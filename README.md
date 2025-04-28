@@ -18,7 +18,7 @@ Building Zeitlos requires [Yosys](https://github.com/YosysHQ/yosys), [nextpnr-ec
 
 ```
 $ make PREFIX=/opt/riscv32i/bin/riscv32-unknown-elf BOARD=lakritz
-$ openFPGA -c dirtyJtag output/lakritz/soc.bin
+$ openFPGALoader -c dirtyJtag output/lakritz/soc.bin
 ```
 
 3. At the BIOS prompt, load the kernel into main memory by pressing 'x' and then upload `sw/os/kernel.bin`. You will need to have the [xfer](https://github.com/machdyne/xfer) utility installed and configured in minicom.
@@ -35,5 +35,5 @@ $ openFPGA -c dirtyJtag output/lakritz/soc.bin
 
 The contents of this repo are released under the [Lone Dynamics Open License](LICENSE.md) with the following exceptions:
 
-- cpu/picorv32 uses the ISC license.
-- ext/uart16550 uses the LGPL license.
+- rtl/cpu/picorv32 uses the ISC license.
+- rtl/ext/uart16550 uses the LGPL license.
