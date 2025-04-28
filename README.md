@@ -25,7 +25,7 @@ $ openFPGALoader -c dirtyJtag output/lakritz/soc.bin
 
 4. Boot the kernel by pressing 'b'.
 
-5. Load an app using xfer and start a new process (for example `sw/apps/blinky.bin`):
+5. Use the process upload command which loads an app into memory using xfer and starts a new process (for example `sw/apps/blinky.bin`):
 
 ```
 > pu
