@@ -14,7 +14,7 @@ $ minicom -D /dev/ttyACM0 -b 1000000
 
 2. Build and write the gateware (and BIOS) to the FPGA SRAM:
 
-Building Zeitlos requires [Yosys](https://github.com/YosysHQ/yosys), [nextpnr-ice40](https://github.com/YosysHQ/nextpnr), [prjtrellis](https://github.com/YosysHQ/prjtrellis) and a [RV32I toolchain](https://github.com/YosysHQ/picorv32#building-a-pure-rv32i-toolchain).
+Building Zeitlos requires [Yosys](https://github.com/YosysHQ/yosys), [nextpnr-ecp5](https://github.com/YosysHQ/nextpnr), [prjtrellis](https://github.com/YosysHQ/prjtrellis) and a [RV32I toolchain](https://github.com/YosysHQ/picorv32#building-a-pure-rv32i-toolchain).
 
 ```
 $ make PREFIX=/opt/riscv32i/bin/riscv32-unknown-elf BOARD=lakritz
