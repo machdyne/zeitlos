@@ -1,5 +1,5 @@
 /*
- *  mt48lc16m16a2_ctrl - A sdram controller (wishbone version)
+ *  w9825g6kh_ctrl - A sdram controller (wishbone version)
  *
  *  Copyright (C) 2022  Hirosh Dabui <hirosh@dabui.de>
  *  Copyright (C) 2025  Lone Dynamics Corporation <info@lonedynamics.com>
@@ -29,7 +29,7 @@ module sdram_wb #(
     parameter SDRAM_CLK_FREQ = 64,
     parameter TRP_NS = 25,
     parameter TRC_NS = 60,
-    parameter TRCD_NS = 15,
+    parameter TRCD_NS = 20,
     parameter TCH_NS = 2,
     parameter CAS = 3'd2
 ) (
@@ -330,7 +330,7 @@ end
 
       COL_WRITEL: begin
         command_nxt = CMD_WRITE;
-        dqm_nxt     = ~wb_sel_i[1:0];
+        dqm_nxt     = { ~wb_sel_i[1], ~wb_sel_i[0] };
         saddr_nxt   = {3'b001, wb_adr_i[10:2], 1'b0};  // autoprecharge and column
         ba_nxt      = wb_adr_i[22:21];
         dq_nxt      = wb_dat_i[15:0];
@@ -340,7 +340,7 @@ end
 
       COL_WRITEH: begin
         command_nxt      = CMD_NOP;
-        dqm_nxt          = ~wb_sel_i[3:2];
+        dqm_nxt          = { ~wb_sel_i[3], ~wb_sel_i[2] };
         saddr_nxt        = {3'b001, wb_adr_i[10:2], 1'b0};  // autoprecharge and column
         ba_nxt           = wb_adr_i[22:21];
         dq_nxt           = wb_dat_i[31:16];
