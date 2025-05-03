@@ -27,9 +27,9 @@
 // ===============================
 module sdram_wb #(
     parameter SDRAM_CLK_FREQ = 64,
-    parameter TRP_NS = 25,
+    parameter TRP_NS = 15,
     parameter TRC_NS = 60,
-    parameter TRCD_NS = 20,
+    parameter TRCD_NS = 15,
     parameter TCH_NS = 2,
     parameter CAS = 3'd2
 ) (
@@ -283,28 +283,28 @@ module sdram_wb #(
         end
       end
 
-PRE_BEFORE_READ: begin
-  command_nxt = CMD_ACT;
-  ba_nxt = wb_adr_i[22:21];
-  saddr_nxt = {wb_adr_i[24:23], wb_adr_i[20:10]};
-  wait_states_nxt = TRCD;
-  ret_state_nxt = COL_READ;
-  state_nxt = WAIT_STATE;
-end
+      PRE_BEFORE_READ: begin
+        command_nxt = CMD_ACT;
+        ba_nxt = wb_adr_i[22:21];
+        saddr_nxt = {wb_adr_i[24:23], wb_adr_i[20:10]};
+        wait_states_nxt = TRCD;
+        ret_state_nxt = COL_READ;
+        state_nxt = WAIT_STATE;
+      end
 
-PRE_BEFORE_WRITE: begin
-  command_nxt = CMD_ACT;
-  ba_nxt = wb_adr_i[22:21];
-  saddr_nxt = {wb_adr_i[24:23], wb_adr_i[20:10]};
-  wait_states_nxt = TRCD;
-  ret_state_nxt = COL_WRITEL;
-  state_nxt = WAIT_STATE;
-end
+      PRE_BEFORE_WRITE: begin
+        command_nxt = CMD_ACT;
+        ba_nxt = wb_adr_i[22:21];
+        saddr_nxt = {wb_adr_i[24:23], wb_adr_i[20:10]};
+        wait_states_nxt = TRCD;
+        ret_state_nxt = COL_WRITEL;
+        state_nxt = WAIT_STATE;
+      end
 
       COL_READ: begin
         command_nxt     = CMD_READ;
         dqm_nxt         = 2'b00;
-        saddr_nxt       = {3'b001, wb_adr_i[10:2], 1'b0};  // autoprecharge and column
+        saddr_nxt       = {3'b000, wb_adr_i[10:2], 1'b0};  // NO autoprecharge and column
         ba_nxt          = wb_adr_i[22:21];
         wait_states_nxt = CAS_LATENCY;
         ret_state_nxt   = COL_READL;
@@ -331,7 +331,7 @@ end
       COL_WRITEL: begin
         command_nxt = CMD_WRITE;
         dqm_nxt     = { ~wb_sel_i[1], ~wb_sel_i[0] };
-        saddr_nxt   = {3'b001, wb_adr_i[10:2], 1'b0};  // autoprecharge and column
+        saddr_nxt   = {3'b000, wb_adr_i[10:2], 1'b0};  // NO autoprecharge and column
         ba_nxt      = wb_adr_i[22:21];
         dq_nxt      = wb_dat_i[15:0];
         oe_nxt      = 1'b1;
