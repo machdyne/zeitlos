@@ -37,3 +37,4 @@ The contents of this repo are released under the [Lone Dynamics Open License](LI
 
 - rtl/cpu/picorv32 uses the ISC license.
 - rtl/ext/uart16550 uses the LGPL license.
+- rtl/ext/usb\_hid\_host uses the Apache 2.0 license.

@@ -1,10 +1,17 @@
-RTL_PICO=rtl/sysctl.v \
+RTL_PICO = \
+	rtl/sysctl.v \
+	rtl/clk/pll0.v \
+	rtl/clk/pll1.v \
+	rtl/cpu/picorv32/picorv32.v \
 	rtl/mem/bram.v \
 	rtl/mem/sram.v \
 	rtl/mem/sdram.v \
 	rtl/mem/qqspi.v \
+	rtl/mem/vram.v \
 	rtl/debug.v \
-	rtl/cpu/picorv32/picorv32.v \
+	rtl/gpu/gpu_ddmi.v \
+	rtl/gpu/gpu_video.v \
+	rtl/gpu/tmds_encoder.v \
 	rtl/ext/uart16550/rtl/verilog/uart_top.v \
 	rtl/ext/uart16550/rtl/verilog/uart_wb.v \
 	rtl/ext/uart16550/rtl/verilog/uart_debug_if.v \
@@ -15,12 +22,10 @@ RTL_PICO=rtl/sysctl.v \
 	rtl/ext/uart16550/rtl/verilog/uart_sync_flops.v \
 	rtl/ext/uart16550/rtl/verilog/uart_transmitter.v \
 	rtl/ext/uart16550/rtl/verilog/uart_receiver.v \
-	rtl/ext/uart16550/rtl/verilog/raminfr.v
-
-ifdef USB
-	RTL_PICO += ext/usb_hid_host/src/usb_hid_host.v \
-		ext/usb_hid_host/src/usb_hid_host_rom.v
-endif
+	rtl/ext/uart16550/rtl/verilog/raminfr.v \
+	rtl/usb_hid.v \
+	rtl/ext/usb_hid_host/src/usb_hid_host.v \
+	rtl/ext/usb_hid_host/src/usb_hid_host_rom.v
 
 BOARD_LC = $(shell echo '$(BOARD)' | tr '[:upper:]' '[:lower:]')
 BOARD_UC = $(shell echo '$(BOARD)' | tr '[:lower:]' '[:upper:]')
@@ -211,7 +216,9 @@ zeitlos_ecp5_pico:
 		"synth_ecp5 -top sysctl -json output/$(BOARD_LC)/soc.json" $(RTL_PICO)
 	nextpnr-ecp5 --$(DEVICE) --package $(PACKAGE) --lpf boards/$(LPF) \
 		--json output/$(BOARD_LC)/soc.json \
-		--textcfg output/$(BOARD_LC)/soc.config #--lpf-allow-unconstrained
+		--report output/$(BOARD_LC)/report.txt \
+		--textcfg output/$(BOARD_LC)/soc.config \
+		--timing-allow-fail #--lpf-allow-unconstrained
 
 zeitlos_gatemate_pico:
 	mkdir -p output/$(BOARD_LC)
@@ -236,8 +243,11 @@ soc:
 		--bit output/$(BOARD_LC)/soc.bin
 endif
 
-dev: clean_os os
-dev-prog: dev prog
+dev: clean_os clean_bios os bios
+dev-prog: dev soc prog
+
+prog: 
+	$(PROG) output/$(BOARD_LC)/soc.bin
 
 os:
 	cd sw/os && make

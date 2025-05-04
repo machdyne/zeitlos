@@ -22,6 +22,10 @@
 #define reg_led (*(volatile uint32_t*)0xe0000000)
 #define reg_leds (*(volatile uint32_t*)0xe0000004)
 
+#define reg_usb_info (*(volatile uint32_t*)0xc0000000)
+#define reg_usb_keys (*(volatile uint32_t*)0xc0000004)
+#define reg_usb_mouse (*(volatile uint32_t*)0xc0000008)
+
 // --
 
 int getch(void);

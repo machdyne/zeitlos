@@ -64,6 +64,26 @@ module sysctl #()
 	inout QQSPI_MOSI, QQSPI_MISO, QQSPI_SIO2, QQSPI_SIO3,
 `endif
 
+`ifdef GPU_VGA
+	output VGA_R,
+	output VGA_G,
+	output VGA_B,
+	output VGA_HS,
+	output VGA_VS,
+`endif
+
+`ifdef GPU_DDMI
+	output DDMI_D0_P,
+	output DDMI_D1_P,
+	output DDMI_D2_P,
+	output DDMI_CK_P,
+`endif
+
+`ifdef USB_HID
+	inout [1:0] usb_host_dp,
+	inout [1:0] usb_host_dm,
+`endif
+
 );
 
 	// BOARD LEDS
@@ -73,61 +93,35 @@ module sysctl #()
 	assign LED_G = ~(|cpu_irq);
 `endif
 
-/*
-	assign DBG[0] = wbs_uart0_ack_o;
-	assign DBG[1] = 0;
-	assign DBG[2] = 0;
-	assign DBG[3] = 0;
-	assign DBG[4] = 0;
-	assign DBG[5] = 0;
-	assign DBG[6] = 0;
-	assign DBG[7] = 0;
-*/
+	// CLOCKS
 
-/*
-	assign DBG[0] = wbs_bram_dat_o[0];
-	assign DBG[1] = wbs_bram_dat_o[1];
-	assign DBG[2] = wbs_bram_dat_o[2];
-	assign DBG[3] = wbs_bram_dat_o[3];
-	assign DBG[4] = wbs_bram_dat_o[4];
-	assign DBG[5] = wbs_bram_dat_o[5];
-	assign DBG[6] = wbs_bram_dat_o[6];
-	assign DBG[7] = wbs_bram_dat_o[7];
-*/
-
-/*
-	assign DBG[0] = wbm_adr_sel_word[0];
-	assign DBG[1] = wbm_adr_sel_word[1];
-	assign DBG[2] = wbm_adr_sel_word[2];
-	assign DBG[3] = wbm_adr_sel_word[3];
-	assign DBG[4] = wbm_adr_sel_word[4];
-	assign DBG[5] = wbm_adr_sel_word[5];
-	assign DBG[6] = wbm_adr_sel_word[6];
-	assign DBG[7] = wbm_adr_sel_word[7];
-*/
-
-	// CLOCK
-
-/*
+	wire clk125mhz;
 	wire clk100mhz;
 	wire clk75mhz;
 	wire clk50mhz;
+	wire clk48mhz = CLK_48;
 	wire clk12mhz;
 
-	reg pll_locked;
-	pll0 #() ecp5_pll0 (
-		.clkin(CLK_48),
+	wire sys_clk = clk48mhz;
+
+	wire pll_locked = pll0_locked && pll1_locked;
+	wire pll0_locked;
+	wire pll1_locked;
+
+	pll0 #() pll0_i (
+		.clkin(clk48mhz),
 		.clkout0(clk100mhz),
 		.clkout1(clk75mhz),
 		.clkout2(clk50mhz),
 		.clkout3(clk12mhz),
-		.locked(pll_locked)
+		.locked(pll0_locked)
 	);
-	wire sys_clk = clk12mhz;
-*/
 
-	wire pll_locked = 1;
-	wire sys_clk = CLK_48;
+	pll1 #() pll1_i (
+		.clkin(clk48mhz),
+		.clkout0(clk125mhz),
+		.locked(pll1_locked)
+	);
 
 	// RESET
 	reg [11:0] resetn_counter = 0;
@@ -154,6 +148,8 @@ module sysctl #()
 	always @* begin
 		cpu_irq = 0;
 		cpu_irq[3] = irq_timer;
+		cpu_irq[4] = wbs_uart0_int;
+		cpu_irq[5] = wbs_usb0_int;
 	end
 
 	always @(posedge sys_clk) begin
@@ -173,8 +169,10 @@ module sysctl #()
 	wire [31:0] wbs_sram_dat_o;
 	wire [31:0] wbs_sdram_dat_o;
 	wire [31:0] wbs_qqspi_dat_o;
+	wire [31:0] wbs_vram_dat_o;
 	wire [31:0] wbs_debug_dat_o;
 	wire [31:0] wbs_uart0_dat_o;
+	wire [31:0] wbs_usb0_dat_o;
 
 	wire cs_bram = (wbm_adr < 8192);
 `ifdef MEM_SRAM
@@ -184,8 +182,20 @@ module sysctl #()
 `elsif MEM_QQSPI
 	wire cs_qqspi = ((wbm_adr & 32'hf000_0000) == 32'h4000_0000);
 `endif
+
+`ifdef MEM_VRAM
+	wire cs_vram = ((wbm_adr & 32'hf000_0000) == 32'h2000_0000);
+`endif
+
+`ifdef USB_HID
+	wire cs_usb0 = ((wbm_adr & 32'hf000_0000) == 32'hc000_0000);
+`endif
+`ifdef DEBUG
 	wire cs_debug = ((wbm_adr & 32'hf000_0000) == 32'he000_0000);
+`endif
+`ifdef UART0
 	wire cs_uart0 = ((wbm_adr & 32'hf000_0000) == 32'hf000_0000);
+`endif
 
 	assign wbm_dat_i =
 		cs_bram ? wbs_bram_dat_o :
@@ -196,16 +206,28 @@ module sysctl #()
 `elsif MEM_QQSPI
 		cs_qqspi ? wbs_qqspi_dat_o :
 `endif
+`ifdef MEM_VRAM
+		cs_vram ? wbs_vram_dat_o :
+`endif
+`ifdef DEBUG
 		cs_debug ? wbs_debug_dat_o :
+`endif
+`ifdef UART0
 		cs_uart0 ? wbs_uart0_dat_o :
+`endif
+`ifdef USB_HID
+		cs_usb0 ? wbs_usb0_dat_o :
+`endif
 		32'hzzzz_zzzz;
 
 	wire wbs_bram_ack_o;
 	wire wbs_sram_ack_o;
 	wire wbs_sdram_ack_o;
 	wire wbs_qqspi_ack_o;
+	wire wbs_vram_ack_o;
 	wire wbs_debug_ack_o;
 	wire wbs_uart0_ack_o;
+	wire wbs_usb0_ack_o;
 
 	assign wbm_ack =
 		cs_bram ? wbs_bram_ack_o :
@@ -216,8 +238,18 @@ module sysctl #()
 `elsif MEM_QQSPI
 		cs_qqspi ? wbs_qqspi_ack_o :
 `endif
+`ifdef MEM_VRAM
+		cs_vram ? wbs_vram_ack_o :
+`endif
+`ifdef DEBUG
 		cs_debug ? wbs_debug_ack_o :
+`endif
+`ifdef UART0
 		cs_uart0 ? wbs_uart0_ack_o :
+`endif
+`ifdef USB_HID
+		cs_usb0 ? wbs_usb0_ack_o :
+`endif
 		1'b0;
 
 	// WISHBONE MASTER: CPU
@@ -354,6 +386,7 @@ module sysctl #()
 	);
 `endif
 
+	// WISHBONE SLAVE: SDRAM (MAIN MEMORY)
 `ifdef MEM_SDRAM
 
 	wire wbm_cyc_sdram = cs_sdram && wbm_cyc;
@@ -382,7 +415,29 @@ module sysctl #()
 		.sdram_dq(sdram_dq),
 		.sdram_dqm(sdram_dm),
 	);
+`endif
 
+	// WISHBONE SLAVE: DUAL-PORT VRAM (FRAMEBUFFER)
+`ifdef MEM_VRAM
+	wire wbm_cyc_vram = cs_vram && wbm_cyc;
+	reg [15:0] gb_adr;
+	reg [31:0] gb_dat;
+
+	vram_wb #() wbs_vram_i
+	(
+		.wb_clk_i(wbm_clk),
+		.wb_rst_i(wbm_rst),
+		.wb_adr_i(wbm_adr_sel_word),
+		.wb_dat_i(wbm_dat_o),
+		.wb_dat_o(wbs_vram_dat_o),
+		.wb_we_i(wbm_we),
+		.wb_sel_i(wbm_sel),
+		.wb_stb_i(wbm_stb),
+		.wb_ack_o(wbs_vram_ack_o),
+		.wb_cyc_i(wbm_cyc_vram),
+		.gb_adr_i(gb_adr),
+		.gb_dat_o(gb_dat),
+	);
 `endif
 
 `ifdef MEM_QQSPI
@@ -411,7 +466,7 @@ module sysctl #()
 `endif
 
 	// WISHBONE SLAVE: LED DEBUG INTERFACE
-
+`ifdef DEBUG
 	wire wbm_cyc_debug = cs_debug && wbm_cyc;
 
 	debug_wb #() wbs_debug0_i
@@ -431,9 +486,10 @@ module sysctl #()
 		.leds(DBG)
 `endif
 	);
+`endif
 
 	// WISHBONE SLAVE: UART0
-
+`ifdef UART0
 	reg wbs_uart0_int;
 	wire wbm_cyc_uart0 = cs_uart0 && wbm_cyc;
 	wire wbm_stb_uart0 = cs_uart0 && wbm_stb;
@@ -458,5 +514,62 @@ module sysctl #()
 		.dcd_pad_i(1'b1),
 		.int_o(wbs_uart0_int)
 	);
+`endif
+
+	// WISHBONE SLAVE: USB HID
+`ifdef USB_HID
+	reg wbs_usb0_int;
+	wire wbm_cyc_usb0 = cs_usb0 && wbm_cyc;
+
+	usb_hid_wb #() wbs_usb0_i
+	(
+		.wb_clk_i(wbm_clk),
+		.wb_rst_i(wbm_rst),
+		.wb_adr_i(wbm_adr_sel_word),
+		.wb_dat_i(wbm_dat_o),
+		.wb_dat_o(wbs_usb0_dat_o),
+		.wb_we_i(wbm_we),
+		.wb_sel_i(wbm_sel),
+		.wb_stb_i(wbm_stb),
+		.wb_ack_o(wbs_usb0_ack_o),
+		.wb_cyc_i(wbm_cyc_usb0),
+		.usb_clk(clk12mhz),
+		.usb_dm(usb_host_dm[0]),
+		.usb_dp(usb_host_dp[0]),
+		.int_o(wbs_usb0_int),
+	);
+`endif
+
+	// GPU
+`ifdef GPU
+	wire [9:0] gpu_x;
+	wire [9:0] gpu_y;
+	wire gpu_pixel;
+
+	assign gpu_pixel = 0;	// can be used for text & sprites
+
+	gpu_video #() gpu_video_i
+	(
+		.clk(wbm_clk),
+		.pclk(clk75mhz),
+		.bclk(clk125mhz),
+		.resetn(~wbm_rst),
+		.pixel(gpu_pixel),
+		.x(gpu_x),
+		.y(gpu_y),
+		.gb_adr_o(gb_adr),
+		.gb_dat_i(gb_dat),
+`ifdef GPU_VGA
+		.red(VGA_R),
+		.green(VGA_G),
+		.blue(VGA_B),
+		.hsync(VGA_HS),
+		.vsync(VGA_VS),
+`endif
+`ifdef GPU_DDMI
+		.dvi_p({ DDMI_CK_P, DDMI_D2_P, DDMI_D1_P, DDMI_D0_P }),
+`endif
+);
+`endif
 
 endmodule

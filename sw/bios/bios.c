@@ -22,8 +22,14 @@
 #define reg_led (*(volatile uint8_t*)0xe0000000)
 #define reg_leds (*(volatile uint8_t*)0xe0000004)
 
+#define reg_usb_info (*(volatile uint32_t*)0xc0000000)
+#define reg_usb_keys (*(volatile uint32_t*)0xc0000004)
+#define reg_usb_mouse (*(volatile uint32_t*)0xc0000008)
+
 #define MEM_BIOS			0x00000000
 #define MEM_BIOS_SIZE	2*1024
+#define MEM_VRAM			0x20000000
+#define MEM_VRAM_SIZE	(1024*768)/32
 #define MEM_MAIN			0x40000000
 #define MEM_MAIN_SIZE	1024*1024
 
@@ -196,10 +202,26 @@ void cmd_echo() {
 void cmd_info() {
 
 	uint8_t tmp;
+	uint32_t tmp32;
 
 	print("led: 0x");
 	tmp = reg_led;
 	print_hex(tmp, 2);
+	print("\n");
+
+	print("usb_info: 0x");
+	tmp32 = reg_usb_info;
+	print_hex(tmp32, 8);
+	print("\n");
+
+	print("usb_keys: 0x");
+	tmp32 = reg_usb_keys;
+	print_hex(tmp32, 8);
+	print("\n");
+
+	print("usb_mouse: 0x");
+	tmp32 = reg_usb_mouse;
+	print_hex(tmp32, 8);
 	print("\n");
 
 }
@@ -296,6 +318,9 @@ void cmd_help() {
 void cmd_toggle_addr_ptr(void) {
 
 	if (addr_ptr == MEM_BIOS) {
+		addr_ptr = MEM_VRAM;
+		mem_total = MEM_VRAM_SIZE;
+	} else if (addr_ptr == MEM_VRAM) {
 		addr_ptr = MEM_MAIN;
 		mem_total = MEM_MAIN_SIZE;
 	} else if (addr_ptr == MEM_MAIN) {

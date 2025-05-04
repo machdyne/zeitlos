@@ -106,8 +106,6 @@ module sdram_wb #(
   reg [1:0] ba;
   reg [1:0] ba_nxt;
 
-  assign wb_ack_o = wb_cyc_i && ready;
-
   assign sdram_clk = wb_clk_i;
   assign sdram_cke = cke;
   assign sdram_addr = saddr;
@@ -175,6 +173,7 @@ module sdram_wb #(
       saddr <= 0;
       update_ready <= 1'b0;
     end else begin
+      wb_ack_o <= wb_cyc_i && ready;
       dq <= dq_nxt;
       wb_dat_o <= dout_nxt;
       state <= state_nxt;
