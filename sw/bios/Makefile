@@ -16,7 +16,7 @@ bios.elf: bios.lds $(BOOT) bios.c
 	 $(PREFIX)objdump -S --disassemble bios.elf > bios.asm
 
 bios_seed.hex:
-	icebram -g 32 $(BRAM_WORDS) > bios_seed.hex
+	ecpbram -g bios_seed.hex -w 32 -d $(BRAM_WORDS)
 
 bios.hex: bios.bin
 	python3 makehex.py bios.bin $(BRAM_WORDS) > bios.hex
