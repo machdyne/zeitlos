@@ -1,6 +1,10 @@
 #ifndef KERNEL_H
 #define KERNEL_H
 
+#define Z_IRQ_KTIMER			3
+#define Z_IRQ_UART			4
+#define Z_IRQ_HID				5
+
 typedef uint32_t z_rv;
 
 typedef struct {
@@ -18,5 +22,6 @@ typedef struct {
 
 z_rv z_proc_create(uint32_t addr, uint32_t size);
 z_rv z_proc_dump(void);
+z_rv z_kernel_dump(void);
 
 #endif

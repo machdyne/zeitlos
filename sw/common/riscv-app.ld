@@ -18,9 +18,10 @@ SECTIONS
     _edata = .;
   }
 
-  .bss : {
+  .bss ALIGN(4) : {
     _sbss = .;
     *(COMMON)
+    *(.sbss .sbss.*)
     *(.bss .bss.*)
     _ebss = .;
   }

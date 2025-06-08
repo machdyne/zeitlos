@@ -17,6 +17,7 @@
 `define LED_RGB
 //`define LED_DEBUG
 `define GPU
+`define GPU_CURSOR
 `define GPU_PIXEL_DOUBLE
 `define GPU_VGA
 `define UART0
@@ -31,6 +32,7 @@
 `define MEM_VRAM
 `define GPU
 `define GPU_PIXEL_DOUBLE
+`define GPU_CURSOR
 `define GPU_DDMI
 `define UART0
 `define USB_HID

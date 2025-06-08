@@ -88,6 +88,8 @@ module sysctl #()
 
 	// BOARD LEDS
 
+assign LED_B = !cpu_trap; // XXX
+
 `ifdef LED_RGB
 	assign LED_R = !cpu_trap;
 	assign LED_G = ~(|cpu_irq);
@@ -392,7 +394,7 @@ module sysctl #()
 	wire wbm_cyc_sdram = cs_sdram && wbm_cyc;
 
 	sdram_wb #(
-		.SDRAM_CLK_FREQ(SYSCLK / 1_000_000)
+//		.SDRAM_CLK_FREQ(SYSCLK / 1_000_000)
 	) sdram_i (
       .wb_clk_i(wbm_clk),
       .wb_rst_i(wbm_rst),
@@ -481,7 +483,7 @@ module sysctl #()
 		.wb_stb_i(wbm_stb),
 		.wb_ack_o(wbs_debug_ack_o),
 		.wb_cyc_i(wbm_cyc_debug),
-		.led(LED_B),
+//		.led(LED_B),
 `ifdef LED_DEBUG
 		.leds(DBG)
 `endif
@@ -533,10 +535,12 @@ module sysctl #()
 		.wb_stb_i(wbm_stb),
 		.wb_ack_o(wbs_usb0_ack_o),
 		.wb_cyc_i(wbm_cyc_usb0),
+		.int_o(wbs_usb0_int),
 		.usb_clk(clk12mhz),
 		.usb_dm(usb_host_dm[0]),
 		.usb_dp(usb_host_dp[0]),
-		.int_o(wbs_usb0_int),
+		.curs_x(gpu_curs_x),
+		.curs_y(gpu_curs_y),
 	);
 `endif
 
@@ -546,7 +550,12 @@ module sysctl #()
 	wire [9:0] gpu_y;
 	wire gpu_pixel;
 
-	assign gpu_pixel = 0;	// can be used for text & sprites
+	assign gpu_pixel =
+`ifdef GPU_CURSOR
+		gpu_curs_pixel;
+`else
+		0;
+`endif
 
 	gpu_video #() gpu_video_i
 	(
@@ -569,7 +578,24 @@ module sysctl #()
 `ifdef GPU_DDMI
 		.dvi_p({ DDMI_CK_P, DDMI_D2_P, DDMI_D1_P, DDMI_D0_P }),
 `endif
-);
+	);
+`endif
+
+	// GPU CURSOR
+`ifdef GPU_CURSOR
+	wire [9:0] gpu_curs_x;
+	wire [9:0] gpu_curs_y;
+	wire gpu_curs_pixel;
+
+	gpu_cursor #() gpu_cursor_i
+	(
+		.pclk(clk75mhz),
+		.pixel(gpu_curs_pixel),
+		.gpu_x(gpu_x),
+		.gpu_y(gpu_y),
+		.curs_x(gpu_curs_x),
+		.curs_y(gpu_curs_y),
+	);
 `endif
 
 endmodule

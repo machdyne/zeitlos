@@ -25,6 +25,7 @@
 #define reg_usb_info (*(volatile uint32_t*)0xc0000000)
 #define reg_usb_keys (*(volatile uint32_t*)0xc0000004)
 #define reg_usb_mouse (*(volatile uint32_t*)0xc0000008)
+#define reg_usb_cursor (*(volatile uint32_t*)0xc000000c)
 
 #define MEM_BIOS			0x00000000
 #define MEM_BIOS_SIZE	2*1024
@@ -182,7 +183,6 @@ uint32_t crc32b(char *data, uint32_t len) {
 			mask = -(crc & 1);
 			crc = (crc >> 1) ^ (0xedb88320 & mask);
 		}
-		i = i + 1;
 	}
 	return ~crc;
 }
@@ -223,6 +223,12 @@ void cmd_info() {
 	tmp32 = reg_usb_mouse;
 	print_hex(tmp32, 8);
 	print("\n");
+
+	print("usb_cursor: 0x");
+	tmp32 = reg_usb_cursor;
+	print_hex(tmp32, 8);
+	print("\n");
+
 
 }
 

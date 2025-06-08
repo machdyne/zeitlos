@@ -1,0 +1,1 @@
+Z_API_FUNC(z_hello, void, char *)

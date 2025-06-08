@@ -32,7 +32,7 @@ void sh(void) {
 
 	while (1) {
 
-		printf(">");
+		printf("> ");
 		fflush(stdout);
 
 		readline(buffer, 255);
@@ -77,6 +77,7 @@ void sh(void) {
 				continue;
 			}
 			printf("creating process at %lx: ", addr);
+			fflush(stdout);
 			if (z_proc_create(addr, 128*1024) == Z_OK)
 				printf("OK\n");
 			else
@@ -94,6 +95,7 @@ void sh(void) {
 			bytes = xfer_recv(addr);
 			printf("received %li bytes to 0x%lx.\n", bytes, addr);
 			printf("creating process at %lx: ", addr);
+			fflush(stdout);
 			if (z_proc_create(addr, bytes + (32*1024)) == Z_OK)
 				printf("OK\n");
 			else
@@ -102,6 +104,10 @@ void sh(void) {
 
 		if (!strncmp(buffer, "ps", cmdlen)) {
 			z_proc_dump();
+		}
+
+		if (!strncmp(buffer, "ks", cmdlen)) {
+			z_kernel_dump();
 		}
 
       if (!strncmp(buffer, "boot", cmdlen)) {
@@ -155,5 +161,6 @@ void sh_help(void) {
 	printf(" pc [addr]         create & start a new process\n");
 	printf(" pu [addr]         upload & create & start a new process\n");
 	printf(" ps                display a process snapshot\n");
+	printf(" ks                display a kernel snapshot\n");
 
 }

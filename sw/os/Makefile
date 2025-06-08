@@ -5,14 +5,16 @@ CFLAGS = -fPIC --std=gnu99 -Os -MD -Wall -march=$(ARCH)
 LDFLAGS = -fPIC
 LDSCRIPT = ../common/riscv-os.ld
 
-OBJS = kernel.o zeitlos.o sh.o xfer.o
+OBJS = kernel.o zeitlos.o api.o sh.o xfer.o ui.o
 
 kernel: kernel.elf kernel.bin
 
 kernel.o:
 	$(CC) $(CFLAGS) -c kernel.c -o kernel.o
+	$(CC) $(CFLAGS) -c api.c -o api.o
 	$(CC) $(CFLAGS) -c sh.c -o sh.o
 	$(CC) $(CFLAGS) -c xfer.c -o xfer.o
+	$(CC) $(CFLAGS) -c ui.c -o ui.o
 	$(CC) $(CFLAGS) -c ../common/zeitlos.c -o zeitlos.o
 	$(CC) $(CFLAGS) -c kernel.c -S -o kernel.asm
 	$(CC) $(CFLAGS) -c sh.c -S -o sh.asm

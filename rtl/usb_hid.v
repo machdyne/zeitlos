@@ -1,6 +1,6 @@
 /*
- * USB HID
- * Copyright (c) 2025 Lone Dynamics Corporation. All rights reserved.
+ * Zeitlos SOC 
+ a Copyright (c) 2025 Lone Dynamics Corporation. All rights reserved.
  *
  * USB HID wishbone interface
  *
@@ -22,11 +22,15 @@ module usb_hid_wb #()
 	inout usb_dm,
 	inout usb_dp,
 	output int_o,
+	output [9:0] curs_x,
+	output [9:0] curs_y,
 );
 
 `ifdef USB_HID
 
+	wire uhh_report;
 	wire uhh_dr;
+
 	wire [1:0] uhh_usb_type;
 	wire [7:0] uhh_key_modifiers, uhh_key1, uhh_key2, uhh_key3, uhh_key4;
 	wire [7:0] uhh_mouse_btn;
@@ -34,9 +38,36 @@ module usb_hid_wb #()
 
 	assign int_o = uhh_report;
 
+	reg [9:0] curs_x;
+	reg [9:0] curs_y;
+
+	reg signed [7:0] mouse_dx;
+	reg signed [7:0] mouse_dy;
+
+	reg mouse_move;
+
 	always @(posedge wb_clk_i) begin
 
 		wb_ack_o <= 0;
+		mouse_move <= 0;
+
+		if (uhh_report) begin
+			mouse_dx <= uhh_mouse_dx;
+			mouse_dy <= uhh_mouse_dy;
+			mouse_move <= 1;
+		end
+
+		if (mouse_move) begin
+
+			if (curs_x == 1023 && mouse_dx > 0) curs_x = 1023;
+			else if (curs_x == 0 && mouse_dx < 0) curs_x = 0;
+			else curs_x <= curs_x + mouse_dx;
+
+			if (curs_y == 767 && mouse_dy > 0) curs_y = 767;
+			else if (curs_y == 0 && mouse_dy < 0) curs_y = 0;
+			else curs_y <= curs_y + mouse_dy;
+
+		end
 
 		if (wb_cyc_i && wb_stb_i && !wb_we_i) begin
 
@@ -47,7 +78,10 @@ module usb_hid_wb #()
 				{ uhh_key1, uhh_key2, uhh_key3, uhh_key4 };
 
 			if (wb_adr_i[2:0] == 3'h02) wb_dat_o <=
-				{ 8'h00, uhh_mouse_btn, uhh_mouse_dy, uhh_mouse_dx };
+				{ 8'h00, uhh_mouse_btn, mouse_dy, mouse_dx };
+
+			if (wb_adr_i[2:0] == 3'h03) wb_dat_o <=
+				{ 8'h00, uhh_mouse_btn, curs_y, curs_x };
 
 			wb_ack_o <= 1;
 

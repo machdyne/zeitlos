@@ -3,6 +3,9 @@
 
 #include <stdint.h>
 
+#define Z_CMD_IRQ          0
+#define Z_CMD_GET_API_MAP  1
+
 #define Z_OK 0
 #define Z_FAIL 1
 
@@ -25,6 +28,7 @@
 #define reg_usb_info (*(volatile uint32_t*)0xc0000000)
 #define reg_usb_keys (*(volatile uint32_t*)0xc0000004)
 #define reg_usb_mouse (*(volatile uint32_t*)0xc0000008)
+#define reg_usb_cursor (*(volatile uint32_t*)0xc000000c)
 
 // --
 
@@ -50,5 +54,16 @@ void noecho(void);
 #define CH_FF	0x0c
 #define CH_BS	0x08
 #define CH_DEL	0x7f
+
+// --
+
+#define Z_API_FUNC(name, ret, ...) ret (*name)(__VA_ARGS__);
+typedef struct {
+    #include "api.def"
+} z_api_map_t;
+#undef Z_API_FUNC
+
+z_api_map_t *z_init(void);
+
 
 #endif

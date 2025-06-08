@@ -21,6 +21,22 @@ int term_buf_ptr = 0;
 void echo(void) { term_echo = true; }
 void noecho(void) { term_echo = false; }
 
+z_api_map_t *z_init(void) {
+
+	z_api_map_t *z_api_map = NULL;
+
+	uint32_t *(*kernel_ptr)(uint32_t, uint32_t *, uint32_t);
+
+	kernel_ptr =
+		(uint32_t *(*)(uint32_t, uint32_t *, uint32_t))(uintptr_t)reg_kernel;
+
+	if (reg_kernel)
+		z_api_map = (z_api_map_t *)kernel_ptr(Z_CMD_GET_API_MAP, NULL, 0);
+
+	return z_api_map;
+
+}
+
 ssize_t _read(int file, void *ptr, size_t len)
 {
    unsigned char *p = ptr;

@@ -7,9 +7,9 @@
 
 #include <stdint.h>
 
+#define Z_CMD_IRQ		0
+
 #define reg_kernel (*(volatile uint32_t*)0x0000000c)
-#define reg_leds (*(volatile uint32_t*)0xe0000004)
-#define reg_uart0_data (*(volatile uint8_t*)0xf0000000)
 
 uint32_t *(*kernel_ptr)(uint32_t, uint32_t *, uint32_t);
 
@@ -20,7 +20,7 @@ uint32_t *irq(uint32_t *regs, uint32_t irqs)
 		(uint32_t *(*)(uint32_t, uint32_t *, uint32_t))(uintptr_t)reg_kernel;
 
 	if (reg_kernel != 0x00000000) {
-		regs = kernel_ptr(0, regs, irqs);
+		regs = (uint32_t *)kernel_ptr(Z_CMD_IRQ, regs, irqs);
 	}
 
 	return regs;

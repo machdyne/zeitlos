@@ -9,8 +9,9 @@ RTL_PICO = \
 	rtl/mem/qqspi.v \
 	rtl/mem/vram.v \
 	rtl/debug.v \
-	rtl/gpu/gpu_ddmi.v \
 	rtl/gpu/gpu_video.v \
+	rtl/gpu/gpu_cursor.v \
+	rtl/gpu/gpu_ddmi.v \
 	rtl/gpu/tmds_encoder.v \
 	rtl/ext/uart16550/rtl/verilog/uart_top.v \
 	rtl/ext/uart16550/rtl/verilog/uart_wb.v \
@@ -218,7 +219,7 @@ zeitlos_ecp5_pico:
 		--json output/$(BOARD_LC)/soc.json \
 		--report output/$(BOARD_LC)/report.txt \
 		--textcfg output/$(BOARD_LC)/soc.config \
-		--timing-allow-fail #--lpf-allow-unconstrained
+		--timing-allow-fail
 
 zeitlos_gatemate_pico:
 	mkdir -p output/$(BOARD_LC)
@@ -243,7 +244,7 @@ soc:
 		--bit output/$(BOARD_LC)/soc.bin
 endif
 
-dev: clean_os clean_bios os bios
+dev: clean_os clean_bios clean_apps os bios apps
 dev-prog: dev soc prog
 
 prog: 
@@ -268,4 +269,5 @@ clean_bios:
 
 clean_apps:
 	cd sw/apps && make clean
+
 .PHONY: clean_bios bios apps

@@ -54,9 +54,9 @@ module gpu_video #(
    wire [9:0] hy = y >> 1;
 
 `ifdef GPU_PIXEL_DOUBLE
-   wire pset = is_visible && hline[hx];
+   wire pset = is_visible && (hline[hx] || pixel);
 `else
-   wire pset = is_visible && hline[x];
+   wire pset = is_visible && (hline[x] || pixel);
 `endif
 
 	assign red = pset;
@@ -142,11 +142,11 @@ module gpu_video #(
 				vc <= 0;
 			end else begin
 				vc <= vc + 1;
-				if (vc > v_disp_start) y <= vc - v_disp_start + 1; else y <= 0;
+				if (vc > v_disp_start) y <= vc - v_disp_start; else y <= 0;
 			end
 		end else begin
 			hc <= hc + 1;
-			if (hc > h_disp_start) x <= hc - h_disp_start + 1; else x <= 0;
+			if (hc > h_disp_start) x <= hc - h_disp_start; else x <= 0;
 		end
 
 	end
