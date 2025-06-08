@@ -60,11 +60,12 @@ int main(void) {
 
 }
 
-// this is called by the BIOS interrupt handler
-// it uses the interrupt stack
-uint32_t *z_kernel_entry(uint32_t cmd, uint32_t *regs, uint32_t irqs) {
+// - a pointer to the kernel entry function can be found at 0x0000000c
+//   (if the kernel started)
+// - this is called by the BIOS interrupt handler which uses the interrupt stack
+// - it can also be called by apps to get the location of the api map
 
-	++z_kernel_ticks;
+uint32_t *z_kernel_entry(uint32_t cmd, uint32_t *regs, uint32_t irqs) {
 
 	if (cmd != Z_CMD_IRQ) {
 
@@ -77,6 +78,8 @@ uint32_t *z_kernel_entry(uint32_t cmd, uint32_t *regs, uint32_t irqs) {
 		}
 
 	}
+
+	++z_kernel_ticks;
 
 	// swap process on KTIMER interrupt
 //	if ((irqs & (1 << Z_IRQ_KTIMER)) != 0) {
