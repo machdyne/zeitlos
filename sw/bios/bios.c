@@ -361,7 +361,6 @@ void uart_init() {
 
 	reg_uart0_fcr = (uint8_t)0b00000111;	// enable fifos; trigger 1 byte
 	reg_uart0_ier = (uint8_t)0b00000000;	// disable all interrupts
-	//reg_uart0_ier = (uint8_t)0b00001111;	// enable all interrupts
 
 }
 

@@ -10,67 +10,28 @@ void delay() {
    }
 }
 
-void print_hex_digit(uint8_t val) {
-    if (val < 10) {
-        reg_uart0_data = '0' + val;
-    } else {
-        reg_uart0_data = 'A' + (val - 10);
-    }
-    delay();
-}
-
-void print_hex32(uint32_t val) {
-    for (int i = 7; i >= 0; i--) {
-        uint8_t nibble = (val >> (i * 4)) & 0xF;
-        print_hex_digit(nibble);
-    }
-}
-
-void print_ptr_hex(const void *ptr) {
-    print_hex32((uint32_t)(uintptr_t)ptr);
-}
-
 int main() {
 
 	uint32_t ctr = 0;
 
-	z_api_map_t *z_api_map;
+	uint32_t *(*z_kernel_ptr)(uint32_t, uint32_t *, uint32_t);
 
-	reg_uart0_data = 'A';
-	z_api_map = z_init();
+	z_kernel_ptr =
+		(uint32_t *(*)(uint32_t, uint32_t *, uint32_t))(uintptr_t)reg_kernel;
 
-	delay();
-	reg_uart0_data = 'B';
-	delay();
-
-	reg_uart0_data = ':';
-	delay();
-
-	print_ptr_hex((void *)&z_api_map);
-	delay();
-
-	reg_uart0_data = ':';
-	delay();
-
-	print_ptr_hex(z_api_map);
-	delay();
 
 	while (1) {
 
 		reg_led = 0x00;
-
-//		putchar('Q');	// this doesn't work
-//		printf("Hello world! %li\n", ctr);	// this doesn't work
-
-		if (z_api_map && z_api_map->z_hello) {
-			z_api_map->z_hello("TEST");
-			delay();
-		} else {
-			reg_uart0_data = 'F';
-			delay();
-		}
-
 		delay();
+
+//		printf("HELLO.\n"); // not working yet
+
+		z_obj_t obj;
+		obj.type = Z_STR;
+		obj.val.str = "THIS IS A TEST.\n";
+		z_kernel_ptr(Z_SYS_UI_PRINT, (uint32_t *)&obj, 0);
+
 		reg_led = 0x01;
 		delay();
 

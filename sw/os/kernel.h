@@ -1,5 +1,8 @@
-#ifndef KERNEL_H
-#define KERNEL_H
+#ifndef Z_KERNEL_H
+#define Z_KERNEL_H
+
+#define Z_OK   0
+#define Z_FAIL 1
 
 #define Z_IRQ_KTIMER			3
 #define Z_IRQ_UART			4
@@ -23,5 +26,20 @@ typedef struct {
 z_rv z_proc_create(uint32_t addr, uint32_t size);
 z_rv z_proc_dump(void);
 z_rv z_kernel_dump(void);
+
+// --
+
+static inline uint32_t maskirq(uint32_t new_mask) {
+    uint32_t old_mask;
+
+    __asm__ volatile (
+        ".insn r 0x0B, 0x6, 0x03, %0, %1, zero"
+        : "=r"(old_mask)      // output: destination register
+        : "r"(new_mask)       // input: source register
+        : "memory"
+    );
+
+    return old_mask;
+}
 
 #endif

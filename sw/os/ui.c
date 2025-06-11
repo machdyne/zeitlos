@@ -12,6 +12,7 @@
 
 #include "../common/zeitlos.h"
 #include "kernel.h"
+#include "uart.h"
 
 uint16_t z_cursor_y = 0;
 uint16_t z_cursor_x = 0;
@@ -20,19 +21,21 @@ void z_ui_int(void) {
 
 }
 
-void delay() {
-   volatile static int x, y;
-   for (int i = 0; i < 10000; i++) {
-      x += y;
-   }
-}
+// --
 
-void z_hello_impl (char *str) {
+z_obj_t *z_ui_print (z_obj_t *obj) {
 
-   reg_uart0_data = ':'; // this works
-   delay();
+	char *s = obj->val.str;
 
-	printf("HELLO\r\n"); // this doesn't
-	//printf("HELLO %s!\r\n", str);
+    while (*s) {
+        if (*s == '\n') {
+            while (k_uart_tx_full());
+            reg_uart0_data = '\r';
+        }
+        while (k_uart_tx_full());
+        reg_uart0_data = *s++;
+    }
+
+	return (&z_rv_ok);
 
 }

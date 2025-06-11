@@ -88,8 +88,6 @@ module sysctl #()
 
 	// BOARD LEDS
 
-assign LED_B = !cpu_trap; // XXX
-
 `ifdef LED_RGB
 	assign LED_R = !cpu_trap;
 	assign LED_G = ~(|cpu_irq);
@@ -149,6 +147,9 @@ assign LED_B = !cpu_trap; // XXX
 
 	always @* begin
 		cpu_irq = 0;
+		// cpu_irq[0] = irq_cpu_timer;
+		// cpu_irq[1] = irq_ebreak;
+		// cpu_irq[2] = irq_bus_error;
 		cpu_irq[3] = irq_timer;
 		cpu_irq[4] = wbs_uart0_int;
 		cpu_irq[5] = wbs_usb0_int;
@@ -280,7 +281,8 @@ assign LED_B = !cpu_trap; // XXX
       .ENABLE_DIV(0),
       .ENABLE_IRQ(1),
       .ENABLE_IRQ_TIMER(0),
-      .ENABLE_IRQ_QREGS(1)
+      .ENABLE_IRQ_QREGS(1),
+		.LATCHED_IRQ(32'b1111_1111_1111_1111_1111_1111_1110_1111)
 	)
 	wbm_cpu0_i
 	(
@@ -483,7 +485,7 @@ assign LED_B = !cpu_trap; // XXX
 		.wb_stb_i(wbm_stb),
 		.wb_ack_o(wbs_debug_ack_o),
 		.wb_cyc_i(wbm_cyc_debug),
-//		.led(LED_B),
+		.led(LED_B),
 `ifdef LED_DEBUG
 		.leds(DBG)
 `endif

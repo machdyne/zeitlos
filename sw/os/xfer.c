@@ -10,6 +10,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include "../common/zeitlos.h"
+#include "uart.h"
 
 void getchars(char *buf, int len);
 uint32_t crc32b(char *data, uint32_t len);
@@ -19,23 +20,23 @@ int mygetch(void);
 void getchars(char *buf, int len) {
 	int c;
 	for (int i = 0; i < len; i++) {
-		while ((c = mygetch()) == EOF);
+		while ((c = mygetch()) == EOF) /* wait */;
 		buf[i] = (uint8_t)c;
 	};
 }
 
 void myputch(int c)
 {
-	while ((reg_uart0_lsr & 0x20) == 0);
-   reg_uart0_data = (char)c;
+	while (k_uart_tx_full()) /* wait */;
+	k_uart_putc((char)c);
 }
 
 int mygetch(void)
 {
-	if ((reg_uart0_lsr & 0x01) != 1)
+	if (k_uart_rx_empty())
       return EOF;
    else
-		return (char)reg_uart0_data;
+		return k_uart_getc();
 }
 
 uint32_t xfer_recv(uint32_t addr_ptr)
@@ -54,11 +55,11 @@ uint32_t xfer_recv(uint32_t addr_ptr)
 
 	while (1) {
 
-		while ((cmd = mygetch()) == EOF);
+		while ((cmd = mygetch()) == EOF) /* wait */;
 		buf_data[0] = (uint8_t)cmd;
 
 		if ((char)cmd == 'L') {
-			while ((datasize = mygetch()) == EOF);
+			while ((datasize = mygetch()) == EOF) /* wait */;
 			buf_data[1] = (uint8_t)datasize;
 			getchars(&buf_data[2], datasize);
 			getchars(buf_crc, 4);

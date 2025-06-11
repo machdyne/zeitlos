@@ -2,6 +2,10 @@
  * ZEITLOS OS
  * Copyright (c) 2025 Lone Dynamics Corporation. All rights reserved.
  *
+ * Application runtime.
+ *
+ * This is compiled into each app.
+ *
  */
 
 #include <errno.h>
@@ -15,55 +19,113 @@
 
 bool term_echo = true;
 bool term_escape = false;
-char term_buf[16];
-int term_buf_ptr = 0;
 
 void echo(void) { term_echo = true; }
 void noecho(void) { term_echo = false; }
 
-z_api_map_t *z_init(void) {
+//
 
-	z_api_map_t *z_api_map = NULL;
+bool uart_rx_empty(void);
+bool uart_tx_full(void);
+void uart_putc(char c);
+int16_t uart_getc(void);
 
-	uint32_t *(*kernel_ptr)(uint32_t, uint32_t *, uint32_t);
+bool uart_rx_empty(void) {
+	uint32_t *(*z_kernel_ptr)(uint32_t, uint32_t *, uint32_t) =
+		(uint32_t *(*)(uint32_t, uint32_t *, uint32_t))(uintptr_t)reg_kernel;
+	z_obj_t obj;
+	z_kernel_ptr(Z_SYS_UART_RX_EMPTY, (uint32_t *)&obj, 0);
+	return (bool)obj.val.int32;
+}
 
-	kernel_ptr =
+bool uart_tx_full(void) {
+	uint32_t *(*z_kernel_ptr)(uint32_t, uint32_t *, uint32_t) =
 		(uint32_t *(*)(uint32_t, uint32_t *, uint32_t))(uintptr_t)reg_kernel;
 
-	if (reg_kernel)
-		z_api_map = (z_api_map_t *)kernel_ptr(Z_CMD_GET_API_MAP, NULL, 0);
+//	reg_leds = 0xff;
+//	print_hex32(&z_kernel_ptr);
+//	while(1);  // XXX
 
-	return z_api_map;
 
+	z_obj_t obj;
+	z_kernel_ptr(Z_SYS_UART_RX_EMPTY, (uint32_t *)&obj, 0);
+	return (bool)obj.val.int32;
 }
+
+void uart_putc(char c) {
+	uint32_t *(*z_kernel_ptr)(uint32_t, uint32_t *, uint32_t) =
+		(uint32_t *(*)(uint32_t, uint32_t *, uint32_t))(uintptr_t)reg_kernel;
+	z_obj_t obj;
+	obj.val.int32 = c;
+	z_kernel_ptr(Z_SYS_UART_RX_EMPTY, (uint32_t *)&obj, 0);
+}
+
+int16_t uart_getc(void) {
+	uint32_t *(*z_kernel_ptr)(uint32_t, uint32_t *, uint32_t) =
+		(uint32_t *(*)(uint32_t, uint32_t *, uint32_t))(uintptr_t)reg_kernel;
+	z_obj_t obj;
+	z_kernel_ptr(Z_SYS_UART_RX_EMPTY, (uint32_t *)&obj, 0);
+	return (int16_t)obj.val.int32;
+}
+
+void rt_delay() {
+   volatile static int x, y;
+   for (int i = 0; i < 10000; i++) {
+      x += y;
+   }
+}
+
+void print_hex_digit(uint8_t val) {
+    if (val < 10) {
+        reg_uart0_data = '0' + val;
+    } else {
+        reg_uart0_data = 'A' + (val - 10);
+    }
+    rt_delay();  // Small delay so UART has time to send the character
+}
+
+void print_hex32(uint32_t val) {
+    for (int i = 7; i >= 0; i--) {
+        uint8_t nibble = (val >> (i * 4)) & 0xF;
+        print_hex_digit(nibble);
+    }
+}
+
+void print_ptr_hex(const void *ptr) {
+    print_hex32((uint32_t)(uintptr_t)ptr);
+}
+
+//
+//
 
 ssize_t _read(int file, void *ptr, size_t len)
 {
    unsigned char *p = ptr;
 	ssize_t i;
-	int uart_dr;
+	int c;
    for (i = 0; i < len; i++) {
-		uart_dr = 0;
-		while (!uart_dr) {
-			uart_dr = ((reg_uart0_lsr & 0x01) == 1);
-		};
-		p[i] = (char)reg_uart0_data;
+
+		// wait for character
+		while (uart_rx_empty());
+		
+		p[i] = (char)c;
 		if (p[i] == 0x0a) return i + 1;
 		if (p[i] == 0x0d) { p[i] = 0x0a; return i + 1; }
 		if (term_echo) {
-			while ((reg_uart0_lsr & 0x20) == 0);
-			reg_uart0_data = p[i];
+			// wait for free buffer space
+			while (uart_tx_full()) /* wait */;
+			uart_putc(p[i]);
 		}
    }
    return len;
 }
 
+// non-blocking getc
 int getch(void) {
-	int uart_dr = ((reg_uart0_lsr & 0x01) == 1);
-	if (!uart_dr) {
+	if (uart_rx_empty()) {
 		return EOF;
 	} else {
-		return (char)reg_uart0_data;
+		return (char)uart_getc();
 	}
 }
 
@@ -90,8 +152,7 @@ void readline(char *buf, int maxlen) {
 			fflush(stdout);
 		}
 		else if (c > 0) {
-			putchar(c);
-			fflush(stdout);
+			if (term_echo) uart_putc(c);
 			buf[pl++] = c;
 		}
 
@@ -108,11 +169,11 @@ ssize_t _write(int file, const void *ptr, size_t len)
 	const unsigned char *p = ptr;
 	for (int i = 0; i < len; i++) {
 		if (p[i] == 0x0a) {
-			while ((reg_uart0_lsr & 0x20) == 0);
-			reg_uart0_data = (unsigned char)0x0d;
+			while (uart_tx_full()) /* wait */;
+			uart_putc(0x0d);
 		}
-		while ((reg_uart0_lsr & 0x20) == 0);
-		reg_uart0_data = (unsigned char)p[i];
+		while (uart_tx_full()) /* wait */;
+		uart_putc(p[i]);
 	}
 	return len;
 }
@@ -162,3 +223,8 @@ void _exit(int exit_status)
 	asm volatile ("jr a0");
 	__builtin_unreachable();
 }
+
+// --
+
+#define Z_IS_OK(obj)   ((obj) && (obj)->type == Z_RETVAL && (obj)->value.uint32 == 0)
+#define Z_IS_FAIL(obj)  ((obj) && (obj)->type == Z_RETVAL && (obj)->value.uint32 == 1)

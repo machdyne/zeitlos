@@ -78,7 +78,7 @@ void sh(void) {
 			}
 			printf("creating process at %lx: ", addr);
 			fflush(stdout);
-			if (z_proc_create(addr, 128*1024) == Z_OK)
+			if (z_proc_create(addr, 128*1024) == 0)
 				printf("OK\n");
 			else
 				printf("FAIL\n");
@@ -96,7 +96,7 @@ void sh(void) {
 			printf("received %li bytes to 0x%lx.\n", bytes, addr);
 			printf("creating process at %lx: ", addr);
 			fflush(stdout);
-			if (z_proc_create(addr, bytes + (32*1024)) == Z_OK)
+			if (z_proc_create(addr, bytes + (32*1024)) == 0)
 				printf("OK\n");
 			else
 				printf("FAIL\n");

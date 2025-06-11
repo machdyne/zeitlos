@@ -15,10 +15,11 @@
 `define MEM_VRAM
 //`define MEM_QQSPI
 `define LED_RGB
-//`define LED_DEBUG
+`define LED_DEBUG
 `define GPU
 `define GPU_CURSOR
 `define GPU_PIXEL_DOUBLE
+`define GPU_CURSOR
 `define GPU_VGA
 `define UART0
 `define USB_HID

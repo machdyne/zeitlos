@@ -3,11 +3,29 @@
 
 #include <stdint.h>
 
-#define Z_CMD_IRQ          0
-#define Z_CMD_GET_API_MAP  1
+typedef enum {
+	Z_UINT32,
+	Z_INT32,
+	Z_STR,
+	Z_LIST,
+	Z_KV,
+	Z_RETVAL
+} z_type_t;
 
-#define Z_OK 0
-#define Z_FAIL 1
+typedef struct {
+
+	z_type_t type;
+	union {
+		void *ptr;
+		char *str;
+		uint32_t uint32;
+		int32_t int32;
+	} val;
+
+} z_obj_t;
+
+static z_obj_t z_rv_ok = { .type = Z_RETVAL, .val.uint32 = 0 };
+static z_obj_t z_rv_fail = { .type = Z_RETVAL, .val.uint32 = 1 };
 
 #define reg_kernel (*(volatile uint32_t*)0x0000000c)
 
@@ -57,13 +75,12 @@ void noecho(void);
 
 // --
 
-#define Z_API_FUNC(name, ret, ...) ret (*name)(__VA_ARGS__);
-typedef struct {
-    #include "api.def"
-} z_api_map_t;
-#undef Z_API_FUNC
-
-z_api_map_t *z_init(void);
-
+#define Z_MKSYSCALL(name, fn) Z_SYS_##name,
+typedef enum {
+	Z_SYSCALL_NONE = 0,
+	#include "syscalls.def"
+	Z_SYSCALL_COUNT
+} z_syscall_id_t;
+#undef Z_MKSYSCALL
 
 #endif
