@@ -18,7 +18,7 @@ Building Zeitlos requires [Yosys](https://github.com/YosysHQ/yosys), [nextpnr-ec
 
 ```
 $ make PREFIX=/opt/riscv32i/bin/riscv32-unknown-elf- BOARD=lakritz
-$ make BOARD=lakritz CABLE=dirtyJtag dev-prog
+$ make PREFIX=/opt/riscv32i/bin/riscv32-unknown-elf- BOARD=lakritz CABLE=dirtyJtag dev-prog
 ```
 
 3. At the BIOS prompt, load the kernel into main memory by pressing 'x' and then upload `sw/os/kernel.bin`. You will need to have the [xfer](https://github.com/machdyne/xfer) utility installed and configured in minicom.
