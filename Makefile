@@ -9,6 +9,7 @@ RTL_PICO = \
 	rtl/mem/qqspi.v \
 	rtl/mem/vram.v \
 	rtl/debug.v \
+	rtl/spibb.v \
 	rtl/gpu/gpu_video.v \
 	rtl/gpu/gpu_cursor.v \
 	rtl/gpu/gpu_ddmi.v \
@@ -182,6 +183,13 @@ else ifeq ($(BOARD), lowe)
 	PR = ~/work/fpga/gatemate/cc-toolchain-linux/bin/p_r/p_r
 	PRFLAGS += -uCIO -ccf boards/lowe.ccf -cCP -crc +uCIO -om 3
 	PROG = openFPGALoader -c $(CABLE)
+else ifeq ($(BOARD), lebkuchen)
+	FAMILY = gatemate
+	DEVICE = ccgma1
+	CCF = boards/lebkuchen_v0.ccf
+	SYNTH = ~/work/fpga/gatemate/oss-cad-suite/bin/yosys
+	PR = ~/work/fpga/gatemate/oss-cad-suite/bin/nextpnr-himbaechel
+	PROG = openFPGALoader -c $(CABLE)
 else ifeq ($(BOARD), cceval)
 	FAMILY = gatemate
 	DEVICE = ccgma1
@@ -205,7 +213,7 @@ endif
 
 zeitlos_ice40_pico:
 	mkdir -p output/$(BOARD_LC)
-	yosys -DBOARD_$(BOARD_UC) -q -p \
+	yosys -DBOARD_$(BOARD_UC) -DICE40 -q -p \
 		"synth_ice40 -top sysctl -json output/$(BOARD_LC)/soc.json" $(RTL_PICO)
 	nextpnr-ice40 --$(DEVICE) --package $(PACKAGE) --pcf boards/$(PCF) \
 		--asc output/$(BOARD_LC)/soc.txt --json output/$(BOARD_LC)/soc.json \
@@ -213,7 +221,7 @@ zeitlos_ice40_pico:
 
 zeitlos_ecp5_pico:
 	mkdir -p output/$(BOARD_LC)
-	yosys -DBOARD_$(BOARD_UC) -q -p \
+	yosys -DBOARD_$(BOARD_UC) -DECP5 -q -p \
 		"synth_ecp5 -top sysctl -json output/$(BOARD_LC)/soc.json" $(RTL_PICO)
 	nextpnr-ecp5 --$(DEVICE) --package $(PACKAGE) --lpf boards/$(LPF) \
 		--json output/$(BOARD_LC)/soc.json \
@@ -223,10 +231,13 @@ zeitlos_ecp5_pico:
 
 zeitlos_gatemate_pico:
 	mkdir -p output/$(BOARD_LC)
-	$(SYNTH) -DBOARD_$(BOARD_UC) -q -l synth.log -p \
+	$(SYNTH) -DBOARD_$(BOARD_UC) -DGATEMATE -q -l synth.log -p \
 		"read -sv $(RTL_PICO); synth_gatemate -top sysctl -nomx8 -vlog output/$(BOARD_LC)/soc_synth.v"
-	$(PR) -i output/$(BOARD_LC)/soc_synth.v -o output/$(BOARD_LC)/soc $(PRFLAGS)
-
+	$(PR) --device $(FAMILY) \
+		--json output/$(BOARD_LC)/soc.json \
+		--report output/$(BOARD_LC)/report.txt \
+		--textcfg output/$(BOARD_LC)/soc.config \
+		--timing-allow-fail -o --ccf boards/$(CCF)
 bios:
 	cd sw/bios && make BOARD=$(BOARD_UC) FAMILY=$(FAMILY_UC)
 

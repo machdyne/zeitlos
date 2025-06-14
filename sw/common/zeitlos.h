@@ -48,6 +48,8 @@ static z_obj_t z_rv_fail = { .type = Z_RETVAL, .val.uint32 = 1 };
 #define reg_usb_mouse (*(volatile uint32_t*)0xc0000008)
 #define reg_usb_cursor (*(volatile uint32_t*)0xc000000c)
 
+#define reg_sdcard (*(volatile uint32_t*)0xb0000000)
+
 // --
 
 int getch(void);

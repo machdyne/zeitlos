@@ -64,6 +64,13 @@ module sysctl #()
 	inout QQSPI_MOSI, QQSPI_MISO, QQSPI_SIO2, QQSPI_SIO3,
 `endif
 
+`ifdef SPI_SDCARD
+   output SD_SS,
+   inout SD_MISO,
+   output SD_MOSI,
+   output SD_SCK,
+`endif 
+
 `ifdef GPU_VGA
 	output VGA_R,
 	output VGA_G,
@@ -104,6 +111,9 @@ module sysctl #()
 
 	wire sys_clk = clk48mhz;
 
+
+`ifdef ECP5
+
 	wire pll_locked = pll0_locked && pll1_locked;
 	wire pll0_locked;
 	wire pll1_locked;
@@ -123,6 +133,57 @@ module sysctl #()
 		.locked(pll1_locked)
 	);
 
+`elsif GATEMATE
+
+	wire pll_locked = pll0_locked && pll1_locked && pll2_locked;
+	wire pll0_locked;
+	wire pll1_locked;
+	wire pll2_locked;
+
+   CC_PLL #(
+      .REF_CLK(48.0),      // reference input in MHz
+      .OUT_CLK(125.0),     // pll output frequency in MHz
+      .PERF_MD("ECONOMY"), // LOWPOWER, ECONOMY, SPEED
+      .LOW_JITTER(1),      // 0: disable, 1: enable low jitter mode
+      .CI_FILTER_CONST(2), // optional CI filter constant
+      .CP_FILTER_CONST(4)  // optional CP filter constant
+   ) pll_inst (
+      .CLK_REF(clk), .CLK_FEEDBACK(1'b0), .USR_CLK_REF(1'b0),
+      .USR_LOCKED_STDY_RST(1'b0),
+		.USR_PLL_LOCKED(pll0_locked),
+      .CLK0(clk125mhz),
+   );
+
+   CC_PLL #(
+      .REF_CLK(48.0),      // reference input in MHz
+      .OUT_CLK(75.0),      // pll output frequency in MHz
+      .PERF_MD("ECONOMY"), // LOWPOWER, ECONOMY, SPEED
+      .LOW_JITTER(1),      // 0: disable, 1: enable low jitter mode
+      .CI_FILTER_CONST(2), // optional CI filter constant
+      .CP_FILTER_CONST(4)  // optional CP filter constant
+   ) pll_inst (
+      .CLK_REF(clk), .CLK_FEEDBACK(1'b0), .USR_CLK_REF(1'b0),
+      .USR_LOCKED_STDY_RST(1'b0),
+		.USR_PLL_LOCKED(pll1_locked),
+      .CLK0(clk75mhz),
+   );
+
+   CC_PLL #(
+      .REF_CLK(48.0),      // reference input in MHz
+      .OUT_CLK(12.0),      // pll output frequency in MHz
+      .PERF_MD("ECONOMY"), // LOWPOWER, ECONOMY, SPEED
+      .LOW_JITTER(1),      // 0: disable, 1: enable low jitter mode
+      .CI_FILTER_CONST(2), // optional CI filter constant
+      .CP_FILTER_CONST(4)  // optional CP filter constant
+   ) pll_inst (
+      .CLK_REF(clk), .CLK_FEEDBACK(1'b0), .USR_CLK_REF(1'b0),
+      .USR_LOCKED_STDY_RST(1'b0),
+		.USR_PLL_LOCKED(pll2_locked),
+      .CLK0(clk12mhz),
+   );
+
+`endif
+
 	// RESET
 	reg [11:0] resetn_counter = 0;
 	wire sys_rstn = &resetn_counter;
@@ -135,7 +196,7 @@ module sysctl #()
 	end
 
 	// RTC
-	reg [20:0] rtc_ctr;
+	reg [15:0] rtc_ctr;	// ~732hz
 
 	always @(posedge sys_clk) begin
 		rtc_ctr <= rtc_ctr + 1;
@@ -175,6 +236,7 @@ module sysctl #()
 	wire [31:0] wbs_vram_dat_o;
 	wire [31:0] wbs_debug_dat_o;
 	wire [31:0] wbs_uart0_dat_o;
+	wire [31:0] wbs_spisdcard_dat_o;
 	wire [31:0] wbs_usb0_dat_o;
 
 	wire cs_bram = (wbm_adr < 8192);
@@ -190,6 +252,9 @@ module sysctl #()
 	wire cs_vram = ((wbm_adr & 32'hf000_0000) == 32'h2000_0000);
 `endif
 
+`ifdef SPI_SDCARD
+	wire cs_spisdcard = ((wbm_adr & 32'hf000_0000) == 32'hb000_0000);
+`endif
 `ifdef USB_HID
 	wire cs_usb0 = ((wbm_adr & 32'hf000_0000) == 32'hc000_0000);
 `endif
@@ -218,6 +283,9 @@ module sysctl #()
 `ifdef UART0
 		cs_uart0 ? wbs_uart0_dat_o :
 `endif
+`ifdef SPI_SDCARD
+		cs_spisdcard ? wbs_spisdcard_dat_o :
+`endif
 `ifdef USB_HID
 		cs_usb0 ? wbs_usb0_dat_o :
 `endif
@@ -230,6 +298,7 @@ module sysctl #()
 	wire wbs_vram_ack_o;
 	wire wbs_debug_ack_o;
 	wire wbs_uart0_ack_o;
+	wire wbs_spisdcard_ack_o;
 	wire wbs_usb0_ack_o;
 
 	assign wbm_ack =
@@ -249,6 +318,9 @@ module sysctl #()
 `endif
 `ifdef UART0
 		cs_uart0 ? wbs_uart0_ack_o :
+`endif
+`ifdef SPI_SDCARD
+		cs_spisdcard ? wbs_spisdcard_ack_o :
 `endif
 `ifdef USB_HID
 		cs_usb0 ? wbs_usb0_ack_o :
@@ -517,6 +589,29 @@ module sysctl #()
 		.ri_pad_i(1'b1),
 		.dcd_pad_i(1'b1),
 		.int_o(wbs_uart0_int)
+	);
+`endif
+
+	// WISHBONE SLAVE: SPI BIT-BANG INTERFACE FOR SDCARD
+`ifdef SPI_SDCARD
+	wire wbm_cyc_spisdcard = cs_spisdcard && wbm_cyc;
+
+	spibb_wb #() wbs_spibb0_i
+	(
+		.wb_clk_i(wbm_clk),
+		.wb_rst_i(wbm_rst),
+		.wb_adr_i(wbm_adr_sel_word),
+		.wb_dat_i(wbm_dat_o),
+		.wb_dat_o(wbs_spisdcard_dat_o),
+		.wb_we_i(wbm_we),
+		.wb_sel_i(wbm_sel),
+		.wb_stb_i(wbm_stb),
+		.wb_ack_o(wbs_spisdcard_ack_o),
+		.wb_cyc_i(wbm_cyc_spisdcard),
+		.sd_ss(SD_SS),
+		.sd_miso(SD_MISO),
+		.sd_mosi(SD_MOSI),
+		.sd_sck(SD_SCK)
 	);
 `endif
 

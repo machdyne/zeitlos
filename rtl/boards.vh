@@ -23,6 +23,7 @@
 `define GPU_VGA
 `define UART0
 `define USB_HID
+`define SPI_SDCARD
 
 `elsif BOARD_LAKRITZ
 
@@ -37,5 +38,6 @@
 `define GPU_DDMI
 `define UART0
 `define USB_HID
+`define SPI_SDCARD
 
 `endif

@@ -183,9 +183,9 @@ start:
 	/* call bios main */
 	jal ra, main
 
-	/* set stack pointer to end of kernel + stack size */
-	lui sp, %hi(0x4003fff0)
-	addi sp, sp, %lo(0x4003fff0)
+	/* set stack pointer to end of main memory */
+	lui sp, %hi(0x40100000)
+	addi sp, sp, %lo(0x40100000)
 
 	/* jump to OS main */
 	li a0, 0x40000000

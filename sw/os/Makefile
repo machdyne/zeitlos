@@ -1,17 +1,23 @@
 PREFIX = /opt/riscv32i/bin/riscv32-unknown-elf-
 ARCH = rv32i
 CC = $(PREFIX)gcc
-CFLAGS = -fPIC --std=gnu99 -Os -MD -Wall -march=$(ARCH)
+CFLAGS = -fPIC --std=gnu99 -Os -MD -Wall -march=$(ARCH) -I../common
 LDFLAGS = -fPIC
 LDSCRIPT = ../common/riscv-os.ld
 
-OBJS = kernel.o kruntime.o uart.o sh.o xfer.o ui.o
+OBJS = kernel.o kruntime.o mem.o \
+	fs/fs.o fs/fatfs/sdmm.o fs/fatfs/ff.o \
+	uart.o sh.o xfer.o ui.o
 
 kernel: kernel.elf kernel.bin
 
 kernel.o:
 	$(CC) $(CFLAGS) -c kernel.c -o kernel.o
 	$(CC) $(CFLAGS) -c kruntime.c -o kruntime.o
+	$(CC) $(CFLAGS) -c mem.c -o mem.o
+	$(CC) $(CFLAGS) -c fs/fs.c -o fs/fs.o
+	$(CC) $(CFLAGS) -c fs/fatfs/sdmm.c -o fs/fatfs/sdmm.o
+	$(CC) $(CFLAGS) -c fs/fatfs/ff.c -o fs/fatfs/ff.o
 	$(CC) $(CFLAGS) -c sh.c -o sh.o
 	$(CC) $(CFLAGS) -c xfer.c -o xfer.o
 	$(CC) $(CFLAGS) -c ui.c -o ui.o
