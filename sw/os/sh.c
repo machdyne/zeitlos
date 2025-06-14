@@ -76,6 +76,33 @@ void sh(void) {
 				fs_list_dir("/");
 		}
 
+		// MAKE DIRECTORY
+		if (!strncmp(buffer, "mkdir", cmdlen)) {
+			arg = get_arg(buffer, 1);
+			if (arg != NULL)
+				fs_mkdir(arg);
+			else
+				printf("error: no file/directory specified\n");
+		}
+
+		// TOUCH FILE
+		if (!strncmp(buffer, "touch", cmdlen)) {
+			arg = get_arg(buffer, 1);
+			if (arg != NULL)
+				fs_touch(arg);
+			else
+				printf("error: no file/directory specified\n");
+		}
+
+		// REMOVE FILE/DIRECTORY
+		if (!strncmp(buffer, "rm", cmdlen)) {
+			arg = get_arg(buffer, 1);
+			if (arg != NULL)
+				fs_unlink(arg);
+			else
+				printf("error: no file/directory specified\n");
+		}
+
 		// RECEIVE TO ADDR VIA XFER
 		else if (!strncmp(buffer, "xa", cmdlen)) {
 			arg = get_arg(buffer, 1);
@@ -94,6 +121,10 @@ void sh(void) {
 		// RECEIVE TO FILE VIA XFER
 		else if (!strncmp(buffer, "xf", cmdlen)) {
 			arg = get_arg(buffer, 1);
+			if (arg == NULL) {
+				printf("error: no file specified\n");
+				continue;
+			}
 			uint32_t bytes_received, bytes_written;
 			void *tmp = k_mem_alloc(1024*128); // 128K max file size for now
 			uint32_t addr = (uint32_t)(uintptr_t)tmp;
@@ -210,5 +241,8 @@ void sh_help(void) {
 	printf(" ps                display a process snapshot\n");
 	printf(" ks                display a kernel snapshot\n");
 	printf(" ls [path]         display list of files\n");
+	printf(" mkdir [path]      make a directory\n");
+	printf(" touch [path]      create empty file\n");
+	printf(" rm [path]         remove a file\n");
 
 }
