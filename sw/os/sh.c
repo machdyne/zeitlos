@@ -8,6 +8,7 @@
 
 #include <stdio.h>
 #include <stdbool.h>
+#include <stdlib.h>
 #include <string.h>
 #include "../common/zeitlos.h"
 #include "kernel.h"
@@ -79,12 +80,38 @@ void sh(void) {
 		else if (!strncmp(buffer, "xa", cmdlen)) {
 			arg = get_arg(buffer, 1);
 			uint32_t addr, bytes;
-			if (!sscanf(arg, "%lx", &addr))
-				addr = 0x40040000; 
+			if (!sscanf(arg, "%lx", &addr)) {
+				printf("bad address\n");
+				continue;
+			}
 			printf("xfer addr 0x%lx; ready to receive (press D to cancel) ...\n",
 				addr);
 			bytes = xfer_recv(addr);
 			printf("received %li bytes to 0x%lx.\n", bytes, addr);
+		}
+
+
+		// RECEIVE TO FILE VIA XFER
+		else if (!strncmp(buffer, "xf", cmdlen)) {
+			arg = get_arg(buffer, 1);
+			uint32_t bytes_received, bytes_written;
+			void *tmp = k_mem_alloc(1024*128); // 128K max file size for now
+			uint32_t addr = (uint32_t)(uintptr_t)tmp;
+			printf("uploading to file %s.\n", arg);
+			printf("xfer addr 0x%lx; ready to receive (press D to cancel) ...\n",
+				addr);
+			bytes_received = xfer_recv(addr);
+			printf("received %li bytes to 0x%lx.\n", bytes_received, addr);
+			if (bytes_received) {
+				printf("writing to file %s ... ", arg);
+				fflush(stdout);
+				bytes_written = fs_write_file(arg, tmp, bytes_received);
+				k_mem_free(tmp);
+				if (bytes_written == bytes_received)
+					printf("done.\n");
+				else
+					printf("failed.\n");
+			}
 		}
 
 		// CREATE A PROCESS
