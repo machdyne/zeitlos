@@ -81,7 +81,7 @@ module usb_hid_wb #()
 				{ 8'h00, uhh_mouse_btn, mouse_dy, mouse_dx };
 
 			if (wb_adr_i[2:0] == 3'h03) wb_dat_o <=
-				{ 8'h00, uhh_mouse_btn, curs_y, curs_x };
+				{ 11'd0, uhh_mouse_btn, curs_y, curs_x };
 
 			wb_ack_o <= 1;
 

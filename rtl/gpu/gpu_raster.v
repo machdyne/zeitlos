@@ -2,7 +2,7 @@
  * Zeitlos SOC GPU
  * Copyright (c) 2025 Lone Dynamics Corporation. All rights reserved.
  *
- * Line rasterizer.
+ * Line rasterizer with command FIFO.
  *
  */
 
@@ -31,12 +31,33 @@ module gpu_raster_wb (
     input               m_ack_i
 );
 
-// Registers  
+// CPU interface registers  
+reg [8:0] cpu_x0, cpu_x1, cpu_y0, cpu_y1;
+reg cpu_color;
+
+// Command FIFO parameters
+parameter FIFO_DEPTH = 16;
+parameter FIFO_ADDR_WIDTH = 4;
+
+// Command FIFO storage (37 bits per entry: 9+9+9+9+1)
+reg [36:0] fifo_mem [0:FIFO_DEPTH-1];
+reg [FIFO_ADDR_WIDTH-1:0] fifo_wr_ptr;
+reg [FIFO_ADDR_WIDTH-1:0] fifo_rd_ptr;
+reg [FIFO_ADDR_WIDTH:0] fifo_count;
+
+// FIFO signals
+wire fifo_empty = (fifo_count == 0);
+wire fifo_full = (fifo_count == FIFO_DEPTH);
+wire fifo_push;
+wire fifo_pop;
+
+// Current drawing command registers
 reg [8:0] x0, x1, y0, y1;
-reg [8:0] cur_x, cur_y;
 reg color;
-reg busy_reg;
-reg start_req;
+
+// Drawing state registers
+reg [8:0] cur_x, cur_y;
+reg draw_busy;
 reg [15:0] pixel_count;
 
 // FSM
@@ -98,23 +119,54 @@ assign err2 = e2_lt_dx ? (err1 + dx) : err1;
 // Check if we've reached the end
 assign at_end = (cur_x == x1) && (cur_y == y1);
 
-// Start pulse generation
-wire start_pulse = start_req && !busy_reg;
+// FIFO control
+assign fifo_push = wb_cyc_i && wb_stb_i && wb_we_i && (wb_adr_i[3:0] == 4'd5) && !fifo_full;
+assign fifo_pop = (state == SETUP);
+
+// Overall busy signal (FIFO not empty OR currently drawing)
+wire busy_signal = !fifo_empty || draw_busy;
 
 // VRAM address calculation
 wire [31:0] pixel_word_addr = 32'h20000000 + ((cur_y << 4) + (cur_x >> 5)) * 4;
 wire [4:0] pixel_bit_pos = cur_x[4:0];
 wire [31:0] pixel_mask = 32'h00000001 << pixel_bit_pos;
 
+// FIFO management
+always @(posedge clk) begin
+    if (rst) begin
+        fifo_wr_ptr <= 0;
+        fifo_rd_ptr <= 0;
+        fifo_count <= 0;
+    end else begin
+        case ({fifo_push, fifo_pop})
+            2'b10: begin // Push only
+                fifo_mem[fifo_wr_ptr] <= {cpu_color, cpu_y1, cpu_x1, cpu_y0, cpu_x0};
+                fifo_wr_ptr <= fifo_wr_ptr + 1;
+                fifo_count <= fifo_count + 1;
+            end
+            2'b01: begin // Pop only
+                fifo_rd_ptr <= fifo_rd_ptr + 1;
+                fifo_count <= fifo_count - 1;
+            end
+            2'b11: begin // Push and pop simultaneously
+                fifo_mem[fifo_wr_ptr] <= {cpu_color, cpu_y1, cpu_x1, cpu_y0, cpu_x0};
+                fifo_wr_ptr <= fifo_wr_ptr + 1;
+                fifo_rd_ptr <= fifo_rd_ptr + 1;
+                // fifo_count stays the same
+            end
+            // 2'b00: No change
+        endcase
+    end
+end
+
 // Wishbone register interface
 always @(posedge clk) begin
     if (rst) begin
-        x0 <= 9'd0;
-        y0 <= 9'd0;
-        x1 <= 9'd0;
-        y1 <= 9'd0;
-        color <= 1'b0;
-        start_req <= 1'b0;
+        cpu_x0 <= 9'd0;
+        cpu_y0 <= 9'd0;
+        cpu_x1 <= 9'd0;
+        cpu_y1 <= 9'd0;
+        cpu_color <= 1'b0;
         wb_ack_o <= 1'b0;
         wb_dat_o <= 32'd0;
     end else begin
@@ -124,40 +176,38 @@ always @(posedge clk) begin
             wb_ack_o <= 1'b1;
             if (wb_we_i) begin
                 case (wb_adr_i[3:0])
-                    4'd0: x0 <= wb_dat_i[8:0];
-                    4'd1: y0 <= wb_dat_i[8:0];
-                    4'd2: x1 <= wb_dat_i[8:0];
-                    4'd3: y1 <= wb_dat_i[8:0];
-                    4'd4: color <= wb_dat_i[0];
-                    4'd5: if (!busy_reg) start_req <= 1'b1;
+                    4'd0: cpu_x0 <= wb_dat_i[8:0];
+                    4'd1: cpu_y0 <= wb_dat_i[8:0];
+                    4'd2: cpu_x1 <= wb_dat_i[8:0];
+                    4'd3: cpu_y1 <= wb_dat_i[8:0];
+                    4'd4: cpu_color <= wb_dat_i[0];
+                    4'd5: ; // Start command - handled by FIFO push logic
                     default: ;
                 endcase
             end else begin
                 case (wb_adr_i[3:0])
-                    4'd0: wb_dat_o <= {23'd0, x0};
-                    4'd1: wb_dat_o <= {23'd0, y0};
-                    4'd2: wb_dat_o <= {23'd0, x1};
-                    4'd3: wb_dat_o <= {23'd0, y1};
-                    4'd4: wb_dat_o <= {31'd0, color};
-                    4'd5: wb_dat_o <= {31'd0, start_req};
-                    4'd6: wb_dat_o <= {31'd0, busy_reg};
+                    4'd0: wb_dat_o <= {23'd0, cpu_x0};
+                    4'd1: wb_dat_o <= {23'd0, cpu_y0};
+                    4'd2: wb_dat_o <= {23'd0, cpu_x1};
+                    4'd3: wb_dat_o <= {23'd0, cpu_y1};
+                    4'd4: wb_dat_o <= {31'd0, cpu_color};
+                    4'd5: wb_dat_o <= 32'd0; // Start register (write-only)
+                    4'd6: wb_dat_o <= {31'd0, busy_signal};
                     4'd7: wb_dat_o <= {16'd0, pixel_count};
                     4'd8: wb_dat_o <= {23'd0, cur_x};
                     4'd9: wb_dat_o <= {23'd0, cur_y};
+                    4'd10: wb_dat_o <= {27'd0, fifo_count}; // Debug: FIFO count
                     default: wb_dat_o <= 32'd0;
                 endcase
             end
         end
-
-        if (start_pulse)
-            start_req <= 1'b0;
     end
 end
 
 // Main FSM and Bresenham algorithm
 always @(posedge clk) begin
     if (rst) begin
-        busy_reg <= 1'b0;
+        draw_busy <= 1'b0;
         m_cyc_o <= 1'b0;
         m_stb_o <= 1'b0;
         m_we_o <= 1'b0;
@@ -169,16 +219,24 @@ always @(posedge clk) begin
         cur_y <= 9'd0;
         err <= 13'd0;
         pixel_count <= 16'd0;
+        x0 <= 9'd0;
+        y0 <= 9'd0;
+        x1 <= 9'd0;
+        y1 <= 9'd0;
+        color <= 1'b0;
     end else begin
         case(state)
         IDLE: begin
-            busy_reg <= 1'b0;
+            draw_busy <= 1'b0;
             m_cyc_o <= 1'b0;
             m_stb_o <= 1'b0;
             m_we_o <= 1'b0;
 
-            if (start_pulse) begin
-                busy_reg <= 1'b1;
+            // Check if there's a command in the FIFO
+            if (!fifo_empty) begin
+                // Load command from FIFO
+                {color, y1, x1, y0, x0} <= fifo_mem[fifo_rd_ptr];
+                draw_busy <= 1'b1;
                 state <= SETUP;
             end
         end
@@ -241,8 +299,8 @@ always @(posedge clk) begin
         end
 
         DONE: begin
-            busy_reg <= 1'b0;
-            state <= IDLE;
+            draw_busy <= 1'b0;
+            state <= IDLE;  // Will check FIFO again in next cycle
         end
 
         default: begin
