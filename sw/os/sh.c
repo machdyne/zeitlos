@@ -149,6 +149,10 @@ void sh(void) {
 		else if (!strncmp(buffer, "run", cmdlen)) {
 			arg = get_arg(buffer, 1);
 			uint32_t size = fs_size(arg);
+			if (!size) {
+				printf("file not found/empty\n");
+				continue;
+			}
 			printf("creating process (file: %s size: %ld)\n", arg, size);
 			fflush(stdout);
 			uint32_t pid = k_proc_create(size);
