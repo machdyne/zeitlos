@@ -234,13 +234,13 @@ gpu_clip_enable = 1;
 			draw_box(x, y, x + 200, y + 100, 1);
 
 		}
-
+/*
 		if ((c++ % 10000) == 0) {
         uart_puts("FIFO = ");
         uart_putnum(gpu_debug_fifo_count);
         uart_puts("\r\n");
 		}
-
+*/
 		c++;
 
 	}
