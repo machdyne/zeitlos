@@ -135,7 +135,7 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 
 		if ((z_procs[z_pid].flags & Z_PROC_FLAG_DIE) == Z_PROC_FLAG_DIE) {
 			// free the memory
-			k_mem_free(z_procs[z_pid].base);
+			k_mem_free((void *)z_procs[z_pid].base);
 			// kill the process
 			z_procs[z_pid].base = 0x00000000;
 			z_procs[z_pid].flags = 0x00000000;

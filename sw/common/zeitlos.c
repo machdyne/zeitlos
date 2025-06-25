@@ -30,41 +30,33 @@ bool uart_tx_full(void);
 void uart_putc(char c);
 int16_t uart_getc(void);
 
+void print_hex32(uint32_t val);
+
 bool uart_rx_empty(void) {
-	uint32_t *(*z_kernel_ptr)(uint32_t, uint32_t *, uint32_t) =
-		(uint32_t *(*)(uint32_t, uint32_t *, uint32_t))(uintptr_t)reg_kernel;
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
 	z_obj_t obj;
 	z_kernel_ptr(Z_SYS_UART_RX_EMPTY, (uint32_t *)&obj, 0);
 	return (bool)obj.val.int32;
 }
 
 bool uart_tx_full(void) {
-	uint32_t *(*z_kernel_ptr)(uint32_t, uint32_t *, uint32_t) =
-		(uint32_t *(*)(uint32_t, uint32_t *, uint32_t))(uintptr_t)reg_kernel;
-
-//	reg_leds = 0xff;
-//	print_hex32(&z_kernel_ptr);
-//	while(1);  // XXX
-
-
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
 	z_obj_t obj;
-	z_kernel_ptr(Z_SYS_UART_RX_EMPTY, (uint32_t *)&obj, 0);
+	z_kernel_ptr(Z_SYS_UART_TX_FULL, (uint32_t *)&obj, 0);
 	return (bool)obj.val.int32;
 }
 
 void uart_putc(char c) {
-	uint32_t *(*z_kernel_ptr)(uint32_t, uint32_t *, uint32_t) =
-		(uint32_t *(*)(uint32_t, uint32_t *, uint32_t))(uintptr_t)reg_kernel;
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
 	z_obj_t obj;
 	obj.val.int32 = c;
-	z_kernel_ptr(Z_SYS_UART_RX_EMPTY, (uint32_t *)&obj, 0);
+	z_kernel_ptr(Z_SYS_UART_PUTC, (uint32_t *)&obj, 0);
 }
 
 int16_t uart_getc(void) {
-	uint32_t *(*z_kernel_ptr)(uint32_t, uint32_t *, uint32_t) =
-		(uint32_t *(*)(uint32_t, uint32_t *, uint32_t))(uintptr_t)reg_kernel;
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
 	z_obj_t obj;
-	z_kernel_ptr(Z_SYS_UART_RX_EMPTY, (uint32_t *)&obj, 0);
+	z_kernel_ptr(Z_SYS_UART_GETC, (uint32_t *)&obj, 0);
 	return (int16_t)obj.val.int32;
 }
 

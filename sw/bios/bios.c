@@ -290,6 +290,16 @@ void cmd_memhigh()
 	print("done.\n");
 }
 
+void cmd_memhigh_ff()
+{
+	print("zeroing ... ");
+   volatile uint32_t *addr = (uint32_t *)addr_ptr;
+	for (int i = 0; i < (mem_total / sizeof(int)); i++) {
+		(*(volatile uint32_t *)(addr + i)) = 0xffffffff;
+	}
+	print("done.\n");
+}
+
 void memcpy(uint32_t dest, uint32_t src, uint32_t n) {
    volatile uint32_t *from = (uint32_t *)src;
    volatile uint32_t *to = (uint32_t *)dest;
@@ -375,7 +385,7 @@ void main() {
 
 	int cmd;
 
-	reg_led = 0x00;
+	reg_led = 0xff;
 
 	addr_ptr = MEM_MAIN;
 	mem_total = MEM_MAIN_SIZE;
@@ -451,8 +461,11 @@ void main() {
 				cmd_memzero();
 				break;
 			case 'f':
-			case 'F':
 				cmd_memhigh();
+				break;
+			case 'F':
+				cmd_memhigh_ff();
+				break;
 			default:
 				continue;
 		}

@@ -18,6 +18,18 @@ SECTIONS
     _edata = .;
   }
 
+  .got ALIGN(4) : {
+    _got_start = .;
+    KEEP(*(.got))
+    _got_end = .;
+  }
+
+  .got.plt ALIGN(4) : {
+    _got.plt_start = .;
+    KEEP(*(.got.plt))
+    _got.plt_end = .;
+  }
+
   .bss ALIGN(4) : {
     _sbss = .;
     *(COMMON)

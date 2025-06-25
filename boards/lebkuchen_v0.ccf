@@ -52,6 +52,25 @@
 #   default_GPIO | DRIVE=3; # sets all output strengths to 3mA, unless overwritten
 #
 
-Net   "clk"  Loc = "IO_SB_A7" | SCHMITT_TRIGGER=true;
-Net   "led"  Loc = "IO_WC_A0";
+Net   "CLK_48"  Loc = "IO_SB_A7" | SCHMITT_TRIGGER=true;
+Net   "LED_B"  Loc = "IO_WC_A0";
+
+Net   "UART0_RX"  Loc = "IO_SA_A8";	# RP2040 TX
+Net   "UART0_TX"  Loc = "IO_SA_B8";	# RP2040 RX
+
+Net   "SD_SS"  Loc = "IO_WB_B2";
+Net   "SD_MOSI"  Loc = "IO_WB_A2";
+Net   "SD_MISO"  Loc = "IO_WB_B5";
+Net   "SD_SCK"  Loc = "IO_WB_A5";
+
+Net   "usb_host_dp[0]"  Loc = "IO_WB_B1";
+Net   "usb_host_dm[0]"  Loc = "IO_WB_A1";
+Net   "usb_host_dp[1]"  Loc = "IO_WB_B0";
+Net   "usb_host_dm[1]"  Loc = "IO_WB_A0";
+
+Net   "VGA_HS"  Loc = "IO_EB_A0";
+Net   "VGA_VS"  Loc = "IO_EB_B0";
+Net   "VGA_R"  Loc = "IO_EB_A4";
+Net   "VGA_G"  Loc = "IO_EB_B5";
+Net   "VGA_B"  Loc = "IO_EB_A3";
 

@@ -7,6 +7,10 @@ _start:
     # get PC-relative base
     auipc t0, 0           # t0 = base
 
+    # set stack pointer
+    li    t1, 0x2000      # 8 KB stack
+    add   sp, t0, t1
+
     # set global pointer
 0:  auipc gp, %pcrel_hi(__global_pointer$)
     addi  gp, gp, %pcrel_lo(0b)
@@ -49,9 +53,6 @@ _start:
     j     3b
 
 4:
-    # set stack pointer
-    li    t1, 0x2000      # 8 KB stack
-    add   sp, t0, t1
 
     #la a0, __libc_fini_array
     #call atexit

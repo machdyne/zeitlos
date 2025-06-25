@@ -3,6 +3,7 @@ RTL_PICO = \
 	rtl/clk/pll0.v \
 	rtl/clk/pll1.v \
 	rtl/cpu/picorv32/picorv32.v \
+	rtl/arbiter.v \
 	rtl/mem/bram.v \
 	rtl/mem/sram.v \
 	rtl/mem/sdram.v \
@@ -10,6 +11,7 @@ RTL_PICO = \
 	rtl/mem/vram.v \
 	rtl/debug.v \
 	rtl/spibb.v \
+	rtl/gpu/gpu_raster.v \
 	rtl/gpu/gpu_video.v \
 	rtl/gpu/gpu_cursor.v \
 	rtl/gpu/gpu_ddmi.v \
@@ -104,8 +106,8 @@ else ifeq ($(BOARD), icoboard)
 	DEVICE = hx8k
 	PACKAGE = ct256
 	PCF = icoboard.pcf
-	PROG = icoprog -p < output/soc.bin
-	FLASH = icoprog -f < output/soc.bin
+	PROG = icoprog -p < output/soc.bit
+	FLASH = icoprog -f < output/soc.bit
 	FLASH_OFFSET = -O
 else ifeq ($(BOARD), schoko)
 	FAMILY = ecp5
@@ -155,48 +157,15 @@ else ifeq ($(BOARD), lakritz)
 	PROG = openFPGALoader -c $(CABLE)
 	FLASH = openFPGALoader -v -c $(CABLE) -f
 	FLASH_OFFSET = -o
-else ifeq ($(BOARD), kolsch_v0)
-	FAMILY = gatemate
-	DEVICE = ccgma1
-	SYNTH = ~/work/fpga/gatemate/cc-toolchain-linux/bin/yosys/yosys
-	PR = ~/work/fpga/gatemate/cc-toolchain-linux/bin/p_r/p_r
-	PRFLAGS += -uCIO -ccf boards/kolsch_v0.ccf -cCP -crc +uCIO -om 2
-else ifeq ($(BOARD), kolsch_v1)
-	FAMILY = gatemate
-	DEVICE = ccgma1
-	SYNTH = ~/work/fpga/gatemate/cc-toolchain-linux/bin/yosys/yosys
-	PR = ~/work/fpga/gatemate/cc-toolchain-linux/bin/p_r/p_r
-	PRFLAGS += -uCIO -ccf boards/kolsch_v1.ccf -cCP -crc +uCIO -om 3
-	PROG = openFPGALoader -c dirtyJtag
-else ifeq ($(BOARD), kolsch_v2)
-	FAMILY = gatemate
-	DEVICE = ccgma1
-	#SYNTH = ~/work/fpga/gatemate/cc-toolchain-linux/bin/yosys/yosys
-	SYNTH = yosys
-	PR = ~/work/fpga/gatemate/cc-toolchain-linux/bin/p_r/p_r
-	PRFLAGS += -uCIO -ccf boards/kolsch_v2.ccf -cCP -crc +uCIO -om 3
-	PROG = openFPGALoader -c dirtyJtag
-else ifeq ($(BOARD), lowe)
-	FAMILY = gatemate
-	DEVICE = ccgma1
-	SYNTH = ~/work/fpga/gatemate/cc-toolchain-linux/bin/yosys/yosys
-	PR = ~/work/fpga/gatemate/cc-toolchain-linux/bin/p_r/p_r
-	PRFLAGS += -uCIO -ccf boards/lowe.ccf -cCP -crc +uCIO -om 3
-	PROG = openFPGALoader -c $(CABLE)
 else ifeq ($(BOARD), lebkuchen)
 	FAMILY = gatemate
 	DEVICE = ccgma1
+	CABLE = dirtyJtag
 	CCF = boards/lebkuchen_v0.ccf
 	SYNTH = ~/work/fpga/gatemate/oss-cad-suite/bin/yosys
 	PR = ~/work/fpga/gatemate/oss-cad-suite/bin/nextpnr-himbaechel
+	PACK = ~/work/fpga/gatemate/oss-cad-suite/bin/gmpack
 	PROG = openFPGALoader -c $(CABLE)
-else ifeq ($(BOARD), cceval)
-	FAMILY = gatemate
-	DEVICE = ccgma1
-	SYNTH = ~/work/fpga/gatemate/cc-toolchain-linux/bin/yosys/yosys
-	PR = ~/work/fpga/gatemate/cc-toolchain-linux/bin/p_r/p_r
-	PRFLAGS += -uCIO -ccf boards/cceval.ccf -cCP -crc +uCIO -om 3
-	PROG = openFPGALoader -c gatemate_evb_jtag
 endif
 
 FAMILY_UC = $(shell echo '$(FAMILY)' | tr '[:lower:]' '[:upper:]')
@@ -232,19 +201,18 @@ zeitlos_ecp5_pico:
 zeitlos_gatemate_pico:
 	mkdir -p output/$(BOARD_LC)
 	$(SYNTH) -DBOARD_$(BOARD_UC) -DGATEMATE -q -l synth.log -p \
-		"read -sv $(RTL_PICO); synth_gatemate -top sysctl -nomx8 -vlog output/$(BOARD_LC)/soc_synth.v"
-	$(PR) --device $(FAMILY) \
-		--json output/$(BOARD_LC)/soc.json \
-		--report output/$(BOARD_LC)/report.txt \
-		--textcfg output/$(BOARD_LC)/soc.config \
-		--timing-allow-fail -o --ccf boards/$(CCF)
+		"read -sv $(RTL_PICO); synth_gatemate -top sysctl -luttree -nomult \
+			-nomx8 -json output/$(BOARD_LC)/soc.json"
+	$(PR) --device CCGM1A1 --json output/$(BOARD_LC)/soc.json --vopt ccf=$(CCF) --vopt out=output/$(BOARD_LC)/soc.txt --router router2
+	$(PACK) output/$(BOARD_LC)/soc.txt output/$(BOARD_LC)/soc.bit
+
 bios:
 	cd sw/bios && make BOARD=$(BOARD_UC) FAMILY=$(FAMILY_UC)
 
 ifeq ($(FAMILY), ice40)
 soc:
 	icebram sw/bios/bios_seed.hex sw/bios/bios.hex < \
-		output/$(BOARD_LC)/soc.txt | icepack > output/$(BOARD_LC)/soc.bin
+		output/$(BOARD_LC)/soc.txt | icepack > output/$(BOARD_LC)/soc.bit
 else ifeq ($(FAMILY), ecp5)
 soc:
 	ecpbram -i output/$(BOARD_LC)/soc.config \
@@ -252,14 +220,14 @@ soc:
 		-f sw/bios/bios_seed.hex \
 		-t sw/bios/bios.hex
 	ecppack -v --compress --freq 2.4 output/$(BOARD_LC)/soc_final.config \
-		--bit output/$(BOARD_LC)/soc.bin
+		--bit output/$(BOARD_LC)/soc.bit
 endif
 
 dev: clean_os clean_bios clean_apps os bios apps
 dev-prog: dev soc prog
 
 prog: 
-	$(PROG) output/$(BOARD_LC)/soc.bin
+	$(PROG) output/$(BOARD_LC)/soc.bit
 
 os:
 	cd sw/os && make

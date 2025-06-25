@@ -12,7 +12,7 @@ module spibb_wb #()
 	input wb_rst_i,
 	input [31:0] wb_adr_i,
 	input [31:0] wb_dat_i,
-	output [31:0] wb_dat_o,
+	output reg [31:0] wb_dat_o,
 	input wb_we_i,
 	input [3:0] wb_sel_i,
 	input wb_stb_i,

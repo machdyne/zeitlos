@@ -17,6 +17,7 @@
 `define LED_RGB
 `define LED_DEBUG
 `define GPU
+`define GPU_RASTER
 `define GPU_CURSOR
 `define GPU_PIXEL_DOUBLE
 `define GPU_CURSOR
@@ -33,9 +34,26 @@
 `define MEM_SDRAM
 `define MEM_VRAM
 `define GPU
+`define GPU_RASTER
 `define GPU_PIXEL_DOUBLE
 `define GPU_CURSOR
 `define GPU_DDMI
+`define UART0
+`define USB_HID
+`define SPI_SDCARD
+
+`elsif BOARD_LEBKUCHEN
+
+`define FPGA_GATEMATE
+`define OSC48
+`define SYSCLK48
+`define MEM_PSRAM
+`define MEM_VRAM
+`define GPU
+`define GPU_RASTER
+`define GPU_PIXEL_DOUBLE
+`define GPU_CURSOR
+`define GPU_VGA
 `define UART0
 `define USB_HID
 `define SPI_SDCARD

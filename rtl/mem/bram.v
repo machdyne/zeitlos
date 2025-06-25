@@ -26,7 +26,12 @@ module bram_wb #()
 );
 
 	reg [31:0] ram [0:2047];
+
+`ifdef FPGA_GATEMATE
+	initial $readmemh("sw/bios/bios.hex", ram);
+`else
 	initial $readmemh("sw/bios/bios_seed.hex", ram);
+`endif
 
 	reg [31:0] dat_o;
 	reg ack_o;

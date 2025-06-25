@@ -27,6 +27,8 @@ typedef struct {
 static z_obj_t z_rv_ok = { .type = Z_RETVAL, .val.uint32 = 0 };
 static z_obj_t z_rv_fail = { .type = Z_RETVAL, .val.uint32 = 1 };
 
+typedef uint32_t *(*z_kernel_ptr_t)(uint32_t, uint32_t *, uint32_t);
+
 #define reg_kernel (*(volatile uint32_t*)0x0000000c)
 
 #define reg_uart0_data (*(volatile uint8_t*)0xf0000000)
@@ -49,6 +51,7 @@ static z_obj_t z_rv_fail = { .type = Z_RETVAL, .val.uint32 = 1 };
 #define reg_usb_cursor (*(volatile uint32_t*)0xc000000c)
 
 #define reg_sdcard (*(volatile uint32_t*)0xb0000000)
+#define reg_gpu (*(volatile uint32_t*)0xa0000000)
 
 // --
 

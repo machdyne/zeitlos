@@ -111,7 +111,6 @@ module sysctl #()
 
 	wire sys_clk = clk48mhz;
 
-
 `ifdef ECP5
 
 	wire pll_locked = pll0_locked && pll1_locked;
@@ -147,22 +146,22 @@ module sysctl #()
       .LOW_JITTER(1),      // 0: disable, 1: enable low jitter mode
       .CI_FILTER_CONST(2), // optional CI filter constant
       .CP_FILTER_CONST(4)  // optional CP filter constant
-   ) pll_inst (
-      .CLK_REF(clk), .CLK_FEEDBACK(1'b0), .USR_CLK_REF(1'b0),
+   ) pll_inst0 (
+      .CLK_REF(CLK_48), .CLK_FEEDBACK(1'b0), .USR_CLK_REF(1'b0),
       .USR_LOCKED_STDY_RST(1'b0),
 		.USR_PLL_LOCKED(pll0_locked),
       .CLK0(clk125mhz),
    );
 
    CC_PLL #(
-      .REF_CLK(48.0),      // reference input in MHz
+      .REF_CLK(125.0),      // reference input in MHz
       .OUT_CLK(75.0),      // pll output frequency in MHz
       .PERF_MD("ECONOMY"), // LOWPOWER, ECONOMY, SPEED
       .LOW_JITTER(1),      // 0: disable, 1: enable low jitter mode
       .CI_FILTER_CONST(2), // optional CI filter constant
       .CP_FILTER_CONST(4)  // optional CP filter constant
-   ) pll_inst (
-      .CLK_REF(clk), .CLK_FEEDBACK(1'b0), .USR_CLK_REF(1'b0),
+   ) pll_inst1 (
+      .CLK_REF(CLK_48), .CLK_FEEDBACK(1'b0), .USR_CLK_REF(1'b0),
       .USR_LOCKED_STDY_RST(1'b0),
 		.USR_PLL_LOCKED(pll1_locked),
       .CLK0(clk75mhz),
@@ -175,8 +174,8 @@ module sysctl #()
       .LOW_JITTER(1),      // 0: disable, 1: enable low jitter mode
       .CI_FILTER_CONST(2), // optional CI filter constant
       .CP_FILTER_CONST(4)  // optional CP filter constant
-   ) pll_inst (
-      .CLK_REF(clk), .CLK_FEEDBACK(1'b0), .USR_CLK_REF(1'b0),
+   ) pll_inst2 (
+      .CLK_REF(CLK_48), .CLK_FEEDBACK(1'b0), .USR_CLK_REF(1'b0),
       .USR_LOCKED_STDY_RST(1'b0),
 		.USR_PLL_LOCKED(pll2_locked),
       .CLK0(clk12mhz),
@@ -223,11 +222,43 @@ module sysctl #()
 
 	// WISHBONE BUS
 
+/*
+	// XX
+	reg [7:0] leds = 0;
+	assign DBG = leds;
+	always @(posedge sys_clk) begin
+		if (varb_master) leds <= leds + 1;
+	end
+	// XX
+*/
+
+   wire varb_master;		// vram arbiter master: 0 = cpu, 1 = gpu
+
 	wire wbm_clk = sys_clk;
 	wire wbm_rst = !sys_rstn;
 
+	wire [31:0] wbm_adr;
+	wire [31:0] wbm_dat_o;
+	wire [31:0] wbm_dat_i;
+	wire [3:0] wbm_sel;
+	wire wbm_we;
+	wire wbm_stb;
+	wire wbm_ack;
+	wire wbm_cyc;
+
+	wire [31:0] wbm_vram_adr;
+	wire [31:0] wbm_vram_dat_o;
+	wire [31:0] wbm_vram_dat_i;
+	wire [3:0] wbm_vram_sel;
+	wire wbm_vram_we;
+	wire wbm_vram_stb;
+	wire wbm_vram_cyc;
+
 	wire [27:0] wbm_adr_sel = (wbm_adr & 32'h0fff_ffff);
 	wire [25:0] wbm_adr_sel_word = wbm_adr_sel[27:2];
+
+	wire [27:0] wbm_vram_adr_sel = wbm_vram_adr - 32'h2000_0000; // subtract base addr
+	wire [25:0] wbm_vram_adr_sel_word = wbm_vram_adr_sel[27:2];
 
 	wire [31:0] wbs_bram_dat_o;
 	wire [31:0] wbs_sram_dat_o;
@@ -238,6 +269,7 @@ module sysctl #()
 	wire [31:0] wbs_uart0_dat_o;
 	wire [31:0] wbs_spisdcard_dat_o;
 	wire [31:0] wbs_usb0_dat_o;
+	wire [31:0] wbs_gpu_dat_o;
 
 	wire cs_bram = (wbm_adr < 8192);
 `ifdef MEM_SRAM
@@ -247,16 +279,17 @@ module sysctl #()
 `elsif MEM_QQSPI
 	wire cs_qqspi = ((wbm_adr & 32'hf000_0000) == 32'h4000_0000);
 `endif
-
 `ifdef MEM_VRAM
 	wire cs_vram = ((wbm_adr & 32'hf000_0000) == 32'h2000_0000);
 `endif
-
 `ifdef SPI_SDCARD
 	wire cs_spisdcard = ((wbm_adr & 32'hf000_0000) == 32'hb000_0000);
 `endif
 `ifdef USB_HID
 	wire cs_usb0 = ((wbm_adr & 32'hf000_0000) == 32'hc000_0000);
+`endif
+`ifdef GPU_RASTER
+	wire cs_gpu = ((wbm_adr & 32'hf000_0000) == 32'ha000_0000);
 `endif
 `ifdef DEBUG
 	wire cs_debug = ((wbm_adr & 32'hf000_0000) == 32'he000_0000);
@@ -275,7 +308,11 @@ module sysctl #()
 		cs_qqspi ? wbs_qqspi_dat_o :
 `endif
 `ifdef MEM_VRAM
+`ifdef GPU_RASTER
+		cs_vram ? wbm_cpu_arb0_dat_i :
+`else
 		cs_vram ? wbs_vram_dat_o :
+`endif
 `endif
 `ifdef DEBUG
 		cs_debug ? wbs_debug_dat_o :
@@ -289,6 +326,9 @@ module sysctl #()
 `ifdef USB_HID
 		cs_usb0 ? wbs_usb0_dat_o :
 `endif
+`ifdef GPU_RASTER
+		cs_gpu ? wbs_gpu_dat_o :
+`endif
 		32'hzzzz_zzzz;
 
 	wire wbs_bram_ack_o;
@@ -300,6 +340,7 @@ module sysctl #()
 	wire wbs_uart0_ack_o;
 	wire wbs_spisdcard_ack_o;
 	wire wbs_usb0_ack_o;
+	wire wbs_gpu_ack_o;
 
 	assign wbm_ack =
 		cs_bram ? wbs_bram_ack_o :
@@ -311,7 +352,11 @@ module sysctl #()
 		cs_qqspi ? wbs_qqspi_ack_o :
 `endif
 `ifdef MEM_VRAM
+`ifdef GPU_RASTER
+		cs_vram ? wbm_cpu_arb0_ack :
+`else
 		cs_vram ? wbs_vram_ack_o :
+`endif
 `endif
 `ifdef DEBUG
 		cs_debug ? wbs_debug_ack_o :
@@ -324,6 +369,9 @@ module sysctl #()
 `endif
 `ifdef USB_HID
 		cs_usb0 ? wbs_usb0_ack_o :
+`endif
+`ifdef GPU_RASTER
+		cs_gpu ? wbs_gpu_ack_o :
 `endif
 		1'b0;
 
@@ -372,51 +420,112 @@ module sysctl #()
 		.irq(cpu_irq)
 	);
 
-	// WISHBONE MASTER: DMA CONTROLLER
-/*
-	wire [31:0] wbm_dma_adr;
-	wire [31:0] wbm_dma_dat_o;
-	reg [31:0] wbm_dma_dat_i;
-	wire [3:0] wbm_dma_sel;
-	wire wbm_dma_we;
-	wire wbm_dma_stb;
-	wire wbm_dma_ack;
-	wire wbm_dma_cyc;
-
-	dma #() dma_i
-	(
-		.wb_clk_i(sys_clk),
-		.wb_rst_i(sys_rst),
-		.wbm_adr_o(wbm_dma_adr),
-		.wbm_dat_o(wbm_dma_dat_o),
-		.wbm_dat_i(wbm_dma_dat_i),
-		.wbm_we_o(wbm_dma_we),
-		.wbm_sel_o(wbm_dma_sel),
-		.wbm_stb_o(wbm_dma_stb),
-		.wbm_ack_i(wbm_dma_ack),
-		.wbm_cyc_o(wbm_dma_cyc),
-	);
-*/
-
-	// WISHBONE ARBITER (always CPU for now)
-
-	wire [31:0] wbm_adr;
-	wire [31:0] wbm_dat_o;
-	wire [31:0] wbm_dat_i;
-	wire [3:0] wbm_sel;
-	wire wbm_we;
-	wire wbm_stb;
-	wire wbm_ack;
-	wire wbm_cyc;
-
+	// CPU controls the main bus (will share with DMA controller)
 	assign wbm_adr = wbm_cpu_adr;
 	assign wbm_dat_o = wbm_cpu_dat_o;
-	assign wbm_dat_i = wbm_cpu_dat_i;
+	assign wbm_cpu_dat_i = wbm_dat_i;
 	assign wbm_sel = wbm_cpu_sel;
 	assign wbm_we = wbm_cpu_we;
 	assign wbm_stb = wbm_cpu_stb;
-	assign wbm_ack = wbm_cpu_ack;
+	assign wbm_cpu_ack = wbm_ack;
 	assign wbm_cyc = wbm_cpu_cyc;
+
+	// WISHBONE MASTER: GPU Rasterizer
+`ifdef GPU_RASTER
+	wire [31:0] wbm_gpu_adr;
+	wire [31:0] wbm_gpu_dat_i;
+	wire [31:0] wbm_gpu_dat_o;
+	wire [3:0] wbm_gpu_sel;
+	wire wbm_gpu_we;
+	wire wbm_gpu_stb;
+	wire wbm_gpu_ack;
+	wire wbm_gpu_cyc;
+
+	wire wbm_cyc_gpu = cs_gpu && wbm_cyc;
+
+	gpu_raster_wb #() wbm_gpu0_i
+	(
+ 		.clk(wbm_clk),
+ 		.rst(wbm_rst),
+
+		// slave interface for command input
+		.wb_adr_i(wbm_adr_sel_word),
+		.wb_dat_i(wbm_dat_o),
+		.wb_dat_o(wbs_gpu_dat_o),
+		.wb_we_i(wbm_we),
+		.wb_sel_i(wbm_sel),
+		.wb_stb_i(wbm_stb),
+		.wb_cyc_i(wbm_cyc_gpu),
+		.wb_ack_o(wbs_gpu_ack_o),
+
+		// master interface to VRAM
+		.m_adr_o(wbm_gpu_adr),
+		.m_dat_i(wbm_gpu_dat_i),
+		.m_dat_o(wbm_gpu_dat_o),
+		.m_cyc_o(wbm_gpu_cyc),
+		.m_stb_o(wbm_gpu_stb),
+		.m_we_o(wbm_gpu_we),
+		.m_sel_o(wbm_gpu_sel),
+		.m_ack_i(wbm_gpu_ack),
+//		.dbg(DBG)
+	);
+
+	// WISHBONE ARBITER
+	wire [31:0] wbm_cpu_arb0_dat_i;
+	wire wbm_cpu_arb0_ack;
+
+	wire wbm_cpu_arb0_cyc = cs_vram && wbm_cpu_cyc;
+
+   wb_arbiter #() arb0_i
+   (
+      .clk(wbm_clk),
+      .rst(wbm_rst),
+   
+      // Master 0 (CPU)
+      .m0_adr_i(wbm_cpu_adr),
+      .m0_dat_i(wbm_cpu_dat_o),
+      .m0_dat_o(wbm_cpu_arb0_dat_i), 
+      .m0_we_i(wbm_cpu_we),
+      .m0_sel_i(wbm_cpu_sel),
+      .m0_stb_i(wbm_cpu_stb),
+      .m0_cyc_i(wbm_cpu_arb0_cyc),
+      .m0_ack_o(wbm_cpu_arb0_ack),
+   
+      // Master 1 (GPU)
+      .m1_adr_i(wbm_gpu_adr),
+      .m1_dat_i(wbm_gpu_dat_o),
+      .m1_dat_o(wbm_gpu_dat_i),
+      .m1_we_i(wbm_gpu_we),
+      .m1_sel_i(wbm_gpu_sel),
+      .m1_stb_i(wbm_gpu_stb),
+      .m1_cyc_i(wbm_gpu_cyc),
+      .m1_ack_o(wbm_gpu_ack),
+   
+      // Selected master
+      .s_adr_o(wbm_vram_adr), 
+      .s_dat_i(wbs_vram_dat_o),
+      .s_dat_o(wbm_vram_dat_o),
+      .s_we_o(wbm_vram_we),
+      .s_sel_o(wbm_vram_sel),
+      .s_stb_o(wbm_vram_stb),
+      .s_cyc_o(wbm_vram_cyc),
+      .s_ack_i(wbs_vram_ack_o),
+      .master(varb_master)
+   );
+   
+`else
+
+	assign wbm_vram_adr = wbm_cpu_adr;
+	assign wbm_vram_dat_o = wbm_cpu_dat_o;
+	assign wbm_vram_dat_i = wbm_cpu_dat_i;
+	assign wbm_vram_sel = wbm_cpu_sel;
+	assign wbm_vram_we = wbm_cpu_we;
+	assign wbm_vram_stb = wbm_cpu_stb;
+	assign wbm_vram_cyc = wbm_cpu_cyc;
+
+	assign varb_master = 0;
+
+`endif
 
 	// WISHBONE SLAVE: BLOCK RAM (BIOS)
 
@@ -468,7 +577,7 @@ module sysctl #()
 	wire wbm_cyc_sdram = cs_sdram && wbm_cyc;
 
 	sdram_wb #(
-//		.SDRAM_CLK_FREQ(SYSCLK / 1_000_000)
+		.SDRAM_CLK_FREQ(SYSCLK / 1_000_000)
 	) sdram_i (
       .wb_clk_i(wbm_clk),
       .wb_rst_i(wbm_rst),
@@ -493,9 +602,8 @@ module sysctl #()
 	);
 `endif
 
-	// WISHBONE SLAVE: DUAL-PORT VRAM (FRAMEBUFFER)
+	// WISHBONE SLAVE: DUAL-PORT VRAM (FRAMEBUFFER) [DEDICATED BUS]
 `ifdef MEM_VRAM
-	wire wbm_cyc_vram = cs_vram && wbm_cyc;
 	reg [15:0] gb_adr;
 	reg [31:0] gb_dat;
 
@@ -503,14 +611,14 @@ module sysctl #()
 	(
 		.wb_clk_i(wbm_clk),
 		.wb_rst_i(wbm_rst),
-		.wb_adr_i(wbm_adr_sel_word),
-		.wb_dat_i(wbm_dat_o),
+		.wb_adr_i(wbm_vram_adr_sel_word),
+		.wb_dat_i(wbm_vram_dat_o),
 		.wb_dat_o(wbs_vram_dat_o),
-		.wb_we_i(wbm_we),
-		.wb_sel_i(wbm_sel),
-		.wb_stb_i(wbm_stb),
+		.wb_we_i(wbm_vram_we),
+		.wb_sel_i(wbm_vram_sel),
+		.wb_stb_i(wbm_vram_stb),
 		.wb_ack_o(wbs_vram_ack_o),
-		.wb_cyc_i(wbm_cyc_vram),
+		.wb_cyc_i(wbm_vram_cyc),
 		.gb_adr_i(gb_adr),
 		.gb_dat_o(gb_dat),
 	);
@@ -558,9 +666,12 @@ module sysctl #()
 		.wb_ack_o(wbs_debug_ack_o),
 		.wb_cyc_i(wbm_cyc_debug),
 		.led(LED_B),
+
+
 `ifdef LED_DEBUG
 		.leds(DBG)
 `endif
+
 	);
 `endif
 
@@ -641,7 +752,7 @@ module sysctl #()
 	);
 `endif
 
-	// GPU
+	// GPU: Video Generator
 `ifdef GPU
 	wire [9:0] gpu_x;
 	wire [9:0] gpu_y;
@@ -676,9 +787,10 @@ module sysctl #()
 		.dvi_p({ DDMI_CK_P, DDMI_D2_P, DDMI_D1_P, DDMI_D0_P }),
 `endif
 	);
+
 `endif
 
-	// GPU CURSOR
+	// GPU: Hardware Cursor
 `ifdef GPU_CURSOR
 	wire [9:0] gpu_curs_x;
 	wire [9:0] gpu_curs_y;
