@@ -2,7 +2,7 @@
  * Zeitlos SOC GPU
  * Copyright (c) 2025 Lone Dynamics Corporation. All rights reserved.
  *
- * Line rasterizer with command FIFO.
+ * Line rasterizer with command FIFO and clipping.
  *
  */
 
@@ -34,6 +34,10 @@ module gpu_raster_wb (
 // CPU interface registers  
 reg [8:0] cpu_x0, cpu_x1, cpu_y0, cpu_y1;
 reg cpu_color;
+
+// Clipping registers
+reg [8:0] clip_x0, clip_y0, clip_x1, clip_y1;
+reg clip_enable;
 
 // Command FIFO parameters
 parameter FIFO_DEPTH = 16;
@@ -126,6 +130,11 @@ assign fifo_pop = (state == SETUP);
 // Overall busy signal (FIFO not empty OR currently drawing)
 wire busy_signal = !fifo_empty || draw_busy;
 
+// Clipping check
+wire pixel_in_clip = !clip_enable || 
+                    (cur_x >= clip_x0 && cur_x <= clip_x1 && 
+                     cur_y >= clip_y0 && cur_y <= clip_y1);
+
 // VRAM address calculation
 wire [31:0] pixel_word_addr = 32'h20000000 + ((cur_y << 4) + (cur_x >> 5)) * 4;
 wire [4:0] pixel_bit_pos = cur_x[4:0];
@@ -167,6 +176,11 @@ always @(posedge clk) begin
         cpu_x1 <= 9'd0;
         cpu_y1 <= 9'd0;
         cpu_color <= 1'b0;
+        clip_x0 <= 9'd0;
+        clip_y0 <= 9'd0;
+        clip_x1 <= 9'd511;  // Default to full screen
+        clip_y1 <= 9'd511;
+        clip_enable <= 1'b0;  // Disabled by default
         wb_ack_o <= 1'b0;
         wb_dat_o <= 32'd0;
     end else begin
@@ -175,28 +189,38 @@ always @(posedge clk) begin
         if (wb_cyc_i && wb_stb_i && !wb_ack_o) begin
             wb_ack_o <= 1'b1;
             if (wb_we_i) begin
-                case (wb_adr_i[3:0])
-                    4'd0: cpu_x0 <= wb_dat_i[8:0];
-                    4'd1: cpu_y0 <= wb_dat_i[8:0];
-                    4'd2: cpu_x1 <= wb_dat_i[8:0];
-                    4'd3: cpu_y1 <= wb_dat_i[8:0];
-                    4'd4: cpu_color <= wb_dat_i[0];
-                    4'd5: ; // Start command - handled by FIFO push logic
+                case (wb_adr_i[4:0])
+                    5'd0: cpu_x0 <= wb_dat_i[8:0];
+                    5'd1: cpu_y0 <= wb_dat_i[8:0];
+                    5'd2: cpu_x1 <= wb_dat_i[8:0];
+                    5'd3: cpu_y1 <= wb_dat_i[8:0];
+                    5'd4: cpu_color <= wb_dat_i[0];
+                    5'd5: ; // Start command - handled by FIFO push logic
+                    5'd11: clip_x0 <= wb_dat_i[8:0];
+                    5'd12: clip_y0 <= wb_dat_i[8:0];
+                    5'd13: clip_x1 <= wb_dat_i[8:0];
+                    5'd14: clip_y1 <= wb_dat_i[8:0];
+                    5'd15: clip_enable <= wb_dat_i[0];
                     default: ;
                 endcase
             end else begin
-                case (wb_adr_i[3:0])
-                    4'd0: wb_dat_o <= {23'd0, cpu_x0};
-                    4'd1: wb_dat_o <= {23'd0, cpu_y0};
-                    4'd2: wb_dat_o <= {23'd0, cpu_x1};
-                    4'd3: wb_dat_o <= {23'd0, cpu_y1};
-                    4'd4: wb_dat_o <= {31'd0, cpu_color};
-                    4'd5: wb_dat_o <= 32'd0; // Start register (write-only)
-                    4'd6: wb_dat_o <= {31'd0, busy_signal};
-                    4'd7: wb_dat_o <= {16'd0, pixel_count};
-                    4'd8: wb_dat_o <= {23'd0, cur_x};
-                    4'd9: wb_dat_o <= {23'd0, cur_y};
-                    4'd10: wb_dat_o <= {27'd0, fifo_count}; // Debug: FIFO count
+                case (wb_adr_i[4:0])
+                    5'd0: wb_dat_o <= {23'd0, cpu_x0};
+                    5'd1: wb_dat_o <= {23'd0, cpu_y0};
+                    5'd2: wb_dat_o <= {23'd0, cpu_x1};
+                    5'd3: wb_dat_o <= {23'd0, cpu_y1};
+                    5'd4: wb_dat_o <= {31'd0, cpu_color};
+                    5'd5: wb_dat_o <= 32'd0; // Start register (write-only)
+                    5'd6: wb_dat_o <= {31'd0, busy_signal};
+                    5'd7: wb_dat_o <= {16'd0, pixel_count};
+                    5'd8: wb_dat_o <= {23'd0, cur_x};
+                    5'd9: wb_dat_o <= {23'd0, cur_y};
+                    5'd10: wb_dat_o <= {27'd0, fifo_count}; // Debug: FIFO count
+                    5'd11: wb_dat_o <= {23'd0, clip_x0};
+                    5'd12: wb_dat_o <= {23'd0, clip_y0};
+                    5'd13: wb_dat_o <= {23'd0, clip_x1};
+                    5'd14: wb_dat_o <= {23'd0, clip_y1};
+                    5'd15: wb_dat_o <= {31'd0, clip_enable};
                     default: wb_dat_o <= 32'd0;
                 endcase
             end
@@ -251,12 +275,23 @@ always @(posedge clk) begin
         end
 
         READ: begin
-            m_cyc_o <= 1'b1;
-            m_stb_o <= 1'b1;
-            m_we_o <= 1'b0;
-            m_sel_o <= 4'b1111;
-            m_adr_o <= pixel_word_addr;
-            state <= WAIT_READ;
+            // Check if pixel is within clip bounds
+            if (pixel_in_clip) begin
+                m_cyc_o <= 1'b1;
+                m_stb_o <= 1'b1;
+                m_we_o <= 1'b0;
+                m_sel_o <= 4'b1111;
+                m_adr_o <= pixel_word_addr;
+                state <= WAIT_READ;
+            end else begin
+                // Skip this pixel, but continue line algorithm
+                pixel_count <= pixel_count + 1;
+                if (at_end || pixel_count > 1000) begin
+                    state <= DONE;
+                end else begin
+                    state <= NEXT;
+                end
+            end
         end
 
         WAIT_READ: begin
