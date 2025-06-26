@@ -12,6 +12,7 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 |-----------|----------|
 | CPU | 32-bit RISC-V (PicoRV32) |
 | GPU | Line rasterizer with command FIFO and clipping |
+| MTU | Memory Translation Unit provides virtual addressing |
 | Bus | 32-bit Wishbone |
 | Main Memory | SDRAM, PSRAM or SRAM |
 | Framebuffer | 512x384x1bpp |
@@ -23,8 +24,16 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 ### OS
 
  - Pre-emptive multitasking
- - Flat memory model (no MMU)
+ - Flat memory model with virtual address space for apps
  - FAT16/32 filesystem
+
+#### Memory Translation Unit
+
+Zeitlos doesn't have an MMU but instead has a single virtual address space that is remapped to a main memory address during context switches.
+
+The Zeitlos kernel is located at `0x4000_0000` which is the beginning of main memory, and apps are loaded immediately after the kernel. However, each app executes at fixed address `0x8000_0000` which is a mirror of their actual address in the main memory. The translation base address register is set during context switches so that each app can access its own memory through `0x8000_0000`.
+
+With the MTU, there is no need for position independent code or complicated address relocation.
 
 ### Boards
 

@@ -4,11 +4,13 @@ ARCH = rv32i
 CC = $(PREFIX)gcc
 AS = $(PREFIX)as
 ASFLAGS = -march=$(ARCH) -mabi=ilp32
-CFLAGS = -fPIC --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=ilp32
-LDFLAGS = -fPIC -nostartfiles
+CFLAGS = --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=ilp32
+#CFLAGS = -fPIC --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=ilp32
+LDFLAGS = #-fPIC -nostartfiles
 LDSCRIPT = ../../common/riscv-app.ld
 
-OBJS = crt0.o zeitlos.o hello.o
+OBJS = zeitlos.o hello.o
+#OBJS = crt0.o zeitlos.o hello.o
 
 hello: hello.elf hello.bin
 

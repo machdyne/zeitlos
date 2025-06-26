@@ -254,6 +254,8 @@ module sysctl #()
 	wire wbm_vram_stb;
 	wire wbm_vram_cyc;
 
+	wire [27:0] wbm_cpu_adr_sel = (wbm_cpu_adr & 32'h0fff_ffff);
+
 	wire [27:0] wbm_adr_sel = (wbm_adr & 32'h0fff_ffff);
 	wire [25:0] wbm_adr_sel_word = wbm_adr_sel[27:2];
 
@@ -261,6 +263,7 @@ module sysctl #()
 	wire [25:0] wbm_vram_adr_sel_word = wbm_vram_adr_sel[27:2];
 
 	wire [31:0] wbs_bram_dat_o;
+	wire [31:0] wbs_mtu_dat_o;
 	wire [31:0] wbs_sram_dat_o;
 	wire [31:0] wbs_sdram_dat_o;
 	wire [31:0] wbs_qqspi_dat_o;
@@ -272,6 +275,8 @@ module sysctl #()
 	wire [31:0] wbs_gpu_dat_o;
 
 	wire cs_bram = (wbm_adr < 8192);
+	wire cs_mtu = ((wbm_adr & 32'hf000_0000) == 32'h9000_0000);
+
 `ifdef MEM_SRAM
 	wire cs_sram = ((wbm_adr & 32'hf000_0000) == 32'h4000_0000);
 `elsif MEM_SDRAM
@@ -300,6 +305,7 @@ module sysctl #()
 
 	assign wbm_dat_i =
 		cs_bram ? wbs_bram_dat_o :
+		cs_mtu ? wbs_mtu_dat_o :
 `ifdef MEM_SRAM
 		cs_sram ? wbs_sram_dat_o :
 `elsif MEM_SDRAM
@@ -332,6 +338,7 @@ module sysctl #()
 		32'hzzzz_zzzz;
 
 	wire wbs_bram_ack_o;
+	wire wbs_mtu_ack_o;
 	wire wbs_sram_ack_o;
 	wire wbs_sdram_ack_o;
 	wire wbs_qqspi_ack_o;
@@ -344,6 +351,7 @@ module sysctl #()
 
 	assign wbm_ack =
 		cs_bram ? wbs_bram_ack_o :
+		cs_mtu ? wbs_mtu_ack_o :
 `ifdef MEM_SRAM
 		cs_sram ? wbs_sram_ack_o :
 `elsif MEM_SDRAM
@@ -420,8 +428,26 @@ module sysctl #()
 		.irq(cpu_irq)
 	);
 
+	// WISHBONE SLAVE: MTU (Memory Translation Unit)
+	wire wbm_cyc_mtu = cs_mtu && wbm_cyc;
+
+	wb_mtu mtu_i (
+		.clk_i(wbm_clk),
+		.rst_i(wbm_rst),
+		.addr_in(wbm_cpu_adr),
+		.addr_out(wbm_adr),
+		.cfg_adr_i(wbm_cpu_adr_sel),
+		.cfg_dat_i(wbm_dat_o),
+		.cfg_dat_o(wbs_mtu_dat_o),
+		.cfg_sel_i(wbm_sel),
+		.cfg_we_i(wbm_we),
+		.cfg_stb_i(wbm_stb),
+		.cfg_cyc_i(wbm_cyc_mtu),
+		.cfg_ack_o(wbs_mtu_ack_o)
+    );
+
 	// CPU controls the main bus (will share with DMA controller)
-	assign wbm_adr = wbm_cpu_adr;
+	//assign wbm_adr = wbm_cpu_adr;
 	assign wbm_dat_o = wbm_cpu_dat_o;
 	assign wbm_cpu_dat_i = wbm_dat_i;
 	assign wbm_sel = wbm_cpu_sel;

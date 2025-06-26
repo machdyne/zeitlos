@@ -20,6 +20,7 @@
 
 #define Z_PROCS_MAX 16
 #define Z_PROC_STACK_SIZE  8*1024
+#define Z_KERNEL_STACK_SIZE  8*1024
 
 typedef z_obj_t* (*z_syscall_t)(z_obj_t *args);
 
@@ -67,9 +68,21 @@ int main(void) {
 	}
 
 	// create process zero (this process):
-	uint32_t k_size = ((uint32_t)&_end - (uint32_t)&_start) + Z_PROC_STACK_SIZE;
+	uint32_t k_size = k_mem_align_up((((uint32_t)&_end - (uint32_t)&_start) +
+		Z_KERNEL_STACK_SIZE), Z_MEM_ALIGNMENT);
 	printf(" - kernel process size %ld\n", k_size);
-	k_proc_create(k_size);
+
+
+	// set the kernel stack pointer
+	__asm__ volatile (
+		"mv sp, %0"
+		:
+		: "r" (0x40000000 + k_size)
+	);
+
+	// call some function ...
+
+	k_proc_create((uint32_t)&_end - (uint32_t)&_start);
 	k_proc_start(0);
 
 	// set the kernel register so the irq handler knows who to call
@@ -146,6 +159,10 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 		if ((z_procs[z_pid].flags & Z_PROC_FLAG_ACTIVE) != Z_PROC_FLAG_ACTIVE)
 			goto next_process;
 
+		// configure address translation
+		reg_mtu = z_procs[z_pid].base;
+
+		// return the registers
 		return z_procs[z_pid].regs;
 	}
 
@@ -174,28 +191,28 @@ uint32_t k_proc_create(uint32_t size) {
 	// find first available process slot
 	for (int p = 0; p < Z_PROCS_MAX; p++) {
 
-		if (z_procs[p].base == 0x00000000) {
+		if (z_procs[p].base != 0x00000000) continue;
 
-			void *mem = k_mem_alloc(mem_size);
-			if (!mem) return(Z_FAIL);
-			uint32_t base = (int32_t)(uintptr_t)mem;
-			z_procs[p].base = base;
-			z_procs[p].size = mem_size;
-			for (int i = 0; i < 32; i++) {
-				z_procs[p].regs[i] = 0x00000000;
-			}
-			z_procs[p].regs[0] = base;	// pc
-			z_procs[p].regs[1] = (uint32_t)&k_proc_exit_stub; // ra
-
-			// sp:
-			//  sp for kernel is set in boot code
-			//  sp for apps is set in crt0
-			//  so this init value shouldn't be used is probably unnecessary
-			z_procs[p].regs[2] = 0x40100000;
-		
-			return(p);
-
+		void *mem = k_mem_alloc(mem_size);
+		if (!mem) return(Z_FAIL);
+		uint32_t base = (int32_t)(uintptr_t)mem;
+		z_procs[p].base = base;
+		z_procs[p].size = mem_size;
+		for (int i = 0; i < 32; i++) {
+			z_procs[p].regs[i] = 0x00000000;
 		}
+
+		if (p == 0) {
+			z_procs[p].regs[0] = 0x40000000;	// pc
+			z_procs[p].regs[1] = (uint32_t)&k_proc_exit_stub; // ra
+			z_procs[p].regs[2] = 0x40000000 + mem_size;	// sp
+		} else {
+			z_procs[p].regs[0] = 0x80000000;	// pc
+			z_procs[p].regs[1] = (uint32_t)&k_proc_exit_stub; // ra
+			z_procs[p].regs[2] = 0x80000000 + mem_size;	// sp
+		}
+
+		return(p);
 
 	}
 
@@ -237,7 +254,7 @@ z_rv k_proc_dump(void) {
 }
 
 void *k_proc_exit_stub(void) {
-	printf("PEXIT.\n");
+	kprint("PEXIT.\n");
 	while (1);
 }
 

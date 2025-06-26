@@ -27,12 +27,16 @@
 #define reg_usb_mouse (*(volatile uint32_t*)0xc0000008)
 #define reg_usb_cursor (*(volatile uint32_t*)0xc000000c)
 
+#define reg_mtu (*(volatile uint32_t*)0x90000000)
+
 #define MEM_BIOS			0x00000000
 #define MEM_BIOS_SIZE	2*1024
 #define MEM_VRAM			0x20000000
 #define MEM_VRAM_SIZE	(1024*768)/32
 #define MEM_MAIN			0x40000000
 #define MEM_MAIN_SIZE	1024*1024
+#define MEM_APP			0x80000000
+#define MEM_APP_SIZE		1024*1024
 
 //#include "scancodes.h"
 //#include "hidcodes.h"
@@ -340,6 +344,9 @@ void cmd_toggle_addr_ptr(void) {
 		addr_ptr = MEM_MAIN;
 		mem_total = MEM_MAIN_SIZE;
 	} else if (addr_ptr == MEM_MAIN) {
+		addr_ptr = MEM_APP;
+		mem_total = MEM_APP_SIZE;
+	} else if (addr_ptr == MEM_APP) {
 		addr_ptr = MEM_BIOS;
 		mem_total = MEM_BIOS_SIZE;
 	}
@@ -386,6 +393,7 @@ void main() {
 	int cmd;
 
 	reg_led = 0xff;
+	reg_mtu = 0x40000000;	// 0x8000_0000 will mirror 0x4000_0000
 
 	addr_ptr = MEM_MAIN;
 	mem_total = MEM_MAIN_SIZE;

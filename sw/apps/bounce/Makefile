@@ -4,16 +4,13 @@ ARCH = rv32i
 CC = $(PREFIX)gcc
 AS = $(PREFIX)as
 ASFLAGS = -march=$(ARCH) -mabi=ilp32
-CFLAGS = -fPIC --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=ilp32
-LDFLAGS = -fPIC -nostartfiles
+CFLAGS = --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=ilp32
+LDFLAGS = 
 LDSCRIPT = ../../common/riscv-app.ld
 
-OBJS = crt0.o bounce.o
+OBJS = bounce.o
 
 bounce: bounce.elf bounce.bin
-
-crt0.o:
-	$(AS) $(ASFLAGS) -o crt0.o ../../common/crt0.S
 
 bounce.o:
 	$(CC) $(CFLAGS) -c bounce.c -o bounce.o

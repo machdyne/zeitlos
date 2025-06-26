@@ -3,7 +3,7 @@
 
 void delay() {
    volatile static int x, y;
-   for (int i = 0; i < 500000; i++) {
+   for (int i = 0; i < 50000; i++) {
       x += y;
    }
 }

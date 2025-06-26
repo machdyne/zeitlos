@@ -3,6 +3,7 @@ RTL_PICO = \
 	rtl/clk/pll0.v \
 	rtl/clk/pll1.v \
 	rtl/cpu/picorv32/picorv32.v \
+	rtl/mtu.v \
 	rtl/arbiter.v \
 	rtl/mem/bram.v \
 	rtl/mem/sram.v \

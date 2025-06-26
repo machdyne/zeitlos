@@ -183,7 +183,7 @@ start:
 	/* call bios main */
 	jal ra, main
 
-	/* set stack pointer to end of main memory */
+	/* temporarily set kernel stack pointer to MAIN_MEM + 1MB */
 	lui sp, %hi(0x40100000)
 	addi sp, sp, %lo(0x40100000)
 
