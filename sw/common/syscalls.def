@@ -1,0 +1,5 @@
+Z_MKSYSCALL(UI_PRINT, z_ui_print)
+Z_MKSYSCALL(UART_GETC, z_uart_getc)
+Z_MKSYSCALL(UART_PUTC, z_uart_putc)
+Z_MKSYSCALL(UART_RX_EMPTY, z_uart_rx_empty)
+Z_MKSYSCALL(UART_TX_FULL, z_uart_tx_full)
