@@ -65,7 +65,7 @@ $ make BOARD=lakritz CABLE=dirtyJtag flash
 
 3. The BIOS will automatically boot the kernel within a few seconds if no keys are pressed.
 
-4. Use `xf` to upload apps to an FAT-formatted SD card and `run <file>` to start them. You will need to have the [xfer](https://github.com/machdyne/xfer) utility installed and configured in minicom. 
+4. Use `xf` to upload apps to a FAT-formatted SD card and `run <file>` to start them. You will need to have the [xfer](https://github.com/machdyne/xfer) utility installed and configured in minicom. 
 
 ## Developers
 
