@@ -1,5 +1,5 @@
 /*
- * ZEITLOS OS
+ * Zeitlos OS
  * Copyright (c) 2025 Lone Dynamics Corporation. All rights reserved.
  *
  * Application runtime.
@@ -90,7 +90,7 @@ void print_ptr_hex(const void *ptr) {
 //
 //
 
-ssize_t _read(int file, void *ptr, size_t len)
+ssize_t _read(int fd, void *ptr, size_t len)
 {
    unsigned char *p = ptr;
 	ssize_t i;
@@ -156,7 +156,7 @@ void readline(char *buf, int maxlen) {
 
 }
 
-ssize_t _write(int file, const void *ptr, size_t len)
+ssize_t _write(int fd, const void *ptr, size_t len)
 {
 	const unsigned char *p = ptr;
 	for (int i = 0; i < len; i++) {
@@ -179,13 +179,14 @@ int _close(int fd) {
 	return 0;
 }
 
-int _fstat(int file, struct stat *st) {
+int _fstat(int fd, struct stat *st) {
 	errno = ENOENT;
 	return -1;
 }
 
 int _isatty(int fd) {
-    return 1;
+	if (fd >= 0 && fd <= 2) return(1);
+	return(0);
 }
 
 extern char _end;
@@ -211,9 +212,13 @@ void *_sbrk(int incr) {
 
 void _exit(int exit_status)
 {
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_kernel_ptr(Z_SYS_EXIT, NULL, 0);
+/*
 	asm volatile ("li a0, 0x00000000");
 	asm volatile ("jr a0");
 	__builtin_unreachable();
+*/
 }
 
 // --

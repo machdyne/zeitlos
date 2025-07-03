@@ -1,6 +1,8 @@
 #ifndef Z_KERNEL_H
 #define Z_KERNEL_H
 
+#include "../common/zeitlos.h"
+
 #define Z_OK   0
 #define Z_FAIL 1
 
@@ -46,5 +48,9 @@ static inline uint32_t maskirq(uint32_t new_mask) {
 
     return old_mask;
 }
+
+// --
+
+z_obj_t *z_exit(z_obj_t *obj);
 
 #endif

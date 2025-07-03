@@ -10,9 +10,11 @@ RTL_PICO = \
 	rtl/mem/sdram.v \
 	rtl/mem/qqspi.v \
 	rtl/mem/vram.v \
+	rtl/spiflashro.v \
 	rtl/debug.v \
 	rtl/spibb.v \
 	rtl/gpu/gpu_raster.v \
+	rtl/gpu/gpu_blit.v \
 	rtl/gpu/gpu_video.v \
 	rtl/gpu/gpu_cursor.v \
 	rtl/gpu/gpu_ddmi.v \
@@ -32,12 +34,20 @@ RTL_PICO = \
 	rtl/ext/usb_hid_host/src/usb_hid_host.v \
 	rtl/ext/usb_hid_host/src/usb_hid_host_rom.v
 
-BOARD_LC = $(shell echo '$(BOARD)' | tr '[:upper:]' '[:lower:]')
-BOARD_UC = $(shell echo '$(BOARD)' | tr '[:lower:]' '[:upper:]')
-
 ifndef CABLE
 	CABLE = usb-blaster
 endif
+
+main: check zeitlos
+
+check:
+ifndef BOARD
+	@echo must set BOARD variable \(make BOARD=obst\)
+	@exit 1
+endif
+
+BOARD_LC = $(shell echo '$(BOARD)' | tr '[:upper:]' '[:lower:]')
+BOARD_UC = $(shell echo '$(BOARD)' | tr '[:lower:]' '[:upper:]')
 
 ifeq ($(BOARD_LC), riegel)
 	FAMILY = ice40
@@ -171,7 +181,7 @@ endif
 
 FAMILY_UC = $(shell echo '$(FAMILY)' | tr '[:lower:]' '[:upper:]')
 
-zeitlos: zeitlos_pico bios soc os apps
+zeitlos: check zeitlos_pico bios soc os apps
 
 ifeq ($(FAMILY), ice40)
 zeitlos_pico: zeitlos_ice40_pico
@@ -224,11 +234,30 @@ soc:
 		--bit output/$(BOARD_LC)/soc.bit
 endif
 
-dev: clean_os clean_bios clean_apps os bios apps
-dev-prog: dev soc prog
+ifeq ($(FAMILY), ice40)
+flash_soc: check soc
+	$(FLASH) output/$(BOARD_LC)/soc.bit
+else
+flash_soc: check soc
+	$(FLASH) output/$(BOARD_LC)/soc.bit
+endif
+
+ifeq ($(FAMILY), ice40)
+flash_os: check os
+	$(FLASH) $(FLASH_OFFSET) sw/os/kernel.bin 100000
+else
+flash_os: check os
+	$(FLASH) $(FLASH_OFFSET) 1048576 sw/os/kernel.bin
+endif
 
 prog: 
 	$(PROG) output/$(BOARD_LC)/soc.bit
+
+dev: check clean_os clean_bios clean_apps os bios apps
+dev-prog: dev soc prog
+dev-flash: dev flash_os
+
+flash: zeitlos flash_soc flash_os
 
 os:
 	cd sw/os && make

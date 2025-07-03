@@ -55,25 +55,25 @@ If you have an unsupported board and want to try Zeitlos, please open an issue.
 $ minicom -D /dev/ttyACM0 -b 1000000
 ```
 
-2. Build and write the gateware (and BIOS) to the FPGA SRAM:
+2. Build and write the gateware and kernel to flash:
 
 Building Zeitlos requires [Yosys](https://github.com/YosysHQ/yosys), [nextpnr-ecp5](https://github.com/YosysHQ/nextpnr), [prjtrellis](https://github.com/YosysHQ/prjtrellis) and a [RV32I toolchain](https://github.com/YosysHQ/picorv32#building-a-pure-rv32i-toolchain).
 
 ```
-$ make PREFIX=/opt/riscv32i/bin/riscv32-unknown-elf- BOARD=lakritz CABLE=dirtyJtag dev-prog
+$ make BOARD=lakritz CABLE=dirtyJtag flash
 ```
 
-3. At the BIOS prompt, load the kernel into main memory by pressing `x` and then upload `sw/os/kernel.bin`. You will need to have the [xfer](https://github.com/machdyne/xfer) utility installed and configured in minicom.
+3. The BIOS will automatically boot the kernel within a few seconds if no keys are pressed.
 
-4. Boot the kernel by pressing `b`.
-
-5. Use `xf` to upload apps to an SD card and `run <file>` to start them.
+4. Use `xf` to upload apps to an SD card and `run <file>` to start them.
 
 ## Developers
 
 ### Documentation
 
-The Zeitlos documentation will be the [Timeless Computing](https://github.com/machdyne/tc) book. The later chapters will explain the system, list the API, etc.
+The Zeitlos documentation will be the [Timeless Computing](https://github.com/machdyne/tc) book, which will be included in the default Zeitlos distribution. The later chapters will explain the system, list the API, etc. 
+
+The Zeitlos implementation portions of the book are currently located in the `docs` directory.
 
 ### LLM-generated code
 

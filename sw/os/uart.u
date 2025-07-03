@@ -1,0 +1,6 @@
+static inline bool k_uart_tx_fifo_empty();
+static inline bool k_uart_rx_fifo_empty();
+static inline bool k_uart_tx_fifo_full();
+static inline bool k_uart_rx_fifo_full();
+int16_t k_uart_getc(void);
+int16_t k_uart_putc(char c);

@@ -501,9 +501,12 @@ void infinite_spinning_cube() {
         first_frame = 0;
         
         // MUCH faster rotation - big angle steps
-        angle_x = (angle_x + 10) % 360;  // 10 degree steps
-        angle_y = (angle_y + 15) % 360;  // 15 degree steps
-        angle_z = (angle_z + 8) % 360;   // 8 degree steps
+        angle_x = (angle_x + 5) % 360;  // 10 degree steps
+        angle_y = (angle_y + 7) % 360;  // 15 degree steps
+        angle_z = (angle_z + 3) % 360;   // 8 degree steps
+
+	//		simple_delay(1000);
+
     }
 }
 

@@ -1,5 +1,5 @@
 
-PREFIX = /opt/riscv32i/bin/riscv32-unknown-elf-
+PREFIX = riscv32-unknown-elf-
 ARCH = rv32i
 CC = $(PREFIX)gcc
 AS = $(PREFIX)as

@@ -20,6 +20,7 @@ char *get_arg(char *str, int n);
 void sh_help(void);
 void hex_dump(uint32_t addr);
 uint32_t xfer_recv(uint32_t addr_ptr);
+void cls(void);
 
 // --
 
@@ -125,6 +126,10 @@ void sh(void) {
 				printf("error: no file specified\n");
 				continue;
 			}
+
+			// for testing purposes; delete it if it already exists
+			fs_unlink(arg);
+
 			uint32_t bytes_received, bytes_written;
 			void *tmp = k_mem_alloc(1024*128); // 128K max file size for now
 			uint32_t addr = (uint32_t)(uintptr_t)tmp;
@@ -175,7 +180,7 @@ void sh(void) {
 		else if (!strncmp(buffer, "kill", cmdlen)) {
 			arg = get_arg(buffer, 1);
 			uint32_t pid;
-			if (!sscanf(arg, "%ld", &pid)) {
+			if ((!sscanf(arg, "%ld", &pid)) || pid == 0) {
 				printf("bad pid\n");
 				continue;
 			}
@@ -185,6 +190,11 @@ void sh(void) {
 				printf("OK\n");
 			else
 				printf("FAIL\n");
+		}
+
+		// CLEAR SCREEN
+		else if (!strncmp(buffer, "cls", cmdlen)) {
+			cls();
 		}
 
 		// DISPLAY PROCESS SNAPSHOT
@@ -234,6 +244,13 @@ void hex_dump(uint32_t addr) {
 
 }
 
+void cls(void) {
+	volatile uint32_t *addr = (uint32_t *)0x20000000;
+	for (int i = 0; i < (((512 * 384) / 32) / sizeof(int)); i++) {
+		(*(volatile uint32_t *)(addr + i)) = 0x00000000;
+	}
+}
+
 void sh_help(void) {
 
 	printf("commands:\n");
@@ -244,6 +261,7 @@ void sh_help(void) {
 	printf(" kill <pid>        kill a process\n");
 	printf(" ps                display a process snapshot\n");
 	printf(" ks                display a kernel snapshot\n");
+	printf(" cls               clear framebuffer\n");
 	printf(" ls [path]         display list of files\n");
 	printf(" mkdir [path]      make a directory\n");
 	printf(" touch [path]      create empty file\n");

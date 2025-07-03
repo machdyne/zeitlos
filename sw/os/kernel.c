@@ -42,7 +42,6 @@ volatile uint32_t __attribute__((section(".bss"))) z_kernel_ticks = 0;
 void sh(void);
 uint32_t *z_kernel_entry(uint32_t cmd, uint32_t *args, uint32_t val);
 uint32_t k_proc_active_count(void);
-void *k_proc_exit_stub(void);
 
 void kprint(const char *s);
 void kprint_hex32(uint32_t);
@@ -110,7 +109,7 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 	if (syscall_id != Z_SYSCALL_NONE) {
 
 		if (syscall_id >= Z_SYSCALL_COUNT || !z_syscall_table[syscall_id]) {
-			return ((uint32_t *)&z_rv_fail);
+			return ((uint32_t *)&z_fail);
     	}
 
 		return (uint32_t *)z_syscall_table[syscall_id]((z_obj_t *)regs);
@@ -204,12 +203,11 @@ uint32_t k_proc_create(uint32_t size) {
 
 		if (p == 0) {
 			z_procs[p].regs[0] = 0x40000000;	// pc
-			z_procs[p].regs[1] = (uint32_t)&k_proc_exit_stub; // ra
 			z_procs[p].regs[2] = 0x40000000 + mem_size;	// sp
 		} else {
 			z_procs[p].regs[0] = 0x80000000;	// pc
-			z_procs[p].regs[1] = (uint32_t)&k_proc_exit_stub; // ra
-			z_procs[p].regs[2] = 0x80000000 + mem_size;	// sp
+			z_procs[p].regs[2] = 0x80000000 + mem_size - 4;	// sp
+			*((uint32_t *)(0x80000000 + mem_size - 4)) = z_procs[p].regs[1];	// sp = ra
 		}
 
 		return(p);
@@ -253,17 +251,6 @@ z_rv k_proc_dump(void) {
 	return Z_OK;
 }
 
-void *k_proc_exit_stub(void) {
-	kprint("PEXIT.\n");
-	while (1);
-}
-
-z_obj_t *z_sys_hello(z_obj_t *obj);
-
-z_obj_t *z_sys_hello(z_obj_t *obj) {
-	printf("TEST.\n");
-}
-
 // --
 
 void kprint(const char *s) {
@@ -291,5 +278,13 @@ void kprint_hex32(uint32_t val) {
         uint8_t nibble = (val >> (i * 4)) & 0xF;
         kprint_hex_digit(nibble);
     }
+}
+
+// --
+
+z_obj_t *z_exit(z_obj_t *obj) {
+	uint32_t pid = z_pid;
+	k_proc_kill(pid);
+	while (1) /* wait to die */;
 }
 

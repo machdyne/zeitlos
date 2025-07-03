@@ -1,3 +1,4 @@
+Z_MKSYSCALL(EXIT, z_exit)
 Z_MKSYSCALL(UI_PRINT, z_ui_print)
 Z_MKSYSCALL(UART_GETC, z_uart_getc)
 Z_MKSYSCALL(UART_PUTC, z_uart_putc)

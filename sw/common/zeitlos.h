@@ -2,30 +2,7 @@
 #define ZEITLOS_H
 
 #include <stdint.h>
-
-typedef enum {
-	Z_UINT32,
-	Z_INT32,
-	Z_STR,
-	Z_LIST,
-	Z_KV,
-	Z_RETVAL
-} z_type_t;
-
-typedef struct {
-
-	z_type_t type;
-	union {
-		void *ptr;
-		char *str;
-		uint32_t uint32;
-		int32_t int32;
-	} val;
-
-} z_obj_t;
-
-static z_obj_t z_rv_ok = { .type = Z_RETVAL, .val.uint32 = 0 };
-static z_obj_t z_rv_fail = { .type = Z_RETVAL, .val.uint32 = 1 };
+#include "zobj.h"
 
 typedef uint32_t *(*z_kernel_ptr_t)(uint32_t, uint32_t *, uint32_t);
 

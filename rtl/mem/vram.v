@@ -24,7 +24,7 @@ module vram_wb #()
 
 `ifdef GPU_PIXEL_DOUBLE
     reg [31:0] vram [0:6143];   // 512 * 384 / 32 = 6144 words
-    //reg [31:0] vram [0:12287];   // 512 * 384 / 32 = 6144 words * 2
+//    reg [31:0] vram [0:12287];   // 512 * 384 / 32 = 6144 words * 2
 `else
     reg [31:0] vram [0:24575];  // 1024 * 768 / 32 = 24576 words
 `endif

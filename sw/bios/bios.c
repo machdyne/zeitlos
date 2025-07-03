@@ -29,14 +29,21 @@
 
 #define reg_mtu (*(volatile uint32_t*)0x90000000)
 
+#define AUTOLOAD_CNT		1000000
+
 #define MEM_BIOS			0x00000000
-#define MEM_BIOS_SIZE	2*1024
+#define MEM_BIOS_SIZE	2 * 1024
+#define MEM_ROM			0x10000000
+#define MEM_ROM_SIZE		1024 * 1024 * 2
 #define MEM_VRAM			0x20000000
-#define MEM_VRAM_SIZE	(1024*768)/32
+#define MEM_VRAM_SIZE	(1024 * 768) / 32
 #define MEM_MAIN			0x40000000
-#define MEM_MAIN_SIZE	1024*1024
+#define MEM_MAIN_SIZE	1024 * 1024
 #define MEM_APP			0x80000000
-#define MEM_APP_SIZE		1024*1024
+#define MEM_APP_SIZE		1024 * 1024
+
+#define ROM_OS_ADDR		(MEM_ROM + (1024 * 1024 * 1))
+#define ROM_OS_SIZE		1024 * 256
 
 //#include "scancodes.h"
 //#include "hidcodes.h"
@@ -58,6 +65,7 @@ char hidtoascii(uint8_t code);
 void print_hex(uint32_t v, int digits);
 void memtest(uint32_t addr_ptr, uint32_t mem_total);
 void memcpy(uint32_t dest, uint32_t src, uint32_t n);
+void load_zeitlos(void);
 
 int vid_cols;
 int vid_rows;
@@ -305,11 +313,26 @@ void cmd_memhigh_ff()
 }
 
 void memcpy(uint32_t dest, uint32_t src, uint32_t n) {
-   volatile uint32_t *from = (uint32_t *)src;
-   volatile uint32_t *to = (uint32_t *)dest;
-	for (int i = 0; i < (n / sizeof(uint32_t)); i++) {
-		(*(volatile uint32_t *)(to + i)) = *(from + i);
+	volatile uint32_t *from = (uint32_t *)src;
+	volatile uint32_t *to = (uint32_t *)dest;
+	uint32_t words = n / sizeof(uint32_t);
+	for (uint32_t i = 0; i < words; i++) {
+		to[i] = from[i];
 	}
+}
+
+void load_zeitlos() {
+	print("loading zeitlos from rom to main memory ... ");
+
+	print_hex(MEM_MAIN, 8);
+	print(" ");
+	print_hex(ROM_OS_ADDR, 8);
+	print(" ");
+	print_hex(ROM_OS_SIZE, 8);
+	print(" ");
+
+	memcpy(MEM_MAIN, ROM_OS_ADDR, ROM_OS_SIZE);
+	print("done.\n");
 }
 
 //
@@ -338,6 +361,9 @@ void cmd_help() {
 void cmd_toggle_addr_ptr(void) {
 
 	if (addr_ptr == MEM_BIOS) {
+		addr_ptr = MEM_ROM;
+		mem_total = MEM_ROM_SIZE;
+	} else if (addr_ptr == MEM_ROM) {
 		addr_ptr = MEM_VRAM;
 		mem_total = MEM_VRAM_SIZE;
 	} else if (addr_ptr == MEM_VRAM) {
@@ -390,10 +416,19 @@ void delay() {
 
 void main() {
 
+	uint32_t ctr = 0;
+	bool interacted = false;
 	int cmd;
 
 	reg_led = 0xff;
 	reg_mtu = 0x40000000;	// 0x8000_0000 will mirror 0x4000_0000
+
+/*
+volatile uint32_t* vram = (volatile uint32_t*)0x20000000;
+vram[0] = 0x00000001;  // Should be leftmost pixel if bit 0 = left
+vram[1] = 0x80000000;
+*/
+
 
 	addr_ptr = MEM_MAIN;
 	mem_total = MEM_MAIN_SIZE;
@@ -401,6 +436,8 @@ void main() {
 	uart_init();
 
 	print("ZB\n");
+
+	load_zeitlos();
 
 	cmd_info();
 	cmd_help();
@@ -411,7 +448,12 @@ void main() {
 		print_hex(addr_ptr, 8);
 		print("> ");
 
-		while ((cmd = getchar()) == EOF) continue;
+		while ((cmd = getchar()) == EOF) {
+			ctr++;
+			if (ctr == AUTOLOAD_CNT && !interacted) return;
+		}
+
+		interacted = true;
 
 		print("\n");
 
@@ -473,6 +515,10 @@ void main() {
 				break;
 			case 'F':
 				cmd_memhigh_ff();
+				break;
+			case 'l':
+			case 'L':
+				load_zeitlos();
 				break;
 			default:
 				continue;

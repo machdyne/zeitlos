@@ -91,6 +91,15 @@ module sysctl #()
 	inout [1:0] usb_host_dm,
 `endif
 
+`ifdef MEM_ROM
+   output CSPI_SS_FLASH,
+   input CSPI_MISO,
+   output CSPI_MOSI,
+`ifndef FPGA_ECP5
+   output CSPI_SCK,
+`endif
+`endif
+
 );
 
 	// BOARD LEDS
@@ -232,7 +241,7 @@ module sysctl #()
 	// XX
 */
 
-   wire varb_master;		// vram arbiter master: 0 = cpu, 1 = gpu
+   wire [1:0] varb_master;
 
 	wire wbm_clk = sys_clk;
 	wire wbm_rst = !sys_rstn;
@@ -268,11 +277,13 @@ module sysctl #()
 	wire [31:0] wbs_sdram_dat_o;
 	wire [31:0] wbs_qqspi_dat_o;
 	wire [31:0] wbs_vram_dat_o;
+	wire [31:0] wbs_rom_dat_o;
 	wire [31:0] wbs_debug_dat_o;
 	wire [31:0] wbs_uart0_dat_o;
 	wire [31:0] wbs_spisdcard_dat_o;
 	wire [31:0] wbs_usb0_dat_o;
 	wire [31:0] wbs_gpu_dat_o;
+	wire [31:0] wbs_gpu_blit_dat_o;
 
 	wire cs_bram = (wbm_adr < 8192);
 	wire cs_mtu = ((wbm_adr & 32'hf000_0000) == 32'h9000_0000);
@@ -287,6 +298,11 @@ module sysctl #()
 `ifdef MEM_VRAM
 	wire cs_vram = ((wbm_adr & 32'hf000_0000) == 32'h2000_0000);
 `endif
+`ifdef MEM_ROM
+	wire cs_rom = ((wbm_adr & 32'hf000_0000) == 32'h1000_0000);
+`endif
+
+// TODO: move peripherals to 32'hfxxx_0000
 `ifdef SPI_SDCARD
 	wire cs_spisdcard = ((wbm_adr & 32'hf000_0000) == 32'hb000_0000);
 `endif
@@ -295,6 +311,9 @@ module sysctl #()
 `endif
 `ifdef GPU_RASTER
 	wire cs_gpu = ((wbm_adr & 32'hf000_0000) == 32'ha000_0000);
+`endif
+`ifdef GPU_BLIT
+	wire cs_gpu_blit = ((wbm_adr & 32'hf000_0000) == 32'hd000_0000);
 `endif
 `ifdef DEBUG
 	wire cs_debug = ((wbm_adr & 32'hf000_0000) == 32'he000_0000);
@@ -320,6 +339,9 @@ module sysctl #()
 		cs_vram ? wbs_vram_dat_o :
 `endif
 `endif
+`ifdef MEM_ROM
+		cs_rom ? wbs_rom_dat_o :
+`endif
 `ifdef DEBUG
 		cs_debug ? wbs_debug_dat_o :
 `endif
@@ -335,6 +357,9 @@ module sysctl #()
 `ifdef GPU_RASTER
 		cs_gpu ? wbs_gpu_dat_o :
 `endif
+`ifdef GPU_BLIT
+		cs_gpu_blit ? wbs_gpu_blit_dat_o :
+`endif
 		32'hzzzz_zzzz;
 
 	wire wbs_bram_ack_o;
@@ -343,11 +368,13 @@ module sysctl #()
 	wire wbs_sdram_ack_o;
 	wire wbs_qqspi_ack_o;
 	wire wbs_vram_ack_o;
+	wire wbs_rom_ack_o;
 	wire wbs_debug_ack_o;
 	wire wbs_uart0_ack_o;
 	wire wbs_spisdcard_ack_o;
 	wire wbs_usb0_ack_o;
 	wire wbs_gpu_ack_o;
+	wire wbs_gpu_blit_ack_o;
 
 	assign wbm_ack =
 		cs_bram ? wbs_bram_ack_o :
@@ -366,6 +393,9 @@ module sysctl #()
 		cs_vram ? wbs_vram_ack_o :
 `endif
 `endif
+`ifdef MEM_ROM
+		cs_rom ? wbs_rom_ack_o :
+`endif
 `ifdef DEBUG
 		cs_debug ? wbs_debug_ack_o :
 `endif
@@ -380,6 +410,9 @@ module sysctl #()
 `endif
 `ifdef GPU_RASTER
 		cs_gpu ? wbs_gpu_ack_o :
+`endif
+`ifdef GPU_BLIT
+		cs_gpu_blit ? wbs_gpu_blit_ack_o :
 `endif
 		1'b0;
 
@@ -495,6 +528,52 @@ module sysctl #()
 		.m_ack_i(wbm_gpu_ack),
 //		.dbg(DBG)
 	);
+`endif
+
+`ifdef GPU_BLIT
+	wire [31:0] wbm_gpu_blit_adr;
+	wire [31:0] wbm_gpu_blit_dat_i;
+	wire [31:0] wbm_gpu_blit_dat_o;
+	wire [3:0] wbm_gpu_blit_sel;
+	wire wbm_gpu_blit_we;
+	wire wbm_gpu_blit_stb;
+	wire wbm_gpu_blit_ack;
+	wire wbm_gpu_blit_cyc;
+
+	// Add chip select for blitter configuration
+	wire wbm_cyc_gpu_blit = cs_gpu_blit && wbm_cyc;
+
+	gpu_blit_wb #() wbm_blit0_i
+	(
+		.clk(wbm_clk),
+		.rst(wbm_rst),
+
+		// slave interface for configuration
+		.wb_adr_i(wbm_adr_sel_word),
+		.wb_dat_i(wbm_dat_o),
+		.wb_dat_o(wbs_gpu_blit_dat_o),
+		.wb_we_i(wbm_we),
+		.wb_sel_i(wbm_sel),
+		.wb_stb_i(wbm_stb),
+		.wb_cyc_i(wbm_cyc_gpu_blit),
+		.wb_ack_o(wbs_gpu_blit_ack_o),
+
+		// master interface to VRAM
+		.m_adr_o(wbm_gpu_blit_adr),
+		.m_dat_i(wbm_gpu_blit_dat_i),
+		.m_dat_o(wbm_gpu_blit_dat_o),
+		.m_cyc_o(wbm_gpu_blit_cyc),
+		.m_stb_o(wbm_gpu_blit_stb),
+		.m_we_o(wbm_gpu_blit_we),
+		.m_sel_o(wbm_gpu_blit_sel),
+		.m_ack_i(wbm_gpu_blit_ack),
+
+//		.busy(blit_busy)
+	);
+
+`endif
+
+`ifdef ARBITER
 
 	// WISHBONE ARBITER
 	wire [31:0] wbm_cpu_arb0_dat_i;
@@ -516,8 +595,9 @@ module sysctl #()
       .m0_stb_i(wbm_cpu_stb),
       .m0_cyc_i(wbm_cpu_arb0_cyc),
       .m0_ack_o(wbm_cpu_arb0_ack),
-   
-      // Master 1 (GPU)
+
+`ifdef GPU_RASTER
+      // Master 1 (GPU rasterizer)
       .m1_adr_i(wbm_gpu_adr),
       .m1_dat_i(wbm_gpu_dat_o),
       .m1_dat_o(wbm_gpu_dat_i),
@@ -526,7 +606,20 @@ module sysctl #()
       .m1_stb_i(wbm_gpu_stb),
       .m1_cyc_i(wbm_gpu_cyc),
       .m1_ack_o(wbm_gpu_ack),
-   
+`endif
+
+`ifdef GPU_BLIT
+      // Master 2 (GPU blitter)
+      .m2_adr_i(wbm_gpu_blit_adr),
+      .m2_dat_i(wbm_gpu_blit_dat_o),
+      .m2_dat_o(wbm_gpu_blit_dat_i),
+      .m2_we_i(wbm_gpu_blit_we),
+      .m2_sel_i(wbm_gpu_blit_sel),
+      .m2_stb_i(wbm_gpu_blit_stb),
+      .m2_cyc_i(wbm_gpu_blit_cyc),
+      .m2_ack_o(wbm_gpu_blit_ack),
+`endif
+
       // Selected master
       .s_adr_o(wbm_vram_adr), 
       .s_dat_i(wbs_vram_dat_o),
@@ -650,6 +743,7 @@ module sysctl #()
 	);
 `endif
 
+	// WISHBONE SLAVE: QUAD QUAD SPI MODULE
 `ifdef MEM_QQSPI
 	wire wbm_cyc_qqspi = cs_qqspi && wbm_cyc;
 
@@ -672,6 +766,34 @@ module sysctl #()
 		.sio1_so_miso(QQSPI_MISO),
 		.sio2(QQSPI_SIO2),
 		.sio3(QQSPI_SIO3),
+	);
+`endif
+
+	// WISHBONE SLAVE: READ-ONLY MEMORY (FLASH/MMOD)
+`ifdef MEM_ROM
+	wire wbm_cyc_rom = cs_rom && wbm_cyc;
+
+`ifdef FPGA_ECP5
+	wire CSPI_SCK;
+	USRMCLK usrmclk0 (.USRMCLKI(CSPI_SCK), .USRMCLKTS(1'b0));
+`endif
+
+	spiflashro_wb #() wbs_rom0_i
+	(
+		.wb_clk_i(wbm_clk),
+		.wb_rst_i(wbm_rst),
+		.wb_adr_i({ wbm_adr_sel_word, 2'b00 }),
+		.wb_dat_i(wbm_dat_o),
+		.wb_dat_o(wbs_rom_dat_o),
+		.wb_we_i(wbm_we),
+		.wb_sel_i(wbm_sel),
+		.wb_stb_i(wbm_stb),
+		.wb_ack_o(wbs_rom_ack_o),
+		.wb_cyc_i(wbm_cyc_rom),
+		.ss(CSPI_SS_FLASH),
+		.sck(CSPI_SCK),
+		.mosi(CSPI_MOSI),
+		.miso(CSPI_MISO),
 	);
 `endif
 

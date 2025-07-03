@@ -24,6 +24,6 @@ int main() {
 
 	}
 
-	while (1) /* wait */;
+//	while (1) /* wait */;
 
 }

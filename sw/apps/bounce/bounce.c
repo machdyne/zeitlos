@@ -25,6 +25,8 @@ int main() {
 	int dx = 1, dy = 1;
 	const int box_size = 10;
 
+	draw_box(0, 32, box_size, box_size, 1);
+
 	while (1) {
 
 		// erase previous box
@@ -35,7 +37,7 @@ int main() {
 		y += dy;
 
 		// bounce off walls
-		if (x <= 0 || x + box_size >= WIDTH) dx = -dx;
+		if (x <= 0 || x + box_size >= WIDTH - 32 - (box_size * 2)) dx = -dx;
 		if (y <= 0 || y + box_size >= HEIGHT) dy = -dy;
 
 		// draw new box
@@ -59,7 +61,7 @@ void set_pixel(int x, int y, int c) {
     uint32_t word_index = bit_index / 32;
     uint32_t bit_position = bit_index % 32;
 
-   // uint32_t mask = 1U << (31 - bit_position);
+    //uint32_t mask = 1U << (31 - bit_position);
     uint32_t mask = 1U << bit_position;
 
     if (c) {

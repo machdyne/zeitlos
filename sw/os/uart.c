@@ -185,21 +185,21 @@ void k_uart_putc(char c) {
 
 z_obj_t *z_uart_rx_empty(z_obj_t *obj) {
 	obj->val.int32 = uart_rx_fifo_empty();
-	return (&z_rv_ok);
+	return (&z_ok);
 }
 
 z_obj_t *z_uart_tx_full(z_obj_t *obj) {
 	obj->val.int32 = uart_tx_fifo_full();
-	return (&z_rv_ok);
+	return (&z_ok);
 }
 
 z_obj_t *z_uart_getc(z_obj_t *obj) {
 	obj->val.int32 = k_uart_getc();
-	return (&z_rv_ok);
+	return (&z_ok);
 }
 
 z_obj_t *z_uart_putc(z_obj_t *obj) {
 	char c = (char)obj->val.int32;
 	k_uart_putc(c);
-	return (&z_rv_ok);
+	return (&z_ok);
 }

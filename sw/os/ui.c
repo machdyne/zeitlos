@@ -36,6 +36,6 @@ z_obj_t *z_ui_print (z_obj_t *obj) {
         reg_uart0_data = *s++;
     }
 
-	return (&z_rv_ok);
+	return (&z_ok);
 
 }
