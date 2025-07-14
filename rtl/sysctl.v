@@ -163,7 +163,7 @@ module sysctl #()
    );
 
    CC_PLL #(
-      .REF_CLK(125.0),      // reference input in MHz
+      .REF_CLK(48.0),      // reference input in MHz
       .OUT_CLK(75.0),      // pll output frequency in MHz
       .PERF_MD("ECONOMY"), // LOWPOWER, ECONOMY, SPEED
       .LOW_JITTER(1),      // 0: disable, 1: enable low jitter mode
