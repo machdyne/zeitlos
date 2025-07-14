@@ -177,6 +177,15 @@ else ifeq ($(BOARD), lebkuchen)
 	PR = ~/work/fpga/gatemate/oss-cad-suite/bin/nextpnr-himbaechel
 	PACK = ~/work/fpga/gatemate/oss-cad-suite/bin/gmpack
 	PROG = openFPGALoader -c $(CABLE)
+else ifeq ($(BOARD), kolsch)
+	FAMILY = gatemate
+	DEVICE = ccgma1
+	CABLE = dirtyJtag
+	CCF = boards/kolsch_v2.ccf
+	SYNTH = ~/work/fpga/gatemate/oss-cad-suite/bin/yosys
+	PR = ~/work/fpga/gatemate/oss-cad-suite/bin/nextpnr-himbaechel
+	PACK = ~/work/fpga/gatemate/oss-cad-suite/bin/gmpack
+	PROG = openFPGALoader -c $(CABLE)
 endif
 
 FAMILY_UC = $(shell echo '$(FAMILY)' | tr '[:lower:]' '[:upper:]')
@@ -224,6 +233,10 @@ ifeq ($(FAMILY), ice40)
 soc:
 	icebram sw/bios/bios_seed.hex sw/bios/bios.hex < \
 		output/$(BOARD_LC)/soc.txt | icepack > output/$(BOARD_LC)/soc.bit
+
+else ifeq ($(FAMILY), gatemate)
+soc:
+	echo
 else ifeq ($(FAMILY), ecp5)
 soc:
 	ecpbram -i output/$(BOARD_LC)/soc.config \

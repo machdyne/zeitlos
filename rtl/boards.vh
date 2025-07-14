@@ -65,4 +65,22 @@
 `define SPI_SDCARD
 `define SPI_FLASH
 
+`elsif BOARD_KOLSCH
+
+`define FPGA_GATEMATE
+`define OSC48
+`define SYSCLK48
+`define MEM_SDRAM
+`define MEM_VRAM
+`define GPU
+`define GPU_RASTER
+`define GPU_BLIT
+`define GPU_PIXEL_DOUBLE
+`define GPU_CURSOR
+`define GPU_VGA
+`define UART0
+`define USB_HID
+//`define SPI_SDCARD
+//`define SPI_FLASH
+
 `endif

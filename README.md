@@ -43,6 +43,7 @@ The following boards are currently supported:
 
  - [Machdyne Obst](https://github.com/machdyne/obst)
  - [Machdyne Lakritz](https://github.com/machdyne/lakritz)
+ - [Machdyne Kölsch](https://github.com/machdyne/kolsch)
  - (more soon)
 
 If you have an unsupported board and want to try Zeitlos, please open an issue.

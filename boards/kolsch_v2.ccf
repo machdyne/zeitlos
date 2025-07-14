@@ -1,0 +1,113 @@
+## blink.ccf
+#
+# Date: 2022-10-21
+#
+# Format:
+# <pin-direction> "<pin-name>" Loc = "<pin-location>" | <opt.-constraints>;
+#
+# Additional constraints can be appended using the pipe symbol.
+# Files are read line by line. Text after the hash symbol is ignored.
+#
+# Available pin directions:
+#
+# Pin_in
+#   defines an input pin
+# Pin_out
+#   defines an output pin
+# Pin_inout
+#   defines a bidirectional pin
+#
+# Available pin constraints:
+#
+# SCHMITT_TRIGGER={true,false}
+#   enables or disables schmitt trigger (hysteresis) option
+# PULLUP={true,false}
+#   enables or disables I/O pullup resistor of nominal 50kOhm
+# PULLDOWN={true,false}
+#   enables or disables I/O pulldown resistor of nominal 50kOhm
+# KEEPER={true,false}
+#   enables or disables I/O keeper option
+# SLEW={slow,fast}
+#   sets slew rate to slow or fast
+# DRIVE={3,6,9,12}
+#   sets output drive strength to 3mA..12mA
+# DELAY_OBF={0..15}
+#   adds an additional delay of n * nominal 50ps to output signal
+# DELAY_IBF={0..15}
+#   adds an additional delay of n * nominal 50ps to input signal
+# FF_IBF={true,false}
+#   enables or disables placing of FF in input buffer, if possible
+# FF_OBF={true,false}
+#   enables or disables placing of FF in output buffer, if possible
+# LVDS_BOOST={true,false}
+#   enables increased LVDS output current of 6.4mA (default: 3.2mA)
+# LVDS_TERM={true,false}
+#   enables on-chip LVDS termination resistor of nominal 100Ohm, in output mode only
+#
+# Global IO constraints can be set with the default_GPIO statement. It can be
+# overwritten by individual settings for specific GPIOs, e.g.:
+#   default_GPIO | DRIVE=3; # sets all output strengths to 3mA, unless overwritten
+#
+
+Pin_in   "CLK_48"  Loc = "IO_SB_A8" | SCHMITT_TRIGGER=true;
+
+Pin_out  "LED_B"  Loc = "IO_NB_B4";
+
+Pin_in   "UART0_TX"  Loc = "IO_WC_A2";
+Pin_out  "UART0_RX"  Loc = "IO_WC_A0";
+
+Pin_out	"sdram_clock" Loc = "IO_SA_A6";
+
+Pin_out	"sdram_a[0]" Loc = "IO_EA_A2";
+Pin_out	"sdram_a[1]" Loc = "IO_SB_B2";
+Pin_out	"sdram_a[2]" Loc = "IO_SB_B8";
+Pin_out	"sdram_a[3]" Loc = "IO_EA_B2";
+Pin_out	"sdram_a[4]" Loc = "IO_EA_B0";
+Pin_out	"sdram_a[5]" Loc = "IO_EA_A0";
+Pin_out	"sdram_a[6]" Loc = "IO_SB_B6";
+Pin_out	"sdram_a[7]" Loc = "IO_SB_A3";
+Pin_out	"sdram_a[8]" Loc = "IO_EA_A1";
+Pin_out	"sdram_a[9]" Loc = "IO_SB_B0";
+Pin_out	"sdram_a[10]" Loc = "IO_SB_A2";
+Pin_out	"sdram_a[11]" Loc = "IO_SB_A0";
+Pin_out	"sdram_a[12]" Loc = "IO_EA_B1";
+
+Pin_out	"sdram_ba[0]" Loc = "IO_EA_B4";
+Pin_out	"sdram_ba[1]" Loc = "IO_SB_B1";
+
+Pin_out	"sdram_cs_n" Loc = "IO_SB_A1";
+Pin_out	"sdram_cke" Loc = "IO_SA_A7";
+Pin_out	"sdram_ras_n" Loc = "IO_SB_B5";
+Pin_out	"sdram_cas_n" Loc = "IO_SB_B3";
+Pin_out	"sdram_we_n" Loc = "IO_SB_A5";
+
+Pin_out	"sdram_dm[0]" Loc = "IO_SA_A8";
+Pin_out	"sdram_dm[1]" Loc = "IO_SA_A1";
+
+Pin_inout	"sdram_dq[0]" Loc = "IO_SA_B5";
+Pin_inout	"sdram_dq[1]" Loc = "IO_SA_B4";
+Pin_inout	"sdram_dq[2]" Loc = "IO_SA_A5";
+Pin_inout	"sdram_dq[3]" Loc = "IO_SB_B7";
+Pin_inout	"sdram_dq[4]" Loc = "IO_SA_B7";
+Pin_inout	"sdram_dq[5]" Loc = "IO_SB_A6";
+Pin_inout	"sdram_dq[6]" Loc = "IO_SA_B6";
+Pin_inout	"sdram_dq[7]" Loc = "IO_SA_B8";
+Pin_inout	"sdram_dq[8]" Loc = "IO_SA_A2";
+Pin_inout	"sdram_dq[9]" Loc = "IO_SA_A4";
+Pin_inout	"sdram_dq[10]" Loc = "IO_SA_B2";
+Pin_inout	"sdram_dq[11]" Loc = "IO_SA_B0";
+Pin_inout	"sdram_dq[12]" Loc = "IO_SA_A0";
+Pin_inout	"sdram_dq[13]" Loc = "IO_SA_B3";
+Pin_inout	"sdram_dq[14]" Loc = "IO_SA_B1";
+Pin_inout	"sdram_dq[15]" Loc = "IO_SA_A3";
+
+Pin_out	"VGA_R" Loc = "IO_NA_A4";
+Pin_out	"VGA_G" Loc = "IO_NA_B2";
+Pin_out	"VGA_B" Loc = "IO_NA_A8";
+Pin_out	"VGA_HS" Loc = "IO_NA_A0";
+Pin_out	"VGA_VS" Loc = "IO_NA_B0";
+
+Net   "usb_host_dp[0]"  Loc = "IO_WB_A7";
+Net   "usb_host_dm[0]"  Loc = "IO_WB_B7";
+Net   "usb_host_dp[1]"  Loc = "IO_WB_A5";
+Net   "usb_host_dm[1]"  Loc = "IO_WB_B5";
