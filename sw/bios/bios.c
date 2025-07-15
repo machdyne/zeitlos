@@ -423,13 +423,6 @@ void main() {
 	reg_led = 0xff;
 	reg_mtu = 0x40000000;	// 0x8000_0000 will mirror 0x4000_0000
 
-/*
-volatile uint32_t* vram = (volatile uint32_t*)0x20000000;
-vram[0] = 0x00000001;  // Should be leftmost pixel if bit 0 = left
-vram[1] = 0x80000000;
-*/
-
-
 	addr_ptr = MEM_MAIN;
 	mem_total = MEM_MAIN_SIZE;
 
@@ -437,7 +430,9 @@ vram[1] = 0x80000000;
 
 	print("ZB\n");
 
+#ifndef FPGA_GATEMATE
 	load_zeitlos();
+#endif
 
 	cmd_info();
 	cmd_help();

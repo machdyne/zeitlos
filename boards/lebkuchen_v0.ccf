@@ -63,10 +63,10 @@ Net   "SD_MOSI"  Loc = "IO_WB_A2";
 Net   "SD_MISO"  Loc = "IO_WB_B5";
 Net   "SD_SCK"  Loc = "IO_WB_A5";
 
-Net   "usb_host_dp[0]"  Loc = "IO_WB_B1";
-Net   "usb_host_dm[0]"  Loc = "IO_WB_A1";
-Net   "usb_host_dp[1]"  Loc = "IO_WB_B0";
-Net   "usb_host_dm[1]"  Loc = "IO_WB_A0";
+Net   "usb_host_dp[0]"  Loc = "IO_WB_B0";
+Net   "usb_host_dm[0]"  Loc = "IO_WB_A0";
+Net   "usb_host_dp[1]"  Loc = "IO_WB_B1";
+Net   "usb_host_dm[1]"  Loc = "IO_WB_A1";
 
 Net   "VGA_HS"  Loc = "IO_EB_A0";
 Net   "VGA_VS"  Loc = "IO_EB_B0";
