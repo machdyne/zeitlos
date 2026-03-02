@@ -59,7 +59,10 @@ module sysctl #()
 `endif
 
 `ifdef MEM_QQSPI
-	output QQSPI_CS1, QQSPI_CS0, QQSPI_SS,
+`ifndef MEM_QQSPI_SINGLE
+	output QQSPI_CS1, QQSPI_CS0,
+`endif
+	output QQSPI_SS,
 	output QQSPI_SCK,
 	inout QQSPI_MOSI, QQSPI_MISO, QQSPI_SIO2, QQSPI_SIO3,
 `endif
@@ -151,7 +154,7 @@ module sysctl #()
    CC_PLL #(
       .REF_CLK(48.0),      // reference input in MHz
       .OUT_CLK(125.0),     // pll output frequency in MHz
-      .PERF_MD("ECONOMY"), // LOWPOWER, ECONOMY, SPEED
+      .PERF_MD("ECONOMY"), // LOWPOWER, ECONOMY, ECONOMY
       .LOW_JITTER(1),      // 0: disable, 1: enable low jitter mode
       .CI_FILTER_CONST(2), // optional CI filter constant
       .CP_FILTER_CONST(4)  // optional CP filter constant
@@ -165,7 +168,7 @@ module sysctl #()
    CC_PLL #(
       .REF_CLK(48.0),      // reference input in MHz
       .OUT_CLK(75.0),      // pll output frequency in MHz
-      .PERF_MD("ECONOMY"), // LOWPOWER, ECONOMY, SPEED
+      .PERF_MD("ECONOMY"), // LOWPOWER, ECONOMY, ECONOMY
       .LOW_JITTER(1),      // 0: disable, 1: enable low jitter mode
       .CI_FILTER_CONST(2), // optional CI filter constant
       .CP_FILTER_CONST(4)  // optional CP filter constant
@@ -179,7 +182,7 @@ module sysctl #()
    CC_PLL #(
       .REF_CLK(48.0),      // reference input in MHz
       .OUT_CLK(12.0),      // pll output frequency in MHz
-      .PERF_MD("ECONOMY"), // LOWPOWER, ECONOMY, SPEED
+      .PERF_MD("ECONOMY"), // LOWPOWER, ECONOMY, ECONOMY
       .LOW_JITTER(1),      // 0: disable, 1: enable low jitter mode
       .CI_FILTER_CONST(2), // optional CI filter constant
       .CP_FILTER_CONST(4)  // optional CP filter constant
@@ -760,7 +763,9 @@ module sysctl #()
       .wb_ack_o(wbs_qqspi_ack_o),
       .wb_cyc_i(wbm_cyc_qqspi),
    	.cen(QQSPI_SS),
+`ifndef MEM_QQSPI_SINGLE
    	.cs({QQSPI_CS1, QQSPI_CS0}),
+`endif
    	.sclk(QQSPI_SCK),
 		.sio0_si_mosi(QQSPI_MOSI),
 		.sio1_so_miso(QQSPI_MISO),
