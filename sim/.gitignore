@@ -1,0 +1,7 @@
+zeitlos-sim
+zsim-headless
+zsim-debug
+testapp/*.o
+testapp/*.elf
+testapp/*.bin
+testapp/*.map
