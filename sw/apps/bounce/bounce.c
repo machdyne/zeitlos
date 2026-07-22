@@ -37,7 +37,7 @@ int main() {
 		y += dy;
 
 		// bounce off walls
-		if (x <= 0 || x + box_size >= WIDTH - 32 - (box_size * 2)) dx = -dx;
+		if (x <= 0 || x + box_size >= WIDTH) dx = -dx;
 		if (y <= 0 || y + box_size >= HEIGHT) dy = -dy;
 
 		// draw new box

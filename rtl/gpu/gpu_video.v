@@ -151,7 +151,7 @@ module gpu_video #(
 
 	end
 
-	reg [4:0] refill_words;
+	reg [5:0] refill_words;
 
 `ifdef GPU_PIXEL_DOUBLE
 	reg [511:0] hline;
@@ -162,17 +162,24 @@ module gpu_video #(
 	always @(posedge clk) begin
 		if (refill) begin
 `ifdef GPU_PIXEL_DOUBLE
-			refill_words <= 16;
+			refill_words <= 17;
+			gb_adr_o <= (hy << 4) + 15;
 `else
-			refill_words <= 32;
+			refill_words <= 33;
+			gb_adr_o <= (y << 5) + 31;
 `endif
-		end else if (refill_words) begin
+		end else if (refill_words > 0) begin
 `ifdef GPU_PIXEL_DOUBLE
-			gb_adr_o <= (hy << 4) + (refill_words - 1);
+			if (refill_words != 17)
+				hline <= { hline, gb_dat_i };
+			if (refill_words > 2)
+				gb_adr_o <= (hy << 4) + (refill_words - 3);
 `else
-			gb_adr_o <= (y << 5) + (refill_words - 1);
+			if (refill_words != 33)
+				hline <= { hline, gb_dat_i };
+			if (refill_words > 2)
+				gb_adr_o <= (y << 5) + (refill_words - 3);
 `endif
-			hline <= { hline, gb_dat_i };
 			refill_words <= refill_words - 1;
 		end
 	end
