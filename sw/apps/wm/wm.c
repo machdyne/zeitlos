@@ -1,0 +1,551 @@
+/*
+ * wm -- Zeitlos window manager
+ *
+ * Owns the screen: draws windows as a 5-line box (4-line border +
+ * 1-line titlebar separator), lets the user drag them by the
+ * titlebar, and tracks focus/z-order. Apps don't draw their own
+ * content yet -- see docs/window_manager.md for the phased plan --
+ * so this phase is entirely about window chrome and the
+ * create/destroy/moved protocol in zwm.h.
+ *
+ * Expected to be started as pid 1 (see Z_PID_WM in zwm.h) -- run it
+ * right after boot, before any client apps:
+ *
+ *   > run wm
+ *
+ * Until a real client app exists, wm creates a couple of windows for
+ * itself on startup so there's something to look at and drag.
+ */
+
+#include <stdio.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <string.h>
+
+#include "../../common/zeitlos.h"
+#include "../../common/zwm.h"
+
+#define WM_MAX_WINDOWS    16
+#define WM_SCREEN_W       512
+#define WM_SCREEN_H       384
+#define WM_TITLE_MAX      24
+
+#define WM_VRAM ((volatile uint32_t *)0x20000000)
+
+typedef struct {
+	bool		used;
+	uint32_t	owner_pid;
+	uint32_t	x, y, w, h;
+	char		title[WM_TITLE_MAX];
+} wm_window_t;
+
+static wm_window_t windows[WM_MAX_WINDOWS];
+static uint8_t zorder[WM_MAX_WINDOWS];	// back-to-front; zorder[count-1] is frontmost
+static uint8_t zorder_count = 0;
+static int focused = -1;		// index into windows[], or -1
+static int dragging = -1;		// index into windows[], or -1
+static int drag_off_x = 0, drag_off_y = 0;
+// bounding box swept by the dragged window since the drag started --
+// see the drag-update block below for why this is tracked instead of
+// just the start/end rects.
+static int drag_min_x, drag_min_y, drag_max_x, drag_max_y;
+
+static void send_win_rect(uint32_t to, uint32_t subject, uint32_t tag, int idx);
+static void handle_message(z_msg_t *msg);
+
+// lightweight redraw notification -- no heap allocation (see
+// Z_WM_REDRAW in zwm.h for why this matters). safe to call as often
+// as repair_region() below does.
+static void send_redraw(uint32_t to, int idx) {
+	uint32_t packed = Z_WM_PACK_XY(idx, windows[idx].x, windows[idx].y);
+	z_msg_new_send(to, Z_WM_REDRAW, 0, z_obj_uint32(packed));
+}
+
+// -- gpu / screen --
+
+static inline void gpu_wait_fifo(void) {
+	while (gpu_debug_fifo_count > 15) /* wait */;
+}
+
+static void draw_line(int x0, int y0, int x1, int y1, int color) {
+	gpu_wait_fifo();
+	gpu_x0 = x0;
+	gpu_y0 = y0;
+	gpu_x1 = x1;
+	gpu_y1 = y1;
+	gpu_color = color & 1;
+	gpu_start = 1;
+}
+
+static void clear_screen(void) {
+	for (int i = 0; i < (WM_SCREEN_W * WM_SCREEN_H) / 32; i++)
+		WM_VRAM[i] = 0;
+}
+
+static void draw_window_box(wm_window_t *w, bool is_focused, int color) {
+
+	int x0 = w->x, y0 = w->y;
+	int x1 = w->x + w->w - 1, y1 = w->y + w->h - 1;
+	int ty = w->y + Z_WM_TITLEBAR_H;
+
+	draw_line(x0, y0, x1, y0, color);	// top
+	draw_line(x1, y0, x1, y1, color);	// right
+	draw_line(x1, y1, x0, y1, color);	// bottom
+	draw_line(x0, y1, x0, y0, color);	// left
+	draw_line(x0, ty, x1, ty, color);	// titlebar separator
+
+	if (is_focused) {
+		// bolder border for the focused window -- a 1px inset outline.
+		// text rendering isn't wired up yet (see docs/window_manager.md),
+		// so this is the only visual focus indicator for now.
+		draw_line(x0 + 1, y0 + 1, x1 - 1, y0 + 1, color);
+		draw_line(x1 - 1, y0 + 1, x1 - 1, y1 - 1, color);
+		draw_line(x1 - 1, y1 - 1, x0 + 1, y1 - 1, color);
+		draw_line(x0 + 1, y1 - 1, x0 + 1, y0 + 1, color);
+	}
+
+}
+
+// returns true if rectangles a and b (given as x,y,w,h) overlap at all
+static bool rects_overlap(int ax, int ay, int aw, int ah,
+	int bx, int by, int bw, int bh) {
+	return !(ax + aw <= bx || bx + bw <= ax || ay + ah <= by || by + bh <= ay);
+}
+
+static void fill_rect(int x, int y, int w, int h, int color) {
+
+	for (int j = 0; j < h; j++) {
+		int py = y + j;
+		if (py < 0 || py >= WM_SCREEN_H) continue;
+		for (int i = 0; i < w; i++) {
+			int px = x + i;
+			if (px < 0 || px >= WM_SCREEN_W) continue;
+			uint32_t bit_index = (uint32_t)py * WM_SCREEN_W + (uint32_t)px;
+			uint32_t word_index = bit_index / 32;
+			uint32_t mask = 1U << (bit_index % 32);
+			if (color) WM_VRAM[word_index] |= mask;
+			else WM_VRAM[word_index] &= ~mask;
+		}
+	}
+
+}
+
+// bound on how long repair_region() will block waiting for one app to
+// ack a redraw (see wait_for_redraw_done() below) before giving up
+// and moving on. not a precise time unit -- see docs/window_manager.md.
+#define REDRAW_ACK_TIMEOUT   500
+
+// blocks until `pid` sends Z_WM_REDRAW_DONE, or the timeout above is
+// hit. keeps servicing every other message normally while waiting
+// (via handle_message()) rather than discarding them -- unlike
+// z_msg_wait(), which would drop any other app's requests that
+// arrived during the wait.
+static void wait_for_redraw_done(uint32_t pid) {
+
+	for (int waited = 0; waited < REDRAW_ACK_TIMEOUT; waited++) {
+
+		z_msg_t msg;
+		bool got_ack = false;
+
+		while (z_msg_read(&msg) == Z_OK) {
+			if (msg.subject == Z_WM_REDRAW_DONE && msg.from == pid)
+				got_ack = true;
+			else
+				handle_message(&msg);
+		}
+
+		if (got_ack) return;
+
+		for (volatile int i = 0; i < 2000; i++);
+
+	}
+
+	printf("wm: timed out waiting for pid %ld to ack a redraw\n", (long)pid);
+
+}
+
+// clears just the given screen region and redraws chrome + waits for
+// a content redraw from every window whose rect overlaps it, strictly
+// back-to-front -- nothing outside this region is touched, and
+// nothing jumps the queue. this replaced an earlier full-screen clear
+// + redraw-everyone approach, which meant any window changing (even a
+// click that only changed focus) made every other window on screen
+// flash, whether or not it was anywhere near the change. the
+// back-to-front ordering (via wait_for_redraw_done()) is what
+// actually keeps a window's content from momentarily showing through
+// a window that's supposed to be in front of it -- without it, each
+// app redraws whenever its process happens to get scheduled, with no
+// guarantee that's in z-order. see docs/window_manager.md, "targeted
+// redraw" and "content z-order".
+static void repair_region(int rx, int ry, int rw, int rh) {
+
+	fill_rect(rx, ry, rw, rh, 0);
+
+	for (int i = 0; i < zorder_count; i++) {
+		int idx = zorder[i];
+		wm_window_t *w = &windows[idx];
+		if (!rects_overlap(rx, ry, rw, rh,
+			(int)w->x, (int)w->y, (int)w->w, (int)w->h))
+			continue;
+		draw_window_box(w, idx == focused, 1);
+		if (w->owner_pid == Z_PID_WM) continue;
+		send_redraw(w->owner_pid, idx);
+		wait_for_redraw_done(w->owner_pid);
+	}
+
+}
+
+// -- mouse --
+//
+// reg_usb_cursor's x/y fields come from a hardware cursor tracker
+// (rtl/usb_hid.v) that's clamped, not wrapping: curs_x in [0,1023],
+// curs_y in [0,767] -- both exactly 2x the 512x384 screen resolution,
+// so /2 maps them onto screen pixels directly. no software-side
+// tracking needed.
+
+static inline int get_cursor_x(void) {
+	return (reg_usb_cursor & 0x3FF) / 2;
+}
+
+static inline int get_cursor_y(void) {
+	return ((reg_usb_cursor >> 10) & 0x3FF) / 2;
+}
+
+static inline uint8_t get_mouse_btn(void) {
+	return (reg_usb_cursor >> 20) & 0x0F;
+}
+
+// -- window table --
+
+static int create_window(uint32_t owner_pid, const char *title,
+	uint32_t w, uint32_t h) {
+
+	for (int i = 0; i < WM_MAX_WINDOWS; i++) {
+
+		if (windows[i].used) continue;
+
+		windows[i].used = true;
+		windows[i].owner_pid = owner_pid;
+		windows[i].w = w;
+		windows[i].h = h;
+
+		// simple cascade -- see docs/window_manager.md, placement
+		// strategy was left for a later pass
+		uint32_t n = zorder_count;
+		windows[i].x = 20 + (n % 8) * 24;
+		windows[i].y = 20 + (n % 8) * 20;
+
+		if (title) {
+			strncpy(windows[i].title, title, WM_TITLE_MAX - 1);
+			windows[i].title[WM_TITLE_MAX - 1] = 0;
+		} else {
+			windows[i].title[0] = 0;
+		}
+
+		zorder[zorder_count++] = i;
+
+		printf("wm: created window %d '%s' owner=%ld at (%ld,%ld) %ldx%ld\n",
+			i, windows[i].title, (long)owner_pid,
+			(long)windows[i].x, (long)windows[i].y,
+			(long)windows[i].w, (long)windows[i].h);
+
+		return i;
+
+	}
+
+	printf("wm: create_window failed -- no free window slots\n");
+	return -1;
+
+}
+
+// returns true if idx's z-order position actually changed
+static bool bring_to_front(int idx) {
+
+	int found = -1;
+	for (int i = 0; i < zorder_count; i++) {
+		if (zorder[i] == idx) { found = i; break; }
+	}
+	if (found < 0) return false;
+	if (found == zorder_count - 1) return false;	// already frontmost
+
+	for (int i = found; i < zorder_count - 1; i++)
+		zorder[i] = zorder[i + 1];
+	zorder[zorder_count - 1] = idx;
+
+	return true;
+
+}
+
+static void destroy_window(uint32_t id) {
+
+	if (id >= WM_MAX_WINDOWS || !windows[id].used) return;
+
+	int ox = (int)windows[id].x, oy = (int)windows[id].y;
+	int ow = (int)windows[id].w, oh = (int)windows[id].h;
+
+	windows[id].used = false;
+
+	int found = -1;
+	for (int i = 0; i < zorder_count; i++) {
+		if (zorder[i] == id) { found = i; break; }
+	}
+	if (found >= 0) {
+		for (int i = found; i < zorder_count - 1; i++)
+			zorder[i] = zorder[i + 1];
+		zorder_count--;
+	}
+
+	if (focused == (int)id) focused = -1;
+	if (dragging == (int)id) dragging = -1;
+
+	printf("wm: destroyed window %ld\n", (long)id);
+
+	// window is already removed from windows[]/zorder above, so this
+	// only redraws/notifies whatever else was overlapping its old spot
+	repair_region(ox, oy, ow, oh);
+
+}
+
+// returns the frontmost window containing (cx,cy), or -1
+static int hit_test(int cx, int cy) {
+
+	for (int i = zorder_count - 1; i >= 0; i--) {
+		int idx = zorder[i];
+		wm_window_t *w = &windows[idx];
+		if (cx >= (int)w->x && cx <= (int)(w->x + w->w - 1) &&
+			cy >= (int)w->y && cy <= (int)(w->y + w->h - 1))
+			return idx;
+	}
+
+	return -1;
+
+}
+
+static bool hit_titlebar(int idx, int cy) {
+	return (cy < (int)(windows[idx].y + Z_WM_TITLEBAR_H));
+}
+
+// -- app protocol --
+
+static void send_win_rect(uint32_t to, uint32_t subject, uint32_t tag, int idx) {
+
+	z_obj_t msg = z_obj_map(5);
+
+	if (idx >= 0) {
+		z_map_set(&msg, "id", z_obj_int32(idx));
+		z_map_set(&msg, "x", z_obj_uint32(windows[idx].x));
+		z_map_set(&msg, "y", z_obj_uint32(windows[idx].y));
+		z_map_set(&msg, "w", z_obj_uint32(windows[idx].w));
+		z_map_set(&msg, "h", z_obj_uint32(windows[idx].h));
+	} else {
+		z_map_set(&msg, "id", z_obj_int32(-1));
+	}
+
+	z_msg_new_send(to, subject, tag, msg);
+
+	// note: `msg` is intentionally never freed here. it's a borrowed
+	// payload until the recipient reads it (see docs/messaging.md) --
+	// wm doesn't wait for that, so freeing immediately would race.
+	// same accepted-leak tradeoff as the ping/pong demo.
+
+}
+
+static void handle_message(z_msg_t *msg) {
+
+	switch (msg->subject) {
+
+		case Z_WM_CREATE_WINDOW: {
+
+			char title[WM_TITLE_MAX] = "";
+			uint32_t w = Z_WM_DEFAULT_WIDTH, h = Z_WM_DEFAULT_HEIGHT;
+
+			z_obj_t *t = z_map_find(&msg->obj, "title");
+			if (t && t->type == Z_STR && t->val.str)
+				strncpy(title, t->val.str, WM_TITLE_MAX - 1);
+
+			z_obj_t *wo = z_map_find(&msg->obj, "w");
+			if (wo && wo->type == Z_UINT32) w = wo->val.uint32;
+
+			z_obj_t *ho = z_map_find(&msg->obj, "h");
+			if (ho && ho->type == Z_UINT32) h = ho->val.uint32;
+
+			int idx = create_window(msg->from, title, w, h);
+			send_win_rect(msg->from, Z_WM_WINDOW_CREATED, msg->tag, idx);
+
+			if (idx >= 0)
+				repair_region(windows[idx].x, windows[idx].y,
+					windows[idx].w, windows[idx].h);
+
+			break;
+
+		}
+
+		case Z_WM_DESTROY_WINDOW:
+
+			if (msg->obj.type == Z_UINT32)
+				destroy_window(msg->obj.val.uint32);	// repairs its own region
+
+			break;
+
+		default:
+			break;
+
+	}
+
+}
+
+static void notify_moved(int idx) {
+
+	// demo windows (owned by wm itself) have no app to notify
+	if (windows[idx].owner_pid == Z_PID_WM) return;
+
+	send_win_rect(windows[idx].owner_pid, Z_WM_WINDOW_MOVED, 0, idx);
+
+}
+
+// -- main loop --
+
+int main(void) {
+
+	printf("wm: starting as pid %d.\n", Z_PID_WM);
+
+	for (int i = 0; i < WM_MAX_WINDOWS; i++)
+		windows[i].used = false;
+
+	// one explicit clear here, in case something else left stale
+	// pixels in the framebuffer before wm started -- repair_region()
+	// (used everywhere else from here on) deliberately never touches
+	// more of the screen than it has to.
+	clear_screen();
+
+	// demo windows so there's something to see/drag before a real
+	// client app exists -- see the file header comment.
+	int demo1 = create_window(Z_PID_WM, "Window 1", 140, 100);
+	int demo2 = create_window(Z_PID_WM, "Window 2", 140, 100);
+	if (demo1 >= 0)
+		repair_region(windows[demo1].x, windows[demo1].y, windows[demo1].w, windows[demo1].h);
+	if (demo2 >= 0)
+		repair_region(windows[demo2].x, windows[demo2].y, windows[demo2].w, windows[demo2].h);
+
+	uint8_t last_btn = 0;
+
+	while (1) {
+
+		// -- drain incoming requests (non-blocking) --
+		z_msg_t msg;
+		while (z_msg_read(&msg) == Z_OK)
+			handle_message(&msg);
+
+		// -- mouse --
+		int cx = get_cursor_x();
+		int cy = get_cursor_y();
+		uint8_t btn = get_mouse_btn();
+		bool btn_down = (btn & 1) != 0;
+		bool btn_was_down = (last_btn & 1) != 0;
+
+		if (btn_down && !btn_was_down) {
+
+			int hit = hit_test(cx, cy);
+
+			// temporary debug instrumentation -- see docs/window_manager.md
+			// "cursor calibration" note. remove once the coordinate mapping
+			// is confirmed against real hardware.
+			printf("wm: click raw=0x%08lx cx=%d cy=%d",
+				(unsigned long)reg_usb_cursor, cx, cy);
+			if (hit >= 0) {
+				printf(" -> hit win %d (x=%ld y=%ld w=%ld h=%ld) titlebar=%d\n",
+					hit, (long)windows[hit].x, (long)windows[hit].y,
+					(long)windows[hit].w, (long)windows[hit].h,
+					hit_titlebar(hit, cy));
+			} else {
+				printf(" -> no hit\n");
+			}
+
+			if (hit >= 0) {
+
+				bool focus_changed = (focused != hit);
+				int old_focused = focused;
+				if (focus_changed) focused = hit;
+
+				bool reordered = bring_to_front(hit);
+
+				if (focus_changed && old_focused >= 0)
+					repair_region(windows[old_focused].x, windows[old_focused].y,
+						windows[old_focused].w, windows[old_focused].h);
+
+				if (focus_changed || reordered)
+					repair_region(windows[hit].x, windows[hit].y,
+						windows[hit].w, windows[hit].h);
+
+				if (hit_titlebar(hit, cy)) {
+					dragging = hit;
+					drag_off_x = cx - windows[hit].x;
+					drag_off_y = cy - windows[hit].y;
+					drag_min_x = windows[hit].x;
+					drag_min_y = windows[hit].y;
+					drag_max_x = windows[hit].x + windows[hit].w;
+					drag_max_y = windows[hit].y + windows[hit].h;
+				}
+
+			}
+
+		}
+
+		if (btn_down && dragging >= 0) {
+
+			int32_t nx = cx - drag_off_x;
+			int32_t ny = cy - drag_off_y;
+
+			if (nx < 0) nx = 0;
+			if (ny < 0) ny = 0;
+			if (nx + (int32_t)windows[dragging].w > WM_SCREEN_W)
+				nx = WM_SCREEN_W - windows[dragging].w;
+			if (ny + (int32_t)windows[dragging].h > WM_SCREEN_H)
+				ny = WM_SCREEN_H - windows[dragging].h;
+
+			if ((uint32_t)nx != windows[dragging].x ||
+				(uint32_t)ny != windows[dragging].y) {
+
+				// wireframe drag: move just this window's own border,
+				// cheaply, instead of a full-screen clear+redraw+
+				// content-notify on every step -- that was queuing up
+				// redraw messages faster than apps could drain them,
+				// which is what made content look like it was playing
+				// back in slow motion after the fact. content (this
+				// window's own, and anything underneath the border's
+				// old position) is left alone until the drag
+				// completes, at which point one repair_region() over
+				// everywhere the window passed through puts it all
+				// back correctly. see docs/window_manager.md.
+				draw_window_box(&windows[dragging], dragging == focused, 0);
+				windows[dragging].x = nx;
+				windows[dragging].y = ny;
+				draw_window_box(&windows[dragging], dragging == focused, 1);
+
+				if (nx < drag_min_x) drag_min_x = nx;
+				if (ny < drag_min_y) drag_min_y = ny;
+				if (nx + (int32_t)windows[dragging].w > drag_max_x)
+					drag_max_x = nx + (int32_t)windows[dragging].w;
+				if (ny + (int32_t)windows[dragging].h > drag_max_y)
+					drag_max_y = ny + (int32_t)windows[dragging].h;
+
+			}
+
+		}
+
+		if (!btn_down && btn_was_down && dragging >= 0) {
+			printf("wm: drag release win %d final x=%ld y=%ld\n",
+				dragging, (long)windows[dragging].x, (long)windows[dragging].y);
+			notify_moved(dragging);
+			repair_region(drag_min_x, drag_min_y,
+				drag_max_x - drag_min_x, drag_max_y - drag_min_y);
+			dragging = -1;
+		}
+
+		last_btn = btn;
+
+		for (volatile int i = 0; i < 2000; i++); // light throttle
+
+	}
+
+}

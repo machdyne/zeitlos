@@ -17,8 +17,9 @@
 #include "mem.h"
 #include "uart.h"
 #include "ui.h"
+#include "msg.h"
 
-#define Z_PROCS_MAX 16
+// Z_PROCS_MAX now lives in kernel.h (msg.c needs it too)
 #define Z_PROC_STACK_SIZE  8*1024
 #define Z_KERNEL_STACK_SIZE  8*1024
 

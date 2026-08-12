@@ -60,6 +60,41 @@ int16_t uart_getc(void) {
 	return (int16_t)obj.val.int32;
 }
 
+// -- messaging --
+
+z_rv z_msg_send(z_msg_t *msg) {
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_obj_t *rv = (z_obj_t *)z_kernel_ptr(Z_SYS_MSG_SEND, (uint32_t *)msg, 0);
+	return rv->val.uint32;
+}
+
+z_rv z_msg_read(z_msg_t *msg) {
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_obj_t *rv = (z_obj_t *)z_kernel_ptr(Z_SYS_MSG_READ, (uint32_t *)msg, 0);
+	return rv->val.uint32;
+}
+
+z_rv z_msg_new_send(uint32_t to, uint32_t subject, uint32_t tag, z_obj_t obj) {
+	z_msg_t msg;
+	msg.to = to;
+	msg.subject = subject;
+	msg.tag = tag;
+	msg.obj = obj;
+	return z_msg_send(&msg);
+}
+
+z_rv z_msg_wait(z_msg_t *msg, uint32_t subject, uint32_t tag) {
+	while (1) {
+		if (z_msg_read(msg) == Z_OK) {
+			if (msg->subject == subject && msg->tag == tag)
+				return Z_OK;
+			// not the message we're waiting for -- discard and keep going
+		}
+	}
+}
+
+// --
+
 void rt_delay() {
    volatile static int x, y;
    for (int i = 0; i < 10000; i++) {

@@ -112,7 +112,7 @@ void sh(void) {
 				printf("bad address\n");
 				continue;
 			}
-			printf("xfer addr 0x%lx; ready to receive (press D to cancel) ...\n",
+			printf("xfer addr 0x%lx; ready to receive (hold D to cancel) ...\n",
 				addr);
 			bytes = xfer_recv(addr);
 			printf("received %li bytes to 0x%lx.\n", bytes, addr);
@@ -134,7 +134,7 @@ void sh(void) {
 			void *tmp = k_mem_alloc(1024*128); // 128K max file size for now
 			uint32_t addr = (uint32_t)(uintptr_t)tmp;
 			printf("uploading to file %s.\n", arg);
-			printf("xfer addr 0x%lx; ready to receive (press D to cancel) ...\n",
+			printf("xfer addr 0x%lx; ready to receive (hold D to cancel) ...\n",
 				addr);
 			bytes_received = xfer_recv(addr);
 			printf("received %li bytes to 0x%lx.\n", bytes_received, addr);

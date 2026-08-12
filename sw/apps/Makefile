@@ -5,6 +5,10 @@ all:
 	cd gpu3d && make
 	cd bounce && make
 	cd bounceblit && make
+	cd ping && make
+	cd pong && make
+	cd wm && make
+	cd hello_win && make
 
 clean:
 	cd blinky && make clean
@@ -13,3 +17,7 @@ clean:
 	cd gpu3d && make clean
 	cd bounce && make clean
 	cd bounceblit && make clean
+	cd ping && make clean
+	cd pong && make clean
+	cd wm && make clean
+	cd hello_win && make clean

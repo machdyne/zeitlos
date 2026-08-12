@@ -46,6 +46,17 @@ module usb_hid_wb #()
 
 	reg mouse_move;
 
+	// compute the candidate next position with extra headroom bits so
+	// overshoot past [0,1023]/[0,767] can be detected and saturated
+	// instead of wrapping in curs_x/curs_y's own 10-bit unsigned width.
+	// mouse_dx/mouse_dy are real HID deltas (commonly more than +-1),
+	// so a single update can jump straight past a boundary -- checking
+	// "curs_x == 0/1023" before applying the delta (as this used to)
+	// only catches the case where the *current* value already happens
+	// to sit exactly on the boundary, not the general overshoot case.
+	wire signed [11:0] curs_x_sum = $signed({2'b00, curs_x}) + mouse_dx;
+	wire signed [11:0] curs_y_sum = $signed({2'b00, curs_y}) + mouse_dy;
+
 	always @(posedge wb_clk_i) begin
 
 		wb_ack_o <= 0;
@@ -59,13 +70,13 @@ module usb_hid_wb #()
 
 		if (mouse_move) begin
 
-			if (curs_x == 1023 && mouse_dx > 0) curs_x = 1023;
-			else if (curs_x == 0 && mouse_dx < 0) curs_x = 0;
-			else curs_x <= curs_x + mouse_dx;
+			if (curs_x_sum < 0) curs_x <= 0;
+			else if (curs_x_sum > 1023) curs_x <= 1023;
+			else curs_x <= curs_x_sum[9:0];
 
-			if (curs_y == 767 && mouse_dy > 0) curs_y = 767;
-			else if (curs_y == 0 && mouse_dy < 0) curs_y = 0;
-			else curs_y <= curs_y + mouse_dy;
+			if (curs_y_sum < 0) curs_y <= 0;
+			else if (curs_y_sum > 767) curs_y <= 767;
+			else curs_y <= curs_y_sum[9:0];
 
 		end
 

@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include "zobj.h"
+#include "zmsg.h"
 
 typedef uint32_t *(*z_kernel_ptr_t)(uint32_t, uint32_t *, uint32_t);
 
@@ -54,6 +55,21 @@ int getch(void);
 void readline(char *buf, int maxlen);
 void echo(void);
 void noecho(void);
+
+// --
+
+// send a pre-built message
+z_rv z_msg_send(z_msg_t *msg);
+
+// build and send a message in one call
+z_rv z_msg_new_send(uint32_t to, uint32_t subject, uint32_t tag, z_obj_t obj);
+
+// pop the next available message, if any (non-blocking)
+z_rv z_msg_read(z_msg_t *msg);
+
+// block until a message matching subject/tag arrives, discarding
+// anything else that shows up in the meantime
+z_rv z_msg_wait(z_msg_t *msg, uint32_t subject, uint32_t tag);
 
 #define VT100_CURSOR_UP       "\e[A"
 #define VT100_CURSOR_DOWN     "\e[B"

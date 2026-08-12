@@ -7,7 +7,7 @@ LDSCRIPT = ../common/riscv-os.ld
 
 OBJS = kernel.o kruntime.o mem.o \
 	fs/fs.o fs/fatfs/sdmm.o fs/fatfs/ff.o \
-	uart.o sh.o xfer.o ui.o
+	uart.o sh.o xfer.o ui.o msg.o
 
 kernel: kernel.elf kernel.bin
 
@@ -22,6 +22,7 @@ kernel.o:
 	$(CC) $(CFLAGS) -c xfer.c -o xfer.o
 	$(CC) $(CFLAGS) -c ui.c -o ui.o
 	$(CC) $(CFLAGS) -c uart.c -o uart.o
+	$(CC) $(CFLAGS) -c msg.c -o msg.o
 	$(CC) $(CFLAGS) -c kernel.c -S -o kernel.asm
 	$(CC) $(CFLAGS) -c sh.c -S -o sh.asm
 

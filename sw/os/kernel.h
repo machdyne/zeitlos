@@ -3,14 +3,12 @@
 
 #include "../common/zeitlos.h"
 
-#define Z_OK   0
-#define Z_FAIL 1
+// z_rv, Z_OK and Z_FAIL are defined in ../common/zmsg.h (pulled in via
+// zeitlos.h above) since apps need them too, not just the kernel.
 
 #define Z_IRQ_KTIMER			3
 #define Z_IRQ_UART			4
 #define Z_IRQ_HID				5
-
-typedef uint32_t z_rv;
 
 typedef struct {
 
@@ -23,6 +21,16 @@ typedef struct {
 
 #define Z_PROC_FLAG_ACTIVE	0x000000001
 #define Z_PROC_FLAG_DIE		0x000000002
+
+#define Z_PROCS_MAX 16
+
+// the live process table and the pid of the process currently
+// scheduled/executing -- defined in kernel.c. msg.c (and anything
+// else that needs to translate another process's pointers) needs
+// direct access to z_procs[pid].base, and z_pid to know who's
+// calling.
+extern volatile uint32_t z_pid;
+extern volatile z_proc z_procs[Z_PROCS_MAX];
 
 // --
 
