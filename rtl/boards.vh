@@ -16,8 +16,9 @@
 `define MEM_VRAM
 //`define MEM_QQSPI
 `define MEM_ROM
+`define MEM_GLYPH
 `define LED_RGB
-`define LED_DEBUG
+//`define LED_DEBUG
 `define GPU
 `define GPU_RASTER
 `define GPU_BLIT
@@ -52,7 +53,8 @@
 `define FPGA_GATEMATE
 `define OSC48
 `define SYSCLK48
-`define MEM_PSRAM
+//`define MEM_QQSPI
+//`define MEM_QQSPI_SINGLE
 `define MEM_VRAM
 `define GPU
 `define GPU_RASTER

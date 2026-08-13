@@ -403,6 +403,40 @@ static void notify_moved(int idx) {
 
 }
 
+// repairs a completed drag's swept region (drag_min_x/y..drag_max_x/y,
+// see the drag-update block below) -- deliberately EXCLUDING the
+// dragged window's own final footprint. that footprint's border is
+// already correct: the wireframe drag kept it in sync at every step,
+// so clearing and redrawing it here would be pure waste, and visibly
+// flashes something that didn't need to change. what genuinely does
+// need repairing is the "wake" the window left behind -- the parts of
+// the swept region it's no longer sitting on, which still have stale
+// old content in them (content stays frozen during a drag, by
+// design -- see docs/window_manager.md) -- decomposed into up to four
+// surrounding strips (top/bottom/left/right of the window's final
+// rect). the window's own content still needs a fresh redraw (it was
+// frozen too), so that's requested directly, without touching chrome.
+static void repair_drag(int dragged_idx) {
+
+	wm_window_t *w = &windows[dragged_idx];
+	int fx = (int)w->x, fy = (int)w->y, fw = (int)w->w, fh = (int)w->h;
+
+	if (drag_min_y < fy)
+		repair_region(drag_min_x, drag_min_y, drag_max_x - drag_min_x, fy - drag_min_y);
+	if (fy + fh < drag_max_y)
+		repair_region(drag_min_x, fy + fh, drag_max_x - drag_min_x, drag_max_y - (fy + fh));
+	if (drag_min_x < fx)
+		repair_region(drag_min_x, fy, fx - drag_min_x, fh);
+	if (fx + fw < drag_max_x)
+		repair_region(fx + fw, fy, drag_max_x - (fx + fw), fh);
+
+	if (w->owner_pid != Z_PID_WM) {
+		send_redraw(w->owner_pid, dragged_idx);
+		wait_for_redraw_done(w->owner_pid);
+	}
+
+}
+
 // -- main loop --
 
 int main(void) {
@@ -537,8 +571,7 @@ int main(void) {
 			printf("wm: drag release win %d final x=%ld y=%ld\n",
 				dragging, (long)windows[dragging].x, (long)windows[dragging].y);
 			notify_moved(dragging);
-			repair_region(drag_min_x, drag_min_y,
-				drag_max_x - drag_min_x, drag_max_y - drag_min_y);
+			repair_drag(dragging);
 			dragging = -1;
 		}
 

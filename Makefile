@@ -10,6 +10,7 @@ RTL_PICO = \
 	rtl/mem/sdram.v \
 	rtl/mem/qqspi.v \
 	rtl/mem/vram.v \
+	rtl/mem/glyph.v \
 	rtl/spiflashro.v \
 	rtl/debug.v \
 	rtl/spibb.v \

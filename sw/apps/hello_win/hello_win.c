@@ -17,11 +17,13 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <string.h>
 
 #include "../../common/zeitlos.h"
 #include "../../common/zwm.h"
 #include "../../common/zwin.h"
 #include "../../common/zfont.h"
+#include "../../common/zgfx.h"
 
 static z_win_t win;
 static uint32_t count = 0;
@@ -36,8 +38,14 @@ static int counter_y;
 // notification (window moved, or the wm just cleared the screen),
 // never on the periodic tick below.
 static void draw_static(void) {
+	static const char *s = "Hello, world!";
+	// temporary diagnostic -- logs exactly what's about to be drawn
+	// and its length, so we can compare against what actually shows
+	// up on screen (see docs/window_manager.md, "hardware glyph
+	// blitting" investigation notes).
+	printf("hello_win: draw_static: '%s' (%d chars)\n", s, (int)strlen(s));
 	z_win_clear(&win);
-	z_win_draw_text(&win, 4, LABEL_Y, "Hello, world!", 1, &z_font_6x12);
+	z_win_draw_text(&win, 4, LABEL_Y, s, 1, &z_font_6x12);
 }
 
 // redraws just the counter's own line, not the whole window -- doing
@@ -49,40 +57,43 @@ static void draw_counter(void) {
 	char buf[48];
 	z_win_fill_rect(&win, 0, counter_y, win.w, z_font_6x12.h, 0);
 	snprintf(buf, sizeof(buf), "count=%lu", (unsigned long)count);
+	// same temporary diagnostic as draw_static() above
+	printf("hello_win: draw_counter: '%s' (%d chars)\n", buf, (int)strlen(buf));
 	z_win_draw_text(&win, 4, counter_y, buf, 1, &z_font_6x12);
 }
 
 // drains every pending message, applying any position update and
-// redrawing (once) if anything came in. if the redraw was specifically
-// in response to Z_WM_REDRAW, acks it (z_win_redraw_done()) so the wm
-// can move on to redrawing whatever window is in front of this one --
-// see docs/window_manager.md, "content z-order". Z_WM_WINDOW_MOVED
-// doesn't need an ack; the wm doesn't block waiting for one.
+// redrawing (once) if a Z_WM_REDRAW came in. Z_WM_WINDOW_MOVED is
+// deliberately NOT treated as its own redraw trigger here, even
+// though it also carries a position update -- the wm's repair_region()
+// always sends Z_WM_REDRAW for the same window in the same call, and
+// treating both as independent triggers caused a real, visible
+// double-redraw (flash): the two messages can arrive at measurably
+// different times (WINDOW_MOVED is sent before the wm's chrome-
+// drawing work, REDRAW after), so if this app got scheduled in
+// between, it would redraw once for each. See docs/window_manager.md,
+// "content z-order" for the wider protocol this is part of.
 static bool drain_messages(void) {
 
-	bool got_anything = false;
 	bool got_wm_redraw = false;
 	z_msg_t msg;
 
 	while (z_msg_read(&msg) == Z_OK) {
 		if (msg.subject == Z_WM_REDRAW) {
 			z_win_apply_redraw(&win, msg.obj.val.uint32);
-			got_anything = true;
 			got_wm_redraw = true;
 		} else if (msg.subject == Z_WM_WINDOW_MOVED) {
-			z_win_parse_rect(&win, &msg.obj);
-			got_anything = true;
+			z_win_parse_rect(&win, &msg.obj);	// keep win.x/y in sync; no redraw here
 		}
 	}
 
-	if (got_anything) {
+	if (got_wm_redraw) {
 		draw_static();
 		draw_counter();
-		if (got_wm_redraw)
-			z_win_redraw_done(&win);
+		z_win_redraw_done(&win);
 	}
 
-	return got_anything;
+	return got_wm_redraw;
 
 }
 
@@ -105,6 +116,12 @@ int main(void) {
 		printf("hello_win: failed to create window\n");
 		return 1;
 	}
+
+	// required for Z_GFX_HW_BLIT builds -- pushes z_font_6x12's glyph
+	// data into hardware glyph memory so the blitter has something to
+	// read; a documented no-op in software-only builds. must happen
+	// before the first draw_static()/draw_counter() call below.
+	z_gfx_hw_font_load(&z_font_6x12);
 
 	printf("hello_win: window %ld created at (%ld,%ld) %ldx%ld\n",
 		(long)win.id, (long)win.x, (long)win.y,

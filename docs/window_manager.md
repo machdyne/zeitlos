@@ -245,13 +245,18 @@ building anyway.
 (`z_fb_set_pixel`, `z_fb_fill_rect`, `z_fb_draw_char`,
 `z_fb_draw_text`), each taking an optional clip rect. These write
 directly to the 1bpp framebuffer via ordinary memory writes -- not
-through the shared GPU line rasterizer/blitter -- which matters for
-the GPU-arbitration question flagged below: two apps drawing into two
+through the shared GPU line rasterizer -- which matters for the
+GPU-arbitration question flagged below: two apps drawing into two
 different, non-overlapping windows can't race on shared hardware
 state (like the rasterizer's single clip register) this way, only on
 memory, and disjoint memory writes from different processes are
 inherently safe. See "Known limitations" for the case this doesn't
-cover.
+cover. (`z_fb_draw_char`/`z_fb_draw_text` can optionally be backed by
+the hardware glyph blitter instead of software pixel writes -- see
+"Hardware glyph blitting" below -- but the arbitration reasoning above
+is specifically about the plain-memory-write path; the blitter is
+shared hardware state like the rasterizer is, see that section for
+how it's currently scoped to avoid the same problem.)
 
 `sw/common/zwin.c/h` layers window-aware helpers on top:
 `z_win_create()` (wraps the `Z_WM_CREATE_WINDOW` exchange),
@@ -263,6 +268,108 @@ app to draw, and it's the mechanism referred to in "apps are trusted"
 below: nothing stops an app from calling `zgfx.h` directly with no
 clip, or writing to VRAM itself, but an app that only calls `z_win_*`
 physically cannot draw outside its own window.
+
+## Hardware glyph blitting
+
+`z_fb_draw_char`/`z_fb_draw_text` have two implementations, selected
+at compile time by defining `Z_GFX_HW_BLIT` (`-DZ_GFX_HW_BLIT` in an
+app's `CFLAGS`) -- the original software renderer (default, always
+available, always correct) or a hardware-accelerated path driving the
+GPU blitter (`rtl/gpu/gpu_blit.v`) and a new dedicated glyph memory
+(`rtl/mem/glyph.v`). Both implementations live in `zgfx.c` under
+`#ifdef Z_GFX_HW_BLIT`; the interface (`zgfx.h`) is identical either
+way, so callers (`zwin.c`, apps) don't need to know which is active.
+
+**Why**: software drawing costs roughly one function call + clip
+check + shift/mask + read-modify-write per *pixel*. The blitter writes
+a whole 32-pixel *word* per Wishbone transaction (a few cycles each).
+That's on the order of 100x fewer cycles per pixel for anything
+word-parallel, which is most of what text rendering needs (background
+fills especially).
+
+**How it fits together**:
+- `rtl/mem/glyph.v` is a small (4096-byte, room for both current fonts
+  with headroom for more) dual-port BRAM. Port A is a normal
+  Wishbone slave at `0x3000_0000` (`GLYPH_MEM_BASE` in `zeitlos.h`) --
+  software writes font glyph data here. Port B is a direct,
+  non-Wishbone synchronous read port wired straight to the blitter in
+  `sysctl.v` -- glyph reads never contend with anything else on the
+  bus.
+- `gpu_blit_wb` gained a third mode (`CTRL_GLYPH`, alongside the
+  existing fill/copy) that blits one glyph: reads its row bytes from
+  glyph memory, and for each row does a solid-cell read-modify-write
+  into the framebuffer (foreground color where a glyph bit is set,
+  background color where it isn't -- proper terminal-cell semantics,
+  not a transparent overlay like the software renderer). One trigger
+  per character; software loops over a string.
+- `z_gfx_hw_font_load(font)` (new in `zgfx.h`, always declared and
+  callable) pushes a `z_font_t`'s glyph data into glyph memory. Call
+  it once, before the first hardware-accelerated draw with that font.
+  It's a documented no-op when built without `Z_GFX_HW_BLIT`, so
+  callers don't need their own `#ifdef`.
+- The hardware blit is **unclipped by design** -- it doesn't do the
+  general partial-word clipping the fill/copy path does. `z_fb_draw_char`
+  checks whether the glyph is fully on-screen and (if a clip rect was
+  given) fully inside it; if not, it falls back to the same
+  per-pixel software path used when `Z_GFX_HW_BLIT` isn't defined at
+  all. In practice this only affects glyphs that would land partially
+  outside a window's edge, which shouldn't be common if windows are
+  sized to fit whole character cells.
+- **Bit order matters and was a real source of bugs earlier in this
+  project** (see the font orientation notes above) -- worth being
+  extra careful here. Framebuffer words have increasing x = increasing
+  bit position; font bytes are MSB-first (bit 7 = leftmost pixel).
+  `gpu_blit.v`'s glyph path explicitly bit-reverses each glyph byte
+  before use (`g_byte_rev` in the RTL) to reconcile this. If hardware
+  text ever renders mirrored, this is the first place to check.
+- A found-and-fixed bug along the way: the *existing* fill/copy
+  clipped-fill path referenced `read_data` for partial-word masking
+  without ever populating it (the clipped-fill branch skipped straight
+  to `ST_WRITE`, never `ST_READ`) -- meaning any clipped rectangle
+  fill that didn't land on exact 32-pixel word boundaries (i.e. almost
+  any real window-sized rectangle) would have masked against
+  stale/undefined data. Fixed as part of this work, independent of the
+  glyph blitting itself.
+
+**This is genuinely untested** -- I don't have access to your FPGA
+toolchain or hardware, so none of `glyph.v`, the `gpu_blit.v` glyph
+extension, or the `sysctl.v` wiring has been simulated or run. A
+staged bring-up is strongly recommended rather than trusting all of it
+at once:
+1. Build with the fill/copy bugfix alone (no `MEM_GLYPH`/glyph mode
+   changes exercised yet) and confirm existing rectangle fills
+   (`z_win_clear()`, etc.) still look correct -- this validates the
+   `ST_READ` routing fix didn't regress the working paths.
+2. Bring up `glyph.v` in isolation: write a few known bytes via its
+   Wishbone port, read them back, confirm round-trip correctness,
+   before wiring it to the blitter at all.
+3. Trigger a glyph blit with a synthetic, easy-to-recognize pattern
+   (e.g. a solid square, or a diagonal-line test glyph) rather than
+   real font data first, and confirm it lands at the right pixel
+   position with the right dimensions before trusting orientation.
+4. Only then load real font data (`z_gfx_hw_font_load()`) and confirm
+   actual character shapes render correctly and right-side up.
+5. `MEM_GLYPH` must be defined (RTL) for any bitstream that software
+   built with `Z_GFX_HW_BLIT` will run on. `gpu_blit_wb`'s
+   `glyph_addr_o`/`glyph_data_i` ports are always connected in
+   `sysctl.v` regardless of `MEM_GLYPH` -- without it, `glyph_data_i`
+   is tied to a constant `0` rather than real glyph memory (so the
+   build stays clean either way), meaning glyph-mode blits would just
+   read all-zero glyph data if triggered without `MEM_GLYPH` actually
+   built. Software and RTL feature flags still need to agree for
+   glyph rendering to do anything meaningful.
+
+**Assumptions worth double-checking against your actual conventions**,
+since I made judgment calls without being able to verify them: the
+`0x3000_0000` base address for glyph memory (chosen because it was
+the only free top-nibble slot in `sysctl.v`'s existing decode scheme
+next to `0x2` VRAM -- there was no established convention to follow);
+and the register layout at offsets 7-11 in `gpu_blit_wb` (picked
+because 0-6 were already taken, no other constraint). The RTL feature
+flag is `MEM_GLYPH`, matching the existing `MEM_SRAM`/`MEM_SDRAM`/
+`MEM_QQSPI`/`MEM_VRAM`/`MEM_ROM` naming convention already used in
+`sysctl.v` for other memories.
+
 
 The font (`sw/common/zfont.h/zfont_data.c`) supports multiple bitmap
 fonts through a common `z_font_t` struct (width, height, codepoint

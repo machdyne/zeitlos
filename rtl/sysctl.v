@@ -287,6 +287,7 @@ module sysctl #()
 	wire [31:0] wbs_usb0_dat_o;
 	wire [31:0] wbs_gpu_dat_o;
 	wire [31:0] wbs_gpu_blit_dat_o;
+	wire [31:0] wbs_glyph_dat_o;
 
 	wire cs_bram = (wbm_adr < 8192);
 	wire cs_mtu = ((wbm_adr & 32'hf000_0000) == 32'h9000_0000);
@@ -317,6 +318,9 @@ module sysctl #()
 `endif
 `ifdef GPU_BLIT
 	wire cs_gpu_blit = ((wbm_adr & 32'hf000_0000) == 32'hd000_0000);
+`endif
+`ifdef MEM_GLYPH
+	wire cs_glyph = ((wbm_adr & 32'hf000_0000) == 32'h3000_0000);
 `endif
 `ifdef DEBUG
 	wire cs_debug = ((wbm_adr & 32'hf000_0000) == 32'he000_0000);
@@ -363,6 +367,9 @@ module sysctl #()
 `ifdef GPU_BLIT
 		cs_gpu_blit ? wbs_gpu_blit_dat_o :
 `endif
+`ifdef MEM_GLYPH
+		cs_glyph ? wbs_glyph_dat_o :
+`endif
 		32'hzzzz_zzzz;
 
 	wire wbs_bram_ack_o;
@@ -378,6 +385,7 @@ module sysctl #()
 	wire wbs_usb0_ack_o;
 	wire wbs_gpu_ack_o;
 	wire wbs_gpu_blit_ack_o;
+	wire wbs_glyph_ack_o;
 
 	assign wbm_ack =
 		cs_bram ? wbs_bram_ack_o :
@@ -416,6 +424,9 @@ module sysctl #()
 `endif
 `ifdef GPU_BLIT
 		cs_gpu_blit ? wbs_gpu_blit_ack_o :
+`endif
+`ifdef MEM_GLYPH
+		cs_glyph ? wbs_glyph_ack_o :
 `endif
 		1'b0;
 
@@ -533,6 +544,45 @@ module sysctl #()
 	);
 `endif
 
+	// glyph memory wires: always declared (even if MEM_GLYPH isn't
+	// built) so gpu_blit_wb's glyph_addr_o/glyph_data_i ports always
+	// have something connected -- see the tie-off below for why this
+	// matters.
+	wire [11:0] wbm_blit_glyph_addr;
+	wire [7:0]  wbm_blit_glyph_data;
+
+`ifdef MEM_GLYPH
+	// glyph memory: CPU loads font data via the wishbone slave port
+	// (cs_glyph, above); the blitter reads it back via a direct,
+	// non-wishbone port (glyph_addr/glyph_data below) -- no bus
+	// arbitration, since nothing else ever needs to touch it.
+	glyph_mem #(.ADDR_WIDTH(12)) glyph0_i
+	(
+		.clk(wbm_clk),
+
+		.wb_cyc_i(cs_glyph && wbm_cyc),
+		.wb_stb_i(wbm_stb),
+		.wb_we_i(wbm_we),
+		.wb_sel_i(wbm_sel),
+		.wb_adr_i(wbm_adr_sel_word),
+		.wb_dat_i(wbm_dat_o),
+		.wb_ack_o(wbs_glyph_ack_o),
+		.wb_dat_o(wbs_glyph_dat_o),
+
+		.blit_addr(wbm_blit_glyph_addr),
+		.blit_data(wbm_blit_glyph_data)
+	);
+`else
+	// no glyph memory built -- tie the blitter's read port to a fixed
+	// value instead of leaving it floating. gpu_blit_wb's glyph mode
+	// is only ever entered if software explicitly sets CTRL_GLYPH,
+	// which it has no reason to do in a build without MEM_GLYPH, but
+	// an undriven input is still worth avoiding for its own sake
+	// (X-propagation in simulation, and just generally not something
+	// you want floating on real silicon).
+	assign wbm_blit_glyph_data = 8'h00;
+`endif
+
 `ifdef GPU_BLIT
 	wire [31:0] wbm_gpu_blit_adr;
 	wire [31:0] wbm_gpu_blit_dat_i;
@@ -570,6 +620,11 @@ module sysctl #()
 		.m_we_o(wbm_gpu_blit_we),
 		.m_sel_o(wbm_gpu_blit_sel),
 		.m_ack_i(wbm_gpu_blit_ack),
+
+		// always connected now (see the wire declaration/tie-off
+		// above) -- no longer conditional on MEM_GLYPH
+		.glyph_addr_o(wbm_blit_glyph_addr),
+		.glyph_data_i(wbm_blit_glyph_data),
 
 //		.busy(blit_busy)
 	);

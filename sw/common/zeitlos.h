@@ -41,6 +41,34 @@ typedef uint32_t *(*z_kernel_ptr_t)(uint32_t, uint32_t *, uint32_t);
 #define gpu_debug_cur_x (*(volatile uint32_t*)0xa0000020)
 #define gpu_debug_cur_y (*(volatile uint32_t*)0xa0000024)  
 #define gpu_debug_fifo_count (*(volatile uint32_t*)0xa0000028)
+
+// GPU blitter (rtl/gpu/gpu_blit.v) -- word-indexed registers, matching
+// wb_adr_i[3:0] in the RTL. See docs/window_manager.md, "hardware
+// glyph blitting" for the fill/copy vs glyph-blit protocol.
+#define gpu_blit_ctrl        (*(volatile uint32_t*)0xd0000000)
+#define gpu_blit_status      (*(volatile uint32_t*)0xd0000004)
+#define gpu_blit_dst_x       (*(volatile uint32_t*)0xd0000008)
+#define gpu_blit_dst_y       (*(volatile uint32_t*)0xd000000c)
+#define gpu_blit_width       (*(volatile uint32_t*)0xd0000010)
+#define gpu_blit_height      (*(volatile uint32_t*)0xd0000014)
+#define gpu_blit_pattern     (*(volatile uint32_t*)0xd0000018)
+#define gpu_blit_glyph_addr  (*(volatile uint32_t*)0xd000001c)
+#define gpu_blit_glyph_w     (*(volatile uint32_t*)0xd0000020)
+#define gpu_blit_glyph_h     (*(volatile uint32_t*)0xd0000024)
+#define gpu_blit_fg_color    (*(volatile uint32_t*)0xd0000028)
+#define gpu_blit_bg_color    (*(volatile uint32_t*)0xd000002c)
+
+#define GPU_BLIT_CTRL_START  (1u << 0)
+#define GPU_BLIT_CTRL_FILL   (1u << 1)
+#define GPU_BLIT_CTRL_CLIP   (1u << 2)
+#define GPU_BLIT_CTRL_GLYPH  (1u << 3)
+
+// glyph memory (rtl/mem/glyph.v) -- byte-addressable, 4096 bytes.
+// software writes font data here (see z_gfx_hw_font_load() in
+// zgfx.c); the blitter reads it back via its own direct port, never
+// through this address.
+#define GLYPH_MEM_BASE       0x30000000
+#define GLYPH_MEM_SIZE       4096
 #define gpu_clip_x0     (*(volatile uint32_t*)0xa000002c)  // Left bound
 #define gpu_clip_y0     (*(volatile uint32_t*)0xa0000030)  // Top bound  
 #define gpu_clip_x1     (*(volatile uint32_t*)0xa0000034)  // Right bound
