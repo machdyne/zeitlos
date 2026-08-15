@@ -20,8 +20,9 @@ gpudemo.elf: $(OBJS)
 	$(CC) $(LDFLAGS) -Wl,-T$(LDSCRIPT),-Map,gpudemo.map -o gpudemo.elf $(OBJS)
 	$(PREFIX)objdump -S --disassemble gpudemo.elf > gpudemo.dasm
 
-gpudemo.bin:
-	$(PREFIX)objcopy -O binary gpudemo.elf gpudemo.bin
+gpudemo.bin: gpudemo.elf
+	@END=$$($(PREFIX)nm gpudemo.elf | awk '$$3=="_end"{print "0x"$$1}'); \
+	$(PREFIX)objcopy -O binary --pad-to=$$END gpudemo.elf gpudemo.bin
 
 clean:
 	rm -f gpudemo.elf gpudemo.bin gpudemo.asm gpudemo.dasm gpudemo.map gpudemo.o *.o *.d

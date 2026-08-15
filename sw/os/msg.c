@@ -92,8 +92,21 @@ z_rv z_mailbox_pop(uint32_t pid, z_msg_envelope_t *msg) {
 // physical address it actually refers to. the result is always below
 // the mirror window, so it's dereferenceable directly, from any
 // process's context, without going through the MTU.
+//
+// pid 0 (the kernel, including sh.c acting as pid 0) is a special
+// case: it never runs through the 0x8000_0000 mirror at all -- it
+// executes at, and allocates from, its own native/physical address
+// space directly. applying the mirror-subtraction formula to a
+// pointer that was never mirrored in the first place produces a wild,
+// garbage address (a large unsigned underflow, since such a pointer
+// is nowhere near 0x8000_0000) -- this was a real, crash-causing bug,
+// only ever exercised once something first sent a message *from* the
+// kernel to a regular process (previously, every message was
+// app-to-app or app-to-wm; sh.c's tget/tput were the first
+// kernel-to-app case).
 static inline void *z_translate(uint32_t pid, void *vptr) {
 	if (!vptr) return NULL;
+	if (pid == 0) return vptr;
 	return (void *)((uint32_t)vptr - 0x80000000 + z_procs[pid].base);
 }
 
@@ -102,14 +115,17 @@ static inline void *z_translate(uint32_t pid, void *vptr) {
 // strings are pointed at the sender's bytes via a physical address --
 // no copy. lists/maps have their structural nodes rebuilt into the
 // caller-supplied scratch arrays (see zmsg.h); the leaf data inside
-// them is left in place in the sender's memory. never mutates the
-// sender's own memory.
+// them is left in place in the sender's memory. blobs work the same
+// way as strings (leaf bytes never copied) but need their {len,data}
+// header rebuilt into scratch too, since it's an indirect struct, not
+// a single pointer. never mutates the sender's own memory.
 //
 // returns Z_FAIL (and resets obj to Z_NONE) if the scratch budget
 // isn't big enough for the payload.
 static z_rv z_resolve_obj(uint32_t from_pid, z_obj_t *obj,
 	z_obj_table_t *tables, uint32_t *tcount,
-	z_obj_t *items, uint32_t *icount) {
+	z_obj_t *items, uint32_t *icount,
+	z_blob_t *blobs, uint32_t *bcount) {
 
 	switch (obj->type) {
 
@@ -123,6 +139,30 @@ static z_rv z_resolve_obj(uint32_t from_pid, z_obj_t *obj,
 		case Z_STR:
 			obj->val.str = (char *)z_translate(from_pid, obj->val.str);
 			return Z_OK;
+
+		case Z_BLOB: {
+
+			z_blob_t *src =
+				(z_blob_t *)z_translate(from_pid, obj->val.ptr);
+
+			if (!src) {
+				obj->type = Z_NONE;
+				return Z_OK;
+			}
+
+			if (*bcount >= Z_MSG_MAX_BLOBS) {
+				obj->type = Z_NONE;
+				return Z_FAIL;
+			}
+
+			z_blob_t *dst = &blobs[(*bcount)++];
+			dst->len = src->len;
+			dst->data = (uint8_t *)z_translate(from_pid, src->data);
+
+			obj->val.ptr = dst;
+			return Z_OK;
+
+		}
 
 		case Z_LIST:
 		case Z_MAP: {
@@ -156,7 +196,7 @@ static z_rv z_resolve_obj(uint32_t from_pid, z_obj_t *obj,
 					z_translate(from_pid, &src->a[i]);
 				dst->a[i] = *sa;
 				if (z_resolve_obj(from_pid, &dst->a[i],
-					tables, tcount, items, icount) != Z_OK) {
+					tables, tcount, items, icount, blobs, bcount) != Z_OK) {
 					obj->type = Z_NONE;
 					return Z_FAIL;
 				}
@@ -166,7 +206,7 @@ static z_rv z_resolve_obj(uint32_t from_pid, z_obj_t *obj,
 						z_translate(from_pid, &src->b[i]);
 					dst->b[i] = *sb;
 					if (z_resolve_obj(from_pid, &dst->b[i],
-						tables, tcount, items, icount) != Z_OK) {
+						tables, tcount, items, icount, blobs, bcount) != Z_OK) {
 						obj->type = Z_NONE;
 						return Z_FAIL;
 					}
@@ -229,12 +269,61 @@ z_obj_t *k_msg_read(z_obj_t *args) {
 	msg->tag = env.tag;
 	msg->obj = env.obj;
 
-	uint32_t tcount = 0, icount = 0;
-	z_resolve_obj(env.from, &msg->obj, msg->_tables, &tcount, msg->_items, &icount);
+	uint32_t tcount = 0, icount = 0, bcount = 0;
+	z_resolve_obj(env.from, &msg->obj, msg->_tables, &tcount,
+		msg->_items, &icount, msg->_blobs, &bcount);
 	// on scratch-budget overflow the message is still delivered (so
 	// the mailbox doesn't get stuck), but msg->obj comes back as
 	// Z_NONE -- see z_resolve_obj().
 
 	return (&z_ok);
 
+}
+
+// -- kernel-side message API for sh.c -- see msg.h for why this
+// exists separately from zeitlos.c's app-facing wrappers --
+
+z_rv z_msg_send(z_msg_t *msg) {
+	z_obj_t *rv = k_msg_send((z_obj_t *)msg);
+	return rv->val.uint32;
+}
+
+z_rv z_msg_read(z_msg_t *msg) {
+	z_obj_t *rv = k_msg_read((z_obj_t *)msg);
+	return rv->val.uint32;
+}
+
+z_rv z_msg_wait(z_msg_t *msg, uint32_t subject, uint32_t tag) {
+	while (1) {
+		if (z_msg_read(msg) == Z_OK) {
+			if (msg->subject == subject && msg->tag == tag)
+				return Z_OK;
+			// not the message we're waiting for -- discard and keep going
+		}
+	}
+}
+
+z_rv z_msg_new_send(uint32_t to, uint32_t subject, uint32_t tag, z_obj_t obj) {
+	z_msg_t msg;
+	msg.to = to;
+	msg.subject = subject;
+	msg.tag = tag;
+	msg.obj = obj;
+	return z_msg_send(&msg);
+}
+
+z_rv z_msg_wait_timeout(z_msg_t *msg, uint32_t subject, uint32_t tag, uint32_t timeout_ticks) {
+	uint32_t start = z_kernel_ticks;
+	while (z_kernel_ticks - start < timeout_ticks) {
+		if (z_msg_read(msg) == Z_OK) {
+			if (msg->subject == subject && msg->tag == tag)
+				return Z_OK;
+			// not the message we're waiting for -- discard and keep going
+		}
+	}
+	return Z_FAIL;
+}
+
+uint32_t z_uptime_ticks(void) {
+	return z_kernel_ticks;
 }

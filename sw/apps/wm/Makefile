@@ -26,8 +26,9 @@ wm.elf: $(OBJS)
 	$(CC) $(LDFLAGS) -Wl,-T$(LDSCRIPT),-Map,wm.map -o wm.elf $(OBJS)
 	$(PREFIX)objdump -S --disassemble wm.elf > wm.dasm
 
-wm.bin:
-	$(PREFIX)objcopy -O binary wm.elf wm.bin
+wm.bin: wm.elf
+	@END=$$($(PREFIX)nm wm.elf | awk '$$3=="_end"{print "0x"$$1}'); \
+	$(PREFIX)objcopy -O binary --pad-to=$$END wm.elf wm.bin
 
 clean:
 	rm -f wm.elf wm.bin wm.asm wm.dasm wm.map *.o *.d

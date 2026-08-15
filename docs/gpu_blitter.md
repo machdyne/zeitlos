@@ -21,17 +21,23 @@ The Zeitlos GPU Blitter is a high-performance 2D graphics accelerator designed f
 | 0xD0000004 | BLIT_STATUS | Status register (read-only) |
 | 0xD0000008 | BLIT_DST_X | Destination X coordinate (pixels) |
 | 0xD000000C | BLIT_DST_Y | Destination Y coordinate (pixels) |
-| 0xD0000010 | BLIT_WIDTH | Width in pixels |
-| 0xD0000014 | BLIT_HEIGHT | Height in pixels |
-| 0xD0000018 | BLIT_PATTERN | Fill pattern (32-bit) |
+| 0xD0000010 | BLIT_WIDTH | Width in pixels (fill/copy mode only) |
+| 0xD0000014 | BLIT_HEIGHT | Height in pixels (fill/copy mode only) |
+| 0xD0000018 | BLIT_PATTERN | Fill pattern (fill/copy mode only) |
+| 0xD000001C | BLIT_GLYPH_ADDR | Glyph mode: byte offset into glyph memory |
+| 0xD0000020 | BLIT_GLYPH_W | Glyph mode: glyph width in pixels |
+| 0xD0000024 | BLIT_GLYPH_H | Glyph mode: glyph height in pixels |
+| 0xD0000028 | BLIT_FG_COLOR | Glyph mode: foreground pixel value |
+| 0xD000002C | BLIT_BG_COLOR | Glyph mode: background pixel value |
 
 ## Control Register (BLIT_CTRL)
 
 | Bit | Name | Description |
 |-----|------|-------------|
 | 0 | START | Start operation (write 1 to begin) |
-| 1 | FILL | Operation mode (0=copy, 1=fill) |
-| 2 | CLIP | Clipping enable (0=disabled, 1=enabled) |
+| 1 | FILL | Operation mode (0=copy, 1=fill) -- ignored in glyph mode |
+| 2 | CLIP | Clipping enable (0=disabled, 1=enabled) -- ignored in glyph mode |
+| 3 | GLYPH | 0=normal fill/copy, 1=glyph blit mode |
 
 ## Status Register (BLIT_STATUS)
 
@@ -128,25 +134,28 @@ fill_rect(50, 50, 10, 10, PATTERN_WHITE);
 fill_rect(100, 100, 6, 12, PATTERN_WHITE);
 ```
 
-### Text Rendering
+### Text Rendering (real glyph blit mode)
 
-```c
-void draw_char(int x, int y, char c) {
-    // Example: Simple 'A' character
-    fill_rect(x + 1, y + 0, 4, 2, PATTERN_WHITE);  // Top
-    fill_rect(x + 0, y + 2, 2, 8, PATTERN_WHITE);  // Left
-    fill_rect(x + 4, y + 2, 2, 8, PATTERN_WHITE);  // Right  
-    fill_rect(x + 1, y + 5, 4, 2, PATTERN_WHITE);  // Middle
-}
+The hand-drawn-boxes approach previously shown here was a placeholder
+written before glyph blit mode existed. Real hardware-accelerated
+text rendering is now implemented -- see
+`docs/window_manager.md`, "Hardware glyph blitting" for the full
+design (register layout, the bit-reversal needed to reconcile font
+byte order with framebuffer bit order, word-straddle handling, and
+known risk areas), and `sw/common/zgfx.c` (`Z_GFX_HW_BLIT` build) for
+the actual C driving it. In short: `gpu_blit_wb` reads glyph row data
+from a separate glyph memory (`rtl/mem/glyph.v`, loaded by software
+via `z_gfx_hw_font_load()`), and blits one glyph per trigger with
+solid foreground/background per pixel (a true text-cell fill, not a
+transparent overlay like the software-only renderer) -- see
+`BLIT_GLYPH_ADDR`/`_W`/`_H`/`FG_COLOR`/`BG_COLOR` in the memory map
+above.
 
-void draw_text(int x, int y, const char* text) {
-    int char_x = x;
-    for (int i = 0; text[i]; i++) {
-        draw_char(char_x, y, text[i]);
-        char_x += 8;  // 6 pixels wide + 2 spacing
-    }
-}
-```
+Glyph mode is unclipped by design -- the caller is responsible for
+only triggering it for glyphs that are already fully on-screen (and
+within any window clip rect), falling back to software rendering
+otherwise. This keeps the hardware path simple at the cost of pushing
+that one piece of judgment into the C driver.
 
 ### Bouncing Animation
 
@@ -233,7 +242,43 @@ The blitter is designed to be robust:
 - **Out-of-bounds coordinates**: Safely clipped
 - **Zero dimensions**: Operation completes immediately
 - **Negative coordinates**: Handled by clipping
-- **Concurrent operations**: Hardware prevents conflicts
+- **Concurrent register access**: NOT arbitrated between processes.
+  The Wishbone bus serializes individual read/write transactions, but
+  nothing stops two processes from interleaving their own register
+  writes if both try to set up a blit operation at once -- one
+  process's dst_x/dst_y/etc. writes could land in between another's,
+  corrupting both operations. Same class of problem as the GPU line
+  rasterizer's shared clip register, discussed in
+  `docs/window_manager.md`'s "GPU arbitration" limitation -- currently
+  unsolved in general, and the reason `zgfx.c`'s hardware glyph path
+  is the only thing driving this register set in practice, from a
+  single process at a time.
+
+## Bugs found (and fixed) during hardware bring-up
+
+Worth knowing if you're debugging something that touches this module,
+since both were subtle and easy to reintroduce:
+
+1. **Clipped fills read undefined data.** The clipped-fill path used
+   to skip straight from `ST_CLIP` to `ST_WRITE`, but `ST_WRITE`'s
+   partial-word masking (`(read_data & ~left_mask) | ...`) depends on
+   `read_data`, which was never populated -- `ST_READ` was only
+   reached by the *unclipped* path. Any clipped rectangle fill not
+   landing on exact 32-pixel word boundaries (i.e. almost any
+   real-world window-sized rectangle) masked against garbage. Fixed
+   by routing clipped fills through `ST_READ` like copy mode always
+   did.
+2. **Control-bit latching race.** `glyph_reg`/`fill_reg`/
+   `clip_enable_reg` are set by the Wishbone-slave `always` block, but
+   were latched into `work_glyph`/`work_fill`/`work_clip` by the
+   *separate* state-machine `always` block on the same clock edge as
+   the triggering write -- Verilog evaluates all RHS expressions
+   across blocks using pre-edge values, so the trigger latched
+   whatever these registers held *before* the write, not the value
+   being written. In practice this only mis-fired on the very first
+   glyph trigger ever issued (after that, `glyph_reg` stays `1` and
+   the staleness is invisible). Fixed by latching directly from
+   `wb_dat_i` (the value actually being written this cycle) instead.
 
 ## Best Practices
 

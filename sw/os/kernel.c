@@ -23,6 +23,10 @@
 #define Z_PROC_STACK_SIZE  8*1024
 #define Z_KERNEL_STACK_SIZE  8*1024
 
+z_obj_t *z_uptime(z_obj_t *args);	// defined below; forward-declared
+									// since syscalls.def (included next)
+									// needs it visible for the table
+
 typedef z_obj_t* (*z_syscall_t)(z_obj_t *args);
 
 z_syscall_t z_syscall_table[Z_SYSCALL_COUNT] = {
@@ -46,6 +50,17 @@ uint32_t k_proc_active_count(void);
 
 void kprint(const char *s);
 void kprint_hex32(uint32_t);
+
+// returns z_kernel_ticks -- increments at ~732Hz (the KTIMER IRQ
+// rate, see rtl/sysctl.v's rtc_ctr). apps use this for elapsed-time
+// measurement (e.g. sw/apps/net/tftp.c's retry timeout) where a
+// loop-iteration count (like enc28j60.c's ETH_TX_TIMEOUT) isn't
+// precise enough.
+z_obj_t *z_uptime(z_obj_t *args) {
+	args->type = Z_UINT32;
+	args->val.uint32 = z_kernel_ticks;
+	return (&z_ok);
+}
 
 // --
 
@@ -119,7 +134,16 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 
 	// not a system call; must be an interrupt
 
-	++z_kernel_ticks;
+	// only the KTIMER IRQ should advance the tick counter -- it was
+	// previously incremented for ANY interrupt (including UART RX/TX,
+	// which fires far more often, especially under heavy printf
+	// activity from multiple processes), inflating z_kernel_ticks
+	// well beyond real elapsed time. this made every tick-based
+	// timeout (z_msg_wait_timeout(), tftp.c's retry timer) fire much
+	// sooner than intended.
+	if ((irqs & (1 << Z_IRQ_KTIMER)) != 0) {
+		++z_kernel_ticks;
+	}
 
 	// handle interrupts
 	if ((irqs & (1 << Z_IRQ_UART)) != 0) {

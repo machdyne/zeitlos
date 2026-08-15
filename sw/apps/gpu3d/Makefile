@@ -19,8 +19,9 @@ gpu3d.elf: $(OBJS)
 	$(CC) $(LDFLAGS) -Wl,-T$(LDSCRIPT),-Map,gpu3d.map -o gpu3d.elf $(OBJS)
 	$(PREFIX)objdump -S --disassemble gpu3d.elf > gpu3d.dasm
 
-gpu3d.bin:
-	$(PREFIX)objcopy -O binary gpu3d.elf gpu3d.bin
+gpu3d.bin: gpu3d.elf
+	@END=$$($(PREFIX)nm gpu3d.elf | awk '$$3=="_end"{print "0x"$$1}'); \
+	$(PREFIX)objcopy -O binary --pad-to=$$END gpu3d.elf gpu3d.bin
 
 clean:
 	rm -f gpu3d.elf gpu3d.bin gpu3d.asm gpu3d.dasm gpu3d.map gpu3d.o *.o *.d

@@ -93,6 +93,13 @@ z_rv z_msg_wait(z_msg_t *msg, uint32_t subject, uint32_t tag) {
 	}
 }
 
+uint32_t z_uptime_ticks(void) {
+	z_obj_t obj = {0};
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_kernel_ptr(Z_SYS_UPTIME, (uint32_t *)&obj, 0);
+	return obj.val.uint32;
+}
+
 // --
 
 void rt_delay() {

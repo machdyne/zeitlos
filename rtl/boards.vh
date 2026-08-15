@@ -28,6 +28,7 @@
 `define UART0
 `define USB_HID
 `define SPI_SDCARD
+`define SPI_ETH
 
 `elsif BOARD_LAKRITZ
 

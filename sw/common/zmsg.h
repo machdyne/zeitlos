@@ -28,6 +28,13 @@
  * no copy of the leaf data (numbers, string bytes). This is what
  * Z_MSG_MAX_TABLES/Z_MSG_MAX_ITEMS below are for.
  *
+ * Z_BLOB payloads (arbitrary-length binary data -- see zobj.h) work
+ * like Z_STR: the actual bytes are never copied, only pointer-
+ * translated. Since a blob is an indirect {len, data} header (not a
+ * single pointer like Z_STR), the header itself gets rebuilt into a
+ * small scratch pool (Z_MSG_MAX_BLOBS below), same idea as the
+ * table/item pools for lists/maps.
+ *
  * In every case, the data is BORROWED from the sender's memory. It's
  * only guaranteed to stay valid until you send your own next message
  * (which may let the sender run again and reuse or free it). Never
@@ -56,6 +63,11 @@ typedef uint32_t z_rv;
 #define Z_MSG_MAX_TABLES   4
 #define Z_MSG_MAX_ITEMS    16
 
+// scratch budget for Z_BLOB payload headers (see above). small on
+// purpose -- a message typically carries at most one blob (e.g. one
+// UDP packet's worth of data), maybe two if nested in a small map.
+#define Z_MSG_MAX_BLOBS    2
+
 // a message as seen by a process.
 typedef struct {
 
@@ -65,9 +77,11 @@ typedef struct {
 	uint32_t	tag;		// useful for matching RPC replies
 	z_obj_t		obj;
 
-	// scratch space used only when obj is a Z_LIST/Z_MAP -- see above.
+	// scratch space used only when obj (or something inside it) is a
+	// Z_LIST/Z_MAP/Z_BLOB -- see above.
 	z_obj_table_t	_tables[Z_MSG_MAX_TABLES];
 	z_obj_t		_items[Z_MSG_MAX_ITEMS];
+	z_blob_t	_blobs[Z_MSG_MAX_BLOBS];
 
 } z_msg_t;
 

@@ -12,6 +12,7 @@ RTL_PICO = \
 	rtl/mem/vram.v \
 	rtl/mem/glyph.v \
 	rtl/spiflashro.v \
+	rtl/spibb_eth.v \
 	rtl/debug.v \
 	rtl/spibb.v \
 	rtl/gpu/gpu_raster.v \
@@ -36,7 +37,7 @@ RTL_PICO = \
 	rtl/ext/usb_hid_host/src/usb_hid_host_rom.v
 
 ifndef CABLE
-	CABLE = usb-blaster
+	CABLE = dirtyJtag
 endif
 
 main: check zeitlos

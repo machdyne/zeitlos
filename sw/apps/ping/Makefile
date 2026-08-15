@@ -26,8 +26,9 @@ ping.elf: $(OBJS)
 	$(CC) $(LDFLAGS) -Wl,-T$(LDSCRIPT),-Map,ping.map -o ping.elf $(OBJS)
 	$(PREFIX)objdump -S --disassemble ping.elf > ping.dasm
 
-ping.bin:
-	$(PREFIX)objcopy -O binary ping.elf ping.bin
+ping.bin: ping.elf
+	@END=$$($(PREFIX)nm ping.elf | awk '$$3=="_end"{print "0x"$$1}'); \
+	$(PREFIX)objcopy -O binary --pad-to=$$END ping.elf ping.bin
 
 clean:
 	rm -f ping.elf ping.bin ping.asm ping.dasm ping.map *.o *.d

@@ -11,13 +11,16 @@ typedef enum {
     Z_FLOAT32,
     Z_STR,
     Z_LIST,
-    Z_MAP
+    Z_MAP,
+    Z_BLOB    // arbitrary-length binary data, explicit length -- NOT
+              // NUL-terminated like Z_STR, safe for data that may
+              // contain zero bytes anywhere (e.g. network packets)
 } z_type_t;
 
 typedef struct {
     z_type_t type;
     union {
-        void *ptr;          // used for lists, maps
+        void *ptr;          // used for lists, maps, blobs
         char *str;          // used for strings
         uint32_t uint32;    // used for unsigned integers
         int32_t int32;      // used for signed integers
@@ -32,6 +35,12 @@ typedef struct {
     z_obj_t *b;
 } z_obj_table_t;
 
+// used by blobs (Z_BLOB) -- val.ptr points to one of these
+typedef struct {
+    uint32_t len;
+    uint8_t *data;
+} z_blob_t;
+
 // Return value objects
 static z_obj_t z_ok = { .type = Z_RETVAL, .val.int32 = 0 };
 static z_obj_t z_fail = { .type = Z_RETVAL, .val.int32 = 1 };
@@ -44,6 +53,11 @@ z_obj_t z_obj_float32(float f);
 z_obj_t z_obj_str(const char *s);
 z_obj_t z_obj_list(uint32_t len);
 z_obj_t z_obj_map(uint32_t len);
+z_obj_t z_obj_blob(const void *data, uint32_t len);   // copies data
+
+// blob accessors -- return 0/NULL if obj isn't a Z_BLOB
+uint32_t z_blob_len(const z_obj_t *obj);
+void *z_blob_data(const z_obj_t *obj);
 
 // Convenience aliases
 #define z_obj_int z_obj_int32

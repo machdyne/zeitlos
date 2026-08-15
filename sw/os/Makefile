@@ -7,11 +7,25 @@ LDSCRIPT = ../common/riscv-os.ld
 
 OBJS = kernel.o kruntime.o mem.o \
 	fs/fs.o fs/fatfs/sdmm.o fs/fatfs/ff.o \
-	uart.o sh.o xfer.o ui.o msg.o
+	uart.o sh.o xfer.o ui.o msg.o zobj.o zstream.o
+
+# kernel.o's recipe below builds every object in one go (they're not
+# independent processes, and mostly don't need to be) -- but for
+# `make` to actually know when to rerun that recipe, kernel.o needs
+# every source file that feeds it listed as a prerequisite here.
+# without this, `make` only checks whether kernel.o already exists,
+# not whether any of these are newer than it -- so it'll happily keep
+# linking stale objects built from an older version of a file after
+# any edit. bit us for real with fs/fs.c during this session's
+# zstream/TFTP work -- see docs/networking.md.
+KSRCS = kernel.c kruntime.c mem.c \
+	fs/fs.c fs/fatfs/sdmm.c fs/fatfs/ff.c \
+	uart.c sh.c xfer.c ui.c msg.c \
+	../common/zobj.c ../common/zstream.c
 
 kernel: kernel.elf kernel.bin
 
-kernel.o:
+kernel.o: $(KSRCS)
 	$(CC) $(CFLAGS) -c kernel.c -o kernel.o
 	$(CC) $(CFLAGS) -c kruntime.c -o kruntime.o
 	$(CC) $(CFLAGS) -c mem.c -o mem.o
@@ -23,6 +37,8 @@ kernel.o:
 	$(CC) $(CFLAGS) -c ui.c -o ui.o
 	$(CC) $(CFLAGS) -c uart.c -o uart.o
 	$(CC) $(CFLAGS) -c msg.c -o msg.o
+	$(CC) $(CFLAGS) -c ../common/zobj.c -o zobj.o
+	$(CC) $(CFLAGS) -c ../common/zstream.c -o zstream.o
 	$(CC) $(CFLAGS) -c kernel.c -S -o kernel.asm
 	$(CC) $(CFLAGS) -c sh.c -S -o sh.asm
 
@@ -35,7 +51,6 @@ kernel.bin:
 	$(PREFIX)objcopy -O binary kernel.elf kernel.bin
 
 clean:
-	rm -f kernel.elf kernel.bin kernel.asm kernel.dasm kernel.map sh.asm *.o *.d
+	rm -f kernel.elf kernel.bin kernel.asm kernel.dasm kernel.map sh.asm *.o *.d fs/*.o fs/fatfs/*.o
 
 .PHONY: kernel clean
-

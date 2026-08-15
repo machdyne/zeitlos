@@ -32,6 +32,12 @@ typedef struct {
 extern volatile uint32_t z_pid;
 extern volatile z_proc z_procs[Z_PROCS_MAX];
 
+// ticks since boot, ~732Hz (the KTIMER IRQ rate -- see
+// rtl/sysctl.v's rtc_ctr). apps reach this via the Z_SYS_UPTIME
+// syscall/z_uptime_ticks() (zeitlos.c); sh.c, being the kernel itself,
+// reads it directly.
+extern volatile uint32_t z_kernel_ticks;
+
 // --
 
 uint32_t k_proc_create(uint32_t size);

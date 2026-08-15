@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "fatfs/ff.h"
+#include "fs.h"
 
 FATFS sdvol0;
 
@@ -179,6 +180,56 @@ int fs_write_file(char *path, char *buf, uint32_t len) {
 	printf("write failed; error code: %i\n", res);
 	return 0;
 
+}
+
+// -- chunked (streaming) read/write -- see fs.h --
+
+int fs_open_write(FIL *f, char *path) {
+	FRESULT res = f_open(f, path, FA_WRITE | FA_CREATE_ALWAYS);
+	if (res != FR_OK) {
+		printf("fs_open_write: failed; error code: %i\n", res);
+		return 0;
+	}
+	return 1;
+}
+
+int fs_write_chunk(FIL *f, const void *buf, uint32_t len) {
+	UINT bw;
+	FRESULT res = f_write(f, buf, len, &bw);
+	if (res != FR_OK) {
+		printf("fs_write_chunk: failed; error code: %i\n", res);
+		return -1;
+	}
+	return (int)bw;
+}
+
+int fs_close_write(FIL *f) {
+	FRESULT res = f_close(f);
+	return (res == FR_OK) ? 1 : 0;
+}
+
+int fs_open_read(FIL *f, char *path) {
+	FRESULT res = f_open(f, path, FA_READ | FA_OPEN_EXISTING);
+	if (res != FR_OK) {
+		printf("fs_open_read: failed; error code: %i\n", res);
+		return 0;
+	}
+	return 1;
+}
+
+int32_t fs_read_chunk(FIL *f, void *buf, uint32_t maxlen) {
+	UINT br;
+	FRESULT res = f_read(f, buf, maxlen, &br);
+	if (res != FR_OK) {
+		printf("fs_read_chunk: failed; error code: %i\n", res);
+		return -1;
+	}
+	return (int32_t)br;	// 0 means EOF (nothing left to read), matching f_read()'s own convention
+}
+
+int fs_close_read(FIL *f) {
+	FRESULT res = f_close(f);
+	return (res == FR_OK) ? 1 : 0;
 }
 
 int fs_mkdir(char *path) {

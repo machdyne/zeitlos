@@ -107,7 +107,7 @@ void z_fb_draw_char(int x, int y, char c, int color, const z_font_t *font, const
 		hw_blit_wait();	// a prior hardware blit could still be in
 						// flight; wait for it before writing directly
 						// to VRAM here, or the two could race
-		draw_char_sw(x, y, c, color, font, clip);
+//		draw_char_sw(x, y, c, color, font, clip);
 		return;
 	}
 

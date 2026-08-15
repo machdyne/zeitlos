@@ -74,6 +74,14 @@ module sysctl #()
    output SD_SCK,
 `endif 
 
+`ifdef SPI_ETH
+   output ETH_SS,
+   inout ETH_MISO,
+   output ETH_MOSI,
+   output ETH_SCLK,
+   input ETH_INT,
+`endif
+
 `ifdef GPU_VGA
 	output VGA_R,
 	output VGA_G,
@@ -288,6 +296,7 @@ module sysctl #()
 	wire [31:0] wbs_gpu_dat_o;
 	wire [31:0] wbs_gpu_blit_dat_o;
 	wire [31:0] wbs_glyph_dat_o;
+	wire [31:0] wbs_spieth_dat_o;
 
 	wire cs_bram = (wbm_adr < 8192);
 	wire cs_mtu = ((wbm_adr & 32'hf000_0000) == 32'h9000_0000);
@@ -321,6 +330,9 @@ module sysctl #()
 `endif
 `ifdef MEM_GLYPH
 	wire cs_glyph = ((wbm_adr & 32'hf000_0000) == 32'h3000_0000);
+`endif
+`ifdef SPI_ETH
+	wire cs_spieth = ((wbm_adr & 32'hf000_0000) == 32'h5000_0000);
 `endif
 `ifdef DEBUG
 	wire cs_debug = ((wbm_adr & 32'hf000_0000) == 32'he000_0000);
@@ -370,6 +382,9 @@ module sysctl #()
 `ifdef MEM_GLYPH
 		cs_glyph ? wbs_glyph_dat_o :
 `endif
+`ifdef SPI_ETH
+		cs_spieth ? wbs_spieth_dat_o :
+`endif
 		32'hzzzz_zzzz;
 
 	wire wbs_bram_ack_o;
@@ -386,6 +401,7 @@ module sysctl #()
 	wire wbs_gpu_ack_o;
 	wire wbs_gpu_blit_ack_o;
 	wire wbs_glyph_ack_o;
+	wire wbs_spieth_ack_o;
 
 	assign wbm_ack =
 		cs_bram ? wbs_bram_ack_o :
@@ -427,6 +443,9 @@ module sysctl #()
 `endif
 `ifdef MEM_GLYPH
 		cs_glyph ? wbs_glyph_ack_o :
+`endif
+`ifdef SPI_ETH
+		cs_spieth ? wbs_spieth_ack_o :
 `endif
 		1'b0;
 
@@ -931,6 +950,30 @@ module sysctl #()
 		.sd_miso(SD_MISO),
 		.sd_mosi(SD_MOSI),
 		.sd_sck(SD_SCK)
+	);
+`endif
+
+	// WISHBONE SLAVE: SPI BIT-BANG INTERFACE FOR ETH (ENC28J60)
+`ifdef SPI_ETH
+	wire wbm_cyc_spieth = cs_spieth && wbm_cyc;
+
+	spibb_eth_wb #() wbs_spibbeth0_i
+	(
+		.wb_clk_i(wbm_clk),
+		.wb_rst_i(wbm_rst),
+		.wb_adr_i(wbm_adr_sel_word),
+		.wb_dat_i(wbm_dat_o),
+		.wb_dat_o(wbs_spieth_dat_o),
+		.wb_we_i(wbm_we),
+		.wb_sel_i(wbm_sel),
+		.wb_stb_i(wbm_stb),
+		.wb_ack_o(wbs_spieth_ack_o),
+		.wb_cyc_i(wbm_cyc_spieth),
+		.eth_ss(ETH_SS),
+		.eth_miso(ETH_MISO),
+		.eth_mosi(ETH_MOSI),
+		.eth_sck(ETH_SCLK),
+		.eth_int(ETH_INT)
 	);
 `endif
 

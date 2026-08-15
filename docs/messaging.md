@@ -286,4 +286,14 @@ it, and there's no ack mechanism yet to know when it's safe). See
 - **Fixed scratch/mailbox budgets.** `Z_MAILBOX_DEPTH`,
   `Z_MSG_MAX_TABLES`, `Z_MSG_MAX_ITEMS` are compile-time constants,
   not tunable per-process. Fine for control-message traffic; not
-  meant for bulk data transfer.
+  meant for bulk data transfer -- for that, see `sw/common/zstream.h`,
+  a pull-based streaming layer built on top of this messaging system
+  specifically for moving data too large or too incremental for a
+  single message (first used by TFTP, `docs/networking.md`, but
+  generic). It also sidesteps the reply-lifetime problem above for
+  its own case: a stream chunk's "when is it safe to free" question
+  is answered by the next pull arriving, which is itself proof the
+  previous chunk was received -- worth a look as a pattern even where
+  streaming itself isn't the fit, since the same trick (let the next
+  request double as an ack for the previous reply) could apply
+  elsewhere.

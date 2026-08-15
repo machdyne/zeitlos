@@ -4,7 +4,7 @@ ARCH = rv32i
 CC = $(PREFIX)gcc
 AS = $(PREFIX)as
 ASFLAGS = -march=$(ARCH) -mabi=ilp32
-CFLAGS = --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=ilp32 -DZ_GFX_HW_BLIT
+CFLAGS = --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=ilp32
 LDFLAGS =
 LDSCRIPT = ../../common/riscv-app.ld
 
@@ -35,8 +35,9 @@ hello_win.elf: $(OBJS)
 	$(CC) $(LDFLAGS) -Wl,-T$(LDSCRIPT),-Map,hello_win.map -o hello_win.elf $(OBJS)
 	$(PREFIX)objdump -S --disassemble hello_win.elf > hello_win.dasm
 
-hello_win.bin:
-	$(PREFIX)objcopy -O binary hello_win.elf hello_win.bin
+hello_win.bin: hello_win.elf
+	@END=$$($(PREFIX)nm hello_win.elf | awk '$$3=="_end"{print "0x"$$1}'); \
+	$(PREFIX)objcopy -O binary --pad-to=$$END hello_win.elf hello_win.bin
 
 clean:
 	rm -f hello_win.elf hello_win.bin hello_win.asm hello_win.dasm hello_win.map *.o *.d

@@ -26,8 +26,9 @@ pong.elf: $(OBJS)
 	$(CC) $(LDFLAGS) -Wl,-T$(LDSCRIPT),-Map,pong.map -o pong.elf $(OBJS)
 	$(PREFIX)objdump -S --disassemble pong.elf > pong.dasm
 
-pong.bin:
-	$(PREFIX)objcopy -O binary pong.elf pong.bin
+pong.bin: pong.elf
+	@END=$$($(PREFIX)nm pong.elf | awk '$$3=="_end"{print "0x"$$1}'); \
+	$(PREFIX)objcopy -O binary --pad-to=$$END pong.elf pong.bin
 
 clean:
 	rm -f pong.elf pong.bin pong.asm pong.dasm pong.map *.o *.d

@@ -28,8 +28,9 @@ hello.elf: $(OBJS)
 	$(CC) $(LDFLAGS) -Wl,-T$(LDSCRIPT),-Map,hello.map -o hello.elf $(OBJS) 
 	$(PREFIX)objdump -S --disassemble hello.elf > hello.dasm
 
-hello.bin:
-	$(PREFIX)objcopy -O binary hello.elf hello.bin
+hello.bin: hello.elf
+	@END=$$($(PREFIX)nm hello.elf | awk '$$3=="_end"{print "0x"$$1}'); \
+	$(PREFIX)objcopy -O binary --pad-to=$$END hello.elf hello.bin
 
 clean:
 	rm -f hello.elf hello.bin hello.asm hello.dasm hello.map *.o *.d

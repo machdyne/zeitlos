@@ -11,8 +11,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include "../common/zeitlos.h"
+#include "../common/znet.h"
+#include "../common/zstream.h"
 #include "kernel.h"
 #include "fs/fs.h"
+#include "fs/fatfs/ff.h"
+#include "msg.h"
 
 // --
 
@@ -21,6 +25,26 @@ void sh_help(void);
 void hex_dump(uint32_t addr);
 uint32_t xfer_recv(uint32_t addr_ptr);
 void cls(void);
+bool parse_ipv4(const char *s, uint32_t *out);
+
+// shortened for now (was 60s) while TFTP is still being brought up --
+// waiting a full minute per failed attempt makes debugging painfully
+// slow. 10s is still generous for a local network exchange; raise it
+// back once TFTP is confirmed working, since a real large-file
+// transfer could plausibly need longer.
+#define TFTP_REPLY_TIMEOUT_TICKS (10 * 732)
+
+// a fresh tag per tget/tput call, not a constant 0 -- if a request
+// times out on the shell side (above) but net's reply arrives later
+// anyway, and the user then issues a NEW tget/tput before that stale
+// reply shows up, z_msg_wait_timeout() matching on (subject, tag)
+// alone could match the stale reply to the new, unrelated request. a
+// monotonically increasing tag makes every request distinguishable
+// from every other one, so this can't happen.
+static uint32_t next_tftp_tag(void) {
+	static uint32_t tag = 0;
+	return ++tag;
+}
 
 // --
 
@@ -112,7 +136,7 @@ void sh(void) {
 				printf("bad address\n");
 				continue;
 			}
-			printf("xfer addr 0x%lx; ready to receive (hold D to cancel) ...\n",
+			printf("xfer addr 0x%lx; ready to receive (press D to cancel) ...\n",
 				addr);
 			bytes = xfer_recv(addr);
 			printf("received %li bytes to 0x%lx.\n", bytes, addr);
@@ -134,7 +158,7 @@ void sh(void) {
 			void *tmp = k_mem_alloc(1024*128); // 128K max file size for now
 			uint32_t addr = (uint32_t)(uintptr_t)tmp;
 			printf("uploading to file %s.\n", arg);
-			printf("xfer addr 0x%lx; ready to receive (hold D to cancel) ...\n",
+			printf("xfer addr 0x%lx; ready to receive (press D to cancel) ...\n",
 				addr);
 			bytes_received = xfer_recv(addr);
 			printf("received %li bytes to 0x%lx.\n", bytes_received, addr);
@@ -148,6 +172,209 @@ void sh(void) {
 				else
 					printf("failed.\n");
 			}
+		}
+
+		// GET FILE VIA TFTP (uses the 'net' app -- see sw/common/znet.h)
+		else if (!strncmp(buffer, "tget", cmdlen)) {
+
+			char *ip_str = get_arg(buffer, 1);
+			char *remote = get_arg(buffer, 2);
+			char *local = get_arg(buffer, 3);
+
+			if (!ip_str || !remote) {
+				printf("usage: tget <server-ip> <remote-file> [local-file]\n");
+				continue;
+			}
+			if (!local) local = remote;
+
+			uint32_t ip;
+			if (!parse_ipv4(ip_str, &ip)) {
+				printf("tget: bad ip address\n");
+				continue;
+			}
+
+			printf("tget: requesting %s from %s ...\n", remote, ip_str);
+			fflush(stdout);
+
+			z_obj_t req = z_obj_map(2);
+			z_map_set(&req, "ip", z_obj_uint32(ip));
+			z_map_set(&req, "filename", z_obj_str(remote));
+			// note: `req` intentionally never freed -- one-shot
+			// request, same borrowed-payload reasoning used
+			// throughout (see docs/messaging.md)
+
+			zstream_consumer_t cons;
+			char err[64];
+			if (!zstream_open(&cons, Z_PID_NET, req, err, sizeof(err))) {
+				printf("tget: failed to open: %s\n", err);
+				continue;
+			}
+
+			FIL f;
+			if (!fs_open_write(&f, local)) {
+				printf("tget: failed to open %s for writing\n", local);
+				zstream_abort(&cons);
+				continue;
+			}
+
+			uint32_t total = 0;
+			bool ok = true;
+
+			while (1) {
+
+				const uint8_t *data;
+				uint32_t len;
+				zstream_result_t r = zstream_pull(&cons, &data, &len, err, sizeof(err));
+
+				if (r == ZSTREAM_EOF) break;
+
+				if (r == ZSTREAM_ERROR) {
+					printf("tget: failed: %s\n", err);
+					ok = false;
+					break;
+				}
+
+				if (fs_write_chunk(&f, data, len) != (int)len) {
+					printf("tget: write failed\n");
+					zstream_abort(&cons);
+					ok = false;
+					break;
+				}
+
+				total += len;
+
+			}
+
+			fs_close_write(&f);
+
+			if (ok) printf("tget: wrote %ld bytes to %s\n", (long)total, local);
+
+		}
+
+		// PUT FILE VIA TFTP
+		else if (!strncmp(buffer, "tput", cmdlen)) {
+
+			char *ip_str = get_arg(buffer, 1);
+			char *local = get_arg(buffer, 2);
+			char *remote = get_arg(buffer, 3);
+
+			if (!ip_str || !local) {
+				printf("usage: tput <server-ip> <local-file> [remote-file]\n");
+				continue;
+			}
+			if (!remote) remote = local;
+
+			uint32_t ip;
+			if (!parse_ipv4(ip_str, &ip)) {
+				printf("tput: bad ip address\n");
+				continue;
+			}
+
+			uint32_t size = fs_size(local);
+			if (!size) {
+				printf("tput: local file not found/empty\n");
+				continue;
+			}
+
+			FIL f;
+			if (!fs_open_read(&f, local)) {
+				printf("tput: failed to open %s for reading\n", local);
+				continue;
+			}
+
+			uint32_t tag = next_tftp_tag();
+			z_obj_t req = z_obj_map(2);
+			z_map_set(&req, "ip", z_obj_uint32(ip));
+			z_map_set(&req, "filename", z_obj_str(remote));
+			z_msg_new_send(Z_PID_NET, Z_NET_TFTP_PUT, tag, req);
+			// note: `req` intentionally never freed -- same
+			// borrowed-payload reasoning as tget above; one-shot
+			// per tput call.
+
+			printf("tput: sending %s (%ld bytes) to %s ...\n", local, (long)size, ip_str);
+			fflush(stdout);
+
+			// act as a zstream *producer* now -- net is about to
+			// open a stream back to us (pid 0) to pull this file's
+			// bytes. we have nothing else to do while this runs, so
+			// a simple blocking loop is fine here, same reasoning as
+			// z_msg_wait_timeout()'s own use below.
+			zstream_producer_t prod;
+			bool have_stream = false;
+			bool producer_ok = true;
+			uint8_t chunk[ZSTREAM_CHUNK_SIZE_DEFAULT];
+			uint32_t start = z_uptime_ticks();
+
+			while (z_uptime_ticks() - start < TFTP_REPLY_TIMEOUT_TICKS) {
+
+				z_msg_t msg;
+				if (z_msg_read(&msg) != Z_OK) continue;
+
+				if (!have_stream) {
+					if (msg.subject != Z_STREAM_OPEN) continue;	// discard anything else while waiting to start
+					zstream_accept(&prod, msg.from, msg.tag);
+					have_stream = true;
+					start = z_uptime_ticks();
+					continue;
+				}
+
+				if (msg.subject == Z_STREAM_ABORT) {
+					producer_ok = false;
+					break;
+				}
+
+				if (msg.subject != Z_STREAM_PULL) continue;
+
+				if (zstream_producer_handle(&prod, &msg) != ZSTREAM_EVENT_PULL)
+					continue;	// stale/retry pull, already handled internally
+
+				int32_t n = fs_read_chunk(&f, chunk, sizeof(chunk));
+
+				if (n < 0) {
+					zstream_send_error(&prod, "local read failed");
+					producer_ok = false;
+					break;
+				}
+
+				if (n == 0) {
+					zstream_send_eof(&prod);
+					break;	// our part is done -- net finishes talking to the server on its own
+				}
+
+				zstream_send_chunk(&prod, chunk, (uint32_t)n);
+				start = z_uptime_ticks();
+
+			}
+
+			fs_close_read(&f);
+
+			if (!have_stream) {
+				printf("tput: no reply from net after 10s -- is it running? (`run net`) "
+					"if it's running but this happened anyway, that's worth reporting.\n");
+				continue;
+			}
+
+			if (!producer_ok) {
+				printf("tput: failed sending local data\n");
+				continue;
+			}
+
+			z_msg_t reply;
+			if (z_msg_wait_timeout(&reply, Z_NET_TFTP_PUT_REPLY, tag, TFTP_REPLY_TIMEOUT_TICKS) != Z_OK) {
+				printf("tput: no reply from net after 10s -- is it running? (`run net`) "
+					"if it's running but this happened anyway, that's worth reporting.\n");
+				continue;
+			}
+
+			z_obj_t *ok = z_map_find(&reply.obj, "ok");
+			if (ok && ok->val.uint32) {
+				printf("tput: done\n");
+			} else {
+				z_obj_t *err = z_map_find(&reply.obj, "error");
+				printf("tput: failed: %s\n",
+					(err && err->type == Z_STR) ? err->val.str : "unknown error");
+			}
+
 		}
 
 		// CREATE A PROCESS
@@ -173,6 +400,47 @@ void sh(void) {
 			fs_load(base, arg);
 			printf(" - starting process\n");
 			k_proc_start(pid);
+
+		}
+
+		// INIT SCRIPT (hardcoded for now -- see docs/networking.md's
+		// note on why net needs a predictable pid. eventually this
+		// should launch wm, net, and whatever else, in order, instead
+		// of a single hardcoded placeholder+net sequence.)
+		else if (!strncmp(buffer, "init", cmdlen)) {
+
+			if (z_procs[1].base != 0) {
+				printf("init: already initialized (pid 1 already reserved)\n");
+				continue;
+			}
+
+			// reserve pid 1 with a placeholder process that's never
+			// started, so net (which expects to be pid 2 -- see
+			// Z_PID_NET in znet.h) lands on a predictable pid without
+			// needing wm to be running first. this also isolates net
+			// from wm entirely for testing -- no other process is
+			// ever active at the same time as net, this way.
+			uint32_t placeholder_pid = k_proc_create(4);
+			if (!placeholder_pid) {
+				printf("init: failed to reserve pid 1\n");
+				continue;
+			}
+			printf("init: reserved pid %ld (placeholder, not started)\n", placeholder_pid);
+
+			uint32_t size = fs_size("net");
+			if (!size) {
+				printf("init: net binary not found\n");
+				continue;
+			}
+			uint32_t pid = k_proc_create(size);
+			if (!pid) {
+				printf("init: unable to create net process\n");
+				continue;
+			}
+			uint32_t base = k_proc_base(pid);
+			fs_load(base, "net");
+			k_proc_start(pid);
+			printf("init: net started as pid %ld\n", pid);
 
 		}
 
@@ -211,19 +479,49 @@ void sh(void) {
 
 }
 
+// returns argument n (0 = command name, 1 = first argument, ...) of
+// str, split on spaces, or NULL if there aren't that many.
+//
+// operates on a private copy internally and hands back a copy of the
+// result, rather than using strtok() directly on str and returning a
+// pointer into it. strtok() is destructive (writes a '\0' into the
+// string at each delimiter it consumes as it goes), and reaching
+// argument n means walking past n delimiters internally -- so a
+// single call for a HIGH-numbered argument already corrupts the
+// buffer for a SUBSEQUENT call asking for a lower-numbered one
+// (commands needing more than one argument, like tget/tput, call
+// this multiple times per command line; every earlier command only
+// ever called it once, which is why this never surfaced before).
+// Each result is copied into one of several rotating static slots
+// (not a single shared one) so that multiple results from sequential
+// calls -- e.g. ip_str/remote/local in tget -- can all still be read
+// afterward without one overwriting another.
 char *get_arg(char *str, int n) {
 
-	char *token;
-	int tn = 0;
+	static char slots[8][64];
+	static int next_slot = 0;
 
-	token = strtok(str, " ");
+	char tmp[256];
+	strncpy(tmp, str, sizeof(tmp) - 1);
+	tmp[sizeof(tmp) - 1] = 0;
+
+	char *token = strtok(tmp, " ");
+	int tn = 0;
 
 	while (token != NULL && tn != n) {
 		token = strtok(NULL, " ");
 		tn++;
 	}
 
-	return token;
+	if (!token) return NULL;
+
+	char *slot = slots[next_slot];
+	next_slot = (next_slot + 1) % 8;
+
+	strncpy(slot, token, sizeof(slots[0]) - 1);
+	slot[sizeof(slots[0]) - 1] = 0;
+
+	return slot;
 
 }
 
@@ -251,13 +549,56 @@ void cls(void) {
 	}
 }
 
+// parses a dotted-quad IPv4 address ("a.b.c.d") into a packed
+// uint32_t (matching znet.h's convention -- same packing z_map_find'd
+// "ip" values use, e.g. ip.c's own address handling). returns false
+// on a malformed address rather than silently returning 0
+// (0.0.0.0 is itself a value someone could plausibly type by mistake,
+// so treating a parse failure as "0" would be a silent, misleading
+// success).
+bool parse_ipv4(const char *s, uint32_t *out) {
+
+	uint32_t octets[4];
+
+	for (int i = 0; i < 4; i++) {
+
+		if (i > 0) {
+			if (*s != '.') return false;
+			s++;
+		}
+
+		if (*s < '0' || *s > '9') return false;
+
+		uint32_t v = 0;
+		int digits = 0;
+		while (*s >= '0' && *s <= '9') {
+			v = v * 10 + (*s - '0');
+			s++;
+			digits++;
+			if (digits > 3 || v > 255) return false;
+		}
+
+		octets[i] = v;
+
+	}
+
+	if (*s != '\0') return false;	// trailing garbage
+
+	*out = (octets[0] << 24) | (octets[1] << 16) | (octets[2] << 8) | octets[3];
+	return true;
+
+}
+
 void sh_help(void) {
 
 	printf("commands:\n");
 	printf(" hd <addr>         hex dump memory\n");
 	printf(" xa <addr>         receive to addr via xfer\n");
 	printf(" xf <file>         receive to file via xfer\n");
+	printf(" tget <ip> <remote-file> [local-file]  fetch a file via tftp (needs `run net`)\n");
+	printf(" tput <ip> <local-file> [remote-file]  send a file via tftp (needs `run net`)\n");
 	printf(" run <file>        create a new process\n");
+	printf(" init               reserve pid 1, start net as pid 2 (no wm needed)\n");
 	printf(" kill <pid>        kill a process\n");
 	printf(" ps                display a process snapshot\n");
 	printf(" ks                display a kernel snapshot\n");

@@ -20,8 +20,9 @@ bounceblit.elf: $(OBJS)
 	$(CC) $(LDFLAGS) -Wl,-T$(LDSCRIPT),-Map,bounceblit.map -o bounceblit.elf $(OBJS)
 	$(PREFIX)objdump -S --disassemble bounceblit.elf > bounceblit.dasm
 
-bounceblit.bin:
-	$(PREFIX)objcopy -O binary bounceblit.elf bounceblit.bin
+bounceblit.bin: bounceblit.elf
+	@END=$$($(PREFIX)nm bounceblit.elf | awk '$$3=="_end"{print "0x"$$1}'); \
+	$(PREFIX)objcopy -O binary --pad-to=$$END bounceblit.elf bounceblit.bin
 
 clean:
 	rm -f bounceblit.elf bounceblit.bin bounceblit.asm bounceblit.dasm bounceblit.map bounceblit.o *.o *.d

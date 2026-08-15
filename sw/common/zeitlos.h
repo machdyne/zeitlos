@@ -69,6 +69,14 @@ typedef uint32_t *(*z_kernel_ptr_t)(uint32_t, uint32_t *, uint32_t);
 // through this address.
 #define GLYPH_MEM_BASE       0x30000000
 #define GLYPH_MEM_SIZE       4096
+
+// ETH SPI bit-bang interface (rtl/spibb_eth.v) for the ENC28J60
+// Ethernet controller (PMOD). Same bit layout as reg_sdcard: bit0 =
+// MISO (read), bit1 = MOSI (write), bit2 = SCK (write), bit3 = SS
+// (write), bit4 = the chip's INT line (read, active low -- not used
+// as a real interrupt yet, just readable). See sw/apps/net/enc28j60.c
+// for the driver.
+#define reg_eth (*(volatile uint32_t*)0x50000000)
 #define gpu_clip_x0     (*(volatile uint32_t*)0xa000002c)  // Left bound
 #define gpu_clip_y0     (*(volatile uint32_t*)0xa0000030)  // Top bound  
 #define gpu_clip_x1     (*(volatile uint32_t*)0xa0000034)  // Right bound
@@ -98,6 +106,11 @@ z_rv z_msg_read(z_msg_t *msg);
 // block until a message matching subject/tag arrives, discarding
 // anything else that shows up in the meantime
 z_rv z_msg_wait(z_msg_t *msg, uint32_t subject, uint32_t tag);
+
+// ticks since boot, ~732Hz (the KTIMER IRQ rate -- see
+// rtl/sysctl.v's rtc_ctr). for elapsed-time measurement; not
+// wall-clock/calendar time.
+uint32_t z_uptime_ticks(void);
 
 #define VT100_CURSOR_UP       "\e[A"
 #define VT100_CURSOR_DOWN     "\e[B"

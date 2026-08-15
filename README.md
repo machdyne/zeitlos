@@ -10,14 +10,15 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 
 | Component | Features/Notes |
 |-----------|----------|
-| CPU | 32-bit RISC-V (PicoRV32) |
-| GPU | Line rasterizer and blitter with clipping |
+| CPU | 32-bit RISC-V (PicoRV32) @ 48MHz |
+| GPU | Line rasterizer and blitter |
 | MTU | Virtual addressing through Memory Translation Unit |
 | Bus | 32-bit Wishbone |
-| Main Memory | SDRAM, PSRAM or SRAM |
+| Main Memory | SDRAM, PSRAM or SRAM (1MB minimum) |
 | Framebuffer | 512x384x1bpp |
-| Video | VGA, HDMI |
+| Video | VGA, DVI, DVI over HDMI |
 | Storage | MicroSD |
+| Network | Ethernet (SPI) |
 | HID | USB mouse/keyboard |
 | I/O | GPIO, SPI, 16550 UART |
 
@@ -26,6 +27,8 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
  - Pre-emptive multitasking
  - Flat memory model with virtual address space for apps
  - FAT16/32 filesystem
+ - Object-based interprocess messaging
+ - IP/ARP/ICMP/UDP/TFTP networking
 
 #### Memory Translation Unit
 
@@ -34,6 +37,14 @@ Zeitlos doesn't have an MMU but instead has a single virtual address space that 
 The Zeitlos kernel is located at `0x4000_0000` which is the beginning of main memory, and apps are loaded immediately after the kernel. However, each app executes at fixed address `0x8000_0000` which is a mirror of their actual address in the main memory. The translation base address register is set during context switches so that each app can access its own memory through `0x8000_0000`.
 
 With the MTU, there is no need for position independent code or complicated address relocation.
+
+### Apps
+
+| App | Pid | Description |
+|-----|-----|-------------|
+| sh | 0 | System shell (serial console) |
+| wm | 1 | Window Manager |
+| net | 2 | Networking Server |
 
 ### Boards
 
@@ -79,7 +90,7 @@ The Zeitlos implementation portions of the book are currently located in the `do
 
 ### LLM-generated code
 
-To the extent that there is LLM-generated code in this repo, it should be space indented. Any space indented code should be carefully audited and then converted to tabs (eventually). 
+This project makes use of LLMs for code and documentation.
 
 ## License
 

@@ -128,36 +128,71 @@ static inline bool uart_rx_fifo_full() {
 // --
 
 bool k_uart_rx_empty(void) {
-	return uart_rx_fifo_empty();
+	// same protection as k_uart_putc()/k_uart_getc(), and for the
+	// same reason -- this reads rx_head/rx_tail as a pair, and an
+	// unprotected read here was the actual remaining half of the
+	// UART race: _read()'s poll loop (`while (uart_rx_empty())`)
+	// could see an inconsistent snapshot mid-update by another
+	// process's now-protected k_uart_putc()/getc() call, hanging
+	// forever if that snapshot looked permanently empty/full.
+	uint32_t old_mask = maskirq(0xFFFFFFFF);
+	bool v = uart_rx_fifo_empty();
+	maskirq(old_mask);
+	return v;
 }
 
 bool k_uart_tx_full(void) {
-	return uart_tx_fifo_full();
+	uint32_t old_mask = maskirq(0xFFFFFFFF);
+	bool v = uart_tx_fifo_full();
+	maskirq(old_mask);
+	return v;
 }
 
 
 int16_t k_uart_getc(void) {
 
+	// same protection as k_uart_putc() above, and for the same
+	// reason -- see its comment.
+	uint32_t old_mask = maskirq(0xFFFFFFFF);
+
 	if (rx_head == rx_tail) {
 		// RX FIFO is empty
+		maskirq(old_mask);
 		return -1;
 	}
 
 	char c = uart_rx_fifo[rx_tail];
 	rx_tail = (rx_tail + 1) % UART_FIFO_SIZE;
 
+	maskirq(old_mask);
 	return c;
 
 }
 
 void k_uart_putc(char c) {
 
-	uart_irq_disable();
+	// mask ALL irqs (not just the uart one) so a scheduler swap can't
+	// interleave with another process also inside this function --
+	// tx_head/tx_tail are shared kernel state that every process's
+	// printf() ultimately writes through (apps via syscall, the
+	// kernel/sh.c directly), so two processes concurrently mid-way
+	// through this critical section corrupts the indices. this was a
+	// real bug: uart_irq_disable() only masks the UART IRQ (bit 4),
+	// not the KTIMER IRQ that drives scheduling, so a timer
+	// preemption could switch to another process still inside this
+	// same function. the corrupted indices could make
+	// uart_tx_fifo_full() return true permanently, and _write()'s
+	// `while (k_uart_tx_full()) /* wait */;` has no timeout -- so
+	// whichever process's next printf() hit that state would hang
+	// forever, while other processes kept running normally (matching
+	// the observed symptom: net going silent forever mid-transfer
+	// while sh.c's own unrelated code kept working).
+	uint32_t old_mask = maskirq(0xFFFFFFFF);
 
 	uint8_t next = (tx_head + 1) % UART_FIFO_SIZE;
 
 	if (next == tx_tail) {
-		uart_irq_enable();
+		maskirq(old_mask);
 		// TX buffer full
 		return;  // Or return error code
 	}
@@ -177,19 +212,19 @@ void k_uart_putc(char c) {
 		reg_uart0_ier = 0b00000011; // Enable TX and RX
 	}
 
-	uart_irq_enable();
+	maskirq(old_mask);
 
 }
 
 // --
 
 z_obj_t *z_uart_rx_empty(z_obj_t *obj) {
-	obj->val.int32 = uart_rx_fifo_empty();
+	obj->val.int32 = k_uart_rx_empty();
 	return (&z_ok);
 }
 
 z_obj_t *z_uart_tx_full(z_obj_t *obj) {
-	obj->val.int32 = uart_tx_fifo_full();
+	obj->val.int32 = k_uart_tx_full();
 	return (&z_ok);
 }
 

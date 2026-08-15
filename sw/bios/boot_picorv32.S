@@ -69,6 +69,27 @@ irq_vec:
 
 	/* call interrupt handler C function */
 
+	// stack used by the C-level interrupt handler itself
+	// (z_kernel_entry, z_uart_irq, etc.) while it runs -- NOT the
+	// stack of whichever process got interrupted (that's separately
+	// saved/restored via irq_regs below). increased from 256 words
+	// (1024 bytes) to 512 words (2048 bytes): the old size is the
+	// likely cause of an intermittent, timing-dependent bug where a
+	// process's saved return address gets corrupted if an interrupt
+	// happens to fire at the wrong moment -- if C-level interrupt
+	// handling ever used more than 1024 bytes of stack, it would
+	// silently overwrite irq_regs (which sits directly below this
+	// stack in memory, and holds the interrupted process's saved
+	// register state, including ra), corrupting whichever process
+	// happened to be interrupted at that exact moment. this is a
+	// hypothesis based on the failure pattern observed (see
+	// docs/networking.md's TFTP debugging notes), not something
+	// confirmed by directly measuring actual stack usage during
+	// interrupt handling. kept deliberately modest (2x, not more)
+	// since this shares an 8KB (2048-word) BRAM budget with the rest
+	// of the BIOS -- if the bug persists, this can be increased
+	// further (raise BRAM_WORDS in sw/bios/Makefile too, if the FPGA
+	// has spare capacity, since the whole BIOS needs to still fit).
 	lui sp, %hi(irq_stack)
 	addi sp, sp, %lo(irq_stack)
 
@@ -136,10 +157,11 @@ irq_regs:
 	// the program counter is saved as register 0
 	.fill 32,4
 
-	// stack for the interrupt handler
-	//.fill 64,4
-	//.fill 128,4
-	.fill 256,4
+	// stack for the interrupt handler -- see the comment above the
+	// sp setup, this was increased from 256 to 512 words as the
+	// primary suspect for an intermittent return-address corruption
+	// bug
+	.fill 512,4
 
 irq_stack:
 

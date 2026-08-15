@@ -6,6 +6,8 @@
  *
  */
 
+#include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
 #include <math.h>
@@ -67,6 +69,26 @@ z_obj_t z_obj_map(uint32_t len) {
     return obj;
 }
 
+z_obj_t z_obj_blob(const void *data, uint32_t len) {
+    z_blob_t *b = malloc(sizeof(z_blob_t));
+    b->len = len;
+    b->data = malloc(len ? len : 1);
+    if (data && len && b->data) memcpy(b->data, data, len);
+    z_obj_t obj = { .type = Z_BLOB };
+    obj.val.ptr = b;
+    return obj;
+}
+
+uint32_t z_blob_len(const z_obj_t *obj) {
+    if (!obj || obj->type != Z_BLOB || !obj->val.ptr) return 0;
+    return ((z_blob_t *)obj->val.ptr)->len;
+}
+
+void *z_blob_data(const z_obj_t *obj) {
+    if (!obj || obj->type != Z_BLOB || !obj->val.ptr) return NULL;
+    return ((z_blob_t *)obj->val.ptr)->data;
+}
+
 // RETURN VALUE TESTING
 
 // Check if a return value indicates success
@@ -114,6 +136,16 @@ void z_obj_free(z_obj_t *obj) {
                 obj->val.str = NULL;
             }
             break;
+
+        case Z_BLOB: {
+            z_blob_t *b = (z_blob_t *)obj->val.ptr;
+            if (b) {
+                if (b->data) free(b->data);
+                free(b);
+                obj->val.ptr = NULL;
+            }
+            break;
+        }
 
         case Z_LIST:
         case Z_MAP: {
@@ -181,6 +213,12 @@ void z_obj_print(const z_obj_t *obj) {
             }
             break;
 
+        case Z_BLOB: {
+            z_blob_t *b = (z_blob_t *)obj->val.ptr;
+            printf("blob(%u bytes)", b ? b->len : 0);
+            break;
+        }
+
         case Z_LIST: {
             z_obj_table_t *t = (z_obj_table_t *)obj->val.ptr;
             printf("[");
@@ -240,6 +278,12 @@ z_obj_t z_obj_copy(const z_obj_t *src) {
             
         case Z_STR:
             return z_obj_str(src->val.str ? src->val.str : "");
+
+        case Z_BLOB: {
+            z_blob_t *b = (z_blob_t *)src->val.ptr;
+            if (!b) return z_obj_none();
+            return z_obj_blob(b->data, b->len);
+        }
             
         case Z_LIST: {
             z_obj_table_t *src_table = (z_obj_table_t *)src->val.ptr;
@@ -301,6 +345,15 @@ int z_obj_equal(const z_obj_t *a, const z_obj_t *b) {
         case Z_STR:
             if (!a->val.str || !b->val.str) return (a->val.str == b->val.str);
             return strcmp(a->val.str, b->val.str) == 0;
+
+        case Z_BLOB: {
+            z_blob_t *ba = (z_blob_t *)a->val.ptr;
+            z_blob_t *bb = (z_blob_t *)b->val.ptr;
+            if (!ba || !bb) return (ba == bb);
+            if (ba->len != bb->len) return 0;
+            if (ba->len == 0) return 1;
+            return memcmp(ba->data, bb->data, ba->len) == 0;
+        }
             
         case Z_LIST: {
             z_obj_table_t *ta = (z_obj_table_t *)a->val.ptr;
@@ -350,6 +403,11 @@ uint32_t z_obj_size(const z_obj_t *obj) {
         
         case Z_STR:
             return obj->val.str ? (uint32_t)strlen(obj->val.str) : 0;
+
+        case Z_BLOB: {
+            z_blob_t *b = (z_blob_t *)obj->val.ptr;
+            return b ? b->len : 0;
+        }
             
         default:
             return 0;

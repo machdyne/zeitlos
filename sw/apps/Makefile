@@ -9,6 +9,7 @@ all:
 	cd pong && make
 	cd wm && make
 	cd hello_win && make
+	cd net && make
 
 clean:
 	cd blinky && make clean
@@ -21,3 +22,4 @@ clean:
 	cd pong && make clean
 	cd wm && make clean
 	cd hello_win && make clean
+	cd net && make clean

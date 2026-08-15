@@ -20,8 +20,9 @@ bounce.elf: $(OBJS)
 	$(CC) $(LDFLAGS) -Wl,-T$(LDSCRIPT),-Map,bounce.map -o bounce.elf $(OBJS)
 	$(PREFIX)objdump -S --disassemble bounce.elf > bounce.dasm
 
-bounce.bin:
-	$(PREFIX)objcopy -O binary bounce.elf bounce.bin
+bounce.bin: bounce.elf
+	@END=$$($(PREFIX)nm bounce.elf | awk '$$3=="_end"{print "0x"$$1}'); \
+	$(PREFIX)objcopy -O binary --pad-to=$$END bounce.elf bounce.bin
 
 clean:
 	rm -f bounce.elf bounce.bin bounce.asm bounce.dasm bounce.map bounce.o *.o *.d
