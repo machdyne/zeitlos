@@ -27,7 +27,7 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
  - Pre-emptive multitasking
  - Flat memory model with virtual address space for apps
  - FAT16/32 filesystem
- - Object-based interprocess messaging
+ - Object-based interprocess messaging and streaming
  - IP/ARP/ICMP/UDP/TFTP networking
 
 #### Memory Translation Unit
