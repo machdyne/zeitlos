@@ -73,32 +73,54 @@ void z_win_redraw_done(const z_win_t *win) {
 	z_msg_new_send(Z_PID_WM, Z_WM_REDRAW_DONE, 0, z_obj_uint32((uint32_t)win->id));
 }
 
-static void content_clip(const z_win_t *win, z_clip_t *clip) {
-	// inset by 1px on every side -- the un-inset rect's edges coincide
-	// exactly with where wm draws the window's border lines (left,
-	// right, bottom, and the titlebar separator), so without this,
-	// z_win_clear()/z_win_fill_rect() paint directly over the border
-	// wherever content touches it.
-	clip->x0 = win->x + 1;
-	clip->y0 = win->y + Z_WM_TITLEBAR_H + 1;
-	clip->x1 = win->x + win->w - 2;
-	clip->y1 = win->y + win->h - 2;
+void z_win_content_rect(const z_win_t *win, z_clip_t *out) {
+	// inset by 2px on left/right/bottom, 1px below the titlebar
+	// separator on top. Two separate things overlap the outer 1px
+	// border here: the border itself (win->x/win->x+win->w-1 etc),
+	// and -- only when the window is focused -- wm.c's own bold
+	// focus-border, drawn a further 1px in (win->x+1/win->w-2 etc,
+	// on left/right/bottom; its top edge sits inside the titlebar
+	// area, not down here, so no extra inset is needed on that side).
+	// A 1px-only inset used to coincide exactly with the focus
+	// border's own pixels -- invisible for content that stays well
+	// clear of the edge (nothing before drew close enough to notice),
+	// but any content actually reaching the content area's own
+	// boundary would draw directly on top of the focus border,
+	// visibly gnawing at it whenever the window happened to be
+	// focused.
+	out->x0 = win->x + 2;
+	out->y0 = win->y + Z_WM_TITLEBAR_H + 1;
+	out->x1 = win->x + win->w - 3;
+	out->y1 = win->y + win->h - 3;
 }
 
 void z_win_fill_rect(const z_win_t *win, int x, int y, int w, int h, int color) {
 	z_clip_t clip;
-	content_clip(win, &clip);
+	z_win_content_rect(win, &clip);
 	z_fb_fill_rect(win->x + x, clip.y0 + y, w, h, color, &clip);
 }
 
 void z_win_clear(const z_win_t *win) {
-	// oversized on purpose -- content_clip() (via z_win_fill_rect's
-	// clip) cuts this down to the actual content area regardless.
+	// oversized on purpose -- z_win_content_rect() (via
+	// z_win_fill_rect's clip) cuts this down to the actual content
+	// area regardless.
 	z_win_fill_rect(win, 0, 0, win->w, win->h, 0);
 }
 
 void z_win_draw_text(const z_win_t *win, int x, int y, const char *s, int color, const z_font_t *font) {
 	z_clip_t clip;
-	content_clip(win, &clip);
+	z_win_content_rect(win, &clip);
 	z_fb_draw_text(win->x + x, clip.y0 + y, s, color, font, &clip);
+}
+
+void z_win_hw_line(const z_win_t *win, int x0, int y0, int x1, int y1, int color) {
+	z_clip_t clip;
+	z_win_content_rect(win, &clip);
+	z_fb_hw_line(x0, y0, x1, y1, color, &clip);
+}
+
+void z_win_hw_box(const z_win_t *win, int x0, int y0, int x1, int y1, int color) {
+	z_clip_t clip;
+	z_win_content_rect(win, &clip);
+	z_fb_hw_box(x0, y0, x1, y1, color, &clip);
 }

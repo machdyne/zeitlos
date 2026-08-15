@@ -7,6 +7,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdio.h>
 
 #include "zeitlos.h"
 #include "zgfx.h"
@@ -48,6 +49,157 @@ void z_fb_fill_rect(int x, int y, int w, int h, int color, const z_clip_t *clip)
 	for (int j = 0; j < h; j++)
 		for (int i = 0; i < w; i++)
 			z_fb_set_pixel(x + i, y + j, color, clip);
+
+}
+
+// -- hardware line rasterizer path (rtl/gpu/gpu_raster.v) -- see
+// zgfx.h's file header comment and z_fb_hw_line()'s own comment for
+// why this needed IRQ masking to be safe for concurrent access from
+// multiple processes.
+
+static inline void gpu_wait_fifo(void) {
+	// bounded defensively -- see z_fb_hw_line()'s own comment on why
+	// the rasterizer's hardware state machine can hang forever with
+	// no protection of its own if it's ever handed a bad coordinate.
+	// The coordinate clamp there is the real fix; this is a backstop
+	// in case some other, not-yet-understood path can still stall
+	// it -- an arbitrary-but-generous bound, well past anything a
+	// genuinely draining FIFO should ever take, so this essentially
+	// never fires under normal operation. If it does fire, that's
+	// itself important diagnostic information (the rasterizer really
+	// is stuck, not just slow), so it's reported, not silently
+	// swallowed -- better for the calling process to stay responsive
+	// and report the problem than to freeze forever the way it did
+	// before this existed.
+	uint32_t waited = 0;
+	while (gpu_debug_fifo_count > 15) {
+		if (++waited > 10000000) {
+			printf("zgfx: gpu fifo wait timed out -- rasterizer may be stuck\n");
+			return;
+		}
+	}
+}
+
+void z_fb_hw_line(int x0, int y0, int x1, int y1, int color, const z_clip_t *clip) {
+
+	// unconditional, regardless of clip -- clip only ever narrows
+	// where on screen a line can land, it was never a bounds check
+	// against the framebuffer's actual physical size. The hardware
+	// has no protection of its own here: gpu_y0/gpu_y1 are 9-bit
+	// registers (0-511), but the framebuffer is only Z_SCREEN_H=384
+	// pixels tall, so 384-511 is representable but physically
+	// invalid -- and rtl/gpu/gpu_raster.v's WAIT_READ/WAIT_WRITE
+	// states wait on the framebuffer bus's ack with no timeout at
+	// all (only the pixel *count* along a line is bounded, not how
+	// long any single pixel's bus transaction is allowed to take).
+	// A coordinate that lands somewhere the bus never acks hangs the
+	// rasterizer's state machine forever: draw_busy never clears,
+	// the FIFO never drains, and gpu_wait_fifo() (below, and in every
+	// future call) spins forever waiting for room that will never
+	// free up. Clamping here, at the one shared entry point every
+	// caller goes through, closes this regardless of where a bad
+	// coordinate would otherwise have come from.
+	if (x0 < 0) x0 = 0;
+	if (x0 >= Z_SCREEN_W) x0 = Z_SCREEN_W - 1;
+	if (x1 < 0) x1 = 0;
+	if (x1 >= Z_SCREEN_W) x1 = Z_SCREEN_W - 1;
+	if (y0 < 0) y0 = 0;
+	if (y0 >= Z_SCREEN_H) y0 = Z_SCREEN_H - 1;
+	if (y1 < 0) y1 = 0;
+	if (y1 >= Z_SCREEN_H) y1 = Z_SCREEN_H - 1;
+
+	// deliberately outside the masked section below -- this can
+	// legitimately take a while if the FIFO's backed up, and masking
+	// through that would stall the scheduler for every other process,
+	// not just this one.
+	gpu_wait_fifo();
+
+	uint32_t old_mask = maskirq(0xFFFFFFFF);
+
+	if (clip) {
+		gpu_clip_x0 = (uint32_t)clip->x0;
+		gpu_clip_y0 = (uint32_t)clip->y0;
+		gpu_clip_x1 = (uint32_t)clip->x1;
+		gpu_clip_y1 = (uint32_t)clip->y1;
+		gpu_clip_enable = 1;
+	} else {
+		gpu_clip_enable = 0;
+	}
+
+	gpu_x0 = (uint32_t)x0;
+	gpu_y0 = (uint32_t)y0;
+	gpu_x1 = (uint32_t)x1;
+	gpu_y1 = (uint32_t)y1;
+	gpu_color = color & 1;
+	gpu_start = 1;
+
+	maskirq(old_mask);
+
+}
+
+void z_fb_hw_box(int x0, int y0, int x1, int y1, int color, const z_clip_t *clip) {
+	z_fb_hw_line(x0, y0, x1, y0, color, clip);	// top
+	z_fb_hw_line(x1, y0, x1, y1, color, clip);	// right
+	z_fb_hw_line(x1, y1, x0, y1, color, clip);	// bottom
+	z_fb_hw_line(x0, y1, x0, y0, color, clip);	// left
+}
+
+// -- GPU blitter fill path (rtl/gpu/gpu_blit.v) -- see zgfx.h's
+// z_fb_hw_fill_rect() comment for why this needed the same
+// clamp+mask treatment as z_fb_hw_line() above. Declared here,
+// unconditionally (not inside the Z_GFX_HW_BLIT block below), since
+// fill mode is independent of whether this build also drives the
+// hardware glyph path -- the blitter itself is always present in the
+// register map regardless of that build flag.
+
+static inline void gpu_blit_wait_idle(void) {
+	// bounded defensively, same reasoning and same pattern as
+	// gpu_wait_fifo() above -- an out-of-range destination could hang
+	// this state machine forever with no protection of its own; the
+	// coordinate clamp in z_fb_hw_fill_rect() is the real fix, this
+	// is a backstop in case some other path can still stall it.
+	uint32_t waited = 0;
+	while (gpu_blit_status & 1) {
+		if (++waited > 10000000) {
+			printf("zgfx: gpu blitter wait timed out -- blitter may be stuck\n");
+			return;
+		}
+	}
+}
+
+void z_fb_hw_fill_rect(int x, int y, int w, int h, int color) {
+
+	// clamp to actual screen bounds -- unconditional, regardless of
+	// CTRL_CLIP, for the same reason z_fb_hw_line() clamps
+	// unconditionally. See this function's own declaration in zgfx.h
+	// for the full reasoning.
+	if (x < 0) { w += x; x = 0; }
+	if (y < 0) { h += y; y = 0; }
+	if (x + w > Z_SCREEN_W) w = Z_SCREEN_W - x;
+	if (y + h > Z_SCREEN_H) h = Z_SCREEN_H - y;
+	if (w <= 0 || h <= 0) return;	// nothing left to draw
+
+	// wait for any prior blitter operation to finish -- including one
+	// from the hardware glyph path (z_fb_draw_char(), below, shares
+	// this same register set) or another process -- before touching
+	// its registers ourselves.
+	gpu_blit_wait_idle();
+
+	uint32_t old_mask = maskirq(0xFFFFFFFF);
+
+	gpu_blit_dst_x = (uint32_t)x;
+	gpu_blit_dst_y = (uint32_t)y;
+	gpu_blit_width = (uint32_t)w;
+	gpu_blit_height = (uint32_t)h;
+	gpu_blit_pattern = color ? 0xFFFFFFFFu : 0x00000000u;
+	gpu_blit_ctrl = GPU_BLIT_CTRL_START | GPU_BLIT_CTRL_FILL | GPU_BLIT_CTRL_CLIP;
+
+	maskirq(old_mask);
+
+	// wait for this fill to actually finish before returning -- see
+	// zgfx.h's comment on why this can't rely on the next operation
+	// to serialize the way consecutive glyph blits do.
+	gpu_blit_wait_idle();
 
 }
 
@@ -107,7 +259,7 @@ void z_fb_draw_char(int x, int y, char c, int color, const z_font_t *font, const
 		hw_blit_wait();	// a prior hardware blit could still be in
 						// flight; wait for it before writing directly
 						// to VRAM here, or the two could race
-//		draw_char_sw(x, y, c, color, font, clip);
+		draw_char_sw(x, y, c, color, font, clip);
 		return;
 	}
 

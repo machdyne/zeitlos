@@ -50,6 +50,7 @@ z_rv k_kernel_dump(void);
 
 // --
 
+/*
 static inline uint32_t maskirq(uint32_t new_mask) {
     uint32_t old_mask;
 
@@ -62,6 +63,7 @@ static inline uint32_t maskirq(uint32_t new_mask) {
 
     return old_mask;
 }
+*/
 
 // --
 

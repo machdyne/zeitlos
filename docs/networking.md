@@ -16,6 +16,10 @@ TX/RX), ARP/ICMP, and TFTP (both GET and PUT, streaming, no file size
 limit) have all been confirmed against real hardware and a real TFTP
 server -- see "Confirmed working" sections below.
 
+See `docs/app_runtime.md` for `maskirq()` (used throughout
+`enc28j60.c` to protect SPI bit-bang transactions from interrupt
+preemption) and the rest of the app runtime this all sits within.
+
 ## Why an app, not the kernel
 
 - Keeps the kernel small, consistent with the project's direction so

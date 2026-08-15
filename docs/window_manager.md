@@ -8,14 +8,23 @@ windows around by their titlebar. Apps talk to it over the messaging
 system (see `docs/messaging.md`) using the protocol in
 `sw/common/zwm.h`.
 
-This is a skeleton, matching the phased plan it was built against:
+This was built against a phased plan, all three phases now done:
 
-1. **This phase**: window chrome, drag, focus. Apps don't draw their
-   own content yet -- wm draws an empty box for every window.
-2. **Next**: apps drawing inside their allocated window rect.
-3. **After that**: arbitrating shared GPU access between apps drawing
-   concurrently (see "Known limitations" below -- this is deliberately
-   deferred, not solved here).
+1. Window chrome, drag, focus.
+2. Apps drawing their own content inside their allocated window rect
+   (`hello_win`, `gpu3d`, `gpudemo` -- see "Drawing content" below).
+3. Arbitrating shared GPU access between apps drawing concurrently,
+   for the line rasterizer specifically -- see `docs/app_runtime.md`,
+   "The GPU line rasterizer" for the full story (two real hazards,
+   both closed by moving that access behind `zgfx.c`'s IRQ-masked
+   `z_fb_hw_line()`), and "Known limitations" below for what's still
+   open (the blitter has its own, different, not-yet-unified scoping).
+
+See `docs/app_runtime.md` for the broader app-runtime picture this
+all sits within (`zeitlos.h/c`, the syscall trampoline, direct
+hardware register access, `zgfx.c`) -- this document stays focused on
+the window manager's own protocol and `zwin.c`'s window-relative
+drawing helpers.
 
 ## Starting it
 
@@ -212,6 +221,21 @@ in `zwin.c` is the app-side call -- `hello_win` sends it right after
 finishing the redraw that `Z_WM_REDRAW` triggered, not for redraws it
 initiates on its own (the wm isn't waiting on those).
 
+`repair_region()` takes an `exclude_idx` parameter for one specific
+case: right after `create_window()`, the brand-new window's own chrome
+needs drawing (and repair_region() is what does it) before its owner
+gets its `Z_WM_WINDOW_CREATED` reply -- otherwise the owner's
+`z_win_create()` can return, and its first drawing calls can run,
+before the wm has drawn so much as a border for it. But that same new
+window's owner can't be sent `Z_WM_REDRAW`/waited on for an ack the
+normal way, since it's still blocked waiting for the very reply that
+hasn't been sent yet -- its `z_msg_wait()` would silently discard the
+`Z_WM_REDRAW` (it doesn't match what it's waiting for), and
+`wait_for_redraw_done()` would stall for the full timeout on every
+single window creation. `exclude_idx` skips just the notify+wait step
+for that one window (chrome still gets drawn) while behaving normally
+for every other window `repair_region()` touches.
+
 This blocks `wm`'s whole main loop -- no mouse handling, no other
 apps' requests serviced by the normal poll -- until the *specific* app
 being waited on acks or a timeout (`REDRAW_ACK_TIMEOUT` in `wm.c`,
@@ -243,31 +267,65 @@ building anyway.
 
 `sw/common/zgfx.c/h` provides direct-framebuffer pixel/text drawing
 (`z_fb_set_pixel`, `z_fb_fill_rect`, `z_fb_draw_char`,
-`z_fb_draw_text`), each taking an optional clip rect. These write
-directly to the 1bpp framebuffer via ordinary memory writes -- not
-through the shared GPU line rasterizer -- which matters for the
-GPU-arbitration question flagged below: two apps drawing into two
-different, non-overlapping windows can't race on shared hardware
-state (like the rasterizer's single clip register) this way, only on
-memory, and disjoint memory writes from different processes are
+`z_fb_draw_text`), each taking an optional clip rect -- ordinary
+memory writes to the 1bpp framebuffer, so two apps drawing into two
+different, non-overlapping windows can't race on anything here, only
+on memory, and disjoint memory writes from different processes are
 inherently safe. See "Known limitations" for the case this doesn't
-cover. (`z_fb_draw_char`/`z_fb_draw_text` can optionally be backed by
-the hardware glyph blitter instead of software pixel writes -- see
-"Hardware glyph blitting" below -- but the arbitration reasoning above
-is specifically about the plain-memory-write path; the blitter is
-shared hardware state like the rasterizer is, see that section for
-how it's currently scoped to avoid the same problem.)
+cover.
+
+`zgfx.c/h` also provides `z_fb_hw_line()`/`z_fb_hw_box()`, driving the
+shared GPU line rasterizer (`rtl/gpu/gpu_raster.v`) directly, and
+`z_fb_hw_fill_rect()`, driving the GPU blitter's fill mode
+(`rtl/gpu/gpu_blit.v` -- see `docs/gpu_blitter.md`) -- unlike the
+memory-write functions above, both of these *are* shared, global
+hardware state with no per-process isolation, and used to be (the
+rasterizer) or still partly is (the blitter's glyph path, see below)
+a real source of bugs. See `docs/app_runtime.md`, "The GPU line
+rasterizer" and "The GPU blitter" for the full story on each: the
+same two hazards each time (a shared clip/bounds state that whoever
+drew most recently determines for everyone else, and a
+register-writes-then-trigger sequence that isn't atomic), closed the
+same way (IRQ-masked atomicity, coordinates clamped to the actual
+screen bounds unconditionally, state reasserted fresh on every call
+rather than assumed to still be correct). `wm.c` itself draws its
+chrome through these now -- fills/clears via `z_fb_hw_fill_rect()`,
+borders/titlebar separators via `z_fb_hw_line()`/`z_fb_hw_box()`,
+both unclipped (`clip=NULL`) since it already knows its own
+coordinates are valid; `gpu3d`/`gpudemo` draw through the window-aware
+`z_win_hw_line()`/`z_win_hw_box()` wrappers described next. `wm.c`
+switching its own `fill_rect()`/`clear_screen()` from a software VRAM
+loop to `z_fb_hw_fill_rect()` wasn't just a speed win -- see
+`docs/app_runtime.md`'s note on why a long, tight, uninterrupted
+software loop was itself implicated in a real crash.
 
 `sw/common/zwin.c/h` layers window-aware helpers on top:
 `z_win_create()` (wraps the `Z_WM_CREATE_WINDOW` exchange),
-`z_win_clear()`, and `z_win_draw_text()` -- the latter two always
-clip to the window's own content area (below the titlebar, per
-`Z_WM_TITLEBAR_H` in `zwm.h`) and use content-relative coordinates
-((0,0) is just below the titlebar). This is the sanctioned way for an
-app to draw, and it's the mechanism referred to in "apps are trusted"
+`z_win_clear()`, `z_win_fill_rect()`, and `z_win_draw_text()` -- these
+four always clip to the window's own content area (below the
+titlebar, per `Z_WM_TITLEBAR_H` in `zwm.h`) and use content-relative
+coordinates ((0,0) is just below the titlebar). `z_win_hw_line()`/
+`z_win_hw_box()` do the same for the hardware rasterizer path, though
+note the coordinate convention differs -- see their own doc comments
+in `zwin.h`, since apps drawing through the rasterizer (a 3D
+projection, say) typically already compute absolute screen
+coordinates themselves, so these only take over clip-region/IRQ-mask
+management, not coordinate translation. `z_win_content_rect()`
+exposes the content-area rectangle these all compute internally, for
+any app that needs to know its own drawable bounds for something else
+(centering content, bouncing something off the edges) without
+duplicating that formula itself -- which is exactly what caused a
+real, shipped bug once already (`gpu3d`/`gpudemo` each kept their own
+copy, and it silently fell out of sync with this file's own version
+after a border-inset fix here). This is the sanctioned way for an app
+to draw, and it's the mechanism referred to in "apps are trusted"
 below: nothing stops an app from calling `zgfx.h` directly with no
 clip, or writing to VRAM itself, but an app that only calls `z_win_*`
 physically cannot draw outside its own window.
+
+See `docs/app_runtime.md` for the full app-runtime picture this all
+sits within (`zeitlos.h/c`, the syscall trampoline, process startup)
+-- this document stays focused on the window manager's own protocol.
 
 ## Hardware glyph blitting
 
@@ -448,24 +506,53 @@ a convenient API, not a hard guarantee.
   protocol between wm and app. If you see duplicate/stale text after
   moving a window, or a delay before content catches up, this is why
   -- try a smaller `POLL_CHUNK` first.
-- **The focused-window bold border can still get drawn over.**
-  `zwin.c`'s content clip insets 1px from the window's outer edge, far
-  enough to never overlap the *regular* (unfocused) border -- but the
-  focused-window indicator (`draw_window_box()`'s extra 1px-inset
-  outline in `wm.c`) sits exactly on that same inset boundary, so
-  content that reaches all the way to its own edge could still paint
-  over it. `hello_win` never hits this in practice (it leaves a 4px
-  margin), but nothing enforces that margin. A 2px inset would close
-  this too, at the cost of slightly less usable content area; not
-  done since it wasn't the reported problem.
-- **No GPU arbitration for the line rasterizer/blitter.** Direct
-  framebuffer writes (what `zgfx`/`zwin` use for text) sidestep this
-  for content drawn that way, since they don't touch shared hardware
-  registers -- but if an app ever wants to use the line rasterizer or
-  blitter for its own content (not just `zgfx` pixel writes), the
-  original problem (two processes racing on the rasterizer's single
-  clip register) is back. Still unsolved; app-level locking was the
-  suggested direction, not yet implemented.
+- **~~The focused-window bold border can still get drawn over~~ --
+  fixed.** Was: `zwin.c`'s content clip inset only 1px from the
+  window's outer edge, far enough to clear the *regular* (unfocused)
+  border but not wm's additional bold focus-border (`draw_window_box()`'s
+  extra 1px-inset outline, drawn only when a window is focused) --
+  content reaching the content area's own edge would draw directly
+  over it whenever the window happened to be focused. `gpu3d`
+  (drawing a cube whose rotation naturally reaches its own content
+  area's edges) is what finally exposed this -- `hello_win` never hit
+  it since it leaves a 4px margin. Fixed: `z_win_content_rect()`
+  (`zwin.c`) now insets 2px on left/right/bottom, clearing both
+  borders.
+- **~~No GPU arbitration for the line rasterizer/blitter~~ -- fixed.**
+  Was: direct framebuffer writes (what `zgfx`/`zwin` used for text)
+  sidestepped this for content drawn that way, but any app wanting to
+  use the line rasterizer for its own content hit the original
+  problem (two processes racing on the rasterizer's single clip
+  register, plus a second hazard: the register-writes-then-trigger
+  sequence isn't atomic either, so a preempted-mid-sequence call could
+  end up interleaved with another process's own sequence). Fixed by
+  moving rasterizer access behind `zgfx.c`'s `z_fb_hw_line()`/
+  `z_fb_hw_box()`: IRQ-masked for the writes-then-trigger sequence
+  (not the FIFO-wait beforehand, which can legitimately take a while
+  and shouldn't stall the scheduler for other processes while it
+  does), and clip state reasserted fresh on every single call rather
+  than assumed to still be correct from a previous one. `wm.c`,
+  `gpu3d`, and `gpudemo` all draw through this now instead of each
+  keeping its own copy of this logic. See `docs/app_runtime.md`, "the
+  GPU line rasterizer" for the full writeup.
+
+  The blitter (used for both fills and hardware glyph blitting, see
+  below) is a *separate* piece of shared hardware state from the
+  rasterizer, with the same two hazards in its own right (confirmed
+  directly in `rtl/gpu/gpu_blit.v`, not just by inference from the
+  rasterizer's own bugs) -- but only its **fill path** has had the
+  same fix applied so far, via `zgfx.c`'s `z_fb_hw_fill_rect()` (see
+  `docs/app_runtime.md`, "the GPU blitter", and `docs/gpu_blitter.md`
+  for the full writeup on each). The **glyph path**
+  (`z_fb_draw_char()`/`z_fb_draw_text()`, `Z_GFX_HW_BLIT` builds only)
+  still isn't -- see "Hardware glyph blitting" below for how it's
+  currently scoped (informally, by convention, to a single process at
+  a time) rather than actually protected. A fill from one process and
+  a glyph blit from another could still interleave badly, since they
+  share the same registers and only one side masks IRQs around them.
+  Worth unifying if/when the glyph path gets touched again for
+  another reason -- not done proactively here, since it wasn't what
+  was asked.
 - **A subtler framebuffer race for overlapping/adjacent windows.**
   `z_fb_set_pixel()`'s read-modify-write of a framebuffer word
   (`VRAM[word_index] |= mask`) isn't atomic. Two non-overlapping
@@ -475,7 +562,48 @@ a convenient API, not a hard guarantee.
   shared word concurrently could clobber each other's bit if
   preempted mid-update. Not addressed yet -- would need either
   word-aligned window placement or a locking/masking scheme around
-  framebuffer writes.
+  framebuffer writes. Narrower in practice than it used to be: `wm.c`
+  itself no longer touches the framebuffer this way at all (its own
+  chrome now draws entirely through the hardware paths above), so
+  this only applies to apps still using the software `z_fb_*`
+  functions for their own content (`hello_win`'s text, by default --
+  `Z_GFX_HW_BLIT` builds route glyphs through the blitter instead,
+  which has its own, different concurrent-access gap noted above).
+- **An intermittent crash chased across several rounds, current
+  status: not yet fully confirmed fixed.** `wm.c` would sometimes
+  hang or hard-reset (confirmed via the board's `cpu_trap` LED -- a
+  genuine CPU trap, not just an unresponsive process) after dragging
+  windows around for a while, release-triggered specifically. Ruled
+  out, in order: `maskirq()` (removed entirely in a test build, bug
+  persisted), the CPU's MUL/DIV extension (a separate, concurrent
+  change being tested -- removed, bug persisted), and an
+  out-of-range GPU coordinate hanging the rasterizer's FIFO (a real,
+  separate bug fixed regardless -- see `z_fb_hw_line()`'s coordinate
+  clamp in `docs/app_runtime.md` -- but not what was causing this).
+  Targeted diagnostics eventually placed the hang specifically inside
+  `fill_rect()`'s own software loop, with no clear dependency on the
+  rect's size (a smaller, later call would sometimes hang while a
+  larger, earlier one in the same sequence had just completed fully)
+  -- consistent with something timing/interrupt-probabilistic rather
+  than a fixed threshold. Current best explanation: `fill_rect()` was
+  a tight, uninterrupted loop spanning many timer-tick periods for
+  anything but a small rect, and this project has hit this exact
+  failure class once before (see `boot_picorv32.S`'s `irq_stack`
+  comment) -- the C-level interrupt handler's own dedicated stack,
+  sized adequately for a timer tick alone, but not necessarily for a
+  timer tick and a UART interrupt both landing in the same handler
+  invocation, which heavy printf output (both the diagnostic
+  instrumentation used to chase this, and plausibly any sufficiently
+  chatty app in normal use) makes far more likely. Addressed two
+  ways: the IRQ stack was doubled again (512->1024 words -- the
+  second such increase; the first, 256->512, addressed a related
+  symptom during earlier TFTP debugging, see `docs/networking.md`),
+  and `fill_rect()` itself was switched to `z_fb_hw_fill_rect()` (the
+  GPU blitter), removing the long software loop that both created the
+  original symptom and made it easy to trigger. Neither half of this
+  has been confirmed as *the* fix by dedicated, isolated testing (the
+  two changes landed together) -- testing in normal use is ongoing as
+  of this writing, with no recurrence seen so far.
 - **No process-death cleanup.** If an app that owns a window is
   killed, `wm` has no way to find out and will leave its window (and
   window-table slot) around forever. This needs either a kernel
@@ -488,4 +616,10 @@ a convenient API, not a hard guarantee.
 - **Placement cascade is intentionally minimal** -- it just offsets
   each new window slightly from the last; no collision avoidance,
   centering, or multi-monitor concerns (not applicable here) were
-  considered.
+  considered. It also doesn't check the new window's own size against
+  the screen bounds at all: a large enough window (a first version of
+  `gpu3d`'s own window, 320x320, is what surfaced this) can land
+  partially or entirely off the bottom/right of the 512x384 screen
+  depending on where the cascade happens to be, with no clamping.
+  Worked around so far by keeping `gpu3d`/`gpudemo`'s own window sizes
+  modest rather than fixing placement itself.

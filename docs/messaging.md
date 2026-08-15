@@ -18,6 +18,10 @@ This guide covers two layers:
   the rules around what you can safely do with a message once you
   have one.
 
+See `docs/app_runtime.md` for where these `z_msg_*` wrappers sit
+within the broader app runtime (the syscall trampoline they're built
+on, direct hardware register access, `zgfx.c`).
+
 ## The object system
 
 ### Types

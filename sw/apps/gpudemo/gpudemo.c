@@ -1,247 +1,190 @@
+/*
+ * gpudemo -- minimal hardware line-rasterizer + window clip test
+ *
+ * Draws simple shapes (a static box+diagonals test pattern, then a
+ * small bouncing box) inside a wm window, using the same hardware
+ * line rasterizer and window-clip approach gpu3d uses -- deliberately
+ * without any 3D projection math, to isolate whether the rasterizer's
+ * hardware clip region (rtl/gpu/gpu_raster.v) actually constrains
+ * drawing to the window's content area, or whether something more
+ * fundamental is going on. See docs/window_manager.md.
+ *
+ * Prints the exact window/content/clip geometry to the UART on
+ * startup and on every redraw, plus the bouncing box's own position
+ * on each bounce, so what's actually being programmed into the
+ * hardware -- and where things are actually drawn -- can be directly
+ * compared against what shows up on screen.
+ *
+ * Requires the wm to already be running:
+ *
+ *   > run wm
+ *   > run gpudemo
+ */
+
+#include <stdio.h>
 #include <stdint.h>
+#include <stdbool.h>
 
-// Register offsets - using 32-bit access
-#define gpu_x0 (*(volatile uint32_t*)0xa0000000)
-#define gpu_y0 (*(volatile uint32_t*)0xa0000004)
-#define gpu_x1 (*(volatile uint32_t*)0xa0000008)
-#define gpu_y1 (*(volatile uint32_t*)0xa000000c)
-#define gpu_color (*(volatile uint32_t*)0xa0000010)
-#define gpu_start (*(volatile uint32_t*)0xa0000014)
-#define gpu_busy (*(volatile uint32_t*)0xa0000018)
-#define gpu_pixel_count (*(volatile uint32_t*)0xa000001c)
-#define gpu_debug_cur_x (*(volatile uint32_t*)0xa0000020)
-#define gpu_debug_cur_y (*(volatile uint32_t*)0xa0000024)  
-#define gpu_debug_fifo_count (*(volatile uint32_t*)0xa0000028)
+#include "../../common/zeitlos.h"
+#include "../../common/zwm.h"
+#include "../../common/zwin.h"
 
-#define gpu_clip_x0     (*(volatile uint32_t*)0xa000002c)  // Left bound
-#define gpu_clip_y0     (*(volatile uint32_t*)0xa0000030)  // Top bound  
-#define gpu_clip_x1     (*(volatile uint32_t*)0xa0000034)  // Right bound
-#define gpu_clip_y1     (*(volatile uint32_t*)0xa0000038)  // Bottom bound
-#define gpu_clip_enable (*(volatile uint32_t*)0xa000003c)  // Enable clipping
+// register access, IRQ-masked atomicity, and clip-region management
+// for the hardware line rasterizer are all handled by
+// z_win_hw_line()/z_win_hw_box() (zwin.h) now -- this file never
+// touches the gpu_*/gpu_clip_* registers directly. See zgfx.h's file
+// header comment for why that hardware access needed to move behind
+// a shared, careful implementation rather than each app managing it
+// (badly, it turned out) on its own.
 
-#define reg_usb_cursor (*(volatile uint32_t*)0xc000000c)
+// small window, similar footprint to hello_win/the resized gpu3d --
+// see wm.c's create_window() fixed cascade placement (no check
+// against window size) for why staying modest matters.
+#define WIN_WIDTH   200
+#define WIN_HEIGHT  150
 
-// UART output
-#define uart_tx (*(volatile uint8_t*)0xf0000000)
+static z_win_t win;
+static uint32_t content_x0, content_y0, content_x1, content_y1;
 
-
-uint16_t get_cursor_x() {
-    return reg_usb_cursor & 0x3FF; // bits 9:0
+static void draw_line(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1, uint8_t color) {
+	z_win_hw_line(&win, x0, y0, x1, y1, color);
 }
 
-uint16_t get_cursor_y() {
-    return (reg_usb_cursor >> 10) & 0x3FF; // bits 19:10
+static void draw_box(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1, uint8_t color) {
+	z_win_hw_box(&win, x0, y0, x1, y1, color);
 }
 
-uint8_t get_mouse_btn() {
-    return (reg_usb_cursor >> 20) & 0x0F; // bits 23:20
-}
+// content_x0/y0/x1/y1 here are for this file's own use (the static
+// pattern's inset, the bouncing box's boundaries) -- not tied to the
+// hardware clip registers at all anymore, z_win_hw_line()/
+// z_win_hw_box() compute and apply that themselves, fresh, on every
+// call. Queried via z_win_content_rect() (zwin.h) rather than
+// duplicating the content-area formula here -- that duplication is
+// exactly what caused a real bug once already (two separately-kept
+// copies of this rectangle drifting out of sync -- see
+// docs/window_manager.md).
+static void update_win_geometry(void) {
 
-void delay(void) {
-    for (volatile int i = 0; i < 1000; i++);
-}
+	z_clip_t clip;
+	z_win_content_rect(&win, &clip);
+	content_x0 = (uint32_t)clip.x0;
+	content_y0 = (uint32_t)clip.y0;
+	content_x1 = (uint32_t)clip.x1;
+	content_y1 = (uint32_t)clip.y1;
 
-void uart_putc(char c) {
-    uart_tx = c;
-    delay();
-}
-
-void uart_puts(const char *s) {
-    while (*s) {
-        uart_putc(*s++);
-    }
-}
-
-void uart_putnum(uint32_t n) {
-    char buf[12];
-    int i = 0;
-    if (n == 0) {
-        uart_putc('0');
-        return;
-    }
-    while (n > 0 && i < 11) {
-        buf[i++] = '0' + (n % 10);
-        n /= 10;
-    }
-    while (i--) uart_putc(buf[i]);
-}
-
-// Draw line with timeout
-void draw_line(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1, uint8_t color) {
-/*
-    uart_puts("Drawing line (");
-    uart_putnum(x0);
-    uart_puts(",");
-    uart_putnum(y0);
-    uart_puts(") to (");
-    uart_putnum(x1);
-    uart_puts(",");
-    uart_putnum(y1);
-    uart_puts(") color=");
-    uart_putnum(color);
-    uart_puts("... ");
-*/
-
-   // while ((gpu_busy & 1)) /* wait */;
-    while (gpu_debug_fifo_count > 15) /* wait */;
-
-    gpu_x0 = x0;
-    gpu_y0 = y0;
-    gpu_x1 = x1;
-    gpu_y1 = y1;
-    gpu_color = color & 1;
-    gpu_start = 1;
-
-/*
-    // Wait until GPU is not busy with timeout
-    int timeout = 100000;
-    while ((gpu_busy & 1) && timeout > 0) {
-        timeout--;
-        delay();
-    }
-    
-    if (timeout == 0) {
-        uart_puts("TIMEOUT!\r\n");
-    } else {
-        uart_puts("DONE (");
-        uart_putnum(gpu_pixel_count);
-        uart_puts(" pixels) final_pos=(");
-        uart_putnum(gpu_debug_cur_x);
-        uart_puts(",");
-        uart_putnum(gpu_debug_cur_y);
-        uart_puts(") states=0x");
-        
-        // Print state history as hex
-        uint32_t states = gpu_debug_state_history;
-        for (int i = 4; i >= 0; i -= 4) {
-            uint8_t digit = (states >> i) & 0xF;
-            if (digit < 10)
-                uart_putc('0' + digit);
-            else
-                uart_putc('A' + digit - 10);
-        }
-        uart_puts("\r\n");
-    }
-*/
+	printf("gpudemo: win=(%ld,%ld) %ldx%ld  content=(%ld,%ld)-(%ld,%ld)\n",
+		(long)win.x, (long)win.y, (long)win.w, (long)win.h,
+		(long)content_x0, (long)content_y0, (long)content_x1, (long)content_y1);
 
 }
 
-// Draw a box (rectangle) given top-left and bottom-right corners
-void draw_box(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1, uint8_t color) {
-    
-    // Top edge
-    draw_line(x0, y0, x1, y0, color);
-    
-    // Right edge  
-    draw_line(x1, y0, x1, y1, color);
-    
-    // Bottom edge
-    draw_line(x1, y1, x0, y1, color);
-    
-    // Left edge
-    draw_line(x0, y1, x0, y0, color);
-
+// static test pattern -- a box inset 10px from every content edge,
+// plus both diagonals. Deliberately drawn close to the content area's
+// own boundary (not tiny/centered) so any bleed past the window's
+// border would be immediately, unambiguously visible.
+static void draw_static_pattern(void) {
+	draw_box(content_x0 + 10, content_y0 + 10, content_x1 - 10, content_y1 - 10, 1);
+	draw_line(content_x0 + 10, content_y0 + 10, content_x1 - 10, content_y1 - 10, 1);
+	draw_line(content_x1 - 10, content_y0 + 10, content_x0 + 10, content_y1 - 10, 1);
 }
 
-void test_fifo_burst() {
-    uart_puts("=== FIFO Burst Test ===\r\n");
-    
-    uint32_t fifo_counts[10];
-    
-    // Issue commands and capture FIFO counts immediately
-    for (int i = 0; i < 10; i++) {
-        gpu_x0 = i * 10;
-        gpu_y0 = i * 10; 
-        gpu_x1 = i * 10 + 50;
-        gpu_y1 = i * 10 + 50;
-        gpu_color = 1;
-        gpu_start = 1;
-        
-        // Read FIFO count IMMEDIATELY after command
-        fifo_counts[i] = gpu_debug_fifo_count;
-    }
-    
-    // Now print the captured values
-    for (int i = 0; i < 10; i++) {
-        uart_puts("Cmd ");
-        uart_putnum(i);
-        uart_puts(" FIFO was ");
-        uart_putnum(fifo_counts[i]);
-        uart_puts("\r\n");
-    }
+// explicit clip test: a line from the content area's own center to a
+// corner of the FULL 512x384 screen, far outside the window in every
+// direction. If gpu_clip_enable is actually being respected by the
+// hardware, this should visibly stop dead at the window's edge --
+// nothing beyond it. If the whole line (all the way to the screen
+// corner) is visible, the clip registers aren't constraining the
+// rasterizer's output at all, regardless of what we've written to
+// them or what they read back as.
+static void draw_clip_test(void) {
+	uint32_t cx = (content_x0 + content_x1) / 2;
+	uint32_t cy = (content_y0 + content_y1) / 2;
+	printf("gpudemo: clip test line from (%lu,%lu) to screen corner (511,383) -- "
+		"should stop at the window edge if clipping works\n",
+		(unsigned long)cx, (unsigned long)cy);
+	draw_line(cx, cy, 511, 383, 1);
 }
 
 int main(void) {
-    uart_puts("=== GPU Line Drawing Box Test ===\r\n");
 
-    uart_puts("=== Drawing Box ===\r\n");
+	printf("gpudemo: hardware line rasterizer + window clip test\n");
 
-    // Draw a 100x80 box starting at (50,50)
-    draw_box(50, 50, 150, 130, 1);
-    
-    uart_puts("=== Drawing Diagonal Inside Box ===\r\n");
-    
-    // Draw diagonal from top-left to bottom-right
-    draw_line(50, 50, 150, 130, 1);
-    
-    uart_puts("=== Drawing Second Diagonal ===\r\n");
-    
-    // Draw diagonal from top-right to bottom-left
-    draw_line(150, 50, 50, 130, 1);
+	if (z_win_create(&win, "gpudemo", WIN_WIDTH, WIN_HEIGHT) != Z_OK) {
+		printf("gpudemo: failed to create window\n");
+		return 1;
+	}
 
-    uart_puts("=== Box Test Complete ===\r\n");
-    
-    uart_puts("=== Additional Line Tests ===\r\n");
-    
-    // Test some additional lines for verification
-    // Horizontal line
-    draw_line(200, 100, 300, 100, 1);
-    
-    // Vertical line
-    draw_line(250, 50, 250, 150, 1);
-    
-    // Long diagonal
-    draw_line(200, 200, 400, 300, 1);
+	update_win_geometry();
+	z_win_clear(&win);
+	draw_static_pattern();
+	draw_clip_test();
 
-	test_fifo_burst();
+	printf("gpudemo: static test pattern drawn, starting bouncing box\n");
 
-    uart_puts("=== All Tests Complete ===\r\n");
-
-
-    uart_puts("=== Enabling clipping ===\r\n");
-
-gpu_clip_x0 = 100;
-gpu_clip_y0 = 50; 
-gpu_clip_x1 = 299;  // inclusive bounds
-gpu_clip_y1 = 199;
-gpu_clip_enable = 1;
-
-	uint16_t x, y;
-	uint16_t lx, ly;
-
-	uint32_t c = 0;
+	// small bouncing box -- same erase-then-redraw pattern gpu3d
+	// uses for its cube (erase previous frame, then draw the new
+	// one), deliberately simple (fixed-size box, no 3D math, no
+	// perspective) to isolate whether that erase/redraw pattern
+	// itself is what's causing the border to get overwritten.
+	const int box_size = 16;
+	int bx = (int)content_x0 + 20, by = (int)content_y0 + 20;
+	int dx = 2, dy = 1;
+	bool first_frame = true;
+	bool redraw_pending = false;
+	uint32_t bounce_count = 0;
 
 	while (1) {
 
-		lx = x;
-		ly = y;
-
-		x = get_cursor_x() / 2;
-		y = get_cursor_y() / 2;
-
-		if (x != lx || y != ly) {
-			draw_box(lx, ly, lx + 200, ly + 100, 0);
-			draw_box(x, y, x + 200, y + 100, 1);
-
+		z_msg_t msg;
+		while (z_msg_read(&msg) == Z_OK) {
+			if (msg.subject == Z_WM_REDRAW) {
+				z_win_apply_redraw(&win, msg.obj.val.uint32);
+				update_win_geometry();
+				first_frame = true;
+				redraw_pending = true;
+			} else if (msg.subject == Z_WM_WINDOW_MOVED) {
+				z_win_parse_rect(&win, &msg.obj);
+				update_win_geometry();
+			}
 		}
-/*
-		if ((c++ % 10000) == 0) {
-        uart_puts("FIFO = ");
-        uart_putnum(gpu_debug_fifo_count);
-        uart_puts("\r\n");
+
+		if (first_frame) {
+			// wm just did a full-screen clear (per zwm.h's own
+			// comment on Z_WM_REDRAW) -- redraw everything fresh,
+			// nothing of ours is left on screen to erase
+			draw_static_pattern();
+		} else {
+			draw_box(bx, by, bx + box_size, by + box_size, 0);
 		}
-*/
-		c++;
+
+		bx += dx;
+		by += dy;
+
+		bool bounced = false;
+
+		if (bx < (int)content_x0) { bx = (int)content_x0; dx = -dx; bounced = true; }
+		else if (bx + box_size > (int)content_x1) { bx = (int)content_x1 - box_size; dx = -dx; bounced = true; }
+
+		if (by < (int)content_y0) { by = (int)content_y0; dy = -dy; bounced = true; }
+		else if (by + box_size > (int)content_y1) { by = (int)content_y1 - box_size; dy = -dy; bounced = true; }
+
+		draw_box(bx, by, bx + box_size, by + box_size, 1);
+
+		if (bounced) {
+			bounce_count++;
+			printf("gpudemo: bounce #%lu at (%d,%d), content=(%ld,%ld)-(%ld,%ld)\n",
+				(unsigned long)bounce_count, bx, by,
+				(long)content_x0, (long)content_y0, (long)content_x1, (long)content_y1);
+		}
+
+		if (redraw_pending) {
+			z_win_redraw_done(&win);
+			redraw_pending = false;
+		}
+
+		first_frame = false;
+
+		for (volatile int i = 0; i < 30000; i++) ;	// visible speed
 
 	}
 

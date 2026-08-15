@@ -22,6 +22,7 @@
 #include "zeitlos.h"
 #include "zobj.h"
 #include "zfont.h"
+#include "zgfx.h"
 
 typedef struct {
 	int32_t		id;	// -1 if creation failed
@@ -67,5 +68,32 @@ void z_win_fill_rect(const z_win_t *win, int x, int y, int w, int h, int color);
 // '\n' starts a new line. clipped to the window's own bounds. pass
 // &z_font_6x12 or &z_font_8x16 (zfont.h) for font.
 void z_win_draw_text(const z_win_t *win, int x, int y, const char *s, int color, const z_font_t *font);
+
+// the window's content area (below the titlebar, inset to clear both
+// wm's border and -- if the window is focused -- its additional bold
+// focus-border) in absolute screen coordinates. This is exactly what
+// z_win_clear()/z_win_fill_rect()/z_win_draw_text()/z_win_hw_line()
+// etc. all clip to internally -- exposed so callers that need to know
+// their own drawable bounds for something else (centering content,
+// bouncing something off the edges, and so on) can query it instead
+// of duplicating the formula themselves. That duplication is exactly
+// what caused a real, previously-shipped bug: two callers each kept
+// their own copy of this rectangle, and one of them fell out of sync
+// with a border-inset change made here. See docs/window_manager.md.
+void z_win_content_rect(const z_win_t *win, z_clip_t *out);
+
+// hardware-accelerated line/box draw via the GPU line rasterizer
+// (rtl/gpu/gpu_raster.v) -- absolute screen coordinates (unlike
+// z_win_fill_rect()/z_win_draw_text() above, which are
+// window-relative: apps drawing through the hardware rasterizer
+// typically already compute absolute coordinates themselves, e.g. a
+// 3D projection centered on the window, so this only takes over
+// clip-region and IRQ-mask management, not coordinate translation).
+// Automatically clips to the window's own content area on every call
+// -- see zgfx.h's z_fb_hw_line() for why that needed IRQ masking to
+// be safe for concurrent access from multiple processes; none of
+// that is visible here.
+void z_win_hw_line(const z_win_t *win, int x0, int y0, int x1, int y1, int color);
+void z_win_hw_box(const z_win_t *win, int x0, int y0, int x1, int y1, int color);
 
 #endif

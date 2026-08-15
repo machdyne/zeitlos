@@ -2,16 +2,18 @@
 
 ## Overview
 
-The Zeitlos GPU Blitter is a high-performance 2D graphics accelerator designed for efficient rectangular fills, sprite blitting, and text rendering. It operates on a 512×384 monochrome (1-bit-per-pixel) framebuffer with automatic clipping and word-level optimization.
+The Zeitlos GPU Blitter is a high-performance 2D graphics accelerator designed for efficient rectangular fills, sprite blitting, and text rendering. It operates on a 512×384 monochrome (1-bit-per-pixel) framebuffer, with word-level optimization and clipping available (but not automatic in every mode -- see "Clipping Behavior" and "Error Handling" below before assuming safety you haven't actually requested).
+
+For fill mode specifically, `sw/common/zgfx.c`'s `z_fb_hw_fill_rect()` is the recommended, actually-safe way to drive this hardware -- see `docs/app_runtime.md`, "The GPU blitter" and "Best Practices" below.
 
 ## Key Features
 
 - **Hardware-accelerated rectangular fills**
-- **Automatic screen boundary clipping**
+- **Screen boundary clipping when `CTRL_CLIP` is requested** -- not automatic otherwise; see "Clipping Behavior" below
 - **Word-level optimization with pixel-precise masking**
 - **Simple memory-mapped register interface**
 - **Optimized for font rendering (6×12 characters)**
-- **Safe operation with bounds checking**
+- **`z_fb_hw_fill_rect()` (fill mode only) adds real, unconditional bounds safety and cross-process protection on top of the raw hardware -- see "Best Practices" below**
 
 ## Memory Map
 
@@ -216,6 +218,24 @@ When `CTRL_CLIP` is enabled, the blitter automatically:
 - Prevents buffer overruns
 - Uses pixel-level masks for partial word operations
 
+**This is conditional, not automatic in the unqualified sense the
+name suggests.** With `CTRL_CLIP` *not* set (which the "Best
+Practices"/"Optimize Common Operations" sections below recommend for
+"known-safe" operations), `ST_CLIP` in `gpu_blit.v` computes the
+destination address directly from the raw, unvalidated
+`dst_x`/`dst_y`/`width`/`height` -- no bounds check of any kind. Worse,
+`ST_WAIT_READ`/`ST_WAIT_WRITE` wait on the framebuffer bus's ack with
+no timeout of their own, so an out-of-range destination this way can
+hang the blitter's hardware state machine forever, not just produce a
+wrong pixel. See `sw/common/zgfx.c`'s `z_fb_hw_fill_rect()` and
+`docs/app_runtime.md`, "The GPU blitter" for the actual fix
+(coordinates clamped to the real screen bounds *unconditionally*,
+regardless of `CTRL_CLIP`) -- **that function, not raw register
+writes, is the safe way to drive fill mode now**; the raw-register
+examples throughout this document (including immediately below)
+predate that fix and no longer reflect the recommended way to use
+this hardware.
+
 ### Examples
 
 ```c
@@ -238,21 +258,31 @@ The `BLIT_PATTERN` register accepts 32-bit values:
 
 ## Error Handling
 
-The blitter is designed to be robust:
-- **Out-of-bounds coordinates**: Safely clipped
-- **Zero dimensions**: Operation completes immediately
-- **Negative coordinates**: Handled by clipping
+The blitter's design *intent* is to be robust, but see "Automatic
+Clipping" above before relying on any of this -- most of it holds
+only when `CTRL_CLIP` is actually set:
+- **Out-of-bounds coordinates**: Safely clipped -- *only if
+  `CTRL_CLIP` is set*. Otherwise unchecked, and can hang the
+  hardware state machine (see above).
+- **Zero dimensions**: Operation completes immediately.
+- **Negative coordinates**: Handled by clipping -- same `CTRL_CLIP`
+  caveat as above.
 - **Concurrent register access**: NOT arbitrated between processes.
   The Wishbone bus serializes individual read/write transactions, but
   nothing stops two processes from interleaving their own register
   writes if both try to set up a blit operation at once -- one
   process's dst_x/dst_y/etc. writes could land in between another's,
   corrupting both operations. Same class of problem as the GPU line
-  rasterizer's shared clip register, discussed in
-  `docs/window_manager.md`'s "GPU arbitration" limitation -- currently
-  unsolved in general, and the reason `zgfx.c`'s hardware glyph path
-  is the only thing driving this register set in practice, from a
-  single process at a time.
+  rasterizer's shared clip register. **Fixed for fill mode** by
+  `sw/common/zgfx.c`'s `z_fb_hw_fill_rect()` (IRQ-masked
+  register-writes-then-trigger sequence, coordinates clamped
+  unconditionally regardless of `CTRL_CLIP`) -- see
+  `docs/app_runtime.md`, "The GPU blitter" for the full writeup.
+  **Still open for glyph mode**: `zgfx.c`'s hardware glyph path
+  (`z_fb_draw_char()`/`z_fb_draw_text()`) shares these same registers
+  but isn't `maskirq()`-protected, so a fill from one process and a
+  glyph blit from another could still interleave badly. Not unified
+  with the fill-mode fix yet.
 
 ## Bugs found (and fixed) during hardware bring-up
 
@@ -282,6 +312,16 @@ since both were subtle and easy to reintroduce:
 
 ## Best Practices
 
+**Use `sw/common/zgfx.c`'s `z_fb_hw_fill_rect()` for fill mode rather
+than the raw register sequences below.** It does everything "Always
+Wait for Completion" and "Use Clipping for Safety" describe, plus the
+two things raw register access can't: coordinates clamped to the
+actual screen bounds *unconditionally* (not just when `CTRL_CLIP` is
+requested), and the register-writes-then-trigger sequence protected
+against interleaving with another process's own writes. The
+raw-register examples below are kept for reference/understanding the
+hardware, not as a recommended way to drive it directly anymore.
+
 ### 1. Always Wait for Completion
 ```c
 // Wrong - may corrupt operations
@@ -299,8 +339,15 @@ fill_rect(20, 20, 10, 10, PATTERN_WHITE);
 // Recommended for user input or dynamic coordinates
 BLIT_CTRL = CTRL_START | CTRL_FILL | CTRL_CLIP;
 
-// Only disable clipping for known-safe operations
-BLIT_CTRL = CTRL_START | CTRL_FILL;  // Slightly faster
+// Skipping CTRL_CLIP is NOT just "slightly faster with a bit less
+// safety" -- the unclipped path has no bounds check of any kind, and
+// an out-of-range destination can hang the hardware state machine
+// forever (see "Automatic Clipping" above). Only ever skip this for
+// coordinates you can prove are always in-range by construction (a
+// fixed, compile-time-constant full-screen clear, say) -- and even
+// then, z_fb_hw_fill_rect() (which clamps regardless of CTRL_CLIP)
+// removes the need to make that judgment call at all.
+BLIT_CTRL = CTRL_START | CTRL_FILL;
 ```
 
 ### 3. Optimize Common Operations

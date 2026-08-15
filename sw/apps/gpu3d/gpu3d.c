@@ -1,24 +1,18 @@
 #include <stdio.h>
 #include <stdint.h>
+#include <stdbool.h>
 
-// Register offsets - using 32-bit access
-#define gpu_x0 (*(volatile uint32_t*)0xa0000000)
-#define gpu_y0 (*(volatile uint32_t*)0xa0000004)
-#define gpu_x1 (*(volatile uint32_t*)0xa0000008)
-#define gpu_y1 (*(volatile uint32_t*)0xa000000c)
-#define gpu_color (*(volatile uint32_t*)0xa0000010)
-#define gpu_start (*(volatile uint32_t*)0xa0000014)
-#define gpu_busy (*(volatile uint32_t*)0xa0000018)
-#define gpu_pixel_count (*(volatile uint32_t*)0xa000001c)
-#define gpu_debug_cur_x (*(volatile uint32_t*)0xa0000020)
-#define gpu_debug_cur_y (*(volatile uint32_t*)0xa0000024)  
-#define gpu_debug_fifo_count (*(volatile uint32_t*)0xa0000028)
+#include "../../common/zeitlos.h"
+#include "../../common/zwm.h"
+#include "../../common/zwin.h"
 
-#define gpu_clip_x0     (*(volatile uint32_t*)0xa000002c)  // Left bound
-#define gpu_clip_y0     (*(volatile uint32_t*)0xa0000030)  // Top bound  
-#define gpu_clip_x1     (*(volatile uint32_t*)0xa0000034)  // Right bound
-#define gpu_clip_y1     (*(volatile uint32_t*)0xa0000038)  // Bottom bound
-#define gpu_clip_enable (*(volatile uint32_t*)0xa000003c)  // Enable clipping
+// register access, IRQ-masked atomicity, and clip-region management
+// for the hardware line rasterizer are all handled by
+// z_win_hw_line() (zwin.h) now -- this file never touches the
+// gpu_*/gpu_clip_* registers directly. See zgfx.h's file header
+// comment for why that hardware access needed to move behind a
+// shared, careful implementation rather than each app managing it
+// (badly, it turned out) on its own.
 
 #define reg_usb_cursor (*(volatile uint32_t*)0xc000000c)
 
@@ -68,9 +62,52 @@ typedef struct {
 // Screen configuration (adjust to match your display)
 #define SCREEN_WIDTH 512
 #define SCREEN_HEIGHT 384
-#define SCREEN_CENTER_X (SCREEN_WIDTH/2)
-#define SCREEN_CENTER_Y (SCREEN_HEIGHT/2)
-#define PROJECTION_DISTANCE INT_TO_FIXED(300)
+// scaled down along with WIN_WIDTH/HEIGHT below -- was 300 for the
+// original full-screen (512x384) version. Projected extent scales
+// linearly with this value (z_offset is independent of it), so this
+// was derived directly from the same numeric sweep referenced below:
+// 300 gave a ~111px worst-case extent; 140 gives ~52px, verified
+// against the smaller window's own content-area size.
+#define PROJECTION_DISTANCE INT_TO_FIXED(140)
+
+// window size requested from the wm -- similar footprint to
+// hello_win (160x100) rather than the earlier 320x320, which turned
+// out to be large enough that the wm's window placement (a fixed
+// cascade with no check against window size -- see wm.c's
+// create_window()) could push it partially off the 384px-tall
+// screen. 160x160 (square, suited to a cube rather than text) fits
+// safely regardless of cascade position. PROJECTION_DISTANCE above
+// was rescaled to match -- see update_win_geometry()'s content-area
+// math: worst-case projected extent is ~52px against a ~72-78px
+// content-area half-extent here, comfortable margin either way.
+#define WIN_WIDTH   160
+#define WIN_HEIGHT  160
+
+static z_win_t win;
+
+// projection center -- was a fixed SCREEN_CENTER_X/Y compile-time
+// constant before windowing (the screen's own center); now tracks
+// the window's content area instead, recomputed by
+// update_win_geometry() below whenever the window is created or
+// moved.
+static int win_center_x, win_center_y;
+
+// content-area bounds, for centering the projection. z_win_hw_line()
+// (zwin.h) computes and applies this same rectangle to the hardware
+// clip registers itself, on every call -- this file only needs it
+// for the projection math below, via the same z_win_content_rect()
+// call zwin.c's own drawing functions use internally, rather than
+// keeping a separate, possibly-drifting copy of the formula (which
+// is exactly what happened before this -- see docs/window_manager.md).
+static void update_win_geometry(void) {
+
+	z_clip_t clip;
+	z_win_content_rect(&win, &clip);
+
+	win_center_x = (int)((clip.x0 + clip.x1) / 2);
+	win_center_y = (int)((clip.y0 + clip.y1) / 2);
+
+}
 
 // ============================================================================
 // FIXED-POINT MATH FUNCTIONS
@@ -235,8 +272,8 @@ vertex2d_t project_vertex(vertex3d_t v) {
     if (z_offset <= FLOAT_TO_FIXED(0.1)) z_offset = FLOAT_TO_FIXED(0.1);
     
     // Perspective projection
-    result.x = SCREEN_CENTER_X + FIXED_TO_INT(fixed_div(fixed_mul(v.x, PROJECTION_DISTANCE), z_offset));
-    result.y = SCREEN_CENTER_Y - FIXED_TO_INT(fixed_div(fixed_mul(v.y, PROJECTION_DISTANCE), z_offset));
+    result.x = win_center_x + FIXED_TO_INT(fixed_div(fixed_mul(v.x, PROJECTION_DISTANCE), z_offset));
+    result.y = win_center_y - FIXED_TO_INT(fixed_div(fixed_mul(v.y, PROJECTION_DISTANCE), z_offset));
     
     return result;
 }
@@ -289,45 +326,39 @@ void delay(void) {
     for (volatile int i = 0; i < 1000; i++);
 }
 
-void uart_putc(char c) {
+void gpu3d_uart_putc(char c) {
     uart_tx = c;
     delay();
 }
 
-void uart_puts(const char *s) {
+void gpu3d_uart_puts(const char *s) {
     while (*s) {
-        uart_putc(*s++);
+        gpu3d_uart_putc(*s++);
     }
 }
 
-void uart_putnum(uint32_t n) {
+void gpu3d_uart_putnum(uint32_t n) {
     char buf[12];
     int i = 0;
     if (n == 0) {
-        uart_putc('0');
+        gpu3d_uart_putc('0');
         return;
     }
     while (n > 0 && i < 11) {
         buf[i++] = '0' + (n % 10);
         n /= 10;
     }
-    while (i--) uart_putc(buf[i]);
+    while (i--) gpu3d_uart_putc(buf[i]);
 }
 
 // Draw line with timeout
 void draw_line(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1, uint8_t color) {
-
-    while (gpu_debug_fifo_count > 15) /* wait */;
-
-    gpu_x0 = x0;
-    gpu_x0 = x0;
-    gpu_y0 = y0;
-    gpu_x1 = x1;
-    gpu_y1 = y1;
-    gpu_color = color & 1;
-    gpu_clip_enable = 0;
-    gpu_start = 1;
-
+    // z_win_hw_line() (zwin.h) handles the FIFO-wait, clip-region
+    // setup, and IRQ-masked atomicity -- kept as a thin wrapper under
+    // this same name/signature so every existing call site in this
+    // file (including the unused demo functions further down) stays
+    // unchanged.
+    z_win_hw_line(&win, x0, y0, x1, y1, color);
 }
 
 
@@ -345,7 +376,7 @@ void simple_delay(int cycles) {
 
 // Demo 1: Single spinning cube
 void demo_spinning_cube(int frames) {
-    uart_puts("Demo: Spinning Cube\r\n");
+    gpu3d_uart_puts("Demo: Spinning Cube\r\n");
     
     for (int frame = 0; frame < frames; frame++) {
         int angle = (frame * 2) % 360;
@@ -358,7 +389,7 @@ void demo_spinning_cube(int frames) {
 
 // Demo 2: Multiple objects cycling
 void demo_morphing_objects(int frames) {
-    uart_puts("Demo: Morphing Objects\r\n");
+    gpu3d_uart_puts("Demo: Morphing Objects\r\n");
     
     object3d_t *objects[] = {&cube, &tetrahedron, &octahedron};
     int num_objects = 3;
@@ -378,7 +409,7 @@ void demo_morphing_objects(int frames) {
 
 // Demo 3: Complex animation with varying speeds
 void demo_complex_animation(int frames) {
-    uart_puts("Demo: Complex Animation\r\n");
+    gpu3d_uart_puts("Demo: Complex Animation\r\n");
     
     for (int frame = 0; frame < frames; frame++) {
         // Use different angle calculations for organic movement
@@ -400,7 +431,7 @@ void demo_complex_animation(int frames) {
 
 // Test basic line drawing
 void test_basic_lines() {
-    uart_puts("Testing basic line drawing...\r\n");
+    gpu3d_uart_puts("Testing basic line drawing...\r\n");
     
     
     // Draw some test lines
@@ -414,21 +445,21 @@ void test_basic_lines() {
     draw_line(350, 250, 250, 250, 1); // Bottom
     draw_line(250, 250, 250, 150, 1); // Left
     
-    uart_puts("Basic lines drawn\r\n");
+    gpu3d_uart_puts("Basic lines drawn\r\n");
 }
 
 // Test projection without rotation
 void test_projection() {
-    uart_puts("Testing projection...\r\n");
+    gpu3d_uart_puts("Testing projection...\r\n");
     
     vertex3d_t test_vertex = {INT_TO_FIXED(0), INT_TO_FIXED(0), INT_TO_FIXED(0)};
     vertex2d_t projected = project_vertex(test_vertex);
     
-    uart_puts("Center point projects to: ");
-    uart_putnum(projected.x);
-    uart_puts(", ");
-    uart_putnum(projected.y);
-    uart_puts("\r\n");
+    gpu3d_uart_puts("Center point projects to: ");
+    gpu3d_uart_putnum(projected.x);
+    gpu3d_uart_puts(", ");
+    gpu3d_uart_putnum(projected.y);
+    gpu3d_uart_puts("\r\n");
     
     // Draw a point at the projected center
     draw_line(projected.x, projected.y, projected.x, projected.y, 1);
@@ -457,15 +488,42 @@ void run_3d_demos() {
 
 // Ultra-fast cube with bigger angle steps
 void infinite_spinning_cube() {
-    uart_puts("Starting FAST spinning cube demo...\r\n");
-    
-    gpu_clip_enable = 0;
-    
+    printf("Starting FAST spinning cube demo...\r\n");
+
     int angle_x = 0, angle_y = 0, angle_z = 0;
     vertex2d_t prev_projected[8];
     int first_frame = 1;
-    
+    bool redraw_pending = false;	// a Z_WM_REDRAW arrived; call
+					// z_win_redraw_done() once this
+					// frame finishes drawing (see
+					// docs/window_manager.md, "content
+					// z-order")
+
     while (1) {
+
+	// non-blocking message drain, same shape as hello_win's
+	// drain_messages(). Z_WM_REDRAW means the wm just did a
+	// full-screen clear (per zwm.h's own comment on that subject),
+	// so there's nothing of ours left on screen to erase --
+	// first_frame=1 skips straight to drawing a fresh frame at the
+	// (possibly new) window position, reusing the same mechanism
+	// that already exists below for the very first frame ever
+	// drawn. Z_WM_WINDOW_MOVED updates window position/geometry the
+	// same way but is deliberately not its own redraw trigger --
+	// same reasoning as hello_win's drain_messages().
+	z_msg_t msg;
+	while (z_msg_read(&msg) == Z_OK) {
+		if (msg.subject == Z_WM_REDRAW) {
+			z_win_apply_redraw(&win, msg.obj.val.uint32);
+			update_win_geometry();
+			first_frame = 1;
+			redraw_pending = true;
+		} else if (msg.subject == Z_WM_WINDOW_MOVED) {
+			z_win_parse_rect(&win, &msg.obj);
+			update_win_geometry();
+		}
+	}
+
         vertex2d_t curr_projected[8];
         for (int i = 0; i < 8; i++) {
             vertex3d_t transformed = rotate_vertex(cube_vertices[i], angle_x, angle_y, angle_z);
@@ -493,6 +551,11 @@ void infinite_spinning_cube() {
                 draw_line(v0.x, v0.y, v1.x, v1.y, 1);
             }
         }
+
+	if (redraw_pending) {
+		z_win_redraw_done(&win);
+		redraw_pending = false;
+	}
         
         for (int i = 0; i < 8; i++) {
             prev_projected[i] = curr_projected[i];
@@ -505,27 +568,24 @@ void infinite_spinning_cube() {
         angle_y = (angle_y + 7) % 360;  // 15 degree steps
         angle_z = (angle_z + 3) % 360;   // 8 degree steps
 
-	//		simple_delay(1000);
-
     }
 }
 
 // Main function - choose which demo to run
 int main() {
-    uart_puts("3D Spinning Object Demo - Fixed Point Version\r\n");
-    uart_puts("Using hardware line rasterizer\r\n");
+    printf("3D Spinning Object Demo - Fixed Point Version\r\n");
+    printf("Using hardware line rasterizer\r\n");
 
-		clear_screen();
-   
+    if (z_win_create(&win, "gpu3d", WIN_WIDTH, WIN_HEIGHT) != Z_OK) {
+        printf("gpu3d: failed to create window\r\n");
+        return 1;
+    }
 
-//test_basic_lines();
- 
-    // Option 1: Run finite demos
- //   run_3d_demos();
-    
-    // Option 2: Run infinite spinning cube (uncomment to use)
+    update_win_geometry();
+    z_win_clear(&win);
+
     infinite_spinning_cube();
-    
+
     return 0;
 }
 

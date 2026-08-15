@@ -1,6 +1,6 @@
 
 PREFIX = /opt/riscv32i/bin/riscv32-unknown-elf-
-ARCH = rv32i
+ARCH = rv32im
 CC = $(PREFIX)gcc
 AS = $(PREFIX)as
 ASFLAGS = -march=$(ARCH) -mabi=ilp32
@@ -8,7 +8,7 @@ CFLAGS = --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=ilp32
 LDFLAGS =
 LDSCRIPT = ../../common/riscv-app.ld
 
-OBJS = zeitlos.o zobj.o wm.o
+OBJS = zeitlos.o zobj.o zgfx.o wm.o
 
 wm: wm.elf wm.bin
 
@@ -17,6 +17,9 @@ zeitlos.o:
 
 zobj.o:
 	$(CC) $(CFLAGS) -c ../../common/zobj.c -o zobj.o
+
+zgfx.o:
+	$(CC) $(CFLAGS) -c ../../common/zgfx.c -o zgfx.o
 
 wm.o:
 	$(CC) $(CFLAGS) -c wm.c -o wm.o

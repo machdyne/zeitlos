@@ -1,4 +1,3 @@
-
 PREFIX = riscv32-unknown-elf-
 ARCH = rv32i
 CC = $(PREFIX)gcc
@@ -8,11 +7,23 @@ CFLAGS = --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=ilp32
 LDFLAGS = 
 LDSCRIPT = ../../common/riscv-app.ld
 
-OBJS = gpudemo.o
+OBJS = zeitlos.o zobj.o zgfx.o zwin.o gpudemo.o
 
 gpudemo: gpudemo.elf gpudemo.bin
 
-gpudemo.o:
+zeitlos.o: ../../common/zeitlos.c ../../common/zeitlos.h
+	$(CC) $(CFLAGS) -c ../../common/zeitlos.c -o zeitlos.o
+
+zobj.o: ../../common/zobj.c ../../common/zobj.h
+	$(CC) $(CFLAGS) -c ../../common/zobj.c -o zobj.o
+
+zgfx.o: ../../common/zgfx.c ../../common/zgfx.h
+	$(CC) $(CFLAGS) -c ../../common/zgfx.c -o zgfx.o
+
+zwin.o: ../../common/zwin.c ../../common/zwin.h
+	$(CC) $(CFLAGS) -c ../../common/zwin.c -o zwin.o
+
+gpudemo.o: gpudemo.c
 	$(CC) $(CFLAGS) -c gpudemo.c -o gpudemo.o
 	$(CC) $(CFLAGS) -c gpudemo.c -S -o gpudemo.asm
 
@@ -25,7 +36,6 @@ gpudemo.bin: gpudemo.elf
 	$(PREFIX)objcopy -O binary --pad-to=$$END gpudemo.elf gpudemo.bin
 
 clean:
-	rm -f gpudemo.elf gpudemo.bin gpudemo.asm gpudemo.dasm gpudemo.map gpudemo.o *.o *.d
+	rm -f gpudemo.elf gpudemo.bin gpudemo.asm gpudemo.dasm gpudemo.map *.o *.d
 
 .PHONY: gpudemo clean
-

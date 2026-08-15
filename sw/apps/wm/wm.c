@@ -24,13 +24,12 @@
 
 #include "../../common/zeitlos.h"
 #include "../../common/zwm.h"
+#include "../../common/zgfx.h"
 
 #define WM_MAX_WINDOWS    16
 #define WM_SCREEN_W       512
 #define WM_SCREEN_H       384
 #define WM_TITLE_MAX      24
-
-#define WM_VRAM ((volatile uint32_t *)0x20000000)
 
 typedef struct {
 	bool		used;
@@ -62,24 +61,17 @@ static void send_redraw(uint32_t to, int idx) {
 }
 
 // -- gpu / screen --
-
-static inline void gpu_wait_fifo(void) {
-	while (gpu_debug_fifo_count > 15) /* wait */;
-}
-
-static void draw_line(int x0, int y0, int x1, int y1, int color) {
-	gpu_wait_fifo();
-	gpu_x0 = x0;
-	gpu_y0 = y0;
-	gpu_x1 = x1;
-	gpu_y1 = y1;
-	gpu_color = color & 1;
-	gpu_start = 1;
-}
+//
+// chrome (border/titlebar) drawing goes through zgfx.h's
+// z_fb_hw_line()/z_fb_hw_box() now, not a local copy of this logic --
+// see zgfx.h's file header comment for why that needed IRQ masking to
+// be safe for concurrent access from multiple processes (gpu3d/
+// gpudemo also draw through the same hardware rasterizer while they
+// run). clip=NULL below: wm always draws chrome unclipped, at
+// coordinates it already knows are valid.
 
 static void clear_screen(void) {
-	for (int i = 0; i < (WM_SCREEN_W * WM_SCREEN_H) / 32; i++)
-		WM_VRAM[i] = 0;
+	z_fb_hw_fill_rect(0, 0, WM_SCREEN_W, WM_SCREEN_H, 0);
 }
 
 static void draw_window_box(wm_window_t *w, bool is_focused, int color) {
@@ -88,20 +80,14 @@ static void draw_window_box(wm_window_t *w, bool is_focused, int color) {
 	int x1 = w->x + w->w - 1, y1 = w->y + w->h - 1;
 	int ty = w->y + Z_WM_TITLEBAR_H;
 
-	draw_line(x0, y0, x1, y0, color);	// top
-	draw_line(x1, y0, x1, y1, color);	// right
-	draw_line(x1, y1, x0, y1, color);	// bottom
-	draw_line(x0, y1, x0, y0, color);	// left
-	draw_line(x0, ty, x1, ty, color);	// titlebar separator
+	z_fb_hw_box(x0, y0, x1, y1, color, NULL);
+	z_fb_hw_line(x0, ty, x1, ty, color, NULL);	// titlebar separator
 
 	if (is_focused) {
 		// bolder border for the focused window -- a 1px inset outline.
 		// text rendering isn't wired up yet (see docs/window_manager.md),
 		// so this is the only visual focus indicator for now.
-		draw_line(x0 + 1, y0 + 1, x1 - 1, y0 + 1, color);
-		draw_line(x1 - 1, y0 + 1, x1 - 1, y1 - 1, color);
-		draw_line(x1 - 1, y1 - 1, x0 + 1, y1 - 1, color);
-		draw_line(x0 + 1, y1 - 1, x0 + 1, y0 + 1, color);
+		z_fb_hw_box(x0 + 1, y0 + 1, x1 - 1, y1 - 1, color, NULL);
 	}
 
 }
@@ -113,21 +99,17 @@ static bool rects_overlap(int ax, int ay, int aw, int ah,
 }
 
 static void fill_rect(int x, int y, int w, int h, int color) {
-
-	for (int j = 0; j < h; j++) {
-		int py = y + j;
-		if (py < 0 || py >= WM_SCREEN_H) continue;
-		for (int i = 0; i < w; i++) {
-			int px = x + i;
-			if (px < 0 || px >= WM_SCREEN_W) continue;
-			uint32_t bit_index = (uint32_t)py * WM_SCREEN_W + (uint32_t)px;
-			uint32_t word_index = bit_index / 32;
-			uint32_t mask = 1U << (bit_index % 32);
-			if (color) WM_VRAM[word_index] |= mask;
-			else WM_VRAM[word_index] &= ~mask;
-		}
-	}
-
+	// hardware blitter fill (zgfx.h) instead of a software VRAM loop
+	// now -- see docs/gpu_blitter.md and docs/app_runtime.md, "The
+	// GPU line rasterizer" (the fill-mode writeup applies the same
+	// reasoning) for why this matters beyond raw speed: this used to
+	// be a tight, uninterrupted software loop spanning many timer
+	// ticks for anything but a small rect, which turned out to be
+	// implicated in an intermittent crash during exactly this kind of
+	// sustained, CPU-bound looping (see boot_picorv32.S's irq_stack
+	// comment). z_fb_hw_fill_rect() finishes the same fill in a
+	// small, roughly constant number of hardware operations instead.
+	z_fb_hw_fill_rect(x, y, w, h, color);
 }
 
 // bound on how long repair_region() will block waiting for one app to
@@ -177,9 +159,21 @@ static void wait_for_redraw_done(uint32_t pid) {
 // app redraws whenever its process happens to get scheduled, with no
 // guarantee that's in z-order. see docs/window_manager.md, "targeted
 // redraw" and "content z-order".
-static void repair_region(int rx, int ry, int rw, int rh) {
+//
+// exclude_idx: skip the redraw-notify+wait step for this one window
+// index (still draws its chrome), or -1 to not exclude anything. only
+// needed right after create_window() -- see its caller below: that
+// window's owner is still blocked waiting for Z_WM_WINDOW_CREATED at
+// this point, so it isn't listening for Z_WM_REDRAW yet and couldn't
+// possibly reply, which would otherwise stall every window creation
+// for the full wait_for_redraw_done() timeout.
+static void repair_region(int rx, int ry, int rw, int rh, int exclude_idx) {
 
 	fill_rect(rx, ry, rw, rh, 0);
+
+	// temporary diagnostic -- isolating whether a hang is inside
+	// fill_rect() itself or the loop below. remove once resolved.
+	printf("wm: repair_region: fill_rect(%d,%d,%d,%d) done\n", rx, ry, rw, rh);
 
 	for (int i = 0; i < zorder_count; i++) {
 		int idx = zorder[i];
@@ -187,8 +181,13 @@ static void repair_region(int rx, int ry, int rw, int rh) {
 		if (!rects_overlap(rx, ry, rw, rh,
 			(int)w->x, (int)w->y, (int)w->w, (int)w->h))
 			continue;
+		// temporary diagnostic instrumentation -- see repair_drag()'s
+		// own comment. remove once resolved.
+		printf("wm: repair_region: draw_window_box idx=%d (%ld,%ld,%ld,%ld) focused=%d\n",
+			idx, (long)w->x, (long)w->y, (long)w->w, (long)w->h, idx == focused);
 		draw_window_box(w, idx == focused, 1);
 		if (w->owner_pid == Z_PID_WM) continue;
+		if (idx == exclude_idx) continue;
 		send_redraw(w->owner_pid, idx);
 		wait_for_redraw_done(w->owner_pid);
 	}
@@ -302,7 +301,7 @@ static void destroy_window(uint32_t id) {
 
 	// window is already removed from windows[]/zorder above, so this
 	// only redraws/notifies whatever else was overlapping its old spot
-	repair_region(ox, oy, ow, oh);
+	repair_region(ox, oy, ow, oh, -1);
 
 }
 
@@ -370,11 +369,19 @@ static void handle_message(z_msg_t *msg) {
 			if (ho && ho->type == Z_UINT32) h = ho->val.uint32;
 
 			int idx = create_window(msg->from, title, w, h);
-			send_win_rect(msg->from, Z_WM_WINDOW_CREATED, msg->tag, idx);
 
+			// draw this window's chrome (and repair anything it now
+			// covers) BEFORE replying -- otherwise the owner's
+			// z_win_create() can return, and its first drawing calls
+			// can run, before the wm has drawn so much as a border
+			// or titlebar for it at all. exclude_idx=idx: see
+			// repair_region()'s own comment for why this window
+			// specifically must skip the redraw-notify+wait step.
 			if (idx >= 0)
 				repair_region(windows[idx].x, windows[idx].y,
-					windows[idx].w, windows[idx].h);
+					windows[idx].w, windows[idx].h, idx);
+
+			send_win_rect(msg->from, Z_WM_WINDOW_CREATED, msg->tag, idx);
 
 			break;
 
@@ -421,14 +428,36 @@ static void repair_drag(int dragged_idx) {
 	wm_window_t *w = &windows[dragged_idx];
 	int fx = (int)w->x, fy = (int)w->y, fw = (int)w->w, fh = (int)w->h;
 
-	if (drag_min_y < fy)
-		repair_region(drag_min_x, drag_min_y, drag_max_x - drag_min_x, fy - drag_min_y);
-	if (fy + fh < drag_max_y)
-		repair_region(drag_min_x, fy + fh, drag_max_x - drag_min_x, drag_max_y - (fy + fh));
-	if (drag_min_x < fx)
-		repair_region(drag_min_x, fy, fx - drag_min_x, fh);
-	if (fx + fw < drag_max_x)
-		repair_region(fx + fw, fy, drag_max_x - (fx + fw), fh);
+	// temporary diagnostic instrumentation -- tracking down a
+	// sometimes-crash-on-release bug. low frequency (once per drag
+	// release, not per drag-update step), so shouldn't itself
+	// perturb timing the way heavier instrumentation has elsewhere
+	// in this project's history. remove once resolved.
+	printf("wm: repair_drag win %d final=(%d,%d,%d,%d) swept=(%d,%d)-(%d,%d)\n",
+		dragged_idx, fx, fy, fw, fh, drag_min_x, drag_min_y, drag_max_x, drag_max_y);
+
+	if (drag_min_y < fy) {
+		printf("wm: repair_drag: top strip (%d,%d,%d,%d)\n",
+			drag_min_x, drag_min_y, drag_max_x - drag_min_x, fy - drag_min_y);
+		repair_region(drag_min_x, drag_min_y, drag_max_x - drag_min_x, fy - drag_min_y, -1);
+	}
+	if (fy + fh < drag_max_y) {
+		printf("wm: repair_drag: bottom strip (%d,%d,%d,%d)\n",
+			drag_min_x, fy + fh, drag_max_x - drag_min_x, drag_max_y - (fy + fh));
+		repair_region(drag_min_x, fy + fh, drag_max_x - drag_min_x, drag_max_y - (fy + fh), -1);
+	}
+	if (drag_min_x < fx) {
+		printf("wm: repair_drag: left strip (%d,%d,%d,%d)\n",
+			drag_min_x, fy, fx - drag_min_x, fh);
+		repair_region(drag_min_x, fy, fx - drag_min_x, fh, -1);
+	}
+	if (fx + fw < drag_max_x) {
+		printf("wm: repair_drag: right strip (%d,%d,%d,%d)\n",
+			fx + fw, fy, drag_max_x - (fx + fw), fh);
+		repair_region(fx + fw, fy, drag_max_x - (fx + fw), fh, -1);
+	}
+
+	printf("wm: repair_drag: strips done\n");
 
 	if (w->owner_pid != Z_PID_WM) {
 		send_redraw(w->owner_pid, dragged_idx);
@@ -457,9 +486,9 @@ int main(void) {
 	int demo1 = create_window(Z_PID_WM, "Window 1", 140, 100);
 	int demo2 = create_window(Z_PID_WM, "Window 2", 140, 100);
 	if (demo1 >= 0)
-		repair_region(windows[demo1].x, windows[demo1].y, windows[demo1].w, windows[demo1].h);
+		repair_region(windows[demo1].x, windows[demo1].y, windows[demo1].w, windows[demo1].h, -1);
 	if (demo2 >= 0)
-		repair_region(windows[demo2].x, windows[demo2].y, windows[demo2].w, windows[demo2].h);
+		repair_region(windows[demo2].x, windows[demo2].y, windows[demo2].w, windows[demo2].h, -1);
 
 	uint8_t last_btn = 0;
 
@@ -505,11 +534,11 @@ int main(void) {
 
 				if (focus_changed && old_focused >= 0)
 					repair_region(windows[old_focused].x, windows[old_focused].y,
-						windows[old_focused].w, windows[old_focused].h);
+						windows[old_focused].w, windows[old_focused].h, -1);
 
 				if (focus_changed || reordered)
 					repair_region(windows[hit].x, windows[hit].y,
-						windows[hit].w, windows[hit].h);
+						windows[hit].w, windows[hit].h, -1);
 
 				if (hit_titlebar(hit, cy)) {
 					dragging = hit;

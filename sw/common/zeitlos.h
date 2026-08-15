@@ -85,6 +85,32 @@ typedef uint32_t *(*z_kernel_ptr_t)(uint32_t, uint32_t *, uint32_t);
 
 #define reg_mtu (*(volatile uint32_t*)0x90000000)
 
+// PicoRV32's maskirq custom instruction -- a raw CPU instruction, not
+// privilege-gated, no syscall needed, safe for any app to use
+// directly. Returns the *previous* mask (so callers can restore it
+// afterward) and sets the new one. Same definition as sw/os/kernel.h's
+// kernel-side copy (that one's kept separate since the kernel doesn't
+// otherwise depend on zeitlos.h). Originally lived only in
+// sw/apps/net/enc28j60.c (to protect SPI bit-bang transactions from
+// interrupt preemption -- a timer/UART IRQ firing mid-transaction
+// stretches a clock pulse by however long the interrupt takes to
+// service, a real SPI timing violation); moved here once zgfx.c's
+// hardware line rasterizer support needed the same pattern, for the
+// same underlying reason: a handful of MMIO register writes plus a
+// trigger need to complete as one atomic unit, since the rasterizer's
+// registers (rtl/gpu/gpu_raster.v) are global, shared peripheral
+// state with no per-process isolation -- see zgfx.c's z_fb_hw_line().
+static inline uint32_t maskirq(uint32_t new_mask) {
+	uint32_t old_mask;
+	__asm__ volatile (
+		".insn r 0x0B, 0x6, 0x03, %0, %1, zero"
+		: "=r"(old_mask)
+		: "r"(new_mask)
+		: "memory"
+	);
+	return old_mask;
+}
+
 // --
 
 int getch(void);

@@ -38,6 +38,7 @@
 `define MEM_SDRAM
 `define MEM_VRAM
 `define MEM_ROM
+`define MEM_GLYPH
 `define GPU
 `define GPU_RASTER
 `define GPU_BLIT
@@ -47,7 +48,6 @@
 `define UART0
 `define USB_HID
 `define SPI_SDCARD
-`define SPI_FLASH
 
 `elsif BOARD_LEBKUCHEN
 
