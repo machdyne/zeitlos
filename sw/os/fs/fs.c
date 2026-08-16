@@ -25,7 +25,7 @@ int fs_load(uint32_t dst, char *path) {
 
 	sz = f_size(&f);
 
-	printf("loading %li bytes ...\n", sz);
+	// printf("loading %li bytes ...\n", sz);
 
 	int blks = sz / 1024;
 
