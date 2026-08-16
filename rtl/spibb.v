@@ -18,8 +18,6 @@ module spibb_wb #()
 	input wb_stb_i,
 	output wb_ack_o,
 	input wb_cyc_i,
-	output reg led,
-	output reg [7:0] leds,
 	output reg sd_ss, sd_sck, sd_mosi,
 	input sd_miso
 );
@@ -32,8 +30,9 @@ module spibb_wb #()
 		ack <= 0;
 
       if (wb_rst_i) begin
-         led <= 1;
-         leds <= 8'h00;
+			sd_ss <= 1;
+			sd_sck <= 1;
+			sd_mosi <= 1;
       end else if (wb_cyc_i && wb_stb_i && wb_we_i) begin
 			{sd_ss, sd_sck, sd_mosi} <= wb_dat_i[3:1];
 			ack <= 1;
