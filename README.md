@@ -56,6 +56,7 @@ The following boards are currently supported:
  - [Machdyne Lakritz](https://github.com/machdyne/lakritz)
  - [Machdyne Kölsch](https://github.com/machdyne/kolsch)
  - [Machdyne Lebkuchen](https://github.com/machdyne/lebkuchen)
+ - [Machdyne Mozart](https://github.com/machdyne/mozart) / [ML1](https://github.com/machdyne/sechzig)
  - (more soon)
 
 If you have an unsupported board and want to try Zeitlos, please open an issue.
@@ -98,5 +99,6 @@ The contents of this repo are released under the [Lone Dynamics Open License](LI
 
 - rtl/cpu/picorv32 uses the ISC license.
 - rtl/ext/uart16550 uses the LGPL license.
+- rtl/mem/sdram\_kianv uses the Apache 2.0 license.
 - rtl/ext/usb\_hid\_host uses the Apache 2.0 license.
 - sw/os/fs/fatfs uses a BSD compatible license.

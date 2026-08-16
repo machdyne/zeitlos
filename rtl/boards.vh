@@ -49,6 +49,25 @@
 `define USB_HID
 `define SPI_SDCARD
 
+`elsif BOARD_MOZART_ML1
+
+`define FPGA_ECP5
+`define OSC48
+`define SYSCLK48
+`define MEM_SDRAM
+`define MEM_VRAM
+`define MEM_ROM
+`define MEM_GLYPH
+`define GPU
+`define GPU_RASTER
+`define GPU_BLIT
+`define GPU_PIXEL_DOUBLE
+`define GPU_CURSOR
+`define GPU_DDMI
+`define UART0
+`define USB_HID
+`define SPI_SDCARD
+
 `elsif BOARD_LEBKUCHEN
 
 `define FPGA_GATEMATE

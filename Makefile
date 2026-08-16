@@ -7,7 +7,7 @@ RTL_PICO = \
 	rtl/arbiter.v \
 	rtl/mem/bram.v \
 	rtl/mem/sram.v \
-	rtl/mem/sdram.v \
+	rtl/mem/sdram_kianv.v \
 	rtl/mem/qqspi.v \
 	rtl/mem/vram.v \
 	rtl/mem/glyph.v \
@@ -169,6 +169,14 @@ else ifeq ($(BOARD), lakritz)
 	LPF = lakritz_v0.lpf
 	PROG = openFPGALoader -c $(CABLE)
 	FLASH = openFPGALoader -v -c $(CABLE) -f
+	FLASH_OFFSET = -o
+else ifeq ($(BOARD), mozart_ml1)
+	FAMILY = ecp5
+	DEVICE = 45k
+	PACKAGE = CABGA256
+	LPF = mozart_ml1.lpf
+	PROG = openFPGALoader -c dirtyJtag
+	FLASH = openFPGALoader -v -c dirtyJtag -f
 	FLASH_OFFSET = -o
 else ifeq ($(BOARD), lebkuchen)
 	FAMILY = gatemate
