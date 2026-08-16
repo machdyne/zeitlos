@@ -84,8 +84,8 @@ module gpu_video #(
 		.pclk(pclk),
 		.tmds_clk(bclk),
 `ifdef GPU_AMBER
-		.in_vga_red({red, red, red, red, red, red, red, red}),
-		.in_vga_green({green, 1'b0, green, green, green, green, green, green}),
+		.in_vga_red({red, red, 1'b0, red, 1'b0, 1'b0, red, 1'b0}),
+		.in_vga_green({green, 1'b0, 1'b0, green, green, green, 1'b0, green}),
 		.in_vga_blue({8'b0}),
 `else
 		.in_vga_red({red, 7'b0}),
