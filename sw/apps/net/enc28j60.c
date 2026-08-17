@@ -189,6 +189,7 @@ static uint8_t spi_xfer(uint8_t out) {
 #define TXSTOP_INIT    0x1FFF
 
 #define ETH_TX_TIMEOUT 200000	// loop iterations, not calibrated to real time
+#define ETH_MII_TIMEOUT 200000	// loop iterations, not calibrated to real time
 
 static uint8_t current_bank = 0xFF;	// force a bank select on first access
 static uint16_t next_packet_ptr = RXSTART_INIT;
@@ -339,8 +340,17 @@ static void eth_phy_write(uint8_t phy_reg, uint16_t data) {
 	eth_write_reg16(MIWRL, data);
 	// the write is triggered automatically once MIWRH is written;
 	// wait for MISTAT.BUSY to clear before touching the MII interface
-	// again
-	while (eth_read_reg(MISTAT) & 0x01) ;
+	// again. bounded, not a plain while(1)-style wait: with no chip
+	// on the SPI bus at all, eth_read_reg() reads back whatever the
+	// floating/pulled MISO line happens to settle to, and if that
+	// includes bit 0 set, this would otherwise spin forever -- called
+	// (twice) from enc28j60_init() below, *before* the revision check
+	// that's supposed to detect and report a missing chip, so that
+	// check was never actually being reached with no chip present.
+	uint32_t timeout;
+	for (timeout = 0; timeout < ETH_MII_TIMEOUT; timeout++) {
+		if (!(eth_read_reg(MISTAT) & 0x01)) break;
+	}
 }
 
 // -- public API --
