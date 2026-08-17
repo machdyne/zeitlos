@@ -26,6 +26,7 @@ void hex_dump(uint32_t addr);
 uint32_t xfer_recv(uint32_t addr_ptr);
 void cls(void);
 bool parse_ipv4(const char *s, uint32_t *out);
+void init(void);
 
 // shortened for now (was 60s) while TFTP is still being brought up --
 // waiting a full minute per failed attempt makes debugging painfully
@@ -90,7 +91,6 @@ void sh(void) {
 			if (sscanf(arg, "%lx", &addr))
 				hex_dump(addr);
 		}
-
 
 		// LIST DIRECTORY
 		else if (!strncmp(buffer, "ls", cmdlen)) {
@@ -403,45 +403,9 @@ void sh(void) {
 
 		}
 
-		// INIT SCRIPT (hardcoded for now -- see docs/networking.md's
-		// note on why net needs a predictable pid. eventually this
-		// should launch wm, net, and whatever else, in order, instead
-		// of a single hardcoded placeholder+net sequence.)
+		// RE-RUN THE INIT SCRIPT
 		else if (!strncmp(buffer, "init", cmdlen)) {
-
-			if (z_procs[1].base != 0) {
-				printf("init: already initialized (pid 1 already reserved)\n");
-				continue;
-			}
-
-			// reserve pid 1 with a placeholder process that's never
-			// started, so net (which expects to be pid 2 -- see
-			// Z_PID_NET in znet.h) lands on a predictable pid without
-			// needing wm to be running first. this also isolates net
-			// from wm entirely for testing -- no other process is
-			// ever active at the same time as net, this way.
-			uint32_t placeholder_pid = k_proc_create(4);
-			if (!placeholder_pid) {
-				printf("init: failed to reserve pid 1\n");
-				continue;
-			}
-			printf("init: reserved pid %ld (placeholder, not started)\n", placeholder_pid);
-
-			uint32_t size = fs_size("net");
-			if (!size) {
-				printf("init: net binary not found\n");
-				continue;
-			}
-			uint32_t pid = k_proc_create(size);
-			if (!pid) {
-				printf("init: unable to create net process\n");
-				continue;
-			}
-			uint32_t base = k_proc_base(pid);
-			fs_load(base, "net");
-			k_proc_start(pid);
-			printf("init: net started as pid %ld\n", pid);
-
+			init();	
 		}
 
 		// KILL A PROCESS
@@ -476,6 +440,56 @@ void sh(void) {
 		}
 
 	}
+
+}
+
+// INIT SCRIPT (hardcoded for now -- see docs/networking.md's
+// note on why net/wm need a predictable pid.
+
+void init(void) {
+
+	printf("running init script ...\n");
+
+	if (z_procs[1].base != 0) {
+		printf("init: already initialized (pid 1 already reserved)\n");
+		return;
+	}
+
+	// wm:
+
+	printf("starting wm\n");
+	uint32_t size_wm = fs_size("wm");
+	if (!size_wm) {
+		printf("init: wm binary not found\n");
+		return;
+	}
+	uint32_t pid_wm = k_proc_create(size_wm);
+	if (!pid_wm) {
+		printf("init: unable to create wm process\n");
+		return;
+	}
+	uint32_t base_wm = k_proc_base(pid_wm);
+	fs_load(base_wm, "wm");
+	k_proc_start(pid_wm);
+	printf("init: net started as pid %ld\n", pid_wm);
+
+	// net:
+
+	printf("starting net\n");
+	uint32_t size_net = fs_size("net");
+	if (!size_net) {
+		printf("init: net binary not found\n");
+		return;
+	}
+	uint32_t pid_net = k_proc_create(size_net);
+	if (!pid_net) {
+		printf("init: unable to create net process\n");
+		return;
+	}
+	uint32_t base_net = k_proc_base(pid_net);
+	fs_load(base_net, "net");
+	k_proc_start(pid_net);
+	printf("init: net started as pid %ld\n", pid_net);
 
 }
 
