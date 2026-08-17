@@ -104,11 +104,14 @@ at the release-time repair.
 
 ## Input
 
-Mouse position/buttons are read directly from `reg_usb_cursor`
-(bits 9:0 = x, 19:10 = y, 23:20 = button state), scaled down by 2 to
-match the 512x384 framebuffer -- same convention `sw/apps/gpudemo`
-uses. `wm` polls this once per main-loop iteration; there's no input
-event queue yet.
+Mouse position/buttons are read via `mouse_port()` (`wm.c`), which
+picks whichever of the two USB HID ports currently reports itself as
+a mouse -- there's no fixed port-to-device mapping anymore, and no
+guarantee it's the same port from one boot to the next. See
+`docs/user_input.md` for the dual-port hardware and register layout
+this reads from; this section stays focused on what `wm` does with
+the result. `wm` polls this once per main-loop iteration; there's no
+mouse event queue.
 
 - **Click on a window** brings it to front and focuses it -- but only
   repaints if focus or z-order actually changed (clicking an
@@ -119,6 +122,15 @@ event queue yet.
   once the button is released (not on every intermediate position),
   so apps aren't flooded with move messages mid-drag.
 - There's no resize yet, matching the original design goal.
+
+Keyboard input is interrupt-driven, not polled -- see
+`docs/user_input.md` for the full stack (kernel capture, keysym
+translation) and `Z_WM_KEY` below for what reaches an app. Unlike the
+mouse, keyboard events only ever go to the *focused* window's owner;
+a window with no mouse available to click still gets focus once, on
+creation, if nothing else is already focused (also covered in
+`docs/user_input.md`) -- otherwise a keyboard-only session would have
+no way to focus anything at all.
 
 ## App protocol
 
@@ -131,6 +143,7 @@ shapes. Summary:
 | wm → app | `Z_WM_WINDOW_CREATED` | `Z_MAP{id, x, y, w, h}` | reply (same `tag` as the request) |
 | app → wm | `Z_WM_DESTROY_WINDOW` | `Z_UINT32` (window id) | close a window |
 | wm → app | `Z_WM_WINDOW_MOVED` | `Z_MAP{id, x, y, w, h}` | sent after a drag completes |
+| wm → app | `Z_WM_KEY` | packed `Z_UINT32` (`Z_WM_PACK_KEY`) | key press/release, focused window only -- see `docs/user_input.md` |
 
 A client app's request/reply exchange looks like:
 
