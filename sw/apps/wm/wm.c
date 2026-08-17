@@ -25,6 +25,7 @@
 #include "../../common/zeitlos.h"
 #include "../../common/zwm.h"
 #include "../../common/zgfx.h"
+#include "../../common/zkbd.h"
 
 #define WM_MAX_WINDOWS    16
 #define WM_SCREEN_W       512
@@ -196,22 +197,81 @@ static void repair_region(int rx, int ry, int rw, int rh, int exclude_idx) {
 
 // -- mouse --
 //
-// reg_usb_cursor's x/y fields come from a hardware cursor tracker
+// reg_usbN_cursor's x/y fields come from a hardware cursor tracker
 // (rtl/usb_hid.v) that's clamped, not wrapping: curs_x in [0,1023],
-// curs_y in [0,767] -- both exactly 2x the 512x384 screen resolution,
-// so /2 maps them onto screen pixels directly. no software-side
-// tracking needed.
+// curs_y in [0,767] -- both exactly 2x the 512x384 framebuffer, so /2
+// maps them onto screen pixels directly. no software-side tracking
+// needed.
+//
+// there are two independent USB HID ports now (see zeitlos.h), and
+// no fixed port-to-device mapping -- either port might be the mouse.
+// mouse_port() picks whichever port currently reports itself as a
+// mouse (typ==2); if neither does (nothing plugged in yet) or,
+// unusually, both do, it prefers port 0 -- matching the same
+// tie-breaking rule rtl/sysctl.v's hardware cursor-sprite mux uses,
+// so the software click math and the on-screen pointer never disagree
+// about which port is "the" mouse.
+//
+// typ lives at bits[25:24] of the info register (rtl/usb_hid.v:
+// { report[31], 5'b0[30:26], typ[25:24], 16'b0[23:8], modifiers[7:0] }),
+// NOT bits[23:22] -- that range falls entirely inside the constant
+// 16'b0 padding and always reads 0 regardless of what's plugged in.
+static inline int mouse_port(void) {
+	uint8_t typ0 = (reg_usb0_info >> 24) & 0x3;
+	uint8_t typ1 = (reg_usb1_info >> 24) & 0x3;
+	if (typ0 == 2) return 0;
+	if (typ1 == 2) return 1;
+	return 0;
+}
 
 static inline int get_cursor_x(void) {
-	return (reg_usb_cursor & 0x3FF) / 2;
+	uint32_t cursor = (mouse_port() == 0) ? reg_usb0_cursor : reg_usb1_cursor;
+	return (cursor & 0x3FF) / 2;
 }
 
 static inline int get_cursor_y(void) {
-	return ((reg_usb_cursor >> 10) & 0x3FF) / 2;
+	uint32_t cursor = (mouse_port() == 0) ? reg_usb0_cursor : reg_usb1_cursor;
+	return ((cursor >> 10) & 0x3FF) / 2;
 }
 
 static inline uint8_t get_mouse_btn(void) {
-	return (reg_usb_cursor >> 20) & 0x0F;
+	uint32_t cursor = (mouse_port() == 0) ? reg_usb0_cursor : reg_usb1_cursor;
+	return (cursor >> 20) & 0x0F;
+}
+
+// -- keyboard --
+//
+// unlike the mouse above, keyboard capture is interrupt-driven, not
+// polled -- see sw/os/hid.c. hid_read_key() pops one already-decoded
+// press/release edge event at a time from the kernel's small event
+// ring, drawn from BOTH usb ports (hid.c decides per-port; this side
+// just gets a merged stream). wm drains all of them every main-loop
+// iteration (there can be more than one queued since the last time we
+// got scheduled) and forwards each to the *focused* window's owner
+// only, translating the raw USB HID usage code to a keysym (zkbd.h)
+// first. Demo windows (owned by wm itself, see main() below) have no
+// app to notify, same as notify_moved()'s check below.
+static void dispatch_keys(void) {
+
+	int32_t ev;
+	while ((ev = hid_read_key()) >= 0) {
+
+		uint8_t usage     = (ev >> 1) & 0xFF;
+		uint8_t modifiers = (ev >> 9) & 0xFF;
+		bool    pressed   = (ev & 1) != 0;
+
+		if (focused < 0) continue;
+		if (windows[focused].owner_pid == Z_PID_WM) continue;
+
+		uint32_t keysym = z_kbd_usage_to_keysym(usage, modifiers);
+		if (keysym == Z_KEY_NONE) continue;   // bare modifier change, or
+		                                       // an unmapped usage code
+
+		uint32_t packed = Z_WM_PACK_KEY(keysym, modifiers, pressed);
+		z_msg_new_send(windows[focused].owner_pid, Z_WM_KEY, 0, z_obj_uint32(packed));
+
+	}
+
 }
 
 // -- window table --
@@ -370,6 +430,17 @@ static void handle_message(z_msg_t *msg) {
 
 			int idx = create_window(msg->from, title, w, h);
 
+			// auto-focus a newly created window if nothing is
+			// currently focused -- without this, a session with no
+			// working mouse (no mouse plugged in, or neither USB port
+			// currently reporting itself as one -- see mouse_port()
+			// above) has no way to ever focus a window at all, since
+			// focus is otherwise only ever set by a mouse click. only
+			// fires when nothing else is focused yet, so it won't
+			// steal focus from an already-focused window when a
+			// second app creates one later.
+			if (idx >= 0 && focused < 0) focused = idx;
+
 			// draw this window's chrome (and repair anything it now
 			// covers) BEFORE replying -- otherwise the owner's
 			// z_win_create() can return, and its first drawing calls
@@ -492,12 +563,38 @@ int main(void) {
 
 	uint8_t last_btn = 0;
 
+	// diagnostic: prints whenever either USB HID port's device type
+	// changes (rtl/ext/usb_hid_host/src/usb_hid_host.v's `typ`
+	// register -- 0=none, 1=keyboard, 2=mouse, 3=gamepad). there are
+	// two independent ports (see zeitlos.h) with no fixed
+	// port-to-device mapping -- mouse_port() above and dispatch_keys()
+	// each decide dynamically which port is which. watch these lines
+	// on the UART console to confirm what the board currently sees on
+	// each port.
+	uint8_t last_hid_typ0 = 0xFF, last_hid_typ1 = 0xFF;	// impossible value -- forces the first print
+	static const char *hid_typ_names[4] = { "none", "keyboard", "mouse", "gamepad" };
+
 	while (1) {
+
+		uint8_t hid_typ0 = (reg_usb0_info >> 24) & 0x3;
+		if (hid_typ0 != last_hid_typ0) {
+			printf("wm: usb port 0 device type -> %s\n", hid_typ_names[hid_typ0]);
+			last_hid_typ0 = hid_typ0;
+		}
+
+		uint8_t hid_typ1 = (reg_usb1_info >> 24) & 0x3;
+		if (hid_typ1 != last_hid_typ1) {
+			printf("wm: usb port 1 device type -> %s\n", hid_typ_names[hid_typ1]);
+			last_hid_typ1 = hid_typ1;
+		}
 
 		// -- drain incoming requests (non-blocking) --
 		z_msg_t msg;
 		while (z_msg_read(&msg) == Z_OK)
 			handle_message(&msg);
+
+		// -- keyboard (interrupt-captured, drained here) --
+		dispatch_keys();
 
 		// -- mouse --
 		int cx = get_cursor_x();
@@ -512,9 +609,12 @@ int main(void) {
 
 			// temporary debug instrumentation -- see docs/window_manager.md
 			// "cursor calibration" note. remove once the coordinate mapping
-			// is confirmed against real hardware.
-			printf("wm: click raw=0x%08lx cx=%d cy=%d",
-				(unsigned long)reg_usb_cursor, cx, cy);
+			// is confirmed against real hardware. raw comes from
+			// whichever port mouse_port() decided is the mouse, same as
+			// the cx/cy computed from it.
+			int mp = mouse_port();
+			printf("wm: click port=%d raw=0x%08lx cx=%d cy=%d", mp,
+				(unsigned long)(mp == 0 ? reg_usb0_cursor : reg_usb1_cursor), cx, cy);
 			if (hit >= 0) {
 				printf(" -> hit win %d (x=%ld y=%ld w=%ld h=%ld) titlebar=%d\n",
 					hit, (long)windows[hit].x, (long)windows[hit].y,

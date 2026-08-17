@@ -2,12 +2,12 @@ PREFIX = /opt/riscv32i/bin/riscv32-unknown-elf-
 ARCH = rv32i
 CC = $(PREFIX)gcc
 CFLAGS = -fPIC --std=gnu99 -Os -MD -Wall -march=$(ARCH) -I../common
-LDFLAGS = -fPIC
+LDFLAGS = -fPIC -march=$(ARCH) -mabi=ilp32
 LDSCRIPT = ../common/riscv-os.ld
 
 OBJS = kernel.o kruntime.o mem.o \
 	fs/fs.o fs/fatfs/sdmm.o fs/fatfs/ff.o \
-	uart.o sh.o xfer.o ui.o msg.o zobj.o zstream.o
+	uart.o hid.o sh.o xfer.o ui.o msg.o zobj.o zstream.o
 
 # kernel.o's recipe below builds every object in one go (they're not
 # independent processes, and mostly don't need to be) -- but for
@@ -20,7 +20,7 @@ OBJS = kernel.o kruntime.o mem.o \
 # zstream/TFTP work -- see docs/networking.md.
 KSRCS = kernel.c kruntime.c mem.c \
 	fs/fs.c fs/fatfs/sdmm.c fs/fatfs/ff.c \
-	uart.c sh.c xfer.c ui.c msg.c \
+	uart.c hid.c sh.c xfer.c ui.c msg.c \
 	../common/zobj.c ../common/zstream.c
 
 kernel: kernel.elf kernel.bin
@@ -36,6 +36,7 @@ kernel.o: $(KSRCS)
 	$(CC) $(CFLAGS) -c xfer.c -o xfer.o
 	$(CC) $(CFLAGS) -c ui.c -o ui.o
 	$(CC) $(CFLAGS) -c uart.c -o uart.o
+	$(CC) $(CFLAGS) -c hid.c -o hid.o
 	$(CC) $(CFLAGS) -c msg.c -o msg.o
 	$(CC) $(CFLAGS) -c ../common/zobj.c -o zobj.o
 	$(CC) $(CFLAGS) -c ../common/zstream.c -o zstream.o

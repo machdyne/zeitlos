@@ -233,6 +233,9 @@ module sysctl #()
 		cpu_irq[3] = irq_timer;
 		cpu_irq[4] = wbs_uart0_int;
 		cpu_irq[5] = wbs_usb0_int;
+`ifdef USB_HID
+		cpu_irq[6] = wbs_usb1_int;
+`endif
 	end
 
 	always @(posedge sys_clk) begin
@@ -293,6 +296,7 @@ module sysctl #()
 	wire [31:0] wbs_uart0_dat_o;
 	wire [31:0] wbs_spisdcard_dat_o;
 	wire [31:0] wbs_usb0_dat_o;
+	wire [31:0] wbs_usb1_dat_o;
 	wire [31:0] wbs_gpu_dat_o;
 	wire [31:0] wbs_gpu_blit_dat_o;
 	wire [31:0] wbs_glyph_dat_o;
@@ -320,7 +324,33 @@ module sysctl #()
 	wire cs_spisdcard = ((wbm_adr & 32'hf000_0000) == 32'hb000_0000);
 `endif
 `ifdef USB_HID
-	wire cs_usb0 = ((wbm_adr & 32'hf000_0000) == 32'hc000_0000);
+	// two independent usb_hid_wb instances (port 0 / port 1, see
+	// boards/*.lpf's usb_host_dp[1:0]/usb_host_dm[1:0] -- Obst and
+	// Lakritz both break out two USB host ports). Both instances share
+	// the same 256MB top-nibble slot (0xc for USB_HID, unchanged from
+	// before this was two instances) and are discriminated by address
+	// bit 5 -- NOT bit 4: wb_adr_i (usb_hid_wb's own address input,
+	// see below) is wbm_adr_sel_word = wbm_adr_sel[27:2], a WORD-
+	// shifted address, so byte-address bit 4 lands on wb_adr_i[2] --
+	// exactly one of the 3 bits (wb_adr_i[2:0]) usb_hid_wb uses
+	// internally to select among its own 4 registers (info/keys/
+	// mouse/cursor, see rtl/usb_hid.v). Using bit 4 here collided with
+	// that: port 1's addresses decoded to a register-select value of
+	// 4 inside the module, which matches none of its four cases, so
+	// it acked but never drove wb_dat_o. Bit 5 (word bit 3) sits
+	// safely above that 3-bit field. Port 0's own register addresses
+	// (bit5=0) are therefore bit-for-bit unchanged from before this
+	// was two instances -- sw/bios/bios.c and sw/apps/gpu3d/gpu3d.c
+	// both have their own private copies of these #defines and don't
+	// need updating. Port 1 lives at 0xc0000020-0xc000002c (info/
+	// keys/mouse/cursor) -- see zeitlos.h's reg_usb1_* -- not
+	// 0xc0000010-0xc000001c as an earlier version of this file had it.
+	//
+	// which physical device (keyboard/mouse/gamepad) ends up on which
+	// port isn't fixed -- see sw/os/hid.c and sw/apps/wm/wm.c, which
+	// each poll both instances' own `typ` field and decide dynamically.
+	wire cs_usb0 = ((wbm_adr & 32'hf000_0020) == 32'hc000_0000);
+	wire cs_usb1 = ((wbm_adr & 32'hf000_0020) == 32'hc000_0020);
 `endif
 `ifdef GPU_RASTER
 	wire cs_gpu = ((wbm_adr & 32'hf000_0000) == 32'ha000_0000);
@@ -372,6 +402,7 @@ module sysctl #()
 `endif
 `ifdef USB_HID
 		cs_usb0 ? wbs_usb0_dat_o :
+		cs_usb1 ? wbs_usb1_dat_o :
 `endif
 `ifdef GPU_RASTER
 		cs_gpu ? wbs_gpu_dat_o :
@@ -398,6 +429,7 @@ module sysctl #()
 	wire wbs_uart0_ack_o;
 	wire wbs_spisdcard_ack_o;
 	wire wbs_usb0_ack_o;
+	wire wbs_usb1_ack_o;
 	wire wbs_gpu_ack_o;
 	wire wbs_gpu_blit_ack_o;
 	wire wbs_glyph_ack_o;
@@ -434,6 +466,7 @@ module sysctl #()
 `endif
 `ifdef USB_HID
 		cs_usb0 ? wbs_usb0_ack_o :
+		cs_usb1 ? wbs_usb1_ack_o :
 `endif
 `ifdef GPU_RASTER
 		cs_gpu ? wbs_gpu_ack_o :
@@ -982,6 +1015,9 @@ module sysctl #()
 	reg wbs_usb0_int;
 	wire wbm_cyc_usb0 = cs_usb0 && wbm_cyc;
 
+	wire [1:0] wbs_usb0_typ;
+	wire [9:0] wbs_usb0_curs_x, wbs_usb0_curs_y;
+
 	usb_hid_wb #() wbs_usb0_i
 	(
 		.wb_clk_i(wbm_clk),
@@ -998,8 +1034,43 @@ module sysctl #()
 		.usb_clk(clk12mhz),
 		.usb_dm(usb_host_dm[0]),
 		.usb_dp(usb_host_dp[0]),
-		.curs_x(gpu_curs_x),
-		.curs_y(gpu_curs_y),
+		.curs_x(wbs_usb0_curs_x),
+		.curs_y(wbs_usb0_curs_y),
+		.typ(wbs_usb0_typ),
+	);
+
+	// second port -- see boards/*.lpf's usb_host_dp[1]/usb_host_dm[1]
+	// (Obst, Lakritz both wire a second USB host port). Identical
+	// instance, own register slot (cs_usb1, bit4 of the address --
+	// see the cs_usb0/cs_usb1 comment above), own interrupt bit
+	// (cpu_irq[6] below). Which physical device ends up here isn't
+	// fixed at the hardware level at all -- software (sw/os/hid.c,
+	// sw/apps/wm/wm.c) reads both instances' own `typ` and decides.
+	reg wbs_usb1_int;
+	wire wbm_cyc_usb1 = cs_usb1 && wbm_cyc;
+
+	wire [1:0] wbs_usb1_typ;
+	wire [9:0] wbs_usb1_curs_x, wbs_usb1_curs_y;
+
+	usb_hid_wb #() wbs_usb1_i
+	(
+		.wb_clk_i(wbm_clk),
+		.wb_rst_i(wbm_rst),
+		.wb_adr_i(wbm_adr_sel_word),
+		.wb_dat_i(wbm_dat_o),
+		.wb_dat_o(wbs_usb1_dat_o),
+		.wb_we_i(wbm_we),
+		.wb_sel_i(wbm_sel),
+		.wb_stb_i(wbm_stb),
+		.wb_ack_o(wbs_usb1_ack_o),
+		.wb_cyc_i(wbm_cyc_usb1),
+		.int_o(wbs_usb1_int),
+		.usb_clk(clk12mhz),
+		.usb_dm(usb_host_dm[1]),
+		.usb_dp(usb_host_dp[1]),
+		.curs_x(wbs_usb1_curs_x),
+		.curs_y(wbs_usb1_curs_y),
+		.typ(wbs_usb1_typ),
 	);
 `endif
 
@@ -1046,6 +1117,24 @@ module sysctl #()
 	wire [9:0] gpu_curs_x;
 	wire [9:0] gpu_curs_y;
 	wire gpu_curs_pixel;
+
+	// the sprite has one position to render, but there are now two
+	// independent USB HID ports, either of which might currently be
+	// the mouse (see the usb_hid_wb instances above, and sw/os/hid.c/
+	// sw/apps/wm/wm.c on the software side, which make the same
+	// decision for click hit-testing) -- so pick whichever instance's
+	// own `typ` currently says "mouse" (2), preferring port 0 if
+	// (unusually) both do. An instance that isn't currently a mouse
+	// never updates its own curs_x/curs_y (usb_hid_wb only moves them
+	// on a report while typ==2 -- see rtl/usb_hid.v), so if neither
+	// port is a mouse this just holds whatever port 0 last had
+	// (0,0 after reset), same as the single-port behavior before this.
+`ifdef USB_HID
+	assign gpu_curs_x = (wbs_usb0_typ == 2'd2) ? wbs_usb0_curs_x :
+		(wbs_usb1_typ == 2'd2) ? wbs_usb1_curs_x : wbs_usb0_curs_x;
+	assign gpu_curs_y = (wbs_usb0_typ == 2'd2) ? wbs_usb0_curs_y :
+		(wbs_usb1_typ == 2'd2) ? wbs_usb1_curs_y : wbs_usb0_curs_y;
+`endif
 
 	gpu_cursor #() gpu_cursor_i
 	(

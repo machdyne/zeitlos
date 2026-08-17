@@ -18,6 +18,7 @@
 #include "uart.h"
 #include "ui.h"
 #include "msg.h"
+#include "hid.h"
 
 // Z_PROCS_MAX now lives in kernel.h (msg.c needs it too)
 #define Z_PROC_STACK_SIZE  8*1024
@@ -71,6 +72,10 @@ int main(void) {
 	// init uart
 	z_uart_init();
 	printf(" - uart initialized.\n");
+
+	// init usb hid keyboard event queue
+	z_hid_init();
+	printf(" - hid initialized.\n");
 
 	// init memory management
 	k_mem_init();
@@ -150,9 +155,13 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 		z_uart_irq();
 	}
 
-	//if ((irqs & (1 << Z_IRQ_HID)) != 0) {
-	// z_ui_irq();
-	//}
+	if ((irqs & (1 << Z_IRQ_HID)) != 0) {
+		z_hid_irq0();
+	}
+
+	if ((irqs & (1 << Z_IRQ_HID1)) != 0) {
+		z_hid_irq1();
+	}
 
 	// swap process on KTIMER interrupt
 	if ((irqs & (1 << Z_IRQ_KTIMER)) != 0) {

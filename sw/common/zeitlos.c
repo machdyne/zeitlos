@@ -60,6 +60,19 @@ int16_t uart_getc(void) {
 	return (int16_t)obj.val.int32;
 }
 
+// pops the next queued raw USB HID keyboard event (see sw/os/hid.c),
+// or -1 if none is pending. non-blocking, same "pop or -1" shape as
+// uart_getc() above. the returned value, if >= 0, is packed as:
+// bit0 = pressed(1)/released(0), bits8:1 = HID usage code,
+// bits16:9 = modifier byte -- see sw/os/hid.c's HID_EVENT() macro
+// and sw/common/zkbd.h for turning the usage code into a keysym.
+int32_t hid_read_key(void) {
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_obj_t obj;
+	z_kernel_ptr(Z_SYS_HID_READ_KEY, (uint32_t *)&obj, 0);
+	return obj.val.int32;
+}
+
 // -- messaging --
 
 z_rv z_msg_send(z_msg_t *msg) {

@@ -23,6 +23,43 @@ typedef uint32_t *(*z_kernel_ptr_t)(uint32_t, uint32_t *, uint32_t);
 #define reg_led (*(volatile uint32_t*)0xe0000000)
 #define reg_leds (*(volatile uint32_t*)0xe0000004)
 
+// Two independent USB HID ports (rtl/usb_hid.v's usb_hid_wb, two
+// instances in rtl/sysctl.v) -- Obst and Lakritz both break out two
+// USB host ports (boards/*.lpf's usb_host_dp[1:0]/usb_host_dm[1:0]).
+// Both instances share the same 256MB top-nibble slot, discriminated
+// by address bit 5 -- see sysctl.v's cs_usb0/cs_usb1 comment for why
+// it's bit 5 and not bit 4 (usb_hid_wb's own internal register select
+// uses wb_adr_i[2:0], and wb_adr_i is a word-shifted address, so bit
+// 4 of the byte address collides with that). Which physical device
+// (keyboard/mouse/gamepad) ends up on which port isn't fixed by
+// hardware at all: each port's own `info` register's typ field (bits
+// 25:24 -- 0=none, 1=keyboard, 2=mouse, 3=gamepad) says what's
+// currently plugged into THAT port, and software decides which to
+// treat as "the" keyboard/mouse from that -- see sw/os/hid.c and
+// sw/apps/wm/wm.c, which both poll/read both ports and pick
+// dynamically rather than assuming a fixed port-to-device mapping.
+//
+// reg_usb0_* are new names for the exact same registers/addresses as
+// the pre-existing reg_usb_* below (kept as-is, unchanged, since
+// sw/bios/bios.c and sw/apps/gpu3d/gpu3d.c both have their own private
+// copies of the old names and don't need updating) -- use reg_usb0_*
+// in any new code that also needs to talk about reg_usb1_*, purely so
+// the two ports read symmetrically side by side.
+#define reg_usb0_info   (*(volatile uint32_t*)0xc0000000)
+#define reg_usb0_keys   (*(volatile uint32_t*)0xc0000004)
+#define reg_usb0_mouse  (*(volatile uint32_t*)0xc0000008)
+#define reg_usb0_cursor (*(volatile uint32_t*)0xc000000c)
+
+#define reg_usb1_info   (*(volatile uint32_t*)0xc0000020)
+#define reg_usb1_keys   (*(volatile uint32_t*)0xc0000024)
+#define reg_usb1_mouse  (*(volatile uint32_t*)0xc0000028)
+#define reg_usb1_cursor (*(volatile uint32_t*)0xc000002c)
+
+// pre-existing names, unchanged -- always port 0. kept for every
+// existing caller (sw/bios/bios.c, sw/apps/gpu3d/gpu3d.c have their
+// own private copies of these same four lines and don't go through
+// this header at all, but anything that *does* include this header
+// and only ever cared about a single port can keep using these).
 #define reg_usb_info (*(volatile uint32_t*)0xc0000000)
 #define reg_usb_keys (*(volatile uint32_t*)0xc0000004)
 #define reg_usb_mouse (*(volatile uint32_t*)0xc0000008)
@@ -117,6 +154,13 @@ int getch(void);
 void readline(char *buf, int maxlen);
 void echo(void);
 void noecho(void);
+
+// pops the next queued raw USB HID keyboard event, or -1 if none is
+// pending -- see sw/os/hid.c and sw/common/zkbd.h. Currently only
+// used by wm.c (see docs/window_manager.md), which owns turning raw
+// input into per-app messages the same way it already does for the
+// mouse.
+int32_t hid_read_key(void);
 
 // --
 

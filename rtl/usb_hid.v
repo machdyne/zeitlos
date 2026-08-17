@@ -24,6 +24,7 @@ module usb_hid_wb #()
 	output int_o,
 	output [9:0] curs_x,
 	output [9:0] curs_y,
+	output [1:0] typ,
 );
 
 `ifdef USB_HID
@@ -37,6 +38,13 @@ module usb_hid_wb #()
 	wire signed [7:0] uhh_mouse_dx, uhh_mouse_dy;
 
 	assign int_o = uhh_report;
+
+	// exposed as a plain wire (not just readable via the info register
+	// at wb_adr_i[2:0]==0) so sysctl.v can select which instance's
+	// curs_x/curs_y feeds the hardware cursor sprite (GPU_CURSOR)
+	// without a wishbone read round-trip -- see sysctl.v's usb_cursor
+	// mux, added alongside the second usb_hid_wb instance for port 1.
+	assign typ = uhh_usb_type;
 
 	reg [9:0] curs_x;
 	reg [9:0] curs_y;

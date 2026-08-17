@@ -24,6 +24,7 @@
 #include "../../common/zwin.h"
 #include "../../common/zfont.h"
 #include "../../common/zgfx.h"
+#include "../../common/zkbd.h"
 
 static z_win_t win;
 static uint32_t count = 0;
@@ -33,6 +34,14 @@ static uint32_t count = 0;
 // content-relative y of the counter line -- computed once, since
 // z_font_6x12.h isn't a compile-time constant
 static int counter_y;
+
+// content-relative y of the keypress debug line, below the counter --
+// this is phase 1's actual test harness: confirms Z_WM_KEY (wm.c) and
+// the interrupt-driven capture underneath it (sw/os/hid.c) actually
+// reach an app. See docs/window_manager.md for the wider input model
+// this is part of.
+static int key_y;
+static char last_key_desc[48] = "(no key yet)";
 
 // the label never changes -- only redraw it in response to a wm
 // notification (window moved, or the wm just cleared the screen),
@@ -62,6 +71,59 @@ static void draw_counter(void) {
 	z_win_draw_text(&win, 4, counter_y, buf, 1, &z_font_6x12);
 }
 
+// renders a Z_WM_KEY payload as a short human-readable line, e.g.
+// "Ctrl+Shift+A down" or "Left up" -- caret notation for the raw
+// control characters (Enter/Tab/Esc/Ctrl+letter all arrive as
+// keysyms < 0x20, per zkbd.h) since those aren't otherwise printable.
+static void describe_key(uint32_t packed, char *buf, size_t buflen) {
+
+	uint32_t keysym    = Z_WM_UNPACK_KEY_KEYSYM(packed);
+	uint8_t  modifiers = Z_WM_UNPACK_KEY_MODIFIERS(packed);
+	bool     pressed   = Z_WM_UNPACK_KEY_PRESSED(packed) != 0;
+
+	char mods[24] = "";
+	if (modifiers & Z_KBD_MOD_CTRL)  strncat(mods, "Ctrl+",  sizeof(mods) - strlen(mods) - 1);
+	if (modifiers & Z_KBD_MOD_ALT)   strncat(mods, "Alt+",   sizeof(mods) - strlen(mods) - 1);
+	if (modifiers & Z_KBD_MOD_SHIFT) strncat(mods, "Shift+", sizeof(mods) - strlen(mods) - 1);
+	if (modifiers & Z_KBD_MOD_GUI)   strncat(mods, "Gui+",   sizeof(mods) - strlen(mods) - 1);
+
+	char keyname[16];
+	if (keysym < 0x20) {
+		snprintf(keyname, sizeof(keyname), "^%c", (char)(keysym + '@'));
+	} else if (keysym < 0x7f) {
+		snprintf(keyname, sizeof(keyname), "%c", (char)keysym);
+	} else if (keysym == 0x7f) {
+		snprintf(keyname, sizeof(keyname), "Backspace");
+	} else switch (keysym) {
+		case Z_KEY_UP:       snprintf(keyname, sizeof(keyname), "Up"); break;
+		case Z_KEY_DOWN:     snprintf(keyname, sizeof(keyname), "Down"); break;
+		case Z_KEY_LEFT:     snprintf(keyname, sizeof(keyname), "Left"); break;
+		case Z_KEY_RIGHT:    snprintf(keyname, sizeof(keyname), "Right"); break;
+		case Z_KEY_HOME:     snprintf(keyname, sizeof(keyname), "Home"); break;
+		case Z_KEY_END:      snprintf(keyname, sizeof(keyname), "End"); break;
+		case Z_KEY_PAGEUP:   snprintf(keyname, sizeof(keyname), "PgUp"); break;
+		case Z_KEY_PAGEDOWN: snprintf(keyname, sizeof(keyname), "PgDn"); break;
+		case Z_KEY_INSERT:   snprintf(keyname, sizeof(keyname), "Ins"); break;
+		case Z_KEY_DELETE:   snprintf(keyname, sizeof(keyname), "Del"); break;
+		case Z_KEY_F1: case Z_KEY_F2: case Z_KEY_F3: case Z_KEY_F4:
+		case Z_KEY_F5: case Z_KEY_F6: case Z_KEY_F7: case Z_KEY_F8:
+		case Z_KEY_F9: case Z_KEY_F10: case Z_KEY_F11: case Z_KEY_F12:
+			snprintf(keyname, sizeof(keyname), "F%d", (int)(keysym - Z_KEY_F1 + 1));
+			break;
+		default:
+			snprintf(keyname, sizeof(keyname), "?%lu", (unsigned long)keysym);
+			break;
+	}
+
+	snprintf(buf, buflen, "%s%s %s", mods, keyname, pressed ? "down" : "up ");
+
+}
+
+static void draw_key(void) {
+	z_win_fill_rect(&win, 0, key_y, win.w, z_font_6x12.h, 0);
+	z_win_draw_text(&win, 4, key_y, last_key_desc, 1, &z_font_6x12);
+}
+
 // drains every pending message, applying any position update and
 // redrawing (once) if a Z_WM_REDRAW came in. Z_WM_WINDOW_MOVED is
 // deliberately NOT treated as its own redraw trigger here, even
@@ -84,12 +146,22 @@ static bool drain_messages(void) {
 			got_wm_redraw = true;
 		} else if (msg.subject == Z_WM_WINDOW_MOVED) {
 			z_win_parse_rect(&win, &msg.obj);	// keep win.x/y in sync; no redraw here
+		} else if (msg.subject == Z_WM_KEY) {
+			// redraw immediately, not just on the next tick -- this is
+			// the actual point of this line: confirming keypresses show
+			// up with no perceptible delay. see docs/window_manager.md
+			// for why wm is the one deciding *which* window this was
+			// even routed to (focus tracking) -- this app only ever
+			// sees keys while it's the focused window.
+			describe_key(msg.obj.val.uint32, last_key_desc, sizeof(last_key_desc));
+			draw_key();
 		}
 	}
 
 	if (got_wm_redraw) {
 		draw_static();
 		draw_counter();
+		draw_key();
 		z_win_redraw_done(&win);
 	}
 
@@ -111,6 +183,7 @@ static bool drain_messages(void) {
 int main(void) {
 
 	counter_y = LABEL_Y + z_font_6x12.h;
+	key_y = counter_y + z_font_6x12.h;
 
 	if (z_win_create(&win, "hello_win", 160, 100) != Z_OK) {
 		printf("hello_win: failed to create window\n");
@@ -129,6 +202,7 @@ int main(void) {
 
 	draw_static();
 	draw_counter();
+	draw_key();
 
 	while (1) {
 

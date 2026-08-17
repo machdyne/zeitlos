@@ -67,6 +67,27 @@
 // why this exists and its limits).
 #define Z_WM_REDRAW_DONE         105
 
+// wm -> app: sent to the *focused* window's owner only, whenever a
+// key is pressed or released (see sw/os/hid.c for the interrupt-driven
+// USB HID capture this is built on, and sw/common/zkbd.h for the
+// usage->keysym translation wm.c applies before packing this). Like
+// Z_WM_REDRAW, this can fire at high frequency (every keystroke, plus
+// a release for each), so it's a packed Z_UINT32, not a Z_MAP -- same
+// no-heap-allocation reasoning as Z_WM_REDRAW.
+#define Z_WM_KEY                106
+
+// keysym: 0x0000-0x7fff (see zkbd.h -- ASCII in 0x00-0x7f, named keys
+// like arrows in 0x100+). modifiers: the raw USB HID modifier byte
+// (zkbd.h's Z_KBD_MOD_* bits) at the time of this event. pressed: 1 =
+// key down, 0 = key up.
+#define Z_WM_PACK_KEY(keysym, modifiers, pressed) \
+	((((uint32_t)(keysym) & 0x7FFF) << 9) | \
+	 (((uint32_t)(modifiers) & 0xFF) << 1) | \
+	 ((pressed) ? 1u : 0u))
+#define Z_WM_UNPACK_KEY_KEYSYM(v)     (((v) >> 9) & 0x7FFF)
+#define Z_WM_UNPACK_KEY_MODIFIERS(v)  (((v) >> 1) & 0xFF)
+#define Z_WM_UNPACK_KEY_PRESSED(v)    ((v) & 1)
+
 #define Z_WM_PACK_XY(id, x, y) \
 	((((uint32_t)(id) & 0xFF) << 20) | \
 	 (((uint32_t)(x) & 0x3FF) << 10) | \

@@ -7,3 +7,19 @@ Z_MKSYSCALL(UART_TX_FULL, z_uart_tx_full)
 Z_MKSYSCALL(MSG_SEND, k_msg_send)
 Z_MKSYSCALL(MSG_READ, k_msg_read)
 Z_MKSYSCALL(UPTIME, z_uptime)
+// new syscalls always go at the END of this list, never inserted in
+// the middle -- every id above this point must stay exactly where it
+// already was, in every already-flashed kernel, forever. inserting a
+// new entry earlier shifts every subsequent Z_MKSYSCALL's enum value
+// (Z_SYS_MSG_SEND, etc.) by one, and since z_syscall_id_t is generated
+// fresh from whichever syscalls.def each binary happens to be built
+// from, an app built against a newer syscalls.def than the currently
+// flashed kernel.bin would silently call the WRONG kernel handler for
+// every syscall after the insertion point -- not a crash, just quietly
+// wrong behavior that looks like unrelated memory corruption. (This
+// bit us for real once already, during phase 1 of keyboard/input
+// work -- HID_READ_KEY was originally inserted here, ahead of
+// MSG_SEND, and got moved to the end for exactly this reason.)
+// kernel.bin and every app must always be rebuilt+reflashed together
+// after any change to this file, regardless of where the change was made.
+Z_MKSYSCALL(HID_READ_KEY, z_hid_read_key)

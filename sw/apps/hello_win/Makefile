@@ -5,7 +5,7 @@ CC = $(PREFIX)gcc
 AS = $(PREFIX)as
 ASFLAGS = -march=$(ARCH) -mabi=ilp32
 CFLAGS = --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=ilp32 -DZ_GFX_HW_BLIT
-LDFLAGS =
+LDFLAGS = -march=$(ARCH) -mabi=ilp32
 LDSCRIPT = ../../common/riscv-app.ld
 
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o hello_win.o

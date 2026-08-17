@@ -9,6 +9,9 @@
 #define Z_IRQ_KTIMER			3
 #define Z_IRQ_UART			4
 #define Z_IRQ_HID				5
+#define Z_IRQ_HID1				6	// second USB HID port -- see
+									// rtl/sysctl.v's cpu_irq[6],
+									// sw/os/hid.c
 
 typedef struct {
 
