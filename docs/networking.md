@@ -10,11 +10,21 @@ mediates access to it via messaging" pattern the window manager
 (`sw/apps/wm`) established for graphics -- see `docs/window_manager.md`
 if that precedent isn't already familiar.
 
+A second hardware backend now exists alongside it: an in-fabric RMII
+Ethernet MAC (`rtl/ethmac_rmii.v`) for `mozart_ml1`, which has an RMII
+PHY (LAN8720A) but no SPI Ethernet PMOD. See "Second backend: RMII
+(mozart_ml1)" below -- everything above `eth.c` (ARP/IP/UDP/TFTP) is
+identical either way; only the driver underneath it differs, and
+which one gets built in is a compile-time choice, not a runtime one.
+
 **Current status: ARP + ICMP echo (ping) + TFTP client, all confirmed
-working on real hardware.** Hardware bring-up (SPI link + raw frame
-TX/RX), ARP/ICMP, and TFTP (both GET and PUT, streaming, no file size
-limit) have all been confirmed against real hardware and a real TFTP
-server -- see "Confirmed working" sections below.
+working on real hardware over the ENC28J60 backend.** Hardware
+bring-up (SPI link + raw frame TX/RX), ARP/ICMP, and TFTP (both GET
+and PUT, streaming, no file size limit) have all been confirmed
+against real hardware and a real TFTP server -- see "Confirmed
+working" sections below. **The RMII backend has NOT yet been tried on
+real hardware** -- see its own section for what has and hasn't been
+verified.
 
 See `docs/app_runtime.md` for `maskirq()` (used throughout
 `enc28j60.c` to protect SPI bit-bang transactions from interrupt
@@ -57,6 +67,226 @@ SPI routines in `enc28j60.c` closely resemble the proven,
 widely-used ChaN FatFs bit-bang driver already in
 `sw/os/fs/fatfs/sdmm.c`.
 
+## Second backend: RMII (mozart_ml1)
+
+`mozart_ml1` has an RMII PHY (LAN8720A) wired directly to the FPGA
+instead of an SPI Ethernet PMOD, so it needed a real Ethernet MAC in
+the fabric -- `rtl/ethmac_rmii.v`, exposed to software through
+`sw/apps/net/rmii_eth.c/h` as an alternative to `enc28j60.c/h`.
+Everything above the driver layer (`eth.c` and up -- framing, ARP, IP,
+UDP, TFTP) is completely unaware of which backend is underneath it;
+this section is only about what's different below that line.
+
+### Why this one couldn't follow the "protocol timing in software" philosophy above
+
+The SPI backend's whole design point (see "Why the SPI protocol is
+entirely in software" above) was pushing protocol timing into C so
+bugs are fixable by editing a file, not resynthesizing a bitstream.
+RMII can't do that: it's a synchronous 2-bit-wide bus clocked at
+50MHz shared between the MAC and the PHY, with byte boundaries,
+preamble/SFD framing, and CRC32 generation all needing to happen on
+literally every clock edge. There's no slack for software to bit-bang
+this over the wishbone bus the way `spibb_eth.v`/`enc28j60.c` bit-bang
+SPI -- by the time a wishbone transaction round-tripped through the
+CPU, several RMII bit-times would already have passed. So this MAC's
+RX/TX state machines, byte assembly, and CRC32 all live in
+`rtl/ethmac_rmii.v` itself, which is exactly the "hand-rolled hardware
+state machine" risk profile the SPI section above was contrasting
+itself against (same category of risk the GPU blitter,
+`rtl/gpu/gpu_blit.v`, carried -- "took several rounds of
+hardware-tested bugfixes to get right").
+
+The mitigation available here that wasn't fully exploited for the
+blitter: extensive simulation *before* real hardware. `tb/` has three
+Icarus Verilog testbenches, all currently passing:
+
+- `tb/ethmac_rmii_tb.v` -- drives a synthetic, correctly-CRC'd RMII
+  frame into the RX engine and checks byte-exact buffer contents,
+  correct length, and that the CRC32 check accepts it.
+- `tb/ethmac_rmii_tb2.v` -- negative paths: a frame with a deliberately
+  corrupted FCS must be rejected and counted, not accepted; a second
+  frame arriving before software pops the first must be dropped and
+  counted, not silently overwrite the still-unread buffer.
+- `tb/ethmac_rmii_loopback_tb.v` -- instantiates *two* `ethmac_rmii_wb`
+  cores sharing one `eth_refclk`, wires one's TX pins straight to the
+  other's RX pins, and drives an actual send-then-receive. This is
+  the test that actually validates TX: it means the TX engine's CRC32
+  generation isn't just internally self-consistent, it's independently
+  accepted by the RX engine's already-verified checker. Covers both a
+  word-aligned (64-byte) and a deliberately non-word-aligned (61-byte)
+  frame length, since the first two word-aligned lengths tried
+  happened to not exercise the last-partial-word byte-lane addressing
+  path.
+
+Run any of them with:
+```
+iverilog -g2005 -o /tmp/tb rtl/ethmac_rmii.v tb/ethmac_rmii_tb.v && vvp /tmp/tb
+```
+(`ethmac_rmii.v`'s `module ... #()` empty-parameter-list syntax is a
+Yosys-tolerated convention used throughout `rtl/` that plain `iverilog`
+rejects -- strip the `#()` from a scratch copy first if compiling it
+standalone this way; not an issue when it's included as part of the
+real `synth_ecp5`/Yosys build.)
+
+**None of this has been run on real hardware yet.** Simulation
+confirms the logic is internally correct against synthetic stimulus;
+it says nothing about synthesis, place-and-route, timing closure on
+the new 50MHz `ETH_REFCLK` domain, or how a real LAN8720A and a real
+switch actually behave. Treat `net.c`'s test output (`make
+BOARD=mozart_ml1`, then `NET_PHY=RMII` -- see below) as the actual
+first evidence of whether any of this works outside simulation, same
+as the original SPI backend's equivalent line above said before its
+own hardware bring-up.
+
+### No MDIO/MDC
+
+`mozart_ml1`'s LAN8720A has no MDIO/MDC connected -- see the pin list
+in `boards/mozart_ml1.lpf`. That means:
+
+- The PHY's mode (speed/duplex autonegotiation, PHY address) is set
+  entirely by strap pull-ups (`PULLMODE=UP` on `rx_data`/`crs_dv` in
+  the LPF) sampled at the moment `eth_rst_n` is released, per the
+  LAN8720A datasheet's strap-pin table. There's no way to read this
+  back or override it in software.
+- This MAC assumes the result is 100M full duplex -- the common case
+  against a modern switch -- and never checks. If a real link
+  negotiates something else, nothing currently detects or reports
+  that; it would likely just look like silent packet loss or garbled
+  frames, indistinguishable at first from a real bug elsewhere in this
+  list. Worth ruling out early on the first hardware bring-up attempt,
+  e.g. by trying a different switch port/cable if TX/RX both look
+  wrong from the start.
+- No chip revision or link-status register to read, unlike
+  `enc28j60_revision()` -- `rmii_eth_init()` can't tell you anything
+  about whether the PHY is actually responding, only what its own
+  `CRS_DV`/`ETH_REFCLK` pins look like from the FPGA side (see
+  `rmii_eth_init()`'s print).
+
+### Register map and driver
+
+Full register map is documented in `rtl/ethmac_rmii.v`'s header
+comment (the RTL-side source of truth); `sw/common/zeitlos.h`'s
+`reg_ethmac_*` block is the C-side mirror of the same thing.
+Summary: `STATUS`/`RX_LEN`/`RX_CTRL` for receive (single-buffer, one
+frame at a time -- see below), `TX_LEN`/`TX_CTRL` plus a TX buffer
+for transmit. No interrupt -- `net.c`'s existing poll loop (`eth_poll()`
+-> `phy_recv()`) covers this the same way it already covers ENC28J60.
+
+**Single RX buffer, not double-buffered.** A second frame arriving
+before software has popped the first is dropped and counted
+(`rx_drop_count` in `STATUS`), not queued. Deliberately simple for a
+first version, consistent with the "keep buffers minimal" constraint
+this was built under -- worth watching `rx_drop_count` under real
+network load and revisiting (double-buffering, or a small ring) if it
+turns out to matter in practice.
+
+**No destination-MAC filtering in hardware.** The ENC28J60 filters in
+hardware; this MAC has no MDIO to configure an equivalent filter, so
+it receives every frame that reaches the wire -- broadcast, multicast,
+unicast to other hosts, all of it. Functionally harmless (`arp.c`/
+`ip.c` only act on frames whose contents they recognize), but on a
+busy LAN it means the single RX buffer above fills with irrelevant
+traffic more often than the ENC28J60 backend would see under the same
+conditions -- another reason to watch `rx_drop_count`.
+
+**CRC32 residual constant.** RX validates a received frame by running
+the same bit-serial update continuously across the frame's data bytes
+*and* its own trailing FCS, then checking the result against a fixed
+constant (`0xDEBB20E3`) rather than computing an independent CRC and
+comparing. That constant was verified against Python's `zlib.crc32()`
+on synthetic frames while writing this (see the git history/session
+notes around `rtl/ethmac_rmii.v`'s Phase 2), not transcribed from
+memory and trusted -- an earlier guess (`0xC704DD7B`, a different, also
+commonly-cited "CRC32 magic residual" that turned out to belong to a
+different bit-order convention) was caught this way before it reached
+RTL. Worth remembering if this constant is ever touched: it depends
+exactly on the bit order chosen for the shift register (`{ eth_rxd,
+rx_shift[7:2] }`, LSB-first per byte) -- re-derive and re-check against
+`zlib.crc32()` rather than adjusting it by trial and error.
+
+### Build-time backend selection
+
+Unlike `sw/bios` (already built per-board via `-DBOARD_$(BOARD)`),
+`sw/apps` isn't currently board-aware -- the top-level `apps` target
+builds one binary set with no board distinction, because until this
+backend existed nothing under `sw/apps` needed one. `sw/apps/net`'s
+`NET_PHY` Makefile variable (`ENC28J60` by default, `RMII` for
+`mozart_ml1`) is the first place that had to change. See
+`sw/apps/net/net_phy.h`'s header comment for the full reasoning,
+including why this is a build-time choice and not a runtime probe --
+short version: there's no reliable way for software to ask "was
+`rtl/ethmac_rmii.v` actually synthesized into this bitstream?" by
+reading a register, since an unmapped wishbone address doesn't fault,
+it just reads back whatever `sysctl.v`'s mux resolves its default
+case to.
+
+```
+cd sw/apps/net
+make NET_PHY=RMII net
+```
+
+`NET_PHY` changes `CFLAGS` and which driver object gets linked, not
+any `.c` file's contents, so plain per-file `.c` prerequisites (already
+used throughout this Makefile for the general "stale `.o` after an
+edit" reason -- see the comment there) wouldn't notice a bare `make
+NET_PHY=RMII` after a previous `NET_PHY=ENC28J60` build in the same
+directory, and would happily link a stale `eth.o`/`net.o` still
+compiled with the *other* driver selected. `.net_phy_selected` (a real
+file, not just a phony target -- see the Makefile) exists specifically
+to force the right objects to rebuild when this changes; run `make
+clean` first if in doubt rather than trusting it blindly.
+
+### `rtl/ethmac_rmii.v`/`rmii_eth.c` -- known risk areas
+
+Same spirit as the ENC28J60 list below: worth checking these first if
+hardware bring-up doesn't work, roughly in the order most likely to
+explain a total failure vs. a subtler one.
+
+1. **Never touched real fabric.** Everything above is simulation-only
+   (see the testbenches above) -- synthesis, place-and-route, and
+   timing closure on the new 50MHz `ETH_REFCLK` domain have not been
+   confirmed. If `make BOARD=mozart_ml1` doesn't close timing cleanly,
+   start there before doubting the logic itself.
+2. **CDC correctness, reasoned through but not stress-tested.** The
+   two synchronizers (`crs_dv`/`ETH_REFCLK` heartbeat into `wb_clk_i`;
+   the RX "pop" and TX "start" toggle handshakes) follow standard,
+   conservative patterns and are explained inline in
+   `rtl/ethmac_rmii.v`, but "reasoned to be correct" and "survived
+   real silicon at real voltage/temperature margins across many
+   power-on cycles" are different claims. If RX/TX work most of the
+   time but fail intermittently (as opposed to consistently, which
+   would point elsewhere), this is the first thing to suspect.
+3. **REF_CLK50 assumption.** Built assuming pin `C7` is a 50MHz
+   oscillator shared between the FPGA and the LAN8720A's own
+   XTAL/REF_CLK input (confirmed during design, not independently
+   re-verified against a schematic here) -- if RX never locks onto
+   even a plausible-looking bit pattern, confirm this pin is actually
+   toggling at 50MHz before doubting the RX state machine itself.
+4. **100M full-duplex assumed, never confirmed.** See "No MDIO/MDC"
+   above -- there's no way to read back what the PHY actually
+   negotiated. Worth ruling out early (different cable/switch port)
+   if things look wrong from the very start rather than assuming a
+   logic bug.
+5. **Inter-frame gap (48 `ETH_REFCLK` cycles, 12 byte-times) is the
+   IEEE 802.3 minimum, not independently validated against a real
+   switch's tolerance.** If back-to-back transmissions are somehow
+   involved in a failure, this is worth a second look, though it's
+   the least likely item on this list -- 48 cycles matches the spec
+   value exactly, no rounding or approximation involved.
+6. **CRC32 residual constant** (`0xDEBB20E3`) -- see "Register map and
+   driver" above for how it was derived/checked. Low risk (it was
+   verified against `zlib.crc32()`, and the loopback testbench
+   confirms TX's independently-generated FCS is accepted by RX's
+   check of it), but worth re-deriving rather than hand-adjusting if
+   it's ever touched.
+7. **Single RX buffer, promiscuous reception** -- not a correctness
+   risk, but expect a higher `rx_drop_count` than the ENC28J60 backend
+   under equivalent network load. See "Register map and driver" above.
+
+None of this has been run on real hardware. Treat `net.c`'s test
+output, built with `NET_PHY=RMII` against `BOARD=mozart_ml1`, as the
+actual first evidence of whether any of it works outside simulation.
+
 ## `Z_BLOB`: the object system's new binary-data type
 
 Before any of this, `zobj.h`/`zobj.c` needed a type for arbitrary-
@@ -97,8 +327,10 @@ streaming" below.
   depend on the gateway being correct. Correct the constants in
   `net.c` (`OUR_NETMASK`/`OUR_GATEWAY`) if this assumption is wrong
   for your network.
-- **MAC**: `02:00:00:00:00:01`, hardcoded in `sw/apps/net/net.c`. The
-  ENC28J60 has no factory-assigned address. `02` as the first octet
+- **MAC**: `02:00:00:00:00:01`, hardcoded in `sw/apps/net/net.c`.
+  Neither backend has a factory-assigned address (the ENC28J60 has
+  none at all; `rtl/ethmac_rmii.v` has no address-filter register to
+  read one back from even if it did). `02` as the first octet
   (specifically, the locally-administered-address bit) marks this as
   intentionally not a real vendor-assigned MAC, avoiding any
   collision risk with real hardware.
@@ -177,6 +409,10 @@ things that happen to both involve the word "duplex".)
 
 ## Layers implemented so far
 
+- `sw/apps/net/net_phy.h` -- picks the driver underneath everything
+  else (`enc28j60.c` or `rmii_eth.c`) at build time -- see "Second
+  backend: RMII (mozart_ml1)" above. Everything below this bullet is
+  unaware of which one is active.
 - `sw/apps/net/eth.c/h` -- Ethernet framing (build/parse the 14-byte
   header, dispatch received frames to `arp.c`/`ip.c` by ethertype).
 - `sw/apps/net/arp.c/h` -- a small fixed-size (8-entry) IP-to-MAC
@@ -400,6 +636,13 @@ than debugging one layer at a time.
    `net`'s driver-facing internals stay ENC28J60-specific; only the
    public UDP-facing API needs to be something a W5500 backend could
    also implement.
+
+The RMII backend (`mozart_ml1`) followed the same "build and verify
+incrementally" approach but as its own separate staged plan, run in
+parallel to this one rather than as a continuation of it (different
+board, different hardware layer, same lesson applied again) -- see
+"Second backend: RMII (mozart_ml1)" above for where it currently
+stands (simulation-verified, not yet real-hardware-verified).
 
 ## TFTP debugging notes
 
