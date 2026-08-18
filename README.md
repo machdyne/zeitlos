@@ -18,7 +18,7 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 | Framebuffer | 640x480x1bpp |
 | Video | VGA, DVI, DVI over HDMI |
 | Storage | MicroSD |
-| Network | Ethernet (SPI) |
+| Network | Ethernet (SPI) and Ethernet MAC (for RMII PHY) |
 | HID | USB mouse/keyboard |
 | I/O | GPIO, SPI, 16550 UART |
 

@@ -37,7 +37,7 @@
 #include "../../common/zeitlos.h"
 #include "../../common/znet.h"
 #include "../../common/zstream.h"
-#include "enc28j60.h"
+#include "net_phy.h"
 #include "eth.h"
 #include "arp.h"
 #include "ip.h"
@@ -187,19 +187,16 @@ static void check_tftp_progress(void) {
 
 int main(void) {
 
-	printf("net: initializing enc28j60...\n");
+	printf("net: initializing %s...\n", NET_PHY_NAME);
 
-	if (!enc28j60_init(our_mac)) {
-		printf("net: enc28j60_init failed -- chip did not respond "
-			"(revision read back as 0x%02x, expected a small nonzero "
-			"value). check SPI wiring/timing before looking anywhere "
-			"else in the driver -- see enc28j60.c's header comment.\n",
-			enc28j60_revision());
+	if (!phy_init(our_mac)) {
+		printf("net: phy_init (%s) failed -- see that driver's header comment "
+			"for what to check first.\n", NET_PHY_NAME);
 		return 1;
 	}
 
-	printf("net: enc28j60 revision 0x%02x, mac %02x:%02x:%02x:%02x:%02x:%02x\n",
-		enc28j60_revision(),
+	phy_debug_dump();
+	printf("net: mac %02x:%02x:%02x:%02x:%02x:%02x\n",
 		our_mac[0], our_mac[1], our_mac[2], our_mac[3], our_mac[4], our_mac[5]);
 
 	eth_init(our_mac);

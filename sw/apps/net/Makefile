@@ -8,7 +8,20 @@ CFLAGS = --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=ilp32
 LDFLAGS =
 LDSCRIPT = ../../common/riscv-app.ld
 
-OBJS = zeitlos.o zobj.o zstream.o enc28j60.o eth.o arp.o ip.o udp.o tftp.o net.o
+# which NIC driver to build in -- ENC28J60 (SPI PMOD, most boards) or
+# RMII (rtl/ethmac_rmii.v, mozart_ml1 only). See net_phy.h for why
+# this is a build-time choice, not a runtime probe.
+NET_PHY ?= ENC28J60
+#NET_PHY ?= RMII
+CFLAGS += -DNET_PHY_$(NET_PHY)
+
+ifeq ($(NET_PHY), RMII)
+PHY_OBJ = rmii_eth.o
+else
+PHY_OBJ = enc28j60.o
+endif
+
+OBJS = zeitlos.o zobj.o zstream.o $(PHY_OBJ) eth.o arp.o ip.o udp.o tftp.o net.o
 
 net: net.elf net.bin
 
@@ -18,6 +31,26 @@ net: net.elf net.bin
 # keep linking a stale .o built from an older version of that file
 # after any edit. bit us for real with sw/os/fs/fs.c during this
 # session's zstream/TFTP work -- see docs/networking.md.
+#
+# NET_PHY itself is a second, different way the same class of
+# staleness bug can happen: switching it changes CFLAGS and which
+# driver .o gets linked, not any .c file's contents, so a plain .c
+# prerequisite wouldn't notice `make NET_PHY=RMII` after a previous
+# `make NET_PHY=ENC28J60` and would happily link a stale eth.o/net.o
+# still compiled with the OTHER driver's -DNET_PHY_* -- silently
+# building for the wrong board. .net_phy_selected below is a real
+# file whose mtime only changes when NET_PHY's value actually does
+# (FORCE makes its own recipe re-run the check every build; the
+# recipe itself only rewrites the file, bumping its mtime, if the
+# value differs from last time), and every NET_PHY-sensitive object
+# depends on it.
+
+FORCE:
+
+.net_phy_selected: FORCE
+	@if [ ! -f $@ ] || [ "$$(cat $@ 2>/dev/null)" != "$(NET_PHY)" ]; then \
+		echo "$(NET_PHY)" > $@; \
+	fi
 
 zeitlos.o: ../../common/zeitlos.c ../../common/zeitlos.h
 	$(CC) $(CFLAGS) -c ../../common/zeitlos.c -o zeitlos.o
@@ -28,10 +61,13 @@ zobj.o: ../../common/zobj.c ../../common/zobj.h
 zstream.o: ../../common/zstream.c ../../common/zstream.h
 	$(CC) $(CFLAGS) -c ../../common/zstream.c -o zstream.o
 
-enc28j60.o: enc28j60.c enc28j60.h
+enc28j60.o: enc28j60.c enc28j60.h .net_phy_selected
 	$(CC) $(CFLAGS) -c enc28j60.c -o enc28j60.o
 
-eth.o: eth.c eth.h
+rmii_eth.o: rmii_eth.c rmii_eth.h .net_phy_selected
+	$(CC) $(CFLAGS) -c rmii_eth.c -o rmii_eth.o
+
+eth.o: eth.c eth.h net_phy.h .net_phy_selected
 	$(CC) $(CFLAGS) -c eth.c -o eth.o
 
 arp.o: arp.c arp.h
@@ -46,7 +82,7 @@ udp.o: udp.c udp.h
 tftp.o: tftp.c tftp.h
 	$(CC) $(CFLAGS) -c tftp.c -o tftp.o
 
-net.o: net.c
+net.o: net.c net_phy.h .net_phy_selected
 	$(CC) $(CFLAGS) -c net.c -o net.o
 	$(CC) $(CFLAGS) -c net.c -S -o net.asm
 
@@ -60,6 +96,6 @@ net.bin: net.elf
 	$(PREFIX)objcopy -O binary --pad-to=$$END net.elf net.bin
 
 clean:
-	rm -f net.elf net.bin net.asm net.dasm net.map *.o *.d
+	rm -f net.elf net.bin net.asm net.dasm net.map *.o *.d .net_phy_selected
 
-.PHONY: net clean
+.PHONY: net clean FORCE

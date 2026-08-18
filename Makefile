@@ -13,6 +13,7 @@ RTL_PICO = \
 	rtl/mem/glyph.v \
 	rtl/spiflashro.v \
 	rtl/spibb_eth.v \
+	rtl/ethmac_rmii.v \
 	rtl/debug.v \
 	rtl/spibb.v \
 	rtl/gpu/gpu_raster.v \

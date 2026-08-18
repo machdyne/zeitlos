@@ -487,7 +487,7 @@ tftp_result_t tftp_poll(uint32_t *out_len, char *err_out, uint32_t err_out_len) 
 				fail("timed out");
 			} else {
 				printf("net: tftp retry %d/%d\n", retries, TFTP_MAX_RETRIES);
-				enc28j60_debug_dump();
+				//enc28j60_debug_dump();
 				send_last_packet();	// retransmit
 			}
 		}

@@ -10,7 +10,7 @@
 #include <stdbool.h>
 
 #include "eth.h"
-#include "enc28j60.h"
+#include "net_phy.h"
 #include "arp.h"
 #include "ip.h"
 #include "../../common/zeitlos.h"
@@ -46,7 +46,7 @@ bool eth_send(const uint8_t dst_mac[6], uint16_t ethertype,
 		framelen = 60;
 	}
 
-	return enc28j60_send(txbuf, framelen);
+	return phy_send(txbuf, framelen);
 
 }
 
@@ -55,21 +55,20 @@ void eth_poll(void) {
 	uint16_t len;
 	int drained = 0;
 
-	// bounded defensively -- if enc28j60_recv() ever fails to return
-	// 0 (e.g. a bug in the ENC28J60 driver's EPKTCNT/ERXRDPT handling
-	// under buffer wraparound), this loop would otherwise spin
-	// forever, and would do so silently from net's other code's
-	// perspective (this file's own "rx frame" print below would still
-	// fire every iteration, so it wouldn't be silent from THIS log,
-	// but nothing downstream -- retries, other polling -- would ever
-	// run again). capped well above any realistic single-poll packet
-	// burst.
-	while ((len = enc28j60_recv(rxbuf, sizeof(rxbuf))) > 0) {
+	// bounded defensively -- if phy_recv() ever fails to return 0
+	// (e.g. a bug in the active driver's own receive-drain logic)
+	// this loop would otherwise spin forever, and would do so
+	// silently from net's other code's perspective (this file's own
+	// "rx frame" print below would still fire every iteration, so it
+	// wouldn't be silent from THIS log, but nothing downstream --
+	// retries, other polling -- would ever run again). capped well
+	// above any realistic single-poll packet burst.
+	while ((len = phy_recv(rxbuf, sizeof(rxbuf))) > 0) {
 
 		drained++;
 		if (drained > 64) {
 			printf("net: eth_poll drained >64 packets in one call, bailing "
-				"(possible enc28j60 driver bug -- EPKTCNT never reaching 0?)\n");
+				"(possible driver bug -- receive-ready flag never clearing?)\n");
 			break;
 		}
 
