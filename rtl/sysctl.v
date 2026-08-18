@@ -82,6 +82,15 @@ module sysctl #()
    input ETH_INT,
 `endif
 
+`ifdef ETH_RMII
+   input ETH_REFCLK,
+   input [1:0] ETH_RXD,
+   output [1:0] ETH_TXD,
+   output ETH_TX_EN,
+   input ETH_CRS_DV,
+   output ETH_RST_N,
+`endif
+
 `ifdef GPU_VGA
 	output VGA_R,
 	output VGA_G,
@@ -305,6 +314,7 @@ module sysctl #()
 	wire [31:0] wbs_gpu_blit_dat_o;
 	wire [31:0] wbs_glyph_dat_o;
 	wire [31:0] wbs_spieth_dat_o;
+	wire [31:0] wbs_ethmac_dat_o;
 
 	wire cs_bram = (wbm_adr < 8192);
 	wire cs_mtu = ((wbm_adr & 32'hf000_0000) == 32'h9000_0000);
@@ -368,6 +378,9 @@ module sysctl #()
 `ifdef SPI_ETH
 	wire cs_spieth = ((wbm_adr & 32'hf000_0000) == 32'h5000_0000);
 `endif
+`ifdef ETH_RMII
+	wire cs_ethmac = ((wbm_adr & 32'hf000_0000) == 32'h6000_0000);
+`endif
 `ifdef DEBUG
 	wire cs_debug = ((wbm_adr & 32'hf000_0000) == 32'he000_0000);
 `endif
@@ -420,6 +433,9 @@ module sysctl #()
 `ifdef SPI_ETH
 		cs_spieth ? wbs_spieth_dat_o :
 `endif
+`ifdef ETH_RMII
+		cs_ethmac ? wbs_ethmac_dat_o :
+`endif
 		32'hzzzz_zzzz;
 
 	wire wbs_bram_ack_o;
@@ -438,6 +454,7 @@ module sysctl #()
 	wire wbs_gpu_blit_ack_o;
 	wire wbs_glyph_ack_o;
 	wire wbs_spieth_ack_o;
+	wire wbs_ethmac_ack_o;
 
 	assign wbm_ack =
 		cs_bram ? wbs_bram_ack_o :
@@ -483,6 +500,9 @@ module sysctl #()
 `endif
 `ifdef SPI_ETH
 		cs_spieth ? wbs_spieth_ack_o :
+`endif
+`ifdef ETH_RMII
+		cs_ethmac ? wbs_ethmac_ack_o :
 `endif
 		1'b0;
 
@@ -1011,6 +1031,31 @@ module sysctl #()
 		.eth_mosi(ETH_MOSI),
 		.eth_sck(ETH_SCLK),
 		.eth_int(ETH_INT)
+	);
+`endif
+
+	// WISHBONE SLAVE: RMII ETHERNET MAC (LAN8720A, mozart_ml1 only)
+`ifdef ETH_RMII
+	wire wbm_cyc_ethmac = cs_ethmac && wbm_cyc;
+
+	ethmac_rmii_wb #() wbs_ethmac0_i
+	(
+		.wb_clk_i(wbm_clk),
+		.wb_rst_i(wbm_rst),
+		.wb_adr_i(wbm_adr_sel_word),
+		.wb_dat_i(wbm_dat_o),
+		.wb_dat_o(wbs_ethmac_dat_o),
+		.wb_we_i(wbm_we),
+		.wb_sel_i(wbm_sel),
+		.wb_stb_i(wbm_stb),
+		.wb_ack_o(wbs_ethmac_ack_o),
+		.wb_cyc_i(wbm_cyc_ethmac),
+		.eth_refclk(ETH_REFCLK),
+		.eth_rxd(ETH_RXD),
+		.eth_txd(ETH_TXD),
+		.eth_tx_en(ETH_TX_EN),
+		.eth_crs_dv(ETH_CRS_DV),
+		.eth_rst_n(ETH_RST_N)
 	);
 `endif
 
