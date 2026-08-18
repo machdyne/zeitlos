@@ -6,14 +6,19 @@ module pll0
 (
     input clkin, // 48 MHz, 0 deg
     output clkout0, // 100 MHz, 0 deg
-    output clkout1, // 75 MHz, 0 deg
+    output clkout1, // unused -- video (pclk) moved to pll1, which now
+                     // provides both pclk and bclk together from a
+                     // single shared VCO for an exact ratio between
+                     // them (see pll1.v's own comment). Left disabled
+                     // rather than removing the port outright, to
+                     // avoid renumbering clkout2/clkout3 throughout
+                     // rtl/sysctl.v for no functional benefit.
     output clkout2, // 50 MHz, 0 deg
     output clkout3, // 12 MHz, 0 deg
     output locked
 );
 (* FREQUENCY_PIN_CLKI="48" *)
 (* FREQUENCY_PIN_CLKOP="100" *)
-(* FREQUENCY_PIN_CLKOS="75" *)
 (* FREQUENCY_PIN_CLKOS2="50" *)
 (* FREQUENCY_PIN_CLKOS3="12" *)
 (* ICP_CURRENT="12" *) (* LPF_RESISTOR="8" *) (* MFG_ENABLE_FILTEROPAMP="1" *) (* MFG_GMCREF_SEL="2" *)
@@ -31,8 +36,8 @@ EHXPLLL #(
         .CLKOP_DIV(6),
         .CLKOP_CPHASE(2),
         .CLKOP_FPHASE(0),
-        .CLKOS_ENABLE("ENABLED"),
-        .CLKOS_DIV(8),
+        .CLKOS_ENABLE("DISABLED"),
+        .CLKOS_DIV(19),
         .CLKOS_CPHASE(2),
         .CLKOS_FPHASE(0),
         .CLKOS2_ENABLE("ENABLED"),

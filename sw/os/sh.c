@@ -474,8 +474,29 @@ void init(void) {
 	printf("init: net started as pid %ld\n", pid_wm);
 
 	// net:
+	//
+	// NOT started here, only its pid slot reserved -- net.c's own
+	// startup currently hangs forever when there's no
+	// NIC PMOD physically present, which is always true on Lakritz
+	// right now: it only has one PMOD slot, and that's already
+	// occupied by the USB-UART PMOD this console runs over. Reserving
+	// the slot without loading/starting the binary (k_proc_create()
+	// only -- no fs_load(), no k_proc_start()) still gets net its
+	// usual pid (2), which is all portdemo below actually needs --
+	// term.c/zport.h don't care whether net itself is running, only
+	// that portdemo lands on a predictable pid, which depends on
+	// wm/net/portdemo all being created in this same fixed order
+	// every time (see docs/networking.md's note on why net/wm need a
+	// predictable pid, and docs/ports.md's "Testing this").
+	//
+	// once net's NIC-detection hang is fixed (or on a board/config
+	// that actually has a NIC PMOD available), this can go back to
+	// loading+starting net normally -- or, in the meantime, `run net`
+	// still works to start it manually (on a DIFFERENT, newly
+	// allocated pid, not this reserved one -- fine for manual testing,
+	// just not usable by anything hardcoded to expect pid 2).
 
-	printf("starting net\n");
+	printf("reserving net's pid (not starting it -- see comment above)\n");
 	uint32_t size_net = fs_size("net");
 	if (!size_net) {
 		printf("init: net binary not found\n");
@@ -483,13 +504,35 @@ void init(void) {
 	}
 	uint32_t pid_net = k_proc_create(size_net);
 	if (!pid_net) {
-		printf("init: unable to create net process\n");
+		printf("init: unable to reserve net process\n");
 		return;
 	}
-	uint32_t base_net = k_proc_base(pid_net);
-	fs_load(base_net, "net");
-	k_proc_start(pid_net);
-	printf("init: net started as pid %ld\n", pid_net);
+	printf("init: net pid %ld reserved (not started)\n", pid_net);
+
+	// portdemo: a virtual port provider with no real hardware behind
+	// it -- see docs/ports.md and sw/apps/portdemo/portdemo.c. same
+	// reason as wm/net above: term.c connects to it at the fixed pid
+	// Z_PID_PORTDEMO (zport.h), so it needs a predictable pid too.
+	// not fatal if this one specifically fails to start (unlike
+	// wm/net above) -- term falls back to local echo without it, see
+	// term.c's own header comment.
+
+	printf("starting portdemo\n");
+	uint32_t size_portdemo = fs_size("portdemo");
+	if (!size_portdemo) {
+		printf("init: portdemo binary not found (non-fatal -- term will "
+			"fall back to local echo)\n");
+		return;
+	}
+	uint32_t pid_portdemo = k_proc_create(size_portdemo);
+	if (!pid_portdemo) {
+		printf("init: unable to create portdemo process (non-fatal)\n");
+		return;
+	}
+	uint32_t base_portdemo = k_proc_base(pid_portdemo);
+	fs_load(base_portdemo, "portdemo");
+	k_proc_start(pid_portdemo);
+	printf("init: portdemo started as pid %ld\n", pid_portdemo);
 
 }
 
@@ -558,7 +601,14 @@ void hex_dump(uint32_t addr) {
 
 void cls(void) {
 	volatile uint32_t *addr = (uint32_t *)0x20000000;
-	for (int i = 0; i < (((512 * 384) / 32) / sizeof(int)); i++) {
+	// word count directly -- addr+i is uint32_t* pointer arithmetic
+	// (already advances 4 bytes per i), so this must NOT also divide
+	// by sizeof(int) the way it used to: (512*384/32)/sizeof(int) was
+	// a pre-existing bug that only cleared 1/4 of actual VRAM (1536
+	// of the 6144 words the old 512x384 framebuffer actually had).
+	// Fixed alongside updating the dimensions themselves for the new
+	// native 640x480 resolution (640*480/32 = 9600 words).
+	for (int i = 0; i < ((640 * 480) / 32); i++) {
 		(*(volatile uint32_t *)(addr + i)) = 0x00000000;
 	}
 }

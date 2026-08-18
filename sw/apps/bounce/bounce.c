@@ -5,8 +5,8 @@
 #include "../../common/zeitlos.h"
 
 #define MEM_VRAM ((volatile uint32_t *)0x20000000)
-#define WIDTH 512
-#define HEIGHT 384
+#define WIDTH 640
+#define HEIGHT 480
 
 void set_pixel(int x, int y, int c);
 void draw_box(int x0, int y0, int width, int height, int c);

@@ -22,7 +22,6 @@
 `define GPU
 `define GPU_RASTER
 `define GPU_BLIT
-`define GPU_PIXEL_DOUBLE
 `define GPU_CURSOR
 `define GPU_VGA
 `define UART0
@@ -42,7 +41,6 @@
 `define GPU
 `define GPU_RASTER
 `define GPU_BLIT
-`define GPU_PIXEL_DOUBLE
 `define GPU_CURSOR
 `define GPU_DDMI
 `define UART0
@@ -61,7 +59,6 @@
 `define GPU
 `define GPU_RASTER
 `define GPU_BLIT
-`define GPU_PIXEL_DOUBLE
 `define GPU_CURSOR
 `define GPU_DDMI
 `define UART0
@@ -79,7 +76,6 @@
 `define GPU
 `define GPU_RASTER
 `define GPU_BLIT
-`define GPU_PIXEL_DOUBLE
 `define GPU_CURSOR
 `define GPU_VGA
 `define UART0
@@ -97,7 +93,6 @@
 `define GPU
 `define GPU_RASTER
 `define GPU_BLIT
-`define GPU_PIXEL_DOUBLE
 `define GPU_CURSOR
 `define GPU_VGA
 `define UART0

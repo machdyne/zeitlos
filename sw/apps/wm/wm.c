@@ -28,8 +28,8 @@
 #include "../../common/zkbd.h"
 
 #define WM_MAX_WINDOWS    16
-#define WM_SCREEN_W       512
-#define WM_SCREEN_H       384
+#define WM_SCREEN_W       640
+#define WM_SCREEN_H       480
 #define WM_TITLE_MAX      24
 
 typedef struct {
@@ -198,10 +198,11 @@ static void repair_region(int rx, int ry, int rw, int rh, int exclude_idx) {
 // -- mouse --
 //
 // reg_usbN_cursor's x/y fields come from a hardware cursor tracker
-// (rtl/usb_hid.v) that's clamped, not wrapping: curs_x in [0,1023],
-// curs_y in [0,767] -- both exactly 2x the 512x384 framebuffer, so /2
-// maps them onto screen pixels directly. no software-side tracking
-// needed.
+// (rtl/usb_hid.v) clamped to [0,639]/[0,479] -- exactly the native
+// 640x480 framebuffer resolution, so no scaling is needed at all
+// (this used to be a /2, back when curs_x/curs_y's native range was
+// [0,1023]/[0,767], double the then-512x384 framebuffer -- see
+// rtl/usb_hid.v's own comment on why that clamp changed).
 //
 // there are two independent USB HID ports now (see zeitlos.h), and
 // no fixed port-to-device mapping -- either port might be the mouse.
@@ -226,12 +227,12 @@ static inline int mouse_port(void) {
 
 static inline int get_cursor_x(void) {
 	uint32_t cursor = (mouse_port() == 0) ? reg_usb0_cursor : reg_usb1_cursor;
-	return (cursor & 0x3FF) / 2;
+	return cursor & 0x3FF;
 }
 
 static inline int get_cursor_y(void) {
 	uint32_t cursor = (mouse_port() == 0) ? reg_usb0_cursor : reg_usb1_cursor;
-	return ((cursor >> 10) & 0x3FF) / 2;
+	return (cursor >> 10) & 0x3FF;
 }
 
 static inline uint8_t get_mouse_btn(void) {

@@ -152,5 +152,25 @@ install-deps:
 	sudo apt-get update
 	sudo apt-get install -y gcc make valgrind cppcheck clang-format
 
+# zvt100 test suite (independent of zobj -- no ZOBJ_DIR dependency)
+ZVT100_DIR = ../common
+ZVT100_SRC = $(ZVT100_DIR)/zvt100.c
+ZVT100_OBJ = $(BUILD_DIR)/zvt100.o
+TEST_ZVT100_OBJ = $(BUILD_DIR)/test_zvt100.o
+TEST_ZVT100_EXE = $(BUILD_DIR)/test_zvt100
+
+$(ZVT100_OBJ): $(ZVT100_SRC) $(ZVT100_DIR)/zvt100.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -I$(ZVT100_DIR) -c $< -o $@
+
+$(TEST_ZVT100_OBJ): test_zvt100.c $(ZVT100_DIR)/zvt100.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -I$(ZVT100_DIR) -c $< -o $@
+
+$(TEST_ZVT100_EXE): $(TEST_ZVT100_OBJ) $(ZVT100_OBJ) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
+
+test-zvt100: $(TEST_ZVT100_EXE)
+	@echo "Running zvt100 test suite..."
+	./$(TEST_ZVT100_EXE)
+
 # Phony targets
-.PHONY: all test test-all memtest quick debug release coverage coverage-report analyze format clean help setup install-deps
+.PHONY: all test test-all test-zvt100 memtest quick debug release coverage coverage-report analyze format clean help setup install-deps

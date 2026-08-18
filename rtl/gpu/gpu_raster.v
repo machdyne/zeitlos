@@ -31,20 +31,24 @@ module gpu_raster_wb (
     input               m_ack_i
 );
 
-// CPU interface registers  
-reg [8:0] cpu_x0, cpu_x1, cpu_y0, cpu_y1;
+// CPU interface registers -- 10 bits: x needs 0-639 now (640-wide
+// native resolution), which doesn't fit the old 9-bit (0-511 max)
+// fields. Y only needs 0-479, but is bundled with X in the same
+// declarations/FIFO packing, so widened uniformly for simplicity --
+// a handful of extra flip-flops, not meaningfully costly.
+reg [9:0] cpu_x0, cpu_x1, cpu_y0, cpu_y1;
 reg cpu_color;
 
 // Clipping registers
-reg [8:0] clip_x0, clip_y0, clip_x1, clip_y1;
+reg [9:0] clip_x0, clip_y0, clip_x1, clip_y1;
 reg clip_enable;
 
 // Command FIFO parameters
 parameter FIFO_DEPTH = 16;
 parameter FIFO_ADDR_WIDTH = 4;
 
-// Command FIFO storage (37 bits per entry: 9+9+9+9+1)
-reg [36:0] fifo_mem [0:FIFO_DEPTH-1];
+// Command FIFO storage (41 bits per entry: 10+10+10+10+1)
+reg [40:0] fifo_mem [0:FIFO_DEPTH-1];
 reg [FIFO_ADDR_WIDTH-1:0] fifo_wr_ptr;
 reg [FIFO_ADDR_WIDTH-1:0] fifo_rd_ptr;
 reg [FIFO_ADDR_WIDTH:0] fifo_count;
@@ -56,11 +60,11 @@ wire fifo_push;
 wire fifo_pop;
 
 // Current drawing command registers
-reg [8:0] x0, x1, y0, y1;
+reg [9:0] x0, x1, y0, y1;
 reg color;
 
 // Drawing state registers
-reg [8:0] cur_x, cur_y;
+reg [9:0] cur_x, cur_y;
 reg draw_busy;
 reg [15:0] pixel_count;
 
@@ -88,17 +92,28 @@ reg signed [12:0] err;
 wire signed [12:0] e2;
 wire e2_gt_dy, e2_lt_dx;
 wire signed [12:0] err1, err2;
-wire [8:0] xa, ya, xb, yb;
-wire [8:0] next_x, next_y;
+wire [9:0] xa, ya, xb, yb;
+wire [9:0] next_x, next_y;
 wire at_end;
 
 // Calculate step directions and distances
+//
+// deltax/deltay are signed [10:0] (11 bits, bit 10 is the true sign
+// bit) -- but the checks below used to read bit 8, left over from
+// when these were 9-bit fields matching x0/x1's own width (where bit
+// 8 *was* the sign bit). For |delta| <= 255 this still happened to
+// work: two's-complement sign-extension makes bits 8, 9, and 10 all
+// equal at that magnitude. Past 255 it silently breaks -- the
+// direction comes out wrong, and the stepper runs away instead of
+// stopping at x1/y1. This is exactly what caused wm.c's chrome lines
+// (typically a few hundred pixels wide) to draw all the way across
+// the screen instead of stopping at the window's own edge.
 assign deltax = x1 - x0;
-assign right = ~deltax[8];   // right if deltax is not negative
+assign right = ~deltax[10];   // right if deltax is not negative
 assign dx = right ? deltax : -deltax;     // dx is always positive
 
 assign deltay = y1 - y0;
-assign down = ~deltay[8];    // down if deltay is not negative  
+assign down = ~deltay[10];    // down if deltay is not negative
 assign dy = down ? -deltay : deltay;      // dy is always negative
 
 // Error calculation
@@ -135,8 +150,12 @@ wire pixel_in_clip = !clip_enable ||
                     (cur_x >= clip_x0 && cur_x <= clip_x1 && 
                      cur_y >= clip_y0 && cur_y <= clip_y1);
 
-// VRAM address calculation
-wire [31:0] pixel_word_addr = 32'h20000000 + ((cur_y << 4) + (cur_x >> 5)) * 4;
+// VRAM address calculation -- 640px/row = 20 words/row (not a
+// power-of-2 stride like the old 512px/16-word row was, so this is
+// now (cur_y*20), computed as (cur_y<<4)+(cur_y<<2) to avoid
+// inferring an actual multiplier for what's just cur_y*20 -- see
+// rtl/gpu/gpu_video.v's own row_base comment, same reasoning).
+wire [31:0] pixel_word_addr = 32'h20000000 + (((cur_y << 4) + (cur_y << 2) + (cur_x >> 5)) * 4);
 wire [4:0] pixel_bit_pos = cur_x[4:0];
 wire [31:0] pixel_mask = 32'h00000001 << pixel_bit_pos;
 
@@ -171,15 +190,15 @@ end
 // Wishbone register interface
 always @(posedge clk) begin
     if (rst) begin
-        cpu_x0 <= 9'd0;
-        cpu_y0 <= 9'd0;
-        cpu_x1 <= 9'd0;
-        cpu_y1 <= 9'd0;
+        cpu_x0 <= 10'd0;
+        cpu_y0 <= 10'd0;
+        cpu_x1 <= 10'd0;
+        cpu_y1 <= 10'd0;
         cpu_color <= 1'b0;
-        clip_x0 <= 9'd0;
-        clip_y0 <= 9'd0;
-        clip_x1 <= 9'd511;  // Default to full screen
-        clip_y1 <= 9'd511;
+        clip_x0 <= 10'd0;
+        clip_y0 <= 10'd0;
+        clip_x1 <= 10'd639;  // Default to full screen (640x480 native)
+        clip_y1 <= 10'd479;
         clip_enable <= 1'b0;  // Disabled by default
         wb_ack_o <= 1'b0;
         wb_dat_o <= 32'd0;
@@ -190,36 +209,36 @@ always @(posedge clk) begin
             wb_ack_o <= 1'b1;
             if (wb_we_i) begin
                 case (wb_adr_i[4:0])
-                    5'd0: cpu_x0 <= wb_dat_i[8:0];
-                    5'd1: cpu_y0 <= wb_dat_i[8:0];
-                    5'd2: cpu_x1 <= wb_dat_i[8:0];
-                    5'd3: cpu_y1 <= wb_dat_i[8:0];
+                    5'd0: cpu_x0 <= wb_dat_i[9:0];
+                    5'd1: cpu_y0 <= wb_dat_i[9:0];
+                    5'd2: cpu_x1 <= wb_dat_i[9:0];
+                    5'd3: cpu_y1 <= wb_dat_i[9:0];
                     5'd4: cpu_color <= wb_dat_i[0];
                     5'd5: ; // Start command - handled by FIFO push logic
-                    5'd11: clip_x0 <= wb_dat_i[8:0];
-                    5'd12: clip_y0 <= wb_dat_i[8:0];
-                    5'd13: clip_x1 <= wb_dat_i[8:0];
-                    5'd14: clip_y1 <= wb_dat_i[8:0];
+                    5'd11: clip_x0 <= wb_dat_i[9:0];
+                    5'd12: clip_y0 <= wb_dat_i[9:0];
+                    5'd13: clip_x1 <= wb_dat_i[9:0];
+                    5'd14: clip_y1 <= wb_dat_i[9:0];
                     5'd15: clip_enable <= wb_dat_i[0];
                     default: ;
                 endcase
             end else begin
                 case (wb_adr_i[4:0])
-                    5'd0: wb_dat_o <= {23'd0, cpu_x0};
-                    5'd1: wb_dat_o <= {23'd0, cpu_y0};
-                    5'd2: wb_dat_o <= {23'd0, cpu_x1};
-                    5'd3: wb_dat_o <= {23'd0, cpu_y1};
+                    5'd0: wb_dat_o <= {22'd0, cpu_x0};
+                    5'd1: wb_dat_o <= {22'd0, cpu_y0};
+                    5'd2: wb_dat_o <= {22'd0, cpu_x1};
+                    5'd3: wb_dat_o <= {22'd0, cpu_y1};
                     5'd4: wb_dat_o <= {31'd0, cpu_color};
                     5'd5: wb_dat_o <= 32'd0; // Start register (write-only)
                     5'd6: wb_dat_o <= {31'd0, busy_signal};
                     5'd7: wb_dat_o <= {16'd0, pixel_count};
-                    5'd8: wb_dat_o <= {23'd0, cur_x};
-                    5'd9: wb_dat_o <= {23'd0, cur_y};
+                    5'd8: wb_dat_o <= {22'd0, cur_x};
+                    5'd9: wb_dat_o <= {22'd0, cur_y};
                     5'd10: wb_dat_o <= {27'd0, fifo_count}; // Debug: FIFO count
-                    5'd11: wb_dat_o <= {23'd0, clip_x0};
-                    5'd12: wb_dat_o <= {23'd0, clip_y0};
-                    5'd13: wb_dat_o <= {23'd0, clip_x1};
-                    5'd14: wb_dat_o <= {23'd0, clip_y1};
+                    5'd11: wb_dat_o <= {22'd0, clip_x0};
+                    5'd12: wb_dat_o <= {22'd0, clip_y0};
+                    5'd13: wb_dat_o <= {22'd0, clip_x1};
+                    5'd14: wb_dat_o <= {22'd0, clip_y1};
                     5'd15: wb_dat_o <= {31'd0, clip_enable};
                     default: wb_dat_o <= 32'd0;
                 endcase
@@ -239,14 +258,14 @@ always @(posedge clk) begin
         m_adr_o <= 32'd0;
         m_dat_o <= 32'd0;
         state <= IDLE;
-        cur_x <= 9'd0;
-        cur_y <= 9'd0;
+        cur_x <= 10'd0;
+        cur_y <= 10'd0;
         err <= 13'd0;
         pixel_count <= 16'd0;
-        x0 <= 9'd0;
-        y0 <= 9'd0;
-        x1 <= 9'd0;
-        y1 <= 9'd0;
+        x0 <= 10'd0;
+        y0 <= 10'd0;
+        x1 <= 10'd0;
+        y1 <= 10'd0;
         color <= 1'b0;
     end else begin
         case(state)

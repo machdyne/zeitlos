@@ -22,12 +22,14 @@ module vram_wb #()
    output reg [31:0] gb_dat_o
 );
 
-`ifdef GPU_PIXEL_DOUBLE
-    reg [31:0] vram [0:6143];   // 512 * 384 / 32 = 6144 words
-//    reg [31:0] vram [0:12287];   // 512 * 384 / 32 = 6144 words * 2
-`else
-    reg [31:0] vram [0:24575];  // 1024 * 768 / 32 = 24576 words
-`endif
+    // 640 * 480 / 32 = 9600 words -- native resolution. GPU_PIXEL_DOUBLE
+    // (rendering at half this and doubling both axes on scanout, the
+    // scheme that used to let a 512x384 framebuffer fill a 1024x768
+    // signal) is gone -- no board defines it anymore, and
+    // rtl/gpu/gpu_video.v no longer has any conditional branch on it
+    // either, so keeping one here too would just be a latent
+    // VRAM-size mismatch waiting to happen if it were ever redefined.
+    reg [31:0] vram [0:9599];
 
     wire wb_active = wb_cyc_i && wb_stb_i;
 

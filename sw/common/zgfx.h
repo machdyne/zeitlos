@@ -43,8 +43,8 @@
 #include <stdint.h>
 #include "zfont.h"
 
-#define Z_SCREEN_W 512
-#define Z_SCREEN_H 384
+#define Z_SCREEN_W 640
+#define Z_SCREEN_H 480
 
 // inclusive bounds
 typedef struct {
@@ -56,6 +56,24 @@ void z_fb_set_pixel(int x, int y, int color, const z_clip_t *clip);
 void z_fb_fill_rect(int x, int y, int w, int h, int color, const z_clip_t *clip);
 void z_fb_draw_char(int x, int y, char c, int color, const z_font_t *font, const z_clip_t *clip);
 void z_fb_draw_text(int x, int y, const char *s, int color, const z_font_t *font, const z_clip_t *clip);
+
+// like z_fb_draw_char()/z_fb_draw_text(), but with fg AND bg
+// independently colorable, instead of z_fb_draw_char()'s bg hardcoded
+// to 0 (see its own comment). The hardware glyph blitter
+// (rtl/gpu/gpu_blit.v) already has two genuinely independent color
+// registers (fg_color_reg/bg_color_reg, each latched into every pixel
+// of the cell depending on that pixel's glyph bit -- see
+// ST_GLYPH_WRITE_LO's read-modify-write) -- z_fb_draw_char() just
+// never exposed the second one. Useful for anything drawing solid
+// two-color cells, e.g. a terminal emulator's reverse-video attribute
+// (sw/apps/term) -- swap fg_color/bg_color for a "reverse" cell
+// instead of falling back to per-pixel software rendering, which is
+// what motivated adding this: sw/apps/term used to do exactly that
+// (see its own git history) and redrawing a full 80x25 grid through
+// z_fb_set_pixel() one pixel at a time was slow enough to be visibly
+// laggy while typing.
+void z_fb_draw_char2(int x, int y, char c, int fg_color, int bg_color, const z_font_t *font, const z_clip_t *clip);
+void z_fb_draw_text2(int x, int y, const char *s, int fg_color, int bg_color, const z_font_t *font, const z_clip_t *clip);
 
 // hardware-accelerated line draw via the GPU line rasterizer
 // (rtl/gpu/gpu_raster.v). Handles both hazards of that shared

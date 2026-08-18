@@ -60,8 +60,8 @@ typedef struct {
 } object3d_t;
 
 // Screen configuration (adjust to match your display)
-#define SCREEN_WIDTH 512
-#define SCREEN_HEIGHT 384
+#define SCREEN_WIDTH 640
+#define SCREEN_HEIGHT 480
 // scaled down along with WIN_WIDTH/HEIGHT below -- was 300 for the
 // original full-screen (512x384) version. Projected extent scales
 // linearly with this value (z_offset is independent of it), so this

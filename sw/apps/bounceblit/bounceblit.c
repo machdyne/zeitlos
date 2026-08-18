@@ -22,8 +22,8 @@
 #define CTRL_CLIP       (1 << 2)
 
 // Screen parameters
-#define WIDTH           512
-#define HEIGHT          384
+#define WIDTH           640
+#define HEIGHT          480
 
 // Patterns
 #define PATTERN_BLACK   0x00000000

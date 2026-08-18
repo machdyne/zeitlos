@@ -122,9 +122,12 @@ module sysctl #()
 
 	// CLOCKS
 
-	wire clk125mhz;
+	wire clk125mhz;	// actually 126MHz now (TMDS bclk) -- name kept
+					// as-is to avoid a wide mechanical rename, see
+					// rtl/clk/pll1.v's own comment for the real value
 	wire clk100mhz;
-	wire clk75mhz;
+	wire clk75mhz;	// actually 25.2MHz now (pixel clock, pclk) --
+					// same naming note as clk125mhz above
 	wire clk50mhz;
 	wire clk48mhz = CLK_48;
 	wire clk12mhz;
@@ -140,7 +143,7 @@ module sysctl #()
 	pll0 #() pll0_i (
 		.clkin(clk48mhz),
 		.clkout0(clk100mhz),
-		.clkout1(clk75mhz),
+		.clkout1(),
 		.clkout2(clk50mhz),
 		.clkout3(clk12mhz),
 		.locked(pll0_locked)
@@ -149,6 +152,7 @@ module sysctl #()
 	pll1 #() pll1_i (
 		.clkin(clk48mhz),
 		.clkout0(clk125mhz),
+		.clkout1(clk75mhz),
 		.locked(pll1_locked)
 	);
 

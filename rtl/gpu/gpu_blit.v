@@ -56,7 +56,7 @@ module gpu_blit_wb #(
 );
 
     localparam VRAM_BASE = 32'h20000000;
-    localparam SCREEN_STRIDE = 64; // 512 pixels / 8 = 64 bytes per line
+    localparam SCREEN_STRIDE = 80; // 640 pixels / 8 = 80 bytes per line
 
     // Control bits
     localparam CTRL_START = 0;
@@ -105,9 +105,10 @@ module gpu_blit_wb #(
     reg [31:0] g_row;           // current row within the glyph, 0..work_glyph_h-1
     reg [7:0]  g_glyph_byte;    // glyph row byte, as fetched from glyph memory (still MSB-first at this point)
 
-    // Clipping calculations (fill/copy path, unchanged)
-    wire [31:0] screen_clip_x_end = 32'd512;
-    wire [31:0] screen_clip_y_end = 32'd384;
+    // Clipping calculations (fill/copy path, unchanged) -- 640x480
+    // native resolution now, was 512x384
+    wire [31:0] screen_clip_x_end = 32'd640;
+    wire [31:0] screen_clip_y_end = 32'd480;
     wire [31:0] rect_x_end = work_dst_x + work_width;
     wire [31:0] rect_y_end = work_dst_y + work_height;
 

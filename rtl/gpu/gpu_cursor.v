@@ -33,12 +33,14 @@ module gpu_cursor #()
 	// rather than wrapping to the other side.
 	//
 	// note: curs_x/curs_y are compared against gpu_x/gpu_y directly,
-	// unscaled -- an earlier revision divided them by 2 on the theory
-	// that curs_x/y's native range (0..1023/0..767, see rtl/usb_hid.v)
-	// was double the 512x384 framebuffer resolution, but that was
-	// wrong: gpu_x/gpu_y (raw scanout position) turned out to already
-	// be in the same native range as curs_x/curs_y, and halving
-	// compressed the visible cursor into a quarter of the screen.
+	// unscaled -- both now range 0..639/0..479 (native 640x480, see
+	// rtl/gpu/gpu_video.v and rtl/usb_hid.v's own curs_x/curs_y clamp
+	// bounds), so no scaling is needed at all. An earlier revision
+	// divided them by 2 on the theory that curs_x/y's native range
+	// was double the framebuffer resolution (true back when the
+	// framebuffer was 512x384 displayed via 2x pixel-doubling at
+	// 1024x768) -- that's gone now, this module's own logic never
+	// needed to change for it, only the upstream ranges did.
 	wire signed [11:0] cx = { 2'b00, curs_x };
 	wire signed [11:0] cy = { 2'b00, curs_y };
 

@@ -36,7 +36,7 @@
 #define MEM_ROM			0x10000000
 #define MEM_ROM_SIZE		1024 * 1024 * 2
 #define MEM_VRAM			0x20000000
-#define MEM_VRAM_SIZE	(1024 * 768) / 32
+#define MEM_VRAM_SIZE	(640 * 480) / 32
 #define MEM_MAIN			0x40000000
 #define MEM_MAIN_SIZE	1024 * 1024
 #define MEM_APP			0x80000000

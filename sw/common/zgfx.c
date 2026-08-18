@@ -85,9 +85,9 @@ void z_fb_hw_line(int x0, int y0, int x1, int y1, int color, const z_clip_t *cli
 	// unconditional, regardless of clip -- clip only ever narrows
 	// where on screen a line can land, it was never a bounds check
 	// against the framebuffer's actual physical size. The hardware
-	// has no protection of its own here: gpu_y0/gpu_y1 are 9-bit
-	// registers (0-511), but the framebuffer is only Z_SCREEN_H=384
-	// pixels tall, so 384-511 is representable but physically
+	// has no protection of its own here: gpu_y0/gpu_y1 are 10-bit
+	// registers (0-1023), but the framebuffer is only Z_SCREEN_H=480
+	// pixels tall, so 480-1023 is representable but physically
 	// invalid -- and rtl/gpu/gpu_raster.v's WAIT_READ/WAIT_WRITE
 	// states wait on the framebuffer bus's ack with no timeout at
 	// all (only the pixel *count* along a line is bounded, not how
@@ -300,6 +300,83 @@ void z_fb_draw_text(int x, int y, const char *s, int color, const z_font_t *font
 
 }
 
+// software fallback for z_fb_draw_char2() below, used the same way
+// draw_char_sw() is used by z_fb_draw_char() -- a glyph that needs
+// clipping, since the hardware blit is unclipped by design. Unlike
+// draw_char_sw() (transparent overlay, only touches ink pixels), this
+// draws a SOLID cell -- fills the whole glyph-sized rect with bg_color
+// first, then ink pixels with fg_color on top -- matching what the
+// hardware path below actually does, so clipped and unclipped glyphs
+// look identical.
+static void draw_char_sw2(int x, int y, char c, int fg_color, int bg_color,
+	const z_font_t *font, const z_clip_t *clip) {
+
+	unsigned char uc = (unsigned char)c;
+	const uint8_t *glyph = font->glyphs + (uc - font->first) * font->h;
+
+	z_fb_fill_rect(x, y, font->w, font->h, bg_color, clip);
+
+	for (int row = 0; row < font->h; row++) {
+		uint8_t bits = glyph[row];
+		for (int col = 0; col < font->w; col++) {
+			if (bits & (0x80 >> col))
+				z_fb_set_pixel(x + col, y + row, fg_color, clip);
+		}
+	}
+
+}
+
+void z_fb_draw_char2(int x, int y, char c, int fg_color, int bg_color,
+	const z_font_t *font, const z_clip_t *clip) {
+
+	unsigned char uc = (unsigned char)c;
+	if (uc < font->first || uc > font->last) return;
+
+	bool fits =
+		x >= 0 && y >= 0 &&
+		x + font->w <= Z_SCREEN_W && y + font->h <= Z_SCREEN_H &&
+		(!clip ||
+			(x >= clip->x0 && y >= clip->y0 &&
+			 x + font->w - 1 <= clip->x1 && y + font->h - 1 <= clip->y1));
+
+	if (!fits) {
+		hw_blit_wait();	// see z_fb_draw_char()'s own comment on why
+		draw_char_sw2(x, y, c, fg_color, bg_color, font, clip);
+		return;
+	}
+
+	hw_blit_wait();	// wait for any previous glyph blit to finish
+
+	gpu_blit_dst_x = x;
+	gpu_blit_dst_y = y;
+	gpu_blit_glyph_addr = (uint32_t)(uc - font->first) * font->h;
+	gpu_blit_glyph_w = font->w;
+	gpu_blit_glyph_h = font->h;
+	gpu_blit_fg_color = fg_color ? 1 : 0;
+	gpu_blit_bg_color = bg_color ? 1 : 0;
+	gpu_blit_ctrl = GPU_BLIT_CTRL_START | GPU_BLIT_CTRL_GLYPH;
+
+}
+
+void z_fb_draw_text2(int x, int y, const char *s, int fg_color, int bg_color,
+	const z_font_t *font, const z_clip_t *clip) {
+
+	int cx = x, cy = y;
+
+	for (; *s; s++) {
+		if (*s == '\n') {
+			cx = x;
+			cy += font->h;
+			continue;
+		}
+		z_fb_draw_char2(cx, cy, *s, fg_color, bg_color, font, clip);
+		cx += font->w;
+	}
+
+	hw_blit_wait();	// see z_fb_draw_text()'s own comment on why
+
+}
+
 #else
 
 // -- software renderer (default) --
@@ -339,6 +416,43 @@ void z_fb_draw_text(int x, int y, const char *s, int color, const z_font_t *font
 			continue;
 		}
 		z_fb_draw_char(cx, cy, *s, color, font, clip);
+		cx += font->w;
+	}
+
+}
+
+void z_fb_draw_char2(int x, int y, char c, int fg_color, int bg_color,
+	const z_font_t *font, const z_clip_t *clip) {
+
+	unsigned char uc = (unsigned char)c;
+	if (uc < font->first || uc > font->last) return;
+
+	const uint8_t *glyph = font->glyphs + (uc - font->first) * font->h;
+
+	z_fb_fill_rect(x, y, font->w, font->h, bg_color, clip);
+
+	for (int row = 0; row < font->h; row++) {
+		uint8_t bits = glyph[row];
+		for (int col = 0; col < font->w; col++) {
+			if (bits & (0x80 >> col))
+				z_fb_set_pixel(x + col, y + row, fg_color, clip);
+		}
+	}
+
+}
+
+void z_fb_draw_text2(int x, int y, const char *s, int fg_color, int bg_color,
+	const z_font_t *font, const z_clip_t *clip) {
+
+	int cx = x, cy = y;
+
+	for (; *s; s++) {
+		if (*s == '\n') {
+			cx = x;
+			cy += font->h;
+			continue;
+		}
+		z_fb_draw_char2(cx, cy, *s, fg_color, bg_color, font, clip);
 		cx += font->w;
 	}
 

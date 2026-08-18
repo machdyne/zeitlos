@@ -89,7 +89,7 @@ static void draw_static_pattern(void) {
 }
 
 // explicit clip test: a line from the content area's own center to a
-// corner of the FULL 512x384 screen, far outside the window in every
+// corner of the FULL 640x480 screen, far outside the window in every
 // direction. If gpu_clip_enable is actually being respected by the
 // hardware, this should visibly stop dead at the window's edge --
 // nothing beyond it. If the whole line (all the way to the screen
@@ -99,10 +99,10 @@ static void draw_static_pattern(void) {
 static void draw_clip_test(void) {
 	uint32_t cx = (content_x0 + content_x1) / 2;
 	uint32_t cy = (content_y0 + content_y1) / 2;
-	printf("gpudemo: clip test line from (%lu,%lu) to screen corner (511,383) -- "
+	printf("gpudemo: clip test line from (%lu,%lu) to screen corner (639,479) -- "
 		"should stop at the window edge if clipping works\n",
 		(unsigned long)cx, (unsigned long)cy);
-	draw_line(cx, cy, 511, 383, 1);
+	draw_line(cx, cy, 639, 479, 1);
 }
 
 int main(void) {

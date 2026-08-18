@@ -15,7 +15,7 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 | MTU | Virtual addressing through Memory Translation Unit |
 | Bus | 32-bit Wishbone |
 | Main Memory | SDRAM, PSRAM or SRAM (1MB minimum) |
-| Framebuffer | 512x384x1bpp |
+| Framebuffer | 640x480x1bpp |
 | Video | VGA, DVI, DVI over HDMI |
 | Storage | MicroSD |
 | Network | Ethernet (SPI) |

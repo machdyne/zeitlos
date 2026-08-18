@@ -1,14 +1,37 @@
-# Zeitlos Ports Design (planned, not yet implemented)
+# Zeitlos Ports Design
 
-**Status: design only.** Nothing in this document exists in
-`sw/common`/`sw/apps` yet -- no `zport.h`, no port-provider apps. This
-is the plan `term` (see below) is meant to be built against once
-phase 1 (keyboard input, `docs/user_input.md`) and phase 2 (`term`'s
-standalone VT100 core) are done. Written up now, ahead of the code,
-so the shape of the thing is settled before implementation starts --
-update this document (and remove this notice) as pieces actually land,
-the way `docs/networking.md`'s "Staged plan" section tracks done vs.
-not-done work for that subsystem.
+**Status: phases 1-3 below are implemented** (`sw/common/zport.h`/`.c`,
+`sw/apps/portdemo`, `term` wired to it). Phases 4-5 and "Open
+questions" are still just plan. Written up ahead of the code
+originally, the way `docs/networking.md`'s "Staged plan" section
+tracks done vs. not-done work for that subsystem -- update this
+document as the remaining phases land.
+
+## Testing this
+
+`portdemo` needs the fixed pid `Z_PID_PORTDEMO` (3) to be reachable at
+all -- see "Protocol sketch" below for why fixed pids are how this
+works right now. That pid is only guaranteed if `wm` (pid 1) and `net`
+(pid 2) started first, in that order, which `sw/os/sh.c`'s `init`
+shell command does automatically (it now starts `portdemo` right after
+`net`, non-fatally if that binary's missing). **Use `init`, not
+individual `run wm`/`run net` commands**, if you want `term` to
+actually find `portdemo` -- manually `run`-ning things in a different
+order (e.g. `run wm` then `run portdemo` without `net` in between)
+will land `portdemo` on a different pid than `term` is hardcoded to
+look for, and `term` will silently fall back to local echo instead
+(not wrong, just not testing the thing you meant to test).
+
+```
+> init
+> run term
+```
+
+Type something -- `portdemo`'s banner should appear on connect, and
+everything typed afterward should echo back (byte-for-byte, so
+backspace won't visibly erase anything against this specific demo --
+see `sw/apps/portdemo/portdemo.c`'s own header comment on why that's
+expected, not a bug).
 
 ## Overview
 
@@ -90,15 +113,18 @@ general solution would need.
 
 ## Planned phases
 
-1. `zport.h`/`zport.c` -- the protocol above, client + provider helper
-   API, modeled on `zstream.c`'s style (thin wrappers, no hidden
-   blocking on the provider side).
-2. A demo virtual port app (echo/banner, no hardware) -- the test
-   harness for everything else here, built and exercised before any
-   real provider.
-3. `term` wired to the demo port instead of local echo, once its
-   standalone VT100 core (phase 2, see the top-level project plan) is
-   working against a hardcoded test byte stream.
+1. ~~`zport.h`/`zport.c`~~ -- done. The protocol above, client +
+   provider helper API, modeled on `zstream.c`'s style. One deviation
+   from a plain "no timeout" RPC (`z_win_create()`'s own pattern): the
+   client's connect blocks with a bounded ~2 second timeout, not
+   forever, since a port provider (unlike `wm`) isn't guaranteed to be
+   running at all.
+2. ~~A demo virtual port app~~ -- done, `sw/apps/portdemo`
+   (echo/banner, no hardware). Single connection at a time.
+3. ~~`term` wired to the demo port~~ -- done, with a fallback: no
+   port provider answering within the connect timeout means `term`
+   still works standalone via local echo (phase 3's behavior),
+   printing which mode it ended up in at startup.
 4. Real providers: UART port, then telnet-over-UDP (gated on `net`'s
    own UDP API backlog item).
 5. Revisit flow control (above) only if real usage shows the
