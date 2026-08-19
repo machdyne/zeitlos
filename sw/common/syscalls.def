@@ -23,3 +23,6 @@ Z_MKSYSCALL(UPTIME, z_uptime)
 // kernel.bin and every app must always be rebuilt+reflashed together
 // after any change to this file, regardless of where the change was made.
 Z_MKSYSCALL(HID_READ_KEY, z_hid_read_key)
+Z_MKSYSCALL(PID_REGISTER, k_pid_register)
+Z_MKSYSCALL(PID_LOOKUP, k_pid_lookup)
+Z_MKSYSCALL(GETPID, k_getpid)

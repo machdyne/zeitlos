@@ -2,6 +2,7 @@
 #define ZEITLOS_H
 
 #include <stdint.h>
+#include <stdbool.h>
 #include "zobj.h"
 #include "zmsg.h"
 
@@ -220,6 +221,35 @@ z_rv z_msg_wait(z_msg_t *msg, uint32_t subject, uint32_t tag);
 // rtl/sysctl.v's rtc_ctr). for elapsed-time measurement; not
 // wall-clock/calendar time.
 uint32_t z_uptime_ticks(void);
+
+// -- PID name registry (sw/os/pidreg.c/h) --
+//
+// Registers `basename` for the calling process; the kernel appends a
+// number unique among currently-registered instances of that base
+// name (even the first one -- "term" becomes "term0", not bare
+// "term") and writes the result into `out`, up to `outlen` bytes
+// including the NUL. Returns true on success. A process may call this
+// more than once to register several names for itself (e.g. multiple
+// ports) -- each call is independent.
+bool z_pid_register(const char *basename, char *out, uint32_t outlen);
+
+// Resolves a full name (as returned by z_pid_register(), e.g.
+// "term3") to its owning pid. Returns true and writes *pid on
+// success, false if nothing currently active matches. Cache the
+// result if sending more than one message to the same name -- this
+// walks a small fixed-size table in the kernel on every call, cheap
+// but not free. A cached pid can go stale if its owner later exits;
+// z_msg_send() already fails safely against a dead/reused pid (same
+// as it always has for hardcoded pids like Z_PID_WM), so this isn't a
+// new failure mode to handle, just the existing one reached a
+// different way.
+bool z_pid_lookup(const char *name, uint32_t *pid);
+
+// the calling process's own pid. Mainly useful for the same reason
+// wm.c needs it: to tell "is this thing mine?" apart from "is this
+// thing owned by whatever pid I happen to have been started as" --
+// see z_getpid()'s comment in sw/os/kernel.c.
+uint32_t z_getpid(void);
 
 #define VT100_CURSOR_UP       "\e[A"
 #define VT100_CURSOR_DOWN     "\e[B"

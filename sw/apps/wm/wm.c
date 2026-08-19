@@ -8,10 +8,18 @@
  * so this phase is entirely about window chrome and the
  * create/destroy/moved protocol in zwm.h.
  *
- * Expected to be started as pid 1 (see Z_PID_WM in zwm.h) -- run it
- * right after boot, before any client apps:
+ * Expected to be started before any client apps that want a window
+ * (they'll fail to connect otherwise) -- typically right after boot:
  *
  *   > run wm
+ *
+ * Registers itself as "wm0" (see sw/os/pidreg.h) so clients can find
+ * it by name (zwin.c's z_win_create() looks this up, falling back to
+ * the fixed Z_PID_WM constant in zwm.h if lookup fails -- e.g. an old
+ * build of wm that predates registration). wm no longer assumes it's
+ * literally pid 1 internally either -- see my_pid below, queried via
+ * z_getpid() at startup and used for wm's own "is this window mine?"
+ * checks instead of comparing against Z_PID_WM directly.
  *
  * Until a real client app exists, wm creates a couple of windows for
  * itself on startup so there's something to look at and drag.
@@ -40,6 +48,17 @@ typedef struct {
 } wm_window_t;
 
 static wm_window_t windows[WM_MAX_WINDOWS];
+
+// this process's own actual pid -- queried via z_getpid() at startup
+// (see main()), NOT the Z_PID_WM constant (zwm.h). Z_PID_WM is still
+// what OTHER processes use to reach wm (zwin.c looks it up by name
+// now, falling back to Z_PID_WM -- see docs/window_manager.md), but
+// wm's own "is this window mine?" checks below need wm's REAL pid,
+// not an assumption that it's always started first. Previously these
+// compared directly against Z_PID_WM, which only ever worked because
+// that assumption happened to hold in practice.
+static uint32_t my_pid;
+
 static uint8_t zorder[WM_MAX_WINDOWS];	// back-to-front; zorder[count-1] is frontmost
 static uint8_t zorder_count = 0;
 static int focused = -1;		// index into windows[], or -1
@@ -187,7 +206,7 @@ static void repair_region(int rx, int ry, int rw, int rh, int exclude_idx) {
 		printf("wm: repair_region: draw_window_box idx=%d (%ld,%ld,%ld,%ld) focused=%d\n",
 			idx, (long)w->x, (long)w->y, (long)w->w, (long)w->h, idx == focused);
 		draw_window_box(w, idx == focused, 1);
-		if (w->owner_pid == Z_PID_WM) continue;
+		if (w->owner_pid == my_pid) continue;
 		if (idx == exclude_idx) continue;
 		send_redraw(w->owner_pid, idx);
 		wait_for_redraw_done(w->owner_pid);
@@ -262,7 +281,7 @@ static void dispatch_keys(void) {
 		bool    pressed   = (ev & 1) != 0;
 
 		if (focused < 0) continue;
-		if (windows[focused].owner_pid == Z_PID_WM) continue;
+		if (windows[focused].owner_pid == my_pid) continue;
 
 		uint32_t keysym = z_kbd_usage_to_keysym(usage, modifiers);
 		if (keysym == Z_KEY_NONE) continue;   // bare modifier change, or
@@ -476,7 +495,7 @@ static void handle_message(z_msg_t *msg) {
 static void notify_moved(int idx) {
 
 	// demo windows (owned by wm itself) have no app to notify
-	if (windows[idx].owner_pid == Z_PID_WM) return;
+	if (windows[idx].owner_pid == my_pid) return;
 
 	send_win_rect(windows[idx].owner_pid, Z_WM_WINDOW_MOVED, 0, idx);
 
@@ -531,7 +550,7 @@ static void repair_drag(int dragged_idx) {
 
 	printf("wm: repair_drag: strips done\n");
 
-	if (w->owner_pid != Z_PID_WM) {
+	if (w->owner_pid != my_pid) {
 		send_redraw(w->owner_pid, dragged_idx);
 		wait_for_redraw_done(w->owner_pid);
 	}
@@ -542,7 +561,19 @@ static void repair_drag(int dragged_idx) {
 
 int main(void) {
 
-	printf("wm: starting as pid %d.\n", Z_PID_WM);
+	my_pid = z_getpid();
+
+	// registers as "wm0" (see sw/os/pidreg.h) -- what zwin.c's
+	// z_win_create() looks up now, instead of assuming Z_PID_WM.
+	// Not fatal if this fails (registry full -- shouldn't happen in
+	// practice, wm is normally the very first thing started): callers
+	// still have the Z_PID_WM fallback, so wm just runs without a
+	// discoverable name in that unlikely case.
+	char wm_name[24];
+	if (z_pid_register("wm", wm_name, sizeof(wm_name)))
+		printf("wm: starting as pid %ld, registered as '%s'.\n", (long)my_pid, wm_name);
+	else
+		printf("wm: starting as pid %ld (name registration failed).\n", (long)my_pid);
 
 	for (int i = 0; i < WM_MAX_WINDOWS; i++)
 		windows[i].used = false;
@@ -555,8 +586,8 @@ int main(void) {
 
 	// demo windows so there's something to see/drag before a real
 	// client app exists -- see the file header comment.
-	int demo1 = create_window(Z_PID_WM, "Window 1", 140, 100);
-	int demo2 = create_window(Z_PID_WM, "Window 2", 140, 100);
+	int demo1 = create_window(my_pid, "Window 1", 140, 100);
+	int demo2 = create_window(my_pid, "Window 2", 140, 100);
 	if (demo1 >= 0)
 		repair_region(windows[demo1].x, windows[demo1].y, windows[demo1].w, windows[demo1].h, -1);
 	if (demo2 >= 0)

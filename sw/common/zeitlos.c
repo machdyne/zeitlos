@@ -113,6 +113,62 @@ uint32_t z_uptime_ticks(void) {
 	return obj.val.uint32;
 }
 
+// -- PID name registry -- see zeitlos.h --
+
+bool z_pid_register(const char *basename, char *out, uint32_t outlen) {
+
+	if (outlen == 0) return false;
+
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_obj_t obj;
+	obj.type = Z_STR;
+	obj.val.str = (char *)basename;
+
+	// success/failure is read from the VALUE at the returned pointer
+	// (rv->val.uint32 == Z_OK), not by comparing the pointer itself
+	// against this file's own &z_ok -- z_ok/z_fail are `static`
+	// (zobj.h), so the kernel's compiled copy and this app's compiled
+	// copy are different objects at different addresses; only
+	// z_msg_send()'s existing precedent (`return rv->val.uint32;`,
+	// no pointer comparison at all) reads correctly across that
+	// boundary. The actual output (the assigned full name) comes back
+	// via `obj` itself, mutated in place by the kernel handler -- see
+	// k_pid_register()'s comment in sw/os/pidreg.c for why that's the
+	// convention here rather than a returned data object.
+	z_obj_t *rv = (z_obj_t *)z_kernel_ptr(Z_SYS_PID_REGISTER, (uint32_t *)&obj, 0);
+	if (rv->val.uint32 != Z_OK || obj.type != Z_STR || !obj.val.str) return false;
+
+	uint32_t i;
+	for (i = 0; i < outlen - 1 && obj.val.str[i]; i++)
+		out[i] = obj.val.str[i];
+	out[i] = 0;
+
+	return true;
+
+}
+
+bool z_pid_lookup(const char *name, uint32_t *pid) {
+
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_obj_t obj;
+	obj.type = Z_STR;
+	obj.val.str = (char *)name;
+
+	z_obj_t *rv = (z_obj_t *)z_kernel_ptr(Z_SYS_PID_LOOKUP, (uint32_t *)&obj, 0);
+	if (rv->val.uint32 != Z_OK || obj.type != Z_UINT32) return false;
+
+	*pid = obj.val.uint32;
+	return true;
+
+}
+
+uint32_t z_getpid(void) {
+	z_obj_t obj = {0};
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_kernel_ptr(Z_SYS_GETPID, (uint32_t *)&obj, 0);
+	return obj.val.uint32;
+}
+
 // --
 
 void rt_delay() {

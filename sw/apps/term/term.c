@@ -261,7 +261,19 @@ int main(void) {
 	term_win_w = VT_COLS * TERM_FONT.w + 4;
 	term_win_h = VT_ROWS * TERM_FONT.h + 15;
 
-	if (z_win_create(&win, "term", term_win_w, term_win_h) != Z_OK) {
+	// register this instance under a kernel-numbered name ("term0",
+	// "term1", ...) -- see sw/os/pidreg.h -- so other processes can
+	// find THIS particular term by name instead of relying on a fixed
+	// pid (which only ever worked for wm/net, started once each in a
+	// known boot order; doesn't work for something the user can start
+	// any number of times, like term). Falls back to the literal
+	// "term" as the window title if registration ever fails (e.g. the
+	// registry is full) -- not fatal, just loses the disambiguation.
+	char instance_name[24] = "term";
+	if (!z_pid_register("term", instance_name, sizeof(instance_name)))
+		printf("term: pid registration failed, window title won't be unique\n");
+
+	if (z_win_create(&win, instance_name, term_win_w, term_win_h) != Z_OK) {
 		printf("term: failed to create window\n");
 		return 1;
 	}
@@ -281,7 +293,20 @@ int main(void) {
 	// message loop below, since z_port_connect() discards any
 	// unrelated message that arrives while it's waiting (same
 	// accepted limitation as z_win_create()/z_msg_wait()).
-	if (z_port_connect(&port, Z_PID_PORTDEMO) == Z_OK) {
+	//
+	// looks up "portdemo0" (see sw/os/pidreg.h) instead of assuming
+	// the fixed Z_PID_PORTDEMO constant -- falls back to it if lookup
+	// fails (portdemo isn't running, hasn't registered yet, or is an
+	// old build that predates the registry). only done once, here,
+	// not cached -- term connects to a provider exactly once at
+	// startup, unlike zwin.c's wm lookups or sh.c's net lookups,
+	// which happen on every window/tftp operation and are worth
+	// caching for that reason.
+	uint32_t portdemo_pid;
+	if (!z_pid_lookup("portdemo0", &portdemo_pid))
+		portdemo_pid = Z_PID_PORTDEMO;
+
+	if (z_port_connect(&port, portdemo_pid) == Z_OK) {
 		printf("term: connected to port at pid %ld (conn %ld)\n",
 			(long)port.peer_pid, (long)port.conn_id);
 	} else {

@@ -15,6 +15,29 @@
 #include "zwin.h"
 #include "zgfx.h"
 
+// resolved once, cached for the lifetime of this process -- z_win_*
+// can be called often (z_win_redraw_done() potentially once per
+// redraw), and re-doing a name lookup on every single call would be
+// wasteful when wm's pid never changes for as long as this process
+// runs. Falls back to the fixed Z_PID_WM constant (zwm.h) if lookup
+// ever fails -- e.g. wm hasn't registered itself yet (a startup-order
+// race, though wm is normally started well before any client) or is
+// an older build that predates the registry. A false resolution here
+// isn't fatal either way: z_msg_send() already fails safely against
+// a wrong/dead pid, same as it always has -- see sw/os/pidreg.h's
+// comment on this same tradeoff.
+static uint32_t wm_pid_cache;
+static bool wm_pid_resolved = false;
+
+static uint32_t resolve_wm_pid(void) {
+	if (!wm_pid_resolved) {
+		if (!z_pid_lookup("wm0", &wm_pid_cache))
+			wm_pid_cache = Z_PID_WM;
+		wm_pid_resolved = true;
+	}
+	return wm_pid_cache;
+}
+
 z_rv z_win_create(z_win_t *win, const char *title, uint32_t w, uint32_t h) {
 
 	z_obj_t args = z_obj_map(3);
@@ -22,7 +45,7 @@ z_rv z_win_create(z_win_t *win, const char *title, uint32_t w, uint32_t h) {
 	if (w) z_map_set(&args, "w", z_obj_uint32(w));
 	if (h) z_map_set(&args, "h", z_obj_uint32(h));
 
-	z_msg_new_send(Z_PID_WM, Z_WM_CREATE_WINDOW, 0, args);
+	z_msg_new_send(resolve_wm_pid(), Z_WM_CREATE_WINDOW, 0, args);
 	// note: `args` is intentionally never freed here -- same accepted
 	// leak/lifetime tradeoff documented in docs/messaging.md. we're
 	// about to block on the reply below, so it's still valid for the
@@ -70,7 +93,7 @@ void z_win_apply_redraw(z_win_t *win, uint32_t packed) {
 }
 
 void z_win_redraw_done(const z_win_t *win) {
-	z_msg_new_send(Z_PID_WM, Z_WM_REDRAW_DONE, 0, z_obj_uint32((uint32_t)win->id));
+	z_msg_new_send(resolve_wm_pid(), Z_WM_REDRAW_DONE, 0, z_obj_uint32((uint32_t)win->id));
 }
 
 void z_win_content_rect(const z_win_t *win, z_clip_t *out) {

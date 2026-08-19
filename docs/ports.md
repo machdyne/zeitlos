@@ -9,18 +9,16 @@ document as the remaining phases land.
 
 ## Testing this
 
-`portdemo` needs the fixed pid `Z_PID_PORTDEMO` (3) to be reachable at
-all -- see "Protocol sketch" below for why fixed pids are how this
-works right now. That pid is only guaranteed if `wm` (pid 1) and `net`
-(pid 2) started first, in that order, which `sw/os/sh.c`'s `init`
-shell command does automatically (it now starts `portdemo` right after
-`net`, non-fatally if that binary's missing). **Use `init`, not
-individual `run wm`/`run net` commands**, if you want `term` to
-actually find `portdemo` -- manually `run`-ning things in a different
-order (e.g. `run wm` then `run portdemo` without `net` in between)
-will land `portdemo` on a different pid than `term` is hardcoded to
-look for, and `term` will silently fall back to local echo instead
-(not wrong, just not testing the thing you meant to test).
+`term` looks up `portdemo0` by name (`sw/os/pidreg.h`) and connects to
+whatever pid that resolves to -- so `run portdemo` before `run term`,
+in any order relative to `wm`/`net`, is enough for `term` to find it.
+The fixed pid `Z_PID_PORTDEMO` (3) only matters as a **fallback**, if
+name lookup ever fails (registry full, or portdemo started before it
+managed to register) -- and that fallback is *only* guaranteed correct
+if `wm` (pid 1) and `net` (pid 2) started first, in that exact order,
+which `sw/os/sh.c`'s `init` shell command still does automatically,
+for whichever code path ends up needing it. `init` remains the
+easiest way to bring everything up in one step either way:
 
 ```
 > init
@@ -87,10 +85,15 @@ DATA      either direction     tag=conn_id   obj=Z_BLOB (raw bytes)
 CLOSE     either direction     tag=conn_id   obj=Z_NONE
 ```
 
-Same well-known-pid convention `Z_PID_WM`/`Z_PID_NET` already use
-(`docs/messaging.md`'s "no dynamic pid discovery yet" limitation
-applies here too) -- a port provider runs at a documented, fixed pid,
-started before any client that wants to reach it.
+Reachability now prefers name lookup over a fixed pid -- `sw/os/pidreg.h`'s
+registry, `portdemo` registers as `portdemo0` and `term` looks it up --
+with `Z_PID_WM`/`Z_PID_NET`'s original well-known-pid convention kept
+as the fallback if that lookup ever fails. See "Testing this" above
+for what that actually means for bring-up order in practice, and
+`sw/os/pidreg.h`'s own header comment for the registry's design
+(numbering, why it's not a permanent counter, the mutate-in-place
+syscall convention it follows) -- there's no separate doc page for it
+yet, that header comment is the actual source of truth.
 
 ### Flow control: an explicit, deliberate gap for v1
 
@@ -135,7 +138,10 @@ general solution would need.
 - **Multiple concurrent `term` instances / port multiplexing.** Not
   addressed by the sketch above -- one provider, one client
   connection, for now.
-- **A real name/pid registry** would help here the same way it would
-  help `docs/messaging.md`'s existing "no dynamic pid discovery"
-  limitation generally -- worth building once, project-wide, rather
-  than inventing a ports-specific workaround.
+- ~~A real name/pid registry~~ -- done, project-wide rather than a
+  ports-specific workaround (as this section originally hoped for):
+  `sw/os/pidreg.h`. `portdemo`/`term` migrated to it -- see "Testing
+  this" and "Protocol sketch" above. Doesn't address the multiplexing
+  question above on its own (a registered name still only ever maps
+  to one pid at a time), just the pid-discovery half of the original
+  limitation.

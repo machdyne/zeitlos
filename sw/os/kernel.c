@@ -19,6 +19,7 @@
 #include "ui.h"
 #include "msg.h"
 #include "hid.h"
+#include "pidreg.h"
 #include "logo.h"
 
 // Z_PROCS_MAX now lives in kernel.h (msg.c needs it too)
@@ -28,6 +29,16 @@
 z_obj_t *z_uptime(z_obj_t *args);	// defined below; forward-declared
 									// since syscalls.def (included next)
 									// needs it visible for the table
+z_obj_t *k_getpid(z_obj_t *args);	// same reasoning -- named k_getpid,
+									// not z_getpid, since zeitlos.h
+									// (pulled in above) already
+									// declares an app-facing
+									// z_getpid() with a DIFFERENT
+									// signature (uint32_t, no args) --
+									// same k_/z_ naming split
+									// k_msg_send/z_msg_send and
+									// k_pid_register/z_pid_register
+									// already use, for the same reason
 
 typedef z_obj_t* (*z_syscall_t)(z_obj_t *args);
 
@@ -61,6 +72,23 @@ void kprint_hex32(uint32_t);
 z_obj_t *z_uptime(z_obj_t *args) {
 	args->type = Z_UINT32;
 	args->val.uint32 = z_kernel_ticks;
+	return (&z_ok);
+}
+
+// returns the CALLING process's own pid. z_pid correctly identifies
+// the caller here because a syscall executes synchronously as a plain
+// function call from the currently-scheduled process -- z_pid is only
+// ever changed by the scheduler's own KTIMER-driven swap (see
+// z_kernel_entry() below), never mid-syscall. First real use: wm.c
+// needs to know its own actual pid to correctly identify its own
+// windows (previously done via the Z_PID_WM constant, which only
+// worked because wm happens to always be started first -- see
+// zwm.h's comment on that convention, and sw/os/pidreg.h for the
+// name-registry this is meant to work alongside). Named k_getpid, not
+// z_getpid -- see the forward declaration above for why.
+z_obj_t *k_getpid(z_obj_t *args) {
+	args->type = Z_UINT32;
+	args->val.uint32 = z_pid;
 	return (&z_ok);
 }
 
@@ -98,6 +126,17 @@ int main(void) {
 		z_procs[p].base = 0x00000000;
 		z_procs[p].flags = 0x00000000;
 	}
+
+	// zero the pid name registry -- see k_pidreg_init()'s comment in
+	// pidreg.h for why this can't just be left to .bss (short
+	// version: it can't be trusted to start zero on this hardware,
+	// same reason z_procs[] above is zeroed explicitly too, and this
+	// one -- unlike z_procs[] -- didn't get that treatment the first
+	// time around, which broke real hardware almost immediately).
+	// must happen before ANY process can possibly reach
+	// k_pid_register()/k_pid_lookup() -- right here, this early, is
+	// the only place that's actually guaranteed.
+	k_pidreg_init();
 
 	// create process zero (this process):
 	uint32_t k_size = k_mem_align_up((((uint32_t)&_end - (uint32_t)&_start) +
@@ -194,6 +233,11 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 		if ((z_procs[z_pid].flags & Z_PROC_FLAG_DIE) == Z_PROC_FLAG_DIE) {
 			// free the memory
 			k_mem_free((void *)z_procs[z_pid].base);
+			// release any names this process registered (see
+			// pidreg.h -- without this, a later, unrelated process
+			// reusing this same pid slot would inherit stale name
+			// registrations that were never its own)
+			k_pidreg_release_all(z_pid);
 			// kill the process
 			z_procs[z_pid].base = 0x00000000;
 			z_procs[z_pid].flags = 0x00000000;

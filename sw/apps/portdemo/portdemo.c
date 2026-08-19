@@ -7,9 +7,13 @@
  * second CONNECT while already connected to someone else gets
  * refused.
  *
- * Started automatically at boot (sw/os/sh.c's init()) at the
- * well-known pid Z_PID_PORTDEMO (zport.h) -- same reason wm/net get a
- * fixed pid, see docs/networking.md.
+ * Started automatically at boot (sw/os/sh.c's init()). Registers as
+ * "portdemo0" (see sw/os/pidreg.h) -- term.c looks this up now
+ * instead of only using the fixed Z_PID_PORTDEMO constant (zport.h),
+ * same migration wm/net already went through (docs/networking.md).
+ * Z_PID_PORTDEMO is still there as a fallback if lookup ever fails
+ * (registration failed, or an old term build that predates the
+ * registry).
  *
  * Being a dumb byte-for-byte echo (not a real terminal/pty), it
  * doesn't interpret backspace (0x7f) specially -- term.c only does
@@ -35,7 +39,13 @@ static const char *BANNER =
 
 int main(void) {
 
-	printf("portdemo: starting as pid %d.\n", Z_PID_PORTDEMO);
+	char name[24];
+	if (z_pid_register("portdemo", name, sizeof(name)))
+		printf("portdemo: starting as pid %ld, registered as '%s'.\n",
+			(long)z_getpid(), name);
+	else
+		printf("portdemo: starting as pid %ld (name registration failed).\n",
+			(long)z_getpid());
 
 	conn.connected = false;
 

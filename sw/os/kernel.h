@@ -51,6 +51,15 @@ z_rv k_proc_dump(void);
 z_rv k_proc_kill(uint32_t pid);
 z_rv k_kernel_dump(void);
 
+// raw, unbuffered UART print -- no libc stdio involved at all (no
+// buffering, no heap). defined in kernel.c. exposed here (was
+// private to kernel.c) because it's the right tool for exactly the
+// class of bug that found snprintf()'s hang in pidreg.c: something
+// worth reaching for whenever debugging a hardware-only issue where
+// full libc stdio itself might be part of what's broken.
+void kprint(const char *s);
+void kprint_hex32(uint32_t val);
+
 // --
 
 /*

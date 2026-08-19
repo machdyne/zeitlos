@@ -203,6 +203,19 @@ int main(void) {
 	arp_init(OUR_IP);
 	ip_init(OUR_IP, OUR_NETMASK, OUR_GATEWAY);
 
+	// registers as "net0" (see sw/os/pidreg.h) -- callers can now
+	// reach net by name instead of only the fixed Z_PID_NET constant
+	// (znet.h); sh.c's tftp calls fall back to Z_PID_NET if this ever
+	// fails or hasn't happened yet. Deliberately not fatal if
+	// registration fails -- net is still fully usable via the fixed
+	// pid, same as it always has been, just not independently
+	// discoverable by name in that case.
+	char net_name[24];
+	if (z_pid_register("net", net_name, sizeof(net_name)))
+		printf("net: registered as '%s'\n", net_name);
+	else
+		printf("net: name registration failed (still usable via fixed pid)\n");
+
 	printf("net: ip 192.168.178.230/24, listening (arp + icmp echo + tftp)\n");
 
 	while (1) {

@@ -10,6 +10,8 @@ all:
 	cd wm && make
 	cd hello_win && make
 	cd net && make
+	cd term && make
+	cd portdemo && make
 
 clean:
 	cd blinky && make clean
@@ -23,3 +25,5 @@ clean:
 	cd wm && make clean
 	cd hello_win && make clean
 	cd net && make clean
+	cd term && make clean
+	cd portdemo && make clean

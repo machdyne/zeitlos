@@ -17,6 +17,7 @@
 #include "fs/fs.h"
 #include "fs/fatfs/ff.h"
 #include "msg.h"
+#include "pidreg.h"
 
 // --
 
@@ -34,6 +35,26 @@ void init(void);
 // back once TFTP is confirmed working, since a real large-file
 // transfer could plausibly need longer.
 #define TFTP_REPLY_TIMEOUT_TICKS (10 * 732)
+
+// resolved once, cached for the shell's lifetime (which is the whole
+// uptime of the system, sh.c being pid 0) -- same reasoning as
+// zwin.c's resolve_wm_pid(): re-doing a name lookup on every single
+// tget/tput would be wasteful when net's pid doesn't change once
+// it's running. Falls back to the fixed Z_PID_NET constant (znet.h)
+// if lookup ever fails (net hasn't registered yet, or hasn't been
+// started at all -- zstream_open()/z_msg_new_send() below still fail
+// safely against a wrong/dead pid either way, same as always).
+static uint32_t net_pid_cache;
+static bool net_pid_resolved = false;
+
+static uint32_t resolve_net_pid(void) {
+	if (!net_pid_resolved) {
+		if (!z_pid_lookup("net0", &net_pid_cache))
+			net_pid_cache = Z_PID_NET;
+		net_pid_resolved = true;
+	}
+	return net_pid_cache;
+}
 
 // a fresh tag per tget/tput call, not a constant 0 -- if a request
 // times out on the shell side (above) but net's reply arrives later
@@ -55,6 +76,18 @@ void sh(void) {
    int cmdlen;
    char *cmdend;
 	char *arg;
+
+	// explicit reset, not trusted to .bss's initial value -- sh.c is
+	// compiled into the kernel binary, and kernel.bin's own objcopy
+	// rule (sw/os/Makefile) has no --pad-to, unlike every app's
+	// Makefile (confirmed for wm/term/portdemo) -- so, same as
+	// sw/os/pidreg.c's k_pidreg_init(), this can't be left to .bss's
+	// initial value on real hardware. sh() runs exactly once, here,
+	// before anything could possibly reach resolve_net_pid() (tget/
+	// tput, or `init` calling it indirectly), so this is the one
+	// place that's actually guaranteed early enough.
+	net_pid_resolved = false;
+	net_pid_cache = 0;
 
 	printf("type help for help.\n\n");
 
@@ -205,7 +238,7 @@ void sh(void) {
 
 			zstream_consumer_t cons;
 			char err[64];
-			if (!zstream_open(&cons, Z_PID_NET, req, err, sizeof(err))) {
+			if (!zstream_open(&cons, resolve_net_pid(), req, err, sizeof(err))) {
 				printf("tget: failed to open: %s\n", err);
 				continue;
 			}
@@ -286,7 +319,7 @@ void sh(void) {
 			z_obj_t req = z_obj_map(2);
 			z_map_set(&req, "ip", z_obj_uint32(ip));
 			z_map_set(&req, "filename", z_obj_str(remote));
-			z_msg_new_send(Z_PID_NET, Z_NET_TFTP_PUT, tag, req);
+			z_msg_new_send(resolve_net_pid(), Z_NET_TFTP_PUT, tag, req);
 			// note: `req` intentionally never freed -- same
 			// borrowed-payload reasoning as tget above; one-shot
 			// per tput call.
@@ -434,6 +467,11 @@ void sh(void) {
 			k_proc_dump();
 		}
 
+		// DISPLAY PID NAME REGISTRY
+		else if (!strncmp(buffer, "pr", cmdlen)) {
+			k_pidreg_dump();
+		}
+
 		// DISPLAY KERNEL SNAPSHOT
 		else if (!strncmp(buffer, "ks", cmdlen)) {
 			k_kernel_dump();
@@ -482,19 +520,30 @@ void init(void) {
 	// occupied by the USB-UART PMOD this console runs over. Reserving
 	// the slot without loading/starting the binary (k_proc_create()
 	// only -- no fs_load(), no k_proc_start()) still gets net its
-	// usual pid (2), which is all portdemo below actually needs --
-	// term.c/zport.h don't care whether net itself is running, only
-	// that portdemo lands on a predictable pid, which depends on
-	// wm/net/portdemo all being created in this same fixed order
-	// every time (see docs/networking.md's note on why net/wm need a
-	// predictable pid, and docs/ports.md's "Testing this").
+	// usual pid (2), which is all portdemo below actually needs.
+	//
+	// this whole reservation dance is now specifically about keeping
+	// the FALLBACK path correct, not the primary one: term.c/zport.h
+	// prefer looking up "portdemo0" by name (sw/os/pidreg.h) these
+	// days, which doesn't care what pid portdemo actually lands on --
+	// but if that lookup ever fails (registry full, or portdemo
+	// somehow started before it could register), the fallback is
+	// still the fixed Z_PID_PORTDEMO constant, and THAT still depends
+	// on wm/net/portdemo being created in this same fixed order every
+	// time (see docs/networking.md's note on why net/wm need a
+	// predictable pid, and docs/ports.md's "Testing this"). Worth
+	// keeping even though it's now a belt-and-suspenders fallback
+	// rather than the only thing standing between term and a wrong
+	// pid.
 	//
 	// once net's NIC-detection hang is fixed (or on a board/config
 	// that actually has a NIC PMOD available), this can go back to
 	// loading+starting net normally -- or, in the meantime, `run net`
 	// still works to start it manually (on a DIFFERENT, newly
 	// allocated pid, not this reserved one -- fine for manual testing,
-	// just not usable by anything hardcoded to expect pid 2).
+	// since it'll still register as "net0" and be found by name
+	// either way; only something still relying on the Z_PID_NET
+	// fallback specifically would need the reserved pid).
 
 	printf("reserving net's pid (not starting it -- see comment above)\n");
 	uint32_t size_net = fs_size("net");
@@ -511,8 +560,10 @@ void init(void) {
 
 	// portdemo: a virtual port provider with no real hardware behind
 	// it -- see docs/ports.md and sw/apps/portdemo/portdemo.c. same
-	// reason as wm/net above: term.c connects to it at the fixed pid
-	// Z_PID_PORTDEMO (zport.h), so it needs a predictable pid too.
+	// reservation reasoning as wm/net above, for the fallback path --
+	// term.c prefers looking up "portdemo0" by name now, but falls
+	// back to the fixed pid Z_PID_PORTDEMO (zport.h) if that lookup
+	// fails, so it's still worth landing here predictably.
 	// not fatal if this one specifically fails to start (unlike
 	// wm/net above) -- term falls back to local echo without it, see
 	// term.c's own header comment.
@@ -665,6 +716,7 @@ void sh_help(void) {
 	printf(" init               reserve pid 1, start net as pid 2 (no wm needed)\n");
 	printf(" kill <pid>        kill a process\n");
 	printf(" ps                display a process snapshot\n");
+	printf(" pr                display the pid name registry\n");
 	printf(" ks                display a kernel snapshot\n");
 	printf(" cls               clear framebuffer\n");
 	printf(" ls [path]         display list of files\n");

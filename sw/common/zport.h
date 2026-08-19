@@ -13,10 +13,13 @@
  * -- this header is deliberately just the protocol + thin helpers,
  * not a repeat of that reasoning.
  *
- * Same well-known-pid convention Z_PID_WM/Z_PID_NET already use
- * (docs/messaging.md's "no dynamic pid discovery yet" limitation
- * applies here too) -- a provider runs at a documented, fixed pid,
- * started before any client that wants to reach it.
+ * A provider can be reached at a fixed, documented pid (the
+ * Z_PID_PORTDEMO convention below), started before any client that
+ * wants it -- or, better, registered by name (sw/os/pidreg.h) and
+ * looked up by whoever wants to connect, same migration Z_PID_WM/
+ * Z_PID_NET already went through (see docs/networking.md). The fixed
+ * pid still exists as a fallback for whichever path a given provider/
+ * client pair doesn't (yet) use.
  *
  *   CONNECT   client -> provider   tag=0         obj=Z_NONE
  *   CONNECTED provider -> client   tag=0         obj=Z_UINT32(conn_id)
@@ -47,8 +50,9 @@
 #define Z_PORT_DATA       123
 #define Z_PORT_CLOSE      124
 
-// well-known pid for the demo virtual port (sw/apps/portdemo) --
-// same convention as Z_PID_WM (zwm.h) / Z_PID_NET (znet.h).
+// fallback pid for the demo virtual port (sw/apps/portdemo) if name
+// lookup ("portdemo0") fails -- same convention as Z_PID_WM (zwm.h) /
+// Z_PID_NET (znet.h).
 #define Z_PID_PORTDEMO   3
 
 typedef struct {
