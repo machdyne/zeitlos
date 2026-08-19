@@ -251,49 +251,43 @@ int main(void) {
 
 uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 
+	// gp must be correct -- the kernel's own -- for the ENTIRE
+	// duration this function (and everything it calls) executes, no
+	// matter which of the two ways it got here: a syscall (a plain
+	// jalr straight from the calling app's own code, see
+	// docs/app_runtime.md) or a real hardware interrupt, routed
+	// through sw/bios/boot_picorv32.S's irq_vec. That assembly sets
+	// up a correct, fixed sp for this handler, but only ever SAVES
+	// gp (`sw x3, 3*4(x1)`) -- it never assigns gp a new value before
+	// calling in. Either way, without this fixup, kernel code here
+	// runs with whatever gp the interrupted/calling process happened
+	// to have -- wrong for z_syscall_table[] and any small-enough
+	// kernel global any handler goes on to touch.
+	//
+	// Previously this fixup was scoped to the syscall branch only,
+	// on the reasoning that the interrupt path's own full
+	// 32-register save/restore already handled gp correctly -- true
+	// for PRESERVING each process's own gp across being interrupted
+	// and resumed later, but NOT the same as gp being correct DURING
+	// this function's own C code execution in between. That gap is
+	// exactly what mem.c's allocator globals hit the first time
+	// `kill <pid>` (sh.c) actually ran a process's death cleanup
+	// (k_mem_free(), below) through the KTIMER branch -- same
+	// mechanism as the syscall-side bug already fixed here, different
+	// path, previously unprotected.
+	//
+	// Restored to the caller's/interrupted-process's own value before
+	// every return below (all of them go through the `done` label),
+	// so nothing about its own gp-relative addressing is disturbed
+	// once control goes back to it.
+	uint32_t saved_gp;
+	__asm__ volatile ("mv %0, gp" : "=r"(saved_gp));
+	__asm__ volatile ("mv gp, %0" ::
+		"r"((uint32_t)(uintptr_t)&__global_pointer$) : "memory");
+
+	uint32_t *ret;
+
 	if (syscall_id != Z_SYSCALL_NONE) {
-
-		// A syscall (see docs/app_runtime.md, "The syscall trampoline")
-		// is a plain jalr straight from the CALLING APP's own compiled
-		// code into this function -- not a hardware trap, so nothing
-		// automatically fixes up gp the way sw/bios/boot_picorv32.S's
-		// irq_vec does for real interrupts (it saves/restores all 32
-		// GPRs, gp included, around every hardware IRQ -- which is
-		// exactly why preemptive scheduling has always worked fine:
-		// each process's own gp correctly survives being preempted
-		// and resumed). Kernel code reached via a syscall instead
-		// executes with whatever gp the calling app had -- wrong for
-		// z_syscall_table[] itself (two lines down) and for ANY
-		// small-enough kernel global any syscall handler goes on to
-		// touch (this is what broke mem.c's mem_block_count the
-		// moment Z_SYS_PROC_RUN gave an app a way to reach
-		// k_mem_alloc() for the first time -- see that fix's own
-		// comment in mem.c). Tagging individual kernel globals
-		// __attribute__((section(".bss"))) (kernel.c's own
-		// z_pid/z_procs[]/z_kernel_ticks, mem.c's block_list/
-		// mem_block_count) is NOT a reliable fix by itself: the
-		// linker's relaxation pass decides gp-relative vs. absolute
-		// addressing by a symbol's FINAL LINKED ADDRESS being within
-		// reach of gp, not which section it's tagged into -- a
-		// .bss-tagged symbol placed early enough (right after
-		// .sdata/.sbss, exactly where gp points) can still get
-		// relaxed, and where exactly it lands depends on overall
-		// build layout, not anything the tag controls. The actual
-		// fix: make gp correct -- the kernel's own -- for the entire
-		// duration ANY kernel code runs via this path, done right
-		// here, before touching anything else, and restored to the
-		// caller's own value before returning, so the app's own
-		// gp-relative addressing is undisturbed once control goes
-		// back to it. (This makes the .bss tags mentioned above
-		// redundant going forward, but they're left in place --
-		// harmless, and exactly what the rest of this codebase
-		// already does for this situation elsewhere.)
-		uint32_t caller_gp;
-		__asm__ volatile ("mv %0, gp" : "=r"(caller_gp));
-		__asm__ volatile ("mv gp, %0" ::
-			"r"((uint32_t)(uintptr_t)&__global_pointer$) : "memory");
-
-		uint32_t *ret;
 
 		if (syscall_id >= Z_SYSCALL_COUNT || !z_syscall_table[syscall_id]) {
 			ret = (uint32_t *)&z_fail;
@@ -301,9 +295,7 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 			ret = (uint32_t *)z_syscall_table[syscall_id]((z_obj_t *)regs);
 		}
 
-		__asm__ volatile ("mv gp, %0" :: "r"(caller_gp) : "memory");
-
-		return ret;
+		goto done;
 
 	}
 
@@ -337,7 +329,7 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 	if ((irqs & (1 << Z_IRQ_KTIMER)) != 0) {
 
 		// don't switch if there's only one process
-		if (k_proc_active_count() < 2) return regs;
+		if (k_proc_active_count() < 2) { ret = regs; goto done; }
 
 		// save current process registers
   		for (int i = 0; i < 32; i++) {
@@ -360,8 +352,7 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 			// kill the process
 			z_procs[z_pid].base = 0x00000000;
 			z_procs[z_pid].flags = 0x00000000;
-			z_pid++;
-			if (z_pid >= Z_PROCS_MAX) z_pid = 0;
+			goto next_process;
 		}
 
 		if ((z_procs[z_pid].flags & Z_PROC_FLAG_ACTIVE) != Z_PROC_FLAG_ACTIVE)
@@ -371,10 +362,15 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 		reg_mtu = z_procs[z_pid].base;
 
 		// return the registers
-		return z_procs[z_pid].regs;
+		ret = (uint32_t *)z_procs[z_pid].regs;
+		goto done;
 	}
 
-	return regs;
+	ret = regs;
+
+	done:
+	__asm__ volatile ("mv gp, %0" :: "r"(saved_gp) : "memory");
+	return ret;
 
 }
 
@@ -491,6 +487,7 @@ z_rv k_proc_stop(uint32_t pid) {
 }
 
 z_rv k_proc_kill(uint32_t pid) {
+	if (pid >= Z_PROCS_MAX) return Z_FAIL;
 	z_procs[pid].flags |= Z_PROC_FLAG_DIE;
 	return Z_OK;
 }

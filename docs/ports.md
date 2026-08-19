@@ -9,27 +9,41 @@ document as the remaining phases land.
 
 ## Testing this
 
-`term` looks up `portdemo0` by name (`sw/os/pidreg.h`) and connects to
-whatever pid that resolves to -- so `run portdemo` before `run term`,
-in any order relative to `wm`/`net`, is enough for `term` to find it.
-The fixed pid `Z_PID_PORTDEMO` (3) only matters as a **fallback**, if
-name lookup ever fails (registry full, or portdemo started before it
-managed to register) -- and that fallback is *only* guaranteed correct
-if `wm` (pid 1) and `net` (pid 2) started first, in that exact order,
-which `sw/os/sh.c`'s `init` shell command still does automatically,
-for whichever code path ends up needing it. `init` remains the
-easiest way to bring everything up in one step either way:
+`term` looks up `lisp0` by name (`sw/os/pidreg.h`) and connects to
+whatever pid that resolves to -- so `run lisp` before `run term`, in
+any order relative to `wm`/`net`, is enough for `term` to find it. The
+fixed pid `Z_PID_LISP` (3, `sw/common/zlisp.h`) only matters as a
+**fallback**, if name lookup ever fails (registry full, or lisp
+started before it managed to register) -- and that fallback is *only*
+guaranteed correct if `wm` (pid 1) and `net` (pid 2) started first, in
+that exact order, which `sw/os/sh.c`'s `init` shell command still does
+automatically, for whichever code path ends up needing it. `init`
+remains the easiest way to bring everything up in one step either way
+-- it now starts `lisp` itself too (in the same boot-order slot
+`portdemo` used to occupy, see `init()`'s own comment):
 
 ```
 > init
 > run term
 ```
 
-Type something -- `portdemo`'s banner should appear on connect, and
-everything typed afterward should echo back (byte-for-byte, so
-backspace won't visibly erase anything against this specific demo --
-see `sw/apps/portdemo/portdemo.c`'s own header comment on why that's
-expected, not a bug).
+Type `help` -- `lisp`'s banner should appear on connect, followed by a
+`>` prompt, and typed characters (including backspace) should behave
+like an ordinary line-oriented command prompt, not a raw echo (see
+`sw/common/zline.h` for how `lisp` does this on its end -- `term`
+itself still only relays bytes, it does none of this). `ping`/`uptime`
+are good next things to try; anything not yet recognized says so
+plainly rather than pretending to understand it (Scheme evaluation
+isn't wired in yet -- see `sw/apps/lisp/lisp.c`'s own header comment
+for where that lands).
+
+`portdemo` (`sw/apps/portdemo/portdemo.c`) is still there, and still
+useful as a minimal test harness for the *port protocol itself* in
+isolation from any command interpreter -- `run portdemo` starts it
+manually (it's no longer started by `init`), but `term` won't find it
+automatically anymore since it now looks for `lisp0` first. Its own
+header comment still accurately describes its byte-for-byte-echo,
+no-line-editing behavior.
 
 ## Overview
 
