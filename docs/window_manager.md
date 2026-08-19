@@ -28,18 +28,25 @@ drawing helpers.
 
 ## Starting it
 
-The WM is expected to run as a fixed, well-known pid -- see
-`Z_PID_WM` in `zwm.h`. There's no dynamic role discovery yet (see
-`docs/messaging.md`), so this is a hard assumption: start it right
-after boot, before any client app, the same way the ping/pong demo
-assumes pong is running as pid 1:
+The WM registers itself by name (`"wm0"`, via the pid name registry --
+see `docs/app_runtime.md`'s syscall table and `sw/os/pidreg.c/h`) at
+startup, so client apps (`zwin.c`'s `z_win_create()`) can find it by
+name rather than assuming a fixed pid. It still needs to actually be
+running before any client app tries to create a window (they'll fail
+to connect otherwise), and `zwin.c` still falls back to the fixed
+`Z_PID_WM` constant (`zwm.h`) if the name lookup fails -- e.g. an old
+`wm` build that predates the registry -- so starting it right after
+boot, before any client app, remains the right convention even though
+it's no longer a hard requirement the way it used to be:
 
 ```
 > run wm
 ```
 
-Until a real client app exists, `wm` creates two windows for itself on
-startup so there's something to look at and drag immediately.
+Until a real client app exists, `wm` creates two demo windows for
+itself on startup so there's something to look at and drag
+immediately, plus the dock (see "The dock" below) with launchers for
+the two real apps that do exist so far (`term`, `gpu3d`).
 
 ## Window representation
 
@@ -276,6 +283,98 @@ complexity than this phase warranted. Revisit if the stall becomes a
 real problem, or once resizing/proper occlusion support is worth
 building anyway.
 
+## The dock
+
+A small always-on-top launcher bar, anchored to the bottom left of
+the screen, with one 32x32 icon per app (`sw/apps/wm/wm.c`,
+`dock_apps[]`). Currently hardcoded to two apps, `term` and `gpu3d`;
+adding a third is one more `{ "name", "label" }` entry in
+`dock_apps[]`, nothing else. `name` is the bare filename `z_proc_run()`
+(see `docs/app_runtime.md`) expects -- no path, no extension, same as
+what you'd type after `run` at the kernel shell.
+
+It's a real entry in `wm`'s own `windows[]`/`zorder`, owned by `wm`'s
+own pid (`my_pid`, not the `Z_PID_WM` constant -- see "Starting it"
+above) like the two demo windows created alongside it in `main()` --
+not a special-cased overlay bolted on outside the normal window
+system. That was a deliberate choice: reusing `repair_region()`'s
+existing overlap-based dirty-region tracking means the dock gets
+correctly redrawn whenever something overlaps it, and correctly
+avoids touching/notifying anything it doesn't overlap, for free,
+instead of needing its own parallel redraw path. Three things make it
+behave differently from an ordinary window, all driven by small,
+targeted flags/checks rather than forking the window struct or the
+main loop:
+
+- **No titlebar.** `wm_window_t.no_titlebar` (general-purpose, not
+  dock-specific) skips the titlebar separator line in
+  `draw_window_box()` and makes `hit_titlebar()` always return
+  `false` for that window -- so clicking anywhere in the dock can
+  never start a drag.
+- **Always frontmost.** `create_dock()` is called last in `main()`
+  (after the demo windows), so it starts out frontmost by
+  construction (`create_window()` always appends to the front of
+  `zorder`). Every other place `zorder` can change -- a window being
+  raised by a click (`main()`'s click handling) or a new window being
+  created (`handle_message()`'s `Z_WM_CREATE_WINDOW` case) -- follows
+  up with `bring_to_front(dock_idx)`, so nothing can end up drawn on
+  top of it. This is the only reason clicking inside the dock's rect
+  reliably resolves to the dock in `hit_test()` (which walks `zorder`
+  back-to-front and returns the first match) without needing a
+  separate, earlier check ahead of the normal hit-test call.
+- **Content is drawn synchronously, in-process.** `draw_dock()` is
+  called directly from `repair_region()`'s per-window loop, right
+  next to `draw_window_box()` -- not via `Z_WM_REDRAW` +
+  `wait_for_redraw_done()` like every other window's content. That
+  messaging round trip exists to let `repair_region()`'s
+  back-to-front ordering guarantee hold (see "Content z-order" above)
+  when content is drawn by a *different* process that might not be
+  scheduled for a while; the dock's content is drawn by `wm` itself,
+  in the same call, so there's nothing to wait for and no ordering
+  gap to close. (Same reasoning already applied to the demo windows,
+  which just never draw any content at all -- the dock is the first
+  wm-owned window with real content of its own.)
+
+Icon content is real per-app pixel art: 32x32 1bpp bitmaps (the
+framebuffer itself is 1bpp, see `zgfx.h`), generated from source PNGs
+by `sw/data/icons/gen_dock_icon_data.py` into `sw/apps/wm/dock_icons.c`/
+`.h` (checked in, not generated at build time -- see that script's own
+header comment for the full "add a new icon" steps and source-PNG
+requirements: exactly 32x32, exactly two colors, no anti-aliasing).
+`draw_dock()`'s `draw_icon_bitmap()` blits one via `z_fb_set_pixel()`
+per bit -- not the hardware blitter (that's for glyph/font data
+specifically, see below), and not a hot path (dock icons only redraw
+when `repair_region()` finds the dock's rect overlapping something,
+not continuously), so the straightforward per-pixel software path is
+the right one here, same reasoning as `z_fb_set_pixel()`'s general
+default-case status in `zgfx.h`.
+
+Text -- the "Dock" window title, not currently drawn anywhere per
+"Known limitations" below, so nothing dock-related actually uses text
+right now -- would go through the hardware glyph blitter if it ever
+does (`wm`'s Makefile builds with `-DZ_GFX_HW_BLIT`, like
+`hello_win`/`term`) -- see "Hardware glyph blitting" below for how
+that path works, and for why `wm` loading `z_font_5x7` exactly once,
+itself, in `main()`, is now the *only* place any font is ever loaded
+into hardware glyph memory board-wide.
+
+Clicking a slot calls `z_proc_run()` (see `docs/app_runtime.md`'s
+syscall table) and always spawns a fresh process, the same as running
+`run <app>` twice from the shell would -- there's no tracking of
+whether an app is "already running" to focus instead. Revisit if that
+turns out to matter in practice.
+
+One placement note: the dock sits at a fixed `y` close to
+`WM_SCREEN_H` (see `DOCK_MARGIN`/`DOCK_ICON_SIZE` in `wm.c`), while
+every other window still uses the plain top-left cascade described
+under "App protocol" above (`x = 20 + (n % 8) * 24`, `y = 20 + (n % 8)
+* 20`, capped at `y = 160` for the first 8 windows) -- so in practice
+new windows don't reach far enough down the screen to land on the
+dock. Nothing currently *enforces* that the way it does for the
+screen's own edges (see "Placement cascade is intentionally minimal"
+under "Known limitations"); it just happens to hold given the current
+cascade formula and app window sizes.
+
 ## Drawing content
 
 `sw/common/zgfx.c/h` provides direct-framebuffer pixel/text drawing
@@ -378,6 +477,27 @@ fills especially).
   it once, before the first hardware-accelerated draw with that font.
   It's a documented no-op when built without `Z_GFX_HW_BLIT`, so
   callers don't need their own `#ifdef`.
+- **Glyph memory is shared, global hardware state -- one font's data
+  at a time, board-wide, with no per-process isolation.** Every
+  `Z_GFX_HW_BLIT` process used to call `z_gfx_hw_font_load()` itself
+  at its own startup, which only worked by accident: nothing
+  arbitrated whose call "won" if two processes using different fonts
+  were both running, and there was no reload-before-draw discipline
+  either, so a later process's `z_gfx_hw_font_load()` call for a
+  *different* font could silently corrupt an already-running
+  process's hardware-blitted text. Current convention, adopted
+  specifically to close this rather than just narrow it: `wm` (see
+  "The dock" above) is now the *only* process that ever calls
+  `z_gfx_hw_font_load()` -- once, at its own startup, for
+  `z_font_5x7` -- and every other app (`hello_win`, `term`) is
+  expected to only ever draw with `z_font_5x7`, never loading a font
+  of its own. This isn't enforced anywhere in code -- a
+  `Z_GFX_HW_BLIT` app that calls `z_gfx_hw_font_load()` with a
+  different font, or that's built to draw with one (`term`'s
+  `FONT=z_font_6x12` build option still exists, see its own comment
+  in `term.c`), will still corrupt glyph memory for everyone. It's a
+  convention, not a guarantee, same category of tradeoff as the app
+  trust model below.
 - The hardware blit is **unclipped by design** -- it doesn't do the
   general partial-word clipping the fill/copy path does. `z_fb_draw_char`
   checks whether the glyph is fully on-screen and (if a clip rect was
@@ -626,6 +746,26 @@ a convenient API, not a hard guarantee.
   now exists via `zgfx`, but `wm.c` draws chrome purely via the line
   rasterizer and hasn't been updated to render the title text yet).
 - **No app-requested placement or resize.**
+- **No "already running -- focus instead of relaunching" tracking**
+  for dock icons (noted in "The dock" above, deliberately deferred --
+  doesn't change the click-handling or redraw plumbing when addressed
+  later). The dock also doesn't currently avoid other windows landing
+  on top of it via the cascade the way it avoids being *drawn*
+  underneath them (see "The dock"'s own placement note) -- true so
+  far only because current app window sizes and the cascade formula
+  happen not to reach that far down the screen, not because anything
+  enforces it.
+- **Single-font, single-loader convention isn't enforced.** "Hardware
+  glyph blitting" above covers this in full -- `wm` is the only
+  process meant to call `z_gfx_hw_font_load()`, and every app is
+  meant to only ever draw with `z_font_5x7` as a result, but nothing
+  stops a `Z_GFX_HW_BLIT` build from violating either half (e.g.
+  `term`'s existing `FONT=z_font_6x12` build option). A real fix would
+  need either per-window glyph regions or a "load before every draw
+  you actually own" discipline that survives multiple fonts in play
+  at once -- neither attempted here, since the immediate goal (close
+  the wm/dock race, not support multiple simultaneous fonts) didn't
+  need it.
 - **Placement cascade is intentionally minimal** -- it just offsets
   each new window slightly from the last; no collision avoidance,
   centering, or multi-monitor concerns (not applicable here) were

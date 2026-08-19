@@ -48,6 +48,21 @@ indirection was involved in once: an `objcopy` build step silently
 truncating a binary before `.bss`, understating how much physical
 memory a process actually needed).
 
+`kernel.bin` itself (`sw/os/Makefile`) had this same `objcopy`
+truncation gap until it was given the same `--pad-to=$END` treatment
+every app `Makefile` already uses (`hello_win`'s is the clearest
+example) -- found by inspection, not by a reproduced symptom, so
+whether it was ever actually observed causing a problem on real
+hardware is unconfirmed. Worth taking seriously regardless: `.bss`
+zero-init has already been shown *not* reliable on this hardware once
+before (the pid name registry's own table needed explicit zeroing in
+`main()` after `.bss` alone "broke real hardware almost immediately"
+-- see `k_pidreg_init()`'s call site in `sw/os/kernel.c`), and an
+untruncated, zero-padded flash image is what actually makes that
+zero-init assumption true in the first place, for every `.bss`
+variable, not just the ones that have separately needed their own
+explicit-zeroing workaround so far.
+
 `_end` (provided by the linker, right after `.bss`) marks the top of
 a process's static footprint -- everything above it, up to its own
 stack, is heap. `_sbrk()` (`zeitlos.c`) grows the heap up from `_end`
@@ -58,6 +73,185 @@ silently collide with a deeply-nested stack -- `malloc()` just starts
 failing instead. There's no MMU here, so this is a soft check against
 one process's own accidental self-collision, not protection against
 anything else -- see "Trust model" below.
+
+**`k_proc_create()` (`sw/os/kernel.c`) used to have a real bug in this
+same area**, only exercised once something other than `sh.c` (pid 0)
+could trigger it -- worth understanding since it's the same class of
+mistake as the TFTP one just above, and the `z_translate()` one in
+`sw/os/msg.c`, all three being different ways of getting a
+`0x8000_0000`-relative address wrong. Setting up a brand-new process's
+initial registers, `k_proc_create()` needs to write that process's
+initial return address onto the *new* process's own stack -- before
+that process has been started, while some other process (whichever
+one called `k_proc_create()`) is still the one actually executing.
+Because the MTU only remaps `0x8000_0000` "on every context switch"
+(see above) -- not on demand for whatever the currently-running code
+happens to be setting up -- a virtual-address write through that
+window at this point resolves through the *caller's own* current
+mapping, not the new process's. The original code did exactly this
+(`*(uint32_t *)(0x80000000 + mem_size - 4) = ...`), which happened to
+be harmless every time it was actually exercised, since the only
+caller was `sh.c` (pid 0), and pid 0's own memory region rarely
+collided with anything that mattered. It stopped being harmless the
+moment a second caller existed: `Z_SYS_PROC_RUN` (see the syscall
+table below) lets *any* running process launch another one, and when
+a live process with active heap/stack of its own calls it, that stray
+write lands squarely inside the caller's own memory -- in practice,
+this crashed `wm` immediately after it used the dock (see
+`docs/window_manager.md`, "The dock") to launch an app. Fixed by
+writing through the physical address instead (`base + mem_size - 4`,
+using the physical `base` already computed earlier in the same
+function) -- no translation needed or wanted, since this is a direct
+physical write to memory the kernel already knows the real address
+of.
+
+**A second, unrelated bug in the same function, found immediately
+after fixing the first one** (diagnostic `kprint()`/`kprint_hex32()`
+tracing through `k_proc_run()`/`k_proc_create()` narrowed it down --
+see either function's git history if those traces are still present).
+`k_proc_create()`'s out-of-memory path used to read
+`if (!mem) return(Z_FAIL);`. `Z_FAIL` is `1` (`zmsg.h`) -- a real,
+valid pid a caller could otherwise legitimately get back on *success*,
+not a sentinel distinguishable from one. Every caller (`sh.c`'s `run`,
+`k_proc_run()`) checks success/failure with `if (pid)`/`if (!pid)`,
+treating any nonzero return as "created, this is the new pid" -- so an
+allocation failure was silently read as "successfully created process
+1". Process 1 is normally a real, active process (`wm` itself, see
+`Z_PID_WM` in `zwm.h`) -- so the caller went on to call
+`k_proc_base(1)` (returning `wm`'s own, currently-in-use base) and
+`fs_load()` the app being launched directly into it, overwriting `wm`'s
+own live memory out from under itself. This reproduced immediately:
+launching `gpu3d` from the dock failed to allocate its ~100KB
+(`k_mem_alloc()` returned `NULL` -- worth checking separately whether
+that's a genuine capacity issue, given the pool is `Z_MEM_SIZE` = 1MB
+total and every process consumes at least `Z_MEM_MIN_BLOCK_SIZE` =
+32KB regardless of how small it actually is, `mem.h`), and that
+failure, misread as "created pid 1", corrupted `wm` while it was the
+very process making the call. Fixed by returning `0` instead --
+matching this function's own actual convention elsewhere (the
+`return(0);` at the very end, for "no free slot", already used `0`,
+not `Z_FAIL` -- this was a one-line inconsistency within the same
+function, not a codebase-wide convention mismatch). This bug
+predates the dock/`Z_SYS_PROC_RUN` work -- it was always latent in
+`k_proc_create()`, just never observed, since `sh.c` (pid 0) was the
+only caller before, and pid 0 is always occupied (permanently, from
+boot) so a caller could never mistake a failure return of `1` for a
+legitimately-returned pid 0 the way it could -- and did -- for pid 1.
+
+**A third bug, found chasing the second one further** -- with the
+`Z_FAIL` issue fixed, `gpu3d` still failed to launch (cleanly this
+time, no crash) with `k_mem_alloc()` genuinely returning `NULL` for a
+~100KB request that should have had plenty of room (only the kernel
+and `wm` itself were running). The actual cause: `mem.c`'s metadata
+pool counter, `mem_block_count` -- a small `static int`, read and
+incremented on every single `k_mem_alloc()` call via
+`alloc_metadata()` -- wasn't tagged
+`__attribute__((section(".bss")))`. This matters a great deal here,
+and there's already a precedent for exactly this fix a few lines above
+it in `kernel.c` (`z_pid`/`z_procs[]`/`z_kernel_ticks`, tagged with the
+comment "force bss because `__global_pointer$` will be wrong in the
+interrupt handler") and in `mem.c` itself (`block_list`, right next to
+`mem_block_count`, already had the tag -- `mem_block_count` didn't).
+
+The mechanism, chased down in full this time: `gp` (the global
+pointer register, used by RISC-V's "small data" addressing relaxation
+to reach `.sdata`/`.sbss`/tagged-`.bss` globals in a single
+instruction) is set once, per binary, by that binary's own linker
+script (`__global_pointer$ = . + 0x800;` in both `riscv-os.ld` and
+`riscv-app.ld`, each relative to that binary's own `.sdata`) -- the
+kernel's own `gp` and any given app's own `gp` are different values,
+pointing at different memory entirely (kernel linked at
+`0x40000000`, apps at `0x80000000`). A **syscall**, as implemented
+here (see "The syscall trampoline" below), is a plain `jalr` from
+inside the app's own compiled code straight into kernel code -- `gp`
+isn't part of the C ABI's caller/callee-saved convention (compilers
+assume it's a whole-program constant, never touched across calls), so
+nothing changes it. Kernel code executing via a syscall runs with
+whatever `gp` the *calling app* had, not the kernel's own -- so any
+small-enough kernel global the compiler chooses to address
+`gp`-relative resolves through the wrong base, silently reading and
+writing memory inside the calling app's own address space instead of
+the kernel's real variable. This is genuinely different from (not a
+duplicate of) the interrupt/scheduler path, which is NOT affected the
+same way: `sw/bios/boot_picorv32.S`'s `irq_vec` saves and restores all
+32 GPRs -- `gp` included -- around every hardware interrupt, so each
+process's own `gp` correctly survives being preempted and resumed.
+Syscalls don't go through that path at all, so there's no equivalent
+save/restore for them.
+
+`mem_block_count` was never affected before, purely because it was
+never *reached* this way before -- `sh.c` (kernel code, always
+correctly running with the kernel's own `gp`) was the only caller of
+anything in `mem.c` until `Z_SYS_PROC_RUN` gave an app (`wm`, via its
+dock) a way to reach `k_mem_alloc()` for the first time. Garbage read
+through the wrong `gp` happened to come back `>= Z_MEM_MAX_BLOCKS`,
+so `alloc_metadata()` reported the metadata pool full, and
+`k_mem_alloc()` propagated that as a clean, ordinary-looking
+allocation failure -- no crash, no obviously wrong value, just a
+plausible "out of memory" that wasn't real.
+
+The `.bss` tag on `mem_block_count` (matching the existing precedents
+above) turned out NOT to fix this on its own -- the very next test
+hung instead of cleanly failing, a *different* symptom from the exact
+same underlying cause, which is itself informative: the linker's
+relaxation pass decides `gp`-relative vs. absolute addressing by a
+symbol's FINAL LINKED ADDRESS being within reach of `gp`, not which
+named section it's tagged into. A `.bss`-tagged symbol placed early
+enough (right after `.sdata`/`.sbss`, exactly where `gp` points) can
+still get relaxed -- and exactly where any given symbol lands is a
+build-layout detail the section tag doesn't control, so the same tag
+can appear to "work" for one variable and not another, or stop working
+after an unrelated change shifts layout. Confirmed by compiling a test
+build for a similar (but not identical -- rv64, not this project's
+rv32i) RISC-V target and disassembling the result: `mem_block_count`,
+`.bss`-tagged, still generated a `gp`-relative access.
+
+**The actual, general fix**: make `gp` correct -- the kernel's own,
+not whatever the calling app's was -- for the entire duration any
+kernel code executes via the syscall path, in `z_kernel_entry()`
+itself, rather than chasing individual variables. Right at the top of
+the syscall branch (before touching `z_syscall_table[]`, which has
+the exact same exposure), save the caller's `gp`, switch to the
+kernel's own (`&__global_pointer$`, the same linker symbol
+`riscv-os.ld`'s `.sdata` section already defines), dispatch to the
+syscall handler, then restore the caller's `gp` before returning --
+so the calling app's own `gp`-relative addressing is undisturbed once
+control goes back to it. This protects every kernel global uniformly,
+present and future, without depending on anyone remembering to tag a
+new one. The same test build's disassembly of the fixed function shows
+exactly the intended shape (register names/addressing forms will
+differ some on the project's actual rv32i target, but the sequence is
+the same): save caller's `gp`, load `__global_pointer$`'s address,
+switch `gp` to it, call the syscall handler through `z_syscall_table[]`,
+switch `gp` back to the saved value, return.
+
+The existing `.bss` tags (`kernel.c`'s `z_pid`/`z_procs[]`/
+`z_kernel_ticks`, `mem.c`'s `block_list`/`mem_block_count`) are
+redundant now, but left in place -- harmless, and no reason to
+disturb working (if no longer load-bearing) code.
+
+An alternative considered and not taken: disabling `gp`-relative
+addressing entirely for the kernel build (`-mno-relax`, or
+`-msmall-data-limit=0`). Would also work, and is simpler to reason
+about (no `gp`-relative addressing anywhere in the kernel, ever, so
+nothing to get wrong), at the cost of one extra instruction for every
+small-global access kernel-wide -- code size and a marginal, likely
+unmeasurable runtime cost. The syscall-dispatch fix above is more
+precisely targeted (only the syscall path pays anything, and it pays
+two `mv` instructions total, not a systemic per-access cost) and
+doesn't require touching every kernel `Makefile`'s flags, so it's the
+one implemented -- but `-mno-relax` remains a reasonable fallback if
+`gp` mismatches are ever suspected somewhere this fix doesn't reach
+(`sw/bios/`, a separate, tiny binary with its own `gp`, isn't covered
+by this kernel-side fix at all, though its own C code -- `irq()`,
+relaying into `z_kernel_entry` -- doesn't appear to touch anything but
+`irq_regs`/`irq_stack`, both plain assembly-addressed, not C globals,
+so this doesn't look like it currently needs the same treatment).
+
+This is a **general hazard for any new small kernel global reached
+from a syscall for the first time** that no longer needs to be
+worried about per-variable, now that the fix lives at the dispatch
+point instead.
 
 ## The syscall trampoline
 
@@ -86,10 +280,47 @@ z_kernel_ptr(Z_SYS_UPTIME, (uint32_t *)&obj, 0);
 | `Z_SYS_MSG_SEND` | `k_msg_send` | `z_msg_send()` |
 | `Z_SYS_MSG_READ` | `k_msg_read` | `z_msg_read()` |
 | `Z_SYS_UPTIME` | `z_uptime` | `z_uptime_ticks()` |
+| `Z_SYS_HID_READ_KEY` | `z_hid_read_key` | `hid_read_key()` |
+| `Z_SYS_PID_REGISTER` | `k_pid_register` | `z_pid_register()` |
+| `Z_SYS_PID_LOOKUP` | `k_pid_lookup` | `z_pid_lookup()` |
+| `Z_SYS_GETPID` | `k_getpid` | `z_getpid()` |
+| `Z_SYS_PROC_RUN` | `k_proc_run` | `z_proc_run()` |
 
 Adding a new syscall means adding a `Z_MKSYSCALL(...)` line to
 `syscalls.def`, a handler in the kernel, and (usually) a thin
-app-side wrapper here following the same pattern.
+app-side wrapper here following the same pattern. Kernel handler and
+app-side wrapper can't share a name if the kernel file also includes
+`zeitlos.h` (most do, for the register/type definitions) -- `kernel.c`
+does, which is why `Z_SYS_GETPID`/`Z_SYS_PID_REGISTER`/
+`Z_SYS_PID_LOOKUP`/`Z_SYS_PROC_RUN`'s handlers are `k_getpid`/
+`k_pid_register`/`k_pid_lookup`/`k_proc_run`, not their `z_`-prefixed
+app-facing names -- those were already taken by the wrappers declared
+in `zeitlos.h`, and would otherwise collide, `-Wall`-visibly.
+`k_proc_run`/`k_msg_send`/`k_msg_read`/etc. follow this existing
+`k_`-prefix convention for kernel-internal functions that don't share
+their app-facing name.
+
+`Z_SYS_PID_REGISTER`/`Z_SYS_PID_LOOKUP`/`Z_SYS_GETPID` are the pid
+name registry (`sw/os/pidreg.c/h`) -- lets a process register a
+kernel-numbered name for itself (`z_pid_register("term", ...)` ->
+`"term0"`, `"term1"`, ...) and lets others resolve that name back to a
+pid (`z_pid_lookup()`), instead of relying on fixed pid constants like
+`Z_PID_WM` that only worked because of boot-order convention. `wm.c`
+registers itself as `"wm0"`; `zwin.c`'s `z_win_create()` looks that up
+(falling back to `Z_PID_WM` if the lookup fails, e.g. an old wm build
+that predates the registry).
+
+`Z_SYS_PROC_RUN` (`k_proc_run()`, `sw/os/kernel.c`) is what lets a
+running process launch another one -- before it existed, only
+kernel-space code (`sh.c`, compiled directly into `kernel.bin`, not a
+syscall caller at all) could call `k_proc_create()`/`fs_load()`/
+`k_proc_start()`. It's the same three-call sequence sh.c's `run`
+command and `init()` use, just wrapped as a syscall so e.g.
+`sw/apps/wm`'s dock (see `docs/window_manager.md`, "The dock") can
+call it too. Takes a bare filename (`z_proc_run("term")`, no path or
+extension -- same name you'd type after `run` at the shell prompt),
+returns the new pid or 0 on failure (file not found, or no free
+process slot).
 
 The kernel (`sw/os/*`) doesn't link `zeitlos.c` itself -- it *is* the
 privileged side these wrappers are calling into, so it has its own,

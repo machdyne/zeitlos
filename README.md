@@ -40,11 +40,12 @@ With the MTU, there is no need for position independent code or complicated addr
 
 ### Apps
 
-| App | Pid | Description |
-|-----|-----|-------------|
-| sh | 0 | System shell (serial console) |
-| wm | 1 | Window Manager |
-| net | 2 | Networking Server |
+| App | Description |
+|-----|-------------|
+| sh | Kernel shell (serial console) |
+| wm | Window manager |
+| net | Networking server |
+| term | Terminal emulator |
 
 ### Boards
 

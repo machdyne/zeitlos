@@ -251,6 +251,11 @@ bool z_pid_lookup(const char *name, uint32_t *pid);
 // see z_getpid()'s comment in sw/os/kernel.c.
 uint32_t z_getpid(void);
 
+// launches a new process from a named file on the FAT filesystem
+// (e.g. z_proc_run("term")) -- see zeitlos.c for the full writeup.
+// Returns the new pid, or 0 on failure.
+uint32_t z_proc_run(const char *name);
+
 #define VT100_CURSOR_UP       "\e[A"
 #define VT100_CURSOR_DOWN     "\e[B"
 #define VT100_CURSOR_RIGHT    "\e[C"

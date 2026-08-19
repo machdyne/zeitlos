@@ -26,3 +26,8 @@ Z_MKSYSCALL(HID_READ_KEY, z_hid_read_key)
 Z_MKSYSCALL(PID_REGISTER, k_pid_register)
 Z_MKSYSCALL(PID_LOOKUP, k_pid_lookup)
 Z_MKSYSCALL(GETPID, k_getpid)
+// launches a new process from a named file on the FAT filesystem --
+// see k_proc_run() in sw/os/kernel.c for the full writeup. added for
+// sw/apps/wm's dock (see docs/window_manager.md), the first thing
+// besides the kernel shell that needs to start a process.
+Z_MKSYSCALL(PROC_RUN, k_proc_run)

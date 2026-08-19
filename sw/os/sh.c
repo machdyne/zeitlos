@@ -188,7 +188,7 @@ void sh(void) {
 			fs_unlink(arg);
 
 			uint32_t bytes_received, bytes_written;
-			void *tmp = k_mem_alloc(1024*128); // 128K max file size for now
+			void *tmp = k_mem_alloc(1024*256); // 256K max file size for now
 			uint32_t addr = (uint32_t)(uintptr_t)tmp;
 			printf("uploading to file %s.\n", arg);
 			printf("xfer addr 0x%lx; ready to receive (press D to cancel) ...\n",

@@ -169,6 +169,22 @@ uint32_t z_getpid(void) {
 	return obj.val.uint32;
 }
 
+// launches a new process from a named file on the FAT filesystem
+// (e.g. "term", "gpu3d" -- bare name, no path/extension, same as
+// typing `run term` at the kernel shell). Returns the new pid, or 0
+// on failure (file not found, or no free process slot -- see
+// Z_SYS_PROC_RUN in sw/os/kernel.c for the full writeup). The new
+// process is started immediately; there's no separate "start" step
+// for callers of this wrapper.
+uint32_t z_proc_run(const char *name) {
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_obj_t obj;
+	obj.type = Z_STR;
+	obj.val.str = (char *)name;
+	z_kernel_ptr(Z_SYS_PROC_RUN, (uint32_t *)&obj, 0);
+	return obj.val.uint32;
+}
+
 // --
 
 void rt_delay() {

@@ -46,6 +46,19 @@
 // comfortably -- see docs/user_input.md's "Debugging notes" for the
 // history) -- pass a different FONT to go back to 6x12 or try
 // something else entirely.
+//
+// IMPORTANT as of the pid-registry/dock work: wm is now the only
+// process that ever loads glyph data into hardware glyph memory (see
+// its Makefile's own comment, and z_gfx_hw_font_load() in main()
+// below -- there isn't one anymore), and it only ever loads
+// z_font_5x7. Building term with a different FONT now means its
+// hardware-blitted text (Z_GFX_HW_BLIT builds) will render using
+// z_font_5x7's glyph *data* reinterpreted at this font's dimensions
+// -- garbled, not just wrong-sized. Software-only builds (no
+// Z_GFX_HW_BLIT) aren't affected, since those read glyph data
+// straight from this process's own zfont_data.o, not shared hardware
+// state. Don't override FONT for a Z_GFX_HW_BLIT build until wm loads
+// more than one font.
 #ifndef TERM_FONT_NAME
 #define TERM_FONT_NAME z_font_5x7
 #endif
@@ -278,13 +291,13 @@ int main(void) {
 		return 1;
 	}
 
-	// required for Z_GFX_HW_BLIT builds (see draw_cell()'s comment) --
-	// pushes TERM_FONT's glyph data into hardware glyph memory so the
-	// blitter has something to read; a documented no-op in
-	// software-only builds. must happen before the first render()
-	// call below. same pattern as hello_win.c's own startup.
-	z_gfx_hw_font_load(&TERM_FONT);
-
+	// no z_gfx_hw_font_load() call here anymore -- wm now loads
+	// z_font_5x7 into hardware glyph memory exactly once, at its own
+	// startup, and is the only process that ever does (see
+	// TERM_FONT_NAME's own comment above, and wm's Makefile). As long
+	// as this stays built against the default TERM_FONT_NAME
+	// (z_font_5x7), the glyph data wm already loaded is exactly what
+	// this needs -- nothing to push here.
 	vt_init(&vt);   // already marks every row dirty, so the first
 	                // render() below draws the full (blank) screen
 

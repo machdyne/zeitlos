@@ -50,9 +50,10 @@ kernel.elf: $(OBJS)
 	$(CC) $(LDFLAGS) -Wl,-T$(LDSCRIPT),-Map,kernel.map -o kernel.elf $(OBJS)
 	$(PREFIX)objdump -S --disassemble kernel.elf > kernel.dasm
 
-kernel.bin:
-	$(PREFIX)strip kernel.elf
-	$(PREFIX)objcopy -O binary kernel.elf kernel.bin
+kernel.bin: kernel.elf
+	@END=$$($(PREFIX)nm kernel.elf | awk '$$3=="_end"{print "0x"$$1}'); \
+	$(PREFIX)strip kernel.elf; \
+	$(PREFIX)objcopy -O binary --pad-to=$$END kernel.elf kernel.bin
 
 clean:
 	rm -f kernel.elf kernel.bin kernel.asm kernel.dasm kernel.map sh.asm *.o *.d fs/*.o fs/fatfs/*.o
