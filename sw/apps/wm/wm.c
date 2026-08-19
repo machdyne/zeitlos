@@ -808,6 +808,7 @@ int main(void) {
 	// "just call z_gfx_hw_font_load() again from wherever needs it".
 	z_gfx_hw_font_load(&z_font_5x7);
 
+/*
 	// demo windows so there's something to see/drag before a real
 	// client app exists -- see the file header comment.
 	int demo1 = create_window(my_pid, "Window 1", 140, 100, -1, -1);
@@ -816,6 +817,7 @@ int main(void) {
 		repair_region(windows[demo1].x, windows[demo1].y, windows[demo1].w, windows[demo1].h, -1);
 	if (demo2 >= 0)
 		repair_region(windows[demo2].x, windows[demo2].y, windows[demo2].w, windows[demo2].h, -1);
+*/
 
 	// dock -- created last so it starts out frontmost (see
 	// create_dock()'s own comment); bring_to_front(dock_idx) calls
