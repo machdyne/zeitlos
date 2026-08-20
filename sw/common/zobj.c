@@ -32,20 +32,28 @@ z_obj_t z_obj_float32(float f) {
 }
 
 z_obj_t z_obj_str(const char *s) {
-    z_obj_t obj = { .type = Z_STR };
+    // matches z_obj_blob()'s own malloc-failure handling (zobj.c, this
+    // file) -- this used to leave obj.type as Z_STR with val.str still
+    // NULL on a failed malloc(), which is worse than z_obj_blob()'s old
+    // bug: not just silently missing data, but a Z_STR object carrying
+    // a NULL pointer that anything reading .val.str without its own
+    // NULL check (not every caller has one -- z_obj_blob()'s own
+    // comment documents exactly this class of downstream risk) could
+    // crash on. Bail out to a clean Z_NONE instead, same as
+    // z_obj_blob(), so a caller checking the returned object's type
+    // has an actual signal to notice.
     if (s) {
         size_t len = strlen(s);
-        obj.val.str = malloc(len + 1);
-        if (obj.val.str) {
-            strcpy(obj.val.str, s);
-        }
+        char *copy = malloc(len + 1);
+        if (!copy) return z_obj_none();
+        strcpy(copy, s);
+        return (z_obj_t){ .type = Z_STR, .val.str = copy };
     } else {
-        obj.val.str = malloc(1);
-        if (obj.val.str) {
-            obj.val.str[0] = '\0';
-        }
+        char *copy = malloc(1);
+        if (!copy) return z_obj_none();
+        copy[0] = '\0';
+        return (z_obj_t){ .type = Z_STR, .val.str = copy };
     }
-    return obj;
 }
 
 z_obj_t z_obj_list(uint32_t len) {

@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <string.h>
 
 #include "ip.h"
 #include "eth.h"
@@ -23,6 +24,61 @@ static uint32_t our_ip;
 static uint32_t our_netmask;
 static uint32_t our_gateway;
 static uint16_t next_ip_id = 1;
+
+// -- one-slot pending-packet queue, for when ip_send() (below) can't
+// reach the next hop's MAC yet --
+//
+// ip_send()'s own header comment (ip.h) documents the intended
+// contract: a false return "kicks off resolution... the caller should
+// just retry". Nothing actually implemented that retry -- tcp.c's
+// send_tracked()/tcp_poll() never check tcp_send_segment()'s return
+// value at all, so a fresh outbound TCP connection's very first SYN
+// (needing ARP resolution almost always, since a brand-new peer is
+// essentially never already cached) silently vanished, with only
+// tcp.c's own multi-second RTO backoff as a chance to try again --
+// and even that could keep losing the race on a busy network, since
+// arp.c's own cache eviction policy ("evict slot 0", not LRU) could
+// kick a resolved entry back out before the next retry needed it
+// again. Confirmed as the root cause of a real "TCP handshake never
+// happens, even against a server confirmed reachable from another
+// host" symptom on real hardware.
+//
+// This queues the fully-built packet (header, payload, checksum
+// already computed) here instead of just dropping it, and ip_poll()
+// (called every iteration of net's own main loop, same as eth_poll()/
+// tcp_poll()/etc.) actually sends it the moment the ARP cache shows
+// the next hop resolved -- typically within a millisecond or two on a
+// local network, not tcp.c's own RTO backoff (which grows to several
+// seconds by its own later retries).
+//
+// Single slot: a second ip_send() while one is already pending
+// overwrites it, silently reproducing this same bug for whichever one
+// gets overwritten. Fine for how this is actually used today -- every
+// current caller (tcp.c, udp.c, this file's own ICMP reply) has at
+// most one outstanding send that could need this at a time -- worth
+// revisiting with a real per-destination queue if a caller ever needs
+// more than one concurrently pending target.
+static bool pending_valid;
+static uint32_t pending_next_hop;
+static uint8_t pending_pkt[IP_HDR_LEN + IP_MAX_PAYLOAD];
+static uint16_t pending_len;
+
+// call every main-loop iteration (net.c) -- flushes the pending
+// packet above the moment its next hop's MAC resolves. A no-op
+// (single `if`, cheap) on every call where nothing's pending, which
+// is the overwhelming majority of calls in practice.
+void ip_poll(void) {
+
+	if (!pending_valid) return;
+
+	uint8_t dst_mac[6];
+	if (!arp_lookup(pending_next_hop, dst_mac)) return;	// still waiting
+
+	pending_valid = false;
+	eth_send(dst_mac, ETHERTYPE_IPV4, pending_pkt, pending_len);
+
+}
+
 
 void ip_init(uint32_t ip, uint32_t netmask, uint32_t gateway_ip) {
 	our_ip = ip;
@@ -94,6 +150,15 @@ bool ip_send(uint32_t dst_ip, uint8_t protocol, const uint8_t *payload, uint16_t
 	uint8_t dst_mac[6];
 	if (!arp_lookup(next_hop, dst_mac)) {
 		arp_request(next_hop);
+		// queue this fully-built packet (header/payload/checksum
+		// already done above) so ip_poll() can actually send it once
+		// ARP resolves, instead of just dropping it here -- see that
+		// function's own comment, and the pending-packet fields just
+		// above it, for the full story.
+		pending_next_hop = next_hop;
+		memcpy(pending_pkt, pkt, total_len);
+		pending_len = total_len;
+		pending_valid = true;
 		return false;
 	}
 

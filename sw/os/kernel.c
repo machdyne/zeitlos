@@ -168,13 +168,12 @@ z_obj_t *k_proc_run(z_obj_t *args) {
 	uint32_t pid = 0;
 	uint32_t size = fs_size(name);
 
-	// see kernel.h's Z_PROC_STACK_SIZE_DEFAULT/_LARGE comment -- same
-	// name-based special case sh.c's own `run`/`init` use, so
-	// launching `repl` via wm's dock (this syscall's own motivating
-	// case) gets the same stack+heap allowance it needs regardless of
-	// which path started it.
-	uint32_t stack_size = !strcmp(name, "repl") ?
-		Z_PROC_STACK_SIZE_LARGE : Z_PROC_STACK_SIZE_DEFAULT;
+	// see kernel.h's z_proc_stack_size_for() comment -- the same
+	// shared decision sh.c's own `run`/`init` use, so launching
+	// `repl`/`net` via wm's dock (this syscall's own motivating case)
+	// gets the same stack+heap allowance either one needs regardless
+	// of which path started it.
+	uint32_t stack_size = z_proc_stack_size_for(name);
 
 	if (size) {
 		pid = k_proc_create(size, stack_size);
@@ -279,7 +278,7 @@ int main(void) {
 
 	printf(" - starting shell.\n");
 
-	// the kernel / kernel shell run on process 0
+	// the kernel shell is process zero
 	sh();
 
 }

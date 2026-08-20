@@ -14,17 +14,36 @@
 #include "zmsg.h"
 #include "zport.h"
 
-// ~2 seconds at the kernel tick rate (~732Hz -- see sw/os/kernel.c's
-// z_kernel_ticks comment). generous enough that a provider that's
-// merely slow to get scheduled still connects fine, short enough that
-// a provider that isn't running at all doesn't hang the caller.
-#define Z_PORT_CONNECT_TIMEOUT_TICKS (732 * 2)
+// Z_PORT_CONNECT_TIMEOUT_TICKS is declared in zport.h (public) -- see
+// that file's own comment for why: this is the right default for "is
+// the provider process even up", the wrong one for a provider whose
+// own CONNECT handling involves a slow, async operation before it
+// can reply either way (e.g. net.c's telnet port: it doesn't send
+// CONNECTED/REFUSED until an actual TCP handshake to a remote server
+// resolves, which can legitimately take up to tcp.c's own worst-case
+// retry budget -- TCP_RTO_TICKS_BASE/_MAX_SHIFT/_MAX_RETRIES there
+// sum to ~31.5s before giving up). A real bug on real hardware: this
+// constant's 2s was shorter than that 31.5s worst case, so `term`'s
+// own telnet connect always timed out on this side before net's TCP
+// layer ever got a chance to reply either way -- see
+// z_port_connect_arg_timeout() below for the fix (an explicit,
+// per-call override), and term.c's connect_port() for where the
+// telnet-specific call actually uses it.
 
 z_rv z_port_connect(z_port_t *port, uint32_t provider_pid) {
 	return z_port_connect_arg(port, provider_pid, z_obj_none());
 }
 
 z_rv z_port_connect_arg(z_port_t *port, uint32_t provider_pid, z_obj_t arg) {
+	return z_port_connect_arg_timeout(port, provider_pid, arg,
+		Z_PORT_CONNECT_TIMEOUT_TICKS);
+}
+
+// see zport.h's own comment for the full reasoning on why this needed
+// to become an explicit, per-call parameter instead of one blanket
+// constant every connect used.
+z_rv z_port_connect_arg_timeout(z_port_t *port, uint32_t provider_pid,
+	z_obj_t arg, uint32_t timeout_ticks) {
 
 	port->peer_pid = provider_pid;
 	port->conn_id = 0;
@@ -34,7 +53,7 @@ z_rv z_port_connect_arg(z_port_t *port, uint32_t provider_pid, z_obj_t arg) {
 
 	uint32_t start = z_uptime_ticks();
 
-	while ((z_uptime_ticks() - start) < Z_PORT_CONNECT_TIMEOUT_TICKS) {
+	while ((z_uptime_ticks() - start) < timeout_ticks) {
 
 		z_msg_t msg;
 		if (z_msg_read(&msg) != Z_OK) continue;
@@ -45,14 +64,34 @@ z_rv z_port_connect_arg(z_port_t *port, uint32_t provider_pid, z_obj_t arg) {
 			return Z_OK;
 		}
 
-		if (msg.subject == Z_PORT_REFUSED && msg.tag == 0)
+		if (msg.subject == Z_PORT_REFUSED && msg.tag == 0) {
+			// diagnostic: distinguish an explicit refusal (the
+			// provider is alive, ran, and rejected the connection for
+			// a real reason) from the timeout below (the provider
+			// never replied at all) -- callers like term.c's
+			// connect_port() currently print the same generic "no
+			// port provider answered" message for both Z_FAIL cases,
+			// which made a real bug (net.c's telnet_on_closed() never
+			// actually running -- see tcp.c's notify()/
+			// reset_to_closed() ordering fix) look identical to a
+			// genuine timeout from the console alone.
+			if (msg.obj.type == Z_STR && msg.obj.val.str)
+				printf("zport: connect to pid %ld refused: %s\n",
+					(long)provider_pid, msg.obj.val.str);
+			else
+				printf("zport: connect to pid %ld refused (no reason given)\n",
+					(long)provider_pid);
 			return Z_FAIL;
+		}
 
 		// not a reply to our CONNECT -- discard and keep waiting, same
 		// as z_msg_wait() (zeitlos.c) does for any RPC-style exchange
 
 	}
 
+	printf("zport: connect to pid %ld timed out after %ld ticks -- "
+		"provider never replied\n",
+		(long)provider_pid, (long)timeout_ticks);
 	return Z_FAIL;	// timed out -- provider likely isn't running
 
 }

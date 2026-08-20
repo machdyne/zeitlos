@@ -421,14 +421,12 @@ void sh(void) {
 			}
 			printf("creating process (file: %s size: %ld)\n", arg, size);
 			fflush(stdout);
-			// see kernel.h's Z_PROC_STACK_SIZE_DEFAULT/_LARGE comment
-			// -- `repl` (sw/apps/repl/repl.c) is the one process with
-			// a confirmed need for more than the default allowance
-			// (Scheme stdlib loading + zport.h's own accepted
-			// per-connection leak, see zport.c's own z_port_send()
-			// comment).
-			uint32_t stack_size = !strcmp(arg, "repl") ?
-				Z_PROC_STACK_SIZE_LARGE : Z_PROC_STACK_SIZE_DEFAULT;
+			// see kernel.h's z_proc_stack_size_for() comment -- both
+			// `repl` and `net` are zport.h providers with a confirmed
+			// need for more than the default allowance (per-message
+			// zport.h leak, plus repl's own Scheme stdlib loading --
+			// see zport.c's own z_port_send() comment).
+			uint32_t stack_size = z_proc_stack_size_for(arg);
 			uint32_t pid = k_proc_create(size, stack_size);
 			printf(" - pid: %ld\n", pid);
 			if (!pid) {
@@ -519,7 +517,7 @@ void init(void) {
 		printf("init: wm binary not found\n");
 		return;
 	}
-	uint32_t pid_wm = k_proc_create(size_wm, Z_PROC_STACK_SIZE_DEFAULT);
+	uint32_t pid_wm = k_proc_create(size_wm, z_proc_stack_size_for("wm"));
 	if (!pid_wm) {
 		printf("init: unable to create wm process\n");
 		return;
@@ -553,7 +551,7 @@ void init(void) {
 	if (!size_net) {
 		printf("init: net binary not found (non-fatal)\n");
 	} else {
-		uint32_t pid_net = k_proc_create(size_net, Z_PROC_STACK_SIZE_DEFAULT);
+		uint32_t pid_net = k_proc_create(size_net, z_proc_stack_size_for("net"));
 		if (!pid_net) {
 			printf("init: unable to create net process (non-fatal)\n");
 		} else {
@@ -588,7 +586,7 @@ void init(void) {
 			"fall back to local echo)\n");
 		return;
 	}
-	uint32_t pid_repl = k_proc_create(size_repl, Z_PROC_STACK_SIZE_LARGE);
+	uint32_t pid_repl = k_proc_create(size_repl, z_proc_stack_size_for("repl"));
 	if (!pid_repl) {
 		printf("init: unable to create repl process (non-fatal)\n");
 		return;

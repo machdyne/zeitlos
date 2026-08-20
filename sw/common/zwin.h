@@ -69,17 +69,22 @@ void z_win_fill_rect(const z_win_t *win, int x, int y, int w, int h, int color);
 // &z_font_6x12 or &z_font_8x16 (zfont.h) for font.
 void z_win_draw_text(const z_win_t *win, int x, int y, const char *s, int color, const z_font_t *font);
 
-// the window's content area (below the titlebar, inset to clear both
-// wm's border and -- if the window is focused -- its additional bold
-// focus-border) in absolute screen coordinates. This is exactly what
-// z_win_clear()/z_win_fill_rect()/z_win_draw_text()/z_win_hw_line()
-// etc. all clip to internally -- exposed so callers that need to know
-// their own drawable bounds for something else (centering content,
-// bouncing something off the edges, and so on) can query it instead
-// of duplicating the formula themselves. That duplication is exactly
-// what caused a real, previously-shipped bug: two callers each kept
-// their own copy of this rectangle, and one of them fell out of sync
-// with a border-inset change made here. See docs/window_manager.md.
+// the window's content area (below the titlebar, inset to clear wm's
+// own outer border) in absolute screen coordinates. This is exactly
+// what z_win_clear()/z_win_fill_rect()/z_win_draw_text()/
+// z_win_hw_line() etc. all clip to internally -- exposed so callers
+// that need to know their own drawable bounds for something else
+// (centering content, bouncing something off the edges, and so on)
+// can query it instead of duplicating the formula themselves. That
+// duplication is exactly what caused a real, previously-shipped bug:
+// two callers each kept their own copy of this rectangle, and one of
+// them fell out of sync with a border-inset change made here. See
+// docs/window_manager.md.
+//
+// Does NOT need to account for the focused-window highlight anymore
+// -- that's now drawn just outside the window's own frame (wm.c's
+// draw_window_box()), not inside it, so it never overlaps content
+// regardless of focus state.
 void z_win_content_rect(const z_win_t *win, z_clip_t *out);
 
 // hardware-accelerated line/box draw via the GPU line rasterizer

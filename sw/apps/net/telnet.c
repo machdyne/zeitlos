@@ -165,6 +165,8 @@ static void on_tcp_event(tcp_event_t ev, const uint8_t *data, uint16_t len) {
 	switch (ev) {
 
 	case TCP_EVENT_ESTABLISHED:
+		printf("telnet: TCP_EVENT_ESTABLISHED, app_on_established=%s\n",
+			app_on_established ? "set" : "NULL");
 		if (app_on_established) app_on_established();
 		break;
 
@@ -173,6 +175,16 @@ static void on_tcp_event(tcp_event_t ev, const uint8_t *data, uint16_t len) {
 		break;
 
 	case TCP_EVENT_CLOSED:
+		// diagnostic: this is the exact dispatch point between tcp.c's
+		// notify() and net.c's telnet_on_closed() -- a real bug once
+		// meant notify() itself never called this function at all
+		// (tcp.c's reset_to_closed()/notify() ordering, now fixed).
+		// Printing here regardless of whether app_on_closed is set
+		// confirms the event actually made it this far, which is the
+		// one thing the old silent-drop bug made impossible to tell
+		// from net.c's own logs alone.
+		printf("telnet: TCP_EVENT_CLOSED, app_on_closed=%s\n",
+			app_on_closed ? "set" : "NULL");
 		if (app_on_closed) app_on_closed();
 		break;
 

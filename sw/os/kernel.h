@@ -1,6 +1,7 @@
 #ifndef Z_KERNEL_H
 #define Z_KERNEL_H
 
+#include <string.h>
 #include "../common/zeitlos.h"
 
 // z_rv, Z_OK and Z_FAIL are defined in ../common/zmsg.h (pulled in via
@@ -34,31 +35,53 @@ typedef struct {
 // process:
 //
 // - Z_PROC_STACK_SIZE_LARGE (64KB): confirmed necessary for `repl`
-//   specifically (sw/apps/repl/repl.c) -- Scheme stdlib loading alone
-//   consumes several KB of this on startup (see repl's own "heap
-//   grown N bytes by end of stdlib load" boot log line), and every
-//   zport.h z_port_send() call after that (one per keystroke echoed,
-//   plus every reply) leaks a small, DELIBERATELY never-freed
-//   z_obj_blob() allocation into this same region for the rest of
-//   the connection's lifetime -- see zport.c's own z_port_send()
-//   comment for why that leak is intentional, not a bug still to
-//   fix. A smaller allowance here would just reproduce the original
-//   real-hardware crash that motivated raising this in the first
-//   place (silent Z_BLOB allocation failures, see zobj.c's
-//   z_obj_blob() comment), just later instead of immediately.
+//   AND `net` specifically -- both are zport.h providers whose own
+//   z_port_send() call, on every message relayed to a connected
+//   `term` (repl: one per keystroke echoed/reply; net: one per chunk
+//   of telnet traffic relayed, telnet_on_data() in net.c), leaks a
+//   small, DELIBERATELY never-freed z_obj_blob() allocation into this
+//   same region for the rest of the connection's lifetime -- see
+//   zport.c's own z_port_send() comment for why that leak is
+//   intentional, not a bug still to fix. repl additionally spends
+//   several KB of this on Scheme stdlib loading at startup (see its
+//   own "heap grown N bytes by end of stdlib load" boot log line).
+//   `net` was originally left at the DEFAULT tier below when this
+//   became two tiers instead of one blanket size -- a real bug, not
+//   a deliberate choice: found when a telnet session's failure path
+//   (net.c's telnet_on_closed(), sending Z_PORT_REFUSED back to a
+//   waiting `term` after tcp.c gives up on all its retries) went
+//   silent on real hardware after running long enough to exhaust a
+//   16KB budget, leaving `term` timing out instead of seeing an
+//   explicit refusal. A smaller allowance here would just reproduce
+//   the original real-hardware crash that motivated the LARGE tier's
+//   existence in the first place (silent Z_BLOB/Z_STR allocation
+//   failures, see zobj.c's z_obj_blob()/z_obj_str() comments), just
+//   later instead of immediately.
 // - Z_PROC_STACK_SIZE_DEFAULT (16KB): everything else (the kernel's
-//   own self-registration, wm, net, term, ...). None of these have
-//   ever shown a confirmed need for more than the original 8KB this
+//   own self-registration, wm, term, ...). None of these have ever
+//   shown a confirmed need for more than the original 8KB this
 //   project shipped with -- doubled here as a safety margin (there's
 //   no hard data ruling out needing slightly more), not because any
-//   of them have their own known Scheme-stdlib-style story the way
-//   `repl` does. Confirmed on real hardware (Obst's 1MB variant,
-//   `MEM 1` in rtl/boards.vh) that paying the 64KB default for every
-//   process left no room to run wm+net+repl+term all at once --
-//   see docs/csrs.md and this project's own memory-budget history
-//   around this constant for the full story.
+//   of them have their own known Scheme-stdlib-/zport-leak-style
+//   story the way `repl`/`net` do. Confirmed on real hardware (Obst's
+//   1MB variant, `MEM 1` in rtl/boards.vh) that paying the 64KB
+//   default for every process left no room to run wm+net+repl+term
+//   all at once -- see docs/csrs.md and this project's own
+//   memory-budget history around this constant for the full story.
 #define Z_PROC_STACK_SIZE_DEFAULT  16*1024
 #define Z_PROC_STACK_SIZE_LARGE    64*1024
+
+// which tier (above) a process named `name` should get -- the one
+// place this decision is made, used by every path that can start a
+// process by name (sh.c's `run`/`init`, and k_proc_run()'s own
+// Z_SYS_PROC_RUN syscall handler in kernel.c, which is how wm's dock
+// launches apps). A single shared check specifically so a future
+// third LARGE-tier process doesn't require finding and updating every
+// call site individually the way `net` joining `repl` here just did.
+static inline uint32_t z_proc_stack_size_for(const char *name) {
+	return (!strcmp(name, "repl") || !strcmp(name, "net")) ?
+		Z_PROC_STACK_SIZE_LARGE : Z_PROC_STACK_SIZE_DEFAULT;
+}
 
 // the live process table and the pid of the process currently
 // scheduled/executing -- defined in kernel.c. msg.c (and anything

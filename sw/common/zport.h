@@ -76,6 +76,15 @@ typedef struct {
 
 // -- client side --
 
+// ~2 seconds at the kernel tick rate (~732Hz -- see sw/os/kernel.c's
+// z_kernel_ticks comment). Public (not zport.c-private) specifically
+// so a caller needing a longer timeout for one particular connect
+// (z_port_connect_arg_timeout() below) can still reference this exact
+// default for every other connect it makes, rather than having to
+// duplicate the number. See z_port_connect_arg_timeout()'s own
+// comment for why one blanket timeout doesn't fit every provider.
+#define Z_PORT_CONNECT_TIMEOUT_TICKS (732 * 2)
+
 // connects to a provider at a well-known pid. blocks briefly (a
 // bounded ~2 second timeout, NOT forever -- unlike z_msg_wait()'s own
 // unbounded blocking, used elsewhere in this codebase for RPCs like
@@ -101,7 +110,32 @@ z_rv z_port_connect(z_port_t *port, uint32_t provider_pid);
 // (docs/messaging.md) applies to `arg` -- it only needs to stay valid
 // until this call returns (it's read once, synchronously, when
 // building the CONNECT message).
+//
+// Uses the default ~2 second timeout (zport.c's own
+// Z_PORT_CONNECT_TIMEOUT_TICKS) -- fine for a provider that's simply
+// slow to get scheduled, wrong for one whose own CONNECT handling
+// involves a slow async operation before it can reply either way. Use
+// z_port_connect_arg_timeout() below instead for a provider like
+// that (net.c's telnet port is exactly this case -- see that
+// function's own comment).
 z_rv z_port_connect_arg(z_port_t *port, uint32_t provider_pid, z_obj_t arg);
+
+// same as z_port_connect_arg(), but with an explicit timeout instead
+// of the default ~2 seconds -- for a provider whose own CONNECT
+// handling can legitimately take a while before it knows whether to
+// reply CONNECTED or REFUSED, rather than one that either answers
+// almost immediately or isn't running at all. net.c's telnet port is
+// the motivating case: it doesn't reply until an actual TCP handshake
+// to a remote server resolves one way or the other, which can take up
+// to tcp.c's own worst-case retry budget (~31.5s, TCP_RTO_TICKS_BASE/
+// _MAX_SHIFT/_MAX_RETRIES there) -- the default 2s timeout meant
+// `term`'s own connect always gave up locally before net's TCP layer
+// ever got a chance to answer, even once net was working correctly on
+// its own end. Found and fixed on real hardware: this is what that
+// looked like from the outside (a telnet connect that always "timed
+// out", regardless of how long tcp.c's own retries were given).
+z_rv z_port_connect_arg_timeout(z_port_t *port, uint32_t provider_pid,
+	z_obj_t arg, uint32_t timeout_ticks);
 
 // -- client OR provider side, once connected --
 

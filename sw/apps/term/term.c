@@ -94,16 +94,35 @@
 #endif
 #define TERM_FONT TERM_FONT_NAME
 
-// window size such that z_win_content_rect()'s inset (2px left/right,
-// 1px below the titlebar, 3px bottom -- see zwin.c) leaves EXACTLY
-// VT_COLS*font.w x VT_ROWS*font.h of content area: content width =
-// win.w-4, content height = win.h-15 (see zwin.c's z_win_content_rect()).
-// This is why there's no separate z_win_clear() call anywhere below:
-// the 80x25 grid tiles the content area exactly, no leftover padding
-// pixels to clear separately, so a full dirty-cell redraw already
-// covers every pixel. Computed at runtime (not a macro) now that the
-// font itself is swappable -- TERM_FONT.w/.h aren't preprocessor
-// constants.
+// how long connect_port() (below) waits for CONNECTED/REFUSED when
+// connecting through the Z_TERM_SET_PORT Z_MAP form specifically --
+// currently only ever `repl`'s `telnet <ip>` command. Longer than
+// zport.h's own Z_PORT_CONNECT_TIMEOUT_TICKS default (~2s, right for
+// a provider that's simply up-or-not) because net.c's telnet port
+// provider doesn't reply CONNECTED/REFUSED until an actual TCP
+// handshake to the remote server resolves one way or the other --
+// that can legitimately take up to net's own tcp.c worst-case retry
+// budget (TCP_RTO_TICKS_BASE/_MAX_SHIFT/_MAX_RETRIES there sum to
+// ~31.5s before giving up). 45s -- ~13.5s of margin over that 31.5s
+// worst case, room for scheduling/message-passing overhead on top of
+// tcp.c's own numbers without needing to track them exactly. Found on
+// real hardware: without this, a telnet connect to a genuinely
+// unreachable/non-listening target always timed out on term's own
+// side (this constant, at its old 2s) before net's TCP layer had
+// even gotten partway through its own retries, let alone given up
+// and sent an explicit REFUSED -- see zport.c's own
+// Z_PORT_CONNECT_TIMEOUT_TICKS comment for the fuller story.
+#define TERM_TELNET_CONNECT_TIMEOUT_TICKS (732 * 45)
+
+// window size such that z_win_content_rect()'s inset (2px on every
+// content-bearing edge -- see zwin.c) leaves EXACTLY VT_COLS*font.w x
+// VT_ROWS*font.h of content area: content width = win.w-4, content
+// height = win.h-16 (see zwin.c's z_win_content_rect()). This is why
+// there's no separate z_win_clear() call anywhere below: the 80x25
+// grid tiles the content area exactly, no leftover padding pixels to
+// clear separately, so a full dirty-cell redraw already covers every
+// pixel. Computed at runtime (not a macro) now that the font itself
+// is swappable -- TERM_FONT.w/.h aren't preprocessor constants.
 static int term_win_w, term_win_h;
 
 static vt_screen_t vt;
@@ -221,7 +240,14 @@ static void feed_and_echo(const char *s) {
 // <name>` command), non-Z_NONE only for the Z_TERM_SET_PORT Z_MAP
 // form (see zterm.h) -- e.g. repl's `telnet <ip>` command, which
 // needs `net` to see the target IP as part of the CONNECT itself.
-static bool connect_port(const char *name, uint32_t fallback_pid, z_obj_t arg) {
+// `timeout_ticks`: how long to wait for CONNECTED/REFUSED --
+// Z_PORT_CONNECT_TIMEOUT_TICKS (zport.h) for the common case (default
+// arg, or a provider expected to answer almost immediately), longer
+// for a provider known to do something slow before it can reply
+// either way -- see the Z_MAP call site below (telnet) for the
+// motivating case and the actual number used.
+static bool connect_port(const char *name, uint32_t fallback_pid, z_obj_t arg,
+	uint32_t timeout_ticks) {
 
 	if (port.connected) z_port_close(&port);
 
@@ -234,7 +260,7 @@ static bool connect_port(const char *name, uint32_t fallback_pid, z_obj_t arg) {
 		target_pid = fallback_pid;
 	}
 
-	if (z_port_connect_arg(&port, target_pid, arg) == Z_OK) {
+	if (z_port_connect_arg_timeout(&port, target_pid, arg, timeout_ticks) == Z_OK) {
 		printf("term: connected to port at pid %ld (conn %ld)\n",
 			(long)port.peer_pid, (long)port.conn_id);
 		return true;
@@ -347,7 +373,7 @@ static void handle_key_event(uint32_t packed) {
 	// other unmapped key) if already talking to "repl0" -- harmless
 	// either way, connect_port() itself is safe to call redundantly.
 	if (keysym == Z_KEY_F12) {
-		connect_port("repl0", Z_PID_REPL, z_obj_none());
+		connect_port("repl0", Z_PID_REPL, z_obj_none(), Z_PORT_CONNECT_TIMEOUT_TICKS);
 		return;
 	}
 
@@ -385,7 +411,7 @@ static void handle_key_event(uint32_t packed) {
 int main(void) {
 
 	term_win_w = VT_COLS * TERM_FONT.w + 4;
-	term_win_h = VT_ROWS * TERM_FONT.h + 15;
+	term_win_h = VT_ROWS * TERM_FONT.h + 16;
 
 	// register this instance under a kernel-numbered name ("term0",
 	// "term1", ...) -- see sw/os/pidreg.h -- so other processes can
@@ -429,7 +455,7 @@ int main(void) {
 	// A runtime switch to some OTHER, caller-specified provider
 	// (Z_TERM_SET_PORT, connect_port() above, this file's own header
 	// comment) has no such well-known fallback to guess -- see there.
-	connect_port("repl0", Z_PID_REPL, z_obj_none());
+	connect_port("repl0", Z_PID_REPL, z_obj_none(), Z_PORT_CONNECT_TIMEOUT_TICKS);
 
 	while (1) {
 
@@ -468,15 +494,20 @@ int main(void) {
 				// `net` to see the target IP as part of the CONNECT
 				// itself, not a separate message.
 				if (msg.obj.type == Z_STR && msg.obj.val.str) {
-					connect_port(msg.obj.val.str, 0, z_obj_none());
+					connect_port(msg.obj.val.str, 0, z_obj_none(), Z_PORT_CONNECT_TIMEOUT_TICKS);
 				} else if (msg.obj.type == Z_MAP) {
 					z_obj_t *name_obj = z_map_find(&msg.obj, "name");
 					if (!name_obj || name_obj->type != Z_STR || !name_obj->val.str) {
 						printf("term: SET_PORT map with no valid 'name', ignoring\n");
 					} else {
 						z_obj_t *arg_obj = z_map_find(&msg.obj, "arg");
+						// the Z_MAP form is currently telnet-only (see
+						// this block's own header comment) -- longer
+						// timeout, see TERM_TELNET_CONNECT_TIMEOUT_TICKS's
+						// own comment for why.
 						connect_port(name_obj->val.str, 0,
-							arg_obj ? *arg_obj : z_obj_none());
+							arg_obj ? *arg_obj : z_obj_none(),
+							TERM_TELNET_CONNECT_TIMEOUT_TICKS);
 					}
 				} else {
 					printf("term: SET_PORT with no name, ignoring\n");

@@ -84,13 +84,35 @@ typedef struct {
 
 static tcp_tcb_t tcb;
 static uint32_t our_ip;
-static uint16_t next_local_port = 49152;	// ephemeral range, RFC 6335
+static uint16_t next_local_port;	// seeded in tcp_init() -- see its own comment
 
 void tcp_init(uint32_t ip) {
 	our_ip = ip;
 	tcb.state = TCP_CLOSED;
 	tcb.tx_pending = false;
 	tcb.handler = NULL;
+
+	// seed from boot-time ticks rather than a fixed 49152 every time
+	// -- with our_ip also fixed (net.c's own OUR_IP), a hardcoded
+	// starting port meant EVERY connection to the same remote
+	// server:port, across every reboot of this board, reused the
+	// exact same (our_ip, port, remote_ip, remote_port) 4-tuple.
+	// Found as the actual root cause of a real "TCP handshake never
+	// completes, even against a server confirmed listening and
+	// reachable" symptom: the remote server had lingering state for
+	// that exact tuple from an earlier test (a normal TCP stack keeps
+	// a connection's state around for a while after its peer goes
+	// silent, whether that's minutes or hours depending on the OS),
+	// and responded to our fresh SYN with a plain challenge ACK
+	// (RFC 5961 -- "unexpected segment on what looks like an existing
+	// connection") instead of a SYN-ACK, every single retry, every
+	// single reboot, since we kept presenting the identical tuple it
+	// already had state for. z_uptime_ticks() (docs/networking.md) is
+	// the only source of "varies across boots" this codebase has --
+	// not cryptographically random and doesn't need to be, just
+	// different enough each boot to stop colliding with whatever the
+	// last boot's connections used.
+	next_local_port = 49152 + (z_uptime_ticks() % 16384);
 }
 
 // -- checksum: RFC 793 pseudo-header (src/dst IP, zero, protocol=6,
@@ -283,7 +305,19 @@ void tcp_abort(void) {
 }
 
 static void notify(tcp_event_t ev, const uint8_t *data, uint16_t len) {
-	if (tcb.handler) tcb.handler(ev, data, len);
+	// diagnostic: a NULL handler here used to be silent -- this is
+	// exactly what a real bug looked like (reset_to_closed() clearing
+	// tcb.handler before notify() ran, see tcp_handle()'s RST branch
+	// and tcp_poll()'s retry-giveup branch, both now fixed to notify
+	// first) -- printing this instead of just returning means a
+	// similar future ordering mistake shows up immediately instead of
+	// as a silent "term never heard back" symptom two layers away.
+	if (!tcb.handler) {
+		printf("tcp: notify(event=%d) with no handler registered -- dropped\n",
+			(int)ev);
+		return;
+	}
+	tcb.handler(ev, data, len);
 }
 
 // called whenever an inbound segment's ACK flag is set and its ack
@@ -341,8 +375,19 @@ void tcp_handle(uint32_t src_ip, const uint8_t *p, uint16_t len) {
 	// now, no FIN exchange to wait for.
 	if (flags & TCP_FLAG_RST) {
 		bool was_established = (tcb.state != TCP_SYN_SENT);
-		reset_to_closed();
+		// notify() BEFORE reset_to_closed() -- reset_to_closed() sets
+		// tcb.handler = NULL, and notify() only calls the handler if
+		// it's non-NULL, so the old order silently dropped every
+		// TCP_EVENT_CLOSED delivered this way: the callback (e.g.
+		// net.c's telnet_on_closed(), which is what actually sends
+		// Z_PORT_REFUSED back to a waiting `term`) never ran at all.
+		// Found via a real symptom on real hardware: net's own
+		// "giving up after N retries" print (this file's tcp_poll(),
+		// same bug, same fix) but no corresponding
+		// "telnet connect... failed" from net.c ever followed it, and
+		// `term` timed out instead of seeing an explicit refusal.
 		notify(TCP_EVENT_CLOSED, NULL, 0);
+		reset_to_closed();
 		(void)was_established;	// same event either way -- see tcp.h's TCP_EVENT_CLOSED doc
 		return;
 	}
@@ -505,8 +550,18 @@ void tcp_poll(void) {
 	if (tcb.retries >= TCP_MAX_RETRIES) {
 		printf("tcp: giving up after %d retries, connection abandoned\n",
 			TCP_MAX_RETRIES);
-		reset_to_closed();
+		// notify() BEFORE reset_to_closed() -- see tcp_handle()'s RST
+		// branch above for why the old order (reset first) silently
+		// dropped this event: reset_to_closed() clears tcb.handler,
+		// and notify() only calls it if non-NULL. This was the
+		// specific path behind a real symptom: this printf() would
+		// fire, but net.c's telnet_on_closed() (registered as
+		// tcb.handler by tcp_connect(), via telnet_connect()) never
+		// ran, so its own "telnet connect... failed" print never
+		// followed, and no Z_PORT_REFUSED was ever sent -- `term`
+		// just timed out on its own end instead.
 		notify(TCP_EVENT_CLOSED, NULL, 0);
+		reset_to_closed();
 		return;
 	}
 

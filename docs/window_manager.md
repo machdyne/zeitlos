@@ -640,17 +640,42 @@ a convenient API, not a hard guarantee.
   moving a window, or a delay before content catches up, this is why
   -- try a smaller `POLL_CHUNK` first.
 - **~~The focused-window bold border can still get drawn over~~ --
-  fixed.** Was: `zwin.c`'s content clip inset only 1px from the
-  window's outer edge, far enough to clear the *regular* (unfocused)
-  border but not wm's additional bold focus-border (`draw_window_box()`'s
-  extra 1px-inset outline, drawn only when a window is focused) --
-  content reaching the content area's own edge would draw directly
-  over it whenever the window happened to be focused. `gpu3d`
-  (drawing a cube whose rotation naturally reaches its own content
-  area's edges) is what finally exposed this -- `hello_win` never hit
-  it since it leaves a 4px margin. Fixed: `z_win_content_rect()`
-  (`zwin.c`) now insets 2px on left/right/bottom, clearing both
-  borders.
+  fixed, then superseded, then given real breathing room.** Was:
+  `zwin.c`'s content clip inset only 1px from the window's outer
+  edge, far enough to clear the *regular* (unfocused) border but not
+  wm's additional bold focus-border (`draw_window_box()`'s extra
+  1px-inset outline, drawn only when a window is focused) -- content
+  reaching the content area's own edge would draw directly over it
+  whenever the window happened to be focused. `gpu3d` (drawing a
+  cube whose rotation naturally reaches its own content area's edges)
+  is what finally exposed this -- `hello_win` never hit it since it
+  leaves a 4px margin. First fixed by insetting `z_win_content_rect()`
+  2px on left/right/bottom, clearing both borders -- but that meant
+  hardware-blitted text (`term`, 5px-wide glyphs) sat directly against
+  the *outer* border with almost no breathing room, since the extra
+  pixel came out of content, not chrome. Superseded: the focus-border
+  itself now draws 1px *outside* the window's own frame instead of
+  1px inside it (`draw_window_box()`), so it never overlaps content
+  at all regardless of focus state -- `repair_region()`'s own
+  dirty-region computation grew a matching 1px margin (clamped to the
+  screen's own bounds, since the hardware rasterizer's coordinate
+  registers are unsigned and a negative x/y would otherwise wrap to a
+  huge value instead of clipping) so the now-external ring gets
+  properly cleared/redrawn on every focus change, not just drawn.
+  With the focus-border no longer a factor, `z_win_content_rect()`'s
+  inset first dropped back to 1px on every content-bearing edge --
+  which turned out to be a second real-hardware regression of its
+  own, just a subtler one: 1px is exactly enough to not share a pixel
+  with the border, but zero *blank* pixels between content and border
+  reads as text sitting directly against (or overlapping) the frame,
+  which is exactly what it looked like once `term` was rebuilt against
+  it. Settled on 2px on every side (left/right/bottom/top, top
+  relative to the titlebar separator line) as a genuine margin rather
+  than a border-avoidance side effect this time -- see
+  `zwin.c`'s own `z_win_content_rect()` comment for the full
+  reasoning, and `term.c`'s own window-size formula
+  (`VT_COLS*font.w + 4`, `VT_ROWS*font.h + 16`) for the matching
+  arithmetic.
 - **~~No GPU arbitration for the line rasterizer/blitter~~ -- fixed.**
   Was: direct framebuffer writes (what `zgfx`/`zwin` used for text)
   sidestepped this for content drawn that way, but any app wanting to
@@ -673,16 +698,23 @@ a convenient API, not a hard guarantee.
   below) is a *separate* piece of shared hardware state from the
   rasterizer, with the same two hazards in its own right (confirmed
   directly in `rtl/gpu/gpu_blit.v`, not just by inference from the
-  rasterizer's own bugs) -- but only its **fill path** has had the
-  same fix applied so far, via `zgfx.c`'s `z_fb_hw_fill_rect()` (see
-  `docs/app_runtime.md`, "the GPU blitter", and `docs/gpu_blitter.md`
-  for the full writeup on each). The **glyph path**
-  (`z_fb_draw_char()`/`z_fb_draw_text()`, `Z_GFX_HW_BLIT` builds only)
-  still isn't -- see "Hardware glyph blitting" below for how it's
-  currently scoped (informally, by convention, to a single process at
-  a time) rather than actually protected. A fill from one process and
-  a glyph blit from another could still interleave badly, since they
-  share the same registers and only one side masks IRQs around them.
+  rasterizer's own bugs). Both paths now have the same fix applied:
+  the **fill path** via `zgfx.c`'s `z_fb_hw_fill_rect()`, and the
+  **glyph path** (`z_fb_draw_char()`/`z_fb_draw_char2()`, `Z_GFX_HW_BLIT`
+  builds only) via the same IRQ-masking treatment around its own
+  7-register writes-then-trigger sequence (`gpu_blit_dst_x`/`_dst_y`/
+  `_glyph_addr`/`_glyph_w`/`_glyph_h`/`_fg_color`/`_bg_color`, then
+  `ctrl`) -- see `docs/app_runtime.md`, "the GPU blitter", and
+  `docs/gpu_blitter.md` for the full writeup on each. The glyph path
+  had been relying entirely on convention instead (see "Hardware
+  glyph blitting" below for the loader side of that convention, which
+  is unrelated and still in place) -- real, confirmed real-hardware
+  symptom before this fix: garbled pixels near text, worse with more
+  than one glyph-drawing process actually running at once (e.g. two
+  `term` windows, or `term` alongside `hello_win`), since a timer IRQ
+  landing mid-setup could let a second process's own glyph-blit setup
+  interleave before the first's `ctrl=START` write ever fired, mixing
+  one process's coordinates with another's glyph/color.
   Worth unifying if/when the glyph path gets touched again for
   another reason -- not done proactively here, since it wasn't what
   was asked.

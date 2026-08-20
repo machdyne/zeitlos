@@ -224,10 +224,16 @@ static void telnet_on_data(const uint8_t *data, uint16_t len) {
 static void telnet_on_closed(void) {
 
 	if (telnet_state == TN_CONNECTING) {
-		// term's own z_port_connect_arg() (zport.c) is waiting up to
-		// ~2 seconds for CONNECTED or REFUSED -- if this arrives
-		// after that timeout already fired, it's harmlessly ignored
-		// on term's end (same accepted limitation z_port_connect()
+		// term's own connect_port() (term.c) uses
+		// TERM_TELNET_CONNECT_TIMEOUT_TICKS for this specific
+		// connection (~45s -- long enough to cover this file's own
+		// tcp.c worst-case retry budget, ~31.5s, with margin), not
+		// zport.h's ~2s default -- found via a real bug where the 2s
+		// default was shorter than tcp.c's own retry budget, so term
+		// always gave up locally before this could ever fire. If this
+		// message still arrives after term's (now much longer)
+		// timeout has already fired, it's harmlessly ignored on
+		// term's end (same accepted limitation z_port_connect()
 		// already documents).
 		z_msg_new_send(telnet_client_pid, Z_PORT_REFUSED, 0,
 			z_obj_str("net: telnet connection failed"));
@@ -277,6 +283,16 @@ static void handle_telnet_port_connect(const z_msg_t *msg) {
 	}
 
 	telnet_state = TN_CONNECTING;
+	// diagnostic: confirms the TCP layer actually accepted the
+	// connection attempt and telnet_state is now TN_CONNECTING --
+	// distinguishes "SYN sent, now waiting on the network" (this
+	// line) from a silent failure somewhere in tcp.c/telnet.c between
+	// here and either telnet_on_established() or telnet_on_closed()
+	// eventually firing (see tcp.c's notify() and telnet.c's
+	// on_tcp_event(), both of which now log unconditionally for the
+	// same reason).
+	printf("net: telnet_connect() accepted, state=TN_CONNECTING, "
+		"waiting on TCP handshake\n");
 	// deliberately no CONNECTED/REFUSED sent yet -- see
 	// telnet_on_established()/telnet_on_closed() above, and this
 	// file's own header comment on telnet_state.
@@ -412,6 +428,13 @@ int main(void) {
 	while (1) {
 
 		eth_poll();
+
+		// flushes ip_send()'s pending packet (see ip.c's own comment)
+		// the moment eth_poll() just above has processed an ARP reply
+		// resolving whatever it was waiting on -- placed right after
+		// eth_poll() specifically to minimize that latency, rather
+		// than waiting for some later point in this same loop.
+		ip_poll();
 
 		z_msg_t msg;
 		while (z_msg_read(&msg) == Z_OK) {

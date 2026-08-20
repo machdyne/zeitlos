@@ -97,22 +97,27 @@ void z_win_redraw_done(const z_win_t *win) {
 }
 
 void z_win_content_rect(const z_win_t *win, z_clip_t *out) {
-	// inset by 2px on left/right/bottom, 1px below the titlebar
-	// separator on top. Two separate things overlap the outer 1px
-	// border here: the border itself (win->x/win->x+win->w-1 etc),
-	// and -- only when the window is focused -- wm.c's own bold
-	// focus-border, drawn a further 1px in (win->x+1/win->w-2 etc,
-	// on left/right/bottom; its top edge sits inside the titlebar
-	// area, not down here, so no extra inset is needed on that side).
-	// A 1px-only inset used to coincide exactly with the focus
-	// border's own pixels -- invisible for content that stays well
-	// clear of the edge (nothing before drew close enough to notice),
-	// but any content actually reaching the content area's own
-	// boundary would draw directly on top of the focus border,
-	// visibly gnawing at it whenever the window happened to be
-	// focused.
+	// inset by 2px on every content-bearing edge: 1px to clear the
+	// window's own outer border/titlebar-separator line, plus a
+	// genuine 1px blank margin beyond that so content never sits
+	// directly against the frame. A 1px-only inset (just enough to
+	// not share a pixel with the border) used to be here instead --
+	// mathematically correct (content and border never touched the
+	// same pixel), but visually wrong: zero blank pixels between
+	// them reads as text right up against, or even overlapping, the
+	// frame, which is exactly what it looked like on real hardware.
+	// This is a real margin, not a border-avoidance side effect --
+	// worth restating since an EARLIER version of this inset also
+	// happened to be 2px, but only on left/right/bottom and only
+	// because wm.c's old focus-border used to draw 1px INSIDE the
+	// frame, needing a second pixel of clearance for a completely
+	// different reason (that focus-border now draws outside the
+	// frame instead, see wm.c's draw_window_box()) -- this version
+	// applies the same 2px inset on all four sides, top included,
+	// specifically for visual breathing room, not to dodge anything
+	// else drawn nearby.
 	out->x0 = win->x + 2;
-	out->y0 = win->y + Z_WM_TITLEBAR_H + 1;
+	out->y0 = win->y + Z_WM_TITLEBAR_H + 2;
 	out->x1 = win->x + win->w - 3;
 	out->y1 = win->y + win->h - 3;
 }

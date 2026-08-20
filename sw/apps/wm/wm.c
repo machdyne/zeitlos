@@ -161,10 +161,39 @@ static void draw_window_box(wm_window_t *w, bool is_focused, int color) {
 	}
 
 	if (is_focused) {
-		// bolder border for the focused window -- a 1px inset outline.
-		// text rendering isn't wired up yet (see docs/window_manager.md),
-		// so this is the only visual focus indicator for now.
-		z_fb_hw_box(x0 + 1, y0 + 1, x1 - 1, y1 - 1, color, NULL);
+		// bolder border for the focused window -- a 1px OUTSET
+		// outline, drawn just outside the window's own frame rather
+		// than 1px inside it. Used to be inset (x0+1,y0+1,x1-1,y1-1),
+		// which put it directly against content -- z_win_content_rect()
+		// (zwin.c) had to reserve an entire extra pixel of margin on
+		// every content-bearing edge just to keep glyphs from
+		// visually gnawing at it. Moving it outward reclaims that
+		// pixel for content -- see zwin.c's own updated comment.
+		//
+		// Clamped to the screen's own bounds before drawing: the
+		// hardware rasterizer's coordinate registers are unsigned
+		// (rtl/gpu/gpu_raster.v), so a window sitting flush against
+		// x=0 or y=0 would otherwise send a negative coordinate that
+		// wraps to a huge value instead of clipping, corrupting
+		// framebuffer memory far outside the intended region -- same
+		// class of risk z_fb_hw_line()'s own header comment already
+		// documents for exactly this reason. Ordinary cascaded window
+		// placement keeps windows clear of the edges in practice, but
+		// a dragged window can still end up flush against one -- this
+		// has to hold regardless of how a window got there.
+		//
+		// repair_region() (below) expands whatever region it's given
+		// by this same 1px on every side before clearing/redrawing,
+		// specifically so this outward ring's own pixels get properly
+		// cleared/redrawn on every focus change -- see its own
+		// comment for why that's centralized there instead of at
+		// every individual call site.
+		int fx0 = x0 - 1, fy0 = y0 - 1, fx1 = x1 + 1, fy1 = y1 + 1;
+		if (fx0 < 0) fx0 = 0;
+		if (fy0 < 0) fy0 = 0;
+		if (fx1 >= WM_SCREEN_W) fx1 = WM_SCREEN_W - 1;
+		if (fy1 >= WM_SCREEN_H) fy1 = WM_SCREEN_H - 1;
+		z_fb_hw_box(fx0, fy0, fx1, fy1, color, NULL);
 	}
 
 }
@@ -303,11 +332,26 @@ static void wait_for_redraw_done(uint32_t pid) {
 // for the full wait_for_redraw_done() timeout.
 static void repair_region(int rx, int ry, int rw, int rh, int exclude_idx) {
 
-	fill_rect(rx, ry, rw, rh, 0);
+	// expand by 1px on every side before clearing/redrawing -- the
+	// focused window's chrome highlight (draw_window_box()'s own
+	// comment) is now drawn just OUTSIDE a window's own (x,y,w,h)
+	// bounds, so a region computed from a window's own bounds alone
+	// (true for most callers here) would otherwise leave the outward
+	// ring's outermost pixel uncleared on losing focus, or undrawn on
+	// gaining it. Centralized here, once, rather than at every
+	// individual call site, so nothing new can forget it. Clamped to
+	// the screen's own bounds before use -- same reasoning
+	// draw_window_box() itself documents: the hardware rasterizer's
+	// coordinate registers are unsigned, so a negative x/y wraps to a
+	// huge value instead of clipping, corrupting framebuffer memory
+	// far outside the intended region.
+	rx -= 1; ry -= 1; rw += 2; rh += 2;
+	if (rx < 0) { rw += rx; rx = 0; }
+	if (ry < 0) { rh += ry; ry = 0; }
+	if (rx + rw > WM_SCREEN_W) rw = WM_SCREEN_W - rx;
+	if (ry + rh > WM_SCREEN_H) rh = WM_SCREEN_H - ry;
 
-	// temporary diagnostic -- isolating whether a hang is inside
-	// fill_rect() itself or the loop below. remove once resolved.
-	printf("wm: repair_region: fill_rect(%d,%d,%d,%d) done\n", rx, ry, rw, rh);
+	fill_rect(rx, ry, rw, rh, 0);
 
 	for (int i = 0; i < zorder_count; i++) {
 		int idx = zorder[i];
@@ -315,10 +359,6 @@ static void repair_region(int rx, int ry, int rw, int rh, int exclude_idx) {
 		if (!rects_overlap(rx, ry, rw, rh,
 			(int)w->x, (int)w->y, (int)w->w, (int)w->h))
 			continue;
-		// temporary diagnostic instrumentation -- see repair_drag()'s
-		// own comment. remove once resolved.
-		printf("wm: repair_region: draw_window_box idx=%d (%ld,%ld,%ld,%ld) focused=%d\n",
-			idx, (long)w->x, (long)w->y, (long)w->w, (long)w->h, idx == focused);
 		draw_window_box(w, idx == focused, 1);
 		if (idx == dock_idx) draw_dock();
 		if (w->owner_pid == my_pid) continue;

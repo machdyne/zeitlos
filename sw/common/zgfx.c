@@ -263,7 +263,30 @@ void z_fb_draw_char(int x, int y, char c, int color, const z_font_t *font, const
 		return;
 	}
 
-	hw_blit_wait();	// wait for any previous glyph blit to finish
+	hw_blit_wait();	// wait for any previous glyph blit to finish --
+					// deliberately outside the masked section below,
+					// same reasoning as z_fb_hw_line()'s own
+					// gpu_wait_fifo() comment: this can legitimately
+					// take a while, and masking through it would
+					// stall the scheduler for every other process,
+					// not just this one.
+
+	// z_fb_hw_line()/z_fb_hw_fill_rect() both mask IRQs around their
+	// own multi-register hardware setup, specifically because the
+	// blitter/rasterizer registers are SHARED, board-wide hardware --
+	// term/hello_win/wm (and multiple `term` instances at once) can
+	// all reach this same register set, preemptively scheduled. This
+	// function used to be the one exception: 7 separate MMIO writes
+	// (dst_x, dst_y, glyph_addr, glyph_w, glyph_h, fg_color, bg_color)
+	// before the ctrl=START trigger, all unprotected -- a timer IRQ
+	// landing between any two of them could let a DIFFERENT process's
+	// own glyph-blit setup interleave before ctrl=START ever fires,
+	// mixing one process's coordinates with another's glyph/color,
+	// which is exactly the kind of thing that shows up as garbled
+	// pixels near text on real hardware, timing-dependent (worse with
+	// more than one process actually drawing glyphs around the same
+	// time, e.g. two `term` windows, or `term` alongside `hello_win`).
+	uint32_t old_mask = maskirq(0xFFFFFFFF);
 
 	gpu_blit_dst_x = x;
 	gpu_blit_dst_y = y;
@@ -275,6 +298,8 @@ void z_fb_draw_char(int x, int y, char c, int color, const z_font_t *font, const
 							// this differs from the software renderer's
 							// transparent-overlay behavior
 	gpu_blit_ctrl = GPU_BLIT_CTRL_START | GPU_BLIT_CTRL_GLYPH;
+
+	maskirq(old_mask);
 
 }
 
@@ -345,7 +370,17 @@ void z_fb_draw_char2(int x, int y, char c, int fg_color, int bg_color,
 		return;
 	}
 
-	hw_blit_wait();	// wait for any previous glyph blit to finish
+	hw_blit_wait();	// wait for any previous glyph blit to finish --
+					// deliberately outside the masked section below,
+					// same reasoning as z_fb_draw_char()'s own comment.
+
+	// see z_fb_draw_char()'s own comment above for why this needs the
+	// same IRQ masking z_fb_hw_line()/z_fb_hw_fill_rect() already
+	// have -- this function has the identical 7-write-then-trigger
+	// shape, and term.c's own per-cell rendering (draw_cell(), via
+	// this exact function) is precisely the kind of frequent,
+	// multi-process-concurrent caller that gap mattered for.
+	uint32_t old_mask = maskirq(0xFFFFFFFF);
 
 	gpu_blit_dst_x = x;
 	gpu_blit_dst_y = y;
@@ -355,6 +390,8 @@ void z_fb_draw_char2(int x, int y, char c, int fg_color, int bg_color,
 	gpu_blit_fg_color = fg_color ? 1 : 0;
 	gpu_blit_bg_color = bg_color ? 1 : 0;
 	gpu_blit_ctrl = GPU_BLIT_CTRL_START | GPU_BLIT_CTRL_GLYPH;
+
+	maskirq(old_mask);
 
 }
 
