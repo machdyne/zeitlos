@@ -28,7 +28,7 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
  - Flat memory model with virtual address space for apps
  - FAT16/32 filesystem
  - Object-based interprocess messaging and streaming
- - IP/ARP/ICMP/UDP/TFTP networking
+ - IP/ARP/ICMP/UDP/TFTP/TCP/TELNET networking
 
 #### Memory Translation Unit
 
@@ -46,7 +46,7 @@ With the MTU, there is no need for position independent code or complicated addr
 | wm | Window manager + dock |
 | net | Networking server |
 | term | Terminal emulator (connects to services; VT100 emulation) |
-| lisp | Lisp server (subset of R4RS Scheme) |
+| repl | Lisp/CLI server (subset of R4RS Scheme) |
 
 ### Boards
 
