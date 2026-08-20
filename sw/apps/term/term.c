@@ -8,18 +8,29 @@
  * `make test-zvt100` from sw/test/, entirely on the host).
  *
  * Phase 4: connects to a port (sw/common/zport.h/.c, docs/ports.md)
- * at startup -- sw/apps/portdemo if it's running (started
- * automatically at boot, see sw/os/sh.c's init()), which just sends a
- * banner and echoes back whatever it receives. Typed keys go out
- * through the port; whatever comes back in (Z_PORT_DATA) is what
- * actually reaches the VT100 parser now, not the keystroke directly --
- * this is the real "keyboard -> wm -> term -> port -> (something) ->
- * term -> screen" path, not a standalone loop anymore.
+ * at startup -- sw/apps/lisp if it's running (started automatically
+ * at boot, see sw/os/sh.c's init()), Zeitlos's command interpreter
+ * (sw/apps/lisp/lisp.c). Typed keys go out through the port; whatever
+ * comes back in (Z_PORT_DATA) is what actually reaches the VT100
+ * parser now, not the keystroke directly -- this is the real
+ * "keyboard -> wm -> term -> port -> lisp -> term -> screen" path,
+ * not a standalone loop anymore. `lisp` does its own line editing,
+ * echo, and backspace handling on the other end of the port (see
+ * sw/common/zline.h's header comment for why that has to live on
+ * lisp's side, not here) -- term itself stays exactly as "dumb" a
+ * VT100 renderer as before, just relaying bytes.
+ *
+ * Before lisp existed, term connected to sw/apps/portdemo instead (a
+ * raw echo/banner test harness, no command interpreter, no line
+ * editing of its own -- see its own header comment) -- portdemo is
+ * still there and still useful as a minimal test harness for the
+ * port protocol itself, just no longer what term looks for by
+ * default.
  *
  * If there's no port provider running (or it doesn't answer within
  * z_port_connect()'s timeout), term falls back to local echo -- typed
  * keys get fed straight back into the VT100 parser, same as phase 3 --
- * so it's still usable standalone without portdemo.
+ * so it's still usable standalone without lisp.
  */
 
 #include <stdio.h>
@@ -35,6 +46,11 @@
 #include "../../common/zkbd.h"
 #include "../../common/zvt100.h"
 #include "../../common/zport.h"
+#include "../../common/zterm.h"
+#include "../../common/zlisp.h"	// for Z_PID_LISP, the fixed-pid
+									// fallback below -- term itself
+									// never sends/receives LISP_EVAL,
+									// it only needs this one constant
 
 // which font to render with -- override at build time with
 // `make term FONT=z_font_6x12` (or any other font declared in
@@ -166,6 +182,49 @@ static void render(void) {
 
 static void feed_and_echo(const char *s) {
 	vt_feed(&vt, (const uint8_t *)s, (uint32_t)strlen(s));
+}
+
+// closes the current port connection (if any -- harmless no-op via
+// z_port_close()'s own `if (!port->connected) return;` if there isn't
+// one) and attempts a new one to `name` (a pidreg name, e.g.
+// "lisp0"/"portdemo0"), falling back to `fallback_pid` ONLY if that
+// lookup fails and `fallback_pid` is nonzero -- pass 0 for a
+// caller-specified name (Z_TERM_SET_PORT below) where there's no
+// sensible fixed-pid guess to fall back to, the way there is for the
+// well-known startup default (see main()'s own call to this).
+//
+// blocks for up to z_port_connect()'s own timeout either way (same
+// accepted "discards unrelated messages while waiting" limitation
+// that already applied to the startup connection -- see
+// z_port_connect()'s own comment, zport.c) -- called from the main
+// message loop for Z_TERM_SET_PORT, not just at startup, so a
+// SET_PORT-triggered reconnect can now genuinely stall this term's
+// responsiveness to keystrokes/redraws for that same window, same as
+// it already could during the one that happens before the main loop
+// even starts.
+static bool connect_port(const char *name, uint32_t fallback_pid) {
+
+	if (port.connected) z_port_close(&port);
+
+	uint32_t target_pid;
+	if (!z_pid_lookup(name, &target_pid)) {
+		if (!fallback_pid) {
+			printf("term: '%s' not found -- local echo only\n", name);
+			return false;
+		}
+		target_pid = fallback_pid;
+	}
+
+	if (z_port_connect(&port, target_pid) == Z_OK) {
+		printf("term: connected to port at pid %ld (conn %ld)\n",
+			(long)port.peer_pid, (long)port.conn_id);
+		return true;
+	}
+
+	printf("term: no port provider answered at pid %ld -- local echo only\n",
+		(long)target_pid);
+	return false;
+
 }
 
 // translates one keysym into 0+ raw bytes to send onward -- to the
@@ -307,24 +366,16 @@ int main(void) {
 	// unrelated message that arrives while it's waiting (same
 	// accepted limitation as z_win_create()/z_msg_wait()).
 	//
-	// looks up "portdemo0" (see sw/os/pidreg.h) instead of assuming
-	// the fixed Z_PID_PORTDEMO constant -- falls back to it if lookup
-	// fails (portdemo isn't running, hasn't registered yet, or is an
-	// old build that predates the registry). only done once, here,
-	// not cached -- term connects to a provider exactly once at
-	// startup, unlike zwin.c's wm lookups or sh.c's net lookups,
-	// which happen on every window/tftp operation and are worth
-	// caching for that reason.
-	uint32_t portdemo_pid;
-	if (!z_pid_lookup("portdemo0", &portdemo_pid))
-		portdemo_pid = Z_PID_PORTDEMO;
-
-	if (z_port_connect(&port, portdemo_pid) == Z_OK) {
-		printf("term: connected to port at pid %ld (conn %ld)\n",
-			(long)port.peer_pid, (long)port.conn_id);
-	} else {
-		printf("term: no port provider answered -- local echo only\n");
-	}
+	// looks up "lisp0" (see sw/os/pidreg.h) instead of assuming the
+	// fixed Z_PID_LISP constant -- falls back to it if lookup fails
+	// (lisp isn't running, hasn't registered yet, or is an old build
+	// that predates the registry). This is the only place a fixed-pid
+	// fallback makes sense -- "lisp0" is the well-known default
+	// provider, same reasoning Z_PID_PORTDEMO existed for before it.
+	// A runtime switch to some OTHER, caller-specified provider
+	// (Z_TERM_SET_PORT, connect_port() above, this file's own header
+	// comment) has no such well-known fallback to guess -- see there.
+	connect_port("lisp0", Z_PID_LISP);
 
 	while (1) {
 
@@ -348,6 +399,16 @@ int main(void) {
 				if (port.connected && msg.tag == port.conn_id) {
 					port.connected = false;
 					printf("term: port closed by peer -- local echo only from here on\n");
+				}
+			} else if (msg.subject == Z_TERM_SET_PORT) {
+				// see zterm.h -- fire-and-forget, no reply sent either
+				// way; the result shows up in this printf() log (via
+				// connect_port()) and, if it worked, in what actually
+				// starts arriving over the new connection.
+				if (msg.obj.type == Z_STR && msg.obj.val.str) {
+					connect_port(msg.obj.val.str, 0);
+				} else {
+					printf("term: SET_PORT with no name, ignoring\n");
 				}
 			}
 		}

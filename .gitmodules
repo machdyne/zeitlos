@@ -1,0 +1,3 @@
+[submodule "sw/ext/ms"]
+	path = sw/ext/ms
+	url = https://github.com/machdyne/ms

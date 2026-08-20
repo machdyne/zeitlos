@@ -558,32 +558,39 @@ void init(void) {
 	}
 	printf("init: net pid %ld reserved (not started)\n", pid_net);
 
-	// portdemo: a virtual port provider with no real hardware behind
-	// it -- see docs/ports.md and sw/apps/portdemo/portdemo.c. same
-	// reservation reasoning as wm/net above, for the fallback path --
-	// term.c prefers looking up "portdemo0" by name now, but falls
-	// back to the fixed pid Z_PID_PORTDEMO (zport.h) if that lookup
-	// fails, so it's still worth landing here predictably.
-	// not fatal if this one specifically fails to start (unlike
-	// wm/net above) -- term falls back to local echo without it, see
-	// term.c's own header comment.
+	// lisp: Zeitlos's command interpreter -- see
+	// sw/apps/lisp/lisp.c. same reservation reasoning as wm/net
+	// above, for the fallback path -- term.c prefers looking up
+	// "lisp0" by name now, but falls back to the fixed pid
+	// Z_PID_LISP (zlisp.h) if that lookup fails, so it's still worth
+	// landing here predictably. not fatal if this one specifically
+	// fails to start (unlike wm/net above) -- term falls back to
+	// local echo without it, see term.c's own header comment.
+	//
+	// this replaces starting portdemo here (see docs/ports.md and
+	// sw/apps/portdemo/portdemo.c) -- term no longer looks for
+	// portdemo by default (see term.c's own header comment on why),
+	// so starting it automatically at boot no longer serves the
+	// purpose this reservation dance exists for. portdemo itself is
+	// unchanged and still builds/runs fine manually (`run portdemo`)
+	// for testing the port protocol in isolation from lisp.
 
-	printf("starting portdemo\n");
-	uint32_t size_portdemo = fs_size("portdemo");
-	if (!size_portdemo) {
-		printf("init: portdemo binary not found (non-fatal -- term will "
+	printf("starting lisp\n");
+	uint32_t size_lisp = fs_size("lisp");
+	if (!size_lisp) {
+		printf("init: lisp binary not found (non-fatal -- term will "
 			"fall back to local echo)\n");
 		return;
 	}
-	uint32_t pid_portdemo = k_proc_create(size_portdemo);
-	if (!pid_portdemo) {
-		printf("init: unable to create portdemo process (non-fatal)\n");
+	uint32_t pid_lisp = k_proc_create(size_lisp);
+	if (!pid_lisp) {
+		printf("init: unable to create lisp process (non-fatal)\n");
 		return;
 	}
-	uint32_t base_portdemo = k_proc_base(pid_portdemo);
-	fs_load(base_portdemo, "portdemo");
-	k_proc_start(pid_portdemo);
-	printf("init: portdemo started as pid %ld\n", pid_portdemo);
+	uint32_t base_lisp = k_proc_base(pid_lisp);
+	fs_load(base_lisp, "lisp");
+	k_proc_start(pid_lisp);
+	printf("init: lisp started as pid %ld\n", pid_lisp);
 
 }
 

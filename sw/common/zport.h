@@ -52,7 +52,17 @@
 
 // fallback pid for the demo virtual port (sw/apps/portdemo) if name
 // lookup ("portdemo0") fails -- same convention as Z_PID_WM (zwm.h) /
-// Z_PID_NET (znet.h).
+// Z_PID_NET (znet.h). Stale as an actual fallback since `lisp`
+// replaced portdemo in sh.c's init() boot sequence (see
+// sw/apps/lisp/lisp.c, sw/common/zlisp.h's Z_PID_LISP -- 3, the same
+// slot this constant documents, since lisp now starts where portdemo
+// used to): portdemo is no longer started automatically at boot, so
+// nothing actually lands here anymore unless you `run portdemo`
+// manually, at whatever pid happens to be free at the time -- this
+// constant is only meaningful again if something goes back to
+// starting portdemo at a fixed, predictable point in the boot order.
+// Left in place, not removed -- still accurate documentation of the
+// convention itself, just not a live guarantee right now.
 #define Z_PID_PORTDEMO   3
 
 typedef struct {
