@@ -79,7 +79,7 @@ typedef struct {
 // third LARGE-tier process doesn't require finding and updating every
 // call site individually the way `net` joining `repl` here just did.
 static inline uint32_t z_proc_stack_size_for(const char *name) {
-	return (!strcmp(name, "repl") || !strcmp(name, "net")) ?
+	return (!strcmp(name, "repl")) ?
 		Z_PROC_STACK_SIZE_LARGE : Z_PROC_STACK_SIZE_DEFAULT;
 }
 

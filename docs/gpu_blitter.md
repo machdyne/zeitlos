@@ -287,7 +287,7 @@ only when `CTRL_CLIP` is actually set:
 ## Bugs found (and fixed) during hardware bring-up
 
 Worth knowing if you're debugging something that touches this module,
-since both were subtle and easy to reintroduce:
+since all three were subtle and easy to reintroduce:
 
 1. **Clipped fills read undefined data.** The clipped-fill path used
    to skip straight from `ST_CLIP` to `ST_WRITE`, but `ST_WRITE`'s
@@ -309,6 +309,39 @@ since both were subtle and easy to reintroduce:
    glyph trigger ever issued (after that, `glyph_reg` stays `1` and
    the staleness is invisible). Fixed by latching directly from
    `wb_dat_i` (the value actually being written this cycle) instead.
+3. **Glyph fetch read one cycle too early.** `ST_GLYPH_FETCH` sets
+   `glyph_addr_o`, which only becomes visible to `glyph_mem`'s
+   `blit_addr` input the *following* cycle -- and `glyph_mem`'s own
+   port B is itself a registered (1-cycle-latency) BRAM read, so
+   `glyph_data_i` doesn't actually reflect the requested address until
+   two cycles after `ST_GLYPH_FETCH`, not one. `ST_GLYPH_FETCH_WAIT`
+   sampled `glyph_data_i` a cycle early, so every row's write used the
+   *previous* row's glyph byte, and each glyph's true last row was
+   fetched but never written anywhere. Symptoms on real hardware:
+   every character rendered shifted down one pixel row, with row 0 of
+   each glyph showing whatever ink the *previous* glyph's last row
+   happened to have (visible as stray pixels bleeding into otherwise-
+   blank cells, e.g. spaces right after a character with descenders),
+   and the glyph's genuine bottom row never appearing at all. This is
+   almost certainly the real explanation for `z_font_5x7`'s "bottom
+   row cut off" symptom noted in `zfont.h`/`term.c` -- switching to
+   `z_font_5x8` didn't fix the root cause, it just added a blank
+   padding row so the row this bug drops is normally blank anyway,
+   which is also why the top-row contamination was easy to miss (most
+   glyphs' last row is ink-bearing, but plenty of transitions still
+   line up to show something). Fixed by adding a second wait state,
+   `ST_GLYPH_FETCH_WAIT2`, so the byte is captured two cycles after
+   the address is presented instead of one. Confirmed by simulation
+   (a testbench instantiating the real `gpu_blit_wb` + `glyph_mem`
+   against a bus model matching `rtl/mem/vram.v`'s actual ack timing):
+   the original RTL produced exactly the predicted row-shifted,
+   previous-glyph-contaminated output; the fix produces the correct
+   glyph bit-for-bit. The straddling (word-crossing) split logic
+   itself was verified separately and was never at fault -- a
+   single-row straddle test passes identically on both the buggy and
+   fixed RTL, isolating the bug to the row-to-row fetch timing only.
+   Worth revisiting whether `z_font_5x7` (rather than the `z_font_5x8`
+   padding-row workaround) now renders correctly with this fix in.
 
 ## Best Practices
 

@@ -1,6 +1,8 @@
 # ![Zeitlos](https://github.com/machdyne/zeitlos/blob/bcca7d8a5dbba752f1f5e41afce82037e9b3b3ec/zeitlos.png)
 
-Zeitlos is a work-in-progress SOC (System-on-a-Chip) and OS (Operating System) developed in tandem and intended to provide a responsive graphical environment for running timeless applications on FPGA computers.
+Zeitlos is a work-in-progress SOC (System-on-a-Chip) and OS (Operating System) developed in tandem and intended to provide a responsive graphical environment for using and developing timeless applications on FPGA computers.
+
+The core applications allow Zeitlos to be used as an extensible multi-window network terminal with scripting and graphics.
 
 Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 
@@ -46,7 +48,7 @@ With the MTU, there is no need for position independent code or complicated addr
 | wm | Window manager + dock |
 | net | Networking server |
 | term | Terminal emulator (connects to services; VT100 emulation) |
-| repl | CLI server (subset of R4RS Scheme) |
+| repl | User shell + Lisp interpreter (subset of R4RS Scheme) |
 
 ### Boards
 

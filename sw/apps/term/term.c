@@ -164,6 +164,41 @@ static void draw_cell(int col, int row, char ch, bool reverse) {
 
 }
 
+// TEMPORARY MITIGATION, not a fix -- see the big comment on
+// RESWEEP_COLS below and render()'s own call site. Re-stamps a
+// bounded run of columns using the *real* vt.cells content (never a
+// blank/erase), so worst case it costs a few redundant (already fast,
+// see docs/gpu_blitter.md's performance table) hardware glyph blits
+// and best case it papers over a stray-pixel artifact with correct
+// pixels. Safe by construction: it can't destroy real content the way
+// a blind "clear N pixels to the right" would, because it doesn't
+// know or care whether those columns hold real text -- it just
+// redraws whatever vt.cells actually says is there, which is already
+// correct.
+//
+// enough columns to cover the reported ~32-64px (2 words) of
+// corruption at TERM_FONT.w=5px/col: 64/5 = 12.8, rounded up. If a
+// different TERM_FONT build (see its own comment) is ever used with
+// Z_GFX_HW_BLIT, this scales with it automatically since it's
+// expressed in columns, not pixels.
+#define RESWEEP_COLS 13
+
+static void resweep_right_of_cursor(void) {
+
+	int row = vt.cursor_y;
+	if (row < 0 || row >= VT_ROWS) return;
+
+	int start_col = vt.cursor_x + 1;
+	int end_col = start_col + RESWEEP_COLS;
+	if (end_col > VT_COLS) end_col = VT_COLS;
+
+	for (int col = start_col; col < end_col; col++) {
+		vt_cell_t *cell = &vt.cells[row][col];
+		draw_cell(col, row, cell->ch, cell->reverse);
+	}
+
+}
+
 // redraws whatever actually changed: dirty cells (from vt_feed()
 // since the last call) plus the cursor overlay, which needs its own
 // tracking since moving the cursor (e.g. an arrow key) doesn't dirty
@@ -210,6 +245,13 @@ static void render(void) {
 
 	draw_cursor_x = cur_x;
 	draw_cursor_y = cur_y;
+
+	// TEMPORARY MITIGATION for the horizontal-corruption report near
+	// freshly-typed text (see resweep_right_of_cursor()'s own
+	// comment) -- gated on any_dirty (not cursor_moved alone) so a
+	// pure cursor move (arrow keys, no new content) doesn't pay for
+	// it; typing is exactly the case that needs it.
+	if (any_dirty) resweep_right_of_cursor();
 
 }
 

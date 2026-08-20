@@ -718,6 +718,41 @@ a convenient API, not a hard guarantee.
   Worth unifying if/when the glyph path gets touched again for
   another reason -- not done proactively here, since it wasn't what
   was asked.
+- **Unresolved: horizontal garbage (~32-64px) near freshly-typed text
+  in `term`, root cause not yet found.** Reported on real hardware
+  after the glyph-fetch pipeline fix (`docs/gpu_blitter.md`, "Bugs
+  found (and fixed)" #3, which did fix a separate, confirmed vertical
+  row-shift/contamination bug) -- garbage appears within roughly 1-2
+  framebuffer words to the right of what's being typed, sometimes
+  duplicating recently-typed characters, sometimes solid blocks;
+  bounded (doesn't reach the window edge), and specifically tied to
+  active typing. Ruled out so far, each via a dedicated testbench (see
+  `rtl/gpu/bench/`), not just review: `gpu_blit.v`'s word-straddle
+  split math (`tb_straddle.v`); a full 48-character line at real
+  5px-pitch spacing, covering every possible word-alignment offset
+  (`tb_line.v`); and cross-master corruption or ack-misrouting through
+  the real `rtl/arbiter.v` + `rtl/mem/vram.v` under aggressive,
+  continuous contention from a second synthetic bus master mimicking
+  `gpu_raster_wb`'s own access pattern (`tb_arbiter_stress.v`) -- all
+  pass cleanly against the fixed RTL. `sw/common/zvt100.c`'s parser
+  and `sw/apps/term/term.c`'s own dirty-tracking/cursor-overlay logic
+  were also reviewed without finding a bug. Given the full row
+  containing the cursor is already redrawn on every dirty frame, a
+  bug confined to *that* redraw should already self-correct on the
+  very next keystroke -- that it doesn't (per the report) points either
+  at something outside what's been simulated here (real board timing
+  the testbenches don't model, or the messaging/port layer
+  double-delivering input -- `sw/common/zport.c`/`sw/os/msg.c`, not
+  yet audited for this) or at a narrower RTL case the above
+  testbenches don't happen to hit. `term.c` now has a temporary,
+  content-safe mitigation (`resweep_right_of_cursor()`, gated on
+  `any_dirty`): it re-stamps a bounded run of columns to the right of
+  the cursor using `vt.cells`' real data, last in `render()`, every
+  frame where something was actually typed -- so worst case it's a
+  handful of redundant (already-fast) glyph blits, and it can't
+  destroy real content the way a blind clear would, but it's a
+  mitigation, not a fix, and won't help if the corruption's source is
+  outside `term`'s own render pass entirely.
 - **A subtler framebuffer race for overlapping/adjacent windows.**
   `z_fb_set_pixel()`'s read-modify-write of a framebuffer word
   (`VRAM[word_index] |= mask`) isn't atomic. Two non-overlapping

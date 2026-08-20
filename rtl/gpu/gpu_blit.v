@@ -79,7 +79,7 @@ module gpu_blit_wb #(
                ST_GLYPH_WRITE_LO = 5'd12, ST_GLYPH_WAIT_WRITE_LO = 5'd13,
                ST_GLYPH_READ_HI = 5'd14, ST_GLYPH_WAIT_READ_HI = 5'd15,
                ST_GLYPH_WRITE_HI = 5'd16, ST_GLYPH_WAIT_WRITE_HI = 5'd17,
-               ST_GLYPH_ROW_DONE = 5'd18;
+               ST_GLYPH_ROW_DONE = 5'd18, ST_GLYPH_FETCH_WAIT2 = 5'd19;
 
     // Operation variables
     reg [31:0] work_dst_x, work_dst_y, work_width, work_height, work_pattern;
@@ -450,8 +450,20 @@ module gpu_blit_wb #(
                 end
 
                 ST_GLYPH_FETCH_WAIT: begin
-                    // glyph_data_i is valid one cycle after glyph_addr_o
-                    // was presented (see rtl/mem/glyph.v's port B)
+                    // glyph_addr_o (set last state) has only just now
+                    // become visible to glyph_mem's blit_addr input this
+                    // cycle -- glyph_mem's own port B is a registered
+                    // (synchronous) BRAM read, so its blit_data output
+                    // won't reflect THIS address until the cycle after
+                    // that. One wait state here is not enough: this state
+                    // must only wait, not sample glyph_data_i yet (see
+                    // ST_GLYPH_FETCH_WAIT2 below for the actual capture).
+                    state <= ST_GLYPH_FETCH_WAIT2;
+                end
+
+                ST_GLYPH_FETCH_WAIT2: begin
+                    // NOW glyph_data_i reflects mem[glyph_addr_o] as
+                    // presented two cycles ago -- see ST_GLYPH_FETCH_WAIT.
                     g_glyph_byte <= glyph_data_i;
                     state <= ST_GLYPH_READ_LO;
                 end
