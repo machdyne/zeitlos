@@ -43,9 +43,10 @@ With the MTU, there is no need for position independent code or complicated addr
 | App | Description |
 |-----|-------------|
 | sh | Kernel shell (serial console) |
-| wm | Window manager |
+| wm | Window manager + dock |
 | net | Networking server |
-| term | Terminal emulator |
+| term | Terminal emulator (connects to services; VT100 emulation) |
+| lisp | Lisp server (subset of R4RS Scheme) |
 
 ### Boards
 
@@ -70,17 +71,28 @@ If you have an unsupported board and want to try Zeitlos, please open an issue.
 $ minicom -D /dev/ttyACM0 -b 1000000
 ```
 
-2. Build and write the gateware and kernel to flash:
+2. Build and flash the system:
 
 Building Zeitlos requires [Yosys](https://github.com/YosysHQ/yosys), [nextpnr-ecp5](https://github.com/YosysHQ/nextpnr), [prjtrellis](https://github.com/YosysHQ/prjtrellis) and a [RV32I toolchain](https://github.com/YosysHQ/picorv32#building-a-pure-rv32i-toolchain).
 
 ```
+$ git submodule update --init --recursive
 $ make BOARD=lakritz CABLE=dirtyJtag flash
 ```
 
-3. The BIOS will automatically boot the kernel within a few seconds if no keys are pressed.
+The above command will build the SOC, BIOS, OS and apps and then write the gateware and kernel to flash.
 
-4. Use `xf` to upload apps to a FAT-formatted SD card and `run <file>` to start them. You will need to have the [xfer](https://github.com/machdyne/xfer) utility installed and configured in minicom. 
+The BIOS will automatically boot the kernel within a few seconds if no keys are pressed.
+
+3. Put the apps on an sdcard:
+
+You can either use the demo image (available soon):
+
+```
+gzip -dc images/zeitlos.img.gz | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync
+```
+
+Or use the `xf` command to upload apps to a FAT-formatted SD card and `run <file>` to start them. You will need to have the [xfer](https://github.com/machdyne/xfer) utility installed and configured in minicom.
 
 ## Developers
 
