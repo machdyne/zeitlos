@@ -24,5 +24,14 @@ extern const z_font_t z_font_8x16;	// original font, sw/data/font/font8x16.mem
 extern const z_font_t z_font_6x12;	// compact font, for dense text (e.g. a terminal)
 extern const z_font_t z_font_5x7;	// smaller still -- see sw/apps/term's TERM_FONT_NAME
 									// for how to pick this at build time
+extern const z_font_t z_font_5x8;	// same width as z_font_5x7, one extra
+									// row of height -- sw/data/font/font5x8.mem.
+									// Adopted as the default for hardware-blitted
+									// text (wm/term/hello_win) after real-hardware
+									// testing showed the bottom pixel row of
+									// z_font_5x7 glyphs getting cut off on screen;
+									// the extra row works around that rather than
+									// being a confirmed fix for its root cause,
+									// which hasn't been separately diagnosed.
 
 #endif

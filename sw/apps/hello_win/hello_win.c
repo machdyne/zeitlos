@@ -32,7 +32,7 @@ static uint32_t count = 0;
 #define LABEL_Y  4
 
 // content-relative y of the counter line -- computed once, since
-// z_font_5x7.h isn't a compile-time constant
+// z_font_5x8.h isn't a compile-time constant
 static int counter_y;
 
 // content-relative y of the keypress debug line, below the counter --
@@ -54,7 +54,7 @@ static void draw_static(void) {
 	// blitting" investigation notes).
 	printf("hello_win: draw_static: '%s' (%d chars)\n", s, (int)strlen(s));
 	z_win_clear(&win);
-	z_win_draw_text(&win, 4, LABEL_Y, s, 1, &z_font_5x7);
+	z_win_draw_text(&win, 4, LABEL_Y, s, 1, &z_font_5x8);
 }
 
 // redraws just the counter's own line, not the whole window -- doing
@@ -64,11 +64,11 @@ static void draw_static(void) {
 // gap is wide enough to see.
 static void draw_counter(void) {
 	char buf[48];
-	z_win_fill_rect(&win, 0, counter_y, win.w, z_font_5x7.h, 0);
+	z_win_fill_rect(&win, 0, counter_y, win.w, z_font_5x8.h, 0);
 	snprintf(buf, sizeof(buf), "count=%lu", (unsigned long)count);
 	// same temporary diagnostic as draw_static() above
 	printf("hello_win: draw_counter: '%s' (%d chars)\n", buf, (int)strlen(buf));
-	z_win_draw_text(&win, 4, counter_y, buf, 1, &z_font_5x7);
+	z_win_draw_text(&win, 4, counter_y, buf, 1, &z_font_5x8);
 }
 
 // renders a Z_WM_KEY payload as a short human-readable line, e.g.
@@ -120,8 +120,8 @@ static void describe_key(uint32_t packed, char *buf, size_t buflen) {
 }
 
 static void draw_key(void) {
-	z_win_fill_rect(&win, 0, key_y, win.w, z_font_5x7.h, 0);
-	z_win_draw_text(&win, 4, key_y, last_key_desc, 1, &z_font_5x7);
+	z_win_fill_rect(&win, 0, key_y, win.w, z_font_5x8.h, 0);
+	z_win_draw_text(&win, 4, key_y, last_key_desc, 1, &z_font_5x8);
 }
 
 // drains every pending message, applying any position update and
@@ -182,8 +182,8 @@ static bool drain_messages(void) {
 
 int main(void) {
 
-	counter_y = LABEL_Y + z_font_5x7.h;
-	key_y = counter_y + z_font_5x7.h;
+	counter_y = LABEL_Y + z_font_5x8.h;
+	key_y = counter_y + z_font_5x8.h;
 
 	if (z_win_create(&win, "hello_win", 160, 100) != Z_OK) {
 		printf("hello_win: failed to create window\n");
@@ -191,12 +191,12 @@ int main(void) {
 	}
 
 	// no z_gfx_hw_font_load() call here anymore -- wm now loads
-	// z_font_5x7 into hardware glyph memory exactly once, at its own
+	// z_font_5x8 into hardware glyph memory exactly once, at its own
 	// startup, and is the only process on the board that ever does
 	// (see wm's Makefile and main()'s own comment there). Every app,
 	// this one included, is expected to only ever draw with
-	// z_font_5x7 as a result -- this file used z_font_6x12 until this
-	// change; switched to z_font_5x7 throughout specifically so this
+	// z_font_5x8 as a result -- this file used z_font_6x12 until this
+	// change; switched to z_font_5x8 throughout specifically so this
 	// still renders correctly now that it isn't loading its own font
 	// data.
 

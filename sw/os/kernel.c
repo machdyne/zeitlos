@@ -23,9 +23,28 @@
 #include "pidreg.h"
 #include "logo.h"
 #include "fs/fs.h"
+#include "../common/zsoc.h"
 
 // Z_PROCS_MAX now lives in kernel.h (msg.c needs it too)
-#define Z_PROC_STACK_SIZE  8*1024
+//
+// Real-hardware finding, in two parts (see kernel.h's
+// Z_PROC_STACK_SIZE_DEFAULT/_LARGE for where this landed): a single
+// blanket 8KB stack+heap allowance per process (there's no separate
+// heap region at all -- zeitlos.c's own _sbrk() grows the C heap
+// upward from a process's own `_end` but bounds it against the
+// CURRENT STACK POINTER, so the real call stack and the C heap share
+// this one region for the process's entire lifetime, nothing ever
+// handed back) was NOT enough for `repl` specifically -- Scheme
+// stdlib loading plus zport.h's own per-connection z_obj_blob() leak
+// (zport.c's own comment) exhausted it. Raised to 64KB (Z_PROC_
+// STACK_SIZE_LARGE) for `repl`, first as a single blanket constant
+// for every process -- which then turned out to be too generous on
+// the smallest supported board (Obst's 1MB variant, `MEM 1` in
+// rtl/boards.vh): paying 64KB per process for `kernel`+`wm`+`net`+
+// `repl` left no room to also run `term`. Now per-process
+// (Z_PROC_STACK_SIZE_DEFAULT, 16KB, for everything that isn't
+// `repl` -- see sh.c's own `run`/`init` call sites for where that
+// choice is made) -- see kernel.h for the full reasoning either way.
 #define Z_KERNEL_STACK_SIZE  8*1024
 
 z_obj_t *z_uptime(z_obj_t *args);	// defined below; forward-declared
@@ -149,8 +168,16 @@ z_obj_t *k_proc_run(z_obj_t *args) {
 	uint32_t pid = 0;
 	uint32_t size = fs_size(name);
 
+	// see kernel.h's Z_PROC_STACK_SIZE_DEFAULT/_LARGE comment -- same
+	// name-based special case sh.c's own `run`/`init` use, so
+	// launching `repl` via wm's dock (this syscall's own motivating
+	// case) gets the same stack+heap allowance it needs regardless of
+	// which path started it.
+	uint32_t stack_size = !strcmp(name, "repl") ?
+		Z_PROC_STACK_SIZE_LARGE : Z_PROC_STACK_SIZE_DEFAULT;
+
 	if (size) {
-		pid = k_proc_create(size);
+		pid = k_proc_create(size, stack_size);
 		if (pid) {
 			uint32_t base = k_proc_base(pid);
 			fs_load(base, name);
@@ -190,8 +217,21 @@ int main(void) {
 	z_hid_init();
 	printf(" - hid initialized.\n");
 
-	// init memory management
-	k_mem_init();
+	// init memory management -- pool size comes from the SOC
+	// capability CSRs (rtl/csrs.v, sw/common/zsoc.h, docs/csrs.md)
+	// when available, so this board's REAL amount of main RAM gets
+	// used (Lakritz/mozart_ml1: 32MB, some boards more) instead of
+	// the Obst-only 1MB this used to hardcode unconditionally. Falls
+	// back to Z_MEM_SIZE_DEFAULT (mem.h) on a bitstream that predates
+	// rtl/csrs.v entirely -- z_soc_mem_mb() itself already returns 0
+	// in that case (z_soc_csrs_present() is false), so this check
+	// doesn't need to duplicate that logic, just decide what to do
+	// with a 0.
+	uint32_t mem_mb = z_soc_mem_mb();
+	uint32_t mem_total = mem_mb ? (mem_mb * 1024 * 1024) : Z_MEM_SIZE_DEFAULT;
+	printf(" - main memory: %ldMB%s\n", (long)(mem_total / (1024 * 1024)),
+		mem_mb ? "" : " (CSRs not present -- assumed default)");
+	k_mem_init(mem_total);
 	printf(" - memory initialized.\n");
 
 	// set all processes as available
@@ -226,7 +266,7 @@ int main(void) {
 
 	// call some function ...
 
-	k_proc_create((uint32_t)&_end - (uint32_t)&_start);
+	k_proc_create((uint32_t)&_end - (uint32_t)&_start, Z_PROC_STACK_SIZE_DEFAULT);
 	k_proc_start(0);
 
 	// set the kernel register so the irq handler knows who to call
@@ -386,10 +426,12 @@ uint32_t k_proc_active_count(void) {
 
 }
 
-// return process id or 0 on fail
-uint32_t k_proc_create(uint32_t size) {
+// return process id or 0 on fail. `stack_size` is the per-process
+// stack+heap allowance -- see kernel.h's Z_PROC_STACK_SIZE_DEFAULT/
+// _LARGE comment for which one a given caller should pass.
+uint32_t k_proc_create(uint32_t size, uint32_t stack_size) {
 
-	uint32_t mem_size = k_mem_align_up(size + Z_PROC_STACK_SIZE,
+	uint32_t mem_size = k_mem_align_up(size + stack_size,
 		Z_MEM_ALIGNMENT);
 
 	// find first available process slot

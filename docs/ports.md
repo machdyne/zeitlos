@@ -1,25 +1,26 @@
 # Zeitlos Ports Design
 
-**Status: phases 1-3 below are implemented** (`sw/common/zport.h`/`.c`,
-`sw/apps/portdemo`, `term` wired to it). Phases 4-5 and "Open
-questions" are still just plan. Written up ahead of the code
-originally, the way `docs/networking.md`'s "Staged plan" section
-tracks done vs. not-done work for that subsystem -- update this
-document as the remaining phases land.
+**Status: phases 1-4 below are implemented** (`sw/common/zport.h`/`.c`,
+`sw/apps/portdemo`, `term` wired to it, and now `sw/apps/net`'s telnet
+provider). Phase 4's UART port is still not done (only telnet landed
+so far); phase 5 and "Open questions" are still just plan. Written up
+ahead of the code originally, the way `docs/networking.md`'s "Staged
+plan" section tracks done vs. not-done work for that subsystem --
+update this document as the remaining phases land.
 
 ## Testing this
 
-`term` looks up `lisp0` by name (`sw/os/pidreg.h`) and connects to
-whatever pid that resolves to -- so `run lisp` before `run term`, in
+`term` looks up `repl0` by name (`sw/os/pidreg.h`) and connects to
+whatever pid that resolves to -- so `run repl` before `run term`, in
 any order relative to `wm`/`net`, is enough for `term` to find it. The
-fixed pid `Z_PID_LISP` (3, `sw/common/zlisp.h`) only matters as a
-**fallback**, if name lookup ever fails (registry full, or lisp
+fixed pid `Z_PID_REPL` (3, `sw/common/zrepl.h`) only matters as a
+**fallback**, if name lookup ever fails (registry full, or repl
 started before it managed to register) -- and that fallback is *only*
 guaranteed correct if `wm` (pid 1) and `net` (pid 2) started first, in
 that exact order, which `sw/os/sh.c`'s `init` shell command still does
 automatically, for whichever code path ends up needing it. `init`
 remains the easiest way to bring everything up in one step either way
--- it now starts `lisp` itself too (in the same boot-order slot
+-- it now starts `repl` itself too (in the same boot-order slot
 `portdemo` used to occupy, see `init()`'s own comment):
 
 ```
@@ -27,21 +28,21 @@ remains the easiest way to bring everything up in one step either way
 > run term
 ```
 
-Type `help` -- `lisp`'s banner should appear on connect, followed by a
+Type `help` -- `repl`'s banner should appear on connect, followed by a
 `>` prompt, and typed characters (including backspace) should behave
 like an ordinary line-oriented command prompt, not a raw echo (see
-`sw/common/zline.h` for how `lisp` does this on its end -- `term`
+`sw/common/zline.h` for how `repl` does this on its end -- `term`
 itself still only relays bytes, it does none of this). `ping`/`uptime`
 are good next things to try; anything not yet recognized says so
 plainly rather than pretending to understand it (Scheme evaluation
-isn't wired in yet -- see `sw/apps/lisp/lisp.c`'s own header comment
+isn't wired in yet -- see `sw/apps/repl/repl.c`'s own header comment
 for where that lands).
 
 `portdemo` (`sw/apps/portdemo/portdemo.c`) is still there, and still
 useful as a minimal test harness for the *port protocol itself* in
 isolation from any command interpreter -- `run portdemo` starts it
 manually (it's no longer started by `init`), but `term` won't find it
-automatically anymore since it now looks for `lisp0` first. Its own
+automatically anymore since it now looks for `repl0` first. Its own
 header comment still accurately describes its byte-for-byte-echo,
 no-line-editing behavior.
 
@@ -52,13 +53,18 @@ in an 80x25-character window. A terminal needs somewhere to send
 keystrokes and somewhere output comes from -- a **port** is that
 somewhere: a small, generic client/provider protocol so `term` doesn't
 need to know or care whether it's talking to a real hardware UART, a
-telnet-over-UDP proxy, or a test harness. Example port providers:
+real telnet server over TCP, or a test harness. Example port
+providers:
 
 - A hardware UART port -- thin wrapper over the existing
   `Z_SYS_UART_*` syscalls (`docs/app_runtime.md`).
-- A telnet-over-UDP proxy, riding on `sw/apps/net` (`docs/networking.md`)
-  -- gated on `net` gaining a message-based raw UDP API first (already
-  its own backlog item there).
+- A telnet client, riding on `sw/apps/net` (`docs/networking.md`) --
+  **done**, see `docs/networking.md`'s "TCP + telnet" section. (This
+  was originally sketched here as a "telnet-over-UDP proxy" gated on
+  `net` gaining a message-based raw UDP API -- that was a placeholder
+  written before either piece existed; what actually got built is a
+  real TCP client, since telnet genuinely needs TCP, not a UDP-based
+  workaround.)
 - A demo virtual port (loopback/echo, canned banner) -- no real
   hardware needed, meant purely as a test harness for `term` and the
   port client API itself, built *before* any real provider.
@@ -99,6 +105,17 @@ DATA      either direction     tag=conn_id   obj=Z_BLOB (raw bytes)
 CLOSE     either direction     tag=conn_id   obj=Z_NONE
 ```
 
+The "provider-specific args" case above is now real, not just a
+possibility left open in the sketch: `z_port_connect_arg()`
+(`sw/common/zport.h`) lets a client supply CONNECT's payload
+explicitly (`z_port_connect()` itself is now a thin wrapper passing
+`Z_NONE`). First use: `sw/apps/net`'s telnet provider, which needs to
+know a target IP *before* it can decide whether to accept a connection
+at all -- see `docs/networking.md`'s "TCP + telnet" section, and
+`sw/common/zterm.h`'s `Z_TERM_SET_PORT` for how that argument actually
+gets from `repl`'s `telnet <ip>` command to `term`'s own
+`z_port_connect_arg()` call.
+
 Reachability now prefers name lookup over a fixed pid -- `sw/os/pidreg.h`'s
 registry, `portdemo` registers as `portdemo0` and `term` looks it up --
 with `Z_PID_WM`/`Z_PID_NET`'s original well-known-pid convention kept
@@ -113,12 +130,30 @@ yet, that header comment is the actual source of truth.
 
 Fire-and-forget `Z_BLOB` messages have no backpressure beyond "the
 mailbox is only `Z_MAILBOX_DEPTH` deep and `z_msg_send()` fails when
-it's full" (`docs/messaging.md`). For interactive, human-typing-speed
-traffic (or a demo loopback) that's plenty -- but it is *not* the same
-safety `zstream`'s pull rhythm provides for something like a large
-paste over telnet or a chatty remote process. The plan is to ship the
-simple version first, see whether that gap ever actually matters in
-practice, and only then reach for something more structured -- e.g.
+it's full" (`docs/messaging.md`). **Real-hardware finding: this
+originally assumed "for interactive, human-typing-speed traffic...
+that's plenty" -- it wasn't.** Typing a single short word into `term`
+(connected to `repl`) could silently drop bytes/echo/response
+partway through: `wm.c` sends two `Z_WM_KEY` messages per keystroke
+(press + release, unbatched) straight to the focused window's
+mailbox, each press round-tripping through `term` -> `repl` -> `term`
+as a `Z_PORT_DATA` echo -- enough messages from a single short word to
+exceed the original `Z_MAILBOX_DEPTH` of 8 with no crash, just quiet
+data loss. `Z_MAILBOX_DEPTH` was raised to 32 (`sw/common/zmsg.h`) as
+a direct fix once this was confirmed -- see that header's own comment
+for the math. This is not the same as building the two-independent-
+`zstream`s solution described below; it's just giving the existing
+fire-and-forget mechanism enough slack for real interactive typing
+speed, which is a different (and much cheaper) fix than the one this
+section originally anticipated needing. The `zstream`-based approach
+below remains the right answer for something that genuinely needs
+real backpressure (a large paste, a chatty remote) rather than just
+enough headroom for a burst of ordinary keystrokes.
+
+For anything more than that -- a large paste over telnet, or a chatty
+remote process -- the plan is to see whether the (now much larger)
+simple version still shows real problems in practice before reaching
+for something more structured -- e.g.
 two independent `zstream`s per connection (one direction each), which
 `net`'s existing async consumer API (`zstream_open_async()`/
 `zstream_pull_async()`/`zstream_consumer_handle()`, built for TFTP PUT)
@@ -142,8 +177,16 @@ general solution would need.
    port provider answering within the connect timeout means `term`
    still works standalone via local echo (phase 3's behavior),
    printing which mode it ended up in at startup.
-4. Real providers: UART port, then telnet-over-UDP (gated on `net`'s
-   own UDP API backlog item).
+4. Real providers: UART port (not yet done), and telnet -- **done**,
+   as a real TCP client (`sw/apps/net/tcp.c`/`telnet.c`), not the
+   "telnet-over-UDP proxy" originally sketched in "Overview" above
+   (see that section's own note on why the plan changed). Reachable
+   via `repl`'s `telnet <ip>` command; see `docs/networking.md`'s "TCP
+   + telnet" section for the design, and its own "getting back out of
+   a telnet session" subsection for how `term`'s F12 key hands control
+   back to `repl` once connected to a real remote (something
+   `portdemo`/`repl` themselves don't need, since they can just answer
+   a `quit`/`exit` command instead).
 5. Revisit flow control (above) only if real usage shows the
    fire-and-forget gap actually matters.
 

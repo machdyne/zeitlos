@@ -444,6 +444,122 @@ things that happen to both involve the word "duplex".)
   beyond what the other end of the stream imposes on itself -- see
   "TFTP: exposed to other processes via messaging and streaming"
   below.
+- `sw/apps/net/tcp.c/h` -- a client-only (active open) TCP, **one
+  connection at a time**, dispatched from `ip_handle()` for protocol
+  6. See "TCP + telnet" below.
+- `sw/apps/net/telnet.c/h` -- a minimal telnet (RFC 854) client
+  layered directly on `tcp.c`. See "TCP + telnet" below.
+
+## TCP + telnet
+
+Adds Zeitlos's first non-UDP transport, in service of one concrete
+feature: `repl`'s `telnet <ip>` command, letting a `term` window
+connect to a real remote telnet server instead of the local `repl`
+interpreter. See `docs/ports.md` for the `zport.h` provider mechanism
+this rides on (`term` <-> `net`) and `sw/common/zterm.h` for
+`Z_TERM_SET_PORT`, the message that gets a `term` instance to actually
+switch over.
+
+**Written, not yet run against real hardware or a real telnet
+server** -- same status the ENC28J60/RMII drivers started at before
+their own "Confirmed working" sections above; treat this section as a
+design writeup, not a confirmation.
+
+### Why client-only, one connection at a time
+
+Nothing in Zeitlos needs to *accept* incoming TCP connections yet (no
+listening/passive-open side, no SYN queue), and `telnet <ip>` only
+ever needs one outbound connection open at a time -- so `tcp.c` keeps
+a single static TCB rather than a connection table, the same
+simplifying choice TFTP already made for "one transfer at a time" (see
+the staged plan above). `telnet.c` inherits the same constraint by
+construction, since it's just a byte-stream filter sitting directly on
+top of `tcp.c`'s one connection.
+
+### Stop-and-wait sending, not a real send window
+
+`tcp_send()` allows at most one unacknowledged outbound segment at a
+time -- the next call fails (caller retries on a later poll) until the
+previous one is acked. No sliding window, no pipelining, no
+retransmit *queue* (just one retransmit *slot*). This is a real
+throughput ceiling (round-trip-time-bound, not bandwidth-bound) that
+would be a bad tradeoff for a bulk transfer protocol -- which is
+exactly why TFTP doesn't work this way, it streams through
+`zstream.h` instead. Telnet traffic is different: small, bursty,
+interactive, latency-sensitive rather than throughput-sensitive, so
+this costs nothing in practice while avoiding a real
+window/retransmit-queue implementation entirely. `telnet.c` layers a
+small internal send queue (`TELNET_TX_QUEUE_LEN`, telnet.c) on top so
+a burst of typed keystrokes and a handful of option-negotiation
+replies don't fight each other over that single slot -- `telnet_poll()`
+drains it through `tcp_send()` as room allows.
+
+### No out-of-order reassembly
+
+A segment that doesn't arrive with the exact sequence number expected
+is dropped, not buffered -- relies entirely on the peer's own
+retransmit timer to resend it in order. No reassembly queue, no
+selective ack. Expected to be a non-issue on a local, low-latency LAN
+(the same environment TFTP's own design already assumes); would need
+revisiting for a path with real reordering.
+
+### No TCP options, no half-close
+
+No MSS negotiation, no window scaling -- `tcp.c` never sends a TCP
+options field, so both ends fall back to RFC 879's 536-byte default
+MSS (`TCP_MAX_PAYLOAD`, tcp.h). No half-close support either: a
+remote-initiated FIN gets `net`'s own FIN sent right back immediately
+(see `tcp_handle()`'s `TCP_ESTABLISHED` case, tcp.c) instead of
+lingering in `CLOSE_WAIT` waiting for the application to decide --
+telnet has no use for keeping one direction of a connection open after
+the other has closed.
+
+### Telnet option negotiation: accept ECHO/SGA, refuse everything else
+
+`telnet.c` refuses (`WONT`/`DONT`) every option a server proposes *to*
+it, except it *accepts* `WILL ECHO`/`WILL SUPPRESS-GO-AHEAD` from the
+server (replies `DO`) -- deliberately asymmetric, not a bug. `term`
+does no local character echo once connected to a port (see
+`docs/ports.md`), so refusing server-side echo would leave a user
+typing blind; accepting it is what makes a session actually usable.
+Almost every common `telnetd` (Linux/BSD, busybox) offers exactly
+these two options unprompted at connect time. Never replies to an
+unsolicited `DONT`/`WONT` (only `DO`/`WILL` get an answer) --
+deliberately, since always-answer-everything is the classic way to
+build an infinite negotiation ping-pong with a peer that does the
+same; see `telnet.h`'s own comment for the full reasoning.
+
+### Getting back out of a telnet session
+
+Once `term` is relaying raw bytes to a real remote, there's no
+`quit`/`exit` command the way `repl`/`portdemo` have to hand control
+back with. `term` reserves **F12** as a fixed, always-available escape
+hotkey back to `repl0`, intercepted in `handle_key_event()` before it
+ever reaches whatever port is currently connected -- not the classic
+telnet-client Ctrl-], since Ctrl is only special-cased for letters in
+`sw/common/zkbd.c`'s keysym translation (extending that to punctuation
+would be a keyboard-layer change every app inherits, for a feature
+only `term` needs). See `term.c`'s own header/`handle_key_event()`
+comments.
+
+### The CONNECT-time IP argument
+
+`term` never itself knows a telnet target's IP -- `repl`'s `telnet
+<ip>` command does. Rather than a separate message from `repl` to
+`net` racing against `term`'s own connection attempt, the IP rides
+along as the `zport` `CONNECT` message's own payload:
+`z_port_connect_arg()` (`sw/common/zport.h`) lets a caller supply
+that payload instead of the default `Z_NONE`, and
+`Z_TERM_SET_PORT`'s `Z_MAP` form (`sw/common/zterm.h`) is how `repl`
+gets that argument to `term` in the first place. `net`'s own
+`Z_PORT_CONNECT` handler requires a `Z_UINT32` payload (the target
+IP) and refuses anything else -- there's currently only one thing a
+`CONNECT` to `net` can mean. Because the TCP handshake itself is
+asynchronous, `net` doesn't call `z_port_accept()` synchronously the
+way `portdemo`/`repl` do -- it defers `Z_PORT_CONNECTED`/
+`Z_PORT_REFUSED` until the handshake actually resolves (or times out),
+staying within `z_port_connect_arg()`'s own ~2 second connect timeout
+(`zport.c`) for anything on a normal LAN.
 
 ## TFTP: exposed to other processes via messaging and streaming
 
@@ -624,12 +740,33 @@ than debugging one layer at a time.
    truncation bug corrupting `net`'s own stack via an undersized
    memory allocation, not anything in the networking code itself --
    see "TFTP debugging notes" below for the full story.
-5. A message-based UDP API for other apps (not just the shell) to use
+4.5. **Written, not yet run on real hardware.** `net` now checks the
+   SOC capability CSRs (`rtl/csrs.v`, `docs/csrs.md`) before touching
+   any ethernet backend register, and exits cleanly instead of hanging
+   forever on a board that confirms it doesn't have the hardware this
+   binary was built for (e.g. Lakritz, which has neither `SPI_ETH` nor
+   `ETH_RMII`) -- this is what lets `sw/os/sh.c`'s `init` start `net`
+   automatically on every board now, instead of the old
+   pid-reservation-only workaround. See `docs/csrs.md` for the full
+   design; unrelated to phases 1-7 here, just riding alongside them in
+   the same file/app.
+5. **Written, not yet run on real hardware or against a real telnet
+   server.** TCP client (`tcp.c`) + a minimal telnet client
+   (`telnet.c`), exposed to other processes as a `zport` provider
+   (`sw/common/zport.h`, `docs/ports.md`) -- reachable via `repl`'s
+   `telnet <ip>` command through `term`. See "TCP + telnet" below for
+   the design and the same kind of "known risk areas" writeup the
+   ENC28J60/RMII drivers got before their own hardware bring-up passes
+   (above) -- follow the same "confirm the simplest layer first"
+   approach here too: a bare SYN/SYN-ACK/ACK handshake against
+   something like `nc -l` before layering telnet negotiation or `term`
+   on top.
+6. A message-based UDP API for other apps (not just the shell) to use
    directly, reusing `Z_BLOB` and the same messaging shape `znet.h`
    already established for TFTP -- straightforward extension once
    there's an app that actually needs raw UDP rather than going
    through TFTP.
-6. W5500 backend. Per the design discussion that led here: W5500 has
+7. W5500 backend. Per the design discussion that led here: W5500 has
    its own hardware IP/socket layer (unlike the ENC28J60's raw MAC),
    so the swappable boundary for that backend is at the socket/UDP
    level, not the Ethernet-frame level that ARP/IP below it sit at --

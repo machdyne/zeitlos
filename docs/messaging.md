@@ -277,6 +277,37 @@ it, and there's no ack mechanism yet to know when it's safe). See
   "the reply-then-request pattern happens to make it safe." Anything
   that needs to free reply memory promptly (rather than leak it, or
   rely on request/reply alternation) needs a real mechanism here.
+  **Real-hardware finding, in two parts:** `sw/common/zport.h`'s
+  `z_port_send()` originally just leaked its `z_obj_blob()` payload on
+  every single call, following the same "small, accepted leak"
+  precedent as `pong`'s reply strings (see the ping/pong example
+  above) -- but `zport.h`'s own usage pattern (potentially many sends
+  per connection, e.g. one per keystroke echoed by `repl`,
+  `sw/apps/repl/repl.c`) isn't the same shape as a one-shot RPC reply,
+  and confirmed on real hardware: enough sustained interactive use
+  exhausted the sending process's own heap (`Z_PROC_STACK_SIZE`,
+  `sw/os/kernel.c` -- since raised significantly, see that constant's
+  own comment), at which point `z_obj_blob()`'s internal `malloc()`
+  started failing -- see that function's own comment (`sw/common/
+  zobj.c`) for what an unchecked failure there used to do silently.
+  A first attempted fix freed the PREVIOUS call's blob at the start of
+  each new `z_port_send()`, reasoning that the peer must have had a
+  scheduling slot to read it by then -- this is exactly the "no
+  reply-lifetime ack" problem this bullet describes, and the fix
+  turned out to demonstrate it rather than solve it: the assumption
+  breaks whenever a caller makes several sends back-to-back with
+  nothing in between to force a scheduler switch (confirmed on real
+  hardware with `repl`'s own `handle_connect()`, which sends a banner
+  then a prompt with no yield between them -- the second call's free
+  ran before the peer had necessarily read the first message, and the
+  very next `z_obj_blob()` call reused that just-freed memory, so the
+  first message resolved to the SECOND message's bytes by the time the
+  peer actually read it). Reverted -- `z_port_send()` now goes back to
+  never freeing at all, relying on the much larger
+  `Z_PROC_STACK_SIZE` to make the leak tolerable for a realistic
+  session rather than a free that was actively incorrect. This remains
+  open: a real fix needs the receiver's own read to prove safety, not
+  any action by the sender.
 - **No process-death notification.** If a process holding a reference
   another process is relying on gets killed, there's currently no
   message or callback that tells anyone. This matters most for the

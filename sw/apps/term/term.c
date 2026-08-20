@@ -8,19 +8,19 @@
  * `make test-zvt100` from sw/test/, entirely on the host).
  *
  * Phase 4: connects to a port (sw/common/zport.h/.c, docs/ports.md)
- * at startup -- sw/apps/lisp if it's running (started automatically
+ * at startup -- sw/apps/repl if it's running (started automatically
  * at boot, see sw/os/sh.c's init()), Zeitlos's command interpreter
- * (sw/apps/lisp/lisp.c). Typed keys go out through the port; whatever
+ * (sw/apps/repl/repl.c). Typed keys go out through the port; whatever
  * comes back in (Z_PORT_DATA) is what actually reaches the VT100
  * parser now, not the keystroke directly -- this is the real
- * "keyboard -> wm -> term -> port -> lisp -> term -> screen" path,
- * not a standalone loop anymore. `lisp` does its own line editing,
+ * "keyboard -> wm -> term -> port -> repl -> term -> screen" path,
+ * not a standalone loop anymore. `repl` does its own line editing,
  * echo, and backspace handling on the other end of the port (see
  * sw/common/zline.h's header comment for why that has to live on
- * lisp's side, not here) -- term itself stays exactly as "dumb" a
+ * repl's side, not here) -- term itself stays exactly as "dumb" a
  * VT100 renderer as before, just relaying bytes.
  *
- * Before lisp existed, term connected to sw/apps/portdemo instead (a
+ * Before repl existed, term connected to sw/apps/portdemo instead (a
  * raw echo/banner test harness, no command interpreter, no line
  * editing of its own -- see its own header comment) -- portdemo is
  * still there and still useful as a minimal test harness for the
@@ -30,7 +30,18 @@
  * If there's no port provider running (or it doesn't answer within
  * z_port_connect()'s timeout), term falls back to local echo -- typed
  * keys get fed straight back into the VT100 parser, same as phase 3 --
- * so it's still usable standalone without lisp.
+ * so it's still usable standalone without repl.
+ *
+ * Phase 5 (telnet, docs/networking.md/docs/ports.md): `repl`'s
+ * `telnet <ip>` command redirects a term instance from repl to
+ * sw/apps/net's telnet port provider instead (still via
+ * Z_TERM_SET_PORT, sw/common/zterm.h -- see connect_port() below for
+ * the mechanics). Once connected to a real remote that way, there's
+ * no "quit"/"exit" command to hand control back with the way
+ * repl/portdemo have -- so handle_key_event() below reserves F12 as a
+ * fixed, always-available escape hotkey back to "repl0", intercepted
+ * before it ever reaches the port. See that function's own comment
+ * for why F12 specifically (not the classic telnet-client Ctrl-]).
  */
 
 #include <stdio.h>
@@ -47,36 +58,39 @@
 #include "../../common/zvt100.h"
 #include "../../common/zport.h"
 #include "../../common/zterm.h"
-#include "../../common/zlisp.h"	// for Z_PID_LISP, the fixed-pid
+#include "../../common/zrepl.h"	// for Z_PID_REPL, the fixed-pid
 									// fallback below -- term itself
-									// never sends/receives LISP_EVAL,
+									// never sends/receives REPL_EVAL,
 									// it only needs this one constant
 
 // which font to render with -- override at build time with
 // `make term FONT=z_font_6x12` (or any other font declared in
 // zfont.h) to switch sizes without touching this file. Defaults to
-// the smallest currently available (z_font_5x7, sw/data/font/font5x7.mem
-// -- a public-domain BDF conversion, see that file's own header) since
-// that's what's actually been settled on after testing 6x12 (too much
-// blit work per redraw, too little screen margin for wm to drag
-// comfortably -- see docs/user_input.md's "Debugging notes" for the
-// history) -- pass a different FONT to go back to 6x12 or try
-// something else entirely.
+// z_font_5x8 (sw/data/font/font5x8.mem) -- one row taller than the
+// original z_font_5x7 (sw/data/font/font5x7.mem, a public-domain BDF
+// conversion, see that file's own header), adopted after real-
+// hardware testing showed z_font_5x7's bottom pixel row getting cut
+// off on screen (see zfont.h's own z_font_5x8 comment) -- that's what
+// was actually settled on after ALSO testing 6x12 (too much blit work
+// per redraw, too little screen margin for wm to drag comfortably --
+// see docs/user_input.md's "Debugging notes" for that history) --
+// pass a different FONT to go back to 6x12 or try something else
+// entirely.
 //
 // IMPORTANT as of the pid-registry/dock work: wm is now the only
 // process that ever loads glyph data into hardware glyph memory (see
 // its Makefile's own comment, and z_gfx_hw_font_load() in main()
 // below -- there isn't one anymore), and it only ever loads
-// z_font_5x7. Building term with a different FONT now means its
+// z_font_5x8. Building term with a different FONT now means its
 // hardware-blitted text (Z_GFX_HW_BLIT builds) will render using
-// z_font_5x7's glyph *data* reinterpreted at this font's dimensions
+// z_font_5x8's glyph *data* reinterpreted at this font's dimensions
 // -- garbled, not just wrong-sized. Software-only builds (no
 // Z_GFX_HW_BLIT) aren't affected, since those read glyph data
 // straight from this process's own zfont_data.o, not shared hardware
 // state. Don't override FONT for a Z_GFX_HW_BLIT build until wm loads
 // more than one font.
 #ifndef TERM_FONT_NAME
-#define TERM_FONT_NAME z_font_5x7
+#define TERM_FONT_NAME z_font_5x8
 #endif
 #define TERM_FONT TERM_FONT_NAME
 
@@ -187,7 +201,7 @@ static void feed_and_echo(const char *s) {
 // closes the current port connection (if any -- harmless no-op via
 // z_port_close()'s own `if (!port->connected) return;` if there isn't
 // one) and attempts a new one to `name` (a pidreg name, e.g.
-// "lisp0"/"portdemo0"), falling back to `fallback_pid` ONLY if that
+// "repl0"/"portdemo0"), falling back to `fallback_pid` ONLY if that
 // lookup fails and `fallback_pid` is nonzero -- pass 0 for a
 // caller-specified name (Z_TERM_SET_PORT below) where there's no
 // sensible fixed-pid guess to fall back to, the way there is for the
@@ -202,7 +216,12 @@ static void feed_and_echo(const char *s) {
 // responsiveness to keystrokes/redraws for that same window, same as
 // it already could during the one that happens before the main loop
 // even starts.
-static bool connect_port(const char *name, uint32_t fallback_pid) {
+// `arg` is forwarded as-is into z_port_connect_arg() -- Z_NONE for
+// every existing caller (the startup connection, and repl's `port
+// <name>` command), non-Z_NONE only for the Z_TERM_SET_PORT Z_MAP
+// form (see zterm.h) -- e.g. repl's `telnet <ip>` command, which
+// needs `net` to see the target IP as part of the CONNECT itself.
+static bool connect_port(const char *name, uint32_t fallback_pid, z_obj_t arg) {
 
 	if (port.connected) z_port_close(&port);
 
@@ -215,7 +234,7 @@ static bool connect_port(const char *name, uint32_t fallback_pid) {
 		target_pid = fallback_pid;
 	}
 
-	if (z_port_connect(&port, target_pid) == Z_OK) {
+	if (z_port_connect_arg(&port, target_pid, arg) == Z_OK) {
 		printf("term: connected to port at pid %ld (conn %ld)\n",
 			(long)port.peer_pid, (long)port.conn_id);
 		return true;
@@ -267,7 +286,17 @@ static int key_to_bytes(uint32_t keysym, char *buf, int buflen) {
 		{ Z_KEY_F9,       "\x1b[20~" },
 		{ Z_KEY_F10,      "\x1b[21~" },
 		{ Z_KEY_F11,      "\x1b[23~" },
-		{ Z_KEY_F12,      "\x1b[24~" },
+		{ Z_KEY_F12,      "\x1b[24~" },	// unreachable in practice --
+										// handle_key_event() intercepts
+										// F12 itself before calling
+										// this function at all (see
+										// its own comment); kept here
+										// so the table stays a
+										// complete, honest record of
+										// the "ordinary" VT100/xterm
+										// mapping regardless of what
+										// this app currently does
+										// with that specific key.
 	};
 
 	for (uint32_t i = 0; i < sizeof(table) / sizeof(table[0]); i++) {
@@ -296,6 +325,31 @@ static void handle_key_event(uint32_t packed) {
 	bool pressed = Z_WM_UNPACK_KEY_PRESSED(packed) != 0;
 
 	if (!pressed) return;
+
+	// F12: a fixed, term-local escape hotkey back to "repl0",
+	// intercepted here BEFORE key_to_bytes()/the port -- regardless
+	// of what term is currently connected to (or not connected to at
+	// all). Exists because a real remote (e.g. a telnet server via
+	// `net`, docs/networking.md) has no equivalent of portdemo's/
+	// repl's own "quit"/"exit" commands to hand control back with --
+	// once term is relaying raw bytes to some arbitrary remote, there
+	// was otherwise no way out except the remote itself closing the
+	// connection. The classic telnet-client convention is Ctrl-],
+	// but Ctrl is only special-cased for letters in
+	// sw/common/zkbd.c's usage-to-keysym translation (Ctrl+A..Z ->
+	// 0x01..0x1A) -- extending that to punctuation would be a
+	// keyboard-layer change every app inherits, for a feature only
+	// this one app needs, so F12 (unused by anything term itself
+	// sends -- its own key_to_bytes() table entry for F12 is simply
+	// never reached now) stays entirely local to this file instead.
+	// No-op (falls through to the normal path below, so an F12 with
+	// no port connected still local-echoes nothing, same as any
+	// other unmapped key) if already talking to "repl0" -- harmless
+	// either way, connect_port() itself is safe to call redundantly.
+	if (keysym == Z_KEY_F12) {
+		connect_port("repl0", Z_PID_REPL, z_obj_none());
+		return;
+	}
 
 	char buf[8];
 	int len = key_to_bytes(keysym, buf, sizeof(buf));
@@ -351,11 +405,11 @@ int main(void) {
 	}
 
 	// no z_gfx_hw_font_load() call here anymore -- wm now loads
-	// z_font_5x7 into hardware glyph memory exactly once, at its own
+	// z_font_5x8 into hardware glyph memory exactly once, at its own
 	// startup, and is the only process that ever does (see
 	// TERM_FONT_NAME's own comment above, and wm's Makefile). As long
 	// as this stays built against the default TERM_FONT_NAME
-	// (z_font_5x7), the glyph data wm already loaded is exactly what
+	// (z_font_5x8), the glyph data wm already loaded is exactly what
 	// this needs -- nothing to push here.
 	vt_init(&vt);   // already marks every row dirty, so the first
 	                // render() below draws the full (blank) screen
@@ -366,16 +420,16 @@ int main(void) {
 	// unrelated message that arrives while it's waiting (same
 	// accepted limitation as z_win_create()/z_msg_wait()).
 	//
-	// looks up "lisp0" (see sw/os/pidreg.h) instead of assuming the
-	// fixed Z_PID_LISP constant -- falls back to it if lookup fails
-	// (lisp isn't running, hasn't registered yet, or is an old build
+	// looks up "repl0" (see sw/os/pidreg.h) instead of assuming the
+	// fixed Z_PID_REPL constant -- falls back to it if lookup fails
+	// (repl isn't running, hasn't registered yet, or is an old build
 	// that predates the registry). This is the only place a fixed-pid
-	// fallback makes sense -- "lisp0" is the well-known default
+	// fallback makes sense -- "repl0" is the well-known default
 	// provider, same reasoning Z_PID_PORTDEMO existed for before it.
 	// A runtime switch to some OTHER, caller-specified provider
 	// (Z_TERM_SET_PORT, connect_port() above, this file's own header
 	// comment) has no such well-known fallback to guess -- see there.
-	connect_port("lisp0", Z_PID_LISP);
+	connect_port("repl0", Z_PID_REPL, z_obj_none());
 
 	while (1) {
 
@@ -405,8 +459,25 @@ int main(void) {
 				// way; the result shows up in this printf() log (via
 				// connect_port()) and, if it worked, in what actually
 				// starts arriving over the new connection.
+				//
+				// two payload shapes (zterm.h): a bare Z_STR is just
+				// the provider name (original form); a Z_MAP carries
+				// an additional "arg", forwarded into
+				// connect_port()'s own z_port_connect_arg() call --
+				// e.g. repl's `telnet <ip>` command, which needs
+				// `net` to see the target IP as part of the CONNECT
+				// itself, not a separate message.
 				if (msg.obj.type == Z_STR && msg.obj.val.str) {
-					connect_port(msg.obj.val.str, 0);
+					connect_port(msg.obj.val.str, 0, z_obj_none());
+				} else if (msg.obj.type == Z_MAP) {
+					z_obj_t *name_obj = z_map_find(&msg.obj, "name");
+					if (!name_obj || name_obj->type != Z_STR || !name_obj->val.str) {
+						printf("term: SET_PORT map with no valid 'name', ignoring\n");
+					} else {
+						z_obj_t *arg_obj = z_map_find(&msg.obj, "arg");
+						connect_port(name_obj->val.str, 0,
+							arg_obj ? *arg_obj : z_obj_none());
+					}
 				} else {
 					printf("term: SET_PORT with no name, ignoring\n");
 				}

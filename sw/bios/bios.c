@@ -29,6 +29,15 @@
 
 #define reg_mtu (*(volatile uint32_t*)0x90000000)
 
+// SOC capability CSRs (rtl/csrs.v, docs/csrs.md) -- local copies of
+// the same registers sw/common/zsoc.h defines for the rest of the
+// codebase, since sw/bios is a fully freestanding, self-contained
+// build with no shared-header include path (same reasoning every
+// other reg_* macro above is a private copy here, not a #include).
+#define reg_csr_magic  (*(volatile uint32_t*)0x70000000)
+#define reg_csr_mem_mb (*(volatile uint32_t*)0x70000004)
+#define CSR_MAGIC 0x5A454954	// "ZEIT" -- see rtl/csrs.v
+
 #define AUTOLOAD_CNT		1000000
 
 #define MEM_BIOS			0x00000000
@@ -38,7 +47,12 @@
 #define MEM_VRAM			0x20000000
 #define MEM_VRAM_SIZE	(640 * 480) / 32
 #define MEM_MAIN			0x40000000
-#define MEM_MAIN_SIZE	1024 * 1024
+// fallback only -- see get_mem_main_size() below, which is what
+// main()/cmd_toggle_addr_ptr() actually call. Matches Obst (the only
+// board this ever ran on before rtl/boards.vh's `MEM/rtl/csrs.v
+// existed) -- kept as the fallback for a bitstream that predates CSRs
+// entirely, same reasoning sw/os/mem.h's Z_MEM_SIZE_DEFAULT uses.
+#define MEM_MAIN_SIZE_DEFAULT	1024 * 1024
 #define MEM_APP			0x80000000
 #define MEM_APP_SIZE		1024 * 1024
 
@@ -53,6 +67,21 @@ uint16_t curs_y = 0;
 
 uint32_t addr_ptr;
 uint32_t mem_total;
+
+// reads rtl/csrs.v's MEM_MB register instead of assuming
+// MEM_MAIN_SIZE_DEFAULT -- see docs/csrs.md. Falls back to that
+// default if reg_csr_magic doesn't read back CSR_MAGIC (an older
+// bitstream that predates rtl/csrs.v has nothing mapped at that
+// address at all -- reading it doesn't fault on this bus, it just
+// returns whatever rtl/sysctl.v's data-mux default case resolves to,
+// so the magic-number check is the only reliable way to tell) or if
+// the MB value itself is implausibly zero.
+uint32_t get_mem_main_size() {
+	if (reg_csr_magic != CSR_MAGIC) return MEM_MAIN_SIZE_DEFAULT;
+	uint32_t mem_mb = reg_csr_mem_mb;
+	if (!mem_mb) return MEM_MAIN_SIZE_DEFAULT;
+	return mem_mb * 1024 * 1024;
+}
 
 // --------------------------------------------------------
 
@@ -368,7 +397,7 @@ void cmd_toggle_addr_ptr(void) {
 		mem_total = MEM_VRAM_SIZE;
 	} else if (addr_ptr == MEM_VRAM) {
 		addr_ptr = MEM_MAIN;
-		mem_total = MEM_MAIN_SIZE;
+		mem_total = get_mem_main_size();
 	} else if (addr_ptr == MEM_MAIN) {
 		addr_ptr = MEM_APP;
 		mem_total = MEM_APP_SIZE;
@@ -424,7 +453,7 @@ void main() {
 	reg_mtu = 0x40000000;	// 0x8000_0000 will mirror 0x4000_0000
 
 	addr_ptr = MEM_MAIN;
-	mem_total = MEM_MAIN_SIZE;
+	mem_total = get_mem_main_size();
 
 	uart_init();
 

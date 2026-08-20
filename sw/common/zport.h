@@ -52,10 +52,10 @@
 
 // fallback pid for the demo virtual port (sw/apps/portdemo) if name
 // lookup ("portdemo0") fails -- same convention as Z_PID_WM (zwm.h) /
-// Z_PID_NET (znet.h). Stale as an actual fallback since `lisp`
+// Z_PID_NET (znet.h). Stale as an actual fallback since `repl`
 // replaced portdemo in sh.c's init() boot sequence (see
-// sw/apps/lisp/lisp.c, sw/common/zlisp.h's Z_PID_LISP -- 3, the same
-// slot this constant documents, since lisp now starts where portdemo
+// sw/apps/repl/repl.c, sw/common/zrepl.h's Z_PID_REPL -- 3, the same
+// slot this constant documents, since repl now starts where portdemo
 // used to): portdemo is no longer started automatically at boot, so
 // nothing actually lands here anymore unless you `run portdemo`
 // manually, at whatever pid happens to be free at the time -- this
@@ -88,6 +88,21 @@ typedef struct {
 // once you're also expecting other messages to arrive.
 z_rv z_port_connect(z_port_t *port, uint32_t provider_pid);
 
+// same as z_port_connect(), but lets the caller send a
+// provider-specific argument as CONNECT's payload instead of the
+// default Z_NONE -- see the protocol sketch above ("obj=Z_NONE (or
+// provider-specific args)"). First use: sw/apps/net's telnet port
+// provider, which needs to know a target IP before it can decide
+// whether to accept the connection at all -- see docs/ports.md and
+// sw/common/zterm.h's Z_TERM_SET_PORT (which carries this argument
+// from whoever originated the request, e.g. `repl`'s `telnet <ip>`
+// command, through to term's own z_port_connect_arg() call). Same
+// borrowed-payload lifetime rule as any other message payload
+// (docs/messaging.md) applies to `arg` -- it only needs to stay valid
+// until this call returns (it's read once, synchronously, when
+// building the CONNECT message).
+z_rv z_port_connect_arg(z_port_t *port, uint32_t provider_pid, z_obj_t arg);
+
 // -- client OR provider side, once connected --
 
 // sends a chunk of data. fire-and-forget -- see docs/ports.md's "Flow
@@ -96,6 +111,28 @@ z_rv z_port_connect(z_port_t *port, uint32_t provider_pid);
 // because the peer's mailbox is full is the only backpressure that
 // exists yet, and this just surfaces that as Z_FAIL rather than
 // hiding it).
+//
+// Internally builds a Z_BLOB (z_obj_blob(), zobj.c -- a real heap
+// copy of `data`) and DELIBERATELY NEVER FREES IT -- same accepted,
+// intentional leak `pong`'s own reply strings already use
+// (docs/messaging.md's ping/pong example), now relied on directly
+// here too rather than fought. An earlier version tried to free the
+// PREVIOUS call's blob on each new call, reasoning that the peer must
+// have had a scheduling slot to read it by then -- reverted after a
+// real-hardware bug: that assumption breaks whenever a caller makes
+// several z_port_send() calls back-to-back with nothing in between to
+// force a scheduler switch (e.g. `repl`'s own handle_connect(),
+// banner then prompt immediately) -- the second call's free ran
+// before the peer had necessarily read the first message at all, and
+// the very next z_obj_blob() call reused that just-freed memory, so
+// the first message resolved to the SECOND message's bytes by the
+// time the peer actually read it. See docs/messaging.md's "Known
+// limitations" for the general version of this problem -- a real fix
+// needs the receiver's own read to prove safety, not the sender's
+// next unrelated action, which is a bigger mechanism than this file
+// takes on right now. Relies instead on Z_PROC_STACK_SIZE
+// (sw/os/kernel.c) being large enough to absorb this leak for a
+// realistic session length -- raised specifically because of this.
 z_rv z_port_send(z_port_t *port, const void *data, uint32_t len);
 
 // tells the peer this connection is done. does not wait for any

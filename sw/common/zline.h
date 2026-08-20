@@ -9,7 +9,7 @@
  * Copyright (c) 2025 Lone Dynamics Corporation. All rights reserved.
  *
  * Line assembly for byte-at-a-time input over a duplex byte stream --
- * pulled out of sw/apps/lisp/lisp.c (the first thing that needed it)
+ * pulled out of sw/apps/repl/repl.c (the first thing that needed it)
  * so any other port provider (sw/common/zport.h, docs/ports.md) that
  * wants the same "type -> see what you typed -> press Enter -> get a
  * line" behavior doesn't have to reimplement it.
@@ -41,7 +41,7 @@
  * Deliberately NOT handling here: multi-line continuation (e.g.
  * waiting for balanced parens before treating input as "really"
  * complete) -- that depends on what the completed line MEANS, which
- * this module has no opinion on. A caller that needs that (`lisp`,
+ * this module has no opinion on. A caller that needs that (`repl`,
  * once real Scheme evaluation is wired in) layers it on top, by
  * choosing not to act on a "complete" line yet and instead
  * accumulating it into its own multi-line buffer.

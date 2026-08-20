@@ -8,6 +8,85 @@
 
 `include "boards.vh"
 
+// rtl/boards.vh's per-board `MEM (total main RAM, megabytes) is
+// optional -- defaulted here to 1 (matching the original hardcoded
+// assumption every board effectively had before `MEM/rtl/csrs.v
+// existed) if a board block doesn't set it, rather than leaving it
+// undefined and breaking the build. See docs/csrs.md.
+`ifndef MEM
+`define MEM 1
+`endif
+
+// feature bits exposed via rtl/csrs.v's FEATURES register -- KEEP IN
+// SYNC with sw/common/zsoc.h's Z_FEATURE_* constants (bit position is
+// the only thing that has to match; see csrs.v's own header comment
+// for why there's no single shared source for both sides). Each term
+// mirrors one of rtl/boards.vh's own `ifdef flags directly -- this is
+// deliberately just a bit-for-bit exposure of "was this `ifdef
+// active in this build", nothing computed or inferred beyond that.
+localparam CSR_FEATURES =
+`ifdef MEM_SRAM
+	(32'h1 << 0) |
+`endif
+`ifdef MEM_SDRAM
+	(32'h1 << 1) |
+`endif
+`ifdef MEM_VRAM
+	(32'h1 << 2) |
+`endif
+`ifdef MEM_QQSPI
+	(32'h1 << 3) |
+`endif
+`ifdef MEM_ROM
+	(32'h1 << 4) |
+`endif
+`ifdef MEM_GLYPH
+	(32'h1 << 5) |
+`endif
+`ifdef GPU
+	(32'h1 << 6) |
+`endif
+`ifdef GPU_RASTER
+	(32'h1 << 7) |
+`endif
+`ifdef GPU_BLIT
+	(32'h1 << 8) |
+`endif
+`ifdef GPU_CURSOR
+	(32'h1 << 9) |
+`endif
+`ifdef GPU_VGA
+	(32'h1 << 10) |
+`endif
+`ifdef GPU_DDMI
+	(32'h1 << 11) |
+`endif
+`ifdef UART0
+	(32'h1 << 12) |
+`endif
+`ifdef USB_HID
+	(32'h1 << 13) |
+`endif
+`ifdef SPI_SDCARD
+	(32'h1 << 14) |
+`endif
+`ifdef SPI_ETH
+	(32'h1 << 15) |
+`endif
+`ifdef SPI_FLASH
+	(32'h1 << 16) |
+`endif
+`ifdef ETH_RMII
+	(32'h1 << 17) |
+`endif
+`ifdef LED_RGB
+	(32'h1 << 18) |
+`endif
+`ifdef LED_DEBUG
+	(32'h1 << 19) |
+`endif
+	32'h0;
+
 localparam SYSCLK = 48_000_000;
 
 module sysctl #()
@@ -315,6 +394,7 @@ module sysctl #()
 	wire [31:0] wbs_glyph_dat_o;
 	wire [31:0] wbs_spieth_dat_o;
 	wire [31:0] wbs_ethmac_dat_o;
+	wire [31:0] wbs_csrs_dat_o;
 
 	wire cs_bram = (wbm_adr < 8192);
 	wire cs_mtu = ((wbm_adr & 32'hf000_0000) == 32'h9000_0000);
@@ -381,6 +461,13 @@ module sysctl #()
 `ifdef ETH_RMII
 	wire cs_ethmac = ((wbm_adr & 32'hf000_0000) == 32'h6000_0000);
 `endif
+	// CSRs (rtl/csrs.v) -- always decoded, no `ifdef guard, unlike
+	// every peripheral above/below this line -- see csrs.v's own
+	// header comment for why. Nibble 0x7 was the first free slot in
+	// this address map at the time this was added (0x0/0x9 bram/mtu,
+	// 0x1-0x6 mem/glyph/spieth/ethmac, 0xa-0xf gpu/sdcard/usb/debug/
+	// uart -- see the full cs_* list in this file).
+	wire cs_csrs = ((wbm_adr & 32'hf000_0000) == 32'h7000_0000);
 `ifdef DEBUG
 	wire cs_debug = ((wbm_adr & 32'hf000_0000) == 32'he000_0000);
 `endif
@@ -436,6 +523,7 @@ module sysctl #()
 `ifdef ETH_RMII
 		cs_ethmac ? wbs_ethmac_dat_o :
 `endif
+		cs_csrs ? wbs_csrs_dat_o :
 		32'hzzzz_zzzz;
 
 	wire wbs_bram_ack_o;
@@ -455,6 +543,7 @@ module sysctl #()
 	wire wbs_glyph_ack_o;
 	wire wbs_spieth_ack_o;
 	wire wbs_ethmac_ack_o;
+	wire wbs_csrs_ack_o;
 
 	assign wbm_ack =
 		cs_bram ? wbs_bram_ack_o :
@@ -504,6 +593,7 @@ module sysctl #()
 `ifdef ETH_RMII
 		cs_ethmac ? wbs_ethmac_ack_o :
 `endif
+		cs_csrs ? wbs_csrs_ack_o :
 		1'b0;
 
 	// WISHBONE MASTER: CPU
@@ -1058,6 +1148,29 @@ module sysctl #()
 		.eth_rst_n(ETH_RST_N)
 	);
 `endif
+
+	// WISHBONE SLAVE: CSRs (rtl/csrs.v) -- always instantiated, no
+	// `ifdef guard, on every board regardless of what else is built
+	// in -- see csrs.v's own header comment for why. MEM_MB/FEATURES
+	// come straight from this file's own `MEM/CSR_FEATURES above.
+	wire wbm_cyc_csrs = cs_csrs && wbm_cyc;
+
+	csrs_wb #(
+		.MEM_MB(`MEM),
+		.FEATURES(CSR_FEATURES)
+	) wbs_csrs0_i
+	(
+		.wb_clk_i(wbm_clk),
+		.wb_rst_i(wbm_rst),
+		.wb_adr_i(wbm_adr_sel_word),
+		.wb_dat_i(wbm_dat_o),
+		.wb_dat_o(wbs_csrs_dat_o),
+		.wb_we_i(wbm_we),
+		.wb_sel_i(wbm_sel),
+		.wb_stb_i(wbm_stb),
+		.wb_ack_o(wbs_csrs_ack_o),
+		.wb_cyc_i(wbm_cyc_csrs),
+	);
 
 	// WISHBONE SLAVE: USB HID
 `ifdef USB_HID

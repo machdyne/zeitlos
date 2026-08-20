@@ -354,7 +354,7 @@ Text -- the "Dock" window title, not currently drawn anywhere per
 right now -- would go through the hardware glyph blitter if it ever
 does (`wm`'s Makefile builds with `-DZ_GFX_HW_BLIT`, like
 `hello_win`/`term`) -- see "Hardware glyph blitting" below for how
-that path works, and for why `wm` loading `z_font_5x7` exactly once,
+that path works, and for why `wm` loading `z_font_5x8` exactly once,
 itself, in `main()`, is now the *only* place any font is ever loaded
 into hardware glyph memory board-wide.
 
@@ -489,8 +489,8 @@ fills especially).
   specifically to close this rather than just narrow it: `wm` (see
   "The dock" above) is now the *only* process that ever calls
   `z_gfx_hw_font_load()` -- once, at its own startup, for
-  `z_font_5x7` -- and every other app (`hello_win`, `term`) is
-  expected to only ever draw with `z_font_5x7`, never loading a font
+  `z_font_5x8` -- and every other app (`hello_win`, `term`) is
+  expected to only ever draw with `z_font_5x8`, never loading a font
   of its own. This isn't enforced anywhere in code -- a
   `Z_GFX_HW_BLIT` app that calls `z_gfx_hw_font_load()` with a
   different font, or that's built to draw with one (`term`'s
@@ -758,7 +758,7 @@ a convenient API, not a hard guarantee.
 - **Single-font, single-loader convention isn't enforced.** "Hardware
   glyph blitting" above covers this in full -- `wm` is the only
   process meant to call `z_gfx_hw_font_load()`, and every app is
-  meant to only ever draw with `z_font_5x7` as a result, but nothing
+  meant to only ever draw with `z_font_5x8` as a result, but nothing
   stops a `Z_GFX_HW_BLIT` build from violating either half (e.g.
   `term`'s existing `FONT=z_font_6x12` build option). A real fix would
   need either per-window glyph regions or a "load before every draw

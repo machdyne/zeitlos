@@ -13,6 +13,7 @@
 #include "eth.h"
 #include "arp.h"
 #include "udp.h"
+#include "tcp.h"
 #include "../../common/zeitlos.h"
 
 #define IP_HDR_LEN     20
@@ -27,6 +28,10 @@ void ip_init(uint32_t ip, uint32_t netmask, uint32_t gateway_ip) {
 	our_ip = ip;
 	our_netmask = netmask;
 	our_gateway = gateway_ip;
+}
+
+uint32_t ip_our_addr(void) {
+	return our_ip;
 }
 
 static bool ip_is_local(uint32_t ip) {
@@ -153,6 +158,9 @@ void ip_handle(const uint8_t src_mac[6], const uint8_t *p, uint16_t len) {
 	switch (protocol) {
 		case 1:	// ICMP
 			icmp_handle(src_ip, payload, paylen);
+			break;
+		case 6:		// TCP
+			tcp_handle(src_ip, payload, paylen);
 			break;
 		case 17:	// UDP
 			udp_handle(src_ip, payload, paylen);

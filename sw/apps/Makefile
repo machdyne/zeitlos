@@ -12,7 +12,7 @@ all:
 	cd net && make
 	cd term && make
 	cd portdemo && make
-	cd lisp && make
+	cd repl && make
 
 clean:
 	cd blinky && make clean
@@ -28,4 +28,4 @@ clean:
 	cd net && make clean
 	cd term && make clean
 	cd portdemo && make clean
-	cd lisp && make clean
+	cd repl && make clean

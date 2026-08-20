@@ -21,7 +21,7 @@ else
 PHY_OBJ = enc28j60.o
 endif
 
-OBJS = zeitlos.o zobj.o zstream.o $(PHY_OBJ) eth.o arp.o ip.o udp.o tftp.o net.o
+OBJS = zeitlos.o zobj.o zstream.o zport.o $(PHY_OBJ) eth.o arp.o ip.o udp.o tcp.o telnet.o tftp.o net.o
 
 net: net.elf net.bin
 
@@ -61,6 +61,9 @@ zobj.o: ../../common/zobj.c ../../common/zobj.h
 zstream.o: ../../common/zstream.c ../../common/zstream.h
 	$(CC) $(CFLAGS) -c ../../common/zstream.c -o zstream.o
 
+zport.o: ../../common/zport.c ../../common/zport.h
+	$(CC) $(CFLAGS) -c ../../common/zport.c -o zport.o
+
 enc28j60.o: enc28j60.c enc28j60.h .net_phy_selected
 	$(CC) $(CFLAGS) -c enc28j60.c -o enc28j60.o
 
@@ -79,10 +82,16 @@ ip.o: ip.c ip.h
 udp.o: udp.c udp.h
 	$(CC) $(CFLAGS) -c udp.c -o udp.o
 
+tcp.o: tcp.c tcp.h
+	$(CC) $(CFLAGS) -c tcp.c -o tcp.o
+
+telnet.o: telnet.c telnet.h tcp.h
+	$(CC) $(CFLAGS) -c telnet.c -o telnet.o
+
 tftp.o: tftp.c tftp.h
 	$(CC) $(CFLAGS) -c tftp.c -o tftp.o
 
-net.o: net.c net_phy.h .net_phy_selected
+net.o: net.c net_phy.h .net_phy_selected ../../common/zsoc.h
 	$(CC) $(CFLAGS) -c net.c -o net.o
 	$(CC) $(CFLAGS) -c net.c -S -o net.asm
 

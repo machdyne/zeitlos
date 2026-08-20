@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Generates sw/apps/lisp/ms_stdlib.h from sw/ext/ms/ms_stdlib.l (the
+Generates sw/apps/repl/ms_stdlib.h from sw/ext/ms/ms_stdlib.l (the
 `ms` submodule's own standard library source).
 
 Building Machdyne Scheme with -DLIX removes all file I/O -- no
@@ -16,7 +16,7 @@ write that one line out. Nothing Zeitlos-specific about the format --
 this is upstream's own expected embedding contract, not something we
 invented.
 
-Regenerated automatically by sw/apps/lisp/Makefile (a build
+Regenerated automatically by sw/apps/repl/Makefile (a build
 dependency on both this script and sw/ext/ms/ms_stdlib.l -- see that
 Makefile) whenever the submodule's stdlib source is newer than the
 last generated header, so `git submodule update` pulling in an
@@ -75,7 +75,7 @@ def main():
 	out_path.write_text(
 		"/* GENERATED FILE -- do not edit by hand.\n"
 		f" * Produced by {Path(__file__).name} from {src_path.name}\n"
-		" * (sw/ext/ms, a git submodule -- see sw/apps/lisp/Makefile). */\n\n"
+		" * (sw/ext/ms, a git submodule -- see sw/apps/repl/Makefile). */\n\n"
 		f'static const char ms_stdlib_l[] =\n\t"{escaped}";\n'
 	)
 

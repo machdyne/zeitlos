@@ -13,10 +13,10 @@ OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zkbd.o dock_icons.o wm.o
 # built with -DZ_GFX_HW_BLIT, same as hello_win/term -- the dock's
 # icon labels (see wm.c's draw_dock()) go through the hardware glyph
 # blitter. wm is now the ONLY process on the board that ever calls
-# z_gfx_hw_font_load() (once, in main(), for z_font_5x7 -- see that
+# z_gfx_hw_font_load() (once, in main(), for z_font_5x8 -- see that
 # call's own comment) -- hello_win/term no longer load a font
 # themselves, and every app is expected to only ever draw with
-# z_font_5x7 as a result. This sidesteps the cross-process glyph
+# z_font_5x8 as a result. This sidesteps the cross-process glyph
 # memory race entirely (see docs/window_manager.md, "Hardware glyph
 # blitting") rather than just narrowing it: there's nothing left to
 # race over once only one process ever writes to glyph memory, and

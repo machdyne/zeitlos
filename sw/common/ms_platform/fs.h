@@ -12,7 +12,7 @@
  * anything through this header -- it only needs to exist and be
  * findable. Deliberately empty.
  *
- * Shared here (sw/common/ms_platform/), not under sw/apps/lisp/,
+ * Shared here (sw/common/ms_platform/), not under sw/apps/repl/,
  * since any future app embedding ms (see this project's own planning
  * notes on eventually wanting Scheme reachable from more than one
  * place) needs the exact same stub -- no reason for each to carry

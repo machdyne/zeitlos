@@ -17,7 +17,7 @@
  * `static` internals, not split out anywhere. This header is
  * literally just the small subset of those declarations that AREN'T
  * `static` in ms.c (i.e. the ones actually reachable from outside
- * it), copied here by hand so lisp.c has something to #include
+ * it), copied here by hand so repl.c has something to #include
  * without pulling in the whole 2000+ line implementation file or
  * poking at its internals.
  *
@@ -33,7 +33,7 @@
  * bigger diff against upstream for not much benefit at this size.
  */
 
-typedef struct ms_val ms_val;	/* fully opaque here on purpose -- lisp.c
+typedef struct ms_val ms_val;	/* fully opaque here on purpose -- repl.c
 	 * only ever holds ms_val* and passes it back into ms's own
 	 * functions, never looks inside one, so it never needs the real
 	 * struct definition (ms.c's own, sitting among its `static`
@@ -54,7 +54,7 @@ void ms_load_string(const char *src, ms_val *env);
 long ms_heap_used(void);	/* cells currently live, out of MS_HEAP_SIZE
 	 * total (a compile-time constant, already known to any caller
 	 * that was itself built with the same -DMS_HEAP_SIZE, see
-	 * sw/apps/lisp/Makefile's MS_SIZE_CFLAGS) */
+	 * sw/apps/repl/Makefile's MS_SIZE_CFLAGS) */
 size_t ms_cell_size(void);	/* sizeof(ms_val) on THIS build/target --
 	 * varies with pointer width, don't assume a fixed number */
 
@@ -63,11 +63,11 @@ extern ms_val *ms_global_env;
 void ms_init(void);
 void ms_deinit(void);
 void ms_init_lix(bool stdlib);	/* only exists in ms.o if ms.c itself
-	 * was built with -DLIX (sw/apps/lisp/Makefile always does) --
+	 * was built with -DLIX (sw/apps/repl/Makefile always does) --
 	 * deliberately NOT wrapped in `#ifdef LIX` here: that guard would
 	 * depend on whichever translation unit happens to include THIS
 	 * header also defining LIX itself, which nothing requires (only
-	 * ms.c's own compile step needs -DLIX; lisp.c calling this
+	 * ms.c's own compile step needs -DLIX; repl.c calling this
 	 * function doesn't need to redefine it just to see the
 	 * prototype) -- caught by testing exactly this build shape,
 	 * where leaving the guard in produced a silent implicit-
@@ -77,7 +77,7 @@ void ms_init_lix(bool stdlib);	/* only exists in ms.o if ms.c itself
  * upstream Lisp semantics -- see ms.c's own header comment on
  * ms_panic_before_try() for the full usage pattern and WHY the
  * setjmp() call itself can't be wrapped in a helper function; that
- * constraint is real and lisp.c's own callers respect it, every
+ * constraint is real and repl.c's own callers respect it, every
  * setjmp() below happens directly in the function that goes on to
  * call ms_eval(), never through a shared helper) -- */
 extern jmp_buf ms_panic_recovery;

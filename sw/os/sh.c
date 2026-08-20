@@ -14,6 +14,7 @@
 #include "../common/znet.h"
 #include "../common/zstream.h"
 #include "kernel.h"
+#include "mem.h"
 #include "fs/fs.h"
 #include "fs/fatfs/ff.h"
 #include "msg.h"
@@ -420,7 +421,15 @@ void sh(void) {
 			}
 			printf("creating process (file: %s size: %ld)\n", arg, size);
 			fflush(stdout);
-			uint32_t pid = k_proc_create(size);
+			// see kernel.h's Z_PROC_STACK_SIZE_DEFAULT/_LARGE comment
+			// -- `repl` (sw/apps/repl/repl.c) is the one process with
+			// a confirmed need for more than the default allowance
+			// (Scheme stdlib loading + zport.h's own accepted
+			// per-connection leak, see zport.c's own z_port_send()
+			// comment).
+			uint32_t stack_size = !strcmp(arg, "repl") ?
+				Z_PROC_STACK_SIZE_LARGE : Z_PROC_STACK_SIZE_DEFAULT;
+			uint32_t pid = k_proc_create(size, stack_size);
 			printf(" - pid: %ld\n", pid);
 			if (!pid) {
 				printf("unable to create process\n");
@@ -477,6 +486,15 @@ void sh(void) {
 			k_kernel_dump();
 		}
 
+		// DISPLAY MEMORY POOL STATS (k_mem_alloc(), sw/os/mem.c) --
+		// added to debug a real-hardware "runs out of memory, no
+		// error shown" report -- run this after each `run <app>` to
+		// see exactly how much is left and whether it's fragmented
+		// (see k_mem_dump()'s own comment in mem.c).
+		else if (!strncmp(buffer, "free", cmdlen)) {
+			k_mem_dump();
+		}
+
 	}
 
 }
@@ -501,7 +519,7 @@ void init(void) {
 		printf("init: wm binary not found\n");
 		return;
 	}
-	uint32_t pid_wm = k_proc_create(size_wm);
+	uint32_t pid_wm = k_proc_create(size_wm, Z_PROC_STACK_SIZE_DEFAULT);
 	if (!pid_wm) {
 		printf("init: unable to create wm process\n");
 		return;
@@ -509,60 +527,48 @@ void init(void) {
 	uint32_t base_wm = k_proc_base(pid_wm);
 	fs_load(base_wm, "wm");
 	k_proc_start(pid_wm);
-	printf("init: net started as pid %ld\n", pid_wm);
+	printf("init: wm started as pid %ld\n", pid_wm);
 
-	// net:
-	//
-	// NOT started here, only its pid slot reserved -- net.c's own
-	// startup currently hangs forever when there's no
-	// NIC PMOD physically present, which is always true on Lakritz
-	// right now: it only has one PMOD slot, and that's already
-	// occupied by the USB-UART PMOD this console runs over. Reserving
-	// the slot without loading/starting the binary (k_proc_create()
-	// only -- no fs_load(), no k_proc_start()) still gets net its
-	// usual pid (2), which is all portdemo below actually needs.
-	//
-	// this whole reservation dance is now specifically about keeping
-	// the FALLBACK path correct, not the primary one: term.c/zport.h
-	// prefer looking up "portdemo0" by name (sw/os/pidreg.h) these
-	// days, which doesn't care what pid portdemo actually lands on --
-	// but if that lookup ever fails (registry full, or portdemo
-	// somehow started before it could register), the fallback is
-	// still the fixed Z_PID_PORTDEMO constant, and THAT still depends
-	// on wm/net/portdemo being created in this same fixed order every
-	// time (see docs/networking.md's note on why net/wm need a
-	// predictable pid, and docs/ports.md's "Testing this"). Worth
-	// keeping even though it's now a belt-and-suspenders fallback
-	// rather than the only thing standing between term and a wrong
-	// pid.
-	//
-	// once net's NIC-detection hang is fixed (or on a board/config
-	// that actually has a NIC PMOD available), this can go back to
-	// loading+starting net normally -- or, in the meantime, `run net`
-	// still works to start it manually (on a DIFFERENT, newly
-	// allocated pid, not this reserved one -- fine for manual testing,
-	// since it'll still register as "net0" and be found by name
-	// either way; only something still relying on the Z_PID_NET
-	// fallback specifically would need the reserved pid).
+	// net: sw/apps/net -- ARP/ICMP/TFTP/TCP/telnet, see
+	// docs/networking.md. Loaded and started normally now, same as
+	// wm/repl above -- this used to only reserve net's pid slot (see
+	// git history around this comment) because net.c's own startup
+	// hung forever on any board without ethernet hardware physically
+	// present (e.g. Lakritz, which has only one PMOD slot and it's
+	// already occupied by the USB-UART PMOD this console runs over).
+	// Fixed: net.c now checks the SOC capability CSRs (rtl/csrs.v,
+	// sw/common/zsoc.h, docs/csrs.md) BEFORE touching any ethernet
+	// backend register, and exits cleanly (not started, no hang) on a
+	// board that confirms it doesn't have the hardware this binary
+	// was built for -- so it's now safe to always attempt starting it
+	// here, same as any other app. The old reservation dance was also
+	// specifically about keeping portdemo's fallback-pid convention
+	// correct -- moot now anyway, since portdemo hasn't been started
+	// automatically at boot for a while (see the `repl` comment
+	// below); net's failure here (like repl's) is non-fatal to the
+	// rest of this script, unlike wm's.
 
-	printf("reserving net's pid (not starting it -- see comment above)\n");
+	printf("starting net\n");
 	uint32_t size_net = fs_size("net");
 	if (!size_net) {
-		printf("init: net binary not found\n");
-		return;
+		printf("init: net binary not found (non-fatal)\n");
+	} else {
+		uint32_t pid_net = k_proc_create(size_net, Z_PROC_STACK_SIZE_DEFAULT);
+		if (!pid_net) {
+			printf("init: unable to create net process (non-fatal)\n");
+		} else {
+			uint32_t base_net = k_proc_base(pid_net);
+			fs_load(base_net, "net");
+			k_proc_start(pid_net);
+			printf("init: net started as pid %ld\n", pid_net);
+		}
 	}
-	uint32_t pid_net = k_proc_create(size_net);
-	if (!pid_net) {
-		printf("init: unable to reserve net process\n");
-		return;
-	}
-	printf("init: net pid %ld reserved (not started)\n", pid_net);
 
-	// lisp: Zeitlos's command interpreter -- see
-	// sw/apps/lisp/lisp.c. same reservation reasoning as wm/net
+	// repl: Zeitlos's command interpreter -- see
+	// sw/apps/repl/repl.c. same reservation reasoning as wm/net
 	// above, for the fallback path -- term.c prefers looking up
-	// "lisp0" by name now, but falls back to the fixed pid
-	// Z_PID_LISP (zlisp.h) if that lookup fails, so it's still worth
+	// "repl0" by name now, but falls back to the fixed pid
+	// Z_PID_REPL (zrepl.h) if that lookup fails, so it's still worth
 	// landing here predictably. not fatal if this one specifically
 	// fails to start (unlike wm/net above) -- term falls back to
 	// local echo without it, see term.c's own header comment.
@@ -573,24 +579,24 @@ void init(void) {
 	// so starting it automatically at boot no longer serves the
 	// purpose this reservation dance exists for. portdemo itself is
 	// unchanged and still builds/runs fine manually (`run portdemo`)
-	// for testing the port protocol in isolation from lisp.
+	// for testing the port protocol in isolation from repl.
 
-	printf("starting lisp\n");
-	uint32_t size_lisp = fs_size("lisp");
-	if (!size_lisp) {
-		printf("init: lisp binary not found (non-fatal -- term will "
+	printf("starting repl\n");
+	uint32_t size_repl = fs_size("repl");
+	if (!size_repl) {
+		printf("init: repl binary not found (non-fatal -- term will "
 			"fall back to local echo)\n");
 		return;
 	}
-	uint32_t pid_lisp = k_proc_create(size_lisp);
-	if (!pid_lisp) {
-		printf("init: unable to create lisp process (non-fatal)\n");
+	uint32_t pid_repl = k_proc_create(size_repl, Z_PROC_STACK_SIZE_LARGE);
+	if (!pid_repl) {
+		printf("init: unable to create repl process (non-fatal)\n");
 		return;
 	}
-	uint32_t base_lisp = k_proc_base(pid_lisp);
-	fs_load(base_lisp, "lisp");
-	k_proc_start(pid_lisp);
-	printf("init: lisp started as pid %ld\n", pid_lisp);
+	uint32_t base_repl = k_proc_base(pid_repl);
+	fs_load(base_repl, "repl");
+	k_proc_start(pid_repl);
+	printf("init: repl started as pid %ld\n", pid_repl);
 
 }
 

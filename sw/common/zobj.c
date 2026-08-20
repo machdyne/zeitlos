@@ -71,9 +71,32 @@ z_obj_t z_obj_map(uint32_t len) {
 
 z_obj_t z_obj_blob(const void *data, uint32_t len) {
     z_blob_t *b = malloc(sizeof(z_blob_t));
+    if (!b) return z_obj_none();	// malloc failure -- previously fell
+    				// straight through to `b->len = len;`,
+    				// a NULL-pointer write. Found via a real
+    				// leak (sw/common/zport.c's z_port_send(),
+    				// now fixed) that pushed a process's heap
+    				// to exhaustion on real hardware.
     b->len = len;
     b->data = malloc(len ? len : 1);
-    if (data && len && b->data) memcpy(b->data, data, len);
+    if (!b->data) {
+    	// previously left `b->len` at the ORIGINAL requested length
+    	// with `b->data == NULL` -- a blob that looks intact (right
+    	// length) but carries no bytes. z_translate()'s own NULL
+    	// safety (sw/os/msg.c) kept this from crashing anything that
+    	// received it, but it also meant the failure was completely
+    	// silent: the DATA message still arrived, still had the
+    	// "right" length, and the receiver's own `if (data && len)`
+    	// guard (e.g. term.c's Z_PORT_DATA handling) just silently
+    	// did nothing -- no error anywhere, just missing bytes. Bail
+    	// out to a clean Z_NONE instead, so a caller checking the
+    	// returned object's type (or z_msg_new_send()'s return value,
+    	// once resolved on the receiving end) has an actual signal to
+    	// notice, rather than an object that only fails when read.
+    	free(b);
+    	return z_obj_none();
+    }
+    if (data && len) memcpy(b->data, data, len);
     z_obj_t obj = { .type = Z_BLOB };
     obj.val.ptr = b;
     return obj;

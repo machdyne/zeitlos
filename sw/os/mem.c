@@ -64,12 +64,12 @@ uint32_t k_mem_align_up(uint32_t val, uint32_t align) {
 	return (val + align - 1) & ~(align - 1);
 }
 
-void k_mem_init(void) {
+void k_mem_init(uint32_t total_size) {
     mem_block_count = 0;
 
     k_mem_block_t* first = alloc_metadata();
     first->start = Z_MEM_BASE;
-    first->size = Z_MEM_SIZE;
+    first->size = total_size;
     first->used = false;
     first->next = NULL;
 
@@ -163,4 +163,52 @@ void k_mem_free(void* ptr) {
         prev = blk;
         blk = blk->next;
     }
+}
+
+// prints a summary of the k_mem_alloc() pool -- `free` in sh.c. Added
+// specifically to debug a real-hardware "runs out of memory, but no
+// error shown" report: k_proc_create()/k_mem_alloc() DO check for and
+// report allocation failure already (see k_mem_alloc()'s own `return
+// NULL` and k_proc_create()'s `if (!mem) return(0);`, checked by
+// every caller in sh.c) -- so a genuinely silent crash suggests
+// something is exhausting memory in a way that doesn't go through
+// that path cleanly, or memory is tighter than expected in the first
+// place (see mem.h's own Z_MEM_SIZE_DEFAULT/docs/csrs.md for how the
+// pool's total size is determined). Reports the largest single free
+// block separately from total free bytes, since k_mem_alloc() needs
+// ONE block big enough, not just enough free bytes in aggregate --
+// fragmentation (many small free blocks, no single large one) would
+// show up as "plenty of free KB" but still fail every real
+// allocation, which total-free alone would hide.
+z_rv k_mem_dump(void) {
+
+	uint32_t total = 0, used = 0, largest_free = 0;
+	int used_blocks = 0, free_blocks = 0;
+
+	k_mem_block_t *blk = block_list;
+	while (blk) {
+		total += blk->size;
+		if (blk->used) {
+			used += blk->size;
+			used_blocks++;
+		} else {
+			free_blocks++;
+			if (blk->size > largest_free) largest_free = blk->size;
+		}
+		blk = blk->next;
+	}
+
+	uint32_t free_total = total - used;
+
+	printf(" total: %6ld KB\n", (long)(total / 1024));
+	printf("  used: %6ld KB (%d block%s)\n",
+		(long)(used / 1024), used_blocks, used_blocks == 1 ? "" : "s");
+	printf("  free: %6ld KB (%d block%s, largest %ld KB)\n",
+		(long)(free_total / 1024), free_blocks, free_blocks == 1 ? "" : "s",
+		(long)(largest_free / 1024));
+	printf("  meta: %d/%d block descriptors in use\n",
+		mem_block_count, Z_MEM_MAX_BLOCKS);
+
+	return Z_OK;
+
 }

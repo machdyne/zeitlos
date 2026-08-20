@@ -18,25 +18,25 @@ MS_PLATFORM_DIR = ../../common/ms_platform
 # memory-budget reasoning behind the defaults below; 4000 cells left
 # comfortable headroom for the full stdlib plus interactive use in
 # testing, against this app's actual process memory budget.
-# Passed to BOTH ms.o and lisp.o below (lisp.c's own boot log prints
+# Passed to BOTH ms.o and repl.o below (repl.c's own boot log prints
 # these) from these same two variables specifically so the two
 # translation units can never see different values for the same
-# build -- see lisp.c's own comment on why that matters.
+# build -- see repl.c's own comment on why that matters.
 MS_HEAP_SIZE ?= 4000
 MS_PROTECT_STACK_SIZE ?= 192
 
 MS_SIZE_CFLAGS = -DMS_HEAP_SIZE=$(MS_HEAP_SIZE) \
 	-DMS_PROTECT_STACK_SIZE=$(MS_PROTECT_STACK_SIZE)
 
-# -DLIX / -DMS_STATIC_HEAP only apply to ms.c's own compile -- lisp.c
+# -DLIX / -DMS_STATIC_HEAP only apply to ms.c's own compile -- repl.c
 # doesn't include ms.c or need either macro itself, only the sizes
 # above (for its boot-log printf and nothing else).
 MS_CFLAGS = -DLIX -DMS_STATIC_HEAP $(MS_SIZE_CFLAGS) \
 	-I$(MS_PLATFORM_DIR) -I.
 
-OBJS = zeitlos.o zobj.o zport.o zline.o zlisp.o ms.o lisp.o
+OBJS = zeitlos.o zobj.o zport.o zline.o zrepl.o ms.o repl.o
 
-lisp: lisp.elf lisp.bin
+repl: repl.elf repl.bin
 
 zeitlos.o:
 	$(CC) $(CFLAGS) -c ../../common/zeitlos.c -o zeitlos.o
@@ -50,8 +50,8 @@ zport.o:
 zline.o:
 	$(CC) $(CFLAGS) -c ../../common/zline.c -o zline.o
 
-zlisp.o:
-	$(CC) $(CFLAGS) -c ../../common/zlisp.c -o zlisp.o
+zrepl.o:
+	$(CC) $(CFLAGS) -c ../../common/zrepl.c -o zrepl.o
 
 # regenerated whenever the submodule's stdlib source is newer than the
 # last build's header -- see gen_ms_stdlib.py's own header comment for
@@ -62,19 +62,19 @@ ms_stdlib.h: gen_ms_stdlib.py $(MS_DIR)/ms_stdlib.l
 ms.o: ms_stdlib.h
 	$(CC) $(CFLAGS) $(MS_CFLAGS) -c $(MS_DIR)/ms.c -o ms.o
 
-lisp.o:
-	$(CC) $(CFLAGS) $(MS_SIZE_CFLAGS) -c lisp.c -o lisp.o
-	$(CC) $(CFLAGS) $(MS_SIZE_CFLAGS) -c lisp.c -S -o lisp.asm
+repl.o:
+	$(CC) $(CFLAGS) $(MS_SIZE_CFLAGS) -c repl.c -o repl.o
+	$(CC) $(CFLAGS) $(MS_SIZE_CFLAGS) -c repl.c -S -o repl.asm
 
-lisp.elf: $(OBJS)
-	$(CC) $(LDFLAGS) -Wl,-T$(LDSCRIPT),-Map,lisp.map -o lisp.elf $(OBJS) -lm
-	$(PREFIX)objdump -S --disassemble lisp.elf > lisp.dasm
+repl.elf: $(OBJS)
+	$(CC) $(LDFLAGS) -Wl,-T$(LDSCRIPT),-Map,repl.map -o repl.elf $(OBJS) -lm
+	$(PREFIX)objdump -S --disassemble repl.elf > repl.dasm
 
-lisp.bin: lisp.elf
-	@END=$$($(PREFIX)nm lisp.elf | awk '$$3=="_end"{print "0x"$$1}'); \
-	$(PREFIX)objcopy -O binary --pad-to=$$END lisp.elf lisp.bin
+repl.bin: repl.elf
+	@END=$$($(PREFIX)nm repl.elf | awk '$$3=="_end"{print "0x"$$1}'); \
+	$(PREFIX)objcopy -O binary --pad-to=$$END repl.elf repl.bin
 
 clean:
-	rm -f lisp.elf lisp.bin lisp.asm lisp.dasm lisp.map ms_stdlib.h *.o *.d
+	rm -f repl.elf repl.bin repl.asm repl.dasm repl.map ms_stdlib.h *.o *.d
 
-.PHONY: lisp clean
+.PHONY: repl clean

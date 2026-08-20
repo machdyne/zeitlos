@@ -5,6 +5,7 @@
  * See zport.h.
  */
 
+#include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -20,12 +21,16 @@
 #define Z_PORT_CONNECT_TIMEOUT_TICKS (732 * 2)
 
 z_rv z_port_connect(z_port_t *port, uint32_t provider_pid) {
+	return z_port_connect_arg(port, provider_pid, z_obj_none());
+}
+
+z_rv z_port_connect_arg(z_port_t *port, uint32_t provider_pid, z_obj_t arg) {
 
 	port->peer_pid = provider_pid;
 	port->conn_id = 0;
 	port->connected = false;
 
-	z_msg_new_send(provider_pid, Z_PORT_CONNECT, 0, z_obj_none());
+	z_msg_new_send(provider_pid, Z_PORT_CONNECT, 0, arg);
 
 	uint32_t start = z_uptime_ticks();
 
@@ -53,9 +58,48 @@ z_rv z_port_connect(z_port_t *port, uint32_t provider_pid) {
 }
 
 z_rv z_port_send(z_port_t *port, const void *data, uint32_t len) {
+
 	if (!port->connected) return Z_FAIL;
-	return z_msg_new_send(port->peer_pid, Z_PORT_DATA, port->conn_id,
-		z_obj_blob(data, len));
+
+	z_obj_t obj = z_obj_blob(data, len);
+
+	// z_obj_blob() (zobj.c) returns Z_NONE instead of a broken object
+	// when its internal malloc() fails (see that function's own
+	// comment), but z_msg_send() below would still report Z_OK for a
+	// Z_NONE payload -- from the caller's perspective this call would
+	// look like it "succeeded" while silently sending nothing at all.
+	// Surface it here instead of leaving it invisible -- this is what
+	// caught a real Z_PROC_STACK_SIZE-too-small bug (sw/os/kernel.c)
+	// on real hardware, where even a 2-byte allocation failed.
+	if (len > 0 && obj.type != Z_BLOB)
+		printf("zport: z_obj_blob() failed to allocate %lu bytes -- "
+			"heap likely exhausted\n", (unsigned long)len);
+
+	// Deliberately never freed here -- see z_port_t's own comment
+	// (zport.h) for why an earlier "free the previous send's blob on
+	// the next send" scheme was tried and reverted: it assumed the
+	// peer had a scheduling slot to read the previous message before
+	// the next z_port_send() call, which is FALSE whenever a caller
+	// makes several sends back-to-back with no yield in between --
+	// e.g. `repl`'s own handle_connect() (banner, then prompt,
+	// immediately) or its per-line response (text, then "\r\n", then
+	// the next prompt). Freeing the banner's blob before `term` had
+	// necessarily read it, followed immediately by the prompt's
+	// z_obj_blob() call reusing that exact just-freed memory, meant
+	// the banner message resolved to the PROMPT's own bytes by the
+	// time `term` actually read it -- confirmed on real hardware:
+	// `term` never saw the banner's true length at all, only two
+	// prompt-sized DATA messages in a row. Reverted to the same
+	// intentional, accepted leak `pong`'s own reply strings already
+	// use (docs/messaging.md's ping/pong example) -- now backed by a
+	// much larger per-process heap (Z_PROC_STACK_SIZE, kernel.c,
+	// raised specifically because of this) rather than a free that
+	// turned out to be unsafe. See docs/messaging.md's "Known
+	// limitations" for the general version of this problem -- a real
+	// fix needs the receiver's own read to be what proves safety, not
+	// the sender's next unrelated action.
+	return z_msg_new_send(port->peer_pid, Z_PORT_DATA, port->conn_id, obj);
+
 }
 
 void z_port_close(z_port_t *port) {

@@ -1,10 +1,10 @@
 /*
- * lisp -- Zeitlos's command interpreter app.
+ * repl -- Zeitlos's command interpreter app.
  *
  * This is NOT sw/os/sh.c (the kernel shell) -- sh.c stays exactly
  * what it already is, a method of last resort always available on
  * the serial console, independent of whether anything in here is
- * even running. `lisp` is a separate, ordinary app: a port provider
+ * even running. `repl` is a separate, ordinary app: a port provider
  * (sw/common/zport.h, docs/ports.md) that `term` connects to, running
  * Machdyne Scheme (sw/ext/ms, a git submodule -- see docs/scheme.md)
  * as its primary language, with system APIs (filesystem, graphics,
@@ -24,9 +24,9 @@
  * -DMS_STATIC_HEAP, not upstream's default malloc'd heap) and the
  * submodule/build setup. `ms_init_lix()` runs once, here, at startup,
  * against ONE shared `ms_global_env` -- every port connection's
- * commands, and every LISP_EVAL request, evaluate against the same
+ * commands, and every REPL_EVAL request, evaluate against the same
  * global state (a user who wants a truly separate environment can run
- * a second `lisp` instance instead, see pidreg -- much simpler, and
+ * a second `repl` instance instead, see pidreg -- much simpler, and
  * avoids paying multiple Scheme heaps' worth of memory, a real cost
  * on a 1MB-RAM board, for isolation nothing has asked for yet).
  * Any line that doesn't match a builtin command is evaluated as
@@ -40,12 +40,12 @@
  * deliberately NOT this module's job, it layers on top, still to be
  * added).
  *
- * Besides the port protocol, this app also answers Z_LISP_EVAL
- * messages (sw/common/zlisp.h) -- a second, non-interactive way to
+ * Besides the port protocol, this app also answers Z_REPL_EVAL
+ * messages (sw/common/zrepl.h) -- a second, non-interactive way to
  * reach the exact same command dispatcher, meant for a C-based app
  * (a future text editor, most obviously) that already has a chunk of
  * source text in memory and just wants it run, without pretending to
- * be a human typing at a port. See zlisp.h's own header comment for
+ * be a human typing at a port. See zrepl.h's own header comment for
  * the wire format; handle_eval() below is the provider side of it.
  */
 
@@ -60,9 +60,51 @@
 #include "../../common/zeitlos.h"
 #include "../../common/zport.h"
 #include "../../common/zline.h"
-#include "../../common/zlisp.h"
+#include "../../common/zrepl.h"
 #include "../../common/zterm.h"
 #include "ms_api.h"
+
+// parses a dotted-quad IPv4 address ("a.b.c.d") into a packed
+// uint32_t, for the "telnet <ip>" command below. Same logic as
+// sw/os/sh.c's own parse_ipv4() (used there for tget/tput) -- not
+// shared code, since sh.c runs in the kernel build (see
+// docs/networking.md's "init: running net without wm" for why that
+// build can't just link an app-facing header) and this app has no
+// other reason to depend on anything sh.c-specific. Small enough that
+// duplicating it here is simpler than inventing a shared location for
+// one function two very different build contexts both want.
+static bool parse_ipv4(const char *s, uint32_t *out) {
+
+	uint32_t octets[4];
+
+	for (int i = 0; i < 4; i++) {
+
+		if (i > 0) {
+			if (*s != '.') return false;
+			s++;
+		}
+
+		if (*s < '0' || *s > '9') return false;
+
+		uint32_t v = 0;
+		int digits = 0;
+		while (*s >= '0' && *s <= '9') {
+			v = v * 10 + (*s - '0');
+			s++;
+			digits++;
+			if (digits > 3 || v > 255) return false;
+		}
+
+		octets[i] = v;
+
+	}
+
+	if (*s != '\0') return false;	// trailing garbage
+
+	*out = (octets[0] << 24) | (octets[1] << 16) | (octets[2] << 8) | octets[3];
+	return true;
+
+}
 
 // how many simultaneous port connections (i.e. `term` windows) this
 // instance will accept -- small on purpose for phase 1, matching
@@ -71,17 +113,17 @@
 // needs to be higher; a rejected 5th connection ("too many
 // connections", see handle_connect() below) is a clean, visible
 // failure, not a crash.
-#define Z_LISP_MAX_CONNS 4
+#define Z_REPL_MAX_CONNS 4
 
 typedef struct {
 	z_port_t	port;
 	z_line_t	line;
-} lisp_conn_t;
+} repl_conn_t;
 
-static lisp_conn_t conns[Z_LISP_MAX_CONNS];
+static repl_conn_t conns[Z_REPL_MAX_CONNS];
 
 static const char *BANNER =
-	"lisp -- Zeitlos command interpreter\r\n"
+	"repl -- Zeitlos command interpreter\r\n"
 	"type 'help' for a list of commands -- anything else is "
 	"evaluated as Scheme\r\n";
 
@@ -120,7 +162,7 @@ static void eval_scheme(const char *expr, char *out, uint32_t out_cap) {
 
 	if (!scheme_ready) {
 		snprintf(out, out_cap,
-			"lisp: Scheme isn't available (failed to initialize at "
+			"repl: Scheme isn't available (failed to initialize at "
 			"startup -- see the boot log on the serial console)");
 		return;
 	}
@@ -133,7 +175,7 @@ static void eval_scheme(const char *expr, char *out, uint32_t out_cap) {
 		ms_val *form = ms_read(&p);
 
 		if (!form) {
-			snprintf(out, out_cap, "lisp: couldn't parse that");
+			snprintf(out, out_cap, "repl: couldn't parse that");
 			return;
 		}
 
@@ -152,7 +194,7 @@ static void eval_scheme(const char *expr, char *out, uint32_t out_cap) {
 		// reformat whatever ms_log() said.
 		ms_panic_after_recover();
 		snprintf(out, out_cap,
-			"lisp: Scheme error (see the serial console for details)");
+			"repl: Scheme error (see the serial console for details)");
 
 	}
 
@@ -178,7 +220,7 @@ static void eval_scheme(const char *expr, char *out, uint32_t out_cap) {
 //
 // `requester_pid` is the pid of the `term` (or whatever) instance
 // this line arrived from -- handle_data() passes the connection's own
-// `port.peer_pid`, handle_eval() passes 0 (a bare LISP_EVAL request
+// `port.peer_pid`, handle_eval() passes 0 (a bare REPL_EVAL request
 // has no connection, and therefore no specific term to redirect --
 // see the "port" command below, the only thing that currently cares
 // about this parameter at all).
@@ -195,7 +237,7 @@ static bool dispatch_line(const char *line, char *out, uint32_t out_cap,
 	if (!strcmp(line, "help")) {
 		snprintf(out, out_cap,
 			"commands: help, ping, uptime, echo <text>, free, "
-			"port <name>, quit\r\n"
+			"port <name>, telnet <ip>, quit\r\n"
 			"anything else is evaluated as Scheme, e.g. (+ 1 2)");
 		return false;
 	}
@@ -239,7 +281,7 @@ static bool dispatch_line(const char *line, char *out, uint32_t out_cap,
 		// sbrk(0) (newlib, backed by zeitlos.c's own _sbrk()) returns
 		// the current break WITHOUT growing it -- the standard
 		// "just tell me where it is" idiom. The gap between that and
-		// _end is everything malloc()'d since boot -- for `lisp`
+		// _end is everything malloc()'d since boot -- for `repl`
 		// specifically, that's ms's own T_STR/T_VECTOR cell payloads
 		// (ms.c's own type comments -- those two types own
 		// malloc'd memory, unlike every other ms_val, which lives
@@ -291,23 +333,23 @@ static bool dispatch_line(const char *line, char *out, uint32_t out_cap,
 		}
 
 		if (!requester_pid) {
-			// a bare LISP_EVAL request, not a real term connection --
+			// a bare REPL_EVAL request, not a real term connection --
 			// see this function's own header comment on why there's
 			// nothing to redirect in that case.
 			snprintf(out, out_cap,
-				"lisp: 'port' only works from an interactive term "
-				"connection, not a LISP_EVAL request");
+				"repl: 'port' only works from an interactive term "
+				"connection, not a REPL_EVAL request");
 			return false;
 		}
 
 		// see sw/common/zterm.h for the full protocol/reasoning --
 		// fire-and-forget, no reply. term.c closes ITS side of the
 		// current connection itself (connect_port(), term.c) before
-		// attempting the new one -- but this side (lisp's own) closes
+		// attempting the new one -- but this side (repl's own) closes
 		// proactively too, right here (the `return true` below --
 		// same "end this connection" signal "quit" uses, see
 		// handle_data()'s own handling of it), rather than waiting
-		// for term's own Z_PORT_CLOSE to arrive: lisp is the one
+		// for term's own Z_PORT_CLOSE to arrive: repl is the one
 		// telling this peer to leave, so there's no reason to still
 		// send a PROMPT down a connection that's already ending on
 		// purpose, the way handle_data() otherwise would for any
@@ -334,7 +376,74 @@ static bool dispatch_line(const char *line, char *out, uint32_t out_cap,
 
 	if (!strcmp(line, "port")) {
 		snprintf(out, out_cap,
-			"usage: port <name>  (e.g. port portdemo0, port lisp1)");
+			"usage: port <name>  (e.g. port portdemo0, port repl1)");
+		return false;
+	}
+
+	if (!strncmp(line, "telnet ", 7)) {
+
+		const char *target = line + 7;
+		while (*target == ' ') target++;
+
+		if (*target == 0) {
+			snprintf(out, out_cap,
+				"usage: telnet <ip>  (e.g. telnet 192.168.178.100)");
+			return false;
+		}
+
+		if (!requester_pid) {
+			// same reasoning as "port" above -- nothing to redirect
+			// for a bare REPL_EVAL request, there's no term
+			// connection behind it.
+			snprintf(out, out_cap,
+				"repl: 'telnet' only works from an interactive term "
+				"connection, not a REPL_EVAL request");
+			return false;
+		}
+
+		uint32_t ip;
+		if (!parse_ipv4(target, &ip)) {
+			snprintf(out, out_cap, "telnet: bad IP address '%s'", target);
+			return false;
+		}
+
+		// same SET_PORT mechanism the "port" command above uses --
+		// just the Z_MAP form (sw/common/zterm.h) so `net`
+		// (sw/apps/net) gets the target IP as part of the CONNECT
+		// itself (sw/common/zport.h's z_port_connect_arg()), not a
+		// separate message racing against this one. "net0" is net's
+		// own pidreg name (net.c registers itself under "net", same
+		// convention as repl/term); if net isn't running, term's own
+		// name lookup just fails and it stays in local echo, same as
+		// any other unreachable "port" target -- no fixed-pid
+		// fallback here, matching "port <name>"'s own precedent
+		// above (unlike term's OWN startup connection to
+		// "repl0"/Z_PID_REPL, which does have one).
+		//
+		// `arg` (like `port`'s own z_obj_str(target) just above) is
+		// intentionally never freed -- a fire-and-forget message with
+		// a heap-allocated payload is only safe long-term if nothing
+		// ever reuses or frees the memory out from under a receiver
+		// that hasn't read it yet (docs/messaging.md); leaving it
+		// permanently allocated sidesteps that lifetime question at
+		// the cost of a small, deliberate, already-accepted-elsewhere
+		// leak (one map + one string per `telnet`/`port` command
+		// typed, not a per-byte or per-message cost).
+		z_obj_t arg = z_obj_map(2);
+		z_map_set(&arg, "name", z_obj_str("net0"));
+		z_map_set(&arg, "arg", z_obj_uint32(ip));
+		z_msg_new_send(requester_pid, Z_TERM_SET_PORT, 0, arg);
+
+		snprintf(out, out_cap,
+			"connecting to %s -- disconnecting now (F12 returns to repl)",
+			target);
+		return true;
+
+	}
+
+	if (!strcmp(line, "telnet")) {
+		snprintf(out, out_cap,
+			"usage: telnet <ip>  (e.g. telnet 192.168.178.100)");
 		return false;
 	}
 
@@ -372,20 +481,28 @@ static bool dispatch_line(const char *line, char *out, uint32_t out_cap,
 
 // -- port (interactive) side --
 
-static void conn_send_str(lisp_conn_t *c, const char *s) {
+static void conn_send_str(repl_conn_t *c, const char *s) {
 	uint32_t len = (uint32_t)strlen(s);
-	if (len) z_port_send(&c->port, s, len);
+	if (!len) return;
+	// z_port_send() can legitimately fail (peer's mailbox full, or
+	// disconnected -- docs/ports.md's own "explicit, deliberate gap
+	// for v1") -- log it rather than silently dropping the bytes with
+	// no trace anywhere, same as this file already does for TFTP-style
+	// failures elsewhere in the codebase.
+	if (z_port_send(&c->port, s, len) != Z_OK)
+		printf("repl: conn_send_str failed (%lu bytes) to pid %ld\n",
+			(unsigned long)len, (long)c->port.peer_pid);
 }
 
 static void handle_connect(const z_msg_t *msg) {
 
 	int slot = -1;
-	for (int i = 0; i < Z_LISP_MAX_CONNS; i++) {
+	for (int i = 0; i < Z_REPL_MAX_CONNS; i++) {
 		if (!conns[i].port.connected) { slot = i; break; }
 	}
 
 	if (slot < 0) {
-		z_port_refuse(msg, "lisp: too many connections");
+		z_port_refuse(msg, "repl: too many connections");
 		return;
 	}
 
@@ -394,15 +511,15 @@ static void handle_connect(const z_msg_t *msg) {
 	z_port_accept(&conns[slot].port, msg, (uint32_t)(slot + 1));
 	z_line_reset(&conns[slot].line);
 
-	printf("lisp: connection %d accepted (pid %ld)\n", slot, (long)msg->from);
+	printf("repl: connection %d accepted (pid %ld)\n", slot, (long)msg->from);
 
 	conn_send_str(&conns[slot], BANNER);
 	conn_send_str(&conns[slot], PROMPT);
 
 }
 
-static lisp_conn_t *find_conn_by_tag(uint32_t tag) {
-	for (int i = 0; i < Z_LISP_MAX_CONNS; i++) {
+static repl_conn_t *find_conn_by_tag(uint32_t tag) {
+	for (int i = 0; i < Z_REPL_MAX_CONNS; i++) {
 		if (conns[i].port.connected && conns[i].port.conn_id == tag)
 			return &conns[i];
 	}
@@ -411,7 +528,7 @@ static lisp_conn_t *find_conn_by_tag(uint32_t tag) {
 
 static void handle_data(const z_msg_t *msg) {
 
-	lisp_conn_t *c = find_conn_by_tag(msg->tag);
+	repl_conn_t *c = find_conn_by_tag(msg->tag);
 	if (!c) return; // stale DATA against an already-closed connection
 
 	uint32_t len = z_blob_len(&msg->obj);
@@ -430,11 +547,17 @@ static void handle_data(const z_msg_t *msg) {
 		int complete =
 			z_line_feed(&c->line, data[i], echo, &echo_len, sizeof(echo));
 
-		if (echo_len) z_port_send(&c->port, echo, echo_len);
+		if (echo_len) {
+			// see conn_send_str()'s own comment above -- same
+			// reasoning applies here.
+			if (z_port_send(&c->port, echo, echo_len) != Z_OK)
+				printf("repl: echo z_port_send failed (%lu bytes) to pid %ld\n",
+					(unsigned long)echo_len, (long)c->port.peer_pid);
+		}
 
 		if (!complete) continue;
 
-		char out[Z_LISP_EVAL_REPLY_MAX];
+		char out[Z_REPL_EVAL_REPLY_MAX];
 		bool wants_quit =
 			dispatch_line(c->line.buf, out, sizeof(out), c->port.peer_pid);
 
@@ -462,18 +585,18 @@ static void handle_data(const z_msg_t *msg) {
 }
 
 static void handle_close(const z_msg_t *msg) {
-	lisp_conn_t *c = find_conn_by_tag(msg->tag);
+	repl_conn_t *c = find_conn_by_tag(msg->tag);
 	if (!c) return;
 	c->port.connected = false;
-	printf("lisp: connection closed by peer\n");
+	printf("repl: connection closed by peer\n");
 }
 
-// -- LISP_EVAL (message-based, non-interactive) side -- see
-// sw/common/zlisp.h for the wire format and reasoning.
+// -- REPL_EVAL (message-based, non-interactive) side -- see
+// sw/common/zrepl.h for the wire format and reasoning.
 
 static void handle_eval(const z_msg_t *msg) {
 
-	char input[Z_LISP_EVAL_REPLY_MAX];
+	char input[Z_REPL_EVAL_REPLY_MAX];
 
 	if (msg->obj.type == Z_STR && msg->obj.val.str) {
 
@@ -489,31 +612,31 @@ static void handle_eval(const z_msg_t *msg) {
 
 	} else {
 
-		z_msg_new_send(msg->from, Z_LISP_ERROR, msg->tag, z_obj_str(
-			"lisp: LISP_EVAL requires a Z_STR or Z_BLOB payload"));
+		z_msg_new_send(msg->from, Z_REPL_ERROR, msg->tag, z_obj_str(
+			"repl: REPL_EVAL requires a Z_STR or Z_BLOB payload"));
 		return;
 
 	}
 
-	char out[Z_LISP_EVAL_REPLY_MAX];
+	char out[Z_REPL_EVAL_REPLY_MAX];
 	dispatch_line(input, out, sizeof(out), 0); // 0 = no requesting term
 		// connection -- see dispatch_line()'s own header comment
 	// dispatch_line()'s "wants to quit" return is deliberately
 	// ignored here -- there's no connection/session for a bare
-	// LISP_EVAL request to end.
+	// REPL_EVAL request to end.
 
-	z_msg_new_send(msg->from, Z_LISP_RESULT, msg->tag, z_obj_str(out));
+	z_msg_new_send(msg->from, Z_REPL_RESULT, msg->tag, z_obj_str(out));
 
 }
 
 int main(void) {
 
-	char instance_name[24] = "lisp";
-	if (z_pid_register("lisp", instance_name, sizeof(instance_name)))
-		printf("lisp: starting as pid %ld, registered as '%s'.\n",
+	char instance_name[24] = "repl";
+	if (z_pid_register("repl", instance_name, sizeof(instance_name)))
+		printf("repl: starting as pid %ld, registered as '%s'.\n",
 			(long)z_getpid(), instance_name);
 	else
-		printf("lisp: starting as pid %ld (name registration failed, "
+		printf("repl: starting as pid %ld (name registration failed, "
 			"term won't be able to find this instance by name).\n",
 			(long)z_getpid());
 
@@ -530,16 +653,28 @@ int main(void) {
 	if (setjmp(ms_panic_recovery) == 0) {
 		ms_init_lix(true);
 		scheme_ready = true;
-		printf("lisp: Scheme ready (%d cells, %d protect-stack slots)\n",
+		printf("repl: Scheme ready (%d cells, %d protect-stack slots)\n",
 			MS_HEAP_SIZE, MS_PROTECT_STACK_SIZE);
+		// Logs how much of the shared stack+heap region
+		// (Z_PROC_STACK_SIZE, sw/os/kernel.c) stdlib loading alone
+		// consumes -- there's no separate heap region at all (see
+		// that constant's own comment for why), so this number
+		// directly says how much headroom is actually left for
+		// everything else this process will ever malloc() (Scheme's
+		// own T_STR/T_VECTOR values, and every zport.h z_port_send()
+		// call via zobj.c's z_obj_blob()) before hitting real trouble.
+		extern char _end;
+		uint32_t heap_grown = (uint32_t)sbrk(0) - (uint32_t)&_end;
+		printf("repl: heap grown %lu bytes by end of stdlib load\n",
+			(unsigned long)heap_grown);
 	} else {
 		ms_panic_after_recover();
-		printf("lisp: Scheme failed to initialize (non-fatal -- "
+		printf("repl: Scheme failed to initialize (non-fatal -- "
 			"builtin commands still work, 'scheme' will report "
 			"unavailable)\n");
 	}
 
-	for (int i = 0; i < Z_LISP_MAX_CONNS; i++)
+	for (int i = 0; i < Z_REPL_MAX_CONNS; i++)
 		conns[i].port.connected = false;
 
 	while (1) {
@@ -553,7 +688,7 @@ int main(void) {
 				handle_data(&msg);
 			} else if (msg.subject == Z_PORT_CLOSE) {
 				handle_close(&msg);
-			} else if (msg.subject == Z_LISP_EVAL) {
+			} else if (msg.subject == Z_REPL_EVAL) {
 				handle_eval(&msg);
 			}
 

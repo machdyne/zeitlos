@@ -53,9 +53,30 @@ typedef uint32_t z_rv;
 #define Z_FAIL 1
 
 // how many pending messages a single process's mailbox can hold.
-// small on purpose -- messages are meant to be drained promptly, this
-// isn't a general-purpose queue.
-#define Z_MAILBOX_DEPTH   8
+// Small on purpose -- messages are meant to be drained promptly, this
+// isn't a general-purpose queue -- but 8 turned out too small in
+// practice: confirmed on real hardware that typing a single short
+// word into `term` (connected to `repl`, docs/ports.md) can silently
+// drop bytes/echo/response partway through. Root cause: `wm.c` sends
+// TWO Z_WM_KEY messages per keystroke (press AND release, with no
+// batching -- see wm.c's own key-dispatch loop) straight to the
+// focused window's mailbox, and each of those (on the press half)
+// round-trips through `term` -> `repl` -> `term` as a Z_PORT_DATA
+// echo -- so a single 4-letter word plus Enter can put on the order
+// of 15-20 messages through `term`'s mailbox in quick succession.
+// z_msg_send() fails silently once the mailbox is full (no crash, no
+// error surfaced to the sender by default -- see docs/messaging.md),
+// which is exactly what made this look like garbled/truncated output
+// rather than an obvious failure. Raised to give real headroom for
+// ordinary interactive typing rather than tuning it to the bare
+// minimum that happened to pass initial testing; the actual required
+// depth depends on typing speed vs. how fast a receiver's own main
+// loop drains its mailbox between key events, which varies per app,
+// so this errs generous. Costs ~24 bytes per envelope * Z_PROCS_MAX
+// process slots * (new - old) depth in additional kernel .bss
+// (msg.c's z_mailboxes[]) -- a few KB, negligible against this
+// board's overall memory budget.
+#define Z_MAILBOX_DEPTH   32
 
 // scratch budget used by z_msg_read() to resolve Z_LIST/Z_MAP
 // payloads (see the big comment above). enough for a small, flat

@@ -6,6 +6,15 @@
 
 // BOARD CONFIG
 // ------------
+//
+// `MEM is total main RAM in megabytes -- read by rtl/csrs.v (see
+// docs/csrs.md) into a runtime-readable register, so software
+// (sw/bios/bios.c, sw/os/mem.c) can size itself off the real number
+// instead of a hardcoded assumption that only ever matched Obst (the
+// first board this ran on). If a board block below doesn't set it,
+// rtl/sysctl.v defaults it to 1 (matching that original hardcoded
+// assumption) rather than leaving it undefined -- see that file's own
+// `ifndef MEM guard.
 
 `ifdef BOARD_OBST
 
@@ -28,6 +37,7 @@
 `define USB_HID
 `define SPI_SDCARD
 `define SPI_ETH
+`define MEM 1
 
 `elsif BOARD_LAKRITZ
 
@@ -46,6 +56,7 @@
 `define UART0
 `define USB_HID
 `define SPI_SDCARD
+`define MEM 32
 
 `elsif BOARD_MOZART_ML1
 
@@ -65,6 +76,7 @@
 `define USB_HID
 `define SPI_SDCARD
 `define ETH_RMII
+`define MEM 32
 
 `elsif BOARD_LEBKUCHEN
 
@@ -83,6 +95,7 @@
 `define USB_HID
 `define SPI_SDCARD
 `define SPI_FLASH
+`define MEM 8
 
 `elsif BOARD_KOLSCH
 
@@ -100,5 +113,6 @@
 `define USB_HID
 //`define SPI_SDCARD
 //`define SPI_FLASH
+`define MEM 64
 
 `endif

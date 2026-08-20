@@ -179,7 +179,7 @@ static void draw_window_box(wm_window_t *w, bool is_focused, int color) {
 // in this codebase so far.
 //
 // unlike an earlier version of this function, this does NOT call
-// z_gfx_hw_font_load() itself -- wm loads z_font_5x7 exactly once, in
+// z_gfx_hw_font_load() itself -- wm loads z_font_5x8 exactly once, in
 // main(), and that's now the only font any process on the board loads
 // into hardware glyph memory at all (see main()'s comment, and
 // "Hardware glyph blitting" in docs/window_manager.md). draw_dock()
@@ -785,7 +785,7 @@ int main(void) {
 	// more of the screen than it has to.
 	clear_screen();
 
-	// loads z_font_5x7's glyph data into hardware glyph memory once,
+	// loads z_font_5x8's glyph data into hardware glyph memory once,
 	// here, at startup -- and NOWHERE else on the whole board. This
 	// is a deliberate change from the earlier per-app convention
 	// (hello_win/term each called z_gfx_hw_font_load() themselves
@@ -795,9 +795,9 @@ int main(void) {
 	// whose load call "wins" if two processes using different fonts
 	// are both drawing around the same time -- see
 	// docs/window_manager.md, "Hardware glyph blitting". Now wm is
-	// the sole owner: it loads z_font_5x7 once and never reloads or
+	// the sole owner: it loads z_font_5x8 once and never reloads or
 	// swaps it, and every app (including the dock, see draw_dock())
-	// is expected to only ever draw with z_font_5x7 -- there's
+	// is expected to only ever draw with z_font_5x8 -- there's
 	// currently no second font in use anywhere, by design, precisely
 	// so nothing else needs its own z_gfx_hw_font_load() call or has
 	// any reason to fight over what's in glyph memory. If a genuine
@@ -806,7 +806,17 @@ int main(void) {
 	// load-before-every-draw-you-actually-own discipline like an
 	// earlier version of draw_dock() used) -- it does not extend to
 	// "just call z_gfx_hw_font_load() again from wherever needs it".
-	z_gfx_hw_font_load(&z_font_5x7);
+	//
+	// z_font_5x8 replaced z_font_5x7 here (and in every other
+	// Z_GFX_HW_BLIT consumer -- sw/apps/term, sw/apps/hello_win, see
+	// their own comments) after real-hardware testing showed the
+	// bottom pixel row of z_font_5x7 glyphs getting cut off on
+	// screen -- see zfont.h's own z_font_5x8 comment. wm/term/
+	// hello_win must all agree on which font is currently loaded
+	// (this is exactly the single-owner constraint the paragraph
+	// above describes), so this had to change in all three together,
+	// not just here.
+	z_gfx_hw_font_load(&z_font_5x8);
 
 /*
 	// demo windows so there's something to see/drag before a real

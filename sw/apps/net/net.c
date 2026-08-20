@@ -1,5 +1,5 @@
 /*
- * net -- ARP + ICMP echo (ping) + TFTP client
+ * net -- ARP + ICMP echo (ping) + TFTP client + TCP/telnet client
  *
  * Phases 1-4 of the staged plan in docs/networking.md: SPI/chip
  * bring-up, ARP, IP + ICMP echo reply, UDP + TFTP -- all confirmed
@@ -11,12 +11,30 @@
  * TFTP is exposed to other processes (including the shell's tget/tput
  * commands) via messaging -- see sw/common/znet.h for the protocol.
  *
+ * TCP (tcp.c/h) + a minimal telnet client (telnet.c/h) sit alongside
+ * TFTP -- net acts as a zport provider (sw/common/zport.h,
+ * docs/ports.md) for a single telnet session, reached by `repl`'s
+ * `telnet <ip>` command via `term`'s Z_TERM_SET_PORT (sw/common/
+ * zterm.h). See this file's own "telnet:" section below for the
+ * message flow, and tcp.h/telnet.h for what's simplified relative to
+ * a general-purpose TCP/telnet implementation (one connection at a
+ * time, stop-and-wait sending, no out-of-order reassembly).
+ *
  * IP config is static (see docs/networking.md for why). The netmask
  * and gateway below are ASSUMED (a typical home-router /24 with
  * gateway at .1) -- only the IP address (192.168.178.230) was
  * actually specified. Correct if wrong; for same-subnet traffic it
  * won't matter, since the gateway is only consulted for destinations
  * outside the local subnet.
+ *
+ * On startup, checks rtl/csrs.v's capability CSR (sw/common/zsoc.h,
+ * docs/csrs.md) to confirm THIS board's build actually has the
+ * ethernet backend (SPI_ETH or ETH_RMII) this binary was compiled
+ * for, exiting cleanly (not hanging) if it's confirmed absent -- e.g.
+ * Lakritz, which has neither. This is what lets sw/os/sh.c's `init`
+ * always attempt starting net now, on every board, instead of the
+ * old pid-reservation-only workaround -- see net_phy.h's own header
+ * comment for the full story.
  *
  * Run with:
  *   > run net
@@ -37,11 +55,15 @@
 #include "../../common/zeitlos.h"
 #include "../../common/znet.h"
 #include "../../common/zstream.h"
+#include "../../common/zport.h"
+#include "../../common/zsoc.h"
 #include "net_phy.h"
 #include "eth.h"
 #include "arp.h"
 #include "ip.h"
 #include "tftp.h"
+#include "tcp.h"
+#include "telnet.h"
 
 // no factory MAC on this chip -- locally-administered address (the
 // 0x02 first-octet bit pattern marks it as such, avoiding any clash
@@ -62,6 +84,29 @@ static bool transfer_active = false;
 static bool pending_is_put = false;
 static uint32_t pending_to = 0;
 static uint32_t pending_tag = 0;
+
+// -- telnet: net acts as a zport provider (sw/common/zport.h,
+// docs/ports.md) for a single telnet session at a time, matching
+// tcp.c's own single-TCB constraint (there can only ever be one TCP
+// connection open, so there can only ever be one telnet session
+// either). See docs/networking.md's "TCP + telnet" notes and
+// sw/common/zterm.h's Z_TERM_SET_PORT for how a `term` instance ends
+// up connecting here in the first place (repl's `telnet <ip>`
+// command).
+//
+// TN_IDLE: no session. TN_CONNECTING: a Z_PORT_CONNECT was accepted
+// enough to start the TCP handshake, but CONNECTED/REFUSED hasn't
+// been sent back to the waiting client yet -- see
+// handle_telnet_port_connect() for why that has to be deferred.
+// TN_ACTIVE: telnet_port is a real, accepted zport connection,
+// relaying both directions.
+typedef enum { TN_IDLE, TN_CONNECTING, TN_ACTIVE } telnet_session_state_t;
+
+static telnet_session_state_t telnet_state = TN_IDLE;
+static z_port_t telnet_port;
+static uint32_t telnet_client_pid;	// valid once state != TN_IDLE
+#define TELNET_CONN_ID 1			// only one connection ever -- no
+									// need to hand out distinct ids
 
 static void print_ip(uint32_t ip) {
 	printf("%ld.%ld.%ld.%ld",
@@ -149,6 +194,124 @@ static void handle_tftp_put_request(z_msg_t *msg) {
 
 }
 
+// -- telnet: tcp.c/telnet.c event callbacks --
+
+// the TCP handshake (started from handle_telnet_port_connect() below)
+// completed -- only now do we tell the waiting `term` it's connected,
+// mirroring what z_port_accept() does internally (zport.c). Can't
+// call z_port_accept() itself here since it needs the original
+// z_msg_t, which is long gone by the time an async TCP handshake
+// resolves -- telnet_client_pid (captured at CONNECT time) is all it
+// would have given us anyway.
+static void telnet_on_established(void) {
+	telnet_port.peer_pid = telnet_client_pid;
+	telnet_port.conn_id = TELNET_CONN_ID;
+	telnet_port.connected = true;
+	telnet_state = TN_ACTIVE;
+	z_msg_new_send(telnet_client_pid, Z_PORT_CONNECTED, 0, z_obj_uint32(TELNET_CONN_ID));
+	printf("net: telnet connected, relaying to pid %ld\n", (long)telnet_client_pid);
+}
+
+static void telnet_on_data(const uint8_t *data, uint16_t len) {
+	if (telnet_state != TN_ACTIVE) return;
+	z_port_send(&telnet_port, data, len);
+}
+
+// covers both "the handshake itself never completed" (state was
+// still TN_CONNECTING) and "an established session ended" (state was
+// TN_ACTIVE) -- tcp.h's TCP_EVENT_CLOSED documents the same two-in-one
+// shape, telnet.c just passes it straight through.
+static void telnet_on_closed(void) {
+
+	if (telnet_state == TN_CONNECTING) {
+		// term's own z_port_connect_arg() (zport.c) is waiting up to
+		// ~2 seconds for CONNECTED or REFUSED -- if this arrives
+		// after that timeout already fired, it's harmlessly ignored
+		// on term's end (same accepted limitation z_port_connect()
+		// already documents).
+		z_msg_new_send(telnet_client_pid, Z_PORT_REFUSED, 0,
+			z_obj_str("net: telnet connection failed"));
+		printf("net: telnet connect to pid %ld failed\n", (long)telnet_client_pid);
+	} else if (telnet_state == TN_ACTIVE) {
+		z_port_close(&telnet_port);	// notifies the peer -- term
+										// falls back to local echo on
+										// receiving this (term.c)
+		printf("net: telnet session ended\n");
+	}
+
+	telnet_state = TN_IDLE;
+
+}
+
+// -- telnet: zport provider side (Z_PORT_CONNECT/DATA/CLOSE from a
+// `term` instance) --
+
+// a Z_PORT_CONNECT here always means "start a telnet session" --
+// there's currently only one thing a CONNECT to net can mean, same
+// reasoning Z_STREAM_OPEN's own comment gives for TFTP GET. Requires
+// obj=Z_UINT32 (the target IP) -- see zport.h's
+// z_port_connect_arg()/zterm.h's Z_TERM_SET_PORT Z_MAP form for how a
+// `term` ends up sending that instead of the default Z_NONE.
+static void handle_telnet_port_connect(const z_msg_t *msg) {
+
+	if (telnet_state != TN_IDLE) {
+		z_port_refuse(msg, "net: already busy with another telnet session");
+		return;
+	}
+
+	if (msg->obj.type != Z_UINT32) {
+		z_port_refuse(msg, "net: telnet requires a target IP");
+		return;
+	}
+
+	uint32_t ip = msg->obj.val.uint32;
+	telnet_client_pid = msg->from;
+
+	printf("net: telnet connecting to ");
+	print_ip(ip);
+	printf(" for pid %ld\n", (long)telnet_client_pid);
+
+	if (!telnet_connect(ip, telnet_on_established, telnet_on_data, telnet_on_closed)) {
+		z_port_refuse(msg, "net: tcp busy with another connection");
+		return;
+	}
+
+	telnet_state = TN_CONNECTING;
+	// deliberately no CONNECTED/REFUSED sent yet -- see
+	// telnet_on_established()/telnet_on_closed() above, and this
+	// file's own header comment on telnet_state.
+
+}
+
+static void handle_telnet_port_data(const z_msg_t *msg) {
+
+	if (telnet_state != TN_ACTIVE || !telnet_port.connected ||
+		msg->tag != telnet_port.conn_id) return;
+
+	uint32_t len = z_blob_len(&msg->obj);
+	void *data = z_blob_data(&msg->obj);
+	if (data && len) telnet_send((const uint8_t *)data, (uint16_t)len);
+	// telnet_send() returning false here (its own outbound queue is
+	// full) just drops these bytes -- the same accepted
+	// fire-and-forget flow-control gap docs/ports.md already
+	// documents for the port protocol itself, not worth building a
+	// second layer of backpressure over.
+
+}
+
+static void handle_telnet_port_close(const z_msg_t *msg) {
+
+	if (telnet_state != TN_ACTIVE || !telnet_port.connected ||
+		msg->tag != telnet_port.conn_id) return;
+
+	telnet_port.connected = false;
+	telnet_abort();	// term already left -- no reason to wait out a
+						// graceful FIN exchange with the remote server
+	telnet_state = TN_IDLE;
+	printf("net: telnet port closed by peer\n");
+
+}
+
 static void check_tftp_progress(void) {
 
 	if (!transfer_active) return;
@@ -189,6 +352,33 @@ int main(void) {
 
 	printf("net: initializing %s...\n", NET_PHY_NAME);
 
+	// check the SOC actually has the ethernet backend this binary was
+	// built for BEFORE touching any of its registers -- see
+	// net_phy.h's own header comment and docs/csrs.md for the full
+	// story. z_soc_feature_confirmed_absent() (not a plain negated
+	// z_soc_has_feature()) is deliberate: an older bitstream that
+	// predates rtl/csrs.v entirely can't answer this at all, and the
+	// safe, backward-compatible behavior there is "proceed as before"
+	// (this board might genuinely have the hardware, we just can't
+	// confirm it), not "refuse". Only a POSITIVE, confirmed "this
+	// board's build has neither SPI_ETH nor ETH_RMII" makes net exit
+	// here -- which is exactly what makes it safe for sw/os/sh.c's
+	// `init` to always attempt starting net now, on every board,
+	// instead of the old pid-reservation-only workaround.
+#ifdef NET_PHY_RMII
+	if (z_soc_feature_confirmed_absent(Z_FEATURE_ETH_RMII)) {
+		printf("net: this SOC build has no RMII ethernet (rtl/boards.vh's "
+			"ETH_RMII) -- nothing to do here, exiting cleanly.\n");
+		return 1;
+	}
+#else
+	if (z_soc_feature_confirmed_absent(Z_FEATURE_SPI_ETH)) {
+		printf("net: this SOC build has no SPI ethernet (rtl/boards.vh's "
+			"SPI_ETH) -- nothing to do here, exiting cleanly.\n");
+		return 1;
+	}
+#endif
+
 	if (!phy_init(our_mac)) {
 		printf("net: phy_init (%s) failed -- see that driver's header comment "
 			"for what to check first.\n", NET_PHY_NAME);
@@ -202,6 +392,7 @@ int main(void) {
 	eth_init(our_mac);
 	arp_init(OUR_IP);
 	ip_init(OUR_IP, OUR_NETMASK, OUR_GATEWAY);
+	tcp_init(OUR_IP);
 
 	// registers as "net0" (see sw/os/pidreg.h) -- callers can now
 	// reach net by name instead of only the fixed Z_PID_NET constant
@@ -216,7 +407,7 @@ int main(void) {
 	else
 		printf("net: name registration failed (still usable via fixed pid)\n");
 
-	printf("net: ip 192.168.178.230/24, listening (arp + icmp echo + tftp)\n");
+	printf("net: ip 192.168.178.230/24, listening (arp + icmp echo + tftp + telnet)\n");
 
 	while (1) {
 
@@ -226,10 +417,15 @@ int main(void) {
 		while (z_msg_read(&msg) == Z_OK) {
 			if (msg.subject == Z_STREAM_OPEN) handle_stream_open(&msg);
 			else if (msg.subject == Z_NET_TFTP_PUT) handle_tftp_put_request(&msg);
+			else if (msg.subject == Z_PORT_CONNECT) handle_telnet_port_connect(&msg);
+			else if (msg.subject == Z_PORT_DATA) handle_telnet_port_data(&msg);
+			else if (msg.subject == Z_PORT_CLOSE) handle_telnet_port_close(&msg);
 			else tftp_handle_stream_msg(&msg);
 		}
 
 		check_tftp_progress();
+		tcp_poll();
+		telnet_poll();
 
 		for (volatile int i = 0; i < 500; i++) ; // light throttle
 
