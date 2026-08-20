@@ -42,11 +42,11 @@ With the MTU, there is no need for position independent code or complicated addr
 
 | App | Description |
 |-----|-------------|
-| sh | Kernel shell (serial console) |
+| kernel | Kernel + kernel shell (serial console) |
 | wm | Window manager + dock |
 | net | Networking server |
 | term | Terminal emulator (connects to services; VT100 emulation) |
-| repl | Lisp/CLI server (subset of R4RS Scheme) |
+| repl | CLI server (subset of R4RS Scheme) |
 
 ### Boards
 

@@ -279,7 +279,7 @@ int main(void) {
 
 	printf(" - starting shell.\n");
 
-	// the kernel shell is process zero
+	// the kernel / kernel shell run on process 0
 	sh();
 
 }
