@@ -38,7 +38,7 @@
 #define reg_csr_mem_mb (*(volatile uint32_t*)0x70000004)
 #define CSR_MAGIC 0x5A454954	// "ZEIT" -- see rtl/csrs.v
 
-#define AUTOLOAD_CNT		1000000
+#define AUTOLOAD_CNT		500000
 
 #define MEM_BIOS			0x00000000
 #define MEM_BIOS_SIZE	2 * 1024

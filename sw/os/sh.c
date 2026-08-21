@@ -13,6 +13,7 @@
 #include "../common/zeitlos.h"
 #include "../common/znet.h"
 #include "../common/zstream.h"
+#include "../common/zdns.h"
 #include "kernel.h"
 #include "mem.h"
 #include "fs/fs.h"
@@ -27,7 +28,6 @@ void sh_help(void);
 void hex_dump(uint32_t addr);
 uint32_t xfer_recv(uint32_t addr_ptr);
 void cls(void);
-bool parse_ipv4(const char *s, uint32_t *out);
 void init(void);
 
 // shortened for now (was 60s) while TFTP is still being brought up --
@@ -216,14 +216,15 @@ void sh(void) {
 			char *local = get_arg(buffer, 3);
 
 			if (!ip_str || !remote) {
-				printf("usage: tget <server-ip> <remote-file> [local-file]\n");
+				printf("usage: tget <server-ip-or-hostname> <remote-file> [local-file]\n");
 				continue;
 			}
 			if (!local) local = remote;
 
 			uint32_t ip;
-			if (!parse_ipv4(ip_str, &ip)) {
-				printf("tget: bad ip address\n");
+			char err[64];
+			if (!z_resolve_host(ip_str, &ip, err, sizeof(err))) {
+				printf("tget: %s\n", err);
 				continue;
 			}
 
@@ -238,7 +239,6 @@ void sh(void) {
 			// throughout (see docs/messaging.md)
 
 			zstream_consumer_t cons;
-			char err[64];
 			if (!zstream_open(&cons, resolve_net_pid(), req, err, sizeof(err))) {
 				printf("tget: failed to open: %s\n", err);
 				continue;
@@ -293,14 +293,15 @@ void sh(void) {
 			char *remote = get_arg(buffer, 3);
 
 			if (!ip_str || !local) {
-				printf("usage: tput <server-ip> <local-file> [remote-file]\n");
+				printf("usage: tput <server-ip-or-hostname> <local-file> [remote-file]\n");
 				continue;
 			}
 			if (!remote) remote = local;
 
 			uint32_t ip;
-			if (!parse_ipv4(ip_str, &ip)) {
-				printf("tput: bad ip address\n");
+			char resolve_err[64];
+			if (!z_resolve_host(ip_str, &ip, resolve_err, sizeof(resolve_err))) {
+				printf("tput: %s\n", resolve_err);
 				continue;
 			}
 
@@ -675,45 +676,14 @@ void cls(void) {
 	}
 }
 
-// parses a dotted-quad IPv4 address ("a.b.c.d") into a packed
-// uint32_t (matching znet.h's convention -- same packing z_map_find'd
-// "ip" values use, e.g. ip.c's own address handling). returns false
-// on a malformed address rather than silently returning 0
-// (0.0.0.0 is itself a value someone could plausibly type by mistake,
-// so treating a parse failure as "0" would be a silent, misleading
-// success).
-bool parse_ipv4(const char *s, uint32_t *out) {
-
-	uint32_t octets[4];
-
-	for (int i = 0; i < 4; i++) {
-
-		if (i > 0) {
-			if (*s != '.') return false;
-			s++;
-		}
-
-		if (*s < '0' || *s > '9') return false;
-
-		uint32_t v = 0;
-		int digits = 0;
-		while (*s >= '0' && *s <= '9') {
-			v = v * 10 + (*s - '0');
-			s++;
-			digits++;
-			if (digits > 3 || v > 255) return false;
-		}
-
-		octets[i] = v;
-
-	}
-
-	if (*s != '\0') return false;	// trailing garbage
-
-	*out = (octets[0] << 24) | (octets[1] << 16) | (octets[2] << 8) | octets[3];
-	return true;
-
-}
+// hostname/IP resolution for tget/tput above now goes through
+// sw/common/zdns.h's z_resolve_host() -- used to be a private
+// parse_ipv4() copy here (IP-only, no hostname support), duplicated
+// from sw/apps/repl/repl.c's own copy purely because there was
+// nowhere shared both build contexts (this kernel build vs. a normal
+// app) could reach -- zdns.c's dual-build trick (same one
+// sw/common/zstream.c already used, see zdns.c's own header comment)
+// finally gave both a real shared home, so both copies were deleted.
 
 void sh_help(void) {
 
@@ -721,8 +691,8 @@ void sh_help(void) {
 	printf(" hd <addr>         hex dump memory\n");
 	printf(" xa <addr>         receive to addr via xfer\n");
 	printf(" xf <file>         receive to file via xfer\n");
-	printf(" tget <ip> <remote-file> [local-file]  fetch a file via tftp (needs `run net`)\n");
-	printf(" tput <ip> <local-file> [remote-file]  send a file via tftp (needs `run net`)\n");
+	printf(" tget <ip-or-host> <remote-file> [local-file]  fetch a file via tftp (needs `run net`)\n");
+	printf(" tput <ip-or-host> <local-file> [remote-file]  send a file via tftp (needs `run net`)\n");
 	printf(" run <file>        create a new process\n");
 	printf(" init               reserve pid 1, start net as pid 2 (no wm needed)\n");
 	printf(" kill <pid>        kill a process\n");

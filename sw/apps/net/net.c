@@ -1,5 +1,5 @@
 /*
- * net -- ARP + ICMP echo (ping) + TFTP client + TCP/telnet client
+ * net -- ARP + ICMP echo (ping) + TFTP client + TCP/telnet client + DNS client
  *
  * Phases 1-4 of the staged plan in docs/networking.md: SPI/chip
  * bring-up, ARP, IP + ICMP echo reply, UDP + TFTP -- all confirmed
@@ -14,18 +14,43 @@
  * TCP (tcp.c/h) + a minimal telnet client (telnet.c/h) sit alongside
  * TFTP -- net acts as a zport provider (sw/common/zport.h,
  * docs/ports.md) for a single telnet session, reached by `repl`'s
- * `telnet <ip>` command via `term`'s Z_TERM_SET_PORT (sw/common/
- * zterm.h). See this file's own "telnet:" section below for the
- * message flow, and tcp.h/telnet.h for what's simplified relative to
- * a general-purpose TCP/telnet implementation (one connection at a
- * time, stop-and-wait sending, no out-of-order reassembly).
+ * `telnet <ip-or-hostname>` command via `term`'s Z_TERM_SET_PORT
+ * (sw/common/zterm.h). See this file's own "telnet:" section below
+ * for the message flow, and tcp.h/telnet.h for what's simplified
+ * relative to a general-purpose TCP/telnet implementation (one
+ * connection at a time, stop-and-wait sending, no out-of-order
+ * reassembly).
  *
- * IP config is static (see docs/networking.md for why). The netmask
- * and gateway below are ASSUMED (a typical home-router /24 with
- * gateway at .1) -- only the IP address (192.168.178.230) was
- * actually specified. Correct if wrong; for same-subnet traffic it
- * won't matter, since the gateway is only consulted for destinations
- * outside the local subnet.
+ * DNS (dns.c/h) resolves hostnames to the IPs everything else in this
+ * file actually needs -- A records only, one resolution at a time,
+ * exposed to other processes via Z_NET_DNS_RESOLVE/_REPLY (znet.h).
+ * Most callers don't send those directly: sw/common/zdns.h's
+ * z_resolve_host() (used by repl's `telnet` command, the primary
+ * caller this was built for) wraps parsing a plain dotted-quad IP
+ * and falling back to an actual DNS query into one call. See dns.c's
+ * own header comment for scope cuts (no CNAME following, no caching)
+ * and docs/networking.md's "DNS client" section for where the
+ * nameserver itself comes from (DHCP by default, or the
+ * NET_STATIC_DNS build-time override).
+ *
+ * IP config: DHCP by default (sw/apps/net/dhcp.c -- DISCOVER/OFFER/
+ * REQUEST/ACK, run once at startup, no renewal -- see that file's own
+ * header comment for the full design and why it's scoped that way),
+ * falling back to the static config below (OUR_IP/OUR_NETMASK/
+ * OUR_GATEWAY, themselves just this file's names for the Makefile's
+ * NET_STATIC_IP/NETMASK/GATEWAY) if no DHCP server answers within
+ * dhcp_acquire()'s retry budget. Build with `make NET_DHCP=0` to skip
+ * DHCP entirely and always use the static config instead -- e.g. for
+ * a network with no DHCP server, or any setup that wants a fixed
+ * address regardless of what a server might offer. Either way, set
+ * NET_STATIC_IP/NET_STATIC_NETMASK/NET_STATIC_GATEWAY (dotted-quad or
+ * hex, see the Makefile) to override the static values themselves --
+ * they default to the ASSUMED-typical config this file always used
+ * before DHCP existed (a home-router /24 with gateway at .1; only the
+ * IP address, 192.168.178.230, was ever actually specified for it --
+ * see docs/networking.md's "Config" section). For same-subnet traffic
+ * the gateway's exact value won't matter either way, since it's only
+ * consulted for destinations outside the local subnet.
  *
  * On startup, checks rtl/csrs.v's capability CSR (sw/common/zsoc.h,
  * docs/csrs.md) to confirm THIS board's build actually has the
@@ -61,6 +86,8 @@
 #include "eth.h"
 #include "arp.h"
 #include "ip.h"
+#include "dhcp.h"
+#include "dns.h"
 #include "tftp.h"
 #include "tcp.h"
 #include "telnet.h"
@@ -70,9 +97,53 @@
 // with real vendor-assigned addresses)
 static const uint8_t our_mac[6] = { 0x02, 0x00, 0x00, 0x00, 0x00, 0x01 };
 
-#define OUR_IP       0xC0A8B2E6u	// 192.168.178.230
-#define OUR_NETMASK  0xFFFFFF00u	// /24 -- ASSUMED, see file header comment
-#define OUR_GATEWAY  0xC0A8B201u	// 192.168.178.1 -- ASSUMED, see file header comment
+// NET_DHCP and NET_STATIC_IP/NETMASK/GATEWAY/DNS are set by
+// sw/apps/net/Makefile (NET_DHCP ?= 1, NET_STATIC_* default to
+// 192.168.178.230/24 gw .1 dns none) -- see that Makefile's own
+// comment. #ifndef fallbacks here are just so this file still
+// compiles standalone (e.g. a syntax-check invocation of gcc without
+// the Makefile's -D flags); the Makefile always defines all five for
+// a real build, so these defaults normally never matter in practice.
+#ifndef NET_DHCP
+#define NET_DHCP 1
+#endif
+#ifndef NET_STATIC_IP
+#define NET_STATIC_IP       0xC0A8B2E6u	// 192.168.178.230
+#endif
+#ifndef NET_STATIC_NETMASK
+#define NET_STATIC_NETMASK  0xFFFFFF00u	// 255.255.255.0
+#endif
+#ifndef NET_STATIC_GATEWAY
+#define NET_STATIC_GATEWAY  0xC0A8B201u	// 192.168.178.1
+#endif
+#ifndef NET_STATIC_DNS
+#define NET_STATIC_DNS      0x00000000u	// none -- see "Config" below
+#endif
+
+// kept as the OUR_* names below since every existing comment/message
+// in this file already refers to them that way -- NET_STATIC_* is
+// just the Makefile-facing spelling of the exact same three values.
+// With NET_DHCP=1 (the default) these are only the FALLBACK, used if
+// no DHCP server answers dhcp_acquire()'s retries -- ASSUMED-typical
+// values (a home-router /24, gateway at .1), not necessarily right
+// for your network; see docs/networking.md's "Config" section. With
+// NET_DHCP=0 these are used unconditionally instead -- set them via
+// `make NET_STATIC_IP=... NET_STATIC_NETMASK=... NET_STATIC_GATEWAY=...`
+// (dotted-quad or hex, either works -- see the Makefile).
+#define OUR_IP       NET_STATIC_IP
+#define OUR_NETMASK  NET_STATIC_NETMASK
+#define OUR_GATEWAY  NET_STATIC_GATEWAY
+
+// unlike OUR_IP/NETMASK/GATEWAY above, NET_STATIC_DNS is NOT a
+// DHCP-failure fallback -- it's a standing manual override, checked
+// AFTER dhcp_acquire() regardless of whether DHCP itself succeeded or
+// even ran at all (NET_DHCP=0). Left as 0 (the default), whatever
+// nameserver DHCP handed back (option 6) is used as-is, including
+// "none" if DHCP didn't offer one or wasn't run. Set explicitly, it
+// always wins over whatever DHCP said -- see this file's main() and
+// docs/networking.md's "Config"/"DNS client" sections for the full
+// reasoning on why DNS gets this different-from-IP/gateway treatment.
+#define OUR_DNS      NET_STATIC_DNS
 
 static bool transfer_active = false;
 
@@ -328,6 +399,24 @@ static void handle_telnet_port_close(const z_msg_t *msg) {
 
 }
 
+// a Z_NET_DNS_RESOLVE always carries a Z_STR (the hostname) --
+// dns_resolve_start() (dns.c) handles every outcome itself, including
+// replying directly to msg->from/msg->tag on failure, so there's
+// nothing left for net.c to do here beyond basic payload validation.
+static void handle_dns_resolve(const z_msg_t *msg) {
+
+	if (msg->obj.type != Z_STR || !msg->obj.val.str) {
+		z_obj_t reply = z_obj_map(2);
+		z_map_set(&reply, "ok", z_obj_uint32(0));
+		z_map_set(&reply, "error", z_obj_str("dns: bad request (expected a hostname string)"));
+		z_msg_new_send(msg->from, Z_NET_DNS_RESOLVE_REPLY, msg->tag, reply);
+		return;
+	}
+
+	dns_resolve_start(msg->obj.val.str, msg->from, msg->tag);
+
+}
+
 static void check_tftp_progress(void) {
 
 	if (!transfer_active) return;
@@ -406,9 +495,51 @@ int main(void) {
 		our_mac[0], our_mac[1], our_mac[2], our_mac[3], our_mac[4], our_mac[5]);
 
 	eth_init(our_mac);
-	arp_init(OUR_IP);
-	ip_init(OUR_IP, OUR_NETMASK, OUR_GATEWAY);
-	tcp_init(OUR_IP);
+
+	// arp/ip/tcp all need to start out at "no address yet" (0) for
+	// dhcp_acquire() to run at all -- see ip_handle()'s own comment
+	// in ip.c and dhcp.c's header comment for why. Re-initialized
+	// just below with whichever address actually wins (DHCP's lease,
+	// or the static fallback), before anything past this point could
+	// possibly care what our_ip is.
+	arp_init(0);
+	ip_init(0, 0, 0);
+	tcp_init(0);
+
+	uint32_t use_ip, use_netmask, use_gateway, use_dns = 0;
+
+#if NET_DHCP
+	if (dhcp_acquire(our_mac, &use_ip, &use_netmask, &use_gateway, &use_dns)) {
+		printf("net: using dhcp-assigned address\n");
+	} else {
+		printf("net: dhcp unavailable, falling back to static "
+			"config (see this file's header comment)\n");
+		use_ip = OUR_IP;
+		use_netmask = OUR_NETMASK;
+		use_gateway = OUR_GATEWAY;
+	}
+#else
+	// DHCP compiled out entirely (`make NET_DHCP=0`) -- not even
+	// attempted, straight to the static config. dhcp.o itself isn't
+	// even linked in this case (see the Makefile's DHCP_OBJ), so
+	// there's no dhcp_acquire() to call here at all.
+	printf("net: dhcp disabled at build time (NET_DHCP=0), using "
+		"static config\n");
+	use_ip = OUR_IP;
+	use_netmask = OUR_NETMASK;
+	use_gateway = OUR_GATEWAY;
+#endif
+
+	// NET_STATIC_DNS is a standing override, not a DHCP-failure
+	// fallback -- see this file's own comment on OUR_DNS above. If
+	// it's unset (0), whatever DHCP provided (possibly also 0, i.e.
+	// none) is used as-is.
+	if (OUR_DNS) use_dns = OUR_DNS;
+	dns_set_nameserver(use_dns);
+
+	arp_init(use_ip);
+	ip_init(use_ip, use_netmask, use_gateway);
+	tcp_init(use_ip);
 
 	// registers as "net0" (see sw/os/pidreg.h) -- callers can now
 	// reach net by name instead of only the fixed Z_PID_NET constant
@@ -423,7 +554,11 @@ int main(void) {
 	else
 		printf("net: name registration failed (still usable via fixed pid)\n");
 
-	printf("net: ip 192.168.178.230/24, listening (arp + icmp echo + tftp + telnet)\n");
+	printf("net: ip ");
+	print_ip(use_ip);
+	printf("/");
+	print_ip(use_netmask);
+	printf(", listening (arp + icmp echo + tftp + telnet + dns)\n");
 
 	while (1) {
 
@@ -440,6 +575,7 @@ int main(void) {
 		while (z_msg_read(&msg) == Z_OK) {
 			if (msg.subject == Z_STREAM_OPEN) handle_stream_open(&msg);
 			else if (msg.subject == Z_NET_TFTP_PUT) handle_tftp_put_request(&msg);
+			else if (msg.subject == Z_NET_DNS_RESOLVE) handle_dns_resolve(&msg);
 			else if (msg.subject == Z_PORT_CONNECT) handle_telnet_port_connect(&msg);
 			else if (msg.subject == Z_PORT_DATA) handle_telnet_port_data(&msg);
 			else if (msg.subject == Z_PORT_CLOSE) handle_telnet_port_close(&msg);
@@ -449,6 +585,7 @@ int main(void) {
 		check_tftp_progress();
 		tcp_poll();
 		telnet_poll();
+		dns_poll();
 
 		for (volatile int i = 0; i < 500; i++) ; // light throttle
 

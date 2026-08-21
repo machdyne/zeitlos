@@ -21,7 +21,53 @@ else
 PHY_OBJ = enc28j60.o
 endif
 
-OBJS = zeitlos.o zobj.o zstream.o zport.o $(PHY_OBJ) eth.o arp.o ip.o udp.o tcp.o telnet.o tftp.o net.o
+# DHCP (dhcp.c) on by default; set NET_DHCP=0 to disable it entirely
+# and always use the static NET_STATIC_* config below -- e.g. for a
+# board with no DHCP server on its network, or any setup where a
+# fixed address is wanted regardless of what a server might offer.
+# With DHCP left on (the default), NET_STATIC_* is still meaningful:
+# it's the fallback net.c uses if no DHCP server answers within
+# dhcp_acquire()'s retry budget (see dhcp.c/docs/networking.md) --
+# same three values, two different roles depending on NET_DHCP.
+NET_DHCP ?= 1
+CFLAGS += -DNET_DHCP=$(NET_DHCP)
+
+# accepted either as a dotted quad ("192.168.1.50") or already as a
+# 0x-prefixed hex literal ("0xC0A80132") -- either way, converted here
+# to a single hex constant (one byte per octet) since that's what a
+# C -D define actually needs to end up as.
+NET_STATIC_IP      ?= 192.168.178.230
+NET_STATIC_NETMASK ?= 255.255.255.0
+NET_STATIC_GATEWAY ?= 192.168.178.1
+
+# nameserver override -- 0.0.0.0 (the default) means "no override,
+# just use whatever DHCP provides (option 6), or none at all if DHCP
+# is off/doesn't provide one" -- see net.c's own OUR_DNS comment and
+# docs/networking.md's "DNS client" section. Unlike NET_STATIC_IP/
+# NETMASK/GATEWAY above, this is NOT a DHCP-failure fallback: if set,
+# it always wins over whatever DHCP said, even on a successful lease.
+NET_STATIC_DNS     ?= 0.0.0.0
+
+dottedquad_to_hex = $(shell printf '%s' "$(1)" | grep -qE '^0[xX]' && \
+	printf '%s' "$(1)" || \
+	printf '0x%02X%02X%02X%02X' $$(printf '%s' "$(1)" | tr '.' ' '))
+
+CFLAGS += -DNET_STATIC_IP=$(call dottedquad_to_hex,$(NET_STATIC_IP))
+CFLAGS += -DNET_STATIC_NETMASK=$(call dottedquad_to_hex,$(NET_STATIC_NETMASK))
+CFLAGS += -DNET_STATIC_GATEWAY=$(call dottedquad_to_hex,$(NET_STATIC_GATEWAY))
+CFLAGS += -DNET_STATIC_DNS=$(call dottedquad_to_hex,$(NET_STATIC_DNS))
+
+ifeq ($(NET_DHCP), 1)
+DHCP_OBJ = dhcp.o
+else
+DHCP_OBJ =
+endif
+
+# dns.c (sw/apps/net/dns.c) is always built in, independent of
+# NET_DHCP -- it only needs SOME nameserver configured (DHCP-provided
+# or NET_STATIC_DNS), not DHCP itself, so unlike dhcp.o there's no
+# "off" switch for it tied to NET_DHCP.
+OBJS = zeitlos.o zobj.o zstream.o zport.o $(PHY_OBJ) eth.o arp.o ip.o udp.o $(DHCP_OBJ) dns.o tcp.o telnet.o tftp.o net.o
 
 net: net.elf net.bin
 
@@ -44,12 +90,26 @@ net: net.elf net.bin
 # recipe itself only rewrites the file, bumping its mtime, if the
 # value differs from last time), and every NET_PHY-sensitive object
 # depends on it.
+#
+# NET_DHCP/NET_STATIC_* are the same class of bug again, third time:
+# they only affect net.c's CFLAGS (and, for NET_DHCP=0, which objects
+# get linked at all), not net.c's own file content, so switching e.g.
+# `make NET_DHCP=0` after a previous `make NET_DHCP=1` build wouldn't
+# otherwise trigger a rebuild of the stale net.o. .net_config_selected
+# follows the exact same pattern as .net_phy_selected, just tracking
+# a different set of values (now including NET_STATIC_DNS too).
 
 FORCE:
 
 .net_phy_selected: FORCE
 	@if [ ! -f $@ ] || [ "$$(cat $@ 2>/dev/null)" != "$(NET_PHY)" ]; then \
 		echo "$(NET_PHY)" > $@; \
+	fi
+
+.net_config_selected: FORCE
+	@cur="$(NET_DHCP) $(NET_STATIC_IP) $(NET_STATIC_NETMASK) $(NET_STATIC_GATEWAY) $(NET_STATIC_DNS)"; \
+	if [ ! -f $@ ] || [ "$$(cat $@ 2>/dev/null)" != "$$cur" ]; then \
+		echo "$$cur" > $@; \
 	fi
 
 zeitlos.o: ../../common/zeitlos.c ../../common/zeitlos.h
@@ -82,6 +142,12 @@ ip.o: ip.c ip.h
 udp.o: udp.c udp.h
 	$(CC) $(CFLAGS) -c udp.c -o udp.o
 
+dhcp.o: dhcp.c dhcp.h udp.h ip.h eth.h
+	$(CC) $(CFLAGS) -c dhcp.c -o dhcp.o
+
+dns.o: dns.c dns.h udp.h ../../common/znet.h
+	$(CC) $(CFLAGS) -c dns.c -o dns.o
+
 tcp.o: tcp.c tcp.h
 	$(CC) $(CFLAGS) -c tcp.c -o tcp.o
 
@@ -91,7 +157,7 @@ telnet.o: telnet.c telnet.h tcp.h
 tftp.o: tftp.c tftp.h
 	$(CC) $(CFLAGS) -c tftp.c -o tftp.o
 
-net.o: net.c net_phy.h .net_phy_selected ../../common/zsoc.h
+net.o: net.c net_phy.h .net_phy_selected .net_config_selected ../../common/zsoc.h dhcp.h dns.h
 	$(CC) $(CFLAGS) -c net.c -o net.o
 	$(CC) $(CFLAGS) -c net.c -S -o net.asm
 
@@ -105,6 +171,6 @@ net.bin: net.elf
 	$(PREFIX)objcopy -O binary --pad-to=$$END net.elf net.bin
 
 clean:
-	rm -f net.elf net.bin net.asm net.dasm net.map *.o *.d .net_phy_selected
+	rm -f net.elf net.bin net.asm net.dasm net.map *.o *.d .net_phy_selected .net_config_selected
 
 .PHONY: net clean FORCE

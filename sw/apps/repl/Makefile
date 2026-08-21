@@ -34,7 +34,7 @@ MS_SIZE_CFLAGS = -DMS_HEAP_SIZE=$(MS_HEAP_SIZE) \
 MS_CFLAGS = -DLIX -DMS_STATIC_HEAP $(MS_SIZE_CFLAGS) \
 	-I$(MS_PLATFORM_DIR) -I.
 
-OBJS = zeitlos.o zobj.o zport.o zline.o zrepl.o ms.o repl.o
+OBJS = zeitlos.o zobj.o zport.o zline.o zrepl.o zdns.o ms.o repl.o
 
 repl: repl.elf repl.bin
 
@@ -52,6 +52,9 @@ zline.o:
 
 zrepl.o:
 	$(CC) $(CFLAGS) -c ../../common/zrepl.c -o zrepl.o
+
+zdns.o:
+	$(CC) $(CFLAGS) -c ../../common/zdns.c -o zdns.o
 
 # regenerated whenever the submodule's stdlib source is newer than the
 # last build's header -- see gen_ms_stdlib.py's own header comment for

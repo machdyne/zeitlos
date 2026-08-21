@@ -145,6 +145,19 @@ bool ip_send(uint32_t dst_ip, uint8_t protocol, const uint8_t *payload, uint16_t
 
 	for (uint16_t i = 0; i < len; i++) pkt[IP_HDR_LEN + i] = payload[i];
 
+	// limited broadcast (255.255.255.255) never goes through ARP --
+	// it's not a real host to resolve, and there may not even BE an
+	// ARP-resolvable next hop yet (this is exactly the situation
+	// dhcp.c's DISCOVER/REQUEST are sent in: our_ip is still 0.0.0.0,
+	// there's no gateway to speak of, and the whole point of the
+	// packet is reaching a server we can't already address any other
+	// way). Goes straight to the link-layer broadcast address instead.
+	if (dst_ip == 0xFFFFFFFFu) {
+		static const uint8_t bcast_mac[6] =
+			{ 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+		return eth_send(bcast_mac, ETHERTYPE_IPV4, pkt, total_len);
+	}
+
 	uint32_t next_hop = ip_is_local(dst_ip) ? dst_ip : our_gateway;
 
 	uint8_t dst_mac[6];
@@ -214,8 +227,25 @@ void ip_handle(const uint8_t src_mac[6], const uint8_t *p, uint16_t len) {
 		((uint32_t)p[18] << 8) | p[19];
 
 	// accept unicast addressed to us, or full broadcast -- not
-	// attempting subnet-broadcast or multicast handling yet
-	if (dst_ip != our_ip && dst_ip != 0xFFFFFFFFu) return;
+	// attempting subnet-broadcast or multicast handling yet.
+	//
+	// Exception: while we have no address yet (our_ip == 0.0.0.0,
+	// true only during dhcp.c's own DISCOVER/REQUEST exchange at
+	// startup, before ip_init() is called again with a real address
+	// -- see net.c's main()), accept anything. This is what makes a
+	// DHCPOFFER/DHCPACK actually reachable at all: some servers honor
+	// the client's broadcast flag (dhcp.c always sets it) and reply
+	// to 255.255.255.255, which the check above already lets through
+	// regardless -- but others unicast straight to the still-being-
+	// offered address instead (valid per RFC 2131, and common in
+	// practice: the server already knows our MAC from the request's
+	// chaddr field, so it doesn't need ARP either), which is a dst_ip
+	// we have no way to pre-validate against anything meaningful yet.
+	// Harmless to relax here specifically: this only widens what
+	// reaches udp_handle()'s dst-port dispatch during the brief
+	// bootstrap window, and dhcp.c's own xid check (dhcp.c) rejects
+	// anything that isn't actually a reply to our own request.
+	if (dst_ip != our_ip && dst_ip != 0xFFFFFFFFu && our_ip != 0) return;
 
 	const uint8_t *payload = p + ihl;
 	uint16_t paylen = total_len - ihl;

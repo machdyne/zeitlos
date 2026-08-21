@@ -32,6 +32,11 @@
  * which is the actual data channel. The requester needs to be ready
  * to act as a zstream producer (respond to net's Z_STREAM_OPEN)
  * essentially as soon as it sends this.
+ *
+ * DNS: a single request/reply pair, Z_NET_DNS_RESOLVE /
+ * _RESOLVE_REPLY below -- see their own comments, and
+ * sw/common/zdns.h for the blocking wrapper most callers should use
+ * instead of sending these directly.
  */
 
 // the networking app's well-known pid, same convention as Z_PID_WM
@@ -57,5 +62,32 @@
 // when the requester finishes producing chunks (those two can finish
 // at different times).
 #define Z_NET_TFTP_PUT_REPLY   303
+
+// requester -> net: Z_STR (the hostname to resolve, e.g.
+// "example.com"). net.c dispatches this to sw/apps/net/dns.c's
+// dns_resolve_start(), which sends the actual DNS query (RFC 1035, A
+// records only) to whichever nameserver is configured (DHCP-provided
+// by default, or the NET_STATIC_DNS build-time override -- see
+// docs/networking.md's "DNS client" section and dns.c's own header
+// comment). One resolution in flight at a time, same "one X at a
+// time" simplification as everything else in this app (TFTP's one
+// transfer, TCP's one connection) -- a request that arrives while
+// one is already pending gets an immediate "busy" error reply rather
+// than being queued.
+//
+// Most callers don't need to send this directly: sw/common/zdns.h's
+// z_dns_resolve()/z_resolve_host() wrap the send-and-wait-for-reply
+// round trip below into a single blocking call, the same way
+// zstream.h's blocking API wraps Z_STREAM_*'s own request/reply
+// shape. Written directly here mainly for net.c/dns.c's own
+// documentation purposes.
+#define Z_NET_DNS_RESOLVE        304
+
+// net -> requester, reply to Z_NET_DNS_RESOLVE (same tag): Z_MAP with
+// "ok" (Z_UINT32, 0 or 1). If ok, "ip" (Z_UINT32) holds the resolved
+// address. If not ok, "error" (Z_STR) holds a short reason (no
+// nameserver configured, NXDOMAIN/no A record, timeout, busy with
+// another resolution, etc).
+#define Z_NET_DNS_RESOLVE_REPLY  305
 
 #endif

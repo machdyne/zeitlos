@@ -62,49 +62,17 @@
 #include "../../common/zline.h"
 #include "../../common/zrepl.h"
 #include "../../common/zterm.h"
+#include "../../common/zdns.h"
 #include "ms_api.h"
 
-// parses a dotted-quad IPv4 address ("a.b.c.d") into a packed
-// uint32_t, for the "telnet <ip>" command below. Same logic as
-// sw/os/sh.c's own parse_ipv4() (used there for tget/tput) -- not
-// shared code, since sh.c runs in the kernel build (see
-// docs/networking.md's "init: running net without wm" for why that
-// build can't just link an app-facing header) and this app has no
-// other reason to depend on anything sh.c-specific. Small enough that
-// duplicating it here is simpler than inventing a shared location for
-// one function two very different build contexts both want.
-static bool parse_ipv4(const char *s, uint32_t *out) {
-
-	uint32_t octets[4];
-
-	for (int i = 0; i < 4; i++) {
-
-		if (i > 0) {
-			if (*s != '.') return false;
-			s++;
-		}
-
-		if (*s < '0' || *s > '9') return false;
-
-		uint32_t v = 0;
-		int digits = 0;
-		while (*s >= '0' && *s <= '9') {
-			v = v * 10 + (*s - '0');
-			s++;
-			digits++;
-			if (digits > 3 || v > 255) return false;
-		}
-
-		octets[i] = v;
-
-	}
-
-	if (*s != '\0') return false;	// trailing garbage
-
-	*out = (octets[0] << 24) | (octets[1] << 16) | (octets[2] << 8) | octets[3];
-	return true;
-
-}
+// hostname/IP resolution for the "telnet <ip-or-hostname>" command
+// below now goes through sw/common/zdns.h's z_resolve_host() -- see
+// its own header comment. Used to be a private parse_ipv4() copy
+// here (IP-only, no hostname support), duplicated from sw/os/sh.c's
+// own copy purely because there was nowhere shared both build
+// contexts (this app vs. the kernel) could reach -- zdns.c's
+// dual-build trick (same one sw/common/zstream.c already used)
+// finally gave both a real shared home, so both copies were deleted.
 
 // how many simultaneous port connections (i.e. `term` windows) this
 // instance will accept -- small on purpose for phase 1, matching
@@ -237,7 +205,7 @@ static bool dispatch_line(const char *line, char *out, uint32_t out_cap,
 	if (!strcmp(line, "help")) {
 		snprintf(out, out_cap,
 			"commands: help, ping, uptime, echo <text>, free, "
-			"port <name>, telnet <ip>, quit\r\n"
+			"port <name>, telnet <ip-or-host>, quit\r\n"
 			"anything else is evaluated as Scheme, e.g. (+ 1 2)");
 		return false;
 	}
@@ -387,7 +355,8 @@ static bool dispatch_line(const char *line, char *out, uint32_t out_cap,
 
 		if (*target == 0) {
 			snprintf(out, out_cap,
-				"usage: telnet <ip>  (e.g. telnet 192.168.178.100)");
+				"usage: telnet <ip-or-hostname>  (e.g. telnet 192.168.178.100, "
+				"telnet myserver.local)");
 			return false;
 		}
 
@@ -401,9 +370,28 @@ static bool dispatch_line(const char *line, char *out, uint32_t out_cap,
 			return false;
 		}
 
+		// z_resolve_host() (sw/common/zdns.h) tries a plain dotted-
+		// quad parse first (instant, no messaging) and only falls
+		// back to an actual DNS query -- via `net`'s dns.c, see
+		// znet.h's Z_NET_DNS_RESOLVE -- if that fails. That fallback
+		// blocks this call for up to a few seconds in the worst case
+		// (no response/net not running/genuine NXDOMAIN) -- see
+		// z_dns_resolve()'s own header comment. Worth knowing here
+		// specifically: repl's own main loop (below) services EVERY
+		// connected port/REPL_EVAL request from one shared mailbox,
+		// so a slow hostname lookup from one `term` window stalls
+		// repl's response to every OTHER connected window too, not
+		// just this one, for as long as it blocks. Bounded and rare
+		// in practice (a real nameserver on a local network answers
+		// in single-digit milliseconds, and a literal IP never
+		// touches this path at all), but a real cost, not a
+		// theoretical one -- worth revisiting with a real
+		// non-blocking resolve-then-connect flow if it ever proves
+		// to matter with several people using `term` at once.
 		uint32_t ip;
-		if (!parse_ipv4(target, &ip)) {
-			snprintf(out, out_cap, "telnet: bad IP address '%s'", target);
+		char err[64];
+		if (!z_resolve_host(target, &ip, err, sizeof(err))) {
+			snprintf(out, out_cap, "telnet: %s", err);
 			return false;
 		}
 
@@ -434,16 +422,24 @@ static bool dispatch_line(const char *line, char *out, uint32_t out_cap,
 		z_map_set(&arg, "arg", z_obj_uint32(ip));
 		z_msg_new_send(requester_pid, Z_TERM_SET_PORT, 0, arg);
 
+		// shows the resolved address alongside whatever was typed --
+		// makes it obvious when `target` was a hostname (as opposed
+		// to already being the IP itself, where this is redundant but
+		// harmless) which actual address the connection is using.
 		snprintf(out, out_cap,
-			"connecting to %s -- disconnecting now (F12 returns to repl)",
-			target);
+			"connecting to %s (%ld.%ld.%ld.%ld) -- disconnecting now "
+			"(F12 returns to repl)",
+			target,
+			(long)((ip >> 24) & 0xFF), (long)((ip >> 16) & 0xFF),
+			(long)((ip >> 8) & 0xFF), (long)(ip & 0xFF));
 		return true;
 
 	}
 
 	if (!strcmp(line, "telnet")) {
 		snprintf(out, out_cap,
-			"usage: telnet <ip>  (e.g. telnet 192.168.178.100)");
+			"usage: telnet <ip-or-hostname>  (e.g. telnet 192.168.178.100, "
+			"telnet myserver.local)");
 		return false;
 	}
 

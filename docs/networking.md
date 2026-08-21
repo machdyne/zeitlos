@@ -13,8 +13,8 @@ if that precedent isn't already familiar.
 A second hardware backend now exists alongside it: an in-fabric RMII
 Ethernet MAC (`rtl/ethmac_rmii.v`) for `mozart_ml1`, which has an RMII
 PHY (LAN8720A) but no SPI Ethernet PMOD. See "Second backend: RMII
-(mozart_ml1)" below -- everything above `eth.c` (ARP/IP/UDP/TFTP) is
-identical either way; only the driver underneath it differs, and
+(mozart_ml1)" below -- everything above `eth.c` (ARP/IP/UDP/DNS/TFTP)
+is identical either way; only the driver underneath it differs, and
 which one gets built in is a compile-time choice, not a runtime one.
 
 **Current status: ARP + ICMP echo (ping) + TFTP client, all confirmed
@@ -24,7 +24,13 @@ and PUT, streaming, no file size limit) have all been confirmed
 against real hardware and a real TFTP server -- see "Confirmed
 working" sections below. **The RMII backend has NOT yet been tried on
 real hardware** -- see its own section for what has and hasn't been
-verified.
+verified. **DHCP (`dhcp.c`) and DNS (`dns.c`) are also written but not
+yet confirmed** against a real server or real hardware -- see "DHCP
+client"/"DNS client" below; `net` falls back to its previous static IP
+config automatically if DHCP doesn't work out (and hostname resolution
+simply isn't available, with a clear error, if no nameserver is
+configured), so neither of these puts the rest of the confirmed stack
+at risk.
 
 See `docs/app_runtime.md` for `maskirq()` (used throughout
 `enc28j60.c` to protect SPI bit-bang transactions from interrupt
@@ -317,16 +323,61 @@ streaming" below.
 
 ## Config
 
-- **IP**: static, `192.168.178.230` (no DHCP client -- out of scope
-  for a dev-loop tool). **Netmask and gateway are assumed, not
-  confirmed** -- only the IP address itself was specified. `net.c`
-  assumes a typical home-router `/24` (`255.255.255.0`) with the
-  gateway at `.1` (`192.168.178.1`). This only matters for traffic to
-  destinations outside the local subnet -- `ping`/`tget`/`tput`
-  to/from a machine on the same `192.168.178.0/24` network don't
-  depend on the gateway being correct. Correct the constants in
-  `net.c` (`OUR_NETMASK`/`OUR_GATEWAY`) if this assumption is wrong
-  for your network.
+- **IP**: DHCP by default (`sw/apps/net/dhcp.c`), falling back to a
+  static address if no DHCP server answers -- see "DHCP client" below
+  for the full design. **Both DHCP itself, and the static values used
+  either as its fallback or unconditionally, are build-time choices**
+  (`sw/apps/net/Makefile`), the same "compile-time, not runtime"
+  reasoning `NET_PHY` already uses (see `net_phy.h`'s own comment) --
+  there's no persistent config store or way to pass arguments to an
+  app in this OS yet (see `sh.c`'s `run`), so a Makefile variable is
+  the natural place for this, consistent with how the backend driver
+  itself is already selected:
+
+  ```
+  make                        # DHCP on (default), static fallback = 192.168.178.230/24 gw .1
+  make NET_DHCP=0              # DHCP off entirely -- always use the static config below
+  make NET_STATIC_IP=10.0.0.42 NET_STATIC_NETMASK=255.255.255.0 NET_STATIC_GATEWAY=10.0.0.1
+                                # override the static values -- accepted as dotted-quad or
+                                # 0x-prefixed hex, either works (see the Makefile);
+                                # meaningful as the DHCP fallback (NET_DHCP=1, the default)
+                                # or as the address used outright (NET_DHCP=0)
+  ```
+
+  With DHCP on and answering, the static values above are never used
+  at all -- they only matter once DHCP is off, or fails. **The
+  defaults for those values are still ASSUMED, not confirmed** -- only
+  the IP address (`192.168.178.230`) was ever actually specified for
+  them, back when this was the only option; `net.c` assumes a typical
+  home-router `/24` (`255.255.255.0`) with the gateway at `.1`
+  (`192.168.178.1`). This only matters for traffic to destinations
+  outside the local subnet -- `ping`/`tget`/`tput` to/from a machine
+  on the same subnet don't depend on the gateway being correct.
+  Override `NET_STATIC_GATEWAY`/`NET_STATIC_NETMASK` above if this
+  assumption is wrong for your network and you're relying on the
+  static config (`NET_DHCP=0`) or its fallback role.
+- **DNS (nameserver)**: DHCP-provided by default (option 6, parsed by
+  `dhcp.c` alongside the IP/netmask/gateway/lease options it already
+  reads), with a build-time override, `NET_STATIC_DNS` -- see "DNS
+  client" below for the full design and why this one's override
+  semantics differ from `NET_STATIC_IP`/`NETMASK`/`GATEWAY` above (a
+  standing override that always wins, not merely a DHCP-failure
+  fallback):
+
+  ```
+  make                              # DHCP on: uses whatever nameserver DHCP hands back, if any
+  make NET_STATIC_DNS=1.1.1.1        # always use this nameserver, regardless of what DHCP says
+  make NET_DHCP=0 NET_STATIC_DNS=1.1.1.1
+                                      # DHCP off entirely, still resolve hostnames via this nameserver
+  ```
+
+  With neither DHCP nor `NET_STATIC_DNS` providing a nameserver (e.g.
+  `NET_DHCP=0` and no override set), hostname resolution simply isn't
+  available -- `z_dns_resolve()`/`z_resolve_host()` (`sw/common/
+  zdns.h`) return a clear "no nameserver configured" error rather than
+  hanging or silently failing. Plain dotted-quad IPs (`telnet
+  192.168.1.1`, `tget 192.168.1.1 ...`) always work regardless, since
+  they never need a nameserver at all.
 - **MAC**: `02:00:00:00:00:01`, hardcoded in `sw/apps/net/net.c`.
   Neither backend has a factory-assigned address (the ENC28J60 has
   none at all; `rtl/ethmac_rmii.v` has no address-filter register to
@@ -434,6 +485,22 @@ things that happen to both involve the word "duplex".)
   used"), and IP-level checksums already cover header corruption.
   Deliberate simplicity, revisit if this ever runs over a link less
   trustworthy than a local dev network.
+- `sw/apps/net/dhcp.c/h` -- a DHCP (RFC 2131/2132) client:
+  DISCOVER/OFFER/REQUEST/ACK, run once at startup ahead of everything
+  else in this list (`net.c`'s `main()` calls `dhcp_acquire()` right
+  after `eth_init()`, before `arp_init()`/`ip_init()`/`tcp_init()` are
+  called with a real address). See "DHCP client" below for the full
+  design, including why -- unlike everything else on this list -- it
+  blocks with a bounded timeout instead of folding into `net.c`'s own
+  non-blocking main-loop poll.
+- `sw/apps/net/dns.c/h` -- a DNS (RFC 1035) client: A-record lookups
+  only, **one resolution at a time**, non-blocking/poll-driven like
+  `arp.c`/`tftp.c`/`tcp.c` (unlike `dhcp.c` just above -- see "DNS
+  client" below for why the two differ here). Exposed to other
+  processes via `Z_NET_DNS_RESOLVE`/`_RESOLVE_REPLY` (`znet.h`);
+  `sw/common/zdns.h`'s `z_resolve_host()` is the blocking wrapper most
+  callers (`repl`'s `telnet` command, `sh.c`'s `tget`/`tput`) actually
+  use instead of sending those messages directly.
 - `sw/apps/net/tftp.c/h` -- a TFTP (RFC 1350) client. Non-blocking,
   poll-driven, **one transfer at a time**: `tftp_get_start()`/
   `tftp_put_start()` kick off a transfer, `tftp_poll()` is called
@@ -449,6 +516,173 @@ things that happen to both involve the word "duplex".)
   6. See "TCP + telnet" below.
 - `sw/apps/net/telnet.c/h` -- a minimal telnet (RFC 854) client
   layered directly on `tcp.c`. See "TCP + telnet" below.
+
+## DHCP client
+
+Adds `sw/apps/net/dhcp.c/h`, run once at startup (`net.c`'s `main()`)
+ahead of everything else -- see that file's own header comment for
+the full design writeup; summarized here. On by default, off with
+`make NET_DHCP=0` -- see "Config" above for the full build-time
+toggle and the static-IP override that goes with it either way.
+
+- **Blocking, not polled -- the one exception to how every other
+  layer in this stack is built.** `arp.c`/`tftp.c`/`tcp.c` are all
+  non-blocking-poll by design because `net.c`'s main loop has other
+  work to interleave with any one of them being in progress. Nothing
+  else meaningful can happen before `net` has an address at all --
+  there's no other process to serve yet (`net` hasn't even
+  `z_pid_register()`'d itself), and `ip_send()` has nowhere useful to
+  route non-broadcast traffic without `our_ip`/`our_gateway` set. So
+  `dhcp_acquire()` just runs its own tight `eth_poll()`-driven wait
+  loop with a timeout, the same shape `sw/common/zport.c`'s
+  `z_port_connect_arg_timeout()` and `zstream.c`'s open/pull timeouts
+  already use for their own single-purpose blocking exchanges.
+- **One-shot: no lease renewal.** Acquires a lease at boot and keeps
+  it for the process's entire run -- no T1/T2 timers, no re-REQUEST,
+  no handling of the lease actually expiring. A real functional gap
+  on a network with short DHCP leases; accepted deliberately for a
+  first version, same category of scope cut as TFTP's
+  one-transfer-at-a-time or TCP's single TCB elsewhere in this file --
+  `net` is a dev-loop tool typically restarted often (`run net` is a
+  fresh process, hence a fresh lease, every time), on networks that
+  usually hand out long leases to begin with.
+- **Every packet is broadcast, never unicast -- by design, not as a
+  simplification.** The REQUEST that follows a `SELECTING`-state OFFER
+  is broadcast per RFC 2131 itself (`ciaddr` is still `0.0.0.0` at
+  that point), not a choice made here. DISCOVER and REQUEST both set
+  the broadcast flag (RFC 2131 4.1) asking the server to reply via
+  `255.255.255.255` rather than unicast to the not-yet-configured
+  offered address -- and `ip_handle()` (`ip.c`) also relaxes its
+  normal destination-IP filter while `our_ip` is still `0.0.0.0`,
+  specifically so a server that unicasts anyway (valid per the RFC,
+  and something real servers do once they know the client's MAC from
+  the request's own `chaddr` field) still gets through. Net effect:
+  `dhcp.c` never needs ARP at all -- every send goes out `ip_send()`'s
+  limited-broadcast fast path (see below), straight to the Ethernet
+  broadcast address.
+- **`ip_send()` gained a limited-broadcast fast path** (`ip.c`): a
+  destination of `255.255.255.255` now goes directly to the Ethernet
+  broadcast MAC, bypassing the ARP-resolve-the-next-hop logic
+  entirely (there's no real host to resolve, and during DHCP
+  negotiation there may not even be a gateway configured yet to fall
+  back to). General-purpose, not DHCP-specific -- any future caller
+  that needs to broadcast benefits from this too.
+- **Fails soft.** If no server answers within the retry budget
+  (`DHCP_MAX_ATTEMPTS` attempts per phase, `DHCP_TIMEOUT_TICKS` each,
+  `dhcp.c`), or a server sends a NAK, `dhcp_acquire()` returns `false`
+  and `net.c` falls back to its existing static
+  `OUR_IP`/`OUR_NETMASK`/`OUR_GATEWAY` constants -- a board with no
+  DHCP server on its network (a bench setup with just a switch, say)
+  behaves exactly as it did before this file existed, just with a
+  bounded delay (a few seconds, not TCP's ~30s worst-case backoff)
+  before falling back rather than hanging.
+
+**Written, not yet run against a real DHCP server or real hardware**
+-- same status TCP/telnet started at below; treat this section as a
+design writeup, not a confirmation, until it's been checked against
+at least one real router/server (e.g. the one built into a typical
+home router, or `isc-dhcp-server`/`dnsmasq` on Linux) and the
+resulting lease's IP/netmask/gateway confirmed correct by also
+checking the server's own lease table.
+
+## DNS client
+
+Adds `sw/apps/net/dns.c/h`, letting `repl`'s `telnet` command (the
+primary caller this was built for), `sh.c`'s `tget`/`tput`, and any
+future caller take a hostname ("myserver.local") anywhere a plain
+dotted-quad IP was previously required. See dns.c's own header
+comment for the full design writeup; summarized here:
+
+- **Non-blocking/poll-driven, unlike `dhcp.c`.** `dhcp_acquire()`
+  blocks net's own main loop because nothing else useful can happen
+  before net has an address at all (see "DHCP client" above). DNS is
+  the opposite case: a resolution is kicked off by a message from some
+  OTHER process, arriving well after net is already up and doing
+  useful work, so there's no reason to block net's own loop for it --
+  `dns.c` fits the same non-blocking poll shape `arp.c`/`tftp.c`/
+  `tcp.c` already use (`dns_resolve_start()` kicks a query off,
+  `dns_poll()` -- called every main-loop iteration alongside
+  `eth_poll()`/`ip_poll()`/etc. -- drives retransmission and the
+  overall timeout).
+- **A records only, no CNAME following, no caching.** Only asks for
+  (and only looks at) type-A answer records -- a server that replies
+  with a CNAME chain instead of an A record is reported as "no A
+  record in response", a resolve failure, even though a real resolver
+  would follow the alias and try again. No result caching either:
+  every `z_dns_resolve()` call is a fresh query on the wire, even for
+  a hostname just resolved a moment ago. Both deliberate scope cuts
+  for a first version -- same spirit as `dhcp.c`'s own "no lease
+  renewal" cut elsewhere in this doc -- worth revisiting if a real use
+  ever needs a CNAME-fronted hostname, or resolves the same name often
+  enough that the extra round trips start to matter.
+- **One resolution in flight at a time.** Same simplification as
+  TFTP's one transfer/TCP's one connection -- a `Z_NET_DNS_RESOLVE`
+  that arrives while one is already in progress gets an immediate
+  "busy" reply, not queued.
+- **The nameserver itself**: DHCP-provided by default (option 6,
+  parsed by `dhcp.c` alongside the address/netmask/gateway/lease
+  options it already reads), or the `NET_STATIC_DNS` build-time
+  override -- see "Config" above for the exact Makefile invocations.
+  Unlike `NET_STATIC_IP`/`NETMASK`/`GATEWAY`, this override is a
+  standing one, not merely a DHCP-failure fallback: if set, it always
+  wins over whatever DHCP said, even on an otherwise-successful lease
+  -- reasoning being that DNS is a genuinely independent setting
+  someone might want to override on its own (a different, faster, or
+  more trustworthy resolver than whatever a given network's DHCP
+  server happens to hand out) in a way that overriding the IP/netmask/
+  gateway itself rarely is.
+- **`sw/common/zdns.h`/`zdns.c`** -- the "usable from anywhere" half of
+  this feature, and the reason a plain dotted-quad IP and an actual
+  hostname can both just work at every call site that matters:
+  - `z_parse_ipv4()` -- the dotted-quad parser itself, no networking
+    involved. Used to be duplicated (byte-for-byte identical) between
+    `sh.c` and `repl.c`, purely because there was nowhere shared both
+    build contexts (kernel vs. a normal app) could reach before this
+    file existed. Both copies were deleted in favor of this one.
+  - `z_dns_resolve()` -- sends `Z_NET_DNS_RESOLVE` to `net` and blocks
+    (with its own bounded timeout) for the `Z_NET_DNS_RESOLVE_REPLY`.
+    Same "there's nothing else useful to do meanwhile, so just wait"
+    reasoning `z_port_connect_arg_timeout()` (`zport.c`) and
+    `zstream.c`'s own blocking calls already use elsewhere in this
+    codebase.
+  - `z_resolve_host()` -- tries `z_parse_ipv4()` first (fast, no
+    messaging, doesn't even need `net` running), falls back to
+    `z_dns_resolve()` only if that fails. This is the one function
+    most callers actually want, and what `repl.c`'s `telnet` command
+    and `sh.c`'s `tget`/`tput` both now call.
+  - Builds into either an app (linking `zeitlos.o`) or the kernel
+    (linking `msg.o`/`pidreg.o`) unmodified, via the exact same
+    dual-build technique `zstream.c` already established (see its own
+    header comment, and `zdns.c`'s) -- forward-declaring
+    `z_msg_send()`/`z_msg_read()`/`z_msg_new_send()`/
+    `z_uptime_ticks()`/`z_pid_lookup()` instead of `#include
+    "zeitlos.h"`, which would collide with `kruntime.c`'s own
+    `getch()`/`readline()`/`echo()`/`noecho()` in the kernel build.
+- **A real, known cost worth flagging: `repl.c`'s own message loop.**
+  `repl` services every connected `term`/`REPL_EVAL` request from one
+  shared mailbox (`main()`'s own `while (1) { while (z_msg_read...)
+  }`). A slow hostname lookup from ONE `telnet` command -- worst case,
+  `net` not running, or a genuinely unresponsive nameserver -- blocks
+  that whole loop for up to `z_dns_resolve()`'s timeout, delaying
+  every OTHER connected window's response too, not just the one that
+  typed `telnet`. Bounded (a few seconds) and rare in practice (a real
+  nameserver on a local network answers in single-digit milliseconds,
+  and a literal IP never touches this path at all, per
+  `z_resolve_host()`'s parse-first order above), but a real cost, not
+  a theoretical one -- worth revisiting with a genuinely non-blocking
+  resolve-then-connect flow in `repl.c` if it ever proves to matter
+  with several people using `term` at once. Documented inline at the
+  `telnet` command's own call site in `repl.c` too.
+
+**Written, not yet run against a real DNS server (or nameserver
+provided by a real DHCP server) or real hardware** -- same status
+DHCP/TCP/telnet all started at elsewhere in this doc; treat this
+section as a design writeup, not a confirmation, until checked against
+at least one real resolver (a home router's built-in one, or
+`dnsmasq`/`unbound`/a public resolver like `1.1.1.1` via
+`NET_STATIC_DNS`) and a hostname that's actually confirmed to resolve
+to the address `dig`/`nslookup`/`host` (run from another machine on
+the same network) agrees with.
 
 ## TCP + telnet
 
@@ -754,13 +988,13 @@ than debugging one layer at a time.
    server.** TCP client (`tcp.c`) + a minimal telnet client
    (`telnet.c`), exposed to other processes as a `zport` provider
    (`sw/common/zport.h`, `docs/ports.md`) -- reachable via `repl`'s
-   `telnet <ip>` command through `term`. See "TCP + telnet" below for
-   the design and the same kind of "known risk areas" writeup the
-   ENC28J60/RMII drivers got before their own hardware bring-up passes
-   (above) -- follow the same "confirm the simplest layer first"
-   approach here too: a bare SYN/SYN-ACK/ACK handshake against
-   something like `nc -l` before layering telnet negotiation or `term`
-   on top.
+   `telnet <ip-or-hostname>` command through `term`. See "TCP +
+   telnet" below for the design and the same kind of "known risk
+   areas" writeup the ENC28J60/RMII drivers got before their own
+   hardware bring-up passes (above) -- follow the same "confirm the
+   simplest layer first" approach here too: a bare SYN/SYN-ACK/ACK
+   handshake against something like `nc -l` before layering telnet
+   negotiation or `term` on top.
 6. A message-based UDP API for other apps (not just the shell) to use
    directly, reusing `Z_BLOB` and the same messaging shape `znet.h`
    already established for TFTP -- straightforward extension once
@@ -773,6 +1007,32 @@ than debugging one layer at a time.
    `net`'s driver-facing internals stay ENC28J60-specific; only the
    public UDP-facing API needs to be something a W5500 backend could
    also implement.
+8. **Written, not yet run against a real DHCP server or real
+   hardware.** DHCP client (`dhcp.c`) replacing the fully-static IP
+   config phases 3-7 above were all built and tested against -- see
+   "DHCP client" above for the full design and known scope cuts (no
+   lease renewal, chief among them). Same "confirm the simplest thing
+   first" approach as every hardware-adjacent layer above: check that
+   a bare DISCOVER actually reaches a real router/server and gets an
+   OFFER back before trusting the rest of the exchange, and cross-
+   check the resulting lease's IP/netmask/gateway against that
+   server's own lease table rather than trusting `net`'s own printed
+   log of what it parsed.
+9. **Written, not yet run against a real DNS server or real
+   hardware.** DNS client (`dns.c`) plus the shared `sw/common/zdns.h`
+   helpers, replacing the IP-only `telnet`/`tget`/`tput` these all
+   used before -- see "DNS client" above for the full design and known
+   scope cuts (A records only, no CNAME following, no caching). Same
+   "confirm the simplest thing first" approach: check that a bare
+   A-record query against a well-known, always-up hostname (e.g. one
+   of the DHCP server's own vendor's domains, or anything `dig`/
+   `nslookup` from another machine on the same network confirms
+   resolves) round-trips correctly before trusting anything layered on
+   top of it (`repl`'s `telnet`, `sh.c`'s `tget`/`tput`) -- and
+   separately confirm the DHCP-provided-nameserver path (phase 8's own
+   option 6 parsing) actually gets exercised, not just the
+   `NET_STATIC_DNS` override, since a bench setup used to test DHCP in
+   isolation might not have a nameserver on option 6 at all.
 
 The RMII backend (`mozart_ml1`) followed the same "build and verify
 incrementally" approach but as its own separate staged plan, run in
