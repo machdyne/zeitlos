@@ -513,10 +513,24 @@ int main(void) {
 			} else if (msg.subject == Z_WM_KEY) {
 				handle_key_event(msg.obj.val.uint32);
 			} else if (msg.subject == Z_PORT_DATA) {
-				if (!port.connected || msg.tag != port.conn_id) continue;
-				uint32_t len = z_blob_len(&msg.obj);
-				void *data = z_blob_data(&msg.obj);
-				if (data && len) vt_feed(&vt, (const uint8_t *)data, len);
+				if (port.connected && msg.tag == port.conn_id) {
+					uint32_t len = z_blob_len(&msg.obj);
+					void *data = z_blob_data(&msg.obj);
+					if (data && len) vt_feed(&vt, (const uint8_t *)data, len);
+				}
+				// tells whoever sent this it's now safe to free its own
+				// z_obj_blob() allocation -- see z_port_send_ack()'s own
+				// comment (zport.h) for why this has to come AFTER
+				// vt_feed() actually finishes reading `data`, not right
+				// after z_msg_read() produced `msg`. Sent unconditionally,
+				// even when the guard above didn't match -- that's still
+				// a message this process will never look at again, and
+				// the sender's own pending-sends slot for it
+				// (Z_PORT_MAX_PENDING_SENDS, zport.h) needs an ack to
+				// ever be freed regardless.
+				z_port_send_ack(&msg);
+			} else if (msg.subject == Z_PORT_DATA_ACK) {
+				z_port_handle_ack(&port, &msg);
 			} else if (msg.subject == Z_PORT_CLOSE) {
 				if (port.connected && msg.tag == port.conn_id) {
 					port.connected = false;

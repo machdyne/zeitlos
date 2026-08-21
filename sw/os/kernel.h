@@ -34,29 +34,42 @@ typedef struct {
 // entire lifetime). Two tiers, not one blanket size for every
 // process:
 //
-// - Z_PROC_STACK_SIZE_LARGE (64KB): confirmed necessary for `repl`
-//   AND `net` specifically -- both are zport.h providers whose own
-//   z_port_send() call, on every message relayed to a connected
-//   `term` (repl: one per keystroke echoed/reply; net: one per chunk
-//   of telnet traffic relayed, telnet_on_data() in net.c), leaks a
-//   small, DELIBERATELY never-freed z_obj_blob() allocation into this
-//   same region for the rest of the connection's lifetime -- see
-//   zport.c's own z_port_send() comment for why that leak is
-//   intentional, not a bug still to fix. repl additionally spends
-//   several KB of this on Scheme stdlib loading at startup (see its
-//   own "heap grown N bytes by end of stdlib load" boot log line).
-//   `net` was originally left at the DEFAULT tier below when this
-//   became two tiers instead of one blanket size -- a real bug, not
-//   a deliberate choice: found when a telnet session's failure path
-//   (net.c's telnet_on_closed(), sending Z_PORT_REFUSED back to a
-//   waiting `term` after tcp.c gives up on all its retries) went
-//   silent on real hardware after running long enough to exhaust a
-//   16KB budget, leaving `term` timing out instead of seeing an
-//   explicit refusal. A smaller allowance here would just reproduce
-//   the original real-hardware crash that motivated the LARGE tier's
-//   existence in the first place (silent Z_BLOB/Z_STR allocation
-//   failures, see zobj.c's z_obj_blob()/z_obj_str() comments), just
-//   later instead of immediately.
+// - Z_PROC_STACK_SIZE_LARGE (64KB): `repl` AND `net`, currently --
+//   both are zport.h providers whose own z_port_send() call, on every
+//   message relayed to a connected `term` (repl: one per keystroke
+//   echoed/reply; net: one per chunk of telnet traffic relayed,
+//   telnet_on_data() in net.c), used to leak a small z_obj_blob()
+//   allocation into this same region for the rest of the connection's
+//   lifetime -- confirmed on real hardware as the cause of a heap-
+//   exhaustion crash during a long enough session (a chatty telnet
+//   BBS, specifically), which is what motivated this LARGE tier's
+//   existence at all, and (via a second, separate real bug -- `net`
+//   was left off the check below when this became two tiers instead
+//   of one blanket size) a second near-identical crash before that
+//   omission was caught and fixed.
+//
+//   **That leak itself is fixed now**, not just budgeted around --
+//   see sw/common/zport.h's Z_PORT_DATA_ACK and docs/messaging.md's
+//   "Known limitations" for the full design (an explicit ack from the
+//   receiver once it's genuinely done reading a DATA message's
+//   payload, at which point the sender frees it, rather than holding
+//   it for the rest of the connection). Whether `repl`/`net` could
+//   safely move back down to the DEFAULT tier below as a result is a
+//   real, open question -- both still have OTHER heap usage this fix
+//   doesn't touch (repl's Scheme stdlib load at startup; both
+//   processes' one-shot RPC-style replies elsewhere, e.g. DHCP/DNS/
+//   TFTP responses in net.c, which are still small-and-intentionally-
+//   leaked per docs/messaging.md, just bounded by request COUNT now
+//   rather than by session length or byte volume) -- but the
+//   dominant, unbounded cost that specifically justified LARGE is
+//   gone. Left at LARGE here deliberately, not downgraded as a side
+//   effect of the DATA_ACK fix: this is a real hardware memory
+//   allocation with no data yet on what a downgraded budget actually
+//   looks like under load, and getting it wrong here reproduces the
+//   exact silent-heap-exhaustion failure mode this whole tier exists
+//   to prevent. Worth a real, deliberate, separately-tested pass at
+//   DEFAULT for both once there's hardware to check it against, not a
+//   guess made here.
 // - Z_PROC_STACK_SIZE_DEFAULT (16KB): everything else (the kernel's
 //   own self-registration, wm, term, ...). None of these have ever
 //   shown a confirmed need for more than the original 8KB this
@@ -77,9 +90,9 @@ typedef struct {
 // Z_SYS_PROC_RUN syscall handler in kernel.c, which is how wm's dock
 // launches apps). A single shared check specifically so a future
 // third LARGE-tier process doesn't require finding and updating every
-// call site individually the way `net` joining `repl` here just did.
+// call site individually the way `net` joining `repl` here once did.
 static inline uint32_t z_proc_stack_size_for(const char *name) {
-	return (!strcmp(name, "repl")) ?
+	return (!strcmp(name, "repl") || !strcmp(name, "net")) ?
 		Z_PROC_STACK_SIZE_LARGE : Z_PROC_STACK_SIZE_DEFAULT;
 }
 

@@ -267,47 +267,216 @@ ping's pid in advance.
 Note: pong never frees the strings it allocates each reply (a small,
 documented, intentional leak for this simple demo -- freeing
 immediately after `z_msg_send()` would race with ping still reading
-it, and there's no ack mechanism yet to know when it's safe). See
-"Known limitations" below.
+it). `zport.h`'s DATA channel now has a real ack-based mechanism for
+exactly this problem (see "Known limitations" below) -- ping/pong
+itself doesn't use `zport.h`, so this doesn't change here, but the
+same trick would apply if this demo ever needed to stop leaking.
 
 ## Known limitations / future work
 
-- **No reply-lifetime ack.** A sender of a borrowed payload has no
-  way to know when the receiver is actually done reading it beyond
-  "the reply-then-request pattern happens to make it safe." Anything
-  that needs to free reply memory promptly (rather than leak it, or
-  rely on request/reply alternation) needs a real mechanism here.
-  **Real-hardware finding, in two parts:** `sw/common/zport.h`'s
-  `z_port_send()` originally just leaked its `z_obj_blob()` payload on
-  every single call, following the same "small, accepted leak"
-  precedent as `pong`'s reply strings (see the ping/pong example
-  above) -- but `zport.h`'s own usage pattern (potentially many sends
-  per connection, e.g. one per keystroke echoed by `repl`,
-  `sw/apps/repl/repl.c`) isn't the same shape as a one-shot RPC reply,
-  and confirmed on real hardware: enough sustained interactive use
-  exhausted the sending process's own heap (`Z_PROC_STACK_SIZE`,
-  `sw/os/kernel.c` -- since raised significantly, see that constant's
-  own comment), at which point `z_obj_blob()`'s internal `malloc()`
-  started failing -- see that function's own comment (`sw/common/
-  zobj.c`) for what an unchecked failure there used to do silently.
-  A first attempted fix freed the PREVIOUS call's blob at the start of
-  each new `z_port_send()`, reasoning that the peer must have had a
-  scheduling slot to read it by then -- this is exactly the "no
-  reply-lifetime ack" problem this bullet describes, and the fix
-  turned out to demonstrate it rather than solve it: the assumption
-  breaks whenever a caller makes several sends back-to-back with
-  nothing in between to force a scheduler switch (confirmed on real
-  hardware with `repl`'s own `handle_connect()`, which sends a banner
-  then a prompt with no yield between them -- the second call's free
-  ran before the peer had necessarily read the first message, and the
-  very next `z_obj_blob()` call reused that just-freed memory, so the
-  first message resolved to the SECOND message's bytes by the time the
-  peer actually read it). Reverted -- `z_port_send()` now goes back to
-  never freeing at all, relying on the much larger
-  `Z_PROC_STACK_SIZE` to make the leak tolerable for a realistic
-  session rather than a free that was actively incorrect. This remains
-  open: a real fix needs the receiver's own read to prove safety, not
-  any action by the sender.
+- **No general reply-lifetime ack.** Outside of `zport.h`'s DATA
+  channel (below), a sender of a borrowed payload still has no way to
+  know when the receiver is actually done reading it beyond "the
+  reply-then-request pattern happens to make it safe." One-shot
+  RPC-style replies throughout this codebase (DHCP's ACK, DNS's reply,
+  TFTP's per-request replies, `pong`'s own strings above) all still
+  rely on exactly that pattern, or just leak intentionally -- and
+  that's fine for them: one small allocation per REQUEST, not one per
+  BYTE of an open-ended session, so the leak stays bounded by how many
+  distinct requests get made, not by how long a connection stays open.
+  **`zport.h`'s DATA channel is different, and now has a real fix --
+  see below.**
+
+  **Real-hardware finding, in three parts, the last one now
+  resolved:** `sw/common/zport.h`'s `z_port_send()` originally just
+  leaked its `z_obj_blob()` payload on every single call, following
+  the same "small, accepted leak" precedent as `pong`'s reply strings
+  -- but `zport.h`'s own usage pattern (potentially many sends per
+  connection, e.g. one per keystroke echoed by `repl`, or one per
+  chunk of telnet traffic relayed by `net`) isn't the same shape as a
+  one-shot RPC reply, and confirmed on real hardware: enough sustained
+  interactive use exhausted the sending process's own heap
+  (`Z_PROC_STACK_SIZE`, `sw/os/kernel.c`), at which point
+  `z_obj_blob()`'s internal `malloc()` started failing -- see that
+  function's own comment (`sw/common/zobj.c`) for what an unchecked
+  failure there used to do silently. A first attempted fix freed the
+  PREVIOUS call's blob at the start of each new `z_port_send()`,
+  reasoning that the peer must have had a scheduling slot to read it
+  by then -- this is exactly the "no reply-lifetime ack" problem this
+  bullet describes, and the fix turned out to demonstrate it rather
+  than solve it: the assumption breaks whenever a caller makes several
+  sends back-to-back with nothing in between to force a scheduler
+  switch (confirmed on real hardware with `repl`'s own
+  `handle_connect()`, which sends a banner then a prompt with no yield
+  between them -- the second call's free ran before the peer had
+  necessarily read the first message, and the very next
+  `z_obj_blob()` call reused that just-freed memory, so the first
+  message resolved to the SECOND message's bytes by the time the peer
+  actually read it). Reverted -- `z_port_send()` went back to never
+  freeing at all, relying on `Z_PROC_STACK_SIZE` to make the leak
+  tolerable for a realistic session rather than a free that was
+  actively incorrect. **Still not enough**: a genuinely long-running
+  interactive session (a chatty telnet BBS, specifically) could still
+  exhaust even the larger budget -- the leak was unbounded, just
+  slower to hit.
+
+  **The actual fix**: `zport.h` gained a real `Z_PORT_DATA_ACK`
+  message. Whichever side receives a `Z_PORT_DATA` calls
+  `z_port_send_ack()` once its own handler has GENUINELY finished
+  reading the payload (not the moment `z_msg_read()` returns -- see
+  below for why that distinction matters); the original sender's
+  `z_port_send()` tracks each outstanding blob in a small, fixed-size
+  per-connection FIFO queue (`Z_PORT_MAX_PENDING_SENDS`, `zport.h`) and
+  frees the oldest entry once `z_port_handle_ack()` sees any ack
+  arrive for that connection. Every current DATA sender/receiver
+  (`net`'s telnet relay, `repl`, `term`, `portdemo`) now sends and
+  handles this.
+
+  **A second real-hardware finding, right after the first shipped:**
+  the very first version of this matched an incoming ack against the
+  pending entry by comparing the payload's own data POINTER -- and
+  that never worked, because a pointer is only a meaningful, stable
+  value in the process that allocated it. `sw/os/msg.c`'s own header
+  comment spells out why: "a pointer created by process P is always
+  `P.base + (vaddr - 0x80000000)` in physical terms." The receiver's
+  `z_blob_data()` returns that already-resolved PHYSICAL address; the
+  sender's own record of what it allocated (`b->data` from
+  `z_obj_blob()`) is still expressed in the sender's OWN, unresolved,
+  process-relative view -- a different numeric value, with no way for
+  an app to redo that translation itself (`z_translate()` is
+  kernel-internal). Every ack's "match" silently failed, every pending
+  entry sat there forever unfreed, and the queue filled up after
+  exactly `Z_PORT_MAX_PENDING_SENDS` sends -- observed on real hardware
+  as `z_port_send()` starting to fail permanently (`Z_FAIL`, "echo
+  z_port_send failed") after typing only a handful of characters into
+  `term`. **Fixed by not matching on any transmitted value at all**:
+  mailboxes are FIFO per sender/receiver pair, and every current DATA
+  receiver acks exactly once, in the order it read each message -- so
+  the Nth ack to arrive always corresponds to the Nth still-
+  outstanding send, and popping the oldest entry off the queue on any
+  ack is correct without needing to identify which one by value.
+
+  **A third real-hardware finding, right after the second was fixed:**
+  the FIFO-position approach above is only correct if every DATA
+  message really does get exactly one ack, in order -- and the fix
+  didn't yet guarantee the ACK ITSELF actually arrives, only that the
+  DATA message did. `z_port_send_ack()` originally called
+  `z_msg_new_send()` and discarded its return value, same class of
+  omission `z_port_send()` itself used to have for the DATA send
+  before it was fixed to free immediately on failure. But a lost ack
+  is worse than a lost DATA message: a lost DATA message is caught and
+  handled (see the "send that never gets delivered" bullet below); a
+  lost ack silently and PERMANENTLY shifts the FIFO position mapping
+  for every later ack on that connection, since there's no longer a
+  1:1 correspondence between sends and acks to fall back on. First
+  observed as a diagnostic length mismatch added specifically to catch
+  this class of bug (the ack's own payload briefly carried the
+  original message's length back as a cross-check) -- confirmed real
+  on hardware: two adjacent entries (a 1-byte character echo, a
+  3-byte backspace echo, `sw/common/zline.c`) showed up mismatched in
+  exactly the pattern a one-position permanent desync produces. Traced
+  to a receiving mailbox being transiently full right when `term`
+  tried to send an ack back (the same class of keystroke-burst
+  congestion `docs/ports.md`'s "Flow control" section already
+  documents) -- **fixed by giving `z_port_send_ack()` a short, bounded
+  retry** (`Z_PORT_ACK_RETRY_TICKS`, `zport.c`, ~0.5s) instead of
+  either accepting the loss or trying to make the matching scheme
+  robust to it. The diagnostic length check itself was removed once
+  the real fix (reliable ack delivery) made it unnecessary -- keeping
+  it around risked training people to read a length mismatch as
+  meaningful when the actual invariant that matters is delivery, not
+  content.
+
+  A few design points worth keeping in mind, since they weren't
+  obvious going in:
+  - **The ack has to be sent by the receiving APPLICATION's own code,
+    once it's actually done reading -- not automatically by the
+    messaging layer at `z_msg_read()` time.** This system schedules
+    preemptively (`sw/os/kernel.c`, KTIMER-driven round-robin), not
+    cooperatively -- a receiver's own handler could in principle be
+    interrupted mid-read. `z_msg_read()` only resolves the pointer; it
+    doesn't mean the handler has actually read through the bytes yet.
+    An automatic ack fired right at resolve time could let the sender
+    free memory the receiver's own handler hasn't finished reading,
+    reintroducing the exact corruption class described above.
+    `term.c`'s `Z_PORT_DATA` handler, for example, sends the ack right
+    after `vt_feed()` returns, not right after the `z_msg_read()` that
+    produced the message.
+  - **Every DATA receiver acks unconditionally, on every code path,
+    even one that never actually touches the payload** -- a stale
+    message against an already-closed connection, say. This isn't
+    optional politeness: the FIFO-ordering guarantee above depends on
+    every send eventually getting exactly one ack, in order, no matter
+    what the receiver decided to do with it. Skipping an ack on some
+    early-return path would misalign every later entry in that
+    connection's queue, not just leave one thing unfreed.
+  - **A receiving process still can't just free the memory itself,
+    even though it has a real, dereferenceable pointer to it.** Each
+    process's `malloc()`/`free()` (via `_sbrk()`, `zeitlos.c`/
+    `kruntime.c`) is independent, per-process bump-allocator state --
+    there's no shared heap across processes (that's a separate thing
+    from `sw/os/mem.c`'s `k_mem_alloc()`, which only carves out whole
+    *processes'* memory regions at creation time, not small in-process
+    objects). A receiver calling `free()` on a pointer it didn't
+    `malloc()` would be handing that address to a completely
+    unrelated allocator instance, which could at best no-op/crash and
+    at worst conclude that memory is now free and later hand it back
+    out via one of the receiver's own ordinary `malloc()` calls --
+    silent corruption of memory a different, still-live process
+    considers its own. Only the original allocating process can safely
+    free its own allocation, which is exactly why an ack back to that
+    process, rather than a direct free by the receiver, is required.
+  - **Backpressure is a deliberate side effect, not the goal.**
+    `Z_PORT_MAX_PENDING_SENDS` being small and fixed means
+    `z_port_send()` itself now refuses new sends (`Z_FAIL`) once a
+    peer has fallen far enough behind on acking, rather than growing
+    without bound. This gives `zport.h` a real memory ceiling it
+    didn't have before, but it's not the general flow-control redesign
+    `docs/ports.md`'s "Flow control: an explicit, deliberate gap for
+    v1" describes as still-future work -- that section is about
+    giving `zport` real pull/credit-based backpressure for its own
+    sake (a large paste, a chatty remote); this is a narrow safety
+    valve against the specific "peer stopped acking entirely" case,
+    sized generously enough that ordinary interactive traffic never
+    gets near it.
+  - **A send that never gets delivered at all** (the peer's mailbox is
+    full, `z_msg_send()` itself fails) never gets a chance to be
+    acked -- nobody ever receives it. `z_port_send()` frees that one
+    immediately, right at the failed call site, rather than pushing it
+    onto the pending queue at all -- pushing it would leave a
+    permanent gap with no ack ever coming to pop it, misaligning every
+    later entry the same way skipping an ack would. This is the DATA
+    side of delivery failure; **the ack side (below) is handled
+    differently, on purpose**, since giving up isn't a safe option
+    there.
+  - **`z_port_send_ack()` retries instead of giving up, unlike every
+    other send in this file.** A lost DATA message is self-contained
+    -- the bullet above shows it's caught and cleanly freed, nothing
+    else is affected. A lost ack is not self-contained: it corrupts
+    the FIFO position mapping for every send after it on that
+    connection, permanently, since the whole scheme depends on a
+    strict 1:1 correspondence between sends and acks. So a short,
+    bounded retry (`Z_PORT_ACK_RETRY_TICKS`, ~0.5s) is the right
+    tradeoff specifically here, even though nothing else in `zport.h`
+    retries: the failure this guards against (a receiving mailbox
+    transiently full) resolves within the receiver's own next
+    scheduling slice or two under this system's preemptive scheduling,
+    so the retry usually costs nothing observable, while the
+    alternative (silent, permanent desync) is worse than any bounded
+    wait. If the retry genuinely exhausts (something worse than
+    transient congestion), it logs and gives up -- `z_port_send()`'s
+    own backpressure is still the correct backstop from there, same as
+    for a peer that's stopped acking entirely.
+  - **Deliberately scoped to `zport.h`'s DATA channel, not a universal
+    fix.** One-shot RPC-style replies elsewhere (DHCP, DNS, TFTP,
+    `pong`) are left as-is, per this bullet's opening paragraph --
+    already bounded, already negligible, not worth the extra
+    bookkeeping. This mechanism could generalize (a shared
+    `zmsg.h`-level ack primitive any protocol could opt into, or a
+    refcount-in-the-object scheme if this system ever grows a
+    broadcast primitive with more than one recipient per payload) if
+    a second real need for it ever shows up -- not built speculatively
+    ahead of that.
 - **No process-death notification.** If a process holding a reference
   another process is relying on gets killed, there's currently no
   message or callback that tells anyone. This matters most for the
@@ -328,7 +497,9 @@ it, and there's no ack mechanism yet to know when it's safe). See
   generic). It also sidesteps the reply-lifetime problem above for
   its own case: a stream chunk's "when is it safe to free" question
   is answered by the next pull arriving, which is itself proof the
-  previous chunk was received -- worth a look as a pattern even where
-  streaming itself isn't the fit, since the same trick (let the next
-  request double as an ack for the previous reply) could apply
-  elsewhere.
+  previous chunk was received. `zport.h`'s own `Z_PORT_DATA_ACK`
+  (above) solves the same underlying problem a different way -- an
+  explicit ack message rather than a pull request doing double duty --
+  since `zport`'s DATA channel is push-based in both directions, not
+  pull-based like `zstream`; worth remembering both patterns exist
+  before reaching for a third if a similar need comes up again.

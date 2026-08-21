@@ -102,6 +102,7 @@ CONNECTED provider -> client   tag=nonce   obj=Z_UINT32(conn_id)
 REFUSED   provider -> client   tag=nonce   obj=Z_STR(reason)
 
 DATA      either direction     tag=conn_id   obj=Z_BLOB (raw bytes)
+DATA_ACK  either direction     tag=conn_id   obj=Z_NONE
 CLOSE     either direction     tag=conn_id   obj=Z_NONE
 ```
 
@@ -125,6 +126,36 @@ for what that actually means for bring-up order in practice, and
 (numbering, why it's not a permanent counter, the mutate-in-place
 syscall convention it follows) -- there's no separate doc page for it
 yet, that header comment is the actual source of truth.
+
+`DATA_ACK` is also real now, not part of the original sketch: DATA's
+`Z_BLOB` payload is a real heap allocation on the sender's side, and
+`DATA_ACK` is how the receiver tells the sender it's safe to free once
+it's genuinely done reading it -- see `z_port_send_ack()`/
+`z_port_handle_ack()` (`sw/common/zport.h`) and `docs/messaging.md`'s
+"Known limitations" for the full design writeup, including two real
+follow-up bugs worth knowing about if this is ever touched again:
+
+- The sender matches an ack to a pending send by FIFO ORDER
+  (mailboxes are FIFO per sender/receiver pair, and every receiver
+  acks exactly once, in read order), not by anything the ack itself
+  carries -- an earlier version tried matching by the payload's data
+  pointer instead, which never actually worked, since a pointer is
+  only a meaningful value in the process that allocated it
+  (`sw/os/msg.c`'s own header comment explains the cross-process
+  addressing this ran into).
+- That FIFO-order matching only holds if the ack itself reliably
+  arrives -- `z_port_send_ack()` retries (bounded, `zport.c`) rather
+  than fire-and-forgetting the ack the way every other send in this
+  file does, since a lost ack doesn't just cost one missed
+  notification, it permanently misaligns the FIFO for every send after
+  it on that connection. Confirmed on real hardware as a receiving
+  mailbox transiently full (the same keystroke-burst congestion this
+  section's own "Flow control" discussion below already documents)
+  right when an ack was being sent back.
+
+This is strictly about memory lifetime, not the flow-control question
+the next section covers -- see that section's own note on the
+distinction.
 
 ### Flow control: an explicit, deliberate gap for v1
 
@@ -150,6 +181,22 @@ below remains the right answer for something that genuinely needs
 real backpressure (a large paste, a chatty remote) rather than just
 enough headroom for a burst of ordinary keystrokes.
 
+**`Z_PORT_DATA_ACK` (see the protocol sketch above) is a related but
+separate mechanism, worth not conflating with this section.** It
+exists to answer "when is it safe to free a DATA message's payload",
+not "how much can be in flight before something should slow down" --
+see `docs/messaging.md`'s "Known limitations" for its own design
+writeup. It does have a backpressure SIDE EFFECT (`z_port_send()`
+refuses new sends once `Z_PORT_MAX_PENDING_SENDS` outstanding, unacked
+sends pile up on one connection), which does give `zport` a real
+memory ceiling it didn't have before -- but that cap is sized as a
+safety valve against a peer that's stopped acking entirely (crashed,
+or otherwise stuck), not tuned as this section's actual flow-control
+answer, and doesn't address the "large paste/chatty remote" case this
+section is about (ordinary acking keeps pace with ordinary traffic
+long before that cap is ever approached). The `zstream`-based approach
+below is still the plan for that, if it ever proves necessary.
+
 For anything more than that -- a large paste over telnet, or a chatty
 remote process -- the plan is to see whether the (now much larger)
 simple version still shows real problems in practice before reaching
@@ -170,7 +217,11 @@ general solution would need.
    from a plain "no timeout" RPC (`z_win_create()`'s own pattern): the
    client's connect blocks with a bounded ~2 second timeout, not
    forever, since a port provider (unlike `wm`) isn't guaranteed to be
-   running at all.
+   running at all. `Z_PORT_DATA_ACK` (see the protocol sketch above)
+   was added later, once sustained real-hardware use of the DATA
+   channel showed the original "just leak every send" design running
+   a process's heap out over a long enough session -- see
+   `docs/messaging.md`'s "Known limitations" for the full story.
 2. ~~A demo virtual port app~~ -- done, `sw/apps/portdemo`
    (echo/banner, no hardware). Single connection at a time.
 3. ~~`term` wired to the demo port~~ -- done, with a fallback: no

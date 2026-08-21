@@ -100,6 +100,15 @@ z_rv z_port_send(z_port_t *port, const void *data, uint32_t len) {
 
 	if (!port->connected) return Z_FAIL;
 
+	// backpressure BEFORE allocating anything -- see zport.h's own
+	// Z_PORT_MAX_PENDING_SENDS/`pending` comments. A peer that's
+	// stopped acking (crashed, or has just fallen far behind) makes
+	// z_port_send() itself refuse further sends this way, rather than
+	// letting them leak without bound the way this function used to --
+	// see this function's own header comment (zport.h) for the full
+	// before/after story.
+	if (port->pending_count >= Z_PORT_MAX_PENDING_SENDS) return Z_FAIL;
+
 	z_obj_t obj = z_obj_blob(data, len);
 
 	// z_obj_blob() (zobj.c) returns Z_NONE instead of a broken object
@@ -110,34 +119,40 @@ z_rv z_port_send(z_port_t *port, const void *data, uint32_t len) {
 	// Surface it here instead of leaving it invisible -- this is what
 	// caught a real Z_PROC_STACK_SIZE-too-small bug (sw/os/kernel.c)
 	// on real hardware, where even a 2-byte allocation failed.
-	if (len > 0 && obj.type != Z_BLOB)
-		printf("zport: z_obj_blob() failed to allocate %lu bytes -- "
-			"heap likely exhausted\n", (unsigned long)len);
+	if (obj.type != Z_BLOB) {
+		if (len > 0)
+			printf("zport: z_obj_blob() failed to allocate %lu bytes -- "
+				"heap likely exhausted\n", (unsigned long)len);
+		return Z_FAIL;
+	}
 
-	// Deliberately never freed here -- see z_port_t's own comment
-	// (zport.h) for why an earlier "free the previous send's blob on
-	// the next send" scheme was tried and reverted: it assumed the
-	// peer had a scheduling slot to read the previous message before
-	// the next z_port_send() call, which is FALSE whenever a caller
-	// makes several sends back-to-back with no yield in between --
-	// e.g. `repl`'s own handle_connect() (banner, then prompt,
-	// immediately) or its per-line response (text, then "\r\n", then
-	// the next prompt). Freeing the banner's blob before `term` had
-	// necessarily read it, followed immediately by the prompt's
-	// z_obj_blob() call reusing that exact just-freed memory, meant
-	// the banner message resolved to the PROMPT's own bytes by the
-	// time `term` actually read it -- confirmed on real hardware:
-	// `term` never saw the banner's true length at all, only two
-	// prompt-sized DATA messages in a row. Reverted to the same
-	// intentional, accepted leak `pong`'s own reply strings already
-	// use (docs/messaging.md's ping/pong example) -- now backed by a
-	// much larger per-process heap (Z_PROC_STACK_SIZE, kernel.c,
-	// raised specifically because of this) rather than a free that
-	// turned out to be unsafe. See docs/messaging.md's "Known
-	// limitations" for the general version of this problem -- a real
-	// fix needs the receiver's own read to be what proves safety, not
-	// the sender's next unrelated action.
-	return z_msg_new_send(port->peer_pid, Z_PORT_DATA, port->conn_id, obj);
+	z_rv rv = z_msg_new_send(port->peer_pid, Z_PORT_DATA, port->conn_id, obj);
+
+	if (rv != Z_OK) {
+		// never delivered (most likely: the peer's mailbox is full) --
+		// no ack will ever arrive for this one, so free it right here
+		// instead of leaking it forever. The one case
+		// z_port_handle_ack() can't cover on its own -- see that
+		// function's own comment. Deliberately NOT pushed onto
+		// `pending` below -- pushing it would leave a permanent gap
+		// in the FIFO with no ack ever coming to pop it, misaligning
+		// every later entry.
+		z_obj_free(&obj);
+		return rv;
+	}
+
+	// pushed onto the TAIL of *port's own FIFO -- z_port_handle_ack()
+	// pops from the HEAD, on the strength of the ordering guarantee
+	// its own comment (zport.h) explains, once the peer's own
+	// z_port_send_ack() (called from ITS handler for this exact
+	// Z_PORT_DATA, once it's genuinely done reading the payload)
+	// reports it's safe to.
+	z_blob_t *b = (z_blob_t *)obj.val.ptr;
+	uint32_t tail = (port->pending_head + port->pending_count) % Z_PORT_MAX_PENDING_SENDS;
+	port->pending[tail].header = b;
+	port->pending_count++;
+
+	return Z_OK;
 
 }
 
@@ -145,6 +160,74 @@ void z_port_close(z_port_t *port) {
 	if (!port->connected) return;
 	z_msg_new_send(port->peer_pid, Z_PORT_CLOSE, port->conn_id, z_obj_none());
 	port->connected = false;
+}
+
+// bounded retry window for z_port_send_ack() below -- short on
+// purpose, see that function's own header comment (zport.h) for why:
+// the only realistic failure mode is the receiving mailbox being
+// transiently busy, which resolves within a scheduling slice or two,
+// not something worth a long wait over. Same ~732Hz tick rate used
+// throughout this codebase (docs/networking.md's "z_uptime_ticks()").
+#define Z_PORT_ACK_RETRY_TICKS (732 / 2)	// ~0.5s
+
+void z_port_send_ack(const z_msg_t *data_msg) {
+
+	if (data_msg->obj.type != Z_BLOB) return;	// nothing to ack -- malformed DATA
+
+	uint32_t start = z_uptime_ticks();
+
+	do {
+
+		if (z_msg_new_send(data_msg->from, Z_PORT_DATA_ACK, data_msg->tag,
+			z_obj_none()) == Z_OK) return;
+
+		// z_msg_send() failing here means data_msg->from's own mailbox
+		// is full right now -- retrying immediately (rather than
+		// giving up, the way z_port_send() itself does for the
+		// original DATA send) is deliberate: see this function's own
+		// header comment (zport.h) for why a lost ack is a much worse
+		// failure than a lost DATA message. No explicit yield needed
+		// between attempts -- this system schedules preemptively
+		// (sw/os/kernel.c, KTIMER-driven round-robin), so even a tight
+		// retry loop like this one gets interrupted regularly, giving
+		// the peer real chances to drain its own mailbox in between.
+
+	} while ((z_uptime_ticks() - start) < Z_PORT_ACK_RETRY_TICKS);
+
+	// still failing after a genuine retry window -- something worse
+	// than transient congestion is going on. z_port_send()'s own
+	// backpressure (Z_PORT_MAX_PENDING_SENDS) is the correct backstop
+	// from here, same as it already is for a peer that's stopped
+	// acking entirely -- nothing more productive to do on this side.
+	printf("zport: failed to deliver ack to pid %ld after retrying for "
+		"%ld ticks -- its mailbox may be stuck\n",
+		(long)data_msg->from, (long)Z_PORT_ACK_RETRY_TICKS);
+
+}
+
+void z_port_handle_ack(z_port_t *port, const z_msg_t *msg) {
+
+	if (!port->connected || msg->tag != port->conn_id) return;
+	if (port->pending_count == 0) return;	// stale/duplicate ack -- nothing outstanding
+
+	// pops the OLDEST outstanding entry, unconditionally -- see
+	// z_port_t's own comment on `pending` for why this is correct:
+	// mailboxes are FIFO per sender/receiver pair, every current DATA
+	// receiver acks exactly once, in read order, and z_port_send_ack()
+	// itself guarantees that ack reliably arrives -- so the Nth ack
+	// back always corresponds to the Nth still-outstanding send.
+	uint32_t i = port->pending_head;
+
+	// reuses zobj.c's own general-purpose Z_BLOB destructor (frees
+	// both the header and its ->data) rather than duplicating that
+	// logic here -- port->pending[i].header is exactly the val.ptr
+	// z_obj_blob() originally returned.
+	z_obj_t blob = { .type = Z_BLOB, .val.ptr = port->pending[i].header };
+	z_obj_free(&blob);
+
+	port->pending_head = (port->pending_head + 1) % Z_PORT_MAX_PENDING_SENDS;
+	port->pending_count--;
+
 }
 
 void z_port_accept(z_port_t *out_port, const z_msg_t *connect_msg, uint32_t conn_id) {

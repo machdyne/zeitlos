@@ -67,11 +67,25 @@ int main(void) {
 
 			} else if (msg.subject == Z_PORT_DATA) {
 
-				if (!conn.connected || msg.tag != conn.conn_id) continue;
+				if (conn.connected && msg.tag == conn.conn_id) {
+					uint32_t len = z_blob_len(&msg.obj);
+					void *data = z_blob_data(&msg.obj);
+					if (data && len) z_port_send(&conn, data, len);
+				}
+				// tells the client it's now safe to free its own
+				// z_obj_blob() allocation -- see z_port_send_ack()'s
+				// own comment (sw/common/zport.h) for why this has to
+				// come after the echo z_port_send() above has already
+				// copied whatever it needed out of `data` (it has --
+				// z_obj_blob(), zobj.c, memcpy()s up front). Sent
+				// unconditionally, even when the guard above didn't
+				// match -- that's still a message this process will
+				// never look at again.
+				z_port_send_ack(&msg);
 
-				uint32_t len = z_blob_len(&msg.obj);
-				void *data = z_blob_data(&msg.obj);
-				if (data && len) z_port_send(&conn, data, len);
+			} else if (msg.subject == Z_PORT_DATA_ACK) {
+
+				z_port_handle_ack(&conn, &msg);
 
 			} else if (msg.subject == Z_PORT_CLOSE) {
 

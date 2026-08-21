@@ -525,58 +525,76 @@ static repl_conn_t *find_conn_by_tag(uint32_t tag) {
 static void handle_data(const z_msg_t *msg) {
 
 	repl_conn_t *c = find_conn_by_tag(msg->tag);
-	if (!c) return; // stale DATA against an already-closed connection
 
-	uint32_t len = z_blob_len(&msg->obj);
-	uint8_t *data = (uint8_t *)z_blob_data(&msg->obj);
-	if (!data || !len) return;
+	if (c) {
 
-	// a single DATA message is usually one keystroke (see this
-	// file's own header comment), but feed every byte through in
-	// order regardless -- correct either way, and doesn't assume
-	// anything about how many bytes a future, non-term client might
-	// bundle into one message (e.g. a pasted block).
-	for (uint32_t i = 0; i < len; i++) {
+		uint32_t len = z_blob_len(&msg->obj);
+		uint8_t *data = (uint8_t *)z_blob_data(&msg->obj);
 
-		char echo[Z_LINE_ECHO_MAX];
-		uint32_t echo_len;
-		int complete =
-			z_line_feed(&c->line, data[i], echo, &echo_len, sizeof(echo));
+		if (data && len) {
 
-		if (echo_len) {
-			// see conn_send_str()'s own comment above -- same
-			// reasoning applies here.
-			if (z_port_send(&c->port, echo, echo_len) != Z_OK)
-				printf("repl: echo z_port_send failed (%lu bytes) to pid %ld\n",
-					(unsigned long)echo_len, (long)c->port.peer_pid);
+			// a single DATA message is usually one keystroke (see this
+			// file's own header comment), but feed every byte through
+			// in order regardless -- correct either way, and doesn't
+			// assume anything about how many bytes a future, non-term
+			// client might bundle into one message (e.g. a pasted
+			// block).
+			for (uint32_t i = 0; i < len; i++) {
+
+				char echo[Z_LINE_ECHO_MAX];
+				uint32_t echo_len;
+				int complete =
+					z_line_feed(&c->line, data[i], echo, &echo_len, sizeof(echo));
+
+				if (echo_len) {
+					// see conn_send_str()'s own comment above -- same
+					// reasoning applies here.
+					if (z_port_send(&c->port, echo, echo_len) != Z_OK)
+						printf("repl: echo z_port_send failed (%lu bytes) to pid %ld\n",
+							(unsigned long)echo_len, (long)c->port.peer_pid);
+				}
+
+				if (!complete) continue;
+
+				char out[Z_REPL_EVAL_REPLY_MAX];
+				bool wants_quit =
+					dispatch_line(c->line.buf, out, sizeof(out), c->port.peer_pid);
+
+				if (out[0]) {
+					conn_send_str(c, out);
+					conn_send_str(c, "\r\n");
+				}
+
+				if (wants_quit) {
+					z_port_close(&c->port);
+					// c->port.connected is now false -- if more bytes
+					// from this same peer are still queued behind this
+					// DATA message (unlikely, but not impossible), the
+					// tag won't match a connected slot anymore and
+					// find_conn_by_tag() will just drop them next
+					// time, same as any other post-close stray DATA.
+					break;
+				}
+
+				conn_send_str(c, PROMPT);
+				z_line_reset(&c->line);
+
+			}
+
 		}
-
-		if (!complete) continue;
-
-		char out[Z_REPL_EVAL_REPLY_MAX];
-		bool wants_quit =
-			dispatch_line(c->line.buf, out, sizeof(out), c->port.peer_pid);
-
-		if (out[0]) {
-			conn_send_str(c, out);
-			conn_send_str(c, "\r\n");
-		}
-
-		if (wants_quit) {
-			z_port_close(&c->port);
-			// c->port.connected is now false -- if more bytes from
-			// this same peer are still queued behind this DATA
-			// message (unlikely, but not impossible), the tag won't
-			// match a connected slot anymore and handle_data()'s own
-			// early-return above will just drop them, same as any
-			// other post-close stray DATA.
-			return;
-		}
-
-		conn_send_str(c, PROMPT);
-		z_line_reset(&c->line);
 
 	}
+
+	// tells whoever sent this it's now safe to free its own
+	// z_obj_blob() allocation -- see z_port_send_ack()'s own comment
+	// (zport.h) for why this has to come after every branch above has
+	// genuinely finished reading `data` (it's a safe no-op for a
+	// stale/unrecognized connection, or an empty/malformed payload --
+	// neither of those branches ever touch `data` at all). One call
+	// site covering every way this function can finish, on purpose,
+	// rather than one per early exit, so it can't accidentally get
+	// missed if this function's control flow changes later.
+	z_port_send_ack(msg);
 
 }
 
@@ -682,6 +700,9 @@ int main(void) {
 				handle_connect(&msg);
 			} else if (msg.subject == Z_PORT_DATA) {
 				handle_data(&msg);
+			} else if (msg.subject == Z_PORT_DATA_ACK) {
+				repl_conn_t *c = find_conn_by_tag(msg.tag);
+				if (c) z_port_handle_ack(&c->port, &msg);
 			} else if (msg.subject == Z_PORT_CLOSE) {
 				handle_close(&msg);
 			} else if (msg.subject == Z_REPL_EVAL) {

@@ -372,17 +372,32 @@ static void handle_telnet_port_connect(const z_msg_t *msg) {
 
 static void handle_telnet_port_data(const z_msg_t *msg) {
 
-	if (telnet_state != TN_ACTIVE || !telnet_port.connected ||
-		msg->tag != telnet_port.conn_id) return;
+	if (telnet_state == TN_ACTIVE && telnet_port.connected &&
+		msg->tag == telnet_port.conn_id) {
 
-	uint32_t len = z_blob_len(&msg->obj);
-	void *data = z_blob_data(&msg->obj);
-	if (data && len) telnet_send((const uint8_t *)data, (uint16_t)len);
-	// telnet_send() returning false here (its own outbound queue is
-	// full) just drops these bytes -- the same accepted
-	// fire-and-forget flow-control gap docs/ports.md already
-	// documents for the port protocol itself, not worth building a
-	// second layer of backpressure over.
+		uint32_t len = z_blob_len(&msg->obj);
+		void *data = z_blob_data(&msg->obj);
+		if (data && len) telnet_send((const uint8_t *)data, (uint16_t)len);
+		// telnet_send() returning false here (its own outbound queue
+		// is full) just drops these bytes -- the same accepted
+		// fire-and-forget flow-control gap docs/ports.md already
+		// documents for the port protocol itself, not worth building
+		// a second layer of backpressure over.
+
+	}
+
+	// tells `term` it's now safe to free its own z_obj_blob()
+	// allocation for this message -- see z_port_send_ack()'s own
+	// comment (zport.h) for why this has to come after the branch
+	// above has genuinely finished reading `data` (telnet_send()
+	// already copied whatever it needed via queue_bytes()'s own
+	// memcpy(), telnet.c, before returning). Sent unconditionally,
+	// even when the guard above didn't match and `data` was never
+	// touched at all -- that's still a message `net` will never look
+	// at again, and `term`'s own pending-sends slot for it
+	// (Z_PORT_MAX_PENDING_SENDS, zport.h) needs an ack to ever be
+	// freed regardless of whether `net` did anything useful with it.
+	z_port_send_ack(msg);
 
 }
 
@@ -578,6 +593,7 @@ int main(void) {
 			else if (msg.subject == Z_NET_DNS_RESOLVE) handle_dns_resolve(&msg);
 			else if (msg.subject == Z_PORT_CONNECT) handle_telnet_port_connect(&msg);
 			else if (msg.subject == Z_PORT_DATA) handle_telnet_port_data(&msg);
+			else if (msg.subject == Z_PORT_DATA_ACK) z_port_handle_ack(&telnet_port, &msg);
 			else if (msg.subject == Z_PORT_CLOSE) handle_telnet_port_close(&msg);
 			else tftp_handle_stream_msg(&msg);
 		}
