@@ -576,7 +576,10 @@ int main() {
     printf("3D Spinning Object Demo - Fixed Point Version\r\n");
     printf("Using hardware line rasterizer\r\n");
 
-    if (z_win_create(&win, "gpu3d", WIN_WIDTH, WIN_HEIGHT) != Z_OK) {
+    // see term.c's own comment on this flag combination -- gpu3d owns
+    // exactly one window for its whole lifetime.
+    if (z_win_create_flags(&win, "gpu3d", WIN_WIDTH, WIN_HEIGHT, -1, -1,
+        Z_WIN_FLAG_CLOSE_ICON | Z_WIN_FLAG_CLOSE_KILLS_OWNER) != Z_OK) {
         printf("gpu3d: failed to create window\r\n");
         return 1;
     }

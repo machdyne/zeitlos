@@ -273,16 +273,32 @@ only when `CTRL_CLIP` is actually set:
   writes if both try to set up a blit operation at once -- one
   process's dst_x/dst_y/etc. writes could land in between another's,
   corrupting both operations. Same class of problem as the GPU line
-  rasterizer's shared clip register. **Fixed for fill mode** by
-  `sw/common/zgfx.c`'s `z_fb_hw_fill_rect()` (IRQ-masked
-  register-writes-then-trigger sequence, coordinates clamped
-  unconditionally regardless of `CTRL_CLIP`) -- see
-  `docs/app_runtime.md`, "The GPU blitter" for the full writeup.
-  **Still open for glyph mode**: `zgfx.c`'s hardware glyph path
-  (`z_fb_draw_char()`/`z_fb_draw_text()`) shares these same registers
-  but isn't `maskirq()`-protected, so a fill from one process and a
-  glyph blit from another could still interleave badly. Not unified
-  with the fill-mode fix yet.
+  rasterizer's shared clip register. Both fill mode
+  (`z_fb_hw_fill_rect()`) and glyph mode (`z_fb_draw_char()`/
+  `z_fb_draw_char2()`/`z_fb_draw_icon()`) already wrapped their own
+  register-writes-then-trigger sequence in `maskirq()`, so two
+  processes' register writes themselves can't interleave. **What
+  WASN'T covered**, until `gpu_blit_acquire()` (`sw/common/zgfx.c`):
+  every one of those callers checked "is the hardware idle?" with
+  IRQs still enabled, *then separately* masked IRQs before its own
+  writes+trigger -- a real gap between the check and the mask. A timer
+  IRQ landing in that gap can switch to a different process, which
+  observes the same "idle" state, wins the race, and starts (and
+  fully masks) its own operation; when the original process resumes
+  and finally masks IRQs, the hardware is no longer idle, but nothing
+  re-checked that -- its own START trigger lands while `draw_busy` is
+  still 1 and the state machine isn't in `ST_IDLE`, and is silently
+  dropped (`start_trigger`'s `!draw_busy` gate is only evaluated
+  inside the `ST_IDLE` case -- see `rtl/gpu/gpu_blit.v`). No error,
+  no effect, and the caller has no way to know its operation never
+  happened. `gpu_blit_acquire()` closes this by folding the busy-check
+  into the SAME masked section as the trigger (re-checking under the
+  mask, unmasking and retrying if it lost the race) -- used by all
+  four callers above. See its own (long) comment in `zgfx.c`, and
+  `docs/window_manager.md`'s "Known limitations" entry on `term`'s
+  horizontal-garbage-near-typed-text report, for the full reasoning
+  behind why this is a strong candidate for that bug specifically
+  (not confirmed on real hardware).
 
 ## Bugs found (and fixed) during hardware bring-up
 

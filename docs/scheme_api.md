@@ -313,6 +313,23 @@ to its `z_win_t` (needed for every draw call's clip/offset
 computation) -- no cleanup on `Z_PORT_CLOSE`, a window's lifetime is
 tied to `repl` itself.
 
+**Titlebar close icon.** Every window `(win-create ...)` makes now
+shows a titlebar close icon (`Z_WIN_FLAG_CLOSE_ICON`, see
+`docs/window_manager.md`'s "Window titlebar icons") -- but clicking it
+does NOT kill `repl`, and does not need `Z_WIN_FLAG_CLOSE_KILLS_OWNER`
+(also NOT set here): since `repl` can have several of these windows
+open under the one `zapi_windows[]` table at once, `wm` instead sends
+`Z_WM_CLOSE` for just the clicked window's id, handled in `repl.c`'s
+main loop by `zapi_win_close(id)` (`zapi.c`/`.h`) -- it destroys that
+one table entry, the same bookkeeping `(win-destroy id)` above already
+does, just triggered by the icon instead of an explicit Scheme call.
+The window's `z_win_t` and its slot in the table both go away exactly
+as if `(win-destroy id)` had been called; there's no separate
+Scheme-visible event for this yet (nothing calls back into `ms_eval()`
+when it happens) -- if Scheme code needs to react to a window closing
+rather than just have the bookkeeping cleaned up, that's a real gap to
+revisit, not attempted here.
+
 **Coordinate system: window-relative, `(0,0)` = content top-left.**
 `line`/`box`/`text` all take coordinates relative to the window's own
 CONTENT area -- past the 1px frame border and the 1px breathing-room

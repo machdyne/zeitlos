@@ -109,7 +109,10 @@ int main(void) {
 
 	printf("gpudemo: hardware line rasterizer + window clip test\n");
 
-	if (z_win_create(&win, "gpudemo", WIN_WIDTH, WIN_HEIGHT) != Z_OK) {
+	// see term.c's own comment on this flag combination -- gpudemo
+	// owns exactly one window for its whole lifetime.
+	if (z_win_create_flags(&win, "gpudemo", WIN_WIDTH, WIN_HEIGHT, -1, -1,
+		Z_WIN_FLAG_CLOSE_ICON | Z_WIN_FLAG_CLOSE_KILLS_OWNER) != Z_OK) {
 		printf("gpudemo: failed to create window\n");
 		return 1;
 	}

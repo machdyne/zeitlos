@@ -167,6 +167,93 @@ static inline void gpu_blit_wait_idle(void) {
 	}
 }
 
+// -- cross-process TOCTOU race on the blitter's single busy/idle gate --
+//
+// see docs/gpu_blitter.md, "Concurrent register access", and
+// docs/window_manager.md's "Unresolved: horizontal garbage" note --
+// this function is the fix for both.
+//
+// Every caller that's about to START a new blitter operation (fill OR
+// glyph -- both modes share this one peripheral, the same single
+// draw_busy bit, and no queue of their own) used to poll
+// gpu_blit_status with IRQs still enabled (gpu_blit_wait_idle()/
+// hw_blit_wait() below), THEN separately call maskirq() before
+// writing its own registers and trigger. That gap between "observed
+// idle" and "IRQs actually masked" is a real window: a timer IRQ
+// landing in it can switch to a different process, which polls the
+// SAME still-idle status, wins the race, and starts its own operation
+// (masked, so it runs to completion uninterrupted). When the original
+// process resumes and finally masks IRQs, the hardware is no longer
+// idle -- but nothing re-checked that. Its own CTRL write (with START
+// set) lands while draw_busy is 1 and the state machine isn't in
+// ST_IDLE (rtl/gpu/gpu_blit.v) -- `start_trigger` is gated on
+// `!draw_busy`, evaluated only inside the ST_IDLE case, so the write
+// is accepted onto the bus (wb_ack_o still fires) but has NO EFFECT:
+// no new operation starts, and nothing reports this back in software.
+// The caller returns believing it just triggered a glyph blit or a
+// fill; the framebuffer cells it meant to touch are left exactly as
+// they were before the call.
+//
+// This is a strong theoretical fit for term's reported "horizontal
+// garbage near freshly-typed text" (docs/window_manager.md): a
+// dropped glyph trigger leaves a cell showing whatever was there
+// before -- stale content, which is exactly what "duplicating
+// recently-typed characters" or "solid blocks" (an old reverse-video
+// cursor cell) would look like -- and it's specific to active typing
+// because term's render() issues many z_fb_draw_char2() calls in a
+// tight sequence while redrawing a dirty row, multiplying how often
+// this narrow gap gets exercised; wm's own fill-mode use (repair_
+// region()'s fill_rect(), which shares this exact peripheral/busy bit
+// with glyph mode) is a second, independent process that can win that
+// race against term at any moment, not just during a drag. It also
+// explains why the project's own RTL testbenches (docs/gpu_blitter.md)
+// never caught it: they exercise gpu_blit_wb in isolation against a
+// bus model, not this software-level, cross-PROCESS scheduling race,
+// which only exists once two processes are actually competing for the
+// same peripheral on real hardware. Not confirmed as THE root cause
+// (nothing here was reproduced on real hardware to prove it), but
+// it's a genuine, previously-open race regardless of whether it's
+// this one -- closing it is correct either way.
+//
+// Fix: fold the busy-check into the SAME masked section as the
+// trigger, so nothing can get between them. The (potentially long)
+// spin-wait itself stays OUTSIDE the mask, same reasoning
+// gpu_wait_fifo()/gpu_blit_wait_idle()/hw_blit_wait() already
+// document (masking through a genuinely long wait would stall the
+// scheduler for every other process, not just this one) -- only the
+// FINAL check, a single cheap register read, happens with IRQs
+// already masked. If that final check finds the hardware busy after
+// all (another process won the race in the gap between the spin-wait
+// and the mask), this unmasks and goes around again rather than
+// blocking with IRQs disabled.
+//
+// Returns with IRQs masked -- the caller must finish its own register
+// writes and trigger, then call maskirq(old_mask) itself (same
+// contract the old bare maskirq(0xFFFFFFFF) call had).
+static inline uint32_t gpu_blit_acquire(void) {
+
+	for (;;) {
+
+		uint32_t waited = 0;
+		while (gpu_blit_status & 1) {
+			if (++waited > 10000000) {
+				printf("zgfx: gpu blitter wait timed out -- blitter may be stuck\n");
+				break;
+			}
+		}
+
+		uint32_t old_mask = maskirq(0xFFFFFFFF);
+		if (!(gpu_blit_status & 1)) return old_mask;
+
+		// lost the race: something else started an operation in the
+		// gap between the spin-wait above and this check. unmask and
+		// try again.
+		maskirq(old_mask);
+
+	}
+
+}
+
 void z_fb_hw_fill_rect(int x, int y, int w, int h, int color) {
 
 	// clamp to actual screen bounds -- unconditional, regardless of
@@ -179,13 +266,11 @@ void z_fb_hw_fill_rect(int x, int y, int w, int h, int color) {
 	if (y + h > Z_SCREEN_H) h = Z_SCREEN_H - y;
 	if (w <= 0 || h <= 0) return;	// nothing left to draw
 
-	// wait for any prior blitter operation to finish -- including one
-	// from the hardware glyph path (z_fb_draw_char(), below, shares
-	// this same register set) or another process -- before touching
-	// its registers ourselves.
-	gpu_blit_wait_idle();
-
-	uint32_t old_mask = maskirq(0xFFFFFFFF);
+	// waits for any prior blitter operation to finish AND masks IRQs
+	// atomically with that check -- see gpu_blit_acquire()'s own
+	// comment for why the old "wait, then separately mask" sequence
+	// that used to be here was a genuine cross-process race.
+	uint32_t old_mask = gpu_blit_acquire();
 
 	gpu_blit_dst_x = (uint32_t)x;
 	gpu_blit_dst_y = (uint32_t)y;
@@ -263,14 +348,6 @@ void z_fb_draw_char(int x, int y, char c, int color, const z_font_t *font, const
 		return;
 	}
 
-	hw_blit_wait();	// wait for any previous glyph blit to finish --
-					// deliberately outside the masked section below,
-					// same reasoning as z_fb_hw_line()'s own
-					// gpu_wait_fifo() comment: this can legitimately
-					// take a while, and masking through it would
-					// stall the scheduler for every other process,
-					// not just this one.
-
 	// z_fb_hw_line()/z_fb_hw_fill_rect() both mask IRQs around their
 	// own multi-register hardware setup, specifically because the
 	// blitter/rasterizer registers are SHARED, board-wide hardware --
@@ -286,7 +363,16 @@ void z_fb_draw_char(int x, int y, char c, int color, const z_font_t *font, const
 	// pixels near text on real hardware, timing-dependent (worse with
 	// more than one process actually drawing glyphs around the same
 	// time, e.g. two `term` windows, or `term` alongside `hello_win`).
-	uint32_t old_mask = maskirq(0xFFFFFFFF);
+	//
+	// gpu_blit_acquire() (see its own comment, above z_fb_hw_fill_
+	// rect()) folds the "wait for idle" step into the SAME masked
+	// section as the trigger below -- this used to be a separate
+	// hw_blit_wait() (unmasked) followed by a separate maskirq() call,
+	// which was itself a cross-process race: see that function's
+	// comment for the full writeup, including why this is suspected
+	// to be the actual cause of the "horizontal garbage near
+	// freshly-typed text" report (docs/window_manager.md).
+	uint32_t old_mask = gpu_blit_acquire();
 
 	gpu_blit_dst_x = x;
 	gpu_blit_dst_y = y;
@@ -370,17 +456,17 @@ void z_fb_draw_char2(int x, int y, char c, int fg_color, int bg_color,
 		return;
 	}
 
-	hw_blit_wait();	// wait for any previous glyph blit to finish --
-					// deliberately outside the masked section below,
-					// same reasoning as z_fb_draw_char()'s own comment.
-
-	// see z_fb_draw_char()'s own comment above for why this needs the
-	// same IRQ masking z_fb_hw_line()/z_fb_hw_fill_rect() already
-	// have -- this function has the identical 7-write-then-trigger
-	// shape, and term.c's own per-cell rendering (draw_cell(), via
-	// this exact function) is precisely the kind of frequent,
-	// multi-process-concurrent caller that gap mattered for.
-	uint32_t old_mask = maskirq(0xFFFFFFFF);
+	// see z_fb_draw_char()'s own comment above (and gpu_blit_
+	// acquire()'s own, longer comment above z_fb_hw_fill_rect()) for
+	// why this needs the SAME atomic wait+mask gpu_blit_acquire()
+	// provides, not a separate wait-then-mask -- this function has
+	// the identical 7-write-then-trigger shape, and term.c's own
+	// per-cell rendering (draw_cell(), via this exact function,
+	// called many times per keystroke while typing) is precisely the
+	// kind of frequent, multi-process-concurrent caller that gap
+	// mattered for, and the leading suspect for the "horizontal
+	// garbage near freshly-typed text" report.
+	uint32_t old_mask = gpu_blit_acquire();
 
 	gpu_blit_dst_x = x;
 	gpu_blit_dst_y = y;
@@ -411,6 +497,58 @@ void z_fb_draw_text2(int x, int y, const char *s, int fg_color, int bg_color,
 	}
 
 	hw_blit_wait();	// see z_fb_draw_text()'s own comment on why
+
+}
+
+// -- window icons -- see zicon.h and zgfx.h's own comments on
+// z_gfx_hw_icon_load()/z_fb_draw_icon(). Same glyph-blit hardware
+// path as font text above (rtl/gpu/gpu_blit.v's CTRL_GLYPH mode),
+// just addressed into the reserved icon region at the end of glyph
+// memory (Z_ICON_MEM_OFFSET) instead of the font region at the start.
+
+void z_gfx_hw_icon_load(int icon_id, const uint8_t *bitmap) {
+
+	if (icon_id < 0 || icon_id >= Z_ICON_SLOTS) return;
+
+	volatile uint8_t *glyph_mem = (volatile uint8_t *)GLYPH_MEM_BASE;
+	uint32_t base = (uint32_t)Z_ICON_MEM_OFFSET + (uint32_t)icon_id * Z_ICON_H;
+
+	for (uint32_t i = 0; i < Z_ICON_H; i++)
+		glyph_mem[base + i] = bitmap[i];
+
+}
+
+void z_fb_draw_icon(int x, int y, int icon_id, int fg_color, int bg_color, const z_clip_t *clip) {
+
+	if (icon_id < 0 || icon_id >= Z_ICON_SLOTS) return;
+
+	bool fits =
+		x >= 0 && y >= 0 &&
+		x + Z_ICON_W <= Z_SCREEN_W && y + Z_ICON_H <= Z_SCREEN_H &&
+		(!clip ||
+			(x >= clip->x0 && y >= clip->y0 &&
+			 x + Z_ICON_W - 1 <= clip->x1 && y + Z_ICON_H - 1 <= clip->y1));
+
+	// unlike z_fb_draw_char()/z_fb_draw_char2(), there's no software
+	// fallback for a partially off-screen/clipped icon -- see this
+	// function's own declaration in zgfx.h for why that's fine here
+	// (window icons are only ever drawn by wm itself, entirely inside
+	// a titlebar rect it already knows is on-screen).
+	if (!fits) return;
+
+	uint32_t old_mask = gpu_blit_acquire();	// see its own comment,
+												// above z_fb_hw_fill_rect()
+
+	gpu_blit_dst_x = x;
+	gpu_blit_dst_y = y;
+	gpu_blit_glyph_addr = (uint32_t)Z_ICON_MEM_OFFSET + (uint32_t)icon_id * Z_ICON_H;
+	gpu_blit_glyph_w = Z_ICON_W;
+	gpu_blit_glyph_h = Z_ICON_H;
+	gpu_blit_fg_color = fg_color ? 1 : 0;
+	gpu_blit_bg_color = bg_color ? 1 : 0;
+	gpu_blit_ctrl = GPU_BLIT_CTRL_START | GPU_BLIT_CTRL_GLYPH;
+
+	maskirq(old_mask);
 
 }
 
@@ -493,6 +631,24 @@ void z_fb_draw_text2(int x, int y, const char *s, int fg_color, int bg_color,
 		cx += font->w;
 	}
 
+}
+
+// window icons are a hardware-glyph-blit-only feature (see zicon.h's
+// own header comment and zgfx.h's declarations) -- documented no-ops
+// without Z_GFX_HW_BLIT, same contract z_gfx_hw_font_load() above
+// already has, so callers don't need their own #ifdef.
+void z_gfx_hw_icon_load(int icon_id, const uint8_t *bitmap) {
+	(void)icon_id;
+	(void)bitmap;
+}
+
+void z_fb_draw_icon(int x, int y, int icon_id, int fg_color, int bg_color, const z_clip_t *clip) {
+	(void)x;
+	(void)y;
+	(void)icon_id;
+	(void)fg_color;
+	(void)bg_color;
+	(void)clip;
 }
 
 #endif

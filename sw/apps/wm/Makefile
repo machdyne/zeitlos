@@ -8,7 +8,7 @@ CFLAGS = --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=ilp32 -DZ_GFX_HW_BLIT
 LDFLAGS = -march=$(ARCH) -mabi=ilp32
 LDSCRIPT = ../../common/riscv-app.ld
 
-OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zkbd.o dock_icons.o wm.o
+OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zkbd.o dock_icons.o win_icons.o wm.o
 
 # built with -DZ_GFX_HW_BLIT, same as hello_win/term -- the dock's
 # icon labels (see wm.c's draw_dock()) go through the hardware glyph
@@ -46,6 +46,12 @@ zkbd.o:
 # dock_icons.h's own header comment).
 dock_icons.o: dock_icons.c dock_icons.h
 	$(CC) $(CFLAGS) -c dock_icons.c -o dock_icons.o
+
+# win_icons.c/.h are hand-edited (binary literals), not generated --
+# see win_icons.h's own header comment. Titlebar close icon and any
+# future window icon (minimize, open file, save file, ...) live here.
+win_icons.o: win_icons.c win_icons.h
+	$(CC) $(CFLAGS) -c win_icons.c -o win_icons.o
 
 wm.o:
 	$(CC) $(CFLAGS) -c wm.c -o wm.o

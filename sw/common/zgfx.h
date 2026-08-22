@@ -42,6 +42,7 @@
 
 #include <stdint.h>
 #include "zfont.h"
+#include "zicon.h"
 
 #define Z_SCREEN_W 640
 #define Z_SCREEN_H 480
@@ -134,5 +135,32 @@ void z_fb_hw_fill_rect(int x, int y, int w, int h, int color);
 // need their own #ifdef. See docs/window_manager.md, "hardware glyph
 // blitting".
 void z_gfx_hw_font_load(const z_font_t *font);
+
+// loads one 8x8 window icon's glyph data (Z_ICON_H bytes, one row per
+// byte, MSB-first -- same row-major/bit-order convention as a
+// z_font_t's own glyphs, see zfont.h) into hardware glyph memory's
+// reserved icon region (zicon.h's Z_ICON_MEM_OFFSET). `icon_id` is a
+// zicon.h z_icon_id_t. Same single-owner discipline as
+// z_gfx_hw_font_load(): call this once per icon, from wm's own
+// startup, right after loading the font -- see sw/apps/wm/win_icons.h
+// and wm.c's main(). Always declared/callable regardless of
+// Z_GFX_HW_BLIT -- a documented no-op without it, so callers don't
+// need their own #ifdef, same contract z_gfx_hw_font_load() has.
+void z_gfx_hw_icon_load(int icon_id, const uint8_t *bitmap);
+
+// hardware-blits window icon `icon_id` (zicon.h) at (x,y), 8x8,
+// solid two-color-cell semantics (fg where an icon bit is set, bg
+// where it isn't) -- same as z_fb_draw_char2(). Unlike font glyphs
+// there's no software fallback for a partially off-screen/clipped
+// icon: window icons are only ever drawn by wm itself, entirely
+// within a titlebar rect it already computed and knows is on-screen
+// (see sw/apps/wm/wm.c's draw_titlebar_content()), so that case is
+// never actually exercised, and a call that doesn't fully fit simply
+// draws nothing rather than carrying a second, untested rendering
+// path. Always declared/callable regardless of Z_GFX_HW_BLIT -- a
+// documented no-op without it (window icons are a hardware-only
+// feature, see zicon.h's own header comment), so callers don't need
+// their own #ifdef.
+void z_fb_draw_icon(int x, int y, int icon_id, int fg_color, int bg_color, const z_clip_t *clip);
 
 #endif

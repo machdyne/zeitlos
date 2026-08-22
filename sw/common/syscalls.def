@@ -50,3 +50,10 @@ Z_MKSYSCALL(FS_OPEN_READ, k_fs_open_read)
 Z_MKSYSCALL(FS_READ_CHUNK, k_fs_read_chunk)
 Z_MKSYSCALL(FS_WRITE_CHUNK, k_fs_write_chunk)
 Z_MKSYSCALL(FS_CLOSE, k_fs_close)
+// kills another process outright, from userland -- see
+// k_proc_kill_syscall() in sw/os/kernel.c for the full writeup. Added
+// for sw/apps/wm's Z_WIN_FLAG_CLOSE_KILLS_OWNER (docs/window_manager.md):
+// wm needs to be able to kill a window's owning process when its
+// close icon is clicked, the same way k_proc_run() (above) let wm
+// start one.
+Z_MKSYSCALL(PROC_KILL, k_proc_kill_syscall)

@@ -22,4 +22,13 @@
 // else gets a chance to eval).
 void zapi_register(void);
 
+// destroys the Scheme-owned window with this wm window id (if this
+// process still has one open under it) -- see zapi.c's own comment
+// for the full writeup. Called from repl.c's main loop on Z_WM_CLOSE
+// (sw/common/zwm.h) -- the one piece of the window-close protocol
+// that has to live in repl.c itself rather than zapi.c, since
+// zapi.c's own procedures only ever run from an ms_eval() call, never
+// from the message loop directly.
+void zapi_win_close(int id);
+
 #endif

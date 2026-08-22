@@ -2,6 +2,7 @@
 // diamond 3.8-3.9 is untested
 // diamond 3.10 or higher is likely to abort with error about unable to use feedback signal
 // cause of this could be from wrong CPHASE/FPHASE parameters
+`ifdef OSC48
 module pll1
 (
     input clkin, // 48 MHz, 0 deg
@@ -73,3 +74,4 @@ EHXPLLL #(
 assign clkout0 = clkfb;
 
 endmodule
+`endif

@@ -137,7 +137,86 @@ mouse, keyboard events only ever go to the *focused* window's owner;
 a window with no mouse available to click still gets focus once, on
 creation, if nothing else is already focused (also covered in
 `docs/user_input.md`) -- otherwise a keyboard-only session would have
-no way to focus anything at all.
+no way to focus anything at all. See "Keyboard-only operation" below
+for everything else that adds -- Alt+Tab, Alt+Arrow, and the dock's
+own keyboard navigation, all of which now cover the same ground the
+mouse does.
+
+## Keyboard-only operation
+
+Keyboard-only use is a first-class case, not an afterthought -- Zeitlos
+has no requirement that a mouse be plugged in at all. Everything a
+mouse can do to `wm` itself (focus a window, move it, launch an app
+from the dock) has a keyboard equivalent, all handled directly in
+`dispatch_keys()` (`wm.c`) and never forwarded to any app's own
+`Z_WM_KEY` stream:
+
+- **Alt+Tab** cycles focus to the next window, dock included (see
+  "The dock" below for why the dock counts as a focusable item now,
+  not just an always-on-top overlay) -- `next_focusable()` walks
+  `windows[]` in fixed SLOT order (not z-order: the dock is kept
+  frontmost in z-order at all times via `bring_to_front(dock_idx)`
+  calls scattered through this file, which would otherwise dominate/
+  distort a z-order-based cycle), wrapping around, and skips unused
+  slots. The newly-focused window is brought to front exactly the way
+  a mouse click on it already would be -- `alt_tab()` mirrors that
+  code path rather than introducing a second one.
+- **Alt+Arrow** moves the *focused* window by `WM_KEY_MOVE_STEP` (10)
+  pixels in that direction, clamped to the screen the same way a mouse
+  drag already is -- a no-op if the dock is what's focused (its
+  position is fixed, see `create_dock()`). Implemented as an instant,
+  single-step version of a mouse drag: `alt_move_focused()` updates
+  the window's position directly, then hands the before/after
+  bounding box to `repair_drag()` -- the exact same sweep-region
+  repair a real drag-release already uses (see "Redraw strategy"
+  above) -- rather than re-deriving that logic.
+- **The dock is now focusable** (Alt+Tab reaches it like any other
+  window) and, while it has focus, Left/Right/Up/Down move a selection
+  cursor between icons (wrapping around) and Enter launches the
+  selected one -- see `dock_handle_key()`. This reuses the exact same
+  `dock_launch()` codepath a mouse click already goes through (see
+  below), just reached a different way; both keyboard Enter and a
+  mouse click on an icon are just two calls into the same function
+  now, not two separate implementations. A small 1px-outset selection
+  ring (`draw_dock_selection_ring()`, same visual language as a
+  focused *window's* own outset border -- see `draw_window_box()`)
+  shows which icon is selected, but only while the dock itself
+  actually has keyboard focus -- it's not drawn at all otherwise, so
+  it can't be mistaken for anything else on screen.
+- **Dock launch feedback.** Whichever way an app gets launched from
+  the dock -- mouse click or keyboard Enter -- its icon is drawn
+  *inverted* (`dock_launching[]`, `draw_icon_bitmap_inverted()`: a
+  solid-filled slot with the icon's own shape cut out of it, rather
+  than lit up against a dark slot) starting BEFORE `z_proc_run()` is
+  even called, not after it returns -- `z_proc_run()`
+  (`sw/os/kernel.c`'s `k_proc_run()`) blocks wm's own process for as
+  long as it takes to load the app's entire binary off the
+  filesystem, which is the actual slow part of "launching" -- drawing
+  the inverted icon only after that call returns would mean the
+  invert only ever covered the (usually imperceptibly fast)
+  remainder: the newly-started process's own C runtime init plus its
+  first `z_win_create()` call, with no disk I/O left in it by that
+  point. `dock_launch()`'s own framebuffer write lands in VRAM and
+  stays there, visible on screen, even while wm sits blocked inside
+  `z_proc_run()` right after -- the display scans out from VRAM
+  independently of whichever process the CPU happens to be running.
+  The inverted state is cleared either when the launched pid creates
+  its first window (`handle_message()`'s `Z_WM_CREATE_WINDOW` case,
+  matched by pid, not by which icon was clicked -- an app could in
+  principle create its window from a different code path than the one
+  that "feels" tied to the click, but pid is the only identity wm
+  actually has to go on) or immediately if `z_proc_run()` itself
+  fails synchronously (file missing, no free process slot -- no pid
+  will ever exist to clear it the normal way). While an icon is
+  inverted, launching it again (from either input method) is a no-op
+  -- `dock_launch()`'s own `dock_launching[slot]` check -- so an
+  impatient double-click or a held-down Enter can't spawn a
+  slow-loading app twice before its first window ever shows up. A
+  generous iteration-count timeout (`DOCK_LAUNCH_TIMEOUT_ITERS`,
+  checked once per main-loop iteration) clears the inverted state
+  anyway if a launched process starts but never creates a window at
+  all (crashes early, isn't a GUI app, etc) -- otherwise a single bad
+  launch would permanently strand that icon.
 
 ## App protocol
 
@@ -595,6 +674,116 @@ See `sw/apps/hello_win` for a complete minimal example: create a
 window, draw text into it, redraw on `Z_WM_REDRAW`/`Z_WM_WINDOW_MOVED`
 and on its own periodic tick.
 
+## Window titlebar icons
+
+Every window's titlebar (see "Window representation" above,
+`Z_WM_TITLEBAR_H`) now shows its title text on the left (drawn with
+`z_font_5x8` via `z_fb_draw_text()`, same hardware glyph blitter as
+everything else in this section) and, optionally, a small close icon
+on the right.
+
+**Icons live in the same hardware glyph memory as font data, in a
+separate reserved region** -- see `sw/common/zicon.h`. Font glyphs
+occupy the *front* of glyph memory (offset 0, `z_gfx_hw_font_load()`,
+unchanged from before); window icons occupy a small, fixed-size
+region at the very *end* (`Z_ICON_MEM_OFFSET`, currently 256 bytes --
+32 slots of 8x8 1bpp each). This split means adding or resizing
+window icons can never disturb font glyph addressing, and the two
+regions can only collide if font data itself grows to consume nearly
+all of glyph memory, which none of the currently-defined fonts come
+close to. `z_gfx_hw_icon_load()`/`z_fb_draw_icon()` (`zgfx.h`) are the
+loading/drawing primitives -- same `CTRL_GLYPH` hardware blit mode
+`z_fb_draw_char()` uses, just addressed into the icon region instead
+of the font region. Like the font, **`wm` is the sole owner**: it
+loads every window icon once, at its own startup
+(`z_win_icons_load()`, `sw/apps/wm/win_icons.c`), right after loading
+`z_font_5x8` -- same single-owner discipline "Hardware glyph
+blitting" above already established for the font, extended to cover
+icons too, for the same reason (nothing else ever writes to glyph
+memory, so there's nothing to race over).
+
+**Window icon bitmaps are hand-edited, not generated** (unlike dock
+icons, `sw/apps/wm/dock_icons.c`, which come from
+`sw/data/icons/gen_dock_icon_data.py` and a source PNG) --
+`win_icons.c` uses binary literals (one `0b`-prefixed byte per glyph
+row) specifically so an 8x8 icon can be eyeballed and tweaked
+directly as bits, without round-tripping through an image editor and
+a generator script for something this small. The one currently
+defined, `Z_ICON_CLOSE` (`zicon.h`), is a hollow box -- deliberately
+NOT an X, since the mouse cursor itself is drawn as an X
+(`rtl/gpu/gpu_cursor.v`) and a same-shaped close icon under the
+pointer would be genuinely hard to read, not just an aesthetic
+mismatch. Adding a new window icon (minimize, open file, save file,
+...) is: append an id to `z_icon_id_t` (`zicon.h`, before
+`Z_ICON_ID_COUNT`), add its 8-byte bitmap to `win_icons.c`, and add
+one `z_gfx_hw_icon_load()` call for it in `z_win_icons_load()`.
+
+**Whether a window gets a close icon at all, and what clicking it
+does, is opt-in per window** via a `Z_WIN_FLAG_*` bitmask (`zwm.h`)
+passed to `Z_WM_CREATE_WINDOW`'s new `flags` key -- app-side entry
+point is `z_win_create_flags()` (`zwin.h`), which `z_win_create()`/
+`z_win_create_ex()` now both just call with `flags=0` (no icon), so
+every caller written before this feature existed is unaffected.
+- `Z_WIN_FLAG_CLOSE_ICON` -- draw the close icon at all. Without it
+  (the default), no icon, and the titlebar can't be clicked closed.
+- `Z_WIN_FLAG_CLOSE_KILLS_OWNER` -- meaningless without the flag
+  above. **Set**: clicking the icon makes `wm` destroy the window
+  AND kill the owning process outright (`z_proc_kill()`, a new
+  syscall -- see below), no message round trip, no chance for the
+  app to ignore it. Only correct for an app that owns exactly one
+  window for its whole lifetime -- `term`, `hello_win`, `gpu3d`, and
+  `gpudemo` all opt into this combination now. **Clear** (the
+  default when `Z_WIN_FLAG_CLOSE_ICON` is set alone): `wm` instead
+  sends the window's owner a new `Z_WM_CLOSE` message (a `Z_UINT32`
+  window id, fire-and-forget, same convention as `Z_WM_REDRAW`/
+  `Z_WM_KEY`) and does nothing else on its own -- the window stays
+  open and interactive until/unless the owner itself calls
+  `z_win_destroy()` on that specific id. This is the right choice
+  for any app that can own MORE than one window at a time off a
+  single pid: `repl`'s Scheme `win-create` (`docs/scheme_api.md`,
+  `sw/apps/repl/zapi.c`) is exactly that case (a single `repl`
+  process can have several Scheme-created windows open
+  simultaneously, tracked in `zapi_windows[]`) -- setting
+  `Z_WIN_FLAG_CLOSE_KILLS_OWNER` there would take down `repl` itself,
+  and every other window it owns, the instant any ONE of them was
+  clicked closed. `repl.c`'s main loop now handles `Z_WM_CLOSE` by
+  calling `zapi_win_close()` (`zapi.h`/`zapi.c`), which just destroys
+  the one matching `zapi_windows[]` entry -- same bookkeeping the
+  Scheme-facing `(win-destroy id)` already does, just reachable
+  directly from the message loop instead of only from Scheme code.
+
+**Click handling**: `wm.c`'s `hit_close_icon()` is checked BEFORE the
+general titlebar-drag/focus-change handling in the main loop's click
+dispatch, so clicking the icon closes the window instead of starting
+a drag or changing focus first. `close_icon_rect()` computes the
+icon's on-screen rect once and is shared between the hit test and the
+actual draw (`draw_titlebar_content()`), the same "compute once,
+share everywhere" reasoning `z_win_content_rect()`'s own comment
+gives for the identical class of bug.
+
+**Titlebar text/icon are drawn separately from the border**, in
+`draw_titlebar_content()`, called from `repair_region()` right after
+`draw_window_box()` -- NOT from the wireframe-drag block in `main()`,
+which calls `draw_window_box()` directly (color=0 then color=1) on
+every intermediate drag step to move just the border cheaply, while
+content stays frozen by design (see "Redraw strategy" above). Title
+text and the close icon are exactly that kind of content, not
+border -- folding them into the per-drag-step border redraw would
+have defeated the entire point of the wireframe-only move for zero
+visual benefit, since neither moves relative to the border anyway.
+
+**New syscall: `Z_SYS_PROC_KILL`** (`syscalls.def`,
+`k_proc_kill_syscall()` in `kernel.c`, `z_proc_kill()` in
+`zeitlos.h/.c`) -- lets any userland process kill another by pid, the
+same way the existing `Z_SYS_PROC_RUN` (added earlier for the dock,
+see "The dock" above) let `wm` start one. No ownership/permission
+check, same "apps are fully trusted" model as everything else here
+(see "App trust model" below) -- wm uses this on a window's
+`owner_pid` when `Z_WIN_FLAG_CLOSE_KILLS_OWNER` is set and its close
+icon is clicked. The underlying kernel-internal `k_proc_kill()`
+(used directly by `sh.c`'s `kill` shell command) is unchanged; this
+just exposes the same mechanism as a syscall.
+
 ## App trust model
 
 Apps in Zeitlos are fully trusted -- there's no memory protection
@@ -718,41 +907,84 @@ a convenient API, not a hard guarantee.
   Worth unifying if/when the glyph path gets touched again for
   another reason -- not done proactively here, since it wasn't what
   was asked.
-- **Unresolved: horizontal garbage (~32-64px) near freshly-typed text
-  in `term`, root cause not yet found.** Reported on real hardware
-  after the glyph-fetch pipeline fix (`docs/gpu_blitter.md`, "Bugs
-  found (and fixed)" #3, which did fix a separate, confirmed vertical
-  row-shift/contamination bug) -- garbage appears within roughly 1-2
-  framebuffer words to the right of what's being typed, sometimes
-  duplicating recently-typed characters, sometimes solid blocks;
-  bounded (doesn't reach the window edge), and specifically tied to
-  active typing. Ruled out so far, each via a dedicated testbench (see
-  `rtl/gpu/bench/`), not just review: `gpu_blit.v`'s word-straddle
-  split math (`tb_straddle.v`); a full 48-character line at real
-  5px-pitch spacing, covering every possible word-alignment offset
-  (`tb_line.v`); and cross-master corruption or ack-misrouting through
-  the real `rtl/arbiter.v` + `rtl/mem/vram.v` under aggressive,
-  continuous contention from a second synthetic bus master mimicking
-  `gpu_raster_wb`'s own access pattern (`tb_arbiter_stress.v`) -- all
-  pass cleanly against the fixed RTL. `sw/common/zvt100.c`'s parser
-  and `sw/apps/term/term.c`'s own dirty-tracking/cursor-overlay logic
-  were also reviewed without finding a bug. Given the full row
-  containing the cursor is already redrawn on every dirty frame, a
-  bug confined to *that* redraw should already self-correct on the
-  very next keystroke -- that it doesn't (per the report) points either
-  at something outside what's been simulated here (real board timing
-  the testbenches don't model, or the messaging/port layer
-  double-delivering input -- `sw/common/zport.c`/`sw/os/msg.c`, not
-  yet audited for this) or at a narrower RTL case the above
-  testbenches don't happen to hit. `term.c` now has a temporary,
-  content-safe mitigation (`resweep_right_of_cursor()`, gated on
-  `any_dirty`): it re-stamps a bounded run of columns to the right of
-  the cursor using `vt.cells`' real data, last in `render()`, every
-  frame where something was actually typed -- so worst case it's a
-  handful of redundant (already-fast) glyph blits, and it can't
-  destroy real content the way a blind clear would, but it's a
-  mitigation, not a fix, and won't help if the corruption's source is
-  outside `term`'s own render pass entirely.
+- **Horizontal garbage (~32-64px) near freshly-typed text in `term`
+  -- likely root cause found, mitigation removed in favor of a real
+  fix.** Reported on real hardware after the glyph-fetch pipeline fix
+  (`docs/gpu_blitter.md`, "Bugs found (and fixed)" #3, which did fix a
+  separate, confirmed vertical row-shift/contamination bug) -- garbage
+  appeared within roughly 1-2 framebuffer words to the right of what's
+  being typed, sometimes duplicating recently-typed characters,
+  sometimes solid blocks; bounded (doesn't reach the window edge), and
+  specifically tied to active typing. Ruled out at the RTL level, each
+  via a dedicated testbench (see `rtl/gpu/bench/`), not just review:
+  `gpu_blit.v`'s word-straddle split math (`tb_straddle.v`); a full
+  48-character line at real 5px-pitch spacing, covering every possible
+  word-alignment offset (`tb_line.v`); and cross-master corruption or
+  ack-misrouting through the real `rtl/arbiter.v` + `rtl/mem/vram.v`
+  under aggressive, continuous contention from a second synthetic bus
+  master mimicking `gpu_raster_wb`'s own access pattern
+  (`tb_arbiter_stress.v`) -- all pass cleanly against the fixed RTL.
+  `sw/common/zvt100.c`'s parser and `sw/apps/term/term.c`'s own
+  dirty-tracking/cursor-overlay logic were also reviewed without
+  finding a bug. That pointed at something the RTL-only testbenches
+  above structurally can't exercise: a **software-level, cross-process
+  race**, found on review of `sw/common/zgfx.c`'s glyph/fill-mode
+  callers -- see `gpu_blit_acquire()`'s own (long) comment there for
+  the full writeup. Short version: every caller about to start a new
+  blitter operation used to poll "is the hardware idle?" with IRQs
+  still enabled, then separately mask IRQs before writing its own
+  registers and the START trigger. The blitter (unlike the line
+  rasterizer, which has a FIFO) has no queue -- a START trigger written
+  while another operation is still in flight lands while the state
+  machine isn't in `ST_IDLE` and is silently dropped, no error, no
+  effect. A timer IRQ landing in that narrow "observed idle but not
+  yet masked" gap can switch to a different process (`wm`'s own
+  `fill_rect()`-based screen repairs, or another `term`/`hello_win`
+  instance's own glyph blits -- both share this exact peripheral and
+  busy bit) which wins the race and starts its own operation; when the
+  original process resumes, its own trigger silently no-ops, and the
+  framebuffer cell it meant to update is left showing whatever was
+  there before -- stale content, exactly matching "duplicating
+  recently-typed characters" or "solid blocks" (an old reverse-video
+  cursor cell). It fits "specific to active typing" too: `term`'s
+  `render()` issues many `z_fb_draw_char2()` calls in a tight sequence
+  per dirty row, multiplying how often the gap gets exercised.
+  `gpu_blit_acquire()` closes the gap by folding the busy-check into
+  the SAME masked section as the trigger, with a re-check-and-retry if
+  another process won the race in between -- applied to
+  `z_fb_hw_fill_rect()`, `z_fb_draw_char()`, `z_fb_draw_char2()`, and
+  the new `z_fb_draw_icon()` (all of which share the one peripheral).
+  **This has not been confirmed on real hardware** -- there was no way
+  to reproduce or verify it in this environment -- so treat it as a
+  strong, well-reasoned candidate rather than a proven fix.
+
+  **Update: confirmed insufficient on its own.** After
+  `gpu_blit_acquire()` shipped (with `resweep_right_of_cursor()`
+  removed on the theory it was no longer needed), the artifact was
+  still observed on real hardware -- both in `term`'s typing
+  (the original report) and, new, in `wm`'s own titlebar text (a
+  single-process, no-contention draw, which rules out a
+  cross-*process* race as the sole explanation for at least that
+  occurrence). So either `gpu_blit_acquire()`'s race isn't the (whole)
+  cause, or there's a second, still-unidentified bug -- current
+  suspicion, not yet confirmed via simulation, is something in
+  `rtl/gpu/gpu_blit.v`'s own state machine (see this file's own
+  `TERM_RESWEEP_MITIGATION` note just below). `gpu_blit_acquire()`
+  itself is still believed correct and worth keeping regardless (it
+  closes a real race independent of whether it explains this
+  particular symptom) -- it just isn't sufficient by itself.
+  `resweep_right_of_cursor()` has accordingly been reinstated in
+  `term.c`, now behind a build-time opt-out
+  (`TERM_RESWEEP_MITIGATION`, defined to `1` by default) rather than
+  unconditionally removed or unconditionally present -- see that
+  macro's own comment in `term.c` for how to disable it once a real
+  fix is confirmed (`make term CFLAGS+=-DTERM_RESWEEP_MITIGATION=0`,
+  or edit the `#define`). Leaving it enabled by default costs a
+  handful of redundant (already-fast) glyph blits per keystroke and
+  can only ever redraw *correct* content, never destroy any -- see the
+  mitigation's own comment for why that's true by construction --
+  so there's no real downside to leaving it on while the actual root
+  cause is still being tracked down.
 - **A subtler framebuffer race for overlapping/adjacent windows.**
   `z_fb_set_pixel()`'s read-modify-write of a framebuffer word
   (`VRAM[word_index] |= mask`) isn't atomic. Two non-overlapping

@@ -62,6 +62,14 @@ z_obj_t *k_getpid(z_obj_t *args);	// same reasoning -- named k_getpid,
 									// k_pid_register/z_pid_register
 									// already use, for the same reason
 z_obj_t *k_proc_run(z_obj_t *args);	// ditto -- see definition below
+z_obj_t *k_proc_kill_syscall(z_obj_t *args);	// ditto -- named _syscall, not
+									// k_proc_kill, since that name is already
+									// taken by the existing z_rv k_proc_kill
+									// (uint32_t) below (used directly by sh.c's
+									// `kill` command, and now by this syscall
+									// handler too) -- same k_/z_ naming-collision
+									// reasoning as k_proc_run()'s own comment
+									// just above.
 
 typedef z_obj_t* (*z_syscall_t)(z_obj_t *args);
 
@@ -532,6 +540,26 @@ z_rv k_proc_kill(uint32_t pid) {
 	if (pid >= Z_PROCS_MAX) return Z_FAIL;
 	z_procs[pid].flags |= Z_PROC_FLAG_DIE;
 	return Z_OK;
+}
+
+// syscall wrapper around k_proc_kill() above -- see Z_SYS_PROC_KILL
+// (syscalls.def) and z_proc_kill() (zeitlos.h/.c) for the userland
+// side. Added for sw/apps/wm's Z_WIN_FLAG_CLOSE_KILLS_OWNER
+// (docs/window_manager.md): before this existed, only kernel-space
+// code (sh.c's `kill` command, compiled directly into kernel.bin)
+// could kill an arbitrary process -- same gap k_proc_run() closed for
+// STARTING one, for the same reason (wm needing to reach a kernel
+// facility no syscall exposed yet).
+//
+// No ownership/permission check -- any process can kill any other by
+// pid, same "apps are fully trusted" model the rest of this kernel
+// already runs on (docs/window_manager.md's own "apps are trusted"
+// note). args->val.uint32 is the target pid; result convention
+// matches k_proc_run() just above (z_ok/z_fail only, nothing written
+// back into args -- there's no "new pid" equivalent to report here).
+z_obj_t *k_proc_kill_syscall(z_obj_t *args) {
+	if (!args || args->type != Z_UINT32) return (&z_fail);
+	return (k_proc_kill(args->val.uint32) == Z_OK) ? (&z_ok) : (&z_fail);
 }
 
 uint32_t k_proc_base(uint32_t pid) {

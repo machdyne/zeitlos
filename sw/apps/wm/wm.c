@@ -34,7 +34,9 @@
 #include "../../common/zwm.h"
 #include "../../common/zgfx.h"
 #include "../../common/zkbd.h"
+#include "../../common/zicon.h"
 #include "dock_icons.h"
+#include "win_icons.h"
 
 #define WM_MAX_WINDOWS    16
 #define WM_SCREEN_W       640
@@ -53,6 +55,11 @@ typedef struct {
 	// dock-specific, in case something else wants a chromeless window
 	// later.
 	bool		no_titlebar;
+	// Z_WIN_FLAG_* bitmask (zwm.h) from this window's own
+	// Z_WM_CREATE_WINDOW request -- currently only the close-icon
+	// flags. See close_icon_rect()/hit_close_icon()/
+	// draw_titlebar_content()/handle_close_click() below.
+	uint32_t	flags;
 } wm_window_t;
 
 // -- dock --
@@ -101,6 +108,32 @@ static const dock_app_t dock_apps[] = {
 // checking.
 static int dock_idx = -1;
 
+// -- dock keyboard navigation / launch feedback -- see
+// docs/window_manager.md, "Keyboard-only operation" --
+//
+// which dock icon is currently selected for keyboard navigation
+// (Left/Right/Up/Down while the dock itself has focus -- see
+// dock_handle_key() below), or -1 before the dock has ever had
+// keyboard focus. Only actually drawn (as a selection ring, see
+// draw_dock()) while the dock IS focused -- see dispatch_keys()'s own
+// `focused == dock_idx` check -- so this can stay set to wherever it
+// last was even after focus moves elsewhere, and picks up right where
+// it left off next time.
+static int dock_selected = -1;
+
+// per-slot "an app launched from this icon hasn't created its first
+// window yet" state -- drawn as an inverted icon (draw_dock()) and
+// used to prevent re-launching the same app a second time from an
+// impatient click or Enter press while it's still starting up (see
+// dock_launch()). Cleared either when the launched process (matched
+// by pid, dock_launching_pid[]) creates its first window (handle_
+// message()'s Z_WM_CREATE_WINDOW case) or after DOCK_LAUNCH_TIMEOUT_
+// ITERS main-loop iterations with no window (main()'s own loop) --
+// see that constant's own comment for why a timeout exists at all.
+static bool dock_launching[DOCK_APP_COUNT];
+static uint32_t dock_launching_pid[DOCK_APP_COUNT];
+static uint32_t dock_launching_ticks[DOCK_APP_COUNT];
+
 static wm_window_t windows[WM_MAX_WINDOWS];
 
 // this process's own actual pid -- queried via z_getpid() at startup
@@ -125,6 +158,16 @@ static int drag_min_x, drag_min_y, drag_max_x, drag_max_y;
 
 static void send_win_rect(uint32_t to, uint32_t subject, uint32_t tag, int idx);
 static void handle_message(z_msg_t *msg);
+// forward-declared so the keyboard hotkey handlers (alt_tab()/
+// alt_move_focused(), defined ahead of dispatch_keys() further down --
+// see their own comments) can reuse the exact same focus/z-order/
+// screen-repair machinery the mouse path already uses, rather than
+// duplicating it -- these three are otherwise only defined later in
+// the file (bring_to_front() in "-- window table --", notify_moved()/
+// repair_drag() in "-- app protocol --").
+static bool bring_to_front(int idx);
+static void notify_moved(int idx);
+static void repair_drag(int dragged_idx);
 
 // lightweight redraw notification -- no heap allocation (see
 // Z_WM_REDRAW in zwm.h for why this matters). safe to call as often
@@ -198,6 +241,102 @@ static void draw_window_box(wm_window_t *w, bool is_focused, int color) {
 
 }
 
+// -- titlebar text + close icon --
+//
+// left-aligned window title text ("term0", "gpu3d0", ...) plus an
+// optional close icon (Z_WIN_FLAG_CLOSE_ICON, zwm.h) on the right --
+// both hardware-glyph-blitted (z_fb_draw_text()/z_fb_draw_icon(),
+// zgfx.h), same as every other piece of window chrome wm draws.
+// Deliberately NOT part of draw_window_box(): that function is also
+// called, with color=0 then color=1, on every single step of a
+// wireframe drag (see the dragging block in main() below) to
+// cheaply move just the border -- content stays frozen during a
+// drag by design (repair_drag()'s own comment), and titlebar
+// text/icon are exactly that kind of content, not border. Redrawing
+// them on every drag step would defeat the whole point of the
+// wireframe-only move (cheap, uninterrupted) for zero visual benefit,
+// since the title/icon don't move relative to the border anyway.
+// Instead this is called once, from repair_region() below, at
+// exactly the same point draw_dock() already is -- after chrome is
+// (re)drawn following a create/destroy/focus-change/drag-release, not
+// on every intermediate step.
+#define Z_WM_TITLE_TEXT_MARGIN_X   3
+#define Z_WM_CLOSE_ICON_MARGIN_X   2
+#define Z_WM_CLOSE_ICON_GAP        3	// min gap kept between the end
+					// of the title text and the icon
+
+// vertical extent of the titlebar's actual INTERIOR -- i.e.
+// Z_WM_TITLEBAR_H (zwm.h) minus the 1px top border row (row 0,
+// drawn as part of the window's outer box by draw_window_box(), not
+// titlebar content). Titlebar content must be centered within THIS,
+// not within Z_WM_TITLEBAR_H itself -- treating the border row as
+// available space was exactly the bug that made the close icon look
+// about 1px too high (it was centered as if 12 rows were free, when
+// only 11 -- now 10 -- actually were). See zwm.h's own comment on
+// Z_WM_TITLEBAR_H for the full numbers.
+#define Z_WM_TITLEBAR_CONTENT_Y0   1
+#define Z_WM_TITLEBAR_CONTENT_H    (Z_WM_TITLEBAR_H - Z_WM_TITLEBAR_CONTENT_Y0)
+
+// absolute (screen-relative) y to draw `h` pixels of titlebar content
+// at, centered within Z_WM_TITLEBAR_CONTENT_H -- shared by
+// draw_titlebar_content()'s title text and close icon (both 8px tall
+// right now, z_font_5x8.h/Z_ICON_H, so they land on the exact same
+// row and visually line up), and by close_icon_rect() below, so
+// nothing computes this independently and risks disagreeing.
+static int titlebar_content_y(const wm_window_t *w, int h) {
+	return (int)w->y + Z_WM_TITLEBAR_CONTENT_Y0 + (Z_WM_TITLEBAR_CONTENT_H - h) / 2;
+}
+
+// computes the close icon's on-screen rect for window `w` -- shared
+// between draw_titlebar_content() (below) and hit_close_icon() (see
+// hit_titlebar()'s neighborhood below) so the two can never silently
+// disagree about where the icon actually is, the same "compute once,
+// share everywhere" reasoning zwin.c's own z_win_content_rect()
+// comment gives for the exact same class of bug.
+static void close_icon_rect(const wm_window_t *w, int *out_x, int *out_y) {
+	int x1 = (int)(w->x + w->w - 1);
+	*out_x = x1 - Z_WM_CLOSE_ICON_MARGIN_X - Z_ICON_W + 1;
+	*out_y = titlebar_content_y(w, Z_ICON_H);
+}
+
+static void draw_titlebar_content(wm_window_t *w) {
+
+	if (w->no_titlebar) return;	// nothing to draw -- see the dock
+
+	int x0 = (int)w->x, y0 = (int)w->y;
+	int x1 = (int)(w->x + w->w - 1);
+
+	bool has_close = (w->flags & Z_WIN_FLAG_CLOSE_ICON) != 0;
+	int close_x = 0, close_y = 0;
+	if (has_close) close_icon_rect(w, &close_x, &close_y);
+
+	// clip title text to the titlebar strip, and stop it short of the
+	// close icon (if any) instead of letting a long title run
+	// underneath it. z_fb_draw_text()'s own per-glyph clip (zgfx.c)
+	// keeps this pixel-exact for whichever glyph straddles the clip
+	// boundary -- the same partial-glyph-falls-back-to-software
+	// mechanism every other clipped hardware glyph draw in this
+	// codebase already relies on, not something new introduced here.
+	z_clip_t clip;
+	clip.x0 = x0 + Z_WM_TITLE_TEXT_MARGIN_X;
+	clip.y0 = y0;
+	clip.x1 = has_close ? (close_x - Z_WM_CLOSE_ICON_GAP - 1) : x1;
+	clip.y1 = y0 + Z_WM_TITLEBAR_H - 1;
+
+	if (w->title[0] && clip.x1 >= clip.x0)
+		z_fb_draw_text(x0 + Z_WM_TITLE_TEXT_MARGIN_X,
+			titlebar_content_y(w, z_font_5x8.h),
+			w->title, 1, &z_font_5x8, &clip);
+
+	if (has_close)
+		// clip=NULL: same as draw_window_box()'s own chrome draws --
+		// wm already computed this rect from the window's own bounds,
+		// so it's known on-screen and within the titlebar, nothing
+		// left to clip against.
+		z_fb_draw_icon(close_x, close_y, Z_ICON_CLOSE, 1, 0, NULL);
+
+}
+
 // draws the dock's content (one 32x32 icon slot per dock_apps[]
 // entry) -- called from repair_region() below, same place/timing as
 // an app's own Z_WM_REDRAW-triggered redraw, except synchronous and
@@ -235,6 +374,38 @@ static void draw_icon_bitmap(int x0, int y0, const uint8_t *bitmap) {
 
 }
 
+// draws `bitmap` INVERTED -- a solid-filled slot with the icon's own
+// shape cut out of it, rather than the icon lit up against a dark
+// slot. Used for the "launching" state (dock_launching[], see its own
+// comment) so a launch in progress is visually obvious without adding
+// a whole separate iconography -- see draw_dock() below. The caller
+// is responsible for the solid fill itself (z_fb_hw_fill_rect(),
+// hardware-accelerated, matching this file's "everything through
+// gpu_blit/gpu_raster" convention -- see draw_dock()); this function
+// only punches the icon's own ink pixels back out to 0 on top of it,
+// same per-bit loop as draw_icon_bitmap() above, just inverted.
+static void draw_icon_bitmap_inverted(int x0, int y0, const uint8_t *bitmap) {
+
+	for (int row = 0; row < DOCK_ICON_SIZE; row++) {
+		for (int col = 0; col < DOCK_ICON_SIZE; col++) {
+			uint8_t byte = bitmap[row * (DOCK_ICON_SIZE / 8) + col / 8];
+			int bit = (byte >> (7 - (col % 8))) & 1;
+			if (bit) z_fb_set_pixel(x0 + col, y0 + row, 0, NULL);
+		}
+	}
+
+}
+
+// draws the dock's own keyboard-focus indicator around dock_selected
+// (a 1px-outset ring, same visual language as a focused window's own
+// outset border -- see draw_window_box()'s own comment) -- only ever
+// called while the dock itself has keyboard focus (see draw_dock()
+// below), same as a window's focus ring is only ever drawn for the
+// currently-focused window.
+static void draw_dock_selection_ring(int ix, int iy) {
+	z_fb_hw_box(ix - 1, iy - 1, ix + DOCK_ICON_SIZE, iy + DOCK_ICON_SIZE, 1, NULL);
+}
+
 static void draw_dock(void) {
 
 	if (dock_idx < 0) return;
@@ -242,14 +413,30 @@ static void draw_dock(void) {
 	wm_window_t *w = &windows[dock_idx];
 	int x0 = (int)w->x, y0 = (int)w->y;
 
+	// see dock_selected's own comment -- the ring only shows while
+	// the dock itself is the keyboard-focused item, same as it would
+	// be redrawn away the instant focus moves elsewhere (repair_
+	// region() clears+redraws whatever it covers regardless).
+	bool dock_focused = (focused == dock_idx);
+
 	for (int i = 0; i < DOCK_APP_COUNT; i++) {
 
 		int ix = x0 + DOCK_PADDING + i * (DOCK_ICON_SIZE + DOCK_ICON_GAP);
 		int iy = y0 + DOCK_PADDING;
 
+		if (dock_focused && i == dock_selected)
+			draw_dock_selection_ring(ix, iy);
+
 		z_fb_hw_box(ix, iy, ix + DOCK_ICON_SIZE - 1, iy + DOCK_ICON_SIZE - 1, 1, NULL);
 
-		draw_icon_bitmap(ix, iy, dock_apps[i].bitmap);
+		if (dock_launching[i]) {
+			// see dock_launching[]'s own comment -- solid fill, then
+			// the icon's own ink pixels punched back out to 0 on top.
+			z_fb_hw_fill_rect(ix, iy, DOCK_ICON_SIZE, DOCK_ICON_SIZE, 1);
+			draw_icon_bitmap_inverted(ix, iy, dock_apps[i].bitmap);
+		} else {
+			draw_icon_bitmap(ix, iy, dock_apps[i].bitmap);
+		}
 
 	}
 
@@ -360,6 +547,7 @@ static void repair_region(int rx, int ry, int rw, int rh, int exclude_idx) {
 			(int)w->x, (int)w->y, (int)w->w, (int)w->h))
 			continue;
 		draw_window_box(w, idx == focused, 1);
+		draw_titlebar_content(w);
 		if (idx == dock_idx) draw_dock();
 		if (w->owner_pid == my_pid) continue;
 		if (idx == exclude_idx) continue;
@@ -414,6 +602,251 @@ static inline uint8_t get_mouse_btn(void) {
 	return (cursor >> 20) & 0x0F;
 }
 
+// -- dock launching (shared by mouse click and keyboard Enter) --
+
+// how many main-loop iterations dock_launching[] is allowed to stay
+// set before wm gives up waiting and clears it anyway (see the
+// timeout check in main()'s own loop) -- a safety net for an app that
+// starts but never creates a window at all (crashes early, isn't a
+// GUI app, etc), so a single bad launch can't leave that icon
+// permanently stuck inverted and unrelaunchable. Not a precise time
+// unit -- same caveat REDRAW_ACK_TIMEOUT's own comment gives -- just
+// generously past how long even a slow-loading GUI app should ever
+// take to get as far as its first z_win_create() call.
+#define DOCK_LAUNCH_TIMEOUT_ITERS   5000
+
+// launches dock_apps[slot], same as a mouse click on that icon (see
+// dock_click() below, which now just maps a click to a slot and calls
+// this) -- factored out so keyboard activation (dock_handle_key()'s
+// Enter case) gets EXACTLY the same launching/re-launch-prevention/
+// visual-feedback behavior, not a second copy of it.
+static void dock_launch(int slot) {
+
+	if (slot < 0 || slot >= DOCK_APP_COUNT) return;
+
+	// already launching -- see dock_launching[]'s own comment. Without
+	// this, an impatient double-click, or holding Enter down, could
+	// fire off several copies of a slow-loading app before the first
+	// one even gets as far as creating its window.
+	if (dock_launching[slot]) return;
+
+	// mark this icon "launching" and repaint it inverted BEFORE
+	// calling z_proc_run() below -- NOT after, which is where this
+	// used to happen and was the reason the invert was never actually
+	// visible. z_proc_run() (-> k_proc_run(), sw/os/kernel.c) blocks
+	// THIS process -- wm itself -- for as long as it takes to load
+	// the app's entire binary off the filesystem, which is the actual
+	// slow part of "launching" an app; drawing the inverted icon only
+	// after that call returns means the invert only ever covered the
+	// (usually imperceptibly fast) remainder -- the newly-started
+	// process's own C runtime init plus its first z_win_create() call,
+	// no disk I/O involved at that point. The framebuffer write below
+	// lands in VRAM immediately and stays there, visible on screen,
+	// even while wm's own process sits blocked inside z_proc_run()
+	// right after -- the display scans out from VRAM independently of
+	// whichever process the CPU happens to be running at the time.
+	dock_launching[slot] = true;
+	dock_launching_pid[slot] = 0;	// not known yet -- see below
+	dock_launching_ticks[slot] = 0;
+
+	if (dock_idx >= 0)
+		repair_region(windows[dock_idx].x, windows[dock_idx].y,
+			windows[dock_idx].w, windows[dock_idx].h, -1);
+
+	const char *name = dock_apps[slot].name;
+	printf("wm: dock: launching '%s'\n", name);
+
+	uint32_t pid = z_proc_run(name);
+
+	if (!pid) {
+
+		printf("wm: dock: failed to launch '%s' -- file missing, or no free process slot\n", name);
+
+		// undo the inverted state immediately -- z_proc_run() failed
+		// synchronously (no process was even created), so there's no
+		// pid that will ever create a window and clear this the
+		// normal way (handle_message()'s Z_WM_CREATE_WINDOW case), and
+		// no reason to wait out the timeout either.
+		dock_launching[slot] = false;
+		if (dock_idx >= 0)
+			repair_region(windows[dock_idx].x, windows[dock_idx].y,
+				windows[dock_idx].w, windows[dock_idx].h, -1);
+
+		return;
+
+	}
+
+	printf("wm: dock: launched '%s' as pid %ld\n", name, (long)pid);
+	dock_launching_pid[slot] = pid;
+
+}
+
+// handles one keysym while the dock itself has keyboard focus (see
+// dispatch_keys()'s own `focused == dock_idx` check) -- Left/Up moves
+// the selection to the previous icon, Right/Down to the next (both
+// wrapping around), Enter launches the selected one via dock_launch()
+// above. Returns true if this keysym was one the dock actually
+// consumes (regardless of `pressed` -- a matching key-release is
+// swallowed too, same as a matching key-press, since there's nothing
+// useful to do with either once handled here); false for anything
+// else, which falls through to dispatch_keys()'s normal forward-or-
+// drop handling (in practice always dropped for the dock, since its
+// owner_pid is wm's own -- see that check -- but returning false
+// keeps this function honest about which keys it actually owns rather
+// than silently swallowing everything while the dock has focus).
+static bool dock_handle_key(uint32_t keysym, bool pressed) {
+
+	if (dock_idx < 0 || DOCK_APP_COUNT <= 0) return false;
+
+	bool prev     = (keysym == Z_KEY_LEFT || keysym == Z_KEY_UP);
+	bool next     = (keysym == Z_KEY_RIGHT || keysym == Z_KEY_DOWN);
+	bool activate = (keysym == CH_CR);   // Enter -- see zkbd.c's usage 0x28 mapping
+
+	if (!prev && !next && !activate) return false;
+	if (!pressed) return true;   // own the key, but only act on press
+
+	if (dock_selected < 0) dock_selected = 0;
+
+	if (prev || next) {
+
+		int old_selected = dock_selected;
+
+		if (prev)
+			dock_selected = (dock_selected == 0) ? DOCK_APP_COUNT - 1 : dock_selected - 1;
+		else
+			dock_selected = (dock_selected == DOCK_APP_COUNT - 1) ? 0 : dock_selected + 1;
+
+		if (dock_selected != old_selected)
+			repair_region(windows[dock_idx].x, windows[dock_idx].y,
+				windows[dock_idx].w, windows[dock_idx].h, -1);
+
+	} else {
+		dock_launch(dock_selected);
+	}
+
+	return true;
+
+}
+
+// -- global keyboard hotkeys (Alt+Tab, Alt+Arrow) --
+//
+// handled entirely here, by wm itself, and NEVER forwarded to any
+// app's own Z_WM_KEY stream -- see dispatch_keys()'s own comment on
+// why these are intercepted before the normal forward-to-focused-
+// window path. This is what makes Zeitlos usable keyboard-only: every
+// OTHER piece of window management (focus, moving, launching apps) is
+// already reachable without a mouse via these plus dock_handle_key()
+// above -- see docs/window_manager.md, "Keyboard-only operation".
+
+// returns the next USED window slot after `from`, wrapping around --
+// treats every used slot as equally focusable, dock included (see
+// this file's own header comment on why keyboard-only operation
+// matters), in fixed SLOT order rather than z-order. Slot order, not
+// z-order, specifically because the dock is deliberately kept
+// frontmost in z-order at all times (bring_to_front(dock_idx) is
+// called after nearly every reorder elsewhere in this file) -- a
+// z-order-based cycle would have the dock dominate/distort it. from=
+// -1 starts from the first used slot (so Alt+Tab with nothing
+// currently focused still does something sensible).
+static int next_focusable(int from) {
+
+	int start = (from < 0) ? 0 : (from + 1) % WM_MAX_WINDOWS;
+
+	for (int i = 0; i < WM_MAX_WINDOWS; i++) {
+		int idx = (start + i) % WM_MAX_WINDOWS;
+		if (windows[idx].used) return idx;
+	}
+
+	return -1;
+
+}
+
+// Alt+Tab -- cycles focus to the next window (dock included, see
+// next_focusable()'s own comment), bringing it to front exactly the
+// way a mouse click on a window already does (see the click-handling
+// block in main() below, which this mirrors).
+static void alt_tab(void) {
+
+	int next = next_focusable(focused);
+	if (next < 0 || next == focused) return;
+
+	int old_focused = focused;
+	focused = next;
+
+	// give the dock a sensible default selection the first time it's
+	// ever reached this way, rather than requiring an arrow press
+	// first just to see where you are -- see dock_selected's own
+	// comment.
+	if (focused == dock_idx && dock_selected < 0 && DOCK_APP_COUNT > 0)
+		dock_selected = 0;
+
+	bring_to_front(focused);
+	// keep the dock frontmost regardless -- see its own comment where
+	// this same call appears elsewhere in this file (handle_message(),
+	// the mouse click handler). A no-op when focused IS the dock.
+	if (dock_idx >= 0) bring_to_front(dock_idx);
+
+	if (old_focused >= 0)
+		repair_region(windows[old_focused].x, windows[old_focused].y,
+			windows[old_focused].w, windows[old_focused].h, -1);
+	repair_region(windows[focused].x, windows[focused].y,
+		windows[focused].w, windows[focused].h, -1);
+
+}
+
+// pixels moved per Alt+Arrow press -- see alt_move_focused() below.
+#define WM_KEY_MOVE_STEP   10
+
+// Alt+Arrow -- moves the FOCUSED window (never the dock -- its
+// position is fixed, see create_dock()) by WM_KEY_MOVE_STEP pixels in
+// the given direction, clamped to the screen the same way a mouse
+// drag already is. This is functionally an instant, single-step
+// "drag" with no wireframe preview in between -- it reuses repair_
+// drag()'s own sweep-region repair (see that function's own comment)
+// by updating the window's position directly first and handing it the
+// same before/after bounding-box bookkeeping (drag_min/max_x/y) a
+// mouse drag release already produces, rather than duplicating that
+// logic here.
+static void alt_move_focused(uint32_t keysym) {
+
+	if (focused < 0 || focused == dock_idx || !windows[focused].used) return;
+
+	int dx = 0, dy = 0;
+	switch (keysym) {
+		case Z_KEY_LEFT:  dx = -WM_KEY_MOVE_STEP; break;
+		case Z_KEY_RIGHT: dx =  WM_KEY_MOVE_STEP; break;
+		case Z_KEY_UP:    dy = -WM_KEY_MOVE_STEP; break;
+		case Z_KEY_DOWN:  dy =  WM_KEY_MOVE_STEP; break;
+		default: return;
+	}
+
+	wm_window_t *w = &windows[focused];
+
+	int32_t nx = (int32_t)w->x + dx;
+	int32_t ny = (int32_t)w->y + dy;
+	if (nx < 0) nx = 0;
+	if (ny < 0) ny = 0;
+	if (nx + (int32_t)w->w > WM_SCREEN_W) nx = WM_SCREEN_W - (int32_t)w->w;
+	if (ny + (int32_t)w->h > WM_SCREEN_H) ny = WM_SCREEN_H - (int32_t)w->h;
+
+	if ((uint32_t)nx == w->x && (uint32_t)ny == w->y) return;   // already at the edge
+
+	int old_x = (int)w->x, old_y = (int)w->y;
+	int ww = (int)w->w, wh = (int)w->h;
+
+	w->x = (uint32_t)nx;
+	w->y = (uint32_t)ny;
+
+	drag_min_x = old_x < nx ? old_x : nx;
+	drag_min_y = old_y < ny ? old_y : ny;
+	drag_max_x = (old_x + ww > nx + ww) ? old_x + ww : nx + ww;
+	drag_max_y = (old_y + wh > ny + wh) ? old_y + wh : ny + wh;
+
+	notify_moved(focused);
+	repair_drag(focused);
+
+}
+
 // -- keyboard --
 //
 // unlike the mouse above, keyboard capture is interrupt-driven, not
@@ -422,10 +855,16 @@ static inline uint8_t get_mouse_btn(void) {
 // ring, drawn from BOTH usb ports (hid.c decides per-port; this side
 // just gets a merged stream). wm drains all of them every main-loop
 // iteration (there can be more than one queued since the last time we
-// got scheduled) and forwards each to the *focused* window's owner
-// only, translating the raw USB HID usage code to a keysym (zkbd.h)
-// first. Demo windows (owned by wm itself, see main() below) have no
-// app to notify, same as notify_moved()'s check below.
+// got scheduled).
+//
+// Global hotkeys (Alt+Tab, Alt+Arrow -- see alt_tab()/
+// alt_move_focused() above) and dock navigation (dock_handle_key()
+// above, while the dock has focus) are handled here, directly by wm,
+// and consumed -- never forwarded to any app. Everything else goes to
+// the *focused* window's owner only, translating the raw USB HID
+// usage code to a keysym (zkbd.h) first. Demo windows (owned by wm
+// itself, see main() below) have no app to notify, same as
+// notify_moved()'s check below.
 static void dispatch_keys(void) {
 
 	int32_t ev;
@@ -435,12 +874,32 @@ static void dispatch_keys(void) {
 		uint8_t modifiers = (ev >> 9) & 0xFF;
 		bool    pressed   = (ev & 1) != 0;
 
-		if (focused < 0) continue;
-		if (windows[focused].owner_pid == my_pid) continue;
-
 		uint32_t keysym = z_kbd_usage_to_keysym(usage, modifiers);
 		if (keysym == Z_KEY_NONE) continue;   // bare modifier change, or
 		                                       // an unmapped usage code
+
+		// -- global hotkeys -- act on press only; the matching
+		// release is silently dropped (nothing to do with it, and it
+		// must not fall through to being forwarded as a Tab/arrow
+		// keystroke to whatever's focused).
+		if ((modifiers & Z_KBD_MOD_ALT) && keysym == '\t') {
+			if (pressed) alt_tab();
+			continue;
+		}
+		if ((modifiers & Z_KBD_MOD_ALT) &&
+			(keysym == Z_KEY_LEFT || keysym == Z_KEY_RIGHT ||
+			 keysym == Z_KEY_UP   || keysym == Z_KEY_DOWN)) {
+			if (pressed) alt_move_focused(keysym);
+			continue;
+		}
+
+		// -- the dock, while focused, owns plain arrows/Enter for its
+		// own icon navigation -- see dock_handle_key()'s own comment
+		// on exactly which keys it consumes and why.
+		if (focused == dock_idx && dock_handle_key(keysym, pressed)) continue;
+
+		if (focused < 0) continue;
+		if (windows[focused].owner_pid == my_pid) continue;
 
 		uint32_t packed = Z_WM_PACK_KEY(keysym, modifiers, pressed);
 		z_msg_new_send(windows[focused].owner_pid, Z_WM_KEY, 0, z_obj_uint32(packed));
@@ -458,7 +917,7 @@ static void dispatch_keys(void) {
 // has one fixed spot (bottom left) rather than wanting to cascade
 // with everything else.
 static int create_window(uint32_t owner_pid, const char *title,
-	uint32_t w, uint32_t h, int32_t fixed_x, int32_t fixed_y) {
+	uint32_t w, uint32_t h, int32_t fixed_x, int32_t fixed_y, uint32_t flags) {
 
 	for (int i = 0; i < WM_MAX_WINDOWS; i++) {
 
@@ -473,6 +932,7 @@ static int create_window(uint32_t owner_pid, const char *title,
 		// there's nothing else that clears it back to the normal
 		// default.
 		windows[i].no_titlebar = false;
+		windows[i].flags = flags;
 
 		if (fixed_x >= 0 && fixed_y >= 0) {
 			windows[i].x = (uint32_t)fixed_x;
@@ -525,7 +985,7 @@ static int create_dock(void) {
 	int32_t x = DOCK_MARGIN;
 	int32_t y = WM_SCREEN_H - (int32_t)h - DOCK_MARGIN;
 
-	int idx = create_window(my_pid, "Dock", w, h, x, y);
+	int idx = create_window(my_pid, "Dock", w, h, x, y, 0);
 	if (idx < 0) return -1;
 
 	windows[idx].no_titlebar = true;
@@ -602,13 +1062,79 @@ static bool hit_titlebar(int idx, int cy) {
 	return (cy < (int)(windows[idx].y + Z_WM_TITLEBAR_H));
 }
 
+// true if (cx,cy) landed on window idx's close icon -- see
+// close_icon_rect() (above, near draw_titlebar_content()) for the
+// shared rect computation this and the actual draw both use. Checked
+// BEFORE the general titlebar-drag hit test in main()'s click
+// handling below, so clicking the icon closes the window instead of
+// starting a drag.
+static bool hit_close_icon(int idx, int cx, int cy) {
+
+	if (windows[idx].no_titlebar) return false;
+	if (!(windows[idx].flags & Z_WIN_FLAG_CLOSE_ICON)) return false;
+
+	int ix, iy;
+	close_icon_rect(&windows[idx], &ix, &iy);
+
+	return cx >= ix && cx < ix + Z_ICON_W && cy >= iy && cy < iy + Z_ICON_H;
+
+}
+
+// handles a click already known to have landed on window idx's close
+// icon (see hit_close_icon() above, and its own call site in main()'s
+// click handling below) -- see Z_WIN_FLAG_CLOSE_KILLS_OWNER's own
+// comment in zwm.h for the full reasoning behind the two behaviors.
+static void handle_close_click(int idx) {
+
+	uint32_t owner = windows[idx].owner_pid;
+	uint32_t flags = windows[idx].flags;
+
+	printf("wm: close icon clicked for window %d (owner=%ld, kills_owner=%d)\n",
+		idx, (long)owner, (flags & Z_WIN_FLAG_CLOSE_KILLS_OWNER) ? 1 : 0);
+
+	if (flags & Z_WIN_FLAG_CLOSE_KILLS_OWNER) {
+
+		// destroy_window() repairs the screen region itself. kill the
+		// owner AFTER that -- destroy_window() doesn't depend on the
+		// owner still being alive to do its own bookkeeping (it never
+		// waits on the owner for anything -- see repair_region()'s
+		// own exclude_idx reasoning for the one case that does), so
+		// ordering here doesn't matter for correctness, but killing
+		// first would leave a brief window where a dead process still
+		// has a window on screen for no reason.
+		destroy_window(idx);
+
+		// windows owned by wm itself (the dock, or the commented-out
+		// demo windows in main()) would never actually reach here in
+		// practice -- neither sets Z_WIN_FLAG_CLOSE_ICON -- but this
+		// guard exists for the same reason dispatch_keys()/
+		// notify_moved() already have one: wm killing ITSELF here
+		// would be a self-inflicted, hard-to-debug way to go down.
+		if (owner != my_pid) z_proc_kill(owner);
+
+	} else {
+
+		// let the owner decide -- see Z_WM_CLOSE's own comment
+		// (zwm.h). fire-and-forget, same as every other wm->app
+		// notification; the window stays open (and interactive)
+		// until/unless the owner itself calls z_win_destroy() on it.
+		if (owner != my_pid)
+			z_msg_new_send(owner, Z_WM_CLOSE, 0, z_obj_uint32((uint32_t)idx));
+
+	}
+
+}
+
 // handles a click already known to have landed inside the dock's own
 // rect (see the dock_idx branch in main()'s click handling below) --
 // maps the click to an icon slot, if any (clicks in the padding
-// between/around icons land on no slot and are ignored), and launches
-// that slot's app via z_proc_run(). Always spawns a fresh process,
-// same as running `run <app>` twice from the shell would -- no
-// tracking of whether the app is "already running" (see
+// between/around icons land on no slot and are ignored), and delegates
+// to dock_launch() above -- shared with the keyboard Enter path
+// (dock_handle_key()), so both get identical launching/re-launch-
+// prevention/visual-feedback behavior. Always spawns a fresh process
+// for an icon that isn't currently mid-launch, same as running
+// `run <app>` twice from the shell would -- no tracking of whether
+// the app is "already running" once it HAS finished launching (see
 // docs/window_manager.md for anything that changes about that later).
 static void dock_click(int cx, int cy) {
 
@@ -627,14 +1153,7 @@ static void dock_click(int cx, int cy) {
 	if (slot < 0 || slot >= DOCK_APP_COUNT) return;
 	if (slot_x >= DOCK_ICON_SIZE) return;	// in the gap between icons
 
-	const char *name = dock_apps[slot].name;
-	printf("wm: dock: launching '%s'\n", name);
-
-	uint32_t pid = z_proc_run(name);
-	if (!pid)
-		printf("wm: dock: failed to launch '%s' -- file missing, or no free process slot\n", name);
-	else
-		printf("wm: dock: launched '%s' as pid %ld\n", name, (long)pid);
+	dock_launch(slot);
 
 }
 
@@ -669,6 +1188,24 @@ static void handle_message(z_msg_t *msg) {
 
 		case Z_WM_CREATE_WINDOW: {
 
+			// if this is a dock-launched app's FIRST window, the
+			// launch is considered complete -- clear the "launching"
+			// (inverted icon) state regardless of whether the window
+			// creation below actually succeeds (a window-table-full
+			// failure still means the PROCESS itself came up fine,
+			// which is what "launching" is actually tracking -- see
+			// dock_launching[]'s own comment). Independent of
+			// anything else this case does, so it runs first.
+			for (int di = 0; di < DOCK_APP_COUNT; di++) {
+				if (dock_launching[di] && dock_launching_pid[di] == msg->from) {
+					dock_launching[di] = false;
+					if (dock_idx >= 0)
+						repair_region(windows[dock_idx].x, windows[dock_idx].y,
+							windows[dock_idx].w, windows[dock_idx].h, -1);
+					break;
+				}
+			}
+
 			char title[WM_TITLE_MAX] = "";
 			uint32_t w = Z_WM_DEFAULT_WIDTH, h = Z_WM_DEFAULT_HEIGHT;
 
@@ -696,7 +1233,15 @@ static void handle_message(z_msg_t *msg) {
 				fy = (int32_t)yo->val.uint32;
 			}
 
-			int idx = create_window(msg->from, title, w, h, fx, fy);
+			// optional Z_WIN_FLAG_* bitmask (zwm.h) -- see
+			// z_win_create_flags() (zwin.c) for the app-facing
+			// sender. missing key -> 0 (no close icon), same as
+			// every caller that predates this feature.
+			uint32_t flags = 0;
+			z_obj_t *flo = z_map_find(&msg->obj, "flags");
+			if (flo && flo->type == Z_UINT32) flags = flo->val.uint32;
+
+			int idx = create_window(msg->from, title, w, h, fx, fy, flags);
 
 			// keep the dock frontmost -- create_window() always
 			// appends new windows to the front of zorder (see its
@@ -872,11 +1417,22 @@ int main(void) {
 	// not just here.
 	z_gfx_hw_font_load(&z_font_5x8);
 
+	// window titlebar icons (close, and any future minimize/open/save
+	// icon -- see win_icons.h) live in the same hardware glyph memory
+	// as font data, just in a separate reserved region at the far end
+	// of it (zicon.h's Z_ICON_MEM_OFFSET) -- loading them here, right
+	// after the font, follows the exact same single-owner discipline
+	// the comment above just finished explaining for z_font_5x8: wm
+	// is the only process that ever writes to glyph memory, icons
+	// included, so there's nothing else that needs its own load call
+	// or any reason to fight over what's there.
+	z_win_icons_load();
+
 /*
 	// demo windows so there's something to see/drag before a real
 	// client app exists -- see the file header comment.
-	int demo1 = create_window(my_pid, "Window 1", 140, 100, -1, -1);
-	int demo2 = create_window(my_pid, "Window 2", 140, 100, -1, -1);
+	int demo1 = create_window(my_pid, "Window 1", 140, 100, -1, -1, 0);
+	int demo2 = create_window(my_pid, "Window 2", 140, 100, -1, -1, 0);
 	if (demo1 >= 0)
 		repair_region(windows[demo1].x, windows[demo1].y, windows[demo1].w, windows[demo1].h, -1);
 	if (demo2 >= 0)
@@ -924,6 +1480,19 @@ int main(void) {
 		while (z_msg_read(&msg) == Z_OK)
 			handle_message(&msg);
 
+		// -- dock launch timeout -- see DOCK_LAUNCH_TIMEOUT_ITERS'
+		// own comment below for why this exists at all.
+		for (int di = 0; di < DOCK_APP_COUNT; di++) {
+			if (!dock_launching[di]) continue;
+			if (++dock_launching_ticks[di] < DOCK_LAUNCH_TIMEOUT_ITERS) continue;
+			printf("wm: dock: gave up waiting for '%s' (pid %ld) to create a window\n",
+				dock_apps[di].name, (long)dock_launching_pid[di]);
+			dock_launching[di] = false;
+			if (dock_idx >= 0)
+				repair_region(windows[dock_idx].x, windows[dock_idx].y,
+					windows[dock_idx].w, windows[dock_idx].h, -1);
+		}
+
 		// -- keyboard (interrupt-captured, drained here) --
 		dispatch_keys();
 
@@ -963,6 +1532,17 @@ int main(void) {
 				// just figure out which icon slot, if any, was
 				// clicked, and launch that app. see dock_click() below.
 				dock_click(cx, cy);
+
+			} else if (hit >= 0 && hit_close_icon(hit, cx, cy)) {
+
+				// close icon click: checked BEFORE the general
+				// focus/drag handling below, so it never also starts
+				// a drag or reorders anything -- see
+				// handle_close_click()'s own comment for what happens
+				// next (which itself may destroy this window, so
+				// nothing below this branch may assume windows[hit]
+				// is still valid).
+				handle_close_click(hit);
 
 			} else if (hit >= 0) {
 

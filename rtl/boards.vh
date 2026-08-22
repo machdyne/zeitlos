@@ -20,7 +20,7 @@
 
 `define FPGA_ECP5
 `define OSC48
-`define SYSCLK48
+`define MEM 1				// note that some Obst boards have 2MB SRAM
 `define MEM_SRAM
 `define MEM_VRAM
 //`define MEM_QQSPI
@@ -37,13 +37,12 @@
 `define USB_HID
 `define SPI_SDCARD
 `define SPI_ETH
-`define MEM 1
 
 `elsif BOARD_LAKRITZ
 
 `define FPGA_ECP5
 `define OSC48
-`define SYSCLK48
+`define MEM 32
 `define MEM_SDRAM
 `define MEM_VRAM
 `define MEM_ROM
@@ -56,13 +55,12 @@
 `define UART0
 `define USB_HID
 `define SPI_SDCARD
-`define MEM 32
 
 `elsif BOARD_MOZART_ML1
 
 `define FPGA_ECP5
 `define OSC48
-`define SYSCLK48
+`define MEM 32
 `define MEM_SDRAM
 `define MEM_VRAM
 `define MEM_ROM
@@ -76,13 +74,12 @@
 `define USB_HID
 `define SPI_SDCARD
 `define ETH_RMII
-`define MEM 32
 
 `elsif BOARD_LEBKUCHEN
 
 `define FPGA_GATEMATE
 `define OSC48
-`define SYSCLK48
+`define MEM 8
 //`define MEM_QQSPI
 //`define MEM_QQSPI_SINGLE
 `define MEM_VRAM
@@ -95,13 +92,12 @@
 `define USB_HID
 `define SPI_SDCARD
 `define SPI_FLASH
-`define MEM 8
 
 `elsif BOARD_KOLSCH
 
 `define FPGA_GATEMATE
 `define OSC48
-`define SYSCLK48
+`define MEM 64
 `define MEM_SDRAM
 `define MEM_VRAM
 `define GPU
@@ -113,6 +109,23 @@
 `define USB_HID
 //`define SPI_SDCARD
 //`define SPI_FLASH
-`define MEM 64
+
+`elsif BOARD_ULX3S
+
+`define FPGA_ECP5
+`define OSC25
+`define MEM 32
+`define MEM_SDRAM
+`define MEM_VRAM
+`define MEM_ROM
+`define MEM_GLYPH
+`define GPU
+`define GPU_RASTER
+`define GPU_BLIT
+`define GPU_CURSOR
+`define GPU_DDMI
+`define UART0
+`define USB_HID
+`define SPI_SDCARD
 
 `endif

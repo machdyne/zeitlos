@@ -7,85 +7,7 @@
  */
 
 `include "boards.vh"
-
-// rtl/boards.vh's per-board `MEM (total main RAM, megabytes) is
-// optional -- defaulted here to 1 (matching the original hardcoded
-// assumption every board effectively had before `MEM/rtl/csrs.v
-// existed) if a board block doesn't set it, rather than leaving it
-// undefined and breaking the build. See docs/csrs.md.
-`ifndef MEM
-`define MEM 1
-`endif
-
-// feature bits exposed via rtl/csrs.v's FEATURES register -- KEEP IN
-// SYNC with sw/common/zsoc.h's Z_FEATURE_* constants (bit position is
-// the only thing that has to match; see csrs.v's own header comment
-// for why there's no single shared source for both sides). Each term
-// mirrors one of rtl/boards.vh's own `ifdef flags directly -- this is
-// deliberately just a bit-for-bit exposure of "was this `ifdef
-// active in this build", nothing computed or inferred beyond that.
-localparam CSR_FEATURES =
-`ifdef MEM_SRAM
-	(32'h1 << 0) |
-`endif
-`ifdef MEM_SDRAM
-	(32'h1 << 1) |
-`endif
-`ifdef MEM_VRAM
-	(32'h1 << 2) |
-`endif
-`ifdef MEM_QQSPI
-	(32'h1 << 3) |
-`endif
-`ifdef MEM_ROM
-	(32'h1 << 4) |
-`endif
-`ifdef MEM_GLYPH
-	(32'h1 << 5) |
-`endif
-`ifdef GPU
-	(32'h1 << 6) |
-`endif
-`ifdef GPU_RASTER
-	(32'h1 << 7) |
-`endif
-`ifdef GPU_BLIT
-	(32'h1 << 8) |
-`endif
-`ifdef GPU_CURSOR
-	(32'h1 << 9) |
-`endif
-`ifdef GPU_VGA
-	(32'h1 << 10) |
-`endif
-`ifdef GPU_DDMI
-	(32'h1 << 11) |
-`endif
-`ifdef UART0
-	(32'h1 << 12) |
-`endif
-`ifdef USB_HID
-	(32'h1 << 13) |
-`endif
-`ifdef SPI_SDCARD
-	(32'h1 << 14) |
-`endif
-`ifdef SPI_ETH
-	(32'h1 << 15) |
-`endif
-`ifdef SPI_FLASH
-	(32'h1 << 16) |
-`endif
-`ifdef ETH_RMII
-	(32'h1 << 17) |
-`endif
-`ifdef LED_RGB
-	(32'h1 << 18) |
-`endif
-`ifdef LED_DEBUG
-	(32'h1 << 19) |
-`endif
-	32'h0;
+`include "csrs.vh"
 
 localparam SYSCLK = 48_000_000;
 
@@ -100,6 +22,9 @@ module sysctl #()
 `endif
 `ifdef OSC48
    input CLK_48,
+`endif
+`ifdef OSC25
+   input CLK_25,
 `endif
 
 `ifdef LED_RGB
@@ -210,15 +135,19 @@ module sysctl #()
 
 	// CLOCKS
 
-	wire clk125mhz;	// actually 126MHz now (TMDS bclk) -- name kept
-					// as-is to avoid a wide mechanical rename, see
-					// rtl/clk/pll1.v's own comment for the real value
+	wire clk126mhz;
 	wire clk100mhz;
-	wire clk75mhz;	// actually 25.2MHz now (pixel clock, pclk) --
-					// same naming note as clk125mhz above
+	wire clk25_2mhz;
 	wire clk50mhz;
-	wire clk48mhz = CLK_48;
+	wire clk48mhz;
+	wire clk25mhz;
 	wire clk12mhz;
+
+`ifdef OSC48
+	assign clk48mhz = CLK_48;
+`elsif OSC25
+	assign clk25mhz = CLK_25;
+`endif
 
 	wire sys_clk = clk48mhz;
 
@@ -228,10 +157,11 @@ module sysctl #()
 	wire pll0_locked;
 	wire pll1_locked;
 
+`ifdef OSC48
+
 	pll0 #() pll0_i (
 		.clkin(clk48mhz),
 		.clkout0(clk100mhz),
-		.clkout1(),
 		.clkout2(clk50mhz),
 		.clkout3(clk12mhz),
 		.locked(pll0_locked)
@@ -239,10 +169,28 @@ module sysctl #()
 
 	pll1 #() pll1_i (
 		.clkin(clk48mhz),
-		.clkout0(clk125mhz),
-		.clkout1(clk75mhz),
+		.clkout0(clk126mhz),
+		.clkout1(clk25_2mhz),
 		.locked(pll1_locked)
 	);
+
+`elsif OSC25
+
+	pll0_25 #() pll0_i (
+		.clkin(clk25mhz),
+		.clkout2(clk48mhz),
+		.clkout3(clk12mhz),
+		.locked(pll0_locked)
+	);
+
+	pll1_25 #() pll1_i (
+		.clkin(clk25mhz),
+		.clkout2(clk126mhz),
+		.clkout3(clk25_2mhz),
+		.locked(pll1_locked)
+	);
+
+`endif
 
 `elsif GATEMATE
 
@@ -253,7 +201,7 @@ module sysctl #()
 
    CC_PLL #(
       .REF_CLK(48.0),      // reference input in MHz
-      .OUT_CLK(125.0),     // pll output frequency in MHz
+      .OUT_CLK(126.0),     // pll output frequency in MHz
       .PERF_MD("ECONOMY"), // LOWPOWER, ECONOMY, ECONOMY
       .LOW_JITTER(1),      // 0: disable, 1: enable low jitter mode
       .CI_FILTER_CONST(2), // optional CI filter constant
@@ -262,12 +210,12 @@ module sysctl #()
       .CLK_REF(CLK_48), .CLK_FEEDBACK(1'b0), .USR_CLK_REF(1'b0),
       .USR_LOCKED_STDY_RST(1'b0),
 		.USR_PLL_LOCKED(pll0_locked),
-      .CLK0(clk125mhz),
+      .CLK0(clk126mhz),
    );
 
    CC_PLL #(
       .REF_CLK(48.0),      // reference input in MHz
-      .OUT_CLK(75.0),      // pll output frequency in MHz
+      .OUT_CLK(25.2),      // pll output frequency in MHz
       .PERF_MD("ECONOMY"), // LOWPOWER, ECONOMY, ECONOMY
       .LOW_JITTER(1),      // 0: disable, 1: enable low jitter mode
       .CI_FILTER_CONST(2), // optional CI filter constant
@@ -276,7 +224,7 @@ module sysctl #()
       .CLK_REF(CLK_48), .CLK_FEEDBACK(1'b0), .USR_CLK_REF(1'b0),
       .USR_LOCKED_STDY_RST(1'b0),
 		.USR_PLL_LOCKED(pll1_locked),
-      .CLK0(clk75mhz),
+      .CLK0(clk25_2mhz),
    );
 
    CC_PLL #(
@@ -1252,8 +1200,8 @@ module sysctl #()
 	gpu_video #() gpu_video_i
 	(
 		.clk(wbm_clk),
-		.pclk(clk75mhz),
-		.bclk(clk125mhz),
+		.pclk(clk25_2mhz),
+		.bclk(clk126mhz),
 		.resetn(~wbm_rst),
 		.pixel(gpu_pixel),
 		.x(gpu_x),
@@ -1300,7 +1248,7 @@ module sysctl #()
 
 	gpu_cursor #() gpu_cursor_i
 	(
-		.pclk(clk75mhz),
+		.pclk(clk25_2mhz),
 		.pixel(gpu_curs_pixel),
 		.gpu_x(gpu_x),
 		.gpu_y(gpu_y),

@@ -117,12 +117,14 @@
 // window size such that z_win_content_rect()'s inset (2px on every
 // content-bearing edge -- see zwin.c) leaves EXACTLY VT_COLS*font.w x
 // VT_ROWS*font.h of content area: content width = win.w-4, content
-// height = win.h-16 (see zwin.c's z_win_content_rect()). This is why
-// there's no separate z_win_clear() call anywhere below: the 80x25
-// grid tiles the content area exactly, no leftover padding pixels to
-// clear separately, so a full dirty-cell redraw already covers every
-// pixel. Computed at runtime (not a macro) now that the font itself
-// is swappable -- TERM_FONT.w/.h aren't preprocessor constants.
+// height = win.h - (Z_WM_TITLEBAR_H+4) -- currently win.h-15, since
+// Z_WM_TITLEBAR_H is 11 (zwm.h) -- see zwin.c's z_win_content_rect().
+// This is why there's no separate z_win_clear() call anywhere below:
+// the 80x25 grid tiles the content area exactly, no leftover padding
+// pixels to clear separately, so a full dirty-cell redraw already
+// covers every pixel. Computed at runtime (not a macro) now that the
+// font itself is swappable -- TERM_FONT.w/.h aren't preprocessor
+// constants.
 static int term_win_w, term_win_h;
 
 static vt_screen_t vt;
@@ -164,8 +166,33 @@ static void draw_cell(int col, int row, char ch, bool reverse) {
 
 }
 
-// TEMPORARY MITIGATION, not a fix -- see the big comment on
-// RESWEEP_COLS below and render()'s own call site. Re-stamps a
+// -- temporary mitigation for unresolved horizontal-garbage-near-
+// freshly-typed-text reports (docs/window_manager.md, "Known
+// limitations") --
+//
+// gpu_blit_acquire() (sw/common/zgfx.c) was a real, confirmed fix for
+// a genuine cross-process race on the GPU blitter's busy/idle gate --
+// but the artifact was STILL reported after that fix landed, so
+// either that wasn't the (whole) root cause, or something else is
+// also at play. Root cause still under investigation (suspected
+// rtl/gpu/gpu_blit.v state-machine/RTL issue, not yet confirmed in
+// simulation as of this writing).
+//
+// Reinstated here as a build-time opt-out rather than removed or
+// silently always-on, specifically so it can be flipped off (`make
+// term CFLAGS+=-DTERM_RESWEEP_MITIGATION=0`, or edit the #define
+// below) the moment a real fix is confirmed, without having to dig
+// this back out of git history -- see the mitigation's own comment
+// on why it's safe to leave enabled in the meantime (it can only ever
+// redraw correct content, never destroy any).
+#ifndef TERM_RESWEEP_MITIGATION
+#define TERM_RESWEEP_MITIGATION 1
+#endif
+
+#if TERM_RESWEEP_MITIGATION
+
+// TEMPORARY MITIGATION, not a fix -- see TERM_RESWEEP_MITIGATION's
+// own comment above and render()'s call site below. Re-stamps a
 // bounded run of columns using the *real* vt.cells content (never a
 // blank/erase), so worst case it costs a few redundant (already fast,
 // see docs/gpu_blitter.md's performance table) hardware glyph blits
@@ -176,8 +203,8 @@ static void draw_cell(int col, int row, char ch, bool reverse) {
 // redraws whatever vt.cells actually says is there, which is already
 // correct.
 //
-// enough columns to cover the reported ~32-64px (2 words) of
-// corruption at TERM_FONT.w=5px/col: 64/5 = 12.8, rounded up. If a
+// enough columns to cover the originally-reported ~32-64px (2 words)
+// of corruption at TERM_FONT.w=5px/col: 64/5 = 12.8, rounded up. If a
 // different TERM_FONT build (see its own comment) is ever used with
 // Z_GFX_HW_BLIT, this scales with it automatically since it's
 // expressed in columns, not pixels.
@@ -198,6 +225,8 @@ static void resweep_right_of_cursor(void) {
 	}
 
 }
+
+#endif // TERM_RESWEEP_MITIGATION
 
 // redraws whatever actually changed: dirty cells (from vt_feed()
 // since the last call) plus the cursor overlay, which needs its own
@@ -246,12 +275,14 @@ static void render(void) {
 	draw_cursor_x = cur_x;
 	draw_cursor_y = cur_y;
 
-	// TEMPORARY MITIGATION for the horizontal-corruption report near
-	// freshly-typed text (see resweep_right_of_cursor()'s own
-	// comment) -- gated on any_dirty (not cursor_moved alone) so a
+	// see TERM_RESWEEP_MITIGATION's own comment (near draw_cell()
+	// above) for why this is still here, guarded, rather than fully
+	// removed -- gated on any_dirty (not cursor_moved alone) so a
 	// pure cursor move (arrow keys, no new content) doesn't pay for
 	// it; typing is exactly the case that needs it.
+#if TERM_RESWEEP_MITIGATION
 	if (any_dirty) resweep_right_of_cursor();
+#endif
 
 }
 
@@ -453,7 +484,13 @@ static void handle_key_event(uint32_t packed) {
 int main(void) {
 
 	term_win_w = VT_COLS * TERM_FONT.w + 4;
-	term_win_h = VT_ROWS * TERM_FONT.h + 16;
+	// +4 for the same left/right 2px content inset; +Z_WM_TITLEBAR_H+4
+	// mirrors z_win_content_rect()'s own y0 formula (zwin.c) exactly,
+	// rather than a hardcoded number that would silently go stale
+	// again if Z_WM_TITLEBAR_H (zwm.h) ever changes -- see this file's
+	// own comment on term_win_w/term_win_h above for why this has to
+	// land on an exact multiple of the font's cell size.
+	term_win_h = VT_ROWS * TERM_FONT.h + Z_WM_TITLEBAR_H + 4;
 
 	// register this instance under a kernel-numbered name ("term0",
 	// "term1", ...) -- see sw/os/pidreg.h -- so other processes can
@@ -467,7 +504,16 @@ int main(void) {
 	if (!z_pid_register("term", instance_name, sizeof(instance_name)))
 		printf("term: pid registration failed, window title won't be unique\n");
 
-	if (z_win_create(&win, instance_name, term_win_w, term_win_h) != Z_OK) {
+	// Z_WIN_FLAG_CLOSE_ICON | Z_WIN_FLAG_CLOSE_KILLS_OWNER (zwm.h):
+	// term owns exactly one window for its entire lifetime, so
+	// clicking its titlebar close icon destroying that window AND
+	// killing this process outright is exactly right -- see
+	// Z_WIN_FLAG_CLOSE_KILLS_OWNER's own comment for why that's NOT
+	// the default (an app that can own several windows off one pid,
+	// e.g. repl's Scheme `win-create`, needs the other behavior
+	// instead).
+	if (z_win_create_flags(&win, instance_name, term_win_w, term_win_h, -1, -1,
+		Z_WIN_FLAG_CLOSE_ICON | Z_WIN_FLAG_CLOSE_KILLS_OWNER) != Z_OK) {
 		printf("term: failed to create window\n");
 		return 1;
 	}

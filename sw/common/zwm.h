@@ -20,14 +20,67 @@
 // -- shared between wm.c (which draws it) and zwin.c (which uses it
 // to compute where a window's content area starts). keep these in
 // sync if you change the window chrome.
-#define Z_WM_TITLEBAR_H   12
+//
+// NOTE on the "12 pixels" this used to be, and why it's 11 now: the
+// titlebar separator line (wm.c's draw_window_box()) is drawn AT row
+// Z_WM_TITLEBAR_H, i.e. Z_WM_TITLEBAR_H rows exist above it -- but
+// row 0 of those is the window's own TOP BORDER (part of the outer
+// box, drawn by the same function), not titlebar interior. So the
+// space actually available for titlebar content (title text, the
+// close icon -- wm.c's draw_titlebar_content()) is Z_WM_TITLEBAR_H-1
+// rows, not Z_WM_TITLEBAR_H -- easy to miss since nothing enforced
+// this distinction until vertically centering an icon made a
+// mis-sized interior visible as an off-by-one (the icon sat ~1px
+// higher than centered). 11 makes that interior exactly 10 rows,
+// which centers an 8px icon (Z_ICON_H, zicon.h) or 8px-tall text
+// (z_font_5x8.h) with an even, symmetric 1px gap on both sides --
+// see wm.c's own Z_WM_TITLEBAR_CONTENT_H/titlebar_content_y().
+#define Z_WM_TITLEBAR_H   11
 
 // -- message subjects --
 
 // app -> wm request: obj is a Z_MAP with optional "title" (Z_STR),
-// "w" (Z_UINT32), "h" (Z_UINT32) keys. any missing key falls back to
-// a WM-chosen default. the WM chooses the window's position itself.
+// "w" (Z_UINT32), "h" (Z_UINT32), "x"/"y" (Z_UINT32, both or
+// neither -- see zwin.c's z_win_create_ex()), and "flags" (Z_UINT32,
+// Z_WIN_FLAG_* below) keys. any missing key falls back to a
+// WM-chosen default (no exact placement, flags=0 -- no close icon).
 #define Z_WM_CREATE_WINDOW    100
+
+// -- window flags (the "flags" key on Z_WM_CREATE_WINDOW) --
+//
+// see zwin.h's z_win_create_flags() for the app-facing entry point,
+// and wm.c's draw_titlebar_content()/handle_close_click() for how wm
+// itself interprets these.
+
+// show a small hollow-box close icon on the right side of this
+// window's titlebar (see sw/apps/wm/win_icons.h -- Z_ICON_CLOSE).
+// Ignored on a no-titlebar window (there's no titlebar to put it in --
+// see wm.c's own `no_titlebar`, currently only the dock). With this
+// bit clear (the default -- every existing caller that predates this
+// flag), no icon is drawn and the titlebar can't be clicked closed at
+// all, same as before this feature existed.
+#define Z_WIN_FLAG_CLOSE_ICON         (1u << 0)
+
+// what clicking the close icon actually does -- meaningless without
+// Z_WIN_FLAG_CLOSE_ICON also set.
+//
+//   clear (default): wm sends Z_WM_CLOSE (below) to the window's
+//   owner and otherwise does nothing -- the window stays open, and
+//   interactive, until/unless the owner itself calls z_win_destroy()
+//   on it (zwin.h). This is the right choice for any app that can own
+//   MORE THAN ONE window at a time (e.g. repl's Scheme `win-create`,
+//   docs/scheme_api.md) -- clicking one sub-window's close icon must
+//   not take the others, or the owning process itself, down with it.
+//
+//   set: wm destroys this window itself AND kills the owning process
+//   outright (z_proc_kill(), zeitlos.h) -- no message round trip, no
+//   chance for the app to ignore it. Only appropriate for an app that
+//   owns exactly one window for its entire lifetime (term, hello_win,
+//   gpu3d, gpudemo, ...) -- setting this on one of SEVERAL windows
+//   sharing a pid takes every one of that pid's windows down the
+//   instant any single one's close icon is clicked, not just the one
+//   that was actually clicked.
+#define Z_WIN_FLAG_CLOSE_KILLS_OWNER  (1u << 1)
 
 // wm -> app reply to a Z_WM_CREATE_WINDOW (same tag as the request):
 // obj is a Z_MAP with "id" (Z_INT32, -1 on failure), "x", "y", "w",
@@ -75,6 +128,19 @@
 // a release for each), so it's a packed Z_UINT32, not a Z_MAP -- same
 // no-heap-allocation reasoning as Z_WM_REDRAW.
 #define Z_WM_KEY                106
+
+// wm -> app: the titlebar close icon (Z_WIN_FLAG_CLOSE_ICON) was
+// clicked on one of this process's windows, and that window's
+// Z_WIN_FLAG_CLOSE_KILLS_OWNER bit was NOT set -- see that flag's own
+// comment above for the full reasoning. obj is a Z_UINT32 window id
+// (the SPECIFIC window that was clicked closed, not necessarily this
+// process's only one -- see repl's zapi.c/repl.c for the sub-window
+// case this exists for). Purely a notification: wm does nothing else
+// on its own here, the window stays open and fully interactive unless
+// or until the owner calls z_win_destroy() (zwin.h) on this id
+// itself, same as any other window destruction. Fire-and-forget, no reply
+// expected -- same convention as Z_WM_REDRAW/Z_WM_KEY.
+#define Z_WM_CLOSE               107
 
 // keysym: 0x0000-0x7fff (see zkbd.h -- ASCII in 0x00-0x7f, named keys
 // like arrows in 0x100+). modifiers: the raw USB HID modifier byte

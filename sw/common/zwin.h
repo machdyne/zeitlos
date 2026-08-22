@@ -43,6 +43,21 @@ z_rv z_win_create(z_win_t *win, const char *title, uint32_t w, uint32_t h);
 z_rv z_win_create_ex(z_win_t *win, const char *title, uint32_t w, uint32_t h,
 	int32_t x, int32_t y);
 
+// like z_win_create_ex(), but also takes a Z_WIN_FLAG_* bitmask
+// (sw/common/zwm.h) -- currently Z_WIN_FLAG_CLOSE_ICON and
+// Z_WIN_FLAG_CLOSE_KILLS_OWNER, controlling whether wm draws a
+// titlebar close icon for this window at all, and what clicking it
+// does (see those flags' own comments in zwm.h for the full
+// reasoning, especially around apps -- like repl's Scheme
+// `win-create` -- that can own more than one window at a time).
+// z_win_create()/z_win_create_ex() both just call this with flags=0
+// (no close icon), so every existing caller is unaffected -- this is
+// the one that actually sends "flags" on the wire; the other two
+// exist only for source compatibility with code written before this
+// parameter existed.
+z_rv z_win_create_flags(z_win_t *win, const char *title, uint32_t w, uint32_t h,
+	int32_t x, int32_t y, uint32_t flags);
+
 // parses a Z_MAP{id,x,y,w,h} object (as sent with Z_WM_WINDOW_CREATED
 // or Z_WM_WINDOW_MOVED) into *win. returns false if obj doesn't have
 // the expected shape.

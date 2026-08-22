@@ -21,6 +21,7 @@
 
 #include "ms_api.h"
 #include "../../common/zfsapp.h"
+#include "../../common/zwm.h"
 #include "../../common/zwin.h"
 #include "../../common/zfont.h"
 #include "../../common/zdns.h"
@@ -287,15 +288,49 @@ static ms_val *zapi_win_create(ms_val *args) {
 	if (slot < 0) return ms_mk_bool(false);
 
 	z_win_t win;
-	z_rv rv = (x >= 0 && y >= 0)
-		? z_win_create_ex(&win, title, w, h, x, y)
-		: z_win_create(&win, title, w, h);
+	// Z_WIN_FLAG_CLOSE_ICON only -- NOT Z_WIN_FLAG_CLOSE_KILLS_OWNER.
+	// A single repl process can own several of these at once (that's
+	// the entire point of zapi_windows[] being a table, not a single
+	// slot), so clicking one window's close icon must not take repl
+	// itself, or any of its OTHER windows, down with it -- see
+	// Z_WIN_FLAG_CLOSE_KILLS_OWNER's own comment in zwm.h. wm instead
+	// sends Z_WM_CLOSE for just this window id, handled in repl.c's
+	// main loop by zapi_win_close() below (destroys this one table
+	// entry, same bookkeeping as an explicit (win-destroy id) call).
+	z_rv rv = z_win_create_flags(&win, title, w, h, x, y, Z_WIN_FLAG_CLOSE_ICON);
 	if (rv != Z_OK) return ms_mk_bool(false);
 
 	zapi_windows[slot].used = true;
 	zapi_windows[slot].win = win;
 
 	return ms_mk_num(win.id);
+
+}
+
+// destroys the Scheme-owned window with this wm window id, if this
+// process still has one open under it -- same bookkeeping
+// zapi_win_destroy() (the Scheme-facing (win-destroy id), just above
+// it in the source) does, just callable directly from C. Added for
+// repl.c's Z_WM_CLOSE handling (zwm.h) -- the titlebar close icon on
+// a Scheme-created window (zapi_win_create() above) was clicked, and
+// wm is leaving the decision of what that means up to repl, per
+// Z_WM_CLOSE's own contract; "destroy the window Scheme itself was
+// tracking under this id" is the obvious, minimal thing to do with
+// that notification without inventing a second, Scheme-visible event
+// system just for this. A window id repl doesn't currently own
+// (already destroyed some other way, or was never one of repl's --
+// shouldn't happen in practice, but Z_WM_CLOSE carries no ownership
+// guarantee of its own) is silently ignored, same as
+// zapi_win_destroy()'s own "not found" case.
+void zapi_win_close(int id) {
+
+	for (int i = 0; i < ZAPI_WIN_MAX; i++) {
+		if (zapi_windows[i].used && zapi_windows[i].win.id == id) {
+			z_win_destroy(&zapi_windows[i].win);
+			zapi_windows[i].used = false;
+			return;
+		}
+	}
 
 }
 

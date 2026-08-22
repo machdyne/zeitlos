@@ -75,6 +75,7 @@
 #include "../../common/zline.h"
 #include "../../common/zrepl.h"
 #include "../../common/zterm.h"
+#include "../../common/zwm.h"
 #include "../../common/zdns.h"
 #include "ms_api.h"
 #include "te_bridge.h"
@@ -958,6 +959,19 @@ int main(void) {
 				handle_close(&msg);
 			} else if (msg.subject == Z_REPL_EVAL) {
 				handle_eval(&msg);
+			} else if (msg.subject == Z_WM_CLOSE) {
+				// titlebar close icon clicked on one of THIS repl's
+				// Scheme-created windows (zapi.c's zapi_win_create(),
+				// (win-create ...) in Scheme -- see Z_WM_CLOSE's own
+				// comment in zwm.h for why wm sends this instead of
+				// just destroying the window itself: repl can own
+				// several windows off this one pid, so only the
+				// specific window that was clicked should go away,
+				// never the others and never repl itself). obj is a
+				// Z_UINT32 window id -- see zapi_win_close() (zapi.h)
+				// for what actually happens with it.
+				if (msg.obj.type == Z_UINT32)
+					zapi_win_close((int)msg.obj.val.uint32);
 			}
 
 		}

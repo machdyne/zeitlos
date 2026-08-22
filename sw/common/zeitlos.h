@@ -256,6 +256,14 @@ uint32_t z_getpid(void);
 // Returns the new pid, or 0 on failure.
 uint32_t z_proc_run(const char *name);
 
+// kills another process outright, by pid -- see k_proc_kill_syscall()
+// in sw/os/kernel.c for the full writeup. No ownership check: any
+// process can kill any other, same trust model as the rest of this
+// kernel. Added for sw/apps/wm's Z_WIN_FLAG_CLOSE_KILLS_OWNER
+// (sw/common/zwm.h) -- wm calling this on a window's owner_pid when
+// its titlebar close icon is clicked with that flag set.
+void z_proc_kill(uint32_t pid);
+
 // NOTE: app-facing filesystem access (fs_size()/fs_mallocfile()/
 // fs_write_file(), backed by the new Z_SYS_FS_SIZE/_READ/_WRITE
 // syscalls) is DELIBERATELY NOT declared here, even though this file

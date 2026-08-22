@@ -21,7 +21,7 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 | Video | VGA, DVI, DVI over HDMI |
 | Storage | MicroSD |
 | Network | Ethernet (SPI) and Ethernet MAC (for RMII PHY) |
-| HID | USB mouse/keyboard |
+| HID | USB keyboard + optional USB mouse |
 | I/O | GPIO, SPI, 16550 UART |
 
 ### OS
@@ -61,6 +61,7 @@ The following boards are currently supported:
  - [Machdyne Kölsch](https://github.com/machdyne/kolsch)
  - [Machdyne Lebkuchen](https://github.com/machdyne/lebkuchen)
  - [Machdyne Mozart](https://github.com/machdyne/mozart) / [ML1](https://github.com/machdyne/sechzig)
+ - [ULX3S](https://radiona.org/ulx3s/) **UNTESTED**
  - (more soon)
 
 If you have an unsupported board and want to try Zeitlos, please open an issue.

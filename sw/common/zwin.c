@@ -42,6 +42,11 @@ z_rv z_win_create(z_win_t *win, const char *title, uint32_t w, uint32_t h) {
 	return z_win_create_ex(win, title, w, h, -1, -1);
 }
 
+// see zwin.h's own comment on why this delegates to
+// z_win_create_flags(): z_win_create()/z_win_create_ex() are just the
+// flags=0 (no close icon) special case, kept around so no existing
+// caller needs to change.
+
 // like z_win_create(), but places the window at an exact screen
 // position instead of letting the wm auto-cascade it -- x/y >= 0
 // both required to take effect (either one negative falls back to
@@ -57,8 +62,17 @@ z_rv z_win_create(z_win_t *win, const char *title, uint32_t w, uint32_t h) {
 // caller (sw/apps/hello_win) is completely unaffected.
 z_rv z_win_create_ex(z_win_t *win, const char *title, uint32_t w, uint32_t h,
 	int32_t x, int32_t y) {
+	return z_win_create_flags(win, title, w, h, x, y, 0);
+}
 
-	z_obj_t args = z_obj_map(5);
+// does the actual work for all three z_win_create*() entry points --
+// see zwin.h's own comment on why there are three. `flags` is a
+// Z_WIN_FLAG_* bitmask (zwm.h), sent to the wm as-is; 0 means "no
+// close icon", same as before this parameter existed.
+z_rv z_win_create_flags(z_win_t *win, const char *title, uint32_t w, uint32_t h,
+	int32_t x, int32_t y, uint32_t flags) {
+
+	z_obj_t args = z_obj_map(6);
 	z_map_set(&args, "title", z_obj_str(title ? title : ""));
 	if (w) z_map_set(&args, "w", z_obj_uint32(w));
 	if (h) z_map_set(&args, "h", z_obj_uint32(h));
@@ -66,6 +80,12 @@ z_rv z_win_create_ex(z_win_t *win, const char *title, uint32_t w, uint32_t h,
 		z_map_set(&args, "x", z_obj_uint32((uint32_t)x));
 		z_map_set(&args, "y", z_obj_uint32((uint32_t)y));
 	}
+	// omitted entirely when 0 (no flags), same "missing key falls
+	// back to a default" convention every other optional key here
+	// already follows (zwm.h's own Z_WM_CREATE_WINDOW comment) --
+	// not required for correctness (wm treats a missing "flags" the
+	// same as an explicit 0), just consistent with the others.
+	if (flags) z_map_set(&args, "flags", z_obj_uint32(flags));
 
 	z_msg_new_send(resolve_wm_pid(), Z_WM_CREATE_WINDOW, 0, args);
 	// note: `args` is intentionally never freed here -- same accepted

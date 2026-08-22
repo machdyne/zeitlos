@@ -185,6 +185,15 @@ uint32_t z_proc_run(const char *name) {
 	return obj.val.uint32;
 }
 
+// kills another process by pid -- see zeitlos.h's own comment.
+void z_proc_kill(uint32_t pid) {
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_obj_t obj;
+	obj.type = Z_UINT32;
+	obj.val.uint32 = pid;
+	z_kernel_ptr(Z_SYS_PROC_KILL, (uint32_t *)&obj, 0);
+}
+
 // --
 
 void rt_delay() {

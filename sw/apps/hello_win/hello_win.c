@@ -185,7 +185,11 @@ int main(void) {
 	counter_y = LABEL_Y + z_font_5x8.h;
 	key_y = counter_y + z_font_5x8.h;
 
-	if (z_win_create(&win, "hello_win", 160, 100) != Z_OK) {
+	// see term.c's own comment on this same flag combination -- same
+	// reasoning applies here: hello_win owns exactly one window for
+	// its whole lifetime.
+	if (z_win_create_flags(&win, "hello_win", 160, 100, -1, -1,
+		Z_WIN_FLAG_CLOSE_ICON | Z_WIN_FLAG_CLOSE_KILLS_OWNER) != Z_OK) {
 		printf("hello_win: failed to create window\n");
 		return 1;
 	}
