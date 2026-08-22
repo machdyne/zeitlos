@@ -34,6 +34,15 @@ typedef struct {
 // HEIGHT in zwm.h). returns Z_FAIL if the wm didn't reply or refused.
 z_rv z_win_create(z_win_t *win, const char *title, uint32_t w, uint32_t h);
 
+// like z_win_create(), but places the window at an exact screen
+// position (x, y both >= 0) instead of letting the wm auto-cascade
+// it -- see zwin.c's own comment for why this is safe to call
+// (creation is exempt from the wm's redraw-ack wait) and why it's a
+// separate function rather than new parameters on z_win_create()
+// itself (keeps every existing caller unaffected).
+z_rv z_win_create_ex(z_win_t *win, const char *title, uint32_t w, uint32_t h,
+	int32_t x, int32_t y);
+
 // parses a Z_MAP{id,x,y,w,h} object (as sent with Z_WM_WINDOW_CREATED
 // or Z_WM_WINDOW_MOVED) into *win. returns false if obj doesn't have
 // the expected shape.
@@ -100,5 +109,12 @@ void z_win_content_rect(const z_win_t *win, z_clip_t *out);
 // that is visible here.
 void z_win_hw_line(const z_win_t *win, int x0, int y0, int x1, int y1, int color);
 void z_win_hw_box(const z_win_t *win, int x0, int y0, int x1, int y1, int color);
+
+// tells the wm to destroy this window (fire-and-forget, no reply --
+// see zwin.c's own comment). Not previously exposed as a client
+// helper -- only the raw Z_WM_DESTROY_WINDOW message subject existed
+// (zwm.h) -- added for the Zeitlos Scheme API's (win-destroy id),
+// docs/scheme_api.md.
+void z_win_destroy(const z_win_t *win);
 
 #endif

@@ -682,7 +682,21 @@ static void handle_message(z_msg_t *msg) {
 			z_obj_t *ho = z_map_find(&msg->obj, "h");
 			if (ho && ho->type == Z_UINT32) h = ho->val.uint32;
 
-			int idx = create_window(msg->from, title, w, h, -1, -1);
+			// optional exact placement (Zeitlos Scheme API's
+			// (win-create ... x y), docs/scheme_api.md) -- both
+			// present and well-typed, or fall back to the usual
+			// auto-placed cascade exactly like every existing caller
+			// that's never sent these (create_window()'s own
+			// fixed_x/fixed_y contract: -1,-1 means cascade).
+			int32_t fx = -1, fy = -1;
+			z_obj_t *xo = z_map_find(&msg->obj, "x");
+			z_obj_t *yo = z_map_find(&msg->obj, "y");
+			if (xo && xo->type == Z_UINT32 && yo && yo->type == Z_UINT32) {
+				fx = (int32_t)xo->val.uint32;
+				fy = (int32_t)yo->val.uint32;
+			}
+
+			int idx = create_window(msg->from, title, w, h, fx, fy);
 
 			// keep the dock frontmost -- create_window() always
 			// appends new windows to the front of zorder (see its

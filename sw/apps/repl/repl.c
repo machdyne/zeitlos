@@ -47,6 +47,19 @@
  * source text in memory and just wants it run, without pretending to
  * be a human typing at a port. See zrepl.h's own header comment for
  * the wire format; handle_eval() below is the provider side of it.
+ *
+ * Phase 5 (this revision): the "future text editor" mentioned just
+ * above is no longer future -- `te` (sw/ext/te, a git submodule) is
+ * now reachable via the `te <filename>` command. See docs/editor.md
+ * for the full writeup (the -DTE_HOST_IO patch te.c needed, the new
+ * Z_SYS_FS_* syscalls this required building since no app could read
+ * or write a file before this, the memory-budget reasoning behind
+ * te_bridge.c's file-size ceiling, and why only one `te` session can
+ * be live at a time, process-wide). Unlike Scheme evaluation above,
+ * `te` is NOT reachable through Z_REPL_EVAL -- it needs an actual
+ * connection to own (screen output, input bytes, the in_editor
+ * flag) that a bare eval request has none of; see the "te" command's
+ * own handling in dispatch_line() below.
  */
 
 #include <stdio.h>
@@ -64,6 +77,8 @@
 #include "../../common/zterm.h"
 #include "../../common/zdns.h"
 #include "ms_api.h"
+#include "te_bridge.h"
+#include "zapi.h"
 
 // hostname/IP resolution for the "telnet <ip-or-hostname>" command
 // below now goes through sw/common/zdns.h's z_resolve_host() -- see
@@ -86,6 +101,16 @@
 typedef struct {
 	z_port_t	port;
 	z_line_t	line;
+	// true while THIS connection owns the (single, process-wide) live
+	// `te` session -- see te_bridge.h's own header comment for why
+	// only one connection can be "in te" at a time. When true,
+	// handle_data() routes this connection's bytes straight to
+	// te_bridge_feed() instead of the normal z_line_feed()/
+	// dispatch_line() path below. Relies on zero-initialized .bss,
+	// same as z_port_t's own fields already do (see zport.h's comment
+	// on `pending` for why that's a safe assumption for every app
+	// binary here).
+	bool		in_editor;
 } repl_conn_t;
 
 static repl_conn_t conns[Z_REPL_MAX_CONNS];
@@ -168,6 +193,112 @@ static void eval_scheme(const char *expr, char *out, uint32_t out_cap) {
 
 }
 
+// -- bare-word command syntax (docs/scheme_api.md \S1) --
+//
+// translates e.g. "tget 1.2.3.4 firmware.bin" into
+// `(tget "1.2.3.4" "firmware.bin")` -- but only actually attempted by
+// dispatch_line() below when the first word is bound to something
+// callable (ms_is_callable()); this function itself doesn't check
+// that (its only caller already does, right before using its result).
+//
+// Argument classification, one whitespace-separated token at a time:
+//   - already starts with '"' or '('  -> passed through unquoted (the
+//     user already wrote real Scheme for this one argument)
+//   - "#t"/"#f"/"#true"/"#false"       -> passed through unquoted
+//   - parses ENTIRELY as a number (strtod consumes the whole token,
+//     not just a prefix -- so e.g. "192.168.1.1", which strtod reads
+//     as 192.168 and stops at the second '.', correctly falls through
+//     to the quoted-string case below instead of becoming a bare
+//     192.168) -> passed through unquoted, becomes a Scheme number
+//   - anything else                    -> wrapped in "..." as a
+//     string literal, with '"' and '\' escaped defensively
+//
+// There's no way to pass a bare symbol/variable reference through
+// this syntax at all -- `line mywin 10 10` sends the STRING "mywin",
+// never the value of a variable named mywin. Write real Scheme
+// (`(line mywin 10 10 ...)`) for that; `scheme <expr>` is also always
+// available as an explicit bypass of this whole function.
+//
+// Returns false (out untouched) if `line` doesn't tokenize (no first
+// word at all) or if the translated form would overflow `out_cap` --
+// dispatch_line() falls back to evaluating `line` completely
+// unchanged in either case, same as if this function didn't exist.
+static bool translate_command_line(const char *line, char *out, uint32_t out_cap) {
+
+	const char *p = line;
+	while (*p == ' ') p++;
+	const char *cmd_start = p;
+	while (*p && *p != ' ') p++;
+	uint32_t cmd_len = (uint32_t)(p - cmd_start);
+
+	if (cmd_len == 0 || cmd_len >= Z_LINE_MAX) return false;
+
+	char cmd[Z_LINE_MAX + 1];
+	memcpy(cmd, cmd_start, cmd_len);
+	cmd[cmd_len] = 0;
+
+	if (!ms_is_callable(cmd)) return false;
+
+	uint32_t o = 0;
+#define Z_EMIT(c) do { if (o + 1 >= out_cap) return false; out[o++] = (char)(c); } while (0)
+#define Z_EMIT_STR(s) do { for (const char *_q = (s); *_q; _q++) Z_EMIT(*_q); } while (0)
+
+	Z_EMIT('(');
+	Z_EMIT_STR(cmd);
+
+	while (*p) {
+
+		while (*p == ' ') p++;
+		if (!*p) break;
+
+		const char *tok_start = p;
+		while (*p && *p != ' ') p++;
+		uint32_t tok_len = (uint32_t)(p - tok_start);
+
+		char tok[Z_LINE_MAX + 1];
+		if (tok_len >= sizeof(tok)) return false;
+		memcpy(tok, tok_start, tok_len);
+		tok[tok_len] = 0;
+
+		Z_EMIT(' ');
+
+		if (tok[0] == '"' || tok[0] == '(') {
+			Z_EMIT_STR(tok);
+			continue;
+		}
+
+		if (!strcmp(tok, "#t") || !strcmp(tok, "#f") ||
+			!strcmp(tok, "#true") || !strcmp(tok, "#false")) {
+			Z_EMIT_STR(tok);
+			continue;
+		}
+
+		char *endptr = NULL;
+		strtod(tok, &endptr);
+		if (endptr && *endptr == 0 && endptr != tok) {
+			Z_EMIT_STR(tok);
+			continue;
+		}
+
+		Z_EMIT('"');
+		for (const char *q = tok; *q; q++) {
+			if (*q == '"' || *q == '\\') Z_EMIT('\\');
+			Z_EMIT(*q);
+		}
+		Z_EMIT('"');
+
+	}
+
+	Z_EMIT(')');
+	out[o] = 0;
+
+#undef Z_EMIT
+#undef Z_EMIT_STR
+
+	return true;
+
+}
+
 // -- command dispatch: the ONE thing both the port path (handle_data,
 // one line at a time, per connection) and the message path
 // (handle_eval, one request at a time, no connection at all) call
@@ -186,14 +317,20 @@ static void eval_scheme(const char *expr, char *out, uint32_t out_cap) {
 // "quit"/"exit") -- meaningless and safely ignored by handle_eval(),
 // which has no session to end.
 //
-// `requester_pid` is the pid of the `term` (or whatever) instance
-// this line arrived from -- handle_data() passes the connection's own
-// `port.peer_pid`, handle_eval() passes 0 (a bare REPL_EVAL request
-// has no connection, and therefore no specific term to redirect --
-// see the "port" command below, the only thing that currently cares
-// about this parameter at all).
+// `conn` is the connection this line arrived from -- handle_data()
+// passes the connection's own repl_conn_t*, handle_eval() passes NULL
+// (a bare REPL_EVAL request has no connection, and therefore no
+// specific term to redirect, and nothing to hand editor-mode
+// ownership to -- see the "port"/"telnet"/"te" commands below, the
+// only things that currently care about this parameter at all).
+// `requester_pid` (derived below) is what those commands actually
+// need most of the time -- kept as a local rather than changing every
+// existing call site, since `conn ? conn->port.peer_pid : 0` reads
+// worse repeated inline than named once.
 static bool dispatch_line(const char *line, char *out, uint32_t out_cap,
-	uint32_t requester_pid) {
+	repl_conn_t *conn) {
+
+	uint32_t requester_pid = conn ? conn->port.peer_pid : 0;
 
 	while (*line == ' ') line++; // skip leading spaces
 
@@ -205,7 +342,7 @@ static bool dispatch_line(const char *line, char *out, uint32_t out_cap,
 	if (!strcmp(line, "help")) {
 		snprintf(out, out_cap,
 			"commands: help, ping, uptime, echo <text>, free, "
-			"port <name>, telnet <ip-or-host>, quit\r\n"
+			"port <name>, telnet <ip-or-host>, te <filename>, quit\r\n"
 			"anything else is evaluated as Scheme, e.g. (+ 1 2)");
 		return false;
 	}
@@ -443,6 +580,48 @@ static bool dispatch_line(const char *line, char *out, uint32_t out_cap,
 		return false;
 	}
 
+	if (!strncmp(line, "te ", 3)) {
+
+		const char *target = line + 3;
+		while (*target == ' ') target++;
+
+		if (*target == 0) {
+			snprintf(out, out_cap, "usage: te <filename>");
+			return false;
+		}
+
+		if (!conn) {
+			// same reasoning as "port"/"telnet" above -- a bare
+			// REPL_EVAL request has no connection to hand editor-mode
+			// ownership to, and nowhere for te's own VT100 screen
+			// output to go.
+			snprintf(out, out_cap,
+				"repl: 'te' only works from an interactive term "
+				"connection, not a REPL_EVAL request");
+			return false;
+		}
+
+		char reason[128];
+		if (te_bridge_start(&conn->port, target, reason, sizeof(reason))) {
+			// te_bridge_start() has already sent the editor's own
+			// first screen down this connection -- nothing more to
+			// say here, and no PROMPT either (handle_data() checks
+			// conn->in_editor itself to skip that, see there).
+			conn->in_editor = true;
+			out[0] = 0;
+		} else {
+			snprintf(out, out_cap, "te: %s", reason);
+		}
+
+		return false;
+
+	}
+
+	if (!strcmp(line, "te")) {
+		snprintf(out, out_cap, "usage: te <filename>");
+		return false;
+	}
+
 	if (!strncmp(line, "scheme ", 7)) {
 		eval_scheme(line + 7, out, out_cap);
 		return false;
@@ -458,19 +637,25 @@ static bool dispatch_line(const char *line, char *out, uint32_t out_cap,
 		return true;
 	}
 
-	// no builtin matched -- default to Scheme. builtins above always
-	// win on an exact/prefix match first (so e.g. "help" always shows
-	// the builtin help text, never an "unbound symbol: help" Scheme
-	// error, even though nothing stops a user from later `define`ing
-	// their own Scheme binding named help -- the builtin table simply
-	// isn't reachable through Scheme at all, they're two separate
-	// namespaces that only happen to share dispatch here) -- but
-	// anything else, "the whole line" is handed to eval_scheme()
-	// as-is. The explicit "scheme <expr>" command above still works
-	// too (mostly redundant now, kept for explicitness/scripting and
-	// because it costs nothing to leave in) -- this is just the same
-	// path with the "scheme " prefix no longer required.
-	eval_scheme(line, out, out_cap);
+	// no builtin matched -- try bare-word command syntax
+	// (docs/scheme_api.md \S1) before falling back to evaluating the
+	// line exactly as typed: e.g. "ls" -> "(ls)",
+	// `tget 1.2.3.4 f` -> `(tget "1.2.3.4" "f")` -- but ONLY if the
+	// first word is CURRENTLY bound to something callable
+	// (ms_is_callable(), sw/ext/ms/ms.c) -- deliberately no separate
+	// curated keyword list to maintain (docs/scheme_api.md \S1c: "any
+	// bound procedure", not an allow-list). An unbound first word, or
+	// one bound to something non-callable (a plain variable), falls
+	// through completely unchanged -- eval_scheme() sees exactly
+	// `line` in that case, same as always (this preserves e.g.
+	// `myvar` alone still just printing myvar's value, not attempting
+	// to call it).
+	char translated[Z_LINE_MAX * 2 + 8];
+	if (scheme_ready && translate_command_line(line, translated, sizeof(translated))) {
+		eval_scheme(translated, out, out_cap);
+	} else {
+		eval_scheme(line, out, out_cap);
+	}
 	return false;
 
 }
@@ -538,8 +723,38 @@ static void handle_data(const z_msg_t *msg) {
 			// in order regardless -- correct either way, and doesn't
 			// assume anything about how many bytes a future, non-term
 			// client might bundle into one message (e.g. a pasted
-			// block).
+			// block, or -- the common case for this specific check --
+			// a multi-byte VT100 escape sequence like an arrow key
+			// while this connection is in the `te` editor below).
 			for (uint32_t i = 0; i < len; i++) {
+
+				// while this connection owns the live `te` session
+				// (te_bridge.h), every byte goes straight to it,
+				// bypassing the normal line-editing/dispatch path
+				// entirely -- bytes from any OTHER connection still
+				// go through that path below regardless, so repl
+				// stays responsive to its other windows while one is
+				// editing. This check is per-BYTE, not per-message,
+				// for the same reason z_line_feed() below needs
+				// bytes fed one at a time.
+				if (c->in_editor) {
+
+					if (!te_bridge_feed(data[i])) {
+						// Esc :q just ended the session -- clear the
+						// screen (te's own last redraw is still up)
+						// and drop this connection back into normal
+						// line mode.
+						c->in_editor = false;
+						conn_send_str(c,
+							"\r\n" VT100_ERASE_SCREEN VT100_CURSOR_HOME
+							"te: session ended\r\n");
+						conn_send_str(c, PROMPT);
+						z_line_reset(&c->line);
+					}
+
+					continue;
+
+				}
 
 				char echo[Z_LINE_ECHO_MAX];
 				uint32_t echo_len;
@@ -558,7 +773,7 @@ static void handle_data(const z_msg_t *msg) {
 
 				char out[Z_REPL_EVAL_REPLY_MAX];
 				bool wants_quit =
-					dispatch_line(c->line.buf, out, sizeof(out), c->port.peer_pid);
+					dispatch_line(c->line.buf, out, sizeof(out), c);
 
 				if (out[0]) {
 					conn_send_str(c, out);
@@ -576,8 +791,18 @@ static void handle_data(const z_msg_t *msg) {
 					break;
 				}
 
-				conn_send_str(c, PROMPT);
 				z_line_reset(&c->line);
+
+				if (c->in_editor) {
+					// dispatch_line() just started a `te` session on
+					// this connection (the "te <filename>" command
+					// above) -- it already sent the editor's own
+					// first screen, so don't ALSO print the normal
+					// PROMPT on top of it.
+					continue;
+				}
+
+				conn_send_str(c, PROMPT);
 
 			}
 
@@ -601,6 +826,19 @@ static void handle_data(const z_msg_t *msg) {
 static void handle_close(const z_msg_t *msg) {
 	repl_conn_t *c = find_conn_by_tag(msg->tag);
 	if (!c) return;
+	if (c->in_editor) {
+		// this connection's own `term` disappeared (crashed, closed,
+		// whatever) while it owned the live `te` session -- release
+		// the process-wide editor lock rather than leaving every
+		// future `te` command permanently refused with "already in
+		// use". No attempt to save first: there's no connection left
+		// to report success/failure back to, and te_bridge_abort()'s
+		// own contract is explicit about not trying -- same accepted
+		// "unclean disconnect loses unsaved changes" tradeoff any
+		// real editor has.
+		te_bridge_abort();
+		c->in_editor = false;
+	}
 	c->port.connected = false;
 	printf("repl: connection closed by peer\n");
 }
@@ -633,8 +871,8 @@ static void handle_eval(const z_msg_t *msg) {
 	}
 
 	char out[Z_REPL_EVAL_REPLY_MAX];
-	dispatch_line(input, out, sizeof(out), 0); // 0 = no requesting term
-		// connection -- see dispatch_line()'s own header comment
+	dispatch_line(input, out, sizeof(out), NULL); // NULL = no requesting
+		// term connection -- see dispatch_line()'s own header comment
 	// dispatch_line()'s "wants to quit" return is deliberately
 	// ignored here -- there's no connection/session for a bare
 	// REPL_EVAL request to end.
@@ -681,6 +919,19 @@ int main(void) {
 		uint32_t heap_grown = (uint32_t)sbrk(0) - (uint32_t)&_end;
 		printf("repl: heap grown %lu bytes by end of stdlib load\n",
 			(unsigned long)heap_grown);
+		// registers every Zeitlos-specific procedure (ls, read-file,
+		// ...) into the same shared ms_global_env stdlib just loaded
+		// into -- see zapi.h/docs/scheme_api.md. Still inside this
+		// function's own protected region (this file's own comment
+		// on eval_scheme() explains why that's required for anything
+		// that can reach ms_log(MS_PANIC, ...), which
+		// ms_def_builtin() can in principle do via its own
+		// alloc_cell() calls on a genuinely exhausted heap) --
+		// lumped into the same all-or-nothing early-boot check as
+		// the stdlib load itself, rather than a separate try/catch,
+		// since a heap too small for THIS is already a hard failure
+		// either way.
+		zapi_register();
 	} else {
 		ms_panic_after_recover();
 		printf("repl: Scheme failed to initialize (non-fatal -- "

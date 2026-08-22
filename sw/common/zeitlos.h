@@ -256,6 +256,19 @@ uint32_t z_getpid(void);
 // Returns the new pid, or 0 on failure.
 uint32_t z_proc_run(const char *name);
 
+// NOTE: app-facing filesystem access (fs_size()/fs_mallocfile()/
+// fs_write_file(), backed by the new Z_SYS_FS_SIZE/_READ/_WRITE
+// syscalls) is DELIBERATELY NOT declared here, even though this file
+// is otherwise the natural home for an app-facing syscall wrapper --
+// this header is also pulled into KERNEL-side code (sw/os/kernel.h
+// includes it), which separately includes sw/os/fs/fs.h, the
+// kernel-native FatFs wrappers -- and fs.h already declares
+// fs_size()/fs_mallocfile()/fs_write_file() itself, with slightly
+// different signatures (uint32_t vs int, etc.) for the kernel's own
+// direct-FatFs-call versions. Declaring the app-facing versions HERE
+// under the same names would collide at kernel-compile time. See
+// sw/common/zfsapp.h instead -- same names, app-only header, never
+// pulled into kernel.c.
 #define VT100_CURSOR_UP       "\e[A"
 #define VT100_CURSOR_DOWN     "\e[B"
 #define VT100_CURSOR_RIGHT    "\e[C"

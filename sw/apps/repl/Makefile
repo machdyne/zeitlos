@@ -34,7 +34,34 @@ MS_SIZE_CFLAGS = -DMS_HEAP_SIZE=$(MS_HEAP_SIZE) \
 MS_CFLAGS = -DLIX -DMS_STATIC_HEAP $(MS_SIZE_CFLAGS) \
 	-I$(MS_PLATFORM_DIR) -I.
 
-OBJS = zeitlos.o zobj.o zport.o zline.o zrepl.o zdns.o ms.o repl.o
+# sw/ext/te -- a small VT100-based text editor, vendored as a git
+# submodule (see docs/editor.md and te's own README.md) -- built here
+# with -DEMBEDDED (te's own fs.h/getch() contract, satisfied by
+# te_support/fs.h + sw/common/zfsapp.c) and -DTE_HOST_IO (repl-side
+# I/O indirection -- te_support/te_host_io.h, implemented by
+# te_bridge.c -- see that submodule's own top-of-file comment on this
+# flag for why it exists and why it doesn't affect any OTHER build of
+# te.c). TE_DEFAULT_ROWS/COLS match `term`'s own fixed VT100 screen
+# size exactly (VT_ROWS/VT_COLS, sw/common/zvt100.h) rather than te's
+# own smaller built-in defaults, so `te` uses the whole window.
+TE_DIR = ../../ext/te
+TE_SUPPORT_DIR = te_support
+TE_DEFAULT_ROWS ?= 25
+TE_DEFAULT_COLS ?= 80
+
+# how large a file `te` will open -- see te_bridge.c's own comment on
+# why this is deliberately conservative relative to repl's 64KB heap,
+# and docs/editor.md for the arithmetic behind the default.
+# Overridable, e.g. `make TE_MAX_FILE_SIZE=4096`.
+TE_MAX_FILE_SIZE ?= 2048
+
+TE_CFLAGS = -DEMBEDDED -DTE_HOST_IO \
+	-DTE_DEFAULT_ROWS=$(TE_DEFAULT_ROWS) -DTE_DEFAULT_COLS=$(TE_DEFAULT_COLS) \
+	-I$(TE_SUPPORT_DIR)
+
+OBJS = zeitlos.o zobj.o zport.o zline.o zrepl.o zdns.o zfsapp.o zstream.o \
+	zgfx.o zfont_data.o zwin.o ms.o \
+	te.o te_bridge.o zapi.o repl.o
 
 repl: repl.elf repl.bin
 
@@ -56,6 +83,29 @@ zrepl.o:
 zdns.o:
 	$(CC) $(CFLAGS) -c ../../common/zdns.c -o zdns.o
 
+# needed for `tget`/`tput` (zapi.c's own "Networking" section) --
+# repl didn't link this before this API existed either.
+zstream.o:
+	$(CC) $(CFLAGS) -c ../../common/zstream.c -o zstream.o
+
+zfsapp.o:
+	$(CC) $(CFLAGS) -c ../../common/zfsapp.c -o zfsapp.o
+
+# the window/graphics stack -- see zapi.c's own "Windows" section for
+# why repl needs this now (it didn't before this API existed). Same
+# three objects/build rules sw/apps/hello_win's own Makefile already
+# uses for the same three source files -- copied here verbatim rather
+# than reinvented, this is the established way any app links against
+# z_win_*.
+zgfx.o:
+	$(CC) $(CFLAGS) -c ../../common/zgfx.c -o zgfx.o
+
+zfont_data.o:
+	$(CC) $(CFLAGS) -c ../../common/zfont_data.c -o zfont_data.o
+
+zwin.o:
+	$(CC) $(CFLAGS) -c ../../common/zwin.c -o zwin.o
+
 # regenerated whenever the submodule's stdlib source is newer than the
 # last build's header -- see gen_ms_stdlib.py's own header comment for
 # why this isn't committed to the repo instead.
@@ -64,6 +114,20 @@ ms_stdlib.h: gen_ms_stdlib.py $(MS_DIR)/ms_stdlib.l
 
 ms.o: ms_stdlib.h
 	$(CC) $(CFLAGS) $(MS_CFLAGS) -c $(MS_DIR)/ms.c -o ms.o
+
+# te.c itself is never edited in place here -- if a fix is ever needed
+# upstream, edit $(TE_DIR)/te.c directly (it's a git submodule) and
+# commit it there; this rule just compiles whatever's currently
+# checked out, same as ms.o does for sw/ext/ms above.
+te.o: $(TE_DIR)/te.c $(TE_SUPPORT_DIR)/fs.h $(TE_SUPPORT_DIR)/te_host_io.h
+	$(CC) $(CFLAGS) $(TE_CFLAGS) -c $(TE_DIR)/te.c -o te.o
+
+te_bridge.o: te_bridge.c te_bridge.h $(TE_SUPPORT_DIR)/te_host_io.h
+	$(CC) $(CFLAGS) -DTE_MAX_FILE_SIZE=$(TE_MAX_FILE_SIZE) -c te_bridge.c -o te_bridge.o
+
+zapi.o: zapi.c zapi.h ms_api.h ../../common/zfsapp.h ../../common/zwin.h \
+	../../common/zdns.h ../../common/znet.h ../../common/zstream.h
+	$(CC) $(CFLAGS) -c zapi.c -o zapi.o
 
 repl.o:
 	$(CC) $(CFLAGS) $(MS_SIZE_CFLAGS) -c repl.c -o repl.o

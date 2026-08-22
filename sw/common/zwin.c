@@ -39,11 +39,33 @@ static uint32_t resolve_wm_pid(void) {
 }
 
 z_rv z_win_create(z_win_t *win, const char *title, uint32_t w, uint32_t h) {
+	return z_win_create_ex(win, title, w, h, -1, -1);
+}
 
-	z_obj_t args = z_obj_map(3);
+// like z_win_create(), but places the window at an exact screen
+// position instead of letting the wm auto-cascade it -- x/y >= 0
+// both required to take effect (either one negative falls back to
+// the normal cascade, same as z_win_create() itself always requests).
+// Safe to call regardless of what else is on screen: unlike MOVING an
+// existing window later would be, window CREATION is explicitly
+// exempt from the wm's redraw-ack wait (wm.c's own create_window()
+// caller uses repair_region()'s exclude_idx specifically for this --
+// see docs/window_manager.md, "Content z-order" -- since a brand-new
+// window's owner is still blocked on Z_WM_WINDOW_CREATED and can't
+// possibly be listening for Z_WM_REDRAW yet). A NEW function rather
+// than adding parameters to z_win_create() itself, so every existing
+// caller (sw/apps/hello_win) is completely unaffected.
+z_rv z_win_create_ex(z_win_t *win, const char *title, uint32_t w, uint32_t h,
+	int32_t x, int32_t y) {
+
+	z_obj_t args = z_obj_map(5);
 	z_map_set(&args, "title", z_obj_str(title ? title : ""));
 	if (w) z_map_set(&args, "w", z_obj_uint32(w));
 	if (h) z_map_set(&args, "h", z_obj_uint32(h));
+	if (x >= 0 && y >= 0) {
+		z_map_set(&args, "x", z_obj_uint32((uint32_t)x));
+		z_map_set(&args, "y", z_obj_uint32((uint32_t)y));
+	}
 
 	z_msg_new_send(resolve_wm_pid(), Z_WM_CREATE_WINDOW, 0, args);
 	// note: `args` is intentionally never freed here -- same accepted
@@ -151,4 +173,15 @@ void z_win_hw_box(const z_win_t *win, int x0, int y0, int x1, int y1, int color)
 	z_clip_t clip;
 	z_win_content_rect(win, &clip);
 	z_fb_hw_box(x0, y0, x1, y1, color, &clip);
+}
+
+// tells the wm to destroy this window -- fire-and-forget, no reply
+// (see wm.c's own Z_WM_DESTROY_WINDOW handler: it repairs the screen
+// region itself and doesn't send anything back). Safe to call even if
+// win->id is already -1 (a failed z_win_create(), or a window that
+// was never actually created) -- the wm just won't find a matching id
+// and drops it, same as it already does for any unrecognized id.
+void z_win_destroy(const z_win_t *win) {
+	if (win->id < 0) return;
+	z_msg_new_send(resolve_wm_pid(), Z_WM_DESTROY_WINDOW, 0, z_obj_uint32((uint32_t)win->id));
 }

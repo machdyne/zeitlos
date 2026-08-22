@@ -1,3 +1,6 @@
 [submodule "sw/ext/ms"]
 	path = sw/ext/ms
 	url = https://github.com/machdyne/ms
+[submodule "sw/ext/te"]
+	path = sw/ext/te
+	url = https://github.com/machdyne/te.git

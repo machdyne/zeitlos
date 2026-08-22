@@ -48,7 +48,7 @@ With the MTU, there is no need for position independent code or complicated addr
 | wm | Window manager + dock |
 | net | Networking server |
 | term | Terminal emulator (connects to services; VT100 emulation) |
-| repl | User shell + Lisp interpreter (subset of R4RS Scheme) |
+| repl | App server + Lisp interpreter (subset of R4RS Scheme) |
 
 ### Boards
 

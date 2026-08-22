@@ -39,6 +39,11 @@ typedef struct ms_val ms_val;	/* fully opaque here on purpose -- repl.c
 	 * struct definition (ms.c's own, sitting among its `static`
 	 * internals) */
 
+typedef ms_val *(*ms_builtin)(ms_val *args);	/* the shape every
+	 * zapi_* function (sw/apps/repl/zapi.c) has, same as every bi_*
+	 * builtin inside ms.c itself -- args is a pre-evaluated Scheme
+	 * list, see ms_car()/ms_cdr() below for walking it */
+
 /* -- evaluation -- */
 ms_val *ms_eval(ms_val *x, ms_val *env);
 ms_val *ms_read(const char **s);
@@ -89,5 +94,36 @@ void ms_panic_after_recover(void);
 void ms_panic_disarm(void);
 
 extern int ms_out_of_memory_count;
+
+/* -- Zeitlos Scheme API registration/construction (docs/scheme_api.md)
+ * -- NOT part of upstream ms.c. Lets sw/apps/repl/zapi.c register its
+ * own C-backed Scheme procedures and build/inspect ms_val* arguments
+ * and return values, without needing the real (still deliberately
+ * opaque, see ms_val's own comment above) struct definition. See
+ * ms.c's own comment right above these functions' definitions (near
+ * ms_heap_used()/ms_cell_size()) for the full design writeup -- one
+ * small, one-time patch, everything added after it lives purely in
+ * zapi.c, ms.c never needs touching again for a new procedure. */
+
+typedef enum { MS_INFO, MS_ERROR, MS_PANIC } ms_log_level;
+void ms_log(ms_log_level level, const char *fmt, ...);
+
+void ms_def_builtin(const char *name, ms_builtin fn);
+bool ms_is_callable(const char *name);
+
+ms_val *ms_mk_str(char *owned);	/* takes ownership -- must be malloc'd, or NULL */
+ms_val *ms_mk_num(double n);
+ms_val *ms_mk_bool(bool b);
+ms_val *ms_nil_val(void);
+ms_val *ms_mk_str_list(char **items, int count);	/* takes ownership of each item */
+
+bool ms_is_str(ms_val *v);
+bool ms_is_num(ms_val *v);
+bool ms_is_pair(ms_val *v);
+bool ms_is_nil(ms_val *v);
+const char *ms_str_val(ms_val *v);
+double ms_num_val(ms_val *v);
+ms_val *ms_car(ms_val *v);
+ms_val *ms_cdr(ms_val *v);
 
 #endif

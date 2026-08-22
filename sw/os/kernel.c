@@ -23,6 +23,7 @@
 #include "pidreg.h"
 #include "logo.h"
 #include "fs/fs.h"
+#include "fsapi.h"
 #include "../common/zsoc.h"
 
 // Z_PROCS_MAX now lives in kernel.h (msg.c needs it too)

@@ -31,3 +31,22 @@ Z_MKSYSCALL(GETPID, k_getpid)
 // sw/apps/wm's dock (see docs/window_manager.md), the first thing
 // besides the kernel shell that needs to start a process.
 Z_MKSYSCALL(PROC_RUN, k_proc_run)
+// filesystem access for ordinary apps (not just sh.c/kernel code) --
+// see sw/os/fsapi.h for the full design writeup. Added for
+// sw/apps/repl's `te` command (docs/editor.md), deliberately general.
+Z_MKSYSCALL(FS_SIZE, k_fs_size)
+Z_MKSYSCALL(FS_READ, k_fs_read)
+Z_MKSYSCALL(FS_WRITE, k_fs_write)
+// Files half of the Zeitlos Scheme API (docs/scheme_api.md) needed
+// two more: deleting a file, and listing a directory (previously
+// print-only, sh.c-only -- see sw/os/fsapi.h's own comment on
+// k_fs_list()).
+Z_MKSYSCALL(FS_UNLINK, k_fs_unlink)
+Z_MKSYSCALL(FS_LIST, k_fs_list)
+// chunked file I/O for `tget`/`tput` (docs/scheme_api.md,
+// "Networking") -- see sw/common/zfs.h for the full design writeup.
+Z_MKSYSCALL(FS_OPEN_WRITE, k_fs_open_write)
+Z_MKSYSCALL(FS_OPEN_READ, k_fs_open_read)
+Z_MKSYSCALL(FS_READ_CHUNK, k_fs_read_chunk)
+Z_MKSYSCALL(FS_WRITE_CHUNK, k_fs_write_chunk)
+Z_MKSYSCALL(FS_CLOSE, k_fs_close)
