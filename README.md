@@ -49,8 +49,8 @@ With the MTU, there is no need for position independent code or complicated addr
 | kernel | Kernel + kernel shell (serial console) |
 | wm | Window manager + dock |
 | net | Networking server |
-| term | Terminal emulator (connects to services; VT100 emulation) |
 | repl | App server + [Lisp interpreter (subset of R4RS Scheme)](https://github.com/machdyne/ms) |
+| term | Terminal emulator (connects to services; VT100 emulation) |
 
 ### Boards
 
