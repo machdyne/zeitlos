@@ -27,12 +27,6 @@ Zeitlos works fully without a mouse if you don't have one plugged in.
 - **While the dock has focus**, the arrow keys move a selection
   between icons and **Enter** launches the selected app.
 
-### Closing an app
-
-There's no close button on most windows yet. To stop an app, open a
-`term` window (see below) and use `kill <pid>` -- `ps` lists what's
-running and its process IDs if you need to find one.
-
 ## The terminal
 
 `term` is your main way of interacting with Zeitlos -- launch it from
