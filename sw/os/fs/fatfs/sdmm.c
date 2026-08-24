@@ -40,17 +40,24 @@
 #define DO_INIT()						/* Initialize port for MMC DO as input */
 #define DO			(reg_sdcard &	0x01)	/* Test for MMC DO ('H':true, 'L':false) */
 
+/* Shadow copy of the writable {CS,CK,DI} bits (bits 3,2,1). Matches
+   spibb_wb's reset state (sd_ss=1, sd_sck=1, sd_mosi=1 -> 0x0E).
+   Avoids reading reg_sdcard back before every write: DI/CK/CS are
+   outputs we last set ourselves, so we already know their state --
+   only DO (bit 0, MISO, an input) genuinely needs a hardware read. */
+static BYTE sd_port = 0x0E;
+
 #define DI_INIT()						/* Initialize port for MMC DI as output */
-#define DI_H()		reg_sdcard |= 0x02	/* Set MMC DI "high" */
-#define DI_L()		reg_sdcard &= 0xFD	/* Set MMC DI "low" */
+#define DI_H()		do { sd_port |= 0x02; reg_sdcard = sd_port; } while(0)	/* Set MMC DI "high" */
+#define DI_L()		do { sd_port &= 0xFD; reg_sdcard = sd_port; } while(0)	/* Set MMC DI "low" */
 
 #define CK_INIT()						/* Initialize port for MMC SCLK as output */
-#define CK_H()		reg_sdcard |= 0x04	/* Set MMC SCLK "high" */
-#define	CK_L()		reg_sdcard &= 0xFB	/* Set MMC SCLK "low" */
+#define CK_H()		do { sd_port |= 0x04; reg_sdcard = sd_port; } while(0)	/* Set MMC SCLK "high" */
+#define	CK_L()		do { sd_port &= 0xFB; reg_sdcard = sd_port; } while(0)	/* Set MMC SCLK "low" */
 
-#define CS_INIT()							/* Initialize port for MMC CS as output */
-#define	CS_H()		reg_sdcard |= 0x08	/* Set MMC CS "high" */
-#define CS_L()		reg_sdcard &= 0xF7	/* Set MMC CS "low" */
+#define CS_INIT()						/* Initialize port for MMC CS as output */
+#define	CS_H()		do { sd_port |= 0x08; reg_sdcard = sd_port; } while(0)	/* Set MMC CS "high" */
+#define CS_L()		do { sd_port &= 0xF7; reg_sdcard = sd_port; } while(0)	/* Set MMC CS "low" */
 
 
 static
