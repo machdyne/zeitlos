@@ -418,7 +418,29 @@ void tcp_handle(uint32_t src_ip, const uint8_t *p, uint16_t len) {
 			if (seq == tcb.rcv_nxt) {
 				tcb.rcv_nxt += data_len;
 				send_ack();
-				notify(TCP_EVENT_DATA, data, data_len);
+				// deliver at most TCP_MAX_RX_PAYLOAD bytes to the
+				// listener, NOT data_len itself -- see tcp.h's own
+				// TCP_MAX_RX_PAYLOAD comment for the real-hardware
+				// overflow this closes (telnet.c's clean[] buffer,
+				// confirmed reachable since nothing here ever bounded
+				// what a listener actually receives). Deliberately
+				// only clamps the delivered length, not data_len
+				// itself above: rcv_nxt/send_ack() must still reflect
+				// the TRUE number of bytes this segment contained,
+				// or our own ACK would silently claim to have
+				// received less than the peer actually sent,
+				// desyncing sequence tracking for every segment after
+				// this one. Worst case here, an implausibly large
+				// single segment's tail bytes are correctly ACKed but
+				// never actually delivered to the application --
+				// same "peer's own retransmit timer sorts out
+				// whatever this end drops" philosophy this file's own
+				// header comment already applies to out-of-order
+				// segments.
+				uint16_t deliver_len = data_len;
+				if (deliver_len > TCP_MAX_RX_PAYLOAD)
+					deliver_len = TCP_MAX_RX_PAYLOAD;
+				notify(TCP_EVENT_DATA, data, deliver_len);
 			} else if (seq < tcb.rcv_nxt) {
 				// already-seen retransmit -- re-ack so the peer
 				// stops retransmitting it, don't deliver it again

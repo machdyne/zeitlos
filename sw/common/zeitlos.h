@@ -222,6 +222,17 @@ z_rv z_msg_wait(z_msg_t *msg, uint32_t subject, uint32_t tag);
 // wall-clock/calendar time.
 uint32_t z_uptime_ticks(void);
 
+// busy-waits for at least `ms` milliseconds, built on z_uptime_ticks()
+// above -- see delay_ms()'s own comment (zeitlos.c) for why this
+// exists (replacing ad-hoc, uncalibrated `for(volatile int i=0;...)`
+// spin loops with something expressed in real time) and what "busy"
+// means here (this process keeps its own CPU slice the whole time;
+// there's no sleep/yield primitive to hand it back). Not a substitute
+// for z_msg_wait()/z_msg_wait_timeout() if what you're actually doing
+// is waiting on a message/event that might take a while or arrive at
+// an unpredictable time -- this is for short, fixed delays only.
+void delay_ms(uint32_t ms);
+
 // -- PID name registry (sw/os/pidreg.c/h) --
 //
 // Registers `basename` for the calling process; the kernel appends a

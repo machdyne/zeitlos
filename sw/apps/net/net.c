@@ -470,6 +470,26 @@ static void check_tftp_progress(void) {
 
 int main(void) {
 
+	// diagnostic: distinguishes "this process's own execution jumped
+	// back to main()" (canary stays MAGIC -- .bss was never re-zeroed,
+	// since that only happens when fs_load() rewrites this process's
+	// entire memory region from the on-disk binary, i.e. a genuine
+	// fresh k_proc_create()+fs_load()+k_proc_start()) from "something
+	// actually re-created and reloaded this process, just without
+	// printing any of the usual `run`/`creating process`/`dock:
+	// launching` messages every existing caller of k_proc_create()
+	// already has" (canary reads 0 -- fresh .bss). A static local,
+	// not a stack variable, specifically so it survives whichever of
+	// those two things actually happened to reach this exact line
+	// again. Added while investigating a real-hardware symptom: net
+	// reappearing under a new pidreg name ("net1") with no visible
+	// process-creation message anywhere in the log.
+	static uint32_t entry_canary;
+	printf("net: main() entered, entry_canary=0x%08lx (expect 0 on a "
+		"genuine fresh load, nonzero if this is the same process's "
+		"own execution jumping back here)\n", (unsigned long)entry_canary);
+	entry_canary = 0xDEADBEEF;
+
 	printf("net: initializing %s...\n", NET_PHY_NAME);
 
 	// check the SOC actually has the ethernet backend this binary was

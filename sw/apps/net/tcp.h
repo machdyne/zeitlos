@@ -51,10 +51,35 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-// max application-data bytes in one segment, in either direction --
-// see the "no options at all" note above for why this is exactly
-// RFC 879's default MSS rather than something derived from ETH_MTU.
+// max application-data bytes we ever SEND in one segment -- see the
+// "no options at all" note above for why this is exactly RFC 879's
+// default MSS rather than something derived from ETH_MTU. This is a
+// SEND-side convention, not an enforced limit on what a peer can send
+// TO us -- see TCP_MAX_RX_PAYLOAD below for the receive-side version
+// of this constant, which is NOT the same number and must not be
+// confused with it.
 #define TCP_MAX_PAYLOAD  536
+
+// max application-data bytes we can ever RECEIVE in one segment --
+// this file's own receive path (tcp_handle(), tcp.c) never sends an
+// MSS option in its SYN, so RFC 879 says a well-behaved peer SHOULD
+// default to sending us no more than the 536-byte TCP_MAX_PAYLOAD
+// above -- but "should" isn't "must", and nothing here actually
+// enforces it against what a peer genuinely sends. A real,
+// server-controlled TCP segment can be as large as this link's own
+// physical MTU allows (ip.c's own IP_MAX_PAYLOAD, 1480, minus this
+// file's own 20-byte TCP_HDR_LEN) regardless of what we'd prefer.
+// Confirmed as a real gap on real hardware: telnet.c's own
+// clean[TCP_MAX_PAYLOAD] buffer (its receive-side parse output,
+// sized off the WRONG one of these two constants) could overflow if
+// a real server ever sent a single segment larger than 536 bytes --
+// nothing between tcp_handle()'s own data_len computation and that
+// buffer ever clamped it. Fixed at both ends: tcp_handle() itself now
+// clamps data_len to this constant before ever handing it to a
+// listener (defense at the source, correct regardless of any one
+// listener's own buffer size), and telnet.c's clean[] is now sized to
+// match this constant instead of the send-side one.
+#define TCP_MAX_RX_PAYLOAD  (1480 - 20)
 
 typedef enum {
 	// the handshake completed -- data/tcp_send() usable from here.

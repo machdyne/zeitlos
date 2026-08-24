@@ -219,6 +219,22 @@ void ip_handle(const uint8_t src_mac[6], const uint8_t *p, uint16_t len) {
 
 	uint16_t total_len = (p[2] << 8) | p[3];
 	if (total_len > len) return;	// truncated frame
+	if (total_len < ihl) return;	// declared total length shorter than
+					// the header alone -- malformed
+					// (possible with IP options present,
+					// since ihl can exceed the 20-byte
+					// minimum but total_len is otherwise
+					// unvalidated against it). Without this,
+					// `total_len - ihl` below underflows as
+					// unsigned arithmetic (e.g. 20-24 wraps
+					// to 65532), handing icmp_handle()/
+					// tcp_handle()/udp_handle() a huge, bogus
+					// payload length far beyond the actual
+					// received frame -- a real, confirmed gap,
+					// found by inspection during a real-
+					// hardware crash investigation, though
+					// never confirmed as that crash's actual
+					// cause.
 
 	uint8_t protocol = p[9];
 	uint32_t src_ip = ((uint32_t)p[12] << 24) | ((uint32_t)p[13] << 16) |

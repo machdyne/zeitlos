@@ -390,6 +390,32 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 		if (z_pid >= Z_PROCS_MAX) z_pid = 0;
 
 		if ((z_procs[z_pid].flags & Z_PROC_FLAG_DIE) == Z_PROC_FLAG_DIE) {
+			// NOTE: this whole branch runs inside the KTIMER
+			// interrupt handler itself (this function's interrupt
+			// path, not the syscall path) -- picorv32's interrupt
+			// model here doesn't nest, so nothing on this path can
+			// safely call printf()/anything that waits on another
+			// interrupt to make progress. uart.c's own _write()
+			// documents exactly this hazard: `while (k_uart_tx_full())
+			// /* wait */;` has no timeout, and the TX fifo is only
+			// ever drained by the UART TX interrupt -- which can
+			// never fire while we're already inside THIS interrupt
+			// handler. A printf() briefly lived right here (paired
+			// with one in k_proc_kill() below, which runs via the
+			// syscall path instead and is fine) -- it caused a
+			// genuine, total hang the moment it landed at a point
+			// where the TX fifo happened to already be full (far more
+			// likely right after a burst of unrelated output, e.g.
+			// telnet's own connect-sequence prints), with nothing
+			// able to recover it since even the scheduler itself
+			// never gets to run again. Removed; k_proc_kill()'s own
+			// print (this file) still shows every DIE request as it
+			// happens, which is what actually matters for the
+			// investigation this was added for -- exactly when the
+			// resulting free below actually runs is a fixed, short
+			// delay after that (at most one full round-robin cycle),
+			// not additional information worth this risk to observe
+			// directly.
 			// free the memory
 			k_mem_free((void *)z_procs[z_pid].base);
 			// release any names this process registered (see
@@ -538,6 +564,26 @@ z_rv k_proc_stop(uint32_t pid) {
 
 z_rv k_proc_kill(uint32_t pid) {
 	if (pid >= Z_PROCS_MAX) return Z_FAIL;
+	// diagnostic: this flag is the ONLY mechanism in this kernel that
+	// can free a running process's memory block mid-session (the
+	// scheduler's own death-cleanup below actually does the free, one
+	// full round-robin cycle later -- see that code's own new
+	// diagnostic print). Logging the call itself, here, catches WHO
+	// asked for this and WHEN, which the cleanup-side print alone
+	// can't show (by the time cleanup runs, the caller's own stack
+	// frame -- and any context about why -- is long gone). Added
+	// while investigating a real-hardware symptom: a running process
+	// (net) reappearing under a new pidreg name with no visible `run`/
+	// `creating process` message, consistent with its memory being
+	// freed and immediately reused rather than a fresh k_proc_create()
+	// -- this pins down whether k_proc_kill() is actually involved at
+	// all, and if so, from where (z_proc_kill_syscall()'s only current
+	// caller is wm.c's handle_close_click(), which prints its own
+	// diagnostic before calling this -- if THIS print appears without
+	// that one, something else is calling k_proc_kill() directly,
+	// which as of this commit should only be sh.c's `kill` command).
+	printf("k_proc_kill: pid %ld marked to die (base=%08lx)\n",
+		(long)pid, (long)z_procs[pid].base);
 	z_procs[pid].flags |= Z_PROC_FLAG_DIE;
 	return Z_OK;
 }

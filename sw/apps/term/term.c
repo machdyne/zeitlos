@@ -267,6 +267,13 @@ static void feed_and_echo(const char *s) {
 // for a provider known to do something slow before it can reply
 // either way -- see the Z_MAP call site below (telnet) for the
 // motivating case and the actual number used.
+// forward declaration -- handle_key_event() itself is defined later
+// in this file (it needs `vt`/state connect_port() doesn't otherwise
+// depend on), but connect_port()'s own wait loop (below) needs to
+// call it to service Z_WM_KEY while blocked on a slow connect, same
+// as the main loop already does.
+static void handle_key_event(uint32_t packed);
+
 static bool connect_port(const char *name, uint32_t fallback_pid, z_obj_t arg,
 	uint32_t timeout_ticks) {
 
@@ -281,10 +288,103 @@ static bool connect_port(const char *name, uint32_t fallback_pid, z_obj_t arg,
 		target_pid = fallback_pid;
 	}
 
-	if (z_port_connect_arg_timeout(&port, target_pid, arg, timeout_ticks) == Z_OK) {
+	// inline reimplementation of z_port_connect_arg_timeout() (zport.c)
+	// rather than a direct call to it -- that function's own wait loop
+	// discards anything that isn't Z_PORT_CONNECTED/Z_PORT_REFUSED
+	// ("not a reply to our CONNECT -- discard and keep waiting"), which
+	// is the right call for its OTHER callers (a short, fixed ~2s
+	// timeout, and no window/keyboard traffic to lose in the first
+	// place for most of them) but wrong here: this function's own
+	// header comment already flagged, before TERM_TELNET_CONNECT_
+	// TIMEOUT_TICKS existed, that a SET_PORT-triggered reconnect could
+	// "stall this term's responsiveness to keystrokes/redraws for that
+	// same window" -- a real, accepted limitation at the original ~2s
+	// window. Extending that window to 45s for telnet specifically
+	// (TERM_TELNET_CONNECT_TIMEOUT_TICKS's own comment) turned a small,
+	// easy-to-miss accepted gap into a ~22x larger one: real-hardware
+	// symptom this was chasing was `wm`'s own "timed out waiting for
+	// pid N to ack a redraw" firing during an active telnet connect
+	// attempt (repair_region()/repair_drag(), wm.c) -- because THIS
+	// wait loop was discarding the exact Z_WM_REDRAW message that
+	// carries this window's own updated (x,y) after a move
+	// (z_win_apply_redraw(), below) and that `wm` needs a
+	// Z_WM_REDRAW_DONE reply to before it'll stop waiting. `win`'s own
+	// cached position went stale for the rest of this term's lifetime
+	// as a result -- silently wrong content-vs-chrome placement at
+	// best, a real, still only partially understood contributor to
+	// harder crashes reported on real hardware at worst.
+	//
+	// Services the same subset of messages the main loop below does
+	// (Z_WM_REDRAW/Z_WM_WINDOW_MOVED/Z_WM_KEY), matching wm.c's own
+	// wait_for_redraw_done() convention ("keeps servicing every other
+	// message normally while waiting... rather than discarding them").
+	// Z_PORT_DATA/Z_PORT_DATA_ACK/Z_PORT_CLOSE/Z_TERM_SET_PORT are
+	// deliberately NOT serviced here: the port this call is in the
+	// middle of (re)establishing isn't connected yet (or is the OLD
+	// one, already closed above), so there's no sensible connection
+	// for incoming data to belong to, and a nested SET_PORT arriving
+	// mid-connect is an edge case rare enough not to be worth this
+	// function calling itself recursively to handle.
+
+	port.peer_pid = target_pid;
+	port.conn_id = 0;
+	port.connected = false;
+
+	z_msg_new_send(target_pid, Z_PORT_CONNECT, 0, arg);
+
+	uint32_t start = z_uptime_ticks();
+	z_rv result = Z_FAIL;
+	bool refused = false;
+
+	while ((z_uptime_ticks() - start) < timeout_ticks) {
+
+		z_msg_t msg;
+		if (z_msg_read(&msg) != Z_OK) continue;
+
+		if (msg.subject == Z_PORT_CONNECTED && msg.tag == 0) {
+			port.conn_id = msg.obj.val.uint32;
+			port.connected = true;
+			result = Z_OK;
+			break;
+		}
+
+		if (msg.subject == Z_PORT_REFUSED && msg.tag == 0) {
+			if (msg.obj.type == Z_STR && msg.obj.val.str)
+				printf("zport: connect to pid %ld refused: %s\n",
+					(long)target_pid, msg.obj.val.str);
+			else
+				printf("zport: connect to pid %ld refused (no reason given)\n",
+					(long)target_pid);
+			refused = true;
+			break;
+		}
+
+		if (msg.subject == Z_WM_REDRAW) {
+			z_win_apply_redraw(&win, msg.obj.val.uint32);
+			vt_mark_all_dirty(&vt);
+			draw_cursor_x = -1;
+			draw_cursor_y = -1;
+			render();
+			z_win_redraw_done(&win);
+		} else if (msg.subject == Z_WM_WINDOW_MOVED) {
+			z_win_parse_rect(&win, &msg.obj);
+		} else if (msg.subject == Z_WM_KEY) {
+			handle_key_event(msg.obj.val.uint32);
+		}
+		// anything else: same "not relevant to this wait" discard the
+		// generic zport.c version already documents.
+
+	}
+
+	if (result == Z_OK) {
 		printf("term: connected to port at pid %ld (conn %ld)\n",
 			(long)port.peer_pid, (long)port.conn_id);
 		return true;
+	}
+
+	if (!refused) {
+		printf("zport: connect to pid %ld timed out after %ld ticks -- "
+			"provider never replied\n", (long)target_pid, (long)timeout_ticks);
 	}
 
 	printf("term: no port provider answered at pid %ld -- local echo only\n",

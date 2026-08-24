@@ -102,11 +102,21 @@ static void answer_negotiation(uint8_t cmd, uint8_t opt) {
 // legitimately straddle two separate TCP segments.
 static void telnet_feed(const uint8_t *data, uint16_t len) {
 
-	static uint8_t clean[TCP_MAX_PAYLOAD];	// output can't exceed
-											// input length (IAC
-											// removal only shrinks
-											// it), so this is always
-											// big enough
+	// sized to TCP_MAX_RX_PAYLOAD (tcp.h), NOT TCP_MAX_PAYLOAD -- see
+	// that header's own comment for why these are two different
+	// numbers (536 vs 1460): TCP_MAX_PAYLOAD is our own SEND-side MSS
+	// convention, which says nothing about how large a segment a real
+	// server can actually send US. This buffer used to be sized off
+	// the wrong one of the two -- confirmed reachable on real
+	// hardware once tcp_handle() (tcp.c) started properly clamping
+	// what it delivers to TCP_MAX_RX_PAYLOAD too, closing this from
+	// both ends: the buffer is now big enough for anything that could
+	// arrive, AND the sender-side clamp means it never has to be.
+	static uint8_t clean[TCP_MAX_RX_PAYLOAD];	// output can't exceed
+												// input length (IAC
+												// removal only shrinks
+												// it), so this is always
+												// big enough
 	uint16_t clean_len = 0;
 
 	for (uint16_t i = 0; i < len; i++) {

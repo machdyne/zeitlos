@@ -113,6 +113,43 @@ uint32_t z_uptime_ticks(void) {
 	return obj.val.uint32;
 }
 
+// busy-waits for at least `ms` milliseconds, using z_uptime_ticks()
+// (the KTIMER IRQ's own ~732Hz tick counter, sw/os/kernel.c) rather
+// than an arbitrary `for (volatile int i = 0; i < N; i++);` spin loop
+// -- the kind of ad-hoc delay that's shown up repeatedly across this
+// codebase (real-hardware timing tests, wait_for_redraw_done()'s own
+// small per-iteration spin, and others), each one tuned by feel
+// against whatever clock speed/compiler/optimization level happened
+// to be in use at the time, with no actual relationship to wall-clock
+// time. This one does: pass a real millisecond count and get
+// (approximately) that long, regardless of CPU speed or how the
+// caller was compiled.
+//
+// "approximately": ~732Hz isn't an exact round number (48MHz driving
+// a 16-bit hardware counter, rtl/sysctl.v's own rtc_ctr -- see that
+// file's own comment), so any ms-to-ticks conversion has some
+// built-in imprecision from the hardware itself, not something this
+// function can fix. Rounds UP (ticks = ceil(ms * 732 / 1000)) rather
+// than down, specifically so a caller asking for "at least N ms"
+// actually gets at least that much, never slightly less -- the
+// opposite rounding direction would silently under-deliver by up to
+// one tick's worth of time (~1.4ms) on every call, which compounds
+// badly for a caller doing many small delays in a loop.
+//
+// A "delay" here means exactly what it means everywhere else in this
+// codebase: busy-spin (this process keeps its CPU slice, doing
+// nothing useful) until enough ticks have passed -- there's no
+// sleep/yield-until-woken primitive in this kernel a process could
+// use instead. Fine for the short, occasional delays this is meant
+// for; not a substitute for actually blocking on a message/event if
+// the wait could be long or unpredictable (z_msg_wait()/
+// z_msg_wait_timeout(), zeitlos.h, do that instead).
+void delay_ms(uint32_t ms) {
+	uint32_t ticks = ((uint64_t)ms * 732 + 999) / 1000;
+	uint32_t start = z_uptime_ticks();
+	while (z_uptime_ticks() - start < ticks);
+}
+
 // -- PID name registry -- see zeitlos.h --
 
 bool z_pid_register(const char *basename, char *out, uint32_t outlen) {
