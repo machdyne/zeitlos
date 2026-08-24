@@ -358,6 +358,105 @@ since all three were subtle and easy to reintroduce:
    fixed RTL, isolating the bug to the row-to-row fetch timing only.
    Worth revisiting whether `z_font_5x7` (rather than the `z_font_5x8`
    padding-row workaround) now renders correctly with this fix in.
+4. **`glyph_mem`'s CPU-facing read port aliased to the previous
+   transaction's address** (`rtl/mem/glyph.v`) -- found while chasing
+   the still-open "horizontal garbage near freshly-typed text" report
+   below. A Wishbone read of word N would return word (N-1)'s data
+   instead, and byte-at-a-time writes (exactly how `sw/common/
+   zgfx.c`'s `z_gfx_hw_font_load()`/`z_gfx_hw_icon_load()` actually
+   load data -- one `volatile uint8_t*` store per byte) could land
+   at the wrong byte entirely. Root cause, isolated via direct A/B
+   simulation testing (Icarus Verilog 12.0) rather than by
+   inspection: the array was indexed through an intermediate `wire
+   word_addr = wb_adr_i[...]`, reused across the read and all four
+   conditional per-byte-lane writes in the same clocked block. That's
+   textbook-correct, conventional Verilog and reads fine -- but
+   reproducibly aliased in this specific simulator. Rewriting every
+   use to index `mem[]` with an inline part-select of the raw port
+   signal directly (`mem[wb_adr_i[ADDR_WIDTH-3:0]]`, no intermediate
+   wire at all) -- exactly how `vram_wb` (`rtl/mem/vram.v`) already
+   indexes its own `vram[wb_adr_i]`, which was verified clean under
+   the identical test -- eliminated it completely. **Given the
+   symptom would have to be present on literally the very first
+   character ever rendered after boot (font loading, not just this
+   port's readback, was affected) if this were happening on real
+   hardware, and the reported garbling is intermittent, not constant
+   or present from boot, this is believed to be an Icarus-Verilog-
+   specific code-generation quirk rather than a real hardware/
+   synthesis defect** -- included here, and fixed regardless, because
+   it's a genuine, reproducible bug either way, and because nothing
+   in this codebase currently performs a Wishbone READ of glyph
+   memory at all (font/icon loading is write-only from the CPU side),
+   so this particular instance was practically dormant. Also relevant
+   to anyone writing future testbenches against this module: this
+   specific "wire-typed intermediate memory-array index, reused
+   across a read plus multiple conditional writes in one block" shape
+   is now a known Icarus hazard in this project, worth checking for
+   elsewhere before trusting a simulation result that depends on it.
+   `gpu_raster.v`'s own `fifo_mem` was checked and does NOT share this
+   shape (`fifo_wr_ptr`/`fifo_rd_ptr` are plain registered counters,
+   not wire-derived part-selects) -- see the "horizontal garbage" note
+   below for the broader investigation this came out of. **Update:**
+   the "clean, passing, full end-to-end simulation" mentioned here in
+   an earlier version of this entry turned out to be a false negative
+   -- see bug #5 below for what it was actually missing and why.
+5. **Straddling glyphs could corrupt the framebuffer word to the right
+   of a character, deterministically, with no multi-process contention
+   needed at all.** This is believed to be the actual root cause of
+   the long-running "horizontal garbage near freshly-typed text"
+   report -- see docs/window_manager.md's own entry for the full
+   investigation trail (several earlier, real but ultimately
+   insufficient fixes: `gpu_blit_acquire()`'s cross-process race,
+   bug #4 above). Found by building a real Icarus Verilog testbench
+   around the actual `gpu_blit_wb` + `glyph_mem` + `vram_wb` +
+   `arbiter` sources and checking framebuffer content after a
+   realistic multi-character string draw (word-straddling character
+   included) with zero contention -- something the project's earlier
+   per-piece testbenches (`tb_straddle.v`, `tb_line.v`,
+   `tb_arbiter_stress.v`) never happened to combine: a straddling
+   character with OTHER, non-zero ink already present in the low word
+   from characters drawn before it in the same string.
+   Root cause: `ST_GLYPH_WAIT_WRITE_LO` used to release the bus
+   (`m_cyc_o`/`m_stb_o` low) for exactly ONE cycle before
+   `ST_GLYPH_READ_HI` re-asserted it to start the high word's own
+   read. That one cycle isn't enough settling time for either of two
+   independently-registered pipelines to actually clear: `vram_wb`'s
+   own ack (`rtl/mem/vram.v` re-asserts `wb_ack_o<=1` every single
+   cycle `wb_active` is high, with no "already acked" guard the way
+   `glyph_mem` has), and the arbiter's own response-routing
+   (`rtl/arbiter.v`, itself registered one cycle behind its own state
+   transitions, which briefly drop to `IDLE` when `m_cyc_o` goes low
+   even for one cycle). The high word's read could see a stale,
+   already-consumed ack left over from the low word's write, and
+   capture the LOW word's read-modify-write data into `read_data`
+   instead of the high word's own -- so the high-word write combined
+   the (wrong) low-word content with the new glyph's spillover bits,
+   corrupting whatever was in the high word (typically, whatever the
+   NEXT few characters would go on to occupy) with a wide, wrong
+   pattern. Confirmed cycle-by-cycle via direct signal tracing (a
+   `$display` inside a copy of `gpu_blit_wb`, `glyph_mem`, and
+   `rtl/arbiter.v`, watching `m2_ack_o`/`m2_dat_o`/arbiter `state`
+   through the exact transition) before writing the fix, and confirmed
+   NOT to reproduce with nothing already drawn in the low word first
+   -- which is exactly why an isolated single-straddling-character
+   testbench (no prior ink in that word) never caught it: a stale read
+   of an all-zero word is indistinguishable from a correct one.
+   Fixed by widening the low-word-to-high-word transition to match the
+   row-to-row transition's own (already-safe) three-cycle margin --
+   two new states, `ST_GLYPH_HI_SETTLE1`/`ST_GLYPH_HI_SETTLE2`, sit
+   between the low-word write's ack and the high-word read's own
+   trigger. Verified via simulation: a direct 13-character string draw
+   (no contention) that previously produced ~24 bits of wrong ink per
+   affected row now renders bit-for-bit correct; an 80-character
+   string (many straddle crossings) also renders clean; the original
+   contention-stress scenario (a straddling character under a
+   continuously-requesting second bus master) still passes. On the
+   strength of this, `term.c`'s `resweep_right_of_cursor()` mitigation
+   has been removed outright rather than kept behind a flag -- see
+   that function's own removal note (git history) for what to
+   reintroduce if garbage is somehow still observed on real hardware
+   after this fix, which would mean this wasn't (the whole of) the
+   cause after all.
 
 ## Best Practices
 

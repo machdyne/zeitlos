@@ -79,7 +79,8 @@ module gpu_blit_wb #(
                ST_GLYPH_WRITE_LO = 5'd12, ST_GLYPH_WAIT_WRITE_LO = 5'd13,
                ST_GLYPH_READ_HI = 5'd14, ST_GLYPH_WAIT_READ_HI = 5'd15,
                ST_GLYPH_WRITE_HI = 5'd16, ST_GLYPH_WAIT_WRITE_HI = 5'd17,
-               ST_GLYPH_ROW_DONE = 5'd18, ST_GLYPH_FETCH_WAIT2 = 5'd19;
+               ST_GLYPH_ROW_DONE = 5'd18, ST_GLYPH_FETCH_WAIT2 = 5'd19,
+               ST_GLYPH_HI_SETTLE1 = 5'd20, ST_GLYPH_HI_SETTLE2 = 5'd21;
 
     // Operation variables
     reg [31:0] work_dst_x, work_dst_y, work_width, work_height, work_pattern;
@@ -504,9 +505,61 @@ module gpu_blit_wb #(
                         m_cyc_o <= 1'b0;
                         m_stb_o <= 1'b0;
                         m_we_o <= 1'b0;
-                        if (g_straddle) state <= ST_GLYPH_READ_HI;
+                        if (g_straddle) state <= ST_GLYPH_HI_SETTLE1;
                         else state <= ST_GLYPH_ROW_DONE;
                     end
+                end
+
+                // -- bus settle states between the low-word write and
+                // the high-word read of a straddling glyph --
+                //
+                // this used to be a single cycle (straight from
+                // ST_GLYPH_WAIT_WRITE_LO's ack into ST_GLYPH_READ_HI,
+                // which re-asserted m_cyc_o/m_stb_o on the very next
+                // cycle) -- confirmed via simulation (Icarus Verilog
+                // 12.0, a testbench driving the real gpu_blit_wb +
+                // glyph_mem + vram_wb + arbiter together, checking
+                // actual framebuffer content after a real multi-
+                // character string draw) to be too short. Both
+                // vram_wb's own ack (registered, and NOT edge-gated --
+                // rtl/mem/vram.v re-asserts wb_ack_o<=1 every single
+                // cycle wb_active is high, with no "already acked"
+                // guard the way glyph_mem has) and the arbiter's own
+                // response-routing (rtl/arbiter.v, also registered,
+                // one cycle behind its own state transitions) each
+                // need a full cycle to actually clear back to 0 once
+                // m_cyc_o drops -- one cycle of m_cyc_o=0 isn't enough
+                // for BOTH to settle before this state machine checks
+                // m_ack_i again for the high-word read, so that read
+                // could see a stale, already-consumed ack left over
+                // from the low-word write, and capture the LOW word's
+                // data into read_data instead of the high word's own.
+                // On real hardware this produced exactly the reported
+                // "horizontal garbage/duplicated characters" symptom
+                // (docs/window_manager.md) -- deterministically, no
+                // multi-process contention needed, any time a
+                // straddling character followed others that had
+                // already put non-zero ink in the low word (which is
+                // why it reproduced reliably with real text but was
+                // easy to miss testing a straddle in isolation with
+                // nothing drawn before it, since a stale read of an
+                // all-zero word looks identical to a correct one).
+                //
+                // The row-to-row transition (ST_GLYPH_WAIT_WRITE_HI ->
+                // ST_GLYPH_ROW_DONE -> ST_GLYPH_FETCH -> ST_GLYPH_
+                // FETCH_WAIT -> ST_GLYPH_FETCH_WAIT2 -> ST_GLYPH_
+                // READ_LO) was never affected by this -- it already
+                // has three full cycles of m_cyc_o=0 in between,
+                // which turns out to be exactly the margin needed.
+                // These two extra states give the low-to-high word
+                // transition that same margin, rather than trying to
+                // rely on the smallest gap that happens to work.
+                ST_GLYPH_HI_SETTLE1: begin
+                    state <= ST_GLYPH_HI_SETTLE2;
+                end
+
+                ST_GLYPH_HI_SETTLE2: begin
+                    state <= ST_GLYPH_READ_HI;
                 end
 
                 ST_GLYPH_READ_HI: begin

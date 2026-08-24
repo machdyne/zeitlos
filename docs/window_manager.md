@@ -907,84 +907,64 @@ a convenient API, not a hard guarantee.
   Worth unifying if/when the glyph path gets touched again for
   another reason -- not done proactively here, since it wasn't what
   was asked.
-- **Horizontal garbage (~32-64px) near freshly-typed text in `term`
-  -- likely root cause found, mitigation removed in favor of a real
-  fix.** Reported on real hardware after the glyph-fetch pipeline fix
-  (`docs/gpu_blitter.md`, "Bugs found (and fixed)" #3, which did fix a
-  separate, confirmed vertical row-shift/contamination bug) -- garbage
-  appeared within roughly 1-2 framebuffer words to the right of what's
-  being typed, sometimes duplicating recently-typed characters,
-  sometimes solid blocks; bounded (doesn't reach the window edge), and
-  specifically tied to active typing. Ruled out at the RTL level, each
-  via a dedicated testbench (see `rtl/gpu/bench/`), not just review:
-  `gpu_blit.v`'s word-straddle split math (`tb_straddle.v`); a full
-  48-character line at real 5px-pitch spacing, covering every possible
-  word-alignment offset (`tb_line.v`); and cross-master corruption or
-  ack-misrouting through the real `rtl/arbiter.v` + `rtl/mem/vram.v`
-  under aggressive, continuous contention from a second synthetic bus
-  master mimicking `gpu_raster_wb`'s own access pattern
-  (`tb_arbiter_stress.v`) -- all pass cleanly against the fixed RTL.
-  `sw/common/zvt100.c`'s parser and `sw/apps/term/term.c`'s own
-  dirty-tracking/cursor-overlay logic were also reviewed without
-  finding a bug. That pointed at something the RTL-only testbenches
-  above structurally can't exercise: a **software-level, cross-process
-  race**, found on review of `sw/common/zgfx.c`'s glyph/fill-mode
-  callers -- see `gpu_blit_acquire()`'s own (long) comment there for
-  the full writeup. Short version: every caller about to start a new
-  blitter operation used to poll "is the hardware idle?" with IRQs
-  still enabled, then separately mask IRQs before writing its own
-  registers and the START trigger. The blitter (unlike the line
-  rasterizer, which has a FIFO) has no queue -- a START trigger written
-  while another operation is still in flight lands while the state
-  machine isn't in `ST_IDLE` and is silently dropped, no error, no
-  effect. A timer IRQ landing in that narrow "observed idle but not
-  yet masked" gap can switch to a different process (`wm`'s own
-  `fill_rect()`-based screen repairs, or another `term`/`hello_win`
-  instance's own glyph blits -- both share this exact peripheral and
-  busy bit) which wins the race and starts its own operation; when the
-  original process resumes, its own trigger silently no-ops, and the
-  framebuffer cell it meant to update is left showing whatever was
-  there before -- stale content, exactly matching "duplicating
-  recently-typed characters" or "solid blocks" (an old reverse-video
-  cursor cell). It fits "specific to active typing" too: `term`'s
-  `render()` issues many `z_fb_draw_char2()` calls in a tight sequence
-  per dirty row, multiplying how often the gap gets exercised.
-  `gpu_blit_acquire()` closes the gap by folding the busy-check into
-  the SAME masked section as the trigger, with a re-check-and-retry if
-  another process won the race in between -- applied to
-  `z_fb_hw_fill_rect()`, `z_fb_draw_char()`, `z_fb_draw_char2()`, and
-  the new `z_fb_draw_icon()` (all of which share the one peripheral).
-  **This has not been confirmed on real hardware** -- there was no way
-  to reproduce or verify it in this environment -- so treat it as a
-  strong, well-reasoned candidate rather than a proven fix.
+- **Horizontal garbage (~32-64px) near freshly-typed text -- root
+  cause found and fixed.** Originally reported in `term` after the
+  glyph-fetch pipeline fix (`docs/gpu_blitter.md`, "Bugs found (and
+  fixed)" #3, a separate, confirmed vertical row-shift/contamination
+  bug) -- garbage appeared within roughly 1-2 framebuffer words to the
+  right of what's being typed, sometimes duplicating recently-typed
+  characters, sometimes solid blocks. A real, independently-confirmed
+  cross-process race (`gpu_blit_acquire()`, `sw/common/zgfx.c`) was
+  found and fixed along the way, but turned out not to be (the whole
+  of) the cause -- the report persisted afterward, including in a
+  single-process, zero-contention case (`wm`'s own titlebar text,
+  "term0" repeatably rendering as "term0  ter"; `hello_win`'s content
+  text repeatably rendering "Hello, world!" as "Hello, world! wo.")
+  that ruled out cross-process timing as the explanation for at least
+  that occurrence, and confirmed (by toggling `-DZ_GFX_HW_BLIT` off,
+  which made the corruption disappear entirely) that it was specific
+  to the hardware glyph-blit path itself, not string handling or the
+  software fallback.
 
-  **Update: confirmed insufficient on its own.** After
-  `gpu_blit_acquire()` shipped (with `resweep_right_of_cursor()`
-  removed on the theory it was no longer needed), the artifact was
-  still observed on real hardware -- both in `term`'s typing
-  (the original report) and, new, in `wm`'s own titlebar text (a
-  single-process, no-contention draw, which rules out a
-  cross-*process* race as the sole explanation for at least that
-  occurrence). So either `gpu_blit_acquire()`'s race isn't the (whole)
-  cause, or there's a second, still-unidentified bug -- current
-  suspicion, not yet confirmed via simulation, is something in
-  `rtl/gpu/gpu_blit.v`'s own state machine (see this file's own
-  `TERM_RESWEEP_MITIGATION` note just below). `gpu_blit_acquire()`
-  itself is still believed correct and worth keeping regardless (it
-  closes a real race independent of whether it explains this
-  particular symptom) -- it just isn't sufficient by itself.
-  `resweep_right_of_cursor()` has accordingly been reinstated in
-  `term.c`, now behind a build-time opt-out
-  (`TERM_RESWEEP_MITIGATION`, defined to `1` by default) rather than
-  unconditionally removed or unconditionally present -- see that
-  macro's own comment in `term.c` for how to disable it once a real
-  fix is confirmed (`make term CFLAGS+=-DTERM_RESWEEP_MITIGATION=0`,
-  or edit the `#define`). Leaving it enabled by default costs a
-  handful of redundant (already-fast) glyph blits per keystroke and
-  can only ever redraw *correct* content, never destroy any -- see the
-  mitigation's own comment for why that's true by construction --
-  so there's no real downside to leaving it on while the actual root
-  cause is still being tracked down.
+  That evidence -- deterministic, single-process, hardware-path-only,
+  reproducing identically across two completely unrelated call sites
+  (`wm.c` and `hello_win.c`) that share nothing but `zgfx.c`'s glyph-
+  draw code -- pointed at something in the shared hardware trigger
+  mechanism rather than anything app-specific, and was precise enough
+  to finally reproduce in simulation: a real Icarus Verilog testbench
+  driving the actual `gpu_blit_wb` + `glyph_mem` + `vram_wb` +
+  `arbiter` sources through a realistic multi-character string draw,
+  zero contention, checking framebuffer content afterward. See
+  `docs/gpu_blitter.md`, "Bugs found (and fixed)" #5 for the full root
+  cause and fix -- summary: `ST_GLYPH_WAIT_WRITE_LO` released the bus
+  for exactly one cycle before the high word's own read of a
+  straddling character, which wasn't enough time for either `vram_wb`'s
+  own ack or the arbiter's response-routing (both independently
+  registered) to clear, so the high word's read could see a stale,
+  already-consumed ack and capture the LOW word's data instead of its
+  own -- corrupting whatever the next few characters would go on to
+  occupy. It only became visible once the low word already had
+  non-zero ink from earlier characters in the same string, which is
+  exactly why real text triggered it reliably while an isolated
+  single-straddling-character test (nothing drawn before it) didn't:
+  a stale read of an all-zero word is indistinguishable from a correct
+  one. Fixed by widening that transition to match the row-to-row
+  transition's own already-safe three-cycle margin
+  (`ST_GLYPH_HI_SETTLE1`/`ST_GLYPH_HI_SETTLE2`, `rtl/gpu/gpu_blit.v`).
+  Verified via simulation across several scenarios: a direct
+  13-character string (no contention), an 80-character string (many
+  straddle crossings), and the original contention-stress scenario
+  (straddling character under a continuously-requesting second bus
+  master) -- all render bit-for-bit correct.
+
+  `term.c`'s `resweep_right_of_cursor()` mitigation has been removed
+  outright on the strength of this (not left behind a flag) -- see its
+  own removal note in `term.c`/git history for what to reintroduce if
+  garbage is somehow still observed on real hardware after this fix,
+  which would mean this wasn't (the whole of) the cause after all.
+  `gpu_blit_acquire()` (the earlier cross-process race fix) remains in
+  place regardless -- it closes a real, independent race, whether or
+  not it was ever the cause of this particular symptom.
 - **A subtler framebuffer race for overlapping/adjacent windows.**
   `z_fb_set_pixel()`'s read-modify-write of a framebuffer word
   (`VRAM[word_index] |= mask`) isn't atomic. Two non-overlapping

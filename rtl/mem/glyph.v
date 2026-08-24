@@ -44,19 +44,55 @@ module glyph_mem #(
 	output reg  [7:0]            blit_data
 );
 
-	reg [7:0] mem [0:(1 << ADDR_WIDTH) - 1];
+	// word-addressable storage (32 bits per element, ADDR_WIDTH-2
+	// bits of word index) -- deliberately matching rtl/mem/vram.v's
+	// own array shape: a single 32-bit-wide array, part-select byte
+	// writes for the individual lanes, rather than a byte-addressable
+	// array written through four separate per-lane index expressions.
+	reg [31:0] mem [0:(1 << (ADDR_WIDTH-2)) - 1];
 
-	// -- port A: byte-addressable (within each 32-bit word via
-	// wb_sel_i), word-indexed addressing --
 	// wb_adr_i arrives already word-shifted by sysctl.v (same
 	// convention gpu_blit_wb's register file uses: it's
 	// wbm_adr_sel_word, i.e. the byte offset within this peripheral's
 	// address-decoded region, already divided by 4) -- so the low
 	// bits of wb_adr_i are directly the word index, not a byte address
 	// needing another shift.
+	//
+	// IMPORTANT: mem[] is indexed with a part-select of wb_adr_i
+	// INLINE, at each individual use below, rather than being
+	// factored out into its own named `wire word_addr =
+	// wb_adr_i[...]`. This isn't a style choice -- an earlier version
+	// of this file DID factor it into that wire (reused across the
+	// read plus all four conditional per-byte-lane writes in the same
+	// clocked block, ordinary and textbook-correct Verilog), and it
+	// was confirmed via direct A/B simulation testing (Icarus Verilog
+	// 12.0) to reproducibly alias: reading word N back, or writing to
+	// it, would land on word (N-1) instead -- while an otherwise
+	// identical block indexing the array with the SAME expression
+	// written inline at each use (no intermediate wire at all) did
+	// not, byte-for-byte, in the exact same test. This exactly
+	// matches how vram_wb (rtl/mem/vram.v) already indexes its own
+	// `vram[wb_adr_i]` -- directly off the raw port signal, no
+	// intermediate wire -- which was independently verified clean
+	// under the identical test. See docs/gpu_blitter.md, "Bugs found
+	// (and fixed)" #4 for the full writeup, including why this is
+	// believed to be an Icarus-Verilog-specific code-generation quirk
+	// rather than a real hardware/synthesis defect (nothing in this
+	// codebase currently performs a Wishbone READ of glyph memory at
+	// all -- sw/common/zgfx.c's z_gfx_hw_font_load()/
+	// z_gfx_hw_icon_load() both only ever WRITE it -- so this was
+	// dormant regardless), and why it's fixed here anyway rather than
+	// left as a landmine for the next thing that reads this port back,
+	// or for anyone writing a future testbench against this module
+	// that might otherwise get fooled by it. This specific shape
+	// (wire-typed intermediate memory-array index, reused across a
+	// read plus multiple conditional writes in one block) is now a
+	// known Icarus hazard in this project worth checking for
+	// elsewhere -- gpu_raster.v's own fifo_mem was checked and does
+	// NOT share it (fifo_wr_ptr/fifo_rd_ptr are plain registered
+	// counters, not wire-derived part-selects).
 
-	wire [ADDR_WIDTH-3:0] word_addr = wb_adr_i[ADDR_WIDTH-3:0];
-
+	// port A read/write
 	always @(posedge clk) begin
 
 		wb_ack_o <= 1'b0;
@@ -64,26 +100,29 @@ module glyph_mem #(
 		if (wb_cyc_i && wb_stb_i && !wb_ack_o) begin
 
 			wb_ack_o <= 1'b1;
+			wb_dat_o <= mem[wb_adr_i[ADDR_WIDTH-3:0]];
 
 			if (wb_we_i) begin
-				if (wb_sel_i[0]) mem[{word_addr, 2'b00}] <= wb_dat_i[7:0];
-				if (wb_sel_i[1]) mem[{word_addr, 2'b01}] <= wb_dat_i[15:8];
-				if (wb_sel_i[2]) mem[{word_addr, 2'b10}] <= wb_dat_i[23:16];
-				if (wb_sel_i[3]) mem[{word_addr, 2'b11}] <= wb_dat_i[31:24];
-			end else begin
-				wb_dat_o <= {
-					mem[{word_addr, 2'b11}], mem[{word_addr, 2'b10}],
-					mem[{word_addr, 2'b01}], mem[{word_addr, 2'b00}]
-				};
+				if (wb_sel_i[0]) mem[wb_adr_i[ADDR_WIDTH-3:0]][7:0]   <= wb_dat_i[7:0];
+				if (wb_sel_i[1]) mem[wb_adr_i[ADDR_WIDTH-3:0]][15:8]  <= wb_dat_i[15:8];
+				if (wb_sel_i[2]) mem[wb_adr_i[ADDR_WIDTH-3:0]][23:16] <= wb_dat_i[23:16];
+				if (wb_sel_i[3]) mem[wb_adr_i[ADDR_WIDTH-3:0]][31:24] <= wb_dat_i[31:24];
 			end
 
 		end
 
 	end
 
-	// -- port B: blitter read --
+	// -- port B: blitter read -- byte-addressed (blit_addr is a byte
+	// address, matching gpu_blit_wb's own glyph_addr_o), so pull the
+	// right byte lane out of the word-oriented storage above. A
+	// simple unconditional single-array-read each cycle -- also
+	// indexed inline (same reasoning as port A above), and was never
+	// vulnerable to the aliasing bug in the first place even before
+	// this (no writes anywhere in this block), so this port's own
+	// behavior/timing is otherwise unchanged.
 	always @(posedge clk) begin
-		blit_data <= mem[blit_addr];
+		blit_data <= mem[blit_addr[ADDR_WIDTH-1:2]][(blit_addr[1:0] * 8) +: 8];
 	end
 
 endmodule

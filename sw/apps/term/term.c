@@ -166,68 +166,6 @@ static void draw_cell(int col, int row, char ch, bool reverse) {
 
 }
 
-// -- temporary mitigation for unresolved horizontal-garbage-near-
-// freshly-typed-text reports (docs/window_manager.md, "Known
-// limitations") --
-//
-// gpu_blit_acquire() (sw/common/zgfx.c) was a real, confirmed fix for
-// a genuine cross-process race on the GPU blitter's busy/idle gate --
-// but the artifact was STILL reported after that fix landed, so
-// either that wasn't the (whole) root cause, or something else is
-// also at play. Root cause still under investigation (suspected
-// rtl/gpu/gpu_blit.v state-machine/RTL issue, not yet confirmed in
-// simulation as of this writing).
-//
-// Reinstated here as a build-time opt-out rather than removed or
-// silently always-on, specifically so it can be flipped off (`make
-// term CFLAGS+=-DTERM_RESWEEP_MITIGATION=0`, or edit the #define
-// below) the moment a real fix is confirmed, without having to dig
-// this back out of git history -- see the mitigation's own comment
-// on why it's safe to leave enabled in the meantime (it can only ever
-// redraw correct content, never destroy any).
-#ifndef TERM_RESWEEP_MITIGATION
-#define TERM_RESWEEP_MITIGATION 1
-#endif
-
-#if TERM_RESWEEP_MITIGATION
-
-// TEMPORARY MITIGATION, not a fix -- see TERM_RESWEEP_MITIGATION's
-// own comment above and render()'s call site below. Re-stamps a
-// bounded run of columns using the *real* vt.cells content (never a
-// blank/erase), so worst case it costs a few redundant (already fast,
-// see docs/gpu_blitter.md's performance table) hardware glyph blits
-// and best case it papers over a stray-pixel artifact with correct
-// pixels. Safe by construction: it can't destroy real content the way
-// a blind "clear N pixels to the right" would, because it doesn't
-// know or care whether those columns hold real text -- it just
-// redraws whatever vt.cells actually says is there, which is already
-// correct.
-//
-// enough columns to cover the originally-reported ~32-64px (2 words)
-// of corruption at TERM_FONT.w=5px/col: 64/5 = 12.8, rounded up. If a
-// different TERM_FONT build (see its own comment) is ever used with
-// Z_GFX_HW_BLIT, this scales with it automatically since it's
-// expressed in columns, not pixels.
-#define RESWEEP_COLS 13
-
-static void resweep_right_of_cursor(void) {
-
-	int row = vt.cursor_y;
-	if (row < 0 || row >= VT_ROWS) return;
-
-	int start_col = vt.cursor_x + 1;
-	int end_col = start_col + RESWEEP_COLS;
-	if (end_col > VT_COLS) end_col = VT_COLS;
-
-	for (int col = start_col; col < end_col; col++) {
-		vt_cell_t *cell = &vt.cells[row][col];
-		draw_cell(col, row, cell->ch, cell->reverse);
-	}
-
-}
-
-#endif // TERM_RESWEEP_MITIGATION
-
 // redraws whatever actually changed: dirty cells (from vt_feed()
 // since the last call) plus the cursor overlay, which needs its own
 // tracking since moving the cursor (e.g. an arrow key) doesn't dirty
@@ -275,14 +213,24 @@ static void render(void) {
 	draw_cursor_x = cur_x;
 	draw_cursor_y = cur_y;
 
-	// see TERM_RESWEEP_MITIGATION's own comment (near draw_cell()
-	// above) for why this is still here, guarded, rather than fully
-	// removed -- gated on any_dirty (not cursor_moved alone) so a
-	// pure cursor move (arrow keys, no new content) doesn't pay for
-	// it; typing is exactly the case that needs it.
-#if TERM_RESWEEP_MITIGATION
-	if (any_dirty) resweep_right_of_cursor();
-#endif
+	// NOTE: this used to also call a resweep_right_of_cursor()
+	// mitigation here (re-stamping a bounded run of columns after
+	// every dirty-row redraw, gated behind a TERM_RESWEEP_MITIGATION
+	// build flag) for a horizontal-garbage-near-typed-text artifact.
+	// Removed now that the actual root cause has been found and fixed
+	// at the source: rtl/gpu/gpu_blit.v's straddling-glyph state
+	// machine could capture the WRONG framebuffer word's data into a
+	// high-word read-modify-write, due to too narrow a bus-settle gap
+	// between the low-word write and the high-word read (see that
+	// file's own ST_GLYPH_HI_SETTLE1/2 states, and docs/gpu_blitter.md,
+	// "Bugs found (and fixed)" #5, for the full writeup and how this
+	// was actually confirmed via simulation this time, not just
+	// theorized). If garbage reappears after this fix on real
+	// hardware, that's strong evidence this specific fix isn't (the
+	// whole of) the cause after all -- see git history for
+	// resweep_right_of_cursor()'s implementation, which is safe to
+	// reintroduce (it can only ever redraw correct content, never
+	// destroy any) while investigating further.
 
 }
 

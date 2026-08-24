@@ -452,7 +452,7 @@ void z_fb_draw_char2(int x, int y, char c, int fg_color, int bg_color,
 
 	if (!fits) {
 		hw_blit_wait();	// see z_fb_draw_char()'s own comment on why
-		draw_char_sw2(x, y, c, fg_color, bg_color, font, clip);
+//		draw_char_sw2(x, y, c, fg_color, bg_color, font, clip);
 		return;
 	}
 
