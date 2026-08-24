@@ -4,6 +4,8 @@ Zeitlos is a work-in-progress SOC (System-on-a-Chip) and OS (Operating System) d
 
 The core applications allow Zeitlos to be used as an extensible multi-window network terminal with scripting and graphics.
 
+![Zeitlos Screenshot #0](https://github.com/machdyne/zeitlos/blob/be6ba741fefc0e93af9495daf9c51ec6df5ace51/ss0.png)
+
 Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 
 ## Features
