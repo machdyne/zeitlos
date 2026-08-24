@@ -72,7 +72,7 @@ If you have an unsupported board and want to try Zeitlos, please open an issue.
 
 1. Put the apps on an sdcard:
 
-You can either use the demo image (latest release):
+Write the zeitlos image to an sdcard (latest release):
 
 ```
 curl -LO https://github.com/machdyne/zeitlos/releases/latest/download/zeitlos.img.gz
@@ -80,8 +80,6 @@ gzip -dc zeitlos.img.gz | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync
 ```
 
 Replace `/dev/sdX` with your sdcard's device node (check with `lsblk` first — writing to the wrong device will destroy its contents).
-
-Or use the `xf` command to upload apps to a FAT-formatted SD card and `run <file>` to start them. You will need to have the [xfer](https://github.com/machdyne/xfer) utility installed and configured in minicom.
 
 2. Build and flash the system:
 
@@ -96,9 +94,9 @@ $ make BOARD=lakritz CABLE=dirtyJtag flash
 
 The above command will build the SOC, BIOS, OS and apps and then write the gateware and kernel to flash.
 
-The BIOS will automatically boot the kernel within a few seconds if no keys are pressed.
+The BIOS will automatically boot the kernel if no keys are pressed.
 
-If `wm`, `net`, and `repl` are present on the card, the kernel starts them automatically a few seconds after boot -- you'll land straight in the graphical desktop. See [`docs/welcome.md`](docs/welcome.md) for how to use it from there.
+If `wm`, `net`, and `repl` are present on the sdcard, the kernel starts them automatically a few seconds after boot -- you'll land straight in the graphical desktop. See [`docs/welcome.md`](docs/welcome.md) for how to use it from there.
 
 ## Developers
 
