@@ -97,6 +97,8 @@ gzip -dc images/zeitlos.img.gz | sudo dd of=/dev/sdX bs=4M status=progress conv=
 
 Or use the `xf` command to upload apps to a FAT-formatted SD card and `run <file>` to start them. You will need to have the [xfer](https://github.com/machdyne/xfer) utility installed and configured in minicom.
 
+Once `wm`, `net`, and `repl` are present on the card, the kernel starts them automatically a few seconds after boot -- you'll land straight in the graphical desktop. See [`docs/welcome.md`](docs/welcome.md) for how to use it from there.
+
 ## Developers
 
 ### Documentation

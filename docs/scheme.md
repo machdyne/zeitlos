@@ -133,46 +133,6 @@ it can't be wrapped in a shared helper) -- a bad form reports an error
 back down the port/reply message, it doesn't take the whole `repl`
 process (and therefore every OTHER connection's session) down with it.
 
-## A real ABI bug this integration hit and fixed
-
-`scheme (+ 1 2)` (or, after the default-fallback change above, just
-`(+ 1 2)`) initially printed `12884901888` instead of `3` -- exactly
-`3 << 32`. `ms`'s own number-formatting code (`print_double()`, and
-`tostr_inner()`'s `T_NUM` case -- the second is what backs
-`ms_to_string()`, the function `repl.c` actually calls) detects a
-whole-number `double` and formats it with
-`printf("%lld", (long long)d)`. On this project's actual RV32I target
-(`-mabi=ilp32` -- no hardware float, so under a pure soft-float ABI a
-`long long` and a `double` are passed to a variadic function exactly
-the same way, both as an 8-byte value split across the integer-
-register/stack argument path), that 64-bit value's two halves came
-back swapped or offset by one register slot -- the value `3` was
-present, just in the wrong half. Confirmed on-target via `repl`'s own
-`scheme`/default-Scheme path; not yet root-caused to a specific layer
-(this toolchain's variadic long-long marshaling specifically, vs.
-something in the double-to-int64 conversion feeding it), and not
-reproducible on a desktop host build, where the ABI is different.
-
-Fixed in the patch (`ms_num_to_str()`, next to `print_double()` in
-`ms.c`) by never materializing or passing a 64-bit integer through a
-variadic call at all -- digits are extracted one at a time with
-`fmod()`/`floor()`, staying entirely in `double` and single-digit
-`int` (32-bit, one register, no marshaling ambiguity possible) the
-whole way. Exact for any double that's already a genuine integer
-within a double's 53-bit exact-integer range, which both call sites'
-existing `fabs(d) < 1e15` guard already assumes. Verified against
-negative numbers, zero, `-0.0`, and 12-digit values -- all correct.
-The `%g` (fractional-number) path is untouched and unconfirmed either
-way -- same ABI class of risk in principle (a `double` argument goes
-through the identical variadic-passing mechanism as the `long long`
-case that WAS confirmed broken), but no evidence yet that it's
-actually broken, and hand-rolling a general shortest-round-trip float
-formatter with confidence, without a way to test it on-target, is a
-substantially bigger and riskier undertaking than the whole-number
-fix above. Worth testing deliberately on hardware (e.g. `(/ 1 2)`
-should print `0.5`) -- flag it if a fractional result ever looks wrong
-the same way the integer one did.
-
 ## `sw/apps/repl/ms_api.h`
 
 `ms.c` has no separate public header of its own -- built with `-DLIX`
@@ -250,3 +210,45 @@ message (including that confirmation, and the `Z_PORT_CLOSE` right
 after it) while it waits. Harmless -- the real evidence the switch
 worked is the new provider's own banner showing up right after -- just
 don't expect to see the confirmation linger.
+
+## Historical notes
+
+### A real ABI bug this integration hit and fixed
+
+`scheme (+ 1 2)` (or, after the default-fallback change above, just
+`(+ 1 2)`) initially printed `12884901888` instead of `3` -- exactly
+`3 << 32`. `ms`'s own number-formatting code (`print_double()`, and
+`tostr_inner()`'s `T_NUM` case -- the second is what backs
+`ms_to_string()`, the function `repl.c` actually calls) detects a
+whole-number `double` and formats it with
+`printf("%lld", (long long)d)`. On this project's actual RV32I target
+(`-mabi=ilp32` -- no hardware float, so under a pure soft-float ABI a
+`long long` and a `double` are passed to a variadic function exactly
+the same way, both as an 8-byte value split across the integer-
+register/stack argument path), that 64-bit value's two halves came
+back swapped or offset by one register slot -- the value `3` was
+present, just in the wrong half. Confirmed on-target via `repl`'s own
+`scheme`/default-Scheme path; not yet root-caused to a specific layer
+(this toolchain's variadic long-long marshaling specifically, vs.
+something in the double-to-int64 conversion feeding it), and not
+reproducible on a desktop host build, where the ABI is different.
+
+Fixed in the patch (`ms_num_to_str()`, next to `print_double()` in
+`ms.c`) by never materializing or passing a 64-bit integer through a
+variadic call at all -- digits are extracted one at a time with
+`fmod()`/`floor()`, staying entirely in `double` and single-digit
+`int` (32-bit, one register, no marshaling ambiguity possible) the
+whole way. Exact for any double that's already a genuine integer
+within a double's 53-bit exact-integer range, which both call sites'
+existing `fabs(d) < 1e15` guard already assumes. Verified against
+negative numbers, zero, `-0.0`, and 12-digit values -- all correct.
+The `%g` (fractional-number) path is untouched and unconfirmed either
+way -- same ABI class of risk in principle (a `double` argument goes
+through the identical variadic-passing mechanism as the `long long`
+case that WAS confirmed broken), but no evidence yet that it's
+actually broken, and hand-rolling a general shortest-round-trip float
+formatter with confidence, without a way to test it on-target, is a
+substantially bigger and riskier undertaking than the whole-number
+fix above. Worth testing deliberately on hardware (e.g. `(/ 1 2)`
+should print `0.5`) -- flag it if a fractional result ever looks wrong
+the same way the integer one did.

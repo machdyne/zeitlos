@@ -29,6 +29,16 @@ void hex_dump(uint32_t addr);
 uint32_t xfer_recv(uint32_t addr_ptr);
 void cls(void);
 void init(void);
+void screenshot(void);
+
+// framebuffer: fixed native resolution, 1 bit per pixel, packed rows
+// -- see docs/gpu_blitter.md/docs/gpu_raster.md for the hardware side
+// of this. Shared here by cls() and screenshot() so both stay correct
+// together if the resolution ever changes again.
+#define FB_BASE   0x20000000
+#define FB_WIDTH  640
+#define FB_HEIGHT 480
+#define FB_SIZE   ((FB_WIDTH * FB_HEIGHT) / 8)   // 38400 bytes
 
 // shortened for now (was 60s) while TFTP is still being brought up --
 // waiting a full minute per failed attempt makes debugging painfully
@@ -36,6 +46,30 @@ void init(void);
 // back once TFTP is confirmed working, since a real large-file
 // transfer could plausibly need longer.
 #define TFTP_REPLY_TIMEOUT_TICKS (10 * 732)
+
+// fs_mount() above is a lazy/deferred mount (FatFs opt=0) -- it
+// doesn't actually touch the card at all, the real handshake
+// (disk_initialize(), sdmm.c) only happens on the first genuine file
+// access. Probing for "wm" immediately after mounting can still race
+// that handshake on some hardware (slow card power-up, etc), so
+// auto-init polls for it to actually become readable instead of
+// assuming a fixed delay is always long enough -- boots as fast as
+// the card allows, and still gives a slow card real headroom before
+// giving up. Checked once per tick (not in a tight sub-tick loop) so
+// this doesn't hammer the card with repeated f_open() attempts.
+#define AUTOINIT_TIMEOUT_TICKS (3 * 732)   // ~3 seconds
+
+static bool wait_for_apps_ready(void) {
+	uint32_t start = z_uptime_ticks();
+	uint32_t last_tick = start;
+	while (z_uptime_ticks() - start < AUTOINIT_TIMEOUT_TICKS) {
+		uint32_t now = z_uptime_ticks();
+		if (now == last_tick) continue;
+		last_tick = now;
+		if (fs_size("wm") != 0) return true;
+	}
+	return false;
+}
 
 // resolved once, cached for the shell's lifetime (which is the whole
 // uptime of the system, sh.c being pid 0) -- same reasoning as
@@ -99,6 +133,17 @@ void sh(void) {
       printf("done.\n");
    else
       printf("failed.\n");
+
+	// auto-start the graphical environment by default -- see
+	// wait_for_apps_ready()'s own comment above for why this polls
+	// rather than just calling init() immediately after fs_mount().
+	if (wait_for_apps_ready()) {
+		init();
+	} else {
+		printf("init: apps not found on filesystem after %lus, "
+			"skipping auto-start (run `init` manually once ready)\n",
+			(unsigned long)(AUTOINIT_TIMEOUT_TICKS / 732));
+	}
 
 	while (1) {
 
@@ -470,6 +515,11 @@ void sh(void) {
 			cls();
 		}
 
+		// SCREENSHOT
+		else if (!strncmp(buffer, "ss", cmdlen)) {
+			screenshot();
+		}
+
 		// DISPLAY PROCESS SNAPSHOT
 		else if (!strncmp(buffer, "ps", cmdlen)) {
 			k_proc_dump();
@@ -663,7 +713,7 @@ void hex_dump(uint32_t addr) {
 }
 
 void cls(void) {
-	volatile uint32_t *addr = (uint32_t *)0x20000000;
+	volatile uint32_t *addr = (uint32_t *)FB_BASE;
 	// word count directly -- addr+i is uint32_t* pointer arithmetic
 	// (already advances 4 bytes per i), so this must NOT also divide
 	// by sizeof(int) the way it used to: (512*384/32)/sizeof(int) was
@@ -671,9 +721,21 @@ void cls(void) {
 	// of the 6144 words the old 512x384 framebuffer actually had).
 	// Fixed alongside updating the dimensions themselves for the new
 	// native 640x480 resolution (640*480/32 = 9600 words).
-	for (int i = 0; i < ((640 * 480) / 32); i++) {
+	for (int i = 0; i < (FB_SIZE / 4); i++) {
 		(*(volatile uint32_t *)(addr + i)) = 0x00000000;
 	}
+}
+
+// dumps the raw framebuffer, exactly as it sits in VRAM, to ss.bin --
+// FB_WIDTH*FB_HEIGHT 1bpp pixels, packed 8 per byte, FB_WIDTH/8 bytes
+// per row, no header. See tools/ssconv.py to convert this into a
+// viewable PNG.
+void screenshot(void) {
+	int written = fs_write_file("ss.bin", (char *)FB_BASE, FB_SIZE);
+	if (written == FB_SIZE)
+		printf("screenshot saved to ss.bin (%d bytes)\n", written);
+	else
+		printf("ss: write failed (wrote %d of %d bytes)\n", written, FB_SIZE);
 }
 
 // hostname/IP resolution for tget/tput above now goes through
@@ -694,12 +756,13 @@ void sh_help(void) {
 	printf(" tget <ip-or-host> <remote-file> [local-file]  fetch a file via tftp (needs `run net`)\n");
 	printf(" tput <ip-or-host> <local-file> [remote-file]  send a file via tftp (needs `run net`)\n");
 	printf(" run <file>        create a new process\n");
-	printf(" init               reserve pid 1, start net as pid 2 (no wm needed)\n");
+	printf(" init               start wm, net, and repl (runs automatically at boot)\n");
 	printf(" kill <pid>        kill a process\n");
 	printf(" ps                display a process snapshot\n");
 	printf(" pr                display the pid name registry\n");
 	printf(" ks                display a kernel snapshot\n");
 	printf(" cls               clear framebuffer\n");
+	printf(" ss                save a screenshot to ss.bin (see tools/ssconv.py)\n");
 	printf(" ls [path]         display list of files\n");
 	printf(" mkdir [path]      make a directory\n");
 	printf(" touch [path]      create empty file\n");

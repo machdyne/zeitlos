@@ -426,23 +426,12 @@ cur_x <= clip_x1`, etc.).
 This hardware has no concept of "which process is asking" -- it's
 global, shared peripheral state, sitting behind ordinary memory-
 mapped registers with no per-process view, no locking, nothing. Two
-real hazards follow directly from that, and both bit this project for
-real before being fixed:
+hazards follow directly from that:
 
 1. **Whoever wrote the clip registers last wins, for every
    subsequent caller, not just themselves.** `wm.c` draws its own
    chrome unclipped; `gpu3d`/`gpudemo` draw clipped to their own
-   window. Before this was centralized, each of those files managed
-   `gpu_clip_*` itself, on its own schedule (`wm.c` never touched it
-   at all; the apps set it only when their own window moved) -- so
-   once any app had run at all, whichever clip state it left behind
-   silently applied to every other process's next draw call too,
-   regardless of what that process actually wanted. Symptom: window
-   borders vanishing (clipped away by some other window's bounds) or
-   content escaping its own window (drawn while clipping had been
-   left disabled by something else's chrome draw). See
-   `docs/window_manager.md`'s "Known limitations" for the full
-   incident.
+   window.
 2. **The register-writes-then-trigger sequence isn't atomic.** Six-plus
    separate MMIO writes (clip bounds, `x0`/`y0`/`x1`/`y1`/`color`,
    then `start`) with the scheduler able to preempt between any of
@@ -452,7 +441,7 @@ real before being fixed:
    callers' parameters.
 
 Both are closed by `z_fb_hw_line()`/`z_fb_hw_box()` (`zgfx.c`), the
-only sanctioned way into this hardware now -- `wm.c`, `gpu3d`, and
+only sanctioned way into this hardware -- `wm.c`, `gpu3d`, and
 `gpudemo` all draw through these rather than touching the registers
 themselves:
 
@@ -498,17 +487,6 @@ worst case is on the order of a few hundred nanoseconds, against a
 ~1.37ms timer-IRQ period (~732Hz) -- not something a preempted
 process elsewhere in the system could ever notice.
 
-One residual, accepted gap: `gpu_wait_fifo()`'s check and the
-subsequent masked write aren't a single atomic unit either -- another
-process could theoretically claim the last free FIFO slot in the
-narrow window between this call's wait returning and its own mask
-taking effect. Bounded and low-severity (worst case is a delayed or
-dropped line segment, not corruption or a crash), and would need
-either widening the masked region to include the wait (reintroducing
-the scheduler-stall problem above) or a more involved retry-inside-
-mask design to close -- not done, not currently a known problem in
-practice.
-
 `z_win_hw_line()`/`z_win_hw_box()` (`zwin.h`) are the window-aware
 version of the same two functions, automatically clipping to the
 caller's own window content area -- see `docs/window_manager.md`,
@@ -530,7 +508,7 @@ rasterizer above, currently used two ways:
 - **Fill mode**, via `zgfx.c`'s `z_fb_hw_fill_rect()` -- a
   hardware-accelerated rectangle fill, dramatically faster than
   iterating pixels in software (`docs/gpu_blitter.md` quotes ~1,200
-  hardware operations for a full-screen clear, against 512×384
+  hardware operations for a full-screen clear, against 640×480
   individual bit operations the software path would need). `wm.c`'s
   `fill_rect()`/`clear_screen()` both draw through this now, not a
   software VRAM loop.
@@ -538,30 +516,16 @@ rasterizer above, currently used two ways:
   `Z_GFX_HW_BLIT` builds -- see `docs/window_manager.md`, "Hardware
   glyph blitting" for that design in full; not covered again here.
 
-Same two hazards as the line rasterizer, confirmed directly in the
-RTL rather than assumed by analogy, and only one of them fixed so
-far:
+The blitter has the same two classes of hazard as the line
+rasterizer above:
 
-1. **Bounds checking is conditional, not automatic.** `docs/gpu_blitter.md`
-   documents the blitter as safe against out-of-range coordinates
-   ("Automatic Clipping... Prevents buffer overruns") -- true, but
-   only when `CTRL_CLIP` is set, and the same doc recommends
-   *skipping* it for "known-safe" operations like full-screen clears.
-   In `ST_CLIP` (`gpu_blit.v`), the unclipped path computes the
-   destination address directly from the caller's raw
-   `dst_x`/`dst_y`/`width`/`height` with no bounds check of any kind
-   -- only the clipped path checks against `screen_clip_x_end`/
-   `_y_end`. And exactly like the rasterizer, `ST_WAIT_READ`/
-   `ST_WAIT_WRITE` wait on the framebuffer bus's ack with no timeout
-   of their own. An out-of-range destination computed from unclipped
-   coordinates can hang the blitter's state machine forever, the same
-   way an out-of-range coordinate could hang the rasterizer.
-2. **No arbitration between processes.** `docs/gpu_blitter.md`
-   documents this directly: "Concurrent register access: NOT
-   arbitrated between processes... one process's `dst_x`/`dst_y`/etc.
-   writes could land in between another's, corrupting both
-   operations." Same underlying problem as the rasterizer's shared
-   clip register, just a different register set.
+1. **Bounds checking is conditional, not automatic.** It's only
+   applied when `CTRL_CLIP` is set -- see `docs/gpu_blitter.md`,
+   "Clipping Behavior" for the details and why an unclipped
+   out-of-range destination can hang the blitter's state machine.
+2. **No arbitration between processes.** Register writes aren't
+   serialized across processes -- see `docs/gpu_blitter.md`, "Error
+   Handling".
 
 `z_fb_hw_fill_rect()` closes both, for the fill path: coordinates are
 clamped to the actual screen bounds unconditionally (not just when
@@ -590,12 +554,9 @@ point in a fill-then-different-hardware sequence where that next
 operation would otherwise wait for the fill's pixel writes to have
 actually landed.
 
-**Not yet fixed**: the glyph-blit path above shares these same
-registers but isn't `maskirq()`-protected -- a fill from one process
-and a glyph blit from another could still interleave badly. Not
-unified with the fill-mode fix here, since it wasn't what motivated
-this work; worth doing if the glyph path gets touched again for
-another reason.
+**Known gap**: the glyph-blit path above shares these same registers
+but isn't `maskirq()`-protected -- a fill from one process and a
+glyph blit from another could still interleave badly.
 
 ## Trust model
 
@@ -610,3 +571,28 @@ higher-level layers this document describes (`z_fb_hw_line()`,
 way to do these things, not a hard guarantee. See
 `docs/window_manager.md`, "App trust model" for the same point made
 about window boundaries specifically.
+
+## Known limitations and historical notes
+
+- **Line rasterizer FIFO check/mask gap.** `z_fb_hw_line()` waits for
+  FIFO space *before* masking IRQs, then masks separately for the
+  actual register writes. Another process could theoretically claim
+  the last free FIFO slot in the narrow window between the wait
+  returning and the mask taking effect. This is bounded and
+  low-severity (worst case is a delayed or dropped line segment, not
+  corruption or a crash) and is not currently a known problem in
+  practice; closing it fully would mean either widening the masked
+  region to include the wait (which would stall the scheduler for as
+  long as the FIFO wait takes) or a more involved retry-inside-mask
+  design.
+- **Shared clip-register hazard, before it was centralized.** Before
+  `z_fb_hw_line()`/`z_fb_hw_box()` existed, `wm.c` and the apps each
+  managed the line rasterizer's `gpu_clip_*` registers independently
+  and on their own schedule. Because the hardware has no per-process
+  clip state, whichever clip rectangle was left behind by the last
+  caller silently applied to the next caller too -- symptoms included
+  window borders vanishing (clipped away by another window's bounds)
+  or content escaping its own window. This is fixed by routing all
+  drawing through `z_fb_hw_line()`/`z_fb_hw_box()`, which reassert
+  clip state fresh on every call. See `docs/window_manager.md`,
+  "Known limitations" for the full incident.

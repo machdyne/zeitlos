@@ -431,33 +431,6 @@ debugging first:
 None of this has been simulated or run. Treat `sw/apps/net/net.c`'s
 test output as the actual first evidence of whether any of it works.
 
-## Confirmed working, and one bug found
-
-Real hardware testing confirmed, in order:
-
-- SPI/chip init: `enc28j60_revision()` returned `0x06`, a plausible
-  ENC28J60 revision.
-- Raw TX/RX: a test broadcast frame was accepted, and a real ARP
-  request from another device on the network was correctly received
-  and decoded.
-- ARP + ICMP echo: `net` correctly answered an ARP "who-has" for its
-  own IP and replied to `ping` from another machine on the network --
-  logged output confirmed both.
-- TFTP GET and PUT, streaming, against a real TFTP server on the
-  network: multi-block transfers (well beyond the size of a single
-  TFTP block, exercising the full streaming/flow-control path on both
-  ends, not just a one-packet edge case) completed successfully in
-  both directions.
-
-It also turned up a real bug: the *first* received frame during raw
-TX/RX testing was our own test broadcast, echoed straight back. The
-ENC28J60's internal PHY has a half-duplex loopback that's **enabled by
-default** -- every transmitted frame gets looped back into the RX path
-unless explicitly disabled (`PHCON2.HDLDIS`, bit 8). Fixed in
-`enc28j60_init()`. (Unrelated to the later half-vs-full-*duplex-mode*
-question discussed in "TFTP debugging notes" below -- two different
-things that happen to both involve the word "duplex".)
-
 ## Layers implemented so far
 
 - `sw/apps/net/net_phy.h` -- picks the driver underneath everything
@@ -1191,3 +1164,25 @@ to `tftp.c`/`zstream.c`:
   genuinely no size limit left anywhere in the path (`net`'s own
   memory footprint should stay flat regardless of transfer size, per
   the whole point of the streaming rework).
+
+## Historical notes
+
+### Real-hardware bring-up
+
+Real hardware testing confirmed, in order: SPI/chip init
+(`enc28j60_revision()` returned a plausible ENC28J60 revision), raw
+TX/RX (a test broadcast frame was accepted and a real ARP request
+from another device was correctly received and decoded), ARP + ICMP
+echo (`net` correctly answered an ARP "who-has" and replied to
+`ping` from another machine), and TFTP GET/PUT streaming against a
+real TFTP server (multi-block transfers completed successfully in
+both directions).
+
+Bring-up also turned up a real bug: the *first* received frame during
+raw TX/RX testing was the driver's own test broadcast, echoed
+straight back. The ENC28J60's internal PHY has a half-duplex loopback
+that's enabled by default -- every transmitted frame gets looped back
+into the RX path unless explicitly disabled (`PHCON2.HDLDIS`, bit 8).
+Fixed in `enc28j60_init()`. (Unrelated to the half-vs-full-*duplex-
+mode* question discussed in "TFTP debugging notes" above -- two
+different things that happen to both involve the word "duplex".)

@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Zeitlos GPU Line Rasterizer is a hardware-accelerated line drawing engine with built-in command FIFO buffering and clipping support. It uses the Bresenham line algorithm for pixel-perfect line rendering on a 512×384 monochrome (1-bit-per-pixel) framebuffer.
+The Zeitlos GPU Line Rasterizer is a hardware-accelerated line drawing engine with built-in command FIFO buffering and clipping support. It uses the Bresenham line algorithm for pixel-perfect line rendering on a 640×480 monochrome (1-bit-per-pixel) framebuffer.
 
 ## Key Features
 
@@ -43,10 +43,10 @@ The Zeitlos GPU Line Rasterizer is a hardware-accelerated line drawing engine wi
 
 ## Screen Specifications
 
-- **Resolution**: 512×384 pixels
+- **Resolution**: 640×480 pixels
 - **Color depth**: 1-bit per pixel (monochrome)
 - **Framebuffer**: Located at 0x20000000
-- **Coordinate system**: (0,0) at top-left, (511,383) at bottom-right
+- **Coordinate system**: (0,0) at top-left, (639,479) at bottom-right
 
 ## Programming Interface
 
@@ -145,7 +145,7 @@ void disable_clipping(void) {
 
 ```c
 void set_full_screen_clip(void) {
-    set_clip_rect(0, 0, 511, 383);
+    set_clip_rect(0, 0, 639, 479);
 }
 ```
 
@@ -325,7 +325,7 @@ int safe_draw_line(int x0, int y0, int x1, int y1, int color) {
 
 ```c
 int validate_coordinates(int x, int y) {
-    return (x >= 0 && x < 512 && y >= 0 && y < 384);
+    return (x >= 0 && x < 640 && y >= 0 && y < 480);
 }
 
 void draw_safe_line(int x0, int y0, int x1, int y1, int color) {
@@ -376,8 +376,8 @@ void performance_test(void) {
     
     // Draw 1000 random lines
     for (int i = 0; i < 1000; i++) {
-        draw_line(rand() % 512, rand() % 384, 
-                 rand() % 512, rand() % 384, COLOR_WHITE);
+        draw_line(rand() % 640, rand() % 480, 
+                 rand() % 640, rand() % 480, COLOR_WHITE);
     }
     
     wait_lines_complete();
