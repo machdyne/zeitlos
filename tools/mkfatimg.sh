@@ -30,6 +30,7 @@ cp sw/apps/net/net.bin "$MOUNT_DIR/net"
 cp sw/apps/gpu3d/gpu3d.bin "$MOUNT_DIR/gpu3d"
 cp sw/apps/term/term.bin "$MOUNT_DIR/term"
 cp sw/apps/wm/wm.bin "$MOUNT_DIR/wm"
+cp sw/apps/repl/repl.bin "$MOUNT_DIR/repl"
 cp sw/apps/portdemo/portdemo.bin "$MOUNT_DIR/portdemo"
 
 sync
