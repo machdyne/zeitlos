@@ -91,11 +91,14 @@ The BIOS will automatically boot the kernel within a few seconds if no keys are 
 
 3. Put the apps on an sdcard:
 
-You can either use the demo image (available soon):
+You can either use the demo image (latest release):
 
 ```
-gzip -dc images/zeitlos.img.gz | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync
+curl -LO https://github.com/machdyne/zeitlos/releases/latest/download/zeitlos.img.gz
+gzip -dc zeitlos.img.gz | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync
 ```
+
+Replace `/dev/sdX` with your sdcard's device node (check with `lsblk` first — writing to the wrong device will destroy its contents).
 
 Or use the `xf` command to upload apps to a FAT-formatted SD card and `run <file>` to start them. You will need to have the [xfer](https://github.com/machdyne/xfer) utility installed and configured in minicom.
 
