@@ -104,6 +104,33 @@ int fs_mount(void)
 		return 1;
 }
 
+// Mount the card NOW, rather than deferring it.
+//
+// fs_mount() above passes opt=0, a deferred mount: FatFs registers the
+// volume and returns success without touching the hardware, and the
+// card is only really initialised by the first file operation that
+// needs it. That is fine when something is about to do file I/O
+// anyway, and actively wrong when nothing is -- the card sits
+// uninitialised and every later operation returns FR_NOT_READY.
+//
+// opt=1 forces the mount immediately, so the return value actually
+// means "there is a working filesystem here". Used at boot to bring
+// the card up regardless of whether the core apps are going to be
+// loaded from it, because `ls`, `xf` and everything else afterwards
+// depend on it having happened.
+//
+// Returns 0 on success. A slow card may need a few attempts, so
+// callers should retry rather than treating one failure as final.
+int fs_mount_now(void)
+{
+	FRESULT res;
+	res = f_mount(&sdvol0, "", 1);
+	if (res == FR_OK)
+		return 0;
+	else
+		return 1;
+}
+
 int fs_format(void) {
 
 	FRESULT res;
@@ -277,6 +304,15 @@ void fs_list_dir(char *path) {
 	static FILINFO fno;
 
 	res = f_opendir(&dir, path);
+
+	// Say so, rather than printing nothing. An unreadable card and
+	// an empty one look identical otherwise, and with core apps in
+	// flash the "in flash:" section below still prints -- so a
+	// failed mount presents as "only the flash apps are listed",
+	// which looks like a bug in the underlay rather than a card that
+	// never came up.
+	if (res != FR_OK)
+		printf("(filesystem unavailable: error %d)\n", (int)res);
 
 	if (res == FR_OK) {
 		for (;;) {

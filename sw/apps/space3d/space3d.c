@@ -166,7 +166,7 @@
 #define SPAWN_MIN        70
 #define SPAWN_MAX        150
 
-#define NUM_STARS        80
+#define NUM_STARS        64
 
 #define EXPL_FRAMES      9
 #define EXPL_STEP        30
@@ -192,28 +192,54 @@
 // large number of very distant stars. It's also cheaper: a dot is a
 // zero-length line and the rasterizer retires it in a handful of
 // cycles.
-#define MAX_GALAXIES     3
+#define MAX_GALAXIES     2
 #define GALAXY_ARMS      3
 #define GALAXY_DOTS      14      // per arm
 #define GALAXY_TWIST     7       // byte-angle advance per radial step
-#define GALAXY_Z_MIN     9000
-#define GALAXY_Z_MAX     17000
+#define GALAXY_Z_MIN     20000
+#define GALAXY_Z_MAX     40000
 
-// Galaxies sit in their own slow parallax layer: they take a fraction
-// of the ship's lateral motion and none of its forward motion. This
-// is a cheat and an intentional one. Placed honestly and moved
-// honestly, an object far enough away to look like a galaxy would
-// need a Z so large that the projection quantises to nothing, and one
-// near enough to render would come sweeping past in seconds. The
-// divisor buys the thing that actually reads as distance -- barely
-// moving when you steer hard -- without either problem.
-#define GALAXY_PARALLAX  6
+// Galaxies take the ship's full lateral motion, and none of its
+// forward motion.
+//
+// There used to be a divisor here, damping their lateral response to
+// a sixth. It was a mistake, and an instructive one: perspective
+// already damps distant things by 1/z, so the divisor was faking
+// distance on top of a real distance and double-counting it. The
+// measured result was 3.6 px/sec of drift against a near star's 130 --
+// a ratio of 36 to 1, which stops reading as "very far away" and
+// starts reading as "pinned to the windscreen", because nothing in
+// the real world is that much more sluggish than its neighbours.
+//
+// The fix is to make the distance real rather than simulated: the Z
+// range above went from 9-17k out to 20-40k, and the divisor is gone.
+// Perspective alone now yields about 9 px/sec against the same near
+// star, a ratio near 15 to 1 -- plainly background, but it moves when
+// you steer, which is the whole difference between scenery and a
+// sticker on the glass. Apparent size is unaffected because galaxies
+// are sized by how big they should look, not how big they are (see
+// spawn_galaxy()).
+//
+// Forward motion is still deliberately ignored. A galaxy that
+// approached at cruise speed would arrive, and there is nothing
+// sensible to do when it does.
 
 // Full rotation is 256 byte-angle units. The spin accumulator is
 // 16-bit and the angle is its top byte, so a rate of ~110 works out
 // near 0.43 units per frame: a little over twenty seconds per
 // revolution at 30fps, which is slow enough to read as majestic
 // rather than as a spinning propeller.
+// How long a galaxy stays away between appearances, in frames, and
+// how long it takes to cross the view once it turns up. Sized against
+// each other: with two slots, a crossing of ~2400 frames against a
+// dormancy of 3000-9000 leaves a galaxy on screen well under half the
+// time, so empty sky is the normal state and a spiral drifting
+// through is an event.
+#define GALAXY_DORMANT_MIN  3000
+#define GALAXY_DORMANT_MAX  9000
+#define GALAXY_CROSS_MIN    1800
+#define GALAXY_CROSS_MAX    3200
+
 #define GALAXY_SPIN_MIN  70
 #define GALAXY_SPIN_MAX  165
 
@@ -406,6 +432,7 @@ typedef struct {
 	uint16_t spin;        // accumulator; the angle is its top byte
 	uint16_t spin_rate;
 	uint8_t  tilt;        // inclination of the disc, byte angle
+	int32_t  dormant;     // frames until it next appears; 0 = on screen
 } galaxy_t;
 
 static galaxy_t galaxies[MAX_GALAXIES];
@@ -877,20 +904,58 @@ static void build_hud(void) {
 // FRAME OUTPUT
 // ===========================================================================
 
-// Erase what's on screen, then draw what should be. Both lists are
-// already clipped to the content rect, so z_win_hw_line()'s own clamp
-// never has anything to do here.
+// Reconcile what's on screen with what should be.
+//
+// The first version of this erased the entire previous frame and then
+// drew the entire new one -- two hardware line operations per line,
+// every frame, whether or not anything had changed. On a single-
+// buffered framebuffer that is not merely wasteful, it is visible:
+// every line on screen spends the gap between its erase and its
+// redraw switched off, so the whole scene strobes at the frame rate.
+// The static furniture suffered worst, because the corner brackets
+// and the reticle never move and so were being blanked and restored
+// hundreds of times for no reason at all.
+//
+// This version erases only lines that actually differ from last
+// frame, and draws all of them. Two things follow, and the second is
+// the one that matters:
+//
+//  - Anything that didn't move is never switched off. The corners and
+//    reticle now sit there continuously. Drawing a lit pixel again is
+//    a no-op on 1bpp, so redrawing them costs nothing visually.
+//
+//  - There is no hole-punching problem. Erasing a line that crosses a
+//    kept line does blank the shared pixel -- but the draw pass runs
+//    afterwards and covers every line, so the crossing is repaired
+//    within the same frame. That is precisely why the draw pass stays
+//    unconditional instead of also being skipped for unchanged lines,
+//    which would be faster still and would leave permanent scars
+//    across the HUD.
+//
+// Comparison is index-wise, which is a heuristic about efficiency and
+// never about correctness: every old line is either matched or
+// erased, and every new line is drawn, whatever the indices happen to
+// line up as. Emitting in a stable order (HUD first, it is always the
+// same twelve lines) just makes the heuristic hit more often.
 static void blit_frame(void) {
 
 	int prev = cur_buf ^ 1;
+	int n_new = line_count[cur_buf];
+	int n_old = line_count[prev];
 	int i;
 
-	for (i = 0; i < line_count[prev]; i++) {
-		line_t *l = &line_buf[prev][i];
-		z_win_hw_line(&win, l->x0, l->y0, l->x1, l->y1, 0);
+	for (i = 0; i < n_old; i++) {
+		line_t *o = &line_buf[prev][i];
+		if (i < n_new) {
+			line_t *n = &line_buf[cur_buf][i];
+			if (o->x0 == n->x0 && o->y0 == n->y0 &&
+			    o->x1 == n->x1 && o->y1 == n->y1)
+				continue;          // unchanged: leave it lit
+		}
+		z_win_hw_line(&win, o->x0, o->y0, o->x1, o->y1, 0);
 	}
 
-	for (i = 0; i < line_count[cur_buf]; i++) {
+	for (i = 0; i < n_new; i++) {
 		line_t *l = &line_buf[cur_buf][i];
 		z_win_hw_line(&win, l->x0, l->y0, l->x1, l->y1, 1);
 	}
@@ -964,15 +1029,18 @@ static void render(void) {
 
 	line_count[cur_buf] = 0;
 
-	// Order matters only for the erase pass's overlap artefacts, but
-	// galaxies first is the natural reading order anyway: furthest
-	// thing in the scene, drawn first.
+	// Ordered most-static first, so blit_frame()'s index-wise
+	// comparison lines up as often as possible. The HUD leads because
+	// it is always exactly the same twelve lines at the same indices
+	// and therefore always matches; galaxies follow because they are
+	// the next slowest thing in the scene. Draw order carries no
+	// visual meaning here -- everything is the same colour.
+	build_hud();
 	build_galaxies();
 	build_stars();
 	build_objects();
 	build_missiles();
 	build_explosions();
-	build_hud();
 
 	blit_frame();
 
@@ -1039,19 +1107,43 @@ static void roll_galaxy_look(galaxy_t *g) {
 	g->vy = rnd_range(-2, 2);
 }
 
-static void spawn_galaxy(int i) {
+// Brings a galaxy on from one side, aimed across the view.
+//
+// Entry can't be left to the parallax drift alone: that depends
+// entirely on how the player happens to be steering, so a galaxy
+// could sit just off the edge indefinitely, or be pushed straight
+// back out the way it came. Giving it a proper motion of its own,
+// pointed inward and scaled so the crossing takes a set time
+// regardless of how far away it is, means an appearance always
+// actually happens.
+static void wake_galaxy(galaxy_t *g) {
 
-	galaxy_t *g = &galaxies[i];
-	int32_t half;
+	int32_t half, lim, side, speed_x;
 
-	g->active = true;
-	// Z is set once and never changes -- galaxies have no forward
-	// motion, so nothing would ever move them along it.
 	g->z = rnd_range(GALAXY_Z_MIN, GALAXY_Z_MAX);
 	half = (g->z * 157) >> PROJ_SHIFT;
+	lim = half * 5 / 4;
 
 	roll_galaxy_look(g);
-	g->x = rnd_range(-half, half);
+
+	side = rnd_range(0, 1) ? 1 : -1;
+	g->x = side * lim;
+
+	// Crossing time is what's chosen; the world-space speed is solved
+	// back from it, so a distant galaxy and a nearer one take about
+	// as long to sail past rather than the far one crawling.
+	speed_x = (2 * lim) / rnd_range(GALAXY_CROSS_MIN, GALAXY_CROSS_MAX);
+	if (speed_x < 1) speed_x = 1;
+	g->vx = -side * speed_x;
+	g->vy = rnd_range(-2, 2);
+
+	g->dormant = 0;
+	g->active = true;
+}
+
+static void sleep_galaxy(galaxy_t *g) {
+	g->active = false;
+	g->dormant = rnd_range(GALAXY_DORMANT_MIN, GALAXY_DORMANT_MAX);
 }
 
 static void update_galaxies(void) {
@@ -1063,7 +1155,10 @@ static void update_galaxies(void) {
 		galaxy_t *g = &galaxies[i];
 		int32_t half, lim;
 
-		if (!g->active) continue;
+		if (!g->active) {
+			if (--g->dormant <= 0) wake_galaxy(g);
+			continue;
+		}
 
 		g->spin = (uint16_t)(g->spin + g->spin_rate);
 
@@ -1071,32 +1166,27 @@ static void update_galaxies(void) {
 		// GALAXY_PARALLAX. The galaxy's own drift is what keeps the
 		// sky slowly evolving when the player flies dead straight and
 		// contributes nothing to the parallax term.
-		g->x += g->vx - ship_vx / GALAXY_PARALLAX;
-		g->y += g->vy - ship_vy / GALAXY_PARALLAX;
+		g->x += g->vx - ship_vx;
+		g->y += g->vy - ship_vy;
 
 		half = (g->z * 157) >> PROJ_SHIFT;
 		lim = half * 5 / 4;
 
-		// Wrapped, not respawned.
+		// Gone once it's fully off the side, and it stays gone for a
+		// while -- see sleep_galaxy().
 		//
-		// Respawning on a randomly chosen side was the first version
-		// and it quietly broke: it placed the galaxy at 1.25 times
-		// the frustum half-width while the recycle test fired at 1.5,
-		// so landing on the side it was already drifting toward gave
-		// it a quarter of a half-width to cover before recycling
-		// again. Galaxies ended up bouncing between respawns without
-		// ever crossing the view, and the average number visible fell
-		// by half without anything looking obviously wrong. There was
-		// no bound on Y at all, so one could also just wander off the
-		// top and never return.
-		//
-		// A toroidal wrap has none of those failure modes: it exits
-		// one side and re-enters the other still travelling the same
-		// way, so it is guaranteed to cross. The wrap point is
-		// outside the frustum, which is what makes it safe to re-roll
-		// the galaxy's appearance at the same moment.
-		if (g->x > lim)       { g->x -= 2 * lim; roll_galaxy_look(g); }
-		else if (g->x < -lim) { g->x += 2 * lim; roll_galaxy_look(g); }
+		// An earlier version wrapped it straight round to the other
+		// side instead, which was itself a fix for an even earlier
+		// one that respawned onto a random side and could bounce a
+		// galaxy off-screen indefinitely. Wrapping worked, but it
+		// guaranteed a galaxy was almost always somewhere in view,
+		// and two of them at once was busy rather than beautiful.
+		// Dormancy is what makes them scenery you come across instead
+		// of wallpaper you sit in front of.
+		if (g->x > lim || g->x < -lim) {
+			sleep_galaxy(g);
+			continue;
+		}
 
 		if (g->y > lim)       { g->y -= 2 * lim; }
 		else if (g->y < -lim) { g->y += 2 * lim; }
@@ -1424,7 +1514,20 @@ static void reset_game(void) {
 	memset(explosions, 0, sizeof(explosions));
 
 	for (i = 0; i < NUM_STARS; i++) spawn_star(i, true);
-	for (i = 0; i < MAX_GALAXIES; i++) spawn_galaxy(i);
+	// One is brought straight on so a run doesn't necessarily open on
+	// bare sky; the rest start dormant on staggered timers so they
+	// don't all arrive together later.
+	for (i = 0; i < MAX_GALAXIES; i++) {
+		if (i == 0) {
+			wake_galaxy(&galaxies[i]);
+			// placed part-way across rather than at the edge, so it's
+			// already in view at frame one
+			galaxies[i].x /= 2;
+		} else {
+			sleep_galaxy(&galaxies[i]);
+			galaxies[i].dormant = rnd_range(600, GALAXY_DORMANT_MAX);
+		}
+	}
 
 	ship_vx = ship_vy = 0;
 	speed = SPEED_CRUISE;

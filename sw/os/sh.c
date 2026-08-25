@@ -111,6 +111,39 @@ static bool wait_for_apps_ready(void) {
 	return false;
 }
 
+// Bring the sdcard up, retrying while a slow one powers on.
+//
+// This has to happen at boot whether or not the core apps are coming
+// from the card, and that is the whole point of it existing
+// separately. fs_mount() is a DEFERRED mount (FatFs opt=0): it
+// registers the volume without touching the hardware, and the card is
+// only really initialised by the first file operation that needs it.
+//
+// wait_for_apps_ready() above used to do that initialisation by
+// accident -- its repeated fs_size("wm") calls were what drove the
+// card through disk_initialize(). Once boot could skip that loop (core
+// apps in flash, nothing needed from the card), the card was left
+// uninitialised and every later operation failed with FR_NOT_READY:
+// `ls` showed no files, `xf` refused to write. The card was fine;
+// nothing had ever woken it.
+//
+// So: force the mount, explicitly, always.
+static bool wait_for_card_ready(void) {
+	uint32_t start = z_uptime_ticks();
+	uint32_t last_tick = start;
+
+	if (fs_mount_now() == 0) return true;
+
+	while (z_uptime_ticks() - start < AUTOINIT_TIMEOUT_TICKS) {
+		uint32_t now = z_uptime_ticks();
+		if (now == last_tick) continue;
+		last_tick = now;
+		if (fs_mount_now() == 0) return true;
+	}
+
+	return false;
+}
+
 // resolved once, cached for the shell's lifetime (which is the whole
 // uptime of the system, sh.c being pid 0) -- same reasoning as
 // zwin.c's resolve_wm_pid(): re-doing a name lookup on every single
@@ -256,13 +289,31 @@ void sh(void) {
 	// Note this only decides WHEN to call init(). init() still picks
 	// per app, so a card holding just `wm` still gets its wm from the
 	// card and everything else from flash.
+	// Bring the card up FIRST, always, before deciding anything else.
+	// Where the core apps come from is a separate question -- init()
+	// resolves that per app -- but `ls`, `xf` and every other file
+	// operation afterwards need the card initialised, and with a
+	// deferred mount nothing else will do it.
+	//
+	// When the core apps are in flash we only try once: a board with no
+	// card should not stall for AUTOINIT_TIMEOUT_TICKS on every boot
+	// waiting for hardware that isn't there. When they are not, the
+	// card is the only source of apps, so it is worth waiting for.
+	bool card_ready;
+	if (z_zar_present())
+		card_ready = (fs_mount_now() == 0);
+	else
+		card_ready = wait_for_card_ready();
+
+	if (card_ready)
+		printf("init: sdcard ready\n");
+	else if (z_zar_present())
+		printf("init: no sdcard, using core apps in flash\n");
+
 	if (boot_cancel_requested()) {
 		printf("init: cancelled -- run `init` to start the graphical "
 			"environment manually\n");
-	} else if (z_zar_present() && fs_size("wm") == 0) {
-		// core apps in flash and nothing on the card shadowing them --
-		// no reason to wait for a card that may not exist
-		printf("init: core apps in flash, no sd card needed\n");
+	} else if (card_ready || z_zar_present()) {
 		init();
 	} else if (wait_for_apps_ready()) {
 		init();

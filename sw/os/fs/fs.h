@@ -7,6 +7,8 @@
 #include "../../common/zexec.h"
 
 int fs_mount(void);
+// forced (non-deferred) mount -- see fs.c for why this exists
+int fs_mount_now(void);
 int fs_format(void);
 uint32_t fs_total(void);
 uint32_t fs_free(void);
