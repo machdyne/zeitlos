@@ -44,6 +44,10 @@ ifndef CABLE
 	CABLE = dirtyJtag
 endif
 
+# RISC-V prefix forwarded to sw/bios and sw/os. Override for a
+# multi-lib gcc, e.g. PREFIX=/opt/riscv/bin/riscv64-unknown-elf-
+PREFIX ?= /opt/riscv32i/bin/riscv32-unknown-elf-
+
 main: check zeitlos
 
 check:
@@ -184,11 +188,13 @@ else ifeq ($(BOARD), mozart_ml1)
 	FLASH_OFFSET = -o
 else ifeq ($(BOARD), ulx3s)
 	FAMILY = ecp5
-	DEVICE = 25k
+	# Same 12/25/45/85K PCB and LPF. Default matches upstream (25k);
+	# this workspace's board is 85K: make BOARD=ulx3s DEVICE=85k
+	DEVICE ?= 25k
 	PACKAGE = CABGA381
 	LPF = ulx3s.lpf
-	PROG = openFPGALoader -c $(CABLE)
-	FLASH = openFPGALoader -v -c $(CABLE) -f
+	PROG = openFPGALoader -b ulx3s
+	FLASH = openFPGALoader -v -b ulx3s -f
 	FLASH_OFFSET = -o
 else ifeq ($(BOARD), lebkuchen)
 	FAMILY = gatemate
@@ -249,7 +255,7 @@ zeitlos_gatemate_pico:
 	$(PACK) output/$(BOARD_LC)/soc.txt output/$(BOARD_LC)/soc.bit
 
 bios:
-	cd sw/bios && make BOARD=$(BOARD_UC) FAMILY=$(FAMILY_UC)
+	cd sw/bios && make BOARD=$(BOARD_UC) FAMILY=$(FAMILY_UC) PREFIX=$(PREFIX)
 
 ifeq ($(FAMILY), ice40)
 soc:
@@ -295,10 +301,10 @@ dev-flash: dev flash_os
 flash: zeitlos flash_soc flash_os
 
 os:
-	cd sw/os && make
+	cd sw/os && make PREFIX=$(PREFIX)
 
 apps:
-	cd sw/apps && make
+	cd sw/apps && make PREFIX=$(PREFIX)
 
 clean: clean_os clean_bios clean_apps
 

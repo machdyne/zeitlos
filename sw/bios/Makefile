@@ -1,4 +1,4 @@
-PREFIX=/opt/riscv32i/bin/riscv32-unknown-elf-
+PREFIX ?= /opt/riscv32i/bin/riscv32-unknown-elf-
 CFLAGS=-DBOARD_$(BOARD) -DFPGA_$(FAMILY)
 ARCH=rv32i
 ABI=ilp32

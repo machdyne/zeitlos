@@ -124,6 +124,23 @@ module sysctl #()
 `endif
 `endif
 
+`ifdef BOARD_ULX3S
+	output wifi_en,
+	output wifi_gpio0,
+	output flash_holdn,
+	output flash_wpn,
+	output LED1,
+	output LED2,
+	// US2 host pull control: 0 = 15 kΩ pulldown on D+/D- (usb_hid_host)
+	output usb_fpga_pu_dp,
+	output usb_fpga_pu_dn,
+	// SPI 1-bit SD: DAT1/DAT2 must sit high. They were only in the
+	// LPF (no net), so ECP5 default pulldown held them low and many
+	// cards never left FR_NOT_READY.
+	output SD_DAT1,
+	output SD_DAT2,
+`endif
+
 );
 
 	// BOARD LEDS
@@ -253,6 +270,25 @@ module sysctl #()
 		else if (!sys_rstn)
 			resetn_counter <= resetn_counter + 1;
 	end
+
+`ifdef BOARD_ULX3S
+	// Hold the ESP32 in reset so it does not fight the FPGA for the
+	// SD bus (CLK/CMD/DAT are shared). Drive flash HOLD#/WP# high —
+	// those pins float to pulldown on unused ECP5 IOs and would
+	// otherwise freeze SPI reads of the kernel. LED1/LED2 are
+	// bring-up taps that do not depend on the CPU: PLL lock and
+	// released reset. LED_B (LED0) stays the debug_wb software LED.
+	assign wifi_en = 1'b0;
+	assign wifi_gpio0 = 1'b0;
+	assign flash_holdn = 1'b1;
+	assign flash_wpn = 1'b1;
+	assign LED1 = pll_locked;
+	assign LED2 = sys_rstn;
+	assign usb_fpga_pu_dp = 1'b0;
+	assign usb_fpga_pu_dn = 1'b0;
+	assign SD_DAT1 = 1'b1;
+	assign SD_DAT2 = 1'b1;
+`endif
 
 	// RTC
 	reg [15:0] rtc_ctr;	// ~732hz
@@ -1127,6 +1163,10 @@ module sysctl #()
 
 	wire [1:0] wbs_usb0_typ;
 	wire [9:0] wbs_usb0_curs_x, wbs_usb0_curs_y;
+
+	// Port 0: Obst/Lakritz onboard USB; ULX3S maps this to US2
+	// (see boards/ulx3s.lpf). Port 1 is the second physical socket
+	// (J1 on ULX3S, for an optional Dual USB Host PMOD).
 
 	usb_hid_wb #() wbs_usb0_i
 	(

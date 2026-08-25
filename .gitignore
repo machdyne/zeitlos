@@ -1,0 +1,29 @@
+# Yosys / nextpnr / ecppack
+output/
+*.bit
+*.svf
+*.config
+*.json
+
+# RISC-V build products (BIOS, kernel, apps)
+*.o
+*.elf
+*.map
+*.asm
+*.dasm
+*.bin
+!sw/data/images/zeitlos.bin
+*.hex
+!rtl/ext/usb_hid_host/src/usb_hid_host_rom.hex
+sw/bios/bios_seed.hex
+
+# gcc -MD leftovers (ff.d / fs.d are tracked upstream; new ones stay local)
+sw/apps/**/*.d
+sw/os/*.d
+sw/os/fs/*.d
+sw/os/fs/fatfs/sdmm.d
+
+# App configure crumbs
+sw/apps/net/.net_config_selected
+sw/apps/net/.net_phy_selected
+sw/apps/repl/ms_stdlib.h

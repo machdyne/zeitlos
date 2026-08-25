@@ -1,8 +1,9 @@
-PREFIX = /opt/riscv32i/bin/riscv32-unknown-elf-
+PREFIX ?= /opt/riscv32i/bin/riscv32-unknown-elf-
 ARCH = rv32i
+ABI = ilp32
 CC = $(PREFIX)gcc
-CFLAGS = -fPIC --std=gnu99 -Os -MD -Wall -march=$(ARCH) -I../common
-LDFLAGS = -fPIC -march=$(ARCH) -mabi=ilp32
+CFLAGS = -fPIC --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) -I../common
+LDFLAGS = -fPIC -march=$(ARCH) -mabi=$(ABI)
 LDSCRIPT = ../common/riscv-os.ld
 
 OBJS = kernel.o kruntime.o mem.o \
