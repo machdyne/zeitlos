@@ -27,10 +27,13 @@ ping.elf: $(OBJS)
 	$(PREFIX)objdump -S --disassemble ping.elf > ping.dasm
 
 ping.bin: ping.elf
-	@END=$$($(PREFIX)nm ping.elf | awk '$$3=="_end"{print "0x"$$1}'); \
-	$(PREFIX)objcopy -O binary --pad-to=$$END ping.elf ping.bin
+	@EDATA=$$($(PREFIX)nm ping.elf | awk '$$3=="_edata"{print "0x"$$1}'); \
+	END=$$($(PREFIX)nm ping.elf | awk '$$3=="_end"{print "0x"$$1}'); \
+	$(PREFIX)objcopy -O binary ping.elf ping.data; \
+	python3 ../../../tools/mkexec.py ping.data ping.bin $$(($$END - $$EDATA)); \
+	rm -f ping.data
 
 clean:
-	rm -f ping.elf ping.bin ping.asm ping.dasm ping.map *.o *.d
+	rm -f ping.elf ping.bin ping.data ping.asm ping.dasm ping.map *.o *.d
 
 .PHONY: ping clean

@@ -32,10 +32,13 @@ gpudemo.elf: $(OBJS)
 	$(PREFIX)objdump -S --disassemble gpudemo.elf > gpudemo.dasm
 
 gpudemo.bin: gpudemo.elf
-	@END=$$($(PREFIX)nm gpudemo.elf | awk '$$3=="_end"{print "0x"$$1}'); \
-	$(PREFIX)objcopy -O binary --pad-to=$$END gpudemo.elf gpudemo.bin
+	@EDATA=$$($(PREFIX)nm gpudemo.elf | awk '$$3=="_edata"{print "0x"$$1}'); \
+	END=$$($(PREFIX)nm gpudemo.elf | awk '$$3=="_end"{print "0x"$$1}'); \
+	$(PREFIX)objcopy -O binary gpudemo.elf gpudemo.data; \
+	python3 ../../../tools/mkexec.py gpudemo.data gpudemo.bin $$(($$END - $$EDATA)); \
+	rm -f gpudemo.data
 
 clean:
-	rm -f gpudemo.elf gpudemo.bin gpudemo.asm gpudemo.dasm gpudemo.map *.o *.d
+	rm -f gpudemo.elf gpudemo.bin gpudemo.data gpudemo.asm gpudemo.dasm gpudemo.map *.o *.d
 
 .PHONY: gpudemo clean

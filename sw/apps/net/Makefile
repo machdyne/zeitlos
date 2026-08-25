@@ -4,8 +4,19 @@ ARCH = rv32i
 CC = $(PREFIX)gcc
 AS = $(PREFIX)as
 ASFLAGS = -march=$(ARCH) -mabi=ilp32
-CFLAGS = --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=ilp32
-LDFLAGS =
+# See sw/apps/repl/Makefile for the full reasoning behind these two --
+# in short, sw/common is shared by every app, so each links whole
+# objects for the sake of a fraction of them, and section GC drops the
+# rest. Measured saving on this app is noted in docs/scheme_api.md's
+# memory-budget section. Set GC_SECTIONS=0 to disable.
+GC_SECTIONS ?= 1
+ifeq ($(GC_SECTIONS),1)
+GC_CFLAGS = -ffunction-sections -fdata-sections
+GC_LDFLAGS = -Wl,--gc-sections
+endif
+
+CFLAGS = --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=ilp32 $(GC_CFLAGS)
+LDFLAGS = $(GC_LDFLAGS)
 LDSCRIPT = ../../common/riscv-app.ld
 
 # which NIC driver to build in -- ENC28J60 (SPI PMOD, most boards) or

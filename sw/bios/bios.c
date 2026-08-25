@@ -59,6 +59,18 @@
 #define ROM_OS_ADDR		(MEM_ROM + (1024 * 1024 * 1))
 #define ROM_OS_SIZE		1024 * 256
 
+// Boot splash -- a full 640x480 1bpp framebuffer image, programmed at a
+// fixed flash offset just below the kernel's by the top-level Makefile's
+// `flash_logo` target. It is pre-centred and pre-padded at build time
+// (sw/data/images/pad_logo.py), so showing it is one flat memcpy of the
+// whole framebuffer rather than a row-by-row copy -- which matters here,
+// where the BIOS budget is measured in bytes against BRAM_WORDS.
+//
+// KEEP IN SYNC with Z_BOOT_LOGO_FLASH_OFFSET (sw/os/logo.h) and
+// LOGO_FLASH_OFFSET_HEX/_DEC (top-level Makefile).
+#define ROM_LOGO_ADDR	(MEM_ROM + 0x000F0000)
+#define ROM_LOGO_SIZE	((640 * 480) / 8)
+
 //#include "scancodes.h"
 //#include "hidcodes.h"
 
@@ -87,7 +99,6 @@ uint32_t get_mem_main_size() {
 
 uint32_t xfer_recv(uint32_t addr);
 uint32_t crc32b(char *data, uint32_t len);
-void putchar_vga(const char c);
 char scantoascii(uint8_t scancode);
 char hidtoascii(uint8_t code);
 
@@ -121,25 +132,15 @@ void print(const char *p)
 		putchar(*(p++));
 }
 
-void putchar_vga(const char c) {
-	int xy = curs_y * vid_cols + curs_x;
-	if (c == '\n') {
-		curs_x = 0;
-		curs_y++;
-	} else {
-		(*(volatile uint8_t *)(0x10000000 + xy)) = c;
-		curs_x++;
-		for (int i = curs_x; i < vid_cols - curs_x + 1; i++)
-			(*(volatile uint8_t *)(0x10000000 + xy + i)) = ' ';
-	}
-	if (curs_x >= vid_cols) { curs_x = 0; curs_y++; };
-	if (curs_y > vid_rows - 1) {
-		curs_y = vid_rows - 1;
-		memcpy(0x10000000, 0x10000000 + vid_cols,
-			(vid_cols * vid_rows) - vid_cols);
-	};
-}
-
+// NOTE: putchar_vga() used to sit here -- a VGA text-output routine
+// that was declared and defined but never called from anywhere, and
+// which wrote to 0x10000000 (MEM_ROM, the flash window) rather than
+// MEM_VRAM, so it could not have worked as written. Removed to make
+// room for the splash memcpy in main(): this BIOS is capped at
+// BRAM_WORDS (2048 words = 8KB, sw/bios/Makefile) and was within a
+// handful of bytes of that ceiling, while putchar_vga() was ~290 bytes
+// of it. Recoverable from git if it was a work in progress -- but its
+// destination address needs fixing before it can do anything.
 int getchar()
 {
 	int uart_dr = ((reg_uart0_lsr & 0x01) == 1);
@@ -458,6 +459,14 @@ void main() {
 	uart_init();
 
 	print("ZB\n");
+
+	// Splash before load_zeitlos() on purpose: the 256KB kernel copy is
+	// the longest pause in the boot, so this puts something on screen
+	// first. Flash is memory-mapped (load_zeitlos() memcpy()s the
+	// kernel straight out of it), so this uses no RAM at all -- and
+	// because the image is a whole pre-padded framebuffer, it also
+	// clears whatever was in VRAM at reset.
+	memcpy((void *)MEM_VRAM, (void *)ROM_LOGO_ADDR, ROM_LOGO_SIZE);
 
 #ifndef FPGA_GATEMATE
 	load_zeitlos();

@@ -21,11 +21,14 @@ bounceblit.elf: $(OBJS)
 	$(PREFIX)objdump -S --disassemble bounceblit.elf > bounceblit.dasm
 
 bounceblit.bin: bounceblit.elf
-	@END=$$($(PREFIX)nm bounceblit.elf | awk '$$3=="_end"{print "0x"$$1}'); \
-	$(PREFIX)objcopy -O binary --pad-to=$$END bounceblit.elf bounceblit.bin
+	@EDATA=$$($(PREFIX)nm bounceblit.elf | awk '$$3=="_edata"{print "0x"$$1}'); \
+	END=$$($(PREFIX)nm bounceblit.elf | awk '$$3=="_end"{print "0x"$$1}'); \
+	$(PREFIX)objcopy -O binary bounceblit.elf bounceblit.data; \
+	python3 ../../../tools/mkexec.py bounceblit.data bounceblit.bin $$(($$END - $$EDATA)); \
+	rm -f bounceblit.data
 
 clean:
-	rm -f bounceblit.elf bounceblit.bin bounceblit.asm bounceblit.dasm bounceblit.map bounceblit.o *.o *.d
+	rm -f bounceblit.elf bounceblit.bin bounceblit.data bounceblit.asm bounceblit.dasm bounceblit.map bounceblit.o *.o *.d
 
 .PHONY: bounceblit clean
 

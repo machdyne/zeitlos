@@ -68,7 +68,9 @@
 #include <stdbool.h>
 #include <string.h>
 #include <setjmp.h>
-#include <unistd.h>	// sbrk() -- see the "free" command below
+#include <unistd.h>	// sbrk() -- the startup heap-usage log in main()
+					// below (the `free` command that also used it is now a
+					// Scheme procedure, see zapi.c)
 
 #include "../../common/zeitlos.h"
 #include "../../common/zport.h"
@@ -79,6 +81,7 @@
 #include "../../common/zdns.h"
 #include "ms_api.h"
 #include "te_bridge.h"
+#include "page.h"
 #include "zapi.h"
 
 // hostname/IP resolution for the "telnet <ip-or-hostname>" command
@@ -112,6 +115,15 @@ typedef struct {
 	// on `pending` for why that's a safe assumption for every app
 	// binary here).
 	bool		in_editor;
+	// true while THIS connection owns the (single, process-wide) live
+	// `page` session -- exactly the same role in_editor plays for
+	// `te`, and mutually exclusive with it in practice since neither
+	// command can be typed while the other owns the connection. Kept
+	// as a separate flag rather than folded into one "full-screen
+	// mode" enum: the two route their bytes to different modules and
+	// end on different conditions, so a shared flag would only have to
+	// be disambiguated again at every use.
+	bool		in_pager;
 } repl_conn_t;
 
 static repl_conn_t conns[Z_REPL_MAX_CONNS];
@@ -119,9 +131,52 @@ static repl_conn_t conns[Z_REPL_MAX_CONNS];
 static const char *BANNER =
 	"repl -- Zeitlos command interpreter\r\n"
 	"type 'help' for a list of commands -- anything else is "
-	"evaluated as Scheme\r\n";
+	"evaluated as Scheme\r\n"
+	// F12 is intercepted by `term` itself, before anything reaches a
+	// port (see handle_key_event() in term.c) -- so it works even when
+	// term is relaying raw bytes to a remote that has no quit command
+	// of its own, which is exactly the situation someone needs it in
+	// and exactly the situation where they can't be told about it.
+	// Worth a line here, on the one screen every session starts at.
+	"F12 returns to repl from any port (telnet, portdemo, ...)\r\n";
 
 static const char *PROMPT = "> ";
+
+// Only the commands that genuinely CAN'T be Scheme procedures are
+// listed as builtins -- each needs the requesting connection itself
+// (`te`/`page` take it over for a full-screen session; `port`/`telnet`
+// redirect it elsewhere; `quit` ends it), which a Scheme procedure has
+// no access to. Everything else moved to the Scheme API and is listed
+// under `scheme:`, so each command lives in exactly one place -- see
+// docs/scheme_api.md.
+//
+// DELIBERATELY TERSE, and the guard below is why: dispatch_line()
+// writes its response into a Z_REPL_EVAL_REPLY_MAX (256 byte) buffer
+// (zrepl.h) via snprintf(), which truncates SILENTLY. The first
+// version of this listing after `page`/`ps`/`free`/... were added ran
+// to 357 bytes and lost its last third with no runtime symptom at all
+// -- caught only by -Wformat-truncation. Rather than trust the next
+// person to notice, the typedef below turns an over-long help string
+// into a compile ERROR (a negative array size), naming this comment.
+//
+// If this genuinely needs to grow past the cap, the options are: raise
+// Z_REPL_EVAL_REPLY_MAX (it's a wire constant -- every REPL_EVAL peer
+// must be rebuilt together, see zrepl.h), or stop routing help through
+// `out` and send it straight down the connection in chunks (which a
+// bare REPL_EVAL request, having no connection, then couldn't get).
+// Shortening the text is the cheap answer and has been the right one
+// so far.
+static const char HELP_TEXT[] =
+	"builtins: help ping echo te <f> page <f> port <n> telnet <h> scheme <e> quit\r\n"
+	"scheme:   ls ps free uptime run kill load mkdir touch-file delay-ms ...\r\n"
+	"F12 returns here from any port; bare word = call, so `ps` is (ps)\r\n"
+	"anything else is evaluated as Scheme";
+
+// build-time check -- see HELP_TEXT's own comment. A negative array
+// size rather than _Static_assert(): this tree builds with --std=gnu99
+// and this idiom needs no C11.
+typedef char repl_help_text_fits_in_reply_buffer[
+	(sizeof(HELP_TEXT) <= Z_REPL_EVAL_REPLY_MAX) ? 1 : -1];
 
 // set once in main(), after the one and only ms_init_lix() attempt --
 // see there for what happens if it fails (an undersized MS_HEAP_SIZE
@@ -132,6 +187,152 @@ static const char *PROMPT = "> ";
 // hitting ms_eval() against an interpreter that was never actually
 // initialized.
 static bool scheme_ready = false;
+
+// copies `s` into `out` (capacity `out_cap`), and when it doesn't fit
+// makes that VISIBLE instead of silently dropping the tail.
+//
+// This exists because silent truncation has now bitten this file
+// twice: once in the `help` text (357 bytes into a 256 byte buffer,
+// losing its last third with no symptom), and once in Scheme results
+// -- `(free)` prints to ~293 bytes and `(ps)` on a full process table
+// to ~770, both of which used to just stop mid-token, looking for all
+// the world like the output was corrupt rather than merely cut off.
+// Z_REPL_REPLY_MAX (zrepl.h) is now large enough for both, but a
+// Scheme value has no upper bound in general -- (ls) on a large
+// directory, or any user expression -- so the honest thing is to say
+// so when it happens rather than pretend it didn't.
+static void copy_or_mark_truncated(char *out, uint32_t out_cap, const char *s) {
+
+	static const char MARK[] = " ...[truncated]";
+
+	if (!out || !out_cap) return;
+
+	uint32_t len = (uint32_t)strlen(s);
+
+	if (len < out_cap) {
+		memcpy(out, s, len + 1);
+		return;
+	}
+
+	// pathologically small buffer -- nothing useful fits alongside the
+	// marker, so just say what happened.
+	if (out_cap <= sizeof(MARK)) {
+		snprintf(out, out_cap, "[truncated]");
+		return;
+	}
+
+	// sizeof(MARK) counts its NUL, so keep + sizeof(MARK) == out_cap
+	// exactly: every byte used, still NUL-terminated.
+	uint32_t keep = out_cap - sizeof(MARK);
+	memcpy(out, s, keep);
+	memcpy(out + keep, MARK, sizeof(MARK));
+
+}
+
+// -- Scheme stdout capture (z_stdout_hook, sw/common/zeitlos.h) --
+//
+// `ms`'s printing procedures -- display, write, print, newline, gc and
+// dump -- all write to stdout, which on this OS means the serial
+// console. For someone running them from a `term` window that is
+// simply the wrong screen: (dump) printed ~200 symbol names onto the
+// UART and showed the user nothing.
+//
+// While an interactive command is being dispatched, stdout is
+// redirected here, ACCUMULATED into a buffer, and sent to the
+// requesting connection once dispatch has finished. Buffering rather
+// than sending per write() matters for two reasons: ms issues many
+// small fputs() calls (dump emits one per symbol), which would be one
+// z_port_send() each and blow past Z_PORT_MAX_PENDING_SENDS
+// (zport.h's own flow-control note) -- the same batching te_bridge.c
+// already does for te; and sending from inside the hook risks
+// re-entering it, since a failed z_port_send() logs with printf().
+//
+// The normal path therefore never sends while the hook is installed.
+// Only an overflowing buffer does, and cap_flushing guards that case
+// by routing any nested write back to the UART instead of recursing.
+// Sized so the largest realistic output goes out in ONE z_port_send().
+// That's not just efficiency: z_port_send() refuses once
+// Z_PORT_MAX_PENDING_SENDS (8, zport.h) sends are unacked, and no ack
+// can arrive mid-command -- repl only processes Z_PORT_DATA_ACK back
+// in its main loop, which it doesn't reach until this whole dispatch
+// finishes. So the real budget is 8 sends per command, shared with the
+// reply and the prompt.
+//
+// (dump) is the worst case by a wide margin: ~210 bound symbols after
+// the stdlib loads, ~1.5KB of names and wrapping. At 512 bytes that
+// was 3 sends of a ~6 send budget, and it would have grown quietly
+// tighter with every builtin added. 2KB makes it one.
+static repl_conn_t	*cap_conn = NULL;	// where captured output goes
+static char			cap_buf[2048];
+static uint32_t		cap_len = 0;
+static bool			cap_flushing = false;	// re-entrancy guard
+static bool			cap_last_was_cr = false;
+
+static void conn_send_str(repl_conn_t *c, const char *s);
+
+// sends whatever has accumulated, with the hook temporarily removed so
+// a send failure's own printf() can't come back through here.
+static void cap_flush(void) {
+
+	if (!cap_len) return;
+
+	z_stdout_hook_t saved = z_stdout_hook;
+	z_stdout_hook = NULL;
+	cap_flushing = true;
+
+	if (cap_conn && cap_conn->port.connected) {
+		if (z_port_send(&cap_conn->port, cap_buf, cap_len) != Z_OK) {
+			// out of pending-send slots, or the peer's mailbox is
+			// full. Fall back to the console rather than dropping the
+			// bytes: output landing in the wrong place is a nuisance,
+			// output vanishing with only a one-line warning is the
+			// silent-truncation failure mode this file has already
+			// been bitten by three times.
+			printf("repl: captured-output send failed (%lu bytes) -- "
+				"falling back to console:\n", (unsigned long)cap_len);
+			fwrite(cap_buf, 1, cap_len, stdout);
+		}
+	} else {
+		// no connection to show it on (it went away mid-command) --
+		// fall back to the console rather than dropping the output on
+		// the floor entirely.
+		fwrite(cap_buf, 1, cap_len, stdout);
+	}
+
+	cap_len = 0;
+	cap_flushing = false;
+	z_stdout_hook = saved;
+
+}
+
+static void cap_putc(char c) {
+	if (cap_len >= sizeof(cap_buf)) cap_flush();
+	cap_buf[cap_len++] = c;
+}
+
+// Expands a BARE '\n' into "\r\n" for the VT100 at the far end, while
+// leaving an existing "\r\n" alone -- ms.c mixes the two conventions
+// (bi_dump's line wrapping emits "\r\n" explicitly, while `newline`
+// emits a plain "\n"), and blindly expanding every '\n' would turn the
+// former into "\r\r\n".
+static void repl_stdout_hook(const char *data, uint32_t len) {
+
+	if (cap_flushing) {
+		// a nested write from inside cap_flush() -- send it to the
+		// console rather than recursing back into the buffer we are
+		// in the middle of emptying.
+		fwrite(data, 1, len, stdout);
+		return;
+	}
+
+	for (uint32_t i = 0; i < len; i++) {
+		char c = data[i];
+		if (c == '\n' && !cap_last_was_cr) cap_putc('\r');
+		cap_putc(c);
+		cap_last_was_cr = (c == '\r');
+	}
+
+}
 
 // -- Scheme evaluation --
 //
@@ -175,7 +376,10 @@ static void eval_scheme(const char *expr, char *out, uint32_t out_cap) {
 
 		ms_val *result = ms_eval(form, ms_global_env);
 		char *s = ms_to_string(result, true);
-		snprintf(out, out_cap, "%s", s);
+		// NOT snprintf(): a printed Scheme value has no bounded size,
+		// and quietly losing its tail reads as corruption rather than
+		// as truncation -- see copy_or_mark_truncated() above.
+		copy_or_mark_truncated(out, out_cap, s);
 		free(s); // ms_to_string() malloc's this -- see ms_api.h
 
 	} else {
@@ -341,10 +545,7 @@ static bool dispatch_line(const char *line, char *out, uint32_t out_cap,
 	}
 
 	if (!strcmp(line, "help")) {
-		snprintf(out, out_cap,
-			"commands: help, ping, uptime, echo <text>, free, "
-			"port <name>, telnet <ip-or-host>, te <filename>, quit\r\n"
-			"anything else is evaluated as Scheme, e.g. (+ 1 2)");
+		snprintf(out, out_cap, "%s", HELP_TEXT);
 		return false;
 	}
 
@@ -353,11 +554,12 @@ static bool dispatch_line(const char *line, char *out, uint32_t out_cap,
 		return false;
 	}
 
-	if (!strcmp(line, "uptime")) {
-		snprintf(out, out_cap, "%lu ticks since boot",
-			(unsigned long)z_uptime_ticks());
-		return false;
-	}
+	// NOTE: `uptime` and `free` used to be builtins right here. Both
+	// are Scheme procedures now (zapi.c) -- they return real values
+	// instead of pre-formatted text, and the bare-word command syntax
+	// below means typing `uptime` or `free` still works exactly as it
+	// did. `free` also reports considerably more than it used to (the
+	// kernel pool as well as this process's own heaps).
 
 	if (!strncmp(line, "echo ", 5)) {
 		snprintf(out, out_cap, "%s", line + 5);
@@ -366,64 +568,6 @@ static bool dispatch_line(const char *line, char *out, uint32_t out_cap,
 
 	if (!strcmp(line, "echo")) {
 		out[0] = 0;
-		return false;
-	}
-
-	if (!strcmp(line, "free")) {
-
-		// _end/_start: the same linker-provided symbols
-		// docs/app_runtime.md describes, and zeitlos.c's own _sbrk()
-		// already uses the same `extern char _end;` convention for --
-		// _end is the top of this process's static footprint
-		// (code+data+.bss, right where k_proc_create()'s own size
-		// request, sh.c's fs_size(), came from at boot -- see
-		// docs/app_runtime.md); _start is this process's fixed
-		// virtual base (0x80000000, same for every app, riscv-app.ld)
-		// -- their difference is exactly the static size, the same
-		// number kernel.c computes for ITS OWN binary the same way
-		// (`(uint32_t)&_end - (uint32_t)&_start` in main(), see
-		// k_proc_create()'s very first call site).
-		//
-		// sbrk(0) (newlib, backed by zeitlos.c's own _sbrk()) returns
-		// the current break WITHOUT growing it -- the standard
-		// "just tell me where it is" idiom. The gap between that and
-		// _end is everything malloc()'d since boot -- for `repl`
-		// specifically, that's ms's own T_STR/T_VECTOR cell payloads
-		// (ms.c's own type comments -- those two types own
-		// malloc'd memory, unlike every other ms_val, which lives
-		// entirely inside the fixed cell heap below) plus anything
-		// else this file itself ever malloc()s (nothing, currently).
-		//
-		// what this does NOT show: the kernel's own view of this
-		// process's total allocated block (k_mem_alloc() rounds up to
-		// at least a 32KB minimum, mem.h's Z_MEM_MIN_BLOCK_SIZE) --
-		// there's no syscall yet for a process to ask the kernel that
-		// about itself. Left for later ("we can expose the API
-		// later").
-		extern char _end, _start;
-		uint32_t static_footprint = (uint32_t)&_end - (uint32_t)&_start;
-		uint32_t heap_grown = (uint32_t)sbrk(0) - (uint32_t)&_end;
-
-		if (scheme_ready) {
-			long used = ms_heap_used();
-			long total = MS_HEAP_SIZE;
-			uint32_t cell_bytes = (uint32_t)ms_cell_size();
-			snprintf(out, out_cap,
-				"scheme heap:  %ld/%ld cells used (~%lu/%lu KB)\r\n"
-				"c heap:       %lu bytes grown via malloc (strings/vectors)\r\n"
-				"static:       %lu bytes (code+data+bss, fixed at build)",
-				used, total,
-				(unsigned long)((uint32_t)used * cell_bytes / 1024),
-				(unsigned long)((uint32_t)total * cell_bytes / 1024),
-				(unsigned long)heap_grown, (unsigned long)static_footprint);
-		} else {
-			snprintf(out, out_cap,
-				"scheme heap:  unavailable (Scheme failed to initialize)\r\n"
-				"c heap:       %lu bytes grown via malloc\r\n"
-				"static:       %lu bytes (code+data+bss, fixed at build)",
-				(unsigned long)heap_grown, (unsigned long)static_footprint);
-		}
-
 		return false;
 	}
 
@@ -623,6 +767,52 @@ static bool dispatch_line(const char *line, char *out, uint32_t out_cap,
 		return false;
 	}
 
+	// `page` -- the read-only counterpart to `te` above, for files far
+	// too large for te's TE_MAX_FILE_SIZE ceiling (see page.h and
+	// docs/editor.md). Structurally identical to the `te` case: it
+	// takes over this connection for a full-screen VT100 session, so
+	// it needs a real connection and can't be a Scheme procedure.
+	if (!strncmp(line, "page ", 5)) {
+
+		const char *target = line + 5;
+		while (*target == ' ') target++;
+
+		if (*target == 0) {
+			snprintf(out, out_cap, "usage: page <filename>");
+			return false;
+		}
+
+		if (!conn) {
+			// same reasoning as "te"/"port"/"telnet" above -- a bare
+			// REPL_EVAL request has no connection to hand session
+			// ownership to, and nowhere for the pager's own screen
+			// output to go.
+			snprintf(out, out_cap,
+				"repl: 'page' only works from an interactive term "
+				"connection, not a REPL_EVAL request");
+			return false;
+		}
+
+		char reason[128];
+		if (page_start(&conn->port, target, reason, sizeof(reason))) {
+			// page_start() has already drawn the first screen --
+			// nothing to say here, and no PROMPT either (handle_data()
+			// checks conn->in_pager itself to skip it, see there).
+			conn->in_pager = true;
+			out[0] = 0;
+		} else {
+			snprintf(out, out_cap, "page: %s", reason);
+		}
+
+		return false;
+
+	}
+
+	if (!strcmp(line, "page")) {
+		snprintf(out, out_cap, "usage: page <filename>");
+		return false;
+	}
+
 	if (!strncmp(line, "scheme ", 7)) {
 		eval_scheme(line + 7, out, out_cap);
 		return false;
@@ -757,6 +947,25 @@ static void handle_data(const z_msg_t *msg) {
 
 				}
 
+				// same per-byte check, and same reasoning, as
+				// in_editor just above -- while this connection is
+				// paging, its bytes drive the viewer instead of the
+				// line editor, and every OTHER connection keeps
+				// working normally throughout.
+				if (c->in_pager) {
+
+					if (!page_feed(data[i])) {
+						// 'q' just ended the session -- page_feed()
+						// has already restored the screen itself.
+						c->in_pager = false;
+						conn_send_str(c, PROMPT);
+						z_line_reset(&c->line);
+					}
+
+					continue;
+
+				}
+
 				char echo[Z_LINE_ECHO_MAX];
 				uint32_t echo_len;
 				int complete =
@@ -772,9 +981,49 @@ static void handle_data(const z_msg_t *msg) {
 
 				if (!complete) continue;
 
-				char out[Z_REPL_EVAL_REPLY_MAX];
+				// Z_REPL_REPLY_MAX, not the smaller REPL_EVAL wire
+				// cap -- this is repl's own stack buffer for an
+				// interactive reply and has no peer to stay
+				// compatible with, so it's sized for what real
+				// commands actually print (see zrepl.h).
+				char out[Z_REPL_REPLY_MAX];
+
+				// capture anything the command prints to stdout and
+				// show it HERE rather than on the serial console --
+				// see repl_stdout_hook() above. Installed only for the
+				// interactive path: a REPL_EVAL request (handle_eval())
+				// has no connection to show output on, so its stdout
+				// keeps going to the console exactly as before.
+				cap_conn = c;
+				cap_len = 0;
+				cap_last_was_cr = false;
+				z_stdout_hook = repl_stdout_hook;
+
 				bool wants_quit =
 					dispatch_line(c->line.buf, out, sizeof(out), c);
+
+				// newlib buffers stdout (_isatty() reports a tty, so
+				// it's line-buffered) -- anything ms printed without a
+				// trailing newline is still sitting in libc's own
+				// buffer and has not reached the hook yet. Flush it
+				// through while the hook is STILL installed, then take
+				// the hook down before emptying our own buffer.
+				fflush(stdout);
+				z_stdout_hook = NULL;
+
+				if (c->in_editor || c->in_pager) {
+					// dispatch_line() just handed this connection to
+					// `te` or `page`, which has already drawn its own
+					// full screen -- appending repl's captured
+					// diagnostics on top of it would corrupt that
+					// display, so send them to the console instead.
+					if (cap_len) fwrite(cap_buf, 1, cap_len, stdout);
+					cap_len = 0;
+				} else {
+					cap_flush();
+				}
+
+				cap_conn = NULL;
 
 				if (out[0]) {
 					conn_send_str(c, out);
@@ -794,12 +1043,11 @@ static void handle_data(const z_msg_t *msg) {
 
 				z_line_reset(&c->line);
 
-				if (c->in_editor) {
-					// dispatch_line() just started a `te` session on
-					// this connection (the "te <filename>" command
-					// above) -- it already sent the editor's own
-					// first screen, so don't ALSO print the normal
-					// PROMPT on top of it.
+				if (c->in_editor || c->in_pager) {
+					// dispatch_line() just started a `te` or `page`
+					// session on this connection -- it already sent
+					// that session's own first screen, so don't ALSO
+					// print the normal PROMPT on top of it.
 					continue;
 				}
 
@@ -839,6 +1087,16 @@ static void handle_close(const z_msg_t *msg) {
 		// real editor has.
 		te_bridge_abort();
 		c->in_editor = false;
+	}
+	if (c->in_pager) {
+		// same reasoning as the `te` case just above -- release the
+		// process-wide pager lock rather than leaving every future
+		// `page` command refused with "already open". This one also
+		// closes the still-open file handle, which is a real (if
+		// small) resource: handles live in a bounded kernel-side table
+		// with no process-exit sweep (sw/common/zfs.h).
+		page_abort();
+		c->in_pager = false;
 	}
 	c->port.connected = false;
 	printf("repl: connection closed by peer\n");

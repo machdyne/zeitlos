@@ -13,6 +13,23 @@
 #include <math.h>
 #include "zobj.h"
 
+// The single definition of the shared return-value objects declared
+// extern in zobj.h -- see that header's own comment for why they moved
+// here (a `static` definition in a header gave every including
+// translation unit its own copy, and a -Wunused-variable warning for
+// each one that didn't use them, which was almost all of them).
+//
+// Deliberately NOT `const`, even though nothing writes to either: the
+// syscall handler signature is `z_obj_t *(*)(z_obj_t *)`, so every
+// `return (&z_ok);` in the kernel would be discarding a const
+// qualifier. Making the objects const would mean either casting it
+// away at ~40 return sites or changing the handler signature (and
+// therefore the syscall table's function-pointer type) across the
+// whole tree -- a much larger, riskier change than the warning fix
+// this is part of.
+z_obj_t z_ok = { .type = Z_RETVAL, .val.int32 = 0 };
+z_obj_t z_fail = { .type = Z_RETVAL, .val.int32 = 1 };
+
 // OBJECT CREATION
 
 z_obj_t z_obj_none(void) {

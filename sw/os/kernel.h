@@ -31,57 +31,70 @@ typedef struct {
 // Per-process stack+heap allowance (see mem.h's own comment on why
 // there's no separate heap region at all -- this is the ONLY room a
 // process's call stack AND malloc()'d heap ever get, shared, for its
-// entire lifetime). Two tiers, not one blanket size for every
-// process:
+// entire lifetime).
 //
-// - Z_PROC_STACK_SIZE_LARGE (64KB): `repl` AND `net`, currently --
-//   both are zport.h providers whose own z_port_send() call, on every
-//   message relayed to a connected `term` (repl: one per keystroke
-//   echoed/reply; net: one per chunk of telnet traffic relayed,
-//   telnet_on_data() in net.c), used to leak a small z_obj_blob()
-//   allocation into this same region for the rest of the connection's
-//   lifetime -- confirmed on real hardware as the cause of a heap-
-//   exhaustion crash during a long enough session (a chatty telnet
-//   BBS, specifically), which is what motivated this LARGE tier's
-//   existence at all, and (via a second, separate real bug -- `net`
-//   was left off the check below when this became two tiers instead
-//   of one blanket size) a second near-identical crash before that
-//   omission was caught and fixed.
+// IMPORTANT, because it is easy to get backwards: this is NOT where a
+// process's static footprint lives. Code, .rodata and .bss are part of
+// the BINARY, and k_proc_create() sizes the block as image + this. So
+// `repl`'s 96KB Scheme cell heap (MS_HEAP_SIZE * sizeof(ms_val), a
+// .bss array inside ms.o) is entirely unaffected by the tier chosen
+// here -- changing repl from LARGE to MEDIUM below costs it zero
+// Scheme cells. What the tier bounds is the C stack plus whatever
+// malloc() hands out at runtime.
 //
-//   **That leak itself is fixed now**, not just budgeted around --
-//   see sw/common/zport.h's Z_PORT_DATA_ACK and docs/messaging.md's
-//   "Known limitations" for the full design (an explicit ack from the
-//   receiver once it's genuinely done reading a DATA message's
-//   payload, at which point the sender frees it, rather than holding
-//   it for the rest of the connection). Whether `repl`/`net` could
-//   safely move back down to the DEFAULT tier below as a result is a
-//   real, open question -- both still have OTHER heap usage this fix
-//   doesn't touch (repl's Scheme stdlib load at startup; both
-//   processes' one-shot RPC-style replies elsewhere, e.g. DHCP/DNS/
-//   TFTP responses in net.c, which are still small-and-intentionally-
-//   leaked per docs/messaging.md, just bounded by request COUNT now
-//   rather than by session length or byte volume) -- but the
-//   dominant, unbounded cost that specifically justified LARGE is
-//   gone. Left at LARGE here deliberately, not downgraded as a side
-//   effect of the DATA_ACK fix: this is a real hardware memory
-//   allocation with no data yet on what a downgraded budget actually
-//   looks like under load, and getting it wrong here reproduces the
-//   exact silent-heap-exhaustion failure mode this whole tier exists
-//   to prevent. Worth a real, deliberate, separately-tested pass at
-//   DEFAULT for both once there's hardware to check it against, not a
-//   guess made here.
-// - Z_PROC_STACK_SIZE_DEFAULT (16KB): everything else (the kernel's
-//   own self-registration, wm, term, ...). None of these have ever
-//   shown a confirmed need for more than the original 8KB this
-//   project shipped with -- doubled here as a safety margin (there's
-//   no hard data ruling out needing slightly more), not because any
-//   of them have their own known Scheme-stdlib-/zport-leak-style
-//   story the way `repl`/`net` do. Confirmed on real hardware (Obst's
-//   1MB variant, `MEM 1` in rtl/boards.vh) that paying the 64KB
-//   default for every process left no room to run wm+net+repl+term
-//   all at once -- see docs/csrs.md and this project's own
-//   memory-budget history around this constant for the full story.
+// Four tiers:
+//
+// - Z_PROC_STACK_SIZE_SMALL (8KB): `wm` and `term`. This is the size
+//   this project originally shipped with for everything; DEFAULT below
+//   doubled it as a blanket safety margin, and the note there is
+//   explicit that no app had ever shown a confirmed need for more.
+//   These two are plain message-loop apps -- no interpreter, no
+//   per-message allocation that outlives a call -- so they're the two
+//   with the least reason to pay the doubled margin, and returning
+//   them to 8KB is what made room for a second `term` instance on a
+//   1MB board (see docs/boot.md's memory budget).
+//
+// - Z_PROC_STACK_SIZE_DEFAULT (16KB): anything not named below. Still
+//   the right default for an unknown app: the margin costs little when
+//   only one or two processes are unaccounted for, and an app nobody
+//   has measured is exactly the one that shouldn't get the smallest
+//   tier.
+//
+// - Z_PROC_STACK_SIZE_MEDIUM (32KB): `net` AND `repl`.
+//
+//   Both used to be LARGE, for the same reason: their z_port_send()
+//   call leaked a small z_obj_blob() allocation per message relayed,
+//   for the lifetime of the connection -- confirmed on real hardware
+//   as the cause of a heap-exhaustion crash during a long telnet
+//   session. **That leak is fixed** (see zport.h's Z_PORT_DATA_ACK and
+//   docs/messaging.md), and the question of whether either could come
+//   back down was left deliberately open, pending a real number.
+//
+//   Both now have one. `net` still holds the one-shot,
+//   intentionally-leaked RPC replies (DHCP/DNS/TFTP in net.c), bounded
+//   by request COUNT rather than session length. `repl` reports its own
+//   figure at every boot -- "heap grown 5960 bytes by end of stdlib
+//   load" -- so its baseline C-heap use is ~6KB, leaving ~26KB of
+//   headroom at this tier.
+//
+//   THE REMAINING RISK FOR `repl` IS STACK, NOT HEAP, and it's worth
+//   knowing what to watch: deep non-tail Scheme recursion nests
+//   ms_eval() frames on the C stack. MS_PROTECT_STACK_SIZE (192,
+//   sw/apps/repl/Makefile) bounds that depth, so the worst case is
+//   roughly 192 frames -- comfortably inside 32KB at any plausible
+//   frame size, but not by so much that it's beyond testing. Something
+//   deliberately recursive is the thing to try. The symptom of getting
+//   this wrong is the silent heap/stack exhaustion this tier system
+//   exists to prevent, not a clean error; `(free)`'s own "c-heap"
+//   figure (docs/scheme_api.md) is the number to watch, and putting
+//   repl back on LARGE is the fix.
+//
+// - Z_PROC_STACK_SIZE_LARGE (64KB): nothing, currently. Kept defined
+//   rather than deleted precisely so the line above is a one-word
+//   change if MEDIUM proves too tight for either of them.
+#define Z_PROC_STACK_SIZE_SMALL    8*1024
 #define Z_PROC_STACK_SIZE_DEFAULT  16*1024
+#define Z_PROC_STACK_SIZE_MEDIUM   32*1024
 #define Z_PROC_STACK_SIZE_LARGE    64*1024
 
 // which tier (above) a process named `name` should get -- the one
@@ -89,11 +102,14 @@ typedef struct {
 // process by name (sh.c's `run`/`init`, and k_proc_run()'s own
 // Z_SYS_PROC_RUN syscall handler in kernel.c, which is how wm's dock
 // launches apps). A single shared check specifically so a future
-// third LARGE-tier process doesn't require finding and updating every
-// call site individually the way `net` joining `repl` here once did.
+// tier change doesn't require finding and updating every call site
+// individually the way `net` joining `repl` here once did.
 static inline uint32_t z_proc_stack_size_for(const char *name) {
-	return (!strcmp(name, "repl") || !strcmp(name, "net")) ?
-		Z_PROC_STACK_SIZE_LARGE : Z_PROC_STACK_SIZE_DEFAULT;
+	if (!strcmp(name, "repl") || !strcmp(name, "net"))
+		return Z_PROC_STACK_SIZE_MEDIUM;
+	if (!strcmp(name, "wm") || !strcmp(name, "term"))
+		return Z_PROC_STACK_SIZE_SMALL;
+	return Z_PROC_STACK_SIZE_DEFAULT;
 }
 
 // the live process table and the pid of the process currently

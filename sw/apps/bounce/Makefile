@@ -21,11 +21,14 @@ bounce.elf: $(OBJS)
 	$(PREFIX)objdump -S --disassemble bounce.elf > bounce.dasm
 
 bounce.bin: bounce.elf
-	@END=$$($(PREFIX)nm bounce.elf | awk '$$3=="_end"{print "0x"$$1}'); \
-	$(PREFIX)objcopy -O binary --pad-to=$$END bounce.elf bounce.bin
+	@EDATA=$$($(PREFIX)nm bounce.elf | awk '$$3=="_edata"{print "0x"$$1}'); \
+	END=$$($(PREFIX)nm bounce.elf | awk '$$3=="_end"{print "0x"$$1}'); \
+	$(PREFIX)objcopy -O binary bounce.elf bounce.data; \
+	python3 ../../../tools/mkexec.py bounce.data bounce.bin $$(($$END - $$EDATA)); \
+	rm -f bounce.data
 
 clean:
-	rm -f bounce.elf bounce.bin bounce.asm bounce.dasm bounce.map bounce.o *.o *.d
+	rm -f bounce.elf bounce.bin bounce.data bounce.asm bounce.dasm bounce.map bounce.o *.o *.d
 
 .PHONY: bounce clean
 

@@ -57,3 +57,39 @@ Z_MKSYSCALL(FS_CLOSE, k_fs_close)
 // close icon is clicked, the same way k_proc_run() (above) let wm
 // start one.
 Z_MKSYSCALL(PROC_KILL, k_proc_kill_syscall)
+// Directory creation / empty-file creation, previously reachable only
+// from sh.c (kernel code, links fs/fs.c directly) via its own `mkdir`
+// and `touch` commands. Added for the Scheme API's (mkdir ...) and
+// (touch-file ...) -- see docs/scheme_api.md's own "Files" section.
+// Thin wrappers over the existing fs_mkdir()/fs_touch() (sw/os/fs/fs.c),
+// following every convention the other FS_* handlers here already do.
+Z_MKSYSCALL(FS_MKDIR, k_fs_mkdir)
+Z_MKSYSCALL(FS_TOUCH, k_fs_touch)
+// Repositions an already-open chunked-I/O handle (Z_SYS_FS_OPEN_READ /
+// _OPEN_WRITE, see sw/common/zfs.h). Added for sw/apps/repl's `page`
+// command (a VT100 pager over files far too large to hold in memory --
+// see page.h): scrolling BACKWARDS needs to re-read a region that's
+// already behind the current read position, and every existing chunked
+// call only ever moves forward. Without this, a page-up in a
+// book-sized file would mean closing, reopening, and re-reading from
+// byte 0 every time.
+Z_MKSYSCALL(FS_SEEK, k_fs_seek)
+// A snapshot of the live process table, as DATA rather than as the
+// console-only printf() dump k_proc_dump() (sw/os/kernel.c) already
+// does for sh.c's `ps`. Added so the Scheme API's (ps) can return a
+// real list of lists a caller can filter/sort/act on -- see
+// docs/scheme_api.md's own "Processes" section. Same relationship
+// k_fs_list() has to fs_list_dir(): the print-only version stays
+// exactly as it is, this returns the same information to a caller.
+Z_MKSYSCALL(PROC_LIST, k_proc_list)
+// Likewise for the kernel's own memory pool (sw/os/mem.c) -- the data
+// behind k_mem_dump()/sh.c's `free`, returned instead of printed, so
+// the Scheme API's (free) can report the WHOLE picture (kernel pool +
+// this process's own Scheme/C heaps) rather than just the part a
+// process can see about itself.
+Z_MKSYSCALL(MEM_STATS, k_mem_stats)
+// Filesystem capacity -- fs_total()/fs_free() (sw/os/fs/fs.c) have
+// existed all along but were never reachable from anywhere: no syscall,
+// no shell command, nothing in Scheme. This exposes them, for `df` in
+// both sh.c and the Scheme API.
+Z_MKSYSCALL(FS_DF, k_fs_df)

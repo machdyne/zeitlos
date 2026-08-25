@@ -320,3 +320,94 @@ z_obj_t *k_fs_list(z_obj_t *args) {
 	return (&z_ok);
 
 }
+
+// -- mkdir / touch / seek --
+//
+// The first two are thin wrappers over fs_mkdir()/fs_touch()
+// (sw/os/fs/fs.c), which already do the real work and which sh.c's own
+// `mkdir`/`touch` commands have always used -- this just makes them
+// reachable from an ordinary app, the same way k_fs_unlink() did for
+// fs_unlink(). Both of those fs.c functions follow the SAME inverted
+// convention fs_unlink() does (0 on SUCCESS, non-zero on failure) --
+// see k_fs_unlink()'s own comment above, which spells out why that's
+// worth restating at every call site rather than trusting memory.
+//
+// Their unconditional printf() (inside fs.c) means an app-triggered
+// mkdir/touch also shows up on the serial console -- same visibility
+// every other fs.c operation already has, not new behavior introduced
+// here.
+
+z_obj_t *k_fs_mkdir(z_obj_t *args) {
+
+	z_fs_path_args_t *a = (z_fs_path_args_t *)args;
+
+	if (!a || !a->name) return (&z_fail);
+
+	return (fs_mkdir(a->name) == 0) ? (&z_ok) : (&z_fail);
+
+}
+
+z_obj_t *k_fs_touch(z_obj_t *args) {
+
+	z_fs_path_args_t *a = (z_fs_path_args_t *)args;
+
+	if (!a || !a->name) return (&z_fail);
+
+	return (fs_touch(a->name) == 0) ? (&z_ok) : (&z_fail);
+
+}
+
+// Repositions an open chunked-I/O handle. Same handle-table ownership
+// check every other chunked handler above performs, for the same
+// reason (see zfs.h's own "Ownership" note): a small integer handle is
+// trivially guessable, so one process must not be able to move another
+// process's file position out from under it.
+//
+// f_lseek() on a READ handle clamps to the file size rather than
+// failing when asked to go past EOF, which is exactly the behavior
+// sw/apps/repl's `page` wants for a "jump to end" -- the resulting
+// position comes back in a->pos so a caller that cares can see where
+// it actually landed. On a WRITE handle FatFs would instead EXTEND the
+// file, which is a real difference worth knowing about but not
+// something this handler needs to police: page only ever opens for
+// read, and a caller that opened for write and seeks past the end has
+// asked for exactly what FatFs does.
+z_obj_t *k_fs_seek(z_obj_t *args) {
+
+	z_fs_seek_args_t *a = (z_fs_seek_args_t *)args;
+	if (a) a->pos = 0;
+
+	if (!a || a->handle < 0 || a->handle >= Z_FS_MAX_OPEN) return (&z_fail);
+
+	if (!z_fs_handles[a->handle].used || z_fs_handles[a->handle].owner_pid != z_pid)
+		return (&z_fail);
+
+	FRESULT res = f_lseek(&z_fs_handles[a->handle].fil, (FSIZE_t)a->offset);
+	if (res != FR_OK) return (&z_fail);
+
+	a->pos = (uint32_t)f_tell(&z_fs_handles[a->handle].fil);
+
+	return (&z_ok);
+
+}
+
+// Filesystem capacity. Both numbers come straight from fs_total()/
+// fs_free() (sw/os/fs/fs.c), which wrap FatFs's f_getfree() and have
+// been sitting there unused since long before this syscall existed --
+// nothing had a way to call them. Each returns 0 on failure (no card,
+// not mounted, FatFs error), which this passes through unchanged: a
+// volume that genuinely reports 0 total is indistinguishable from one
+// that failed to answer, and neither is a state where a caller should
+// be told a capacity.
+z_obj_t *k_fs_df(z_obj_t *args) {
+
+	z_fs_df_args_t *a = (z_fs_df_args_t *)args;
+
+	if (!a) return (&z_fail);
+
+	a->total_kb = fs_total();
+	a->free_kb = fs_free();
+
+	return (&z_ok);
+
+}

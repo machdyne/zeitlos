@@ -5,6 +5,8 @@
 #include <stdbool.h>
 #include "zobj.h"
 #include "zmsg.h"
+#include "zproc.h"	// z_proc_info_t / z_mem_stats_args_t, used by the
+						// z_proc_list()/z_mem_stats() declarations below
 
 typedef uint32_t *(*z_kernel_ptr_t)(uint32_t, uint32_t *, uint32_t);
 
@@ -273,7 +275,54 @@ uint32_t z_proc_run(const char *name);
 // kernel. Added for sw/apps/wm's Z_WIN_FLAG_CLOSE_KILLS_OWNER
 // (sw/common/zwm.h) -- wm calling this on a window's owner_pid when
 // its titlebar close icon is clicked with that flag set.
-void z_proc_kill(uint32_t pid);
+//
+// Returns Z_OK/Z_FAIL (it returned void until the Scheme API's (kill
+// ...) needed a real answer -- see zeitlos.c). Existing callers that
+// ignore the value are unaffected and need no change.
+z_rv z_proc_kill(uint32_t pid);
+
+// snapshot of the live process table, and of the kernel memory pool --
+// the data behind sh.c's `ps` and `free`, returned rather than printed.
+// See sw/common/zproc.h for the structs and the full reasoning, and
+// zeitlos.c for these two wrappers' own contracts.
+//
+// Declared here rather than in zproc.h itself for the same reason
+// z_proc_run()/z_proc_kill() above are: this file is the established
+// home for app-facing syscall wrappers, while zproc.h stays a pure
+// shared-wire-format header includable from both sides (exactly the
+// split sw/common/zfs.h and sw/os/fsapi.h already use).
+uint32_t z_proc_list(z_proc_info_t *out, uint32_t max, uint32_t *truncated);
+bool z_mem_stats(z_mem_stats_args_t *out);
+
+// Optional redirect for stdout (fd 1 -- printf(), putchar(), anything
+// through the FILE* stdout). NULL by default: every byte goes to the
+// UART via _write(), exactly as it always has, and an app that never
+// touches this sees no change whatsoever.
+//
+// Exists because a process whose real user is at the far end of a
+// zport.h connection (sw/apps/repl, whose Scheme runs for someone
+// sitting in a `term` window) has its output land in the wrong place
+// entirely. `ms`'s printing procedures -- `display`, `write`, `print`,
+// `newline`, `gc`, and `dump` -- all write straight to stdout, so
+// running (dump) from `term` printed ~200 symbol names onto the serial
+// console and showed the user nothing at all.
+//
+// A hook here rather than patching those call sites: ms.c has 50+
+// scattered printf()/fputs()/putchar() calls with no output
+// abstraction of its own, so redirecting them individually would mean
+// a large diff against a submodule this project deliberately keeps
+// close to upstream (see docs/scheme.md). Catching it at the one place
+// every one of them already funnels through costs a single branch in
+// _write() and covers procedures nobody has written yet.
+//
+// `data` is NOT NUL-terminated and is only valid for the duration of
+// the call. The hook receives raw bytes with NO LF->CRLF expansion --
+// _write()'s own expansion is skipped when a hook is installed, since
+// only the hook knows what its transport wants. A hook must not itself
+// write to stdout: see repl.c's own implementation for the
+// buffer-then-flush structure that avoids re-entering this path.
+typedef void (*z_stdout_hook_t)(const char *data, uint32_t len);
+extern z_stdout_hook_t z_stdout_hook;
 
 // NOTE: app-facing filesystem access (fs_size()/fs_mallocfile()/
 // fs_write_file(), backed by the new Z_SYS_FS_SIZE/_READ/_WRITE
@@ -298,6 +347,16 @@ void z_proc_kill(uint32_t pid);
 #define VT100_CLEAR_HOME      "\e[;H"
 #define VT100_ERASE_SCREEN    "\e[J"
 #define VT100_ERASE_LINE      "\e[K"
+
+// SGR. `term`'s own VT100 emulator implements exactly one attribute --
+// reverse video (sw/common/zvt100.c's 'm' case, which handles 0/7/27
+// and ignores everything else) -- because that's the one a monochrome
+// framebuffer can actually represent; see zvt100.h's own header
+// comment. These two names exist so callers reach for the supported
+// attribute rather than hand-rolling an escape that will be silently
+// dropped. Added for sw/apps/repl's `page` status line.
+#define VT100_REVERSE         "\e[7m"
+#define VT100_ATTR_RESET      "\e[0m"
 
 #define CH_ESC	0x1b
 #define CH_LF	0x0a

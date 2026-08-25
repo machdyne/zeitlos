@@ -2,6 +2,7 @@
 #define ZFSAPP_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 /*
  * Zeitlos
@@ -107,5 +108,34 @@ int fs_write_chunk(int handle, const void *buf, int len);
 // path) -- see the "known limitation" note above on what happens if
 // you don't (a leaked slot in a small, bounded kernel-side table).
 int fs_close_handle(int handle);
+
+// creates a directory / an empty file. 1 on success, 0 on failure --
+// this file's own convention, which is the INVERSE of what the
+// kernel-native fs_mkdir()/fs_touch() (sw/os/fs/fs.c) return; the
+// translation happens inside these wrappers so no caller has to think
+// about it. Added alongside the Scheme API's (mkdir ...) and
+// (touch-file ...), see docs/scheme_api.md.
+int fs_mkdir(const char *path);
+int fs_touch(const char *path);
+
+// repositions an open handle from fs_open_read()/fs_open_write() to an
+// absolute byte offset. 1 on success, 0 on failure (bad/foreign
+// handle, or a FatFs-level error). Seeking past EOF on a read handle
+// is not a failure -- FatFs clamps to the file size and the next
+// fs_read_chunk() reports a clean 0-byte EOF. Added for sw/apps/repl's
+// `page`, which needs to scroll BACKWARDS through a file far too big
+// to hold in memory; every other chunked call only moves forward.
+int fs_seek(int handle, uint32_t offset);
+
+// filesystem capacity, both figures in KB (not bytes -- a 32GB card
+// overflows a uint32_t of bytes; see z_fs_df_args_t in zfs.h). Either
+// pointer may be NULL. Returns false if the syscall itself failed;
+// note that an unmounted or absent card reports 0/0 with a true
+// return, since that's a successful answer of "nothing there".
+//
+// Named fs_df() rather than fs_free() to avoid colliding with the
+// kernel-native fs_free() (sw/os/fs/fs.c) -- see zeitlos.h's own note
+// on exactly that class of collision.
+bool fs_df(uint32_t *total_kb, uint32_t *free_kb);
 
 #endif

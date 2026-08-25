@@ -36,10 +36,13 @@ hello_win.elf: $(OBJS)
 	$(PREFIX)objdump -S --disassemble hello_win.elf > hello_win.dasm
 
 hello_win.bin: hello_win.elf
-	@END=$$($(PREFIX)nm hello_win.elf | awk '$$3=="_end"{print "0x"$$1}'); \
-	$(PREFIX)objcopy -O binary --pad-to=$$END hello_win.elf hello_win.bin
+	@EDATA=$$($(PREFIX)nm hello_win.elf | awk '$$3=="_edata"{print "0x"$$1}'); \
+	END=$$($(PREFIX)nm hello_win.elf | awk '$$3=="_end"{print "0x"$$1}'); \
+	$(PREFIX)objcopy -O binary hello_win.elf hello_win.data; \
+	python3 ../../../tools/mkexec.py hello_win.data hello_win.bin $$(($$END - $$EDATA)); \
+	rm -f hello_win.data
 
 clean:
-	rm -f hello_win.elf hello_win.bin hello_win.asm hello_win.dasm hello_win.map *.o *.d
+	rm -f hello_win.elf hello_win.bin hello_win.data hello_win.asm hello_win.dasm hello_win.map *.o *.d
 
 .PHONY: hello_win clean

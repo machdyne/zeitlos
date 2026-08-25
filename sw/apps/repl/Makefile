@@ -4,8 +4,29 @@ ARCH = rv32i
 CC = $(PREFIX)gcc
 AS = $(PREFIX)as
 ASFLAGS = -march=$(ARCH) -mabi=ilp32
-CFLAGS = --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=ilp32
-LDFLAGS = -march=$(ARCH) -mabi=ilp32
+# -ffunction-sections/-fdata-sections + --gc-sections (below) let the
+# linker drop code and data nothing actually references. This is worth
+# real money here: sw/common is shared by every app, so each one links
+# whole objects for the sake of a fraction of them -- repl pulls in
+# zfont_data.o for the single font `text` uses and gets all four, and
+# zobj.o/zgfx.o/zstream.o are each used partially. Measured on this
+# app: ~7KB. wm and term save roughly twice that, since a larger share
+# of what they link is unreferenced.
+#
+# Set GC_SECTIONS=0 to turn this off. It's on by default because it's
+# a pure win on every build tested -- but section GC on a bare-metal
+# target can in principle drop something reachable only from assembly
+# or referenced solely by the linker script, and if an app starts
+# misbehaving in a way that smells like missing code, this is the
+# first thing to rule out.
+GC_SECTIONS ?= 1
+ifeq ($(GC_SECTIONS),1)
+GC_CFLAGS = -ffunction-sections -fdata-sections
+GC_LDFLAGS = -Wl,--gc-sections
+endif
+
+CFLAGS = --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=ilp32 $(GC_CFLAGS)
+LDFLAGS = -march=$(ARCH) -mabi=ilp32 $(GC_LDFLAGS)
 LDSCRIPT = ../../common/riscv-app.ld
 
 # sw/ext/ms -- Machdyne Scheme, vendored directly (already patched
@@ -61,7 +82,7 @@ TE_CFLAGS = -DEMBEDDED -DTE_HOST_IO \
 
 OBJS = zeitlos.o zobj.o zport.o zline.o zrepl.o zdns.o zfsapp.o zstream.o \
 	zgfx.o zfont_data.o zwin.o ms.o \
-	te.o te_bridge.o zapi.o repl.o
+	te.o te_bridge.o page.o zapi.o repl.o
 
 repl: repl.elf repl.bin
 
@@ -125,9 +146,20 @@ te.o: $(TE_DIR)/te.c $(TE_SUPPORT_DIR)/fs.h $(TE_SUPPORT_DIR)/te_host_io.h
 te_bridge.o: te_bridge.c te_bridge.h $(TE_SUPPORT_DIR)/te_host_io.h
 	$(CC) $(CFLAGS) -DTE_MAX_FILE_SIZE=$(TE_MAX_FILE_SIZE) -c te_bridge.c -o te_bridge.o
 
+# needs MS_SIZE_CFLAGS as of this revision -- the `free` procedure
+# reports MS_HEAP_SIZE, so this translation unit has to see the same
+# value ms.o and repl.o were built with. Same
+# one-variable-feeds-every-compile reasoning documented above.
 zapi.o: zapi.c zapi.h ms_api.h ../../common/zfsapp.h ../../common/zwin.h \
-	../../common/zdns.h ../../common/znet.h ../../common/zstream.h
-	$(CC) $(CFLAGS) -c zapi.c -o zapi.o
+	../../common/zdns.h ../../common/znet.h ../../common/zstream.h \
+	../../common/zproc.h
+	$(CC) $(CFLAGS) $(MS_SIZE_CFLAGS) -c zapi.c -o zapi.o
+
+# the `page` command's VT100 file viewer -- see page.h. No ms/te flags
+# needed: it talks to zport and zfsapp only, and knows nothing about
+# either Scheme or the editor.
+page.o: page.c page.h ../../common/zfsapp.h ../../common/zport.h
+	$(CC) $(CFLAGS) -c page.c -o page.o
 
 repl.o:
 	$(CC) $(CFLAGS) $(MS_SIZE_CFLAGS) -c repl.c -o repl.o
@@ -138,10 +170,13 @@ repl.elf: $(OBJS)
 	$(PREFIX)objdump -S --disassemble repl.elf > repl.dasm
 
 repl.bin: repl.elf
-	@END=$$($(PREFIX)nm repl.elf | awk '$$3=="_end"{print "0x"$$1}'); \
-	$(PREFIX)objcopy -O binary --pad-to=$$END repl.elf repl.bin
+	@EDATA=$$($(PREFIX)nm repl.elf | awk '$$3=="_edata"{print "0x"$$1}'); \
+	END=$$($(PREFIX)nm repl.elf | awk '$$3=="_end"{print "0x"$$1}'); \
+	$(PREFIX)objcopy -O binary repl.elf repl.data; \
+	python3 ../../../tools/mkexec.py repl.data repl.bin $$(($$END - $$EDATA)); \
+	rm -f repl.data
 
 clean:
-	rm -f repl.elf repl.bin repl.asm repl.dasm repl.map ms_stdlib.h *.o *.d
+	rm -f repl.elf repl.bin repl.data repl.asm repl.dasm repl.map ms_stdlib.h *.o *.d
 
 .PHONY: repl clean

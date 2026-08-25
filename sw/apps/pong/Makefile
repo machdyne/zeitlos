@@ -27,10 +27,13 @@ pong.elf: $(OBJS)
 	$(PREFIX)objdump -S --disassemble pong.elf > pong.dasm
 
 pong.bin: pong.elf
-	@END=$$($(PREFIX)nm pong.elf | awk '$$3=="_end"{print "0x"$$1}'); \
-	$(PREFIX)objcopy -O binary --pad-to=$$END pong.elf pong.bin
+	@EDATA=$$($(PREFIX)nm pong.elf | awk '$$3=="_edata"{print "0x"$$1}'); \
+	END=$$($(PREFIX)nm pong.elf | awk '$$3=="_end"{print "0x"$$1}'); \
+	$(PREFIX)objcopy -O binary pong.elf pong.data; \
+	python3 ../../../tools/mkexec.py pong.data pong.bin $$(($$END - $$EDATA)); \
+	rm -f pong.data
 
 clean:
-	rm -f pong.elf pong.bin pong.asm pong.dasm pong.map *.o *.d
+	rm -f pong.elf pong.bin pong.data pong.asm pong.dasm pong.map *.o *.d
 
 .PHONY: pong clean

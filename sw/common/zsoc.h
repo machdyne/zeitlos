@@ -56,6 +56,33 @@
 
 #define Z_CSR_MAGIC 0x5A454954u	// "ZEIT" -- see rtl/csrs.v
 
+// -- system clock --
+//
+// Fixed at 48MHz across every board. Not a per-board value and not
+// discoverable at runtime: 48 was chosen over an otherwise-rounder 50
+// specifically because it divides cleanly for a 1Mbaud UART, and
+// nothing in the current lineup has a reason to differ.
+//
+// NOTHING ON THIS SOC CAN MEASURE ITS OWN CLOCK. rtl/sysctl.v's
+// rtc_ctr (which generates the KTIMER interrupt) is clocked from
+// sys_clk, the same clock rdcycle counts -- so cycles-per-tick is
+// always exactly 65536 by construction, whatever the real frequency
+// is. Any "measured MHz" derived from those two is a tautology that
+// reports this constant back. The UART baud divisor is derived from
+// sys_clk too, so there is no independent time reference anywhere on
+// chip. If the PLL is ever misconfigured, the symptom is everything
+// running proportionally fast or slow with nothing reporting it --
+// which is exactly why this lives here as a stated assumption rather
+// than pretending to be a measurement.
+#define Z_SYSCLK_HZ 48000000u
+
+// KTIMER rate: rtc_ctr is a free-running 16-bit counter on sys_clk and
+// fires the interrupt on wrap, so this is exactly SYSCLK / 65536 --
+// 732.42Hz at 48MHz. The integer 732 used throughout the tree is that
+// truncated, a 0.06% error, which is immaterial for the timeouts and
+// delays it's used for.
+#define Z_TICK_HZ (Z_SYSCLK_HZ / 65536u)
+
 // -- feature bits -- KEEP IN SYNC with rtl/sysctl.v's CSR_FEATURES
 // localparam. Bit position is the only thing that has to match
 // between the two sides; there's no single shared source for both
@@ -81,6 +108,41 @@
 #define Z_FEATURE_ETH_RMII    (1u << 17)
 #define Z_FEATURE_LED_RGB     (1u << 18)
 #define Z_FEATURE_LED_DEBUG   (1u << 19)
+
+// -- feature table (sw/common/zsoc.c) --
+//
+// The human-readable half of the Z_FEATURE_* bits above, kept in the
+// same directory so that everything which has to track rtl/sysctl.v's
+// CSR_FEATURES lives in one place. See zsoc.c's own header comment.
+//
+// Data only -- no printing. A consumer that wants to display these
+// (k_soc_report(), sw/os/kernel.c) owns its own formatting; a shared
+// file pulling in printf() would be unusable from contexts without
+// stdio. Link sw/common/zsoc.c to use these; a translation unit that
+// only wants the inline helpers below needs no extra object.
+typedef enum {
+	Z_FEAT_GROUP_MEMORY = 0,
+	Z_FEAT_GROUP_GPU,
+	Z_FEAT_GROUP_INPUT,
+	Z_FEAT_GROUP_STORAGE,
+	Z_FEAT_GROUP_NETWORK,
+	Z_FEAT_GROUP_LED,
+	Z_FEAT_GROUP_COUNT
+} z_feat_group_t;
+
+typedef struct {
+	uint32_t	bit;	// one of the Z_FEATURE_* values above
+	const char	*name;	// short display name, e.g. "usb-hid"
+	uint8_t		group;	// a z_feat_group_t
+} z_feature_info_t;
+
+// Sorted by `group` -- see zsoc.c on why that matters to consumers.
+extern const z_feature_info_t z_soc_features[];
+extern const int z_soc_features_count;
+
+// Indexed by z_feat_group_t, padded to a common width for column
+// output.
+extern const char *const z_soc_feature_groups[];
 
 // true only if rtl/csrs.v is actually present in the running
 // bitstream -- see this file's own header comment for why every

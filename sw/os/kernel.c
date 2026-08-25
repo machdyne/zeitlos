@@ -24,6 +24,8 @@
 #include "logo.h"
 #include "fs/fs.h"
 #include "fsapi.h"
+#include "procapi.h"	// k_proc_list(), referenced by the syscall
+						// table built from syscalls.def below
 #include "../common/zsoc.h"
 
 // Z_PROCS_MAX now lives in kernel.h (msg.c needs it too)
@@ -175,7 +177,10 @@ z_obj_t *k_proc_run(z_obj_t *args) {
 	name[sizeof(name) - 1] = 0;
 
 	uint32_t pid = 0;
-	uint32_t size = fs_size(name);
+	// ZEXE-aware, same as sh.c's `run` -- image size is data + bss,
+	// which is not the file size for the new format (sw/common/zexec.h).
+	z_exec_info_t xi;
+	uint32_t size = fs_exec_info(name, &xi) ? 0 : xi.total;
 
 	// see kernel.h's z_proc_stack_size_for() comment -- the same
 	// shared decision sh.c's own `run`/`init` use, so launching
@@ -188,7 +193,7 @@ z_obj_t *k_proc_run(z_obj_t *args) {
 		pid = k_proc_create(size, stack_size);
 		if (pid) {
 			uint32_t base = k_proc_base(pid);
-			fs_load(base, name);
+			fs_load_exec(base, name, &xi);
 			k_proc_start(pid);
 		}
 	}
@@ -202,24 +207,197 @@ z_obj_t *k_proc_run(z_obj_t *args) {
 
 // --
 
+
+
+// -- SOC feature inventory --
+//
+// rtl/csrs.v exposes a bitmap of what was actually synthesized into the
+// running bitstream (sw/common/zsoc.h's Z_FEATURE_* bits). Printing it
+// at boot turns a whole class of confusing bring-up failure into a
+// glance at the log: "the network doesn't work" on a board whose
+// bitstream simply has no ethernet PHY looks identical, from software,
+// to a driver bug -- until the boot log says which one it is.
+//
+// Grouped rather than dumped as a flat list or a hex word: the groups
+// are how someone actually reasons about a board ("does this one have a
+// GPU? does it have storage?"), and a raw 0x000c53f7 helps nobody.
+//
+// The bit/name/group table itself lives in sw/common/zsoc.c, next to
+// the Z_FEATURE_* defines it mirrors, so everything that has to track
+// rtl/sysctl.v's CSR_FEATURES is in one directory. This function owns
+// only the layout.
+static void k_soc_report(void) {
+
+	if (!z_soc_csrs_present()) {
+		// An older bitstream has nothing mapped at 0x7000_0000 at all.
+		// Say "unknown" rather than printing an empty feature list --
+		// see z_soc_has_feature()'s own comment in zsoc.h on why
+		// "can't confirm" is a genuinely different answer from "no".
+		printf(" - soc: features unknown (bitstream predates rtl/csrs.v)\n");
+		return;
+	}
+
+	printf(" - soc features:\n");
+
+	int n = z_soc_features_count;
+	int cur = -1;
+	bool any_on_line = false;
+
+	for (int i = 0; i < n; i++) {
+
+		if (!z_soc_has_feature(z_soc_features[i].bit)) continue;
+
+		if (z_soc_features[i].group != cur) {
+			if (any_on_line) printf("\n");
+			printf("     %s ", z_soc_feature_groups[z_soc_features[i].group]);
+			cur = z_soc_features[i].group;
+			any_on_line = true;
+		}
+
+		printf("%s ", z_soc_features[i].name);
+
+	}
+
+	if (any_on_line) printf("\n");
+	else printf("     (none reported)\n");
+
+}
+
+
+// -- CPU speed report --
+//
+// picorv32 is instantiated with ENABLE_COUNTERS/ENABLE_COUNTERS64 at
+// their defaults of 1 (rtl/sysctl.v overrides neither), so rdcycle and
+// rdinstret are real, free-running hardware counters. Only the low 32
+// bits are read: the benchmark window below is ~50ms, which at any
+// plausible clock is a few million counts, nowhere near a wrap.
+static inline uint32_t rd_cycle(void) {
+	uint32_t v; __asm__ volatile ("rdcycle %0" : "=r"(v)); return v;
+}
+static inline uint32_t rd_instret(void) {
+	uint32_t v; __asm__ volatile ("rdinstret %0" : "=r"(v)); return v;
+}
+
+// how long to measure for, in KTIMER ticks (~732Hz, so ~50ms). Long
+// enough that the tick quantisation (one tick = ~1.4ms, so ~2.7% at
+// this window) doesn't dominate, short enough to be invisible in the
+// boot.
+#define CPU_BENCH_TICKS ((Z_TICK_HZ * 50) / 1000)	// ~50ms
+
+// Measures and prints the CPU's instruction rate.
+//
+// The clock is NOT measured -- it is Z_SYSCLK_HZ, a stated constant
+// (sw/common/zsoc.h, which explains why measuring it is impossible on
+// this SOC: the KTIMER and rdcycle share sys_clk, so cycles-per-tick is
+// always exactly 65536 no matter what the PLL is actually doing). An
+// earlier version of this function derived "MHz" from those two and
+// printed a number that would have read ~48 on a board clocked at 24.
+//
+// So MIPS comes from the two hardware counters and the stated clock --
+// di/dc is the real, measured part, Z_SYSCLK_HZ scales it -- rather
+// than from elapsed wall time, which would have inherited the same
+// assumption twice over. IPC (di/dc alone) is the one figure here that
+// depends on no assumption at all.
+//
+// MIPS is measured over a deliberately plain integer loop. Worth being
+// honest about what that means: rdinstret counts instructions retired
+// whatever they are, so a figure measured while polling a UART register
+// would mostly report Wishbone stalls, not compute. This loop touches
+// no peripherals, so what comes out is a compute-bound best case, not
+// an average over real work. IPC alongside it makes the CPI visible
+// (picorv32 is a multi-cycle design, so expect well under 1).
+//
+// Must be called AFTER reg_kernel is set: z_kernel_ticks only advances
+// once the IRQ handler is installed and KTIMER is firing. The cycle
+// counter is independent of that, so it doubles as an escape hatch --
+// if ticks never advance, this gives up and says so rather than
+// spinning forever and hanging the boot.
+static void k_cpu_report(void) {
+
+	uint32_t guard = rd_cycle();
+	uint32_t t0 = z_kernel_ticks;
+
+	while (z_kernel_ticks == t0) {
+		// ~4s at any sane clock -- see this function's own comment
+		if (rd_cycle() - guard > 200000000u) {
+			printf(" - cpu: ktimer not running, skipping speed check\n");
+			return;
+		}
+	}
+
+	volatile uint32_t sink = 0;
+	uint32_t x = 12345;
+
+	t0 = z_kernel_ticks;
+	uint32_t i0 = rd_instret();
+	uint32_t c0 = rd_cycle();
+
+	while (z_kernel_ticks - t0 < CPU_BENCH_TICKS) {
+		// plain rv32i integer work -- no multiply (ENABLE_MUL is 0 in
+		// rtl/sysctl.v, so a `*` here would become a libgcc call and
+		// measure that instead), no memory beyond the loop itself.
+		for (int i = 0; i < 64; i++) {
+			x += i;
+			x ^= x >> 7;
+			x += x << 3;
+		}
+		sink = x;
+	}
+
+	uint32_t di = rd_instret() - i0;
+	uint32_t dc = rd_cycle() - c0;
+	(void)sink;
+
+	if (!dc) return;
+
+	// Integer math throughout -- no float in kernel code.
+	//
+	// MIPS x100 = (di / dc) * (Z_SYSCLK_HZ / 1e6) * 100, rearranged to
+	// divide FIRST so nothing overflows: di * 4800 would be ~1.2e10 at
+	// this window size, well past 32 bits. Dividing dc by the scale
+	// factor instead costs ~0.02% precision and stays in range.
+	uint32_t scale = (Z_SYSCLK_HZ / 1000000u) * 100u;	// 4800 at 48MHz
+	uint32_t denom = dc / scale;
+	if (!denom) return;
+
+	uint32_t mips_x100 = di / denom;
+	uint32_t ipc_x100 = (di / 100) * 10000 / (dc / 100) / 100;
+
+	printf(" - cpu: %ld.%02ld MIPS @ %ld MHz (%ld.%02ld IPC)\n",
+		(long)(mips_x100 / 100), (long)(mips_x100 % 100),
+		(long)(Z_SYSCLK_HZ / 1000000u),
+		(long)(ipc_x100 / 100), (long)(ipc_x100 % 100));
+
+}
+
+
 int main(void) {
 
-	// boot splash -- VRAM is plain memory-mapped hardware with no
+	// boot splash -- the image lives in flash (see logo.h) and is
+	// copied straight to VRAM, so this costs no main memory at all.
+	// VRAM is plain memory-mapped hardware with no
 	// init of its own needed, so this can run before literally
 	// anything else (uart/hid/mem init below), the earliest the OS
 	// can put anything on screen. Stays up until something else
 	// writes over it -- normally wm's own startup clear_screen()
 	// call, whenever the user eventually runs wm; nothing here
 	// coordinates that handoff explicitly, it's just whichever writes
-	// to VRAM last. Flip to true if it displays with foreground/
-	// background swapped on real hardware -- see logo.h's own comment.
-	z_boot_logo_show(false);
+	// to VRAM last. If it ever displays with foreground/background
+	// swapped, regenerate the flashed image with pad_logo.py --invert
+	// rather than changing anything here -- see logo.h's own comment.
+	z_boot_logo_show();
 
 	kprint("\nZEITLOS\n");
 
 	// init uart
 	z_uart_init();
 	printf(" - uart initialized.\n");
+
+	// straight after uart, so the hardware inventory is the first thing
+	// in the log -- CSRs are plain memory-mapped registers needing no
+	// init of their own, so this can run as early as there is somewhere
+	// to print to.
+	k_soc_report();
 
 	// init usb hid keyboard event queue
 	z_hid_init();
@@ -280,6 +458,11 @@ int main(void) {
 	// set the kernel register so the irq handler knows who to call
 	reg_kernel = (uint32_t)(uintptr_t)z_kernel_entry;
 	printf(" - kernel active.\n");
+
+	// now that KTIMER is actually firing (z_kernel_ticks only advances
+	// once reg_kernel above is set), the CPU speed check can run --
+	// see k_cpu_report()'s own comment for what the numbers mean.
+	k_cpu_report();
 
 //	while (1) {
 //		if ((z_kernel_ticks % 100) == 0) z_kernel_dump();

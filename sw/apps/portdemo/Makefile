@@ -30,10 +30,13 @@ portdemo.elf: $(OBJS)
 	$(PREFIX)objdump -S --disassemble portdemo.elf > portdemo.dasm
 
 portdemo.bin: portdemo.elf
-	@END=$$($(PREFIX)nm portdemo.elf | awk '$$3=="_end"{print "0x"$$1}'); \
-	$(PREFIX)objcopy -O binary --pad-to=$$END portdemo.elf portdemo.bin
+	@EDATA=$$($(PREFIX)nm portdemo.elf | awk '$$3=="_edata"{print "0x"$$1}'); \
+	END=$$($(PREFIX)nm portdemo.elf | awk '$$3=="_end"{print "0x"$$1}'); \
+	$(PREFIX)objcopy -O binary portdemo.elf portdemo.data; \
+	python3 ../../../tools/mkexec.py portdemo.data portdemo.bin $$(($$END - $$EDATA)); \
+	rm -f portdemo.data
 
 clean:
-	rm -f portdemo.elf portdemo.bin portdemo.asm portdemo.dasm portdemo.map *.o *.d
+	rm -f portdemo.elf portdemo.bin portdemo.data portdemo.asm portdemo.dasm portdemo.map *.o *.d
 
 .PHONY: portdemo clean

@@ -5,6 +5,7 @@
 
 #include "fatfs/ff.h"
 #include "fs.h"
+#include "../../common/zexec.h"
 
 FATFS sdvol0;
 
@@ -292,5 +293,93 @@ void fs_list_dir(char *path) {
 	}
 
 	return;
+
+}
+
+// -- Zeitlos executable format (sw/common/zexec.h) --
+//
+// fs_load() above loads a file verbatim and knows nothing about what
+// is in it. These two understand the ZEXE header: bss is a number to
+// be memset() rather than a region of zeros to be read off the card,
+// which is where the load-time saving comes from.
+//
+// Split into inspect-then-load, not one call, because the caller needs
+// the image size BEFORE it can allocate: k_proc_create() has to be
+// handed data_size + bss_size, and only then is there a base address
+// to load into.
+
+// Reads and parses the header. Returns 0 on success. A file with no
+// magic is not an error -- it reports as a legacy raw binary, which is
+// exactly right for an old --pad-to image whose bss is already present
+// as zeros (see z_exec_parse()).
+int fs_exec_info(char *path, z_exec_info_t *info) {
+
+	FIL f;
+	FRESULT res;
+	UINT br = 0;
+	uint8_t hdr[Z_EXEC_HEADER_SIZE];
+
+	if (!path || !info) return 1;
+
+	res = f_open(&f, path, FA_READ | FA_OPEN_EXISTING);
+	if (res != FR_OK) return 1;
+
+	uint32_t sz = (uint32_t)f_size(&f);
+
+	res = f_read(&f, hdr, Z_EXEC_HEADER_SIZE, &br);
+	f_close(&f);
+
+	if (res != FR_OK) return 1;
+
+	return z_exec_parse(hdr, (uint32_t)br, sz, info);
+
+}
+
+// Loads the data section to `dst` and zeroes the bss immediately after
+// it. `info` must come from fs_exec_info() on the same file.
+//
+// The bss memset() is the entire point of the format: for `repl` that
+// is ~110KB that used to be read from the SD card one 1KB block at a
+// time and is now a single memset over RAM.
+int fs_load_exec(uint32_t dst, char *path, const z_exec_info_t *info) {
+
+	FIL f;
+	FRESULT res;
+	UINT br;
+
+	char buf[1024];
+	char *dst_ptr = (char *)dst;
+
+	if (!path || !info) return 1;
+
+	res = f_open(&f, path, FA_READ | FA_OPEN_EXISTING);
+	if (res != FR_OK) return 1;
+
+	// skip the header -- legacy files have data_off 0, so this is a
+	// no-op for them and the same code path serves both formats.
+	if (info->data_off) {
+		res = f_lseek(&f, info->data_off);
+		if (res != FR_OK) { f_close(&f); return 1; }
+	}
+
+	uint32_t left = info->data_size;
+
+	while (left) {
+		uint32_t n = (left > sizeof(buf)) ? (uint32_t)sizeof(buf) : left;
+		res = f_read(&f, buf, n, &br);
+		if (res != FR_OK || br != n) { f_close(&f); return 1; }
+		memcpy(dst_ptr, buf, n);
+		dst_ptr += n;
+		left -= n;
+	}
+
+	f_close(&f);
+
+	// Nothing else zeroes .bss on this OS -- there is no crt0 doing it,
+	// which is why the old format shipped it as literal zeros in the
+	// file. Doing it here is what makes dropping them safe.
+	if (info->bss_size) memset(dst_ptr, 0, info->bss_size);
+
+	return 0;
 
 }

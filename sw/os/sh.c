@@ -16,6 +16,9 @@
 #include "../common/zdns.h"
 #include "kernel.h"
 #include "mem.h"
+#include "uart.h"
+#include "../common/zsoc.h"	// Z_TICK_HZ	// k_uart_getc()/k_uart_rx_empty() -- see
+					// boot_cancel_requested() below
 #include "fs/fs.h"
 #include "fs/fatfs/ff.h"
 #include "msg.h"
@@ -105,6 +108,72 @@ static uint32_t next_tftp_tag(void) {
 
 // --
 
+
+
+// How long to wait for the user to cancel the init script, and which
+// key does it. ~500ms at the KTIMER's ~732Hz -- long enough to catch a
+// deliberate keypress (and a held key repeats, so it's forgiving),
+// short enough that nobody notices it on a normal boot.
+#define BOOT_CANCEL_TICKS  ((Z_TICK_HZ * 500) / 1000)
+#define BOOT_CANCEL_KEY    0x1b   // ESC
+
+// Gives the user a brief window to stop the graphical environment from
+// starting, the same way sw/bios/bios.c's own AUTOLOAD_CNT loop lets a
+// keypress stop the BIOS from autoloading the kernel. Returns true if
+// init() should be skipped.
+//
+// Why this exists: once wm starts it clears the screen and takes over,
+// and if something in the graphical stack is broken (a bad wm build, an
+// app that wedges, a display that shows nothing) there was no way back
+// to the serial console short of reflashing. This is the escape hatch.
+// The shell prompt is still there afterwards, so `init` can be run by
+// hand once whatever it was is sorted out.
+//
+// SERIAL CONSOLE ONLY, deliberately. k_uart_getc()/k_uart_rx_empty()
+// (sw/os/uart.h) read the UART and nothing else -- the USB keyboard
+// goes through an entirely separate path (z_hid_read_key(), sw/os/hid.c)
+// which is not polled here. That's the right split: this is a recovery
+// mechanism for when the graphical side is what's broken, so it should
+// depend on as little of the system as possible, and the console is the
+// one interface guaranteed to work when the display isn't. It also
+// means a stray keypress on the USB keyboard during boot can't silently
+// leave someone at a bare shell wondering where their desktop went.
+//
+// Side benefit worth knowing: the 500ms this costs every boot is also
+// 500ms longer that the flash-backed boot splash (sw/os/logo.h) stays
+// on screen before wm's clear_screen() wipes it -- which on a monitor
+// that takes a moment to sync is the difference between seeing it and
+// not.
+static bool boot_cancel_requested(void) {
+
+	printf("starting init in 500ms -- press ESC to cancel ... ");
+	fflush(stdout);
+
+	uint32_t start = z_uptime_ticks();
+	bool cancel = false;
+
+	while (z_uptime_ticks() - start < BOOT_CANCEL_TICKS) {
+
+		if (k_uart_rx_empty()) continue;
+
+		// Anything OTHER than ESC is deliberately discarded rather than
+		// treated as a cancel: line noise, or a stray byte left in the
+		// FIFO from whatever the user typed at the BIOS prompt, should
+		// not silently skip the desktop. One specific key, so cancelling
+		// is always something you meant to do.
+		if (k_uart_getc() == BOOT_CANCEL_KEY) {
+			cancel = true;
+			break;
+		}
+
+	}
+
+	printf(cancel ? "cancelled.\n" : "\n");
+
+	return cancel;
+
+}
+
 void sh(void) {
 
    char buffer[256];
@@ -137,7 +206,10 @@ void sh(void) {
 	// auto-start the graphical environment by default -- see
 	// wait_for_apps_ready()'s own comment above for why this polls
 	// rather than just calling init() immediately after fs_mount().
-	if (wait_for_apps_ready()) {
+	if (boot_cancel_requested()) {
+		printf("init: cancelled -- run `init` to start the graphical "
+			"environment manually\n");
+	} else if (wait_for_apps_ready()) {
 		init();
 	} else {
 		printf("init: apps not found on filesystem after %lus, "
@@ -460,12 +532,22 @@ void sh(void) {
 		// CREATE A PROCESS
 		else if (!strncmp(buffer, "run", cmdlen)) {
 			arg = get_arg(buffer, 1);
-			uint32_t size = fs_size(arg);
-			if (!size) {
+			// ZEXE-aware: the image size is data + bss, which for the
+			// new format is NOT the file size (see sw/common/zexec.h).
+			// Legacy raw binaries report bss 0 and total == file size,
+			// so this is the same number it always was for them.
+			z_exec_info_t xi;
+			if (fs_exec_info(arg, &xi)) {
+				printf("file not found, or not a usable executable\n");
+				continue;
+			}
+			if (!xi.total) {
 				printf("file not found/empty\n");
 				continue;
 			}
-			printf("creating process (file: %s size: %ld)\n", arg, size);
+			uint32_t size = xi.total;
+			printf("creating process (file: %s size: %ld%s)\n", arg,
+				(long)size, xi.is_zexe ? "" : " raw");
 			fflush(stdout);
 			// see kernel.h's z_proc_stack_size_for() comment -- both
 			// `repl` and `net` are zport.h providers with a confirmed
@@ -483,7 +565,7 @@ void sh(void) {
 			uint32_t base = k_proc_base(pid);
 			printf(" - base: %lx\n", base);
 			printf(" - loading file\n");
-			fs_load(base, arg);
+			fs_load_exec(base, arg, &xi);
 			printf(" - starting process\n");
 			k_proc_start(pid);
 
@@ -544,6 +626,24 @@ void sh(void) {
 			k_mem_dump();
 		}
 
+		// DISPLAY FILESYSTEM CAPACITY -- the SD card, as opposed to
+		// `free` just above, which is main memory. fs_total()/fs_free()
+		// (sw/os/fs/fs.c) have existed since long before this command
+		// and were simply never called by anything; both report KB and
+		// both return 0 on any failure (no card, not mounted), which is
+		// why "not mounted" and "empty" read the same here.
+		else if (!strncmp(buffer, "df", cmdlen)) {
+			uint32_t total = fs_total();
+			uint32_t freek = fs_free();
+			if (!total) {
+				printf("no filesystem mounted\n");
+			} else {
+				printf(" total: %6ld KB\n", (long)total);
+				printf("  used: %6ld KB\n", (long)(total - freek));
+				printf("  free: %6ld KB\n", (long)freek);
+			}
+		}
+
 	}
 
 }
@@ -563,7 +663,8 @@ void init(void) {
 	// wm:
 
 	printf("starting wm\n");
-	uint32_t size_wm = fs_size("wm");
+	z_exec_info_t xi_wm;
+	uint32_t size_wm = fs_exec_info("wm", &xi_wm) ? 0 : xi_wm.total;
 	if (!size_wm) {
 		printf("init: wm binary not found\n");
 		return;
@@ -574,7 +675,7 @@ void init(void) {
 		return;
 	}
 	uint32_t base_wm = k_proc_base(pid_wm);
-	fs_load(base_wm, "wm");
+	fs_load_exec(base_wm, "wm", &xi_wm);
 	k_proc_start(pid_wm);
 	printf("init: wm started as pid %ld\n", pid_wm);
 
@@ -598,7 +699,8 @@ void init(void) {
 	// rest of this script, unlike wm's.
 
 	printf("starting net\n");
-	uint32_t size_net = fs_size("net");
+	z_exec_info_t xi_net;
+	uint32_t size_net = fs_exec_info("net", &xi_net) ? 0 : xi_net.total;
 	if (!size_net) {
 		printf("init: net binary not found (non-fatal)\n");
 	} else {
@@ -607,7 +709,7 @@ void init(void) {
 			printf("init: unable to create net process (non-fatal)\n");
 		} else {
 			uint32_t base_net = k_proc_base(pid_net);
-			fs_load(base_net, "net");
+			fs_load_exec(base_net, "net", &xi_net);
 			k_proc_start(pid_net);
 			printf("init: net started as pid %ld\n", pid_net);
 		}
@@ -631,7 +733,8 @@ void init(void) {
 	// for testing the port protocol in isolation from repl.
 
 	printf("starting repl\n");
-	uint32_t size_repl = fs_size("repl");
+	z_exec_info_t xi_repl;
+	uint32_t size_repl = fs_exec_info("repl", &xi_repl) ? 0 : xi_repl.total;
 	if (!size_repl) {
 		printf("init: repl binary not found (non-fatal -- term will "
 			"fall back to local echo)\n");
@@ -643,7 +746,7 @@ void init(void) {
 		return;
 	}
 	uint32_t base_repl = k_proc_base(pid_repl);
-	fs_load(base_repl, "repl");
+	fs_load_exec(base_repl, "repl", &xi_repl);
 	k_proc_start(pid_repl);
 	printf("init: repl started as pid %ld\n", pid_repl);
 
@@ -759,6 +862,7 @@ void sh_help(void) {
 	printf(" init               start wm, net, and repl (runs automatically at boot)\n");
 	printf(" kill <pid>        kill a process\n");
 	printf(" ps                display a process snapshot\n");
+	printf(" df                display filesystem capacity\n");
 	printf(" pr                display the pid name registry\n");
 	printf(" ks                display a kernel snapshot\n");
 	printf(" cls               clear framebuffer\n");

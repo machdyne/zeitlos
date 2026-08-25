@@ -4,8 +4,19 @@ ARCH = rv32i
 CC = $(PREFIX)gcc
 AS = $(PREFIX)as
 ASFLAGS = -march=$(ARCH) -mabi=ilp32
-CFLAGS = --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=ilp32 -DZ_GFX_HW_BLIT
-LDFLAGS = -march=$(ARCH) -mabi=ilp32
+# See sw/apps/repl/Makefile for the full reasoning behind these two --
+# in short, sw/common is shared by every app, so each links whole
+# objects for the sake of a fraction of them, and section GC drops the
+# rest. Measured saving on this app is noted in docs/scheme_api.md's
+# memory-budget section. Set GC_SECTIONS=0 to disable.
+GC_SECTIONS ?= 1
+ifeq ($(GC_SECTIONS),1)
+GC_CFLAGS = -ffunction-sections -fdata-sections
+GC_LDFLAGS = -Wl,--gc-sections
+endif
+
+CFLAGS = --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=ilp32 -DZ_GFX_HW_BLIT $(GC_CFLAGS)
+LDFLAGS = -march=$(ARCH) -mabi=ilp32 $(GC_LDFLAGS)
 LDSCRIPT = ../../common/riscv-app.ld
 
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zkbd.o dock_icons.o win_icons.o wm.o
@@ -62,10 +73,13 @@ wm.elf: $(OBJS)
 	$(PREFIX)objdump -S --disassemble wm.elf > wm.dasm
 
 wm.bin: wm.elf
-	@END=$$($(PREFIX)nm wm.elf | awk '$$3=="_end"{print "0x"$$1}'); \
-	$(PREFIX)objcopy -O binary --pad-to=$$END wm.elf wm.bin
+	@EDATA=$$($(PREFIX)nm wm.elf | awk '$$3=="_edata"{print "0x"$$1}'); \
+	END=$$($(PREFIX)nm wm.elf | awk '$$3=="_end"{print "0x"$$1}'); \
+	$(PREFIX)objcopy -O binary wm.elf wm.data; \
+	python3 ../../../tools/mkexec.py wm.data wm.bin $$(($$END - $$EDATA)); \
+	rm -f wm.data
 
 clean:
-	rm -f wm.elf wm.bin wm.asm wm.dasm wm.map *.o *.d
+	rm -f wm.elf wm.bin wm.data wm.asm wm.dasm wm.map *.o *.d
 
 .PHONY: wm clean

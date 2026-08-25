@@ -4,8 +4,19 @@ ARCH = rv32i
 CC = $(PREFIX)gcc
 AS = $(PREFIX)as
 ASFLAGS = -march=$(ARCH) -mabi=ilp32
-CFLAGS = --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=ilp32 -DZ_GFX_HW_BLIT
-LDFLAGS = -march=$(ARCH) -mabi=ilp32
+# See sw/apps/repl/Makefile for the full reasoning behind these two --
+# in short, sw/common is shared by every app, so each links whole
+# objects for the sake of a fraction of them, and section GC drops the
+# rest. Measured saving on this app is noted in docs/scheme_api.md's
+# memory-budget section. Set GC_SECTIONS=0 to disable.
+GC_SECTIONS ?= 1
+ifeq ($(GC_SECTIONS),1)
+GC_CFLAGS = -ffunction-sections -fdata-sections
+GC_LDFLAGS = -Wl,--gc-sections
+endif
+
+CFLAGS = --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=ilp32 -DZ_GFX_HW_BLIT $(GC_CFLAGS)
+LDFLAGS = -march=$(ARCH) -mabi=ilp32 $(GC_LDFLAGS)
 LDSCRIPT = ../../common/riscv-app.ld
 
 # which font to build against -- e.g. `make term FONT=z_font_6x12`.
@@ -52,10 +63,13 @@ term.elf: $(OBJS)
 	$(PREFIX)objdump -S --disassemble term.elf > term.dasm
 
 term.bin: term.elf
-	@END=$$($(PREFIX)nm term.elf | awk '$$3=="_end"{print "0x"$$1}'); \
-	$(PREFIX)objcopy -O binary --pad-to=$$END term.elf term.bin
+	@EDATA=$$($(PREFIX)nm term.elf | awk '$$3=="_edata"{print "0x"$$1}'); \
+	END=$$($(PREFIX)nm term.elf | awk '$$3=="_end"{print "0x"$$1}'); \
+	$(PREFIX)objcopy -O binary term.elf term.data; \
+	python3 ../../../tools/mkexec.py term.data term.bin $$(($$END - $$EDATA)); \
+	rm -f term.data
 
 clean:
-	rm -f term.elf term.bin term.asm term.dasm term.map *.o *.d
+	rm -f term.elf term.bin term.data term.asm term.dasm term.map *.o *.d
 
 .PHONY: term clean

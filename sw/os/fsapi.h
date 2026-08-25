@@ -119,6 +119,26 @@ z_obj_t *k_fs_list(z_obj_t *args);
 // chunked file I/O -- see zfs.h's own comment for the full design
 // writeup (why a kernel-side handle table, ownership-by-pid, the
 // known limitation on a crashed process's handles).
+// mkdir/touch: previously sh.c-only (it links fs/fs.c directly), now
+// reachable from any app -- added for the Scheme API's (mkdir ...) and
+// (touch-file ...), see docs/scheme_api.md. Both are thin wrappers over
+// the existing fs_mkdir()/fs_touch(), same relationship k_fs_unlink()
+// has to fs_unlink(). Args are z_fs_path_args_t (sw/common/zfs.h).
+z_obj_t *k_fs_mkdir(z_obj_t *args);
+z_obj_t *k_fs_touch(z_obj_t *args);
+
+// repositions an open chunked handle -- args are z_fs_seek_args_t.
+// Added for sw/apps/repl's `page`, whose backward scrolling needs to
+// re-read regions already behind the current position; every other
+// chunked call only ever moves forward. See k_fs_seek()'s own comment
+// in fsapi.c for the EOF-clamping behavior.
+z_obj_t *k_fs_seek(z_obj_t *args);
+
+// filesystem capacity -- args are z_fs_df_args_t (sw/common/zfs.h),
+// both figures in KB. Thin wrapper over the long-existing but
+// previously unreachable fs_total()/fs_free().
+z_obj_t *k_fs_df(z_obj_t *args);
+
 z_obj_t *k_fs_open_write(z_obj_t *args);
 z_obj_t *k_fs_open_read(z_obj_t *args);
 z_obj_t *k_fs_read_chunk(z_obj_t *args);

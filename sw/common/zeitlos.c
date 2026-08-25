@@ -223,12 +223,75 @@ uint32_t z_proc_run(const char *name) {
 }
 
 // kills another process by pid -- see zeitlos.h's own comment.
-void z_proc_kill(uint32_t pid) {
+//
+// Returns Z_OK/Z_FAIL as of this revision (it used to return void, and
+// simply discarded what the syscall already told it). Widening a void
+// return is source-compatible in both directions -- every existing
+// call site (sw/apps/wm's close-icon handling) ignores the value and
+// still compiles unchanged -- and the Scheme API's (kill ...) wants a
+// real #t/#f rather than an unconditional "sure, probably" (see
+// docs/scheme_api.md).
+z_rv z_proc_kill(uint32_t pid) {
 	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
 	z_obj_t obj;
 	obj.type = Z_UINT32;
 	obj.val.uint32 = pid;
-	z_kernel_ptr(Z_SYS_PROC_KILL, (uint32_t *)&obj, 0);
+	z_obj_t *rv = (z_obj_t *)z_kernel_ptr(Z_SYS_PROC_KILL, (uint32_t *)&obj, 0);
+	return (rv && rv->val.uint32 == Z_OK) ? Z_OK : Z_FAIL;
+}
+
+// fills `out` with a snapshot of the live process table -- see
+// sw/common/zproc.h for the entry shape and why this exists. Returns
+// how many entries were written (0 is a legitimate answer for an
+// unusable request, not just an empty table -- check the return of
+// this against `max` plus `*truncated` if the distinction matters).
+//
+// `truncated` may be NULL if the caller doesn't care; when non-NULL
+// it's set to 1 if `max` cut the listing short. Sized entirely by the
+// caller: there's no allocation anywhere in this path, on either side
+// of the syscall, which is what keeps it usable from a process whose
+// heap is already under pressure -- exactly the situation someone
+// typing `ps` is most likely to be in.
+uint32_t z_proc_list(z_proc_info_t *out, uint32_t max, uint32_t *truncated) {
+
+	if (truncated) *truncated = 0;
+	if (!out || !max) return 0;
+
+	z_proc_list_args_t args;
+	args.out = out;
+	args.max = max;
+	args.count = 0;
+	args.truncated = 0;
+
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_obj_t *rv = (z_obj_t *)z_kernel_ptr(Z_SYS_PROC_LIST, (uint32_t *)&args, 0);
+
+	if (!rv || rv->val.uint32 != Z_OK) return 0;
+
+	if (truncated) *truncated = args.truncated;
+
+	return args.count;
+
+}
+
+// fills `out` with the kernel memory pool's current state -- the same
+// numbers sh.c's `free` prints, in bytes. true on success.
+//
+// This is the KERNEL POOL (k_mem_alloc(), sw/os/mem.c): the blocks
+// whole processes get carved out of. It says nothing about how much of
+// its OWN block a given process has consumed via malloc()/sbrk() --
+// that's a separate number, visible to a process about itself only,
+// and conflating the two is easy enough that sw/apps/repl's (free)
+// deliberately reports both under clearly different names.
+bool z_mem_stats(z_mem_stats_args_t *out) {
+
+	if (!out) return false;
+
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_obj_t *rv = (z_obj_t *)z_kernel_ptr(Z_SYS_MEM_STATS, (uint32_t *)out, 0);
+
+	return (rv && rv->val.uint32 == Z_OK);
+
 }
 
 // --
@@ -329,8 +392,26 @@ void readline(char *buf, int maxlen) {
 
 }
 
+// Optional redirect for whatever this process writes to stdout -- see
+// z_stdout_hook's own comment in zeitlos.h. NULL (the default, and the
+// only possibility until sw/apps/repl started using it) means every
+// byte goes to the UART exactly as it always has.
+z_stdout_hook_t z_stdout_hook = NULL;
+
 ssize_t _write(int fd, const void *ptr, size_t len)
 {
+	// fd 1 only. stderr (fd 2) deliberately stays on the UART even
+	// when a hook is installed: it's where ms.c's own "[panic] ..."
+	// diagnostics go, and the serial console is exactly where those
+	// belong -- repl's error replies already tell the user to look
+	// there. Redirecting them into a `term` window would also mean a
+	// panic raised while rendering output could recurse back into the
+	// thing that was already failing.
+	if (fd == 1 && z_stdout_hook) {
+		z_stdout_hook((const char *)ptr, (uint32_t)len);
+		return len;
+	}
+
 	const unsigned char *p = ptr;
 	for (int i = 0; i < len; i++) {
 		if (p[i] == 0x0a) {

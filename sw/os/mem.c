@@ -12,6 +12,7 @@
 
 #include "kernel.h"
 #include "../common/zeitlos.h"
+#include "../common/zproc.h"
 #include "mem.h"
 
 volatile static __attribute__((section(".bss")))
@@ -180,25 +181,76 @@ void k_mem_free(void* ptr) {
 // fragmentation (many small free blocks, no single large one) would
 // show up as "plenty of free KB" but still fail every real
 // allocation, which total-free alone would hide.
-z_rv k_mem_dump(void) {
+// One walk of the block list, filling in everything both k_mem_dump()
+// (below) and k_mem_stats() (below that) report. Factored out when the
+// second caller arrived rather than left duplicated: the two would
+// otherwise drift the moment anything about the pool's bookkeeping
+// changes, and a `free` command that disagrees with itself depending
+// on whether you typed it at the kernel shell or from Scheme is
+// exactly the kind of thing nobody notices until it matters.
+//
+// Fills a z_mem_stats_args_t (sw/common/zproc.h) purely because that
+// struct already names every field this needs; k_mem_dump() just reads
+// the fields back out and prints them.
+static void mem_collect(z_mem_stats_args_t *s) {
 
-	uint32_t total = 0, used = 0, largest_free = 0;
-	int used_blocks = 0, free_blocks = 0;
+	s->total = 0;
+	s->used = 0;
+	s->largest_free = 0;
+	s->used_blocks = 0;
+	s->free_blocks = 0;
 
 	k_mem_block_t *blk = block_list;
 	while (blk) {
-		total += blk->size;
+		s->total += blk->size;
 		if (blk->used) {
-			used += blk->size;
-			used_blocks++;
+			s->used += blk->size;
+			s->used_blocks++;
 		} else {
-			free_blocks++;
-			if (blk->size > largest_free) largest_free = blk->size;
+			s->free_blocks++;
+			if (blk->size > s->largest_free) s->largest_free = blk->size;
 		}
 		blk = blk->next;
 	}
 
-	uint32_t free_total = total - used;
+	s->free = s->total - s->used;
+	s->blocks_used = (uint32_t)mem_block_count;
+	s->blocks_max = Z_MEM_MAX_BLOCKS;
+
+}
+
+// Z_SYS_MEM_STATS -- the same numbers k_mem_dump() prints, returned to
+// a caller instead. See sw/common/zproc.h for why this exists and why
+// it reports bytes rather than the KB the dump rounds to.
+//
+// Note this reports the KERNEL POOL (k_mem_alloc(), this file), which
+// is a completely different thing from the per-process heap an app
+// grows with sbrk()/malloc() inside its own already-allocated block --
+// sw/apps/repl's (free) reports both, clearly separated, precisely
+// because conflating them is easy and misleading.
+z_obj_t *k_mem_stats(z_obj_t *args) {
+
+	z_mem_stats_args_t *a = (z_mem_stats_args_t *)args;
+
+	if (!a) return (&z_fail);
+
+	mem_collect(a);
+
+	return (&z_ok);
+
+}
+
+z_rv k_mem_dump(void) {
+
+	z_mem_stats_args_t s;
+	mem_collect(&s);
+
+	uint32_t total = s.total;
+	uint32_t used = s.used;
+	uint32_t largest_free = s.largest_free;
+	int used_blocks = (int)s.used_blocks;
+	int free_blocks = (int)s.free_blocks;
+	uint32_t free_total = s.free;
 
 	printf(" total: %6ld KB\n", (long)(total / 1024));
 	printf("  used: %6ld KB (%d block%s)\n",

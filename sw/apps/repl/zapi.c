@@ -18,6 +18,8 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>	// snprintf() -- see zapi_read_form() below
+#include <unistd.h>	// sbrk() -- see the `free` procedure below
 
 #include "ms_api.h"
 #include "../../common/zfsapp.h"
@@ -27,6 +29,7 @@
 #include "../../common/zdns.h"
 #include "../../common/znet.h"
 #include "../../common/zstream.h"
+#include "../../common/zproc.h"
 #include "zapi.h"
 
 // -- small shared helpers --
@@ -757,6 +760,430 @@ static ms_val *zapi_tput(ms_val *args) {
 
 }
 
+// -- returning structured (nested) values to Scheme --
+//
+// ms.c's embedder API (ms_api.h) hands out the scalar constructors
+// (ms_mk_num/_str/_bool/_nil) plus exactly one composite,
+// ms_mk_str_list() -- and its own comment is explicit that this is
+// deliberate: building anything bigger than one cell from OUTSIDE ms.c
+// means getting GC protection right by hand across several
+// allocations, which is precisely what it doesn't want every embedder
+// re-deriving. There is no exposed `cons`, so there is no way to build
+// a list of lists with what's there.
+//
+// Rather than patch ms.c to expose PUSH/POP (or a builder API) purely
+// so `ps` and `free` can return tables, these two build their result
+// as Scheme SOURCE TEXT and hand it to ms_read() -- which is already
+// public, already used by repl.c's own eval path, and returns exactly
+// the parsed structure we want. ms_read() does all its own GC
+// protection internally, so this is safe by construction rather than
+// by careful hand-auditing.
+//
+// The tradeoffs, honestly: it costs a snprintf() pass and a parse over
+// a small buffer, and it's only safe for data we ourselves format
+// (every value below is a number or a fixed label -- no user-supplied
+// string is ever interpolated, so nothing can inject syntax). For the
+// sizes involved -- at most Z_PROCS_MAX rows of six numbers -- that is
+// far cheaper in CODE SIZE than the alternative, which matters here:
+// see docs/scheme_api.md's own note on this app's memory budget. If a
+// future API needs to return large or user-derived nested data, this
+// is the wrong tool and a real builder in ms.c is the right one.
+static ms_val *zapi_read_form(const char *src) {
+	const char *p = src;
+	ms_val *v = ms_read(&p);
+	// a parse failure here would mean this file formatted its own
+	// buffer wrong (or overflowed it) -- an empty list is a safer
+	// answer than NULL, which callers of a builtin never expect.
+	return v ? v : ms_nil_val();
+}
+
+// -- Processes --
+
+// how many process rows one (ps) call can report. Matches the kernel's
+// own Z_PROCS_MAX (sw/os/kernel.h) -- redefined here rather than
+// included, because kernel.h is KERNEL-side code (it pulls in the
+// process table, the syscall handler declarations, and fs.h's
+// kernel-native prototypes, which collide with the app-facing ones in
+// zfsapp.h -- see zeitlos.h's own note on exactly that collision).
+// If the kernel's table ever grows past this, the two must be updated
+// together -- but so must every already-flashed binary, since the
+// syscall's own arg struct is shared, so this is not a case where one
+// side can drift silently.
+#define ZAPI_PS_MAX 16
+
+// (ps) -- a snapshot of the process table as a list of lists, one row
+// per live process:
+//
+//   ((pid base size pc sp flags) ...)
+//
+// Same information sh.c's own `ps` prints (k_proc_dump(), which stays
+// exactly as it is) -- but as data, so it can be filtered, sorted, or
+// fed to (kill ...). Values are plain numbers, decimal rather than the
+// hex the console dump uses: hex is right for reading addresses by
+// eye, numbers are right for a caller doing arithmetic, and a caller
+// that wants hex can format it.
+//
+// The pid is the process TABLE INDEX, which is what (kill ...),
+// k_proc_base() and k_proc_kill() all take -- so a pid from here can
+// go straight back into (kill ...) with no translation.
+static ms_val *zapi_ps(ms_val *args) {
+
+	(void)args;
+
+	z_proc_info_t procs[ZAPI_PS_MAX];
+	uint32_t truncated = 0;
+	uint32_t n = z_proc_list(procs, ZAPI_PS_MAX, &truncated);
+	// `truncated` is deliberately not surfaced to Scheme: it can only
+	// be set if the kernel's own table outgrew ZAPI_PS_MAX, which the
+	// comment on that constant explains is a rebuild-both situation,
+	// not a runtime condition a script could usefully handle.
+	(void)truncated;
+
+	// worst case: Z_PROCS_MAX rows of six 10-digit numbers plus
+	// separators. Sized generously and bounds-checked below anyway.
+	char buf[ZAPI_PS_MAX * 72 + 8];
+	uint32_t o = 0;
+
+	buf[o++] = '(';
+
+	for (uint32_t i = 0; i < n && o < sizeof(buf) - 80; i++) {
+		o += (uint32_t)snprintf(buf + o, sizeof(buf) - o,
+			"(%lu %lu %lu %lu %lu %lu)",
+			(unsigned long)procs[i].pid, (unsigned long)procs[i].base,
+			(unsigned long)procs[i].size, (unsigned long)procs[i].pc,
+			(unsigned long)procs[i].sp, (unsigned long)procs[i].flags);
+	}
+
+	buf[o++] = ')';
+	buf[o] = 0;
+
+	return zapi_read_form(buf);
+
+}
+
+// (run "name") -- starts a process from a file on the filesystem (bare
+// name, no path or extension: "net", not "/NET.BIN"), exactly as sh.c's
+// own `run` and wm's dock do. Returns the new pid, or #f if it
+// couldn't start (file missing/empty, no free process slot, or not
+// enough memory in the pool -- (free) below is the thing to check
+// next if this returns #f unexpectedly).
+//
+// #f rather than a raised error, deliberately: unlike the networking
+// procedures below (where losing the specific reason costs the caller
+// real diagnostic information), "it didn't start" is a single, plainly
+// visible outcome that a script may well want to branch on -- the same
+// distinction file-size/read-file already draw against the window
+// procedures.
+static ms_val *zapi_run(ms_val *args) {
+	const char *name = zapi_arg_str(ms_car(args), "run");
+	uint32_t pid = z_proc_run(name);
+	if (!pid) return ms_mk_bool(false);
+	return ms_mk_num(pid);
+}
+
+// (kill pid) -- #t/#f. No ownership check anywhere in this path: any
+// process can kill any other, the same trust model the rest of this
+// kernel has (see z_proc_kill()'s own comment, zeitlos.h).
+//
+// Killing repl's own pid works and is exactly as final as it sounds --
+// there's no confirmation step here, and (getpid) is right there if a
+// script wants to check first.
+static ms_val *zapi_kill(ms_val *args) {
+	int pid = zapi_arg_int(ms_car(args), "kill");
+	if (pid <= 0) return ms_mk_bool(false);
+	return ms_mk_bool(z_proc_kill((uint32_t)pid) == Z_OK);
+}
+
+// (uptime) -- ticks since boot, as a number.
+//
+// This replaces the old BUILTIN `uptime` command, which printed a
+// fixed string and gave a caller nothing to compute with. Ticks rather
+// than seconds because ticks are what the hardware actually counts
+// (the KTIMER IRQ, ~732Hz -- see z_uptime_ticks(), zeitlos.c); dividing
+// to seconds in Scheme is one obvious expression, while recovering
+// ticks from a pre-rounded seconds value isn't possible at all. The
+// counter is 32-bit and wraps after roughly 68 days of uptime.
+static ms_val *zapi_uptime(ms_val *args) {
+	(void)args;
+	return ms_mk_num(z_uptime_ticks());
+}
+
+// (delay-ms n) -- busy-waits at least n milliseconds, then returns #t.
+//
+// BLOCKS THIS ENTIRE PROCESS, which on `repl` means every other
+// connected `term` window stops being serviced for the duration, not
+// just the one that ran this -- repl's single main loop drains one
+// shared mailbox (see repl.c). There is no sleep/yield primitive in
+// this OS at all, so this genuinely burns cycles rather than giving
+// them up; delay_ms() (zeitlos.c) is a spin on z_uptime_ticks(). Fine
+// for pacing a short animation or a retry loop, actively antisocial
+// for anything long.
+static ms_val *zapi_delay_ms(ms_val *args) {
+	int ms = zapi_arg_int(ms_car(args), "delay-ms");
+	if (ms > 0) delay_ms((uint32_t)ms);
+	return ms_mk_bool(true);
+}
+
+// -- Memory --
+
+// (free) -- an association list of memory figures, all in BYTES except
+// the two cell counts:
+//
+//   (("scheme-cells-used" N) ("scheme-cells-total" N)
+//    ("scheme-bytes" N) ("c-heap" N) ("static" N)
+//    ("mem-total" N) ("mem-used" N) ("mem-free" N)
+//    ("mem-largest-free" N) ("mem-used-blocks" N)
+//    ("mem-free-blocks" N) ("mem-blocks-used" N) ("mem-blocks-max" N))
+//
+// so (cadr (assoc "mem-free" (free))) gets one figure out.
+//
+// TWO DIFFERENT THINGS are reported here and conflating them is the
+// easy mistake this layout exists to prevent:
+//
+//   - the "scheme-"/"c-heap"/"static" figures describe THIS PROCESS's
+//     own footprint inside the block it was already given -- the same
+//     numbers the old builtin `free` command showed.
+//   - the "mem-" figures describe the KERNEL POOL (k_mem_alloc(),
+//     sw/os/mem.c): the memory whole processes get carved out of, and
+//     what sh.c's own `free` shows. This is what determines whether
+//     the next (run ...) succeeds.
+//
+// A process can be comfortable while the pool is nearly exhausted, and
+// vice versa; neither number predicts the other.
+//
+// If Scheme failed to initialize at boot the three "scheme-" figures
+// are reported as 0 rather than omitted, so the shape of the returned
+// list never varies and a caller's (assoc ...) can't suddenly fail.
+static ms_val *zapi_free(ms_val *args) {
+
+	(void)args;
+
+	// _end/_start and sbrk(0): the same linker-provided symbols and
+	// the same "just tell me where the break is" idiom the old builtin
+	// used -- see docs/app_runtime.md. _end is the top of this
+	// process's static footprint, _start its fixed base (0x80000000,
+	// riscv-app.ld); the gap between sbrk(0) and _end is everything
+	// malloc()'d since boot, which for repl is dominated by ms's own
+	// T_STR/T_VECTOR payloads.
+	extern char _end, _start;
+	uint32_t static_footprint = (uint32_t)&_end - (uint32_t)&_start;
+	uint32_t heap_grown = (uint32_t)sbrk(0) - (uint32_t)&_end;
+
+	// No "is Scheme ready?" check here, unlike the old builtin `free`
+	// command this replaces: that ran from repl.c's dispatcher, which
+	// is reachable whether or not Scheme came up. This is a Scheme
+	// PROCEDURE -- if it's executing at all, the interpreter it would
+	// be reporting on is demonstrably working.
+	long used = ms_heap_used();
+	long total = MS_HEAP_SIZE;
+	uint32_t cell_bytes = (uint32_t)ms_cell_size();
+
+	z_mem_stats_args_t m;
+	memset(&m, 0, sizeof(m));
+	z_mem_stats(&m);	// all-zero figures on failure -- see above on
+						// why the list's shape stays fixed regardless
+
+	char buf[640];
+	snprintf(buf, sizeof(buf),
+		"((\"scheme-cells-used\" %ld) (\"scheme-cells-total\" %ld)"
+		" (\"scheme-bytes\" %lu) (\"c-heap\" %lu) (\"static\" %lu)"
+		" (\"mem-total\" %lu) (\"mem-used\" %lu) (\"mem-free\" %lu)"
+		" (\"mem-largest-free\" %lu) (\"mem-used-blocks\" %lu)"
+		" (\"mem-free-blocks\" %lu) (\"mem-blocks-used\" %lu)"
+		" (\"mem-blocks-max\" %lu))",
+		used, total,
+		(unsigned long)((uint32_t)used * cell_bytes),
+		(unsigned long)heap_grown, (unsigned long)static_footprint,
+		(unsigned long)m.total, (unsigned long)m.used,
+		(unsigned long)m.free, (unsigned long)m.largest_free,
+		(unsigned long)m.used_blocks, (unsigned long)m.free_blocks,
+		(unsigned long)m.blocks_used, (unsigned long)m.blocks_max);
+
+	return zapi_read_form(buf);
+
+}
+
+// -- Files (continued) --
+
+// (mkdir "path") -- #t/#f. (touch-file "path") -- creates an empty
+// file, #t/#f.
+//
+// `touch-file`, not `touch`: R4RS has no `touch`, but "touch" is a
+// tempting name for a caller to bind themselves, and more importantly
+// the bare-word command syntax (docs/scheme_api.md \S1) means ANY bound
+// callable becomes a typeable command -- so a short, generic name here
+// is a name taken away from the user's own global environment for
+// good. The `-file` suffix also matches the existing read-file/
+// write-file/delete-file family, which is what a reader will expect
+// this to sit alongside.
+static ms_val *zapi_mkdir(ms_val *args) {
+	const char *path = zapi_arg_str(ms_car(args), "mkdir");
+	return ms_mk_bool(fs_mkdir(path) != 0);
+}
+
+static ms_val *zapi_touch_file(ms_val *args) {
+	const char *path = zapi_arg_str(ms_car(args), "touch-file");
+	return ms_mk_bool(fs_touch(path) != 0);
+}
+
+// (load "file.l") -- reads a file and evaluates EVERY form in it
+// against the shared global environment, returning #t (or #f if the
+// file couldn't be read).
+//
+// Note this is genuinely more than the (eval (read (read-file ...)))
+// it replaces: that evaluates the FIRST form only and silently ignores
+// the rest of the file, which is almost never what someone loading a
+// script wants.
+//
+// Implemented with ms_load_string() (already public, see ms_api.h),
+// NOT by enabling upstream ms.c's own `load`/`file->str`: those live
+// inside `#ifndef LIX` and go through fopen()/fread(), which is why
+// sw/common/ms_platform/fs.h is a deliberately empty stub in this
+// build -- there is no stdio file layer here to enable. Routing them
+// through Zeitlos's fs_* calls instead would mean putting
+// Zeitlos-specific I/O inside ms.c, which is exactly the kind of
+// change that makes a submodule harder to upstream rather than
+// easier. So: no ms.c patch needed for this at all.
+//
+// A parse or evaluation error inside the loaded file raises a normal
+// Scheme panic, caught by repl.c's existing recovery -- with whatever
+// forms already ran having already taken effect. There is no
+// transactional "load it all or none of it" behavior, same as any
+// other Scheme's `load`.
+static ms_val *zapi_load(ms_val *args) {
+
+	const char *name = zapi_arg_str(ms_car(args), "load");
+
+	int sz = fs_size((char *)name);
+	if (sz <= 0) return ms_mk_bool(false);
+
+	char *raw = fs_mallocfile((char *)name);
+	if (!raw) return ms_mk_bool(false);
+
+	// fs_mallocfile() returns exactly `sz` raw bytes and does NOT
+	// NUL-terminate -- same contract read-file above documents, and
+	// ms_load_string() needs a real C string.
+	char *s = malloc((size_t)sz + 1);
+	if (!s) { free(raw); return ms_mk_bool(false); }
+	memcpy(s, raw, (size_t)sz);
+	s[sz] = 0;
+	free(raw);
+
+	// ms_load_string() can panic (a malformed form, an error inside
+	// the file). That longjmp's back to repl.c's recovery point,
+	// skipping the free() below -- a bounded, one-off leak of this
+	// file's text on a failed load, accepted rather than worked around
+	// with a setjmp() here: ms_api.h's own contract is explicit that
+	// the protected region has to live in the frame that goes on to
+	// call ms_eval(), and adding a second recovery point inside a
+	// builtin would fight the one repl.c already establishes.
+	ms_load_string(s, ms_global_env);
+	free(s);
+
+	return ms_mk_bool(true);
+
+}
+
+// (print-console x) -- prints to the SERIAL CONSOLE, deliberately, no
+// matter where this process's stdout is currently pointed.
+//
+// The console counterpart to ordinary `print`: since repl now
+// redirects stdout to the requesting `term` connection while a command
+// runs (z_stdout_hook, sw/common/zeitlos.h -- see repl.c's own
+// repl_stdout_hook()), `display`/`print` correctly show text to the
+// person who typed the command. This one deliberately does the
+// opposite, which is what you want when the console is a second window
+// onto a running system: tracing what a procedure does without that
+// trace scrolling through the output you're trying to read, watching a
+// long-running loop while a `term` window shows only its result, or
+// getting anything at all out of code that runs with no connection
+// attached.
+//
+// Semantics match `print` (ms.c's bi_print), NOT `display` -- the name
+// sets the expectation and the behavior follows it: a trailing newline
+// is added, non-string values print in READABLE form (strings inside a
+// list come out quoted, the way `write` does), a string argument
+// prints raw, and no argument at all emits just a newline. Returns #f,
+// same as bi_print. The automatic newline is also the right default
+// for the debugging this exists for -- a trace line that needs an
+// explicit "\n" every time is a trace line that eventually won't have
+// one.
+//
+// Implemented by writing to stderr rather than by temporarily removing
+// the hook. Both would reach the UART, but the hook dance has a real
+// hazard: stdout is line-buffered, so bytes from an earlier `display`
+// may still be sitting inside libc, and flushing them with the hook
+// removed would misroute that earlier output to the console. stderr is
+// unbuffered and _write() only ever redirects fd 1, so this needs no
+// coordination with the capture buffer at all and can't reorder or
+// steal anything already in flight. (That path is already proven in
+// this build -- ms_log() writes its [info]/[error]/[panic] lines to
+// stderr.)
+//
+// Consequence worth knowing: this shares the console with those
+// "[panic] ..." diagnostics. That's the intent -- one debugging
+// stream, in the order things actually happened.
+static ms_val *zapi_print_console(ms_val *args) {
+
+	if (ms_is_nil(args)) {
+		fputs("\n", stderr);
+		fflush(stderr);
+		return ms_mk_bool(false);
+	}
+
+	ms_val *x = ms_car(args);
+
+	if (ms_is_str(x)) {
+		fputs(ms_str_val(x), stderr);
+	} else {
+		// readable = true: `print`'s own convention (bi_print calls
+		// ms_print(x, true)), as opposed to display form.
+		char *s = ms_to_string(x, true);
+		if (s) { fputs(s, stderr); free(s); }
+	}
+
+	fputs("\n", stderr);
+	fflush(stderr);
+
+	return ms_mk_bool(false);
+
+}
+
+// (df) -- filesystem capacity, as an association list, all figures in
+// KILOBYTES:
+//
+//   (("total-kb" N) ("used-kb" N) ("free-kb" N))
+//
+// KB rather than bytes because these are 32-bit all the way down and a
+// 32GB card's byte count overflows a uint32_t -- see z_fs_df_args_t
+// (sw/common/zfs.h). A caller wanting bytes can multiply; a caller
+// handed a pre-overflowed number could not have recovered it.
+//
+// This is the SD card. (free) above is main memory. The two are
+// unrelated and the names deliberately match the shell commands
+// (`df`/`free`, sw/os/sh.c) that report the same things.
+//
+// An absent or unmounted card reports all zeros rather than raising --
+// "how much space is there" has a truthful answer of "none" in that
+// state, and a script polling for a card shouldn't have to catch an
+// error to find out it isn't there yet.
+static ms_val *zapi_df(ms_val *args) {
+
+	(void)args;
+
+	uint32_t total = 0, freek = 0;
+	fs_df(&total, &freek);
+
+	char buf[160];
+	snprintf(buf, sizeof(buf),
+		"((\"total-kb\" %lu) (\"used-kb\" %lu) (\"free-kb\" %lu))",
+		(unsigned long)total, (unsigned long)(total - freek),
+		(unsigned long)freek);
+
+	return zapi_read_form(buf);
+
+}
+
 // -- registration --
 
 void zapi_register(void) {
@@ -777,4 +1204,22 @@ void zapi_register(void) {
 	ms_def_builtin("msg-wait", zapi_msg_wait);
 	ms_def_builtin("tget", zapi_tget);
 	ms_def_builtin("tput", zapi_tput);
+	ms_def_builtin("mkdir", zapi_mkdir);
+	ms_def_builtin("touch-file", zapi_touch_file);
+	ms_def_builtin("load", zapi_load);
+	// `file->str` is upstream ms.c's own name for "whole file as a
+	// string" (bi_file_to_str, compiled out under -DLIX along with the
+	// rest of its stdio path). Bound to the SAME function read-file
+	// already is, rather than a second implementation: code written
+	// against either name works, and there's no behavior to keep in
+	// sync because there's only one function.
+	ms_def_builtin("file->str", zapi_read_file);
+	ms_def_builtin("ps", zapi_ps);
+	ms_def_builtin("run", zapi_run);
+	ms_def_builtin("kill", zapi_kill);
+	ms_def_builtin("uptime", zapi_uptime);
+	ms_def_builtin("free", zapi_free);
+	ms_def_builtin("delay-ms", zapi_delay_ms);
+	ms_def_builtin("print-console", zapi_print_console);
+	ms_def_builtin("df", zapi_df);
 }

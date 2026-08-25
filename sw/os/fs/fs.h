@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include "fatfs/ff.h"
+#include "../../common/zexec.h"
 
 int fs_mount(void);
 int fs_format(void);
@@ -11,6 +12,13 @@ uint32_t fs_total(void);
 uint32_t fs_free(void);
 
 int fs_load(uint32_t dst, char *path);
+
+// Zeitlos executable format -- see sw/common/zexec.h. Inspect first
+// (the caller needs the image size to allocate), then load. Handles
+// legacy raw --pad-to binaries transparently: they report bss_size 0
+// and load exactly as fs_load() would.
+int fs_exec_info(char *path, z_exec_info_t *info);
+int fs_load_exec(uint32_t dst, char *path, const z_exec_info_t *info);
 void *fs_mallocfile(char *path);
 uint32_t fs_size(char *path);
 int fs_write_file(char *path, char *buf, uint32_t len);

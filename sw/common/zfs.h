@@ -126,4 +126,39 @@ typedef struct {
 	int32_t		handle;
 } z_fs_close_args_t;
 
+// FS_MKDIR / FS_TOUCH -- both take nothing but a path, so they share
+// one shape rather than carrying two identical single-field structs.
+// Deliberately NOT reusing z_fs_unlink_args_t above for this despite
+// the identical layout: these are different operations, and a future
+// revision that needs to add a field to one of them (a mode/flags
+// argument, say) shouldn't have to first untangle it from the other
+// two that happened to share a struct.
+typedef struct {
+	char		*name;		// directory (mkdir) or file (touch) to create
+} z_fs_path_args_t;
+
+// FS_SEEK -- repositions an open handle from FS_OPEN_READ/_OPEN_WRITE.
+// `offset` is absolute, from the start of the file, matching FatFs's
+// own f_lseek(). Seeking past EOF on a READ handle is not an error at
+// this level (FatFs clamps to the file size); the next FS_READ_CHUNK
+// simply reports 0 bytes, the same clean-EOF result that call already
+// documents. Added for sw/apps/repl's `page` -- see this project's
+// syscalls.def for the full reasoning.
+typedef struct {
+	int32_t		handle;
+	uint32_t	offset;		// absolute byte offset from start of file
+	uint32_t	pos;		// OUT: resulting position (0 on failure)
+} z_fs_seek_args_t;
+
+// FS_DF -- filesystem capacity. Reported in KILOBYTES, not bytes,
+// deliberately: these are uint32_t, and a 32GB card's byte count
+// overflows one. KB covers up to 4TB, which is well past anything this
+// OS will see on an SD card, and it matches what the underlying
+// fs_total()/fs_free() (sw/os/fs/fs.c) already return -- both compute
+// `clusters * csize / 2`, i.e. 512-byte sectors halved into KB.
+typedef struct {
+	uint32_t	total_kb;	// OUT: whole volume (0 if unmounted/failed)
+	uint32_t	free_kb;	// OUT: unallocated space
+} z_fs_df_args_t;
+
 #endif
