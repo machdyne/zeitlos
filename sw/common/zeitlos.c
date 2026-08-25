@@ -106,6 +106,31 @@ z_rv z_msg_wait(z_msg_t *msg, uint32_t subject, uint32_t tag) {
 	}
 }
 
+// Block until a message arrives or `ticks` kernel ticks elapse.
+//
+// timeout_ticks of 0 means "wait indefinitely" -- the same convention
+// the kernel side uses. Returns immediately if a message is already
+// queued.
+// Size of a launchable app by this name (data + bss), or 0 if there
+// isn't one. Checks the filesystem AND the flash core-app archive, so
+// the answer matches what z_proc_run() would actually launch.
+uint32_t z_exec_exists(const char *name) {
+	z_obj_t obj = {0};
+	obj.type = Z_STR;
+	obj.val.str = (char *)name;
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_kernel_ptr(Z_SYS_EXEC_EXISTS, (uint32_t *)&obj, 0);
+	return (obj.type == Z_UINT32) ? obj.val.uint32 : 0;
+}
+
+void z_proc_wait(uint32_t timeout_ticks) {
+	z_obj_t obj = {0};
+	obj.type = Z_UINT32;
+	obj.val.uint32 = timeout_ticks;
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_kernel_ptr(Z_SYS_PROC_WAIT, (uint32_t *)&obj, 0);
+}
+
 uint32_t z_uptime_ticks(void) {
 	z_obj_t obj = {0};
 	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
@@ -479,3 +504,45 @@ void _exit(int exit_status)
 
 #define Z_IS_OK(obj)   ((obj) && (obj)->type == Z_RETVAL && (obj)->value.uint32 == 0)
 #define Z_IS_FAIL(obj)  ((obj) && (obj)->type == Z_RETVAL && (obj)->value.uint32 == 1)
+
+// -- picolibc stdio glue --
+//
+// Only compiled when building against picolibc (Debian/Ubuntu's
+// gcc-riscv64-unknown-elf ships no C library of its own, so picolibc
+// is the one paired with it -- see docs/toolchain.md). Newlib
+// toolchains define stdin/stdout/stderr themselves and skip all of
+// this; __PICOLIBC__ comes from picolibc.h, which stdio.h includes.
+//
+// The difference that makes this necessary: newlib provides the three
+// standard streams and routes them through _write()/_read() below.
+// picolibc's tinystdio does NOT -- it leaves stdin/stdout/stderr for
+// the application to define, so without this every printf() in the
+// tree fails to link with "undefined reference to `stdout`".
+//
+// Both hooks just forward to the same _write()/_read() the newlib
+// build uses, so behaviour is identical either way. One byte at a
+// time is not fast, but printf here ends up in a UART FIFO regardless
+// and correctness matters more than buffering.
+#ifdef __PICOLIBC__
+
+static int z_picolibc_putc(char c, FILE *f) {
+	(void)f;
+	_write(1, &c, 1);
+	return (unsigned char)c;
+}
+
+static int z_picolibc_getc(FILE *f) {
+	char c;
+	(void)f;
+	if (_read(0, &c, 1) != 1) return EOF;
+	return (unsigned char)c;
+}
+
+static FILE z_picolibc_stdio = FDEV_SETUP_STREAM(
+	z_picolibc_putc, z_picolibc_getc, NULL, _FDEV_SETUP_RW);
+
+FILE *const stdin = &z_picolibc_stdio;
+FILE *const stdout = &z_picolibc_stdio;
+FILE *const stderr = &z_picolibc_stdio;
+
+#endif // __PICOLIBC__

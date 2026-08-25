@@ -140,3 +140,45 @@ void _exit(int exit_status)
 	asm volatile ("jr a0");
 	__builtin_unreachable();
 }
+
+// -- picolibc stdio glue --
+//
+// Only compiled when building against picolibc (Debian/Ubuntu's
+// gcc-riscv64-unknown-elf ships no C library of its own, so picolibc
+// is the one paired with it -- see docs/toolchain.md). Newlib
+// toolchains define stdin/stdout/stderr themselves and skip all of
+// this; __PICOLIBC__ comes from picolibc.h, which stdio.h includes.
+//
+// The difference that makes this necessary: newlib provides the three
+// standard streams and routes them through _write()/_read() below.
+// picolibc's tinystdio does NOT -- it leaves stdin/stdout/stderr for
+// the application to define, so without this every printf() in the
+// tree fails to link with "undefined reference to `stdout`".
+//
+// Both hooks just forward to the same _write()/_read() the newlib
+// build uses, so behaviour is identical either way. One byte at a
+// time is not fast, but printf here ends up in a UART FIFO regardless
+// and correctness matters more than buffering.
+#ifdef __PICOLIBC__
+
+static int z_picolibc_putc(char c, FILE *f) {
+	(void)f;
+	_write(1, &c, 1);
+	return (unsigned char)c;
+}
+
+static int z_picolibc_getc(FILE *f) {
+	char c;
+	(void)f;
+	if (_read(0, &c, 1) != 1) return EOF;
+	return (unsigned char)c;
+}
+
+static FILE z_picolibc_stdio = FDEV_SETUP_STREAM(
+	z_picolibc_putc, z_picolibc_getc, NULL, _FDEV_SETUP_RW);
+
+FILE *const stdin = &z_picolibc_stdio;
+FILE *const stdout = &z_picolibc_stdio;
+FILE *const stderr = &z_picolibc_stdio;
+
+#endif // __PICOLIBC__

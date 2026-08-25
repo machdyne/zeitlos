@@ -40,6 +40,10 @@
 
 const z_feature_info_t z_soc_features[] = {
 
+	{ Z_FEATURE_CPU_MUL,      "mul",    Z_FEAT_GROUP_CPU  },
+	{ Z_FEATURE_CPU_MUL_FAST, "mul-hw", Z_FEAT_GROUP_CPU  },
+	{ Z_FEATURE_CPU_DIV,      "div",    Z_FEAT_GROUP_CPU  },
+
 	{ Z_FEATURE_MEM_SRAM,   "sram",    Z_FEAT_GROUP_MEMORY  },
 	{ Z_FEATURE_MEM_SDRAM,  "sdram",   Z_FEAT_GROUP_MEMORY  },
 	{ Z_FEATURE_MEM_VRAM,   "vram",    Z_FEAT_GROUP_MEMORY  },
@@ -75,6 +79,7 @@ const int z_soc_features_count =
 // doesn't have to. Indexed by Z_FEAT_GROUP_*, so this array's order is
 // fixed by that enum, not by anything here.
 const char *const z_soc_feature_groups[] = {
+	"cpu    ",
 	"memory ",
 	"gpu    ",
 	"input  ",

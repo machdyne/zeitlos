@@ -67,6 +67,25 @@ z_rv z_mailbox_push(uint32_t pid, z_msg_envelope_t *msg) {
 
 }
 
+// Is this process's mailbox empty?
+//
+// Exists for k_proc_wait() (kernel.c), which must test this in the
+// same syscall that sets Z_PROC_FLAG_BLOCKED -- see that function's
+// comment on the lost-wakeup race. Reading count under maskirq for the
+// same reason push/pop do: the mailbox is written from interrupt
+// context.
+bool z_mailbox_empty(uint32_t pid) {
+
+	if (pid >= Z_PROCS_MAX) return true;
+
+	uint32_t old_mask = maskirq(0xFFFFFFFF);
+	bool empty = (z_mailboxes[pid].count == 0);
+	maskirq(old_mask);
+
+	return empty;
+
+}
+
 z_rv z_mailbox_pop(uint32_t pid, z_msg_envelope_t *msg) {
 
 	uint32_t old_mask = maskirq(0xFFFFFFFF);
@@ -250,6 +269,13 @@ z_obj_t *k_msg_send(z_obj_t *args) {
 
 	if (z_mailbox_push(msg->to, &env) != Z_OK)
 		return (&z_fail);
+
+	// The recipient may be blocked waiting for exactly this. Waking it
+	// here rather than leaving it to the KTIMER sweep is what makes the
+	// latency win real: otherwise a message would sit unnoticed until
+	// the next tick, up to ~1.37ms, which is precisely the mushiness
+	// this whole change is meant to remove. No-op if it wasn't blocked.
+	k_proc_unblock(msg->to);
 
 	return (&z_ok);
 

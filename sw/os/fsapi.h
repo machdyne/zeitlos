@@ -103,6 +103,8 @@
 // return &z_fail on any real failure (open/read/write error, or a
 // requested read bigger than the caller's own `maxlen`).
 z_obj_t *k_fs_size(z_obj_t *args);
+// resolver-aware existence check (filesystem + flash) -- see fsapi.c
+z_obj_t *k_exec_exists(z_obj_t *args);
 z_obj_t *k_fs_read(z_obj_t *args);
 z_obj_t *k_fs_write(z_obj_t *args);
 

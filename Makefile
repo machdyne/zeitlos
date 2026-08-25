@@ -6,6 +6,7 @@ RTL_PICO = \
 	rtl/clk/pll1_25.v \
 	rtl/cpu/picorv32/picorv32.v \
 	rtl/mtu.v \
+	rtl/cache.v \
 	rtl/arbiter.v \
 	rtl/mem/bram.v \
 	rtl/mem/sram.v \
@@ -18,6 +19,7 @@ RTL_PICO = \
 	rtl/ethmac_rmii.v \
 	rtl/debug.v \
 	rtl/csrs.v \
+	rtl/socctl.v \
 	rtl/spibb.v \
 	rtl/gpu/gpu_raster.v \
 	rtl/gpu/gpu_blit.v \
@@ -285,6 +287,30 @@ flash_os: check os
 	$(FLASH) $(FLASH_OFFSET) 1048576 sw/os/kernel.bin
 endif
 
+# Core apps -- programmed at a fixed flash offset immediately ABOVE the
+# kernel's 256KB region (1MB + 256KB = 0x140000). KEEP THIS OFFSET IN
+# SYNC with Z_ZAR_FLASH_OFFSET in sw/os/zar.h; nothing checks that the
+# two agree, and a mismatch looks like "no core apps in flash" rather
+# than an error.
+#
+# Depends on `apps` so the .bin files exist; mkzar.py stores them
+# verbatim (they are already ZEXE files).
+output/$(BOARD_LC)/apps.zar: apps
+	mkdir -p output/$(BOARD_LC)
+	python3 tools/mkzar.py output/$(BOARD_LC)/apps.zar \
+		wm=sw/apps/wm/wm.bin \
+		net=sw/apps/net/net.bin \
+		repl=sw/apps/repl/repl.bin \
+		term=sw/apps/term/term.bin
+
+ifeq ($(FAMILY), ice40)
+flash_apps: output/$(BOARD_LC)/apps.zar
+	$(FLASH) $(FLASH_OFFSET) output/$(BOARD_LC)/apps.zar 140000
+else
+flash_apps: output/$(BOARD_LC)/apps.zar
+	$(FLASH) $(FLASH_OFFSET) 1310720 output/$(BOARD_LC)/apps.zar
+endif
+
 # Boot splash logo -- programmed separately from the kernel, at a fixed
 # flash offset immediately BELOW the kernel's own 1MB offset.
 #
@@ -343,13 +369,35 @@ prog:
 
 dev: check clean_os clean_bios clean_apps os bios apps
 dev-prog: dev soc prog
-dev-flash: dev flash_os
+# Software-only reflash: kernel + core apps, leaving the gateware
+# alone. The common development cycle, since RTL changes far less often
+# than software does.
+#
+# flash_apps is included deliberately. kernel.bin and the core apps are
+# coupled -- sw/common/syscalls.def is compiled into both, and an app
+# built against a different one calls the wrong kernel handler for
+# every syscall past the point they diverge (see that file's own
+# warning). `dev` rebuilds both from clean, so flashing both together
+# is what keeps them matched.
+#
+# NOTE this does not touch the bitstream. If you have changed anything
+# under rtl/, use `make flash` instead -- software that expects
+# hardware the running bitstream doesn't have fails in confusing ways
+# (the one case that says so clearly is a CPU/ISA mismatch, which
+# k_soc_report() catches at boot; everything else is on you).
+dev-flash: dev flash_os flash_apps
 
 # flash_logo included here so a full `make flash` still produces a
 # system with a splash screen -- the extra write only costs setup time,
 # and leaving it out would make the common path silently lose the logo.
 # Flash it on its own (`make flash_logo`) when only the logo changed.
-flash: zeitlos flash_soc flash_os flash_logo
+# flash_apps is part of the default `flash` deliberately: the point of
+# putting the core apps in flash is that a freshly flashed board boots
+# to a working desktop with no SD card at all. Leaving it as a separate
+# opt-in target would defeat that -- a new user would flash the board,
+# get a bare shell, and have no reason to suspect there was a second
+# command to run. See sw/os/zar.h.
+flash: zeitlos flash_soc flash_os flash_logo flash_apps
 
 os:
 	cd sw/os && make

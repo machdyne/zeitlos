@@ -31,6 +31,7 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
  - Pre-emptive multitasking
  - Flat memory model with virtual address space for apps
  - FAT16/32 filesystem
+ - Core apps in flash -- boots to a desktop with no sdcard ([docs/flash_apps.md](docs/flash_apps.md))
  - Object-based interprocess messaging and streaming
  - IP/ARP/ICMP/UDP/DHCP/DNS/TFTP/TCP/TELNET networking
 
@@ -70,20 +71,36 @@ If you have an unsupported board and want to try Zeitlos, please open an issue.
 
 ## Usage
 
-1. Put the apps on an sdcard:
+**An sdcard is optional.** The core apps (`wm`, `net`, `repl`, `term`)
+are programmed into flash alongside the kernel, so a freshly flashed
+board boots straight to the graphical desktop with nothing else
+attached. See [Core apps in flash](#core-apps-in-flash) below.
 
-Write the zeitlos image to an sdcard (latest release):
+1. Build and flash the system:
+
+Building Zeitlos requires FPGA tools (Yosys, nextpnr, and a bitstream
+packer for your FPGA family) and a RISC-V toolchain. Most of these are
+available as Debian/Ubuntu packages:
 
 ```
-curl -LO https://github.com/machdyne/zeitlos/releases/latest/download/zeitlos.img.gz
-gzip -dc zeitlos.img.gz | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync
+$ sudo apt install yosys nextpnr-ecp5 fpga-trellis fpga-trellis-database \
+                   openfpgaloader
 ```
 
-Replace `/dev/sdX` with your sdcard's device node (check with `lsblk` first — writing to the wrong device will destroy its contents).
+The RISC-V compiler is the one piece not to take from apt: Zeitlos is
+built against newlib, and Ubuntu's `gcc-riscv64-unknown-elf` ships no C
+library at all. Use the [xPack prebuilt
+toolchain](https://github.com/xpack-dev-tools/riscv-none-elf-gcc-xpack/releases)
+(GCC + binutils + newlib, no building required) and set `RISCV_PREFIX`
+in `sw/common/arch.mk` to point at it.
 
-2. Build and flash the system:
+See [docs/toolchain.md](docs/toolchain.md) for current upstream
+versions, the OSS CAD Suite bundle, GateMate boards, and the trade-offs
+between the RISC-V toolchain options.
 
-Building Zeitlos requires [Yosys](https://github.com/YosysHQ/yosys), [nextpnr-ecp5](https://github.com/YosysHQ/nextpnr), [prjtrellis](https://github.com/YosysHQ/prjtrellis) and a [RV32I toolchain](https://github.com/YosysHQ/picorv32#building-a-pure-rv32i-toolchain).
+Note that Zeitlos now builds `rv32im` (hardware multiply and divide) --
+see [docs/muldiv.md](docs/muldiv.md). Gateware and software must be
+flashed together.
 
 ```
 $ git clone https://github.com/machdyne/zeitlos
@@ -92,11 +109,61 @@ $ git submodule update --init --recursive
 $ make BOARD=lakritz CABLE=dirtyJtag flash
 ```
 
-The above command will build the SOC, BIOS, OS and apps and then write the gateware and kernel to flash.
+The above command builds the SOC, BIOS, OS and apps, then writes the
+gateware, kernel, boot splash and core apps to flash.
 
-The BIOS will automatically boot the kernel if no keys are pressed.
+The BIOS will automatically boot the kernel if no keys are pressed, and
+the kernel starts `wm`, `net` and `repl` automatically -- you'll land
+straight in the graphical desktop. See [`docs/welcome.md`](docs/welcome.md)
+for how to use it from there.
 
-If `wm`, `net`, and `repl` are present on the sdcard, the kernel starts them automatically a few seconds after boot -- you'll land straight in the graphical desktop. See [`docs/welcome.md`](docs/welcome.md) for how to use it from there.
+**The mouse pointer tells you when it's ready.** It is a **Z** while
+the system is still starting up and an **X** once it isn't. The dock
+won't launch anything while the Z is showing -- `term` connects to
+`repl` the moment it starts, and launching it too early gives you a
+blank window rather than a terminal. Wait for the X. See
+[`docs/socctl.md`](docs/socctl.md).
+
+2. Optionally, add an sdcard:
+
+An sdcard is only needed for storing files and for apps beyond the core
+four. Write the zeitlos image to one with:
+
+```
+curl -LO https://github.com/machdyne/zeitlos/releases/latest/download/zeitlos.img.gz
+gzip -dc zeitlos.img.gz | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync
+```
+
+Replace `/dev/sdX` with your sdcard's device node (check with `lsblk` first — writing to the wrong device will destroy its contents).
+
+### Core apps in flash
+
+`wm`, `net`, `repl` and `term` are written to flash as part of a normal
+`make flash`, immediately after the kernel. They are an *underlay*
+beneath the filesystem, not a separate namespace: there is still exactly
+one name for `term`, and `run term` behaves identically whether it came
+from flash or from a card.
+
+The rule is one line:
+
+> if the filesystem has it, use that; otherwise use the flash copy.
+
+A file on the card wins, because the only way it got there was somebody
+deliberately putting it there — which is what makes `xf wm` still work
+as a single-app hot-swap during development, with no version scheme or
+timestamps involved. `ls` lists the flash copies in a separate section,
+skipping any that a real file is shadowing, so what you see is what
+`run` would actually launch.
+
+For iterating on the OS itself, `make dev-flash` rebuilds and reflashes
+the kernel and core apps without touching the gateware:
+
+```
+$ make clean && make BOARD=obst dev-flash
+```
+
+See [`docs/flash_apps.md`](docs/flash_apps.md) for the archive format
+and the design reasoning.
 
 ## Developers
 

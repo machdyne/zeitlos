@@ -109,6 +109,12 @@
 #define Z_FEATURE_LED_RGB     (1u << 18)
 #define Z_FEATURE_LED_DEBUG   (1u << 19)
 
+// CPU extensions. Unlike everything above, these describe the core
+// rather than a peripheral -- see z_soc_check_cpu_arch() below.
+#define Z_FEATURE_CPU_MUL     (1u << 20)
+#define Z_FEATURE_CPU_DIV     (1u << 21)
+#define Z_FEATURE_CPU_MUL_FAST (1u << 22)
+
 // -- feature table (sw/common/zsoc.c) --
 //
 // The human-readable half of the Z_FEATURE_* bits above, kept in the
@@ -121,7 +127,12 @@
 // stdio. Link sw/common/zsoc.c to use these; a translation unit that
 // only wants the inline helpers below needs no extra object.
 typedef enum {
-	Z_FEAT_GROUP_MEMORY = 0,
+	// CPU first: it describes the core itself rather than a
+	// peripheral, and it is the one line worth seeing before
+	// anything else if a build is about to die on illegal
+	// instructions (see z_soc_check_cpu_arch()).
+	Z_FEAT_GROUP_CPU = 0,
+	Z_FEAT_GROUP_MEMORY,
 	Z_FEAT_GROUP_GPU,
 	Z_FEAT_GROUP_INPUT,
 	Z_FEAT_GROUP_STORAGE,
@@ -198,6 +209,186 @@ static inline bool z_soc_has_feature(uint32_t feature) {
 static inline bool z_soc_feature_confirmed_absent(uint32_t feature) {
 	if (!z_soc_csrs_present()) return false;	// unknown, not absent
 	return (reg_csr_features & feature) == 0;
+}
+
+// -- SOC control (rtl/socctl.v) --
+//
+// Writable global configuration, at 0x7000_02xx. The third tenant of
+// nibble 0x7 alongside the read-only CSRs (0x7000_00xx) and the
+// instruction cache (0x7000_01xx).
+//
+// Kept separate from the CSRs deliberately: that block is documented
+// as read-only and side-effect-free, and its value is precisely that
+// inertness. Configuration software SETS lives here instead.
+#define reg_socctl_ctrl  (*(volatile uint32_t*)0x70000200)
+#define reg_socctl_magic (*(volatile uint32_t*)0x70000204)
+
+#define Z_SOCCTL_MAGIC 0x5A435452u	// "ZCTR" -- see rtl/socctl.v
+
+// Mouse cursor shape: 0 = normal pointer (X), 1 = busy pointer (Z).
+// The sprite is drawn in hardware (rtl/gpu/gpu_cursor.v) and
+// composited at scanout, so this is the only way to change it --
+// software cannot draw over it.
+#define Z_SOCCTL_CURSOR_BUSY (1u << 0)
+
+// true only if this bitstream actually has rtl/socctl.v. Same magic
+// check, and the same reason for it, as z_soc_csrs_present().
+static inline bool z_socctl_present(void) {
+	return reg_socctl_magic == Z_SOCCTL_MAGIC;
+}
+
+// Show the busy (Z) cursor, or the normal (X) one.
+//
+// Safe to call on a bitstream without socctl -- the write goes to an
+// address csrs.v decodes and ignores, so it is acked and discarded
+// rather than hanging the bus. (An address NOTHING decodes gets no ack
+// at all and stalls the CPU forever; see rtl/cache.v's own note.)
+static inline void z_cursor_set_busy(bool busy) {
+	reg_socctl_ctrl = busy ? Z_SOCCTL_CURSOR_BUSY : 0;
+}
+
+// -- instruction cache (rtl/cache.v) --
+//
+// Registers live at 0x7000_01xx, sharing nibble 0x7 with the CSRs
+// above (0x7000_00xx) and selected by address bit 8 -- see
+// rtl/sysctl.v's cs_cache. They are deliberately NOT part of the CSR
+// block itself: that block is documented as read-only and
+// side-effect-free, and a flush register is neither.
+#define reg_icache_ctrl   (*(volatile uint32_t*)0x70000100)
+#define reg_icache_hits   (*(volatile uint32_t*)0x70000104)
+#define reg_icache_misses (*(volatile uint32_t*)0x70000108)
+#define reg_icache_info   (*(volatile uint32_t*)0x7000010c)
+
+#define Z_ICACHE_CTRL_ENABLE  (1u << 0)
+#define Z_ICACHE_CTRL_FLUSH   (1u << 1)
+
+// top half of reg_icache_info -- KEEP IN SYNC with rtl/cache.v
+#define Z_ICACHE_MAGIC 0x1CACu
+
+// true only if this bitstream was actually built with `ICACHE.
+//
+// Same reasoning as z_soc_csrs_present() above: an unmapped read
+// doesn't fault on this bus, it returns whatever rtl/sysctl.v's data
+// mux resolves to, so a magic constant is the only reliable way to
+// tell "not built in" from "built in and reporting zero".
+static inline bool z_icache_present(void) {
+	return ((reg_icache_info >> 16) & 0xffffu) == Z_ICACHE_MAGIC;
+}
+
+// cache geometry, meaningless unless z_icache_present()
+static inline uint32_t z_icache_kb(void) {
+	return reg_icache_info & 0xffu;
+}
+
+static inline uint32_t z_icache_line_words(void) {
+	return (reg_icache_info >> 8) & 0xffu;
+}
+
+// Invalidate every cache line.
+//
+// MUST be called after writing code into main memory and BEFORE
+// jumping to it. Only two places in this codebase do that:
+// fs_load_exec() (sw/os/fs/fs.c) and load_zeitlos() (sw/bios/bios.c).
+//
+// The failure this prevents is worth stating plainly, because it is
+// intermittent and allocation-order dependent rather than
+// reproducible: app A loads at base X, exits, k_mem_free() releases
+// X, then app B loads at that same base. The cache still holds A's
+// instructions for those physical addresses, so B executes A's code.
+// Nothing about B is wrong; it just runs somebody else's program.
+//
+// Safe to call unconditionally, but ONLY because rtl/sysctl.v
+// guarantees this address is decoded on every build: without `ICACHE,
+// csrs_wb keeps the whole 0x7 nibble and acks it. Do not assume the
+// general "unmapped access is harmless" rule applies here -- it does
+// not. An address nothing decodes gets NO ACK on this bus and
+// picorv32_wb waits for that ack forever, which is a dead hang, not a
+// read of undefined data. An earlier version of this comment claimed
+// otherwise and hung the BIOS on every non-ICACHE build.
+//
+// Costs NUM_LINES cycles (~11us at 48MHz for 512 lines) while the
+// cache walks its lines, which is nothing against the SD card read
+// that precedes it.
+static inline void z_icache_flush(void) {
+	reg_icache_ctrl = Z_ICACHE_CTRL_ENABLE | Z_ICACHE_CTRL_FLUSH;
+}
+
+// Turn the cache off/on at runtime. This exists so that "is the cache
+// causing this?" can be answered on hardware with a single register
+// write instead of a re-synthesis. Disabling forces every fetch to go
+// to main memory, exactly as a bitstream built without `ICACHE would.
+static inline void z_icache_enable(bool on) {
+	reg_icache_ctrl = on ? Z_ICACHE_CTRL_ENABLE : 0;
+}
+
+// -- rv32im gateware/software agreement check --
+//
+// The asymmetry that makes this worth a function:
+//
+//   rv32i  software on rv32im gateware -- fine, M just goes unused.
+//   rv32im software on rv32i  gateware -- FATAL, and not gracefully.
+//
+// In the second case every mul/div is an illegal instruction. picorv32
+// is built here with CATCH_ILLINSN and ENABLE_IRQ (rtl/sysctl.v), so
+// that raises IRQ 1 -- which sw/os/kernel.c has no handler for (it
+// knows about KTIMER/UART/HID only), so the handler returns, the same
+// instruction executes again, and the machine spins. No message, no
+// trap output, just a hang somewhere unrelated-looking.
+//
+// The software half is known at build time, the hardware half from the
+// CSR feature bits. Comparing them turns that hang into one clear line
+// at boot.
+//
+// Z_ARCH_HAS_MUL/Z_ARCH_HAS_DIV come from sw/common/arch.mk, which
+// derives them from ARCH itself. That is deliberate: GCC's
+// __riscv_mul/__riscv_div are used only as a fallback for code not
+// built through those Makefiles. Depending on the compiler alone would
+// mean that on a toolchain that spells them differently, this check
+// quietly evaluates to "nothing to verify" and the safety net vanishes
+// without any indication -- and this tree targets a deliberately old
+// toolchain (picorv32 pins riscv-gnu-toolchain rev 411d134, 2018).
+//
+// __riscv_zmmul is checked too. -march=rv32i_zmmul does NOT define
+// __riscv_mul, so a check looking only for that would decide a
+// zmmul binary has no multiply while its text section is full of them.
+#if defined(Z_ARCH_HAS_MUL)
+#  define Z_BUILD_MUL Z_ARCH_HAS_MUL
+#elif defined(__riscv_mul) || defined(__riscv_muldiv) || defined(__riscv_zmmul)
+#  define Z_BUILD_MUL 1
+#else
+#  define Z_BUILD_MUL 0
+#endif
+
+#if defined(Z_ARCH_HAS_DIV)
+#  define Z_BUILD_DIV Z_ARCH_HAS_DIV
+#elif defined(__riscv_div) || defined(__riscv_muldiv)
+#  define Z_BUILD_DIV 1
+#else
+#  define Z_BUILD_DIV 0
+#endif
+
+// Returns true if this binary can safely run on this bitstream.
+// Deliberately contains no multiply or divide itself, so it is safe to
+// call before knowing the answer.
+static inline bool z_soc_check_cpu_arch(void) {
+#if Z_BUILD_MUL
+	if (!z_soc_has_feature(Z_FEATURE_CPU_MUL)) return false;
+#endif
+#if Z_BUILD_DIV
+	if (!z_soc_has_feature(Z_FEATURE_CPU_DIV)) return false;
+#endif
+	return true;
+}
+
+// What this binary was compiled for, for printing alongside the above.
+static inline const char *z_soc_build_arch(void) {
+#if Z_BUILD_MUL && Z_BUILD_DIV
+	return "rv32im";
+#elif Z_BUILD_MUL
+	return "rv32i_zmmul";
+#else
+	return "rv32i";
+#endif
 }
 
 #endif

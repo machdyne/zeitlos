@@ -6,6 +6,8 @@
 #include "fatfs/ff.h"
 #include "fs.h"
 #include "../../common/zexec.h"
+#include "../../common/zsoc.h"
+#include "../zar.h"
 
 FATFS sdvol0;
 
@@ -292,6 +294,46 @@ void fs_list_dir(char *path) {
 		f_closedir(&dir);
 	}
 
+	// Core apps living in flash (sw/os/zar.h) are listed after the
+	// filesystem's own contents, marked, and only for the top-level
+	// directory.
+	//
+	// They are NOT files -- there is no directory entry, they cannot be
+	// opened, read, written or deleted, and only the process-launch
+	// path (fs_exec_info_any() below) ever resolves them. Listing them
+	// anyway is about not creating a mystery: on a board with no SD
+	// card, `ls` would otherwise show nothing at all while `run term`
+	// worked perfectly, which is exactly the sort of thing that costs
+	// somebody an afternoon.
+	//
+	// An entry shadowed by a real file on the card is skipped rather
+	// than shown twice -- what `ls` prints should match what `run`
+	// would actually launch, and the filesystem copy is the one that
+	// wins (see fs_exec_info_any()).
+	if (z_zar_count() && (path[0] == 0 || (path[0] == '/' && path[1] == 0))) {
+
+		int shown = 0;
+		char name[Z_ZAR_NAME_MAX + 1];
+		z_exec_info_t tmp;
+
+		for (uint32_t zi = 0; zi < z_zar_count(); zi++) {
+
+			if (!z_zar_name(zi, name)) continue;
+
+			// shadowed by a real file -- already listed above
+			if (fs_exec_info(name, &tmp) == 0 && tmp.total) continue;
+
+			if (!shown) {
+				printf("\nin flash:\n");
+				shown = 1;
+			}
+
+			printf("%s\n", name);
+
+		}
+
+	}
+
 	return;
 
 }
@@ -341,6 +383,71 @@ int fs_exec_info(char *path, z_exec_info_t *info) {
 // The bss memset() is the entire point of the format: for `repl` that
 // is ~110KB that used to be read from the SD card one 1KB block at a
 // time and is now a single memset over RAM.
+// -- executable resolution: filesystem first, flash underneath --
+//
+// The core apps live in flash as well as (optionally) on the SD card
+// -- see sw/os/zar.h. These two are the single place that decides
+// which copy a launch uses, so every path that starts a process gets
+// the same answer: sh.c's `run`, sh.c's `init`, and k_proc_run()
+// (which is what wm's dock calls).
+//
+// The rule is one line: if the filesystem has it, use that; otherwise
+// fall back to the flash copy. Deliberately an UNDERLAY rather than a
+// second namespace -- there is still exactly one name for `term`, and
+// `run term` works identically whether it came from a card or from
+// flash, whether a card is present at all, and whether the app was
+// just killed and is being restarted.
+//
+// Drive letters (A: = flash, B: = card) were the alternative and were
+// rejected as the wrong shape for this problem: every path-taking API
+// in the tree -- fs_open/size/read/write, ls, te, repl's file API,
+// tget/tput -- would have to learn about drives, writes to the
+// read-only flash drive would need a new failure path in each of them,
+// and callers like the dock would then need to know WHICH drive an app
+// lives on, which is precisely the thing they should not have to care
+// about. That is a namespace solution to what is actually a fallback
+// question. If explicit selection is ever genuinely needed, a
+// "flash:term" prefix handled here is a much smaller change than
+// teaching the whole filesystem API about drives.
+//
+// The shadowing rule is unchanged and intentional: a file on the card
+// wins, because the only way it got there was somebody deliberately
+// putting it there. Callers that want to report which source was used
+// can compare fs_exec_info()'s result themselves; both sh.c's init and
+// `run` print it.
+int fs_exec_info_any(char *path, z_exec_info_t *info) {
+
+	if (fs_exec_info(path, info) == 0 && info->total)
+		return 0;
+
+	if (z_zar_exec_info(path, info) == 0 && info->total)
+		return 0;
+
+	return 1;
+
+}
+
+// true if `path` resolved to the flash copy rather than the card.
+// Only for reporting -- the loader below re-resolves on its own.
+int fs_exec_is_flash(char *path) {
+	z_exec_info_t tmp;
+	if (fs_exec_info(path, &tmp) == 0 && tmp.total) return 0;
+	return (z_zar_exec_info(path, &tmp) == 0 && tmp.total) ? 1 : 0;
+}
+
+// Loads whichever copy fs_exec_info_any() would have chosen. Re-runs
+// the same test rather than taking a source argument: two functions
+// that must be called with matching arguments is exactly the kind of
+// pairing that eventually gets called with mismatched ones.
+int fs_load_exec_any(uint32_t dst, char *path, const z_exec_info_t *info) {
+
+	if (fs_exec_is_flash(path))
+		return z_zar_load_exec(dst, path, info);
+
+	return fs_load_exec(dst, path, info);
+
+}
+
 int fs_load_exec(uint32_t dst, char *path, const z_exec_info_t *info) {
 
 	FIL f;
@@ -379,6 +486,20 @@ int fs_load_exec(uint32_t dst, char *path, const z_exec_info_t *info) {
 	// which is why the old format shipped it as literal zeros in the
 	// file. Doing it here is what makes dropping them safe.
 	if (info->bss_size) memset(dst_ptr, 0, info->bss_size);
+
+	// We have just written CODE through the data path. The
+	// instruction cache (rtl/cache.v) caches fetches only, so it
+	// never saw any of those stores -- but it may still hold lines
+	// for these same PHYSICAL addresses from a previous occupant of
+	// this memory, since k_mem_free()/k_mem_alloc() happily hand the
+	// same base back out to the next app. Without this flush that
+	// app runs the previous one's instructions.
+	//
+	// This is the ONLY app loader in the tree (kernel.c, sh.c), so
+	// this one call covers every launch path. The only other place
+	// code is written as data is sw/bios/bios.c's load_zeitlos(),
+	// which has its own flush.
+	z_icache_flush();
 
 	return 0;
 

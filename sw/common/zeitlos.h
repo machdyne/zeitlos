@@ -217,6 +217,14 @@ z_rv z_msg_read(z_msg_t *msg);
 
 // block until a message matching subject/tag arrives, discarding
 // anything else that shows up in the meantime
+// Give up the CPU until a message arrives or `timeout_ticks` elapse
+// (0 = indefinitely). Returns immediately if a message is already
+// queued. This is what makes an idle app cost the scheduler nothing --
+// see Z_PROC_FLAG_BLOCKED in sw/os/kernel.h.
+uint32_t z_exec_exists(const char *name);
+
+void z_proc_wait(uint32_t timeout_ticks);
+
 z_rv z_msg_wait(z_msg_t *msg, uint32_t subject, uint32_t tag);
 
 // ticks since boot, ~732Hz (the KTIMER IRQ rate -- see

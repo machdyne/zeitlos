@@ -93,3 +93,15 @@ Z_MKSYSCALL(MEM_STATS, k_mem_stats)
 // no shell command, nothing in Scheme. This exposes them, for `df` in
 // both sh.c and the Scheme API.
 Z_MKSYSCALL(FS_DF, k_fs_df)
+// Blocks the calling process until a message arrives or a timeout
+// elapses, instead of spinning on z_msg_read(). Argument is the
+// timeout in kernel ticks (0 = wait indefinitely). See k_proc_wait()
+// in sw/os/kernel.c for the lost-wakeup race this has to avoid, and
+// Z_PROC_FLAG_BLOCKED in sw/os/kernel.h for why the scheduler needed
+// this at all.
+Z_MKSYSCALL(PROC_WAIT, k_proc_wait)
+// Does a launchable app by this name exist, from the filesystem OR the
+// flash core-app archive? Returns its image size, 0 if not. Used by
+// wm's dock to show only apps that are actually present. See
+// k_exec_exists() in sw/os/fsapi.c.
+Z_MKSYSCALL(EXEC_EXISTS, k_exec_exists)

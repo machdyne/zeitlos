@@ -1,9 +1,10 @@
 
-PREFIX = /opt/riscv32i/bin/riscv32-unknown-elf-
-ARCH = rv32i
+PREFIX ?= $(RISCV_PREFIX)
+# ARCH/ABI come from one place -- see that file for why
+include ../../common/arch.mk
 CC = $(PREFIX)gcc
 AS = $(PREFIX)as
-ASFLAGS = -march=$(ARCH) -mabi=ilp32
+ASFLAGS = -march=$(ARCH) -mabi=$(ABI)
 # See sw/apps/repl/Makefile for the full reasoning behind these two --
 # in short, sw/common is shared by every app, so each links whole
 # objects for the sake of a fraction of them, and section GC drops the
@@ -15,8 +16,8 @@ GC_CFLAGS = -ffunction-sections -fdata-sections
 GC_LDFLAGS = -Wl,--gc-sections
 endif
 
-CFLAGS = --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=ilp32 -DZ_GFX_HW_BLIT $(GC_CFLAGS)
-LDFLAGS = -march=$(ARCH) -mabi=ilp32 $(GC_LDFLAGS)
+CFLAGS = --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) -DZ_GFX_HW_BLIT $(GC_CFLAGS) $(ARCH_DEFS) $(LIBC_FLAGS)
+LDFLAGS = -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS)
 LDSCRIPT = ../../common/riscv-app.ld
 
 # which font to build against -- e.g. `make term FONT=z_font_6x12`.
@@ -55,11 +56,11 @@ zport.o:
 	$(CC) $(CFLAGS) -c ../../common/zport.c -o zport.o
 
 term.o:
-	$(CC) $(CFLAGS) -c term.c -o term.o
 	$(CC) $(CFLAGS) -c term.c -S -o term.asm
+	$(CC) $(CFLAGS) -c term.c -o term.o
 
 term.elf: $(OBJS)
-	$(CC) $(LDFLAGS) -Wl,-T$(LDSCRIPT),-Map,term.map -o term.elf $(OBJS)
+	$(CC) $(LDFLAGS) -T $(LDSCRIPT) -Wl,-Map,term.map -o term.elf $(OBJS)
 	$(PREFIX)objdump -S --disassemble term.elf > term.dasm
 
 term.bin: term.elf
@@ -73,3 +74,22 @@ clean:
 	rm -f term.elf term.bin term.data term.asm term.dasm term.map *.o *.d
 
 .PHONY: term clean
+
+# Header dependency tracking.
+#
+# CFLAGS has carried -MD all along, so gcc has been writing .d files
+# listing every header each object depends on -- but nothing included
+# them, and the object rules below have no prerequisites at all
+# (`wm.o:` rather than `wm.o: wm.c`). The effect is that once an object
+# file exists, make considers it permanently up to date: editing a .c
+# or a .h rebuilds nothing, and the link silently produces a binary
+# from stale objects.
+#
+# That is not a theoretical problem -- it has twice produced hardware
+# that behaved like a broken feature when the real cause was simply
+# that the change was never compiled in. Including the .d files makes
+# every object depend on its own source and headers, so `make` alone is
+# correct and `make clean` stops being a required ritual.
+-include $(wildcard *.d)
+-include $(wildcard */*.d)
+-include $(wildcard */*/*.d)

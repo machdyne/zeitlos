@@ -18,7 +18,13 @@
  *
  */
 
-#include <stdio.h>
+// No <stdio.h>: this is a freestanding -nostdlib build with no C
+// library linked at all, and it defines its own putchar/getchar/puts
+// below rather than calling any. The include was vestigial, and it
+// actively breaks toolchains whose libc headers are picolibc's --
+// those declare stdin/stdout in ways that collide with this file's
+// own. <stdint.h>/<stdbool.h> are freestanding headers supplied by
+// GCC itself, so they need no library.
 #include <stdint.h>
 
 int putchar(int c);

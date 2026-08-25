@@ -6,7 +6,7 @@ you can intervene.
 ## Sequence
 
 ```
-gateware  ->  BIOS (BRAM)  ->  kernel (flash -> RAM)  ->  sh()  ->  init()  ->  wm, net, repl, term
+gateware  ->  BIOS (BRAM)  ->  kernel (flash -> RAM)  ->  sh()  ->  init()  ->  wm, net, repl
 ```
 
 1. **BIOS** (`sw/bios/bios.c`) runs from block RAM baked into the
@@ -17,10 +17,20 @@ gateware  ->  BIOS (BRAM)  ->  kernel (flash -> RAM)  ->  sh()  ->  init()  ->  
    HID and the memory pool, registers itself as pid 0, and calls
    `sh()`.
 3. **`sh()`** (`sw/os/sh.c`) mounts the filesystem, offers the
-   **init-cancel window** below, then waits for the apps to appear on
-   the card and runs `init()`.
-4. **`init()`** starts `wm`, `net`, `repl` and `term`, in that order.
-   `wm`'s startup `clear_screen()` is what wipes the splash.
+   **init-cancel window** below, then runs `init()`.
+
+   If the core apps are in flash and nothing on the card shadows them,
+   this happens immediately. Otherwise it waits up to
+   `AUTOINIT_TIMEOUT_TICKS` (~3s) for a slow sdcard to become
+   readable -- pointless on a board with no card at all, which is why
+   the flash case is checked first. See
+   [`flash_apps.md`](flash_apps.md).
+4. **`init()`** starts `wm`, `net` and `repl`, in that order. `term` is
+   launched on demand from wm's dock rather than at boot. `wm`'s
+   startup `clear_screen()` is what wipes the splash.
+
+   Each app is resolved independently: filesystem first, flash
+   underneath, and the source is printed (`init: wm (flash)`).
 
 ## Cancelling init
 

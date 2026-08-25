@@ -18,6 +18,11 @@ module gpu_cursor #()
 	input [9:0] curs_x,
 	input [9:0] curs_y,
 
+	// 0 = normal pointer (X), 1 = busy pointer (Z). Driven by
+	// rtl/socctl.v's cursor_busy; see that module for why a single
+	// unsynchronised bit is fine crossing into pclk here.
+	input curs_alt,
+
 );
 
 	// the sprite is a 5x5 diamond of points, each an offset (-2..+2)
@@ -54,19 +59,50 @@ module gpu_cursor #()
 	wire signed [11:0] yp1 = cy + 12'sd1;
 	wire signed [11:0] yp2 = cy + 12'sd2;
 
+	// The X: both diagonals of the 5x5 grid, 9 points.
+	wire hit_x =
+		(xm2 >= 0 && ym2 >= 0 && gpu_x == xm2[9:0] && gpu_y == ym2[9:0]) ||
+		(xm1 >= 0 && ym1 >= 0 && gpu_x == xm1[9:0] && gpu_y == ym1[9:0]) ||
+		(gpu_x == curs_x && gpu_y == curs_y) ||
+		(gpu_x == xp1[9:0]    && gpu_y == yp1[9:0]) ||
+		(gpu_x == xp2[9:0]    && gpu_y == yp2[9:0]) ||
+		(gpu_x == xp2[9:0]    && ym2 >= 0 && gpu_y == ym2[9:0]) ||
+		(gpu_x == xp1[9:0]    && ym1 >= 0 && gpu_y == ym1[9:0]) ||
+		(xm1 >= 0 && gpu_x == xm1[9:0] && gpu_y == yp1[9:0]) ||
+		(xm2 >= 0 && gpu_x == xm2[9:0] && gpu_y == yp2[9:0]);
+
+	// The Z: full top and bottom bars plus the anti-diagonal, 13
+	// points. Drawn solid rather than sparse -- a 5x5 Z with gaps in
+	// the bars doesn't read as a Z at all, and the extra comparators
+	// are cheap next to being unrecognisable.
+	//
+	// Same negative-offset discipline as the X above: an offset that
+	// would go off the top or left of the screen is simply not drawn,
+	// rather than wrapping to the opposite edge. Every term using xm*
+	// or ym* is guarded.
+	wire hit_z =
+		// top bar, y = -2
+		(ym2 >= 0 && (
+			(xm2 >= 0 && gpu_x == xm2[9:0] && gpu_y == ym2[9:0]) ||
+			(xm1 >= 0 && gpu_x == xm1[9:0] && gpu_y == ym2[9:0]) ||
+			(gpu_x == curs_x        && gpu_y == ym2[9:0]) ||
+			(gpu_x == xp1[9:0]      && gpu_y == ym2[9:0]) ||
+			(gpu_x == xp2[9:0]      && gpu_y == ym2[9:0])
+		)) ||
+		// anti-diagonal, top-right down to bottom-left
+		(ym1 >= 0 && gpu_x == xp1[9:0] && gpu_y == ym1[9:0]) ||
+		(gpu_x == curs_x && gpu_y == curs_y) ||
+		(xm1 >= 0 && gpu_x == xm1[9:0] && gpu_y == yp1[9:0]) ||
+		// bottom bar, y = +2
+		((xm2 >= 0 && gpu_x == xm2[9:0] && gpu_y == yp2[9:0]) ||
+		 (xm1 >= 0 && gpu_x == xm1[9:0] && gpu_y == yp2[9:0]) ||
+		 (gpu_x == curs_x        && gpu_y == yp2[9:0]) ||
+		 (gpu_x == xp1[9:0]      && gpu_y == yp2[9:0]) ||
+		 (gpu_x == xp2[9:0]      && gpu_y == yp2[9:0]));
+
 	always @(posedge pclk) begin
 
-		if (
-			(xm2 >= 0 && ym2 >= 0 && gpu_x == xm2[9:0] && gpu_y == ym2[9:0]) ||
-			(xm1 >= 0 && ym1 >= 0 && gpu_x == xm1[9:0] && gpu_y == ym1[9:0]) ||
-			(gpu_x == curs_x && gpu_y == curs_y) ||
-			(gpu_x == xp1[9:0]    && gpu_y == yp1[9:0]) ||
-			(gpu_x == xp2[9:0]    && gpu_y == yp2[9:0]) ||
-			(gpu_x == xp2[9:0]    && ym2 >= 0 && gpu_y == ym2[9:0]) ||
-			(gpu_x == xp1[9:0]    && ym1 >= 0 && gpu_y == ym1[9:0]) ||
-			(xm1 >= 0 && gpu_x == xm1[9:0] && gpu_y == yp1[9:0]) ||
-			(xm2 >= 0 && gpu_x == xm2[9:0] && gpu_y == yp2[9:0])
-		)
+		if (curs_alt ? hit_z : hit_x)
 			pixel <= 1'b1;
 		else
 			pixel <= 1'b0;

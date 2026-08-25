@@ -4,6 +4,25 @@
 `define DEBUG
 `define ARBITER
 
+// RV32IM: hardware multiply and divide (rtl/cpu/picorv32/picorv32.v's
+// ENABLE_FAST_MUL/ENABLE_MUL/ENABLE_DIV). Universal rather than
+// per-board because the alternative -- some boards with M, some
+// without -- means the software has to be built differently per board
+// too, and a bitstream/binary mismatch here is not a graceful failure:
+// every `mul` becomes an illegal instruction. See docs/muldiv.md.
+//
+// `CPU_MUL_FAST uses the DSP-backed multiplier (2 cycles). It is the
+// one to watch in the nextpnr timing report -- picorv32 instantiates
+// picorv32_pcpi_fast_mul with EXTRA_MUL_FFS=0, i.e. a full unpipelined
+// 32x32 multiply, which is the most likely thing in this design to
+// limit Fmax. If timing gets tight, comment it out and leave `CPU_MUL
+// defined: that selects the sequential shift-add multiplier instead
+// (~32 cycles, still roughly an order of magnitude faster than the
+// libgcc software routine it replaces) with no timing risk at all.
+`define CPU_MUL
+`define CPU_MUL_FAST
+`define CPU_DIV
+
 // BOARD CONFIG
 // ------------
 //
@@ -55,6 +74,9 @@
 `define UART0
 `define USB_HID
 `define SPI_SDCARD
+`define ICACHE
+`define ICACHE_KB 4
+`define ICACHE_LINE_WORDS 4
 
 `elsif BOARD_MOZART_ML1
 

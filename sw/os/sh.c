@@ -17,6 +17,7 @@
 #include "kernel.h"
 #include "mem.h"
 #include "uart.h"
+#include "zar.h"
 #include "../common/zsoc.h"	// Z_TICK_HZ	// k_uart_getc()/k_uart_rx_empty() -- see
 					// boot_cancel_requested() below
 #include "fs/fs.h"
@@ -28,6 +29,7 @@
 
 char *get_arg(char *str, int n);
 void sh_help(void);
+static void sh_bench(void);
 void hex_dump(uint32_t addr);
 uint32_t xfer_recv(uint32_t addr_ptr);
 void cls(void);
@@ -61,6 +63,41 @@ void screenshot(void);
 // giving up. Checked once per tick (not in a tight sub-tick loop) so
 // this doesn't hammer the card with repeated f_open() attempts.
 #define AUTOINIT_TIMEOUT_TICKS (3 * 732)   // ~3 seconds
+
+// -- core app source selection --
+//
+// Boot-time only, and deliberately narrow: `ls` doesn't show flash
+// apps, `run` doesn't look for them, nothing else consults the
+// archive. The whole rule is:
+//
+//   on the SD card?  -> use that, it is assumed newer
+//   otherwise        -> use the flash copy
+//
+// "Assumed newer" is not a guess dressed up as a policy -- the only
+// way an app gets onto the card is somebody deliberately putting it
+// there with `xf`, so treating that as intent is exactly right, and it
+// keeps single-app hot-swapping working during development with no
+// version scheme, timestamps or precedence rules to maintain.
+//
+// Each app prints where it came from, so a stale file on the card
+// shadowing a freshly flashed one is visible at boot rather than a
+// mystery later.
+typedef enum { CORE_SRC_NONE, CORE_SRC_SD, CORE_SRC_FLASH } core_src_t;
+
+static core_src_t core_exec_info(const char *name, z_exec_info_t *info) {
+	if (fs_exec_info_any((char *)name, info) != 0) return CORE_SRC_NONE;
+	return fs_exec_is_flash((char *)name) ? CORE_SRC_FLASH : CORE_SRC_SD;
+}
+
+static int core_load_exec(uint32_t dst, const char *name,
+	const z_exec_info_t *info, core_src_t src) {
+	(void)src;	// the resolver re-checks; see fs_load_exec_any()
+	return fs_load_exec_any(dst, (char *)name, info);
+}
+
+static const char *core_src_name(core_src_t src) {
+	return (src == CORE_SRC_FLASH) ? "flash" : "sd";
+}
 
 static bool wait_for_apps_ready(void) {
 	uint32_t start = z_uptime_ticks();
@@ -206,9 +243,27 @@ void sh(void) {
 	// auto-start the graphical environment by default -- see
 	// wait_for_apps_ready()'s own comment above for why this polls
 	// rather than just calling init() immediately after fs_mount().
+	//
+	// The flash case is checked FIRST and skips the poll entirely.
+	// wait_for_apps_ready() exists to tolerate a slow SD card powering
+	// up, and spends up to AUTOINIT_TIMEOUT_TICKS doing it -- which is
+	// exactly the wrong thing to do on a board with no card at all,
+	// where the answer will never change and the user would sit
+	// through a 3 second stall on every single boot before the desktop
+	// appeared. Booting with no card is a first-class path here, not a
+	// fallback: see sw/os/zar.h.
+	//
+	// Note this only decides WHEN to call init(). init() still picks
+	// per app, so a card holding just `wm` still gets its wm from the
+	// card and everything else from flash.
 	if (boot_cancel_requested()) {
 		printf("init: cancelled -- run `init` to start the graphical "
 			"environment manually\n");
+	} else if (z_zar_present() && fs_size("wm") == 0) {
+		// core apps in flash and nothing on the card shadowing them --
+		// no reason to wait for a card that may not exist
+		printf("init: core apps in flash, no sd card needed\n");
+		init();
 	} else if (wait_for_apps_ready()) {
 		init();
 	} else {
@@ -537,7 +592,7 @@ void sh(void) {
 			// Legacy raw binaries report bss 0 and total == file size,
 			// so this is the same number it always was for them.
 			z_exec_info_t xi;
-			if (fs_exec_info(arg, &xi)) {
+			if (fs_exec_info_any(arg, &xi)) {
 				printf("file not found, or not a usable executable\n");
 				continue;
 			}
@@ -565,7 +620,9 @@ void sh(void) {
 			uint32_t base = k_proc_base(pid);
 			printf(" - base: %lx\n", base);
 			printf(" - loading file\n");
-			fs_load_exec(base, arg, &xi);
+			printf("loading %s from %s\n", arg,
+				fs_exec_is_flash(arg) ? "flash" : "sd");
+			fs_load_exec_any(base, arg, &xi);
 			printf(" - starting process\n");
 			k_proc_start(pid);
 
@@ -626,6 +683,73 @@ void sh(void) {
 			k_mem_dump();
 		}
 
+		// INSTRUCTION CACHE STATUS / CONTROL (rtl/cache.v)
+		//
+		// `cache` alone reports hit rate; `cache on|off` is the
+		// bring-up escape hatch. Disabling forces every fetch to main
+		// memory, exactly as a bitstream built without `ICACHE would,
+		// so "is the cache causing this?" can be answered on real
+		// hardware in one command rather than a re-synthesis.
+		//
+		// Counters reset on every flush, and fs_load_exec() flushes on
+		// every app load -- so what this reports is activity since the
+		// last `run`, not since boot. That's usually what you want when
+		// measuring one app, but it's worth knowing before wondering
+		// why the numbers look small.
+		// CPU / MEMORY MICRO-BENCHMARKS -- see sh_bench() above for what
+		// each figure measures and why the boot-time MIPS number isn't
+		// enough on its own.
+		else if (!strncmp(buffer, "bench", cmdlen)) {
+			sh_bench();
+		}
+
+		else if (!strncmp(buffer, "cache", cmdlen)) {
+			arg = get_arg(buffer, 1);
+
+			if (!z_icache_present()) {
+				printf("no instruction cache in this bitstream\n");
+			}
+			else if (arg != NULL && !strcmp(arg, "on")) {
+				z_icache_enable(true);
+				printf("instruction cache enabled\n");
+			}
+			else if (arg != NULL && !strcmp(arg, "off")) {
+				z_icache_enable(false);
+				printf("instruction cache disabled\n");
+			}
+			else if (arg != NULL && !strcmp(arg, "flush")) {
+				z_icache_flush();
+				printf("instruction cache flushed\n");
+			}
+			else {
+				uint32_t hits = reg_icache_hits;
+				uint32_t misses = reg_icache_misses;
+				uint32_t total = hits + misses;
+				uint32_t h = hits;
+				uint32_t t = total;
+				uint32_t permille;
+
+				// scale both down together before multiplying by
+				// 1000, rather than reaching for 64-bit math: h*1000
+				// overflows a uint32_t past ~4.29M hits, which is a
+				// perfectly reachable count between two flushes.
+				while (t > 4000000u) { t >>= 4; h >>= 4; }
+				permille = t ? (h * 1000u) / t : 0;
+
+				printf("icache: %ldKB, %ld-word lines%s\n",
+					z_icache_kb(), z_icache_line_words(),
+					(reg_icache_ctrl & Z_ICACHE_CTRL_ENABLE) ?
+						"" : " (DISABLED)");
+				printf("  hits:   %ld\n", hits);
+				printf("  misses: %ld\n", misses);
+				if (total)
+					printf("  rate:   %ld.%ld%%\n",
+						permille / 10, permille % 10);
+				else
+					printf("  rate:   (no fetches yet)\n");
+			}
+		}
+
 		// DISPLAY FILESYSTEM CAPACITY -- the SD card, as opposed to
 		// `free` just above, which is main memory. fs_total()/fs_free()
 		// (sw/os/fs/fs.c) have existed since long before this command
@@ -664,7 +788,8 @@ void init(void) {
 
 	printf("starting wm\n");
 	z_exec_info_t xi_wm;
-	uint32_t size_wm = fs_exec_info("wm", &xi_wm) ? 0 : xi_wm.total;
+	core_src_t src_wm = core_exec_info("wm", &xi_wm);
+	uint32_t size_wm = (src_wm == CORE_SRC_NONE) ? 0 : xi_wm.total;
 	if (!size_wm) {
 		printf("init: wm binary not found\n");
 		return;
@@ -675,7 +800,8 @@ void init(void) {
 		return;
 	}
 	uint32_t base_wm = k_proc_base(pid_wm);
-	fs_load_exec(base_wm, "wm", &xi_wm);
+	printf("init: wm (%s)\n", core_src_name(src_wm));
+	core_load_exec(base_wm, "wm", &xi_wm, src_wm);
 	k_proc_start(pid_wm);
 	printf("init: wm started as pid %ld\n", pid_wm);
 
@@ -700,7 +826,8 @@ void init(void) {
 
 	printf("starting net\n");
 	z_exec_info_t xi_net;
-	uint32_t size_net = fs_exec_info("net", &xi_net) ? 0 : xi_net.total;
+	core_src_t src_net = core_exec_info("net", &xi_net);
+	uint32_t size_net = (src_net == CORE_SRC_NONE) ? 0 : xi_net.total;
 	if (!size_net) {
 		printf("init: net binary not found (non-fatal)\n");
 	} else {
@@ -709,7 +836,8 @@ void init(void) {
 			printf("init: unable to create net process (non-fatal)\n");
 		} else {
 			uint32_t base_net = k_proc_base(pid_net);
-			fs_load_exec(base_net, "net", &xi_net);
+			printf("init: net (%s)\n", core_src_name(src_net));
+			core_load_exec(base_net, "net", &xi_net, src_net);
 			k_proc_start(pid_net);
 			printf("init: net started as pid %ld\n", pid_net);
 		}
@@ -734,7 +862,8 @@ void init(void) {
 
 	printf("starting repl\n");
 	z_exec_info_t xi_repl;
-	uint32_t size_repl = fs_exec_info("repl", &xi_repl) ? 0 : xi_repl.total;
+	core_src_t src_repl = core_exec_info("repl", &xi_repl);
+	uint32_t size_repl = (src_repl == CORE_SRC_NONE) ? 0 : xi_repl.total;
 	if (!size_repl) {
 		printf("init: repl binary not found (non-fatal -- term will "
 			"fall back to local echo)\n");
@@ -746,7 +875,8 @@ void init(void) {
 		return;
 	}
 	uint32_t base_repl = k_proc_base(pid_repl);
-	fs_load_exec(base_repl, "repl", &xi_repl);
+	printf("init: repl (%s)\n", core_src_name(src_repl));
+	core_load_exec(base_repl, "repl", &xi_repl, src_repl);
 	k_proc_start(pid_repl);
 	printf("init: repl started as pid %ld\n", pid_repl);
 
@@ -850,6 +980,173 @@ void screenshot(void) {
 // sw/common/zstream.c already used, see zdns.c's own header comment)
 // finally gave both a real shared home, so both copies were deleted.
 
+
+// -- micro-benchmarks (`bench`) --
+//
+// The boot-time MIPS figure (k_cpu_report(), kernel.c) runs one fixed
+// integer loop, deliberately unchanged across builds so the number
+// stays comparable. That makes it blind to anything it doesn't
+// exercise: enabling hardware multiply barely moved it, because that
+// loop contains no multiply.
+//
+// These measure the specific things SOC changes actually affect, in
+// CYCLES PER OPERATION, so a change either moves the relevant number
+// or it doesn't:
+//
+//   int   register-only ALU work -- the boot figure's baseline
+//   mul   32x32 multiply         -- rtl/boards.vh `CPU_MUL/`CPU_MUL_FAST
+//   div   32/32 divide           -- `CPU_DIV
+//   ld    sequential word loads  -- main memory read latency
+//   ldr   scattered word loads   -- same, defeating row locality
+//   st    sequential word stores -- main memory write latency
+//
+// ld vs ldr is the interesting pair for memory work: an SDRAM
+// controller that keeps rows open helps `ld` a lot and `ldr` barely at
+// all, so the gap between them is the thing to watch when
+// rtl/mem/sdram.v changes.
+//
+// Everything is `volatile` or consumed into a sink so the compiler
+// cannot optimise the work away -- without that, -Os deletes most of
+// these loops entirely and reports absurdly fast results.
+
+#define BENCH_ITERS 4096
+
+static inline uint32_t bench_cycle(void) {
+	uint32_t v; __asm__ volatile ("rdcycle %0" : "=r"(v)); return v;
+}
+
+// Instructions retired. rdcycle counts WALL cycles, so it includes
+// every cycle spent in other processes while this one was preempted --
+// which at 4 runnable processes inflates every figure ~4x and, worse,
+// does so unevenly, because each measurement spans only a couple of
+// 1.37ms timeslices and the phase relationship shifts between runs.
+// That noise is easy to spot: if `mul` comes out lower than `int`,
+// the numbers are meaningless, since mul does strictly more work.
+//
+// rdinstret does NOT fix that, and an earlier version of this comment
+// wrongly claimed it did. picorv32's counters are single GLOBAL
+// hardware counters -- not virtualised per process, not saved or
+// restored across context switches -- so instructions retired by other
+// processes are counted here too. Both columns include stolen time.
+//
+// It is still worth printing, because the two columns divide out: the
+// ratio is cycles per instruction, which IS meaningful regardless of
+// how much CPU this process got. Comparing insn/op between two loops
+// is also fair, since both are inflated by the same factor.
+//
+// The only clean numbers come from killing the other processes first.
+static inline uint32_t bench_instret(void) {
+	uint32_t v; __asm__ volatile ("rdinstret %0" : "=r"(v)); return v;
+}
+
+// cycles per iteration, x100 so one decimal can be printed without
+// floating point (there is none in kernel code)
+static uint32_t bench_run_cost(uint32_t cycles, uint32_t iters) {
+	if (!iters) return 0;
+	return (cycles * 100u) / iters;
+}
+
+static void bench_print(const char *name, uint32_t cycles, uint32_t insns,
+	uint32_t iters, const char *note) {
+	uint32_t c100 = bench_run_cost(cycles, iters);
+	uint32_t i100 = bench_run_cost(insns, iters);
+	printf("  %-4s %4ld.%02ld cyc  %3ld.%02ld insn   %s\n", name,
+		(long)(c100 / 100), (long)(c100 % 100),
+		(long)(i100 / 100), (long)(i100 % 100), note);
+}
+
+static void sh_bench(void) {
+
+	volatile uint32_t sink = 0;
+	uint32_t i, t0, n0, x;
+	uint32_t c_int, c_mul, c_div, c_ld, c_ldr, c_st;
+	uint32_t n_int, n_mul, n_div, n_ld, n_ldr, n_st;
+
+	// A scratch buffer big enough that scattered access misses
+	// whatever row/line the previous access opened. Static rather
+	// than on the stack: the shell's stack is not this large.
+	static volatile uint32_t buf[1024];
+
+	printf("cycles per operation (lower is better)\n");
+
+	// -- integer ALU --
+	x = 12345;
+	n0 = bench_instret(); t0 = bench_cycle();
+	for (i = 0; i < BENCH_ITERS; i++) {
+		x += i;
+		x ^= x >> 7;
+	}
+	c_int = bench_cycle() - t0; n_int = bench_instret() - n0;
+	sink = x;
+
+	// -- multiply --
+	x = 12345;
+	n0 = bench_instret(); t0 = bench_cycle();
+	for (i = 0; i < BENCH_ITERS; i++) {
+		x = x * 1103515245u + 12345u;
+	}
+	c_mul = bench_cycle() - t0; n_mul = bench_instret() - n0;
+	sink = x;
+
+	// -- divide --
+	x = 0xffff0000u;
+	n0 = bench_instret(); t0 = bench_cycle();
+	for (i = 0; i < BENCH_ITERS; i++) {
+		x = x / (i + 3u);
+		x += 0x1000u;
+	}
+	c_div = bench_cycle() - t0; n_div = bench_instret() - n0;
+	sink = x;
+
+	// -- sequential loads --
+	n0 = bench_instret(); t0 = bench_cycle();
+	for (i = 0; i < BENCH_ITERS; i++) {
+		sink = buf[i & 1023];
+	}
+	c_ld = bench_cycle() - t0; n_ld = bench_instret() - n0;
+
+	// -- scattered loads --
+	// 397 is prime relative to 1024, so this walks the whole buffer
+	// in a stride that never repeats a nearby address.
+	n0 = bench_instret(); t0 = bench_cycle();
+	for (i = 0; i < BENCH_ITERS; i++) {
+		sink = buf[(i * 397u) & 1023];
+	}
+	c_ldr = bench_cycle() - t0; n_ldr = bench_instret() - n0;
+
+	// -- sequential stores --
+	n0 = bench_instret(); t0 = bench_cycle();
+	for (i = 0; i < BENCH_ITERS; i++) {
+		buf[i & 1023] = i;
+	}
+	c_st = bench_cycle() - t0; n_st = bench_instret() - n0;
+
+	(void)sink;
+
+	bench_print("int", c_int, n_int, BENCH_ITERS, "add/shift/xor");
+	bench_print("mul", c_mul, n_mul, BENCH_ITERS,
+		z_soc_has_feature(Z_FEATURE_CPU_MUL) ?
+			"hardware" : "software (libgcc)");
+	bench_print("div", c_div, n_div, BENCH_ITERS,
+		z_soc_has_feature(Z_FEATURE_CPU_DIV) ?
+			"hardware" : "software (libgcc)");
+	bench_print("ld", c_ld, n_ld, BENCH_ITERS, "sequential word loads");
+	bench_print("ldr", c_ldr, n_ldr, BENCH_ITERS, "scattered word loads");
+	bench_print("st", c_st, n_st, BENCH_ITERS, "sequential word stores");
+
+	// CPU share: how much of the wall time this process actually got.
+	// If it reads well under 100%, every cycles/op figure above is
+	// inflated by roughly the reciprocal, and the thing to fix is the
+	// scheduler, not the code being measured. Uses the int loop, whose
+	// instruction mix is the most predictable.
+	printf("\nprocesses: %ld runnable\n", (long)k_proc_runnable_count());
+	printf("note: BOTH columns include time/instructions from other\n");
+	printf("      processes -- picorv32's counters are global, not per\n");
+	printf("      process. cyc/insn (CPI) is still meaningful. For clean\n");
+	printf("      absolute numbers, kill the other processes first.\n");
+
+}
+
 void sh_help(void) {
 
 	printf("commands:\n");
@@ -871,5 +1168,7 @@ void sh_help(void) {
 	printf(" mkdir [path]      make a directory\n");
 	printf(" touch [path]      create empty file\n");
 	printf(" rm [path]         remove a file\n");
+	printf(" cache [on|off|flush]  instruction cache stats/control\n");
+	printf(" bench             cpu/memory micro-benchmarks\n");
 
 }

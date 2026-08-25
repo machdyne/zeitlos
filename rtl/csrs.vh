@@ -75,4 +75,20 @@ localparam CSR_FEATURES =
 `ifdef LED_DEBUG
 	(32'h1 << 19) |
 `endif
+// CPU extensions. Unlike every bit above these describe the CPU core
+// rather than a peripheral, and they exist for a specific reason:
+// software compiled for rv32im running on a bitstream WITHOUT M does
+// not degrade, it dies -- every mul/div is an illegal instruction.
+// Exposing these lets the BIOS say so in one clear line at boot
+// instead of leaving a mystery hang. See sw/common/zsoc.h's
+// z_soc_check_cpu_arch().
+`ifdef CPU_MUL
+	(32'h1 << 20) |
+`endif
+`ifdef CPU_DIV
+	(32'h1 << 21) |
+`endif
+`ifdef CPU_MUL_FAST
+	(32'h1 << 22) |
+`endif
 	32'h0;

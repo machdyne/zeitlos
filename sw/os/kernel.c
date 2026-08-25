@@ -73,6 +73,11 @@ z_obj_t *k_proc_kill_syscall(z_obj_t *args);	// ditto -- named _syscall, not
 									// reasoning as k_proc_run()'s own comment
 									// just above.
 
+// Prototyped here rather than with the other process helpers below,
+// because the syscall table immediately after this line references it
+// and syscalls.def is expanded at that point.
+z_obj_t *k_proc_wait(z_obj_t *args);
+
 typedef z_obj_t* (*z_syscall_t)(z_obj_t *args);
 
 z_syscall_t z_syscall_table[Z_SYSCALL_COUNT] = {
@@ -180,7 +185,10 @@ z_obj_t *k_proc_run(z_obj_t *args) {
 	// ZEXE-aware, same as sh.c's `run` -- image size is data + bss,
 	// which is not the file size for the new format (sw/common/zexec.h).
 	z_exec_info_t xi;
-	uint32_t size = fs_exec_info(name, &xi) ? 0 : xi.total;
+	// _any: filesystem first, flash core-app archive underneath (fs.c).
+	// This is what lets wm's dock launch `term` on a board with no SD
+	// card, and what lets a killed core app be restarted.
+	uint32_t size = fs_exec_info_any(name, &xi) ? 0 : xi.total;
 
 	// see kernel.h's z_proc_stack_size_for() comment -- the same
 	// shared decision sh.c's own `run`/`init` use, so launching
@@ -193,7 +201,7 @@ z_obj_t *k_proc_run(z_obj_t *args) {
 		pid = k_proc_create(size, stack_size);
 		if (pid) {
 			uint32_t base = k_proc_base(pid);
-			fs_load_exec(base, name, &xi);
+			fs_load_exec_any(base, name, &xi);
 			k_proc_start(pid);
 		}
 	}
@@ -260,6 +268,27 @@ static void k_soc_report(void) {
 
 	if (any_on_line) printf("\n");
 	else printf("     (none reported)\n");
+
+	// Gateware/software agreement. If this binary was built for rv32im
+	// but the bitstream has no multiplier, every mul is an illegal
+	// instruction -- which on this SOC is not a clean trap but IRQ 1,
+	// which nothing handles, so the machine would spin somewhere that
+	// looks unrelated. Say so here instead. See zsoc.h's own
+	// z_soc_check_cpu_arch() comment for the full failure mode.
+	printf("     build   %s\n", z_soc_build_arch());
+
+	if (!z_soc_check_cpu_arch()) {
+		printf("\n");
+		printf(" *** CPU MISMATCH ***\n");
+		printf(" this kernel is built for %s but the bitstream\n",
+			z_soc_build_arch());
+		printf(" has no hardware multiply/divide. every mul/div\n");
+		printf(" will be an illegal instruction.\n");
+		printf(" rebuild the gateware (rtl/boards.vh: CPU_MUL,\n");
+		printf(" CPU_DIV) or the software (sw/common/arch.mk:\n");
+		printf(" ARCH=rv32i), and flash both together.\n");
+		printf("\n");
+	}
 
 }
 
@@ -333,9 +362,17 @@ static void k_cpu_report(void) {
 	uint32_t c0 = rd_cycle();
 
 	while (z_kernel_ticks - t0 < CPU_BENCH_TICKS) {
-		// plain rv32i integer work -- no multiply (ENABLE_MUL is 0 in
-		// rtl/sysctl.v, so a `*` here would become a libgcc call and
-		// measure that instead), no memory beyond the loop itself.
+		// Plain integer work: shifts, adds and xors only, no memory
+		// beyond the loop itself and deliberately no multiply.
+		//
+		// The no-multiply part predates rv32im (rtl/boards.vh's
+		// `CPU_MUL) and is now a deliberate choice rather than a
+		// limitation: keeping this loop identical across builds is
+		// what makes the number comparable over time. It does mean
+		// this figure is blind to hardware multiply -- it barely
+		// moved when MUL was enabled, because there is nothing here
+		// for MUL to do. Use the `bench` shell command (sw/os/sh.c)
+		// to measure mul/div/memory separately.
 		for (int i = 0; i < 64; i++) {
 			x += i;
 			x ^= x >> 7;
@@ -517,6 +554,7 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 		"r"((uint32_t)(uintptr_t)&__global_pointer$) : "memory");
 
 	uint32_t *ret;
+	int sched_scanned;
 
 	if (syscall_id != Z_SYSCALL_NONE) {
 
@@ -559,16 +597,49 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 	// swap process on KTIMER interrupt
 	if ((irqs & (1 << Z_IRQ_KTIMER)) != 0) {
 
-		// don't switch if there's only one process
-		if (k_proc_active_count() < 2) { ret = regs; goto done; }
+		// Wake anything whose timeout has expired, BEFORE counting
+		// runnable processes or picking the next one -- otherwise a
+		// process whose sleep just elapsed would wait another full
+		// round before being noticed.
+		//
+		// wake_tick 0 means "no timeout, wait indefinitely"; such a
+		// process is woken only by k_msg_send(). The comparison is
+		// written as a subtraction so it stays correct across the
+		// 32-bit wrap of z_kernel_ticks (~68 days at 732Hz): a plain
+		// `ticks >= wake_tick` would fail for a sleep that straddles
+		// the wrap and hang that process for another full period.
+		for (int i = 0; i < Z_PROCS_MAX; i++) {
+			if ((z_procs[i].flags & Z_PROC_FLAG_BLOCKED) == 0) continue;
+			if (z_procs[i].wake_tick == 0) continue;
+			if ((int32_t)(z_kernel_ticks - z_procs[i].wake_tick) > 0)
+				k_proc_unblock(i);
+		}
+
+		// don't switch if there's at most one process that could run.
+		// Deliberately runnable, not active: if wm/net/repl are all
+		// blocked on their mailboxes, the one process with work to do
+		// keeps the CPU instead of round-robining through three
+		// processes that would each immediately block again.
+		if (k_proc_runnable_count() < 2) { ret = regs; goto done; }
 
 		// save current process registers
   		for (int i = 0; i < 32; i++) {
 			z_procs[z_pid].regs[i] = *(regs + i);
 		}
 
-		// find next active process (round-robin scheduling)
+		// Bounded scan. Before BLOCKED existed, this loop was
+		// guaranteed to terminate because the current process was
+		// itself active and would be reached again. That is no longer
+		// true -- every process can now be unschedulable at once -- and
+		// an unbounded scan here would spin forever INSIDE the timer
+		// interrupt handler, which is unrecoverable. The count is the
+		// safety net; the k_proc_runnable_count() check above means it
+		// should never actually be hit.
+		sched_scanned = 0;
+
+		// find next runnable process (round-robin scheduling)
 		next_process:
+		if (++sched_scanned > Z_PROCS_MAX) { ret = regs; goto done; }
 		z_pid++;
 		if (z_pid >= Z_PROCS_MAX) z_pid = 0;
 
@@ -612,7 +683,9 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 			goto next_process;
 		}
 
-		if ((z_procs[z_pid].flags & Z_PROC_FLAG_ACTIVE) != Z_PROC_FLAG_ACTIVE)
+		// skips both inactive and blocked slots -- see
+		// Z_PROC_RUNNABLE()/Z_PROC_FLAG_BLOCKED in kernel.h
+		if (!Z_PROC_RUNNABLE(z_procs[z_pid]))
 			goto next_process;
 
 		// configure address translation
@@ -628,6 +701,81 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 	done:
 	__asm__ volatile ("mv gp, %0" :: "r"(saved_gp) : "memory");
 	return ret;
+
+}
+
+// Make a blocked process schedulable again. Safe to call on a process
+// that isn't blocked (does nothing), which is what lets k_msg_send()
+// call it unconditionally on every delivery.
+void k_proc_unblock(uint32_t pid) {
+	if (pid >= Z_PROCS_MAX) return;
+	z_procs[pid].flags &= ~Z_PROC_FLAG_BLOCKED;
+	z_procs[pid].wake_tick = 0;
+}
+
+// -- k_proc_wait syscall --
+//
+// "Block me until a message arrives, or until `timeout` ticks have
+// passed." A timeout of 0 means wait indefinitely.
+//
+// THE RACE THIS AVOIDS is the whole reason this is a syscall rather
+// than two: check the mailbox, find it empty, then set BLOCKED. If a
+// message could arrive between those two steps, the sender would
+// unblock a process that isn't blocked yet, and the process would then
+// mark itself blocked and sleep forever holding a message it never
+// noticed -- a hang that depends on exact timing and would be
+// miserable to reproduce.
+//
+// It is safe here because both halves happen inside one syscall.
+// picorv32's interrupt model doesn't nest, and no other process can
+// run until this handler returns, so nothing can deliver a message in
+// between. Do NOT split this into a "peek" and a separate "block".
+//
+// Returns Z_OK if the caller is now blocked, Z_FAIL if a message was
+// already waiting and it should just carry on reading.
+//
+// Note this does not switch away immediately -- the caller keeps
+// whatever remains of its current timeslice and spins in the
+// z_msg_wait() loop until the next KTIMER tick, which then skips it.
+// So at most one partial timeslice is wasted per block, once, rather
+// than every timeslice forever. Yielding on the spot would need the
+// syscall path to do the full save/switch dance the KTIMER path does;
+// that's a worthwhile follow-up, not a correctness issue.
+z_obj_t *k_proc_wait(z_obj_t *args) {
+
+	uint32_t timeout = (args->type == Z_UINT32) ? args->val.uint32 : 0;
+
+	// something already waiting -- don't block, let the caller read it
+	if (!z_mailbox_empty(z_pid))
+		return (&z_fail);
+
+	// wake_tick 0 is the sentinel for "indefinite", so a timeout that
+	// happens to land exactly on tick 0 is nudged to 1. At 732Hz that
+	// is a 1.4ms error once every ~68 days.
+	if (timeout) {
+		uint32_t w = z_kernel_ticks + timeout;
+		z_procs[z_pid].wake_tick = w ? w : 1;
+	} else {
+		z_procs[z_pid].wake_tick = 0;
+	}
+
+	z_procs[z_pid].flags |= Z_PROC_FLAG_BLOCKED;
+
+	return (&z_ok);
+
+}
+
+// Processes that could actually be given a timeslice right now, as
+// opposed to k_proc_active_count()'s "processes that exist".
+uint32_t k_proc_runnable_count(void) {
+
+	uint32_t count = 0;
+
+	for (int i = 0; i < Z_PROCS_MAX; i++)
+		if (Z_PROC_RUNNABLE(z_procs[i]))
+			count++;
+
+	return(count);
 
 }
 
@@ -805,8 +953,17 @@ z_rv k_kernel_dump(void) {
 z_rv k_proc_dump(void) {
 	for (int i = 0; i < Z_PROCS_MAX; i++) {
 		if (!z_procs[i].base) continue;
-		printf(" pid: %2i base: %.8lx size: %.8lx pc %.8lx sp: %.8lx flags: %.8lx\n",
-			i, z_procs[i].base, z_procs[i].size,
+		// state is derived from flags rather than printed as another
+		// number: which processes are actually schedulable is the whole
+		// point of Z_PROC_FLAG_BLOCKED, and reading it out of a hex
+		// bitmask at a serial console is needless work.
+		const char *state = "run";
+		if (z_procs[i].flags & Z_PROC_FLAG_DIE) state = "die";
+		else if (z_procs[i].flags & Z_PROC_FLAG_BLOCKED) state = "blk";
+		else if (!(z_procs[i].flags & Z_PROC_FLAG_ACTIVE)) state = "---";
+
+		printf(" pid: %2i %s base: %.8lx size: %.8lx pc %.8lx sp: %.8lx flags: %.8lx\n",
+			i, state, z_procs[i].base, z_procs[i].size,
 			z_procs[i].regs[0], z_procs[i].regs[2], z_procs[i].flags);
 	}
 	return Z_OK;

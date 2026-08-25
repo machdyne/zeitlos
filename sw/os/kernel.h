@@ -19,12 +19,48 @@ typedef struct {
 	uint32_t		base;
 	uint32_t		size;
 	uint32_t		flags;
+
+	// Tick at which a BLOCKED process becomes runnable again, or 0 for
+	// "no timeout, wait indefinitely". Only meaningful while BLOCKED is
+	// set. See k_proc_wait() in kernel.c.
+	uint32_t		wake_tick;
+
 	uint32_t		regs[32];
 
 } z_proc;
 
 #define Z_PROC_FLAG_ACTIVE	0x000000001
 #define Z_PROC_FLAG_DIE		0x000000002
+
+// Process is waiting for something and must NOT be given a timeslice.
+//
+// Without this, waiting is spelled as a spin: z_msg_wait() in
+// zeitlos.c loops on z_msg_read() until something arrives, so a
+// process with an empty mailbox burns its entire ~1.37ms turn asking
+// "anything yet?" a few thousand times. The scheduler cannot tell that
+// apart from real work, so with wm + net + repl idle, a busy
+// foreground app still gets only ~1/4 of the CPU -- and adding a fifth
+// process slows everything down even if it does nothing.
+//
+// A blocked process is skipped entirely by the round-robin scan, and
+// becomes runnable again via either:
+//   - k_msg_send() delivering a message to it (immediate), or
+//   - the KTIMER sweep, once z_kernel_ticks reaches wake_tick.
+//
+// ACTIVE stays set while blocked. BLOCKED is about schedulability, not
+// liveness, so k_proc_kill() and the DIE path are unaffected.
+#define Z_PROC_FLAG_BLOCKED	0x000000004
+
+// Scheduler helpers -- k_proc_unblock() is called from msg.c on every
+// delivery, so it has to be visible outside kernel.c.
+uint32_t k_proc_runnable_count(void);
+void k_proc_unblock(uint32_t pid);
+z_obj_t *k_proc_wait(z_obj_t *args);
+
+// Eligible for a timeslice: active and not blocked.
+#define Z_PROC_RUNNABLE(p) \
+	(((p).flags & (Z_PROC_FLAG_ACTIVE | Z_PROC_FLAG_BLOCKED)) \
+		== Z_PROC_FLAG_ACTIVE)
 
 #define Z_PROCS_MAX 16
 

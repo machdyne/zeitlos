@@ -31,6 +31,7 @@
 #include <string.h>
 
 #include "../../common/zeitlos.h"
+#include "../../common/zsoc.h"	// Z_TICK_HZ, z_cursor_set_busy()
 #include "../../common/zwm.h"
 #include "../../common/zgfx.h"
 #include "../../common/zkbd.h"
@@ -91,11 +92,32 @@ typedef struct {
 	const uint8_t	*bitmap;	// 32x32 1bpp, MSB-first -- see dock_icons.h
 } dock_app_t;
 
-static const dock_app_t dock_apps[] = {
+// Everything the dock COULD show. What it actually shows is decided at
+// startup by dock_build(), which keeps only the ones that resolve.
+//
+// An icon for an app that isn't installed is a button that does
+// nothing, and which apps exist genuinely varies per machine now: the
+// core apps are in flash and always present (sw/os/zar.h), while
+// anything else only exists if somebody put it on an sdcard. Listing a
+// candidate here is therefore an offer, not a promise -- adding a new
+// app to the dock needs no conditional logic, just an entry and an
+// icon.
+static const dock_app_t dock_candidates[] = {
 	{ "term",	z_icon_term_data  },
 	{ "gpu3d",	z_icon_gpu3d_data },
 };
-#define DOCK_APP_COUNT   (int)(sizeof(dock_apps) / sizeof(dock_apps[0]))
+#define DOCK_CANDIDATE_COUNT \
+	(int)(sizeof(dock_candidates) / sizeof(dock_candidates[0]))
+
+// The subset actually present, filled in by dock_build(). Pointers
+// into dock_candidates[] rather than copies, so the icon data isn't
+// duplicated.
+static const dock_app_t *dock_apps[DOCK_CANDIDATE_COUNT];
+static int dock_app_count;
+
+// Everything below indexes the live set, so this stays spelled the way
+// it always was.
+#define DOCK_APP_COUNT   dock_app_count
 
 #define DOCK_ICON_SIZE   32	// fixed icon size, see file header comment
 #define DOCK_ICON_GAP     4	// space between adjacent icons
@@ -130,9 +152,9 @@ static int dock_selected = -1;
 // message()'s Z_WM_CREATE_WINDOW case) or after DOCK_LAUNCH_TIMEOUT_
 // ITERS main-loop iterations with no window (main()'s own loop) --
 // see that constant's own comment for why a timeout exists at all.
-static bool dock_launching[DOCK_APP_COUNT];
-static uint32_t dock_launching_pid[DOCK_APP_COUNT];
-static uint32_t dock_launching_ticks[DOCK_APP_COUNT];
+static bool dock_launching[DOCK_CANDIDATE_COUNT];
+static uint32_t dock_launching_pid[DOCK_CANDIDATE_COUNT];
+static uint32_t dock_launching_deadline[DOCK_CANDIDATE_COUNT];
 
 static wm_window_t windows[WM_MAX_WINDOWS];
 
@@ -337,6 +359,150 @@ static void draw_titlebar_content(wm_window_t *w) {
 
 }
 
+// -- system-busy state --
+//
+// A BITMASK of reasons rather than a bool or a counter, deliberately.
+// A bool breaks as soon as two things are busy at once -- whichever
+// finishes first clears it while the other is still going. A counter
+// fixes that but leaks forever on one unbalanced call, and gives you
+// nothing to look at when it does. With named reasons, setting the
+// same one twice is harmless, clearing it is definitive, and a stuck
+// busy state says on the console exactly which reason is stuck.
+//
+// The visible effect is the mouse cursor: X normally, Z while busy.
+// See wm_busy_set()/wm_busy_clear().
+#define WM_BUSY_STARTUP   (1u << 0)   // core services not up yet
+
+static uint32_t wm_busy_mask;
+
+// Reports what it wrote and whether the hardware is even there. This
+// is deliberately noisy: the cursor is the only visible effect, so a
+// silent failure here looks identical to "the feature doesn't work"
+// with nothing to go on. Prints once per state change, not per loop.
+static void wm_busy_apply(void) {
+	// The cursor sprite is drawn in hardware and composited at scanout
+	// (rtl/gpu/gpu_cursor.v), so this register is the only way to
+	// change its shape -- wm cannot draw over it.
+	//
+	// Requires a bitstream with rtl/socctl.v: this is an RTL change, so
+	// `make flash`, not `make dev-flash`. Harmless on an older
+	// bitstream (the write is acked and discarded), it just leaves the
+	// cursor as an X.
+	bool busy = (wm_busy_mask != 0);
+
+	z_cursor_set_busy(busy);
+
+	// Read it back. socctl's CTRL register is readable, so this
+	// distinguishes the three ways this can fail -- no socctl in the
+	// bitstream at all, socctl present but the write not landing, and
+	// the write landing fine while something else is wrong -- which
+	// otherwise all present identically as "the cursor didn't change".
+	if (!z_socctl_present()) {
+		printf("wm: busy=%d (no socctl in this bitstream, cursor fixed)\n",
+			(int)busy);
+		return;
+	}
+
+	uint32_t rb = reg_socctl_ctrl & Z_SOCCTL_CURSOR_BUSY;
+	printf("wm: busy=0x%lx cursor=%s%s\n", (unsigned long)wm_busy_mask,
+		rb ? "Z" : "X",
+		((rb != 0) == busy) ? "" : " (READBACK MISMATCH)");
+}
+
+static void wm_busy_set(uint32_t reason) {
+	if (wm_busy_mask & reason) return;
+	wm_busy_mask |= reason;
+	wm_busy_apply();
+}
+
+static void wm_busy_clear(uint32_t reason) {
+	if (!(wm_busy_mask & reason)) return;
+	wm_busy_mask &= ~reason;
+	wm_busy_apply();
+}
+
+static bool wm_is_busy(void) {
+	return wm_busy_mask != 0;
+}
+
+// -- core service readiness --
+//
+// `term` connects to `repl` over a port as soon as it starts, and that
+// connect has a timeout. Launch it before repl has registered itself
+// and the connect simply fails -- term comes up as a blank window with
+// no indication of why, which is exactly the confusing failure this
+// gating exists to prevent.
+//
+// Checked by name via the pid registry rather than by fixed pid: the
+// fixed Z_PID_* values are a fallback, and registration is what
+// actually signals "this service is up and listening".
+static bool core_services_ready(void) {
+
+	uint32_t pid;
+	bool net_up = z_pid_lookup("net0", &pid);
+	bool repl_up = z_pid_lookup("repl0", &pid);
+
+	// Log each service the first time it appears, so a service that
+	// never registers is obvious from the console rather than showing
+	// up only as a cursor that never changes.
+	static bool logged_net, logged_repl;
+	if (net_up && !logged_net) { logged_net = true; printf("wm: net0 up\n"); }
+	if (repl_up && !logged_repl) { logged_repl = true; printf("wm: repl0 up\n"); }
+
+	return net_up && repl_up;
+
+}
+
+// Polled from the main loop until it goes true, then never again.
+// Clearing WM_BUSY_STARTUP is what re-enables the dock.
+//
+// Returns true on the transition, so the caller can repaint. Doing the
+// repaint here would need repair_region() forward-declared, and this
+// sits above it purely because the busy state has to be declared
+// before dock_launch() uses it -- not worth a declaration just to move
+// one line.
+static bool check_core_services(void) {
+
+	if (!(wm_busy_mask & WM_BUSY_STARTUP)) return false;
+	if (!core_services_ready()) return false;
+
+	printf("wm: core services ready\n");
+	wm_busy_clear(WM_BUSY_STARTUP);
+
+	return true;
+
+}
+
+// Decides which candidates the dock actually offers.
+//
+// Called once at startup. z_exec_exists() asks the kernel's own
+// resolver (filesystem first, flash core-app archive underneath), so
+// the answer is exactly what z_proc_run() would do -- a candidate is
+// kept if and only if clicking it would really launch something.
+//
+// Not re-run when an sdcard is inserted later. Doing that would mean
+// resizing and repainting the dock window underneath whatever the user
+// is doing, and the dock is drawn once at a size derived from the
+// count. Worth revisiting if hotplug ever becomes a thing people
+// actually do; for now a reboot picks up a new card.
+static void dock_build(void) {
+
+	dock_app_count = 0;
+
+	for (int i = 0; i < DOCK_CANDIDATE_COUNT; i++) {
+		if (!z_exec_exists(dock_candidates[i].name)) {
+			printf("wm: dock: '%s' not installed, skipping\n",
+				dock_candidates[i].name);
+			continue;
+		}
+		dock_apps[dock_app_count++] = &dock_candidates[i];
+	}
+
+	printf("wm: dock: %d of %d apps available\n",
+		dock_app_count, DOCK_CANDIDATE_COUNT);
+
+}
+
 // draws the dock's content (one 32x32 icon slot per dock_apps[]
 // entry) -- called from repair_region() below, same place/timing as
 // an app's own Z_WM_REDRAW-triggered redraw, except synchronous and
@@ -433,9 +599,9 @@ static void draw_dock(void) {
 			// see dock_launching[]'s own comment -- solid fill, then
 			// the icon's own ink pixels punched back out to 0 on top.
 			z_fb_hw_fill_rect(ix, iy, DOCK_ICON_SIZE, DOCK_ICON_SIZE, 1);
-			draw_icon_bitmap_inverted(ix, iy, dock_apps[i].bitmap);
+			draw_icon_bitmap_inverted(ix, iy, dock_apps[i]->bitmap);
 		} else {
-			draw_icon_bitmap(ix, iy, dock_apps[i].bitmap);
+			draw_icon_bitmap(ix, iy, dock_apps[i]->bitmap);
 		}
 
 	}
@@ -613,7 +779,16 @@ static inline uint8_t get_mouse_btn(void) {
 // unit -- same caveat REDRAW_ACK_TIMEOUT's own comment gives -- just
 // generously past how long even a slow-loading GUI app should ever
 // take to get as far as its first z_win_create() call.
-#define DOCK_LAUNCH_TIMEOUT_ITERS   5000
+// Now a real time budget rather than a loop-iteration count.
+//
+// Counting iterations was never reliable: loop rate depends on how
+// many other processes are runnable, so this same constant meant
+// something different with one app running than with five. Adding the
+// idle yield at the bottom of the main loop below would have made that
+// worse still (the loop now runs at ~Z_TICK_HZ when idle), so it is
+// measured against z_uptime_ticks() instead and no longer cares how
+// fast the loop happens to be spinning.
+#define DOCK_LAUNCH_TIMEOUT_TICKS   (Z_TICK_HZ * 3)
 
 // launches dock_apps[slot], same as a mouse click on that icon (see
 // dock_click() below, which now just maps a click to a slot and calls
@@ -623,6 +798,18 @@ static inline uint8_t get_mouse_btn(void) {
 static void dock_launch(int slot) {
 
 	if (slot < 0 || slot >= DOCK_APP_COUNT) return;
+
+	// Nothing launches while the system is busy. Right now the only
+	// reason is WM_BUSY_STARTUP -- `term` connects to `repl` the
+	// moment it starts, and if repl isn't listening yet that connect
+	// times out and term comes up as a blank window with no
+	// explanation. Refusing the launch is far better than producing a
+	// broken one, and the Z cursor is what tells the user to wait.
+	if (wm_is_busy()) {
+		printf("wm: dock: busy, not launching '%s' yet\n",
+			dock_apps[slot]->name);
+		return;
+	}
 
 	// already launching -- see dock_launching[]'s own comment. Without
 	// this, an impatient double-click, or holding Enter down, could
@@ -647,13 +834,13 @@ static void dock_launch(int slot) {
 	// whichever process the CPU happens to be running at the time.
 	dock_launching[slot] = true;
 	dock_launching_pid[slot] = 0;	// not known yet -- see below
-	dock_launching_ticks[slot] = 0;
+	dock_launching_deadline[slot] = z_uptime_ticks() + DOCK_LAUNCH_TIMEOUT_TICKS;
 
 	if (dock_idx >= 0)
 		repair_region(windows[dock_idx].x, windows[dock_idx].y,
 			windows[dock_idx].w, windows[dock_idx].h, -1);
 
-	const char *name = dock_apps[slot].name;
+	const char *name = dock_apps[slot]->name;
 	printf("wm: dock: launching '%s'\n", name);
 
 	uint32_t pid = z_proc_run(name);
@@ -977,6 +1164,17 @@ static int create_window(uint32_t owner_pid, const char *title,
 // cascade every other window uses. owner_pid is my_pid, same as the
 // demo windows -- see main().
 static int create_dock(void) {
+
+	// No dock at all if nothing resolved. Not just cosmetic: the width
+	// below computes (DOCK_APP_COUNT - 1) * DOCK_ICON_GAP in unsigned
+	// arithmetic, which underflows to an enormous width at zero. Can't
+	// happen while `term` is a flash-resident core app, but the dock
+	// contents are data now and this is one subtraction away from
+	// being someone's very confusing afternoon.
+	if (DOCK_APP_COUNT <= 0) {
+		printf("wm: dock: no apps available, not creating dock\n");
+		return -1;
+	}
 
 	uint32_t w = DOCK_PADDING * 2 + DOCK_APP_COUNT * DOCK_ICON_SIZE +
 		(DOCK_APP_COUNT - 1) * DOCK_ICON_GAP;
@@ -1443,7 +1641,17 @@ int main(void) {
 	// create_dock()'s own comment); bring_to_front(dock_idx) calls
 	// elsewhere in this file keep it that way as other windows come
 	// and go.
+	//
+	// dock_build() first: create_dock() sizes the window from
+	// DOCK_APP_COUNT, so the live set has to be known before the
+	// window exists, not after.
+	dock_build();
 	dock_idx = create_dock();
+
+	// Busy until net and repl register themselves. wm is up (it is
+	// this process) but the services term depends on are started by
+	// init() alongside it and take a moment to appear.
+	wm_busy_set(WM_BUSY_STARTUP);
 	if (dock_idx >= 0)
 		repair_region(windows[dock_idx].x, windows[dock_idx].y,
 			windows[dock_idx].w, windows[dock_idx].h, -1);
@@ -1480,13 +1688,15 @@ int main(void) {
 		while (z_msg_read(&msg) == Z_OK)
 			handle_message(&msg);
 
-		// -- dock launch timeout -- see DOCK_LAUNCH_TIMEOUT_ITERS'
-		// own comment below for why this exists at all.
+		// -- dock launch timeout -- see DOCK_LAUNCH_TIMEOUT_TICKS'
+		// own comment below for why this exists at all. Compared as a
+		// subtraction so it stays correct across the 32-bit tick wrap.
 		for (int di = 0; di < DOCK_APP_COUNT; di++) {
 			if (!dock_launching[di]) continue;
-			if (++dock_launching_ticks[di] < DOCK_LAUNCH_TIMEOUT_ITERS) continue;
+			if ((int32_t)(z_uptime_ticks() - dock_launching_deadline[di]) < 0)
+				continue;
 			printf("wm: dock: gave up waiting for '%s' (pid %ld) to create a window\n",
-				dock_apps[di].name, (long)dock_launching_pid[di]);
+				dock_apps[di]->name, (long)dock_launching_pid[di]);
 			dock_launching[di] = false;
 			if (dock_idx >= 0)
 				repair_region(windows[dock_idx].x, windows[dock_idx].y,
@@ -1629,6 +1839,12 @@ int main(void) {
 		}
 
 		last_btn = btn;
+
+		// clears WM_BUSY_STARTUP once net/repl are registered; repaint
+		// the dock on the transition so it stops looking disabled
+		if (check_core_services() && dock_idx >= 0)
+			repair_region(windows[dock_idx].x, windows[dock_idx].y,
+				windows[dock_idx].w, windows[dock_idx].h, -1);
 
 		for (volatile int i = 0; i < 2000; i++); // light throttle
 

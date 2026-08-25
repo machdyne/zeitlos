@@ -679,7 +679,6 @@ int main(void) {
 		render();
 
 		if (got_redraw) z_win_redraw_done(&win);
-
 	}
 
 	return 0;

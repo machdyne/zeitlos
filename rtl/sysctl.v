@@ -11,6 +11,23 @@
 
 localparam SYSCLK = 48_000_000;
 
+// Instruction cache geometry defaults, if a board enabled `ICACHE
+// without pinning them (rtl/boards.vh). 8KB with 4-word lines suits
+// the SDRAM boards: rtl/mem/sdram.v has no burst path, so a fill costs
+// ~11 cycles per word regardless and short lines keep the miss penalty
+// down. PSRAM boards will eventually want longer lines -- rtl/mem/
+// qqspi.v spends ~40 of its ~63 cycles per word on fixed command/
+// address/dummy overhead, which a burst would amortize -- but that
+// needs burst support in qqspi_wb first, so don't raise this there yet.
+`ifdef ICACHE
+`ifndef ICACHE_KB
+`define ICACHE_KB 8
+`endif
+`ifndef ICACHE_LINE_WORDS
+`define ICACHE_LINE_WORDS 4
+`endif
+`endif
+
 module sysctl #()
 (
 
@@ -309,6 +326,18 @@ module sysctl #()
 	wire wbm_ack;
 	wire wbm_cyc;
 
+	// Physical (post-MTU) CPU address. This is wb_mtu's translated
+	// output, and is what the instruction cache tags on -- see
+	// rtl/cache.v's header for why the cache must sit AFTER the MTU
+	// rather than before it (tagging virtual 0x8000_xxxx would make
+	// every app's addresses alias every other app's, and would force a
+	// full invalidate on every context switch).
+	//
+	// Without ICACHE this is simply wired straight through to wbm_adr
+	// and the bus behaves exactly as it did before the cache existed.
+	wire [31:0] wbm_cpu_padr;
+	wire wbm_cpu_instr;
+
 	wire [31:0] wbm_vram_adr;
 	wire [31:0] wbm_vram_dat_o;
 	wire [31:0] wbm_vram_dat_i;
@@ -343,6 +372,10 @@ module sysctl #()
 	wire [31:0] wbs_spieth_dat_o;
 	wire [31:0] wbs_ethmac_dat_o;
 	wire [31:0] wbs_csrs_dat_o;
+	wire [31:0] wbs_socctl_dat_o;
+`ifdef ICACHE
+	wire [31:0] wbs_cache_dat_o;
+`endif
 
 	wire cs_bram = (wbm_adr < 8192);
 	wire cs_mtu = ((wbm_adr & 32'hf000_0000) == 32'h9000_0000);
@@ -415,7 +448,54 @@ module sysctl #()
 	// this address map at the time this was added (0x0/0x9 bram/mtu,
 	// 0x1-0x6 mem/glyph/spieth/ethmac, 0xa-0xf gpu/sdcard/usb/debug/
 	// uart -- see the full cs_* list in this file).
-	wire cs_csrs = ((wbm_adr & 32'hf000_0000) == 32'h7000_0000);
+	// Nibble 0x7 is split: csrs.v keeps 0x7000_00xx and the instruction
+	// cache's control/status registers take 0x7000_01xx. Bit 8 selects.
+	// The cache deliberately does NOT live inside csrs.v -- that block
+	// is documented as read-only and side-effect-free, and a flush
+	// register is neither. Nibble 0x8 was the other candidate and was
+	// rejected: that's the virtual window apps execute in, so a stale
+	// app pointer dereferenced in kernel context would land on cache
+	// control registers, which is a bad failure mode to invent.
+	// The 0x7000_01xx sub-window MUST be acknowledged on every board,
+	// with or without a cache, for a reason learned the hard way: an
+	// address nothing decodes gets NO ACK on this bus (the wbm_ack mux
+	// below falls through to 1'b0), and picorv32_wb then waits for that
+	// ack forever. It is not a harmless read of undefined data, it is a
+	// dead hang -- which is exactly what a flush write did on a build
+	// without the cache.
+	//
+	// sw/bios/bios.c and sw/os/fs/fs.c write the flush register
+	// unconditionally, and they have to: the obvious alternative --
+	// read INFO first to see whether a cache exists -- would hang on
+	// that very read for the same reason.
+	//
+	// So without ICACHE, csrs_wb simply keeps the whole 0x7 nibble it
+	// always had. It acks any cycle in range, ignores writes, and reads
+	// back 32'h0 for offsets it doesn't know (see rtl/csrs.v) -- which
+	// is precisely the stub behaviour needed here, and zero returned
+	// from INFO fails z_icache_present()'s magic check, correctly
+	// telling software the cache isn't there. A dedicated stub slave
+	// was tried first and cost ~800 LUT4 on ECP5: adding another term
+	// to the wbm_dat_i mux is expensive because that mux resolves
+	// through a 32'hzzzz_zzzz default, which yosys handles poorly.
+	// Nibble 0x7 has three tenants, all always decoded:
+	//   0x7000_00xx  csrs.v      read-only "what does this bitstream have"
+	//   0x7000_01xx  cache.v     instruction cache control/stats
+	//   0x7000_02xx  socctl.v    writable global config
+	// Without ICACHE, csrs.v absorbs the cache window so the flush
+	// register still acks -- see the comment above cs_socctl below.
+	wire cs_socctl = ((wbm_adr & 32'hf000_0300) == 32'h7000_0200);
+	wire wbm_cyc_socctl = cs_socctl && wbm_cyc;
+`ifdef ICACHE
+	wire cs_csrs = ((wbm_adr & 32'hf000_0300) == 32'h7000_0000);
+	wire cs_cache = ((wbm_adr & 32'hf000_0300) == 32'h7000_0100);
+	wire wbm_cyc_cache = cs_cache && wbm_cyc;
+`else
+	// csrs takes everything in the nibble EXCEPT socctl's window, so an
+	// unconditional icache flush write still gets acked (an undecoded
+	// address gets no ack at all and hangs the CPU -- see cache.v).
+	wire cs_csrs = ((wbm_adr & 32'hf000_0000) == 32'h7000_0000) && !cs_socctl;
+`endif
 `ifdef DEBUG
 	wire cs_debug = ((wbm_adr & 32'hf000_0000) == 32'he000_0000);
 `endif
@@ -471,7 +551,11 @@ module sysctl #()
 `ifdef ETH_RMII
 		cs_ethmac ? wbs_ethmac_dat_o :
 `endif
+		cs_socctl ? wbs_socctl_dat_o :
 		cs_csrs ? wbs_csrs_dat_o :
+`ifdef ICACHE
+		cs_cache ? wbs_cache_dat_o :
+`endif
 		32'hzzzz_zzzz;
 
 	wire wbs_bram_ack_o;
@@ -492,6 +576,10 @@ module sysctl #()
 	wire wbs_spieth_ack_o;
 	wire wbs_ethmac_ack_o;
 	wire wbs_csrs_ack_o;
+	wire wbs_socctl_ack_o;
+`ifdef ICACHE
+	wire wbs_cache_ack_o;
+`endif
 
 	assign wbm_ack =
 		cs_bram ? wbs_bram_ack_o :
@@ -541,7 +629,11 @@ module sysctl #()
 `ifdef ETH_RMII
 		cs_ethmac ? wbs_ethmac_ack_o :
 `endif
+		cs_socctl ? wbs_socctl_ack_o :
 		cs_csrs ? wbs_csrs_ack_o :
+`ifdef ICACHE
+		cs_cache ? wbs_cache_ack_o :
+`endif
 		1'b0;
 
 	// WISHBONE MASTER: CPU
@@ -566,8 +658,26 @@ module sysctl #()
       .PROGADDR_IRQ(32'h0000_0010),
       .BARREL_SHIFTER(1),
       .COMPRESSED_ISA(0),
+      // rv32im -- see rtl/boards.vh's CPU_MUL/CPU_MUL_FAST/CPU_DIV.
+      // ENABLE_MUL and ENABLE_FAST_MUL are mutually exclusive inside
+      // picorv32 (the generate block prefers FAST), so CPU_MUL_FAST
+      // selects the DSP multiplier and plain CPU_MUL the sequential
+      // one; defining both is fine and means "fast".
+`ifdef CPU_MUL_FAST
       .ENABLE_MUL(0),
+      .ENABLE_FAST_MUL(1),
+`elsif CPU_MUL
+      .ENABLE_MUL(1),
+      .ENABLE_FAST_MUL(0),
+`else
+      .ENABLE_MUL(0),
+      .ENABLE_FAST_MUL(0),
+`endif
+`ifdef CPU_DIV
+      .ENABLE_DIV(1),
+`else
       .ENABLE_DIV(0),
+`endif
       .ENABLE_IRQ(1),
       .ENABLE_IRQ_TIMER(0),
       .ENABLE_IRQ_QREGS(1),
@@ -586,7 +696,11 @@ module sysctl #()
 		.wbm_ack_i(wbm_cpu_ack),
 		.wbm_cyc_o(wbm_cpu_cyc),
 		.trap(cpu_trap),
-		.irq(cpu_irq)
+		.irq(cpu_irq),
+		// picorv32 already produces this; it was simply never wired up
+		// before. rtl/cache.v uses it to cache instruction fetches ONLY,
+		// which is what keeps data coherency out of the picture entirely.
+		.mem_instr(wbm_cpu_instr)
 	);
 
 	// WISHBONE SLAVE: MTU (Memory Translation Unit)
@@ -596,7 +710,7 @@ module sysctl #()
 		.clk_i(wbm_clk),
 		.rst_i(wbm_rst),
 		.addr_in(wbm_cpu_adr),
-		.addr_out(wbm_adr),
+		.addr_out(wbm_cpu_padr),
 		.cfg_adr_i(wbm_cpu_adr_sel),
 		.cfg_dat_i(wbm_dat_o),
 		.cfg_dat_o(wbs_mtu_dat_o),
@@ -608,7 +722,58 @@ module sysctl #()
     );
 
 	// CPU controls the main bus (will share with DMA controller)
-	//assign wbm_adr = wbm_cpu_adr;
+	//
+	// With ICACHE the instruction cache sits in this path: the CPU
+	// talks to the cache, and the cache drives the bus. It needs to own
+	// wbm_adr rather than just observe it, because during a line fill
+	// it addresses words the CPU never asked for. Every wbm_* signal
+	// still has exactly one driver either way.
+`ifdef ICACHE
+
+	wb_icache #(
+		.CACHE_KB(`ICACHE_KB),
+		.LINE_WORDS(`ICACHE_LINE_WORDS)
+	) icache_i (
+		.wb_clk_i(wbm_clk),
+		.wb_rst_i(wbm_rst),
+
+		// upstream: the CPU, at its translated physical address
+		.c_adr_i(wbm_cpu_padr),
+		.c_dat_i(wbm_cpu_dat_o),
+		.c_dat_o(wbm_cpu_dat_i),
+		.c_we_i(wbm_cpu_we),
+		.c_sel_i(wbm_cpu_sel),
+		.c_stb_i(wbm_cpu_stb),
+		.c_cyc_i(wbm_cpu_cyc),
+		.c_instr_i(wbm_cpu_instr),
+		.c_ack_o(wbm_cpu_ack),
+
+		// downstream: the main wishbone bus
+		.m_adr_o(wbm_adr),
+		.m_dat_o(wbm_dat_o),
+		.m_dat_i(wbm_dat_i),
+		.m_we_o(wbm_we),
+		.m_sel_o(wbm_sel),
+		.m_stb_o(wbm_stb),
+		.m_cyc_o(wbm_cyc),
+		.m_ack_i(wbm_ack),
+
+		// control/status registers (0x7000_0100, see cs_cache above)
+		.cfg_adr_i({ 30'b0, wbm_adr_sel_word[1:0] }),
+		.cfg_dat_i(wbm_dat_o),
+		.cfg_dat_o(wbs_cache_dat_o),
+		.cfg_we_i(wbm_we),
+		.cfg_stb_i(wbm_stb),
+		.cfg_cyc_i(wbm_cyc_cache),
+		.cfg_ack_o(wbs_cache_ack_o)
+	);
+
+`else
+
+	// wbm_cpu_padr, not wbm_cpu_adr: the MTU's translated output, which
+	// is what this bus has always carried -- the MTU simply used to
+	// drive wbm_adr directly instead of going through a named wire.
+	assign wbm_adr = wbm_cpu_padr;
 	assign wbm_dat_o = wbm_cpu_dat_o;
 	assign wbm_cpu_dat_i = wbm_dat_i;
 	assign wbm_sel = wbm_cpu_sel;
@@ -616,6 +781,8 @@ module sysctl #()
 	assign wbm_stb = wbm_cpu_stb;
 	assign wbm_cpu_ack = wbm_ack;
 	assign wbm_cyc = wbm_cpu_cyc;
+
+`endif
 
 	// WISHBONE MASTER: GPU Rasterizer
 `ifdef GPU_RASTER
@@ -1103,6 +1270,35 @@ module sysctl #()
 	// come straight from this file's own `MEM/CSR_FEATURES above.
 	wire wbm_cyc_csrs = cs_csrs && wbm_cyc;
 
+	// WISHBONE SLAVE: SOC CONTROL (writable global config)
+	//
+	// Always instantiated, no `ifdef -- same reasoning as csrs.v below.
+	// cursor_busy goes straight to rtl/gpu/gpu_cursor.v; it is declared
+	// unconditionally so the wire exists even on boards built without
+	// GPU_CURSOR, where it simply goes nowhere.
+	wire socctl_cursor_busy;
+
+	socctl_wb socctl_i (
+		.wb_clk_i(wbm_clk),
+		.wb_rst_i(wbm_rst),
+		// Masked to this block's own window, NOT the raw word address.
+		// socctl lives at 0x7000_02xx, so wbm_adr_sel_word is 0x80 for
+		// its first register, not 0 -- passing it straight through
+		// means no case ever matches, writes vanish and MAGIC reads
+		// back as zero. csrs.v gets away with the raw value only
+		// because its window starts at offset 0. Same masking as the
+		// icache block above.
+		.wb_adr_i({ 30'b0, wbm_adr_sel_word[1:0] }),
+		.wb_dat_i(wbm_dat_o),
+		.wb_dat_o(wbs_socctl_dat_o),
+		.wb_we_i(wbm_we),
+		.wb_sel_i(wbm_sel),
+		.wb_stb_i(wbm_stb),
+		.wb_ack_o(wbs_socctl_ack_o),
+		.wb_cyc_i(wbm_cyc_socctl),
+		.cursor_busy(socctl_cursor_busy)
+	);
+
 	csrs_wb #(
 		.MEM_MB(`MEM),
 		.FEATURES(CSR_FEATURES)
@@ -1254,6 +1450,7 @@ module sysctl #()
 		.gpu_y(gpu_y),
 		.curs_x(gpu_curs_x),
 		.curs_y(gpu_curs_y),
+		.curs_alt(socctl_cursor_busy),
 	);
 `endif
 

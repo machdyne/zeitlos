@@ -13,6 +13,40 @@
 #include "fsapi.h"
 #include "fs/fs.h"
 
+// Does a launchable executable by this name exist, from ANY source?
+//
+// Deliberately not k_fs_size(): that only looks at the filesystem, so
+// on a board with no sdcard it would report the flash-resident core
+// apps as missing -- which is exactly backwards, since those are the
+// ones guaranteed to be there. This goes through fs_exec_info_any()
+// (sw/os/fs/fs.c), the same resolver every launch path uses, so the
+// answer always matches what `run` would actually do.
+//
+// Added for wm's dock, which builds itself from whichever of its
+// candidate apps are actually present -- an icon for a missing app is
+// a button that does nothing. See docs/window_manager.md.
+//
+// Returns the process image size (data + bss), or 0 if not found, so
+// callers get a usable size for free rather than needing a second
+// call.
+z_obj_t *k_exec_exists(z_obj_t *args) {
+
+	if (!args || args->type != Z_STR || !args->val.str) {
+		args->type = Z_UINT32;
+		args->val.uint32 = 0;
+		return (&z_fail);
+	}
+
+	z_exec_info_t xi;
+	uint32_t total = fs_exec_info_any(args->val.str, &xi) ? 0 : xi.total;
+
+	args->type = Z_UINT32;
+	args->val.uint32 = total;
+
+	return total ? (&z_ok) : (&z_fail);
+
+}
+
 z_obj_t *k_fs_size(z_obj_t *args) {
 
 	z_fs_size_args_t *a = (z_fs_size_args_t *)args;

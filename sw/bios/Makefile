@@ -1,6 +1,11 @@
-PREFIX=/opt/riscv32i/bin/riscv32-unknown-elf-
-CFLAGS=-DBOARD_$(BOARD) -DFPGA_$(FAMILY)
-ARCH=rv32i
+PREFIX ?= $(RISCV_PREFIX)
+# No $(LIBC_FLAGS) here, deliberately: the BIOS is built
+# -ffreestanding -nostdlib and has no C library at all. Pulling in
+# picolibc's specs would drag its headers in too, and bios.c has its
+# own globals called stdin/stdout that then collide with them.
+CFLAGS=-DBOARD_$(BOARD) -DFPGA_$(FAMILY) $(ARCH_DEFS)
+# ARCH/ABI come from one place -- see that file for why
+include ../common/arch.mk
 ABI=ilp32
 
 #BRAM_WORDS=1280

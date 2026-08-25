@@ -19,6 +19,13 @@ int fs_load(uint32_t dst, char *path);
 // and load exactly as fs_load() would.
 int fs_exec_info(char *path, z_exec_info_t *info);
 int fs_load_exec(uint32_t dst, char *path, const z_exec_info_t *info);
+
+// Filesystem first, flash core-app archive underneath -- see fs.c.
+// Every process-launch path should use these rather than the two
+// above, so that a card-less board behaves identically.
+int fs_exec_info_any(char *path, z_exec_info_t *info);
+int fs_load_exec_any(uint32_t dst, char *path, const z_exec_info_t *info);
+int fs_exec_is_flash(char *path);	// 1 if resolved to flash
 void *fs_mallocfile(char *path);
 uint32_t fs_size(char *path);
 int fs_write_file(char *path, char *buf, uint32_t len);

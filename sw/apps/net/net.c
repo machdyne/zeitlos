@@ -623,7 +623,10 @@ int main(void) {
 		telnet_poll();
 		dns_poll();
 
-		for (volatile int i = 0; i < 500; i++) ; // light throttle
+		// Idle yield -- replaces a busy-wait throttle. See wm.c's own
+		// comment at the same spot. Returns immediately when a message
+		// is already queued, so packet handling is not delayed.
+		z_proc_wait(1);
 
 	}
 

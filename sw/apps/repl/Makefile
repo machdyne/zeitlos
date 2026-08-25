@@ -1,9 +1,10 @@
 
-PREFIX = /opt/riscv32i/bin/riscv32-unknown-elf-
-ARCH = rv32i
+PREFIX ?= $(RISCV_PREFIX)
+# ARCH/ABI come from one place -- see that file for why
+include ../../common/arch.mk
 CC = $(PREFIX)gcc
 AS = $(PREFIX)as
-ASFLAGS = -march=$(ARCH) -mabi=ilp32
+ASFLAGS = -march=$(ARCH) -mabi=$(ABI)
 # -ffunction-sections/-fdata-sections + --gc-sections (below) let the
 # linker drop code and data nothing actually references. This is worth
 # real money here: sw/common is shared by every app, so each one links
@@ -25,8 +26,8 @@ GC_CFLAGS = -ffunction-sections -fdata-sections
 GC_LDFLAGS = -Wl,--gc-sections
 endif
 
-CFLAGS = --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=ilp32 $(GC_CFLAGS)
-LDFLAGS = -march=$(ARCH) -mabi=ilp32 $(GC_LDFLAGS)
+CFLAGS = --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) $(GC_CFLAGS) $(ARCH_DEFS) $(LIBC_FLAGS)
+LDFLAGS = -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS)
 LDSCRIPT = ../../common/riscv-app.ld
 
 # sw/ext/ms -- Machdyne Scheme, vendored directly (already patched
@@ -162,11 +163,11 @@ page.o: page.c page.h ../../common/zfsapp.h ../../common/zport.h
 	$(CC) $(CFLAGS) -c page.c -o page.o
 
 repl.o:
-	$(CC) $(CFLAGS) $(MS_SIZE_CFLAGS) -c repl.c -o repl.o
 	$(CC) $(CFLAGS) $(MS_SIZE_CFLAGS) -c repl.c -S -o repl.asm
+	$(CC) $(CFLAGS) $(MS_SIZE_CFLAGS) -c repl.c -o repl.o
 
 repl.elf: $(OBJS)
-	$(CC) $(LDFLAGS) -Wl,-T$(LDSCRIPT),-Map,repl.map -o repl.elf $(OBJS) -lm
+	$(CC) $(LDFLAGS) -T $(LDSCRIPT) -Wl,-Map,repl.map -o repl.elf $(OBJS) -lm
 	$(PREFIX)objdump -S --disassemble repl.elf > repl.dasm
 
 repl.bin: repl.elf
@@ -180,3 +181,22 @@ clean:
 	rm -f repl.elf repl.bin repl.data repl.asm repl.dasm repl.map ms_stdlib.h *.o *.d
 
 .PHONY: repl clean
+
+# Header dependency tracking.
+#
+# CFLAGS has carried -MD all along, so gcc has been writing .d files
+# listing every header each object depends on -- but nothing included
+# them, and the object rules below have no prerequisites at all
+# (`wm.o:` rather than `wm.o: wm.c`). The effect is that once an object
+# file exists, make considers it permanently up to date: editing a .c
+# or a .h rebuilds nothing, and the link silently produces a binary
+# from stale objects.
+#
+# That is not a theoretical problem -- it has twice produced hardware
+# that behaved like a broken feature when the real cause was simply
+# that the change was never compiled in. Including the .d files makes
+# every object depend on its own source and headers, so `make` alone is
+# correct and `make clean` stops being a required ritual.
+-include $(wildcard *.d)
+-include $(wildcard */*.d)
+-include $(wildcard */*/*.d)

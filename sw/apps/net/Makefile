@@ -1,9 +1,10 @@
 
-PREFIX = /opt/riscv32i/bin/riscv32-unknown-elf-
-ARCH = rv32i
+PREFIX ?= $(RISCV_PREFIX)
+# ARCH/ABI come from one place -- see that file for why
+include ../../common/arch.mk
 CC = $(PREFIX)gcc
 AS = $(PREFIX)as
-ASFLAGS = -march=$(ARCH) -mabi=ilp32
+ASFLAGS = -march=$(ARCH) -mabi=$(ABI)
 # See sw/apps/repl/Makefile for the full reasoning behind these two --
 # in short, sw/common is shared by every app, so each links whole
 # objects for the sake of a fraction of them, and section GC drops the
@@ -15,8 +16,8 @@ GC_CFLAGS = -ffunction-sections -fdata-sections
 GC_LDFLAGS = -Wl,--gc-sections
 endif
 
-CFLAGS = --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=ilp32 $(GC_CFLAGS)
-LDFLAGS = $(GC_LDFLAGS)
+CFLAGS = --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) $(GC_CFLAGS) $(ARCH_DEFS) $(LIBC_FLAGS)
+LDFLAGS = -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS)
 LDSCRIPT = ../../common/riscv-app.ld
 
 # which NIC driver to build in -- ENC28J60 (SPI PMOD, most boards) or
@@ -169,19 +170,52 @@ tftp.o: tftp.c tftp.h
 	$(CC) $(CFLAGS) -c tftp.c -o tftp.o
 
 net.o: net.c net_phy.h .net_phy_selected .net_config_selected ../../common/zsoc.h dhcp.h dns.h
-	$(CC) $(CFLAGS) -c net.c -o net.o
 	$(CC) $(CFLAGS) -c net.c -S -o net.asm
+	$(CC) $(CFLAGS) -c net.c -o net.o
 
 net.elf: $(OBJS)
-	$(CC) $(LDFLAGS) -Wl,-T$(LDSCRIPT),-Map,net.map -o net.elf $(OBJS)
+	$(CC) $(LDFLAGS) -T $(LDSCRIPT) -Wl,-Map,net.map -o net.elf $(OBJS)
 	$(PREFIX)objdump -S --disassemble net.elf > net.dasm
 
+# ZEXE, same as every other app (sw/common/zexec.h). This was the last
+# Makefile still emitting a raw --pad-to binary: .bss shipped as
+# literal zeros in the file rather than as a number for the loader to
+# memset. That still loads -- z_exec_parse() treats a missing header as
+# a legacy image -- but it makes net.bin far larger than it needs to
+# be, which now costs flash as well as SD card space and load time,
+# since net is one of the core apps programmed into the ZAR archive
+# (sw/os/zar.h). tools/mkzar.py warns about exactly this.
+#
+# The --pad-to trick it replaces was working around objcopy truncating
+# .bss (docs/networking.md, "objcopy truncation bug"); mkexec.py solves
+# the same problem by recording _end - _edata in the header instead.
 net.bin: net.elf
-	@END=$$($(PREFIX)nm net.elf | awk '$$3=="_end"{print "0x"$$1}'); \
-	echo "net.bin: padding to _end=$$END (includes .bss -- see docs/networking.md, \"objcopy truncation bug\")"; \
-	$(PREFIX)objcopy -O binary --pad-to=$$END net.elf net.bin
+	@EDATA=$$($(PREFIX)nm net.elf | awk '$$3=="_edata"{print "0x"$$1}'); \
+	END=$$($(PREFIX)nm net.elf | awk '$$3=="_end"{print "0x"$$1}'); \
+	$(PREFIX)objcopy -O binary net.elf net.data; \
+	python3 ../../../tools/mkexec.py net.data net.bin $$(($$END - $$EDATA)); \
+	rm -f net.data
 
 clean:
-	rm -f net.elf net.bin net.asm net.dasm net.map *.o *.d .net_phy_selected .net_config_selected
+	rm -f net.elf net.bin net.data net.asm net.dasm net.map *.o *.d .net_phy_selected .net_config_selected
 
 .PHONY: net clean FORCE
+
+# Header dependency tracking.
+#
+# CFLAGS has carried -MD all along, so gcc has been writing .d files
+# listing every header each object depends on -- but nothing included
+# them, and the object rules below have no prerequisites at all
+# (`wm.o:` rather than `wm.o: wm.c`). The effect is that once an object
+# file exists, make considers it permanently up to date: editing a .c
+# or a .h rebuilds nothing, and the link silently produces a binary
+# from stale objects.
+#
+# That is not a theoretical problem -- it has twice produced hardware
+# that behaved like a broken feature when the real cause was simply
+# that the change was never compiled in. Including the .d files makes
+# every object depend on its own source and headers, so `make` alone is
+# correct and `make clean` stops being a required ritual.
+-include $(wildcard *.d)
+-include $(wildcard */*.d)
+-include $(wildcard */*/*.d)
