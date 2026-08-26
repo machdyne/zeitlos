@@ -45,6 +45,8 @@ With the MTU, there is no need for position independent code or complicated addr
 
 ### Apps
 
+#### Core Apps
+
 | App | Description |
 |-----|-------------|
 | kernel | Kernel + kernel shell (serial console) |
@@ -52,6 +54,14 @@ With the MTU, there is no need for position independent code or complicated addr
 | net | Networking server |
 | repl | App server + [Lisp interpreter (subset of R4RS Scheme)](https://github.com/machdyne/ms) |
 | term | Terminal emulator (connects to services; VT100 emulation) |
+
+#### Additional Apps
+
+| App | Description |
+|-----|-------------|
+| gpu3d | Spinning 3D cube demo |
+| space3d | First-person 3D space shooter game |
+| draw | MacPaint-inspired drawing app |
 
 ### Boards
 
