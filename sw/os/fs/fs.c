@@ -300,7 +300,6 @@ void fs_list_dir(char *path) {
 
 	FRESULT res;
 	DIR dir;
-	UINT i;
 	static FILINFO fno;
 
 	res = f_opendir(&dir, path);
@@ -319,10 +318,15 @@ void fs_list_dir(char *path) {
 			res = f_readdir(&dir, &fno);
 			if (res != FR_OK || fno.fname[0] == 0) break;
 			if (fno.fattrib & AM_DIR) {
-				i = strlen(path);
+				// `path[i] = 0` used to live here, writing into the
+				// caller's buffer at strlen(path) -- i.e. over the
+				// existing NUL. Harmless in value, undefined in
+				// principle: sh.c calls fs_list_dir("/"), a string
+				// literal, so this was a write into .rodata. Nothing
+				// read the result and nothing depended on it, so it is
+				// simply gone rather than made conditional.
 				printf("%s\n", fno.fname);
 				if (res != FR_OK) break;
-					path[i] = 0;
 			} else {
 				printf("%s/%s\n", path, fno.fname);
 			}
@@ -350,14 +354,28 @@ void fs_list_dir(char *path) {
 
 		int shown = 0;
 		char name[Z_ZAR_NAME_MAX + 1];
-		z_exec_info_t tmp;
+		static FILINFO st;	// static: see the f_stat() note below
 
 		for (uint32_t zi = 0; zi < z_zar_count(); zi++) {
 
 			if (!z_zar_name(zi, name)) continue;
 
-			// shadowed by a real file -- already listed above
-			if (fs_exec_info(name, &tmp) == 0 && tmp.total) continue;
+			// shadowed by a real file -- already listed above.
+			//
+			// f_stat(), NOT fs_exec_info(). fs_exec_info() OPENS the
+			// file, and with FF_FS_TINY=0 (ffconf.h) every FIL carries
+			// its own FF_MAX_SS sector buffer -- so that call put an
+			// extra ~550 bytes of stack inside `ls`, on top of a live
+			// DIR and whatever printf needs, for no reason at all: the
+			// question here is only "does a directory entry with this
+			// name exist", which needs no file handle and no data read.
+			//
+			// That extra depth is a plausible cause of the intermittent
+			// garbled filenames and failed writes seen after the flash
+			// underlay landed -- `ls` was the one command that suddenly
+			// got deeper, and a stack that reaches into the FATFS work
+			// area corrupts exactly the directory buffers being read.
+			if (f_stat(name, &st) == FR_OK) continue;
 
 			if (!shown) {
 				printf("\nin flash:\n");
