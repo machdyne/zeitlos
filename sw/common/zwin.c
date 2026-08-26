@@ -29,10 +29,19 @@
 static uint32_t wm_pid_cache;
 static bool wm_pid_resolved = false;
 
+// Returns 0 if wm isn't running.
+//
+// No fallback to the fixed Z_PID_WM constant: a miss means wm is not
+// there, and guessing a pid sends window requests to whatever process
+// happens to occupy it -- pid 0 is the kernel. The pid wm lands on
+// depends entirely on start order.
+//
+// A failed lookup is NOT cached: an app may start before wm has
+// registered, and caching the miss would keep reporting "no wm" long
+// after one appeared.
 static uint32_t resolve_wm_pid(void) {
 	if (!wm_pid_resolved) {
-		if (!z_pid_lookup("wm0", &wm_pid_cache))
-			wm_pid_cache = Z_PID_WM;
+		if (!z_pid_lookup("wm0", &wm_pid_cache)) return 0;
 		wm_pid_resolved = true;
 	}
 	return wm_pid_cache;
@@ -87,7 +96,9 @@ z_rv z_win_create_flags(z_win_t *win, const char *title, uint32_t w, uint32_t h,
 	// same as an explicit 0), just consistent with the others.
 	if (flags) z_map_set(&args, "flags", z_obj_uint32(flags));
 
-	z_msg_new_send(resolve_wm_pid(), Z_WM_CREATE_WINDOW, 0, args);
+	uint32_t wmpid = resolve_wm_pid();
+	if (!wmpid) return Z_FAIL;	// no wm running -- fail, don't guess
+	z_msg_new_send(wmpid, Z_WM_CREATE_WINDOW, 0, args);
 	// note: `args` is intentionally never freed here -- same accepted
 	// leak/lifetime tradeoff documented in docs/messaging.md. we're
 	// about to block on the reply below, so it's still valid for the
@@ -168,7 +179,9 @@ int z_win_content_h(const z_win_t *win) {
 }
 
 void z_win_redraw_done(const z_win_t *win) {
-	z_msg_new_send(resolve_wm_pid(), Z_WM_REDRAW_DONE, 0, z_obj_uint32((uint32_t)win->id));
+	uint32_t wmpid_r = resolve_wm_pid();
+	if (wmpid_r)
+		z_msg_new_send(wmpid_r, Z_WM_REDRAW_DONE, 0, z_obj_uint32((uint32_t)win->id));
 }
 
 void z_win_content_rect(const z_win_t *win, z_clip_t *out) {
@@ -236,5 +249,7 @@ void z_win_hw_box(const z_win_t *win, int x0, int y0, int x1, int y1, int color)
 // and drops it, same as it already does for any unrecognized id.
 void z_win_destroy(const z_win_t *win) {
 	if (win->id < 0) return;
-	z_msg_new_send(resolve_wm_pid(), Z_WM_DESTROY_WINDOW, 0, z_obj_uint32((uint32_t)win->id));
+	uint32_t wmpid_d = resolve_wm_pid();
+	if (wmpid_d)
+		z_msg_new_send(wmpid_d, Z_WM_DESTROY_WINDOW, 0, z_obj_uint32((uint32_t)win->id));
 }

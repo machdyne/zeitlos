@@ -558,13 +558,15 @@ static ms_val *zapi_msg_wait(ms_val *args) {
 static uint32_t zapi_net_pid_cache;
 static bool zapi_net_pid_resolved = false;
 
-// same lookup-then-cache pattern as zwin.c's own resolve_wm_pid() --
-// see its comment for the full reasoning (falls back to the fixed
-// Z_PID_NET constant, znet.h, if the name lookup fails).
+// Returns 0 if net isn't running. Same lookup-then-cache pattern as
+// zwin.c's resolve_wm_pid(); see zdns.c's copy for why there is no
+// fallback to the fixed Z_PID_NET constant any more.
+//
+// A failed lookup is not cached: repl may start before net has
+// registered.
 static uint32_t zapi_resolve_net_pid(void) {
 	if (!zapi_net_pid_resolved) {
-		if (!z_pid_lookup("net0", &zapi_net_pid_cache))
-			zapi_net_pid_cache = Z_PID_NET;
+		if (!z_pid_lookup("net0", &zapi_net_pid_cache)) return 0;
 		zapi_net_pid_resolved = true;
 	}
 	return zapi_net_pid_cache;

@@ -1380,7 +1380,7 @@ module sysctl #()
 	// version made the SPI clock rate a function of compiler codegen,
 	// which broke when the toolchain changed and would break again
 	// with an instruction cache enabled.
-	spisd_wb #() wbs_spisd0_i
+	spim_wb #(.DEFAULT_DIV(8'd59)) wbs_spisd0_i
 	(
 		.wb_clk_i(wbm_clk),
 		.wb_rst_i(wbm_rst),
@@ -1392,10 +1392,11 @@ module sysctl #()
 		.wb_stb_i(wbm_stb),
 		.wb_ack_o(wbs_spisdcard_ack_o),
 		.wb_cyc_i(wbm_cyc_spisdcard),
-		.sd_ss(SD_SS),
-		.sd_miso(SD_MISO),
-		.sd_mosi(SD_MOSI),
-		.sd_sck(SD_SCK)
+		.spi_cs_n(SD_SS),
+		.spi_miso(SD_MISO),
+		.spi_mosi(SD_MOSI),
+		.spi_sck(SD_SCK),
+		.spi_int(1'b1)		// sdcards have no interrupt line
 	);
 `endif
 
@@ -1403,7 +1404,10 @@ module sysctl #()
 `ifdef SPI_ETH
 	wire wbm_cyc_spieth = cs_spieth && wbm_cyc;
 
-	spibb_eth_wb #() wbs_spibbeth0_i
+	// spim_wb, same module as the sdcard above. The ENC28J60 needs no
+	// slow init phase -- it takes full speed from reset -- so its
+	// divider starts fast rather than at 400kHz. See rtl/spim.v.
+	spim_wb #(.DEFAULT_DIV(8'd1)) wbs_spieth0_i
 	(
 		.wb_clk_i(wbm_clk),
 		.wb_rst_i(wbm_rst),
@@ -1415,11 +1419,11 @@ module sysctl #()
 		.wb_stb_i(wbm_stb),
 		.wb_ack_o(wbs_spieth_ack_o),
 		.wb_cyc_i(wbm_cyc_spieth),
-		.eth_ss(ETH_SS),
-		.eth_miso(ETH_MISO),
-		.eth_mosi(ETH_MOSI),
-		.eth_sck(ETH_SCLK),
-		.eth_int(ETH_INT)
+		.spi_cs_n(ETH_SS),
+		.spi_miso(ETH_MISO),
+		.spi_mosi(ETH_MOSI),
+		.spi_sck(ETH_SCLK),
+		.spi_int(ETH_INT)
 	);
 `endif
 

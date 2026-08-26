@@ -166,6 +166,24 @@ typedef uint32_t *(*z_kernel_ptr_t)(uint32_t, uint32_t *, uint32_t);
 // (write), bit4 = the chip's INT line (read, active low -- not used
 // as a real interrupt yet, just readable). See sw/apps/net/enc28j60.c
 // for the driver.
+// -- hardware SPI master for the ENC28J60 (rtl/spim.v) --
+//
+// Same module and same register layout as the sdcard block above --
+// see rtl/spim.v. The divider defaults fast here because the ENC28J60,
+// unlike an sdcard, needs no slow initialisation phase.
+#define reg_spieth_data   (*(volatile uint32_t*)0x50000000)
+#define reg_spieth_status (*(volatile uint32_t*)0x50000004)
+#define reg_spieth_ctrl   (*(volatile uint32_t*)0x50000008)
+#define reg_spieth_magic  (*(volatile uint32_t*)0x5000000c)
+
+// STATUS bit 2: the chip's interrupt pin, active low. Readable so the
+// driver can check for a pending packet with one register read instead
+// of a whole SPI transaction.
+#define Z_SPI_INT         (1u << 2)
+
+#define Z_SPIETH_DIV      1     // 12MHz; ENC28J60 SPI maximum is 20MHz
+
+// kept for compatibility with anything still poking the old register
 #define reg_eth (*(volatile uint32_t*)0x50000000)
 
 // RMII Ethernet MAC (rtl/ethmac_rmii.v), mozart_ml1 only. Alternative

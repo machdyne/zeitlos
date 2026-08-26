@@ -14,6 +14,7 @@
 #include "udp.h"
 #include "enc28j60.h"
 #include "../../common/zeitlos.h"
+#include "../../common/zsoc.h"	// Z_TICK_HZ
 #include "../../common/zstream.h"
 
 #define TFTP_OP_RRQ    1
@@ -34,6 +35,43 @@ static bool is_get;
 static uint32_t srv_ip;
 static uint16_t srv_port;	// 0 until learned from the server's first reply
 static uint16_t local_port;
+// Per-packet tftp logging. Off by default -- see send_last_pkt().
+// Flip to true when debugging the protocol itself; expect transfers to
+// slow down noticeably while it is on, which is the point.
+static bool tftp_verbose = false;
+
+// Throughput accounting. Bytes are counted as they cross the wire, so
+// this measures the transfer itself and not the shell's file writing
+// on either side of it.
+static uint32_t xfer_bytes;
+static uint32_t xfer_start_ticks;
+
+// Reports the rate a completed transfer actually achieved.
+//
+// Worth having in the tree rather than working it out by hand each
+// time: TFTP is stop-and-wait, so its throughput is dominated by
+// ROUND TRIP time, not by link speed. A number well below the link
+// rate is expected and normal here -- what matters is watching it move
+// when something changes (a faster SPI, a bigger blksize, a scheduler
+// that does not make each round trip wait for a timeslice).
+static void report_rate(const char *what) {
+
+	uint32_t ticks = z_uptime_ticks() - xfer_start_ticks;
+	uint32_t ms = (ticks * 1000u) / Z_TICK_HZ;
+
+	if (!ms) ms = 1;	// sub-tick transfers: avoid dividing by zero
+
+	// bytes/ms == KB/s to within 2.4%, and needs no 64-bit maths or
+	// floating point. Printed with one decimal via integer arithmetic.
+	uint32_t kbps10 = (xfer_bytes * 10u) / ms;
+
+	printf("net: tftp %s %lu bytes in %lu.%03lus (%lu.%lu KB/s)\n",
+		what, (unsigned long)xfer_bytes,
+		(unsigned long)(ms / 1000), (unsigned long)(ms % 1000),
+		(unsigned long)(kbps10 / 10), (unsigned long)(kbps10 % 10));
+
+}
+
 static uint16_t block;
 static uint32_t buf_len;	// total bytes transferred so far (GET: received, PUT: sent) -- final byte count reported via tftp_poll()
 static uint16_t last_chunk_len;	// PUT only: length of the most recently SENT block
@@ -98,12 +136,29 @@ static void send_last_packet(void) {
 	const char *result = ok ? "sent" : "FAILED (arp not resolved yet?)";
 	uint16_t port = srv_port ? srv_port : TFTP_SERVER_PORT;
 
-	if (op == TFTP_OP_DATA || op == TFTP_OP_ACK) {
-		printf("net: tftp send op=%d block=%d len=%d to port %d: %s\n",
-			op, (last_pkt[2] << 8) | last_pkt[3], last_pkt_len, port, result);
-	} else {
-		printf("net: tftp send op=%d len=%d to port %d: %s\n",
-			op, last_pkt_len, port, result);
+	// Per-packet logging is OFF by default, and not only because it is
+	// noisy. This printf sits in the send path ahead of last_tx_ticks
+	// below, and kernel printf blocks while the UART FIFO drains -- so
+	// on a transfer it was ~62 characters of blocking added to EVERY
+	// block's turnaround. TFTP is stop-and-wait: nothing else moves
+	// until this ACK goes out, so that time lands directly on the
+	// total transfer time rather than overlapping with anything.
+	//
+	// Errors, retries and the initial server lock-on are still printed
+	// unconditionally elsewhere in this file -- those are rare and are
+	// what you actually want to see.
+	if (tftp_verbose) {
+		if (op == TFTP_OP_DATA || op == TFTP_OP_ACK) {
+			printf("net: tftp send op=%d block=%d len=%d to port %d: %s\n",
+				op, (last_pkt[2] << 8) | last_pkt[3], last_pkt_len, port,
+				result);
+		} else {
+			printf("net: tftp send op=%d len=%d to port %d: %s\n",
+				op, last_pkt_len, port, result);
+		}
+	} else if (!ok) {
+		// a send that failed is worth a line even when quiet
+		printf("net: tftp send op=%d FAILED (arp not resolved yet?)\n", op);
 	}
 
 	last_tx_ticks = z_uptime_ticks();
@@ -167,6 +222,7 @@ static void try_deliver_get(void) {
 	zstream_send_chunk(&out_stream, held_data, held_len);
 	block = block + 1;	// held_data was always block+1 by construction (see handle_packet())
 	buf_len += held_len;
+	xfer_bytes += held_len;	// wire bytes, for report_rate()
 	pull_pending = false;
 
 	uint16_t delivered_len = held_len;
@@ -197,6 +253,7 @@ static void try_send_put_block(void) {
 	block++;
 	send_data(block, held_data, held_len);
 	buf_len += held_len;
+	xfer_bytes += held_len;	// wire bytes, for report_rate()
 	last_chunk_len = held_len;
 	held_valid = false;
 
@@ -298,6 +355,8 @@ bool tftp_get_start(uint32_t server_ip, const char *filename,
 	srv_port = 0;
 	local_port = next_local_port();
 	is_get = true;
+	xfer_bytes = 0;
+	xfer_start_ticks = z_uptime_ticks();
 	buf_len = 0;
 	block = 0;
 	retries = 0;
@@ -322,6 +381,8 @@ bool tftp_put_start(uint32_t server_ip, const char *filename, uint32_t sender_pi
 	srv_port = 0;
 	local_port = next_local_port();
 	is_get = false;
+	xfer_bytes = 0;
+	xfer_start_ticks = z_uptime_ticks();
 	buf_len = 0;
 	block = 0;
 	last_chunk_len = 0;
@@ -495,6 +556,7 @@ tftp_result_t tftp_poll(uint32_t *out_len, char *err_out, uint32_t err_out_len) 
 
 	if (state == T_DONE_OK) {
 		if (out_len) *out_len = buf_len;
+		report_rate(is_get ? "get" : "put");
 		state = T_IDLE;
 		return TFTP_RESULT_OK;
 	}

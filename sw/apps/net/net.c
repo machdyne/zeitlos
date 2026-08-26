@@ -470,6 +470,27 @@ static void check_tftp_progress(void) {
 
 int main(void) {
 
+	// Register the name FIRST, before touching hardware.
+	//
+	// This used to happen ~116 lines further down, after the ENC28J60
+	// bring-up and a full DHCP acquisition -- seconds during which
+	// z_pid_lookup("net0") missed and every caller silently fell
+	// through to the fixed Z_PID_NET constant. On a boot where net
+	// does not land on the pid that constant names (start it without
+	// wm, say) those callers talk to whatever process IS at that pid.
+	//
+	// Nothing about being on the network is a precondition for having
+	// a name: this process exists and can receive messages from the
+	// moment it starts, which is exactly when it should be findable.
+	// Registering here means a lookup either succeeds or the process
+	// genuinely is not running.
+	char net_name[24];
+	if (z_pid_register("net", net_name, sizeof(net_name)))
+		printf("net: registered as '%s'\n", net_name);
+	else
+		printf("net: name registration FAILED -- callers will not find "
+			"this process\n");
+
 	// diagnostic: distinguishes "this process's own execution jumped
 	// back to main()" (canary stays MAGIC -- .bss was never re-zeroed,
 	// since that only happens when fs_load() rewrites this process's
@@ -577,17 +598,6 @@ int main(void) {
 	tcp_init(use_ip);
 
 	// registers as "net0" (see sw/os/pidreg.h) -- callers can now
-	// reach net by name instead of only the fixed Z_PID_NET constant
-	// (znet.h); sh.c's tftp calls fall back to Z_PID_NET if this ever
-	// fails or hasn't happened yet. Deliberately not fatal if
-	// registration fails -- net is still fully usable via the fixed
-	// pid, same as it always has been, just not independently
-	// discoverable by name in that case.
-	char net_name[24];
-	if (z_pid_register("net", net_name, sizeof(net_name)))
-		printf("net: registered as '%s'\n", net_name);
-	else
-		printf("net: name registration failed (still usable via fixed pid)\n");
 
 	printf("net: ip ");
 	print_ip(use_ip);
@@ -623,9 +633,31 @@ int main(void) {
 		telnet_poll();
 		dns_poll();
 
-		// Idle yield -- replaces a busy-wait throttle. See wm.c's own
-		// comment at the same spot. Returns immediately when a message
-		// is already queued, so packet handling is not delayed.
+		// Yield the rest of the timeslice.
+		//
+		// MEASURED, not assumed: removing this made tftp 7% SLOWER
+		// (2.693s -> 2.896s for the same 88872-byte transfer with the
+		// same processes running). The reasoning that said it should
+		// help was backwards.
+		//
+		// TFTP is stop-and-wait, so once a block has been handed to the
+		// shell this process has nothing to do until the shell replies.
+		// Spinning here does not find the reply any sooner -- the reply
+		// cannot exist until the shell RUNS -- it just makes the shell
+		// wait out this process's full 1.37ms timeslice first. Yielding
+		// gets the shell scheduled sooner and shortens the round trip.
+		//
+		// Note this is the opposite of what the CPU-bound `bench`
+		// numbers suggested about blocking, and both are correct:
+		// yielding costs throughput and buys latency. This loop is
+		// bound by latency.
+		//
+		// The 1-tick timeout matters: incoming packets are found by
+		// POLLING the ENC28J60, not by message, so k_msg_send()'s wake
+		// never fires for an arriving frame and the timeout is the only
+		// thing that gets this process running again. Waking on the
+		// controller's INT pin (already wired to rtl/spim.v STATUS bit
+		// 2) would be strictly better than a timer.
 		z_proc_wait(1);
 
 	}

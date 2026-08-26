@@ -18,12 +18,11 @@ RTL_PICO = \
 	rtl/mem/vram.v \
 	rtl/mem/glyph.v \
 	rtl/spiflashro.v \
-	rtl/spibb_eth.v \
 	rtl/ethmac_rmii.v \
 	rtl/debug.v \
 	rtl/csrs.v \
 	rtl/socctl.v \
-	rtl/spisd.v \
+	rtl/spim.v \
 	rtl/gpu/gpu_raster.v \
 	rtl/gpu/gpu_blit.v \
 	rtl/gpu/gpu_video.v \

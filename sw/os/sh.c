@@ -155,11 +155,17 @@ static bool wait_for_card_ready(void) {
 static uint32_t net_pid_cache;
 static bool net_pid_resolved = false;
 
+// Returns 0 if net isn't running -- see zdns.c's copy of this for why
+// there is no longer a fallback to the fixed Z_PID_NET constant.
+//
+// Not cached on failure: net may simply not have started yet, and a
+// cached 0 would keep reporting that after it had.
 static uint32_t resolve_net_pid(void) {
 	if (!net_pid_resolved) {
-		if (!z_pid_lookup("net0", &net_pid_cache))
-			net_pid_cache = Z_PID_NET;
-		net_pid_resolved = true;
+		if (z_pid_lookup("net0", &net_pid_cache))
+			net_pid_resolved = true;
+		else
+			return 0;
 	}
 	return net_pid_cache;
 }
@@ -462,7 +468,12 @@ void sh(void) {
 			// throughout (see docs/messaging.md)
 
 			zstream_consumer_t cons;
-			if (!zstream_open(&cons, resolve_net_pid(), req, err, sizeof(err))) {
+			uint32_t npid = resolve_net_pid();
+			if (!npid) {
+				printf("net is not running (run `init` or `run net`)\n");
+				continue;
+			}
+			if (!zstream_open(&cons, npid, req, err, sizeof(err))) {
 				printf("tget: failed to open: %s\n", err);
 				continue;
 			}
@@ -544,7 +555,12 @@ void sh(void) {
 			z_obj_t req = z_obj_map(2);
 			z_map_set(&req, "ip", z_obj_uint32(ip));
 			z_map_set(&req, "filename", z_obj_str(remote));
-			z_msg_new_send(resolve_net_pid(), Z_NET_TFTP_PUT, tag, req);
+			uint32_t npid2 = resolve_net_pid();
+			if (!npid2) {
+				printf("net is not running (run `init` or `run net`)\n");
+				continue;
+			}
+			z_msg_new_send(npid2, Z_NET_TFTP_PUT, tag, req);
 			// note: `req` intentionally never freed -- same
 			// borrowed-payload reasoning as tget above; one-shot
 			// per tput call.

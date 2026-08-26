@@ -621,7 +621,23 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 		// blocked on their mailboxes, the one process with work to do
 		// keeps the CPU instead of round-robining through three
 		// processes that would each immediately block again.
-		if (k_proc_runnable_count() < 2) { ret = regs; goto done; }
+		// Only skip the switch if the CURRENT process is itself still
+		// runnable. Otherwise we would decline to switch AWAY FROM a
+		// process that has just blocked itself, and go on running it --
+		// which is both wrong and, with exactly two processes, fatal.
+		//
+		// Concretely: with only the shell and net, net calls
+		// z_proc_wait(), marks itself BLOCKED, and the runnable count
+		// drops to 1 (the shell). The old test then returned `regs` --
+		// net's own context -- so net kept running while blocked and the
+		// shell was never scheduled again. The serial console simply
+		// stopped responding. It went unnoticed because wm and repl are
+		// normally running, which keeps the count above 2.
+		//
+		// This test predates Z_PROC_FLAG_BLOCKED, when "runnable" meant
+		// "active" and the current process was always counted.
+		if (Z_PROC_RUNNABLE(z_procs[z_pid]) &&
+			k_proc_runnable_count() < 2) { ret = regs; goto done; }
 
 		// save current process registers
   		for (int i = 0; i < 32; i++) {
