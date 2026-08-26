@@ -979,6 +979,40 @@ concept separate from "draw into a window" in the existing C API
 (`zwin.h`'s own comment: this is "the sanctioned way for an app to
 draw," always clipped to a window).
 
+### Display -- IMPLEMENTED
+
+| Procedure | Behavior |
+|---|---|
+| `(video-mode)` | current virtual phosphor mode as a string: `"white"`, `"amber"`, `"green"` or `"paper"` |
+| `(video-mode m)` | set it; `m` is a name or a number 0-3. Returns the mode actually in effect, as a string |
+
+Screen-wide, not per-window: the framebuffer is a single 1bpp surface
+and this selects how a set bit is coloured at scanout. See
+`docs/socctl.md` for the register, the modes, and why a change lands on
+the next frame boundary rather than immediately.
+
+Both a name and a number are accepted because both are natural here --
+a person types the name, generated or looping code
+(`(video-mode (modulo n 4))`) wants the number.
+
+Setting returns the resulting mode rather than `#t`, so `(video-mode)`
+and `(video-mode "amber")` both answer the same question: what is the
+screen doing now. The value is read back from the register, not echoed
+from the argument.
+
+An unrecognised name or an out-of-range number panics, like every other
+bad argument in `zapi.c`, rather than falling back to white -- a typo
+that quietly reset the display would be a confusing thing to debug.
+Gateware without the register panics too, with a message that says so,
+since the fix there is a reflash rather than anything the caller can
+change.
+
+Deliberately **not** named `color`: that word already means the 1-bit
+pixel value in `(line ...)`, `(box ...)` and `(text ...)`, and reusing
+it for something screen-wide would be actively misleading. The kernel
+shell's equivalent *is* called `color`, because `sh.c` has no such
+clash.
+
 ### Messaging -- IMPLEMENTED
 
 | Procedure | Behavior |

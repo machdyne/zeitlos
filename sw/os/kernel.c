@@ -78,6 +78,15 @@ z_obj_t *k_proc_kill_syscall(z_obj_t *args);	// ditto -- named _syscall, not
 // and syscalls.def is expanded at that point.
 z_obj_t *k_proc_wait(z_obj_t *args);
 
+// Same reason -- defined below, needed visible here. Named k_video_*
+// rather than z_video_* because sw/common/zsoc.h already declares
+// z_video_get_mode()/z_video_set_mode() with different signatures (the
+// direct-MMIO inline helpers these wrap), and zsoc.h is included
+// above. Same k_/z_ split as k_getpid/z_getpid and k_msg_send/
+// z_msg_send already use, for the same collision.
+z_obj_t *k_video_get_mode(z_obj_t *args);
+z_obj_t *k_video_set_mode(z_obj_t *args);
+
 typedef z_obj_t* (*z_syscall_t)(z_obj_t *args);
 
 z_syscall_t z_syscall_table[Z_SYSCALL_COUNT] = {
@@ -133,6 +142,43 @@ z_obj_t *k_getpid(z_obj_t *args) {
 	args->type = Z_UINT32;
 	args->val.uint32 = z_pid;
 	return (&z_ok);
+}
+
+// -- virtual phosphor mode (rtl/socctl.v's VIDEO register) --
+//
+// Returns the current mode in args. On a bitstream that predates the
+// register this reports Z_VIDEO_MODE_WHITE and still succeeds, because
+// white is what such a board is genuinely displaying -- see
+// z_video_get_mode() in sw/common/zsoc.h. A caller that needs to tell
+// "white" from "can't change it" uses the set path, which does fail.
+z_obj_t *k_video_get_mode(z_obj_t *args) {
+	args->type = Z_UINT32;
+	args->val.uint32 = z_video_get_mode();
+	return (&z_ok);
+}
+
+// Sets the mode. Fails, writing nothing, on an out-of-range value or a
+// bitstream without the register -- the distinction matters to the
+// caller (a typo vs. gateware that needs reflashing) but not here, and
+// z_video_set_mode() already refuses both.
+//
+// The mode is echoed back into args on the way out, whether or not the
+// write succeeded, so a caller gets the mode actually in effect rather
+// than the one it asked for. That is the difference between a `color`
+// command that reports what the screen is doing and one that reports
+// what it hoped.
+z_obj_t *k_video_set_mode(z_obj_t *args) {
+
+	bool ok = false;
+
+	if (args && args->type == Z_UINT32)
+		ok = z_video_set_mode(args->val.uint32);
+
+	args->type = Z_UINT32;
+	args->val.uint32 = z_video_get_mode();
+
+	return ok ? (&z_ok) : (&z_fail);
+
 }
 
 // launches a new process from a named file on the FAT filesystem --

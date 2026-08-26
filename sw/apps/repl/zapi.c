@@ -30,6 +30,12 @@
 #include "../../common/znet.h"
 #include "../../common/zstream.h"
 #include "../../common/zproc.h"
+#include "../../common/zsoc.h"	// Z_VIDEO_MODE_*, z_video_mode_name(),
+								// z_video_mode_from_name() -- the naming
+								// helpers only. The actual get/set go
+								// through zeitlos.h's syscall wrappers
+								// (z_video_mode_get/_set), not zsoc.h's
+								// direct-MMIO inlines.
 #include "zapi.h"
 
 // -- small shared helpers --
@@ -1188,6 +1194,76 @@ static ms_val *zapi_df(ms_val *args) {
 
 // -- registration --
 
+// (video-mode) -- current virtual phosphor mode as a string, one of
+// "white", "amber", "green", "paper".
+//
+// (video-mode "amber") or (video-mode 1) -- set it, returning the mode
+// actually in effect afterwards (again as a string), NOT #t. Returning
+// the resulting state rather than a success flag means the common
+// interactive case reads the same either way -- (video-mode) and
+// (video-mode "amber") both answer "what is the screen doing now" --
+// and a caller that wants to check can compare against what it asked
+// for.
+//
+// Both a name and a number are accepted because both are natural here:
+// a person types the name, and generated or looping code ((video-mode
+// (modulo n 4))) wants the number. An unrecognised name or an
+// out-of-range number is a panic, like every other bad argument in
+// this file, rather than silently falling back to white -- a typo that
+// quietly reset the display would be a confusing thing to debug.
+//
+// One getter/setter procedure rather than a video-mode/video-mode!
+// pair: this is a single register with no compound state, so there is
+// nothing a separate setter would clarify. Not named `color` -- that
+// word already means the 1-bit pixel value in (line ...), (box ...)
+// and (text ...) just above, and reusing it for something screen-wide
+// would be actively misleading.
+static ms_val *zapi_video_mode(ms_val *args) {
+
+	if (!ms_is_nil(args)) {
+
+		ms_val *a = ms_car(args);
+		uint32_t mode;
+
+		if (ms_is_str(a)) {
+			const char *name = ms_str_val(a);
+			mode = z_video_mode_from_name(name);
+			if (mode >= Z_VIDEO_MODE_COUNT)
+				ms_log(MS_PANIC, "video-mode: unknown mode '%s' "
+					"(want white, amber, green or paper)", name);
+		}
+		else if (ms_is_num(a)) {
+			double n = ms_num_val(a);
+			if (n < 0 || n >= (double)Z_VIDEO_MODE_COUNT)
+				ms_log(MS_PANIC, "video-mode: mode out of range "
+					"(want 0..%d)", (int)Z_VIDEO_MODE_COUNT - 1);
+			mode = (uint32_t)n;
+		}
+		else {
+			ms_log(MS_PANIC, "video-mode: expected a string or a number");
+			return ms_mk_bool(false);	// not reached -- ms_log(MS_PANIC)
+										// longjmps out, see this file's
+										// own header comment
+		}
+
+		// A failure here is gateware that predates the register, not a
+		// bad argument -- worth saying so explicitly, because the fix
+		// is a reflash rather than anything the caller can change.
+		if (!z_video_mode_set(mode))
+			ms_log(MS_PANIC, "video-mode: this bitstream has no video "
+				"mode register (needs `make flash`)");
+
+	}
+
+	// Read back rather than returning the requested mode, for the same
+	// reason sh.c's `color` does: it reports the screen's actual state.
+	char *s = strdup(z_video_mode_name(z_video_mode_get()));
+	if (!s) ms_log(MS_PANIC, "video-mode: out of memory");
+
+	return ms_mk_str(s);	// takes ownership
+
+}
+
 void zapi_register(void) {
 	ms_def_builtin("ls", zapi_ls);
 	ms_def_builtin("file-size", zapi_file_size);
@@ -1224,4 +1300,5 @@ void zapi_register(void) {
 	ms_def_builtin("delay-ms", zapi_delay_ms);
 	ms_def_builtin("print-console", zapi_print_console);
 	ms_def_builtin("df", zapi_df);
+	ms_def_builtin("video-mode", zapi_video_mode);
 }

@@ -40,6 +40,7 @@ Word-addressed, matching every other simple slave in this codebase.
 |---|---|---|
 | `0x7000_0200` | CTRL | bit 0: cursor shape. 0 = normal (X), 1 = busy (Z). **Resets to 1.** Bits 31:1 reserved, write 0. |
 | `0x7000_0204` | MAGIC | fixed `0x5A43_5452` (`"ZCTR"`) |
+| `0x7000_0208` | VIDEO | bits 1:0: virtual phosphor mode. Reads back as `{0x5643, 14'b0, mode}`. Reset value comes from the board's `GPU_*` defines. |
 
 MAGIC exists for the same reason `csrs.v` has one: reading an address
 nothing decodes does **not** fault on this bus, so a known constant is
@@ -138,6 +139,117 @@ wm: dock: busy, not launching 'term' yet
 Both dock paths (mouse click and keyboard Enter) go through
 `dock_launch()`, so the gating covers each.
 
+## Virtual phosphor modes
+
+The framebuffer is 1bpp, so a pixel is only ever set or clear. What
+colour a set pixel *scans out as* is this register's job.
+
+| Mode | Value | Appearance |
+|---|---|---|
+| `GPU_WHITE` | `00` | white on black (default) |
+| `GPU_AMBER` | `01` | amber on black |
+| `GPU_GREEN` | `10` | green on black |
+| `GPU_PAPER` | `11` | black on white |
+
+These were `ifdef GPU_AMBER` / `ifdef GPU_GREEN` inside
+`rtl/gpu/gpu_video.v`: chosen at synthesis and changeable only by
+re-flashing gateware. The defines still exist and still work, but they
+now choose the **power-on default** only (`rtl/sysctl.v` derives
+socctl's reset value from them and passes it in as
+`VIDEO_MODE_RESET`), and software can change it at any time afterwards.
+A board that used to synthesize green still comes up green.
+
+The colour values themselves are unchanged, on both the VGA and DDMI
+paths — including amber's asymmetric per-channel weightings and the
+fact that the DDMI path drives `0x80` rather than `0xff` for white.
+Those are what this hardware has always produced; adjusting them here
+would have altered the look of every existing board while nominally
+only adding a feature.
+
+`GPU_PAPER` is the one new mode, and it is not a fourth colour. It is
+the white path with the pixel sense inverted, which is why it is
+exactly as legible as white rather than approximately so.
+
+### Why it isn't a spare bit in CTRL
+
+`z_cursor_set_busy()` writes CTRL as a whole word. Spare CTRL bits
+would therefore be wiped to white on every busy/idle transition in
+`wm` — a bug that would look like the display randomly resetting
+itself. A read-modify-write in the C helper would fix that and would
+be one non-atomic sequence away from doing it again the first time
+anything else touched CTRL. A separate register has no such failure
+mode.
+
+### Why there is a second signature
+
+MAGIC tells you socctl is present. It does **not** tell you this
+register is: socctl shipped before VIDEO existed, and on such a
+bitstream the read falls through socctl's `default` case and returns
+`0` — bit-for-bit identical to a working block reporting white. So
+VIDEO carries `0x5643` (`"VC"`, video colour) in its top half, and
+`z_video_mode_present()` checks that rather than MAGIC. Same approach,
+and the same reason for it, as `rtl/cache.v`'s `Z_ICACHE_MAGIC`.
+
+### Frame-boundary updates
+
+`gpu_video.v` synchronises the mode into its pixel clock domain with
+two flops, then adopts the value **only when the frame counters wrap**.
+
+Two flops alone are not enough for a multi-bit value: the bits can
+resolve on different cycles, so a `01` → `10` write can be observed as
+`00` or `11` in between. For one pixel clock that is invisible. The
+reason to care is that a mid-frame change draws the top of the screen
+in one mode and the bottom in another — on `GPU_PAPER`, which inverts,
+that is a very visible tear.
+
+So a mode change lands at the next frame boundary: at most 16.7ms,
+below the threshold at which a person can tell it from instant.
+
+### Blanking
+
+In `GPU_PAPER` the *inactive* pixel state is 1. An ungated invert would
+therefore drive the VGA DAC high through the front porch, sync pulse
+and back porch. That is not cosmetic — a monitor reads sync amplitude
+to lock, and a "white" blanking interval is how you get a display that
+reports no signal at all. `pset` is gated by `is_visible` for exactly
+this reason. The other three modes would tolerate the sloppiness; this
+one does not.
+
+### Using it
+
+From the kernel shell:
+
+```
+> color
+color: white
+usage: color [white|amber|green|paper]
+> color amber
+color: amber
+```
+
+From Scheme (`repl`):
+
+```scheme
+(video-mode)          ; => "white"
+(video-mode "green")  ; => "green"
+(video-mode 3)        ; => "paper"
+```
+
+From C, in an app, via syscall (`sw/common/zeitlos.h`):
+
+```c
+uint32_t mode = z_video_mode_get();
+bool ok = z_video_mode_set(Z_VIDEO_MODE_AMBER);
+```
+
+Or directly, from kernel code (`sw/common/zsoc.h`) — note the
+deliberately different names, so it is always clear at the call site
+which path is in use:
+
+```c
+if (z_video_mode_present()) z_video_set_mode(Z_VIDEO_MODE_PAPER);
+```
+
 ## Troubleshooting
 
 `wm_busy_apply()` reads the register back after writing and reports it,
@@ -153,6 +265,14 @@ wm: busy=0x0 cursor=X
 
 - `no socctl in this bitstream` -- the gateware predates this block.
   This is an RTL change, so it needs `make flash`, not `make dev-flash`.
+- `no video mode register in this bitstream` -- socctl is there but
+  predates VIDEO. Also `make flash`. Reported separately from the line
+  above because the fix is the same but the diagnosis isn't.
+- `color` reports the mode you set but the screen doesn't change --
+  the mode is adopted at a frame boundary, so check you aren't looking
+  at a display that has lost lock for some other reason. The readback
+  comes from the register, which is the SOC's intent, not proof that a
+  monitor is showing it.
 - `READBACK MISMATCH` -- the write isn't landing. Check the address
   masking above.
 - No `net0 up` / `repl0 up` line -- that service never registered, so

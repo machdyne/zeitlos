@@ -1466,7 +1466,37 @@ module sysctl #()
 	// GPU_CURSOR, where it simply goes nowhere.
 	wire socctl_cursor_busy;
 
-	socctl_wb socctl_i (
+	// Virtual phosphor mode -- socctl.v holds it, rtl/gpu/gpu_video.v
+	// consumes it. Declared unconditionally for the same reason
+	// socctl_cursor_busy above is.
+	wire [1:0] socctl_video_mode;
+
+	// `GPU_AMBER / `GPU_GREEN / `GPU_PAPER (rtl/boards.vh) used to be
+	// read directly by gpu_video.v and hard-wired the colour at
+	// synthesis. They now choose only the POWER-ON DEFAULT, and
+	// software can change it afterwards at any time.
+	//
+	// This lives here rather than in socctl.v so that socctl stays a
+	// generic register block: board configuration is this file's job,
+	// and boards.vh is included here. socctl gets a number.
+	//
+	// Order matters if more than one is somehow defined -- first match
+	// wins, and there is no "both" to express. That is a build-file
+	// mistake rather than a state worth encoding.
+	localparam [1:0] VIDEO_MODE_DEFAULT =
+`ifdef GPU_AMBER
+		2'd1;
+`elsif GPU_GREEN
+		2'd2;
+`elsif GPU_PAPER
+		2'd3;
+`else
+		2'd0;
+`endif
+
+	socctl_wb #(
+		.VIDEO_MODE_RESET(VIDEO_MODE_DEFAULT)
+	) socctl_i (
 		.wb_clk_i(wbm_clk),
 		.wb_rst_i(wbm_rst),
 		// Masked to this block's own window, NOT the raw word address.
@@ -1484,7 +1514,8 @@ module sysctl #()
 		.wb_stb_i(wbm_stb),
 		.wb_ack_o(wbs_socctl_ack_o),
 		.wb_cyc_i(wbm_cyc_socctl),
-		.cursor_busy(socctl_cursor_busy)
+		.cursor_busy(socctl_cursor_busy),
+		.video_mode(socctl_video_mode)
 	);
 
 	csrs_wb #(
@@ -1588,6 +1619,7 @@ module sysctl #()
 		.bclk(clk126mhz),
 		.resetn(~wbm_rst),
 		.pixel(gpu_pixel),
+		.video_mode(socctl_video_mode),
 		.x(gpu_x),
 		.y(gpu_y),
 		.gb_adr_o(gb_adr),

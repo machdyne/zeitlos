@@ -138,6 +138,28 @@ uint32_t z_uptime_ticks(void) {
 	return obj.val.uint32;
 }
 
+// -- virtual phosphor mode -- see zeitlos.h and sw/common/zsoc.h --
+
+uint32_t z_video_mode_get(void) {
+	z_obj_t obj = {0};
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_kernel_ptr(Z_SYS_VIDEO_GET_MODE, (uint32_t *)&obj, 0);
+	return (obj.type == Z_UINT32) ? obj.val.uint32 : 0;
+}
+
+// The kernel echoes the mode actually in effect back into obj, so the
+// success test is whether we ended up where we asked to be rather than
+// the return code alone. That covers the case a bare z_ok/z_fail
+// cannot: gateware without the register accepts nothing and stays put.
+bool z_video_mode_set(uint32_t mode) {
+	z_obj_t obj = {0};
+	obj.type = Z_UINT32;
+	obj.val.uint32 = mode;
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_kernel_ptr(Z_SYS_VIDEO_SET_MODE, (uint32_t *)&obj, 0);
+	return (obj.type == Z_UINT32) && (obj.val.uint32 == mode);
+}
+
 // busy-waits for at least `ms` milliseconds, using z_uptime_ticks()
 // (the KTIMER IRQ's own ~732Hz tick counter, sw/os/kernel.c) rather
 // than an arbitrary `for (volatile int i = 0; i < N; i++);` spin loop

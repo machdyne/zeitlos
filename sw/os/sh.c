@@ -817,6 +817,59 @@ void sh(void) {
 			}
 		}
 
+		// VIRTUAL PHOSPHOR MODE (rtl/socctl.v's VIDEO register)
+		//
+		// `color` alone reports the current mode; `color <name>` sets
+		// it. The four modes are white (white on black, the default),
+		// amber, green and paper (black on white).
+		//
+		// These were `ifdef GPU_AMBER/`ifdef GPU_GREEN in
+		// rtl/gpu/gpu_video.v -- chosen at synthesis, changeable only
+		// by re-flashing gateware. The defines still exist and still
+		// work, but now choose only the power-on default.
+		//
+		// Kernel code, so this calls zsoc.h's MMIO helpers directly
+		// rather than going through the VIDEO_SET_MODE syscall; sh.c
+		// IS the kernel and already touches socctl this way for the
+		// cursor. Apps use z_video_mode_set() (zeitlos.h) instead.
+		else if (!strncmp(buffer, "color", cmdlen)) {
+
+			arg = get_arg(buffer, 1);
+
+			if (!z_video_mode_present()) {
+				// Deliberately distinguished from "socctl missing
+				// entirely": a bitstream can have socctl and still
+				// predate this register, and the fix is the same
+				// either way but the diagnosis isn't.
+				printf("no video mode register in this bitstream\n");
+				printf("(this is an RTL change -- needs `make flash`)\n");
+			}
+			else if (arg == NULL) {
+				printf("color: %s\n", z_video_mode_name(z_video_get_mode()));
+				printf("usage: color [white|amber|green|paper]\n");
+			}
+			else {
+				uint32_t mode = z_video_mode_from_name(arg);
+
+				if (mode >= Z_VIDEO_MODE_COUNT) {
+					printf("unknown color '%s'\n", arg);
+					printf("usage: color [white|amber|green|paper]\n");
+				}
+				else if (z_video_set_mode(mode)) {
+					// Read back rather than echoing `mode`. The write
+					// is fire-and-forget on this bus, so reporting the
+					// requested value would look identical whether or
+					// not it landed -- the same reason wm_busy_apply()
+					// reads back after setting the cursor.
+					printf("color: %s\n",
+						z_video_mode_name(z_video_get_mode()));
+				}
+				else {
+					printf("color: failed to set '%s'\n", arg);
+				}
+			}
+		}
+
 		// DISPLAY FILESYSTEM CAPACITY -- the SD card, as opposed to
 		// `free` just above, which is main memory. fs_total()/fs_free()
 		// (sw/os/fs/fs.c) have existed since long before this command
@@ -1276,6 +1329,7 @@ void sh_help(void) {
 	printf(" touch [path]      create empty file\n");
 	printf(" rm [path]         remove a file\n");
 	printf(" cache [on|off|flush]  instruction cache stats/control\n");
+	printf(" color [white|amber|green|paper]  display phosphor mode\n");
 	printf(" bench             cpu/memory micro-benchmarks\n");
 
 }

@@ -300,6 +300,25 @@ z_rv z_msg_wait(z_msg_t *msg, uint32_t subject, uint32_t tag);
 // wall-clock/calendar time.
 uint32_t z_uptime_ticks(void);
 
+// -- virtual phosphor mode --
+//
+// The display's colour scheme: Z_VIDEO_MODE_WHITE / _AMBER / _GREEN /
+// _PAPER (sw/common/zsoc.h, which is where the constants and the full
+// writeup live). Screen-wide, not per-window -- the whole framebuffer
+// is one 1bpp surface and this picks how a set bit is coloured at
+// scanout.
+//
+// Named z_video_mode_get()/_set(), NOT z_video_get_mode()/
+// z_video_set_mode(): those names are already taken by zsoc.h's inline
+// direct-MMIO helpers, which any app may include. Deliberately
+// different rather than shadowing, so it is always clear at the call
+// site which path is being used.
+//
+// z_video_mode_set() returns false if the mode is out of range or the
+// gateware predates the register, and changes nothing in either case.
+uint32_t z_video_mode_get(void);
+bool z_video_mode_set(uint32_t mode);
+
 // busy-waits for at least `ms` milliseconds, built on z_uptime_ticks()
 // above -- see delay_ms()'s own comment (zeitlos.c) for why this
 // exists (replacing ad-hoc, uncalibrated `for(volatile int i=0;...)`

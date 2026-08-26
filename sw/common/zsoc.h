@@ -241,6 +241,7 @@ static inline bool z_soc_feature_confirmed_absent(uint32_t feature) {
 // inertness. Configuration software SETS lives here instead.
 #define reg_socctl_ctrl  (*(volatile uint32_t*)0x70000200)
 #define reg_socctl_magic (*(volatile uint32_t*)0x70000204)
+#define reg_socctl_video (*(volatile uint32_t*)0x70000208)
 
 #define Z_SOCCTL_MAGIC 0x5A435452u	// "ZCTR" -- see rtl/socctl.v
 
@@ -264,6 +265,99 @@ static inline bool z_socctl_present(void) {
 // at all and stalls the CPU forever; see rtl/cache.v's own note.)
 static inline void z_cursor_set_busy(bool busy) {
 	reg_socctl_ctrl = busy ? Z_SOCCTL_CURSOR_BUSY : 0;
+}
+
+// -- virtual phosphor modes (rtl/gpu/gpu_video.v) --
+//
+// The display's colour scheme, in a register instead of an `ifdef.
+// GPU_AMBER/GPU_GREEN used to be synthesis-time choices baked into
+// gpu_video.v; they now select only the POWER-ON DEFAULT (rtl/sysctl.v
+// derives socctl's reset value from them), and this changes it live.
+//
+// "Paper" is black-on-white. It is not a fourth colour but the white
+// mode with the pixel sense inverted, which is why it is exactly as
+// legible as the white one rather than approximately so.
+//
+// A change takes effect at the next frame boundary rather than
+// immediately -- gpu_video.v adopts the new value only when its
+// counters wrap, so no frame is ever drawn half in one mode and half
+// in another. Worst case that is 16.7ms.
+#define Z_VIDEO_MODE_WHITE 0u	// white on black (default)
+#define Z_VIDEO_MODE_AMBER 1u	// amber on black
+#define Z_VIDEO_MODE_GREEN 2u	// green on black
+#define Z_VIDEO_MODE_PAPER 3u	// black on white
+#define Z_VIDEO_MODE_COUNT 4u
+
+// top half of reg_socctl_video -- KEEP IN SYNC with rtl/socctl.v's
+// own VIDEO_SIG. "VC", video colour.
+#define Z_VIDEO_SIG 0x5643u
+
+// true only if this bitstream's socctl actually has the VIDEO
+// register.
+//
+// z_socctl_present() is NOT sufficient here and checking it instead
+// would be a real bug: socctl shipped before this register existed, so
+// a bitstream can answer the ZCTR magic correctly and still have
+// nothing at 0x7000_0208. On one of those, the read falls through
+// socctl's own default case and returns 0 -- which is bit-for-bit
+// identical to a working block reporting Z_VIDEO_MODE_WHITE. Hence a
+// second signature in the upper half, same approach as
+// z_icache_present().
+static inline bool z_video_mode_present(void) {
+	return ((reg_socctl_video >> 16) & 0xffffu) == Z_VIDEO_SIG;
+}
+
+// Current mode, or Z_VIDEO_MODE_WHITE if this bitstream predates the
+// register -- white is what such a board is actually displaying, so
+// the fallback is the truth rather than a placeholder.
+static inline uint32_t z_video_get_mode(void) {
+	if (!z_video_mode_present()) return Z_VIDEO_MODE_WHITE;
+	return reg_socctl_video & 0x3u;
+}
+
+// Set the mode. Returns false if this bitstream can't do it (an RTL
+// change -- needs `make flash`, not `make dev-flash`) or if `mode` is
+// out of range; in neither case is anything written.
+static inline bool z_video_set_mode(uint32_t mode) {
+	if (mode >= Z_VIDEO_MODE_COUNT) return false;
+	if (!z_video_mode_present()) return false;
+	reg_socctl_video = mode;
+	return true;
+}
+
+// Display name for a mode, for anything that prints one. Always
+// returns a valid string, "unknown" for a value out of range, so a
+// caller can print the result without checking first.
+static inline const char *z_video_mode_name(uint32_t mode) {
+	switch (mode) {
+		case Z_VIDEO_MODE_WHITE: return "white";
+		case Z_VIDEO_MODE_AMBER: return "amber";
+		case Z_VIDEO_MODE_GREEN: return "green";
+		case Z_VIDEO_MODE_PAPER: return "paper";
+		default: return "unknown";
+	}
+}
+
+// Parse a mode name, case-sensitive, as typed by a person (sh.c's
+// `color` command, the Scheme API's (video-mode ...)). Returns
+// Z_VIDEO_MODE_COUNT for anything unrecognised -- deliberately an
+// out-of-range value rather than defaulting to white, so a typo is
+// reported instead of silently resetting the display.
+//
+// Written out longhand rather than with strcmp() so this header stays
+// usable from anywhere without pulling in <string.h>; it is four
+// short words.
+static inline uint32_t z_video_mode_from_name(const char *s) {
+	if (!s) return Z_VIDEO_MODE_COUNT;
+	if (s[0] == 'w' && s[1] == 'h' && s[2] == 'i' && s[3] == 't' &&
+		s[4] == 'e' && s[5] == '\0') return Z_VIDEO_MODE_WHITE;
+	if (s[0] == 'a' && s[1] == 'm' && s[2] == 'b' && s[3] == 'e' &&
+		s[4] == 'r' && s[5] == '\0') return Z_VIDEO_MODE_AMBER;
+	if (s[0] == 'g' && s[1] == 'r' && s[2] == 'e' && s[3] == 'e' &&
+		s[4] == 'n' && s[5] == '\0') return Z_VIDEO_MODE_GREEN;
+	if (s[0] == 'p' && s[1] == 'a' && s[2] == 'p' && s[3] == 'e' &&
+		s[4] == 'r' && s[5] == '\0') return Z_VIDEO_MODE_PAPER;
+	return Z_VIDEO_MODE_COUNT;
 }
 
 // -- instruction cache (rtl/cache.v) --

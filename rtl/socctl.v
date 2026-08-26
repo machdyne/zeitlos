@@ -50,6 +50,33 @@
  *             fault on this bus, so a known constant is the only way
  *             software can tell "this block is present" from "this is
  *             whatever the bus happened to resolve to".
+ *   2  VIDEO  bits 1:0: virtual phosphor mode, driven out to
+ *             rtl/gpu/gpu_video.v. 00 white-on-black, 01 amber,
+ *             10 green, 11 paper (black-on-white). Resets to
+ *             VIDEO_MODE_RESET, which rtl/sysctl.v derives from the
+ *             board's `GPU_AMBER/`GPU_GREEN/`GPU_PAPER defines so a
+ *             board that used to synthesize green still COMES UP
+ *             green -- the defines now choose a power-on default
+ *             instead of a permanent wiring.
+ *
+ *             Reads back as { 16'h5643, 14'b0, mode }. The signature
+ *             is not decoration: a bitstream can have socctl (so
+ *             MAGIC is right) and still predate this register, and on
+ *             one of those the register-2 read falls to the default
+ *             case and returns 0 -- which is indistinguishable from a
+ *             perfectly working block reporting white. Software
+ *             checking the top half gets a real answer either way.
+ *             Same trick, and the same reason for it, as
+ *             rtl/cache.v's Z_ICACHE_MAGIC.
+ *
+ *             VIDEO is a SEPARATE register rather than spare bits in
+ *             CTRL. That is not tidiness: z_cursor_set_busy()
+ *             (sw/common/zsoc.h) writes CTRL as a whole word, so
+ *             sharing would mean every busy/idle transition in
+ *             sw/apps/wm silently reset the display to white. A
+ *             read-modify-write in the C helper would fix that and
+ *             would also be one non-atomic sequence away from doing
+ *             it again the first time anything else touches CTRL.
  *
  * Reset state is BUSY (cursor = Z), not idle.
  *
@@ -65,7 +92,13 @@
  * exactly what is true.
  */
 
-module socctl_wb #()
+module socctl_wb #(
+    // Power-on virtual phosphor mode. Set by rtl/sysctl.v from the
+    // board's own defines -- see this file's header and the VIDEO
+    // register below. Defaults to white-on-black, matching the
+    // behaviour of a board that defines none of them.
+    parameter [1:0] VIDEO_MODE_RESET = 2'd0
+)
 (
     input wb_clk_i,
     input wb_rst_i,
@@ -84,14 +117,30 @@ module socctl_wb #()
     // single bit changed by a human-paced event (a window manager
     // deciding it is busy), and the worst case of sampling it mid-flip
     // is one frame drawn with the old shape.
-    output wire cursor_busy
+    output wire cursor_busy,
+
+    // Virtual phosphor mode -> rtl/gpu/gpu_video.v's own video_mode
+    // input. Crosses into the pixel clock domain there rather than
+    // here, because that is where the timing needed to make the change
+    // land on a frame boundary lives -- see gpu_video.v's own
+    // synchroniser comment. Declared unconditionally, exactly like
+    // cursor_busy above: on a board built without `GPU it simply goes
+    // nowhere.
+    output wire [1:0] video_mode
 );
 
     localparam MAGIC = 32'h5A43_5452;   // "ZCTR"
 
+    // top half of the VIDEO register -- "VC", video colour. See this
+    // file's header comment for why a second signature is needed when
+    // MAGIC already exists.
+    localparam VIDEO_SIG = 16'h5643;
+
     reg [31:0] ctrl;
+    reg [1:0] video;
 
     assign cursor_busy = ctrl[0];
+    assign video_mode = video;
 
     always @(posedge wb_clk_i) begin
 
@@ -99,6 +148,7 @@ module socctl_wb #()
 
             // busy at reset -- see this file's header comment
             ctrl <= 32'h0000_0001;
+            video <= VIDEO_MODE_RESET;
             wb_ack_o <= 1'b0;
             wb_dat_o <= 32'h0000_0000;
 
@@ -124,11 +174,23 @@ module socctl_wb #()
                         if (wb_sel_i[3]) ctrl[31:24] <= wb_dat_i[31:24];
                     end
 
+                    // Only lane 0 matters -- the mode is two bits and
+                    // the rest of the word is a read-only signature,
+                    // so there is nothing for the upper lanes to
+                    // write. Every value of wb_dat_i[1:0] is a legal
+                    // mode, so no range check is needed or wanted:
+                    // rejecting a write here would be invisible to
+                    // software, which cannot see an error on this bus.
+                    if (wb_adr_i == 32'd2) begin
+                        if (wb_sel_i[0]) video <= wb_dat_i[1:0];
+                    end
+
                 end else begin
 
                     case (wb_adr_i)
                         32'd0: wb_dat_o <= ctrl;
                         32'd1: wb_dat_o <= MAGIC;
+                        32'd2: wb_dat_o <= { VIDEO_SIG, 14'b0, video };
                         default: wb_dat_o <= 32'h0000_0000;
                     endcase
 

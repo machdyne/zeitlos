@@ -105,3 +105,17 @@ Z_MKSYSCALL(PROC_WAIT, k_proc_wait)
 // wm's dock to show only apps that are actually present. See
 // k_exec_exists() in sw/os/fsapi.c.
 Z_MKSYSCALL(EXEC_EXISTS, k_exec_exists)
+// Virtual phosphor mode -- the display's colour scheme (white/amber/
+// green/paper), see rtl/socctl.v's VIDEO register and docs/socctl.md.
+//
+// These are the FIRST syscalls in this file whose work an app could
+// equally well do itself: the register is plain MMIO and nothing stops
+// an app writing it, exactly as sw/apps/wm already writes socctl's
+// CTRL directly via z_cursor_set_busy(). They exist anyway because the
+// display is genuinely shared state -- every process is looking at the
+// same screen -- and routing changes through the kernel means there is
+// one place to put policy when that starts to matter. Nothing is
+// arbitrated today; the honest description is that this is where the
+// arbitration would go, not that it already happens.
+Z_MKSYSCALL(VIDEO_GET_MODE, k_video_get_mode)
+Z_MKSYSCALL(VIDEO_SET_MODE, k_video_set_mode)
