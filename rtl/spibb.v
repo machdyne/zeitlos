@@ -4,6 +4,8 @@
  *
  * SPI bit-bang interface; requires a dedicated SPI bus.
  *
+ * Previously used for the sdcard (see spisd.v). Unused for now.
+ *
  */
 
 module spibb_wb #()

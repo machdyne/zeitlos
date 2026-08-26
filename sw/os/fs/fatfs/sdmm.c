@@ -35,40 +35,78 @@
 /* Platform dependent macros and functions needed to be modified           */
 /*-------------------------------------------------------------------------*/
 
-#include "zeitlos.h"		/* Include device specific declareation file here */
+#include "zeitlos.h"
+#include "zsoc.h"			/* Z_SYSCLK_HZ, for dly_us() */		/* Include device specific declareation file here */
 
-#define DO_INIT()						/* Initialize port for MMC DO as input */
-#define DO			(reg_sdcard &	0x01)	/* Test for MMC DO ('H':true, 'L':false) */
+/*--------------------------------------------------------------------------
 
-/* Shadow copy of the writable {CS,CK,DI} bits (bits 3,2,1). Matches
-   spibb_wb's reset state (sd_ss=1, sd_sck=1, sd_mosi=1 -> 0x0E).
-   Avoids reading reg_sdcard back before every write: DI/CK/CS are
-   outputs we last set ourselves, so we already know their state --
-   only DO (bit 0, MISO, an input) genuinely needs a hardware read. */
-static BYTE sd_port = 0x0E;
+   Hardware SPI back end (rtl/spisd.v)
 
-#define DI_INIT()						/* Initialize port for MMC DI as output */
-#define DI_H()		do { sd_port |= 0x02; reg_sdcard = sd_port; } while(0)	/* Set MMC DI "high" */
-#define DI_L()		do { sd_port &= 0xFD; reg_sdcard = sd_port; } while(0)	/* Set MMC DI "low" */
+   This driver used to toggle SCLK, MOSI and CS as GPIO, one wishbone
+   cycle per edge. That made the SPI clock rate an emergent property of
+   compiler codegen: it changed when the toolchain moved from GCC 8.2/
+   rv32i to GCC 15.2/rv32im, it would change again with an instruction
+   cache enabled, and it changed when a read-modify-write that looked
+   redundant was removed -- that read was a full bus cycle, and
+   deleting it both doubled SCLK and removed the card's data setup
+   time.
 
-#define CK_INIT()						/* Initialize port for MMC SCLK as output */
-#define CK_H()		do { sd_port |= 0x04; reg_sdcard = sd_port; } while(0)	/* Set MMC SCLK "high" */
-#define	CK_L()		do { sd_port &= 0xFB; reg_sdcard = sd_port; } while(0)	/* Set MMC SCLK "low" */
+   Now the shift register and clock divider live in gateware. Software
+   writes a byte, polls BUSY, reads the byte that came back. Timing is
+   identical on every board, at every optimisation level, under every
+   compiler.
 
-#define CS_INIT()						/* Initialize port for MMC CS as output */
-#define	CS_H()		do { sd_port |= 0x08; reg_sdcard = sd_port; } while(0)	/* Set MMC CS "high" */
-#define CS_L()		do { sd_port &= 0xF7; reg_sdcard = sd_port; } while(0)	/* Set MMC CS "low" */
+   Roughly 100 CPU cycles per BIT became roughly 48 per BYTE.
+
+---------------------------------------------------------------------------*/
+
+/* Exchange one byte, full duplex. SPI has no half-duplex mode: every
+   byte sent produces a byte received, so a "send" discards the result
+   and a "receive" sends 0xFF (which is what the card expects to see
+   while it is the one talking). */
+static BYTE spi_xchg (BYTE d)
+{
+	reg_spisd_data = d;
+	while (reg_spisd_status & Z_SPISD_BUSY) ;
+	return (BYTE)(reg_spisd_data & 0xFF);
+}
+
+/* Chip select. Active low on the pin; the register takes 1 to ASSERT,
+   so the polarity lives in the gateware rather than being open-coded
+   at every call site the way the old GPIO version did it. */
+#define CS_H()		do { reg_spisd_ctrl = Z_SPISD_CTRL_DIV(sd_div); } while(0)
+#define CS_L()		do { reg_spisd_ctrl = Z_SPISD_CTRL_DIV(sd_div) | Z_SPISD_CTRL_CS; } while(0)
+
+/* Current divider, shadowed because CTRL holds CS and DIV in the same
+   word and CS is changed far more often than the clock. */
+static BYTE sd_div = Z_SPISD_DIV_INIT;
+
+static void sd_set_speed (BYTE div)
+{
+	sd_div = div;
+	reg_spisd_ctrl = Z_SPISD_CTRL_DIV(sd_div) |
+		((reg_spisd_ctrl & Z_SPISD_CTRL_CS) ? Z_SPISD_CTRL_CS : 0);
+}
 
 
 static
-void dly_us (UINT n)	/* Delay n microseconds (avr-gcc -Os) */
+void dly_us (UINT n)	/* Delay n microseconds */
 {
+	/* Was three volatile reads per iteration, with a comment saying it
+	   was calibrated for "avr-gcc -Os" -- a delay that depended on a
+	   particular compiler, on a particular CPU, at a particular clock.
+	   rdcycle is the real cycle counter, so this is n microseconds by
+	   construction regardless of all three. */
+	uint32_t start, now, target;
+
+	__asm__ volatile ("rdcycle %0" : "=r"(start));
+	target = (Z_SYSCLK_HZ / 1000000u) * (uint32_t)n;
+
 	do {
-		reg_sdcard;
-		reg_sdcard;
-		reg_sdcard;
-	} while (--n);
+		__asm__ volatile ("rdcycle %0" : "=r"(now));
+	} while ((uint32_t)(now - start) < target);
 }
+
 
 
 /*--------------------------------------------------------------------------
@@ -119,29 +157,12 @@ void xmit_mmc (
 	UINT bc				/* Number of bytes to send */
 )
 {
-	BYTE d;
-
-
 	do {
-		d = *buff++;	/* Get a byte to be sent */
-		if (d & 0x80) DI_H(); else DI_L();	/* bit7 */
-		CK_H(); CK_L();
-		if (d & 0x40) DI_H(); else DI_L();	/* bit6 */
-		CK_H(); CK_L();
-		if (d & 0x20) DI_H(); else DI_L();	/* bit5 */
-		CK_H(); CK_L();
-		if (d & 0x10) DI_H(); else DI_L();	/* bit4 */
-		CK_H(); CK_L();
-		if (d & 0x08) DI_H(); else DI_L();	/* bit3 */
-		CK_H(); CK_L();
-		if (d & 0x04) DI_H(); else DI_L();	/* bit2 */
-		CK_H(); CK_L();
-		if (d & 0x02) DI_H(); else DI_L();	/* bit1 */
-		CK_H(); CK_L();
-		if (d & 0x01) DI_H(); else DI_L();	/* bit0 */
-		CK_H(); CK_L();
+		spi_xchg(*buff++);	/* result discarded: the card is listening,
+							   not talking, during a send */
 	} while (--bc);
 }
+
 
 
 
@@ -155,31 +176,13 @@ void rcvr_mmc (
 	UINT bc		/* Number of bytes to receive */
 )
 {
-	BYTE r;
-
-
-	DI_H();	/* Send 0xFF */
-
 	do {
-		r = 0;	 if (DO) r++;	/* bit7 */
-		CK_H(); CK_L();
-		r <<= 1; if (DO) r++;	/* bit6 */
-		CK_H(); CK_L();
-		r <<= 1; if (DO) r++;	/* bit5 */
-		CK_H(); CK_L();
-		r <<= 1; if (DO) r++;	/* bit4 */
-		CK_H(); CK_L();
-		r <<= 1; if (DO) r++;	/* bit3 */
-		CK_H(); CK_L();
-		r <<= 1; if (DO) r++;	/* bit2 */
-		CK_H(); CK_L();
-		r <<= 1; if (DO) r++;	/* bit1 */
-		CK_H(); CK_L();
-		r <<= 1; if (DO) r++;	/* bit0 */
-		CK_H(); CK_L();
-		*buff++ = r;			/* Store a received byte */
+		*buff++ = spi_xchg(0xFF);	/* 0xFF holds MOSI high, which is
+									   what the card expects while it
+									   is the one driving MISO */
 	} while (--bc);
 }
+
 
 
 
@@ -385,10 +388,12 @@ DSTATUS disk_initialize (
 	if (drv) return RES_NOTRDY;
 
 	dly_us(10000);			/* 10ms */
-	CS_INIT(); CS_H();		/* Initialize port pin tied to CS */
-	CK_INIT(); CK_L();		/* Initialize port pin tied to SCLK */
-	DI_INIT();				/* Initialize port pin tied to DI */
-	DO_INIT();				/* Initialize port pin tied to DO */
+	/* No pin setup: rtl/spisd.v owns the pins and comes out of reset
+	   with CS deasserted and SCLK idle low. Cards must be clocked at
+	   400kHz or below until they leave idle state, hence the slow
+	   divider here; it is raised once initialisation succeeds. */
+	sd_set_speed(Z_SPISD_DIV_INIT);
+	CS_H();
 
 	for (n = 10; n; n--) rcvr_mmc(buf, 1);	/* Apply 80 dummy clocks and the card gets ready to receive command */
 
@@ -421,6 +426,16 @@ DSTATUS disk_initialize (
 		}
 	}
 	CardType = ty;
+
+	/* Initialisation is done, so leave the mandatory 400kHz behind.
+	   Everything above this point had to be slow because a card in idle
+	   state is only specified to 400kHz; from here it will take a real
+	   clock, and this is where the speed of the whole filesystem comes
+	   from. Lower Z_SPISD_DIV_FAST (zeitlos.h) for more, but verify
+	   against the slowest card you care about -- 24MHz is the top of SPI
+	   mode and not every card reaches it. */
+	if (ty) sd_set_speed(Z_SPISD_DIV_FAST);
+
 	s = ty ? 0 : STA_NOINIT;
 	Stat = s;
 

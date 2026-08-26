@@ -68,6 +68,30 @@ typedef uint32_t *(*z_kernel_ptr_t)(uint32_t, uint32_t *, uint32_t);
 #define reg_usb_mouse (*(volatile uint32_t*)0xc0000008)
 #define reg_usb_cursor (*(volatile uint32_t*)0xc000000c)
 
+// -- hardware SPI master for the sdcard (rtl/spisd.v) --
+//
+// Replaces the old bit-bang GPIO register. SCLK is generated in
+// gateware, so the transfer rate no longer depends on compiler
+// codegen, ISA or cache behaviour -- see rtl/spisd.v's header for why
+// that mattered.
+#define reg_spisd_data   (*(volatile uint32_t*)0xb0000000)
+#define reg_spisd_status (*(volatile uint32_t*)0xb0000004)
+#define reg_spisd_ctrl   (*(volatile uint32_t*)0xb0000008)
+#define reg_spisd_magic  (*(volatile uint32_t*)0xb000000c)
+
+#define Z_SPISD_MAGIC     0x53504930u   // "SPI0"
+#define Z_SPISD_BUSY      (1u << 0)     // STATUS: transfer in progress
+#define Z_SPISD_CTRL_CS   (1u << 0)     // CTRL: 1 = assert (pin low)
+#define Z_SPISD_CTRL_DIV(d) (((d) & 0xffu) << 8)
+
+// SCLK = 48MHz / (2 * (DIV + 1)).
+//   59 -> 400kHz, mandatory until the card leaves idle state
+//    1 -> 12MHz
+//    0 -> 24MHz
+#define Z_SPISD_DIV_INIT  59
+#define Z_SPISD_DIV_FAST  1
+
+// kept for compatibility with anything still poking the old register
 #define reg_sdcard (*(volatile uint32_t*)0xb0000000)
 
 #define gpu_x0 (*(volatile uint32_t*)0xa0000000)

@@ -1371,11 +1371,16 @@ module sysctl #()
 	);
 `endif
 
-	// WISHBONE SLAVE: SPI BIT-BANG INTERFACE FOR SDCARD
+	// WISHBONE SLAVE: HARDWARE SPI MASTER FOR SDCARD
 `ifdef SPI_SDCARD
 	wire wbm_cyc_spisdcard = cs_spisdcard && wbm_cyc;
 
-	spibb_wb #() wbs_spibb0_i
+	// spisd_wb, not spibb_wb: SCLK is generated in gateware rather
+	// than by the CPU toggling pins. See rtl/spisd.v -- the bit-banged
+	// version made the SPI clock rate a function of compiler codegen,
+	// which broke when the toolchain changed and would break again
+	// with an instruction cache enabled.
+	spisd_wb #() wbs_spisd0_i
 	(
 		.wb_clk_i(wbm_clk),
 		.wb_rst_i(wbm_rst),
