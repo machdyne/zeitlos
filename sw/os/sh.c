@@ -807,6 +807,45 @@ void sh(void) {
 		// and were simply never called by anything; both report KB and
 		// both return 0 on any failure (no card, not mounted), which is
 		// why "not mounted" and "empty" read the same here.
+		// FORMAT -- destroys everything on the sdcard.
+		//
+		// Requires the exact confirmation word as an argument rather
+		// than a y/n prompt. A prompt is one keystroke away from
+		// wiping a card, and this shell has no undo, no trash and no
+		// second copy of anything. Typing "erase-everything" cannot
+		// happen by accident or by holding a key down.
+		//
+		// Deliberately does NOT touch the core apps: those live in
+		// flash (sw/os/zar.h) and survive this, so a formatted card
+		// still boots to a desktop. That is worth knowing before
+		// running it -- the machine will come back up fine.
+		else if (!strncmp(buffer, "format", cmdlen)) {
+
+			arg = get_arg(buffer, 1);
+
+			if (arg == NULL || strcmp(arg, "erase-everything") != 0) {
+				printf("this will PERMANENTLY ERASE the entire sdcard.\n");
+				printf("core apps in flash (wm, net, repl, term) are not\n");
+				printf("affected and the system will still boot.\n");
+				printf("\n");
+				printf("to proceed, type exactly:\n");
+				printf("  format erase-everything\n");
+			}
+			else {
+				printf("erasing sdcard ...\n");
+				if (fs_format() == 0) {
+					// f_mkfs leaves the volume unmounted; remount so
+					// the very next `ls` or `xf` works instead of
+					// failing with FR_NOT_READY.
+					if (fs_mount_now() == 0)
+						printf("sdcard formatted and remounted.\n");
+					else
+						printf("formatted, but remount failed -- reboot.\n");
+				}
+			}
+
+		}
+
 		else if (!strncmp(buffer, "df", cmdlen)) {
 			uint32_t total = fs_total();
 			uint32_t freek = fs_free();
@@ -1211,6 +1250,7 @@ void sh_help(void) {
 	printf(" kill <pid>        kill a process\n");
 	printf(" ps                display a process snapshot\n");
 	printf(" df                display filesystem capacity\n");
+	printf(" format            ERASE the entire sdcard\n");
 	printf(" pr                display the pid name registry\n");
 	printf(" ks                display a kernel snapshot\n");
 	printf(" cls               clear framebuffer\n");
