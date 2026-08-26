@@ -115,6 +115,12 @@
 #define Z_FEATURE_CPU_DIV     (1u << 21)
 #define Z_FEATURE_CPU_MUL_FAST (1u << 22)
 
+// Which core, not what it can do. Set for rtl/cpu/zeitlos32, clear for
+// picorv32 -- and clear also on any bitstream built before this bit
+// existed, which is correct, since those are all picorv32. See
+// z_soc_cpu_name().
+#define Z_FEATURE_CPU_ZEITLOS32 (1u << 23)
+
 // -- feature table (sw/common/zsoc.c) --
 //
 // The human-readable half of the Z_FEATURE_* bits above, kept in the
@@ -189,6 +195,19 @@ static inline uint32_t z_soc_mem_mb(void) {
 static inline bool z_soc_has_feature(uint32_t feature) {
 	if (!z_soc_csrs_present()) return false;
 	return (reg_csr_features & feature) != 0;
+}
+
+// Name of the CPU core in the running bitstream. Returns "unknown" if
+// this build predates rtl/csrs.v, because on such a bitstream the bit
+// is not merely clear, it is unreadable -- and "picorv32" would be a
+// guess dressed up as a fact.
+//
+// The two cores are drop-in compatible, so the same kernel binary runs
+// on either and nothing else in a running system distinguishes them.
+static inline const char *z_soc_cpu_name(void) {
+	if (!z_soc_csrs_present()) return "unknown";
+	return (reg_csr_features & Z_FEATURE_CPU_ZEITLOS32) ? "zeitlos32"
+	                                                    : "picorv32";
 }
 
 // true only if CSRs are present AND `feature` is confirmed ABSENT --

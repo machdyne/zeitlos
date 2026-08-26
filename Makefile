@@ -5,6 +5,8 @@ RTL_PICO = \
 	rtl/clk/pll0_25.v \
 	rtl/clk/pll1_25.v \
 	rtl/cpu/picorv32/picorv32.v \
+	rtl/cpu/zeitlos32/zeitlos32.v \
+	rtl/cpu/zeitlos32/zeitlos32_muldiv.v \
 	rtl/mtu.v \
 	rtl/cache.v \
 	rtl/arbiter_vram.v \

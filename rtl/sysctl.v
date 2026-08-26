@@ -684,6 +684,64 @@ module sysctl #()
 
 	localparam BRAM_WORDS = 2048;
 
+`ifdef CPU_ZEITLOS32
+
+	// EXPERIMENTAL: rtl/cpu/zeitlos32, selected by `CPU_ZEITLOS32 in
+	// rtl/boards.vh. Port-for-port compatible with the picorv32_wb
+	// instantiation in the `else branch below -- same wishbone
+	// signals, same irq input, same mem_instr for rtl/cache.v, and the
+	// same custom interrupt ABI, so sw/bios/boot_picorv32.S and
+	// sw/bios/custom_ops.S are untouched. Nothing else in this file
+	// knows which core is present.
+	//
+	// See docs/zeitlos32.md and rtl/cpu/zeitlos32/tests/.
+
+	zeitlos32_wb #(
+		.STACKADDR(BRAM_WORDS * 4),      // end of BRAM
+		.PROGADDR_RESET(32'h0000_0000),
+		.PROGADDR_IRQ(32'h0000_0010),
+		// rv32im -- the same `CPU_MUL/`CPU_MUL_FAST/`CPU_DIV switches
+		// the picorv32 branch below uses. FAST_MUL selects the DSP
+		// multiplier over the sequential one; unlike picorv32 the two
+		// are not mutually exclusive parameters, so ENABLE_MUL stays
+		// set either way and FAST_MUL just picks the implementation.
+`ifdef CPU_MUL_FAST
+		.ENABLE_MUL(1),
+		.FAST_MUL(1),
+`elsif CPU_MUL
+		.ENABLE_MUL(1),
+		.FAST_MUL(0),
+`else
+		.ENABLE_MUL(0),
+		.FAST_MUL(0),
+`endif
+`ifdef CPU_DIV
+		.ENABLE_DIV(1),
+`else
+		.ENABLE_DIV(0),
+`endif
+		.LATCHED_IRQ(32'b1111_1111_1111_1111_1111_1111_1110_1111)
+	)
+	wbm_cpu0_i
+	(
+		.wb_clk_i(wbm_clk),
+		.wb_rst_i(wbm_rst),
+		.wbm_adr_o(wbm_cpu_adr),
+		.wbm_dat_o(wbm_cpu_dat_o),
+		.wbm_dat_i(wbm_cpu_dat_i),
+		.wbm_we_o(wbm_cpu_we),
+		.wbm_sel_o(wbm_cpu_sel),
+		.wbm_stb_o(wbm_cpu_stb),
+		.wbm_ack_i(wbm_cpu_ack),
+		.wbm_cyc_o(wbm_cpu_cyc),
+		.trap(cpu_trap),
+		.irq(cpu_irq),
+		.eoi(),
+		.mem_instr(wbm_cpu_instr)
+	);
+
+`else
+
 	picorv32_wb #(
       .STACKADDR(BRAM_WORDS * 4),      // end of BRAM
       .PROGADDR_RESET(32'h0000_0000),
@@ -734,6 +792,8 @@ module sysctl #()
 		// which is what keeps data coherency out of the picture entirely.
 		.mem_instr(wbm_cpu_instr)
 	);
+
+`endif
 
 	// WISHBONE SLAVE: MTU (Memory Translation Unit)
 	wire wbm_cyc_mtu = cs_mtu && wbm_cyc;

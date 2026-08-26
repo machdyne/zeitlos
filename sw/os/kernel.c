@@ -400,7 +400,8 @@ static void k_cpu_report(void) {
 	uint32_t mips_x100 = di / denom;
 	uint32_t ipc_x100 = (di / 100) * 10000 / (dc / 100) / 100;
 
-	printf(" - cpu: %ld.%02ld MIPS @ %ld MHz (%ld.%02ld IPC)\n",
+	printf(" - cpu: %s %ld.%02ld MIPS @ %ld MHz (%ld.%02ld IPC)\n",
+		z_soc_cpu_name(),
 		(long)(mips_x100 / 100), (long)(mips_x100 % 100),
 		(long)(Z_SYSCLK_HZ / 1000000u),
 		(long)(ipc_x100 / 100), (long)(ipc_x100 % 100));

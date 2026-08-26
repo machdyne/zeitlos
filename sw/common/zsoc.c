@@ -40,6 +40,7 @@
 
 const z_feature_info_t z_soc_features[] = {
 
+	{ Z_FEATURE_CPU_ZEITLOS32, "zeitlos32", Z_FEAT_GROUP_CPU },
 	{ Z_FEATURE_CPU_MUL,      "mul",    Z_FEAT_GROUP_CPU  },
 	{ Z_FEATURE_CPU_MUL_FAST, "mul-hw", Z_FEAT_GROUP_CPU  },
 	{ Z_FEATURE_CPU_DIV,      "div",    Z_FEAT_GROUP_CPU  },

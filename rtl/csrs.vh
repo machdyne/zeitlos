@@ -91,4 +91,17 @@ localparam CSR_FEATURES =
 `ifdef CPU_MUL_FAST
 	(32'h1 << 22) |
 `endif
+// WHICH core, not just what it can do. Set when rtl/boards.vh selects
+// rtl/cpu/zeitlos32 instead of picorv32; clear means picorv32, which
+// is also what every bitstream built before zeitlos32 existed reports,
+// so "clear" and "old build" agree rather than conflicting.
+//
+// This is worth a bit of its own because the two cores are drop-in
+// compatible by design: the same kernel binary runs on either, so
+// there is otherwise NOTHING in a running system that says which one
+// you are on. Chasing a bug for an afternoon on the wrong assumption
+// about that is a specific and avoidable waste.
+`ifdef CPU_ZEITLOS32
+	(32'h1 << 23) |
+`endif
 	32'h0;

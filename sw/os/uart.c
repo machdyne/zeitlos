@@ -18,8 +18,12 @@
 
 volatile uint8_t __attribute__((section(".bss"))) uart_rx_fifo[UART_FIFO_SIZE];
 volatile uint8_t __attribute__((section(".bss"))) uart_tx_fifo[UART_FIFO_SIZE];
-volatile uint8_t __attribute__((section(".bss"))) rx_head = 0, rx_tail = 0;
-volatile uint8_t __attribute__((section(".bss"))) tx_head = 0, tx_tail = 0;
+/* uint16_t, not uint8_t: UART_FIFO_SIZE is 512, and (head + 1) % 512
+ * truncated into a uint8_t wraps at 256 -- so the ring silently had
+ * half the depth it claims, and index arithmetic disagreed with the
+ * array bounds. */
+volatile uint16_t __attribute__((section(".bss"))) rx_head = 0, rx_tail = 0;
+volatile uint16_t __attribute__((section(".bss"))) tx_head = 0, tx_tail = 0;
 
 uint16_t leds = 0x00;
 
@@ -30,6 +34,48 @@ void z_uart_init(void) {
 
 	reg_leds = 0;
 
+}
+
+/* Push as much of the software ring into the 16550 as it will take,
+ * right now, without waiting for anything.
+ *
+ * This is the fix for a deadlock that was latent for as long as this
+ * file has existed and that a faster CPU core made reachable.
+ *
+ * The old code sent a character directly ONLY when the ring happened
+ * to be empty and THRE was set, and otherwise queued it and left the
+ * draining to z_uart_irq(). That has two problems:
+ *
+ *   1. z_uart_irq() is only reachable once reg_kernel (0x0000000c) is
+ *      set, which kernel.c does AFTER k_soc_report(). Every printf()
+ *      before that point queued into a ring nothing emptied.
+ *   2. Even afterwards, the "ring was empty" test is a one-way latch.
+ *      _write() calls k_uart_putc() once per character with only a
+ *      few instructions in between, so a single _write() of a 40-byte
+ *      string outruns the UART (1 Mbaud is 480 CPU cycles per
+ *      character) and leaves the ring non-empty. From that moment
+ *      fifo_was_empty is false forever and no character is ever sent
+ *      directly again, no matter how idle the CPU becomes.
+ *
+ * Combined, that meant _write()'s `while (k_uart_tx_full()) ;` could
+ * spin forever with no trap and no diagnostic. picorv32 survived it
+ * only by being slow enough to stay on the right side of the burst
+ * rate; zeitlos32 is 20-35%% fewer cycles for the same work and
+ * crosses it.
+ *
+ * Pumping unconditionally removes the dependency on the interrupt for
+ * forward progress. The interrupt still helps -- it drains in the
+ * background instead of making the writer wait -- but nothing needs
+ * it to make progress any more.
+ *
+ * Callers must already hold the IRQ mask: this touches tx_tail, which
+ * z_uart_irq() also writes.
+ */
+static void tx_pump(void) {
+	while ((tx_head != tx_tail) && (reg_uart0_lsr & 0x20)) {
+		reg_uart0_data = uart_tx_fifo[tx_tail];
+		tx_tail = (tx_tail + 1) % UART_FIFO_SIZE;
+	}
 }
 
 void uart_irq_enable(void) {
@@ -67,21 +113,9 @@ void z_uart_irq(void) {
 		switch (int_id) {
 
 			case 0x01: // Transmit Holding Register Empty (THRE)
-				if (tx_head == tx_tail) {
-					// nothing to send; disable THRE interrupt
-					reg_uart0_ier = 0x01;
-				} else {
-					// drain TX FIFO
-					while ((reg_uart0_lsr & 0x20) && (tx_head != tx_tail)) {
-						reg_uart0_data = uart_tx_fifo[tx_tail];
-						tx_tail = (tx_tail + 1) % UART_FIFO_SIZE;
-					}
-
-					// check again in case we just finished
-					if (tx_head == tx_tail) {
-						reg_uart0_ier = 0x01;
-					}
-				}
+				tx_pump();
+				// nothing left to send: stop asking to be told about it
+				if (tx_head == tx_tail) reg_uart0_ier = 0x01;
 				break;
 
 			case 0x02: // Received Data Available (RDA)
@@ -90,7 +124,7 @@ void z_uart_irq(void) {
 				while (reg_uart0_lsr & 0x01) {  // data Ready
 
 					uint8_t c = reg_uart0_data; // reading data clears error state
-					uint8_t next = (rx_head + 1) % UART_FIFO_SIZE;
+					uint16_t next = (rx_head + 1) % UART_FIFO_SIZE;
 					if (next != rx_tail) {  // RX FIFO not full
 						uart_rx_fifo[rx_head] = c;
 						rx_head = next;
@@ -141,8 +175,13 @@ bool k_uart_rx_empty(void) {
 	return v;
 }
 
+// Pumps before answering. sw/os/kruntime.c's _write() spins on this
+// with no timeout, so an answer of "full" that nothing can change is a
+// hang; pumping here means the question can always make progress on
+// its own.
 bool k_uart_tx_full(void) {
 	uint32_t old_mask = maskirq(0xFFFFFFFF);
+	tx_pump();
 	bool v = uart_tx_fifo_full();
 	maskirq(old_mask);
 	return v;
@@ -188,29 +227,32 @@ void k_uart_putc(char c) {
 	// the observed symptom: net going silent forever mid-transfer
 	// while sh.c's own unrelated code kept working).
 	uint32_t old_mask = maskirq(0xFFFFFFFF);
+	uint16_t next;
 
-	uint8_t next = (tx_head + 1) % UART_FIFO_SIZE;
+	// Take whatever the UART will accept before deciding there is no
+	// room. Without this the ring can only shrink from the interrupt,
+	// which may not be reachable yet.
+	tx_pump();
 
-	if (next == tx_tail) {
-		maskirq(old_mask);
-		// TX buffer full
-		return;  // Or return error code
-	}
+	next = (tx_head + 1) % UART_FIFO_SIZE;
 
-	bool fifo_was_empty = (tx_head == tx_tail);
+	// Genuinely full. Block until the UART has taken something, rather
+	// than dropping the character -- losing output silently is worse
+	// than being slow, and this cannot deadlock because tx_pump() only
+	// needs the LSR, never the interrupt.
+	while (next == tx_tail) tx_pump();
 
 	uart_tx_fifo[tx_head] = c;
 	tx_head = next;
 
-	if (fifo_was_empty && (reg_uart0_lsr & 0x20)) {
-		// FIFO was empty and UART is ready — send directly
-		reg_uart0_data = uart_tx_fifo[tx_tail];
-		tx_tail = (tx_tail + 1) % UART_FIFO_SIZE;
-	}
+	// and send it now if the UART is ready, rather than waiting to be
+	// told that it is
+	tx_pump();
 
-	if (tx_head != tx_tail) {
-		reg_uart0_ier = 0b00000011; // Enable TX and RX
-	}
+	// Ask for THRE only while something is actually queued. Leaving it
+	// enabled with an empty ring means a THRE interrupt on every
+	// character the UART finishes, for no reason.
+	reg_uart0_ier = (tx_head != tx_tail) ? 0b00000011 : 0b00000001;
 
 	maskirq(old_mask);
 

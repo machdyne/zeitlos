@@ -23,6 +23,25 @@
 `define CPU_MUL_FAST
 `define CPU_DIV
 
+// CPU core selection. Undefined (the default) means picorv32, exactly
+// as before. Defining this selects rtl/cpu/zeitlos32 instead -- an
+// experimental in-house RV32IM core that implements the same
+// interrupt ABI, so sw/bios/boot_picorv32.S and sw/bios/custom_ops.S
+// are unchanged either way and no software needs rebuilding to switch.
+//
+// This is a ONE LINE switch on purpose: zeitlos32 is developed
+// alongside everything else rather than as a branch, and being able
+// to A/B the two cores against an otherwise identical bitstream is
+// what makes a mystery bug tractable ("is it my scheduler or my
+// core?" is an expensive question to keep asking).
+//
+// `CPU_MUL / `CPU_MUL_FAST / `CPU_DIV above apply to both cores.
+// Note `CPU_MUL_FAST on GateMate: rtl/../Makefile passes -nomult to
+// synth_gatemate, so the DSP multiplier lands in LUTs there. See
+// docs/zeitlos32.md.
+//
+//`define CPU_ZEITLOS32
+
 // BOARD CONFIG
 // ------------
 //
