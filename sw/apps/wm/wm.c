@@ -61,6 +61,14 @@ typedef struct {
 	// flags. See close_icon_rect()/hit_close_icon()/
 	// draw_titlebar_content()/handle_close_click() below.
 	uint32_t	flags;
+	// smallest this window may be resized to (see the resize block
+	// in main() below). Set once at creation from the global
+	// Z_WM_MIN_WIDTH/HEIGHT floor, or from the window's own created
+	// size if it asked for Z_WIN_FLAG_MIN_IS_CREATE (zwm.h). Stored
+	// per-window rather than recomputed on demand because the
+	// creation size it may be derived from is not retained anywhere
+	// else -- w/h change as soon as the user resizes.
+	uint32_t	min_w, min_h;
 } wm_window_t;
 
 // -- dock --
@@ -103,8 +111,10 @@ typedef struct {
 // app to the dock needs no conditional logic, just an entry and an
 // icon.
 static const dock_app_t dock_candidates[] = {
-	{ "term",	z_icon_term_data  },
-	{ "gpu3d",	z_icon_gpu3d_data },
+	{ "term",		z_icon_term_data  },
+	{ "draw",		z_icon_draw_data  },
+	{ "gpu3d",		z_icon_gpu3d_data },
+	{ "space3d",	z_icon_space3d_data },
 };
 #define DOCK_CANDIDATE_COUNT \
 	(int)(sizeof(dock_candidates) / sizeof(dock_candidates[0]))
@@ -173,6 +183,43 @@ static uint8_t zorder_count = 0;
 static int focused = -1;		// index into windows[], or -1
 static int dragging = -1;		// index into windows[], or -1
 static int drag_off_x = 0, drag_off_y = 0;
+
+// -- resize state -- deliberately kept separate from the drag state
+// above rather than folded into one "gesture" struct: the two can
+// never be active at once (both start from a button press on
+// different parts of the same window), but they repair the screen
+// very differently at release -- a drag knows its window's size never
+// changed and can repair only the wake it left behind, while a resize
+// changes the content area itself and has to repair the whole union.
+// Sharing state between them would invite exactly the kind of "which
+// mode am I in" bug that costs an afternoon.
+static int resizing = -1;		// index into windows[], or -1
+// offset from the cursor to the window's bottom-right corner at the
+// moment the grip was grabbed, so the corner doesn't jump to the
+// cursor on the first pixel of movement.
+static int resize_off_x = 0, resize_off_y = 0;
+// the candidate size being previewed by the wireframe right now --
+// the window's own w/h are NOT touched until the button is released.
+static int resize_w = 0, resize_h = 0;
+// largest extent the wireframe reached during this resize, so the
+// release-time repair covers everywhere it drew, not just the final
+// rect -- the same reason the drag path tracks its swept bounding box.
+static int resize_max_w = 0, resize_max_h = 0;
+
+// -- pointer delivery state -- see dispatch_mouse() below --
+//
+// which window currently owns the pointer, or -1. Set on a button
+// press inside a window's content area and held until release, so a
+// gesture that wanders outside the window it started in keeps being
+// delivered there (see Z_WM_MOUSE's own comment in zwm.h for why that
+// matters).
+static int mouse_capture = -1;
+// last Z_WM_MOUSE payload actually sent, and who it went to -- used
+// purely to coalesce: a stationary mouse should cost zero messages,
+// and without this wm would send one per main-loop iteration forever.
+static uint32_t mouse_last_packed;
+static int mouse_last_target = -1;
+static bool mouse_last_valid = false;
 // bounding box swept by the dragged window since the drag started --
 // see the drag-update block below for why this is tracked instead of
 // just the start/end rects.
@@ -223,6 +270,30 @@ static void draw_window_box(wm_window_t *w, bool is_focused, int color) {
 	if (!w->no_titlebar) {
 		int ty = w->y + Z_WM_TITLEBAR_H;
 		z_fb_hw_line(x0, ty, x1, ty, color, NULL);	// titlebar separator
+	}
+
+	// resize grip -- a few diagonal ticks in the lower-right corner,
+	// marking the area hit_resize_grip() below actually tests. Drawn
+	// here, as part of the box, rather than in
+	// draw_titlebar_content(): it's genuine border, not content, so
+	// it should move with the wireframe on every step of a drag
+	// (which is exactly what being in this function gets it) instead
+	// of vanishing until release the way the title text does.
+	//
+	// Only for windows that can actually be resized -- an ornamental
+	// grip on a fixed-size window is worse than no grip at all, since
+	// the one thing a grip promises is that dragging it does
+	// something.
+	if ((w->flags & Z_WIN_FLAG_RESIZABLE) && !w->no_titlebar) {
+		for (int i = 3; i < Z_WM_RESIZE_GRIP; i += 3) {
+			int gx = x1 - i, gy = y1 - i;
+			// skip any tick that would need a negative coordinate --
+			// the rasterizer's registers are unsigned and would wrap
+			// it to a huge value rather than clipping, the same
+			// hazard the focus ring below already clamps for.
+			if (gx < x0 || gy < y0) continue;
+			z_fb_hw_line(gx, y1, x1, gy, color, NULL);
+		}
 	}
 
 	if (is_focused) {
@@ -1121,6 +1192,29 @@ static int create_window(uint32_t owner_pid, const char *title,
 		windows[i].no_titlebar = false;
 		windows[i].flags = flags;
 
+		// minimum size for a later resize (see the resize block in
+		// main()). Z_WIN_FLAG_MIN_IS_CREATE means "never smaller than
+		// what I just asked for" -- for an app whose window contains
+		// fixed-size furniture it can't shrink below, which the app
+		// knows and wm can't work out for itself. See that flag's own
+		// comment in zwm.h.
+		//
+		// The global floor is applied either way, including on top of
+		// a requested minimum: a window that asked to be created at
+		// 20x20 must still not be resizable down to 20x20, because
+		// below Z_WM_MIN_HEIGHT the content area's height goes
+		// NEGATIVE and underflows to an enormous unsigned value
+		// downstream.
+		if (flags & Z_WIN_FLAG_MIN_IS_CREATE) {
+			windows[i].min_w = w;
+			windows[i].min_h = h;
+		} else {
+			windows[i].min_w = Z_WM_MIN_WIDTH;
+			windows[i].min_h = Z_WM_MIN_HEIGHT;
+		}
+		if (windows[i].min_w < Z_WM_MIN_WIDTH) windows[i].min_w = Z_WM_MIN_WIDTH;
+		if (windows[i].min_h < Z_WM_MIN_HEIGHT) windows[i].min_h = Z_WM_MIN_HEIGHT;
+
 		if (fixed_x >= 0 && fixed_y >= 0) {
 			windows[i].x = (uint32_t)fixed_x;
 			windows[i].y = (uint32_t)fixed_y;
@@ -1231,6 +1325,13 @@ static void destroy_window(uint32_t id) {
 
 	if (focused == (int)id) focused = -1;
 	if (dragging == (int)id) dragging = -1;
+	// same reasoning as `dragging` above: leaving either of these
+	// pointing at a destroyed slot means the next mouse event gets
+	// delivered to, or the next resize step draws a wireframe around,
+	// whatever unrelated window later reuses this index.
+	if (resizing == (int)id) resizing = -1;
+	if (mouse_capture == (int)id) mouse_capture = -1;
+	if (mouse_last_target == (int)id) mouse_last_valid = false;
 
 	printf("wm: destroyed window %ld\n", (long)id);
 
@@ -1258,6 +1359,98 @@ static int hit_test(int cx, int cy) {
 static bool hit_titlebar(int idx, int cy) {
 	if (windows[idx].no_titlebar) return false;	// nothing to hit -- see the dock
 	return (cy < (int)(windows[idx].y + Z_WM_TITLEBAR_H));
+}
+
+// true if (cx,cy) landed in window idx's lower-right resize grip --
+// the square marked by the diagonal ticks draw_window_box() draws.
+// Checked BEFORE the general titlebar/content handling in main()'s
+// click dispatch, so grabbing the corner starts a resize rather than
+// being delivered to the app as an ordinary click.
+//
+// Returns false for a window that didn't ask to be resizable, which
+// is what keeps this entirely invisible to every app that predates
+// the flag: without Z_WIN_FLAG_RESIZABLE the corner is just frame,
+// exactly as it always was.
+static bool hit_resize_grip(int idx, int cx, int cy) {
+
+	wm_window_t *w = &windows[idx];
+
+	if (w->no_titlebar) return false;
+	if (!(w->flags & Z_WIN_FLAG_RESIZABLE)) return false;
+
+	int x1 = (int)(w->x + w->w - 1);
+	int y1 = (int)(w->y + w->h - 1);
+
+	return cx > x1 - Z_WM_RESIZE_GRIP && cx <= x1 &&
+		cy > y1 - Z_WM_RESIZE_GRIP && cy <= y1;
+
+}
+
+// true if (cx,cy) is inside window idx's CONTENT area -- the region an
+// app can actually draw into, below the titlebar and inset from the
+// frame.
+//
+// This duplicates the inset arithmetic in zwin.c's
+// z_win_content_rect(), which is unfortunate and worth stating
+// plainly: the two live in different processes and there is no shared
+// header carrying the formula, so they are kept in sync by hand. That
+// exact duplication has already caused one real bug in this codebase
+// (see z_win_content_rect()'s own comment). It is tolerable here only
+// because being wrong is cosmetic in this direction -- a slightly
+// wrong content rect means the "inside" bit on a Z_WM_MOUSE event is
+// off by a pixel or two at the very edge, not that anything draws
+// outside its window. If the inset ever changes, change it in both
+// places.
+static bool point_in_content(int idx, int cx, int cy) {
+
+	wm_window_t *w = &windows[idx];
+
+	int top = w->no_titlebar ? 2 : (Z_WM_TITLEBAR_H + 2);
+
+	return cx >= (int)w->x + 2 && cx <= (int)(w->x + w->w) - 3 &&
+		cy >= (int)w->y + top && cy <= (int)(w->y + w->h) - 3;
+
+}
+
+// draws the resize wireframe: the BOTTOM and RIGHT edges only, of the
+// candidate (nw x nh) rect, as a 2px-bold L.
+//
+// Deliberately not a full box. Dragging a window already highlights
+// its entire frame, and reusing that here would say "the whole window
+// is moving" when in fact the top-left corner is pinned and only these
+// two edges follow the cursor. Showing exactly the edges that move is
+// both more honest and, in practice, easier to aim with.
+//
+// The 2px boldness comes from drawing the L twice, once at the
+// candidate edge and once 1px outside it -- the same visual weight and
+// the same outset trick draw_window_box() uses for the focus ring, so
+// the two read as belonging to the same vocabulary.
+//
+// color=0 erases (the caller redraws at the new size immediately
+// after). Like the wireframe drag this can gnaw at whatever it passes
+// over, including this window's own real border -- content is frozen
+// during the gesture by design and the release-time repair puts all of
+// it back. See docs/window_manager.md.
+static void draw_resize_wire(wm_window_t *w, int nw, int nh, int color) {
+
+	int x0 = (int)w->x, y0 = (int)w->y;
+
+	for (int o = 0; o <= 1; o++) {
+
+		int x1 = x0 + nw - 1 + o;
+		int y1 = y0 + nh - 1 + o;
+
+		// clamp -- the rasterizer's coordinate registers are
+		// unsigned, so anything off-screen has to be dropped here
+		// rather than wrapped. See draw_window_box()'s own comment.
+		if (x1 >= WM_SCREEN_W || y1 >= WM_SCREEN_H) continue;
+		if (x1 < x0 || y1 < y0) continue;
+
+		z_fb_hw_line(x0, y1, x1, y1, color, NULL);	// bottom edge
+		z_fb_hw_line(x1, y0, x1, y1, color, NULL);	// right edge
+
+	}
+
 }
 
 // true if (cx,cy) landed on window idx's close icon -- see
@@ -1496,6 +1689,83 @@ static void notify_moved(int idx) {
 	if (windows[idx].owner_pid == my_pid) return;
 
 	send_win_rect(windows[idx].owner_pid, Z_WM_WINDOW_MOVED, 0, idx);
+
+}
+
+// tells the owner its window is now a different size. Same shape and
+// same release-only timing as notify_moved() above -- and, critically,
+// called BEFORE the repair that follows a resize, so the app has the
+// new w/h in its queue ahead of the Z_WM_REDRAW asking it to redraw at
+// that size. See Z_WM_WINDOW_RESIZED's own comment in zwm.h for why
+// that ordering is load-bearing rather than incidental.
+static void notify_resized(int idx) {
+
+	if (windows[idx].owner_pid == my_pid) return;
+
+	send_win_rect(windows[idx].owner_pid, Z_WM_WINDOW_RESIZED, 0, idx);
+
+}
+
+// -- pointer delivery --
+//
+// Decides which window, if any, should receive this pointer sample and
+// sends it -- see Z_WM_MOUSE in zwm.h for the wire format and the
+// coalescing contract this implements.
+//
+// Two rules, in order:
+//
+//   1. If a capture is active (a button went down inside some
+//      window's content area and hasn't come up yet), that window gets
+//      the event no matter where the cursor now is. This is what makes
+//      a paint stroke, a slider drag, or a rubber-banded selection
+//      survive the cursor leaving the window.
+//   2. Otherwise the FOCUSED window gets the event, but only while the
+//      cursor is actually over it and it is the frontmost window at
+//      that point. Requiring the hit test to agree with `focused` is
+//      what stops a window from receiving phantom events through
+//      another window stacked on top of it.
+//
+// Nothing is delivered while wm is running its own drag or resize
+// gesture: the pointer belongs to wm for the duration, and forwarding
+// those samples would have apps reacting to a gesture aimed at their
+// chrome.
+static void dispatch_mouse(int cx, int cy, uint8_t btn) {
+
+	if (dragging >= 0 || resizing >= 0) return;
+
+	int target = mouse_capture;
+
+	if (target < 0) {
+		int hit = hit_test(cx, cy);
+		if (hit >= 0 && hit == focused) target = hit;
+	}
+
+	if (target < 0) return;
+	if (!windows[target].used) { mouse_capture = -1; return; }
+
+	// wm-owned windows (the dock) have no separate process to notify;
+	// wm handles their clicks inline. Same guard notify_moved() and
+	// dispatch_keys() already carry.
+	if (windows[target].owner_pid == my_pid) return;
+
+	uint32_t packed = Z_WM_PACK_MOUSE(cx, cy, btn,
+		point_in_content(target, cx, cy));
+
+	// coalesce -- a mouse that hasn't moved and whose buttons haven't
+	// changed produces no traffic at all. Without this, wm would send
+	// one message per main-loop iteration to whatever window happened
+	// to be under a resting cursor, which floods that app's queue and
+	// (since nothing frees message payloads -- see docs/messaging.md)
+	// steadily consumes wm's own heap for no reason.
+	if (mouse_last_valid && target == mouse_last_target &&
+		packed == mouse_last_packed) return;
+
+	z_msg_new_send(windows[target].owner_pid, Z_WM_MOUSE, 0,
+		z_obj_uint32(packed));
+
+	mouse_last_packed = packed;
+	mouse_last_target = target;
+	mouse_last_valid = true;
 
 }
 
@@ -1774,7 +2044,27 @@ int main(void) {
 					repair_region(windows[hit].x, windows[hit].y,
 						windows[hit].w, windows[hit].h, -1);
 
-				if (hit_titlebar(hit, cy)) {
+				// grip first: it sits inside the window's general
+				// body, so a plain content-click test would swallow
+				// it. hit_resize_grip() is false for any window that
+				// didn't ask for Z_WIN_FLAG_RESIZABLE, so this branch
+				// simply never fires for windows that predate the
+				// flag.
+				if (hit_resize_grip(hit, cx, cy)) {
+
+					resizing = hit;
+					// offset from the cursor to the corner, so the
+					// corner doesn't snap to the cursor on the first
+					// pixel of movement
+					resize_off_x = cx - (int)(windows[hit].x + windows[hit].w - 1);
+					resize_off_y = cy - (int)(windows[hit].y + windows[hit].h - 1);
+					resize_w = (int)windows[hit].w;
+					resize_h = (int)windows[hit].h;
+					resize_max_w = resize_w;
+					resize_max_h = resize_h;
+					draw_resize_wire(&windows[hit], resize_w, resize_h, 1);
+
+				} else if (hit_titlebar(hit, cy)) {
 					dragging = hit;
 					drag_off_x = cx - windows[hit].x;
 					drag_off_y = cy - windows[hit].y;
@@ -1782,6 +2072,11 @@ int main(void) {
 					drag_min_y = windows[hit].y;
 					drag_max_x = windows[hit].x + windows[hit].w;
 					drag_max_y = windows[hit].y + windows[hit].h;
+				} else if (point_in_content(hit, cx, cy)) {
+					// press inside the app's own content area: hand
+					// the pointer to that window until the button
+					// comes up again. See dispatch_mouse() above.
+					mouse_capture = hit;
 				}
 
 			}
@@ -1830,6 +2125,48 @@ int main(void) {
 
 		}
 
+		if (btn_down && resizing >= 0) {
+
+			int idx = resizing;
+
+			int nw = cx - resize_off_x - (int)windows[idx].x + 1;
+			int nh = cy - resize_off_y - (int)windows[idx].y + 1;
+
+			// the window's own minimum (see create_window()) --
+			// this is what Z_WIN_FLAG_MIN_IS_CREATE actually buys an
+			// app: draw's tool column and palette can't be shrunk
+			// out of existence.
+			if (nw < (int)windows[idx].min_w) nw = (int)windows[idx].min_w;
+			if (nh < (int)windows[idx].min_h) nh = (int)windows[idx].min_h;
+
+			// and the screen's own bounds -- the top-left corner is
+			// pinned during a resize, so only the far edges can leave
+			// the screen.
+			if ((int)windows[idx].x + nw > WM_SCREEN_W)
+				nw = WM_SCREEN_W - (int)windows[idx].x;
+			if ((int)windows[idx].y + nh > WM_SCREEN_H)
+				nh = WM_SCREEN_H - (int)windows[idx].y;
+
+			if (nw != resize_w || nh != resize_h) {
+
+				// wireframe, exactly as the drag path above does it
+				// and for exactly the same reason: a full
+				// clear+redraw+content-notify per step queues redraws
+				// faster than apps can drain them. The window's real
+				// w/h are NOT touched here -- only the preview moves,
+				// and the commit happens once, on release.
+				draw_resize_wire(&windows[idx], resize_w, resize_h, 0);
+				resize_w = nw;
+				resize_h = nh;
+				draw_resize_wire(&windows[idx], resize_w, resize_h, 1);
+
+				if (nw > resize_max_w) resize_max_w = nw;
+				if (nh > resize_max_h) resize_max_h = nh;
+
+			}
+
+		}
+
 		if (!btn_down && btn_was_down && dragging >= 0) {
 			printf("wm: drag release win %d final x=%ld y=%ld\n",
 				dragging, (long)windows[dragging].x, (long)windows[dragging].y);
@@ -1837,6 +2174,60 @@ int main(void) {
 			repair_drag(dragging);
 			dragging = -1;
 		}
+
+		if (!btn_down && btn_was_down && resizing >= 0) {
+
+			int idx = resizing;
+
+			printf("wm: resize release win %d %ldx%ld -> %dx%d\n",
+				idx, (long)windows[idx].w, (long)windows[idx].h,
+				resize_w, resize_h);
+
+			// erase the preview before committing, so the repair
+			// below isn't fighting a stale wireframe sitting on top
+			// of freshly drawn chrome.
+			draw_resize_wire(&windows[idx], resize_w, resize_h, 0);
+
+			int ow = (int)windows[idx].w, oh = (int)windows[idx].h;
+
+			windows[idx].w = (uint32_t)resize_w;
+			windows[idx].h = (uint32_t)resize_h;
+
+			// clear this BEFORE repairing: repair_region() waits on
+			// the owner's redraw ack and services other messages
+			// while it does, so wm must not still look mid-gesture by
+			// the time any of that runs.
+			resizing = -1;
+
+			// tell the app its new size first -- see notify_resized()
+			// and Z_WM_WINDOW_RESIZED (zwm.h) on why this must
+			// precede the redraw request repair_region() sends.
+			notify_resized(idx);
+
+			// repair the union of everywhere the window has been:
+			// its old footprint, its new one, and the largest extent
+			// the wireframe reached in between. Unlike the drag path
+			// there's no point excluding the window's own final rect
+			// -- its content area genuinely changed size, so all of
+			// it needs redrawing anyway.
+			int uw = ow > resize_max_w ? ow : resize_max_w;
+			int uh = oh > resize_max_h ? oh : resize_max_h;
+			if ((int)windows[idx].w > uw) uw = (int)windows[idx].w;
+			if ((int)windows[idx].h > uh) uh = (int)windows[idx].h;
+
+			repair_region((int)windows[idx].x, (int)windows[idx].y, uw, uh, -1);
+
+		}
+
+		// forward this pointer sample to whichever app owns it (if
+		// any) -- after the gesture handling above, so a press that
+		// starts a drag or resize is consumed by wm rather than also
+		// reaching the app, and before the capture is released below,
+		// so the app still receives the button-up that ends its own
+		// gesture.
+		dispatch_mouse(cx, cy, btn);
+
+		if (!btn_down && btn_was_down) mouse_capture = -1;
 
 		last_btn = btn;
 

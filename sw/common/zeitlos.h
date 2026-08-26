@@ -98,10 +98,36 @@ typedef uint32_t *(*z_kernel_ptr_t)(uint32_t, uint32_t *, uint32_t);
 #define gpu_blit_fg_color    (*(volatile uint32_t*)0xd0000028)
 #define gpu_blit_bg_color    (*(volatile uint32_t*)0xd000002c)
 
+// -- memory copy source (rtl/gpu/gpu_blit.v, CTRL_SRCMEM) --
+//
+// gpu_blit_src_addr is a PHYSICAL byte address, word aligned. The
+// blitter is its own bus master and does not go through the MTU
+// (rtl/mtu.v), so an app's virtual 0x8000_xxxx pointer is meaningless
+// to it -- see z_mtu_phys() below and z_fb_hw_blit_mem() in zgfx.h.
+//
+// gpu_blit_src_shift packs two things: bits [4:0] are the bit offset,
+// within the word at src_addr, of the pixel that lands on bit 0 of the
+// first destination word; bit [8] says to start the shifter's window
+// with zeros instead of reading that word at all. Software never sets
+// these by hand -- z_fb_hw_blit_mem() derives both.
+#define gpu_blit_src_addr    (*(volatile uint32_t*)0xd0000030)
+#define gpu_blit_src_stride  (*(volatile uint32_t*)0xd0000034)
+#define gpu_blit_src_shift   (*(volatile uint32_t*)0xd0000038)
+
 #define GPU_BLIT_CTRL_START  (1u << 0)
 #define GPU_BLIT_CTRL_FILL   (1u << 1)
 #define GPU_BLIT_CTRL_CLIP   (1u << 2)
 #define GPU_BLIT_CTRL_GLYPH  (1u << 3)
+#define GPU_BLIT_CTRL_SRCMEM (1u << 4)
+
+#define GPU_BLIT_SRC_PRIME_ZERO (1u << 8)
+
+// MTU translation base (rtl/mtu.v). Readable from an app: only
+// 0x8xxx_xxxx is translated, so a load from here reaches the MTU
+// itself rather than being remapped. Reads as 0 in a context with no
+// translation active (the kernel's own), in which case virtual and
+// physical addresses are already the same thing.
+#define reg_mtu_base         (*(volatile uint32_t*)0x90000000)
 
 // glyph memory (rtl/mem/glyph.v) -- byte-addressable, 4096 bytes.
 // software writes font data here (see z_gfx_hw_font_load() in

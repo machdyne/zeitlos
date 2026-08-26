@@ -82,6 +82,42 @@
 //   that was actually clicked.
 #define Z_WIN_FLAG_CLOSE_KILLS_OWNER  (1u << 1)
 
+// this window can be resized by dragging its lower-right corner (see
+// wm.c's hit_resize_grip()/draw_resize_wire()). Ignored on a
+// no-titlebar window, same as the close-icon flags -- the dock is a
+// fixed-size fixture, not something the user resizes.
+//
+// With this bit clear (the default -- every caller that predates this
+// flag) the window is exactly as fixed-size as it always was, and the
+// corner is a normal part of the frame with no special hit testing at
+// all.
+//
+// Resizing is a WIREFRAME operation, like dragging already is: only
+// the prospective bottom and right edges are drawn while the mouse is
+// down (an L, not a full box -- see draw_resize_wire()), so it reads
+// visually as "you are moving these two edges" rather than "you are
+// moving the whole window", which is what a full-frame highlight
+// already means during a drag. Content stays frozen until release,
+// same accepted tradeoff the drag path already documents.
+#define Z_WIN_FLAG_RESIZABLE          (1u << 2)
+
+// clamp this window's minimum size to whatever size it was CREATED
+// at, instead of the global Z_WM_MIN_WIDTH/HEIGHT floor below.
+// Meaningless without Z_WIN_FLAG_RESIZABLE also set.
+//
+// Exists because an app with fixed-size furniture inside its window --
+// draw's tool column and pattern palette are exactly this -- has a
+// size below which its own chrome stops fitting, and that size is
+// generally not something wm can work out on its own. The app already
+// knows it (it's why it asked for that size in the first place), so
+// this lets it say "never smaller than what I asked for" in one bit
+// rather than needing a whole separate minimum-size negotiation.
+//
+// Note this only sets a FLOOR, not a fixed size -- the window can
+// still grow without limit (up to the screen). An app that wants a
+// genuine fixed size just doesn't set Z_WIN_FLAG_RESIZABLE.
+#define Z_WIN_FLAG_MIN_IS_CREATE      (1u << 3)
+
 // wm -> app reply to a Z_WM_CREATE_WINDOW (same tag as the request):
 // obj is a Z_MAP with "id" (Z_INT32, -1 on failure), "x", "y", "w",
 // "h" (Z_UINT32) keys giving the window's actual allocated rect.
@@ -142,6 +178,78 @@
 // expected -- same convention as Z_WM_REDRAW/Z_WM_KEY.
 #define Z_WM_CLOSE               107
 
+// wm -> app: sent once after a resize drag completes (not on every
+// intermediate size -- same reasoning Z_WM_WINDOW_MOVED's own
+// release-only delivery has). obj is a Z_MAP with the same
+// "id"/"x"/"y"/"w"/"h" shape as Z_WM_WINDOW_CREATED, so the app can
+// just run it through z_win_parse_rect() (zwin.h) exactly like it
+// already does for the creation reply -- there is deliberately no new
+// parsing path for this.
+//
+// Sent BEFORE the Z_WM_REDRAW that follows the resize repair, so an
+// app that processes its queue in order always has the new w/h in
+// hand by the time it's asked to redraw at that size. That ordering
+// is load-bearing: Z_WM_REDRAW carries only x/y (it's a packed
+// Z_UINT32 with no room for w/h -- see its own comment), so an app
+// that saw the redraw first would redraw itself at its OLD size into
+// a window that is no longer that size.
+#define Z_WM_WINDOW_RESIZED      108
+
+// wm -> app: pointer position/button state, sent to the window that
+// currently owns the pointer -- normally the focused window while the
+// cursor is over it, or, once a button has been pressed inside a
+// window, that window until the button is released (see wm.c's
+// mouse_capture, and "pointer capture" in docs/window_manager.md).
+//
+// Capture is what makes drag-style interaction work at all: a paint
+// stroke, a slider, a rubber-banded rectangle all need to keep
+// receiving events after the cursor has wandered outside the window
+// it started in. Without it, every such gesture would silently cut
+// off at the window edge.
+//
+// Like Z_WM_REDRAW/Z_WM_KEY this is a packed Z_UINT32, not a Z_MAP,
+// and for exactly the same reason: it fires at pointer-movement
+// rates, and a fresh Z_MAP per event exhausts wm's heap (nothing
+// frees these -- see docs/messaging.md).
+//
+// wm COALESCES these -- one is sent only when the position or button
+// state actually differs from the last one sent to that window, so a
+// stationary mouse costs nothing. It does NOT rate-limit them beyond
+// that, so an app should drain its whole queue and act on the LAST
+// mouse message it finds rather than processing every one in turn;
+// otherwise a slow redraw path makes the app fall progressively
+// further behind the real cursor. See sw/apps/draw for that pattern.
+//
+// Coordinates are ABSOLUTE SCREEN coordinates, matching z_win_hw_line()
+// and friends (zwin.h) rather than the window-relative convention
+// z_win_draw_text() uses. z_win_mouse_content_xy() (zwin.h) converts
+// to content-relative when that's what's wanted.
+#define Z_WM_MOUSE               109
+
+// x/y: absolute screen coordinates, 0-1023 each (the same 10-bit
+// fields rtl/usb_hid.v's cursor register already uses -- see
+// docs/user_input.md). buttons: the raw 4-bit button mask, bit 0 =
+// left. inside: 1 if the cursor is within the receiving window's own
+// content rect right now, 0 if it isn't -- which happens while a
+// capture is active and the cursor has left the window. An app that
+// draws on drag should keep drawing when this is 0 (clipping handles
+// the rest); an app doing hover highlighting should stop.
+#define Z_WM_PACK_MOUSE(x, y, buttons, inside) \
+	((((inside) ? 1u : 0u) << 24) | \
+	 (((uint32_t)(buttons) & 0xF) << 20) | \
+	 (((uint32_t)(y) & 0x3FF) << 10) | \
+	 ((uint32_t)(x) & 0x3FF))
+#define Z_WM_UNPACK_MOUSE_X(v)        ((v) & 0x3FF)
+#define Z_WM_UNPACK_MOUSE_Y(v)        (((v) >> 10) & 0x3FF)
+#define Z_WM_UNPACK_MOUSE_BUTTONS(v)  (((v) >> 20) & 0xF)
+#define Z_WM_UNPACK_MOUSE_INSIDE(v)   (((v) >> 24) & 1)
+
+// left mouse button, as it appears in Z_WM_UNPACK_MOUSE_BUTTONS()'s
+// result -- named here so apps stop open-coding `& 1`.
+#define Z_MOUSE_BTN_LEFT   (1u << 0)
+#define Z_MOUSE_BTN_RIGHT  (1u << 1)
+#define Z_MOUSE_BTN_MIDDLE (1u << 2)
+
 // keysym: 0x0000-0x7fff (see zkbd.h -- ASCII in 0x00-0x7f, named keys
 // like arrows in 0x100+). modifiers: the raw USB HID modifier byte
 // (zkbd.h's Z_KBD_MOD_* bits) at the time of this event. pressed: 1 =
@@ -165,5 +273,23 @@
 // defaults used when a Z_WM_CREATE_WINDOW request omits w/h
 #define Z_WM_DEFAULT_WIDTH     140
 #define Z_WM_DEFAULT_HEIGHT     100
+
+// -- resize geometry --
+
+// side length, in pixels, of the square grab area in a resizable
+// window's lower-right corner. Shared between wm.c (which hit-tests
+// and draws it) and any app that wants to keep its own content clear
+// of it -- draw does exactly that, so the corner of its pattern
+// palette isn't a dead zone that swallows clicks.
+#define Z_WM_RESIZE_GRIP        12
+
+// absolute floor on a resizable window's size, used unless the window
+// set Z_WIN_FLAG_MIN_IS_CREATE (above) to raise it. Not merely
+// cosmetic: a window narrower than the titlebar's own furniture
+// (title text plus close icon) draws garbage, and one shorter than
+// the titlebar has a negative-height content area, which underflows
+// to an enormous unsigned height in several places downstream.
+#define Z_WM_MIN_WIDTH          64
+#define Z_WM_MIN_HEIGHT         (Z_WM_TITLEBAR_H + 20)
 
 #endif

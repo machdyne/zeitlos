@@ -7,7 +7,8 @@ RTL_PICO = \
 	rtl/cpu/picorv32/picorv32.v \
 	rtl/mtu.v \
 	rtl/cache.v \
-	rtl/arbiter.v \
+	rtl/arbiter_vram.v \
+	rtl/arbiter_main.v \
 	rtl/mem/bram.v \
 	rtl/mem/sram.v \
 	rtl/mem/sdram_kianv.v \

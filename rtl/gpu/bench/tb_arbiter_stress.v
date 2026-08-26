@@ -107,7 +107,7 @@ module tb_arbiter_stress;
     wire        s_we_o, s_stb_o, s_cyc_o, s_ack_i;
     wire [1:0]  varb_master;
 
-    wb_arbiter arb (
+    wb_arbiter_vram arb (
         .clk(clk), .rst(rst),
         .m0_adr_i(32'b0), .m0_dat_i(32'b0), .m0_dat_o(), .m0_we_i(1'b0),
         .m0_sel_i(4'b0), .m0_stb_i(1'b0), .m0_cyc_i(1'b0), .m0_ack_o(),

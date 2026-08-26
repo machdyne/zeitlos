@@ -52,8 +52,11 @@ the two real apps that do exist so far (`term`, `gpu3d`).
 
 Each window is drawn as a 5-line box: a 4-line rectangle border plus
 one horizontal line separating the titlebar area from the body
-(`WM_TITLEBAR_H` pixels tall). There's no resize handle and no
-content area rendering yet -- just the outline.
+(`WM_TITLEBAR_H` pixels tall). A window created with
+`Z_WIN_FLAG_RESIZABLE` also gets a resize grip: a few diagonal ticks in
+the lower-right corner, drawn by `draw_window_box()` so they move with
+the wireframe during a drag rather than vanishing until release the way
+titlebar text does.
 
 The focused window gets a second, 1px-inset outline drawn on top of
 the first (4 extra lines) as a simple "bolder border" focus
@@ -128,7 +131,10 @@ mouse event queue.
   fully on-screen. `wm` sends `Z_WM_WINDOW_MOVED` to the owning app
   once the button is released (not on every intermediate position),
   so apps aren't flooded with move messages mid-drag.
-- There's no resize yet, matching the original design goal.
+- **Click+drag on the resize grip** resizes the window -- see
+  "Resizing" below.
+- **Pointer events reach apps** via `Z_WM_MOUSE`, with capture -- see
+  "Pointer delivery" below.
 
 Keyboard input is interrupt-driven, not polled -- see
 `docs/user_input.md` for the full stack (kernel capture, keysym
@@ -141,6 +147,119 @@ no way to focus anything at all. See "Keyboard-only operation" below
 for everything else that adds -- Alt+Tab, Alt+Arrow, and the dock's
 own keyboard navigation, all of which now cover the same ground the
 mouse does.
+
+## Widgets
+
+`sw/common/zwidget.c` is a small toolkit for the furniture an app keeps
+in its window: push buttons, toggles, radio groups, pattern swatches,
+sliders. It is deliberately **not** a UI framework -- no layout engine,
+no widget tree, no focus chain. A widget set is a flat array the app
+declares and positions itself, in content-relative coordinates. The
+first two consumers (`draw`'s tool column and pattern palette) both want
+fixed grids they compute arithmetically, and a layout engine would be
+more code than the thing it replaces.
+
+What it does provide is the part that is annoying to write twice: hit
+testing, pressed/selected state, radio-group exclusivity, dirty tracking
+so only changed widgets repaint, and drawing that goes through the GPU.
+
+Widget bodies, frames, fills and slider tracks use
+`z_fb_hw_fill_rect()`, `z_fb_hw_fill_pattern()` and `z_win_hw_box()`.
+Text labels go through the hardware glyph path. **Icons do not** -- they
+are drawn per pixel in software, and that is not an oversight. The
+glyph blitter can only draw what is in glyph memory, that memory holds
+one font at a time, and by board-wide convention `wm` is the only
+process that ever writes to it (see "Hardware glyph blitting" below). An
+app blitting its own icons would have to load them there, breaking that
+convention and reintroducing exactly the cross-process race it exists to
+prevent. Icons are 16x16 and redrawn only when a widget's state changes,
+so software is genuinely fine -- the same tradeoff `wm` already makes
+for the dock's own 32x32 icons.
+
+`z_fb_hw_fill_pattern()` (`zgfx.h`) is new alongside this: the
+blitter's `BLIT_PATTERN` register was always a full 32-bit word, and
+`z_fb_hw_fill_rect()` simply hardcoded it to all-0s or all-1s. Patterns
+are 8 bytes, one per row, MSB-first -- the same convention as font
+glyphs and `zicon.h` icons -- and are anchored to the screen's 8-pixel
+grid so adjacent fills tile seamlessly. Cost is one blitter operation
+per *run of rows sharing a pattern byte*, so a solid fill still costs
+one.
+
+## Pointer delivery
+
+Until `Z_WM_MOUSE` existed, `wm` polled the pointer and kept it
+entirely to itself -- only `Z_WM_KEY` ever reached an app. An app that
+needed the mouse had to read the USB HID registers directly, which is
+what the pre-window `sw/apps/draw` did and precisely why it could not
+live in a window.
+
+`Z_WM_MOUSE` is a packed `Z_UINT32` (`x`, `y`, buttons, and an "inside
+my content rect" bit), for the same no-heap-allocation reason as
+`Z_WM_REDRAW` and `Z_WM_KEY`: it fires at pointer-movement rates, and
+nothing frees message payloads (see `docs/messaging.md`).
+
+**Who receives it**, in order:
+
+1. If a **capture** is active, that window, wherever the cursor now is.
+   A capture starts when a button goes down inside a window's content
+   area and ends when it comes up.
+2. Otherwise the **focused** window, but only while the cursor is over
+   it *and* the hit test agrees it is frontmost there. Requiring both
+   is what stops a window receiving phantom events through another
+   window stacked on top of it.
+
+Nothing is delivered while `wm` is running its own drag or resize
+gesture -- the pointer belongs to `wm` for the duration.
+
+Capture is not a refinement; without it every drag-style interaction
+(a paint stroke, a slider, a rubber-banded rectangle) silently cuts off
+at the window edge.
+
+`wm` **coalesces** these: one is sent only when position or buttons
+actually differ from the last one sent to that window, so a resting
+mouse costs nothing. It does not rate-limit beyond that, so an app
+should drain its whole queue and act on the *last* mouse message it
+finds. Processing every one in turn makes a slow redraw path fall
+progressively further behind the real cursor -- the stroke visibly lags
+and then catches up in a rush.
+
+Coordinates are absolute screen coordinates, matching `z_win_hw_line()`
+rather than the window-relative convention `z_win_draw_text()` uses.
+`z_win_mouse_content_xy()` (`zwin.h`) converts.
+
+## Resizing
+
+A window created with `Z_WIN_FLAG_RESIZABLE` can be resized by dragging
+the grip in its lower-right corner. Without the flag the corner is
+ordinary frame and the hit test never fires, so every app predating the
+flag is completely unaffected.
+
+The gesture is a **wireframe**, like dragging already is, and for the
+same reason: a full clear/redraw/content-notify per step queues redraws
+faster than apps can drain them. Only the prospective **bottom and
+right edges** are drawn -- a 2px bold L, not a full box. Dragging a
+window already highlights its entire frame, and reusing that here would
+claim the whole window is moving when in fact the top-left corner is
+pinned and only those two edges follow the cursor. Showing exactly the
+edges that move is both more honest and easier to aim.
+
+The window's real `w`/`h` are not touched until the button is released.
+On release `wm` commits the size, sends `Z_WM_WINDOW_RESIZED`, then
+repairs the union of the old footprint, the new one, and the largest
+extent the wireframe reached in between. Unlike the drag path there is
+no point excluding the window's own final rect -- its content area
+genuinely changed size, so all of it needs redrawing.
+
+**Minimum size.** Every resizable window is clamped to
+`Z_WM_MIN_WIDTH`/`Z_WM_MIN_HEIGHT`. That floor is not cosmetic: below
+it the content area's height goes negative and underflows to an
+enormous unsigned value downstream. `Z_WIN_FLAG_MIN_IS_CREATE` raises
+the floor to whatever size the window was *created* at, for an app with
+fixed-size furniture it cannot shrink below -- `sw/apps/draw`'s tool
+column and pattern palette are exactly that. The app knows that size
+(it is why it asked for it); `wm` has no way to work it out. The global
+floor still applies on top, so a window created at 20x20 is not
+resizable down to 20x20.
 
 ## Keyboard-only operation
 
@@ -278,14 +397,20 @@ per affected window, and a fresh `Z_MAP` per broadcast (several heap
 allocations, including one per key string) is more than this needs,
 given the wm never frees the message objects it sends (see
 docs/messaging.md's borrowed-payload lifetime rules). The packed
-scalar carries just `(id, x, y)` -- width/height are omitted since
-there's no resize support yet, so an app already has them from
-`Z_WM_WINDOW_CREATED` and they don't change. `z_win_apply_redraw()` in
-`zwin.c` unpacks it.
+scalar carries just `(id, x, y)` -- there is no room for width/height
+in it. That is why `Z_WM_WINDOW_RESIZED` exists as a separate `Z_MAP`
+message and why `wm` sends it *before* the redraw that follows a resize:
+an app that saw the redraw first would repaint at its old size into a
+window that is no longer that size. `z_win_apply_redraw()` in `zwin.c`
+unpacks the packed form.
 
-`Z_WM_WINDOW_CREATED` and `Z_WM_WINDOW_MOVED` are low-frequency (once
-per window, once per completed drag) and keep the `Z_MAP` shape --
-`z_win_parse_rect()` handles those. An app's message loop needs to
+`Z_WM_WINDOW_CREATED`, `Z_WM_WINDOW_MOVED` and `Z_WM_WINDOW_RESIZED`
+are low-frequency (once per window, once per completed drag or resize)
+and keep the `Z_MAP` shape -- `z_win_parse_rect()` handles all three,
+and `z_win_apply_resized()` is just that under a name that says what it
+is for at the call site. An app that handles resizing must handle
+**both** `Z_WM_WINDOW_RESIZED` (to learn its new size) and the
+`Z_WM_REDRAW` that follows (to know when to repaint at it). An app's message loop needs to
 tell these two shapes apart by subject; see `sw/apps/hello_win` for
 the pattern.
 
@@ -366,11 +491,21 @@ building anyway.
 
 A small always-on-top launcher bar, anchored to the bottom left of
 the screen, with one 32x32 icon per app (`sw/apps/wm/wm.c`,
-`dock_apps[]`). Currently hardcoded to two apps, `term` and `gpu3d`;
-adding a third is one more `{ "name", "label" }` entry in
-`dock_apps[]`, nothing else. `name` is the bare filename `z_proc_run()`
-(see `docs/app_runtime.md`) expects -- no path, no extension, same as
-what you'd type after `run` at the kernel shell.
+`dock_candidates[]`). Currently `term`, `gpu3d` and `draw`; adding
+another is one more `{ "name", z_icon_<name>_data }` entry there, plus
+a 32x32 PNG in `sw/data/icons/` and a run of
+`gen_dock_icon_data.py` -- see that script's own usage comment.
+Nothing else.
+
+A candidate is only an *offer*: `dock_build()` keeps the ones that
+actually resolve via `z_exec_exists()` at startup, so an app that isn't
+installed is skipped rather than becoming a button that does nothing.
+`draw` lives on the sdcard rather than in the flash core-app archive,
+so it appears only when a card carrying it is present.
+
+`name` is the bare filename `z_proc_run()` (see `docs/app_runtime.md`)
+expects -- no path, no extension, same as what you'd type after `run` at
+the kernel shell.
 
 It's a real entry in `wm`'s own `windows[]`/`zorder`, owned by `wm`'s
 own pid (`my_pid`, not the `Z_PID_WM` constant -- see "Starting it"
@@ -920,7 +1055,7 @@ a convenient API, not a hard guarantee.
   `gpu_blit.v`'s word-straddle split math (`tb_straddle.v`); a full
   48-character line at real 5px-pitch spacing, covering every possible
   word-alignment offset (`tb_line.v`); and cross-master corruption or
-  ack-misrouting through the real `rtl/arbiter.v` + `rtl/mem/vram.v`
+  ack-misrouting through the real `rtl/arbiter_vram.v` + `rtl/mem/vram.v`
   under aggressive, continuous contention from a second synthetic bus
   master mimicking `gpu_raster_wb`'s own access pattern
   (`tb_arbiter_stress.v`) -- all pass cleanly against the fixed RTL.
@@ -1044,7 +1179,9 @@ a convenient API, not a hard guarantee.
 - **Titles are still not drawn** in the chrome itself (font support
   now exists via `zgfx`, but `wm.c` draws chrome purely via the line
   rasterizer and hasn't been updated to render the title text yet).
-- **No app-requested placement or resize.**
+- **No app-requested resize.** The user can resize a window that asked
+  for `Z_WIN_FLAG_RESIZABLE`, but an app cannot ask to be resized, nor
+  change its own minimum after creation.
 - **No "already running -- focus instead of relaunching" tracking**
   for dock icons (noted in "The dock" above, deliberately deferred --
   doesn't change the click-handling or redraw plumbing when addressed

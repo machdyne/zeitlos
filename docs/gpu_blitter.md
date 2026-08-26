@@ -4,7 +4,10 @@
 
 The Zeitlos GPU Blitter is a high-performance 2D graphics accelerator designed for efficient rectangular fills, sprite blitting, and text rendering. It operates on a 640×480 monochrome (1-bit-per-pixel) framebuffer, with word-level optimization and clipping support.
 
-For fill mode, `sw/common/zgfx.c`'s `z_fb_hw_fill_rect()` is the recommended way to drive this hardware rather than raw register writes -- see "Best Practices" below.
+`sw/common/zgfx.c` is the recommended way to drive this hardware rather
+than raw register writes -- `z_fb_hw_fill_rect()` and
+`z_fb_hw_fill_pattern()` for fills, `z_fb_hw_blit_mem()` and
+`z_fb_hw_blit_vram()` for copies. See "Best Practices" below.
 
 ## Key Features
 
@@ -12,8 +15,11 @@ For fill mode, `sw/common/zgfx.c`'s `z_fb_hw_fill_rect()` is the recommended way
 - **Screen boundary clipping when `CTRL_CLIP` is requested** -- see "Clipping Behavior" below
 - **Word-level optimization with pixel-precise masking**
 - **Simple memory-mapped register interface**
-- **Optimized for font rendering (6×12 characters)**
+- **Optimized for font rendering** (any glyph up to 8 pixels wide; the
+  board-wide font is `z_font_5x8`)
 - **Hardware glyph blit mode** for accelerated text rendering
+- **Copy from main memory or from VRAM**, at arbitrary bit alignment --
+  see "Copy modes" below
 - **`z_fb_hw_fill_rect()` (fill mode only) adds unconditional bounds safety and cross-process protection on top of the raw hardware** -- see "Best Practices" below
 
 ## Memory Map
@@ -32,6 +38,19 @@ For fill mode, `sw/common/zgfx.c`'s `z_fb_hw_fill_rect()` is the recommended way
 | 0xD0000024 | BLIT_GLYPH_H | Glyph mode: glyph height in pixels |
 | 0xD0000028 | BLIT_FG_COLOR | Glyph mode: foreground pixel value |
 | 0xD000002C | BLIT_BG_COLOR | Glyph mode: background pixel value |
+| 0xD0000030 | BLIT_SRC_ADDR | Copy mode: source address (see "Copy modes") |
+| 0xD0000034 | BLIT_SRC_STRIDE | Copy mode: source row pitch in bytes |
+| 0xD0000038 | BLIT_SRC_SHIFT | Copy mode: window bit offset + prime flag |
+
+Note there is **no BLIT_SRC_X / BLIT_SRC_Y**. Earlier revisions of this
+document listed them at 0xD000001C and 0xD0000020; those addresses were
+reassigned to the glyph path (`BLIT_GLYPH_ADDR` / `BLIT_GLYPH_W`) and the
+registers no longer exist. The source rectangle's position is folded into
+`BLIT_SRC_ADDR` and `BLIT_SRC_SHIFT` instead -- see "Copy modes".
+
+The register file is addressed by `wb_adr_i[3:0]`, so index 15
+(0xD000003C) is the last one available. Anything further would need the
+decode widened.
 
 ## Control Register (BLIT_CTRL)
 
@@ -41,6 +60,7 @@ For fill mode, `sw/common/zgfx.c`'s `z_fb_hw_fill_rect()` is the recommended way
 | 1 | FILL | Operation mode (0=copy, 1=fill) -- ignored in glyph mode |
 | 2 | CLIP | Clipping enable (0=disabled, 1=enabled) -- ignored in glyph mode |
 | 3 | GLYPH | 0=normal fill/copy, 1=glyph blit mode |
+| 4 | SRCMEM | Copy mode source: 0=VRAM, 1=main memory. Ignored unless FILL=0 and GLYPH=0 |
 
 ## Status Register (BLIT_STATUS)
 
@@ -70,9 +90,17 @@ For fill mode, `sw/common/zgfx.c`'s `z_fb_hw_fill_rect()` is the recommended way
 #define BLIT_HEIGHT     (*(volatile uint32_t*)(BLITTER_BASE + 0x14))
 #define BLIT_PATTERN    (*(volatile uint32_t*)(BLITTER_BASE + 0x18))
 
+#define BLIT_SRC_ADDR   (*(volatile uint32_t*)(BLITTER_BASE + 0x30))
+#define BLIT_SRC_STRIDE (*(volatile uint32_t*)(BLITTER_BASE + 0x34))
+#define BLIT_SRC_SHIFT  (*(volatile uint32_t*)(BLITTER_BASE + 0x38))
+
 #define CTRL_START      (1 << 0)
 #define CTRL_FILL       (1 << 1)
 #define CTRL_CLIP       (1 << 2)
+#define CTRL_GLYPH      (1 << 3)
+#define CTRL_SRCMEM     (1 << 4)
+
+#define SRC_PRIME_ZERO  (1 << 8)   /* in BLIT_SRC_SHIFT */
 
 #define PATTERN_BLACK   0x00000000
 #define PATTERN_WHITE   0xFFFFFFFF
@@ -133,8 +161,8 @@ fill_rect(10, 20, 1, 1, PATTERN_WHITE);
 // Small rectangle
 fill_rect(50, 50, 10, 10, PATTERN_WHITE);
 
-// Font-sized character block
-fill_rect(100, 100, 6, 12, PATTERN_WHITE);
+// Font-sized character block (z_font_5x8)
+fill_rect(100, 100, 5, 8, PATTERN_WHITE);
 ```
 
 ### Text Rendering (glyph blit mode)
@@ -156,6 +184,28 @@ only triggering it for glyphs that are already fully on-screen (and
 within any window clip rect), falling back to software rendering
 otherwise. This keeps the hardware path simple at the cost of pushing
 that one piece of judgment into the C driver.
+
+### Copying a bitmap from main memory
+
+Almost always via `sw/common/zgfx.h` rather than by hand:
+
+```c
+/* an offscreen 1bpp document, framebuffer bit order, 80 bytes/row */
+static uint32_t doc[480][20];
+
+/* show the region at (doc_x, doc_y) at screen (sx, sy) */
+z_fb_hw_blit_mem(doc, sizeof(doc[0]), doc_x, doc_y, sx, sy, w, h);
+```
+
+Note the source bitmap must use the framebuffer's own bit order --
+pixel x at bit `(x & 31)` of word `(x >> 5)`, least significant bit
+leftmost, matching `z_fb_set_pixel()`. A bitmap stored MSB-first (the
+convention used for glyphs, icons and fill patterns) will come out
+mirrored in 32-pixel blocks.
+
+`sw/apps/draw` is the worked example: a full-screen-sized document in
+main memory, blitted into a window's canvas area, clipped by the app to
+its viewport first because the hardware only clips to the screen.
 
 ### Bouncing Animation
 
@@ -187,6 +237,171 @@ int main() {
 }
 ```
 
+## Copy modes
+
+With `CTRL_FILL` and `CTRL_GLYPH` both clear, the blitter copies a 1bpp
+rectangle into the framebuffer. `CTRL_SRCMEM` picks where the source
+comes from:
+
+| CTRL_SRCMEM | Source | Read through | Use |
+|---|---|---|---|
+| 1 | Main memory | the blitter's main-bus master port | offscreen document buffers (`sw/apps/draw`), bitmaps loaded from disk |
+| 0 | VRAM | the same port used for the destination | offscreen VRAM to on-screen VRAM, i.e. sprites |
+
+Both share one engine. The shifter, the edge masking, the clipping and
+the state machine are identical; the only difference is which port
+issues the source read.
+
+**VRAM-to-VRAM copy did not work before this.** It was a stub from the
+day the module was written -- `ST_WRITE`'s copy branch wrote the
+destination straight back unchanged -- and the `BLIT_SRC_X`/`BLIT_SRC_Y`
+registers this document used to describe had long since been reassigned
+to the glyph path. It works now as a side effect of building the
+main-memory path properly. Note that it is only *useful* on a bitstream
+whose VRAM is larger than the visible framebuffer: `rtl/mem/vram.v` is
+currently exactly 640x480/32 words with nothing spare, so today there is
+no offscreen region to keep a sprite in. Enlarging VRAM is what makes
+this mode worth having.
+
+### Source addressing
+
+The source rectangle's position is **not** given as an x/y pair. The
+hardware assembles each destination word from a two-word sliding window
+over the source row, and what it needs to know is where that window
+starts:
+
+- `BLIT_SRC_ADDR` -- byte address (word aligned) of the source word the
+  window starts on, for the first row.
+- `BLIT_SRC_STRIDE` -- bytes per source row; added to `BLIT_SRC_ADDR`
+  once per row.
+- `BLIT_SRC_SHIFT` -- bits [4:0], the bit offset within that word of the
+  pixel that lands on bit 0 of the first destination word. Bit [8]
+  (`SRC_PRIME_ZERO`) starts the window with zeros instead of reading
+  that word at all.
+
+Software derives all three from the source x/y it actually has:
+
+```c
+int sbit0 = src_x - (dst_x & 31);   /* may be negative */
+if (sbit0 >= 0) {
+    sword = sbit0 >> 5; sshift = sbit0 & 31; prime = 0;
+} else {
+    sword = 0; sshift = sbit0 + 32; prime = SRC_PRIME_ZERO;
+}
+BLIT_SRC_ADDR   = src_base + src_y * stride + sword * 4;
+BLIT_SRC_STRIDE = stride;
+BLIT_SRC_SHIFT  = prime | sshift;
+```
+
+`sbit0` is the source-row bit index landing on bit 0 of the first
+destination word -- that word begins at screen x = `dst_x & ~31`, which
+is `dst_x & 31` pixels left of `dst_x`. It can go negative, but by at
+most one word (`dst_x & 31` is at most 31 and `src_x` is at least 0),
+which is the whole reason `SRC_PRIME_ZERO` exists: rather than reading
+the word before the buffer, the window starts empty. Every pixel that
+would have come from that phantom word sits left of `dst_x` and is
+masked out of the destination anyway.
+
+Don't write these by hand. `z_fb_hw_blit_mem()` and
+`z_fb_hw_blit_vram()` (`sw/common/zgfx.h`) do the derivation, the
+clamping and the IRQ masking.
+
+### Source addresses are physical
+
+`BLIT_SRC_ADDR` is a **physical** address. The blitter is its own bus
+master and does not go through the MTU (`rtl/mtu.v`), which only
+translates addresses the CPU issues. An app runs at virtual
+`0x8000_0000`, so handing one of its pointers straight to the blitter
+points it at whatever lives at *physical* `0x8000_0000` -- not that
+app's data, and quite possibly not memory at all.
+
+`z_fb_hw_blit_mem()` translates for you, by reading the MTU's own
+translation base (`reg_mtu_base`, `sw/common/zeitlos.h`) and adding the
+offset. A base of 0 means no translation is active and the address is
+already physical.
+
+### Two master ports, and the deadlock they could cause
+
+A main-memory source needs a bus the blitter previously had no access
+to. Its framebuffer master goes through `rtl/arbiter_vram.v`, whose
+selected master is wired only to VRAM; main memory is on the main bus,
+which the CPU owned outright (`sysctl.v` said as much: *"CPU controls
+the main bus (will share with DMA controller)"*). So the blitter gained
+a second, read-only master port, and `rtl/arbiter_main.v` puts it on
+the main bus alongside the CPU.
+
+The two arbiters are named for the bus each one owns:
+`wb_arbiter_vram` (3 masters: CPU, rasterizer, blitter framebuffer
+port) and `wb_arbiter_main` (2 masters: CPU, blitter source port). The
+blitter is a master on both.
+
+There is no simpler arrangement. Routing the existing port to both buses
+would mean the VRAM arbiter's output driving the main bus, which the CPU
+already drives -- the same arbitration problem one level down. The
+alternative of merging all four masters onto a single system-wide
+arbiter is a bigger change to a well-tested interconnect, not a smaller
+one.
+
+**The two ports are never asserted at the same time**, and that is a
+correctness requirement, not tidiness. Both arbiters release a grant
+only when the winning master drops `cyc`. A blitter holding VRAM while
+waiting for main memory, against a CPU holding main memory while waiting
+for VRAM, deadlocks the machine solid. The state machine keeps the ports
+strictly alternating, and `rtl/gpu/bench/tb_memblit.v` asserts on every
+cycle of every test that both are never high together.
+
+`wb_arbiter_main` is round robin. Fixed priority fails badly in both
+directions here: with the blitter on top, a long copy starves a CPU
+trying to make progress on the same bus; with the CPU on top, a tight
+load/store loop can keep a copy from ever finishing while the blitter
+holds `BUSY`, so software polling that flag spins forever.
+
+### Caveats
+
+- **Overlapping source and destination are not handled** in VRAM-to-VRAM
+  mode. The copy runs top-to-bottom, left-to-right with no direction
+  selection, so an overlap where the destination trails the source in
+  that order re-reads pixels the same operation already wrote.
+- **The hardware may read one word past** the last source word it needs,
+  whenever source and destination are not word-aligned to each other.
+  Those bits are masked out of the result, but the read happens -- so a
+  source buffer should not end exactly at the last valid byte of a
+  mapping.
+- **Clipping is to the screen only**, as with fill. A caller needing to
+  clip to something smaller (a window's content area, a scrolling
+  viewport) must narrow the rectangle itself and adjust `src_x`/`src_y`
+  in step.
+- **Older bitstreams silently do nothing useful.** A blitter predating
+  this mode ignores `CTRL_SRCMEM` and takes the old copy stub, which
+  writes the destination back unchanged -- a no-op, not an error.
+  `z_fb_hw_blit_mem_available()` probes for the mode (it writes
+  `CTRL_SRCMEM` without `CTRL_START` and reads it back) so an app can
+  keep a software fallback; `sw/apps/draw` does exactly that.
+
+### Verification
+
+`rtl/gpu/bench/tb_memblit.v` checks every pixel of a 640x480 screen
+against a reference model, over 28 cases: all 64 source/destination bit
+alignment combinations, the `SRC_PRIME_ZERO` corner, shift-0, sub-word
+and multi-word widths, right-edge screen clipping, a 500x40 copy, a
+3-wait-state source memory, and six VRAM-to-VRAM copies. It also runs a
+fill-mode regression.
+
+```
+$ iverilog -g2005 -o tb rtl/gpu/bench/tb_memblit.v rtl/gpu/gpu_blit.v
+$ vvp tb
+```
+
+One detail in that testbench is worth knowing before you modify it. The
+two slave models behave **differently on purpose**, because the real
+ones do. `rtl/mem/vram.v` acks on every cycle `cyc && stb` are high,
+with no one-ack-per-transaction guard, and the pre-existing fill path
+depends on that: it holds `cyc` asserted across its read and its write,
+so a stricter slave acks the read twice and swallows the write entirely.
+Main memory (`rtl/mem/sram.v`, `rtl/mem/sdram_kianv.v`) *is* strict.
+Modelling VRAM strictly makes the testbench report fill-mode failures
+that hardware does not have.
+
 ## Performance Characteristics
 
 ### Optimized Operations
@@ -201,7 +416,7 @@ int main() {
 | Object Size | Memory Operations | Performance |
 |-------------|-------------------|-------------|
 | 1×1 pixel | ~2-4 | Excellent |
-| 6×12 character | ~8-16 | Excellent |
+| 5×8 character | ~8-16 | Excellent |
 | 10×10 box | ~20-40 | Very Good |
 | 32×32 square | ~64-128 | Excellent |
 | Full screen | ~1,200 | Blazing Fast |
@@ -237,14 +452,46 @@ fill_rect(256, 192, 1000, 1000, PATTERN_WHITE);  // Clips to screen
 
 ## Pattern Values
 
-The `BLIT_PATTERN` register accepts 32-bit values:
+The `BLIT_PATTERN` register accepts any 32-bit value, and it is written
+into each destination word (masked at the edges). That makes it a
+horizontal 32-pixel pattern which repeats identically on every row:
 
 ```c
-#define PATTERN_BLACK   0x00000000  // All pixels black
-#define PATTERN_WHITE   0xFFFFFFFF  // All pixels white
+#define PATTERN_BLACK   0x00000000  // All pixels off
+#define PATTERN_WHITE   0xFFFFFFFF  // All pixels on
 #define PATTERN_CHECKER 0xAAAAAAAA  // Alternating pixels
 #define PATTERN_DOTS    0x11111111  // Sparse dots
 ```
+
+For a pattern that varies **vertically** -- which is what most useful
+textures do -- the fill has to be issued per row of the pattern, with
+`BLIT_PATTERN` reloaded each time. `z_fb_hw_fill_pattern()`
+(`sw/common/zgfx.h`) does this: it takes an 8-byte, row-per-byte,
+MSB-first pattern (the same convention as `z_font_t` glyphs and
+`zicon.h` icons) and issues one blitter operation **per run of rows
+sharing a pattern byte** -- so a solid or vertically-uniform pattern
+still costs a single operation, while an alternating one costs up to
+`h`.
+
+Two details of that worth knowing:
+
+- The 8-bit row is replicated across all four bytes of the word. Since
+  32 is a multiple of 8, the pattern is thereby anchored to the
+  **screen's** 8-pixel grid, not to the rectangle's own corner. Two
+  adjacent rects filled with the same pattern tile seamlessly into each
+  other, which is what makes a pattern read as a texture the shapes are
+  cut out of.
+- Framebuffer words put the leftmost pixel in the **least** significant
+  bit (`z_fb_set_pixel()`), while pattern and glyph bytes are MSB-first.
+  `z_fb_hw_fill_pattern()` reverses each row byte on the way in. Getting
+  this wrong is an unpleasant bug to chase: every symmetric pattern
+  (solid, 50% checker, horizontal lines) looks perfectly correct, and
+  only the asymmetric ones come out mirrored -- as a plausible-looking
+  diagonal leaning the wrong way.
+
+`Z_PATTERN_COUNT` ready-made patterns live in `z_pattern_table[]`
+(`sw/common/zwidget.h`), ordered light to dark then lines and textures.
+`sw/apps/draw` uses them for both its palette swatches and its fills.
 
 ## Error Handling
 
@@ -257,22 +504,36 @@ The `BLIT_PATTERN` register accepts 32-bit values:
 - **Concurrent register access**: Not arbitrated between processes at
   the register level -- two processes writing their own
   dst_x/dst_y/etc. and triggering a blit could interleave and corrupt
-  both operations. Use `z_fb_hw_fill_rect()` (fill mode) or
-  `z_fb_draw_char()`/`z_fb_draw_char2()`/`z_fb_draw_icon()` (glyph
-  mode), which use `gpu_blit_acquire()` (`sw/common/zgfx.c`) to
-  serialize access safely across processes -- see "Best Practices"
-  below.
+  both operations. Use the `sw/common/zgfx.c` helpers listed under
+  "Best Practices" below -- all of them go through
+  `gpu_blit_acquire()`, which serializes access safely across
+  processes. This applies to copy mode exactly as much as to fill and
+  glyph: a copy latches source address, stride and shift across several
+  register writes, so an interleaved second operation produces a blit
+  reading from a mix of two callers' parameters.
 
 ## Best Practices
 
-**Use `sw/common/zgfx.c`'s `z_fb_hw_fill_rect()` for fill mode rather
-than the raw register sequences below.** It does everything "Always
-Wait for Completion" and "Use Clipping for Safety" describe, plus the
-two things raw register access can't: coordinates clamped to the
-actual screen bounds *unconditionally* (not just when `CTRL_CLIP` is
-requested), and the register-writes-then-trigger sequence protected
-against interleaving with another process's own writes. The
-raw-register examples below are kept for reference and for
+**Use `sw/common/zgfx.c` rather than the raw register sequences below.**
+
+| Want | Call |
+|---|---|
+| solid fill | `z_fb_hw_fill_rect()` |
+| 8x8 patterned fill | `z_fb_hw_fill_pattern()` |
+| copy from main memory | `z_fb_hw_blit_mem()` |
+| copy within VRAM | `z_fb_hw_blit_vram()` |
+| text / icons | `z_fb_draw_char()`, `z_fb_draw_char2()`, `z_fb_draw_icon()` |
+
+All of them do everything "Always Wait for Completion" and "Use Clipping
+for Safety" describe, plus the things raw register access can't:
+coordinates clamped to the actual screen bounds *unconditionally* (not
+just when `CTRL_CLIP` is requested), and the register-writes-then-trigger
+sequence protected against interleaving with another process's own
+writes via `gpu_blit_acquire()`. The copy helpers additionally derive
+the source word/shift/prime encoding and, for `z_fb_hw_blit_mem()`,
+translate the source pointer to a physical address.
+
+The raw-register examples below are kept for reference and for
 understanding the hardware, not as the recommended way to drive it.
 
 ### 1. Always Wait for Completion
@@ -338,15 +599,31 @@ void clear_screen_fast(void) {
 
 ### Hardware Architecture
 - Word-level operations with pixel-precise masking
-- Bresenham-style line generation for efficient memory access
 - Automatic stride calculation for framebuffer addressing
-- Pipelined state machine for maximum throughput
+- A single state machine shared by fill, copy and glyph modes
+
+There is **no** line generation in this module -- that is the separate
+line rasterizer, `rtl/gpu/gpu_raster.v` (`docs/gpu_raster.md`), reached
+from C via `z_fb_hw_line()`/`z_fb_hw_box()`. An earlier revision of this
+document credited the blitter with Bresenham line drawing; it has never
+had any.
 
 ### Memory Interface
-- 32-bit wide memory access via Wishbone protocol
-- Burst-capable for large operations
-- Automatic address generation and bounds checking
-- Optimized for 1-bit-per-pixel framebuffer format
+
+**Two Wishbone master ports**, both 32 bits wide:
+
+| Port | Bus | Used by |
+|---|---|---|
+| `m_*` | VRAM, via `rtl/arbiter_vram.v` | all destination reads and writes; also source reads in VRAM-to-VRAM copy |
+| `s_*` | main bus, via `rtl/arbiter_main.v` | source reads in main-memory copy only; idle otherwise |
+
+Single transactions, not bursts -- one word per handshake. The two ports
+are never asserted simultaneously; see "Two master ports, and the
+deadlock they could cause" above for why that is a correctness
+requirement and not just a simplification.
+
+Bounds checking is **conditional**, not automatic: it happens only when
+`CTRL_CLIP` is set. See "Clipping Behavior".
 
 ## Historical Notes
 

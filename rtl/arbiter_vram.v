@@ -2,11 +2,18 @@
  * Zeitlos SOC
  * Copyright (c) 2025 Lone Dynamics Corporation. All rights reserved.
  *
- * 3-Port Wishbone bus arbiter (CPU, GPU Raster, GPU Blit)
- * 
+ * 3-Port Wishbone arbiter for the VRAM bus (CPU, GPU Raster, GPU Blit
+ * framebuffer accesses).
+ *
+ * Named for the bus it arbitrates, not for being "the" arbiter: there
+ * is a second one, rtl/arbiter_main.v, on the main bus. The blitter is
+ * a master on BOTH -- it reads a source bitmap from main memory and
+ * writes pixels to VRAM -- which is why the distinction matters. See
+ * rtl/arbiter_main.v's own header for the deadlock the pair could
+ * otherwise form.
  */
 
-module wb_arbiter (
+module wb_arbiter_vram (
     input  wire        clk,
     input  wire        rst,
 

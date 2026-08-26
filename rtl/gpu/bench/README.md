@@ -17,7 +17,7 @@ Self-checking testbenches for the hardware glyph blitter
   possible word-alignment offset at least once, and checks every
   character landed in exactly its own bit range with no
   cross-contamination between characters.
-- `tb_arbiter_stress.v` -- instantiates the real `rtl/arbiter.v` and
+- `tb_arbiter_stress.v` -- instantiates the real `rtl/arbiter_vram.v` and
   `rtl/mem/vram.v` (not a simplified mock) alongside `gpu_blit_wb`,
   plus a synthetic second bus master that continuously performs its
   own read-modify-write cycles to a fixed "canary" word (mimicking
@@ -78,7 +78,7 @@ vvp /tmp/tb_line.out
 sed 's/module vram_wb #()/module vram_wb/' rtl/mem/vram.v > /tmp/vram_fix.v
 iverilog -g2005 -o /tmp/tb_arbiter.out \
     rtl/gpu/bench/tb_arbiter_stress.v rtl/gpu/gpu_blit.v \
-    /tmp/glyph_lintfix.v rtl/arbiter.v /tmp/vram_fix.v
+    /tmp/glyph_lintfix.v rtl/arbiter_vram.v /tmp/vram_fix.v
 vvp /tmp/tb_arbiter.out
 ```
 

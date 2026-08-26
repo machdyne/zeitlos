@@ -326,6 +326,38 @@ module sysctl #()
 	wire wbm_ack;
 	wire wbm_cyc;
 
+	// The CPU's own side of the main bus, upstream of wb_arbiter_main
+	// (rtl/arbiter_main.v). This used to BE wbm_* -- the CPU was the
+	// only
+	// master here, so the two were the same wires. The blitter's
+	// memory-copy mode (rtl/gpu/gpu_blit.v, CTRL_SRCMEM) makes it a
+	// second master, so the CPU now drives wbc_* and the arbiter
+	// drives wbm_*.
+	//
+	// Everything downstream -- every cs_* decode, every slave, the
+	// wbm_dat_i/wbm_ack muxes -- is unchanged and still sees wbm_*,
+	// which is now simply "whichever master currently holds the bus"
+	// rather than "the CPU".
+	wire [31:0] wbc_adr;
+	wire [31:0] wbc_dat_o;
+	wire [31:0] wbc_dat_i;
+	wire [3:0] wbc_sel;
+	wire wbc_we;
+	wire wbc_stb;
+	wire wbc_ack;
+	wire wbc_cyc;
+
+	// The blitter's source-read port. Tied off below when the blitter
+	// isn't in this bitstream.
+	wire [31:0] wbm_blitsrc_adr;
+	wire [31:0] wbm_blitsrc_dat_i;
+	wire wbm_blitsrc_we;
+	wire [3:0] wbm_blitsrc_sel;
+	wire wbm_blitsrc_stb;
+	wire wbm_blitsrc_cyc;
+	wire wbm_blitsrc_ack;
+	wire marb_master;
+
 	// Physical (post-MTU) CPU address. This is wb_mtu's translated
 	// output, and is what the instruction cache tags on -- see
 	// rtl/cache.v's header for why the cache must sit AFTER the MTU
@@ -748,15 +780,15 @@ module sysctl #()
 		.c_instr_i(wbm_cpu_instr),
 		.c_ack_o(wbm_cpu_ack),
 
-		// downstream: the main wishbone bus
-		.m_adr_o(wbm_adr),
-		.m_dat_o(wbm_dat_o),
-		.m_dat_i(wbm_dat_i),
-		.m_we_o(wbm_we),
-		.m_sel_o(wbm_sel),
-		.m_stb_o(wbm_stb),
-		.m_cyc_o(wbm_cyc),
-		.m_ack_i(wbm_ack),
+		// downstream: the main wishbone bus, via wb_arbiter_main below
+		.m_adr_o(wbc_adr),
+		.m_dat_o(wbc_dat_o),
+		.m_dat_i(wbc_dat_i),
+		.m_we_o(wbc_we),
+		.m_sel_o(wbc_sel),
+		.m_stb_o(wbc_stb),
+		.m_cyc_o(wbc_cyc),
+		.m_ack_i(wbc_ack),
 
 		// control/status registers (0x7000_0100, see cs_cache above)
 		.cfg_adr_i({ 30'b0, wbm_adr_sel_word[1:0] }),
@@ -773,14 +805,91 @@ module sysctl #()
 	// wbm_cpu_padr, not wbm_cpu_adr: the MTU's translated output, which
 	// is what this bus has always carried -- the MTU simply used to
 	// drive wbm_adr directly instead of going through a named wire.
-	assign wbm_adr = wbm_cpu_padr;
-	assign wbm_dat_o = wbm_cpu_dat_o;
-	assign wbm_cpu_dat_i = wbm_dat_i;
-	assign wbm_sel = wbm_cpu_sel;
-	assign wbm_we = wbm_cpu_we;
-	assign wbm_stb = wbm_cpu_stb;
-	assign wbm_cpu_ack = wbm_ack;
-	assign wbm_cyc = wbm_cpu_cyc;
+	assign wbc_adr = wbm_cpu_padr;
+	assign wbc_dat_o = wbm_cpu_dat_o;
+	assign wbm_cpu_dat_i = wbc_dat_i;
+	assign wbc_sel = wbm_cpu_sel;
+	assign wbc_we = wbm_cpu_we;
+	assign wbc_stb = wbm_cpu_stb;
+	assign wbm_cpu_ack = wbc_ack;
+	assign wbc_cyc = wbm_cpu_cyc;
+
+`endif
+
+	// MAIN BUS ARBITER (CPU vs blitter source reads)
+	//
+	// See rtl/arbiter_main.v for the round-robin policy and why the
+	// grant
+	// is held for a whole transaction. That last part is what makes
+	// this safe to drop in front of the CPU: a CPU transaction is
+	// never preempted half way, so every cs_* decode stays coherent
+	// for the whole of it, and nothing downstream can observe the bus
+	// changing owner mid-cycle.
+	//
+	// Deadlock: the blitter needs BOTH this bus (source reads) and the
+	// VRAM bus behind wb_arbiter_vram (framebuffer writes), and each
+	// arbiter only releases a grant when its winner drops cyc. If the
+	// blitter ever held one while waiting for the other, and the CPU
+	// held the opposite, the machine would lock solid. It cannot: the
+	// blitter's state machine keeps its two master ports strictly
+	// alternating, never asserting both, and rtl/gpu/bench/tb_memblit.v
+	// asserts exactly that on every cycle of every test.
+
+`ifdef GPU_BLIT
+
+	wb_arbiter_main marb0_i (
+		.clk(wbm_clk),
+		.rst(wbm_rst),
+
+		// Master 0: CPU (through the instruction cache, if built)
+		.m0_adr_i(wbc_adr),
+		.m0_dat_i(wbc_dat_o),
+		.m0_dat_o(wbc_dat_i),
+		.m0_we_i(wbc_we),
+		.m0_sel_i(wbc_sel),
+		.m0_stb_i(wbc_stb),
+		.m0_cyc_i(wbc_cyc),
+		.m0_ack_o(wbc_ack),
+
+		// Master 1: blitter source reads
+		.m1_adr_i(wbm_blitsrc_adr),
+		.m1_dat_i(32'h0),
+		.m1_dat_o(wbm_blitsrc_dat_i),
+		.m1_we_i(wbm_blitsrc_we),
+		.m1_sel_i(wbm_blitsrc_sel),
+		.m1_stb_i(wbm_blitsrc_stb),
+		.m1_cyc_i(wbm_blitsrc_cyc),
+		.m1_ack_o(wbm_blitsrc_ack),
+
+		.s_adr_o(wbm_adr),
+		.s_dat_o(wbm_dat_o),
+		.s_dat_i(wbm_dat_i),
+		.s_we_o(wbm_we),
+		.s_sel_o(wbm_sel),
+		.s_stb_o(wbm_stb),
+		.s_cyc_o(wbm_cyc),
+		.s_ack_i(wbm_ack),
+
+		.master(marb_master)
+	);
+
+`else
+
+	// No blitter in this bitstream, so no second master -- wire the
+	// CPU straight through and the main bus behaves exactly as it did
+	// before the arbiter existed.
+	assign wbm_adr = wbc_adr;
+	assign wbm_dat_o = wbc_dat_o;
+	assign wbc_dat_i = wbm_dat_i;
+	assign wbm_sel = wbc_sel;
+	assign wbm_we = wbc_we;
+	assign wbm_stb = wbc_stb;
+	assign wbc_ack = wbm_ack;
+	assign wbm_cyc = wbc_cyc;
+
+	assign wbm_blitsrc_dat_i = 32'h0;
+	assign wbm_blitsrc_ack = 1'b0;
+	assign marb_master = 1'b0;
 
 `endif
 
@@ -902,6 +1011,16 @@ module sysctl #()
 		.m_sel_o(wbm_gpu_blit_sel),
 		.m_ack_i(wbm_gpu_blit_ack),
 
+		// master interface to MAIN MEMORY (memory copy source reads).
+		// Idle in every other mode -- see rtl/gpu/gpu_blit.v.
+		.s_adr_o(wbm_blitsrc_adr),
+		.s_dat_i(wbm_blitsrc_dat_i),
+		.s_cyc_o(wbm_blitsrc_cyc),
+		.s_stb_o(wbm_blitsrc_stb),
+		.s_we_o(wbm_blitsrc_we),
+		.s_sel_o(wbm_blitsrc_sel),
+		.s_ack_i(wbm_blitsrc_ack),
+
 		// always connected now (see the wire declaration/tie-off
 		// above) -- no longer conditional on MEM_GLYPH
 		.glyph_addr_o(wbm_blit_glyph_addr),
@@ -920,7 +1039,7 @@ module sysctl #()
 
 	wire wbm_cpu_arb0_cyc = cs_vram && wbm_cpu_cyc;
 
-   wb_arbiter #() arb0_i
+   wb_arbiter_vram #() varb0_i
    (
       .clk(wbm_clk),
       .rst(wbm_rst),

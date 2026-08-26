@@ -134,6 +134,39 @@ void z_win_apply_redraw(z_win_t *win, uint32_t packed) {
 	win->y = Z_WM_UNPACK_Y(packed);
 }
 
+bool z_win_apply_resized(z_win_t *win, z_obj_t *obj) {
+	return z_win_parse_rect(win, obj);
+}
+
+bool z_win_mouse_content_xy(const z_win_t *win, uint32_t packed, int *cx, int *cy) {
+
+	z_clip_t clip;
+	z_win_content_rect(win, &clip);
+
+	int sx = (int)Z_WM_UNPACK_MOUSE_X(packed);
+	int sy = (int)Z_WM_UNPACK_MOUSE_Y(packed);
+
+	*cx = sx - clip.x0;
+	*cy = sy - clip.y0;
+
+	return sx >= clip.x0 && sx <= clip.x1 && sy >= clip.y0 && sy <= clip.y1;
+
+}
+
+int z_win_content_w(const z_win_t *win) {
+	z_clip_t clip;
+	z_win_content_rect(win, &clip);
+	int w = clip.x1 - clip.x0 + 1;
+	return w > 0 ? w : 0;
+}
+
+int z_win_content_h(const z_win_t *win) {
+	z_clip_t clip;
+	z_win_content_rect(win, &clip);
+	int h = clip.y1 - clip.y0 + 1;
+	return h > 0 ? h : 0;
+}
+
 void z_win_redraw_done(const z_win_t *win) {
 	z_msg_new_send(resolve_wm_pid(), Z_WM_REDRAW_DONE, 0, z_obj_uint32((uint32_t)win->id));
 }

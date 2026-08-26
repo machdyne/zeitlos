@@ -68,6 +68,40 @@ bool z_win_parse_rect(z_win_t *win, z_obj_t *obj);
 // don't change -- there's no resize support yet).
 void z_win_apply_redraw(z_win_t *win, uint32_t packed);
 
+// applies a Z_WM_WINDOW_RESIZED payload to *win. That message carries
+// the same Z_MAP{id,x,y,w,h} shape as Z_WM_WINDOW_CREATED, so this is
+// just z_win_parse_rect() under a name that says what it's for at the
+// call site -- there is deliberately no second parsing path.
+//
+// Note this updates w/h as well as x/y, which is exactly what
+// z_win_apply_redraw() above does NOT do (Z_WM_REDRAW has no room for
+// them). An app that handles resizing must handle BOTH messages: this
+// one to learn its new size, and the redraw that follows to know when
+// to repaint at it.
+bool z_win_apply_resized(z_win_t *win, z_obj_t *obj);
+
+// converts a Z_WM_MOUSE payload's absolute screen coordinates into
+// coordinates relative to the top-left of this window's CONTENT area
+// -- i.e. the same origin z_win_draw_text()/z_win_fill_rect() use, so
+// a hit test and the drawing that responds to it are expressed in one
+// coordinate system rather than two.
+//
+// Writes *cx/*cy unconditionally (they can legitimately go negative,
+// or past the content area's width/height, while a capture is active
+// and the cursor has left the window -- see Z_WM_MOUSE in zwm.h).
+// RETURNS whether the point is actually within the content area, so
+// the common "ignore this unless it's over my content" case stays a
+// single call.
+bool z_win_mouse_content_xy(const z_win_t *win, uint32_t packed, int *cx, int *cy);
+
+// width/height of the window's content area, in pixels -- what an app
+// laying out its own furniture actually needs, as opposed to win->w/h
+// which include the frame and titlebar. Derived from
+// z_win_content_rect() so it can't drift from what the drawing calls
+// clip to.
+int z_win_content_w(const z_win_t *win);
+int z_win_content_h(const z_win_t *win);
+
 // call this once you're done redrawing in response to Z_WM_REDRAW.
 // the wm blocks on this (per window, back-to-front) before letting
 // any window in front of yours redraw its own content -- without it,

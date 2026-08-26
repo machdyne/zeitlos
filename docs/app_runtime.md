@@ -1,5 +1,6 @@
 # Zeitlos App Runtime
 
+
 ## Overview
 
 Every app in `sw/apps/*` links against `sw/common/zeitlos.c/h` --
@@ -596,3 +597,32 @@ about window boundaries specifically.
   drawing through `z_fb_hw_line()`/`z_fb_hw_box()`, which reassert
   clip state fresh on every call. See `docs/window_manager.md`,
   "Known limitations" for the full incident.
+
+## DMA masters bypass the MTU
+
+The MTU (`rtl/mtu.v`) translates addresses **the CPU issues**. It is not
+a system-wide MMU, and nothing else on the bus goes through it.
+
+That matters now that the GPU blitter can read main memory
+(`docs/gpu_blitter.md`, "Copy modes"). The blitter is its own bus
+master, so an app pointer -- virtual `0x8000_xxxx` -- means nothing to
+it. Handing one over points it at whatever lives at *physical*
+`0x8000_0000`, which is not that app's data and quite possibly not
+memory at all.
+
+Software translates before handing an address to any such master:
+
+```c
+phys = reg_mtu_base ? reg_mtu_base + (virt & 0x0FFFFFFF) : virt;
+```
+
+`reg_mtu_base` (`sw/common/zeitlos.h`) reads the MTU's own translation
+base. It is readable from an app because only `0x8xxx_xxxx` is
+translated, so the load reaches the MTU rather than being remapped. A
+base of 0 means no translation is active (the kernel's own context) and
+the address is already physical. `z_fb_hw_blit_mem()` does this for you;
+anything else driving a bus master with an app pointer must do the same.
+
+A physical address stays valid across a context switch, so latching one
+before starting a long operation is safe -- which is what the blitter
+does.
