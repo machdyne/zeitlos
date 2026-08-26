@@ -19,8 +19,8 @@ Based on `e02af33`. Passes its own test suite (RV32IM, the counter
 CSRs, and the picorv32 interrupt ABI) in simulation, at three fixed
 memory latencies plus three randomised-latency profiles, in both
 multiplier configurations. Synthesises clean and meets 60MHz on ECP5.
-It has **not** been run on hardware. Treat it as promising rather than
-proven.
+
+Zeitlos can run on Zeitlos32, but we plan to continue using PicoRV32 for development until the CPU is more proven.
 
 ### On the main-bus arbiter
 
