@@ -59,9 +59,15 @@ With the MTU, there is no need for position independent code or complicated addr
 
 | App | Description |
 |-----|-------------|
-| gpu3d | Spinning 3D cube demo |
-| space3d | First-person 3D space shooter game |
+| text | Text editor |
+| read | Text reader for files of unlimited size (with rendered Markdown) |
 | draw | MacPaint-inspired drawing app |
+| files | File browser |
+| calc | Calculator |
+| info | System info |
+| settings | System settings |
+| space3d | First-person 3D space shooter game |
+| gpu3d | Spinning 3D cube demo |
 
 ### Boards
 
