@@ -82,7 +82,7 @@ typedef struct {
 //   all at once -- see docs/csrs.md and this project's own
 //   memory-budget history around this constant for the full story.
 #define Z_PROC_STACK_SIZE_DEFAULT  16*1024
-#define Z_PROC_STACK_SIZE_LARGE    64*1024
+#define Z_PROC_STACK_SIZE_LARGE    1024*1024	// was 64K; 32 MB boards can afford a real heap for repl/net (te opens 128 KB files)
 
 // which tier (above) a process named `name` should get -- the one
 // place this decision is made, used by every path that can start a
