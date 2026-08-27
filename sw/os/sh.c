@@ -598,18 +598,20 @@ void init(void) {
 	// rest of this script, unlike wm's.
 
 	printf("starting net\n");
+	uint32_t pid_net = 0;
 	uint32_t size_net = fs_size("net");
 	if (!size_net) {
 		printf("init: net binary not found (non-fatal)\n");
 	} else {
-		uint32_t pid_net = k_proc_create(size_net, z_proc_stack_size_for("net"));
+		pid_net = k_proc_create(size_net, z_proc_stack_size_for("net"));
 		if (!pid_net) {
 			printf("init: unable to create net process (non-fatal)\n");
 		} else {
 			uint32_t base_net = k_proc_base(pid_net);
 			fs_load(base_net, "net");
-			k_proc_start(pid_net);
-			printf("init: net started as pid %ld\n", pid_net);
+			// deliberately NOT k_proc_start()ed here -- see the end of
+			// this function.
+			printf("init: net loaded as pid %ld (start deferred)\n", pid_net);
 		}
 	}
 
@@ -619,7 +621,7 @@ void init(void) {
 	// "repl0" by name now, but falls back to the fixed pid
 	// Z_PID_REPL (zrepl.h) if that lookup fails, so it's still worth
 	// landing here predictably. not fatal if this one specifically
-	// fails to start (unlike wm/net above) -- term falls back to
+	// fails to start (unlike wm above) -- term falls back to
 	// local echo without it, see term.c's own header comment.
 	//
 	// this replaces starting portdemo here (see docs/ports.md and
@@ -635,17 +637,33 @@ void init(void) {
 	if (!size_repl) {
 		printf("init: repl binary not found (non-fatal -- term will "
 			"fall back to local echo)\n");
-		return;
+	} else {
+		uint32_t pid_repl = k_proc_create(size_repl, z_proc_stack_size_for("repl"));
+		if (!pid_repl) {
+			printf("init: unable to create repl process (non-fatal)\n");
+		} else {
+			uint32_t base_repl = k_proc_base(pid_repl);
+			fs_load(base_repl, "repl");
+			k_proc_start(pid_repl);
+			printf("init: repl started as pid %ld\n", pid_repl);
+		}
 	}
-	uint32_t pid_repl = k_proc_create(size_repl, z_proc_stack_size_for("repl"));
-	if (!pid_repl) {
-		printf("init: unable to create repl process (non-fatal)\n");
-		return;
+
+	// net is started LAST, once every fs_load() above has finished.
+	// Z_SYS_FS_* syscalls (fsapi.c) and this function's own fs_load()
+	// calls share one non-reentrant FatFs instance and one bit-banged
+	// SD driver (sdmm.c's static sd_port) with no mutual exclusion --
+	// fsapi.h's "Concurrency note" flags exactly this. net's first act
+	// is reading NET.CFG, so starting it before repl's fs_load() was
+	// done interleaved two SD transfers on every boot (ULX3S,
+	// 2026-08-27: net stuck at "initializing", repl loaded from a
+	// corrupted stream, desktop frozen). Keeping create+fs_load above
+	// preserves net's fixed pid slot (Z_PID_NET); only the moment it
+	// begins executing moves.
+	if (pid_net) {
+		k_proc_start(pid_net);
+		printf("init: net started as pid %ld\n", pid_net);
 	}
-	uint32_t base_repl = k_proc_base(pid_repl);
-	fs_load(base_repl, "repl");
-	k_proc_start(pid_repl);
-	printf("init: repl started as pid %ld\n", pid_repl);
 
 }
 
