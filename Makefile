@@ -18,6 +18,7 @@ RTL_PICO = \
 	rtl/ethmac_rmii.v \
 	rtl/debug.v \
 	rtl/csrs.v \
+	rtl/esp32_rxfifo.v \
 	rtl/spibb.v \
 	rtl/gpu/gpu_raster.v \
 	rtl/gpu/gpu_blit.v \

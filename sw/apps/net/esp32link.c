@@ -7,15 +7,13 @@
  * Transport model (fw ver 2): every frame the ESP32 sends is the
  * reply to one frame we sent. RX_POLL is answered with the oldest
  * queued control message (HELLO, LINK, LOG), else a DATA frame, else
- * NOP; DATA is answered with DATA_ACK; STA with STA_ACK. A whole
- * transaction (our frame + the reply) runs with interrupts masked:
- * UART1 is a 16-byte 16550 FIFO read by polling from a time-sliced
- * process, so anything that arrives while another process holds the
- * CPU (up to ~4 ms, i.e. 400 bytes at 1 Mbaud) is lost -- that is how
- * STA_ACK, LINK and ESP32 log lines went missing on 2026-08-27. Same
- * approach as enc28j60.c's maskirq() around SPI transactions; a
- * 1518-byte DATA reply masks for ~16 ms. Timeouts inside the masked
- * window use rdcycle (48 MHz), because the kernel tick is an IRQ.
+ * NOP; DATA is answered with DATA_ACK; STA with STA_ACK. Replies are
+ * read from rtl/esp32_rxfifo.v, a 2 KiB block-RAM FIFO on the UART1
+ * RX pin (the 16550's 16 bytes could not survive a time slice: at
+ * 1 Mbaud, ~4 ms away from the CPU is 400 bytes). So nothing here
+ * masks interrupts, and a reply that comes late is never thrown away:
+ * whatever is in the FIFO is dispatched before the next request goes
+ * out, and the ESP32 always answers in order. TX still uses the 16550.
  */
 
 #include <stdio.h>
@@ -41,14 +39,16 @@
 #define STA_RETRY_GAP   (1 * TICKS_PER_SEC)
 #define STA_MAX_TRIES   5
 
-#define CYC_PER_MS      48000u
-#define REPLY_CYC       (8 * CYC_PER_MS)	/* ESP32 task wake-up + first
-						   byte, normally < 1 ms */
-#define PROBE_CYC       (2 * CYC_PER_MS)	/* while the ESP32 may still be
-						   booting: keep the masked
-						   wait short */
-#define BYTE_CYC        (1 * CYC_PER_MS)	/* between bytes of one frame
-						   (10 us apart on the wire) */
+/* rtl/esp32_rxfifo.v */
+#define reg_esp32rx_count (*(volatile uint32_t*)0xf0000300)
+#define reg_esp32rx_data  (*(volatile uint32_t*)0xf0000304)
+#define reg_esp32rx_flush (*(volatile uint32_t*)0xf0000308)
+
+#define REPLY_TICKS     30	/* ~40 ms for the ESP32 to start answering
+				   (normally < 1 ms; tcpip/wifi can delay it) */
+#define PROBE_TICKS     4	/* while the ESP32 may still be booting */
+#define BYTE_TICKS      3	/* ~4 ms between bytes of one frame (10 us
+				   apart on the wire) */
 
 #define ESP32_CTL_EN    0x1
 #define ESP32_CTL_GPIO0 0x2
@@ -76,13 +76,21 @@ static uint32_t polls_sent;
 static uint32_t polls_unanswered;
 static uint32_t nops_rx;
 static uint32_t logs_rx;
+static uint32_t data_rx;
+static uint32_t late_rx;
+static uint32_t fifo_overruns;
+static uint32_t last_dump_tick;
+#define DUMP_INTERVAL   (15 * TICKS_PER_SEC)
 static uint8_t peer_mac[6];
 
-/* one-slot DATA queue: filled by znic_dispatch(), drained by
- * esp32link_recv() */
-static uint8_t rx_data[ZNIC_MAX_PAYLOAD];
-static uint16_t rx_data_len;
-static int rx_data_pending;
+/* small DATA ring: filled by znic_dispatch(), drained by
+ * esp32link_recv(). More than one slot because late replies drained
+ * ahead of a request can carry several frames. */
+#define RX_RING 4
+static uint8_t rx_data[RX_RING][ZNIC_MAX_PAYLOAD];
+static uint16_t rx_data_len[RX_RING];
+static int rx_head, rx_tail, rx_count;
+#define rx_data_pending (rx_count > 0)
 
 /* wifi bring-up state machine, driven by esp32link_poll_wifi() */
 enum { PH_HELLO = 0, PH_SEND_STA, PH_WAIT_LINK, PH_DONE };
@@ -92,34 +100,35 @@ static int sta_tries;
 static int link_timeout_reported;
 static uint32_t last_probe_tick;
 
-/* ---- cycle counter (immune to maskirq, unlike z_uptime_ticks) ---- */
+/* ---- RX FIFO (BRAM) ---------------------------------------------- */
 
-static inline uint32_t cyc(void)
+static inline uint32_t rx_avail(void)
 {
-	uint32_t x;
-	__asm__ volatile (".option push\n.option arch, +zicsr\n"
-		"rdcycle %0\n.option pop" : "=r"(x));
-	return x;
+	return reg_esp32rx_count & 0xfff;
 }
 
-/* ---- UART1 ------------------------------------------------------- */
-
-static inline int uart1_rx_ready(void)
+static inline int rx_overrun(void)
 {
-	return (reg_uart1_lsr & UART1_LSR_DR) != 0;
+	return (reg_esp32rx_count >> 12) & 1;
 }
 
-/* one byte within `limit` cycles; data-ready is checked before the
- * counter so the fast path is a single MMIO read */
-static int uart1_getc_cyc(uint8_t *c, uint32_t limit)
+/* one byte within `ticks` kernel ticks; data-ready is checked before
+ * the clock so the fast path is a single MMIO read */
+static int rx_getc_ticks(uint8_t *c, uint32_t ticks)
 {
-	uint32_t start = cyc();
+	uint32_t start = 0;
+	int timing = 0;
 	for (;;) {
-		if (uart1_rx_ready()) {
-			*c = (uint8_t)reg_uart1_data;
+		if (rx_avail()) {
+			*c = (uint8_t)reg_esp32rx_data;
 			return 1;
 		}
-		if (cyc() - start >= limit)
+		if (!timing) {
+			start = z_uptime_ticks();
+			timing = 1;
+			continue;
+		}
+		if (z_uptime_ticks() - start >= ticks)
 			return 0;
 	}
 }
@@ -170,20 +179,20 @@ static void znic_tx_raw(uint8_t type, const uint8_t *payload, uint16_t n)
 	uart1_putc((uint8_t)(crc >> 8));
 }
 
-/* one framed message: sync hunt bounded by `first` cycles, then every
- * byte within BYTE_CYC. Returns 1 with rx_msg_* filled. */
+/* one framed message: sync hunt bounded by `first` ticks, then every
+ * byte within BYTE_TICKS. Returns 1 with rx_msg_* filled. */
 static int znic_rx_raw(uint32_t first)
 {
 	uint8_t c;
-	uint32_t start = cyc();
+	uint32_t start = z_uptime_ticks();
 	int seen7e = 0;
 	for (;;) {
-		if (!uart1_rx_ready()) {
-			if (cyc() - start >= first)
+		if (!rx_avail()) {
+			if (z_uptime_ticks() - start >= first)
 				return 0;
 			continue;
 		}
-		c = (uint8_t)reg_uart1_data;
+		c = (uint8_t)reg_esp32rx_data;
 		if (!seen7e) {
 			if (c == ZNIC_SYNC0)
 				seen7e = 1;
@@ -198,7 +207,7 @@ static int znic_rx_raw(uint32_t first)
 
 	uint8_t hdr[4];
 	for (int i = 0; i < 4; i++) {
-		if (!uart1_getc_cyc(&hdr[i], BYTE_CYC))
+		if (!rx_getc_ticks(&hdr[i], BYTE_TICKS))
 			return 0;
 	}
 	uint16_t n = (uint16_t)hdr[2] | ((uint16_t)hdr[3] << 8);
@@ -207,11 +216,11 @@ static int znic_rx_raw(uint32_t first)
 		return 0;
 	}
 	for (uint16_t i = 0; i < n; i++) {
-		if (!uart1_getc_cyc(&rx_msg[i], BYTE_CYC))
+		if (!rx_getc_ticks(&rx_msg[i], BYTE_TICKS))
 			return 0;
 	}
 	uint8_t crcl, crch;
-	if (!uart1_getc_cyc(&crcl, BYTE_CYC) || !uart1_getc_cyc(&crch, BYTE_CYC))
+	if (!rx_getc_ticks(&crcl, BYTE_TICKS) || !rx_getc_ticks(&crch, BYTE_TICKS))
 		return 0;
 	uint16_t got = (uint16_t)crcl | ((uint16_t)crch << 8);
 
@@ -231,18 +240,47 @@ static int znic_rx_raw(uint32_t first)
 	return 1;
 }
 
-/* One transaction, interrupts masked throughout: drop stale RX bytes,
- * send our frame, read exactly one reply. Returns the reply type or
- * -1. Nothing here prints; callers dispatch afterwards. */
-static int znic_xfer(uint8_t type, const uint8_t *payload, uint16_t n,
-	uint32_t first)
+static void znic_dispatch(void);
+
+/* whatever already sits in the FIFO is a late reply to an earlier
+ * request: dispatch it, never drop it */
+static void znic_drain(void)
 {
-	uint32_t old = maskirq(0xFFFFFFFF);
-	reg_uart1_fcr = 0x03;	/* FIFO on + reset RX FIFO */
+	if (rx_overrun()) {
+		fifo_overruns++;
+		reg_esp32rx_flush = 1;	/* stream is broken anyway; clears the flag */
+		return;
+	}
+	while (rx_avail()) {
+		if (!znic_rx_raw(1))
+			break;
+		late_rx++;
+		znic_dispatch();
+	}
+}
+
+/* One transaction: drain late replies, send our frame, read one
+ * reply. With `want` != 0, keep reading (dispatching the others)
+ * until that type shows up. Returns the reply type or -1 on timeout.
+ * Interrupts stay enabled: the BRAM FIFO holds what arrives while
+ * another process runs. */
+static int znic_xfer(uint8_t type, const uint8_t *payload, uint16_t n,
+	uint32_t first, uint8_t want)
+{
+	znic_drain();
 	znic_tx_raw(type, payload, n);
-	int ok = znic_rx_raw(first);
-	maskirq(old);
-	return ok ? (int)rx_msg_type : -1;
+	uint32_t start = z_uptime_ticks();
+	for (;;) {
+		uint32_t left = first - (z_uptime_ticks() - start);
+		if (z_uptime_ticks() - start >= first)
+			return -1;
+		if (!znic_rx_raw(left ? left : 1))
+			return -1;
+		if (!want || rx_msg_type == want)
+			return (int)rx_msg_type;
+		late_rx++;
+		znic_dispatch();	/* a straggler; keep waiting for ours */
+	}
 }
 
 /* apply the reply in rx_msg_* to the link state (prints allowed) */
@@ -309,10 +347,12 @@ static void znic_dispatch(void)
 		break;
 
 	case ZNIC_DATA:
-		if (!rx_data_pending) {
-			memcpy(rx_data, rx_msg, rx_msg_len);
-			rx_data_len = rx_msg_len;
-			rx_data_pending = 1;
+		data_rx++;
+		if (rx_count < RX_RING) {
+			memcpy(rx_data[rx_head], rx_msg, rx_msg_len);
+			rx_data_len[rx_head] = rx_msg_len;
+			rx_head = (rx_head + 1) % RX_RING;
+			rx_count++;
 		} else {
 			data_dropped++;
 		}
@@ -344,7 +384,7 @@ static int znic_send_sta(const char *ssid, const char *psk)
 	sta_acked = 0;
 	sta_sent_tick = z_uptime_ticks();
 	sta_tries++;
-	int t = znic_xfer(ZNIC_STA, body, (uint16_t)(2 + sl + pl), REPLY_CYC);
+	int t = znic_xfer(ZNIC_STA, body, (uint16_t)(2 + sl + pl), REPLY_TICKS, ZNIC_STA_ACK);
 	printf("esp32link: STA sent ssid='%s' (try %d)\n", ssid, sta_tries);
 	if (t >= 0)
 		znic_dispatch();
@@ -372,20 +412,20 @@ bool esp32link_init(const uint8_t mac[6])
 	polls_unanswered = 0;
 	nops_rx = 0;
 	logs_rx = 0;
-	rx_data_pending = 0;
+	data_rx = 0;
+	late_rx = 0;
+	fifo_overruns = 0;
+	last_dump_tick = 0;
+	rx_head = rx_tail = rx_count = 0;
 	phase = PH_HELLO;
 	sta_tries = 0;
 	link_timeout_reported = 0;
 	last_probe_tick = 0;
 
-	/* self-check of the cycle counter the masked timeouts rely on:
-	 * 10 ms of wall clock should be ~480000 cycles at 48 MHz */
-	uint32_t c0 = cyc();
-	delay_ms(10);
-	uint32_t c1 = cyc();
-	printf("esp32link: rdcycle %lu cycles / 10 ms\n", (unsigned long)(c1 - c0));
-
 	uart1_init();
+	reg_esp32rx_flush = 1;
+	printf("esp32link: rx fifo count=%lu (expect 0 after flush)\n",
+		(unsigned long)rx_avail());
 
 	/* gpio0=1, en=0 then en=1 so the ESP32 boots from flash */
 	reg_esp32_ctl = ESP32_CTL_GPIO0;
@@ -483,6 +523,11 @@ bool esp32link_wifi_sta(const char *ssid, const char *psk)
 
 uint16_t esp32link_recv(uint8_t *buf, uint16_t maxlen)
 {
+	/* periodic transport counters (diagnostic) */
+	if (hello_ok && z_uptime_ticks() - last_dump_tick > DUMP_INTERVAL) {
+		last_dump_tick = z_uptime_ticks();
+		esp32link_debug_dump();
+	}
 	if (!rx_data_pending) {
 		/* before HELLO the ESP32 may still be booting: probe gently */
 		if (!hello_ok) {
@@ -491,7 +536,7 @@ uint16_t esp32link_recv(uint8_t *buf, uint16_t maxlen)
 			last_probe_tick = z_uptime_ticks();
 		}
 		polls_sent++;
-		int t = znic_xfer(ZNIC_RX_POLL, 0, 0, hello_ok ? REPLY_CYC : PROBE_CYC);
+		int t = znic_xfer(ZNIC_RX_POLL, 0, 0, hello_ok ? REPLY_TICKS : PROBE_TICKS, 0);
 		if (t < 0) {
 			polls_unanswered++;
 			return 0;
@@ -501,11 +546,12 @@ uint16_t esp32link_recv(uint8_t *buf, uint16_t maxlen)
 	if (!rx_data_pending)
 		return 0;
 
-	uint16_t n = rx_data_len;
+	uint16_t n = rx_data_len[rx_tail];
 	if (n > maxlen)
 		n = maxlen;
-	memcpy(buf, rx_data, n);
-	rx_data_pending = 0;
+	memcpy(buf, rx_data[rx_tail], n);
+	rx_tail = (rx_tail + 1) % RX_RING;
+	rx_count--;
 	return n;
 }
 
@@ -513,14 +559,9 @@ bool esp32link_send(const uint8_t *buf, uint16_t len)
 {
 	if (len > ZNIC_MAX_PAYLOAD)
 		return false;
-	int t = znic_xfer(ZNIC_DATA, buf, len, REPLY_CYC);
+	int t = znic_xfer(ZNIC_DATA, buf, len, REPLY_TICKS, ZNIC_DATA_ACK);
 	if (t < 0) {
 		printf("esp32link: TX not acked\n");
-		return false;
-	}
-	if (t != ZNIC_DATA_ACK) {
-		znic_dispatch();	/* unexpected but real: keep it */
-		printf("esp32link: TX got type 0x%02x instead of DATA_ACK\n", t);
 		return false;
 	}
 	return true;
@@ -530,10 +571,12 @@ void esp32link_debug_dump(void)
 {
 	printf("esp32link: hello=%d(#%d) fw=%u rst=%u sta_ack=%d status=%u link=%d "
 		"rssi=%d phase=%d polls=%lu unanswered=%lu nops=%lu logs=%lu "
-		"crc_err=%lu dropped=%lu ctl=0x%lx\n",
+		"data=%lu late=%lu crc_err=%lu dropped=%lu fifo=%lu ovr=%lu ctl=0x%lx\n",
 		hello_ok, hello_count, peer_fw, peer_rst, sta_acked, sta_status,
 		link_up, last_rssi, phase, (unsigned long)polls_sent,
 		(unsigned long)polls_unanswered, (unsigned long)nops_rx,
-		(unsigned long)logs_rx, (unsigned long)crc_errors,
-		(unsigned long)data_dropped, (unsigned long)reg_esp32_ctl);
+		(unsigned long)logs_rx, (unsigned long)data_rx,
+		(unsigned long)late_rx, (unsigned long)crc_errors,
+		(unsigned long)data_dropped, (unsigned long)rx_avail(),
+		(unsigned long)fifo_overruns, (unsigned long)reg_esp32_ctl);
 }

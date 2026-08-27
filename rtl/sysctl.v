@@ -382,6 +382,7 @@ module sysctl #()
 `endif
 `ifdef ESP32_LINK
 	wire [31:0] wbs_esp32ctl_dat_o;
+	wire [31:0] wbs_esp32rx_dat_o;
 `endif
 	wire [31:0] wbs_spisdcard_dat_o;
 	wire [31:0] wbs_usb0_dat_o;
@@ -484,6 +485,7 @@ module sysctl #()
 `endif
 `ifdef ESP32_LINK
 	wire cs_esp32ctl = ((wbm_adr & 32'hf000_0300) == 32'hf000_0200);
+	wire cs_esp32rx = ((wbm_adr & 32'hf000_0300) == 32'hf000_0300);
 `endif
 
 	assign wbm_dat_i =
@@ -517,6 +519,7 @@ module sysctl #()
 `endif
 `ifdef ESP32_LINK
 		cs_esp32ctl ? wbs_esp32ctl_dat_o :
+		cs_esp32rx ? wbs_esp32rx_dat_o :
 `endif
 `ifdef SPI_SDCARD
 		cs_spisdcard ? wbs_spisdcard_dat_o :
@@ -557,6 +560,7 @@ module sysctl #()
 `endif
 `ifdef ESP32_LINK
 	wire wbs_esp32ctl_ack_o;
+	wire wbs_esp32rx_ack_o;
 `endif
 	wire wbs_spisdcard_ack_o;
 	wire wbs_usb0_ack_o;
@@ -599,6 +603,7 @@ module sysctl #()
 `endif
 `ifdef ESP32_LINK
 		cs_esp32ctl ? wbs_esp32ctl_ack_o :
+		cs_esp32rx ? wbs_esp32rx_ack_o :
 `endif
 `ifdef SPI_SDCARD
 		cs_spisdcard ? wbs_spisdcard_ack_o :
@@ -1164,6 +1169,22 @@ module sysctl #()
 			end
 		end
 	end
+
+	// 2 KiB block-RAM receive FIFO on the same UART1 RX pin (see
+	// rtl/esp32_rxfifo.v): the 16550's 16 bytes are not enough for a
+	// polled, time-sliced reader at 1 Mbaud.
+	esp32_rxfifo #(.CLK_PER_BIT(48), .DEPTH_BITS(11)) wbs_esp32rx_i (
+		.clk(wbm_clk),
+		.rst(wbm_rst),
+		.rx(UART1_RX),
+		.wb_adr_i(wbm_adr),
+		.wb_dat_i(wbm_dat_o),
+		.wb_dat_o(wbs_esp32rx_dat_o),
+		.wb_we_i(wbm_we),
+		.wb_stb_i(wbm_stb && cs_esp32rx),
+		.wb_cyc_i(wbm_cyc && cs_esp32rx),
+		.wb_ack_o(wbs_esp32rx_ack_o)
+	);
 `endif
 
 	// WISHBONE SLAVE: SPI BIT-BANG INTERFACE FOR SDCARD
