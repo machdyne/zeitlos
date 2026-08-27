@@ -64,6 +64,10 @@ static uint8_t last_reason;
 static uint8_t last_scan;
 static uint32_t crc_errors;
 static uint32_t data_dropped;
+static uint32_t polls_sent;
+static uint32_t nops_rx;
+static uint32_t logs_rx;
+static uint8_t peer_rst;
 static uint8_t peer_mac[6];
 
 /* one-slot DATA queue: filled by znic_pump(), drained by
@@ -251,18 +255,21 @@ static int znic_pump(uint32_t ticks)
 		hello_count++;
 		if (rx_msg_len >= 6)
 			memcpy(peer_mac, rx_msg, 6);
+		/* flags byte = esp_reset_reason(): 1 poweron, 3 sw, 4 panic,
+		 * 5 int wdt, 6 task wdt, 9 brownout */
+		peer_rst = (rx_msg_len >= 7) ? rx_msg[6] : 0;
 		if (!hello_ok) {
 			hello_ok = 1;
 			first_hello_tick = z_uptime_ticks();
-			printf("esp32link: HELLO fw=%u mac %02x:%02x:%02x:%02x:%02x:%02x\n",
-				(rx_msg_len >= 8) ? rx_msg[7] : 0,
+			printf("esp32link: HELLO fw=%u rst=%u mac %02x:%02x:%02x:%02x:%02x:%02x\n",
+				(rx_msg_len >= 8) ? rx_msg[7] : 0, peer_rst,
 				peer_mac[0], peer_mac[1], peer_mac[2],
 				peer_mac[3], peer_mac[4], peer_mac[5]);
 		} else if (z_uptime_ticks() - first_hello_tick > HELLO_BURST) {
-			printf("esp32link: HELLO again (#%d, %lus after the first) "
+			printf("esp32link: HELLO again (#%d, %lus after the first, rst=%u) "
 				"-- ESP32 reset? resending STA\n", hello_count,
 				(unsigned long)((z_uptime_ticks() - first_hello_tick)
-					/ TICKS_PER_SEC));
+					/ TICKS_PER_SEC), peer_rst);
 			first_hello_tick = z_uptime_ticks();
 			link_up = 0;
 			sta_acked = 0;
@@ -307,7 +314,16 @@ static int znic_pump(uint32_t ticks)
 		znic_tx(ZNIC_DATA_ACK, 0, 0);
 		break;
 
-	default:	/* NOP, DATA_ACK, unknown */
+	case ZNIC_LOG:	/* one ESP_LOG line from the firmware */
+		logs_rx++;
+		printf("esp32: %.*s\n", (int)rx_msg_len, (const char *)rx_msg);
+		break;
+
+	case ZNIC_NOP:
+		nops_rx++;
+		break;
+
+	default:	/* DATA_ACK, unknown */
 		break;
 	}
 
@@ -327,6 +343,10 @@ bool esp32link_init(const uint8_t mac[6])
 	last_scan = 0;
 	crc_errors = 0;
 	data_dropped = 0;
+	polls_sent = 0;
+	nops_rx = 0;
+	logs_rx = 0;
+	peer_rst = 0;
 	rx_data_pending = 0;
 	phase = PH_HELLO;
 	link_timeout_reported = 0;
@@ -388,6 +408,7 @@ void esp32link_poll_wifi(const char *ssid, const char *psk)
 				z_uptime_ticks() - sta_sent_tick > LINK_TIMEOUT) {
 			printf("esp32link: no LINK %us after STA (still listening)\n",
 				LINK_TIMEOUT / TICKS_PER_SEC);
+			esp32link_debug_dump();
 			link_timeout_reported = 1;
 		}
 		break;
@@ -433,6 +454,7 @@ uint16_t esp32link_recv(uint8_t *buf, uint16_t maxlen)
 	}
 	if (!rx_data_pending) {
 		znic_tx(ZNIC_RX_POLL, 0, 0);
+		polls_sent++;
 		znic_pump(POLL_TIMEOUT);
 	}
 	if (!rx_data_pending)
@@ -465,9 +487,10 @@ bool esp32link_send(const uint8_t *buf, uint16_t len)
 
 void esp32link_debug_dump(void)
 {
-	printf("esp32link: hello=%d(#%d) sta_ack=%d status=%u link=%d rssi=%d "
-		"phase=%d crc_err=%lu dropped=%lu ctl=0x%lx\n",
-		hello_ok, hello_count, sta_acked, sta_status, link_up, last_rssi,
-		phase, (unsigned long)crc_errors, (unsigned long)data_dropped,
-		(unsigned long)reg_esp32_ctl);
+	printf("esp32link: hello=%d(#%d) rst=%u sta_ack=%d status=%u link=%d rssi=%d "
+		"phase=%d polls=%lu nops=%lu logs=%lu crc_err=%lu dropped=%lu ctl=0x%lx\n",
+		hello_ok, hello_count, peer_rst, sta_acked, sta_status, link_up,
+		last_rssi, phase, (unsigned long)polls_sent, (unsigned long)nops_rx,
+		(unsigned long)logs_rx, (unsigned long)crc_errors,
+		(unsigned long)data_dropped, (unsigned long)reg_esp32_ctl);
 }

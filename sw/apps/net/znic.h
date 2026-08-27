@@ -25,6 +25,7 @@
 #define ZNIC_STA       0x20
 #define ZNIC_STA_ACK   0x21
 #define ZNIC_DATA_ACK  0x22
+#define ZNIC_LOG       0x30	/* ESP32 -> Z: one ESP_LOG line (text) */
 
 #define ZNIC_STA_OK    0
 
