@@ -8,7 +8,7 @@ LDSCRIPT = ../common/riscv-os.ld
 
 OBJS = kernel.o kruntime.o mem.o zar.o \
 	fs/fs.o fs/fatfs/sdmm.o fs/fatfs/ff.o \
-	uart.o hid.o sh.o xfer.o ui.o msg.o pidreg.o fsapi.o procapi.o zobj.o zstream.o zdns.o zsoc.o logo.o
+	uart.o hid.o sh.o xfer.o xmodem.o ui.o msg.o pidreg.o fsapi.o procapi.o zobj.o zstream.o zdns.o zsoc.o logo.o
 
 # kernel.o's recipe below builds every object in one go (they're not
 # independent processes, and mostly don't need to be) -- but for
@@ -21,7 +21,7 @@ OBJS = kernel.o kruntime.o mem.o zar.o \
 # zstream/TFTP work -- see docs/networking.md.
 KSRCS = kernel.c kruntime.c mem.c \
 	fs/fs.c fs/fatfs/sdmm.c fs/fatfs/ff.c \
-	uart.c hid.c sh.c xfer.c ui.c msg.c pidreg.c fsapi.c procapi.c logo.c \
+	uart.c hid.c sh.c xfer.c xmodem.c ui.c msg.c pidreg.c fsapi.c procapi.c logo.c \
 	../common/zobj.c ../common/zstream.c ../common/zdns.c ../common/zsoc.c
 
 kernel: kernel.elf kernel.bin
@@ -35,6 +35,7 @@ kernel.o: $(KSRCS)
 	$(CC) $(CFLAGS) -c fs/fatfs/ff.c -o fs/fatfs/ff.o
 	$(CC) $(CFLAGS) -c sh.c -o sh.o
 	$(CC) $(CFLAGS) -c xfer.c -o xfer.o
+	$(CC) $(CFLAGS) -c xmodem.c -o xmodem.o
 	$(CC) $(CFLAGS) -c ui.c -o ui.o
 	$(CC) $(CFLAGS) -c uart.c -o uart.o
 	$(CC) $(CFLAGS) -c hid.c -o hid.o

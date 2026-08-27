@@ -25,6 +25,7 @@
 #include "fs/fatfs/ff.h"
 #include "msg.h"
 #include "pidreg.h"
+#include "xmodem.h"
 
 // --
 
@@ -64,6 +65,14 @@ void screenshot(void);
 // giving up. Checked once per tick (not in a tight sub-tick loop) so
 // this doesn't hammer the card with repeated f_open() attempts.
 #define AUTOINIT_TIMEOUT_TICKS (3 * 732)   // ~3 seconds
+
+// Staging buffer for a serial upload (`xf`, `xmf`). The whole file is
+// received into RAM and only then written out, because neither
+// protocol knows the length up front and both can still fail partway
+// through -- staging keeps a failed transfer from leaving a truncated
+// file on the card. Allocated per transfer and freed straight after,
+// so it costs nothing when no upload is in progress.
+#define UPLOAD_MAX_SIZE (1024 * 256)   // 256K max file size for now
 
 // -- core app source selection --
 //
@@ -419,7 +428,7 @@ void sh(void) {
 			fs_unlink(arg);
 
 			uint32_t bytes_received, bytes_written;
-			void *tmp = k_mem_alloc(1024*256); // 256K max file size for now
+			void *tmp = k_mem_alloc(UPLOAD_MAX_SIZE);
 			uint32_t addr = (uint32_t)(uintptr_t)tmp;
 			printf("uploading to file %s.\n", arg);
 			printf("xfer addr 0x%lx; ready to receive (press D to cancel) ...\n",
@@ -436,6 +445,58 @@ void sh(void) {
 				else
 					printf("failed.\n");
 			}
+		}
+
+		// RECEIVE TO FILE VIA XMODEM
+		//
+		// Same shape as `xf` above, different protocol: this one talks
+		// to any ordinary terminal program's built-in send, with no
+		// host-side tooling. See sw/os/xmodem.h for when to prefer
+		// which -- short version, `xf` for executables (exact length),
+		// `xmf` for everything else and for machines where you only
+		// have a serial terminal.
+		else if (!strncmp(buffer, "xmf", cmdlen)) {
+
+			arg = get_arg(buffer, 1);
+			if (arg == NULL) {
+				printf("error: no file specified\n");
+				continue;
+			}
+
+			void *tmp = k_mem_alloc(UPLOAD_MAX_SIZE);
+			if (tmp == NULL) {
+				printf("error: out of memory\n");
+				continue;
+			}
+
+			printf("uploading to file %s via xmodem.\n", arg);
+			printf("start your terminal's xmodem send now; waiting up to "
+				"3 minutes ('C' below is the CRC request) ...\n");
+			fflush(stdout);
+
+			xmodem_result_t xres;
+			uint32_t bytes_received = xmodem_recv(
+				(uint32_t)(uintptr_t)tmp, UPLOAD_MAX_SIZE, &xres);
+
+			if (xres != XMODEM_OK) {
+				printf("\nxmodem: %s.\n", xmodem_strerror(xres));
+				k_mem_free(tmp);
+				continue;
+			}
+
+			printf("\nreceived %lu bytes.\n", (unsigned long)bytes_received);
+			printf("writing to file %s ... ", arg);
+			fflush(stdout);
+
+			// FA_CREATE_ALWAYS truncates, so no fs_unlink() needed
+			uint32_t bytes_written =
+				fs_write_file(arg, tmp, bytes_received);
+			k_mem_free(tmp);
+
+			if (bytes_written == bytes_received)
+				printf("done.\n");
+			else
+				printf("failed.\n");
 		}
 
 		// GET FILE VIA TFTP (uses the 'net' app -- see sw/common/znet.h)
@@ -1376,6 +1437,7 @@ void sh_help(void) {
 	printf(" hd <addr>         hex dump memory\n");
 	printf(" xa <addr>         receive to addr via xfer\n");
 	printf(" xf <file>         receive to file via xfer\n");
+	printf(" xmf <file>        receive to file via xmodem\n");
 	printf(" tget <ip-or-host> <remote-file> [local-file]  fetch a file via tftp (needs `run net`)\n");
 	printf(" tput <ip-or-host> <local-file> [remote-file]  send a file via tftp (needs `run net`)\n");
 	printf(" run <file>        create a new process\n");
