@@ -212,7 +212,15 @@ z_obj_t *k_video_set_mode(z_obj_t *args) {
 // is written back into args->val.uint32 (in/out parameter), while the
 // z_ok/z_fail return value is just success/fail -- see zeitlos.c's
 // z_proc_run() wrapper for the caller side.
-#define Z_PROC_RUN_NAME_MAX 32
+// Long enough for a full PATH, not just a bare program name. The file
+// browser launches an executable the user double-clicked, which may
+// be several directories deep, and fs_exec_info_any() (sw/os/fs/fs.c)
+// resolves a path perfectly well -- but a name longer than this is
+// silently TRUNCATED here, which turns into a confusing "no such
+// file" rather than an error about length. 64 matches
+// Z_FLIST_PATH_MAX (sw/common/zflist.h), which is what the browser
+// can produce.
+#define Z_PROC_RUN_NAME_MAX 64
 z_obj_t *k_proc_run(z_obj_t *args) {
 
 	if (!args) return (&z_fail);
@@ -626,6 +634,16 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 	// sooner than intended.
 	if ((irqs & (1 << Z_IRQ_KTIMER)) != 0) {
 		++z_kernel_ticks;
+
+		// Charge this tick to whoever was running when it fired.
+		//
+		// z_pid is the interrupted process (the syscall path above
+		// has already returned by here, so this is genuinely an
+		// interrupt of running code, not of a kernel call made on
+		// someone's behalf). Sampled accounting: one increment per
+		// tick, no timers started or stopped, and the error is
+		// bounded by the tick period.
+		if (z_pid < Z_PROCS_MAX) ++z_procs[z_pid].cpu_ticks;
 	}
 
 	// handle interrupts
@@ -1025,9 +1043,14 @@ z_rv k_proc_dump(void) {
 		else if (z_procs[i].flags & Z_PROC_FLAG_BLOCKED) state = "blk";
 		else if (!(z_procs[i].flags & Z_PROC_FLAG_ACTIVE)) state = "---";
 
-		printf(" pid: %2i %s base: %.8lx size: %.8lx pc %.8lx sp: %.8lx flags: %.8lx\n",
+		// cpu is the process's LIFETIME tick count, not a
+		// percentage -- `ps` is a snapshot and has no second sample
+		// to difference against. sw/apps/info takes two and reports
+		// a real percentage; see z_proc_info_t in zproc.h.
+		printf(" pid: %2i %s base: %.8lx size: %.8lx pc %.8lx sp: %.8lx flags: %.8lx cpu: %lu\n",
 			i, state, z_procs[i].base, z_procs[i].size,
-			z_procs[i].regs[0], z_procs[i].regs[2], z_procs[i].flags);
+			z_procs[i].regs[0], z_procs[i].regs[2], z_procs[i].flags,
+			(unsigned long)z_procs[i].cpu_ticks);
 	}
 	return Z_OK;
 }

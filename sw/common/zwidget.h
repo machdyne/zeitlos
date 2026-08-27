@@ -141,6 +141,27 @@ typedef struct {
 	// z_widget_mouse().
 	uint8_t		last_buttons;
 
+	// index of the keyboard-focused widget, or -1 for none.
+	//
+	// Keyboard-only operation is a first-class case in this system
+	// (see docs/window_manager.md), and a set of buttons you can only
+	// reach with a pointer is a dead end for anyone without one. The
+	// focused widget draws a ring and is what z_widget_key_activate()
+	// acts on.
+	//
+	// -1 by default, so an app that never calls the focus functions
+	// below behaves exactly as it did before they existed -- nothing
+	// draws a ring and nothing changes.
+	int			focused;
+
+	// Set once this set has ever had keyboard focus. Until then the
+	// focus ring is not drawn OR erased, so a set that only uses the
+	// pointer is left exactly as it was before focus existed --
+	// which matters for a grid whose widgets abut, where erasing a
+	// ring would rub out the neighbour's frame. A set that uses
+	// focus needs at least 2px between widgets.
+	bool		focus_used;
+
 } z_widget_set_t;
 
 // -- ready-made 8x8 patterns, MSB-first rows --
@@ -204,5 +225,162 @@ int z_widget_group_selection(const z_widget_set_t *set, uint8_t group);
 // everything it changed dirty but does not draw -- pair it with
 // z_widget_draw_all(set, false) to get the repaint.
 void z_widget_select(z_widget_set_t *set, int idx);
+
+// -- keyboard focus --
+//
+// An app drives these from its own key handler; the toolkit has no
+// idea which key means "next". See sw/apps/files for the pattern,
+// including how a set of buttons shares one tab order with a widget
+// that isn't part of the set at all.
+
+// Moves focus to the next (or previous) enabled widget, wrapping.
+// From -1, forward lands on the first and backward on the last.
+//
+// Returns the new focus index. Marks what changed dirty; pair with
+// z_widget_draw_all(set, false).
+int z_widget_focus_next(z_widget_set_t *set, bool backward);
+
+// Sets focus directly, or clears it with -1.
+void z_widget_focus_set(z_widget_set_t *set, int idx);
+
+// Activates the focused widget, exactly as a click on it would --
+// toggles a toggle, selects a radio member, reports a button.
+// Returns the activated index, or -1 if nothing has focus.
+//
+// The caller decides which keys reach this. Enter and Space are the
+// conventional pair.
+int z_widget_key_activate(z_widget_set_t *set);
+
+// ---------------------------------------------------------------
+// scrollbars
+// ---------------------------------------------------------------
+
+/*
+ * A scrollbar is its own type rather than another z_widget_type_t,
+ * for two concrete reasons rather than tidiness:
+ *
+ *   - RANGE. z_widget_t's value/vmin/vmax are int16_t, which is
+ *     plenty for a slider over a handful of settings and not enough
+ *     here. A 32KB text buffer of short lines wraps to more lines
+ *     than an int16_t can index, and a scrollbar that silently wraps
+ *     around at 32767 is a genuinely nasty bug to find. These are
+ *     int32_t.
+ *
+ *   - INTERACTION. z_widget_mouse() answers "which widget did this
+ *     activate", which is the right question for buttons and
+ *     swatches and the wrong one for a scrollbar: what a caller needs
+ *     to know is whether the VALUE changed, and a scrollbar's hit
+ *     regions (the thumb, and the trough either side of it) do
+ *     different things to it. Squeezing that into the activation-
+ *     index model would mean the caller re-deriving from coordinates
+ *     what this already knows.
+ *
+ * A scrollbar owns no memory and allocates nothing. It draws through
+ * the blitter like everything else here.
+ *
+ * Visually it is deliberately minimal: a thumb, and nothing else. No
+ * step arrows (there is no scroll wheel in this system either, so the
+ * mouse-only granularity is a page -- but arrows are three extra hit
+ * regions and a pair of drawn triangles for something the keyboard
+ * already does better), and no trough frame. When there is nothing to
+ * scroll, it draws NOTHING rather than a full-length thumb, which is
+ * both quieter and unambiguous.
+ *
+ * The horizontal orientation is fully implemented even though the
+ * first caller (sw/apps/text) only uses the vertical one -- see
+ * sw/apps/draw's own "no scrolling yet" note for the app that wants
+ * both, and docs/widgets.md.
+ */
+
+typedef enum {
+	Z_SB_VERT = 0,
+	Z_SB_HORZ,
+} z_sb_orient_t;
+
+// Thickness across the short axis -- the width of a vertical
+// scrollbar, the height of a horizontal one. A click target rather
+// than a visual weight: the thumb itself is drawn narrower than this
+// (see z_scrollbar_draw()), and the rest is slack so the bar is
+// grabbable without careful aim.
+#define Z_SB_THICK   12
+
+typedef struct {
+
+	const z_win_t	*win;
+	z_sb_orient_t	orient;
+
+	// content-relative position, and length along the LONG axis --
+	// the short axis is always Z_SB_THICK, so there's no way to
+	// express a scrollbar of the wrong thickness.
+	//
+	// On a RESIZABLE window, a scrollbar down the right edge must
+	// stop short of the resize grip or it swallows it and the window
+	// can't be resized any more:
+	//
+	//     z_scrollbar_set_geom(&sb, cw - Z_SB_THICK, 0,
+	//         ch - Z_WIN_GRIP_INSET);
+	//
+	// See Z_WIN_GRIP_INSET in zwm.h. A fixed-size window has no grip
+	// and can use the full height.
+	int16_t		x, y, len;
+
+	// the scrolled document. `total` is its full extent, `page` how
+	// much of it is visible at once, both in whatever unit the
+	// caller likes (text uses wrapped lines; a picture would use
+	// pixels). value is the first visible unit, clamped to
+	// [0, total - page].
+	int32_t		total, page, value;
+
+	// -- interaction state, owned by z_scrollbar_mouse() --
+	bool		dragging;
+	// where in the thumb the pointer grabbed it, in pixels along the
+	// long axis. Held so the thumb doesn't jump to center itself
+	// under the cursor on the first pixel of movement -- the same
+	// reasoning wm.c's own drag_off_x/resize_off_x have.
+	int32_t		drag_grab;
+	uint8_t		last_buttons;
+
+	bool		dirty;
+
+} z_scrollbar_t;
+
+// binds a scrollbar to a window. Geometry and range are set
+// separately (below) since both typically change on a resize while
+// this doesn't.
+void z_scrollbar_init(z_scrollbar_t *sb, const z_win_t *win, z_sb_orient_t o);
+
+// content-relative position and length along the long axis. Call from
+// the app's own layout() on every resize.
+void z_scrollbar_set_geom(z_scrollbar_t *sb, int x, int y, int len);
+
+// sets the document extent and visible amount, re-clamping value to
+// suit. Returns true if value had to change as a result -- which the
+// caller needs to know, since it means the view has to be redrawn as
+// well as the scrollbar (e.g. deleting the last page of a document
+// scrolls the view up whether the user asked or not).
+bool z_scrollbar_set_range(z_scrollbar_t *sb, int32_t total, int32_t page);
+
+// sets the scroll position, clamped. Returns true if it changed.
+bool z_scrollbar_set_value(z_scrollbar_t *sb, int32_t v);
+
+// draws the scrollbar if it's dirty, or unconditionally with force --
+// same contract, and the same reasoning, as z_widget_draw_all().
+void z_scrollbar_draw(z_scrollbar_t *sb, bool force);
+
+// feeds one pointer sample in (content-relative, `buttons` from
+// Z_WM_UNPACK_MOUSE_BUTTONS). Returns true if the value changed, so
+// the caller can redraw its view. Repaints the scrollbar itself as
+// needed.
+//
+// Note this returns false for a click that HIT the scrollbar but
+// didn't move it (pressing the thumb, say). Use
+// z_scrollbar_has_pointer() below to tell "not mine" from "mine, no
+// change" -- a caller that treats a returned false as "not mine"
+// would start selecting text the moment the user grabbed the thumb.
+bool z_scrollbar_mouse(z_scrollbar_t *sb, int cx, int cy, uint8_t buttons);
+
+// true while this scrollbar owns the pointer (a drag it started is
+// still in progress), or if the given point is inside its rect.
+bool z_scrollbar_has_pointer(const z_scrollbar_t *sb, int cx, int cy);
 
 #endif

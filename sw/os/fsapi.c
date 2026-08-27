@@ -170,6 +170,17 @@ static int z_fs_alloc_handle(void) {
 	return -1;
 }
 
+int k_fs_open_count(void) {
+
+	int n = 0;
+
+	for (int i = 0; i < Z_FS_MAX_OPEN; i++)
+		if (z_fs_handles[i].used) n++;
+
+	return n;
+
+}
+
 z_obj_t *k_fs_open_write(z_obj_t *args) {
 
 	z_fs_open_args_t *a = (z_fs_open_args_t *)args;
@@ -315,6 +326,17 @@ z_obj_t *k_fs_list(z_obj_t *args) {
 	size_t prefix_len = strlen(prefix);
 
 	uint32_t max_entries = a->max_entries ? a->max_entries : 0xFFFFFFFFu;
+
+	// A `types` buffer is sized by the caller in units of entries,
+	// and the ONLY thing that tells us how many that is, is
+	// max_entries. Without one, the entry count is bounded solely by
+	// out_cap -- a 4KB name buffer holds several hundred short names,
+	// so writing a type byte per entry into a buffer whose length we
+	// were never told is a straightforward overrun of app memory.
+	// Refuse rather than guess: zfs.h states the requirement, and a
+	// caller that ignored it gets a clean failure instead of silent
+	// corruption somewhere else in its address space.
+	if (a->types && !a->max_entries) return (&z_fail);
 	uint32_t written = 0;
 	uint32_t count = 0;
 
@@ -340,6 +362,13 @@ z_obj_t *k_fs_list(z_obj_t *args) {
 			a->truncated = 1;
 			break;
 		}
+
+		// Optional -- see Z_FS_TYPE_* in zfs.h for why this is a
+		// separate buffer rather than a decoration on the name. NULL
+		// (every caller that predates it) skips this entirely.
+		if (a->types)
+			a->types[count] = (fno.fattrib & AM_DIR)
+				? Z_FS_TYPE_DIR : Z_FS_TYPE_FILE;
 
 		memcpy(a->out + written, full, flen + 1); // +1: include the NUL separator
 		written += (uint32_t)(flen + 1);
@@ -439,8 +468,8 @@ z_obj_t *k_fs_df(z_obj_t *args) {
 
 	if (!a) return (&z_fail);
 
-	a->total_kb = fs_total();
-	a->free_kb = fs_free();
+	// One FAT scan, not two -- see fs_df_kb() in sw/os/fs/fs.c.
+	fs_df_kb(&a->total_kb, &a->free_kb);
 
 	return (&z_ok);
 

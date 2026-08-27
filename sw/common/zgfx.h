@@ -231,6 +231,26 @@ bool z_fb_hw_blit_mem_available(void);
 void z_fb_hw_blit_vram(int src_x, int src_y,
 	int dst_x, int dst_y, int w, int h);
 
+// Waits until BOTH graphics engines have finished everything already
+// submitted -- the line rasterizer's FIFO is empty and the blitter is
+// idle.
+//
+// Normally nobody needs this. z_fb_hw_line() only waits for FIFO
+// SPACE and returns with the line still queued, which is exactly what
+// makes it fast, and the pixels landing a moment later is invisible.
+//
+// It matters when something is about to change what those pixels mean.
+// The case this was added for: an app draws through the rasterizer,
+// the app is killed, and wm repairs the screen region it occupied --
+// but the dead app's queued lines are still in the FIFO and drain
+// AFTERWARDS, painting over the repair. The result is a window that
+// closes and leaves a scribble behind, which looks like wm failing to
+// clean up rather than a queue that outlived its owner.
+//
+// So: call this before any repair that follows a process going away.
+// It is a wait, so don't put it in a draw loop.
+void z_fb_hw_sync(void);
+
 // loads a font's glyph data into hardware glyph memory (rtl/mem/glyph.v)
 // for use by the hardware-accelerated draw path. Call once, before the
 // first draw using that font. Always declared/callable regardless of

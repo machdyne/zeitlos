@@ -56,7 +56,30 @@ typedef struct {
 	uint32_t	count;		// OUT: how many entries were actually written
 	uint32_t	truncated;	// OUT: 1 if out_cap or max_entries cut the
 							// listing short, 0 if it's complete
+	uint8_t		*types;		// OUT: optional, may be NULL -- one
+							// Z_FS_TYPE_* byte per entry, in the same
+							// order as `out`. Must have room for
+							// max_entries bytes when non-NULL.
 } z_fs_list_args_t;
+
+/*
+ * Entry types for z_fs_list_args_t.types above.
+ *
+ * Added because a file browser has to draw a directory differently
+ * from a file and, more importantly, has to DO something different
+ * when one is picked -- and the packed name list alone can't say
+ * which is which. FatFs knows (FILINFO.fattrib & AM_DIR) and was
+ * simply throwing the answer away.
+ *
+ * A separate optional out-buffer rather than, say, a trailing '/' on
+ * directory names: the names in `out` are already documented as
+ * directly usable with fs_size()/fs_mallocfile()/fs_unlink(), and
+ * decorating them would quietly break every existing caller
+ * (sw/apps/repl's `ls`) at the same time. A NULL `types` behaves
+ * exactly as this syscall always has.
+ */
+#define Z_FS_TYPE_FILE   0
+#define Z_FS_TYPE_DIR    1
 
 /*
  * Chunked file I/O -- FS_OPEN_READ/FS_OPEN_WRITE/FS_READ_CHUNK/

@@ -118,6 +118,16 @@ z_obj_t *k_fs_write(z_obj_t *args);
 z_obj_t *k_fs_unlink(z_obj_t *args);
 z_obj_t *k_fs_list(z_obj_t *args);
 
+// How many chunked-I/O handles are currently open, across all
+// processes. Zero means nothing is mid-read or mid-write.
+//
+// Exists for sh.c's `mount`: remounting a volume out from under an
+// open FIL leaves that handle pointing at cluster chains from the old
+// mount, and the next write through it corrupts the card. Nothing
+// else in this system had a reason to ask, because nothing else
+// re-mounts.
+int k_fs_open_count(void);
+
 // chunked file I/O -- see zfs.h's own comment for the full design
 // writeup (why a kernel-side handle table, ownership-by-pid, the
 // known limitation on a crashed process's handles).

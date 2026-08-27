@@ -25,7 +25,10 @@ CFLAGS = --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) -DZ_GFX_HW_BLIT $
 LDFLAGS = -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS)
 LDSCRIPT = ../../common/riscv-app.ld
 
-OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o draw_icons.o draw.o
+# zfsapp.o/zflist.o/zdialog.o are the file dialogs (new/open/save) --
+# zflist.o needs zfsapp.o, and draw.c needs both plus zdialog.o.
+OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o \
+	zfsapp.o zflist.o zdialog.o draw_icons.o draw.o
 
 draw: draw.elf draw.bin
 
@@ -46,6 +49,15 @@ zwin.o:
 
 zwidget.o:
 	$(CC) $(CFLAGS) -c ../../common/zwidget.c -o zwidget.o
+
+zfsapp.o:
+	$(CC) $(CFLAGS) -c ../../common/zfsapp.c -o zfsapp.o
+
+zflist.o:
+	$(CC) $(CFLAGS) -c ../../common/zflist.c -o zflist.o
+
+zdialog.o:
+	$(CC) $(CFLAGS) -c ../../common/zdialog.c -o zdialog.o
 
 # draw_icons.c/.h are hand-edited (binary literals with an ASCII
 # picture of each row in the comment), not generated -- see

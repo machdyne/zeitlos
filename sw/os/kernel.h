@@ -3,6 +3,7 @@
 
 #include <string.h>
 #include "../common/zeitlos.h"
+#include "../common/zproc.h"
 
 // z_rv, Z_OK and Z_FAIL are defined in ../common/zmsg.h (pulled in via
 // zeitlos.h above) since apps need them too, not just the kernel.
@@ -25,31 +26,35 @@ typedef struct {
 	// set. See k_proc_wait() in kernel.c.
 	uint32_t		wake_tick;
 
+	// KTIMER ticks this process has been the RUNNING one for, since
+	// it was created. Free-running; a reader samples it twice and
+	// divides the difference by the elapsed ticks to get a
+	// percentage over that interval.
+	//
+	// Counted in the KTIMER interrupt handler, which fires at
+	// Z_TICK_HZ (~732Hz) and knows which process it interrupted --
+	// that is the whole measurement, and it costs one increment per
+	// tick. There is no finer resolution available: a process that
+	// starts and finishes work entirely between two ticks is
+	// invisible, which is the standard limitation of sampled
+	// accounting and worth remembering before trusting a single
+	// short interval.
+	//
+	// This is the only CPU-time measurement in the system. Before it,
+	// the closest thing available was counting runnable processes
+	// (Z_PROC_FLAG_BLOCKED), which says how many things WANT the CPU
+	// but nothing about who is getting it.
+	uint32_t		cpu_ticks;
+
 	uint32_t		regs[32];
 
 } z_proc;
 
-#define Z_PROC_FLAG_ACTIVE	0x000000001
-#define Z_PROC_FLAG_DIE		0x000000002
-
-// Process is waiting for something and must NOT be given a timeslice.
-//
-// Without this, waiting is spelled as a spin: z_msg_wait() in
-// zeitlos.c loops on z_msg_read() until something arrives, so a
-// process with an empty mailbox burns its entire ~1.37ms turn asking
-// "anything yet?" a few thousand times. The scheduler cannot tell that
-// apart from real work, so with wm + net + repl idle, a busy
-// foreground app still gets only ~1/4 of the CPU -- and adding a fifth
-// process slows everything down even if it does nothing.
-//
-// A blocked process is skipped entirely by the round-robin scan, and
-// becomes runnable again via either:
-//   - k_msg_send() delivering a message to it (immediate), or
-//   - the KTIMER sweep, once z_kernel_ticks reaches wake_tick.
-//
-// ACTIVE stays set while blocked. BLOCKED is about schedulability, not
-// liveness, so k_proc_kill() and the DIE path are unaffected.
-#define Z_PROC_FLAG_BLOCKED	0x000000004
+// Z_PROC_FLAG_ACTIVE / _DIE / _BLOCKED are defined in
+// ../common/zproc.h, included above -- they are reported to apps
+// through z_proc_info_t, so they cannot live in this header, which
+// app code must not include. See that file for the full writeup on
+// what BLOCKED means for the scheduler.
 
 // Scheduler helpers -- k_proc_unblock() is called from msg.c on every
 // delivery, so it has to be visible outside kernel.c.

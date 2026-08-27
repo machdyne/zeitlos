@@ -14,9 +14,15 @@
  * comment for how to wire a new icon in after regenerating this file.
  */
 
+extern const uint8_t z_icon_calc_data[32 * 4];
 extern const uint8_t z_icon_draw_data[32 * 4];
+extern const uint8_t z_icon_files_data[32 * 4];
 extern const uint8_t z_icon_gpu3d_data[32 * 4];
+extern const uint8_t z_icon_info_data[32 * 4];
+extern const uint8_t z_icon_read_data[32 * 4];
+extern const uint8_t z_icon_settings_data[32 * 4];
 extern const uint8_t z_icon_space3d_data[32 * 4];
 extern const uint8_t z_icon_term_data[32 * 4];
+extern const uint8_t z_icon_text_data[32 * 4];
 
 #endif

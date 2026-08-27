@@ -73,10 +73,34 @@ z_obj_t z_obj_str(const char *s) {
     }
 }
 
+// z_obj_list()/z_obj_map(): every allocation here is checked.
+//
+// They previously were not: `malloc()` was called and the result
+// written through immediately (`t->len = len;`). On a heap that had
+// run out that is a store to address 0, which on this hardware is not
+// a fault you can catch -- the machine simply goes down.
+//
+// That turned every heap leak anywhere in a process into an
+// unexplained crash somewhere else entirely. The one that surfaced it
+// was wm's own window-move notification (see send_win_rect() in
+// sw/apps/wm/wm.c), which leaked ~384 bytes per move against an 8KB
+// stack-and-heap budget and took the machine down after roughly
+// twenty drags -- a symptom that pointed nowhere near either the leak
+// or this function.
+//
+// Returning Z_NONE instead means the caller gets an object whose type
+// says it is empty. z_map_set() already refuses anything that isn't a
+// live Z_MAP, so a failed allocation now degrades to a message with a
+// missing payload -- which the receiving side must already tolerate,
+// since every reader in this codebase checks the type of what it got.
 z_obj_t z_obj_list(uint32_t len) {
     z_obj_table_t *t = malloc(sizeof(z_obj_table_t));
+    if (!t) return z_obj_none();
+
+    t->a = calloc(len ? len : 1, sizeof(z_obj_t));
+    if (!t->a) { free(t); return z_obj_none(); }
+
     t->len = len;
-    t->a = calloc(len, sizeof(z_obj_t));
     t->b = NULL;
 
     z_obj_t obj = { .type = Z_LIST };
@@ -86,9 +110,23 @@ z_obj_t z_obj_list(uint32_t len) {
 
 z_obj_t z_obj_map(uint32_t len) {
     z_obj_table_t *t = malloc(sizeof(z_obj_table_t));
+    if (!t) return z_obj_none();
+
+    // calloc(0, ...) may legitimately return NULL, which is not a
+    // failure -- ask for at least one element so the check below
+    // means what it says.
+    t->a = calloc(len ? len : 1, sizeof(z_obj_t)); // keys
+    t->b = calloc(len ? len : 1, sizeof(z_obj_t)); // values
+
+    if (!t->a || !t->b) {
+        if (t->a) free(t->a);
+        if (t->b) free(t->b);
+        free(t);
+        return z_obj_none();
+    }
+
     t->len = len;
-    t->a = calloc(len, sizeof(z_obj_t)); // keys
-    t->b = calloc(len, sizeof(z_obj_t)); // values
+
     z_obj_t obj = { .type = Z_MAP };
     obj.val.ptr = t;
     return obj;

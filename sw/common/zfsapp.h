@@ -80,6 +80,34 @@ int fs_unlink(char *filename);
 // string the same way -- see zapi.c's own zapi_ls()).
 char **fs_list(const char *path, uint32_t max_entries, uint32_t *count);
 
+// Same listing, into storage the CALLER already owns -- no malloc()
+// anywhere, and no ownership to hand back.
+//
+// `buf` receives the entries packed as NUL-terminated strings
+// back-to-back (exactly the wire format z_fs_list_args_t.out
+// describes -- walk it with strlen()+1), each already a full
+// "/"-prefixed path just like fs_list()'s. `types`, if non-NULL,
+// receives one Z_FS_TYPE_* byte per entry, in the same order, and
+// MUST have room for max_entries of them -- which is why a non-NULL
+// `types` with max_entries == 0 is rejected outright rather than
+// guessed at (see zfs.h and k_fs_list()).
+//
+// `*count` gets the number of entries; `*truncated` (either pointer
+// may be NULL) gets 1 if buf_cap or max_entries cut the listing
+// short. Returns 1 on success, 0 on failure -- this file's usual
+// convention.
+//
+// Prefer this over fs_list() in anything long-lived or repeated. An
+// app gets its stack and heap out of one 16KB allocation
+// (Z_PROC_STACK_SIZE_DEFAULT, sw/os/kernel.h), and fs_list() takes
+// two mallocs plus one per entry, then hands the caller the job of
+// freeing all of them -- fine once at startup, needlessly risky for
+// something a file browser does every time the user opens a folder.
+// sw/common/zflist.c uses this one.
+int fs_list_into(const char *path, char *buf, uint32_t buf_cap,
+	uint8_t *types, uint32_t max_entries, uint32_t *count,
+	uint32_t *truncated);
+
 // -- chunked file I/O -- for a transfer too large to hold entirely in
 // memory at once (tget/tput, docs/scheme_api.md "Networking") -- the
 // three functions above load/hold a whole file; these move it one

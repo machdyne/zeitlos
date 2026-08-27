@@ -29,6 +29,7 @@
 #include "kernel.h"
 #include "../common/zeitlos.h"
 #include "../common/zproc.h"
+#include "pidreg.h"
 #include "procapi.h"
 
 // Walks the whole fixed-size process table and copies out every slot
@@ -76,6 +77,20 @@ z_obj_t *k_proc_list(z_obj_t *args) {
 		a->out[n].pc    = z_procs[i].regs[0];
 		a->out[n].sp    = z_procs[i].regs[2];
 		a->out[n].flags = z_procs[i].flags;
+		a->out[n].cpu_ticks = z_procs[i].cpu_ticks;
+
+		// Name from the pid registry, or "" for a process that never
+		// registered one -- see z_proc_info_t's own comment in
+		// sw/common/zproc.h.
+		{
+			const char *nm = k_pidreg_name_for(i);
+			uint32_t c = 0;
+			if (nm)
+				for (; c < Z_PROC_NAME_MAX - 1 && nm[c]; c++)
+					a->out[n].name[c] = nm[c];
+			a->out[n].name[c] = 0;
+		}
+
 		n++;
 
 	}

@@ -6,6 +6,12 @@ all:
 	cd wm && make
 	cd hello_win && make
 	cd draw && make
+	cd text && make
+	cd files && make
+	cd info && make
+	cd settings && make
+	cd calc && make
+	cd read && make
 	cd net && make
 	cd term && make
 	cd portdemo && make
@@ -20,6 +26,12 @@ clean:
 	cd wm && make clean
 	cd hello_win && make clean
 	cd draw && make clean
+	cd text && make clean
+	cd files && make clean
+	cd info && make clean
+	cd settings && make clean
+	cd calc && make clean
+	cd read && make clean
 	cd net && make clean
 	cd term && make clean
 	cd portdemo && make clean

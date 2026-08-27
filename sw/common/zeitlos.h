@@ -5,6 +5,20 @@
 #include <stdbool.h>
 #include "zobj.h"
 #include "zmsg.h"
+/*
+ * OS version.
+ *
+ * One string, here, because more than one thing wants to report it --
+ * the info app displays it, and a boot banner or an `about` command
+ * would want the same value rather than its own copy.
+ *
+ * Hand-maintained. There is deliberately no build date or git hash in
+ * it: both would change the binary on every rebuild, which makes
+ * "is the flashed image the one I just built?" harder to answer by
+ * comparison, not easier.
+ */
+#define Z_OS_VERSION  "0.0.2"
+
 #include "zproc.h"	// z_proc_info_t / z_mem_stats_args_t, used by the
 						// z_proc_list()/z_mem_stats() declarations below
 

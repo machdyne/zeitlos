@@ -415,6 +415,36 @@ void readline(char *buf, int maxlen) {
 
 		c = getch();
 
+		// Swallow escape sequences instead of typing them into the
+		// buffer.
+		//
+		// This reader stays deliberately minimal -- backspace and
+		// Enter, nothing else -- because it is the serial console's
+		// line editor and the console is the recovery path of last
+		// resort. Complexity here is complexity in the one thing that
+		// has to work when everything else does not. Richer editing
+		// belongs in sw/common/zline.c, which `repl` and any other
+		// port provider use.
+		//
+		// But an arrow key sends ESC [ D, and without this those
+		// three bytes were APPENDED to the line as literal
+		// characters. Pressing Left to fix a typo silently corrupted
+		// the command instead. Discarding them costs a few lines and
+		// no behaviour: the keys do nothing, which is what a minimal
+		// reader should do, rather than something actively wrong.
+		//
+		// Consumes ESC, an optional '[' or 'O' introducer, and any
+		// parameter bytes, up to and including the first final byte
+		// (0x40-0x7e). Good enough for every sequence key_to_bytes()
+		// in sw/apps/term produces.
+		if (c == 0x1b) {
+			int e = getch();
+			if (e == '[' || e == 'O') {
+				do { e = getch(); } while (e >= 0x30 && e <= 0x3f);
+			}
+			continue;
+		}
+
 		if (c == CH_CR || c == CH_LF) {
 			break;
 		}

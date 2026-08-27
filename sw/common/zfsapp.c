@@ -120,6 +120,12 @@ char **fs_list(const char *path, uint32_t max_entries, uint32_t *count) {
 	args.max_entries = max_entries;
 	args.count = 0;
 	args.truncated = 0;
+	// This function's callers only ever wanted names. Explicitly
+	// NULL, not left uninitialized -- the kernel writes through this
+	// pointer when it isn't NULL, and an uninitialized one here would
+	// be a stack-garbage address scribbled on by a syscall, which is
+	// about as unpleasant a bug as this codebase can produce.
+	args.types = NULL;
 
 	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
 	z_obj_t *rv = (z_obj_t *)z_kernel_ptr(Z_SYS_FS_LIST, (uint32_t *)&args, 0);
@@ -157,6 +163,39 @@ char **fs_list(const char *path, uint32_t max_entries, uint32_t *count) {
 	free(buf);
 	if (count) *count = args.count;
 	return names;
+
+}
+
+// Allocation-free sibling of fs_list() above -- see zfsapp.h for when
+// to prefer which.
+int fs_list_into(const char *path, char *buf, uint32_t buf_cap,
+	uint8_t *types, uint32_t max_entries, uint32_t *count,
+	uint32_t *truncated) {
+
+	if (count) *count = 0;
+	if (truncated) *truncated = 0;
+
+	if (!buf || buf_cap == 0) return 0;
+	if (types && !max_entries) return 0;	// see zfs.h / k_fs_list()
+
+	z_fs_list_args_t args;
+	args.path = (char *)path;
+	args.out = buf;
+	args.out_cap = buf_cap;
+	args.max_entries = max_entries;
+	args.count = 0;
+	args.truncated = 0;
+	args.types = types;
+
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_obj_t *rv = (z_obj_t *)z_kernel_ptr(Z_SYS_FS_LIST, (uint32_t *)&args, 0);
+
+	if (rv->val.uint32 != Z_OK) return 0;
+
+	if (count) *count = args.count;
+	if (truncated) *truncated = args.truncated;
+
+	return 1;
 
 }
 

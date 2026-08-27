@@ -407,6 +407,24 @@ os:
 apps:
 	cd sw/apps && make
 
+# Publish every built app to a TFTP root, so a running machine can pull
+# the latest builds with `tget` instead of `xf` over the serial link.
+# Each app lands under its bare name -- sw/apps/text/text.bin becomes
+# $(TFTP_DIR)/text, which is what `tget` asks for and what `run <file>`
+# expects to find afterwards.
+#
+#   $ make clean && sudo make BOARD=obst dev-flash && sudo make tftp-dist
+#
+# Deliberately does NOT depend on `apps`. This target is normally run
+# under sudo (a TFTP root is usually root-owned), and a build running
+# as root leaves root-owned .o files scattered through sw/, which then
+# break every subsequent non-root build in the tree. Build first, copy
+# second -- the script says so plainly if it finds nothing built.
+TFTP_DIR ?= /srv/tftp
+
+tftp-dist:
+	@tools/tftp-dist.sh $(TFTP_DIR)
+
 clean: clean_os clean_bios clean_apps
 
 clean_soc:
@@ -421,4 +439,4 @@ clean_bios:
 clean_apps:
 	cd sw/apps && make clean
 
-.PHONY: clean_bios bios apps
+.PHONY: clean_bios bios apps tftp-dist

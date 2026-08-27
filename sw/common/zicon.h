@@ -58,8 +58,23 @@
 // to invite confusion later for zero benefit now. See
 // sw/apps/wm/win_icons.h/.c for the actual bitmap data, and wm.c's
 // draw_titlebar_content() for how these get drawn.
+// Note these are NOT all titlebar icons. Z_ICON_FOLDER/_FILE/_UPDIR
+// are drawn by APPS, into their own content areas -- the file-list
+// widget (sw/common/zflist.h) puts one at the start of every row.
+// That's fine and doesn't break the single-owner rule zicon.h's
+// header comment describes: wm remains the only process that WRITES
+// glyph memory, and z_fb_draw_icon() (zgfx.h) only reads it. An app
+// drawing an icon wm has already loaded costs nothing and is one
+// blitter op instead of a 64-iteration pixel loop.
 typedef enum {
 	Z_ICON_CLOSE = 0,
+	Z_ICON_NEW,
+	Z_ICON_SAVE,
+	Z_ICON_OPEN,
+	Z_ICON_FONT,
+	Z_ICON_FOLDER,
+	Z_ICON_FILE,
+	Z_ICON_UPDIR,
 	Z_ICON_ID_COUNT		// keep last
 } z_icon_id_t;
 

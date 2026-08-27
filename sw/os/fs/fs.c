@@ -164,6 +164,35 @@ uint32_t fs_total(void) {
 	return 0;
 }
 
+// Both capacity figures from ONE f_getfree() call.
+//
+// fs_total() and fs_free() below each make their own, and f_getfree()
+// on FAT32 walks the entire FAT to count free clusters -- seconds on
+// a large card, during which the calling process is stuck. Asking for
+// "how full is the card" therefore paid that cost TWICE, for two
+// numbers that come out of the same scan.
+//
+// FatFs caches the count afterwards (fs->free_clst) and later calls
+// are cheap until a write invalidates it, so this mostly matters for
+// the first call after mounting or after writing -- which is exactly
+// when something like a file browser or a system monitor asks.
+//
+// Both figures in KB, matching fs_total()/fs_free().
+void fs_df_kb(uint32_t *total_kb, uint32_t *free_kb) {
+
+	FATFS *fs;
+	DWORD fre_clust;
+
+	if (total_kb) *total_kb = 0;
+	if (free_kb) *free_kb = 0;
+
+	if (f_getfree("", &fre_clust, &fs) != FR_OK) return;
+
+	if (total_kb) *total_kb = ((fs->n_fatent - 2) * fs->csize) / 2;
+	if (free_kb) *free_kb = (fre_clust * fs->csize) / 2;
+
+}
+
 uint32_t fs_free(void) {
 	FATFS *fs;
 	FRESULT res;

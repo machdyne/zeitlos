@@ -21,6 +21,7 @@
 #include "../common/zsoc.h"	// Z_TICK_HZ	// k_uart_getc()/k_uart_rx_empty() -- see
 					// boot_cancel_requested() below
 #include "fs/fs.h"
+#include "fsapi.h"
 #include "fs/fatfs/ff.h"
 #include "msg.h"
 #include "pidreg.h"
@@ -915,9 +916,47 @@ void sh(void) {
 
 		}
 
+		// Re-mount the SD card.
+		//
+		// There is no card-detect line on this hardware (SPI only),
+		// so nothing can notice a card being inserted or swapped --
+		// the volume is mounted once at boot and that is the last
+		// word on the subject. This is the manual override: put a
+		// card in, type `mount`.
+		//
+		// It also re-runs disk_initialize(), which is what recovers a
+		// card that failed to come up at boot (a slow card, or one
+		// inserted a moment too late).
+		else if (!strncmp(buffer, "mount", cmdlen)) {
+
+			// Refuse while anything has a file open. Remounting out
+			// from under an open FIL leaves that handle describing
+			// cluster chains from the previous mount, and the next
+			// write through it corrupts the card -- a far worse
+			// outcome than making the user close something first.
+			int open_now = k_fs_open_count();
+
+			if (open_now) {
+				printf("mount: %d file handle(s) still open -- "
+					"close them first\n", open_now);
+			} else if (fs_mount_now() == 0) {
+				uint32_t total = 0, freek = 0;
+				fs_df_kb(&total, &freek);
+				if (total)
+					printf("mounted: %ld KB total, %ld KB free\n",
+						(long)total, (long)freek);
+				else
+					printf("mounted, but no filesystem found\n");
+			} else {
+				printf("mount failed -- is a card inserted?\n");
+			}
+
+		}
+
 		else if (!strncmp(buffer, "df", cmdlen)) {
-			uint32_t total = fs_total();
-			uint32_t freek = fs_free();
+			// One FAT scan, not two -- see fs_df_kb() in fs.c.
+			uint32_t total = 0, freek = 0;
+			fs_df_kb(&total, &freek);
 			if (!total) {
 				printf("no filesystem mounted\n");
 			} else {
@@ -1319,6 +1358,7 @@ void sh_help(void) {
 	printf(" kill <pid>        kill a process\n");
 	printf(" ps                display a process snapshot\n");
 	printf(" df                display filesystem capacity\n");
+	printf(" mount             (re)mount the sdcard -- no card-detect, so this is manual\n");
 	printf(" format            ERASE the entire sdcard\n");
 	printf(" pr                display the pid name registry\n");
 	printf(" ks                display a kernel snapshot\n");

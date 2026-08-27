@@ -26,6 +26,10 @@ int fs_load_exec(uint32_t dst, char *path, const z_exec_info_t *info);
 // Every process-launch path should use these rather than the two
 // above, so that a card-less board behaves identically.
 int fs_exec_info_any(char *path, z_exec_info_t *info);
+
+// Both capacity figures in KB from a single FAT scan -- see fs.c for
+// why calling fs_total() and fs_free() separately is worth avoiding.
+void fs_df_kb(uint32_t *total_kb, uint32_t *free_kb);
 int fs_load_exec_any(uint32_t dst, char *path, const z_exec_info_t *info);
 int fs_exec_is_flash(char *path);	// 1 if resolved to flash
 void *fs_mallocfile(char *path);

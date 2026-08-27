@@ -64,20 +64,28 @@
  * frames, rubber-band previews -- does go through the GPU, via
  * zwidget.c and zgfx.h.
  *
+ * -- scrolling --
+ *
+ * The document is a fixed 640x480 and no window can be that large once
+ * the frame, titlebar, tool column and palette are accounted for, so
+ * the viewport is always smaller than the drawing. A vertical
+ * scrollbar down the right of the canvas and a horizontal one along
+ * its bottom (z_scrollbar_t, sw/common/zwidget.h) pan it; scroll_x/
+ * scroll_y hold the document coordinate at the viewport's top-left.
+ * Before this the bottom and right of the document were simply
+ * unreachable.
+ *
  * -- not implemented yet --
  *
- * No new/save/load: the titlebar buttons for those are the intended
- * next step, and want a wm-side titlebar-icon API more general than
- * today's single close icon. No scrolling -- the window shows the
- * document's top-left corner, and since the document is now the full
- * size of the screen, every window is smaller than it and the bottom
- * and right of the document are currently unreachable. No undo. No
- * flood fill -- see the note
- * above tool_icons[] for why the one that was here got removed and what
- * bringing it back would need.
+ * No new/save/load: the titlebar-icon API those want now exists
+ * (Z_WIN_FLAG_NEW_ICON and friends, zwm.h) and sw/apps/text shows the
+ * pattern, including the file dialogs in sw/common/zdialog.h. No undo.
+ * No flood fill -- see the note above tool_icons[] for why the one
+ * that was here got removed and what bringing it back would need.
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
@@ -88,6 +96,11 @@
 #include "../../common/zgfx.h"
 #include "../../common/zfont.h"
 #include "../../common/zwidget.h"
+#include "../../common/zflist.h"
+#include "../../common/zdialog.h"
+#include "../../common/zfsapp.h"
+#include "../../common/zbm.h"
+#include "../../common/ztype.h"
 #include "draw_icons.h"
 
 #define VRAM        ((volatile uint32_t *)0x20000000)
@@ -135,6 +148,36 @@ static uint32_t canvas[CANVAS_H][CANVAS_WORDS];
 // alternative rather than an error path.
 static bool use_hw_blit;
 
+// Marks the document dirty (or clean) and refreshes the titlebar.
+// Forward-declared: the drawing tools further down call it, and it is
+// defined with the rest of the file handling near the bottom.
+static void set_modified(bool m);
+
+// -- the file --
+//
+// Saved as ZBM (sw/common/zbm.h): a 16-byte header carrying a magic
+// and the real dimensions, then the canvas array verbatim.
+//
+// The first version wrote the canvas with no header at all, since it
+// is already exactly what the blitter reads. The header is worth its
+// sixteen bytes: without one a file carried no record of its own
+// shape, so changing CANVAS_W/CANVAS_H would have turned every
+// existing file into unreadable garbage with only the byte count to
+// notice from, and nothing outside draw could identify a saved image
+// at all. Files written before it are still loadable -- see
+// z_bm_is_legacy_size() and load_canvas() below.
+static char filename[80];
+static bool modified;
+
+static z_dialog_ctx_t dlg_ctx;
+
+// Directory the last dialog was in, so a second one starts where the
+// first left off rather than back at the root.
+static char last_dir[Z_FLIST_PATH_MAX] = "/";
+
+// Filename handed to us at launch, if any -- see main().
+static char launch_path[80];
+
 // -- window --
 
 // Created at exactly the size we want as the MINIMUM, because
@@ -158,6 +201,35 @@ static z_win_t win;
 
 // canvas viewport, content-relative
 static int view_x, view_y, view_w, view_h;
+
+// -- scrolling --
+//
+// The document is a fixed 640x480 and the window is smaller than that
+// by default, so most of the drawing was simply unreachable: the
+// viewport showed the document's top-left corner and there was no way
+// to move it. Two scrollbars (z_scrollbar_t, sw/common/zwidget.h) now
+// pan it.
+//
+// scroll_x/scroll_y are the document coordinate shown at the
+// viewport's top-left, i.e. exactly the scrollbars' values. Every
+// document-to-screen conversion in this file goes through
+// doc_screen_x()/doc_screen_y() below rather than adding vc.x0
+// directly, which is what to_doc()'s own comment anticipated when it
+// said adding a scroll offset should be a change to one function --
+// it turned out to be a change to one function plus the two
+// conversions running the other way.
+static z_scrollbar_t vsb, hsb;
+static int scroll_x, scroll_y;
+
+// Document coordinate -> absolute screen coordinate, within the
+// viewport whose clip rect is `vc`.
+static inline int doc_screen_x(const z_clip_t *vc, int dx) {
+	return vc->x0 + dx - scroll_x;
+}
+
+static inline int doc_screen_y(const z_clip_t *vc, int dy) {
+	return vc->y0 + dy - scroll_y;
+}
 
 // -- widgets --
 
@@ -523,11 +595,31 @@ static void layout(void) {
 
 	view_x = TOOLS_W + 1;
 	view_y = 0;
-	view_w = cw - view_x;
-	view_h = ch - PALETTE_H - 1;
+
+	// Both scrollbars come out of the viewport, not out of the window
+	// chrome: the vertical one runs down the right edge of the canvas
+	// and the horizontal one along its bottom, leaving a Z_SB_THICK
+	// square where they meet.
+	view_w = cw - view_x - Z_SB_THICK;
+	view_h = ch - PALETTE_H - 1 - Z_SB_THICK;
 
 	if (view_w < 0) view_w = 0;
 	if (view_h < 0) view_h = 0;
+
+	z_scrollbar_set_geom(&vsb, cw - Z_SB_THICK, view_y, view_h);
+	z_scrollbar_set_geom(&hsb, view_x, view_y + view_h, view_w);
+
+	// Range is in document PIXELS -- the unit the caller picks (see
+	// zwidget.h). page is how much of the document is on screen, so
+	// growing the window shows more of it and shrinks the thumb.
+	z_scrollbar_set_range(&vsb, CANVAS_H, view_h);
+	z_scrollbar_set_range(&hsb, CANVAS_W, view_w);
+
+	// set_range() clamps the value, so a resize that reveals more of
+	// the document can shift the viewport -- pick the clamped values
+	// back up rather than letting scroll_x/y disagree with the bars.
+	scroll_x = (int)hsb.value;
+	scroll_y = (int)vsb.value;
 
 	for (int i = 0; i < TOOL_COUNT; i++) {
 		widgets[W_TOOL0 + i].x = (int16_t)((i % TOOL_COLS) * TOOL_BTN);
@@ -593,18 +685,45 @@ static void clear_panels(void) {
 	// tool column, full height above the palette
 	fill_content_rect(0, 0, TOOLS_W, ch - PALETTE_H, 0);
 
-	// palette strip, full width below its rule
-	fill_content_rect(0, ch - PALETTE_H + 1, cw, PALETTE_H - 1, 0);
+	// Palette strip, below its rule -- in two pieces, because the
+	// resize grip's corner falls inside this window's content area
+	// and a full-width fill down to the bottom erases most of it.
+	// See Z_WIN_GRIP_INSET in zwm.h; sw/apps/text does the same thing
+	// for the same reason.
+	int pal_y = ch - PALETTE_H + 1;
 
-	// viewport area the document doesn't reach. The window can be
-	// larger than the document in either axis, and canvas_blit() clamps
-	// to the document rather than painting blank space itself.
-	if (view_w > CANVAS_W)
-		fill_content_rect(view_x + CANVAS_W, view_y,
-			view_w - CANVAS_W, view_h, 0);
-	if (view_h > CANVAS_H)
-		fill_content_rect(view_x, view_y + CANVAS_H,
-			view_w, view_h - CANVAS_H, 0);
+	// first row the grip occupies -- clamped up to the palette's own
+	// top, so a window short enough for the grip to start above the
+	// palette doesn't produce a negative-height fill below.
+	int grip_y = ch - Z_WIN_GRIP_INSET;
+	if (grip_y < pal_y) grip_y = pal_y;
+
+	// full width, for the rows above the grip
+	if (grip_y > pal_y)
+		fill_content_rect(0, pal_y, cw, grip_y - pal_y, 0);
+
+	// the grip's own rows, stopping short of its columns
+	int grip_keep_w = cw - Z_WIN_GRIP_INSET;
+	if (grip_keep_w > 0 && ch > grip_y)
+		fill_content_rect(0, grip_y, grip_keep_w, ch - grip_y, 0);
+
+	// The square where the two scrollbars meet. Neither of them owns
+	// it, and the canvas blit stops short of both.
+	fill_content_rect(view_x + view_w, view_y + view_h,
+		Z_SB_THICK, Z_SB_THICK, 0);
+
+	// viewport area the document doesn't reach. With scrolling this
+	// only happens if the window is somehow larger than the document,
+	// which it can't currently be -- kept because canvas_blit() still
+	// clamps to the document rather than painting blank space itself,
+	// so the day CANVAS_W/H shrinks this is what stops it leaving
+	// stale pixels.
+	if (view_w > CANVAS_W - scroll_x)
+		fill_content_rect(view_x + (CANVAS_W - scroll_x), view_y,
+			view_w - (CANVAS_W - scroll_x), view_h, 0);
+	if (view_h > CANVAS_H - scroll_y)
+		fill_content_rect(view_x, view_y + (CANVAS_H - scroll_y),
+			view_w, view_h - (CANVAS_H - scroll_y), 0);
 
 }
 
@@ -622,9 +741,37 @@ static void draw_frame(void) {
 	z_fb_hw_line(c.x0 + TOOLS_W, c.y0,
 		c.x0 + TOOLS_W, c.y0 + ch - PALETTE_H - 2, 1, &c);
 
-	// horizontal rule above the palette
-	z_fb_hw_line(c.x0, c.y0 + ch - PALETTE_H,
-		c.x0 + cw - 1, c.y0 + ch - PALETTE_H, 1, &c);
+	// horizontal rule above the palette. Stops short of the grip
+	// column for the same reason clear_panels() does -- the rule
+	// itself sits above the grip today, but the window can be short
+	// enough for PALETTE_H to put it inside the grip's rows.
+	int rule_x1 = cw - 1;
+	if (ch - PALETTE_H >= ch - Z_WIN_GRIP_INSET)
+		rule_x1 = cw - Z_WIN_GRIP_INSET - 1;
+	if (rule_x1 >= 0)
+		z_fb_hw_line(c.x0, c.y0 + ch - PALETTE_H,
+			c.x0 + rule_x1, c.y0 + ch - PALETTE_H, 1, &c);
+
+}
+
+// Re-blits the canvas viewport at the current scroll offset, and
+// repaints the bars. Everything else this app draws -- tools,
+// palette, rules -- is fixed to the window, so scrolling doesn't
+// touch it; a full repaint() here would flash the whole panel set on
+// every step of a scrollbar drag.
+static void scroll_view(void) {
+
+	z_clip_t vc;
+	view_clip(&vc);
+
+	canvas_blit(scroll_x, scroll_y, view_w, view_h, vc.x0, vc.y0, &vc);
+
+	z_scrollbar_draw(&vsb, false);
+	z_scrollbar_draw(&hsb, false);
+
+	// Any rubber band on screen was drawn at the old offset and is
+	// now in the wrong place; the blit above has already erased it.
+	prev_valid = false;
 
 }
 
@@ -643,7 +790,10 @@ static void repaint(void) {
 	draw_frame();
 	z_widget_draw_all(&wset, true);
 
-	canvas_blit(0, 0, view_w, view_h, vc.x0, vc.y0, &vc);
+	z_scrollbar_draw(&vsb, true);
+	z_scrollbar_draw(&hsb, true);
+
+	canvas_blit(scroll_x, scroll_y, view_w, view_h, vc.x0, vc.y0, &vc);
 
 	prev_valid = false;
 
@@ -657,14 +807,12 @@ static const uint8_t *pattern(void) {
 	return z_pattern_table[cur_pattern];
 }
 
-// Converts a content-relative point to document coordinates. The
-// document's origin currently sits at the viewport's top-left (no
-// scrolling yet), so this is just a subtraction -- isolated in one
-// function anyway, since adding a scroll offset later should be a
-// change to this function and nothing else.
+// Converts a content-relative point to document coordinates -- the
+// viewport's own offset, plus however far the document is scrolled
+// underneath it.
 static void to_doc(int cx, int cy, int *dx, int *dy) {
-	*dx = cx - view_x;
-	*dy = cy - view_y;
+	*dx = cx - view_x + scroll_x;
+	*dy = cy - view_y + scroll_y;
 }
 
 static bool in_view(int cx, int cy) {
@@ -739,7 +887,7 @@ static void preview_erase(void) {
 
 	canvas_blit(prev_x0, prev_y0,
 		prev_x1 - prev_x0 + 1, prev_y1 - prev_y0 + 1,
-		vc.x0 + prev_x0, vc.y0 + prev_y0, &vc);
+		doc_screen_x(&vc, prev_x0), doc_screen_y(&vc, prev_y0), &vc);
 
 	prev_valid = false;
 
@@ -751,8 +899,8 @@ static void preview_draw(int dx0, int dy0, int dx1, int dy1) {
 	z_clip_t vc;
 	view_clip(&vc);
 
-	int ax0 = vc.x0 + dx0, ay0 = vc.y0 + dy0;
-	int ax1 = vc.x0 + dx1, ay1 = vc.y0 + dy1;
+	int ax0 = doc_screen_x(&vc, dx0), ay0 = doc_screen_y(&vc, dy0);
+	int ax1 = doc_screen_x(&vc, dx1), ay1 = doc_screen_y(&vc, dy1);
 
 	switch (cur_tool) {
 
@@ -786,6 +934,10 @@ static void preview_draw(int dx0, int dy0, int dx1, int dy1) {
 
 // Commits a finished shape into the document.
 static void shape_commit(int dx0, int dy0, int dx1, int dy1) {
+
+	// Every path through this function writes to the canvas, so one
+	// flag here covers all four shape tools.
+	set_modified(true);
 
 	switch (cur_tool) {
 
@@ -831,7 +983,7 @@ static void canvas_refresh(int dx0, int dy0, int dx1, int dy1) {
 	int y1 = (dy0 < dy1 ? dy1 : dy0) + 2;
 
 	canvas_blit(x0, y0, x1 - x0 + 1, y1 - y0 + 1,
-		vc.x0 + x0, vc.y0 + y0, &vc);
+		doc_screen_x(&vc, x0), doc_screen_y(&vc, y0), &vc);
 
 }
 
@@ -846,6 +998,34 @@ static void handle_mouse(uint32_t packed) {
 
 	uint8_t buttons = (uint8_t)Z_WM_UNPACK_MOUSE_BUTTONS(packed);
 	bool down = (buttons & Z_MOUSE_BTN_LEFT) != 0;
+
+	// Scrollbars before anything else, and they keep the pointer for
+	// the whole of a drag they started -- otherwise sliding the thumb
+	// sideways over the canvas would start painting. Checking
+	// has_pointer() rather than the return value matters: the return
+	// says whether the VALUE changed, and pressing the thumb changes
+	// nothing (see zwidget.h).
+	if (z_scrollbar_has_pointer(&vsb, cx, cy)) {
+		if (z_scrollbar_mouse(&vsb, cx, cy, buttons)) {
+			scroll_y = (int)vsb.value;
+			scroll_view();
+		}
+		return;
+	}
+
+	if (z_scrollbar_has_pointer(&hsb, cx, cy)) {
+		if (z_scrollbar_mouse(&hsb, cx, cy, buttons)) {
+			scroll_x = (int)hsb.value;
+			scroll_view();
+		}
+		return;
+	}
+
+	// Keep both edge detectors fed even when the pointer is
+	// elsewhere, so a button released outside a bar still ends its
+	// drag.
+	z_scrollbar_mouse(&vsb, cx, cy, buttons);
+	z_scrollbar_mouse(&hsb, cx, cy, buttons);
 
 	// Widgets first. z_widget_mouse() only claims events landing on a
 	// widget, so a click on the canvas falls through -- but a press
@@ -875,6 +1055,11 @@ static void handle_mouse(uint32_t packed) {
 		// invisible stroke that springs into life the moment the
 		// cursor wanders over the canvas.
 		if (!in_view(cx, cy)) return;
+
+		// The press itself already stamps a pixel for every freehand
+		// tool, so the document is dirty from here on regardless of
+		// whether a drag follows.
+		set_modified(true);
 
 		drawing = true;
 		stroke_x0 = dx; stroke_y0 = dy;
@@ -964,6 +1149,293 @@ static void handle_mouse(uint32_t packed) {
 
 // ---------------------------------------------------------------
 
+// Titlebar text: the filename, with a leading '*' while there are
+// unsaved changes. Same convention as sw/apps/text.
+static void update_title(void) {
+
+	char t[32];
+	int n = 0;
+
+	const char *base = filename[0] ? filename : "untitled";
+
+	for (const char *p = filename; *p; p++)
+		if (*p == '/') base = p + 1;
+
+	if (modified && n < (int)sizeof(t) - 1) t[n++] = '*';
+
+	for (const char *p = base; *p && n < (int)sizeof(t) - 1; p++) t[n++] = *p;
+
+	t[n] = 0;
+
+	z_win_set_title(&win, t);
+
+}
+
+// ---------------------------------------------------------------
+// files
+// ---------------------------------------------------------------
+
+#define CANVAS_BYTES  ((int)sizeof(canvas))
+
+static void forward_msg(z_msg_t *msg, void *user);
+
+static void set_modified(bool m) {
+
+	if (modified == m) return;
+
+	modified = m;
+	update_title();
+
+}
+
+static void remember_dir(const char *path) {
+
+	int last = 0;
+	for (int i = 0; path[i]; i++) if (path[i] == '/') last = i;
+
+	if (last == 0) { last_dir[0] = '/'; last_dir[1] = 0; return; }
+
+	int i = 0;
+	for (; i < last && i < (int)sizeof(last_dir) - 1; i++) last_dir[i] = path[i];
+	last_dir[i] = 0;
+
+}
+
+// Writes header + pixels. Two writes, so this goes through a handle
+// rather than fs_write_file(), which takes a single buffer -- the
+// alternative is a 38416-byte staging copy this app has nowhere to
+// put.
+static bool write_canvas(const char *path) {
+
+	z_bm_header_t hdr;
+	z_bm_header_init(&hdr, CANVAS_W, CANVAS_H);
+
+	int h = fs_open_write(path);
+	if (h < 0) return false;
+
+	bool ok = true;
+
+	if (fs_write_chunk(h, &hdr, Z_BM_HEADER_SIZE) != Z_BM_HEADER_SIZE)
+		ok = false;
+
+	if (ok && fs_write_chunk(h, canvas, CANVAS_BYTES) != CANVAS_BYTES)
+		ok = false;
+
+	// Always close, including on the error path -- a leaked handle is
+	// a permanently lost slot in a table of Z_FS_MAX_OPEN (4), and
+	// nothing sweeps them when a process exits (see zfs.h).
+	fs_close_handle(h);
+
+	return ok;
+
+}
+
+static bool do_save_to(const char *path) {
+
+	int wrote = write_canvas(path) ? CANVAS_BYTES : 0;
+
+	if (wrote != CANVAS_BYTES) {
+		z_dialog_confirm(&dlg_ctx, "Save failed",
+			"The image could not be\nwritten completely.", Z_DIALOG_OK_CANCEL);
+		return false;
+	}
+
+	if (path != filename) {
+		int i = 0;
+		for (; path[i] && i < (int)sizeof(filename) - 1; i++)
+			filename[i] = path[i];
+		filename[i] = 0;
+	}
+
+	remember_dir(filename);
+	set_modified(false);
+	update_title();
+
+	return true;
+
+}
+
+static bool do_save_as(void) {
+
+	char path[80];
+	const char *suggest = filename[0] ? filename : "";
+
+	for (const char *p = filename; *p; p++)
+		if (*p == '/') suggest = p + 1;
+
+	if (!z_dialog_save(&dlg_ctx, last_dir, suggest, path, sizeof(path)))
+		return false;
+
+	return do_save_to(path);
+
+}
+
+static bool do_save(void) {
+
+	if (!filename[0]) return do_save_as();
+
+	return do_save_to(filename);
+
+}
+
+// Offers to save when there are unsaved changes. false means the user
+// cancelled and whatever prompted this must not proceed.
+static bool confirm_discard(void) {
+
+	if (!modified) return true;
+
+	int r = z_dialog_confirm(&dlg_ctx, "Unsaved changes",
+		"Save changes before\ncontinuing?", Z_DIALOG_YES_NO_CANCEL);
+
+	if (r == Z_DIALOG_CANCEL) return false;
+	if (r == Z_DIALOG_NO) return true;
+
+	// Yes -- and a cancelled or failed save calls the whole thing
+	// off, rather than discarding the drawing anyway.
+	return do_save();
+
+}
+
+static void do_new(void) {
+
+	if (!confirm_discard()) return;
+
+	canvas_clear();
+
+	filename[0] = 0;
+	scroll_x = scroll_y = 0;
+	z_scrollbar_set_value(&vsb, 0);
+	z_scrollbar_set_value(&hsb, 0);
+
+	set_modified(false);
+	update_title();
+	repaint();
+
+}
+
+// Reads a ZBM into the canvas. Returns false (having shown a dialog)
+// if the file isn't one, or isn't this canvas's size.
+static bool load_canvas(const char *path) {
+
+	int size = fs_size((char *)path);
+
+	if (size <= 0) {
+		z_dialog_confirm(&dlg_ctx, "Open failed",
+			"That file could not\nbe read.", Z_DIALOG_OK_CANCEL);
+		return false;
+	}
+
+	int h = fs_open_read(path);
+
+	if (h < 0) {
+		z_dialog_confirm(&dlg_ctx, "Open failed",
+			"That file could not\nbe read.", Z_DIALOG_OK_CANCEL);
+		return false;
+	}
+
+	z_bm_header_t hdr;
+	bool legacy = false;
+
+	if (fs_read_chunk(h, &hdr, Z_BM_HEADER_SIZE) != Z_BM_HEADER_SIZE) {
+		fs_close_handle(h);
+		z_dialog_confirm(&dlg_ctx, "Not an image",
+			"That file is too short\nto be a ZBM.", Z_DIALOG_OK_CANCEL);
+		return false;
+	}
+
+	if (!z_bm_header_valid(&hdr)) {
+
+		// No magic. It may be a headerless file from before the
+		// format had one, and the only evidence available for that is
+		// its length -- see z_bm_is_legacy_size(). Rewind to 0,
+		// because what we just read as a header was pixel data.
+		if (!z_bm_is_legacy_size((uint32_t)size, CANVAS_W, CANVAS_H)) {
+			fs_close_handle(h);
+			z_dialog_confirm(&dlg_ctx, "Not an image",
+				"That file is not\na ZBM bitmap.", Z_DIALOG_OK_CANCEL);
+			return false;
+		}
+
+		legacy = true;
+		fs_seek(h, 0);
+
+	} else if (hdr.width != CANVAS_W || hdr.height != CANVAS_H) {
+
+		// A real ZBM, just not one this app can hold. Said plainly
+		// rather than loaded at the wrong stride, which would look
+		// like a corrupted image and get blamed on the save.
+		fs_close_handle(h);
+		z_dialog_confirm(&dlg_ctx, "Wrong size",
+			"That image is not\n640x480.", Z_DIALOG_OK_CANCEL);
+		return false;
+
+	}
+
+	if (legacy) printf("draw: loading headerless (pre-ZBM) file\n");
+
+	// Straight into the canvas -- fs_mallocfile() would need a second
+	// 37.5KB out of a heap that is 16KB shared with the stack
+	// (Z_PROC_STACK_SIZE_DEFAULT, sw/os/kernel.h) and could never
+	// succeed. A short read therefore leaves the canvas partly
+	// updated, which is visible but harmless; refusing to touch it
+	// until the whole file is known good would cost a staging buffer
+	// this app has nowhere to put.
+	char *dst = (char *)canvas;
+	int got = 0;
+
+	while (got < CANVAS_BYTES) {
+		int n = fs_read_chunk(h, dst + got, CANVAS_BYTES - got);
+		if (n <= 0) break;
+		got += n;
+	}
+
+	fs_close_handle(h);
+
+	if (got != CANVAS_BYTES)
+		z_dialog_confirm(&dlg_ctx, "Open failed",
+			"The image was only\npartly readable.", Z_DIALOG_OK_CANCEL);
+
+	return true;
+
+}
+
+static void do_open(void) {
+
+	if (!confirm_discard()) return;
+
+	char path[80];
+
+	if (!z_dialog_open(&dlg_ctx, last_dir, path, sizeof(path))) return;
+
+	if (!load_canvas(path)) return;
+
+	int i = 0;
+	for (; path[i] && i < (int)sizeof(filename) - 1; i++) filename[i] = path[i];
+	filename[i] = 0;
+
+	remember_dir(filename);
+
+	scroll_x = scroll_y = 0;
+	z_scrollbar_set_value(&vsb, 0);
+	z_scrollbar_set_value(&hsb, 0);
+
+	set_modified(false);
+	update_title();
+	repaint();
+
+}
+
+static void do_close(void) {
+
+	if (!confirm_discard()) return;
+
+	z_win_destroy(&win);
+
+	printf("draw: exiting\n");
+	exit(0);
+
+}
+
 static void widgets_init(void) {
 
 	memset(widgets, 0, sizeof(widgets));
@@ -993,6 +1465,59 @@ static void widgets_init(void) {
 
 }
 
+// Handles the messages that belong to this app's own window, from
+// both the main loop and -- through z_dialog_ctx_t -- from inside any
+// dialog that happens to be open.
+//
+// One function for both is not a convenience: while a dialog is up wm
+// carries on asking THIS window to redraw and blocks waiting for the
+// ack, so an app that only serviced redraws from its main loop would
+// freeze the screen every time it opened a dialog. See zdialog.h.
+static void forward_msg(z_msg_t *msg, void *user) {
+
+	(void)user;
+
+	switch (msg->subject) {
+
+		case Z_WM_REDRAW:
+
+			if (msg->obj.type != Z_UINT32) break;
+
+			// Only ours -- a dialog's own redraws are handled inside
+			// zdialog.c, and this is also the message that can arrive
+			// while a dialog is still being created.
+			if (z_win_redraw_id(msg->obj.val.uint32) != win.id) break;
+
+			z_win_apply_redraw(&win, msg->obj.val.uint32);
+			repaint();
+			z_win_redraw_done(&win);
+
+			break;
+
+		case Z_WM_WINDOW_MOVED:
+
+			// No layout() -- moving doesn't change our size, and
+			// every rect we hold is content-relative.
+			z_win_parse_rect(&win, &msg->obj);
+			break;
+
+		case Z_WM_WINDOW_RESIZED:
+
+			// Arrives BEFORE the Z_WM_REDRAW that follows a resize
+			// (zwm.h guarantees that ordering), so the layout is
+			// already correct by the time we're asked to repaint at
+			// the new size.
+			z_win_apply_resized(&win, &msg->obj);
+			layout();
+			break;
+
+		default:
+			break;
+
+	}
+
+}
+
 int main(void) {
 
 	printf("draw: starting\n");
@@ -1009,17 +1534,51 @@ int main(void) {
 	// the tool column and pattern palette can never be shrunk out of
 	// the window. See both flags' comments in zwm.h.
 	//
-	// CLOSE_KILLS_OWNER is correct here specifically because this app
-	// owns exactly one window for its whole lifetime -- see that flag's
-	// own warning about apps that own several.
-	if (z_win_create_flags(&win, "draw", WIN_W, WIN_H, -1, -1,
-		Z_WIN_FLAG_CLOSE_ICON | Z_WIN_FLAG_CLOSE_KILLS_OWNER |
-		Z_WIN_FLAG_RESIZABLE | Z_WIN_FLAG_MIN_IS_CREATE) != Z_OK) {
+	// CLOSE_ICON WITHOUT CLOSE_KILLS_OWNER. This app used to have the
+	// killing form, which was correct while it owned exactly one
+	// window for its whole lifetime. It no longer does -- a dialog is
+	// a window -- and that flag takes down every window of a pid the
+	// instant any one of them is clicked closed (see its own warning
+	// in zwm.h). It also has to be the non-killing form so that
+	// closing with an unsaved drawing gets a chance to ask.
+	if (z_win_create_flags(&win, "untitled", WIN_W, WIN_H, -1, -1,
+		Z_WIN_FLAG_CLOSE_ICON | Z_WIN_FLAG_RESIZABLE |
+		Z_WIN_FLAG_MIN_IS_CREATE |
+		Z_WIN_FLAG_NEW_ICON | Z_WIN_FLAG_OPEN_ICON |
+		Z_WIN_FLAG_SAVE_ICON) != Z_OK) {
 		printf("draw: failed to create window -- is wm running?\n");
 		return 1;
 	}
 
+	z_scrollbar_init(&vsb, &win, Z_SB_VERT);
+	z_scrollbar_init(&hsb, &win, Z_SB_HORZ);
+
+	// The dialogs need somewhere to send messages that aren't theirs
+	// -- above all this window's own Z_WM_REDRAW, which wm blocks on
+	// an ack for while a dialog is up. See zdialog.h.
+	dlg_ctx.parent = &win;
+	dlg_ctx.on_msg = forward_msg;
+	dlg_ctx.user = NULL;
+
 	layout();
+
+	// A file to open, if something launched us with one (the file
+	// browser does -- see Z_WM_SET_ARG in zwm.h). Done AFTER the
+	// dialog context is set up, since load_canvas() reports failures
+	// through a dialog, and after layout() so a repaint is valid.
+	if (z_launch_arg_take(launch_path, sizeof(launch_path)) &&
+		load_canvas(launch_path)) {
+
+		int i = 0;
+		for (; launch_path[i] && i < (int)sizeof(filename) - 1; i++)
+			filename[i] = launch_path[i];
+		filename[i] = 0;
+
+		remember_dir(filename);
+
+	}
+
+	update_title();
 	repaint();
 
 	for (;;) {
@@ -1041,29 +1600,35 @@ int main(void) {
 						handle_mouse(msg.obj.val.uint32);
 					break;
 
-				case Z_WM_REDRAW:
-					if (msg.obj.type == Z_UINT32)
-						z_win_apply_redraw(&win, msg.obj.val.uint32);
-					repaint();
-					z_win_redraw_done(&win);
+				case Z_WM_TITLEBAR_ICON: {
+
+					if (msg.obj.type != Z_UINT32) break;
+
+					uint32_t v = msg.obj.val.uint32;
+					if ((int)Z_WM_UNPACK_TBICON_ID(v) != win.id) break;
+
+					switch (Z_WM_UNPACK_TBICON_KIND(v)) {
+						case Z_WM_TBICON_NEW:  do_new(); break;
+						case Z_WM_TBICON_OPEN: do_open(); break;
+						case Z_WM_TBICON_SAVE: do_save(); break;
+						default: break;
+					}
+
 					break;
 
-				case Z_WM_WINDOW_MOVED:
-					// No layout() -- moving doesn't change our size,
-					// and every rect we hold is content-relative.
-					z_win_parse_rect(&win, &msg.obj);
-					break;
+				}
 
-				case Z_WM_WINDOW_RESIZED:
-					// Arrives BEFORE the Z_WM_REDRAW that follows a
-					// resize (zwm.h guarantees that ordering), so the
-					// layout is already correct by the time we're asked
-					// to repaint at the new size.
-					z_win_apply_resized(&win, &msg.obj);
-					layout();
+				case Z_WM_CLOSE:
+
+					if (msg.obj.type == Z_UINT32 &&
+						(int32_t)msg.obj.val.uint32 == win.id)
+						do_close();
+
 					break;
 
 				default:
+
+					forward_msg(&msg, NULL);
 					break;
 
 			}

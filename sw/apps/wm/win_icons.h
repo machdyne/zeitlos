@@ -35,6 +35,23 @@
 // mismatch.
 extern const uint8_t z_icon_close_data[Z_ICON_H];
 
+// The extra titlebar icons -- see Z_WIN_FLAG_NEW_ICON and friends in
+// sw/common/zwm.h for what asking for one actually does, and wm.c's
+// titlebar_icons() for how they get placed.
+extern const uint8_t z_icon_new_data[Z_ICON_H];
+extern const uint8_t z_icon_save_data[Z_ICON_H];
+extern const uint8_t z_icon_open_data[Z_ICON_H];
+extern const uint8_t z_icon_font_data[Z_ICON_H];
+
+// NOT titlebar icons -- these three are for the file-list widget's
+// own rows (sw/common/zflist.h). They live here anyway because this
+// is the one place that loads glyph memory's icon region, and wm is
+// the only process allowed to do that (zicon.h). An app that wants a
+// new icon of its own adds it here, not in the app.
+extern const uint8_t z_icon_folder_data[Z_ICON_H];
+extern const uint8_t z_icon_file_data[Z_ICON_H];
+extern const uint8_t z_icon_updir_data[Z_ICON_H];
+
 // pushes every window icon above into hardware glyph memory's
 // reserved icon region (zicon.h) via z_gfx_hw_icon_load() (zgfx.h).
 // Call once, from wm's own startup, right after z_gfx_hw_font_load()

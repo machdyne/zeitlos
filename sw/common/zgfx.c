@@ -167,6 +167,37 @@ static inline void gpu_blit_wait_idle(void) {
 	}
 }
 
+// See zgfx.h for when this is needed and why it normally isn't.
+//
+// Bounded the same way gpu_wait_fifo() and gpu_blit_wait_idle() are,
+// and for the same reason: neither engine has a timeout of its own, so
+// a stuck one must not take the caller down with it. A timeout here
+// means the screen may keep a stray mark, which is a great deal better
+// than wm hanging.
+void z_fb_hw_sync(void) {
+
+	uint32_t waited = 0;
+
+	// Rasterizer first: it is the one with a queue, so it is the one
+	// that can still be drawing after its submitter is gone.
+	while (gpu_debug_fifo_count) {
+		if (++waited > 10000000) {
+			printf("zgfx: sync timed out draining the rasterizer FIFO\n");
+			return;
+		}
+	}
+
+	waited = 0;
+
+	while (gpu_blit_status & 1) {
+		if (++waited > 10000000) {
+			printf("zgfx: sync timed out waiting for the blitter\n");
+			return;
+		}
+	}
+
+}
+
 // -- cross-process TOCTOU race on the blitter's single busy/idle gate --
 //
 // see docs/gpu_blitter.md, "Concurrent register access", and
@@ -540,14 +571,97 @@ void z_fb_hw_blit_vram(int src_x, int src_y,
 // -- hardware glyph blit path -- see zgfx.h and
 // docs/window_manager.md, "hardware glyph blitting" --
 
+// -- glyph memory layout --
+//
+// More than one font can be resident at once, at FIXED offsets
+// declared here rather than assigned as fonts are loaded.
+//
+// That distinction is the whole design. Glyph memory is a single piece
+// of global hardware, but zgfx.c is linked into every process
+// separately, so any allocation state kept here would be per-process:
+// wm would load a font, record where it put it, and no other process
+// would have any idea. Every app would then fall back to software
+// rendering for text, which is exactly what the hardware path exists
+// to avoid.
+//
+// A fixed table compiled from one source file gives every process the
+// same answer without anyone having to communicate it. wm writes the
+// glyphs (it remains the only process that ever does -- see zicon.h);
+// everyone else just reads the offset out of this table and blits.
+//
+// Fonts are identified by ADDRESS, which is safe within a process --
+// &z_font_5x8 differs between processes, but each process compares
+// against its own copy and every process agrees on the OFFSET, which
+// is all the hardware cares about.
+//
+// Current occupancy, against Z_ICON_MEM_OFFSET (3840):
+//
+//   z_font_5x8    96 glyphs x  8 rows =  768 bytes at    0
+//   z_font_6x12   96 glyphs x 12 rows = 1152 bytes at  768
+//                                              free from 1920
+//
+// To add a font: append an entry with the next free offset, check the
+// total still clears Z_ICON_MEM_OFFSET, and add a
+// z_gfx_hw_font_load() call for it in wm's main(). A font that isn't
+// in this table still WORKS -- it just renders in software, since
+// glyph_offset_of() reports it as absent.
+typedef struct {
+	const z_font_t	*font;
+	uint32_t	offset;
+} z_glyph_slot_t;
+
+static const z_glyph_slot_t glyph_layout[] = {
+	{ &z_font_5x8,  0   },
+	{ &z_font_6x12, 768 },
+};
+
+#define GLYPH_LAYOUT_COUNT \
+	(int)(sizeof(glyph_layout) / sizeof(glyph_layout[0]))
+
+// Where `font` lives in glyph memory. Returns false if it isn't one
+// of the resident fonts, in which case the caller must render in
+// software -- blitting from an offset that holds a different font's
+// data would draw confident nonsense, which is worse than being slow.
+static bool glyph_offset_of(const z_font_t *font, uint32_t *out) {
+
+	for (int i = 0; i < GLYPH_LAYOUT_COUNT; i++) {
+		if (glyph_layout[i].font == font) {
+			*out = glyph_layout[i].offset;
+			return true;
+		}
+	}
+
+	return false;
+
+}
+
 void z_gfx_hw_font_load(const z_font_t *font) {
+
+	uint32_t base;
+	if (!glyph_offset_of(font, &base)) {
+		// Not a resident font. Loading it anywhere would either
+		// overwrite one that IS resident or land somewhere nothing
+		// will ever look, so do neither -- text in this font simply
+		// renders in software.
+		printf("zgfx: font not in glyph_layout[], not loaded\n");
+		return;
+	}
 
 	volatile uint8_t *glyph_mem = (volatile uint8_t *)GLYPH_MEM_BASE;
 	uint32_t n = (uint32_t)(font->last - font->first + 1) * font->h;
-	if (n > GLYPH_MEM_SIZE) n = GLYPH_MEM_SIZE;	// truncate rather than overrun
+
+	// Never past the icon region at the top of glyph memory
+	// (zicon.h). Truncating produces a font with missing glyphs at
+	// the end, which is ugly; overrunning corrupts the icons, which
+	// looks like an unrelated bug in wm's titlebar.
+	if (base + n > Z_ICON_MEM_OFFSET) {
+		printf("zgfx: font at offset %u would overrun the icon region\n",
+			(unsigned)base);
+		n = (base < Z_ICON_MEM_OFFSET) ? (Z_ICON_MEM_OFFSET - base) : 0;
+	}
 
 	for (uint32_t i = 0; i < n; i++)
-		glyph_mem[i] = font->glyphs[i];
+		glyph_mem[base + i] = font->glyphs[i];
 
 }
 
@@ -587,7 +701,12 @@ void z_fb_draw_char(int x, int y, char c, int color, const z_font_t *font, const
 			(x >= clip->x0 && y >= clip->y0 &&
 			 x + font->w - 1 <= clip->x1 && y + font->h - 1 <= clip->y1));
 
-	if (!fits) {
+	uint32_t glyph_base;
+	bool resident = glyph_offset_of(font, &glyph_base);
+
+	// A font that isn't resident in glyph memory renders in software,
+	// exactly like a clipped glyph does -- see glyph_layout[].
+	if (!fits || !resident) {
 		hw_blit_wait();	// a prior hardware blit could still be in
 						// flight; wait for it before writing directly
 						// to VRAM here, or the two could race
@@ -623,7 +742,7 @@ void z_fb_draw_char(int x, int y, char c, int color, const z_font_t *font, const
 
 	gpu_blit_dst_x = x;
 	gpu_blit_dst_y = y;
-	gpu_blit_glyph_addr = (uint32_t)(uc - font->first) * font->h;
+	gpu_blit_glyph_addr = glyph_base + (uint32_t)(uc - font->first) * font->h;
 	gpu_blit_glyph_w = font->w;
 	gpu_blit_glyph_h = font->h;
 	gpu_blit_fg_color = color ? 1 : 0;
@@ -646,6 +765,19 @@ void z_fb_draw_text(int x, int y, const char *s, int color, const z_font_t *font
 			cy += font->h;
 			continue;
 		}
+		// Skip a glyph that starts entirely past the clip's right
+		// edge instead of handing it to z_fb_draw_char(), which
+		// would route it to the software renderer and then reject
+		// all font->w * font->h of its pixel writes one at a time.
+		// Truncated text is common -- a long window title in a
+		// narrow titlebar, a filename wider than the list -- and
+		// this is the difference between a handful of wasted pixel
+		// operations and several hundred.
+		//
+		// `continue`, not `break`: the string may contain a newline
+		// that resets cx and puts later glyphs back inside the clip.
+		if (clip && cx > clip->x1) { cx += font->w; continue; }
+
 		z_fb_draw_char(cx, cy, *s, color, font, clip);
 		cx += font->w;
 	}
@@ -697,9 +829,25 @@ void z_fb_draw_char2(int x, int y, char c, int fg_color, int bg_color,
 			(x >= clip->x0 && y >= clip->y0 &&
 			 x + font->w - 1 <= clip->x1 && y + font->h - 1 <= clip->y1));
 
-	if (!fits) {
+	uint32_t glyph_base;
+	bool resident = glyph_offset_of(font, &glyph_base);
+
+	// Same two fallback conditions as z_fb_draw_char(): a glyph that
+	// needs clipping, or a font that isn't resident in glyph memory
+	// (see glyph_layout[]).
+	//
+	// The software call here was COMMENTED OUT, so a clipped glyph
+	// drew nothing at all -- a partially-visible character at the
+	// edge of a clip region simply vanished. That was survivable
+	// while the only caller was term (whose cells are always fully
+	// inside its grid), and stopped being so as soon as the file-list
+	// widget started drawing clipped rows through it. It is also
+	// load-bearing now for a different reason: without it, a
+	// non-resident font would draw nothing rather than falling back,
+	// which is a far more confusing failure than being slow.
+	if (!fits || !resident) {
 		hw_blit_wait();	// see z_fb_draw_char()'s own comment on why
-//		draw_char_sw2(x, y, c, fg_color, bg_color, font, clip);
+		draw_char_sw2(x, y, c, fg_color, bg_color, font, clip);
 		return;
 	}
 
@@ -717,7 +865,7 @@ void z_fb_draw_char2(int x, int y, char c, int fg_color, int bg_color,
 
 	gpu_blit_dst_x = x;
 	gpu_blit_dst_y = y;
-	gpu_blit_glyph_addr = (uint32_t)(uc - font->first) * font->h;
+	gpu_blit_glyph_addr = glyph_base + (uint32_t)(uc - font->first) * font->h;
 	gpu_blit_glyph_w = font->w;
 	gpu_blit_glyph_h = font->h;
 	gpu_blit_fg_color = fg_color ? 1 : 0;
@@ -739,6 +887,19 @@ void z_fb_draw_text2(int x, int y, const char *s, int fg_color, int bg_color,
 			cy += font->h;
 			continue;
 		}
+		// Skip a glyph that starts entirely past the clip's right
+		// edge instead of handing it to z_fb_draw_char(), which
+		// would route it to the software renderer and then reject
+		// all font->w * font->h of its pixel writes one at a time.
+		// Truncated text is common -- a long window title in a
+		// narrow titlebar, a filename wider than the list -- and
+		// this is the difference between a handful of wasted pixel
+		// operations and several hundred.
+		//
+		// `continue`, not `break`: the string may contain a newline
+		// that resets cx and puts later glyphs back inside the clip.
+		if (clip && cx > clip->x1) { cx += font->w; continue; }
+
 		z_fb_draw_char2(cx, cy, *s, fg_color, bg_color, font, clip);
 		cx += font->w;
 	}
@@ -837,6 +998,19 @@ void z_fb_draw_text(int x, int y, const char *s, int color, const z_font_t *font
 			cy += font->h;
 			continue;
 		}
+		// Skip a glyph that starts entirely past the clip's right
+		// edge instead of handing it to z_fb_draw_char(), which
+		// would route it to the software renderer and then reject
+		// all font->w * font->h of its pixel writes one at a time.
+		// Truncated text is common -- a long window title in a
+		// narrow titlebar, a filename wider than the list -- and
+		// this is the difference between a handful of wasted pixel
+		// operations and several hundred.
+		//
+		// `continue`, not `break`: the string may contain a newline
+		// that resets cx and puts later glyphs back inside the clip.
+		if (clip && cx > clip->x1) { cx += font->w; continue; }
+
 		z_fb_draw_char(cx, cy, *s, color, font, clip);
 		cx += font->w;
 	}
@@ -874,6 +1048,19 @@ void z_fb_draw_text2(int x, int y, const char *s, int fg_color, int bg_color,
 			cy += font->h;
 			continue;
 		}
+		// Skip a glyph that starts entirely past the clip's right
+		// edge instead of handing it to z_fb_draw_char(), which
+		// would route it to the software renderer and then reject
+		// all font->w * font->h of its pixel writes one at a time.
+		// Truncated text is common -- a long window title in a
+		// narrow titlebar, a filename wider than the list -- and
+		// this is the difference between a handful of wasted pixel
+		// operations and several hundred.
+		//
+		// `continue`, not `break`: the string may contain a newline
+		// that resets cx and puts later glyphs back inside the clip.
+		if (clip && cx > clip->x1) { cx += font->w; continue; }
+
 		z_fb_draw_char2(cx, cy, *s, fg_color, bg_color, font, clip);
 		cx += font->w;
 	}

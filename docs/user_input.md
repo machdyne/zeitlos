@@ -314,3 +314,47 @@ one-line fix.
   notes" above -- `ping`, `pong`, `blinky`, `gpu3d`, `gpudemo`,
   `bounce`, `bounceblit`, `hello`, and `net` all still link without
   `-march`/`-mabi`.
+
+## Cursor precision
+
+The hardware cursor position (`curs_x`/`curs_y` in `rtl/usb_hid.v`) is
+updated by adding the mouse's HID delta once per report. Getting that
+"once" right is less obvious than it looks.
+
+`usb_hid_host` emits `report` as a **one-cycle pulse in its own
+`usbclk` domain** — 12 MHz (`clk12mhz`, `sysctl.v`). The block that
+consumes it runs on `wb_clk_i`, which is `sys_clk` at 48 MHz. Four
+times faster. Sampling the pulse with a plain `if (uhh_report)`
+therefore saw it high across four consecutive wishbone edges and
+applied the same delta on every one of them, so **one count of physical
+mouse movement moved the pointer four to five pixels**.
+
+That presented as a sensitivity problem — the cursor felt jumpy and it
+was hard to land on an 8x8 titlebar icon — rather than as the missing
+clock-domain crossing it was. Worth remembering as a shape: a pulse
+generated in a slower domain and consumed in a faster one is repeated,
+not lost, and the symptom is a multiplied effect rather than a missing
+one.
+
+The fix is two flops to resolve metastability plus a third for rising-
+edge detection, giving exactly one update per report regardless of the
+clock ratio. The deltas themselves are captured continuously one cycle
+behind, because `usb_hid_host` clears `mouse_dx`/`mouse_dy` on the same
+`usbclk` edge that drops the pulse — the valid window is only those
+four wishbone cycles, and the synchroniser eats two or three of them.
+
+### Pointer acceleration
+
+With the multiply-by-four gone the pointer is 1:1 — one HID count, one
+pixel — which is the finest this hardware can resolve and also four
+times slower than it used to be. `USB_HID_ACCEL` (top of
+`rtl/usb_hid.v`) doubles deltas above `USB_HID_ACCEL_THRESHOLD` so that
+small, aiming movements keep full precision while a sweep across the
+screen stays quick. Undefine it for a strictly linear pointer, raise
+the threshold to make it engage later, or change the `<<< 1` in the
+module body to `<<< 2` for a steeper curve.
+
+There is no software-side sensitivity control, and no sub-pixel
+accumulator: 1:1 is already the finest the 10-bit cursor registers can
+express, so precision below that would need fractional position bits
+rather than a different curve.
