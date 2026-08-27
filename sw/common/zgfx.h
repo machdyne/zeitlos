@@ -41,6 +41,7 @@
  */
 
 #include <stdint.h>
+#include <stdbool.h>
 #include "zfont.h"
 #include "zicon.h"
 
@@ -127,6 +128,128 @@ void z_fb_hw_box(int x0, int y0, int x1, int y1, int color, const z_clip_t *clip
 // next operation would otherwise wait for this fill's pixel writes to
 // have actually landed.
 void z_fb_hw_fill_rect(int x, int y, int w, int h, int color);
+
+// like z_fb_hw_fill_rect(), but fills with an 8x8 1bpp PATTERN
+// instead of a solid color -- the blitter's BLIT_PATTERN register has
+// always been a full 32-bit word (docs/gpu_blitter.md), and
+// z_fb_hw_fill_rect() simply hardcodes it to all-0s or all-1s. This
+// exposes the rest of it.
+//
+// `pat` is 8 bytes, one per pattern row, MSB-first -- the same
+// row-major/bit-order convention z_font_t glyphs and zicon.h window
+// icons already use, so a pattern can be written as eight binary
+// literals and read as a picture of itself. See Z_PATTERN_* in
+// zwidget.h for a ready-made MacPaint-style set.
+//
+// The pattern is anchored to the SCREEN's own 8-pixel grid, not to
+// (x,y): two adjacent rects filled with the same pattern tile
+// seamlessly into each other rather than each restarting the pattern
+// at its own corner. That falls out of how the hardware works (the
+// blitter writes the pattern word into destination words, and both 32
+// and the framebuffer's word grid are multiples of 8) and is also the
+// behavior you want -- it's what makes a pattern read as a texture
+// the shapes are cut out of, which is exactly the early-MacPaint
+// model.
+//
+// Cost is one blitter operation per RUN OF ROWS SHARING A PATTERN
+// BYTE, not per row: a solid or 8-row-uniform pattern costs a single
+// op, the pathological alternating case costs h. Worth knowing before
+// using this for anything in a tight loop -- for per-pixel work on an
+// offscreen 1bpp buffer, do it in software instead (the blitter only
+// ever addresses the visible framebuffer).
+void z_fb_hw_fill_pattern(int x, int y, int w, int h, const uint8_t *pat);
+
+// hardware copy of a 1bpp bitmap from MAIN MEMORY into the framebuffer
+// (rtl/gpu/gpu_blit.v, CTRL_SRCMEM). This is what makes an offscreen
+// document buffer practical: the alternative is a software loop moving
+// words into VRAM one at a time, which is what sw/apps/draw used to do.
+//
+// `src` points at the bitmap; `src_stride` is its row pitch in BYTES.
+// The bitmap's bit order must match the framebuffer's -- pixel x at bit
+// (x & 31) of word (x >> 5), least significant bit leftmost, the same
+// convention z_fb_set_pixel() uses. src_x/src_y select a rectangle
+// within it; dst_x/dst_y place it on screen. Source and destination
+// need no particular alignment to each other: the hardware slides a
+// 64-bit window along the source row, so an odd offset costs the same
+// as an aligned one.
+//
+// Clipped to the screen only, exactly like z_fb_hw_fill_rect() -- a
+// caller that needs to clip to something smaller (a window's content
+// area, a scrolling viewport) must narrow the rectangle itself before
+// calling, adjusting src_x/src_y in step.
+//
+// Returns false, having drawn nothing, on a bitstream whose blitter
+// predates this mode. Callers that must work on both should check
+// z_fb_hw_blit_mem_available() once at startup and keep a software
+// path -- see sw/apps/draw's canvas_blit().
+//
+// Two constraints worth knowing:
+//   - `src` is translated to a physical address internally (the
+//     blitter bypasses the MTU), so it must be ordinary app or kernel
+//     memory that stays put. It cannot be a pointer into VRAM.
+//   - the hardware may read up to one word beyond the last source word
+//     it actually needs, whenever source and destination are not
+//     word-aligned to each other. Those bits are masked out of the
+//     result, but the read does happen, so `src` should not end exactly
+//     at the last valid byte of a mapping.
+bool z_fb_hw_blit_mem(const void *src, int src_stride,
+	int src_x, int src_y, int dst_x, int dst_y, int w, int h);
+
+// true if this bitstream's blitter implements the mode above. Probes
+// the hardware (writes the mode bit without a start bit and reads it
+// back) rather than assuming, so the same binary runs on an older
+// bitstream instead of silently drawing nothing.
+bool z_fb_hw_blit_mem_available(void);
+
+// hardware copy of a rectangle from one part of VRAM to another
+// (rtl/gpu/gpu_blit.v with CTRL_FILL and CTRL_SRCMEM both clear).
+//
+// Same engine, same arbitrary bit alignment and same clipping as
+// z_fb_hw_blit_mem() above -- the only difference is that the source is
+// read through the blitter's framebuffer port instead of its
+// main-memory port, so this needs no main-bus traffic at all.
+//
+// src_x/src_y are in VRAM pixel coordinates, using the framebuffer's
+// own 640-pixel stride. That deliberately allows a source ABOVE or
+// BELOW the visible area: on a bitstream whose VRAM is larger than
+// 640x480 (rtl/mem/vram.v), rows past 479 are offscreen storage, and
+// this is how a sprite kept there gets drawn. On a bitstream with
+// exactly 640x480 of VRAM there is no such region and this is only
+// useful for moving visible pixels around.
+//
+// Overlapping source and destination rectangles are NOT handled: the
+// copy runs top-to-bottom, left-to-right with no direction selection,
+// so an overlap where the destination trails the source in that order
+// will read pixels this same operation has already written. Copy via a
+// third rectangle if you need that.
+//
+// Unlike z_fb_hw_blit_mem() this has no availability check, because a
+// blitter that predates the copy path doesn't fail cleanly -- the old
+// stub wrote the destination back unchanged, so a caller would see a
+// no-op rather than an error. Gate on z_fb_hw_blit_mem_available()
+// instead: the two arrived together, so it answers for both.
+void z_fb_hw_blit_vram(int src_x, int src_y,
+	int dst_x, int dst_y, int w, int h);
+
+// Waits until BOTH graphics engines have finished everything already
+// submitted -- the line rasterizer's FIFO is empty and the blitter is
+// idle.
+//
+// Normally nobody needs this. z_fb_hw_line() only waits for FIFO
+// SPACE and returns with the line still queued, which is exactly what
+// makes it fast, and the pixels landing a moment later is invisible.
+//
+// It matters when something is about to change what those pixels mean.
+// The case this was added for: an app draws through the rasterizer,
+// the app is killed, and wm repairs the screen region it occupied --
+// but the dead app's queued lines are still in the FIFO and drain
+// AFTERWARDS, painting over the repair. The result is a window that
+// closes and leaves a scribble behind, which looks like wm failing to
+// clean up rather than a queue that outlived its owner.
+//
+// So: call this before any repair that follows a process going away.
+// It is a wait, so don't put it in a draw loop.
+void z_fb_hw_sync(void);
 
 // loads a font's glyph data into hardware glyph memory (rtl/mem/glyph.v)
 // for use by the hardware-accelerated draw path. Call once, before the

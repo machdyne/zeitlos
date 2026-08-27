@@ -24,6 +24,8 @@
 #include "logo.h"
 #include "fs/fs.h"
 #include "fsapi.h"
+#include "procapi.h"	// k_proc_list(), referenced by the syscall
+						// table built from syscalls.def below
 #include "../common/zsoc.h"
 
 // Z_PROCS_MAX now lives in kernel.h (msg.c needs it too)
@@ -70,6 +72,20 @@ z_obj_t *k_proc_kill_syscall(z_obj_t *args);	// ditto -- named _syscall, not
 									// handler too) -- same k_/z_ naming-collision
 									// reasoning as k_proc_run()'s own comment
 									// just above.
+
+// Prototyped here rather than with the other process helpers below,
+// because the syscall table immediately after this line references it
+// and syscalls.def is expanded at that point.
+z_obj_t *k_proc_wait(z_obj_t *args);
+
+// Same reason -- defined below, needed visible here. Named k_video_*
+// rather than z_video_* because sw/common/zsoc.h already declares
+// z_video_get_mode()/z_video_set_mode() with different signatures (the
+// direct-MMIO inline helpers these wrap), and zsoc.h is included
+// above. Same k_/z_ split as k_getpid/z_getpid and k_msg_send/
+// z_msg_send already use, for the same collision.
+z_obj_t *k_video_get_mode(z_obj_t *args);
+z_obj_t *k_video_set_mode(z_obj_t *args);
 
 typedef z_obj_t* (*z_syscall_t)(z_obj_t *args);
 
@@ -128,6 +144,43 @@ z_obj_t *k_getpid(z_obj_t *args) {
 	return (&z_ok);
 }
 
+// -- virtual phosphor mode (rtl/socctl.v's VIDEO register) --
+//
+// Returns the current mode in args. On a bitstream that predates the
+// register this reports Z_VIDEO_MODE_WHITE and still succeeds, because
+// white is what such a board is genuinely displaying -- see
+// z_video_get_mode() in sw/common/zsoc.h. A caller that needs to tell
+// "white" from "can't change it" uses the set path, which does fail.
+z_obj_t *k_video_get_mode(z_obj_t *args) {
+	args->type = Z_UINT32;
+	args->val.uint32 = z_video_get_mode();
+	return (&z_ok);
+}
+
+// Sets the mode. Fails, writing nothing, on an out-of-range value or a
+// bitstream without the register -- the distinction matters to the
+// caller (a typo vs. gateware that needs reflashing) but not here, and
+// z_video_set_mode() already refuses both.
+//
+// The mode is echoed back into args on the way out, whether or not the
+// write succeeded, so a caller gets the mode actually in effect rather
+// than the one it asked for. That is the difference between a `color`
+// command that reports what the screen is doing and one that reports
+// what it hoped.
+z_obj_t *k_video_set_mode(z_obj_t *args) {
+
+	bool ok = false;
+
+	if (args && args->type == Z_UINT32)
+		ok = z_video_set_mode(args->val.uint32);
+
+	args->type = Z_UINT32;
+	args->val.uint32 = z_video_get_mode();
+
+	return ok ? (&z_ok) : (&z_fail);
+
+}
+
 // launches a new process from a named file on the FAT filesystem --
 // same fs_size()/k_proc_create()/k_proc_base()/fs_load()/k_proc_start()
 // sequence as sh.c's "run" shell command and init() (see sh.c), but
@@ -159,7 +212,15 @@ z_obj_t *k_getpid(z_obj_t *args) {
 // is written back into args->val.uint32 (in/out parameter), while the
 // z_ok/z_fail return value is just success/fail -- see zeitlos.c's
 // z_proc_run() wrapper for the caller side.
-#define Z_PROC_RUN_NAME_MAX 32
+// Long enough for a full PATH, not just a bare program name. The file
+// browser launches an executable the user double-clicked, which may
+// be several directories deep, and fs_exec_info_any() (sw/os/fs/fs.c)
+// resolves a path perfectly well -- but a name longer than this is
+// silently TRUNCATED here, which turns into a confusing "no such
+// file" rather than an error about length. 64 matches
+// Z_FLIST_PATH_MAX (sw/common/zflist.h), which is what the browser
+// can produce.
+#define Z_PROC_RUN_NAME_MAX 64
 z_obj_t *k_proc_run(z_obj_t *args) {
 
 	if (!args) return (&z_fail);
@@ -175,7 +236,13 @@ z_obj_t *k_proc_run(z_obj_t *args) {
 	name[sizeof(name) - 1] = 0;
 
 	uint32_t pid = 0;
-	uint32_t size = fs_size(name);
+	// ZEXE-aware, same as sh.c's `run` -- image size is data + bss,
+	// which is not the file size for the new format (sw/common/zexec.h).
+	z_exec_info_t xi;
+	// _any: filesystem first, flash core-app archive underneath (fs.c).
+	// This is what lets wm's dock launch `term` on a board with no SD
+	// card, and what lets a killed core app be restarted.
+	uint32_t size = fs_exec_info_any(name, &xi) ? 0 : xi.total;
 
 	// see kernel.h's z_proc_stack_size_for() comment -- the same
 	// shared decision sh.c's own `run`/`init` use, so launching
@@ -188,7 +255,7 @@ z_obj_t *k_proc_run(z_obj_t *args) {
 		pid = k_proc_create(size, stack_size);
 		if (pid) {
 			uint32_t base = k_proc_base(pid);
-			fs_load(base, name);
+			fs_load_exec_any(base, name, &xi);
 			k_proc_start(pid);
 		}
 	}
@@ -202,24 +269,227 @@ z_obj_t *k_proc_run(z_obj_t *args) {
 
 // --
 
+
+
+// -- SOC feature inventory --
+//
+// rtl/csrs.v exposes a bitmap of what was actually synthesized into the
+// running bitstream (sw/common/zsoc.h's Z_FEATURE_* bits). Printing it
+// at boot turns a whole class of confusing bring-up failure into a
+// glance at the log: "the network doesn't work" on a board whose
+// bitstream simply has no ethernet PHY looks identical, from software,
+// to a driver bug -- until the boot log says which one it is.
+//
+// Grouped rather than dumped as a flat list or a hex word: the groups
+// are how someone actually reasons about a board ("does this one have a
+// GPU? does it have storage?"), and a raw 0x000c53f7 helps nobody.
+//
+// The bit/name/group table itself lives in sw/common/zsoc.c, next to
+// the Z_FEATURE_* defines it mirrors, so everything that has to track
+// rtl/sysctl.v's CSR_FEATURES is in one directory. This function owns
+// only the layout.
+static void k_soc_report(void) {
+
+	if (!z_soc_csrs_present()) {
+		// An older bitstream has nothing mapped at 0x7000_0000 at all.
+		// Say "unknown" rather than printing an empty feature list --
+		// see z_soc_has_feature()'s own comment in zsoc.h on why
+		// "can't confirm" is a genuinely different answer from "no".
+		printf(" - soc: features unknown (bitstream predates rtl/csrs.v)\n");
+		return;
+	}
+
+	printf(" - soc features:\n");
+
+	int n = z_soc_features_count;
+	int cur = -1;
+	bool any_on_line = false;
+
+	for (int i = 0; i < n; i++) {
+
+		if (!z_soc_has_feature(z_soc_features[i].bit)) continue;
+
+		if (z_soc_features[i].group != cur) {
+			if (any_on_line) printf("\n");
+			printf("     %s ", z_soc_feature_groups[z_soc_features[i].group]);
+			cur = z_soc_features[i].group;
+			any_on_line = true;
+		}
+
+		printf("%s ", z_soc_features[i].name);
+
+	}
+
+	if (any_on_line) printf("\n");
+	else printf("     (none reported)\n");
+
+	// Gateware/software agreement. If this binary was built for rv32im
+	// but the bitstream has no multiplier, every mul is an illegal
+	// instruction -- which on this SOC is not a clean trap but IRQ 1,
+	// which nothing handles, so the machine would spin somewhere that
+	// looks unrelated. Say so here instead. See zsoc.h's own
+	// z_soc_check_cpu_arch() comment for the full failure mode.
+	printf("     build   %s\n", z_soc_build_arch());
+
+	if (!z_soc_check_cpu_arch()) {
+		printf("\n");
+		printf(" *** CPU MISMATCH ***\n");
+		printf(" this kernel is built for %s but the bitstream\n",
+			z_soc_build_arch());
+		printf(" has no hardware multiply/divide. every mul/div\n");
+		printf(" will be an illegal instruction.\n");
+		printf(" rebuild the gateware (rtl/boards.vh: CPU_MUL,\n");
+		printf(" CPU_DIV) or the software (sw/common/arch.mk:\n");
+		printf(" ARCH=rv32i), and flash both together.\n");
+		printf("\n");
+	}
+
+}
+
+
+// -- CPU speed report --
+//
+// picorv32 is instantiated with ENABLE_COUNTERS/ENABLE_COUNTERS64 at
+// their defaults of 1 (rtl/sysctl.v overrides neither), so rdcycle and
+// rdinstret are real, free-running hardware counters. Only the low 32
+// bits are read: the benchmark window below is ~50ms, which at any
+// plausible clock is a few million counts, nowhere near a wrap.
+static inline uint32_t rd_cycle(void) {
+	uint32_t v; __asm__ volatile ("rdcycle %0" : "=r"(v)); return v;
+}
+static inline uint32_t rd_instret(void) {
+	uint32_t v; __asm__ volatile ("rdinstret %0" : "=r"(v)); return v;
+}
+
+// how long to measure for, in KTIMER ticks (~732Hz, so ~50ms). Long
+// enough that the tick quantisation (one tick = ~1.4ms, so ~2.7% at
+// this window) doesn't dominate, short enough to be invisible in the
+// boot.
+#define CPU_BENCH_TICKS ((Z_TICK_HZ * 50) / 1000)	// ~50ms
+
+// Measures and prints the CPU's instruction rate.
+//
+// The clock is NOT measured -- it is Z_SYSCLK_HZ, a stated constant
+// (sw/common/zsoc.h, which explains why measuring it is impossible on
+// this SOC: the KTIMER and rdcycle share sys_clk, so cycles-per-tick is
+// always exactly 65536 no matter what the PLL is actually doing). An
+// earlier version of this function derived "MHz" from those two and
+// printed a number that would have read ~48 on a board clocked at 24.
+//
+// So MIPS comes from the two hardware counters and the stated clock --
+// di/dc is the real, measured part, Z_SYSCLK_HZ scales it -- rather
+// than from elapsed wall time, which would have inherited the same
+// assumption twice over. IPC (di/dc alone) is the one figure here that
+// depends on no assumption at all.
+//
+// MIPS is measured over a deliberately plain integer loop. Worth being
+// honest about what that means: rdinstret counts instructions retired
+// whatever they are, so a figure measured while polling a UART register
+// would mostly report Wishbone stalls, not compute. This loop touches
+// no peripherals, so what comes out is a compute-bound best case, not
+// an average over real work. IPC alongside it makes the CPI visible
+// (picorv32 is a multi-cycle design, so expect well under 1).
+//
+// Must be called AFTER reg_kernel is set: z_kernel_ticks only advances
+// once the IRQ handler is installed and KTIMER is firing. The cycle
+// counter is independent of that, so it doubles as an escape hatch --
+// if ticks never advance, this gives up and says so rather than
+// spinning forever and hanging the boot.
+static void k_cpu_report(void) {
+
+	uint32_t guard = rd_cycle();
+	uint32_t t0 = z_kernel_ticks;
+
+	while (z_kernel_ticks == t0) {
+		// ~4s at any sane clock -- see this function's own comment
+		if (rd_cycle() - guard > 200000000u) {
+			printf(" - cpu: ktimer not running, skipping speed check\n");
+			return;
+		}
+	}
+
+	volatile uint32_t sink = 0;
+	uint32_t x = 12345;
+
+	t0 = z_kernel_ticks;
+	uint32_t i0 = rd_instret();
+	uint32_t c0 = rd_cycle();
+
+	while (z_kernel_ticks - t0 < CPU_BENCH_TICKS) {
+		// Plain integer work: shifts, adds and xors only, no memory
+		// beyond the loop itself and deliberately no multiply.
+		//
+		// The no-multiply part predates rv32im (rtl/boards.vh's
+		// `CPU_MUL) and is now a deliberate choice rather than a
+		// limitation: keeping this loop identical across builds is
+		// what makes the number comparable over time. It does mean
+		// this figure is blind to hardware multiply -- it barely
+		// moved when MUL was enabled, because there is nothing here
+		// for MUL to do. Use the `bench` shell command (sw/os/sh.c)
+		// to measure mul/div/memory separately.
+		for (int i = 0; i < 64; i++) {
+			x += i;
+			x ^= x >> 7;
+			x += x << 3;
+		}
+		sink = x;
+	}
+
+	uint32_t di = rd_instret() - i0;
+	uint32_t dc = rd_cycle() - c0;
+	(void)sink;
+
+	if (!dc) return;
+
+	// Integer math throughout -- no float in kernel code.
+	//
+	// MIPS x100 = (di / dc) * (Z_SYSCLK_HZ / 1e6) * 100, rearranged to
+	// divide FIRST so nothing overflows: di * 4800 would be ~1.2e10 at
+	// this window size, well past 32 bits. Dividing dc by the scale
+	// factor instead costs ~0.02% precision and stays in range.
+	uint32_t scale = (Z_SYSCLK_HZ / 1000000u) * 100u;	// 4800 at 48MHz
+	uint32_t denom = dc / scale;
+	if (!denom) return;
+
+	uint32_t mips_x100 = di / denom;
+	uint32_t ipc_x100 = (di / 100) * 10000 / (dc / 100) / 100;
+
+	printf(" - cpu: %s %ld.%02ld MIPS @ %ld MHz (%ld.%02ld IPC)\n",
+		z_soc_cpu_name(),
+		(long)(mips_x100 / 100), (long)(mips_x100 % 100),
+		(long)(Z_SYSCLK_HZ / 1000000u),
+		(long)(ipc_x100 / 100), (long)(ipc_x100 % 100));
+
+}
+
+
 int main(void) {
 
-	// boot splash -- VRAM is plain memory-mapped hardware with no
+	// boot splash -- the image lives in flash (see logo.h) and is
+	// copied straight to VRAM, so this costs no main memory at all.
+	// VRAM is plain memory-mapped hardware with no
 	// init of its own needed, so this can run before literally
 	// anything else (uart/hid/mem init below), the earliest the OS
 	// can put anything on screen. Stays up until something else
 	// writes over it -- normally wm's own startup clear_screen()
 	// call, whenever the user eventually runs wm; nothing here
 	// coordinates that handoff explicitly, it's just whichever writes
-	// to VRAM last. Flip to true if it displays with foreground/
-	// background swapped on real hardware -- see logo.h's own comment.
-	z_boot_logo_show(false);
+	// to VRAM last. If it ever displays with foreground/background
+	// swapped, regenerate the flashed image with pad_logo.py --invert
+	// rather than changing anything here -- see logo.h's own comment.
+	z_boot_logo_show();
 
 	kprint("\nZEITLOS\n");
 
 	// init uart
 	z_uart_init();
 	printf(" - uart initialized.\n");
+
+	// straight after uart, so the hardware inventory is the first thing
+	// in the log -- CSRs are plain memory-mapped registers needing no
+	// init of their own, so this can run as early as there is somewhere
+	// to print to.
+	k_soc_report();
 
 	// init usb hid keyboard event queue
 	z_hid_init();
@@ -281,6 +551,11 @@ int main(void) {
 	reg_kernel = (uint32_t)(uintptr_t)z_kernel_entry;
 	printf(" - kernel active.\n");
 
+	// now that KTIMER is actually firing (z_kernel_ticks only advances
+	// once reg_kernel above is set), the CPU speed check can run --
+	// see k_cpu_report()'s own comment for what the numbers mean.
+	k_cpu_report();
+
 //	while (1) {
 //		if ((z_kernel_ticks % 100) == 0) z_kernel_dump();
 //	};
@@ -334,6 +609,7 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 		"r"((uint32_t)(uintptr_t)&__global_pointer$) : "memory");
 
 	uint32_t *ret;
+	int sched_scanned;
 
 	if (syscall_id != Z_SYSCALL_NONE) {
 
@@ -358,6 +634,16 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 	// sooner than intended.
 	if ((irqs & (1 << Z_IRQ_KTIMER)) != 0) {
 		++z_kernel_ticks;
+
+		// Charge this tick to whoever was running when it fired.
+		//
+		// z_pid is the interrupted process (the syscall path above
+		// has already returned by here, so this is genuinely an
+		// interrupt of running code, not of a kernel call made on
+		// someone's behalf). Sampled accounting: one increment per
+		// tick, no timers started or stopped, and the error is
+		// bounded by the tick period.
+		if (z_pid < Z_PROCS_MAX) ++z_procs[z_pid].cpu_ticks;
 	}
 
 	// handle interrupts
@@ -376,16 +662,65 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 	// swap process on KTIMER interrupt
 	if ((irqs & (1 << Z_IRQ_KTIMER)) != 0) {
 
-		// don't switch if there's only one process
-		if (k_proc_active_count() < 2) { ret = regs; goto done; }
+		// Wake anything whose timeout has expired, BEFORE counting
+		// runnable processes or picking the next one -- otherwise a
+		// process whose sleep just elapsed would wait another full
+		// round before being noticed.
+		//
+		// wake_tick 0 means "no timeout, wait indefinitely"; such a
+		// process is woken only by k_msg_send(). The comparison is
+		// written as a subtraction so it stays correct across the
+		// 32-bit wrap of z_kernel_ticks (~68 days at 732Hz): a plain
+		// `ticks >= wake_tick` would fail for a sleep that straddles
+		// the wrap and hang that process for another full period.
+		for (int i = 0; i < Z_PROCS_MAX; i++) {
+			if ((z_procs[i].flags & Z_PROC_FLAG_BLOCKED) == 0) continue;
+			if (z_procs[i].wake_tick == 0) continue;
+			if ((int32_t)(z_kernel_ticks - z_procs[i].wake_tick) > 0)
+				k_proc_unblock(i);
+		}
+
+		// don't switch if there's at most one process that could run.
+		// Deliberately runnable, not active: if wm/net/repl are all
+		// blocked on their mailboxes, the one process with work to do
+		// keeps the CPU instead of round-robining through three
+		// processes that would each immediately block again.
+		// Only skip the switch if the CURRENT process is itself still
+		// runnable. Otherwise we would decline to switch AWAY FROM a
+		// process that has just blocked itself, and go on running it --
+		// which is both wrong and, with exactly two processes, fatal.
+		//
+		// Concretely: with only the shell and net, net calls
+		// z_proc_wait(), marks itself BLOCKED, and the runnable count
+		// drops to 1 (the shell). The old test then returned `regs` --
+		// net's own context -- so net kept running while blocked and the
+		// shell was never scheduled again. The serial console simply
+		// stopped responding. It went unnoticed because wm and repl are
+		// normally running, which keeps the count above 2.
+		//
+		// This test predates Z_PROC_FLAG_BLOCKED, when "runnable" meant
+		// "active" and the current process was always counted.
+		if (Z_PROC_RUNNABLE(z_procs[z_pid]) &&
+			k_proc_runnable_count() < 2) { ret = regs; goto done; }
 
 		// save current process registers
   		for (int i = 0; i < 32; i++) {
 			z_procs[z_pid].regs[i] = *(regs + i);
 		}
 
-		// find next active process (round-robin scheduling)
+		// Bounded scan. Before BLOCKED existed, this loop was
+		// guaranteed to terminate because the current process was
+		// itself active and would be reached again. That is no longer
+		// true -- every process can now be unschedulable at once -- and
+		// an unbounded scan here would spin forever INSIDE the timer
+		// interrupt handler, which is unrecoverable. The count is the
+		// safety net; the k_proc_runnable_count() check above means it
+		// should never actually be hit.
+		sched_scanned = 0;
+
+		// find next runnable process (round-robin scheduling)
 		next_process:
+		if (++sched_scanned > Z_PROCS_MAX) { ret = regs; goto done; }
 		z_pid++;
 		if (z_pid >= Z_PROCS_MAX) z_pid = 0;
 
@@ -429,7 +764,9 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 			goto next_process;
 		}
 
-		if ((z_procs[z_pid].flags & Z_PROC_FLAG_ACTIVE) != Z_PROC_FLAG_ACTIVE)
+		// skips both inactive and blocked slots -- see
+		// Z_PROC_RUNNABLE()/Z_PROC_FLAG_BLOCKED in kernel.h
+		if (!Z_PROC_RUNNABLE(z_procs[z_pid]))
 			goto next_process;
 
 		// configure address translation
@@ -445,6 +782,81 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 	done:
 	__asm__ volatile ("mv gp, %0" :: "r"(saved_gp) : "memory");
 	return ret;
+
+}
+
+// Make a blocked process schedulable again. Safe to call on a process
+// that isn't blocked (does nothing), which is what lets k_msg_send()
+// call it unconditionally on every delivery.
+void k_proc_unblock(uint32_t pid) {
+	if (pid >= Z_PROCS_MAX) return;
+	z_procs[pid].flags &= ~Z_PROC_FLAG_BLOCKED;
+	z_procs[pid].wake_tick = 0;
+}
+
+// -- k_proc_wait syscall --
+//
+// "Block me until a message arrives, or until `timeout` ticks have
+// passed." A timeout of 0 means wait indefinitely.
+//
+// THE RACE THIS AVOIDS is the whole reason this is a syscall rather
+// than two: check the mailbox, find it empty, then set BLOCKED. If a
+// message could arrive between those two steps, the sender would
+// unblock a process that isn't blocked yet, and the process would then
+// mark itself blocked and sleep forever holding a message it never
+// noticed -- a hang that depends on exact timing and would be
+// miserable to reproduce.
+//
+// It is safe here because both halves happen inside one syscall.
+// picorv32's interrupt model doesn't nest, and no other process can
+// run until this handler returns, so nothing can deliver a message in
+// between. Do NOT split this into a "peek" and a separate "block".
+//
+// Returns Z_OK if the caller is now blocked, Z_FAIL if a message was
+// already waiting and it should just carry on reading.
+//
+// Note this does not switch away immediately -- the caller keeps
+// whatever remains of its current timeslice and spins in the
+// z_msg_wait() loop until the next KTIMER tick, which then skips it.
+// So at most one partial timeslice is wasted per block, once, rather
+// than every timeslice forever. Yielding on the spot would need the
+// syscall path to do the full save/switch dance the KTIMER path does;
+// that's a worthwhile follow-up, not a correctness issue.
+z_obj_t *k_proc_wait(z_obj_t *args) {
+
+	uint32_t timeout = (args->type == Z_UINT32) ? args->val.uint32 : 0;
+
+	// something already waiting -- don't block, let the caller read it
+	if (!z_mailbox_empty(z_pid))
+		return (&z_fail);
+
+	// wake_tick 0 is the sentinel for "indefinite", so a timeout that
+	// happens to land exactly on tick 0 is nudged to 1. At 732Hz that
+	// is a 1.4ms error once every ~68 days.
+	if (timeout) {
+		uint32_t w = z_kernel_ticks + timeout;
+		z_procs[z_pid].wake_tick = w ? w : 1;
+	} else {
+		z_procs[z_pid].wake_tick = 0;
+	}
+
+	z_procs[z_pid].flags |= Z_PROC_FLAG_BLOCKED;
+
+	return (&z_ok);
+
+}
+
+// Processes that could actually be given a timeslice right now, as
+// opposed to k_proc_active_count()'s "processes that exist".
+uint32_t k_proc_runnable_count(void) {
+
+	uint32_t count = 0;
+
+	for (int i = 0; i < Z_PROCS_MAX; i++)
+		if (Z_PROC_RUNNABLE(z_procs[i]))
+			count++;
+
+	return(count);
 
 }
 
@@ -622,9 +1034,23 @@ z_rv k_kernel_dump(void) {
 z_rv k_proc_dump(void) {
 	for (int i = 0; i < Z_PROCS_MAX; i++) {
 		if (!z_procs[i].base) continue;
-		printf(" pid: %2i base: %.8lx size: %.8lx pc %.8lx sp: %.8lx flags: %.8lx\n",
-			i, z_procs[i].base, z_procs[i].size,
-			z_procs[i].regs[0], z_procs[i].regs[2], z_procs[i].flags);
+		// state is derived from flags rather than printed as another
+		// number: which processes are actually schedulable is the whole
+		// point of Z_PROC_FLAG_BLOCKED, and reading it out of a hex
+		// bitmask at a serial console is needless work.
+		const char *state = "run";
+		if (z_procs[i].flags & Z_PROC_FLAG_DIE) state = "die";
+		else if (z_procs[i].flags & Z_PROC_FLAG_BLOCKED) state = "blk";
+		else if (!(z_procs[i].flags & Z_PROC_FLAG_ACTIVE)) state = "---";
+
+		// cpu is the process's LIFETIME tick count, not a
+		// percentage -- `ps` is a snapshot and has no second sample
+		// to difference against. sw/apps/info takes two and reports
+		// a real percentage; see z_proc_info_t in zproc.h.
+		printf(" pid: %2i %s base: %.8lx size: %.8lx pc %.8lx sp: %.8lx flags: %.8lx cpu: %lu\n",
+			i, state, z_procs[i].base, z_procs[i].size,
+			z_procs[i].regs[0], z_procs[i].regs[2], z_procs[i].flags,
+			(unsigned long)z_procs[i].cpu_ticks);
 	}
 	return Z_OK;
 }

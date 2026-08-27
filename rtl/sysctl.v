@@ -11,6 +11,23 @@
 
 localparam SYSCLK = 48_000_000;
 
+// Instruction cache geometry defaults, if a board enabled `ICACHE
+// without pinning them (rtl/boards.vh). 8KB with 4-word lines suits
+// the SDRAM boards: rtl/mem/sdram.v has no burst path, so a fill costs
+// ~11 cycles per word regardless and short lines keep the miss penalty
+// down. PSRAM boards will eventually want longer lines -- rtl/mem/
+// qqspi.v spends ~40 of its ~63 cycles per word on fixed command/
+// address/dummy overhead, which a burst would amortize -- but that
+// needs burst support in qqspi_wb first, so don't raise this there yet.
+`ifdef ICACHE
+`ifndef ICACHE_KB
+`define ICACHE_KB 8
+`endif
+`ifndef ICACHE_LINE_WORDS
+`define ICACHE_LINE_WORDS 4
+`endif
+`endif
+
 module sysctl #()
 (
 
@@ -352,6 +369,50 @@ module sysctl #()
 	wire wbm_ack;
 	wire wbm_cyc;
 
+	// The CPU's own side of the main bus, upstream of wb_arbiter_main
+	// (rtl/arbiter_main.v). This used to BE wbm_* -- the CPU was the
+	// only
+	// master here, so the two were the same wires. The blitter's
+	// memory-copy mode (rtl/gpu/gpu_blit.v, CTRL_SRCMEM) makes it a
+	// second master, so the CPU now drives wbc_* and the arbiter
+	// drives wbm_*.
+	//
+	// Everything downstream -- every cs_* decode, every slave, the
+	// wbm_dat_i/wbm_ack muxes -- is unchanged and still sees wbm_*,
+	// which is now simply "whichever master currently holds the bus"
+	// rather than "the CPU".
+	wire [31:0] wbc_adr;
+	wire [31:0] wbc_dat_o;
+	wire [31:0] wbc_dat_i;
+	wire [3:0] wbc_sel;
+	wire wbc_we;
+	wire wbc_stb;
+	wire wbc_ack;
+	wire wbc_cyc;
+
+	// The blitter's source-read port. Tied off below when the blitter
+	// isn't in this bitstream.
+	wire [31:0] wbm_blitsrc_adr;
+	wire [31:0] wbm_blitsrc_dat_i;
+	wire wbm_blitsrc_we;
+	wire [3:0] wbm_blitsrc_sel;
+	wire wbm_blitsrc_stb;
+	wire wbm_blitsrc_cyc;
+	wire wbm_blitsrc_ack;
+	wire marb_master;
+
+	// Physical (post-MTU) CPU address. This is wb_mtu's translated
+	// output, and is what the instruction cache tags on -- see
+	// rtl/cache.v's header for why the cache must sit AFTER the MTU
+	// rather than before it (tagging virtual 0x8000_xxxx would make
+	// every app's addresses alias every other app's, and would force a
+	// full invalidate on every context switch).
+	//
+	// Without ICACHE this is simply wired straight through to wbm_adr
+	// and the bus behaves exactly as it did before the cache existed.
+	wire [31:0] wbm_cpu_padr;
+	wire wbm_cpu_instr;
+
 	wire [31:0] wbm_vram_adr;
 	wire [31:0] wbm_vram_dat_o;
 	wire [31:0] wbm_vram_dat_i;
@@ -393,6 +454,13 @@ module sysctl #()
 	wire [31:0] wbs_spieth_dat_o;
 	wire [31:0] wbs_ethmac_dat_o;
 	wire [31:0] wbs_csrs_dat_o;
+	wire [31:0] wbs_socctl_dat_o;
+`ifdef RTC
+	wire [31:0] wbs_rtc_dat_o;
+`endif
+`ifdef ICACHE
+	wire [31:0] wbs_cache_dat_o;
+`endif
 
 	wire cs_bram = (wbm_adr < 8192);
 	wire cs_mtu = ((wbm_adr & 32'hf000_0000) == 32'h9000_0000);
@@ -465,7 +533,82 @@ module sysctl #()
 	// this address map at the time this was added (0x0/0x9 bram/mtu,
 	// 0x1-0x6 mem/glyph/spieth/ethmac, 0xa-0xf gpu/sdcard/usb/debug/
 	// uart -- see the full cs_* list in this file).
-	wire cs_csrs = ((wbm_adr & 32'hf000_0000) == 32'h7000_0000);
+	// Nibble 0x7 is split: csrs.v keeps 0x7000_00xx and the instruction
+	// cache's control/status registers take 0x7000_01xx. Bit 8 selects.
+	// The cache deliberately does NOT live inside csrs.v -- that block
+	// is documented as read-only and side-effect-free, and a flush
+	// register is neither. Nibble 0x8 was the other candidate and was
+	// rejected: that's the virtual window apps execute in, so a stale
+	// app pointer dereferenced in kernel context would land on cache
+	// control registers, which is a bad failure mode to invent.
+	// The 0x7000_01xx sub-window MUST be acknowledged on every board,
+	// with or without a cache, for a reason learned the hard way: an
+	// address nothing decodes gets NO ACK on this bus (the wbm_ack mux
+	// below falls through to 1'b0), and picorv32_wb then waits for that
+	// ack forever. It is not a harmless read of undefined data, it is a
+	// dead hang -- which is exactly what a flush write did on a build
+	// without the cache.
+	//
+	// sw/bios/bios.c and sw/os/fs/fs.c write the flush register
+	// unconditionally, and they have to: the obvious alternative --
+	// read INFO first to see whether a cache exists -- would hang on
+	// that very read for the same reason.
+	//
+	// So without ICACHE, csrs_wb simply keeps the whole 0x7 nibble it
+	// always had. It acks any cycle in range, ignores writes, and reads
+	// back 32'h0 for offsets it doesn't know (see rtl/csrs.v) -- which
+	// is precisely the stub behaviour needed here, and zero returned
+	// from INFO fails z_icache_present()'s magic check, correctly
+	// telling software the cache isn't there. A dedicated stub slave
+	// was tried first and cost ~800 LUT4 on ECP5: adding another term
+	// to the wbm_dat_i mux is expensive because that mux resolves
+	// through a 32'hzzzz_zzzz default, which yosys handles poorly.
+	// Nibble 0x7 has four tenants:
+	//   0x7000_00xx  csrs.v      read-only "what does this bitstream have"
+	//   0x7000_01xx  cache.v     instruction cache control/stats  (`ICACHE)
+	//   0x7000_02xx  socctl.v    writable global config
+	//   0x7000_03xx  rtc.v       wall-clock seconds/sub-seconds   (`RTC)
+	//
+	// Two of them are optional, and the rule that makes that safe is:
+	// CSRS ABSORBS THE WINDOW OF ANY TENANT THAT ISN'T BUILT. It acks
+	// any cycle in range, ignores writes, and reads back 32'h0 for
+	// offsets it doesn't know (see rtl/csrs.v), which is exactly the
+	// stub behaviour needed -- and a zero read correctly fails both
+	// z_icache_present()'s and z_rtc_available()'s magic checks, so
+	// software is told the hardware isn't there rather than being
+	// handed garbage.
+	//
+	// That absorption is not tidiness. An address NOTHING decodes gets
+	// no ack at all on this bus and picorv32_wb waits for it forever
+	// -- a dead hang, not a read of undefined data. sw/bios/bios.c and
+	// sw/os/fs/fs.c write the icache flush register unconditionally
+	// and have to (reading INFO first to check would hang on that very
+	// read), which is what taught us this the hard way.
+	//
+	// cs_csrs is therefore written once, below, as "the whole nibble
+	// minus whichever tenants actually exist in THIS build", rather
+	// than as a separate expression per combination. With two optional
+	// tenants that would be four cases to keep in agreement, and the
+	// one that mattered would be the one nobody tested.
+	wire cs_socctl = ((wbm_adr & 32'hf000_0300) == 32'h7000_0200);
+	wire wbm_cyc_socctl = cs_socctl && wbm_cyc;
+`ifdef ICACHE
+	wire cs_cache = ((wbm_adr & 32'hf000_0300) == 32'h7000_0100);
+	wire wbm_cyc_cache = cs_cache && wbm_cyc;
+`endif
+`ifdef RTC
+	wire cs_rtc = ((wbm_adr & 32'hf000_0300) == 32'h7000_0300);
+	wire wbm_cyc_rtc = cs_rtc && wbm_cyc;
+`endif
+	wire cs_csrs = ((wbm_adr & 32'hf000_0000) == 32'h7000_0000)
+		&& !cs_socctl
+`ifdef ICACHE
+		&& !cs_cache
+`endif
+`ifdef RTC
+		&& !cs_rtc
+`endif
+		;
 `ifdef DEBUG
 	wire cs_debug = ((wbm_adr & 32'hf000_0000) == 32'he000_0000);
 `endif
@@ -543,7 +686,14 @@ module sysctl #()
 `ifdef ETH_RMII
 		cs_ethmac ? wbs_ethmac_dat_o :
 `endif
+		cs_socctl ? wbs_socctl_dat_o :
+`ifdef RTC
+		cs_rtc ? wbs_rtc_dat_o :
+`endif
 		cs_csrs ? wbs_csrs_dat_o :
+`ifdef ICACHE
+		cs_cache ? wbs_cache_dat_o :
+`endif
 		32'hzzzz_zzzz;
 
 	wire wbs_bram_ack_o;
@@ -571,6 +721,13 @@ module sysctl #()
 	wire wbs_spieth_ack_o;
 	wire wbs_ethmac_ack_o;
 	wire wbs_csrs_ack_o;
+	wire wbs_socctl_ack_o;
+`ifdef RTC
+	wire wbs_rtc_ack_o;
+`endif
+`ifdef ICACHE
+	wire wbs_cache_ack_o;
+`endif
 
 	assign wbm_ack =
 		cs_bram ? wbs_bram_ack_o :
@@ -627,7 +784,14 @@ module sysctl #()
 `ifdef ETH_RMII
 		cs_ethmac ? wbs_ethmac_ack_o :
 `endif
+		cs_socctl ? wbs_socctl_ack_o :
+`ifdef RTC
+		cs_rtc ? wbs_rtc_ack_o :
+`endif
 		cs_csrs ? wbs_csrs_ack_o :
+`ifdef ICACHE
+		cs_cache ? wbs_cache_ack_o :
+`endif
 		1'b0;
 
 	// WISHBONE MASTER: CPU
@@ -646,14 +810,90 @@ module sysctl #()
 
 	localparam BRAM_WORDS = 2048;
 
+`ifdef CPU_ZEITLOS32
+
+	// EXPERIMENTAL: rtl/cpu/zeitlos32, selected by `CPU_ZEITLOS32 in
+	// rtl/boards.vh. Port-for-port compatible with the picorv32_wb
+	// instantiation in the `else branch below -- same wishbone
+	// signals, same irq input, same mem_instr for rtl/cache.v, and the
+	// same custom interrupt ABI, so sw/bios/boot_picorv32.S and
+	// sw/bios/custom_ops.S are untouched. Nothing else in this file
+	// knows which core is present.
+	//
+	// See docs/zeitlos32.md and rtl/cpu/zeitlos32/tests/.
+
+	zeitlos32_wb #(
+		.STACKADDR(BRAM_WORDS * 4),      // end of BRAM
+		.PROGADDR_RESET(32'h0000_0000),
+		.PROGADDR_IRQ(32'h0000_0010),
+		// rv32im -- the same `CPU_MUL/`CPU_MUL_FAST/`CPU_DIV switches
+		// the picorv32 branch below uses. FAST_MUL selects the DSP
+		// multiplier over the sequential one; unlike picorv32 the two
+		// are not mutually exclusive parameters, so ENABLE_MUL stays
+		// set either way and FAST_MUL just picks the implementation.
+`ifdef CPU_MUL_FAST
+		.ENABLE_MUL(1),
+		.FAST_MUL(1),
+`elsif CPU_MUL
+		.ENABLE_MUL(1),
+		.FAST_MUL(0),
+`else
+		.ENABLE_MUL(0),
+		.FAST_MUL(0),
+`endif
+`ifdef CPU_DIV
+		.ENABLE_DIV(1),
+`else
+		.ENABLE_DIV(0),
+`endif
+		.LATCHED_IRQ(32'b1111_1111_1111_1111_1111_1111_1110_1111)
+	)
+	wbm_cpu0_i
+	(
+		.wb_clk_i(wbm_clk),
+		.wb_rst_i(wbm_rst),
+		.wbm_adr_o(wbm_cpu_adr),
+		.wbm_dat_o(wbm_cpu_dat_o),
+		.wbm_dat_i(wbm_cpu_dat_i),
+		.wbm_we_o(wbm_cpu_we),
+		.wbm_sel_o(wbm_cpu_sel),
+		.wbm_stb_o(wbm_cpu_stb),
+		.wbm_ack_i(wbm_cpu_ack),
+		.wbm_cyc_o(wbm_cpu_cyc),
+		.trap(cpu_trap),
+		.irq(cpu_irq),
+		.eoi(),
+		.mem_instr(wbm_cpu_instr)
+	);
+
+`else
+
 	picorv32_wb #(
       .STACKADDR(BRAM_WORDS * 4),      // end of BRAM
       .PROGADDR_RESET(32'h0000_0000),
       .PROGADDR_IRQ(32'h0000_0010),
       .BARREL_SHIFTER(1),
       .COMPRESSED_ISA(0),
+      // rv32im -- see rtl/boards.vh's CPU_MUL/CPU_MUL_FAST/CPU_DIV.
+      // ENABLE_MUL and ENABLE_FAST_MUL are mutually exclusive inside
+      // picorv32 (the generate block prefers FAST), so CPU_MUL_FAST
+      // selects the DSP multiplier and plain CPU_MUL the sequential
+      // one; defining both is fine and means "fast".
+`ifdef CPU_MUL_FAST
       .ENABLE_MUL(0),
+      .ENABLE_FAST_MUL(1),
+`elsif CPU_MUL
+      .ENABLE_MUL(1),
+      .ENABLE_FAST_MUL(0),
+`else
+      .ENABLE_MUL(0),
+      .ENABLE_FAST_MUL(0),
+`endif
+`ifdef CPU_DIV
+      .ENABLE_DIV(1),
+`else
       .ENABLE_DIV(0),
+`endif
       .ENABLE_IRQ(1),
       .ENABLE_IRQ_TIMER(0),
       .ENABLE_IRQ_QREGS(1),
@@ -672,8 +912,14 @@ module sysctl #()
 		.wbm_ack_i(wbm_cpu_ack),
 		.wbm_cyc_o(wbm_cpu_cyc),
 		.trap(cpu_trap),
-		.irq(cpu_irq)
+		.irq(cpu_irq),
+		// picorv32 already produces this; it was simply never wired up
+		// before. rtl/cache.v uses it to cache instruction fetches ONLY,
+		// which is what keeps data coherency out of the picture entirely.
+		.mem_instr(wbm_cpu_instr)
 	);
+
+`endif
 
 	// WISHBONE SLAVE: MTU (Memory Translation Unit)
 	wire wbm_cyc_mtu = cs_mtu && wbm_cyc;
@@ -682,7 +928,7 @@ module sysctl #()
 		.clk_i(wbm_clk),
 		.rst_i(wbm_rst),
 		.addr_in(wbm_cpu_adr),
-		.addr_out(wbm_adr),
+		.addr_out(wbm_cpu_padr),
 		.cfg_adr_i(wbm_cpu_adr_sel),
 		.cfg_dat_i(wbm_dat_o),
 		.cfg_dat_o(wbs_mtu_dat_o),
@@ -694,14 +940,144 @@ module sysctl #()
     );
 
 	// CPU controls the main bus (will share with DMA controller)
-	//assign wbm_adr = wbm_cpu_adr;
-	assign wbm_dat_o = wbm_cpu_dat_o;
-	assign wbm_cpu_dat_i = wbm_dat_i;
-	assign wbm_sel = wbm_cpu_sel;
-	assign wbm_we = wbm_cpu_we;
-	assign wbm_stb = wbm_cpu_stb;
-	assign wbm_cpu_ack = wbm_ack;
-	assign wbm_cyc = wbm_cpu_cyc;
+	//
+	// With ICACHE the instruction cache sits in this path: the CPU
+	// talks to the cache, and the cache drives the bus. It needs to own
+	// wbm_adr rather than just observe it, because during a line fill
+	// it addresses words the CPU never asked for. Every wbm_* signal
+	// still has exactly one driver either way.
+`ifdef ICACHE
+
+	wb_icache #(
+		.CACHE_KB(`ICACHE_KB),
+		.LINE_WORDS(`ICACHE_LINE_WORDS)
+	) icache_i (
+		.wb_clk_i(wbm_clk),
+		.wb_rst_i(wbm_rst),
+
+		// upstream: the CPU, at its translated physical address
+		.c_adr_i(wbm_cpu_padr),
+		.c_dat_i(wbm_cpu_dat_o),
+		.c_dat_o(wbm_cpu_dat_i),
+		.c_we_i(wbm_cpu_we),
+		.c_sel_i(wbm_cpu_sel),
+		.c_stb_i(wbm_cpu_stb),
+		.c_cyc_i(wbm_cpu_cyc),
+		.c_instr_i(wbm_cpu_instr),
+		.c_ack_o(wbm_cpu_ack),
+
+		// downstream: the main wishbone bus, via wb_arbiter_main below
+		.m_adr_o(wbc_adr),
+		.m_dat_o(wbc_dat_o),
+		.m_dat_i(wbc_dat_i),
+		.m_we_o(wbc_we),
+		.m_sel_o(wbc_sel),
+		.m_stb_o(wbc_stb),
+		.m_cyc_o(wbc_cyc),
+		.m_ack_i(wbc_ack),
+
+		// control/status registers (0x7000_0100, see cs_cache above)
+		.cfg_adr_i({ 30'b0, wbm_adr_sel_word[1:0] }),
+		.cfg_dat_i(wbm_dat_o),
+		.cfg_dat_o(wbs_cache_dat_o),
+		.cfg_we_i(wbm_we),
+		.cfg_stb_i(wbm_stb),
+		.cfg_cyc_i(wbm_cyc_cache),
+		.cfg_ack_o(wbs_cache_ack_o)
+	);
+
+`else
+
+	// wbm_cpu_padr, not wbm_cpu_adr: the MTU's translated output, which
+	// is what this bus has always carried -- the MTU simply used to
+	// drive wbm_adr directly instead of going through a named wire.
+	assign wbc_adr = wbm_cpu_padr;
+	assign wbc_dat_o = wbm_cpu_dat_o;
+	assign wbm_cpu_dat_i = wbc_dat_i;
+	assign wbc_sel = wbm_cpu_sel;
+	assign wbc_we = wbm_cpu_we;
+	assign wbc_stb = wbm_cpu_stb;
+	assign wbm_cpu_ack = wbc_ack;
+	assign wbc_cyc = wbm_cpu_cyc;
+
+`endif
+
+	// MAIN BUS ARBITER (CPU vs blitter source reads)
+	//
+	// See rtl/arbiter_main.v for the round-robin policy and why the
+	// grant
+	// is held for a whole transaction. That last part is what makes
+	// this safe to drop in front of the CPU: a CPU transaction is
+	// never preempted half way, so every cs_* decode stays coherent
+	// for the whole of it, and nothing downstream can observe the bus
+	// changing owner mid-cycle.
+	//
+	// Deadlock: the blitter needs BOTH this bus (source reads) and the
+	// VRAM bus behind wb_arbiter_vram (framebuffer writes), and each
+	// arbiter only releases a grant when its winner drops cyc. If the
+	// blitter ever held one while waiting for the other, and the CPU
+	// held the opposite, the machine would lock solid. It cannot: the
+	// blitter's state machine keeps its two master ports strictly
+	// alternating, never asserting both, and rtl/gpu/bench/tb_memblit.v
+	// asserts exactly that on every cycle of every test.
+
+`ifdef GPU_BLIT
+
+	wb_arbiter_main marb0_i (
+		.clk(wbm_clk),
+		.rst(wbm_rst),
+
+		// Master 0: CPU (through the instruction cache, if built)
+		.m0_adr_i(wbc_adr),
+		.m0_dat_i(wbc_dat_o),
+		.m0_dat_o(wbc_dat_i),
+		.m0_we_i(wbc_we),
+		.m0_sel_i(wbc_sel),
+		.m0_stb_i(wbc_stb),
+		.m0_cyc_i(wbc_cyc),
+		.m0_ack_o(wbc_ack),
+
+		// Master 1: blitter source reads
+		.m1_adr_i(wbm_blitsrc_adr),
+		.m1_dat_i(32'h0),
+		.m1_dat_o(wbm_blitsrc_dat_i),
+		.m1_we_i(wbm_blitsrc_we),
+		.m1_sel_i(wbm_blitsrc_sel),
+		.m1_stb_i(wbm_blitsrc_stb),
+		.m1_cyc_i(wbm_blitsrc_cyc),
+		.m1_ack_o(wbm_blitsrc_ack),
+
+		.s_adr_o(wbm_adr),
+		.s_dat_o(wbm_dat_o),
+		.s_dat_i(wbm_dat_i),
+		.s_we_o(wbm_we),
+		.s_sel_o(wbm_sel),
+		.s_stb_o(wbm_stb),
+		.s_cyc_o(wbm_cyc),
+		.s_ack_i(wbm_ack),
+
+		.master(marb_master)
+	);
+
+`else
+
+	// No blitter in this bitstream, so no second master -- wire the
+	// CPU straight through and the main bus behaves exactly as it did
+	// before the arbiter existed.
+	assign wbm_adr = wbc_adr;
+	assign wbm_dat_o = wbc_dat_o;
+	assign wbc_dat_i = wbm_dat_i;
+	assign wbm_sel = wbc_sel;
+	assign wbm_we = wbc_we;
+	assign wbm_stb = wbc_stb;
+	assign wbc_ack = wbm_ack;
+	assign wbm_cyc = wbc_cyc;
+
+	assign wbm_blitsrc_dat_i = 32'h0;
+	assign wbm_blitsrc_ack = 1'b0;
+	assign marb_master = 1'b0;
+
+`endif
 
 	// WISHBONE MASTER: GPU Rasterizer
 `ifdef GPU_RASTER
@@ -821,6 +1197,16 @@ module sysctl #()
 		.m_sel_o(wbm_gpu_blit_sel),
 		.m_ack_i(wbm_gpu_blit_ack),
 
+		// master interface to MAIN MEMORY (memory copy source reads).
+		// Idle in every other mode -- see rtl/gpu/gpu_blit.v.
+		.s_adr_o(wbm_blitsrc_adr),
+		.s_dat_i(wbm_blitsrc_dat_i),
+		.s_cyc_o(wbm_blitsrc_cyc),
+		.s_stb_o(wbm_blitsrc_stb),
+		.s_we_o(wbm_blitsrc_we),
+		.s_sel_o(wbm_blitsrc_sel),
+		.s_ack_i(wbm_blitsrc_ack),
+
 		// always connected now (see the wire declaration/tie-off
 		// above) -- no longer conditional on MEM_GLYPH
 		.glyph_addr_o(wbm_blit_glyph_addr),
@@ -839,7 +1225,7 @@ module sysctl #()
 
 	wire wbm_cpu_arb0_cyc = cs_vram && wbm_cpu_cyc;
 
-   wb_arbiter #() arb0_i
+   wb_arbiter_vram #() varb0_i
    (
       .clk(wbm_clk),
       .rst(wbm_rst),
@@ -1187,11 +1573,16 @@ module sysctl #()
 	);
 `endif
 
-	// WISHBONE SLAVE: SPI BIT-BANG INTERFACE FOR SDCARD
+	// WISHBONE SLAVE: HARDWARE SPI MASTER FOR SDCARD
 `ifdef SPI_SDCARD
 	wire wbm_cyc_spisdcard = cs_spisdcard && wbm_cyc;
 
-	spibb_wb #() wbs_spibb0_i
+	// spisd_wb, not spibb_wb: SCLK is generated in gateware rather
+	// than by the CPU toggling pins. See rtl/spisd.v -- the bit-banged
+	// version made the SPI clock rate a function of compiler codegen,
+	// which broke when the toolchain changed and would break again
+	// with an instruction cache enabled.
+	spim_wb #(.DEFAULT_DIV(8'd59)) wbs_spisd0_i
 	(
 		.wb_clk_i(wbm_clk),
 		.wb_rst_i(wbm_rst),
@@ -1203,10 +1594,11 @@ module sysctl #()
 		.wb_stb_i(wbm_stb),
 		.wb_ack_o(wbs_spisdcard_ack_o),
 		.wb_cyc_i(wbm_cyc_spisdcard),
-		.sd_ss(SD_SS),
-		.sd_miso(SD_MISO),
-		.sd_mosi(SD_MOSI),
-		.sd_sck(SD_SCK)
+		.spi_cs_n(SD_SS),
+		.spi_miso(SD_MISO),
+		.spi_mosi(SD_MOSI),
+		.spi_sck(SD_SCK),
+		.spi_int(1'b1)		// sdcards have no interrupt line
 	);
 `endif
 
@@ -1214,7 +1606,10 @@ module sysctl #()
 `ifdef SPI_ETH
 	wire wbm_cyc_spieth = cs_spieth && wbm_cyc;
 
-	spibb_eth_wb #() wbs_spibbeth0_i
+	// spim_wb, same module as the sdcard above. The ENC28J60 needs no
+	// slow init phase -- it takes full speed from reset -- so its
+	// divider starts fast rather than at 400kHz. See rtl/spim.v.
+	spim_wb #(.DEFAULT_DIV(8'd1)) wbs_spieth0_i
 	(
 		.wb_clk_i(wbm_clk),
 		.wb_rst_i(wbm_rst),
@@ -1226,11 +1621,11 @@ module sysctl #()
 		.wb_stb_i(wbm_stb),
 		.wb_ack_o(wbs_spieth_ack_o),
 		.wb_cyc_i(wbm_cyc_spieth),
-		.eth_ss(ETH_SS),
-		.eth_miso(ETH_MISO),
-		.eth_mosi(ETH_MOSI),
-		.eth_sck(ETH_SCLK),
-		.eth_int(ETH_INT)
+		.spi_cs_n(ETH_SS),
+		.spi_miso(ETH_MISO),
+		.spi_mosi(ETH_MOSI),
+		.spi_sck(ETH_SCLK),
+		.spi_int(ETH_INT)
 	);
 `endif
 
@@ -1265,6 +1660,66 @@ module sysctl #()
 	// come straight from this file's own `MEM/CSR_FEATURES above.
 	wire wbm_cyc_csrs = cs_csrs && wbm_cyc;
 
+	// WISHBONE SLAVE: SOC CONTROL (writable global config)
+	//
+	// Always instantiated, no `ifdef -- same reasoning as csrs.v below.
+	// cursor_busy goes straight to rtl/gpu/gpu_cursor.v; it is declared
+	// unconditionally so the wire exists even on boards built without
+	// GPU_CURSOR, where it simply goes nowhere.
+	wire socctl_cursor_busy;
+
+	// Virtual phosphor mode -- socctl.v holds it, rtl/gpu/gpu_video.v
+	// consumes it. Declared unconditionally for the same reason
+	// socctl_cursor_busy above is.
+	wire [1:0] socctl_video_mode;
+
+	// `GPU_AMBER / `GPU_GREEN / `GPU_PAPER (rtl/boards.vh) used to be
+	// read directly by gpu_video.v and hard-wired the colour at
+	// synthesis. They now choose only the POWER-ON DEFAULT, and
+	// software can change it afterwards at any time.
+	//
+	// This lives here rather than in socctl.v so that socctl stays a
+	// generic register block: board configuration is this file's job,
+	// and boards.vh is included here. socctl gets a number.
+	//
+	// Order matters if more than one is somehow defined -- first match
+	// wins, and there is no "both" to express. That is a build-file
+	// mistake rather than a state worth encoding.
+	localparam [1:0] VIDEO_MODE_DEFAULT =
+`ifdef GPU_AMBER
+		2'd1;
+`elsif GPU_GREEN
+		2'd2;
+`elsif GPU_PAPER
+		2'd3;
+`else
+		2'd0;
+`endif
+
+	socctl_wb #(
+		.VIDEO_MODE_RESET(VIDEO_MODE_DEFAULT)
+	) socctl_i (
+		.wb_clk_i(wbm_clk),
+		.wb_rst_i(wbm_rst),
+		// Masked to this block's own window, NOT the raw word address.
+		// socctl lives at 0x7000_02xx, so wbm_adr_sel_word is 0x80 for
+		// its first register, not 0 -- passing it straight through
+		// means no case ever matches, writes vanish and MAGIC reads
+		// back as zero. csrs.v gets away with the raw value only
+		// because its window starts at offset 0. Same masking as the
+		// icache block above.
+		.wb_adr_i({ 30'b0, wbm_adr_sel_word[1:0] }),
+		.wb_dat_i(wbm_dat_o),
+		.wb_dat_o(wbs_socctl_dat_o),
+		.wb_we_i(wbm_we),
+		.wb_sel_i(wbm_sel),
+		.wb_stb_i(wbm_stb),
+		.wb_ack_o(wbs_socctl_ack_o),
+		.wb_cyc_i(wbm_cyc_socctl),
+		.cursor_busy(socctl_cursor_busy),
+		.video_mode(socctl_video_mode)
+	);
+
 	csrs_wb #(
 		.MEM_MB(`MEM),
 		.FEATURES(CSR_FEATURES)
@@ -1281,6 +1736,50 @@ module sysctl #()
 		.wb_ack_o(wbs_csrs_ack_o),
 		.wb_cyc_i(wbm_cyc_csrs),
 	);
+
+	// WISHBONE SLAVE: RTC (rtl/rtc.v) -- wall-clock seconds since the
+	// Unix epoch, plus a 1/1024s fraction.
+	//
+	// Optional, `RTC in rtl/boards.vh, which defines it at the
+	// universal level so every board gets one by default -- it needs
+	// no pins and no board support, so there is no board-specific
+	// reason to want it or not. Without it, csrs.v absorbs this
+	// window (see the cs_csrs comment above), reads return 0, the
+	// FEATURE bit is clear and software correctly concludes there is
+	// no clock here.
+	//
+	// NOT the same thing as rtc_ctr further up this file, despite the
+	// name they share, and NOT affected by this define. That one is
+	// the ~732Hz KTIMER divider and counts ticks since boot; this one
+	// has an epoch and answers what the date is. See rtc.v's own
+	// header comment.
+	//
+	// wb_adr_i is masked to this block's own window rather than being
+	// the raw word address, exactly like the socctl and icache blocks
+	// above -- the RTC lives at 0x7000_03xx, so wbm_adr_sel_word is
+	// 0xC0 for its first register, not 0. Passing it straight through
+	// would mean no case ever matches: writes would vanish and MAGIC
+	// would read back zero. Three bits, not two, because this block
+	// has six registers.
+	//
+	// CLK_HZ is SYSCLK (48MHz on every board in this lineup), which
+	// the prescaler divides by 1024 exactly -- see rtc.v.
+`ifdef RTC
+	rtc_wb #(
+		.CLK_HZ(SYSCLK)
+	) rtc_i (
+		.wb_clk_i(wbm_clk),
+		.wb_rst_i(wbm_rst),
+		.wb_adr_i({ 29'b0, wbm_adr_sel_word[2:0] }),
+		.wb_dat_i(wbm_dat_o),
+		.wb_dat_o(wbs_rtc_dat_o),
+		.wb_we_i(wbm_we),
+		.wb_sel_i(wbm_sel),
+		.wb_stb_i(wbm_stb),
+		.wb_ack_o(wbs_rtc_ack_o),
+		.wb_cyc_i(wbm_cyc_rtc)
+	);
+`endif
 
 	// WISHBONE SLAVE: USB HID
 `ifdef USB_HID
@@ -1370,6 +1869,7 @@ module sysctl #()
 		.bclk(clk126mhz),
 		.resetn(~wbm_rst),
 		.pixel(gpu_pixel),
+		.video_mode(socctl_video_mode),
 		.x(gpu_x),
 		.y(gpu_y),
 		.gb_adr_o(gb_adr),
@@ -1420,6 +1920,7 @@ module sysctl #()
 		.gpu_y(gpu_y),
 		.curs_x(gpu_curs_x),
 		.curs_y(gpu_curs_y),
+		.curs_alt(socctl_cursor_busy),
 	);
 `endif
 

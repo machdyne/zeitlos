@@ -39,4 +39,11 @@ void k_mem_free(void *ptr);
 uint32_t k_mem_align_up(uint32_t val, uint32_t align);
 z_rv k_mem_dump(void);	// `free` in sh.c -- see its own comment in mem.c
 
+// Z_SYS_MEM_STATS handler -- args are z_mem_stats_args_t
+// (sw/common/zproc.h). The same information k_mem_dump() prints,
+// returned as data so an app (specifically sw/apps/repl's Scheme
+// (free), see docs/scheme_api.md) can report it. Both share one walk
+// of the block list -- see mem_collect() in mem.c.
+z_obj_t *k_mem_stats(z_obj_t *args);
+
 #endif

@@ -84,6 +84,26 @@
 // than this is truncated (still NUL-terminated), not rejected.
 #define Z_REPL_EVAL_REPLY_MAX 256
 
+// max response text repl builds for an INTERACTIVE (port/`term`)
+// command -- deliberately larger than the REPL_EVAL wire cap above,
+// and deliberately a separate constant.
+//
+// The two have genuinely different constraints. Z_REPL_EVAL_REPLY_MAX
+// is a protocol promise: every REPL_EVAL peer sizes its own buffer
+// from it, so raising it means rebuilding both sides together. This
+// one is purely repl-internal -- a stack buffer in its own
+// handle_data() -- so it can be whatever the output actually needs,
+// with no compatibility question at all.
+//
+// 256 turned out to be too small for real output. `(free)` prints to
+// ~293 bytes and `(ps)` on a full 16-entry process table to ~770; both
+// were silently losing their tails, which is exactly how they were
+// reported ("... ("mem-free-blocks" 1) ("mem-blo" and nothing more).
+// 1024 covers both comfortably. Anything that still doesn't fit is now
+// marked as truncated rather than just stopping mid-token -- see
+// copy_or_mark_truncated() in repl.c.
+#define Z_REPL_REPLY_MAX 1024
+
 // sends `code` to `repl_pid` as a REPL_EVAL request and blocks for the
 // reply -- bounded (~`timeout_ticks`, see z_uptime_ticks()), NOT
 // forever, same reasoning as z_port_connect()'s own timeout: `repl`

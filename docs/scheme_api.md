@@ -123,6 +123,201 @@ budget; the C body itself (and whatever it allocates while running,
 freed again once it returns) is where any real cost lives, same as
 every existing `bi_*` builtin already inside `ms.c`.
 
+### What stays a builtin, and why
+
+`F12` is worth knowing about and is mentioned in both repl's connect
+banner and `help`: `term` intercepts it locally, before anything
+reaches a port (`handle_key_event()` in `term.c`), so it works even
+when term is relaying raw bytes to a remote that has no quit command
+of its own -- which is exactly the situation you need it in, and
+exactly the situation where nothing can tell you about it.
+
+Five commands are **not** Scheme procedures and can't become ones:
+`help`, `te`, `page`, `port`, `telnet`, plus `quit`/`exit`. Each needs
+the *requesting connection itself* -- `te` and `page` take it over for
+a full-screen VT100 session, `port` and `telnet` redirect it
+elsewhere, `quit` ends it -- and a Scheme procedure has no access to
+that. `dispatch_line()` passes the connection through as `conn`, which
+is `NULL` for a `Z_REPL_EVAL` request; all five refuse cleanly in that
+case rather than half-working.
+
+Everything else moved to the Scheme API, so each command now lives in
+exactly one place. Bare-word syntax (\S1b) means this is invisible in
+use: typing `uptime` or `free` still works, it just means `(uptime)`
+and `(free)` now and returns a value you can compute with.
+
+**Reply buffers, and why truncation is now always visible.** This bit
+three times, so it is worth stating plainly:
+
+- `help` ran to 357 bytes into a 256-byte buffer and silently lost its
+  last third.
+- `(free)` prints to ~293 bytes and `(ps)` on a full 16-entry process
+  table to ~770. Both used to stop mid-token -- `... ("mem-free-blocks"
+  1) ("mem-blo` and nothing more -- which reads as corrupt output
+  rather than as cut-off output.
+
+There are now **two** constants, because the two paths have genuinely
+different constraints:
+
+| constant | value | scope |
+|---|---|---|
+| `Z_REPL_EVAL_REPLY_MAX` | 256 | wire cap for `REPL_EVAL` -- every peer sizes its buffer from it, so raising it means rebuilding both sides |
+| `Z_REPL_REPLY_MAX` | 1024 | repl-internal stack buffer for interactive (port/`term`) replies -- no peer, no compatibility question |
+
+`help` is held in a named constant with a negative-array-size typedef
+beside it, so an over-long help string is a compile **error** rather
+than something the next person has to notice. It is deliberately sized
+against the *smaller* cap so it reads identically on both paths.
+
+And because a printed Scheme value has no bounded size in general --
+`(ls)` on a large directory, or any user expression -- `eval_scheme()`
+routes its result through `copy_or_mark_truncated()`, which appends
+` ...[truncated]` instead of just stopping. Silent truncation is the
+failure mode all three of these shared; the fix is not just a bigger
+buffer but saying so when it still doesn't fit.
+
+### Scheme output goes to `term`, not the serial console
+
+`ms`'s printing procedures -- `display`, `write`, `print`, `newline`,
+`gc` and `dump` -- all write to stdout, which on this OS means the
+UART. For someone running them from a `term` window that is the wrong
+screen entirely: `(dump)` printed ~210 symbol names onto the serial
+console and showed the user nothing at all.
+
+Fixed with a redirect hook (`z_stdout_hook`, `sw/common/zeitlos.h`)
+rather than by patching the call sites: `ms.c` has 50+ scattered
+`printf()`/`fputs()`/`putchar()` calls and no output abstraction of
+its own, so redirecting them individually would mean a large diff
+against a submodule this project deliberately keeps close to upstream.
+Catching it where they all already funnel through -- `_write()` -- costs
+one branch and covers procedures nobody has written yet.
+
+While an interactive command is dispatching, repl installs the hook,
+**accumulates** output, and sends it once dispatch finishes. Details
+that matter:
+
+- **Buffered, not per-write.** `dump` emits one `fputs()` per symbol.
+  Sending each would be one message apiece, and `z_port_send()` refuses
+  once `Z_PORT_MAX_PENDING_SENDS` (8) sends go unacked -- with no ack
+  possible mid-command, since repl only processes `Z_PORT_DATA_ACK`
+  back in its main loop. The real budget is ~8 sends per command,
+  shared with the reply and prompt. The buffer is 2KB so `dump`'s
+  ~1.5KB goes out in one.
+- **`fflush(stdout)` before taking the hook down.** stdout is
+  line-buffered (`_isatty()` reports a tty), so anything printed
+  without a trailing newline is still inside libc when dispatch
+  returns.
+- **stderr stays on the console.** `ms.c`'s `[panic]` diagnostics
+  belong there, and redirecting them would let a panic raised while
+  rendering output recurse into what was already failing.
+- **Bare `\n` becomes `\r\n`, existing `\r\n` is left alone.** `ms.c`
+  mixes both conventions -- `bi_dump`'s wrapping emits `\r\n`, while
+  `newline` emits `\n` -- so blind expansion would produce `\r\r\n`.
+- **`te`/`page` sessions are exempt.** Those draw their own full
+  screen; captured diagnostics go to the console instead of being
+  painted over it.
+- **A failed send falls back to the console** rather than dropping the
+  output.
+
+`REPL_EVAL` requests are unaffected -- no connection, so stdout keeps
+going to the console exactly as before.
+
+#### `(print-console x)` -- the deliberate opposite
+
+| Procedure | Behavior |
+|---|---|
+| `(display x)` / `(print x)` | print to the `term` window that ran the command (ms builtins) |
+| `(print-console x)` | prints to the serial console, always |
+
+Once `display` goes to `term`, there's no way to *deliberately* reach
+the console -- which is exactly what you want when the console is a
+second window onto a running system: tracing what a procedure does
+without that trace scrolling through the output you're trying to read,
+watching a long loop while the `term` window shows only its result, or
+getting anything at all out of code running with no connection
+attached.
+
+Semantics match **`print`**, not `display` -- the name sets the
+expectation and the behavior follows it: a trailing newline is added,
+non-string values print in readable form (strings inside a list come
+out quoted), a string argument prints raw, and no argument at all
+emits just a newline. Returns `#f`, same as `print`. The automatic
+newline is the right default for what this exists for: a trace line
+that needs an explicit `"\n"` every time is a trace line that
+eventually won't have one.
+
+Implemented by writing to **stderr**, not by temporarily removing the
+hook. Both would reach the UART, but the hook dance has a real hazard:
+stdout is line-buffered, so bytes from an earlier `display` may still
+be inside libc, and flushing them with the hook removed would misroute
+that earlier output to the console. stderr is unbuffered and `_write()`
+only ever redirects fd 1, so this needs no coordination with the
+capture buffer and can't reorder or steal anything in flight. (This
+path is already proven in this build -- `ms_log()` writes its
+`[info]`/`[error]`/`[panic]` lines to stderr.)
+
+Consequence worth knowing: this shares the console with those `[panic]`
+diagnostics. That's the intent -- one debugging stream, in the order
+things actually happened.
+
+### `page` -- viewing files of any size
+
+`te` (`docs/editor.md`) loads the whole document into repl's heap and
+pays several times the file's raw size for its line-list
+representation, which is why `te_bridge.c` enforces a conservative
+`TE_MAX_FILE_SIZE` (2KB default). That ceiling is right for an editor
+and useless for reading a book.
+
+`page` (`sw/apps/repl/page.c`) never holds more than a screenful. It
+keeps the file open across the session and re-reads what it needs on
+each redraw, so peak memory is a fixed few KB whether the file is 2KB
+or 2MB. Keys: space/`f` and `b` for pages, arrows or `j`/`k` for
+lines, PgUp/PgDn, `g`/`G` for the ends, `q` to quit.
+
+**Reading backwards is the whole design problem** -- a byte offset is
+not a line number, and nothing in a text file lets you find the start
+of the previous line without having already seen it. An offset for
+every line would work and is exactly what this can't afford: a 2MB
+book is ~40k lines, and 40k × 4 bytes is 160KB of index for a process
+whose entire stack+heap allowance is 64KB. So `page` keeps a **sparse
+index** -- one offset every `PAGE_IDX_STRIDE` (256) lines,
+`PAGE_IDX_MAX` (256) entries, 1KB of `.bss`, covering 65,536 lines --
+filled in lazily as a side effect of ordinary scrolling, with no
+separate indexing pass. Any jump seeks to the nearest anchor at or
+before the target and scans forward, at most 256 lines. Past that
+coverage the index stops growing and long backward jumps get slower;
+that's a deliberate choice over an unbounded index, and the failure
+mode is a moment of latency, not running out of memory.
+
+That seek is why **`FS_SEEK`** exists. Every pre-existing chunked-I/O
+call only moves forward; without it, paging back one screen in a book
+would mean closing the file, reopening it, and re-reading from byte 0
+-- on an SD card, on every keypress.
+
+The status line clamps the **filename**, not the key hints, when the
+two don't fit the row together -- someone paging a file already knows
+what they opened, while the hints are this viewer's only
+discoverability.
+
+`page` deliberately **truncates** long lines rather than wrapping
+them. Wrapping would make one file line occupy several screen rows, so
+"page down 24 lines" would no longer mean a fixed number of file
+lines, and scrolling arithmetic that depends on content width is much
+harder to keep correct. Tabs render as a space and other control bytes
+as `.`, so a binary file opened by mistake scrolls harmlessly instead
+of filling the terminal with escape sequences it will try to
+interpret.
+
+Session ownership follows `te_bridge.h`'s rule exactly: the state is
+file-static, so one connection pages at a time and a second `page`
+command is refused rather than quietly stealing the first reader's
+position. repl stays fully responsive to its other connections
+throughout -- paging is driven one keystroke at a time through the
+normal message loop and never blocks it. On `Z_PORT_CLOSE`,
+`page_abort()` closes the open handle, which matters: handles live in
+a bounded kernel-side table (`Z_FS_MAX_OPEN` is 4) with no
+process-exit sweep.
+
 ## 3. The registration mechanism (implemented -- 4th patch to `ms.c`)
 
 `ms.c`'s own `def_builtin()`/`mk_fun()`/`mk_sym()`/`env_define()` are
@@ -239,6 +434,11 @@ translation (\S1b).
 | `(read-file "name")` | whole file contents as a string, or `#f` |
 | `(write-file "name" "contents")` | create/truncate + write; `#t`/`#f` |
 | `(delete-file "name")` | `#t`/`#f` |
+| `(mkdir "path")` | create a directory; `#t`/`#f` |
+| `(touch-file "path")` | create an empty file; `#t`/`#f` |
+| `(load "file.l")` | read a file and evaluate **every** form in it; `#t`, or `#f` if unreadable |
+| `(file->str "name")` | alias for `read-file` (upstream `ms`'s own name for it) |
+| `(df)` | filesystem capacity: `(("total-kb" N) ("used-kb" N) ("free-kb" N))` |
 
 Backed by two new syscalls (`sw/os/fsapi.c`, following the exact
 "no kernel `malloc()`, caller-owned buffers" conventions the original
@@ -284,6 +484,345 @@ containing an embedded NUL byte reads back truncated at that byte (no
 embedded-NUL support in this string representation) -- fine for
 ordinary text, not a safe way to read arbitrary binary data as a
 Scheme string.
+
+
+#### `mkdir` / `touch-file`, and why the odd name
+
+Two more thin syscalls (`FS_MKDIR`, `FS_TOUCH`) over the existing
+`fs_mkdir()`/`fs_touch()` in `sw/os/fs/fs.c`, which already did the
+real work but were reachable only from `sh.c` (kernel code, which
+links `fs/fs.c` directly). Exactly the same relationship `FS_UNLINK`
+has to `fs_unlink()`.
+
+One trap worth restating, because it has already caused a bug in this
+codebase once: `fs_mkdir()`/`fs_touch()`/`fs_unlink()` all return **0
+on success**, inverted from `fs_size()`/`fs_write_file()`'s "0 means
+failure". The app-side wrappers in `sw/common/zfsapp.c` normalize this
+to that file's own 1-on-success convention, so no caller above them
+has to think about it.
+
+It is `touch-file`, not `touch`, for a reason that only exists because
+of bare-word command syntax (\S1b): **any bound callable becomes a
+typeable command**, so every short generic name registered here is a
+name permanently taken away from the user's own global environment.
+`-file` also matches the existing `read-file`/`write-file`/
+`delete-file` family, which is where a reader will expect to find it.
+
+#### `load` needs no `ms.c` patch
+
+`ms.c` does have its own `load` and `file->str` builtins -- but they
+live inside `#ifndef LIX` and go through `fopen()`/`fread()`. This
+build is `-DLIX` precisely because there is no stdio file layer here,
+which is why `sw/common/ms_platform/fs.h` is a deliberately empty
+stub. Enabling them would mean routing Zeitlos's `fs_*` calls into
+`ms.c` itself -- Zeitlos-specific I/O inside the submodule, which
+makes it *harder* to upstream, not easier.
+
+Instead `zapi_load()` uses `ms_load_string()`, which is already public
+and already declared in `ms_api.h`. **No change to `sw/ext/ms` was
+needed for any part of this revision.**
+
+`load` is also genuinely more than the `(eval (read (read-file ...)))`
+it replaces: that evaluates the *first* form and silently ignores the
+rest of the file, which is essentially never what someone loading a
+script wants. `ms_load_string()` loops over every form.
+
+An error inside a loaded file raises a normal Scheme panic (caught by
+`repl.c`'s existing recovery) with whatever forms already ran having
+already taken effect -- no transactional all-or-nothing behavior, same
+as any other Scheme's `load`.
+
+#### `(df)` -- filesystem capacity
+
+All figures in **kilobytes**, not bytes: these are 32-bit all the way
+down and a 32GB card's byte count overflows a `uint32_t`. A caller
+wanting bytes can multiply; a caller handed a pre-overflowed number
+could not have recovered it.
+
+`(df)` is the **SD card**; `(free)` is **main memory**. They're
+unrelated, and the names deliberately match the `df`/`free` shell
+commands (`sw/os/sh.c`) that report the same two things.
+
+An absent or unmounted card reports all zeros rather than raising --
+"how much space is there" has a truthful answer of "none" in that
+state, and a script polling for a card shouldn't have to catch an error
+to discover it isn't there yet.
+
+`fs_total()`/`fs_free()` (`sw/os/fs/fs.c`) wrap FatFs's `f_getfree()`
+and had existed all along -- there was simply no syscall, no shell
+command, and nothing in Scheme that ever called them. The new `FS_DF`
+syscall exposes them, and `df` was added to `sh.c` at the same time.
+
+### Processes -- IMPLEMENTED
+
+| Procedure | Behavior |
+|---|---|
+| `(ps)` | process table snapshot: a list of `(pid base size pc sp flags)` rows |
+| `(run "name")` | start a process from a file (bare name: `"net"`, not `"/NET.BIN"`); new pid, or `#f` |
+| `(kill pid)` | `#t`/`#f` |
+| `(uptime)` | ticks since boot, as a number |
+| `(delay-ms n)` | busy-wait at least `n` ms, then `#t` |
+
+`(ps)` returns **data**, not the pre-formatted text `sh.c`'s own `ps`
+prints. `k_proc_dump()` stays exactly as it is; the new `PROC_LIST`
+syscall returns the same information to a caller -- the same
+relationship `k_fs_list()` already has to `fs_list_dir()`. Values are
+decimal rather than the hex the console dump uses: hex is right for
+reading addresses by eye, numbers are right for a caller doing
+arithmetic, and a caller who wants hex can format it.
+
+The `pid` is the process **table index**, which is what `(kill ...)`,
+`k_proc_base()` and `k_proc_kill()` all take -- so a pid from `(ps)`
+goes straight back into `(kill ...)` with no translation:
+
+```scheme
+; kill every process except the kernel (pid 0) and ourselves
+(for-each (lambda (row)
+            (if (and (> (car row) 0) (not (= (car row) (getpid))))
+                (kill (car row))))
+          (ps))
+```
+
+`run` and `kill` needed **no new syscalls** -- `PROC_RUN` and
+`PROC_KILL` already existed for wm's dock and close-icon handling.
+`z_proc_kill()` was widened from `void` to `z_rv` so `(kill ...)` can
+return a real `#t`/`#f` rather than an unconditional "probably";
+existing callers that ignore the value compile unchanged.
+
+`run` returns `#f` rather than raising, deliberately: unlike the
+networking procedures, where losing the specific reason costs real
+diagnostic information, "it didn't start" is a single plainly-visible
+outcome a script may well want to branch on -- the same distinction
+`file-size`/`read-file` already draw against the window procedures.
+If it returns `#f` unexpectedly, `(free)` below is the thing to check
+next.
+
+`uptime` replaces a builtin that printed a fixed string and gave a
+caller nothing to compute with. Ticks rather than seconds because
+ticks are what the hardware counts (the KTIMER IRQ, ~732Hz): dividing
+to seconds is one obvious expression, while recovering ticks from a
+pre-rounded seconds value isn't possible at all. The counter is 32-bit
+and wraps after roughly 68 days.
+
+**`delay-ms` blocks this entire process.** On `repl` that means every
+other connected `term` window stops being serviced for the duration,
+not just the one that ran it -- repl's single main loop drains one
+shared mailbox. There is no sleep/yield primitive in this OS, so this
+genuinely burns cycles rather than giving them up. Fine for pacing a
+short animation or a retry loop; actively antisocial for anything
+long.
+
+### Time -- IMPLEMENTED
+
+| Procedure | Behavior |
+|---|---|
+| `(current-time)` | seconds since the Unix epoch, UTC, as a number; `#f` if the clock is unavailable or unset |
+| `(current-date)` | `(year month day hour minute second weekday yearday)`; `#f` if unavailable or unset |
+| `(current-date t)` | the same breakdown for an arbitrary timestamp `t` |
+
+The wall clock (`rtl/rtc.v`, `docs/rtc.md`), as opposed to `(uptime)`
+above. Both exist and they answer different questions: `uptime` is
+monotonic and is what you time things with, this has an epoch and can
+jump backwards the moment net's NTP client lands a correction. Using
+the wrong one is how you get a negative duration.
+
+```scheme
+(current-date)          ; => (2026 8 27 14 31 2 4 238)
+(current-date 0)        ; => (1970 1 1 0 0 0 4 0)
+```
+
+`month` is 1-12 and `day` is 1-31 -- not the 0-based months a C
+`struct tm` uses. This is a value people read, and a 1-based month is
+what they expect. `weekday` is 0 for Sunday; `yearday` is 0-365.
+
+**Everything here is UTC.** There is no timezone conversion anywhere in
+Zeitlos yet -- see `docs/rtc.md` on why that is a decision rather than
+an oversight.
+
+`#f` rather than a panic when the clock is unset, which is the opposite
+call from the one `(video-mode ...)` makes for missing gateware. Setting
+the display is something the caller asked to **do**, and failing it
+quietly would hide a reflash they need to know about. Asking what time
+it is is a **question**, and "I don't know" is a real answer to it -- on
+a machine with no network that is the permanent, correct, entirely
+unexceptional answer, and blowing up a one-liner over it would be
+obnoxious. It also composes:
+
+```scheme
+(if (current-time)
+    (display (current-date))
+    (display "clock not set"))
+```
+
+Both halves of that check matter and neither implies the other: a board
+can have an RTC nobody has told the time to (the normal state for the
+first few seconds after boot), and a board can have no RTC at all.
+
+The optional argument to `current-date` makes it a general calendar
+function rather than only a clock reading -- formatting a file's
+timestamp, working out what day some computed second falls on. It needs
+no RTC, so `(current-date 0)` answers on a board with no clock. Same
+optional-argument shape as `(ls)`/`(ls path)` and
+`(video-mode)`/`(video-mode m)`.
+
+A **positional** list, unlike `(free)` and `(df)` below, which return
+association lists. Those hand back a dozen unrelated figures where a
+name is the only thing telling them apart; a date is eight fields in an
+order every calendar has used for a very long time, and
+`(cadr (assoc "hour" (current-date)))` would be a worse way to ask for
+the hour than `(list-ref (current-date) 3)`.
+
+Numbers rather than a preformatted string, matching `(ps)` and
+`(uptime)`: a string is one `str-append` away from a list of numbers,
+and a list of numbers cannot be recovered from a string without parsing
+it back.
+
+Seconds rather than the RTC's own 1/1024s units, which is the opposite
+of `(uptime)`'s ticks -- the reasoning there was that dividing to
+seconds is easy while recovering ticks isn't, and here the raw unit
+already **is** seconds. The fraction is deliberately not exposed:
+nothing in Scheme runs anywhere near that fast, and a two-element
+return would complicate every caller for the benefit of none.
+
+### Memory -- IMPLEMENTED
+
+`(free)` returns an association list, all figures in **bytes** except
+the two cell counts:
+
+```scheme
+(cadr (assoc "mem-free" (free)))   ; => bytes free in the kernel pool
+```
+
+| Key | Meaning |
+|---|---|
+| `scheme-cells-used` / `scheme-cells-total` | `ms` cell heap, in cells |
+| `scheme-bytes` | the same, in bytes |
+| `c-heap` | bytes `malloc()`'d by this process since boot |
+| `static` | this process's code+data+bss, fixed at build |
+| `mem-total` / `mem-used` / `mem-free` | kernel pool |
+| `mem-largest-free` | biggest single free block (fragmentation) |
+| `mem-used-blocks` / `mem-free-blocks` | block counts |
+| `mem-blocks-used` / `mem-blocks-max` | block descriptors consumed |
+
+**Two different things are reported here, and conflating them is the
+easy mistake this layout exists to prevent.** The `scheme-`/`c-heap`/
+`static` figures describe *this process's own footprint inside the
+block it was already given* -- what the old builtin `free` showed. The
+`mem-` figures describe the *kernel pool* (`k_mem_alloc()`,
+`sw/os/mem.c`): the memory whole processes get carved out of, and what
+`sh.c`'s own `free` shows. This is what determines whether the next
+`(run ...)` succeeds. A process can be comfortable while the pool is
+nearly exhausted, and vice versa; neither number predicts the other.
+
+The new `MEM_STATS` syscall shares one walk of the block list with
+`k_mem_dump()` (see `mem_collect()` in `mem.c`) rather than
+duplicating it -- a `free` that disagrees with itself depending on
+whether you typed it at the kernel shell or from Scheme is exactly the
+kind of thing nobody notices until it matters.
+
+### Returning nested values: `ms_read()`, not a builder
+
+`ps` and `free` both return lists of lists, and `ms.c`'s embedder API
+has no exposed `cons` -- it offers the scalar constructors plus
+exactly one composite, `ms_mk_str_list()`. That is deliberate:
+building anything larger from outside `ms.c` means getting GC
+protection right by hand across several allocations, which is
+precisely what it doesn't want every embedder re-deriving.
+
+Rather than patch `ms.c` to expose `PUSH`/`POP` (or add a builder API)
+purely so two procedures can return tables, both build their result as
+Scheme **source text** and hand it to `ms_read()` -- already public,
+already used by `repl.c`'s own eval path, and it does all its own GC
+protection internally. Safe by construction rather than by careful
+hand-auditing.
+
+The honest tradeoffs: it costs a `snprintf()` pass and a parse over a
+small buffer, and it is only safe for data we format ourselves. Every
+interpolated value in both procedures is a number or a fixed label --
+no user-supplied string is ever interpolated, so nothing can inject
+syntax. For at most 16 rows of six numbers this is far cheaper in
+**code size** than the alternative, which matters here (see the memory
+budget section below). **If a future API needs to return large or
+user-derived nested data, this is the wrong tool and a real builder in
+`ms.c` is the right one.**
+
+### The memory budget, and how this revision paid for itself
+
+Adding all of the above cost `repl` about **12.8KB** of image. The
+project had roughly 16KB of headroom before wm+net+repl+term stopped
+fitting in the 1MB minimum main-memory requirement, so this needed
+paying for. Three things did:
+
+**1. Section GC (`--gc-sections`) -- the big one.** `sw/common` is
+shared by every app, so each links whole objects for the sake of a
+fraction of them: `repl` pulls in `zfont_data.o` for the single font
+`text` uses and gets all four; `zobj.o`/`zgfx.o`/`zstream.o` are each
+used partially. Compiling with `-ffunction-sections -fdata-sections`
+and linking with `--gc-sections` lets the linker drop the rest.
+Measured:
+
+| app | saving |
+|---|---|
+| `repl` | ~6.9KB |
+| `wm` | ~14.2KB |
+| `term` | ~13.0KB |
+
+On by default in each app's Makefile; set `GC_SECTIONS=0` to disable.
+It is a pure win on every build tested, but section GC on a bare-metal
+target can in principle drop something reachable only from assembly or
+referenced solely by the linker script -- **if an app starts
+misbehaving in a way that smells like missing code, this is the first
+thing to rule out.**
+
+**2. `Z_PROC_STACK_SIZE_MEDIUM` (32KB) for `net`.** `kernel.h`'s own
+comment left this as an explicit open question: the unbounded
+per-message `zport.h` leak was the one thing genuinely justifying 64KB
+for `net`, it *is* fixed (`Z_PORT_DATA_ACK`), but whether `net` could
+come back down was deliberately not guessed at. This is a partial
+answer -- half the reduction, not all of it. What `net` still has is
+the one-shot, intentionally-leaked RPC replies (DHCP/DNS/TFTP in
+`net.c`), bounded by request *count* rather than session length, which
+is the kind of slow accumulation 16KB might eventually not survive but
+32KB comfortably should. **If this regresses, the symptom is not
+obvious:** `net` stops responding or dies mid-session after long
+uptime with heavy DHCP/DNS/TFTP traffic, with no error anywhere. Put
+it back on `LARGE` if that appears.
+
+**3. Not patching `ms.c`.** Both the `load` and the nested-value
+decisions above avoided adding code to the largest object in the
+build.
+
+Net effect: `repl` grows ~5.8KB after its own section GC, while `wm`
+and `term` return ~27KB and `net` returns 32KB to the pool.
+
+### A note on build warnings
+
+`zobj.h` used to `static`-define `z_ok`/`z_fail` in the header, giving
+every translation unit that included it (almost always via
+`zeitlos.h`) a private copy -- and a `-Wunused-variable` pair for each
+one that didn't use them, which was nearly all of them. That was two
+warnings per object file, in every app in the tree.
+
+They are now declared `extern` in `zobj.h` and defined once in
+`zobj.c`. Checked before changing: nothing mutates either object and
+nothing compares a returned pointer against `&z_ok`/`&z_fail` (callers
+read `rv->val.uint32`, never the address), so collapsing the copies
+changes no behavior; and the four apps that include the header without
+linking `zobj.o` (`blinky`, `bounce`, `bounceblit`, `hello`) don't
+reference the symbols, so an extern *declaration* never becomes an
+undefined reference for them -- all four verified to still link.
+
+This is worth more than tidiness. Dozens of known-harmless warnings in
+every build are the noise a real one hides in: the silent help-text
+truncation described above sat in a build whose output was already too
+noisy to read.
+
+> Numbers measured with a `picolibc` `rv32i/ilp32` stand-in for the
+> project's newlib toolchain -- **absolute** values will differ from a
+> real `/opt/riscv32i` build; the deltas are what these are for.
+> `net`'s own section-GC saving is unmeasured. Note also that
+> `k_proc_create()` rounds `image + stack` up to 4KB, so real
+> allocations move in page-sized steps.
 
 ### Windows -- IMPLEMENTED
 
@@ -511,6 +1050,40 @@ Folded into Windows above -- there's no freestanding "draw graphics"
 concept separate from "draw into a window" in the existing C API
 (`zwin.h`'s own comment: this is "the sanctioned way for an app to
 draw," always clipped to a window).
+
+### Display -- IMPLEMENTED
+
+| Procedure | Behavior |
+|---|---|
+| `(video-mode)` | current virtual phosphor mode as a string: `"white"`, `"amber"`, `"green"` or `"paper"` |
+| `(video-mode m)` | set it; `m` is a name or a number 0-3. Returns the mode actually in effect, as a string |
+
+Screen-wide, not per-window: the framebuffer is a single 1bpp surface
+and this selects how a set bit is coloured at scanout. See
+`docs/socctl.md` for the register, the modes, and why a change lands on
+the next frame boundary rather than immediately.
+
+Both a name and a number are accepted because both are natural here --
+a person types the name, generated or looping code
+(`(video-mode (modulo n 4))`) wants the number.
+
+Setting returns the resulting mode rather than `#t`, so `(video-mode)`
+and `(video-mode "amber")` both answer the same question: what is the
+screen doing now. The value is read back from the register, not echoed
+from the argument.
+
+An unrecognised name or an out-of-range number panics, like every other
+bad argument in `zapi.c`, rather than falling back to white -- a typo
+that quietly reset the display would be a confusing thing to debug.
+Gateware without the register panics too, with a message that says so,
+since the fix there is a reflash rather than anything the caller can
+change.
+
+Deliberately **not** named `color`: that word already means the 1-bit
+pixel value in `(line ...)`, `(box ...)` and `(text ...)`, and reusing
+it for something screen-wide would be actively misleading. The kernel
+shell's equivalent *is* called `color`, because `sh.c` has no such
+clash.
 
 ### Messaging -- IMPLEMENTED
 

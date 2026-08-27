@@ -75,7 +75,56 @@ localparam CSR_FEATURES =
 `ifdef LED_DEBUG
 	(32'h1 << 19) |
 `endif
-`ifdef ESP32_LINK
+// CPU extensions. Unlike every bit above these describe the CPU core
+// rather than a peripheral, and they exist for a specific reason:
+// software compiled for rv32im running on a bitstream WITHOUT M does
+// not degrade, it dies -- every mul/div is an illegal instruction.
+// Exposing these lets the BIOS say so in one clear line at boot
+// instead of leaving a mystery hang. See sw/common/zsoc.h's
+// z_soc_check_cpu_arch().
+`ifdef CPU_MUL
 	(32'h1 << 20) |
+`endif
+`ifdef CPU_DIV
+	(32'h1 << 21) |
+`endif
+`ifdef CPU_MUL_FAST
+	(32'h1 << 22) |
+`endif
+// WHICH core, not just what it can do. Set when rtl/boards.vh selects
+// rtl/cpu/zeitlos32 instead of picorv32; clear means picorv32, which
+// is also what every bitstream built before zeitlos32 existed reports,
+// so "clear" and "old build" agree rather than conflicting.
+//
+// This is worth a bit of its own because the two cores are drop-in
+// compatible by design: the same kernel binary runs on either, so
+// there is otherwise NOTHING in a running system that says which one
+// you are on. Chasing a bug for an afternoon on the wrong assumption
+// about that is a specific and avoidable waste.
+`ifdef CPU_ZEITLOS32
+	(32'h1 << 23) |
+`endif
+// rtl/rtc.v -- the wall clock. Mirrors `RTC in rtl/boards.vh like
+// every bit above mirrors its own define; boards.vh defines it at the
+// universal level, so this is set on every board by default and clear
+// only where somebody deliberately commented it out.
+//
+// This bit is what software checks BEFORE touching the RTC's own
+// registers, and the order is load-bearing rather than stylistic.
+// Within a build the two answers agree -- no RTC means csrs.v absorbs
+// its window and the MAGIC read comes back 0 either way. Across
+// builds they do not: on a bitstream predating rtl/rtc.v entirely,
+// 0x7000_03xx is decoded by nothing on an `ICACHE board, and an
+// undecoded address on this bus never acks, so the CPU HANGS on that
+// read (see rtl/cache.v's own note on the same hazard). This bit sits
+// at 0x7000_0008, which every bitstream ever built decodes, so asking
+// here is always safe. See z_rtc_available() in sw/common/zrtc.h.
+`ifdef RTC
+	(32'h1 << 24) |
+`endif
+// ULX3S ESP32 link (rtl/esp32_rxfifo.v, UART1, esp32 control) --
+// moved from bit 20 when the CPU/RTC bits above took 20-24.
+`ifdef ESP32_LINK
+	(32'h1 << 25) |
 `endif
 	32'h0;

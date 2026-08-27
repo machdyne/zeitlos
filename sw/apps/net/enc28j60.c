@@ -44,15 +44,27 @@
 // a bad state.
 
 // -- SPI bit-bang primitives (mode 0,0: clock idle low, sample on
-// rising edge, MSB first) -- same reg_eth bit layout as spibb_eth.v --
+// rising edge, MSB first) -- handled in gateware, see rtl/spim.v --
 
-#define ETH_MISO()    (reg_eth & 0x01)
-#define ETH_MOSI_H()  (reg_eth |= 0x02)
-#define ETH_MOSI_L()  (reg_eth &= ~0x02)
-#define ETH_SCK_H()   (reg_eth |= 0x04)
-#define ETH_SCK_L()   (reg_eth &= ~0x04)
-#define ETH_CS_H()    (reg_eth |= 0x08)   // deasserted -- chip select is active low
-#define ETH_CS_L()    (reg_eth &= ~0x08)  // asserted
+/* Hardware SPI (rtl/spim.v).
+
+   These used to be GPIO read-modify-writes toggling SCLK and MOSI one
+   wishbone cycle per edge, so the SPI clock rate was whatever speed
+   the compiler's generated loop happened to run at -- about 55 KB/s,
+   which capped this 10Mbit controller at roughly 4.5% of wire speed.
+
+   The shift register and clock divider are now in gateware. That is
+   about 18x faster, and -- more importantly -- the timing no longer
+   changes when the toolchain, the ISA or the cache configuration
+   changes. The sdcard driver learned that the hard way; see
+   sw/os/fs/fatfs/sdmm.c. */
+
+#define ETH_CS_H()    (reg_spieth_ctrl = Z_SPISD_CTRL_DIV(Z_SPIETH_DIV))
+#define ETH_CS_L()    (reg_spieth_ctrl = Z_SPISD_CTRL_DIV(Z_SPIETH_DIV) | Z_SPISD_CTRL_CS)
+
+/* The chip's interrupt pin, active low: true means a packet or error
+   is pending. One register read, no SPI transaction. */
+#define ETH_INT_ASSERTED()  ((reg_spieth_status & Z_SPI_INT) == 0)
 
 static void eth_delay_us(uint32_t n) {
 	// approximate, not calibrated against real silicon timing --
@@ -67,17 +79,11 @@ static void eth_delay_ms(uint32_t n) {
 
 static uint8_t spi_xfer(uint8_t out) {
 
-	uint8_t in = 0;
-
-	for (int i = 7; i >= 0; i--) {
-		if (out & (1 << i)) ETH_MOSI_H(); else ETH_MOSI_L();
-		ETH_SCK_H();
-		in <<= 1;
-		if (ETH_MISO()) in |= 1;
-		ETH_SCK_L();
-	}
-
-	return in;
+	/* Full duplex, one byte, in hardware. The eight-iteration bit loop
+	   this replaces cost roughly 800 CPU cycles; this costs about 48. */
+	reg_spieth_data = out;
+	while (reg_spieth_status & Z_SPISD_BUSY) ;
+	return (uint8_t)(reg_spieth_data & 0xFF);
 
 }
 
@@ -357,8 +363,9 @@ static void eth_phy_write(uint8_t phy_reg, uint16_t data) {
 
 bool enc28j60_init(const uint8_t mac[6]) {
 
+	// No pin setup needed: rtl/spim.v owns the pins and comes out of
+	// reset with CS deasserted and SCLK idle low.
 	ETH_CS_H();
-	ETH_SCK_L();
 
 	// soft reset
 	ETH_CS_L();

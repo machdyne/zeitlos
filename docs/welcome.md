@@ -141,6 +141,27 @@ serial connection (you'll need the `xfer` utility on the other end):
 > xf myfile.bin
 ```
 
+`xmf` does the same thing over XMODEM/CRC, which needs no host-side
+tooling at all -- just the file-send your terminal program already
+has (minicom's `Ctrl-A S`, picocom's `--send-cmd sx`, Tera Term's
+File > Transfer > XMODEM > Send):
+
+```
+> xmf myfile.bin
+```
+
+Run the command first, then start the send; the receiver waits about
+three minutes and prints `C` characters while it waits, which is how
+it asks the sender for CRC mode.
+
+Prefer `xf` for executables. XMODEM has no length field -- the last
+block is padded out to a 128- or 1024-byte boundary and the padding
+has to be guessed at on arrival -- so a file whose final bytes are
+genuinely `0x00` or `0x1a` can come out slightly short. That does not
+matter for most files, but the loader derives an executable's data
+length from its size on disk, so `xf`, which carries an exact byte
+count, is the safer choice there.
+
 If something goes wrong and the desktop doesn't come up, this is also
 where you'd start it manually with `init`, or investigate with `ps`.
 

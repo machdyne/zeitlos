@@ -56,7 +56,30 @@ typedef struct {
 	uint32_t	count;		// OUT: how many entries were actually written
 	uint32_t	truncated;	// OUT: 1 if out_cap or max_entries cut the
 							// listing short, 0 if it's complete
+	uint8_t		*types;		// OUT: optional, may be NULL -- one
+							// Z_FS_TYPE_* byte per entry, in the same
+							// order as `out`. Must have room for
+							// max_entries bytes when non-NULL.
 } z_fs_list_args_t;
+
+/*
+ * Entry types for z_fs_list_args_t.types above.
+ *
+ * Added because a file browser has to draw a directory differently
+ * from a file and, more importantly, has to DO something different
+ * when one is picked -- and the packed name list alone can't say
+ * which is which. FatFs knows (FILINFO.fattrib & AM_DIR) and was
+ * simply throwing the answer away.
+ *
+ * A separate optional out-buffer rather than, say, a trailing '/' on
+ * directory names: the names in `out` are already documented as
+ * directly usable with fs_size()/fs_mallocfile()/fs_unlink(), and
+ * decorating them would quietly break every existing caller
+ * (sw/apps/repl's `ls`) at the same time. A NULL `types` behaves
+ * exactly as this syscall always has.
+ */
+#define Z_FS_TYPE_FILE   0
+#define Z_FS_TYPE_DIR    1
 
 /*
  * Chunked file I/O -- FS_OPEN_READ/FS_OPEN_WRITE/FS_READ_CHUNK/
@@ -125,5 +148,40 @@ typedef struct {
 typedef struct {
 	int32_t		handle;
 } z_fs_close_args_t;
+
+// FS_MKDIR / FS_TOUCH -- both take nothing but a path, so they share
+// one shape rather than carrying two identical single-field structs.
+// Deliberately NOT reusing z_fs_unlink_args_t above for this despite
+// the identical layout: these are different operations, and a future
+// revision that needs to add a field to one of them (a mode/flags
+// argument, say) shouldn't have to first untangle it from the other
+// two that happened to share a struct.
+typedef struct {
+	char		*name;		// directory (mkdir) or file (touch) to create
+} z_fs_path_args_t;
+
+// FS_SEEK -- repositions an open handle from FS_OPEN_READ/_OPEN_WRITE.
+// `offset` is absolute, from the start of the file, matching FatFs's
+// own f_lseek(). Seeking past EOF on a READ handle is not an error at
+// this level (FatFs clamps to the file size); the next FS_READ_CHUNK
+// simply reports 0 bytes, the same clean-EOF result that call already
+// documents. Added for sw/apps/repl's `page` -- see this project's
+// syscalls.def for the full reasoning.
+typedef struct {
+	int32_t		handle;
+	uint32_t	offset;		// absolute byte offset from start of file
+	uint32_t	pos;		// OUT: resulting position (0 on failure)
+} z_fs_seek_args_t;
+
+// FS_DF -- filesystem capacity. Reported in KILOBYTES, not bytes,
+// deliberately: these are uint32_t, and a 32GB card's byte count
+// overflows one. KB covers up to 4TB, which is well past anything this
+// OS will see on an SD card, and it matches what the underlying
+// fs_total()/fs_free() (sw/os/fs/fs.c) already return -- both compute
+// `clusters * csize / 2`, i.e. 512-byte sectors halved into KB.
+typedef struct {
+	uint32_t	total_kb;	// OUT: whole volume (0 if unmounted/failed)
+	uint32_t	free_kb;	// OUT: unallocated space
+} z_fs_df_args_t;
 
 #endif

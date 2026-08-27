@@ -503,3 +503,50 @@ same trick would apply if this demo ever needed to stop leaking.
   since `zport`'s DATA channel is push-based in both directions, not
   pull-based like `zstream`; worth remembering both patterns exist
   before reaching for a third if a similar need comes up again.
+
+
+## Payload lifetime, and the leak it used to cause
+
+A str/list/map payload is **borrowed**: `k_msg_send()` stores the
+sender's own pointer, and `k_msg_read()` resolves it out of the
+sender's address space (`z_translate()`, `sw/os/msg.c`) only when the
+recipient actually reads the message. The sender therefore cannot free
+it at the point of sending — the recipient may not have looked yet.
+
+For a long time the answer to that was simply not to free at all, and
+the call sites said so in as many words ("intentionally never freed").
+That is survivable for a message sent once at startup. It is not
+survivable for one sent on a repeating user action, and one of these
+was:
+
+`wm`'s `send_win_rect()` built a five-key `Z_MAP` with `z_obj_map()`
+and `z_map_set()` for every `Z_WM_WINDOW_MOVED` — one per completed
+drag, per Alt+Arrow step, and per resize. Measured at **384 bytes a
+time**, against the 8KB `wm` gets for stack and heap together
+(`Z_PROC_STACK_SIZE_SMALL`, `sw/os/kernel.h`). About twenty window
+moves exhausted the heap. `z_obj_map()` then wrote through the NULL
+that `malloc()` returned, and the machine went down — with nothing in
+the symptom pointing at either the leak or the allocator.
+
+Two changes, and both matter:
+
+- **Frequent payloads are built in static storage.** `send_win_rect()`
+  (`wm.c`), `z_win_create_cb()` and `z_win_set_title()` (`zwin.c`) now
+  fill pre-declared `z_obj_t`/`z_obj_table_t` arrays and point string
+  values at literals or fixed buffers. `z_translate()` reaches `.bss`
+  and `.rodata` exactly as well as it reached the heap; it just cannot
+  run out. Where the send is fire-and-forget, a small RING of slots is
+  used so a payload isn't overwritten before the recipient reads it —
+  which narrows the borrow window rather than closing it, but replaces
+  a certainty with something that does not happen in practice.
+- **`z_obj_map()`/`z_obj_list()` check their allocations.** They now
+  return `Z_NONE` rather than dereferencing NULL, so an exhausted heap
+  anywhere degrades to a message with a missing payload instead of
+  taking the system down. Every reader in this codebase already checks
+  the type of what it got.
+
+The rule to take from this: **if a message is sent in response to
+something the user can do repeatedly, its payload must not be
+allocated.** Use a packed scalar (`Z_WM_REDRAW`, `Z_WM_MOUSE` and
+`Z_WM_KEY` all do) or static storage. The leak is invisible until the
+process dies, and the crash lands nowhere near the cause.

@@ -47,6 +47,14 @@ module gpu_video #(
 	input bclk,
 	input resetn,
 
+	// Virtual phosphor mode, from rtl/socctl.v's VIDEO register (see
+	// that file, and docs/socctl.md). In the WISHBONE clock domain,
+	// not pclk -- synchronised below before anything looks at it.
+	//
+	// 00 white-on-black (default)  01 amber-on-black
+	// 10 green-on-black            11 black-on-white ("paper")
+	input [1:0] video_mode,
+
 	output red,
 	output green,
 	output blue,
@@ -69,21 +77,44 @@ module gpu_video #(
 	reg [10:0] hc;
 	reg [10:0] vc;
 
-	wire pset = is_visible && (hline[x] || pixel);
+	// -- virtual phosphor modes --
+	//
+	// These were `ifdef GPU_AMBER / `ifdef GPU_GREEN: chosen at
+	// synthesis, changeable only by re-flashing the gateware. They are
+	// now a 2-bit register in rtl/socctl.v that software can write at
+	// any time. The COLOUR VALUES below are unchanged from those
+	// `ifdefs -- only the selection moved.
+	//
+	// GPU_PAPER is the one genuinely new mode, and it is not a colour
+	// at all: it is white-on-black with the pixel sense inverted, so
+	// it reuses the white path exactly rather than defining a second
+	// white that could drift out of step with the first.
+	localparam [1:0] GPU_MODE_WHITE = 2'd0;
+	localparam [1:0] GPU_MODE_AMBER = 2'd1;
+	localparam [1:0] GPU_MODE_GREEN = 2'd2;
+	localparam [1:0] GPU_MODE_PAPER = 2'd3;
 
-`ifdef GPU_AMBER
-   assign red   = pset;
-   assign green = pset;
-   assign blue  = 1'b0;
-`elsif GPU_GREEN
-   assign red   = 1'b0;
-   assign green = pset;
-   assign blue  = 1'b0;
-`else
-   assign red   = pset;
-   assign green = pset;
-   assign blue  = pset;
-`endif
+	reg [1:0] video_mode_sync0;
+	reg [1:0] video_mode_sync1;
+	reg [1:0] video_mode_active;
+
+	wire pix = hline[x] || pixel;
+
+	// is_visible gates the result, and it MUST: in GPU_PAPER the
+	// inactive state is 1, so an ungated invert would drive the VGA
+	// DAC high right through the front porch, sync pulse and back
+	// porch. That is not a cosmetic problem -- a monitor reads sync
+	// amplitude to lock, and a "white" blanking interval is how you
+	// get a display that reports no signal at all. The other three
+	// modes would tolerate the sloppiness; this one does not, which
+	// is exactly why the gate belongs here rather than per-mode.
+	wire pset = is_visible &&
+		((video_mode_active == GPU_MODE_PAPER) ? ~pix : pix);
+
+	assign red   = (video_mode_active == GPU_MODE_GREEN) ? 1'b0 : pset;
+	assign green = pset;
+	assign blue  = (video_mode_active == GPU_MODE_AMBER ||
+	                video_mode_active == GPU_MODE_GREEN) ? 1'b0 : pset;
 
 `ifdef GPU_DDMI
 
@@ -91,6 +122,33 @@ module gpu_video #(
 	wire [1:0] out_tmds_green;
 	wire [1:0] out_tmds_blue;
 	wire [1:0] out_tmds_clk;
+
+	// Same three colours the `ifdefs above used to select between,
+	// bit-for-bit -- the amber weightings in particular are the
+	// original ones and are deliberately not "tidied up" into
+	// something rounder. White/green stay at 0x80 rather than 0xff for
+	// the same reason: that is what this path has always driven, and
+	// changing it would silently alter the look of every existing
+	// board while nominally only adding a feature.
+	//
+	// GPU_PAPER needs no entry of its own: pset is already inverted
+	// for it above, so the white arms below produce black glyphs on a
+	// 0x80 field, which is precisely the same white, swapped.
+	wire [7:0] ddmi_red =
+		(video_mode_active == GPU_MODE_AMBER) ?
+			{pset, pset, 1'b0, pset, 1'b0, 1'b0, pset, 1'b0} :
+		(video_mode_active == GPU_MODE_GREEN) ? 8'b0 :
+			{pset, 7'b0};
+
+	wire [7:0] ddmi_green =
+		(video_mode_active == GPU_MODE_AMBER) ?
+			{pset, 1'b0, 1'b0, pset, pset, pset, 1'b0, pset} :
+			{pset, 7'b0};
+
+	wire [7:0] ddmi_blue =
+		(video_mode_active == GPU_MODE_AMBER ||
+		 video_mode_active == GPU_MODE_GREEN) ? 8'b0 :
+			{pset, 7'b0};
 
 	ODDRX1F ddr0_clock (.D0(out_tmds_clk   [0] ), .D1(out_tmds_clk   [1] ), .Q(dvi_p[3]), .SCLK(bclk), .RST(0));
 	ODDRX1F ddr0_red   (.D0(out_tmds_red   [0] ), .D1(out_tmds_red   [1] ), .Q(dvi_p[2]), .SCLK(bclk), .RST(0));
@@ -101,19 +159,9 @@ module gpu_video #(
 	(
 		.pclk(pclk),
 		.tmds_clk(bclk),
-`ifdef GPU_AMBER
-      .in_vga_red({red, red, 1'b0, red, 1'b0, 1'b0, red, 1'b0}),
-      .in_vga_green({green, 1'b0, 1'b0, green, green, green, 1'b0, green}),
-      .in_vga_blue(8'b0),
-`elsif GPU_GREEN
-      .in_vga_red(8'b0),
-      .in_vga_green({green, 7'b0}),
-      .in_vga_blue(8'b0),
-`else
-      .in_vga_red({red, 7'b0}),
-      .in_vga_green({green, 7'b0}),
-      .in_vga_blue({blue, 7'b0}),
-`endif
+		.in_vga_red(ddmi_red),
+		.in_vga_green(ddmi_green),
+		.in_vga_blue(ddmi_blue),
 		.in_vga_blank(!is_visible),
 		.in_vga_vsync(vsync),
 		.in_vga_hsync(hsync),
@@ -146,6 +194,39 @@ module gpu_video #(
 		(hc >= h_front_porch + h_pulse_width);
 	assign vsync = (vc < v_front_porch) ||
 		(vc >= v_front_porch + v_pulse_width);
+
+	// video_mode crosses from the wishbone clock into pclk. Two flops
+	// handle metastability, but two flops alone are NOT enough for a
+	// multi-bit value: the two bits can resolve on different cycles,
+	// so a write of 01 -> 10 can be observed as 00 or 11 in between.
+	// For one pixel clock that would be invisible; the reason to care
+	// is that a mid-frame change means the top of the screen is drawn
+	// in one mode and the bottom in another, which on a mode that
+	// inverts (GPU_PAPER) is a very visible tear.
+	//
+	// So the synchronised value is only ADOPTED at the end of a frame,
+	// on the same cycle the counters wrap. Every frame is therefore
+	// drawn entirely in one mode, and a mode change takes effect at
+	// the next frame boundary -- at most 16.7ms after the store
+	// retires, which is below the threshold at which a person could
+	// tell it from instant.
+	//
+	// Resets to white rather than to video_mode, which means a board
+	// whose default is amber or green shows white for at most one
+	// frame at power-on. Sampling the input directly at reset would
+	// avoid that, but it is the one read that genuinely cannot be
+	// synchronised (there is no clock yet), and a single frame during
+	// a window when the monitor has not locked anyway is not worth an
+	// unsynchronised cross-domain read.
+	always @(posedge pclk) begin
+		video_mode_sync0 <= video_mode;
+		video_mode_sync1 <= video_mode_sync0;
+		if (!resetn) begin
+			video_mode_active <= GPU_MODE_WHITE;
+		end else if (hc == h_disp_stop - 1 && vc == v_disp_stop - 1) begin
+			video_mode_active <= video_mode_sync1;
+		end
+	end
 
 	reg refill;
 	reg refill_toggle;

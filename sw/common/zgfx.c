@@ -167,6 +167,37 @@ static inline void gpu_blit_wait_idle(void) {
 	}
 }
 
+// See zgfx.h for when this is needed and why it normally isn't.
+//
+// Bounded the same way gpu_wait_fifo() and gpu_blit_wait_idle() are,
+// and for the same reason: neither engine has a timeout of its own, so
+// a stuck one must not take the caller down with it. A timeout here
+// means the screen may keep a stray mark, which is a great deal better
+// than wm hanging.
+void z_fb_hw_sync(void) {
+
+	uint32_t waited = 0;
+
+	// Rasterizer first: it is the one with a queue, so it is the one
+	// that can still be drawing after its submitter is gone.
+	while (gpu_debug_fifo_count) {
+		if (++waited > 10000000) {
+			printf("zgfx: sync timed out draining the rasterizer FIFO\n");
+			return;
+		}
+	}
+
+	waited = 0;
+
+	while (gpu_blit_status & 1) {
+		if (++waited > 10000000) {
+			printf("zgfx: sync timed out waiting for the blitter\n");
+			return;
+		}
+	}
+
+}
+
 // -- cross-process TOCTOU race on the blitter's single busy/idle gate --
 //
 // see docs/gpu_blitter.md, "Concurrent register access", and
@@ -288,19 +319,349 @@ void z_fb_hw_fill_rect(int x, int y, int w, int h, int color) {
 
 }
 
+// -- patterned fill -- see zgfx.h for the format and the anchoring
+// rule this relies on.
+
+// expands one MSB-first pattern row byte into the 32-bit word the
+// blitter actually wants.
+//
+// The bit reversal is the part worth explaining. Framebuffer pixel x
+// lives at bit (x % 32) of its word -- z_fb_set_pixel()'s own
+// `1U << (bit_index % 32)`, i.e. the LEFTMOST pixel of a word is its
+// LEAST significant bit. Pattern rows, on the other hand, are written
+// MSB-first so they read as a picture (bit 7 is the leftmost pixel),
+// matching every other bitmap in this tree. Those two conventions are
+// opposite, so one of them has to be reversed here rather than
+// silently producing mirrored patterns -- which is a genuinely
+// annoying bug to spot, since the symmetric patterns (solid, 50%
+// checker, horizontal lines) all look perfectly correct and only the
+// asymmetric ones (diagonals) come out wrong, and then only as a
+// mirror image that still looks like a plausible diagonal.
+static uint32_t pattern_row_word(uint8_t row) {
+
+	uint32_t b = 0;
+	for (int i = 0; i < 8; i++)
+		if (row & (0x80u >> i)) b |= (1u << i);
+
+	// replicate across all four bytes: 32 is a multiple of 8, so this
+	// is what anchors the pattern to the screen's 8-pixel grid.
+	return b | (b << 8) | (b << 16) | (b << 24);
+
+}
+
+void z_fb_hw_fill_pattern(int x, int y, int w, int h, const uint8_t *pat) {
+
+	if (!pat) return;
+
+	// same unconditional clamp z_fb_hw_fill_rect() applies, for the
+	// same reason -- see its own comment. Done here, once, before the
+	// row loop, so the per-run fills below are all known in-bounds.
+	if (x < 0) { w += x; x = 0; }
+	if (y < 0) { h += y; y = 0; }
+	if (x + w > Z_SCREEN_W) w = Z_SCREEN_W - x;
+	if (y + h > Z_SCREEN_H) h = Z_SCREEN_H - y;
+	if (w <= 0 || h <= 0) return;
+
+	int row = 0;
+	while (row < h) {
+
+		uint8_t b = pat[(y + row) & 7];
+
+		// merge the following rows that share this same pattern byte
+		// into one blitter operation -- see zgfx.h's note on cost.
+		// A solid fill collapses to a single op this way, which
+		// matters because "solid black" and "solid white" are the two
+		// most-used patterns by a wide margin.
+		int run = 1;
+		while (row + run < h && pat[(y + row + run) & 7] == b) run++;
+
+		uint32_t old_mask = gpu_blit_acquire();
+
+		gpu_blit_dst_x = (uint32_t)x;
+		gpu_blit_dst_y = (uint32_t)(y + row);
+		gpu_blit_width = (uint32_t)w;
+		gpu_blit_height = (uint32_t)run;
+		gpu_blit_pattern = pattern_row_word(b);
+		gpu_blit_ctrl = GPU_BLIT_CTRL_START | GPU_BLIT_CTRL_FILL | GPU_BLIT_CTRL_CLIP;
+
+		maskirq(old_mask);
+
+		gpu_blit_wait_idle();
+
+		row += run;
+
+	}
+
+}
+
+// -- copy from main memory / from VRAM --
+//
+// See zgfx.h for the API contract. This function's whole job beyond the
+// usual register poke is computing what the hardware actually wants,
+// which is not what the caller naturally has.
+//
+// The hardware assembles each destination word from a sliding two-word
+// window over the source row, and needs to be told two things about the
+// FIRST destination word: which source word the window starts on, and
+// at what bit offset within it. Both are derived from the same quantity:
+//
+//   sbit0 = src_x - (dst_x & 31)
+//
+// which is the source-row bit index that lands on bit 0 of the first
+// destination word (that word starts at screen x = dst_x & ~31, i.e.
+// (dst_x & 31) pixels to the left of dst_x).
+//
+// sbit0 can be negative, and exactly one word's worth negative at most,
+// since (dst_x & 31) <= 31 and src_x >= 0. That case means the window
+// would start in the word BEFORE the source buffer -- so instead of
+// reading out of bounds, the prime-with-zero bit tells the hardware to
+// start the window with zeros. Every pixel that would have come from
+// that phantom word sits left of dst_x and is masked out of the
+// destination anyway, so nothing is lost.
+static void blit_copy_setup(uint32_t src_base, int src_stride,
+	int src_x, int src_y, int dst_x) {
+
+	int sbit0 = src_x - (dst_x & 31);
+	int sword, sshift;
+	uint32_t prime;
+
+	if (sbit0 >= 0) {
+		sword = sbit0 >> 5;
+		sshift = sbit0 & 31;
+		prime = 0;
+	} else {
+		sword = 0;
+		sshift = sbit0 + 32;
+		prime = GPU_BLIT_SRC_PRIME_ZERO;
+	}
+
+	gpu_blit_src_addr = src_base + (uint32_t)(src_y * src_stride) +
+		(uint32_t)(sword * 4);
+	gpu_blit_src_stride = (uint32_t)src_stride;
+	gpu_blit_src_shift = prime | (uint32_t)sshift;
+
+}
+
+// Translates an app pointer to the physical address the blitter needs.
+//
+// The blitter is its own bus master and does not go through the MTU
+// (rtl/mtu.v), which only translates addresses the CPU issues. An app
+// runs at virtual 0x8000_0000 and its buffers are there, so handing one
+// of those pointers straight to the blitter would point it at whatever
+// happens to live at physical 0x8000_0000 -- not this app's data, and
+// quite possibly not memory at all.
+//
+// A translation base of 0 means no translation is active (the kernel's
+// own context), in which case the address is already physical.
+static uint32_t blit_phys_addr(const void *p) {
+
+	// via uintptr_t: a direct pointer-to-uint32_t cast warns on any
+	// 64-bit host, which matters because sw/common is also built by the
+	// host-side tests and by sim/ (see sim/README.md).
+	uint32_t v = (uint32_t)(uintptr_t)p;
+	uint32_t base = reg_mtu_base;
+
+	if (base == 0) return v;
+	if ((v & 0xF0000000u) != 0x80000000u) return v;
+
+	return base + (v & 0x0FFFFFFFu);
+
+}
+
+bool z_fb_hw_blit_mem_available(void) {
+
+	// Probe rather than assume: the same app binary may be run against
+	// a bitstream whose blitter predates this mode, and the failure
+	// there is silent (the mode bit is simply ignored and the copy
+	// writes the destination back unchanged), which is exactly the kind
+	// of thing that gets misdiagnosed as an app bug.
+	//
+	// Safe to do at any time: CTRL_START is not set, so this configures
+	// nothing and starts nothing. Cached because it cannot change while
+	// this process runs.
+	static int cached = -1;
+
+	if (cached < 0) {
+		uint32_t old_mask = gpu_blit_acquire();
+		gpu_blit_ctrl = GPU_BLIT_CTRL_SRCMEM;
+		cached = (gpu_blit_ctrl & GPU_BLIT_CTRL_SRCMEM) ? 1 : 0;
+		gpu_blit_ctrl = 0;
+		maskirq(old_mask);
+		if (!cached)
+			printf("zgfx: blitter has no memory-copy mode in this bitstream\n");
+	}
+
+	return cached == 1;
+
+}
+
+bool z_fb_hw_blit_mem(const void *src, int src_stride,
+	int src_x, int src_y, int dst_x, int dst_y, int w, int h) {
+
+	if (!z_fb_hw_blit_mem_available()) return false;
+
+	// Clamp to the screen, moving the SOURCE origin in step -- clamping
+	// only the destination would slide the wrong part of the bitmap into
+	// view. Same unconditional clamp z_fb_hw_fill_rect() applies, and
+	// for the same reason: the coordinate registers are unsigned, so a
+	// negative value wraps to something enormous rather than clipping.
+	if (dst_x < 0) { w += dst_x; src_x -= dst_x; dst_x = 0; }
+	if (dst_y < 0) { h += dst_y; src_y -= dst_y; dst_y = 0; }
+	if (dst_x + w > Z_SCREEN_W) w = Z_SCREEN_W - dst_x;
+	if (dst_y + h > Z_SCREEN_H) h = Z_SCREEN_H - dst_y;
+	if (w <= 0 || h <= 0) return true;	// nothing to draw is not a failure
+
+	uint32_t old_mask = gpu_blit_acquire();
+
+	gpu_blit_dst_x = (uint32_t)dst_x;
+	gpu_blit_dst_y = (uint32_t)dst_y;
+	gpu_blit_width = (uint32_t)w;
+	gpu_blit_height = (uint32_t)h;
+
+	blit_copy_setup(blit_phys_addr(src), src_stride, src_x, src_y, dst_x);
+
+	gpu_blit_ctrl = GPU_BLIT_CTRL_START | GPU_BLIT_CTRL_CLIP |
+		GPU_BLIT_CTRL_SRCMEM;
+
+	maskirq(old_mask);
+
+	gpu_blit_wait_idle();
+
+	return true;
+
+}
+
+void z_fb_hw_blit_vram(int src_x, int src_y,
+	int dst_x, int dst_y, int w, int h) {
+
+	// Only the destination is clamped here, and only against the visible
+	// screen. The source is deliberately NOT clamped to Z_SCREEN_H: on a
+	// bitstream with more VRAM than the visible framebuffer, a legitimate
+	// source row lives past 479. Clamping it would make offscreen sprite
+	// storage unreachable, which is most of the point of this call.
+	if (dst_x < 0) { w += dst_x; src_x -= dst_x; dst_x = 0; }
+	if (dst_y < 0) { h += dst_y; src_y -= dst_y; dst_y = 0; }
+	if (dst_x + w > Z_SCREEN_W) w = Z_SCREEN_W - dst_x;
+	if (dst_y + h > Z_SCREEN_H) h = Z_SCREEN_H - dst_y;
+	if (w <= 0 || h <= 0) return;
+
+	uint32_t old_mask = gpu_blit_acquire();
+
+	gpu_blit_dst_x = (uint32_t)dst_x;
+	gpu_blit_dst_y = (uint32_t)dst_y;
+	gpu_blit_width = (uint32_t)w;
+	gpu_blit_height = (uint32_t)h;
+
+	// VRAM is addressed by the blitter directly, with the framebuffer's
+	// own stride -- no MTU translation, because this address never
+	// leaves the VRAM bus.
+	blit_copy_setup(0x20000000u, Z_SCREEN_W / 8, src_x, src_y, dst_x);
+
+	// CTRL_FILL and CTRL_SRCMEM both clear: copy, source in VRAM.
+	gpu_blit_ctrl = GPU_BLIT_CTRL_START | GPU_BLIT_CTRL_CLIP;
+
+	maskirq(old_mask);
+
+	gpu_blit_wait_idle();
+
+}
+
 #ifdef Z_GFX_HW_BLIT
 
 // -- hardware glyph blit path -- see zgfx.h and
 // docs/window_manager.md, "hardware glyph blitting" --
 
+// -- glyph memory layout --
+//
+// More than one font can be resident at once, at FIXED offsets
+// declared here rather than assigned as fonts are loaded.
+//
+// That distinction is the whole design. Glyph memory is a single piece
+// of global hardware, but zgfx.c is linked into every process
+// separately, so any allocation state kept here would be per-process:
+// wm would load a font, record where it put it, and no other process
+// would have any idea. Every app would then fall back to software
+// rendering for text, which is exactly what the hardware path exists
+// to avoid.
+//
+// A fixed table compiled from one source file gives every process the
+// same answer without anyone having to communicate it. wm writes the
+// glyphs (it remains the only process that ever does -- see zicon.h);
+// everyone else just reads the offset out of this table and blits.
+//
+// Fonts are identified by ADDRESS, which is safe within a process --
+// &z_font_5x8 differs between processes, but each process compares
+// against its own copy and every process agrees on the OFFSET, which
+// is all the hardware cares about.
+//
+// Current occupancy, against Z_ICON_MEM_OFFSET (3840):
+//
+//   z_font_5x8    96 glyphs x  8 rows =  768 bytes at    0
+//   z_font_6x12   96 glyphs x 12 rows = 1152 bytes at  768
+//                                              free from 1920
+//
+// To add a font: append an entry with the next free offset, check the
+// total still clears Z_ICON_MEM_OFFSET, and add a
+// z_gfx_hw_font_load() call for it in wm's main(). A font that isn't
+// in this table still WORKS -- it just renders in software, since
+// glyph_offset_of() reports it as absent.
+typedef struct {
+	const z_font_t	*font;
+	uint32_t	offset;
+} z_glyph_slot_t;
+
+static const z_glyph_slot_t glyph_layout[] = {
+	{ &z_font_5x8,  0   },
+	{ &z_font_6x12, 768 },
+};
+
+#define GLYPH_LAYOUT_COUNT \
+	(int)(sizeof(glyph_layout) / sizeof(glyph_layout[0]))
+
+// Where `font` lives in glyph memory. Returns false if it isn't one
+// of the resident fonts, in which case the caller must render in
+// software -- blitting from an offset that holds a different font's
+// data would draw confident nonsense, which is worse than being slow.
+static bool glyph_offset_of(const z_font_t *font, uint32_t *out) {
+
+	for (int i = 0; i < GLYPH_LAYOUT_COUNT; i++) {
+		if (glyph_layout[i].font == font) {
+			*out = glyph_layout[i].offset;
+			return true;
+		}
+	}
+
+	return false;
+
+}
+
 void z_gfx_hw_font_load(const z_font_t *font) {
+
+	uint32_t base;
+	if (!glyph_offset_of(font, &base)) {
+		// Not a resident font. Loading it anywhere would either
+		// overwrite one that IS resident or land somewhere nothing
+		// will ever look, so do neither -- text in this font simply
+		// renders in software.
+		printf("zgfx: font not in glyph_layout[], not loaded\n");
+		return;
+	}
 
 	volatile uint8_t *glyph_mem = (volatile uint8_t *)GLYPH_MEM_BASE;
 	uint32_t n = (uint32_t)(font->last - font->first + 1) * font->h;
-	if (n > GLYPH_MEM_SIZE) n = GLYPH_MEM_SIZE;	// truncate rather than overrun
+
+	// Never past the icon region at the top of glyph memory
+	// (zicon.h). Truncating produces a font with missing glyphs at
+	// the end, which is ugly; overrunning corrupts the icons, which
+	// looks like an unrelated bug in wm's titlebar.
+	if (base + n > Z_ICON_MEM_OFFSET) {
+		printf("zgfx: font at offset %u would overrun the icon region\n",
+			(unsigned)base);
+		n = (base < Z_ICON_MEM_OFFSET) ? (Z_ICON_MEM_OFFSET - base) : 0;
+	}
 
 	for (uint32_t i = 0; i < n; i++)
-		glyph_mem[i] = font->glyphs[i];
+		glyph_mem[base + i] = font->glyphs[i];
 
 }
 
@@ -340,7 +701,12 @@ void z_fb_draw_char(int x, int y, char c, int color, const z_font_t *font, const
 			(x >= clip->x0 && y >= clip->y0 &&
 			 x + font->w - 1 <= clip->x1 && y + font->h - 1 <= clip->y1));
 
-	if (!fits) {
+	uint32_t glyph_base;
+	bool resident = glyph_offset_of(font, &glyph_base);
+
+	// A font that isn't resident in glyph memory renders in software,
+	// exactly like a clipped glyph does -- see glyph_layout[].
+	if (!fits || !resident) {
 		hw_blit_wait();	// a prior hardware blit could still be in
 						// flight; wait for it before writing directly
 						// to VRAM here, or the two could race
@@ -376,7 +742,7 @@ void z_fb_draw_char(int x, int y, char c, int color, const z_font_t *font, const
 
 	gpu_blit_dst_x = x;
 	gpu_blit_dst_y = y;
-	gpu_blit_glyph_addr = (uint32_t)(uc - font->first) * font->h;
+	gpu_blit_glyph_addr = glyph_base + (uint32_t)(uc - font->first) * font->h;
 	gpu_blit_glyph_w = font->w;
 	gpu_blit_glyph_h = font->h;
 	gpu_blit_fg_color = color ? 1 : 0;
@@ -399,6 +765,19 @@ void z_fb_draw_text(int x, int y, const char *s, int color, const z_font_t *font
 			cy += font->h;
 			continue;
 		}
+		// Skip a glyph that starts entirely past the clip's right
+		// edge instead of handing it to z_fb_draw_char(), which
+		// would route it to the software renderer and then reject
+		// all font->w * font->h of its pixel writes one at a time.
+		// Truncated text is common -- a long window title in a
+		// narrow titlebar, a filename wider than the list -- and
+		// this is the difference between a handful of wasted pixel
+		// operations and several hundred.
+		//
+		// `continue`, not `break`: the string may contain a newline
+		// that resets cx and puts later glyphs back inside the clip.
+		if (clip && cx > clip->x1) { cx += font->w; continue; }
+
 		z_fb_draw_char(cx, cy, *s, color, font, clip);
 		cx += font->w;
 	}
@@ -450,9 +829,25 @@ void z_fb_draw_char2(int x, int y, char c, int fg_color, int bg_color,
 			(x >= clip->x0 && y >= clip->y0 &&
 			 x + font->w - 1 <= clip->x1 && y + font->h - 1 <= clip->y1));
 
-	if (!fits) {
+	uint32_t glyph_base;
+	bool resident = glyph_offset_of(font, &glyph_base);
+
+	// Same two fallback conditions as z_fb_draw_char(): a glyph that
+	// needs clipping, or a font that isn't resident in glyph memory
+	// (see glyph_layout[]).
+	//
+	// The software call here was COMMENTED OUT, so a clipped glyph
+	// drew nothing at all -- a partially-visible character at the
+	// edge of a clip region simply vanished. That was survivable
+	// while the only caller was term (whose cells are always fully
+	// inside its grid), and stopped being so as soon as the file-list
+	// widget started drawing clipped rows through it. It is also
+	// load-bearing now for a different reason: without it, a
+	// non-resident font would draw nothing rather than falling back,
+	// which is a far more confusing failure than being slow.
+	if (!fits || !resident) {
 		hw_blit_wait();	// see z_fb_draw_char()'s own comment on why
-//		draw_char_sw2(x, y, c, fg_color, bg_color, font, clip);
+		draw_char_sw2(x, y, c, fg_color, bg_color, font, clip);
 		return;
 	}
 
@@ -470,7 +865,7 @@ void z_fb_draw_char2(int x, int y, char c, int fg_color, int bg_color,
 
 	gpu_blit_dst_x = x;
 	gpu_blit_dst_y = y;
-	gpu_blit_glyph_addr = (uint32_t)(uc - font->first) * font->h;
+	gpu_blit_glyph_addr = glyph_base + (uint32_t)(uc - font->first) * font->h;
 	gpu_blit_glyph_w = font->w;
 	gpu_blit_glyph_h = font->h;
 	gpu_blit_fg_color = fg_color ? 1 : 0;
@@ -492,6 +887,19 @@ void z_fb_draw_text2(int x, int y, const char *s, int fg_color, int bg_color,
 			cy += font->h;
 			continue;
 		}
+		// Skip a glyph that starts entirely past the clip's right
+		// edge instead of handing it to z_fb_draw_char(), which
+		// would route it to the software renderer and then reject
+		// all font->w * font->h of its pixel writes one at a time.
+		// Truncated text is common -- a long window title in a
+		// narrow titlebar, a filename wider than the list -- and
+		// this is the difference between a handful of wasted pixel
+		// operations and several hundred.
+		//
+		// `continue`, not `break`: the string may contain a newline
+		// that resets cx and puts later glyphs back inside the clip.
+		if (clip && cx > clip->x1) { cx += font->w; continue; }
+
 		z_fb_draw_char2(cx, cy, *s, fg_color, bg_color, font, clip);
 		cx += font->w;
 	}
@@ -590,6 +998,19 @@ void z_fb_draw_text(int x, int y, const char *s, int color, const z_font_t *font
 			cy += font->h;
 			continue;
 		}
+		// Skip a glyph that starts entirely past the clip's right
+		// edge instead of handing it to z_fb_draw_char(), which
+		// would route it to the software renderer and then reject
+		// all font->w * font->h of its pixel writes one at a time.
+		// Truncated text is common -- a long window title in a
+		// narrow titlebar, a filename wider than the list -- and
+		// this is the difference between a handful of wasted pixel
+		// operations and several hundred.
+		//
+		// `continue`, not `break`: the string may contain a newline
+		// that resets cx and puts later glyphs back inside the clip.
+		if (clip && cx > clip->x1) { cx += font->w; continue; }
+
 		z_fb_draw_char(cx, cy, *s, color, font, clip);
 		cx += font->w;
 	}
@@ -627,6 +1048,19 @@ void z_fb_draw_text2(int x, int y, const char *s, int fg_color, int bg_color,
 			cy += font->h;
 			continue;
 		}
+		// Skip a glyph that starts entirely past the clip's right
+		// edge instead of handing it to z_fb_draw_char(), which
+		// would route it to the software renderer and then reject
+		// all font->w * font->h of its pixel writes one at a time.
+		// Truncated text is common -- a long window title in a
+		// narrow titlebar, a filename wider than the list -- and
+		// this is the difference between a handful of wasted pixel
+		// operations and several hundred.
+		//
+		// `continue`, not `break`: the string may contain a newline
+		// that resets cx and puts later glyphs back inside the clip.
+		if (clip && cx > clip->x1) { cx += font->w; continue; }
+
 		z_fb_draw_char2(cx, cy, *s, fg_color, bg_color, font, clip);
 		cx += font->w;
 	}

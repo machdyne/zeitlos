@@ -179,6 +179,16 @@ z_obj_t *k_pid_lookup(z_obj_t *args) {
 
 }
 
+const char *k_pidreg_name_for(uint32_t pid) {
+
+	for (uint32_t i = 0; i < Z_PIDREG_MAX; i++)
+		if (z_pidreg[i].active && z_pidreg[i].pid == pid)
+			return z_pidreg[i].name;
+
+	return NULL;
+
+}
+
 void k_pidreg_release_all(uint32_t pid) {
 	for (int e = 0; e < Z_PIDREG_MAX; e++) {
 		if (z_pidreg[e].active && z_pidreg[e].pid == pid) {

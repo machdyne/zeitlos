@@ -41,9 +41,31 @@ typedef struct {
     uint8_t *data;
 } z_blob_t;
 
-// Return value objects
-static z_obj_t z_ok = { .type = Z_RETVAL, .val.int32 = 0 };
-static z_obj_t z_fail = { .type = Z_RETVAL, .val.int32 = 1 };
+// Return value objects -- the shared &z_ok/&z_fail every syscall
+// handler returns (see sw/os/fsapi.h's own header comment on that
+// convention).
+//
+// DECLARED here, DEFINED once in zobj.c. These used to be `static`
+// definitions right here in the header, which gave every translation
+// unit that included it -- directly or, far more often, via
+// zeitlos.h -- its own private copy. Since almost nothing outside the
+// kernel's syscall handlers actually uses them, that produced a
+// -Wunused-variable warning pair in essentially every app object
+// compiled in this tree: dozens of identical warnings that had to be
+// scrolled past to find real ones, which is precisely how a genuine
+// silent-truncation bug in repl.c's help text got missed once.
+//
+// Safe to make extern (checked before changing): nothing anywhere
+// mutates either object, and nothing compares a returned pointer
+// against &z_ok/&z_fail -- callers on both sides of the syscall
+// boundary read the VALUE (`rv->val.uint32 == Z_OK`), never the
+// address, so collapsing the per-TU copies into one changes no
+// behavior. It also doesn't break the four apps that include this
+// header but don't link zobj.o (blinky, bounce, bounceblit, hello):
+// an extern declaration only becomes an undefined symbol if something
+// actually references it, and none of them do.
+extern z_obj_t z_ok;
+extern z_obj_t z_fail;
 
 // Function declarations
 z_obj_t z_obj_none(void);

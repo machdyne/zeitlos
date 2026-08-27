@@ -16,15 +16,22 @@
 #include "../common/zdns.h"
 #include "kernel.h"
 #include "mem.h"
+#include "uart.h"
+#include "zar.h"
+#include "../common/zsoc.h"	// Z_TICK_HZ	// k_uart_getc()/k_uart_rx_empty() -- see
+					// boot_cancel_requested() below
 #include "fs/fs.h"
+#include "fsapi.h"
 #include "fs/fatfs/ff.h"
 #include "msg.h"
 #include "pidreg.h"
+#include "xmodem.h"
 
 // --
 
 char *get_arg(char *str, int n);
 void sh_help(void);
+static void sh_bench(void);
 void hex_dump(uint32_t addr);
 uint32_t xfer_recv(uint32_t addr_ptr);
 void cls(void);
@@ -59,6 +66,49 @@ void screenshot(void);
 // this doesn't hammer the card with repeated f_open() attempts.
 #define AUTOINIT_TIMEOUT_TICKS (3 * 732)   // ~3 seconds
 
+// Staging buffer for a serial upload (`xf`, `xmf`). The whole file is
+// received into RAM and only then written out, because neither
+// protocol knows the length up front and both can still fail partway
+// through -- staging keeps a failed transfer from leaving a truncated
+// file on the card. Allocated per transfer and freed straight after,
+// so it costs nothing when no upload is in progress.
+#define UPLOAD_MAX_SIZE (1024 * 256)   // 256K max file size for now
+
+// -- core app source selection --
+//
+// Boot-time only, and deliberately narrow: `ls` doesn't show flash
+// apps, `run` doesn't look for them, nothing else consults the
+// archive. The whole rule is:
+//
+//   on the SD card?  -> use that, it is assumed newer
+//   otherwise        -> use the flash copy
+//
+// "Assumed newer" is not a guess dressed up as a policy -- the only
+// way an app gets onto the card is somebody deliberately putting it
+// there with `xf`, so treating that as intent is exactly right, and it
+// keeps single-app hot-swapping working during development with no
+// version scheme, timestamps or precedence rules to maintain.
+//
+// Each app prints where it came from, so a stale file on the card
+// shadowing a freshly flashed one is visible at boot rather than a
+// mystery later.
+typedef enum { CORE_SRC_NONE, CORE_SRC_SD, CORE_SRC_FLASH } core_src_t;
+
+static core_src_t core_exec_info(const char *name, z_exec_info_t *info) {
+	if (fs_exec_info_any((char *)name, info) != 0) return CORE_SRC_NONE;
+	return fs_exec_is_flash((char *)name) ? CORE_SRC_FLASH : CORE_SRC_SD;
+}
+
+static int core_load_exec(uint32_t dst, const char *name,
+	const z_exec_info_t *info, core_src_t src) {
+	(void)src;	// the resolver re-checks; see fs_load_exec_any()
+	return fs_load_exec_any(dst, (char *)name, info);
+}
+
+static const char *core_src_name(core_src_t src) {
+	return (src == CORE_SRC_FLASH) ? "flash" : "sd";
+}
+
 static bool wait_for_apps_ready(void) {
 	uint32_t start = z_uptime_ticks();
 	uint32_t last_tick = start;
@@ -68,6 +118,39 @@ static bool wait_for_apps_ready(void) {
 		last_tick = now;
 		if (fs_size("wm") != 0) return true;
 	}
+	return false;
+}
+
+// Bring the sdcard up, retrying while a slow one powers on.
+//
+// This has to happen at boot whether or not the core apps are coming
+// from the card, and that is the whole point of it existing
+// separately. fs_mount() is a DEFERRED mount (FatFs opt=0): it
+// registers the volume without touching the hardware, and the card is
+// only really initialised by the first file operation that needs it.
+//
+// wait_for_apps_ready() above used to do that initialisation by
+// accident -- its repeated fs_size("wm") calls were what drove the
+// card through disk_initialize(). Once boot could skip that loop (core
+// apps in flash, nothing needed from the card), the card was left
+// uninitialised and every later operation failed with FR_NOT_READY:
+// `ls` showed no files, `xf` refused to write. The card was fine;
+// nothing had ever woken it.
+//
+// So: force the mount, explicitly, always.
+static bool wait_for_card_ready(void) {
+	uint32_t start = z_uptime_ticks();
+	uint32_t last_tick = start;
+
+	if (fs_mount_now() == 0) return true;
+
+	while (z_uptime_ticks() - start < AUTOINIT_TIMEOUT_TICKS) {
+		uint32_t now = z_uptime_ticks();
+		if (now == last_tick) continue;
+		last_tick = now;
+		if (fs_mount_now() == 0) return true;
+	}
+
 	return false;
 }
 
@@ -82,11 +165,17 @@ static bool wait_for_apps_ready(void) {
 static uint32_t net_pid_cache;
 static bool net_pid_resolved = false;
 
+// Returns 0 if net isn't running -- see zdns.c's copy of this for why
+// there is no longer a fallback to the fixed Z_PID_NET constant.
+//
+// Not cached on failure: net may simply not have started yet, and a
+// cached 0 would keep reporting that after it had.
 static uint32_t resolve_net_pid(void) {
 	if (!net_pid_resolved) {
-		if (!z_pid_lookup("net0", &net_pid_cache))
-			net_pid_cache = Z_PID_NET;
-		net_pid_resolved = true;
+		if (z_pid_lookup("net0", &net_pid_cache))
+			net_pid_resolved = true;
+		else
+			return 0;
 	}
 	return net_pid_cache;
 }
@@ -104,6 +193,72 @@ static uint32_t next_tftp_tag(void) {
 }
 
 // --
+
+
+
+// How long to wait for the user to cancel the init script, and which
+// key does it. ~500ms at the KTIMER's ~732Hz -- long enough to catch a
+// deliberate keypress (and a held key repeats, so it's forgiving),
+// short enough that nobody notices it on a normal boot.
+#define BOOT_CANCEL_TICKS  ((Z_TICK_HZ * 500) / 1000)
+#define BOOT_CANCEL_KEY    0x1b   // ESC
+
+// Gives the user a brief window to stop the graphical environment from
+// starting, the same way sw/bios/bios.c's own AUTOLOAD_CNT loop lets a
+// keypress stop the BIOS from autoloading the kernel. Returns true if
+// init() should be skipped.
+//
+// Why this exists: once wm starts it clears the screen and takes over,
+// and if something in the graphical stack is broken (a bad wm build, an
+// app that wedges, a display that shows nothing) there was no way back
+// to the serial console short of reflashing. This is the escape hatch.
+// The shell prompt is still there afterwards, so `init` can be run by
+// hand once whatever it was is sorted out.
+//
+// SERIAL CONSOLE ONLY, deliberately. k_uart_getc()/k_uart_rx_empty()
+// (sw/os/uart.h) read the UART and nothing else -- the USB keyboard
+// goes through an entirely separate path (z_hid_read_key(), sw/os/hid.c)
+// which is not polled here. That's the right split: this is a recovery
+// mechanism for when the graphical side is what's broken, so it should
+// depend on as little of the system as possible, and the console is the
+// one interface guaranteed to work when the display isn't. It also
+// means a stray keypress on the USB keyboard during boot can't silently
+// leave someone at a bare shell wondering where their desktop went.
+//
+// Side benefit worth knowing: the 500ms this costs every boot is also
+// 500ms longer that the flash-backed boot splash (sw/os/logo.h) stays
+// on screen before wm's clear_screen() wipes it -- which on a monitor
+// that takes a moment to sync is the difference between seeing it and
+// not.
+static bool boot_cancel_requested(void) {
+
+	printf("starting init in 500ms -- press ESC to cancel ... ");
+	fflush(stdout);
+
+	uint32_t start = z_uptime_ticks();
+	bool cancel = false;
+
+	while (z_uptime_ticks() - start < BOOT_CANCEL_TICKS) {
+
+		if (k_uart_rx_empty()) continue;
+
+		// Anything OTHER than ESC is deliberately discarded rather than
+		// treated as a cancel: line noise, or a stray byte left in the
+		// FIFO from whatever the user typed at the BIOS prompt, should
+		// not silently skip the desktop. One specific key, so cancelling
+		// is always something you meant to do.
+		if (k_uart_getc() == BOOT_CANCEL_KEY) {
+			cancel = true;
+			break;
+		}
+
+	}
+
+	printf(cancel ? "cancelled.\n" : "\n");
+
+	return cancel;
+
+}
 
 void sh(void) {
 
@@ -137,7 +292,46 @@ void sh(void) {
 	// auto-start the graphical environment by default -- see
 	// wait_for_apps_ready()'s own comment above for why this polls
 	// rather than just calling init() immediately after fs_mount().
-	if (wait_for_apps_ready()) {
+	//
+	// The flash case is checked FIRST and skips the poll entirely.
+	// wait_for_apps_ready() exists to tolerate a slow SD card powering
+	// up, and spends up to AUTOINIT_TIMEOUT_TICKS doing it -- which is
+	// exactly the wrong thing to do on a board with no card at all,
+	// where the answer will never change and the user would sit
+	// through a 3 second stall on every single boot before the desktop
+	// appeared. Booting with no card is a first-class path here, not a
+	// fallback: see sw/os/zar.h.
+	//
+	// Note this only decides WHEN to call init(). init() still picks
+	// per app, so a card holding just `wm` still gets its wm from the
+	// card and everything else from flash.
+	// Bring the card up FIRST, always, before deciding anything else.
+	// Where the core apps come from is a separate question -- init()
+	// resolves that per app -- but `ls`, `xf` and every other file
+	// operation afterwards need the card initialised, and with a
+	// deferred mount nothing else will do it.
+	//
+	// When the core apps are in flash we only try once: a board with no
+	// card should not stall for AUTOINIT_TIMEOUT_TICKS on every boot
+	// waiting for hardware that isn't there. When they are not, the
+	// card is the only source of apps, so it is worth waiting for.
+	bool card_ready;
+	if (z_zar_present())
+		card_ready = (fs_mount_now() == 0);
+	else
+		card_ready = wait_for_card_ready();
+
+	if (card_ready)
+		printf("init: sdcard ready\n");
+	else if (z_zar_present())
+		printf("init: no sdcard, using core apps in flash\n");
+
+	if (boot_cancel_requested()) {
+		printf("init: cancelled -- run `init` to start the graphical "
+			"environment manually\n");
+	} else if (card_ready || z_zar_present()) {
+		init();
+	} else if (wait_for_apps_ready()) {
 		init();
 	} else {
 		printf("init: apps not found on filesystem after %lus, "
@@ -234,7 +428,7 @@ void sh(void) {
 			fs_unlink(arg);
 
 			uint32_t bytes_received, bytes_written;
-			void *tmp = k_mem_alloc(1024*256); // 256K max file size for now
+			void *tmp = k_mem_alloc(UPLOAD_MAX_SIZE);
 			uint32_t addr = (uint32_t)(uintptr_t)tmp;
 			printf("uploading to file %s.\n", arg);
 			printf("xfer addr 0x%lx; ready to receive (press D to cancel) ...\n",
@@ -251,6 +445,58 @@ void sh(void) {
 				else
 					printf("failed.\n");
 			}
+		}
+
+		// RECEIVE TO FILE VIA XMODEM
+		//
+		// Same shape as `xf` above, different protocol: this one talks
+		// to any ordinary terminal program's built-in send, with no
+		// host-side tooling. See sw/os/xmodem.h for when to prefer
+		// which -- short version, `xf` for executables (exact length),
+		// `xmf` for everything else and for machines where you only
+		// have a serial terminal.
+		else if (!strncmp(buffer, "xmf", cmdlen)) {
+
+			arg = get_arg(buffer, 1);
+			if (arg == NULL) {
+				printf("error: no file specified\n");
+				continue;
+			}
+
+			void *tmp = k_mem_alloc(UPLOAD_MAX_SIZE);
+			if (tmp == NULL) {
+				printf("error: out of memory\n");
+				continue;
+			}
+
+			printf("uploading to file %s via xmodem.\n", arg);
+			printf("start your terminal's xmodem send now; waiting up to "
+				"3 minutes ('C' below is the CRC request) ...\n");
+			fflush(stdout);
+
+			xmodem_result_t xres;
+			uint32_t bytes_received = xmodem_recv(
+				(uint32_t)(uintptr_t)tmp, UPLOAD_MAX_SIZE, &xres);
+
+			if (xres != XMODEM_OK) {
+				printf("\nxmodem: %s.\n", xmodem_strerror(xres));
+				k_mem_free(tmp);
+				continue;
+			}
+
+			printf("\nreceived %lu bytes.\n", (unsigned long)bytes_received);
+			printf("writing to file %s ... ", arg);
+			fflush(stdout);
+
+			// FA_CREATE_ALWAYS truncates, so no fs_unlink() needed
+			uint32_t bytes_written =
+				fs_write_file(arg, tmp, bytes_received);
+			k_mem_free(tmp);
+
+			if (bytes_written == bytes_received)
+				printf("done.\n");
+			else
+				printf("failed.\n");
 		}
 
 		// GET FILE VIA TFTP (uses the 'net' app -- see sw/common/znet.h)
@@ -284,7 +530,12 @@ void sh(void) {
 			// throughout (see docs/messaging.md)
 
 			zstream_consumer_t cons;
-			if (!zstream_open(&cons, resolve_net_pid(), req, err, sizeof(err))) {
+			uint32_t npid = resolve_net_pid();
+			if (!npid) {
+				printf("net is not running (run `init` or `run net`)\n");
+				continue;
+			}
+			if (!zstream_open(&cons, npid, req, err, sizeof(err))) {
 				printf("tget: failed to open: %s\n", err);
 				continue;
 			}
@@ -366,7 +617,12 @@ void sh(void) {
 			z_obj_t req = z_obj_map(2);
 			z_map_set(&req, "ip", z_obj_uint32(ip));
 			z_map_set(&req, "filename", z_obj_str(remote));
-			z_msg_new_send(resolve_net_pid(), Z_NET_TFTP_PUT, tag, req);
+			uint32_t npid2 = resolve_net_pid();
+			if (!npid2) {
+				printf("net is not running (run `init` or `run net`)\n");
+				continue;
+			}
+			z_msg_new_send(npid2, Z_NET_TFTP_PUT, tag, req);
 			// note: `req` intentionally never freed -- same
 			// borrowed-payload reasoning as tget above; one-shot
 			// per tput call.
@@ -460,12 +716,22 @@ void sh(void) {
 		// CREATE A PROCESS
 		else if (!strncmp(buffer, "run", cmdlen)) {
 			arg = get_arg(buffer, 1);
-			uint32_t size = fs_size(arg);
-			if (!size) {
+			// ZEXE-aware: the image size is data + bss, which for the
+			// new format is NOT the file size (see sw/common/zexec.h).
+			// Legacy raw binaries report bss 0 and total == file size,
+			// so this is the same number it always was for them.
+			z_exec_info_t xi;
+			if (fs_exec_info_any(arg, &xi)) {
+				printf("file not found, or not a usable executable\n");
+				continue;
+			}
+			if (!xi.total) {
 				printf("file not found/empty\n");
 				continue;
 			}
-			printf("creating process (file: %s size: %ld)\n", arg, size);
+			uint32_t size = xi.total;
+			printf("creating process (file: %s size: %ld%s)\n", arg,
+				(long)size, xi.is_zexe ? "" : " raw");
 			fflush(stdout);
 			// see kernel.h's z_proc_stack_size_for() comment -- both
 			// `repl` and `net` are zport.h providers with a confirmed
@@ -483,7 +749,9 @@ void sh(void) {
 			uint32_t base = k_proc_base(pid);
 			printf(" - base: %lx\n", base);
 			printf(" - loading file\n");
-			fs_load(base, arg);
+			printf("loading %s from %s\n", arg,
+				fs_exec_is_flash(arg) ? "flash" : "sd");
+			fs_load_exec_any(base, arg, &xi);
 			printf(" - starting process\n");
 			k_proc_start(pid);
 
@@ -544,6 +812,246 @@ void sh(void) {
 			k_mem_dump();
 		}
 
+		// INSTRUCTION CACHE STATUS / CONTROL (rtl/cache.v)
+		//
+		// `cache` alone reports hit rate; `cache on|off` is the
+		// bring-up escape hatch. Disabling forces every fetch to main
+		// memory, exactly as a bitstream built without `ICACHE would,
+		// so "is the cache causing this?" can be answered on real
+		// hardware in one command rather than a re-synthesis.
+		//
+		// Counters reset on every flush, and fs_load_exec() flushes on
+		// every app load -- so what this reports is activity since the
+		// last `run`, not since boot. That's usually what you want when
+		// measuring one app, but it's worth knowing before wondering
+		// why the numbers look small.
+		// CPU / MEMORY MICRO-BENCHMARKS -- see sh_bench() above for what
+		// each figure measures and why the boot-time MIPS number isn't
+		// enough on its own.
+		else if (!strncmp(buffer, "bench", cmdlen)) {
+			sh_bench();
+		}
+
+		else if (!strncmp(buffer, "cache", cmdlen)) {
+			arg = get_arg(buffer, 1);
+
+			if (!z_icache_present()) {
+				printf("no instruction cache in this bitstream\n");
+			}
+			else if (arg != NULL && !strcmp(arg, "on")) {
+				z_icache_enable(true);
+				printf("instruction cache enabled\n");
+			}
+			else if (arg != NULL && !strcmp(arg, "off")) {
+				z_icache_enable(false);
+				printf("instruction cache disabled\n");
+			}
+			else if (arg != NULL && !strcmp(arg, "flush")) {
+				z_icache_flush();
+				printf("instruction cache flushed\n");
+			}
+			else {
+				uint32_t hits = reg_icache_hits;
+				uint32_t misses = reg_icache_misses;
+				uint32_t total = hits + misses;
+				uint32_t h = hits;
+				uint32_t t = total;
+				uint32_t permille;
+
+				// scale both down together before multiplying by
+				// 1000, rather than reaching for 64-bit math: h*1000
+				// overflows a uint32_t past ~4.29M hits, which is a
+				// perfectly reachable count between two flushes.
+				while (t > 4000000u) { t >>= 4; h >>= 4; }
+				permille = t ? (h * 1000u) / t : 0;
+
+				printf("icache: %ldKB, %ld-word lines%s\n",
+					z_icache_kb(), z_icache_line_words(),
+					(reg_icache_ctrl & Z_ICACHE_CTRL_ENABLE) ?
+						"" : " (DISABLED)");
+				printf("  hits:   %ld\n", hits);
+				printf("  misses: %ld\n", misses);
+				if (total)
+					printf("  rate:   %ld.%ld%%\n",
+						permille / 10, permille % 10);
+				else
+					printf("  rate:   (no fetches yet)\n");
+			}
+		}
+
+		// VIRTUAL PHOSPHOR MODE (rtl/socctl.v's VIDEO register)
+		//
+		// `color` alone reports the current mode; `color <name>` sets
+		// it. The four modes are white (white on black, the default),
+		// amber, green and paper (black on white).
+		//
+		// These were `ifdef GPU_AMBER/`ifdef GPU_GREEN in
+		// rtl/gpu/gpu_video.v -- chosen at synthesis, changeable only
+		// by re-flashing gateware. The defines still exist and still
+		// work, but now choose only the power-on default.
+		//
+		// Kernel code, so this calls zsoc.h's MMIO helpers directly
+		// rather than going through the VIDEO_SET_MODE syscall; sh.c
+		// IS the kernel and already touches socctl this way for the
+		// cursor. Apps use z_video_mode_set() (zeitlos.h) instead.
+		else if (!strncmp(buffer, "color", cmdlen)) {
+
+			arg = get_arg(buffer, 1);
+
+			if (!z_video_mode_present()) {
+				// Deliberately distinguished from "socctl missing
+				// entirely": a bitstream can have socctl and still
+				// predate this register, and the fix is the same
+				// either way but the diagnosis isn't.
+				printf("no video mode register in this bitstream\n");
+				printf("(this is an RTL change -- needs `make flash`)\n");
+			}
+			else if (arg == NULL) {
+				printf("color: %s\n", z_video_mode_name(z_video_get_mode()));
+				printf("usage: color [white|amber|green|paper]\n");
+			}
+			else {
+				uint32_t mode = z_video_mode_from_name(arg);
+
+				if (mode >= Z_VIDEO_MODE_COUNT) {
+					printf("unknown color '%s'\n", arg);
+					printf("usage: color [white|amber|green|paper]\n");
+				}
+				else if (z_video_set_mode(mode)) {
+					// Read back rather than echoing `mode`. The write
+					// is fire-and-forget on this bus, so reporting the
+					// requested value would look identical whether or
+					// not it landed -- the same reason wm_busy_apply()
+					// reads back after setting the cursor.
+					printf("color: %s\n",
+						z_video_mode_name(z_video_get_mode()));
+				}
+				else {
+					printf("color: failed to set '%s'\n", arg);
+				}
+			}
+		}
+
+		// DISPLAY FILESYSTEM CAPACITY -- the SD card, as opposed to
+		// `free` just above, which is main memory. fs_total()/fs_free()
+		// (sw/os/fs/fs.c) have existed since long before this command
+		// and were simply never called by anything; both report KB and
+		// both return 0 on any failure (no card, not mounted), which is
+		// why "not mounted" and "empty" read the same here.
+		// FORMAT -- destroys everything on the sdcard.
+		//
+		// Requires the exact confirmation word as an argument rather
+		// than a y/n prompt. A prompt is one keystroke away from
+		// wiping a card, and this shell has no undo, no trash and no
+		// second copy of anything. Typing "erase-everything" cannot
+		// happen by accident or by holding a key down.
+		//
+		// Deliberately does NOT touch the core apps: those live in
+		// flash (sw/os/zar.h) and survive this, so a formatted card
+		// still boots to a desktop. That is worth knowing before
+		// running it -- the machine will come back up fine.
+		else if (!strncmp(buffer, "format", cmdlen)) {
+
+			arg = get_arg(buffer, 1);
+
+			if (arg == NULL || strcmp(arg, "erase-everything") != 0) {
+				printf("this will PERMANENTLY ERASE the entire sdcard.\n");
+				printf("core apps in flash (wm, net, repl, term) are not\n");
+				printf("affected and the system will still boot.\n");
+				printf("\n");
+				printf("to proceed, type exactly:\n");
+				printf("  format erase-everything\n");
+			}
+			else {
+				printf("erasing sdcard ...\n");
+				if (fs_format() == 0) {
+					// f_mkfs leaves the volume unmounted; remount so
+					// the very next `ls` or `xf` works instead of
+					// failing with FR_NOT_READY.
+					if (fs_mount_now() == 0)
+						printf("sdcard formatted and remounted.\n");
+					else
+						printf("formatted, but remount failed -- reboot.\n");
+				}
+			}
+
+		}
+
+		// Re-mount the SD card.
+		//
+		// There is no card-detect line on this hardware (SPI only),
+		// so nothing can notice a card being inserted or swapped --
+		// the volume is mounted once at boot and that is the last
+		// word on the subject. This is the manual override: put a
+		// card in, type `mount`.
+		//
+		// It also re-runs disk_initialize(), which is what recovers a
+		// card that failed to come up at boot (a slow card, or one
+		// inserted a moment too late).
+		else if (!strncmp(buffer, "mount", cmdlen)) {
+
+			// Refuse while anything has a file open. Remounting out
+			// from under an open FIL leaves that handle describing
+			// cluster chains from the previous mount, and the next
+			// write through it corrupts the card -- a far worse
+			// outcome than making the user close something first.
+			int open_now = k_fs_open_count();
+
+			if (open_now) {
+				printf("mount: %d file handle(s) still open -- "
+					"close them first\n", open_now);
+			} else if (fs_mount_now() == 0) {
+				uint32_t total = 0, freek = 0;
+				fs_df_kb(&total, &freek);
+				if (total)
+					printf("mounted: %ld KB total, %ld KB free\n",
+						(long)total, (long)freek);
+				else
+					printf("mounted, but no filesystem found\n");
+			} else {
+				printf("mount failed -- is a card inserted?\n");
+			}
+
+		}
+
+		// SYNC -- make the sdcard safe to remove or power off.
+		//
+		// FatFs holds metadata in RAM: a file's directory entry is not
+		// updated until it is closed, and both the volume and every open
+		// file carry a 512-byte sector buffer. Cutting power in that
+		// window -- or reprogramming the FPGA, which is the same thing
+		// from the card's point of view -- leaves lost clusters and
+		// half-written directory records.
+		//
+		// That is the most likely cause of corruption during development,
+		// where the board gets reprogrammed far more often than a normal
+		// machine gets power-cycled. Run this first and the card is
+		// consistent.
+		else if (!strncmp(buffer, "sync", cmdlen)) {
+			if (fs_unmount() == 0) {
+				printf("filesystem flushed; safe to reprogram or remove\n");
+				if (fs_mount_now() == 0)
+					printf("remounted.\n");
+				else
+					printf("remount failed -- reboot or reinsert card\n");
+			} else {
+				printf("flush failed\n");
+			}
+		}
+
+		else if (!strncmp(buffer, "df", cmdlen)) {
+			// One FAT scan, not two -- see fs_df_kb() in fs.c.
+			uint32_t total = 0, freek = 0;
+			fs_df_kb(&total, &freek);
+			if (!total) {
+				printf("no filesystem mounted\n");
+			} else {
+				printf(" total: %6ld KB\n", (long)total);
+				printf("  used: %6ld KB\n", (long)(total - freek));
+				printf("  free: %6ld KB\n", (long)freek);
+			}
+		}
+
 	}
 
 }
@@ -563,7 +1071,9 @@ void init(void) {
 	// wm:
 
 	printf("starting wm\n");
-	uint32_t size_wm = fs_size("wm");
+	z_exec_info_t xi_wm;
+	core_src_t src_wm = core_exec_info("wm", &xi_wm);
+	uint32_t size_wm = (src_wm == CORE_SRC_NONE) ? 0 : xi_wm.total;
 	if (!size_wm) {
 		printf("init: wm binary not found\n");
 		return;
@@ -574,7 +1084,8 @@ void init(void) {
 		return;
 	}
 	uint32_t base_wm = k_proc_base(pid_wm);
-	fs_load(base_wm, "wm");
+	printf("init: wm (%s)\n", core_src_name(src_wm));
+	core_load_exec(base_wm, "wm", &xi_wm, src_wm);
 	k_proc_start(pid_wm);
 	printf("init: wm started as pid %ld\n", pid_wm);
 
@@ -599,7 +1110,9 @@ void init(void) {
 
 	printf("starting net\n");
 	uint32_t pid_net = 0;
-	uint32_t size_net = fs_size("net");
+	z_exec_info_t xi_net;
+	core_src_t src_net = core_exec_info("net", &xi_net);
+	uint32_t size_net = (src_net == CORE_SRC_NONE) ? 0 : xi_net.total;
 	if (!size_net) {
 		printf("init: net binary not found (non-fatal)\n");
 	} else {
@@ -608,7 +1121,8 @@ void init(void) {
 			printf("init: unable to create net process (non-fatal)\n");
 		} else {
 			uint32_t base_net = k_proc_base(pid_net);
-			fs_load(base_net, "net");
+			printf("init: net (%s)\n", core_src_name(src_net));
+			core_load_exec(base_net, "net", &xi_net, src_net);
 			// deliberately NOT k_proc_start()ed here -- see the end of
 			// this function.
 			printf("init: net loaded as pid %ld (start deferred)\n", pid_net);
@@ -633,7 +1147,9 @@ void init(void) {
 	// for testing the port protocol in isolation from repl.
 
 	printf("starting repl\n");
-	uint32_t size_repl = fs_size("repl");
+	z_exec_info_t xi_repl;
+	core_src_t src_repl = core_exec_info("repl", &xi_repl);
+	uint32_t size_repl = (src_repl == CORE_SRC_NONE) ? 0 : xi_repl.total;
 	if (!size_repl) {
 		printf("init: repl binary not found (non-fatal -- term will "
 			"fall back to local echo)\n");
@@ -643,7 +1159,8 @@ void init(void) {
 			printf("init: unable to create repl process (non-fatal)\n");
 		} else {
 			uint32_t base_repl = k_proc_base(pid_repl);
-			fs_load(base_repl, "repl");
+			printf("init: repl (%s)\n", core_src_name(src_repl));
+			core_load_exec(base_repl, "repl", &xi_repl, src_repl);
 			k_proc_start(pid_repl);
 			printf("init: repl started as pid %ld\n", pid_repl);
 		}
@@ -765,18 +1282,190 @@ void screenshot(void) {
 // sw/common/zstream.c already used, see zdns.c's own header comment)
 // finally gave both a real shared home, so both copies were deleted.
 
+
+// -- micro-benchmarks (`bench`) --
+//
+// The boot-time MIPS figure (k_cpu_report(), kernel.c) runs one fixed
+// integer loop, deliberately unchanged across builds so the number
+// stays comparable. That makes it blind to anything it doesn't
+// exercise: enabling hardware multiply barely moved it, because that
+// loop contains no multiply.
+//
+// These measure the specific things SOC changes actually affect, in
+// CYCLES PER OPERATION, so a change either moves the relevant number
+// or it doesn't:
+//
+//   int   register-only ALU work -- the boot figure's baseline
+//   mul   32x32 multiply         -- rtl/boards.vh `CPU_MUL/`CPU_MUL_FAST
+//   div   32/32 divide           -- `CPU_DIV
+//   ld    sequential word loads  -- main memory read latency
+//   ldr   scattered word loads   -- same, defeating row locality
+//   st    sequential word stores -- main memory write latency
+//
+// ld vs ldr is the interesting pair for memory work: an SDRAM
+// controller that keeps rows open helps `ld` a lot and `ldr` barely at
+// all, so the gap between them is the thing to watch when
+// rtl/mem/sdram.v changes.
+//
+// Everything is `volatile` or consumed into a sink so the compiler
+// cannot optimise the work away -- without that, -Os deletes most of
+// these loops entirely and reports absurdly fast results.
+
+#define BENCH_ITERS 4096
+
+static inline uint32_t bench_cycle(void) {
+	uint32_t v; __asm__ volatile ("rdcycle %0" : "=r"(v)); return v;
+}
+
+// Instructions retired. rdcycle counts WALL cycles, so it includes
+// every cycle spent in other processes while this one was preempted --
+// which at 4 runnable processes inflates every figure ~4x and, worse,
+// does so unevenly, because each measurement spans only a couple of
+// 1.37ms timeslices and the phase relationship shifts between runs.
+// That noise is easy to spot: if `mul` comes out lower than `int`,
+// the numbers are meaningless, since mul does strictly more work.
+//
+// rdinstret does NOT fix that, and an earlier version of this comment
+// wrongly claimed it did. picorv32's counters are single GLOBAL
+// hardware counters -- not virtualised per process, not saved or
+// restored across context switches -- so instructions retired by other
+// processes are counted here too. Both columns include stolen time.
+//
+// It is still worth printing, because the two columns divide out: the
+// ratio is cycles per instruction, which IS meaningful regardless of
+// how much CPU this process got. Comparing insn/op between two loops
+// is also fair, since both are inflated by the same factor.
+//
+// The only clean numbers come from killing the other processes first.
+static inline uint32_t bench_instret(void) {
+	uint32_t v; __asm__ volatile ("rdinstret %0" : "=r"(v)); return v;
+}
+
+// cycles per iteration, x100 so one decimal can be printed without
+// floating point (there is none in kernel code)
+static uint32_t bench_run_cost(uint32_t cycles, uint32_t iters) {
+	if (!iters) return 0;
+	return (cycles * 100u) / iters;
+}
+
+static void bench_print(const char *name, uint32_t cycles, uint32_t insns,
+	uint32_t iters, const char *note) {
+	uint32_t c100 = bench_run_cost(cycles, iters);
+	uint32_t i100 = bench_run_cost(insns, iters);
+	printf("  %-4s %4ld.%02ld cyc  %3ld.%02ld insn   %s\n", name,
+		(long)(c100 / 100), (long)(c100 % 100),
+		(long)(i100 / 100), (long)(i100 % 100), note);
+}
+
+static void sh_bench(void) {
+
+	volatile uint32_t sink = 0;
+	uint32_t i, t0, n0, x;
+	uint32_t c_int, c_mul, c_div, c_ld, c_ldr, c_st;
+	uint32_t n_int, n_mul, n_div, n_ld, n_ldr, n_st;
+
+	// A scratch buffer big enough that scattered access misses
+	// whatever row/line the previous access opened. Static rather
+	// than on the stack: the shell's stack is not this large.
+	static volatile uint32_t buf[1024];
+
+	printf("cycles per operation (lower is better)\n");
+
+	// -- integer ALU --
+	x = 12345;
+	n0 = bench_instret(); t0 = bench_cycle();
+	for (i = 0; i < BENCH_ITERS; i++) {
+		x += i;
+		x ^= x >> 7;
+	}
+	c_int = bench_cycle() - t0; n_int = bench_instret() - n0;
+	sink = x;
+
+	// -- multiply --
+	x = 12345;
+	n0 = bench_instret(); t0 = bench_cycle();
+	for (i = 0; i < BENCH_ITERS; i++) {
+		x = x * 1103515245u + 12345u;
+	}
+	c_mul = bench_cycle() - t0; n_mul = bench_instret() - n0;
+	sink = x;
+
+	// -- divide --
+	x = 0xffff0000u;
+	n0 = bench_instret(); t0 = bench_cycle();
+	for (i = 0; i < BENCH_ITERS; i++) {
+		x = x / (i + 3u);
+		x += 0x1000u;
+	}
+	c_div = bench_cycle() - t0; n_div = bench_instret() - n0;
+	sink = x;
+
+	// -- sequential loads --
+	n0 = bench_instret(); t0 = bench_cycle();
+	for (i = 0; i < BENCH_ITERS; i++) {
+		sink = buf[i & 1023];
+	}
+	c_ld = bench_cycle() - t0; n_ld = bench_instret() - n0;
+
+	// -- scattered loads --
+	// 397 is prime relative to 1024, so this walks the whole buffer
+	// in a stride that never repeats a nearby address.
+	n0 = bench_instret(); t0 = bench_cycle();
+	for (i = 0; i < BENCH_ITERS; i++) {
+		sink = buf[(i * 397u) & 1023];
+	}
+	c_ldr = bench_cycle() - t0; n_ldr = bench_instret() - n0;
+
+	// -- sequential stores --
+	n0 = bench_instret(); t0 = bench_cycle();
+	for (i = 0; i < BENCH_ITERS; i++) {
+		buf[i & 1023] = i;
+	}
+	c_st = bench_cycle() - t0; n_st = bench_instret() - n0;
+
+	(void)sink;
+
+	bench_print("int", c_int, n_int, BENCH_ITERS, "add/shift/xor");
+	bench_print("mul", c_mul, n_mul, BENCH_ITERS,
+		z_soc_has_feature(Z_FEATURE_CPU_MUL) ?
+			"hardware" : "software (libgcc)");
+	bench_print("div", c_div, n_div, BENCH_ITERS,
+		z_soc_has_feature(Z_FEATURE_CPU_DIV) ?
+			"hardware" : "software (libgcc)");
+	bench_print("ld", c_ld, n_ld, BENCH_ITERS, "sequential word loads");
+	bench_print("ldr", c_ldr, n_ldr, BENCH_ITERS, "scattered word loads");
+	bench_print("st", c_st, n_st, BENCH_ITERS, "sequential word stores");
+
+	// CPU share: how much of the wall time this process actually got.
+	// If it reads well under 100%, every cycles/op figure above is
+	// inflated by roughly the reciprocal, and the thing to fix is the
+	// scheduler, not the code being measured. Uses the int loop, whose
+	// instruction mix is the most predictable.
+	printf("\nprocesses: %ld runnable\n", (long)k_proc_runnable_count());
+	printf("note: BOTH columns include time/instructions from other\n");
+	printf("      processes -- picorv32's counters are global, not per\n");
+	printf("      process. cyc/insn (CPI) is still meaningful. For clean\n");
+	printf("      absolute numbers, kill the other processes first.\n");
+
+}
+
 void sh_help(void) {
 
 	printf("commands:\n");
 	printf(" hd <addr>         hex dump memory\n");
 	printf(" xa <addr>         receive to addr via xfer\n");
 	printf(" xf <file>         receive to file via xfer\n");
+	printf(" xmf <file>        receive to file via xmodem\n");
 	printf(" tget <ip-or-host> <remote-file> [local-file]  fetch a file via tftp (needs `run net`)\n");
 	printf(" tput <ip-or-host> <local-file> [remote-file]  send a file via tftp (needs `run net`)\n");
 	printf(" run <file>        create a new process\n");
 	printf(" init               start wm, net, and repl (runs automatically at boot)\n");
 	printf(" kill <pid>        kill a process\n");
 	printf(" ps                display a process snapshot\n");
+	printf(" df                display filesystem capacity\n");
+	printf(" sync              flush sdcard (before reprogramming)\n");
+	printf(" mount             (re)mount the sdcard -- no card-detect, so this is manual\n");
+	printf(" format            ERASE the entire sdcard\n");
 	printf(" pr                display the pid name registry\n");
 	printf(" ks                display a kernel snapshot\n");
 	printf(" cls               clear framebuffer\n");
@@ -785,5 +1474,8 @@ void sh_help(void) {
 	printf(" mkdir [path]      make a directory\n");
 	printf(" touch [path]      create empty file\n");
 	printf(" rm [path]         remove a file\n");
+	printf(" cache [on|off|flush]  instruction cache stats/control\n");
+	printf(" color [white|amber|green|paper]  display phosphor mode\n");
+	printf(" bench             cpu/memory micro-benchmarks\n");
 
 }

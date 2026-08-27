@@ -151,6 +151,62 @@ static int draw_cursor_y = -1;
 // one. That per-pixel software path was correct but visibly slow
 // redrawing a full 80x25 grid; z_fb_draw_char2() does the same thing
 // in hardware.
+// -- selection --
+//
+// A rectangular-in-reading-order range over the visible grid: from
+// (sel_r0,sel_c0) to (sel_r1,sel_c1) inclusive, the way a terminal
+// selection actually works -- full rows in between, partial rows at
+// each end -- not a rectangle of columns.
+//
+// The VISIBLE grid only. There is no scrollback in zvt100
+// (vt.cells[VT_ROWS][VT_COLS] is the whole of it), so there is
+// nothing above the top row to select.
+//
+// Anchor plus current, in cell coordinates, so extending backwards
+// needs no special case -- the same shape sw/apps/text uses for text
+// offsets, for the same reason.
+static bool sel_active;
+static bool sel_dragging;
+
+// Previous button mask, for right-button edge detection -- see
+// handle_mouse_event().
+static uint8_t last_buttons;
+static int sel_ar, sel_ac;		// anchor
+static int sel_cr, sel_cc;		// current
+
+// Normalised selection bounds, in reading order.
+static void sel_bounds(int *r0, int *c0, int *r1, int *c1) {
+
+	if (sel_ar < sel_cr || (sel_ar == sel_cr && sel_ac <= sel_cc)) {
+		*r0 = sel_ar; *c0 = sel_ac; *r1 = sel_cr; *c1 = sel_cc;
+	} else {
+		*r0 = sel_cr; *c0 = sel_cc; *r1 = sel_ar; *c1 = sel_ac;
+	}
+
+}
+
+// Is this cell inside the selection? Reading order, so a row strictly
+// between the endpoints is selected end to end.
+static bool sel_has(int row, int col) {
+
+	if (!sel_active) return false;
+
+	int r0, c0, r1, c1;
+	sel_bounds(&r0, &c0, &r1, &c1);
+
+	if (row < r0 || row > r1) return false;
+	if (row == r0 && col < c0) return false;
+	if (row == r1 && col > c1) return false;
+
+	return true;
+
+}
+
+// Defined further down, next to the selection code it drives --
+// connect_port()'s own message pump (above) services pointer events
+// while waiting, so it needs this visible here.
+static void handle_mouse_event(uint32_t packed);
+
 static void draw_cell(int col, int row, char ch, bool reverse) {
 
 	z_clip_t clip;
@@ -158,6 +214,11 @@ static void draw_cell(int col, int row, char ch, bool reverse) {
 
 	int x = clip.x0 + col * TERM_FONT.w;
 	int y = clip.y0 + row * TERM_FONT.h;
+
+	// Selection inverts on top of whatever the cell already is, so a
+	// selected reverse-video cell comes back to normal video rather
+	// than staying indistinguishable from its neighbours.
+	if (sel_has(row, col)) reverse = !reverse;
 
 	int fg = reverse ? 0 : 1;
 	int bg = reverse ? 1 : 0;
@@ -368,6 +429,9 @@ static bool connect_port(const char *name, uint32_t fallback_pid, z_obj_t arg,
 			z_win_redraw_done(&win);
 		} else if (msg.subject == Z_WM_WINDOW_MOVED) {
 			z_win_parse_rect(&win, &msg.obj);
+		} else if (msg.subject == Z_WM_MOUSE) {
+			if (msg.obj.type == Z_UINT32)
+				handle_mouse_event(msg.obj.val.uint32);
 		} else if (msg.subject == Z_WM_KEY) {
 			handle_key_event(msg.obj.val.uint32);
 		}
@@ -466,12 +530,221 @@ static int key_to_bytes(uint32_t keysym, char *buf, int buflen) {
 // connected -- feeds them straight back into our own vt_screen_t as
 // local echo. only acts on key-down events; releases and auto-repeat
 // aren't handled.
+// Redraws every row the selection covers, or used to. Called after
+// any change to the selection, because vt_row_dirty() only knows
+// about cells the EMULATOR changed -- a selection is drawn on top of
+// unchanged content and is invisible to that tracking.
+static void redraw_rows(int r0, int r1) {
+
+	if (r0 > r1) { int t = r0; r0 = r1; r1 = t; }
+	if (r0 < 0) r0 = 0;
+	if (r1 >= VT_ROWS) r1 = VT_ROWS - 1;
+
+	for (int row = r0; row <= r1; row++)
+		for (int col = 0; col < VT_COLS; col++)
+			draw_cell(col, row, vt.cells[row][col].ch,
+				vt.cells[row][col].reverse);
+
+}
+
+static void sel_clear(void) {
+
+	if (!sel_active) return;
+
+	int r0, c0, r1, c1;
+	sel_bounds(&r0, &c0, &r1, &c1);
+
+	sel_active = false;
+	sel_dragging = false;
+
+	redraw_rows(r0, r1);
+
+}
+
+// Copies the selection to the system clipboard.
+//
+// Trailing blanks on each row are dropped: a terminal grid is padded
+// with spaces to the full width, so copying it verbatim gives every
+// line a tail of whitespace that nothing wants pasted back. Rows
+// other than the last get a newline, which is what makes a multi-row
+// copy paste as multiple lines.
+static void sel_copy(void) {
+
+	if (!sel_active) return;
+
+	int r0, c0, r1, c1;
+	sel_bounds(&r0, &c0, &r1, &c1);
+
+	static char out[Z_WM_CLIP_MAX];
+	int n = 0;
+
+	for (int row = r0; row <= r1 && n < (int)sizeof(out) - 1; row++) {
+
+		int from = (row == r0) ? c0 : 0;
+		int to = (row == r1) ? c1 : VT_COLS - 1;
+
+		// walk back over padding spaces
+		int last = from - 1;
+		for (int col = from; col <= to; col++)
+			if (vt.cells[row][col].ch != ' ') last = col;
+
+		for (int col = from; col <= last && n < (int)sizeof(out) - 1; col++) {
+			char ch = vt.cells[row][col].ch;
+			out[n++] = (ch >= 0x20 && ch < 0x7f) ? ch : ' ';
+		}
+
+		if (row != r1 && n < (int)sizeof(out) - 1) out[n++] = '\n';
+
+	}
+
+	out[n] = 0;
+
+	z_clip_set(out, n);
+
+}
+
+// Pastes the clipboard into the session.
+//
+// Straight down the same path a keystroke takes -- bytes out the
+// port, or into our own emulator when nothing is connected. It makes
+// no assumption about line structure, deliberately: against `sh` each
+// newline submits a command, which is correct; against a reader that
+// knows it is mid-form (repl, once zline grows continuation) the same
+// bytes accumulate instead. Neither behaviour belongs to term.
+static void sel_paste(void) {
+
+	static char clip[Z_WM_CLIP_MAX];
+
+	int n = z_clip_get(clip, sizeof(clip));
+	if (n <= 0) return;
+
+	if (port.connected) {
+		z_port_send(&port, clip, (uint32_t)n);
+		return;
+	}
+
+	vt_feed(&vt, (const uint8_t *)clip, (uint32_t)n);
+
+}
+
+// Content-relative pixel position -> cell, clamped to the grid.
+static void cell_at(int cx, int cy, int *row, int *col) {
+
+	int r = cy / TERM_FONT.h;
+	int c = cx / TERM_FONT.w;
+
+	if (r < 0) r = 0;
+	if (r >= VT_ROWS) r = VT_ROWS - 1;
+	if (c < 0) c = 0;
+	if (c >= VT_COLS) c = VT_COLS - 1;
+
+	*row = r;
+	*col = c;
+
+}
+
+static void handle_mouse_event(uint32_t packed) {
+
+	int cx, cy;
+	bool inside = z_win_mouse_content_xy(&win, packed, &cx, &cy);
+
+	uint8_t buttons = (uint8_t)Z_WM_UNPACK_MOUSE_BUTTONS(packed);
+	bool down = (buttons & Z_MOUSE_BTN_LEFT) != 0;
+
+	// Samples over our titlebar reach us too -- wm's hit test is the
+	// whole window rect (see the same guard in sw/apps/text). A drag
+	// already in progress is exempt, so a selection can run off the
+	// edge and keep extending.
+	if (!inside && !sel_dragging) return;
+
+	// Right button copies, as a shortcut for Ctrl+Shift+C. Acted on
+	// at PRESS: there is no drag gesture on this button, so waiting
+	// for the release adds nothing. Same behaviour as sw/apps/text.
+	//
+	// Edge-detected, because Z_WM_MOUSE is a level report rather than
+	// an event -- a held button arrives on every sample.
+	if ((buttons & Z_MOUSE_BTN_RIGHT) && !(last_buttons & Z_MOUSE_BTN_RIGHT))
+		sel_copy();
+
+	last_buttons = buttons;
+
+	int row, col;
+	cell_at(cx, cy, &row, &col);
+
+	if (down && !sel_dragging) {
+
+		// Press: start a new selection here. Clearing first redraws
+		// the old one away.
+		sel_clear();
+
+		sel_ar = sel_cr = row;
+		sel_ac = sel_cc = col;
+		sel_dragging = true;
+
+		return;
+
+	}
+
+	if (down && sel_dragging) {
+
+		if (row == sel_cr && col == sel_cc) return;
+
+		int old_r = sel_cr;
+
+		sel_cr = row;
+		sel_cc = col;
+		sel_active = true;
+
+		// Everything between the previous and current ends changed
+		// appearance; the anchor row too, since a selection can
+		// invert direction across it.
+		redraw_rows(old_r < sel_ar ? old_r : sel_ar,
+			sel_cr > sel_ar ? sel_cr : sel_ar);
+
+		return;
+
+	}
+
+	// Release: the selection stays. A press that never moved selected
+	// nothing, so drop it rather than leaving a one-cell selection
+	// the user did not ask for.
+	sel_dragging = false;
+
+	if (sel_active && sel_ar == sel_cr && sel_ac == sel_cc) sel_clear();
+
+}
+
 static void handle_key_event(uint32_t packed) {
 
 	uint32_t keysym = Z_WM_UNPACK_KEY_KEYSYM(packed);
+	uint8_t mods = (uint8_t)Z_WM_UNPACK_KEY_MODIFIERS(packed);
 	bool pressed = Z_WM_UNPACK_KEY_PRESSED(packed) != 0;
 
 	if (!pressed) return;
+
+	// Ctrl+SHIFT+C/V, not Ctrl+C/V.
+	//
+	// Ctrl+C in a terminal is ^C to the far end -- the single
+	// most-used key in a shell -- and rebinding it to copy would be
+	// indefensible. Every terminal emulator resolves this the same
+	// way and so does this one; sw/apps/text uses the plain Ctrl
+	// forms, and the difference is deliberate rather than an
+	// inconsistency. See docs/widgets.md.
+	//
+	// z_kbd_usage_to_keysym() folds Ctrl+letter to 0x01..0x1A
+	// regardless of Shift, so the shift bit is what distinguishes
+	// these from the control codes they would otherwise be.
+	if ((mods & Z_KBD_MOD_CTRL) && (mods & Z_KBD_MOD_SHIFT)) {
+
+		if (keysym == 0x03) { sel_copy(); return; }		// Ctrl+Shift+C
+		if (keysym == 0x16) { sel_paste(); return; }	// Ctrl+Shift+V
+
+	}
+
+	// Anything else typed drops the selection -- it is about to stop
+	// describing what is on screen anyway, since the far end will
+	// echo something back.
+	if (sel_active && keysym != Z_KEY_NONE) sel_clear();
 
 	// F12: a fixed, term-local escape hotkey back to "repl0",
 	// intercepted here BEFORE key_to_bytes()/the port -- regardless
@@ -604,7 +877,10 @@ int main(void) {
 				got_redraw = true;
 			} else if (msg.subject == Z_WM_WINDOW_MOVED) {
 				z_win_parse_rect(&win, &msg.obj);
-			} else if (msg.subject == Z_WM_KEY) {
+			} else if (msg.subject == Z_WM_MOUSE) {
+			if (msg.obj.type == Z_UINT32)
+				handle_mouse_event(msg.obj.val.uint32);
+		} else if (msg.subject == Z_WM_KEY) {
 				handle_key_event(msg.obj.val.uint32);
 			} else if (msg.subject == Z_PORT_DATA) {
 				if (port.connected && msg.tag == port.conn_id) {
@@ -679,7 +955,6 @@ int main(void) {
 		render();
 
 		if (got_redraw) z_win_redraw_done(&win);
-
 	}
 
 	return 0;

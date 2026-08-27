@@ -132,3 +132,23 @@ count/input-state/cursor-position counters are shown. Defaults to on;
 `te_bridge.c` calls `te_status_bar(0)` before starting a session as a
 further reduction in per-keystroke bytes. The filename and any notice
 (`SAVED`/`FAILED`) still always show either way.
+
+## See also: `page`
+
+`te` **edits** small files -- it loads the whole document into repl's
+heap and pays several times the file's raw size for its line-list
+representation, which is what `TE_MAX_FILE_SIZE` (2KB by default)
+exists to bound.
+
+For **viewing** a file of any size there is now `page`
+(`sw/apps/repl/page.c`, and its own header comment for the full
+design). It never holds more than a screenful, keeps the file open
+across the session, and uses a sparse line index plus the `FS_SEEK`
+syscall to scroll backwards without re-reading from byte 0. Books work
+fine.
+
+Both are single-session per `repl` process, for the same underlying
+reason in `te`'s case (its state is file-static globals inside the
+submodule) -- so `te` on one `term` and `page` on another will refuse
+the second one. Running a second `repl` is the way around that, at the
+cost of another Scheme heap.

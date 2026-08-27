@@ -121,6 +121,12 @@ char **fs_list(const char *path, uint32_t max_entries, uint32_t *count) {
 	args.max_entries = max_entries;
 	args.count = 0;
 	args.truncated = 0;
+	// This function's callers only ever wanted names. Explicitly
+	// NULL, not left uninitialized -- the kernel writes through this
+	// pointer when it isn't NULL, and an uninitialized one here would
+	// be a stack-garbage address scribbled on by a syscall, which is
+	// about as unpleasant a bug as this codebase can produce.
+	args.types = NULL;
 
 	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
 	z_obj_t *rv = (z_obj_t *)z_kernel_ptr(Z_SYS_FS_LIST, (uint32_t *)&args, 0);
@@ -158,6 +164,39 @@ char **fs_list(const char *path, uint32_t max_entries, uint32_t *count) {
 	free(buf);
 	if (count) *count = args.count;
 	return names;
+
+}
+
+// Allocation-free sibling of fs_list() above -- see zfsapp.h for when
+// to prefer which.
+int fs_list_into(const char *path, char *buf, uint32_t buf_cap,
+	uint8_t *types, uint32_t max_entries, uint32_t *count,
+	uint32_t *truncated) {
+
+	if (count) *count = 0;
+	if (truncated) *truncated = 0;
+
+	if (!buf || buf_cap == 0) return 0;
+	if (types && !max_entries) return 0;	// see zfs.h / k_fs_list()
+
+	z_fs_list_args_t args;
+	args.path = (char *)path;
+	args.out = buf;
+	args.out_cap = buf_cap;
+	args.max_entries = max_entries;
+	args.count = 0;
+	args.truncated = 0;
+	args.types = types;
+
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_obj_t *rv = (z_obj_t *)z_kernel_ptr(Z_SYS_FS_LIST, (uint32_t *)&args, 0);
+
+	if (rv->val.uint32 != Z_OK) return 0;
+
+	if (count) *count = args.count;
+	if (truncated) *truncated = args.truncated;
+
+	return 1;
 
 }
 
@@ -240,5 +279,80 @@ int fs_close_handle(int handle) {
 	z_obj_t *rv = (z_obj_t *)z_kernel_ptr(Z_SYS_FS_CLOSE, (uint32_t *)&args, 0);
 
 	return (rv->val.uint32 == Z_OK) ? 1 : 0;
+
+}
+
+// -- mkdir / touch / seek --
+//
+// Same shape as fs_unlink() above: build the small arg struct, one
+// syscall, translate the kernel's z_ok/z_fail into this file's own
+// established 1-on-success/0-on-failure convention (zfsapp.h) -- note
+// that's the INVERSE of what the kernel-native fs_mkdir()/fs_touch()
+// (sw/os/fs/fs.c) themselves return, which is exactly why the
+// translation happens here rather than being left to every caller.
+
+int fs_mkdir(const char *path) {
+
+	if (!path) return 0;
+
+	z_fs_path_args_t args;
+	args.name = (char *)path;
+
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_obj_t *rv = (z_obj_t *)z_kernel_ptr(Z_SYS_FS_MKDIR, (uint32_t *)&args, 0);
+
+	return (rv->val.uint32 == Z_OK) ? 1 : 0;
+
+}
+
+int fs_touch(const char *path) {
+
+	if (!path) return 0;
+
+	z_fs_path_args_t args;
+	args.name = (char *)path;
+
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_obj_t *rv = (z_obj_t *)z_kernel_ptr(Z_SYS_FS_TOUCH, (uint32_t *)&args, 0);
+
+	return (rv->val.uint32 == Z_OK) ? 1 : 0;
+
+}
+
+int fs_seek(int handle, uint32_t offset) {
+
+	if (handle < 0) return 0;
+
+	z_fs_seek_args_t args;
+	args.handle = (int32_t)handle;
+	args.offset = offset;
+	args.pos = 0;
+
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_obj_t *rv = (z_obj_t *)z_kernel_ptr(Z_SYS_FS_SEEK, (uint32_t *)&args, 0);
+
+	return (rv->val.uint32 == Z_OK) ? 1 : 0;
+
+}
+
+// Named fs_df(), NOT fs_free() -- the kernel-native fs_free()
+// (sw/os/fs/fs.c) already owns that name, and sw/common/zeitlos.h's own
+// note explains what happens when an app-facing wrapper collides with a
+// kernel-native one of the same name: it fails at kernel-compile time,
+// since kernel code includes both headers. Same reason this whole file
+// exists separately from zeitlos.h.
+bool fs_df(uint32_t *total_kb, uint32_t *free_kb) {
+
+	z_fs_df_args_t args;
+	args.total_kb = 0;
+	args.free_kb = 0;
+
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_obj_t *rv = (z_obj_t *)z_kernel_ptr(Z_SYS_FS_DF, (uint32_t *)&args, 0);
+
+	if (total_kb) *total_kb = args.total_kb;
+	if (free_kb) *free_kb = args.free_kb;
+
+	return (rv->val.uint32 == Z_OK);
 
 }

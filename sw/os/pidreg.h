@@ -81,6 +81,17 @@ z_obj_t *k_pid_lookup(z_obj_t *args);
 // rather than waiting to find it the same way.
 void k_pidreg_release_all(uint32_t pid);
 
+// The first name registered by `pid`, or NULL if it has none.
+//
+// "First" because one process may hold several registrations -- the
+// table is keyed by name, not by pid (Z_PIDREG_MAX is a total across
+// all processes). For display purposes the first is the useful one:
+// it is the name the process registered at startup.
+//
+// Returns a pointer into the registry, valid until that entry is
+// released. Callers copy it; nothing holds it.
+const char *k_pidreg_name_for(uint32_t pid);
+
 // zeroes the registry table. MUST be called once at kernel startup,
 // before any process can possibly reach k_pid_register()/k_pid_lookup()
 // -- kernel.c calls this right alongside its existing z_procs[]

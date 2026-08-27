@@ -13,6 +13,40 @@
 #include "fsapi.h"
 #include "fs/fs.h"
 
+// Does a launchable executable by this name exist, from ANY source?
+//
+// Deliberately not k_fs_size(): that only looks at the filesystem, so
+// on a board with no sdcard it would report the flash-resident core
+// apps as missing -- which is exactly backwards, since those are the
+// ones guaranteed to be there. This goes through fs_exec_info_any()
+// (sw/os/fs/fs.c), the same resolver every launch path uses, so the
+// answer always matches what `run` would actually do.
+//
+// Added for wm's dock, which builds itself from whichever of its
+// candidate apps are actually present -- an icon for a missing app is
+// a button that does nothing. See docs/window_manager.md.
+//
+// Returns the process image size (data + bss), or 0 if not found, so
+// callers get a usable size for free rather than needing a second
+// call.
+z_obj_t *k_exec_exists(z_obj_t *args) {
+
+	if (!args || args->type != Z_STR || !args->val.str) {
+		args->type = Z_UINT32;
+		args->val.uint32 = 0;
+		return (&z_fail);
+	}
+
+	z_exec_info_t xi;
+	uint32_t total = fs_exec_info_any(args->val.str, &xi) ? 0 : xi.total;
+
+	args->type = Z_UINT32;
+	args->val.uint32 = total;
+
+	return total ? (&z_ok) : (&z_fail);
+
+}
+
 z_obj_t *k_fs_size(z_obj_t *args) {
 
 	z_fs_size_args_t *a = (z_fs_size_args_t *)args;
@@ -134,6 +168,17 @@ static int z_fs_alloc_handle(void) {
 	for (int i = 0; i < Z_FS_MAX_OPEN; i++)
 		if (!z_fs_handles[i].used) return i;
 	return -1;
+}
+
+int k_fs_open_count(void) {
+
+	int n = 0;
+
+	for (int i = 0; i < Z_FS_MAX_OPEN; i++)
+		if (z_fs_handles[i].used) n++;
+
+	return n;
+
 }
 
 z_obj_t *k_fs_open_write(z_obj_t *args) {
@@ -281,6 +326,17 @@ z_obj_t *k_fs_list(z_obj_t *args) {
 	size_t prefix_len = strlen(prefix);
 
 	uint32_t max_entries = a->max_entries ? a->max_entries : 0xFFFFFFFFu;
+
+	// A `types` buffer is sized by the caller in units of entries,
+	// and the ONLY thing that tells us how many that is, is
+	// max_entries. Without one, the entry count is bounded solely by
+	// out_cap -- a 4KB name buffer holds several hundred short names,
+	// so writing a type byte per entry into a buffer whose length we
+	// were never told is a straightforward overrun of app memory.
+	// Refuse rather than guess: zfs.h states the requirement, and a
+	// caller that ignored it gets a clean failure instead of silent
+	// corruption somewhere else in its address space.
+	if (a->types && !a->max_entries) return (&z_fail);
 	uint32_t written = 0;
 	uint32_t count = 0;
 
@@ -307,6 +363,13 @@ z_obj_t *k_fs_list(z_obj_t *args) {
 			break;
 		}
 
+		// Optional -- see Z_FS_TYPE_* in zfs.h for why this is a
+		// separate buffer rather than a decoration on the name. NULL
+		// (every caller that predates it) skips this entirely.
+		if (a->types)
+			a->types[count] = (fno.fattrib & AM_DIR)
+				? Z_FS_TYPE_DIR : Z_FS_TYPE_FILE;
+
 		memcpy(a->out + written, full, flen + 1); // +1: include the NUL separator
 		written += (uint32_t)(flen + 1);
 		count++;
@@ -316,6 +379,97 @@ z_obj_t *k_fs_list(z_obj_t *args) {
 	f_closedir(&dir);
 
 	a->count = count;
+
+	return (&z_ok);
+
+}
+
+// -- mkdir / touch / seek --
+//
+// The first two are thin wrappers over fs_mkdir()/fs_touch()
+// (sw/os/fs/fs.c), which already do the real work and which sh.c's own
+// `mkdir`/`touch` commands have always used -- this just makes them
+// reachable from an ordinary app, the same way k_fs_unlink() did for
+// fs_unlink(). Both of those fs.c functions follow the SAME inverted
+// convention fs_unlink() does (0 on SUCCESS, non-zero on failure) --
+// see k_fs_unlink()'s own comment above, which spells out why that's
+// worth restating at every call site rather than trusting memory.
+//
+// Their unconditional printf() (inside fs.c) means an app-triggered
+// mkdir/touch also shows up on the serial console -- same visibility
+// every other fs.c operation already has, not new behavior introduced
+// here.
+
+z_obj_t *k_fs_mkdir(z_obj_t *args) {
+
+	z_fs_path_args_t *a = (z_fs_path_args_t *)args;
+
+	if (!a || !a->name) return (&z_fail);
+
+	return (fs_mkdir(a->name) == 0) ? (&z_ok) : (&z_fail);
+
+}
+
+z_obj_t *k_fs_touch(z_obj_t *args) {
+
+	z_fs_path_args_t *a = (z_fs_path_args_t *)args;
+
+	if (!a || !a->name) return (&z_fail);
+
+	return (fs_touch(a->name) == 0) ? (&z_ok) : (&z_fail);
+
+}
+
+// Repositions an open chunked-I/O handle. Same handle-table ownership
+// check every other chunked handler above performs, for the same
+// reason (see zfs.h's own "Ownership" note): a small integer handle is
+// trivially guessable, so one process must not be able to move another
+// process's file position out from under it.
+//
+// f_lseek() on a READ handle clamps to the file size rather than
+// failing when asked to go past EOF, which is exactly the behavior
+// sw/apps/repl's `page` wants for a "jump to end" -- the resulting
+// position comes back in a->pos so a caller that cares can see where
+// it actually landed. On a WRITE handle FatFs would instead EXTEND the
+// file, which is a real difference worth knowing about but not
+// something this handler needs to police: page only ever opens for
+// read, and a caller that opened for write and seeks past the end has
+// asked for exactly what FatFs does.
+z_obj_t *k_fs_seek(z_obj_t *args) {
+
+	z_fs_seek_args_t *a = (z_fs_seek_args_t *)args;
+	if (a) a->pos = 0;
+
+	if (!a || a->handle < 0 || a->handle >= Z_FS_MAX_OPEN) return (&z_fail);
+
+	if (!z_fs_handles[a->handle].used || z_fs_handles[a->handle].owner_pid != z_pid)
+		return (&z_fail);
+
+	FRESULT res = f_lseek(&z_fs_handles[a->handle].fil, (FSIZE_t)a->offset);
+	if (res != FR_OK) return (&z_fail);
+
+	a->pos = (uint32_t)f_tell(&z_fs_handles[a->handle].fil);
+
+	return (&z_ok);
+
+}
+
+// Filesystem capacity. Both numbers come straight from fs_total()/
+// fs_free() (sw/os/fs/fs.c), which wrap FatFs's f_getfree() and have
+// been sitting there unused since long before this syscall existed --
+// nothing had a way to call them. Each returns 0 on failure (no card,
+// not mounted, FatFs error), which this passes through unchanged: a
+// volume that genuinely reports 0 total is indistinguishable from one
+// that failed to answer, and neither is a state where a caller should
+// be told a capacity.
+z_obj_t *k_fs_df(z_obj_t *args) {
+
+	z_fs_df_args_t *a = (z_fs_df_args_t *)args;
+
+	if (!a) return (&z_fail);
+
+	// One FAT scan, not two -- see fs_df_kb() in sw/os/fs/fs.c.
+	fs_df_kb(&a->total_kb, &a->free_kb);
 
 	return (&z_ok);
 

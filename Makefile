@@ -5,8 +5,12 @@ RTL_PICO = \
 	rtl/clk/pll0_25.v \
 	rtl/clk/pll1_25.v \
 	rtl/cpu/picorv32/picorv32.v \
+	rtl/cpu/zeitlos32/zeitlos32.v \
+	rtl/cpu/zeitlos32/zeitlos32_muldiv.v \
 	rtl/mtu.v \
-	rtl/arbiter.v \
+	rtl/cache.v \
+	rtl/arbiter_vram.v \
+	rtl/arbiter_main.v \
 	rtl/mem/bram.v \
 	rtl/mem/sram.v \
 	rtl/mem/sdram_kianv.v \
@@ -14,12 +18,13 @@ RTL_PICO = \
 	rtl/mem/vram.v \
 	rtl/mem/glyph.v \
 	rtl/spiflashro.v \
-	rtl/spibb_eth.v \
 	rtl/ethmac_rmii.v \
 	rtl/debug.v \
 	rtl/csrs.v \
 	rtl/esp32_rxfifo.v \
-	rtl/spibb.v \
+	rtl/socctl.v \
+	rtl/rtc.v \
+	rtl/spim.v \
 	rtl/gpu/gpu_raster.v \
 	rtl/gpu/gpu_blit.v \
 	rtl/gpu/gpu_video.v \
@@ -292,20 +297,141 @@ flash_os: check os
 	$(FLASH) $(FLASH_OFFSET) 1048576 sw/os/kernel.bin
 endif
 
+# Core apps -- programmed at a fixed flash offset immediately ABOVE the
+# kernel's 256KB region (1MB + 256KB = 0x140000). KEEP THIS OFFSET IN
+# SYNC with Z_ZAR_FLASH_OFFSET in sw/os/zar.h; nothing checks that the
+# two agree, and a mismatch looks like "no core apps in flash" rather
+# than an error.
+#
+# Depends on `apps` so the .bin files exist; mkzar.py stores them
+# verbatim (they are already ZEXE files).
+output/$(BOARD_LC)/apps.zar: apps
+	mkdir -p output/$(BOARD_LC)
+	python3 tools/mkzar.py output/$(BOARD_LC)/apps.zar \
+		wm=sw/apps/wm/wm.bin \
+		net=sw/apps/net/net.bin \
+		repl=sw/apps/repl/repl.bin \
+		term=sw/apps/term/term.bin
+
+ifeq ($(FAMILY), ice40)
+flash_apps: output/$(BOARD_LC)/apps.zar
+	$(FLASH) $(FLASH_OFFSET) output/$(BOARD_LC)/apps.zar 140000
+else
+flash_apps: output/$(BOARD_LC)/apps.zar
+	$(FLASH) $(FLASH_OFFSET) 1310720 output/$(BOARD_LC)/apps.zar
+endif
+
+# Boot splash logo -- programmed separately from the kernel, at a fixed
+# flash offset immediately BELOW the kernel's own 1MB offset.
+#
+# It used to be compiled into kernel.bin as a 24KB const array
+# (sw/os/logo_data.c). Since k_proc_create() sizes a process's memory
+# block from its image, that cost 24KB of the 1MB main-memory budget
+# permanently, for something shown once at boot. Flash is memory-mapped
+# on this SOC (sw/bios/bios.c's load_zeitlos() memcpy()s the kernel
+# straight out of it), so sw/os/logo.c now reads these bytes directly
+# from flash into VRAM and no main memory is used at all.
+#
+# The artifact written here is sw/data/images/zeitlos_fb.bin: a full
+# 640x480 1bpp framebuffer image, pre-centred and pre-padded from the
+# 512x384 zeitlos.bin by sw/data/images/pad_logo.py. Doing the centring
+# once, here, is what lets both the BIOS and the kernel show it with a
+# single flat memcpy instead of a row-by-row copy -- and it makes the
+# splash clear VRAM rather than leaving a garbage border. Regenerate
+# with:
+#
+#   cd sw/data/images && python3 pad_logo.py zeitlos.bin zeitlos_fb.bin
+#
+# (add --invert if the splash shows with foreground/background swapped;
+# polarity is baked into the image, not decided in C).
+#
+# No header, no wrapper, so there is nothing to keep in sync between the
+# flashed bytes and what the BIOS/kernel expect to find -- and no
+# is-it-programmed check anywhere: the logo is flashed alongside the
+# gateware and kernel, so a board that can boot at all has it.
+#
+# 0xF0000 = 983040. The gateware lives at the start of flash (~400KB
+# today, varies by board) and the kernel at 1MB, so this leaves the
+# gateware headroom up to 960KB. Override both variables together if a
+# board's gateware ever needs more than that:
+#
+#   make flash_logo LOGO_FLASH_OFFSET_HEX=e0000 LOGO_FLASH_OFFSET_DEC=917504
+#
+# KEEP THESE IN SYNC with Z_BOOT_LOGO_FLASH_OFFSET in sw/os/logo.h --
+# there is no build-time link between them (that header is compiled into
+# the kernel, these are arguments to an external flashing tool), so a
+# mismatch shows up only as a missing or garbled splash at boot. The
+# kernel skips drawing entirely if it finds erased flash there, so the
+# failure mode is a blank screen rather than noise.
+LOGO_FLASH_OFFSET_HEX ?= f0000
+LOGO_FLASH_OFFSET_DEC ?= 983040
+
+ifeq ($(FAMILY), ice40)
+flash_logo: check
+	$(FLASH) $(FLASH_OFFSET) sw/data/images/zeitlos_fb.bin $(LOGO_FLASH_OFFSET_HEX)
+else
+flash_logo: check
+	$(FLASH) $(FLASH_OFFSET) $(LOGO_FLASH_OFFSET_DEC) sw/data/images/zeitlos_fb.bin
+endif
+
 prog: 
 	$(PROG) output/$(BOARD_LC)/soc.bit
 
 dev: check clean_os clean_bios clean_apps os bios apps
 dev-prog: dev soc prog
-dev-flash: dev flash_os
+# Software-only reflash: kernel + core apps, leaving the gateware
+# alone. The common development cycle, since RTL changes far less often
+# than software does.
+#
+# flash_apps is included deliberately. kernel.bin and the core apps are
+# coupled -- sw/common/syscalls.def is compiled into both, and an app
+# built against a different one calls the wrong kernel handler for
+# every syscall past the point they diverge (see that file's own
+# warning). `dev` rebuilds both from clean, so flashing both together
+# is what keeps them matched.
+#
+# NOTE this does not touch the bitstream. If you have changed anything
+# under rtl/, use `make flash` instead -- software that expects
+# hardware the running bitstream doesn't have fails in confusing ways
+# (the one case that says so clearly is a CPU/ISA mismatch, which
+# k_soc_report() catches at boot; everything else is on you).
+dev-flash: dev flash_os flash_apps
 
-flash: zeitlos flash_soc flash_os
+# flash_logo included here so a full `make flash` still produces a
+# system with a splash screen -- the extra write only costs setup time,
+# and leaving it out would make the common path silently lose the logo.
+# Flash it on its own (`make flash_logo`) when only the logo changed.
+# flash_apps is part of the default `flash` deliberately: the point of
+# putting the core apps in flash is that a freshly flashed board boots
+# to a working desktop with no SD card at all. Leaving it as a separate
+# opt-in target would defeat that -- a new user would flash the board,
+# get a bare shell, and have no reason to suspect there was a second
+# command to run. See sw/os/zar.h.
+flash: zeitlos flash_soc flash_os flash_logo flash_apps
 
 os:
 	cd sw/os && make PREFIX=$(PREFIX)
 
 apps:
 	cd sw/apps && make PREFIX=$(PREFIX)
+
+# Publish every built app to a TFTP root, so a running machine can pull
+# the latest builds with `tget` instead of `xf` over the serial link.
+# Each app lands under its bare name -- sw/apps/text/text.bin becomes
+# $(TFTP_DIR)/text, which is what `tget` asks for and what `run <file>`
+# expects to find afterwards.
+#
+#   $ make clean && sudo make BOARD=obst dev-flash && sudo make tftp-dist
+#
+# Deliberately does NOT depend on `apps`. This target is normally run
+# under sudo (a TFTP root is usually root-owned), and a build running
+# as root leaves root-owned .o files scattered through sw/, which then
+# break every subsequent non-root build in the tree. Build first, copy
+# second -- the script says so plainly if it finds nothing built.
+TFTP_DIR ?= /srv/tftp
+
+tftp-dist:
+	@tools/tftp-dist.sh $(TFTP_DIR)
 
 clean: clean_os clean_bios clean_apps
 
@@ -321,4 +447,4 @@ clean_bios:
 clean_apps:
 	cd sw/apps && make clean
 
-.PHONY: clean_bios bios apps
+.PHONY: clean_bios bios apps tftp-dist

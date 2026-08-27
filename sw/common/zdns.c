@@ -81,10 +81,22 @@ bool z_parse_ipv4(const char *s, uint32_t *out) {
 // processes, each with their own idea of "for how long is this
 // valid"), and a fresh z_pid_lookup() is cheap enough that it's not
 // worth the extra static state to avoid repeating it.
+// Returns 0 if net isn't running. NO fallback to the fixed Z_PID_NET
+// constant, deliberately.
+//
+// That fallback only ever applied when the lookup MISSED -- i.e. when
+// net had not registered or was not running -- and in exactly those
+// cases sending to a hardcoded pid delivers to whatever process
+// happens to occupy it. Silent misdelivery is worse than an error,
+// and the pid net lands on depends on start order (it is only 2 when
+// wm was started first).
+//
+// net now registers before it touches any hardware, so a miss here
+// means it genuinely is not there.
 static uint32_t resolve_net_pid(void) {
 	uint32_t pid;
 	if (z_pid_lookup("net0", &pid)) return pid;
-	return Z_PID_NET;
+	return 0;
 }
 
 static uint32_t next_dns_tag(void) {
@@ -101,6 +113,7 @@ bool z_dns_resolve(const char *hostname, uint32_t *out_ip,
 	}
 
 	uint32_t net_pid = resolve_net_pid();
+	if (!net_pid) return false;	// net not running -- say so, don't guess
 	uint32_t tag = next_dns_tag();
 
 	z_msg_new_send(net_pid, Z_NET_DNS_RESOLVE, tag, z_obj_str(hostname));

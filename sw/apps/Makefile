@@ -1,35 +1,41 @@
-# PREFIX is optional; forwarded so a multi-lib gcc can be used
-# (make PREFIX=/opt/riscv/bin/riscv64-unknown-elf-).
-APP_MAKE = $(MAKE) $(if $(PREFIX),PREFIX=$(PREFIX),)
-
 all:
-	cd blinky && $(APP_MAKE)
-	cd hello && $(APP_MAKE)
-	cd gpudemo && $(APP_MAKE)
-	cd gpu3d && $(APP_MAKE)
-	cd bounce && $(APP_MAKE)
-	cd bounceblit && $(APP_MAKE)
-	cd ping && $(APP_MAKE)
-	cd pong && $(APP_MAKE)
-	cd wm && $(APP_MAKE)
-	cd hello_win && $(APP_MAKE)
-	cd net && $(APP_MAKE)
-	cd term && $(APP_MAKE)
-	cd portdemo && $(APP_MAKE)
-	cd repl && $(APP_MAKE)
+	cd gpudemo && make
+	cd gpu3d && make
+	cd ping && make
+	cd pong && make
+	cd wm && make
+	cd hello_win && make
+	cd draw && make
+	cd text && make
+	cd files && make
+	cd info && make
+	cd settings && make
+	cd calc && make
+	cd clock && make
+	cd read && make
+	cd net && make
+	cd term && make
+	cd portdemo && make
+	cd repl && make
+	cd space3d && make
 
 clean:
-	cd blinky && $(APP_MAKE) clean
-	cd hello && $(APP_MAKE) clean
-	cd gpudemo && $(APP_MAKE) clean
-	cd gpu3d && $(APP_MAKE) clean
-	cd bounce && $(APP_MAKE) clean
-	cd bounceblit && $(APP_MAKE) clean
-	cd ping && $(APP_MAKE) clean
-	cd pong && $(APP_MAKE) clean
-	cd wm && $(APP_MAKE) clean
-	cd hello_win && $(APP_MAKE) clean
-	cd net && $(APP_MAKE) clean
-	cd term && $(APP_MAKE) clean
-	cd portdemo && $(APP_MAKE) clean
-	cd repl && $(APP_MAKE) clean
+	cd gpudemo && make clean
+	cd gpu3d && make clean
+	cd ping && make clean
+	cd pong && make clean
+	cd wm && make clean
+	cd hello_win && make clean
+	cd draw && make clean
+	cd text && make clean
+	cd files && make clean
+	cd info && make clean
+	cd settings && make clean
+	cd calc && make clean
+	cd clock && make clean
+	cd read && make clean
+	cd net && make clean
+	cd term && make clean
+	cd portdemo && make clean
+	cd repl && make clean
+	cd space3d && make clean

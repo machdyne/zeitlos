@@ -4,8 +4,8 @@
 # Configuration
 ZOBJ_DIR = ../common
 CC = gcc
-CFLAGS = -Wall -Wextra -std=c99 -g -O0
-LDFLAGS = 
+CFLAGS = -Wall -Wextra -std=c99 -g -O0 $(ARCH_DEFS) $(LIBC_FLAGS)
+LDFLAGS = -march=$(ARCH) -mabi=$(ABI)  $(LIBC_FLAGS)
 INCLUDES = -I$(ZOBJ_DIR)
 
 # Directories

@@ -31,6 +31,7 @@
 #include <string.h>
 
 #include "../../common/zeitlos.h"
+#include "../../common/zsoc.h"	// Z_TICK_HZ, z_cursor_set_busy()
 #include "../../common/zwm.h"
 #include "../../common/zgfx.h"
 #include "../../common/zkbd.h"
@@ -60,6 +61,14 @@ typedef struct {
 	// flags. See close_icon_rect()/hit_close_icon()/
 	// draw_titlebar_content()/handle_close_click() below.
 	uint32_t	flags;
+	// smallest this window may be resized to (see the resize block
+	// in main() below). Set once at creation from the global
+	// Z_WM_MIN_WIDTH/HEIGHT floor, or from the window's own created
+	// size if it asked for Z_WIN_FLAG_MIN_IS_CREATE (zwm.h). Stored
+	// per-window rather than recomputed on demand because the
+	// creation size it may be derived from is not retained anywhere
+	// else -- w/h change as soon as the user resizes.
+	uint32_t	min_w, min_h;
 } wm_window_t;
 
 // -- dock --
@@ -91,11 +100,41 @@ typedef struct {
 	const uint8_t	*bitmap;	// 32x32 1bpp, MSB-first -- see dock_icons.h
 } dock_app_t;
 
-static const dock_app_t dock_apps[] = {
-	{ "term",	z_icon_term_data  },
-	{ "gpu3d",	z_icon_gpu3d_data },
+// Everything the dock COULD show. What it actually shows is decided at
+// startup by dock_build(), which keeps only the ones that resolve.
+//
+// An icon for an app that isn't installed is a button that does
+// nothing, and which apps exist genuinely varies per machine now: the
+// core apps are in flash and always present (sw/os/zar.h), while
+// anything else only exists if somebody put it on an sdcard. Listing a
+// candidate here is therefore an offer, not a promise -- adding a new
+// app to the dock needs no conditional logic, just an entry and an
+// icon.
+static const dock_app_t dock_candidates[] = {
+	{ "term",		z_icon_term_data  },
+	{ "files",		z_icon_files_data },
+	{ "text",		z_icon_text_data  },
+	{ "read",		z_icon_read_data  },
+	{ "draw",		z_icon_draw_data  },
+	{ "info",		z_icon_info_data  },
+	{ "calc",		z_icon_calc_data  },
+	{ "clock",		z_icon_clock_data },
+	{ "space3d",	z_icon_space3d_data },
+	{ "gpu3d",		z_icon_gpu3d_data },
+	{ "settings",	z_icon_settings_data },
 };
-#define DOCK_APP_COUNT   (int)(sizeof(dock_apps) / sizeof(dock_apps[0]))
+#define DOCK_CANDIDATE_COUNT \
+	(int)(sizeof(dock_candidates) / sizeof(dock_candidates[0]))
+
+// The subset actually present, filled in by dock_build(). Pointers
+// into dock_candidates[] rather than copies, so the icon data isn't
+// duplicated.
+static const dock_app_t *dock_apps[DOCK_CANDIDATE_COUNT];
+static int dock_app_count;
+
+// Everything below indexes the live set, so this stays spelled the way
+// it always was.
+#define DOCK_APP_COUNT   dock_app_count
 
 #define DOCK_ICON_SIZE   32	// fixed icon size, see file header comment
 #define DOCK_ICON_GAP     4	// space between adjacent icons
@@ -130,9 +169,9 @@ static int dock_selected = -1;
 // message()'s Z_WM_CREATE_WINDOW case) or after DOCK_LAUNCH_TIMEOUT_
 // ITERS main-loop iterations with no window (main()'s own loop) --
 // see that constant's own comment for why a timeout exists at all.
-static bool dock_launching[DOCK_APP_COUNT];
-static uint32_t dock_launching_pid[DOCK_APP_COUNT];
-static uint32_t dock_launching_ticks[DOCK_APP_COUNT];
+static bool dock_launching[DOCK_CANDIDATE_COUNT];
+static uint32_t dock_launching_pid[DOCK_CANDIDATE_COUNT];
+static uint32_t dock_launching_deadline[DOCK_CANDIDATE_COUNT];
 
 static wm_window_t windows[WM_MAX_WINDOWS];
 
@@ -146,11 +185,80 @@ static wm_window_t windows[WM_MAX_WINDOWS];
 // that assumption happened to hold in practice.
 static uint32_t my_pid;
 
+// -- pending launch argument -- see Z_WM_SET_ARG in zwm.h --
+//
+// One slot, because only one app is ever mid-launch at a time. The
+// bytes are deliberately NOT cleared when the argument is claimed,
+// only the valid flag is: the reply is a Z_STR pointing straight at
+// this buffer, and the payload is borrowed until the recipient reads
+// it (docs/messaging.md). Zeroing it here would hand the claiming app
+// an empty string.
+static char pending_arg[Z_WM_ARG_MAX];
+static bool pending_arg_valid;
+static uint32_t pending_arg_tick;
+// what an app gets when there is nothing pending. A real, static,
+// NUL-terminated string rather than NULL, so the reply is always a
+// well-formed Z_STR the receiver can read without a special case.
+static char arg_empty[1];
+
+// -- clipboard -- see Z_WM_CLIP_SET in zwm.h --
+//
+// One buffer for the whole system. Always NUL-terminated, so the
+// reply is a well-formed Z_STR whether or not anything has been
+// copied yet.
+//
+// Not cleared on read: a clipboard you can only paste from once is
+// not a clipboard.
+static char clipboard[Z_WM_CLIP_MAX];
+
 static uint8_t zorder[WM_MAX_WINDOWS];	// back-to-front; zorder[count-1] is frontmost
 static uint8_t zorder_count = 0;
 static int focused = -1;		// index into windows[], or -1
 static int dragging = -1;		// index into windows[], or -1
 static int drag_off_x = 0, drag_off_y = 0;
+
+// -- resize state -- deliberately kept separate from the drag state
+// above rather than folded into one "gesture" struct: the two can
+// never be active at once (both start from a button press on
+// different parts of the same window), but they repair the screen
+// very differently at release -- a drag knows its window's size never
+// changed and can repair only the wake it left behind, while a resize
+// changes the content area itself and has to repair the whole union.
+// Sharing state between them would invite exactly the kind of "which
+// mode am I in" bug that costs an afternoon.
+static int resizing = -1;		// index into windows[], or -1
+// offset from the cursor to the window's bottom-right corner at the
+// moment the grip was grabbed, so the corner doesn't jump to the
+// cursor on the first pixel of movement.
+static int resize_off_x = 0, resize_off_y = 0;
+// the candidate size right now. w/h track this live during the
+// gesture (the frame drawn on screen IS the window's frame at the
+// candidate size), so these two exist to detect a change from one
+// pointer sample to the next rather than to hold a pending value.
+static int resize_w = 0, resize_h = 0;
+// largest extent reached during this resize, so the release-time
+// repair covers everywhere the frame was drawn, not just the final
+// rect -- the same reason the drag path tracks its swept bounding box.
+static int resize_max_w = 0, resize_max_h = 0;
+// the window's size when the gesture began. w/h now track the
+// candidate size live, so this is the only remaining record of what
+// to repair back over.
+static int resize_orig_w = 0, resize_orig_h = 0;
+
+// -- pointer delivery state -- see dispatch_mouse() below --
+//
+// which window currently owns the pointer, or -1. Set on a button
+// press inside a window's content area and held until release, so a
+// gesture that wanders outside the window it started in keeps being
+// delivered there (see Z_WM_MOUSE's own comment in zwm.h for why that
+// matters).
+static int mouse_capture = -1;
+// last Z_WM_MOUSE payload actually sent, and who it went to -- used
+// purely to coalesce: a stationary mouse should cost zero messages,
+// and without this wm would send one per main-loop iteration forever.
+static uint32_t mouse_last_packed;
+static int mouse_last_target = -1;
+static bool mouse_last_valid = false;
 // bounding box swept by the dragged window since the drag started --
 // see the drag-update block below for why this is tracked instead of
 // just the start/end rects.
@@ -168,6 +276,11 @@ static void handle_message(z_msg_t *msg);
 static bool bring_to_front(int idx);
 static void notify_moved(int idx);
 static void repair_drag(int dragged_idx);
+// forward-declared for the same reason as the three above: Alt+Tab
+// (next_focusable(), further down) has to skip windows blocked by
+// their owner's modal dialog, but the modality helpers live with the
+// hit-testing code they otherwise belong next to.
+static int blocked_by_modal(int idx);
 
 // lightweight redraw notification -- no heap allocation (see
 // Z_WM_REDRAW in zwm.h for why this matters). safe to call as often
@@ -201,6 +314,30 @@ static void draw_window_box(wm_window_t *w, bool is_focused, int color) {
 	if (!w->no_titlebar) {
 		int ty = w->y + Z_WM_TITLEBAR_H;
 		z_fb_hw_line(x0, ty, x1, ty, color, NULL);	// titlebar separator
+	}
+
+	// resize grip -- a few diagonal ticks in the lower-right corner,
+	// marking the area hit_resize_grip() below actually tests. Drawn
+	// here, as part of the box, rather than in
+	// draw_titlebar_content(): it's genuine border, not content, so
+	// it should move with the wireframe on every step of a drag
+	// (which is exactly what being in this function gets it) instead
+	// of vanishing until release the way the title text does.
+	//
+	// Only for windows that can actually be resized -- an ornamental
+	// grip on a fixed-size window is worse than no grip at all, since
+	// the one thing a grip promises is that dragging it does
+	// something.
+	if ((w->flags & Z_WIN_FLAG_RESIZABLE) && !w->no_titlebar) {
+		for (int i = 3; i < Z_WM_RESIZE_GRIP; i += 3) {
+			int gx = x1 - i, gy = y1 - i;
+			// skip any tick that would need a negative coordinate --
+			// the rasterizer's registers are unsigned and would wrap
+			// it to a huge value rather than clipping, the same
+			// hazard the focus ring below already clamps for.
+			if (gx < x0 || gy < y0) continue;
+			z_fb_hw_line(gx, y1, x1, gy, color, NULL);
+		}
 	}
 
 	if (is_focused) {
@@ -262,6 +399,11 @@ static void draw_window_box(wm_window_t *w, bool is_focused, int color) {
 // on every intermediate step.
 #define Z_WM_TITLE_TEXT_MARGIN_X   3
 #define Z_WM_CLOSE_ICON_MARGIN_X   2
+// horizontal gap between two ADJACENT titlebar icons -- distinct from
+// Z_WM_CLOSE_ICON_GAP below, which is the (larger) gap kept between
+// the title text and the first icon. Two icons want to read as a
+// related group; the title wants to read as separate from them.
+#define Z_WM_TITLEBAR_ICON_GAP     2
 #define Z_WM_CLOSE_ICON_GAP        3	// min gap kept between the end
 					// of the title text and the icon
 
@@ -287,16 +429,107 @@ static int titlebar_content_y(const wm_window_t *w, int h) {
 	return (int)w->y + Z_WM_TITLEBAR_CONTENT_Y0 + (Z_WM_TITLEBAR_CONTENT_H - h) / 2;
 }
 
-// computes the close icon's on-screen rect for window `w` -- shared
-// between draw_titlebar_content() (below) and hit_close_icon() (see
-// hit_titlebar()'s neighborhood below) so the two can never silently
-// disagree about where the icon actually is, the same "compute once,
-// share everywhere" reasoning zwin.c's own z_win_content_rect()
-// comment gives for the exact same class of bug.
-static void close_icon_rect(const wm_window_t *w, int *out_x, int *out_y) {
+// -- titlebar icon strip --
+//
+// A window can now show several titlebar icons, not just close (see
+// Z_WIN_FLAG_NEW_ICON and friends in zwm.h). They're laid out
+// right-to-left from the right edge, in the fixed order below, so:
+//
+//   - close, when present, sits at exactly the x it always did. That
+//     is not a coincidence to be preserved by accident -- it's why
+//     the order is anchored at the right rather than the left. Every
+//     app that predates this feature draws identically.
+//   - an app that asks for new+save+close reads "new save close" left
+//     to right, which is the order those words are normally written
+//     in, without the app having to specify any order at all.
+//
+// One table, walked by both the drawing and the hit testing, for the
+// same "compute once, share everywhere" reason close_icon_rect() gave
+// when close was the only icon there was -- two copies of this layout
+// disagreeing by a pixel is a button that looks right and doesn't
+// click, which is a genuinely annoying bug to chase.
+typedef struct {
+	uint32_t	flag;	// Z_WIN_FLAG_*_ICON
+	uint8_t		icon;	// z_icon_id_t
+	uint8_t		kind;	// Z_WM_TBICON_*, or 0 for close (see below)
+} titlebar_icon_t;
+
+// Right-to-left. close is first, hence rightmost.
+//
+// The rest are ordered so that the common combination reads
+// left-to-right as new / open / save / close, which is the order a
+// File menu would list them in and the order they are normally
+// spoken. An app asking for a subset just gets that subset in the
+// same relative order, without specifying anything.
+//
+// kind 0 means "this is the close icon" -- it keeps its own
+// Z_WM_CLOSE message and its own kill-the-owner behavior rather than
+// becoming a fifth Z_WM_TBICON_* kind, so nothing that already
+// handles Z_WM_CLOSE has to change. See Z_WM_TITLEBAR_ICON in zwm.h.
+static const titlebar_icon_t titlebar_icon_table[] = {
+	{ Z_WIN_FLAG_CLOSE_ICON, Z_ICON_CLOSE, 0                 },
+	{ Z_WIN_FLAG_SAVE_ICON,  Z_ICON_SAVE,  Z_WM_TBICON_SAVE  },
+	{ Z_WIN_FLAG_OPEN_ICON,  Z_ICON_OPEN,  Z_WM_TBICON_OPEN  },
+	{ Z_WIN_FLAG_NEW_ICON,   Z_ICON_NEW,   Z_WM_TBICON_NEW   },
+	{ Z_WIN_FLAG_FONT_ICON,  Z_ICON_FONT,  Z_WM_TBICON_FONT  },
+};
+#define TITLEBAR_ICON_TABLE_COUNT \
+	(int)(sizeof(titlebar_icon_table) / sizeof(titlebar_icon_table[0]))
+
+// one placed icon
+typedef struct {
+	int		x, y;
+	uint8_t	icon;
+	uint8_t	kind;
+} titlebar_icon_slot_t;
+
+// Fills `out` with this window's icons, in right-to-left order, and
+// returns how many were placed. `*leftmost_x` gets the x of the
+// left-most icon placed, or the window's own right edge if none were
+// -- that's where the title text has to stop.
+//
+// Icons that don't fit are dropped rather than drawn over the title
+// or off the left edge of the window. A narrow window therefore keeps
+// its rightmost icons (close first), which is the right priority: if
+// only one button fits, it should be the one that gets you out.
+static int titlebar_icons(const wm_window_t *w, titlebar_icon_slot_t *out,
+	int *leftmost_x) {
+
 	int x1 = (int)(w->x + w->w - 1);
-	*out_x = x1 - Z_WM_CLOSE_ICON_MARGIN_X - Z_ICON_W + 1;
-	*out_y = titlebar_content_y(w, Z_ICON_H);
+	int x = x1 - Z_WM_CLOSE_ICON_MARGIN_X - Z_ICON_W + 1;
+	int y = titlebar_content_y(w, Z_ICON_H);
+
+	// Never let icons run past where the title text starts. Without
+	// this a 64px-wide window (Z_WM_MIN_WIDTH) asking for four icons
+	// would place some of them off its own left edge, on top of
+	// whatever window is behind it.
+	int floor_x = (int)w->x + Z_WM_TITLE_TEXT_MARGIN_X;
+
+	int n = 0;
+
+	for (int i = 0; i < TITLEBAR_ICON_TABLE_COUNT; i++) {
+
+		if (!(w->flags & titlebar_icon_table[i].flag)) continue;
+		if (x < floor_x) break;
+
+		out[n].x = x;
+		out[n].y = y;
+		out[n].icon = titlebar_icon_table[i].icon;
+		out[n].kind = titlebar_icon_table[i].kind;
+		n++;
+
+		x -= Z_ICON_W + Z_WM_TITLEBAR_ICON_GAP;
+
+	}
+
+	// The title stops short of the leftmost icon actually placed. n-1
+	// rather than "wherever x ended up": x has already been stepped
+	// past the last placed icon, and using it would leave a gap the
+	// width of an icon that no longer exists.
+	*leftmost_x = n ? out[n - 1].x : (x1 + 1);
+
+	return n;
+
 }
 
 static void draw_titlebar_content(wm_window_t *w) {
@@ -304,14 +537,13 @@ static void draw_titlebar_content(wm_window_t *w) {
 	if (w->no_titlebar) return;	// nothing to draw -- see the dock
 
 	int x0 = (int)w->x, y0 = (int)w->y;
-	int x1 = (int)(w->x + w->w - 1);
 
-	bool has_close = (w->flags & Z_WIN_FLAG_CLOSE_ICON) != 0;
-	int close_x = 0, close_y = 0;
-	if (has_close) close_icon_rect(w, &close_x, &close_y);
+	titlebar_icon_slot_t icons[TITLEBAR_ICON_TABLE_COUNT];
+	int leftmost_x;
+	int n = titlebar_icons(w, icons, &leftmost_x);
 
 	// clip title text to the titlebar strip, and stop it short of the
-	// close icon (if any) instead of letting a long title run
+	// leftmost icon (if any) instead of letting a long title run
 	// underneath it. z_fb_draw_text()'s own per-glyph clip (zgfx.c)
 	// keeps this pixel-exact for whichever glyph straddles the clip
 	// boundary -- the same partial-glyph-falls-back-to-software
@@ -320,7 +552,7 @@ static void draw_titlebar_content(wm_window_t *w) {
 	z_clip_t clip;
 	clip.x0 = x0 + Z_WM_TITLE_TEXT_MARGIN_X;
 	clip.y0 = y0;
-	clip.x1 = has_close ? (close_x - Z_WM_CLOSE_ICON_GAP - 1) : x1;
+	clip.x1 = leftmost_x - Z_WM_CLOSE_ICON_GAP - 1;
 	clip.y1 = y0 + Z_WM_TITLEBAR_H - 1;
 
 	if (w->title[0] && clip.x1 >= clip.x0)
@@ -328,12 +560,156 @@ static void draw_titlebar_content(wm_window_t *w) {
 			titlebar_content_y(w, z_font_5x8.h),
 			w->title, 1, &z_font_5x8, &clip);
 
-	if (has_close)
+	for (int i = 0; i < n; i++)
 		// clip=NULL: same as draw_window_box()'s own chrome draws --
 		// wm already computed this rect from the window's own bounds,
 		// so it's known on-screen and within the titlebar, nothing
 		// left to clip against.
-		z_fb_draw_icon(close_x, close_y, Z_ICON_CLOSE, 1, 0, NULL);
+		z_fb_draw_icon(icons[i].x, icons[i].y, icons[i].icon, 1, 0, NULL);
+
+}
+
+// -- system-busy state --
+//
+// A BITMASK of reasons rather than a bool or a counter, deliberately.
+// A bool breaks as soon as two things are busy at once -- whichever
+// finishes first clears it while the other is still going. A counter
+// fixes that but leaks forever on one unbalanced call, and gives you
+// nothing to look at when it does. With named reasons, setting the
+// same one twice is harmless, clearing it is definitive, and a stuck
+// busy state says on the console exactly which reason is stuck.
+//
+// The visible effect is the mouse cursor: X normally, Z while busy.
+// See wm_busy_set()/wm_busy_clear().
+#define WM_BUSY_STARTUP   (1u << 0)   // core services not up yet
+
+static uint32_t wm_busy_mask;
+
+// Reports what it wrote and whether the hardware is even there. This
+// is deliberately noisy: the cursor is the only visible effect, so a
+// silent failure here looks identical to "the feature doesn't work"
+// with nothing to go on. Prints once per state change, not per loop.
+static void wm_busy_apply(void) {
+	// The cursor sprite is drawn in hardware and composited at scanout
+	// (rtl/gpu/gpu_cursor.v), so this register is the only way to
+	// change its shape -- wm cannot draw over it.
+	//
+	// Requires a bitstream with rtl/socctl.v: this is an RTL change, so
+	// `make flash`, not `make dev-flash`. Harmless on an older
+	// bitstream (the write is acked and discarded), it just leaves the
+	// cursor as an X.
+	bool busy = (wm_busy_mask != 0);
+
+	z_cursor_set_busy(busy);
+
+	// Read it back. socctl's CTRL register is readable, so this
+	// distinguishes the three ways this can fail -- no socctl in the
+	// bitstream at all, socctl present but the write not landing, and
+	// the write landing fine while something else is wrong -- which
+	// otherwise all present identically as "the cursor didn't change".
+	if (!z_socctl_present()) {
+		printf("wm: busy=%d (no socctl in this bitstream, cursor fixed)\n",
+			(int)busy);
+		return;
+	}
+
+	uint32_t rb = reg_socctl_ctrl & Z_SOCCTL_CURSOR_BUSY;
+	printf("wm: busy=0x%lx cursor=%s%s\n", (unsigned long)wm_busy_mask,
+		rb ? "Z" : "X",
+		((rb != 0) == busy) ? "" : " (READBACK MISMATCH)");
+}
+
+static void wm_busy_set(uint32_t reason) {
+	if (wm_busy_mask & reason) return;
+	wm_busy_mask |= reason;
+	wm_busy_apply();
+}
+
+static void wm_busy_clear(uint32_t reason) {
+	if (!(wm_busy_mask & reason)) return;
+	wm_busy_mask &= ~reason;
+	wm_busy_apply();
+}
+
+static bool wm_is_busy(void) {
+	return wm_busy_mask != 0;
+}
+
+// -- core service readiness --
+//
+// `term` connects to `repl` over a port as soon as it starts, and that
+// connect has a timeout. Launch it before repl has registered itself
+// and the connect simply fails -- term comes up as a blank window with
+// no indication of why, which is exactly the confusing failure this
+// gating exists to prevent.
+//
+// Checked by name via the pid registry rather than by fixed pid: the
+// fixed Z_PID_* values are a fallback, and registration is what
+// actually signals "this service is up and listening".
+static bool core_services_ready(void) {
+
+	uint32_t pid;
+	bool net_up = z_pid_lookup("net0", &pid);
+	bool repl_up = z_pid_lookup("repl0", &pid);
+
+	// Log each service the first time it appears, so a service that
+	// never registers is obvious from the console rather than showing
+	// up only as a cursor that never changes.
+	static bool logged_net, logged_repl;
+	if (net_up && !logged_net) { logged_net = true; printf("wm: net0 up\n"); }
+	if (repl_up && !logged_repl) { logged_repl = true; printf("wm: repl0 up\n"); }
+
+	return net_up && repl_up;
+
+}
+
+// Polled from the main loop until it goes true, then never again.
+// Clearing WM_BUSY_STARTUP is what re-enables the dock.
+//
+// Returns true on the transition, so the caller can repaint. Doing the
+// repaint here would need repair_region() forward-declared, and this
+// sits above it purely because the busy state has to be declared
+// before dock_launch() uses it -- not worth a declaration just to move
+// one line.
+static bool check_core_services(void) {
+
+	if (!(wm_busy_mask & WM_BUSY_STARTUP)) return false;
+	if (!core_services_ready()) return false;
+
+	printf("wm: core services ready\n");
+	wm_busy_clear(WM_BUSY_STARTUP);
+
+	return true;
+
+}
+
+// Decides which candidates the dock actually offers.
+//
+// Called once at startup. z_exec_exists() asks the kernel's own
+// resolver (filesystem first, flash core-app archive underneath), so
+// the answer is exactly what z_proc_run() would do -- a candidate is
+// kept if and only if clicking it would really launch something.
+//
+// Not re-run when an sdcard is inserted later. Doing that would mean
+// resizing and repainting the dock window underneath whatever the user
+// is doing, and the dock is drawn once at a size derived from the
+// count. Worth revisiting if hotplug ever becomes a thing people
+// actually do; for now a reboot picks up a new card.
+static void dock_build(void) {
+
+	dock_app_count = 0;
+
+	for (int i = 0; i < DOCK_CANDIDATE_COUNT; i++) {
+		if (!z_exec_exists(dock_candidates[i].name)) {
+			printf("wm: dock: '%s' not installed, skipping\n",
+				dock_candidates[i].name);
+			continue;
+		}
+		dock_apps[dock_app_count++] = &dock_candidates[i];
+	}
+
+	printf("wm: dock: %d of %d apps available\n",
+		dock_app_count, DOCK_CANDIDATE_COUNT);
 
 }
 
@@ -433,9 +809,9 @@ static void draw_dock(void) {
 			// see dock_launching[]'s own comment -- solid fill, then
 			// the icon's own ink pixels punched back out to 0 on top.
 			z_fb_hw_fill_rect(ix, iy, DOCK_ICON_SIZE, DOCK_ICON_SIZE, 1);
-			draw_icon_bitmap_inverted(ix, iy, dock_apps[i].bitmap);
+			draw_icon_bitmap_inverted(ix, iy, dock_apps[i]->bitmap);
 		} else {
-			draw_icon_bitmap(ix, iy, dock_apps[i].bitmap);
+			draw_icon_bitmap(ix, iy, dock_apps[i]->bitmap);
 		}
 
 	}
@@ -517,6 +893,29 @@ static void wait_for_redraw_done(uint32_t pid) {
 // this point, so it isn't listening for Z_WM_REDRAW yet and couldn't
 // possibly reply, which would otherwise stall every window creation
 // for the full wait_for_redraw_done() timeout.
+// Does window `idx` completely cover the rectangle (rx,ry,rw,rh)?
+//
+// The point is not which windows overlap each other -- it is whether
+// anything underneath will still be VISIBLE once `idx` has been
+// drawn. If the repaired region lies entirely within `idx`, nothing
+// below it shows through, and asking those owners to redraw is work
+// whose result is painted over the instant it arrives.
+//
+// The +1 ring is the focus highlight, which draw_window_box() draws
+// just outside a window's own bounds.
+static bool window_covers_region(int idx, int rx, int ry, int rw, int rh) {
+
+	if (idx < 0 || !windows[idx].used) return false;
+
+	wm_window_t *w = &windows[idx];
+
+	return rx >= (int)w->x - 1 &&
+		ry >= (int)w->y - 1 &&
+		rx + rw <= (int)w->x + (int)w->w + 1 &&
+		ry + rh <= (int)w->y + (int)w->h + 1;
+
+}
+
 static void repair_region(int rx, int ry, int rw, int rh, int exclude_idx) {
 
 	// expand by 1px on every side before clearing/redrawing -- the
@@ -540,6 +939,35 @@ static void repair_region(int rx, int ry, int rw, int rh, int exclude_idx) {
 
 	fill_rect(rx, ry, rw, rh, 0);
 
+	// Will the excluded window cover this entire region on its own?
+	//
+	// If so, no owner underneath needs to redraw: only the region was
+	// cleared, everything outside it is untouched, and the excluded
+	// window's chrome will fill the region completely. Their content
+	// inside it would be hidden the moment it was drawn.
+	//
+	// This is the common case, not a corner one. A window being
+	// created or brought to the front is repaired using its OWN
+	// rect, so the region always fits inside it -- which is exactly
+	// when the notifications are pointless.
+	//
+	// Very visible before: opening a dialog made its parent repaint
+	// its entire content just before the dialog covered that area,
+	// which read as a flash on every Open. It also made wm block on
+	// an ack for a redraw it did not need.
+	bool region_hidden =
+		window_covers_region(exclude_idx, rx, ry, rw, rh);
+
+	// Where the excluded window sits in the z-order. Only windows
+	// BEHIND it are hidden by it -- anything in front is drawn
+	// afterwards and still needs its content back. zorder is
+	// back-to-front, so "behind" means a lower index.
+	int zex = -1;
+
+	if (region_hidden)
+		for (int i = 0; i < zorder_count; i++)
+			if (zorder[i] == exclude_idx) { zex = i; break; }
+
 	for (int i = 0; i < zorder_count; i++) {
 		int idx = zorder[i];
 		wm_window_t *w = &windows[idx];
@@ -551,6 +979,9 @@ static void repair_region(int rx, int ry, int rw, int rh, int exclude_idx) {
 		if (idx == dock_idx) draw_dock();
 		if (w->owner_pid == my_pid) continue;
 		if (idx == exclude_idx) continue;
+
+		if (region_hidden && zex >= 0 && i < zex) continue;
+
 		send_redraw(w->owner_pid, idx);
 		wait_for_redraw_done(w->owner_pid);
 	}
@@ -613,7 +1044,16 @@ static inline uint8_t get_mouse_btn(void) {
 // unit -- same caveat REDRAW_ACK_TIMEOUT's own comment gives -- just
 // generously past how long even a slow-loading GUI app should ever
 // take to get as far as its first z_win_create() call.
-#define DOCK_LAUNCH_TIMEOUT_ITERS   5000
+// Now a real time budget rather than a loop-iteration count.
+//
+// Counting iterations was never reliable: loop rate depends on how
+// many other processes are runnable, so this same constant meant
+// something different with one app running than with five. Adding the
+// idle yield at the bottom of the main loop below would have made that
+// worse still (the loop now runs at ~Z_TICK_HZ when idle), so it is
+// measured against z_uptime_ticks() instead and no longer cares how
+// fast the loop happens to be spinning.
+#define DOCK_LAUNCH_TIMEOUT_TICKS   (Z_TICK_HZ * 3)
 
 // launches dock_apps[slot], same as a mouse click on that icon (see
 // dock_click() below, which now just maps a click to a slot and calls
@@ -623,6 +1063,18 @@ static inline uint8_t get_mouse_btn(void) {
 static void dock_launch(int slot) {
 
 	if (slot < 0 || slot >= DOCK_APP_COUNT) return;
+
+	// Nothing launches while the system is busy. Right now the only
+	// reason is WM_BUSY_STARTUP -- `term` connects to `repl` the
+	// moment it starts, and if repl isn't listening yet that connect
+	// times out and term comes up as a blank window with no
+	// explanation. Refusing the launch is far better than producing a
+	// broken one, and the Z cursor is what tells the user to wait.
+	if (wm_is_busy()) {
+		printf("wm: dock: busy, not launching '%s' yet\n",
+			dock_apps[slot]->name);
+		return;
+	}
 
 	// already launching -- see dock_launching[]'s own comment. Without
 	// this, an impatient double-click, or holding Enter down, could
@@ -647,13 +1099,13 @@ static void dock_launch(int slot) {
 	// whichever process the CPU happens to be running at the time.
 	dock_launching[slot] = true;
 	dock_launching_pid[slot] = 0;	// not known yet -- see below
-	dock_launching_ticks[slot] = 0;
+	dock_launching_deadline[slot] = z_uptime_ticks() + DOCK_LAUNCH_TIMEOUT_TICKS;
 
 	if (dock_idx >= 0)
 		repair_region(windows[dock_idx].x, windows[dock_idx].y,
 			windows[dock_idx].w, windows[dock_idx].h, -1);
 
-	const char *name = dock_apps[slot].name;
+	const char *name = dock_apps[slot]->name;
 	printf("wm: dock: launching '%s'\n", name);
 
 	uint32_t pid = z_proc_run(name);
@@ -754,7 +1206,16 @@ static int next_focusable(int from) {
 
 	for (int i = 0; i < WM_MAX_WINDOWS; i++) {
 		int idx = (start + i) % WM_MAX_WINDOWS;
-		if (windows[idx].used) return idx;
+		if (!windows[idx].used) continue;
+		// A window blocked by its own owner's modal dialog is skipped
+		// rather than focused (Z_WIN_FLAG_MODAL, zwm.h). Alt+Tabbing
+		// onto it would hand it the keyboard, and since Z_WM_KEY
+		// carries no window id its owner would have no way to tell
+		// those keystrokes from the dialog's -- which is the exact
+		// ambiguity modality exists to remove. The modal window
+		// itself stays in the cycle, so the app is still reachable.
+		if (blocked_by_modal(idx) >= 0) continue;
+		return idx;
 	}
 
 	return -1;
@@ -934,6 +1395,29 @@ static int create_window(uint32_t owner_pid, const char *title,
 		windows[i].no_titlebar = false;
 		windows[i].flags = flags;
 
+		// minimum size for a later resize (see the resize block in
+		// main()). Z_WIN_FLAG_MIN_IS_CREATE means "never smaller than
+		// what I just asked for" -- for an app whose window contains
+		// fixed-size furniture it can't shrink below, which the app
+		// knows and wm can't work out for itself. See that flag's own
+		// comment in zwm.h.
+		//
+		// The global floor is applied either way, including on top of
+		// a requested minimum: a window that asked to be created at
+		// 20x20 must still not be resizable down to 20x20, because
+		// below Z_WM_MIN_HEIGHT the content area's height goes
+		// NEGATIVE and underflows to an enormous unsigned value
+		// downstream.
+		if (flags & Z_WIN_FLAG_MIN_IS_CREATE) {
+			windows[i].min_w = w;
+			windows[i].min_h = h;
+		} else {
+			windows[i].min_w = Z_WM_MIN_WIDTH;
+			windows[i].min_h = Z_WM_MIN_HEIGHT;
+		}
+		if (windows[i].min_w < Z_WM_MIN_WIDTH) windows[i].min_w = Z_WM_MIN_WIDTH;
+		if (windows[i].min_h < Z_WM_MIN_HEIGHT) windows[i].min_h = Z_WM_MIN_HEIGHT;
+
 		if (fixed_x >= 0 && fixed_y >= 0) {
 			windows[i].x = (uint32_t)fixed_x;
 			windows[i].y = (uint32_t)fixed_y;
@@ -978,6 +1462,17 @@ static int create_window(uint32_t owner_pid, const char *title,
 // demo windows -- see main().
 static int create_dock(void) {
 
+	// No dock at all if nothing resolved. Not just cosmetic: the width
+	// below computes (DOCK_APP_COUNT - 1) * DOCK_ICON_GAP in unsigned
+	// arithmetic, which underflows to an enormous width at zero. Can't
+	// happen while `term` is a flash-resident core app, but the dock
+	// contents are data now and this is one subtraction away from
+	// being someone's very confusing afternoon.
+	if (DOCK_APP_COUNT <= 0) {
+		printf("wm: dock: no apps available, not creating dock\n");
+		return -1;
+	}
+
 	uint32_t w = DOCK_PADDING * 2 + DOCK_APP_COUNT * DOCK_ICON_SIZE +
 		(DOCK_APP_COUNT - 1) * DOCK_ICON_GAP;
 	uint32_t h = DOCK_PADDING * 2 + DOCK_ICON_SIZE;
@@ -1019,6 +1514,12 @@ static void destroy_window(uint32_t id) {
 	int ox = (int)windows[id].x, oy = (int)windows[id].y;
 	int ow = (int)windows[id].w, oh = (int)windows[id].h;
 
+	// Read BEFORE the slot is released below -- the focus handoff
+	// further down needs both, and by then this slot is free and may
+	// legitimately be reused by the next create_window() call.
+	bool was_modal = (windows[id].flags & Z_WIN_FLAG_MODAL) != 0;
+	uint32_t owner = windows[id].owner_pid;
+
 	windows[id].used = false;
 
 	int found = -1;
@@ -1031,14 +1532,101 @@ static void destroy_window(uint32_t id) {
 		zorder_count--;
 	}
 
-	if (focused == (int)id) focused = -1;
+	if (focused == (int)id) {
+
+		focused = -1;
+
+		// A modal window closing should hand the keyboard back to
+		// the window it was blocking, not to nothing (Z_WIN_FLAG_
+		// MODAL, zwm.h). Without this, dismissing a dialog leaves
+		// its owner unfocused, so the app that just regained control
+		// of itself receives no keys at all until the user clicks
+		// it -- which reads as the app having hung.
+		//
+		// Frontmost surviving window of the same owner, so an app
+		// with several windows gets back whichever one was on top.
+		// Deliberately not "whatever was focused before the dialog
+		// opened": that would need remembering, and could name a
+		// window that no longer exists.
+		if (was_modal) {
+			for (int i = zorder_count - 1; i >= 0; i--) {
+				int idx = zorder[i];
+				if (!windows[idx].used) continue;
+				if (windows[idx].owner_pid != owner) continue;
+				if (dock_idx >= 0 && idx == dock_idx) continue;
+				focused = idx;
+				break;
+			}
+		}
+
+	}
 	if (dragging == (int)id) dragging = -1;
+	// same reasoning as `dragging` above: leaving either of these
+	// pointing at a destroyed slot means the next mouse event gets
+	// delivered to, or the next resize step redraws the frame of,
+	// whatever unrelated window later reuses this index.
+	if (resizing == (int)id) resizing = -1;
+	if (mouse_capture == (int)id) mouse_capture = -1;
+	if (mouse_last_target == (int)id) mouse_last_valid = false;
 
 	printf("wm: destroyed window %ld\n", (long)id);
+
+	// Drain both graphics engines BEFORE repairing.
+	//
+	// z_fb_hw_line() returns with the line still queued in the
+	// rasterizer's FIFO (see z_fb_hw_sync() in zgfx.h). An app that
+	// was drawing right up to the moment its window went away still
+	// has lines in that queue, and they drain after this function
+	// runs -- painting over the repair below and leaving a scribble
+	// where the window used to be. The queue outlives its submitter;
+	// the repair has to wait for it.
+	z_fb_hw_sync();
 
 	// window is already removed from windows[]/zorder above, so this
 	// only redraws/notifies whatever else was overlapping its old spot
 	repair_region(ox, oy, ow, oh, -1);
+
+}
+
+// -- modality (Z_WIN_FLAG_MODAL, zwm.h) --
+//
+// The frontmost modal window owned by `pid`, or -1 if that process
+// has none. Scanned rather than cached: a process can create and
+// destroy dialogs freely, WM_MAX_WINDOWS is 16, and this runs once
+// per click, not per pointer sample. A cache here would be a second
+// source of truth to keep correct across create/destroy/kill for no
+// measurable gain.
+//
+// Frontmost wins if there are somehow several -- see the flag's own
+// comment in zwm.h on why that's a defined outcome rather than a
+// supported arrangement.
+static int modal_for_owner(uint32_t pid) {
+
+	for (int i = zorder_count - 1; i >= 0; i--) {
+		int idx = zorder[i];
+		if (!windows[idx].used) continue;
+		if (windows[idx].owner_pid != pid) continue;
+		if (windows[idx].flags & Z_WIN_FLAG_MODAL) return idx;
+	}
+
+	return -1;
+
+}
+
+// If `idx` is blocked by one of its own owner's modal windows,
+// returns that modal window's index; otherwise -1.
+//
+// Deliberately scoped to the same owner: a modal dialog in one app
+// must not stop you clicking on a different app, or on the dock. See
+// Z_WIN_FLAG_MODAL in zwm.h.
+static int blocked_by_modal(int idx) {
+
+	if (idx < 0) return -1;
+	if (windows[idx].flags & Z_WIN_FLAG_MODAL) return -1;	// it IS the modal
+	if (dock_idx >= 0 && idx == dock_idx) return -1;
+
+	int m = modal_for_owner(windows[idx].owner_pid);
+	return (m == idx) ? -1 : m;
 
 }
 
@@ -1062,21 +1650,111 @@ static bool hit_titlebar(int idx, int cy) {
 	return (cy < (int)(windows[idx].y + Z_WM_TITLEBAR_H));
 }
 
-// true if (cx,cy) landed on window idx's close icon -- see
-// close_icon_rect() (above, near draw_titlebar_content()) for the
-// shared rect computation this and the actual draw both use. Checked
-// BEFORE the general titlebar-drag hit test in main()'s click
-// handling below, so clicking the icon closes the window instead of
+// true if (cx,cy) landed in window idx's lower-right resize grip --
+// the square marked by the diagonal ticks draw_window_box() draws.
+// Checked BEFORE the general titlebar/content handling in main()'s
+// click dispatch, so grabbing the corner starts a resize rather than
+// being delivered to the app as an ordinary click.
+//
+// Returns false for a window that didn't ask to be resizable, which
+// is what keeps this entirely invisible to every app that predates
+// the flag: without Z_WIN_FLAG_RESIZABLE the corner is just frame,
+// exactly as it always was.
+static bool hit_resize_grip(int idx, int cx, int cy) {
+
+	wm_window_t *w = &windows[idx];
+
+	if (w->no_titlebar) return false;
+	if (!(w->flags & Z_WIN_FLAG_RESIZABLE)) return false;
+
+	int x1 = (int)(w->x + w->w - 1);
+	int y1 = (int)(w->y + w->h - 1);
+
+	return cx > x1 - Z_WM_RESIZE_GRIP && cx <= x1 &&
+		cy > y1 - Z_WM_RESIZE_GRIP && cy <= y1;
+
+}
+
+// Window idx's CONTENT area -- the region an app can actually draw
+// into, below the titlebar and inset from the frame -- in absolute
+// screen coordinates, inclusive bounds.
+//
+// This duplicates the inset arithmetic in zwin.c's
+// z_win_content_rect(), which is unfortunate and worth stating
+// plainly: the two live in different processes and there is no shared
+// header carrying the formula, so they are kept in sync by hand. That
+// exact duplication has already caused one real bug in this codebase
+// (see z_win_content_rect()'s own comment). Kept to ONE copy on this
+// side at least -- point_in_content() below goes through here rather
+// than writing it out again.
+static void window_content_rect(int idx, int *x0, int *y0, int *x1, int *y1) {
+
+	wm_window_t *w = &windows[idx];
+
+	int top = w->no_titlebar ? 2 : (Z_WM_TITLEBAR_H + 2);
+
+	*x0 = (int)w->x + 2;
+	*y0 = (int)w->y + top;
+	*x1 = (int)(w->x + w->w) - 3;
+	*y1 = (int)(w->y + w->h) - 3;
+
+}
+
+// true if (cx,cy) is inside window idx's CONTENT area
+static bool point_in_content(int idx, int cx, int cy) {
+
+	int x0, y0, x1, y1;
+	window_content_rect(idx, &x0, &y0, &x1, &y1);
+
+	return cx >= x0 && cx <= x1 && cy >= y0 && cy <= y1;
+
+}
+
+// Which of window idx's titlebar icons (cx,cy) landed on:
+//
+//   -1  no icon here
+//    0  the close icon
+//   >0  a Z_WM_TBICON_* kind
+//
+// Uses titlebar_icons() (above, next to draw_titlebar_content()) for
+// the placement, so what you can click and what you can see are the
+// same rects by construction rather than by two functions agreeing.
+// Checked BEFORE the general titlebar-drag hit test in main()'s click
+// handling below, so clicking an icon activates it instead of
 // starting a drag.
-static bool hit_close_icon(int idx, int cx, int cy) {
+static int hit_titlebar_icon(int idx, int cx, int cy) {
 
-	if (windows[idx].no_titlebar) return false;
-	if (!(windows[idx].flags & Z_WIN_FLAG_CLOSE_ICON)) return false;
+	if (windows[idx].no_titlebar) return -1;
 
-	int ix, iy;
-	close_icon_rect(&windows[idx], &ix, &iy);
+	titlebar_icon_slot_t icons[TITLEBAR_ICON_TABLE_COUNT];
+	int leftmost_x;
+	int n = titlebar_icons(&windows[idx], icons, &leftmost_x);
 
-	return cx >= ix && cx < ix + Z_ICON_W && cy >= iy && cy < iy + Z_ICON_H;
+	for (int i = 0; i < n; i++)
+		if (cx >= icons[i].x && cx < icons[i].x + Z_ICON_W &&
+			cy >= icons[i].y && cy < icons[i].y + Z_ICON_H)
+			return (int)icons[i].kind;
+
+	return -1;
+
+}
+
+// Sends a Z_WM_TITLEBAR_ICON for one of the non-close icons. Never
+// called for close -- that goes through handle_close_click() below,
+// which has to decide between notifying and killing.
+static void handle_titlebar_icon_click(int idx, int kind) {
+
+	uint32_t owner = windows[idx].owner_pid;
+
+	printf("wm: titlebar icon %d clicked for window %d (owner=%ld)\n",
+		kind, idx, (long)owner);
+
+	// same self-inflicted-damage guard every other notify path here
+	// has -- wm messaging itself would be a confusing way to wedge.
+	if (owner == my_pid) return;
+
+	z_msg_new_send(owner, Z_WM_TITLEBAR_ICON, 0,
+		z_obj_uint32(Z_WM_PACK_TBICON(idx, kind)));
 
 }
 
@@ -1094,23 +1772,30 @@ static void handle_close_click(int idx) {
 
 	if (flags & Z_WIN_FLAG_CLOSE_KILLS_OWNER) {
 
-		// destroy_window() repairs the screen region itself. kill the
-		// owner AFTER that -- destroy_window() doesn't depend on the
-		// owner still being alive to do its own bookkeeping (it never
-		// waits on the owner for anything -- see repair_region()'s
-		// own exclude_idx reasoning for the one case that does), so
-		// ordering here doesn't matter for correctness, but killing
-		// first would leave a brief window where a dead process still
-		// has a window on screen for no reason.
-		destroy_window(idx);
-
-		// windows owned by wm itself (the dock, or the commented-out
-		// demo windows in main()) would never actually reach here in
-		// practice -- neither sets Z_WIN_FLAG_CLOSE_ICON -- but this
-		// guard exists for the same reason dispatch_keys()/
-		// notify_moved() already have one: wm killing ITSELF here
-		// would be a self-inflicted, hard-to-debug way to go down.
+		// Kill the owner FIRST, then destroy the window.
+		//
+		// This used to be the other way round, on the reasoning that
+		// killing first leaves a brief moment where a dead process
+		// still has a window on screen. That is true and it is
+		// cosmetic; the ordering it produced was not. destroy_window()
+		// repairs the region, and with the owner still alive it can
+		// draw into that region between the repair and the kill --
+		// so a window closed while its app was drawing left the
+		// app's last strokes on the desktop behind it.
+		//
+		// Killing first closes that window entirely, and
+		// destroy_window() does not depend on the owner being alive
+		// for any of its own bookkeeping (it never waits on the owner
+		// -- see repair_region()'s exclude_idx reasoning for the one
+		// case that does). It also drains the GPU queues itself, for
+		// the drawing that was already submitted before the kill.
+		//
+		// windows owned by wm itself would never reach here in
+		// practice -- neither sets Z_WIN_FLAG_CLOSE_ICON -- but the
+		// guard stays for the same reason it always did.
 		if (owner != my_pid) z_proc_kill(owner);
+
+		destroy_window(idx);
 
 	} else {
 
@@ -1159,26 +1844,88 @@ static void dock_click(int cx, int cy) {
 
 // -- app protocol --
 
+// -- window-rect payloads --
+//
+// send_win_rect() used to build its Z_MAP with z_obj_map()/
+// z_map_set(), which malloc()s: one table struct, two arrays, and a
+// copied string for each of the five keys. It then deliberately never
+// freed any of it, because the payload is BORROWED until the
+// recipient reads it (docs/messaging.md) and wm doesn't wait for that.
+//
+// That was measured at 384 bytes per call. wm's whole stack-and-heap
+// allowance is 8KB (Z_PROC_STACK_SIZE_SMALL, sw/os/kernel.h), and
+// notify_moved() calls this once per completed window move -- every
+// drag release, every Alt+Arrow step. Around twenty moves exhausted
+// the heap, at which point z_obj_map()'s unchecked malloc() wrote
+// through a NULL pointer and the machine went down. That is the
+// "moving a window around eventually crashes" bug, and it applied
+// equally to repeated resizing (Z_WM_WINDOW_RESIZED goes through here
+// too).
+//
+// Static storage instead, so this allocates nothing at all. The
+// kernel reads the payload out of the sender's own address space
+// (z_translate(), sw/os/msg.c), and .bss is as reachable that way as
+// the heap was -- it just doesn't run out.
+//
+// A RING of slots rather than one, because the borrowed-payload
+// window is still real: a slot must not be overwritten between the
+// send and the recipient's read. Four means four more of these
+// messages would have to be sent, to anyone, before a given one is
+// reused -- and wm sends them one at a time, on user-paced events,
+// to apps that drain their queues every loop. This does not make the
+// borrow race impossible, it makes it require something that doesn't
+// happen; the unbounded leak it replaces was a certainty.
+#define WIN_RECT_SLOTS   4
+#define WIN_RECT_KEYS    5
+
+// Plain literals, pointed at rather than copied -- .rodata translates
+// exactly like .bss does.
+static const char *const win_rect_key_names[WIN_RECT_KEYS] = {
+	"id", "x", "y", "w", "h"
+};
+
+static z_obj_t win_rect_keys[WIN_RECT_SLOTS][WIN_RECT_KEYS];
+static z_obj_t win_rect_vals[WIN_RECT_SLOTS][WIN_RECT_KEYS];
+static z_obj_table_t win_rect_tbl[WIN_RECT_SLOTS];
+static int win_rect_slot;
+
 static void send_win_rect(uint32_t to, uint32_t subject, uint32_t tag, int idx) {
 
-	z_obj_t msg = z_obj_map(5);
+	int s = win_rect_slot;
+	win_rect_slot = (win_rect_slot + 1) % WIN_RECT_SLOTS;
 
-	if (idx >= 0) {
-		z_map_set(&msg, "id", z_obj_int32(idx));
-		z_map_set(&msg, "x", z_obj_uint32(windows[idx].x));
-		z_map_set(&msg, "y", z_obj_uint32(windows[idx].y));
-		z_map_set(&msg, "w", z_obj_uint32(windows[idx].w));
-		z_map_set(&msg, "h", z_obj_uint32(windows[idx].h));
-	} else {
-		z_map_set(&msg, "id", z_obj_int32(-1));
+	z_obj_t *k = win_rect_keys[s];
+	z_obj_t *v = win_rect_vals[s];
+
+	// A failure reply carries nothing but the id, same as before --
+	// the map is simply one entry long, and z_resolve_obj() walks
+	// only `len` of it regardless of how the arrays are sized.
+	int n = (idx >= 0) ? WIN_RECT_KEYS : 1;
+
+	for (int i = 0; i < n; i++) {
+		k[i].type = Z_STR;
+		k[i].val.str = (char *)win_rect_key_names[i];
 	}
 
-	z_msg_new_send(to, subject, tag, msg);
+	v[0].type = Z_INT32;
+	v[0].val.int32 = idx;
 
-	// note: `msg` is intentionally never freed here. it's a borrowed
-	// payload until the recipient reads it (see docs/messaging.md) --
-	// wm doesn't wait for that, so freeing immediately would race.
-	// same accepted-leak tradeoff as the ping/pong demo.
+	if (idx >= 0) {
+		v[1].type = Z_UINT32; v[1].val.uint32 = windows[idx].x;
+		v[2].type = Z_UINT32; v[2].val.uint32 = windows[idx].y;
+		v[3].type = Z_UINT32; v[3].val.uint32 = windows[idx].w;
+		v[4].type = Z_UINT32; v[4].val.uint32 = windows[idx].h;
+	}
+
+	win_rect_tbl[s].len = (uint32_t)n;
+	win_rect_tbl[s].a = k;
+	win_rect_tbl[s].b = v;
+
+	z_obj_t msg;
+	msg.type = Z_MAP;
+	msg.val.ptr = &win_rect_tbl[s];
+
+	z_msg_new_send(to, subject, tag, msg);
 
 }
 
@@ -1261,6 +2008,66 @@ static void handle_message(z_msg_t *msg) {
 			// second app creates one later.
 			if (idx >= 0 && focused < 0) focused = idx;
 
+			// A modal window is the exception to the
+			// don't-steal-focus rule above, and has to be: it exists
+			// precisely to take the keyboard away from its owner's
+			// other windows until it's dismissed (Z_WIN_FLAG_MODAL,
+			// zwm.h). A dialog you have to click before you can type
+			// in it would be a worse version of no dialog at all.
+			//
+			// Note this steals focus from whatever had it, including
+			// another process's window. That's the same thing any
+			// click does, it's user-initiated (some app just opened
+			// a dialog because the user asked it to), and the
+			// alternative -- a modal window that isn't focused --
+			// leaves the owner unable to receive keys for EITHER
+			// window.
+			if (idx >= 0 && (flags & Z_WIN_FLAG_MODAL) &&
+				focused != idx) {
+
+				int old_focused = focused;
+				focused = idx;
+
+				// Only the TITLEBAR strip, not the whole window.
+				//
+				// Losing focus changes exactly one thing about a
+				// window: how wm draws its titlebar. The content is
+				// unaffected, and wm draws the titlebar itself -- so
+				// repairing the full rect asked the owner for a
+				// complete content redraw it had no reason to do.
+				//
+				// That was visible. Opening a dialog produced two
+				// full refreshes of the parent before the dialog
+				// appeared: this one, and the create-time repair
+				// below. The second is real work (the new window has
+				// to be composited); this one was not.
+				//
+				// Same reasoning, and the same one-line fix, as
+				// Z_WM_SET_TITLE's repair above. Note this is only
+				// safe because the z-order is NOT changing here --
+				// alt_tab() repairs in full for exactly that reason,
+				// since bring_to_front() there may uncover content
+				// that really does need redrawing.
+				//
+				// exclude_idx = idx, NOT -1. The old focused window
+				// very often overlaps the window just created (a
+				// dialog is centered on its parent, so it always
+				// does), and without the exclusion this repair asks
+				// the NEW window's owner to redraw it -- while that
+				// owner is still inside z_win_create_cb() and has no
+				// window id to recognize the request by. It can't
+				// ack, so wm blocks here for the full
+				// REDRAW_ACK_TIMEOUT on every single dialog that
+				// opens. Same reasoning as the create-time repair
+				// below; see repair_region()'s own exclude_idx
+				// comment.
+				if (old_focused >= 0 && windows[old_focused].used)
+					repair_region(windows[old_focused].x,
+						windows[old_focused].y, windows[old_focused].w,
+						Z_WM_TITLEBAR_H, idx);
+
+			}
+
 			// draw this window's chrome (and repair anything it now
 			// covers) BEFORE replying -- otherwise the owner's
 			// z_win_create() can return, and its first drawing calls
@@ -1273,6 +2080,137 @@ static void handle_message(z_msg_t *msg) {
 					windows[idx].w, windows[idx].h, idx);
 
 			send_win_rect(msg->from, Z_WM_WINDOW_CREATED, msg->tag, idx);
+
+			break;
+
+		}
+
+		case Z_WM_CLIP_SET: {
+
+			if (msg->obj.type != Z_STR || !msg->obj.val.str) break;
+
+			// Copied out immediately. The payload is borrowed from
+			// the sender until read (docs/messaging.md), and this IS
+			// the read -- holding the pointer instead would leave the
+			// clipboard pointing into another process's memory, which
+			// that process is free to reuse or exit from.
+			uint32_t i = 0;
+			for (; i < Z_WM_CLIP_MAX - 1 && msg->obj.val.str[i]; i++)
+				clipboard[i] = msg->obj.val.str[i];
+			clipboard[i] = 0;
+
+			printf("wm: clipboard set, %lu bytes%s\n", (unsigned long)i,
+				msg->obj.val.str[i] ? " (truncated)" : "");
+
+			break;
+
+		}
+
+		case Z_WM_CLIP_GET: {
+
+			// Points straight at wm's own buffer -- no copy, and
+			// nothing to free. Safe because the buffer is static and
+			// only ever overwritten by another SET, which cannot
+			// happen between this send and the recipient's read (the
+			// recipient is blocked waiting for exactly this).
+			z_obj_t reply;
+			reply.type = Z_STR;
+			reply.val.str = clipboard;
+
+			z_msg_new_send(msg->from, Z_WM_CLIP_DATA, msg->tag, reply);
+
+			break;
+
+		}
+
+		case Z_WM_SET_ARG:
+
+			if (msg->obj.type != Z_STR || !msg->obj.val.str) break;
+
+			strncpy(pending_arg, msg->obj.val.str, Z_WM_ARG_MAX - 1);
+			pending_arg[Z_WM_ARG_MAX - 1] = 0;
+
+			pending_arg_valid = true;
+			pending_arg_tick = z_uptime_ticks();
+
+			printf("wm: launch arg set: '%s'\n", pending_arg);
+
+			break;
+
+		case Z_WM_GET_ARG: {
+
+			// Expired arguments read as absent -- see Z_WM_ARG_TIMEOUT
+			// in zwm.h for why an unclaimed one must not linger.
+			if (pending_arg_valid &&
+				z_uptime_ticks() - pending_arg_tick > Z_WM_ARG_TIMEOUT) {
+				printf("wm: launch arg expired unclaimed\n");
+				pending_arg_valid = false;
+			}
+
+			// Built by hand rather than with z_obj_str(), which
+			// mallocs a copy that nothing can free (the payload is
+			// borrowed until the recipient reads it). Once per app
+			// launch is bounded, but wm has 8KB for stack and heap
+			// together and this is the same leak that took the
+			// machine down after twenty window moves -- see
+			// send_win_rect() and docs/messaging.md.
+			z_obj_t reply;
+			reply.type = Z_STR;
+			reply.val.str = pending_arg_valid ? pending_arg : arg_empty;
+
+			// Claimed exactly once. Only the flag is cleared, not the
+			// bytes -- see pending_arg's own comment.
+			pending_arg_valid = false;
+
+			z_msg_new_send(msg->from, Z_WM_ARG, msg->tag, reply);
+
+			break;
+
+		}
+
+		case Z_WM_SET_TITLE: {
+
+			z_obj_t *id = z_map_find(&msg->obj, "id");
+			z_obj_t *t = z_map_find(&msg->obj, "title");
+
+			if (!id || id->type != Z_INT32) break;
+			if (!t || t->type != Z_STR || !t->val.str) break;
+
+			int idx = id->val.int32;
+			if (idx < 0 || idx >= WM_MAX_WINDOWS || !windows[idx].used) break;
+
+			// Only the owner may retitle its own window. Nothing else
+			// in this protocol is authenticated either, but there is
+			// no reason to add the first way for one app to relabel
+			// another's window.
+			if (windows[idx].owner_pid != msg->from) break;
+
+			strncpy(windows[idx].title, t->val.str, WM_TITLE_MAX - 1);
+			windows[idx].title[WM_TITLE_MAX - 1] = 0;
+
+			// Repair only the titlebar strip, and EXCLUDE THE OWNER.
+			//
+			// Two separate narrowings, both needed. The region,
+			// because repairing the whole window rect would ask
+			// every overlapping owner for a full content redraw over
+			// a change confined to one strip.
+			//
+			// And exclude_idx = idx, because wm draws the titlebar
+			// itself -- a window retitling its OWN titlebar has
+			// nothing to redraw. Without this, every retitle sent
+			// the caller a redraw request it would service later,
+			// from its main loop, after it had already repainted for
+			// its own reasons. In sw/apps/read that was a visible
+			// second render of the whole document on every file
+			// open; in sw/apps/text it is a repaint on the first
+			// keystroke after every save.
+			//
+			// Windows in FRONT of this one still get notified --
+			// they overlap the strip and are drawn after it. Windows
+			// behind are covered by the titlebar and are skipped by
+			// repair_region()'s own occlusion check.
+			repair_region((int)windows[idx].x, (int)windows[idx].y,
+				(int)windows[idx].w, Z_WM_TITLEBAR_H, idx);
 
 			break;
 
@@ -1301,6 +2239,83 @@ static void notify_moved(int idx) {
 
 }
 
+// tells the owner its window is now a different size. Same shape and
+// same release-only timing as notify_moved() above -- and, critically,
+// called BEFORE the repair that follows a resize, so the app has the
+// new w/h in its queue ahead of the Z_WM_REDRAW asking it to redraw at
+// that size. See Z_WM_WINDOW_RESIZED's own comment in zwm.h for why
+// that ordering is load-bearing rather than incidental.
+static void notify_resized(int idx) {
+
+	if (windows[idx].owner_pid == my_pid) return;
+
+	send_win_rect(windows[idx].owner_pid, Z_WM_WINDOW_RESIZED, 0, idx);
+
+}
+
+// -- pointer delivery --
+//
+// Decides which window, if any, should receive this pointer sample and
+// sends it -- see Z_WM_MOUSE in zwm.h for the wire format and the
+// coalescing contract this implements.
+//
+// Two rules, in order:
+//
+//   1. If a capture is active (a button went down inside some
+//      window's content area and hasn't come up yet), that window gets
+//      the event no matter where the cursor now is. This is what makes
+//      a paint stroke, a slider drag, or a rubber-banded selection
+//      survive the cursor leaving the window.
+//   2. Otherwise the FOCUSED window gets the event, but only while the
+//      cursor is actually over it and it is the frontmost window at
+//      that point. Requiring the hit test to agree with `focused` is
+//      what stops a window from receiving phantom events through
+//      another window stacked on top of it.
+//
+// Nothing is delivered while wm is running its own drag or resize
+// gesture: the pointer belongs to wm for the duration, and forwarding
+// those samples would have apps reacting to a gesture aimed at their
+// chrome.
+static void dispatch_mouse(int cx, int cy, uint8_t btn) {
+
+	if (dragging >= 0 || resizing >= 0) return;
+
+	int target = mouse_capture;
+
+	if (target < 0) {
+		int hit = hit_test(cx, cy);
+		if (hit >= 0 && hit == focused) target = hit;
+	}
+
+	if (target < 0) return;
+	if (!windows[target].used) { mouse_capture = -1; return; }
+
+	// wm-owned windows (the dock) have no separate process to notify;
+	// wm handles their clicks inline. Same guard notify_moved() and
+	// dispatch_keys() already carry.
+	if (windows[target].owner_pid == my_pid) return;
+
+	uint32_t packed = Z_WM_PACK_MOUSE(cx, cy, btn,
+		point_in_content(target, cx, cy));
+
+	// coalesce -- a mouse that hasn't moved and whose buttons haven't
+	// changed produces no traffic at all. Without this, wm would send
+	// one message per main-loop iteration to whatever window happened
+	// to be under a resting cursor, which floods that app's queue and
+	// (since nothing frees message payloads -- see docs/messaging.md)
+	// steadily consumes wm's own heap for no reason.
+	if (mouse_last_valid && target == mouse_last_target &&
+		packed == mouse_last_packed) return;
+
+	z_msg_new_send(windows[target].owner_pid, Z_WM_MOUSE, 0,
+		z_obj_uint32(packed));
+
+	mouse_last_packed = packed;
+	mouse_last_target = target;
+	mouse_last_valid = true;
+
+}
+
 // repairs a completed drag's swept region (drag_min_x/y..drag_max_x/y,
 // see the drag-update block below) -- deliberately EXCLUDING the
 // dragged window's own final footprint. that footprint's border is
@@ -1314,46 +2329,78 @@ static void notify_moved(int idx) {
 // surrounding strips (top/bottom/left/right of the window's final
 // rect). the window's own content still needs a fresh redraw (it was
 // frozen too), so that's requested directly, without touching chrome.
+// Blanks everything INSIDE a window's frame -- content area and
+// titlebar interior alike -- leaving just the box and its titlebar
+// separator.
+//
+// Called the moment a titlebar drag begins, before the window has
+// moved a single pixel. Dragging is a wireframe operation: only the
+// border follows the cursor, and the content stays frozen wherever it
+// was drawn. Leaving it there means the window's insides visibly
+// detach from its frame and sit in the middle of the screen until the
+// drag ends, which reads as a rendering fault rather than as
+// "content updates on release". Blanking first makes the gesture say
+// what it actually does -- you are moving an empty frame, and it
+// fills in when you let go.
+//
+// Redraws the box afterwards because the titlebar separator line lives
+// inside the region just cleared and is part of the frame, not part of
+// the content.
+static void clear_window_interior(int idx) {
+
+	wm_window_t *w = &windows[idx];
+
+	int x0 = (int)w->x + 1;
+	int y0 = (int)w->y + 1;
+	int x1 = (int)(w->x + w->w) - 2;
+	int y1 = (int)(w->y + w->h) - 2;
+
+	if (x1 >= x0 && y1 >= y0)
+		fill_rect(x0, y0, x1 - x0 + 1, y1 - y0 + 1, 0);
+
+	draw_window_box(w, idx == focused, 1);
+
+}
+
 static void repair_drag(int dragged_idx) {
 
-	wm_window_t *w = &windows[dragged_idx];
-	int fx = (int)w->x, fy = (int)w->y, fw = (int)w->w, fh = (int)w->h;
+	(void)dragged_idx;	// the swept box below already covers it
 
-	// temporary diagnostic instrumentation -- tracking down a
-	// sometimes-crash-on-release bug. low frequency (once per drag
-	// release, not per drag-update step), so shouldn't itself
-	// perturb timing the way heavier instrumentation has elsewhere
-	// in this project's history. remove once resolved.
-	printf("wm: repair_drag win %d final=(%d,%d,%d,%d) swept=(%d,%d)-(%d,%d)\n",
-		dragged_idx, fx, fy, fw, fh, drag_min_x, drag_min_y, drag_max_x, drag_max_y);
-
-	if (drag_min_y < fy) {
-		printf("wm: repair_drag: top strip (%d,%d,%d,%d)\n",
-			drag_min_x, drag_min_y, drag_max_x - drag_min_x, fy - drag_min_y);
-		repair_region(drag_min_x, drag_min_y, drag_max_x - drag_min_x, fy - drag_min_y, -1);
-	}
-	if (fy + fh < drag_max_y) {
-		printf("wm: repair_drag: bottom strip (%d,%d,%d,%d)\n",
-			drag_min_x, fy + fh, drag_max_x - drag_min_x, drag_max_y - (fy + fh));
-		repair_region(drag_min_x, fy + fh, drag_max_x - drag_min_x, drag_max_y - (fy + fh), -1);
-	}
-	if (drag_min_x < fx) {
-		printf("wm: repair_drag: left strip (%d,%d,%d,%d)\n",
-			drag_min_x, fy, fx - drag_min_x, fh);
-		repair_region(drag_min_x, fy, fx - drag_min_x, fh, -1);
-	}
-	if (fx + fw < drag_max_x) {
-		printf("wm: repair_drag: right strip (%d,%d,%d,%d)\n",
-			fx + fw, fy, drag_max_x - (fx + fw), fh);
-		repair_region(fx + fw, fy, drag_max_x - (fx + fw), fh, -1);
-	}
-
-	printf("wm: repair_drag: strips done\n");
-
-	if (w->owner_pid != my_pid) {
-		send_redraw(w->owner_pid, dragged_idx);
-		wait_for_redraw_done(w->owner_pid);
-	}
+	// One repair over everything the window swept through, INCLUDING
+	// its own final footprint.
+	//
+	// This used to repair four strips around the final rect and
+	// deliberately skip the rect itself, on the reasoning that the
+	// border there was already correct and re-clearing it would
+	// flash. That reasoning was incomplete in two ways, and both
+	// showed up as visible corruption after a small move:
+	//
+	//   - Titlebar CONTENT is not part of draw_window_box(). The
+	//     wireframe drag redraws the box at each step but never the
+	//     title text or icons, so those stay at the position the drag
+	//     started from. Move a window a few pixels and the old text
+	//     and icons are still sitting inside the new footprint, which
+	//     the strips by definition never touch. Alt+Arrow had it
+	//     worse: it doesn't erase the old frame at all, so the old
+	//     BORDER survived inside the new footprint too.
+	//
+	//   - Only the dragged window's own owner was asked to redraw.
+	//     Any OTHER window overlapping the final footprint was left
+	//     as it was.
+	//
+	// repair_region() already does all of this correctly -- clear,
+	// then redraw chrome and titlebar content for every overlapping
+	// window in z-order, asking each owner to repaint its content.
+	// The strips and the footprint together are exactly the swept
+	// bounding box, so this is one call where there were five, and it
+	// sends each affected app one redraw instead of up to four.
+	//
+	// The flash the strips were avoiding is no longer a concern:
+	// starting a drag now blanks the window's interior anyway (see
+	// clear_window_interior(), called from the click handler), so
+	// there is nothing left inside the footprint to preserve.
+	repair_region(drag_min_x, drag_min_y,
+		drag_max_x - drag_min_x, drag_max_y - drag_min_y, -1);
 
 }
 
@@ -1415,7 +2462,19 @@ int main(void) {
 	// (this is exactly the single-owner constraint the paragraph
 	// above describes), so this had to change in all three together,
 	// not just here.
+	// Both resident fonts, at the fixed offsets glyph_layout[]
+	// (sw/common/zgfx.c) declares. wm is still the only process that
+	// writes glyph memory; every other process reads the offsets out
+	// of that same table and blits, which is what lets an app pick a
+	// font without any of them having to agree at runtime.
+	//
+	// z_font_6x12 is what sw/apps/text's titlebar font toggle
+	// switches to (Z_WIN_FLAG_FONT_ICON, zwm.h). Loading it here
+	// rather than on demand keeps the single-owner rule intact --
+	// the alternative is an app writing glyph memory mid-session,
+	// underneath every other app currently drawing text from it.
 	z_gfx_hw_font_load(&z_font_5x8);
+	z_gfx_hw_font_load(&z_font_6x12);
 
 	// window titlebar icons (close, and any future minimize/open/save
 	// icon -- see win_icons.h) live in the same hardware glyph memory
@@ -1443,7 +2502,17 @@ int main(void) {
 	// create_dock()'s own comment); bring_to_front(dock_idx) calls
 	// elsewhere in this file keep it that way as other windows come
 	// and go.
+	//
+	// dock_build() first: create_dock() sizes the window from
+	// DOCK_APP_COUNT, so the live set has to be known before the
+	// window exists, not after.
+	dock_build();
 	dock_idx = create_dock();
+
+	// Busy until net and repl register themselves. wm is up (it is
+	// this process) but the services term depends on are started by
+	// init() alongside it and take a moment to appear.
+	wm_busy_set(WM_BUSY_STARTUP);
 	if (dock_idx >= 0)
 		repair_region(windows[dock_idx].x, windows[dock_idx].y,
 			windows[dock_idx].w, windows[dock_idx].h, -1);
@@ -1480,13 +2549,15 @@ int main(void) {
 		while (z_msg_read(&msg) == Z_OK)
 			handle_message(&msg);
 
-		// -- dock launch timeout -- see DOCK_LAUNCH_TIMEOUT_ITERS'
-		// own comment below for why this exists at all.
+		// -- dock launch timeout -- see DOCK_LAUNCH_TIMEOUT_TICKS'
+		// own comment below for why this exists at all. Compared as a
+		// subtraction so it stays correct across the 32-bit tick wrap.
 		for (int di = 0; di < DOCK_APP_COUNT; di++) {
 			if (!dock_launching[di]) continue;
-			if (++dock_launching_ticks[di] < DOCK_LAUNCH_TIMEOUT_ITERS) continue;
+			if ((int32_t)(z_uptime_ticks() - dock_launching_deadline[di]) < 0)
+				continue;
 			printf("wm: dock: gave up waiting for '%s' (pid %ld) to create a window\n",
-				dock_apps[di].name, (long)dock_launching_pid[di]);
+				dock_apps[di]->name, (long)dock_launching_pid[di]);
 			dock_launching[di] = false;
 			if (dock_idx >= 0)
 				repair_region(windows[dock_idx].x, windows[dock_idx].y,
@@ -1533,7 +2604,45 @@ int main(void) {
 				// clicked, and launch that app. see dock_click() below.
 				dock_click(cx, cy);
 
-			} else if (hit >= 0 && hit_close_icon(hit, cx, cy)) {
+			} else if (hit >= 0 && blocked_by_modal(hit) >= 0) {
+
+				// This window's owner has a modal window open, and
+				// this isn't it (Z_WIN_FLAG_MODAL, zwm.h). Swallow
+				// the click entirely -- no focus change, no raise, no
+				// drag, no resize, no capture, nothing forwarded to
+				// the app -- and put the modal window in front
+				// instead, so a click aimed at the blocked window at
+				// least SHOWS you what's blocking it rather than
+				// appearing to do nothing at all.
+				int m = blocked_by_modal(hit);
+
+				bool focus_changed = (focused != m);
+				int old_focused = focused;
+				if (focus_changed) focused = m;
+
+				// same real-reorder test as the ordinary click path
+				// below -- see its comment for why bring_to_front()'s
+				// own return value can't be trusted once the dock is
+				// pushed back to the front.
+				uint8_t zbefore[WM_MAX_WINDOWS];
+				uint8_t zcount_before = zorder_count;
+				memcpy(zbefore, zorder, zorder_count);
+
+				bring_to_front(m);
+				if (dock_idx >= 0) bring_to_front(dock_idx);
+
+				bool reordered = (zcount_before != zorder_count) ||
+					memcmp(zbefore, zorder, zorder_count) != 0;
+
+				if (focus_changed && old_focused >= 0)
+					repair_region(windows[old_focused].x, windows[old_focused].y,
+						windows[old_focused].w, windows[old_focused].h, -1);
+
+				if (focus_changed || reordered)
+					repair_region(windows[m].x, windows[m].y,
+						windows[m].w, windows[m].h, -1);
+
+			} else if (hit >= 0 && hit_titlebar_icon(hit, cx, cy) == 0) {
 
 				// close icon click: checked BEFORE the general
 				// focus/drag handling below, so it never also starts
@@ -1544,17 +2653,49 @@ int main(void) {
 				// is still valid).
 				handle_close_click(hit);
 
+			} else if (hit >= 0 && hit_titlebar_icon(hit, cx, cy) > 0) {
+
+				// one of the other titlebar icons (new/save/open/
+				// font) -- notify the owner and consume the click,
+				// same as close does. Never starts a drag.
+				handle_titlebar_icon_click(hit, hit_titlebar_icon(hit, cx, cy));
+
 			} else if (hit >= 0) {
 
 				bool focus_changed = (focused != hit);
 				int old_focused = focused;
 				if (focus_changed) focused = hit;
 
-				bool reordered = bring_to_front(hit);
+				// Whether the z-order ACTUALLY ended up different,
+				// rather than whether bring_to_front() moved
+				// something on the way.
+				//
+				// This used to be `bool reordered = bring_to_front(hit);`
+				// -- which is wrong as soon as the dock gets pushed
+				// back to the front immediately afterwards, because
+				// for the window sitting directly below the dock the
+				// two calls cancel out. That window is the common
+				// case, not a corner one: it's whatever the user is
+				// working in. So every click in an
+				// already-frontmost, already-focused window claimed a
+				// reorder and triggered a full repair_region() --
+				// which redraws every overlapping window AND BLOCKS
+				// on an ack from each. Harmless when apps had one
+				// window each; with a dialog open it means two full
+				// repaints and two ack round trips per click, which
+				// is exactly as slow as it sounds.
+				uint8_t zbefore[WM_MAX_WINDOWS];
+				uint8_t zcount_before = zorder_count;
+				memcpy(zbefore, zorder, zorder_count);
+
+				bring_to_front(hit);
 
 				// keep the dock frontmost -- see its own comment
 				// where this same call appears in handle_message().
 				if (dock_idx >= 0) bring_to_front(dock_idx);
+
+				bool reordered = (zcount_before != zorder_count) ||
+					memcmp(zbefore, zorder, zorder_count) != 0;
 
 				if (focus_changed && old_focused >= 0)
 					repair_region(windows[old_focused].x, windows[old_focused].y,
@@ -1564,7 +2705,39 @@ int main(void) {
 					repair_region(windows[hit].x, windows[hit].y,
 						windows[hit].w, windows[hit].h, -1);
 
-				if (hit_titlebar(hit, cy)) {
+				// grip first: it sits inside the window's general
+				// body, so a plain content-click test would swallow
+				// it. hit_resize_grip() is false for any window that
+				// didn't ask for Z_WIN_FLAG_RESIZABLE, so this branch
+				// simply never fires for windows that predate the
+				// flag.
+				if (hit_resize_grip(hit, cx, cy)) {
+
+					resizing = hit;
+					// offset from the cursor to the corner, so the
+					// corner doesn't snap to the cursor on the first
+					// pixel of movement
+					resize_off_x = cx - (int)(windows[hit].x + windows[hit].w - 1);
+					resize_off_y = cy - (int)(windows[hit].y + windows[hit].h - 1);
+					resize_w = (int)windows[hit].w;
+					resize_h = (int)windows[hit].h;
+					resize_max_w = resize_w;
+					resize_max_h = resize_h;
+					// The size the window started at. Needed at
+					// release for the repair union, and no longer
+					// recoverable from w/h -- those now follow the
+					// candidate size live (see the resize-update
+					// block below).
+					resize_orig_w = resize_w;
+					resize_orig_h = resize_h;
+					// Blank the interior, exactly as starting a
+					// titlebar drag does -- see
+					// clear_window_interior(). Without it the app's
+					// content sits at its old size inside a frame
+					// that is changing shape around it.
+					clear_window_interior(hit);
+
+				} else if (hit_titlebar(hit, cy)) {
 					dragging = hit;
 					drag_off_x = cx - windows[hit].x;
 					drag_off_y = cy - windows[hit].y;
@@ -1572,6 +2745,18 @@ int main(void) {
 					drag_min_y = windows[hit].y;
 					drag_max_x = windows[hit].x + windows[hit].w;
 					drag_max_y = windows[hit].y + windows[hit].h;
+					// Blank the interior now, before any movement --
+					// see clear_window_interior(). Deliberately here,
+					// on the press that STARTS a drag, rather than on
+					// any titlebar click: a click that merely focuses
+					// or raises a window has no reason to throw its
+					// content away and make the owner redraw it.
+					clear_window_interior(hit);
+				} else if (point_in_content(hit, cx, cy)) {
+					// press inside the app's own content area: hand
+					// the pointer to that window until the button
+					// comes up again. See dispatch_mouse() above.
+					mouse_capture = hit;
 				}
 
 			}
@@ -1620,6 +2805,70 @@ int main(void) {
 
 		}
 
+		if (btn_down && resizing >= 0) {
+
+			int idx = resizing;
+
+			int nw = cx - resize_off_x - (int)windows[idx].x + 1;
+			int nh = cy - resize_off_y - (int)windows[idx].y + 1;
+
+			// the window's own minimum (see create_window()) --
+			// this is what Z_WIN_FLAG_MIN_IS_CREATE actually buys an
+			// app: draw's tool column and palette can't be shrunk
+			// out of existence.
+			if (nw < (int)windows[idx].min_w) nw = (int)windows[idx].min_w;
+			if (nh < (int)windows[idx].min_h) nh = (int)windows[idx].min_h;
+
+			// and the screen's own bounds -- the top-left corner is
+			// pinned during a resize, so only the far edges can leave
+			// the screen.
+			if ((int)windows[idx].x + nw > WM_SCREEN_W)
+				nw = WM_SCREEN_W - (int)windows[idx].x;
+			if ((int)windows[idx].y + nh > WM_SCREEN_H)
+				nh = WM_SCREEN_H - (int)windows[idx].y;
+
+			if (nw != resize_w || nh != resize_h) {
+
+				// Erase the frame at the current size, adopt the new
+				// one, draw the frame again -- the same three steps
+				// the move drag uses, and for the same reason: a full
+				// clear+redraw+content-notify per step queues redraws
+				// faster than apps can drain them.
+				//
+				// This draws the WHOLE frame at the candidate size,
+				// where it used to draw an L over the prospective
+				// bottom and right edges only. The L was meant to say
+				// "these are the two edges that move", but with the
+				// real frame still sitting at the old size the result
+				// on screen was two disconnected shapes and no
+				// obvious relationship between them. A single closed
+				// rectangle that grows and shrinks under the cursor
+				// reads immediately, and matches what dragging a
+				// window already looks like.
+				//
+				// w/h ARE updated here, unlike before. That is what
+				// makes draw_window_box() draw the candidate rather
+				// than a separate preview, and it is safe because
+				// nothing else reads them mid-gesture -- pointer
+				// dispatch and hit testing are both suspended while
+				// `resizing` is set. The app is still told only once,
+				// on release.
+				draw_window_box(&windows[idx], idx == focused, 0);
+
+				resize_w = nw;
+				resize_h = nh;
+				windows[idx].w = (uint32_t)nw;
+				windows[idx].h = (uint32_t)nh;
+
+				draw_window_box(&windows[idx], idx == focused, 1);
+
+				if (nw > resize_max_w) resize_max_w = nw;
+				if (nh > resize_max_h) resize_max_h = nh;
+
+			}
+
+		}
+
 		if (!btn_down && btn_was_down && dragging >= 0) {
 			printf("wm: drag release win %d final x=%ld y=%ld\n",
 				dragging, (long)windows[dragging].x, (long)windows[dragging].y);
@@ -1628,7 +2877,62 @@ int main(void) {
 			dragging = -1;
 		}
 
+		if (!btn_down && btn_was_down && resizing >= 0) {
+
+			int idx = resizing;
+
+			printf("wm: resize release win %d %ldx%ld -> %dx%d\n",
+				idx, (long)windows[idx].w, (long)windows[idx].h,
+				resize_w, resize_h);
+
+			// No preview to erase: the frame on screen IS the
+			// window's frame, already at the final size, and w/h
+			// already agree with it.
+			int ow = resize_orig_w, oh = resize_orig_h;
+
+			// clear this BEFORE repairing: repair_region() waits on
+			// the owner's redraw ack and services other messages
+			// while it does, so wm must not still look mid-gesture by
+			// the time any of that runs.
+			resizing = -1;
+
+			// tell the app its new size first -- see notify_resized()
+			// and Z_WM_WINDOW_RESIZED (zwm.h) on why this must
+			// precede the redraw request repair_region() sends.
+			notify_resized(idx);
+
+			// repair the union of everywhere the window has been:
+			// its original footprint, its final one, and the largest
+			// extent it reached in between. Unlike the drag path
+			// there's no point excluding the window's own final rect
+			// -- its content area genuinely changed size, so all of
+			// it needs redrawing anyway.
+			int uw = ow > resize_max_w ? ow : resize_max_w;
+			int uh = oh > resize_max_h ? oh : resize_max_h;
+			if ((int)windows[idx].w > uw) uw = (int)windows[idx].w;
+			if ((int)windows[idx].h > uh) uh = (int)windows[idx].h;
+
+			repair_region((int)windows[idx].x, (int)windows[idx].y, uw, uh, -1);
+
+		}
+
+		// forward this pointer sample to whichever app owns it (if
+		// any) -- after the gesture handling above, so a press that
+		// starts a drag or resize is consumed by wm rather than also
+		// reaching the app, and before the capture is released below,
+		// so the app still receives the button-up that ends its own
+		// gesture.
+		dispatch_mouse(cx, cy, btn);
+
+		if (!btn_down && btn_was_down) mouse_capture = -1;
+
 		last_btn = btn;
+
+		// clears WM_BUSY_STARTUP once net/repl are registered; repaint
+		// the dock on the transition so it stops looking disabled
+		if (check_core_services() && dock_idx >= 0)
+			repair_region(windows[dock_idx].x, windows[dock_idx].y,
+				windows[dock_idx].w, windows[dock_idx].h, -1);
 
 		for (volatile int i = 0; i < 2000; i++); // light throttle
 

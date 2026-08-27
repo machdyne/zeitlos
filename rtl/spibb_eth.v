@@ -2,6 +2,8 @@
  * Zeitlos SOC
  * Copyright (c) 2025 Lone Dynamics Corporation. All rights reserved.
  *
+ * Replaced by spim.v.
+ *
  * SPI bit-bang interface for the ENC28J60 Ethernet controller (PMOD).
  * Same pattern as spibb.v (SD card): all actual SPI protocol timing
  * happens in software, this just exposes the raw pins as one

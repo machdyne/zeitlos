@@ -4,9 +4,28 @@
  *
  */
 
-#include <stdio.h>
+// No <stdio.h>: this is a freestanding -nostdlib build with no C
+// library linked at all, and it defines its own putchar/getchar/puts
+// below rather than calling any. The include was vestigial, and it
+// actively breaks toolchains whose libc headers are picolibc's --
+// those declare stdin/stdout in ways that collide with this file's
+// own. <stdint.h>/<stdbool.h> are freestanding headers supplied by
+// GCC itself, so they need no library.
 #include <stdint.h>
+
+// normally from <stdio.h>; see the note above on why that isn't
+// included here.
+#ifndef EOF
+#define EOF (-1)
+#endif
 #include <stdbool.h>
+
+// instruction cache control (rtl/cache.v, 0x7000_01xx -- see
+// sw/common/zsoc.h for the full register map and the flush rationale).
+// Defined locally here rather than included: this BIOS is freestanding
+// and keeps its own private copies of every register it touches, same
+// as the uart/usb ones below.
+#define reg_icache_ctrl (*(volatile uint32_t*)0x70000100)
 
 #define reg_uart0_data (*(volatile uint8_t*)0xf0000000)
 #define reg_uart0_dlbl (*(volatile uint8_t*)0xf0000000)
@@ -59,6 +78,18 @@
 #define ROM_OS_ADDR		(MEM_ROM + (1024 * 1024 * 1))
 #define ROM_OS_SIZE		1024 * 256
 
+// Boot splash -- a full 640x480 1bpp framebuffer image, programmed at a
+// fixed flash offset just below the kernel's by the top-level Makefile's
+// `flash_logo` target. It is pre-centred and pre-padded at build time
+// (sw/data/images/pad_logo.py), so showing it is one flat copy of the
+// whole framebuffer rather than a row-by-row copy -- which matters here,
+// where the BIOS budget is measured in bytes against BRAM_WORDS.
+//
+// KEEP IN SYNC with Z_BOOT_LOGO_FLASH_OFFSET (sw/os/logo.h) and
+// LOGO_FLASH_OFFSET_HEX/_DEC (top-level Makefile).
+#define ROM_LOGO_ADDR	(MEM_ROM + 0x000F0000)
+#define ROM_LOGO_SIZE	((640 * 480) / 8)
+
 //#include "scancodes.h"
 //#include "hidcodes.h"
 
@@ -87,13 +118,17 @@ uint32_t get_mem_main_size() {
 
 uint32_t xfer_recv(uint32_t addr);
 uint32_t crc32b(char *data, uint32_t len);
-void putchar_vga(const char c);
 char scantoascii(uint8_t scancode);
 char hidtoascii(uint8_t code);
 
 void print_hex(uint32_t v, int digits);
 void memtest(uint32_t addr_ptr, uint32_t mem_total);
-void memcpy(uint32_t dest, uint32_t src, uint32_t n);
+// NOT called memcpy: this takes integer addresses rather than
+// pointers, returns void rather than dest, and copies whole words
+// only, so it is not the standard function and must not share its
+// name. It only ever compiled because -ffreestanding implies
+// -fno-builtin and suppressed the conflict with the builtin.
+void bios_wordcpy(uint32_t dest, uint32_t src, uint32_t n);
 void load_zeitlos(void);
 
 int vid_cols;
@@ -121,25 +156,15 @@ void print(const char *p)
 		putchar(*(p++));
 }
 
-void putchar_vga(const char c) {
-	int xy = curs_y * vid_cols + curs_x;
-	if (c == '\n') {
-		curs_x = 0;
-		curs_y++;
-	} else {
-		(*(volatile uint8_t *)(0x10000000 + xy)) = c;
-		curs_x++;
-		for (int i = curs_x; i < vid_cols - curs_x + 1; i++)
-			(*(volatile uint8_t *)(0x10000000 + xy + i)) = ' ';
-	}
-	if (curs_x >= vid_cols) { curs_x = 0; curs_y++; };
-	if (curs_y > vid_rows - 1) {
-		curs_y = vid_rows - 1;
-		memcpy(0x10000000, 0x10000000 + vid_cols,
-			(vid_cols * vid_rows) - vid_cols);
-	};
-}
-
+// NOTE: putchar_vga() used to sit here -- a VGA text-output routine
+// that was declared and defined but never called from anywhere, and
+// which wrote to 0x10000000 (MEM_ROM, the flash window) rather than
+// MEM_VRAM, so it could not have worked as written. Removed to make
+// room for the splash copy in main(): this BIOS is capped at
+// BRAM_WORDS (2048 words = 8KB, sw/bios/Makefile) and was within a
+// handful of bytes of that ceiling, while putchar_vga() was ~290 bytes
+// of it. Recoverable from git if it was a work in progress -- but its
+// destination address needs fixing before it can do anything.
 int getchar()
 {
 	int uart_dr = ((reg_uart0_lsr & 0x01) == 1);
@@ -341,7 +366,7 @@ void cmd_memhigh_ff()
 	print("done.\n");
 }
 
-void memcpy(uint32_t dest, uint32_t src, uint32_t n) {
+void bios_wordcpy(uint32_t dest, uint32_t src, uint32_t n) {
 	volatile uint32_t *from = (uint32_t *)src;
 	volatile uint32_t *to = (uint32_t *)dest;
 	uint32_t words = n / sizeof(uint32_t);
@@ -360,7 +385,22 @@ void load_zeitlos() {
 	print_hex(ROM_OS_SIZE, 8);
 	print(" ");
 
-	memcpy(MEM_MAIN, ROM_OS_ADDR, ROM_OS_SIZE);
+	bios_wordcpy(MEM_MAIN, ROM_OS_ADDR, ROM_OS_SIZE);
+
+	// The kernel image was just written through the data path. The
+	// instruction cache (rtl/cache.v) caches fetches only, so it never
+	// observed those stores. On a COLD boot it is empty anyway and this
+	// changes nothing -- the case that matters is a warm restart back
+	// into the BIOS without the cache being reset, where lines from the
+	// previous kernel are still resident for these exact physical
+	// addresses and would be served to the new one.
+	//
+	// Safe on a bitstream built without `ICACHE, but only because
+	// rtl/sysctl.v decodes this window unconditionally (csrs_wb keeps
+	// the whole 0x7 nibble when there's no cache). An undecoded write
+	// here would never be acked and would hang the BIOS outright.
+	reg_icache_ctrl = 0x3;		// enable | flush
+
 	print("done.\n");
 }
 
@@ -458,6 +498,14 @@ void main() {
 	uart_init();
 
 	print("ZB\n");
+
+	// Splash before load_zeitlos() on purpose: the 256KB kernel copy is
+	// the longest pause in the boot, so this puts something on screen
+	// first. Flash is memory-mapped (load_zeitlos() copies the
+	// kernel straight out of it), so this uses no RAM at all -- and
+	// because the image is a whole pre-padded framebuffer, it also
+	// clears whatever was in VRAM at reset.
+	bios_wordcpy(MEM_VRAM, ROM_LOGO_ADDR, ROM_LOGO_SIZE);
 
 #ifndef FPGA_GATEMATE
 	load_zeitlos();

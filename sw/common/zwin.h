@@ -58,6 +58,48 @@ z_rv z_win_create_ex(z_win_t *win, const char *title, uint32_t w, uint32_t h,
 z_rv z_win_create_flags(z_win_t *win, const char *title, uint32_t w, uint32_t h,
 	int32_t x, int32_t y, uint32_t flags);
 
+// callback shape for z_win_create_cb() below
+typedef void (*z_win_msg_cb)(z_msg_t *msg, void *user);
+
+// like z_win_create_flags(), but hands every message that ISN'T the
+// creation reply to `cb` instead of throwing it away.
+//
+// That difference matters more than it sounds like. All three
+// functions above block on z_msg_wait() (zeitlos.h), and z_msg_wait()
+// DISCARDS anything that doesn't match the subject it's waiting for.
+// For an app creating its one window at startup that's harmless --
+// nothing else is in flight yet. For an app creating a SECOND window
+// while already running, it is not: a Z_WM_REDRAW sitting in the
+// queue at that moment gets silently dropped, and wm is left waiting
+// for an ack that will never come until REDRAW_ACK_TIMEOUT fires
+// (wm.c). The visible symptom is the whole screen freezing for a
+// moment and "wm: timed out waiting for pid N to ack a redraw" on the
+// console, which looks nothing like "somebody opened a dialog".
+//
+// So: any app that creates a window after startup should use this
+// one, with a callback that at minimum services Z_WM_REDRAW and acks
+// it. sw/common/zdialog.c does exactly that, and is the reason this
+// exists.
+//
+// `cb` may be NULL, in which case this behaves exactly like
+// z_win_create_flags() (and has the same hazard).
+z_rv z_win_create_cb(z_win_t *win, const char *title, uint32_t w, uint32_t h,
+	int32_t x, int32_t y, uint32_t flags, z_win_msg_cb cb, void *user);
+
+// the window id carried in a Z_WM_REDRAW payload.
+//
+// Z_WM_REDRAW is packed with Z_WM_PACK_XY(id, x, y) (zwm.h), so the
+// id has always been in there -- z_win_apply_redraw() above just
+// doesn't look at it, because an app with a single window has no use
+// for it. An app with several (one main window plus a dialog, say)
+// very much does: it's the only way to tell which window is being
+// asked to repaint, since the payload is otherwise just coordinates.
+//
+// Exposed as a function rather than an inline macro so zwin.h doesn't
+// have to include zwm.h, which it currently doesn't and which several
+// of its users don't want pulled in transitively.
+int z_win_redraw_id(uint32_t packed);
+
 // parses a Z_MAP{id,x,y,w,h} object (as sent with Z_WM_WINDOW_CREATED
 // or Z_WM_WINDOW_MOVED) into *win. returns false if obj doesn't have
 // the expected shape.
@@ -67,6 +109,40 @@ bool z_win_parse_rect(z_win_t *win, z_obj_t *obj);
 // see zwm.h) to *win, updating x/y only. w/h are left untouched (they
 // don't change -- there's no resize support yet).
 void z_win_apply_redraw(z_win_t *win, uint32_t packed);
+
+// applies a Z_WM_WINDOW_RESIZED payload to *win. That message carries
+// the same Z_MAP{id,x,y,w,h} shape as Z_WM_WINDOW_CREATED, so this is
+// just z_win_parse_rect() under a name that says what it's for at the
+// call site -- there is deliberately no second parsing path.
+//
+// Note this updates w/h as well as x/y, which is exactly what
+// z_win_apply_redraw() above does NOT do (Z_WM_REDRAW has no room for
+// them). An app that handles resizing must handle BOTH messages: this
+// one to learn its new size, and the redraw that follows to know when
+// to repaint at it.
+bool z_win_apply_resized(z_win_t *win, z_obj_t *obj);
+
+// converts a Z_WM_MOUSE payload's absolute screen coordinates into
+// coordinates relative to the top-left of this window's CONTENT area
+// -- i.e. the same origin z_win_draw_text()/z_win_fill_rect() use, so
+// a hit test and the drawing that responds to it are expressed in one
+// coordinate system rather than two.
+//
+// Writes *cx/*cy unconditionally (they can legitimately go negative,
+// or past the content area's width/height, while a capture is active
+// and the cursor has left the window -- see Z_WM_MOUSE in zwm.h).
+// RETURNS whether the point is actually within the content area, so
+// the common "ignore this unless it's over my content" case stays a
+// single call.
+bool z_win_mouse_content_xy(const z_win_t *win, uint32_t packed, int *cx, int *cy);
+
+// width/height of the window's content area, in pixels -- what an app
+// laying out its own furniture actually needs, as opposed to win->w/h
+// which include the frame and titlebar. Derived from
+// z_win_content_rect() so it can't drift from what the drawing calls
+// clip to.
+int z_win_content_w(const z_win_t *win);
+int z_win_content_h(const z_win_t *win);
 
 // call this once you're done redrawing in response to Z_WM_REDRAW.
 // the wm blocks on this (per window, back-to-front) before letting
@@ -124,6 +200,78 @@ void z_win_content_rect(const z_win_t *win, z_clip_t *out);
 // that is visible here.
 void z_win_hw_line(const z_win_t *win, int x0, int y0, int x1, int y1, int color);
 void z_win_hw_box(const z_win_t *win, int x0, int y0, int x1, int y1, int color);
+
+// changes this window's titlebar text (fire-and-forget, no reply --
+// see Z_WM_SET_TITLE in zwm.h). Safe to call on a window that failed
+// to be created (id < 0), same as z_win_destroy().
+//
+// Only the owner may retitle a window, so this always refers to
+// `win` -- there is deliberately no "retitle some other window id"
+// form.
+void z_win_set_title(const z_win_t *win, const char *title);
+
+// -- launch arguments --
+//
+// See Z_WM_SET_ARG in zwm.h for the protocol and why the pending
+// argument lives in wm rather than in the process table.
+//
+// These live in zwin.c, next to the wm pid cache every other message
+// helper here already uses, even though neither has anything to do
+// with windows. Splitting them into their own object would add a file
+// to every app Makefile for two functions.
+
+// Sets the argument the NEXT process launched should pick up. Call
+// this immediately before z_proc_run() (zeitlos.h).
+//
+// Fire-and-forget. It does not name a target process, and it cannot:
+// z_proc_run() hasn't been called yet, so there is no pid. That is
+// what makes claiming destructive and time-limited on wm's side.
+void z_launch_arg_set(const char *arg);
+
+// Claims the pending launch argument, if there is one, and writes it
+// into `out`. Returns true if an argument was claimed, false if there
+// was none (or wm isn't running).
+//
+// Call once, EARLY -- before creating a window. This blocks on wm's
+// reply via z_msg_wait(), which discards anything else that arrives
+// meanwhile; at startup nothing else is in flight yet, which is
+// exactly why this is safe there and would not be later.
+bool z_launch_arg_take(char *out, int outlen);
+
+// -- clipboard --
+//
+// See Z_WM_CLIP_SET in zwm.h for the protocol and why the clipboard
+// lives in wm. Same reasoning as the launch-argument helpers above
+// for why these live in zwin.c despite having nothing to do with
+// windows.
+
+// Stores `len` bytes of `text` as the system clipboard, replacing
+// whatever was there. `len` of -1 means "up to the NUL".
+//
+// The text is copied into a staging buffer here before sending,
+// because the payload is borrowed by wm until it reads the message
+// (docs/messaging.md) and the caller's own buffer -- typically a
+// slice of a document that is about to be edited -- cannot be
+// promised to sit still that long.
+//
+// That staging buffer is Z_WM_CLIP_MAX bytes of .bss, and it is why
+// this is a separate function rather than inlined: an app that never
+// copies never references it, and --gc-sections drops both. Only apps
+// that actually use the clipboard pay for it.
+//
+// Truncated at Z_WM_CLIP_MAX-1 bytes. Fire-and-forget; there is no
+// confirmation and nothing to wait for.
+void z_clip_set(const char *text, int len);
+
+// Fetches the system clipboard into `out`, NUL-terminated. Returns
+// the number of bytes written, or 0 if the clipboard is empty or wm
+// isn't running.
+//
+// BLOCKS on wm's reply via z_msg_wait(), which discards anything else
+// that arrives meanwhile. Call it from a key or click handler, having
+// just drained the queue -- the same constraint z_launch_arg_take()
+// documents, for the same reason.
+int z_clip_get(char *out, int outlen);
 
 // tells the wm to destroy this window (fire-and-forget, no reply --
 // see zwin.c's own comment). Not previously exposed as a client

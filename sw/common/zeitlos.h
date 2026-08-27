@@ -5,6 +5,22 @@
 #include <stdbool.h>
 #include "zobj.h"
 #include "zmsg.h"
+/*
+ * OS version.
+ *
+ * One string, here, because more than one thing wants to report it --
+ * the info app displays it, and a boot banner or an `about` command
+ * would want the same value rather than its own copy.
+ *
+ * Hand-maintained. There is deliberately no build date or git hash in
+ * it: both would change the binary on every rebuild, which makes
+ * "is the flashed image the one I just built?" harder to answer by
+ * comparison, not easier.
+ */
+#define Z_OS_VERSION  "0.0.2"
+
+#include "zproc.h"	// z_proc_info_t / z_mem_stats_args_t, used by the
+						// z_proc_list()/z_mem_stats() declarations below
 
 typedef uint32_t *(*z_kernel_ptr_t)(uint32_t, uint32_t *, uint32_t);
 
@@ -85,6 +101,30 @@ typedef uint32_t *(*z_kernel_ptr_t)(uint32_t, uint32_t *, uint32_t);
 #define reg_usb_mouse (*(volatile uint32_t*)0xc0000008)
 #define reg_usb_cursor (*(volatile uint32_t*)0xc000000c)
 
+// -- hardware SPI master for the sdcard (rtl/spisd.v) --
+//
+// Replaces the old bit-bang GPIO register. SCLK is generated in
+// gateware, so the transfer rate no longer depends on compiler
+// codegen, ISA or cache behaviour -- see rtl/spisd.v's header for why
+// that mattered.
+#define reg_spisd_data   (*(volatile uint32_t*)0xb0000000)
+#define reg_spisd_status (*(volatile uint32_t*)0xb0000004)
+#define reg_spisd_ctrl   (*(volatile uint32_t*)0xb0000008)
+#define reg_spisd_magic  (*(volatile uint32_t*)0xb000000c)
+
+#define Z_SPISD_MAGIC     0x53504930u   // "SPI0"
+#define Z_SPISD_BUSY      (1u << 0)     // STATUS: transfer in progress
+#define Z_SPISD_CTRL_CS   (1u << 0)     // CTRL: 1 = assert (pin low)
+#define Z_SPISD_CTRL_DIV(d) (((d) & 0xffu) << 8)
+
+// SCLK = 48MHz / (2 * (DIV + 1)).
+//   59 -> 400kHz, mandatory until the card leaves idle state
+//    1 -> 12MHz
+//    0 -> 24MHz
+#define Z_SPISD_DIV_INIT  59
+#define Z_SPISD_DIV_FAST  1
+
+// kept for compatibility with anything still poking the old register
 #define reg_sdcard (*(volatile uint32_t*)0xb0000000)
 
 #define gpu_x0 (*(volatile uint32_t*)0xa0000000)
@@ -115,10 +155,36 @@ typedef uint32_t *(*z_kernel_ptr_t)(uint32_t, uint32_t *, uint32_t);
 #define gpu_blit_fg_color    (*(volatile uint32_t*)0xd0000028)
 #define gpu_blit_bg_color    (*(volatile uint32_t*)0xd000002c)
 
+// -- memory copy source (rtl/gpu/gpu_blit.v, CTRL_SRCMEM) --
+//
+// gpu_blit_src_addr is a PHYSICAL byte address, word aligned. The
+// blitter is its own bus master and does not go through the MTU
+// (rtl/mtu.v), so an app's virtual 0x8000_xxxx pointer is meaningless
+// to it -- see z_mtu_phys() below and z_fb_hw_blit_mem() in zgfx.h.
+//
+// gpu_blit_src_shift packs two things: bits [4:0] are the bit offset,
+// within the word at src_addr, of the pixel that lands on bit 0 of the
+// first destination word; bit [8] says to start the shifter's window
+// with zeros instead of reading that word at all. Software never sets
+// these by hand -- z_fb_hw_blit_mem() derives both.
+#define gpu_blit_src_addr    (*(volatile uint32_t*)0xd0000030)
+#define gpu_blit_src_stride  (*(volatile uint32_t*)0xd0000034)
+#define gpu_blit_src_shift   (*(volatile uint32_t*)0xd0000038)
+
 #define GPU_BLIT_CTRL_START  (1u << 0)
 #define GPU_BLIT_CTRL_FILL   (1u << 1)
 #define GPU_BLIT_CTRL_CLIP   (1u << 2)
 #define GPU_BLIT_CTRL_GLYPH  (1u << 3)
+#define GPU_BLIT_CTRL_SRCMEM (1u << 4)
+
+#define GPU_BLIT_SRC_PRIME_ZERO (1u << 8)
+
+// MTU translation base (rtl/mtu.v). Readable from an app: only
+// 0x8xxx_xxxx is translated, so a load from here reaches the MTU
+// itself rather than being remapped. Reads as 0 in a context with no
+// translation active (the kernel's own), in which case virtual and
+// physical addresses are already the same thing.
+#define reg_mtu_base         (*(volatile uint32_t*)0x90000000)
 
 // glyph memory (rtl/mem/glyph.v) -- byte-addressable, 4096 bytes.
 // software writes font data here (see z_gfx_hw_font_load() in
@@ -133,6 +199,24 @@ typedef uint32_t *(*z_kernel_ptr_t)(uint32_t, uint32_t *, uint32_t);
 // (write), bit4 = the chip's INT line (read, active low -- not used
 // as a real interrupt yet, just readable). See sw/apps/net/enc28j60.c
 // for the driver.
+// -- hardware SPI master for the ENC28J60 (rtl/spim.v) --
+//
+// Same module and same register layout as the sdcard block above --
+// see rtl/spim.v. The divider defaults fast here because the ENC28J60,
+// unlike an sdcard, needs no slow initialisation phase.
+#define reg_spieth_data   (*(volatile uint32_t*)0x50000000)
+#define reg_spieth_status (*(volatile uint32_t*)0x50000004)
+#define reg_spieth_ctrl   (*(volatile uint32_t*)0x50000008)
+#define reg_spieth_magic  (*(volatile uint32_t*)0x5000000c)
+
+// STATUS bit 2: the chip's interrupt pin, active low. Readable so the
+// driver can check for a pending packet with one register read instead
+// of a whole SPI transaction.
+#define Z_SPI_INT         (1u << 2)
+
+#define Z_SPIETH_DIV      1     // 12MHz; ENC28J60 SPI maximum is 20MHz
+
+// kept for compatibility with anything still poking the old register
 #define reg_eth (*(volatile uint32_t*)0x50000000)
 
 // RMII Ethernet MAC (rtl/ethmac_rmii.v), mozart_ml1 only. Alternative
@@ -234,12 +318,39 @@ z_rv z_msg_read(z_msg_t *msg);
 
 // block until a message matching subject/tag arrives, discarding
 // anything else that shows up in the meantime
+// Give up the CPU until a message arrives or `timeout_ticks` elapse
+// (0 = indefinitely). Returns immediately if a message is already
+// queued. This is what makes an idle app cost the scheduler nothing --
+// see Z_PROC_FLAG_BLOCKED in sw/os/kernel.h.
+uint32_t z_exec_exists(const char *name);
+
+void z_proc_wait(uint32_t timeout_ticks);
+
 z_rv z_msg_wait(z_msg_t *msg, uint32_t subject, uint32_t tag);
 
 // ticks since boot, ~732Hz (the KTIMER IRQ rate -- see
 // rtl/sysctl.v's rtc_ctr). for elapsed-time measurement; not
 // wall-clock/calendar time.
 uint32_t z_uptime_ticks(void);
+
+// -- virtual phosphor mode --
+//
+// The display's colour scheme: Z_VIDEO_MODE_WHITE / _AMBER / _GREEN /
+// _PAPER (sw/common/zsoc.h, which is where the constants and the full
+// writeup live). Screen-wide, not per-window -- the whole framebuffer
+// is one 1bpp surface and this picks how a set bit is coloured at
+// scanout.
+//
+// Named z_video_mode_get()/_set(), NOT z_video_get_mode()/
+// z_video_set_mode(): those names are already taken by zsoc.h's inline
+// direct-MMIO helpers, which any app may include. Deliberately
+// different rather than shadowing, so it is always clear at the call
+// site which path is being used.
+//
+// z_video_mode_set() returns false if the mode is out of range or the
+// gateware predates the register, and changes nothing in either case.
+uint32_t z_video_mode_get(void);
+bool z_video_mode_set(uint32_t mode);
 
 // busy-waits for at least `ms` milliseconds, built on z_uptime_ticks()
 // above -- see delay_ms()'s own comment (zeitlos.c) for why this
@@ -292,7 +403,54 @@ uint32_t z_proc_run(const char *name);
 // kernel. Added for sw/apps/wm's Z_WIN_FLAG_CLOSE_KILLS_OWNER
 // (sw/common/zwm.h) -- wm calling this on a window's owner_pid when
 // its titlebar close icon is clicked with that flag set.
-void z_proc_kill(uint32_t pid);
+//
+// Returns Z_OK/Z_FAIL (it returned void until the Scheme API's (kill
+// ...) needed a real answer -- see zeitlos.c). Existing callers that
+// ignore the value are unaffected and need no change.
+z_rv z_proc_kill(uint32_t pid);
+
+// snapshot of the live process table, and of the kernel memory pool --
+// the data behind sh.c's `ps` and `free`, returned rather than printed.
+// See sw/common/zproc.h for the structs and the full reasoning, and
+// zeitlos.c for these two wrappers' own contracts.
+//
+// Declared here rather than in zproc.h itself for the same reason
+// z_proc_run()/z_proc_kill() above are: this file is the established
+// home for app-facing syscall wrappers, while zproc.h stays a pure
+// shared-wire-format header includable from both sides (exactly the
+// split sw/common/zfs.h and sw/os/fsapi.h already use).
+uint32_t z_proc_list(z_proc_info_t *out, uint32_t max, uint32_t *truncated);
+bool z_mem_stats(z_mem_stats_args_t *out);
+
+// Optional redirect for stdout (fd 1 -- printf(), putchar(), anything
+// through the FILE* stdout). NULL by default: every byte goes to the
+// UART via _write(), exactly as it always has, and an app that never
+// touches this sees no change whatsoever.
+//
+// Exists because a process whose real user is at the far end of a
+// zport.h connection (sw/apps/repl, whose Scheme runs for someone
+// sitting in a `term` window) has its output land in the wrong place
+// entirely. `ms`'s printing procedures -- `display`, `write`, `print`,
+// `newline`, `gc`, and `dump` -- all write straight to stdout, so
+// running (dump) from `term` printed ~200 symbol names onto the serial
+// console and showed the user nothing at all.
+//
+// A hook here rather than patching those call sites: ms.c has 50+
+// scattered printf()/fputs()/putchar() calls with no output
+// abstraction of its own, so redirecting them individually would mean
+// a large diff against a submodule this project deliberately keeps
+// close to upstream (see docs/scheme.md). Catching it at the one place
+// every one of them already funnels through costs a single branch in
+// _write() and covers procedures nobody has written yet.
+//
+// `data` is NOT NUL-terminated and is only valid for the duration of
+// the call. The hook receives raw bytes with NO LF->CRLF expansion --
+// _write()'s own expansion is skipped when a hook is installed, since
+// only the hook knows what its transport wants. A hook must not itself
+// write to stdout: see repl.c's own implementation for the
+// buffer-then-flush structure that avoids re-entering this path.
+typedef void (*z_stdout_hook_t)(const char *data, uint32_t len);
+extern z_stdout_hook_t z_stdout_hook;
 
 // NOTE: app-facing filesystem access (fs_size()/fs_mallocfile()/
 // fs_write_file(), backed by the new Z_SYS_FS_SIZE/_READ/_WRITE
@@ -317,6 +475,16 @@ void z_proc_kill(uint32_t pid);
 #define VT100_CLEAR_HOME      "\e[;H"
 #define VT100_ERASE_SCREEN    "\e[J"
 #define VT100_ERASE_LINE      "\e[K"
+
+// SGR. `term`'s own VT100 emulator implements exactly one attribute --
+// reverse video (sw/common/zvt100.c's 'm' case, which handles 0/7/27
+// and ignores everything else) -- because that's the one a monochrome
+// framebuffer can actually represent; see zvt100.h's own header
+// comment. These two names exist so callers reach for the supported
+// attribute rather than hand-rolling an escape that will be silently
+// dropped. Added for sw/apps/repl's `page` status line.
+#define VT100_REVERSE         "\e[7m"
+#define VT100_ATTR_RESET      "\e[0m"
 
 #define CH_ESC	0x1b
 #define CH_LF	0x0a

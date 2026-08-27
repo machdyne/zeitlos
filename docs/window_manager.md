@@ -52,8 +52,11 @@ the two real apps that do exist so far (`term`, `gpu3d`).
 
 Each window is drawn as a 5-line box: a 4-line rectangle border plus
 one horizontal line separating the titlebar area from the body
-(`WM_TITLEBAR_H` pixels tall). There's no resize handle and no
-content area rendering yet -- just the outline.
+(`WM_TITLEBAR_H` pixels tall). A window created with
+`Z_WIN_FLAG_RESIZABLE` also gets a resize grip: a few diagonal ticks in
+the lower-right corner, drawn by `draw_window_box()` so they move with
+the wireframe during a drag rather than vanishing until release the way
+titlebar text does.
 
 The focused window gets a second, 1px-inset outline drawn on top of
 the first (4 extra lines) as a simple "bolder border" focus
@@ -128,7 +131,10 @@ mouse event queue.
   fully on-screen. `wm` sends `Z_WM_WINDOW_MOVED` to the owning app
   once the button is released (not on every intermediate position),
   so apps aren't flooded with move messages mid-drag.
-- There's no resize yet, matching the original design goal.
+- **Click+drag on the resize grip** resizes the window -- see
+  "Resizing" below.
+- **Pointer events reach apps** via `Z_WM_MOUSE`, with capture -- see
+  "Pointer delivery" below.
 
 Keyboard input is interrupt-driven, not polled -- see
 `docs/user_input.md` for the full stack (kernel capture, keysym
@@ -141,6 +147,467 @@ no way to focus anything at all. See "Keyboard-only operation" below
 for everything else that adds -- Alt+Tab, Alt+Arrow, and the dock's
 own keyboard navigation, all of which now cover the same ground the
 mouse does.
+
+## Moving and resizing
+
+Both gestures work the same way now, and both blank the window's
+interior when they start (`clear_window_interior()` in `wm.c`).
+
+Without that blanking the app's content stays painted where it was
+while the frame moves or changes shape around it, so the window
+visibly comes apart mid-gesture. Content is restored at the end: the
+release-time `repair_region()` asks the owner to repaint and waits for
+it. That also covers a titlebar click that never becomes a drag, since
+the repair runs on release either way.
+
+**Moving** redraws the frame at each step and repairs the whole swept
+bounding box on release — *including* the window's own final
+footprint. It used to repair four strips around that footprint and
+skip the footprint itself, on the reasoning that the border there was
+already correct. Two things made that wrong, and both showed as
+corruption after a *small* move: titlebar content is not part of
+`draw_window_box()`, so the old title text and icons survived inside
+the new footprint where the strips never reached; and only the dragged
+window's owner was asked to repaint, leaving any other window
+overlapping the footprint stale. A large move happened to look fine
+because the old text landed in a swept strip.
+
+**Resizing** now moves the real frame rather than drawing a separate
+preview: erase the frame, adopt the candidate size, draw it again —
+the same three steps the move drag uses. `w`/`h` follow the candidate
+live, which is safe because pointer dispatch and hit testing are both
+suspended while `resizing` is set; the app is still told once, on
+release, via `Z_WM_WINDOW_RESIZED`.
+
+This replaced an L-shaped wireframe over the prospective bottom and
+right edges. The L was meant to say "these are the two edges that
+move", but with the real frame still sitting at the old size the
+result was two disconnected shapes with no visible relationship. A
+single closed rectangle that grows and shrinks under the cursor reads
+immediately. `resize_orig_w`/`_h` record the starting size, since
+`w`/`h` no longer hold it by the time the release-time repair needs it.
+
+## Titlebar icons
+
+A window can ask for extra titlebar icons alongside the close button by
+setting flags on `Z_WM_CREATE_WINDOW`: `Z_WIN_FLAG_NEW_ICON`,
+`_SAVE_ICON`, `_OPEN_ICON` and `_FONT_ICON` (`zwm.h`). `sw/apps/text`
+uses new + save + close.
+
+They are laid out **right-to-left** from the right edge, in the fixed
+order close, save, open, new, font — so the common combination reads
+left to right as new / open / save / close, the order a File menu would
+list them in. That ordering is anchored at the
+right for two reasons: close keeps the exact position it always had, so
+every app that predates this feature draws identically; and an app
+asking for new+save+close gets them reading "new save close" left to
+right without having to specify any order at all.
+
+`titlebar_icons()` in `wm.c` computes the placement once and is walked
+by both the drawing and the hit testing, so what you can see and what
+you can click are the same rects by construction. Icons that don't fit a
+narrow window are dropped rightmost-first — if only one button fits, it
+should be the one that gets you out. The title text clips to whatever
+the leftmost placed icon leaves.
+
+Clicking one does nothing by itself. `wm` has no idea what "save" means
+for your app, so it sends `Z_WM_TITLEBAR_ICON` to the owner and stops
+there — the same fire-and-forget shape the non-killing form of
+`Z_WM_CLOSE` already had. Close deliberately keeps `Z_WM_CLOSE` rather
+than becoming a fifth icon kind, so no existing app has to learn a new
+message.
+
+The bitmaps live in `sw/apps/wm/win_icons.c`, hand-edited as binary
+literals. Adding one is three steps, unchanged from before: append an id
+to `z_icon_id_t` (`zicon.h`), add the 8-byte bitmap, add a
+`z_gfx_hw_icon_load()` call in `z_win_icons_load()`.
+
+## Moving a window
+
+A drag is a wireframe operation: only the border follows the cursor,
+and content is frozen until the button comes up. Two things follow
+from that which were originally wrong.
+
+**The interior is blanked when the drag starts**, before any movement
+(`clear_window_interior()` in `wm.c`). Without it the window's insides
+stay drawn wherever they were, visibly detached from the frame that is
+now somewhere else — which reads as a rendering fault rather than as
+"content updates on release". This happens on the press that begins a
+drag, not on any titlebar click: a click that merely focuses or raises
+a window has no reason to discard its content and make the owner
+redraw.
+
+**The repair on release covers the window's own footprint**, not just
+the strips around it. `repair_drag()` used to repair four strips and
+deliberately skip the final rect, reasoning that its border was already
+correct. That missed two things:
+
+- Titlebar *content* is not part of `draw_window_box()`. The wireframe
+  drag redraws the box at each step but never the title text or icons,
+  so after a small move the old text and icons were still sitting
+  inside the new footprint, which the strips by definition never touch.
+- Alt+Arrow doesn't erase the old frame at all, so the old **border**
+  survived inside the new footprint too.
+
+It is now a single `repair_region()` over the swept bounding box, which
+also means each affected app gets one redraw request instead of up to
+four.
+
+## Modal windows
+
+`Z_WIN_FLAG_MODAL` makes a window modal **with respect to its owner's
+other windows**. While it exists, `wm` will not focus, raise, drag,
+resize or deliver pointer events to any other window owned by the same
+process; clicking one raises and focuses the modal window instead, so a
+click aimed at a blocked window at least shows you what is blocking it
+rather than appearing to do nothing.
+
+Windows belonging to other processes are completely unaffected. This is
+per-app modality, not a screen-wide grab — a modal dialog that froze the
+whole machine would be a much bigger hammer than anything here needs,
+and would make a wedged app unrecoverable.
+
+The reason it exists is `Z_WM_KEY`, which carries no window id. An app
+with two windows open cannot tell which one a keystroke was meant for.
+Modality resolves that by construction, and is what makes
+`sw/common/zdialog.h`'s blocking dialogs possible at all — see
+`docs/widgets.md`.
+
+Three smaller behaviours fall out of it, each of which is wrong by its
+absence rather than merely untidy:
+
+- A newly created modal window **takes focus immediately**, which is the
+  one exception to `wm`'s usual don't-steal-focus rule. A dialog you have
+  to click before you can type in it is a worse version of no dialog.
+- When a modal window is destroyed, focus goes to the frontmost
+  surviving window of the **same owner**, not to nothing. Otherwise
+  dismissing a dialog leaves its owner unfocused and receiving no keys
+  at all until clicked, which reads as the app having hung.
+- Alt+Tab **skips** windows blocked by their owner's modal. Tabbing onto
+  one would hand it the keyboard and reintroduce the exact ambiguity
+  modality removes. The modal window itself stays in the cycle, so the
+  app is still reachable.
+
+If a process somehow ends up with more than one modal window, the
+frontmost in z-order wins. That isn't a supported arrangement, just a
+defined outcome rather than an undefined one.
+
+## Repairs that nobody can see
+
+`repair_region()` clears a rectangle, redraws the chrome of every
+window overlapping it, and asks each of those windows' owners to
+repaint their content — synchronously, waiting for an ack.
+
+Two of those requests turned out to be pure waste, and both were
+visible as a flash when opening a dialog:
+
+**A region the excluded window covers entirely.** A window being
+created or brought to the front is repaired using its *own* rect, so
+the region always fits inside it. Only that region was cleared;
+everything outside is untouched, and the window's chrome fills the
+region completely. Anything behind it would have its content hidden
+the instant it was drawn. `window_covers_region()` detects this and
+skips the notify-and-wait for every window **behind** the excluded one
+— windows in front are drawn afterwards and still need theirs.
+
+**A focus change.** Losing focus alters exactly one thing about a
+window: how wm draws its titlebar. wm draws that itself, so repairing
+the full rect asked the owner for a complete content redraw it had no
+reason to do. The modal focus-steal now repairs only
+`Z_WM_TITLEBAR_H`.
+
+**A window retitling itself.** `Z_WM_SET_TITLE` had already narrowed
+the *region* to the titlebar strip, but still passed `exclude_idx =
+-1` — so the owner that just asked for the retitle got a full content
+redraw request back. It would service that later, from its main loop,
+after having already repainted for its own reasons. In `read` that was
+a visible second render of the whole document on every file open; in
+`text` it's a repaint on the first keystroke after every save. Now
+`exclude_idx = idx`. Windows in *front* are still notified — they
+overlap the strip and are drawn after it.
+
+That one is only safe because the z-order is *not* changing.
+`alt_tab()` still repairs in full, because `bring_to_front()` there can
+uncover content that really does need redrawing.
+
+Together these removed both full refreshes that used to happen before
+a dialog appeared.
+
+## Draining the GPU before a repair
+
+`z_fb_hw_line()` returns with the line still queued in the rasterizer's
+FIFO — that's what makes it fast, and the pixels landing a moment later
+is normally invisible.
+
+It stops being invisible when a window goes away. An app drawing right
+up to the moment it closes still has lines in that queue, and they
+drain *after* wm repairs the region, painting over the repair. The
+symptom is a window that closes and leaves a scribble behind, which
+reads as wm failing to clean up rather than a queue outliving its
+owner.
+
+Two changes fix it:
+
+- `destroy_window()` calls **`z_fb_hw_sync()`** (`zgfx.h`) before
+  repairing, which waits for the rasterizer FIFO to empty and the
+  blitter to go idle.
+- `handle_close_click()` **kills the owner before destroying the
+  window**, not after. It used to be the other way round, so that a
+  dead process wouldn't briefly still have a window on screen — which
+  is cosmetic. The ordering it produced was not: with the owner still
+  alive, it could draw into the region between the repair and the kill.
+
+## Launch arguments
+
+wm holds one pending launch argument (`Z_WM_SET_ARG` / `Z_WM_GET_ARG` /
+`Z_WM_ARG`), because there is no `argv` and `z_proc_run()` carries only
+a program name. The launcher sets it, starts the process, and the new
+process claims it on startup.
+
+One slot, not one per process: only one app is ever mid-launch at a
+time, and reserving `Z_WM_ARG_MAX` bytes in all sixteen `z_proc`
+entries for something used once would be waste that also has to grow
+every time the path limit does.
+
+Claiming is destructive and time-limited — see `Z_WM_ARG_TIMEOUT` and
+`docs/widgets.md` for why an unclaimed argument must not linger. The
+reply is a `Z_STR` pointing straight at wm's own buffer, so the bytes
+are deliberately *not* cleared when the flag is; the payload is
+borrowed until the recipient reads it.
+
+## Retitling
+
+`Z_WM_SET_TITLE` changes an existing window's titlebar text —
+`z_win_set_title()` (`zwin.h`) is the app-side call. Until now a title
+was fixed at creation, so an app whose title reflects a document had no
+way to say so; `sw/apps/text` shows the current filename and whether it
+has unsaved changes.
+
+Only the owner may retitle its own window. Nothing else in this protocol
+is authenticated either, but there is no reason to add the first way for
+one app to relabel another's.
+
+`wm` repairs only the **titlebar strip**, not the whole window. Repairing
+the window would work and would be one line shorter, but it costs the
+owner a full content redraw and an ack wait every time — for an editor
+that is the first keystroke after every save.
+
+## Fonts in glyph memory
+
+Glyph memory (`rtl/mem/glyph.v`, 4096 bytes, byte-addressed through a
+12-bit address) holds **more than one font at a time**, at fixed
+offsets declared in `glyph_layout[]` (`sw/common/zgfx.c`):
+
+| font | glyphs | bytes | offset |
+| --- | --- | --- | --- |
+| `z_font_5x8` | 96 x 8 rows | 768 | 0 |
+| `z_font_6x12` | 96 x 12 rows | 1152 | 768 |
+| *(free)* | | | 1920 |
+| window icons | 32 slots x 8 | 256 | 3840 |
+
+The offsets being **fixed and compiled from one source file** is the
+whole design, not tidiness. `zgfx.c` is linked separately into every
+process, so any allocation state kept at runtime would be per-process:
+`wm` would load a font, record where it put it, and no other process
+would have any idea — every app would silently fall back to software
+text rendering, which is exactly what the hardware path exists to
+avoid. A shared table means every process derives the same offset
+without anyone communicating anything.
+
+`wm` remains the only process that ever *writes* glyph memory, and now
+loads both fonts at startup. Everyone else reads the offset out of the
+table and blits.
+
+Fonts are matched by **address** (`font == &z_font_5x8`), which is safe
+within a process even though the address differs between them — each
+process compares against its own copy, and all of them agree on the
+offset, which is the only thing the hardware sees.
+
+A font that isn't in the table still works: `glyph_offset_of()` reports
+it as absent and both `z_fb_draw_char()` and `z_fb_draw_char2()` render
+it in software. Blitting from an offset holding a different font's data
+would draw confident nonsense, which is worse than being slow.
+
+To add one: append an entry with the next free offset, check the total
+still clears `Z_ICON_MEM_OFFSET`, and add a `z_gfx_hw_font_load()` call
+in `wm`'s `main()`. Note the blitter only handles glyphs up to 8 pixels
+wide (`gpu_blit.v`), so `z_font_8x16` is the widest that could ever go
+here.
+
+### The software fallback
+
+`z_fb_draw_char()`/`z_fb_draw_char2()` render in software when a glyph
+would need clipping, or when its font isn't resident. It is worth
+knowing exactly why that exists and how much it costs, because the
+obvious reaction — fix it in hardware and delete the fallback — is not
+worth doing.
+
+**Why it exists.** Glyph mode in `rtl/gpu/gpu_blit.v` is genuinely
+unclipped: `CTRL_GLYPH` branches straight to `ST_GLYPH_SETUP` and never
+enters `ST_CLIP`, and `CTRL_CLIP` is documented there as "ignored in
+glyph mode". There is not even a screen bounds check, which is why the
+`fits` test checks the screen as well as the clip rect — an
+out-of-range destination can hang the blitter's state machine.
+
+**How often it fires.** Measured against the real geometry of every
+clipped call site: **zero** for a full text-editor repaint at any
+window size or either font (6273 glyphs, none clipped), zero for the
+file list at normal widths, zero for a titlebar whose title fits. It
+only fires on *truncated* text, and then only for the one glyph
+straddling the boundary.
+
+`z_fb_draw_text()` used to make this much worse than it needed to be:
+it called `draw_char()` for every remaining character even after
+running past the clip, so each one took the software path and then had
+all `w*h` of its pixel writes rejected individually. Skipping glyphs
+that start past `clip->x1` cut the worst measured case (a 24-character
+title in a 64px titlebar) from 21 software glyphs to 1, and a narrow
+file list from 55 to 11.
+
+**What is left** is at most one partial glyph per truncated line — 40
+pixel writes at 5x8, 72 at 6x12. Adding clip support to the glyph state
+machine would mean masking `g_bits_lo`/`g_hi` against a clip window and
+skipping out-of-range rows, in a state machine that already has fifteen
+states, to save that. Not worth it.
+
+**The case that would be slow** is a font that isn't resident, where
+every glyph goes software. Today nothing does that: `term` defaults to
+`z_font_5x8` and `repl`'s `(text ...)` uses `z_font_6x12`, both
+resident. Building `term` with `FONT=z_font_5x7` or `z_font_8x16`
+would be correct but slow, and the fix is to add that font to
+`glyph_layout[]`, not to change the hardware. There are 1920 free bytes
+between the fonts and the icon region, which fits `z_font_8x16` (1536)
+or `z_font_5x7` (672), but not both.
+
+### Font switching
+
+`Z_WIN_FLAG_FONT_ICON` puts a font button in the titlebar and clicking
+it sends `Z_WM_TITLEBAR_ICON` with `Z_WM_TBICON_FONT`. What that means
+is entirely the app's business — `wm` does not change anything itself.
+`sw/apps/text` toggles between the two resident fonts, which changes
+its column count and therefore rewraps the whole document.
+
+## Widgets
+
+`sw/common/zwidget.c` is a small toolkit for the furniture an app keeps
+in its window: push buttons, toggles, radio groups, pattern swatches,
+sliders. It is deliberately **not** a UI framework -- no layout engine,
+no widget tree, no focus chain. A widget set is a flat array the app
+declares and positions itself, in content-relative coordinates. The
+first two consumers (`draw`'s tool column and pattern palette) both want
+fixed grids they compute arithmetically, and a layout engine would be
+more code than the thing it replaces.
+
+What it does provide is the part that is annoying to write twice: hit
+testing, pressed/selected state, radio-group exclusivity, dirty tracking
+so only changed widgets repaint, and drawing that goes through the GPU.
+
+Alongside the widget set there are scrollbars (`z_scrollbar_t`, both
+orientations, in the same file) and a scrolling file-list widget
+(`sw/common/zflist.h`), which is what the file dialogs are built on and
+what a standalone file browser app would reuse. **See
+`docs/widgets.md`** for how to use all of these, and for the dialogs in
+`sw/common/zdialog.h` — including the one non-obvious requirement, that
+an app opening a dialog must keep servicing its own window's redraws
+while the dialog is up.
+
+Widget bodies, frames, fills and slider tracks use
+`z_fb_hw_fill_rect()`, `z_fb_hw_fill_pattern()` and `z_win_hw_box()`.
+Text labels go through the hardware glyph path. **Icons do not** -- they
+are drawn per pixel in software, and that is not an oversight. The
+glyph blitter can only draw what is in glyph memory, that memory holds
+one font at a time, and by board-wide convention `wm` is the only
+process that ever writes to it (see "Hardware glyph blitting" below). An
+app blitting its own icons would have to load them there, breaking that
+convention and reintroducing exactly the cross-process race it exists to
+prevent. Icons are 16x16 and redrawn only when a widget's state changes,
+so software is genuinely fine -- the same tradeoff `wm` already makes
+for the dock's own 32x32 icons.
+
+`z_fb_hw_fill_pattern()` (`zgfx.h`) is new alongside this: the
+blitter's `BLIT_PATTERN` register was always a full 32-bit word, and
+`z_fb_hw_fill_rect()` simply hardcoded it to all-0s or all-1s. Patterns
+are 8 bytes, one per row, MSB-first -- the same convention as font
+glyphs and `zicon.h` icons -- and are anchored to the screen's 8-pixel
+grid so adjacent fills tile seamlessly. Cost is one blitter operation
+per *run of rows sharing a pattern byte*, so a solid fill still costs
+one.
+
+## Pointer delivery
+
+Until `Z_WM_MOUSE` existed, `wm` polled the pointer and kept it
+entirely to itself -- only `Z_WM_KEY` ever reached an app. An app that
+needed the mouse had to read the USB HID registers directly, which is
+what the pre-window `sw/apps/draw` did and precisely why it could not
+live in a window.
+
+`Z_WM_MOUSE` is a packed `Z_UINT32` (`x`, `y`, buttons, and an "inside
+my content rect" bit), for the same no-heap-allocation reason as
+`Z_WM_REDRAW` and `Z_WM_KEY`: it fires at pointer-movement rates, and
+nothing frees message payloads (see `docs/messaging.md`).
+
+**Who receives it**, in order:
+
+1. If a **capture** is active, that window, wherever the cursor now is.
+   A capture starts when a button goes down inside a window's content
+   area and ends when it comes up.
+2. Otherwise the **focused** window, but only while the cursor is over
+   it *and* the hit test agrees it is frontmost there. Requiring both
+   is what stops a window receiving phantom events through another
+   window stacked on top of it.
+
+Nothing is delivered while `wm` is running its own drag or resize
+gesture -- the pointer belongs to `wm` for the duration.
+
+Capture is not a refinement; without it every drag-style interaction
+(a paint stroke, a slider, a rubber-banded rectangle) silently cuts off
+at the window edge.
+
+`wm` **coalesces** these: one is sent only when position or buttons
+actually differ from the last one sent to that window, so a resting
+mouse costs nothing. It does not rate-limit beyond that, so an app
+should drain its whole queue and act on the *last* mouse message it
+finds. Processing every one in turn makes a slow redraw path fall
+progressively further behind the real cursor -- the stroke visibly lags
+and then catches up in a rush.
+
+Coordinates are absolute screen coordinates, matching `z_win_hw_line()`
+rather than the window-relative convention `z_win_draw_text()` uses.
+`z_win_mouse_content_xy()` (`zwin.h`) converts.
+
+## Resizing
+
+A window created with `Z_WIN_FLAG_RESIZABLE` can be resized by dragging
+the grip in its lower-right corner. Without the flag the corner is
+ordinary frame and the hit test never fires, so every app predating the
+flag is completely unaffected.
+
+The gesture is a **wireframe**, like dragging already is, and for the
+same reason: a full clear/redraw/content-notify per step queues redraws
+faster than apps can drain them. Only the prospective **bottom and
+right edges** are drawn -- a 2px bold L, not a full box. Dragging a
+window already highlights its entire frame, and reusing that here would
+claim the whole window is moving when in fact the top-left corner is
+pinned and only those two edges follow the cursor. Showing exactly the
+edges that move is both more honest and easier to aim.
+
+The window's real `w`/`h` are not touched until the button is released.
+On release `wm` commits the size, sends `Z_WM_WINDOW_RESIZED`, then
+repairs the union of the old footprint, the new one, and the largest
+extent the wireframe reached in between. Unlike the drag path there is
+no point excluding the window's own final rect -- its content area
+genuinely changed size, so all of it needs redrawing.
+
+**Minimum size.** Every resizable window is clamped to
+`Z_WM_MIN_WIDTH`/`Z_WM_MIN_HEIGHT`. That floor is not cosmetic: below
+it the content area's height goes negative and underflows to an
+enormous unsigned value downstream. `Z_WIN_FLAG_MIN_IS_CREATE` raises
+the floor to whatever size the window was *created* at, for an app with
+fixed-size furniture it cannot shrink below -- `sw/apps/draw`'s tool
+column and pattern palette are exactly that. The app knows that size
+(it is why it asked for it); `wm` has no way to work it out. The global
+floor still applies on top, so a window created at 20x20 is not
+resizable down to 20x20.
 
 ## Keyboard-only operation
 
@@ -230,6 +697,8 @@ shapes. Summary:
 | app → wm | `Z_WM_DESTROY_WINDOW` | `Z_UINT32` (window id) | close a window |
 | wm → app | `Z_WM_WINDOW_MOVED` | `Z_MAP{id, x, y, w, h}` | sent after a drag completes |
 | wm → app | `Z_WM_KEY` | packed `Z_UINT32` (`Z_WM_PACK_KEY`) | key press/release, focused window only -- see `docs/user_input.md` |
+| app → wm | `Z_WM_SET_TITLE` | `Z_MAP{id, title}` | retitle an existing window -- repairs the titlebar strip only |
+| wm → app | `Z_WM_TITLEBAR_ICON` | packed `Z_UINT32` (`Z_WM_PACK_TBICON`) | a new/save/open/font titlebar icon was clicked |
 
 A client app's request/reply exchange looks like:
 
@@ -278,14 +747,20 @@ per affected window, and a fresh `Z_MAP` per broadcast (several heap
 allocations, including one per key string) is more than this needs,
 given the wm never frees the message objects it sends (see
 docs/messaging.md's borrowed-payload lifetime rules). The packed
-scalar carries just `(id, x, y)` -- width/height are omitted since
-there's no resize support yet, so an app already has them from
-`Z_WM_WINDOW_CREATED` and they don't change. `z_win_apply_redraw()` in
-`zwin.c` unpacks it.
+scalar carries just `(id, x, y)` -- there is no room for width/height
+in it. That is why `Z_WM_WINDOW_RESIZED` exists as a separate `Z_MAP`
+message and why `wm` sends it *before* the redraw that follows a resize:
+an app that saw the redraw first would repaint at its old size into a
+window that is no longer that size. `z_win_apply_redraw()` in `zwin.c`
+unpacks the packed form.
 
-`Z_WM_WINDOW_CREATED` and `Z_WM_WINDOW_MOVED` are low-frequency (once
-per window, once per completed drag) and keep the `Z_MAP` shape --
-`z_win_parse_rect()` handles those. An app's message loop needs to
+`Z_WM_WINDOW_CREATED`, `Z_WM_WINDOW_MOVED` and `Z_WM_WINDOW_RESIZED`
+are low-frequency (once per window, once per completed drag or resize)
+and keep the `Z_MAP` shape -- `z_win_parse_rect()` handles all three,
+and `z_win_apply_resized()` is just that under a name that says what it
+is for at the call site. An app that handles resizing must handle
+**both** `Z_WM_WINDOW_RESIZED` (to learn its new size) and the
+`Z_WM_REDRAW` that follows (to know when to repaint at it). An app's message loop needs to
 tell these two shapes apart by subject; see `sw/apps/hello_win` for
 the pattern.
 
@@ -366,11 +841,21 @@ building anyway.
 
 A small always-on-top launcher bar, anchored to the bottom left of
 the screen, with one 32x32 icon per app (`sw/apps/wm/wm.c`,
-`dock_apps[]`). Currently hardcoded to two apps, `term` and `gpu3d`;
-adding a third is one more `{ "name", "label" }` entry in
-`dock_apps[]`, nothing else. `name` is the bare filename `z_proc_run()`
-(see `docs/app_runtime.md`) expects -- no path, no extension, same as
-what you'd type after `run` at the kernel shell.
+`dock_candidates[]`). Currently `term`, `gpu3d` and `draw`; adding
+another is one more `{ "name", z_icon_<name>_data }` entry there, plus
+a 32x32 PNG in `sw/data/icons/` and a run of
+`gen_dock_icon_data.py` -- see that script's own usage comment.
+Nothing else.
+
+A candidate is only an *offer*: `dock_build()` keeps the ones that
+actually resolve via `z_exec_exists()` at startup, so an app that isn't
+installed is skipped rather than becoming a button that does nothing.
+`draw` lives on the sdcard rather than in the flash core-app archive,
+so it appears only when a card carrying it is present.
+
+`name` is the bare filename `z_proc_run()` (see `docs/app_runtime.md`)
+expects -- no path, no extension, same as what you'd type after `run` at
+the kernel shell.
 
 It's a real entry in `wm`'s own `windows[]`/`zorder`, owned by `wm`'s
 own pid (`my_pid`, not the `Z_PID_WM` constant -- see "Starting it"
@@ -920,7 +1405,7 @@ a convenient API, not a hard guarantee.
   `gpu_blit.v`'s word-straddle split math (`tb_straddle.v`); a full
   48-character line at real 5px-pitch spacing, covering every possible
   word-alignment offset (`tb_line.v`); and cross-master corruption or
-  ack-misrouting through the real `rtl/arbiter.v` + `rtl/mem/vram.v`
+  ack-misrouting through the real `rtl/arbiter_vram.v` + `rtl/mem/vram.v`
   under aggressive, continuous contention from a second synthetic bus
   master mimicking `gpu_raster_wb`'s own access pattern
   (`tb_arbiter_stress.v`) -- all pass cleanly against the fixed RTL.
@@ -1044,7 +1529,9 @@ a convenient API, not a hard guarantee.
 - **Titles are still not drawn** in the chrome itself (font support
   now exists via `zgfx`, but `wm.c` draws chrome purely via the line
   rasterizer and hasn't been updated to render the title text yet).
-- **No app-requested placement or resize.**
+- **No app-requested resize.** The user can resize a window that asked
+  for `Z_WIN_FLAG_RESIZABLE`, but an app cannot ask to be resized, nor
+  change its own minimum after creation.
 - **No "already running -- focus instead of relaunching" tracking**
   for dock icons (noted in "The dock" above, deliberately deferred --
   doesn't change the click-handling or redraw plumbing when addressed

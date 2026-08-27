@@ -1,0 +1,100 @@
+
+PREFIX ?= $(RISCV_PREFIX)
+# ARCH/ABI come from one place -- see that file for why
+include ../../common/arch.mk
+CC = $(PREFIX)gcc
+AS = $(PREFIX)as
+ASFLAGS = -march=$(ARCH) -mabi=$(ABI)
+# See sw/apps/repl/Makefile for the full reasoning -- in short,
+# sw/common is shared by every app, so each links whole objects for the
+# sake of a fraction of them, and section GC drops the rest. Set
+# GC_SECTIONS=0 to disable.
+GC_SECTIONS ?= 1
+ifeq ($(GC_SECTIONS),1)
+GC_CFLAGS = -ffunction-sections -fdata-sections
+GC_LDFLAGS = -Wl,--gc-sections
+endif
+
+# -DZ_GFX_HW_BLIT, same as wm/hello_win/term/draw: every glyph this app
+# draws -- the document itself, the file dialogs, the widget labels --
+# goes through the hardware glyph blitter. That matters more here than
+# in any other app so far, since a full repaint is a screenful of
+# characters rather than a handful.
+#
+# text does NOT call z_gfx_hw_font_load() itself -- wm is the only
+# process on the board that ever loads glyph memory, and every app
+# draws with z_font_5x8 as a result. See docs/window_manager.md,
+# "Hardware glyph blitting", and this app's own header comment on what
+# the reserved font-switch button is waiting for.
+CFLAGS = --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) -DZ_GFX_HW_BLIT $(GC_CFLAGS) $(ARCH_DEFS) $(LIBC_FLAGS)
+LDFLAGS = -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS)
+LDSCRIPT = ../../common/riscv-app.ld
+
+# zfsapp.o is needed by zflist.o (the file browser inside the dialogs)
+# as well as by text.c itself, and zdialog.o/zflist.o are what make
+# this the first app to link either.
+OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o \
+	zfsapp.o zflist.o zdialog.o text.o
+
+text: text.elf text.bin
+
+zeitlos.o:
+	$(CC) $(CFLAGS) -c ../../common/zeitlos.c -o zeitlos.o
+
+zobj.o:
+	$(CC) $(CFLAGS) -c ../../common/zobj.c -o zobj.o
+
+zgfx.o:
+	$(CC) $(CFLAGS) -c ../../common/zgfx.c -o zgfx.o
+
+zfont_data.o:
+	$(CC) $(CFLAGS) -c ../../common/zfont_data.c -o zfont_data.o
+
+zwin.o:
+	$(CC) $(CFLAGS) -c ../../common/zwin.c -o zwin.o
+
+zwidget.o:
+	$(CC) $(CFLAGS) -c ../../common/zwidget.c -o zwidget.o
+
+zfsapp.o:
+	$(CC) $(CFLAGS) -c ../../common/zfsapp.c -o zfsapp.o
+
+zflist.o:
+	$(CC) $(CFLAGS) -c ../../common/zflist.c -o zflist.o
+
+zdialog.o:
+	$(CC) $(CFLAGS) -c ../../common/zdialog.c -o zdialog.o
+
+text.o:
+	$(CC) $(CFLAGS) -c text.c -S -o text.asm
+	$(CC) $(CFLAGS) -c text.c -o text.o
+
+text.elf: $(OBJS)
+	$(CC) $(LDFLAGS) -T $(LDSCRIPT) -Wl,-Map,text.map -o text.elf $(OBJS)
+	$(PREFIX)objdump -S --disassemble text.elf > text.dasm
+
+# Produces a .zexe rather than a raw --pad-to binary, for the same
+# reason sw/apps/draw does: this app's .bss is dominated by the 32KB
+# document buffer and the 8KB line table, and the old format wrote all
+# of that out as literal zeros to be read off the SD card on every
+# launch. The header carries the size as a NUMBER instead. See
+# sw/common/zexec.h.
+text.bin: text.elf
+	@EDATA=$$($(PREFIX)nm text.elf | awk '$$3=="_edata"{print "0x"$$1}'); \
+	END=$$($(PREFIX)nm text.elf | awk '$$3=="_end"{print "0x"$$1}'); \
+	$(PREFIX)objcopy -O binary text.elf text.data; \
+	python3 ../../../tools/mkexec.py text.data text.bin $$(($$END - $$EDATA)); \
+	rm -f text.data
+
+clean:
+	rm -f text.elf text.bin text.data text.asm text.dasm text.map *.o *.d
+
+.PHONY: text clean
+
+# Header dependency tracking -- see sw/apps/wm/Makefile for the full
+# explanation. In short: without this, editing a .c or .h rebuilds
+# nothing once the object exists, and the link silently produces a
+# binary from stale objects.
+-include $(wildcard *.d)
+-include $(wildcard */*.d)
+-include $(wildcard */*/*.d)
