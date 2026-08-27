@@ -65,6 +65,7 @@ With the MTU, there is no need for position independent code or complicated addr
 | files | File browser |
 | calc | Calculator |
 | info | System info |
+| clock | Analog and digital clock |
 | settings | System settings |
 | space3d | First-person 3D space shooter game |
 | gpu3d | Spinning 3D cube demo |
