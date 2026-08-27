@@ -27,7 +27,7 @@ z_rv z_msg_read(z_msg_t *msg);
 z_rv z_msg_new_send(uint32_t to, uint32_t subject, uint32_t tag, z_obj_t obj);
 uint32_t z_uptime_ticks(void);
 
-#define ZSTREAM_TIMEOUT_TICKS (3 * 732)	// ~3s -- generous for
+#define ZSTREAM_TIMEOUT_TICKS (20 * 732)	// ~20s (was 3s: a TFTP server that fetches http(s) on demand needs ~6s for the first block) -- generous for
 	// in-memory messaging plus a slow consumer-side operation (e.g.
 	// an SD card write); short enough that a genuinely stuck peer
 	// is noticed quickly. applies to the consumer side's blocking
