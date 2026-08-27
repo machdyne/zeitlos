@@ -35,6 +35,11 @@ module sysctl #()
    output UART0_TX,
    input UART0_RX,
 
+`ifdef UART1
+	output UART1_TX,
+	input UART1_RX,
+`endif
+
 `ifdef LED_DEBUG
 	output [7:0] DBG,
 `endif
@@ -278,8 +283,10 @@ module sysctl #()
 	// otherwise freeze SPI reads of the kernel. LED1/LED2 are
 	// bring-up taps that do not depend on the CPU: PLL lock and
 	// released reset. LED_B (LED0) stays the debug_wb software LED.
+`ifndef ESP32_LINK
 	assign wifi_en = 1'b0;
 	assign wifi_gpio0 = 1'b0;
+`endif
 	assign flash_holdn = 1'b1;
 	assign flash_wpn = 1'b1;
 	assign LED1 = pll_locked;
@@ -370,6 +377,12 @@ module sysctl #()
 	wire [31:0] wbs_rom_dat_o;
 	wire [31:0] wbs_debug_dat_o;
 	wire [31:0] wbs_uart0_dat_o;
+`ifdef UART1
+	wire [31:0] wbs_uart1_dat_o;
+`endif
+`ifdef ESP32_LINK
+	wire [31:0] wbs_esp32ctl_dat_o;
+`endif
 	wire [31:0] wbs_spisdcard_dat_o;
 	wire [31:0] wbs_usb0_dat_o;
 	wire [31:0] wbs_usb1_dat_o;
@@ -456,7 +469,21 @@ module sysctl #()
 	wire cs_debug = ((wbm_adr & 32'hf000_0000) == 32'he000_0000);
 `endif
 `ifdef UART0
+	// UART0 stays at 0xf0000000 (byte offsets 0x00-0x18). UART1 and
+	// the ESP32 control register share nibble 0xF but sit above
+	// 0x100/0x200 so existing UART0 software is unchanged. Bits 8-9
+	// of the byte address discriminate (same idea as USB port 0/1
+	// using bit 5). Without UART1, keep the original whole-nibble
+	// decode so Obst/Lakritz/Mozart are bit-identical.
+`ifdef UART1
+	wire cs_uart0 = ((wbm_adr & 32'hf000_0300) == 32'hf000_0000);
+	wire cs_uart1 = ((wbm_adr & 32'hf000_0300) == 32'hf000_0100);
+`else
 	wire cs_uart0 = ((wbm_adr & 32'hf000_0000) == 32'hf000_0000);
+`endif
+`endif
+`ifdef ESP32_LINK
+	wire cs_esp32ctl = ((wbm_adr & 32'hf000_0300) == 32'hf000_0200);
 `endif
 
 	assign wbm_dat_i =
@@ -484,6 +511,12 @@ module sysctl #()
 `endif
 `ifdef UART0
 		cs_uart0 ? wbs_uart0_dat_o :
+`endif
+`ifdef UART1
+		cs_uart1 ? wbs_uart1_dat_o :
+`endif
+`ifdef ESP32_LINK
+		cs_esp32ctl ? wbs_esp32ctl_dat_o :
 `endif
 `ifdef SPI_SDCARD
 		cs_spisdcard ? wbs_spisdcard_dat_o :
@@ -519,6 +552,12 @@ module sysctl #()
 	wire wbs_rom_ack_o;
 	wire wbs_debug_ack_o;
 	wire wbs_uart0_ack_o;
+`ifdef UART1
+	wire wbs_uart1_ack_o;
+`endif
+`ifdef ESP32_LINK
+	wire wbs_esp32ctl_ack_o;
+`endif
 	wire wbs_spisdcard_ack_o;
 	wire wbs_usb0_ack_o;
 	wire wbs_usb1_ack_o;
@@ -554,6 +593,12 @@ module sysctl #()
 `endif
 `ifdef UART0
 		cs_uart0 ? wbs_uart0_ack_o :
+`endif
+`ifdef UART1
+		cs_uart1 ? wbs_uart1_ack_o :
+`endif
+`ifdef ESP32_LINK
+		cs_esp32ctl ? wbs_esp32ctl_ack_o :
 `endif
 `ifdef SPI_SDCARD
 		cs_spisdcard ? wbs_spisdcard_ack_o :
@@ -1059,6 +1104,66 @@ module sysctl #()
 		.dcd_pad_i(1'b1),
 		.int_o(wbs_uart0_int)
 	);
+`endif
+
+	// WISHBONE SLAVE: UART1 (ESP32 data plane on ULX3S GPIO16/17)
+`ifdef UART1
+	wire wbs_uart1_int;
+	wire wbm_cyc_uart1 = cs_uart1 && wbm_cyc;
+	wire wbm_stb_uart1 = cs_uart1 && wbm_stb;
+
+	uart_top #() wbs_uart1_i
+	(
+		.wb_clk_i(wbm_clk),
+		.wb_rst_i(wbm_rst),
+		.wb_adr_i(wbm_adr_sel_word),
+		.wb_dat_i(wbm_dat_o),
+		.wb_dat_o(wbs_uart1_dat_o),
+		.wb_we_i(wbm_we),
+		.wb_sel_i(wbm_sel),
+		.wb_stb_i(wbm_stb_uart1),
+		.wb_ack_o(wbs_uart1_ack_o),
+		.wb_cyc_i(wbm_cyc_uart1),
+		.stx_pad_o(UART1_TX),
+		.srx_pad_i(UART1_RX),
+		.cts_pad_i(1'b1),
+		.dsr_pad_i(1'b1),
+		.ri_pad_i(1'b1),
+		.dcd_pad_i(1'b1),
+		.int_o(wbs_uart1_int)
+	);
+`endif
+
+	// ESP32 EN / GPIO0 -- software-controlled reset. Default held in
+	// reset (en=0) so the module does not fight the SD bus at boot.
+`ifdef ESP32_LINK
+	reg wifi_en_r;
+	reg wifi_gpio0_r;
+	assign wifi_en = wifi_en_r;
+	assign wifi_gpio0 = wifi_gpio0_r;
+
+	reg [31:0] esp32ctl_dat;
+	reg esp32ctl_ack;
+	assign wbs_esp32ctl_dat_o = esp32ctl_dat;
+	assign wbs_esp32ctl_ack_o = esp32ctl_ack;
+
+	wire wbm_cyc_esp32ctl = cs_esp32ctl && wbm_cyc;
+
+	always @(posedge wbm_clk) begin
+		esp32ctl_ack <= 0;
+		if (wbm_rst) begin
+			wifi_en_r <= 1'b0;
+			wifi_gpio0_r <= 1'b1;
+		end else if (wbm_cyc_esp32ctl && wbm_stb && !esp32ctl_ack) begin
+			esp32ctl_ack <= 1;
+			if (wbm_we) begin
+				wifi_en_r <= wbm_dat_o[0];
+				wifi_gpio0_r <= wbm_dat_o[1];
+			end else begin
+				esp32ctl_dat <= {30'b0, wifi_gpio0_r, wifi_en_r};
+			end
+		end
+	end
 `endif
 
 	// WISHBONE SLAVE: SPI BIT-BANG INTERFACE FOR SDCARD

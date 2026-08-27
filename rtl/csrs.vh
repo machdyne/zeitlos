@@ -75,4 +75,7 @@ localparam CSR_FEATURES =
 `ifdef LED_DEBUG
 	(32'h1 << 19) |
 `endif
+`ifdef ESP32_LINK
+	(32'h1 << 20) |
+`endif
 	32'h0;

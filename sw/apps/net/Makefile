@@ -8,15 +8,18 @@ CFLAGS = --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=ilp32
 LDFLAGS = -march=$(ARCH) -mabi=ilp32
 LDSCRIPT = ../../common/riscv-app.ld
 
-# which NIC driver to build in -- ENC28J60 (SPI PMOD, most boards) or
-# RMII (rtl/ethmac_rmii.v, mozart_ml1 only). See net_phy.h for why
-# this is a build-time choice, not a runtime probe.
+# which NIC driver to build in -- ENC28J60 (SPI PMOD), RMII
+# (mozart_ml1), or ESP32LINK (ULX3S UART1 to the onboard ESP32).
+# See net_phy.h for why this is a build-time choice.
 NET_PHY ?= ENC28J60
 #NET_PHY ?= RMII
+#NET_PHY ?= ESP32LINK
 CFLAGS += -DNET_PHY_$(NET_PHY)
 
 ifeq ($(NET_PHY), RMII)
 PHY_OBJ = rmii_eth.o
+else ifeq ($(NET_PHY), ESP32LINK)
+PHY_OBJ = esp32link.o
 else
 PHY_OBJ = enc28j60.o
 endif
@@ -67,7 +70,7 @@ endif
 # NET_DHCP -- it only needs SOME nameserver configured (DHCP-provided
 # or NET_STATIC_DNS), not DHCP itself, so unlike dhcp.o there's no
 # "off" switch for it tied to NET_DHCP.
-OBJS = zeitlos.o zobj.o zstream.o zport.o $(PHY_OBJ) eth.o arp.o ip.o udp.o $(DHCP_OBJ) dns.o tcp.o telnet.o tftp.o net.o
+OBJS = zeitlos.o zobj.o zstream.o zport.o zfsapp.o netcfg.o $(PHY_OBJ) eth.o arp.o ip.o udp.o $(DHCP_OBJ) dns.o tcp.o telnet.o tftp.o net.o
 
 net: net.elf net.bin
 
@@ -124,6 +127,15 @@ zstream.o: ../../common/zstream.c ../../common/zstream.h
 zport.o: ../../common/zport.c ../../common/zport.h
 	$(CC) $(CFLAGS) -c ../../common/zport.c -o zport.o
 
+zfsapp.o: ../../common/zfsapp.c ../../common/zfsapp.h
+	$(CC) $(CFLAGS) -c ../../common/zfsapp.c -o zfsapp.o
+
+netcfg.o: netcfg.c netcfg.h
+	$(CC) $(CFLAGS) -c netcfg.c -o netcfg.o
+
+esp32link.o: esp32link.c esp32link.h znic.h netcfg.h .net_phy_selected
+	$(CC) $(CFLAGS) -c esp32link.c -o esp32link.o
+
 enc28j60.o: enc28j60.c enc28j60.h .net_phy_selected
 	$(CC) $(CFLAGS) -c enc28j60.c -o enc28j60.o
 
@@ -157,7 +169,7 @@ telnet.o: telnet.c telnet.h tcp.h
 tftp.o: tftp.c tftp.h
 	$(CC) $(CFLAGS) -c tftp.c -o tftp.o
 
-net.o: net.c net_phy.h .net_phy_selected .net_config_selected ../../common/zsoc.h dhcp.h dns.h
+net.o: net.c net_phy.h netcfg.h .net_phy_selected .net_config_selected ../../common/zsoc.h dhcp.h dns.h
 	$(CC) $(CFLAGS) -c net.c -o net.o
 	$(CC) $(CFLAGS) -c net.c -S -o net.asm
 

@@ -81,6 +81,7 @@
 #define Z_FEATURE_ETH_RMII    (1u << 17)
 #define Z_FEATURE_LED_RGB     (1u << 18)
 #define Z_FEATURE_LED_DEBUG   (1u << 19)
+#define Z_FEATURE_ESP32_LINK  (1u << 20)
 
 // true only if rtl/csrs.v is actually present in the running
 // bitstream -- see this file's own header comment for why every

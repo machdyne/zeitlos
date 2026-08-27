@@ -35,11 +35,22 @@
  * sw/os/sh.c's `init` used to only reserve net's pid rather than
  * starting it -- both fixed now that net can check first.
  *
- * Build for mozart_ml1 with `make -C sw/apps/net NET_PHY=RMII`; every
- * other currently-supported board keeps the default (ENC28J60).
+ * Build for mozart_ml1 with `make -C sw/apps/net NET_PHY=RMII`;
+ * ULX3S ESP32: `NET_PHY=ESP32LINK`. Everyone else keeps ENC28J60.
  */
 
-#ifdef NET_PHY_RMII
+#if defined(NET_PHY_ESP32LINK)
+
+#include "esp32link.h"
+#define NET_PHY_NAME     "esp32link"
+#define phy_init         esp32link_init
+#define phy_recv         esp32link_recv
+#define phy_send         esp32link_send
+#define phy_debug_dump   esp32link_debug_dump
+#define phy_wifi_sta     esp32link_wifi_sta
+#define phy_poll_wifi    esp32link_poll_wifi
+
+#elif defined(NET_PHY_RMII)
 
 #include "rmii_eth.h"
 #define NET_PHY_NAME     "rmii"
@@ -47,6 +58,8 @@
 #define phy_recv         rmii_eth_recv
 #define phy_send         rmii_eth_send
 #define phy_debug_dump   rmii_eth_debug_dump
+#define phy_wifi_sta(ssid, psk)  (true)
+#define phy_poll_wifi(ssid, psk) ((void)0)
 
 #else
 
@@ -56,6 +69,8 @@
 #define phy_recv         enc28j60_recv
 #define phy_send         enc28j60_send
 #define phy_debug_dump   enc28j60_debug_dump
+#define phy_wifi_sta(ssid, psk)  (true)
+#define phy_poll_wifi(ssid, psk) ((void)0)
 
 #endif
 

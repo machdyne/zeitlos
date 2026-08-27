@@ -125,7 +125,9 @@
 `define GPU_CURSOR
 `define GPU_DDMI
 `define UART0
+`define UART1
 `define USB_HID
 `define SPI_SDCARD
+`define ESP32_LINK
 
 `endif
