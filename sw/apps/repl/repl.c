@@ -128,6 +128,59 @@ typedef struct {
 
 static repl_conn_t conns[Z_REPL_MAX_CONNS];
 
+// One history, shared by every connection.
+//
+// Per-connection would be four copies of the same 1KB for something a
+// single user wants to be the same everywhere: recalling a command in
+// one terminal window that was typed in another is the behaviour, not
+// a compromise. See z_line_hist_t in zline.h.
+static z_line_hist_t line_history;
+
+// -- echo batching --
+//
+// Echo bytes for a whole incoming Z_PORT_DATA are accumulated here
+// and sent as ONE message, rather than one message per input byte.
+//
+// Per-byte was fine while input arrived at typing speed, and broke
+// the moment paste existed. z_port_send() refuses once
+// Z_PORT_MAX_PENDING_SENDS (8) messages are unacked (zport.h), and
+// this loop feeds every byte of the paste without ever returning to
+// read the acks -- so a paste of more than eight characters had its
+// TAIL silently dropped from the display while landing correctly in
+// the buffer. Nine characters pasted, exactly one missing.
+//
+// Batching also makes a paste one round trip instead of dozens.
+#define ECHO_BATCH 512
+
+static char echo_batch[ECHO_BATCH];
+static uint32_t echo_batch_len;
+
+static void echo_flush(repl_conn_t *c) {
+
+	if (!echo_batch_len) return;
+
+	if (z_port_send(&c->port, echo_batch, echo_batch_len) != Z_OK)
+		printf("repl: echo z_port_send failed (%lu bytes) to pid %ld\n",
+			(unsigned long)echo_batch_len, (long)c->port.peer_pid);
+
+	echo_batch_len = 0;
+
+}
+
+static void echo_put(repl_conn_t *c, const char *b, uint32_t n) {
+
+	// Flush before it could overflow. One line's worth of redraw is
+	// the largest single contribution, so leaving that much headroom
+	// means a batch is never split mid-sequence -- half an escape
+	// sequence arriving on its own would be interpreted as text.
+	if (echo_batch_len + n > ECHO_BATCH) echo_flush(c);
+
+	if (n > ECHO_BATCH) return;		// cannot happen; refuse rather than smash
+
+	for (uint32_t i = 0; i < n; i++) echo_batch[echo_batch_len++] = b[i];
+
+}
+
 static const char *BANNER =
 	"repl -- Zeitlos command interpreter\r\n"
 	"type 'help' for a list of commands -- anything else is "
@@ -141,6 +194,64 @@ static const char *BANNER =
 	"F12 returns to repl from any port (telnet, portdemo, ...)\r\n";
 
 static const char *PROMPT = "> ";
+
+// Continuation prompt, shown on every row of a form after the first.
+//
+// The SAME WIDTH as PROMPT, which zline requires: every row then
+// starts at the same column, and the editor can repaint without
+// asking the terminal where anything is. See z_line_set_multiline().
+static const char *CONT_PROMPT = ". ";
+
+// Is this input a complete Scheme form?
+//
+// Balanced parentheses, ignoring anything inside a string or after a
+// line comment -- otherwise a `(` in "a (b" or in a ; comment would
+// keep the reader waiting forever for a paren the user never intends
+// to type.
+//
+// An excess of CLOSING parens counts as complete rather than as an
+// error: the form is broken either way, and letting it through means
+// the reader reports the problem, which is far more useful than the
+// terminal silently refusing to accept the line.
+static bool form_complete(const char *s, void *user) {
+
+	(void)user;
+
+	int depth = 0;
+	bool in_str = false;
+
+	for (uint32_t i = 0; s[i]; i++) {
+
+		char c = s[i];
+
+		if (in_str) {
+			if (c == '\\' && s[i + 1]) i++;		// escaped char
+			else if (c == '"') in_str = false;
+			continue;
+		}
+
+		if (c == '"') { in_str = true; continue; }
+
+		// A comment runs to the end of its row, not the end of the
+		// whole buffer -- this input may be several rows.
+		if (c == ';') {
+			while (s[i] && s[i] != '\n') i++;
+			if (!s[i]) break;
+			continue;
+		}
+
+		if (c == '(' || c == '[') depth++;
+		else if (c == ')' || c == ']') {
+			depth--;
+			if (depth < 0) return true;
+		}
+
+	}
+
+	// An unterminated string keeps the form open too.
+	return depth <= 0 && !in_str;
+
+}
 
 // Only the commands that genuinely CAN'T be Scheme procedures are
 // listed as builtins -- each needs the requesting connection itself
@@ -882,6 +993,13 @@ static void handle_connect(const z_msg_t *msg) {
 	// CONNECT/CONNECTED exchange itself (see zport.h)
 	z_port_accept(&conns[slot].port, msg, (uint32_t)(slot + 1));
 	z_line_reset(&conns[slot].line);
+	z_line_set_history(&conns[slot].line, &line_history);
+
+	// Multi-line entry: Enter on an unbalanced form starts a new row
+	// instead of submitting. See form_complete() above and
+	// z_line_set_multiline() in zline.h.
+	z_line_set_multiline(&conns[slot].line, form_complete, NULL,
+		(uint32_t)strlen(PROMPT), CONT_PROMPT);
 
 	printf("repl: connection %d accepted (pid %ld)\n", slot, (long)msg->from);
 
@@ -971,15 +1089,21 @@ static void handle_data(const z_msg_t *msg) {
 				int complete =
 					z_line_feed(&c->line, data[i], echo, &echo_len, sizeof(echo));
 
-				if (echo_len) {
-					// see conn_send_str()'s own comment above -- same
-					// reasoning applies here.
-					if (z_port_send(&c->port, echo, echo_len) != Z_OK)
-						printf("repl: echo z_port_send failed (%lu bytes) to pid %ld\n",
-							(unsigned long)echo_len, (long)c->port.peer_pid);
-				}
+				if (echo_len) echo_put(c, echo, echo_len);
 
 				if (!complete) continue;
+
+				// A line is about to be executed, and its output goes
+				// down the same port -- so the echo has to be on the
+				// wire first or the two arrive out of order.
+				echo_flush(c);
+
+				// Remember it, now that it is a real submitted line.
+				// z_line_feed() deliberately does not do this itself
+				// -- only the caller knows a line was worth keeping,
+				// and blank ones are dropped by
+				// z_line_history_add().
+				z_line_history_add(&line_history, c->line.buf);
 
 				// Z_REPL_REPLY_MAX, not the smaller REPL_EVAL wire
 				// cap -- this is repl's own stack buffer for an
@@ -1054,6 +1178,14 @@ static void handle_data(const z_msg_t *msg) {
 				conn_send_str(c, PROMPT);
 
 			}
+
+			// Anything still buffered goes out now.
+			//
+			// This is the paste case: a block of characters that does
+			// not complete a line leaves its whole echo sitting in the
+			// batch, and without this the text would not appear until
+			// the next keystroke.
+			echo_flush(c);
 
 		}
 

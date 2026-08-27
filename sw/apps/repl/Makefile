@@ -177,10 +177,31 @@ repl.bin: repl.elf
 	python3 ../../../tools/mkexec.py repl.data repl.bin $$(($$END - $$EDATA)); \
 	rm -f repl.data
 
-clean:
-	rm -f repl.elf repl.bin repl.data repl.asm repl.dasm repl.map ms_stdlib.h *.o *.d
+# Host build of the shared line editor's test suite -- with the host's
+# own compiler, not $(CC).
+#
+#   make test
+#
+# The test lives with repl because repl is the line editor's only
+# consumer today, but sw/common/zline.c is shared: any other port
+# provider that wants a command line uses the same code, so run this
+# after touching it.
+#
+# What it checks is not mainly the buffer contents -- those are easy
+# to get right -- but that the ECHO puts the same thing on the screen.
+# An editor whose buffer and display disagree is worse than one that
+# cannot edit at all, because the user is then typing blind into
+# something that looks correct. So it drives a simulated terminal with
+# the echo bytes and compares after every keystroke.
+test:
+	cc --std=gnu99 -Wall -Wextra -I ../../common \
+		-o zline_test ../../common/zline_test.c ../../common/zline.c
+	./zline_test
 
-.PHONY: repl clean
+clean:
+	rm -f zline_test repl.elf repl.bin repl.data repl.asm repl.dasm repl.map ms_stdlib.h *.o *.d
+
+.PHONY: repl clean test
 
 # Header dependency tracking.
 #

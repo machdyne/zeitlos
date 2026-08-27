@@ -78,10 +78,10 @@ What reads those bytes decides what they mean:
   something actively wrong.
 
 - **`zline` (`sw/common/zline.h`)** — the line discipline for port
-  providers, used by `repl`. This is where richer editing belongs:
-  cursor movement, insert, history, and eventually multi-line
-  continuation. Its header already anticipates the last of those, and
-  notes that paren-balance logic layers on top rather than living
+  providers, used by `repl`. This is where richer editing lives:
+  cursor movement, insert, delete, kill and history all work there
+  now. See `docs/line_editing.md`. Multi-line continuation is still to
+  come, and paren-balance logic layers on top rather than living
   inside.
 
 Multi-line entry — typing a newline without submitting, then moving
