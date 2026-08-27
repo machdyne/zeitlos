@@ -953,6 +953,31 @@ void sh(void) {
 
 		}
 
+		// SYNC -- make the sdcard safe to remove or power off.
+		//
+		// FatFs holds metadata in RAM: a file's directory entry is not
+		// updated until it is closed, and both the volume and every open
+		// file carry a 512-byte sector buffer. Cutting power in that
+		// window -- or reprogramming the FPGA, which is the same thing
+		// from the card's point of view -- leaves lost clusters and
+		// half-written directory records.
+		//
+		// That is the most likely cause of corruption during development,
+		// where the board gets reprogrammed far more often than a normal
+		// machine gets power-cycled. Run this first and the card is
+		// consistent.
+		else if (!strncmp(buffer, "sync", cmdlen)) {
+			if (fs_unmount() == 0) {
+				printf("filesystem flushed; safe to reprogram or remove\n");
+				if (fs_mount_now() == 0)
+					printf("remounted.\n");
+				else
+					printf("remount failed -- reboot or reinsert card\n");
+			} else {
+				printf("flush failed\n");
+			}
+		}
+
 		else if (!strncmp(buffer, "df", cmdlen)) {
 			// One FAT scan, not two -- see fs_df_kb() in fs.c.
 			uint32_t total = 0, freek = 0;
@@ -1358,6 +1383,7 @@ void sh_help(void) {
 	printf(" kill <pid>        kill a process\n");
 	printf(" ps                display a process snapshot\n");
 	printf(" df                display filesystem capacity\n");
+	printf(" sync              flush sdcard (before reprogramming)\n");
 	printf(" mount             (re)mount the sdcard -- no card-detect, so this is manual\n");
 	printf(" format            ERASE the entire sdcard\n");
 	printf(" pr                display the pid name registry\n");

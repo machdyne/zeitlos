@@ -52,6 +52,10 @@ void fs_list_dir(char *path);
 int fs_open_write(FIL *f, char *path);
 int fs_write_chunk(FIL *f, const void *buf, uint32_t len);
 int fs_close_write(FIL *f);
+// flush FatFs's buffered metadata to the card -- see fs.c
+int fs_sync(FIL *f);
+// flush and unmount; call before cutting power or reprogramming
+int fs_unmount(void);
 
 int fs_open_read(FIL *f, char *path);
 int32_t fs_read_chunk(FIL *f, void *buf, uint32_t maxlen);

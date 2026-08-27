@@ -243,7 +243,11 @@ int fs_write_file(char *path, char *buf, uint32_t len) {
 
 // -- chunked (streaming) read/write -- see fs.h --
 
+// Bytes written since the last metadata flush. See FS_SYNC_INTERVAL.
+static uint32_t chunk_unsynced;
+
 int fs_open_write(FIL *f, char *path) {
+	chunk_unsynced = 0;
 	FRESULT res = f_open(f, path, FA_WRITE | FA_CREATE_ALWAYS);
 	if (res != FR_OK) {
 		printf("fs_open_write: failed; error code: %i\n", res);
@@ -252,6 +256,15 @@ int fs_open_write(FIL *f, char *path) {
 	return 1;
 }
 
+// How much unflushed data to tolerate before forcing a metadata write.
+//
+// A sync per chunk would be safest and far too slow -- it rewrites the
+// directory entry and FAT every time. 64KB bounds what an interrupted
+// transfer can lose or leave dangling, at roughly one extra metadata
+// write per 128 blocks, which is lost in the noise of the transfer
+// itself.
+#define FS_SYNC_INTERVAL   (64 * 1024)
+
 int fs_write_chunk(FIL *f, const void *buf, uint32_t len) {
 	UINT bw;
 	FRESULT res = f_write(f, buf, len, &bw);
@@ -259,7 +272,50 @@ int fs_write_chunk(FIL *f, const void *buf, uint32_t len) {
 		printf("fs_write_chunk: failed; error code: %i\n", res);
 		return -1;
 	}
+
+	// Periodic metadata flush -- see fs_sync() for why this matters.
+	// Without it the directory entry stays stale for the whole of a
+	// long transfer, so an interruption anywhere in it loses the lot
+	// AND leaves clusters allocated with nothing pointing at them.
+	chunk_unsynced += bw;
+	if (chunk_unsynced >= FS_SYNC_INTERVAL) {
+		f_sync(f);
+		chunk_unsynced = 0;
+	}
+
 	return (int)bw;
+}
+
+// Flush everything FatFs is holding in RAM out to the card.
+//
+// FatFs buffers aggressively and, crucially, does NOT update a file's
+// directory entry (its size and first cluster) until f_close(). With
+// FF_FS_TINY 0 there is also a 512-byte sector buffer inside every FIL
+// and another inside the volume itself. So between opening a file and
+// closing it, the on-card filesystem is inconsistent by design: some
+// clusters are allocated in the FAT with no directory entry pointing
+// at them.
+//
+// Lose power in that window -- or, far more likely during development,
+// reprogram the FPGA -- and the card is left with lost clusters and
+// half-written directory records. That is exactly the damage `fsck`
+// reported ("Wrong checksum for long file name"): interrupted writes,
+// not bad hardware.
+//
+// f_sync() does what f_close() does to the metadata while leaving the
+// file open, so this bounds the damage to whatever was written since
+// the last call rather than the whole transfer.
+int fs_sync(FIL *f) {
+	if (!f) return 0;
+	return (f_sync(f) == FR_OK) ? 1 : 0;
+}
+
+// Flush and unmount the volume. Call before deliberately cutting power
+// or reprogramming; after this the card is consistent and can be
+// removed. fs_mount_now() brings it back.
+int fs_unmount(void) {
+	FRESULT res = f_mount(NULL, "", 0);
+	return (res == FR_OK) ? 0 : 1;
 }
 
 int fs_close_write(FIL *f) {
