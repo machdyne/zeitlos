@@ -612,6 +612,78 @@ genuinely burns cycles rather than giving them up. Fine for pacing a
 short animation or a retry loop; actively antisocial for anything
 long.
 
+### Time -- IMPLEMENTED
+
+| Procedure | Behavior |
+|---|---|
+| `(current-time)` | seconds since the Unix epoch, UTC, as a number; `#f` if the clock is unavailable or unset |
+| `(current-date)` | `(year month day hour minute second weekday yearday)`; `#f` if unavailable or unset |
+| `(current-date t)` | the same breakdown for an arbitrary timestamp `t` |
+
+The wall clock (`rtl/rtc.v`, `docs/rtc.md`), as opposed to `(uptime)`
+above. Both exist and they answer different questions: `uptime` is
+monotonic and is what you time things with, this has an epoch and can
+jump backwards the moment net's NTP client lands a correction. Using
+the wrong one is how you get a negative duration.
+
+```scheme
+(current-date)          ; => (2026 8 27 14 31 2 4 238)
+(current-date 0)        ; => (1970 1 1 0 0 0 4 0)
+```
+
+`month` is 1-12 and `day` is 1-31 -- not the 0-based months a C
+`struct tm` uses. This is a value people read, and a 1-based month is
+what they expect. `weekday` is 0 for Sunday; `yearday` is 0-365.
+
+**Everything here is UTC.** There is no timezone conversion anywhere in
+Zeitlos yet -- see `docs/rtc.md` on why that is a decision rather than
+an oversight.
+
+`#f` rather than a panic when the clock is unset, which is the opposite
+call from the one `(video-mode ...)` makes for missing gateware. Setting
+the display is something the caller asked to **do**, and failing it
+quietly would hide a reflash they need to know about. Asking what time
+it is is a **question**, and "I don't know" is a real answer to it -- on
+a machine with no network that is the permanent, correct, entirely
+unexceptional answer, and blowing up a one-liner over it would be
+obnoxious. It also composes:
+
+```scheme
+(if (current-time)
+    (display (current-date))
+    (display "clock not set"))
+```
+
+Both halves of that check matter and neither implies the other: a board
+can have an RTC nobody has told the time to (the normal state for the
+first few seconds after boot), and a board can have no RTC at all.
+
+The optional argument to `current-date` makes it a general calendar
+function rather than only a clock reading -- formatting a file's
+timestamp, working out what day some computed second falls on. It needs
+no RTC, so `(current-date 0)` answers on a board with no clock. Same
+optional-argument shape as `(ls)`/`(ls path)` and
+`(video-mode)`/`(video-mode m)`.
+
+A **positional** list, unlike `(free)` and `(df)` below, which return
+association lists. Those hand back a dozen unrelated figures where a
+name is the only thing telling them apart; a date is eight fields in an
+order every calendar has used for a very long time, and
+`(cadr (assoc "hour" (current-date)))` would be a worse way to ask for
+the hour than `(list-ref (current-date) 3)`.
+
+Numbers rather than a preformatted string, matching `(ps)` and
+`(uptime)`: a string is one `str-append` away from a list of numbers,
+and a list of numbers cannot be recovered from a string without parsing
+it back.
+
+Seconds rather than the RTC's own 1/1024s units, which is the opposite
+of `(uptime)`'s ticks -- the reasoning there was that dividing to
+seconds is easy while recovering ticks isn't, and here the raw unit
+already **is** seconds. The fraction is deliberately not exposed:
+nothing in Scheme runs anywhere near that fast, and a two-element
+return would complicate every caller for the benefit of none.
+
 ### Memory -- IMPLEMENTED
 
 `(free)` returns an association list, all figures in **bytes** except

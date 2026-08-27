@@ -60,6 +60,40 @@ NET_STATIC_GATEWAY ?= 192.168.178.1
 # it always wins over whatever DHCP said, even on a successful lease.
 NET_STATIC_DNS     ?= 0.0.0.0
 
+# -- NTP (sw/apps/net/ntp.c) --
+#
+# NTP_SERVER is a HOSTNAME by default, not an address, because that is
+# what pool.ntp.org is for: it hands back a different nearby server
+# each time it is resolved, which spreads load and survives any single
+# member going away. Hardcoding one member's address would work today
+# and quietly stop working whenever that machine is retired, which is
+# exactly the failure the pool exists to prevent.
+#
+# The cost is that time sync needs DNS to be working. On a network
+# with no nameserver, set NET_STATIC_NTP below to an address instead
+# and ntp.c skips resolution entirely.
+#
+# Regional pools (de.pool.ntp.org, europe.pool.ntp.org, ...) work the
+# same way and are marginally closer; the plain global name is the
+# default because it is right everywhere.
+NTP_SERVER ?= pool.ntp.org
+CFLAGS += -DNTP_SERVER='"$(NTP_SERVER)"'
+
+# Same dotted-quad-or-hex handling as the addresses above. 0.0.0.0 (the
+# default) means "no override -- resolve NTP_SERVER by name". Unlike
+# NET_STATIC_IP/NETMASK/GATEWAY this is not a fallback for anything: if
+# set, it always wins and no DNS lookup ever happens.
+NET_STATIC_NTP     ?= 0.0.0.0
+
+# Set NTP_ENABLE=0 to build net without the time client at all --
+# ntp.o is not linked and nothing touches the RTC. For a board with no
+# route to the internet, or any setup that would rather set the clock
+# by hand. Note that ntp.c ALSO disables itself at runtime on a
+# bitstream without rtl/rtc.v, so this switch is about not carrying
+# the code, not about avoiding a crash.
+NTP_ENABLE ?= 1
+CFLAGS += -DNTP_ENABLE=$(NTP_ENABLE)
+
 dottedquad_to_hex = $(shell printf '%s' "$(1)" | grep -qE '^0[xX]' && \
 	printf '%s' "$(1)" || \
 	printf '0x%02X%02X%02X%02X' $$(printf '%s' "$(1)" | tr '.' ' '))
@@ -68,6 +102,7 @@ CFLAGS += -DNET_STATIC_IP=$(call dottedquad_to_hex,$(NET_STATIC_IP))
 CFLAGS += -DNET_STATIC_NETMASK=$(call dottedquad_to_hex,$(NET_STATIC_NETMASK))
 CFLAGS += -DNET_STATIC_GATEWAY=$(call dottedquad_to_hex,$(NET_STATIC_GATEWAY))
 CFLAGS += -DNET_STATIC_DNS=$(call dottedquad_to_hex,$(NET_STATIC_DNS))
+CFLAGS += -DNET_STATIC_NTP=$(call dottedquad_to_hex,$(NET_STATIC_NTP))
 
 ifeq ($(NET_DHCP), 1)
 DHCP_OBJ = dhcp.o
@@ -75,11 +110,20 @@ else
 DHCP_OBJ =
 endif
 
+ifeq ($(NTP_ENABLE), 1)
+NTP_OBJ = ntp.o zrtc.o
+else
+NTP_OBJ =
+endif
+
 # dns.c (sw/apps/net/dns.c) is always built in, independent of
 # NET_DHCP -- it only needs SOME nameserver configured (DHCP-provided
 # or NET_STATIC_DNS), not DHCP itself, so unlike dhcp.o there's no
 # "off" switch for it tied to NET_DHCP.
-OBJS = zeitlos.o zobj.o zstream.o zport.o $(PHY_OBJ) eth.o arp.o ip.o udp.o $(DHCP_OBJ) dns.o tcp.o telnet.o tftp.o net.o
+# zrtc.o rides with ntp.o rather than being listed separately: it is
+# the calendar arithmetic ntp.c uses to print the time it just set, and
+# nothing else in this app has any use for a date.
+OBJS = zeitlos.o zobj.o zstream.o zport.o $(PHY_OBJ) eth.o arp.o ip.o udp.o $(DHCP_OBJ) dns.o $(NTP_OBJ) tcp.o telnet.o tftp.o net.o
 
 net: net.elf net.bin
 
@@ -103,7 +147,7 @@ net: net.elf net.bin
 # value differs from last time), and every NET_PHY-sensitive object
 # depends on it.
 #
-# NET_DHCP/NET_STATIC_* are the same class of bug again, third time:
+# NET_DHCP/NET_STATIC_*/NTP_* are the same class of bug again, third time:
 # they only affect net.c's CFLAGS (and, for NET_DHCP=0, which objects
 # get linked at all), not net.c's own file content, so switching e.g.
 # `make NET_DHCP=0` after a previous `make NET_DHCP=1` build wouldn't
@@ -119,7 +163,7 @@ FORCE:
 	fi
 
 .net_config_selected: FORCE
-	@cur="$(NET_DHCP) $(NET_STATIC_IP) $(NET_STATIC_NETMASK) $(NET_STATIC_GATEWAY) $(NET_STATIC_DNS)"; \
+	@cur="$(NET_DHCP) $(NET_STATIC_IP) $(NET_STATIC_NETMASK) $(NET_STATIC_GATEWAY) $(NET_STATIC_DNS) $(NET_STATIC_NTP) $(NTP_SERVER) $(NTP_ENABLE)"; \
 	if [ ! -f $@ ] || [ "$$(cat $@ 2>/dev/null)" != "$$cur" ]; then \
 		echo "$$cur" > $@; \
 	fi
@@ -160,6 +204,12 @@ dhcp.o: dhcp.c dhcp.h udp.h ip.h eth.h
 dns.o: dns.c dns.h udp.h ../../common/znet.h
 	$(CC) $(CFLAGS) -c dns.c -o dns.o
 
+ntp.o: ntp.c ntp.h udp.h dns.h ../../common/zrtc.h ../../common/znet.h .net_config_selected
+	$(CC) $(CFLAGS) -c ntp.c -o ntp.o
+
+zrtc.o: ../../common/zrtc.c ../../common/zrtc.h
+	$(CC) $(CFLAGS) -c ../../common/zrtc.c -o zrtc.o
+
 tcp.o: tcp.c tcp.h
 	$(CC) $(CFLAGS) -c tcp.c -o tcp.o
 
@@ -169,7 +219,7 @@ telnet.o: telnet.c telnet.h tcp.h
 tftp.o: tftp.c tftp.h
 	$(CC) $(CFLAGS) -c tftp.c -o tftp.o
 
-net.o: net.c net_phy.h .net_phy_selected .net_config_selected ../../common/zsoc.h dhcp.h dns.h
+net.o: net.c net_phy.h .net_phy_selected .net_config_selected ../../common/zsoc.h ../../common/zntp.h dhcp.h dns.h ntp.h
 	$(CC) $(CFLAGS) -c net.c -S -o net.asm
 	$(CC) $(CFLAGS) -c net.c -o net.o
 

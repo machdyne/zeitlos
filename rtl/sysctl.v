@@ -405,6 +405,9 @@ module sysctl #()
 	wire [31:0] wbs_ethmac_dat_o;
 	wire [31:0] wbs_csrs_dat_o;
 	wire [31:0] wbs_socctl_dat_o;
+`ifdef RTC
+	wire [31:0] wbs_rtc_dat_o;
+`endif
 `ifdef ICACHE
 	wire [31:0] wbs_cache_dat_o;
 `endif
@@ -510,24 +513,52 @@ module sysctl #()
 	// was tried first and cost ~800 LUT4 on ECP5: adding another term
 	// to the wbm_dat_i mux is expensive because that mux resolves
 	// through a 32'hzzzz_zzzz default, which yosys handles poorly.
-	// Nibble 0x7 has three tenants, all always decoded:
+	// Nibble 0x7 has four tenants:
 	//   0x7000_00xx  csrs.v      read-only "what does this bitstream have"
-	//   0x7000_01xx  cache.v     instruction cache control/stats
+	//   0x7000_01xx  cache.v     instruction cache control/stats  (`ICACHE)
 	//   0x7000_02xx  socctl.v    writable global config
-	// Without ICACHE, csrs.v absorbs the cache window so the flush
-	// register still acks -- see the comment above cs_socctl below.
+	//   0x7000_03xx  rtc.v       wall-clock seconds/sub-seconds   (`RTC)
+	//
+	// Two of them are optional, and the rule that makes that safe is:
+	// CSRS ABSORBS THE WINDOW OF ANY TENANT THAT ISN'T BUILT. It acks
+	// any cycle in range, ignores writes, and reads back 32'h0 for
+	// offsets it doesn't know (see rtl/csrs.v), which is exactly the
+	// stub behaviour needed -- and a zero read correctly fails both
+	// z_icache_present()'s and z_rtc_available()'s magic checks, so
+	// software is told the hardware isn't there rather than being
+	// handed garbage.
+	//
+	// That absorption is not tidiness. An address NOTHING decodes gets
+	// no ack at all on this bus and picorv32_wb waits for it forever
+	// -- a dead hang, not a read of undefined data. sw/bios/bios.c and
+	// sw/os/fs/fs.c write the icache flush register unconditionally
+	// and have to (reading INFO first to check would hang on that very
+	// read), which is what taught us this the hard way.
+	//
+	// cs_csrs is therefore written once, below, as "the whole nibble
+	// minus whichever tenants actually exist in THIS build", rather
+	// than as a separate expression per combination. With two optional
+	// tenants that would be four cases to keep in agreement, and the
+	// one that mattered would be the one nobody tested.
 	wire cs_socctl = ((wbm_adr & 32'hf000_0300) == 32'h7000_0200);
 	wire wbm_cyc_socctl = cs_socctl && wbm_cyc;
 `ifdef ICACHE
-	wire cs_csrs = ((wbm_adr & 32'hf000_0300) == 32'h7000_0000);
 	wire cs_cache = ((wbm_adr & 32'hf000_0300) == 32'h7000_0100);
 	wire wbm_cyc_cache = cs_cache && wbm_cyc;
-`else
-	// csrs takes everything in the nibble EXCEPT socctl's window, so an
-	// unconditional icache flush write still gets acked (an undecoded
-	// address gets no ack at all and hangs the CPU -- see cache.v).
-	wire cs_csrs = ((wbm_adr & 32'hf000_0000) == 32'h7000_0000) && !cs_socctl;
 `endif
+`ifdef RTC
+	wire cs_rtc = ((wbm_adr & 32'hf000_0300) == 32'h7000_0300);
+	wire wbm_cyc_rtc = cs_rtc && wbm_cyc;
+`endif
+	wire cs_csrs = ((wbm_adr & 32'hf000_0000) == 32'h7000_0000)
+		&& !cs_socctl
+`ifdef ICACHE
+		&& !cs_cache
+`endif
+`ifdef RTC
+		&& !cs_rtc
+`endif
+		;
 `ifdef DEBUG
 	wire cs_debug = ((wbm_adr & 32'hf000_0000) == 32'he000_0000);
 `endif
@@ -584,6 +615,9 @@ module sysctl #()
 		cs_ethmac ? wbs_ethmac_dat_o :
 `endif
 		cs_socctl ? wbs_socctl_dat_o :
+`ifdef RTC
+		cs_rtc ? wbs_rtc_dat_o :
+`endif
 		cs_csrs ? wbs_csrs_dat_o :
 `ifdef ICACHE
 		cs_cache ? wbs_cache_dat_o :
@@ -609,6 +643,9 @@ module sysctl #()
 	wire wbs_ethmac_ack_o;
 	wire wbs_csrs_ack_o;
 	wire wbs_socctl_ack_o;
+`ifdef RTC
+	wire wbs_rtc_ack_o;
+`endif
 `ifdef ICACHE
 	wire wbs_cache_ack_o;
 `endif
@@ -662,6 +699,9 @@ module sysctl #()
 		cs_ethmac ? wbs_ethmac_ack_o :
 `endif
 		cs_socctl ? wbs_socctl_ack_o :
+`ifdef RTC
+		cs_rtc ? wbs_rtc_ack_o :
+`endif
 		cs_csrs ? wbs_csrs_ack_o :
 `ifdef ICACHE
 		cs_cache ? wbs_cache_ack_o :
@@ -1534,6 +1574,50 @@ module sysctl #()
 		.wb_ack_o(wbs_csrs_ack_o),
 		.wb_cyc_i(wbm_cyc_csrs),
 	);
+
+	// WISHBONE SLAVE: RTC (rtl/rtc.v) -- wall-clock seconds since the
+	// Unix epoch, plus a 1/1024s fraction.
+	//
+	// Optional, `RTC in rtl/boards.vh, which defines it at the
+	// universal level so every board gets one by default -- it needs
+	// no pins and no board support, so there is no board-specific
+	// reason to want it or not. Without it, csrs.v absorbs this
+	// window (see the cs_csrs comment above), reads return 0, the
+	// FEATURE bit is clear and software correctly concludes there is
+	// no clock here.
+	//
+	// NOT the same thing as rtc_ctr further up this file, despite the
+	// name they share, and NOT affected by this define. That one is
+	// the ~732Hz KTIMER divider and counts ticks since boot; this one
+	// has an epoch and answers what the date is. See rtc.v's own
+	// header comment.
+	//
+	// wb_adr_i is masked to this block's own window rather than being
+	// the raw word address, exactly like the socctl and icache blocks
+	// above -- the RTC lives at 0x7000_03xx, so wbm_adr_sel_word is
+	// 0xC0 for its first register, not 0. Passing it straight through
+	// would mean no case ever matches: writes would vanish and MAGIC
+	// would read back zero. Three bits, not two, because this block
+	// has six registers.
+	//
+	// CLK_HZ is SYSCLK (48MHz on every board in this lineup), which
+	// the prescaler divides by 1024 exactly -- see rtc.v.
+`ifdef RTC
+	rtc_wb #(
+		.CLK_HZ(SYSCLK)
+	) rtc_i (
+		.wb_clk_i(wbm_clk),
+		.wb_rst_i(wbm_rst),
+		.wb_adr_i({ 29'b0, wbm_adr_sel_word[2:0] }),
+		.wb_dat_i(wbm_dat_o),
+		.wb_dat_o(wbs_rtc_dat_o),
+		.wb_we_i(wbm_we),
+		.wb_sel_i(wbm_sel),
+		.wb_stb_i(wbm_stb),
+		.wb_ack_o(wbs_rtc_ack_o),
+		.wb_cyc_i(wbm_cyc_rtc)
+	);
+`endif
 
 	// WISHBONE SLAVE: USB HID
 `ifdef USB_HID

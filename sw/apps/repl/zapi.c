@@ -30,6 +30,8 @@
 #include "../../common/znet.h"
 #include "../../common/zstream.h"
 #include "../../common/zproc.h"
+#include "../../common/zrtc.h"	// the wall clock -- see (current-time)/
+								// (current-date) below
 #include "../../common/zsoc.h"	// Z_VIDEO_MODE_*, z_video_mode_name(),
 								// z_video_mode_from_name() -- the naming
 								// helpers only. The actual get/set go
@@ -1192,6 +1194,119 @@ static ms_val *zapi_df(ms_val *args) {
 
 }
 
+// -- Time --
+//
+// The wall clock (rtl/rtc.v, sw/common/zrtc.h), as opposed to
+// (uptime) further up, which counts ticks since boot. Both are here
+// and they answer different questions: uptime is monotonic and is what
+// you time things with, this has an epoch and can jump backwards the
+// moment net's NTP client lands a correction. Using the wrong one is
+// how you get a negative duration.
+//
+// Everything below is UTC. There is no timezone conversion anywhere in
+// Zeitlos yet -- see sw/common/zrtc.h's own note on why that is a
+// decision rather than an oversight.
+
+// True only if the clock is both present in this bitstream and has
+// actually been set. Both halves are needed and neither implies the
+// other: a board can have an RTC nobody has told the time to (the
+// normal state for the first few seconds after boot, and the permanent
+// state with no network), and a board can have no RTC at all.
+//
+// z_rtc_available() rather than z_rtc_present(): the latter would HANG
+// on a bitstream predating rtl/rtc.v, which is exactly the sort of
+// machine somebody might type (current-time) at. See zrtc.h.
+static bool zapi_clock_ok(void) {
+	return z_rtc_available() && z_rtc_valid();
+}
+
+// (current-time) -- seconds since the Unix epoch, UTC, as a number.
+// #f if the clock is unavailable or has never been set.
+//
+// #f rather than a panic, deliberately, and this is the opposite call
+// from the one (video-mode ...) makes for missing gateware. Setting
+// the display is something the caller asked to DO, and failing it
+// silently would hide a reflash they need to know about. Asking what
+// time it is is a QUESTION, and "I don't know" is a real answer to it
+// -- on a machine with no network that is the permanent, correct,
+// entirely unexceptional answer, and blowing up a one-liner over it
+// would be obnoxious. It also composes: (if (current-time) ... ).
+//
+// Seconds rather than the RTC's own sub-second units, unlike
+// (uptime)'s ticks -- the reasoning there was that dividing to seconds
+// is easy while recovering ticks isn't, and here the raw unit IS
+// seconds. The 1/1024s fraction is deliberately not exposed: nothing
+// in Scheme runs anywhere near that fast, and a two-element return
+// would complicate every caller for the benefit of none of them.
+static ms_val *zapi_current_time(ms_val *args) {
+	(void)args;
+	if (!zapi_clock_ok()) return ms_mk_bool(false);
+	return ms_mk_num(z_rtc_seconds());
+}
+
+// (current-date) -- the clock broken into calendar fields, UTC:
+//
+//   (year month day hour minute second weekday yearday)
+//
+// e.g. (2026 8 27 14 31 2 4 238). month is 1-12 and day 1-31 (not the
+// 0-based months a C struct tm uses -- this is a value people read,
+// and a 1-based month is what they expect); weekday is 0 for Sunday;
+// yearday is 0-365.
+//
+// #f if the clock is unavailable or unset, same as (current-time) and
+// for the same reason.
+//
+// (current-date t) -- decode an arbitrary Unix timestamp instead of
+// the current one. That makes this a general calendar function rather
+// than only a clock reading, which matters for the obvious things --
+// formatting a file's timestamp, working out what day some computed
+// second falls on -- and it needs no RTC at all, so (current-date 0)
+// answers (1970 1 1 0 0 0 4 0) even on a board with no clock. The
+// optional-argument shape matches (ls)/(ls path) and
+// (video-mode)/(video-mode m) elsewhere in this file.
+//
+// A positional list rather than an association list, unlike (free) and
+// (df) above. Those return a dozen unrelated figures where a name is
+// the only thing telling them apart; a date is eight fields in an
+// order every calendar has used for a very long time, and
+// (cadr (assoc "hour" (current-date))) would be a worse way to ask for
+// the hour than (list-ref (current-date) 3).
+//
+// Numbers rather than a preformatted string, matching (ps) and
+// (uptime): a string is one str-append away from a list of numbers,
+// and a list of numbers cannot be recovered from a string without
+// parsing it back.
+static ms_val *zapi_current_date(ms_val *args) {
+
+	uint32_t t;
+
+	if (!ms_is_nil(args)) {
+		int n = zapi_arg_int(ms_car(args), "current-date");
+		if (n < 0)
+			ms_log(MS_PANIC, "current-date: timestamp is before the "
+				"epoch (want 0 or more)");
+		t = (uint32_t)n;
+	} else {
+		if (!zapi_clock_ok()) return ms_mk_bool(false);
+		t = z_rtc_seconds();
+	}
+
+	z_tm_t tm;
+	z_time_to_tm(t, &tm);
+
+	char buf[80];
+	snprintf(buf, sizeof(buf), "(%ld %d %d %d %d %d %d %d)",
+		(long)tm.year, tm.month, tm.day, tm.hour, tm.min, tm.sec,
+		tm.wday, tm.yday);
+
+	// Source text handed to ms_read(), the same way (ps)/(free)/(df)
+	// build their results -- see zapi_read_form()'s own comment. Every
+	// value here is a number this file formatted itself, so there is
+	// nothing a caller could inject.
+	return zapi_read_form(buf);
+
+}
+
 // -- registration --
 
 // (video-mode) -- current virtual phosphor mode as a string, one of
@@ -1296,6 +1411,8 @@ void zapi_register(void) {
 	ms_def_builtin("run", zapi_run);
 	ms_def_builtin("kill", zapi_kill);
 	ms_def_builtin("uptime", zapi_uptime);
+	ms_def_builtin("current-time", zapi_current_time);
+	ms_def_builtin("current-date", zapi_current_date);
 	ms_def_builtin("free", zapi_free);
 	ms_def_builtin("delay-ms", zapi_delay_ms);
 	ms_def_builtin("print-console", zapi_print_console);

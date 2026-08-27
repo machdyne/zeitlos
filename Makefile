@@ -22,6 +22,7 @@ RTL_PICO = \
 	rtl/debug.v \
 	rtl/csrs.v \
 	rtl/socctl.v \
+	rtl/rtc.v \
 	rtl/spim.v \
 	rtl/gpu/gpu_raster.v \
 	rtl/gpu/gpu_blit.v \

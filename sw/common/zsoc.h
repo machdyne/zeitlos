@@ -121,6 +121,24 @@
 // z_soc_cpu_name().
 #define Z_FEATURE_CPU_ZEITLOS32 (1u << 23)
 
+// rtl/rtc.v -- the wall clock (seconds since the Unix epoch, plus a
+// 1/1024s fraction). Mirrors `RTC in rtl/boards.vh, which defines it
+// at the universal level, so this is set on every board by default.
+// Clear means either a board that deliberately turned it off, or a
+// bitstream built before the RTC existed at all -- and software wants
+// the same thing in both cases, which is to not use a clock that
+// isn't there.
+//
+// Checking this bit is not a nicety, and it must come FIRST. The
+// RTC's own registers are at 0x7000_03xx, and a pre-RTC `ICACHE
+// bitstream decodes nothing there -- an undecoded address gets no ack
+// on this bus and the CPU waits for it forever. So reading the RTC's
+// magic as a first probe can hang; reading THIS bit, at 0x7000_0008,
+// cannot, because every bitstream ever built decodes it.
+// z_rtc_available() (sw/common/zrtc.h) is that check in the safe
+// order and is what apps should call.
+#define Z_FEATURE_RTC         (1u << 24)
+
 // -- feature table (sw/common/zsoc.c) --
 //
 // The human-readable half of the Z_FEATURE_* bits above, kept in the
@@ -143,6 +161,12 @@ typedef enum {
 	Z_FEAT_GROUP_INPUT,
 	Z_FEAT_GROUP_STORAGE,
 	Z_FEAT_GROUP_NETWORK,
+	// The wall clock (rtl/rtc.v). Its own group rather than folded
+	// into an existing one because it fits none of them -- it is not
+	// memory, not input, not storage. A group with one member reads
+	// oddly in a list until the alternative is tried, which is
+	// filing a clock under "input".
+	Z_FEAT_GROUP_CLOCK,
 	Z_FEAT_GROUP_LED,
 	Z_FEAT_GROUP_COUNT
 } z_feat_group_t;

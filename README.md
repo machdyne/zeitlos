@@ -33,7 +33,7 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
  - FAT16/32 filesystem
  - Core apps in flash -- boots to a desktop with no sdcard ([docs/flash_apps.md](docs/flash_apps.md))
  - Object-based interprocess messaging and streaming
- - IP/ARP/ICMP/UDP/DHCP/DNS/TFTP/TCP/TELNET networking
+ - IP/ARP/ICMP/UDP/DHCP/NTP/DNS/TFTP/TCP/telnet networking
 
 #### Memory Translation Unit
 

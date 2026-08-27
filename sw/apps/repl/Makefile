@@ -81,8 +81,12 @@ TE_CFLAGS = -DEMBEDDED -DTE_HOST_IO \
 	-DTE_DEFAULT_ROWS=$(TE_DEFAULT_ROWS) -DTE_DEFAULT_COLS=$(TE_DEFAULT_COLS) \
 	-I$(TE_SUPPORT_DIR)
 
+# zrtc.o is the calendar arithmetic behind (current-date) -- see
+# zapi.c. Nothing else in repl needs a date, so it rides in on that one
+# procedure and --gc-sections drops it from any build where zapi.c
+# stops calling it.
 OBJS = zeitlos.o zobj.o zport.o zline.o zrepl.o zdns.o zfsapp.o zstream.o \
-	zgfx.o zfont_data.o zwin.o ms.o \
+	zgfx.o zfont_data.o zwin.o zrtc.o ms.o \
 	te.o te_bridge.o page.o zapi.o repl.o
 
 repl: repl.elf repl.bin
@@ -98,6 +102,9 @@ zport.o:
 
 zline.o:
 	$(CC) $(CFLAGS) -c ../../common/zline.c -o zline.o
+
+zrtc.o: ../../common/zrtc.c ../../common/zrtc.h
+	$(CC) $(CFLAGS) -c ../../common/zrtc.c -o zrtc.o
 
 zrepl.o:
 	$(CC) $(CFLAGS) -c ../../common/zrepl.c -o zrepl.o
@@ -153,7 +160,7 @@ te_bridge.o: te_bridge.c te_bridge.h $(TE_SUPPORT_DIR)/te_host_io.h
 # one-variable-feeds-every-compile reasoning documented above.
 zapi.o: zapi.c zapi.h ms_api.h ../../common/zfsapp.h ../../common/zwin.h \
 	../../common/zdns.h ../../common/znet.h ../../common/zstream.h \
-	../../common/zproc.h
+	../../common/zproc.h ../../common/zrtc.h
 	$(CC) $(CFLAGS) $(MS_SIZE_CFLAGS) -c zapi.c -o zapi.o
 
 # the `page` command's VT100 file viewer -- see page.h. No ms/te flags

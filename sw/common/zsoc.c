@@ -68,6 +68,8 @@ const z_feature_info_t z_soc_features[] = {
 	{ Z_FEATURE_SPI_ETH,    "spi-eth", Z_FEAT_GROUP_NETWORK },
 	{ Z_FEATURE_ETH_RMII,   "rmii",    Z_FEAT_GROUP_NETWORK },
 
+	{ Z_FEATURE_RTC,        "rtc",     Z_FEAT_GROUP_CLOCK   },
+
 	{ Z_FEATURE_LED_RGB,    "rgb",     Z_FEAT_GROUP_LED     },
 	{ Z_FEATURE_LED_DEBUG,  "debug",   Z_FEAT_GROUP_LED     },
 
@@ -86,5 +88,6 @@ const char *const z_soc_feature_groups[] = {
 	"input  ",
 	"storage",
 	"network",
+	"clock  ",
 	"led    ",
 };

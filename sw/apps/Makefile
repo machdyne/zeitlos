@@ -11,6 +11,7 @@ all:
 	cd info && make
 	cd settings && make
 	cd calc && make
+	cd clock && make
 	cd read && make
 	cd net && make
 	cd term && make
@@ -31,6 +32,7 @@ clean:
 	cd info && make clean
 	cd settings && make clean
 	cd calc && make clean
+	cd clock && make clean
 	cd read && make clean
 	cd net && make clean
 	cd term && make clean

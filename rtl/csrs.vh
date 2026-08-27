@@ -104,4 +104,22 @@ localparam CSR_FEATURES =
 `ifdef CPU_ZEITLOS32
 	(32'h1 << 23) |
 `endif
+// rtl/rtc.v -- the wall clock. Mirrors `RTC in rtl/boards.vh like
+// every bit above mirrors its own define; boards.vh defines it at the
+// universal level, so this is set on every board by default and clear
+// only where somebody deliberately commented it out.
+//
+// This bit is what software checks BEFORE touching the RTC's own
+// registers, and the order is load-bearing rather than stylistic.
+// Within a build the two answers agree -- no RTC means csrs.v absorbs
+// its window and the MAGIC read comes back 0 either way. Across
+// builds they do not: on a bitstream predating rtl/rtc.v entirely,
+// 0x7000_03xx is decoded by nothing on an `ICACHE board, and an
+// undecoded address on this bus never acks, so the CPU HANGS on that
+// read (see rtl/cache.v's own note on the same hazard). This bit sits
+// at 0x7000_0008, which every bitstream ever built decodes, so asking
+// here is always safe. See z_rtc_available() in sw/common/zrtc.h.
+`ifdef RTC
+	(32'h1 << 24) |
+`endif
 	32'h0;

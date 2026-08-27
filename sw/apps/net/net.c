@@ -1,5 +1,5 @@
 /*
- * net -- ARP + ICMP echo (ping) + TFTP client + TCP/telnet client + DNS client
+ * net -- ARP + ICMP echo (ping) + TFTP client + TCP/telnet client + DNS + NTP
  *
  * Phases 1-4 of the staged plan in docs/networking.md: SPI/chip
  * bring-up, ARP, IP + ICMP echo reply, UDP + TFTP -- all confirmed
@@ -32,6 +32,18 @@
  * and docs/networking.md's "DNS client" section for where the
  * nameserver itself comes from (DHCP by default, or the
  * NET_STATIC_DNS build-time override).
+ *
+ * NTP (ntp.c/h) sets the hardware RTC (rtl/rtc.v, sw/common/zrtc.h)
+ * from a public time server -- once a few seconds after the network is
+ * up, then hourly. Nothing waits for it and nothing depends on it: a
+ * machine that never manages a sync is one that doesn't know the date,
+ * not a broken one. It resolves its server's hostname by calling
+ * dns.c directly with net's OWN pid as the requester, rather than
+ * through zdns.h's blocking wrapper, which would deadlock here -- see
+ * ntp.c's header comment for why, and for what an SNTP client
+ * deliberately leaves out. Other processes can prod it with
+ * Z_NET_NTP_SYNC (sw/common/zntp.h); nothing needs it to READ the
+ * time, which is a plain load from a memory-mapped register.
  *
  * IP config: DHCP by default (sw/apps/net/dhcp.c -- DISCOVER/OFFER/
  * REQUEST/ACK, run once at startup, no renewal -- see that file's own
@@ -73,6 +85,14 @@
  *   > tput <server-ip> <local-file> [remote-file]
  */
 
+// Set by sw/apps/net/Makefile (NTP_ENABLE ?= 1). Defined here first
+// because the #include below is itself guarded on it -- a fallback
+// further down, alongside the NET_STATIC_* ones, would be too late and
+// would silently build without the header on a standalone compile.
+#ifndef NTP_ENABLE
+#define NTP_ENABLE 1
+#endif
+
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
@@ -82,12 +102,16 @@
 #include "../../common/zstream.h"
 #include "../../common/zport.h"
 #include "../../common/zsoc.h"
+#include "../../common/zntp.h"
 #include "net_phy.h"
 #include "eth.h"
 #include "arp.h"
 #include "ip.h"
 #include "dhcp.h"
 #include "dns.h"
+#if NTP_ENABLE
+#include "ntp.h"
+#endif
 #include "tftp.h"
 #include "tcp.h"
 #include "telnet.h"
@@ -119,6 +143,9 @@ static const uint8_t our_mac[6] = { 0x02, 0x00, 0x00, 0x00, 0x00, 0x01 };
 #ifndef NET_STATIC_DNS
 #define NET_STATIC_DNS      0x00000000u	// none -- see "Config" below
 #endif
+#ifndef NET_STATIC_NTP
+#define NET_STATIC_NTP      0x00000000u	// none -- resolve NTP_SERVER by name
+#endif
 
 // kept as the OUR_* names below since every existing comment/message
 // in this file already refers to them that way -- NET_STATIC_* is
@@ -145,7 +172,22 @@ static const uint8_t our_mac[6] = { 0x02, 0x00, 0x00, 0x00, 0x00, 0x01 };
 // reasoning on why DNS gets this different-from-IP/gateway treatment.
 #define OUR_DNS      NET_STATIC_DNS
 
+// Same standing-override shape as OUR_DNS above, one step further: set
+// it and ntp.c talks to exactly that address and never asks DNS at
+// all; leave it 0 (the default) and ntp.c resolves the Makefile's
+// NTP_SERVER hostname instead. There is no DHCP option involved either
+// way -- option 42 exists, but no home router this has been tried
+// against offers it, and a public pool is a better default than
+// whatever a consumer router thinks a time server is.
+#define OUR_NTP      NET_STATIC_NTP
+
 static bool transfer_active = false;
+
+// Whether ntp_init() found something to do -- false on a build with
+// NTP_ENABLE=0 or a bitstream without rtl/rtc.v. Kept here rather than
+// asked of ntp.c because it is answered once, at startup, and only
+// Z_NET_NTP_STATUS ever wants it.
+static bool ntp_enabled = false;
 
 // only PUT needs a final reply sent from here -- for GET, the stream
 // itself (opened directly by the receiver, see handle_stream_open())
@@ -432,6 +474,51 @@ static void handle_dns_resolve(const z_msg_t *msg) {
 
 }
 
+#if NTP_ENABLE
+
+// -- time sync (sw/common/zntp.h, sw/apps/net/ntp.c) --
+
+// A Z_NET_NTP_SYNC carries no payload -- there is exactly one thing it
+// can mean and no parameters to it. Fire-and-forget on the sender's
+// side, so nothing is sent back: see zntp.h on why a UI must not block
+// on a public server's response time.
+static void handle_ntp_sync(const z_msg_t *msg) {
+	printf("net: ntp: sync requested by pid %ld\n", (long)msg->from);
+	ntp_sync_now();
+}
+
+static void handle_ntp_status(const z_msg_t *msg) {
+
+	uint32_t last = ntp_last_sync_ticks();
+
+	z_obj_t reply = z_obj_map(3);
+	z_map_set(&reply, "enabled", z_obj_uint32(ntp_enabled ? 1 : 0));
+	z_map_set(&reply, "synced", z_obj_uint32(ntp_ever_synced() ? 1 : 0));
+	z_map_set(&reply, "age", z_obj_uint32(last ? (z_uptime_ticks() - last) : 0));
+	// `reply` intentionally never freed -- same one-shot borrowed-reply
+	// tradeoff reply_error() above documents (docs/messaging.md).
+	z_msg_new_send(msg->from, Z_NET_NTP_STATUS, msg->tag, reply);
+
+}
+
+#else
+
+// NTP compiled out entirely (`make NTP_ENABLE=0`) -- ntp.o isn't even
+// linked (see the Makefile's NTP_OBJ), so there is no ntp_sync_now()
+// to call. Z_NET_NTP_SYNC is simply ignored in that build, and a
+// status request still gets a well-formed reply saying so, rather than
+// no reply at all: a caller waiting on one should learn that the
+// answer is "not built in", not time out wondering.
+static void handle_ntp_status(const z_msg_t *msg) {
+	z_obj_t reply = z_obj_map(3);
+	z_map_set(&reply, "enabled", z_obj_uint32(0));
+	z_map_set(&reply, "synced", z_obj_uint32(0));
+	z_map_set(&reply, "age", z_obj_uint32(0));
+	z_msg_new_send(msg->from, Z_NET_NTP_STATUS, msg->tag, reply);
+}
+
+#endif
+
 static void check_tftp_progress(void) {
 
 	if (!transfer_active) return;
@@ -597,13 +684,27 @@ int main(void) {
 	ip_init(use_ip, use_netmask, use_gateway);
 	tcp_init(use_ip);
 
+	// Arms the SNTP client (sw/apps/net/ntp.c). Deliberately AFTER
+	// dns_set_nameserver() and the arp/ip/tcp re-init above: with the
+	// default (hostname) server it needs a working nameserver, and
+	// with any server it needs an address and a route. Nothing waits
+	// on it -- the first request goes out a few seconds from now, off
+	// ntp_poll(), and a machine that never manages a sync is a machine
+	// that just doesn't know the time, not a broken one.
+#if NTP_ENABLE
+	ntp_enabled = ntp_init(OUR_NTP);
+#else
+	printf("net: ntp disabled at build time (NTP_ENABLE=0)\n");
+#endif
+
 	// registers as "net0" (see sw/os/pidreg.h) -- callers can now
 
 	printf("net: ip ");
 	print_ip(use_ip);
 	printf("/");
 	print_ip(use_netmask);
-	printf(", listening (arp + icmp echo + tftp + telnet + dns)\n");
+	printf(", listening (arp + icmp echo + tftp + telnet + dns%s)\n",
+		ntp_enabled ? " + ntp" : "");
 
 	while (1) {
 
@@ -621,6 +722,20 @@ int main(void) {
 			if (msg.subject == Z_STREAM_OPEN) handle_stream_open(&msg);
 			else if (msg.subject == Z_NET_TFTP_PUT) handle_tftp_put_request(&msg);
 			else if (msg.subject == Z_NET_DNS_RESOLVE) handle_dns_resolve(&msg);
+			// A DNS reply arriving HERE, at net, is net's own DNS
+			// request coming back to itself -- ntp.c asks dns.c
+			// directly and names this process as the requester, since
+			// the usual blocking wrapper (zdns.h's z_dns_resolve())
+			// would deadlock when the caller is the process that has
+			// to answer. See ntp.c's header comment. If the tag says
+			// it isn't ntp's, fall through: something else in a later
+			// version may be doing the same trick.
+#if NTP_ENABLE
+			else if (msg.subject == Z_NET_DNS_RESOLVE_REPLY &&
+				ntp_handle_dns_reply(&msg)) { /* consumed */ }
+			else if (msg.subject == Z_NET_NTP_SYNC) handle_ntp_sync(&msg);
+#endif
+			else if (msg.subject == Z_NET_NTP_STATUS) handle_ntp_status(&msg);
 			else if (msg.subject == Z_PORT_CONNECT) handle_telnet_port_connect(&msg);
 			else if (msg.subject == Z_PORT_DATA) handle_telnet_port_data(&msg);
 			else if (msg.subject == Z_PORT_DATA_ACK) z_port_handle_ack(&telnet_port, &msg);
@@ -632,6 +747,11 @@ int main(void) {
 		tcp_poll();
 		telnet_poll();
 		dns_poll();
+#if NTP_ENABLE
+		// Cheap: one comparison in the state this is in almost all of
+		// the time. See ntp.c's own ntp_poll().
+		ntp_poll();
+#endif
 
 		// Yield the rest of the timeslice.
 		//

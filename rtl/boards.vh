@@ -4,6 +4,31 @@
 `define DEBUG
 `define ARBITER
 
+// RTC: the wall clock (rtl/rtc.v) -- seconds since the Unix epoch plus
+// a 1/1024s fraction, set over the network by sw/apps/net's SNTP
+// client and read by sw/apps/clock. See docs/rtc.md.
+//
+// Universal rather than per-board because there is no board-specific
+// reason to want it or not want it: it needs no pins, no external
+// part and no board support of any kind, just a prescaler and a
+// counter clocked from sys_clk. Every board can have one, so every
+// board does by default.
+//
+// Comment it out to reclaim the logic on a board that is genuinely
+// tight -- roughly a 32-bit counter, a 24-bit prescaler and a small
+// register file. Software copes: rtl/csrs.v's own FEATURE bit (see
+// rtl/csrs.vh) goes clear, z_rtc_available() (sw/common/zrtc.h)
+// answers false, net skips its NTP client entirely and sw/apps/clock
+// says on screen that this bitstream has no clock. Nothing hangs and
+// nothing has to be rebuilt differently -- unlike `CPU_MUL above,
+// this is not a switch the software half has to agree with.
+//
+// NOT the same thing as rtl/sysctl.v's `rtc_ctr`, despite the name
+// they share. That is the ~732Hz KTIMER divider, it counts ticks
+// since boot, it is unconditional, and it is unaffected by this
+// define. Only one of the two knows what a date is.
+`define RTC
+
 // RV32IM: hardware multiply and divide (rtl/cpu/picorv32/picorv32.v's
 // ENABLE_FAST_MUL/ENABLE_MUL/ENABLE_DIV). Universal rather than
 // per-board because the alternative -- some boards with M, some
