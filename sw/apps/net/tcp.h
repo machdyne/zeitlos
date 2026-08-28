@@ -32,6 +32,31 @@
  *   relies on the peer's own retransmit timer to resend it in order.
  *   Expected to be a non-issue on a local, low-latency LAN; would
  *   matter more on a lossy/reordering path.
+ *
+ *   Reviewed once SSH was working, and deliberately LEFT AS IS. This
+ *   is a throughput property, not a correctness one: tcp_handle()
+ *   delivers only on an exact seq == rcv_nxt match, so the byte
+ *   stream handed to a listener is always in order and never
+ *   duplicated. SSH's per-packet MAC is therefore never at risk from
+ *   it, which is worth stating plainly because the opposite was
+ *   assumed for a while.
+ *
+ *   The window advertised below is a fixed 2048 bytes, so a peer can
+ *   have at most ~4 segments in flight and a single loss costs at
+ *   most that much retransmission. Reassembly would save around 1.5KB
+ *   of resend -- the window, not the algorithm, is what caps the win,
+ *   so reassembly is only worth doing together with a larger window.
+ *
+ *   The cheaper half of the same problem is still open: this file
+ *   does NOT send a duplicate ACK when it drops an out-of-order
+ *   segment, so the peer never sees the three dup-ACKs that would
+ *   trigger fast retransmit and always waits a full RTO (200ms on
+ *   Linux) instead of recovering in about one RTT. RFC 5681 asks for
+ *   that immediate dup-ACK and it is one line -- `send_ack()` in the
+ *   gap branch of tcp_handle(). Not done yet, on purpose: nothing has
+ *   been measured losing packets on this hardware, and any change
+ *   here wants a host harness that deliberately drops, reorders and
+ *   duplicates segments first.
  * - **No options at all** -- no MSS negotiation, no window scaling.
  *   Both ends fall back to RFC 879's 536-byte default MSS since
  *   neither side advertises one. TCP_MAX_PAYLOAD below matches that.

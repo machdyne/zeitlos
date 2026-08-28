@@ -456,9 +456,35 @@ void tcp_handle(uint32_t src_ip, const uint8_t *p, uint16_t len) {
 				if (deliver_len > TCP_MAX_RX_PAYLOAD)
 					deliver_len = TCP_MAX_RX_PAYLOAD;
 				notify(TCP_EVENT_DATA, data, deliver_len);
-			} else if (seq < tcb.rcv_nxt) {
+			} else if ((int32_t)(seq - tcb.rcv_nxt) < 0) {
 				// already-seen retransmit -- re-ack so the peer
-				// stops retransmitting it, don't deliver it again
+				// stops retransmitting it, don't deliver it again.
+				//
+				// SIGNED DIFFERENCE, NOT `seq < tcb.rcv_nxt`. TCP
+				// sequence numbers are modulo 2^32 and wrap, so a
+				// plain unsigned compare gives the wrong answer for
+				// every segment that straddles the wrap point: an old
+				// retransmit at 0xFFFF_FF00 compared against an
+				// rcv_nxt of 0x0000_0040 looks like a FUTURE segment
+				// and falls through to the gap case below, where it
+				// is dropped without the re-ack that would have
+				// stopped the peer resending it.
+				//
+				// This is not the far-fetched 4GB-session case it
+				// sounds like. The peer's initial sequence number is
+				// random across the whole 32-bit space, so a
+				// connection can start a few hundred bytes below the
+				// wrap purely by chance -- roughly one session in 400
+				// wraps within its first 10MB. The symptom would be a
+				// stall of one retransmit timeout (~200ms), rare
+				// enough to look like a network glitch and never be
+				// traced back to here.
+				//
+				// process_ack() above already gets this right, using
+				// modular subtraction (`ack_num - tx_seq < consumed`).
+				// The two equality tests either side of this one
+				// (seq == rcv_nxt, fin_seq == rcv_nxt) are wrap-safe
+				// as written, since equality is unaffected.
 				send_ack();
 			}
 			// seq > rcv_nxt: a real gap -- no reassembly (tcp.h),
