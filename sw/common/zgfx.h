@@ -77,6 +77,38 @@ void z_fb_draw_text(int x, int y, const char *s, int color, const z_font_t *font
 void z_fb_draw_char2(int x, int y, char c, int fg_color, int bg_color, const z_font_t *font, const z_clip_t *clip);
 void z_fb_draw_text2(int x, int y, const char *s, int fg_color, int bg_color, const z_font_t *font, const z_clip_t *clip);
 
+// -- raster operations --
+//
+// What the `color` argument of z_fb_hw_line()/z_fb_hw_box() (and
+// z_win_hw_line()/z_win_hw_box(), zwin.h) actually selects. It has
+// always been a colour; it is now a two-bit OPERATION, of which the
+// first two values are the old colours unchanged -- every existing
+// caller passing 0 or 1 keeps exactly the behaviour it had.
+//
+// Z_RASTER_XOR is the addition. XOR is its own inverse, so drawing a
+// shape a second time in the same place restores whatever was under
+// it, exactly, with nothing saved anywhere and no knowledge of what
+// was there. On a 1bpp framebuffer with no per-pixel ownership that
+// is the only way to draw something temporary over content you do not
+// own -- a drag outline, a rubber band, a selection marquee -- and
+// take it away again without damaging what it crossed. See
+// docs/xor_raster_op.md.
+//
+// An XOR shape INVERTS what it crosses, so it appears black over
+// white areas and white over black. That is the intended look and
+// what makes it visible against any background.
+//
+// Requires gateware built from this tree's rtl/gpu/gpu_raster.v, which
+// decodes the two-bit op field. There is deliberately no capability
+// bit for it: the rasterizer either has the field or it doesn't, that
+// is decided by which gateware you flashed, and gateware and software
+// are built and flashed together here. Values 0 and 1 are unchanged
+// from the one-bit colour they replaced, so the two sides remain
+// compatible in either direction regardless.
+#define Z_RASTER_CLEAR   0
+#define Z_RASTER_SET     1
+#define Z_RASTER_XOR     2
+
 // hardware-accelerated line draw via the GPU line rasterizer
 // (rtl/gpu/gpu_raster.v). Handles both hazards of that shared
 // hardware state internally -- callers never need to think about

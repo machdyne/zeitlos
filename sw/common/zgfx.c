@@ -130,7 +130,11 @@ void z_fb_hw_line(int x0, int y0, int x1, int y1, int color, const z_clip_t *cli
 	gpu_y0 = (uint32_t)y0;
 	gpu_x1 = (uint32_t)x1;
 	gpu_y1 = (uint32_t)y1;
-	gpu_color = color & 1;
+	// & 3, not & 1: the colour field is a two-bit RASTER OP now
+	// (rtl/gpu/gpu_raster.v) -- 0 clear, 1 set, 2 XOR. Masking to one
+	// bit here would silently turn every XOR into a clear, which is
+	// exactly the kind of failure that looks like broken gateware.
+	gpu_color = color & 3;
 	gpu_start = 1;
 
 	maskirq(old_mask);
@@ -138,10 +142,29 @@ void z_fb_hw_line(int x0, int y0, int x1, int y1, int color, const z_clip_t *cli
 }
 
 void z_fb_hw_box(int x0, int y0, int x1, int y1, int color, const z_clip_t *clip) {
-	z_fb_hw_line(x0, y0, x1, y0, color, clip);	// top
-	z_fb_hw_line(x1, y0, x1, y1, color, clip);	// right
-	z_fb_hw_line(x1, y1, x0, y1, color, clip);	// bottom
-	z_fb_hw_line(x0, y1, x0, y0, color, clip);	// left
+
+	// The verticals deliberately stop one pixel short at BOTH ends, so
+	// that every pixel of the outline is drawn EXACTLY ONCE.
+	//
+	// This used to draw four lines that each shared an endpoint with
+	// the next, so all four corners were painted twice. With only set
+	// and clear available that was invisible -- both are idempotent,
+	// painting a pixel twice is the same as once. XOR is not: a corner
+	// drawn twice XORs back to its original value, so the box would
+	// render with all four corners missing.
+	//
+	// Fixed here rather than only on the XOR path, because "each pixel
+	// once" is correct under every op and produces an identical pixel
+	// set for set and clear (verified over 1369 box sizes by
+	// tools/verify_xor_geometry.py).
+	z_fb_hw_line(x0, y0, x1, y0, color, clip);			// top
+	z_fb_hw_line(x0, y1, x1, y1, color, clip);			// bottom
+
+	if (y1 - y0 >= 2) {
+		z_fb_hw_line(x0, y0 + 1, x0, y1 - 1, color, clip);	// left
+		z_fb_hw_line(x1, y0 + 1, x1, y1 - 1, color, clip);	// right
+	}
+
 }
 
 // -- GPU blitter fill path (rtl/gpu/gpu_blit.v) -- see zgfx.h's

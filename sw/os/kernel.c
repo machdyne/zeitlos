@@ -826,9 +826,51 @@ z_obj_t *k_proc_wait(z_obj_t *args) {
 
 	uint32_t timeout = (args->type == Z_UINT32) ? args->val.uint32 : 0;
 
+	// THE TEST AND THE BLOCK MUST BE ATOMIC TOGETHER.
+	//
+	// z_mailbox_empty() (msg.c) masks interrupts to read `count`, but
+	// it RELEASES the mask before returning -- so without the mask
+	// held here, there is a window between "mailbox is empty" and
+	// "flags |= Z_PROC_FLAG_BLOCKED" in which a KTIMER tick can
+	// preempt this process, run another one, and have it deliver a
+	// message:
+	//
+	//   this process   z_mailbox_empty() -> true, IRQs re-enabled
+	//   *** KTIMER preempts ***
+	//   sender         z_mailbox_push()      message queued
+	//   sender         k_proc_unblock(us)    clears BLOCKED -- which
+	//                                        is not set yet, so this
+	//                                        is a NO-OP and the wakeup
+	//                                        is LOST
+	//   this process   flags |= BLOCKED      sleeps, holding an
+	//                                        unread message
+	//
+	// With `timeout` 0 -- what an app's idle loop passes -- wake_tick
+	// is the "indefinite" sentinel, so nothing ever wakes it on its
+	// own. It sleeps until the NEXT message happens to arrive and
+	// unblocks it as a side effect.
+	//
+	// The visible symptom is an app that ignores a request it was
+	// definitely sent, then services it later when something unrelated
+	// wakes it: "wm: timed out waiting for pid N to ack a redraw" on a
+	// perfectly healthy, idle app, followed by the redraw appearing
+	// anyway a moment later. Rare, load-dependent, and it survives
+	// every fix applied further up the stack, because the app is
+	// ASLEEP rather than slow.
+	//
+	// This function's own comment already said the test had to happen
+	// "in the same syscall" that sets the flag. That is necessary but
+	// not sufficient: it has to happen under the same mask.
+	//
+	// maskirq() nests correctly here -- z_mailbox_empty()'s internal
+	// mask/restore is a no-op while we already hold it.
+	uint32_t old_mask = maskirq(0xFFFFFFFF);
+
 	// something already waiting -- don't block, let the caller read it
-	if (!z_mailbox_empty(z_pid))
+	if (!z_mailbox_empty(z_pid)) {
+		maskirq(old_mask);
 		return (&z_fail);
+	}
 
 	// wake_tick 0 is the sentinel for "indefinite", so a timeout that
 	// happens to land exactly on tick 0 is nudged to 1. At 732Hz that
@@ -841,6 +883,8 @@ z_obj_t *k_proc_wait(z_obj_t *args) {
 	}
 
 	z_procs[z_pid].flags |= Z_PROC_FLAG_BLOCKED;
+
+	maskirq(old_mask);
 
 	return (&z_ok);
 
