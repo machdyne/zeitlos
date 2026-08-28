@@ -373,5 +373,5 @@ void selftest_start(void)
 {
 	if (!ping_done)
 		ping_done = xSemaphoreCreateBinary();
-	xTaskCreate(selftest_task, "ztest", 8192, NULL, 4, NULL);
+	xTaskCreate(selftest_task, "ztest", 12288, NULL, 4, NULL);
 }

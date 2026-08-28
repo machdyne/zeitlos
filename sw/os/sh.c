@@ -1123,9 +1123,8 @@ void init(void) {
 			uint32_t base_net = k_proc_base(pid_net);
 			printf("init: net (%s)\n", core_src_name(src_net));
 			core_load_exec(base_net, "net", &xi_net, src_net);
-			// deliberately NOT k_proc_start()ed here -- see the end of
-			// this function.
-			printf("init: net loaded as pid %ld (start deferred)\n", pid_net);
+			// started at the end of this function, see there
+			printf("init: net loaded as pid %ld\n", pid_net);
 		}
 	}
 
@@ -1166,17 +1165,13 @@ void init(void) {
 		}
 	}
 
-	// net is started LAST, once every fs_load() above has finished.
-	// Z_SYS_FS_* syscalls (fsapi.c) and this function's own fs_load()
-	// calls share one non-reentrant FatFs instance and one bit-banged
-	// SD driver (sdmm.c's static sd_port) with no mutual exclusion --
-	// fsapi.h's "Concurrency note" flags exactly this. net's first act
-	// is reading NET.CFG, so starting it before repl's fs_load() was
-	// done interleaved two SD transfers on every boot (ULX3S,
-	// 2026-08-27: net stuck at "initializing", repl loaded from a
-	// corrupted stream, desktop frozen). Keeping create+fs_load above
-	// preserves net's fixed pid slot (Z_PID_NET); only the moment it
-	// begins executing moves.
+	// net is started last, once every load above has finished. FatFs
+	// access is serialised by fs_lock() (sw/os/fs/fs.c) now, so this is
+	// no longer needed for correctness; it still keeps net's first act
+	// (reading NET.CFG, then releasing the ESP32 on the ULX3S) from
+	// competing with the last load for the card, and keeps Z_PID_NET
+	// where it always was: net is created and loaded in its usual slot
+	// above, only the moment it starts running moves.
 	if (pid_net) {
 		k_proc_start(pid_net);
 		printf("init: net started as pid %ld\n", pid_net);

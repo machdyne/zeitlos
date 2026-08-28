@@ -91,12 +91,6 @@ int gateway_pop_to_zeitlos(uint8_t *out, uint16_t *len)
 	memcpy(out, rxq[rxq_tail], n);
 	*len = n;
 	rxq_tail = (rxq_tail + 1) % RXQ_DEPTH;
-	static uint32_t popped;
-	popped++;
-	if (popped <= 8)
-		ESP_LOGI(TAG, "wifi->Z #%lu len=%u type=%02x%02x (queued %lu, dropped %lu)",
-			(unsigned long)popped, n, out[12], out[13],
-			(unsigned long)n_to_z, (unsigned long)n_drop_z);
 	return 1;
 }
 
@@ -145,12 +139,6 @@ int gateway_from_zeitlos(const uint8_t *frame, uint16_t len)
 		return -1;
 	pbuf_take(p, frame, len);
 	n_from_z++;
-	if (n_from_z <= 8)
-		ESP_LOGI(TAG, "Z->wifi #%lu len=%u type=%02x%02x proto=%u dst=%u.%u.%u.%u",
-			(unsigned long)n_from_z, len, frame[12], frame[13],
-			(len >= 34) ? frame[23] : 0,
-			(len >= 34) ? frame[30] : 0, (len >= 34) ? frame[31] : 0,
-			(len >= 34) ? frame[32] : 0, (len >= 34) ? frame[33] : 0);
 	if (znic_nif.input(p, &znic_nif) != ERR_OK) {
 		ESP_LOGW(TAG, "Z->wifi: input rejected");
 		pbuf_free(p);

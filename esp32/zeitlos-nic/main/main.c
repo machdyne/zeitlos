@@ -74,7 +74,7 @@ int nic_start_sta(const char *ssid, const char *psk)
 	strncpy(sta_psk, psk ? psk : "", sizeof(sta_psk) - 1);
 	wifi_busy = 1;
 	gateway_wait_ready();
-	xTaskCreate(wifi_task, "wifi", 10240, NULL, 4, NULL);
+	xTaskCreate(wifi_task, "wifi", 12288, NULL, 4, NULL);
 	return 0;
 }
 
@@ -92,8 +92,8 @@ static void znic_task(void *arg)
 	TickType_t last_stat = xTaskGetTickCount();
 	for (;;) {
 		int r = znic_recv(&msg, 100);
-		/* one status line every 10 s so Zeitlos can see this side */
-		if (xTaskGetTickCount() - last_stat > pdMS_TO_TICKS(10000)) {
+		/* one status line a minute so Zeitlos can see this side */
+		if (xTaskGetTickCount() - last_stat > pdMS_TO_TICKS(60000)) {
 			last_stat = xTaskGetTickCount();
 			uint32_t fz, tz, dz;
 			gateway_stats(&fz, &tz, &dz);

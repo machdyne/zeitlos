@@ -79,8 +79,6 @@ static uint32_t logs_rx;
 static uint32_t data_rx;
 static uint32_t late_rx;
 static uint32_t fifo_overruns;
-static uint32_t last_dump_tick;
-#define DUMP_INTERVAL   (15 * TICKS_PER_SEC)
 static uint8_t peer_mac[6];
 
 /* small DATA ring: filled by znic_dispatch(), drained by
@@ -415,7 +413,6 @@ bool esp32link_init(const uint8_t mac[6])
 	data_rx = 0;
 	late_rx = 0;
 	fifo_overruns = 0;
-	last_dump_tick = 0;
 	rx_head = rx_tail = rx_count = 0;
 	phase = PH_HELLO;
 	sta_tries = 0;
@@ -424,8 +421,6 @@ bool esp32link_init(const uint8_t mac[6])
 
 	uart1_init();
 	reg_esp32rx_flush = 1;
-	printf("esp32link: rx fifo count=%lu (expect 0 after flush)\n",
-		(unsigned long)rx_avail());
 
 	/* gpio0=1, en=0 then en=1 so the ESP32 boots from flash */
 	reg_esp32_ctl = ESP32_CTL_GPIO0;
@@ -523,11 +518,6 @@ bool esp32link_wifi_sta(const char *ssid, const char *psk)
 
 uint16_t esp32link_recv(uint8_t *buf, uint16_t maxlen)
 {
-	/* periodic transport counters (diagnostic) */
-	if (hello_ok && z_uptime_ticks() - last_dump_tick > DUMP_INTERVAL) {
-		last_dump_tick = z_uptime_ticks();
-		esp32link_debug_dump();
-	}
 	if (!rx_data_pending) {
 		/* before HELLO the ESP32 may still be booting: probe gently */
 		if (!hello_ok) {

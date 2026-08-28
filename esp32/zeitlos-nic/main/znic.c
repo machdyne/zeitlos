@@ -218,9 +218,31 @@ static int znic_log_vprintf(const char *fmt, va_list ap)
 	}
 	if (o == 0)
 		return r;
-
 	if (xPortInIsrContext())
 		return r;
+
+	/* The WiFi library logs "I (123) wifi:" and the message text as two
+	 * separate calls; glue them back into one line. */
+	static char held[ZNIC_LOG_MAX + 1];
+	static int held_len;
+	if (o >= 5 && line[o - 1] == ':' && !memcmp(line + o - 5, "wifi:", 5)) {
+		memcpy(held, line, o);
+		held_len = o;
+		return r;
+	}
+	if (held_len) {
+		/* append into the static buffer: this hook runs on every
+		 * logging task, some with little stack to spare */
+		int n2 = held_len;
+		if (n2 < ZNIC_LOG_MAX) held[n2++] = ' ';
+		int copy = o;
+		if (n2 + copy > ZNIC_LOG_MAX) copy = ZNIC_LOG_MAX - n2;
+		memcpy(held + n2, line, copy);
+		n2 += copy;
+		held_len = 0;
+		znic_ctl_push(ZNIC_LOG, (const uint8_t *)held, (uint16_t)n2);
+		return r;
+	}
 	znic_ctl_push(ZNIC_LOG, (const uint8_t *)line, (uint16_t)o);	/* dropped if full */
 	return r;
 }

@@ -35,6 +35,11 @@ python3 ../nic_selftest.py --flash --ssid MyAP --psk secret
 and runs `test <ssid> <psk>` (scan, associate, DHCP, ping 8.8.8.8).
 Reload the Zeitlos bitstream afterwards.
 
+If esptool reports `Wrong boot mode detected (0x1a)`, the SD card is
+holding DAT0 (ESP32 GPIO2, a boot strap) high -- it happens after the
+FPGA was reprogrammed in the middle of an SD transfer. Remove the card
+(or power-cycle the board without it) and flash again.
+
 Notes: `sdkconfig.defaults` sets the event task stack (4096), the
 tcpip task stack (8192), core locking and NAPT; keep them. The
 python.org 3.10 interpreter aborts at exit on recent macOS; run the
