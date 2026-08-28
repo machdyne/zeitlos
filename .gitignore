@@ -27,3 +27,8 @@ sw/os/fs/fatfs/sdmm.d
 sw/apps/net/.net_config_selected
 sw/apps/net/.net_phy_selected
 sw/apps/repl/ms_stdlib.h
+
+# ESP-IDF (esp32/zeitlos-nic): build tree and the generated sdkconfig
+esp32/zeitlos-nic/build/
+esp32/zeitlos-nic/sdkconfig
+esp32/zeitlos-nic/sdkconfig.old

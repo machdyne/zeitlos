@@ -73,6 +73,12 @@ SPI routines in `enc28j60.c` closely resemble the proven,
 widely-used ChaN FatFs bit-bang driver already in
 `sw/os/fs/fatfs/sdmm.c`.
 
+## Third backend: ESP32 link (ULX3S)
+
+The ULX3S has neither an SPI Ethernet PMOD nor an RMII PHY; its onboard
+ESP32 acts as the network interface over UART1 (`NET_PHY=ESP32LINK`,
+`sw/apps/net/esp32link.c`). See [esp32link.md](esp32link.md).
+
 ## Second backend: RMII (mozart_ml1)
 
 `mozart_ml1` has an RMII PHY (LAN8720A) wired directly to the FPGA
