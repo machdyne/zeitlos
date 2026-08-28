@@ -23,6 +23,7 @@ RTL_PICO = \
 	rtl/csrs.v \
 	rtl/socctl.v \
 	rtl/rtc.v \
+	rtl/trng.v \
 	rtl/spim.v \
 	rtl/gpu/gpu_raster.v \
 	rtl/gpu/gpu_blit.v \
@@ -233,7 +234,7 @@ zeitlos_ice40_pico:
 		"synth_ice40 -top sysctl -json output/$(BOARD_LC)/soc.json" $(RTL_PICO)
 	nextpnr-ice40 --$(DEVICE) --package $(PACKAGE) --pcf boards/$(PCF) \
 		--asc output/$(BOARD_LC)/soc.txt --json output/$(BOARD_LC)/soc.json \
-		--pcf-allow-unconstrained --opt-timing
+		--pcf-allow-unconstrained --opt-timing --ignore-loops
 
 zeitlos_ecp5_pico:
 	mkdir -p output/$(BOARD_LC)
@@ -243,7 +244,7 @@ zeitlos_ecp5_pico:
 		--json output/$(BOARD_LC)/soc.json \
 		--report output/$(BOARD_LC)/report.txt \
 		--textcfg output/$(BOARD_LC)/soc.config \
-		--timing-allow-fail
+		--timing-allow-fail --ignore-loops
 
 zeitlos_gatemate_pico:
 	mkdir -p output/$(BOARD_LC)

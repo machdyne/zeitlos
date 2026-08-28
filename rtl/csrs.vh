@@ -122,4 +122,12 @@ localparam CSR_FEATURES =
 `ifdef RTC
 	(32'h1 << 24) |
 `endif
+// rtl/trng.v -- the entropy source. Mirrors `TRNG in rtl/boards.vh,
+// universal there like `RTC. This bit is the ONLY safe first probe on
+// an arbitrary bitstream: reading the TRNG's own MAGIC on a build that
+// predates rtl/trng.v hits an address nothing decodes, which on this
+// bus never acks and hangs the CPU. See sw/common/zrng.h.
+`ifdef TRNG
+	(32'h1 << 25) |
+`endif
 	32'h0;

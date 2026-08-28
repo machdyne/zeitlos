@@ -15,6 +15,7 @@
 #include "tcp.h"
 #include "ip.h"
 #include "../../common/zeitlos.h"
+#include "../../common/zrng.h"
 
 #define TCP_HDR_LEN  20
 
@@ -344,6 +345,20 @@ static bool process_ack(uint32_t ack_num) {
 }
 
 void tcp_handle(uint32_t src_ip, const uint8_t *p, uint16_t len) {
+
+	// Entropy: WHEN a segment arrives depends on the remote machine's
+	// scheduler, the network's queueing, and the ENC28J60's own SPI
+	// timing -- none of which this board can predict. Cheap (see
+	// z_rng_stir_event(), which only pays for a hash every 32nd call)
+	// and placed before the early returns on purpose: a segment for a
+	// closed connection, or a runt, is just as good a timing sample as
+	// a valid one.
+	//
+	// This never makes z_rng_secure() true -- nothing here can measure
+	// how much entropy a packet arrival carried. It improves an
+	// already-seeded pool, and on a board with no TRNG it is most of
+	// what the fallback has to work with.
+	z_rng_stir_event();
 
 	if (tcb.state == TCP_CLOSED) return;	// no active connection -- nothing to dispatch to
 	if (len < TCP_HDR_LEN) return;

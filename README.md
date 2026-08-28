@@ -23,6 +23,7 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 | Video | VGA, DVI, DVI over HDMI |
 | Storage | MicroSD |
 | Network | Ethernet (SPI) and Ethernet MAC (for RMII PHY) |
+| Entropy | Ring-oscillator TRNG |
 | HID | USB keyboard + optional USB mouse |
 | I/O | GPIO, SPI, 16550 UART |
 
@@ -33,7 +34,7 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
  - FAT16/32 filesystem
  - Core apps in flash -- boots to a desktop with no sdcard ([docs/flash_apps.md](docs/flash_apps.md))
  - Object-based interprocess messaging and streaming
- - IP/ARP/ICMP/UDP/DHCP/NTP/DNS/TFTP/TCP/telnet networking
+ - IP/ARP/ICMP/UDP/DHCP/NTP/DNS/TFTP/TCP/telnet/ssh networking
 
 #### Memory Translation Unit
 

@@ -29,6 +29,20 @@
  *
  * KEEP THE NUMBERING IN SYNC: the next subject added to znet.h must
  * start at 308, not 306.
+ *
+ * That warning has already been ignored once, with exactly the
+ * consequence described above: Z_NET_SSH_PREPARE was added at 306 by
+ * reading znet.h alone, so every `ssh` command was delivered to
+ * handle_ntp_sync() -- net's dispatch chain matched Z_NET_NTP_SYNC
+ * first -- and repl waited forever for a reply nothing would send.
+ * Nothing looked wrong in any log, because net HAD handled the
+ * message.
+ *
+ * sw/apps/net/net.c now carries a compile-time check (search for
+ * SUBJECT COLLISION CHECK) comparing every subject it dispatches
+ * against every other. A new subject should be added to that list at
+ * the same time it is defined here or in znet.h -- a comment is a
+ * request, and this one shows what happens when it is not read.
  */
 
 // requester -> net: Z_NONE. Asks net to sync the RTC from its NTP

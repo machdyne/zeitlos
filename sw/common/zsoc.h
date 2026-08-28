@@ -139,6 +139,19 @@
 // order and is what apps should call.
 #define Z_FEATURE_RTC         (1u << 24)
 
+// rtl/trng.v -- the ring-oscillator entropy source. Same hazard and
+// same rule as Z_FEATURE_RTC directly above: check THIS bit before
+// reading the TRNG's own magic, because on a bitstream built before
+// rtl/trng.v existed that address is decoded by nothing and the read
+// hangs the CPU rather than returning garbage. z_rng_present()
+// (sw/common/zrng.h) is that check in the safe order.
+//
+// Note this bit says the hardware is BUILT, not that it WORKS. A ring
+// oscillator bank that synthesis optimised away sets this bit and
+// produces predictable words; z_rng_secure() is the question worth
+// asking before generating a key. See docs/trng.md.
+#define Z_FEATURE_TRNG        (1u << 25)
+
 // -- feature table (sw/common/zsoc.c) --
 //
 // The human-readable half of the Z_FEATURE_* bits above, kept in the
@@ -167,7 +180,20 @@ typedef enum {
 	// oddly in a list until the alternative is tried, which is
 	// filing a clock under "input".
 	Z_FEAT_GROUP_CLOCK,
+	// The entropy source (rtl/trng.v). Its own group for the same
+	// reason the clock has one: it is not memory, input, storage or
+	// network, and filing it under any of those would be worse than a
+	// short list.
+	Z_FEAT_GROUP_ENTROPY,
 	Z_FEAT_GROUP_LED,
+	// Adding a group here REQUIRES adding its display name to
+	// z_soc_feature_groups[] in zsoc.c, at the same position. That
+	// table is indexed by this enum and nothing links the two but
+	// order; getting it wrong shifts every later name and runs the
+	// last group off the end of the array, which crashed the kernel
+	// mid-boot the first time it happened. zsoc.c now carries a
+	// compile-time size check so the mistake cannot reach a board
+	// again.
 	Z_FEAT_GROUP_COUNT
 } z_feat_group_t;
 

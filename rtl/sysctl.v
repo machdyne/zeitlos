@@ -408,6 +408,9 @@ module sysctl #()
 `ifdef RTC
 	wire [31:0] wbs_rtc_dat_o;
 `endif
+`ifdef TRNG
+	wire [31:0] wbs_trng_dat_o;
+`endif
 `ifdef ICACHE
 	wire [31:0] wbs_cache_dat_o;
 `endif
@@ -518,6 +521,14 @@ module sysctl #()
 	//   0x7000_01xx  cache.v     instruction cache control/stats  (`ICACHE)
 	//   0x7000_02xx  socctl.v    writable global config
 	//   0x7000_03xx  rtc.v       wall-clock seconds/sub-seconds   (`RTC)
+	//   0x7000_04xx  trng.v      ring-oscillator entropy source   (`TRNG)
+	//
+	// The tenant mask is 0x700, not 0x300: four tenants fit in bits
+	// [9:8], the fifth needed bit 10 as well. Every address above has
+	// bit 10 clear, so widening it moved nothing -- the only visible
+	// change is that 0x7000_05xx..07xx now fall through to csrs.v
+	// instead of aliasing onto cache/socctl/rtc, which is strictly
+	// better and is what a future sixth tenant will want anyway.
 	//
 	// Two of them are optional, and the rule that makes that safe is:
 	// CSRS ABSORBS THE WINDOW OF ANY TENANT THAT ISN'T BUILT. It acks
@@ -540,15 +551,19 @@ module sysctl #()
 	// than as a separate expression per combination. With two optional
 	// tenants that would be four cases to keep in agreement, and the
 	// one that mattered would be the one nobody tested.
-	wire cs_socctl = ((wbm_adr & 32'hf000_0300) == 32'h7000_0200);
+	wire cs_socctl = ((wbm_adr & 32'hf000_0700) == 32'h7000_0200);
 	wire wbm_cyc_socctl = cs_socctl && wbm_cyc;
 `ifdef ICACHE
-	wire cs_cache = ((wbm_adr & 32'hf000_0300) == 32'h7000_0100);
+	wire cs_cache = ((wbm_adr & 32'hf000_0700) == 32'h7000_0100);
 	wire wbm_cyc_cache = cs_cache && wbm_cyc;
 `endif
 `ifdef RTC
-	wire cs_rtc = ((wbm_adr & 32'hf000_0300) == 32'h7000_0300);
+	wire cs_rtc = ((wbm_adr & 32'hf000_0700) == 32'h7000_0300);
 	wire wbm_cyc_rtc = cs_rtc && wbm_cyc;
+`endif
+`ifdef TRNG
+	wire cs_trng = ((wbm_adr & 32'hf000_0700) == 32'h7000_0400);
+	wire wbm_cyc_trng = cs_trng && wbm_cyc;
 `endif
 	wire cs_csrs = ((wbm_adr & 32'hf000_0000) == 32'h7000_0000)
 		&& !cs_socctl
@@ -557,6 +572,9 @@ module sysctl #()
 `endif
 `ifdef RTC
 		&& !cs_rtc
+`endif
+`ifdef TRNG
+		&& !cs_trng
 `endif
 		;
 `ifdef DEBUG
@@ -618,6 +636,9 @@ module sysctl #()
 `ifdef RTC
 		cs_rtc ? wbs_rtc_dat_o :
 `endif
+`ifdef TRNG
+		cs_trng ? wbs_trng_dat_o :
+`endif
 		cs_csrs ? wbs_csrs_dat_o :
 `ifdef ICACHE
 		cs_cache ? wbs_cache_dat_o :
@@ -645,6 +666,9 @@ module sysctl #()
 	wire wbs_socctl_ack_o;
 `ifdef RTC
 	wire wbs_rtc_ack_o;
+`endif
+`ifdef TRNG
+	wire wbs_trng_ack_o;
 `endif
 `ifdef ICACHE
 	wire wbs_cache_ack_o;
@@ -701,6 +725,9 @@ module sysctl #()
 		cs_socctl ? wbs_socctl_ack_o :
 `ifdef RTC
 		cs_rtc ? wbs_rtc_ack_o :
+`endif
+`ifdef TRNG
+		cs_trng ? wbs_trng_ack_o :
 `endif
 		cs_csrs ? wbs_csrs_ack_o :
 `ifdef ICACHE
@@ -1616,6 +1643,29 @@ module sysctl #()
 		.wb_stb_i(wbm_stb),
 		.wb_ack_o(wbs_rtc_ack_o),
 		.wb_cyc_i(wbm_cyc_rtc)
+	);
+`endif
+
+	// WISHBONE SLAVE: TRNG
+	//
+	// Defaults are trng.v's own -- eight oscillators, 13 stages in the
+	// shortest, sampled every 256 cycles. Only CLK_HZ is passed, and
+	// only so the block can advertise a correct RATE; nothing here
+	// depends on the system clock otherwise.
+`ifdef TRNG
+	trng_wb #(
+		.CLK_HZ(SYSCLK)
+	) trng_i (
+		.wb_clk_i(wbm_clk),
+		.wb_rst_i(wbm_rst),
+		.wb_adr_i({ 29'b0, wbm_adr_sel_word[2:0] }),
+		.wb_dat_i(wbm_dat_o),
+		.wb_dat_o(wbs_trng_dat_o),
+		.wb_we_i(wbm_we),
+		.wb_sel_i(wbm_sel),
+		.wb_stb_i(wbm_stb),
+		.wb_ack_o(wbs_trng_ack_o),
+		.wb_cyc_i(wbm_cyc_trng)
 	);
 `endif
 

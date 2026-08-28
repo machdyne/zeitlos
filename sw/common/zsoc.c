@@ -70,6 +70,8 @@ const z_feature_info_t z_soc_features[] = {
 
 	{ Z_FEATURE_RTC,        "rtc",     Z_FEAT_GROUP_CLOCK   },
 
+	{ Z_FEATURE_TRNG,       "trng",    Z_FEAT_GROUP_ENTROPY },
+
 	{ Z_FEATURE_LED_RGB,    "rgb",     Z_FEAT_GROUP_LED     },
 	{ Z_FEATURE_LED_DEBUG,  "debug",   Z_FEAT_GROUP_LED     },
 
@@ -81,6 +83,16 @@ const int z_soc_features_count =
 // Padded to a common width so a consumer printing them in a column
 // doesn't have to. Indexed by Z_FEAT_GROUP_*, so this array's order is
 // fixed by that enum, not by anything here.
+//
+// ADDING A GROUP MEANS ADDING A LINE HERE TOO, IN THE SAME POSITION.
+// Getting that wrong does not fail to compile and does not fail
+// visibly: inserting Z_FEAT_GROUP_ENTROPY into the enum without
+// adding "entropy" here shifted every later group's name by one, so
+// the entropy line printed under the heading "led" -- and then the
+// real LED group indexed one past the end of this array and the
+// kernel crashed mid-boot, immediately after printing the feature
+// list. That is precisely how it was found. The check below now makes
+// the same mistake a compile error instead.
 const char *const z_soc_feature_groups[] = {
 	"cpu    ",
 	"memory ",
@@ -89,5 +101,14 @@ const char *const z_soc_feature_groups[] = {
 	"storage",
 	"network",
 	"clock  ",
+	"entropy",
 	"led    ",
 };
+
+// Compile-time assertion that the table above and the enum in zsoc.h
+// still agree. A negative array size is the C99 way to say this
+// without <assert.h> -- static_assert needs C11, and this tree builds
+// with --std=gnu99. Never instantiated; it exists only to fail.
+typedef char z_soc_feature_groups_size_check[
+	(sizeof(z_soc_feature_groups) / sizeof(z_soc_feature_groups[0]))
+		== Z_FEAT_GROUP_COUNT ? 1 : -1];

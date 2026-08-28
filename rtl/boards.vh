@@ -29,6 +29,29 @@
 // define. Only one of the two knows what a date is.
 `define RTC
 
+// rtl/trng.v -- a ring-oscillator true random number generator.
+// Universal, for the same reason `RTC is: it needs no pins, no
+// external part and no board support of any kind, just LUTs and a
+// counter on sys_clk. Every board gets one unless somebody
+// deliberately comments it out.
+//
+// A build without it is not a build software has to be told about:
+// the FEATURE bit in rtl/csrs.v goes clear, rtl/sysctl.v hands the
+// 0x7000_04xx window to csrs.v (which acks it and reads back zero),
+// and z_rng_secure() (sw/common/zrng.h) answers false -- so the SSH
+// client refuses to connect rather than generating a key from
+// something guessable, and `(random)` in Scheme keeps working from a
+// clearly-labelled non-cryptographic fallback.
+//
+// THE ONE THING TO WATCH: this is a combinational loop, which is
+// precisely what synthesis exists to remove. If a toolchain optimises
+// the oscillators away the block still runs and still returns words,
+// and they are worthless. rtl/trng.v carries keep attributes in three
+// dialects and a continuous health monitor for exactly this reason --
+// check the HEALTH bit on real hardware after any toolchain change,
+// not just after a code change. See docs/trng.md.
+`define TRNG
+
 // RV32IM: hardware multiply and divide (rtl/cpu/picorv32/picorv32.v's
 // ENABLE_FAST_MUL/ENABLE_MUL/ENABLE_DIV). Universal rather than
 // per-board because the alternative -- some boards with M, some

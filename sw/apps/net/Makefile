@@ -94,6 +94,31 @@ NET_STATIC_NTP     ?= 0.0.0.0
 NTP_ENABLE ?= 1
 CFLAGS += -DNTP_ENABLE=$(NTP_ENABLE)
 
+# -- SSH (sw/apps/net/ssh/) --
+#
+# On by default. Set SSH_ENABLE=0 to build net without the SSH client
+# at all: none of sw/apps/net/ssh/ is compiled, sw/ext/monocypher is
+# not compiled, and `ssh` at a repl prompt reports that this build has
+# no SSH support. Worth roughly 40KB of flash, which matters because
+# net is one of the core apps programmed into the ZAR archive
+# (sw/os/zar.h).
+#
+# Note that SSH also refuses to run at RUNTIME on a bitstream whose
+# TRNG is missing or unhealthy (z_rng_secure(), sw/common/zrng.h) --
+# this switch is about not carrying the code, not about safety.
+SSH_ENABLE ?= 1
+CFLAGS += -DSSH_ENABLE=$(SSH_ENABLE)
+
+# Largest SSH binary packet we will accept. OpenSSH's own KEXINIT runs
+# to roughly 1.2KB and a long USERAUTH_BANNER can be larger, so this is
+# not a number to trim without testing against a real server. Packets
+# larger than this are not fatal -- ssh.c streams and discards them,
+# since Poly1305 is incremental and ChaCha20 takes an explicit block
+# counter -- but their contents are lost, which is only safe for
+# message types we would have ignored anyway.
+SSH_MAX_PACKET ?= 4096
+CFLAGS += -DSSH_MAX_PACKET=$(SSH_MAX_PACKET)
+
 dottedquad_to_hex = $(shell printf '%s' "$(1)" | grep -qE '^0[xX]' && \
 	printf '%s' "$(1)" || \
 	printf '0x%02X%02X%02X%02X' $$(printf '%s' "$(1)" | tr '.' ' '))
@@ -116,6 +141,17 @@ else
 NTP_OBJ =
 endif
 
+# monocypher.o is large before section GC (63KB) and small after it
+# (23KB linked) -- see sw/ext/monocypher/README.md. GC_SECTIONS above
+# is what makes that true, so do not build this app with GC_SECTIONS=0
+# and then be surprised by the size.
+ifeq ($(SSH_ENABLE), 1)
+SSH_OBJ = monocypher.o monocypher-ed25519.o \
+	ssh_sha256.o ssh_wire.o ssh_crypto.o ssh_proto.o ssh.o
+else
+SSH_OBJ =
+endif
+
 # dns.c (sw/apps/net/dns.c) is always built in, independent of
 # NET_DHCP -- it only needs SOME nameserver configured (DHCP-provided
 # or NET_STATIC_DNS), not DHCP itself, so unlike dhcp.o there's no
@@ -123,7 +159,7 @@ endif
 # zrtc.o rides with ntp.o rather than being listed separately: it is
 # the calendar arithmetic ntp.c uses to print the time it just set, and
 # nothing else in this app has any use for a date.
-OBJS = zeitlos.o zobj.o zstream.o zport.o $(PHY_OBJ) eth.o arp.o ip.o udp.o $(DHCP_OBJ) dns.o $(NTP_OBJ) tcp.o telnet.o tftp.o net.o
+OBJS = zeitlos.o zobj.o zstream.o zport.o zrng.o $(PHY_OBJ) eth.o arp.o ip.o udp.o $(DHCP_OBJ) dns.o $(NTP_OBJ) tcp.o telnet.o $(SSH_OBJ) tftp.o net.o
 
 net: net.elf net.bin
 
@@ -163,7 +199,7 @@ FORCE:
 	fi
 
 .net_config_selected: FORCE
-	@cur="$(NET_DHCP) $(NET_STATIC_IP) $(NET_STATIC_NETMASK) $(NET_STATIC_GATEWAY) $(NET_STATIC_DNS) $(NET_STATIC_NTP) $(NTP_SERVER) $(NTP_ENABLE)"; \
+	@cur="$(NET_DHCP) $(NET_STATIC_IP) $(NET_STATIC_NETMASK) $(NET_STATIC_GATEWAY) $(NET_STATIC_DNS) $(NET_STATIC_NTP) $(NTP_SERVER) $(NTP_ENABLE) $(SSH_ENABLE) $(SSH_MAX_PACKET)"; \
 	if [ ! -f $@ ] || [ "$$(cat $@ 2>/dev/null)" != "$$cur" ]; then \
 		echo "$$cur" > $@; \
 	fi
@@ -210,8 +246,41 @@ ntp.o: ntp.c ntp.h udp.h dns.h ../../common/zrtc.h ../../common/znet.h .net_conf
 zrtc.o: ../../common/zrtc.c ../../common/zrtc.h
 	$(CC) $(CFLAGS) -c ../../common/zrtc.c -o zrtc.o
 
-tcp.o: tcp.c tcp.h
+zrng.o: ../../common/zrng.c ../../common/zrng.h ../../common/zsoc.h
+	$(CC) $(CFLAGS) -c ../../common/zrng.c -o zrng.o
+
+tcp.o: tcp.c tcp.h ../../common/zrng.h
 	$(CC) $(CFLAGS) -c tcp.c -o tcp.o
+
+# -- SSH --
+#
+# The vendored Monocypher files are compiled from sw/ext/monocypher
+# without being copied or patched -- see that directory's README.md on
+# why it stays byte-for-byte identical to upstream. -Wno-sign-compare
+# is not applied and is not needed; it builds clean.
+MONO = ../../ext/monocypher
+
+monocypher.o: $(MONO)/monocypher.c $(MONO)/monocypher.h
+	$(CC) $(CFLAGS) -c $(MONO)/monocypher.c -o monocypher.o
+
+monocypher-ed25519.o: $(MONO)/monocypher-ed25519.c $(MONO)/monocypher-ed25519.h $(MONO)/monocypher.h
+	$(CC) $(CFLAGS) -I$(MONO) -c $(MONO)/monocypher-ed25519.c -o monocypher-ed25519.o
+
+ssh_sha256.o: ssh/ssh_sha256.c ssh/ssh_sha256.h
+	$(CC) $(CFLAGS) -c ssh/ssh_sha256.c -o ssh_sha256.o
+
+ssh_wire.o: ssh/ssh_wire.c ssh/ssh_wire.h
+	$(CC) $(CFLAGS) -c ssh/ssh_wire.c -o ssh_wire.o
+
+ssh_crypto.o: ssh/ssh_crypto.c ssh/ssh_crypto.h ssh/ssh_sha256.h $(MONO)/monocypher.h
+	$(CC) $(CFLAGS) -I$(MONO) -c ssh/ssh_crypto.c -o ssh_crypto.o
+
+ssh_proto.o: ssh/ssh_proto.c ssh/ssh_proto.h ssh/ssh_wire.h ssh/ssh_crypto.h \
+		$(MONO)/monocypher.h $(MONO)/monocypher-ed25519.h
+	$(CC) $(CFLAGS) -I$(MONO) -c ssh/ssh_proto.c -o ssh_proto.o
+
+ssh.o: ssh/ssh.c ssh/ssh.h ssh/ssh_proto.h tcp.h ../../common/zrng.h
+	$(CC) $(CFLAGS) -I$(MONO) -c ssh/ssh.c -o ssh.o
 
 telnet.o: telnet.c telnet.h tcp.h
 	$(CC) $(CFLAGS) -c telnet.c -o telnet.o
@@ -219,7 +288,7 @@ telnet.o: telnet.c telnet.h tcp.h
 tftp.o: tftp.c tftp.h
 	$(CC) $(CFLAGS) -c tftp.c -o tftp.o
 
-net.o: net.c net_phy.h .net_phy_selected .net_config_selected ../../common/zsoc.h ../../common/zntp.h dhcp.h dns.h ntp.h
+net.o: net.c net_phy.h ssh/ssh.h ../../common/znet.h .net_phy_selected .net_config_selected ../../common/zsoc.h ../../common/zntp.h dhcp.h dns.h ntp.h
 	$(CC) $(CFLAGS) -c net.c -S -o net.asm
 	$(CC) $(CFLAGS) -c net.c -o net.o
 
