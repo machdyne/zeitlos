@@ -79,6 +79,7 @@
 #include "../../common/zterm.h"
 #include "../../common/zwm.h"
 #include "../../common/zdns.h"
+#include "../../common/znet.h"	// Z_NET_SSH_PREPARE, see the `ssh` command
 #include "ms_api.h"
 #include "te_bridge.h"
 #include "page.h"
@@ -278,10 +279,10 @@ static bool form_complete(const char *s, void *user) {
 // Shortening the text is the cheap answer and has been the right one
 // so far.
 static const char HELP_TEXT[] =
-	"builtins: help ping echo te <f> page <f> port <n> telnet <h> scheme <e> quit\r\n"
-	"scheme:   ls ps free uptime run kill load mkdir touch-file delay-ms ...\r\n"
-	"F12 returns here from any port; bare word = call, so `ps` is (ps)\r\n"
-	"anything else is evaluated as Scheme";
+	"builtins: help ping echo te <f> page <f> port <n> telnet <h> ssh <h>\r\n"
+	"          scheme <e> quit\r\n"
+	"scheme:   ls ps free uptime run kill load mkdir delay-ms ...\r\n"
+	"F12 returns here from any port; bare word = call, so `ps` is (ps)";
 
 // build-time check -- see HELP_TEXT's own comment. A negative array
 // size rather than _Static_assert(): this tree builds with --std=gnu99
@@ -827,6 +828,176 @@ static bool dispatch_line(const char *line, char *out, uint32_t out_cap,
 			(long)((ip >> 8) & 0xFF), (long)(ip & 0xFF));
 		return true;
 
+	}
+
+	if (!strncmp(line, "ssh ", 4)) {
+
+		const char *target = line + 4;
+		const char *at;
+		char user[64];
+		char host[128];
+		uint32_t ip;
+		char err[64];
+		z_msg_t reply;
+		uint32_t net_pid = 0;
+		z_obj_t req, arg;
+		z_obj_t *ok_obj, *tok_obj, *err_obj;
+		uint32_t token;
+
+		while (*target == ' ') target++;
+
+		if (*target == 0) {
+			snprintf(out, out_cap,
+				"usage: ssh [user@]<ip-or-hostname>  (e.g. ssh me@192.168.178.10)");
+			return false;
+		}
+
+		if (!requester_pid) {
+			// Same reasoning as "telnet" -- there is no term
+			// connection behind a bare REPL_EVAL request to redirect,
+			// and SSH additionally needs one for its own prompts.
+			snprintf(out, out_cap,
+				"repl: 'ssh' only works from an interactive term connection");
+			return false;
+		}
+
+		// Split user@host. A missing username is not an error: net
+		// prompts for one in band, the way PuTTY does, which is one
+		// less thing to get wrong on a keyboard.
+		user[0] = 0;
+		at = strchr(target, '@');
+		if (at) {
+			size_t n = (size_t)(at - target);
+			if (n >= sizeof(user)) {
+				snprintf(out, out_cap, "ssh: username too long");
+				return false;
+			}
+			memcpy(user, target, n);
+			user[n] = 0;
+			target = at + 1;
+		}
+
+		if (strlen(target) >= sizeof(host)) {
+			snprintf(out, out_cap, "ssh: hostname too long");
+			return false;
+		}
+		strcpy(host, target);
+
+		// Same blocking resolve the telnet command uses, with the same
+		// caveat: it stalls repl's single mailbox for every connected
+		// window, not just this one. See the telnet command above.
+		if (!z_resolve_host(host, &ip, err, sizeof(err))) {
+			snprintf(out, out_cap, "ssh: %s", err);
+			return false;
+		}
+
+		// Step one of the two-step setup in sw/common/znet.h: hand
+		// `net` the username directly, in one hop, because forwarding
+		// a string through term's SET_PORT would have its pointer
+		// translated twice and land on garbage. What comes back is a
+		// scalar token that CAN be forwarded safely.
+		// By name, not the fixed Z_PID_NET, for the same reason
+		// zdns.c's own lookup avoids it: if net is not running, a
+		// fixed pid sends this into whatever else happens to occupy
+		// slot 2, and the command hangs waiting for a reply that
+		// process will never send.
+		{
+			if (!z_pid_lookup("net0", &net_pid)) {
+				snprintf(out, out_cap, "ssh: net is not running");
+				return false;
+			}
+			req = z_obj_map(3);
+			z_map_set(&req, "user", z_obj_str(user));
+			z_map_set(&req, "ip", z_obj_uint32(ip));
+			z_map_set(&req, "port", z_obj_uint32(22));
+			printf("repl: ssh prepare -> net pid %ld, user '%s', ip %ld.%ld.%ld.%ld\n",
+				(long)net_pid, user,
+				(long)((ip >> 24) & 0xFF), (long)((ip >> 16) & 0xFF),
+				(long)((ip >> 8) & 0xFF), (long)(ip & 0xFF));
+			z_msg_new_send(net_pid, Z_NET_SSH_PREPARE, 0, req);
+		}
+
+		// BOUNDED wait, following zdns.c's own loop rather than
+		// z_msg_wait(). That function spins FOREVER if the reply
+		// never comes (zeitlos.c) -- and there is a very ordinary way
+		// for it never to come: a `net` that predates
+		// Z_NET_SSH_PREPARE, or one built with SSH_ENABLE=0, does not
+		// recognise the subject and silently drops it. Since core apps
+		// live in the flash ZAR archive (sw/os/zar.h), rebuilding repl
+		// while running a stale net is easy to do by accident.
+		//
+		// The symptom of getting this wrong is the worst kind:
+		// repl's single main loop serves EVERY connected term window,
+		// so an unbounded wait here freezes all of them at once, with
+		// no output anywhere. Found exactly that way.
+		{
+			uint32_t start = z_uptime_ticks();
+			bool got = false;
+
+			while ((z_uptime_ticks() - start) < (732u * 5)) {
+				if (z_msg_read(&reply) != Z_OK) continue;
+				if (reply.subject == Z_NET_SSH_PREPARE_REPLY) { got = true; break; }
+				// anything else is discarded, same as zdns.c's own
+				// loop and zport.c's connect wait
+			}
+
+			if (!got) {
+				printf("repl: no Z_NET_SSH_PREPARE_REPLY from net (pid %ld)\n",
+					(long)net_pid);
+				snprintf(out, out_cap,
+					"ssh: net (pid %ld) did not answer. Check the SERIAL "
+					"console at boot for 'net: ssh support built in' -- if "
+					"that line is absent, net is stale or built "
+					"SSH_ENABLE=0; rebuild and reflash it.",
+					(long)net_pid);
+				return false;
+			}
+		}
+
+		ok_obj = z_map_find(&reply.obj, "ok");
+		if (!ok_obj || ok_obj->type != Z_UINT32 || !ok_obj->val.uint32) {
+			err_obj = z_map_find(&reply.obj, "error");
+			snprintf(out, out_cap, "%s",
+				(err_obj && err_obj->type == Z_STR && err_obj->val.str)
+					? err_obj->val.str : "ssh: net refused the request");
+			return false;
+		}
+
+		tok_obj = z_map_find(&reply.obj, "token");
+		if (!tok_obj || tok_obj->type != Z_UINT32) {
+			snprintf(out, out_cap, "ssh: net returned no token");
+			return false;
+		}
+		token = tok_obj->val.uint32;
+		printf("repl: ssh token %08lx, handing term pid %ld to net0\n",
+			(unsigned long)token, (long)requester_pid);
+
+		// Step two: exactly the mechanism `telnet` uses, and
+		// deliberately the same SCALAR shape -- the token stands in
+		// for telnet's target IP. net tells them apart by checking the
+		// value against the token it just issued.
+		//
+		// `arg` intentionally never freed, same accepted one-per-
+		// command leak the telnet and port commands already document.
+		arg = z_obj_map(2);
+		z_map_set(&arg, "name", z_obj_str("net0"));
+		z_map_set(&arg, "arg", z_obj_uint32(token));
+		z_msg_new_send(requester_pid, Z_TERM_SET_PORT, 0, arg);
+
+		snprintf(out, out_cap,
+			"connecting to %s (%ld.%ld.%ld.%ld) -- disconnecting now "
+			"(F12 returns to repl)",
+			host,
+			(long)((ip >> 24) & 0xFF), (long)((ip >> 16) & 0xFF),
+			(long)((ip >> 8) & 0xFF), (long)(ip & 0xFF));
+		return true;
+
+	}
+
+	if (!strcmp(line, "ssh")) {
+		snprintf(out, out_cap,
+			"usage: ssh [user@]<ip-or-hostname>  (e.g. ssh me@192.168.178.10)");
+		return false;
 	}
 
 	if (!strcmp(line, "telnet")) {

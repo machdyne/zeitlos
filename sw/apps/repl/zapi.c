@@ -32,6 +32,7 @@
 #include "../../common/zproc.h"
 #include "../../common/zrtc.h"	// the wall clock -- see (current-time)/
 								// (current-date) below
+#include "../../common/zrng.h"	// the system CSPRNG -- see (random) below
 #include "../../common/zsoc.h"	// Z_VIDEO_MODE_*, z_video_mode_name(),
 								// z_video_mode_from_name() -- the naming
 								// helpers only. The actual get/set go
@@ -1379,6 +1380,112 @@ static ms_val *zapi_video_mode(ms_val *args) {
 
 }
 
+// -- Randomness --
+
+// (random)    -- a real in [0, 1)
+// (random n)  -- an integer in [0, n), for a positive integer n
+//
+// Both forms come from the system CSPRNG (sw/common/zrng.h), which is
+// seeded from rtl/trng.v's ring oscillators where the bitstream has
+// them and from cycle-counter jitter where it doesn't. `(random-secure?)`
+// below is how a program tells which it got.
+//
+// The integer form is rejection sampled inside z_rng_below(), so it is
+// uniform rather than `mod n` with its bias toward small values.
+//
+// The real form divides a 32-bit draw by 2^32. ms numbers are doubles,
+// whose 53-bit mantissa holds that exactly, so no precision is lost --
+// but only 2^32 distinct values can come out, which is worth knowing
+// before using this to sample a continuous distribution finely.
+//
+// A negative or zero argument returns 0 rather than raising: `(random
+// (length lst))` on an empty list is a natural thing to write and a
+// panic there would be more annoying than useful.
+static ms_val *zapi_random(ms_val *args) {
+
+	int n;
+
+	if (ms_is_nil(args))
+		return ms_mk_num((double)z_rng_u32() / 4294967296.0);
+
+	n = zapi_arg_int(ms_car(args), "random");
+	if (n <= 0) return ms_mk_num(0);
+
+	return ms_mk_num((double)z_rng_below((uint32_t)n));
+
+}
+
+// (random-hex n) -- n random BYTES as a 2n-character lowercase hex
+// string.
+//
+// Bytes rather than characters because the callers that want this want
+// a key, a token or a nonce, and those are measured in bytes. Hex
+// rather than raw because ms strings are NUL-terminated C strings and
+// cannot hold a zero byte.
+//
+// Capped at 256 bytes per call -- not a security limit, just a bound
+// on a single allocation from a heap that repl shares with everything
+// else it is running (see kernel.h's stack-tier comment on repl).
+static ms_val *zapi_random_hex(ms_val *args) {
+
+	static const char hex[] = "0123456789abcdef";
+	uint8_t buf[256];
+	char *out;
+	int n, i;
+
+	n = zapi_arg_int(ms_car(args), "random-hex");
+	if (n <= 0) return ms_mk_str(strdup(""));
+	if (n > 256) ms_log(MS_PANIC, "random-hex: at most 256 bytes");
+
+	z_rng_bytes(buf, (uint32_t)n);
+
+	out = malloc(2 * n + 1);
+	if (!out) ms_log(MS_PANIC, "random-hex: out of memory");
+
+	for (i = 0; i < n; i++) {
+		out[2 * i]     = hex[(buf[i] >> 4) & 0xf];
+		out[2 * i + 1] = hex[buf[i] & 0xf];
+	}
+	out[2 * n] = 0;
+
+	// The buffer held key material a moment ago. Clearing a stack
+	// array whose lifetime ends here is close to ceremonial, but it
+	// costs nothing and the habit is worth more than the instance.
+	memset(buf, 0, sizeof(buf));
+
+	return ms_mk_str(out);
+
+}
+
+// (random-secure?) -- #t if the generator is seeded from a present and
+// healthy hardware source, #f if it is running on the fallback.
+//
+// A program generating anything an attacker will see should check this
+// and stop, exactly as sw/apps/net's SSH client does. It is #f on a
+// bitstream without `TRNG, and also -- importantly -- on one that HAS
+// the hardware but whose oscillators are not oscillating, which is the
+// failure a toolchain can introduce without anyone touching the code.
+// See docs/trng.md.
+static ms_val *zapi_random_secure(ms_val *args) {
+	(void)args;
+	return ms_mk_bool(z_rng_secure());
+}
+
+// (random-stir s) -- mix a string into the entropy pool.
+//
+// For a program that has a source of unpredictability nothing else can
+// see -- the timing of a person's keypresses, say. Absorption is
+// one-way, so this cannot make the generator worse no matter what is
+// passed in, and it never makes `(random-secure?)` true: nothing here
+// can measure how much entropy a caller's bytes carried, and assuming
+// generously is how a system ends up believing it is seeded when it
+// isn't.
+static ms_val *zapi_random_stir(ms_val *args) {
+	const char *s = zapi_arg_str(ms_car(args), "random-stir");
+	z_rng_stir(s, (uint32_t)strlen(s));
+	return ms_mk_bool(true);
+}
+
 void zapi_register(void) {
 	ms_def_builtin("ls", zapi_ls);
 	ms_def_builtin("file-size", zapi_file_size);
@@ -1418,4 +1525,8 @@ void zapi_register(void) {
 	ms_def_builtin("print-console", zapi_print_console);
 	ms_def_builtin("df", zapi_df);
 	ms_def_builtin("video-mode", zapi_video_mode);
+	ms_def_builtin("random", zapi_random);
+	ms_def_builtin("random-hex", zapi_random_hex);
+	ms_def_builtin("random-secure?", zapi_random_secure);
+	ms_def_builtin("random-stir", zapi_random_stir);
 }

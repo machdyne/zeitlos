@@ -86,7 +86,7 @@ TE_CFLAGS = -DEMBEDDED -DTE_HOST_IO \
 # procedure and --gc-sections drops it from any build where zapi.c
 # stops calling it.
 OBJS = zeitlos.o zobj.o zport.o zline.o zrepl.o zdns.o zfsapp.o zstream.o \
-	zgfx.o zfont_data.o zwin.o zrtc.o ms.o \
+	zgfx.o zfont_data.o zwin.o zrtc.o zrng.o ms.o \
 	te.o te_bridge.o page.o zapi.o repl.o
 
 repl: repl.elf repl.bin
@@ -105,6 +105,14 @@ zline.o:
 
 zrtc.o: ../../common/zrtc.c ../../common/zrtc.h
 	$(CC) $(CFLAGS) -c ../../common/zrtc.c -o zrtc.o
+
+# The system CSPRNG, behind (random)/(random-hex)/(random-secure?) --
+# see zapi.c and docs/trng.md. Linked unconditionally rather than
+# behind a switch: it is ~2.4KB and it works (with a clearly-labelled
+# non-cryptographic fallback) on a bitstream with no `TRNG at all, so
+# there is no build where leaving it out would be the right call.
+zrng.o: ../../common/zrng.c ../../common/zrng.h ../../common/zsoc.h
+	$(CC) $(CFLAGS) -c ../../common/zrng.c -o zrng.o
 
 zrepl.o:
 	$(CC) $(CFLAGS) -c ../../common/zrepl.c -o zrepl.o
