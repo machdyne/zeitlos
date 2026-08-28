@@ -758,6 +758,7 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 			// reusing this same pid slot would inherit stale name
 			// registrations that were never its own)
 			k_pidreg_release_all(z_pid);
+			fs_lock_release_pid(z_pid);
 			// kill the process
 			z_procs[z_pid].base = 0x00000000;
 			z_procs[z_pid].flags = 0x00000000;
@@ -823,27 +824,30 @@ void k_proc_unblock(uint32_t pid) {
 // syscall path to do the full save/switch dance the KTIMER path does;
 // that's a worthwhile follow-up, not a correctness issue.
 z_obj_t *k_proc_wait(z_obj_t *args) {
-
 	uint32_t timeout = (args->type == Z_UINT32) ? args->val.uint32 : 0;
-
-	// something already waiting -- don't block, let the caller read it
-	if (!z_mailbox_empty(z_pid))
+	// The whole check-and-block is atomic against the KTIMER wake loop.
+	// This runs in the caller's context with interrupts enabled, and
+	// the caller keeps running until the next tick, so it can be back
+	// here with BLOCKED still set from its previous call. A tick
+	// landing between the wake_tick store and the flags store could
+	// then unblock it (wake_tick = 0) and, on resume, this function
+	// set BLOCKED again with no wake tick: blocked forever. Seen on
+	// the ULX3S (net calls z_proc_wait(1) once per loop iteration):
+	// `ps` showed net "blk ... wake: 0".
+	uint32_t m = maskirq(0xFFFFFFFF);
+	if (!z_mailbox_empty(z_pid)) {
+		maskirq(m);
 		return (&z_fail);
-
-	// wake_tick 0 is the sentinel for "indefinite", so a timeout that
-	// happens to land exactly on tick 0 is nudged to 1. At 732Hz that
-	// is a 1.4ms error once every ~68 days.
+	}
 	if (timeout) {
 		uint32_t w = z_kernel_ticks + timeout;
 		z_procs[z_pid].wake_tick = w ? w : 1;
 	} else {
 		z_procs[z_pid].wake_tick = 0;
 	}
-
 	z_procs[z_pid].flags |= Z_PROC_FLAG_BLOCKED;
-
+	maskirq(m);
 	return (&z_ok);
-
 }
 
 // Processes that could actually be given a timeslice right now, as
@@ -1047,10 +1051,11 @@ z_rv k_proc_dump(void) {
 		// percentage -- `ps` is a snapshot and has no second sample
 		// to difference against. sw/apps/info takes two and reports
 		// a real percentage; see z_proc_info_t in zproc.h.
-		printf(" pid: %2i %s base: %.8lx size: %.8lx pc %.8lx sp: %.8lx flags: %.8lx cpu: %lu\n",
+		printf(" pid: %2i %s base: %.8lx size: %.8lx pc %.8lx sp: %.8lx flags: %.8lx cpu: %lu wake: %lu now: %lu\n",
 			i, state, z_procs[i].base, z_procs[i].size,
 			z_procs[i].regs[0], z_procs[i].regs[2], z_procs[i].flags,
-			(unsigned long)z_procs[i].cpu_ticks);
+			(unsigned long)z_procs[i].cpu_ticks,
+			(unsigned long)z_procs[i].wake_tick, (unsigned long)z_kernel_ticks);
 	}
 	return Z_OK;
 }

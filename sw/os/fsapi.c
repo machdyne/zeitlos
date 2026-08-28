@@ -29,7 +29,7 @@
 // Returns the process image size (data + bss), or 0 if not found, so
 // callers get a usable size for free rather than needing a second
 // call.
-z_obj_t *k_exec_exists(z_obj_t *args) {
+static z_obj_t * k_exec_exists__unlocked(z_obj_t *args) {
 
 	if (!args || args->type != Z_STR || !args->val.str) {
 		args->type = Z_UINT32;
@@ -47,7 +47,7 @@ z_obj_t *k_exec_exists(z_obj_t *args) {
 
 }
 
-z_obj_t *k_fs_size(z_obj_t *args) {
+static z_obj_t * k_fs_size__unlocked(z_obj_t *args) {
 
 	z_fs_size_args_t *a = (z_fs_size_args_t *)args;
 
@@ -66,7 +66,7 @@ z_obj_t *k_fs_size(z_obj_t *args) {
 
 }
 
-z_obj_t *k_fs_read(z_obj_t *args) {
+static z_obj_t * k_fs_read__unlocked(z_obj_t *args) {
 
 	z_fs_read_args_t *a = (z_fs_read_args_t *)args;
 
@@ -105,7 +105,7 @@ z_obj_t *k_fs_read(z_obj_t *args) {
 
 }
 
-z_obj_t *k_fs_write(z_obj_t *args) {
+static z_obj_t * k_fs_write__unlocked(z_obj_t *args) {
 
 	z_fs_write_args_t *a = (z_fs_write_args_t *)args;
 
@@ -131,7 +131,7 @@ z_obj_t *k_fs_write(z_obj_t *args) {
 
 }
 
-z_obj_t *k_fs_unlink(z_obj_t *args) {
+static z_obj_t * k_fs_unlink__unlocked(z_obj_t *args) {
 
 	z_fs_unlink_args_t *a = (z_fs_unlink_args_t *)args;
 
@@ -181,7 +181,7 @@ int k_fs_open_count(void) {
 
 }
 
-z_obj_t *k_fs_open_write(z_obj_t *args) {
+static z_obj_t * k_fs_open_write__unlocked(z_obj_t *args) {
 
 	z_fs_open_args_t *a = (z_fs_open_args_t *)args;
 	if (a) a->handle = -1;
@@ -202,7 +202,7 @@ z_obj_t *k_fs_open_write(z_obj_t *args) {
 
 }
 
-z_obj_t *k_fs_open_read(z_obj_t *args) {
+static z_obj_t * k_fs_open_read__unlocked(z_obj_t *args) {
 
 	z_fs_open_args_t *a = (z_fs_open_args_t *)args;
 	if (a) a->handle = -1;
@@ -229,7 +229,7 @@ z_obj_t *k_fs_open_read(z_obj_t *args) {
 // sw/os/fs/fs.c, which sh.c's own tget already relies on the same way).
 // &z_fail is reserved for a genuine problem: a bad/foreign handle, or
 // FatFs itself reporting an error.
-z_obj_t *k_fs_read_chunk(z_obj_t *args) {
+static z_obj_t * k_fs_read_chunk__unlocked(z_obj_t *args) {
 
 	z_fs_read_chunk_args_t *a = (z_fs_read_chunk_args_t *)args;
 	if (a) a->len = 0;
@@ -249,7 +249,7 @@ z_obj_t *k_fs_read_chunk(z_obj_t *args) {
 
 }
 
-z_obj_t *k_fs_write_chunk(z_obj_t *args) {
+static z_obj_t * k_fs_write_chunk__unlocked(z_obj_t *args) {
 
 	z_fs_write_chunk_args_t *a = (z_fs_write_chunk_args_t *)args;
 	if (a) a->written = 0;
@@ -269,7 +269,7 @@ z_obj_t *k_fs_write_chunk(z_obj_t *args) {
 
 }
 
-z_obj_t *k_fs_close(z_obj_t *args) {
+static z_obj_t * k_fs_close__unlocked(z_obj_t *args) {
 
 	z_fs_close_args_t *a = (z_fs_close_args_t *)args;
 
@@ -297,7 +297,7 @@ z_obj_t *k_fs_close(z_obj_t *args) {
 // compiled code stays away from that libc machinery); the prefix and
 // each combined name are built with plain strlen()/memcpy() into
 // small fixed local buffers instead.
-z_obj_t *k_fs_list(z_obj_t *args) {
+static z_obj_t * k_fs_list__unlocked(z_obj_t *args) {
 
 	z_fs_list_args_t *a = (z_fs_list_args_t *)args;
 
@@ -400,7 +400,7 @@ z_obj_t *k_fs_list(z_obj_t *args) {
 // every other fs.c operation already has, not new behavior introduced
 // here.
 
-z_obj_t *k_fs_mkdir(z_obj_t *args) {
+static z_obj_t * k_fs_mkdir__unlocked(z_obj_t *args) {
 
 	z_fs_path_args_t *a = (z_fs_path_args_t *)args;
 
@@ -410,7 +410,7 @@ z_obj_t *k_fs_mkdir(z_obj_t *args) {
 
 }
 
-z_obj_t *k_fs_touch(z_obj_t *args) {
+static z_obj_t * k_fs_touch__unlocked(z_obj_t *args) {
 
 	z_fs_path_args_t *a = (z_fs_path_args_t *)args;
 
@@ -435,7 +435,7 @@ z_obj_t *k_fs_touch(z_obj_t *args) {
 // something this handler needs to police: page only ever opens for
 // read, and a caller that opened for write and seeks past the end has
 // asked for exactly what FatFs does.
-z_obj_t *k_fs_seek(z_obj_t *args) {
+static z_obj_t * k_fs_seek__unlocked(z_obj_t *args) {
 
 	z_fs_seek_args_t *a = (z_fs_seek_args_t *)args;
 	if (a) a->pos = 0;
@@ -462,7 +462,7 @@ z_obj_t *k_fs_seek(z_obj_t *args) {
 // volume that genuinely reports 0 total is indistinguishable from one
 // that failed to answer, and neither is a state where a caller should
 // be told a capacity.
-z_obj_t *k_fs_df(z_obj_t *args) {
+static z_obj_t * k_fs_df__unlocked(z_obj_t *args) {
 
 	z_fs_df_args_t *a = (z_fs_df_args_t *)args;
 
@@ -473,4 +473,110 @@ z_obj_t *k_fs_df(z_obj_t *args) {
 
 	return (&z_ok);
 
+}
+
+// -- locked entry points (see fs_lock() in fs.c) --------------------
+z_obj_t * k_exec_exists(z_obj_t *args) {
+	fs_lock();
+	z_obj_t * r = k_exec_exists__unlocked(args);
+	fs_unlock();
+	return r;
+}
+
+z_obj_t * k_fs_size(z_obj_t *args) {
+	fs_lock();
+	z_obj_t * r = k_fs_size__unlocked(args);
+	fs_unlock();
+	return r;
+}
+
+z_obj_t * k_fs_read(z_obj_t *args) {
+	fs_lock();
+	z_obj_t * r = k_fs_read__unlocked(args);
+	fs_unlock();
+	return r;
+}
+
+z_obj_t * k_fs_write(z_obj_t *args) {
+	fs_lock();
+	z_obj_t * r = k_fs_write__unlocked(args);
+	fs_unlock();
+	return r;
+}
+
+z_obj_t * k_fs_unlink(z_obj_t *args) {
+	fs_lock();
+	z_obj_t * r = k_fs_unlink__unlocked(args);
+	fs_unlock();
+	return r;
+}
+
+z_obj_t * k_fs_open_write(z_obj_t *args) {
+	fs_lock();
+	z_obj_t * r = k_fs_open_write__unlocked(args);
+	fs_unlock();
+	return r;
+}
+
+z_obj_t * k_fs_open_read(z_obj_t *args) {
+	fs_lock();
+	z_obj_t * r = k_fs_open_read__unlocked(args);
+	fs_unlock();
+	return r;
+}
+
+z_obj_t * k_fs_read_chunk(z_obj_t *args) {
+	fs_lock();
+	z_obj_t * r = k_fs_read_chunk__unlocked(args);
+	fs_unlock();
+	return r;
+}
+
+z_obj_t * k_fs_write_chunk(z_obj_t *args) {
+	fs_lock();
+	z_obj_t * r = k_fs_write_chunk__unlocked(args);
+	fs_unlock();
+	return r;
+}
+
+z_obj_t * k_fs_close(z_obj_t *args) {
+	fs_lock();
+	z_obj_t * r = k_fs_close__unlocked(args);
+	fs_unlock();
+	return r;
+}
+
+z_obj_t * k_fs_list(z_obj_t *args) {
+	fs_lock();
+	z_obj_t * r = k_fs_list__unlocked(args);
+	fs_unlock();
+	return r;
+}
+
+z_obj_t * k_fs_mkdir(z_obj_t *args) {
+	fs_lock();
+	z_obj_t * r = k_fs_mkdir__unlocked(args);
+	fs_unlock();
+	return r;
+}
+
+z_obj_t * k_fs_touch(z_obj_t *args) {
+	fs_lock();
+	z_obj_t * r = k_fs_touch__unlocked(args);
+	fs_unlock();
+	return r;
+}
+
+z_obj_t * k_fs_seek(z_obj_t *args) {
+	fs_lock();
+	z_obj_t * r = k_fs_seek__unlocked(args);
+	fs_unlock();
+	return r;
+}
+
+z_obj_t * k_fs_df(z_obj_t *args) {
+	fs_lock();
+	z_obj_t * r = k_fs_df__unlocked(args);
+	fs_unlock();
+	return r;
 }

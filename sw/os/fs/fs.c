@@ -5,13 +5,59 @@
 
 #include "fatfs/ff.h"
 #include "fs.h"
+#include "../kernel.h"	// maskirq(), z_pid (fs_lock)
 #include "../../common/zexec.h"
 #include "../../common/zsoc.h"
 #include "../zar.h"
 
 FATFS sdvol0;
 
-int fs_load(uint32_t dst, char *path) {
+
+// -- mutual exclusion for FatFs + the SD driver --------------------------
+// Neither is re-entrant, and syscalls run in the caller's own context
+// with interrupts enabled: a KTIMER swap in the middle of one f_read()
+// onto another process that also touches the card interleaves two SPI
+// transactions (fsapi.h's "Concurrency note"). Seen on the ULX3S:
+// 2026-08-27 net reading NET.CFG while init() streamed repl (desktop
+// frozen), 2026-08-28 wm's dock scan (11 EXEC_EXISTS syscalls) while
+// init() loaded net/repl ("not installed", net image corrupted, reset).
+// Recursive per pid because fs.c's functions call each other; waits
+// with interrupts enabled so the holder keeps getting scheduled.
+static volatile uint32_t fs_lock_owner = 0xFFFFFFFFu;
+static volatile uint32_t fs_lock_depth = 0;
+
+void fs_lock(void) {
+	for (;;) {
+		uint32_t m = maskirq(0xFFFFFFFF);
+		if (fs_lock_depth == 0 || fs_lock_owner == z_pid) {
+			fs_lock_owner = z_pid;
+			fs_lock_depth++;
+			maskirq(m);
+			return;
+		}
+		maskirq(m);
+	}
+}
+
+void fs_unlock(void) {
+	uint32_t m = maskirq(0xFFFFFFFF);
+	if (fs_lock_depth > 0 && --fs_lock_depth == 0)
+		fs_lock_owner = 0xFFFFFFFFu;
+	maskirq(m);
+}
+
+// scheduler death cleanup: a process killed while inside the
+// filesystem must not leave everyone else spinning forever
+void fs_lock_release_pid(uint32_t pid) {
+	uint32_t m = maskirq(0xFFFFFFFF);
+	if (fs_lock_owner == pid) {
+		fs_lock_depth = 0;
+		fs_lock_owner = 0xFFFFFFFFu;
+	}
+	maskirq(m);
+}
+
+static int fs_load__unlocked(uint32_t dst, char *path) {
 
 	FIL f;
 	FRESULT res;
@@ -49,7 +95,7 @@ int fs_load(uint32_t dst, char *path) {
 
 }
 
-void *fs_mallocfile(char *path) {
+static void * fs_mallocfile__unlocked(char *path) {
 
 	FIL f;
 	FRESULT res;
@@ -76,7 +122,7 @@ void *fs_mallocfile(char *path) {
 
 }
 
-int fs_touch(char *path) {
+static int fs_touch__unlocked(char *path) {
 
 	FIL f;
 	FRESULT res;
@@ -94,8 +140,7 @@ int fs_touch(char *path) {
 
 }
 
-int fs_mount(void)
-{
+static int fs_mount__unlocked(void) {
 	FRESULT res;
 	res = f_mount(&sdvol0, "", 0);
 	if (res == FR_OK)
@@ -121,8 +166,7 @@ int fs_mount(void)
 //
 // Returns 0 on success. A slow card may need a few attempts, so
 // callers should retry rather than treating one failure as final.
-int fs_mount_now(void)
-{
+static int fs_mount_now__unlocked(void) {
 	FRESULT res;
 	res = f_mount(&sdvol0, "", 1);
 	if (res == FR_OK)
@@ -131,7 +175,7 @@ int fs_mount_now(void)
 		return 1;
 }
 
-int fs_format(void) {
+static int fs_format__unlocked(void) {
 
 	FRESULT res;
 	BYTE work[FF_MAX_SS];
@@ -150,7 +194,7 @@ int fs_format(void) {
 
 }
 
-uint32_t fs_total(void) {
+static uint32_t fs_total__unlocked(void) {
 	FATFS *fs;
 	FRESULT res;
 	DWORD fre_clust;
@@ -178,7 +222,7 @@ uint32_t fs_total(void) {
 // when something like a file browser or a system monitor asks.
 //
 // Both figures in KB, matching fs_total()/fs_free().
-void fs_df_kb(uint32_t *total_kb, uint32_t *free_kb) {
+static void fs_df_kb__unlocked(uint32_t *total_kb, uint32_t *free_kb) {
 
 	FATFS *fs;
 	DWORD fre_clust;
@@ -193,7 +237,7 @@ void fs_df_kb(uint32_t *total_kb, uint32_t *free_kb) {
 
 }
 
-uint32_t fs_free(void) {
+static uint32_t fs_free__unlocked(void) {
 	FATFS *fs;
 	FRESULT res;
 	DWORD fre_clust;
@@ -207,7 +251,7 @@ uint32_t fs_free(void) {
 	return 0;
 }
 
-uint32_t fs_size(char *path) {
+static uint32_t fs_size__unlocked(char *path) {
 	FIL f;
 	FRESULT res;
 	FSIZE_t fs = 0;
@@ -219,7 +263,7 @@ uint32_t fs_size(char *path) {
 	return(fs);
 }
 
-int fs_write_file(char *path, char *buf, uint32_t len) {
+static int fs_write_file__unlocked(char *path, char *buf, uint32_t len) {
 
 	FIL f;
 	FRESULT res;
@@ -246,7 +290,7 @@ int fs_write_file(char *path, char *buf, uint32_t len) {
 // Bytes written since the last metadata flush. See FS_SYNC_INTERVAL.
 static uint32_t chunk_unsynced;
 
-int fs_open_write(FIL *f, char *path) {
+static int fs_open_write__unlocked(FIL *f, char *path) {
 	chunk_unsynced = 0;
 	FRESULT res = f_open(f, path, FA_WRITE | FA_CREATE_ALWAYS);
 	if (res != FR_OK) {
@@ -265,7 +309,7 @@ int fs_open_write(FIL *f, char *path) {
 // itself.
 #define FS_SYNC_INTERVAL   (64 * 1024)
 
-int fs_write_chunk(FIL *f, const void *buf, uint32_t len) {
+static int fs_write_chunk__unlocked(FIL *f, const void *buf, uint32_t len) {
 	UINT bw;
 	FRESULT res = f_write(f, buf, len, &bw);
 	if (res != FR_OK) {
@@ -305,7 +349,7 @@ int fs_write_chunk(FIL *f, const void *buf, uint32_t len) {
 // f_sync() does what f_close() does to the metadata while leaving the
 // file open, so this bounds the damage to whatever was written since
 // the last call rather than the whole transfer.
-int fs_sync(FIL *f) {
+static int fs_sync__unlocked(FIL *f) {
 	if (!f) return 0;
 	return (f_sync(f) == FR_OK) ? 1 : 0;
 }
@@ -313,17 +357,17 @@ int fs_sync(FIL *f) {
 // Flush and unmount the volume. Call before deliberately cutting power
 // or reprogramming; after this the card is consistent and can be
 // removed. fs_mount_now() brings it back.
-int fs_unmount(void) {
+static int fs_unmount__unlocked(void) {
 	FRESULT res = f_mount(NULL, "", 0);
 	return (res == FR_OK) ? 0 : 1;
 }
 
-int fs_close_write(FIL *f) {
+static int fs_close_write__unlocked(FIL *f) {
 	FRESULT res = f_close(f);
 	return (res == FR_OK) ? 1 : 0;
 }
 
-int fs_open_read(FIL *f, char *path) {
+static int fs_open_read__unlocked(FIL *f, char *path) {
 	FRESULT res = f_open(f, path, FA_READ | FA_OPEN_EXISTING);
 	if (res != FR_OK) {
 		printf("fs_open_read: failed; error code: %i\n", res);
@@ -332,7 +376,7 @@ int fs_open_read(FIL *f, char *path) {
 	return 1;
 }
 
-int32_t fs_read_chunk(FIL *f, void *buf, uint32_t maxlen) {
+static int32_t fs_read_chunk__unlocked(FIL *f, void *buf, uint32_t maxlen) {
 	UINT br;
 	FRESULT res = f_read(f, buf, maxlen, &br);
 	if (res != FR_OK) {
@@ -342,12 +386,12 @@ int32_t fs_read_chunk(FIL *f, void *buf, uint32_t maxlen) {
 	return (int32_t)br;	// 0 means EOF (nothing left to read), matching f_read()'s own convention
 }
 
-int fs_close_read(FIL *f) {
+static int fs_close_read__unlocked(FIL *f) {
 	FRESULT res = f_close(f);
 	return (res == FR_OK) ? 1 : 0;
 }
 
-int fs_mkdir(char *path) {
+static int fs_mkdir__unlocked(char *path) {
 
 	FRESULT res;
 
@@ -364,7 +408,7 @@ int fs_mkdir(char *path) {
 
 }
 
-int fs_unlink(char *path) {
+static int fs_unlink__unlocked(char *path) {
 
 	FRESULT res;
 
@@ -381,7 +425,7 @@ int fs_unlink(char *path) {
 
 }
 
-void fs_list_dir(char *path) {
+static void fs_list_dir__unlocked(char *path) {
 
 	FRESULT res;
 	DIR dir;
@@ -493,7 +537,7 @@ void fs_list_dir(char *path) {
 // magic is not an error -- it reports as a legacy raw binary, which is
 // exactly right for an old --pad-to image whose bss is already present
 // as zeros (see z_exec_parse()).
-int fs_exec_info(char *path, z_exec_info_t *info) {
+static int fs_exec_info__unlocked(char *path, z_exec_info_t *info) {
 
 	FIL f;
 	FRESULT res;
@@ -554,7 +598,7 @@ int fs_exec_info(char *path, z_exec_info_t *info) {
 // putting it there. Callers that want to report which source was used
 // can compare fs_exec_info()'s result themselves; both sh.c's init and
 // `run` print it.
-int fs_exec_info_any(char *path, z_exec_info_t *info) {
+static int fs_exec_info_any__unlocked(char *path, z_exec_info_t *info) {
 
 	if (fs_exec_info(path, info) == 0 && info->total)
 		return 0;
@@ -568,7 +612,7 @@ int fs_exec_info_any(char *path, z_exec_info_t *info) {
 
 // true if `path` resolved to the flash copy rather than the card.
 // Only for reporting -- the loader below re-resolves on its own.
-int fs_exec_is_flash(char *path) {
+static int fs_exec_is_flash__unlocked(char *path) {
 	z_exec_info_t tmp;
 	if (fs_exec_info(path, &tmp) == 0 && tmp.total) return 0;
 	return (z_zar_exec_info(path, &tmp) == 0 && tmp.total) ? 1 : 0;
@@ -578,7 +622,7 @@ int fs_exec_is_flash(char *path) {
 // the same test rather than taking a source argument: two functions
 // that must be called with matching arguments is exactly the kind of
 // pairing that eventually gets called with mismatched ones.
-int fs_load_exec_any(uint32_t dst, char *path, const z_exec_info_t *info) {
+static int fs_load_exec_any__unlocked(uint32_t dst, char *path, const z_exec_info_t *info) {
 
 	if (fs_exec_is_flash(path))
 		return z_zar_load_exec(dst, path, info);
@@ -587,7 +631,7 @@ int fs_load_exec_any(uint32_t dst, char *path, const z_exec_info_t *info) {
 
 }
 
-int fs_load_exec(uint32_t dst, char *path, const z_exec_info_t *info) {
+static int fs_load_exec__unlocked(uint32_t dst, char *path, const z_exec_info_t *info) {
 
 	FIL f;
 	FRESULT res;
@@ -642,4 +686,192 @@ int fs_load_exec(uint32_t dst, char *path, const z_exec_info_t *info) {
 
 	return 0;
 
+}
+
+// -- locked entry points (see fs_lock() in fs.c) --------------------
+int fs_load(uint32_t dst, char *path) {
+	fs_lock();
+	int r = fs_load__unlocked(dst, path);
+	fs_unlock();
+	return r;
+}
+
+void * fs_mallocfile(char *path) {
+	fs_lock();
+	void * r = fs_mallocfile__unlocked(path);
+	fs_unlock();
+	return r;
+}
+
+int fs_touch(char *path) {
+	fs_lock();
+	int r = fs_touch__unlocked(path);
+	fs_unlock();
+	return r;
+}
+
+int fs_mount(void) {
+	fs_lock();
+	int r = fs_mount__unlocked();
+	fs_unlock();
+	return r;
+}
+
+int fs_mount_now(void) {
+	fs_lock();
+	int r = fs_mount_now__unlocked();
+	fs_unlock();
+	return r;
+}
+
+int fs_format(void) {
+	fs_lock();
+	int r = fs_format__unlocked();
+	fs_unlock();
+	return r;
+}
+
+uint32_t fs_total(void) {
+	fs_lock();
+	uint32_t r = fs_total__unlocked();
+	fs_unlock();
+	return r;
+}
+
+void fs_df_kb(uint32_t *total_kb, uint32_t *free_kb) {
+	fs_lock();
+	fs_df_kb__unlocked(total_kb, free_kb);
+	fs_unlock();
+}
+
+uint32_t fs_free(void) {
+	fs_lock();
+	uint32_t r = fs_free__unlocked();
+	fs_unlock();
+	return r;
+}
+
+uint32_t fs_size(char *path) {
+	fs_lock();
+	uint32_t r = fs_size__unlocked(path);
+	fs_unlock();
+	return r;
+}
+
+int fs_write_file(char *path, char *buf, uint32_t len) {
+	fs_lock();
+	int r = fs_write_file__unlocked(path, buf, len);
+	fs_unlock();
+	return r;
+}
+
+int fs_open_write(FIL *f, char *path) {
+	fs_lock();
+	int r = fs_open_write__unlocked(f, path);
+	fs_unlock();
+	return r;
+}
+
+int fs_write_chunk(FIL *f, const void *buf, uint32_t len) {
+	fs_lock();
+	int r = fs_write_chunk__unlocked(f, buf, len);
+	fs_unlock();
+	return r;
+}
+
+int fs_sync(FIL *f) {
+	fs_lock();
+	int r = fs_sync__unlocked(f);
+	fs_unlock();
+	return r;
+}
+
+int fs_unmount(void) {
+	fs_lock();
+	int r = fs_unmount__unlocked();
+	fs_unlock();
+	return r;
+}
+
+int fs_close_write(FIL *f) {
+	fs_lock();
+	int r = fs_close_write__unlocked(f);
+	fs_unlock();
+	return r;
+}
+
+int fs_open_read(FIL *f, char *path) {
+	fs_lock();
+	int r = fs_open_read__unlocked(f, path);
+	fs_unlock();
+	return r;
+}
+
+int32_t fs_read_chunk(FIL *f, void *buf, uint32_t maxlen) {
+	fs_lock();
+	int32_t r = fs_read_chunk__unlocked(f, buf, maxlen);
+	fs_unlock();
+	return r;
+}
+
+int fs_close_read(FIL *f) {
+	fs_lock();
+	int r = fs_close_read__unlocked(f);
+	fs_unlock();
+	return r;
+}
+
+int fs_mkdir(char *path) {
+	fs_lock();
+	int r = fs_mkdir__unlocked(path);
+	fs_unlock();
+	return r;
+}
+
+int fs_unlink(char *path) {
+	fs_lock();
+	int r = fs_unlink__unlocked(path);
+	fs_unlock();
+	return r;
+}
+
+void fs_list_dir(char *path) {
+	fs_lock();
+	fs_list_dir__unlocked(path);
+	fs_unlock();
+}
+
+int fs_exec_info(char *path, z_exec_info_t *info) {
+	fs_lock();
+	int r = fs_exec_info__unlocked(path, info);
+	fs_unlock();
+	return r;
+}
+
+int fs_exec_info_any(char *path, z_exec_info_t *info) {
+	fs_lock();
+	int r = fs_exec_info_any__unlocked(path, info);
+	fs_unlock();
+	return r;
+}
+
+int fs_exec_is_flash(char *path) {
+	fs_lock();
+	int r = fs_exec_is_flash__unlocked(path);
+	fs_unlock();
+	return r;
+}
+
+int fs_load_exec_any(uint32_t dst, char *path, const z_exec_info_t *info) {
+	fs_lock();
+	int r = fs_load_exec_any__unlocked(dst, path, info);
+	fs_unlock();
+	return r;
+}
+
+int fs_load_exec(uint32_t dst, char *path, const z_exec_info_t *info) {
+	fs_lock();
+	int r = fs_load_exec__unlocked(dst, path, info);
+	fs_unlock();
+	return r;
 }

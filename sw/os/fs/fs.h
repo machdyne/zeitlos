@@ -61,4 +61,9 @@ int fs_open_read(FIL *f, char *path);
 int32_t fs_read_chunk(FIL *f, void *buf, uint32_t maxlen);
 int fs_close_read(FIL *f);
 
+
+// FatFs/SD mutual exclusion -- see fs.c
+void fs_lock(void);
+void fs_unlock(void);
+void fs_lock_release_pid(uint32_t pid);
 #endif
