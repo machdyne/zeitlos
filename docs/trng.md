@@ -42,10 +42,15 @@ jitters with temperature, voltage and silicon. Lengths are 13, 15, 17
 injection-lock into a single source, which would quietly reduce eight
 oscillators to one.
 
-Their outputs are XORed, resolved through a three-stage synchroniser,
-and sampled once every 256 system clocks. Sampling far slower than the
-oscillators run is the point — jitter accumulates over time, so a fast
-sample gets many bits carrying very little entropy each.
+Each oscillator is sampled into its **own** flip-flop, and the eight
+registered samples are then XORed — in that order, which is a timing
+requirement rather than a style choice (see *Timing* below). Three
+register stages in total: capture, resolve, combine. The combined bit
+is taken once every 256 system clocks.
+
+Sampling far slower than the oscillators run is the point — jitter
+accumulates over time, so a fast sample gets many bits carrying very
+little entropy each.
 
 Von Neumann debiasing follows: sample pairs, `01`→0, `10`→1, `00` and
 `11` discarded. This makes the output exactly unbiased for **any** fixed
@@ -277,11 +282,76 @@ uniform to within 0.7%.
 
 ## Cost
 
-Fabric cost is small — eight short inverter chains, a handful of
-counters, an 8×32 FIFO and the Wishbone interface, on the order of 150
-LUT4 on ECP5. It needs no pins, no external part and no board support,
-which is why `TRNG` is defined at the universal level in
-`rtl/boards.vh` like `RTC`.
+Measured with `yosys synth_ecp5` on `trng.v` alone: **718 cells, 402
+LUT4, 52 carry cells, 181 flip-flops.** It needs no pins, no external
+part and no board support, which is why `TRNG` is defined at the
+universal level in `rtl/boards.vh` like `RTC`.
+
+## Timing
+
+**This block cost the 48 MHz domain its timing margin once**, and two
+things in `trng.v` are shaped by that. Neither should be "simplified"
+back.
+
+**Sample each oscillator before XORing them.** The obvious way round —
+`^ro_tap` straight into a synchroniser — puts a combinational XOR tree
+between eight ring oscillator LUTs and one flip-flop. Those LUTs sit in
+combinational loops, so `--ignore-loops` tells the timing analyser to
+skip them, which *also* means the placer has no reason to keep them
+near each other or near the XOR. Eight scattered LUTs converging on one
+gate is a critical path nobody constrained. Registering each tap first
+turns that into eight short, independent, locally satisfiable hops and
+leaves the XOR as a fully timed flop-to-flop path.
+
+**Anything that happens once per sample should run a cycle late.**
+`raw_valid` is asserted once every `SAMPLE_DIV` cycles — 256 by default
+— so there are 255 idle cycles available and deferring work into them
+is free. Two things use this:
+
+- the window verdict (an 11-bit add and two 11-bit comparators)
+- the repetition verdict — `rep_run`'s 8-bit increment fed two
+  comparators, one against `REP_CUTOFF` and one against `rep_max`, all
+  behind a carry chain starting at `last_raw`. yosys put that chain on
+  the longest path in the block.
+
+Both now increment on the sample cycle and judge on the next. The tests
+themselves are unchanged.
+
+`div_ctr` is 16 bits for the same reason. It was 32, and yosys put that
+carry chain on the longest path: `wb_stb_i → bus_cycle → enable →
+div_ctr[31] → CCU2C`. `SAMPLE_DIV` is consequently bounded to
+[2, 65536] — the lower bound because the window verdict runs one cycle
+after the sample that closes the window, and at `SAMPLE_DIV=1` that
+cycle would collide with the next sample.
+
+Before and after the rework (`yosys synth_ecp5` on `trng.v` alone):
+
+| | before | after |
+|---|---|---|
+| cells | 807 | 722 |
+| LUT4 | 455 | 415 |
+| carry (CCU2C) | 66 | 51 |
+| PFUMX | 82 | 57 |
+
+**None of these numbers is a predicted Fmax, and there is no honest way
+to produce one from synthesis alone.** An earlier version of this
+section quoted yosys `ltp` as a "logic depth" of 251 → 123. That figure
+was misleading and has been removed: `ltp -noff` treats flip-flops as
+pass-through, so what it reports is a topological path across the whole
+design rather than anything a clock has to close — the reported chain
+runs `ro_x → raw_bit → last_raw → rep_run → health_ok → fifo_level →
+fifo_head → wb_dat_o`, which is seven clock cycles, not one. It was
+useful for *locating* deep logic (that is how the 32-bit `div_ctr` and
+the `rep_run` chain were found) and worthless as a measure of speed.
+
+The carry-cell and PFUMX reductions are real and are where the
+single-cycle paths got shorter. The routing win from per-oscillator
+sampling is likely the larger effect and is exactly the one no
+synthesis-level number can show — only a nextpnr critical path report
+can settle it.
+
+None of this changed the entropy behaviour: same oscillators, same
+sampling instant, same debiasing, same health tests.
 
 ## Future work
 

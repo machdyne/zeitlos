@@ -243,9 +243,9 @@ module tb_trng;
 		// would also switch the source off and nothing would ever be
 		// sampled again. Caught here first; zrng.c does the same.
 		wb_write(3'd3, 32'h0000_0003);
-		force dut.sync = 3'b000;
+		force dut.ro_s2 = {8{1'b0}};
 		repeat (20000) @(posedge clk);
-		release dut.sync;
+		release dut.ro_s2;
 		wb_read(3'd2, rv);
 		check(rv[1] === 1'b0, "HEALTH_OK clears on a stuck source");
 
