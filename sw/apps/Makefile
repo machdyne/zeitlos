@@ -18,6 +18,8 @@ all:
 	cd portdemo && make
 	cd repl && make
 	cd space3d && make
+	cd audiotest && make
+	cd track && make
 
 clean:
 	cd gpudemo && make clean
@@ -39,3 +41,5 @@ clean:
 	cd portdemo && make clean
 	cd repl && make clean
 	cd space3d && make clean
+	cd audiotest && make clean
+	cd track && make clean

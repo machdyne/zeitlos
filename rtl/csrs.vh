@@ -130,4 +130,23 @@ localparam CSR_FEATURES =
 `ifdef TRNG
 	(32'h1 << 25) |
 `endif
+// rtl/audio.v -- the sample FIFO and DAC output stage. Mirrors `AUDIO
+// in rtl/boards.vh, which is PER-BOARD rather than universal: audio
+// needs pins and a DAC, so a board either has it or does not.
+//
+// Same hazard and same rule as Z_FEATURE_RTC and Z_FEATURE_TRNG above:
+// check THIS bit before reading the audio block's own MAGIC. On a
+// bitstream built before rtl/audio.v existed, 0x7000_05xx is decoded
+// by nothing, and an undecoded address on this bus never acks -- so
+// the probe read hangs the CPU rather than returning zero. This bit is
+// at 0x7000_0008, which every bitstream ever built decodes, so asking
+// here is always safe. z_audio_present() (sw/common/zaudio.h) is that
+// check in the safe order.
+//
+// Note this bit says a FIFO and an output stage were built. It does
+// NOT say which DAC is on the other end -- the register interface is
+// identical either way. Read the block's own CONFIG register for that.
+`ifdef AUDIO
+	(32'h1 << 26) |
+`endif
 	32'h0;

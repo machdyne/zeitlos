@@ -28,6 +28,75 @@ localparam SYSCLK = 48_000_000;
 `endif
 `endif
 
+// Audio geometry defaults, if a board enabled `AUDIO without pinning
+// them (rtl/boards.vh).
+//
+// 1024 frames: 46ms at 22kHz, 23ms at 44.1kHz.
+//
+// This was 128 and that was WRONG -- see rtl/audio.v's header for the
+// scheduling arithmetic that says so. The short version: this is a
+// preemptive round-robin system and wm and sh both busy-poll, so a
+// player can be off the CPU for two or three 1.365ms ticks at a
+// stretch and must refill a whole round's worth during its own slice.
+// 128 frames is 5.8ms at 22kHz, which leaves no margin at all.
+//
+// The width is what makes 1024 the right number rather than 512: a
+// DP16KD is 18 bits wide, so a 32-bit FIFO needs two of them whatever
+// the depth. 512 frames and 1024 frames cost exactly the same two
+// blocks; 1024 uses them fully. Below 1024 you are paying for BRAM
+// you are not using.
+`ifdef AUDIO
+`ifndef AUDIO_FIFO_LOG2
+`define AUDIO_FIFO_LOG2 10
+`endif
+// Power-on sample rate divider. fs = SYSCLK / (64 * RATE), so 17 is
+// 44117.6Hz at 48MHz -- 0.04% high, a 0.7-cent pitch error.
+//
+// A board with the optical S/PDIF transmitter (Sergei, not supported
+// yet) will want 16 instead, giving 46875Hz: that is the only sample
+// rate on this clocking whose biphase half-cell is an exact integer
+// number of sys_clk cycles. See docs/audio.md.
+`ifndef AUDIO_RATE_RESET
+`define AUDIO_RATE_RESET 8'd17
+`endif
+// log2 of the hardware mixer's channel count. 3 = eight channels;
+// 2 = four, which is all a ProTracker MOD needs and is the dial to
+// reach for when placement is tight. See rtl/audio_mixer.v.
+`ifndef AUDIO_MIXER_CH_BITS
+`define AUDIO_MIXER_CH_BITS 3
+`endif
+// Power-on CTRL. Muted, no interrupt, no channel swap.
+//
+// The one bit a board is likely to want here is SWAPLR (bit 2). PT8211
+// WS polarity is the single thing in this subsystem not verified
+// against a datasheet with confidence, so if a board's channels come
+// out reversed the fix belongs HERE -- once, at power-on -- rather
+// than in every app that plays a sound. docs/audio.md said so before
+// this define existed, which made the advice untrue.
+`ifndef AUDIO_CTRL_RESET
+`define AUDIO_CTRL_RESET 8'h00
+`endif
+`endif
+
+// Which DACs this board actually has pins for, reported to software in
+// rtl/audio.v's CONFIG register. Software cannot otherwise tell -- the
+// register interface is identical whichever output is wired.
+//
+// Bit 2 is RESERVED for the optical S/PDIF transmitter on Sergei and
+// is deliberately not defined anywhere yet; see rtl/audio.v's header
+// for what attaching one involves.
+localparam [3:0] AUDIO_FORMATS =
+`ifdef AUDIO_SD
+	4'b0001 |
+`endif
+`ifdef AUDIO_PT8211
+	4'b0010 |
+`endif
+`ifdef AUDIO_SPDIF
+	4'b0100 |
+`endif
+	4'b0000;
+
 module sysctl #()
 (
 
@@ -110,6 +179,21 @@ module sysctl #()
    output ETH_TX_EN,
    input ETH_CRS_DV,
    output ETH_RST_N,
+`endif
+
+`ifdef AUDIO
+`ifdef AUDIO_SD
+	output AUDIO_L,
+	output AUDIO_R,
+`endif
+`ifdef AUDIO_PT8211
+	output AUD_BCK,
+	output AUD_WS,
+	output AUD_DIN,
+`endif
+`ifdef AUDIO_SPDIF
+	output AUD_OPTICAL,
+`endif
 `endif
 
 `ifdef GPU_VGA
@@ -293,6 +377,14 @@ module sysctl #()
 `ifdef USB_HID
 		cpu_irq[6] = wbs_usb1_int;
 `endif
+		// rtl/audio.v's FIFO watermark. LEVEL-SENSITIVE, and therefore
+		// non-latched in LATCHED_IRQ below -- bit 7 is cleared there
+		// alongside bit 4 (the UART), for exactly the same reason: a
+		// latched level source re-fires the instant the handler returns
+		// and the machine stops making forward progress.
+`ifdef AUDIO
+		cpu_irq[7] = wbs_audio_int;
+`endif
 	end
 
 	always @(posedge sys_clk) begin
@@ -356,7 +448,7 @@ module sysctl #()
 	wire wbm_blitsrc_stb;
 	wire wbm_blitsrc_cyc;
 	wire wbm_blitsrc_ack;
-	wire marb_master;
+	wire [1:0] marb_master;		// 0=CPU 1=blitter 2=audio mixer
 
 	// Physical (post-MTU) CPU address. This is wb_mtu's translated
 	// output, and is what the instruction cache tags on -- see
@@ -410,6 +502,9 @@ module sysctl #()
 `endif
 `ifdef TRNG
 	wire [31:0] wbs_trng_dat_o;
+`endif
+`ifdef AUDIO
+	wire [31:0] wbs_audio_dat_o;
 `endif
 `ifdef ICACHE
 	wire [31:0] wbs_cache_dat_o;
@@ -565,6 +660,15 @@ module sysctl #()
 	wire cs_trng = ((wbm_adr & 32'hf000_0700) == 32'h7000_0400);
 	wire wbm_cyc_trng = cs_trng && wbm_cyc;
 `endif
+	// rtl/audio.v -- the SIXTH tenant of nibble 7, at 0x7000_05xx. No
+	// mask change was needed: the tenant mask above was already widened
+	// from 0x300 to 0x700 when trng arrived, and this file's own comment
+	// said 0x7000_05xx..07xx falling through to csrs.v "is what a future
+	// sixth tenant will want anyway". This is that tenant.
+`ifdef AUDIO
+	wire cs_audio = ((wbm_adr & 32'hf000_0700) == 32'h7000_0500);
+	wire wbm_cyc_audio = cs_audio && wbm_cyc;
+`endif
 	wire cs_csrs = ((wbm_adr & 32'hf000_0000) == 32'h7000_0000)
 		&& !cs_socctl
 `ifdef ICACHE
@@ -575,6 +679,9 @@ module sysctl #()
 `endif
 `ifdef TRNG
 		&& !cs_trng
+`endif
+`ifdef AUDIO
+		&& !cs_audio
 `endif
 		;
 `ifdef DEBUG
@@ -639,6 +746,9 @@ module sysctl #()
 `ifdef TRNG
 		cs_trng ? wbs_trng_dat_o :
 `endif
+`ifdef AUDIO
+		cs_audio ? wbs_audio_dat_o :
+`endif
 		cs_csrs ? wbs_csrs_dat_o :
 `ifdef ICACHE
 		cs_cache ? wbs_cache_dat_o :
@@ -669,6 +779,20 @@ module sysctl #()
 `endif
 `ifdef TRNG
 	wire wbs_trng_ack_o;
+`endif
+`ifdef AUDIO
+	wire wbs_audio_ack_o;
+	wire wbs_audio_int;
+	// rtl/audio_mixer.v's sample fetches -- third master on the main
+	// bus, see the arbiter instantiation below.
+	wire [31:0] wbm_audio_adr;
+	wire [31:0] wbm_audio_dat_o;
+	wire [31:0] wbm_audio_dat_i;
+	wire wbm_audio_we;
+	wire [3:0] wbm_audio_sel;
+	wire wbm_audio_stb;
+	wire wbm_audio_cyc;
+	wire wbm_audio_ack;
 `endif
 `ifdef ICACHE
 	wire wbs_cache_ack_o;
@@ -729,6 +853,9 @@ module sysctl #()
 `ifdef TRNG
 		cs_trng ? wbs_trng_ack_o :
 `endif
+`ifdef AUDIO
+		cs_audio ? wbs_audio_ack_o :
+`endif
 		cs_csrs ? wbs_csrs_ack_o :
 `ifdef ICACHE
 		cs_cache ? wbs_cache_ack_o :
@@ -787,7 +914,7 @@ module sysctl #()
 `else
 		.ENABLE_DIV(0),
 `endif
-		.LATCHED_IRQ(32'b1111_1111_1111_1111_1111_1111_1110_1111)
+		.LATCHED_IRQ(32'b1111_1111_1111_1111_1111_1111_0110_1111)
 	)
 	wbm_cpu0_i
 	(
@@ -838,7 +965,7 @@ module sysctl #()
       .ENABLE_IRQ(1),
       .ENABLE_IRQ_TIMER(0),
       .ENABLE_IRQ_QREGS(1),
-		.LATCHED_IRQ(32'b1111_1111_1111_1111_1111_1111_1110_1111)
+		.LATCHED_IRQ(32'b1111_1111_1111_1111_1111_1111_0110_1111)
 	)
 	wbm_cpu0_i
 	(
@@ -988,6 +1115,31 @@ module sysctl #()
 		.m1_cyc_i(wbm_blitsrc_cyc),
 		.m1_ack_o(wbm_blitsrc_ack),
 
+		// Master 2: audio mixer sample fetches. Tied off on a board
+		// without `AUDIO rather than left dangling -- an unconnected
+		// cyc/stb input would be x in simulation and whatever the
+		// synthesizer felt like in hardware, and this arbiter grants
+		// on cyc && stb.
+`ifdef AUDIO
+		.m2_adr_i(wbm_audio_adr),
+		.m2_dat_i(wbm_audio_dat_o),
+		.m2_dat_o(wbm_audio_dat_i),
+		.m2_we_i(wbm_audio_we),
+		.m2_sel_i(wbm_audio_sel),
+		.m2_stb_i(wbm_audio_stb),
+		.m2_cyc_i(wbm_audio_cyc),
+		.m2_ack_o(wbm_audio_ack),
+`else
+		.m2_adr_i(32'h0),
+		.m2_dat_i(32'h0),
+		.m2_dat_o(),
+		.m2_we_i(1'b0),
+		.m2_sel_i(4'h0),
+		.m2_stb_i(1'b0),
+		.m2_cyc_i(1'b0),
+		.m2_ack_o(),
+`endif
+
 		.s_adr_o(wbm_adr),
 		.s_dat_o(wbm_dat_o),
 		.s_dat_i(wbm_dat_i),
@@ -1016,7 +1168,7 @@ module sysctl #()
 
 	assign wbm_blitsrc_dat_i = 32'h0;
 	assign wbm_blitsrc_ack = 1'b0;
-	assign marb_master = 1'b0;
+	assign marb_master = 2'b00;
 
 `endif
 
@@ -1666,6 +1818,85 @@ module sysctl #()
 		.wb_stb_i(wbm_stb),
 		.wb_ack_o(wbs_trng_ack_o),
 		.wb_cyc_i(wbm_cyc_trng)
+	);
+`endif
+
+	// WISHBONE SLAVE: AUDIO (rtl/audio.v)
+	//
+	// Optional, `AUDIO in rtl/boards.vh -- unlike `RTC and `TRNG this
+	// is per-board rather than universal, because it needs pins and a
+	// DAC on the other end of them. Without it csrs.v absorbs the
+	// 0x7000_05xx window (see the cs_csrs comment above), reads return
+	// 0, the FEATURE bit is clear, and z_audio_present()
+	// (sw/common/zaudio.h) correctly answers false.
+	//
+	// SIX address bits, not three as rtc.v and trng.v use. The block
+	// has eight registers today and the phase-3 hardware mixer adds
+	// per-channel state; six covers the whole 256-byte window, so this
+	// decode never has to be revisited. Masking at all is not optional
+	// -- at 0x7000_05xx the raw wbm_adr_sel_word is 0x140 for register
+	// 0, and passing it through unmasked means no case ever matches:
+	// writes vanish and MAGIC reads back zero, with no error anywhere.
+	//
+	// FORMATS tells software which DAC is actually wired here, which it
+	// cannot otherwise know -- the register interface is identical
+	// either way. Bit 2 is reserved for the optical S/PDIF transmitter
+	// on Sergei; nothing sets it yet.
+`ifdef AUDIO
+	audio_wb #(
+		.DEPTH_LOG2(`AUDIO_FIFO_LOG2),
+		.FORMATS(AUDIO_FORMATS),
+		.CLK_HZ(SYSCLK),
+		.RATE_RESET(`AUDIO_RATE_RESET),
+		.CTRL_RESET(`AUDIO_CTRL_RESET)
+	) audio_i (
+		.wb_clk_i(wbm_clk),
+		.wb_rst_i(wbm_rst),
+		.wb_adr_i({ 26'b0, wbm_adr_sel_word[5:0] }),
+		.wb_dat_i(wbm_dat_o),
+		.wb_dat_o(wbs_audio_dat_o),
+		.wb_we_i(wbm_we),
+		.wb_sel_i(wbm_sel),
+		.wb_stb_i(wbm_stb),
+		.wb_ack_o(wbs_audio_ack_o),
+		.wb_cyc_i(wbm_cyc_audio),
+		.int_o(wbs_audio_int),
+
+		// Only the ports this board has pins for are connected. The
+		// other serialiser reaches no output and yosys prunes it --
+		// which is why rtl/audio_out.v has no `ifdef or generate block
+		// choosing between the two formats. See docs/audio.md for the
+		// measured per-board cost, which differs because of this.
+`ifdef AUDIO_SD
+		.AUDIO_L(AUDIO_L),
+		.AUDIO_R(AUDIO_R),
+`else
+		.AUDIO_L(),
+		.AUDIO_R(),
+`endif
+`ifdef AUDIO_PT8211
+		.AUD_BCK(AUD_BCK),
+		.AUD_WS(AUD_WS),
+		.AUD_DIN(AUD_DIN),
+`else
+		.AUD_BCK(),
+		.AUD_WS(),
+		.AUD_DIN(),
+`endif
+`ifdef AUDIO_SPDIF
+		.AUD_OPTICAL(AUD_OPTICAL),
+`else
+		.AUD_OPTICAL(),
+`endif
+
+		.mx_adr_o(wbm_audio_adr),
+		.mx_dat_o(wbm_audio_dat_o),
+		.mx_dat_i(wbm_audio_dat_i),
+		.mx_we_o(wbm_audio_we),
+		.mx_sel_o(wbm_audio_sel),
+		.mx_stb_o(wbm_audio_stb),
+		.mx_cyc_o(wbm_audio_cyc),
+		.mx_ack_i(wbm_audio_ack)
 	);
 `endif
 

@@ -74,6 +74,32 @@ IOBUF PORT "DBG[6]" IO_TYPE=LVCMOS33;
 LOCATE COMP "DBG[7]" SITE "D10";
 IOBUF PORT "DBG[7]" IO_TYPE=LVCMOS33;
 
+# AUDIO -- 1-bit stereo sigma-delta DAC (rtl/audio_out.v's audio_sd).
+# Enabled by `AUDIO + `AUDIO_SD in rtl/boards.vh. See docs/audio.md.
+LOCATE COMP "AUDIO_L" SITE "J2";
+IOBUF PORT "AUDIO_L" IO_TYPE=LVCMOS33;
+LOCATE COMP "AUDIO_R" SITE "J1";
+IOBUF PORT "AUDIO_R" IO_TYPE=LVCMOS33;
+
+# COMPOSITE VIDEO -- 4-bit DAC, shared with the audio jack. Reserved
+# for the planned "game mode" video output; NOTHING DRIVES THESE YET.
+#
+# Deliberately left commented rather than added live. nextpnr-ecp5
+# most likely only warns about a LOCATE for a port the top module does
+# not have, but "most likely" is not a good enough reason to put a
+# build that currently places at risk for pins nothing uses. Uncomment
+# these at the same time as adding the VIDEO_D port to rtl/sysctl.v --
+# the two halves belong together and neither is useful alone.
+#
+#LOCATE COMP "VIDEO_D0" SITE "G4";
+#IOBUF PORT "VIDEO_D0" IO_TYPE=LVCMOS33;
+#LOCATE COMP "VIDEO_D1" SITE "G3";
+#IOBUF PORT "VIDEO_D1" IO_TYPE=LVCMOS33;
+#LOCATE COMP "VIDEO_D2" SITE "G2";
+#IOBUF PORT "VIDEO_D2" IO_TYPE=LVCMOS33;
+#LOCATE COMP "VIDEO_D3" SITE "H2";
+#IOBUF PORT "VIDEO_D3" IO_TYPE=LVCMOS33;
+
 # RGB LED
 LOCATE COMP "LED_R" SITE "B11";
 IOBUF PORT "LED_R" IO_TYPE=LVCMOS33;

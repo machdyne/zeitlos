@@ -119,6 +119,7 @@ static const dock_app_t dock_candidates[] = {
 	{ "info",		z_icon_info_data  },
 	{ "calc",		z_icon_calc_data  },
 	{ "clock",		z_icon_clock_data },
+	{ "track",		z_icon_track_data },
 	{ "space3d",	z_icon_space3d_data },
 	{ "gpu3d",		z_icon_gpu3d_data },
 	{ "settings",	z_icon_settings_data },

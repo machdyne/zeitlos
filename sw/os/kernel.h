@@ -15,6 +15,18 @@
 									// rtl/sysctl.v's cpu_irq[6],
 									// sw/os/hid.c
 
+// rtl/audio.v's FIFO watermark (cpu_irq[7]). LEVEL-SENSITIVE, and
+// non-latched in rtl/sysctl.v's LATCHED_IRQ mask for that reason --
+// the same treatment Z_IRQ_UART gets. It stays asserted for as long as
+// the FIFO is below its watermark, so a handler that returns without
+// pushing samples will be re-entered immediately. That is the intended
+// behaviour, not a bug, but it does mean the handler MUST either fill
+// the FIFO or clear CTRL.IRQEN before returning.
+//
+// Optional hardware: check Z_FEATURE_AUDIO before enabling it. See
+// sw/common/zaudio.h.
+#define Z_IRQ_AUDIO				7
+
 typedef struct {
 
 	uint32_t		base;

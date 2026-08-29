@@ -21,6 +21,7 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 | Main Memory | SDRAM, PSRAM or SRAM (1MB minimum) |
 | Framebuffer | 640x480x1bpp (monochrome; white, green, or amber) |
 | Video | VGA, DVI, DVI over HDMI |
+| Audio | 8 channel hardware mixer with stereo 1-bit sigma-delta, 16-bit PT8211 or S/PDIF output |
 | Storage | MicroSD |
 | Network | Ethernet (SPI) and Ethernet MAC (for RMII PHY) |
 | Entropy | Ring-oscillator TRNG |
@@ -68,6 +69,7 @@ With the MTU, there is no need for position independent code or complicated addr
 | info | System info |
 | clock | Analog and digital clock |
 | settings | System settings |
+| track | MOD audio file player |
 | space3d | First-person 3D space shooter game |
 | gpu3d | Spinning 3D cube demo + STL viewer |
 
@@ -82,6 +84,7 @@ The following boards are currently supported:
  - [Machdyne Kölsch](https://github.com/machdyne/kolsch)
  - [Machdyne Lebkuchen](https://github.com/machdyne/lebkuchen)
  - [Machdyne Mozart](https://github.com/machdyne/mozart) / [ML1](https://github.com/machdyne/sechzig)
+ - [Machdyne Sergei](https://github.com/machdyne/sergei) / [ML1](https://github.com/machdyne/sechzig)
  - [ULX3S](https://radiona.org/ulx3s/) **UNTESTED** (see [bounty](https://machdyne.com/bounties/))
  - (more soon)
 

@@ -24,6 +24,10 @@ RTL_PICO = \
 	rtl/socctl.v \
 	rtl/rtc.v \
 	rtl/trng.v \
+	rtl/audio.v \
+	rtl/audio_out.v \
+	rtl/audio_mixer.v \
+	rtl/audio_spdif.v \
 	rtl/spim.v \
 	rtl/gpu/gpu_raster.v \
 	rtl/gpu/gpu_blit.v \
@@ -188,6 +192,14 @@ else ifeq ($(BOARD), mozart_ml1)
 	PROG = openFPGALoader -c dirtyJtag
 	FLASH = openFPGALoader -v -c dirtyJtag -f
 	FLASH_OFFSET = -o
+else ifeq ($(BOARD), sergei_ml1)
+	FAMILY = ecp5
+	DEVICE = 45k
+	PACKAGE = CABGA256
+	LPF = sergei_ml1.lpf
+	PROG = openFPGALoader -c dirtyJtag
+	FLASH = openFPGALoader -v -c dirtyJtag -f
+	FLASH_OFFSET = -o
 else ifeq ($(BOARD), ulx3s)
 	FAMILY = ecp5
 	DEVICE = 25k
@@ -228,30 +240,56 @@ else ifeq ($(FAMILY), gatemate)
 zeitlos_pico: zeitlos_gatemate_pico
 endif
 
+# Build logs. Both tools keep printing to the terminal; -l/--log
+# additionally writes the FULL log to a file, which is what -q on the
+# yosys line would otherwise throw away.
+#
+# Worth having because the things you need after a build are the things
+# that scroll past during one: the post-pack utilisation table, and
+# nextpnr's critical path report when a clock fails timing. Neither is
+# in --report, which carries totals rather than the path.
+#
+#   output/<board>/synth.log   yosys: cell counts, inferred RAM/DSP,
+#                              every "Warning:" the run produced
+#   output/<board>/pnr.log     nextpnr: device utilisation, Max
+#                              frequency per clock, and the critical
+#                              path breakdown for each
+#
+# To find why a clock missed:
+#   grep -A40 "Critical path report for clock" output/obst/pnr.log
+#
+# The logs are truncated per run, so what is in them always belongs to
+# the bitstream sitting next to them.
+SYNTH_LOG = output/$(BOARD_LC)/synth.log
+PNR_LOG = output/$(BOARD_LC)/pnr.log
+
 zeitlos_ice40_pico:
 	mkdir -p output/$(BOARD_LC)
-	yosys -DBOARD_$(BOARD_UC) -DICE40 -q -p \
+	yosys -DBOARD_$(BOARD_UC) -DICE40 -q -l $(SYNTH_LOG) -p \
 		"synth_ice40 -top sysctl -json output/$(BOARD_LC)/soc.json" $(RTL_PICO)
 	nextpnr-ice40 --$(DEVICE) --package $(PACKAGE) --pcf boards/$(PCF) \
 		--asc output/$(BOARD_LC)/soc.txt --json output/$(BOARD_LC)/soc.json \
+		-l $(PNR_LOG) \
 		--pcf-allow-unconstrained --opt-timing --ignore-loops
 
 zeitlos_ecp5_pico:
 	mkdir -p output/$(BOARD_LC)
-	yosys -DBOARD_$(BOARD_UC) -DECP5 -q -p \
+	yosys -DBOARD_$(BOARD_UC) -DECP5 -q -l $(SYNTH_LOG) -p \
 		"synth_ecp5 -top sysctl -json output/$(BOARD_LC)/soc.json" $(RTL_PICO)
 	nextpnr-ecp5 --$(DEVICE) --package $(PACKAGE) --lpf boards/$(LPF) \
 		--json output/$(BOARD_LC)/soc.json \
 		--report output/$(BOARD_LC)/report.txt \
 		--textcfg output/$(BOARD_LC)/soc.config \
+		-l $(PNR_LOG) \
 		--timing-allow-fail --ignore-loops
+	@$(MAKE) --no-print-directory timing
 
 zeitlos_gatemate_pico:
 	mkdir -p output/$(BOARD_LC)
-	$(SYNTH) -DBOARD_$(BOARD_UC) -DGATEMATE -q -l synth.log -p \
+	$(SYNTH) -DBOARD_$(BOARD_UC) -DGATEMATE -q -l $(SYNTH_LOG) -p \
 		"read -sv $(RTL_PICO); synth_gatemate -top sysctl -luttree -nomult \
 			-nomx8 -json output/$(BOARD_LC)/soc.json"
-	$(PR) --device CCGM1A1 --json output/$(BOARD_LC)/soc.json --vopt ccf=$(CCF) --vopt out=output/$(BOARD_LC)/soc.txt --router router2
+	$(PR) --device CCGM1A1 --json output/$(BOARD_LC)/soc.json --vopt ccf=$(CCF) --vopt out=output/$(BOARD_LC)/soc.txt --router router2 -l $(PNR_LOG)
 	$(PACK) output/$(BOARD_LC)/soc.txt output/$(BOARD_LC)/soc.bit
 
 bios:
@@ -427,6 +465,62 @@ TFTP_DIR ?= /srv/tftp
 tftp-dist:
 	@tools/tftp-dist.sh $(TFTP_DIR)
 
+# Summarise the last place-and-route: one line per clock, and the
+# critical path for any that failed.
+#
+# Runs automatically at the end of an ecp5 build, because a FAIL line
+# is easy to miss in several thousand lines of nextpnr output and a
+# bitstream that missed timing still programs and still half-works --
+# which is a far more confusing thing to debug than one that refuses to
+# build.
+#
+#   make timing BOARD=obst        after a build
+#   make path BOARD=obst          full critical path for every clock
+timing:
+	@test -f $(PNR_LOG) || { echo "no $(PNR_LOG) -- build first"; exit 1; }
+	@echo
+	@grep -E "Max frequency for clock" $(PNR_LOG) | sed 's/^Info: //' || true
+	@if grep -q "FAIL at" $(PNR_LOG); then \
+		echo; \
+		echo "*** TIMING NOT MET -- the bitstream will program and"; \
+		echo "*** misbehave intermittently. Critical path:"; \
+		echo; \
+		awk '/Critical path report for clock/{c++} c' $(PNR_LOG) \
+			| grep -E "Source|Sink|\.v:[0-9]" | head -30; \
+		echo; \
+		echo "*** full detail: make path BOARD=$(BOARD_LC)"; \
+		echo; \
+	fi
+
+# Differential test of the blitter: reference vs a candidate, same
+# stimulus, framebuffers compared word for word. A clip-path change
+# once hung the blitter on hardware (blank screen after wm, "blitter
+# wait timed out" from zgfx) and nothing in the tree caught it, because
+# nothing tested this module at all.
+#
+#   make test_blit                    reference against itself
+#   make test_blit CAND=/tmp/new.v    reference against a candidate
+CAND ?= rtl/gpu/gpu_blit.v
+test_blit:
+	@mkdir -p output
+	@sed 's/^module gpu_blit_wb/module gpu_blit_cand/' $(CAND) \
+		> output/gpu_blit_cand.v
+	iverilog -g2005 -o output/tb_gpu_blit rtl/tb/tb_gpu_blit.v \
+		rtl/gpu/gpu_blit.v output/gpu_blit_cand.v
+	@vvp output/tb_gpu_blit
+
+path:
+	@test -f $(PNR_LOG) || { echo "no $(PNR_LOG) -- build first"; exit 1; }
+	@awk '/Critical path report/{f=1} f' $(PNR_LOG)
+
+# Utilisation, from the last build. The percentages are what decide
+# whether the placer has room to do a good job -- above about 75%
+# TRELLIS_COMB on this device it starts to struggle, and timing gets
+# seed-sensitive.
+util:
+	@test -f $(PNR_LOG) || { echo "no $(PNR_LOG) -- build first"; exit 1; }
+	@awk '/Device utilisation/{f=1} f && /Info:/' $(PNR_LOG) | head -20
+
 clean: clean_os clean_bios clean_apps
 
 clean_soc:
@@ -441,4 +535,4 @@ clean_bios:
 clean_apps:
 	cd sw/apps && make clean
 
-.PHONY: clean_bios bios apps tftp-dist
+.PHONY: clean_bios bios apps tftp-dist timing path util test_blit

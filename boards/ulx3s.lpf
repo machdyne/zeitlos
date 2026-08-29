@@ -216,3 +216,15 @@ IOBUF PORT "UART0_TX" IO_TYPE=LVCMOS33 PULLMODE=UP DRIVE=4;
 
 LOCATE COMP "UART0_RX" SITE "M1";
 IOBUF PORT "UART0_RX" IO_TYPE=LVCMOS33 PULLMODE=UP;
+
+# ----------------------------------------------------------------------
+# Digital audio output
+# ----------------------------------------------------------------------
+#
+# S/PDIF, coax rather than optical -- electrically a different driver on
+# the far side of the pin, but the same IEC 60958 biphase-mark signal
+# rtl/audio_spdif.v produces for Sergei's TOSLINK module. One pin, no
+# clock. See docs/audio.md.
+
+LOCATE COMP "AUD_OPTICAL" SITE "E5";
+IOBUF PORT "AUD_OPTICAL" IO_TYPE=LVCMOS33;

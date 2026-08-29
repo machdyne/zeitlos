@@ -152,6 +152,24 @@
 // asking before generating a key. See docs/trng.md.
 #define Z_FEATURE_TRNG        (1u << 25)
 
+// rtl/audio.v -- the sample FIFO and DAC output stage. Same hazard and
+// same rule as Z_FEATURE_RTC and Z_FEATURE_TRNG above: check THIS bit
+// before reading the audio block's own MAGIC, because on a bitstream
+// built before rtl/audio.v existed 0x7000_05xx is decoded by nothing
+// and that read hangs the CPU rather than returning garbage.
+// z_audio_present() (sw/common/zaudio.h) is that check in the safe
+// order.
+//
+// Unlike RTC and TRNG this is PER-BOARD: audio needs pins and a DAC on
+// the other end of them, so `AUDIO in rtl/boards.vh is set per board
+// rather than universally, and a board without it is normal rather
+// than deliberately stripped.
+//
+// This bit does NOT say which DAC is wired -- the register interface
+// is identical for the 1-bit and PT8211 output stages. Read the audio
+// block's own CONFIG register for that.
+#define Z_FEATURE_AUDIO       (1u << 26)
+
 // -- feature table (sw/common/zsoc.c) --
 //
 // The human-readable half of the Z_FEATURE_* bits above, kept in the
@@ -185,6 +203,11 @@ typedef enum {
 	// network, and filing it under any of those would be worse than a
 	// short list.
 	Z_FEAT_GROUP_ENTROPY,
+	// Audio (rtl/audio.v). Its own group for the same reason the
+	// clock and the entropy source have one: it is not memory, input,
+	// storage or network. It sits before LED rather than after so the
+	// rows in zsoc.c stay sorted by group, which consumers rely on.
+	Z_FEAT_GROUP_AUDIO,
 	Z_FEAT_GROUP_LED,
 	// Adding a group here REQUIRES adding its display name to
 	// z_soc_feature_groups[] in zsoc.c, at the same position. That

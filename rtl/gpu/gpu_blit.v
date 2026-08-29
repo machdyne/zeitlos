@@ -148,6 +148,10 @@ module gpu_blit_wb #(
     localparam ST_MEM_ROW = 5'd22, ST_MEM_PRIME = 5'd23,
                ST_MEM_PRIME_WAIT = 5'd24, ST_MEM_READ = 5'd25,
                ST_MEM_READ_WAIT = 5'd26;
+    // One idle cycle between latching work_* and clipping against it,
+    // so the registered rect_x_end/rect_y_end above are settled. See
+    // their declaration.
+    localparam ST_CLIP_CALC = 5'd27;
 
     // Operation variables
     reg [31:0] work_dst_x, work_dst_y, work_width, work_height, work_pattern;
@@ -189,8 +193,31 @@ module gpu_blit_wb #(
     // native resolution now, was 512x384
     wire [31:0] screen_clip_x_end = 32'd640;
     wire [31:0] screen_clip_y_end = 32'd480;
-    wire [31:0] rect_x_end = work_dst_x + work_width;
-    wire [31:0] rect_y_end = work_dst_y + work_height;
+    // Registered, to split the clip chain.
+    //
+    // rect_x_end -> final_x_end -> final_width -> word_span -> the
+    // ST_CLIP decision that gates m_stb_o was six chained 32-bit
+    // operations, and it was the whole SOC's critical path at 48MHz.
+    // Breaking it here is worth about +15% Fmax at zero area cost.
+    //
+    // THIS TRAILS work_dst_x BY ONE CYCLE, which is why ST_CLIP_CALC
+    // exists below. work_dst_x is not written by the wishbone slave --
+    // it is latched from dst_x_reg in ST_IDLE on the same edge that
+    // start_trigger fires -- so at the state immediately after
+    // ST_IDLE these registers still hold the PREVIOUS operation's
+    // sum. Going straight to ST_CLIP clipped every blit against stale
+    // coordinates, which hung the state machine and blanked the
+    // screen.
+    //
+    // ST_IDLE's own comment on work_fill/work_clip/work_glyph warns
+    // about exactly this hazard one level down. Same trap, same
+    // module.
+    reg [31:0] rect_x_end;
+    reg [31:0] rect_y_end;
+    always @(posedge clk) begin
+        rect_x_end <= work_dst_x + work_width;
+        rect_y_end <= work_dst_y + work_height;
+    end
 
     wire [31:0] final_x = work_dst_x;
     wire [31:0] final_y = work_dst_y;
@@ -430,12 +457,16 @@ module gpu_blit_wb #(
                         draw_busy <= 1'b1;
 
                         if (wb_dat_i[CTRL_GLYPH]) state <= ST_GLYPH_SETUP;
-                        else state <= ST_CLIP;
+                        else state <= ST_CLIP_CALC;
                     end
                 end
 
                 // -- fill/copy path (unchanged from before, aside from
                 // the ST_READ/ST_WRITE routing fix below) --
+
+                // Nothing to do but let rect_x_end/rect_y_end catch up
+                // with the work_* registers latched last cycle.
+                ST_CLIP_CALC: state <= ST_CLIP;
 
                 ST_CLIP: begin
                     if (work_clip) begin

@@ -72,6 +72,8 @@ const z_feature_info_t z_soc_features[] = {
 
 	{ Z_FEATURE_TRNG,       "trng",    Z_FEAT_GROUP_ENTROPY },
 
+	{ Z_FEATURE_AUDIO,      "audio",   Z_FEAT_GROUP_AUDIO   },
+
 	{ Z_FEATURE_LED_RGB,    "rgb",     Z_FEAT_GROUP_LED     },
 	{ Z_FEATURE_LED_DEBUG,  "debug",   Z_FEAT_GROUP_LED     },
 
@@ -102,6 +104,7 @@ const char *const z_soc_feature_groups[] = {
 	"network",
 	"clock  ",
 	"entropy",
+	"audio  ",
 	"led    ",
 };
 
