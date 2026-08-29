@@ -55,6 +55,48 @@
 // not just after a code change. See docs/trng.md.
 `define TRNG
 
+// Game mode: a 320x240 viewport over the same 640x480 framebuffer,
+// pixel-doubled on scanout so the display timing never changes. See
+// rtl/gpu/gpu_video.v's header for the full design and
+// docs/game_mode.md for what software does with it.
+//
+// Universal rather than per-board, for the same reason `RTC and `TRNG
+// above are: it needs no pins, no external part and no board support
+// of any kind. It is not even a new block -- it is a loadable counter
+// and an adder inside rtl/gpu/gpu_video.v plus two registers in
+// rtl/socctl.v, with no BRAM and no extra VRAM bandwidth (the scanline
+// buffer already held a full framebuffer row; game mode just indexes
+// it differently). Every board that can scan out pixels can have this,
+// so every board does.
+//
+// What it buys is not really "games". It is that a 640x480 desktop
+// becomes usable on a TV: the whole desktop is still there, still
+// running, still exactly where it was, and CTRL-ALT-ARROW moves the
+// viewport around it. Switching in and out kills no apps and destroys
+// no windows, because nothing about the framebuffer changes -- only
+// which part of it the display is pointed at.
+//
+// For an actual full-screen game the same mechanism is a double
+// buffer: 640x480 holds four non-overlapping 320x240 pages, a page
+// flip is one register write, and it is adopted at a frame boundary
+// so it cannot tear. The line rasterizer and the blitter need no RTL
+// changes at all and can draw into any page, because as far as they
+// are concerned there is still exactly one 640x480 1bpp surface.
+//
+// ON A BOARD WITHOUT `GPU THIS DOES NOTHING, and rtl/sysctl.v makes
+// that explicit rather than leaving it implied: it ands `GAME with
+// `GPU before handing socctl its GAME_AVAIL parameter, so the enable
+// bit is forced low in hardware and reads back low. A board with no
+// scanout cannot be talked into a scanout mode.
+//
+// Comment it out to reclaim the logic. Software copes the same way it
+// does for every other optional feature here: the FEATURE bit in
+// rtl/csrs.v goes clear, socctl's GAME register reports avail = 0,
+// z_game_available() (sw/common/zsoc.h) answers false, and the window
+// manager simply does not bind ALT-ESC. Nothing hangs and nothing has
+// to be rebuilt differently.
+`define GAME
+
 // RV32IM: hardware multiply and divide (rtl/cpu/picorv32/picorv32.v's
 // ENABLE_FAST_MUL/ENABLE_MUL/ENABLE_DIV). Universal rather than
 // per-board because the alternative -- some boards with M, some

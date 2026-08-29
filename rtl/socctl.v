@@ -78,6 +78,70 @@
  *             would also be one non-atomic sequence away from doing
  *             it again the first time anything else touches CTRL.
  *
+ *   3  GAME   bit 0: game mode. 0 = desktop (640x480 native, 1:1),
+ *             1 = game (320x240 viewport, pixel-doubled on scanout).
+ *             bit 1: wrap. 0 = the viewport is clamped so it can
+ *             never leave the framebuffer; 1 = it wraps toroidally,
+ *             so scrolling off the right edge comes back on the left.
+ *             See VIEW below and rtl/gpu/gpu_video.v.
+ *
+ *             Reads back as { 16'h5A47, 13'b0, avail, wrap, en }.
+ *             Same signature trick, and the same reason for it, as
+ *             VIDEO above: socctl shipped before this register
+ *             existed, and on one of those bitstreams a read here
+ *             falls to the default case and returns 0 -- which is
+ *             indistinguishable from a working block reporting
+ *             "game mode off". Software checking the top half gets a
+ *             real answer either way.
+ *
+ *             `avail` is GAME_AVAIL, from rtl/boards.vh's `GAME via
+ *             rtl/sysctl.v. It is read-only, and when it is clear the
+ *             enable bit is FORCED LOW rather than merely ignored --
+ *             so a bitstream built without game mode reports the
+ *             truth at every level (the CSR feature bit is clear, the
+ *             avail bit here is clear, and the enable bit reads back
+ *             0 no matter what software writes) instead of claiming a
+ *             mode the scanout hardware cannot produce.
+ *
+ *   4  VIEW   viewport origin in FRAMEBUFFER pixels:
+ *             bits 9:0 = x, bits 25:16 = y. Ignored entirely in
+ *             desktop mode. Range-limited on write to 0..639 / 0..479
+ *             so a wild write can never point scanout outside VRAM;
+ *             the tighter clamp that keeps the whole 320x240 viewport
+ *             on screen (x <= 320, y <= 240) is applied in
+ *             rtl/gpu/gpu_video.v at the frame boundary instead, and
+ *             ONLY when wrap is off -- see that file. Reads back what
+ *             was written (after the 0..639/0..479 limit), not the
+ *             clamped value actually in use, because the clamp
+ *             depends on a mode bit in another register and software
+ *             that wrote a coordinate should be able to read that
+ *             coordinate back.
+ *
+ *             GAME and VIEW are latched into the pixel clock domain
+ *             TOGETHER, as one payload, on a toggle flipped by a
+ *             write to either -- so enabling game mode and setting an
+ *             origin in two consecutive stores can never be observed
+ *             as one-then-the-other with a frame of the wrong origin
+ *             in between. See view_load below.
+ *
+ *   5  FRAME  read-only. { 15'b0, vblank, frame[15:0] } -- the
+ *             framebuffer's own frame counter and current vertical
+ *             blanking state, from rtl/gpu/gpu_video.v.
+ *
+ *             This is what makes tear-free page flipping possible for
+ *             a game, and it is the reason it exists: the viewport
+ *             origin is adopted at a frame boundary, so a flip IS a
+ *             VIEW write, but software still has to know when the
+ *             frame it drew has actually been shown. Polling a
+ *             counter is much cheaper than a vblank interrupt line
+ *             and is what a full-screen game's main loop wants
+ *             anyway.
+ *
+ *             No signature of its own -- it ships with GAME above and
+ *             GAME's signature covers both. On a board built without
+ *             `GPU this reads back all zeroes forever, which is
+ *             correct: there is no scanout, so there are no frames.
+ *
  * Reset state is BUSY (cursor = Z), not idle.
  *
  * That is deliberate and is the honest default: from power-on until
@@ -97,7 +161,16 @@ module socctl_wb #(
     // board's own defines -- see this file's header and the VIDEO
     // register below. Defaults to white-on-black, matching the
     // behaviour of a board that defines none of them.
-    parameter [1:0] VIDEO_MODE_RESET = 2'd0
+    parameter [1:0] VIDEO_MODE_RESET = 2'd0,
+
+    // 1 if this bitstream was built with `GAME (rtl/boards.vh) AND
+    // has a GPU to scan out with. Set by rtl/sysctl.v, which is where
+    // both of those defines are visible; socctl gets a number, the
+    // same arrangement VIDEO_MODE_RESET already uses.
+    //
+    // Defaults to 0 -- a socctl instantiated without being told
+    // anything reports no game mode, which is the safe answer.
+    parameter GAME_AVAIL = 1'b0
 )
 (
     input wb_clk_i,
@@ -126,7 +199,46 @@ module socctl_wb #(
     // synchroniser comment. Declared unconditionally, exactly like
     // cursor_busy above: on a board built without `GPU it simply goes
     // nowhere.
-    output wire [1:0] video_mode
+    output wire [1:0] video_mode,
+
+    // -- game mode configuration -> rtl/gpu/gpu_video.v --
+    //
+    // These four are ONE payload, not four independent signals, and
+    // they are deliberately not synchronised here. view_load is a
+    // TOGGLE, flipped on any write to GAME or VIEW; gpu_video.v
+    // synchronises that single bit into the pixel clock domain and
+    // captures all of game_en/game_wrap/view_x/view_y on the edge.
+    //
+    // Two flops on a multi-bit value is not enough on its own -- the
+    // bits can resolve on different cycles, so a 22-bit payload can
+    // be observed as a mixture of the old and the new value. For a
+    // colour mode that would be one frame drawn in the wrong colour,
+    // which is why VIDEO above gets away with it. For a viewport
+    // origin it is a visible one-frame jump in the middle of smooth
+    // scrolling, and for a page flip it is a whole frame of the wrong
+    // buffer -- both of which are exactly the artefacts this feature
+    // exists to avoid.
+    //
+    // The toggle fixes that the same way rtl/gpu/gpu_video.v's own
+    // refill_toggle/y_refill pair already does: the data is written
+    // on the same wb_clk edge that flips the toggle, so by the time
+    // the toggle's edge has propagated through the far side's
+    // synchroniser the data has been stable for several pixel clocks.
+    output wire        view_load,
+    output wire        game_en,
+    output wire        game_wrap,
+    output wire [9:0]  view_x,
+    output wire [9:0]  view_y,
+
+    // -- scanout status, from rtl/gpu/gpu_video.v --
+    //
+    // Already in the wishbone clock domain when they arrive here (see
+    // that file's own vblank_toggle crossing), so this block just
+    // reads them out. Tied to zero by rtl/sysctl.v on a board with no
+    // `GPU, which is the honest answer -- no scanout, no frames --
+    // rather than a stuck counter software might wait on forever.
+    input  wire [15:0] frame_ctr,
+    input  wire        in_vblank
 );
 
     localparam MAGIC = 32'h5A43_5452;   // "ZCTR"
@@ -136,11 +248,46 @@ module socctl_wb #(
     // MAGIC already exists.
     localparam VIDEO_SIG = 16'h5643;
 
+    // top half of the GAME register -- "ZG". Same purpose as
+    // VIDEO_SIG directly above; see this file's header comment.
+    localparam GAME_SIG = 16'h5A47;
+
     reg [31:0] ctrl;
     reg [1:0] video;
 
+    reg game;
+    reg wrap;
+    reg [9:0] vx;
+    reg [9:0] vy;
+    reg vload;
+
     assign cursor_busy = ctrl[0];
     assign video_mode = video;
+
+    // FORCED low, not merely ignored, on a bitstream without game
+    // mode -- see the GAME register's note in this file's header on
+    // why the lie is worth avoiding. This is the gate that makes it
+    // true at the hardware level rather than only in the readback:
+    // gpu_video.v is handed a 0 here regardless of what software
+    // wrote, so there is no path by which a build with no game
+    // support can be talked into half-entering it.
+    assign game_en   = game && (GAME_AVAIL != 0);
+    assign game_wrap = wrap;
+    assign view_x    = vx;
+    assign view_y    = vy;
+    assign view_load = vload;
+
+    // Range limit on the VIEW write path. This is NOT the clamp that
+    // keeps the viewport on screen -- that one depends on the wrap
+    // bit and lives in gpu_video.v (see the header). This is the much
+    // blunter guarantee that scanout can never be pointed outside the
+    // 9600 words vram_wb actually has, whatever software writes and
+    // in whatever order it writes it. Reading past the end of that
+    // array is undefined in simulation and returns whatever the BRAM
+    // happens to hold on hardware, so it is worth two comparators to
+    // make it structurally impossible rather than merely unlikely.
+    wire [9:0] vx_wr = (wb_dat_i[9:0]   > 10'd639) ? 10'd639 : wb_dat_i[9:0];
+    wire [9:0] vy_wr = (wb_dat_i[25:16] > 10'd479) ? 10'd479 : wb_dat_i[25:16];
 
     always @(posedge wb_clk_i) begin
 
@@ -149,6 +296,22 @@ module socctl_wb #(
             // busy at reset -- see this file's header comment
             ctrl <= 32'h0000_0001;
             video <= VIDEO_MODE_RESET;
+
+            // DESKTOP at reset, on every board, even where `GAME is
+            // defined. `GAME says the mode is available, not that it
+            // is on: the machine boots into a window manager on a
+            // 640x480 desktop and software asks for game mode later.
+            // Coming up in a 320x240 viewport would mean the boot
+            // logo, the BIOS messages and any early panic all landed
+            // mostly off-screen on a board whose only display is a
+            // TV -- which is precisely the situation with the least
+            // margin for a mode nobody asked for.
+            game <= 1'b0;
+            wrap <= 1'b0;
+            vx <= 10'd0;
+            vy <= 10'd0;
+            vload <= 1'b0;
+
             wb_ack_o <= 1'b0;
             wb_dat_o <= 32'h0000_0000;
 
@@ -185,12 +348,55 @@ module socctl_wb #(
                         if (wb_sel_i[0]) video <= wb_dat_i[1:0];
                     end
 
+                    // GAME and VIEW both flip vload. One toggle for
+                    // two registers is the point, not a shortcut:
+                    // gpu_video.v captures the whole payload on the
+                    // edge, so "enter game mode" and "set the origin"
+                    // written as two consecutive stores are adopted
+                    // as one coherent change at one frame boundary
+                    // rather than as two changes a frame apart.
+                    //
+                    // Flipped unconditionally on a write in range,
+                    // including a write that changes nothing. A
+                    // redundant capture of an unchanged payload costs
+                    // nothing and is far easier to reason about than
+                    // a "did anything actually change" comparison
+                    // that has to stay correct as fields are added.
+                    if (wb_adr_i == 32'd3) begin
+                        if (wb_sel_i[0]) begin
+                            game <= wb_dat_i[0];
+                            wrap <= wb_dat_i[1];
+                            vload <= ~vload;
+                        end
+                    end
+
+                    // Lanes 0/1 carry x, lanes 2/3 carry y, so each
+                    // coordinate is honoured or not as a unit -- a
+                    // halfword store to the low half moves x and
+                    // leaves y alone, which is the only byte-lane
+                    // behaviour that makes sense for a pair of
+                    // 10-bit fields. Software writes whole words.
+                    if (wb_adr_i == 32'd4) begin
+                        if (wb_sel_i[0] || wb_sel_i[1]) vx <= vx_wr;
+                        if (wb_sel_i[2] || wb_sel_i[3]) vy <= vy_wr;
+                        vload <= ~vload;
+                    end
+
                 end else begin
 
                     case (wb_adr_i)
                         32'd0: wb_dat_o <= ctrl;
                         32'd1: wb_dat_o <= MAGIC;
                         32'd2: wb_dat_o <= { VIDEO_SIG, 14'b0, video };
+                        // reads back game_en, not `game` -- so a
+                        // build without game support reports the
+                        // enable bit clear no matter what was
+                        // written, matching what the hardware is
+                        // actually doing. See the assign above.
+                        32'd3: wb_dat_o <= { GAME_SIG, 13'b0,
+                                             (GAME_AVAIL != 0), wrap, game_en };
+                        32'd4: wb_dat_o <= { 6'b0, vy, 6'b0, vx };
+                        32'd5: wb_dat_o <= { 15'b0, in_vblank, frame_ctr };
                         default: wb_dat_o <= 32'h0000_0000;
                     endcase
 

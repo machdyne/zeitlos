@@ -1,8 +1,10 @@
-# gpu_blit.v glyph-path testbenches
+# GPU and HID testbenches
 
-Self-checking testbenches for the hardware glyph blitter
-(`rtl/gpu/gpu_blit.v`'s `CTRL_GLYPH` mode), written against
-`iverilog`.
+Self-checking testbenches, written against `iverilog`. Originally all
+for the hardware glyph blitter (`rtl/gpu/gpu_blit.v`'s `CTRL_GLYPH`
+mode); `tb_video_mode.v`, `tb_game_mode.v` and `tb_gamepad.v` have
+since joined them, so the directory name is now broader than its
+history.
 
 - `tb_glyph.v` -- draws two synthetic 4-row glyphs back-to-back and
   checks the resulting framebuffer rows are correct. Catches the
@@ -37,9 +39,26 @@ write that follows it, and only `vram.v`'s specific always-active
 design makes that pattern land correctly). `tb_line.v` and
 `tb_arbiter_stress.v` use the real `vram.v` directly.
 
+- `tb_game_mode.v` -- `rtl/gpu/gpu_video.v`'s game mode. Tests
+  ADDRESSES rather than pixels, since the feature is an address
+  transform: for a given viewport origin and mode, which framebuffer
+  column and row does each physical pixel come from? That is exactly
+  the `x`/`y` output pair. Covers the desktop 1:1 regression, 2x
+  doubling verified exhaustively across a full line, clamp and
+  toroidal wrap, frame-boundary adoption of a mid-frame write, and the
+  frame counter. Runs ~40 full 800x525 frames, so it takes a few
+  minutes rather than a few seconds. See `docs/game_mode.md`.
+- `tb_gamepad.v` -- `rtl/usb_hid.v`'s gamepad register. Uses a STUB
+  `usb_hid_host` (the real core needs an actual USB device bit-banging
+  a low-speed link to produce a report at all, and none of the
+  behaviour under test lives in that core). Covers bit order for every
+  button individually, the clock-domain tearing fix, hot unplug with a
+  direction held, and the interrupt on device type change. Fast.
+  See `docs/gamepad.md`.
+
 ## Status
 
-All four currently pass against the fixed `rtl/gpu/gpu_blit.v`. They
+All originally-four currently pass against the fixed `rtl/gpu/gpu_blit.v`. They
 did **not** reproduce the horizontal (~32-64px) corruption reported
 near freshly-typed text in `term` after the row-shift fix landed --
 see `docs/window_manager.md`, "Known limitations", the "Unresolved:
@@ -80,6 +99,24 @@ iverilog -g2005 -o /tmp/tb_arbiter.out \
     rtl/gpu/bench/tb_arbiter_stress.v rtl/gpu/gpu_blit.v \
     /tmp/glyph_lintfix.v rtl/arbiter_vram.v /tmp/vram_fix.v
 vvp /tmp/tb_arbiter.out
+
+# tb_game_mode.v -- gpu_video.v alone. Its port list ends in a trailing
+# comma, which yosys accepts and iverilog does not.
+sed 's/^\tinput \[31:0\] gb_dat_i,$/\tinput [31:0] gb_dat_i/' \
+    rtl/gpu/gpu_video.v > /tmp/gpu_video_fix.v
+iverilog -g2005 -o /tmp/tb_game.out \
+    rtl/gpu/bench/tb_game_mode.v /tmp/gpu_video_fix.v
+vvp /tmp/tb_game.out          # several minutes
+
+# tb_gamepad.v -- usb_hid.v alone, with its own stub usb_hid_host
+# built into the testbench. usb_hid.v needs three of the same kind of
+# lint fixup: the empty #() parameter list, a trailing comma in the
+# port list, and curs_x/curs_y declared both as output nets and as
+# regs. All three are the file's existing style and yosys is happy
+# with them.
+iverilog -g2005 -DUSB_HID -o /tmp/tb_pad.out \
+    rtl/gpu/bench/tb_gamepad.v rtl/usb_hid.v
+vvp /tmp/tb_pad.out           # about a second
 ```
 
 All four print `RESULT: PASS` or `RESULT: FAIL` plus the offending

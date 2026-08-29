@@ -72,6 +72,14 @@ typedef uint32_t *(*z_kernel_ptr_t)(uint32_t, uint32_t *, uint32_t);
 #define reg_usb1_mouse  (*(volatile uint32_t*)0xc0000028)
 #define reg_usb1_cursor (*(volatile uint32_t*)0xc000002c)
 
+// Gamepad state, one per port -- see sw/common/zpad.h, which is what
+// callers should actually use (it maps PAD INDICES to whichever ports
+// currently hold a pad, since nothing fixes a device to a port). These
+// are here alongside their siblings so the register block is documented
+// in one place, not because reaching for them directly is a good idea.
+#define reg_usb0_pad    (*(volatile uint32_t*)0xc0000010)
+#define reg_usb1_pad    (*(volatile uint32_t*)0xc0000030)
+
 // pre-existing names, unchanged -- always port 0. kept for every
 // existing caller (sw/bios/bios.c, sw/apps/gpu3d/gpu3d.c have their
 // own private copies of these same four lines and don't go through

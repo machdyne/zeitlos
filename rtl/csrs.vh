@@ -149,4 +149,29 @@ localparam CSR_FEATURES =
 `ifdef AUDIO
 	(32'h1 << 26) |
 `endif
+// Game mode -- the 320x240 pixel-doubled viewport over the same
+// 640x480 framebuffer (rtl/gpu/gpu_video.v, controlled through
+// rtl/socctl.v's GAME/VIEW registers). Mirrors `GAME in rtl/boards.vh,
+// which defines it at the universal level like `RTC and `TRNG: it
+// needs no pins and no external part, only a handful of LUTs in the
+// scanout path, so every board with a GPU can have it and does.
+//
+// Note this bit says the BITSTREAM was built with game mode, not that
+// the machine is currently in it -- that is socctl's GAME register,
+// and it reads back 0 at boot on every board. Nor does this bit alone
+// mean the mode is usable: a board with `GAME but no `GPU has nothing
+// to scan out with, so rtl/sysctl.v ands the two together before
+// handing socctl its GAME_AVAIL parameter, and software should prefer
+// socctl's own `avail` bit over this one for the "can I actually do
+// this" question.
+//
+// Unlike Z_FEATURE_RTC/_TRNG/_AUDIO above there is no hang hazard
+// here and no ordering rule to follow: game mode has no address
+// window of its own. It lives inside socctl, which every bitstream
+// that has socctl at all already decodes and acks. The worst an old
+// bitstream does is return 0 from a register it does not know, which
+// GAME's own signature (see rtl/socctl.v) catches cleanly.
+`ifdef GAME
+	(32'h1 << 27) |
+`endif
 	32'h0;

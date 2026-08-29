@@ -1392,6 +1392,140 @@ static void alt_move_focused(uint32_t keysym) {
 
 }
 
+// -- game mode viewport (rtl/gpu/gpu_video.v, sw/common/zsoc.h) --
+//
+// Game mode shows a 320x240 window onto the same 640x480 framebuffer,
+// pixel-doubled, so a 640x480 desktop becomes legible on a TV. wm owns
+// the viewport for the same reason it owns every other global hotkey:
+// it is the one process that sees every keystroke before any app does.
+//
+// NOTHING ELSE IN THIS FILE KNOWS GAME MODE EXISTS, and that is the
+// point. WM_SCREEN_W/H stay 640x480, every window keeps its position,
+// every clip rect and every repair region is unchanged, and the
+// framebuffer is untouched. Switching modes is not a resolution
+// change -- it moves a camera. So it cannot destroy a window or
+// disturb an app, because there is nothing for it to destroy or
+// disturb.
+//
+// The viewport origin is deliberately NOT reset when leaving game
+// mode. Toggling out to see the whole desktop and back again should
+// return you to where you were looking.
+#define WM_VIEW_STEP 20
+
+// x <= 320 and y <= 240 keep the whole viewport on the framebuffer.
+// The hardware clamps to exactly this too (see gpu_video.v), so this
+// is not the safety net -- it is here so the wm's own idea of the
+// origin matches what is being displayed, since reading the register
+// back returns what was written rather than what was clamped.
+#define WM_VIEW_MAX_X (WM_SCREEN_W - Z_GAME_VIEW_W)
+#define WM_VIEW_MAX_Y (WM_SCREEN_H - Z_GAME_VIEW_H)
+
+static int32_t view_x = 0;
+static int32_t view_y = 0;
+
+static void view_apply(void) {
+	if (view_x < 0) view_x = 0;
+	if (view_y < 0) view_y = 0;
+	if (view_x > WM_VIEW_MAX_X) view_x = WM_VIEW_MAX_X;
+	if (view_y > WM_VIEW_MAX_Y) view_y = WM_VIEW_MAX_Y;
+	z_game_set_view((uint32_t)view_x, (uint32_t)view_y);
+}
+
+// Alt+Esc -- toggle game mode, if this bitstream has it.
+//
+// Silently does nothing on a board without it rather than reporting an
+// error: a key combination that is not bound is not a failure, and a
+// dialog box would be a strange thing to get for pressing a key the
+// machine does not implement. z_game_set_enabled() already answers
+// false in that case, so the check is really just about not moving the
+// viewport afterwards.
+//
+// Wrap is left OFF here. Toroidal scrolling is what a game wants; a
+// desktop that wrapped from its right edge back to its left would be
+// disorienting rather than useful. A game that wants it turns it on
+// itself through z_game_set_enabled().
+static void game_toggle(void) {
+
+	if (!z_game_available()) return;
+
+	bool on = !z_game_enabled();
+
+	if (on) {
+		// Centre the viewport on entry rather than starting at the
+		// origin. The dock is bottom-left and most windows cascade
+		// from the top-left, so a corner start would put the viewport
+		// somewhere with nothing in it about as often as not; the
+		// middle is the position from which the least scrolling is
+		// needed to reach anything.
+		view_x = (WM_SCREEN_W - Z_GAME_VIEW_W) / 2;
+		view_y = (WM_SCREEN_H - Z_GAME_VIEW_H) / 2;
+		z_game_set_enabled(true, false);
+		view_apply();
+	} else {
+		z_game_set_enabled(false, false);
+	}
+
+}
+
+// Ctrl+Alt+Arrow -- move the viewport, in game mode only.
+//
+// Ctrl+Alt rather than plain Alt because Alt+Arrow is already taken by
+// alt_move_focused() above. dispatch_keys() must therefore test for
+// this combination FIRST -- Ctrl+Alt+Left also satisfies the Alt+Left
+// test, so checking in the other order would move the focused window
+// and this would never fire at all.
+static void game_move_view(uint32_t keysym) {
+
+	if (!z_game_enabled()) return;
+
+	switch (keysym) {
+		case Z_KEY_LEFT:  view_x -= WM_VIEW_STEP; break;
+		case Z_KEY_RIGHT: view_x += WM_VIEW_STEP; break;
+		case Z_KEY_UP:    view_y -= WM_VIEW_STEP; break;
+		case Z_KEY_DOWN:  view_y += WM_VIEW_STEP; break;
+		default: return;
+	}
+
+	view_apply();
+
+}
+
+// Super (Windows key) held -- the viewport follows the mouse pointer,
+// keeping it inside the visible area.
+//
+// Behind a modifier on purpose. A game in full-screen game mode may
+// well use the mouse, and a viewport that chased the pointer on its
+// own would fight it constantly. Super is the one modifier nothing
+// else in this window manager binds, so it costs no existing shortcut.
+//
+// Called from the mouse polling path rather than the keyboard one --
+// this is a level test on a held modifier, not an edge on a press, so
+// it has to be asked every time the pointer moves rather than once
+// when the key goes down.
+//
+// The margin keeps the pointer away from the very edge of the visible
+// area: scrolling only once the pointer has actually left would mean
+// it was never possible to see what you were about to move onto.
+#define WM_VIEW_FOLLOW_MARGIN 40
+
+static void game_follow_pointer(int mx, int my) {
+
+	if (!z_game_enabled()) return;
+
+	if (mx < view_x + WM_VIEW_FOLLOW_MARGIN)
+		view_x = mx - WM_VIEW_FOLLOW_MARGIN;
+	else if (mx > view_x + Z_GAME_VIEW_W - WM_VIEW_FOLLOW_MARGIN)
+		view_x = mx - Z_GAME_VIEW_W + WM_VIEW_FOLLOW_MARGIN;
+
+	if (my < view_y + WM_VIEW_FOLLOW_MARGIN)
+		view_y = my - WM_VIEW_FOLLOW_MARGIN;
+	else if (my > view_y + Z_GAME_VIEW_H - WM_VIEW_FOLLOW_MARGIN)
+		view_y = my - Z_GAME_VIEW_H + WM_VIEW_FOLLOW_MARGIN;
+
+	view_apply();
+
+}
+
 // -- keyboard --
 //
 // unlike the mouse above, keyboard capture is interrupt-driven, not
@@ -1431,6 +1565,28 @@ static void dispatch_keys(void) {
 			if (pressed) alt_tab();
 			continue;
 		}
+
+		// Alt+Esc -- toggle game mode. Consumed even on a bitstream
+		// without game mode: Escape reaching the focused app only on
+		// boards that happen to lack a feature would be a genuinely
+		// confusing difference between machines.
+		if ((modifiers & Z_KBD_MOD_ALT) && keysym == 0x1b) {
+			if (pressed) game_toggle();
+			continue;
+		}
+
+		// Ctrl+Alt+Arrow -- move the game mode viewport. MUST be
+		// tested before the plain Alt+Arrow case directly below:
+		// Ctrl+Alt+Left also satisfies that test, so the other order
+		// would move the focused window and this would never fire at
+		// all. See game_move_view()'s own comment.
+		if ((modifiers & Z_KBD_MOD_ALT) && (modifiers & Z_KBD_MOD_CTRL) &&
+			(keysym == Z_KEY_LEFT || keysym == Z_KEY_RIGHT ||
+			 keysym == Z_KEY_UP   || keysym == Z_KEY_DOWN)) {
+			if (pressed) game_move_view(keysym);
+			continue;
+		}
+
 		if ((modifiers & Z_KBD_MOD_ALT) &&
 			(keysym == Z_KEY_LEFT || keysym == Z_KEY_RIGHT ||
 			 keysym == Z_KEY_UP   || keysym == Z_KEY_DOWN)) {
@@ -3046,6 +3202,33 @@ int main(void) {
 		// so the app still receives the button-up that ends its own
 		// gesture.
 		dispatch_mouse(cx, cy, btn);
+
+		// Super held -- drag the game mode viewport along with the
+		// pointer. A level test on a held modifier, so it belongs here
+		// in the pointer path rather than in dispatch_keys(): there is
+		// no key event to react to while the key is simply down and
+		// the mouse is moving.
+		//
+		// After dispatch_mouse() deliberately. Scrolling the viewport
+		// does not move the pointer, so the sample the app receives is
+		// the same either way -- but doing it in this order keeps the
+		// rule that apps see the pointer before wm acts on the frame
+		// it was sampled in.
+		//
+		// Reading the modifier byte straight from the HID register
+		// rather than tracking it through dispatch_keys(): a modifier
+		// that is merely HELD generates no events at all between its
+		// press and its release, so an event-derived copy would be
+		// stale exactly when it matters.
+		if (z_game_enabled()) {
+			uint32_t info = (mouse_port() == 0) ? reg_usb0_info : reg_usb1_info;
+			uint32_t kinfo = (mouse_port() == 0) ? reg_usb1_info : reg_usb0_info;
+			// The keyboard is usually the OTHER port from the mouse,
+			// but need not be -- a combo device reports both on one.
+			// Accept the modifier from either.
+			if (((info | kinfo) & Z_KBD_MOD_GUI) != 0)
+				game_follow_pointer(cx, cy);
+		}
 
 		if (!btn_down && btn_was_down) mouse_capture = -1;
 

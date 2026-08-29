@@ -1736,8 +1736,53 @@ module sysctl #()
 		2'd0;
 `endif
 
+	// -- game mode plumbing --
+	//
+	// socctl.v holds the configuration and gpu_video.v consumes it;
+	// these wires are the path between them. Declared unconditionally,
+	// exactly like socctl_cursor_busy and socctl_video_mode above, so
+	// socctl's port list never changes with the board -- on a board
+	// without `GPU they simply reach nothing, and the status wires
+	// coming back are tied off below.
+	wire socctl_view_load;
+	wire socctl_game_en;
+	wire socctl_game_wrap;
+	wire [9:0] socctl_view_x;
+	wire [9:0] socctl_view_y;
+
+	// Availability is `GAME AND `GPU, not `GAME alone. A board with
+	// game mode built but no video hardware has nothing to scan out
+	// with, and reporting the mode as available there would be a lie
+	// software cannot check any other way -- so the and happens here,
+	// once, and socctl is simply told the answer. Same arrangement as
+	// VIDEO_MODE_DEFAULT directly above: the board defines live in
+	// this file, socctl gets a number.
+`ifdef GAME
+`ifdef GPU
+	localparam GAME_AVAILABLE = 1'b1;
+`else
+	localparam GAME_AVAILABLE = 1'b0;
+`endif
+`else
+	localparam GAME_AVAILABLE = 1'b0;
+`endif
+
+	// Scanout status coming back the other way. Zero on a board with
+	// no `GPU, which is the honest answer -- there is no scanout, so
+	// there are no frames and there is no vertical blanking. A stuck
+	// counter would be worse than a zero one: software waiting for it
+	// to change would wait forever, whereas software that reads zero
+	// twice can at least conclude nothing is happening.
+	wire [15:0] gpu_frame_ctr;
+	wire gpu_in_vblank;
+`ifndef GPU
+	assign gpu_frame_ctr = 16'd0;
+	assign gpu_in_vblank = 1'b0;
+`endif
+
 	socctl_wb #(
-		.VIDEO_MODE_RESET(VIDEO_MODE_DEFAULT)
+		.VIDEO_MODE_RESET(VIDEO_MODE_DEFAULT),
+		.GAME_AVAIL(GAME_AVAILABLE)
 	) socctl_i (
 		.wb_clk_i(wbm_clk),
 		.wb_rst_i(wbm_rst),
@@ -1748,7 +1793,16 @@ module sysctl #()
 		// back as zero. csrs.v gets away with the raw value only
 		// because its window starts at offset 0. Same masking as the
 		// icache block above.
-		.wb_adr_i({ 30'b0, wbm_adr_sel_word[1:0] }),
+		//
+		// THREE bits, not two. socctl had four registers and needed
+		// only [1:0]; GAME/VIEW/FRAME take it to six, so the mask has
+		// to widen or words 4 and 5 alias back onto 0 and 1 -- which
+		// would mean a VIEW write silently overwrote CTRL and turned
+		// the mouse cursor into a Z every time the viewport moved.
+		// Eight words is the whole of 0x7000_0200..0x7000_021c, well
+		// inside socctl's 256-byte window, so there is room to widen
+		// again if a seventh register ever turns up.
+		.wb_adr_i({ 29'b0, wbm_adr_sel_word[2:0] }),
 		.wb_dat_i(wbm_dat_o),
 		.wb_dat_o(wbs_socctl_dat_o),
 		.wb_we_i(wbm_we),
@@ -1757,7 +1811,14 @@ module sysctl #()
 		.wb_ack_o(wbs_socctl_ack_o),
 		.wb_cyc_i(wbm_cyc_socctl),
 		.cursor_busy(socctl_cursor_busy),
-		.video_mode(socctl_video_mode)
+		.video_mode(socctl_video_mode),
+		.view_load(socctl_view_load),
+		.game_en(socctl_game_en),
+		.game_wrap(socctl_game_wrap),
+		.view_x(socctl_view_x),
+		.view_y(socctl_view_y),
+		.frame_ctr(gpu_frame_ctr),
+		.in_vblank(gpu_in_vblank)
 	);
 
 	csrs_wb #(
@@ -2008,6 +2069,27 @@ module sysctl #()
 		.resetn(~wbm_rst),
 		.pixel(gpu_pixel),
 		.video_mode(socctl_video_mode),
+		.view_load(socctl_view_load),
+		// GAME_AVAILABLE is already `GAME && `GPU, and socctl has
+		// already gated its own enable bit with it -- so this is belt
+		// and braces. It is cheap belt and braces: yosys sees a
+		// constant 0 on a board without `GAME and folds the whole
+		// game-mode datapath out of gpu_video (the row adder, the
+		// wrap comparator, the doubling phase flop), leaving the
+		// scanout path bit-for-bit what it was before this feature
+		// existed. A board that opts out pays nothing.
+		.game_en(socctl_game_en && GAME_AVAILABLE),
+		.game_wrap(socctl_game_wrap),
+		.view_x(socctl_view_x),
+		.view_y(socctl_view_y),
+		.frame_ctr(gpu_frame_ctr),
+		.in_vblank(gpu_in_vblank),
+		// x and y are FRAMEBUFFER coordinates now, in both modes --
+		// see gpu_video.v's header. In desktop mode that is the same
+		// thing as the screen coordinate they used to be, so nothing
+		// downstream changed; in game mode it is what lets
+		// gpu_cursor.v below stay completely unmodified and still
+		// draw the pointer in the right place, pixel-doubled.
 		.x(gpu_x),
 		.y(gpu_y),
 		.gb_adr_o(gb_adr),
