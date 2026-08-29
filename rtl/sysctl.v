@@ -173,7 +173,11 @@ module sysctl #()
 `endif
 
 `ifdef ETH_RMII
+`ifdef ETH_RMII_DRIVE_REFCLK
+   output ETH_REFCLK,
+`else
    input ETH_REFCLK,
+`endif
    input [1:0] ETH_RXD,
    output [1:0] ETH_TXD,
    output ETH_TX_EN,
@@ -507,7 +511,6 @@ module sysctl #()
 	wire [31:0] wbs_audio_dat_o;
 `endif
 `ifdef ICACHE
-	wire [31:0] wbs_cache_dat_o;
 `endif
 
 	wire cs_bram = (wbm_adr < 8192);
@@ -649,8 +652,15 @@ module sysctl #()
 	wire cs_socctl = ((wbm_adr & 32'hf000_0700) == 32'h7000_0200);
 	wire wbm_cyc_socctl = cs_socctl && wbm_cyc;
 `ifdef ICACHE
-	wire cs_cache = ((wbm_adr & 32'hf000_0700) == 32'h7000_0100);
-	wire wbm_cyc_cache = cs_cache && wbm_cyc;
+	// NOTE: 0x7000_01xx is the instruction cache's register window, but
+	// the cache is NOT a slave here -- it answers those addresses
+	// itself, from the CPU address, upstream of wb_arbiter_main (see
+	// rtl/cache.v). So the CPU's accesses never reach this bus.
+	//
+	// The window is deliberately left to csrs_wb below rather than
+	// decoded to nothing: an address nothing decodes gets no ack and
+	// hangs whoever asked. Any stray access from another master, or
+	// from the CPU on a build without ICACHE, is acked and discarded.
 `endif
 `ifdef RTC
 	wire cs_rtc = ((wbm_adr & 32'hf000_0700) == 32'h7000_0300);
@@ -672,7 +682,6 @@ module sysctl #()
 	wire cs_csrs = ((wbm_adr & 32'hf000_0000) == 32'h7000_0000)
 		&& !cs_socctl
 `ifdef ICACHE
-		&& !cs_cache
 `endif
 `ifdef RTC
 		&& !cs_rtc
@@ -751,7 +760,6 @@ module sysctl #()
 `endif
 		cs_csrs ? wbs_csrs_dat_o :
 `ifdef ICACHE
-		cs_cache ? wbs_cache_dat_o :
 `endif
 		32'hzzzz_zzzz;
 
@@ -795,7 +803,6 @@ module sysctl #()
 	wire wbm_audio_ack;
 `endif
 `ifdef ICACHE
-	wire wbs_cache_ack_o;
 `endif
 
 	assign wbm_ack =
@@ -858,7 +865,6 @@ module sysctl #()
 `endif
 		cs_csrs ? wbs_csrs_ack_o :
 `ifdef ICACHE
-		cs_cache ? wbs_cache_ack_o :
 `endif
 		1'b0;
 
@@ -1016,9 +1022,21 @@ module sysctl #()
 	// still has exactly one driver either way.
 `ifdef ICACHE
 
+// Boards define ICACHE_FAST_HIT to choose between a combinational
+// 1-cycle hit acknowledge (1) and a registered 2-cycle one (0); see
+// rtl/cache.v's FAST_HIT parameter. Default to the fast path when a
+// board says nothing, so older board blocks keep building.
+`ifndef ICACHE_FAST_HIT
+`define ICACHE_FAST_HIT 1
+`endif
+
+	wire cache_cfg_hit;
+
 	wb_icache #(
 		.CACHE_KB(`ICACHE_KB),
-		.LINE_WORDS(`ICACHE_LINE_WORDS)
+		.LINE_WORDS(`ICACHE_LINE_WORDS),
+		.FAST_HIT(`ICACHE_FAST_HIT),
+		.CFG_BASE(32'h7000_0100)
 	) icache_i (
 		.wb_clk_i(wbm_clk),
 		.wb_rst_i(wbm_rst),
@@ -1044,14 +1062,12 @@ module sysctl #()
 		.m_cyc_o(wbc_cyc),
 		.m_ack_i(wbc_ack),
 
-		// control/status registers (0x7000_0100, see cs_cache above)
-		.cfg_adr_i({ 30'b0, wbm_adr_sel_word[1:0] }),
-		.cfg_dat_i(wbm_dat_o),
-		.cfg_dat_o(wbs_cache_dat_o),
-		.cfg_we_i(wbm_we),
-		.cfg_stb_i(wbm_stb),
-		.cfg_cyc_i(wbm_cyc_cache),
-		.cfg_ack_o(wbs_cache_ack_o)
+		// Control/status registers are answered INSIDE the cache,
+		// from the CPU address, upstream of wb_arbiter_main -- they
+		// are not a slave on the main bus. See rtl/cache.v: as a bus
+		// master, routing its own registers through the arbiter meant
+		// waiting on a transaction only it could answer.
+		.c_cfg_hit(cache_cfg_hit)
 	);
 
 `else
@@ -1646,9 +1662,16 @@ module sysctl #()
 	);
 `endif
 
-	// WISHBONE SLAVE: RMII ETHERNET MAC (LAN8720A, mozart_ml1 only)
+	// WISHBONE SLAVE: RMII ETHERNET MAC (tested with LAN8720A)
 `ifdef ETH_RMII
 	wire wbm_cyc_ethmac = cs_ethmac && wbm_cyc;
+
+`ifdef ETH_RMII_DRIVE_REFCLK
+   wire eth_refclk = clk50mhz;
+	assign ETH_REFCLK = eth_refclk;
+`else
+   wire eth_refclk = ETH_REFCLK
+`endif
 
 	ethmac_rmii_wb #() wbs_ethmac0_i
 	(
@@ -1662,7 +1685,7 @@ module sysctl #()
 		.wb_stb_i(wbm_stb),
 		.wb_ack_o(wbs_ethmac_ack_o),
 		.wb_cyc_i(wbm_cyc_ethmac),
-		.eth_refclk(ETH_REFCLK),
+		.eth_refclk(eth_refclk),
 		.eth_rxd(ETH_RXD),
 		.eth_txd(ETH_TXD),
 		.eth_tx_en(ETH_TX_EN),

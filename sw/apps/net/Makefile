@@ -23,8 +23,8 @@ LDSCRIPT = ../../common/riscv-app.ld
 # which NIC driver to build in -- ENC28J60 (SPI PMOD, most boards) or
 # RMII (rtl/ethmac_rmii.v, mozart_ml1 only). See net_phy.h for why
 # this is a build-time choice, not a runtime probe.
-NET_PHY ?= ENC28J60
-#NET_PHY ?= RMII
+#NET_PHY ?= ENC28J60
+NET_PHY ?= RMII
 CFLAGS += -DNET_PHY_$(NET_PHY)
 
 ifeq ($(NET_PHY), RMII)

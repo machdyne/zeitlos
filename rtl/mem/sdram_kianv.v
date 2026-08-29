@@ -83,7 +83,13 @@ module sdram_wb #(
     input wb_we_i,
     input [3:0] wb_sel_i,
     input wb_stb_i,
-    output reg wb_ack_o,
+    // wire, not reg: driven by a continuous assignment below.
+    // Declaring it reg is illegal in Verilog-2001 -- yosys tolerates it
+    // but iverilog rejects it outright, which meant this controller
+    // could not be simulated at all. Worth knowing that the ack is
+    // COMBINATIONAL on wb_cyc_i, which matters to any master that
+    // drops CYC mid-transaction.
+    output wire wb_ack_o,
     input wb_cyc_i,
 
     output wire        sdram_clk,
