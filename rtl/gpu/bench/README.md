@@ -55,6 +55,17 @@ design makes that pattern land correctly). `tb_line.v` and
   button individually, the clock-domain tearing fix, hot unplug with a
   direction held, and the interrupt on device type change. Fast.
   See `docs/gamepad.md`.
+- `tb_composite.v` -- `rtl/gpu/gpu_video.v`'s composite (CVBS) output.
+  MEASURES rather than inspects: a composite signal is wrong in exactly
+  one way that matters, which is that a receiver will not lock to it,
+  and whether it locks is a question about microseconds and voltages.
+  So it times the real waveform with `$realtime` and checks line period,
+  sync width, field rate, line count, the vertical broad pulses and
+  their serrations, that exactly three DAC levels are ever driven, and
+  that a source pixel is four pixel clocks wide. Build with
+  `-DGPU_COMPOSITE`, and add `-DTB_PAL` for PAL. Takes a couple of
+  minutes -- it simulates whole fields, because that is the only way to
+  measure a field rate. See `docs/composite.md`.
 
 ## Status
 

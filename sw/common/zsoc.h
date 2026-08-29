@@ -185,6 +185,27 @@
 // hardware is actually willing to do, which additionally accounts for
 // a board that has `GAME but no `GPU to scan out with.
 #define Z_FEATURE_GAME        (1u << 27)
+
+// Composite video out (rtl/gpu/gpu_video.v's `GPU_COMPOSITE).
+//
+// Worth checking separately from Z_FEATURE_GPU_VGA/_DDMI rather than
+// folding into them, because software genuinely behaves differently: a
+// composite board is 320x240 and CANNOT be anything else. The desktop
+// is still a 640x480 surface -- it is just that only a quarter of it
+// is on screen at a time, permanently, and the viewport is how the
+// rest is reached.
+//
+// So an app deciding whether it has room for a wide window should ask
+// z_video_is_composite() below rather than assuming 640x480 is
+// visible, and it should not assume turning game mode OFF will give it
+// the whole screen back, because on these boards it will not.
+#define Z_FEATURE_COMPOSITE   (1u << 28)
+
+// PAL rather than NTSC. Meaningless unless Z_FEATURE_COMPOSITE is set;
+// check that first. The difference software can actually see is the
+// frame rate -- 50Hz rather than 60 -- which matters to anything
+// pacing itself off z_game_wait_frame().
+#define Z_FEATURE_COMPOSITE_PAL (1u << 29)
 // -- feature table (sw/common/zsoc.c) --
 //
 // The human-readable half of the Z_FEATURE_* bits above, kept in the
@@ -540,6 +561,30 @@ static inline bool z_game_present(void) {
 // built with `GAME but no `GPU -- there being no scanout to double.
 // rtl/sysctl.v ands the two before telling socctl, so the answer here
 // is the one that matters.
+// True on a board whose only display output is composite video.
+//
+// The practical consequence: the visible area is 320x240 and always
+// will be. Game mode is not a mode here, it is the permanent state of
+// the display -- gpu_video.v's FIXED_VIEWPORT makes the viewport
+// unconditional and does not consult the game bit at all.
+//
+// That is a bandwidth fact rather than a choice. Drawing 640 distinct
+// pixels across a 52us active line needs 12.6MHz of luma; composite
+// carries about 4.2 (NTSC) or 5.5 (PAL). A "640 wide" composite
+// picture is a blur of the correct average brightness.
+static inline bool z_video_is_composite(void) {
+	if (!z_soc_csrs_present()) return false;
+	return (reg_csr_features & Z_FEATURE_COMPOSITE) != 0;
+}
+
+// 50 on a PAL composite board, 60 everywhere else. For anything that
+// converts frames to seconds; z_game_wait_frame() paces itself off the
+// hardware either way and needs no help.
+static inline uint32_t z_video_frame_hz(void) {
+	if (!z_video_is_composite()) return 60;
+	return (reg_csr_features & Z_FEATURE_COMPOSITE_PAL) ? 50 : 60;
+}
+
 static inline bool z_game_available(void) {
 	if (!z_game_present()) return false;
 	return (reg_socctl_game & Z_GAME_AVAIL) != 0;

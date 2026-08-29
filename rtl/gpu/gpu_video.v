@@ -143,7 +143,30 @@ module gpu_video #(
 	parameter [10:0] v_front_porch = 10,
 	parameter [10:0] v_pulse_width = 2,
 	parameter [10:0] v_back_porch = 33,
-	parameter [10:0] v_frame = 525
+	parameter [10:0] v_frame = 525,
+
+	// -- scanout scaling --
+	//
+	// H_DIV_BASE is how many pixel clocks one SOURCE pixel occupies in
+	// the base (non-game) mode. 1 for VGA/DDMI, where the framebuffer
+	// and the signal are 1:1. 4 for composite, where 320 source pixels
+	// are spread across 1280 clocks of active video -- see
+	// docs/composite.md for why 320 and not 640.
+	//
+	// FIXED_VIEWPORT makes the 320x240 viewport permanently active,
+	// independent of socctl's game bit. Composite sets it, because on
+	// composite there is no other mode available: the luma bandwidth
+	// to draw 640 distinct pixels across a 52us active line is 12.6MHz
+	// and the channel carries about 4.2 (NTSC) or 5.5 (PAL). A "640
+	// wide" composite picture is a blur of the correct average
+	// brightness, not a picture.
+	//
+	// So on a composite board the viewport is not an optional extra
+	// mode -- it is the only mode, and CTRL-ALT-ARROW is how the rest
+	// of the desktop is reached. That is a design consequence worth
+	// stating rather than discovering.
+	parameter [2:0] H_DIV_BASE = 3'd1,
+	parameter FIXED_VIEWPORT = 1'b0
 
 ) (
 
@@ -207,8 +230,26 @@ module gpu_video #(
 	reg [10:0] hc;
 	reg [10:0] vc;
 
-	// doubling phase for game mode -- see the pixel index block below
-	reg x_phase;
+	// -- scanout divisors --
+	//
+	// h_div: pixel clocks per source pixel. v_half: two physical lines
+	// per source row. vp_on: the viewport origin applies at all.
+	//
+	// On composite these are fixed by the parameters above and
+	// game_active is not consulted, so yosys folds the whole
+	// game_active path out of a composite build -- the viewport is
+	// unconditional there. On VGA/DDMI they follow game_active exactly
+	// as before.
+	wire [2:0] h_div = FIXED_VIEWPORT ? H_DIV_BASE :
+		(game_active ? 3'd2 : 3'd1);
+	wire v_half = FIXED_VIEWPORT ? 1'b0 : game_active;
+	wire vp_on  = FIXED_VIEWPORT ? 1'b1 : game_active;
+
+	// Counts 0..h_div-1. Two bits, because h_div is only ever 1, 2 or
+	// 4 -- a general divider here would be a multiplier's worth of
+	// logic in the one clock domain that has a 640:1 mux in it
+	// already.
+	reg [1:0] x_phase;
 
 	// flipped once per frame, in the pclk domain, and crossed into
 	// the wishbone domain to drive frame_ctr. vblank_p is the raw
@@ -313,7 +354,89 @@ module gpu_video #(
 
 `ifdef GPU_COMPOSITE
 
-	// TODO
+	// -- monochrome composite video (CVBS) --
+	//
+	// One resistor ladder on `dac`, one 75R output, one RCA socket.
+	// See docs/composite.md for the timing derivation, the ladder
+	// values and why this is 320 pixels wide and not 640.
+	//
+	// Mutually exclusive with GPU_VGA and GPU_DDMI at build time. Not
+	// because the pixel pipeline could not feed all three -- it could,
+	// they share hline and the refill -- but because the TIMING is
+	// different. A 15.7kHz line rate and a 31.5kHz line rate cannot
+	// come out of one set of counters, and running two sets means two
+	// scanline buffers and an arbiter on vram's single graphics port.
+	// That is a real feature; it is not this one.
+	//
+	// -- levels --
+	//
+	// A 1Vpp composite signal into 75R has three levels that matter
+	// for a monochrome picture:
+	//
+	//     sync tip   0.000V     the bottom of every sync pulse
+	//     blanking   0.300V     everything not sync and not picture
+	//     white      1.000V     a set pixel
+	//
+	// With a 4-bit ladder spanning 0..1V, 0.3V is 4.5 steps. DAC_BLANK
+	// is 5 (0.333V) rather than 4 (0.267V) because erring HIGH keeps
+	// the sync amplitude at 0.667V rather than 0.733V -- still well
+	// inside the +-6% every receiver allows, and the direction that
+	// loses picture contrast rather than sync lock. A display that
+	// cannot lock shows nothing at all; one with 4% less contrast
+	// looks fine.
+	//
+	// Black and blanking are the same value here, i.e. 0 IRE setup.
+	// That is exactly right for PAL and for NTSC-J, and 7.5 IRE low
+	// for original NTSC-M -- which shows up as blacks that are very
+	// slightly darker than the receiver expects, on a 1bpp display
+	// whose "black" is the absence of a pixel anyway. Not worth a
+	// fourth level and a per-standard difference.
+	localparam [3:0] DAC_SYNC  = 4'd0;
+	localparam [3:0] DAC_BLANK = 4'd5;
+	localparam [3:0] DAC_WHITE = 4'd15;
+
+	// -- composite sync --
+	//
+	// Ordinary lines carry the horizontal pulse. During vertical sync
+	// the pulse is INVERTED into a broad pulse: sync sits low for the
+	// whole line except a short serration at the end.
+	//
+	// This is the simple version -- no equalizing pulses before and
+	// after the vertical block, and no half-line offsets, because
+	// there is no interlace to offset. Both are there in a broadcast
+	// signal to keep an interlaced receiver's vertical oscillator
+	// phased correctly across the half-line difference between fields.
+	// This is progressive 240p/288p: every field is identical, there
+	// is no half-line, and there is nothing for them to correct. Every
+	// consumer TV, capture card and upscaler locks to this; it is what
+	// game consoles emitted for twenty years.
+	wire in_vsync_lines = (vc >= v_front_porch) &&
+		(vc < v_front_porch + v_pulse_width);
+
+	wire h_pulse = (hc >= h_front_porch) &&
+		(hc < h_front_porch + h_pulse_width);
+
+	// the serration: sync returns high for one h_pulse_width at the
+	// end of each broad-pulse line, which is what keeps the
+	// receiver's horizontal oscillator running through the vertical
+	// interval instead of free-running for three lines.
+	// h_disp_stop, not h_line: the counters wrap at h_disp_stop-1 (see
+	// the hc block below), so h_disp_stop IS the line length here and
+	// h_line is unused by the timing. Using h_line would put the
+	// serration in the wrong place on any board whose two disagree.
+	wire broad_pulse = (hc < (h_disp_stop - h_pulse_width));
+
+	wire csync_low = in_vsync_lines ? broad_pulse : h_pulse;
+
+	assign dac = csync_low ? DAC_SYNC :
+		(is_visible && pset) ? DAC_WHITE : DAC_BLANK;
+
+`else
+
+	// No composite output on this board -- tie the ladder off rather
+	// than leaving it floating. Costs nothing; a board without the
+	// pins never routes it anywhere.
+	assign dac = 4'd0;
 
 `endif
 
@@ -421,9 +544,11 @@ module gpu_video #(
 	// In wrap mode there is nothing to clamp -- going off the edge is
 	// the feature -- and socctl.v has already limited the origin to
 	// 0..639/0..479, which is what bounds the arithmetic below.
-	wire [9:0] vx_adopt = (!game_cap) ? 10'd0 :
+	wire vp_cap = FIXED_VIEWPORT ? 1'b1 : game_cap;
+
+	wire [9:0] vx_adopt = (!vp_cap) ? 10'd0 :
 		(!wrap_cap && vx_cap > 10'd320) ? 10'd320 : vx_cap;
-	wire [9:0] vy_adopt = (!game_cap) ? 10'd0 :
+	wire [9:0] vy_adopt = (!vp_cap) ? 10'd0 :
 		(!wrap_cap && vy_cap > 10'd240) ? 10'd240 : vy_cap;
 
 	always @(posedge pclk) begin
@@ -568,8 +693,8 @@ module gpu_video #(
 	wire [9:0] scan_row =
 		(vc_next >= v_disp_start && vc_next < v_disp_stop) ?
 			(vc_next - v_disp_start) : 10'd0;
-	wire [9:0] half_row = { 1'b0, scan_row[9:1] };
-	wire [10:0] row_sum = game_active ?
+	wire [9:0] half_row = v_half ? { 1'b0, scan_row[9:1] } : scan_row;
+	wire [10:0] row_sum = vp_on ?
 		({ 1'b0, vy_active } + { 1'b0, half_row }) : { 1'b0, scan_row };
 	wire [9:0] fb_row =
 		(row_sum >= 11'd480) ? (row_sum - 11'd480) : row_sum[9:0];
@@ -590,7 +715,10 @@ module gpu_video #(
 	// every line starts on the same phase and the two halves of a
 	// doubled pixel never straddle a line boundary.
 	wire [9:0] x_next =
-		(game_active && wrap_active && x == 10'd639) ? 10'd0 : (x + 10'd1);
+		(vp_on && wrap_active && x == 10'd639) ? 10'd0 : (x + 10'd1);
+
+	// true on the last clock of a source pixel
+	wire x_step = (x_phase == (h_div - 3'd1));
 
 	always @(posedge pclk) begin
 
@@ -606,17 +734,17 @@ module gpu_video #(
 		// rather than on the first two.
 		if (!resetn) begin
 			x <= 10'd0;
-			x_phase <= 1'b0;
+			x_phase <= 2'd0;
 		end else if (hc >= h_disp_start) begin
-			if (game_active) begin
-				x_phase <= ~x_phase;
-				if (x_phase) x <= x_next;
-			end else begin
+			if (x_step) begin
+				x_phase <= 2'd0;
 				x <= x_next;
+			end else begin
+				x_phase <= x_phase + 2'd1;
 			end
 		end else begin
 			x <= vx_active;
-			x_phase <= 1'b0;
+			x_phase <= 2'd0;
 		end
 
 		if (!resetn) begin

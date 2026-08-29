@@ -20,8 +20,9 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 | Bus | 32-bit Wishbone |
 | Main Memory | SDRAM, PSRAM or SRAM (1MB minimum) |
 | Framebuffer | 640x480x1bpp (monochrome; white, green, or amber) |
-| Video | VGA, DVI, DVI over HDMI |
-| Audio | 8 channel hardware mixer with stereo 1-bit sigma-delta, 16-bit PT8211 or S/PDIF output |
+| Viewport | Optional 320x240 pixel-doubled viewport |
+| Video | VGA, DVI, DVI over HDMI, composite NTSC and PAL |
+| Audio | 8 channel hardware mixer with stereo output |
 | Storage | MicroSD |
 | Network | Ethernet (SPI) and Ethernet MAC (for RMII PHY) |
 | Entropy | Ring-oscillator TRNG |

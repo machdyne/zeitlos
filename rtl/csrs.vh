@@ -174,4 +174,24 @@ localparam CSR_FEATURES =
 `ifdef GAME
 	(32'h1 << 27) |
 `endif
+// Composite video out (rtl/gpu/gpu_video.v's `GPU_COMPOSITE). Mirrors
+// the define like every bit above mirrors its own.
+//
+// Worth exposing separately from GPU_VGA/GPU_DDMI rather than folding
+// into them, because software genuinely behaves differently here: a
+// composite board is 320x240 and cannot be anything else, so an app
+// that would otherwise ask "am I in game mode" should ask this too
+// before assuming a 640x480 surface is visible. The desktop is still
+// 640x480 -- it is just that only a quarter of it is on screen at a
+// time, permanently.
+`ifdef GPU_COMPOSITE
+	(32'h1 << 28) |
+`endif
+// PAL rather than NTSC, when GPU_COMPOSITE is set. Meaningless on its
+// own; check bit 28 first. The difference software can see is the
+// frame rate -- 50Hz rather than 60 -- which a game pacing itself off
+// z_game_wait_frame() may want to know about.
+`ifdef GPU_COMPOSITE_PAL
+	(32'h1 << 29) |
+`endif
 	32'h0;

@@ -200,6 +200,27 @@ module sysctl #()
 `endif
 `endif
 
+`ifdef GPU_COMPOSITE
+	// Monochrome composite video out. Four bits into an R-2R ladder,
+	// then one 75R series resistor to the centre pin of an RCA
+	// socket -- see docs/composite.md for values and for why four
+	// bits when the picture only needs three levels.
+	//
+	// A board defining `GPU_COMPOSITE must add COMP_DAC[3:0] to its
+	// own .lpf/.ccf. No board in this tree does yet; composite needs
+	// four pins and a handful of resistors none of them have.
+	output [3:0] COMP_DAC,
+`endif
+
+// The VGA and DDMI pin declarations below are suppressed entirely on a
+// composite build, not merely left unconnected. An output port that
+// nothing drives is not harmless: it synthesises to a pin held at a
+// constant, and on a board with a real VGA connector that means a
+// monitor sees a dead signal rather than no signal -- which looks like
+// a broken output rather than one that was never built. Removing the
+// port makes the board file fail loudly at place-and-route instead,
+// pointing at the constraint that no longer has anything to bind to.
+`ifndef GPU_COMPOSITE
 `ifdef GPU_VGA
 	output VGA_R,
 	output VGA_G,
@@ -213,6 +234,7 @@ module sysctl #()
 	output DDMI_D1_P,
 	output DDMI_D2_P,
 	output DDMI_CK_P,
+`endif
 `endif
 
 `ifdef USB_HID
@@ -2061,7 +2083,59 @@ module sysctl #()
 		0;
 `endif
 
-	gpu_video #() gpu_video_i
+	// -- scanout timing --
+	//
+	// Three parameter sets, one build. VGA/DDMI is 640x480@60 with the
+	// framebuffer 1:1 against the signal; composite is 320x240 spread
+	// four pixel clocks per source pixel. All three run from the SAME
+	// 25.2MHz pclk -- composite needs no new PLL output, which is most
+	// of why it is cheap. See docs/composite.md for the derivation.
+	//
+	// The horizontal numbers are in PIXEL CLOCKS, not source pixels, so
+	// h_disp is 1280 for composite (320 x 4) rather than 320. That is
+	// what lets one timing generator serve both: the divisor lives in
+	// H_DIV_BASE and the counters never need to know about it.
+	//
+	// The slack between the nominal porches and the exact line length
+	// is split between front and back porch rather than dumped on one,
+	// so the 1280-clock image sits centred in the active window instead
+	// of hard against its left edge.
+`ifdef GPU_COMPOSITE
+`ifdef GPU_COMPOSITE_PAL
+	// PAL 288p: 1613 clk/line = 64.0079us (+0.012%), 312 lines = 50.07Hz
+	localparam [10:0] VID_H_DISP = 11'd1280, VID_H_FP = 11'd57;
+	localparam [10:0] VID_H_PW   = 11'd118,  VID_H_BP = 11'd158;
+	localparam [10:0] VID_V_DISP = 11'd240,  VID_V_FP = 11'd25;
+	localparam [10:0] VID_V_PW   = 11'd3,    VID_V_BP = 11'd44;
+`else
+	// NTSC 240p: 1602 clk/line = 63.5714us (+0.025%), 262 lines = 60.04Hz
+	localparam [10:0] VID_H_DISP = 11'd1280, VID_H_FP = 11'd65;
+	localparam [10:0] VID_H_PW   = 11'd118,  VID_H_BP = 11'd139;
+	localparam [10:0] VID_V_DISP = 11'd240,  VID_V_FP = 11'd3;
+	localparam [10:0] VID_V_PW   = 11'd3,    VID_V_BP = 11'd16;
+`endif
+	localparam [2:0] VID_H_DIV = 3'd4;
+	localparam VID_FIXED_VP = 1'b1;
+`else
+	// VESA DMT 640x480@60 -- unchanged from every previous bitstream.
+	localparam [10:0] VID_H_DISP = 11'd640, VID_H_FP = 11'd16;
+	localparam [10:0] VID_H_PW   = 11'd96,  VID_H_BP = 11'd48;
+	localparam [10:0] VID_V_DISP = 11'd480, VID_V_FP = 11'd10;
+	localparam [10:0] VID_V_PW   = 11'd2,   VID_V_BP = 11'd33;
+	localparam [2:0] VID_H_DIV = 3'd1;
+	localparam VID_FIXED_VP = 1'b0;
+`endif
+
+	gpu_video #(
+		.h_disp(VID_H_DISP), .h_front_porch(VID_H_FP),
+		.h_pulse_width(VID_H_PW), .h_back_porch(VID_H_BP),
+		.h_line(VID_H_FP + VID_H_PW + VID_H_BP + VID_H_DISP),
+		.v_disp(VID_V_DISP), .v_front_porch(VID_V_FP),
+		.v_pulse_width(VID_V_PW), .v_back_porch(VID_V_BP),
+		.v_frame(VID_V_FP + VID_V_PW + VID_V_BP + VID_V_DISP),
+		.H_DIV_BASE(VID_H_DIV),
+		.FIXED_VIEWPORT(VID_FIXED_VP)
+	) gpu_video_i
 	(
 		.clk(wbm_clk),
 		.pclk(clk25_2mhz),
@@ -2094,6 +2168,16 @@ module sysctl #()
 		.y(gpu_y),
 		.gb_adr_o(gb_adr),
 		.gb_dat_i(gb_dat),
+`ifdef GPU_COMPOSITE
+		// Composite REPLACES the VGA and DDMI connections rather than
+		// joining them -- see boards.vh's own note on why the two
+		// cannot share one timing generator. Written as an `ifdef/
+		// `else here rather than trusting a board author to comment
+		// out `GPU_VGA as well: a board that defined both would
+		// otherwise build, drive VGA pins with 15.7kHz sync, and fail
+		// in a way that looks like broken hardware.
+		.dac(COMP_DAC),
+`else
 `ifdef GPU_VGA
 		.red(VGA_R),
 		.green(VGA_G),
@@ -2103,6 +2187,7 @@ module sysctl #()
 `endif
 `ifdef GPU_DDMI
 		.dvi_p({ DDMI_CK_P, DDMI_D2_P, DDMI_D1_P, DDMI_D0_P }),
+`endif
 `endif
 	);
 

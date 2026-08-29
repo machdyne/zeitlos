@@ -222,6 +222,41 @@
 // The dial works; it is just not worth turning. If logic is what you
 // need back, turn `AUDIO_MIXER off instead.
 
+// COMPOSITE VIDEO
+// ---------------
+//
+// rtl/gpu/gpu_video.v's monochrome CVBS output -- one resistor ladder
+// on `dac`, one 75R series resistor, one RCA socket. See
+// docs/composite.md for the timing derivation and the ladder values.
+//
+// `GPU_COMPOSITE       build the composite timing and output stage
+// `GPU_COMPOSITE_PAL   PAL 288p at 50Hz. Without it, NTSC 240p at 60Hz.
+//
+// MUTUALLY EXCLUSIVE WITH `GPU_VGA AND `GPU_DDMI, and this is enforced
+// in rtl/sysctl.v rather than left to a board author to remember.
+//
+// Not because the pixel pipeline could not feed all three -- it could,
+// they share hline and the refill -- but because the TIMING is
+// different. A 15.7kHz line rate and a 31.5kHz line rate cannot come
+// out of one set of counters, and running two sets means two scanline
+// buffers and an arbiter on vram.v's single graphics port. That is a
+// real feature; it is not this one.
+//
+// THE VIEWPORT IS NOT OPTIONAL ON A COMPOSITE BOARD. Composite is
+// 320x240, always, and gpu_video.v's FIXED_VIEWPORT parameter makes
+// that unconditional -- socctl's game bit is not consulted at all.
+//
+// That is a bandwidth fact, not a choice: drawing 640 distinct pixels
+// across a 52us active line needs 12.6MHz of luma and the channel
+// carries about 4.2 (NTSC) or 5.5 (PAL). A "640 wide" composite
+// picture is a blur of the correct average brightness, not a picture.
+// So on a TV, CTRL-ALT-ARROW is how the rest of the desktop is
+// reached, and `GAME above stops being a nice extra and becomes the
+// thing that makes the machine usable at all.
+//
+//`define GPU_COMPOSITE
+//`define GPU_COMPOSITE_PAL
+
 // BOARD CONFIG
 // ------------
 //
