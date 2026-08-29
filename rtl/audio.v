@@ -461,6 +461,8 @@ module audio_wb #(
 	wire signed [15:0] mix_l;
 	wire signed [15:0] mix_r;
 	wire [7:0] mix_active;
+	wire [31:0] mix_dbg_adr;
+	wire [31:0] mix_dbg_dat;
 `else
 	// No mixer in this build: MIXEN does nothing, MIXSTAT reads zero,
 	// and the channel registers are written into a void. Software sees
@@ -470,6 +472,8 @@ module audio_wb #(
 	wire signed [15:0] mix_l = 16'sd0;
 	wire signed [15:0] mix_r = 16'sd0;
 	wire [7:0] mix_active = 8'h00;
+	wire [31:0] mix_dbg_adr = 32'h0;
+	wire [31:0] mix_dbg_dat = 32'h0;
 `endif
 
 	// Channel-register writes are decoded here and handed straight to
@@ -585,7 +589,9 @@ module audio_wb #(
 		.m_ack_i(mx_ack_i),
 		.out_l(mix_l),
 		.out_r(mix_r),
-		.active_o(mix_active)
+		.active_o(mix_active),
+		.dbg_adr_o(mix_dbg_adr),
+		.dbg_dat_o(mix_dbg_dat)
 	);
 `else
 	assign mx_adr_o = 32'h0000_0000;
@@ -805,6 +811,9 @@ module audio_wb #(
 						32'd7: wb_dat_o <= CLK_HZ;
 						32'd8: wb_dat_o <= { 20'b0, spdif_fs, mixvol };
 						32'd9: wb_dat_o <= { 24'b0, mix_active };
+						// bus read probe -- see audio_mixer.v
+						32'd10: wb_dat_o <= mix_dbg_adr;
+						32'd11: wb_dat_o <= mix_dbg_dat;
 						default: wb_dat_o <= 32'h0000_0000;
 					endcase
 

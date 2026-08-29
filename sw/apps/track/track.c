@@ -177,7 +177,15 @@ static int windowed;
 static int volume = MOD_VOLUME_DEFAULT;
 
 static int separation = 65;
-static uint32_t rate_div = Z_AUDIO_RATE_22K;
+/* Set from the hardware at startup, NOT to a constant.
+ *
+ * boards.vh picks a power-on rate its outputs can actually carry --
+ * Sergei sets 16 (46875Hz) because that is the only rate whose S/PDIF
+ * half-cell is a whole number of sys_clk. This app used to overwrite
+ * that with 22kHz at startup, which is below the 32kHz floor every
+ * IEC 60958 receiver is specified to, so the digital output produced
+ * garbage on a board that was configured correctly. */
+static uint32_t rate_div;
 
 /* Hardware mixing (rtl/audio_mixer.v) when the bitstream has it.
  *
@@ -300,6 +308,37 @@ static int slot_row[PATTERN_ROWS];
  * change mid-redraw simply restarts it against the new position rather
  * than producing a grid half from each.
  */
+/*
+ * Header redraw queue.
+ *
+ * draw_status() drew two lines of text plus the channel bars in one
+ * call -- measured on hardware at 34ms (`st25`), longer than a 20ms
+ * tracker tick, which is what was still producing bursts after the
+ * pattern grid was made incremental. Fixing the grid and leaving this
+ * alone just moved the stall.
+ *
+ * So the header is a dirty-bit queue drawn ONE ITEM PER ITERATION,
+ * same rule as the grid: no single draw may block the audio loop.
+ *
+ * It is also far less work than it was, because most of it does not
+ * change most of the time. The title never changes during a module;
+ * the rate/volume/separation line changes only on a keypress or when
+ * the once-a-second counters update. Only the position line and the
+ * channel bars actually move.
+ */
+#define DIRTY_TITLE   (1u << 0)
+#define DIRTY_POS     (1u << 1)
+#define DIRTY_INFO    (1u << 2)
+#define DIRTY_CHANS   (1u << 3)
+
+static unsigned hdr_dirty;
+static int last_pos_row = -1;
+
+/* 's' toggles a once-a-second channel dump to the serial console. Off
+ * by default: printf over the UART is slow enough to disturb the very
+ * timing it would be reporting on. */
+static int dump_stats;
+
 static int pat_pending = PATTERN_ROWS;
 static int pat_row;
 static int pat_order;
@@ -589,27 +628,73 @@ static void pattern_step(void) {
  * and "the CPU is too slow" (mix sits below 100), which sound similar
  * and want completely different fixes.
  */
-static void draw_status(void) {
+static void draw_pos_line(void) {
 	char buf[64];
-
-	snprintf(buf, sizeof(buf), "pos %02d/%02d pat %02d row %02d spd %d/%d",
+	snprintf(buf, sizeof(buf), "pos %02d/%02d  pat %02d  row %02d  spd %d/%d",
 		player.order_pos, player.song_len,
 		player.order[player.order_pos], player.row,
 		player.speed, player.bpm);
 	draw_line(1, buf);
+}
 
-	if (rr_percent >= 0)
-		snprintf(buf, sizeof(buf),
-			"%lu %dch vol%d sep%d %s%d%% brst%d %s",
-			(unsigned long)z_audio_rate_hz(), player.channels,
-			volume, separation, hw_mix ? "rate" : "mix", rr_percent,
-			hw_burst_max,
-			paused ? "PAUSED" : (z_audio_underrun() ? "UNDER" : ""));
-	else
-		snprintf(buf, sizeof(buf), "%lu Hz %dch vol %d%% sep %d%% %s",
-			(unsigned long)z_audio_rate_hz(), player.channels,
-			volume, separation, paused ? "PAUSED" : "");
+static void draw_info_line(void) {
+	char buf[64];
+	uint32_t fmt = z_audio_formats();
+
+	snprintf(buf, sizeof(buf), "%lu %dch vol%d sep%d %s%d%% brst%d %s",
+		(unsigned long)z_audio_rate_hz(), player.channels,
+		volume, separation, hw_mix ? "rate" : "mix", rr_percent,
+		hw_burst_max,
+		paused ? "PAUSED" : (z_audio_underrun() ? "UNDER" : ""));
+	(void)fmt;
 	draw_line(2, buf);
+}
+
+/* Draw at most one pending header item. A no-op once they are clean. */
+/*
+ * Per-channel activity bars.
+ *
+ * Drawn from the ENGINE's channel state, not by measuring the mixed
+ * output. That is the honest thing to show: these bars are what the
+ * player believes each channel is doing, so when they disagree with
+ * what comes out of the jack they are evidence about where the fault
+ * is rather than decoration.
+ *
+ * Cheap -- one fill per channel, no glyphs -- which is why it shares a
+ * queue slot with the text lines without unbalancing it.
+ */
+static void draw_channels(int row) {
+	int y = 3 + row * ROW_H;
+	int c;
+	int nch = player.channels ? player.channels : 1;
+	int bw = (z_win_content_w(&win) - 8) / nch;
+
+	for (c = 0; c < player.channels; c++) {
+		int x = 4 + c * bw;
+		int lvl = player.ch[c].active ? player.ch[c].volume : 0;
+		int w = (lvl * (bw - 4)) / 64;
+		z_win_fill_rect(&win, x, y, bw - 3, ROW_H, 0);
+		if (w > 0) z_win_fill_rect(&win, x, y + 1, w, ROW_H - 2, 1);
+	}
+}
+
+static void header_step(void) {
+	if (hdr_dirty & DIRTY_POS) {
+		hdr_dirty &= ~DIRTY_POS;
+		draw_pos_line();
+	} else if (hdr_dirty & DIRTY_CHANS) {
+		hdr_dirty &= ~DIRTY_CHANS;
+		draw_channels(3);
+	} else if (hdr_dirty & DIRTY_INFO) {
+		hdr_dirty &= ~DIRTY_INFO;
+		draw_info_line();
+	} else if (hdr_dirty & DIRTY_TITLE) {
+		char buf[64];
+		hdr_dirty &= ~DIRTY_TITLE;
+		snprintf(buf, sizeof(buf), "%s  \"%s\"",
+			files[cur_file] ? files[cur_file] : "", player.name);
+		draw_line(0, buf);
+	}
 }
 
 /*
@@ -621,41 +706,28 @@ static void draw_status(void) {
  */
 static void draw_diag(void) {
 	char buf[64];
-	snprintf(buf, sizeof(buf), "fd%lu ms%lu pt%lu st%lu  n spc v r -=",
+	snprintf(buf, sizeof(buf), "fd%lu ms%lu pt%lu st%lu  n spc v r s -=",
 		(unsigned long)t_feed_max, (unsigned long)t_msg_max,
 		(unsigned long)t_pat_max, (unsigned long)t_sta_max);
 	draw_row_text(z_win_content_h(&win) - ROW_H - 1, buf, 0);
 }
 
 static void draw_all(void) {
-	char buf[64];
+	int k;
 
 	z_win_clear(&win);
 
-	snprintf(buf, sizeof(buf), "%s  \"%s\"",
-		files[cur_file] ? files[cur_file] : "", player.name);
-	draw_line(0, buf);
+	/* Everything is repainted, but ONE ITEM PER ITERATION by
+	 * header_step() and pattern_step() -- a full repaint in one call
+	 * is what used to stall the audio. */
+	hdr_dirty = DIRTY_TITLE | DIRTY_POS | DIRTY_INFO | DIRTY_CHANS;
 
-	draw_status();
+	for (k = 0; k < PATTERN_ROWS; k++) slot_row[k] = -2;
+	last_drawn_row = -1;
+	draw_pattern();
 
-	if (show_pattern) {
-		int k;
-		for (k = 0; k < PATTERN_ROWS; k++) slot_row[k] = -2;
-		last_drawn_row = -1;
-		draw_pattern();
-	} else {
-		draw_line(4, "pattern view off (v)");
-	}
+	if (!show_pattern) draw_line(4, "pattern view off (v)");
 
-	/* z_win_content_h(), not win.h.
-	 *
-	 * win.h is the whole window INCLUDING the titlebar and borders,
-	 * but z_win_draw_text() takes content-relative coordinates whose
-	 * origin is below the titlebar -- so measuring down from win.h
-	 * put this line past the bottom edge, where it was clipped away
-	 * and simply never appeared. zwin.h exposes the content height for
-	 * exactly this, and duplicating the formula instead is what caused
-	 * a real bug in gpu3d once already. */
 	draw_diag();
 }
 
@@ -691,11 +763,16 @@ static void handle_key(uint32_t key) {
 			hw_next_256 = z_uptime_ticks() << 8;
 		}
 		break;
+	case 's':
+		dump_stats = !dump_stats;
+		printf("\ntrack: stats %s\n", dump_stats ? "on" : "off");
+		break;
 	case 'v':
 		show_pattern = !show_pattern;
 		draw_all();
 		break;
-	case 'r':
+	case 'r': {
+		uint32_t next;
 		/* Cycle the sample rate live.
 		 *
 		 * Halving the rate halves the mixer's work, so this is the
@@ -704,9 +781,15 @@ static void handle_key(uint32_t key) {
 		 * new rate immediately, so pitch and tempo are unaffected --
 		 * only the resampling quality changes.
 		 */
-		if (rate_div == Z_AUDIO_RATE_44K) rate_div = Z_AUDIO_RATE_22K;
-		else if (rate_div == Z_AUDIO_RATE_22K) rate_div = Z_AUDIO_RATE_11K;
-		else rate_div = Z_AUDIO_RATE_44K;
+		/* Skip anything this board's outputs cannot carry -- on a
+		 * board with a transmitter that rules out 22k and 11k. */
+		next = rate_div;
+		do {
+			if (next == Z_AUDIO_RATE_44K) next = Z_AUDIO_RATE_22K;
+			else if (next == Z_AUDIO_RATE_22K) next = Z_AUDIO_RATE_11K;
+			else next = Z_AUDIO_RATE_44K;
+		} while (!z_audio_rate_ok(next) && next != rate_div);
+		rate_div = next;
 		reg_audio_rate = rate_div;
 		player.rate = z_audio_rate_hz();
 		modplay_retempo(&player);
@@ -716,18 +799,19 @@ static void handle_key(uint32_t key) {
 		if (windowed) draw_all();
 		else printf("\ntrack: %lu Hz\n", (unsigned long)z_audio_rate_hz());
 		break;
+	}
 	case '-':
 	case '_':
 		volume -= 5;
 		apply_volume();
-		if (windowed) draw_status();
+		if (windowed) hdr_dirty |= DIRTY_INFO;
 		else printf("\ntrack: volume %d%%\n", volume);
 		break;
 	case '=':
 	case '+':
 		volume += 5;
 		apply_volume();
-		if (windowed) draw_status();
+		if (windowed) hdr_dirty |= DIRTY_INFO;
 		else printf("\ntrack: volume %d%%\n", volume);
 		break;
 	case '[':
@@ -895,6 +979,39 @@ static void feed_hw(void) {
 	}
 }
 
+/*
+ * Dump what the app is actually programming into the mixer.
+ *
+ * Printed once per second to the serial console. The point is to make
+ * the app's view checkable against what comes out of the jack: if
+ * these values are sane and the sound is not, the fault is below this
+ * layer -- the mixer, the bus, or main memory -- and if they are wrong
+ * it is the engine or the address arithmetic.
+ *
+ * `base` is the PHYSICAL address the mixer fetches from. Compare it
+ * against the process base `ps` reports: it should land inside the
+ * process, well past its code.
+ */
+static void dump_channels(void)
+{
+	int c;
+
+	printf("track: buf phys %08lx  mixvol %02lx  mixstat %02lx\n",
+		(unsigned long)phys_of(modbuf),
+		(unsigned long)(reg_audio_mixvol & 0xFF),
+		(unsigned long)(reg_audio_mixstat & 0xFF));
+
+	for (c = 0; c < player.channels; c++) {
+		mod_channel_t *ch = &player.ch[c];
+		uint32_t smp_hz = ch->period
+			? (3546895u / (uint32_t)ch->period) : 0;
+		printf("  ch%d smp%-2d per%4d %5luHz step%08lx vol%2d %s\n",
+			c, ch->sample, ch->period, (unsigned long)smp_hz,
+			(unsigned long)z_audio_step(smp_hz, z_audio_rate_hz()),
+			ch->volume, ch->active ? "on" : "--");
+	}
+}
+
 static void write_channels(void) {
 	int c;
 
@@ -1058,6 +1175,7 @@ static int play(int index) {
 				 * status refresh -- one fewer line of glyphs in
 				 * the path that runs eight times a second. */
 				if (windowed) draw_diag();
+				if (dump_stats) dump_channels();
 				hw_burst_max = 0;
 				t_feed_max = 0; t_msg_max = 0;
 				t_pat_max = 0; t_sta_max = 0;
@@ -1084,21 +1202,28 @@ static int play(int index) {
 				draw_pattern();
 			}
 
-			/* One row per pass, so a redraw is spread across
-			 * iterations instead of blocking feed_hw. */
+			/* The position line and the channel bars follow the
+			 * MUSIC too -- they only change when the row does, so
+			 * marking them here rather than on a timer removes
+			 * most of the header's work outright. */
+			if (player.row != last_pos_row) {
+				last_pos_row = player.row;
+				hdr_dirty |= DIRTY_POS | DIRTY_CHANS;
+			}
+
+			/* One header item and one grid row per pass, so a
+			 * redraw is spread across iterations instead of
+			 * blocking feed_hw(). */
+			t0 = z_uptime_ticks();
+			header_step();
+			dt = z_uptime_ticks() - t0;
+			if (dt > t_sta_max) t_sta_max = dt;
+
 			t0 = z_uptime_ticks();
 			pattern_step();
 			dt = z_uptime_ticks() - t0;
 			if (dt > t_pat_max) t_pat_max = dt;
 
-			/* The status line is cheap and wants to be smooth. */
-			if (z_uptime_ticks() - last_draw > 90) {
-				last_draw = z_uptime_ticks();
-				t0 = z_uptime_ticks();
-				draw_status();
-				dt = z_uptime_ticks() - t0;
-				if (dt > t_sta_max) t_sta_max = dt;
-			}
 		} else {
 			int32_t ev = hid_read_key();
 			if (ev >= 0)
@@ -1141,6 +1266,10 @@ int main(void) {
 	 * channels here, and about double at 44.1kHz. A player on its own
 	 * can afford either; a game running alongside can afford neither,
 	 * which is what phase 3's hardware mixer is for. */
+	/* Start from the rate the board came up with. */
+	rate_div = reg_audio_rate & 0xFF;
+	if (!z_audio_rate_ok(rate_div)) rate_div = Z_AUDIO_RATE_44K;
+
 	z_audio_start(rate_div);
 
 	hw_mix = z_audio_mixer_present();

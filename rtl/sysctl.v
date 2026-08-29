@@ -1670,7 +1670,7 @@ module sysctl #()
    wire eth_refclk = clk50mhz;
 	assign ETH_REFCLK = eth_refclk;
 `else
-   wire eth_refclk = ETH_REFCLK
+   wire eth_refclk = ETH_REFCLK;
 `endif
 
 	ethmac_rmii_wb #() wbs_ethmac0_i

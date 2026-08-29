@@ -262,6 +262,31 @@ module sdram_wb #(
   reg        update_ready, update_ready_nxt;
 
   wire valid = wb_cyc_i && wb_stb_i;
+
+  // -------------------------------------------------
+  // READ vs WRITE
+  // -------------------------------------------------
+  //
+  // wb_we_i decides. It used to be `wb_sel_i == 4'b0000`, which meant
+  // a master doing a perfectly ordinary read -- we low, all byte
+  // enables set -- got a WRITE of whatever happened to be on wb_dat_i.
+  //
+  // That is not a hypothetical. rtl/audio_mixer.v drove we=0/sel=1111
+  // and silently erased the sample data it was reading, one word per
+  // fetch, which took a long time to find because from the outside it
+  // looked like corrupted reads rather than unwanted writes.
+  //
+  // rtl/gpu/gpu_blit.v drives the same combination on BOTH its ports
+  // (s_we_o=0/s_sel_o=1111 for main-memory source reads, and
+  // we=0/sel=1111 for framebuffer reads). It has not been bitten only
+  // because the framebuffer is VRAM; the moment CTRL_SRCMEM reads main
+  // memory on a board where that is SDRAM, it would have destroyed the
+  // source data it was copying.
+  //
+  // sel keeps its real job, which is byte enables on a write (dqm
+  // below). A write with sel=0 now writes nothing, which is the
+  // correct reading of the signal rather than a special case.
+  wire is_write = wb_we_i;
   assign wb_ack_o = wb_cyc_i && ready;
 
   // -------------------------------------------------
@@ -458,7 +483,7 @@ module sdram_wb #(
           if (KEEP_OPEN != 0) begin
             if (same_row_hit) begin
               // hit: go emit READ/WRITE now
-              if (wb_sel_i == 4'b0000) begin
+              if (!is_write) begin
                 state_nxt = READ_CMD;
               end else begin
                 state_nxt = WRITE_L;
@@ -496,7 +521,7 @@ module sdram_wb #(
         ba_nxt       = cur_bank_w;
         saddr_nxt    = cur_row_w;
         wait_cnt_nxt = TRCD_CYC;
-        ret_state_nxt= (wb_sel_i == 4'b0000) ? READ_CMD : WRITE_L;
+        ret_state_nxt= (!is_write) ? READ_CMD : WRITE_L;
 
         // record open row (for KEEP_OPEN)
         if (KEEP_OPEN != 0) begin

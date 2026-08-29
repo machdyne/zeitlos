@@ -128,6 +128,32 @@ module tb_audio_mixer;
 					end
 				end
 
+				// A read must not assert we, and on this SoC it
+				// should leave sel clear as well.
+				//
+				// The model used to accept anything and always return
+				// data, so it passed a mixer driving we=0/sel=1111 --
+				// which rtl/mem/sdram_kianv.v took as a WRITE, because
+				// it decided read-versus-write on sel and ignored we
+				// entirely. The mixer erased the sample buffer it was
+				// reading, one word per fetch, and every test in this
+				// file passed while the hardware destroyed memory.
+				//
+				// That controller now honours we, so sel is no longer
+				// load-bearing. The check stays because it is free,
+				// because the CPU drives sel=0 on reads (mem_wstrb is
+				// zero), and because it would catch the same mistake
+				// on a board whose bitstream predates the fix.
+				if (m_sel != 4'b0000) begin
+					$display("FAIL read issued with sel=%b -- on this bus that is a WRITE",
+						m_sel);
+					errors = errors + 1;
+				end
+				if (m_we) begin
+					$display("FAIL mixer asserted we on a read");
+					errors = errors + 1;
+				end
+
 				if (wcount >= waits) begin
 					m_dat_i <= {
 						mem[(m_adr - MEM_BASE) + 3],
@@ -243,7 +269,57 @@ module tb_audio_mixer;
 
 	// ------------------------------------------------------------
 
+	// Free-running frame_req at `period` cycles with `w` wait states
+	// per bus read. Counts frames issued against frames the sequencer
+	// actually completed.
+	integer done_count;
+	integer issued;
+
+	task stream_test;
+		input [31:0] period;
+		input integer w;
+		integer f;
+		begin
+			waits = w;
+			for (f = 0; f < 8; f = f + 1)
+				setup_ch(f[2:0], 32'd0, 32'd64, 32'd0, 32'd32,
+					32'd1 << FRAC, 8'd32, 8'd32);
+
+			done_count = 0;
+			issued = 0;
+
+			for (f = 0; f < 60; f = f + 1) begin
+				@(posedge clk);
+				frame_req <= 1'b1;
+				@(posedge clk);
+				frame_req <= 1'b0;
+				issued = issued + 1;
+				repeat (period - 2) @(posedge clk);
+			end
+
+			repeat (period) @(posedge clk);
+
+			$display("  period %0d, %0d wait states: %0d issued, %0d completed",
+				period, w, issued, done_count);
+			if (done_count != issued) begin
+				$display("FAIL %0d frame(s) DROPPED -- frame_req arrived while busy",
+					issued - done_count);
+				errors = errors + 1;
+			end else begin
+				$display("  ok  no frames dropped");
+			end
+			waits = 2;
+		end
+	endtask
+
+	// count completed frames
+	always @(posedge clk)
+		if (!rst && dut.state == 4'd12) done_count = done_count + 1;
+
 	initial begin
+
+		done_count = 0;
+		issued = 0;
 
 		if ($test$plusargs("vcd")) begin
 			$dumpfile("/tmp/tb_audio_mixer.vcd");
@@ -459,6 +535,28 @@ module tb_audio_mixer;
 		check("still correct with waits", out_l,
 			(8 * 1 * 32 * 255) >>> 10);
 		waits = 2;
+
+		$display("");
+		$display("=== 10. free-running frame_req (the real condition) ===");
+
+		// Every test above uses one_frame(), which waits for the
+		// sequencer to go idle before issuing the next frame_req. That
+		// is not how the hardware works: frame_req comes from
+		// audio_out on a fixed period whatever the mixer is doing, and
+		// on a board with SDRAM the bus latency is long and variable.
+		//
+		// If a frame_req arrives while the sequencer is busy, ST_IDLE
+		// never sees it and the pulse is LOST -- that frame's samples
+		// are never latched and no channel advances its position. A
+		// few of those a second is static.
+		//
+		// So: drive frame_req free-running at the real period and
+		// count what the mixer actually completes.
+		stream_test(32'd1024, 2);     // 46875 Hz, fast memory
+		stream_test(32'd1024, 8);     // ...with a slower bus
+		stream_test(32'd1024, 20);    // ...SDRAM-like, contended
+		stream_test(32'd1024, 60);    // ...pathological
+		stream_test(32'd1024, 110);   // ...where it must finally break
 
 		$display("");
 		if (errors == 0)

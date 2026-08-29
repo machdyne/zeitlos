@@ -52,14 +52,24 @@
  * unresampled while ALSO feeding a digital output. That is not what
  * this machine does.
  *
- * -- RATE MUST BE EVEN --
+ * -- ANY RATE, ODD OR EVEN --
  *
- * A half-cell is rate/2 sys_clk, so an odd `rate` cannot be divided
- * evenly and the frame would need a one-cycle correction each time it
- * resyncs. 16 is the intended value; 17 (44117.6Hz, the analogue
- * default) is odd and will produce a slightly ragged line. The
- * transmitter still runs -- receivers tolerate far worse -- but a
- * board with S/PDIF should come up at 16.
+ * A half-cell is rate/2 sys_clk, which is not an integer for an odd
+ * rate. The divider below handles that by accumulating rather than
+ * dividing, so exactly 128 half-cells land in every frame whatever the
+ * rate. An odd rate costs half a cycle of edge jitter and nothing
+ * else.
+ *
+ * That matters because the rate is a RUNTIME register that any app can
+ * write, and the value every app actually asks for is 17. An earlier
+ * version required an even rate, said so only in a comment, and
+ * truncated when it got 17 -- producing a line 6.2% faster than the
+ * samples feeding it.
+ *
+ * What is still worth respecting is the RECEIVER's range: IEC 60958
+ * parts are typically specified for 32kHz and up, so the 22kHz and
+ * 11kHz settings in sw/common/zaudio.h are below what a DAC will lock
+ * to no matter how clean the line is. See z_audio_spdif_ok().
  *
  * -- FRAME FORMAT --
  *
@@ -112,15 +122,40 @@ module audio_spdif (
 	output reg spdif
 );
 
-	reg [7:0] div;
+	reg [15:0] acc;
 	reg [6:0] hc;          // half-cell within the frame, 0..127
 	reg [7:0] blkframe;    // frame within the 192-frame block
 	reg pre_inv;
 	reg signed [15:0] hold_l;
 	reg signed [15:0] hold_r;
 
-	wire [7:0] hc_div = (rate < 8'd4) ? 8'd2 : (rate >> 1);
-	wire tick = (div == 8'd0);
+	// FRACTIONAL half-cell divider.
+	//
+	// A frame is 64*rate sys_clk and carries exactly 128 half-cells,
+	// so a half-cell is rate/2 cycles -- which is not an integer for
+	// an odd rate. The first version did `rate >> 1` and TRUNCATED:
+	// at rate 17 it produced 8-cycle half-cells, so the line ran a
+	// 1024-cycle frame against the sample path's 1088. 46875 Hz of
+	// S/PDIF fed from 44118 Hz of samples, 6.2% apart, with nothing
+	// correcting it -- frames duplicated and dropped continuously, and
+	// the output was audibly wrong.
+	//
+	// The docs said "RATE must be even" and nothing enforced it, while
+	// the default rate every app asks for is 17. A constraint that is
+	// only written down is not a constraint.
+	//
+	// So instead of dividing, this accumulates: add 128 every cycle
+	// and emit a half-cell each time a frame period's worth has piled
+	// up. That puts EXACTLY 128 half-cells in every frame at any rate,
+	// odd or even, and makes drift structurally impossible rather than
+	// merely unlikely.
+	//
+	// The cost for an odd rate is that half-cells alternate between 8
+	// and 9 cycles: half a cycle, 10ns, on a 177ns cell. Receivers PLL
+	// to the stream and tolerate far more than that. An even rate
+	// divides exactly and has no jitter at all.
+	wire [15:0] frame_cycles = { 2'b0, rate, 6'b0 };   // 64 * rate
+	wire tick = (acc >= frame_cycles);
 
 	wire sub = hc[6];          // 0 = subframe A (left), 1 = B (right)
 	wire [5:0] pos = hc[5:0];  // half-cell within the subframe
@@ -176,7 +211,7 @@ module audio_spdif (
 
 		if (rst) begin
 
-			div <= 8'd0;
+			acc <= 16'd0;
 			hc <= 7'd0;
 			blkframe <= 8'd0;
 			pre_inv <= 1'b0;
@@ -208,9 +243,10 @@ module audio_spdif (
 				hold_r <= enable ? sample_r : 16'sd0;
 			end
 
+			acc <= tick ? (acc - frame_cycles + 16'd128) : (acc + 16'd128);
+
 			if (tick) begin
 
-				div <= hc_div - 8'd1;
 				hc <= hc + 7'd1;
 
 				if (hc == 7'd127) begin
@@ -236,10 +272,6 @@ module audio_spdif (
 					// hc+1 is odd: second half, transitions only for a 1
 					spdif <= data_bit ? ~spdif : spdif;
 				end
-
-			end else begin
-
-				div <= div - 8'd1;
 
 			end
 		end

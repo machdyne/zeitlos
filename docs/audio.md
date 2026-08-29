@@ -1005,13 +1005,39 @@ the mixer itself. The only case that would want it is playing 44.1 kHz
 material unresampled while also feeding a digital output, which is not
 what this machine does.
 
-### RATE must be even
+### Any rate, odd or even
 
-A half-cell is `rate/2` `sys_clk`, so an odd `rate` cannot be divided
-evenly. 16 is the intended value; the analogue default of 17
-(44117.6 Hz) is odd and produces a slightly ragged line. Receivers
-tolerate far worse, but a board with a transmitter should come up at
-16, which is what `AUDIO_RATE_RESET 8'd16` in `boards.vh` does.
+A half-cell is `rate/2` `sys_clk`, which is not an integer for an odd
+rate. The divider accumulates rather than dividing — it adds 128 every
+cycle and emits a half-cell each time a frame period's worth has piled
+up — so **exactly 128 half-cells land in every frame at any rate**, and
+drift is structurally impossible rather than merely unlikely.
+
+An odd rate costs half a cycle of edge jitter, 10 ns on a 177 ns cell.
+Receivers PLL to the stream and tolerate far more. An even rate divides
+exactly and has none.
+
+This replaced a `rate >> 1` that **truncated**. At rate 17 it produced
+8-cycle half-cells, so the line ran a 1024-cycle frame against the
+sample path's 1088: 46875 Hz of S/PDIF fed from 44118 Hz of samples,
+6.2% apart, frames duplicated and dropped continuously. The docs said
+"RATE must be even", nothing enforced it, and the rate every app asked
+for was 17. **A constraint that is only written down is not a
+constraint.**
+
+### What the receiver needs, which hardware cannot check
+
+IEC 60958 parts are typically specified from **32 kHz** up, so
+`Z_AUDIO_RATE_22K` and `Z_AUDIO_RATE_11K` are below what a DAC will
+lock to however clean the line is. `48e6 / (64 * RATE) >= 32000` means
+`RATE <= 23`.
+
+`z_audio_rate_ok()` in `sw/common/zaudio.h` answers this, and apps that
+offer a rate control should filter through it. They should also **start
+from whatever rate the board came up with** — `AUDIO_RATE_RESET` exists
+so a board can pick a rate its outputs can carry, and an app that
+overwrites it with a constant throws that away. Both `track` and
+`audiotest` used to do exactly that.
 
 ### Frame format
 

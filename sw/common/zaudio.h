@@ -104,6 +104,13 @@
 #define reg_audio_mixvol (*(volatile uint32_t*)0x70000520)
 #define reg_audio_mixstat (*(volatile uint32_t*)0x70000524)
 
+/* Bus read probe (rtl/audio_mixer.v): the address and the full 32-bit
+ * word of the mixer's LAST fetch. Read the same address from the CPU
+ * and compare -- if they differ, the mixer is not seeing what the CPU
+ * sees, and the fault is in the bus path rather than in the mixing. */
+#define reg_audio_mixdbg_adr (*(volatile uint32_t*)0x70000528)
+#define reg_audio_mixdbg_dat (*(volatile uint32_t*)0x7000052c)
+
 /*
  * Hardware mixer channel registers (rtl/audio_mixer.v).
  *
@@ -180,6 +187,7 @@
 #define Z_AUDIO_RATE_46K  16   // 46875.0 Hz -- see above
 #define Z_AUDIO_RATE_22K  34   // 22058.8 Hz
 #define Z_AUDIO_RATE_11K  68   // 11029.4 Hz
+
 
 /*
  * True only if this bitstream actually has the audio block.
@@ -400,6 +408,47 @@ static inline void z_audio_mixer_enable(bool on) {
 	if (on) c |= Z_AUDIO_CTRL_MIXEN;
 	else c &= ~Z_AUDIO_CTRL_MIXEN;
 	reg_audio_ctrl = c;
+}
+
+/*
+ * Lowest rate divider a digital output can carry.
+ *
+ * IEC 60958 receivers are typically specified from 32kHz up, so the
+ * 22kHz and 11kHz settings above are below what a DAC will lock to no
+ * matter how clean the line is -- 48e6/(64*RATE) has to stay at or
+ * above 32000, which means RATE <= 23.
+ *
+ * The transmitter itself does not care and will happily send 11kHz.
+ * The receiver on the other end is the constraint, and it is the one
+ * thing the FPGA cannot check.
+ */
+#define Z_AUDIO_RATE_MIN_SPDIF 23
+
+/*
+ * Is `rate_div` usable on this board?
+ *
+ * On a board with only analogue outputs, any rate is fine. With a
+ * transmitter, anything below 32kHz will not lock. Apps that offer a
+ * rate control should filter through this rather than assuming, and
+ * they should START from whatever rate the board came up with --
+ * `AUDIO_RATE_RESET` in boards.vh exists so a board can pick a rate
+ * its outputs can actually carry, and an app that overwrites it with a
+ * constant throws that away.
+ */
+static inline bool z_audio_rate_ok(uint32_t rate_div) {
+	if (rate_div < 2) return false;
+	if (z_audio_formats() & Z_AUDIO_FORMAT_SPDIF) {
+		/* Below 32kHz no receiver will lock. */
+		if (rate_div > Z_AUDIO_RATE_MIN_SPDIF) return false;
+		/* And EVEN, because a half-cell is rate/2. The transmitter
+		 * handles an odd rate with a fractional divider, but only in
+		 * a bitstream new enough to have it -- an older one truncates
+		 * and runs the line 6% fast, which is heard as static laid
+		 * over the music. Preferring even costs nothing and is
+		 * correct on both. */
+		if (rate_div & 1u) return false;
+	}
+	return true;
 }
 
 #endif

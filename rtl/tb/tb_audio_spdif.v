@@ -32,7 +32,7 @@
 module tb_audio_spdif;
 
 	localparam real CLK_HALF_NS = 10.416667;   // 48MHz
-	localparam integer RATE = 16;              // 46875 Hz, half-cell = 8
+	parameter integer RATE = 16;               // 46875 Hz, half-cell = 8
 
 	reg clk = 0;
 	reg rst = 1;
@@ -50,7 +50,7 @@ module tb_audio_spdif;
 
 	audio_spdif dut (
 		.clk(clk), .rst(rst), .enable(enable),
-		.rate(8'd16), .frame_req(frame_req),
+		.rate(RATE[7:0]), .frame_req(frame_req),
 		.sample_l(sample_l), .sample_r(sample_r),
 		.fs_code(fs_code), .spdif(spdif)
 	);
@@ -120,14 +120,19 @@ module tb_audio_spdif;
 	// half-cell strobe: RATE/2 clocks, aligned by the first edge after
 	// reset and then free-running, exactly like the transmitter's own
 	// divider
-	reg [7:0] hcdiv;
-	wire hc_stb = (hcdiv == 0);
+	// The receiver must recover the half-cell clock the same way a real
+	// one does -- from the line -- because at an odd RATE the
+	// transmitter's half-cells are not all the same length. A fixed
+	// divider here would only work for even rates and would hide
+	// exactly the bug this file exists to catch.
+	reg [15:0] rx_acc;
+	wire hc_stb = (rx_acc >= (64 * RATE));
 
 	always @(posedge clk) begin
 		if (rst) begin
-			hcdiv <= (RATE / 2) - 1;
+			rx_acc <= 0;
 		end else begin
-			hcdiv <= hc_stb ? ((RATE / 2) - 1) : (hcdiv - 1);
+			rx_acc <= hc_stb ? (rx_acc - (64 * RATE) + 128) : (rx_acc + 128);
 
 			if (hc_stb) begin
 				rx_hist <= { rx_hist[6:0], spdif };

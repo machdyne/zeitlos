@@ -165,7 +165,18 @@ module audio_mixer #(
 	output reg signed [15:0] out_r,
 
 	// bit per channel, for software to see what is still sounding
-	output wire [7:0] active_o
+	output wire [7:0] active_o,
+
+	// -- bus read probe --
+	//
+	// The address and the full word of the LAST fetch this block made.
+	// Software can read the same address itself and compare: if they
+	// differ, the mixer is not seeing what the CPU sees and the fault
+	// is in the bus path, not in the mixing. Nothing else can
+	// distinguish "the mixer reads the wrong bytes" from "the mixer
+	// mixes them wrongly" without an oscilloscope.
+	output reg [31:0] dbg_adr_o,
+	output reg [31:0] dbg_dat_o
 );
 
 	localparam integer CHANNELS = (1 << CH_BITS);
@@ -274,7 +285,27 @@ module audio_mixer #(
 
 	assign m_dat_o = 32'h0000_0000;
 	assign m_we_o = 1'b0;
-	assign m_sel_o = 4'b1111;
+	// READ. On this bus that means sel = 0, NOT 1111.
+	//
+	// rtl/mem/sdram_kianv.v ignores wb_we_i completely and decides
+	// read-versus-write on `wb_sel_i == 4'b0000`. Driving all-ones
+	// with we low therefore does not request a read -- it performs a
+	// WRITE of wb_dat_i, which this block ties to zero.
+	//
+	// So the mixer was erasing the very sample data it was trying to
+	// play, one word per fetch, and getting stale bus content back
+	// because no read ever happened. It looked exactly like a
+	// corrupted bus: the mixer returned instruction words and
+	// pointers, and the CPU's own buffer came back zeroed after the
+	// mixer had run over it.
+	//
+	// Obst never showed it. rtl/mem/sram.v honours we, so the same
+	// cycle was a harmless read there, and the mixer worked.
+	//
+	// rtl/gpu/gpu_blit.v follows the same convention -- 4'b0000 to
+	// read, 4'b1111 to write. This block is the odd one out and was
+	// wrong from the day it was written.
+	assign m_sel_o = 4'b0000;
 	assign active_o = { {(8-CHANNELS){1'b0}}, ch_active };
 
 	// Trigger decode for a CPU write to a channel's CTRL word. Bit 17
@@ -309,6 +340,8 @@ module audio_mixer #(
 			m_stb_o <= 1'b0;
 			m_cyc_o <= 1'b0;
 			m_adr_o <= 32'h0000_0000;
+			dbg_adr_o <= 32'h0000_0000;
+			dbg_dat_o <= 32'h0000_0000;
 			mul_a <= 24'sd0;
 			mul_b <= 8'd0;
 			mul_r <= 33'sd0;
@@ -433,6 +466,8 @@ module audio_mixer #(
 					end else if (m_ack_i) begin
 						m_cyc_o <= 1'b0;
 						m_stb_o <= 1'b0;
+						dbg_adr_o <= { cur_addr[31:2], 2'b00 };
+						dbg_dat_o <= m_dat_i;
 						case (cur_byte)
 							2'd0: sample <= m_dat_i[7:0];
 							2'd1: sample <= m_dat_i[15:8];
