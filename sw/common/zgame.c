@@ -9,11 +9,11 @@
 
 #include "zgame.h"
 
-bool z_game_begin(z_game_t *g, bool wrap) {
+bool z_game_begin(z_game_t *g, z_game_scroll_t orient, bool wrap) {
 
+	g->orient = orient;
 	g->back = 1;
-	g->cam_x = 0;
-	g->cam_y = 0;
+	g->cam = 0;
 	g->wrap = wrap;
 	g->last_frame = 0;
 
@@ -28,7 +28,8 @@ bool z_game_begin(z_game_t *g, bool wrap) {
 	 * alternative, clearing it here, produces a flash of black on
 	 * every entry into game mode, and a caller that cares can clear
 	 * both pages itself before its first flip. */
-	z_game_set_view(0, Z_GAME_PAGE_Y(0));
+	z_game_set_view((uint32_t)Z_GAME_PAGE_X(orient, 0),
+		(uint32_t)Z_GAME_PAGE_Y(orient, 0));
 
 	g->last_frame = z_game_frame();
 
@@ -41,18 +42,18 @@ void z_game_end(z_game_t *g) {
 	z_game_set_enabled(false, false);
 }
 
-void z_game_camera_to(z_game_t *g, int32_t world_x, int32_t world_w) {
+void z_game_camera_to(z_game_t *g, int32_t world_pos, int32_t world_len) {
 
-	/* Clamp so the RIGHT edge of the viewport stops at the end of the
-	 * world, not the left edge -- otherwise the last 320 columns of a
-	 * level can never be looked at. */
-	int32_t max_x = world_w - Z_GAME_VIEW_W;
-	if (max_x < 0) max_x = 0;
+	/* Clamp so the FAR edge of the viewport stops at the end of the
+	 * world, not the near edge -- otherwise the last viewport's worth
+	 * of a level could never be looked at. */
+	int32_t max_pos = world_len - Z_GAME_VIEW_SPAN(g->orient);
+	if (max_pos < 0) max_pos = 0;
 
-	if (world_x < 0) world_x = 0;
-	if (world_x > max_x) world_x = max_x;
+	if (world_pos < 0) world_pos = 0;
+	if (world_pos > max_pos) world_pos = max_pos;
 
-	g->cam_x = world_x;
+	g->cam = world_pos;
 
 }
 
@@ -60,10 +61,19 @@ uint32_t z_game_flip(z_game_t *g) {
 
 	uint32_t now, elapsed;
 
-	/* The camera's framebuffer x is the world position folded into the
-	 * page's 640-column torus; its y selects which half-page. */
-	z_game_set_view((uint32_t)z_game_page_col(g->cam_x),
-		(uint32_t)(Z_GAME_PAGE_Y(g->back) + g->cam_y));
+	/* Along the scrolling axis the camera is the world position folded
+	 * into the page's torus; along the other it is simply the page
+	 * origin, which is what keeps that axis clear of the wrap
+	 * boundary. */
+	{
+		int fold = z_game_fold(g->orient, g->cam);
+		if (g->orient == Z_GAME_SCROLL_H)
+			z_game_set_view((uint32_t)fold,
+				(uint32_t)Z_GAME_PAGE_Y(g->orient, g->back));
+		else
+			z_game_set_view((uint32_t)Z_GAME_PAGE_X(g->orient, g->back),
+				(uint32_t)fold);
+	}
 
 	z_game_wait_frame();
 
@@ -85,8 +95,8 @@ uint32_t z_game_flip(z_game_t *g) {
 bool z_game_scroll_span(z_game_t *g, int32_t *from, int32_t *to) {
 
 	int b = g->back;
-	int32_t want_from = g->cam_x;
-	int32_t want_to = g->cam_x + Z_GAME_VIEW_W;
+	int32_t want_from = g->cam;
+	int32_t want_to = g->cam + Z_GAME_VIEW_SPAN(g->orient);
 
 	/* Nothing recorded for this page -- everything is new. */
 	if (g->drawn_from[b] >= g->drawn_to[b]) {
@@ -110,15 +120,15 @@ bool z_game_scroll_span(z_game_t *g, int32_t *from, int32_t *to) {
 		return true;
 	}
 
-	/* The ordinary case: scrolling right, so the new columns are on
-	 * the right. */
+	/* The ordinary case: advancing, so the new strip is at the high
+	 * end. */
 	if (want_to > g->drawn_to[b]) {
 		*from = g->drawn_to[b];
 		*to = want_to;
 		return true;
 	}
 
-	/* Scrolling left. */
+	/* Retreating. */
 	*from = want_from;
 	*to = g->drawn_from[b];
 	return true;
@@ -148,13 +158,16 @@ void z_game_mark_drawn(z_game_t *g, int32_t from, int32_t to) {
 	if (from < g->drawn_from[b]) g->drawn_from[b] = from;
 	if (to > g->drawn_to[b]) g->drawn_to[b] = to;
 
-	/* A page is a 640-wide torus: it cannot hold more than 640
-	 * distinct world columns, and claiming otherwise would mean
-	 * skipping a redraw of columns that have genuinely been
-	 * overwritten by the wrap. Trim from the left, since the right is
-	 * the leading edge and is what was just drawn. */
-	if (g->drawn_to[b] - g->drawn_from[b] > Z_GAME_PAGE_W)
-		g->drawn_from[b] = g->drawn_to[b] - Z_GAME_PAGE_W;
+	/* A page is a torus: it cannot hold more distinct world positions
+	 * than its own span, and claiming otherwise would mean skipping a
+	 * redraw of a strip the wrap has genuinely overwritten. Trim from
+	 * the low end, since the high end is the leading edge and is what
+	 * was just drawn. */
+	{
+		int32_t span = Z_GAME_PAGE_SPAN(g->orient);
+		if (g->drawn_to[b] - g->drawn_from[b] > span)
+			g->drawn_from[b] = g->drawn_to[b] - span;
+	}
 
 }
 
