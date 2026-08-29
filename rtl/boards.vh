@@ -254,6 +254,18 @@
 // reached, and `GAME above stops being a nice extra and becomes the
 // thing that makes the machine usable at all.
 //
+// OFF BY DEFAULT ON EVERY BOARD, and these two lines are the switch.
+// They are not per-board because a board does not "have" composite the
+// way it has a DAC or an ethernet PHY -- Lakritz has the four pins
+// either way, and which of its two video outputs is built is a choice
+// made per bitstream, not per board.
+//
+// Lakritz is the one board wired for it today: boards/lakritz_v0.lpf
+// carries COMP_DAC[3:0] on P1/R1/P2/N4, commented out, waiting for
+// this. Enabling composite there means uncommenting BOTH those pins
+// and `GPU_COMPOSITE here, AND commenting out `GPU_DDMI in the Lakritz
+// block below -- see that .lpf's own note.
+//
 //`define GPU_COMPOSITE
 //`define GPU_COMPOSITE_PAL
 

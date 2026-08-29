@@ -101,9 +101,37 @@ to 1Vpp into a terminated 75Ω line. Exact values are not critical — a
 receiver cares about the *ratio* of sync to picture, which the ladder
 sets, far more than absolute amplitude.
 
-A board defining `GPU_COMPOSITE` must add `COMP_DAC[3:0]` to its own
-`.lpf`/`.ccf`. **No board in this tree does yet** — composite needs four
-pins and a handful of resistors none of them have.
+### Lakritz
+
+Lakritz is wired for this: `COMP_DAC[3:0]` on **P1, R1, P2, N4**, in
+`boards/lakritz_v0.lpf` — the same four pins that file has carried as
+`VIDEO_D0..D3` since before any of this existed, renamed to match the
+bus port in `sysctl.v`.
+
+They are **commented out, and composite is off by default**, which is
+deliberate. `GPU_COMPOSITE` is off in `boards.vh`, and on a build
+without it `sysctl.v` does not declare `COMP_DAC` at all — so a live
+`LOCATE` would reference a port the top module does not have on every
+ordinary Lakritz build.
+
+To turn it on, three edits that belong together:
+
+1. uncomment `GPU_COMPOSITE` (and optionally `GPU_COMPOSITE_PAL`) in
+   `rtl/boards.vh`
+2. uncomment the four `COMP_DAC` lines in `boards/lakritz_v0.lpf`
+3. comment out `GPU_DDMI` in the Lakritz board block
+
+Step 3 is not optional — composite and DDMI cannot coexist. `sysctl.v`
+suppresses the DDMI port declarations on a composite build, so
+forgetting it fails loudly at place-and-route rather than producing a
+board that drives HDMI pins with 15.7 kHz sync.
+
+These are off per **bitstream**, not per board: Lakritz has the pins
+either way, and which of its two video outputs is built is a choice
+made at build time.
+
+Any other board wanting composite must add `COMP_DAC[3:0]` to its own
+`.lpf`/`.ccf`.
 
 ## Sync
 
