@@ -251,7 +251,7 @@
 `define MEM_ROM
 `define MEM_GLYPH
 `define ICACHE
-`define ICACHE_KB 4
+`define ICACHE_KB 8
 `define ICACHE_LINE_WORDS 4
 `define GPU
 `define GPU_RASTER
@@ -276,7 +276,7 @@
 `define MEM_ROM
 `define MEM_GLYPH
 `define ICACHE
-`define ICACHE_KB 4
+`define ICACHE_KB 8
 `define ICACHE_LINE_WORDS 4
 `define GPU
 `define GPU_RASTER
