@@ -20,6 +20,7 @@ all:
 	cd space3d && make
 	cd audiotest && make
 	cd track && make
+	cd gamedemo && make
 
 clean:
 	cd gpudemo && make clean
@@ -43,3 +44,4 @@ clean:
 	cd space3d && make clean
 	cd audiotest && make clean
 	cd track && make clean
+	cd gamedemo && make clean

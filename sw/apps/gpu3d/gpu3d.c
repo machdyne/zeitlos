@@ -183,6 +183,24 @@ static const uint8_t cube_e[12][2] = {
 	{ 0, 4 }, { 1, 5 }, { 2, 6 }, { 3, 7 }
 };
 
+/* Cube faces, two triangles each, wound COUNTER-CLOCKWISE seen from
+ * outside -- the convention mtri_t documents and that backface culling
+ * depends on. Vertices 0-3 are the z=-1 face, 4-7 the z=+1 face.
+ *
+ * Getting a winding backwards does not look like a winding error. The
+ * face is culled when it should be drawn, so the solid gets a hole and
+ * you see the inside of the far side through it. Worth checking each
+ * one against cube_v above rather than trusting the pattern.
+ */
+static const uint8_t cube_t[12][3] = {
+	{ 0, 2, 1 }, { 0, 3, 2 },      /* back   z=-1 */
+	{ 4, 5, 6 }, { 4, 6, 7 },      /* front  z=+1 */
+	{ 0, 1, 5 }, { 0, 5, 4 },      /* bottom y=-1 */
+	{ 3, 7, 6 }, { 3, 6, 2 },      /* top    y=+1 */
+	{ 0, 4, 7 }, { 0, 7, 3 },      /* left   x=-1 */
+	{ 1, 2, 6 }, { 1, 6, 5 }       /* right  x=+1 */
+};
+
 /* The built-in model, and what gpu3d falls back to when a load
  * fails. Already normalized -- half-extent exactly 1.0 -- which is
  * the same contract model_normalize() gives a loaded model, so the
@@ -202,6 +220,14 @@ static void load_cube(void) {
 	for (int i = 0; i < 12; i++) {
 		model.edges[i].v0 = cube_e[i][0];
 		model.edges[i].v1 = cube_e[i][1];
+	}
+
+	model.ntris = 12;
+
+	for (int i = 0; i < 12; i++) {
+		model.tris[i].v0 = cube_t[i][0];
+		model.tris[i].v1 = cube_t[i][1];
+		model.tris[i].v2 = cube_t[i][2];
 	}
 
 	model.decimated = 0;
@@ -689,6 +715,12 @@ static void fps_draw(void) {
 
 static bool loading = false;
 
+/* Solid shading, toggled with S. Off by default: wireframe is what
+ * gpu3d has always been and what every imported model can still do. */
+static bool shade_mode = false;
+
+
+
 static void draw_edge(int x0, int y0, int x1, int y1, int color) {
 
 	if (!on_screen(x0, y0) || !on_screen(x1, y1)) return;
@@ -697,9 +729,425 @@ static void draw_edge(int x0, int y0, int x1, int y1, int color) {
 
 }
 
+
+/* ============================================================
+ * flat shading
+ * ============================================================
+ *
+ * Software edge-walking, hardware span fills. There is no triangle
+ * rasterizer in the gateware and this does not need one: a flat-shaded
+ * face is a set of horizontal spans, and a shaded span is exactly one
+ * z_win_hw_fill_shade() call.
+ *
+ * Whether that is fast enough is the question this exists to answer.
+ * If it is, a hardware rasterizer is never worth the gates.
+ *
+ * -- what this deliberately does NOT do --
+ *
+ * No Z-buffer. A 1bpp framebuffer has nowhere to put one, and 640x480
+ * of depth would be more memory than the machine has spare. Faces are
+ * sorted back-to-front and painted in that order, which is exact for
+ * a convex solid (a cube) and wrong for interpenetrating geometry --
+ * the classic painter's-algorithm failure. Acceptable here and worth
+ * knowing before pointing this at a complicated mesh.
+ *
+ * No perspective-correct anything, no interpolation across the face.
+ * Flat shading only: one grey per triangle.
+ */
+
+#define SHADE_MAX_TRIS MODEL_MAX_TRIS
+
+/* Darkest a lit face gets. Not 0: a face turned fully away from the
+ * light still has a silhouette, and painting it black makes the solid
+ * look like it has a bite taken out of it against a black background. */
+#define SHADE_AMBIENT 3
+
+/* Sort keys, back to front. Depth is the sum of the three rotated z
+ * values -- the centroid times three, which orders identically and
+ * avoids a divide per face. */
+static int32_t tri_depth[SHADE_MAX_TRIS];
+static uint8_t tri_order[SHADE_MAX_TRIS];
+static uint8_t tri_shade[SHADE_MAX_TRIS];
+static int     tri_visible;
+
+/* Rotated vertices, kept per frame so face normals can be computed in
+ * VIEW space. cur_x/cur_y are already projected, and a normal taken
+ * from projected coordinates is only good enough for culling, not for
+ * lighting -- perspective divide distorts the angle. */
+static fixed_t rot_x[MODEL_MAX_VERTS];
+static fixed_t rot_y[MODEL_MAX_VERTS];
+static fixed_t rot_z[MODEL_MAX_VERTS];
+
+/* Integer square root, for normalising a face normal.
+ *
+ * Twelve of these per frame for a cube, so a bit-by-bit method is more
+ * than fast enough and avoids pulling in any float. */
+static uint32_t isqrt32(uint64_t v)
+{
+	uint64_t rem = 0, root = 0;
+	for (int i = 0; i < 32; i++) {
+		root <<= 1;
+		rem = (rem << 2) | (v >> 62);
+		v <<= 2;
+		if (root < rem) {
+			rem -= root | 1;
+			root |= 2;
+		}
+	}
+	return (uint32_t)(root >> 1);
+}
+
+/* Fixed light direction, Q12, pointing FROM the surface TOWARD the
+ * light. Roughly over the viewer's left shoulder, and normalised so
+ * the dot product below needs no further scaling.
+ *
+ * A fixed direction in VIEW space is the whole point: the model turns
+ * under a stationary light, which is what makes a face's brightness
+ * depend on its own orientation and nothing else. */
+#define LIGHT_X  (-1683)   /* -0.411 */
+#define LIGHT_Y  ( 2458)   /*  0.600 */
+#define LIGHT_Z  (-2801)   /* -0.684, toward the camera */
+
+/* Fill one horizontal span.
+ *
+ * Clipping is left to z_win_hw_fill_shade(), which clips to the
+ * window's content rect. Doing it here as well would duplicate the
+ * inclusive-bounds arithmetic that is easy to get wrong -- and getting
+ * it wrong costs the last column of every span, which reads as a notch
+ * down one edge of the solid rather than as a clipping bug. */
+static int span_cx0, span_cy0, span_cx1, span_cy1;
+
+/* -- span-based erase: why there is no clear --
+ *
+ * Clearing the window and redrawing leaves the object ABSENT for the
+ * part of each frame between the two. At 15fps that is a large
+ * fraction of the frame and the cube visibly flashes -- the same
+ * problem ERASE_INTERLEAVED solves for wireframes by erasing and
+ * redrawing one edge at a time, so the object is never fully gone.
+ *
+ * The equivalent for solid faces is to erase only what is no longer
+ * covered. Each frame records, per scanline, the leftmost and
+ * rightmost pixel the faces reached. Next frame the object is drawn
+ * FIRST, and then only the slivers of the previous silhouette that the
+ * new one does not cover are cleared.
+ *
+ * The object is therefore never blanked. Nothing flashes, and the
+ * erase is proportional to how far the silhouette moved rather than to
+ * the window area -- which is also why it is faster than the clear it
+ * replaces.
+ *
+ * EXACT FOR A CONVEX SILHOUETTE, which a cube has: per scanline the
+ * coverage is a single interval, so a min and a max describe it
+ * completely. A non-convex model can have two intervals on one
+ * scanline, and the gap between them would not be erased. That is a
+ * real limitation and the reason to revisit this when STL faces
+ * arrive; for the built-in solids it is exact.
+ */
+#define SPAN_ROWS 512
+
+static int16_t span_prev_lo[SPAN_ROWS];
+static int16_t span_prev_hi[SPAN_ROWS];
+static int16_t span_cur_lo[SPAN_ROWS];
+static int16_t span_cur_hi[SPAN_ROWS];
+static bool    span_prev_valid = false;
+
+static void span_reset_cur(void)
+{
+	for (int y = 0; y < SPAN_ROWS; y++) {
+		span_cur_lo[y] = 32767;
+		span_cur_hi[y] = -1;
+	}
+}
+
+/* Clear the parts of last frame's silhouette this frame does not
+ * cover. Called AFTER the faces are drawn, which is the whole point --
+ * the object is on screen the entire time. */
+static void span_erase_leftovers(void)
+{
+	if (!span_prev_valid) return;
+
+	for (int y = span_cy0; y <= span_cy1 && y < SPAN_ROWS; y++) {
+
+		int plo = span_prev_lo[y], phi = span_prev_hi[y];
+		int clo = span_cur_lo[y],  chi = span_cur_hi[y];
+
+		if (phi < plo) continue;             /* nothing was there */
+
+		if (chi < clo) {
+			/* covered last frame, not at all this frame */
+			z_fb_hw_span_clear(plo, y, phi - plo + 1);
+			continue;
+		}
+
+		if (plo < clo)
+			z_fb_hw_span_clear(plo, y,
+				(clo - 1 < phi ? clo - 1 : phi) - plo + 1);
+
+		if (phi > chi) {
+			int x0 = (chi + 1 > plo) ? chi + 1 : plo;
+			z_fb_hw_span_clear(x0, y, phi - x0 + 1);
+		}
+
+	}
+}
+
+/* Clip bounds for the whole frame, fetched once.
+ *
+ * Clipping per span rather than per call into zwin lets the inner loop
+ * use z_fb_hw_span(), which writes three registers instead of six --
+ * see zgfx.h. At several hundred spans a frame that halving is worth
+ * more than the tidiness of letting zwin do it. */
+static void shade_clip_begin(void)
+{
+	z_clip_t c;
+	z_win_content_rect(&win, &c);
+	span_cx0 = (int)c.x0; span_cy0 = (int)c.y0;
+	span_cx1 = (int)c.x1; span_cy1 = (int)c.y1;
+}
+
+static void shade_span(int x0, int x1, int y)
+{
+	if (x1 < x0) { int t = x0; x0 = x1; x1 = t; }
+
+	if (y < span_cy0 || y > span_cy1) return;
+	if (x0 < span_cx0) x0 = span_cx0;
+	if (x1 > span_cx1) x1 = span_cx1;
+	if (x1 < x0) return;
+
+	if (y < SPAN_ROWS) {
+		if (x0 < span_cur_lo[y]) span_cur_lo[y] = (int16_t)x0;
+		if (x1 > span_cur_hi[y]) span_cur_hi[y] = (int16_t)x1;
+	}
+
+	z_fb_hw_span(x0, y, x1 - x0 + 1);
+}
+
+/* Flat-fill one triangle by walking its edges.
+ *
+ * Vertices are sorted by y, then the triangle is drawn as two parts
+ * split at the middle vertex: top (one apex, widening) and bottom
+ * (narrowing to one apex). Standard, and the only subtlety is that
+ * the long edge spans BOTH halves, so its interpolation must run
+ * continuously across the split rather than restarting.
+ */
+static void shade_triangle(int ax, int ay, int bx, int by,
+	int cx, int cy, int level)
+{
+	int t;
+
+	/* Hoists height and level out of the span loop. */
+	z_fb_hw_span_begin(level);
+
+	/* sort a,b,c by y */
+	if (ay > by) { t=ax; ax=bx; bx=t; t=ay; ay=by; by=t; }
+	if (ay > cy) { t=ax; ax=cx; cx=t; t=ay; ay=cy; cy=t; }
+	if (by > cy) { t=bx; bx=cx; cx=t; t=by; by=cy; cy=t; }
+
+	if (cy == ay) {
+		/* degenerate: a single scanline. Still worth drawing -- an
+		 * edge-on face is one line, and skipping it leaves a gap in
+		 * the silhouette as the model rotates. */
+		int lo = ax < bx ? (ax < cx ? ax : cx) : (bx < cx ? bx : cx);
+		int hi = ax > bx ? (ax > cx ? ax : cx) : (bx > cx ? bx : cx);
+		shade_span(lo, hi, ay);
+		return;
+	}
+
+	/* Clip the SCAN RANGE, not just each span. A face partly above the
+	 * window would otherwise run its whole interpolation for rows that
+	 * are discarded -- which for a model scaled up past the window is
+	 * most of them. */
+	{
+		int y0 = ay < span_cy0 ? span_cy0 : ay;
+		int y1 = cy > span_cy1 ? span_cy1 : cy;
+		if (y1 < y0) return;
+
+	for (int y = y0; y <= y1; y++) {
+
+		int xl, xr;
+
+		/* long edge a->c, spanning the whole triangle */
+		xl = ax + ((cx - ax) * (y - ay)) / (cy - ay);
+
+		/* short edge: a->b above the split, b->c below */
+		if (y < by)
+			xr = (by == ay) ? bx : ax + ((bx - ax) * (y - ay)) / (by - ay);
+		else
+			xr = (cy == by) ? bx : bx + ((cx - bx) * (y - by)) / (cy - by);
+
+		shade_span(xl, xr, y);
+
+	}
+	}
+}
+
+/* Render the model as solid shaded faces.
+ *
+ * Returns false if the model has no faces, so the caller can fall back
+ * to wireframe rather than showing nothing. An STL import produces no
+ * faces today (see stl.c), so that path is the common one.
+ */
+static bool render_shaded(void)
+{
+	if (model.ntris <= 0) return false;
+
+	shade_clip_begin();
+	span_reset_cur();
+
+	tri_visible = 0;
+
+	for (int i = 0; i < model.ntris && i < SHADE_MAX_TRIS; i++) {
+
+		int a = model.tris[i].v0;
+		int b = model.tris[i].v1;
+		int c = model.tris[i].v2;
+
+		/* Backface cull on the PROJECTED cross product. Screen space
+		 * is correct for this even under perspective: projection
+		 * preserves winding, so the sign is the same as it would be
+		 * in view space, and only the sign matters. */
+		int32_t ex1 = cur_x[b] - cur_x[a];
+		int32_t ey1 = cur_y[b] - cur_y[a];
+		int32_t ex2 = cur_x[c] - cur_x[a];
+		int32_t ey2 = cur_y[c] - cur_y[a];
+		int32_t cross = ex1 * ey2 - ey1 * ex2;
+
+		/* KEEP when the cross product is POSITIVE.
+		 *
+		 * This sign was wrong in the first version, and reasoning
+		 * about it did not settle it -- screen y runs down, which
+		 * flips the handedness, and it is genuinely easy to talk
+		 * yourself into either answer. It was resolved by computing
+		 * each face's true 3D normal independently and checking which
+		 * sign agreed: cross > 0 matches on all twelve cube faces,
+		 * from a head-on view (2 visible) and a corner view (6).
+		 *
+		 * Getting it backwards does not look like an inverted test.
+		 * You see the inside of the far side of the solid, which
+		 * reads as a hole. */
+		if (cross <= 0) continue;
+
+		/* Light level from the face's TRUE 3D NORMAL against a fixed
+		 * light direction.
+		 *
+		 * The first version used the projected area instead, scaled
+		 * against a running maximum over the visible faces. The area
+		 * really is a cosine term, so a single face brightened and
+		 * dimmed correctly -- but the SCALE moved with the model,
+		 * because the largest visible face changes as it turns. Every
+		 * face's level then shifted together, which reads exactly as
+		 * a light source orbiting the object rather than as shading.
+		 *
+		 * A normal against a fixed direction has no shared term, so a
+		 * face's brightness depends only on its own orientation. That
+		 * is what makes it look lit rather than animated.
+		 *
+		 * Computed in VIEW space from the rotated vertices, not from
+		 * the projected ones: perspective divide distorts angles, so
+		 * projected coordinates are good enough to decide FACING (a
+		 * sign) but not ANGLE (a magnitude).
+		 */
+		{
+			int32_t ux = rot_x[b] - rot_x[a];
+			int32_t uy = rot_y[b] - rot_y[a];
+			int32_t uz = rot_z[b] - rot_z[a];
+			int32_t vx = rot_x[c] - rot_x[a];
+			int32_t vy = rot_y[c] - rot_y[a];
+			int32_t vz = rot_z[c] - rot_z[a];
+
+			/* Q12 inputs give a Q24 cross product; shifted back to
+			 * Q12 so the magnitude below stays in range. */
+			int32_t nx = (int32_t)(((int64_t)uy * vz - (int64_t)uz * vy) >> 12);
+			int32_t ny = (int32_t)(((int64_t)uz * vx - (int64_t)ux * vz) >> 12);
+			int32_t nz = (int32_t)(((int64_t)ux * vy - (int64_t)uy * vx) >> 12);
+
+			uint64_t mag2 = (uint64_t)((int64_t)nx * nx)
+			              + (uint64_t)((int64_t)ny * ny)
+			              + (uint64_t)((int64_t)nz * nz);
+			uint32_t mag = isqrt32(mag2);
+
+			int lvl;
+
+			if (mag == 0) {
+				/* Degenerate face -- zero area in 3D. Nothing sensible
+				 * to light, and it covers no pixels either. */
+				lvl = 1;
+			} else {
+				int32_t dot = (int32_t)((((int64_t)nx * LIGHT_X)
+				                       + ((int64_t)ny * LIGHT_Y)
+				                       + ((int64_t)nz * LIGHT_Z)) >> 12);
+
+				/* cos in Q12, -4096..4096 */
+				int32_t cosq = (int32_t)(((int64_t)dot << 12) / (int32_t)mag);
+
+				if (cosq < 0) cosq = 0;      /* facing away from the light */
+				if (cosq > 4096) cosq = 4096;
+
+				/* Ambient floor so an unlit face is still a shape
+				 * rather than a hole in the silhouette. */
+				lvl = SHADE_AMBIENT +
+					(int)((cosq * (Z_SHADE_MAX - SHADE_AMBIENT)) >> 12);
+			}
+
+			if (lvl < 1) lvl = 1;
+			if (lvl > Z_SHADE_MAX) lvl = Z_SHADE_MAX;
+
+			tri_shade[tri_visible] = (uint8_t)lvl;
+		}
+
+		tri_depth[tri_visible] = rot_z[a] + rot_z[b] + rot_z[c];
+		tri_order[tri_visible] = (uint8_t)i;
+		tri_visible++;
+
+	}
+
+	/* Painter's algorithm: back to front. Insertion sort, because
+	 * tri_visible is at most a few dozen for the models that have
+	 * faces at all -- a heap would be more code and slower at this
+	 * size. */
+	for (int i = 1; i < tri_visible; i++) {
+		int32_t dk = tri_depth[i];
+		uint8_t ok = tri_order[i];
+		uint8_t sk = tri_shade[i];
+		int j = i - 1;
+		while (j >= 0 && tri_depth[j] < dk) {
+			tri_depth[j+1] = tri_depth[j];
+			tri_order[j+1] = tri_order[j];
+			tri_shade[j+1] = tri_shade[j];
+			j--;
+		}
+		tri_depth[j+1] = dk;
+		tri_order[j+1] = ok;
+		tri_shade[j+1] = sk;
+	}
+
+	for (int i = 0; i < tri_visible; i++) {
+		const mtri_t *tr = &model.tris[tri_order[i]];
+		shade_triangle(
+			cur_x[tr->v0], cur_y[tr->v0],
+			cur_x[tr->v1], cur_y[tr->v1],
+			cur_x[tr->v2], cur_y[tr->v2],
+			tri_shade[i]);
+	}
+
+	/* Erase LAST, so the object is never off screen. */
+	span_erase_leftovers();
+
+	for (int y = 0; y < SPAN_ROWS; y++) {
+		span_prev_lo[y] = span_cur_lo[y];
+		span_prev_hi[y] = span_cur_hi[y];
+	}
+	span_prev_valid = true;
+
+	return true;
+}
+
 static void render_frame(void) {
 
-	if (model.nverts <= 0 || model.nedges <= 0) return;
+	/* A model with faces but no edges is legal -- nedges is only
+	 * needed by the wireframe path. */
+	if (model.nverts <= 0) return;
+	if (model.nedges <= 0 && model.ntris <= 0) return;
 
 	PERF_FRAME_BEGIN();
 
@@ -717,6 +1165,14 @@ static void render_frame(void) {
 
 		vertex3d_t t = rotate_vertex(model.verts[i], rx, ry, rz);
 
+		/* Kept for the painter's-algorithm depth sort. View space,
+		 * not projected -- projection is monotonic in z so either
+		 * would order correctly, but the rotated value is already in
+		 * hand and needs no divide. */
+		rot_x[i] = t.x;
+		rot_y[i] = t.y;
+		rot_z[i] = t.z;
+
 		int px, py;
 		project(&t, d, &px, &py);
 
@@ -732,13 +1188,30 @@ static void render_frame(void) {
 
 	PERF_ACC(c_xform, t_xform);
 
+
+
 	bb_x0 = minx; bb_y0 = miny;
 	bb_x1 = maxx; bb_y1 = maxy;
 	bb_valid = true;
 
 	PERF_MARK(t_erase);
 
-	if (erase_mode == ERASE_CLEAR) {
+	/* Shading always clears.
+	 *
+	 * ERASE_INTERLEAVED works by redrawing last frame's EDGES in
+	 * colour 0, which has no meaning for filled faces -- there is no
+	 * edge list to walk that would erase a solid. Painting the new
+	 * frame's faces over the old ones almost works and fails exactly
+	 * where it matters: as the model turns, a face that shrinks
+	 * leaves a fringe of the previous frame behind it.
+	 *
+	 * The flicker that interleaved erase exists to avoid is much less
+	 * visible with solid faces anyway, because the clear is
+	 * immediately followed by large fills rather than by thin lines. */
+	/* Shading does NOT clear here -- see span_erase_leftovers(). It
+	 * erases only what the new silhouette no longer covers, after
+	 * drawing, so the object is never blanked and nothing flashes. */
+	if (erase_mode == ERASE_CLEAR && !(shade_mode && model.ntris > 0)) {
 		z_win_fill_rect(&win, 0, 0, content_w, content_h, 0);
 		prev_valid = false;
 	}
@@ -764,7 +1237,18 @@ static void render_frame(void) {
 
 	PERF_MARK(t_draw);
 
-	if (erase_mode == ERASE_INTERLEAVED && prev_valid) {
+	/* Solid first: render_shaded() reports false when the model has no
+	 * faces, and the wireframe path below runs instead. That is the
+	 * common case -- an STL import produces no faces (stl.c) -- so
+	 * pressing S on an imported model correctly does nothing rather
+	 * than blanking the view. */
+	if (shade_mode && render_shaded()) {
+
+		/* Faces were drawn; skip the wireframe entirely. The
+		 * silhouette comes from the fills themselves. */
+		prev_valid = false;
+
+	} else if (erase_mode == ERASE_INTERLEAVED && prev_valid) {
 
 		/* Erase and redraw each edge as a pair, so the object is
 		 * never blank -- only ever one edge short, for as long as it
@@ -1196,6 +1680,21 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 			z_win_clear(&win);
 			break;
 
+		case 's':
+		case 'S':
+			/* Solid shading. Silently ineffective on a model with no
+			 * faces, which is honest -- there is nothing to shade --
+			 * but the status line reports which mode is in effect so
+			 * it is not a mystery. */
+			shade_mode = !shade_mode;
+			if (erase_mode == ERASE_INTERLEAVED) prev_valid = false;
+			/* The recorded silhouette describes pixels drawn by the
+			 * other mode, so it cannot be used to erase them. Clear
+			 * the window once on the switch and start fresh. */
+			span_prev_valid = false;
+			z_win_fill_rect(&win, 0, 0, content_w, content_h, 0);
+			break;
+
 		case 'o':
 		case 'O':
 			do_open();
@@ -1338,6 +1837,11 @@ int main(void) {
 		fps_tick_update();
 		perf_report();
 
+	
+		/* Yield. This loop used to spin, so the app was RUNNABLE
+		 * forever and took a full scheduler share from whatever was
+		 * in the foreground -- see docs/app_runtime.md. renders continuously, so it caps at one tick rather than blocking. */
+		z_proc_wait(1);
 	}
 
 	return 0;

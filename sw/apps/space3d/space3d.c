@@ -73,6 +73,7 @@
 #include <string.h>
 
 #include "../../common/zeitlos.h"
+#include "../../common/zsoc.h"	// Z_TICK_HZ, for the idle wait in main()
 #include "../../common/zwm.h"
 #include "../../common/zwin.h"
 #include "../../common/zfont.h"
@@ -1676,6 +1677,11 @@ int main(void) {
 			       "raise MAX_LINES\n", MAX_LINES);
 			overflowed = false;
 		}
+	
+		/* Yield. This loop used to spin, so the app was RUNNABLE
+		 * forever and took a full scheduler share from whatever was
+		 * in the foreground -- see docs/app_runtime.md. renders continuously, so it caps at one tick rather than blocking. */
+		z_proc_wait(1);
 	}
 
 	return 0;

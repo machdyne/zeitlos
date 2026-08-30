@@ -160,11 +160,47 @@ typedef uint32_t *(*z_kernel_ptr_t)(uint32_t, uint32_t *, uint32_t);
 #define gpu_blit_src_stride  (*(volatile uint32_t*)0xd0000034)
 #define gpu_blit_src_shift   (*(volatile uint32_t*)0xd0000038)
 
+// Second source base, for the blitter's single-pass masked sprite mode
+// (CTRL bit 7). A is at gpu_blit_src_addr and is the mask; B is here
+// and is the data. Same stride, same shift, same rectangle -- only the
+// base differs, which is exactly why the hardware can share one
+// shifter between them. See docs/gpu_blitter.md.
+#define gpu_blit_src_b_addr  (*(volatile uint32_t*)0xd000003c)
+
+/* Source-read probe (rtl/gpu/gpu_blit.v). The address the blitter last
+ * presented for a source read, the data it actually received, and a
+ * count of source reads since reset.
+ *
+ * Read-only. Same idea as the audio mixer's MIXDBG pair: read the same
+ * address from the CPU and compare -- if they differ, the blitter is
+ * not seeing what the CPU sees, and the fault is in the bus path
+ * rather than in the blitting.
+ *
+ * The count distinguishes a stale probe from a fresh one. Without it,
+ * reading the same values twice is ambiguous between "nothing
+ * happened" and "it happened again identically". */
+#define gpu_blit_dbg_src_adr (*(volatile uint32_t*)0xd0000040)
+#define gpu_blit_dbg_src_dat (*(volatile uint32_t*)0xd0000044)
+#define gpu_blit_dbg_src_cnt (*(volatile uint32_t*)0xd0000048)
+
 #define GPU_BLIT_CTRL_START  (1u << 0)
 #define GPU_BLIT_CTRL_FILL   (1u << 1)
 #define GPU_BLIT_CTRL_CLIP   (1u << 2)
 #define GPU_BLIT_CTRL_GLYPH  (1u << 3)
 #define GPU_BLIT_CTRL_SRCMEM (1u << 4)
+
+// Raster operation, bits 6:5 -- see Z_ROP_* in zgfx.h. 0 is COPY, so
+// every caller written before these existed keeps its old behaviour.
+#define GPU_BLIT_CTRL_ROP_LSB 5
+
+// Single-pass masked sprite: A (mask) at src_addr, B (data) at
+// src_b_addr, dst = (A & B) | (~A & dst). See docs/gpu_blitter.md.
+#define GPU_BLIT_CTRL_COOKIE (1u << 7)
+
+// Ordered-dither fill: PATTERN's low five bits are a grey level rather
+// than a bitmask, and the hardware generates a screen-aligned 4x4
+// matrix for it. See docs/gpu_blitter.md.
+#define GPU_BLIT_CTRL_DITHER (1u << 8)
 
 #define GPU_BLIT_SRC_PRIME_ZERO (1u << 8)
 

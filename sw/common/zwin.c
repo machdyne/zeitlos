@@ -421,6 +421,29 @@ void z_win_hw_line(const z_win_t *win, int x0, int y0, int x1, int y1, int color
 	z_fb_hw_line(x0, y0, x1, y1, color, &clip);
 }
 
+// Shaded fill, clipped to the window's content area.
+//
+// The clip matters more here than for a line: a shaded SPAN is the
+// primitive a software triangle rasterizer emits, and a rasterizer
+// working from projected vertices will happily produce spans that run
+// off the window when the model is scaled up or rotated near the edge.
+void z_win_hw_fill_shade(const z_win_t *win, int x, int y, int w, int h,
+	int level) {
+	z_clip_t clip;
+	z_win_content_rect(win, &clip);
+	/* z_clip_t is INCLUSIVE bounds (x0..x1), not origin-plus-size --
+	 * so the right edge is x1 + 1, not x + w. Getting that wrong
+	 * loses the last column of every clipped span, which on a shaded
+	 * triangle shows up as a one-pixel notch down one side rather
+	 * than as an obviously wrong rectangle. */
+	if (x < clip.x0) { w -= (int)(clip.x0 - x); x = (int)clip.x0; }
+	if (y < clip.y0) { h -= (int)(clip.y0 - y); y = (int)clip.y0; }
+	if (x + w > (int)clip.x1 + 1) w = (int)clip.x1 + 1 - x;
+	if (y + h > (int)clip.y1 + 1) h = (int)clip.y1 + 1 - y;
+	if (w <= 0 || h <= 0) return;
+	z_fb_hw_fill_shade_async(x, y, w, h, level);
+}
+
 void z_win_hw_box(const z_win_t *win, int x0, int y0, int x1, int y1, int color) {
 	z_clip_t clip;
 	z_win_content_rect(win, &clip);

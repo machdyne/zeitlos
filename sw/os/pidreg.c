@@ -68,6 +68,32 @@ void k_pidreg_init(void) {
 
 // -- syscalls --
 
+// Name -> pid, callable from anywhere in the kernel including
+// INTERRUPT CONTEXT.
+//
+// Separate from k_pid_lookup() below, which is the syscall: that one
+// takes and returns z_obj_t and allocates, neither of which is safe
+// from an ISR. This is a table scan and nothing else.
+//
+// Added for the ethernet receive interrupt (k_irq_handler() in
+// kernel.c), which has to find whoever is waiting on packets without
+// hardwiring a pid -- net registers itself like any other service and
+// a fixed pid would break the moment it were restarted.
+bool k_pid_find(const char *name, uint32_t *pid) {
+
+	if (!name || !pid) return false;
+
+	for (int e = 0; e < Z_PIDREG_MAX; e++) {
+		if (!z_pidreg[e].active) continue;
+		if (strcmp(z_pidreg[e].name, name) != 0) continue;
+		*pid = z_pidreg[e].pid;
+		return true;
+	}
+
+	return false;
+
+}
+
 z_obj_t *k_pid_register(z_obj_t *args) {
 
 	if (args->type != Z_STR || !args->val.str) {

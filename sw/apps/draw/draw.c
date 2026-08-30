@@ -91,6 +91,7 @@
 #include <string.h>
 
 #include "../../common/zeitlos.h"
+#include "../../common/zsoc.h"	// Z_TICK_HZ, for the idle wait in main()
 #include "../../common/zwm.h"
 #include "../../common/zwin.h"
 #include "../../common/zgfx.h"
@@ -1637,6 +1638,11 @@ int main(void) {
 
 		for (volatile int i = 0; i < 200; i++);	// light throttle
 
+	
+		/* Yield. This loop used to spin, so the app was RUNNABLE
+		 * forever and took a full scheduler share from whatever was
+		 * in the foreground -- see docs/app_runtime.md. a paint program only changes on input. */
+		z_proc_wait(Z_TICK_HZ / 30);
 	}
 
 	return 0;

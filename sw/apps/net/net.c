@@ -1144,13 +1144,35 @@ int main(void) {
 		// yielding costs throughput and buys latency. This loop is
 		// bound by latency.
 		//
-		// The 1-tick timeout matters: incoming packets are found by
-		// POLLING the ENC28J60, not by message, so k_msg_send()'s wake
-		// never fires for an arriving frame and the timeout is the only
-		// thing that gets this process running again. Waking on the
-		// controller's INT pin (already wired to rtl/spim.v STATUS bit
-		// 2) would be strictly better than a timer.
-		z_proc_wait(1);
+		// Blocks until a frame arrives or the timeout expires.
+		//
+		// This used to be a bare 1-tick wait because incoming packets
+		// could only be FOUND BY POLLING -- neither MAC had an
+		// interrupt wired to anything that could wake a blocked
+		// process, so the timeout was the only thing that got this
+		// process running again. That meant ~732 wakes a second to
+		// discover, almost every time, that nothing had happened.
+		//
+		// It cost more than it looks. The scheduler shares the CPU
+		// between RUNNABLE processes, so a process that wakes
+		// constantly takes a full share out of whatever is in the
+		// foreground rather than out of idle time. A full-screen app
+		// measured a quarter of the machine with three such wakers
+		// alongside it.
+		//
+		// Both MACs now raise Z_IRQ_ETH when a frame is waiting
+		// (rtl/ethmac_rmii.v's eth_int_o, and the ENC28J60's INT pin
+		// via rtl/sysctl.v), and the kernel turns that into a message
+		// -- so this wakes when a packet actually arrives.
+		//
+		// The timeout stays, and is now long rather than 1 tick. It
+		// is no longer how packets are noticed; it is a backstop for
+		// the periodic work this loop still does (ARP ageing, socket
+		// timers, TX retries), and insurance against a MAC that
+		// somehow leaves its RX buffer occupied without the interrupt
+		// following. Ten wakes a second for housekeeping instead of
+		// 732 for nothing.
+		z_proc_wait(Z_TICK_HZ / 10);
 
 	}
 

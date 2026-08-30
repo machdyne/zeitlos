@@ -103,6 +103,37 @@ module gpu_blit_wb #(
     output wire        busy
 );
 
+    /* -- source-read probe --
+     *
+     * The address the blitter last PRESENTED for a source read, and
+     * the data it actually RECEIVED, readable through registers 5 and
+     * 6 of the status page.
+     *
+     * Same idea, and the same reason, as rtl/audio_mixer.v's
+     * dbg_adr_o/dbg_dat_o: software can read the same address itself
+     * and compare. If they differ, the fault is in the bus path rather
+     * than in the logic, and that distinction cannot be made from
+     * software alone.
+     *
+     * Added for a VRAM-to-VRAM copy fault where the source read
+     * returns row-origin data instead of the word requested -- on
+     * hardware only. Every simulation of this module in isolation
+     * addresses its source correctly (rtl/gpu/bench/tb_vscroll.v,
+     * tb_edge.v), so the difference is the real bus, which is exactly
+     * what these two registers expose.
+     *
+     * Latched on the ACK, so they always describe a completed
+     * transaction rather than one in flight. Free when unused: two
+     * registers and no effect on any datapath. */
+    reg [31:0] dbg_src_adr;
+    reg [31:0] dbg_src_dat;
+
+    /* Counts source reads since reset, so software can tell a stale
+     * probe from a fresh one -- without it, reading the same values
+     * twice is ambiguous between "nothing happened" and "it happened
+     * again identically". */
+    reg [31:0] dbg_src_cnt;
+
     localparam VRAM_BASE = 32'h20000000;
     localparam SCREEN_STRIDE = 80; // 640 pixels / 8 = 80 bytes per line
 
@@ -113,10 +144,139 @@ module gpu_blit_wb #(
     localparam CTRL_GLYPH = 3;  // 0=normal fill/copy, 1=glyph blit
     localparam CTRL_SRCMEM = 4; // 1=copy source is main memory (needs CTRL_FILL=0)
 
+    // -- raster operation, CTRL bits 6:5 --
+    //
+    // How the source word combines with what is already in the
+    // destination. Applies to fill and to both kinds of copy; IGNORED
+    // in glyph mode, which has its own write path with its own
+    // fg/bg/cell merge and no use for these.
+    //
+    // ROP_COPY is 0 so that every existing caller -- which writes
+    // neither of these bits -- keeps behaving exactly as before. That
+    // is not politeness: gpu_blit has shipped, and a bitstream where
+    // an old binary's blits suddenly XOR would be a very confusing
+    // thing to debug.
+    //
+    // ANDN (dst & ~src) rather than plain AND, because the operation
+    // sprites actually need is "punch a hole shaped like this mask",
+    // and with plain AND the caller would have to store an inverted
+    // copy of every mask. ANDN costs the same one LUT input and saves
+    // the sprite sheet from carrying both polarities. See
+    // docs/gpu.md's masked sprite recipe.
+    localparam CTRL_ROP_LSB = 5;
+
+    // -- single-pass masked sprite ("cookie cut"), CTRL bit 7 --
+    //
+    // Fetches TWO source streams and combines them with the
+    // destination in one operation:
+    //
+    //     dst = (A & B) | (~A & dst)
+    //
+    // A is the mask (1 where the sprite is opaque), B is the sprite
+    // data, at src_addr and src_b_addr respectively. The ROP field
+    // above is ignored while this is set -- the combine IS the op.
+    //
+    // Replaces the two-pass ANDN-then-OR recipe, and the reason is not
+    // mainly speed. Two passes cost six bus transactions per
+    // destination word against four, and two register setups against
+    // one -- worth having, but the structural wins matter more:
+    //
+    //   ATOMIC. Between the two passes the sprite's footprint is
+    //   momentarily blank, so a two-pass sprite can only safely be
+    //   drawn into a back buffer. One pass can go straight onto the
+    //   visible page.
+    //
+    //   FULLY ASYNCHRONOUS. z_fb_hw_blit_sprite_async() could only
+    //   ever leave the SECOND pass running, because starting it had to
+    //   wait for the first. One pass means the caller gets the whole
+    //   blit duration back.
+    //
+    // -- what this deliberately is NOT --
+    //
+    // Not a general minterm unit. The Amiga blitter took an 8-bit
+    // function select over A, B and C, which is an 8:1 mux per bit --
+    // roughly 112 LUT4 and two logic levels, against this fixed
+    // function's one LUT4 and one level. Cookie-cut is the only
+    // minterm anyone actually reaches for, and the 2-bit ROP field
+    // already covers XOR fills and the rest.
+    //
+    // -- and why it needs no second shifter --
+    //
+    // A and B are read on DIFFERENT CYCLES, so one barrel shifter
+    // serves both as long as its output is latched per stream. The
+    // Amiga needed two shifters only because its A and B could be
+    // independently positioned; here they are always the same sprite
+    // geometry -- same stride, same src_x/src_y, therefore the same
+    // shift. That single observation is what makes this cheap: the
+    // shifter is by far the most expensive thing in the source path.
+    localparam CTRL_COOKIE = 7;
+
+    // -- ordered-dither fill, CTRL bit 8 --
+    //
+    // In a fill with this set, PATTERN is not a bit pattern -- its low
+    // five bits are a GREY LEVEL, 0..16, and the hardware generates a
+    // 4x4 ordered dither for it.
+    //
+    // -- why a level and not a pattern table --
+    //
+    // The obvious design is four pattern registers indexed by y&3.
+    // That needs four new registers (the file is already at 16, so it
+    // would need a wider address too) and leaves the caller to compute
+    // dither matrices.
+    //
+    // A level needs no new register at all -- PATTERN is already
+    // there and is meaningless as a bitmask in this mode -- and the
+    // matrix is a constant, so the four row patterns are a
+    // combinational function of five bits. No storage whatsoever.
+    //
+    // -- why this is SCREEN-ALIGNED by construction --
+    //
+    // This is the property that makes patterns useful rather than
+    // decorative, and it comes for free here.
+    //
+    // The dither row is the destination's absolute framebuffer row and
+    // the dither column is the bit's absolute position within the
+    // 32-bit word -- which, because the framebuffer is a flat bitmap
+    // at 32 pixels per word, IS the absolute screen column mod 4.
+    // Neither is relative to the rectangle being filled.
+    //
+    // So two adjacent fills share one continuous pattern with no seam,
+    // and a region redrawn at a different rectangle offset comes out
+    // identical. A rectangle-relative pattern gets both wrong: seams
+    // where fills meet, and a shimmer when anything scrolls.
+    //
+    // -- what it is for --
+    //
+    // Greys, on a display that has none. 17 stable levels from one
+    // 5-bit value: flat-shaded 3D, disabled controls, scrollbar
+    // troughs, chart shading, and -- the case that prompted it --
+    // textured backgrounds without a blit per tile. See
+    // docs/gpu_blitter.md.
+    localparam CTRL_DITHER = 8;
+
+    localparam ROP_COPY = 2'd0;  // dst = src            (what it always did)
+    localparam ROP_OR   = 2'd1;  // dst = dst | src
+    localparam ROP_XOR  = 2'd2;  // dst = dst ^ src
+    localparam ROP_ANDN = 2'd3;  // dst = dst & ~src
+
     // Configuration registers
     reg [31:0] dst_x_reg, dst_y_reg, width_reg, height_reg;
     reg [31:0] pattern_reg;
     reg fill_reg, clip_enable_reg, glyph_reg, srcmem_reg;
+
+    // Shadow of the ROP field, kept ONLY so the CTRL readback can
+    // report it. work_rop below is what the datapath actually uses.
+    //
+    // Two registers for one field looks redundant and is not: software
+    // detects raster op support by writing the field without a start
+    // bit and reading it back (z_fb_hw_rop_available() in
+    // sw/common/zgfx.c), exactly as it already probes for memory-copy
+    // support. A bitstream without this feature returns zero, so the
+    // same binary can keep a software path instead of silently drawing
+    // opaque boxes where masked sprites were meant to go.
+    reg [1:0] rop_reg;
+    reg cookie_reg;
+    reg dither_reg;
     reg [31:0] glyph_addr_reg, glyph_w_reg, glyph_h_reg, fg_color_reg, bg_color_reg;
 
     // -- memory copy source registers --
@@ -133,6 +293,12 @@ module gpu_blit_wb #(
     // one case where that pixel would fall in the word BEFORE the
     // source buffer: see ST_MEM_ROW.
     reg [31:0] src_addr_reg, src_stride_reg, src_shift_reg;
+
+    // Base of the B stream. Same stride, same shift and same
+    // src_x/src_y as A -- only the base differs, because the mask and
+    // the data are two bitmaps of identical geometry. That is what
+    // lets them share the shifter.
+    reg [31:0] src_b_addr_reg;
 
     // State machine
     reg [4:0] state;
@@ -156,8 +322,19 @@ module gpu_blit_wb #(
     // Operation variables
     reg [31:0] work_dst_x, work_dst_y, work_width, work_height, work_pattern;
     reg work_fill, work_clip, work_glyph;
+    reg [1:0] work_rop;
     reg [31:0] work_glyph_addr, work_glyph_w, work_glyph_h, work_fg, work_bg;
     reg work_srcmem, work_src_prime;
+    reg work_cookie;
+    reg work_dither;
+
+    // Absolute framebuffer row currently being written. Only the low
+    // two bits are used (the dither row), but it is kept as a full
+    // row number because that is what makes it ABSOLUTE -- deriving
+    // it from a per-blit line counter would make the pattern
+    // rectangle-relative, which is the exact thing this avoids.
+    reg [9:0] cur_y;
+    reg [31:0] work_src_b_addr;
     reg [31:0] work_src_addr, work_src_stride;
     reg [4:0]  work_src_shift;
     reg draw_busy;
@@ -170,6 +347,22 @@ module gpu_blit_wb #(
     // src_word_out: the assembled destination word, held across the
     //   framebuffer read-modify-write that follows
     reg [31:0] mem_row_addr, mem_next_addr, src_prev, src_word_out;
+
+    // -- second source stream (channel B), cookie-cut mode only --
+    //
+    // A complete duplicate of the row/word walk state above, and
+    // nothing else: no second shifter (see CTRL_COOKIE), no second bus
+    // port. A and B share the `s` port with alternating reads, which
+    // is free because the walk was already sequential.
+    //
+    // `mem_stream` selects which of the two the shared states are
+    // currently working on: 0 = A (the mask), 1 = B (the data). Every
+    // other mode leaves it at 0 and never looks at the B registers,
+    // so yosys folds the whole thing away on a build that never sets
+    // CTRL_COOKIE... which is to say never, since it is a runtime bit
+    // -- but the datapath is still idle, not merely unused.
+    reg [31:0] mem_row_addr_b, mem_next_addr_b, src_prev_b, src_word_out_b;
+    reg        mem_stream;
 
     // Clipped rectangle coordinates
     reg [31:0] clip_x, clip_y, clip_width, clip_height;
@@ -256,6 +449,114 @@ module gpu_blit_wb #(
     wire [5:0] g_offset_plus_w = {1'b0, g_bit_offset} + work_glyph_w[5:0];
     wire g_straddle = (g_offset_plus_w > 6'd32);
 
+    // -- raster operation ------------------------------------------
+    //
+    // Applied to the source word BEFORE the edge/clip mask merge in
+    // ST_WRITE, so the two compose in the only order that makes sense:
+    // the op decides what the new pixels are, the mask decides which
+    // of them are allowed to land.
+    //
+    // TIMING. Two separate wires rather than one fed by a
+    // fill?pattern:src mux, deliberately. Per bit each of these is a
+    // function of exactly four things -- the destination bit, the
+    // source bit and the two op bits -- which is one LUT4 on ECP5.
+    // ST_WRITE then merges with the mask, three inputs, one more LUT4.
+    // So this adds ONE logic level to a path that was already
+    // register-to-register (read_data is captured in ST_WAIT_READ,
+    // m_dat_o is a register), and the blitter's write path is nowhere
+    // near the 48MHz critical path to begin with.
+    //
+    // Folding the fill/copy choice in here instead would make it six
+    // inputs and two levels before the merge, for no gain -- ST_WRITE
+    // already branches on work_fill, so the selection is free there.
+    wire [31:0] rop_fill =
+        (work_rop == ROP_OR)   ? (read_data |  fill_src) :
+        (work_rop == ROP_XOR)  ? (read_data ^  fill_src) :
+        (work_rop == ROP_ANDN) ? (read_data & ~fill_src) :
+                                  fill_src;
+
+    wire [31:0] rop_copy =
+        (work_rop == ROP_OR)   ? (read_data |  src_word_out) :
+        (work_rop == ROP_XOR)  ? (read_data ^  src_word_out) :
+        (work_rop == ROP_ANDN) ? (read_data & ~src_word_out) :
+                                  src_word_out;
+
+    // Any op other than COPY needs to know what is already there, so
+    // the one path that skips the destination read -- an unclipped
+    // fill -- must stop skipping it.
+    //
+    // This is the whole correctness story for ROPs. A copy always
+    // reads (ST_MEM_READ_WAIT routes through ST_READ), and a clipped
+    // fill already reads to preserve bits outside the rect. An
+    // UNCLIPPED fill went straight to a blind ST_WRITE, and with a
+    // non-COPY op that would have merged against whatever read_data
+    // held from the previous operation -- producing a result that is
+    // wrong in a way that depends on what the blitter did last, which
+    // is about the worst debugging experience available.
+    // Cookie cut: (A & B) | (~A & dst). One LUT4 per bit -- three
+    // inputs, no op select, because the function is fixed.
+    wire [31:0] cookie_out =
+        (src_word_out & src_word_out_b) | (~src_word_out & read_data);
+
+    // What actually lands, for a copy. The mux between cookie and the
+    // ROP result is one more input; ST_WRITE then merges with the edge
+    // mask as before. Three logic levels total on a path that is
+    // register-to-register and has slack -- read_data is captured in
+    // ST_WAIT_READ, m_dat_o is a register.
+    wire [31:0] copy_src = work_cookie ? cookie_out : rop_copy;
+
+    // Cookie cut reads the destination for the same reason every
+    // non-COPY op does: ~A & dst needs to know what dst was.
+    // -- 4x4 ordered dither --
+    //
+    // Bayer matrix, the standard one. Thresholds 0..15; a pixel is set
+    // where its threshold is below the requested level, so level 0 is
+    // black, level 16 is solid, and the 15 between are evenly spaced.
+    //
+    // A constant function of (row, column), so this whole block is
+    // combinational from five bits of PATTERN and two bits of cur_y --
+    // no storage, and yosys folds it to roughly one LUT per bit.
+    function [3:0] bayer;
+        input [1:0] r;
+        input [1:0] c;
+        begin
+            case ({r, c})
+                4'd0:  bayer = 4'd0;   4'd1:  bayer = 4'd8;
+                4'd2:  bayer = 4'd2;   4'd3:  bayer = 4'd10;
+                4'd4:  bayer = 4'd12;  4'd5:  bayer = 4'd4;
+                4'd6:  bayer = 4'd14;  4'd7:  bayer = 4'd6;
+                4'd8:  bayer = 4'd3;   4'd9:  bayer = 4'd11;
+                4'd10: bayer = 4'd1;   4'd11: bayer = 4'd9;
+                4'd12: bayer = 4'd15;  4'd13: bayer = 4'd7;
+                4'd14: bayer = 4'd13;  default: bayer = 4'd5;
+            endcase
+        end
+    endfunction
+
+    wire [4:0] dither_level = work_pattern[4:0];
+
+    // One word of dither for the row being written. Bit i's dither
+    // COLUMN is i[1:0] -- the bit's position in the word, which is the
+    // absolute screen column mod 4, because the framebuffer is a flat
+    // bitmap at 32 pixels per word. That is the whole of the screen
+    // alignment: no offset is ever added.
+    wire [31:0] dither_word;
+    genvar dgi;
+    generate
+        for (dgi = 0; dgi < 32; dgi = dgi + 1) begin : dither_bits
+            assign dither_word[dgi] =
+                ({1'b0, bayer(cur_y[1:0], dgi[1:0])} < dither_level);
+        end
+    endgenerate
+
+    // What a fill lays down. PATTERN as written, or the generated
+    // dither -- and everything downstream (the raster op, the edge
+    // mask merge) is unchanged, so a dithered fill clips and composes
+    // exactly like any other.
+    wire [31:0] fill_src = work_dither ? dither_word : work_pattern;
+
+    wire rop_needs_read = (work_rop != ROP_COPY) || work_cookie;
+
     // low-word-relative bit pattern/cell mask, before the word-crossing split
     wire [31:0] g_glyph_bits = ({24'h0, g_byte_rev}) & ((32'h1 << work_glyph_w) - 32'h1);
     wire [31:0] g_cell_bits  = (32'h1 << work_glyph_w) - 32'h1;
@@ -293,8 +594,13 @@ module gpu_blit_wb #(
     wire        mem_src_ack = work_srcmem ? s_ack_i : m_ack_i;
 
     wire [5:0] mem_shift_hi = 6'd32 - {1'b0, work_src_shift};
-    wire [31:0] mem_blend = (work_src_shift == 5'd0) ? src_prev :
-                            ((src_prev >> work_src_shift) |
+    // The two-word window's older half, for whichever stream is being
+    // walked. One shifter, time-multiplexed -- see CTRL_COOKIE.
+    wire [31:0] mem_prev_sel = mem_stream ? src_prev_b : src_prev;
+    wire [31:0] mem_addr_sel = mem_stream ? mem_next_addr_b : mem_next_addr;
+
+    wire [31:0] mem_blend = (work_src_shift == 5'd0) ? mem_prev_sel :
+                            ((mem_prev_sel >> work_src_shift) |
                              (mem_src_dat << mem_shift_hi));
 
     // Which bits of the destination word this operation may modify.
@@ -336,7 +642,11 @@ module gpu_blit_wb #(
             bg_color_reg <= 32'h0;
             src_addr_reg <= 32'h0;
             src_stride_reg <= 32'h0;
+            rop_reg <= 2'd0;
+            cookie_reg <= 1'b0;
+            dither_reg <= 1'b0;
             src_shift_reg <= 32'h0;
+            src_b_addr_reg <= 32'h0;
             wb_ack_o <= 1'b0;
             wb_dat_o <= 32'd0;
         end else begin
@@ -345,12 +655,22 @@ module gpu_blit_wb #(
             if (wb_cyc_i && wb_stb_i && !wb_ack_o) begin
                 wb_ack_o <= 1'b1;
                 if (wb_we_i) begin
-                    case (wb_adr_i[3:0])
+                    /* FIVE bits, not four. Registers 0 through 15 were
+                     * full, so the debug probe needed the next page.
+                     * Safe to widen: this block's window is far larger
+                     * than the registers in it, and 16..31 previously
+                     * aliased back onto 0..15 -- which nothing relied
+                     * on, and which would have made the probe
+                     * overwrite CTRL. */
+                    case (wb_adr_i[4:0])
                         4'd0: begin  // CTRL
                             fill_reg <= wb_dat_i[CTRL_FILL];
                             clip_enable_reg <= wb_dat_i[CTRL_CLIP];
                             glyph_reg <= wb_dat_i[CTRL_GLYPH];
                             srcmem_reg <= wb_dat_i[CTRL_SRCMEM];
+                            rop_reg <= wb_dat_i[CTRL_ROP_LSB+1:CTRL_ROP_LSB];
+                            cookie_reg <= wb_dat_i[CTRL_COOKIE];
+                            dither_reg <= wb_dat_i[CTRL_DITHER];
                         end
                         4'd1: ; // STATUS - read only
                         4'd2: dst_x_reg <= wb_dat_i;
@@ -366,11 +686,19 @@ module gpu_blit_wb #(
                         4'd12: src_addr_reg <= wb_dat_i;
                         4'd13: src_stride_reg <= wb_dat_i;
                         4'd14: src_shift_reg <= wb_dat_i;
+                        4'd15: src_b_addr_reg <= wb_dat_i;
                         default: ;
                     endcase
                 end else begin
-                    case (wb_adr_i[3:0])
-                        4'd0: wb_dat_o <= {27'h0, srcmem_reg, glyph_reg, clip_enable_reg, fill_reg, 1'b0};
+                    /* FIVE bits, not four. Registers 0 through 15 were
+                     * full, so the debug probe needed the next page.
+                     * Safe to widen: this block's window is far larger
+                     * than the registers in it, and 16..31 previously
+                     * aliased back onto 0..15 -- which nothing relied
+                     * on, and which would have made the probe
+                     * overwrite CTRL. */
+                    case (wb_adr_i[4:0])
+                        4'd0: wb_dat_o <= {23'h0, dither_reg, cookie_reg, rop_reg, srcmem_reg, glyph_reg, clip_enable_reg, fill_reg, 1'b0};
                         4'd1: wb_dat_o <= {31'h0, draw_busy};
                         4'd2: wb_dat_o <= dst_x_reg;
                         4'd3: wb_dat_o <= dst_y_reg;
@@ -385,6 +713,19 @@ module gpu_blit_wb #(
                         4'd12: wb_dat_o <= src_addr_reg;
                         4'd13: wb_dat_o <= src_stride_reg;
                         4'd14: wb_dat_o <= src_shift_reg;
+                        4'd15: wb_dat_o <= src_b_addr_reg;
+
+                        /* -- source-read probe, read-only --
+                         *
+                         * The address last presented for a source read
+                         * and the data actually received. Software
+                         * reads the same address itself and compares;
+                         * a mismatch puts the fault in the bus path
+                         * rather than in this module. See dbg_src_adr
+                         * above and rtl/audio_mixer.v's equivalent. */
+                        5'd16: wb_dat_o <= dbg_src_adr;
+                        5'd17: wb_dat_o <= dbg_src_dat;
+                        5'd18: wb_dat_o <= dbg_src_cnt;
                         default: wb_dat_o <= 32'd0;
                     endcase
                 end
@@ -410,6 +751,25 @@ module gpu_blit_wb #(
             s_cyc_o <= 1'b0;
             s_stb_o <= 1'b0;
             s_adr_o <= 32'd0;
+            mem_stream <= 1'b0;
+            work_cookie <= 1'b0;
+
+            /* Reset HERE, in the block that also latches them.
+             *
+             * These were first reset alongside src_b_addr_reg in the
+             * register-file block, which drives none of them -- two
+             * always blocks assigning one reg. Simulation tolerates
+             * that and the testbenches passed; synthesis does not, and
+             * on hardware the counter read back as a constant zero
+             * while the latches appeared to work. A probe that reads
+             * zero is indistinguishable from a probe that is absent,
+             * which cost a build to discover.
+             *
+             * One reg, one always block. */
+            dbg_src_adr <= 32'h0;
+            dbg_src_dat <= 32'h0;
+            dbg_src_cnt <= 32'h0;
+            work_dither <= 1'b0;
             state <= ST_IDLE;
         end else begin
             case (state)
@@ -449,6 +809,14 @@ module gpu_blit_wb #(
                         // written this cycle, not out of srcmem_reg,
                         // which the slave block updates on this same edge
                         work_srcmem <= wb_dat_i[CTRL_SRCMEM];
+                        // same reason as work_fill/work_clip above: the
+                        // op has to be frozen for the whole blit, not
+                        // read live from a register software may write
+                        // again while this one is still running.
+                        work_rop <= wb_dat_i[CTRL_ROP_LSB+1:CTRL_ROP_LSB];
+                        work_cookie <= wb_dat_i[CTRL_COOKIE];
+                        work_dither <= wb_dat_i[CTRL_DITHER];
+                        work_src_b_addr <= src_b_addr_reg;
                         work_src_addr <= src_addr_reg;
                         work_src_stride <= src_stride_reg;
                         work_src_shift <= src_shift_reg[4:0];
@@ -484,6 +852,7 @@ module gpu_blit_wb #(
                             current_word_in_line <= 32'h0;
                             total_lines <= final_height;
                             words_per_line <= word_span_words;
+                            cur_y <= final_y[9:0];
                             line_start_addr <= final_y * SCREEN_STRIDE + (left_word_boundary >> 3);
                             current_word_addr <= final_y * SCREEN_STRIDE + (left_word_boundary >> 3);
 
@@ -496,6 +865,7 @@ module gpu_blit_wb #(
                             // word counts, destination addresses) is
                             // shared with it unchanged.
                             mem_row_addr <= work_src_addr;
+                            mem_row_addr_b <= work_src_b_addr;
 
                             // clipped fills may need to preserve bits
                             // outside the clip rect within a partial word
@@ -523,6 +893,7 @@ module gpu_blit_wb #(
                         current_word_in_line <= 32'h0;
                         total_lines <= work_height;
                         words_per_line <= (work_width + 31) >> 5;
+                        cur_y <= work_dst_y[9:0];
                         line_start_addr <= work_dst_y * SCREEN_STRIDE + (work_dst_x >> 5) * 4;
                         current_word_addr <= work_dst_y * SCREEN_STRIDE + (work_dst_x >> 5) * 4;
 
@@ -530,9 +901,13 @@ module gpu_blit_wb #(
                         right_mask <= 32'hFFFFFFFF;
 
                         mem_row_addr <= work_src_addr;
+                        mem_row_addr_b <= work_src_b_addr;
 
                         if (work_fill) begin
-                            state <= ST_WRITE;
+                            // rop_needs_read: see its own comment. An
+                            // unclipped COPY-op fill still skips the
+                            // read, exactly as before.
+                            state <= rop_needs_read ? ST_READ : ST_WRITE;
                         end else begin
                             state <= ST_MEM_ROW;
                         end
@@ -565,6 +940,11 @@ module gpu_blit_wb #(
                     s_stb_o <= 1'b0;
 
                     mem_next_addr <= mem_row_addr;
+                    mem_next_addr_b <= mem_row_addr_b;
+                    src_prev_b <= 32'h0;
+                    // Always A first. Every non-cookie mode leaves this
+                    // at 0 and never touches the B registers at all.
+                    mem_stream <= 1'b0;
                     src_prev <= 32'h0;
 
                     // work_src_prime handles the one case where the
@@ -588,26 +968,44 @@ module gpu_blit_wb #(
                     if (work_srcmem) begin
                         s_cyc_o <= 1'b1;
                         s_stb_o <= 1'b1;
-                        s_adr_o <= mem_next_addr;
+                        s_adr_o <= mem_addr_sel;
                     end else begin
                         m_cyc_o <= 1'b1;
                         m_stb_o <= 1'b1;
                         m_we_o <= 1'b0;
                         m_sel_o <= 4'b1111;
-                        m_adr_o <= mem_next_addr;
+                        m_adr_o <= mem_addr_sel;
                     end
                     state <= ST_MEM_PRIME_WAIT;
                 end
 
                 ST_MEM_PRIME_WAIT: begin
                     if (mem_src_ack) begin
-                        src_prev <= mem_src_dat;
-                        mem_next_addr <= mem_next_addr + 4;
+                        dbg_src_adr <= mem_addr_sel;
+                        dbg_src_dat <= mem_src_dat;
+                        dbg_src_cnt <= dbg_src_cnt + 32'd1;
+                        if (mem_stream) begin
+                            src_prev_b <= mem_src_dat;
+                            mem_next_addr_b <= mem_next_addr_b + 4;
+                        end else begin
+                            src_prev <= mem_src_dat;
+                            mem_next_addr <= mem_next_addr + 4;
+                        end
                         s_cyc_o <= 1'b0;
                         s_stb_o <= 1'b0;
                         m_cyc_o <= 1'b0;
                         m_stb_o <= 1'b0;
-                        state <= ST_MEM_READ;
+                        // In cookie mode BOTH windows have to be
+                        // primed before the first word can be built,
+                        // so A's prime is followed by B's rather than
+                        // by the first read.
+                        if (work_cookie && !mem_stream) begin
+                            mem_stream <= 1'b1;
+                            state <= ST_MEM_PRIME;
+                        end else begin
+                            mem_stream <= 1'b0;
+                            state <= ST_MEM_READ;
+                        end
                     end
                 end
 
@@ -615,32 +1013,53 @@ module gpu_blit_wb #(
                     if (work_srcmem) begin
                         s_cyc_o <= 1'b1;
                         s_stb_o <= 1'b1;
-                        s_adr_o <= mem_next_addr;
+                        s_adr_o <= mem_addr_sel;
                     end else begin
                         m_cyc_o <= 1'b1;
                         m_stb_o <= 1'b1;
                         m_we_o <= 1'b0;
                         m_sel_o <= 4'b1111;
-                        m_adr_o <= mem_next_addr;
+                        m_adr_o <= mem_addr_sel;
                     end
                     state <= ST_MEM_READ_WAIT;
                 end
 
                 ST_MEM_READ_WAIT: begin
                     if (mem_src_ack) begin
+                        dbg_src_adr <= mem_addr_sel;
+                        dbg_src_dat <= mem_src_dat;
+                        dbg_src_cnt <= dbg_src_cnt + 32'd1;
                         // mem_blend reads the source data wire directly,
                         // so it is only valid in this cycle -- latch the
                         // result rather than recomputing it later from a
                         // src_cur register that would need its own
                         // sequencing.
-                        src_word_out <= mem_blend;
-                        src_prev <= mem_src_dat;
-                        mem_next_addr <= mem_next_addr + 4;
+                        //
+                        // Latched PER STREAM, and that is exactly what
+                        // saves a second barrel shifter: A and B are
+                        // read on different cycles, so one shifter can
+                        // serve both if each result is captured as it
+                        // goes past. See CTRL_COOKIE.
+                        if (mem_stream) begin
+                            src_word_out_b <= mem_blend;
+                            src_prev_b <= mem_src_dat;
+                            mem_next_addr_b <= mem_next_addr_b + 4;
+                        end else begin
+                            src_word_out <= mem_blend;
+                            src_prev <= mem_src_dat;
+                            mem_next_addr <= mem_next_addr + 4;
+                        end
                         s_cyc_o <= 1'b0;
                         s_stb_o <= 1'b0;
                         m_cyc_o <= 1'b0;
                         m_stb_o <= 1'b0;
-                        state <= ST_READ;
+                        if (work_cookie && !mem_stream) begin
+                            mem_stream <= 1'b1;
+                            state <= ST_MEM_READ;
+                        end else begin
+                            mem_stream <= 1'b0;
+                            state <= ST_READ;
+                        end
                     end
                 end
 
@@ -670,17 +1089,17 @@ module gpu_blit_wb #(
                     if (work_fill) begin
                         if (work_clip && words_per_line > 1) begin
                             if (current_word_in_line == 0) begin
-                                m_dat_o <= (read_data & ~left_mask) | (work_pattern & left_mask);
+                                m_dat_o <= (read_data & ~left_mask) | (rop_fill & left_mask);
                             end else if (current_word_in_line == words_per_line - 1) begin
-                                m_dat_o <= (read_data & ~right_mask) | (work_pattern & right_mask);
+                                m_dat_o <= (read_data & ~right_mask) | (rop_fill & right_mask);
                             end else begin
-                                m_dat_o <= work_pattern;
+                                m_dat_o <= rop_fill;
                             end
                         end else if (work_clip && words_per_line == 1) begin
                             m_dat_o <= (read_data & ~(left_mask & right_mask)) |
-                                       (work_pattern & (left_mask & right_mask));
+                                       (rop_fill & (left_mask & right_mask));
                         end else begin
-                            m_dat_o <= work_pattern;
+                            m_dat_o <= rop_fill;
                         end
                     end else if (!work_fill) begin
                         // copy: merge the assembled source word in,
@@ -690,7 +1109,7 @@ module gpu_blit_wb #(
                         // word has already been fetched and shifted, and
                         // where it came from no longer matters.
                         m_dat_o <= (read_data & ~mem_edge_mask) |
-                                   (src_word_out & mem_edge_mask);
+                                   (copy_src & mem_edge_mask);
                     end else begin
                         // unreachable: with CTRL_FILL clear, ST_CLIP
                         // always routes into the copy path above,
@@ -723,6 +1142,7 @@ module gpu_blit_wb #(
                             draw_busy <= 1'b0;
                             state <= ST_IDLE;
                         end else begin
+                            cur_y <= cur_y + 10'd1;
                             line_start_addr <= line_start_addr + SCREEN_STRIDE;
                             current_word_addr <= line_start_addr + SCREEN_STRIDE;
 
@@ -730,6 +1150,9 @@ module gpu_blit_wb #(
                             // rather than base + line*stride so there is
                             // no per-row multiplier in this path.
                             mem_row_addr <= mem_row_addr + work_src_stride;
+                            // B walks in lockstep -- same stride,
+                            // because it is the same sprite geometry.
+                            mem_row_addr_b <= mem_row_addr_b + work_src_stride;
 
                             // clipped fills can land on a partial word
                             // here too (this line's first/last word), so
@@ -738,7 +1161,7 @@ module gpu_blit_wb #(
                             // straight to a blind ST_WRITE.
                             if (!work_fill) begin
                                 state <= ST_MEM_ROW;
-                            end else if (work_fill && !work_clip) begin
+                            end else if (work_fill && !work_clip && !rop_needs_read) begin
                                 state <= ST_WRITE;
                             end else begin
                                 state <= ST_READ;
@@ -751,7 +1174,7 @@ module gpu_blit_wb #(
                         // same reasoning as above
                         if (!work_fill) begin
                             state <= ST_MEM_READ;
-                        end else if (work_fill && !work_clip) begin
+                        end else if (work_fill && !work_clip && !rop_needs_read) begin
                             state <= ST_WRITE;
                         end else begin
                             state <= ST_READ;

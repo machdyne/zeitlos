@@ -227,6 +227,182 @@ void z_fb_hw_fill_pattern(int x, int y, int w, int h, const uint8_t *pat);
 bool z_fb_hw_blit_mem(const void *src, int src_stride,
 	int src_x, int src_y, int dst_x, int dst_y, int w, int h);
 
+// -- raster operations (rtl/gpu/gpu_blit.v, CTRL bits 6:5) --
+//
+// How the source combines with what is already on screen. Every blit
+// and fill function above takes Z_ROP_COPY implicitly, which is what
+// they have always done; the _rop variants below take one explicitly.
+//
+// Z_ROP_ANDN is (dst & ~src), not plain AND, because the operation
+// sprites actually need is "punch a hole shaped like this mask" -- and
+// with plain AND every mask would have to be stored inverted.
+#define Z_ROP_COPY 0   // dst = src
+#define Z_ROP_OR   1   // dst = dst | src
+#define Z_ROP_XOR  2   // dst = dst ^ src
+#define Z_ROP_ANDN 3   // dst = dst & ~src
+
+bool z_fb_hw_blit_mem_rop(const void *src, int src_stride,
+	int src_x, int src_y, int dst_x, int dst_y, int w, int h, int rop);
+
+void z_fb_hw_fill_rect_rop(int x, int y, int w, int h, int color, int rop);
+
+// -- masked sprite, in hardware --
+//
+// The thing raster ops exist for. Two passes over the same rectangle:
+// ANDN the mask to clear exactly the pixels the sprite will occupy,
+// then OR the data to lay them in. Background outside the mask is
+// untouched.
+//
+//   mask: 1 wherever the sprite is opaque
+//   data: the sprite's own pixels, 0 wherever the mask is 0
+//
+// Both planes share src_stride and the src_x/src_y rectangle, so a
+// sprite sheet can keep them as two bitmaps of identical geometry --
+// which is what sw/apps/gamedemo's gen_sprites.py emits.
+//
+// TWO passes and not one: a single-pass masked blit would need the
+// hardware to fetch two source streams at once, which is a second
+// source port and a second shifter. Two passes reuse everything and
+// cost one extra read-modify-write per word, on an engine that is
+// already far faster than the software loop this replaces.
+//
+// Not atomic, therefore. Between the two passes the sprite's footprint
+// is momentarily blank, so a sprite drawn directly into the VISIBLE
+// page can tear into a one-frame hole. Draw into the back page and
+// flip (sw/common/zgame.h), which a game is doing anyway.
+//
+// Returns false, having drawn nothing, if this bitstream's blitter has
+// no raster ops -- check z_fb_hw_rop_available() once at startup.
+bool z_fb_hw_blit_sprite(const void *data, const void *mask, int src_stride,
+	int src_x, int src_y, int dst_x, int dst_y, int w, int h);
+
+// true if this bitstream's blitter implements raster ops. Probed the
+// same way, and for the same reason, as z_fb_hw_blit_mem_available():
+// the same binary may be run against an older bitstream, where the ROP
+// bits are simply ignored and every op silently behaves as COPY --
+// which for a sprite means an opaque box rather than nothing at all,
+// and is exactly the kind of thing that gets misdiagnosed as bad art.
+bool z_fb_hw_rop_available(void);
+
+// True if the blitter can do a masked sprite in ONE pass (CTRL bit 7).
+//
+// z_fb_hw_blit_sprite() uses it automatically where present and falls
+// back to ANDN-then-OR where not, so most callers never need to ask.
+// Ask when it changes what you can safely do: a one-pass sprite is
+// ATOMIC and can go straight onto the visible page, where the two-pass
+// fallback leaves the footprint momentarily blank and must draw into a
+// back buffer.
+bool z_fb_hw_cookie_available(void);
+
+// -- shaded fills --
+//
+// A grey, on a display that has none: the blitter generates a 4x4
+// ordered dither for `level`, 0 (black) to Z_SHADE_MAX (solid). 17
+// evenly spaced levels.
+//
+// SCREEN-ALIGNED, which is the property that makes this useful rather
+// than decorative. The pattern is indexed by absolute framebuffer row
+// and column, never by the rectangle -- so two adjacent shaded fills
+// join with no seam, and a region redrawn at a different offset comes
+// out identical. A rectangle-relative pattern gets both wrong: visible
+// seams where fills meet, and a shimmer whenever anything scrolls.
+//
+// What it is for, beyond 3D: disabled controls, scrollbar troughs,
+// chart shading, selection washes, and textured backgrounds drawn as
+// one fill rather than a blit per tile.
+//
+// A shaded SPAN is one fill, which is what lets a software triangle
+// rasterizer emit flat-shaded polygons without any triangle hardware.
+//
+// Falls back to a plain black or white fill where the bitstream has no
+// dither support -- wrong but legible, rather than filling with the
+// level as a bit pattern, which would be noise.
+#define Z_SHADE_MAX 16
+
+void z_fb_hw_fill_shade(int x, int y, int w, int h, int level);
+void z_fb_hw_fill_shade_async(int x, int y, int w, int h, int level);
+
+bool z_fb_hw_dither_available(void);
+
+// -- shaded spans, for a software rasterizer --
+//
+// z_fb_hw_span_begin(level) once per face, then z_fb_hw_span(x, y, w)
+// per scanline. Height and grey level are hoisted out of the loop, so
+// each span costs three register writes instead of six.
+//
+// That matters at rasterizer rates: hundreds of spans a frame, each
+// register write a stalled bus cycle from the CPU. Halving the traffic
+// is the difference between keeping the blitter fed and not.
+//
+// z_fb_hw_span() does NOT clip and does not validate. It is the inner
+// loop of something that has already clipped; re-checking would put the
+// comparisons back that the hoisting removed. Anything that has not
+// clipped must call z_fb_hw_fill_shade() instead.
+void z_fb_hw_span_begin(int level);
+void z_fb_hw_span(int x, int y, int w);
+
+// Clear one scanline span, same lean path. For a rasterizer erasing
+// what its silhouette no longer covers -- which lets it draw first and
+// erase after, so the object is never blanked and nothing flashes.
+void z_fb_hw_span_clear(int x, int y, int w);
+
+// -- asynchronous blits --
+//
+// Every function above returns only once the blitter has finished. The
+// _async variants return as soon as the operation has been STARTED, so
+// the caller gets the blit duration back to do something else with.
+//
+// -- why this is safe, and why it needs almost no new machinery --
+//
+// gpu_blit_acquire() (zgfx.c) already waits for the blitter to go idle
+// BEFORE it starts anything, and re-checks with interrupts masked. So
+// the trailing wait these functions do is not what makes back-to-back
+// blits correct -- the leading wait in the next one is. Dropping the
+// trailing wait therefore changes when the caller regains control, and
+// nothing else. A sequence of async blits is exactly as correct as a
+// sequence of synchronous ones, cross-process races included.
+//
+// -- the one thing a caller MUST do --
+//
+// An async blit is still running when the call returns. Anything that
+// reads or writes the affected pixels with the CPU -- z_fb_get_pixel(),
+// a software sprite path, a direct VRAM poke -- must call
+// z_fb_hw_sync() first, or it will race the hardware and see a
+// half-drawn rectangle. Another BLIT is fine; only CPU access needs
+// the barrier.
+//
+// The synchronous functions are unchanged and remain the default. This
+// is opt-in on purpose: the callers that benefit are the ones with
+// real work to overlap, and the ones that don't benefit would only
+// gain a new way to get it wrong.
+//
+// -- how much this actually buys --
+//
+// Nothing at all if the caller immediately blocks. The gain is exactly
+// the CPU work done between starting a blit and needing it finished,
+// capped at the blit's own duration. A loop that blits and does
+// nothing else runs at the same speed either way; a loop that computes
+// the next item's position, looks up its bitmap, or steps its physics
+// gets that work for free.
+//
+// So the useful shape is: start the blit for item N, prepare item N+1,
+// start its blit (which waits for N as a side effect), and so on.
+bool z_fb_hw_blit_mem_async(const void *src, int src_stride,
+	int src_x, int src_y, int dst_x, int dst_y, int w, int h, int rop);
+
+void z_fb_hw_fill_rect_async(int x, int y, int w, int h, int color);
+
+// Masked sprite, started but not waited for.
+//
+// NOTE this is two blits internally (see z_fb_hw_blit_sprite above), so
+// it necessarily waits for the first pass before starting the second --
+// only the SECOND is left running when this returns. Half the win of
+// the synchronous version, until the blitter grows a single-pass
+// cookie-cut mode.
+bool z_fb_hw_blit_sprite_async(const void *data, const void *mask,
+	int src_stride, int src_x, int src_y, int dst_x, int dst_y,
+	int w, int h);
+
 // true if this bitstream's blitter implements the mode above. Probes
 // the hardware (writes the mode bit without a start bit and reads it
 // back) rather than assuming, so the same binary runs on an older
@@ -260,6 +436,71 @@ bool z_fb_hw_blit_mem_available(void);
 // stub wrote the destination back unchanged, so a caller would see a
 // no-op rather than an error. Gate on z_fb_hw_blit_mem_available()
 // instead: the two arrived together, so it answers for both.
+// -- vertical scroll, in hardware --
+//
+// Moves the contents of a rectangle up or down by `dy` pixels.
+// Negative dy moves content UP (scrolling forward through a document);
+// positive moves it DOWN (scrolling back). The strip `dy` pixels deep
+// that scrolls in is NOT touched -- the caller redraws it.
+//
+// Roughly 4x faster than re-rendering the text: for an 80x25 terminal,
+// 1.07ms against 4.67ms. Not a throughput win -- glyph drawing costs
+// about 1% of the CPU either way -- but it removes a perceptible hitch
+// every time output scrolls.
+//
+// -- why the direction matters, and why both still work --
+//
+// The blitter walks rows top-down and copies through VRAM, so an
+// overlapping copy can overwrite a source row before it has been read.
+//
+//   Content moving UP: the destination is ABOVE the source, so each
+//   row is read before anything overwrites it. One blit, safe.
+//
+//   Content moving DOWN: the destination is BELOW the source, and a
+//   single blit would destroy rows it has not read yet.
+//
+// The second case is NOT unfixable, which is worth stating because the
+// obvious conclusion is that scrolling back cannot be accelerated. It
+// is done as a series of blits `dy` deep, issued BOTTOM TO TOP. Within
+// one strip source and destination cannot overlap (the strip is
+// exactly the scroll distance), and going upward means each strip is
+// read before the strip below it is written.
+//
+// The cost is one blit per strip instead of one overall -- 24 rather
+// than 1 for a 25-line screen scrolling by one line. Same pixels, so
+// the same blitter time; only the per-blit setup is multiplied, and it
+// still comes out several times faster than re-rendering.
+void z_fb_hw_scroll(int x, int y, int w, int h, int dy);
+
+/* Debug counters for the scroll path. Set to N to have the next N
+ * scroll operations print their arguments, and the next N blits print
+ * theirs, then stop.
+ *
+ * Bounded rather than boolean on purpose: scrolls happen at key-repeat
+ * rates, and an unbounded print would flood the console and change the
+ * timing of the thing being investigated. */
+extern int z_fb_scroll_debug;
+extern int z_fb_scroll_dbg_armed;
+
+/* Bisection tool -- see zgfx.c. Set nonzero to force the scroll region
+ * onto 32-pixel boundaries, so the copy needs no bit shifting at all.
+ * A few edge pixels are then not scrolled; the point is whether the
+ * SIDEWAYS OFFSET disappears, which would localise the fault to the
+ * unaligned source path. */
+extern int z_fb_scroll_align;
+
+/* Issue each scroll blit twice -- see zgfx.c. Distinguishes a
+ * transient (bus settle, arbitration) from a systematic fault. Never a
+ * fix: the second pass is pure waste when it is not needed. */
+extern int z_fb_scroll_twice;
+
+/* Read the blitter's source-read probe and compare it against what the
+ * CPU sees at the same address. Prints three things: what the copy
+ * asked for, what the blitter presented, and what came back -- which
+ * separates "asked for the wrong word" from "asked correctly and got
+ * the wrong data". See zeitlos.h's gpu_blit_dbg_* registers. */
+void z_fb_hw_scroll_probe(uint32_t expect_adr);
+
 void z_fb_hw_blit_vram(int src_x, int src_y,
 	int dst_x, int dst_y, int w, int h);
 

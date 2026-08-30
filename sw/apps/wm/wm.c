@@ -2324,6 +2324,25 @@ static void handle_message(z_msg_t *msg) {
 
 		}
 
+		// A full-screen app is handing the framebuffer back. See
+		// Z_WM_REPAINT's own comment in zwm.h for why this takes no
+		// rectangle.
+		//
+		// repair_region() over the whole screen is exactly the right
+		// primitive and already does everything needed: desktop
+		// background, every window frame, and a Z_WM_REDRAW to each
+		// owner so app content comes back too. exclude_idx -1 excludes
+		// nothing.
+		//
+		// Also drops any mouse capture and re-asserts the cursor
+		// shape. A game that exited while wm thought a drag was in
+		// progress would otherwise leave the next click behaving as
+		// the end of that drag.
+		case Z_WM_REPAINT:
+			mouse_capture = -1;
+			repair_region(0, 0, WM_SCREEN_W, WM_SCREEN_H, -1);
+			break;
+
 		case Z_WM_CLIP_SET: {
 
 			if (msg->obj.type != Z_STR || !msg->obj.val.str) break;
@@ -3241,6 +3260,31 @@ int main(void) {
 				windows[dock_idx].w, windows[dock_idx].h, -1);
 
 		for (volatile int i = 0; i < 2000; i++); // light throttle
+
+		/* Yield the rest of this timeslice.
+		 *
+		 * wm cannot block indefinitely the way repl can: the pointer
+		 * is POLLED from rtl/usb_hid.v's cursor register, not
+		 * delivered as a message, so nothing would wake it when the
+		 * mouse moves.
+		 *
+		 * But spinning is not the alternative. Waiting one tick wakes
+		 * this loop at Z_TICK_HZ (732Hz), which is more than twelve
+		 * times the display's refresh rate -- far finer than anything
+		 * a person can see in a pointer -- while handing back the
+		 * ~99% of each timeslice that was previously spent re-reading
+		 * a register that had not changed.
+		 *
+		 * A message arriving cuts the wait short, so app requests are
+		 * still serviced immediately rather than up to a tick late.
+		 *
+		 * This matters well beyond wm's own responsiveness: the
+		 * scheduler divides the CPU between RUNNABLE processes, so a
+		 * spinning wm takes its share out of whatever is in the
+		 * foreground. A full-screen app measured a quarter of the
+		 * machine with three such spinners running alongside it, and
+		 * a quarter of the CPU means a quarter of the frame rate. */
+		z_proc_wait(1);
 
 	}
 

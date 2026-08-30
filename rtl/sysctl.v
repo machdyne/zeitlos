@@ -391,6 +391,50 @@ module sysctl #()
 	// INTERRUPTS
 
 	reg irq_timer;
+	// -- ethernet receive interrupt --
+	//
+	// One wire from whichever MAC this board has, into cpu_irq[8].
+	// Declared unconditionally and tied low when there is no ethernet
+	// at all, so the interrupt assignment below needs no `ifdef of its
+	// own -- the same arrangement gpu_frame_ctr uses.
+	//
+	// A RISING-EDGE PULSE, not a level -- and the first version of
+	// this got it wrong in a way the file already warned about.
+	//
+	// eth_rx_ready below IS a level: high for as long as a frame sits
+	// in the RX buffer. Feeding that straight into cpu_irq[8] looked
+	// safer (no window in which the interrupt is acknowledged but a
+	// packet is still unread) and instead brought the machine to a
+	// crawl -- UART output visibly printing character by character,
+	// the dock drawing its icons one at a time.
+	//
+	// The reason is written twenty lines above, about bits 4 and 7: "a
+	// latched level source re-fires the instant the handler returns
+	// and the machine stops making forward progress." Bit 8 is latched
+	// in LATCHED_IRQ, so a level there re-fires forever.
+	//
+	// The UART and the audio FIFO escape this by being non-latched
+	// AND by having handlers that can clear the source -- draining the
+	// FIFO lowers the level. Ethernet has neither property: only
+	// `net`, a userspace process, can consume the frame, and it cannot
+	// run while the ISR is re-entering. Non-latched would storm just
+	// the same.
+	//
+	// So the interrupt is one pulse per ARRIVAL. If a second frame
+	// lands before the first is read there is no new rising edge and
+	// no second interrupt -- which is fine, because net drains every
+	// pending frame once it runs, and its timeout (docs/networking.md)
+	// is the backstop for the case where it somehow does not.
+	wire eth_rx_ready;
+	reg eth_rx_ready_d;
+	always @(posedge wbm_clk) eth_rx_ready_d <= eth_rx_ready;
+	wire eth_rx_int = eth_rx_ready && !eth_rx_ready_d;
+`ifndef ETH_RMII
+`ifndef ETH_SPI
+	assign eth_rx_ready = 1'b0;
+`endif
+`endif
+
 
 	always @* begin
 		cpu_irq = 0;
@@ -410,6 +454,14 @@ module sysctl #()
 		// and the machine stops making forward progress.
 `ifdef AUDIO
 		cpu_irq[7] = wbs_audio_int;
+
+		// Ethernet receive. See eth_rx_int above for why this is a
+		// PULSE rather than a level, and docs/networking.md for what
+		// it replaced -- sw/apps/net woke ~732 times a second on a
+		// timer to discover nothing had arrived, and on a machine
+		// whose scheduler splits the CPU between RUNNABLE processes
+		// that came out of the foreground app's share.
+		cpu_irq[8] = eth_rx_int;
 `endif
 	end
 
@@ -1682,6 +1734,28 @@ module sysctl #()
 		.spi_sck(ETH_SCLK),
 		.spi_int(ETH_INT)
 	);
+
+	// The ENC28J60's INT pin is ACTIVE LOW, so it inverts into the
+	// same active-high interrupt line the RMII MAC drives. Software
+	// then sees one Z_IRQ_ETH regardless of which MAC the board has,
+	// which is the point -- sw/apps/net already abstracts over the two
+	// and should not have to learn the difference here.
+	//
+	// This is the wire spim.v's own comment says would be "strictly
+	// better than a timer": the pin was already routed and readable in
+	// STATUS bit 2, it simply was not connected to anything that could
+	// wake a blocked process.
+	// Active low, and SYNCHRONISED before the edge detector above --
+	// this is an asynchronous pin from another chip, and an
+	// unsynchronised signal feeding an edge detector produces spurious
+	// pulses on metastability, which for an interrupt means a storm
+	// that appears at random.
+	reg eth_int_s0, eth_int_s1;
+	always @(posedge wbm_clk) begin
+		eth_int_s0 <= ~ETH_INT;
+		eth_int_s1 <= eth_int_s0;
+	end
+	assign eth_rx_ready = eth_int_s1;
 `endif
 
 	// WISHBONE SLAVE: RMII ETHERNET MAC (tested with LAN8720A)
@@ -1712,7 +1786,8 @@ module sysctl #()
 		.eth_txd(ETH_TXD),
 		.eth_tx_en(ETH_TX_EN),
 		.eth_crs_dv(ETH_CRS_DV),
-		.eth_rst_n(ETH_RST_N)
+		.eth_rst_n(ETH_RST_N),
+		.eth_int_o(eth_rx_ready)
 	);
 `endif
 

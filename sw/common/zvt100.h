@@ -81,7 +81,33 @@ typedef struct {
 	// dirty rows instead of the whole 80x25 grid on every byte.
 	bool dirty[VT_ROWS];
 
+
+	/* Rows scrolled off the top since the last vt_take_scrolls().
+	 *
+	 * Lets a renderer move the pixels that survived a scroll rather
+	 * than redrawing every cell -- about 4x cheaper for a full
+	 * screen. Purely advisory: a renderer that ignores it is still
+	 * correct, just slower.
+	 *
+	 * Saturates rather than wrapping. Once it exceeds the screen
+	 * height nothing survives the scroll anyway, so the exact value
+	 * stops mattering and a wrap to a small number would be actively
+	 * wrong. */
+	uint16_t scrolls;
+
 } vt_screen_t;
+
+/* How many rows have scrolled off the top since this was last called,
+ * and reset the count.
+ *
+ * "Take" rather than "get" because reading it clears it: the renderer
+ * is claiming responsibility for those scrolls, and leaving them for a
+ * second caller would shift the screen twice. */
+static inline uint16_t vt_take_scrolls(vt_screen_t *vt) {
+	uint16_t n = vt->scrolls;
+	vt->scrolls = 0;
+	return n;
+}
 
 // resets to a blank screen, cursor at (0,0), no pending escape state.
 void vt_init(vt_screen_t *vt);

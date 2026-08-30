@@ -30,6 +30,7 @@
 #include <string.h>
 
 #include "../../common/zeitlos.h"
+#include "../../common/zsoc.h"	// Z_TICK_HZ, for the idle wait in main()
 #include "../../common/zport.h"
 
 static z_port_t conn;
@@ -98,6 +99,11 @@ int main(void) {
 
 		}
 
+	
+		/* Yield. This loop used to spin, so the app was RUNNABLE
+		 * forever and took a full scheduler share from whatever was
+		 * in the foreground -- see docs/app_runtime.md. entirely message-driven. */
+		z_proc_wait(Z_TICK_HZ / 30);
 	}
 
 	return 0;

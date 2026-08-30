@@ -659,6 +659,28 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 		z_hid_irq1();
 	}
 
+	// Ethernet receive -- unblock whoever is waiting on packets.
+	//
+	// No handler and no queue: the frame is sitting in the MAC's RX
+	// buffer and the driver reads it from there. All this interrupt
+	// has to do is make sure the driver gets scheduled to look, which
+	// is exactly what unblocking it does.
+	//
+	// Z_IRQ_ETH is a LEVEL -- it stays asserted while a frame is
+	// waiting -- so this fires repeatedly until the driver consumes
+	// it. That is harmless (unblocking an already-runnable process
+	// does nothing) and is what makes the level safe: there is no
+	// window in which the interrupt has been acknowledged but a packet
+	// is still unread.
+	//
+	// The pid is looked up rather than fixed: net registers itself
+	// like any other service, and hardwiring a pid here would break
+	// the moment it were restarted.
+	if ((irqs & (1 << Z_IRQ_ETH)) != 0) {
+		uint32_t net_pid;
+		if (k_pid_find("net0", &net_pid)) k_proc_unblock(net_pid);
+	}
+
 	// swap process on KTIMER interrupt
 	if ((irqs & (1 << Z_IRQ_KTIMER)) != 0) {
 

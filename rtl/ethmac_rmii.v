@@ -109,7 +109,34 @@ module ethmac_rmii_wb #()
 	output [1:0] eth_txd,
 	output eth_tx_en,
 	input eth_crs_dv,
-	output eth_rst_n
+	output eth_rst_n,
+
+	// -- receive interrupt --
+	//
+	// A LEVEL, not a pulse: high for exactly as long as a frame is
+	// waiting in the RX buffer. It is rx_ready_sync, the same bit
+	// STATUS bit 2 reports, brought out to the CPU's interrupt
+	// controller.
+	//
+	// A level rather than an edge on purpose. The driver clears it by
+	// consuming the frame, which is the only thing that can clear it,
+	// so there is no window in which the interrupt has been
+	// acknowledged but a frame is still waiting -- the classic way an
+	// edge-triggered network interrupt loses a packet and wedges the
+	// link until the next one happens to arrive.
+	//
+	// It also costs nothing. rx_ready_sync already exists and is
+	// already synchronised into the wishbone domain for the STATUS
+	// read (see its own comment on the quasi-static crossing); this is
+	// a wire.
+	//
+	// Why it matters: without this, a driver has no way to learn that
+	// a packet arrived except to keep asking. sw/apps/net polled on a
+	// 1-tick timer, waking ~732 times a second to discover nothing had
+	// happened -- and because the scheduler shares the CPU between
+	// RUNNABLE processes, that came out of whatever was in the
+	// foreground rather than out of idle time.
+	output eth_int_o
 );
 
 	localparam REG_STATUS  = 0;
@@ -519,6 +546,8 @@ module ethmac_rmii_wb #()
 	// since settled and nothing is still writing it. Software must
 	// still only trust this value while rx_ready_sync (STATUS bit 2)
 	// reads 1 -- same rule as the buffer contents below.
+	assign eth_int_o = rx_ready_sync;
+
 	reg [10:0] rx_len_sync = 0;
 
 	always @(posedge wb_clk_i) begin

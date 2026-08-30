@@ -890,6 +890,19 @@ bool stl_load(const char *path, model_t *m, void (*pump)(void)) {
 
 	m->nverts = 0;
 	m->nedges = 0;
+
+	/* No faces from an STL import -- yet.
+	 *
+	 * The loader already reads triangles (that is what an STL IS) and
+	 * then converts them to a deduplicated edge list, discarding the
+	 * faces. Keeping them is a real change: the triangle count after
+	 * cluster decimation is far above MODEL_MAX_TRIS, so it needs its
+	 * own budget and its own decimation, not just an array.
+	 *
+	 * Zeroing it here is what makes the renderer degrade gracefully
+	 * rather than draw garbage: ntris == 0 means "wireframe only", and
+	 * the shaded path falls back on its own. See mtri_t in model.h. */
+	m->ntris = 0;
 	m->decimated = 0;
 	m->name[0] = 0;
 

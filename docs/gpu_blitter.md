@@ -726,3 +726,737 @@ placeholder approach for rendering text with the blitter, written
 before glyph blit mode was implemented. That approach is no longer
 relevant; all current text rendering uses the real glyph blit mode
 described above, or software rendering as a fallback.
+
+## Raster operations
+
+`gpu_blit.v` CTRL bits **6:5** select how the source word combines with
+what is already in the destination.
+
+| | | |
+|---|---|---|
+| `Z_ROP_COPY` | 0 | `dst = src` |
+| `Z_ROP_OR` | 1 | `dst = dst \| src` |
+| `Z_ROP_XOR` | 2 | `dst = dst ^ src` |
+| `Z_ROP_ANDN` | 3 | `dst = dst & ~src` |
+
+Applies to fill and to both kinds of copy. **Ignored in glyph mode**,
+which has its own write path with its own fg/bg/cell merge and no use
+for these.
+
+`ROP_COPY` is 0 so every existing caller — which writes neither bit —
+keeps behaving exactly as before. That is not politeness: `gpu_blit` has
+shipped, and a bitstream where an old binary's blits suddenly XOR would
+be a very confusing thing to debug.
+
+### Why ANDN rather than AND
+
+The operation sprites need is "punch a hole shaped like this mask". With
+plain AND the caller would have to store an inverted copy of every mask.
+ANDN costs the same single LUT input and saves the sprite sheet from
+carrying both polarities.
+
+### Masked sprites
+
+```c
+z_fb_hw_blit_sprite(data, mask, stride, sx, sy, dx, dy, w, h);
+```
+
+Two passes over the same rectangle: **ANDN the mask** to clear exactly
+the pixels the sprite will occupy, then **OR the data** to lay them in.
+Order matters — OR first would light pixels the mask pass then clears
+again, leaving a sprite-shaped hole instead of a sprite.
+
+Two passes and not one because a single-pass masked blit needs the
+hardware to fetch two source streams at once: a second source port and a
+second shifter. Two passes reuse everything and cost one extra
+read-modify-write per word.
+
+**Not atomic.** Between the passes the sprite's footprint is momentarily
+blank, so a sprite drawn into the *visible* page can tear into a
+one-frame hole. Draw into the back page and flip — which a game is doing
+anyway.
+
+### The correctness hazard: blind fills
+
+Any op other than COPY needs to know what is already in the
+destination. A copy always reads it, and a *clipped* fill already reads
+it to preserve bits outside the rect — but an **unclipped fill** went
+straight to a blind `ST_WRITE`.
+
+With a non-COPY op that would merge against whatever `read_data` held
+from the *previous* blit: wrong in a way that depends on what the
+blitter did last, which is about the worst debugging experience
+available. `rop_needs_read` forces the read. An unclipped COPY fill
+still skips it, exactly as before.
+
+### Timing
+
+Two wires, `rop_fill` and `rop_copy`, rather than one fed by a
+`fill ? pattern : src` mux — deliberately.
+
+Per bit each is a function of exactly four things: the destination bit,
+the source bit, and the two op bits. That is **one LUT4** on ECP5.
+`ST_WRITE` then merges with the edge mask, three inputs, one more LUT4.
+
+So this adds **one logic level** to a path that was already
+register-to-register (`read_data` is captured in `ST_WAIT_READ`,
+`m_dat_o` is a register), on a write path nowhere near the 48MHz
+critical path to begin with.
+
+Folding the fill/copy choice into a single wire would make it six inputs
+and two levels *before* the merge, for no gain — `ST_WRITE` already
+branches on `work_fill`, so the selection is free there.
+
+Cost is roughly 64 extra LUT4 (two 32-bit op networks) plus a 2-bit
+register, and no BRAM.
+
+### Detecting support
+
+`z_fb_hw_rop_available()` writes the ROP field with no start bit and
+reads it back, the same probe `z_fb_hw_blit_mem_available()` uses.
+
+Worth having, because the failure on an older bitstream is nastier than
+usual: the bits are simply ignored, so every op behaves as COPY, and a
+masked sprite draws its mask as a solid block with the data over the top
+— an **opaque box**, which looks like bad art rather than a missing
+hardware feature.
+
+### Testing
+
+`rtl/gpu/bench/tb_rop.v`, self-checking, passes. Covers every op in fill
+and memory-copy mode against an independently-computed model; the
+COPY-is-unchanged regression; the blind-fill hazard explicitly (it runs
+a blit that leaves a known value in `read_data`, then an unclipped OR
+fill elsewhere, and distinguishes `dst|src` from `dst|stale`); the
+masked-sprite recipe end to end including untouched neighbours; and the
+CTRL readback the software probe depends on.
+
+`tb_memblit.v` still passes unchanged.
+
+```
+iverilog -g2005 -o /tmp/tb_rop.out \
+    rtl/gpu/bench/tb_rop.v rtl/gpu/gpu_blit.v
+vvp /tmp/tb_rop.out
+```
+
+## Asynchronous blits
+
+Every blit function returns only once the blitter has finished. The
+`_async` variants return as soon as the operation has been *started*,
+giving the caller the blit duration back to do something else with.
+
+### Why this needed almost no new machinery
+
+`gpu_blit_acquire()` already waits for the blitter to go idle **before**
+starting anything, and re-checks with interrupts masked — that is what
+closed the cross-process race documented above it in `zgfx.c`.
+
+So the trailing wait is not what makes back-to-back blits correct. The
+*leading* wait in the next one is. Dropping the trailing wait changes
+when the caller regains control and nothing else: a sequence of async
+blits is exactly as correct as a sequence of synchronous ones, including
+against another process competing for the same peripheral.
+
+### The one rule
+
+An async blit is still running when the call returns. Anything touching
+the affected pixels **with the CPU** — `z_fb_get_pixel()`, a software
+sprite path, a direct VRAM poke — must call `z_fb_hw_sync()` first.
+Another *blit* is fine; only CPU access needs the barrier.
+
+`gamedemo` needs this in two places, and both are the kind of thing that
+would otherwise fail once a year on a loaded system rather than in
+testing:
+
+- before `z_game_flip()`, or the frame shown could be one blit short
+- before the software sprite fallback, which reads VRAM to composite
+
+### How much it buys
+
+Nothing if the caller immediately blocks. The gain is exactly the CPU
+work done between starting a blit and needing it finished, capped at the
+blit's duration.
+
+So the useful shape is: start the blit for item N, prepare item N+1,
+start its blit (which waits for N as a side effect), and so on. In
+`gamedemo`'s tile loop the per-tile work — indexing the map, folding the
+world x into the page, computing the destination — is roughly 20 cycles
+against a ~120 cycle blit, so it overlaps almost entirely.
+
+The synchronous functions are unchanged and remain the default. This is
+opt-in on purpose: the callers that benefit are the ones with real work
+to overlap, and the ones that don't would only gain a new way to get it
+wrong.
+
+### Masked sprites are only half async
+
+`z_fb_hw_blit_sprite_async()` is two blits internally, so it necessarily
+waits for the ANDN pass before starting the OR pass — only the second is
+left running when it returns.
+
+That is the strongest remaining argument for a **single-pass cookie-cut
+mode**: not the raw cycle count, but that a one-pass sprite is fully
+asynchronous and atomic, where a two-pass one can be neither.
+
+## Single-pass masked sprites (cookie cut)
+
+CTRL bit **7**. Fetches two source streams and combines them with the
+destination in one operation:
+
+```
+dst = (A & B) | (~A & dst)
+```
+
+A is the mask (`gpu_blit_src_addr`, 1 where the sprite is opaque), B is
+the data (`gpu_blit_src_b_addr`). The ROP field is ignored while this is
+set — the combine *is* the op.
+
+`z_fb_hw_blit_sprite()` uses it automatically where present and falls
+back to ANDN-then-OR where not, so most callers never need to know.
+
+### Measured
+
+| | cycles, 16×16 |
+|---|---|
+| two-pass ANDN + OR | 544 |
+| one-pass cookie cut | **400** (73%) |
+
+Four bus transactions per destination word instead of six, and one
+register setup instead of two.
+
+### The structural wins matter more than the speed
+
+**Atomic.** Between two passes the sprite's footprint is momentarily
+blank, so a two-pass sprite can only safely be drawn into a back buffer.
+One pass can go straight onto the visible page.
+
+**Fully asynchronous.** `z_fb_hw_blit_sprite_async()` could only ever
+leave the *second* pass running, because starting it had to wait for the
+first. One pass gives the caller the whole blit duration back.
+
+### Why it needs no second shifter
+
+This is what makes it cheap, and it's the one design decision worth
+recording.
+
+A and B are read on **different cycles**, so one barrel shifter serves
+both as long as its output is latched per stream — which
+`ST_MEM_READ_WAIT` now does, selecting on `mem_stream`. The Amiga
+blitter needed two shifters only because its A and B could be
+*independently positioned*; here they are always the same sprite
+geometry, so same stride, same `src_x`/`src_y`, therefore the same
+shift.
+
+The shifter is by far the most expensive thing in the source path
+(~64–96 LUT4). Sharing it takes the cost of this feature down to a
+duplicate of the row/word walk registers — roughly 160 flops — plus one
+LUT4 per bit for the combine and one more for the mux against the ROP
+result.
+
+No second bus port and no new arbiter client either: A and B share the
+`s` port with alternating reads, which is free because the walk was
+already sequential.
+
+### What it deliberately is not
+
+Not a general minterm unit. The Amiga took an 8-bit function select over
+A, B and C, which is an 8:1 mux per bit — roughly 112 LUT4 and two logic
+levels, against this fixed function's one LUT4 and one level. Cookie-cut
+is the only minterm anyone actually reaches for, and the 2-bit ROP field
+already covers XOR fills and the rest.
+
+### Timing
+
+Three logic levels in the write merge: the combine (3 inputs), the mux
+against `rop_copy` (3 inputs), then the edge-mask merge (3 inputs). Up
+from two.
+
+The path is register-to-register — `read_data` is captured in
+`ST_WAIT_READ`, `m_dat_o` is a register — and the blitter's write path
+is nowhere near the 48MHz critical path. **COPY blits are unchanged**: a
+320×240 unclipped fill still measures 9,624 cycles, so the OS fill path
+pays nothing.
+
+### Testing
+
+`rtl/gpu/bench/tb_rop.v` covers it, and the cases were chosen for what
+they'd catch rather than for coverage:
+
+- one pass equals two, against an independently computed model rather
+  than against the two-pass result, so a shared bug still fails
+- **multi-row** — B has its own row pointer, and a stride advance
+  applied to A but not B would show up only from row 1 onward, which a
+  single-row test passes regardless
+- **unaligned** — both streams must take the same shift from the one
+  shared shifter; a stream holding a stale shifted value corrupts only
+  this case
+- neighbouring words untouched
+- the CTRL readback the software probe depends on
+
+`tb_memblit.v` still passes unchanged.
+
+Two bugs this caught during development, both from patches that silently
+failed to apply: `mem_stream` never being initialised (X propagation
+through the shared shifter, which broke plain memory copies), and
+`ST_MEM_READ_WAIT` keeping its single-stream behaviour. Worth noting
+that the first showed up as *existing* tests failing, which is exactly
+what the regression cases are for.
+
+## Shaded fills (ordered dither)
+
+CTRL bit **8**. In a fill with this set, `PATTERN` is not a bit pattern
+— its low five bits are a **grey level**, 0 to 16, and the hardware
+generates a 4x4 ordered dither for it.
+
+`z_fb_hw_fill_shade(x, y, w, h, level)`.
+
+### Why a level, not a pattern table
+
+The obvious design is four pattern registers indexed by `y & 3`. That
+needs four new registers — the file is already at 16, so it would need a
+wider address too — and leaves every caller to compute dither matrices.
+
+A level needs **no new register at all**: `PATTERN` is already there and
+is meaningless as a bitmask in this mode. The Bayer matrix is a
+constant, so the four row patterns are a combinational function of five
+bits. No storage whatsoever, roughly one LUT per bit.
+
+### Screen-aligned by construction
+
+This is the property that makes patterns useful rather than decorative,
+and here it comes for free.
+
+The dither **row** is the destination's absolute framebuffer row. The
+dither **column** is the bit's position within the 32-bit word — which,
+because the framebuffer is a flat bitmap at 32 pixels per word, *is* the
+absolute screen column mod 4. Neither is relative to the rectangle being
+filled, and no offset is ever added.
+
+So two adjacent fills share one continuous pattern with no seam, and a
+region redrawn at a different rectangle offset comes out identical. A
+rectangle-relative pattern gets both wrong: seams where fills meet, and
+a shimmer whenever anything scrolls.
+
+`tb_rop.v` tests this specifically, because **no single-rectangle test
+can catch it** — every other dither check passes just as well with a
+rectangle-relative pattern. The alignment test fills a 64-pixel span as
+one rectangle, then as two adjacent rectangles, and requires the results
+to be bit-identical.
+
+### What it is for
+
+Greys, on a display that has none. Seventeen stable levels from one
+5-bit value:
+
+- flat-shaded 3D — a shaded **span is one fill**, which is what lets a
+  software triangle rasterizer emit flat-shaded polygons with no
+  triangle hardware at all
+- disabled controls, scrollbar troughs, selection washes
+- chart and histogram shading
+- textured backgrounds drawn as one fill rather than a blit per tile —
+  the case that prompted this, after `gamedemo`'s ground went from 63
+  tile blits to one fill and lost its texture
+
+### Cost
+
+No storage. The Bayer matrix is a constant function of two row bits and
+two column bits, and the column is fixed per bit lane, so each bit is
+about one LUT4. It sits where `PATTERN` already fed the raster op, so
+everything downstream — the ROP, the edge-mask merge, clipping —
+is unchanged and a dithered fill composes exactly like any other.
+
+`COPY` fills measure identically to before.
+
+### Testing
+
+`tb_rop.v`: level 0 is exactly black and level 16 exactly solid (both
+ends must be reachable or "off" and "on" are not); a mid level checked
+bit by bit against the matrix; and the split-fill alignment test above.
+`tb_memblit.v` still passes.
+
+## Hardware vertical scroll
+
+`z_fb_hw_scroll(x, y, w, h, dy)` moves a rectangle's contents up or
+down. Negative `dy` moves content **up** (scrolling forward through a
+document); positive moves it **down** (scrolling back). The strip that
+scrolls in is not touched — the caller redraws it.
+
+For an 80x25 terminal: **1.07ms against 4.67ms**, about 4.4x. Not a
+throughput win — glyph drawing is around 1% of the CPU either way — but
+it removes a perceptible hitch every time output scrolls.
+
+### Both directions work, and one of them is not obvious
+
+The blitter walks rows top-down and copies through VRAM, so an
+overlapping copy can overwrite a source row before reading it.
+
+**Content moving up** puts the destination above the source, so every
+row is read before anything overwrites it. One blit.
+
+**Content moving down** puts the destination below the source, and a
+single blit would destroy rows it has not read yet. The obvious
+conclusion is that scrolling back cannot be accelerated — and that is
+wrong. It is done as a series of blits exactly `dy` deep, issued
+**bottom to top**: within one strip source and destination cannot
+overlap, and working upward means each strip is read before the strip
+below it is written.
+
+The cost is one blit per strip rather than one overall — 24 instead of 1
+for a 25-line screen scrolling by one line. Same pixels, so the same
+blitter time; only the per-blit setup multiplies, and it is still
+several times faster than re-rendering.
+
+### A bug worth recording
+
+The topmost strip is partly off the region, and the first version
+clamped its **source** without advancing its **destination**. That lost
+exactly one row per scroll, at the top.
+
+It looked correct for `dy == 1`, where the skip is zero, and failed for
+every larger step — the kind of thing that survives a quick test of the
+common case and shows up later as a mysterious duplicated line.
+
+Verified against a row-level model that also flags any read of an
+already-overwritten row: seven cases, both directions, `dy` from 1 to
+24, all correct with no overwrite-before-read.
+
+### Wired into term, text and read
+
+All three had a full re-render on every scroll. Each needed a different
+integration, and the differences are the interesting part.
+
+**`term`** — the shadow grid made this nearly free. A scroll changes
+every cell in the model, so the shadow compare would find them all
+different and redraw the screen. Blitting the surviving pixels up *and
+shifting the shadow by the same amount* makes the compare find them
+matching, so it draws only the rows that genuinely changed. One blit
+plus one row of glyphs instead of twenty-five.
+
+The blit and the shift must agree exactly. If they disagree the compare
+concludes rows match when they do not, and the terminal shows stale
+text with nothing to indicate it.
+
+`zvt100` gained a `scrolls` counter and `vt_take_scrolls()`. A count,
+not a flag: several lines can scroll between two renders, and the
+renderer needs the total. "Take" because reading clears it — leaving
+the count for a second caller would shift the screen twice.
+
+**`text`** — a `scroll_repaint()` kept deliberately separate from
+`repaint()`. `repaint()` runs on `Z_WM_REDRAW` after wm has cleared the
+region, so it must not assume anything about what is on screen, which
+is exactly what scrolling does assume. Conflating them would blit
+whatever was underneath the window into the text area.
+
+It also falls back to a full repaint when a selection exists:
+`draw_row()` renders selected runs inverted, so moving old pixels would
+carry stale highlighting with them.
+
+**`read`** — the hard one, and only half accelerated. Its display lines
+are **not a uniform height**, since headings use a larger font, so "n
+lines" is not a fixed pixel shift. The shift has to be measured from
+the layout, and only lines already laid out can be measured — the ones
+scrolling off the top, not the ones scrolling in from above.
+
+So forward scrolling measures `vlines[n].y` before scrolling and blits
+by exactly that, while backward keeps the full repaint. Forward is
+overwhelmingly the common direction in a reader, and half the win with
+no risk of shifting by the wrong amount beats laying the incoming lines
+out twice to find the number.
+
+### Debugging the scroll offset
+
+On hardware the scroll blit lands horizontally offset by roughly the
+window's own x origin — content from outside the window appearing
+inside it — in all three apps, and only on hardware.
+
+**The RTL is not the cause.** `rtl/gpu/bench/tb_vscroll.v` performs
+VRAM-to-VRAM copies at x = 32, 44, 12 and 63, single-row and
+multi-row, replicating exactly what `z_fb_hw_blit_vram()` programs.
+Every pixel matches. So the fault is in the coordinates handed over,
+not in what the blitter does with them.
+
+`z_fb_scroll_debug` and `z_fb_scroll_dbg_armed` trace both ends of that
+handover: what the app computes, and what `z_fb_hw_scroll()` passes on.
+Bounded counters rather than a flag, because scrolls happen at
+key-repeat rates and an unbounded print would flood the console and
+change the timing being investigated.
+
+`text` currently prints the first six scrolls: its own `delta`, the
+content rect, `text_w`, and the resulting blit arguments. The useful
+comparison is against `fill_content(0, ...)`, which draws the same text
+area and resolves x to `c.x0 + 0` — anything the blit does differently
+from that is the bug.
+
+`term` and `read` stay disabled while this is narrowed down, so only one
+app is moving.
+
+#### What the trace showed
+
+```
+text scroll: delta=1 top=1 drawn=0 rows=25 LINE_H=9
+  content rect: x0=46 y0=53 x1=361 y1=277  (w=316 h=225)
+  text_w=303 TEXT_X0=2  -> blit x=46 w=303
+zgfx scroll: x=46 y=53 w=303 h=225 dy=-9
+  blit_vram sx=46 sy=62 dx=46 dy=53 w=303 h=216
+```
+
+**The coordinates are correct.** Source x equals destination x equals
+the content rect's x0. The source row is exactly one line below the
+destination row. The width matches the text area. Nothing here explains
+a sideways shift, which rules out the app and `z_fb_hw_scroll()` and
+leaves the copy itself.
+
+#### The bisection
+
+`z_fb_scroll_align` forces the region onto 32-pixel boundaries, so the
+copy is word-for-word with no bit shifting at all. It is **ON by
+default** in the debug build.
+
+(It was briefly a Ctrl-F toggle, which was a bad idea twice over: the
+key never reached `handle_key`, and in an editor nearly every plain key
+inserts text, so there was no good key to spare. A build-time default
+asks the question just as well.)
+
+A few pixels at each edge are then not scrolled and will be wrong. That
+is expected and is not the thing to look at. The thing to look at is
+whether the **sideways offset** disappears:
+
+- **offset gone** → the fault is in the unaligned source path, where
+  `blit_copy_setup()` computes a sub-word shift
+- **offset remains** → alignment is innocent, and the fault is in the
+  VRAM source addressing itself
+
+#### The answer: neither
+
+With the copy forced word-aligned, hardware reported:
+
+```
+zgfx scroll: x=64 y=53 w=256 h=225 dy=-9
+  blit_vram sx=64 sy=62 dx=64 dy=53 w=256 h=216
+  setup: sx=64 dx=64 sbit0=64 sword=2 sshift=0 prime=0
+  setup: src_addr=+4968 -> row 62 word 2 (want row 62 word 2)
+```
+
+`sshift=0` and `prime=0` — no bit shifting at all — and the derived
+source address lands exactly on the row and word it wants. **And the
+content was still pushed sideways.**
+
+So every software-side hypothesis is eliminated:
+
+| suspect | verdict |
+|---|---|
+| app coordinates | traced, correct |
+| `z_fb_hw_scroll()` arguments | traced, correct |
+| `blit_copy_setup()` addressing | traced, self-checked, correct |
+| the unaligned/shifter path | bypassed entirely, fault persists |
+| the RTL copy in isolation | `tb_vscroll.v`, correct at these alignments |
+| `vram.v` timing | presents data and ack together, as modelled |
+| `arbiter_vram` | registers data and ack together, consistent |
+
+#### The unscrolled strip
+
+Reported from hardware: *"the scrolling occurred about 20-30 pixels
+inside the edge, content between the frame and that point doesn't
+scroll at all."*
+
+In the **aligned** build that is fully explained and expected. The
+region starts at x = 46 and gets rounded up to x = 64, so exactly 18
+pixels at the left are outside the copy and keep their old content. The
+bisection tool was documented as leaving edge pixels unscrolled; what
+was not anticipated is how it LOOKS. The boundary between scrolled and
+unscrolled content is a hard vertical seam, and a seam reads as a line
+-- which is why it was first described as the window frame appearing
+inside the window.
+
+That reframes the original report. The symptom is not content shifted
+sideways; it is **a left-hand strip that does not scroll**, with a seam
+at its right edge. In the unaligned build that strip was 40-50 pixels,
+which is wider than any rounding explains and is the thing still to
+account for.
+
+Worth recording because the two descriptions suggest completely
+different faults: "shifted right" points at addressing, "a strip that
+does not move" points at the edge masking of the first destination
+word. Two rounds were spent on the first reading.
+
+#### What the corrupted text actually shows
+
+Expected on screen:
+
+```
+| the dock. It gives you a text console ...
+```
+
+Actually displayed:
+
+```
+| the   | the It gives you a text console ...
+```
+
+The **start of the row** reappears where `dock.` should be. This is not
+a shift and never was: part-way through the copy, the source read
+returns data from the ROW ORIGIN instead of from the word it asked for.
+Everything after that point is correct again.
+
+That also explains the earlier "unscrolled left strip" and "content
+pushed right" descriptions -- both are how a row-start duplication
+looks depending on where the eye lands.
+
+Doubling the blit changed nothing, so it is not a settle or
+first-transaction effect.
+
+#### Why simulation keeps passing
+
+`tb_vscroll.v` seeds each source word distinctly and compares pixel by
+pixel; `tb_edge.v` seeds source all-ones against destination all-zeros
+so a skipped word cannot hide. Both pass. The RTL, driven alone,
+addresses its source correctly.
+
+So the fault is environmental -- something about the real VRAM path
+that no bench here reproduces. A VRAM-to-VRAM copy is the only
+operation that issues source read, destination read and destination
+write back to back on that one port, and the only one where the source
+travels through `arbiter_vram` alongside the CPU.
+
+#### Next step: a source-read probe
+
+Inference has been exhausted -- every static hypothesis was eliminated
+by measurement, and the remaining one cannot be seen from software.
+
+`rtl/audio_mixer.v` already has exactly the right pattern for this:
+`MIXDBG_ADR`/`MIXDBG_DAT` latch the address and data of the mixer's
+last fetch, so software can read the same address itself and compare.
+If they differ, the fault is in the bus path rather than in the logic.
+
+The blitter needs the same two registers on its source read. That turns
+this from an argument into a measurement: dump the address the blitter
+actually presented and the data it actually received for the first few
+words of a scroll, and compare against what the copy was asked for.
+About twenty lines of RTL and a handful of software.
+
+The one thing simulation has never covered is **concurrency**.
+`tb_vscroll.v` connects the blitter straight to a VRAM model with no
+other master. On hardware the CPU shares that port through
+`arbiter_vram`, and a VRAM-to-VRAM copy is the only operation that
+issues three back-to-back transactions on it -- source read,
+destination read, destination write -- where every other mode splits
+the source onto the separate main-memory port.
+
+That is also the same class of bug this file already records as #5: the
+glyph path needed `ST_GLYPH_HI_SETTLE1/2` for a bus-settle gap that was
+too narrow, and it was found by simulation rather than reasoning.
+
+The next step is a testbench that arbitrates the blitter against a
+competing master, not more tracing. `rtl/gpu/bench/tb_arbiter_stress.v`
+is the place to start from.
+
+Disabled in all three apps meanwhile, one line each.
+
+
+## Source-read probe
+
+Three read-only registers on the blitter, mirroring what
+`rtl/audio_mixer.v` already does for the mixer:
+
+| reg | addr | |
+|---|---|---|
+| 16 | `0xd0000040` | address last presented for a source read |
+| 17 | `0xd0000044` | data actually received |
+| 18 | `0xd0000048` | source reads since reset |
+
+Software reads the same address itself and compares. If the values
+differ, the blitter is not seeing what the CPU sees, and the fault is in
+the bus path rather than in the blitting — a distinction that cannot be
+made from software alone. The mixer's own comment says exactly this, and
+it could have been written for this bug.
+
+The count matters: without it, reading the same values twice is
+ambiguous between "nothing happened" and "it happened again
+identically".
+
+`z_fb_hw_scroll_probe()` prints three things rather than two — what the
+copy **asked for**, what the blitter **presented**, and what **came
+back**. That separates two quite different faults:
+
+- presented ≠ asked → the walk is addressing the wrong word
+- presented = asked but data ≠ what the CPU reads → the bus path
+
+Given the corruption duplicates the row's opening text, "presented"
+drifting toward the row origin is the thing to watch, and the printout
+gives the difference in words directly.
+
+The decode widened from four bits to five to fit these: registers 0-15
+were full. Addresses 16-31 previously aliased back onto 0-15, which
+nothing relied on and which would have made the probe overwrite CTRL.
+
+Free when unused: three registers and no effect on any datapath. All
+four blitter testbenches still pass.
+
+### The probe read zero: multiple drivers
+
+First hardware run of the probe returned `reads=0` with all three
+registers zero, while `dst_x` read back correctly — so the block was
+decoding fine and the counter genuinely was not counting.
+
+The cause: the probe registers were **latched in the state-machine
+`always` block but reset in the register-file block**. Two always
+blocks assigning one reg.
+
+Simulation tolerates that, and all four testbenches passed. Synthesis
+does not, and on hardware the counter read back as a constant zero
+while the latches appeared to work.
+
+A probe that reads zero is indistinguishable from a probe that is
+absent, which is what made this cost a build to find — the diagnostic
+failed in exactly the way that looks like the thing it was diagnosing.
+
+One reg, one always block. The reset now lives beside the latch.
+
+### The probe's verdict: the source read is correct
+
+Hardware, three consecutive scrolls:
+
+```
+blit probe: reads=2376
+  asked for  : 200056b8
+  presented  : 200056bc  (+1 words from asked)
+  blitter got: 00001c90
+  cpu reads  : 00001c90  MATCH
+```
+
+- **2376 reads per scroll** is exactly 216 rows x 11 words -- a 10-word
+  span plus the shifter's prime. The walk issues precisely the reads it
+  should, no more and no fewer.
+- **+1 word** is the shifter's look-ahead: the last read fetches one
+  word past the last needed. Expected.
+- **Data matches** what the CPU reads at the same address.
+
+So the copy engine addresses its source correctly and receives the
+right data. The fault is downstream -- the shifter, the merge, or the
+destination read/write -- and not in anything measured so far.
+
+### A methodology note, because it cost a round
+
+An attempt to bisect this with a fresh testbench produced nonsense:
+the NON-overlapping control case reported more wrong pixels than the
+overlapping case it was meant to be compared against, which cannot
+happen. The expected-value arithmetic in that bench was wrong, not the
+blitter.
+
+That also casts doubt on `tb_vscroll.v`'s pass. It compares the
+destination against the SOURCE MEMORY after the blit, so a systematic
+error affecting both readings identically would go unnoticed --
+exactly the trap that let the earlier "verified correct" claim stand.
+`tb_edge.v` avoids it by comparing against constants (source all-ones,
+destination all-zeros) and is the more trustworthy of the two.
+
+The right test for an overlapping copy is:
+
+1. snapshot the source region into a separate array BEFORE the blit
+2. run the blit
+3. compare the destination against the SNAPSHOT, never against live
+   memory, and never against a formula recomputed independently
+
+Step 3 is the one that matters: a formula can be wrong in a way that
+mimics a hardware fault, and live memory can have been overwritten by
+the very operation under test.

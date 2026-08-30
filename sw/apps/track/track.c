@@ -1238,6 +1238,21 @@ static int play(int index) {
 				fflush(stdout);
 			}
 		}
+	
+		/* Yield. This loop used to spin, so a music player running in
+		 * the background took a full scheduler share from whatever
+		 * was in the foreground -- see docs/app_runtime.md.
+		 *
+		 * One tick (~1.37ms) rather than a longer sleep, because
+		 * unlike a message-driven app this one has real periodic
+		 * work: feeding the mixer, and the tracker tick itself.
+		 * Waking 732 times a second is far more often than either
+		 * needs and still returns essentially the whole timeslice.
+		 *
+		 * Safe against underrun by a wide margin: the audio FIFO
+		 * holds several milliseconds and the hardware mixer is fed on
+		 * tracker ticks at around 50Hz. */
+		z_proc_wait(1);
 	}
 
 	if (!windowed) printf("\n");

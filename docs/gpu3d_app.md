@@ -387,3 +387,196 @@ $ ./stl_test teapot.stl teapot_bin.stl
 It asserts normalization (half-extent exactly 1.0, centred on the
 origin) and edge-list integrity (in range, non-degenerate,
 deduplicated, index-ordered).
+
+
+## Faces and flat shading (in progress)
+
+`model_t` now carries an optional face list (`tris` / `ntris`) alongside
+its edges.
+
+**Optional is the important word.** `ntris == 0` means "wireframe only",
+and the renderer falls back to it rather than refusing to draw. Nothing
+is synthesised or converted: a model without faces simply cannot be
+shaded, which is the honest answer and keeps every existing model
+working untouched.
+
+### The cube has faces; STL imports do not
+
+Deliberately, and in that order.
+
+The cube is 12 triangles and its winding can be checked by hand — all
+twelve were verified to have outward normals before anything was drawn
+with them. That proves the shading pipeline against something whose
+correct output is obvious.
+
+STL import is a bigger problem than it looks. The loader already *reads*
+triangles — that is what an STL is — and then converts them to a
+deduplicated edge list, discarding the faces. Keeping them is not just
+an array: the triangle count after cluster decimation is far above
+`MODEL_MAX_TRIS`, so it needs its own budget and its own decimation
+pass. `stl.c` sets `ntris = 0` explicitly so an imported model degrades
+to wireframe rather than drawing garbage.
+
+### Winding
+
+Counter-clockwise seen from outside. Backface culling tests the sign of
+the projected 2D cross product, so this convention has to hold for every
+model that wants shading.
+
+A face wound the wrong way **does not look like a winding error**. It is
+culled when it should be drawn, so the solid gets a hole and you see the
+inside of the far side through it. Worth checking each face against the
+vertex table rather than trusting a pattern.
+
+### Shading, as implemented
+
+`S` toggles it. Software edge-walking, hardware span fills.
+
+- **Backface cull** on the projected 2D cross product. Projection
+  preserves winding, so the sign is the same as it would be in view
+  space, and only the sign matters.
+- **Light level from the face's true 3D normal** against a fixed light
+  direction in view space, computed from the rotated vertices. See
+  below for the version that did not work.
+- **Painter's algorithm**, back to front, insertion sorted. Exact for a
+  convex solid; wrong for interpenetrating geometry, which is the
+  classic failure and worth knowing before pointing this at a
+  complicated mesh. There is no Z-buffer and nowhere to put one.
+- **Always clears.** `ERASE_INTERLEAVED` erases by redrawing last
+  frame's *edges* in colour 0, which has no meaning for filled faces.
+  Painting new faces over old almost works and fails exactly where it
+  matters: a face that shrinks as the model turns leaves a fringe of
+  the previous frame behind it.
+
+### Lighting from projected area looked like a moving light
+
+The first version had no normal at all. The projected cross product's
+magnitude is twice the triangle's screen area, which for a face of fixed
+3D size falls to zero as it turns edge-on — genuinely the cosine term a
+diffuse light wants, free, since the value is already computed for
+culling.
+
+It was scaled against a running maximum over the visible faces, and that
+is where it fell apart. A single face brightened and dimmed correctly,
+but the **scale moved with the model**, because which face is largest
+changes as it turns. Every face's level then shifted together, which
+reads exactly as a light source orbiting the object rather than as
+shading.
+
+The fix is a real normal against a **fixed** direction: no shared term,
+so a face's brightness depends only on its own orientation. Computed in
+view space from the rotated vertices, not the projected ones —
+perspective divide distorts angles, so projected coordinates are good
+enough to decide *facing* (a sign) but not *angle* (a magnitude).
+
+Checked numerically over a rotation: coplanar triangle pairs always
+agree, and faces move independently — one falls 15 to 3 while another
+rises 3 to 14, with no common drift.
+
+There is an ambient floor of 3. A face turned fully from the light still
+has a silhouette, and painting it black makes the solid look like it has
+a bite taken out of it against a black background.
+
+### The cube flashed, and clearing was the cause
+
+Clearing the window and redrawing leaves the object **absent** for the
+part of each frame between the two. At 15fps that is a large fraction of
+the frame, and it flashes badly.
+
+`ERASE_INTERLEAVED` already solves this for wireframes by erasing and
+redrawing one edge at a time, so the object is never fully gone. The
+equivalent for solid faces is to **erase only what is no longer
+covered**.
+
+Each frame records, per scanline, the leftmost and rightmost pixel the
+faces reached. The next frame draws the object **first**, then clears
+only the slivers of the previous silhouette the new one does not cover.
+
+The object is therefore never blanked — nothing flashes — and the erase
+is proportional to how far the silhouette moved rather than to the
+window area, so it is also faster than the clear it replaces.
+
+**Exact for a convex silhouette**, which a cube has: per scanline the
+coverage is a single interval, so a min and a max describe it
+completely. A non-convex model can have two intervals on one scanline
+and the gap between them would not be erased — a real limitation, and
+the reason to revisit this when STL faces arrive.
+
+Verified by simulating a shape moving across a buffer for six frames and
+checking for both leftover pixels and holes: zero of each.
+
+### Clearing only the bounding box left trails
+
+Also fixed by reverting. Last frame's faces extended to *last* frame's
+bbox, and as the model turns the two differ — so a crescent of the
+previous frame survives outside the new box, and the fresh black
+rectangle reads as a box cutting into the shape.
+
+Clearing the union of the two bboxes would fix it properly and is worth
+revisiting, but only once the shading itself is settled: a partial clear
+makes every other rendering bug look like a clearing bug.
+
+### The cull sign was wrong, and reasoning did not settle it
+
+Screen y runs down, which flips the handedness, and it is genuinely
+easy to argue yourself into either answer — I did, and wrote a
+confident comment for the wrong one.
+
+It was settled by computing each face's true 3D normal independently
+and checking which sign agreed. `cross > 0` matches on all twelve cube
+faces, from a head-on view (2 triangles visible, since a cube seen down
+an axis shows one face) and from a corner view (6 visible, 6 culled).
+
+Worth recording because getting it backwards **does not look like an
+inverted test**. You see the inside of the far side of the solid, which
+reads as a hole.
+
+The triangle filler was checked the same way: rendered to an ASCII
+buffer and scanned for interior gaps, including the degenerate
+single-scanline case that an edge-on face produces.
+
+### Making it fast enough
+
+First hardware run was 12-15fps. Two changes, both about the CPU rather
+than the blitter:
+
+**Spans write three registers, not six.** `z_fb_hw_span_begin(level)`
+hoists height and grey level out of the loop, so each scanline writes
+only `dst_x`, `dst_y` and `width`. At several hundred spans a frame,
+each register write is a stalled bus cycle from the CPU, and the
+register traffic costs as much as the blitting.
+
+Clipping moved out of `zwin` and into the rasterizer for the same
+reason: `z_fb_hw_span()` deliberately does **not** clip or validate, so
+that the inner loop of something which has already clipped pays nothing
+for checks it does not need.
+
+**The scan range is clipped, not just each span.** A face partly outside
+the window used to run its whole interpolation for rows that were then
+discarded — which for a model scaled past the window edge is most of
+them.
+
+**The clear is the bounding box, not the window.** The model is
+normalised to half-extent 1 and the projection is centred, so at default
+scale it occupies well under half the content area.
+
+### If the faces are solid white and black with no pattern
+
+The gateware has no dither support — `z_fb_hw_dither_available()`
+returned false and `z_fb_hw_fill_shade()` fell back to a plain fill,
+white above level 8 and black below. As the model turns and levels cross
+that threshold, faces flip between the two.
+
+That is the fallback working as designed on old gateware, not a bug.
+`make flash`, not `make dev-flash` — the dither is CTRL bit 8 in
+`gpu_blit.v`.
+
+### Why no triangle rasterizer
+
+A flat-shaded face is a set of horizontal spans, and a shaded span is
+exactly one `z_win_hw_fill_shade()` call. So software edge-walking plus
+hardware span fills gets the whole feature with no new gates.
+
+Whether that is fast enough decides whether a hardware rasterizer is
+ever worth building — and it can now be measured rather than guessed,
+which was the point of doing the pattern hardware first.

@@ -409,6 +409,29 @@
 #define Z_WM_CLIP_GET            116
 #define Z_WM_CLIP_DATA           117
 
+// app -> wm: repaint the WHOLE screen -- desktop background, every
+// window's frame, and a Z_WM_REDRAW to every window's owner.
+//
+// For an app that has taken the framebuffer over entirely and is
+// giving it back. A full-screen game (sw/apps/gamedemo) draws straight
+// into VRAM over everything, including wm's own chrome and other
+// apps' content, and none of those know it happened -- wm repaints on
+// damage it caused itself, and this damage came from outside.
+//
+// Without this, quitting a full-screen app returns you to a desktop
+// whose windows are all still ALIVE and still owned and still exactly
+// where they were, but whose pixels are gone. The machine is fine and
+// the screen is garbage, which is a confusing pair of facts to be
+// handed.
+//
+// Deliberately no arguments -- not a rectangle. An app that overwrote
+// the framebuffer generally cannot say what it damaged (a scrolling
+// game touches every pixel over a few frames), and a wrong rectangle
+// would leave debris that looks exactly like this bug not being fixed.
+// The whole screen is the only honest answer, and it costs one
+// repaint on an event that happens when a person quits an app.
+#define Z_WM_REPAINT            118
+
 // Clipboard capacity in bytes, including the terminating NUL.
 //
 // One static buffer in wm's .bss, so this is a fixed cost paid once

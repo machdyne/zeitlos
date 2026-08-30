@@ -27,6 +27,21 @@
 // sw/common/zaudio.h.
 #define Z_IRQ_AUDIO				7
 
+// Ethernet receive -- a frame is waiting in the MAC's RX buffer.
+//
+// LEVEL, not a pulse: asserted for exactly as long as a frame is
+// actually there, and cleared only by the driver consuming it. That is
+// deliberate. An edge-triggered network interrupt has a window between
+// acknowledgement and the next arrival in which a packet can be
+// dropped, and the link then stays dead until something else happens
+// to come in -- a failure that looks like a flaky cable.
+//
+// One line for both MACs. rtl/ethmac_rmii.v drives it from its own
+// rx_ready (STATUS bit 2) and the ENC28J60's active-low INT pin is
+// inverted into the same wire in rtl/sysctl.v, so sw/apps/net sees one
+// interrupt regardless of which ethernet the board has.
+#define Z_IRQ_ETH				8
+
 typedef struct {
 
 	uint32_t		base;

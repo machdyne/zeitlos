@@ -74,6 +74,7 @@
 
 #include "../../common/zeitlos.h"
 #include "../../common/zport.h"
+#include "../../common/zsoc.h"	// Z_TICK_HZ, for the idle wait in main()
 #include "../../common/zline.h"
 #include "../../common/zrepl.h"
 #include "../../common/zterm.h"
@@ -1536,6 +1537,36 @@ int main(void) {
 			}
 
 		}
+
+		/* Block until something arrives.
+		 *
+		 * This loop used to spin. Every iteration read an empty
+		 * mailbox and went round again, which meant repl consumed a
+		 * full scheduler timeslice forever while doing nothing at
+		 * all -- and since the scheduler shares the CPU between
+		 * RUNNABLE processes, that came directly out of whatever was
+		 * in the foreground. A full-screen app measured a quarter of
+		 * the CPU with three such spinners alongside it.
+		 *
+		 * Nothing here is polled: every branch above is driven by a
+		 * message. So this could be z_proc_wait(0) and block
+		 * indefinitely.
+		 *
+		 * A timeout is used instead, deliberately. The port layer
+		 * (sw/common/zport.c) has retransmit and connection state
+		 * that is currently advanced only when a message happens to
+		 * arrive; blocking forever would be correct today and would
+		 * silently stall the first time that stops being true. Waking
+		 * ~20 times a second costs essentially nothing and removes
+		 * that trap.
+		 *
+		 * z_proc_wait() also handles the lost-wakeup race properly --
+		 * it tests the mailbox in the same syscall that sets
+		 * Z_PROC_FLAG_BLOCKED (see k_proc_wait() in sw/os/kernel.c),
+		 * so a message arriving between the read above and the block
+		 * here wakes it rather than being missed. */
+		z_proc_wait(Z_TICK_HZ / 20);
+
 	}
 
 	return 0;

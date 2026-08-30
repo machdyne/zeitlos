@@ -101,6 +101,26 @@ typedef struct {
 } medge_t;
 
 /*
+ * A triangular face, as three indices into model_t.verts.
+ *
+ * OPTIONAL. A model may have edges and no faces -- that is what every
+ * model here was until shading existed, and what an STL import still
+ * produces today. ntris == 0 means "wireframe only", and the renderer
+ * falls back to it rather than refusing to draw. Nothing has to be
+ * converted or synthesised: a model without faces simply cannot be
+ * shaded, which is the honest answer.
+ *
+ * Winding is COUNTER-CLOCKWISE when the face is seen from outside, so
+ * the sign of the projected 2D cross product is what backface culling
+ * tests. That convention has to hold for every model that wants
+ * shading; a face wound the other way is culled when it should be
+ * drawn, which looks like a hole rather than like a winding error.
+ */
+typedef struct {
+	uint16_t v0, v1, v2;
+} mtri_t;
+
+/*
  * Sized for INTERACTIVE RATE, not for fidelity.
  *
  * These were 768/1536 and measured 4 FPS on real hardware with a
@@ -124,6 +144,18 @@ typedef struct {
 #define MODEL_MAX_VERTS   256
 #define MODEL_MAX_EDGES   384
 
+/* Faces are OPTIONAL and only the built-in solids have them today, so
+ * this is sized for those rather than for an imported mesh. A cube is
+ * 12 triangles; room for a few more built-ins costs 6 bytes each.
+ *
+ * Deliberately NOT sized to MODEL_MAX_EDGES. A closed mesh has roughly
+ * two triangles per three edges, so matching them would add several
+ * kilobytes of .bss to every gpu3d build for data that STL import does
+ * not currently produce. When it does, this is the number to raise --
+ * and the interactive-rate constraint above is what to check it
+ * against, not the memory. */
+#define MODEL_MAX_TRIS    64
+
 #define MODEL_NAME_MAX    24
 
 typedef struct {
@@ -133,6 +165,11 @@ typedef struct {
 
 	int		nverts;
 	int		nedges;
+
+	/* Faces, if this model has them. 0 for a wireframe-only model --
+	 * see mtri_t. */
+	mtri_t		tris[MODEL_MAX_TRIS];
+	int		ntris;
 
 	/* short display name -- the basename of the loaded file, or
 	 * "cube" for the built-in. Shown in the titlebar. */

@@ -199,6 +199,15 @@ void z_win_content_rect(const z_win_t *win, z_clip_t *out);
 // be safe for concurrent access from multiple processes; none of
 // that is visible here.
 void z_win_hw_line(const z_win_t *win, int x0, int y0, int x1, int y1, int color);
+
+// Shaded fill (zgfx.h's z_fb_hw_fill_shade), clipped to the window's
+// content area. Asynchronous -- call z_fb_hw_sync() before reading the
+// affected pixels with the CPU.
+//
+// One call per scanline is how a software triangle rasterizer draws a
+// flat-shaded face, which is why this exists.
+void z_win_hw_fill_shade(const z_win_t *win, int x, int y, int w, int h,
+	int level);
 void z_win_hw_box(const z_win_t *win, int x0, int y0, int x1, int y1, int color);
 
 // changes this window's titlebar text (fire-and-forget, no reply --
