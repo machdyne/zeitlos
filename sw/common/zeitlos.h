@@ -8,16 +8,12 @@
 /*
  * OS version.
  *
- * One string, here, because more than one thing wants to report it --
- * the info app displays it, and a boot banner or an `about` command
- * would want the same value rather than its own copy.
- *
- * Hand-maintained. There is deliberately no build date or git hash in
- * it: both would change the binary on every rebuild, which makes
- * "is the flashed image the one I just built?" harder to answer by
- * comparison, not easier.
+ * Moved to its own header so release/zrelease can read and bump it
+ * without parsing this file. Included here so that every app and the
+ * kernel still get Z_OS_VERSION from including zeitlos.h, exactly as
+ * before. See zversion.h for why it stays hand-maintained.
  */
-#define Z_OS_VERSION  "0.0.2"
+#include "zversion.h"
 
 #include "zproc.h"	// z_proc_info_t / z_mem_stats_args_t, used by the
 						// z_proc_list()/z_mem_stats() declarations below

@@ -18,6 +18,7 @@ RTL_PICO = \
 	rtl/mem/vram.v \
 	rtl/mem/glyph.v \
 	rtl/spiflashro.v \
+	rtl/uart_null.v \
 	rtl/ethmac_rmii.v \
 	rtl/debug.v \
 	rtl/csrs.v \
@@ -53,6 +54,16 @@ RTL_PICO = \
 ifndef CABLE
 	CABLE = dirtyJtag
 endif
+
+# Extra defines handed to the synthesis tool, on top of the
+# -DBOARD_<X> and -D<FAMILY> the recipes below always pass.
+#
+# Empty for every ordinary build. It exists for release/zrelease, which
+# passes -DZSPEC to make rtl/boards.vh use a generated define set
+# instead of its own per-board `ifdef chain -- see that file's ZSPEC
+# note for why a release needs to be able to build a board WITHOUT a
+# feature, which a command-line -D cannot express.
+EXTRA_DEFINES ?=
 
 main: check zeitlos
 
@@ -265,7 +276,7 @@ PNR_LOG = output/$(BOARD_LC)/pnr.log
 
 zeitlos_ice40_pico:
 	mkdir -p output/$(BOARD_LC)
-	yosys -DBOARD_$(BOARD_UC) -DICE40 -q -l $(SYNTH_LOG) -p \
+	yosys $(EXTRA_DEFINES) -DBOARD_$(BOARD_UC) -DICE40 -q -l $(SYNTH_LOG) -p \
 		"synth_ice40 -top sysctl -json output/$(BOARD_LC)/soc.json" $(RTL_PICO)
 	nextpnr-ice40 --$(DEVICE) --package $(PACKAGE) --pcf boards/$(PCF) \
 		--asc output/$(BOARD_LC)/soc.txt --json output/$(BOARD_LC)/soc.json \
@@ -274,7 +285,7 @@ zeitlos_ice40_pico:
 
 zeitlos_ecp5_pico:
 	mkdir -p output/$(BOARD_LC)
-	yosys -DBOARD_$(BOARD_UC) -DECP5 -q -l $(SYNTH_LOG) -p \
+	yosys $(EXTRA_DEFINES) -DBOARD_$(BOARD_UC) -DECP5 -q -l $(SYNTH_LOG) -p \
 		"synth_ecp5 -top sysctl -json output/$(BOARD_LC)/soc.json" $(RTL_PICO)
 	nextpnr-ecp5 --$(DEVICE) --package $(PACKAGE) --lpf boards/$(LPF) \
 		--json output/$(BOARD_LC)/soc.json \
@@ -286,7 +297,7 @@ zeitlos_ecp5_pico:
 
 zeitlos_gatemate_pico:
 	mkdir -p output/$(BOARD_LC)
-	$(SYNTH) -DBOARD_$(BOARD_UC) -DGATEMATE -q -l $(SYNTH_LOG) -p \
+	$(SYNTH) $(EXTRA_DEFINES) -DBOARD_$(BOARD_UC) -DGATEMATE -q -l $(SYNTH_LOG) -p \
 		"read -sv $(RTL_PICO); synth_gatemate -top sysctl -luttree -nomult \
 			-nomx8 -json output/$(BOARD_LC)/soc.json"
 	$(PR) --device CCGM1A1 --json output/$(BOARD_LC)/soc.json --vopt ccf=$(CCF) --vopt out=output/$(BOARD_LC)/soc.txt --router router2 -l $(PNR_LOG)

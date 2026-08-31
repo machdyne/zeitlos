@@ -118,8 +118,10 @@ module sysctl #()
 `endif
 	output LED_B,
 
+`ifdef UART0
    output UART0_TX,
    input UART0_RX,
+`endif
 
 `ifdef LED_DEBUG
 	output [7:0] DBG,
@@ -788,9 +790,11 @@ module sysctl #()
 `ifdef DEBUG
 	wire cs_debug = ((wbm_adr & 32'hf000_0000) == 32'he000_0000);
 `endif
-`ifdef UART0
+	// Unconditional, unlike the `ifdef-guarded decodes above. Without
+	// `UART0 this window is answered by rtl/uart_null.v instead of by
+	// uart_top -- see the instantiation below for why it must be
+	// answered by SOMETHING.
 	wire cs_uart0 = ((wbm_adr & 32'hf000_0000) == 32'hf000_0000);
-`endif
 
 	assign wbm_dat_i =
 		cs_bram ? wbs_bram_dat_o :
@@ -815,9 +819,7 @@ module sysctl #()
 `ifdef DEBUG
 		cs_debug ? wbs_debug_dat_o :
 `endif
-`ifdef UART0
 		cs_uart0 ? wbs_uart0_dat_o :
-`endif
 `ifdef SPI_SDCARD
 		cs_spisdcard ? wbs_spisdcard_dat_o :
 `endif
@@ -864,6 +866,12 @@ module sysctl #()
 	wire wbs_rom_ack_o;
 	wire wbs_debug_ack_o;
 	wire wbs_uart0_ack_o;
+	// Declared here rather than inside `ifdef UART0 below, because
+	// cpu_irq[4] reads it unconditionally. It used to be a `reg` in
+	// that block, which left it an implicit undriven net on a build
+	// without a UART -- and an implicit net connected to an interrupt
+	// input is not a failure anything reports.
+	wire wbs_uart0_int;
 	wire wbs_spisdcard_ack_o;
 	wire wbs_usb0_ack_o;
 	wire wbs_usb1_ack_o;
@@ -920,9 +928,7 @@ module sysctl #()
 `ifdef DEBUG
 		cs_debug ? wbs_debug_ack_o :
 `endif
-`ifdef UART0
 		cs_uart0 ? wbs_uart0_ack_o :
-`endif
 `ifdef SPI_SDCARD
 		cs_spisdcard ? wbs_spisdcard_ack_o :
 `endif
@@ -1672,7 +1678,6 @@ module sysctl #()
 
 	// WISHBONE SLAVE: UART0
 `ifdef UART0
-	reg wbs_uart0_int;
 	wire wbm_cyc_uart0 = cs_uart0 && wbm_cyc;
 	wire wbm_stb_uart0 = cs_uart0 && wbm_stb;
 
@@ -1694,6 +1699,43 @@ module sysctl #()
 		.dsr_pad_i(1'b1),
 		.ri_pad_i(1'b1),
 		.dcd_pad_i(1'b1),
+		.int_o(wbs_uart0_int)
+	);
+`else
+	// No `UART0. The window is still decoded and still acked -- by
+	// rtl/uart_null.v, which reports a transmitter that is always ready
+	// and a receiver that never has data.
+	//
+	// This branch is not a nicety. Before it existed, leaving `UART0
+	// out meant cs_uart0 vanished from the ack mux, the mux fell
+	// through to 1'b0, and the read in sw/bios/bios.c's putchar()
+	//
+	//     while ((reg_uart0_lsr & 0x20) == 0);
+	//
+	// never completed -- so the CPU stalled on the first character of
+	// the boot banner, before anything reached a screen. Every other
+	// optional block here degrades to "acks, reads zero"; this makes
+	// the UART do the same.
+	//
+	// Software needs no changes to cope with it, which is the point:
+	// the alternative was a Z_FEATURE_UART0 check in the BIOS, the
+	// kernel console, the shell and uart.c's ISR, all of them dead
+	// code on every board that has a UART. Software that wants to
+	// TELL the user there is no console rather than merely survive
+	// should still check that bit (sw/common/zsoc.h, bit 12) -- it is
+	// clear on a build using this.
+	uart_null wbs_uart0_null_i
+	(
+		.wb_clk_i(wbm_clk),
+		.wb_rst_i(wbm_rst),
+		.wb_adr_i(wbm_adr_sel_word),
+		.wb_dat_i(wbm_dat_o),
+		.wb_dat_o(wbs_uart0_dat_o),
+		.wb_we_i(wbm_we),
+		.wb_sel_i(wbm_sel),
+		.wb_stb_i(cs_uart0 && wbm_stb),
+		.wb_cyc_i(cs_uart0 && wbm_cyc),
+		.wb_ack_o(wbs_uart0_ack_o),
 		.int_o(wbs_uart0_int)
 	);
 `endif
@@ -1727,7 +1769,11 @@ module sysctl #()
 	);
 `endif
 
-	// WISHBONE SLAVE: SPI BIT-BANG INTERFACE FOR ETH (ENC28J60)
+	// WISHBONE SLAVE: HARDWARE SPI MASTER FOR ETH (ENC28J60)
+	//
+	// Was bit-banged (rtl/spibb_eth.v) and is not any more -- see
+	// rtl/spim.v, which replaced both spibb variants. The old name
+	// survived here longer than the old module did.
 `ifdef SPI_ETH
 	wire wbm_cyc_spieth = cs_spieth && wbm_cyc;
 

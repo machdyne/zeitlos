@@ -1,0 +1,10 @@
+# Build scratch and release artifacts. Everything under these is
+# reproducible from a tagged commit, and a 1.5MB image per target adds
+# up fast in a repository's history.
+build/
+dist/
+
+# The manifest of files this tool has written into the source tree.
+# Present only while a build is running, or after one died -- see
+# release/lib/gen.py. `zrelease clean` removes it and whatever it lists.
+.generated

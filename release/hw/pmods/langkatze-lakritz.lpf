@@ -1,0 +1,52 @@
+# Langkatze (ENC28J60 SPI ethernet PMOD) on Lakritz.
+#
+# Appended to boards/lakritz_v0.lpf by the release build to produce the
+# constraint file for the lakritz_langkatze target. The base .lpf is
+# never modified.
+#
+# ###################################################################
+# ##  THE SITE VALUES BELOW ARE PLACEHOLDERS AND MUST BE FILLED IN  ##
+# ###################################################################
+#
+# The release build refuses to run any target whose .lpf fragment still
+# contains the string TODO, so this file cannot be shipped by accident.
+# Replace each TODO with the real ECP5 ball and delete this banner.
+#
+# For reference, boards/obst_v0.lpf already carries a working Langkatze
+# mapping on Obst's PMODB:
+#
+#     ETH_SS    C8    PMODB1
+#     ETH_MOSI  B9    PMODB2
+#     ETH_MISO  A10   PMODB3
+#     ETH_SCLK  C10   PMODB4
+#     ETH_INT   B8    PMODB7
+#
+# so the signal-to-PMOD-pin assignment is settled; only the Lakritz
+# ball for each PMOD pin is needed.
+#
+# ONE THING TO CHECK WHILE FILLING THIS IN: boards/lakritz_v0.lpf puts
+# UART0_TX on B12 and UART0_RX on B13. If those are on the same
+# physical PMOD connector that Langkatze occupies, then this target
+# cannot have both, and the right fix is not to double-book the pins --
+# it is to add
+#
+#     defines = -UART0
+#
+# to targets/lakritz_langkatze.spec, which is the case that the whole
+# add/remove mechanism in the spec files exists to handle. Removing
+# `UART0 makes rtl/sysctl.v drop the 16550 and its port declarations,
+# so the B12/B13 constraints in the base .lpf become harmless (they
+# reference ports that no longer exist -- nextpnr is run with
+# --timing-allow-fail but NOT with an allow-unconstrained flag on ecp5,
+# so verify this rather than assuming it).
+
+LOCATE COMP "ETH_SS" SITE "TODO";
+IOBUF PORT "ETH_SS" IO_TYPE=LVCMOS33;
+LOCATE COMP "ETH_MOSI" SITE "TODO";
+IOBUF PORT "ETH_MOSI" IO_TYPE=LVCMOS33;
+LOCATE COMP "ETH_MISO" SITE "TODO";
+IOBUF PORT "ETH_MISO" IO_TYPE=LVCMOS33;
+LOCATE COMP "ETH_SCLK" SITE "TODO";
+IOBUF PORT "ETH_SCLK" IO_TYPE=LVCMOS33;
+LOCATE COMP "ETH_INT" SITE "TODO";
+IOBUF PORT "ETH_INT" IO_TYPE=LVCMOS33;

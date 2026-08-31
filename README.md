@@ -98,6 +98,41 @@ are programmed into flash alongside the kernel, so a freshly flashed
 board boots straight to the graphical desktop with nothing else
 attached. See [Core apps in flash](#core-apps-in-flash) below.
 
+### Quick start: prebuilt images
+
+Each [release](https://github.com/machdyne/zeitlos/releases/latest)
+ships one image per supported board, containing the gateware, boot
+splash, kernel and core apps. Flash it and the board boots to a desktop
+— nothing to build.
+
+Pick the image matching your hardware, for example a Lakritz with a
+USB-UART PMOD:
+
+```
+$ curl -LO https://github.com/machdyne/zeitlos/releases/latest/download/zeitlos-lakritz_uart.img
+$ openFPGALoader -c dirtyJtag -f -o 0 zeitlos-lakritz_uart.img
+```
+
+Adjust `-c` to match your programming cable. The release page and the
+`README.txt` shipped with it list every available image and its exact
+flashing command.
+
+Optionally add an sdcard for the additional apps, the documentation and
+storage:
+
+```
+$ curl -LO https://github.com/machdyne/zeitlos/releases/latest/download/zeitlos.img.gz
+$ gzip -dc zeitlos.img.gz | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync
+```
+
+Replace `/dev/sdX` with your sdcard's device node (check with `lsblk`
+first — writing to the wrong device will destroy its contents).
+
+If there's no image for your board, build from source below and please
+open an issue.
+
+### Building from source
+
 1. Build and flash the system:
 
 Building Zeitlos requires FPGA tools (Yosys, nextpnr, and a bitstream
@@ -149,14 +184,8 @@ blank window rather than a terminal. Wait for the X. See
 2. Optionally, add an sdcard:
 
 An sdcard is only needed for storing files and for apps beyond the core
-four. Write the zeitlos image to one with:
-
-```
-curl -LO https://github.com/machdyne/zeitlos/releases/latest/download/zeitlos.img.gz
-gzip -dc zeitlos.img.gz | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync
-```
-
-Replace `/dev/sdX` with your sdcard's device node (check with `lsblk` first — writing to the wrong device will destroy its contents).
+four. See [Quick start](#quick-start-prebuilt-images) above for how to
+write the image.
 
 ### Core apps in flash
 
@@ -194,6 +223,12 @@ and the design reasoning.
 The Zeitlos documentation will be the [Timeless Computing](https://github.com/machdyne/tc) book, which will be included in the default Zeitlos distribution. The later chapters will explain the system, list the API, etc. 
 
 The Zeitlos implementation portions of the book are currently located in the `docs` directory.
+
+### Releases
+
+Prebuilt images are built and published by `release/zrelease`, which
+builds one image per board/PMOD combination, assembles it, checks it and
+uploads it. See [docs/releases.md](docs/releases.md).
 
 ### LLM-generated code
 

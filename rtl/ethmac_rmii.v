@@ -3,7 +3,7 @@
  * Copyright (c) 2025 Lone Dynamics Corporation. All rights reserved.
  *
  * RMII Ethernet MAC (LAN8720A PHY). mozart_ml1 only -- an optional
- * alternative to rtl/spibb_eth.v (SPI ENC28J60) for boards that have
+ * alternative to the SPI ENC28J60 path (rtl/spim.v) for boards that have
  * an RMII PHY but no SPI Ethernet MAC.
  *
  * No MDIO/MDC on this board -- see boards/mozart_ml1.lpf's PULLMODE=UP

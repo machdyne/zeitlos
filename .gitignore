@@ -1,0 +1,9 @@
+# Written by release/zrelease for the duration of a release build and
+# removed again afterwards. Ignored so that a build interrupted at the
+# wrong moment cannot leave behind something that looks committable.
+# See rtl/boards.vh's ZSPEC note and release/lib/gen.py.
+/rtl/zspec.vh
+/boards/.zrelease-*.lpf
+
+# Build output
+/output/

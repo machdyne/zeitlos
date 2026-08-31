@@ -280,6 +280,33 @@
 // rtl/sysctl.v defaults it to 1 (matching that original hardcoded
 // assumption) rather than leaving it undefined -- see that file's own
 // `ifndef MEM guard.
+//
+// -- The ZSPEC escape hatch --
+//
+// Defining ZSPEC replaces this whole per-board chain with a generated
+// zspec.vh. Nothing in an ordinary build does that: without -DZSPEC
+// everything below behaves exactly as it always has, and
+// `make BOARD=lakritz flash` is unaffected.
+//
+// It exists for release/, which builds a TARGET rather than a board --
+// lakritz_uart and lakritz_langkatze are the same board with different
+// PMODs, so they need different define sets. Additive defines could
+// have come in on the yosys command line, but a variant is not always
+// a superset of its base: a PMOD that occupies the console pins means
+// building WITHOUT `UART0, and there is no command-line way to remove
+// a define. Replacing the block wholesale is the only mechanism that
+// can express absence.
+//
+// release/hw/boards/*.spec carries a copy of each block below, and
+// `release/zrelease check` diffs the two and fails on any difference,
+// so the duplication is verified rather than trusted. The universal
+// section ABOVE this comment is not duplicated and not replaceable --
+// a spec cannot turn off `RTC or `CPU_MUL, because each of those has a
+// reason above for being universal that a per-target choice would not
+// change.
+`ifdef ZSPEC
+`include "zspec.vh"
+`else
 
 `ifdef BOARD_OBST
 
@@ -455,5 +482,7 @@
 `define AUDIO_RATE_RESET 8'd16
 
 `endif
+
+`endif	// ZSPEC
 
 `endif
