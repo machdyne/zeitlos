@@ -25,7 +25,21 @@
 `define USB_HID_ACCEL
 `define USB_HID_ACCEL_THRESHOLD 3
 
-module usb_hid_wb #()
+module usb_hid_wb #(
+	// -- pointer sensitivity --
+	//
+	// Divides the pointer delta by 2^SENS_SHIFT. 0 is the historical
+	// behaviour: one HID count, one pixel. That assumes a mouse whose
+	// counts per centimetre are in the same range as the screen's
+	// pixels, which a modern one is not -- at 1600 CPI a centimetre is
+	// about 630 counts and the screen is 640 wide, so a nudge throws
+	// the pointer across the display. 2 (a quarter) suits such a mouse
+	// on 640x480. The remainder is carried rather than discarded, so a
+	// slow drag still advances a pixel at a time instead of rounding
+	// away to nothing. Set per board from rtl/boards.vh's
+	// USB_HID_SENS_SHIFT.
+	parameter SENS_SHIFT = 0
+)
 (
 	input wb_clk_i,
 	input wb_rst_i,
@@ -245,8 +259,19 @@ module usb_hid_wb #()
 	// "curs_x == 0/639" before applying the delta (as this used to)
 	// only catches the case where the *current* value already happens
 	// to sit exactly on the boundary, not the general overshoot case.
-	wire signed [11:0] curs_x_sum = $signed({2'b00, curs_x}) + dx_move;
-	wire signed [11:0] curs_y_sum = $signed({2'b00, curs_y}) + dy_move;
+	// sensitivity divide, with the remainder carried in sub_x/sub_y so
+	// that slow movement is not rounded away (see SENS_SHIFT above)
+	reg signed [11:0] sub_x;
+	reg signed [11:0] sub_y;
+	wire signed [11:0] acc_x = sub_x + dx_move;
+	wire signed [11:0] acc_y = sub_y + dy_move;
+	wire signed [11:0] step_x = acc_x >>> SENS_SHIFT;
+	wire signed [11:0] step_y = acc_y >>> SENS_SHIFT;
+	wire signed [11:0] rem_x = acc_x - (step_x <<< SENS_SHIFT);
+	wire signed [11:0] rem_y = acc_y - (step_y <<< SENS_SHIFT);
+
+	wire signed [11:0] curs_x_sum = $signed({2'b00, curs_x}) + step_x;
+	wire signed [11:0] curs_y_sum = $signed({2'b00, curs_y}) + step_y;
 
 	always @(posedge wb_clk_i) begin
 
@@ -286,6 +311,9 @@ module usb_hid_wb #()
 		end
 
 		if (mouse_move) begin
+
+			sub_x <= rem_x;
+			sub_y <= rem_y;
 
 			if (curs_x_sum < 0) curs_x <= 0;
 			else if (curs_x_sum > 639) curs_x <= 639;

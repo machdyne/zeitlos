@@ -249,7 +249,7 @@ else ifeq ($(BOARD), ulx3s)
 	# intermittently, so a seed known to meet it is pinned here.
 	# Re-check after any RTL or pin change (`make ... timing`), and
 	# override with PNR_SEED= on the command line.
-	PNR_SEED ?= 6
+	PNR_SEED ?= 7
 FLASH_OFFSET = -o
 else ifeq ($(BOARD), lebkuchen)
 	FAMILY = gatemate

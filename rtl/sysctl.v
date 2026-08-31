@@ -679,6 +679,14 @@ module sysctl #()
 	wire cs_spisdcard = ((wbm_adr & 32'hf000_0000) == 32'hb000_0000);
 `endif
 `ifdef USB_HID
+	// Pointer sensitivity (usb_hid_wb's SENS_SHIFT): boards whose
+	// mouse counts and screen pixels are of the same order leave this
+	// alone and get the historical 1:1 pointer.
+`ifdef USB_HID_SENS_SHIFT
+	localparam USB_HID_SENS = `USB_HID_SENS_SHIFT;
+`else
+	localparam USB_HID_SENS = 0;
+`endif
 	// two independent usb_hid_wb instances (port 0 / port 1, see
 	// boards/*.lpf's usb_host_dp[1:0]/usb_host_dm[1:0] -- Obst and
 	// Lakritz both break out two USB host ports). Both instances share
@@ -2319,7 +2327,7 @@ module sysctl #()
 	// (see boards/ulx3s.lpf). Port 1 is the second physical socket
 	// (J1 on ULX3S, for an optional Dual USB Host PMOD).
 
-	usb_hid_wb #() wbs_usb0_i
+	usb_hid_wb #(.SENS_SHIFT(USB_HID_SENS)) wbs_usb0_i
 	(
 		.wb_clk_i(wbm_clk),
 		.wb_rst_i(wbm_rst),
@@ -2353,7 +2361,7 @@ module sysctl #()
 	wire [1:0] wbs_usb1_typ;
 	wire [9:0] wbs_usb1_curs_x, wbs_usb1_curs_y;
 
-	usb_hid_wb #() wbs_usb1_i
+	usb_hid_wb #(.SENS_SHIFT(USB_HID_SENS)) wbs_usb1_i
 	(
 		.wb_clk_i(wbm_clk),
 		.wb_rst_i(wbm_rst),

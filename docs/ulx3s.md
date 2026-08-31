@@ -8,7 +8,7 @@ make BOARD=ulx3s DEVICE=85k prog       # bitstream to SRAM
 make BOARD=ulx3s DEVICE=85k flash_os   # kernel to SPI flash at 1MiB
 ```
 
-`DEVICE` defaults to `25k`. `PNR_SEED` defaults to 6 on this board:
+`DEVICE` defaults to `25k`. `PNR_SEED` defaults to 7 on this board:
 the design sits close to 48MHz on the 85F and which placement seed
 meets it is luck -- the spread is roughly 45-50MHz and nextpnr's own
 default is among the ones that miss. A bitstream that misses timing
