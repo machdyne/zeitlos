@@ -14,7 +14,7 @@
 #include <stdint.h>
 
 #include "net_phy.h"
-#include "zsoc.h"
+#include "../../common/zsoc.h"
 
 static const net_phy_t phy_enc28j60 = {
 	"enc28j60",
