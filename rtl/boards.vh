@@ -351,6 +351,8 @@
 `define USB_HID
 `define SPI_SDCARD
 `define ETH_RMII
+// See the note on ETH_RX_SLOTS under BOARD_SERGEI_ML1.
+`define ETH_RX_SLOTS 4
 `define AUDIO
 `define AUDIO_PT8211
 `define AUDIO_MIXER
@@ -377,6 +379,10 @@
 `define SPI_SDCARD
 `define ETH_RMII
 `define ETH_RMII_DRIVE_REFCLK
+// Frames the RMII receive FIFO holds, one full-size frame per slot.
+// Power of two, 2 or more. 2KB of block RAM each -- cheap on ECP5-45,
+// which is the only place RMII is built. See rtl/ethmac_rmii.v.
+`define ETH_RX_SLOTS 4
 `define AUDIO
 `define AUDIO_SPDIF
 `define AUDIO_MIXER

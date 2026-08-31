@@ -1933,18 +1933,135 @@ and the apps' speed memories come from `obst`, which is 10ns SRAM.
 Byte-at-a-time parsing, per-cell MMIO setup, stack traffic -- all of
 it stalls on SDRAM and none of it did on SRAM.
 
-**The two-minute test that settles it:** compare the boot line
-`- cpu: <name> N.NN MIPS @ N MHz (N.NN IPC)` between sergei_ml1 and
-obst. It is computed from rdcycle/rdinstret over real work. If
-sergei's IPC is a fraction of obst's, the slowdown is the memory
-system, it affects everything equally, and the fix is a dcache -- not
-anything findable by bisection.
+**That test was run, and it came back negative:**
 
-**Before testing networking on obst:** obst is a `SPI_ETH` board, and
-until the `ETH_SPI`/`SPI_ETH` fix in `rtl/sysctl.v` it had TWO drivers
-on `eth_rx_ready` -- the interrupt line resolves to `x` when a frame
-arrives. Any obst bitstream built for comparison must include that fix
-or the networking comparison is meaningless.
+    sergei_ml1 (SDRAM):  6.79 MIPS @ 48 MHz (0.14 IPC)
+    obst       (SRAM):   6.77 MIPS @ 48 MHz (0.14 IPC)
+
+Identical. So the memory system is NOT what separates the two boards,
+and the "no dcache" theory does not explain the difference between
+them. 0.14 IPC -- about seven cycles per instruction -- is simply what
+picorv32 costs: it is a multi-cycle, non-pipelined core, and that
+figure is its normal operating point, not a stall signature. A dcache
+is still worth having, but it is an absolute-speed improvement for
+both boards rather than the explanation for anything observed here.
+
+What the two boards actually showed:
+
+- **`read` is slow on BOTH.** Equal IPC, equal slowness: the cost is
+  the work itself, not the machine. `read` re-reads and re-parses the
+  document on every scroll, and that is where a scroll's time goes.
+  Caching the layout is the fix, and it is an algorithmic one.
+- **`text` is the same on both**, and keeps the hardware-scroll gain.
+- **Networking is fast on obst and slow on sergei_ml1** -- the one
+  genuinely board-specific symptom, and the MAC is the difference.
+
+### `bench` was measuring the whole system, not the loop
+
+The per-board `bench` figures could not be compared as they stood, and
+the giveaway was in the numbers themselves: the `int` loop is
+`x += i; x ^= x >> 7;` -- five instructions or so -- yet one board
+reported 10.72 insn/iteration and the other 20.03. The same compiled
+code cannot retire twice the instructions.
+
+`rdcycle` and `rdinstret` are global free-running counters and the
+shell is preemptible, so each loop was measuring whatever `wm`, `net`,
+`repl` and the scheduler did inside its window. Background work scales
+with how LONG the window is, so a slower board looks disproportionately
+worse than it is -- the measurement penalises the thing it is
+measuring.
+
+`sh_bench()` now masks interrupts around each measured region
+(per-loop, so the system breathes between them; the cost is a small
+uptime drift). The numbers after this change are the first ones worth
+comparing across boards.
+
+### The clean numbers, and what they decide
+
+                 int      mul      div       ld      ldr       st
+    obst        36.00    30.00    66.00    60.00    60.00    48.00
+    sergei_ml1  35.03    29.03    63.02    81.77    81.77    52.52
+    insn/iter    5.00     4.00     4.00     7.00     7.00     6.00
+
+Instruction counts are now identical on both boards, which is the
+check that the measurement is sound -- identical code retiring
+identical instructions.
+
+**The CPU is the same and it is the dominant cost.** int, mul and div
+match within 3%. Five instructions take 35 cycles: **~7 cycles per
+instruction**, which is picorv32 by construction -- multi-cycle,
+non-pipelined. At 48MHz that is the ~6.9 MIPS the boot line reports,
+and it is the ceiling every app runs against.
+
+**Memory is the only difference, and it is modest.** Per instruction:
+
+    obst    int 7.20   ld 8.57   st 8.00
+    sergei  int 7.01   ld 11.68  st 8.75
+
+SDRAM costs sergei about 4.7 extra cycles per instruction on loads and
+1.7 on stores, against an SRAM board. In whole-loop terms sergei's
+loads are 36% slower and its stores 9% slower.
+
+**What a dcache is therefore worth.** At the theoretical best it makes
+sergei's loads behave like obst's SRAM: `ld` from 81.77 down toward
+60, about -27% on load-heavy code and perhaps 10-15% on a mixed
+instruction stream. Real, worth having, and not transformative.
+
+**What it will not do, from this data alone:** `read` is slow on obst
+TOO -- and obst is the board with the faster memory. A dcache can at
+best make sergei match obst, which is a machine where `read` is
+already slow. So `read`'s cost is not memory, it is instructions
+executed, and the fix is to execute fewer of them: cache the layout
+instead of re-reading and re-parsing the document on every scroll.
+
+**A caveat on `ldr`:** it came out EXACTLY equal to `ld` on both
+boards. That is not the SDRAM row policy being perfect, it is the
+benchmark's working set being too small to defeat it -- `buf` is 1024
+words (4KB), a couple of SDRAM rows, so `(i * 397) & 1023` never
+leaves the rows already open. Until that working set grows, treat
+ld == ldr as "not measured" rather than as evidence that scattering is
+free. Noted in `sh_bench()` itself.
+
+(An earlier reading of the contaminated run blamed obst's lack of an
+instruction cache. The clean numbers retire that: obst matches sergei
+exactly on int/mul/div despite having no icache at all, because SRAM
+fetch is fast enough not to need one.)
+
+### The networking difference is the RX buffer, not the CPU
+
+obst runs an ENC28J60, which has an **8KB RX ring** and holds many
+frames. sergei_ml1 runs `rtl/ethmac_rmii.v`, which has a **single
+frame buffer** -- and its own comment says what happens when a second
+frame arrives before software has popped the first:
+
+    // buffer still full -- software hasn't popped
+    // the previous frame yet. drop this one.
+    if (rx_drop_count != 4'hF) rx_drop_count <= rx_drop_count + 1'b1;
+
+A `top` refresh over telnet is a BURST of back-to-back segments. At
+100Mbit a 1500-byte frame takes ~120us, so several arrive inside a
+single millisecond; the MAC keeps the first and drops the rest, and
+TCP recovers them by retransmission timeout. That is exactly what
+"much faster on obst" looks like from the other side, and it explains
+why changing net's wait from 100ms to 1.4ms made no difference: at
+1.4ms the burst has already been dropped at wire speed. No polling
+rate reaches it. It is not latency, it is capacity.
+
+**This is measurable, not a theory.** The MAC already counts the
+drops and exposes them: STATUS bits [7:4] are `rx_drop_count`
+(saturating at 15), bits [11:8] `rx_err_count`. Read STATUS while
+running `top` over telnet on sergei. A climbing drop count confirms
+it outright, and distinguishes it from CRC errors at the same time.
+
+The fix is a deeper RX path in `ethmac_rmii.v` -- a multi-frame ring,
+as the ENC28J60 has -- and it is a bigger and more promising piece of
+work for the networking symptom than a dcache is.
+
+**A note for any future obst networking comparison:** obst is a
+`SPI_ETH` board, and until the `ETH_SPI`/`SPI_ETH` fix in
+`rtl/sysctl.v` it had TWO drivers on `eth_rx_ready`, so the interrupt
+line resolves to `x` when a frame arrives. Any obst bitstream built
+for comparison must include that fix.
 
 ### If this is revisited
 

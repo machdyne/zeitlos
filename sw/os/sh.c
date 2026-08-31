@@ -1289,11 +1289,42 @@ void screenshot(void) {
 // all, so the gap between them is the thing to watch when
 // rtl/mem/sdram.v changes.
 //
+// CAVEAT, measured: ld and ldr currently come out IDENTICAL on both an
+// SRAM and an SDRAM board. That is not the controller being perfect,
+// it is this benchmark's working set being too small to defeat row
+// locality -- buf is 1024 words (4KB), which spans only a couple of
+// SDRAM rows, so `(i * 397) & 1023` never leaves the rows already
+// open. To actually exercise the row policy this needs a working set
+// larger than a few rows; until then, treat ld == ldr as "not
+// measured" rather than as evidence that scattering is free.
+//
 // Everything is `volatile` or consumed into a sink so the compiler
 // cannot optimise the work away -- without that, -Os deletes most of
 // these loops entirely and reports absurdly fast results.
 
 #define BENCH_ITERS 4096
+
+/* rdcycle and rdinstret are GLOBAL, free-running counters, and the
+ * shell is a preemptible process. Without masking, every loop below
+ * measures whatever wm, net, repl and the scheduler happened to do
+ * inside its window -- not the loop.
+ *
+ * That is not a small effect, and it silently destroys cross-board
+ * comparison. Measured on two boards before this was added: the `int`
+ * loop is `x += i; x ^= x >> 7;`, five instructions or so, and it
+ * reported 10.72 insn/iter on one board and 20.03 on the other. The
+ * same compiled code cannot retire twice the instructions; the gap was
+ * background work, and it scales with how long the window happens to
+ * be, so the SLOWER board looks disproportionately worse than it is.
+ *
+ * Masking per-loop rather than around the whole run: each window is
+ * ~10ms, which is a long time to be deaf, and this way the system gets
+ * to breathe between them. The timer ticks lost will show as a small
+ * uptime drift -- the honest cost of measuring a single process on a
+ * machine with a shared counter. */
+static uint32_t bench_mask;
+#define BENCH_BEGIN() (bench_mask = maskirq(0xFFFFFFFF))
+#define BENCH_END()   maskirq(bench_mask)
 
 static inline uint32_t bench_cycle(void) {
 	uint32_t v; __asm__ volatile ("rdcycle %0" : "=r"(v)); return v;
@@ -1355,55 +1386,67 @@ static void sh_bench(void) {
 
 	// -- integer ALU --
 	x = 12345;
+	BENCH_BEGIN();
 	n0 = bench_instret(); t0 = bench_cycle();
 	for (i = 0; i < BENCH_ITERS; i++) {
 		x += i;
 		x ^= x >> 7;
 	}
 	c_int = bench_cycle() - t0; n_int = bench_instret() - n0;
+	BENCH_END();
 	sink = x;
 
 	// -- multiply --
 	x = 12345;
+	BENCH_BEGIN();
 	n0 = bench_instret(); t0 = bench_cycle();
 	for (i = 0; i < BENCH_ITERS; i++) {
 		x = x * 1103515245u + 12345u;
 	}
 	c_mul = bench_cycle() - t0; n_mul = bench_instret() - n0;
+	BENCH_END();
 	sink = x;
 
 	// -- divide --
 	x = 0xffff0000u;
+	BENCH_BEGIN();
 	n0 = bench_instret(); t0 = bench_cycle();
 	for (i = 0; i < BENCH_ITERS; i++) {
 		x = x / (i + 3u);
 		x += 0x1000u;
 	}
 	c_div = bench_cycle() - t0; n_div = bench_instret() - n0;
+	BENCH_END();
 	sink = x;
 
 	// -- sequential loads --
+	BENCH_BEGIN();
 	n0 = bench_instret(); t0 = bench_cycle();
 	for (i = 0; i < BENCH_ITERS; i++) {
 		sink = buf[i & 1023];
 	}
 	c_ld = bench_cycle() - t0; n_ld = bench_instret() - n0;
+	BENCH_END();
 
 	// -- scattered loads --
 	// 397 is prime relative to 1024, so this walks the whole buffer
 	// in a stride that never repeats a nearby address.
+	BENCH_BEGIN();
 	n0 = bench_instret(); t0 = bench_cycle();
 	for (i = 0; i < BENCH_ITERS; i++) {
 		sink = buf[(i * 397u) & 1023];
 	}
 	c_ldr = bench_cycle() - t0; n_ldr = bench_instret() - n0;
+	BENCH_END();
 
 	// -- sequential stores --
+	BENCH_BEGIN();
 	n0 = bench_instret(); t0 = bench_cycle();
 	for (i = 0; i < BENCH_ITERS; i++) {
 		buf[i & 1023] = i;
 	}
 	c_st = bench_cycle() - t0; n_st = bench_instret() - n0;
+	BENCH_END();
 
 	(void)sink;
 

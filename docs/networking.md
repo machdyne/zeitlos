@@ -71,6 +71,61 @@ an asynchronous pin from another chip, and an unsynchronised signal
 feeding an edge detector produces spurious pulses on metastability —
 which for an interrupt means a storm that appears at random.
 
+### The RX buffer holds four frames, not one
+
+The RMII MAC held exactly ONE received frame, and dropped anything
+that arrived before software had popped it:
+
+    // buffer still full -- software hasn't popped
+    // the previous frame yet. drop this one.
+
+At 100Mbit a 1518-byte frame occupies the wire for ~122us, while the
+software that drains it runs when the scheduler next reaches it. So a
+BURST -- a screenful of `top` over telnet is a handful of back-to-back
+segments -- lost everything after the first frame, and TCP recovered
+each loss by retransmission timeout. The symptom is "the network is
+slow" rather than "the network is broken", which is what made it hard
+to see. The same workload on a board with an ENC28J60 (8KB RX ring)
+was visibly faster, which is the comparison that finally located it.
+
+`rxbuf` is now a FIFO of `ETH_RX_SLOTS` slots (default 4, one
+full-size frame each), with gray-coded pointers crossing between the
+`eth_refclk` and `wb_clk_i` domains in the standard async-FIFO way.
+
+**The register interface is unchanged.** RX_LEN and the RX_BUF window
+both follow the read pointer, so software still sees exactly one frame
+at a time, at the same addresses, popped by the same write to RXCTRL.
+`sw/apps/net/eth.c` needs no change; it simply stops losing frames.
+
+The old toggle handshake for the pop is gone -- the read pointer
+itself crosses back now, which is simpler and says how many slots
+software has taken rather than only that it took one.
+
+Sizing: TCP advertises a 2048-byte receive window
+(`sw/apps/net/tcp.c`), so a peer will not have more than that in
+flight -- two full-MTU frames, or many small ones. Four slots covers
+the window with room to spare. Cost is 2KB of block RAM per slot, and
+RMII only builds on ECP5-45 boards where that is not scarce; RX goes
+from 1 EBR to 4. Configurable per board in `rtl/boards.vh`
+(`ETH_RX_SLOTS`, power of two, 2 or more).
+
+TX is deliberately left single-slot. It is software-paced rather than
+wire-paced, so it has no equivalent failure mode, and there is no
+measurement yet saying it stalls. `rx_drop_count` is what pointed at
+the receive side; if something similar ever points at transmit, the
+same slot structure applies.
+
+**Verified by `rtl/tb/tb_ethmac_rmii.v`**, which drives real RMII
+dibits at the real rate with correct preamble, SFD and CRC32, and
+reads frames back over wishbone exactly as `eth.c` does. It checks
+that a full burst of `ETH_RX_SLOTS` frames arrives intact with zero
+drops, that one more than that drops exactly one and counts it, that
+the FIFO still works a lap later, and that a bad-CRC frame is counted
+as an error rather than a drop and consumes no slot. Against the old
+single-slot RTL it fails immediately -- 3 of 4 burst frames dropped --
+so it is proven sensitive rather than merely green. Passes at 2, 4, 8
+and 16 slots.
+
 ### Two wiring bugs found afterwards
 
 Everything above describes the intended design, and it is correct. Two
