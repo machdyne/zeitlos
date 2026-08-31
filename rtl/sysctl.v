@@ -429,8 +429,17 @@ module sysctl #()
 	reg eth_rx_ready_d;
 	always @(posedge wbm_clk) eth_rx_ready_d <= eth_rx_ready;
 	wire eth_rx_int = eth_rx_ready && !eth_rx_ready_d;
+	// The macro is SPI_ETH (see rtl/boards.vh). This tie-off tested
+	// ETH_SPI, which is not defined anywhere, so on an ENC28J60 board
+	// it stayed active alongside the real driver further down and
+	// eth_rx_ready had TWO continuous assignments -- the constant here
+	// and the synchronised INT pin. The wire resolves to x the moment
+	// a frame arrives, so the interrupt never worked on those boards
+	// and net fell back to its backstop timeout for every packet.
+	// RMII boards were unaffected: that guard spells its macro
+	// correctly.
 `ifndef ETH_RMII
-`ifndef ETH_SPI
+`ifndef SPI_ETH
 	assign eth_rx_ready = 1'b0;
 `endif
 `endif
@@ -454,6 +463,7 @@ module sysctl #()
 		// and the machine stops making forward progress.
 `ifdef AUDIO
 		cpu_irq[7] = wbs_audio_int;
+`endif
 
 		// Ethernet receive. See eth_rx_int above for why this is a
 		// PULSE rather than a level, and docs/networking.md for what
@@ -461,8 +471,16 @@ module sysctl #()
 		// timer to discover nothing had arrived, and on a machine
 		// whose scheduler splits the CPU between RUNNABLE processes
 		// that came out of the foreground app's share.
+		//
+		// OUTSIDE the `ifdef AUDIO above, which it was accidentally
+		// nested inside. eth_rx_ready is declared unconditionally and
+		// tied low when the board has no ethernet, precisely so this
+		// line needs no `ifdef of its own -- but sitting inside the
+		// audio guard, a board with ethernet and no audio would have
+		// silently had no ethernet interrupt at all. Every board with
+		// ethernet today also has audio, so this was latent rather
+		// than active.
 		cpu_irq[8] = eth_rx_int;
-`endif
 	end
 
 	always @(posedge sys_clk) begin

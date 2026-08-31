@@ -319,6 +319,41 @@ module gpu_blit_wb #(
     // their declaration.
     localparam ST_CLIP_CALC = 5'd27;
 
+    // -- bus settle states between two m-port transactions in the
+    // VRAM-source copy path --
+    //
+    // Same hazard, same cure as ST_GLYPH_HI_SETTLE1/2: vram_wb
+    // re-asserts its ack every cycle wb_active is high (no
+    // "already acked" guard), and the arbiter's response routing is
+    // registered, so after this state machine consumes an ack and
+    // drops m_cyc_o, m_ack_i stays high for TWO more cycles with
+    // m_dat_i holding a re-read of the OLD address. Any wait state
+    // entered with only one cycle of m_cyc_o low in between samples
+    // that stale ack, captures the previous transaction's data, and
+    // abandons the read it just launched (the arbiter grants one
+    // cycle after stb has already gone away).
+    //
+    // A VRAM-to-VRAM copy had exactly two such transitions, each with
+    // a one-cycle gap: prime -> first source read (so the first read
+    // of every row captured the PRIME word again -- the row's start
+    // reappearing one word later on screen), and source read ->
+    // destination read (so read_data held the source word, corrupting
+    // the preserved bits of partial edge words). Reproduced
+    // deterministically in rtl/gpu/bench/tb_system_vscroll.v, which
+    // drives the real gpu_blit_wb + wb_arbiter_vram + vram_wb
+    // together -- tb_vscroll.v and tb_edge.v replace those two with
+    // an idealized one-cycle-ack slave, which is why they passed for
+    // rounds while hardware failed.
+    //
+    // Only the VRAM-source copy needs this: it is the one mode with
+    // back-to-back m-port transactions separated by a released bus.
+    // A main-memory source puts the source read on the s port, the
+    // fill path holds m_cyc_o continuously through its
+    // read-modify-write, and every other m-port gap is already >= 2
+    // idle cycles (the margin the fill path has always shipped with).
+    // settle_ret holds where to resume.
+    localparam ST_MEM_SETTLE1 = 5'd28, ST_MEM_SETTLE2 = 5'd29;
+
     // Operation variables
     reg [31:0] work_dst_x, work_dst_y, work_width, work_height, work_pattern;
     reg work_fill, work_clip, work_glyph;
@@ -338,6 +373,11 @@ module gpu_blit_wb #(
     reg [31:0] work_src_addr, work_src_stride;
     reg [4:0]  work_src_shift;
     reg draw_busy;
+
+    // Where the settle pair resumes -- ST_MEM_READ, ST_MEM_PRIME or
+    // ST_READ. Written only by the state-machine always block (see the
+    // debug-probe comment below for what happens otherwise).
+    reg [4:0] settle_ret;
 
     // -- memory copy iteration state --
     // mem_row_addr: byte address of the current row's first source word
@@ -770,6 +810,7 @@ module gpu_blit_wb #(
             dbg_src_dat <= 32'h0;
             dbg_src_cnt <= 32'h0;
             work_dither <= 1'b0;
+            settle_ret <= ST_IDLE;
             state <= ST_IDLE;
         end else begin
             case (state)
@@ -999,12 +1040,26 @@ module gpu_blit_wb #(
                         // primed before the first word can be built,
                         // so A's prime is followed by B's rather than
                         // by the first read.
+                        //
+                        // A VRAM source just released the m port, so
+                        // the next m-port transaction must wait out
+                        // the stale ack -- see ST_MEM_SETTLE1. A
+                        // main-memory source used the s port and goes
+                        // straight on, exactly as before.
                         if (work_cookie && !mem_stream) begin
                             mem_stream <= 1'b1;
-                            state <= ST_MEM_PRIME;
+                            if (work_srcmem) state <= ST_MEM_PRIME;
+                            else begin
+                                settle_ret <= ST_MEM_PRIME;
+                                state <= ST_MEM_SETTLE1;
+                            end
                         end else begin
                             mem_stream <= 1'b0;
-                            state <= ST_MEM_READ;
+                            if (work_srcmem) state <= ST_MEM_READ;
+                            else begin
+                                settle_ret <= ST_MEM_READ;
+                                state <= ST_MEM_SETTLE1;
+                            end
                         end
                     end
                 end
@@ -1053,15 +1108,39 @@ module gpu_blit_wb #(
                         s_stb_o <= 1'b0;
                         m_cyc_o <= 1'b0;
                         m_stb_o <= 1'b0;
+                        // Same stale-ack margin as ST_MEM_PRIME_WAIT
+                        // above: a VRAM source has to settle before
+                        // the destination read (or cookie B's read)
+                        // re-asserts the same port it just released.
+                        // Without it, ST_WAIT_READ consumed the stale
+                        // ack and captured the SOURCE word into
+                        // read_data instead of the destination word.
                         if (work_cookie && !mem_stream) begin
                             mem_stream <= 1'b1;
-                            state <= ST_MEM_READ;
+                            if (work_srcmem) state <= ST_MEM_READ;
+                            else begin
+                                settle_ret <= ST_MEM_READ;
+                                state <= ST_MEM_SETTLE1;
+                            end
                         end else begin
                             mem_stream <= 1'b0;
-                            state <= ST_READ;
+                            if (work_srcmem) state <= ST_READ;
+                            else begin
+                                settle_ret <= ST_READ;
+                                state <= ST_MEM_SETTLE1;
+                            end
                         end
                     end
                 end
+
+                // -- the settle pair itself. Two cycles, because the
+                // stale ack outlives the release by exactly two: one
+                // for vram_wb's own registered ack to clear once stb
+                // is gone, one more for the arbiter's registered
+                // response routing to follow. The same arithmetic that
+                // sized ST_GLYPH_HI_SETTLE1/2.
+                ST_MEM_SETTLE1: state <= ST_MEM_SETTLE2;
+                ST_MEM_SETTLE2: state <= settle_ret;
 
                 ST_READ: begin
                     m_cyc_o <= 1'b1;

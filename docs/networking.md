@@ -71,6 +71,52 @@ an asynchronous pin from another chip, and an unsynchronised signal
 feeding an edge detector produces spurious pulses on metastability —
 which for an interrupt means a storm that appears at random.
 
+### Two wiring bugs found afterwards
+
+Everything above describes the intended design, and it is correct. Two
+things stopped it reaching the hardware.
+
+**`ETH_SPI` vs `SPI_ETH`.** The macro is `SPI_ETH` (rtl/boards.vh).
+The tie-off that grounds `eth_rx_ready` on a board with no ethernet
+tested `ETH_SPI`, which is not defined anywhere. On an ENC28J60 board
+that guard therefore stayed active *alongside* the real driver, and
+`eth_rx_ready` had two continuous assignments -- a constant `1'b0` and
+the synchronised `INT` pin. The wire resolves to `x` the moment a
+frame arrives, so on those boards the interrupt never fired at all and
+`net` fell back to the backstop timeout for every single packet: 100ms
+per arrival where the old poll loop took 1.4ms. RMII boards were never
+affected -- that guard spells its macro correctly.
+
+Simulated both ways, one pulse per arrival: before, 0 pulses and the
+line stuck at `x`; after, 2 pulses for 2 arrivals, RMII unchanged.
+
+**`cpu_irq[8]` was inside `` `ifdef AUDIO ``.** It sat after
+`cpu_irq[7]` and inside the same guard. `eth_rx_ready` is declared
+unconditionally and tied low precisely so this assignment needs no
+`ifdef of its own, which is what the comment above it says -- but a
+board with ethernet and no audio would silently have had no ethernet
+interrupt. Latent rather than active, since every board with ethernet
+today also has audio. Moved out.
+
+### A lost wakeup on the software side
+
+Separately, and independent of the wiring: `k_proc_unblock()` was
+documented as doing nothing when the target is not blocked, which is
+safe for a message -- it stays in the mailbox, and `k_proc_wait()`
+re-checks the mailbox under the same interrupt mask before sleeping.
+A direct unblock leaves nothing behind to re-check.
+
+So a frame arriving anywhere in net's loop body -- after `eth_poll()`
+has drained, before the wait -- unblocked a process that had not
+blocked yet, and the frame waited out the backstop. The window is the
+whole loop body, not a few instructions.
+
+`k_proc_unblock()` now records such a wakeup (`Z_PROC_FLAG_WAKE`,
+sw/common/zproc.h) and `k_proc_wait()` consumes it instead of
+sleeping, tested under the same mask as the mailbox check for the same
+reason. This is not specific to ethernet: it closes the same race for
+any future direct unblock.
+
 ### The kernel side
 
 No handler and no queue. The frame is in the MAC's RX buffer and the
@@ -83,12 +129,25 @@ separate from the `k_pid_lookup()` syscall, which takes and returns
 registers itself like any other service and a hardwired pid would break
 the moment it were restarted.
 
-### The timeout stays
+### The timeout: back to one tick
 
-`net` still passes a timeout, now `Z_TICK_HZ / 10` rather than 1 tick.
-It is no longer how packets are noticed; it is a backstop for the
-periodic work the loop still does — ARP ageing, socket timers, TX
-retries — and insurance against a MAC that somehow leaves its RX buffer
-occupied without the interrupt following.
+`net` waits **one tick**, the same as `wm`, and for the same reason:
+this loop polls things no message can announce — the MAC, ARP ageing,
+socket timers, TX retries, DNS and NTP state. A process that polls
+cannot block indefinitely, because nothing would wake it.
 
-Ten wakes a second for housekeeping instead of 732 for nothing.
+It ran at `Z_TICK_HZ / 10` for a while, on the reasoning that
+`Z_IRQ_ETH` now wakes the process when a frame arrives, leaving the
+timeout as a housekeeping backstop. The interrupt does work — it is
+correctly wired on both MACs and unmasked from boot
+(`sw/bios/boot_picorv32.S` writes a zero mask). But a backstop that
+far out means every case where the wake does not arrive costs 100ms
+instead of 1.4ms, and interactive traffic feels exactly as bad as that
+sounds. A rare miss at 1.4ms is invisible; a rare miss at 100ms is the
+whole user experience.
+
+So the interrupt is what makes this loop RESPONSIVE and the tick is
+what makes it ROBUST. Both is the right answer, and 732 cheap wakes a
+second is what this did before the interrupt existed. That was never
+what made a foreground app slow — three spinning processes were, and
+those are fixed by blocking rather than by waiting longer.

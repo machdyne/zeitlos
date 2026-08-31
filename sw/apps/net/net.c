@@ -1146,32 +1146,24 @@ int main(void) {
 		//
 		// Blocks until a frame arrives or the timeout expires.
 		//
-		// This used to be a bare 1-tick wait because incoming packets
-		// could only be FOUND BY POLLING -- neither MAC had an
-		// interrupt wired to anything that could wake a blocked
-		// process, so the timeout was the only thing that got this
-		// process running again. That meant ~732 wakes a second to
-		// discover, almost every time, that nothing had happened.
-		//
-		// It cost more than it looks. The scheduler shares the CPU
-		// between RUNNABLE processes, so a process that wakes
-		// constantly takes a full share out of whatever is in the
-		// foreground rather than out of idle time. A full-screen app
-		// measured a quarter of the machine with three such wakers
-		// alongside it.
-		//
-		// Both MACs now raise Z_IRQ_ETH when a frame is waiting
+		// Z_IRQ_ETH wakes this process when a frame actually arrives
 		// (rtl/ethmac_rmii.v's eth_int_o, and the ENC28J60's INT pin
-		// via rtl/sysctl.v), and the kernel turns that into a message
-		// -- so this wakes when a packet actually arrives.
+		// via rtl/sysctl.v), so the timeout is not how packets are
+		// noticed. It is a backstop for the periodic work this loop
+		// still does -- ARP ageing, socket timers, TX retries -- and
+		// insurance against a MAC that somehow leaves its RX buffer
+		// occupied without the interrupt following.
 		//
-		// The timeout stays, and is now long rather than 1 tick. It
-		// is no longer how packets are noticed; it is a backstop for
-		// the periodic work this loop still does (ARP ageing, socket
-		// timers, TX retries), and insurance against a MAC that
-		// somehow leaves its RX buffer occupied without the interrupt
-		// following. Ten wakes a second for housekeeping instead of
-		// 732 for nothing.
+		// Ten wakes a second for housekeeping instead of 732 for
+		// nothing. The scheduler shares the CPU between RUNNABLE
+		// processes, so a process that wakes constantly takes a full
+		// share out of whatever is in the foreground.
+		//
+		// TRIED AND REVERTED: going back to z_proc_wait(1), on the
+		// theory that a lost wake was costing 100ms of latency, made
+		// no difference to interactive traffic. So net's wait is not
+		// what makes telnet feel slow, and the cheaper idle is the
+		// better default.
 		z_proc_wait(Z_TICK_HZ / 10);
 
 	}

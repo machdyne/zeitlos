@@ -374,9 +374,29 @@ static void render(void) {
 			if (draw_cursor_y < 0) { draw_cursor_x = -1; draw_cursor_y = -1; }
 
 		} else if (n > 0) {
-			/* Nothing survived, or the blit is disabled -- let the
-			 * compare below redraw what changed. */
-			shadow_invalidate();
+			/* Deliberately NOT shadow_invalidate() here.
+			 *
+			 * The shadow models what is ON THE GLASS, not what is
+			 * in the vt model. Reaching this branch means the
+			 * pixels were not touched -- no blit ran -- so the
+			 * shadow is still exactly right, and the compare below
+			 * will redraw precisely the cells whose content
+			 * changed. Invalidating throws that away and forces all
+			 * 2000 cells, which is the one thing this shadow exists
+			 * to avoid.
+			 *
+			 * It costs most in exactly the case that felt slowest:
+			 * a full-screen application that REPAINTS rather than
+			 * streams (top, vi -- anything cursor-addressed) emits
+			 * a scroll when it writes its bottom line, then rewrites
+			 * the same layout. Almost every cell is unchanged, so
+			 * the compare should draw almost nothing; the invalidate
+			 * turned every refresh into a whole-screen redraw.
+			 *
+			 * For a STREAMING terminal nothing is lost: after a
+			 * scroll every row's content genuinely differs from what
+			 * is on the glass, so the compare redraws it anyway.
+			 * Strictly better or equal, and no blit involved. */
 		}
 	}
 

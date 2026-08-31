@@ -235,11 +235,6 @@ static char last_dir[Z_FLIST_PATH_MAX] = "/";
 
 static void forward_msg(z_msg_t *msg, void *user);
 static void repaint(void);
-static void scroll_down(int n);
-
-/* True once the body has been fully drawn at least once, so
- * scroll_forward() knows the screen matches the layout. */
-static bool drawn_valid = false;
 
 // ---------------------------------------------------------------
 // buffered line reader
@@ -1324,68 +1319,6 @@ static void repaint_body(void) {
 	update_scrollbar();
 
 	body_dirty = false;
-	drawn_valid = true;
-
-}
-
-/* -- scroll forward, moving the pixels instead of redrawing them --
- *
- * The display lines that stay on screen are already correct, just in
- * the wrong place. The hardware moves them and only the strip that
- * scrolled in is drawn. About 4x cheaper than redrawing the body (see
- * docs/gpu_blitter.md), and a reader scrolls more than it does
- * anything else.
- *
- * -- why pixels, and why only forward --
- *
- * read's display lines are NOT a uniform height: headings use a larger
- * font, so "n lines" is not a fixed number of pixels. The shift has to
- * be measured from the layout -- and it can only be measured for lines
- * ALREADY laid out, which means the ones scrolling off the top, not
- * the ones scrolling in from above.
- *
- * So forward is accelerated (measure vlines[n].y before scrolling,
- * blit by exactly that many pixels) and backward keeps the full
- * repaint. Forward is overwhelmingly the common direction in a reader,
- * and half the win with no risk of shifting by the wrong amount beats
- * laying the incoming lines out twice to find the number.
- */
-static void scroll_forward(int n) {
-
-	int shift = 0;
-
-	/* DISABLED -- see the note in sw/apps/text/text.c's
-	 * scroll_repaint(). The blit landed horizontally offset on
-	 * hardware in all three apps; the RTL is verified correct at
-	 * these alignments (rtl/gpu/bench/tb_vscroll.v), so the fault is
-	 * in the coordinates being handed over.
-	 *
-	 * Leaving shift at 0 takes the repaint_body() path below, which
-	 * is exactly the behaviour before this was added. */
-	if (0 && drawn_valid && n > 0 && n < nvlines)
-		shift = vlines[n].y;
-
-	scroll_down(n);
-
-	if (shift <= 0 || shift >= view_h) {
-		repaint_body();
-		return;
-	}
-
-	{
-		z_clip_t c;
-		z_win_content_rect(&win, &c);
-		z_fb_hw_scroll((int)c.x0 + MARGIN, (int)c.y0, view_w,
-			view_h, -shift);
-	}
-
-	/* Everything now sitting in the strip the blit exposed. */
-	for (int r = 0; r < nvlines; r++)
-		if (vlines[r].y + vlines[r].h > view_h - shift)
-			redraw_row(r);
-
-	update_scrollbar();
-	body_dirty = false;
 
 }
 
@@ -1927,7 +1860,7 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 
 	switch (keysym) {
 
-		case Z_KEY_DOWN:    scroll_forward(1); return;
+		case Z_KEY_DOWN:    scroll_down(1); repaint_body(); return;
 		case Z_KEY_UP:      scroll_up(1); repaint_body(); return;
 		// Space is page down, the convention every pager shares --
 		// it is the key a hand rests on while reading. Shift+Space
@@ -1938,7 +1871,7 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 			repaint_body();
 			return;
 
-		case Z_KEY_PAGEDOWN: scroll_forward(page - 1); return;
+		case Z_KEY_PAGEDOWN: scroll_down(page - 1); repaint_body(); return;
 		case Z_KEY_PAGEUP:   scroll_up(page - 1); repaint_body(); return;
 
 		case Z_KEY_HOME:

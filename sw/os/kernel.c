@@ -666,12 +666,25 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 	// has to do is make sure the driver gets scheduled to look, which
 	// is exactly what unblocking it does.
 	//
-	// Z_IRQ_ETH is a LEVEL -- it stays asserted while a frame is
-	// waiting -- so this fires repeatedly until the driver consumes
-	// it. That is harmless (unblocking an already-runnable process
-	// does nothing) and is what makes the level safe: there is no
-	// window in which the interrupt has been acknowledged but a packet
-	// is still unread.
+	// Z_IRQ_ETH is a rising-edge PULSE, one per arrival -- NOT a
+	// level. rtl/sysctl.v edge-detects the MAC's level deliberately:
+	// bit 8 is latched, and a latched level re-fires forever, which
+	// brought the machine to a crawl. Read that file's comment before
+	// changing anything here.
+	//
+	// This comment used to claim the opposite, and concluded there
+	// was "no window in which the interrupt has been acknowledged but
+	// a packet is still unread". That is true of a level and false of
+	// an edge, and the gap it hid was a real one: a frame arriving
+	// while net was still running unblocked a process that was not
+	// blocked yet, which was a no-op, and the frame sat unread until
+	// net's backstop timeout expired ~100ms later. Interactive
+	// traffic over telnet felt exactly as slow as that sounds.
+	//
+	// k_proc_unblock() now RECORDS a wakeup that arrives too early
+	// (Z_PROC_FLAG_WAKE, zproc.h) and k_proc_wait() consumes it
+	// instead of sleeping, so a single pulse cannot be missed however
+	// it is timed.
 	//
 	// The pid is looked up rather than fixed: net registers itself
 	// like any other service, and hardwiring a pid here would break
@@ -808,12 +821,22 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 }
 
 // Make a blocked process schedulable again. Safe to call on a process
-// that isn't blocked (does nothing), which is what lets k_msg_send()
-// call it unconditionally on every delivery.
+// that isn't blocked, which is what lets k_msg_send() call it
+// unconditionally on every delivery.
+//
+// Calling it on a process that has NOT blocked yet is not a no-op any
+// more: the wakeup is recorded, so it cannot be lost in the window
+// between a process deciding to wait and actually being marked
+// BLOCKED. See Z_PROC_FLAG_WAKE in zproc.h for the case that made
+// this necessary.
 void k_proc_unblock(uint32_t pid) {
 	if (pid >= Z_PROCS_MAX) return;
-	z_procs[pid].flags &= ~Z_PROC_FLAG_BLOCKED;
-	z_procs[pid].wake_tick = 0;
+	if (z_procs[pid].flags & Z_PROC_FLAG_BLOCKED) {
+		z_procs[pid].flags &= ~Z_PROC_FLAG_BLOCKED;
+		z_procs[pid].wake_tick = 0;
+	} else {
+		z_procs[pid].flags |= Z_PROC_FLAG_WAKE;
+	}
 }
 
 // -- k_proc_wait syscall --
@@ -887,6 +910,20 @@ z_obj_t *k_proc_wait(z_obj_t *args) {
 	// maskirq() nests correctly here -- z_mailbox_empty()'s internal
 	// mask/restore is a no-op while we already hold it.
 	uint32_t old_mask = maskirq(0xFFFFFFFF);
+
+	// A wakeup that landed before this process got here. Consume it
+	// and do not sleep: whatever it signalled has already happened,
+	// and for a direct unblock there is nothing left to re-check the
+	// way the mailbox test below re-checks a message.
+	//
+	// Tested under the same mask as that test, and for the same
+	// reason -- checking it outside would reopen the very window this
+	// is here to close.
+	if (z_procs[z_pid].flags & Z_PROC_FLAG_WAKE) {
+		z_procs[z_pid].flags &= ~Z_PROC_FLAG_WAKE;
+		maskirq(old_mask);
+		return (&z_fail);
+	}
 
 	// something already waiting -- don't block, let the caller read it
 	if (!z_mailbox_empty(z_pid)) {

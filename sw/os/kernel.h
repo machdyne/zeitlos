@@ -29,12 +29,19 @@
 
 // Ethernet receive -- a frame is waiting in the MAC's RX buffer.
 //
-// LEVEL, not a pulse: asserted for exactly as long as a frame is
-// actually there, and cleared only by the driver consuming it. That is
-// deliberate. An edge-triggered network interrupt has a window between
-// acknowledgement and the next arrival in which a packet can be
-// dropped, and the link then stays dead until something else happens
-// to come in -- a failure that looks like a flaky cable.
+// A rising-edge PULSE, one per arrival -- not a level.
+//
+// This said "LEVEL, not a pulse" and argued that an edge has a window
+// in which a packet can be dropped. The concern was right; the
+// description was wrong. rtl/sysctl.v edge-detects on purpose, because
+// bit 8 is latched and a latched level re-fires forever -- the level
+// version brought the machine to a crawl.
+//
+// The window the old comment worried about was therefore real and
+// open. It is closed on the software side instead: a wakeup that
+// arrives while the driver is still running is recorded rather than
+// dropped (Z_PROC_FLAG_WAKE in sw/common/zproc.h), so a single pulse
+// cannot be missed no matter how it is timed against net's loop.
 //
 // One line for both MACs. rtl/ethmac_rmii.v drives it from its own
 // rx_ready (STATUS bit 2) and the ENC28J60's active-low INT pin is

@@ -500,11 +500,25 @@ static void fill_content(int cx, int cy, int w, int h, int color) {
 // than as a filled block over one. A block caret hides the character
 // it is on, which for an insertion point sitting BETWEEN two
 // characters is also just wrong about where the text will go.
+
+// Screen row where draw_caret() last left its rule, or -1. The
+// scroll blit MOVES those pixels: without this bookkeeping,
+// scroll_repaint() translates the old caret onto a surviving row
+// and nothing ever erases it -- visible as a small vertical rule
+// ghost at the caret's old column (the left text edge, when moving
+// through line starts), stacking up one per scroll. term.c keeps
+// the same bookkeeping for its cursor overlay (draw_cursor_x/y);
+// this is the editor's version of the same lesson.
+static int caret_drawn_row = -1;
+
 static void draw_caret(void) {
 
 	int l = line_at(cursor);
 
-	if (l < top_line || l >= top_line + rows) return;
+	if (l < top_line || l >= top_line + rows) {
+		caret_drawn_row = -1;
+		return;
+	}
 
 	int col = cursor - (int)line_off[l];
 	if (col > cols) col = cols;
@@ -520,6 +534,8 @@ static void draw_caret(void) {
 	if (x > c.x0 + text_w - 1) x = c.x0 + text_w - 1;
 
 	z_fb_hw_line(x, y, x, y + cur_font->h - 1, 1, &c);
+
+	caret_drawn_row = l - top_line;
 
 }
 
@@ -747,22 +763,21 @@ static void scroll_repaint(void) {
 	 * draw_row() renders selected runs inverted, so moving old pixels
 	 * would carry stale highlighting with them. Cheap to detect and
 	 * far cheaper than getting it wrong. */
-	/* DISABLED again -- see docs/gpu_blitter.md, "the scroll offset".
+	/* Re-enabled. The fault was never on this side: coordinates,
+	 * arguments and the derived source address were all traced
+	 * correct on hardware. The corruption was a stale-ack hazard in
+	 * the blitter's VRAM-to-VRAM copy path -- the always-acking
+	 * vram_wb plus the arbiter's registered response routing left
+	 * the previous transaction's ack visible two cycles after
+	 * release, and two transitions in the copy path re-entered the
+	 * port after only one. Fixed in rtl/gpu/gpu_blit.v
+	 * (ST_MEM_SETTLE1/2), reproduced and verified by
+	 * rtl/gpu/bench/tb_system_vscroll.v, which drives the real
+	 * blitter + arbiter + vram together. See docs/gpu_blitter.md,
+	 * "The fix: a stale ack, not a wrong address".
 	 *
-	 * Everything on this side is verified correct on hardware: the
-	 * traced coordinates, the derived source address, and the same
-	 * fault with the copy forced word-aligned so no bit shifting is
-	 * involved at all. The RTL copies correctly in isolation at these
-	 * exact alignments. The fault is in the integration, and finding
-	 * it needs a testbench with a competing bus master rather than
-	 * more printf.
-	 *
-	 * One line, so re-enabling is deleting it. The tracing below is
-	 * left in place and costs nothing while scroll_dbg is 0.
-	 */
-	/* DISABLED -- see docs/gpu_blitter.md. One line; delete to
-	 * re-enable, and set scroll_dbg nonzero to trace again. */
-	if (1) { repaint(); return; }
+	 * The tracing below is left in place and costs nothing while
+	 * scroll_dbg is 0; set it nonzero to trace again. */
 
 	/* Tracing, for when this is re-enabled.
 	 *
@@ -821,6 +836,19 @@ static void scroll_repaint(void) {
 			for (int r = rows - delta; r < rows; r++) draw_row(r);
 		else
 			for (int r = 0; r < -delta; r++) draw_row(r);
+
+		/* The old caret's 1px rule moved with the pixels. If its
+		 * translated position landed on a SURVIVING row, redraw that
+		 * row to erase it -- rows that scrolled in were fully
+		 * redrawn just above and need nothing. Without this, every
+		 * scroll leaves a rule ghost at the caret's old column. */
+		if (caret_drawn_row >= 0) {
+			int g = caret_drawn_row - delta;
+			if (g >= 0 && g < rows &&
+				!(delta > 0 && g >= rows - delta) &&
+				!(delta < 0 && g < -delta))
+				draw_row(g);
+		}
 	}
 
 	draw_caret();

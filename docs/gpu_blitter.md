@@ -1187,8 +1187,9 @@ comparison is against `fill_content(0, ...)`, which draws the same text
 area and resolves x to `c.x0 + 0` — anything the blit does differently
 from that is the bug.
 
-`term` and `read` stay disabled while this is narrowed down, so only one
-app is moving.
+`term` and `read` were kept disabled while this was narrowed down, so
+only one app was moving. (All three are re-enabled now -- see "The
+fix: a stale ack, not a wrong address" at the end of this file.)
 
 #### What the trace showed
 
@@ -1350,7 +1351,11 @@ The next step is a testbench that arbitrates the blitter against a
 competing master, not more tracing. `rtl/gpu/bench/tb_arbiter_stress.v`
 is the place to start from.
 
-Disabled in all three apps meanwhile, one line each.
+(In the end no competing master was needed at all: the real arbiter and
+the real `vram.v` alone, with every other master idle, reproduce the
+corruption deterministically. See "The fix: a stale ack, not a wrong
+address" below. The apps were disabled at one line each while this was
+open; all three are re-enabled now.)
 
 
 ## Source-read probe
@@ -1460,3 +1465,501 @@ The right test for an overlapping copy is:
 Step 3 is the one that matters: a formula can be wrong in a way that
 mimics a hardware fault, and live memory can have been overwritten by
 the very operation under test.
+
+## The fix: a stale ack, not a wrong address
+
+**Resolved.** The scroll-by-blit corruption was a stale-ack hazard in
+the VRAM-to-VRAM copy path -- the same class of bug as the glyph
+path's `ST_GLYPH_HI_SETTLE1/2`, in two more places. Fixed in
+`rtl/gpu/gpu_blit.v` (`ST_MEM_SETTLE1/2`), reproduced and verified in
+simulation by `rtl/gpu/bench/tb_system_vscroll.v`, and re-enabled in
+`term`, `text` and `read`.
+
+### The mechanism
+
+`vram.v` re-asserts `wb_ack_o` on **every** cycle `cyc`/`stb` are held
+-- it has no "already acked" guard -- and `arbiter_vram`'s response
+routing is registered one cycle behind. Put together: after the
+blitter consumes an ack and drops `m_cyc_o`, **`m_ack_i` stays high
+for two more cycles**, with `m_dat_i` holding a re-read of the *old*
+address. (One cycle for `vram.v`'s registered ack to clear once `stb`
+is gone, one more for the arbiter's registered routing to follow --
+the same arithmetic that sized the glyph settle pair.)
+
+The VRAM-source copy path had exactly two transitions that re-entered
+the framebuffer port with only **one** cycle of `cyc` low in between:
+
+- **prime → first source read.** The wait state samples the stale ack
+  one cycle after asserting, captures the **prime word again** as
+  "source word 1", and the read it just launched dies -- the arbiter
+  grants one cycle after `stb` has already gone away, so the
+  transaction never reaches VRAM. The shifted stream is one word
+  behind at the start of every row, so the **row's opening word
+  reappears one word later** -- `| the   | the It gives...` --
+  then the stales are consumed and everything re-syncs.
+- **source read → destination read.** Same sampling error: `read_data`
+  captures the **source** word instead of the destination word,
+  corrupting the preserved bits of partial edge words.
+
+### Why every measurement said what it said
+
+Each prior result was honest; each was answering a narrower question
+than it appeared to:
+
+- **The probe exonerated the source read** because the ack *count*
+  increments once per wait-state visit whether the ack is stale or
+  not (2376, exactly right), and the *last* read of a blit -- the
+  only one inspectable after the fact -- is clean: the stales are
+  consumed mid-row, transactions before the final one.
+- **`tb_vscroll.v` and `tb_edge.v` passed** because both model the
+  framebuffer as an idealized slave whose ack pulses exactly once. A
+  clean-ack model *cannot* express this bug, no matter what it
+  checks. It was never the comparison method that was weak -- it was
+  the bus model.
+- **Only this mode failed** because a VRAM-to-VRAM copy is the only
+  operation with back-to-back *released* transactions on the m port.
+  A main-memory source interleaves the s port between them; a fill
+  holds `cyc` continuously through its read-modify-write, a rhythm
+  the always-acking `vram.v` happens to serve correctly. (Which is
+  also why the fix must be in the blitter: edge-gating `vram.v`'s ack
+  would hang every fill.)
+- **Doubling the blit changed nothing** because the fault is inside
+  each blit's per-row rhythm, not in its first transaction.
+- **No competing master was needed.** The "concurrency" hypothesis
+  was half right -- the fault *was* environmental, in the arbiter
+  path no bench modelled -- but the blitter races only its own
+  previous transaction's ghost.
+
+### The fix
+
+Two settle states, `ST_MEM_SETTLE1`/`ST_MEM_SETTLE2`, plus a
+`settle_ret` register naming where to resume -- entered from
+`ST_MEM_PRIME_WAIT` and `ST_MEM_READ_WAIT` (including the cookie-cut
+A→B loops) **only when the source is VRAM**. A main-memory source
+keeps its exact timing. Mirrors the glyph fix in shape and in size.
+
+Cost: two cycles per source read, about 22 cycles per row for the
+80-column scroll -- the scroll stays roughly 4x faster than
+re-rendering.
+
+`settle_ret` is written and reset in the state-machine `always` block
+only. (See "The probe read zero: multiple drivers" above for what
+happens otherwise; `yosys` `check -assert` is clean.)
+
+### The testbench that finally sees it
+
+`rtl/gpu/bench/tb_system_vscroll.v` drives the **real**
+`gpu_blit_wb` + **real** `wb_arbiter_vram` + **real** `vram_wb`
+together -- the trio that runs on hardware -- and checks
+snapshot-first, exactly as the methodology note above prescribes.
+
+It covers: the exact hardware case (`x=46 y=53 w=303 h=225 dy=-9`),
+an alignment sweep (x = 0, 12, 32, 44, 46, 63, and a 1px-wide copy),
+the prime (`sbit0 < 0`) case, `sx != dx` shifted copies, three
+back-to-back overlapping scrolls re-snapshotting between each, and
+unclipped/clipped/XOR fills through the real arbiter to guard the
+held-`cyc` fill rhythm the fix must not disturb.
+
+Against the pre-fix RTL it fails 367 checks -- every one of the 225
+rows of the hardware case corrupts identically, destination word 2
+holding word 1's data -- so the bench is proven sensitive, not
+merely green. Against the fixed RTL everything passes, and
+`tb_vscroll`, `tb_edge`, `tb_memblit`, `tb_rop` and `tb_straddle`
+still pass unchanged.
+
+**This bench is the gate for any change to the copy path's state
+machine.** The idealized-slave benches remain useful for datapath
+logic, but they are structurally blind to ack-timing bugs, which is
+the class this module keeps producing.
+
+(Noted while regressing: `tb_glyph.v`, `tb_line.v` and
+`tb_arbiter_stress.v` fail identically on the RTL both before and
+after this fix -- byte-for-byte the same output -- so they were
+already failing at this commit, most likely bench rot from an earlier
+RTL change rather than a hardware fault, since glyphs demonstrably
+work on hardware. Worth a separate look, `tb_arbiter_stress.v`
+especially, since it is the designated cross-master canary.)
+
+### Status
+
+`text` uses hardware scrolling. `term` and `read` do NOT -- both are
+back on their pre-blit versions; see "Where this ended up" at the end
+of this file. All debug scaffolding remains in place and switched
+off: `z_fb_scroll_debug`, `z_fb_scroll_dbg_armed`,
+`z_fb_scroll_align`, `z_fb_scroll_twice`, `scroll_dbg`, the
+source-read probe, and `TERM_INSTRUMENT`/`TEXT_INSTRUMENT`.
+
+### What a correct blit exposed: the apps' own bugs
+
+*(Historical. `term` and `read` have since been reverted to their
+pre-blit versions -- see "Where this ended up". The `text` fix below
+is live, and the reasoning is kept because the ghost class it
+describes applies to any overlay drawn on top of scrolled content.)*
+
+First hardware run with the fixed RTL: `term` perfect, `text` left a
+small vertical line at the left of the text, `read` repeated a line
+when scrolling forward. Neither is the blitter -- both are app
+integration bugs that were UNMEASURABLE while the copy itself
+corrupted everything, and `term` being clean is the tell: it is the
+one app that fully accounts for its overlay (it explicitly moves its
+cursor bookkeeping with the pixels, `draw_cursor_y -= n`).
+
+**`text`: the caret ghost.** The caret is a 1px vertical rule drawn
+over the text. The scroll blit MOVES those pixels; `scroll_repaint()`
+redrew only the rows that scrolled in and drew the caret at its new
+position -- nothing ever erased the translated old rule, and
+`move_cursor_ex()`'s scroll path returns before its own old-row
+redraw. One ghost per scroll, at the caret's old column -- the left
+text edge when moving through line starts, stacking into "a small
+vertical line on the left". Fixed with term's own lesson:
+`draw_caret()` records the screen row it drew on, and
+`scroll_repaint()` redraws the row the translated ghost landed on
+(when it survived the scroll; rows that scrolled in were redrawn
+anyway).
+
+The same class covers `read`'s selection highlight and focused-link
+box: any OVERLAY drawn on top of content is translated by the blit
+with nothing erasing the original. `read` now takes the full-repaint
+path whenever either is on screen.
+
+**`read`: three integration bugs in one function.** The old
+`scroll_forward()` (a) redrew the exposed strip from the STALE
+pre-scroll `vlines[]` cache -- repainting rows that had just been
+moved, which is the repeated text -- (b) never relaid the screen out,
+leaving `vlines[]`/`vlinks[]` (selection, clicks, Tab focus)
+describing rows no longer there, and (c) blitted by `vlines[n].y`,
+which counts from the window edge, overshooting by the top margin and
+by the new top block's `space_before`.
+
+The rewrite lays the new screen out FIRST without drawing
+(`draw_body_from()` with an unreachable threshold), so the shift can
+be measured from both layouts rather than assumed; finds which old
+row became the new row 0 by IDENTITY (per-row `(line, sub)` recorded
+at layout), not by step count -- `subs_of()` charges a scroll step
+for a blank line or a rule, which have no row, so the two diverge at
+every paragraph gap; VERIFIES every surviving row against the old
+screen (identity and exact offset, ~50 comparisons) and falls back to
+the full redraw on any mismatch; and only then blits -- the body band
+only, below the top margin -- and draws the exposed strip from the
+fresh layout, band-filling rows that straddle the seam (rows that did
+not fit on the old screen and fit now).
+
+`sw/apps/read/render_test.c` gained a `seam` mode that models the
+whole pipeline on the host -- layout, blit, strip redraw with band
+fill, the verify guard -- and requires the result to equal a full
+redraw pixel row by pixel row, from every position, at several
+widths. Zero mismatches across five real documents, and the
+pre-existing reversibility mode still passes. That test is also what
+caught the step-count/row-index divergence before it reached
+hardware.
+
+## Correct but slower: when the blit is the wrong tool
+
+Second hardware run: the glitches were gone, `text` was faster in
+both scrolling and scrollbar dragging -- and `term` and `read` were
+both SLOWER than before hardware scrolling existed. Measured with
+`top` over telnet, and with `WELCOME.MD` in the reader.
+
+A blit that is correct is not automatically a blit that pays. Two
+different mistakes, and the honest lesson is the same one twice: the
+comparison that matters is not "blit versus full re-render", it is
+"blit plus what still has to be drawn, versus what the app would
+otherwise have drawn" -- and the second term is not always a full
+screen.
+
+### What the blit actually costs
+
+`rtl/gpu/bench/tb_scroll_timing.v` measures it, through the same
+real blitter + arbiter + VRAM as the correctness bench, so the two
+numbers are directly comparable rather than derived from datasheet
+arithmetic:
+
+| operation (term geometry, 80x25 of 5x8) | cycles |
+| --- | --- |
+| whole-area scroll blit | 39,010 |
+| one glyph cell (hardware only) | 40 |
+| full 2000-cell re-render (hardware only) | 80,000 |
+
+The blit is worth about 975 glyph cells of hardware time, or about
+350 cells once each cell's ~112 cycles of software overhead is
+counted. That is the number an integration has to beat.
+
+The same bench also confirms the stale-ack fix costs nothing on the
+glyph path: 3,200 cycles per 80-cell row before and after, identical.
+The copy path itself went from 28,450 to 39,010 cycles -- the settle
+pair, paid once per source read. Worth knowing, and still far cheaper
+than re-rendering.
+
+### `term`: blitting when the app was going to repaint anyway
+
+*(Historical -- this code is no longer in the tree. The FINDING
+stands and is the useful part: see below.)*
+
+`top` does not scroll in the sense the blit assumes. It emits a
+newline that scrolls the terminal by one row, then REPAINTS the whole
+screen with the same layout. The pixels for that layout are already
+on screen, in the right place, so the shadow compare would have drawn
+almost nothing.
+
+Blitting destroys exactly that. It shifts the screen and the shadow
+up by a row, so every row is now compared against its neighbour,
+nearly all 2000 cells mismatch, and the terminal pays the 39,000-cycle
+blit AND a full re-render -- strictly worse than doing nothing. The
+blit was being used as a reflex where it should have been a decision.
+
+The old `else` branch made it worse still: when it did not blit, it
+called `shadow_invalidate()`. That was pure pessimism. The shadow
+models what is ON SCREEN, and if the screen is not touched the shadow
+is still exactly right; invalidating it forced a full re-render for a
+scroll that could have cost nearly nothing.
+
+`term` now counts both options over the model it is about to draw
+either way -- cells still differing after shifting the shadow (what
+blitting would redraw) against cells differing without shifting (what
+doing nothing would redraw) -- and blits only when it wins by more
+than the ~400 cells it costs. The count runs over cells already in
+cache and exits as soon as the answer is settled, which for streaming
+output is within the first few rows. Streaming still blits; `top` now
+does not, and the removed `shadow_invalidate()` makes that path
+cheaper than the pre-blit behaviour it replaces.
+
+### `read`: a second layout pass that cost more than the blit saved
+
+*(Historical -- this code is no longer in the tree.)*
+
+The first rewrite laid the new screen out twice: once with drawing
+suppressed to measure the shift, once to draw the exposed strip.
+Correct, and slower than the full redraw it replaced -- a layout pass
+re-reads and re-parses the document, which is far more expensive than
+the glyph drawing it was saving.
+
+The shift does not need a second layout. `draw_body_from()` now
+records a STEP TABLE while it lays out: one entry per scroll step --
+every wrapped sub, and also every blank line and rule, which cost a
+step but produce no row -- holding each step's identity and the y at
+which its block begins, before `space_before`. Because the layout and
+`scroll_down()` walk the same blocks by the same rules, "the view
+moved k steps" means "the new top is old step k", and
+
+    shift = step_y[k] - MARGIN
+
+falls straight out of the table already in hand. No second pass, no
+file access. One layout pass, exactly as before hardware scrolling --
+with the full-screen redraw replaced by one strip.
+
+The step table also fixed a real over-conservatism: the previous
+version matched rows by identity and could not place a new top that
+landed on a blank line or a rule, so it fell back to a full repaint
+every time a paragraph gap crossed the top of the screen -- visible
+as "sometimes redraws for no reason when moving one line down".
+
+The verify guard stayed, corrected: a step only has to match if its
+whole BAND is above the redraw strip. A step reaching into the strip
+was redrawn from the fresh layout regardless of what the blit brought,
+and demanding a match there rejected most scrolls -- the block at the
+seam being precisely the one whose surroundings the scroll changed.
+With the band bound exact, the accelerated path is taken on 97-100%
+of one-line scrolls across five documents with zero seam mismatches;
+the remainder are whole-page scrolls landing past the last recorded
+step, where a full repaint is the right answer anyway.
+
+
+## Measuring instead of guessing
+
+Third hardware run, with the term decision and read's single-pass
+layout in place: **no perceptible change to either app.** `read` still
+slow, `top` in `term` still slow. (RTL unchanged from the previous
+build, apps rebuilt.)
+
+That result is worth more than it looks. Two changes that provably
+reduce work -- term no longer blits when repainting wins, read no
+longer lays the document out twice -- produced nothing visible. When
+removing work does not make something faster, the work being removed
+was not the bottleneck, and every further guess is guessing.
+
+What the baseline diff (`56c3796`, before hardware scrolling was
+attempted) does and does not show:
+
+- `term`'s render got strictly CHEAPER: the baseline redrew whole
+  dirty rows, HEAD redraws only cells that differ from a shadow of the
+  glass. That is not the regression.
+- The glyph path in `zgfx.c` is untouched; the 586 added lines are new
+  functions (shade, scroll, mem blit), not changes to character
+  drawing.
+- `tb_scroll_timing.v` confirms the stale-ack fix costs the glyph path
+  nothing: 3,200 cycles per 80-cell row before and after.
+- `term`'s idle spin became `z_proc_wait(Z_TICK_HZ / 30)` in this
+  window. Suspicious for throughput, but message delivery unblocks a
+  waiting process (`k_proc_unblock`), so a burst of output should not
+  be capped at 30Hz. Not ruled out on hardware, only in the source.
+
+So both apps are now instrumented in CYCLES rather than glyph counts,
+because glyph counts cannot answer "is drawing the bottleneck at all?"
+
+`TERM_INSTRUMENT` (term.c) reports, every two seconds: total cycles
+split into vt_feed / decide / blit / draw, bytes fed with cycles per
+byte, and cycles per glyph.
+
+`READ_INSTRUMENT` (read.c) reports cycles per scroll split into
+`scroll_down` / blit / layout+draw, and separately the cost of
+`read_block()` -- every document access funnels through it, so that
+one number is all of the layout's I/O and parsing, including whatever
+caching sits underneath.
+
+The specific thing to look for in `read`: if `read_block()` dominates,
+the reader is limited by re-reading and re-parsing the document on
+every scroll, and no drawing strategy will change what it feels like
+-- the work belongs in caching the layout, not in the blitter. Both
+counters use `rdcycle`, a real free-running hardware counter here
+(picorv32 with ENABLE_COUNTERS); `z_uptime_ticks()` at 732Hz cannot
+resolve a single scroll, which is part of why this went unmeasured
+for so long.
+
+
+## Where this ended up
+
+`text` keeps hardware scrolling and is measurably better for it --
+faster on both single-line scrolling and scrollbar dragging, with the
+caret ghost fixed.
+
+`term` and `read` are reverted to their pre-blit versions
+(`56c3796`). Neither ever got faster from the blit on real hardware,
+and two rounds of app-side fixes -- each of which provably removed
+work -- produced no perceptible change. A change that removes work
+and changes nothing is measuring something other than the bottleneck,
+and the honest response is to stop rather than keep adding machinery
+to apps that were fine before.
+
+A further signal, and an unexplained one: the blit-era `read` binary
+was about THREE TIMES the size of the pre-blit build. The source grew
+by a few hundred lines, which cannot account for that. Something in
+that work pulled in a large dependency -- worth finding before any of
+it is reapplied, and possibly related to the slowdown, since a much
+larger binary on this machine means a different memory and cache
+story entirely.
+
+### What survives, and is worth keeping
+
+- **The RTL fix.** `rtl/gpu/gpu_blit.v`'s `ST_MEM_SETTLE1/2` stale-ack
+  fix is correct and independently verified; the corruption it fixes
+  was real and would affect any future user of the VRAM-to-VRAM copy
+  path. `text` depends on it.
+- **The benches.** `tb_system_vscroll.v` (real blitter + arbiter +
+  vram, fails 367 checks on the pre-fix RTL) and `tb_scroll_timing.v`
+  (what operations actually cost).
+- **The cost numbers.** The whole-area scroll blit is ~39,000 cycles,
+  a glyph cell ~40 cycles of hardware time and ~112 including software
+  overhead. So the blit is worth roughly 350 cells. An app that would
+  otherwise redraw fewer than that should not blit at all.
+- **The `term` finding**, which is the most reusable result here: a
+  full-screen app that REPAINTS (top, vi -- anything using cursor
+  addressing) may emit a scroll and then rewrite the same layout. The
+  pixels are already correct and in place, so a shadow compare draws
+  almost nothing -- unless a blit has just shifted the screen and the
+  shadow, at which point every row is compared against its neighbour
+  and nearly every cell mismatches. Blitting there costs a full
+  re-render MORE than doing nothing. Any future re-attempt has to
+  decide per scroll, not per app.
+
+### Postscript: it was not the video path
+
+Confirmed on hardware after the revert:
+
+- **`read` performs the same with and without the blit**, and the
+  pre-blit binary is ~50K against ~150K for the blit-era one. Same
+  speed, a third of the size. Since the blit changed DRAWING
+  substantially and moved nothing, drawing was never the constraint.
+  The board is SDRAM with no dcache, where `read` was originally
+  developed on 10ns SRAM (`obst`) -- and markdown parsing is
+  byte-at-a-time scanning over file buffers, exactly the access
+  pattern that collapses without a cache. That is a dcache problem,
+  not a blitter one, and no application-level change reaches it.
+
+  The `- cpu: ... MIPS @ ... MHz (... IPC)` line the kernel prints at
+  boot (from `rdcycle`/`rdinstret`) quantifies this directly:
+  comparing IPC between the two boards measures the stall.
+
+- **`term` under `top` was the ethernet interrupt**, not video at all.
+  `Z_IRQ_ETH` is a rising-edge pulse (rtl/sysctl.v edge-detects the
+  MAC's level deliberately -- bit 8 is latched and a latched level
+  re-fires forever), while `kernel.h` and the ISR both described it as
+  a LEVEL and concluded there was "no window in which the interrupt
+  has been acknowledged but a packet is still unread". True of a
+  level, false of an edge. A frame arriving anywhere in net's loop
+  body unblocked a process that had not blocked yet -- a no-op -- and
+  the frame sat unread until the backstop timeout expired ~100ms
+  later, where the old `z_proc_wait(1)` had capped it at 1.4ms. Fixed
+  by making an early wakeup sticky (`Z_PROC_FLAG_WAKE`), and the
+  comments corrected.
+
+Both of the real causes were in the memory system and the interrupt
+path. The blitter work was a long detour around them, and the reason
+it took so long is that nothing was measured on hardware until the
+end.
+
+### The exhaustive elimination: do not bisect for text speed
+
+Before spending time bisecting 56c3796..HEAD for a text-drawing
+regression, know that every functional delta in that window has been
+checked, and the text path is unchanged at every level:
+
+- `term.c`'s entire draw path is byte-identical to 56c3796 when
+  reverted, and still felt slow -- identical code, so the code is not
+  the cause.
+- `z_fb_draw_char2`, `z_fb_draw_char` and `gpu_blit_acquire` in
+  zgfx.c: byte-identical to 56c3796 (the file's 586 new lines are new
+  functions, not changes).
+- The blitter's glyph path: MEASURED identical across all three RTL
+  versions -- 56c3796, 0747b98, and 0747b98 with the stale-ack fix --
+  3,200 cycles per 80-cell row in every case, through the real
+  arbiter and VRAM (`tb_scroll_timing.v`). The "new blitter
+  ops/patterns" cost the glyph path nothing.
+- `rtl/sysctl.v`'s 77 changed lines are the ethernet interrupt and
+  comments; nothing touches the bus, the clocks, or memory.
+- `rtl/ethmac_rmii.v`: one added output wire, no datapath change.
+- `zvt100.c`: a scroll counter; the mark-all-dirty on scroll predates
+  the window.
+- `zwin.c` / `zeitlos.h`: additive (new functions and registers).
+- wm/repl/net moved from spinning to blocking, which RETURNS CPU to
+  the foreground app -- the wrong sign for a slowdown.
+- The SDRAM controller (`sdram_kianv.v`) is unchanged in the window
+  and already tuned: KEEP_OPEN row policy, CAS 2, per-bank open-row
+  tracking. No easy factor-of-two is sitting in it.
+
+A bisection between these commits for text-drawing speed will
+terminate with "no commit is bad". The remaining explanation is the
+one `read` already demonstrated: this board is SDRAM with no dcache,
+and the apps' speed memories come from `obst`, which is 10ns SRAM.
+Byte-at-a-time parsing, per-cell MMIO setup, stack traffic -- all of
+it stalls on SDRAM and none of it did on SRAM.
+
+**The two-minute test that settles it:** compare the boot line
+`- cpu: <name> N.NN MIPS @ N MHz (N.NN IPC)` between sergei_ml1 and
+obst. It is computed from rdcycle/rdinstret over real work. If
+sergei's IPC is a fraction of obst's, the slowdown is the memory
+system, it affects everything equally, and the fix is a dcache -- not
+anything findable by bisection.
+
+**Before testing networking on obst:** obst is a `SPI_ETH` board, and
+until the `ETH_SPI`/`SPI_ETH` fix in `rtl/sysctl.v` it had TWO drivers
+on `eth_rx_ready` -- the interrupt line resolves to `x` when a frame
+arrives. Any obst bitstream built for comparison must include that fix
+or the networking comparison is meaningless.
+
+### If this is revisited
+
+Measure first, on hardware, with `rdcycle`. The specific question for
+`read` is whether `read_block()` -- all of the document I/O and
+parsing -- dominates a scroll. If it does, no drawing strategy will
+change how the reader feels, and the work belongs in caching the
+layout. The question for `term` is whether `vt_feed` dwarfs the draw
+loop. Both were left unmeasured through this entire effort, which is
+why it ran as long as it did.
+
+One safe improvement is available independently of any blitting: the
+old `term` scroll path called `shadow_invalidate()`, forcing a full
+re-render. The shadow models what is ON SCREEN, so if the screen is
+not touched it stays accurate and the compare would draw only what
+changed. Dropping that invalidate makes scrolling cheaper than the
+pre-blit baseline with no blit involved at all -- but it should land
+as its own change, measured on its own.

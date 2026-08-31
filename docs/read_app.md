@@ -62,6 +62,27 @@ exactly this: down N display lines then up N must land where it
 started, from every position. 12,208 round trips across five real
 documents, all exact.
 
+**Forward scrolling moves pixels rather than redrawing them** (a
+hardware VRAM-to-VRAM blit -- see `docs/gpu_blitter.md`), and only
+forward: display lines are not a uniform height, so the shift has to
+be measured from layout, and only lines already on screen have one.
+`draw_body_from()` records a STEP TABLE as it lays out -- one entry
+per scroll step, including the blank lines and rules that cost a step
+but produce no row, each holding its identity and the y at which its
+block begins. Because layout and `scroll_down()` walk the same blocks
+by the same rules, the new top after k steps is old step k, and the
+shift is `step_y[k] - MARGIN`: no second layout pass, no extra file
+access. `scroll_forward()` blits by that, draws the exposed strip
+from the one layout pass it was going to do anyway, then VERIFIES
+that every step whose band sits entirely above the strip really did
+move by exactly that much -- repainting fully if not.
+
+`make render MODE=seam` proves the invariant this rests on: blit plus
+strip redraw must equal a full redraw, pixel row by pixel row, from
+every position at several widths. Zero mismatches across five real
+documents, with 97-100% of one-line scrolls taking the accelerated
+path; the rest are whole-page scrolls, which repaint.
+
 Scrolling up therefore can't just decrement — it uses `prev_block()`,
 which replays from the nearest checkpoint. Bounded by the stride, so
 it doesn't get slower as the document grows.

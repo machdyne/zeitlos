@@ -73,6 +73,28 @@
 // sw/apps/info charts.
 #define Z_PROC_FLAG_BLOCKED	0x000000004
 
+// A wakeup that arrived while the target was still RUNNING.
+//
+// k_proc_unblock() on a process that has not blocked yet would
+// otherwise be a no-op and the wakeup simply lost. That is harmless
+// for messages -- the message stays in the mailbox, and k_proc_wait()
+// re-checks the mailbox under the same interrupt mask before sleeping,
+// which is what that function's long comment is about. It is NOT
+// harmless for a source that unblocks DIRECTLY, leaving nothing behind
+// for k_proc_wait() to find.
+//
+// The ethernet receive interrupt is exactly that source: one pulse per
+// arrival (rtl/sysctl.v turns the MAC's level into a rising edge on
+// purpose -- a latched level re-fires forever), no queue, and no level
+// still asserted by the time the driver looks. A frame arriving
+// anywhere in net's loop body -- between its eth_poll() and its wait
+// -- unblocked a process that was still running, and the frame then
+// sat unread until the backstop timeout expired.
+//
+// So record the wakeup instead of dropping it, and let the next
+// k_proc_wait() consume it and decline to sleep.
+#define Z_PROC_FLAG_WAKE	0x000000008
+
 // Longest process name reported below. Matches Z_PIDREG_NAME_MAX
 // (sw/os/pidreg.h), which is where the names come from -- declared
 // separately rather than including that header, which is kernel-side
