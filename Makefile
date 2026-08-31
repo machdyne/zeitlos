@@ -242,11 +242,14 @@ else ifeq ($(BOARD), ulx3s)
 	LPF = ulx3s.lpf
 	PROG = openFPGALoader -b ulx3s
 	FLASH = openFPGALoader -v -b ulx3s -f
-		# Placement seed. The 85K build meets 48MHz on this one but misses
-	# it by ~0.2% on nextpnr's default, and a bitstream that misses is
-	# one that misbehaves intermittently rather than one that fails to
-	# load. Override with PNR_SEED= on the command line.
-	PNR_SEED ?= 2
+		# Placement seed. This design sits close to 48MHz on the 85F, and
+	# which seed meets it is luck: the spread across seeds is roughly
+	# 45-50MHz, and nextpnr's default is among the ones that miss. A
+	# bitstream that misses timing programs fine and then misbehaves
+	# intermittently, so a seed known to meet it is pinned here.
+	# Re-check after any RTL or pin change (`make ... timing`), and
+	# override with PNR_SEED= on the command line.
+	PNR_SEED ?= 6
 FLASH_OFFSET = -o
 else ifeq ($(BOARD), lebkuchen)
 	FAMILY = gatemate

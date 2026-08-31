@@ -133,7 +133,7 @@ IOBUF PORT "sdram_dm[1]" IO_TYPE=LVCMOS33;
 # USB HID
 #
 # Port 0 = onboard US2 (usb_fpga_bd_dp/dn). Keyboard without a PMOD.
-# Port 1 = ULX3S J1 pins 1-2, for an optional Dual USB Host PMOD later.
+# Port 1 = J2 GP26/GN26 (see below), for a second USB port.
 #
 # usb_fpga_pu_* = 0 enables the 15 kΩ pulldowns usb_hid_host needs.
 # ----------------------------------------------------------------------
@@ -150,11 +150,23 @@ IOBUF PORT "usb_fpga_pu_dp" IO_TYPE=LVCMOS33 DRIVE=4;
 LOCATE COMP "usb_fpga_pu_dn" SITE "C12";
 IOBUF PORT "usb_fpga_pu_dn" IO_TYPE=LVCMOS33 DRIVE=4;
 
-LOCATE COMP "usb_host_dp[1]" SITE "B11";
-IOBUF PORT "usb_host_dp[1]" IO_TYPE=LVCMOS33;
+# Port 1 = J2 header, GP26/GN26 (pins 34 and 33), one connector row
+# away from GND (38) and 5V OUT (40) so a hand-made USB-A socket
+# reaches all four signals. They are the two halves of one differential
+# pair -- routed as a pair on the PCB and facing each other on the
+# header -- which is why they are the pins to use rather than two of
+# the same row.
+#
+# D+ on GP26 and D- on GN26, not the other way round: usb_hid_host
+# tells a device's speed apart by which line the device pulls high,
+# and it only speaks low speed (1.5 Mbps), where that line is D-.
+# Both lines need an external 15k pulldown to GND -- the onboard
+# usb_fpga_pu_* resistors above are US2's and do nothing here.
+LOCATE COMP "usb_host_dp[1]" SITE "B13";
+IOBUF PORT "usb_host_dp[1]" IO_TYPE=LVCMOS33 DRIVE=4;
 
-LOCATE COMP "usb_host_dm[1]" SITE "C11";
-IOBUF PORT "usb_host_dm[1]" IO_TYPE=LVCMOS33;
+LOCATE COMP "usb_host_dm[1]" SITE "C13";
+IOBUF PORT "usb_host_dm[1]" IO_TYPE=LVCMOS33 DRIVE=4;
 
 # ----------------------------------------------------------------------
 # GPDI / HDMI

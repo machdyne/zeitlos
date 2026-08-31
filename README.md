@@ -86,7 +86,7 @@ The following boards are currently supported:
  - [Machdyne Lebkuchen](https://github.com/machdyne/lebkuchen)
  - [Machdyne Mozart](https://github.com/machdyne/mozart) / [ML1](https://github.com/machdyne/sechzig)
  - [Machdyne Sergei](https://github.com/machdyne/sergei) / [ML1](https://github.com/machdyne/sechzig)
- - [ULX3S](https://radiona.org/ulx3s/) (85F tested; WiFi through the onboard ESP32, see [docs/esp32link.md](docs/esp32link.md))
+ - [ULX3S](https://radiona.org/ulx3s/) (85F tested, see [docs/ulx3s.md](docs/ulx3s.md))
  - (more soon)
 
 If you have an unsupported board and want to try Zeitlos, please open an issue.
