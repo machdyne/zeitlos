@@ -276,6 +276,7 @@ def cmd_build(args):
             ROOT, t, version, out,
             dry=args.dry_run,
             allow_timing_fail=args.allow_timing_fail,
+            strict_io_timing=args.strict_io_timing,
             keep_generated=args.keep_generated,
             jobs=args.jobs,
             full_image=args.full_image))
@@ -464,6 +465,10 @@ def main(argv):
     b.add_argument("--allow-dirty", action="store_true")
     b.add_argument("--allow-drift", action="store_true")
     b.add_argument("--allow-timing-fail", action="store_true")
+    b.add_argument("--strict-io-timing", action="store_true",
+                   help="also fail on IO-primitive timing domains "
+                        "(TRELLIS_IO_IN and friends), which are advisory "
+                        "by default")
     b.add_argument("--keep-generated", action="store_true",
                    help="leave rtl/zspec.vh etc. in place for inspection")
     b.add_argument("--dry-run", action="store_true")

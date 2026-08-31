@@ -39,6 +39,23 @@ Info: Max frequency for clock '$glbnet$vid_clk': 138.02 MHz (PASS at 125.00 MHz)
 FAKE_PNR_FAIL = FAKE_PNR.replace("63.41 MHz (PASS at 48.00 MHz)",
                                  "41.02 MHz (FAIL at 48.00 MHz)")
 
+# nextpnr reports Fmax twice -- once from a placement estimate, once
+# after routing. Only the second describes the bitstream that was
+# written. This log has a pessimistic first round that PASSES on
+# re-route, plus a TRELLIS_IO_IN domain that fails in both: reading the
+# whole file rather than the last round would fail a release on a
+# number that routing already fixed.
+FAKE_PNR_TWO_ROUNDS = """\
+Info: Device utilisation:
+Info:           TRELLIS_COMB: 19422/24288    79%
+Info: Max frequency for clock '$glbnet$clk_48': 41.02 MHz (FAIL at 48.00 MHz)
+Info: Max frequency for clock 'TRELLIS_IO_IN': 34.32 MHz (FAIL at 48.00 MHz)
+Info: Routing complete.
+Info: Max frequency for clock '$glbnet$clk_48': 63.41 MHz (PASS at 48.00 MHz)
+Info: Max frequency for clock 'TRELLIS_IO_IN': 45.72 MHz (FAIL at 48.00 MHz)
+Info: Program finished normally.
+"""
+
 
 def fake_run(pnr_text):
     """Replacement for build.run that writes what a real build would."""
@@ -47,9 +64,13 @@ def fake_run(pnr_text):
         if "mkzar.py" in joined:
             # Let the real mkzar.py run -- it is part of what we test.
             return build_mod.__dict__["_real_run"](cmd, cwd, env, dry, False)
-        board = next((c.split("=", 1)[1] for c in cmd
-                      if c.startswith("BOARD=")), "lakritz").lower()
-        out = os.path.join(ROOT, "output", board)
+        outdir = next((c.split("=", 1)[1] for c in cmd
+                       if c.startswith("OUTDIR=")), None)
+        if outdir is None:
+            board = next((c.split("=", 1)[1] for c in cmd
+                          if c.startswith("BOARD=")), "lakritz").lower()
+            outdir = os.path.join("output", board)
+        out = os.path.join(ROOT, outdir)
         if "zeitlos_pico" in cmd or "soc" in cmd:
             os.makedirs(out, exist_ok=True)
             with open(os.path.join(out, "soc.bit"), "wb") as f:
@@ -82,7 +103,11 @@ def main():
     lay = layout_mod.load(ROOT)
     version = "0.0.2-selftest"
     out = os.path.join(ROOT, "release/dist", version)
-    created = [out, os.path.join(ROOT, "output")]
+    # Only output/releases -- NOT all of output/. This test builds three
+    # targets and each one wipes its own directory, so cleaning up the
+    # whole tree afterwards would delete a developer's working
+    # bitstreams as the price of running the test suite.
+    created = [out, os.path.join(ROOT, "output", "releases")]
     for app in ("wm", "net", "repl", "term"):
         created.append(os.path.join(ROOT, "sw/apps", app, app + ".bin"))
     created.append(os.path.join(ROOT, "sw/os/kernel.bin"))
@@ -108,6 +133,35 @@ def main():
                                    allow_timing_fail=True)
         assert r["timing"]["failed"] is True
         print("   built, with timing recorded as failed in the manifest")
+
+        # --- 1b. only the FINAL timing report counts ------------------
+        print("\n== only the final timing report counts ==")
+        import build as _b
+        import tempfile as _tf
+        with _tf.NamedTemporaryFile("w", suffix=".log", delete=False) as f:
+            f.write(FAKE_PNR_TWO_ROUNDS)
+            two = f.name
+        t = _b.check_timing(two)
+        if t["rounds"] != 2:
+            failures.append("did not detect two timing reports")
+        if len(t["clocks"]) != 2:
+            failures.append("kept %d clocks; should keep only the final "
+                            "round's 2" % len(t["clocks"]))
+        if t["failed"]:
+            failures.append("failed on a placement estimate that routing "
+                            "then fixed")
+        if not t["advisory"]:
+            failures.append("TRELLIS_IO_IN was not treated as advisory")
+        print("   %d reports found, last one used, %d clocks"
+              % (t["rounds"], len(t["clocks"])))
+        print("   clk_48 41.0 (est) -> 63.4 (routed): not a failure")
+        print("   TRELLIS_IO_IN FAIL recorded as advisory, does not gate")
+        st = _b.check_timing(two, strict_io_timing=True)
+        if not st["failed"]:
+            failures.append("--strict-io-timing did not gate on "
+                            "TRELLIS_IO_IN")
+        print("   --strict-io-timing gates on it: %s" % st["failed"])
+        os.unlink(two)
 
         # --- 2. normal builds ----------------------------------------
         print("\n== building every target ==")

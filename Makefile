@@ -76,6 +76,23 @@ endif
 BOARD_LC = $(shell echo '$(BOARD)' | tr '[:upper:]' '[:lower:]')
 BOARD_UC = $(shell echo '$(BOARD)' | tr '[:lower:]' '[:upper:]')
 
+# Where the bitstream and everything alongside it lands.
+#
+# Overridable so that a build which is NOT your development build can
+# be kept out of the way of one that is. release/zrelease sets
+#
+#   OUTDIR=output/releases/<board>
+#
+# and wipes that directory before each target, because two targets on
+# one board (lakritz_uart and lakritz_langkatze) would otherwise share
+# a directory and a failed second build would leave the first one's
+# soc.bit sitting there looking valid. Without this override that wipe
+# would take your working bitstream with it.
+#
+# Anything using it must not assume the directory exists -- every
+# recipe below mkdir -p's it.
+OUTDIR ?= output/$(BOARD_LC)
+
 ifeq ($(BOARD_LC), riegel)
 	FAMILY = ice40
 	DEVICE = hx4k
@@ -260,48 +277,49 @@ endif
 # nextpnr's critical path report when a clock fails timing. Neither is
 # in --report, which carries totals rather than the path.
 #
-#   output/<board>/synth.log   yosys: cell counts, inferred RAM/DSP,
-#                              every "Warning:" the run produced
-#   output/<board>/pnr.log     nextpnr: device utilisation, Max
-#                              frequency per clock, and the critical
-#                              path breakdown for each
+#   $(OUTDIR)/synth.log   yosys: cell counts, inferred RAM/DSP,
+#                         every "Warning:" the run produced
+#   $(OUTDIR)/pnr.log     nextpnr: device utilisation, Max frequency
+#                         per clock, and the critical path breakdown
+#                         for each
 #
-# To find why a clock missed:
+# OUTDIR is output/<board> for an ordinary build; see its definition
+# above. To find why a clock missed:
 #   grep -A40 "Critical path report for clock" output/obst/pnr.log
 #
 # The logs are truncated per run, so what is in them always belongs to
 # the bitstream sitting next to them.
-SYNTH_LOG = output/$(BOARD_LC)/synth.log
-PNR_LOG = output/$(BOARD_LC)/pnr.log
+SYNTH_LOG = $(OUTDIR)/synth.log
+PNR_LOG = $(OUTDIR)/pnr.log
 
 zeitlos_ice40_pico:
-	mkdir -p output/$(BOARD_LC)
+	mkdir -p $(OUTDIR)
 	yosys $(EXTRA_DEFINES) -DBOARD_$(BOARD_UC) -DICE40 -q -l $(SYNTH_LOG) -p \
-		"synth_ice40 -top sysctl -json output/$(BOARD_LC)/soc.json" $(RTL_PICO)
+		"synth_ice40 -top sysctl -json $(OUTDIR)/soc.json" $(RTL_PICO)
 	nextpnr-ice40 --$(DEVICE) --package $(PACKAGE) --pcf boards/$(PCF) \
-		--asc output/$(BOARD_LC)/soc.txt --json output/$(BOARD_LC)/soc.json \
+		--asc $(OUTDIR)/soc.txt --json $(OUTDIR)/soc.json \
 		-l $(PNR_LOG) \
 		--pcf-allow-unconstrained --opt-timing --ignore-loops
 
 zeitlos_ecp5_pico:
-	mkdir -p output/$(BOARD_LC)
+	mkdir -p $(OUTDIR)
 	yosys $(EXTRA_DEFINES) -DBOARD_$(BOARD_UC) -DECP5 -q -l $(SYNTH_LOG) -p \
-		"synth_ecp5 -top sysctl -json output/$(BOARD_LC)/soc.json" $(RTL_PICO)
+		"synth_ecp5 -top sysctl -json $(OUTDIR)/soc.json" $(RTL_PICO)
 	nextpnr-ecp5 --$(DEVICE) --package $(PACKAGE) --lpf boards/$(LPF) \
-		--json output/$(BOARD_LC)/soc.json \
-		--report output/$(BOARD_LC)/report.txt \
-		--textcfg output/$(BOARD_LC)/soc.config \
+		--json $(OUTDIR)/soc.json \
+		--report $(OUTDIR)/report.txt \
+		--textcfg $(OUTDIR)/soc.config \
 		-l $(PNR_LOG) \
 		--timing-allow-fail --ignore-loops
 	@$(MAKE) --no-print-directory timing
 
 zeitlos_gatemate_pico:
-	mkdir -p output/$(BOARD_LC)
+	mkdir -p $(OUTDIR)
 	$(SYNTH) $(EXTRA_DEFINES) -DBOARD_$(BOARD_UC) -DGATEMATE -q -l $(SYNTH_LOG) -p \
 		"read -sv $(RTL_PICO); synth_gatemate -top sysctl -luttree -nomult \
-			-nomx8 -json output/$(BOARD_LC)/soc.json"
-	$(PR) --device CCGM1A1 --json output/$(BOARD_LC)/soc.json --vopt ccf=$(CCF) --vopt out=output/$(BOARD_LC)/soc.txt --router router2 -l $(PNR_LOG)
-	$(PACK) output/$(BOARD_LC)/soc.txt output/$(BOARD_LC)/soc.bit
+			-nomx8 -json $(OUTDIR)/soc.json"
+	$(PR) --device CCGM1A1 --json $(OUTDIR)/soc.json --vopt ccf=$(CCF) --vopt out=$(OUTDIR)/soc.txt --router router2 -l $(PNR_LOG)
+	$(PACK) $(OUTDIR)/soc.txt $(OUTDIR)/soc.bit
 
 bios:
 	cd sw/bios && make BOARD=$(BOARD_UC) FAMILY=$(FAMILY_UC)
@@ -309,27 +327,27 @@ bios:
 ifeq ($(FAMILY), ice40)
 soc:
 	icebram sw/bios/bios_seed.hex sw/bios/bios.hex < \
-		output/$(BOARD_LC)/soc.txt | icepack > output/$(BOARD_LC)/soc.bit
+		$(OUTDIR)/soc.txt | icepack > $(OUTDIR)/soc.bit
 
 else ifeq ($(FAMILY), gatemate)
 soc:
 	echo
 else ifeq ($(FAMILY), ecp5)
 soc:
-	ecpbram -i output/$(BOARD_LC)/soc.config \
-		-o output/$(BOARD_LC)/soc_final.config \
+	ecpbram -i $(OUTDIR)/soc.config \
+		-o $(OUTDIR)/soc_final.config \
 		-f sw/bios/bios_seed.hex \
 		-t sw/bios/bios.hex
-	ecppack -v --compress --freq 2.4 output/$(BOARD_LC)/soc_final.config \
-		--bit output/$(BOARD_LC)/soc.bit
+	ecppack -v --compress --freq 2.4 $(OUTDIR)/soc_final.config \
+		--bit $(OUTDIR)/soc.bit
 endif
 
 ifeq ($(FAMILY), ice40)
 flash_soc: check soc
-	$(FLASH) output/$(BOARD_LC)/soc.bit
+	$(FLASH) $(OUTDIR)/soc.bit
 else
 flash_soc: check soc
-	$(FLASH) output/$(BOARD_LC)/soc.bit
+	$(FLASH) $(OUTDIR)/soc.bit
 endif
 
 ifeq ($(FAMILY), ice40)
@@ -348,20 +366,20 @@ endif
 #
 # Depends on `apps` so the .bin files exist; mkzar.py stores them
 # verbatim (they are already ZEXE files).
-output/$(BOARD_LC)/apps.zar: apps
-	mkdir -p output/$(BOARD_LC)
-	python3 tools/mkzar.py output/$(BOARD_LC)/apps.zar \
+$(OUTDIR)/apps.zar: apps
+	mkdir -p $(OUTDIR)
+	python3 tools/mkzar.py $(OUTDIR)/apps.zar \
 		wm=sw/apps/wm/wm.bin \
 		net=sw/apps/net/net.bin \
 		repl=sw/apps/repl/repl.bin \
 		term=sw/apps/term/term.bin
 
 ifeq ($(FAMILY), ice40)
-flash_apps: output/$(BOARD_LC)/apps.zar
-	$(FLASH) $(FLASH_OFFSET) output/$(BOARD_LC)/apps.zar 140000
+flash_apps: $(OUTDIR)/apps.zar
+	$(FLASH) $(FLASH_OFFSET) $(OUTDIR)/apps.zar 140000
 else
-flash_apps: output/$(BOARD_LC)/apps.zar
-	$(FLASH) $(FLASH_OFFSET) 1310720 output/$(BOARD_LC)/apps.zar
+flash_apps: $(OUTDIR)/apps.zar
+	$(FLASH) $(FLASH_OFFSET) 1310720 $(OUTDIR)/apps.zar
 endif
 
 # Boot splash logo -- programmed separately from the kernel, at a fixed
@@ -418,7 +436,7 @@ flash_logo: check
 endif
 
 prog: 
-	$(PROG) output/$(BOARD_LC)/soc.bit
+	$(PROG) $(OUTDIR)/soc.bit
 
 dev: check clean_os clean_bios clean_apps os bios apps
 dev-prog: dev soc prog
@@ -534,6 +552,10 @@ util:
 
 clean: clean_os clean_bios clean_apps
 
+# Removes EVERYTHING under output/, including output/releases/ if
+# release/zrelease has built there. That is deliberate -- "clean the
+# build output" should not leave some of it behind -- but it does mean
+# a `make clean_soc` discards release bitstreams too. They rebuild.
 clean_soc:
 	rm -rf output/*
 

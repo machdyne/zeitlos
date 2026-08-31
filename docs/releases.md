@@ -92,6 +92,9 @@ release/
   lib/notes.py          NOTES.md, README.txt, MANIFEST.json
   lib/selftest.py       end-to-end test with the toolchain stubbed
   dist/<version>/       artifacts (gitignored)
+
+output/releases/<board>/    bitstreams and logs from a release build,
+                            kept apart from output/<board>
 ```
 
 `release/README.md` is a pointer to this file and nothing else. Two
@@ -358,11 +361,17 @@ Per target:
    files are still sitting next to the sources. Switching `NET_PHY`
    changes no `.c` file, so nothing in a dependency graph notices and
    the link happily reuses an `eth.o` built for the other driver.
-2. **Wipe `output/<board>`.** `lakritz_uart` and `lakritz_langkatze`
-   share `output/lakritz`, because the Makefile keys that directory off
-   `BOARD` and not off the target. If the second build fails at
+2. **Wipe `output/releases/<board>`.** `lakritz_uart` and
+   `lakritz_langkatze` share a directory, because the Makefile keys it
+   off `BOARD` and not off the target. If the second build fails at
    place-and-route, the first one's `soc.bit` is still there looking
    perfectly valid and would be shipped under the wrong name.
+
+   Under `output/releases/` rather than `output/` so that wipe cannot
+   take a development bitstream with it. The Makefile gained an
+   `OUTDIR` variable for this; it defaults to `output/<board>` and
+   nothing but the release build overrides it. `make clean_soc` still
+   removes everything under `output/`, releases included.
 3. **Gateware and BIOS** (`zeitlos_pico bios soc`). The slow step.
 4. **Timing check** — see below.
 5. **Kernel**, then **apps** with the derived `NET_PHY`.
@@ -380,7 +389,7 @@ Then once per release: the sdcard image, `README.txt`, `NOTES.md`,
 | Version mismatch | `sw/common/zversion.h` says 0.0.2 and you asked for 0.0.3. The version is compiled into the kernel and shown by `info`; shipping these mismatched means the release page and the running system disagree about what it is, discovered from a screenshot months later. | `--bump` (edits the header — commit it) |
 | Dirty tree | `MANIFEST.json` would record a commit the artifacts did not come from. | `--allow-dirty` |
 | Spec drift | A board spec no longer matches `rtl/boards.vh`, so a release would build something other than what `make BOARD=x flash` builds. | `--allow-drift` |
-| Timing failure | See below. | `--allow-timing-fail` |
+| Timing failure | A named clock domain missed its target in the **final** report. IO domains are advisory; see below. | `--allow-timing-fail` |
 | Unconstrained port | `rtl/sysctl.v` declares a port nothing gives pins to. nextpnr rejects it; this says which define would remove it. | none — pins, or `-NAME` |
 | Two ports on one ball | Two PMODs overlapping, or a PMOD pin hitting something constrained outside any port. | none — `lpf_drop`, or relocate |
 | Region overrun | An oversized gateware silently eats the boot splash; an oversized kernel eats the start of the ZAR. Both present later as *that feature stopped working*. | none — shrink it or move the region |
@@ -398,6 +407,27 @@ not — nobody reads scrollback from a build they did not run, and an
 intermittently-misbehaving image is the worst thing to put behind a
 download link. So this fails the build. The achieved Fmax and the
 utilisation go into `MANIFEST.json` and the release notes either way.
+
+**Only the final report counts.** nextpnr prints Fmax twice — once from
+a placement estimate and again after routing with real delays. Reading
+the whole log and keeping every match concatenates the two rounds,
+showing each clock twice with different numbers and, worse, failing a
+release on an estimate that routing then fixed. The parser splits on
+repetition (a clock name appearing twice means a new round started) and
+keeps the last, which needs no assumption about nextpnr's wording. The
+summary says `[final of 2 reports]` when there was more than one.
+
+**IO domains are advisory.** nextpnr names a timing domain after
+whatever drives it, so paths that begin or end at a pin get bucketed
+under the IO primitive — `TRELLIS_IO_IN` and friends — rather than
+under a clock from the design. A `FAIL` there is usually nextpnr
+applying a default target to a path that has no meaningful frequency:
+there is no PLL to retune and nothing in the `.lpf` asked for it.
+
+Those are recorded in `MANIFEST.json`, printed in the summary, and
+called out by name in the build log, but they do not by themselves
+block a release. `--strict-io-timing` gates on them too. They are not
+silently dropped — a real problem hiding behind one stays visible.
 
 ---
 
@@ -568,7 +598,7 @@ Five, all small and all commented in place:
 | `rtl/boards.vh` | the `ZSPEC` guard around the per-board chain |
 | `rtl/sysctl.v` | `UART0_TX`/`RX` ports guarded by `` `ifdef UART0 ``; `cs_uart0` and its mux entries made unconditional; `wbs_uart0_int` declared as a wire outside the guard (it was a `reg` inside it, but read unconditionally) |
 | `rtl/uart_null.v` | new — the phantom UART, plus `rtl/tb/tb_uart_null.v` |
-| `Makefile` | `EXTRA_DEFINES` on the three synthesis recipes |
+| `Makefile` | `EXTRA_DEFINES` on the three synthesis recipes; `OUTDIR` replacing the hardcoded `output/$(BOARD_LC)`, so release builds can be kept out of the way of development ones |
 | `sw/apps/Makefile` | rewritten around one `APPS` list — it named `ping` and `pong`, which no longer exist, so `make apps` failed at the third line |
 | `sw/common/zversion.h` | new; `Z_OS_VERSION` moved out of `zeitlos.h`, which now includes it |
 | `tools/mkfatimg.sh` | header pointing at the no-root path |

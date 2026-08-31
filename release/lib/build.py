@@ -147,37 +147,104 @@ def git_commit(root):
 # as the deliberate override.
 # ---------------------------------------------------------------------
 
-def check_timing(pnr_log):
+# nextpnr reports Fmax MORE THAN ONCE per run -- once after placement,
+# from an estimate, and again after routing with real delays. Reading
+# the whole log and keeping every match concatenates the rounds, which
+# shows each clock twice with different numbers and, worse, fails a
+# release on a placement estimate that routing then fixed.
+#
+# The final report is the only one that describes the bitstream that
+# was actually written, so it is the only one that counts.
+#
+# Split on repetition rather than on a header string: a clock name
+# appearing for the second time means a new round has started. That
+# needs no assumption about nextpnr's wording, and copes with one
+# round, two, or some future number.
+_FMAX = re.compile(r"Max frequency for clock\s+'([^']+)':\s+"
+                   r"([\d.]+)\s*MHz\s+\(([A-Z]+) at ([\d.]+)\s*MHz\)")
+
+# Domains that are not a clock anybody wrote. nextpnr names a domain
+# after whatever drives it, and paths that begin or end at an IO pin
+# get bucketed under the IO primitive's own name rather than a net from
+# the design. Those are reported and recorded, but they do not by
+# themselves block a release: there is no PLL to retune and no
+# constraint in the .lpf that asked for them, so a "FAIL" here is
+# usually nextpnr assuming a default target for a path that has no
+# meaningful frequency at all.
+#
+# NOT ignored silently. They are shown in the summary, kept in
+# MANIFEST.json, and named in the build output, so a real problem
+# hiding behind one is visible rather than swallowed. Set
+# strict_io_timing=True to gate on them too.
+_PSEUDO_DOMAIN = re.compile(r"^(TRELLIS_IO|IO_IN|IO_OUT|\$?PACKER)", re.I)
+
+
+def _final_round(entries):
+    """The last complete report, split where a clock name repeats."""
+    rounds = [[]]
+    for e in entries:
+        if any(x["clock"] == e["clock"] for x in rounds[-1]):
+            rounds.append([])
+        rounds[-1].append(e)
+    return rounds[-1], len(rounds)
+
+
+def is_pseudo_domain(name):
+    return bool(_PSEUDO_DOMAIN.match(name.rsplit("$", 1)[-1]))
+
+
+def check_timing(pnr_log, strict_io_timing=False):
     if not os.path.exists(pnr_log):
-        return {"clocks": [], "failed": False, "utilisation": {}}
+        return {"clocks": [], "failed": False, "utilisation": {},
+                "rounds": 0, "advisory": []}
 
     with open(pnr_log, errors="replace") as f:
         text = f.read()
 
-    clocks = []
-    for m in re.finditer(r"Max frequency for clock\s+'([^']+)':\s+"
-                         r"([\d.]+)\s*MHz\s+\(([A-Z]+) at ([\d.]+)\s*MHz\)",
-                         text):
-        clocks.append({"clock": m.group(1), "achieved_mhz": float(m.group(2)),
-                       "result": m.group(3), "target_mhz": float(m.group(4))})
+    seen = [{"clock": m.group(1), "achieved_mhz": float(m.group(2)),
+             "result": m.group(3), "target_mhz": float(m.group(4))}
+            for m in _FMAX.finditer(text)]
+    clocks, rounds = _final_round(seen)
 
+    # Utilisation is printed once per run today, but take the last
+    # occurrence for the same reason as above.
     util = {}
     for m in re.finditer(r"^\s*Info:\s+(\w+):\s+(\d+)/\s*(\d+)\s+(\d+)%",
                          text, re.M):
         util[m.group(1)] = {"used": int(m.group(2)), "total": int(m.group(3)),
                             "percent": int(m.group(4))}
 
+    hard, advisory = [], []
+    for c in clocks:
+        if c["result"] != "FAIL":
+            continue
+        if is_pseudo_domain(c["clock"]) and not strict_io_timing:
+            advisory.append(c)
+        else:
+            hard.append(c)
+
     return {"clocks": clocks,
-            "failed": any(c["result"] == "FAIL" for c in clocks),
+            "rounds": rounds,
+            "failed": bool(hard),
+            "failing": hard,
+            "advisory": advisory,
             "utilisation": util}
 
 
 def timing_summary(t):
     if not t["clocks"]:
         return "no timing data"
-    return "; ".join("%s %.1f MHz %s" % (c["clock"].rsplit("$", 1)[-1],
-                                         c["achieved_mhz"], c["result"])
-                     for c in t["clocks"])
+    parts = []
+    for c in t["clocks"]:
+        name = c["clock"].rsplit("$", 1)[-1]
+        tag = c["result"]
+        if c["result"] == "FAIL" and c in t.get("advisory", []):
+            tag = "FAIL (advisory)"
+        parts.append("%s %.1f MHz %s" % (name, c["achieved_mhz"], tag))
+    out = "; ".join(parts)
+    if t.get("rounds", 1) > 1:
+        out += "   [final of %d reports]" % t["rounds"]
+    return out
 
 
 # ---------------------------------------------------------------------
@@ -186,14 +253,22 @@ def timing_summary(t):
 
 def build_target(root, target, version, outdir, dry=False,
                  allow_timing_fail=False, keep_generated=False,
-                 jobs=None, full_image=False):
+                 jobs=None, full_image=False, strict_io_timing=False):
     lay = layout_mod.load(root)
     arch = spec.derive_arch(root)
     sw = target.derive_sw()
     commit, dirty = git_commit(root)
 
     board_lc = target.board.lower()
-    boutput = os.path.join(root, "output", board_lc)
+
+    # NOT output/<board>. A release build wipes this directory before
+    # each target -- it has to, because two targets on one board share
+    # it and a failed second build would otherwise leave the first
+    # one's soc.bit sitting there looking perfectly valid -- and that
+    # wipe must not take a developer's working bitstream with it. The
+    # top-level Makefile's OUTDIR exists for this.
+    outsub = os.path.join("output", "releases", board_lc)
+    boutput = os.path.join(root, outsub)
 
     print("\n=== %s (%s) ===" % (target.name, target.description))
     print("    board %s   arch %s   net %s"
@@ -232,6 +307,7 @@ def build_target(root, target, version, outdir, dry=False,
         mk = ["make", "-C", root]
         common = ["BOARD=" + target.board,
                   "EXTRA_DEFINES=-DZSPEC",
+                  "OUTDIR=" + outsub,
                   "ARCH=" + arch]
         if lpf_name:
             common.append("LPF=" + lpf_name)
@@ -244,7 +320,7 @@ def build_target(root, target, version, outdir, dry=False,
             root, dry=dry)
 
         # -- 2. wipe this board's output dir ---------------------------
-        print("  [2/6] clearing output/%s" % board_lc)
+        print("  [2/6] clearing %s" % outsub)
         if not dry and os.path.isdir(boutput):
             shutil.rmtree(boutput)
 
@@ -257,9 +333,18 @@ def build_target(root, target, version, outdir, dry=False,
         run(mk + common + ["zeitlos_pico", "bios", "soc"], root, dry=dry)
 
         pnr_log = os.path.join(boutput, "pnr.log")
-        timing = check_timing(pnr_log)
+        timing = check_timing(pnr_log, strict_io_timing=strict_io_timing)
         result["timing"] = timing
         print("        %s" % timing_summary(timing))
+        for c in timing.get("advisory", []):
+            print("        note: %s missed its target (%.1f of %.1f MHz). "
+                  "That domain is an IO"
+                  % (c["clock"].rsplit("$", 1)[-1], c["achieved_mhz"],
+                     c["target_mhz"]))
+            print("        primitive rather than a clock from the design, "
+                  "so it is recorded but not gated.")
+            print("        Use --strict-io-timing to treat it as a "
+                  "failure.")
         if timing["utilisation"]:
             u = timing["utilisation"]
             key = "TRELLIS_COMB" if "TRELLIS_COMB" in u else sorted(u)[0]
@@ -267,16 +352,24 @@ def build_target(root, target, version, outdir, dry=False,
                   % (key, u[key]["used"], u[key]["total"], u[key]["percent"]))
 
         if timing["failed"] and not allow_timing_fail:
+            names = ", ".join("%s (%.1f of %.1f MHz)"
+                              % (c["clock"].rsplit("$", 1)[-1],
+                                 c["achieved_mhz"], c["target_mhz"])
+                              for c in timing["failing"])
             raise BuildError(
-                "%s missed timing.\n"
-                "  %s\n"
+                "%s missed timing on %s.\n\n"
+                "  %s\n\n"
                 "  A bitstream that missed timing programs fine and then "
-                "misbehaves intermittently, which is the worst thing to put "
-                "behind a download link. Look at the critical path with\n"
-                "    make path BOARD=%s\n"
+                "misbehaves intermittently, which is the worst thing to\n"
+                "  put behind a download link. Look at the critical path "
+                "with\n"
+                "    make path BOARD=%s OUTDIR=%s\n"
+                "  (OUTDIR because release builds do not share a directory "
+                "with your development ones)\n"
                 "  and either fix it or, if you have decided the margin is "
                 "acceptable, rerun with --allow-timing-fail."
-                % (target.name, timing_summary(timing), board_lc))
+                % (target.name, names, timing_summary(timing), board_lc,
+                   outsub))
 
         # -- 4. kernel -------------------------------------------------
         print("  [4/6] kernel")
