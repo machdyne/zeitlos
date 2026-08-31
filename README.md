@@ -243,3 +243,4 @@ The contents of this repo are released under the [Lone Dynamics Open License](LI
 - rtl/mem/sdram\_kianv uses the Apache 2.0 license.
 - rtl/ext/usb\_hid\_host uses the Apache 2.0 license.
 - sw/os/fs/fatfs uses a BSD compatible license.
+- sw/data/ark uses Creative Commons Attribution-ShareAlike 4.0 International License (CC BY-SA) and the GNU Free Documentation License (GFDL).
