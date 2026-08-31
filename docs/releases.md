@@ -41,9 +41,9 @@ release/dist/0.0.3/
   zeitlos-lakritz_langkatze.img
   zeitlos-mozart_ml1.img
   zeitlos-sergei_ml1.img
-  zeitlos-<target>-gateware.bit     the pieces, for partial reflashes
-  zeitlos-<target>-apps.zar
+  zeitlos-<target>-gateware.bit     the only per-board piece
   zeitlos-kernel.bin                identical for every target
+  zeitlos-apps.zar                  identical for every target
   zeitlos-logo.bin                  identical for every target
   zeitlos.img.gz                    sdcard image, identical for every target
   README.txt                        what each file is, offline
@@ -357,11 +357,12 @@ difference would only ever be found from a bug report.
 
 Per target:
 
-1. **Full software clean.** Not an optimisation to remove later. `sw/`
-   has no per-board object directories, so the previous target's `.o`
-   files are still sitting next to the sources. Switching `NET_PHY`
-   changes no `.c` file, so nothing in a dependency graph notices and
-   the link happily reuses an `eth.o` built for the other driver.
+1. **Software, once for the whole release.** Clean, then kernel, apps
+   and the core app archive. This used to be per target, because
+   `sw/apps/net` was built per board; nothing under `sw/` varies by
+   board any more. The clean still matters: `sw/` has no per-board
+   object directories, so it is how a release guarantees it is not
+   linking something left from a developer's last build.
 2. **Wipe `output/releases/<board>`.** `lakritz_uart` and
    `lakritz_langkatze` share a directory, because the Makefile keys it
    off `BOARD` and not off the target. If the second build fails at
@@ -375,8 +376,9 @@ Per target:
    removes everything under `output/`, releases included.
 3. **Gateware and BIOS** (`zeitlos_pico bios soc`). The slow step.
 4. **Timing check** — see below.
-5. **Kernel**, then **apps** with the derived `NET_PHY`.
-6. **ZAR**, then image assembly and region validation.
+5. **The BIOS**, which is the one board-specific binary (`-DBOARD_x`,
+   `-DFPGA_x`, spliced into the bitstream's BRAM by `ecpbram`).
+6. **Image assembly** and region validation.
 
 Then once per release: the sdcard image, `README.txt`, `NOTES.md`,
 `MANIFEST.json`, `SHA256SUMS`.

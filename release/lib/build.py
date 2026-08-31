@@ -10,15 +10,19 @@
 #
 # Order per target, and the reasons for it:
 #
-#   1. Full software clean. NOT optional and NOT an optimisation to
-#      remove later. sw/ has no per-board object directories -- every
-#      app builds its .o files next to its source -- so the objects
-#      left behind by the previous target are still sitting there.
-#      sw/apps/net/Makefile's header describes what that costs: switch
-#      NET_PHY and the .c files are unchanged, so nothing in a
-#      dependency graph notices, and the link happily reuses an eth.o
-#      compiled for the other driver. The .net_phy_selected stamp file
-#      guards that case specifically, but a clean guards all of them.
+#   1. Full software clean, ONCE for the whole release. sw/ has no
+#      per-board object directories -- every app builds its .o files
+#      next to its source -- so a clean is how a release guarantees it
+#      is not linking something left over from a developer's last
+#      build.
+#
+#      It used to happen per target, because sw/apps/net was built per
+#      board: NET_PHY chose one driver, and switching it changed no
+#      .c file, so nothing in a dependency graph noticed and the link
+#      reused an eth.o compiled for the other one. net now links both
+#      drivers and chooses at runtime (sw/apps/net/net_phy.h), so
+#      nothing under sw/ varies by board and the kernel, the apps and
+#      the core app archive are built exactly once.
 #
 #   2. Wipe output/<board>. lakritz_uart and lakritz_langkatze share
 #      output/lakritz, because the Makefile keys that directory off
@@ -33,9 +37,8 @@
 #      has to be built before `soc` because ecpbram splices bios.hex
 #      into the bitstream's BRAM).
 #
-#   4. Kernel and apps, with the target's derived software config.
-#
-#   5. ZAR, then the assembled image.
+#   4. Per target: the gateware, then the flash image assembled from
+#      that plus the shared kernel, logo and archive.
 #
 # Between 3 and 5 the pnr log is read for timing. See check_timing().
 #
@@ -261,12 +264,66 @@ def timing_summary(t):
 # The build
 # ---------------------------------------------------------------------
 
-def build_target(root, target, version, outdir, dry=False,
+def build_software(root, core_apps, dry=False, jobs=None):
+    """Kernel, apps and the core app archive. ONCE for the whole release.
+
+    Nothing under sw/ varies by board any more. It used to: sw/apps/net
+    was compiled against one NIC driver chosen by NET_PHY, which made
+    net.bin -- and therefore the core app archive, and therefore the
+    entire software half of a release -- board-specific for the sake of
+    one object file. net now links both drivers and picks one at
+    runtime from the feature CSR (sw/apps/net/net_phy.h).
+
+    So this runs once, and every target's flash image embeds the same
+    kernel.bin and the same apps.zar. Faster, and one less way for two
+    targets in a release to differ from each other without anybody
+    meaning them to.
+
+    The BIOS is NOT here: it is board-specific (-DBOARD_x, -DFPGA_x)
+    and is baked into the bitstream by ecpbram, so it belongs to the
+    gateware step.
+    """
+    arch = spec.derive_arch(root)
+    zar = os.path.join(root, "output", "releases", "apps.zar")
+
+    print("\n=== software (shared by every target) ===")
+    print("    arch %s   core apps: %s" % (arch, ", ".join(core_apps)))
+
+    mk = ["make", "-C", root, "ARCH=" + arch]
+    if jobs:
+        mk += ["-j%d" % jobs]
+
+    print("  [1/3] cleaning")
+    run(mk + ["clean_os", "clean_apps"], root, dry=dry)
+
+    print("  [2/3] kernel and apps")
+    run(mk + ["os"], root, dry=dry)
+    run(mk + ["apps"], root, dry=dry)
+
+    print("  [3/3] core app archive")
+    zar_cmd = [sys.executable, os.path.join(root, "tools/mkzar.py"), zar]
+    for app in core_apps:
+        zar_cmd.append("%s=sw/apps/%s/%s.bin" % (app, app, app))
+    out = run(zar_cmd, root, dry=dry)
+    for line in (out or "").strip().splitlines():
+        print("        %s" % line)
+
+    return {"zar": zar,
+            "kernel": os.path.join(root, "sw/os/kernel.bin"),
+            "arch": arch,
+            "core_apps": list(core_apps)}
+
+
+def build_target(root, target, version, outdir, software, dry=False,
                  allow_timing_fail=False, keep_generated=False,
                  jobs=None, full_image=False, strict_io_timing=False):
+    """Gateware and BIOS for one target, then its flash image.
+
+    `software` is what build_software() returned -- the kernel and the
+    core app archive, shared by every target in the release.
+    """
     lay = layout_mod.load(root)
-    arch = spec.derive_arch(root)
-    sw = target.derive_sw()
+    arch = software["arch"]
     # The dirty list is not used here -- cmd_build has already decided
     # whether to proceed. Only the commit is wanted, for zspec.vh's
     # provenance header.
@@ -284,8 +341,8 @@ def build_target(root, target, version, outdir, dry=False,
     boutput = os.path.join(root, outsub)
 
     print("\n=== %s (%s) ===" % (target.name, target.description))
-    print("    board %s   arch %s   net %s"
-          % (target.board, arch, sw["NET_PHY"] or "none"))
+    print("    board %s   arch %s   nic %s"
+          % (target.board, arch, target.nic() or "none"))
 
     result = {
         "target": target.name,
@@ -293,8 +350,8 @@ def build_target(root, target, version, outdir, dry=False,
         "board": target.board,
         "family": target.family,
         "arch": arch,
-        "net_phy": sw["NET_PHY"],
-        "core_apps": target.core_app_list(),
+        "nic": target.nic(),
+        "core_apps": software["core_apps"],
         "defines": {k: v for k, v in target.defines.items()},
         "flash_cmd": target.flash_cmd,
         "notes": list(target.notes),
@@ -327,22 +384,22 @@ def build_target(root, target, version, outdir, dry=False,
         if jobs:
             mk += ["-j%d" % jobs]
 
-        # -- 1. clean --------------------------------------------------
-        print("  [1/6] cleaning software objects")
-        run(mk + common + ["clean_os", "clean_bios", "clean_apps"],
-            root, dry=dry)
+        # -- 1. the BIOS is the only board-specific software ----------
+        #
+        # -DBOARD_x and -DFPGA_x, and it is spliced into the bitstream's
+        # BRAM by ecpbram, so it is rebuilt per target while the kernel
+        # and apps are not. Cleaned first for the same reason the
+        # kernel and apps were: sw/ has no per-board object dirs.
+        print("  [1/4] BIOS (the one board-specific binary)")
+        run(mk + common + ["clean_bios"], root, dry=dry)
 
-        # -- 2. wipe this board's output dir ---------------------------
-        print("  [2/6] clearing %s" % outsub)
+        # -- 2. wipe this board's output dir --------------------------
+        print("  [2/4] clearing %s" % outsub)
         if not dry and os.path.isdir(boutput):
             shutil.rmtree(boutput)
 
-        # -- 3. gateware + bios ----------------------------------------
-        #
-        # `zeitlos` is bios -> place-and-route -> soc -> os -> apps.
-        # The software half is rebuilt below with the target's config;
-        # this is about the bitstream and the BIOS baked into it.
-        print("  [3/6] gateware (yosys + nextpnr -- this is the slow one)")
+        # -- 3. gateware ----------------------------------------------
+        print("  [3/4] gateware (yosys + nextpnr -- this is the slow one)")
         run(mk + common + ["zeitlos_pico", "bios", "soc"], root, dry=dry)
 
         pnr_log = os.path.join(boutput, "pnr.log")
@@ -358,6 +415,7 @@ def build_target(root, target, version, outdir, dry=False,
                   "so it is recorded but not gated.")
             print("        Use --strict-io-timing to treat it as a "
                   "failure.")
+
         if timing["utilisation"]:
             u = timing["utilisation"]
             key = "TRELLIS_COMB" if "TRELLIS_COMB" in u else sorted(u)[0]
@@ -384,34 +442,7 @@ def build_target(root, target, version, outdir, dry=False,
                 % (target.name, names, timing_summary(timing), board_lc,
                    outsub))
 
-        # -- 4. kernel -------------------------------------------------
-        print("  [4/6] kernel")
-        run(mk + common + ["os"], root, dry=dry)
-
-        # -- 5. apps ---------------------------------------------------
-        #
-        # NET_PHY is passed as a command-line variable, which is what
-        # makes it win: sw/apps/net/Makefile uses `NET_PHY ?= RMII`, and
-        # a command-line assignment overrides a ?= and propagates
-        # through the `cd net && make` sub-make via MAKEFLAGS.
-        print("  [5/6] apps%s"
-              % (" (NET_PHY=%s)" % sw["NET_PHY"] if sw["NET_PHY"] else ""))
-        app_vars = list(common)
-        if sw["NET_PHY"]:
-            app_vars.append("NET_PHY=" + sw["NET_PHY"])
-        run(mk + app_vars + ["apps"], root, dry=dry)
-
-        # -- 6. ZAR + image --------------------------------------------
-        print("  [6/6] core app archive and flash image")
-        zar_path = os.path.join(boutput, "apps.zar")
-        zar_cmd = [sys.executable, os.path.join(root, "tools/mkzar.py"),
-                   zar_path]
-        for app in target.core_app_list():
-            zar_cmd.append("%s=sw/apps/%s/%s.bin" % (app, app, app))
-        out = run(zar_cmd, root, dry=dry)
-        if out:
-            for line in out.strip().splitlines():
-                print("        %s" % line)
+        print("  [4/4] flash image")
 
         if dry:
             return result
@@ -419,8 +450,8 @@ def build_target(root, target, version, outdir, dry=False,
         parts = {
             "gateware": os.path.join(boutput, "soc.bit"),
             "logo": os.path.join(root, "sw/data/images/zeitlos_fb.bin"),
-            "kernel": os.path.join(root, "sw/os/kernel.bin"),
-            "apps": zar_path,
+            "kernel": software["kernel"],
+            "apps": software["zar"],
         }
         img, rows = mkflashimg.build(lay, parts, full=full_image)
 
@@ -450,16 +481,17 @@ def build_target(root, target, version, outdir, dry=False,
         print(mkflashimg.describe(rows, len(img), lay["flash_size"]))
         print()
 
-        # The individual pieces ship too. The combined image is what a
-        # new owner wants; these are what you want on the fourth
-        # iteration of a debugging session, when rewriting 1.5MB over
-        # JTAG to change one app is the slow part.
-        for key, src in (("gateware", parts["gateware"]),
-                         ("apps", parts["apps"])):
-            ext = "-gateware.bit" if key == "gateware" else "-apps.zar"
-            dst = os.path.join(outdir, stem + ext)
-            shutil.copy2(src, dst)
-            result["artifacts"][key] = os.path.basename(dst)
+        # The bitstream also ships on its own, for the fourth iteration
+        # of a debugging session when rewriting 1.5MB over JTAG to
+        # change one thing is the slow part.
+        #
+        # The core app archive does NOT ship per target any more -- it
+        # is byte-identical on every board now that net picks its
+        # driver at runtime, so cmd_build writes one zeitlos-apps.zar
+        # alongside zeitlos-kernel.bin.
+        dst = os.path.join(outdir, stem + "-gateware.bit")
+        shutil.copy2(parts["gateware"], dst)
+        result["artifacts"]["gateware"] = os.path.basename(dst)
 
         result["artifacts"]["flash_image"] = os.path.basename(img_path)
         result["image_bytes"] = len(img)

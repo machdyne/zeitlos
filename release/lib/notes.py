@@ -48,7 +48,7 @@ def _target_table(targets):
     rows = ["| Target | Hardware | Networking | Image |",
             "| --- | --- | --- | --- |"]
     for t in targets:
-        net = t["net_phy"] or "none"
+        net = t.get("nic") or "none"
         rows.append("| `%s` | %s | %s | `%s` |"
                     % (t["target"], t["description"], net,
                        t["artifacts"].get("flash_image", "-")))
@@ -199,11 +199,9 @@ def asset_readme(version, commit, targets, sdcard, layout):
         out.append("  %s" % img)
         out.append("      %s" % t["description"])
         out.append("      Networking: %s" % (
-            "ENC28J60 (SPI)" if t["net_phy"] == "ENC28J60" else
-            "RMII ethernet MAC" if t["net_phy"] == "RMII" else
+            "ENC28J60 (SPI)" if t.get("nic") == "ENC28J60" else
+            "RMII ethernet MAC" if t.get("nic") == "RMII" else
             "none in this build"))
-        out.append("      Core apps in flash: %s"
-                   % ", ".join(t["core_apps"]))
         for n in t.get("notes", []):
             out.append("      %s" % n)
         if t.get("flash_cmd"):
@@ -234,10 +232,10 @@ def asset_readme(version, commit, targets, sdcard, layout):
     L = {r.key: r for r in layout["regions"]}
     out.append("  zeitlos-<board>-gateware.bit   bitstream, flash 0x%06x"
                % L["gateware"].offset)
-    out.append("  zeitlos-<board>-apps.zar       core apps, flash 0x%06x"
-               % L["apps"].offset)
     out.append("  zeitlos-kernel.bin             kernel,    flash 0x%06x"
                % L["kernel"].offset)
+    out.append("  zeitlos-apps.zar               core apps, flash 0x%06x"
+               % L["apps"].offset)
     out.append("  zeitlos-logo.bin               splash,    flash 0x%06x"
                % L["logo"].offset)
     out.append("")
@@ -245,8 +243,10 @@ def asset_readme(version, commit, targets, sdcard, layout):
     out.append("                  utilisation for each build")
     out.append("  SHA256SUMS      checksums for everything above")
     out.append("")
-    out.append("The kernel and splash are identical for every board; the")
-    out.append("gateware and core apps are not.")
+    out.append("Only the gateware differs between boards. The kernel,")
+    out.append("the core apps and the splash are identical everywhere --")
+    out.append("the `net` app carries both NIC drivers and picks one at")
+    out.append("startup from the SOC feature register.")
     out.append("")
 
     out.append("-" * W)

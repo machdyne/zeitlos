@@ -70,10 +70,9 @@ def cmd_list(args):
     print("targets:\n")
     for name in spec.list_targets(ROOT):
         t = spec.load_target(ROOT, name)
-        sw = t.derive_sw()
         print("  %-20s %s" % (name, t.description))
-        print("  %-20s board %s, %s, net %s, %d defines"
-              % ("", t.board, t.family, sw["NET_PHY"] or "none",
+        print("  %-20s board %s, %s, nic %s, %d defines"
+              % ("", t.board, t.family, t.nic() or "none",
                  len(t.defines)))
         for pm in t.pmods:
             balls = t.pmod_ports[pm.port]
@@ -336,6 +335,17 @@ def cmd_build(args):
     if not args.dry_run:
         os.makedirs(out, exist_ok=True)
 
+    # Kernel, apps and the core app archive, once for the whole
+    # release. Nothing under sw/ varies by board now that net picks its
+    # NIC driver at runtime, so building this per target would compile
+    # the same sources four times and give four chances for two targets
+    # to differ without anybody meaning them to.
+    software = None
+    if not args.dry_run or True:
+        first = spec.load_target(ROOT, targets[0])
+        software = build_mod.build_software(
+            ROOT, first.core_app_list(), dry=args.dry_run, jobs=args.jobs)
+
     results = []
     for name in targets:
         t = spec.load_target(ROOT, name)
@@ -348,7 +358,7 @@ def cmd_build(args):
                 % (name, "\n  ".join(drift), t.board))
 
         results.append(build_mod.build_target(
-            ROOT, t, version, out,
+            ROOT, t, version, out, software,
             dry=args.dry_run,
             allow_timing_fail=args.allow_timing_fail,
             strict_io_timing=args.strict_io_timing,
@@ -365,8 +375,10 @@ def cmd_build(args):
     # The kernel and the logo are the same bytes for every target, so
     # they ship once rather than four times. They are already inside
     # each flash image; these are for partial reflashes.
-    shutil.copy2(os.path.join(ROOT, "sw/os/kernel.bin"),
+    shutil.copy2(software["kernel"],
                  os.path.join(out, "zeitlos-kernel.bin"))
+    shutil.copy2(software["zar"],
+                 os.path.join(out, "zeitlos-apps.zar"))
     shutil.copy2(os.path.join(ROOT, "sw/data/images/zeitlos_fb.bin"),
                  os.path.join(out, "zeitlos-logo.bin"))
 

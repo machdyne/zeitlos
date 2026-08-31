@@ -920,34 +920,25 @@ int main(void) {
 		"own execution jumping back here)\n", (unsigned long)entry_canary);
 	entry_canary = 0xDEADBEEF;
 
-	printf("net: initializing %s...\n", NET_PHY_NAME);
+	// Pick a driver before touching any of its registers -- see
+	// net_phy.h's header and docs/csrs.md for the full story.
+	//
+	// net_phy_select() uses POSITIVE feature detection, so a bitstream
+	// that predates rtl/csrs.v (and therefore cannot answer) is treated
+	// as "unknown, proceed", not "absent, refuse" -- the same
+	// backward-compatible choice the old #ifdef'd
+	// z_soc_feature_confirmed_absent() check made here. Only a
+	// CSR-capable bitstream reporting neither MAC returns NULL, which
+	// is what makes it safe for sw/os/sh.c's `init` to start net on
+	// every board rather than reserving its pid and giving up.
+	if (!net_phy_select()) {
+		printf("net: this SOC build has no ethernet hardware "
+			"(rtl/boards.vh's SPI_ETH or ETH_RMII) -- nothing to do "
+			"here, exiting cleanly.\n");
+		return 1;
+	}
 
-	// check the SOC actually has the ethernet backend this binary was
-	// built for BEFORE touching any of its registers -- see
-	// net_phy.h's own header comment and docs/csrs.md for the full
-	// story. z_soc_feature_confirmed_absent() (not a plain negated
-	// z_soc_has_feature()) is deliberate: an older bitstream that
-	// predates rtl/csrs.v entirely can't answer this at all, and the
-	// safe, backward-compatible behavior there is "proceed as before"
-	// (this board might genuinely have the hardware, we just can't
-	// confirm it), not "refuse". Only a POSITIVE, confirmed "this
-	// board's build has neither SPI_ETH nor ETH_RMII" makes net exit
-	// here -- which is exactly what makes it safe for sw/os/sh.c's
-	// `init` to always attempt starting net now, on every board,
-	// instead of the old pid-reservation-only workaround.
-#ifdef NET_PHY_RMII
-	if (z_soc_feature_confirmed_absent(Z_FEATURE_ETH_RMII)) {
-		printf("net: this SOC build has no RMII ethernet (rtl/boards.vh's "
-			"ETH_RMII) -- nothing to do here, exiting cleanly.\n");
-		return 1;
-	}
-#else
-	if (z_soc_feature_confirmed_absent(Z_FEATURE_SPI_ETH)) {
-		printf("net: this SOC build has no SPI ethernet (rtl/boards.vh's "
-			"SPI_ETH) -- nothing to do here, exiting cleanly.\n");
-		return 1;
-	}
-#endif
+	printf("net: initializing %s...\n", NET_PHY_NAME);
 
 	if (!phy_init(our_mac)) {
 		printf("net: phy_init (%s) failed -- see that driver's header comment "

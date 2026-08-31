@@ -91,6 +91,7 @@ def fake_run(pnr_text):
             with open(os.path.join(out, "pnr.log"), "w") as f:
                 f.write(pnr_text)
         if "os" in cmd:
+            os.makedirs(os.path.join(ROOT, "sw/os"), exist_ok=True)
             with open(os.path.join(ROOT, "sw/os/kernel.bin"), "wb") as f:
                 f.write(os.urandom(118 * 1024))
         if "apps" in cmd:
@@ -133,8 +134,9 @@ def main():
         print("== a target that missed timing is refused ==")
         build_mod.run = fake_run(FAKE_PNR_FAIL)
         t = spec.load_target(ROOT, "lakritz_uart")
+        soft = build_mod.build_software(ROOT, t.core_app_list())
         try:
-            build_mod.build_target(ROOT, t, version, out)
+            build_mod.build_target(ROOT, t, version, out, soft)
             failures.append("a FAIL-at timing report did not stop the build")
             print("   NOT REFUSED -- bug")
         except build_mod.BuildError as e:
@@ -142,7 +144,7 @@ def main():
             print("   refused, as it should be")
 
         print("\n   ... and --allow-timing-fail overrides it")
-        r = build_mod.build_target(ROOT, t, version, out,
+        r = build_mod.build_target(ROOT, t, version, out, soft,
                                    allow_timing_fail=True)
         assert r["timing"]["failed"] is True
         print("   built, with timing recorded as failed in the manifest")
@@ -179,10 +181,13 @@ def main():
         # --- 2. normal builds ----------------------------------------
         print("\n== building every target ==")
         build_mod.run = fake_run(FAKE_PNR)
+        soft = build_mod.build_software(
+            ROOT, spec.load_target(ROOT, "lakritz_uart").core_app_list())
         results = []
         for name in ("lakritz_uart", "mozart_ml1", "sergei_ml1"):
             t = spec.load_target(ROOT, name)
-            results.append(build_mod.build_target(ROOT, t, version, out))
+            results.append(build_mod.build_target(ROOT, t, version, out,
+                                                  soft))
 
         # --- 3. the images really do contain what they claim ----------
         print("\n== image contents ==")
@@ -210,17 +215,24 @@ def main():
                                    "ok" if not bad else "FAILED: %s" % bad))
             failures.extend(bad)
 
-        # --- 4. net follows the hardware, not a setting ---------------
-        print("\n== the net app follows the hardware ==")
+        # --- 4. one archive, every board ------------------------------
+        #
+        # net links both NIC drivers and chooses at runtime, so the core
+        # app archive no longer varies. If these ever diverge again,
+        # the single zeitlos-apps.zar asset is wrong for some board.
+        print("\n== the core app archive is the same everywhere ==")
+        first = results[0]["core_apps"]
         for res in results:
-            has_net = "net" in res["core_apps"]
-            expect = res["net_phy"] is not None
-            ok = has_net == expect
-            print("   %-16s net_phy=%-9s net in ZAR=%-5s  %s"
-                  % (res["target"], res["net_phy"], has_net,
-                     "ok" if ok else "MISMATCH"))
-            if not ok:
-                failures.append("%s: net/PHY mismatch" % res["target"])
+            same = res["core_apps"] == first
+            print("   %-16s nic=%-9s core apps: %-22s %s"
+                  % (res["target"], res.get("nic"),
+                     ",".join(res["core_apps"]),
+                     "ok" if same else "DIFFERS"))
+            if not same:
+                failures.append("%s ships a different core app set"
+                                % res["target"])
+        if "net" not in first:
+            failures.append("net is not in the core app archive")
 
         # --- 5. notes and manifest -----------------------------------
         print("\n== notes and manifest ==")

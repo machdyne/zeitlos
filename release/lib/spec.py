@@ -180,46 +180,48 @@ class Target:
         self.notes = []
         self.sources = []           # spec files that contributed
 
-    # -- derived software configuration --------------------------------
+    # -- what the hardware has -----------------------------------------
     #
-    # Everything below is computed from self.defines. Nothing reads it
-    # from a spec file, deliberately: see this module's header.
+    # Descriptive only. It goes in the release notes and README.txt so
+    # somebody can tell which download matches their board; NOTHING is
+    # built differently because of it.
+    #
+    # This used to be derive_sw(), and it returned a NET_PHY value that
+    # the build passed to sw/apps/net. That is gone: net now links both
+    # drivers and picks one at runtime from the feature CSR (see
+    # sw/apps/net/net_phy.h). One net.bin runs on every board, so the
+    # whole software half of a release builds once rather than per
+    # target, and the core app archive is identical everywhere.
 
-    def derive_sw(self):
+    def nic(self):
         d = self.defines
-        sw = {}
-
         has_spi_eth = "SPI_ETH" in d
         has_rmii = "ETH_RMII" in d
 
+        # Still worth rejecting, even though nothing downstream now
+        # depends on the answer: rtl/sysctl.v would need two MACs to
+        # honour it, so a spec asking for both is a mistake in the
+        # spec rather than a configuration.
         if has_spi_eth and has_rmii:
             raise SpecError("%s: both SPI_ETH and ETH_RMII are defined. "
-                            "rtl/sysctl.v builds two MACs and sw/apps/net "
-                            "can only link one driver." % self.name)
+                            "rtl/sysctl.v builds one MAC or the other."
+                            % self.name)
         if has_spi_eth:
-            sw["NET_PHY"] = "ENC28J60"
-        elif has_rmii:
-            sw["NET_PHY"] = "RMII"
-        else:
-            sw["NET_PHY"] = None    # no NIC -- net is not built for this
-
-        return sw
+            return "ENC28J60"
+        if has_rmii:
+            return "RMII"
+        return None
 
     def core_app_list(self):
-        """Core apps for this target's ZAR, minus any the hardware can't run.
+        """The core apps in the ZAR.
 
-        `net` on a board with no MAC would build (rmii_eth.c compiles
-        fine against absent hardware) and then sit in flash doing
-        nothing but confusing whoever ran it. Leave it out instead.
+        Now the same list on every board. `net` is included even where
+        there is no MAC: it detects that at startup from the feature
+        CSR and exits cleanly saying so, which is better than being
+        absent for reasons the user cannot see -- and it is what makes
+        one archive correct everywhere.
         """
-        sw = self.derive_sw()
-        apps = list(self.core_apps)
-        if sw["NET_PHY"] is None and "net" in apps:
-            apps.remove("net")
-        return apps
-
-    def net_enabled(self):
-        return self.derive_sw()["NET_PHY"] is not None
+        return list(self.core_apps)
 
 
 def load_target(root, name):

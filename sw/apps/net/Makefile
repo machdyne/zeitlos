@@ -19,11 +19,14 @@ endif
 # NOTE: every later append to CFLAGS in this file must also say
 # `override`. A plain `CFLAGS += ...` after an override assignment is
 # SILENTLY IGNORED by make, which is how -DNET_PHY_$(NET_PHY) went
-# missing once: the build still succeeded through compilation and
-# failed at link with undefined enc28j60_* symbols, because the header
-# had selected one driver and the makefile linked the other. The
-# quieter half was worse -- DHCP, NTP, SSH and the static IP settings
-# had all reverted to their defaults with nothing said.
+# missing once, back when the driver was a build-time choice: the
+# build succeeded through compilation and failed at link with
+# undefined enc28j60_* symbols, because the header had selected one
+# driver and the makefile linked the other. The quieter half was
+# worse -- DHCP, NTP, SSH and the static IP settings had all reverted
+# to their defaults with nothing said. That specific trap is gone with
+# NET_PHY (see below), but the -D flags that remain are just as
+# order-sensitive.
 #
 # `override` so the flags this app REQUIRES survive a command-line
 # CFLAGS. A command-line assignment replaces the makefile's CFLAGS
@@ -36,18 +39,18 @@ override CFLAGS += --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) $(GC_CF
 LDFLAGS = -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS)
 LDSCRIPT = ../../common/riscv-app.ld
 
-# which NIC driver to build in -- ENC28J60 (SPI PMOD, most boards) or
-# RMII (rtl/ethmac_rmii.v, mozart_ml1 only). See net_phy.h for why
-# this is a build-time choice, not a runtime probe.
-#NET_PHY ?= ENC28J60
-NET_PHY ?= RMII
-override CFLAGS += -DNET_PHY_$(NET_PHY)
-
-ifeq ($(NET_PHY), RMII)
-PHY_OBJ = rmii_eth.o
-else
-PHY_OBJ = enc28j60.o
-endif
+# BOTH NIC drivers are built in and the right one is chosen at
+# runtime from the feature CSR -- see net_phy.h for why, and for what
+# it costs (1112 bytes, measured).
+#
+# There is deliberately no NET_PHY variable any more. It was the only
+# thing in sw/apps that made a binary board-specific, and removing it
+# means one net.bin runs everywhere: the core app archive is now the
+# same on every board, the whole software half of a release builds
+# once instead of per target, and net can ship on the sdcard image
+# again (a card copy shadows the flash copy, so a single card image
+# used to be unable to carry it).
+PHY_OBJ = enc28j60.o rmii_eth.o net_phy.o
 
 # DHCP (dhcp.c) on by default; set NET_DHCP=0 to disable it entirely
 # and always use the static NET_STATIC_* config below -- e.g. for a
@@ -186,33 +189,24 @@ net: net.elf net.bin
 # after any edit. bit us for real with sw/os/fs/fs.c during this
 # session's zstream/TFTP work -- see docs/networking.md.
 #
-# NET_PHY itself is a second, different way the same class of
-# staleness bug can happen: switching it changes CFLAGS and which
-# driver .o gets linked, not any .c file's contents, so a plain .c
-# prerequisite wouldn't notice `make NET_PHY=RMII` after a previous
-# `make NET_PHY=ENC28J60` and would happily link a stale eth.o/net.o
-# still compiled with the OTHER driver's -DNET_PHY_* -- silently
-# building for the wrong board. .net_phy_selected below is a real
-# file whose mtime only changes when NET_PHY's value actually does
-# (FORCE makes its own recipe re-run the check every build; the
-# recipe itself only rewrites the file, bumping its mtime, if the
-# value differs from last time), and every NET_PHY-sensitive object
-# depends on it.
+# There used to be a second stamp file here, .net_phy_selected,
+# guarding the same class of bug for NET_PHY: switching it changed
+# CFLAGS and which driver .o was linked without changing any .c file,
+# so make could not see it and would link a stale eth.o compiled for
+# the other driver. Both the variable and the stamp are gone -- both
+# drivers are always built now, so there is nothing to switch and
+# nothing to go stale. See net_phy.h.
 #
-# NET_DHCP/NET_STATIC_*/NTP_* are the same class of bug again, third time:
+# NET_DHCP/NET_STATIC_*/NTP_* are the same class of bug, and this one
+# is real:
 # they only affect net.c's CFLAGS (and, for NET_DHCP=0, which objects
 # get linked at all), not net.c's own file content, so switching e.g.
 # `make NET_DHCP=0` after a previous `make NET_DHCP=1` build wouldn't
 # otherwise trigger a rebuild of the stale net.o. .net_config_selected
-# follows the exact same pattern as .net_phy_selected, just tracking
-# a different set of values (now including NET_STATIC_DNS too).
+# follows the pattern the removed .net_phy_selected used, tracking
+# this set of values (including NET_STATIC_DNS).
 
 FORCE:
-
-.net_phy_selected: FORCE
-	@if [ ! -f $@ ] || [ "$$(cat $@ 2>/dev/null)" != "$(NET_PHY)" ]; then \
-		echo "$(NET_PHY)" > $@; \
-	fi
 
 .net_config_selected: FORCE
 	@cur="$(NET_DHCP) $(NET_STATIC_IP) $(NET_STATIC_NETMASK) $(NET_STATIC_GATEWAY) $(NET_STATIC_DNS) $(NET_STATIC_NTP) $(NTP_SERVER) $(NTP_ENABLE) $(SSH_ENABLE) $(SSH_MAX_PACKET)"; \
@@ -232,13 +226,16 @@ zstream.o: ../../common/zstream.c ../../common/zstream.h
 zport.o: ../../common/zport.c ../../common/zport.h
 	$(CC) $(CFLAGS) -c ../../common/zport.c -o zport.o
 
-enc28j60.o: enc28j60.c enc28j60.h .net_phy_selected
+enc28j60.o: enc28j60.c enc28j60.h
 	$(CC) $(CFLAGS) -c enc28j60.c -o enc28j60.o
 
-rmii_eth.o: rmii_eth.c rmii_eth.h .net_phy_selected
+rmii_eth.o: rmii_eth.c rmii_eth.h
 	$(CC) $(CFLAGS) -c rmii_eth.c -o rmii_eth.o
 
-eth.o: eth.c eth.h net_phy.h .net_phy_selected
+net_phy.o: net_phy.c net_phy.h enc28j60.h rmii_eth.h ../../common/zsoc.h
+	$(CC) $(CFLAGS) -c net_phy.c -o net_phy.o
+
+eth.o: eth.c eth.h net_phy.h
 	$(CC) $(CFLAGS) -c eth.c -o eth.o
 
 arp.o: arp.c arp.h
@@ -304,7 +301,7 @@ telnet.o: telnet.c telnet.h tcp.h
 tftp.o: tftp.c tftp.h
 	$(CC) $(CFLAGS) -c tftp.c -o tftp.o
 
-net.o: net.c net_phy.h ssh/ssh.h ../../common/znet.h .net_phy_selected .net_config_selected ../../common/zsoc.h ../../common/zntp.h dhcp.h dns.h ntp.h
+net.o: net.c net_phy.h ssh/ssh.h ../../common/znet.h .net_config_selected ../../common/zsoc.h ../../common/zntp.h dhcp.h dns.h ntp.h
 	$(CC) $(CFLAGS) -c net.c -S -o net.asm
 	$(CC) $(CFLAGS) -c net.c -o net.o
 

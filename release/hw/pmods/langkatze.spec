@@ -39,10 +39,12 @@
 # If rtl/spim.v ever gains a reset output, pin 8 is where it goes --
 # add `8=ETH_RST_N` here and nothing else in this system changes.
 #
-# NOTHING HERE MENTIONS NET_PHY. sw/apps/net's driver choice is derived
-# from `SPI_ETH by release/lib/spec.py's derive_sw(), because the two
-# being settable independently is exactly the failure sw/apps/net's own
-# Makefile documents at length.
+# NOTHING HERE SELECTS A DRIVER, and nothing anywhere else does either
+# any more. sw/apps/net links both the ENC28J60 and RMII drivers and
+# picks one at startup from the feature CSR (sw/apps/net/net_phy.h), so
+# `SPI_ETH decides what the gateware builds and nothing else has to
+# agree with it. That removed the last thing in sw/apps that varied by
+# board.
 
 description = Langkatze ENC28J60 SPI Ethernet PMOD
 
