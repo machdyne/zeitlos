@@ -16,7 +16,23 @@ GC_CFLAGS = -ffunction-sections -fdata-sections
 GC_LDFLAGS = -Wl,--gc-sections
 endif
 
-CFLAGS = --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) $(GC_CFLAGS) $(ARCH_DEFS) $(LIBC_FLAGS)
+# NOTE: every later append to CFLAGS in this file must also say
+# `override`. A plain `CFLAGS += ...` after an override assignment is
+# SILENTLY IGNORED by make, which is how -DNET_PHY_$(NET_PHY) went
+# missing once: the build still succeeded through compilation and
+# failed at link with undefined enc28j60_* symbols, because the header
+# had selected one driver and the makefile linked the other. The
+# quieter half was worse -- DHCP, NTP, SSH and the static IP settings
+# had all reverted to their defaults with nothing said.
+#
+# `override` so the flags this app REQUIRES survive a command-line
+# CFLAGS. A command-line assignment replaces the makefile's CFLAGS
+# outright -- `make CFLAGS+=-DFOO=1` appends to the command-line value,
+# not to this one -- silently dropping -Os, -march, section GC, the
+# libc specs and any -D this app needs to build correctly. The result
+# still builds and links; it just produces a much larger, slower binary
+# that can overrun the space the loader has for it and crash on start.
+override CFLAGS += --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) $(GC_CFLAGS) $(ARCH_DEFS) $(LIBC_FLAGS)
 LDFLAGS = -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS)
 LDSCRIPT = ../../common/riscv-app.ld
 
@@ -25,7 +41,7 @@ LDSCRIPT = ../../common/riscv-app.ld
 # this is a build-time choice, not a runtime probe.
 #NET_PHY ?= ENC28J60
 NET_PHY ?= RMII
-CFLAGS += -DNET_PHY_$(NET_PHY)
+override CFLAGS += -DNET_PHY_$(NET_PHY)
 
 ifeq ($(NET_PHY), RMII)
 PHY_OBJ = rmii_eth.o
@@ -42,7 +58,7 @@ endif
 # dhcp_acquire()'s retry budget (see dhcp.c/docs/networking.md) --
 # same three values, two different roles depending on NET_DHCP.
 NET_DHCP ?= 1
-CFLAGS += -DNET_DHCP=$(NET_DHCP)
+override CFLAGS += -DNET_DHCP=$(NET_DHCP)
 
 # accepted either as a dotted quad ("192.168.1.50") or already as a
 # 0x-prefixed hex literal ("0xC0A80132") -- either way, converted here
@@ -77,7 +93,7 @@ NET_STATIC_DNS     ?= 0.0.0.0
 # same way and are marginally closer; the plain global name is the
 # default because it is right everywhere.
 NTP_SERVER ?= pool.ntp.org
-CFLAGS += -DNTP_SERVER='"$(NTP_SERVER)"'
+override CFLAGS += -DNTP_SERVER='"$(NTP_SERVER)"'
 
 # Same dotted-quad-or-hex handling as the addresses above. 0.0.0.0 (the
 # default) means "no override -- resolve NTP_SERVER by name". Unlike
@@ -92,7 +108,7 @@ NET_STATIC_NTP     ?= 0.0.0.0
 # bitstream without rtl/rtc.v, so this switch is about not carrying
 # the code, not about avoiding a crash.
 NTP_ENABLE ?= 1
-CFLAGS += -DNTP_ENABLE=$(NTP_ENABLE)
+override CFLAGS += -DNTP_ENABLE=$(NTP_ENABLE)
 
 # -- SSH (sw/apps/net/ssh/) --
 #
@@ -107,7 +123,7 @@ CFLAGS += -DNTP_ENABLE=$(NTP_ENABLE)
 # TRNG is missing or unhealthy (z_rng_secure(), sw/common/zrng.h) --
 # this switch is about not carrying the code, not about safety.
 SSH_ENABLE ?= 1
-CFLAGS += -DSSH_ENABLE=$(SSH_ENABLE)
+override CFLAGS += -DSSH_ENABLE=$(SSH_ENABLE)
 
 # Largest SSH binary packet we will accept. OpenSSH's own KEXINIT runs
 # to roughly 1.2KB and a long USERAUTH_BANNER can be larger, so this is
@@ -117,17 +133,17 @@ CFLAGS += -DSSH_ENABLE=$(SSH_ENABLE)
 # counter -- but their contents are lost, which is only safe for
 # message types we would have ignored anyway.
 SSH_MAX_PACKET ?= 4096
-CFLAGS += -DSSH_MAX_PACKET=$(SSH_MAX_PACKET)
+override CFLAGS += -DSSH_MAX_PACKET=$(SSH_MAX_PACKET)
 
 dottedquad_to_hex = $(shell printf '%s' "$(1)" | grep -qE '^0[xX]' && \
 	printf '%s' "$(1)" || \
 	printf '0x%02X%02X%02X%02X' $$(printf '%s' "$(1)" | tr '.' ' '))
 
-CFLAGS += -DNET_STATIC_IP=$(call dottedquad_to_hex,$(NET_STATIC_IP))
-CFLAGS += -DNET_STATIC_NETMASK=$(call dottedquad_to_hex,$(NET_STATIC_NETMASK))
-CFLAGS += -DNET_STATIC_GATEWAY=$(call dottedquad_to_hex,$(NET_STATIC_GATEWAY))
-CFLAGS += -DNET_STATIC_DNS=$(call dottedquad_to_hex,$(NET_STATIC_DNS))
-CFLAGS += -DNET_STATIC_NTP=$(call dottedquad_to_hex,$(NET_STATIC_NTP))
+override CFLAGS += -DNET_STATIC_IP=$(call dottedquad_to_hex,$(NET_STATIC_IP))
+override CFLAGS += -DNET_STATIC_NETMASK=$(call dottedquad_to_hex,$(NET_STATIC_NETMASK))
+override CFLAGS += -DNET_STATIC_GATEWAY=$(call dottedquad_to_hex,$(NET_STATIC_GATEWAY))
+override CFLAGS += -DNET_STATIC_DNS=$(call dottedquad_to_hex,$(NET_STATIC_DNS))
+override CFLAGS += -DNET_STATIC_NTP=$(call dottedquad_to_hex,$(NET_STATIC_NTP))
 
 ifeq ($(NET_DHCP), 1)
 DHCP_OBJ = dhcp.o

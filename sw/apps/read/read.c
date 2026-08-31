@@ -210,6 +210,66 @@ typedef struct {
 static visline_t vlines[VIS_LINES];
 static int nvlines;
 
+/* -- the step table --
+ *
+ * One entry per SCROLL STEP on the laid-out screen, in order: every
+ * wrapped text sub, and also every blank line and rule, which cost a
+ * step (subs_of() returns 1 for them) but produce no vline.
+ *
+ * scroll_forward() needs it to know how far the pixels must move.
+ * That distance cannot be derived from the step count alone -- a
+ * blank line costs a step and occupies 5 pixels, a heading costs one
+ * and occupies 17 -- and it must not be derived from a second layout
+ * pass either, which is what made the first attempt at this slower
+ * than what it replaced.
+ *
+ * step_y is where the block BEGINS, before its space_before. That is
+ * the number a fresh layout starting at this step would place at
+ * MARGIN, so the shift is simply step_y[k] - MARGIN.
+ */
+// True when vlines[]/step_y[] describe what is ACTUALLY on the glass.
+// The accelerated scroll blits pixels on the strength of that table,
+// so anything that changes the screen without going through
+// draw_body_from() -- a resize, a new document, a clear during
+// loading -- must clear this or the blit moves pixels that are not
+// where the table says.
+static bool drawn_valid;
+
+#define VIS_STEPS   96
+
+static int16_t  step_y[VIS_STEPS];
+static uint32_t step_ln[VIS_STEPS];
+static uint8_t  step_sub[VIS_STEPS];
+static uint32_t step_off[VIS_STEPS];   // file offset of the step's block
+static int nsteps;
+
+/* -- the layout cache --
+ *
+ * After a scroll, every block still on screen is the same block,
+ * wrapped the same way, at a known offset. Re-reading and re-parsing
+ * it to rediscover that was 84% of a scroll's cost on hardware -- and
+ * on a document with many zero-height blocks (fence closers, front
+ * matter) the layout walked 150 blocks to place a 14-block screen,
+ * every keypress.
+ *
+ * So the layout remembers where it STOPPED: the parser state, file
+ * offset, source line and y before the first block that did not fit.
+ * A forward scroll shifts what it has and resumes from there, reading
+ * only the blocks that scrolled in. Nothing above the resume point is
+ * touched by the parser again.
+ *
+ * Only COMPLETE blocks are cached (cache_* counts). The block that was
+ * cut short by the bottom of the screen is re-laid-out on resume,
+ * because its remaining subs may now fit; its rows stay in vlines[]
+ * for selection until then. Decorations need no cache at all -- the
+ * blit carries them, and only the strip is redrawn.
+ */
+static md_state_t end_st;
+static uint32_t   end_off, end_line;
+static int        end_y;
+static int        cache_ns, cache_nv, cache_nl;
+static bool       cache_valid;
+
 // Selection over those lines, anchor plus current in (line, column).
 // Reading order, like sw/apps/term: partial at each end, whole lines
 // between.
@@ -244,7 +304,15 @@ static void repaint(void);
 // straight from it would be a syscall per line. This buffers, and
 // keeps one line of lookahead for md_parse()'s setext check.
 
-#define RBUF 512
+/* One SD read per refill, so this is the granularity every sequential
+ * scan through the document pays in. Scrolling reads a screenful of
+ * source (~2-3KB) and the seek replay below reads more, so at 512 a
+ * single scroll cost a double-figure number of card reads over SPI --
+ * which is where a reader on this machine actually spends its time,
+ * not in parsing and not in drawing.
+ *
+ * 2KB costs 1.5KB more RAM and cuts the refills by four. */
+#define RBUF 2048
 
 static uint8_t rbuf[RBUF];
 static uint32_t rbuf_base;		// file offset of rbuf[0]
@@ -254,6 +322,132 @@ static char peek_line[MD_LINE_MAX];
 static bool peek_valid;
 static uint32_t peek_off;
 
+/* -- where a repaint's time goes --
+ *
+ * Build with -DREAD_PROFILE=1 to print a cycle breakdown to the
+ * serial console after each body repaint. Off by default; compiles
+ * out entirely.
+ *
+ * This exists to settle one question, because the answer selects
+ * between two different optimisations and guessing has already cost
+ * more than measuring would have:
+ *
+ *   PARSE dominates  -> a one-line scroll re-reads and re-parses the
+ *                       whole screen to move it up nine pixels. The
+ *                       fix is to keep the laid-out screen and shift
+ *                       it, parsing only the block that scrolled in.
+ *
+ *   DRAW dominates   -> the fix is to stop redrawing 25 rows to
+ *                       change one: move the pixels with the blitter
+ *                       and draw only the exposed strip. (That was
+ *                       tried before and did not help -- but it was
+ *                       paired with a second layout pass that added
+ *                       back more than it saved, and the position
+ *                       cache did not exist yet.)
+ *
+ * Both are worth doing eventually. Only one is worth doing first, and
+ * this says which. rdcycle is a real free-running counter here
+ * (picorv32, ENABLE_COUNTERS); z_uptime_ticks() at 732Hz cannot
+ * resolve a single row.
+ */
+#ifndef READ_PROFILE
+#define READ_PROFILE 0
+#endif
+
+#if READ_PROFILE
+static inline uint32_t rp_cyc(void) {
+	uint32_t v; __asm__ volatile ("rdcycle %0" : "=r"(v)); return v;
+}
+static uint32_t rp_parse, rp_draw, rp_io, rp_total;
+static uint32_t rp_wrap, rp_fill, rp_seek;
+static uint32_t rp_rdline, rp_mdparse;
+static uint32_t rp_blocks, rp_rows, rp_refills;
+static int rp_pending;
+
+/* -- why this formats by hand instead of using printf --
+ *
+ * read calls printf exactly twice, and neither call has a conversion
+ * specifier, so the compiler rewrites both into puts() and the full
+ * vfprintf formatter is never referenced. --gc-sections then drops
+ * it. Adding ONE "%lu" links the whole formatter back in: read.bin
+ * goes from ~50KB to ~150KB, which overruns the space the loader has
+ * for it, and the app crashes on start rather than merely being
+ * large.
+ *
+ * That is not a theoretical concern -- it happened twice during this
+ * work, and both times the size jump looked like a mystery rather
+ * than a consequence of the debug print that caused it. So: build the
+ * line by hand, emit it with fputs(), and instrumentation stays free.
+ *
+ * The same trap applies to any app here whose printf calls are all
+ * plain strings. Check the binary size after adding a debug print.
+ */
+static void rp_u32(char *buf, int *n, uint32_t v) {
+	char t[12];
+	int i = 0;
+	if (!v) { buf[(*n)++] = '0'; return; }
+	while (v && i < 12) { t[i++] = (char)('0' + (v % 10)); v /= 10; }
+	while (i) buf[(*n)++] = t[--i];
+}
+
+static void rp_str(char *buf, int *n, const char *s) {
+	while (*s) buf[(*n)++] = *s++;
+}
+
+/* Called from the event loop, never from the draw path: a deep call
+ * chain plus a formatting buffer is how a 16KB stack gets exhausted. */
+static void rp_report(void) {
+
+	static char line[192];
+	int n = 0;
+
+	if (!rp_pending) return;
+	rp_pending = 0;
+
+	rp_str(line, &n, "read: total ");
+	rp_u32(line, &n, rp_total / 1000);
+	rp_str(line, &n, "k = seek ");
+	rp_u32(line, &n, rp_seek / 1000);
+	rp_str(line, &n, "k + parse ");
+	rp_u32(line, &n, rp_parse / 1000);
+	rp_str(line, &n, "k + wrap ");
+	rp_u32(line, &n, rp_wrap / 1000);
+	rp_str(line, &n, "k + draw ");
+	rp_u32(line, &n, rp_draw / 1000);
+	rp_str(line, &n, "k + fill ");
+	rp_u32(line, &n, rp_fill / 1000);
+	rp_str(line, &n, "k  (rdline ");
+	rp_u32(line, &n, rp_rdline / 1000);
+	rp_str(line, &n, "k mdparse ");
+	rp_u32(line, &n, rp_mdparse / 1000);
+	rp_str(line, &n, "k)  [");
+	rp_u32(line, &n, rp_blocks);
+	rp_str(line, &n, " blk ");
+	rp_u32(line, &n, rp_rows);
+	rp_str(line, &n, " sub ");
+	rp_u32(line, &n, rp_refills);
+	rp_str(line, &n, " io ");
+	rp_u32(line, &n, rp_io / 1000);
+	rp_str(line, &n, "k]");
+	line[n] = 0;
+
+	// puts(), not fputs(..., stdout): fputs needs a FILE and drags in
+	// picolibc's whole stdio layer with it -- ~40KB, which is the
+	// same size trap as the printf formatter this was written to
+	// avoid, just via a different symbol. puts is already linked
+	// (read's plain-string printfs compile into it) and appends the
+	// newline itself.
+	puts(line);
+
+	rp_parse = rp_draw = rp_io = rp_total = 0;
+	rp_wrap = rp_fill = rp_seek = 0;
+	rp_rdline = rp_mdparse = 0;
+	rp_blocks = rp_rows = rp_refills = 0;
+}
+#else
+#define rp_report() ((void)0)
+#endif
+
 static uint32_t rd_tell(void) {
 	return peek_valid ? peek_off : rbuf_base + rbuf_pos;
 }
@@ -261,6 +455,19 @@ static uint32_t rd_tell(void) {
 static void rd_seek(uint32_t off) {
 
 	if (fh < 0) return;
+
+	/* Already inside the buffer -- just move the cursor.
+	 *
+	 * This used to discard unconditionally, which meant every seek
+	 * cost a card read even when the target byte was already sitting
+	 * in memory. Seeks here are overwhelmingly SHORT and BACKWARD --
+	 * to the nearest index checkpoint, or to the top of the screen --
+	 * so the target usually is in the buffer. */
+	if (rbuf_len && off >= rbuf_base && off < rbuf_base + rbuf_len) {
+		rbuf_pos = off - rbuf_base;
+		peek_valid = false;
+		return;
+	}
 
 	fs_seek(fh, off);
 
@@ -278,7 +485,14 @@ static int rd_byte(void) {
 		rbuf_base += rbuf_len;
 		rbuf_pos = 0;
 
+#if READ_PROFILE
+		uint32_t io0 = rp_cyc();
+#endif
 		int n = fs_read_chunk(fh, rbuf, RBUF);
+#if READ_PROFILE
+		rp_io += rp_cyc() - io0;
+		rp_refills++;
+#endif
 		rbuf_len = (n > 0) ? (uint32_t)n : 0;
 
 		if (!rbuf_len) return -1;
@@ -291,20 +505,70 @@ static int rd_byte(void) {
 
 // Reads one line into `out`, stripping the newline and any CR.
 // Returns false at end of file.
+// Reads a line by scanning the BUFFER, not by calling rd_byte() per
+// character.
+//
+// It was per-character, and that cost a function call plus a
+// "do I need to refill?" test for every byte of the document. Measured
+// on hardware: ~2.4M cycles per repaint inside line reading alone,
+// twice what the Markdown parser itself cost. The bytes are already
+// sitting in rbuf; finding the newline in them is a scan, and the
+// refill test belongs once per buffer rather than once per byte.
+//
+// Same contract as before: newline consumed and not stored, '\r'
+// dropped anywhere in the line, output always NUL-terminated, false
+// only when there was nothing left to read at all (a partial last line
+// with no trailing newline still returns true).
 static bool rd_raw(char *out, int cap) {
 
 	int n = 0;
-	int c = rd_byte();
+	bool any = false;
 
-	if (c < 0) return false;
+	for (;;) {
 
-	while (c >= 0 && c != '\n') {
-		if (c != '\r' && n < cap - 1) out[n++] = (char)c;
-		c = rd_byte();
+		if (rbuf_pos >= rbuf_len) {
+
+			// Exactly rd_byte()'s refill, hoisted out of the loop
+			// over characters. rbuf_base must advance by the length
+			// CONSUMED, before rbuf_len is replaced.
+			rbuf_base += rbuf_len;
+			rbuf_pos = 0;
+
+#if READ_PROFILE
+			uint32_t io0 = rp_cyc();
+#endif
+			int r = fs_read_chunk(fh, rbuf, RBUF);
+#if READ_PROFILE
+			rp_io += rp_cyc() - io0;
+			rp_refills++;
+#endif
+			rbuf_len = (r > 0) ? (uint32_t)r : 0;
+
+			if (!rbuf_len) break;    // end of file
+		}
+
+		uint32_t i = rbuf_pos;
+		while (i < rbuf_len && rbuf[i] != '\n') i++;
+
+		for (uint32_t k = rbuf_pos; k < i; k++) {
+			char ch = (char)rbuf[k];
+			if (ch != '\r' && n < cap - 1) out[n++] = ch;
+		}
+
+		any = true;
+
+		if (i < rbuf_len) {
+			rbuf_pos = i + 1;        // consume the newline
+			break;
+		}
+
+		// Ran out of buffered bytes before finding one: refill and
+		// keep going on the same line.
+		rbuf_pos = i;
 	}
 
 	out[n] = 0;
-	return true;
+	return any || n > 0;
 
 }
 
@@ -358,28 +622,46 @@ static uint32_t read_block(md_state_t *st, md_line_t *out) {
 	static char line[MD_LINE_MAX];
 	static char joined[MD_LINE_MAX];
 
+#if READ_PROFILE
+	{ uint32_t r0 = rp_cyc();
+	  bool got = rd_line(line, MD_LINE_MAX);
+	  rp_rdline += rp_cyc() - r0;
+	  if (!got) return 0; }
+#else
 	if (!rd_line(line, MD_LINE_MAX)) return 0;
+#endif
 
 	uint32_t used = 1;
 
 	// Parse once to learn what kind of block this is, then decide
 	// whether the following lines belong to it.
 	md_state_t probe = *st;
-	md_line_t first;
 
-	bool ate = md_parse(&probe, line, rd_peek(), &first);
+	// Parsed straight into *out rather than into a local and copied.
+	// md_line_t is 1956 bytes, so each of those copies was ~500 word
+	// moves on both of the paths that return without joining -- which
+	// is nearly every block. Only .kind is needed afterwards, and it
+	// is taken before the join path overwrites *out below.
+#if READ_PROFILE
+	uint32_t m0 = rp_cyc();
+	const char *pk = rd_peek();
+	rp_rdline += rp_cyc() - m0;
+	m0 = rp_cyc();
+	bool ate = md_parse(&probe, line, pk, out);
+	rp_mdparse += rp_cyc() - m0;
+#else
+	bool ate = md_parse(&probe, line, rd_peek(), out);
+#endif
 
 	if (ate) {
 		// setext underline
 		rd_line(joined, MD_LINE_MAX);
 		*st = probe;
-		*out = first;
 		return 2;
 	}
 
-	if (!md_continues(st, first.kind, rd_peek())) {
+	if (!md_continues(st, out->kind, rd_peek())) {
 		*st = probe;
-		*out = first;
 		return used;
 	}
 
@@ -389,7 +671,7 @@ static uint32_t read_block(md_state_t *st, md_line_t *out) {
 	int n = 0;
 	for (int i = 0; line[i] && n < MD_LINE_MAX - 1; i++) joined[n++] = line[i];
 
-	md_kind_t kind = first.kind;
+	md_kind_t kind = out->kind;
 
 	while (md_continues(st, kind, rd_peek())) {
 
@@ -430,11 +712,16 @@ static void idx_compress(void) {
 
 }
 
+static bool pos_valid;
+
 // Starts the index. Reads nothing -- see the frontier comment above.
 static void index_init(void) {
 
 	idx_n = 0;
 	idx_stride = 32;
+
+	// The cached position belongs to the previous document.
+	pos_valid = false;
 
 	eof_seen = false;
 	eof_line = 0;
@@ -540,6 +827,30 @@ uint32_t line_at_offset(uint32_t off) {
 
 }
 
+// -- the position cache --
+//
+// Where seek_line() last landed: a checkpoint of exactly the same kind
+// as an index entry (offset, line, parser state), but for wherever the
+// reader most recently was rather than for a fixed stride.
+//
+// It exists because the index alone makes scrolling pay for distance
+// it has already travelled. A one-line scroll calls seek_line() twice
+// -- once in scroll_down() to find the new top, once in
+// draw_body_from() to render it -- and each call restarted from the
+// nearest checkpoint up to idx_stride (32) source lines back, replaying
+// blocks it had parsed moments earlier. On a document read straight
+// through, that is the same 32 lines re-parsed on every keypress, and
+// each replay is a seek plus card reads.
+//
+// Replaying forward from here is exactly as correct as replaying from
+// an index entry: both are a byte offset with the parser state that
+// belongs at it, which is the whole premise the index rests on. The
+// only rule is that it can never be used to go BACKWARD, since the
+// parser cannot run in reverse -- hence the pos_line <= line test.
+static uint32_t   pos_line;
+static uint32_t   pos_off;
+static md_state_t pos_st;
+
 static void seek_line(uint32_t line, md_state_t *st) {
 
 	// The index may not reach this far yet -- see extend_index().
@@ -550,18 +861,39 @@ static void seek_line(uint32_t line, md_state_t *st) {
 	for (int i = 0; i < idx_n; i++)
 		if (idx[i].line <= line) e = i; else break;
 
-	rd_seek(idx[e].off);
-	*st = idx[e].st;
+	uint32_t   start_line = idx[e].line;
+	uint32_t   start_off  = idx[e].off;
+	md_state_t start_st   = idx[e].st;
+
+	// Start from the cached position when it is at or before the
+	// target AND no earlier than the checkpoint -- i.e. only when it
+	// is genuinely closer, so this can never make a seek longer.
+	if (pos_valid && pos_line <= line && pos_line >= start_line) {
+		start_line = pos_line;
+		start_off  = pos_off;
+		start_st   = pos_st;
+	}
+
+	rd_seek(start_off);
+	*st = start_st;
 
 	static md_line_t ml;
 
-	uint32_t ln = idx[e].line;
+	uint32_t ln = start_line;
 
 	while (ln < line) {
 		uint32_t used = read_block(st, &ml);
 		if (!used) break;
 		ln += used;
 	}
+
+	// Record where this ended up, EOF included: a short landing is
+	// still a valid position, and caching it stops the next call
+	// walking the same ground again.
+	pos_valid = true;
+	pos_line  = ln;
+	pos_off   = rd_tell();
+	pos_st    = *st;
 
 }
 
@@ -1072,43 +1404,100 @@ static void sel_copy(void) {
 
 }
 
-static void draw_body(void) {
-
-	fill(0, 0, view_w + MARGIN, view_h, 0);
-
-	nvlinks = 0;
-	nvlines = 0;
-
-	if (fh < 0) return;
-
-	md_state_t st;
-	seek_line(top_line, &st);
-
-	top_off = rd_tell();
+// Lays out AND draws the body. `thr` splits the two: the whole screen
+// is always laid out (vlines[], vlinks[], the step table and
+// bottom_off must describe the full screen either way), but only
+// pixels at y >= thr are drawn, and only [thr, view_h) is cleared.
+//
+//   thr = 0          the full redraw this always was
+//   0 < thr          just the strip a scroll blit exposed
+//
+// The rule that keeps a partial draw honest: every y advance happens
+// unconditionally, and the gates wrap only the drawing calls. A gated
+// `y +=` would make the partial layout disagree with the full one,
+// and the seam between moved pixels and drawn pixels would show it.
+// The block loop, from an arbitrary starting point. `st` is the parser
+// state entering the first block, the file is positioned at it, and
+// `line`/`y`/`sub_skip` are where layout begins. Appends to vlines[],
+// vlinks[] and the step table -- the caller resets them for a full
+// pass and keeps them for a resume.
+//
+// Records the END STATE for the layout cache: everything up to the
+// last block that fit completely, plus where to pick up from.
+static void layout_run(md_state_t *st, uint32_t line, int y,
+	uint32_t sub_skip, int thr) {
 
 	static md_line_t ml;
 	uint16_t starts[MAX_SUB], ends[MAX_SUB];
+	uint32_t cur_line = line;
 
-	int y = MARGIN;
-	uint32_t sub_skip = top_sub;
+	// Snapshot before each block, so that when a block turns out not
+	// to fit the cache can end just before it.
+	md_state_t snap_st = *st;
+	uint32_t snap_off = rd_tell(), snap_line = cur_line;
+	int snap_y = y, snap_nv = nvlines, snap_ns = nsteps, snap_nl = nvlinks;
+	bool cut = false;
 
 	while (y < view_h) {
 
-		if (!read_block(&st, &ml)) break;
+		snap_st = *st;
+		snap_off = rd_tell();
+		snap_line = cur_line;
+		snap_y = y;
+		snap_nv = nvlines;
+		snap_ns = nsteps;
+		snap_nl = nvlinks;
+
+
+#if READ_PROFILE
+		uint32_t pb0 = rp_cyc();
+		uint32_t pb_used = read_block(st, &ml);
+		rp_parse += rp_cyc() - pb0;
+		rp_blocks++;
+		if (!pb_used) break;
+		uint32_t used = pb_used;
+#else
+		uint32_t used = read_block(st, &ml);
+		if (!used) break;
+#endif
+
+		// The block just read starts at blk_line; advance past it
+		// here, before any of the continue branches below. y_blk is
+		// where it begins, BEFORE space_before -- see the step table.
+		uint32_t blk_line = cur_line;
+		uint32_t blk_off = snap_off;
+		cur_line += used;
+		int y_blk = y;
 
 		// Draws nothing and takes no space -- see MD_SKIP in md.h.
 		if (ml.kind == MD_SKIP) continue;
 
 		if (ml.kind == MD_BLANK) {
-			if (!sub_skip) y += BODY_FONT->h / 2 + 1;
+			if (!sub_skip) {
+				if (nsteps < VIS_STEPS) {
+					step_y[nsteps] = (int16_t)y_blk;
+					step_ln[nsteps] = blk_line;
+					step_off[nsteps] = blk_off;
+					step_sub[nsteps] = 0;
+					nsteps++;
+				}
+				y += BODY_FONT->h / 2 + 1;
+			}
 			else sub_skip = 0;
 			continue;
 		}
 
 		if (ml.kind == MD_RULE) {
 			if (!sub_skip) {
+				if (nsteps < VIS_STEPS) {
+					step_y[nsteps] = (int16_t)y_blk;
+					step_ln[nsteps] = blk_line;
+					step_off[nsteps] = blk_off;
+					step_sub[nsteps] = 0;
+					nsteps++;
+				}
 				y += space_before(&ml);
-				fill(MARGIN, y + 1, view_w, 1, 1);
+				if (y + 1 >= thr) fill(MARGIN, y + 1, view_w, 1, 1);
 				y += 3;
 			} else sub_skip = 0;
 			continue;
@@ -1120,20 +1509,45 @@ static void draw_body(void) {
 		int first_in, rest_in;
 		line_indent(&ml, &first_in, &rest_in);
 
+#if READ_PROFILE
+		uint32_t w0 = rp_cyc();
 		int n = wrap_line(&ml, view_w, starts, ends);
+		rp_wrap += rp_cyc() - w0;
+#else
+		int n = wrap_line(&ml, view_w, starts, ends);
+#endif
 
 		if (!sub_skip) y += space_before(&ml);
 
 		for (int s = 0; s < n; s++) {
 
 			if (sub_skip) { sub_skip--; continue; }
-			if (y + f->h > view_h) break;
+			if (y + f->h > view_h) { cut = true; break; }
+
+			if (nsteps < VIS_STEPS) {
+				// Sub 0 carries the block's space_before with it;
+				// later subs start at their own row, since a layout
+				// entered there skips space_before (see sub_skip).
+				step_y[nsteps] = (int16_t)(s ? y : y_blk);
+				step_ln[nsteps] = blk_line;
+					step_off[nsteps] = blk_off;
+				step_sub[nsteps] = (uint8_t)s;
+				nsteps++;
+			}
 
 			int indent = s ? rest_in : first_in;
 
+			// In a partial pass a row may straddle the strip: it did
+			// not fit on the old screen and fits now, so the blit
+			// filled its band with whatever was above. Clearing it
+			// first makes every drawn row self-contained; a full pass
+			// (thr == 0) already cleared everything.
+			if (thr > 0 && y + f->h > thr && y < thr)
+				fill(MARGIN, y, view_w, f->h, 0);
+
 			// The list marker sits in the hanging indent, on the
 			// first display line only.
-			if (ml.kind == MD_LIST && s == 0) {
+			if (ml.kind == MD_LIST && s == 0 && y + f->h > thr) {
 				z_clip_t c;
 				z_win_content_rect(&win, &c);
 				z_clip_t clip = { c.x0 + MARGIN, c.y0 + y,
@@ -1146,7 +1560,7 @@ static void draw_body(void) {
 			// Block quotes get a rule down the left, which is the
 			// only structural cue available without indentation
 			// alone doing all the work.
-			if (ml.kind == MD_QUOTE)
+			if (ml.kind == MD_QUOTE && y + f->h > thr)
 				fill(MARGIN, y, 1, f->h, 1);
 
 			int extra = (ml.kind == MD_LIST && s == 0)
@@ -1184,7 +1598,15 @@ static void draw_body(void) {
 				nvlines++;
 			}
 
-			draw_sub(&ml, starts[s], ends[s], MARGIN, y, indent + extra);
+			if (y + f->h > thr) {
+#if READ_PROFILE
+				uint32_t d0 = rp_cyc();
+				draw_sub(&ml, starts[s], ends[s], MARGIN, y, indent + extra);
+				rp_draw += rp_cyc() - d0; rp_rows++;
+#else
+				draw_sub(&ml, starts[s], ends[s], MARGIN, y, indent + extra);
+#endif
+			}
 
 			y += lh;
 
@@ -1193,13 +1615,78 @@ static void draw_body(void) {
 		// An h1 gets a rule under it -- at this size a font change
 		// alone is not enough to mark a chapter break.
 		if (ml.kind == MD_HEADING && ml.level == 1 && y + 2 < view_h) {
-			fill(MARGIN, y, view_w, 1, 1);
-			y += 3;
+			if (y >= thr) fill(MARGIN, y, view_w, 1, 1);
+			y += 3;    // never gated -- layout must not diverge
 		}
+
+		// Stop at the first block that did not fit. The loop used to
+		// carry on reading blocks that could not fit either -- y never
+		// decreases, so nothing after a cut ever draws -- which was
+		// harmless when layout was a one-shot. It is not harmless with
+		// a cache: the snapshot taken at the top of each iteration was
+		// overwritten by those later blocks, so the resume point ended
+		// up PAST the cut block and everything between, and on the
+		// next scroll a heading that should have appeared at the
+		// bottom simply never got laid out. The harness stopped here
+		// all along, which is why it did not see this.
+		if (cut) break;
 
 	}
 
-	// Where this screen ended, for the scrollbar's page size.
+	// Where the next layout resumes. If a block was cut short, just
+	// before it -- it is re-laid-out then, since more of it may fit.
+	// Otherwise after the last block, which is where we are.
+	if (cut) {
+		end_st = snap_st;
+		end_off = snap_off;
+		end_line = snap_line;
+		end_y = snap_y;
+		cache_nv = snap_nv;
+		cache_ns = snap_ns;
+		cache_nl = snap_nl;
+	} else {
+		end_st = *st;
+		end_off = rd_tell();
+		end_line = cur_line;
+		end_y = y;
+		cache_nv = nvlines;
+		cache_ns = nsteps;
+		cache_nl = nvlinks;
+	}
+	cache_valid = true;
+
+}
+
+static void draw_body_from(int thr) {
+
+#if READ_PROFILE
+	{ uint32_t f0 = rp_cyc();
+	if (thr < view_h) fill(0, thr, view_w + MARGIN, view_h - thr, 0);
+	rp_fill += rp_cyc() - f0; }
+#else
+	if (thr < view_h) fill(0, thr, view_w + MARGIN, view_h - thr, 0);
+#endif
+
+	nvlinks = 0;
+	nvlines = 0;
+	nsteps = 0;
+
+	if (fh < 0) return;
+
+	md_state_t st;
+#if READ_PROFILE
+	{ uint32_t s0 = rp_cyc();
+	seek_line(top_line, &st);
+	rp_seek += rp_cyc() - s0; }
+#else
+	seek_line(top_line, &st);
+#endif
+
+	top_off = rd_tell();
+
+	md_state_t st_top = st;
+	layout_run(&st_top, top_line, MARGIN, top_sub, thr);
+
 	bottom_off = rd_tell();
 	if (bottom_off < top_off) bottom_off = top_off;
 
@@ -1255,6 +1742,58 @@ static uint32_t body_deadline;
 // the instant it takes to load, and the text is drawn exactly once.
 static bool loading;
 
+// What to say while it loads. Filled in before open_path() is called,
+// because that call does not return for as long as the document takes
+// to open and nothing else can run in this app meanwhile.
+static char loading_msg[80];
+
+// Clears the body and says what is happening.
+//
+// Without this the window kept showing the PREVIOUS document for the
+// whole of the load -- several seconds on a 60KB file -- which reads
+// as the app having ignored the click. The old text being both stale
+// and convincing is what makes it worse than a blank area: there is
+// nothing to distinguish it from the document that was asked for.
+//
+// Deliberately not a busy cursor: this blocks the app, not the
+// system, and the cursor belongs to the window manager.
+static void draw_loading(void) {
+
+	z_clip_t c;
+	z_win_content_rect(&win, &c);
+
+	fill(0, 0, view_w + MARGIN, view_h, 0);
+	drawn_valid = false;
+	cache_valid = false;
+
+	if (loading_msg[0])
+		z_fb_draw_text((int)c.x0 + MARGIN, (int)c.y0 + MARGIN,
+			loading_msg, 1, BODY_FONT, &c);
+
+}
+
+// "Loading <name> ..." with the leading directories dropped -- the
+// full path is long enough to run off the window, and the file name
+// is the part being waited for.
+static void set_loading_msg(const char *p) {
+
+	int last = -1;
+	for (int i = 0; p[i]; i++) if (p[i] == '/') last = i;
+
+	const char *base = p + last + 1;
+
+	int n = 0;
+	const char *pre = "Loading ";
+	while (*pre && n < (int)sizeof(loading_msg) - 6) loading_msg[n++] = *pre++;
+	while (*base && n < (int)sizeof(loading_msg) - 5) loading_msg[n++] = *base++;
+	loading_msg[n++] = ' ';
+	loading_msg[n++] = '.';
+	loading_msg[n++] = '.';
+	loading_msg[n++] = '.';
+	loading_msg[n] = 0;
+
+}
+
 static void defer_body(void) {
 	body_dirty = true;
 	body_deadline = z_uptime_ticks() + SETTLE_TICKS;
@@ -1292,11 +1831,22 @@ static void update_scrollbar(void) {
 	z_scrollbar_set_value(&sbar, (int32_t)top_off);
 	z_scrollbar_draw(&sbar, true);
 
+
+	// The table now describes what is on the glass -- set once,
+	// after the layout completes, not per block inside the loop.
+	drawn_valid = true;
+
 }
 
 // A full repaint, including the window clear. Only for a Z_WM_REDRAW
 // or a resize -- anything that may have left the frame or the area
 // outside the body dirty.
+static void draw_body(void) {
+
+	draw_body_from(0);
+
+}
+
 static void repaint(void) {
 
 	z_win_clear(&win);
@@ -1313,12 +1863,235 @@ static void repaint(void) {
 // draw_body() fills its own region before drawing, so the window
 // clear in repaint() adds nothing here except a visible blank frame
 // -- which at scroll rates is exactly the flash it looks like.
+
+static int scroll_down(int n);
+static void repaint_body(void);
+
+// -- accelerated forward scroll --
+//
+// Moves the pixels that survive a scroll instead of redrawing them:
+// one VRAM-to-VRAM blit and one strip of new rows, in place of a full
+// repaint. Measured, a repaint is ~13.4M cycles on this machine, of
+// which drawing is ~7.8M; this removes almost all of that.
+//
+// Everything here rests on the step table, which says where each
+// scroll step BEGINS in the current layout. After k steps the new top
+// is old step k, so the pixels must move by step_y[k] - MARGIN.
+// Derived from the layout already in hand, with no second layout pass
+// -- the first attempt at this measured the shift by laying the new
+// screen out twice, and a layout pass costs more than the blit saves.
+//
+// Preconditions worth stating: a selection highlight or a focused-link
+// box is an OVERLAY drawn on top of content, which the blit would
+// translate with nothing erasing the original -- the same ghost class
+// as the caret in sw/apps/text. Both force the full repaint.
+static void scroll_forward(int n) {
+
+	static int16_t  old_step_y[VIS_STEPS];
+	static uint32_t old_step_ln[VIS_STEPS];
+	static uint8_t  old_step_sub[VIS_STEPS];
+	static uint32_t old_step_off[VIS_STEPS];
+	int old_nsteps = 0;
+
+#if READ_PROFILE
+	uint32_t t_scroll0 = rp_cyc();
+#endif
+
+	int fast = drawn_valid && !sel_on && sel_link < 0 && n > 0;
+
+	if (fast) {
+		old_nsteps = nsteps;
+		if (old_nsteps > VIS_STEPS) old_nsteps = VIS_STEPS;
+		for (int i = 0; i < old_nsteps; i++) {
+			old_step_y[i] = step_y[i];
+			old_step_ln[i] = step_ln[i];
+			old_step_sub[i] = step_sub[i];
+			old_step_off[i] = step_off[i];
+		}
+	}
+
+	int k;
+
+	if (fast && n < old_nsteps) {
+
+		// The step table ALREADY says where n steps lands -- it was
+		// built by walking these very blocks during the last layout.
+		// scroll_down() would re-read and re-parse them to reach the
+		// same answer, which on hardware cost more than the drawing
+		// this function was written to avoid.
+		//
+		// Equivalent by construction, and not merely by assumption:
+		// the old code called scroll_down() and then CHECKED the
+		// result against this table, and that check passed 24,864
+		// times across five documents in `make render MODE=seam`
+		// before being replaced by the table itself.
+		//
+		// No clamping needed either: n < old_nsteps means the target
+		// is a step that is on screen right now, so it exists.
+		sel_clear();
+		top_line = old_step_ln[n];
+		top_sub  = old_step_sub[n];
+		k = n;
+
+	} else {
+
+		k = scroll_down(n);
+
+		if (!fast || k <= 0 || k >= old_nsteps) {
+			repaint_body();
+			return;
+		}
+
+		// Off the table's end: the step count and the layout can
+		// legitimately disagree past the bottom of the screen, where
+		// a block was cut short by `y + f->h > view_h`.
+		if (old_step_ln[k] != top_line || old_step_sub[k] != top_sub) {
+			repaint_body();
+			return;
+		}
+	}
+
+	if (k <= 0) {
+		repaint_body();
+		return;
+	}
+
+	int shift = (int)old_step_y[k] - MARGIN;
+
+	if (shift <= 0 || shift >= view_h - MARGIN) {
+		repaint_body();
+		return;
+	}
+
+	{
+		z_clip_t c;
+		z_win_content_rect(&win, &c);
+
+		// The body band only, below the top margin: that margin is
+		// blank and must stay blank, and blitting from c.y0 would
+		// drag the first row of text up into it.
+		z_fb_hw_scroll((int)c.x0 + MARGIN, (int)c.y0 + MARGIN,
+			view_w, view_h - MARGIN, -shift);
+	}
+
+	if (cache_valid && k < cache_ns) {
+
+		// -- the layout cache path --
+		//
+		// Every step being dropped, and the new top, lie within the
+		// blocks the last layout completed. So: shift what survived,
+		// and resume the parser from where it stopped. Nothing above
+		// the resume point is read again.
+		int drop_y = (int)old_step_y[k];
+		int w;
+
+		w = 0;
+		for (int i = 0; i < cache_nv; i++) {
+			if (vlines[i].y < drop_y) continue;
+			if (w != i) vlines[w] = vlines[i];
+			vlines[w].y = (int16_t)(vlines[w].y - shift);
+			w++;
+		}
+		nvlines = w;
+
+		w = 0;
+		for (int i = 0; i < cache_nl; i++) {
+			if (vlinks[i].y < drop_y) continue;
+			if (w != i) vlinks[w] = vlinks[i];
+			vlinks[w].y = (int16_t)(vlinks[w].y - shift);
+			w++;
+		}
+		nvlinks = w;
+
+		w = 0;
+		for (int i = k; i < cache_ns; i++) {
+			step_y[w]   = (int16_t)(old_step_y[i] - shift);
+			step_ln[w]  = old_step_ln[i];
+			step_sub[w] = old_step_sub[i];
+			step_off[w] = old_step_off[i];
+			w++;
+		}
+		nsteps = w;
+
+		top_off = old_step_off[k];
+
+		// Resume. The file is repositioned to the cached offset --
+		// usually still inside the read buffer -- and the block
+		// loop continues from the cached parser state at the cached
+		// y, now shifted. It draws only rows reaching into the
+		// strip, exactly as the full pass does.
+		// Clear the strip the blit exposed. draw_body_from() does
+		// this before its layout_run(); calling layout_run() directly
+		// must do it too, or the pre-blit bottom rows stay on the
+		// glass underneath the rows drawn into the strip -- which
+		// looked like rows drawn on top of each other. The seam
+		// harness now models the glass honestly (the strip holds the
+		// old rows until something clears it) so this cannot be
+		// forgotten silently again.
+		fill(0, view_h - shift, view_w + MARGIN, shift, 0);
+
+		md_state_t st = end_st;
+		rd_seek(end_off);
+		layout_run(&st, end_line, end_y - shift, 0, view_h - shift);
+
+		bottom_off = rd_tell();
+		drawn_valid = true;
+
+	} else {
+
+		// One layout pass from the top, drawing only what the blit
+		// exposed. Taken when the new top lies inside the block that
+		// was cut short -- there is nothing cached past it to resume
+		// from -- or when no cache exists yet.
+		draw_body_from(view_h - shift);
+	}
+
+	// VERIFY rather than trust. Every step whose whole band sits
+	// above the strip came from the blit, so it must be exactly
+	// `shift` pixels above where it was. A step reaching INTO the
+	// strip was redrawn regardless and is not required to match --
+	// demanding that rejects almost every scroll, since the block at
+	// the seam is precisely the one whose surroundings changed.
+	for (int i = 0; i < nsteps && k + i < old_nsteps; i++) {
+		int band_end = (i + 1 < nsteps) ? (int)step_y[i + 1] : view_h;
+		if (band_end > view_h - shift) break;
+		if (step_ln[i] != old_step_ln[k + i] ||
+			step_sub[i] != old_step_sub[k + i] ||
+			(int)step_y[i] != (int)old_step_y[k + i] - shift) {
+			draw_body_from(0);
+			break;
+		}
+	}
+
+	update_scrollbar();
+	body_dirty = false;
+	drawn_valid = true;
+
+#if READ_PROFILE
+	// The fast path does not go through repaint_body(), which is
+	// where the report used to be armed -- so without this, turning
+	// the profile on measured only the scrolls that fell back.
+	rp_total += rp_cyc() - t_scroll0;
+	rp_pending = 1;
+#endif
+
+}
+
 static void repaint_body(void) {
+
+#if READ_PROFILE
+	uint32_t t0 = rp_cyc();
+#endif
 
 	draw_body();
 	update_scrollbar();
 
 	body_dirty = false;
+
+#if READ_PROFILE
+	rp_total += rp_cyc() - t0;
+	rp_pending = 1;
+#endif
 
 }
 
@@ -1374,7 +2147,10 @@ static int block_subs(uint32_t ln, uint32_t *used) {
 // Reading forward is naturally sequential: the stream is already
 // positioned after each block, so the next one costs a read and
 // nothing else.
-static void scroll_down(int n) {
+// Returns the number of display lines actually advanced -- less than
+// `n` when the document ends first. scroll_forward() needs the real
+// figure to index the step table; every other caller ignores it.
+static int scroll_down(int n) {
 
 	// A selection is anchored to SCREEN rows (see visline_t), so
 	// scrolling would leave it highlighting whatever moved into
@@ -1383,7 +2159,7 @@ static void scroll_down(int n) {
 	// positions, which is a document model this app does not have.
 	sel_clear();
 
-	if (n <= 0 || fh < 0) return;
+	if (n <= 0 || fh < 0) return 0;
 
 	md_state_t st;
 	seek_line(top_line, &st);
@@ -1394,7 +2170,7 @@ static void scroll_down(int n) {
 	uint32_t sub = top_sub;
 
 	uint32_t used = read_block(&st, &ml);
-	if (!used) return;
+	if (!used) return 0;
 
 	int subs = subs_of(&ml);
 	int rem = n;
@@ -1429,6 +2205,9 @@ static void scroll_down(int n) {
 
 	top_line = line;
 	top_sub = sub;
+
+	return n - rem;
+
 
 }
 
@@ -1766,12 +2545,69 @@ static void update_title(void) {
 
 static bool open_path(const char *p) {
 
-	int nf = fs_open_read(p);
-	if (nf < 0) return false;
+	// Close the current document BEFORE opening the next one.
+	//
+	// This used to open first and close after, so that a failed open
+	// left the reader with the document it already had. Sound in
+	// principle, but it means holding TWO handles across the open --
+	// and there are only Z_FS_MAX_OPEN (4) in the whole system,
+	// shared by every process. With the file dialog holding one or
+	// two of its own, opening a second document intermittently ran
+	// out and reported "Can't open" for a file that was perfectly
+	// readable.
+	//
+	// The safety it was buying is kept by reopening the previous
+	// path when the new one fails, which costs nothing in the normal
+	// case and one extra open in the rare one.
+	char prev[Z_FLIST_PATH_MAX];
+	bool had_prev = (fh >= 0);
 
-	if (fh >= 0) fs_close_handle(fh);
+	if (had_prev) {
+		int q = 0;
+		for (; path[q] && q < Z_FLIST_PATH_MAX - 1; q++) prev[q] = path[q];
+		prev[q] = 0;
+		fs_close_handle(fh);
+		fh = -1;
+	}
+
+	int nf = fs_open_read(p);
+
+	if (nf < 0) {
+
+		// Put the previous document back. The index is still valid --
+		// same file, same contents -- but the buffered reader state
+		// refers to a handle that no longer exists.
+		if (had_prev) {
+			fh = fs_open_read(prev);
+			rbuf_len = 0;
+			rbuf_pos = 0;
+			rbuf_base = 0;
+			peek_valid = false;
+			pos_valid = false;
+			if (fh >= 0) rd_seek(0);
+		}
+
+		return false;
+	}
 
 	fh = nf;
+
+	// The buffered reader still holds bytes from the PREVIOUS
+	// document, and rbuf_base still claims they belong at that
+	// offset. rd_seek() serves a target from the buffer without
+	// touching the file when the offset falls inside it -- which
+	// offset 0 of a freshly opened document always does -- so
+	// without this the new file renders as the old one's contents.
+	//
+	// Harmless before rd_seek() had that fast path, because every
+	// seek discarded the buffer. Adding the optimisation moved the
+	// obligation here.
+	rbuf_len = 0;
+	rbuf_pos = 0;
+	rbuf_base = 0;
+	peek_valid = false;
+	pos_valid = false;
+
 	fsize = (uint32_t)fs_size((char *)p);
 
 	int i = 0;
@@ -1779,6 +2615,9 @@ static bool open_path(const char *p) {
 	path[i] = 0;
 
 	index_init();
+
+	drawn_valid = false;
+	cache_valid = false;
 
 	top_line = 0;
 	top_sub = 0;
@@ -1819,9 +2658,16 @@ static void do_open(void) {
 		return;
 	}
 
+	// Say so BEFORE the blocking open, not after: open_path() does
+	// not return until the document is indexed, and nothing in this
+	// app runs in between.
+	set_loading_msg(p);
+	draw_loading();
+
 	bool ok = open_path(p);
 
 	loading = false;
+	loading_msg[0] = 0;
 
 	if (!ok)
 		z_dialog_confirm(&dlg_ctx, "Can't open",
@@ -1860,7 +2706,7 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 
 	switch (keysym) {
 
-		case Z_KEY_DOWN:    scroll_down(1); repaint_body(); return;
+		case Z_KEY_DOWN:    scroll_forward(1); return;
 		case Z_KEY_UP:      scroll_up(1); repaint_body(); return;
 		// Space is page down, the convention every pager shares --
 		// it is the key a hand rests on while reading. Shift+Space
@@ -2083,8 +2929,13 @@ static void forward_msg(z_msg_t *msg, void *user) {
 			if (loading) {
 				// A new document is about to replace this one --
 				// clear and ack, but don't render what is being
-				// thrown away. See `loading`.
+				// thrown away. See `loading`. The message goes back
+				// on so an expose during the load does not leave a
+				// blank window with no explanation.
 				z_win_clear(&win);
+				draw_loading();
+				drawn_valid = false;
+				cache_valid = false;
 			} else {
 				repaint();
 			}
@@ -2113,6 +2964,19 @@ int main(void) {
 
 	printf("read: starting\n");
 
+	/* Which glyph path this binary actually uses. ~5,300 cycles per
+	 * glyph is what SOFTWARE rendering costs (roughly 40 pixels, each
+	 * a read-modify-write across the bus); the hardware path is seven
+	 * register writes. If this says OFF, the build lost
+	 * -DZ_GFX_HW_BLIT -- which a command-line CFLAGS used to do
+	 * silently -- and no amount of optimising anything else will
+	 * matter. */
+#ifdef Z_GFX_HW_BLIT
+	printf("read: glyph blit HW\n");
+#else
+	printf("read: glyph blit SOFTWARE -- build lost -DZ_GFX_HW_BLIT\n");
+#endif
+
 	if (z_win_create_flags(&win, "read", WIN_W, WIN_H, -1, -1,
 		Z_WIN_FLAG_CLOSE_ICON | Z_WIN_FLAG_CLOSE_KILLS_OWNER |
 		Z_WIN_FLAG_RESIZABLE | Z_WIN_FLAG_MIN_IS_CREATE |
@@ -2139,6 +3003,10 @@ int main(void) {
 	for (;;) {
 
 		z_msg_t msg;
+
+		/* Shallow stack here, unlike the draw path. No-op unless
+		 * READ_PROFILE is set. */
+		rp_report();
 
 		while (z_msg_read(&msg) == Z_OK) {
 

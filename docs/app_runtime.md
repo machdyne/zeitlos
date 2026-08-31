@@ -1,6 +1,72 @@
 # Zeitlos App Runtime
 
 
+
+## Do not override CFLAGS from the command line
+
+Every app Makefile here sets flags the app needs to build CORRECTLY,
+not merely to build: `-DZ_GFX_HW_BLIT` selects the hardware glyph
+renderer over the software one, `-Os` and `-ffunction-sections` plus
+`--gc-sections` keep the binary inside the space the loader has for
+it, and `--specs=picolibc.specs` picks the libc.
+
+A command-line assignment REPLACES all of that. `make
+CFLAGS+=-DFOO=1` does not append to the makefile's CFLAGS -- it
+appends to the command-line value, and the makefile's assignment never
+happens. What you get compiles, links, and produces an app that
+renders every glyph in software, skips section GC, and is three times
+the size. Past a certain size it overruns the loader's space and
+crashes on start. Nothing in the build output says any of this; the
+compile lines just look short.
+
+The Makefiles now use `override CFLAGS +=`, so the required flags
+survive any command-line form.
+
+**If you edit an app Makefile:** every LATER append to CFLAGS in that
+file must also say `override`. A plain `CFLAGS += ...` after an
+override assignment is silently ignored by make. That bit `sw/apps/net`
+immediately: `-DNET_PHY_$(NET_PHY)` vanished, the header selected the
+ENC28J60 driver while the makefile linked the RMII one, and the build
+failed at link with undefined `enc28j60_*` symbols. The quieter half
+was worse -- DHCP, NTP, SSH and the static IP settings had all
+reverted to defaults with nothing said. For one-off options prefer:
+
+    make clean && make EXTRA_CFLAGS=-DSOMETHING=1
+
+`clean` first, because `-MD` tracks header dependencies, not flag
+changes.
+
+## printf pulls in ~100KB, and fputs/stdout ~40KB
+
+The formatter is not the only trap here. `fputs(s, stdout)` needs a
+`FILE`, which drags in picolibc's whole stdio layer -- about 40KB --
+even though it formats nothing. `puts()` does not: an app whose
+printf calls are all plain strings already links it, because the
+compiler rewrites `printf("literal\n")` into `puts()`.
+
+So for a debug line: build the string by hand and emit it with
+`puts()`. Not `printf` (formatter), not `fputs` (FILE). Both mistakes
+were made in `sw/apps/read` in the same week, and both showed up as an
+unexplained binary size jump rather than as anything pointing at the
+print.
+
+
+
+An app whose `printf` calls are all plain strings does not link the
+formatter at all: the compiler rewrites `printf("literal\n")` into
+`puts()`, and `--gc-sections` drops `vfprintf`. Adding one conversion
+specifier -- a single `%d` in a debug print -- links it back in and
+costs on the order of 100KB.
+
+That is enough to push an app past the space the loader has for it, in
+which case it crashes on start. `sw/apps/read` hit this twice, and
+both times the binary tripling looked unrelated to the one-line debug
+print that caused it.
+
+If a debug print is worth having, format the numbers by hand and emit
+with `fputs()` -- see `rp_report()` in `sw/apps/read/read.c`. Either
+way, check the binary size after adding one.
+
 ## Overview
 
 Every app in `sw/apps/*` links against `sw/common/zeitlos.c/h` --

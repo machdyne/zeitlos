@@ -21,7 +21,33 @@ endif
 # board that ever loads glyph memory, and every app reads with
 # z_font_5x8 as a result. See docs/window_manager.md, "Hardware glyph
 # blitting".
-CFLAGS = --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) -DZ_GFX_HW_BLIT $(GC_CFLAGS) $(ARCH_DEFS) $(LIBC_FLAGS)
+# EXTRA_CFLAGS is the hook for one-off build options, so nobody has to
+# override CFLAGS itself -- doing that silently drops -DZ_GFX_HW_BLIT
+# and the arch flags with it, and the result builds and runs while
+# rendering every glyph in software.
+#
+#   make clean && make EXTRA_CFLAGS=-DREAD_PROFILE=1
+#
+# (clean first: -MD tracks header dependencies, not flag changes, so a
+# rebuild without it will happily keep the old objects.)
+EXTRA_CFLAGS ?=
+
+# `override` so the flags this app REQUIRES survive any command-line
+# CFLAGS. A command-line assignment normally replaces the makefile's
+# CFLAGS outright -- `make CFLAGS+=-DFOO=1` appends to the command-line
+# value, not to this one -- which silently drops -Os, -march,
+# -ffunction-sections, the libc specs and -DZ_GFX_HW_BLIT.
+#
+# The result of that still BUILDS and still LINKS. It just compiles
+# the software glyph renderer instead of the hardware one and skips
+# section GC, so the binary triples, overruns the space the loader has
+# for the app, and crashes on start. Nothing in the build says so.
+#
+# With override, both of these do the right thing:
+#
+#   make clean && make EXTRA_CFLAGS=-DREAD_PROFILE=1
+#   make clean && make CFLAGS+=-DREAD_PROFILE=1
+override CFLAGS += --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) -DZ_GFX_HW_BLIT $(GC_CFLAGS) $(ARCH_DEFS) $(LIBC_FLAGS) $(EXTRA_CFLAGS)
 LDFLAGS = -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS)
 LDSCRIPT = ../../common/riscv-app.ld
 
@@ -110,6 +136,12 @@ test:
 #
 #   make render DOC=file.md            layout, as text
 #   make render DOC=file.md MODE=scroll  reversibility check
+#   make render DOC=file.md MODE=seam  blit + strip redraw == full
+#                                        redraw, pixel row by pixel row
+#   make render DOC=file.md MODE=seekcache  parser state is the same
+#                                        replayed from any mid-point
+#                                        as from the start (the
+#                                        position cache's premise)
 DOC ?= ../../../docs/welcome.md
 MODE ?= render
 

@@ -13,7 +13,14 @@ ASFLAGS = -march=$(ARCH) -mabi=$(ABI)
 # on the board that ever does (see wm.c's main(), and
 # docs/window_manager.md, "Hardware glyph blitting"). That's also why
 # z_font_5x8 is the only font this app draws with.
-CFLAGS = --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) -DZ_GFX_HW_BLIT $(ARCH_DEFS) $(LIBC_FLAGS)
+# `override` so the flags this app REQUIRES survive a command-line
+# CFLAGS. A command-line assignment replaces the makefile's CFLAGS
+# outright -- `make CFLAGS+=-DFOO=1` appends to the command-line value,
+# not to this one -- silently dropping -Os, -march, section GC, the
+# libc specs and any -D this app needs to build correctly. The result
+# still builds and links; it just produces a much larger, slower binary
+# that can overrun the space the loader has for it and crash on start.
+override CFLAGS += --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) -DZ_GFX_HW_BLIT $(ARCH_DEFS) $(LIBC_FLAGS)
 # -march/-mabi on the LINK line too, not just for compiling: gcc uses
 # them to pick which multilib's libc/libgcc to search, and omitting
 # them silently falls back to the toolchain default -- which may assume
