@@ -121,15 +121,25 @@ def normalise_version(v):
 
 
 def git_commit(root):
+    """(commit, [dirty paths]).
+
+    `git status --porcelain` already omits anything .gitignore covers,
+    which is where build output, release artifacts and Python bytecode
+    live -- so what comes back is genuinely tracked-or-new source. The
+    paths are returned rather than just a boolean because "the tree is
+    dirty" without saying which file is an instruction to go run a
+    second command, and the answer is usually one file you forgot.
+    """
     try:
         out = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root,
                              capture_output=True, text=True)
         commit = out.stdout.strip() or "unknown"
-        dirty = subprocess.run(["git", "status", "--porcelain"], cwd=root,
-                               capture_output=True, text=True).stdout.strip()
-        return commit, bool(dirty)
+        status = subprocess.run(["git", "status", "--porcelain"], cwd=root,
+                                capture_output=True, text=True).stdout
+        paths = [l[3:].strip() for l in status.splitlines() if l.strip()]
+        return commit, paths
     except OSError:
-        return "unknown", False
+        return "unknown", []
 
 
 # ---------------------------------------------------------------------
@@ -257,7 +267,10 @@ def build_target(root, target, version, outdir, dry=False,
     lay = layout_mod.load(root)
     arch = spec.derive_arch(root)
     sw = target.derive_sw()
-    commit, dirty = git_commit(root)
+    # The dirty list is not used here -- cmd_build has already decided
+    # whether to proceed. Only the commit is wanted, for zspec.vh's
+    # provenance header.
+    commit, _ = git_commit(root)
 
     board_lc = target.board.lower()
 

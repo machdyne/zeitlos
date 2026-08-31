@@ -388,7 +388,7 @@ Then once per release: the sdcard image, `README.txt`, `NOTES.md`,
 | Guard | Why | Override |
 | --- | --- | --- |
 | Version mismatch | `sw/common/zversion.h` says 0.0.2 and you asked for 0.0.3. The version is compiled into the kernel and shown by `info`; shipping these mismatched means the release page and the running system disagree about what it is, discovered from a screenshot months later. | `--bump` (edits the header — commit it) |
-| Dirty tree | `MANIFEST.json` would record a commit the artifacts did not come from. | `--allow-dirty` |
+| Dirty tree | `MANIFEST.json` would record a commit the artifacts did not come from. The message lists the files; anything `.gitignore` covers is already excluded, so nothing listed is build output. | `--allow-dirty` |
 | Spec drift | A board spec no longer matches `rtl/boards.vh`, so a release would build something other than what `make BOARD=x flash` builds. | `--allow-drift` |
 | Timing failure | A named clock domain missed its target in the **final** report. IO domains are advisory; see below. | `--allow-timing-fail` |
 | Unconstrained port | `rtl/sysctl.v` declares a port nothing gives pins to. nextpnr rejects it; this says which define would remove it. | none — pins, or `-NAME` |
@@ -506,6 +506,26 @@ The ARK scroll comes from `sw/data/ark` by default; `--ark` points
 elsewhere. Its commit goes into `MANIFEST.json`.
 
 ---
+
+## The tool leaves no trace
+
+Running `zrelease` must not make the tree dirty, because the dirty
+check is the next thing it does. That sounds obvious and was not true
+for one release: importing the `lib/` modules wrote `__pycache__/` into
+`release/lib/`, so `zrelease check` dirtied the tree and `zrelease
+build` then refused to run — and a check its own tooling trips is one
+people learn to pass `--allow-dirty` to, which defeats it.
+
+Fixed at both ends. The entry points set
+`sys.dont_write_bytecode = True`, so the files are never created (the
+cache saves nothing measurable for a program that runs once per
+invocation), and `release/.gitignore` covers `__pycache__/` anyway for
+anyone importing the modules by hand.
+
+The same reasoning covers everything else a build produces:
+`release/dist/`, `release/build/`, `output/` and `release/.generated`
+are all gitignored, so `git status --porcelain` — which is what the
+dirty check reads — reports only genuine source changes.
 
 ## Generated files, and getting rid of them
 

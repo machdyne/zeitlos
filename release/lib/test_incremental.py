@@ -16,6 +16,19 @@
 #   python3 release/lib/test_incremental.py
 #
 
+import sys as _sys
+
+# No __pycache__. This tool runs once per invocation, so the bytecode
+# cache saves nothing measurable -- and it is written into
+# release/lib/, which made `git status` dirty as a side effect of
+# running `zrelease check`, which then made `zrelease build` refuse to
+# run. A check that its own tooling trips is a check people learn to
+# pass --allow-dirty to, which defeats it.
+#
+# Belt and braces with the .gitignore entry: this way the file is never
+# created, so a checkout that predates that entry behaves too.
+_sys.dont_write_bytecode = True
+
 import json
 import os
 import shutil

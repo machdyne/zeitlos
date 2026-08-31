@@ -20,6 +20,19 @@
 # over it. See release/lib/gen.py.
 #
 
+import sys as _sys
+
+# No __pycache__. This tool runs once per invocation, so the bytecode
+# cache saves nothing measurable -- and it is written into
+# release/lib/, which made `git status` dirty as a side effect of
+# running `zrelease check`, which then made `zrelease build` refuse to
+# run. A check that its own tooling trips is a check people learn to
+# pass --allow-dirty to, which defeats it.
+#
+# Belt and braces with the .gitignore entry: this way the file is never
+# created, so a checkout that predates that entry behaves too.
+_sys.dont_write_bytecode = True
+
 import argparse
 import gzip
 import json
@@ -267,7 +280,9 @@ def cmd_build(args):
             print("  %-20s %s" % (name, mark))
 
     print("\nzeitlos %s" % version)
-    print("  commit   %s%s" % (commit[:12], " (tree is DIRTY)" if dirty else ""))
+    print("  commit   %s%s"
+          % (commit[:12],
+             " (tree is DIRTY: %d file(s))" % len(dirty) if dirty else ""))
     print("  targets  %s" % ", ".join(targets))
     print("  output   %s" % os.path.relpath(out, ROOT))
     # -- one release, one commit ---------------------------------------
@@ -304,13 +319,19 @@ def cmd_build(args):
               % (commit[:12], prev_commit[:12]))
 
     if dirty and not args.allow_dirty:
-        die("the working tree has uncommitted changes.\n\n"
+        shown = dirty[:15]
+        listing = "\n".join("    %s" % p for p in shown)
+        if len(dirty) > len(shown):
+            listing += "\n    ... and %d more" % (len(dirty) - len(shown))
+        die("the working tree has uncommitted changes:\n\n%s\n\n"
             "  A release built from a dirty tree cannot be reproduced from "
             "its recorded commit, and the\n"
             "  manifest would say it came from %s when it did not. Commit "
             "or stash, or pass --allow-dirty\n"
-            "  if this is a test build you are not going to ship."
-            % commit[:12])
+            "  if this is a test build you are not going to ship.\n\n"
+            "  Anything .gitignore covers is already excluded, so nothing "
+            "listed above is build output."
+            % (listing, commit[:12]))
 
     if not args.dry_run:
         os.makedirs(out, exist_ok=True)
@@ -386,8 +407,8 @@ def cmd_build(args):
         merged[r["target"]] = r
     all_targets = [merged[k] for k in sorted(merged)]
 
-    man = notes_mod.manifest(version, commit, dirty, all_targets, sdcard,
-                             lay, ark_commit)
+    man = notes_mod.manifest(version, commit, bool(dirty), all_targets,
+                             sdcard, lay, ark_commit)
     notes_mod.write(os.path.join(out, "MANIFEST.json"), man)
     notes_mod.write(os.path.join(out, "NOTES.md"),
                     notes_mod.notes(version, commit, all_targets, sdcard,

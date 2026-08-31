@@ -8,3 +8,10 @@ dist/
 # Present only while a build is running, or after one died -- see
 # release/lib/gen.py. `zrelease clean` removes it and whatever it lists.
 .generated
+
+# Python bytecode. The entry points set sys.dont_write_bytecode so this
+# should never appear, but a checkout where someone imports these
+# modules by hand would otherwise get an untracked directory that makes
+# the release build's dirty-tree check fire.
+__pycache__/
+*.pyc
