@@ -1085,6 +1085,74 @@ it for something screen-wide would be actively misleading. The kernel
 shell's equivalent *is* called `color`, because `sh.c` has no such
 clash.
 
+### Game mode and gamepads -- IMPLEMENTED
+
+| Procedure | Behavior |
+|---|---|
+| `(game-mode)` | current mode as a string: `"off"`, `"on"` or `"wrap"` |
+| `(game-mode m)` | set it; `m` is a name or a number 0-2. Returns the mode actually in effect, as a string |
+| `(game-view)` | viewport origin as a list `(x y)`, in framebuffer pixels |
+| `(game-view x y)` | move it; returns the origin afterwards |
+| `(game-frame)` | the display's own frame counter, 0-65535 |
+| `(game-wait)` | block until the next frame boundary; `#t` |
+| `(gamepad)` / `(gamepad n)` | list of pressed buttons as symbols, `()` if none, `#f` if there is no such pad |
+| `(gamepad-count)` | how many gamepads are attached right now, 0-2 |
+
+See `docs/game_mode.md` and `docs/gamepad.md`.
+
+`game-mode` is deliberately the same **shape** as `video-mode` above --
+one getter/setter, a name or a number accepted, the resulting state
+returned rather than `#t`, read back from the register rather than
+echoed from the argument. It is the same kind of thing: a single
+screen-wide register with no compound state. Two procedures that behave
+alike are worth more than two that each fit their own register slightly
+better.
+
+Names rather than `#t`/`#f`, even though the underlying enable is one
+bit, because there are three states a caller cares about. Wrap is a
+separate bit in the hardware, but "game mode, clamped" and "game mode,
+toroidal" differ enough that folding them into a boolean plus a second
+procedure would make the common case -- turning it on the way a
+scrolling game wants -- take two calls instead of one.
+
+Entering game mode from the REPL is a genuinely useful thing to do
+interactively; it is how you see what the viewport does without writing
+a program. It is also a good way to lose sight of the terminal you
+typed it into, since `repl`'s own window may well be outside the
+320x240 view. **Alt+Esc toggles back** regardless of what any program
+has done -- which is exactly why that hotkey lives in the window
+manager rather than in a library.
+
+`game-view` reads back what was **written**, which is not always what is
+being scanned out: with wrap off the hardware clamps the origin so the
+viewport cannot hang off the edge, and it applies that clamp at scanout
+rather than on the write path. See `docs/game_mode.md`.
+
+`gamepad` returns **symbols**, not a bitmask, because this is the
+interactive layer: `(memq 'a (gamepad))` reads as what it means, and
+this interpreter has no bitwise operations to make a mask usable
+anyway.
+
+It returns `#f` -- not `()` -- when there is no such pad, because "no
+pad" and "a pad with nothing pressed" are genuinely different answers
+and a "press start" screen needs to tell them apart. Same call as
+`(current-time)` makes for an unset clock, and for the same reason:
+asking what a pad is doing is a **question**, and "there isn't one" is
+a real answer to it, so it composes rather than blowing up a one-liner.
+Setting the mode is something the caller asked to **do**, so gateware
+without game mode panics there instead.
+
+`n` is a **pad index**, not a port: pad 0 is whichever port currently
+holds a gamepad. Unplug the pad from port 0 while a second sits in port
+1 and the survivor becomes pad 0. Nothing binds a device to a port on
+this machine -- see `docs/gamepad.md`.
+
+`game-wait` blocks this entire process for up to 16.7ms, with the same
+consequences `(delay-ms ...)` has and for the same reason. Fine for a
+one-shot at a prompt; a Scheme loop calling it sixty times a second is
+not what this interpreter is for, and the answer to wanting that is a C
+program against `sw/common/zgame.h`.
+
 ### Messaging -- IMPLEMENTED
 
 | Procedure | Behavior |

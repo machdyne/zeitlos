@@ -130,7 +130,11 @@ void z_fb_hw_line(int x0, int y0, int x1, int y1, int color, const z_clip_t *cli
 	gpu_y0 = (uint32_t)y0;
 	gpu_x1 = (uint32_t)x1;
 	gpu_y1 = (uint32_t)y1;
-	gpu_color = color & 1;
+	// & 3, not & 1: the colour field is a two-bit RASTER OP now
+	// (rtl/gpu/gpu_raster.v) -- 0 clear, 1 set, 2 XOR. Masking to one
+	// bit here would silently turn every XOR into a clear, which is
+	// exactly the kind of failure that looks like broken gateware.
+	gpu_color = color & 3;
 	gpu_start = 1;
 
 	maskirq(old_mask);
@@ -138,10 +142,29 @@ void z_fb_hw_line(int x0, int y0, int x1, int y1, int color, const z_clip_t *cli
 }
 
 void z_fb_hw_box(int x0, int y0, int x1, int y1, int color, const z_clip_t *clip) {
-	z_fb_hw_line(x0, y0, x1, y0, color, clip);	// top
-	z_fb_hw_line(x1, y0, x1, y1, color, clip);	// right
-	z_fb_hw_line(x1, y1, x0, y1, color, clip);	// bottom
-	z_fb_hw_line(x0, y1, x0, y0, color, clip);	// left
+
+	// The verticals deliberately stop one pixel short at BOTH ends, so
+	// that every pixel of the outline is drawn EXACTLY ONCE.
+	//
+	// This used to draw four lines that each shared an endpoint with
+	// the next, so all four corners were painted twice. With only set
+	// and clear available that was invisible -- both are idempotent,
+	// painting a pixel twice is the same as once. XOR is not: a corner
+	// drawn twice XORs back to its original value, so the box would
+	// render with all four corners missing.
+	//
+	// Fixed here rather than only on the XOR path, because "each pixel
+	// once" is correct under every op and produces an identical pixel
+	// set for set and clear (verified over 1369 box sizes by
+	// tools/verify_xor_geometry.py).
+	z_fb_hw_line(x0, y0, x1, y0, color, clip);			// top
+	z_fb_hw_line(x0, y1, x1, y1, color, clip);			// bottom
+
+	if (y1 - y0 >= 2) {
+		z_fb_hw_line(x0, y0 + 1, x0, y1 - 1, color, clip);	// left
+		z_fb_hw_line(x1, y0 + 1, x1, y1 - 1, color, clip);	// right
+	}
+
 }
 
 // -- GPU blitter fill path (rtl/gpu/gpu_blit.v) -- see zgfx.h's
@@ -285,7 +308,398 @@ static inline uint32_t gpu_blit_acquire(void) {
 
 }
 
+static void hw_fill_rect_core(int x, int y, int w, int h, int color,
+	bool wait);
+static void hw_fill_shade_core(int x, int y, int w, int h, int level,
+	bool wait);
+
+bool z_fb_hw_dither_available(void) {
+
+	static int cached = -1;
+
+	if (cached < 0) {
+		uint32_t old_mask = gpu_blit_acquire();
+		gpu_blit_ctrl = GPU_BLIT_CTRL_DITHER;
+		cached = (gpu_blit_ctrl & GPU_BLIT_CTRL_DITHER) ? 1 : 0;
+		gpu_blit_ctrl = 0;
+		maskirq(old_mask);
+	}
+
+	return cached == 1;
+
+}
+
+void z_fb_hw_fill_shade(int x, int y, int w, int h, int level) {
+	hw_fill_shade_core(x, y, w, h, level, true);
+}
+
+void z_fb_hw_fill_shade_async(int x, int y, int w, int h, int level) {
+	hw_fill_shade_core(x, y, w, h, level, false);
+}
+
+// A grey, on a display that has none.
+//
+// The level goes into PATTERN, which in dither mode is not a bitmask --
+// the hardware generates the 4x4 matrix from it. Falls back to a plain
+// black or white fill on a bitstream without dither support, which is
+// wrong but legible, rather than filling with the level as a bit
+// pattern, which would be noise.
+static void hw_fill_shade_core(int x, int y, int w, int h, int level,
+	bool wait) {
+
+	if (level < 0) level = 0;
+	if (level > Z_SHADE_MAX) level = Z_SHADE_MAX;
+
+	if (!z_fb_hw_dither_available()) {
+		hw_fill_rect_core(x, y, w, h,
+			(level > Z_SHADE_MAX / 2) ? 1 : 0, wait);
+		return;
+	}
+
+	if (x < 0) { w += x; x = 0; }
+	if (y < 0) { h += y; y = 0; }
+	if (x + w > Z_SCREEN_W) w = Z_SCREEN_W - x;
+	if (y + h > Z_SCREEN_H) h = Z_SCREEN_H - y;
+	if (w <= 0 || h <= 0) return;
+
+	{
+		uint32_t old_mask = gpu_blit_acquire();
+
+		gpu_blit_dst_x = (uint32_t)x;
+		gpu_blit_dst_y = (uint32_t)y;
+		gpu_blit_width = (uint32_t)w;
+		gpu_blit_height = (uint32_t)h;
+		gpu_blit_pattern = (uint32_t)level;
+
+		gpu_blit_ctrl = GPU_BLIT_CTRL_START | GPU_BLIT_CTRL_FILL |
+			GPU_BLIT_CTRL_CLIP | GPU_BLIT_CTRL_DITHER;
+
+		maskirq(old_mask);
+	}
+
+	if (wait) gpu_blit_wait_idle();
+
+}
+
+// -- shaded SPAN: one scanline, minimum register traffic --
+//
+// A software triangle rasterizer emits hundreds of these per frame, and
+// at that rate the wishbone register writes cost as much as the blit
+// itself: six writes per span, each a stalled bus cycle from the CPU.
+//
+// Height and grey level do not change between the spans of one face,
+// so they are hoisted into z_fb_hw_span_begin() and this writes only
+// the three registers that vary. Six writes become four, which is the
+// difference between the CPU keeping the blitter fed and not.
+//
+// NO CLIPPING and no validation, deliberately. This is the inner loop
+// of a rasterizer that has already clipped; re-checking here would put
+// four comparisons back into the path the hoisting just took them out
+// of. Callers that have not clipped must use z_fb_hw_fill_shade().
+//
+// Asynchronous, like every other fill. The next span's acquire waits
+// for this one, so a rasterizer that computes the next span's endpoints
+// while this one runs overlaps almost completely.
+static int span_level_cached = -1;
+
+void z_fb_hw_span_begin(int level) {
+
+	if (level < 0) level = 0;
+	if (level > Z_SHADE_MAX) level = Z_SHADE_MAX;
+
+	span_level_cached = level;
+
+	if (!z_fb_hw_dither_available()) return;
+
+	{
+		uint32_t old_mask = gpu_blit_acquire();
+		gpu_blit_height = 1;
+		gpu_blit_pattern = (uint32_t)level;
+		maskirq(old_mask);
+	}
+
+}
+
+void z_fb_hw_span(int x, int y, int w) {
+
+	if (w <= 0) return;
+
+	// Falls back to a whole fill where the bitstream has no dither --
+	// slower, but this path is only reached on old gateware and
+	// correctness matters more than speed there.
+	if (!z_fb_hw_dither_available()) {
+		hw_fill_rect_core(x, y, w, 1,
+			(span_level_cached > Z_SHADE_MAX / 2) ? 1 : 0, false);
+		return;
+	}
+
+	{
+		uint32_t old_mask = gpu_blit_acquire();
+
+		gpu_blit_dst_x = (uint32_t)x;
+		gpu_blit_dst_y = (uint32_t)y;
+		gpu_blit_width = (uint32_t)w;
+
+		gpu_blit_ctrl = GPU_BLIT_CTRL_START | GPU_BLIT_CTRL_FILL |
+			GPU_BLIT_CTRL_CLIP | GPU_BLIT_CTRL_DITHER;
+
+		maskirq(old_mask);
+	}
+
+}
+
+// Clear one scanline span. Same lean register path as z_fb_hw_span(),
+// but a plain black fill rather than a dither -- a rasterizer erasing
+// what it no longer covers needs this as often as it needs the shaded
+// version, and going through z_fb_hw_fill_rect() would put back the
+// six register writes and the clipping that path exists to avoid.
+void z_fb_hw_span_clear(int x, int y, int w) {
+
+	if (w <= 0) return;
+
+	{
+		uint32_t old_mask = gpu_blit_acquire();
+
+		gpu_blit_dst_x = (uint32_t)x;
+		gpu_blit_dst_y = (uint32_t)y;
+		gpu_blit_width = (uint32_t)w;
+		gpu_blit_height = 1;
+		gpu_blit_pattern = 0;
+
+		gpu_blit_ctrl = GPU_BLIT_CTRL_START | GPU_BLIT_CTRL_FILL |
+			GPU_BLIT_CTRL_CLIP;
+
+		maskirq(old_mask);
+	}
+
+	/* Invalidates the hoisted state, so the next shaded span must
+	 * re-establish it. shade_triangle() calls z_fb_hw_span_begin()
+	 * per face, and the erase pass runs after all of them, so this
+	 * never interleaves in practice -- but leaving the cache stale
+	 * would make it a trap for the next caller. */
+	span_level_cached = -1;
+
+}
+
+/* Debug counter for the scroll path -- see zgfx.h. Nonzero prints that
+ * many more scroll operations and their exact blit arguments, then
+ * stops. Bounded rather than a boolean because these run at key-repeat
+ * rates and an unbounded print would flood the console and change the
+ * timing being investigated. */
+int z_fb_scroll_debug = 0;
+int z_fb_scroll_dbg_armed = 0;
+
+/* Force the scroll region onto 32-pixel boundaries.
+ *
+ * A BISECTION TOOL, not a fix. The coordinates handed to this function
+ * are provably correct (traced on hardware: source x, destination x and
+ * the content rect all agree), and the RTL copies correctly at these
+ * alignments in simulation -- so the remaining suspect is the unaligned
+ * source path, where blit_copy_setup() computes a sub-word shift.
+ *
+ * With this set, x is rounded UP and the width DOWN to word
+ * boundaries, so the copy is purely word-for-word with no shifter
+ * involved. A few pixels at each edge are then not scrolled and will
+ * be wrong -- that is expected and is not what to look at.
+ *
+ * What to look at is the OFFSET. If the content stops appearing
+ * shifted sideways, the fault is in the unaligned path. If it still
+ * shifts, alignment is innocent and the fault is in the VRAM source
+ * addressing itself. */
+int z_fb_scroll_align = 0;
+
+/* Issue every scroll blit TWICE, identically.
+ *
+ * A bisection tool, and the sharpest one left. Everything static has
+ * been eliminated: the coordinates, the derived address, the shifter
+ * (bypassed with aligned mode and the fault persisted), and the edge
+ * mask on the first partial word (rtl/gpu/bench/tb_edge.v seeds source
+ * all-ones against destination all-zeros, so a skipped word cannot
+ * hide, and it passes).
+ *
+ * What has never been ruled out is the FIRST transaction of a copy
+ * being different from the rest -- a bus-settle or arbitration effect
+ * that only appears with another master on the VRAM port, which no
+ * simulation here has. A VRAM-to-VRAM copy is the only operation that
+ * puts source read, destination read and destination write on that one
+ * port back to back.
+ *
+ * If repeating the blit makes the artifact disappear, that is the
+ * answer: the second pass finds the bus already settled. If it changes
+ * nothing, the fault is not transient and the copy is being told to do
+ * something different from what it is being asked.
+ *
+ * The second pass is pure waste when it is not needed, so this is a
+ * diagnostic and never a fix. */
+int z_fb_scroll_twice = 0;
+
+/* Read the source-read probe and compare it against VRAM.
+ *
+ * The blitter reports the address it last presented and the data it
+ * received. This reads that same address with the CPU and prints both.
+ * If they differ, the blitter is not seeing what the CPU sees.
+ *
+ * Also prints the address the copy was ASKED for, so three things can
+ * be compared rather than two: what was requested, what the blitter
+ * presented, and what came back.
+ */
+void z_fb_hw_scroll_probe(uint32_t expect_adr) {
+
+	uint32_t adr = gpu_blit_dbg_src_adr;
+	uint32_t dat = gpu_blit_dbg_src_dat;
+	uint32_t cnt = gpu_blit_dbg_src_cnt;
+	uint32_t cpu;
+
+	/* The probe address is a byte address into VRAM; read the same
+	 * word the CPU way. */
+	cpu = *(volatile uint32_t *)(uintptr_t)adr;
+
+	/* Is the probe even reachable?
+	 *
+	 * dst_x (register 2) was written by the blit that just ran, so its
+	 * value is known: it must read back as the destination x. If it
+	 * does, this block is decoding fine and the probe registers are
+	 * genuinely absent -- which means the GATEWARE has not been
+	 * reflashed, since the probe is RTL.
+	 *
+	 * Worth checking automatically. "All three registers read zero" is
+	 * ambiguous between a missing feature, a decode that stops short
+	 * of register 16, and a bus that is not answering at all -- and
+	 * those need completely different responses. */
+	{
+		uint32_t known = gpu_blit_dst_x;
+		printf("blit probe: decode check -- dst_x reads %lu\n",
+			(unsigned long)known);
+		if (cnt == 0 && adr == 0 && dat == 0) {
+			printf("  probe registers read 0.\n");
+			printf("  If dst_x above is the destination x of the last\n");
+			printf("  blit, the block is reachable and the probe simply\n");
+			printf("  is not in this bitstream -- it is RTL, so it needs\n");
+			printf("  `make flash`, not just a rebuilt app.\n");
+			return;
+		}
+	}
+
+	printf("blit probe: reads=%lu\n", (unsigned long)cnt);
+	printf("  asked for  : %08lx\n", (unsigned long)expect_adr);
+	printf("  presented  : %08lx  (%+ld words from asked)\n",
+		(unsigned long)adr, (long)(((int32_t)adr - (int32_t)expect_adr) / 4));
+	printf("  blitter got: %08lx\n", (unsigned long)dat);
+	printf("  cpu reads  : %08lx  %s\n", (unsigned long)cpu,
+		(cpu == dat) ? "MATCH -- bus path is fine, look at the logic"
+		             : "DIFFER -- the blitter is not seeing what the CPU sees");
+
+}
+
+void z_fb_hw_scroll(int x, int y, int w, int h, int dy) {
+
+	if (dy == 0 || w <= 0 || h <= 0) return;
+
+	if (z_fb_scroll_align) {
+		int nx = (x + 31) & ~31;
+		w -= (nx - x);
+		x = nx;
+		w &= ~31;
+		if (w <= 0) return;
+	}
+
+	if (z_fb_scroll_debug > 0) {
+		z_fb_scroll_debug--;
+		printf("zgfx scroll: x=%d y=%d w=%d h=%d dy=%d\n", x, y, w, h, dy);
+	}
+
+	if (dy <= -h || dy >= h) return;   /* nothing survives the scroll */
+
+	if (dy < 0) {
+
+		/* Content moves UP: destination above source, so the whole
+		 * region is one safe blit -- each row is read before anything
+		 * overwrites it. */
+		int n = -dy;
+
+		/* Captured BEFORE the decrement, so the probe after the blit
+		 * runs on the same pass that printed the arguments. Gating it
+		 * on the counter directly makes the two prints depend on the
+		 * order they happen to be decremented in, which is how the
+		 * probe silently never fired the first time. */
+		int trace = z_fb_scroll_dbg_armed;
+
+		if (z_fb_scroll_twice)
+			z_fb_hw_blit_vram(x, y + n, x, y, w, h - n);
+
+		if (trace) {
+			z_fb_scroll_dbg_armed--;
+			printf("  blit_vram sx=%d sy=%d dx=%d dy=%d w=%d h=%d\n",
+				x, y + n, x, y, w, h - n);
+		}
+
+		z_fb_hw_blit_vram(x, y + n, x, y, w, h - n);
+
+		if (trace) {
+			/* The LAST source word the walk should have reached:
+			 * final source row, last word of the span. The probe
+			 * holds whatever it actually reached. */
+			uint32_t last_row = (uint32_t)(y + n + (h - n) - 1);
+			uint32_t last_word = (uint32_t)((x + w - 1) >> 5);
+			z_fb_hw_scroll_probe(0x20000000u + last_row * 80u
+				+ last_word * 4u);
+		}
+
+	} else {
+
+		/* Content moves DOWN: destination below source. A single blit
+		 * would overwrite rows it has not read yet, so this goes in
+		 * strips exactly `dy` deep, BOTTOM TO TOP.
+		 *
+		 * Within a strip source and destination cannot overlap, and
+		 * working upward means each strip is read before the strip
+		 * below it is written. See zgfx.h. */
+		int sy = y + h - dy;          /* top of the last destination strip */
+
+		while (sy > y) {
+			int src = sy - dy;
+			int dst = sy;
+			int hh = dy;
+
+			/* The topmost strip is partly off the region: its source
+			 * would start above y. Skip that part -- and advance the
+			 * DESTINATION by the same amount, not just the source.
+			 *
+			 * Clamping only the source was wrong and lost exactly one
+			 * row per scroll, at the top of the region. It looked
+			 * correct for dy == 1 (where the skip is zero) and failed
+			 * for every larger step, which is the kind of thing that
+			 * survives a quick test of the common case. */
+			if (src < y) {
+				int skip = y - src;
+				src += skip;
+				dst += skip;
+				hh -= skip;
+			}
+
+			if (z_fb_scroll_dbg_armed) {
+				z_fb_scroll_dbg_armed--;
+				printf("  blit_vram sx=%d sy=%d dx=%d dy=%d w=%d h=%d\n",
+					x, src, x, dst, w, hh);
+			}
+			if (hh > 0) z_fb_hw_blit_vram(x, src, x, dst, w, hh);
+			sy -= dy;
+		}
+
+	}
+
+}
+
 void z_fb_hw_fill_rect(int x, int y, int w, int h, int color) {
+	hw_fill_rect_core(x, y, w, h, color, true);
+}
+
+void z_fb_hw_fill_rect_async(int x, int y, int w, int h, int color) {
+	hw_fill_rect_core(x, y, w, h, color, false);
+}
+
+static void hw_fill_rect_core(int x, int y, int w, int h, int color,
+	bool wait) {
 
 	// clamp to actual screen bounds -- unconditional, regardless of
 	// CTRL_CLIP, for the same reason z_fb_hw_line() clamps
@@ -315,7 +729,7 @@ void z_fb_hw_fill_rect(int x, int y, int w, int h, int color) {
 	// wait for this fill to actually finish before returning -- see
 	// zgfx.h's comment on why this can't rely on the next operation
 	// to serialize the way consecutive glyph blits do.
-	gpu_blit_wait_idle();
+	if (wait) gpu_blit_wait_idle();
 
 }
 
@@ -440,6 +854,26 @@ static void blit_copy_setup(uint32_t src_base, int src_stride,
 	gpu_blit_src_stride = (uint32_t)src_stride;
 	gpu_blit_src_shift = prime | (uint32_t)sshift;
 
+	/* The addressing this actually derives, for the scroll
+	 * investigation. This is where the remaining hypothesis lives:
+	 * src_x is an offset WITHIN THE SOURCE BITMAP, and for a VRAM
+	 * source the bitmap is the whole framebuffer -- so src_x is an
+	 * absolute screen x, and the two only coincide when the row
+	 * origin is the bitmap origin.
+	 *
+	 * If src_addr does not land on (src_y, src_x rounded down to a
+	 * word) the addressing is the fault; if it does, it is not. */
+	if (z_fb_scroll_dbg_armed) {
+		uint32_t off = gpu_blit_src_addr - src_base;
+		printf("  setup: sx=%d dx=%d sbit0=%d sword=%d sshift=%d prime=%d\n",
+			src_x, dst_x, sbit0, sword, sshift, prime ? 1 : 0);
+		printf("  setup: src_addr=+%lu -> row %lu word %lu (want row %d word %d)\n",
+			(unsigned long)off,
+			(unsigned long)(off / (uint32_t)src_stride),
+			(unsigned long)((off % (uint32_t)src_stride) / 4),
+			src_y, src_x >> 5);
+	}
+
 }
 
 // Translates an app pointer to the physical address the blitter needs.
@@ -495,8 +929,69 @@ bool z_fb_hw_blit_mem_available(void) {
 
 }
 
+// Z_ROP_* are numbered to match the hardware exactly, so this is a
+// shift and not a translation table -- one fewer thing to keep in step
+// with rtl/gpu/gpu_blit.v. The bit positions themselves live in
+// zeitlos.h alongside every other GPU_BLIT_CTRL_*.
+
+
+static inline uint32_t rop_bits(int rop) {
+	return ((uint32_t)(rop & 3)) << GPU_BLIT_CTRL_ROP_LSB;
+}
+
+// Probed, not assumed, exactly like z_fb_hw_blit_mem_available().
+//
+// The failure this guards against is nastier than that one, though: on
+// a bitstream without raster ops the bits are simply ignored, so every
+// op behaves as COPY. A masked sprite then draws its mask as a solid
+// block and its data over the top -- an opaque box, which looks like
+// bad art rather than a missing hardware feature.
+//
+// Detected by writing ROP_XOR without a start bit and reading it back.
+// gpu_blit's CTRL register readback returns the mode bits it actually
+// stored, so an older bitstream returns zero here.
+bool z_fb_hw_rop_available(void) {
+
+	static int cached = -1;
+
+	if (cached < 0) {
+		uint32_t old_mask = gpu_blit_acquire();
+		gpu_blit_ctrl = rop_bits(Z_ROP_XOR);
+		cached = ((gpu_blit_ctrl >> GPU_BLIT_CTRL_ROP_LSB) & 3) ==
+			(uint32_t)Z_ROP_XOR ? 1 : 0;
+		gpu_blit_ctrl = 0;
+		maskirq(old_mask);
+	}
+
+	return cached == 1;
+
+}
+
 bool z_fb_hw_blit_mem(const void *src, int src_stride,
 	int src_x, int src_y, int dst_x, int dst_y, int w, int h) {
+	return z_fb_hw_blit_mem_rop(src, src_stride, src_x, src_y,
+		dst_x, dst_y, w, h, Z_ROP_COPY);
+}
+
+static bool hw_blit_mem_core(const void *src, int src_stride,
+	int src_x, int src_y, int dst_x, int dst_y, int w, int h, int rop,
+	bool wait);
+
+bool z_fb_hw_blit_mem_rop(const void *src, int src_stride,
+	int src_x, int src_y, int dst_x, int dst_y, int w, int h, int rop) {
+	return hw_blit_mem_core(src, src_stride, src_x, src_y,
+		dst_x, dst_y, w, h, rop, true);
+}
+
+bool z_fb_hw_blit_mem_async(const void *src, int src_stride,
+	int src_x, int src_y, int dst_x, int dst_y, int w, int h, int rop) {
+	return hw_blit_mem_core(src, src_stride, src_x, src_y,
+		dst_x, dst_y, w, h, rop, false);
+}
+
+static bool hw_blit_mem_core(const void *src, int src_stride,
+	int src_x, int src_y, int dst_x, int dst_y, int w, int h, int rop,
+	bool wait) {
 
 	if (!z_fb_hw_blit_mem_available()) return false;
 
@@ -521,14 +1016,122 @@ bool z_fb_hw_blit_mem(const void *src, int src_stride,
 	blit_copy_setup(blit_phys_addr(src), src_stride, src_x, src_y, dst_x);
 
 	gpu_blit_ctrl = GPU_BLIT_CTRL_START | GPU_BLIT_CTRL_CLIP |
-		GPU_BLIT_CTRL_SRCMEM;
+		GPU_BLIT_CTRL_SRCMEM | rop_bits(rop);
 
 	maskirq(old_mask);
 
-	gpu_blit_wait_idle();
+	if (wait) gpu_blit_wait_idle();
 
 	return true;
 
+}
+
+// True if the blitter can do a masked sprite in ONE pass.
+//
+// Probed like every other capability here, and it matters more than
+// the others: on a bitstream without it the two-pass fallback is
+// correct but neither atomic nor fully async, so a caller drawing onto
+// the visible page needs to know which it is getting.
+bool z_fb_hw_cookie_available(void) {
+
+	static int cached = -1;
+
+	if (cached < 0) {
+		uint32_t old_mask = gpu_blit_acquire();
+		gpu_blit_ctrl = GPU_BLIT_CTRL_COOKIE;
+		cached = (gpu_blit_ctrl & GPU_BLIT_CTRL_COOKIE) ? 1 : 0;
+		gpu_blit_ctrl = 0;
+		maskirq(old_mask);
+	}
+
+	return cached == 1;
+
+}
+
+static bool hw_blit_sprite_core(const void *data, const void *mask,
+	int src_stride, int src_x, int src_y, int dst_x, int dst_y,
+	int w, int h, bool wait) {
+
+	if (!z_fb_hw_rop_available()) return false;
+
+	// -- one pass, where the hardware has it --
+	//
+	// Identical result to the ANDN-then-OR pair below, but atomic (the
+	// sprite's footprint is never momentarily blank) and genuinely
+	// asynchronous (there is no first pass to wait for). Both matter
+	// more than the cycle count: two passes can only safely draw into
+	// a back buffer.
+	if (z_fb_hw_cookie_available()) {
+
+		if (dst_x < 0) { w += dst_x; src_x -= dst_x; dst_x = 0; }
+		if (dst_y < 0) { h += dst_y; src_y -= dst_y; dst_y = 0; }
+		if (dst_x + w > Z_SCREEN_W) w = Z_SCREEN_W - dst_x;
+		if (dst_y + h > Z_SCREEN_H) h = Z_SCREEN_H - dst_y;
+		if (w <= 0 || h <= 0) return true;
+
+		{
+			uint32_t old_mask = gpu_blit_acquire();
+
+			gpu_blit_dst_x = (uint32_t)dst_x;
+			gpu_blit_dst_y = (uint32_t)dst_y;
+			gpu_blit_width = (uint32_t)w;
+			gpu_blit_height = (uint32_t)h;
+
+			// A is the mask, B is the data. blit_copy_setup() handles
+			// A; B needs only its base, because the two share stride,
+			// shift and geometry -- which is the same fact that lets
+			// them share the shifter in hardware.
+			blit_copy_setup(blit_phys_addr(mask), src_stride,
+				src_x, src_y, dst_x);
+
+			// B's base is A's base with the mask pointer swapped for
+			// the data pointer. blit_copy_setup() has already folded
+			// the row offset and the source-word offset into
+			// gpu_blit_src_addr, and both are identical for the two
+			// planes, so the difference between the bases is the only
+			// thing that differs -- recomputing it would just be the
+			// same arithmetic with more chances to disagree.
+			gpu_blit_src_b_addr = gpu_blit_src_addr
+				- blit_phys_addr(mask) + blit_phys_addr(data);
+
+			gpu_blit_ctrl = GPU_BLIT_CTRL_START | GPU_BLIT_CTRL_CLIP |
+				GPU_BLIT_CTRL_SRCMEM | GPU_BLIT_CTRL_COOKIE;
+
+			maskirq(old_mask);
+		}
+
+		if (wait) gpu_blit_wait_idle();
+		return true;
+
+	}
+
+	// ANDN the mask first, then OR the data. The order matters: OR
+	// first would light pixels the mask pass then clears again,
+	// leaving a sprite-shaped hole instead of a sprite.
+	//
+	// The first pass is ALWAYS started async: waiting for it here
+	// would be pointless, because starting the second pass calls
+	// gpu_blit_acquire(), which waits for exactly the same thing. The
+	// `wait` flag therefore only governs the second pass.
+	if (!hw_blit_mem_core(mask, src_stride, src_x, src_y,
+		dst_x, dst_y, w, h, Z_ROP_ANDN, false)) return false;
+
+	return hw_blit_mem_core(data, src_stride, src_x, src_y,
+		dst_x, dst_y, w, h, Z_ROP_OR, wait);
+
+}
+
+bool z_fb_hw_blit_sprite(const void *data, const void *mask, int src_stride,
+	int src_x, int src_y, int dst_x, int dst_y, int w, int h) {
+	return hw_blit_sprite_core(data, mask, src_stride, src_x, src_y,
+		dst_x, dst_y, w, h, true);
+}
+
+bool z_fb_hw_blit_sprite_async(const void *data, const void *mask,
+	int src_stride, int src_x, int src_y, int dst_x, int dst_y,
+	int w, int h) {
+	return hw_blit_sprite_core(data, mask, src_stride, src_x, src_y,
+		dst_x, dst_y, w, h, false);
 }
 
 void z_fb_hw_blit_vram(int src_x, int src_y,

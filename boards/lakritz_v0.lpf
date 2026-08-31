@@ -133,3 +133,43 @@ IOBUF PORT "UART0_TX" IO_TYPE=LVCMOS33;
 LOCATE COMP "UART0_RX" SITE "B13";
 IOBUF PORT "UART0_RX" IO_TYPE=LVCMOS33;
 
+# AUDIO -- 1-bit stereo sigma-delta DAC (rtl/audio_out.v's audio_sd).
+# Enabled by `AUDIO + `AUDIO_SD in rtl/boards.vh. See docs/audio.md.
+LOCATE COMP "AUDIO_L" SITE "M3";
+IOBUF PORT "AUDIO_L" IO_TYPE=LVCMOS33;
+LOCATE COMP "AUDIO_R" SITE "N1";
+IOBUF PORT "AUDIO_R" IO_TYPE=LVCMOS33;
+
+# COMPOSITE VIDEO -- 4-bit R-2R DAC into a 75R series resistor and an
+# RCA socket. See docs/composite.md for the ladder values, the timing
+# derivation and the levels.
+#
+# Renamed from VIDEO_D0..D3 to COMP_DAC[3:0] to match rtl/sysctl.v's
+# port, which is a bus rather than four separate signals. Same four
+# pins; only the name changed.
+#
+# STILL COMMENTED OUT, and deliberately, even though the port now
+# exists and the gateware is written. `GPU_COMPOSITE is off by default
+# in rtl/boards.vh, and on a build without it rtl/sysctl.v does not
+# declare COMP_DAC at all -- so a live LOCATE here would reference a
+# port the top module does not have on every ordinary Lakritz build.
+#
+# Uncomment these AND `GPU_COMPOSITE together. They are two halves of
+# one change and neither is useful alone: the define without the pins
+# fails to place, and the pins without the define constrain a port
+# that is not there.
+#
+# Note composite is MUTUALLY EXCLUSIVE with `GPU_DDMI, which Lakritz
+# defines. Enabling composite means commenting that out as well --
+# rtl/sysctl.v enforces this by suppressing the DDMI port declarations
+# on a composite build, so the failure is a loud one at place-and-route
+# rather than a board quietly driving HDMI pins with 15.7kHz sync.
+#
+#LOCATE COMP "COMP_DAC[0]" SITE "P1";
+#IOBUF PORT "COMP_DAC[0]" IO_TYPE=LVCMOS33;
+#LOCATE COMP "COMP_DAC[1]" SITE "R1";
+#IOBUF PORT "COMP_DAC[1]" IO_TYPE=LVCMOS33;
+#LOCATE COMP "COMP_DAC[2]" SITE "P2";
+#IOBUF PORT "COMP_DAC[2]" IO_TYPE=LVCMOS33;
+#LOCATE COMP "COMP_DAC[3]" SITE "N4";
+#IOBUF PORT "COMP_DAC[3]" IO_TYPE=LVCMOS33;

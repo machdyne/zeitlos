@@ -90,4 +90,48 @@
 // another resolution, etc).
 #define Z_NET_DNS_RESOLVE_REPLY  305
 
+// -- SSH session setup (sw/apps/net/ssh/, sw/apps/repl/repl.c) --
+//
+// NUMBERED 308/309, NOT 306/307. The subject space for `net` is split
+// across TWO headers: this file holds 302-305, and sw/common/zntp.h
+// continues the SAME sequence at 306-307. zntp.h says so in its own
+// header and asks that the next subject added here start at 308.
+//
+// These were originally added at 306/307 by reading this file alone.
+// The result was that every `ssh` command was delivered to net's NTP
+// sync handler -- the dispatch chain matched Z_NET_NTP_SYNC first --
+// so repl waited forever for a reply that was never going to come,
+// and net logged nothing unusual because it had genuinely handled the
+// message. Exactly the failure zntp.h predicted. net.c now carries a
+// compile-time check (see its SUBJECT COLLISION CHECK) so the next
+// one cannot reach a board.
+//
+// A two-step handshake that exists to solve one specific problem: an
+// SSH session needs a USERNAME, and `term`'s Z_TERM_SET_PORT cannot
+// carry one.
+//
+// The obvious design -- put {user, ip} in SET_PORT's `arg` map and let
+// term forward it -- is broken, and subtly. z_resolve_obj()
+// (sw/os/msg.c) rewrites payload pointers to PHYSICAL addresses when a
+// message is read. When `term` then re-sends that same object in its
+// own Z_PORT_CONNECT, the kernel translates it a SECOND time --
+// `ptr - 0x80000000 + base` on an address that is already physical,
+// which underflows into garbage. Telnet escapes this only because its
+// arg is a bare Z_UINT32 with no pointers in it.
+//
+// So `repl` sends the strings directly to `net` in ONE hop, where they
+// resolve correctly, and gets back an opaque token. SET_PORT then
+// carries only that token, staying scalar exactly like telnet's IP.
+//
+// The token is also a nonce: it is consumed on use and expires, so a
+// stale or misdirected CONNECT cannot pick up someone else's
+// credentials.
+//
+// Request obj: Z_MAP { "user": Z_STR, "ip": Z_UINT32, "port": Z_UINT32 }
+// Reply obj:   Z_MAP { "ok": Z_UINT32, "token": Z_UINT32,
+//                      "error": Z_STR (only when ok == 0) }
+#define Z_NET_SSH_PREPARE        308
+#define Z_NET_SSH_PREPARE_REPLY  309
+
+
 #endif

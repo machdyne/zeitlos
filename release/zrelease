@@ -1,0 +1,625 @@
+#!/usr/bin/env python3
+#
+# Zeitlos release tooling.
+#
+#   zrelease list                  what can be built
+#   zrelease check                 specs vs rtl/boards.vh, flash layout
+#   zrelease layout                the flash map, as this tool reads it
+#   zrelease build <version>       build everything into dist/<version>/
+#   zrelease verify <version>      re-check what is in dist/<version>/
+#   zrelease ship  <version>       create or update the GitHub release
+#   zrelease clean                 remove generated files from the tree
+#
+# Build and ship are separate commands and neither implies the other:
+# building is slow and produces something you want to try on real
+# hardware first, and publishing is hard to take back.
+#
+# EVERY command starts by sweeping up generated files left behind by a
+# previous run, so a build killed halfway through cannot leave a stale
+# rtl/zspec.vh where the ordinary `make BOARD=... flash` might trip
+# over it. See release/lib/gen.py.
+#
+
+import sys as _sys
+
+# No __pycache__. This tool runs once per invocation, so the bytecode
+# cache saves nothing measurable -- and it is written into
+# release/lib/, which made `git status` dirty as a side effect of
+# running `zrelease check`, which then made `zrelease build` refuse to
+# run. A check that its own tooling trips is a check people learn to
+# pass --allow-dirty to, which defeats it.
+#
+# Belt and braces with the .gitignore entry: this way the file is never
+# created, so a checkout that predates that entry behaves too.
+_sys.dont_write_bytecode = True
+
+import argparse
+import gzip
+import json
+import os
+import shutil
+import subprocess
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+sys.path.insert(0, os.path.join(HERE, "lib"))
+
+import build as build_mod      # noqa: E402
+import gen                     # noqa: E402
+import layout as layout_mod    # noqa: E402
+import mkfatimg                # noqa: E402
+import mkflashimg              # noqa: E402
+import notes as notes_mod      # noqa: E402
+import ship as ship_mod        # noqa: E402
+import spec                    # noqa: E402
+
+
+def distdir(version):
+    return os.path.join(HERE, "dist", version)
+
+
+def die(msg):
+    print("\nzrelease: %s" % msg, file=sys.stderr)
+    sys.exit(1)
+
+
+# ---------------------------------------------------------------------
+
+def cmd_list(args):
+    print("targets:\n")
+    for name in spec.list_targets(ROOT):
+        t = spec.load_target(ROOT, name)
+        print("  %-20s %s" % (name, t.description))
+        print("  %-20s board %s, %s, nic %s, %d defines"
+              % ("", t.board, t.family, t.nic() or "none",
+                 len(t.defines)))
+        for pm in t.pmods:
+            balls = t.pmod_ports[pm.port]
+            print("  %-20s port %s: %s (%s)"
+                  % ("", pm.port.upper(), pm.name,
+                     ", ".join("%s=%s" % (pm.pins[k], balls[k])
+                               for k in sorted(pm.pins))))
+        print()
+    return 0
+
+
+def cmd_layout(args):
+    lay = layout_mod.load(ROOT)
+    print("\nflash map, read from sw/bios/bios.c, sw/os/logo.h, "
+          "sw/os/zar.h and the Makefile:\n")
+    print(layout_mod.describe(lay))
+    print("\nall four sources agree.\n")
+    return 0
+
+
+def cmd_check(args):
+    problems = []
+
+    print("\nflash layout ...")
+    try:
+        lay = layout_mod.load(ROOT)
+        print("  ok -- 0x%06x bytes, %d regions"
+              % (lay["flash_size"], len(lay["regions"])))
+    except layout_mod.LayoutError as e:
+        problems.append(str(e))
+        print("  FAILED")
+
+    print("\narch ...")
+    try:
+        arch = spec.derive_arch(ROOT)
+        print("  ok -- rtl/boards.vh implies %s" % arch)
+    except spec.SpecError as e:
+        problems.append(str(e))
+        print("  FAILED")
+
+    print("\nversion ...")
+    try:
+        v = build_mod.read_version(ROOT)
+        print("  ok -- %s says Z_OS_VERSION %s" % (build_mod.VERSION_H, v))
+    except build_mod.BuildError as e:
+        problems.append(str(e))
+        print("  FAILED")
+
+    print("\nspecs vs rtl/boards.vh ...")
+    for name in spec.list_targets(ROOT):
+        try:
+            t = spec.load_target(ROOT, name)
+        except spec.SpecError as e:
+            problems.append("%s: %s" % (name, e))
+            print("  %-20s FAILED" % name)
+            continue
+        drift = spec.check_drift(ROOT, t)
+        if drift:
+            problems.extend(drift)
+            print("  %-20s DRIFT" % name)
+        else:
+            print("  %-20s ok" % name)
+
+    print("\npin constraints ...")
+    for name in spec.list_targets(ROOT):
+        t = spec.load_target(ROOT, name)
+        try:
+            rel, _ = gen.merged_lpf(ROOT, t)
+        except RuntimeError as e:
+            problems.append(str(e))
+            print("  %-20s BLOCKED" % name)
+            continue
+        cov = gen.check_port_coverage(ROOT, t, spec)
+        if cov:
+            problems.extend("%s: %s" % (name, c) for c in cov)
+            print("  %-20s UNCONSTRAINED PORT" % name)
+            continue
+        if rel is None:
+            print("  %-20s ok -- board .lpf unchanged" % name)
+        else:
+            a, r, m = gen.check_lpf_equivalence(ROOT, t)
+            bits = []
+            if a:
+                bits.append("+%d" % len(a))
+            if r:
+                bits.append("-%d" % len(r))
+            if m:
+                bits.append("moved %d" % len(m))
+            print("  %-20s ok -- %s vs the board .lpf"
+                  % (name, ", ".join(bits) if bits else "identical"))
+            for pm in t.pmods:
+                print("  %-20s      %s in port %s"
+                      % ("", pm.name, pm.port.upper()))
+
+    # The checks above compare text against text. This one runs a real
+    # Verilog preprocessor over rtl/boards.vh both ways and compares
+    # what a synthesis tool would actually see -- which is what catches
+    # a misplaced `ifdef in the ZSPEC guard, or an include that
+    # resolved to nothing at all.
+    print("\npreprocessor equivalence (ZSPEC vs BOARD_x) ...")
+    for name in spec.list_targets(ROOT):
+        t = spec.load_target(ROOT, name)
+        text = gen.zspec_vh(t, "check", "check")
+        try:
+            eq = spec.check_equivalence(ROOT, t, text)
+        except spec.SpecError as e:
+            problems.append(str(e))
+            print("  %-20s FAILED" % name)
+            continue
+        if eq is None:
+            print("  %-20s skipped -- iverilog not installed" % name)
+        elif eq:
+            problems.extend("%s: %s" % (name, p) for p in eq)
+            print("  %-20s MISMATCH" % name)
+        else:
+            print("  %-20s ok" % name)
+
+    print("\nSD card file list (mkfatimg.py vs tools/mkfatimg.sh) ...")
+    sd = mkfatimg.check_against_script(ROOT)
+    if sd:
+        problems.extend(sd)
+        print("  DRIFT")
+    else:
+        print("  ok -- both ship the same files, and neither ships a "
+              "core app")
+
+    print("\ntools ...")
+    for tool, why in (("yosys", "synthesis"), ("nextpnr-ecp5", "place+route"),
+                      ("ecppack", "bitstream"), ("ecpbram", "BIOS into BRAM"),
+                      ("mkfs.fat", "SD image"), ("mcopy", "SD image"),
+                      ("gh", "publishing")):
+        found = shutil.which(tool)
+        print("  %-16s %s" % (tool, found or "MISSING (%s)" % why))
+
+    if problems:
+        print("\n%d problem(s):\n" % len(problems))
+        for p in problems:
+            print("  - %s\n" % p.replace("\n", "\n    "))
+        return 1
+    print("\nall checks passed.\n")
+    return 0
+
+
+def cmd_clean(args):
+    removed, kept = gen.sweep(ROOT, verbose=True)
+    if not removed and not kept:
+        print("nothing to clean -- the tree has no generated files.")
+    if kept:
+        print("\n%d file(s) left in place because they were modified."
+              % len(kept))
+        return 1
+    return 0
+
+
+# ---------------------------------------------------------------------
+
+def cmd_build(args):
+    version = build_mod.normalise_version(args.version)
+    tree_version = build_mod.read_version(ROOT)
+
+    if tree_version != version:
+        if args.bump:
+            print("bumping %s: %s -> %s"
+                  % (build_mod.VERSION_H, tree_version, version))
+            build_mod.bump_version(ROOT, version)
+            print("  This is an edit to a tracked file -- commit it.\n")
+        else:
+            die("%s says Z_OS_VERSION is %r, but you asked to build %r.\n\n"
+                "  The version is compiled into the kernel and shown by the "
+                "info app, so shipping these mismatched means the release\n"
+                "  page and the running system disagree about what it is.\n\n"
+                "  Either build %s, or pass --bump to update the header "
+                "(then commit it)."
+                % (build_mod.VERSION_H, tree_version, version, tree_version))
+
+    targets = args.targets or spec.list_targets(ROOT)
+    for name in targets:
+        if name not in spec.list_targets(ROOT):
+            die("no such target %r. `zrelease list` shows what there is."
+                % name)
+
+    lay = layout_mod.load(ROOT)
+    commit, dirty = build_mod.git_commit(ROOT)
+    out = distdir(version)
+
+    # -- what is already here ------------------------------------------
+    #
+    # Building is INCREMENTAL into dist/<version>/. Building two targets
+    # today, publishing, then adding a third next week under the same
+    # version is a normal thing to want, and `ship` already updates an
+    # existing release in place -- so a second `build` must add to the
+    # directory rather than replace it.
+    #
+    # It nearly did already, since nothing wipes dist/. But the manifest
+    # and the notes were regenerated from THIS RUN's targets only, which
+    # would have quietly rewritten a three-target release page to
+    # describe one. Merge instead.
+    previous = _load_manifest(out)
+    prev_targets = {t["target"]: t for t in previous.get("targets", [])}
+    if prev_targets:
+        print("\nalready in %s:" % os.path.relpath(out, ROOT))
+        for name in sorted(prev_targets):
+            mark = "will rebuild" if name in (args.targets or []) else "keep"
+            print("  %-20s %s" % (name, mark))
+
+    print("\nzeitlos %s" % version)
+    print("  commit   %s%s"
+          % (commit[:12],
+             " (tree is DIRTY: %d file(s))" % len(dirty) if dirty else ""))
+    print("  targets  %s" % ", ".join(targets))
+    print("  output   %s" % os.path.relpath(out, ROOT))
+    # -- one release, one commit ---------------------------------------
+    #
+    # The kernel and the sdcard image are board-independent and are
+    # built ONCE for the whole release, but each target's flash image
+    # embeds its own copy of that kernel. Adding a target from a
+    # different commit therefore produces a release whose images do not
+    # all contain the same kernel -- and sw/common/syscalls.def is
+    # compiled into both the kernel and every app, so a mismatched pair
+    # calls the wrong handler for every syscall past the point they
+    # diverge.
+    #
+    # Building the rest of a release later from the SAME commit is
+    # completely fine and is the case this whole path exists for.
+    prev_commit = previous.get("commit")
+    if prev_targets and prev_commit and prev_commit != commit:
+        if not args.allow_mixed_commits:
+            die("%s was built from %s; you are now on %s.\n\n"
+                "  Adding a target from a different commit gives a release "
+                "whose images do not all contain the\n"
+                "  same kernel. sw/common/syscalls.def is compiled into "
+                "both the kernel and every app, so a\n"
+                "  mismatched pair calls the wrong handler for every "
+                "syscall past the point they diverge.\n\n"
+                "  Either check out %s and build there, or rebuild every "
+                "target from the current commit:\n"
+                "    rm -rf %s && release/zrelease build %s\n\n"
+                "  --allow-mixed-commits if you have verified nothing "
+                "relevant changed between the two."
+                % (os.path.relpath(out, ROOT), prev_commit[:12], commit[:12],
+                   prev_commit[:12], os.path.relpath(out, ROOT), version))
+        print("\n  WARNING: mixing commits -- %s here, %s previously."
+              % (commit[:12], prev_commit[:12]))
+
+    if dirty and not args.allow_dirty:
+        shown = dirty[:15]
+        listing = "\n".join("    %s" % p for p in shown)
+        if len(dirty) > len(shown):
+            listing += "\n    ... and %d more" % (len(dirty) - len(shown))
+        die("the working tree has uncommitted changes:\n\n%s\n\n"
+            "  A release built from a dirty tree cannot be reproduced from "
+            "its recorded commit, and the\n"
+            "  manifest would say it came from %s when it did not. Commit "
+            "or stash, or pass --allow-dirty\n"
+            "  if this is a test build you are not going to ship.\n\n"
+            "  Anything .gitignore covers is already excluded, so nothing "
+            "listed above is build output."
+            % (listing, commit[:12]))
+
+    if not args.dry_run:
+        os.makedirs(out, exist_ok=True)
+
+    # Kernel, apps and the core app archive, once for the whole
+    # release. Nothing under sw/ varies by board now that net picks its
+    # NIC driver at runtime, so building this per target would compile
+    # the same sources four times and give four chances for two targets
+    # to differ without anybody meaning them to.
+    software = None
+    if not args.dry_run or True:
+        first = spec.load_target(ROOT, targets[0])
+        software = build_mod.build_software(
+            ROOT, first.core_app_list(), dry=args.dry_run, jobs=args.jobs)
+
+    results = []
+    for name in targets:
+        t = spec.load_target(ROOT, name)
+        drift = spec.check_drift(ROOT, t)
+        if drift and not args.allow_drift:
+            die("%s: its board spec no longer matches rtl/boards.vh:\n\n  %s"
+                "\n\n  A release would then build something other than what "
+                "`make BOARD=%s flash` builds.\n  Reconcile them, or pass "
+                "--allow-drift if the difference is deliberate."
+                % (name, "\n  ".join(drift), t.board))
+
+        results.append(build_mod.build_target(
+            ROOT, t, version, out, software,
+            dry=args.dry_run,
+            allow_timing_fail=args.allow_timing_fail,
+            strict_io_timing=args.strict_io_timing,
+            keep_generated=args.keep_generated,
+            jobs=args.jobs,
+            full_image=args.full_image))
+
+    if args.dry_run:
+        print("\n--dry-run: nothing was built.\n")
+        return 0
+
+    # -- board-independent artifacts -----------------------------------
+    #
+    # The kernel and the logo are the same bytes for every target, so
+    # they ship once rather than four times. They are already inside
+    # each flash image; these are for partial reflashes.
+    shutil.copy2(software["kernel"],
+                 os.path.join(out, "zeitlos-kernel.bin"))
+    shutil.copy2(software["zar"],
+                 os.path.join(out, "zeitlos-apps.zar"))
+    shutil.copy2(os.path.join(ROOT, "sw/data/images/zeitlos_fb.bin"),
+                 os.path.join(out, "zeitlos-logo.bin"))
+
+    # -- SD card -------------------------------------------------------
+    sdcard = None
+    if not args.no_sdcard:
+        print("\n=== SD card image ===")
+        # Kept as plain "zeitlos.img.gz". It is what v0.0.1 and v0.0.2
+        # already shipped and what the project README's
+        # releases/latest/download/ URL points at; renaming it would
+        # break that link for no gain.
+        raw = os.path.join(out, "zeitlos.img")
+        try:
+            shipped = mkfatimg.build(ROOT, raw, ark_dir=args.ark)
+        except mkfatimg.FatError as e:
+            die("SD image: %s" % e)
+        gz = raw + ".gz"
+        with open(raw, "rb") as f_in, gzip.open(gz, "wb", 9) as f_out:
+            shutil.copyfileobj(f_in, f_out)
+        os.unlink(raw)
+        print("    %d files, %.1f MB compressed"
+              % (len(shipped), os.path.getsize(gz) / 1048576.0))
+        sdcard = {"file": os.path.basename(gz),
+                  "bytes": os.path.getsize(gz),
+                  "files": [n for n, _ in shipped]}
+
+    ark_commit = _ark_commit(args.ark) or previous.get("ark_commit")
+
+    # -- manifest, notes, checksums ------------------------------------
+    #
+    # This run's targets replace same-named entries; everything else
+    # built earlier under this version is carried forward, so the notes
+    # and README.txt describe the whole release rather than the last
+    # command that touched it.
+    merged = dict(prev_targets)
+    for r in results:
+        r["commit"] = commit
+        merged[r["target"]] = r
+    all_targets = [merged[k] for k in sorted(merged)]
+
+    man = notes_mod.manifest(version, commit, bool(dirty), all_targets,
+                             sdcard, lay, ark_commit)
+    notes_mod.write(os.path.join(out, "MANIFEST.json"), man)
+    notes_mod.write(os.path.join(out, "NOTES.md"),
+                    notes_mod.notes(version, commit, all_targets, sdcard,
+                                    lay))
+    notes_mod.write(os.path.join(out, "README.txt"),
+                    notes_mod.asset_readme(version, commit, all_targets,
+                                           sdcard, lay))
+
+    _write_sums(out)
+
+    print("\n=== %s ===" % version)
+    print("  %d target(s): %s"
+          % (len(all_targets), ", ".join(t["target"] for t in all_targets)))
+    for f in sorted(os.listdir(out)):
+        p = os.path.join(out, f)
+        print("  %10d  %s" % (os.path.getsize(p), f))
+    print("\nbuilt into %s" % os.path.relpath(out, ROOT))
+    print("Flash one and try it, then:  release/zrelease ship %s\n" % version)
+    return 0
+
+
+def _load_manifest(out):
+    path = os.path.join(out, "MANIFEST.json")
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (ValueError, OSError):
+        return {}
+
+
+def _ark_commit(ark_dir):
+    d = ark_dir or os.path.join(ROOT, "sw/data/ark")
+    r = subprocess.run(["git", "-C", d, "rev-parse", "HEAD"],
+                       capture_output=True, text=True)
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def _write_sums(out):
+    path = os.path.join(out, "SHA256SUMS")
+    files = sorted(f for f in os.listdir(out)
+                   if f not in ("SHA256SUMS", "NOTES.md"))
+    with open(path, "w") as f:
+        for name in files:
+            f.write("%s  %s\n"
+                    % (mkflashimg.sha256(os.path.join(out, name)), name))
+
+
+# ---------------------------------------------------------------------
+
+def cmd_verify(args):
+    version = build_mod.normalise_version(args.version)
+    out = distdir(version)
+    if not os.path.isdir(out):
+        die("nothing built for %s" % version)
+
+    lay = layout_mod.load(ROOT)
+    ok = True
+
+    print("\nverifying %s\n" % os.path.relpath(out, ROOT))
+
+    sums = os.path.join(out, "SHA256SUMS")
+    if os.path.exists(sums):
+        with open(sums) as f:
+            for line in f:
+                want, name = line.strip().split("  ", 1)
+                p = os.path.join(out, name)
+                if not os.path.exists(p):
+                    print("  MISSING  %s" % name)
+                    ok = False
+                elif mkflashimg.sha256(p) != want:
+                    print("  CHANGED  %s" % name)
+                    ok = False
+        print("  checksums checked")
+
+    # Re-read every image and confirm the pieces really are where the
+    # layout says. Cheap, and it catches an assembler bug or a truncated
+    # write in a way that comparing a checksum against itself cannot.
+    for f in sorted(os.listdir(out)):
+        if not f.endswith("-flash.img"):
+            continue
+        with open(os.path.join(out, f), "rb") as fh:
+            img = fh.read()
+        L = {r.key: r for r in lay["regions"]}
+        zoff = L["apps"].offset
+        if len(img) <= zoff:
+            print("  %s: shorter than the core app offset" % f)
+            ok = False
+            continue
+        if img[zoff:zoff + 4] != b"ZAR1":
+            print("  %s: no ZAR1 magic at 0x%06x -- the kernel will find "
+                  "no core apps" % (f, zoff))
+            ok = False
+            continue
+        loff = L["logo"].offset
+        if img[loff:loff + 4] == b"\xff\xff\xff\xff":
+            print("  %s: logo region is erased -- no boot splash" % f)
+            ok = False
+            continue
+        koff = L["kernel"].offset
+        if img[koff:koff + 4] == b"\xff\xff\xff\xff":
+            print("  %s: kernel region is erased" % f)
+            ok = False
+            continue
+        print("  %-52s ok  (%d bytes)" % (f, len(img)))
+
+    print()
+    if not ok:
+        print("verification FAILED\n")
+        return 1
+    print("verification passed.\n")
+    return 0
+
+
+def cmd_ship(args):
+    version = build_mod.normalise_version(args.version)
+    try:
+        ship_mod.ship(ROOT, version, distdir(version), dry=args.dry_run,
+                      draft=args.draft, prerelease=args.prerelease,
+                      notes_only=args.notes_only, title=args.title)
+    except ship_mod.ShipError as e:
+        die(str(e))
+    return 0
+
+
+# ---------------------------------------------------------------------
+
+def main(argv):
+    p = argparse.ArgumentParser(
+        prog="zrelease", description="Zeitlos release builder")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("list", help="show buildable targets").set_defaults(
+        func=cmd_list)
+    sub.add_parser("layout", help="show the flash map").set_defaults(
+        func=cmd_layout)
+    sub.add_parser("check", help="check specs, layout and tools"
+                   ).set_defaults(func=cmd_check)
+    sub.add_parser("clean", help="remove generated files from the tree"
+                   ).set_defaults(func=cmd_clean)
+
+    b = sub.add_parser("build", help="build a release into dist/<version>")
+    b.add_argument("version")
+    b.add_argument("--targets", nargs="+",
+                   help="build only these (default: all)")
+    b.add_argument("--jobs", "-j", type=int)
+    b.add_argument("--ark", help="ARK checkout (default sw/data/ark)")
+    b.add_argument("--no-sdcard", action="store_true")
+    b.add_argument("--rebuild-sdcard", action="store_true",
+                   help="rebuild the sdcard image even if one is already "
+                        "in dist/<version>/")
+    b.add_argument("--allow-mixed-commits", action="store_true",
+                   help="add targets to a release built from a different "
+                        "commit")
+    b.add_argument("--full-image", action="store_true",
+                   help="pad flash images to the full 2MB")
+    b.add_argument("--bump", action="store_true",
+                   help="update sw/common/zversion.h to this version")
+    b.add_argument("--allow-dirty", action="store_true")
+    b.add_argument("--allow-drift", action="store_true")
+    b.add_argument("--allow-timing-fail", action="store_true")
+    b.add_argument("--strict-io-timing", action="store_true",
+                   help="also fail on IO-primitive timing domains "
+                        "(TRELLIS_IO_IN and friends), which are advisory "
+                        "by default")
+    b.add_argument("--keep-generated", action="store_true",
+                   help="leave rtl/zspec.vh etc. in place for inspection")
+    b.add_argument("--dry-run", action="store_true")
+    b.set_defaults(func=cmd_build)
+
+    v = sub.add_parser("verify", help="re-check a built release")
+    v.add_argument("version")
+    v.set_defaults(func=cmd_verify)
+
+    s = sub.add_parser("ship", help="create or update the GitHub release")
+    s.add_argument("version")
+    s.add_argument("--draft", action="store_true")
+    s.add_argument("--prerelease", action="store_true")
+    s.add_argument("--notes-only", action="store_true",
+                   help="update the release text, upload nothing")
+    s.add_argument("--title")
+    s.add_argument("--dry-run", action="store_true")
+    s.set_defaults(func=cmd_ship)
+
+    args = p.parse_args(argv)
+
+    # Sweep first, always. A previous run that died hard leaves files in
+    # the tree, and the most likely next command is the one that wants
+    # them gone.
+    if args.cmd != "clean":
+        gen.sweep(ROOT, verbose=True)
+
+    try:
+        return args.func(args)
+    except (spec.SpecError, layout_mod.LayoutError, build_mod.BuildError,
+            mkflashimg.ImageError, RuntimeError) as e:
+        die(str(e))
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

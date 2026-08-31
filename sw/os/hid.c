@@ -133,7 +133,50 @@ static void hid_irq_common(hid_port_t *st, uint32_t info, uint32_t keys) {
 	// below are ordinary registered state that stays valid between
 	// reports, not the pulse itself.
 
-	if (typ != 1) return; // not a keyboard report on this port
+	if (typ != 1) {
+
+		// NOT A KEYBOARD ON THIS PORT -- which now includes "not
+		// anything on this port", because the device was unplugged.
+		//
+		// Returning early here (as this used to) leaks state. Held
+		// keys live in st->keys until a later report shows them
+		// absent, and after an unplug NO LATER REPORT EVER COMES:
+		// usb_hid_host stops issuing them entirely. Yank a keyboard
+		// mid-keypress and every app downstream believes that key is
+		// still down, forever, with nothing able to correct it. Swap
+		// a keyboard for a gamepad on the same port and the same
+		// thing happens.
+		//
+		// So flush instead: synthesise the release events that the
+		// departed device is no longer around to send, exactly as if
+		// it had reported every key up before leaving. Consumers see
+		// an ordinary release and need no knowledge of hotplug at
+		// all. rtl/usb_hid.v raises the interrupt that gets us here
+		// on a device type change specifically so this can run --
+		// see its int_o comment.
+		//
+		// The modifier byte passed alongside is 0, not st->modifiers:
+		// by the time these releases are delivered no modifier is
+		// held either, and reporting a stale Shift on the release of
+		// a key would be its own small lie.
+		if (st->modifiers) {
+			uint8_t changed = st->modifiers;
+			for (int b = 0; b < 8; b++) {
+				if (!(changed & (1 << b))) continue;
+				hid_push(HID_EVENT(Z_HID_USAGE_LCTRL + b, 0, false));
+			}
+			st->modifiers = 0;
+		}
+
+		for (int i = 0; i < 4; i++) {
+			uint8_t u = st->keys[i];
+			if (hid_usage_valid(u)) hid_push(HID_EVENT(u, 0, false));
+			st->keys[i] = 0;
+		}
+
+		return;
+
+	}
 
 	uint8_t modifiers = info & 0xFF;
 	uint8_t cur_keys[4] = {

@@ -37,7 +37,7 @@ module gpu_raster_wb (
 // declarations/FIFO packing, so widened uniformly for simplicity --
 // a handful of extra flip-flops, not meaningfully costly.
 reg [9:0] cpu_x0, cpu_x1, cpu_y0, cpu_y1;
-reg cpu_color;
+reg [1:0] cpu_color;
 
 // Clipping registers
 reg [9:0] clip_x0, clip_y0, clip_x1, clip_y1;
@@ -47,8 +47,8 @@ reg clip_enable;
 parameter FIFO_DEPTH = 16;
 parameter FIFO_ADDR_WIDTH = 4;
 
-// Command FIFO storage (41 bits per entry: 10+10+10+10+1)
-reg [40:0] fifo_mem [0:FIFO_DEPTH-1];
+// Command FIFO storage (42 bits per entry: 10+10+10+10+2)
+reg [41:0] fifo_mem [0:FIFO_DEPTH-1];
 reg [FIFO_ADDR_WIDTH-1:0] fifo_wr_ptr;
 reg [FIFO_ADDR_WIDTH-1:0] fifo_rd_ptr;
 reg [FIFO_ADDR_WIDTH:0] fifo_count;
@@ -60,8 +60,12 @@ wire fifo_push;
 wire fifo_pop;
 
 // Current drawing command registers
+localparam [1:0] RASTER_OP_CLEAR = 2'd0;
+localparam [1:0] RASTER_OP_SET   = 2'd1;
+localparam [1:0] RASTER_OP_XOR   = 2'd2;
+
 reg [9:0] x0, x1, y0, y1;
-reg color;
+reg [1:0] color;
 
 // Drawing state registers
 reg [9:0] cur_x, cur_y;
@@ -139,7 +143,10 @@ assign err2 = e2_lt_dx ? (err1 + dx) : err1;
 assign at_end = (cur_x == x1) && (cur_y == y1);
 
 // FIFO control
-assign fifo_push = wb_cyc_i && wb_stb_i && wb_we_i && (wb_adr_i[3:0] == 4'd5) && !fifo_full;
+// !wb_ack_o: without it one register write queued the command twice,
+// which is invisible for set/clear but cancels an XOR entirely.
+assign fifo_push = wb_cyc_i && wb_stb_i && wb_we_i && !wb_ack_o &&
+                   (wb_adr_i[4:0] == 5'd5) && !fifo_full;
 assign fifo_pop = (state == SETUP);
 
 // Overall busy signal (FIFO not empty OR currently drawing)
@@ -194,7 +201,7 @@ always @(posedge clk) begin
         cpu_y0 <= 10'd0;
         cpu_x1 <= 10'd0;
         cpu_y1 <= 10'd0;
-        cpu_color <= 1'b0;
+        cpu_color <= 2'd0;
         clip_x0 <= 10'd0;
         clip_y0 <= 10'd0;
         clip_x1 <= 10'd639;  // Default to full screen (640x480 native)
@@ -213,7 +220,7 @@ always @(posedge clk) begin
                     5'd1: cpu_y0 <= wb_dat_i[9:0];
                     5'd2: cpu_x1 <= wb_dat_i[9:0];
                     5'd3: cpu_y1 <= wb_dat_i[9:0];
-                    5'd4: cpu_color <= wb_dat_i[0];
+                    5'd4: cpu_color <= wb_dat_i[1:0];
                     5'd5: ; // Start command - handled by FIFO push logic
                     5'd11: clip_x0 <= wb_dat_i[9:0];
                     5'd12: clip_y0 <= wb_dat_i[9:0];
@@ -228,7 +235,7 @@ always @(posedge clk) begin
                     5'd1: wb_dat_o <= {22'd0, cpu_y0};
                     5'd2: wb_dat_o <= {22'd0, cpu_x1};
                     5'd3: wb_dat_o <= {22'd0, cpu_y1};
-                    5'd4: wb_dat_o <= {31'd0, cpu_color};
+                    5'd4: wb_dat_o <= {30'd0, cpu_color};
                     5'd5: wb_dat_o <= 32'd0; // Start register (write-only)
                     5'd6: wb_dat_o <= {31'd0, busy_signal};
                     5'd7: wb_dat_o <= {16'd0, pixel_count};
@@ -266,7 +273,7 @@ always @(posedge clk) begin
         y0 <= 10'd0;
         x1 <= 10'd0;
         y1 <= 10'd0;
-        color <= 1'b0;
+        color <= 2'd0;
     end else begin
         case(state)
         IDLE: begin
@@ -316,10 +323,11 @@ always @(posedge clk) begin
         WAIT_READ: begin
             if (m_ack_i) begin
                 m_we_o <= 1'b1;
-                if (color)
-                    m_dat_o <= m_dat_i | pixel_mask;
-                else
-                    m_dat_o <= m_dat_i & ~pixel_mask;
+                case (color)
+                    RASTER_OP_CLEAR: m_dat_o <= m_dat_i & ~pixel_mask;
+                    RASTER_OP_XOR:   m_dat_o <= m_dat_i ^  pixel_mask;
+                    default:         m_dat_o <= m_dat_i |  pixel_mask;
+                endcase
                 state <= WRITE;
             end
         end

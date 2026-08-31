@@ -127,7 +127,20 @@ module wb_icache #(
     // puts the tag comparison into the path that feeds the CPU's ack
     // input, so if timing closure ever gets tight, set it to 0 -- the
     // cache stays correct, just a cycle slower per hit.
-    parameter FAST_HIT    = 1
+    // 1: acknowledge a hit COMBINATIONALLY, in the same cycle the tag
+    // compare resolves (1-cycle hit). This puts BRAM output -> tag
+    // compare -> c_ack_o -> the CPU's wbm_ack_i input all in one
+    // combinational path, and it is the least conventional thing in
+    // this module.
+    //
+    // 0: acknowledge from a register instead (2-cycle hit). Functionally
+    // identical, measurably slower, and takes that whole path out of
+    // play. Try this first when bringing the cache up on a new board.
+    parameter FAST_HIT    = 1,
+    // Base of this module's own register window, matched against the
+    // CPU address upstream of the arbiter. See the note on the removed
+    // cfg_* slave port below.
+    parameter [31:0] CFG_BASE = 32'h7000_0100
 ) (
     input wb_clk_i,
     input wb_rst_i,
@@ -153,14 +166,28 @@ module wb_icache #(
     output reg m_cyc_o,
     input m_ack_i,
 
-    // -- Control / status register slave (see sysctl.v decode) --
-    input [31:0] cfg_adr_i,
-    input [31:0] cfg_dat_i,
-    output reg [31:0] cfg_dat_o,
-    input cfg_we_i,
-    input cfg_stb_i,
-    input cfg_cyc_i,
-    output reg cfg_ack_o
+    // -- Control / status registers --
+    //
+    // Decoded from the CPU's own address INSIDE this module, upstream
+    // of the arbiter, rather than being a slave on the main bus.
+    //
+    // It used to be the latter, and that deadlocked. This module is a
+    // bus MASTER: it drives the CPU's side of wb_arbiter_main. A write
+    // to its own register is not cacheable, so it was forwarded down
+    // the bypass path, granted by the arbiter, decoded on the far side,
+    // and routed back to this module's slave port -- which was waiting
+    // for the very transaction it was being asked to answer. The cache
+    // was asking itself a question through an arbiter it was already
+    // occupying. sw/bios/bios.c writes the flush register immediately
+    // before jumping to the kernel, so the machine hung at boot.
+    //
+    // Answering upstream means these accesses never reach the main bus
+    // at all, which is both correct and faster.
+    //
+    // The window base is the CFG_BASE parameter above.
+    output c_cfg_hit          // 1 when this module is answering its own
+                              // registers; sysctl.v uses it to keep the
+                              // main-bus decode consistent
 );
 
     // -- geometry --------------------------------------------------
@@ -231,6 +258,26 @@ module wb_icache #(
     reg ack_r;
     reg [31:0] dat_r;
 
+    // -- control register decode (upstream, never hits the bus) ----
+
+    reg [31:0] cfg_dat_o;
+    reg cfg_ack_o;
+
+    // Matches this module's own 256-byte window. Must agree with
+    // sysctl.v's cs_cache mask, but is tested against the CPU address
+    // rather than the post-arbiter one.
+    wire cfg_sel;
+    assign cfg_sel = ((c_adr_i & 32'hf000_0700) == CFG_BASE);
+    assign c_cfg_hit = cfg_sel;
+
+    wire [31:0] cfg_adr_i;
+    assign cfg_adr_i = { 30'b0, c_adr_i[3:2] };
+
+    wire cfg_cyc_i = c_cyc_i && cfg_sel;
+    wire cfg_stb_i = c_stb_i && cfg_sel;
+    wire cfg_we_i  = c_we_i;
+    wire [31:0] cfg_dat_i = c_dat_i;
+
     // -- request decode --------------------------------------------
 
     wire req_cacheable;
@@ -272,8 +319,8 @@ module wb_icache #(
     wire hit_now;
     assign hit_now = FAST_HIT && (state == S_LOOKUP) && req_hit;
 
-    assign c_ack_o = ack_r | hit_now;
-    assign c_dat_o = hit_now ? data_q : dat_r;
+    assign c_ack_o = cfg_sel ? cfg_ack_o : (ack_r | hit_now);
+    assign c_dat_o = cfg_sel ? cfg_dat_o : (hit_now ? data_q : dat_r);
 
     // word being written during a fill
     assign fill_didx = { req_idx, fill_cnt };
@@ -409,9 +456,15 @@ module wb_icache #(
                         flush_pending <= 1'b0;
                         flush_idx <= 0;
                         state <= S_FLUSH;
+                    // !cfg_sel: our own registers are answered above,
+                    // upstream. Forwarding them would send the access
+                    // to the arbiter and back to this module -- the
+                    // deadlock described at the top of this file.
+                    //
                     // !c_ack_o: don't re-accept the request we are
                     // still acknowledging this cycle.
-                    end else if (c_cyc_i && c_stb_i && !c_ack_o) begin
+                    end else if (c_cyc_i && c_stb_i && !c_ack_o &&
+                        !cfg_sel) begin
                         req_adr <= c_adr_i;
 
                         if (req_cacheable) begin
@@ -450,7 +503,20 @@ module wb_icache #(
                         m_adr_o <= { req_adr[31:IDX_LSB],
                             {WOFF_BITS{1'b0}}, 2'b00 };
                         m_dat_o <= 32'b0;
-                        m_sel_o <= 4'b1111;
+                        // sel = 0000, NOT 1111. This is load bearing:
+                        // rtl/mem/sdram_kianv.v decides read-vs-write
+                        // from wb_sel_i (picorv32's wstrb convention,
+                        // where sel==0 means read and nonzero sel
+                        // names the byte lanes to WRITE) -- it never
+                        // looks at wb_we_i. With sel=1111 every line
+                        // fill executed the controller's WRITE path,
+                        // zeroing the code it was meant to fetch and
+                        // returning stale data, which is why enabling
+                        // this cache crashed the kernel on SDRAM
+                        // boards while the BIOS and all data traffic
+                        // (both of which carry wstrb correctly) were
+                        // fine.
+                        m_sel_o <= 4'b0000;
                         m_we_o <= 1'b0;
                         m_stb_o <= 1'b1;
                         m_cyc_o <= 1'b1;
@@ -468,8 +534,29 @@ module wb_icache #(
                             fill_want_got <= 1'b1;
                         end
 
+                        // STB drops between words, CYC does NOT.
+                        //
+                        // This is the Wishbone convention -- CYC marks
+                        // the whole bus cycle, STB marks each transfer
+                        // within it -- and here it is load bearing for
+                        // two reasons:
+                        //
+                        //  1. CYC is what holds the arbiter grant
+                        //     (rtl/arbiter_main.v only moves the grant
+                        //     when the current master drops CYC). The
+                        //     old code released the bus between every
+                        //     word, so the GPU blitter could take it
+                        //     mid-line-fill.
+                        //  2. rtl/mem/sdram_kianv.v gates its ack on
+                        //     CYC combinationally and tracks open rows
+                        //     across a burst. A line fill is four
+                        //     sequential words in the same row, which
+                        //     is exactly the case that tracking exists
+                        //     to serve -- but only if it is one bus
+                        //     cycle rather than four.
+                        //
+                        // CYC is dropped once, in S_FILL_END.
                         m_stb_o <= 1'b0;
-                        m_cyc_o <= 1'b0;
 
                         if (fill_cnt == (LINE_WORDS-1)) begin
                             state <= S_FILL_END;
@@ -488,11 +575,14 @@ module wb_icache #(
                 S_FILL_SEQ: begin
                     m_adr_o <= { req_adr[31:IDX_LSB], fill_cnt, 2'b00 };
                     m_stb_o <= 1'b1;
-                    m_cyc_o <= 1'b1;
+                    m_cyc_o <= 1'b1;   // already high; held for clarity
                     state <= S_FILL;
                 end
 
                 S_FILL_END: begin
+                    // the whole line is in; release the bus here
+                    m_cyc_o <= 1'b0;
+
                     // { valid, tag }. If a flush was requested while
                     // this fill was in flight, flush_pending is set
                     // and S_IDLE will walk the whole array next --

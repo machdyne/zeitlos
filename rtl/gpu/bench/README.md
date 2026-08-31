@@ -1,8 +1,10 @@
-# gpu_blit.v glyph-path testbenches
+# GPU and HID testbenches
 
-Self-checking testbenches for the hardware glyph blitter
-(`rtl/gpu/gpu_blit.v`'s `CTRL_GLYPH` mode), written against
-`iverilog`.
+Self-checking testbenches, written against `iverilog`. Originally all
+for the hardware glyph blitter (`rtl/gpu/gpu_blit.v`'s `CTRL_GLYPH`
+mode); `tb_video_mode.v`, `tb_game_mode.v` and `tb_gamepad.v` have
+since joined them, so the directory name is now broader than its
+history.
 
 - `tb_glyph.v` -- draws two synthetic 4-row glyphs back-to-back and
   checks the resulting framebuffer rows are correct. Catches the
@@ -37,14 +39,85 @@ write that follows it, and only `vram.v`'s specific always-active
 design makes that pattern land correctly). `tb_line.v` and
 `tb_arbiter_stress.v` use the real `vram.v` directly.
 
+- `tb_scroll_timing.v` -- not a correctness test: measures what the
+  scroll blit COSTS, in cycles, against the glyph blits it replaces,
+  through the same real blitter + arbiter + vram trio so the two
+  numbers are comparable. The figures an app needs to decide whether
+  blitting pays at all (see `docs/gpu_blitter.md`, "Correct but
+  slower: when the blit is the wrong tool"), and the check that the
+  stale-ack fix costs the glyph path nothing.
+
+- `tb_system_vscroll.v` -- the VRAM-to-VRAM copy path (hardware
+  scrolling) through the real `rtl/arbiter_vram.v` and real
+  `rtl/mem/vram.v` together, single master. This is the bench that
+  finally reproduced the scroll-by-blit display corruption
+  (`docs/gpu_blitter.md`, "The fix: a stale ack, not a wrong
+  address"): `tb_vscroll.v` and `tb_edge.v` model the framebuffer as
+  an idealized slave whose ack pulses exactly once, and a clean-ack
+  model is structurally blind to the stale-ack hazard the real
+  arbiter + vram pair produce. Snapshot-first checking throughout
+  (source region copied aside BEFORE the blit, destination compared
+  against the snapshot, never against live memory). Covers the exact
+  hardware failure case (x=46 y=53 w=303 h=225 dy=-9), an alignment
+  sweep, the prime (`sbit0 < 0`) case, `sx != dx` shifted copies,
+  repeated overlapping scrolls, and unclipped/clipped/XOR fills
+  through the real arbiter. Fails 367 checks on the pre-fix RTL, so
+  it is proven sensitive rather than merely green. **The gate for any
+  change to the copy path's state machine.**
+
+- `tb_game_mode.v` -- `rtl/gpu/gpu_video.v`'s game mode. Tests
+  ADDRESSES rather than pixels, since the feature is an address
+  transform: for a given viewport origin and mode, which framebuffer
+  column and row does each physical pixel come from? That is exactly
+  the `x`/`y` output pair. Covers the desktop 1:1 regression, 2x
+  doubling verified exhaustively across a full line, clamp and
+  toroidal wrap, frame-boundary adoption of a mid-frame write, and the
+  frame counter. Runs ~40 full 800x525 frames, so it takes a few
+  minutes rather than a few seconds. See `docs/game_mode.md`.
+- `tb_gamepad.v` -- `rtl/usb_hid.v`'s gamepad register. Uses a STUB
+  `usb_hid_host` (the real core needs an actual USB device bit-banging
+  a low-speed link to produce a report at all, and none of the
+  behaviour under test lives in that core). Covers bit order for every
+  button individually, the clock-domain tearing fix, hot unplug with a
+  direction held, and the interrupt on device type change. Fast.
+  See `docs/gamepad.md`.
+- `tb_composite.v` -- `rtl/gpu/gpu_video.v`'s composite (CVBS) output.
+  MEASURES rather than inspects: a composite signal is wrong in exactly
+  one way that matters, which is that a receiver will not lock to it,
+  and whether it locks is a question about microseconds and voltages.
+  So it times the real waveform with `$realtime` and checks line period,
+  sync width, field rate, line count, the vertical broad pulses and
+  their serrations, that exactly three DAC levels are ever driven, and
+  that a source pixel is four pixel clocks wide. Build with
+  `-DGPU_COMPOSITE`, and add `-DTB_PAL` for PAL. Takes a couple of
+  minutes -- it simulates whole fields, because that is the only way to
+  measure a field rate. See `docs/composite.md`.
+
 ## Status
 
-All four currently pass against the fixed `rtl/gpu/gpu_blit.v`. They
-did **not** reproduce the horizontal (~32-64px) corruption reported
-near freshly-typed text in `term` after the row-shift fix landed --
-see `docs/window_manager.md`, "Known limitations", the "Unresolved:
-horizontal garbage..." entry, for the current state of that
-investigation and what's been ruled out.
+Note on the apps: `text` uses hardware scrolling; `term` and `read` do
+not (reverted to their pre-blit versions -- see `docs/gpu_blitter.md`,
+"Where this ended up"). The RTL fix and these benches stand regardless
+-- the corruption was real and `text` depends on the fix.
+
+
+`tb_system_vscroll.v`, `tb_vscroll.v`, `tb_edge.v`, `tb_memblit.v`,
+`tb_rop.v` and `tb_straddle.v` pass against the fixed
+`rtl/gpu/gpu_blit.v` (the `ST_MEM_SETTLE1/2` stale-ack fix).
+
+Observed while regressing that fix: `tb_glyph.v`, `tb_line.v` and
+`tb_arbiter_stress.v` fail identically -- byte-for-byte the same
+output -- on the RTL both before and after it, so they were already
+failing beforehand. Most likely bench rot from an earlier RTL change
+rather than a hardware fault, since glyphs demonstrably render
+correctly on hardware; worth a separate look, `tb_arbiter_stress.v`
+especially, since it is the designated cross-master canary.
+
+The original four did **not** reproduce the horizontal (~32-64px)
+corruption reported near freshly-typed text in `term` after the
+row-shift fix landed -- see `docs/window_manager.md`, "Known
+limitations", the "Unresolved: horizontal garbage..." entry, for the
+current state of that investigation and what's been ruled out.
 
 ## Running
 
@@ -80,6 +153,37 @@ iverilog -g2005 -o /tmp/tb_arbiter.out \
     rtl/gpu/bench/tb_arbiter_stress.v rtl/gpu/gpu_blit.v \
     /tmp/glyph_lintfix.v rtl/arbiter_vram.v /tmp/vram_fix.v
 vvp /tmp/tb_arbiter.out
+
+# tb_scroll_timing.v -- cycle measurement, same build as below.
+iverilog -g2005 -o /tmp/tb_time.out \
+    rtl/gpu/bench/tb_scroll_timing.v rtl/gpu/gpu_blit.v \
+    rtl/arbiter_vram.v /tmp/vram_fix.v
+vvp /tmp/tb_time.out
+
+# tb_system_vscroll.v -- real arbiter + real vram, same vram_fix as
+# tb_arbiter_stress above. -g2012 also works and needs no vram fixup.
+iverilog -g2005 -o /tmp/tb_sys.out \
+    rtl/gpu/bench/tb_system_vscroll.v rtl/gpu/gpu_blit.v \
+    rtl/arbiter_vram.v /tmp/vram_fix.v
+vvp /tmp/tb_sys.out
+
+# tb_game_mode.v -- gpu_video.v alone. Its port list ends in a trailing
+# comma, which yosys accepts and iverilog does not.
+sed 's/^\tinput \[31:0\] gb_dat_i,$/\tinput [31:0] gb_dat_i/' \
+    rtl/gpu/gpu_video.v > /tmp/gpu_video_fix.v
+iverilog -g2005 -o /tmp/tb_game.out \
+    rtl/gpu/bench/tb_game_mode.v /tmp/gpu_video_fix.v
+vvp /tmp/tb_game.out          # several minutes
+
+# tb_gamepad.v -- usb_hid.v alone, with its own stub usb_hid_host
+# built into the testbench. usb_hid.v needs three of the same kind of
+# lint fixup: the empty #() parameter list, a trailing comma in the
+# port list, and curs_x/curs_y declared both as output nets and as
+# regs. All three are the file's existing style and yosys is happy
+# with them.
+iverilog -g2005 -DUSB_HID -o /tmp/tb_pad.out \
+    rtl/gpu/bench/tb_gamepad.v rtl/usb_hid.v
+vvp /tmp/tb_pad.out           # about a second
 ```
 
 All four print `RESULT: PASS` or `RESULT: FAIL` plus the offending

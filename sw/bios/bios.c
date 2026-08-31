@@ -399,6 +399,7 @@ void load_zeitlos() {
 	// rtl/sysctl.v decodes this window unconditionally (csrs_wb keeps
 	// the whole 0x7 nibble when there's no cache). An undecoded write
 	// here would never be acked and would hang the BIOS outright.
+	//reg_icache_ctrl = 0x2;		// flush only
 	reg_icache_ctrl = 0x3;		// enable | flush
 
 	print("done.\n");

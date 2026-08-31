@@ -25,6 +25,8 @@ module tb_cache;
 
     localparam CACHE_KB   = 8;
     localparam LINE_WORDS = 4;
+    // overridable: iverilog -Ptb_cache.FAST_HIT=0
+    parameter  FAST_HIT   = 1;
 
     localparam MEM_WORDS  = 8192;      // 32KB of model memory
     localparam MEM_BASE   = 32'h4000_0000;
@@ -85,7 +87,9 @@ module tb_cache;
 
     wb_icache #(
         .CACHE_KB(CACHE_KB),
-        .LINE_WORDS(LINE_WORDS)
+        .LINE_WORDS(LINE_WORDS),
+        .FAST_HIT(FAST_HIT),
+        .FAST_HIT(FAST_HIT)
     ) dut (
         .wb_clk_i(clk),
         .wb_rst_i(rst),
@@ -109,13 +113,7 @@ module tb_cache;
         .m_cyc_o(m_cyc),
         .m_ack_i(m_ack),
 
-        .cfg_adr_i(cfg_adr),
-        .cfg_dat_i(cfg_dat_o),
-        .cfg_dat_o(cfg_dat_i),
-        .cfg_we_i(cfg_we),
-        .cfg_stb_i(cfg_stb),
-        .cfg_cyc_i(cfg_cyc),
-        .cfg_ack_o(cfg_ack)
+        .c_cfg_hit(cfg_hit)
     );
 
     // -- clock -----------------------------------------------------
@@ -167,6 +165,34 @@ module tb_cache;
         end
     end
 
+    // -- CYC continuity monitor ------------------------------------
+    //
+    // The original testbench passed both before and after the bug that
+    // stopped the machine booting, because a synthetic slave does not
+    // care whether CYC is held. Real hardware does, twice over:
+    // arbiter_main only moves the grant when the current master drops
+    // CYC, and sdram_kianv gates its ack on CYC while tracking open
+    // rows across a burst.
+    //
+    // So assert the protocol directly: once a multi-word fill starts,
+    // CYC must stay asserted until the line is complete.
+    integer fill_cyc_drops;
+    reg in_fill;
+
+    initial begin fill_cyc_drops = 0; in_fill = 0; end
+
+    always @(posedge clk) begin
+        if (!rst) begin
+            // a fill is running whenever the DUT is in S_FILL/S_FILL_SEQ
+            if (dut.state == 3'd2 || dut.state == 3'd3) begin
+                if (in_fill && !m_cyc) fill_cyc_drops = fill_cyc_drops + 1;
+                in_fill <= 1'b1;
+            end else begin
+                in_fill <= 1'b0;
+            end
+        end
+    end
+
     // -- bus tasks -------------------------------------------------
 
     task cpu_read;
@@ -211,21 +237,28 @@ module tb_cache;
         end
     endtask
 
+    // Registers are now reached through the CPU port at CFG_BASE,
+    // upstream of the bus -- see rtl/cache.v. These accesses must NOT
+    // produce any activity on the memory side; test 11 checks that.
+    localparam [31:0] CFG_BASE = 32'h7000_0100;
+
     task cfg_write;
         input [31:0] a;
         input [31:0] d;
         begin
             @(posedge clk);
-            cfg_adr <= a;
-            cfg_dat_o <= d;
-            cfg_we <= 1'b1;
-            cfg_stb <= 1'b1;
-            cfg_cyc <= 1'b1;
+            c_adr <= CFG_BASE | (a << 2);
+            c_dat_o <= d;
+            c_we <= 1'b1;
+            c_sel <= 4'b1111;
+            c_instr <= 1'b0;
+            c_stb <= 1'b1;
+            c_cyc <= 1'b1;
             @(posedge clk);
-            while (!cfg_ack) @(posedge clk);
-            cfg_stb <= 1'b0;
-            cfg_cyc <= 1'b0;
-            cfg_we <= 1'b0;
+            while (!c_ack) @(posedge clk);
+            c_stb <= 1'b0;
+            c_cyc <= 1'b0;
+            c_we <= 1'b0;
             @(posedge clk);
         end
     endtask
@@ -235,15 +268,17 @@ module tb_cache;
         output [31:0] d;
         begin
             @(posedge clk);
-            cfg_adr <= a;
-            cfg_we <= 1'b0;
-            cfg_stb <= 1'b1;
-            cfg_cyc <= 1'b1;
+            c_adr <= CFG_BASE | (a << 2);
+            c_we <= 1'b0;
+            c_sel <= 4'b1111;
+            c_instr <= 1'b0;
+            c_stb <= 1'b1;
+            c_cyc <= 1'b1;
             @(posedge clk);
-            while (!cfg_ack) @(posedge clk);
-            d = cfg_dat_i;
-            cfg_stb <= 1'b0;
-            cfg_cyc <= 1'b0;
+            while (!c_ack) @(posedge clk);
+            d = c_dat_i;
+            c_stb <= 1'b0;
+            c_cyc <= 1'b0;
             @(posedge clk);
         end
     endtask
@@ -272,8 +307,6 @@ module tb_cache;
 
         c_adr = 0; c_dat_o = 0; c_we = 0; c_sel = 0;
         c_stb = 0; c_cyc = 0; c_instr = 0;
-        cfg_adr = 0; cfg_dat_o = 0; cfg_we = 0;
-        cfg_stb = 0; cfg_cyc = 0;
 
         for (i = 0; i < MEM_WORDS; i = i + 1)
             mem[i] = 32'hC0DE_0000 + i;
@@ -444,6 +477,38 @@ module tb_cache;
                 cfg_write(32'd0, 32'h3);
                 repeat (2) @(posedge clk);
             end
+        end
+
+        // --- 11: register access must NOT touch the memory bus ----
+        //
+        // This is the regression test for the deadlock that stopped the
+        // machine booting. The registers used to be a slave on the main
+        // bus, so a write to them was forwarded down the bypass path,
+        // through wb_arbiter_main, and back to this module's own slave
+        // port -- which was busy waiting for that very transaction.
+        //
+        // The invariant is simple and worth asserting directly: an
+        // access to CFG_BASE produces ZERO activity on the memory side.
+        $display("-- test 11: register access stays off the memory bus");
+        mem_reads = 0;
+        cfg_read(32'd3, got);
+        cfg_write(32'd0, 32'h3);
+        cfg_read(32'd1, hits_after);
+        repeat (4) @(posedge clk);
+        $display("   4 register accesses -> %0d memory accesses (expect 0)",
+            mem_reads);
+        if (mem_reads != 0) begin
+            errors = errors + 1;
+            $display("FAIL: register access reached the memory bus");
+        end
+
+        // --- 12: CYC held for the whole line fill -----------------
+        $display("-- test 12: CYC held across multi-word line fills");
+        $display("   CYC drops mid-fill: %0d (expect 0)", fill_cyc_drops);
+        if (fill_cyc_drops != 0) begin
+            errors = errors + 1;
+            $display("FAIL: bus released mid-fill -- arbiter grant can be");
+            $display("      lost and sdram open-row tracking broken");
         end
 
         // --- summary ----------------------------------------------

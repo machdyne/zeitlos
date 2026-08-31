@@ -3,7 +3,7 @@
  * Copyright (c) 2025 Lone Dynamics Corporation. All rights reserved.
  *
  * RMII Ethernet MAC (LAN8720A PHY). mozart_ml1 only -- an optional
- * alternative to rtl/spibb_eth.v (SPI ENC28J60) for boards that have
+ * alternative to the SPI ENC28J60 path (rtl/spim.v) for boards that have
  * an RMII PHY but no SPI Ethernet MAC.
  *
  * No MDIO/MDC on this board -- see boards/mozart_ml1.lpf's PULLMODE=UP
@@ -27,11 +27,19 @@
  * CRC32 implementation converges to when run continuously across
  * frame-data-plus-its-own-FCS, no final invert; verified against
  * Python's zlib.crc32 on synthetic frames while writing this, not
- * just transcribed from memory -- see tb/ethmac_rmii_tb.v). A single
- * receive buffer holds one frame at a time; a new frame arriving
- * before software has popped the previous one is dropped and
- * counted, not double-buffered (deliberately simple for a first
- * version -- see the register map below).
+ * just transcribed from memory -- see rtl/tb/tb_ethmac_rmii.v). The
+ * receive buffer is a FIFO of `ETH_RX_SLOTS frames (default 4, one
+ * full-size frame per slot). A frame arriving when every slot is
+ * still unread is dropped and counted -- see rx_drop_count in the
+ * register map below, which is how to tell that case apart from a
+ * CRC error.
+ *
+ * It held exactly ONE frame until this version, which meant any
+ * burst arriving faster than software could drain it -- a screenful
+ * of `top` over telnet, say -- lost all but the first frame and
+ * waited on TCP retransmission timeouts to recover. The symptom is
+ * "the network is slow", not "the network is broken", which is what
+ * made it hard to see.
  *
  * PHASE 3 (this version): TX datapath. Software writes a frame into
  * TX_BUF, latches its length via TX_LEN, then triggers TX_CTRL.
@@ -109,7 +117,34 @@ module ethmac_rmii_wb #()
 	output [1:0] eth_txd,
 	output eth_tx_en,
 	input eth_crs_dv,
-	output eth_rst_n
+	output eth_rst_n,
+
+	// -- receive interrupt --
+	//
+	// A LEVEL, not a pulse: high for exactly as long as a frame is
+	// waiting in the RX buffer. It is rx_ready_sync, the same bit
+	// STATUS bit 2 reports, brought out to the CPU's interrupt
+	// controller.
+	//
+	// A level rather than an edge on purpose. The driver clears it by
+	// consuming the frame, which is the only thing that can clear it,
+	// so there is no window in which the interrupt has been
+	// acknowledged but a frame is still waiting -- the classic way an
+	// edge-triggered network interrupt loses a packet and wedges the
+	// link until the next one happens to arrive.
+	//
+	// It also costs nothing. rx_ready_sync already exists and is
+	// already synchronised into the wishbone domain for the STATUS
+	// read (see its own comment on the quasi-static crossing); this is
+	// a wire.
+	//
+	// Why it matters: without this, a driver has no way to learn that
+	// a packet arrived except to keep asking. sw/apps/net polled on a
+	// 1-tick timer, waking ~732 times a second to discover nothing had
+	// happened -- and because the scheduler shares the CPU between
+	// RUNNABLE processes, that came out of whatever was in the
+	// foreground rather than out of idle time.
+	output eth_int_o
 );
 
 	localparam REG_STATUS  = 0;
@@ -121,6 +156,41 @@ module ethmac_rmii_wb #()
 	localparam RXBUF_WORDS = 512;  // 2048 bytes -- max standard frame is 1518
 	localparam TXBUF_BASE  = 640;  // word offset -- byte offset 0xA00
 	localparam TXBUF_WORDS = 512;  // 2048 bytes
+
+	// -- how many frames the RX buffer holds --
+	//
+	// One slot per frame, RXBUF_WORDS each, so any legal frame fits
+	// in any slot and there is no length-dependent packing to get
+	// wrong. Power of two, two or more: the pointer comparison below
+	// is the standard gray-coded async-FIFO one and needs both.
+	//
+	// Why more than one. A single slot drops every frame that
+	// arrives before software has popped the previous one, and at
+	// 100Mbit a 1518-byte frame occupies the wire for ~122us while
+	// the software that drains it runs when the scheduler next gets
+	// to it -- so a BURST is dropped almost entirely. That is what a
+	// screenful of `top` over telnet is: a handful of back-to-back
+	// segments. Every drop costs a TCP retransmission timeout, which
+	// is why the symptom is "slow" rather than "broken".
+	//
+	// Sizing: TCP advertises a 2048-byte receive window
+	// (sw/apps/net/tcp.c), so a peer will not have more than that in
+	// flight -- two full-MTU frames, or many small ones. Four slots
+	// (8KB) covers the window with room to spare and matches the
+	// ENC28J60's 8KB ring, which is the configuration where this
+	// symptom does not occur.
+	//
+	// Cost is 2KB of block RAM per slot. RMII only builds on ECP5-45
+	// boards (sergei_ml1, mozart_ml1), where that is not scarce.
+`ifdef ETH_RX_SLOTS
+	localparam RX_SLOTS = `ETH_RX_SLOTS;
+`else
+	localparam RX_SLOTS = 4;
+`endif
+	localparam RX_PW = (RX_SLOTS <= 2)  ? 1 :
+	                   (RX_SLOTS <= 4)  ? 2 :
+	                   (RX_SLOTS <= 8)  ? 3 :
+	                   (RX_SLOTS <= 16) ? 4 : 5;
 
 	// Ethernet FCS residual: running the bit-serial CRC32 update below
 	// (init 0xFFFFFFFF, reflected poly 0xEDB88320, no final invert)
@@ -195,7 +265,17 @@ module ethmac_rmii_wb #()
 	// (this section). only ever written from this always block
 	// (single driver), only ever read (never written) from the CPU
 	// side's always block further down.
-	reg [31:0] rxbuf [0:RXBUF_WORDS-1];
+	reg [31:0] rxbuf [0:(RXBUF_WORDS*RX_SLOTS)-1];
+
+	// Per-slot frame length, written in this domain on the same edge
+	// that commits the slot. Crosses to wb_clk_i without a
+	// synchronizer, on the same quasi-static argument the old single
+	// rx_len used: it is written BEFORE the write pointer advances,
+	// and the consumer only looks at a slot after the gray-coded
+	// pointer has crossed two flip-flops -- by which time this has
+	// long settled and nothing is writing it. Same rule for the slot
+	// contents themselves.
+	reg [10:0] rx_len_slot [0:RX_SLOTS-1];
 
 	// continuously-updating byte assembler. RMII delivers 2 bits per
 	// eth_refclk cycle; d0 (eth_rxd, first cycle of a byte) ends up
@@ -210,31 +290,69 @@ module ethmac_rmii_wb #()
 	reg [10:0] byte_cnt = 0;       // bytes received this frame (0..2047)
 	reg [31:0] rx_crc = 32'hFFFFFFFF;
 
-	// handoff to software: single-slot semaphore, plus a toggle-based
-	// CDC handshake for the "pop" request coming from wb_clk_i (see
-	// pop_toggle below).
-	reg rx_avail = 0;
-	reg [10:0] rx_len = 0;
-	reg [3:0] rx_drop_count = 0;   // dropped: buffer still full
+	// Handoff to software: a gray-coded asynchronous FIFO of slots.
+	//
+	// This replaces a single-slot semaphore plus a toggle handshake
+	// for the pop. The toggle is gone -- the read pointer itself is
+	// what crosses back now, which is both simpler and strictly more
+	// informative, since it says HOW MANY slots software has taken
+	// rather than only that it took one.
+	//
+	// Pointers are RX_PW+1 bits: the extra top bit is what
+	// distinguishes full from empty when the low bits are equal.
+	// Standard construction, and the reason both pointers are
+	// converted to gray before crossing -- a binary counter can have
+	// several bits changing on one edge, and sampling it mid-change
+	// in another clock domain yields a value that was never real.
+	// Gray changes exactly one bit per increment, so a mid-change
+	// sample is always either the old value or the new one.
+	reg [RX_PW:0] rx_wr_ptr = 0;        // eth_refclk domain
+	reg [RX_PW:0] rx_wr_gray = 0;
+	reg [RX_PW:0] rx_rd_gray_meta = 0;  // rd pointer, crossed in
+	reg [RX_PW:0] rx_rd_gray_sync = 0;
+
+	reg [3:0] rx_drop_count = 0;   // dropped: FIFO full
 	reg [3:0] rx_err_count = 0;    // dropped: bad CRC / too short
 
-	reg pop_toggle_meta = 0;
-	reg pop_toggle_sync = 0;
-	reg pop_toggle_sync_d = 0;
+	// Full when the write pointer sits exactly one lap ahead of the
+	// read pointer: gray pointers equal except for the top TWO bits,
+	// both inverted.
+	//
+	// Compared against the CURRENT write pointer, not the next one.
+	// Using the next pointer here is the usual way to REGISTER a full
+	// flag one cycle early, but read combinationally it means "would
+	// be full after one more write", which refuses the write that
+	// fills the last slot and quietly costs a slot of capacity.
+	//
+	// Written as a masked compare rather than the more familiar
+	// { ~rd[PW:PW-1], rd[PW-2:0] } concatenation because that form
+	// has no legal spelling at RX_SLOTS = 2, where PW is 1 and
+	// [PW-2:0] is [-1:0]. Here RX_LOW_MASK is simply zero in that
+	// case and the low-bit term drops out on its own.
+	localparam [RX_PW:0] RX_LOW_MASK = (1 << (RX_PW - 1)) - 1;
+
+	wire [RX_PW:0] rx_wr_gray_next =
+		((rx_wr_ptr + 1'b1) >> 1) ^ (rx_wr_ptr + 1'b1);
+	wire rx_full =
+		(rx_wr_gray[RX_PW:RX_PW-1] == ~rx_rd_gray_sync[RX_PW:RX_PW-1]) &&
+		((rx_wr_gray & RX_LOW_MASK) == (rx_rd_gray_sync & RX_LOW_MASK));
+
+	// Which slot the RX engine is filling right now.
+	wire [RX_PW-1:0] rx_wr_slot = rx_wr_ptr[RX_PW-1:0];
 
 	wire [31:0] crc_after_bit0 = crc32_update(rx_crc, eth_rxd[0]);
 	wire [31:0] crc_after_bit1 = crc32_update(crc_after_bit0, eth_rxd[1]);
 
 	always @(posedge eth_refclk) begin
 
-		// cross the wb_clk_i-domain pop request in -- a plain 2-flop
-		// synchronizer on the toggle bit, then edge-detect it here.
-		// safe for a single bit that only ever changes once per
-		// software read (nowhere near every eth_refclk cycle).
-		pop_toggle_meta <= pop_toggle;
-		pop_toggle_sync <= pop_toggle_meta;
-		pop_toggle_sync_d <= pop_toggle_sync;
-		if (pop_toggle_sync != pop_toggle_sync_d) rx_avail <= 1'b0;
+		// Cross the consumer's read pointer in, gray-coded, through
+		// the usual two flops. Nothing is edge-detected here: the
+		// pointer's VALUE is the state, so a sample that is one
+		// update stale simply means this side briefly believes the
+		// FIFO is fuller than it is -- conservative, never wrong in
+		// the dangerous direction.
+		rx_rd_gray_meta <= rx_rd_gray;
+		rx_rd_gray_sync <= rx_rd_gray_meta;
 
 		if (!eth_crs_dv) begin
 
@@ -245,9 +363,9 @@ module ethmac_rmii_wb #()
 			// same non-blocking-assignment trick used throughout:
 			// the clears below don't take effect until next edge.
 			if (sfd_found) begin
-				if (rx_avail) begin
-					// buffer still full -- software hasn't popped
-					// the previous frame yet. drop this one.
+				if (rx_full) begin
+					// every slot still unread -- software is genuinely
+					// behind, not merely mid-frame. drop this one.
 					if (rx_drop_count != 4'hF) rx_drop_count <= rx_drop_count + 1'b1;
 				end else if (byte_cnt >= 11'd64 && rx_crc == CRC32_RESIDUAL) begin
 					// byte_cnt includes the 4-byte FCS (it has to, for
@@ -257,8 +375,13 @@ module ethmac_rmii_wb #()
 					// bytes are still sitting in rxbuf past this
 					// length -- harmless, software just never reads
 					// that far.
-					rx_len <= byte_cnt - 11'd4;
-					rx_avail <= 1'b1;
+					// Commit: length first, then the pointer. The
+					// consumer cannot see the slot until the pointer
+					// crosses, which is what makes writing the length
+					// without a synchronizer safe.
+					rx_len_slot[rx_wr_slot] <= byte_cnt - 11'd4;
+					rx_wr_ptr <= rx_wr_ptr + 1'b1;
+					rx_wr_gray <= rx_wr_gray_next;
 				end else begin
 					if (rx_err_count != 4'hF) rx_err_count <= rx_err_count + 1'b1;
 				end
@@ -294,12 +417,15 @@ module ethmac_rmii_wb #()
 
 			if (dibit_cnt == 2'b11) begin
 				dibit_cnt <= 0;
-				if (!rx_avail) begin
+				if (!rx_full) begin
+					// {slot, word} -- every slot is RXBUF_WORDS long,
+					// so the slot index is simply the high address
+					// bits and no multiply is inferred.
 					case (byte_cnt[1:0])
-						2'b00: rxbuf[byte_cnt[10:2]][7:0]   <= new_byte;
-						2'b01: rxbuf[byte_cnt[10:2]][15:8]  <= new_byte;
-						2'b10: rxbuf[byte_cnt[10:2]][23:16] <= new_byte;
-						2'b11: rxbuf[byte_cnt[10:2]][31:24] <= new_byte;
+						2'b00: rxbuf[{rx_wr_slot, byte_cnt[10:2]}][7:0]   <= new_byte;
+						2'b01: rxbuf[{rx_wr_slot, byte_cnt[10:2]}][15:8]  <= new_byte;
+						2'b10: rxbuf[{rx_wr_slot, byte_cnt[10:2]}][23:16] <= new_byte;
+						2'b11: rxbuf[{rx_wr_slot, byte_cnt[10:2]}][31:24] <= new_byte;
 					endcase
 					if (byte_cnt != 11'd2047) byte_cnt <= byte_cnt + 1'b1;
 				end
@@ -479,7 +605,7 @@ module ethmac_rmii_wb #()
 	// ===========================================================
 
 	// tx_busy crosses via a real 2-flop synchronizer, same as
-	// crs_dv/refclk_hb/rx_avail.
+	// crs_dv/refclk_hb and the RX FIFO pointers.
 	reg tx_busy_meta = 0;
 	reg tx_busy_sync = 0;
 
@@ -499,50 +625,82 @@ module ethmac_rmii_wb #()
 	reg [10:0] tx_len_reg = 0;
 	reg tx_start_toggle = 0;
 
-	// rx_avail crosses via a real 2-flop synchronizer, same as
-	// crs_dv/refclk_hb above.
-	reg rx_ready_meta = 0;
-	reg rx_ready_sync = 0;
+	// Consumer side of the RX FIFO. The read pointer lives here and
+	// crosses back to the RX engine gray-coded; the write pointer
+	// crosses in the same way.
+	reg [RX_PW:0] rx_rd_ptr = 0;
+	reg [RX_PW:0] rx_rd_gray = 0;
+	reg [RX_PW:0] rx_wr_gray_meta = 0;
+	reg [RX_PW:0] rx_wr_gray_sync = 0;
 
 	always @(posedge wb_clk_i) begin
-		rx_ready_meta <= rx_avail;
-		rx_ready_sync <= rx_ready_meta;
+		rx_wr_gray_meta <= rx_wr_gray;
+		rx_wr_gray_sync <= rx_wr_gray_meta;
 	end
 
-	// rx_len crosses WITHOUT a bit-by-bit synchronizer -- normally
-	// unsafe for a multi-bit value, but safe here because rx_len is
-	// quasi-static: it's written in the eth_refclk domain on the
-	// exact same edge rx_avail is set, and never changes again until
-	// software pops the buffer and a whole new frame completes. By
-	// the time rx_ready_sync above has propagated (a handful of
-	// eth_refclk + wb_clk_i cycles after that edge), rx_len has long
-	// since settled and nothing is still writing it. Software must
-	// still only trust this value while rx_ready_sync (STATUS bit 2)
-	// reads 1 -- same rule as the buffer contents below.
+	// Empty when the pointers agree. A stale write-pointer sample
+	// only ever makes this side believe the FIFO is emptier than it
+	// is, which costs a little latency and never a wrong read.
+	wire rx_ready_sync = (rx_rd_gray != rx_wr_gray_sync);
+
+	// Which slot software is looking at. RX_LEN and the RX_BUF window
+	// both follow it, so the register interface is unchanged: from
+	// software's side there is still one frame visible at a time, at
+	// the same addresses, popped the same way.
+	wire [RX_PW-1:0] rx_rd_slot = rx_rd_ptr[RX_PW-1:0];
+
+	wire [RX_PW:0] rx_rd_gray_next =
+		((rx_rd_ptr + 1'b1) >> 1) ^ (rx_rd_ptr + 1'b1);
+
+	// Word offset within the visible slot. Subtracted at full width
+	// and narrowed afterwards, NOT by slicing wb_adr_i first: the
+	// window runs 64..575, so the low nine bits of an address at the
+	// top of it are smaller than RXBUF_BASE and the subtraction would
+	// borrow, wrapping the offset to the far end of the slot. Legal
+	// frames never reach that far, which is exactly the kind of bug
+	// that sits unnoticed until something reads the whole window.
+	wire [31:0] rx_win_off = wb_adr_i - RXBUF_BASE;
+	wire [8:0] rx_word_off = rx_win_off[8:0];
+
+	// The slot's length crosses WITHOUT a bit-by-bit synchronizer --
+	// normally unsafe for a multi-bit value, but safe here because it
+	// is quasi-static: it is written in the eth_refclk domain BEFORE
+	// the write pointer advances, and never changes again until that
+	// slot comes round a full lap later. By the time the gray-coded
+	// write pointer has crossed its two flops and made the slot
+	// visible, the length has long since settled and nothing is
+	// still writing it. Software must still only trust it while
+	// rx_ready_sync (STATUS bit 2) reads 1 -- same rule as the buffer
+	// contents below.
+	assign eth_int_o = rx_ready_sync;
+
 	reg [10:0] rx_len_sync = 0;
 
 	always @(posedge wb_clk_i) begin
-		rx_len_sync <= rx_len;
+		rx_len_sync <= rx_len_slot[rx_rd_slot];
 	end
-
-	// pop request: a toggle, not a pulse -- avoids the request being
-	// missed if it lands on the "wrong" eth_refclk edge relative to a
-	// single-cycle pulse. cleared by nothing; it just keeps toggling.
-	reg pop_toggle = 0;
 
 	always @(posedge wb_clk_i) begin
 
 		wb_ack_o <= 1'b0;
 
 		if (wb_rst_i) begin
-			pop_toggle <= 1'b0;
+			rx_rd_ptr <= 0;
+			rx_rd_gray <= 0;
 			tx_start_toggle <= 1'b0;
 			tx_len_reg <= 0;
 		end else if (wb_cyc_i && wb_stb_i && !wb_ack_o) begin
 
 			if (wb_we_i) begin
 				if (wb_adr_i == REG_RXCTRL) begin
-					pop_toggle <= ~pop_toggle;
+					// Pop: release this slot and move to the next.
+					// Ignored when empty, so a spurious pop cannot
+					// run the pointer past the write side and make
+					// the FIFO look full of garbage.
+					if (rx_ready_sync) begin
+						rx_rd_ptr <= rx_rd_ptr + 1'b1;
+						rx_rd_gray <= rx_rd_gray_next;
+					end
 				end else if (wb_adr_i == REG_TXLEN) begin
 					tx_len_reg <= wb_dat_i[10:0];
 				end else if (wb_adr_i == REG_TXCTRL) begin
@@ -560,7 +718,7 @@ module ethmac_rmii_wb #()
 				else if (wb_adr_i == REG_RXLEN)
 					wb_dat_o <= { 21'b0, rx_len_sync };
 				else if (wb_adr_i >= RXBUF_BASE && wb_adr_i < (RXBUF_BASE + RXBUF_WORDS))
-					wb_dat_o <= rxbuf[wb_adr_i - RXBUF_BASE];
+					wb_dat_o <= rxbuf[{rx_rd_slot, rx_word_off}];
 				else if (wb_adr_i >= TXBUF_BASE && wb_adr_i < (TXBUF_BASE + TXBUF_WORDS))
 					wb_dat_o <= txbuf[wb_adr_i - TXBUF_BASE];
 				else

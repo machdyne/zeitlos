@@ -114,8 +114,12 @@
 #endif
 #include "tftp.h"
 #include "tcp.h"
+#include "../../common/zrng.h"
 #include "telnet.h"
 #include "netcfg.h"
+#if SSH_ENABLE
+#include "ssh/ssh.h"
+#endif
 
 // no factory MAC on this chip -- locally-administered address (the
 // 0x02 first-octet bit pattern marks it as such, avoiding any clash
@@ -221,6 +225,92 @@ static z_port_t telnet_port;
 static uint32_t telnet_client_pid;	// valid once state != TN_IDLE
 #define TELNET_CONN_ID 1			// only one connection ever -- no
 									// need to hand out distinct ids
+
+#if SSH_ENABLE
+
+// -- ssh: a second zport session type through the same single TCB --
+//
+// tcp.c has one connection, so SSH and telnet are mutually exclusive
+// and both states are checked before either starts. That is not a
+// limitation worth engineering around here: one `term` window is
+// having one remote session either way.
+//
+// The pending-token record is the other half of the Z_NET_SSH_PREPARE
+// handshake described in sw/common/znet.h -- `repl` registers the
+// username here in a single hop (where its strings resolve correctly)
+// and gets back a token that `term` can carry as a plain scalar.
+typedef enum { SSH_IDLE, SSH_ACTIVE } ssh_session_state_t;
+
+static ssh_session_state_t ssh_state = SSH_IDLE;
+static z_port_t ssh_port;
+static uint32_t ssh_client_pid;
+#define SSH_CONN_ID 2				// distinct from TELNET_CONN_ID so a
+									// stale DATA from a previous telnet
+									// session cannot be mistaken for ours
+
+static struct {
+	bool valid;
+	uint32_t token;
+	uint32_t ip;
+	uint16_t port;
+	char user[64];
+	uint32_t expires;			// z_uptime_ticks() deadline
+} ssh_pending;
+
+// ~30 seconds at the kernel tick rate. Long enough for a user to
+// finish whatever `repl` was doing between PREPARE and the actual
+// connect, short enough that an abandoned token does not sit in memory
+// holding a username for the rest of the boot.
+#define SSH_TOKEN_TTL_TICKS (732 * 30)
+
+#endif
+
+// tftp_handle_stream_msg() returns void, so there is no way to ask it
+// whether it recognised a message. This wrapper answers that question
+// for the dispatch chain's catch-all without changing tftp.h's own
+// contract: the stream subjects are exactly the ones it handles.
+static bool tftp_handle_stream_msg_checked(const z_msg_t *msg) {
+	if (msg->subject == Z_STREAM_OPEN_REPLY ||
+		msg->subject == Z_STREAM_PULL || msg->subject == Z_STREAM_CHUNK ||
+		msg->subject == Z_STREAM_EOF || msg->subject == Z_STREAM_ERROR ||
+		msg->subject == Z_STREAM_ABORT) {
+		tftp_handle_stream_msg((z_msg_t *)msg);
+		return true;
+	}
+	return false;
+}
+
+// -- SUBJECT COLLISION CHECK --
+//
+// net's subject numbers come from three headers (znet.h, zntp.h,
+// zstream.h) that continue one shared sequence, and nothing but
+// convention keeps them apart. Reusing a number does not fail to
+// compile and does not look wrong at runtime: the dispatch chain below
+// is a series of `else if`, so the FIRST matching branch wins and the
+// message is handled -- by the wrong handler, silently.
+//
+// That is not hypothetical. Z_NET_SSH_PREPARE was added at 306, which
+// zntp.h already used for Z_NET_NTP_SYNC, and every `ssh` command was
+// quietly delivered to the NTP sync handler.
+//
+// So every subject this file dispatches is listed here and checked
+// against every other. A negative array size rather than
+// _Static_assert(): this tree builds --std=gnu99.
+#define Z_SUBJ_DISTINCT2(a, b) ((a) != (b))
+typedef char net_subject_numbers_are_distinct[
+	(Z_SUBJ_DISTINCT2(Z_NET_SSH_PREPARE, Z_NET_NTP_SYNC) &&
+	 Z_SUBJ_DISTINCT2(Z_NET_SSH_PREPARE, Z_NET_NTP_STATUS) &&
+	 Z_SUBJ_DISTINCT2(Z_NET_SSH_PREPARE, Z_NET_DNS_RESOLVE) &&
+	 Z_SUBJ_DISTINCT2(Z_NET_SSH_PREPARE, Z_NET_DNS_RESOLVE_REPLY) &&
+	 Z_SUBJ_DISTINCT2(Z_NET_SSH_PREPARE, Z_NET_TFTP_PUT) &&
+	 Z_SUBJ_DISTINCT2(Z_NET_SSH_PREPARE, Z_STREAM_OPEN) &&
+	 Z_SUBJ_DISTINCT2(Z_NET_SSH_PREPARE_REPLY, Z_NET_NTP_SYNC) &&
+	 Z_SUBJ_DISTINCT2(Z_NET_SSH_PREPARE_REPLY, Z_NET_NTP_STATUS) &&
+	 Z_SUBJ_DISTINCT2(Z_NET_SSH_PREPARE_REPLY, Z_NET_DNS_RESOLVE_REPLY) &&
+	 Z_SUBJ_DISTINCT2(Z_NET_SSH_PREPARE_REPLY, Z_NET_TFTP_PUT_REPLY) &&
+	 Z_SUBJ_DISTINCT2(Z_NET_NTP_SYNC, Z_NET_DNS_RESOLVE) &&
+	 Z_SUBJ_DISTINCT2(Z_NET_NTP_STATUS, Z_NET_DNS_RESOLVE_REPLY) &&
+	 Z_SUBJ_DISTINCT2(Z_NET_TFTP_PUT, Z_NET_DNS_RESOLVE)) ? 1 : -1];
 
 static void print_ip(uint32_t ip) {
 	printf("%ld.%ld.%ld.%ld",
@@ -363,6 +453,225 @@ static void telnet_on_closed(void) {
 
 }
 
+#if SSH_ENABLE
+
+// -- ssh: ssh.c callbacks --
+
+// Everything the SSH layer wants the user to see: progress lines,
+// the host key fingerprint, prompts, and channel data once the shell
+// is up. All of it is just bytes to the port, which is the whole
+// reason prompting in band works (see ssh.h).
+static void ssh_on_out(const uint8_t *data, uint16_t len) {
+	if (ssh_state != SSH_ACTIVE) return;
+	z_port_send(&ssh_port, data, len);
+}
+
+static void ssh_on_ready(void) {
+	printf("net: ssh shell open, relaying to pid %ld\n", (long)ssh_client_pid);
+}
+
+static void ssh_on_closed(const char *reason) {
+	if (ssh_state == SSH_ACTIVE) {
+		// The reason text has already gone to the port as part of the
+		// session output (ssh.c does that), so this only has to tear
+		// the port down -- term falls back to local echo on receiving
+		// it, same as telnet.
+		z_port_close(&ssh_port);
+		printf("net: ssh session ended: %s\n", reason ? reason : "?");
+	}
+	ssh_state = SSH_IDLE;
+}
+
+// -- ssh: Z_NET_SSH_PREPARE --
+
+static void handle_ssh_prepare(const z_msg_t *msg) {
+
+	z_obj_t *user_obj, *ip_obj, *port_obj;
+
+	// Unconditional, before any validation: this one line distinguishes
+	// "net never got the message" from "net got it and refused", which
+	// from repl's end look identical.
+	printf("net: Z_NET_SSH_PREPARE from pid %ld\n", (long)msg->from);
+	z_obj_t reply;
+	uint32_t token;
+
+	if (msg->obj.type != Z_MAP) {
+		reply_error(msg->from, Z_NET_SSH_PREPARE_REPLY, msg->tag,
+			"ssh: bad prepare request");
+		return;
+	}
+
+	// The cast drops const because z_map_find() takes a non-const map
+	// (zobj.h) despite only reading it. Same thing handle_dns_resolve()
+	// and the rest of this file already do with msg->obj; changing the
+	// signature is the right fix and a wider change than this belongs to.
+	user_obj = z_map_find((z_obj_t *)&msg->obj, "user");
+	ip_obj   = z_map_find((z_obj_t *)&msg->obj, "ip");
+	port_obj = z_map_find((z_obj_t *)&msg->obj, "port");
+
+	if (!ip_obj || ip_obj->type != Z_UINT32) {
+		reply_error(msg->from, Z_NET_SSH_PREPARE_REPLY, msg->tag,
+			"ssh: prepare requires a target IP");
+		return;
+	}
+
+	if (telnet_state != TN_IDLE || ssh_state != SSH_IDLE) {
+		reply_error(msg->from, Z_NET_SSH_PREPARE_REPLY, msg->tag,
+			"net: already busy with another session");
+		return;
+	}
+
+	// Refuse here, at the earliest point, rather than at connect time.
+	// ssh_connect() checks this too and would refuse anyway, but by
+	// then `repl` has already told the user it is connecting and `term`
+	// has left its repl connection -- so the failure would arrive in a
+	// window that had just been disconnected from everything.
+	if (!z_rng_secure()) {
+		reply_error(msg->from, Z_NET_SSH_PREPARE_REPLY, msg->tag,
+			"ssh: no trustworthy entropy source -- refusing (see docs/trng.md)");
+		return;
+	}
+
+	// A random token, not a counter. It is the only thing standing
+	// between a CONNECT and the credentials it picks up, and a
+	// predictable one would let any process on the system claim a
+	// pending session by guessing.
+	z_rng_bytes(&token, sizeof(token));
+	if (!token) token = 1;		// 0 is the "no pending token" sentinel
+
+	ssh_pending.valid = true;
+	ssh_pending.token = token;
+	ssh_pending.ip = ip_obj->val.uint32;
+	ssh_pending.port = (port_obj && port_obj->type == Z_UINT32 &&
+		port_obj->val.uint32) ? (uint16_t)port_obj->val.uint32 : 22;
+	ssh_pending.expires = z_uptime_ticks() + SSH_TOKEN_TTL_TICKS;
+
+	ssh_pending.user[0] = 0;
+	if (user_obj && user_obj->type == Z_STR && user_obj->val.str) {
+		strncpy(ssh_pending.user, user_obj->val.str,
+			sizeof(ssh_pending.user) - 1);
+		ssh_pending.user[sizeof(ssh_pending.user) - 1] = 0;
+	}
+
+	reply = z_obj_map(2);
+	z_map_set(&reply, "ok", z_obj_uint32(1));
+	z_map_set(&reply, "token", z_obj_uint32(token));
+	z_msg_new_send(msg->from, Z_NET_SSH_PREPARE_REPLY, msg->tag, reply);
+
+	printf("net: ssh prepared for ");
+	print_ip(ssh_pending.ip);
+	printf(":%d user '%s'\n", (int)ssh_pending.port, ssh_pending.user);
+
+}
+
+// Returns true if this CONNECT is redeeming a valid SSH token. The
+// token is consumed either way -- a single use is the point of it.
+static bool ssh_claim_token(uint32_t token) {
+
+	if (!ssh_pending.valid || !token || token != ssh_pending.token)
+		return false;
+
+	ssh_pending.valid = false;
+
+	if ((int32_t)(z_uptime_ticks() - ssh_pending.expires) > 0) {
+		printf("net: ssh token expired\n");
+		return false;
+	}
+
+	return true;
+
+}
+
+static bool handle_ssh_port_connect(const z_msg_t *msg) {
+
+	if (msg->obj.type != Z_UINT32) {
+		printf("net: PORT_CONNECT with no scalar arg -- not ssh\n");
+		return false;
+	}
+	if (!ssh_claim_token(msg->obj.val.uint32)) {
+		// Not an error by itself: a telnet connect carries a target IP
+		// here and is supposed to fall through. Logged because if an
+		// SSH connect ends up in telnet's hands, THIS is the line that
+		// says so.
+		printf("net: PORT_CONNECT arg %08lx did not match an ssh token "
+			"(pending=%d) -- treating as telnet\n",
+			(unsigned long)msg->obj.val.uint32, (int)ssh_pending.valid);
+		return false;
+	}
+
+	if (telnet_state != TN_IDLE || ssh_state != SSH_IDLE) {
+		z_port_refuse(msg, "net: already busy with another session");
+		return true;
+	}
+
+	ssh_client_pid = msg->from;
+
+	// Accepted IMMEDIATELY, unlike telnet, which defers until its TCP
+	// handshake resolves. SSH needs the port open first: the whole
+	// handshake is several seconds of work with a host key confirmation
+	// and a password prompt in the middle, and all of that is rendered
+	// through this port. Deferring would mean a frozen window followed
+	// by a prompt nobody could answer.
+	ssh_port.peer_pid = ssh_client_pid;
+	ssh_port.conn_id = SSH_CONN_ID;
+	ssh_port.connected = true;
+	ssh_state = SSH_ACTIVE;
+	z_msg_new_send(ssh_client_pid, Z_PORT_CONNECTED, 0,
+		z_obj_uint32(SSH_CONN_ID));
+
+	if (!ssh_connect(ssh_pending.ip, ssh_pending.port,
+			ssh_pending.user[0] ? ssh_pending.user : NULL,
+			ssh_on_out, ssh_on_ready, ssh_on_closed)) {
+		z_port_send(&ssh_port,
+			(const uint8_t *)"ssh: could not start session\r\n", 30);
+		z_port_close(&ssh_port);
+		ssh_state = SSH_IDLE;
+		return true;
+	}
+
+	// Clear the username out of the pending record now it has been
+	// handed over -- it is copied inside ssh.c and there is no reason
+	// for a second copy to sit here until the next connect overwrites
+	// it.
+	memset(ssh_pending.user, 0, sizeof(ssh_pending.user));
+
+	printf("net: ssh connecting for pid %ld\n", (long)ssh_client_pid);
+	return true;
+
+}
+
+static bool handle_ssh_port_data(const z_msg_t *msg) {
+
+	uint32_t len;
+	void *data;
+
+	if (ssh_state != SSH_ACTIVE || !ssh_port.connected ||
+		msg->tag != ssh_port.conn_id) return false;
+
+	len = z_blob_len(&msg->obj);
+	data = z_blob_data(&msg->obj);
+	if (data && len) ssh_input((const uint8_t *)data, (uint16_t)len);
+
+	z_port_send_ack(msg);
+	return true;
+
+}
+
+static bool handle_ssh_port_close(const z_msg_t *msg) {
+
+	if (ssh_state != SSH_ACTIVE || !ssh_port.connected ||
+		msg->tag != ssh_port.conn_id) return false;
+
+	ssh_port.connected = false;
+	ssh_abort();
+	ssh_state = SSH_IDLE;
+	printf("net: ssh port closed by peer\n");
+	return true;
+
+}
+
+#endif // SSH_ENABLE
+
 // -- telnet: zport provider side (Z_PORT_CONNECT/DATA/CLOSE from a
 // `term` instance) --
 
@@ -373,6 +682,19 @@ static void telnet_on_closed(void) {
 // z_port_connect_arg()/zterm.h's Z_TERM_SET_PORT Z_MAP form for how a
 // `term` ends up sending that instead of the default Z_NONE.
 static void handle_telnet_port_connect(const z_msg_t *msg) {
+
+#if SSH_ENABLE
+	// An SSH token looks exactly like a telnet target IP on the wire --
+	// both are a bare Z_UINT32 -- so SSH gets first refusal. It only
+	// claims the message if the value matches a live token it issued,
+	// so a real IP falls straight through to telnet below.
+	if (handle_ssh_port_connect(msg)) return;
+
+	if (ssh_state != SSH_IDLE) {
+		z_port_refuse(msg, "net: already busy with an ssh session");
+		return;
+	}
+#endif
 
 	if (telnet_state != TN_IDLE) {
 		z_port_refuse(msg, "net: already busy with another telnet session");
@@ -599,40 +921,25 @@ int main(void) {
 		"own execution jumping back here)\n", (unsigned long)entry_canary);
 	entry_canary = 0xDEADBEEF;
 
-	printf("net: initializing %s...\n", NET_PHY_NAME);
+	// Pick a driver before touching any of its registers -- see
+	// net_phy.h's header and docs/csrs.md for the full story.
+	//
+	// net_phy_select() uses POSITIVE feature detection, so a bitstream
+	// that predates rtl/csrs.v (and therefore cannot answer) is treated
+	// as "unknown, proceed", not "absent, refuse" -- the same
+	// backward-compatible choice the old #ifdef'd
+	// z_soc_feature_confirmed_absent() check made here. Only a
+	// CSR-capable bitstream reporting neither MAC returns NULL, which
+	// is what makes it safe for sw/os/sh.c's `init` to start net on
+	// every board rather than reserving its pid and giving up.
+	if (!net_phy_select()) {
+		printf("net: this SOC build has no ethernet hardware "
+			"(rtl/boards.vh's SPI_ETH or ETH_RMII) -- nothing to do "
+			"here, exiting cleanly.\n");
+		return 1;
+	}
 
-	// check the SOC actually has the ethernet backend this binary was
-	// built for BEFORE touching any of its registers -- see
-	// net_phy.h's own header comment and docs/csrs.md for the full
-	// story. z_soc_feature_confirmed_absent() (not a plain negated
-	// z_soc_has_feature()) is deliberate: an older bitstream that
-	// predates rtl/csrs.v entirely can't answer this at all, and the
-	// safe, backward-compatible behavior there is "proceed as before"
-	// (this board might genuinely have the hardware, we just can't
-	// confirm it), not "refuse". Only a POSITIVE, confirmed "this
-	// board's build has neither SPI_ETH nor ETH_RMII" makes net exit
-	// here -- which is exactly what makes it safe for sw/os/sh.c's
-	// `init` to always attempt starting net now, on every board,
-	// instead of the old pid-reservation-only workaround.
-#if defined(NET_PHY_ESP32LINK)
-	if (z_soc_feature_confirmed_absent(Z_FEATURE_ESP32_LINK)) {
-		printf("net: this SOC build has no ESP32 link (rtl/boards.vh's "
-			"ESP32_LINK) -- nothing to do here, exiting cleanly.\n");
-		return 1;
-	}
-#elif defined(NET_PHY_RMII)
-	if (z_soc_feature_confirmed_absent(Z_FEATURE_ETH_RMII)) {
-		printf("net: this SOC build has no RMII ethernet (rtl/boards.vh's "
-			"ETH_RMII) -- nothing to do here, exiting cleanly.\n");
-		return 1;
-	}
-#else
-	if (z_soc_feature_confirmed_absent(Z_FEATURE_SPI_ETH)) {
-		printf("net: this SOC build has no SPI ethernet (rtl/boards.vh's "
-			"SPI_ETH) -- nothing to do here, exiting cleanly.\n");
-		return 1;
-	}
-#endif
+	printf("net: initializing %s...\n", NET_PHY_NAME);
 
 	netcfg_t cfg;
 	if (netcfg_load(&cfg) != 0) {
@@ -649,18 +956,11 @@ int main(void) {
 		return 1;
 	}
 
-#if defined(NET_PHY_ESP32LINK)
-	/* HELLO/STA run in the main loop so wm keeps getting HID. */
-	if (cfg.has_wifi)
+	// A wireless backend associates from the main loop below rather
+	// than here, so wm keeps being scheduled while it happens (an
+	// association takes seconds). Wired backends have no poll_wifi.
+	if (net_phy->poll_wifi && cfg.has_wifi)
 		printf("net: wifi STA '%s' deferred to main loop\n", cfg.ssid);
-#else
-	if (cfg.has_wifi) {
-		if (!phy_wifi_sta(cfg.ssid, cfg.psk)) {
-			printf("net: wifi STA failed (ssid='%s')\n", cfg.ssid);
-			return 1;
-		}
-	}
-#endif
 
 	phy_debug_dump();
 	printf("net: mac %02x:%02x:%02x:%02x:%02x:%02x\n",
@@ -743,15 +1043,34 @@ int main(void) {
 	print_ip(use_ip);
 	printf("/");
 	print_ip(use_netmask);
-	printf(", listening (arp + icmp echo + tftp + telnet + dns%s)\n",
+	printf(", listening (arp + icmp echo + tftp + telnet%s + dns%s)\n",
+#if SSH_ENABLE
+		" + ssh",
+#else
+		"",
+#endif
 		ntp_enabled ? " + ntp" : "");
+
+#if SSH_ENABLE
+	// Seeded HERE, at boot, not lazily on the first request. The first
+	// z_rng_secure() call runs a full reseed, and doing that inside
+	// handle_ssh_prepare() would put it on repl's RPC deadline -- a
+	// slow seed would then be indistinguishable from net never having
+	// received the message at all.
+	//
+	// The line it prints is also the single most useful thing on this
+	// console when `ssh` misbehaves: it says both that this net
+	// UNDERSTANDS ssh and whether it has entropy to run it.
+	printf("net: ssh support built in, entropy %s\n",
+		z_rng_secure() ? "ok" : "UNAVAILABLE (ssh will refuse)");
+#else
+	printf("net: built without ssh support (SSH_ENABLE=0)\n");
+#endif
 
 	while (1) {
 
-#if defined(NET_PHY_ESP32LINK)
-		if (cfg.has_wifi)
-			phy_poll_wifi(cfg.ssid, cfg.psk);
-#endif
+		if (net_phy->poll_wifi && cfg.has_wifi)
+			net_phy->poll_wifi(cfg.ssid, cfg.psk);
 
 		eth_poll();
 
@@ -781,16 +1100,45 @@ int main(void) {
 			else if (msg.subject == Z_NET_NTP_SYNC) handle_ntp_sync(&msg);
 #endif
 			else if (msg.subject == Z_NET_NTP_STATUS) handle_ntp_status(&msg);
+#if SSH_ENABLE
+			else if (msg.subject == Z_NET_SSH_PREPARE) handle_ssh_prepare(&msg);
+#endif
 			else if (msg.subject == Z_PORT_CONNECT) handle_telnet_port_connect(&msg);
-			else if (msg.subject == Z_PORT_DATA) handle_telnet_port_data(&msg);
-			else if (msg.subject == Z_PORT_DATA_ACK) z_port_handle_ack(&telnet_port, &msg);
-			else if (msg.subject == Z_PORT_CLOSE) handle_telnet_port_close(&msg);
-			else tftp_handle_stream_msg(&msg);
+			else if (msg.subject == Z_PORT_DATA) {
+#if SSH_ENABLE
+				if (!handle_ssh_port_data(&msg))
+#endif
+				handle_telnet_port_data(&msg);
+			}
+			else if (msg.subject == Z_PORT_DATA_ACK) {
+				z_port_handle_ack(&telnet_port, &msg);
+#if SSH_ENABLE
+				z_port_handle_ack(&ssh_port, &msg);
+#endif
+			}
+			else if (msg.subject == Z_PORT_CLOSE) {
+#if SSH_ENABLE
+				if (!handle_ssh_port_close(&msg))
+#endif
+				handle_telnet_port_close(&msg);
+			}
+			else if (!tftp_handle_stream_msg_checked(&msg)) {
+				// Everything above is an explicit subject and tftp
+				// claims the stream ones; anything left is a message
+				// this build does not understand. Silently dropping it
+				// is what made a stale net indistinguishable from a
+				// broken one -- the sender just waits forever.
+				printf("net: unhandled subject %ld from pid %ld\n",
+					(long)msg.subject, (long)msg.from);
+			}
 		}
 
 		check_tftp_progress();
 		tcp_poll();
 		telnet_poll();
+#if SSH_ENABLE
+		ssh_poll();
+#endif
 		dns_poll();
 #if NTP_ENABLE
 		// Cheap: one comparison in the state this is in almost all of
@@ -817,13 +1165,27 @@ int main(void) {
 		// yielding costs throughput and buys latency. This loop is
 		// bound by latency.
 		//
-		// The 1-tick timeout matters: incoming packets are found by
-		// POLLING the ENC28J60, not by message, so k_msg_send()'s wake
-		// never fires for an arriving frame and the timeout is the only
-		// thing that gets this process running again. Waking on the
-		// controller's INT pin (already wired to rtl/spim.v STATUS bit
-		// 2) would be strictly better than a timer.
-		z_proc_wait(1);
+		// Blocks until a frame arrives or the timeout expires.
+		//
+		// Z_IRQ_ETH wakes this process when a frame actually arrives
+		// (rtl/ethmac_rmii.v's eth_int_o, and the ENC28J60's INT pin
+		// via rtl/sysctl.v), so the timeout is not how packets are
+		// noticed. It is a backstop for the periodic work this loop
+		// still does -- ARP ageing, socket timers, TX retries -- and
+		// insurance against a MAC that somehow leaves its RX buffer
+		// occupied without the interrupt following.
+		//
+		// Ten wakes a second for housekeeping instead of 732 for
+		// nothing. The scheduler shares the CPU between RUNNABLE
+		// processes, so a process that wakes constantly takes a full
+		// share out of whatever is in the foreground.
+		//
+		// TRIED AND REVERTED: going back to z_proc_wait(1), on the
+		// theory that a lost wake was costing 100ms of latency, made
+		// no difference to interactive traffic. So net's wait is not
+		// what makes telnet feel slow, and the cheaper idle is the
+		// better default.
+		z_proc_wait(Z_TICK_HZ / 10);
 
 	}
 

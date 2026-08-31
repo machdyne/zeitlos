@@ -28,6 +28,75 @@ localparam SYSCLK = 48_000_000;
 `endif
 `endif
 
+// Audio geometry defaults, if a board enabled `AUDIO without pinning
+// them (rtl/boards.vh).
+//
+// 1024 frames: 46ms at 22kHz, 23ms at 44.1kHz.
+//
+// This was 128 and that was WRONG -- see rtl/audio.v's header for the
+// scheduling arithmetic that says so. The short version: this is a
+// preemptive round-robin system and wm and sh both busy-poll, so a
+// player can be off the CPU for two or three 1.365ms ticks at a
+// stretch and must refill a whole round's worth during its own slice.
+// 128 frames is 5.8ms at 22kHz, which leaves no margin at all.
+//
+// The width is what makes 1024 the right number rather than 512: a
+// DP16KD is 18 bits wide, so a 32-bit FIFO needs two of them whatever
+// the depth. 512 frames and 1024 frames cost exactly the same two
+// blocks; 1024 uses them fully. Below 1024 you are paying for BRAM
+// you are not using.
+`ifdef AUDIO
+`ifndef AUDIO_FIFO_LOG2
+`define AUDIO_FIFO_LOG2 10
+`endif
+// Power-on sample rate divider. fs = SYSCLK / (64 * RATE), so 17 is
+// 44117.6Hz at 48MHz -- 0.04% high, a 0.7-cent pitch error.
+//
+// A board with the optical S/PDIF transmitter (Sergei, not supported
+// yet) will want 16 instead, giving 46875Hz: that is the only sample
+// rate on this clocking whose biphase half-cell is an exact integer
+// number of sys_clk cycles. See docs/audio.md.
+`ifndef AUDIO_RATE_RESET
+`define AUDIO_RATE_RESET 8'd17
+`endif
+// log2 of the hardware mixer's channel count. 3 = eight channels;
+// 2 = four, which is all a ProTracker MOD needs and is the dial to
+// reach for when placement is tight. See rtl/audio_mixer.v.
+`ifndef AUDIO_MIXER_CH_BITS
+`define AUDIO_MIXER_CH_BITS 3
+`endif
+// Power-on CTRL. Muted, no interrupt, no channel swap.
+//
+// The one bit a board is likely to want here is SWAPLR (bit 2). PT8211
+// WS polarity is the single thing in this subsystem not verified
+// against a datasheet with confidence, so if a board's channels come
+// out reversed the fix belongs HERE -- once, at power-on -- rather
+// than in every app that plays a sound. docs/audio.md said so before
+// this define existed, which made the advice untrue.
+`ifndef AUDIO_CTRL_RESET
+`define AUDIO_CTRL_RESET 8'h00
+`endif
+`endif
+
+// Which DACs this board actually has pins for, reported to software in
+// rtl/audio.v's CONFIG register. Software cannot otherwise tell -- the
+// register interface is identical whichever output is wired.
+//
+// Bit 2 is RESERVED for the optical S/PDIF transmitter on Sergei and
+// is deliberately not defined anywhere yet; see rtl/audio.v's header
+// for what attaching one involves.
+localparam [3:0] AUDIO_FORMATS =
+`ifdef AUDIO_SD
+	4'b0001 |
+`endif
+`ifdef AUDIO_PT8211
+	4'b0010 |
+`endif
+`ifdef AUDIO_SPDIF
+	4'b0100 |
+`endif
+	4'b0000;
+
 module sysctl #()
 (
 
@@ -49,8 +118,10 @@ module sysctl #()
 `endif
 	output LED_B,
 
+`ifdef UART0
    output UART0_TX,
    input UART0_RX,
+`endif
 
 `ifdef UART1
 	output UART1_TX,
@@ -109,7 +180,11 @@ module sysctl #()
 `endif
 
 `ifdef ETH_RMII
+`ifdef ETH_RMII_DRIVE_REFCLK
+   output ETH_REFCLK,
+`else
    input ETH_REFCLK,
+`endif
    input [1:0] ETH_RXD,
    output [1:0] ETH_TXD,
    output ETH_TX_EN,
@@ -117,6 +192,42 @@ module sysctl #()
    output ETH_RST_N,
 `endif
 
+`ifdef AUDIO
+`ifdef AUDIO_SD
+	output AUDIO_L,
+	output AUDIO_R,
+`endif
+`ifdef AUDIO_PT8211
+	output AUD_BCK,
+	output AUD_WS,
+	output AUD_DIN,
+`endif
+`ifdef AUDIO_SPDIF
+	output AUD_OPTICAL,
+`endif
+`endif
+
+`ifdef GPU_COMPOSITE
+	// Monochrome composite video out. Four bits into an R-2R ladder,
+	// then one 75R series resistor to the centre pin of an RCA
+	// socket -- see docs/composite.md for values and for why four
+	// bits when the picture only needs three levels.
+	//
+	// A board defining `GPU_COMPOSITE must add COMP_DAC[3:0] to its
+	// own .lpf/.ccf. No board in this tree does yet; composite needs
+	// four pins and a handful of resistors none of them have.
+	output [3:0] COMP_DAC,
+`endif
+
+// The VGA and DDMI pin declarations below are suppressed entirely on a
+// composite build, not merely left unconnected. An output port that
+// nothing drives is not harmless: it synthesises to a pin held at a
+// constant, and on a board with a real VGA connector that means a
+// monitor sees a dead signal rather than no signal -- which looks like
+// a broken output rather than one that was never built. Removing the
+// port makes the board file fail loudly at place-and-route instead,
+// pointing at the constraint that no longer has anything to bind to.
+`ifndef GPU_COMPOSITE
 `ifdef GPU_VGA
 	output VGA_R,
 	output VGA_G,
@@ -130,6 +241,7 @@ module sysctl #()
 	output DDMI_D1_P,
 	output DDMI_D2_P,
 	output DDMI_CK_P,
+`endif
 `endif
 
 `ifdef USB_HID
@@ -324,6 +436,59 @@ module sysctl #()
 	// INTERRUPTS
 
 	reg irq_timer;
+	// -- ethernet receive interrupt --
+	//
+	// One wire from whichever MAC this board has, into cpu_irq[8].
+	// Declared unconditionally and tied low when there is no ethernet
+	// at all, so the interrupt assignment below needs no `ifdef of its
+	// own -- the same arrangement gpu_frame_ctr uses.
+	//
+	// A RISING-EDGE PULSE, not a level -- and the first version of
+	// this got it wrong in a way the file already warned about.
+	//
+	// eth_rx_ready below IS a level: high for as long as a frame sits
+	// in the RX buffer. Feeding that straight into cpu_irq[8] looked
+	// safer (no window in which the interrupt is acknowledged but a
+	// packet is still unread) and instead brought the machine to a
+	// crawl -- UART output visibly printing character by character,
+	// the dock drawing its icons one at a time.
+	//
+	// The reason is written twenty lines above, about bits 4 and 7: "a
+	// latched level source re-fires the instant the handler returns
+	// and the machine stops making forward progress." Bit 8 is latched
+	// in LATCHED_IRQ, so a level there re-fires forever.
+	//
+	// The UART and the audio FIFO escape this by being non-latched
+	// AND by having handlers that can clear the source -- draining the
+	// FIFO lowers the level. Ethernet has neither property: only
+	// `net`, a userspace process, can consume the frame, and it cannot
+	// run while the ISR is re-entering. Non-latched would storm just
+	// the same.
+	//
+	// So the interrupt is one pulse per ARRIVAL. If a second frame
+	// lands before the first is read there is no new rising edge and
+	// no second interrupt -- which is fine, because net drains every
+	// pending frame once it runs, and its timeout (docs/networking.md)
+	// is the backstop for the case where it somehow does not.
+	wire eth_rx_ready;
+	reg eth_rx_ready_d;
+	always @(posedge wbm_clk) eth_rx_ready_d <= eth_rx_ready;
+	wire eth_rx_int = eth_rx_ready && !eth_rx_ready_d;
+	// The macro is SPI_ETH (see rtl/boards.vh). This tie-off tested
+	// ETH_SPI, which is not defined anywhere, so on an ENC28J60 board
+	// it stayed active alongside the real driver further down and
+	// eth_rx_ready had TWO continuous assignments -- the constant here
+	// and the synchronised INT pin. The wire resolves to x the moment
+	// a frame arrives, so the interrupt never worked on those boards
+	// and net fell back to its backstop timeout for every packet.
+	// RMII boards were unaffected: that guard spells its macro
+	// correctly.
+`ifndef ETH_RMII
+`ifndef SPI_ETH
+	assign eth_rx_ready = 1'b0;
+`endif
+`endif
+
 
 	always @* begin
 		cpu_irq = 0;
@@ -336,6 +501,31 @@ module sysctl #()
 `ifdef USB_HID
 		cpu_irq[6] = wbs_usb1_int;
 `endif
+		// rtl/audio.v's FIFO watermark. LEVEL-SENSITIVE, and therefore
+		// non-latched in LATCHED_IRQ below -- bit 7 is cleared there
+		// alongside bit 4 (the UART), for exactly the same reason: a
+		// latched level source re-fires the instant the handler returns
+		// and the machine stops making forward progress.
+`ifdef AUDIO
+		cpu_irq[7] = wbs_audio_int;
+`endif
+
+		// Ethernet receive. See eth_rx_int above for why this is a
+		// PULSE rather than a level, and docs/networking.md for what
+		// it replaced -- sw/apps/net woke ~732 times a second on a
+		// timer to discover nothing had arrived, and on a machine
+		// whose scheduler splits the CPU between RUNNABLE processes
+		// that came out of the foreground app's share.
+		//
+		// OUTSIDE the `ifdef AUDIO above, which it was accidentally
+		// nested inside. eth_rx_ready is declared unconditionally and
+		// tied low when the board has no ethernet, precisely so this
+		// line needs no `ifdef of its own -- but sitting inside the
+		// audio guard, a board with ethernet and no audio would have
+		// silently had no ethernet interrupt at all. Every board with
+		// ethernet today also has audio, so this was latent rather
+		// than active.
+		cpu_irq[8] = eth_rx_int;
 	end
 
 	always @(posedge sys_clk) begin
@@ -399,7 +589,7 @@ module sysctl #()
 	wire wbm_blitsrc_stb;
 	wire wbm_blitsrc_cyc;
 	wire wbm_blitsrc_ack;
-	wire marb_master;
+	wire [1:0] marb_master;		// 0=CPU 1=blitter 2=audio mixer
 
 	// Physical (post-MTU) CPU address. This is wb_mtu's translated
 	// output, and is what the instruction cache tags on -- see
@@ -458,8 +648,13 @@ module sysctl #()
 `ifdef RTC
 	wire [31:0] wbs_rtc_dat_o;
 `endif
+`ifdef TRNG
+	wire [31:0] wbs_trng_dat_o;
+`endif
+`ifdef AUDIO
+	wire [31:0] wbs_audio_dat_o;
+`endif
 `ifdef ICACHE
-	wire [31:0] wbs_cache_dat_o;
 `endif
 
 	wire cs_bram = (wbm_adr < 8192);
@@ -568,6 +763,14 @@ module sysctl #()
 	//   0x7000_01xx  cache.v     instruction cache control/stats  (`ICACHE)
 	//   0x7000_02xx  socctl.v    writable global config
 	//   0x7000_03xx  rtc.v       wall-clock seconds/sub-seconds   (`RTC)
+	//   0x7000_04xx  trng.v      ring-oscillator entropy source   (`TRNG)
+	//
+	// The tenant mask is 0x700, not 0x300: four tenants fit in bits
+	// [9:8], the fifth needed bit 10 as well. Every address above has
+	// bit 10 clear, so widening it moved nothing -- the only visible
+	// change is that 0x7000_05xx..07xx now fall through to csrs.v
+	// instead of aliasing onto cache/socctl/rtc, which is strictly
+	// better and is what a future sixth tenant will want anyway.
 	//
 	// Two of them are optional, and the rule that makes that safe is:
 	// CSRS ABSORBS THE WINDOW OF ANY TENANT THAT ISN'T BUILT. It acks
@@ -590,41 +793,68 @@ module sysctl #()
 	// than as a separate expression per combination. With two optional
 	// tenants that would be four cases to keep in agreement, and the
 	// one that mattered would be the one nobody tested.
-	wire cs_socctl = ((wbm_adr & 32'hf000_0300) == 32'h7000_0200);
+	wire cs_socctl = ((wbm_adr & 32'hf000_0700) == 32'h7000_0200);
 	wire wbm_cyc_socctl = cs_socctl && wbm_cyc;
 `ifdef ICACHE
-	wire cs_cache = ((wbm_adr & 32'hf000_0300) == 32'h7000_0100);
-	wire wbm_cyc_cache = cs_cache && wbm_cyc;
+	// NOTE: 0x7000_01xx is the instruction cache's register window, but
+	// the cache is NOT a slave here -- it answers those addresses
+	// itself, from the CPU address, upstream of wb_arbiter_main (see
+	// rtl/cache.v). So the CPU's accesses never reach this bus.
+	//
+	// The window is deliberately left to csrs_wb below rather than
+	// decoded to nothing: an address nothing decodes gets no ack and
+	// hangs whoever asked. Any stray access from another master, or
+	// from the CPU on a build without ICACHE, is acked and discarded.
 `endif
 `ifdef RTC
-	wire cs_rtc = ((wbm_adr & 32'hf000_0300) == 32'h7000_0300);
+	wire cs_rtc = ((wbm_adr & 32'hf000_0700) == 32'h7000_0300);
 	wire wbm_cyc_rtc = cs_rtc && wbm_cyc;
+`endif
+`ifdef TRNG
+	wire cs_trng = ((wbm_adr & 32'hf000_0700) == 32'h7000_0400);
+	wire wbm_cyc_trng = cs_trng && wbm_cyc;
+`endif
+	// rtl/audio.v -- the SIXTH tenant of nibble 7, at 0x7000_05xx. No
+	// mask change was needed: the tenant mask above was already widened
+	// from 0x300 to 0x700 when trng arrived, and this file's own comment
+	// said 0x7000_05xx..07xx falling through to csrs.v "is what a future
+	// sixth tenant will want anyway". This is that tenant.
+`ifdef AUDIO
+	wire cs_audio = ((wbm_adr & 32'hf000_0700) == 32'h7000_0500);
+	wire wbm_cyc_audio = cs_audio && wbm_cyc;
 `endif
 	wire cs_csrs = ((wbm_adr & 32'hf000_0000) == 32'h7000_0000)
 		&& !cs_socctl
 `ifdef ICACHE
-		&& !cs_cache
 `endif
 `ifdef RTC
 		&& !cs_rtc
+`endif
+`ifdef TRNG
+		&& !cs_trng
+`endif
+`ifdef AUDIO
+		&& !cs_audio
 `endif
 		;
 `ifdef DEBUG
 	wire cs_debug = ((wbm_adr & 32'hf000_0000) == 32'he000_0000);
 `endif
-`ifdef UART0
-	// UART0 stays at 0xf0000000 (byte offsets 0x00-0x18). UART1 and
-	// the ESP32 control register share nibble 0xF but sit above
-	// 0x100/0x200 so existing UART0 software is unchanged. Bits 8-9
-	// of the byte address discriminate (same idea as USB port 0/1
-	// using bit 5). Without UART1, keep the original whole-nibble
-	// decode so Obst/Lakritz/Mozart are bit-identical.
+	// Unconditional, unlike the `ifdef-guarded decodes above. Without
+	// `UART0 this window is answered by rtl/uart_null.v instead of by
+	// uart_top -- see the instantiation below for why it must be
+	// answered by SOMETHING.
+	//
+	// UART1 and the ESP32 registers (ULX3S) share nibble 0xF but sit
+	// above 0x100/0x200/0x300, so where they exist this window narrows
+	// to bits 8-9 == 0 (the same idea as USB port 0/1 using bit 5).
+	// Without them the whole-nibble decode is what every other board
+	// has always had.
 `ifdef UART1
 	wire cs_uart0 = ((wbm_adr & 32'hf000_0300) == 32'hf000_0000);
 	wire cs_uart1 = ((wbm_adr & 32'hf000_0300) == 32'hf000_0100);
 `else
 	wire cs_uart0 = ((wbm_adr & 32'hf000_0000) == 32'hf000_0000);
-`endif
 `endif
 `ifdef ESP32_LINK
 	wire cs_esp32ctl = ((wbm_adr & 32'hf000_0300) == 32'hf000_0200);
@@ -654,9 +884,7 @@ module sysctl #()
 `ifdef DEBUG
 		cs_debug ? wbs_debug_dat_o :
 `endif
-`ifdef UART0
 		cs_uart0 ? wbs_uart0_dat_o :
-`endif
 `ifdef UART1
 		cs_uart1 ? wbs_uart1_dat_o :
 `endif
@@ -690,9 +918,14 @@ module sysctl #()
 `ifdef RTC
 		cs_rtc ? wbs_rtc_dat_o :
 `endif
+`ifdef TRNG
+		cs_trng ? wbs_trng_dat_o :
+`endif
+`ifdef AUDIO
+		cs_audio ? wbs_audio_dat_o :
+`endif
 		cs_csrs ? wbs_csrs_dat_o :
 `ifdef ICACHE
-		cs_cache ? wbs_cache_dat_o :
 `endif
 		32'hzzzz_zzzz;
 
@@ -705,6 +938,12 @@ module sysctl #()
 	wire wbs_rom_ack_o;
 	wire wbs_debug_ack_o;
 	wire wbs_uart0_ack_o;
+	// Declared here rather than inside `ifdef UART0 below, because
+	// cpu_irq[4] reads it unconditionally. It used to be a `reg` in
+	// that block, which left it an implicit undriven net on a build
+	// without a UART -- and an implicit net connected to an interrupt
+	// input is not a failure anything reports.
+	wire wbs_uart0_int;
 `ifdef UART1
 	wire wbs_uart1_ack_o;
 `endif
@@ -725,8 +964,24 @@ module sysctl #()
 `ifdef RTC
 	wire wbs_rtc_ack_o;
 `endif
+`ifdef TRNG
+	wire wbs_trng_ack_o;
+`endif
+`ifdef AUDIO
+	wire wbs_audio_ack_o;
+	wire wbs_audio_int;
+	// rtl/audio_mixer.v's sample fetches -- third master on the main
+	// bus, see the arbiter instantiation below.
+	wire [31:0] wbm_audio_adr;
+	wire [31:0] wbm_audio_dat_o;
+	wire [31:0] wbm_audio_dat_i;
+	wire wbm_audio_we;
+	wire [3:0] wbm_audio_sel;
+	wire wbm_audio_stb;
+	wire wbm_audio_cyc;
+	wire wbm_audio_ack;
+`endif
 `ifdef ICACHE
-	wire wbs_cache_ack_o;
 `endif
 
 	assign wbm_ack =
@@ -752,9 +1007,7 @@ module sysctl #()
 `ifdef DEBUG
 		cs_debug ? wbs_debug_ack_o :
 `endif
-`ifdef UART0
 		cs_uart0 ? wbs_uart0_ack_o :
-`endif
 `ifdef UART1
 		cs_uart1 ? wbs_uart1_ack_o :
 `endif
@@ -788,9 +1041,14 @@ module sysctl #()
 `ifdef RTC
 		cs_rtc ? wbs_rtc_ack_o :
 `endif
+`ifdef TRNG
+		cs_trng ? wbs_trng_ack_o :
+`endif
+`ifdef AUDIO
+		cs_audio ? wbs_audio_ack_o :
+`endif
 		cs_csrs ? wbs_csrs_ack_o :
 `ifdef ICACHE
-		cs_cache ? wbs_cache_ack_o :
 `endif
 		1'b0;
 
@@ -846,7 +1104,7 @@ module sysctl #()
 `else
 		.ENABLE_DIV(0),
 `endif
-		.LATCHED_IRQ(32'b1111_1111_1111_1111_1111_1111_1110_1111)
+		.LATCHED_IRQ(32'b1111_1111_1111_1111_1111_1111_0110_1111)
 	)
 	wbm_cpu0_i
 	(
@@ -897,7 +1155,7 @@ module sysctl #()
       .ENABLE_IRQ(1),
       .ENABLE_IRQ_TIMER(0),
       .ENABLE_IRQ_QREGS(1),
-		.LATCHED_IRQ(32'b1111_1111_1111_1111_1111_1111_1110_1111)
+		.LATCHED_IRQ(32'b1111_1111_1111_1111_1111_1111_0110_1111)
 	)
 	wbm_cpu0_i
 	(
@@ -948,9 +1206,21 @@ module sysctl #()
 	// still has exactly one driver either way.
 `ifdef ICACHE
 
+// Boards define ICACHE_FAST_HIT to choose between a combinational
+// 1-cycle hit acknowledge (1) and a registered 2-cycle one (0); see
+// rtl/cache.v's FAST_HIT parameter. Default to the fast path when a
+// board says nothing, so older board blocks keep building.
+`ifndef ICACHE_FAST_HIT
+`define ICACHE_FAST_HIT 1
+`endif
+
+	wire cache_cfg_hit;
+
 	wb_icache #(
 		.CACHE_KB(`ICACHE_KB),
-		.LINE_WORDS(`ICACHE_LINE_WORDS)
+		.LINE_WORDS(`ICACHE_LINE_WORDS),
+		.FAST_HIT(`ICACHE_FAST_HIT),
+		.CFG_BASE(32'h7000_0100)
 	) icache_i (
 		.wb_clk_i(wbm_clk),
 		.wb_rst_i(wbm_rst),
@@ -976,14 +1246,12 @@ module sysctl #()
 		.m_cyc_o(wbc_cyc),
 		.m_ack_i(wbc_ack),
 
-		// control/status registers (0x7000_0100, see cs_cache above)
-		.cfg_adr_i({ 30'b0, wbm_adr_sel_word[1:0] }),
-		.cfg_dat_i(wbm_dat_o),
-		.cfg_dat_o(wbs_cache_dat_o),
-		.cfg_we_i(wbm_we),
-		.cfg_stb_i(wbm_stb),
-		.cfg_cyc_i(wbm_cyc_cache),
-		.cfg_ack_o(wbs_cache_ack_o)
+		// Control/status registers are answered INSIDE the cache,
+		// from the CPU address, upstream of wb_arbiter_main -- they
+		// are not a slave on the main bus. See rtl/cache.v: as a bus
+		// master, routing its own registers through the arbiter meant
+		// waiting on a transaction only it could answer.
+		.c_cfg_hit(cache_cfg_hit)
 	);
 
 `else
@@ -1047,6 +1315,31 @@ module sysctl #()
 		.m1_cyc_i(wbm_blitsrc_cyc),
 		.m1_ack_o(wbm_blitsrc_ack),
 
+		// Master 2: audio mixer sample fetches. Tied off on a board
+		// without `AUDIO rather than left dangling -- an unconnected
+		// cyc/stb input would be x in simulation and whatever the
+		// synthesizer felt like in hardware, and this arbiter grants
+		// on cyc && stb.
+`ifdef AUDIO
+		.m2_adr_i(wbm_audio_adr),
+		.m2_dat_i(wbm_audio_dat_o),
+		.m2_dat_o(wbm_audio_dat_i),
+		.m2_we_i(wbm_audio_we),
+		.m2_sel_i(wbm_audio_sel),
+		.m2_stb_i(wbm_audio_stb),
+		.m2_cyc_i(wbm_audio_cyc),
+		.m2_ack_o(wbm_audio_ack),
+`else
+		.m2_adr_i(32'h0),
+		.m2_dat_i(32'h0),
+		.m2_dat_o(),
+		.m2_we_i(1'b0),
+		.m2_sel_i(4'h0),
+		.m2_stb_i(1'b0),
+		.m2_cyc_i(1'b0),
+		.m2_ack_o(),
+`endif
+
 		.s_adr_o(wbm_adr),
 		.s_dat_o(wbm_dat_o),
 		.s_dat_i(wbm_dat_i),
@@ -1075,7 +1368,7 @@ module sysctl #()
 
 	assign wbm_blitsrc_dat_i = 32'h0;
 	assign wbm_blitsrc_ack = 1'b0;
-	assign marb_master = 1'b0;
+	assign marb_master = 2'b00;
 
 `endif
 
@@ -1471,7 +1764,6 @@ module sysctl #()
 
 	// WISHBONE SLAVE: UART0
 `ifdef UART0
-	reg wbs_uart0_int;
 	wire wbm_cyc_uart0 = cs_uart0 && wbm_cyc;
 	wire wbm_stb_uart0 = cs_uart0 && wbm_stb;
 
@@ -1493,6 +1785,43 @@ module sysctl #()
 		.dsr_pad_i(1'b1),
 		.ri_pad_i(1'b1),
 		.dcd_pad_i(1'b1),
+		.int_o(wbs_uart0_int)
+	);
+`else
+	// No `UART0. The window is still decoded and still acked -- by
+	// rtl/uart_null.v, which reports a transmitter that is always ready
+	// and a receiver that never has data.
+	//
+	// This branch is not a nicety. Before it existed, leaving `UART0
+	// out meant cs_uart0 vanished from the ack mux, the mux fell
+	// through to 1'b0, and the read in sw/bios/bios.c's putchar()
+	//
+	//     while ((reg_uart0_lsr & 0x20) == 0);
+	//
+	// never completed -- so the CPU stalled on the first character of
+	// the boot banner, before anything reached a screen. Every other
+	// optional block here degrades to "acks, reads zero"; this makes
+	// the UART do the same.
+	//
+	// Software needs no changes to cope with it, which is the point:
+	// the alternative was a Z_FEATURE_UART0 check in the BIOS, the
+	// kernel console, the shell and uart.c's ISR, all of them dead
+	// code on every board that has a UART. Software that wants to
+	// TELL the user there is no console rather than merely survive
+	// should still check that bit (sw/common/zsoc.h, bit 12) -- it is
+	// clear on a build using this.
+	uart_null wbs_uart0_null_i
+	(
+		.wb_clk_i(wbm_clk),
+		.wb_rst_i(wbm_rst),
+		.wb_adr_i(wbm_adr_sel_word),
+		.wb_dat_i(wbm_dat_o),
+		.wb_dat_o(wbs_uart0_dat_o),
+		.wb_we_i(wbm_we),
+		.wb_sel_i(wbm_sel),
+		.wb_stb_i(cs_uart0 && wbm_stb),
+		.wb_cyc_i(cs_uart0 && wbm_cyc),
+		.wb_ack_o(wbs_uart0_ack_o),
 		.int_o(wbs_uart0_int)
 	);
 `endif
@@ -1602,7 +1931,11 @@ module sysctl #()
 	);
 `endif
 
-	// WISHBONE SLAVE: SPI BIT-BANG INTERFACE FOR ETH (ENC28J60)
+	// WISHBONE SLAVE: HARDWARE SPI MASTER FOR ETH (ENC28J60)
+	//
+	// Was bit-banged (rtl/spibb_eth.v) and is not any more -- see
+	// rtl/spim.v, which replaced both spibb variants. The old name
+	// survived here longer than the old module did.
 `ifdef SPI_ETH
 	wire wbm_cyc_spieth = cs_spieth && wbm_cyc;
 
@@ -1627,11 +1960,40 @@ module sysctl #()
 		.spi_sck(ETH_SCLK),
 		.spi_int(ETH_INT)
 	);
+
+	// The ENC28J60's INT pin is ACTIVE LOW, so it inverts into the
+	// same active-high interrupt line the RMII MAC drives. Software
+	// then sees one Z_IRQ_ETH regardless of which MAC the board has,
+	// which is the point -- sw/apps/net already abstracts over the two
+	// and should not have to learn the difference here.
+	//
+	// This is the wire spim.v's own comment says would be "strictly
+	// better than a timer": the pin was already routed and readable in
+	// STATUS bit 2, it simply was not connected to anything that could
+	// wake a blocked process.
+	// Active low, and SYNCHRONISED before the edge detector above --
+	// this is an asynchronous pin from another chip, and an
+	// unsynchronised signal feeding an edge detector produces spurious
+	// pulses on metastability, which for an interrupt means a storm
+	// that appears at random.
+	reg eth_int_s0, eth_int_s1;
+	always @(posedge wbm_clk) begin
+		eth_int_s0 <= ~ETH_INT;
+		eth_int_s1 <= eth_int_s0;
+	end
+	assign eth_rx_ready = eth_int_s1;
 `endif
 
-	// WISHBONE SLAVE: RMII ETHERNET MAC (LAN8720A, mozart_ml1 only)
+	// WISHBONE SLAVE: RMII ETHERNET MAC (tested with LAN8720A)
 `ifdef ETH_RMII
 	wire wbm_cyc_ethmac = cs_ethmac && wbm_cyc;
+
+`ifdef ETH_RMII_DRIVE_REFCLK
+   wire eth_refclk = clk50mhz;
+	assign ETH_REFCLK = eth_refclk;
+`else
+   wire eth_refclk = ETH_REFCLK;
+`endif
 
 	ethmac_rmii_wb #() wbs_ethmac0_i
 	(
@@ -1645,12 +2007,13 @@ module sysctl #()
 		.wb_stb_i(wbm_stb),
 		.wb_ack_o(wbs_ethmac_ack_o),
 		.wb_cyc_i(wbm_cyc_ethmac),
-		.eth_refclk(ETH_REFCLK),
+		.eth_refclk(eth_refclk),
 		.eth_rxd(ETH_RXD),
 		.eth_txd(ETH_TXD),
 		.eth_tx_en(ETH_TX_EN),
 		.eth_crs_dv(ETH_CRS_DV),
-		.eth_rst_n(ETH_RST_N)
+		.eth_rst_n(ETH_RST_N),
+		.eth_int_o(eth_rx_ready)
 	);
 `endif
 
@@ -1696,8 +2059,53 @@ module sysctl #()
 		2'd0;
 `endif
 
+	// -- game mode plumbing --
+	//
+	// socctl.v holds the configuration and gpu_video.v consumes it;
+	// these wires are the path between them. Declared unconditionally,
+	// exactly like socctl_cursor_busy and socctl_video_mode above, so
+	// socctl's port list never changes with the board -- on a board
+	// without `GPU they simply reach nothing, and the status wires
+	// coming back are tied off below.
+	wire socctl_view_load;
+	wire socctl_game_en;
+	wire socctl_game_wrap;
+	wire [9:0] socctl_view_x;
+	wire [9:0] socctl_view_y;
+
+	// Availability is `GAME AND `GPU, not `GAME alone. A board with
+	// game mode built but no video hardware has nothing to scan out
+	// with, and reporting the mode as available there would be a lie
+	// software cannot check any other way -- so the and happens here,
+	// once, and socctl is simply told the answer. Same arrangement as
+	// VIDEO_MODE_DEFAULT directly above: the board defines live in
+	// this file, socctl gets a number.
+`ifdef GAME
+`ifdef GPU
+	localparam GAME_AVAILABLE = 1'b1;
+`else
+	localparam GAME_AVAILABLE = 1'b0;
+`endif
+`else
+	localparam GAME_AVAILABLE = 1'b0;
+`endif
+
+	// Scanout status coming back the other way. Zero on a board with
+	// no `GPU, which is the honest answer -- there is no scanout, so
+	// there are no frames and there is no vertical blanking. A stuck
+	// counter would be worse than a zero one: software waiting for it
+	// to change would wait forever, whereas software that reads zero
+	// twice can at least conclude nothing is happening.
+	wire [15:0] gpu_frame_ctr;
+	wire gpu_in_vblank;
+`ifndef GPU
+	assign gpu_frame_ctr = 16'd0;
+	assign gpu_in_vblank = 1'b0;
+`endif
+
 	socctl_wb #(
-		.VIDEO_MODE_RESET(VIDEO_MODE_DEFAULT)
+		.VIDEO_MODE_RESET(VIDEO_MODE_DEFAULT),
+		.GAME_AVAIL(GAME_AVAILABLE)
 	) socctl_i (
 		.wb_clk_i(wbm_clk),
 		.wb_rst_i(wbm_rst),
@@ -1708,7 +2116,16 @@ module sysctl #()
 		// back as zero. csrs.v gets away with the raw value only
 		// because its window starts at offset 0. Same masking as the
 		// icache block above.
-		.wb_adr_i({ 30'b0, wbm_adr_sel_word[1:0] }),
+		//
+		// THREE bits, not two. socctl had four registers and needed
+		// only [1:0]; GAME/VIEW/FRAME take it to six, so the mask has
+		// to widen or words 4 and 5 alias back onto 0 and 1 -- which
+		// would mean a VIEW write silently overwrote CTRL and turned
+		// the mouse cursor into a Z every time the viewport moved.
+		// Eight words is the whole of 0x7000_0200..0x7000_021c, well
+		// inside socctl's 256-byte window, so there is room to widen
+		// again if a seventh register ever turns up.
+		.wb_adr_i({ 29'b0, wbm_adr_sel_word[2:0] }),
 		.wb_dat_i(wbm_dat_o),
 		.wb_dat_o(wbs_socctl_dat_o),
 		.wb_we_i(wbm_we),
@@ -1717,7 +2134,14 @@ module sysctl #()
 		.wb_ack_o(wbs_socctl_ack_o),
 		.wb_cyc_i(wbm_cyc_socctl),
 		.cursor_busy(socctl_cursor_busy),
-		.video_mode(socctl_video_mode)
+		.video_mode(socctl_video_mode),
+		.view_load(socctl_view_load),
+		.game_en(socctl_game_en),
+		.game_wrap(socctl_game_wrap),
+		.view_x(socctl_view_x),
+		.view_y(socctl_view_y),
+		.frame_ctr(gpu_frame_ctr),
+		.in_vblank(gpu_in_vblank)
 	);
 
 	csrs_wb #(
@@ -1778,6 +2202,108 @@ module sysctl #()
 		.wb_stb_i(wbm_stb),
 		.wb_ack_o(wbs_rtc_ack_o),
 		.wb_cyc_i(wbm_cyc_rtc)
+	);
+`endif
+
+	// WISHBONE SLAVE: TRNG
+	//
+	// Defaults are trng.v's own -- eight oscillators, 13 stages in the
+	// shortest, sampled every 256 cycles. Only CLK_HZ is passed, and
+	// only so the block can advertise a correct RATE; nothing here
+	// depends on the system clock otherwise.
+`ifdef TRNG
+	trng_wb #(
+		.CLK_HZ(SYSCLK)
+	) trng_i (
+		.wb_clk_i(wbm_clk),
+		.wb_rst_i(wbm_rst),
+		.wb_adr_i({ 29'b0, wbm_adr_sel_word[2:0] }),
+		.wb_dat_i(wbm_dat_o),
+		.wb_dat_o(wbs_trng_dat_o),
+		.wb_we_i(wbm_we),
+		.wb_sel_i(wbm_sel),
+		.wb_stb_i(wbm_stb),
+		.wb_ack_o(wbs_trng_ack_o),
+		.wb_cyc_i(wbm_cyc_trng)
+	);
+`endif
+
+	// WISHBONE SLAVE: AUDIO (rtl/audio.v)
+	//
+	// Optional, `AUDIO in rtl/boards.vh -- unlike `RTC and `TRNG this
+	// is per-board rather than universal, because it needs pins and a
+	// DAC on the other end of them. Without it csrs.v absorbs the
+	// 0x7000_05xx window (see the cs_csrs comment above), reads return
+	// 0, the FEATURE bit is clear, and z_audio_present()
+	// (sw/common/zaudio.h) correctly answers false.
+	//
+	// SIX address bits, not three as rtc.v and trng.v use. The block
+	// has eight registers today and the phase-3 hardware mixer adds
+	// per-channel state; six covers the whole 256-byte window, so this
+	// decode never has to be revisited. Masking at all is not optional
+	// -- at 0x7000_05xx the raw wbm_adr_sel_word is 0x140 for register
+	// 0, and passing it through unmasked means no case ever matches:
+	// writes vanish and MAGIC reads back zero, with no error anywhere.
+	//
+	// FORMATS tells software which DAC is actually wired here, which it
+	// cannot otherwise know -- the register interface is identical
+	// either way. Bit 2 is reserved for the optical S/PDIF transmitter
+	// on Sergei; nothing sets it yet.
+`ifdef AUDIO
+	audio_wb #(
+		.DEPTH_LOG2(`AUDIO_FIFO_LOG2),
+		.FORMATS(AUDIO_FORMATS),
+		.CLK_HZ(SYSCLK),
+		.RATE_RESET(`AUDIO_RATE_RESET),
+		.CTRL_RESET(`AUDIO_CTRL_RESET)
+	) audio_i (
+		.wb_clk_i(wbm_clk),
+		.wb_rst_i(wbm_rst),
+		.wb_adr_i({ 26'b0, wbm_adr_sel_word[5:0] }),
+		.wb_dat_i(wbm_dat_o),
+		.wb_dat_o(wbs_audio_dat_o),
+		.wb_we_i(wbm_we),
+		.wb_sel_i(wbm_sel),
+		.wb_stb_i(wbm_stb),
+		.wb_ack_o(wbs_audio_ack_o),
+		.wb_cyc_i(wbm_cyc_audio),
+		.int_o(wbs_audio_int),
+
+		// Only the ports this board has pins for are connected. The
+		// other serialiser reaches no output and yosys prunes it --
+		// which is why rtl/audio_out.v has no `ifdef or generate block
+		// choosing between the two formats. See docs/audio.md for the
+		// measured per-board cost, which differs because of this.
+`ifdef AUDIO_SD
+		.AUDIO_L(AUDIO_L),
+		.AUDIO_R(AUDIO_R),
+`else
+		.AUDIO_L(),
+		.AUDIO_R(),
+`endif
+`ifdef AUDIO_PT8211
+		.AUD_BCK(AUD_BCK),
+		.AUD_WS(AUD_WS),
+		.AUD_DIN(AUD_DIN),
+`else
+		.AUD_BCK(),
+		.AUD_WS(),
+		.AUD_DIN(),
+`endif
+`ifdef AUDIO_SPDIF
+		.AUD_OPTICAL(AUD_OPTICAL),
+`else
+		.AUD_OPTICAL(),
+`endif
+
+		.mx_adr_o(wbm_audio_adr),
+		.mx_dat_o(wbm_audio_dat_o),
+		.mx_dat_i(wbm_audio_dat_i),
+		.mx_we_o(wbm_audio_we),
+		.mx_sel_o(wbm_audio_sel),
+		.mx_stb_o(wbm_audio_stb),
+		.mx_cyc_o(wbm_audio_cyc),
+		.mx_ack_i(wbm_audio_ack)
 	);
 `endif
 
@@ -1862,7 +2388,59 @@ module sysctl #()
 		0;
 `endif
 
-	gpu_video #() gpu_video_i
+	// -- scanout timing --
+	//
+	// Three parameter sets, one build. VGA/DDMI is 640x480@60 with the
+	// framebuffer 1:1 against the signal; composite is 320x240 spread
+	// four pixel clocks per source pixel. All three run from the SAME
+	// 25.2MHz pclk -- composite needs no new PLL output, which is most
+	// of why it is cheap. See docs/composite.md for the derivation.
+	//
+	// The horizontal numbers are in PIXEL CLOCKS, not source pixels, so
+	// h_disp is 1280 for composite (320 x 4) rather than 320. That is
+	// what lets one timing generator serve both: the divisor lives in
+	// H_DIV_BASE and the counters never need to know about it.
+	//
+	// The slack between the nominal porches and the exact line length
+	// is split between front and back porch rather than dumped on one,
+	// so the 1280-clock image sits centred in the active window instead
+	// of hard against its left edge.
+`ifdef GPU_COMPOSITE
+`ifdef GPU_COMPOSITE_PAL
+	// PAL 288p: 1613 clk/line = 64.0079us (+0.012%), 312 lines = 50.07Hz
+	localparam [10:0] VID_H_DISP = 11'd1280, VID_H_FP = 11'd57;
+	localparam [10:0] VID_H_PW   = 11'd118,  VID_H_BP = 11'd158;
+	localparam [10:0] VID_V_DISP = 11'd240,  VID_V_FP = 11'd25;
+	localparam [10:0] VID_V_PW   = 11'd3,    VID_V_BP = 11'd44;
+`else
+	// NTSC 240p: 1602 clk/line = 63.5714us (+0.025%), 262 lines = 60.04Hz
+	localparam [10:0] VID_H_DISP = 11'd1280, VID_H_FP = 11'd65;
+	localparam [10:0] VID_H_PW   = 11'd118,  VID_H_BP = 11'd139;
+	localparam [10:0] VID_V_DISP = 11'd240,  VID_V_FP = 11'd3;
+	localparam [10:0] VID_V_PW   = 11'd3,    VID_V_BP = 11'd16;
+`endif
+	localparam [2:0] VID_H_DIV = 3'd4;
+	localparam VID_FIXED_VP = 1'b1;
+`else
+	// VESA DMT 640x480@60 -- unchanged from every previous bitstream.
+	localparam [10:0] VID_H_DISP = 11'd640, VID_H_FP = 11'd16;
+	localparam [10:0] VID_H_PW   = 11'd96,  VID_H_BP = 11'd48;
+	localparam [10:0] VID_V_DISP = 11'd480, VID_V_FP = 11'd10;
+	localparam [10:0] VID_V_PW   = 11'd2,   VID_V_BP = 11'd33;
+	localparam [2:0] VID_H_DIV = 3'd1;
+	localparam VID_FIXED_VP = 1'b0;
+`endif
+
+	gpu_video #(
+		.h_disp(VID_H_DISP), .h_front_porch(VID_H_FP),
+		.h_pulse_width(VID_H_PW), .h_back_porch(VID_H_BP),
+		.h_line(VID_H_FP + VID_H_PW + VID_H_BP + VID_H_DISP),
+		.v_disp(VID_V_DISP), .v_front_porch(VID_V_FP),
+		.v_pulse_width(VID_V_PW), .v_back_porch(VID_V_BP),
+		.v_frame(VID_V_FP + VID_V_PW + VID_V_BP + VID_V_DISP),
+		.H_DIV_BASE(VID_H_DIV),
+		.FIXED_VIEWPORT(VID_FIXED_VP)
+	) gpu_video_i
 	(
 		.clk(wbm_clk),
 		.pclk(clk25_2mhz),
@@ -1870,10 +2448,41 @@ module sysctl #()
 		.resetn(~wbm_rst),
 		.pixel(gpu_pixel),
 		.video_mode(socctl_video_mode),
+		.view_load(socctl_view_load),
+		// GAME_AVAILABLE is already `GAME && `GPU, and socctl has
+		// already gated its own enable bit with it -- so this is belt
+		// and braces. It is cheap belt and braces: yosys sees a
+		// constant 0 on a board without `GAME and folds the whole
+		// game-mode datapath out of gpu_video (the row adder, the
+		// wrap comparator, the doubling phase flop), leaving the
+		// scanout path bit-for-bit what it was before this feature
+		// existed. A board that opts out pays nothing.
+		.game_en(socctl_game_en && GAME_AVAILABLE),
+		.game_wrap(socctl_game_wrap),
+		.view_x(socctl_view_x),
+		.view_y(socctl_view_y),
+		.frame_ctr(gpu_frame_ctr),
+		.in_vblank(gpu_in_vblank),
+		// x and y are FRAMEBUFFER coordinates now, in both modes --
+		// see gpu_video.v's header. In desktop mode that is the same
+		// thing as the screen coordinate they used to be, so nothing
+		// downstream changed; in game mode it is what lets
+		// gpu_cursor.v below stay completely unmodified and still
+		// draw the pointer in the right place, pixel-doubled.
 		.x(gpu_x),
 		.y(gpu_y),
 		.gb_adr_o(gb_adr),
 		.gb_dat_i(gb_dat),
+`ifdef GPU_COMPOSITE
+		// Composite REPLACES the VGA and DDMI connections rather than
+		// joining them -- see boards.vh's own note on why the two
+		// cannot share one timing generator. Written as an `ifdef/
+		// `else here rather than trusting a board author to comment
+		// out `GPU_VGA as well: a board that defined both would
+		// otherwise build, drive VGA pins with 15.7kHz sync, and fail
+		// in a way that looks like broken hardware.
+		.dac(COMP_DAC),
+`else
 `ifdef GPU_VGA
 		.red(VGA_R),
 		.green(VGA_G),
@@ -1883,6 +2492,7 @@ module sysctl #()
 `endif
 `ifdef GPU_DDMI
 		.dvi_p({ DDMI_CK_P, DDMI_D2_P, DDMI_D1_P, DDMI_D0_P }),
+`endif
 `endif
 	);
 

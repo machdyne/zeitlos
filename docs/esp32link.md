@@ -2,7 +2,7 @@
 
 The ULX3S has no Ethernet. It has an ESP32 wired to the FPGA over two
 UARTs and a few GPIOs, so on this board Zeitlos's `net` uses a third
-PHY backend, `NET_PHY=ESP32LINK`: the ESP32 runs its own firmware
+PHY backend: the ESP32 runs its own firmware
 (`esp32/zeitlos-nic`) and hands Ethernet frames back and forth over
 UART1. Zeitlos keeps its own MAC, IP stack, ARP, DNS, TFTP and telnet;
 802.11 exists only on the ESP32. This is the same shape as the ENC28J60
@@ -36,8 +36,10 @@ downloads via the gateway's TFTP server.
   frame while another process owns the CPU (one time slice away from
   the CPU is ~400 bytes at 1 Mbaud), so the driver reads replies from
   here with interrupts enabled and never loses a late one.
-- CSR feature bit 25 (`Z_FEATURE_ESP32_LINK`, `rtl/csrs.vh`,
-  `sw/common/zsoc.h`): `net` exits cleanly on a bitstream without it.
+- CSR feature bit 30 (`Z_FEATURE_ESP32_LINK`, `rtl/csrs.vh`,
+  `sw/common/zsoc.h`). `net_phy_select()` (`sw/apps/net/net_phy.c`)
+  picks this backend when the bit is set, exactly as it picks RMII or
+  the ENC28J60 elsewhere -- one `net.bin` runs on every board.
 
 ## ZNIC protocol
 
@@ -66,6 +68,11 @@ else a DATA frame, else NOP; `DATA` gets `DATA_ACK`; `STA` gets
 already in the FIFO before sending and matches replies in order, so a
 reply that arrives late (the ESP32's tcpip and wifi tasks can delay
 the link task by tens of ms) is simply the next thing read.
+
+The driver adds one optional entry to `net_phy_t`, `poll_wifi()`:
+wired backends leave it NULL, and `net`'s main loop calls it when it
+is set, so association happens without blocking `phy_init()` (an
+association takes seconds and `wm` has to keep running).
 
 ## Bring-up from Zeitlos
 

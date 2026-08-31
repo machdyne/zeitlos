@@ -25,5 +25,6 @@ extern const uint8_t z_icon_settings_data[32 * 4];
 extern const uint8_t z_icon_space3d_data[32 * 4];
 extern const uint8_t z_icon_term_data[32 * 4];
 extern const uint8_t z_icon_text_data[32 * 4];
+extern const uint8_t z_icon_track_data[32 * 4];
 
 #endif

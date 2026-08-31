@@ -26,7 +26,14 @@ GC_CFLAGS = -ffunction-sections -fdata-sections
 GC_LDFLAGS = -Wl,--gc-sections
 endif
 
-CFLAGS = --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) $(GC_CFLAGS) $(ARCH_DEFS) $(LIBC_FLAGS)
+# `override` so the flags this app REQUIRES survive a command-line
+# CFLAGS. A command-line assignment replaces the makefile's CFLAGS
+# outright -- `make CFLAGS+=-DFOO=1` appends to the command-line value,
+# not to this one -- silently dropping -Os, -march, section GC, the
+# libc specs and any -D this app needs to build correctly. The result
+# still builds and links; it just produces a much larger, slower binary
+# that can overrun the space the loader has for it and crash on start.
+override CFLAGS += --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) $(GC_CFLAGS) $(ARCH_DEFS) $(LIBC_FLAGS)
 LDFLAGS = -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS)
 LDSCRIPT = ../../common/riscv-app.ld
 
@@ -86,7 +93,7 @@ TE_CFLAGS = -DEMBEDDED -DTE_HOST_IO \
 # procedure and --gc-sections drops it from any build where zapi.c
 # stops calling it.
 OBJS = zeitlos.o zobj.o zport.o zline.o zrepl.o zdns.o zfsapp.o zstream.o \
-	zgfx.o zfont_data.o zwin.o zrtc.o ms.o \
+	zgfx.o zfont_data.o zwin.o zrtc.o zrng.o ms.o \
 	te.o te_bridge.o page.o zapi.o repl.o
 
 repl: repl.elf repl.bin
@@ -105,6 +112,14 @@ zline.o:
 
 zrtc.o: ../../common/zrtc.c ../../common/zrtc.h
 	$(CC) $(CFLAGS) -c ../../common/zrtc.c -o zrtc.o
+
+# The system CSPRNG, behind (random)/(random-hex)/(random-secure?) --
+# see zapi.c and docs/trng.md. Linked unconditionally rather than
+# behind a switch: it is ~2.4KB and it works (with a clearly-labelled
+# non-cryptographic fallback) on a bitstream with no `TRNG at all, so
+# there is no build where leaving it out would be the right call.
+zrng.o: ../../common/zrng.c ../../common/zrng.h ../../common/zsoc.h
+	$(CC) $(CFLAGS) -c ../../common/zrng.c -o zrng.o
 
 zrepl.o:
 	$(CC) $(CFLAGS) -c ../../common/zrepl.c -o zrepl.o

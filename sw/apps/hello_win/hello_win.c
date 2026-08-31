@@ -20,6 +20,7 @@
 #include <string.h>
 
 #include "../../common/zeitlos.h"
+#include "../../common/zsoc.h"	// Z_TICK_HZ, for the idle wait in main()
 #include "../../common/zwm.h"
 #include "../../common/zwin.h"
 #include "../../common/zfont.h"
@@ -224,6 +225,11 @@ int main(void) {
 		count++;
 		draw_counter();
 
+	
+		/* Yield. This loop used to spin, so the app was RUNNABLE
+		 * forever and took a full scheduler share from whatever was
+		 * in the foreground -- see docs/app_runtime.md. a demo that draws once and then waits. */
+		z_proc_wait(Z_TICK_HZ / 30);
 	}
 
 }

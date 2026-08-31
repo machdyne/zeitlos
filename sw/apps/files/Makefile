@@ -21,7 +21,14 @@ endif
 # board that ever loads glyph memory, and every app filess with
 # z_font_5x8 as a result. See docs/window_manager.md, "Hardware glyph
 # blitting".
-CFLAGS = --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) -DZ_GFX_HW_BLIT $(GC_CFLAGS) $(ARCH_DEFS) $(LIBC_FLAGS)
+# `override` so the flags this app REQUIRES survive a command-line
+# CFLAGS. A command-line assignment replaces the makefile's CFLAGS
+# outright -- `make CFLAGS+=-DFOO=1` appends to the command-line value,
+# not to this one -- silently dropping -Os, -march, section GC, the
+# libc specs and any -D this app needs to build correctly. The result
+# still builds and links; it just produces a much larger, slower binary
+# that can overrun the space the loader has for it and crash on start.
+override CFLAGS += --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) -DZ_GFX_HW_BLIT $(GC_CFLAGS) $(ARCH_DEFS) $(LIBC_FLAGS)
 LDFLAGS = -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS)
 LDSCRIPT = ../../common/riscv-app.ld
 

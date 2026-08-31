@@ -50,6 +50,7 @@
 #include <string.h>
 
 #include "../../common/zeitlos.h"
+#include "../../common/zsoc.h"	// Z_TICK_HZ, for the render instrumentation
 #include "../../common/zwm.h"
 #include "../../common/zwin.h"
 #include "../../common/zfont.h"
@@ -231,6 +232,80 @@ static void draw_cell(int col, int row, char ch, bool reverse) {
 // since the last call) plus the cursor overlay, which needs its own
 // tracking since moving the cursor (e.g. an arrow key) doesn't dirty
 // any cell at all.
+/* -- render instrumentation --
+ *
+ * Prints to the serial console, not the window: the point is to see
+ * what render() costs, and drawing the numbers with the very glyph
+ * blitter being measured would change the answer.
+ *
+ * What is being tested: render() redraws whole DIRTY ROWS, all
+ * VT_COLS of them, whichever cells actually changed. Typing one
+ * character marks its row dirty, so one keystroke may cost 80 glyph
+ * blits instead of 1. Whether that matters depends on the ratio these
+ * counters report -- if glyphs-per-render is near VT_COLS while only
+ * a cell or two changed, row granularity is the thing to fix and
+ * per-glyph micro-optimisation is beside the point.
+ *
+ * Measured cost per glyph (docs/gpu_blitter.md): ~112 cycles, of
+ * which ~80 is the blit and ~32 the eight register writes. So 80
+ * glyphs is roughly 9000 cycles -- about 1% of a 60Hz frame, per
+ * keystroke, which is fine; 25 rows of it is not.
+ */
+/* 0 in a normal build. Set to 1 to print render counts to the serial
+ * console every two seconds -- see the block below for what the
+ * numbers mean and which questions they answer.
+ *
+ * Off by default because it is console noise once the question it was
+ * written for has been answered, not because it is expensive: the
+ * counters are increments and the clock is read once per main loop,
+ * not per row. (It WAS per row at first, which made every repaint slow
+ * enough to see as a flash on each keystroke.) */
+#define TERM_INSTRUMENT 0
+
+#if TERM_INSTRUMENT
+static uint32_t ins_renders, ins_glyphs, ins_rows, ins_skipped;
+static uint32_t ins_last_report;
+
+static void ins_report(void)
+{
+	uint32_t now = z_uptime_ticks();
+
+	if (ins_last_report == 0) { ins_last_report = now; return; }
+	if (now - ins_last_report < Z_TICK_HZ * 2) return;
+	if (ins_renders == 0) { ins_last_report = now; return; }
+
+	printf("term: %lu renders, %lu rows, %lu glyphs "
+		"(%lu glyphs/render, %lu/row), %lu no-ops\n",
+		(unsigned long)ins_renders,
+		(unsigned long)ins_rows,
+		(unsigned long)ins_glyphs,
+		(unsigned long)(ins_glyphs / (ins_renders ? ins_renders : 1)),
+		(unsigned long)(ins_rows ? ins_glyphs / ins_rows : 0),
+		(unsigned long)ins_skipped);
+
+	ins_renders = ins_glyphs = ins_rows = ins_skipped = 0;
+	ins_last_report = now;
+}
+#else
+#define ins_report() ((void)0)
+#endif
+
+/* What is currently on the glass: character in the low 8 bits, reverse
+ * flag in bit 8. Compared against the vt model to find the cells that
+ * actually need redrawing -- see render().
+ *
+ * Initialised to a value no cell can hold, so the first render draws
+ * everything rather than trusting a zeroed shadow that says the screen
+ * is full of NULs. */
+static uint16_t shadow[VT_ROWS][VT_COLS];
+
+static void shadow_invalidate(void)
+{
+	for (int r = 0; r < VT_ROWS; r++)
+		for (int c = 0; c < VT_COLS; c++)
+			shadow[r][c] = 0xFFFF;
+}
+
 static void render(void) {
 
 	bool was_dirty[VT_ROWS];
@@ -240,11 +315,124 @@ static void render(void) {
 		if (was_dirty[row]) any_dirty = true;
 	}
 
+#if TERM_INSTRUMENT
+	ins_renders++;
+#endif
+
+	/* -- move the pixels a scroll left behind, instead of redrawing --
+	 *
+	 * A scroll changes every cell in the model, so the shadow compare
+	 * below would find them all different and redraw the whole
+	 * screen: 2000 glyphs, ~4.7ms, and a visible hitch every time
+	 * output scrolls.
+	 *
+	 * But the pixels that survived a scroll are already correct --
+	 * just one row too low. Blitting them up and shifting the SHADOW
+	 * by the same amount makes the compare below find them matching,
+	 * so it draws only the rows that genuinely changed. One blit plus
+	 * one row of glyphs instead of twenty-five.
+	 *
+	 * The shadow shift is what makes this cheap to add: without it
+	 * this would need its own bookkeeping about which rows are now
+	 * correct. With it, the existing compare works out the answer.
+	 *
+	 * Note the blit and the shift must agree exactly. If they
+	 * disagree the compare concludes rows match when they do not, and
+	 * the terminal shows stale text with no way to notice. */
+	{
+		uint16_t n = vt_take_scrolls(&vt);
+
+		/* DISABLED -- see the note in sw/apps/text/text.c's
+		 * scroll_repaint(). Falls back to invalidating the shadow,
+		 * which makes the compare below redraw everything: the
+		 * behaviour before the blit was added, and correct.
+		 *
+		 * vt_take_scrolls() is still called, and must be: the count
+		 * has to be consumed either way or it accumulates and the
+		 * first re-enabled scroll shifts by everything since boot. */
+		if (0 && n > 0 && n < VT_ROWS) {
+
+			z_clip_t c;
+			z_win_content_rect(&win, &c);
+
+			z_fb_hw_scroll((int)c.x0, (int)c.y0,
+				VT_COLS * TERM_FONT.w, VT_ROWS * TERM_FONT.h,
+				-(int)n * TERM_FONT.h);
+
+			for (int r = 0; r + n < VT_ROWS; r++)
+				for (int col = 0; col < VT_COLS; col++)
+					shadow[r][col] = shadow[r + n][col];
+
+			/* The rows that scrolled in hold nothing known. */
+			for (int r = VT_ROWS - n; r < VT_ROWS; r++)
+				for (int col = 0; col < VT_COLS; col++)
+					shadow[r][col] = 0xFFFF;
+
+			/* The cursor overlay moved with the pixels, so where the
+			 * inverted cell used to be no longer describes anything. */
+			draw_cursor_y -= (int)n;
+			if (draw_cursor_y < 0) { draw_cursor_x = -1; draw_cursor_y = -1; }
+
+		} else if (n > 0) {
+			/* Deliberately NOT shadow_invalidate() here.
+			 *
+			 * The shadow models what is ON THE GLASS, not what is
+			 * in the vt model. Reaching this branch means the
+			 * pixels were not touched -- no blit ran -- so the
+			 * shadow is still exactly right, and the compare below
+			 * will redraw precisely the cells whose content
+			 * changed. Invalidating throws that away and forces all
+			 * 2000 cells, which is the one thing this shadow exists
+			 * to avoid.
+			 *
+			 * It costs most in exactly the case that felt slowest:
+			 * a full-screen application that REPAINTS rather than
+			 * streams (top, vi -- anything cursor-addressed) emits
+			 * a scroll when it writes its bottom line, then rewrites
+			 * the same layout. Almost every cell is unchanged, so
+			 * the compare should draw almost nothing; the invalidate
+			 * turned every refresh into a whole-screen redraw.
+			 *
+			 * For a STREAMING terminal nothing is lost: after a
+			 * scroll every row's content genuinely differs from what
+			 * is on the glass, so the compare redraws it anyway.
+			 * Strictly better or equal, and no blit involved. */
+		}
+	}
+
+	/* Redraw only the cells that actually CHANGED, not every cell of
+	 * every dirty row.
+	 *
+	 * vt tracks dirt per ROW, so typing one character marked its row
+	 * dirty and this redrew all VT_COLS of it -- measured at 80 glyph
+	 * blits per keystroke where 1 would do.
+	 *
+	 * Rather than push cell-level tracking down into zvt100 (which
+	 * would touch every routine that writes a cell), this keeps a
+	 * shadow of what is actually ON SCREEN and compares. The dirty
+	 * flags still decide which rows are worth looking at, so a quiet
+	 * screen costs nothing; within those rows the shadow decides what
+	 * is worth drawing.
+	 *
+	 * It also covers a case the dirty flags never could: a row marked
+	 * dirty whose contents happen to be unchanged (a redundant
+	 * repaint, a reverse-video toggle back to where it started) now
+	 * draws nothing at all. */
 	for (int row = 0; row < VT_ROWS; row++) {
 		if (!was_dirty[row]) continue;
+#if TERM_INSTRUMENT
+		ins_rows++;
+#endif
 		for (int col = 0; col < VT_COLS; col++) {
 			vt_cell_t *cell = &vt.cells[row][col];
+			uint16_t now = (uint16_t)((uint8_t)cell->ch |
+				(cell->reverse ? 0x100u : 0u));
+			if (shadow[row][col] == now) continue;
+			shadow[row][col] = now;
 			draw_cell(col, row, cell->ch, cell->reverse);
+#if TERM_INSTRUMENT
+			ins_glyphs++;
+#endif
 		}
 	}
 	vt_clear_dirty(&vt);
@@ -257,7 +445,13 @@ static void render(void) {
 	int cur_y = vt.cursor_y;
 
 	bool cursor_moved = (cur_x != draw_cursor_x || cur_y != draw_cursor_y);
-	if (!any_dirty && !cursor_moved) return;
+	if (!any_dirty && !cursor_moved) {
+#if TERM_INSTRUMENT
+		ins_skipped++;
+		ins_report();
+#endif
+		return;
+	}
 
 	// erase the old cursor cell back to its real (non-inverted)
 	// appearance -- unless that row was already covered by the
@@ -265,14 +459,27 @@ static void render(void) {
 	if (draw_cursor_y >= 0 && draw_cursor_y < VT_ROWS && !was_dirty[draw_cursor_y]) {
 		vt_cell_t *old_cell = &vt.cells[draw_cursor_y][draw_cursor_x];
 		draw_cell(draw_cursor_x, draw_cursor_y, old_cell->ch, old_cell->reverse);
+		shadow[draw_cursor_y][draw_cursor_x] = (uint16_t)((uint8_t)old_cell->ch |
+			(old_cell->reverse ? 0x100u : 0u));
 	}
 
 	// draw the new cursor cell inverted
 	vt_cell_t *cur_cell = &vt.cells[cur_y][cur_x];
 	draw_cell(cur_x, cur_y, cur_cell->ch, !cur_cell->reverse);
+	/* Drawn INVERTED, so record the inverted form -- otherwise the
+	 * next render sees the shadow agreeing with the model and never
+	 * erases the cursor. */
+	shadow[cur_y][cur_x] = (uint16_t)((uint8_t)cur_cell->ch |
+		(!cur_cell->reverse ? 0x100u : 0u));
 
 	draw_cursor_x = cur_x;
 	draw_cursor_y = cur_y;
+
+#if TERM_INSTRUMENT
+	/* the cursor erase and redraw above are glyphs too */
+	ins_glyphs += 2;
+	ins_report();
+#endif
 
 	// NOTE: this used to also call a resweep_right_of_cursor()
 	// mitigation here (re-stamping a bounded run of columns after
@@ -423,6 +630,13 @@ static bool connect_port(const char *name, uint32_t fallback_pid, z_obj_t arg,
 		if (msg.subject == Z_WM_REDRAW) {
 			z_win_apply_redraw(&win, msg.obj.val.uint32);
 			vt_mark_all_dirty(&vt);
+			/* The window has been repainted underneath us, so the
+			 * shadow no longer describes what is on the glass.
+			 * Without this, render() compares against a shadow that
+			 * still matches the model and draws nothing -- leaving
+			 * the terminal blank after a move or an occlusion, which
+			 * is far worse than the redundant redraw it replaced. */
+			shadow_invalidate();
 			draw_cursor_x = -1;
 			draw_cursor_y = -1;
 			render();
@@ -874,6 +1088,7 @@ int main(void) {
 		while (z_msg_read(&msg) == Z_OK) {
 			if (msg.subject == Z_WM_REDRAW) {
 				z_win_apply_redraw(&win, msg.obj.val.uint32);
+				shadow_invalidate();   /* see the other REDRAW case */
 				got_redraw = true;
 			} else if (msg.subject == Z_WM_WINDOW_MOVED) {
 				z_win_parse_rect(&win, &msg.obj);
@@ -948,6 +1163,7 @@ int main(void) {
 			// repaint, same convention hello_win.c's draw_static()
 			// uses on its own Z_WM_REDRAW handling.
 			vt_mark_all_dirty(&vt);
+			shadow_invalidate();  // the glass no longer matches -- see render()
 			draw_cursor_x = -1;   // force the cursor overlay to redraw too
 			draw_cursor_y = -1;
 		}
@@ -955,6 +1171,26 @@ int main(void) {
 		render();
 
 		if (got_redraw) z_win_redraw_done(&win);
+	
+		/* Block until something arrives.
+		 *
+		 * This loop used to spin: measured at ~1435 iterations per
+		 * second while completely idle, every one of them calling
+		 * render(), finding nothing dirty and returning. Cheap
+		 * individually, and ruinous collectively -- the scheduler
+		 * divides the CPU between RUNNABLE processes, so an idle
+		 * terminal was taking a full share out of whatever was in the
+		 * foreground.
+		 *
+		 * That is the same fault wm and repl had, and fixing those
+		 * took a full-screen app from a quarter of the machine to
+		 * half (docs/app_runtime.md). term is the third.
+		 *
+		 * A timeout rather than z_proc_wait(0): everything here is
+		 * message-driven today, but a terminal is exactly the kind of
+		 * thing that grows a cursor blink or an idle timeout later,
+		 * and waking 30 times a second costs nothing measurable. */
+		z_proc_wait(Z_TICK_HZ / 30);
 	}
 
 	return 0;

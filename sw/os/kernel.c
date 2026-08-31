@@ -659,6 +659,41 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 		z_hid_irq1();
 	}
 
+	// Ethernet receive -- unblock whoever is waiting on packets.
+	//
+	// No handler and no queue: the frame is sitting in the MAC's RX
+	// buffer and the driver reads it from there. All this interrupt
+	// has to do is make sure the driver gets scheduled to look, which
+	// is exactly what unblocking it does.
+	//
+	// Z_IRQ_ETH is a rising-edge PULSE, one per arrival -- NOT a
+	// level. rtl/sysctl.v edge-detects the MAC's level deliberately:
+	// bit 8 is latched, and a latched level re-fires forever, which
+	// brought the machine to a crawl. Read that file's comment before
+	// changing anything here.
+	//
+	// This comment used to claim the opposite, and concluded there
+	// was "no window in which the interrupt has been acknowledged but
+	// a packet is still unread". That is true of a level and false of
+	// an edge, and the gap it hid was a real one: a frame arriving
+	// while net was still running unblocked a process that was not
+	// blocked yet, which was a no-op, and the frame sat unread until
+	// net's backstop timeout expired ~100ms later. Interactive
+	// traffic over telnet felt exactly as slow as that sounds.
+	//
+	// k_proc_unblock() now RECORDS a wakeup that arrives too early
+	// (Z_PROC_FLAG_WAKE, zproc.h) and k_proc_wait() consumes it
+	// instead of sleeping, so a single pulse cannot be missed however
+	// it is timed.
+	//
+	// The pid is looked up rather than fixed: net registers itself
+	// like any other service, and hardwiring a pid here would break
+	// the moment it were restarted.
+	if ((irqs & (1 << Z_IRQ_ETH)) != 0) {
+		uint32_t net_pid;
+		if (k_pid_find("net0", &net_pid)) k_proc_unblock(net_pid);
+	}
+
 	// swap process on KTIMER interrupt
 	if ((irqs & (1 << Z_IRQ_KTIMER)) != 0) {
 
@@ -787,12 +822,22 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 }
 
 // Make a blocked process schedulable again. Safe to call on a process
-// that isn't blocked (does nothing), which is what lets k_msg_send()
-// call it unconditionally on every delivery.
+// that isn't blocked, which is what lets k_msg_send() call it
+// unconditionally on every delivery.
+//
+// Calling it on a process that has NOT blocked yet is not a no-op any
+// more: the wakeup is recorded, so it cannot be lost in the window
+// between a process deciding to wait and actually being marked
+// BLOCKED. See Z_PROC_FLAG_WAKE in zproc.h for the case that made
+// this necessary.
 void k_proc_unblock(uint32_t pid) {
 	if (pid >= Z_PROCS_MAX) return;
-	z_procs[pid].flags &= ~Z_PROC_FLAG_BLOCKED;
-	z_procs[pid].wake_tick = 0;
+	if (z_procs[pid].flags & Z_PROC_FLAG_BLOCKED) {
+		z_procs[pid].flags &= ~Z_PROC_FLAG_BLOCKED;
+		z_procs[pid].wake_tick = 0;
+	} else {
+		z_procs[pid].flags |= Z_PROC_FLAG_WAKE;
+	}
 }
 
 // -- k_proc_wait syscall --
@@ -825,20 +870,70 @@ void k_proc_unblock(uint32_t pid) {
 // that's a worthwhile follow-up, not a correctness issue.
 z_obj_t *k_proc_wait(z_obj_t *args) {
 	uint32_t timeout = (args->type == Z_UINT32) ? args->val.uint32 : 0;
-	// The whole check-and-block is atomic against the KTIMER wake loop.
-	// This runs in the caller's context with interrupts enabled, and
-	// the caller keeps running until the next tick, so it can be back
-	// here with BLOCKED still set from its previous call. A tick
-	// landing between the wake_tick store and the flags store could
-	// then unblock it (wake_tick = 0) and, on resume, this function
-	// set BLOCKED again with no wake tick: blocked forever. Seen on
-	// the ULX3S (net calls z_proc_wait(1) once per loop iteration):
-	// `ps` showed net "blk ... wake: 0".
-	uint32_t m = maskirq(0xFFFFFFFF);
-	if (!z_mailbox_empty(z_pid)) {
-		maskirq(m);
+
+	// THE TEST AND THE BLOCK MUST BE ATOMIC TOGETHER.
+	//
+	// z_mailbox_empty() (msg.c) masks interrupts to read `count`, but
+	// it RELEASES the mask before returning -- so without the mask
+	// held here, there is a window between "mailbox is empty" and
+	// "flags |= Z_PROC_FLAG_BLOCKED" in which a KTIMER tick can
+	// preempt this process, run another one, and have it deliver a
+	// message:
+	//
+	//   this process   z_mailbox_empty() -> true, IRQs re-enabled
+	//   *** KTIMER preempts ***
+	//   sender         z_mailbox_push()      message queued
+	//   sender         k_proc_unblock(us)    clears BLOCKED -- which
+	//                                        is not set yet, so this
+	//                                        is a NO-OP and the wakeup
+	//                                        is LOST
+	//   this process   flags |= BLOCKED      sleeps, holding an
+	//                                        unread message
+	//
+	// With `timeout` 0 -- what an app's idle loop passes -- wake_tick
+	// is the "indefinite" sentinel, so nothing ever wakes it on its
+	// own. It sleeps until the NEXT message happens to arrive and
+	// unblocks it as a side effect.
+	//
+	// The visible symptom is an app that ignores a request it was
+	// definitely sent, then services it later when something unrelated
+	// wakes it: "wm: timed out waiting for pid N to ack a redraw" on a
+	// perfectly healthy, idle app, followed by the redraw appearing
+	// anyway a moment later. Rare, load-dependent, and it survives
+	// every fix applied further up the stack, because the app is
+	// ASLEEP rather than slow.
+	//
+	// This function's own comment already said the test had to happen
+	// "in the same syscall" that sets the flag. That is necessary but
+	// not sufficient: it has to happen under the same mask.
+	//
+	// maskirq() nests correctly here -- z_mailbox_empty()'s internal
+	// mask/restore is a no-op while we already hold it.
+	uint32_t old_mask = maskirq(0xFFFFFFFF);
+
+	// A wakeup that landed before this process got here. Consume it
+	// and do not sleep: whatever it signalled has already happened,
+	// and for a direct unblock there is nothing left to re-check the
+	// way the mailbox test below re-checks a message.
+	//
+	// Tested under the same mask as that test, and for the same
+	// reason -- checking it outside would reopen the very window this
+	// is here to close.
+	if (z_procs[z_pid].flags & Z_PROC_FLAG_WAKE) {
+		z_procs[z_pid].flags &= ~Z_PROC_FLAG_WAKE;
+		maskirq(old_mask);
 		return (&z_fail);
 	}
+
+	// something already waiting -- don't block, let the caller read it
+	if (!z_mailbox_empty(z_pid)) {
+		maskirq(old_mask);
+		return (&z_fail);
+	}
+
+	// wake_tick 0 is the sentinel for "indefinite", so a timeout that
+	// happens to land exactly on tick 0 is nudged to 1. At 732Hz that
+	// is a 1.4ms error once every ~68 days.
 	if (timeout) {
 		uint32_t w = z_kernel_ticks + timeout;
 		z_procs[z_pid].wake_tick = w ? w : 1;
@@ -846,7 +941,9 @@ z_obj_t *k_proc_wait(z_obj_t *args) {
 		z_procs[z_pid].wake_tick = 0;
 	}
 	z_procs[z_pid].flags |= Z_PROC_FLAG_BLOCKED;
-	maskirq(m);
+
+	maskirq(old_mask);
+
 	return (&z_ok);
 }
 

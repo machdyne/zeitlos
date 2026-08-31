@@ -119,6 +119,7 @@ static const dock_app_t dock_candidates[] = {
 	{ "info",		z_icon_info_data  },
 	{ "calc",		z_icon_calc_data  },
 	{ "clock",		z_icon_clock_data },
+	{ "track",		z_icon_track_data },
 	{ "space3d",	z_icon_space3d_data },
 	{ "gpu3d",		z_icon_gpu3d_data },
 	{ "settings",	z_icon_settings_data },
@@ -309,11 +310,27 @@ static void draw_window_box(wm_window_t *w, bool is_focused, int color) {
 	int x0 = w->x, y0 = w->y;
 	int x1 = w->x + w->w - 1, y1 = w->y + w->h - 1;
 
+	// Under Z_RASTER_XOR every pixel of this frame must be drawn
+	// EXACTLY ONCE, or drawing the frame a second time will not undo
+	// it. XOR is its own inverse per pixel, not per shape: a pixel
+	// touched twice in one pass is back where it started, so it goes
+	// missing from the visible outline, and a pixel touched an odd
+	// number of times survives the erase as a leftover speck.
+	//
+	// z_fb_hw_box() (zgfx.c) handles its own four corners. What is
+	// left is the two pieces drawn ON TOP of that box below -- the
+	// titlebar separator, whose ends land on the left and right
+	// edges, and the resize grip's ticks, whose ends land on the
+	// bottom and right edges. Both get pulled in by one pixel for
+	// XOR only, so the solid rendering is byte-for-byte what it
+	// always was.
+	int xin = (color == Z_RASTER_XOR) ? 1 : 0;
+
 	z_fb_hw_box(x0, y0, x1, y1, color, NULL);
 
 	if (!w->no_titlebar) {
 		int ty = w->y + Z_WM_TITLEBAR_H;
-		z_fb_hw_line(x0, ty, x1, ty, color, NULL);	// titlebar separator
+		z_fb_hw_line(x0 + xin, ty, x1 - xin, ty, color, NULL);	// titlebar separator
 	}
 
 	// resize grip -- a few diagonal ticks in the lower-right corner,
@@ -336,11 +353,27 @@ static void draw_window_box(wm_window_t *w, bool is_focused, int color) {
 			// it to a huge value rather than clipping, the same
 			// hazard the focus ring below already clamps for.
 			if (gx < x0 || gy < y0) continue;
-			z_fb_hw_line(gx, y1, x1, gy, color, NULL);
+			z_fb_hw_line(gx + xin, y1 - xin, x1 - xin, gy + xin, color, NULL);
 		}
 	}
 
-	if (is_focused) {
+	// The focused window's highlight ring is deliberately NOT drawn as
+	// part of an XOR rubber band, and this is not cosmetic.
+	//
+	// The ring sits 1px outside the frame and is clamped to the
+	// screen, so a window flush against x=0 or y=0 gets a ring edge
+	// clamped ONTO the window's own frame edge. Two shapes, same
+	// pixels: under set/clear that is invisible (both idempotent),
+	// under XOR the second draw cancels the first and that whole edge
+	// of the outline disappears -- then reappears as leftover specks
+	// when the band is XOR-ed off again. Verified against every
+	// window size at every screen corner; dragging a window into the
+	// top-left corner is exactly how you would find it.
+	//
+	// Nothing is lost by omitting it: during a drag the band is
+	// unambiguously the window being moved, and repair_region()
+	// redraws the real focused frame, ring and all, on release.
+	if (is_focused && color != Z_RASTER_XOR) {
 		// bolder border for the focused window -- a 1px OUTSET
 		// outline, drawn just outside the window's own frame rather
 		// than 1px inside it. Used to be inset (x0+1,y0+1,x1-1,y1-1),
@@ -916,6 +949,57 @@ static bool window_covers_region(int idx, int rx, int ry, int rw, int rh) {
 
 }
 
+// Paints the parts of a window's interior that are CHROME, not
+// content: the titlebar's background, and the 1px margin ring between
+// the frame and the content area.
+//
+// Nobody owned these pixels before. draw_window_box() draws a 1px
+// outline and the titlebar separator; the app owns everything from
+// z_win_content_rect() inwards, which zwin.c insets by TWO pixels (one
+// to clear the border, one as a deliberate blank margin so glyphs
+// don't sit against the frame). The ring at inset 1, and the whole
+// titlebar interior, were drawn by no one -- so after
+// repair_region()'s back-to-front pass they still held whatever the
+// window BEHIND had put there. The window looked like it had a
+// transparent 1px gap inside its frame and a transparent titlebar.
+//
+// Only visible when something is actually behind: over the bare
+// desktop the leftover pixels are the region fill's own 0 and look
+// correct. Overlapping windows, and a dock that can now be covered,
+// are what made it obvious.
+//
+// Called immediately BEFORE draw_window_box(), so the frame and
+// separator are drawn on top of this, and before the owner is asked to
+// repaint -- content lands on top in turn. It never touches the
+// content rect itself, so it is safe even for the windows
+// repair_region() skips notifying (exclude_idx, or one hidden behind
+// the excluded window): their content is not disturbed.
+static void draw_window_chrome_bg(wm_window_t *w) {
+
+	int x = (int)w->x, y = (int)w->y;
+	int cw = (int)w->w, ch = (int)w->h;
+
+	// Everything above the content area: for a normal window that is
+	// the titlebar interior, the separator row (redrawn by
+	// draw_window_box() straight after) and the top margin row. A
+	// no-titlebar window has just the margin row.
+	int top_h = w->no_titlebar ? 1 : (Z_WM_TITLEBAR_H + 1);
+
+	fill_rect(x + 1, y + 1, cw - 2, top_h, 0);
+
+	// Bottom margin row, then the left and right margin columns
+	// between them. fill_rect() clamps, so a window too short for
+	// these to exist simply draws nothing.
+	fill_rect(x + 1, y + ch - 2, cw - 2, 1, 0);
+
+	int side_y = y + top_h + 1;
+	int side_h = ch - top_h - 3;
+
+	fill_rect(x + 1, side_y, 1, side_h, 0);
+	fill_rect(x + cw - 2, side_y, 1, side_h, 0);
+
+}
+
 static void repair_region(int rx, int ry, int rw, int rh, int exclude_idx) {
 
 	// expand by 1px on every side before clearing/redrawing -- the
@@ -974,6 +1058,7 @@ static void repair_region(int rx, int ry, int rw, int rh, int exclude_idx) {
 		if (!rects_overlap(rx, ry, rw, rh,
 			(int)w->x, (int)w->y, (int)w->w, (int)w->h))
 			continue;
+		draw_window_chrome_bg(w);
 		draw_window_box(w, idx == focused, 1);
 		draw_titlebar_content(w);
 		if (idx == dock_idx) draw_dock();
@@ -1193,13 +1278,13 @@ static bool dock_handle_key(uint32_t keysym, bool pressed) {
 // returns the next USED window slot after `from`, wrapping around --
 // treats every used slot as equally focusable, dock included (see
 // this file's own header comment on why keyboard-only operation
-// matters), in fixed SLOT order rather than z-order. Slot order, not
-// z-order, specifically because the dock is deliberately kept
-// frontmost in z-order at all times (bring_to_front(dock_idx) is
-// called after nearly every reorder elsewhere in this file) -- a
-// z-order-based cycle would have the dock dominate/distort it. from=
-// -1 starts from the first used slot (so Alt+Tab with nothing
-// currently focused still does something sensible).
+// matters), in fixed SLOT order rather than z-order. Slot order gives
+// a stable, predictable cycle that does not shuffle under the user as
+// windows raise each other -- which matters more now that the dock
+// takes part in z-order like everything else and can be buried. Being
+// in this cycle is what keeps the dock reachable when it is. from=-1
+// starts from the first used slot (so Alt+Tab with nothing currently
+// focused still does something sensible).
 static int next_focusable(int from) {
 
 	int start = (from < 0) ? 0 : (from + 1) % WM_MAX_WINDOWS;
@@ -1241,11 +1326,10 @@ static void alt_tab(void) {
 	if (focused == dock_idx && dock_selected < 0 && DOCK_APP_COUNT > 0)
 		dock_selected = 0;
 
+	// The dock is raised here only if it is what was focused. It used
+	// to be forced to the front unconditionally after every reorder;
+	// see create_dock()'s call site in main() for why that changed.
 	bring_to_front(focused);
-	// keep the dock frontmost regardless -- see its own comment where
-	// this same call appears elsewhere in this file (handle_message(),
-	// the mouse click handler). A no-op when focused IS the dock.
-	if (dock_idx >= 0) bring_to_front(dock_idx);
 
 	if (old_focused >= 0)
 		repair_region(windows[old_focused].x, windows[old_focused].y,
@@ -1308,6 +1392,140 @@ static void alt_move_focused(uint32_t keysym) {
 
 }
 
+// -- game mode viewport (rtl/gpu/gpu_video.v, sw/common/zsoc.h) --
+//
+// Game mode shows a 320x240 window onto the same 640x480 framebuffer,
+// pixel-doubled, so a 640x480 desktop becomes legible on a TV. wm owns
+// the viewport for the same reason it owns every other global hotkey:
+// it is the one process that sees every keystroke before any app does.
+//
+// NOTHING ELSE IN THIS FILE KNOWS GAME MODE EXISTS, and that is the
+// point. WM_SCREEN_W/H stay 640x480, every window keeps its position,
+// every clip rect and every repair region is unchanged, and the
+// framebuffer is untouched. Switching modes is not a resolution
+// change -- it moves a camera. So it cannot destroy a window or
+// disturb an app, because there is nothing for it to destroy or
+// disturb.
+//
+// The viewport origin is deliberately NOT reset when leaving game
+// mode. Toggling out to see the whole desktop and back again should
+// return you to where you were looking.
+#define WM_VIEW_STEP 20
+
+// x <= 320 and y <= 240 keep the whole viewport on the framebuffer.
+// The hardware clamps to exactly this too (see gpu_video.v), so this
+// is not the safety net -- it is here so the wm's own idea of the
+// origin matches what is being displayed, since reading the register
+// back returns what was written rather than what was clamped.
+#define WM_VIEW_MAX_X (WM_SCREEN_W - Z_GAME_VIEW_W)
+#define WM_VIEW_MAX_Y (WM_SCREEN_H - Z_GAME_VIEW_H)
+
+static int32_t view_x = 0;
+static int32_t view_y = 0;
+
+static void view_apply(void) {
+	if (view_x < 0) view_x = 0;
+	if (view_y < 0) view_y = 0;
+	if (view_x > WM_VIEW_MAX_X) view_x = WM_VIEW_MAX_X;
+	if (view_y > WM_VIEW_MAX_Y) view_y = WM_VIEW_MAX_Y;
+	z_game_set_view((uint32_t)view_x, (uint32_t)view_y);
+}
+
+// Alt+Esc -- toggle game mode, if this bitstream has it.
+//
+// Silently does nothing on a board without it rather than reporting an
+// error: a key combination that is not bound is not a failure, and a
+// dialog box would be a strange thing to get for pressing a key the
+// machine does not implement. z_game_set_enabled() already answers
+// false in that case, so the check is really just about not moving the
+// viewport afterwards.
+//
+// Wrap is left OFF here. Toroidal scrolling is what a game wants; a
+// desktop that wrapped from its right edge back to its left would be
+// disorienting rather than useful. A game that wants it turns it on
+// itself through z_game_set_enabled().
+static void game_toggle(void) {
+
+	if (!z_game_available()) return;
+
+	bool on = !z_game_enabled();
+
+	if (on) {
+		// Centre the viewport on entry rather than starting at the
+		// origin. The dock is bottom-left and most windows cascade
+		// from the top-left, so a corner start would put the viewport
+		// somewhere with nothing in it about as often as not; the
+		// middle is the position from which the least scrolling is
+		// needed to reach anything.
+		view_x = (WM_SCREEN_W - Z_GAME_VIEW_W) / 2;
+		view_y = (WM_SCREEN_H - Z_GAME_VIEW_H) / 2;
+		z_game_set_enabled(true, false);
+		view_apply();
+	} else {
+		z_game_set_enabled(false, false);
+	}
+
+}
+
+// Ctrl+Alt+Arrow -- move the viewport, in game mode only.
+//
+// Ctrl+Alt rather than plain Alt because Alt+Arrow is already taken by
+// alt_move_focused() above. dispatch_keys() must therefore test for
+// this combination FIRST -- Ctrl+Alt+Left also satisfies the Alt+Left
+// test, so checking in the other order would move the focused window
+// and this would never fire at all.
+static void game_move_view(uint32_t keysym) {
+
+	if (!z_game_enabled()) return;
+
+	switch (keysym) {
+		case Z_KEY_LEFT:  view_x -= WM_VIEW_STEP; break;
+		case Z_KEY_RIGHT: view_x += WM_VIEW_STEP; break;
+		case Z_KEY_UP:    view_y -= WM_VIEW_STEP; break;
+		case Z_KEY_DOWN:  view_y += WM_VIEW_STEP; break;
+		default: return;
+	}
+
+	view_apply();
+
+}
+
+// Super (Windows key) held -- the viewport follows the mouse pointer,
+// keeping it inside the visible area.
+//
+// Behind a modifier on purpose. A game in full-screen game mode may
+// well use the mouse, and a viewport that chased the pointer on its
+// own would fight it constantly. Super is the one modifier nothing
+// else in this window manager binds, so it costs no existing shortcut.
+//
+// Called from the mouse polling path rather than the keyboard one --
+// this is a level test on a held modifier, not an edge on a press, so
+// it has to be asked every time the pointer moves rather than once
+// when the key goes down.
+//
+// The margin keeps the pointer away from the very edge of the visible
+// area: scrolling only once the pointer has actually left would mean
+// it was never possible to see what you were about to move onto.
+#define WM_VIEW_FOLLOW_MARGIN 40
+
+static void game_follow_pointer(int mx, int my) {
+
+	if (!z_game_enabled()) return;
+
+	if (mx < view_x + WM_VIEW_FOLLOW_MARGIN)
+		view_x = mx - WM_VIEW_FOLLOW_MARGIN;
+	else if (mx > view_x + Z_GAME_VIEW_W - WM_VIEW_FOLLOW_MARGIN)
+		view_x = mx - Z_GAME_VIEW_W + WM_VIEW_FOLLOW_MARGIN;
+
+	if (my < view_y + WM_VIEW_FOLLOW_MARGIN)
+		view_y = my - WM_VIEW_FOLLOW_MARGIN;
+	else if (my > view_y + Z_GAME_VIEW_H - WM_VIEW_FOLLOW_MARGIN)
+		view_y = my - Z_GAME_VIEW_H + WM_VIEW_FOLLOW_MARGIN;
+
+	view_apply();
+
+}
+
 // -- keyboard --
 //
 // unlike the mouse above, keyboard capture is interrupt-driven, not
@@ -1347,6 +1565,28 @@ static void dispatch_keys(void) {
 			if (pressed) alt_tab();
 			continue;
 		}
+
+		// Alt+Esc -- toggle game mode. Consumed even on a bitstream
+		// without game mode: Escape reaching the focused app only on
+		// boards that happen to lack a feature would be a genuinely
+		// confusing difference between machines.
+		if ((modifiers & Z_KBD_MOD_ALT) && keysym == 0x1b) {
+			if (pressed) game_toggle();
+			continue;
+		}
+
+		// Ctrl+Alt+Arrow -- move the game mode viewport. MUST be
+		// tested before the plain Alt+Arrow case directly below:
+		// Ctrl+Alt+Left also satisfies that test, so the other order
+		// would move the focused window and this would never fire at
+		// all. See game_move_view()'s own comment.
+		if ((modifiers & Z_KBD_MOD_ALT) && (modifiers & Z_KBD_MOD_CTRL) &&
+			(keysym == Z_KEY_LEFT || keysym == Z_KEY_RIGHT ||
+			 keysym == Z_KEY_UP   || keysym == Z_KEY_DOWN)) {
+			if (pressed) game_move_view(keysym);
+			continue;
+		}
+
 		if ((modifiers & Z_KBD_MOD_ALT) &&
 			(keysym == Z_KEY_LEFT || keysym == Z_KEY_RIGHT ||
 			 keysym == Z_KEY_UP   || keysym == Z_KEY_DOWN)) {
@@ -1990,12 +2230,11 @@ static void handle_message(z_msg_t *msg) {
 
 			int idx = create_window(msg->from, title, w, h, fx, fy, flags);
 
-			// keep the dock frontmost -- create_window() always
-			// appends new windows to the front of zorder (see its
-			// own comment), which would otherwise let a freshly
-			// created app window cover the dock.
-			if (idx >= 0 && dock_idx >= 0 && idx != dock_idx)
-				bring_to_front(dock_idx);
+			// A newly created window is left in front, dock
+			// included -- create_window() appends to the front of
+			// zorder and that is now allowed to stand. The dock
+			// used to be forced back to the front here; see
+			// create_dock()'s call site in main().
 
 			// auto-focus a newly created window if nothing is
 			// currently focused -- without this, a session with no
@@ -2084,6 +2323,25 @@ static void handle_message(z_msg_t *msg) {
 			break;
 
 		}
+
+		// A full-screen app is handing the framebuffer back. See
+		// Z_WM_REPAINT's own comment in zwm.h for why this takes no
+		// rectangle.
+		//
+		// repair_region() over the whole screen is exactly the right
+		// primitive and already does everything needed: desktop
+		// background, every window frame, and a Z_WM_REDRAW to each
+		// owner so app content comes back too. exclude_idx -1 excludes
+		// nothing.
+		//
+		// Also drops any mouse capture and re-asserts the cursor
+		// shape. A game that exited while wm thought a drag was in
+		// progress would otherwise leave the next click behaving as
+		// the end of that drag.
+		case Z_WM_REPAINT:
+			mouse_capture = -1;
+			repair_region(0, 0, WM_SCREEN_W, WM_SCREEN_H, -1);
+			break;
 
 		case Z_WM_CLIP_SET: {
 
@@ -2350,15 +2608,31 @@ static void clear_window_interior(int idx) {
 
 	wm_window_t *w = &windows[idx];
 
-	int x0 = (int)w->x + 1;
-	int y0 = (int)w->y + 1;
-	int x1 = (int)(w->x + w->w) - 2;
-	int y1 = (int)(w->y + w->h) - 2;
+	// Three steps, and the order matters.
+	//
+	// The frame currently on screen was drawn SOLID, and a solid
+	// shape cannot be undone by XOR-ing it -- XOR only reverses what
+	// XOR drew. So the solid frame is cleared first, the interior is
+	// blanked, and the rubber band is then XOR-drawn onto a known
+	// blank rectangle, where it renders exactly as the solid frame
+	// did. From here every step of the gesture is a matched pair of
+	// XOR draws and nothing underneath is ever damaged again.
+	//
+	// The clear has to come from draw_window_box() rather than the
+	// fill below, because the focused window's highlight ring is
+	// drawn one pixel OUTSIDE the window's own rect and the fill
+	// would not reach it. Left behind, it would then be inverted by
+	// the XOR draw instead of erased.
+	//
+	// The fill covers the whole window rect, border included -- it
+	// used to inset by one pixel to preserve the frame it was about
+	// to redraw. Everything it touches is inside the drag's swept
+	// bounding box and is repaired on release.
+	draw_window_box(w, idx == focused, Z_RASTER_CLEAR);
 
-	if (x1 >= x0 && y1 >= y0)
-		fill_rect(x0, y0, x1 - x0 + 1, y1 - y0 + 1, 0);
+	fill_rect((int)w->x, (int)w->y, (int)w->w, (int)w->h, 0);
 
-	draw_window_box(w, idx == focused, 1);
+	draw_window_box(w, idx == focused, Z_RASTER_XOR);
 
 }
 
@@ -2498,10 +2772,26 @@ int main(void) {
 		repair_region(windows[demo2].x, windows[demo2].y, windows[demo2].w, windows[demo2].h, -1);
 */
 
-	// dock -- created last so it starts out frontmost (see
-	// create_dock()'s own comment); bring_to_front(dock_idx) calls
-	// elsewhere in this file keep it that way as other windows come
-	// and go.
+	// dock -- created last so it STARTS OUT frontmost (see
+	// create_dock()'s own comment). It does not stay that way.
+	//
+	// The dock used to be forced back to the front after every
+	// reorder, everywhere. That made it impossible to put a window
+	// over it: drop a window across the dock and the dock's own
+	// content was painted afterwards, straight over the window's,
+	// so the dock showed THROUGH the window sitting on top of it.
+	// That is not a drawing bug -- back-to-front repainting was
+	// working exactly as specified, the dock was genuinely in front.
+	//
+	// It now participates in z-order like any other window: clicking
+	// it raises it, clicking a window raises that instead, and a
+	// window can cover it.
+	//
+	// A fully covered dock is reachable by Alt+Tab, which cycles in
+	// SLOT order and includes the dock (next_focusable()). If burying
+	// it turns out to be a nuisance in practice, the middle ground is
+	// raising it on click but not on window creation, rather than
+	// going back to pinning it.
 	//
 	// dock_build() first: create_dock() sizes the window from
 	// DOCK_APP_COUNT, so the live set has to be known before the
@@ -2621,15 +2911,17 @@ int main(void) {
 				if (focus_changed) focused = m;
 
 				// same real-reorder test as the ordinary click path
-				// below -- see its comment for why bring_to_front()'s
-				// own return value can't be trusted once the dock is
-				// pushed back to the front.
+				// below. The snapshot/compare is now belt and braces
+				// -- it existed because a following
+				// bring_to_front(dock_idx) could undo what
+				// bring_to_front(m) reported -- but it is still the
+				// honest test of "did z-order actually change", so it
+				// stays.
 				uint8_t zbefore[WM_MAX_WINDOWS];
 				uint8_t zcount_before = zorder_count;
 				memcpy(zbefore, zorder, zorder_count);
 
 				bring_to_front(m);
-				if (dock_idx >= 0) bring_to_front(dock_idx);
 
 				bool reordered = (zcount_before != zorder_count) ||
 					memcmp(zbefore, zorder, zorder_count) != 0;
@@ -2692,7 +2984,6 @@ int main(void) {
 
 				// keep the dock frontmost -- see its own comment
 				// where this same call appears in handle_message().
-				if (dock_idx >= 0) bring_to_front(dock_idx);
 
 				bool reordered = (zcount_before != zorder_count) ||
 					memcmp(zbefore, zorder, zorder_count) != 0;
@@ -2789,10 +3080,17 @@ int main(void) {
 				// completes, at which point one repair_region() over
 				// everywhere the window passed through puts it all
 				// back correctly. see docs/window_manager.md.
-				draw_window_box(&windows[dragging], dragging == focused, 0);
+				// XOR both ways. The first call removes the band
+				// from its old position AND restores whatever it
+				// was covering -- which is the whole point: with
+				// the old clear-then-set pair, that first call
+				// wrote black over every pixel the outline
+				// crossed, gouging a trail through any window
+				// underneath that survived until repair_drag().
+				draw_window_box(&windows[dragging], dragging == focused, Z_RASTER_XOR);
 				windows[dragging].x = nx;
 				windows[dragging].y = ny;
-				draw_window_box(&windows[dragging], dragging == focused, 1);
+				draw_window_box(&windows[dragging], dragging == focused, Z_RASTER_XOR);
 
 				if (nx < drag_min_x) drag_min_x = nx;
 				if (ny < drag_min_y) drag_min_y = ny;
@@ -2853,14 +3151,14 @@ int main(void) {
 				// dispatch and hit testing are both suspended while
 				// `resizing` is set. The app is still told only once,
 				// on release.
-				draw_window_box(&windows[idx], idx == focused, 0);
+				draw_window_box(&windows[idx], idx == focused, Z_RASTER_XOR);
 
 				resize_w = nw;
 				resize_h = nh;
 				windows[idx].w = (uint32_t)nw;
 				windows[idx].h = (uint32_t)nh;
 
-				draw_window_box(&windows[idx], idx == focused, 1);
+				draw_window_box(&windows[idx], idx == focused, Z_RASTER_XOR);
 
 				if (nw > resize_max_w) resize_max_w = nw;
 				if (nh > resize_max_h) resize_max_h = nh;
@@ -2924,6 +3222,33 @@ int main(void) {
 		// gesture.
 		dispatch_mouse(cx, cy, btn);
 
+		// Super held -- drag the game mode viewport along with the
+		// pointer. A level test on a held modifier, so it belongs here
+		// in the pointer path rather than in dispatch_keys(): there is
+		// no key event to react to while the key is simply down and
+		// the mouse is moving.
+		//
+		// After dispatch_mouse() deliberately. Scrolling the viewport
+		// does not move the pointer, so the sample the app receives is
+		// the same either way -- but doing it in this order keeps the
+		// rule that apps see the pointer before wm acts on the frame
+		// it was sampled in.
+		//
+		// Reading the modifier byte straight from the HID register
+		// rather than tracking it through dispatch_keys(): a modifier
+		// that is merely HELD generates no events at all between its
+		// press and its release, so an event-derived copy would be
+		// stale exactly when it matters.
+		if (z_game_enabled()) {
+			uint32_t info = (mouse_port() == 0) ? reg_usb0_info : reg_usb1_info;
+			uint32_t kinfo = (mouse_port() == 0) ? reg_usb1_info : reg_usb0_info;
+			// The keyboard is usually the OTHER port from the mouse,
+			// but need not be -- a combo device reports both on one.
+			// Accept the modifier from either.
+			if (((info | kinfo) & Z_KBD_MOD_GUI) != 0)
+				game_follow_pointer(cx, cy);
+		}
+
 		if (!btn_down && btn_was_down) mouse_capture = -1;
 
 		last_btn = btn;
@@ -2935,6 +3260,31 @@ int main(void) {
 				windows[dock_idx].w, windows[dock_idx].h, -1);
 
 		for (volatile int i = 0; i < 2000; i++); // light throttle
+
+		/* Yield the rest of this timeslice.
+		 *
+		 * wm cannot block indefinitely the way repl can: the pointer
+		 * is POLLED from rtl/usb_hid.v's cursor register, not
+		 * delivered as a message, so nothing would wake it when the
+		 * mouse moves.
+		 *
+		 * But spinning is not the alternative. Waiting one tick wakes
+		 * this loop at Z_TICK_HZ (732Hz), which is more than twelve
+		 * times the display's refresh rate -- far finer than anything
+		 * a person can see in a pointer -- while handing back the
+		 * ~99% of each timeslice that was previously spent re-reading
+		 * a register that had not changed.
+		 *
+		 * A message arriving cuts the wait short, so app requests are
+		 * still serviced immediately rather than up to a tick late.
+		 *
+		 * This matters well beyond wm's own responsiveness: the
+		 * scheduler divides the CPU between RUNNABLE processes, so a
+		 * spinning wm takes its share out of whatever is in the
+		 * foreground. A full-screen app measured a quarter of the
+		 * machine with three such spinners running alongside it, and
+		 * a quarter of the CPU means a quarter of the frame rate. */
+		z_proc_wait(1);
 
 	}
 

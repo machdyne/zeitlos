@@ -61,7 +61,7 @@ kernel.bin: kernel.elf
 	$(PREFIX)objcopy -O binary --pad-to=$$END kernel.elf kernel.bin
 
 clean:
-	rm -f kernel.elf kernel.bin kernel.asm kernel.dasm kernel.map sh.asm *.o *.d fs/*.o fs/fatfs/*.o
+	rm -f kernel.elf kernel.bin kernel.asm kernel.dasm kernel.map sh.asm *.o *.d fs/*.o fs/*.d fs/fatfs/*.o fs/fatfs/*.d
 
 .PHONY: kernel clean
 

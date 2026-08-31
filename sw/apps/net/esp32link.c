@@ -2,7 +2,7 @@
  * Zeitlos -- UART PHY to the onboard ESP32 (ULX3S).
  *
  * Third NIC backend (NET_PHY=ESP32LINK). Speaks ZNIC over UART1;
- * 802.11 stays on the ESP32. See docs/esp32-net.md and znic.h.
+ * 802.11 stays on the ESP32. See docs/esp32link.md and znic.h.
  *
  * Transport model (fw ver 2): every frame the ESP32 sends is the
  * reply to one frame we sent. RX_POLL is answered with the oldest
@@ -485,35 +485,6 @@ void esp32link_poll_wifi(const char *ssid, const char *psk)
 	default:	/* PH_DONE */
 		break;
 	}
-}
-
-/* Blocking variant (not used by net.c's ESP32LINK build, kept for the
- * phy_wifi_sta contract). */
-bool esp32link_wifi_sta(const char *ssid, const char *psk)
-{
-	uint8_t tmp[ZNIC_MAX_PAYLOAD];
-	uint32_t start = z_uptime_ticks();
-	while (!hello_ok && z_uptime_ticks() - start < 5 * TICKS_PER_SEC)
-		esp32link_recv(tmp, sizeof(tmp));
-	if (!hello_ok) {
-		printf("esp32link: no HELLO\n");
-		return false;
-	}
-	sta_tries = 0;
-	if (znic_send_sta(ssid, psk) != ZNIC_STA_ACK || sta_status != ZNIC_STA_OK) {
-		printf("esp32link: no STA_ACK\n");
-		return false;
-	}
-	printf("esp32link: waiting for LINK...\n");
-	phase = PH_WAIT_LINK;
-	start = z_uptime_ticks();
-	while (phase == PH_WAIT_LINK && z_uptime_ticks() - start < LINK_TIMEOUT)
-		esp32link_recv(tmp, sizeof(tmp));
-	if (phase == PH_WAIT_LINK) {
-		printf("esp32link: no LINK (association timed out)\n");
-		return false;
-	}
-	return link_up != 0;
 }
 
 uint16_t esp32link_recv(uint8_t *buf, uint16_t maxlen)

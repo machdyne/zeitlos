@@ -24,6 +24,11 @@ IOBUF PORT "CSPI_MISO" IO_TYPE=LVCMOS33;
 LOCATE COMP "CSPI_MOSI" SITE "T8";
 IOBUF PORT "CSPI_MOSI" IO_TYPE=LVCMOS33;
 
+# AUDIO -- PT8211/TM8211 16-bit serial DAC, LSB-justified.
+# Enabled by `AUDIO + `AUDIO_PT8211 in rtl/boards.vh. Driven by
+# rtl/audio_out.v; see docs/audio.md. If the channels come out
+# swapped, set CTRL.SWAPLR rather than re-cutting these pins --
+# WS polarity is the one thing here not verified against hardware.
 LOCATE COMP "AUD_DIN" SITE "R12";
 IOBUF PORT "AUD_DIN" IO_TYPE=LVCMOS33;
 LOCATE COMP "AUD_WS" SITE "T14";

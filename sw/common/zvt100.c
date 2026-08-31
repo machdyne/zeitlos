@@ -18,7 +18,16 @@ static void mark_dirty(vt_screen_t *vt, int row) {
 // row to blank using the *current* SGR state (matches real terminal
 // behavior -- newly-exposed space takes on whatever attributes are
 // active when it's exposed, not whatever was there before).
+/* Counts scrolls so a renderer can move pixels instead of redrawing
+ * them. See vt_take_scrolls() in zvt100.h.
+ *
+ * A COUNT rather than a flag, because several lines can scroll between
+ * two renders -- a burst of output, a paste -- and the renderer needs
+ * the total to know how far to shift. */
 static void scroll_up(vt_screen_t *vt) {
+
+	if (vt->scrolls < 0xFFFF) vt->scrolls++;
+
 
 	for (int r = 0; r < VT_ROWS - 1; r++) {
 		for (int c = 0; c < VT_COLS; c++)
@@ -283,6 +292,8 @@ void vt_feed(vt_screen_t *vt, const uint8_t *data, uint32_t len) {
 }
 
 void vt_init(vt_screen_t *vt) {
+
+	vt->scrolls = 0;
 
 	for (int r = 0; r < VT_ROWS; r++) {
 		for (int c = 0; c < VT_COLS; c++) {

@@ -70,6 +70,11 @@
 z_obj_t *k_pid_register(z_obj_t *args);
 z_obj_t *k_pid_lookup(z_obj_t *args);
 
+// Name -> pid, IRQ-safe. See pidreg.c -- k_pid_lookup() above is the
+// syscall (z_obj_t in and out, allocates) and must not be called from
+// interrupt context; this is a plain table scan.
+bool k_pid_find(const char *name, uint32_t *pid);
+
 // releases every registration owned by `pid`. Called from kernel.c's
 // scheduler reap path (where a Z_PROC_FLAG_DIE process's slot gets
 // freed) -- without this, a freed pid slot later reused by a

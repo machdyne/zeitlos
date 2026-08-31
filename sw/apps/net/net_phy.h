@@ -5,73 +5,91 @@
  * Zeitlos
  * Copyright (c) 2025 Lone Dynamics Corporation. All rights reserved.
  *
- * Single source of truth for which NIC driver eth.c/net.c actually
- * call -- selected at BUILD time by sw/apps/net/Makefile's NET_PHY
- * variable (default ENC28J60), not a runtime probe.
+ * Which NIC driver eth.c/net.c call -- chosen at RUNTIME, from the
+ * feature CSR, with both drivers linked in.
  *
- * Why build-time and not runtime: sw/bios is already built per-board
- * (Makefile passes -DBOARD_$(BOARD)), but sw/apps isn't -- the top-
- * level `apps` target builds one binary set with no board awareness,
- * because until now nothing under sw/apps needed to know. This is
- * the first app-level hardware fork, and picking WHICH DRIVER CODE
- * gets compiled in genuinely has to happen at build time regardless
- * (ENC28J60 and RMII are different drivers with different APIs, not
- * two configurations of the same one) -- same reasoning -DBOARD_
- * already applies one level down, for the BIOS.
+ * -- Why this changed --
  *
- * What CAN now happen at runtime, and does (net.c's own main()):
- * checking whether the SPECIFIC board this is actually running on was
- * built with the ethernet backend this binary was compiled for, via
- * rtl/csrs.v's feature CSR (sw/common/zsoc.h,
- * z_soc_feature_confirmed_absent()) -- see docs/csrs.md. This used to
- * be impossible: an unmapped address in sysctl.v's wishbone mux just
- * returns whatever that mux's default case resolves to, not a
- * reliably-absent value distinguishable from real hardware in some
- * particular state (see zsoc.h's own header comment) -- so net had no
- * way to tell "this board genuinely has no ethernet hardware" from
- * "it does, and this register just isn't ready yet" without CSRs.
- * That's why net.c used to hang forever on a board like Lakritz
- * (neither SPI_ETH nor ETH_RMII) instead of failing cleanly, and why
- * sw/os/sh.c's `init` used to only reserve net's pid rather than
- * starting it -- both fixed now that net can check first.
+ * It used to be a build-time fork: sw/apps/net/Makefile's NET_PHY
+ * variable picked one driver, #defined the phy_* names onto it, and
+ * left the other out of the link. That worked, but it made net the
+ * only app in the tree that had to be built per board, and the cost
+ * of that landed everywhere:
  *
- * Build for mozart_ml1 with `make -C sw/apps/net NET_PHY=RMII`;
- * ULX3S ESP32: `NET_PHY=ESP32LINK`. Everyone else keeps ENC28J60.
+ *   - sw/apps was otherwise board-agnostic, so the whole software
+ *     half had to be rebuilt per target in a release even though
+ *     nothing else in it varied.
+ *   - the core app archive (sw/os/zar.h) differed per board for the
+ *     sake of one object file.
+ *   - net.bin could not ship on the sdcard image at all, because a
+ *     card copy takes precedence over the flash copy and one card
+ *     image would have handed half the boards the wrong driver.
+ *   - this Makefile grew .net_phy_selected, a stamp file existing
+ *     purely to notice that NET_PHY had changed without any .c file
+ *     changing -- see its comment for the link error and the quieter
+ *     silent-misconfiguration that motivated it.
+ *
+ * -- What it costs --
+ *
+ * Measured, rv32im -Os with --gc-sections: 1112 bytes, about 1.3% of
+ * net.bin. The whole of rmii_eth.o is 972 of that and the dispatch
+ * table and probe are the rest. That buys a binary that runs
+ * correctly on every board, so it is not a close call.
+ *
+ * -- How selection works --
+ *
+ * POSITIVE detection, via z_soc_has_feature() rather than by negating
+ * anything: a bitstream that says ETH_RMII gets the RMII driver, one
+ * that says SPI_ETH gets the ENC28J60 driver.
+ *
+ * The order of the two checks does not matter, because no bitstream
+ * sets both -- release/lib/spec.py rejects a target that tries, and
+ * rtl/sysctl.v would need two MACs to honour it.
+ *
+ * The interesting case is the third one: a bitstream predating
+ * rtl/csrs.v cannot answer at all, and there "unknown" must not be
+ * read as "absent". Such a build gets the ENC28J60 driver, which is
+ * what NET_PHY defaulted to before this existed, so old bitstreams
+ * behave exactly as they did. Only a CSR-capable bitstream that
+ * positively reports neither NIC makes net exit -- which is what lets
+ * sw/os/sh.c's `init` start net unconditionally on every board.
  */
 
-#if defined(NET_PHY_ESP32LINK)
-
-#include "esp32link.h"
-#define NET_PHY_NAME     "esp32link"
-#define phy_init         esp32link_init
-#define phy_recv         esp32link_recv
-#define phy_send         esp32link_send
-#define phy_debug_dump   esp32link_debug_dump
-#define phy_wifi_sta     esp32link_wifi_sta
-#define phy_poll_wifi    esp32link_poll_wifi
-
-#elif defined(NET_PHY_RMII)
-
-#include "rmii_eth.h"
-#define NET_PHY_NAME     "rmii"
-#define phy_init         rmii_eth_init
-#define phy_recv         rmii_eth_recv
-#define phy_send         rmii_eth_send
-#define phy_debug_dump   rmii_eth_debug_dump
-#define phy_wifi_sta(ssid, psk)  (true)
-#define phy_poll_wifi(ssid, psk) ((void)0)
-
-#else
+#include <stdbool.h>
+#include <stdint.h>
 
 #include "enc28j60.h"
-#define NET_PHY_NAME     "enc28j60"
-#define phy_init         enc28j60_init
-#define phy_recv         enc28j60_recv
-#define phy_send         enc28j60_send
-#define phy_debug_dump   enc28j60_debug_dump
-#define phy_wifi_sta(ssid, psk)  (true)
-#define phy_poll_wifi(ssid, psk) ((void)0)
+#include "rmii_eth.h"
+#include "esp32link.h"
 
-#endif
+typedef struct {
+	const char *name;
+	bool (*init)(const uint8_t mac[6]);
+	uint16_t (*recv)(uint8_t *buf, uint16_t maxlen);
+	bool (*send)(const uint8_t *buf, uint16_t len);
+	void (*debug_dump)(void);
+	// Optional, NULL on the wired backends. The ULX3S link is a WiFi
+	// station: it needs credentials (NET.CFG, netcfg.h) and drives the
+	// association from net's main loop rather than blocking phy_init(),
+	// so that wm keeps being scheduled while it happens.
+	void (*poll_wifi)(const char *ssid, const char *psk);
+} net_phy_t;
+
+// The active driver. NULL until net_phy_select() has run, which
+// net.c's main() does before anything touches the hardware.
+extern const net_phy_t *net_phy;
+
+// Picks a driver from the feature CSR. Returns NULL when this
+// bitstream positively reports no ethernet hardware; net.c exits
+// cleanly on that rather than probing registers that are not there.
+const net_phy_t *net_phy_select(void);
+
+// Call-site spellings kept from the #define era, so eth.c and the rest
+// of net.c did not have to change when this became a runtime choice.
+#define NET_PHY_NAME     (net_phy->name)
+#define phy_init(mac)    (net_phy->init(mac))
+#define phy_recv(b, l)   (net_phy->recv((b), (l)))
+#define phy_send(b, l)   (net_phy->send((b), (l)))
+#define phy_debug_dump() (net_phy->debug_dump())
 
 #endif

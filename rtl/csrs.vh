@@ -122,9 +122,84 @@ localparam CSR_FEATURES =
 `ifdef RTC
 	(32'h1 << 24) |
 `endif
-// ULX3S ESP32 link (rtl/esp32_rxfifo.v, UART1, esp32 control) --
-// moved from bit 20 when the CPU/RTC bits above took 20-24.
-`ifdef ESP32_LINK
+// rtl/trng.v -- the entropy source. Mirrors `TRNG in rtl/boards.vh,
+// universal there like `RTC. This bit is the ONLY safe first probe on
+// an arbitrary bitstream: reading the TRNG's own MAGIC on a build that
+// predates rtl/trng.v hits an address nothing decodes, which on this
+// bus never acks and hangs the CPU. See sw/common/zrng.h.
+`ifdef TRNG
 	(32'h1 << 25) |
+`endif
+// rtl/audio.v -- the sample FIFO and DAC output stage. Mirrors `AUDIO
+// in rtl/boards.vh, which is PER-BOARD rather than universal: audio
+// needs pins and a DAC, so a board either has it or does not.
+//
+// Same hazard and same rule as Z_FEATURE_RTC and Z_FEATURE_TRNG above:
+// check THIS bit before reading the audio block's own MAGIC. On a
+// bitstream built before rtl/audio.v existed, 0x7000_05xx is decoded
+// by nothing, and an undecoded address on this bus never acks -- so
+// the probe read hangs the CPU rather than returning zero. This bit is
+// at 0x7000_0008, which every bitstream ever built decodes, so asking
+// here is always safe. z_audio_present() (sw/common/zaudio.h) is that
+// check in the safe order.
+//
+// Note this bit says a FIFO and an output stage were built. It does
+// NOT say which DAC is on the other end -- the register interface is
+// identical either way. Read the block's own CONFIG register for that.
+`ifdef AUDIO
+	(32'h1 << 26) |
+`endif
+// Game mode -- the 320x240 pixel-doubled viewport over the same
+// 640x480 framebuffer (rtl/gpu/gpu_video.v, controlled through
+// rtl/socctl.v's GAME/VIEW registers). Mirrors `GAME in rtl/boards.vh,
+// which defines it at the universal level like `RTC and `TRNG: it
+// needs no pins and no external part, only a handful of LUTs in the
+// scanout path, so every board with a GPU can have it and does.
+//
+// Note this bit says the BITSTREAM was built with game mode, not that
+// the machine is currently in it -- that is socctl's GAME register,
+// and it reads back 0 at boot on every board. Nor does this bit alone
+// mean the mode is usable: a board with `GAME but no `GPU has nothing
+// to scan out with, so rtl/sysctl.v ands the two together before
+// handing socctl its GAME_AVAIL parameter, and software should prefer
+// socctl's own `avail` bit over this one for the "can I actually do
+// this" question.
+//
+// Unlike Z_FEATURE_RTC/_TRNG/_AUDIO above there is no hang hazard
+// here and no ordering rule to follow: game mode has no address
+// window of its own. It lives inside socctl, which every bitstream
+// that has socctl at all already decodes and acks. The worst an old
+// bitstream does is return 0 from a register it does not know, which
+// GAME's own signature (see rtl/socctl.v) catches cleanly.
+`ifdef GAME
+	(32'h1 << 27) |
+`endif
+// Composite video out (rtl/gpu/gpu_video.v's `GPU_COMPOSITE). Mirrors
+// the define like every bit above mirrors its own.
+//
+// Worth exposing separately from GPU_VGA/GPU_DDMI rather than folding
+// into them, because software genuinely behaves differently here: a
+// composite board is 320x240 and cannot be anything else, so an app
+// that would otherwise ask "am I in game mode" should ask this too
+// before assuming a 640x480 surface is visible. The desktop is still
+// 640x480 -- it is just that only a quarter of it is on screen at a
+// time, permanently.
+`ifdef GPU_COMPOSITE
+	(32'h1 << 28) |
+`endif
+// PAL rather than NTSC, when GPU_COMPOSITE is set. Meaningless on its
+// own; check bit 28 first. The difference software can see is the
+// frame rate -- 50Hz rather than 60 -- which a game pacing itself off
+// z_game_wait_frame() may want to know about.
+`ifdef GPU_COMPOSITE_PAL
+	(32'h1 << 29) |
+`endif
+// ULX3S ESP32 network link (rtl/esp32_rxfifo.v + UART1 + the ESP32
+// control register). Same rule as the blocks above: net checks this
+// before touching any of those registers, and the highest free bit is
+// used deliberately -- this is a one-board peripheral, so it stays out
+// of the way of anything universal that comes later.
+`ifdef ESP32_LINK
+	(32'h1 << 30) |
 `endif
 	32'h0;

@@ -1,41 +1,51 @@
+# One list, two rules.
+#
+# This used to be two hand-maintained lists of `cd <dir> && make` lines
+# that had to agree with each other and with what is actually on disk.
+# They had stopped agreeing: both named `ping` and `pong`, neither of
+# which exists any more, so plain `make` in this directory failed at the
+# third line and `make apps` from the top level failed with it. That is
+# survivable when you build one app at a time by hand; it stops any
+# automated build dead, which is how it was found.
+#
+# APPS is now the single list. Adding an app means adding one word.
+APPS = \
+	gpudemo \
+	gpu3d \
+	wm \
+	hello_win \
+	draw \
+	text \
+	files \
+	info \
+	settings \
+	calc \
+	clock \
+	read \
+	net \
+	term \
+	portdemo \
+	repl \
+	space3d \
+	audiotest \
+	track \
+	gamedemo
+
 all:
-	cd gpudemo && make
-	cd gpu3d && make
-	cd ping && make
-	cd pong && make
-	cd wm && make
-	cd hello_win && make
-	cd draw && make
-	cd text && make
-	cd files && make
-	cd info && make
-	cd settings && make
-	cd calc && make
-	cd clock && make
-	cd read && make
-	cd net && make
-	cd term && make
-	cd portdemo && make
-	cd repl && make
-	cd space3d && make
+	@for a in $(APPS); do \
+		echo "==> $$a"; \
+		$(MAKE) -C $$a || exit 1; \
+	done
 
 clean:
-	cd gpudemo && make clean
-	cd gpu3d && make clean
-	cd ping && make clean
-	cd pong && make clean
-	cd wm && make clean
-	cd hello_win && make clean
-	cd draw && make clean
-	cd text && make clean
-	cd files && make clean
-	cd info && make clean
-	cd settings && make clean
-	cd calc && make clean
-	cd clock && make clean
-	cd read && make clean
-	cd net && make clean
-	cd term && make clean
-	cd portdemo && make clean
-	cd repl && make clean
-	cd space3d && make clean
+	@for a in $(APPS); do \
+		$(MAKE) -C $$a clean || exit 1; \
+	done
+
+# `|| exit 1` on both loops, deliberately. A bare `for ... done` in a
+# recipe returns the status of the LAST iteration, so without it a
+# failure in any app but the final one is swallowed and make reports
+# success -- which for a release build means shipping an archive built
+# around a stale or missing .bin.
+
+.PHONY: all clean

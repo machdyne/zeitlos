@@ -32,6 +32,8 @@
 #include "../../common/zproc.h"
 #include "../../common/zrtc.h"	// the wall clock -- see (current-time)/
 								// (current-date) below
+#include "../../common/zrng.h"	// the system CSPRNG -- see (random) below
+#include "../../common/zpad.h"	// gamepads -- see (gamepad ...) below
 #include "../../common/zsoc.h"	// Z_VIDEO_MODE_*, z_video_mode_name(),
 								// z_video_mode_from_name() -- the naming
 								// helpers only. The actual get/set go
@@ -1379,6 +1381,363 @@ static ms_val *zapi_video_mode(ms_val *args) {
 
 }
 
+// -- Game mode and gamepads --
+
+// (game-mode)         -- current mode as a string: "off", "on" or
+//                        "wrap"
+// (game-mode "wrap")  -- set it, returning the mode actually in effect
+// (game-mode 2)       -- same, by number
+//
+// Deliberately the same SHAPE as (video-mode) above -- one
+// getter/setter, a name or a number accepted, the resulting state
+// returned rather than #t -- because it is the same kind of thing: a
+// single screen-wide register with no compound state. Two procedures
+// that behave alike are worth more than two that each fit their own
+// register slightly better.
+//
+// Names rather than #t/#f even though the underlying enable is a
+// single bit, because there are genuinely three states a person cares
+// about here. Wrap is a separate bit in the hardware, but "game mode,
+// clamped" and "game mode, toroidal" are different enough to a caller
+// (see docs/game_mode.md) that folding them into one boolean and a
+// second procedure would make the common case -- turning it on the way
+// a scrolling game wants -- take two calls instead of one.
+//
+// Entering game mode from the REPL is a genuinely useful thing to do
+// interactively; it is how you see what the viewport does without
+// writing a program. It is also a good way to lose sight of the
+// terminal you typed it into, since the REPL's own window may well be
+// outside the 320x240 view. Alt+Esc (sw/apps/wm) toggles back
+// regardless of what any program has done, which is exactly why that
+// hotkey lives in the window manager rather than in a library.
+#define ZAPI_GAME_OFF  0u
+#define ZAPI_GAME_ON   1u
+#define ZAPI_GAME_WRAP 2u
+#define ZAPI_GAME_COUNT 3u
+
+static const char *zapi_game_mode_name(uint32_t m) {
+	switch (m) {
+		case ZAPI_GAME_OFF:  return "off";
+		case ZAPI_GAME_ON:   return "on";
+		case ZAPI_GAME_WRAP: return "wrap";
+		default: return "unknown";
+	}
+}
+
+static ms_val *zapi_game_mode(ms_val *args) {
+
+	if (!ms_is_nil(args)) {
+
+		ms_val *a = ms_car(args);
+		uint32_t mode;
+
+		if (ms_is_str(a)) {
+			const char *s = ms_str_val(a);
+			if (s[0] == 'o' && s[1] == 'f' && s[2] == 'f' && s[3] == '\0')
+				mode = ZAPI_GAME_OFF;
+			else if (s[0] == 'o' && s[1] == 'n' && s[2] == '\0')
+				mode = ZAPI_GAME_ON;
+			else if (s[0] == 'w' && s[1] == 'r' && s[2] == 'a' &&
+				s[3] == 'p' && s[4] == '\0')
+				mode = ZAPI_GAME_WRAP;
+			else {
+				ms_log(MS_PANIC, "game-mode: unknown mode '%s' "
+					"(want off, on or wrap)", s);
+				return ms_mk_bool(false);	// not reached -- see this
+											// file's header comment
+			}
+		}
+		else if (ms_is_num(a)) {
+			double n = ms_num_val(a);
+			if (n < 0 || n >= (double)ZAPI_GAME_COUNT)
+				ms_log(MS_PANIC, "game-mode: mode out of range "
+					"(want 0..%d)", (int)ZAPI_GAME_COUNT - 1);
+			mode = (uint32_t)n;
+		}
+		else {
+			ms_log(MS_PANIC, "game-mode: expected a string or a number");
+			return ms_mk_bool(false);	// not reached
+		}
+
+		// A failure is gateware without game mode, not a bad
+		// argument -- worth saying so, because the fix is a reflash
+		// rather than anything the caller can change. Same treatment
+		// (video-mode) gives the same situation.
+		if (!z_game_set_enabled(mode != ZAPI_GAME_OFF,
+			mode == ZAPI_GAME_WRAP))
+			ms_log(MS_PANIC, "game-mode: this bitstream has no game "
+				"mode (needs `make flash`)");
+
+	}
+
+	// Read back from the hardware rather than returning what was
+	// asked for, for the same reason (video-mode) does: it reports the
+	// screen's actual state.
+	{
+		uint32_t cur = !z_game_enabled() ? ZAPI_GAME_OFF :
+			(z_game_wrap_enabled() ? ZAPI_GAME_WRAP : ZAPI_GAME_ON);
+		char *s = strdup(zapi_game_mode_name(cur));
+		if (!s) ms_log(MS_PANIC, "game-mode: out of memory");
+		return ms_mk_str(s);	// takes ownership
+	}
+
+}
+
+// (game-view)       -- the viewport origin, as a list (x y)
+// (game-view x y)   -- move it, returning the origin afterwards
+//
+// Coordinates are FRAMEBUFFER pixels -- the same space every drawing
+// procedure in this file already uses, not viewport-relative ones.
+//
+// The value read back is what was WRITTEN, which is not always what is
+// being scanned out: with wrap off the hardware clamps the origin to
+// (320,240) so the viewport cannot hang off the edge, and that clamp
+// is applied at scanout rather than on the write path. See
+// docs/game_mode.md.
+static ms_val *zapi_game_view(ms_val *args) {
+
+	char buf[64];
+
+	if (!ms_is_nil(args)) {
+
+		ms_val *ax = ms_car(args);
+		ms_val *rest = ms_cdr(args);
+		double x, y;
+
+		if (ms_is_nil(rest))
+			ms_log(MS_PANIC, "game-view: expected two arguments (x y)");
+
+		if (!ms_is_num(ax) || !ms_is_num(ms_car(rest)))
+			ms_log(MS_PANIC, "game-view: expected numbers");
+
+		x = ms_num_val(ax);
+		y = ms_num_val(ms_car(rest));
+
+		if (x < 0 || x > 639 || y < 0 || y > 479)
+			ms_log(MS_PANIC, "game-view: out of range "
+				"(want 0..639, 0..479)");
+
+		if (!z_game_set_view((uint32_t)x, (uint32_t)y))
+			ms_log(MS_PANIC, "game-view: this bitstream has no game "
+				"mode (needs `make flash`)");
+
+	}
+
+	snprintf(buf, sizeof(buf), "'(%lu %lu)",
+		(unsigned long)z_game_get_view_x(),
+		(unsigned long)z_game_get_view_y());
+
+	return zapi_read_form(buf);
+
+}
+
+// (game-frame) -- the display's own frame counter, 0..65535.
+//
+// Wraps every ~18 minutes at 60Hz. Compare for inequality or subtract;
+// do not test with `>`.
+static ms_val *zapi_game_frame(ms_val *args) {
+	(void)args;
+	return ms_mk_num(z_game_frame());
+}
+
+// (game-wait) -- block until the next frame boundary, returning #t.
+//
+// BLOCKS THIS ENTIRE PROCESS for up to 16.7ms, with the same
+// consequences (delay-ms) has and for the same reason -- see its own
+// comment. On `repl` that means every connected `term` window stops
+// being serviced for the duration. Fine for a one-shot at a prompt;
+// a Scheme loop calling this sixty times a second is not what this
+// interpreter is for, and the answer to wanting that is a C program.
+static ms_val *zapi_game_wait(ms_val *args) {
+	(void)args;
+	z_game_wait_frame();
+	return ms_mk_bool(true);
+}
+
+// (gamepad-count) -- how many USB gamepads are attached right now, 0-2.
+//
+// Reads the hardware every call rather than caching, so plugging a pad
+// in and asking again just works. See docs/gamepad.md on why nothing
+// binds a device to a particular port.
+static ms_val *zapi_gamepad_count(ms_val *args) {
+	(void)args;
+	return ms_mk_num(z_pad_count());
+}
+
+// (gamepad)   -- state of pad 0
+// (gamepad n) -- state of pad n (0 or 1)
+//
+// Returns a list of the symbols currently pressed, e.g. (right a), or
+// the empty list if nothing is. Returns #f -- NOT the empty list --
+// when there is no such pad, because "no pad" and "a pad with nothing
+// pressed" are genuinely different answers and a caller writing a
+// "press start" screen needs to tell them apart.
+//
+// Symbols rather than a bitmask because this is the interactive layer:
+// `(memq 'a (gamepad))` reads as what it means, whereas
+// `(> (bitwise-and (gamepad) 16) 0)` requires a table to understand
+// and this interpreter has no bitwise operations anyway.
+//
+// `n` is a PAD INDEX, not a port: pad 0 is whichever port currently
+// holds a gamepad. Unplug the pad from port 0 while a second sits in
+// port 1 and the survivor becomes pad 0.
+static ms_val *zapi_gamepad(ms_val *args) {
+
+	static const struct { uint32_t bit; const char *name; } names[] = {
+		{ Z_PAD_LEFT,   "left"   },
+		{ Z_PAD_RIGHT,  "right"  },
+		{ Z_PAD_UP,     "up"     },
+		{ Z_PAD_DOWN,   "down"   },
+		{ Z_PAD_A,      "a"      },
+		{ Z_PAD_B,      "b"      },
+		{ Z_PAD_X,      "x"      },
+		{ Z_PAD_Y,      "y"      },
+		{ Z_PAD_SELECT, "select" },
+		{ Z_PAD_START,  "start"  },
+	};
+
+	int pad = 0;
+	uint32_t st;
+	char buf[128];
+	size_t n = 0;
+
+	if (!ms_is_nil(args)) {
+		ms_val *a = ms_car(args);
+		if (!ms_is_num(a))
+			ms_log(MS_PANIC, "gamepad: expected a pad number");
+		double d = ms_num_val(a);
+		if (d < 0 || d >= Z_PAD_MAX_PORTS)
+			ms_log(MS_PANIC, "gamepad: pad out of range (want 0..%d)",
+				Z_PAD_MAX_PORTS - 1);
+		pad = (int)d;
+	}
+
+	if (!z_pad_present(pad)) return ms_mk_bool(false);
+
+	st = z_pad_read(pad);
+
+	// Built as source text and handed to ms_read(), the same way (ps)
+	// and (df) build their results -- see zapi_read_form(). Every
+	// character here comes from the table above, so there is nothing a
+	// caller could inject.
+	n += (size_t)snprintf(buf + n, sizeof(buf) - n, "'(");
+	for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+		if (!(st & names[i].bit)) continue;
+		n += (size_t)snprintf(buf + n, sizeof(buf) - n, "%s%s",
+			(n > 2) ? " " : "", names[i].name);
+	}
+	snprintf(buf + n, sizeof(buf) - n, ")");
+
+	return zapi_read_form(buf);
+
+}
+
+// -- Randomness --
+
+// (random)    -- a real in [0, 1)
+// (random n)  -- an integer in [0, n), for a positive integer n
+//
+// Both forms come from the system CSPRNG (sw/common/zrng.h), which is
+// seeded from rtl/trng.v's ring oscillators where the bitstream has
+// them and from cycle-counter jitter where it doesn't. `(random-secure?)`
+// below is how a program tells which it got.
+//
+// The integer form is rejection sampled inside z_rng_below(), so it is
+// uniform rather than `mod n` with its bias toward small values.
+//
+// The real form divides a 32-bit draw by 2^32. ms numbers are doubles,
+// whose 53-bit mantissa holds that exactly, so no precision is lost --
+// but only 2^32 distinct values can come out, which is worth knowing
+// before using this to sample a continuous distribution finely.
+//
+// A negative or zero argument returns 0 rather than raising: `(random
+// (length lst))` on an empty list is a natural thing to write and a
+// panic there would be more annoying than useful.
+static ms_val *zapi_random(ms_val *args) {
+
+	int n;
+
+	if (ms_is_nil(args))
+		return ms_mk_num((double)z_rng_u32() / 4294967296.0);
+
+	n = zapi_arg_int(ms_car(args), "random");
+	if (n <= 0) return ms_mk_num(0);
+
+	return ms_mk_num((double)z_rng_below((uint32_t)n));
+
+}
+
+// (random-hex n) -- n random BYTES as a 2n-character lowercase hex
+// string.
+//
+// Bytes rather than characters because the callers that want this want
+// a key, a token or a nonce, and those are measured in bytes. Hex
+// rather than raw because ms strings are NUL-terminated C strings and
+// cannot hold a zero byte.
+//
+// Capped at 256 bytes per call -- not a security limit, just a bound
+// on a single allocation from a heap that repl shares with everything
+// else it is running (see kernel.h's stack-tier comment on repl).
+static ms_val *zapi_random_hex(ms_val *args) {
+
+	static const char hex[] = "0123456789abcdef";
+	uint8_t buf[256];
+	char *out;
+	int n, i;
+
+	n = zapi_arg_int(ms_car(args), "random-hex");
+	if (n <= 0) return ms_mk_str(strdup(""));
+	if (n > 256) ms_log(MS_PANIC, "random-hex: at most 256 bytes");
+
+	z_rng_bytes(buf, (uint32_t)n);
+
+	out = malloc(2 * n + 1);
+	if (!out) ms_log(MS_PANIC, "random-hex: out of memory");
+
+	for (i = 0; i < n; i++) {
+		out[2 * i]     = hex[(buf[i] >> 4) & 0xf];
+		out[2 * i + 1] = hex[buf[i] & 0xf];
+	}
+	out[2 * n] = 0;
+
+	// The buffer held key material a moment ago. Clearing a stack
+	// array whose lifetime ends here is close to ceremonial, but it
+	// costs nothing and the habit is worth more than the instance.
+	memset(buf, 0, sizeof(buf));
+
+	return ms_mk_str(out);
+
+}
+
+// (random-secure?) -- #t if the generator is seeded from a present and
+// healthy hardware source, #f if it is running on the fallback.
+//
+// A program generating anything an attacker will see should check this
+// and stop, exactly as sw/apps/net's SSH client does. It is #f on a
+// bitstream without `TRNG, and also -- importantly -- on one that HAS
+// the hardware but whose oscillators are not oscillating, which is the
+// failure a toolchain can introduce without anyone touching the code.
+// See docs/trng.md.
+static ms_val *zapi_random_secure(ms_val *args) {
+	(void)args;
+	return ms_mk_bool(z_rng_secure());
+}
+
+// (random-stir s) -- mix a string into the entropy pool.
+//
+// For a program that has a source of unpredictability nothing else can
+// see -- the timing of a person's keypresses, say. Absorption is
+// one-way, so this cannot make the generator worse no matter what is
+// passed in, and it never makes `(random-secure?)` true: nothing here
+// can measure how much entropy a caller's bytes carried, and assuming
+// generously is how a system ends up believing it is seeded when it
+// isn't.
+static ms_val *zapi_random_stir(ms_val *args) {
+	const char *s = zapi_arg_str(ms_car(args), "random-stir");
+	z_rng_stir(s, (uint32_t)strlen(s));
+	return ms_mk_bool(true);
+}
+
 void zapi_register(void) {
 	ms_def_builtin("ls", zapi_ls);
 	ms_def_builtin("file-size", zapi_file_size);
@@ -1418,4 +1777,14 @@ void zapi_register(void) {
 	ms_def_builtin("print-console", zapi_print_console);
 	ms_def_builtin("df", zapi_df);
 	ms_def_builtin("video-mode", zapi_video_mode);
+	ms_def_builtin("game-mode", zapi_game_mode);
+	ms_def_builtin("game-view", zapi_game_view);
+	ms_def_builtin("game-frame", zapi_game_frame);
+	ms_def_builtin("game-wait", zapi_game_wait);
+	ms_def_builtin("gamepad", zapi_gamepad);
+	ms_def_builtin("gamepad-count", zapi_gamepad_count);
+	ms_def_builtin("random", zapi_random);
+	ms_def_builtin("random-hex", zapi_random_hex);
+	ms_def_builtin("random-secure?", zapi_random_secure);
+	ms_def_builtin("random-stir", zapi_random_stir);
 }

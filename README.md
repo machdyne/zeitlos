@@ -4,7 +4,7 @@ Zeitlos is a work-in-progress SOC (System-on-a-Chip) and OS (Operating System) d
 
 The core applications allow Zeitlos to be used as an extensible multi-window network terminal with scripting and graphics.
 
-![Zeitlos Screenshot #0](https://github.com/machdyne/zeitlos/blob/be6ba741fefc0e93af9495daf9c51ec6df5ace51/ss0.png)
+![Zeitlos Screenshot #0](https://github.com/machdyne/zeitlos/blob/a248944a4e42393ce93cabf0eae6cbc2d1255f9b/ss0.png)
 
 Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 
@@ -20,10 +20,13 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 | Bus | 32-bit Wishbone |
 | Main Memory | SDRAM, PSRAM or SRAM (1MB minimum) |
 | Framebuffer | 640x480x1bpp (monochrome; white, green, or amber) |
-| Video | VGA, DVI, DVI over HDMI |
+| Viewport | Optional 320x240 pixel-doubled viewport |
+| Video | VGA, DVI, DVI over HDMI, composite NTSC and PAL |
+| Audio | 8 channel hardware mixer with stereo output |
 | Storage | MicroSD |
 | Network | Ethernet (SPI) and Ethernet MAC (for RMII PHY) |
-| HID | USB keyboard + optional USB mouse |
+| Entropy | Ring-oscillator TRNG |
+| HID | USB keyboard + optional USB mouse/gamepad |
 | I/O | GPIO, SPI, 16550 UART |
 
 ### OS
@@ -33,7 +36,7 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
  - FAT16/32 filesystem
  - Core apps in flash -- boots to a desktop with no sdcard ([docs/flash_apps.md](docs/flash_apps.md))
  - Object-based interprocess messaging and streaming
- - IP/ARP/ICMP/UDP/DHCP/NTP/DNS/TFTP/TCP/telnet networking
+ - IP/ARP/ICMP/UDP/DHCP/NTP/DNS/TFTP/TCP/telnet/ssh networking
 
 #### Memory Translation Unit
 
@@ -67,8 +70,9 @@ With the MTU, there is no need for position independent code or complicated addr
 | info | System info |
 | clock | Analog and digital clock |
 | settings | System settings |
+| track | MOD audio file player |
 | space3d | First-person 3D space shooter game |
-| gpu3d | Spinning 3D cube demo |
+| gpu3d | Spinning 3D cube demo + STL viewer |
 
 ### Boards
 
@@ -81,6 +85,7 @@ The following boards are currently supported:
  - [Machdyne Kölsch](https://github.com/machdyne/kolsch)
  - [Machdyne Lebkuchen](https://github.com/machdyne/lebkuchen)
  - [Machdyne Mozart](https://github.com/machdyne/mozart) / [ML1](https://github.com/machdyne/sechzig)
+ - [Machdyne Sergei](https://github.com/machdyne/sergei) / [ML1](https://github.com/machdyne/sechzig)
  - [ULX3S](https://radiona.org/ulx3s/) (85F tested; WiFi through the onboard ESP32, see [docs/esp32link.md](docs/esp32link.md))
  - (more soon)
 
@@ -92,6 +97,41 @@ If you have an unsupported board and want to try Zeitlos, please open an issue.
 are programmed into flash alongside the kernel, so a freshly flashed
 board boots straight to the graphical desktop with nothing else
 attached. See [Core apps in flash](#core-apps-in-flash) below.
+
+### Quick start: prebuilt images
+
+Each [release](https://github.com/machdyne/zeitlos/releases/latest)
+ships one image per supported board, containing the gateware, boot
+splash, kernel and core apps. Flash it and the board boots to a desktop
+— nothing to build.
+
+Pick the image matching your hardware, for example a Lakritz with a
+USB-UART PMOD:
+
+```
+$ curl -LO https://github.com/machdyne/zeitlos/releases/latest/download/zeitlos-lakritz_uart.img
+$ openFPGALoader -c dirtyJtag -f -o 0 zeitlos-lakritz_uart.img
+```
+
+Adjust `-c` to match your programming cable. The release page and the
+`README.txt` shipped with it list every available image and its exact
+flashing command.
+
+Optionally add an sdcard for the additional apps, the documentation and
+storage:
+
+```
+$ curl -LO https://github.com/machdyne/zeitlos/releases/latest/download/zeitlos.img.gz
+$ gzip -dc zeitlos.img.gz | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync
+```
+
+Replace `/dev/sdX` with your sdcard's device node (check with `lsblk`
+first — writing to the wrong device will destroy its contents).
+
+If there's no image for your board, build from source below and please
+open an issue.
+
+### Building from source
 
 1. Build and flash the system:
 
@@ -144,14 +184,8 @@ blank window rather than a terminal. Wait for the X. See
 2. Optionally, add an sdcard:
 
 An sdcard is only needed for storing files and for apps beyond the core
-four. Write the zeitlos image to one with:
-
-```
-curl -LO https://github.com/machdyne/zeitlos/releases/latest/download/zeitlos.img.gz
-gzip -dc zeitlos.img.gz | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync
-```
-
-Replace `/dev/sdX` with your sdcard's device node (check with `lsblk` first — writing to the wrong device will destroy its contents).
+four. See [Quick start](#quick-start-prebuilt-images) above for how to
+write the image.
 
 ### Core apps in flash
 
@@ -190,6 +224,12 @@ The Zeitlos documentation will be the [Timeless Computing](https://github.com/ma
 
 The Zeitlos implementation portions of the book are currently located in the `docs` directory.
 
+### Releases
+
+Prebuilt images are built and published by `release/zrelease`, which
+builds one image per board/PMOD combination, assembles it, checks it and
+uploads it. See [docs/releases.md](docs/releases.md).
+
 ### LLM-generated code
 
 This project makes use of LLMs for code and documentation.
@@ -203,3 +243,4 @@ The contents of this repo are released under the [Lone Dynamics Open License](LI
 - rtl/mem/sdram\_kianv uses the Apache 2.0 license.
 - rtl/ext/usb\_hid\_host uses the Apache 2.0 license.
 - sw/os/fs/fatfs uses a BSD compatible license.
+- sw/data/ark uses Creative Commons Attribution-ShareAlike 4.0 International License (CC BY-SA) and the GNU Free Documentation License (GFDL).

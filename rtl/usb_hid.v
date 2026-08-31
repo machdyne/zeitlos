@@ -56,7 +56,102 @@ module usb_hid_wb #()
 	wire [7:0] uhh_mouse_btn;
 	wire signed [7:0] uhh_mouse_dx, uhh_mouse_dy;
 
-	assign int_o = uhh_report;
+	// -- gamepad --
+	//
+	// usb_hid_host.v has decoded these since the day it was vendored
+	// in -- it detects typ==3 and handles several different pad
+	// report layouts (see its own gamepad section). Nothing in this
+	// file connected them, so the information was being produced and
+	// thrown away. This is that gap closed; there is no new protocol
+	// handling here and no new state machine.
+	wire uhh_game_l, uhh_game_r, uhh_game_u, uhh_game_d;
+	wire uhh_game_a, uhh_game_b, uhh_game_x, uhh_game_y;
+	wire uhh_game_sel, uhh_game_sta;
+
+	// LATCHED into the wishbone domain rather than read straight
+	// through, and that is not optional. These ten bits live in
+	// usb_hid_host's 12MHz usbclk domain; a wishbone read that muxed
+	// them directly would be sampling ten independent signals with no
+	// synchroniser at all, so a read landing while the pad state
+	// changes can return a mixture of the old and new values.
+	//
+	// For a d-pad that mixture is not a harmless glitch. Left and
+	// right are separate bits, so a torn read during a left-to-right
+	// flick can report BOTH pressed or NEITHER -- and a game that
+	// resolves "both" as "stand still" gets a character that
+	// occasionally refuses to move for one frame, which is exactly
+	// the kind of bug nobody can reproduce on demand.
+	//
+	// report_edge already exists here for the mouse deltas and solves
+	// precisely the same problem (see its own comment above): it is
+	// one wb_clk-wide pulse per report, correctly synchronised. The
+	// pad state is valid at that moment for the same reason the
+	// deltas are, so it is captured there and held until the next
+	// report. Software then reads a coherent snapshot of one report,
+	// which is what a pad state IS -- never a blend of two.
+	reg [9:0] game_state;
+
+	// -- typ, synchronised, and why that matters here --
+	//
+	// uhh_usb_type lives in the 12MHz usbclk domain. Register 0 has
+	// always read it straight through, and that is left exactly as it
+	// was -- it is a status field software polls, a torn read of it
+	// resolves itself on the next poll, and changing register 0 now
+	// would be a gratuitous risk to code that already works.
+	//
+	// The gamepad path needs better than that, for two reasons.
+	//
+	// First, coherence: register 4 reports the pad state and the
+	// device type together precisely so one read answers "is there a
+	// pad, and what is it doing" without a second read that could
+	// land the far side of a hotplug. That is only true if both come
+	// from the same clock domain.
+	//
+	// Second, and this is the one that actually bites: HOT UNPLUG.
+	// usb_hid_host stops issuing reports the moment a device goes
+	// away, so report_edge stops firing and game_state would simply
+	// freeze at whatever was last held. Pull the cable mid-jump and
+	// the machine believes RIGHT is held down forever, with no event
+	// coming that would ever correct it. Clearing the state whenever
+	// the port is not currently a gamepad is what makes unplugging
+	// safe, and it needs a stable typ in this domain to test against.
+	//
+	// usb_hid_host clears typ to 0 on disconnect (see its own
+	// `~connected & connected_r` line), so this covers unplug, and it
+	// equally covers swapping a pad for a keyboard on the same port.
+	reg [1:0] typ_s0, typ_s1, typ_s2;
+	wire typ_changed = (typ_s1 != typ_s2);
+
+	// Fired on a report OR on a device type change.
+	//
+	// The report pulse alone was enough while every device on a port
+	// stayed put: something arrives, software reads it. Hot swapping
+	// breaks that, and asymmetrically -- PLUGGING a device in
+	// eventually produces reports, so it announces itself, but
+	// UNPLUGGING one produces silence. The last thing the ISR ever
+	// saw was a report with keys held, and no further event ever
+	// arrives to say otherwise, so sw/os/hid.c's per-port key state
+	// keeps those keys held forever. Yanking a keyboard mid-keypress
+	// left the machine believing that key was still down.
+	//
+	// So the type change is an interrupt in its own right. typ goes to
+	// 0 on disconnect (usb_hid_host clears it), which gives the ISR
+	// the edge it needs to flush that port's held keys as releases and
+	// start clean. It equally covers swapping one device for another
+	// on the same port, where the outgoing device's state is just as
+	// stale.
+	//
+	// Safe to OR these together because rtl/sysctl.v marks both HID
+	// interrupts LATCHED_IRQ: a one-cycle pulse from either source is
+	// captured in hardware and stays visible until the ISR runs. Two
+	// sources cannot lose each other's edge, and a spurious extra
+	// interrupt costs one pass through an ISR that re-reads level
+	// state anyway.
+	//
+	// uhh_report is a usbclk pulse and typ_changed is a wb_clk pulse.
+	// Mixing domains into one interrupt line is fine here for exactly
+	// the same reason: what reaches the CPU is a latch, not this wire.
+	assign int_o = uhh_report || typ_changed;
 
 	// exposed as a plain wire (not just readable via the info register
 	// at wb_adr_i[2:0]==0) so sysctl.v can select which instance's
@@ -162,8 +257,27 @@ module usb_hid_wb #()
 		report_s1 <= report_s0;
 		report_s2 <= report_s1;
 
+		typ_s0 <= uhh_usb_type;
+		typ_s1 <= typ_s0;
+		typ_s2 <= typ_s1;
+
 		dx_cap <= uhh_mouse_dx;
 		dy_cap <= uhh_mouse_dy;
+
+		// Pad state. Cleared whenever this port is not currently a
+		// gamepad, which is what makes hot unplug safe -- see the
+		// typ_s* comment above. The clear is tested FIRST so it wins
+		// over a capture: on the report that accompanies a device
+		// change, "no pad here" is the newer and more useful truth
+		// than whatever buttons the outgoing device last reported.
+		if (typ_s2 != 2'd3)
+			game_state <= 10'd0;
+		else if (report_edge)
+			game_state <= { uhh_game_sta, uhh_game_sel,
+			                uhh_game_y, uhh_game_x,
+			                uhh_game_b, uhh_game_a,
+			                uhh_game_d, uhh_game_u,
+			                uhh_game_r, uhh_game_l };
 
 		if (report_edge) begin
 			mouse_dx <= dx_cap;
@@ -197,6 +311,23 @@ module usb_hid_wb #()
 			if (wb_adr_i[2:0] == 3'h03) wb_dat_o <=
 				{ 11'd0, uhh_mouse_btn, curs_y, curs_x };
 
+			// Gamepad state. Bit order is
+			// start/select/y/x/b/a/down/up/right/left, LSB first --
+			// KEEP IN SYNC with sw/common/zpad.h's Z_PAD_* constants,
+			// the same hand-maintained split as this file's HID usage
+			// codes and zkbd.h (there is no shared source between the
+			// Verilog and C halves; edit both together).
+			//
+			// The upper bits carry typ -- the SYNCHRONISED copy, not
+			// the raw one register 0 reports. A pad state of all-zero
+			// is indistinguishable from no pad at all (both mean
+			// "nothing is pressed"), and telling them apart with a
+			// second register read leaves a window where a hotplug
+			// lands between the two. Reporting both from one cycle of
+			// one clock domain makes a single read self-describing.
+			if (wb_adr_i[2:0] == 3'h04) wb_dat_o <=
+				{ 20'd0, typ_s2, game_state };
+
 			wb_ack_o <= 1;
 
 		end
@@ -211,6 +342,11 @@ module usb_hid_wb #()
 		.key1(uhh_key1), .key2(uhh_key2), .key3(uhh_key3), .key4(uhh_key4),
 		.mouse_btn(uhh_mouse_btn),
 		.mouse_dx(uhh_mouse_dx), .mouse_dy(uhh_mouse_dy),
+		.game_l(uhh_game_l), .game_r(uhh_game_r),
+		.game_u(uhh_game_u), .game_d(uhh_game_d),
+		.game_a(uhh_game_a), .game_b(uhh_game_b),
+		.game_x(uhh_game_x), .game_y(uhh_game_y),
+		.game_sel(uhh_game_sel), .game_sta(uhh_game_sta),
 	);
 
 `endif

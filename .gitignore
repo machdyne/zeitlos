@@ -1,31 +1,38 @@
-# Yosys / nextpnr / ecppack
-output/
-*.bit
-*.svf
-*.config
-*.json
+# Written by release/zrelease for the duration of a release build and
+# removed again afterwards. Ignored so that a build interrupted at the
+# wrong moment cannot leave behind something that looks committable.
+# See rtl/boards.vh's ZSPEC note and release/lib/gen.py.
+/rtl/zspec.vh
+/boards/.zrelease-*.lpf
 
-# RISC-V build products (BIOS, kernel, apps)
+# Build output
+/output/
+
+# Build products (BIOS, kernel, apps)
 *.o
 *.elf
 *.map
 *.asm
 *.dasm
+*.bit
+*.svf
+*.config
+*.json
 *.bin
 !sw/data/images/zeitlos.bin
+!sw/data/images/zeitlos_fb.bin
 *.hex
 !rtl/ext/usb_hid_host/src/usb_hid_host_rom.hex
 sw/bios/bios_seed.hex
 
-# gcc -MD leftovers (ff.d / fs.d are tracked upstream; new ones stay local)
+# gcc -MD leftovers
 sw/apps/**/*.d
 sw/os/*.d
 sw/os/fs/*.d
-sw/os/fs/fatfs/sdmm.d
+sw/os/fs/fatfs/*.d
 
 # App configure crumbs
 sw/apps/net/.net_config_selected
-sw/apps/net/.net_phy_selected
 sw/apps/repl/ms_stdlib.h
 
 # ESP-IDF (esp32/zeitlos-nic): build tree and the generated sdkconfig

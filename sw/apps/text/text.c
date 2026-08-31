@@ -75,6 +75,7 @@
 #include <string.h>
 
 #include "../../common/zeitlos.h"
+#include "../../common/zsoc.h"	// Z_TICK_HZ, for the render instrumentation
 #include "../../common/zwm.h"
 #include "../../common/zwin.h"
 #include "../../common/zgfx.h"
@@ -499,11 +500,25 @@ static void fill_content(int cx, int cy, int w, int h, int color) {
 // than as a filled block over one. A block caret hides the character
 // it is on, which for an insertion point sitting BETWEEN two
 // characters is also just wrong about where the text will go.
+
+// Screen row where draw_caret() last left its rule, or -1. The
+// scroll blit MOVES those pixels: without this bookkeeping,
+// scroll_repaint() translates the old caret onto a surviving row
+// and nothing ever erases it -- visible as a small vertical rule
+// ghost at the caret's old column (the left text edge, when moving
+// through line starts), stacking up one per scroll. term.c keeps
+// the same bookkeeping for its cursor overlay (draw_cursor_x/y);
+// this is the editor's version of the same lesson.
+static int caret_drawn_row = -1;
+
 static void draw_caret(void) {
 
 	int l = line_at(cursor);
 
-	if (l < top_line || l >= top_line + rows) return;
+	if (l < top_line || l >= top_line + rows) {
+		caret_drawn_row = -1;
+		return;
+	}
 
 	int col = cursor - (int)line_off[l];
 	if (col > cols) col = cols;
@@ -520,7 +535,64 @@ static void draw_caret(void) {
 
 	z_fb_hw_line(x, y, x, y + cur_font->h - 1, 1, &c);
 
+	caret_drawn_row = l - top_line;
+
 }
+
+/* -- render instrumentation --
+ *
+ * To the serial console, not the window, so measuring does not perturb
+ * what is measured.
+ *
+ * The question for an editor is different from a terminal's. Typing
+ * redraws one row, which is cheap and obviously right. SCROLLING is
+ * the suspect: moving the view one line should be a single VRAM to
+ * VRAM blit of the whole text area plus one new row, and if it is
+ * instead a full re-render then every scroll costs rows x cols glyph
+ * blits.
+ *
+ * At the measured ~112 cycles per glyph, a 40x25 screen re-render is
+ * ~112,000 cycles -- 14% of a 60Hz frame for ONE line of scroll. Held
+ * arrow-down would then be the slowest thing the editor does.
+ *
+ * rows_per_second is the number to watch: a burst far above the number
+ * of lines actually scrolled means whole-screen redraws.
+ */
+/* 0 in a normal build. Set to 1 to print render counts to the serial
+ * console every two seconds -- see the block below for what the
+ * numbers mean and which questions they answer.
+ *
+ * Off by default because it is console noise once the question it was
+ * written for has been answered, not because it is expensive: the
+ * counters are increments and the clock is read once per main loop,
+ * not per row. (It WAS per row at first, which made every repaint slow
+ * enough to see as a flash on each keystroke.) */
+#define TEXT_INSTRUMENT 0
+
+#if TEXT_INSTRUMENT
+static uint32_t ins_rows, ins_chars, ins_fills, ins_last_report;
+
+static void ins_report(void)
+{
+	uint32_t now = z_uptime_ticks();
+
+	if (ins_last_report == 0) { ins_last_report = now; return; }
+	if (now - ins_last_report < Z_TICK_HZ * 2) return;
+	if (ins_rows == 0) { ins_last_report = now; return; }
+
+	printf("text: %lu rows drawn, %lu chars, %lu row fills "
+		"(%lu chars/row)\n",
+		(unsigned long)ins_rows,
+		(unsigned long)ins_chars,
+		(unsigned long)ins_fills,
+		(unsigned long)(ins_rows ? ins_chars / ins_rows : 0));
+
+	ins_rows = ins_chars = ins_fills = 0;
+	ins_last_report = now;
+}
+#else
+#define ins_report() ((void)0)
+#endif
 
 // Draws one visible row (0..rows-1), clearing it first.
 static void draw_row(int r) {
@@ -531,12 +603,27 @@ static void draw_row(int r) {
 
 	fill_content(0, cy, text_w, LINE_H, 0);
 
+#if TEXT_INSTRUMENT
+	/* Counters only. ins_report() is NOT called here: it reads the
+	 * clock, which is a syscall, and draw_row() runs once per visible
+	 * row -- so a full repaint paid 25 syscalls purely to decide it
+	 * was not yet time to print. That made every repaint slow enough
+	 * to see, which showed up as the window flashing on each
+	 * keystroke. Reporting happens once per main loop instead. */
+	ins_rows++;
+	ins_fills++;
+#endif
+
 	int l = top_line + r;
 	if (l >= nlines) return;
 
 	int n = line_draw_len(l);
 	if (n > cols) n = cols;
 	if (n <= 0) return;
+
+#if TEXT_INSTRUMENT
+	ins_chars += (uint32_t)n;
+#endif
 
 	// Copied out because z_win_draw_text() takes a NUL-terminated
 	// string and the buffer is not terminated anywhere in particular.
@@ -640,6 +727,137 @@ static void draw_rows_from(int from) {
 
 }
 
+/* -- scroll-aware repaint --
+ *
+ * `drawn_top` is the top_line the text area currently SHOWS. When only
+ * the scroll position has changed, the rows that stay on screen are
+ * already correct -- they are just in the wrong place -- so the
+ * hardware can move them and only the newly exposed rows need drawing.
+ *
+ * Measured at about 4x cheaper than redrawing every row (see
+ * docs/gpu_blitter.md). Not a throughput win, since glyph drawing is
+ * around 1% of the CPU either way, but it removes the hitch on every
+ * scroll.
+ *
+ * DELIBERATELY SEPARATE FROM repaint(). repaint() is called on
+ * Z_WM_REDRAW, after wm has already cleared the region, so it must not
+ * assume anything about what is on screen -- which is exactly the
+ * assumption this makes. Conflating the two would blit whatever
+ * happened to be underneath the window into the text area.
+ *
+ * -1 means "nothing known on screen", which forces the full path.
+ */
+static int drawn_top = -1;
+
+/* Trace the first few scrolls, then stay quiet -- see scroll_repaint().
+ * Reset by pressing the key that re-arms it (see handle_key). */
+static int scroll_dbg = 0;   /* set nonzero to trace again */
+
+static void repaint(void);
+
+static void scroll_repaint(void) {
+
+	int delta = top_line - drawn_top;
+
+	/* A selection makes the rows that stay on screen NOT unchanged:
+	 * draw_row() renders selected runs inverted, so moving old pixels
+	 * would carry stale highlighting with them. Cheap to detect and
+	 * far cheaper than getting it wrong. */
+	/* Re-enabled. The fault was never on this side: coordinates,
+	 * arguments and the derived source address were all traced
+	 * correct on hardware. The corruption was a stale-ack hazard in
+	 * the blitter's VRAM-to-VRAM copy path -- the always-acking
+	 * vram_wb plus the arbiter's registered response routing left
+	 * the previous transaction's ack visible two cycles after
+	 * release, and two transitions in the copy path re-entered the
+	 * port after only one. Fixed in rtl/gpu/gpu_blit.v
+	 * (ST_MEM_SETTLE1/2), reproduced and verified by
+	 * rtl/gpu/bench/tb_system_vscroll.v, which drives the real
+	 * blitter + arbiter + vram together. See docs/gpu_blitter.md,
+	 * "The fix: a stale ack, not a wrong address".
+	 *
+	 * The tracing below is left in place and costs nothing while
+	 * scroll_dbg is 0; set it nonzero to trace again. */
+
+	/* Tracing, for when this is re-enabled.
+	 *
+	 * On hardware the blit lands horizontally offset by roughly the
+	 * window's own x origin -- content from outside the window
+	 * appearing inside it. The RTL is verified correct at these
+	 * alignments (rtl/gpu/bench/tb_vscroll.v copies VRAM to VRAM at
+	 * x = 32, 44, 12 and 63 with every pixel matching), so the fault
+	 * is in the coordinates handed over rather than in the copy.
+	 *
+	 * These prints report BOTH ends of that handover: what this
+	 * function computes, and what z_fb_hw_scroll() passes on. If they
+	 * agree and are what fill_content() would use for the same
+	 * region, the mismatch is further down; if c.x0 is not what this
+	 * expects, it is the content rect.
+	 *
+	 * The comparison line is the useful one: fill_content(0, ...)
+	 * draws the text area, and it resolves x to c.x0 + 0. Anything
+	 * the blit does differently from that is the bug. */
+	if (scroll_dbg > 0) {
+		z_clip_t dc;
+		z_win_content_rect(&win, &dc);
+		scroll_dbg--;
+		printf("text scroll: delta=%d top=%d drawn=%d rows=%d LINE_H=%d\n",
+			delta, top_line, drawn_top, rows, LINE_H);
+		printf("  content rect: x0=%d y0=%d x1=%d y1=%d  (w=%d h=%d)\n",
+			(int)dc.x0, (int)dc.y0, (int)dc.x1, (int)dc.y1,
+			(int)(dc.x1 - dc.x0 + 1), (int)(dc.y1 - dc.y0 + 1));
+		printf("  text_w=%d TEXT_X0=%d  -> blit x=%d w=%d\n",
+			text_w, TEXT_X0, (int)dc.x0, text_w);
+		z_fb_scroll_debug = 1;
+		z_fb_scroll_dbg_armed = 2;
+		printf("  align mode = %d (1 = word-aligned, no bit shifting)\n",
+			z_fb_scroll_align);
+	}
+
+
+	if (drawn_top < 0 || delta == 0 || delta <= -rows || delta >= rows ||
+		has_sel()) {
+		repaint();
+		return;
+	}
+
+	{
+		z_clip_t c;
+		z_win_content_rect(&win, &c);
+
+		/* Content moves UP by delta*LINE_H when scrolling forward, so
+		 * the sign is negated: a larger top_line means the text moves
+		 * up the screen. */
+		z_fb_hw_scroll((int)c.x0, (int)c.y0, text_w, rows * LINE_H,
+			-delta * LINE_H);
+
+		/* Draw only what scrolled in. */
+		if (delta > 0)
+			for (int r = rows - delta; r < rows; r++) draw_row(r);
+		else
+			for (int r = 0; r < -delta; r++) draw_row(r);
+
+		/* The old caret's 1px rule moved with the pixels. If its
+		 * translated position landed on a SURVIVING row, redraw that
+		 * row to erase it -- rows that scrolled in were fully
+		 * redrawn just above and need nothing. Without this, every
+		 * scroll leaves a rule ghost at the caret's old column. */
+		if (caret_drawn_row >= 0) {
+			int g = caret_drawn_row - delta;
+			if (g >= 0 && g < rows &&
+				!(delta > 0 && g >= rows - delta) &&
+				!(delta < 0 && g < -delta))
+				draw_row(g);
+		}
+	}
+
+	draw_caret();
+	z_scrollbar_draw(&sbar, true);
+
+	drawn_top = top_line;
+
+}
+
 // Full repaint. Called on Z_WM_REDRAW, which wm sends after it has
 // already cleared the region -- so this must not assume anything
 // about what is currently on screen.
@@ -678,6 +896,8 @@ static void repaint(void) {
 	fill_content(0, rows * LINE_H, text_w, ch - rows * LINE_H, 0);
 
 	for (int r = 0; r < rows; r++) draw_row(r);
+
+	drawn_top = top_line;
 
 	draw_caret();
 
@@ -1190,7 +1410,8 @@ static void move_cursor_ex(int to, bool extend) {
 	int hi = old_hi > new_hi ? old_hi : new_hi;
 
 	if (scroll_to_cursor()) {
-		repaint();
+		/* Only the view moved -- the document is unchanged. */
+		scroll_repaint();
 		return;
 	}
 
@@ -1346,7 +1567,9 @@ static void handle_mouse(uint32_t packed) {
 
 		if (z_scrollbar_mouse(&sbar, cx, cy, buttons)) {
 			top_line = (int)sbar.value;
-			repaint();
+			/* Only the view moved -- the document is unchanged, so
+			 * the rows that stay on screen are already correct. */
+			scroll_repaint();
 		}
 
 		return;
@@ -1593,6 +1816,24 @@ int main(void) {
 
 		for (volatile int i = 0; i < 200; i++);	// light throttle
 
+	
+#if TEXT_INSTRUMENT
+		ins_report();
+#endif
+
+		/* Block until something arrives.
+		 *
+		 * This loop spun, like term's and wm's before it. An editor
+		 * sitting idle with a file open was taking a full scheduler
+		 * share from whatever was in the foreground -- see
+		 * docs/app_runtime.md on why that costs far more than the
+		 * work it does.
+		 *
+		 * Everything here is driven by wm messages, so a plain
+		 * z_proc_wait(0) would be correct. The timeout is insurance
+		 * for the periodic work an editor tends to acquire (autosave,
+		 * a blinking caret) rather than for anything present today. */
+		z_proc_wait(Z_TICK_HZ / 30);
 	}
 
 	return 0;

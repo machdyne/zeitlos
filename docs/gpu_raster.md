@@ -18,28 +18,95 @@ The Zeitlos GPU Line Rasterizer is a hardware-accelerated line drawing engine wi
 
 | Address | Register | Description |
 |---------|----------|-------------|
-| 0xE0000000 | LINE_X0 | Line start X coordinate |
-| 0xE0000004 | LINE_Y0 | Line start Y coordinate |
-| 0xE0000008 | LINE_X1 | Line end X coordinate |
-| 0xE000000C | LINE_Y1 | Line end Y coordinate |
-| 0xE0000010 | LINE_COLOR | Line color (0=black, 1=white) |
-| 0xE0000014 | LINE_START | Start line drawing (write-only) |
-| 0xE0000018 | LINE_STATUS | Status register (read-only) |
-| 0xE000001C | LINE_PIXEL_COUNT | Current pixel count (read-only) |
-| 0xE0000020 | LINE_CUR_X | Current X position (read-only) |
-| 0xE0000024 | LINE_CUR_Y | Current Y position (read-only) |
-| 0xE0000028 | LINE_FIFO_COUNT | FIFO depth (read-only) |
-| 0xE000002C | CLIP_X0 | Clip rectangle left |
-| 0xE0000030 | CLIP_Y0 | Clip rectangle top |
-| 0xE0000034 | CLIP_X1 | Clip rectangle right |
-| 0xE0000038 | CLIP_Y1 | Clip rectangle bottom |
-| 0xE000003C | CLIP_ENABLE | Clipping enable (0=off, 1=on) |
+| 0xA0000000 | LINE_X0 | Line start X coordinate |
+| 0xA0000004 | LINE_Y0 | Line start Y coordinate |
+| 0xA0000008 | LINE_X1 | Line end X coordinate |
+| 0xA000000C | LINE_Y1 | Line end Y coordinate |
+| 0xA0000010 | LINE_COLOR | Raster op (0=clear, 1=set, 2=XOR) |
+| 0xA0000014 | LINE_START | Start line drawing (write-only) |
+| 0xA0000018 | LINE_STATUS | Status register (read-only) |
+| 0xA000001C | LINE_PIXEL_COUNT | Current pixel count (read-only) |
+| 0xA0000020 | LINE_CUR_X | Current X position (read-only) |
+| 0xA0000024 | LINE_CUR_Y | Current Y position (read-only) |
+| 0xA0000028 | LINE_FIFO_COUNT | FIFO depth (read-only) |
+| 0xA000002C | CLIP_X0 | Clip rectangle left |
+| 0xA0000030 | CLIP_Y0 | Clip rectangle top |
+| 0xA0000034 | CLIP_X1 | Clip rectangle right |
+| 0xA0000038 | CLIP_Y1 | Clip rectangle bottom |
+| 0xA000003C | CLIP_ENABLE | Clipping enable (0=off, 1=on) |
 
 ## Status Register (LINE_STATUS)
 
 | Bit | Name | Description |
 |-----|------|-------------|
 | 0 | BUSY | Rasterizer busy (1=busy, 0=idle) |
+
+## Raster operations
+
+`LINE_COLOR` is a two-bit **operation**, not just a colour. Values 0
+and 1 are the colours they always were, so nothing written against the
+older one-bit field changes behaviour.
+
+| value | name | effect on each pixel |
+|---|---|---|
+| 0 | `RASTER_CLEAR` | `dat & ~mask` |
+| 1 | `RASTER_SET` | `dat \| mask` |
+| 2 | `RASTER_XOR` | `dat ^ mask` |
+| 3 | — | unassigned; behaves as set |
+
+The app-facing names are `Z_RASTER_CLEAR` / `_SET` / `_XOR` in
+`sw/common/zgfx.h`, passed as the `color` argument of
+`z_fb_hw_line()`, `z_fb_hw_box()` and the `z_win_*` equivalents.
+
+### Why XOR exists
+
+XOR is its own inverse: drawing a shape a second time in the same
+place restores exactly what was underneath, without saving a copy and
+without knowing what was there.
+
+On a 1bpp framebuffer with no per-pixel ownership, that is the only
+way to draw something temporary over content you do not own and then
+take it away again. `wm`'s drag and resize wireframes used to erase
+themselves by drawing in colour 0, which turned every pixel they
+crossed black -- a scar carved through whatever was underneath,
+persisting until the repair at drag release.
+
+An XOR shape **inverts** what it crosses, appearing black over white
+regions and white over black. That is the intended look and what makes
+it visible against any background.
+
+### The op travels in the FIFO entry
+
+It is captured when the command is queued, not read when it is drawn.
+A register sampled at draw time would mean a caller that queued an XOR
+line and then set `LINE_COLOR` back to `SET` before the FIFO drained
+would have its XOR silently executed as a set.
+
+The clip rectangle, by contrast, **is** global state sampled at draw
+time -- see "Clipping Support" below for what that implies when more
+than one process draws.
+
+### XOR is self-inverse per PIXEL, not per shape
+
+This is the part that catches people. A pixel touched twice within one
+pass is back where it started, so it goes missing from the visible
+shape; a pixel touched an odd number of times survives the erase as a
+leftover speck.
+
+Any composite shape drawn with XOR must therefore touch each pixel
+**exactly once**. Two consequences, both of which bit real code in
+`zgfx.c` and `wm.c`:
+
+- A rectangle drawn as four lines sharing their corners paints each
+  corner twice. `z_fb_hw_box()` now shortens the verticals by one
+  pixel at each end so every pixel is drawn once. This is correct for
+  every op and produces an identical pixel set for set and clear.
+- Anything drawn *on top of* an outline -- a titlebar separator ending
+  on the frame, a resize grip tick touching the border -- shares those
+  end pixels with it. `wm` pulls them in by one pixel under XOR only.
+
+`tools/verify_xor_geometry.py` checks both properties against the real
+Bresenham for every window size and screen position.
 
 ## Screen Specifications
 
@@ -53,7 +120,15 @@ The Zeitlos GPU Line Rasterizer is a hardware-accelerated line drawing engine wi
 ### C Header Definition
 
 ```c
-#define RASTERIZER_BASE 0xE0000000
+#define RASTERIZER_BASE 0xA0000000
+```
+
+> The base address is `0xA0000000`. This document said `0xE0000000`
+> until the raster op was added; `sw/common/zeitlos.h` is
+> authoritative and has always said `0xA0000000`. Code written against
+> the old figure pokes an unrelated peripheral and fails silently.
+
+```c
 
 #define LINE_X0         (*(volatile uint32_t*)(RASTERIZER_BASE + 0x00))
 #define LINE_Y0         (*(volatile uint32_t*)(RASTERIZER_BASE + 0x04))
@@ -74,6 +149,12 @@ The Zeitlos GPU Line Rasterizer is a hardware-accelerated line drawing engine wi
 
 #define COLOR_BLACK     0
 #define COLOR_WHITE     1
+
+/* LINE_COLOR is a two-bit RASTER OP. 0 and 1 are the colours above,
+   unchanged; 2 inverts. See "Raster operations" below. */
+#define RASTER_CLEAR    0
+#define RASTER_SET      1
+#define RASTER_XOR      2
 ```
 
 ### Basic Usage
@@ -148,6 +229,28 @@ void set_full_screen_clip(void) {
     set_clip_rect(0, 0, 639, 479);
 }
 ```
+
+### Clip state is global, and sampled at draw time
+
+The clip registers are not part of a queued command. `pixel_in_clip`
+reads them live, in the drawing loop, so a command is clipped by
+whatever the registers hold **when it is drawn** -- which may not be
+what they held when it was submitted.
+
+That is a race between processes. `wm` draws chrome unclipped while
+apps draw clipped; if `wm` queues a window frame and is preempted
+before the FIFO drains, an app can set its own clip rectangle and
+`wm`'s queued lines are drawn clipped to that app's window.
+
+Under set and clear this is a cosmetic glitch the next repaint fixes.
+Under XOR it is destructive: a draw that got clipped is not matched by
+the erase that follows, so pixels are left inverted permanently.
+
+`z_fb_hw_line()` (`sw/common/zgfx.c`) masks interrupts around the
+whole register-write sequence, which keeps one caller's clip and
+coordinates from being interleaved with another's. It does **not**
+close the gap between submission and drawing. Carrying the clip in the
+FIFO entry would; it has not been done.
 
 ## Common Use Cases
 
@@ -422,9 +525,41 @@ The rasterizer implements the classic Bresenham line algorithm in hardware:
 - Concurrent CPU/GPU operation
 - Overflow protection
 
+A push is gated on `!wb_ack_o`, so one register write queues one
+command. Without that term the push condition stays true for as long
+as the master holds cyc/stb -- which on this bus includes the cycle in
+which ack is returned -- and a single write to `LINE_START` queues the
+command **twice**.
+
+That was the behaviour for the whole life of this module and was
+invisible, because set and clear are idempotent: drawing a line twice
+looks exactly like drawing it once. XOR is not idempotent, and a
+command executed twice cancels itself out entirely -- the shape never
+appears, and the erase that follows damages what it crosses. Anything
+added here that is not idempotent depends on this gating being
+correct.
+
 ### Memory Interface
 - Direct framebuffer access
 - Read-modify-write for pixel updates
 - Optimized for 1-bit-per-pixel format
 - Automatic word-level operations
 
+## Testing
+
+`rtl/test/tb_raster_xor.v` exercises the raster ops against a
+behavioural one-cycle-ack VRAM:
+
+```
+iverilog -g2005 -o tb_raster_xor rtl/test/tb_raster_xor.v \
+         rtl/gpu/gpu_raster.v && ./tb_raster_xor
+```
+
+It XORs a line, checks something changed, XORs it again, checks VRAM
+is restored exactly, then confirms ops 0 and 1 still clear and set.
+The "first XOR changed nothing" check is what catches a double push.
+
+`tools/verify_xor_geometry.py` covers the software side -- that
+`z_fb_hw_box()` and `wm`'s window frame draw every pixel exactly once,
+that set and clear are visually unchanged, and that a multi-step drag
+over patterned content restores the framebuffer bit for bit.

@@ -16,7 +16,23 @@ GC_CFLAGS = -ffunction-sections -fdata-sections
 GC_LDFLAGS = -Wl,--gc-sections
 endif
 
-CFLAGS = --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) -DZ_GFX_HW_BLIT $(GC_CFLAGS) $(ARCH_DEFS) $(LIBC_FLAGS)
+# NOTE: every later append to CFLAGS in this file must also say
+# `override`. A plain `CFLAGS += ...` after an override assignment is
+# SILENTLY IGNORED by make, which is how -DNET_PHY_$(NET_PHY) went
+# missing once: the build still succeeded through compilation and
+# failed at link with undefined enc28j60_* symbols, because the header
+# had selected one driver and the makefile linked the other. The
+# quieter half was worse -- DHCP, NTP, SSH and the static IP settings
+# had all reverted to their defaults with nothing said.
+#
+# `override` so the flags this app REQUIRES survive a command-line
+# CFLAGS. A command-line assignment replaces the makefile's CFLAGS
+# outright -- `make CFLAGS+=-DFOO=1` appends to the command-line value,
+# not to this one -- silently dropping -Os, -march, section GC, the
+# libc specs and any -D this app needs to build correctly. The result
+# still builds and links; it just produces a much larger, slower binary
+# that can overrun the space the loader has for it and crash on start.
+override CFLAGS += --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) -DZ_GFX_HW_BLIT $(GC_CFLAGS) $(ARCH_DEFS) $(LIBC_FLAGS)
 LDFLAGS = -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS)
 LDSCRIPT = ../../common/riscv-app.ld
 
@@ -24,7 +40,7 @@ LDSCRIPT = ../../common/riscv-app.ld
 # must be one of the z_font_t externs declared in zfont.h. see term.c's
 # own comment on TERM_FONT_NAME for why this exists.
 ifdef FONT
-CFLAGS += -DTERM_FONT_NAME=$(FONT)
+override CFLAGS += -DTERM_FONT_NAME=$(FONT)
 endif
 
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zkbd.o zvt100.o zport.o term.o

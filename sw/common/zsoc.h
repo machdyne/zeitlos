@@ -108,7 +108,6 @@
 #define Z_FEATURE_ETH_RMII    (1u << 17)
 #define Z_FEATURE_LED_RGB     (1u << 18)
 #define Z_FEATURE_LED_DEBUG   (1u << 19)
-#define Z_FEATURE_ESP32_LINK  (1u << 25)	/* was 20 until CPU_MUL took it */
 
 // CPU extensions. Unlike everything above, these describe the core
 // rather than a peripheral -- see z_soc_check_cpu_arch() below.
@@ -140,6 +139,78 @@
 // order and is what apps should call.
 #define Z_FEATURE_RTC         (1u << 24)
 
+// rtl/trng.v -- the ring-oscillator entropy source. Same hazard and
+// same rule as Z_FEATURE_RTC directly above: check THIS bit before
+// reading the TRNG's own magic, because on a bitstream built before
+// rtl/trng.v existed that address is decoded by nothing and the read
+// hangs the CPU rather than returning garbage. z_rng_present()
+// (sw/common/zrng.h) is that check in the safe order.
+//
+// Note this bit says the hardware is BUILT, not that it WORKS. A ring
+// oscillator bank that synthesis optimised away sets this bit and
+// produces predictable words; z_rng_secure() is the question worth
+// asking before generating a key. See docs/trng.md.
+#define Z_FEATURE_TRNG        (1u << 25)
+
+// rtl/audio.v -- the sample FIFO and DAC output stage. Same hazard and
+// same rule as Z_FEATURE_RTC and Z_FEATURE_TRNG above: check THIS bit
+// before reading the audio block's own MAGIC, because on a bitstream
+// built before rtl/audio.v existed 0x7000_05xx is decoded by nothing
+// and that read hangs the CPU rather than returning garbage.
+// z_audio_present() (sw/common/zaudio.h) is that check in the safe
+// order.
+//
+// Unlike RTC and TRNG this is PER-BOARD: audio needs pins and a DAC on
+// the other end of them, so `AUDIO in rtl/boards.vh is set per board
+// rather than universally, and a board without it is normal rather
+// than deliberately stripped.
+//
+// This bit does NOT say which DAC is wired -- the register interface
+// is identical for the 1-bit and PT8211 output stages. Read the audio
+// block's own CONFIG register for that.
+#define Z_FEATURE_AUDIO       (1u << 26)
+
+// rtl/gpu/gpu_video.v's game mode -- a 320x240 pixel-doubled viewport
+// over the same 640x480 framebuffer. Mirrors `GAME in rtl/boards.vh,
+// which defines it at the universal level, so this is set on every
+// board by default.
+//
+// Unlike Z_FEATURE_RTC/_TRNG/_AUDIO above there is NO hang hazard here
+// and no ordering rule to obey: game mode has no address window of its
+// own, it lives inside socctl, and every bitstream with socctl already
+// decodes and acks that whole window.
+//
+// Prefer z_game_available() (below) over testing this bit directly.
+// This bit says `GAME was defined; that helper asks socctl what the
+// hardware is actually willing to do, which additionally accounts for
+// a board that has `GAME but no `GPU to scan out with.
+#define Z_FEATURE_GAME        (1u << 27)
+
+// Composite video out (rtl/gpu/gpu_video.v's `GPU_COMPOSITE).
+//
+// Worth checking separately from Z_FEATURE_GPU_VGA/_DDMI rather than
+// folding into them, because software genuinely behaves differently: a
+// composite board is 320x240 and CANNOT be anything else. The desktop
+// is still a 640x480 surface -- it is just that only a quarter of it
+// is on screen at a time, permanently, and the viewport is how the
+// rest is reached.
+//
+// So an app deciding whether it has room for a wide window should ask
+// z_video_is_composite() below rather than assuming 640x480 is
+// visible, and it should not assume turning game mode OFF will give it
+// the whole screen back, because on these boards it will not.
+#define Z_FEATURE_COMPOSITE   (1u << 28)
+
+// PAL rather than NTSC. Meaningless unless Z_FEATURE_COMPOSITE is set;
+// check that first. The difference software can actually see is the
+// frame rate -- 50Hz rather than 60 -- which matters to anything
+// pacing itself off z_game_wait_frame().
+#define Z_FEATURE_COMPOSITE_PAL (1u << 29)
+// ULX3S only: the onboard ESP32 as the network interface (UART1 +
+// rtl/esp32_rxfifo.v + the ESP32 control register). Highest free bit
+// deliberately -- a one-board peripheral stays out of the way of
+// anything universal that comes later. See docs/esp32link.md.
+#define Z_FEATURE_ESP32_LINK  (1u << 30)
 // -- feature table (sw/common/zsoc.c) --
 //
 // The human-readable half of the Z_FEATURE_* bits above, kept in the
@@ -168,7 +239,25 @@ typedef enum {
 	// oddly in a list until the alternative is tried, which is
 	// filing a clock under "input".
 	Z_FEAT_GROUP_CLOCK,
+	// The entropy source (rtl/trng.v). Its own group for the same
+	// reason the clock has one: it is not memory, input, storage or
+	// network, and filing it under any of those would be worse than a
+	// short list.
+	Z_FEAT_GROUP_ENTROPY,
+	// Audio (rtl/audio.v). Its own group for the same reason the
+	// clock and the entropy source have one: it is not memory, input,
+	// storage or network. It sits before LED rather than after so the
+	// rows in zsoc.c stay sorted by group, which consumers rely on.
+	Z_FEAT_GROUP_AUDIO,
 	Z_FEAT_GROUP_LED,
+	// Adding a group here REQUIRES adding its display name to
+	// z_soc_feature_groups[] in zsoc.c, at the same position. That
+	// table is indexed by this enum and nothing links the two but
+	// order; getting it wrong shifts every later name and runs the
+	// last group off the end of the array, which crashed the kernel
+	// mid-boot the first time it happened. zsoc.c now carries a
+	// compile-time size check so the mistake cannot reach a board
+	// again.
 	Z_FEAT_GROUP_COUNT
 } z_feat_group_t;
 
@@ -267,6 +356,9 @@ static inline bool z_soc_feature_confirmed_absent(uint32_t feature) {
 #define reg_socctl_ctrl  (*(volatile uint32_t*)0x70000200)
 #define reg_socctl_magic (*(volatile uint32_t*)0x70000204)
 #define reg_socctl_video (*(volatile uint32_t*)0x70000208)
+#define reg_socctl_game  (*(volatile uint32_t*)0x7000020c)
+#define reg_socctl_view  (*(volatile uint32_t*)0x70000210)
+#define reg_socctl_frame (*(volatile uint32_t*)0x70000214)
 
 #define Z_SOCCTL_MAGIC 0x5A435452u	// "ZCTR" -- see rtl/socctl.v
 
@@ -383,6 +475,231 @@ static inline uint32_t z_video_mode_from_name(const char *s) {
 	if (s[0] == 'p' && s[1] == 'a' && s[2] == 'p' && s[3] == 'e' &&
 		s[4] == 'r' && s[5] == '\0') return Z_VIDEO_MODE_PAPER;
 	return Z_VIDEO_MODE_COUNT;
+}
+
+// -- game mode (rtl/gpu/gpu_video.v, via socctl's GAME/VIEW/FRAME) --
+//
+// A 320x240 VIEWPORT over the unchanged 640x480 framebuffer,
+// pixel-doubled on scanout. The display timing does not change: the
+// monitor sees the same 640x480@60Hz signal either way, which is the
+// entire point on a TV that will not accept anything else.
+//
+// Nothing about the framebuffer changes when this is switched on or
+// off. Every window is still where it was, every app is still running,
+// the window manager still thinks the screen is 640x480 -- because it
+// is. Only the part of it the display is pointed at changes, and
+// Z_GAME_VIEW_W/H worth of it is visible at a time. That is why
+// switching modes destroys nothing and why the whole desktop remains
+// reachable in game mode by moving the viewport around
+// (Ctrl+Alt+arrow, see sw/apps/wm).
+//
+// For a full-screen game the same mechanism is a double buffer. The
+// framebuffer holds four non-overlapping 320x240 pages; a game draws
+// into one while displaying another and flips with a single write to
+// the origin, adopted at a frame boundary so it cannot tear. The line
+// rasterizer (rtl/gpu/gpu_raster.v) and the blitter (rtl/gpu/gpu_blit.v)
+// needed no changes at all for this and can draw into any page --
+// as far as they are concerned there is still exactly one 640x480
+// 1bpp surface, which is all there ever was.
+#define Z_GAME_VIEW_W 320
+#define Z_GAME_VIEW_H 240
+
+// The four page origins, for software that wants to think in pages.
+// The HARDWARE HAS NO CONCEPT OF A PAGE -- the origin is an arbitrary
+// (x,y) and these are just the four values that happen to tile the
+// framebuffer without overlapping. A game is free to ignore them
+// entirely and use, say, two half-height 640x240 buffers instead (two
+// pages side by side), which gives double buffering plus 320px of
+// horizontal scroll room in each. Nothing in the RTL cares.
+#define Z_GAME_PAGE0_X 0
+#define Z_GAME_PAGE0_Y 0
+#define Z_GAME_PAGE1_X 320
+#define Z_GAME_PAGE1_Y 0
+#define Z_GAME_PAGE2_X 0
+#define Z_GAME_PAGE2_Y 240
+#define Z_GAME_PAGE3_X 320
+#define Z_GAME_PAGE3_Y 240
+
+#define Z_GAME_ENABLE (1u << 0)
+
+// Toroidal wrapping. Off (the default) the viewport is CLAMPED so it
+// can never hang off the edge of the framebuffer: the origin is
+// limited to x <= 320, y <= 240. That is what the desktop wants --
+// scrolling right to find the dock and having the screen wrap around
+// to the left instead would be disorienting rather than useful.
+//
+// On, column 639 is followed by column 0 and row 479 by row 0. That
+// turns the 640x480 surface into an infinitely scrollable world where
+// only the leading edge has to be redrawn as it comes around, instead
+// of a bounded playfield two screens wide. It is what a scrolling game
+// wants and is almost certainly wrong for anything else.
+//
+// The clamp is applied in hardware at the frame boundary, not on the
+// write path, so it does not depend on the order GAME and VIEW were
+// written in. A consequence worth knowing: z_game_get_view() reads
+// back what you WROTE, not the clamped value actually being scanned.
+#define Z_GAME_WRAP   (1u << 1)
+
+// read-only, reported by the hardware -- see z_game_available()
+#define Z_GAME_AVAIL  (1u << 2)
+
+// top half of reg_socctl_game -- KEEP IN SYNC with rtl/socctl.v's own
+// GAME_SIG. "ZG".
+#define Z_GAME_SIG 0x5A47u
+
+// true only if this bitstream's socctl actually has the GAME register.
+//
+// Same reasoning as z_video_mode_present(), and the same trap:
+// z_socctl_present() is not sufficient, because socctl shipped before
+// these registers existed and on one of those bitstreams the read
+// falls through socctl's default case and returns 0 -- which is
+// indistinguishable from a working block reporting "game mode off".
+static inline bool z_game_present(void) {
+	return ((reg_socctl_game >> 16) & 0xffffu) == Z_GAME_SIG;
+}
+
+// true if this machine can actually enter game mode.
+//
+// This is the question to ask, in preference to testing
+// Z_FEATURE_GAME. That bit says `GAME was defined in rtl/boards.vh;
+// this asks the hardware, which additionally accounts for a board
+// built with `GAME but no `GPU -- there being no scanout to double.
+// rtl/sysctl.v ands the two before telling socctl, so the answer here
+// is the one that matters.
+// True on a board whose only display output is composite video.
+//
+// The practical consequence: the visible area is 320x240 and always
+// will be. Game mode is not a mode here, it is the permanent state of
+// the display -- gpu_video.v's FIXED_VIEWPORT makes the viewport
+// unconditional and does not consult the game bit at all.
+//
+// That is a bandwidth fact rather than a choice. Drawing 640 distinct
+// pixels across a 52us active line needs 12.6MHz of luma; composite
+// carries about 4.2 (NTSC) or 5.5 (PAL). A "640 wide" composite
+// picture is a blur of the correct average brightness.
+static inline bool z_video_is_composite(void) {
+	if (!z_soc_csrs_present()) return false;
+	return (reg_csr_features & Z_FEATURE_COMPOSITE) != 0;
+}
+
+// 50 on a PAL composite board, 60 everywhere else. For anything that
+// converts frames to seconds; z_game_wait_frame() paces itself off the
+// hardware either way and needs no help.
+static inline uint32_t z_video_frame_hz(void) {
+	if (!z_video_is_composite()) return 60;
+	return (reg_csr_features & Z_FEATURE_COMPOSITE_PAL) ? 50 : 60;
+}
+
+static inline bool z_game_available(void) {
+	if (!z_game_present()) return false;
+	return (reg_socctl_game & Z_GAME_AVAIL) != 0;
+}
+
+// true if the machine is in game mode RIGHT NOW.
+//
+// Reads back the hardware's own enable bit, not a shadow copy, so on a
+// bitstream without game mode this answers false however many times
+// software has tried to turn it on.
+static inline bool z_game_enabled(void) {
+	if (!z_game_present()) return false;
+	return (reg_socctl_game & Z_GAME_ENABLE) != 0;
+}
+
+static inline bool z_game_wrap_enabled(void) {
+	if (!z_game_present()) return false;
+	return (reg_socctl_game & Z_GAME_WRAP) != 0;
+}
+
+// Enter or leave game mode. Returns false if this bitstream can't (an
+// RTL change -- needs `make flash`, not `make dev-flash`), writing
+// nothing in that case.
+//
+// Takes effect at the next frame boundary, at most 16.7ms away, for
+// the same reason and by the same mechanism as z_video_set_mode().
+//
+// Leaving game mode does NOT reset the viewport origin: the origin is
+// simply ignored in desktop mode and comes back as it was on the next
+// entry. That is usually what a caller wants (toggle out to see the
+// whole desktop, toggle back to exactly where you were), and a caller
+// that wants otherwise can write the origin itself.
+static inline bool z_game_set_enabled(bool on, bool wrap) {
+	if (!z_game_available()) return false;
+	reg_socctl_game = (on ? Z_GAME_ENABLE : 0u) | (wrap ? Z_GAME_WRAP : 0u);
+	return true;
+}
+
+// Move the viewport. Coordinates are FRAMEBUFFER pixels -- the same
+// coordinate space z_fb_set_pixel() and every window position already
+// use, not viewport-relative ones.
+//
+// Range-limited by hardware to 0..639 / 0..479 on the write path, and
+// clamped further to 0..320 / 0..240 at scanout when wrap is off, so
+// there is no value software can write here that produces a broken
+// display. Returns false only if the bitstream has no game mode.
+//
+// The write is adopted at a frame boundary together with the GAME
+// register, as one payload -- so setting the mode and the origin in
+// two consecutive calls can never be seen as one frame at the old
+// origin followed by one at the new. That is what makes this usable as
+// a page flip.
+static inline bool z_game_set_view(uint32_t x, uint32_t y) {
+	if (!z_game_available()) return false;
+	reg_socctl_view = ((y & 0x3ffu) << 16) | (x & 0x3ffu);
+	return true;
+}
+
+// Reads back what was WRITTEN, not the clamped value in use -- see
+// Z_GAME_WRAP above. Returns 0 on a bitstream without game mode.
+static inline uint32_t z_game_get_view_x(void) {
+	if (!z_game_present()) return 0;
+	return reg_socctl_view & 0x3ffu;
+}
+
+static inline uint32_t z_game_get_view_y(void) {
+	if (!z_game_present()) return 0;
+	return (reg_socctl_view >> 16) & 0x3ffu;
+}
+
+// -- frame timing --
+//
+// A free-running 16-bit count of frames scanned out, and the current
+// vertical blanking state. This is how a game gets vsync: there is no
+// vblank interrupt, deliberately -- polling a counter costs no IRQ
+// line, no latency budget and no kernel involvement, and a full-screen
+// game's main loop is already a loop.
+//
+// The counter wraps every ~18 minutes at 60Hz. Compare for inequality
+// or unsigned-subtract for elapsed frames; do not test with `>`.
+#define Z_GAME_VBLANK (1u << 16)
+
+static inline uint32_t z_game_frame(void) {
+	if (!z_game_present()) return 0;
+	return reg_socctl_frame & 0xffffu;
+}
+
+static inline bool z_game_in_vblank(void) {
+	if (!z_game_present()) return false;
+	return (reg_socctl_frame & Z_GAME_VBLANK) != 0;
+}
+
+// Spin until the frame counter changes, i.e. until the frame being
+// scanned when this was called has finished.
+//
+// The usual page-flip sequence is: draw the back page, call
+// z_game_set_view() to point at it, then call this -- at which point
+// the flip has been adopted and the page just drawn is the one on
+// screen, so the other one is free to draw into.
+//
+// Returns immediately on a bitstream without game mode, rather than
+// spinning forever on a counter that is hardwired to zero. A game that
+// depends on the pacing should check z_game_available() at startup;
+// this only guarantees it will not hang.
+static inline void z_game_wait_frame(void) {
+	uint32_t start;
+	if (!z_game_present()) return;
+	start = reg_socctl_frame & 0xffffu;
+	while ((reg_socctl_frame & 0xffffu) == start)
+		;
 }
 
 // -- instruction cache (rtl/cache.v) --

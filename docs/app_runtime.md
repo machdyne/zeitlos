@@ -1,6 +1,72 @@
 # Zeitlos App Runtime
 
 
+
+## Do not override CFLAGS from the command line
+
+Every app Makefile here sets flags the app needs to build CORRECTLY,
+not merely to build: `-DZ_GFX_HW_BLIT` selects the hardware glyph
+renderer over the software one, `-Os` and `-ffunction-sections` plus
+`--gc-sections` keep the binary inside the space the loader has for
+it, and `--specs=picolibc.specs` picks the libc.
+
+A command-line assignment REPLACES all of that. `make
+CFLAGS+=-DFOO=1` does not append to the makefile's CFLAGS -- it
+appends to the command-line value, and the makefile's assignment never
+happens. What you get compiles, links, and produces an app that
+renders every glyph in software, skips section GC, and is three times
+the size. Past a certain size it overruns the loader's space and
+crashes on start. Nothing in the build output says any of this; the
+compile lines just look short.
+
+The Makefiles now use `override CFLAGS +=`, so the required flags
+survive any command-line form.
+
+**If you edit an app Makefile:** every LATER append to CFLAGS in that
+file must also say `override`. A plain `CFLAGS += ...` after an
+override assignment is silently ignored by make. That bit `sw/apps/net`
+immediately: `-DNET_PHY_$(NET_PHY)` vanished, the header selected the
+ENC28J60 driver while the makefile linked the RMII one, and the build
+failed at link with undefined `enc28j60_*` symbols. The quieter half
+was worse -- DHCP, NTP, SSH and the static IP settings had all
+reverted to defaults with nothing said. For one-off options prefer:
+
+    make clean && make EXTRA_CFLAGS=-DSOMETHING=1
+
+`clean` first, because `-MD` tracks header dependencies, not flag
+changes.
+
+## printf pulls in ~100KB, and fputs/stdout ~40KB
+
+The formatter is not the only trap here. `fputs(s, stdout)` needs a
+`FILE`, which drags in picolibc's whole stdio layer -- about 40KB --
+even though it formats nothing. `puts()` does not: an app whose
+printf calls are all plain strings already links it, because the
+compiler rewrites `printf("literal\n")` into `puts()`.
+
+So for a debug line: build the string by hand and emit it with
+`puts()`. Not `printf` (formatter), not `fputs` (FILE). Both mistakes
+were made in `sw/apps/read` in the same week, and both showed up as an
+unexplained binary size jump rather than as anything pointing at the
+print.
+
+
+
+An app whose `printf` calls are all plain strings does not link the
+formatter at all: the compiler rewrites `printf("literal\n")` into
+`puts()`, and `--gc-sections` drops `vfprintf`. Adding one conversion
+specifier -- a single `%d` in a debug print -- links it back in and
+costs on the order of 100KB.
+
+That is enough to push an app past the space the loader has for it, in
+which case it crashes on start. `sw/apps/read` hit this twice, and
+both times the binary tripling looked unrelated to the one-line debug
+print that caused it.
+
+If a debug print is worth having, format the numbers by hand and emit
+with `fputs()` -- see `rp_report()` in `sw/apps/read/read.c`. Either
+way, check the binary size after adding one.
+
 ## Overview
 
 Every app in `sw/apps/*` links against `sw/common/zeitlos.c/h` --
@@ -626,3 +692,181 @@ anything else driving a bus master with an app pointer must do the same.
 A physical address stays valid across a context switch, so latching one
 before starting a long operation is safe -- which is what the blitter
 does.
+
+## Idling: why background processes must block
+
+The scheduler divides the CPU between **runnable** processes. A process
+that spins in its main loop is runnable forever, so it takes a full
+share whether or not it has anything to do — and that share comes
+directly out of whatever is in the foreground.
+
+This was measured, not theorised. `gamedemo` running full-screen showed
+`dt 4-5` (four to five display frames per update) with `wm`, `net` and
+`repl` alongside it, and `dt 2` with them killed. `ps` showed every
+process in `run` with no `Z_PROC_FLAG_BLOCKED` (0x4) set.
+
+**A quarter of the CPU means a quarter of the frame rate**, and for a
+full-screen app the frame rate *is* the smoothness — there is no amount
+of interpolation that makes 15 positions a second look like 60.
+
+### The primitive
+
+`z_proc_wait(timeout_ticks)` blocks until a message arrives or the
+timeout expires; 0 waits indefinitely. It handles the lost-wakeup race
+properly, testing the mailbox in the same syscall that sets
+`Z_PROC_FLAG_BLOCKED` (`k_proc_wait()` in `sw/os/kernel.c`), so a
+message arriving between a mailbox read and the block wakes the process
+rather than being missed.
+
+### Who blocks, and how
+
+| process | wait | why |
+|---|---|---|
+| `calc`, `settings` | `z_proc_wait(0)` | purely message-driven |
+| `clock` | `Z_TICK_HZ / 8` | redraws on a timer |
+| `info` | sample interval | samples periodically |
+| `net` | 1 tick | polls the ENC28J60 |
+| `repl` | `Z_TICK_HZ / 20` | message-driven; see below |
+| `wm` | 1 tick | polls the pointer |
+
+**`repl`** was a pure spin — it read an empty mailbox and went round
+again, forever. Every branch in its loop is message-driven, so it could
+block indefinitely with `z_proc_wait(0)`. A timeout is used instead
+because the port layer has retransmit and connection state that is
+currently advanced only when a message happens to arrive; blocking
+forever is correct today and would stall silently the first time that
+stops being true. Waking 20 times a second costs nothing and removes
+the trap.
+
+**`wm`** cannot block indefinitely: the pointer is polled from
+`usb_hid.v`'s cursor register, not delivered as a message, so nothing
+would wake it when the mouse moves. One tick wakes it at ~732Hz — over
+twelve times the display refresh, far finer than anyone can see in a
+pointer — while returning the ~99% of each timeslice previously spent
+re-reading an unchanged register. An arriving message cuts the wait
+short, so app requests are still serviced immediately.
+
+### Still outstanding
+
+**Process 0** (kernel and serial console) does not block. It was left
+alone deliberately: it may double as the idle fallback, and making the
+scheduler's own process blockable is not a change to guess at. With
+everything else killed the game still measured `dt 2`, so pid 0 is worth
+investigating — but the remaining gap there is as likely to be the
+drawing as the scheduling.
+
+**`net` polls the ENC28J60** on a 1-tick timer. Its own comment notes
+the controller's INT pin is already wired to `spim.v`'s STATUS bit 2, so
+waking on the interrupt would be strictly better than a timer.
+
+## term and text were spinning too
+
+Measured on hardware with the render instrumentation:
+
+```
+term: 2869 renders, 0 rows, 0 glyphs, 2869 no-ops     <- completely idle
+```
+
+**1435 renders per second while doing nothing.** Every one called
+`render()`, found nothing dirty and returned. Cheap individually,
+ruinous collectively — the scheduler divides the CPU between *runnable*
+processes, so an idle terminal took a full share from whatever was in
+the foreground.
+
+`text` was the same. Both now `z_proc_wait(Z_TICK_HZ / 30)`.
+
+That is the same fault `wm` and `repl` had. Four of the five processes a
+normal desktop runs were spinning, which is most of the explanation for
+a full-screen app measuring a quarter of the machine.
+
+## Text rendering is not the bottleneck
+
+Worth recording, because it is where the optimisation effort was
+originally aimed:
+
+| | glyphs/sec | CPU |
+|---|---|---|
+| term, typing | 1366 | **0.3%** |
+| term, scrolling output | 5005 | **1.2%** |
+| text, scrolling | 4560 | **1.1%** |
+
+At the measured ~112 cycles per glyph, none of it is close to
+significant. The idle spinning cost far more than the drawing ever did.
+
+The one visible cost is a **burst**: a full 80x25 repaint is 2000 glyphs
+= 224,000 cycles = **4.7ms**, which is a perceptible hitch when output
+scrolls. That is a latency problem, not a throughput one, and the fix is
+scroll-by-blit rather than anything per-glyph.
+
+### term redrew whole rows
+
+`vt` tracks dirt per ROW, so typing one character marked its row dirty
+and `render()` redrew all 80 columns — measured at exactly 80 glyphs per
+keystroke where 1 would do.
+
+`render()` now keeps a **shadow of what is actually on the glass** and
+draws only cells that differ. The dirty flags still decide which rows
+are worth examining, so a quiet screen costs nothing; the shadow decides
+what within them is worth drawing.
+
+Pushing cell-level tracking into `zvt100` would have meant touching
+every routine that writes a cell. The shadow needs 4KB and no changes
+to the VT model at all.
+
+It also covers a case dirty flags never could: a row marked dirty whose
+contents happen to be unchanged now draws nothing.
+
+**The shadow must be invalidated whenever the window is repainted from
+outside** — a move, an occlusion, a `Z_WM_REDRAW`. Otherwise it still
+agrees with the model, `render()` draws nothing, and the terminal is
+left blank. All three such sites call `shadow_invalidate()`.
+
+## Every app now yields
+
+Audited all twenty. Eleven were spinning; the rest already used
+`z_proc_wait`.
+
+| policy | apps | wait |
+|---|---|---|
+| message-driven | `wm`, `repl`, `term`, `text`, `files`, `draw`, `hello_win`, `portdemo`, `ping` | `Z_TICK_HZ / 30` |
+| animated / periodic | `gpu3d`, `space3d`, `pong`, `track` | 1 tick |
+| already blocking | `calc`, `clock`, `info`, `net`, `read`, `settings` | unchanged |
+
+**Six of the twelve dock apps were spinners** — `term`, `text`, `files`,
+`draw`, `track`, `space3d`, `gpu3d` — so a desktop with a couple of
+windows open was dividing the CPU among several processes that were
+doing nothing.
+
+Animated apps get one tick rather than a longer sleep. They genuinely do
+need to run every frame, but `z_proc_wait(1)` still returns essentially
+the whole timeslice: waking at 732Hz is more than twenty times any of
+them needs, and an arriving message cuts the wait short.
+
+`track` gets the same, and it is the one with a hard constraint —
+feeding the mixer. Safe by a wide margin: the audio FIFO holds several
+milliseconds and the hardware mixer is fed on tracker ticks at about
+50Hz, against a 1.37ms wake period.
+
+## Scrolling by blit: 4.4x
+
+For an 80x25 terminal (400x200 px at 5x8):
+
+| | cycles | time |
+|---|---|---|
+| full re-render, 2000 glyphs | 224,000 | 4.67 ms |
+| VRAM to VRAM blit of the text area | 42,432 | 0.88 ms |
+| plus the one new row, 80 glyphs | 8,960 | |
+| **total** | **51,392** | **1.07 ms** |
+
+Worth doing, and it is the only remaining text cost that is visible: a
+perceptible hitch every time output scrolls.
+
+**Upward scroll only.** The blitter walks rows top-down, so copying a
+region UP is safe — each row is read before anything overwrites it.
+Scrolling down would need a bottom-up walk, which the hardware cannot
+do, and must stay a re-render. That is the rarer case in a terminal and
+in a reader.
+
+It applies equally to `read` and `text`, which scroll far more than a
+terminal does. Neither is CPU-bound today (both measured near 1%), so
+this is about latency, not throughput.

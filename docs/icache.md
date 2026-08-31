@@ -8,6 +8,7 @@ over wishbone to main memory. Main memory is slow on every board:
 | Backend | Cycles per 32-bit word | Notes |
 |---------|------------------------|-------|
 | `rtl/mem/qqspi.v` (PSRAM) | ~63 | full command/address/dummy sequence per word; ~40 of those are fixed overhead |
+| `rtl/mem/sdram_kianv.v` | ~5-11 | `KEEP_OPEN` tracks one open row per bank; same-row hits are cheaper |
 | `rtl/mem/sdram.v` | ~11 | precharge + activate on *every* access, no open-row tracking |
 | `rtl/mem/sram.v` | ~1 avg | free-running ack generator, already fast — **do not cache** |
 | `rtl/mem/bram.v` | 1 | not cached, no benefit |
@@ -45,6 +46,30 @@ path still routes through `wb_icache`'s own bypass, which costs about a
 cycle more per fetch than having no module at all. Trust `tb_soc.v` for
 speedup claims; use `tb_cache_perf.v` only for hit rates and relative
 geometry comparisons.
+
+## Measured on hardware
+
+Simulation above; this is a real board. `sergei_ml1` (ECP5-45F, 48MHz,
+W9825G6KH-6 SDRAM via `rtl/mem/sdram_kianv.v`), 4KB / 2-word lines,
+figures from `bench`:
+
+| | CPI | MIPS | IPC |
+|---|---|---|---|
+| `ICACHE` undefined | 16.7 | 3.09 | 0.06 |
+| **4KB, 2-word lines** | **8.33** | **5.79** | **0.12** |
+
+**1.87x**, and better than the ~4.7 MIPS predicted from the CPI model.
+Memory stall fell from 12.7 CPI to 4.33, a 2.9x reduction. Beating the
+estimate suggests a hit rate above the 95% assumed, and that
+`sdram_kianv.v`'s `KEEP_OPEN` row tracking helps sequential line fills
+more than the flat ~11 cycles/word model credited.
+
+Read `HITS`/`MISSES` (below) for the real rate before deciding whether
+a larger cache or longer lines are worth more BRAM.
+
+Note this is well short of the ~8.1 MIPS the fetch-bound simulation
+predicts, and that gap is the point of "What this does not fix": real
+code does loads and stores, and those are still uncached.
 
 ## Which boards should enable this
 
@@ -154,7 +179,15 @@ flush the cache many times per frame and gain nothing).
 ## Registers
 
 At `0x7000_0100`, sharing nibble `0x7` with the CSRs (`0x7000_00xx`),
-selected by address bit 8 — see `cs_cache` in `rtl/sysctl.v`.
+selected by address bit 8.
+
+**These are answered inside `rtl/cache.v`, from the CPU address,
+upstream of `wb_arbiter_main` — the cache is not a slave on the main
+bus.** It cannot be: it is a bus *master*, so routing its own registers
+down the bypass path would send them through the arbiter and back to
+the module that was waiting to answer them. `sysctl.v` therefore has no
+`cs_cache` decode; `csrs_wb` keeps the whole `0x7` nibble and absorbs
+the window on builds without `ICACHE`.
 
 These are deliberately **not** part of `rtl/csrs.v`: that block is
 documented as read-only and side-effect-free, and a flush register is
@@ -197,7 +230,16 @@ In `rtl/boards.vh`, per board:
 `define ICACHE
 `define ICACHE_KB 4
 `define ICACHE_LINE_WORDS 4
+`define ICACHE_FAST_HIT 1
 ```
+
+`ICACHE_FAST_HIT` selects how a hit is acknowledged. 1 (the default if
+a board does not define it) answers combinationally in the same cycle
+the tag compare resolves — a 1-cycle hit, but it puts BRAM output ->
+tag compare -> `c_ack_o` -> the CPU's `wbm_ack_i` all in one
+combinational path. 0 answers from a register instead: functionally
+identical, one cycle slower per hit, and that path disappears. Try 0
+first if a new board is unstable with the cache enabled.
 
 With `ICACHE` undefined the bus reverts to its previous behaviour:
 9902 LUT4 / 50 DP16KD against a pristine `82a0e49` baseline of 9894 /
@@ -207,9 +249,10 @@ With `ICACHE` undefined the bus reverts to its previous behaviour:
 One thing that is NOT optional either way: the `0x7000_01xx` register
 window must be acknowledged on every build. `bios.c` and `fs.c` write
 the flush register unconditionally, and an address nothing decodes gets
-no ack on this bus — `picorv32_wb` then waits forever. Without `ICACHE`,
-`csrs_wb` simply keeps the whole `0x7` nibble and answers for it. See
-`cs_csrs`/`cs_cache` in `rtl/sysctl.v`.
+no ack on this bus — `picorv32_wb` then waits forever. With `ICACHE`
+the cache answers it upstream of the arbiter; without, `csrs_wb` keeps
+the whole `0x7` nibble and answers for it. See `cs_csrs` in
+`rtl/sysctl.v`.
 
 `LINE_WORDS` is a parameter because the right value is backend
 dependent. `sdram.v` has no burst path, so a fill costs ~11 cycles per
@@ -247,7 +290,13 @@ it. Trading 11us for ~2350 LUTs is not a close call.
 
 ```
 $ iverilog -g2005 -o tb_cache rtl/tb/tb_cache.v rtl/cache.v && ./tb_cache
+$ iverilog -g2005 -Ptb_cache.FAST_HIT=0 -o tb_cache0 \
+      rtl/tb/tb_cache.v rtl/cache.v && ./tb_cache0
 $ iverilog -g2005 -o tb_perf  rtl/tb/tb_cache_perf.v rtl/cache.v && ./tb_perf
+
+$ iverilog -g2005 -o tb_cs \
+      rtl/tb/tb_cache_sdram.v rtl/cache.v \
+      rtl/mem/sdram_kianv.v rtl/tb/sdram_model.v && ./tb_cs
 
 $ cd rtl/tb                       # cycle-accurate IPC, real picorv32
 $ python3 gen_prog.py
@@ -268,12 +317,75 @@ latency (1-12 cycles) — both real backends have variable timing, and a
 cache that only works against a fixed-latency slave is a cache that only
 works in simulation.
 
-Ten tests: sequential fetch, line-fill granularity, every word offset
+Twelve tests: sequential fetch, line-fill granularity, every word offset
 within a line, index conflict thrashing, data reads bypassing,
 uncacheable regions bypassing, the stale-line-after-code-overwrite
-scenario above, runtime disable, counter accuracy, and a 1500-iteration
-random soak with interleaved writes. Passes at 2KB/2-word through
-16KB/4-word.
+scenario above, runtime disable, counter accuracy, a 1500-iteration
+random soak with interleaved writes, register access producing zero
+memory traffic, and `CYC` continuity across multi-word fills. Passes at
+2KB/2-word through 16KB/4-word, with `FAST_HIT` either way.
+
+### What `tb_cache.v` cannot see
+
+Its slave is synthetic: it acks on demand and has no banks, no open
+rows, no CAS latency, and no opinion about `sel`. **A cache that
+violates the SDRAM protocol passes it** — which is exactly what
+happened with the `sel`/`we` bug, and the reason that bug survived so
+long. `tb_cache.v` passed in every configuration while the hardware
+would not boot.
+
+`rtl/tb/tb_cache_sdram.v` closes that gap by wiring the cache to the
+real `sdram_kianv.v` and a protocol-checking `rtl/tb/sdram_model.v`
+(W9825G6KH / MT48LC16M16A2 class — the two parts are protocol-identical
+at this level). It reproduced the hardware failure on its first run,
+returning zeros for all 96 fetches.
+
+The model is **incomplete**: read data currently lands one beat
+misaligned and it reports a spurious ACT-on-open-bank around refresh,
+so it is not yet a clean pass/fail. Finish it before trusting it as a
+gate — but prefer it to `tb_cache.v` for anything touching the memory
+protocol.
+
+## Bus signalling: `sel` decides direction, not `we`
+
+**`rtl/mem/sdram_kianv.v` decides read-vs-write from `wb_sel_i` and
+never reads `wb_we_i`** — the signal appears exactly once, in the port
+list. `sel == 4'b0000` means read; a nonzero `sel` names the byte lanes
+to *write*. That is picorv32's native `wstrb` convention carried
+straight onto the wishbone port, and it is not what a Wishbone master
+written from the specification would expect.
+
+So a line fill must drive:
+
+```verilog
+m_sel_o <= 4'b0000;   // read. NOT 4'b1111.
+m_we_o  <= 1'b0;
+```
+
+This cost a full debugging session. The fill originally drove
+`sel = 4'b1111` with `we = 0` — "all four byte lanes, reading" by
+conventional Wishbone reading. The controller believed `sel`, took its
+`WRITE_L` path on every miss, **wrote `0x00000000` over the code it was
+supposed to be fetching**, and then pulsed `ready` without a read
+having happened, so the cache latched stale `dout` as the fetched word.
+The cache poisoned itself and the program in memory simultaneously.
+
+Why it presented the way it did:
+
+- BIOS ran fine — it executes from BRAM, which is never cached.
+- The BIOS memory test passed — data traffic carries correct `wstrb`.
+- `cache off` (CTRL = 0x2) booted — `S_BYPASS` forwards `c_sel_i`
+  verbatim, so bypassed reads carry `sel = 0` and behave.
+- ...but then crashed as soon as `init` started apps, because
+  `fs_load_exec()` writes CTRL = 0x3, re-enabling the cache.
+- `LINE_WORDS` 2 and 4 failed identically, and `FAST_HIT` was
+  irrelevant: every fill was a write regardless of geometry.
+
+**If you add another master to `wb_arbiter_main`** — the audio mixer is
+next — drive `sel` this way too. Better, make whichever controller you
+merge honour `we`/`mem_write` for direction, or assert on a `we`/`sel`
+mismatch. A controller that silently writes in response to a
+conventionally-signalled read is a trap for every future master.
 
 ## Bring-up procedure
 
@@ -285,20 +397,53 @@ random soak with interleaved writes. Passes at 2KB/2-word through
    command instead of a re-synthesis. That is the entire reason the
    enable bit exists.
 
+If it fails on a new board, bisect in this order — it splits the module
+along the boundaries that actually separate causes:
+
+1. `bios.c`: write CTRL = `0x2` (flush, enable=0) instead of `0x3`.
+   The cache stays in the bus path but bypasses every fetch. Boots =>
+   the bypass path and the module's presence are fine; the fault is in
+   fill or hit. Note `fs_load_exec()` will re-enable it at the first
+   `run`, so expect a later crash rather than a clean boot.
+2. `ICACHE_FAST_HIT 0` — removes the combinational hit-ack path.
+3. `ICACHE_LINE_WORDS 2` — if 2 works and 4 does not, the fill
+   sequence is at fault; if both fail, it is not the geometry.
+
+And check the bus signalling section above before theorising. The
+`sel`/`we` mismatch survived four wrong hypotheses (arbiter deadlock,
+timing margin, `mem_instr` wiring, `CYC` continuity) precisely because
+every one of them was plausible and none was testable from
+`tb_cache.v`, which passes in every configuration.
+
 ## What this does not fix
 
 Data loads and stores are still uncached and still pay full memory
 latency. After this lands, they are the dominant remaining term. In
 rough cycles-per-instruction terms on SDRAM:
 
-| Configuration | CPI |
-|---------------|-----|
-| Before | ~18 |
-| With I-cache | ~10.5 |
-| With I-cache + open-row SDRAM | ~7.5 |
+| Configuration | CPI | Source |
+|---------------|-----|--------|
+| No cache | 16.7 | measured, sergei_ml1 |
+| With I-cache | 8.33 | measured, sergei_ml1 |
+| picorv32 floor, zero-wait memory | ~4 | — |
 
-The next highest-leverage change is open-row tracking in
-`rtl/mem/sdram.v` — it costs no BRAM, helps loads and stores as well as
-fills, and roughly halves data access cost. A data cache (write-through,
-never write-back, for DMA coherency reasons) is worth revisiting after
-that, and matters far more on PSRAM boards than SDRAM ones.
+Of the 8.33 achieved, roughly 4.33 is still memory stall, nearly all of
+it data traffic. Perfect memory would be ~12 MIPS against the 5.79
+measured.
+
+The next highest-leverage change is **burst line fills**. With a
+controller supporting native read bursts (see the uploaded
+`mt48lc16m16a2_ctrl.v`, `ENABLE_NATIVE_READ_BURST`), a fill becomes one
+command fetching 8 words in ~13 cycles instead of 8 separate ~11-cycle
+reads. That makes `LINE_WORDS 8` cheap, raising the hit rate and
+cutting the miss penalty together.
+
+Burst is worth little *without* the cache: picorv32 issues one fetch and
+blocks, with no prefetch buffer for a burst to fill. Modelled at a 95%
+hit rate, cache alone is ~10.3 CPI and cache-plus-burst ~9.9 — burst is
+a refinement of the miss path, not an alternative to caching.
+
+Open-row tracking is already present in `sdram_kianv.v` (`KEEP_OPEN`)
+and is part of why the measured result beat the estimate. A data cache
+(write-through, never write-back, for DMA coherency reasons) is worth
+revisiting after burst, and matters far more on PSRAM boards.

@@ -15,6 +15,40 @@
 									// rtl/sysctl.v's cpu_irq[6],
 									// sw/os/hid.c
 
+// rtl/audio.v's FIFO watermark (cpu_irq[7]). LEVEL-SENSITIVE, and
+// non-latched in rtl/sysctl.v's LATCHED_IRQ mask for that reason --
+// the same treatment Z_IRQ_UART gets. It stays asserted for as long as
+// the FIFO is below its watermark, so a handler that returns without
+// pushing samples will be re-entered immediately. That is the intended
+// behaviour, not a bug, but it does mean the handler MUST either fill
+// the FIFO or clear CTRL.IRQEN before returning.
+//
+// Optional hardware: check Z_FEATURE_AUDIO before enabling it. See
+// sw/common/zaudio.h.
+#define Z_IRQ_AUDIO				7
+
+// Ethernet receive -- a frame is waiting in the MAC's RX buffer.
+//
+// A rising-edge PULSE, one per arrival -- not a level.
+//
+// This said "LEVEL, not a pulse" and argued that an edge has a window
+// in which a packet can be dropped. The concern was right; the
+// description was wrong. rtl/sysctl.v edge-detects on purpose, because
+// bit 8 is latched and a latched level re-fires forever -- the level
+// version brought the machine to a crawl.
+//
+// The window the old comment worried about was therefore real and
+// open. It is closed on the software side instead: a wakeup that
+// arrives while the driver is still running is recorded rather than
+// dropped (Z_PROC_FLAG_WAKE in sw/common/zproc.h), so a single pulse
+// cannot be missed no matter how it is timed against net's loop.
+//
+// One line for both MACs. rtl/ethmac_rmii.v drives it from its own
+// rx_ready (STATUS bit 2) and the ENC28J60's active-low INT pin is
+// inverted into the same wire in rtl/sysctl.v, so sw/apps/net sees one
+// interrupt regardless of which ethernet the board has.
+#define Z_IRQ_ETH				8
+
 typedef struct {
 
 	uint32_t		base;
@@ -136,7 +170,7 @@ z_obj_t *k_proc_wait(z_obj_t *args);
 #define Z_PROC_STACK_SIZE_SMALL    8*1024
 #define Z_PROC_STACK_SIZE_DEFAULT  16*1024
 #define Z_PROC_STACK_SIZE_MEDIUM   32*1024
-#define Z_PROC_STACK_SIZE_LARGE    1024*1024	// was 64K; 32 MB boards can afford a real heap for repl/net (te opens 128 KB files)
+#define Z_PROC_STACK_SIZE_LARGE    64*1024
 
 // which tier (above) a process named `name` should get -- the one
 // place this decision is made, used by every path that can start a
