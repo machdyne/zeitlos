@@ -22,6 +22,7 @@
 
 import argparse
 import gzip
+import json
 import os
 import shutil
 import subprocess
@@ -245,10 +246,63 @@ def cmd_build(args):
     commit, dirty = build_mod.git_commit(ROOT)
     out = distdir(version)
 
+    # -- what is already here ------------------------------------------
+    #
+    # Building is INCREMENTAL into dist/<version>/. Building two targets
+    # today, publishing, then adding a third next week under the same
+    # version is a normal thing to want, and `ship` already updates an
+    # existing release in place -- so a second `build` must add to the
+    # directory rather than replace it.
+    #
+    # It nearly did already, since nothing wipes dist/. But the manifest
+    # and the notes were regenerated from THIS RUN's targets only, which
+    # would have quietly rewritten a three-target release page to
+    # describe one. Merge instead.
+    previous = _load_manifest(out)
+    prev_targets = {t["target"]: t for t in previous.get("targets", [])}
+    if prev_targets:
+        print("\nalready in %s:" % os.path.relpath(out, ROOT))
+        for name in sorted(prev_targets):
+            mark = "will rebuild" if name in (args.targets or []) else "keep"
+            print("  %-20s %s" % (name, mark))
+
     print("\nzeitlos %s" % version)
     print("  commit   %s%s" % (commit[:12], " (tree is DIRTY)" if dirty else ""))
     print("  targets  %s" % ", ".join(targets))
     print("  output   %s" % os.path.relpath(out, ROOT))
+    # -- one release, one commit ---------------------------------------
+    #
+    # The kernel and the sdcard image are board-independent and are
+    # built ONCE for the whole release, but each target's flash image
+    # embeds its own copy of that kernel. Adding a target from a
+    # different commit therefore produces a release whose images do not
+    # all contain the same kernel -- and sw/common/syscalls.def is
+    # compiled into both the kernel and every app, so a mismatched pair
+    # calls the wrong handler for every syscall past the point they
+    # diverge.
+    #
+    # Building the rest of a release later from the SAME commit is
+    # completely fine and is the case this whole path exists for.
+    prev_commit = previous.get("commit")
+    if prev_targets and prev_commit and prev_commit != commit:
+        if not args.allow_mixed_commits:
+            die("%s was built from %s; you are now on %s.\n\n"
+                "  Adding a target from a different commit gives a release "
+                "whose images do not all contain the\n"
+                "  same kernel. sw/common/syscalls.def is compiled into "
+                "both the kernel and every app, so a\n"
+                "  mismatched pair calls the wrong handler for every "
+                "syscall past the point they diverge.\n\n"
+                "  Either check out %s and build there, or rebuild every "
+                "target from the current commit:\n"
+                "    rm -rf %s && release/zrelease build %s\n\n"
+                "  --allow-mixed-commits if you have verified nothing "
+                "relevant changed between the two."
+                % (os.path.relpath(out, ROOT), prev_commit[:12], commit[:12],
+                   prev_commit[:12], os.path.relpath(out, ROOT), version))
+        print("\n  WARNING: mixing commits -- %s here, %s previously."
+              % (commit[:12], prev_commit[:12]))
+
     if dirty and not args.allow_dirty:
         die("the working tree has uncommitted changes.\n\n"
             "  A release built from a dirty tree cannot be reproduced from "
@@ -318,27 +372,52 @@ def cmd_build(args):
                   "bytes": os.path.getsize(gz),
                   "files": [n for n, _ in shipped]}
 
-    ark_commit = _ark_commit(args.ark)
+    ark_commit = _ark_commit(args.ark) or previous.get("ark_commit")
 
     # -- manifest, notes, checksums ------------------------------------
-    man = notes_mod.manifest(version, commit, dirty, results, sdcard, lay,
-                             ark_commit)
+    #
+    # This run's targets replace same-named entries; everything else
+    # built earlier under this version is carried forward, so the notes
+    # and README.txt describe the whole release rather than the last
+    # command that touched it.
+    merged = dict(prev_targets)
+    for r in results:
+        r["commit"] = commit
+        merged[r["target"]] = r
+    all_targets = [merged[k] for k in sorted(merged)]
+
+    man = notes_mod.manifest(version, commit, dirty, all_targets, sdcard,
+                             lay, ark_commit)
     notes_mod.write(os.path.join(out, "MANIFEST.json"), man)
     notes_mod.write(os.path.join(out, "NOTES.md"),
-                    notes_mod.notes(version, commit, results, sdcard, lay))
+                    notes_mod.notes(version, commit, all_targets, sdcard,
+                                    lay))
     notes_mod.write(os.path.join(out, "README.txt"),
-                    notes_mod.asset_readme(version, commit, results, sdcard,
-                                           lay))
+                    notes_mod.asset_readme(version, commit, all_targets,
+                                           sdcard, lay))
 
     _write_sums(out)
 
     print("\n=== %s ===" % version)
+    print("  %d target(s): %s"
+          % (len(all_targets), ", ".join(t["target"] for t in all_targets)))
     for f in sorted(os.listdir(out)):
         p = os.path.join(out, f)
         print("  %10d  %s" % (os.path.getsize(p), f))
     print("\nbuilt into %s" % os.path.relpath(out, ROOT))
     print("Flash one and try it, then:  release/zrelease ship %s\n" % version)
     return 0
+
+
+def _load_manifest(out):
+    path = os.path.join(out, "MANIFEST.json")
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (ValueError, OSError):
+        return {}
 
 
 def _ark_commit(ark_dir):
@@ -458,6 +537,12 @@ def main(argv):
     b.add_argument("--jobs", "-j", type=int)
     b.add_argument("--ark", help="ARK checkout (default sw/data/ark)")
     b.add_argument("--no-sdcard", action="store_true")
+    b.add_argument("--rebuild-sdcard", action="store_true",
+                   help="rebuild the sdcard image even if one is already "
+                        "in dist/<version>/")
+    b.add_argument("--allow-mixed-commits", action="store_true",
+                   help="add targets to a release built from a different "
+                        "commit")
     b.add_argument("--full-image", action="store_true",
                    help="pad flash images to the full 2MB")
     b.add_argument("--bump", action="store_true",

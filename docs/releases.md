@@ -91,6 +91,7 @@ release/
   lib/ship.py           gh release create/upload
   lib/notes.py          NOTES.md, README.txt, MANIFEST.json
   lib/selftest.py       end-to-end test with the toolchain stubbed
+  lib/test_incremental.py  the build-later-publish-again workflow
   dist/<version>/       artifacts (gitignored)
 
 output/releases/<board>/    bitstreams and logs from a release build,
@@ -538,6 +539,62 @@ matters most at the moment it should not be there at all.
 
 ---
 
+## Building a release in more than one sitting
+
+Building is **incremental** into `dist/<version>/`. Build two targets
+today, publish, add a third next week under the same version:
+
+```
+$ release/zrelease build v0.0.2 --targets lakritz_uart lakritz_langkatze
+$ release/zrelease ship  v0.0.2
+  ...later...
+$ release/zrelease build v0.0.2 --targets sergei_ml1
+$ release/zrelease ship  v0.0.2
+```
+
+The second `build` adds to the directory rather than replacing it, and
+says what it found:
+
+```
+already in release/dist/0.0.2:
+  lakritz_uart         keep
+  lakritz_langkatze    keep
+```
+
+`MANIFEST.json`, `NOTES.md` and `README.txt` are regenerated from the
+**merged** set, so they describe all three targets rather than just the
+last command's. `SHA256SUMS` covers the whole directory. The second
+`ship` then adds one asset and leaves the rest alone.
+
+Two things this has to be careful about:
+
+**One release, one commit.** The kernel and the sdcard image are
+board-independent and built once for the whole release, but every
+target's flash image embeds its own copy of that kernel. Adding a target
+from a different commit gives a release whose images do not all contain
+the same one — and `sw/common/syscalls.def` is compiled into both the
+kernel and every app, so a mismatched pair calls the wrong handler for
+every syscall past the point they diverge. So a build that would mix
+commits stops:
+
+```
+release/dist/0.0.2 was built from 0123456789ab; you are now on ef243b7dfd47.
+  ...
+  Either check out 0123456789ab and build there, or rebuild every target
+  from the current commit:
+    rm -rf release/dist/0.0.2 && release/zrelease build 0.0.2
+```
+
+Coming back later and building the rest **from the same commit** is
+completely fine, and is the case this path exists for.
+`--allow-mixed-commits` if you have checked that nothing relevant moved.
+
+**The sdcard image is not rebuilt.** `mkfs.fat` stamps a fresh volume
+serial into every image, so rebuilding produces different bytes for
+identical content — which would churn the checksum and force a needless
+re-upload on every incremental build. An existing one is kept;
+`--rebuild-sdcard` forces it.
+
 ## Publishing and updating
 
 ```
@@ -585,7 +642,16 @@ that the ZAR magic and the splash land at the right offsets, that gaps
 are left erased, and that `net` is in the archive exactly when the
 target has a MAC.
 
-It cleans up after itself. `git status` is unchanged afterwards.
+```
+$ python3 release/lib/test_incremental.py
+```
+
+covers the multi-sitting workflow above: that a second build adds to
+`dist/` instead of replacing it, that the notes and manifest describe
+every target rather than the last command's, and that rebuilding one
+target in place leaves the others alone.
+
+Both clean up after themselves. `git status` is unchanged afterwards.
 
 ---
 
