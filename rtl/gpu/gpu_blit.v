@@ -353,6 +353,10 @@ module gpu_blit_wb #(
     // idle cycles (the margin the fill path has always shipped with).
     // settle_ret holds where to resume.
     localparam ST_MEM_SETTLE1 = 5'd28, ST_MEM_SETTLE2 = 5'd29;
+    // One cycle after ST_MEM_READ_WAIT's ack: the source word was
+    // captured into src_cur on the ack cycle, and the shifter runs from
+    // that register here. See src_cur's declaration for why.
+    localparam ST_MEM_BLEND = 5'd30;
 
     // Operation variables
     reg [31:0] work_dst_x, work_dst_y, work_width, work_height, work_pattern;
@@ -372,6 +376,9 @@ module gpu_blit_wb #(
     reg [31:0] work_src_b_addr;
     reg [31:0] work_src_addr, work_src_stride;
     reg [4:0]  work_src_shift;
+    // 32 - work_src_shift, latched alongside it so the shifter's select
+    // lines come straight from a register rather than a subtractor.
+    reg [5:0]  work_shift_hi;
     reg draw_busy;
 
     // Where the settle pair resumes -- ST_MEM_READ, ST_MEM_PRIME or
@@ -387,6 +394,15 @@ module gpu_blit_wb #(
     // src_word_out: the assembled destination word, held across the
     //   framebuffer read-modify-write that follows
     reg [31:0] mem_row_addr, mem_next_addr, src_prev, src_word_out;
+    // The source word as it came off the bus, captured on the ack cycle.
+    // mem_blend used to read the bus data wire directly, which put the
+    // whole read-return path -- arbiter grant -> address decode -> data
+    // mux -> this module -> 32-bit barrel shifter -> src_word_out -- in
+    // one 48MHz cycle, and nextpnr reported it as the SoC's critical
+    // path (21ns, three quarters of it routing). Capturing here and
+    // shifting one cycle later in ST_MEM_BLEND splits that in two.
+    // Costs one cycle per source word in copy/cookie mode.
+    reg [31:0] src_cur;
 
     // -- second source stream (channel B), cookie-cut mode only --
     //
@@ -633,7 +649,6 @@ module gpu_blit_wb #(
     wire [31:0] mem_src_dat = work_srcmem ? s_dat_i : m_dat_i;
     wire        mem_src_ack = work_srcmem ? s_ack_i : m_ack_i;
 
-    wire [5:0] mem_shift_hi = 6'd32 - {1'b0, work_src_shift};
     // The two-word window's older half, for whichever stream is being
     // walked. One shifter, time-multiplexed -- see CTRL_COOKIE.
     wire [31:0] mem_prev_sel = mem_stream ? src_prev_b : src_prev;
@@ -641,7 +656,7 @@ module gpu_blit_wb #(
 
     wire [31:0] mem_blend = (work_src_shift == 5'd0) ? mem_prev_sel :
                             ((mem_prev_sel >> work_src_shift) |
-                             (mem_src_dat << mem_shift_hi));
+                             (src_cur << work_shift_hi));
 
     // Which bits of the destination word this operation may modify.
     // Deliberately a SEPARATE expression from the equivalent selection
@@ -861,6 +876,7 @@ module gpu_blit_wb #(
                         work_src_addr <= src_addr_reg;
                         work_src_stride <= src_stride_reg;
                         work_src_shift <= src_shift_reg[4:0];
+                        work_shift_hi <= 6'd32 - {1'b0, src_shift_reg[4:0]};
                         work_src_prime <= src_shift_reg[8];
 
                         draw_busy <= 1'b1;
@@ -1084,61 +1100,64 @@ module gpu_blit_wb #(
                         dbg_src_adr <= mem_addr_sel;
                         dbg_src_dat <= mem_src_dat;
                         dbg_src_cnt <= dbg_src_cnt + 32'd1;
-                        // mem_blend reads the source data wire directly,
-                        // so it is only valid in this cycle -- latch the
-                        // result rather than recomputing it later from a
-                        // src_cur register that would need its own
-                        // sequencing.
-                        //
-                        // Latched PER STREAM, and that is exactly what
-                        // saves a second barrel shifter: A and B are
-                        // read on different cycles, so one shifter can
-                        // serve both if each result is captured as it
-                        // goes past. See CTRL_COOKIE.
-                        if (mem_stream) begin
-                            src_word_out_b <= mem_blend;
-                            src_prev_b <= mem_src_dat;
-                            mem_next_addr_b <= mem_next_addr_b + 4;
-                        end else begin
-                            src_word_out <= mem_blend;
-                            src_prev <= mem_src_dat;
-                            mem_next_addr <= mem_next_addr + 4;
-                        end
+                        // Capture only. The shift, the per-stream
+                        // bookkeeping and the exit decision all moved to
+                        // ST_MEM_BLEND, one cycle later, so that nothing
+                        // combinational hangs off the bus data wire.
+                        src_cur <= mem_src_dat;
                         s_cyc_o <= 1'b0;
                         s_stb_o <= 1'b0;
                         m_cyc_o <= 1'b0;
                         m_stb_o <= 1'b0;
-                        // Same stale-ack margin as ST_MEM_PRIME_WAIT
-                        // above: a VRAM source has to settle before
-                        // the destination read (or cookie B's read)
-                        // re-asserts the same port it just released.
-                        // Without it, ST_WAIT_READ consumed the stale
-                        // ack and captured the SOURCE word into
-                        // read_data instead of the destination word.
-                        if (work_cookie && !mem_stream) begin
-                            mem_stream <= 1'b1;
-                            if (work_srcmem) state <= ST_MEM_READ;
-                            else begin
-                                settle_ret <= ST_MEM_READ;
-                                state <= ST_MEM_SETTLE1;
-                            end
-                        end else begin
-                            mem_stream <= 1'b0;
-                            if (work_srcmem) state <= ST_READ;
-                            else begin
-                                settle_ret <= ST_READ;
-                                state <= ST_MEM_SETTLE1;
-                            end
+                        state <= ST_MEM_BLEND;
+                    end
+                end
+
+                ST_MEM_BLEND: begin
+                    // Latched PER STREAM, and that is exactly what
+                    // saves a second barrel shifter: A and B are
+                    // read on different cycles, so one shifter can
+                    // serve both if each result is captured as it
+                    // goes past. See CTRL_COOKIE.
+                    //
+                    // mem_prev_sel still reads the OLD src_prev here
+                    // (nonblocking), so the window slides exactly as it
+                    // did when this ran on the ack cycle.
+                    if (mem_stream) begin
+                        src_word_out_b <= mem_blend;
+                        src_prev_b <= src_cur;
+                        mem_next_addr_b <= mem_next_addr_b + 4;
+                    end else begin
+                        src_word_out <= mem_blend;
+                        src_prev <= src_cur;
+                        mem_next_addr <= mem_next_addr + 4;
+                    end
+                    // Same stale-ack margin as ST_MEM_PRIME_WAIT
+                    // above: a VRAM source has to settle before
+                    // the destination read (or cookie B's read)
+                    // re-asserts the same port it just released.
+                    // Without it, ST_WAIT_READ consumed the stale
+                    // ack and captured the SOURCE word into
+                    // read_data instead of the destination word.
+                    // (This state itself now adds one more cycle of
+                    // margin on top of the settle pair.)
+                    if (work_cookie && !mem_stream) begin
+                        mem_stream <= 1'b1;
+                        if (work_srcmem) state <= ST_MEM_READ;
+                        else begin
+                            settle_ret <= ST_MEM_READ;
+                            state <= ST_MEM_SETTLE1;
+                        end
+                    end else begin
+                        mem_stream <= 1'b0;
+                        if (work_srcmem) state <= ST_READ;
+                        else begin
+                            settle_ret <= ST_READ;
+                            state <= ST_MEM_SETTLE1;
                         end
                     end
                 end
 
-                // -- the settle pair itself. Two cycles, because the
-                // stale ack outlives the release by exactly two: one
-                // for vram_wb's own registered ack to clear once stb
-                // is gone, one more for the arbiter's registered
-                // response routing to follow. The same arithmetic that
-                // sized ST_GLYPH_HI_SETTLE1/2.
                 ST_MEM_SETTLE1: state <= ST_MEM_SETTLE2;
                 ST_MEM_SETTLE2: state <= settle_ret;
 

@@ -71,6 +71,7 @@ With the MTU, there is no need for position independent code or complicated addr
 | clock | Analog and digital clock |
 | settings | System settings |
 | track | MOD audio file player |
+| gamedemo | 2D side-scrolling platformer game |
 | space3d | First-person 3D space shooter game |
 | gpu3d | Spinning 3D cube demo + STL viewer |
 
