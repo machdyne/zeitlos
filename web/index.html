@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="en" data-phosphor="paper">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zeitlos — a RISC-V SOC and OS for FPGA computers</title>
+<meta name="description" content="Zeitlos is a work-in-progress 32-bit RISC-V system-on-chip and multitasking operating system, developed in tandem, for FPGA computers.">
+<link rel="icon" href="zeitlos.png">
+<meta property="og:title" content="Zeitlos — a RISC-V SOC and OS for FPGA computers">
+<meta property="og:description" content="A 32-bit RISC-V system-on-chip and a multitasking operating system, developed in tandem, for FPGA computers.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://zeitlos.org/">
+<meta property="og:image" content="https://zeitlos.org/zeitlos.png">
+<meta name="twitter:card" content="summary">
+
+<!--
+  Assets expected in the same directory as this file:
+    text1.png   — large transparent wordmark, used as a CSS mask so it takes
+                  the current ink colour (black / green / amber) automatically.
+    zeitlos.png — small wordmark, used as the favicon and social preview.
+  To swap the wordmark, change the two mask URLs in .wordmark below.
+-->
+
+<style>
+/* ---------------------------------------------------------------
+   Zeitlos — strictly two colours. There is no grey anywhere in this
+   stylesheet. Every intermediate tone is an ordered dither of ink on
+   paper, the same way the logo makes its grey and the same way the
+   640x480x1bpp framebuffer makes its own.
+   --------------------------------------------------------------- */
+
+:root{
+  --ink:#000000;
+  --paper:#ffffff;
+  --cell:4px;                 /* dither tile */
+  --measure:66ch;
+  --pad:clamp(1.25rem, 5vw, 3rem);
+  --sans:"Helvetica Neue", Helvetica, Arial, system-ui, sans-serif;
+  --mono:ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
+}
+html[data-phosphor="white"]{ --ink:#ffffff; --paper:#000000; }
+html[data-phosphor="green"]{ --ink:#33ff6a; --paper:#070a07; }
+html[data-phosphor="amber"]{ --ink:#ffb000; --paper:#0a0806; }
+
+*,*::before,*::after{ box-sizing:border-box; }
+
+html{ -webkit-text-size-adjust:100%; }
+
+body{
+  margin:0;
+  background:var(--paper);
+  color:var(--ink);
+  font-family:var(--sans);
+  font-size:clamp(1rem, 0.96rem + 0.2vw, 1.0625rem);
+  line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+  transition:background-color .18s linear, color .18s linear;
+}
+
+/* --- dither system ------------------------------------------------ */
+.d25,.d50,.d75,.d12,.d06{ background-repeat:repeat; background-size:var(--cell) var(--cell); }
+.d75{ background-image:conic-gradient(var(--ink) 75%, transparent 0); }
+.d50{ background-image:conic-gradient(var(--ink) 25%, transparent 0 50%, var(--ink) 0 75%, transparent 0); }
+.d25{ background-image:conic-gradient(var(--ink) 25%, transparent 0); }
+/* the two lightest tones drop to a dot screen, like the logo's own grey */
+.d12{ background-image:radial-gradient(circle at 50% 50%, var(--ink) .85px, transparent .9px); }
+.d06{ background-image:radial-gradient(circle at 50% 50%, var(--ink) .85px, transparent .9px); --cell:6px; }
+
+/* --- shared type -------------------------------------------------- */
+.eyebrow{
+  font-family:var(--mono);
+  font-size:.6875rem;
+  letter-spacing:.22em;
+  text-transform:uppercase;
+  margin:0 0 .75rem;
+}
+.muted{ opacity:.62; }
+.mono{ font-family:var(--mono); }
+
+a{ color:inherit; text-decoration-thickness:1px; text-underline-offset:.22em; }
+a:hover{ text-decoration-style:dotted; }
+:focus-visible{ outline:2px solid var(--ink); outline-offset:3px; }
+
+/* --- layout ------------------------------------------------------- */
+.wrap{ width:100%; max-width:1040px; margin-inline:auto; padding-inline:var(--pad); }
+.prose{ max-width:var(--measure); }
+.prose p{ margin:0 0 1.1em; }
+
+/* --- wordmark (masked, so it inherits the ink colour) ------------- */
+.wordmark{
+  display:block;
+  aspect-ratio:1929 / 366;
+  background-color:var(--ink);
+  -webkit-mask-image:url("text1.png");
+          mask-image:url("text1.png");
+  -webkit-mask-repeat:no-repeat; mask-repeat:no-repeat;
+  -webkit-mask-position:left center; mask-position:left center;
+  -webkit-mask-size:contain; mask-size:contain;
+}
+.wordmark > img{ display:none; width:100%; height:100%; object-fit:contain; object-position:left center; }
+/* Browsers block mask images on file:// URLs. When the page is opened
+   straight off disk, fall back to the plain PNG so it is never invisible. */
+html.no-mask .wordmark{
+  background-color:transparent;
+  -webkit-mask-image:none; mask-image:none;
+}
+html.no-mask .wordmark > img{ display:block; }
+html.no-mask[data-phosphor="white"] .wordmark > img,
+html.no-mask[data-phosphor="green"] .wordmark > img,
+html.no-mask[data-phosphor="amber"] .wordmark > img{ filter:invert(1); }
+
+/* --- masthead ----------------------------------------------------- */
+.masthead{
+  position:sticky; top:0; z-index:20;
+  background:var(--paper);
+  border-bottom:1px solid var(--ink);
+}
+.masthead__inner{
+  display:flex; align-items:center; gap:.6rem 1rem; flex-wrap:wrap;
+  min-height:52px; padding-block:.6rem;
+}
+.masthead .wordmark{ width:104px; flex:none; }
+.masthead__spacer{ flex:1 1 auto; }
+.masthead__link{
+  font-family:var(--mono); font-size:.75rem; letter-spacing:.1em;
+  text-transform:uppercase; text-decoration:none;
+  border:1px solid var(--ink); padding:.42em .85em; white-space:nowrap;
+}
+.masthead__link:hover{ background:var(--ink); color:var(--paper); }
+
+/* phosphor switch */
+.phos{ display:flex; align-items:center; gap:.5rem; }
+.phos__label{
+  font-family:var(--mono); font-size:.6875rem; letter-spacing:.14em;
+  text-transform:uppercase; opacity:.62;
+}
+.phos__set{ display:flex; border:1px solid var(--ink); }
+.phos__btn{
+  appearance:none; background:transparent; color:inherit; cursor:pointer;
+  font-family:var(--mono); font-size:.6875rem; letter-spacing:.1em;
+  text-transform:uppercase; padding:.4em .6em; border:0;
+  border-left:1px solid var(--ink);
+}
+.phos__btn:first-child{ border-left:0; }
+.phos__btn[aria-pressed="true"]{ background:var(--ink); color:var(--paper); }
+@media (max-width:600px){
+  .phos__label{ display:none; }
+  .masthead .wordmark{ width:80px; }
+  .masthead__inner{ gap:.375rem; }
+  .phos__btn{ padding:.4em .36em; letter-spacing:.03em; }
+  .masthead__link{ padding:.42em .6em; letter-spacing:.06em; }
+}
+
+/* --- hero --------------------------------------------------------- */
+.hero{ padding-block:clamp(2.75rem, 7vw, 5rem) clamp(2.5rem, 6vw, 4rem); position:relative; overflow:hidden; }
+.ramp{
+  display:grid; grid-template-columns:repeat(6,1fr);
+  height:clamp(30px, 4.5vw, 46px);
+  border-top:1px solid var(--ink);
+}
+.ramp__solid{ background-color:var(--ink); }
+.hero__inner{ position:relative; z-index:1; }
+.hero .wordmark{ width:min(620px, 100%); margin-bottom:clamp(1.5rem,4vw,2.25rem); }
+.hero__lead{
+  font-size:clamp(1.25rem, 1.05rem + 1.15vw, 1.85rem);
+  line-height:1.34; letter-spacing:-0.015em; max-width:24ch; margin:0 0 1rem;
+  text-wrap:balance;
+}
+.hero__sub{ max-width:52ch; margin:0 0 2rem; }
+
+.status{
+  display:flex; flex-wrap:wrap; gap:.4rem .9rem;
+  font-family:var(--mono); font-size:.75rem; letter-spacing:.06em;
+  border-top:1px solid var(--ink); border-bottom:1px solid var(--ink);
+  padding-block:.6rem; margin-bottom:2rem;
+}
+.status span{ white-space:nowrap; }
+.caret{ display:inline-block; width:.55em; height:1em; background:var(--ink); vertical-align:-.14em; animation:blink 1.1s steps(1) infinite; }
+@keyframes blink{ 50%{ opacity:0; } }
+
+.actions{ display:flex; flex-wrap:wrap; gap:.75rem; }
+.btn{
+  display:inline-flex; align-items:center; gap:.6em;
+  font-family:var(--mono); font-size:.8125rem; letter-spacing:.12em;
+  text-transform:uppercase; text-decoration:none;
+  padding:.8em 1.3em; border:1px solid var(--ink);
+}
+.btn--solid{ background:var(--ink); color:var(--paper); }
+.btn--solid:hover{ background:transparent; color:var(--ink); }
+.btn--ghost:hover{ background:var(--ink); color:var(--paper); }
+
+/* --- sections ----------------------------------------------------- */
+.section{ padding-block:clamp(2.75rem, 6vw, 4.5rem); border-top:1px solid var(--ink); }
+.section__head{ margin-bottom:2rem; }
+.section h2{
+  font-size:clamp(1.5rem, 1.25rem + 1.1vw, 2.1rem);
+  line-height:1.12; letter-spacing:-0.02em; margin:0 0 .6rem; text-wrap:balance;
+}
+.section h3{
+  font-family:var(--mono); font-size:.8125rem; letter-spacing:.16em;
+  text-transform:uppercase; margin:2.25rem 0 .9rem; font-weight:700;
+}
+
+.split{ display:grid; gap:clamp(1.5rem,4vw,3rem); grid-template-columns:1fr; }
+.split > *{ min-width:0; }
+@media (min-width:900px){
+  .split{ grid-template-columns:minmax(0,20rem) minmax(0,1fr); align-items:start; }
+  .split .section__head{ position:sticky; top:76px; margin-bottom:0; }
+}
+
+/* --- goals -------------------------------------------------------- */
+.goals{ list-style:none; margin:0; padding:0; }
+.goals li{ padding:1.1rem 0; border-top:1px solid var(--ink); }
+.goals li:first-child{ border-top:0; padding-top:0; }
+.goals b{ display:block; font-size:1.0625rem; letter-spacing:-0.01em; margin-bottom:.2rem; }
+.goals span{ display:block; max-width:58ch; }
+
+/* --- spec tables -------------------------------------------------- */
+.spec{ width:100%; border-collapse:collapse; font-size:.9375rem; }
+.spec caption{ text-align:left; font-family:var(--mono); font-size:.6875rem; letter-spacing:.18em; text-transform:uppercase; padding-bottom:.7rem; opacity:.62; }
+.spec th,.spec td{ text-align:left; vertical-align:top; padding:.62rem .9rem .62rem 0; border-bottom:1px solid var(--ink); }
+.spec tbody tr:last-child th,.spec tbody tr:last-child td{ border-bottom:0; }
+.spec th{
+  font-family:var(--mono); font-weight:700; font-size:.75rem;
+  letter-spacing:.1em; text-transform:uppercase; white-space:nowrap; width:1%;
+  padding-top:.78rem;
+}
+
+/* --- feature list ------------------------------------------------- */
+.feats{ list-style:none; margin:0; padding:0; display:grid; gap:.55rem; }
+.feats li{ display:flex; gap:.8rem; align-items:baseline; }
+.feats li::before{
+  content:""; flex:none; width:9px; height:9px; margin-top:.1rem;
+  background-color:var(--ink);
+  background-image:conic-gradient(var(--paper) 25%, transparent 0 50%, var(--paper) 0 75%, transparent 0);
+  background-size:4px 4px;
+}
+
+/* --- memory map --------------------------------------------------- */
+.mmap{
+  display:grid; gap:1rem; grid-template-columns:1fr;
+  border:1px solid var(--ink); padding:clamp(1rem,3vw,1.6rem); margin-top:1.5rem;
+}
+@media (min-width:720px){ .mmap{ grid-template-columns:1fr auto 1fr; align-items:center; gap:1.25rem; } }
+.mmap__cap{
+  font-family:var(--mono); font-size:.6875rem; letter-spacing:.14em;
+  text-transform:uppercase; margin:0 0 .6rem; opacity:.62;
+}
+.blk{
+  border:1px solid var(--ink); padding:.6rem .7rem; margin-bottom:-1px;
+  display:flex; justify-content:space-between; align-items:baseline; gap:.75rem;
+  font-family:var(--mono); font-size:.75rem;
+}
+.blk__addr{ opacity:.62; white-space:nowrap; }
+.blk--app{ transition:background-color .12s linear, color .12s linear; }
+.blk__meta{ display:flex; gap:.9rem; align-items:baseline; }
+.blk__state{ visibility:hidden; }              /* keeps the row width stable */
+.blk--live .blk__state{ visibility:visible; }
+.blk--live{ background-color:var(--ink); color:var(--paper); }
+.blk--live .blk__addr{ opacity:.75; }
+.blk--tall{ min-height:5.5rem; align-items:center; }
+.mmap__mid{
+  font-family:var(--mono); font-size:.6875rem; letter-spacing:.14em;
+  text-transform:uppercase; text-align:center; white-space:nowrap;
+}
+.mmap__arrow{ display:block; font-size:1.1rem; letter-spacing:0; }
+@media (max-width:719px){ .mmap__arrow{ transform:rotate(90deg); } }
+.mmap__note{
+  font-family:var(--mono); font-size:.75rem; line-height:1.65;
+  opacity:.62; margin:.9rem 0 0; max-width:62ch;
+}
+
+/* --- footer ------------------------------------------------------- */
+.foot{ border-top:1px solid var(--ink); padding-block:2.5rem 3rem; font-size:.875rem; }
+.foot__rule{ height:6px; margin-bottom:2rem; }
+.foot__grid{ display:grid; gap:1.5rem; grid-template-columns:1fr; }
+@media (min-width:720px){ .foot__grid{ grid-template-columns:1fr auto; align-items:end; } }
+.foot .wordmark{ width:132px; margin-bottom:1rem; }
+.foot p{ margin:0 0 .4rem; max-width:46ch; }
+
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{ animation-duration:.01ms !important; animation-iteration-count:1 !important; transition-duration:.01ms !important; }
+}
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap masthead__inner">
+    <a href="#top" class="wordmark" aria-label="Zeitlos — home"><img src="text1.png" alt=""></a>
+    <div class="masthead__spacer"></div>
+    <div class="phos">
+      <span class="phos__label" aria-hidden="true">Phosphor</span>
+      <div class="phos__set" role="group" aria-label="Display colour">
+        <button type="button" class="phos__btn" data-set="paper" aria-pressed="true">Paper</button>
+        <button type="button" class="phos__btn" data-set="white" aria-pressed="false">White</button>
+        <button type="button" class="phos__btn" data-set="green" aria-pressed="false">Green</button>
+        <button type="button" class="phos__btn" data-set="amber" aria-pressed="false">Amber</button>
+      </div>
+    </div>
+    <a class="masthead__link" href="https://github.com/machdyne/zeitlos">GitHub</a>
+  </div>
+</header>
+
+<main id="top">
+
+  <!-- ============ HERO ============ -->
+  <section class="hero">
+    <div class="wrap hero__inner">
+      <h1 class="wordmark" role="img" aria-label="Zeitlos"><img src="text1.png" alt=""></h1>
+      <p class="hero__lead">A RISC-V system-on-a-chip and an operating system, designed as one machine.</p>
+      <p class="hero__sub">Zeitlos is a work-in-progress SOC and OS built in tandem, giving FPGA computers a
+        responsive graphical environment for running and writing timeless applications.</p>
+
+      <div class="status">
+        <span>rv32im @ 48 MHz</span>
+        <span>640 &times; 480 &times; 1bpp</span>
+        <span>pre-emptive multitasking</span>
+        <span>hardware graphics acceleration</span>
+        <span>work in progress <i class="caret" aria-hidden="true"></i></span>
+      </div>
+
+      <div class="actions">
+        <a class="btn btn--solid" href="https://github.com/machdyne/zeitlos">Source &amp; development &rarr;</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- 1-bit tone ramp: solid ink to paper, entirely in ordered dither -->
+  <div class="ramp" aria-hidden="true">
+    <div class="ramp__solid"></div><div class="d75"></div><div class="d50"></div><div class="d25"></div><div class="d12"></div><div class="d06"></div>
+  </div>
+
+  <!-- ============ WHAT ============ -->
+  <section class="section" id="what">
+    <div class="wrap split">
+      <div class="section__head">
+        <p class="eyebrow">The project</p>
+        <h2>A whole computer, small enough to read</h2>
+        <p class="mono muted" style="font-size:.8125rem;">zeitlos &mdash; German, adj. &mdash; timeless</p>
+      </div>
+      <div class="prose">
+        <p>Most computers are a stack of things nobody has read end to end: a CPU you cannot see inside,
+          firmware you cannot change, an OS too large to hold in your head. Zeitlos is an attempt at the
+          opposite &mdash; a system where the gateware and the operating system live in one repository and are
+          designed together. When the OS needs something the hardware can grow it, and when the
+          hardware offers something the OS can use it immediately.</p>
+        <p>It runs on <a href="https://machdyne.com/">Machdyne</a> FPGA computers and other FPGA development boards. You build the SOC, the BIOS, the kernel and the applications with one
+          <span class="mono">make</span> command, write the result to flash, and the board comes up in a
+          graphical desktop with a dock, movable windows and a terminal.</p>
+        <p>The core applications turn the system into an extensible multi-window network terminal with scripting and
+          graphics.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ GOALS ============ -->
+  <section class="section" id="goals">
+    <div class="wrap split">
+      <div class="section__head">
+        <p class="eyebrow">Goals</p>
+        <h2>What we aim for</h2>
+      </div>
+      <ul class="goals">
+        <li>
+          <b>Timeless applications</b>
+          <span>Software written against a small, stable system.
+            The target is useful timeless applications that still build and still run decades from now.</span>
+        </li>
+        <li>
+          <b>Hardware and software as one design</b>
+          <span>The SOC and OS are designed and developed together, so each is built to what the other actually needs. The OS gets exactly the hardware it needs and the SOC remains as simple as possible.</span>
+        </li>
+        <li>
+          <b>Complete on its own</b>
+          <span>Flash a board once and it boots to a desktop. Storage and networking are optional.</span>
+        </li>
+        <li>
+          <b>Legible from the gate up</b>
+          <span>Verilog for the machine, C for the system, Scheme for scripting it &mdash; each layer small
+            enough to follow. The documentation is being written as a book,
+            <a href="https://github.com/machdyne/tc">Timeless Computing</a>, to be shipped with the system.</span>
+        </li>
+        <li>
+          <b>Open, and open to work on</b>
+          <span>Open-source, developed in the open, and buildable with an
+            open toolchain on ordinary hardware.</span>
+        </li>
+        <li>
+          <b>Responsive</b>
+          <span>Responds quickly and predictably to what you want to do.</span>
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ============ SOC ============ -->
+  <section class="section" id="soc">
+    <div class="wrap split">
+      <div class="section__head">
+        <p class="eyebrow">Hardware</p>
+        <h2>The SOC</h2>
+        <p class="muted">Written in Verilog, targeting ECP5, Artix-7 and GateMate FPGAs.</p>
+      </div>
+      <div>
+        <table class="spec">
+          <caption>System-on-chip</caption>
+          <tbody>
+            <tr><th scope="row">CPU</th><td>32-bit RISC-V (PicoRV32 or Zeitlos32) at 48&nbsp;MHz, <span class="mono">rv32im</span> with hardware multiply and divide, plus an instruction cache</td></tr>
+            <tr><th scope="row">GPU</th><td>Line rasterizer and blitter</td></tr>
+            <tr><th scope="row">MTU</th><td>Virtual addressing through a Memory Translation Unit</td></tr>
+            <tr><th scope="row">Bus</th><td>32-bit Wishbone</td></tr>
+            <tr><th scope="row">Memory</th><td>SDRAM, PSRAM or SRAM, 1&nbsp;MB minimum</td></tr>
+            <tr><th scope="row">Framebuffer</th><td>640&times;480, 1 bit per pixel &mdash; monochrome in white, green or amber</td></tr>
+            <tr><th scope="row">Video</th><td>VGA, DVI, DVI over HDMI</td></tr>
+            <tr><th scope="row">Audio</th><td>8 channel hardware mixer</td></tr>
+            <tr><th scope="row">Storage</th><td>MicroSD</td></tr>
+            <tr><th scope="row">Network</th><td>Ethernet over SPI, and an Ethernet MAC for RMII PHYs</td></tr>
+            <tr><th scope="row">Entropy</th><td>Ring-oscillator TRNG</td></tr>
+            <tr><th scope="row">Input</th><td>USB keyboard, optional USB mouse</td></tr>
+            <tr><th scope="row">I/O</th><td>GPIO, SPI, 16550 UART</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ OS ============ -->
+  <section class="section" id="os">
+    <div class="wrap split">
+      <div class="section__head">
+        <p class="eyebrow">System</p>
+        <h2>The OS</h2>
+        <p class="muted">Written in C, with a Scheme interpreter for scripting.</p>
+      </div>
+      <div>
+        <ul class="feats">
+          <li>Pre-emptive multitasking</li>
+          <li>Flat memory model, with a virtual address space for each application</li>
+          <li>FAT16 and FAT32 filesystems</li>
+          <li>Core applications stored in flash</li>
+          <li>Object-based interprocess messaging and streaming</li>
+          <li>Networking: IP, ARP, ICMP, UDP, DHCP, NTP, TFTP, TCP and telnet</li>
+        </ul>
+
+        <h3>Memory translation</h3>
+        <div class="prose">
+          <p>Zeitlos has no MMU. Instead there is a single virtual address space that is remapped during
+            context switches. The kernel sits at the start of main memory and applications are loaded
+            immediately after it &mdash; but every application <em>executes</em> at the same fixed address,
+            <span class="mono">0x8000_0000</span>, which mirrors wherever it actually lives.</p>
+          <p>The translation base register is set on each context switch, so an application only ever sees its
+            own memory through one address. No need for position-independent code or relocation.</p>
+        </div>
+
+        <div class="mmap" id="mmap">
+          <div>
+            <p class="mmap__cap">Main memory &mdash; physical</p>
+            <div class="blk blk--app blk--live" data-app="Kernel" data-addr="0x4000_0000"><span>Kernel</span><span class="blk__meta"><span class="blk__addr">0x4000_0000</span><span class="blk__addr blk__state">running</span></span></div>
+            <div class="blk blk--app" data-app="App 1" data-addr="0x8000_0000"><span>App 1</span><span class="blk__meta"><span class="blk__addr blk__state">running</span></span></div>
+            <div class="blk blk--app" data-app="App 2" data-addr="0x8000_0000"><span>App 2</span><span class="blk__meta"><span class="blk__addr blk__state">running</span></span></div>
+            <div class="blk blk--app" data-app="App 3" data-addr="0x8000_0000"><span>App 3</span><span class="blk__meta"><span class="blk__addr blk__state">running</span></span></div>
+          </div>
+          <div class="mmap__mid" aria-hidden="true">
+            <span class="mmap__arrow">&rarr;</span>
+            MTU
+          </div>
+          <div>
+            <p class="mmap__cap">Executing at</p>
+            <div class="blk blk--live blk--tall"><span id="mmapVirt">Kernel</span><span class="blk__addr" id="mmapAddr">0x4000_0000</span></div>
+          </div>
+        </div>
+        <p class="mmap__note">The kernel is scheduled as task&nbsp;0 alongside the applications. Only
+          addresses in the <span class="mono">0x8</span> region are translated, so each application is
+          mirrored to <span class="mono">0x8000_0000</span> while the kernel runs untranslated where it
+          sits.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ APPS ============ -->
+  <section class="section" id="apps">
+    <div class="wrap split">
+      <div class="section__head">
+        <p class="eyebrow">Software</p>
+        <h2>Core applications</h2>
+        <p class="muted">Written to flash alongside the kernel and started at boot.</p>
+      </div>
+      <div>
+        <table class="spec">
+          <caption>Shipped in flash</caption>
+          <tbody>
+            <tr><th scope="row">kernel</th><td>Kernel and kernel shell (serial console)</td></tr>
+            <tr><th scope="row">wm</th><td>Window manager and dock</td></tr>
+            <tr><th scope="row">net</th><td>Networking server</td></tr>
+            <tr><th scope="row">repl</th><td>Application server and
+              <a href="https://github.com/machdyne/ms">Lisp interpreter</a>, a subset of R4RS Scheme</td></tr>
+            <tr><th scope="row">term</th><td>Terminal emulator with VT100 emulation, connects to services</td></tr>
+          </tbody>
+        </table>
+        <p class="muted" style="margin-top:1.25rem; max-width:60ch;">Anything on an sdcard shadows the copy in
+          flash, so a single application can be replaced during development without reflashing the rest.
+          Further demos, apps and games live in the repository.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ INVOLVED ============ -->
+  <section class="section" id="involved">
+    <div class="wrap split">
+      <div class="section__head">
+        <p class="eyebrow">Contributing</p>
+        <h2>Get involved</h2>
+      </div>
+      <div class="prose">
+        <p>Zeitlos is early and moving quickly &mdash; the SOC, the kernel, the
+          window manager and the applications are all still being shaped, and there is plenty left to do.
+          Development happens entirely on GitHub.</p>
+        <p>Porting to a new board, filling in the drivers, writing applications, and especially testing the system is extremely helpful. If you have an unsupported FPGA board and want
+          to run Zeitlos on it, please open an issue.</p>
+        <p>Build instructions, the current list of supported boards and the documentation all live in the
+          repository, where they stay up to date with the code.</p>
+        <div class="actions" style="margin-top:1.75rem;">
+          <a class="btn btn--solid" href="https://github.com/machdyne/zeitlos">github.com/machdyne/zeitlos &rarr;</a>
+          <a class="btn btn--ghost" href="https://github.com/machdyne/zeitlos/issues">Issues</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="foot">
+  <div class="wrap">
+    <div class="foot__rule d50" aria-hidden="true"></div>
+    <div class="foot__grid">
+      <div>
+        <div class="wordmark" role="img" aria-label="Zeitlos"><img src="text1.png" alt=""></div>
+        <p class="muted">A SOC and OS for FPGA computers.</p>
+        <p class="muted">Released under the <a href="https://github.com/machdyne/zeitlos/blob/main/LICENSE.md">Lone Dynamics Open License</a>. Some components carry their own
+          licenses &mdash; see the repository for details.</p>
+        <p class="muted">Copyright &copy; 2026 Lone Dynamics Corporation. All rights reserved.</p>
+      </div>
+      <div class="mono muted" style="font-size:.75rem; letter-spacing:.1em;">
+        <p><a href="https://machdyne.com">Machdyne Store</a></p>
+        <p><a href="https://github.com/machdyne/zeitlos">GitHub</a></p>
+        <p><a href="https://github.com/machdyne/tc">Timeless Computing</a></p>
+        <p>zeitlos.org</p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var root = document.documentElement;
+  if (location.protocol === 'file:') root.className = 'no-mask';
+  var btns = document.querySelectorAll('.phos__btn');
+  for (var i = 0; i < btns.length; i++) {
+    btns[i].addEventListener('click', function (e) {
+      var mode = e.currentTarget.getAttribute('data-set');
+      root.setAttribute('data-phosphor', mode);
+      for (var j = 0; j < btns.length; j++) {
+        btns[j].setAttribute('aria-pressed', String(btns[j] === e.currentTarget));
+      }
+    });
+  }
+})();
+
+/* Memory map: step through the round robin (kernel as task 0, then the
+   apps) so it is visible that every app is reached at one address while
+   the kernel runs untranslated. Pauses off-screen, in a hidden tab, and
+   whenever reduced motion is requested. */
+(function () {
+  var mmap = document.getElementById('mmap');
+  var virt = document.getElementById('mmapVirt');
+  var addr = document.getElementById('mmapAddr');
+  if (!mmap || !virt) return;
+  var apps = mmap.querySelectorAll('.blk--app');
+  if (apps.length < 2) return;
+
+  var reduce = window.matchMedia('(prefers-reduced-motion: reduce)');
+  var i = 0, timer = null, inView = true;
+
+  function show(n) {
+    for (var k = 0; k < apps.length; k++) {
+      if (k === n) apps[k].classList.add('blk--live');
+      else apps[k].classList.remove('blk--live');
+    }
+    virt.textContent = apps[n].getAttribute('data-app');
+    if (addr) addr.textContent = apps[n].getAttribute('data-addr');
+  }
+  function step() { i = (i + 1) % apps.length; show(i); }
+  function start() {
+    if (timer || reduce.matches || !inView || document.hidden) return;
+    timer = setInterval(step, 1600);
+  }
+  function stop() { if (timer) { clearInterval(timer); timer = null; } }
+
+  show(0);
+
+  if ('IntersectionObserver' in window) {
+    new IntersectionObserver(function (entries) {
+      inView = entries[0].isIntersecting;
+      inView ? start() : stop();
+    }, { threshold: 0.25 }).observe(mmap);
+  } else {
+    start();
+  }
+
+  document.addEventListener('visibilitychange', function () {
+    document.hidden ? stop() : start();
+  });
+
+  var onPref = function () { reduce.matches ? stop() : start(); };
+  if (reduce.addEventListener) reduce.addEventListener('change', onPref);
+  else if (reduce.addListener) reduce.addListener(onPref);
+})();
+</script>
+
+</body>
+</html>
