@@ -1130,21 +1130,22 @@ void init(void) {
 	// rest of this script, unlike wm's.
 
 	printf("starting net\n");
+	uint32_t pid_net = 0;
 	z_exec_info_t xi_net;
 	core_src_t src_net = core_exec_info("net", &xi_net);
 	uint32_t size_net = (src_net == CORE_SRC_NONE) ? 0 : xi_net.total;
 	if (!size_net) {
 		printf("init: net binary not found (non-fatal)\n");
 	} else {
-		uint32_t pid_net = k_proc_create(size_net, z_proc_stack_size_for("net"));
+		pid_net = k_proc_create(size_net, z_proc_stack_size_for("net"));
 		if (!pid_net) {
 			printf("init: unable to create net process (non-fatal)\n");
 		} else {
 			uint32_t base_net = k_proc_base(pid_net);
 			printf("init: net (%s)\n", core_src_name(src_net));
 			core_load_exec(base_net, "net", &xi_net, src_net);
-			k_proc_start(pid_net);
-			printf("init: net started as pid %ld\n", pid_net);
+			// started at the end of this function, see there
+			printf("init: net loaded as pid %ld\n", pid_net);
 		}
 	}
 
@@ -1184,6 +1185,23 @@ void init(void) {
 	core_load_exec(base_repl, "repl", &xi_repl, src_repl);
 	k_proc_start(pid_repl);
 	printf("init: repl started as pid %ld\n", pid_repl);
+
+	// net is created and loaded above, in its usual slot, but does not
+	// start running until every other load is done.
+	//
+	// Not for the filesystem's sake -- k_no_preempt (kernel.c) settles
+	// that. It is what net does on its very first scheduling slice: on
+	// a board where the network hardware has to be powered up, that is
+	// where it happens, and doing it while the kernel is still
+	// streaming an app off the sdcard is what this avoids. On the
+	// ULX3S, whose NIC is the onboard ESP32 (docs/esp32link.md),
+	// releasing the module mid-load resets the CPU -- consistent with
+	// a supply transient, and reproducible: `run net` on its own is
+	// fine, and so is loading apps with the radio already up.
+	if (pid_net) {
+		k_proc_start(pid_net);
+		printf("init: net started as pid %ld\n", pid_net);
+	}
 
 }
 
