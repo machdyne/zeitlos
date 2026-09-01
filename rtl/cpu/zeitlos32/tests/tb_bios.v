@@ -50,7 +50,7 @@ module tb_bios;
 		.FAST_MUL(1)
 	) cpu (
 		.wb_clk_i(clk), .wb_rst_i(rst),
-		.wbm_adr_o(adr), .wbm_dat_o(dat_o), .wbm_dat_i(dat_i),
+		.wbm_adr_o(adr), .wbm_dat_o(dat_o), .wbm_dat_i(dat_i), .mtu_base(32'h0),
 		.wbm_we_o(we), .wbm_sel_o(sel), .wbm_stb_o(stb),
 		.wbm_ack_i(ack), .wbm_cyc_o(cyc),
 		.mem_instr(mem_instr), .irq(cpu_irq), .eoi(), .trap(cpu_trap)

@@ -177,6 +177,22 @@ module zeitlos32_wb #(
 	input             wbm_ack_i,
 	output reg        wbm_cyc_o,
 
+	// Zeitlos MTU: physical base for the 0x8000_0000 window, applied
+	// here so the bus only ever sees a physical address straight from
+	// a register. Same function rtl/mtu.v used to apply on the bus
+	// side; see the note there for why it moved into the CPU wrappers.
+	//
+	// Cost note, because it differs from picorv32_wb: here mem_adr is
+	// alu_add, i.e. rs1+imm computed COMBINATIONALLY in the same
+	// cycle, so for loads and stores the translation adder sits in
+	// series with the ALU adder before wbm_adr_o. Two 32-bit carry
+	// chains back to back is ~9ns -- inside the 48MHz budget, and it
+	// takes the adder OFF the bus path where it was in series with the
+	// icache tag lookup and every chip-select decode, which is the
+	// path that was actually failing. The fetch side is free: pc is a
+	// register.
+	input      [31:0] mtu_base,
+
 	// high for the whole of an instruction-fetch cycle. rtl/cache.v
 	// uses this to cache fetches only, which is what keeps data
 	// coherency out of the picture entirely.
@@ -437,6 +453,21 @@ module zeitlos32_wb #(
 
 	wire [31:0] pc_plus4 = pc + 32'd4;
 	wire [31:0] mem_adr = alu_add;						// rs1 + imm_i / imm_s
+
+	// -- MTU translation of the two bus addresses this core issues --
+	// Applied to the word-aligned value that used to go out on the bus,
+	// so the result is bit-identical to what the bus-side MTU produced.
+	// Two adders rather than one shared behind a mux: the mux select
+	// would be the state decode, which is the late-arriving signal on
+	// the store path, and a mux before the carry chain costs more than
+	// sixteen extra slices do.
+	wire [31:0] fetch_adr      = {pc[31:2], 2'b00};
+	wire [31:0] data_adr       = {mem_adr[31:2], 2'b00};
+	wire        mtu_en         = (mtu_base != 32'h0);
+	wire [31:0] fetch_adr_phys = (mtu_en && fetch_adr[31:28] == 4'h8) ?
+	                             (mtu_base + {4'h0, fetch_adr[27:0]}) : fetch_adr;
+	wire [31:0] data_adr_phys  = (mtu_en && data_adr[31:28] == 4'h8) ?
+	                             (mtu_base + {4'h0, data_adr[27:0]}) : data_adr;
 	wire [31:0] jalr_adr = {alu_add[31:1], 1'b0};
 	wire [31:0] branch_adr = pc + imm_b;
 	wire [31:0] jal_adr = pc + imm_j;
@@ -641,7 +672,7 @@ module zeitlos32_wb #(
 						else
 							state <= ST_TRAP;
 					end else begin
-						wbm_adr_o <= {pc[31:2], 2'b00};
+						wbm_adr_o <= fetch_adr_phys;
 						wbm_dat_o <= 32'd0;
 						wbm_we_o <= 1'b0;
 						wbm_sel_o <= 4'b1111;
@@ -742,7 +773,7 @@ module zeitlos32_wb #(
 								state <= ST_TRAP;
 							end
 						end else begin
-							wbm_adr_o <= {mem_adr[31:2], 2'b00};
+							wbm_adr_o <= data_adr_phys;
 							wbm_dat_o <= 32'd0;
 							wbm_we_o <= 1'b0;
 							wbm_sel_o <= 4'b1111;
@@ -764,7 +795,7 @@ module zeitlos32_wb #(
 								state <= ST_TRAP;
 							end
 						end else begin
-							wbm_adr_o <= {mem_adr[31:2], 2'b00};
+							wbm_adr_o <= data_adr_phys;
 							wbm_dat_o <= st_dat;
 							wbm_we_o <= 1'b1;
 							wbm_sel_o <= st_sel;

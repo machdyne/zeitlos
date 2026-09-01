@@ -65,6 +65,22 @@ endif
 # feature, which a command-line -D cannot express.
 EXTRA_DEFINES ?=
 
+# ECP5 LUT mapper. `-abc9` is yosys's timing-driven mapper, which uses
+# real ECP5 cell delays rather than counting LUT levels. It is the
+# default because the legacy mapper (plain `abc -lut 4:7`) is
+# depth-first: it finds the shallowest achievable mapping for the whole
+# design and then recovers area under that ceiling, so whenever a
+# change removes the deepest path it responds by spending LUT6/LUT7s
+# on everything that just became near-critical. On this SoC that
+# turned a 40-line blitter change into +1500 LUT4s; abc9 mapped the
+# same two netlists to within six LUTs of each other.
+#
+# Costs a slower yosys step (roughly 1.5-2x). Correctness is not in
+# question either way -- both mappers are equivalence-preserving.
+#
+# Override on the command line to compare:  make BOARD=obst ABC9=
+ABC9 ?= -abc9
+
 main: check zeitlos
 
 check:
@@ -304,7 +320,7 @@ zeitlos_ice40_pico:
 zeitlos_ecp5_pico:
 	mkdir -p $(OUTDIR)
 	yosys $(EXTRA_DEFINES) -DBOARD_$(BOARD_UC) -DECP5 -q -l $(SYNTH_LOG) -p \
-		"synth_ecp5 -top sysctl -json $(OUTDIR)/soc.json" $(RTL_PICO)
+		"synth_ecp5 $(ABC9) -top sysctl -json $(OUTDIR)/soc.json" $(RTL_PICO)
 	nextpnr-ecp5 --$(DEVICE) --package $(PACKAGE) --lpf boards/$(LPF) \
 		--json $(OUTDIR)/soc.json \
 		--report $(OUTDIR)/report.txt \
@@ -505,11 +521,14 @@ tftp-dist:
 #
 #   make timing BOARD=obst        after a build
 #   make path BOARD=obst          full critical path for every clock
+# ro_clk[*] are the TRNG's ring oscillators, each clocking one
+# divide-by-two flop (see rtl/trng.v). nextpnr reports them as clock
+# domains; they always pass and mean nothing here, so they are filtered.
 timing:
 	@test -f $(PNR_LOG) || { echo "no $(PNR_LOG) -- build first"; exit 1; }
 	@echo
-	@grep -E "Max frequency for clock" $(PNR_LOG) | sed 's/^Info: //' || true
-	@if grep -q "FAIL at" $(PNR_LOG); then \
+	@grep -E "Max frequency for clock" $(PNR_LOG) | grep -v "ro_clk" | sed 's/^Info: //' || true
+	@if grep "FAIL at" $(PNR_LOG) | grep -qv "ro_clk"; then \
 		echo; \
 		echo "*** TIMING NOT MET -- the bitstream will program and"; \
 		echo "*** misbehave intermittently. Critical path:"; \

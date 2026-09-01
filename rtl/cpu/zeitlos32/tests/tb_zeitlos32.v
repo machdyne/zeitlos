@@ -139,6 +139,7 @@ module tb_zeitlos32;
 		.wb_clk_i(clk),
 		.wb_rst_i(rst),
 		.wbm_adr_o(wbm_adr),
+		.mtu_base(32'h0),
 		.wbm_dat_o(wbm_dat_o),
 		.wbm_dat_i(cpu_dat),
 		.wbm_we_o(wbm_we),

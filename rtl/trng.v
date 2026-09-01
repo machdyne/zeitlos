@@ -292,6 +292,19 @@ module trng_wb #(
 
 	wire [NUM_RO-1:0] ro_tap;
 
+	// What ro_s1 actually samples. In hardware this is ro_div, the
+	// divide-by-two flop CLOCKED BY EACH RING (see the note at the
+	// always block that drives it); under TRNG_SIM it is ro_tap, the
+	// LFSR stand-in, unchanged.
+	wire [NUM_RO-1:0] ro_smp;
+
+	// One flop per oscillator, clocked by that oscillator's tap and
+	// toggling on every rising edge. Module-level and reset-free on
+	// purpose: it has no synchronous clock to be reset from, and its
+	// initial state is irrelevant to an entropy source.
+	reg  [NUM_RO-1:0] ro_div;
+	wire [NUM_RO-1:0] ro_clk;
+
 	reg enable;
 
 	// Per-oscillator sample registers. See the always block for why the
@@ -372,6 +385,7 @@ module trng_wb #(
 		end
 	endgenerate
 	assign ro_net = {NUM_RO*RO_MAX{1'b0}};
+	assign ro_smp = ro_tap;
 `else
 	// -- the real oscillator bank --
 	//
@@ -472,8 +486,69 @@ module trng_wb #(
 
 			end
 			assign ro_tap[gi] = ro_net[gi*RO_MAX + RO_BASE + 2*gi - 1];
+
+			// -- the divider, and why it exists --
+			//
+			// ro_s1 used to sample ro_tap directly: the raw ring net,
+			// straight into a wb_clk_i flop. To nextpnr that is a
+			// DATA path. It breaks the combinational loop at an
+			// arbitrary stage (--ignore-loops), calls that point a
+			// zero-time source, and traces one full lap of the ring
+			// into ro_s1 as if the ring were synchronous logic that
+			// had to settle before the clock edge. It is nothing of
+			// the kind -- a ring oscillator has no setup requirement;
+			// the flop samples whatever phase the ring is in -- but
+			// nextpnr cannot know that, and the numbers are brutal:
+			// the 27-stage ring is ~18ns per lap, three fifths of it
+			// routing, plus ~3.7ns of clock insertion on the capture
+			// side. On sergei_ml1 that reported as THE critical path
+			// of the whole 48MHz domain (46.6MHz), with the CPU, the
+			// bus and the blitter all sitting behind it. And because
+			// the lap time is mostly routing, it moves by nanoseconds
+			// between placements, which is a large part of why Fmax
+			// on every board has looked like a coin flip.
+			//
+			// Clocking a flop FROM the ring turns the ring->flop arc
+			// into a clock arc, which is not a data path and is not
+			// timed. ro_div -> ro_s1 is then a crossing from an
+			// unconstrained clock into wb_clk_i, which nextpnr lists
+			// under "Max delay" and never folds into the wb_clk_i
+			// Fmax. The synchronous logic gets its own report back.
+			//
+			// Entropy is unchanged. The jitter is in the edge timing
+			// of the ring; a toggle flop passes every edge through at
+			// half the rate, and with SAMPLE_DIV=256 the ring has run
+			// thousands of cycles between samples either way. The
+			// two-flop ro_s1/ro_s2 synchroniser is exactly as needed
+			// as before: the same metastability, the same resolution.
+			//
+			// The tap is buffered first so that the flop's clock net
+			// is a separate net from the ring's own feedback. If
+			// nextpnr decides to promote the clock to a global route,
+			// it then promotes the branch, not the ring, and the
+			// oscillator's lap time is not altered by a DCC.
+`ifdef TRNG_RO_GENERIC
+			assign ro_clk[gi] = ro_tap[gi];
+`elsif ECP5
+			(* keep *) LUT4 #(.INIT(16'hAAAA)) ro_clk_buf (
+				.A(ro_tap[gi]), .B(1'b0), .C(1'b0), .D(1'b0),
+				.Z(ro_clk[gi]));
+`elsif ICE40
+			(* keep *) SB_LUT4 #(.LUT_INIT(16'hAAAA)) ro_clk_buf (
+				.I0(ro_tap[gi]), .I1(1'b0), .I2(1'b0), .I3(1'b0),
+				.O(ro_clk[gi]));
+`elsif GATEMATE
+			(* keep *) CC_LUT1 #(.INIT(2'b10)) ro_clk_buf (
+				.I0(ro_tap[gi]), .O(ro_clk[gi]));
+`else
+			assign ro_clk[gi] = ro_tap[gi];
+`endif
+
+			always @(posedge ro_clk[gi])
+				ro_div[gi] <= ~ro_div[gi];
 		end
 	endgenerate
+	assign ro_smp = ro_div;
 `endif
 
 	// Everything below lives in ONE always block on purpose. The FIFO
@@ -549,7 +624,7 @@ module trng_wb #(
 			// hazard), ro_s2 resolves, ro_x holds the combined bit.
 			// Entropy is unchanged: same oscillators, same sampling
 			// instant, same XOR, one cycle later.
-			ro_s1 <= ro_tap;
+			ro_s1 <= ro_smp;
 			ro_s2 <= ro_s1;
 			ro_x <= ^ro_s2;
 

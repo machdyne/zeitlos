@@ -77,17 +77,34 @@ module csrs_wb #(
 
 	localparam MAGIC = 32'h5A45_4954; // "ZEIT"
 
-	// combinational, read-only -- no clocked state at all, same
-	// style as rtl/debug.v's own wb_dat_o assignment. wb_we_i is
-	// deliberately never even looked at: writes are silently
+	// Registered, like every other slave on this bus. It was
+	// combinational (`assign wb_ack_o = cyc && stb`) -- the ONE slave
+	// that was -- which put the address decode, three 32-bit compares
+	// and this block's position at the tail of the ack mux into a
+	// single 48MHz cycle. One extra cycle on a block read at boot is
+	// free; the timing was not.
+	//
+	// wb_we_i is deliberately never even looked at: writes are silently
 	// no-ops, not errors, matching this bus's usual "unmapped access
 	// doesn't fault" behavior rather than introducing a new failure
 	// mode for what should be an inert, read-only block.
-	assign wb_ack_o = wb_cyc_i && wb_stb_i;
-	assign wb_dat_o =
-		(wb_adr_i == 32'd0) ? MAGIC :
-		(wb_adr_i == 32'd1) ? MEM_MB :
-		(wb_adr_i == 32'd2) ? FEATURES :
-		32'h0;
+	reg        ack_r;
+	reg [31:0] dat_r;
+	assign wb_ack_o = ack_r;
+	assign wb_dat_o = dat_r;
+
+	always @(posedge wb_clk_i) begin
+		if (wb_rst_i) begin
+			ack_r <= 1'b0;
+			dat_r <= 32'h0;
+		end else begin
+			ack_r <= wb_cyc_i && wb_stb_i && !ack_r;
+			dat_r <=
+				(wb_adr_i == 32'd0) ? MAGIC :
+				(wb_adr_i == 32'd1) ? MEM_MB :
+				(wb_adr_i == 32'd2) ? FEATURES :
+				32'h0;
+		end
+	end
 
 endmodule

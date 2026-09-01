@@ -558,6 +558,9 @@ module sysctl #()
 	// Without ICACHE this is simply wired straight through to wbm_adr
 	// and the bus behaves exactly as it did before the cache existed.
 	wire [31:0] wbm_cpu_padr;
+	wire [31:0] mtu_base;		// from mtu_i, consumed by zeitlos32_wb -- declared
+								// here, ahead of both, so it is never an
+								// implicit 1-bit net. Unused with picorv32.
 	wire wbm_cpu_instr;
 
 	wire [31:0] wbm_vram_adr;
@@ -1037,6 +1040,7 @@ module sysctl #()
 		.wb_clk_i(wbm_clk),
 		.wb_rst_i(wbm_rst),
 		.wbm_adr_o(wbm_cpu_adr),
+		.mtu_base(mtu_base),
 		.wbm_dat_o(wbm_cpu_dat_o),
 		.wbm_dat_i(wbm_cpu_dat_i),
 		.wbm_we_o(wbm_cpu_we),
@@ -1108,11 +1112,25 @@ module sysctl #()
 	// WISHBONE SLAVE: MTU (Memory Translation Unit)
 	wire wbm_cyc_mtu = cs_mtu && wbm_cyc;
 
-	wb_mtu mtu_i (
+	// Where the translation happens depends on the CPU -- see the
+	// ON_BUS parameter in rtl/mtu.v. zeitlos32_wb applies it itself,
+	// from mtu_base, on its own address register; picorv32_wb is the
+	// vendored wrapper and is left alone, so for it the MTU translates
+	// on the bus as it always has.
+`ifdef CPU_ZEITLOS32
+	localparam MTU_ON_BUS = 0;
+`else
+	localparam MTU_ON_BUS = 1;
+`endif
+
+	wb_mtu #(
+		.ON_BUS(MTU_ON_BUS)
+	) mtu_i (
 		.clk_i(wbm_clk),
 		.rst_i(wbm_rst),
 		.addr_in(wbm_cpu_adr),
 		.addr_out(wbm_cpu_padr),
+		.base_o(mtu_base),
 		.cfg_adr_i(wbm_cpu_adr_sel),
 		.cfg_dat_i(wbm_dat_o),
 		.cfg_dat_o(wbs_mtu_dat_o),
