@@ -174,6 +174,7 @@ class Target:
         self.pmod_ports = {}        # {port name: {pin: ball}} from the board
         self.pmods = []             # [Pmod] actually plugged in
         self.lpf_drop = []          # extra base-.lpf ports to release
+        self.make_vars = []         # extra VAR=VALUE for the top-level make
         self.defines = {}           # ordered: name -> value or None
         self.flash_cmd = None       # template, {file} {offset}
         self.core_apps = []
@@ -197,15 +198,21 @@ class Target:
         d = self.defines
         has_spi_eth = "SPI_ETH" in d
         has_rmii = "ETH_RMII" in d
+        has_esp32 = "ESP32_LINK" in d
 
         # Still worth rejecting, even though nothing downstream now
         # depends on the answer: rtl/sysctl.v would need two MACs to
         # honour it, so a spec asking for both is a mistake in the
         # spec rather than a configuration.
-        if has_spi_eth and has_rmii:
-            raise SpecError("%s: both SPI_ETH and ETH_RMII are defined. "
-                            "rtl/sysctl.v builds one MAC or the other."
+        if sum([has_spi_eth, has_rmii, has_esp32]) > 1:
+            raise SpecError("%s: more than one of SPI_ETH, ETH_RMII and "
+                            "ESP32_LINK is defined. rtl/sysctl.v builds one "
+                            "NIC, and net_phy_select() picks the first it "
+                            "finds -- so a build with two is one whose "
+                            "networking depends on the order of an if-chain."
                             % self.name)
+        if has_esp32:
+            return "ESP32"
         if has_spi_eth:
             return "ENC28J60"
         if has_rmii:
@@ -240,6 +247,16 @@ def load_target(root, name):
     t.family = _one(bdata, "family", where=bpath)
     t.lpf = _one(bdata, "lpf", default="", where=bpath) or None
     t.flash_cmd = _one(bdata, "flash_cmd", default="", where=bpath) or None
+
+    # Extra variables handed to the top-level Makefile, for a board
+    # whose entry there has a default the release must override.
+    #
+    # ULX3S is the case this exists for: one PCB and one .lpf across
+    # 12/25/45/85K, with `DEVICE ?= 25k` in the Makefile. A release
+    # image is device-specific -- a bitstream for one will not load on
+    # another -- so the spec has to say which, and a target that does
+    # not say gets whatever the Makefile happens to default to.
+    t.make_vars = _words(bdata, "make_vars")
     t.core_apps = _words(bdata, "core_apps") or ["wm", "net", "repl", "term"]
     t.description = _one(tdata, "description",
                          default=_one(bdata, "description", default=name,
@@ -324,6 +341,16 @@ def load_target(root, name):
     # the same edit -- rtl/sysctl.v declares some ports unconditionally,
     # so removing the define does not always remove the port.
     t.lpf_drop = _words(tdata, "lpf_drop")
+
+    # Target-level make variables, appended AFTER the board's so they
+    # win on the make command line -- last assignment of a variable is
+    # the one make uses.
+    # This is how one board becomes several targets: the ULX3S ships
+    # as 12F/25F/45F/85F on one PCB with one .lpf, and the only
+    # difference in the build is nextpnr's --<device>. A bitstream for
+    # one will not load on another, so each is its own target rather
+    # than one target and a note telling owners to rebuild.
+    t.make_vars = t.make_vars + _words(tdata, "make_vars")
     for n in tdata.get("notes", []):
         t.notes.append(n)
 

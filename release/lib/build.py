@@ -397,6 +397,10 @@ def build_target(root, target, version, outdir, software, dry=False,
                   "ARCH=" + arch]
         if lpf_name:
             common.append("LPF=" + lpf_name)
+
+        # Board-specific overrides -- see make_vars in spec.py. On the
+        # command line, so they beat the Makefile's own `?=` defaults.
+        common += target.make_vars
         if jobs:
             mk += ["-j%d" % jobs]
 
