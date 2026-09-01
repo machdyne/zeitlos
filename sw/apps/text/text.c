@@ -907,26 +907,60 @@ static void repaint(void) {
 
 // -- titlebar --
 
-// "text - notes.txt *", truncated to what wm will keep (WM_TITLE_MAX
-// is 24, and the title also has to share the bar with three icons).
-static void update_title(void) {
+// "notes.txt *", truncated to what wm will keep (WM_TITLE_MAX is 24,
+// and the title also has to share the bar with three icons).
+//
+// Split out of update_title() so main() can compute the title BEFORE
+// creating the window -- see its call site there for why that
+// matters.
+static void build_title(char *t, int cap, const char *path, bool star) {
 
-	char t[32];
 	int n = 0;
-
-	const char *base = filename[0] ? filename : "untitled";
+	const char *base = path[0] ? path : "untitled";
 
 	// show just the last path component -- "/DOCS/NOTES.TXT" is
 	// mostly slashes at this width
-	for (const char *s = filename; *s; s++)
+	for (const char *s = path; *s; s++)
 		if (*s == '/') base = s + 1;
 
-	if (modified && n < (int)sizeof(t) - 1) t[n++] = '*';
+	if (star && n < cap - 1) t[n++] = '*';
 
-	for (const char *s = base; *s && n < (int)sizeof(t) - 1; s++)
+	for (const char *s = base; *s && n < cap - 1; s++)
 		t[n++] = *s;
 
 	t[n] = 0;
+
+}
+
+// The last title actually sent to wm, so a call that would not change
+// anything sends nothing.
+//
+// z_win_set_title() is FIRE AND FORGET (see its comment in zwin.c):
+// it queues a message and returns, and wm then does a titlebar repair
+// in its own process -- which redraws chrome for every window
+// overlapping that strip and asks their owners to redraw. Those
+// owners repaint their whole window, unclipped. So a title message
+// sent just before this app paints is a race between that repaint and
+// ours, and zwin.c's own comment notes this app calls it "on every
+// open, every save, and on the first edit after each".
+//
+// Suppressing the no-op sends removes most of that exposure for free.
+// The startup case is handled separately, by creating the window with
+// the right title in the first place.
+static char sent_title[32];
+
+static void update_title(void) {
+
+	char t[32];
+	build_title(t, (int)sizeof(t), filename, modified);
+
+	int i = 0;
+	for (; t[i] && t[i] == sent_title[i]; i++);
+	if (t[i] == sent_title[i]) return;	// identical -- nothing to send
+
+	for (i = 0; i < (int)sizeof(sent_title) - 1 && t[i]; i++)
+		sent_title[i] = t[i];
+	sent_title[i] = 0;
 
 	z_win_set_title(&win, t);
 
@@ -1654,6 +1688,14 @@ static void forward_msg(z_msg_t *msg, void *user) {
 
 	switch (msg->subject) {
 
+		// The part of this window not covered by the windows in
+		// front of it. Confines every subsequent draw to it -- see
+		// z_win_apply_clip() in zwin.c. The ack it sends is not
+		// optional: wm waits for it when a region narrows.
+		case Z_WM_SET_CLIP:
+			z_win_apply_clip(&win, &msg->obj);
+			break;
+
 		case Z_WM_REDRAW:
 
 			if (msg->obj.type != Z_UINT32) break;
@@ -1718,7 +1760,36 @@ int main(void) {
 	// warning in zwm.h. It also has to be the non-killing form for a
 	// second reason: closing with unsaved changes must get a chance
 	// to ask.
-	if (z_win_create_flags(&win, "untitled", WIN_W, WIN_H, -1, -1,
+	// Take the launch argument BEFORE creating the window, so the
+	// window can be created with its final title.
+	//
+	// It used to be created as "untitled" and retitled immediately
+	// after the file loaded. That retitle is fire-and-forget (see
+	// update_title()), so wm was repairing this window's titlebar --
+	// and telling every window underneath to repaint, unclipped --
+	// at the same moment this app was painting its content for the
+	// first time. Two processes drawing into the same pixels, and
+	// whichever finished last won. When the file browser lost, its
+	// chrome stayed visible inside this window until something
+	// forced a clean redraw.
+	//
+	// z_launch_arg_take() needs no window, so moving it above the
+	// create costs nothing and removes the message entirely: the
+	// title is already right, so update_title() below finds nothing
+	// to send.
+	char launch_arg[sizeof(filename)];
+	bool have_arg = z_launch_arg_take(launch_arg, sizeof(launch_arg));
+
+	char initial_title[32];
+	build_title(initial_title, (int)sizeof(initial_title),
+		have_arg ? launch_arg : "", false);
+
+	// Seed the suppression cache with what we are about to create the
+	// window with, so the post-load update_title() stays silent.
+	for (int i = 0; i < (int)sizeof(sent_title); i++)
+		sent_title[i] = initial_title[i];
+
+	if (z_win_create_flags(&win, initial_title, WIN_W, WIN_H, -1, -1,
 		Z_WIN_FLAG_CLOSE_ICON | Z_WIN_FLAG_RESIZABLE |
 		Z_WIN_FLAG_MIN_IS_CREATE |
 		Z_WIN_FLAG_NEW_ICON | Z_WIN_FLAG_OPEN_ICON |
@@ -1735,14 +1806,11 @@ int main(void) {
 
 	layout();
 
-	// A file to open, if something launched us with one -- the file
-	// browser does, via wm's pending launch argument (Z_WM_SET_ARG,
-	// zwm.h). load_file() reports its own failures, and leaves an
-	// empty buffer if it fails, so there is nothing to check here.
-	{
-		char arg[sizeof(filename)];
-		if (z_launch_arg_take(arg, sizeof(arg))) load_file(arg);
-	}
+	// The file the browser launched us with, taken above. load_file()
+	// reports its own failures and leaves an empty buffer, so there
+	// is nothing to check here -- but it needs the window to exist,
+	// because it reports them in a dialog.
+	if (have_arg) load_file(launch_arg);
 
 	rewrap_all();
 	update_title();

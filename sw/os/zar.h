@@ -53,6 +53,15 @@
  * exactly the kind of thing that produces "why is it running the old
  * one" bug reports. Boot says which source each app came from.
  *
+ * -- Entry names are FLAT --
+ *
+ * "wm", not "apps/wm", even though that is where the card keeps its
+ * copy. This archive has no directories, so a separator in a name
+ * would be decoration; and sw/os/fs/fs.c's fs_exec_resolve() is what
+ * knows about apps/, so nothing here has to. It also keeps the whole
+ * of Z_ZAR_NAME_MAX available for the name instead of spending 5 of
+ * its 16 bytes on a constant prefix.
+ *
  * -- Layout --
  *
  *   offset  size  field

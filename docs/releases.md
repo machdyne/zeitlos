@@ -493,11 +493,25 @@ diffs the two file lists and fails if they drift — which is not
 hypothetical, since the committed script and the one actually in use had
 already diverged.
 
+Applications go in `apps/` on the card, alongside `docs/`, `ark/` and
+`user/`, rather than loose in the root. Nothing in the release system
+had to learn that beyond the destination paths:
+`fs_exec_resolve()` (`sw/os/fs/fs.c`) searches the root, then `apps/`,
+then the flash archive, so bare names still work everywhere and the
+ZAR entries stay flat. See `docs/flash_apps.md`.
+
 **The core apps are deliberately absent from the card.** `sw/os/zar.h`
 gives a card copy precedence over the flash copy, so shipping them here
-would shadow the flash build — and for `net` that is not academic: the
-flash copy is built per target with the right driver, and one shared
-card image could only carry one of them.
+would shadow the flash build.
+
+That used to be forced rather than chosen: `net` was compiled against
+one NIC driver, so a single shared card image could only ever have
+carried the wrong one for half the boards. It now links both and picks
+at runtime, so `net.bin` is board-independent and *could* ship here.
+Keeping it out is now a deliberate choice — it preserves the plain rule
+that flash wins unless you deliberately put something on the card, and
+the root-first search order means dropping one at the card root is
+still how you hot-swap a single app during development.
 
 One card image per release, not per target: everything on it is
 board-independent and detects optional hardware at runtime. It is still

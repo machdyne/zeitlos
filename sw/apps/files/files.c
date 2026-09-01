@@ -217,7 +217,32 @@ static void repaint(void) {
 	// after a move (repair_drag() in wm.c excludes the window's own
 	// final footprint), so anything not actively rewritten keeps its
 	// pre-move contents.
-	z_win_clear(&win);
+	//
+	// NOT z_win_clear(), which blanks the content area all the way
+	// into the bottom-right corner. Most of the resize grip falls
+	// INSIDE the content area -- all but its outer 2px, see
+	// Z_WIN_GRIP_INSET in zwm.h -- and wm draws the grip as chrome at
+	// create time without redrawing it afterwards, so clearing over
+	// it left the corner half-drawn until the next resize. That was
+	// visible for as long as this window has been resizable.
+	//
+	// Two rects instead: everything above the grip's row band at full
+	// width, then the band to the left of the grip. Same exclusion
+	// sw/apps/text's repaint() makes for the same reason.
+	{
+		int cw = z_win_content_w(&win);
+		int ch = z_win_content_h(&win);
+
+		int above_grip = ch - Z_WIN_GRIP_INSET;
+		if (above_grip < 0) above_grip = 0;
+
+		z_win_fill_rect(&win, 0, 0, cw, above_grip, 0);
+
+		int left_of_grip = cw - Z_WIN_GRIP_INSET;
+		if (left_of_grip > 0)
+			z_win_fill_rect(&win, 0, above_grip, left_of_grip,
+				Z_WIN_GRIP_INSET, 0);
+	}
 
 	path_draw();
 
@@ -523,6 +548,14 @@ static void forward_msg(z_msg_t *msg, void *user) {
 	(void)user;
 
 	switch (msg->subject) {
+
+		// The part of this window not covered by the windows in
+		// front of it. Confines every subsequent draw to it -- see
+		// z_win_apply_clip() in zwin.c. The ack it sends is not
+		// optional: wm waits for it when a region narrows.
+		case Z_WM_SET_CLIP:
+			z_win_apply_clip(&win, &msg->obj);
+			break;
 
 		case Z_WM_REDRAW:
 

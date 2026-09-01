@@ -189,7 +189,19 @@ _FMAX = re.compile(r"Max frequency for clock\s+'([^']+)':\s+"
 # MANIFEST.json, and named in the build output, so a real problem
 # hiding behind one is visible rather than swallowed. Set
 # strict_io_timing=True to gate on them too.
-_PSEUDO_DOMAIN = re.compile(r"^(TRELLIS_IO|IO_IN|IO_OUT|\$?PACKER)", re.I)
+# A domain is a REAL clock if a net name precedes the primitive
+# suffix: "$glbnet$CLK_48$TRELLIS_IO_IN" is CLK_48 -- the system clock,
+# arriving on a pin rather than from a PLL -- and missing 48MHz there
+# is a hard failure. Only a bare "TRELLIS_IO_IN", with no net name at
+# all, is nextpnr bucketing stray IO paths under the primitive.
+#
+# Taking the last $-segment and matching on that treated the two as
+# the same thing, which would have let a genuine system-clock failure
+# through as an advisory. The whole point of the advisory category is
+# that it covers domains nobody asked for; a named clock was asked
+# for.
+_PSEUDO_SUFFIX = re.compile(r"^(TRELLIS_IO_IN|TRELLIS_IO_OUT|IO_IN|IO_OUT)$",
+                            re.I)
 
 
 def _final_round(entries):
@@ -203,7 +215,11 @@ def _final_round(entries):
 
 
 def is_pseudo_domain(name):
-    return bool(_PSEUDO_DOMAIN.match(name.rsplit("$", 1)[-1]))
+    parts = [p for p in name.split("$") if p and p != "glbnet"]
+    if not parts:
+        return False
+    # More than one part means a real net name is in there.
+    return len(parts) == 1 and bool(_PSEUDO_SUFFIX.match(parts[0]))
 
 
 def check_timing(pnr_log, strict_io_timing=False):

@@ -10,8 +10,9 @@
  * to wait on anything else.
  *
  * Layout: one byte per glyph row, MSB-first (bit 7 = leftmost pixel --
- * matching sw/data/font/*.mem and sw/common/zfont_data.c), addressed
- * as glyph_index * font_height + row. See docs/window_manager.md,
+ * matching the .mem sources in sw/data/font/ and
+ * sw/common/zfont_data.c), addressed as
+ * glyph_index * font_height + row. See docs/window_manager.md,
  * "hardware glyph blitting" for the full convention this needs to
  * match on the software side.
  *

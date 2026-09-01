@@ -36,7 +36,6 @@
 /*-------------------------------------------------------------------------*/
 
 #include "zeitlos.h"
-#include "../../kernel.h"	/* kprint()/kprint_hex32() -- instrumentation */
 #include "zsoc.h"			/* Z_SYSCLK_HZ, for dly_us() */		/* Include device specific declareation file here */
 
 /*--------------------------------------------------------------------------
@@ -438,21 +437,6 @@ DSTATUS disk_initialize (
 	if (ty) sd_set_speed(Z_SPISD_DIV_FAST);
 
 	s = ty ? 0 : STA_NOINIT;
-
-	/* INSTRUMENTATION -- remove once the dock-at-boot question is
-	   settled.
-
-	   disk_initialize() runs on the first REAL card access, not at
-	   f_mount() time (a deferred mount touches no hardware). So where
-	   this line lands in the boot log says when the card actually came
-	   up, relative to wm's dock_build() -- which is the timing question.
-
-	   CardType 0 means the card never answered at all. */
-	kprint("disk_initialize: CardType=0x");
-	kprint_hex32((uint32_t)ty);
-	kprint(" Stat=0x");
-	kprint_hex32((uint32_t)s);
-	kprint("\n");
 
 	Stat = s;
 

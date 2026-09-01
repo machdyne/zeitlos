@@ -10,10 +10,13 @@
  *   - glyph: blits one font glyph from glyph memory (see
  *     rtl/mem/glyph.v) into the framebuffer, with a solid foreground/
  *     background per pixel -- proper terminal-cell semantics, not a
- *     transparent overlay. Unclipped by design: the caller (software)
- *     is expected to only trigger this for glyphs that are already
- *     fully on-screen, and fall back to software rendering for glyphs
- *     that would need partial clipping (e.g. right at a window edge).
+ *     transparent overlay. HONOURS THE SCISSOR when CTRL_CLIP is set:
+ *     a glyph the clip rectangle cuts through renders partially, in
+ *     hardware, so a window edge through a character no longer forces
+ *     a software fallback. Vertically by skipping rows, horizontally
+ *     by masking the cell -- and the CELL is masked, not just the
+ *     glyph bits, or the background would erase pixels outside the
+ *     clip. Without CTRL_CLIP it is unclipped, exactly as before.
  *     See docs/window_manager.md, "hardware glyph blitting".
  *   - copy (CTRL_FILL=0): copies a 1bpp bitmap into the framebuffer,
  *     with arbitrary bit alignment between source and destination. One
@@ -438,10 +441,28 @@ module gpu_blit_wb #(
     reg [31:0] g_row;           // current row within the glyph, 0..work_glyph_h-1
     reg [7:0]  g_glyph_byte;    // glyph row byte, as fetched from glyph memory (still MSB-first at this point)
 
-    // Clipping calculations (fill/copy path, unchanged) -- 640x480
-    // native resolution now, was 512x384
-    wire [31:0] screen_clip_x_end = 32'd640;
-    wire [31:0] screen_clip_y_end = 32'd480;
+    // -- scissor --
+    //
+    // The clip rectangle CTRL_CLIP clips against. Reset to the full
+    // screen, so a bitstream with this change behaves exactly as the
+    // one before it for every caller that never writes these: the
+    // comparisons below then reduce to the 640/480 constants they
+    // used to be.
+    //
+    // Half-open, [x0,x1) x [y0,y1), matching how width/height are
+    // already used here.
+    //
+    // ELEVEN BITS, not 32. The screen is 640x480, so eleven covers it
+    // with room for the 640/480 end values themselves, and the
+    // comparators below are 32-bit against a mostly-zero value --
+    // which synthesis reduces accordingly. That is deliberate
+    // compensation: the high-side compares stop being against a
+    // constant (cheap) and start being against a register (less
+    // cheap), and narrowing the register buys most of that back.
+    reg [10:0] clip_x0_reg, clip_y0_reg, clip_x1_reg, clip_y1_reg;
+
+    wire [31:0] screen_clip_x_end = {21'h0, clip_x1_reg};
+    wire [31:0] screen_clip_y_end = {21'h0, clip_y1_reg};
     // Registered, to split the clip chain.
     //
     // rect_x_end -> final_x_end -> final_width -> word_span -> the
@@ -463,13 +484,35 @@ module gpu_blit_wb #(
     // module.
     reg [31:0] rect_x_end;
     reg [31:0] rect_y_end;
+
+    // The low-side clamp rides in THIS stage, deliberately.
+    //
+    // final_x used to be work_dst_x with no logic at all, and it feeds
+    // the chain the comment above describes as having been the whole
+    // SOC's critical path at 48MHz. Putting a compare-and-mux at the
+    // head of that chain is exactly how the 15% that register bought
+    // gets given back.
+    //
+    // It does not have to go there. clip_x0_reg cannot change during a
+    // blit -- it is written over the wishbone while idle, and
+    // start_trigger is what ends that -- so the clamped value is
+    // available a cycle early, in the same idle cycle ST_CLIP_CALC
+    // already exists to cover. final_x stays a register output, and
+    // the chain is exactly as deep as before this change.
+    reg [31:0] clamped_x;
+    reg [31:0] clamped_y;
+
     always @(posedge clk) begin
         rect_x_end <= work_dst_x + work_width;
         rect_y_end <= work_dst_y + work_height;
+        clamped_x <= (work_dst_x < {21'h0, clip_x0_reg})
+                     ? {21'h0, clip_x0_reg} : work_dst_x;
+        clamped_y <= (work_dst_y < {21'h0, clip_y0_reg})
+                     ? {21'h0, clip_y0_reg} : work_dst_y;
     end
 
-    wire [31:0] final_x = work_dst_x;
-    wire [31:0] final_y = work_dst_y;
+    wire [31:0] final_x = clamped_x;
+    wire [31:0] final_y = clamped_y;
     wire [31:0] final_x_end = (rect_x_end > screen_clip_x_end) ? screen_clip_x_end : rect_x_end;
     wire [31:0] final_y_end = (rect_y_end > screen_clip_y_end) ? screen_clip_y_end : rect_y_end;
     wire [31:0] final_width = final_x_end - final_x;
@@ -617,16 +660,92 @@ module gpu_blit_wb #(
     wire [31:0] g_glyph_bits = ({24'h0, g_byte_rev}) & ((32'h1 << work_glyph_w) - 32'h1);
     wire [31:0] g_cell_bits  = (32'h1 << work_glyph_w) - 32'h1;
 
+    // Sampled in ST_GLYPH_SETUP. All ones when the caller did not ask
+    // for clipping, so glyph mode without CTRL_CLIP behaves exactly as
+    // it always has.
+    reg [31:0] g_cmask_lo, g_cmask_hi;
+
     wire [63:0] g_shifted_bits = ({32'h0, g_glyph_bits}) << g_bit_offset;
     wire [63:0] g_shifted_cell = ({32'h0, g_cell_bits})  << g_bit_offset;
 
-    wire [31:0] g_bits_lo = g_shifted_bits[31:0];
-    wire [31:0] g_bits_hi = g_shifted_bits[63:32];
-    wire [31:0] g_cell_lo = g_shifted_cell[31:0];
-    wire [31:0] g_cell_hi = g_shifted_cell[63:32];
+    // The scissor is applied HERE, at the single point the cell and
+    // bit masks are formed, rather than at each of the two write
+    // merges further down. Both merges consume these, so clipping the
+    // source makes every consumer clipped by construction -- including
+    // any future one -- and it cannot be half-applied.
+    //
+    // Note it clips the CELL as well as the glyph bits. Clipping only
+    // the bits would stop foreground pixels escaping the scissor but
+    // still let the background paint the whole cell, which is worse
+    // than not clipping at all: an occluded terminal would erase the
+    // window in front of it in the shape of its own text.
+    //
+    // g_cmask_* is all ones unless the caller set CTRL_CLIP, so this
+    // is a no-op for every existing glyph caller.
+    wire [31:0] g_bits_lo = g_shifted_bits[31:0]  & g_cmask_lo;
+    wire [31:0] g_bits_hi = g_shifted_bits[63:32] & g_cmask_hi;
+    wire [31:0] g_cell_lo = g_shifted_cell[31:0]  & g_cmask_lo;
+    wire [31:0] g_cell_hi = g_shifted_cell[63:32] & g_cmask_hi;
 
     wire [31:0] g_fg_word = {32{work_fg[0]}};
     wire [31:0] g_bg_word = {32{work_bg[0]}};
+
+    // -- glyph horizontal clipping --
+    //
+    // A glyph lands in at most two destination words: the one holding
+    // work_dst_x, and its neighbour when the cell straddles the
+    // boundary. So a per-word mask of "columns inside the scissor" is
+    // enough, and ANDing it into the cell and bit masks the write path
+    // already builds gives partial-glyph clipping for the cost of two
+    // AND gates in the datapath.
+    //
+    // That is what removes the software fallback: gpu_blitter.md used
+    // to say glyph mode was "unclipped by design -- the caller is
+    // expected to fall back to software rendering for glyphs that
+    // would need partial clipping", which meant a window edge cutting
+    // through a character dropped out of hardware rendering entirely.
+    //
+    // These are COMBINATIONAL but only ever sampled once, in
+    // ST_GLYPH_SETUP. work_dst_x and the scissor cannot change during
+    // a blit, so the masks are constant for its whole duration and the
+    // per-row write path sees registers, not this arithmetic.
+    wire [31:0] g_wx_lo = {work_dst_x[31:5], 5'b00000};
+    wire [31:0] g_wx_hi = g_wx_lo + 32'd32;
+
+    wire [31:0] g_cx0 = {21'h0, clip_x0_reg};
+    wire [31:0] g_cx1 = {21'h0, clip_x1_reg};
+
+    // Bits to drop at the bottom / keep up to, per word, saturating at
+    // 32 so a word wholly outside the scissor yields an empty mask and
+    // one wholly inside yields a full one.
+    wire [31:0] g_dl_lo = (g_cx0 <= g_wx_lo) ? 32'd0 :
+                          ((g_cx0 - g_wx_lo) >= 32'd32) ? 32'd32 : (g_cx0 - g_wx_lo);
+    wire [31:0] g_kl_lo = (g_cx1 <= g_wx_lo) ? 32'd0 :
+                          ((g_cx1 - g_wx_lo) >= 32'd32) ? 32'd32 : (g_cx1 - g_wx_lo);
+    wire [31:0] g_dl_hi = (g_cx0 <= g_wx_hi) ? 32'd0 :
+                          ((g_cx0 - g_wx_hi) >= 32'd32) ? 32'd32 : (g_cx0 - g_wx_hi);
+    wire [31:0] g_kl_hi = (g_cx1 <= g_wx_hi) ? 32'd0 :
+                          ((g_cx1 - g_wx_hi) >= 32'd32) ? 32'd32 : (g_cx1 - g_wx_hi);
+
+    // 64 bits wide so a shift of exactly 32 still leaves the low word
+    // well defined: (ones << 32)[31:0] is zero, which is what an empty
+    // mask needs, where a 32-bit shift by 32 is undefined-ish and a
+    // 32-bit ~(x << 32) would give the opposite of the intended
+    // "keep everything".
+    wire [63:0] g_ones = 64'hFFFFFFFFFFFFFFFF;
+    wire [63:0] g_sh_dl_lo = g_ones << g_dl_lo[5:0];
+    wire [63:0] g_sh_kl_lo = g_ones << g_kl_lo[5:0];
+    wire [63:0] g_sh_dl_hi = g_ones << g_dl_hi[5:0];
+    wire [63:0] g_sh_kl_hi = g_ones << g_kl_hi[5:0];
+
+    wire [31:0] g_cmask_lo_c = g_sh_dl_lo[31:0] & ~g_sh_kl_lo[31:0];
+    wire [31:0] g_cmask_hi_c = g_sh_dl_hi[31:0] & ~g_sh_kl_hi[31:0];
+
+    // Is the row currently being written inside the scissor
+    // vertically? Cheaper than the horizontal case: no mask, just skip
+    // the row's two read-modify-writes entirely.
+    wire g_row_visible = !work_clip ||
+        ((cur_y >= clip_y0_reg[9:0]) && (cur_y < clip_y1_reg[9:0]));
 
     // -- memory copy combinational logic --
 
@@ -688,6 +807,14 @@ module gpu_blit_wb #(
             pattern_reg <= 32'h0;
             fill_reg <= 1'b0;
             clip_enable_reg <= 1'b1;  // Enable clipping by default
+
+            // Full screen, so this module behaves identically to the
+            // version before the scissor existed for any caller that
+            // never writes these.
+            clip_x0_reg <= 11'd0;
+            clip_y0_reg <= 11'd0;
+            clip_x1_reg <= 11'd640;
+            clip_y1_reg <= 11'd480;
             glyph_reg <= 1'b0;
             srcmem_reg <= 1'b0;
             glyph_addr_reg <= 32'h0;
@@ -742,6 +869,25 @@ module gpu_blit_wb #(
                         4'd13: src_stride_reg <= wb_dat_i;
                         4'd14: src_shift_reg <= wb_dat_i;
                         4'd15: src_b_addr_reg <= wb_dat_i;
+
+                        // -- scissor, registers 16..19 --
+                        //
+                        // Truncated to 11 bits on the way in rather
+                        // than range-checked: the screen is 640x480,
+                        // and a caller writing something larger has
+                        // made a mistake this module cannot correct
+                        // for them. Truncation keeps a wild value
+                        // inside the framebuffer instead of letting it
+                        // reach the bus, which is the same reasoning
+                        // z_fb_hw_line()'s unconditional clamp uses on
+                        // the software side.
+                        // 16..18 are the read-only debug registers
+                        // below; the scissor starts at 20 to leave
+                        // that block intact.
+                        5'd20: clip_x0_reg <= wb_dat_i[10:0];
+                        5'd21: clip_y0_reg <= wb_dat_i[10:0];
+                        5'd22: clip_x1_reg <= wb_dat_i[10:0];
+                        5'd23: clip_y1_reg <= wb_dat_i[10:0];
                         default: ;
                     endcase
                 end else begin
@@ -781,6 +927,11 @@ module gpu_blit_wb #(
                         5'd16: wb_dat_o <= dbg_src_adr;
                         5'd17: wb_dat_o <= dbg_src_dat;
                         5'd18: wb_dat_o <= dbg_src_cnt;
+
+                        5'd20: wb_dat_o <= {21'h0, clip_x0_reg};
+                        5'd21: wb_dat_o <= {21'h0, clip_y0_reg};
+                        5'd22: wb_dat_o <= {21'h0, clip_x1_reg};
+                        5'd23: wb_dat_o <= {21'h0, clip_y1_reg};
                         default: wb_dat_o <= 32'd0;
                     endcase
                 end
@@ -789,8 +940,15 @@ module gpu_blit_wb #(
     end
 
     // Start trigger
+    //
+    // wb_adr_i[4:0], NOT [3:0]. The register file is decoded on five
+    // bits (see the case statements above), so a four-bit compare here
+    // aliased every address whose low nibble is zero onto CTRL --
+    // harmless while only 0..15 existed, and a live bug the moment
+    // register 16 was added, since writing the clip registers below
+    // would have fired a blit.
     wire start_trigger = wb_cyc_i && wb_stb_i && wb_we_i &&
-                        (wb_adr_i[3:0] == 4'd0) && wb_dat_i[CTRL_START] && !draw_busy;
+                        (wb_adr_i[4:0] == 5'd0) && wb_dat_i[CTRL_START] && !draw_busy;
 
     // Main state machine
     always @(posedge clk) begin
@@ -900,8 +1058,26 @@ module gpu_blit_wb #(
                         clip_width <= final_width;
                         clip_height <= final_height;
 
-                        if (final_width == 0 || final_height == 0 ||
-                            final_x >= screen_clip_x_end || final_y >= screen_clip_y_end) begin
+                        // EMPTY TEST BY ORDERING, not by width.
+                        //
+                        // final_width is an unsigned subtraction, so a
+                        // rectangle that lies entirely outside the
+                        // scissor -- final_x clamped UP past
+                        // final_x_end clamped DOWN -- does not produce
+                        // zero, it produces a huge value that wraps.
+                        // The engine then walks a word span of tens of
+                        // millions and hangs on a bus address that
+                        // never acks.
+                        //
+                        // That could not happen while the scissor was
+                        // fixed at the full screen, because final_x was
+                        // never clamped up at all. It can now, so the
+                        // test compares the edges directly. This also
+                        // subsumes the two >= screen_clip_*_end checks
+                        // it replaces: if final_x is past the right
+                        // edge then final_x_end, being clamped to that
+                        // same edge, cannot exceed it.
+                        if (final_x >= final_x_end || final_y >= final_y_end) begin
                             draw_busy <= 1'b0;
                             state <= ST_IDLE;
                         end else begin
@@ -921,6 +1097,16 @@ module gpu_blit_wb #(
                             // below; everything set up above (masks,
                             // word counts, destination addresses) is
                             // shared with it unchanged.
+                            //
+                            // NOT adjusted for a scissor that clips the
+                            // left edge. Narrowing the mask inside a
+                            // word needs no adjustment -- the source is
+                            // aligned to the destination WORD, not to
+                            // dst_x. A scissor that pushes final_x into
+                            // a LATER word does, and this does not do
+                            // it: see docs/gpu_blitter.md, "Copy and
+                            // the scissor", for the exact limitation
+                            // and why software must not hit it.
                             mem_row_addr <= work_src_addr;
                             mem_row_addr_b <= work_src_b_addr;
 
@@ -1286,6 +1472,18 @@ module gpu_blit_wb #(
                     g_bit_offset <= work_dst_x[4:0];
                     g_line_addr <= work_dst_y * SCREEN_STRIDE + ((work_dst_x >> 5) * 4);
                     g_row <= 32'h0;
+
+                    // cur_y is shared with the fill/copy path, which
+                    // sets it in ST_CLIP. The glyph path needs it too,
+                    // for g_row_visible -- and for the dither's row
+                    // phase, which is why it was already being set
+                    // here before clipping existed.
+                    cur_y <= work_dst_y[9:0];
+
+                    // Constant for the whole blit; see g_cmask_lo_c.
+                    g_cmask_lo <= work_clip ? g_cmask_lo_c : 32'hFFFFFFFF;
+                    g_cmask_hi <= work_clip ? g_cmask_hi_c : 32'hFFFFFFFF;
+
                     state <= ST_GLYPH_FETCH;
                 end
 
@@ -1310,7 +1508,14 @@ module gpu_blit_wb #(
                     // NOW glyph_data_i reflects mem[glyph_addr_o] as
                     // presented two cycles ago -- see ST_GLYPH_FETCH_WAIT.
                     g_glyph_byte <= glyph_data_i;
-                    state <= ST_GLYPH_READ_LO;
+
+                    // Vertical clipping is a row skip, not a mask: a
+                    // row outside the scissor needs none of the four
+                    // bus transactions the write path is about to do,
+                    // so it costs less than a visible one rather than
+                    // more.
+                    state <= g_row_visible ? ST_GLYPH_READ_LO
+                                           : ST_GLYPH_ROW_DONE;
                 end
 
                 ST_GLYPH_READ_LO: begin
@@ -1449,6 +1654,7 @@ module gpu_blit_wb #(
                     end else begin
                         g_row <= g_row + 1;
                         g_line_addr <= g_line_addr + SCREEN_STRIDE;
+                        cur_y <= cur_y + 10'd1;
                         state <= ST_GLYPH_FETCH;
                     end
                 end

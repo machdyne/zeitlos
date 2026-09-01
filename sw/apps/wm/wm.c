@@ -116,12 +116,13 @@ static const dock_app_t dock_candidates[] = {
 	{ "text",		z_icon_text_data  },
 	{ "read",		z_icon_read_data  },
 	{ "draw",		z_icon_draw_data  },
-	{ "info",		z_icon_info_data  },
-	{ "calc",		z_icon_calc_data  },
-	{ "clock",		z_icon_clock_data },
 	{ "track",		z_icon_track_data },
 	{ "space3d",	z_icon_space3d_data },
-	{ "gpu3d",		z_icon_gpu3d_data },
+	{ "gamedemo",	z_icon_gpu3d_data },
+	{ "gpu3d",		z_icon_gamedemo_data },
+	{ "calc",		z_icon_calc_data  },
+	{ "clock",		z_icon_clock_data },
+	{ "info",		z_icon_info_data  },
 	{ "settings",	z_icon_settings_data },
 };
 #define DOCK_CANDIDATE_COUNT \
@@ -216,6 +217,7 @@ static uint8_t zorder[WM_MAX_WINDOWS];	// back-to-front; zorder[count-1] is fron
 static uint8_t zorder_count = 0;
 static int focused = -1;		// index into windows[], or -1
 static int dragging = -1;		// index into windows[], or -1
+static bool drag_moved = false;	// has the drag actually moved yet?
 static int drag_off_x = 0, drag_off_y = 0;
 
 // -- resize state -- deliberately kept separate from the drag state
@@ -306,6 +308,21 @@ static void clear_screen(void) {
 }
 
 static void draw_window_box(wm_window_t *w, bool is_focused, int color) {
+	// wm's chrome is not any window's content.
+	//
+	// wm owns the dock, and draws it through z_win_* -- which since
+	// per-window regions loads the DOCK's region into zgfx. Every
+	// chrome draw after that inherited it, so borders, titlebars and
+	// the focus inversion were being clipped to wherever the dock
+	// happened to be visible. That is why a titlebar could come out
+	// un-inverted after a retitle and correct itself on the next
+	// move: whichever path ran last decided what was clipped.
+	//
+	// Chrome belongs to wm and covers the whole screen, so it must be
+	// drawn with no region at all. Cleared here rather than at each
+	// individual draw so nothing new can forget it.
+	z_gfx_clear_visible();
+
 
 	int x0 = w->x, y0 = w->y;
 	int x1 = w->x + w->w - 1, y1 = w->y + w->h - 1;
@@ -401,12 +418,22 @@ static void draw_window_box(wm_window_t *w, bool is_focused, int color) {
 		// cleared/redrawn on every focus change -- see its own
 		// comment for why that's centralized there instead of at
 		// every individual call site.
-		int fx0 = x0 - 1, fy0 = y0 - 1, fx1 = x1 + 1, fy1 = y1 + 1;
-		if (fx0 < 0) fx0 = 0;
-		if (fy0 < 0) fy0 = 0;
-		if (fx1 >= WM_SCREEN_W) fx1 = WM_SCREEN_W - 1;
-		if (fy1 >= WM_SCREEN_H) fy1 = WM_SCREEN_H - 1;
-		z_fb_hw_box(fx0, fy0, fx1, fy1, color, NULL);
+		// THE OUTWARD RING IS GONE. Focus is shown by inverting the
+		// titlebar instead -- see draw_titlebar_content().
+		//
+		// The ring was drawn one pixel OUTSIDE this window's bounds,
+		// which means it landed on pixels belonging to whatever was
+		// underneath. Those pixels are inside that window's visible
+		// region, legitimately, so the moment it repainted it erased
+		// the ring: a clock ticking behind a focused window rubbed
+		// the ring away a hand-sweep at a time.
+		//
+		// That is not a bug in either piece. An indicator drawn
+		// outside a window and a rule that each window may only draw
+		// inside its own region cannot both hold. Since the region
+		// rule is what stops windows painting over each other, the
+		// indicator is the one that had to move -- inside the
+		// titlebar, which wm owns and no app can reach.
 	}
 
 }
@@ -566,6 +593,21 @@ static int titlebar_icons(const wm_window_t *w, titlebar_icon_slot_t *out,
 }
 
 static void draw_titlebar_content(wm_window_t *w) {
+	// wm's chrome is not any window's content.
+	//
+	// wm owns the dock, and draws it through z_win_* -- which since
+	// per-window regions loads the DOCK's region into zgfx. Every
+	// chrome draw after that inherited it, so borders, titlebars and
+	// the focus inversion were being clipped to wherever the dock
+	// happened to be visible. That is why a titlebar could come out
+	// un-inverted after a retitle and correct itself on the next
+	// move: whichever path ran last decided what was clipped.
+	//
+	// Chrome belongs to wm and covers the whole screen, so it must be
+	// drawn with no region at all. Cleared here rather than at each
+	// individual draw so nothing new can forget it.
+	z_gfx_clear_visible();
+
 
 	if (w->no_titlebar) return;	// nothing to draw -- see the dock
 
@@ -599,6 +641,47 @@ static void draw_titlebar_content(wm_window_t *w) {
 		// so it's known on-screen and within the titlebar, nothing
 		// left to clip against.
 		z_fb_draw_icon(icons[i].x, icons[i].y, icons[i].icon, 1, 0, NULL);
+
+	// -- focus indicator --
+	//
+	// The focused window's titlebar is INVERTED: one XOR fill over
+	// the strip, after its text and icons are down, so title and
+	// background swap together and the result reads as a filled bar
+	// with knocked-out text.
+	//
+	// This replaced a 1px ring drawn just OUTSIDE the window's
+	// bounds. That ring landed on pixels belonging to whatever was
+	// underneath -- pixels inside THAT window's visible region -- so
+	// it was erased the moment the window below repainted. A clock
+	// ticking behind a focused window rubbed it away a hand-sweep at
+	// a time.
+	//
+	// An indicator outside a window, and a rule that a window may
+	// only draw inside its own region, cannot both hold. The region
+	// rule is what stops windows painting over each other, so the
+	// indicator moved inside the titlebar, which wm owns and no app
+	// can reach.
+	//
+	// XOR rather than drawing the text in reverse video: the icons
+	// are bitmaps and the title is hardware-blitted, so inverting
+	// once at the end costs a single fill and needs no second code
+	// path for either. It also cannot get out of step with what was
+	// drawn, because it operates on exactly those pixels.
+	//
+	// The strip stops one row short of the separator that
+	// draw_window_box() draws at the bottom of the titlebar --
+	// inverting that would make the focused window look like it had
+	// no separator at all.
+	if (focused >= 0 && focused < WM_MAX_WINDOWS &&
+		&windows[focused] == w) {
+
+		int tw = (int)w->w - 2;
+		int th = Z_WM_TITLEBAR_H - 1;
+
+		if (tw > 0 && th > 0)
+			z_fb_hw_fill_rect_rop(x0 + 1, y0 + 1, tw, th, 1, Z_ROP_XOR);
+
+	}
 
 }
 
@@ -975,6 +1058,21 @@ static bool window_covers_region(int idx, int rx, int ry, int rw, int rh) {
 // repair_region() skips notifying (exclude_idx, or one hidden behind
 // the excluded window): their content is not disturbed.
 static void draw_window_chrome_bg(wm_window_t *w) {
+	// wm's chrome is not any window's content.
+	//
+	// wm owns the dock, and draws it through z_win_* -- which since
+	// per-window regions loads the DOCK's region into zgfx. Every
+	// chrome draw after that inherited it, so borders, titlebars and
+	// the focus inversion were being clipped to wherever the dock
+	// happened to be visible. That is why a titlebar could come out
+	// un-inverted after a retitle and correct itself on the next
+	// move: whichever path ran last decided what was clipped.
+	//
+	// Chrome belongs to wm and covers the whole screen, so it must be
+	// drawn with no region at all. Cleared here rather than at each
+	// individual draw so nothing new can forget it.
+	z_gfx_clear_visible();
+
 
 	int x = (int)w->x, y = (int)w->y;
 	int cw = (int)w->w, ch = (int)w->h;
@@ -1000,7 +1098,25 @@ static void draw_window_chrome_bg(wm_window_t *w) {
 
 }
 
+// How many repairs, and how many app redraws they asked for, since
+// the counter was last reset. Printed per input event when
+// wm_clip_debug is on.
+//
+// The flashing is a REPAINT COUNT question, not a region question --
+// the regions in the log were correct. Counting is cheaper than
+// reasoning about it: each repair_region() that overlaps a window
+// makes its owner redraw its whole content, so N of them per click is
+// N flashes, and this says what N is and who was asked.
+static int dbg_repairs;
+static int dbg_redraws;
+
 static void repair_region(int rx, int ry, int rw, int rh, int exclude_idx) {
+
+	dbg_repairs++;
+
+	// See draw_window_box(): wm's own drawing must not inherit a
+	// region left over from the dock.
+	z_gfx_clear_visible();
 
 	// expand by 1px on every side before clearing/redrawing -- the
 	// focused window's chrome highlight (draw_window_box()'s own
@@ -1067,6 +1183,7 @@ static void repair_region(int rx, int ry, int rw, int rh, int exclude_idx) {
 
 		if (region_hidden && zex >= 0 && i < zex) continue;
 
+		dbg_redraws++;
 		send_redraw(w->owner_pid, idx);
 		wait_for_redraw_done(w->owner_pid);
 	}
@@ -1285,6 +1402,343 @@ static bool dock_handle_key(uint32_t keysym, bool pressed) {
 // in this cycle is what keeps the dock reachable when it is. from=-1
 // starts from the first used slot (so Alt+Tab with nothing currently
 // focused still does something sensible).
+// -- visible regions --
+//
+// A window's visible region is its own rectangle minus every window
+// in front of it. Apps draw only inside it (sw/common/zgfx.c), which
+// is what stops a window painting over the ones above it -- a clock
+// running behind a text editor used to redraw its hands straight
+// through the editor.
+//
+// A LIST of rectangles, not one: a window covered in its middle is
+// visible as a ring, and a bounding box around that is a superset --
+// it would permit exactly the drawing this prevents.
+//
+// sw/apps/wm/tests/test_region.c checks this exhaustively, pixel by
+// pixel, against the definition of "visible", and separates the two
+// ways it can be wrong: a region larger than the truth is UNSAFE (an
+// app draws over its neighbour) while one smaller is merely stale.
+// That distinction is the whole design, and it decides what overflow
+// has to do.
+#define WM_MAX_CLIP Z_WM_MAX_CLIP
+
+static bool rect_empty(const z_clip_t *r) {
+	return r->x1 < r->x0 || r->y1 < r->y0;
+}
+
+static bool rect_overlaps(const z_clip_t *a, const z_clip_t *b) {
+	return !(a->x1 < b->x0 || b->x1 < a->x0 ||
+	         a->y1 < b->y0 || b->y1 < a->y0);
+}
+
+/*
+ * r minus cut, as up to four rectangles appended to out[].
+ *
+ * The four are the strips above, below, left and right of the
+ * intersection -- the standard decomposition, and the reason a region
+ * needs a list rather than a rectangle. Order does not matter to
+ * correctness; they are emitted top, bottom, left, right so a
+ * printout reads in a predictable order.
+ *
+ * Returns false if out[] filled up. The caller must treat that as
+ * "shrink", never "keep what is left and carry on" -- see the header.
+ */
+static bool rect_subtract(const z_clip_t *r, const z_clip_t *cut,
+	z_clip_t *out, int *n, int max) {
+
+	if (!rect_overlaps(r, cut)) {
+		if (*n >= max) return false;
+		out[(*n)++] = *r;
+		return true;
+	}
+
+	/* above */
+	if (cut->y0 > r->y0) {
+		if (*n >= max) return false;
+		z_clip_t t = { r->x0, r->y0, r->x1, cut->y0 - 1 };
+		out[(*n)++] = t;
+	}
+	/* below */
+	if (cut->y1 < r->y1) {
+		if (*n >= max) return false;
+		z_clip_t t = { r->x0, cut->y1 + 1, r->x1, r->y1 };
+		out[(*n)++] = t;
+	}
+	/* left, limited to the rows the cut actually covers */
+	{
+		int ty0 = cut->y0 > r->y0 ? cut->y0 : r->y0;
+		int ty1 = cut->y1 < r->y1 ? cut->y1 : r->y1;
+		if (cut->x0 > r->x0 && ty0 <= ty1) {
+			if (*n >= max) return false;
+			z_clip_t t = { r->x0, ty0, cut->x0 - 1, ty1 };
+			out[(*n)++] = t;
+		}
+		/* right */
+		if (cut->x1 < r->x1 && ty0 <= ty1) {
+			if (*n >= max) return false;
+			z_clip_t t = { cut->x1 + 1, ty0, r->x1, ty1 };
+			out[(*n)++] = t;
+		}
+	}
+
+	return true;
+}
+
+/*
+ * The visible region of `win` given the occluders in front of it.
+ *
+ * Returns the count. A count of 0 means FULLY OCCLUDED -- callers must
+ * send that as one empty rectangle rather than as an empty list,
+ * because zgfx reads an empty list as "unrestricted".
+ */
+static int region_compute(const z_clip_t *win,
+	const z_clip_t *occ, int nocc, z_clip_t *out, int max) {
+
+	z_clip_t cur[WM_MAX_CLIP], nxt[WM_MAX_CLIP];
+	int ncur = 0, nnxt;
+
+	cur[ncur++] = *win;
+
+	for (int i = 0; i < nocc; i++) {
+		nnxt = 0;
+		for (int j = 0; j < ncur; j++) {
+			if (!rect_subtract(&cur[j], &occ[i], nxt, &nnxt, WM_MAX_CLIP)) {
+				/*
+				 * Out of room. Keeping what has accumulated so far
+				 * would be a SUPERSET of the truth for the pieces not
+				 * yet cut, so the remaining occluders are still
+				 * applied -- the result is a subset, which is the safe
+				 * direction. Anything that then does not fit is
+				 * dropped, shrinking further.
+				 */
+				break;
+			}
+		}
+		for (int j = 0; j < nnxt; j++) cur[j] = nxt[j];
+		ncur = nnxt;
+		if (ncur == 0) break;
+	}
+
+	int n = 0;
+	for (int i = 0; i < ncur && n < max; i++)
+		if (!rect_empty(&cur[i])) out[n++] = cur[i];
+
+	return n;
+}
+
+// Blocks until `pid` acknowledges a Z_WM_SET_CLIP, or the timeout.
+//
+// Same shape and the same timeout as wait_for_redraw_done(), and for
+// the same reason: every other message is still serviced while
+// waiting, so an app that needs something from wm before it can ack
+// does not deadlock against it.
+// Set to 1 to log every region wm computes and sends. Off by default
+// -- it is one line per window per z-order change, which during a
+// drag is a lot.
+static int wm_clip_debug = 1;
+
+// Area of a region, used only to tell a narrowing from a widening.
+//
+// The rectangles in a region never overlap -- they come from
+// successive subtraction -- so summing their areas is exact, not an
+// approximation.
+static uint32_t region_area(const z_clip_t *r, int n) {
+	uint32_t a = 0;
+	for (int i = 0; i < n; i++) {
+		if (r[i].x1 < r[i].x0 || r[i].y1 < r[i].y0) continue;
+		a += (uint32_t)(r[i].x1 - r[i].x0 + 1) *
+		     (uint32_t)(r[i].y1 - r[i].y0 + 1);
+	}
+	return a;
+}
+
+// Last region sent to each window, so a send that would change
+// nothing sends nothing, and so narrow-vs-widen can be decided.
+static z_clip_t sent_region[WM_MAX_WINDOWS][WM_MAX_CLIP];
+static int sent_region_n[WM_MAX_WINDOWS];
+static bool sent_region_valid[WM_MAX_WINDOWS];
+
+// Computes idx's visible region and sends it, waiting for the ack
+// only when the region NARROWS.
+//
+// The asymmetry is the point. A narrowing region means a window has
+// moved in front, and the app must stop drawing into those pixels
+// BEFORE that window is drawn -- otherwise it is still painting into
+// them while they are being handed to someone else, which is the race
+// this whole change exists to close. A widening region means a window
+// was uncovered; the app drawing less than it is allowed to for a few
+// milliseconds is stale, not wrong, so that one is fire-and-forget.
+//
+// Waiting on every send instead would be correct too, and would cost
+// a round trip per window on every mouse-move during a drag.
+static void send_clip(int idx) {
+
+	if (idx < 0 || idx >= WM_MAX_WINDOWS) return;
+	if (!windows[idx].used) return;
+	if (windows[idx].owner_pid == my_pid) return;   // wm draws its own
+
+	z_clip_t win = { (int)windows[idx].x, (int)windows[idx].y,
+	                 (int)(windows[idx].x + windows[idx].w - 1),
+	                 (int)(windows[idx].y + windows[idx].h - 1) };
+
+	// Occluders: everything in FRONT of idx in the z-order. zorder is
+	// back-to-front, so that is every entry after idx's own.
+	z_clip_t occ[WM_MAX_WINDOWS];
+	int nocc = 0;
+	bool past = false;
+
+	for (int i = 0; i < zorder_count; i++) {
+		int k = zorder[i];
+		if (k == idx) { past = true; continue; }
+		if (!past) continue;
+		if (!windows[k].used) continue;
+		z_clip_t o = { (int)windows[k].x, (int)windows[k].y,
+		               (int)(windows[k].x + windows[k].w - 1),
+		               (int)(windows[k].y + windows[k].h - 1) };
+		occ[nocc++] = o;
+	}
+
+	z_clip_t reg[WM_MAX_CLIP];
+	int n = region_compute(&win, occ, nocc, reg, WM_MAX_CLIP);
+
+	// A fully occluded window is ONE EMPTY rectangle, never zero of
+	// them: zgfx reads an empty list as "unrestricted", which is the
+	// opposite of what this means.
+	if (n == 0) {
+		reg[0].x0 = 0; reg[0].y0 = 0;
+		reg[0].x1 = -1; reg[0].y1 = -1;
+		n = 1;
+	}
+
+	// Nothing changed -- do not spend a message, and above all do not
+	// spend an ack round trip.
+	if (sent_region_valid[idx] && sent_region_n[idx] == n) {
+		bool same = true;
+		for (int i = 0; i < n; i++)
+			if (sent_region[idx][i].x0 != reg[i].x0 ||
+			    sent_region[idx][i].y0 != reg[i].y0 ||
+			    sent_region[idx][i].x1 != reg[i].x1 ||
+			    sent_region[idx][i].y1 != reg[i].y1) { same = false; break; }
+		if (same) return;
+	}
+
+	uint32_t area_now = region_area(reg, n);
+	uint32_t area_was = sent_region_valid[idx]
+		? region_area(sent_region[idx], sent_region_n[idx]) : 0;
+
+	// A window's FIRST region is never a narrowing.
+	//
+	// !sent_region_valid used to count as narrowing, so the very
+	// first region a window ever received was sent-and-waited. That
+	// is a wait the app cannot satisfy: it has just returned from
+	// z_win_create() and is inside layout(), load_file() and its
+	// first repaint, none of which read the message queue. wm sat out
+	// the full timeout on the first launch of every app -- and the
+	// launch that timed out was the one that appeared not to start.
+	//
+	// The wait exists to stop an app drawing into pixels that are
+	// about to belong to someone else. A window that has never had a
+	// region has never been told it owns anything, so there is
+	// nothing to take away and nothing to protect.
+	bool narrowing = sent_region_valid[idx] && area_now < area_was;
+
+	// A WIDENING region needs a redraw, and used to get one by
+	// accident.
+	//
+	// When a window is raised, the area it just uncovered is stale --
+	// it holds whatever was on top of it. The app has to repaint it,
+	// and nothing in the region message asks it to.
+	//
+	// A full-rect repair_region() on every focus change used to
+	// provide that, which is why removing it (to stop the flashing)
+	// left clock drawing only its hands: it was still animating, but
+	// nothing had told it to redraw its face and buttons.
+	//
+	// Asking here is better than the repair that used to do it: only
+	// the window that actually gained area is asked, and only when it
+	// did.
+	bool widening = sent_region_valid[idx] && area_now > area_was;
+
+	z_wm_cliprect_t wire[WM_MAX_CLIP];
+	for (int i = 0; i < n; i++) {
+		wire[i].x0 = (int16_t)reg[i].x0;
+		wire[i].y0 = (int16_t)reg[i].y0;
+		wire[i].x1 = (int16_t)reg[i].x1;
+		wire[i].y1 = (int16_t)reg[i].y1;
+	}
+
+	for (int i = 0; i < n; i++) sent_region[idx][i] = reg[i];
+	sent_region_n[idx] = n;
+	sent_region_valid[idx] = true;
+
+	// Diagnostic. Says what each window was actually told, which is
+	// the one thing a screenshot cannot show -- an artifact could
+	// mean the region was wrong, or right and never applied, and
+	// these two lines tell those apart.
+	if (wm_clip_debug)
+		printf("wm: clip win %d pid %ld: %d rect(s) %d,%d..%d,%d%s\n",
+			idx, (long)windows[idx].owner_pid, n,
+			(int)reg[0].x0, (int)reg[0].y0,
+			(int)reg[0].x1, (int)reg[0].y1,
+			narrowing ? " (narrowing, waiting)" : "");
+
+	z_msg_new_send(windows[idx].owner_pid, Z_WM_SET_CLIP, 0,
+		z_obj_blob(wire, (uint32_t)(n * sizeof(z_wm_cliprect_t))));
+
+	// NO WAIT. Neither for the region ack nor for the widening
+	// redraw below.
+	//
+	// Both waits were added on the theory that a shrinking region
+	// must be acknowledged before the occluding window is drawn, or
+	// the app could still be painting into pixels that now belong to
+	// someone else. That theory was right, and the waits were wrong,
+	// for a reason that only became clear once they were in:
+	//
+	// Every wait blocks wm inside a message handler, re-entering
+	// handle_message() for whatever arrives meanwhile. The original
+	// code had exactly one such point, in repair_region(). Adding
+	// several more -- here, at creation, on every raise and drag --
+	// meant every app that was busy starting up became a timeout,
+	// and the launch that timed out was the one that never appeared.
+	//
+	// And the waits buy nothing now. The reason repair_region() waits
+	// is to stop a rear window's late repaint landing on top of the
+	// front window's. Clipping makes that IMPOSSIBLE regardless of
+	// timing: a rear window's drawing cannot reach the front window's
+	// pixels at all, because they are not in its region. Once regions
+	// exist, ordering apps by ack is protecting against something
+	// that can no longer happen.
+	//
+	// So a region is delivered and that is that. The worst case is an
+	// app drawing against a stale region for the few milliseconds
+	// until it reads its queue -- and repair_region() redraws the
+	// front window immediately afterwards anyway, so even that
+	// self-heals.
+	(void)narrowing;
+
+	// After the region is applied, not before -- a redraw request
+	// answered against the old, narrower region would repaint only
+	// the part that was already correct.
+	if (widening) {
+		dbg_redraws++;
+		send_redraw(windows[idx].owner_pid, idx);
+	}
+
+}
+
+// Every window's region. Called wherever the z-order or any geometry
+// changes -- one call site rather than remembering which windows a
+// given change can affect, because moving one window can widen or
+// narrow any number of others.
+static void send_clip_all_except(int skip) {
+	for (int i = 0; i < WM_MAX_WINDOWS; i++)
+		if (windows[i].used && i != skip) send_clip(i);
+}
+
+static void send_clip_all(void) {
+	send_clip_all_except(-1);
+}
+
 static int next_focusable(int from) {
 
 	int start = (from < 0) ? 0 : (from + 1) % WM_MAX_WINDOWS;
@@ -1743,6 +2197,8 @@ static bool bring_to_front(int idx) {
 		zorder[i] = zorder[i + 1];
 	zorder[zorder_count - 1] = idx;
 
+	// The z-order changed, so every window's region may have.
+	send_clip_all();
 	return true;
 
 }
@@ -1825,6 +2281,9 @@ static void destroy_window(uint32_t id) {
 	// window is already removed from windows[]/zorder above, so this
 	// only redraws/notifies whatever else was overlapping its old spot
 	repair_region(ox, oy, ow, oh, -1);
+
+	// A window going away widens every region it was covering.
+	send_clip_all();
 
 }
 
@@ -2173,6 +2632,12 @@ static void handle_message(z_msg_t *msg) {
 
 	switch (msg->subject) {
 
+		// Apps still ack regions (z_win_apply_clip() sends one), and
+		// nothing waits for them any more -- see send_clip(). Consumed
+		// here so they are not reported as unknown.
+		case Z_WM_CLIP_DONE:
+			break;
+
 		case Z_WM_CREATE_WINDOW: {
 
 			// if this is a dock-launched app's FIRST window, the
@@ -2236,16 +2701,87 @@ static void handle_message(z_msg_t *msg) {
 			// used to be forced back to the front here; see
 			// create_dock()'s call site in main().
 
-			// auto-focus a newly created window if nothing is
-			// currently focused -- without this, a session with no
-			// working mouse (no mouse plugged in, or neither USB port
-			// currently reporting itself as one -- see mouse_port()
-			// above) has no way to ever focus a window at all, since
-			// focus is otherwise only ever set by a mouse click. only
-			// fires when nothing else is focused yet, so it won't
-			// steal focus from an already-focused window when a
-			// second app creates one later.
-			if (idx >= 0 && focused < 0) focused = idx;
+			// -- focus for a newly created window --
+			//
+			// Two cases, and the second used to be missing.
+			//
+			// 1. NOTHING IS FOCUSED. Without this a session with no
+			//    working mouse (none plugged in, or neither USB port
+			//    currently reporting itself as one -- see
+			//    mouse_port() above) could never focus a window at
+			//    all, since focus is otherwise only ever set by a
+			//    click.
+			//
+			// 2. IT IS THE PROCESS'S FIRST WINDOW. A process only
+			//    gets to create a first window because something
+			//    started it, and the only things that start a process
+			//    are the dock, the file browser, and `run` at the
+			//    shell -- all of them user-initiated. So the launch
+			//    IS the request for focus, in the same way clicking a
+			//    window is, and for the same reason a modal dialog
+			//    takes focus below.
+			//
+			//    Without this, launching an app from the file browser
+			//    (or the dock) left the launcher focused and the new
+			//    window unfocused -- so the first thing typed went to
+			//    the wrong app.
+			//
+			// A LATER window from a process that already has one does
+			// NOT take focus. That is the case the old rule was
+			// protecting, and it still holds: an app popping up a
+			// second window in the background should not pull the
+			// keyboard out from under whatever the user is doing. A
+			// modal dialog is the deliberate exception, handled just
+			// below.
+			//
+			// Windows without a titlebar are excluded. The dock is
+			// the only one today and it is created by wm itself
+			// during startup, before anything else exists -- focusing
+			// it here would hand the keyboard to the dock at boot
+			// instead of to the first app the user opens.
+			if (idx >= 0 && !windows[idx].no_titlebar) {
+
+				bool first_window = true;
+				for (int i = 0; i < WM_MAX_WINDOWS; i++) {
+					if (i == idx) continue;
+					if (windows[i].used &&
+						windows[i].owner_pid == msg->from) {
+						first_window = false;
+						break;
+					}
+				}
+
+				if (focused < 0 || first_window) {
+
+					int old_focused = focused;
+					focused = idx;
+
+					// The window that just LOST focus has to be
+					// repainted, or it keeps drawing itself as
+					// focused -- two windows both looking focused,
+					// only one receiving keys. The old rule never
+					// needed this because it only fired when
+					// focused < 0, i.e. when there was nothing to
+					// repaint.
+					//
+					// Titlebar strip only, and exclude_idx = idx.
+					// Both for exactly the reasons the modal case
+					// below spells out: losing focus changes only
+					// the titlebar, and the new window's owner is
+					// still inside z_win_create_cb() and cannot ack
+					// a redraw request, so including it would block
+					// wm for the full REDRAW_ACK_TIMEOUT on every
+					// single app launch.
+					if (old_focused >= 0 && old_focused != idx &&
+						windows[old_focused].used)
+						repair_region(windows[old_focused].x,
+							windows[old_focused].y,
+							windows[old_focused].w,
+							Z_WM_TITLEBAR_H, idx);
+
+				}
+
+			}
 
 			// A modal window is the exception to the
 			// don't-steal-focus rule above, and has to be: it exists
@@ -2314,11 +2850,30 @@ static void handle_message(z_msg_t *msg) {
 			// or titlebar for it at all. exclude_idx=idx: see
 			// repair_region()'s own comment for why this window
 			// specifically must skip the redraw-notify+wait step.
+			// Every OTHER window's region, before the repair below --
+			// same reasoning as repair_drag(): a window this one now
+			// covers must have its narrower region before anything is
+			// drawn over it. The new window itself is skipped because
+			// its owner is still blocked inside z_win_create() and
+			// cannot ack; its own region follows the reply.
+			if (idx >= 0) send_clip_all_except(idx);
+
 			if (idx >= 0)
 				repair_region(windows[idx].x, windows[idx].y,
 					windows[idx].w, windows[idx].h, idx);
 
 			send_win_rect(msg->from, Z_WM_WINDOW_CREATED, msg->tag, idx);
+
+			// This window's OWN region, after the reply.
+			//
+			// The owner is blocked inside z_win_create() waiting for
+			// exactly that reply, so it cannot read its queue -- a
+			// region sent first can never be acked, and wm sat out
+			// the full timeout on every single window creation.
+			//
+			// Everything else already had its region above, before
+			// the repair.
+			if (idx >= 0) send_clip(idx);
 
 			break;
 
@@ -2509,6 +3064,10 @@ static void notify_resized(int idx) {
 
 	send_win_rect(windows[idx].owner_pid, Z_WM_WINDOW_RESIZED, 0, idx);
 
+	// A resize changes this window's own region and, where it grew,
+	// the regions of everything it now covers.
+	send_clip_all();
+
 }
 
 // -- pointer delivery --
@@ -2638,6 +3197,21 @@ static void clear_window_interior(int idx) {
 
 static void repair_drag(int dragged_idx) {
 
+	// BEFORE the repair below, not after.
+	//
+	// The repair asks the windows the drag uncovered to redraw
+	// themselves. If their regions are still the OLD, narrower ones
+	// at that moment, they redraw only the part they were previously
+	// allowed to touch -- and the strip the dragged window just
+	// vacated stays stale. That is the gap left behind when a window
+	// is pulled away from another.
+	//
+	// Doing it first also satisfies the narrowing rule: a window the
+	// drag moved OVER gets its smaller region, and acks it, before
+	// anything is drawn on top of it.
+	send_clip_all();
+
+
 	(void)dragged_idx;	// the swept box below already covers it
 
 	// One repair over everything the window swept through, INCLUDING
@@ -2673,6 +3247,19 @@ static void repair_drag(int dragged_idx) {
 	// starting a drag now blanks the window's interior anyway (see
 	// clear_window_interior(), called from the click handler), so
 	// there is nothing left inside the footprint to preserve.
+	// A press that never became a drag has nothing to repair.
+	//
+	// Nothing was blanked and no region was changed -- both wait for
+	// the first motion event now -- so there is genuinely nothing to
+	// put back. Repairing anyway was a full content redraw of the
+	// window and everything overlapping it on every plain click: one
+	// of the two flashes.
+	//
+	// send_clip_all() above still runs and is a no-op when no region
+	// changed, so a focus-only click costs two titlebar strips and
+	// nothing else.
+	if (!drag_moved) return;
+
 	repair_region(drag_min_x, drag_min_y,
 		drag_max_x - drag_min_x, drag_max_y - drag_min_y, -1);
 
@@ -2874,6 +3461,10 @@ int main(void) {
 			// whichever port mouse_port() decided is the mouse, same as
 			// the cx/cy computed from it.
 			int mp = mouse_port();
+			// Reset here so the counts printed after this click
+			// describe exactly this click's work.
+			if (wm_clip_debug) { dbg_repairs = 0; dbg_redraws = 0; }
+
 			printf("wm: click port=%d raw=0x%08lx cx=%d cy=%d", mp,
 				(unsigned long)(mp == 0 ? reg_usb0_cursor : reg_usb1_cursor), cx, cy);
 			if (hit >= 0) {
@@ -2988,13 +3579,39 @@ int main(void) {
 				bool reordered = (zcount_before != zorder_count) ||
 					memcmp(zbefore, zorder, zorder_count) != 0;
 
+				// TITLEBAR STRIP, not the whole window.
+				//
+				// Losing focus now changes exactly one thing: the
+				// titlebar is no longer inverted. It used to change
+				// two, because the focus ring was drawn as an outward
+				// box around the window's whole perimeter, and
+				// repairing only the top strip would have left three
+				// sides of it on screen.
+				//
+				// With the ring gone (see draw_titlebar_content()),
+				// full-rect repairs here were two complete content
+				// redraws per focus click -- one for the window
+				// losing focus, one for the window gaining it. That
+				// is what made a window flash several times when it
+				// came forward.
+				//
+				// Same reasoning, same one-line fix, as the modal
+				// case in handle_message() already applies.
 				if (focus_changed && old_focused >= 0)
 					repair_region(windows[old_focused].x, windows[old_focused].y,
-						windows[old_focused].w, windows[old_focused].h, -1);
+						windows[old_focused].w, Z_WM_TITLEBAR_H, -1);
 
-				if (focus_changed || reordered)
+				// The window coming forward needs a FULL repair only
+				// if it actually moved in the z-order -- then it may
+				// have been uncovered and has content to restore. If
+				// the click only changed focus, its titlebar is again
+				// the only thing that differs.
+				if (reordered)
 					repair_region(windows[hit].x, windows[hit].y,
 						windows[hit].w, windows[hit].h, -1);
+				else if (focus_changed)
+					repair_region(windows[hit].x, windows[hit].y,
+						windows[hit].w, Z_WM_TITLEBAR_H, -1);
 
 				// grip first: it sits inside the window's general
 				// body, so a plain content-click test would swallow
@@ -3030,19 +3647,20 @@ int main(void) {
 
 				} else if (hit_titlebar(hit, cy)) {
 					dragging = hit;
+
+					// Nothing is blanked and no region is changed HERE.
+					// Both wait for the first actual movement -- see
+					// the motion handler below. A titlebar press that
+					// is released without moving is how a window gets
+					// focused, and it must cost nothing.
+					drag_moved = false;
+
 					drag_off_x = cx - windows[hit].x;
 					drag_off_y = cy - windows[hit].y;
 					drag_min_x = windows[hit].x;
 					drag_min_y = windows[hit].y;
 					drag_max_x = windows[hit].x + windows[hit].w;
 					drag_max_y = windows[hit].y + windows[hit].h;
-					// Blank the interior now, before any movement --
-					// see clear_window_interior(). Deliberately here,
-					// on the press that STARTS a drag, rather than on
-					// any titlebar click: a click that merely focuses
-					// or raises a window has no reason to throw its
-					// content away and make the owner redraw it.
-					clear_window_interior(hit);
 				} else if (point_in_content(hit, cx, cy)) {
 					// press inside the app's own content area: hand
 					// the pointer to that window until the button
@@ -3087,6 +3705,38 @@ int main(void) {
 				// wrote black over every pixel the outline
 				// crossed, gouging a trail through any window
 				// underneath that survived until repair_drag().
+				// FIRST MOVEMENT: this is where a press becomes a
+				// drag, and where the interior is blanked and the
+				// owner told to stop drawing.
+				//
+				// Both used to happen at the press. That made every
+				// titlebar click -- which is how a window is focused
+				// -- throw its content away, and the repair at
+				// release put it back with a full repaint: one of
+				// the flashes. Then the no-movement early-out in
+				// repair_drag() skipped that repaint, and a focused
+				// window came up blank with only its own animation
+				// running. Doing it here means a press-and-release
+				// touches nothing, and a real drag does exactly what
+				// it did before, one motion event later.
+				//
+				// The empty region tells the owner none of this
+				// window is visible for the duration -- what is on
+				// screen is the outline -- so a self-animating app
+				// like clock stops painting hands into the blanked
+				// footprint. repair_drag() recomputes it at release.
+				// One empty rectangle, not zero: zgfx reads an empty
+				// LIST as "unrestricted".
+				if (!drag_moved) {
+					drag_moved = true;
+					clear_window_interior(dragging);
+					z_wm_cliprect_t none = { 0, 0, -1, -1 };
+					z_msg_new_send(windows[dragging].owner_pid,
+						Z_WM_SET_CLIP, 0,
+						z_obj_blob(&none, sizeof(none)));
+					sent_region_valid[dragging] = false;
+				}
+
 				draw_window_box(&windows[dragging], dragging == focused, Z_RASTER_XOR);
 				windows[dragging].x = nx;
 				windows[dragging].y = ny;
@@ -3168,6 +3818,10 @@ int main(void) {
 		}
 
 		if (!btn_down && btn_was_down && dragging >= 0) {
+			if (wm_clip_debug)
+				printf("wm: repaint cost since click: %d repair(s), "
+					"%d app redraw(s)\n", dbg_repairs, dbg_redraws);
+
 			printf("wm: drag release win %d final x=%ld y=%ld\n",
 				dragging, (long)windows[dragging].x, (long)windows[dragging].y);
 			notify_moved(dragging);

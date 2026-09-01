@@ -277,7 +277,23 @@ module gpu_video #(
 	reg [1:0] video_mode_sync1;
 	reg [1:0] video_mode_active;
 
-	wire pix = hline[x] || pixel;
+	// XOR, not OR.
+	//
+	// OR made the cursor always white, which is invisible the moment
+	// it crosses anything white -- and wm now inverts the focused
+	// window's titlebar, so that is a wide bar the pointer disappears
+	// into rather than a rare case.
+	//
+	// XOR is the classic answer and the reason cursor bitmaps have
+	// looked the way they do since the 1980s: over black it reads
+	// white exactly as before, over white it reads black, and over a
+	// dithered fill it reads as the inverse of whatever it is on.
+	// There is no background the pointer can vanish into.
+	//
+	// Free in gates -- an XOR and an OR are the same one LUT at the
+	// same depth -- so this costs nothing in the 25.2MHz pixel domain
+	// this line sits in.
+	wire pix = hline[x] ^ pixel;
 
 	// is_visible gates the result, and it MUST: in GPU_PAPER the
 	// inactive state is 1, so an ungated invert would drive the VGA

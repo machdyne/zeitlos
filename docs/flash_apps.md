@@ -80,6 +80,44 @@ There is still exactly one name for `term`. `run term` behaves
 identically whether it came from a card, from flash, with no card at
 all, or after being killed and restarted.
 
+### The search path
+
+The card keeps its executables in `apps/`, alongside `docs/`, `ark/`
+and `user/`, rather than loose in the root. `fs_exec_resolve()` is
+what knows that. For a **bare name** it tries, in order:
+
+1. the root -- `term`
+2. `apps/` -- `apps/term`
+3. the flash archive, under the bare name
+
+A name **containing `/`** is taken literally and not searched at all,
+so `docs/term` cannot resolve to `apps/term`.
+
+Two consequences worth stating plainly:
+
+- **Nothing above this function changed when the apps moved.**
+  `dock_candidates[]` in wm, the extension table in `ztype.c`,
+  `z_proc_stack_size_for()` in `kernel.h`, pidreg registrations and
+  `run term` at the shell all still use bare names. The alternative --
+  writing `apps/` at every one of those call sites -- would have put a
+  constant prefix in a dozen places where it carries no information,
+  and spent 5 of `Z_ZAR_NAME_MAX`'s 16 bytes on it in the archive too.
+  A prefix repeated everywhere belongs in the resolver instead.
+
+- **Root is searched before `apps/`, deliberately.** That preserves the
+  shadowing rule above: the only way a file reaches the card root is
+  somebody deliberately putting it there, so `xf wm` still hot-swaps a
+  single app during development exactly as it did before `apps/`
+  existed. A card written before the move also still boots, since its
+  root-level apps are found first. The cost is one failed `f_open` per
+  launch on a normally-laid-out card.
+
+This is not the drive-letter idea below under another name. It applies
+to **executable resolution only** -- files are still opened by exact
+path, and `fs_open`/`size`/`read`/`write`, `ls`, `te`, repl's file API
+and `tget`/`tput` are all untouched. Data is addressed; programs are
+resolved.
+
 ### Why not drive letters
 
 Drive letters (`A:` = flash, `B:` = sdcard) were considered and

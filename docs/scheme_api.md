@@ -35,9 +35,9 @@ plain space-separated arguments, also works:
 
 ```
 > ls
-("/WM" "/TERM" "/NET")
-> ls /SUBDIR
-("/SUBDIR/FOO" "/SUBDIR/BAR")
+("/APPS" "/DOCS" "/ARK" "/USER")
+> ls /APPS
+("/APPS/FILES" "/APPS/TEXT" "/APPS/READ")
 ```
 
 This is translated, before evaluation, into the equivalent Scheme
@@ -429,7 +429,7 @@ translation (\S1b).
 
 | Procedure | Behavior |
 |---|---|
-| `(ls)` / `(ls "/path")` | list of filenames under `path` (root if omitted), each a full `/`-prefixed path (e.g. `"/WM"`) |
+| `(ls)` / `(ls "/path")` | list of filenames under `path` (root if omitted), each a full `/`-prefixed path (e.g. `"/APPS"`) |
 | `(file-size "name")` | size in bytes, or `#f` if missing (or genuinely empty -- see caveat below) |
 | `(read-file "name")` | whole file contents as a string, or `#f` |
 | `(write-file "name" "contents")` | create/truncate + write; `#t`/`#f` |
@@ -452,13 +452,13 @@ Backed by two new syscalls (`sw/os/fsapi.c`, following the exact
   *printed* to the console, kernel-side (`sh.c`'s own `ls`); this
   fixes that path's own doubled-slash bug in the process. `sh.c`'s
   existing `fs_list_dir("/")` builds each entry as `path + "/" +
-  name`, which for `path = "/"` produces `"//WM"` -- correct formula,
+  name`, which for `path = "/"` produces `"//APPS"` -- correct formula,
   just never called with anything except the one path where it
   produces a double slash. `k_fs_list()` normalizes the join instead:
   exactly one leading/trailing `/` regardless of how `path` is
   phrased (`"/"`, `""`, `"/SUBDIR"`, `"/SUBDIR/"` all produce the same
   clean joins) -- resolving the design question of *what a listed path
-  should even look like*: always a full path from root, e.g. `"/WM"`.
+  should even look like*: always a full path from root, e.g. `"/APPS"`.
   FatFs treats a leading `/` and a bare name as the same file (no
   separate "current directory" concept beyond the root here), so
   these paths are directly usable as-is with `read-file`/`file-size`/
@@ -1195,7 +1195,7 @@ practice -- not built here.
    cleanup needed on connection close.
 2. **`ls` scope** -- resolved: `ls` takes an optional path argument
    from the start (`(ls "/path")`), root if omitted. Every returned
-   name is a full path (`"/WM"`), fixing the pre-existing `sh.c`
+   name is a full path (`"/APPS"`), fixing the pre-existing `sh.c`
    double-slash display bug in the process (\S4, Files).
 3. **Numeric precision** -- resolved: staying with `double` (`T_NUM`).
    Every id/pid/size this API deals with is well under 2^53 (exact in

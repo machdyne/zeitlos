@@ -627,6 +627,15 @@ static bool connect_port(const char *name, uint32_t fallback_pid, z_obj_t arg,
 			break;
 		}
 
+		// The part of this window not covered by the windows in
+		// front of it -- see z_win_apply_clip() in zwin.c. The ack
+		// it sends is not optional: wm waits for it when a region
+		// narrows.
+		if (msg.subject == Z_WM_SET_CLIP) {
+			z_win_apply_clip(&win, &msg.obj);
+			continue;
+		}
+
 		if (msg.subject == Z_WM_REDRAW) {
 			z_win_apply_redraw(&win, msg.obj.val.uint32);
 			vt_mark_all_dirty(&vt);

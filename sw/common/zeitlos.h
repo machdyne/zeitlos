@@ -163,6 +163,26 @@ typedef uint32_t *(*z_kernel_ptr_t)(uint32_t, uint32_t *, uint32_t);
 // shifter between them. See docs/gpu_blitter.md.
 #define gpu_blit_src_b_addr  (*(volatile uint32_t*)0xd000003c)
 
+// -- scissor (rtl/gpu/gpu_blit.v, registers 20..23) --
+//
+// The rectangle CTRL_CLIP clips against, half-open: [x0,x1) x [y0,y1).
+// Resets to the full screen, so a caller that never writes these gets
+// exactly the behaviour the blitter had before the scissor existed --
+// CTRL_CLIP still means "clip", it just now clips to something you
+// can choose.
+//
+// Eleven bits wide in hardware; anything above is truncated rather
+// than range-checked, on the same reasoning as z_fb_hw_line()'s
+// unconditional clamp: a coordinate the hardware cannot represent
+// must not be allowed to reach the bus.
+//
+// Registers 16..18 are the read-only source-debug block, which is why
+// this starts at 20.
+#define gpu_blit_clip_x0     (*(volatile uint32_t*)0xd0000050)
+#define gpu_blit_clip_y0     (*(volatile uint32_t*)0xd0000054)
+#define gpu_blit_clip_x1     (*(volatile uint32_t*)0xd0000058)
+#define gpu_blit_clip_y1     (*(volatile uint32_t*)0xd000005c)
+
 /* Source-read probe (rtl/gpu/gpu_blit.v). The address the blitter last
  * presented for a source read, the data it actually received, and a
  * count of source reads since reset.

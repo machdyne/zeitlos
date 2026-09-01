@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <string.h>
 
 #include "fatfs/ff.h"
@@ -576,36 +577,137 @@ int fs_exec_info(char *path, z_exec_info_t *info) {
 // putting it there. Callers that want to report which source was used
 // can compare fs_exec_info()'s result themselves; both sh.c's init and
 // `run` print it.
+// -- the search path --
+//
+// A bare program name is looked for in the root, then in APPS/, then
+// in the flash archive. A name containing '/' is taken literally and
+// not searched at all.
+//
+// WHY A SEARCH PATH AND NOT A PREFIX. Moving the apps into APPS/
+// without one would mean every reference to a program grows a
+// constant "apps/": dock_candidates[] in wm, the extension->app table
+// in ztype.c, z_proc_stack_size_for() in kernel.h, pidreg
+// registrations, `run apps/term` at the shell, and the names inside
+// the flash archive -- where it would also spend 5 of
+// Z_ZAR_NAME_MAX's 16 bytes on a prefix that carries no information
+// anywhere it appears. A prefix repeated at every call site is a
+// prefix that belongs in the resolver instead.
+//
+// Doing it here means the directory move costs nothing above this
+// line: bare names keep working everywhere, the archive stays flat,
+// and a card written before the move still boots, because the root is
+// still searched.
+//
+// This is NOT the drive-letter idea rejected below returning by
+// another name. It applies to EXECUTABLE RESOLUTION only. Files are
+// still opened by exact path -- fs_open/size/read/write, ls, te,
+// repl's file API, tget/tput are all untouched, and none of them
+// gains a way for the same string to mean two different files. The
+// split is the ordinary one: data is addressed, programs are
+// resolved.
+//
+// ROOT IS SEARCHED BEFORE APPS/, deliberately. It preserves the
+// shadowing rule the underlay already documents -- the only way a
+// file gets to the card root is somebody deliberately putting it
+// there -- so `xf wm` still hot-swaps a single app during development
+// exactly as it did before APPS/ existed. The cost is one failed
+// f_open per launch on a normally-laid-out card, which is not
+// measurable next to loading the executable itself.
+#define FS_APPS_DIR "apps/"
+
+// Long enough for APPS_DIR plus any name k_proc_run() can pass in
+// (Z_PROC_RUN_NAME_MAX, 64) plus the NUL. A name that would not fit is
+// one that could not have been launched anyway.
+#define FS_RESOLVED_MAX (64 + sizeof(FS_APPS_DIR))
+
+typedef enum {
+	FS_EXEC_NONE = 0,	// no such program anywhere
+	FS_EXEC_FS,			// found on the filesystem, at `resolved`
+	FS_EXEC_ZAR			// found in the flash archive, under the bare name
+} fs_exec_src_t;
+
+// The one function that decides what a program name means. Everything
+// below calls it; nothing below does its own searching.
+//
+// `resolved` receives the path that actually matched (for FS_EXEC_FS)
+// or the archive name (for FS_EXEC_ZAR), so a caller that has already
+// resolved can act on the result without repeating the search.
+static fs_exec_src_t fs_exec_resolve(const char *name, char *resolved,
+	z_exec_info_t *info) {
+
+	z_exec_info_t tmp;
+	if (!info) info = &tmp;
+	if (!name || !*name) return FS_EXEC_NONE;
+
+	// Anything with a separator in it is a path the caller means
+	// literally -- the file browser launching something several
+	// directories deep, for instance. Searching it would be wrong:
+	// "docs/term" must not find APPS/term.
+	bool is_path = false;
+	for (const char *p = name; *p; p++)
+		if (*p == '/' || *p == '\\') { is_path = true; break; }
+
+	size_t len = strlen(name);
+	if (len + sizeof(FS_APPS_DIR) > FS_RESOLVED_MAX) return FS_EXEC_NONE;
+
+	// 1. literal -- the root for a bare name, the given path otherwise
+	strcpy(resolved, name);
+	if (fs_exec_info(resolved, info) == 0 && info->total)
+		return FS_EXEC_FS;
+
+	// 2. APPS/, for bare names only
+	if (!is_path) {
+		strcpy(resolved, FS_APPS_DIR);
+		strcpy(resolved + sizeof(FS_APPS_DIR) - 1, name);
+		if (fs_exec_info(resolved, info) == 0 && info->total)
+			return FS_EXEC_FS;
+	}
+
+	// 3. the flash archive, under the bare name. Entries there are
+	// flat -- no "apps/" prefix -- precisely because this resolver
+	// exists; see sw/os/zar.h.
+	strcpy(resolved, name);
+	if (z_zar_exec_info(resolved, info) == 0 && info->total)
+		return FS_EXEC_ZAR;
+
+	return FS_EXEC_NONE;
+
+}
+
 int fs_exec_info_any(char *path, z_exec_info_t *info) {
 
-	if (fs_exec_info(path, info) == 0 && info->total)
-		return 0;
-
-	if (z_zar_exec_info(path, info) == 0 && info->total)
-		return 0;
-
-	return 1;
+	char resolved[FS_RESOLVED_MAX];
+	return (fs_exec_resolve(path, resolved, info) == FS_EXEC_NONE) ? 1 : 0;
 
 }
 
 // true if `path` resolved to the flash copy rather than the card.
 // Only for reporting -- the loader below re-resolves on its own.
 int fs_exec_is_flash(char *path) {
-	z_exec_info_t tmp;
-	if (fs_exec_info(path, &tmp) == 0 && tmp.total) return 0;
-	return (z_zar_exec_info(path, &tmp) == 0 && tmp.total) ? 1 : 0;
+	char resolved[FS_RESOLVED_MAX];
+	return (fs_exec_resolve(path, resolved, NULL) == FS_EXEC_ZAR) ? 1 : 0;
 }
 
 // Loads whichever copy fs_exec_info_any() would have chosen. Re-runs
-// the same test rather than taking a source argument: two functions
+// the same search rather than taking a source argument: two functions
 // that must be called with matching arguments is exactly the kind of
 // pairing that eventually gets called with mismatched ones.
+//
+// Re-running it is also what makes the search safe to have at all --
+// all three entry points share fs_exec_resolve(), so they cannot
+// disagree about which of root, APPS/ or flash a name meant.
 int fs_load_exec_any(uint32_t dst, char *path, const z_exec_info_t *info) {
 
-	if (fs_exec_is_flash(path))
-		return z_zar_load_exec(dst, path, info);
+	char resolved[FS_RESOLVED_MAX];
+	fs_exec_src_t src = fs_exec_resolve(path, resolved, NULL);
 
-	return fs_load_exec(dst, path, info);
+	if (src == FS_EXEC_ZAR)
+		return z_zar_load_exec(dst, resolved, info);
+
+	if (src == FS_EXEC_FS)
+		return fs_load_exec(dst, resolved, info);
+
+	return 1;
 
 }
 

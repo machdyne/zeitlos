@@ -41,6 +41,11 @@ than raw register writes -- `z_fb_hw_fill_rect()` and
 | 0xD0000030 | BLIT_SRC_ADDR | Copy mode: source address (see "Copy modes") |
 | 0xD0000034 | BLIT_SRC_STRIDE | Copy mode: source row pitch in bytes |
 | 0xD0000038 | BLIT_SRC_SHIFT | Copy mode: window bit offset + prime flag |
+| 0xD000003C | BLIT_SRC_B_ADDR | Copy mode: second source (masked sprite) |
+| 0xD0000050 | BLIT_CLIP_X0 | Scissor left edge, inclusive |
+| 0xD0000054 | BLIT_CLIP_Y0 | Scissor top edge, inclusive |
+| 0xD0000058 | BLIT_CLIP_X1 | Scissor right edge, exclusive |
+| 0xD000005C | BLIT_CLIP_Y1 | Scissor bottom edge, exclusive |
 
 Note there is **no BLIT_SRC_X / BLIT_SRC_Y**. Earlier revisions of this
 document listed them at 0xD000001C and 0xD0000020; those addresses were
@@ -48,9 +53,15 @@ reassigned to the glyph path (`BLIT_GLYPH_ADDR` / `BLIT_GLYPH_W`) and the
 registers no longer exist. The source rectangle's position is folded into
 `BLIT_SRC_ADDR` and `BLIT_SRC_SHIFT` instead -- see "Copy modes".
 
-The register file is addressed by `wb_adr_i[3:0]`, so index 15
-(0xD000003C) is the last one available. Anything further would need the
-decode widened.
+The register file is addressed by `wb_adr_i[4:0]`, so indices 0..31
+(0xD0000000..0xD000007C) are available. Indices 16..18 are a read-only
+source-debug block, which is why the scissor starts at 20.
+
+The **start trigger** decodes all five bits. It used to decode only
+`[3:0]`, which aliased every address with a zero low nibble onto
+`BLIT_CTRL` -- harmless while only indices 0..15 existed, and a live
+bug the moment index 16 was added, since writing a scissor register
+would have fired a blit.
 
 ## Control Register (BLIT_CTRL)
 
@@ -58,7 +69,7 @@ decode widened.
 |-----|------|-------------|
 | 0 | START | Start operation (write 1 to begin) |
 | 1 | FILL | Operation mode (0=copy, 1=fill) -- ignored in glyph mode |
-| 2 | CLIP | Clipping enable (0=disabled, 1=enabled) -- ignored in glyph mode |
+| 2 | CLIP | Clipping enable (0=disabled, 1=enabled) -- honoured in glyph mode too |
 | 3 | GLYPH | 0=normal fill/copy, 1=glyph blit mode |
 | 4 | SRCMEM | Copy mode source: 0=VRAM, 1=main memory. Ignored unless FILL=0 and GLYPH=0 |
 
@@ -179,11 +190,24 @@ pixel (a true text-cell fill, not a transparent overlay) -- see
 `BLIT_GLYPH_ADDR`/`_W`/`_H`/`FG_COLOR`/`BG_COLOR` in the memory map
 above.
 
-Glyph mode is unclipped by design -- the caller is responsible for
-only triggering it for glyphs that are already fully on-screen (and
-within any window clip rect), falling back to software rendering
-otherwise. This keeps the hardware path simple at the cost of pushing
-that one piece of judgment into the C driver.
+Glyph mode HONOURS the scissor when `CTRL_CLIP` is set (see "The
+scissor"). A glyph the scissor cuts through is rendered partially, in
+hardware -- vertically by skipping the rows outside it, horizontally
+by masking the cell. There is no longer any need to fall back to
+software for glyphs at a window edge.
+
+The **cell** is clipped, not only the glyph bits. Glyph mode paints a
+solid cell -- foreground where the bit is set, background everywhere
+else -- so clipping only the bits would still let the background erase
+pixels outside the scissor. For a partially occluded terminal that
+would mean erasing the window in front of it in the shape of its own
+text, which is worse than not clipping at all.
+
+Without `CTRL_CLIP`, glyph mode is unclipped as it always was, and the
+caller is responsible for only triggering it for glyphs already fully
+on-screen. With `CTRL_CLIP` set there is no such restriction and no
+software fallback is needed -- which is what makes a partially
+occluded terminal render its edge characters in hardware.
 
 ### Copying a bitmap from main memory
 
@@ -423,10 +447,69 @@ that hardware does not have.
 
 ## Clipping Behavior
 
+### The scissor
+
+`CTRL_CLIP` clips against a **scissor rectangle**, held in registers
+20..23 (`gpu_blit_clip_x0/y0/x1/y1`, `sw/common/zeitlos.h`). It is
+half-open: `[x0,x1) x [y0,y1)`.
+
+The scissor resets to the full screen, `0,0..640,480`, so a caller
+that never writes it sees exactly the behaviour this block had before
+the scissor existed. `CTRL_CLIP` still means "clip"; it now clips to
+something you can choose.
+
+This is what lets a window's drawing be confined to the part of it
+that is actually visible, rather than every app painting over the
+windows in front of it. See `docs/window_manager.md`, "content
+z-order".
+
+Two things worth knowing:
+
+- The registers are **11 bits**. Wider values are truncated, not
+  rejected -- a coordinate the hardware cannot represent must not
+  reach the bus, for the reasons under "Important" below.
+- A rectangle lying **entirely outside** the scissor draws nothing and
+  returns to idle. That case is tested by ordering (`final_x >=
+  final_x_end`), not by a zero width, because the width is an unsigned
+  subtraction that wraps: clamping the left edge up past a right edge
+  that was clamped down yields a huge span, not zero, and the engine
+  would walk it into a bus address that never acks.
+
+Registers 16..18 are the read-only source-debug block, which is why
+the scissor starts at 20.
+
+### Copy and the scissor
+
+Fills and glyphs clip freely. **Copy modes have one restriction**, and
+software must respect it.
+
+The copy source is aligned to the destination **word**, not to
+`dst_x`: the shifter assembles destination word *k* from source words
+*k-1* and *k*. So a scissor that merely narrows the mask inside a word
+costs the source nothing and works correctly.
+
+A scissor that pushes the first written word **later** than the one
+the caller computed `BLIT_SRC_ADDR` for does not. The engine still
+starts reading at the address it was given, so the copy is fed the
+wrong source words and lands as a shifted or blank image. Fixing that
+means advancing the source *and* re-priming the shifter, which is not
+done today.
+
+**What software must do:** before issuing a copy, clip the destination
+rectangle to the scissor yourself at word granularity -- round the
+left edge down to a 32-pixel boundary -- or split the copy at the
+boundary. `rtl/gpu/bench/tb_clip.v` asserts the current behaviour, so
+this section stops being true the moment someone fixes the priming
+path and that test starts failing.
+
+This could not arise before the scissor existed: the left edge was
+never clamped up, only the right edge clamped down, and clamping the
+far edge cannot move the near one.
+
 ### Automatic Clipping
 
 When `CTRL_CLIP` is enabled, the blitter automatically:
-- Clips rectangles to screen boundaries (0,0 to 639,479)
+- Clips rectangles to the scissor (the full screen unless set otherwise)
 - Handles negative coordinates safely
 - Prevents buffer overruns
 - Uses pixel-level masks for partial word operations

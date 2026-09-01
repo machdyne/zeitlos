@@ -68,6 +68,11 @@ Three things are worth reading carefully:
   answer: `wm`, `net` and `term` are core apps that live in the flash
   archive, not on the card. FatFs read the root directory
   successfully. The filesystem was working.
+
+  (This transcript predates the `apps/` search path. An equivalent
+  trace today shows **two** `FR_NO_FILE` per app rather than one --
+  the root, then `apps/` -- before the flash archive answers. Same
+  meaning, twice the lines. See `docs/flash_apps.md`.)
 - Then it flips to `FR_DISK_ERR` and never recovers. The card was not
   slow to start; it was **broken mid-boot**.
 
@@ -378,4 +383,5 @@ Two signals worth recognising in a boot log:
 - `sw/os/fs/fatfs/sdmm.c` -- the hardware SPI backend and its timeouts
 - `sw/common/zfs.h` -- the chunked I/O API and why the handle table exists
 - `docs/boot.md` -- boot sequence and where the card is brought up
-- `docs/flash_apps.md` -- the flash archive that core apps resolve from
+- `docs/flash_apps.md` -- the flash archive that core apps resolve
+  from, and the root/`apps/`/flash search path used to find them
