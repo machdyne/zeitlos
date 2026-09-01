@@ -472,10 +472,12 @@
 `define UART0
 `define UART1
 `define USB_HID
-// Pointer sensitivity: divide mouse deltas by four. An ordinary modern
-// mouse reports around 1600 counts per inch, which at 1:1 crosses this
-// 640-pixel screen on a nudge. See usb_hid_wb's SENS_SHIFT.
-`define USB_HID_SENS_SHIFT 2
+// Pointer sensitivity: divide mouse deltas by 32. Modern mice report
+// thousands of counts per inch -- enough that at 1:1 a nudge crosses
+// this 640-pixel screen, and enough that hand tremor while moving
+// sideways shows up as tens of pixels of vertical wander. Lower this
+// for a mouse that reports fewer counts. See usb_hid_wb's SENS_SHIFT.
+`define USB_HID_SENS_SHIFT 3
 `define SPI_SDCARD
 `define ESP32_LINK
 

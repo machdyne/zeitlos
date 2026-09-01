@@ -132,6 +132,32 @@ in10lp:
 ; ---- send ACK
 	jmp sendack
 	hiz
+
+; ---- HID Set_Protocol(0): put the interface into BOOT protocol.
+;
+; Without this a device that merely SUPPORTS boot (bInterfaceSubClass
+; 1, which is what this firmware checks for above) keeps reporting in
+; its own report-protocol layout, and the fixed offsets this firmware
+; reads -- byte 1 dx, byte 2 dy -- land on whatever that layout put
+; there. A mouse packing 12-bit deltas, for instance, puts dy's low
+; nibble and dx's high nibble in byte 2, so vertical movement arrives
+; multiplied by 16 and horizontal movement bleeds into it.
+;
+; The status stage retries on NAK like every other transfer here.
+; (Branch range, since it is easy to get wrong from the encoding alone:
+; asukp.py emits label>>2, so a conditional branch reaches 0x3fc and a
+; jmp 0x3ffc -- the whole ROM, several times over.)
+	jmp  setprotocol
+	hiz
+	jmp  rcvdt
+spstatus:
+	jmp  in10
+	hiz
+	jmp  rcvdt
+	bnak spstatus
+	jmp  sendack
+	hiz
+
 	toggle
 	jmp  cstart
 
@@ -276,6 +302,28 @@ setconfig1:			; set active configuration of device 1 to 1 (default config)
 	outb 0x00
 	outb 0x27
 	outb 0x25
+	out4 0x03
+	ret
+
+setprotocol:		; HID Set_Protocol(0) -- boot -- on interface 0
+	outb 0x80
+	outb 0x2d
+	outb 0x01		; ADDR:ENDP = 1:0
+	outb 0xe8		; + CRC5
+	out4 0x03
+
+	outb 0x80
+	outb 0xc3		; PID=DATA0
+	outb 0x21		; bmRequestType: host->device, class, interface
+	outb 0x0b		; bRequest = SET_PROTOCOL
+	outb 0x00		; wValue = 0: boot protocol
+	outb 0x00
+	outb 0x00		; wIndex = interface 0
+	outb 0x00
+	outb 0x00		; wLength = 0
+	outb 0x00
+	outb 0xc6		; CRC16
+	outb 0xe0
 	out4 0x03
 	ret
 
