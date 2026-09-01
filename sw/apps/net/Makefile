@@ -50,7 +50,7 @@ LDSCRIPT = ../../common/riscv-app.ld
 # once instead of per target, and net can ship on the sdcard image
 # again (a card copy shadows the flash copy, so a single card image
 # used to be unable to carry it).
-PHY_OBJ = enc28j60.o rmii_eth.o net_phy.o
+PHY_OBJ = enc28j60.o rmii_eth.o esp32link.o net_phy.o
 
 # DHCP (dhcp.c) on by default; set NET_DHCP=0 to disable it entirely
 # and always use the static NET_STATIC_* config below -- e.g. for a
@@ -178,7 +178,7 @@ endif
 # zrtc.o rides with ntp.o rather than being listed separately: it is
 # the calendar arithmetic ntp.c uses to print the time it just set, and
 # nothing else in this app has any use for a date.
-OBJS = zeitlos.o zobj.o zstream.o zport.o zrng.o $(PHY_OBJ) eth.o arp.o ip.o udp.o $(DHCP_OBJ) dns.o $(NTP_OBJ) tcp.o telnet.o $(SSH_OBJ) tftp.o net.o
+OBJS = zeitlos.o zobj.o zstream.o zport.o zrng.o zfsapp.o netcfg.o $(PHY_OBJ) eth.o arp.o ip.o udp.o $(DHCP_OBJ) dns.o $(NTP_OBJ) tcp.o telnet.o $(SSH_OBJ) tftp.o net.o
 
 net: net.elf net.bin
 
@@ -232,7 +232,16 @@ enc28j60.o: enc28j60.c enc28j60.h
 rmii_eth.o: rmii_eth.c rmii_eth.h
 	$(CC) $(CFLAGS) -c rmii_eth.c -o rmii_eth.o
 
-net_phy.o: net_phy.c net_phy.h enc28j60.h rmii_eth.h ../../common/zsoc.h
+esp32link.o: esp32link.c esp32link.h znic.h netcfg.h
+	$(CC) $(CFLAGS) -c esp32link.c -o esp32link.o
+
+netcfg.o: netcfg.c netcfg.h ../../common/zfsapp.h
+	$(CC) $(CFLAGS) -c netcfg.c -o netcfg.o
+
+zfsapp.o: ../../common/zfsapp.c ../../common/zfsapp.h
+	$(CC) $(CFLAGS) -c ../../common/zfsapp.c -o zfsapp.o
+
+net_phy.o: net_phy.c net_phy.h enc28j60.h rmii_eth.h esp32link.h ../../common/zsoc.h
 	$(CC) $(CFLAGS) -c net_phy.c -o net_phy.o
 
 eth.o: eth.c eth.h net_phy.h
@@ -301,7 +310,7 @@ telnet.o: telnet.c telnet.h tcp.h
 tftp.o: tftp.c tftp.h
 	$(CC) $(CFLAGS) -c tftp.c -o tftp.o
 
-net.o: net.c net_phy.h ssh/ssh.h ../../common/znet.h .net_config_selected ../../common/zsoc.h ../../common/zntp.h dhcp.h dns.h ntp.h
+net.o: net.c net_phy.h netcfg.h ssh/ssh.h ../../common/znet.h .net_config_selected ../../common/zsoc.h ../../common/zntp.h dhcp.h dns.h ntp.h
 	$(CC) $(CFLAGS) -c net.c -S -o net.asm
 	$(CC) $(CFLAGS) -c net.c -o net.o
 

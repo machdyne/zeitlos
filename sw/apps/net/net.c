@@ -116,6 +116,7 @@
 #include "tcp.h"
 #include "../../common/zrng.h"
 #include "telnet.h"
+#include "netcfg.h"
 #if SSH_ENABLE
 #include "ssh/ssh.h"
 #endif
@@ -940,11 +941,26 @@ int main(void) {
 
 	printf("net: initializing %s...\n", NET_PHY_NAME);
 
+	netcfg_t cfg;
+	if (netcfg_load(&cfg) != 0) {
+		printf("net: NET.CFG parse error\n");
+		return 1;
+	}
+	if (cfg.has_file)
+		printf("net: loaded NET.CFG%s ssid='%s'\n",
+			cfg.has_wifi ? " (wifi)" : "", cfg.ssid);
+
 	if (!phy_init(our_mac)) {
 		printf("net: phy_init (%s) failed -- see that driver's header comment "
 			"for what to check first.\n", NET_PHY_NAME);
 		return 1;
 	}
+
+	// A wireless backend associates from the main loop below rather
+	// than here, so wm keeps being scheduled while it happens (an
+	// association takes seconds). Wired backends have no poll_wifi.
+	if (net_phy->poll_wifi && cfg.has_wifi)
+		printf("net: wifi STA '%s' deferred to main loop\n", cfg.ssid);
 
 	phy_debug_dump();
 	printf("net: mac %02x:%02x:%02x:%02x:%02x:%02x\n",
@@ -965,14 +981,24 @@ int main(void) {
 	uint32_t use_ip, use_netmask, use_gateway, use_dns = 0;
 
 #if NET_DHCP
-	if (dhcp_acquire(our_mac, &use_ip, &use_netmask, &use_gateway, &use_dns)) {
-		printf("net: using dhcp-assigned address\n");
+	int want_dhcp = NET_DHCP;
+	if (cfg.dhcp != -1)
+		want_dhcp = cfg.dhcp;
+	if (want_dhcp) {
+		if (dhcp_acquire(our_mac, &use_ip, &use_netmask, &use_gateway, &use_dns)) {
+			printf("net: using dhcp-assigned address\n");
+		} else {
+			printf("net: dhcp unavailable, falling back to static "
+				"config (see this file's header comment)\n");
+			use_ip = cfg.ip ? cfg.ip : OUR_IP;
+			use_netmask = cfg.mask ? cfg.mask : OUR_NETMASK;
+			use_gateway = cfg.gw ? cfg.gw : OUR_GATEWAY;
+		}
 	} else {
-		printf("net: dhcp unavailable, falling back to static "
-			"config (see this file's header comment)\n");
-		use_ip = OUR_IP;
-		use_netmask = OUR_NETMASK;
-		use_gateway = OUR_GATEWAY;
+		printf("net: dhcp=0 in NET.CFG, using static config\n");
+		use_ip = cfg.ip ? cfg.ip : OUR_IP;
+		use_netmask = cfg.mask ? cfg.mask : OUR_NETMASK;
+		use_gateway = cfg.gw ? cfg.gw : OUR_GATEWAY;
 	}
 #else
 	// DHCP compiled out entirely (`make NET_DHCP=0`) -- not even
@@ -981,16 +1007,17 @@ int main(void) {
 	// there's no dhcp_acquire() to call here at all.
 	printf("net: dhcp disabled at build time (NET_DHCP=0), using "
 		"static config\n");
-	use_ip = OUR_IP;
-	use_netmask = OUR_NETMASK;
-	use_gateway = OUR_GATEWAY;
+	use_ip = cfg.ip ? cfg.ip : OUR_IP;
+	use_netmask = cfg.mask ? cfg.mask : OUR_NETMASK;
+	use_gateway = cfg.gw ? cfg.gw : OUR_GATEWAY;
 #endif
 
 	// NET_STATIC_DNS is a standing override, not a DHCP-failure
 	// fallback -- see this file's own comment on OUR_DNS above. If
 	// it's unset (0), whatever DHCP provided (possibly also 0, i.e.
 	// none) is used as-is.
-	if (OUR_DNS) use_dns = OUR_DNS;
+	if (cfg.dns) use_dns = cfg.dns;
+	else if (OUR_DNS) use_dns = OUR_DNS;
 	dns_set_nameserver(use_dns);
 
 	arp_init(use_ip);
@@ -1041,6 +1068,9 @@ int main(void) {
 #endif
 
 	while (1) {
+
+		if (net_phy->poll_wifi && cfg.has_wifi)
+			net_phy->poll_wifi(cfg.ssid, cfg.psk);
 
 		eth_poll();
 

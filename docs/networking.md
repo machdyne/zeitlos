@@ -206,3 +206,9 @@ what makes it ROBUST. Both is the right answer, and 732 cheap wakes a
 second is what this did before the interrupt existed. That was never
 what made a foreground app slow — three spinning processes were, and
 those are fixed by blocking rather than by waiting longer.
+
+A third backend exists for the ULX3S, which has neither an SPI
+Ethernet PMOD nor an RMII PHY: its onboard ESP32 acts as the network
+interface over UART1 (`esp32link.c`, selected by the same runtime
+probe). See [esp32link.md](esp32link.md).
+

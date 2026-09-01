@@ -22,6 +22,7 @@ RTL_PICO = \
 	rtl/ethmac_rmii.v \
 	rtl/debug.v \
 	rtl/csrs.v \
+	rtl/esp32_rxfifo.v \
 	rtl/socctl.v \
 	rtl/rtc.v \
 	rtl/trng.v \
@@ -54,6 +55,10 @@ RTL_PICO = \
 ifndef CABLE
 	CABLE = dirtyJtag
 endif
+
+# RISC-V prefix forwarded to sw/bios and sw/os. Override for a
+# multi-lib gcc, e.g. PREFIX=/opt/riscv/bin/riscv64-unknown-elf-
+PREFIX ?= /opt/riscv32i/bin/riscv32-unknown-elf-
 
 # Extra defines handed to the synthesis tool, on top of the
 # -DBOARD_<X> and -D<FAMILY> the recipes below always pass.
@@ -246,12 +251,22 @@ else ifeq ($(BOARD), sergei_ml1)
 	FLASH_OFFSET = -o
 else ifeq ($(BOARD), ulx3s)
 	FAMILY = ecp5
-	DEVICE = 25k
+	# Same 12/25/45/85K PCB and LPF. Default matches upstream (25k);
+	# this workspace's board is 85K: make BOARD=ulx3s DEVICE=85k
+	DEVICE ?= 25k
 	PACKAGE = CABGA381
 	LPF = ulx3s.lpf
-	PROG = openFPGALoader -c $(CABLE)
-	FLASH = openFPGALoader -v -c $(CABLE) -f
-	FLASH_OFFSET = -o
+	PROG = openFPGALoader -b ulx3s
+	FLASH = openFPGALoader -v -b ulx3s -f
+		# Placement seed. This design sits close to 48MHz on the 85F, and
+	# which seed meets it is luck: the spread across seeds is roughly
+	# 45-50MHz, and nextpnr's default is among the ones that miss. A
+	# bitstream that misses timing programs fine and then misbehaves
+	# intermittently, so a seed known to meet it is pinned here.
+	# Re-check after any RTL or pin change (`make ... timing`), and
+	# override with PNR_SEED= on the command line.
+	PNR_SEED ?= 10
+FLASH_OFFSET = -o
 else ifeq ($(BOARD), lebkuchen)
 	FAMILY = gatemate
 	DEVICE = ccgma1
@@ -326,6 +341,7 @@ zeitlos_ecp5_pico:
 		--report $(OUTDIR)/report.txt \
 		--textcfg $(OUTDIR)/soc.config \
 		-l $(PNR_LOG) \
+		$(if $(PNR_SEED),--seed $(PNR_SEED),) \
 		--timing-allow-fail --ignore-loops
 	@$(MAKE) --no-print-directory timing
 
@@ -338,7 +354,7 @@ zeitlos_gatemate_pico:
 	$(PACK) $(OUTDIR)/soc.txt $(OUTDIR)/soc.bit
 
 bios:
-	cd sw/bios && make BOARD=$(BOARD_UC) FAMILY=$(FAMILY_UC)
+	cd sw/bios && make BOARD=$(BOARD_UC) FAMILY=$(FAMILY_UC) PREFIX=$(PREFIX)
 
 ifeq ($(FAMILY), ice40)
 soc:
@@ -487,10 +503,10 @@ dev-flash: dev flash_os flash_apps
 flash: zeitlos flash_soc flash_os flash_logo flash_apps
 
 os:
-	cd sw/os && make
+	cd sw/os && make PREFIX=$(PREFIX)
 
 apps:
-	cd sw/apps && make
+	cd sw/apps && make PREFIX=$(PREFIX)
 
 # Publish every built app to a TFTP root, so a running machine can pull
 # the latest builds with `tget` instead of `xf` over the serial link.

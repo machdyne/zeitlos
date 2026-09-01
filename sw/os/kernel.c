@@ -999,7 +999,6 @@ void k_proc_unblock(uint32_t pid) {
 // syscall path to do the full save/switch dance the KTIMER path does;
 // that's a worthwhile follow-up, not a correctness issue.
 z_obj_t *k_proc_wait(z_obj_t *args) {
-
 	uint32_t timeout = (args->type == Z_UINT32) ? args->val.uint32 : 0;
 
 	// THE TEST AND THE BLOCK MUST BE ATOMIC TOGETHER.
@@ -1071,13 +1070,11 @@ z_obj_t *k_proc_wait(z_obj_t *args) {
 	} else {
 		z_procs[z_pid].wake_tick = 0;
 	}
-
 	z_procs[z_pid].flags |= Z_PROC_FLAG_BLOCKED;
 
 	maskirq(old_mask);
 
 	return (&z_ok);
-
 }
 
 // Processes that could actually be given a timeslice right now, as
@@ -1281,10 +1278,11 @@ z_rv k_proc_dump(void) {
 		// percentage -- `ps` is a snapshot and has no second sample
 		// to difference against. sw/apps/info takes two and reports
 		// a real percentage; see z_proc_info_t in zproc.h.
-		printf(" pid: %2i %s base: %.8lx size: %.8lx pc %.8lx sp: %.8lx flags: %.8lx cpu: %lu\n",
+		printf(" pid: %2i %s base: %.8lx size: %.8lx pc %.8lx sp: %.8lx flags: %.8lx cpu: %lu wake: %lu now: %lu\n",
 			i, state, z_procs[i].base, z_procs[i].size,
 			z_procs[i].regs[0], z_procs[i].regs[2], z_procs[i].flags,
-			(unsigned long)z_procs[i].cpu_ticks);
+			(unsigned long)z_procs[i].cpu_ticks,
+			(unsigned long)z_procs[i].wake_tick, (unsigned long)z_kernel_ticks);
 	}
 	return Z_OK;
 }

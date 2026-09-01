@@ -60,6 +60,7 @@
 
 #include "enc28j60.h"
 #include "rmii_eth.h"
+#include "esp32link.h"
 
 typedef struct {
 	const char *name;
@@ -67,6 +68,11 @@ typedef struct {
 	uint16_t (*recv)(uint8_t *buf, uint16_t maxlen);
 	bool (*send)(const uint8_t *buf, uint16_t len);
 	void (*debug_dump)(void);
+	// Optional, NULL on the wired backends. The ULX3S link is a WiFi
+	// station: it needs credentials (NET.CFG, netcfg.h) and drives the
+	// association from net's main loop rather than blocking phy_init(),
+	// so that wm keeps being scheduled while it happens.
+	void (*poll_wifi)(const char *ssid, const char *psk);
 } net_phy_t;
 
 // The active driver. NULL until net_phy_select() has run, which

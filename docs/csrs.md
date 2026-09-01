@@ -87,6 +87,7 @@ the software side in `sw/common/zsoc.h`'s `Z_FEATURE_*` constants.
 | 7 | `GPU_RASTER` | 17 | `ETH_RMII` |
 | 8 | `GPU_BLIT` | 18 | `LED_RGB` |
 | 9 | `GPU_CURSOR` | 19 | `LED_DEBUG` |
+| 25 | `ESP32_LINK` | | ULX3S: UART1 + ESP32 control + rx fifo (moved from 20) |
 
 There's no single source shared between the Verilog and C sides here
 -- both have to be hand-edited together and kept in sync deliberately

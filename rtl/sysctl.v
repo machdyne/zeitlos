@@ -123,6 +123,11 @@ module sysctl #()
    input UART0_RX,
 `endif
 
+`ifdef UART1
+	output UART1_TX,
+	input UART1_RX,
+`endif
+
 `ifdef LED_DEBUG
 	output [7:0] DBG,
 `endif
@@ -251,6 +256,23 @@ module sysctl #()
 `ifndef FPGA_ECP5
    output CSPI_SCK,
 `endif
+`endif
+
+`ifdef BOARD_ULX3S
+	output wifi_en,
+	output wifi_gpio0,
+	output flash_holdn,
+	output flash_wpn,
+	output LED1,
+	output LED2,
+	// US2 host pull control: 0 = 15 kΩ pulldown on D+/D- (usb_hid_host)
+	output usb_fpga_pu_dp,
+	output usb_fpga_pu_dn,
+	// SPI 1-bit SD: DAT1/DAT2 must sit high. They were only in the
+	// LPF (no net), so ECP5 default pulldown held them low and many
+	// cards never left FR_NOT_READY.
+	output SD_DAT1,
+	output SD_DAT2,
 `endif
 
 );
@@ -382,6 +404,27 @@ module sysctl #()
 		else if (!sys_rstn)
 			resetn_counter <= resetn_counter + 1;
 	end
+
+`ifdef BOARD_ULX3S
+	// Hold the ESP32 in reset so it does not fight the FPGA for the
+	// SD bus (CLK/CMD/DAT are shared). Drive flash HOLD#/WP# high —
+	// those pins float to pulldown on unused ECP5 IOs and would
+	// otherwise freeze SPI reads of the kernel. LED1/LED2 are
+	// bring-up taps that do not depend on the CPU: PLL lock and
+	// released reset. LED_B (LED0) stays the debug_wb software LED.
+`ifndef ESP32_LINK
+	assign wifi_en = 1'b0;
+	assign wifi_gpio0 = 1'b0;
+`endif
+	assign flash_holdn = 1'b1;
+	assign flash_wpn = 1'b1;
+	assign LED1 = pll_locked;
+	assign LED2 = sys_rstn;
+	assign usb_fpga_pu_dp = 1'b0;
+	assign usb_fpga_pu_dn = 1'b0;
+	assign SD_DAT1 = 1'b1;
+	assign SD_DAT2 = 1'b1;
+`endif
 
 	// RTC
 	reg [15:0] rtc_ctr;	// ~732hz
@@ -588,6 +631,13 @@ module sysctl #()
 	wire [31:0] wbs_rom_dat_o;
 	wire [31:0] wbs_debug_dat_o;
 	wire [31:0] wbs_uart0_dat_o;
+`ifdef UART1
+	wire [31:0] wbs_uart1_dat_o;
+`endif
+`ifdef ESP32_LINK
+	wire [31:0] wbs_esp32ctl_dat_o;
+	wire [31:0] wbs_esp32rx_dat_o;
+`endif
 	wire [31:0] wbs_spisdcard_dat_o;
 	wire [31:0] wbs_usb0_dat_o;
 	wire [31:0] wbs_usb1_dat_o;
@@ -636,6 +686,14 @@ module sysctl #()
 	wire cs_spisdcard = ((wbm_adr & 32'hf000_0000) == 32'hb000_0000);
 `endif
 `ifdef USB_HID
+	// Pointer sensitivity (usb_hid_wb's SENS_SHIFT): boards whose
+	// mouse counts and screen pixels are of the same order leave this
+	// alone and get the historical 1:1 pointer.
+`ifdef USB_HID_SENS_SHIFT
+	localparam USB_HID_SENS = `USB_HID_SENS_SHIFT;
+`else
+	localparam USB_HID_SENS = 0;
+`endif
 	// two independent usb_hid_wb instances (port 0 / port 1, see
 	// boards/*.lpf's usb_host_dp[1:0]/usb_host_dm[1:0] -- Obst and
 	// Lakritz both break out two USB host ports). Both instances share
@@ -801,7 +859,22 @@ module sysctl #()
 	// `UART0 this window is answered by rtl/uart_null.v instead of by
 	// uart_top -- see the instantiation below for why it must be
 	// answered by SOMETHING.
+	//
+	// UART1 and the ESP32 registers (ULX3S) share nibble 0xF but sit
+	// above 0x100/0x200/0x300, so where they exist this window narrows
+	// to bits 8-9 == 0 (the same idea as USB port 0/1 using bit 5).
+	// Without them the whole-nibble decode is what every other board
+	// has always had.
+`ifdef UART1
+	wire cs_uart0 = ((wbm_adr & 32'hf000_0300) == 32'hf000_0000);
+	wire cs_uart1 = ((wbm_adr & 32'hf000_0300) == 32'hf000_0100);
+`else
 	wire cs_uart0 = ((wbm_adr & 32'hf000_0000) == 32'hf000_0000);
+`endif
+`ifdef ESP32_LINK
+	wire cs_esp32ctl = ((wbm_adr & 32'hf000_0300) == 32'hf000_0200);
+	wire cs_esp32rx = ((wbm_adr & 32'hf000_0300) == 32'hf000_0300);
+`endif
 
 	// Both muxes below are AND-OR, not priority chains. Every cs_* is
 	// one-hot by construction (distinct top nibbles; usb0/usb1 split on
@@ -835,6 +908,13 @@ module sysctl #()
 		({32{cs_debug}} & wbs_debug_dat_o) |
 `endif
 		({32{cs_uart0}} & wbs_uart0_dat_o) |
+`ifdef UART1
+		({32{cs_uart1}} & wbs_uart1_dat_o) |
+`endif
+`ifdef ESP32_LINK
+		({32{cs_esp32ctl}} & wbs_esp32ctl_dat_o) |
+		({32{cs_esp32rx}} & wbs_esp32rx_dat_o) |
+`endif
 `ifdef SPI_SDCARD
 		({32{cs_spisdcard}} & wbs_spisdcard_dat_o) |
 `endif
@@ -887,6 +967,13 @@ module sysctl #()
 	// without a UART -- and an implicit net connected to an interrupt
 	// input is not a failure anything reports.
 	wire wbs_uart0_int;
+`ifdef UART1
+	wire wbs_uart1_ack_o;
+`endif
+`ifdef ESP32_LINK
+	wire wbs_esp32ctl_ack_o;
+	wire wbs_esp32rx_ack_o;
+`endif
 	wire wbs_spisdcard_ack_o;
 	wire wbs_usb0_ack_o;
 	wire wbs_usb1_ack_o;
@@ -944,6 +1031,13 @@ module sysctl #()
 		(cs_debug & wbs_debug_ack_o) |
 `endif
 		(cs_uart0 & wbs_uart0_ack_o) |
+`ifdef UART1
+		(cs_uart1 & wbs_uart1_ack_o) |
+`endif
+`ifdef ESP32_LINK
+		(cs_esp32ctl & wbs_esp32ctl_ack_o) |
+		(cs_esp32rx & wbs_esp32rx_ack_o) |
+`endif
 `ifdef SPI_SDCARD
 		(cs_spisdcard & wbs_spisdcard_ack_o) |
 `endif
@@ -1770,6 +1864,82 @@ module sysctl #()
 	);
 `endif
 
+	// WISHBONE SLAVE: UART1 (ESP32 data plane on ULX3S GPIO16/17)
+`ifdef UART1
+	wire wbs_uart1_int;
+	wire wbm_cyc_uart1 = cs_uart1 && wbm_cyc;
+	wire wbm_stb_uart1 = cs_uart1 && wbm_stb;
+
+	uart_top #() wbs_uart1_i
+	(
+		.wb_clk_i(wbm_clk),
+		.wb_rst_i(wbm_rst),
+		.wb_adr_i(wbm_adr_sel_word),
+		.wb_dat_i(wbm_dat_o),
+		.wb_dat_o(wbs_uart1_dat_o),
+		.wb_we_i(wbm_we),
+		.wb_sel_i(wbm_sel),
+		.wb_stb_i(wbm_stb_uart1),
+		.wb_ack_o(wbs_uart1_ack_o),
+		.wb_cyc_i(wbm_cyc_uart1),
+		.stx_pad_o(UART1_TX),
+		.srx_pad_i(UART1_RX),
+		.cts_pad_i(1'b1),
+		.dsr_pad_i(1'b1),
+		.ri_pad_i(1'b1),
+		.dcd_pad_i(1'b1),
+		.int_o(wbs_uart1_int)
+	);
+`endif
+
+	// ESP32 EN / GPIO0 -- software-controlled reset. Default held in
+	// reset (en=0) so the module does not fight the SD bus at boot.
+`ifdef ESP32_LINK
+	reg wifi_en_r;
+	reg wifi_gpio0_r;
+	assign wifi_en = wifi_en_r;
+	assign wifi_gpio0 = wifi_gpio0_r;
+
+	reg [31:0] esp32ctl_dat;
+	reg esp32ctl_ack;
+	assign wbs_esp32ctl_dat_o = esp32ctl_dat;
+	assign wbs_esp32ctl_ack_o = esp32ctl_ack;
+
+	wire wbm_cyc_esp32ctl = cs_esp32ctl && wbm_cyc;
+
+	always @(posedge wbm_clk) begin
+		esp32ctl_ack <= 0;
+		if (wbm_rst) begin
+			wifi_en_r <= 1'b0;
+			wifi_gpio0_r <= 1'b1;
+		end else if (wbm_cyc_esp32ctl && wbm_stb && !esp32ctl_ack) begin
+			esp32ctl_ack <= 1;
+			if (wbm_we) begin
+				wifi_en_r <= wbm_dat_o[0];
+				wifi_gpio0_r <= wbm_dat_o[1];
+			end else begin
+				esp32ctl_dat <= {30'b0, wifi_gpio0_r, wifi_en_r};
+			end
+		end
+	end
+
+	// 2 KiB block-RAM receive FIFO on the same UART1 RX pin (see
+	// rtl/esp32_rxfifo.v): the 16550's 16 bytes are not enough for a
+	// polled, time-sliced reader at 1 Mbaud.
+	esp32_rxfifo #(.CLK_PER_BIT(48), .DEPTH_BITS(11)) wbs_esp32rx_i (
+		.clk(wbm_clk),
+		.rst(wbm_rst),
+		.rx(UART1_RX),
+		.wb_adr_i(wbm_adr),
+		.wb_dat_i(wbm_dat_o),
+		.wb_dat_o(wbs_esp32rx_dat_o),
+		.wb_we_i(wbm_we),
+		.wb_stb_i(wbm_stb && cs_esp32rx),
+		.wb_cyc_i(wbm_cyc && cs_esp32rx),
+		.wb_ack_o(wbs_esp32rx_ack_o)
+	);
+`endif
+
 	// WISHBONE SLAVE: HARDWARE SPI MASTER FOR SDCARD
 `ifdef SPI_SDCARD
 	wire wbm_cyc_spisdcard = cs_spisdcard && wbm_cyc;
@@ -2183,7 +2353,11 @@ module sysctl #()
 	wire [1:0] wbs_usb0_typ;
 	wire [9:0] wbs_usb0_curs_x, wbs_usb0_curs_y;
 
-	usb_hid_wb #() wbs_usb0_i
+	// Port 0: Obst/Lakritz onboard USB; ULX3S maps this to US2
+	// (see boards/ulx3s.lpf). Port 1 is the second physical socket
+	// (J1 on ULX3S, for an optional Dual USB Host PMOD).
+
+	usb_hid_wb #(.SENS_SHIFT(USB_HID_SENS)) wbs_usb0_i
 	(
 		.wb_clk_i(wbm_clk),
 		.wb_rst_i(wbm_rst),
@@ -2217,7 +2391,7 @@ module sysctl #()
 	wire [1:0] wbs_usb1_typ;
 	wire [9:0] wbs_usb1_curs_x, wbs_usb1_curs_y;
 
-	usb_hid_wb #() wbs_usb1_i
+	usb_hid_wb #(.SENS_SHIFT(USB_HID_SENS)) wbs_usb1_i
 	(
 		.wb_clk_i(wbm_clk),
 		.wb_rst_i(wbm_rst),

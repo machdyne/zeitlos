@@ -42,8 +42,9 @@ char *fs_mallocfile(char *filename) {
 	int sz = fs_size(filename);
 	if (sz <= 0) return NULL;
 
-	char *buf = malloc((size_t)sz);
+	char *buf = malloc((size_t)sz + 1);
 	if (!buf) return NULL;
+	buf[sz] = 0;
 
 	z_fs_read_args_t args;
 	args.name = filename;

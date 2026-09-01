@@ -26,6 +26,11 @@
 #define TFTP_SERVER_PORT   69
 #define TFTP_BLOCK_SIZE    512
 #define TFTP_TIMEOUT_TICKS 366	// ~0.5s at the ~732Hz tick rate (see z_uptime_ticks())
+// GET, before the first DATA block: the server may have to produce the
+// file first (the ESP32 gateway fetches http(s):// names on demand --
+// a TLS handshake plus a redirect is ~6 s), so the RRQ is retried
+// every ~4 s instead, same retry count: ~20 s of patience in total.
+#define TFTP_FIRST_TIMEOUT_TICKS (4 * 732)
 #define TFTP_MAX_RETRIES   5
 
 typedef enum { T_IDLE, T_GET, T_PUT, T_DONE_OK, T_DONE_ERR } tstate_t;
@@ -77,6 +82,7 @@ static uint32_t buf_len;	// total bytes transferred so far (GET: received, PUT: 
 static uint16_t last_chunk_len;	// PUT only: length of the most recently SENT block
 static uint32_t last_tx_ticks;
 static uint8_t retries;
+static bool got_first;	// GET: first DATA block seen (see TFTP_FIRST_TIMEOUT_TICKS)
 static uint8_t last_pkt[4 + TFTP_BLOCK_SIZE];
 static uint16_t last_pkt_len;
 static char err_msg[64];
@@ -314,6 +320,7 @@ static void handle_packet(uint32_t src_ip, uint16_t src_port, const uint8_t *p, 
 			held_len = dlen;
 			held_valid = true;
 			retries = 0;
+			got_first = true;
 
 			try_deliver_get();	// may satisfy immediately if a pull is already pending
 
@@ -360,6 +367,7 @@ bool tftp_get_start(uint32_t server_ip, const char *filename,
 	buf_len = 0;
 	block = 0;
 	retries = 0;
+	got_first = false;
 	pull_pending = false;
 	held_valid = false;
 
@@ -541,7 +549,9 @@ tftp_result_t tftp_poll(uint32_t *out_len, char *err_out, uint32_t err_out_len) 
 			fail("timed out waiting for data to send");
 		}
 	} else if (state == T_GET || state == T_PUT) {
-		if (z_uptime_ticks() - last_tx_ticks >= TFTP_TIMEOUT_TICKS) {
+		uint32_t tmo = (state == T_GET && !got_first)
+			? TFTP_FIRST_TIMEOUT_TICKS : TFTP_TIMEOUT_TICKS;
+		if (z_uptime_ticks() - last_tx_ticks >= tmo) {
 			retries++;
 			if (retries > TFTP_MAX_RETRIES) {
 				printf("net: tftp giving up after %d retries\n", TFTP_MAX_RETRIES);

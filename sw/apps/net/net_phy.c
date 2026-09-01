@@ -22,6 +22,16 @@ static const net_phy_t phy_enc28j60 = {
 	enc28j60_recv,
 	enc28j60_send,
 	enc28j60_debug_dump,
+	0,
+};
+
+static const net_phy_t phy_esp32link = {
+	"esp32link",
+	esp32link_init,
+	esp32link_recv,
+	esp32link_send,
+	esp32link_debug_dump,
+	esp32link_poll_wifi,
 };
 
 static const net_phy_t phy_rmii = {
@@ -30,6 +40,7 @@ static const net_phy_t phy_rmii = {
 	rmii_eth_recv,
 	rmii_eth_send,
 	rmii_eth_debug_dump,
+	0,
 };
 
 const net_phy_t *net_phy = 0;
@@ -39,7 +50,9 @@ const net_phy_t *net_phy_select(void)
 	// Positive detection first. rtl/csrs.vh mirrors rtl/boards.vh's
 	// own `ifdefs bit for bit, so these two bits are exactly "was
 	// this SOC built with that MAC".
-	if (z_soc_has_feature(Z_FEATURE_ETH_RMII))
+	if (z_soc_has_feature(Z_FEATURE_ESP32_LINK))
+		net_phy = &phy_esp32link;
+	else if (z_soc_has_feature(Z_FEATURE_ETH_RMII))
 		net_phy = &phy_rmii;
 	else if (z_soc_has_feature(Z_FEATURE_SPI_ETH))
 		net_phy = &phy_enc28j60;

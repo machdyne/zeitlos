@@ -33,6 +33,25 @@ typedef uint32_t *(*z_kernel_ptr_t)(uint32_t, uint32_t *, uint32_t);
 #define reg_uart0_lsr (*(volatile uint8_t*)0xf0000014)
 #define reg_uart0_msr (*(volatile uint8_t*)0xf0000018)
 
+// UART1 (16550) -- same register layout as UART0, offset 0x100 so
+// existing UART0 software is unchanged. ULX3S: ESP32 UART1 on
+// GPIO16/17 (rtl/sysctl.v, docs/esp32-net.md). Not present on boards
+// without UART1; net's ESP32LINK PHY is the only caller.
+#define reg_uart1_data (*(volatile uint8_t*)0xf0000100)
+#define reg_uart1_dlbl (*(volatile uint8_t*)0xf0000100)
+#define reg_uart1_dlbh (*(volatile uint8_t*)0xf0000104)
+#define reg_uart1_ier (*(volatile uint8_t*)0xf0000104)
+#define reg_uart1_fcr (*(volatile uint8_t*)0xf0000108)
+#define reg_uart1_iir (*(volatile uint8_t*)0xf0000108)
+#define reg_uart1_lcr (*(volatile uint8_t*)0xf000010c)
+#define reg_uart1_mcr (*(volatile uint8_t*)0xf0000110)
+#define reg_uart1_lsr (*(volatile uint8_t*)0xf0000114)
+#define reg_uart1_msr (*(volatile uint8_t*)0xf0000118)
+
+// ESP32 enable/boot straps (ULX3S). Bit0 = wifi_en, bit1 = wifi_gpio0.
+// Reset value: en=0, gpio0=1 (held in reset until phy_init).
+#define reg_esp32_ctl (*(volatile uint32_t*)0xf0000200)
+
 #define reg_led (*(volatile uint32_t*)0xe0000000)
 #define reg_leds (*(volatile uint32_t*)0xe0000004)
 

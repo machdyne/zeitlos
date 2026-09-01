@@ -5,7 +5,9 @@
 Zeitlos reads keyboard and mouse input from two independent USB HID
 host ports (`rtl/usb_hid.v`'s `usb_hid_wb`, two instances in
 `rtl/sysctl.v`) -- Obst and Lakritz both break out two USB host ports
-(`boards/*.lpf`'s `usb_host_dp[1:0]`/`usb_host_dm[1:0]`), and there's
+(`boards/*.lpf`'s `usb_host_dp[1:0]`/`usb_host_dm[1:0]` -- on the
+ULX3S port 1 is a pair of header pins rather than a connector, see
+[ulx3s.md](ulx3s.md)), and there's
 no fixed port-to-device mapping: either port can be a keyboard, a
 mouse, a gamepad, or nothing at all, and software decides which is
 which at runtime, every time it needs to know.

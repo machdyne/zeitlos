@@ -3,6 +3,12 @@ BLOCK ASYNCPATHS;
 
 # ULX3S v2.x / v3.x
 # Keep Lakritz SOC port names, map them onto ULX3S pins.
+#
+# MASTER_SPI_PORT=DISABLE so the user bitstream can drive the config
+# flash via USRMCLK (MEM_ROM / kernel at 1MiB). MCCLK_FREQ matches
+# the ecppack --freq 2.4 used by the Makefile.
+
+SYSCONFIG CONFIG_IOVOLTAGE=3.3 COMPRESS_CONFIG=ON MCCLK_FREQ=2.4 MASTER_SPI_PORT=DISABLE SLAVE_SPI_PORT=DISABLE SLAVE_PARALLEL_PORT=DISABLE CONFIG_MODE=SPI_SERIAL;
 
 # ----------------------------------------------------------------------
 # Clock
@@ -14,12 +20,20 @@ IOBUF PORT "CLK_25" IO_TYPE=LVCMOS33;
 FREQUENCY PORT "CLK_25" 25.0 MHz;
 
 # ----------------------------------------------------------------------
-# LED
-# ULX3S LED0
+# LEDs
+# LED0 (LED_B) = debug_wb (software)
+# LED1         = pll_locked (no CPU)
+# LED2         = sys_rstn   (no CPU)
 # ----------------------------------------------------------------------
 
 LOCATE COMP "LED_B" SITE "B2";
-IOBUF PORT "LED_B" IO_TYPE=LVCMOS33;
+IOBUF PORT "LED_B" IO_TYPE=LVCMOS33 DRIVE=4;
+
+LOCATE COMP "LED1" SITE "C2";
+IOBUF PORT "LED1" IO_TYPE=LVCMOS33 DRIVE=4;
+
+LOCATE COMP "LED2" SITE "C1";
+IOBUF PORT "LED2" IO_TYPE=LVCMOS33 DRIVE=4;
 
 # ----------------------------------------------------------------------
 # SDRAM
@@ -116,25 +130,43 @@ LOCATE COMP "sdram_dm[1]" SITE "E20";
 IOBUF PORT "sdram_dm[1]" IO_TYPE=LVCMOS33;
 
 # ----------------------------------------------------------------------
-# Dual USB host PMOD on ULX3S J1
+# USB HID
 #
-# PMOD pin 1 = USB2_DP (bottom socket)
-# PMOD pin 2 = USB2_DN (bottom socket)
-# PMOD pin 3 = USB1_DP (top socket)
-# PMOD pin 4 = USB1_DN (top socket)
+# Port 0 = onboard US2 (usb_fpga_bd_dp/dn). Keyboard without a PMOD.
+# Port 1 = J2 GP26/GN26 (see below), for a second USB port.
+#
+# usb_fpga_pu_* = 0 enables the 15 kΩ pulldowns usb_hid_host needs.
 # ----------------------------------------------------------------------
 
-LOCATE COMP "usb_host_dp[0]" SITE "B11";
-IOBUF PORT "usb_host_dp[0]" IO_TYPE=LVCMOS33;
+LOCATE COMP "usb_host_dp[0]" SITE "D15";
+IOBUF PORT "usb_host_dp[0]" IO_TYPE=LVCMOS33 DRIVE=4;
 
-LOCATE COMP "usb_host_dm[0]" SITE "C11";
-IOBUF PORT "usb_host_dm[0]" IO_TYPE=LVCMOS33;
+LOCATE COMP "usb_host_dm[0]" SITE "E15";
+IOBUF PORT "usb_host_dm[0]" IO_TYPE=LVCMOS33 DRIVE=4;
 
-LOCATE COMP "usb_host_dp[1]" SITE "A10";
-IOBUF PORT "usb_host_dp[1]" IO_TYPE=LVCMOS33;
+LOCATE COMP "usb_fpga_pu_dp" SITE "B12";
+IOBUF PORT "usb_fpga_pu_dp" IO_TYPE=LVCMOS33 DRIVE=4;
 
-LOCATE COMP "usb_host_dm[1]" SITE "A11";
-IOBUF PORT "usb_host_dm[1]" IO_TYPE=LVCMOS33;
+LOCATE COMP "usb_fpga_pu_dn" SITE "C12";
+IOBUF PORT "usb_fpga_pu_dn" IO_TYPE=LVCMOS33 DRIVE=4;
+
+# Port 1 = J2 header, GP26/GN26 (pins 34 and 33), one connector row
+# away from GND (38) and 5V OUT (40) so a hand-made USB-A socket
+# reaches all four signals. They are the two halves of one differential
+# pair -- routed as a pair on the PCB and facing each other on the
+# header -- which is why they are the pins to use rather than two of
+# the same row.
+#
+# D+ on GP26 and D- on GN26, not the other way round: usb_hid_host
+# tells a device's speed apart by which line the device pulls high,
+# and it only speaks low speed (1.5 Mbps), where that line is D-.
+# Both lines need an external 15k pulldown to GND -- the onboard
+# usb_fpga_pu_* resistors above are US2's and do nothing here.
+LOCATE COMP "usb_host_dp[1]" SITE "B13";
+IOBUF PORT "usb_host_dp[1]" IO_TYPE=LVCMOS33 DRIVE=4;
+
+LOCATE COMP "usb_host_dm[1]" SITE "C13";
+IOBUF PORT "usb_host_dm[1]" IO_TYPE=LVCMOS33 DRIVE=4;
 
 # ----------------------------------------------------------------------
 # GPDI / HDMI
@@ -175,6 +207,12 @@ IOBUF PORT "CSPI_MISO" IO_TYPE=LVCMOS33;
 
 LOCATE COMP "CSPI_MOSI" SITE "W2";
 IOBUF PORT "CSPI_MOSI" IO_TYPE=LVCMOS33;
+
+LOCATE COMP "flash_holdn" SITE "W1";
+IOBUF PORT "flash_holdn" IO_TYPE=LVCMOS33 DRIVE=4;
+
+LOCATE COMP "flash_wpn" SITE "Y2";
+IOBUF PORT "flash_wpn" IO_TYPE=LVCMOS33 DRIVE=4;
 
 # ----------------------------------------------------------------------
 # Micro-SD
@@ -218,6 +256,23 @@ LOCATE COMP "UART0_RX" SITE "M1";
 IOBUF PORT "UART0_RX" IO_TYPE=LVCMOS33 PULLMODE=UP;
 
 # ----------------------------------------------------------------------
+# ESP32 enable / reset
+# Shared with the microSD pins — hold in reset while the FPGA owns SD.
+# ----------------------------------------------------------------------
+
+LOCATE COMP "wifi_en" SITE "F1";
+IOBUF PORT "wifi_en" IO_TYPE=LVCMOS33 DRIVE=4;
+
+LOCATE COMP "wifi_gpio0" SITE "L2";
+IOBUF PORT "wifi_gpio0" IO_TYPE=LVCMOS33 DRIVE=4;
+
+# UART1 data plane to ESP32 Serial1 (not UART0/K3/K4 -- those stay
+# for esptool). FPGA TX -> ESP32 RX (GPIO16); FPGA RX <- ESP32 TX (GPIO17).
+LOCATE COMP "UART1_TX" SITE "L1";
+IOBUF PORT "UART1_TX" IO_TYPE=LVCMOS33 PULLMODE=UP DRIVE=4;
+
+LOCATE COMP "UART1_RX" SITE "N3";
+IOBUF PORT "UART1_RX" IO_TYPE=LVCMOS33 PULLMODE=UP;
 # Digital audio output
 # ----------------------------------------------------------------------
 #

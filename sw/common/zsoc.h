@@ -206,6 +206,11 @@
 // frame rate -- 50Hz rather than 60 -- which matters to anything
 // pacing itself off z_game_wait_frame().
 #define Z_FEATURE_COMPOSITE_PAL (1u << 29)
+// ULX3S only: the onboard ESP32 as the network interface (UART1 +
+// rtl/esp32_rxfifo.v + the ESP32 control register). Highest free bit
+// deliberately -- a one-board peripheral stays out of the way of
+// anything universal that comes later. See docs/esp32link.md.
+#define Z_FEATURE_ESP32_LINK  (1u << 30)
 // -- feature table (sw/common/zsoc.c) --
 //
 // The human-readable half of the Z_FEATURE_* bits above, kept in the
