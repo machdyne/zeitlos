@@ -95,6 +95,91 @@ z_syscall_t z_syscall_table[Z_SYSCALL_COUNT] = {
 #undef Z_SYSCALL
 };
 
+// -- filesystem serialisation (see k_no_preempt in kernel.h) --
+//
+// Non-zero means "the process currently running is inside a syscall
+// that is touching FatFs; do not swap it out". Not a lock: nothing
+// ever waits on it, and it is only ever read by the KTIMER swap
+// below.
+volatile uint32_t k_no_preempt = 0;
+
+// The tick at which k_no_preempt last went 0 -> 1, and the number of
+// ticks after which the swap happens ANYWAY.
+//
+// Why a cap at all: sdmm.c's wait_ready() spins for up to 500ms and
+// rcvr_datablock() for up to 100ms before giving up. Deferring
+// preemption across one of those would freeze every process on the
+// machine for half a second, and a counter leaked by some future
+// error path would freeze it permanently. A wedged machine is worse
+// than the corruption this is preventing, so the deferral is allowed
+// to lose.
+//
+// 64 ticks is ~87ms at Z_TICK_HZ (~732Hz) -- far longer than any
+// healthy operation (a 512-byte sector is ~0.5ms at 48 cycles/byte,
+// so even a 64KB single-syscall k_fs_read lands around 64ms) and far
+// shorter than the driver's own timeouts.
+static uint32_t k_no_preempt_start = 0;
+#define K_NO_PREEMPT_MAX_TICKS 64
+
+// The guard, for code that reaches FatFs WITHOUT going through the
+// syscall dispatcher.
+//
+// The dispatcher covers anything an app calls. It does not cover the
+// kernel calling fs_* directly, which sh.c's init() does -- see
+// core_src_of() there. That path was the reason one dock probe still
+// came back FR_DISK_ERR after the dispatcher guard landed: init was
+// loading `net` through fs_exec_info_any() while wm probed through the
+// EXEC_EXISTS syscall, and only one of the two was holding anything
+// off.
+//
+// Counted, not boolean, so nesting is harmless: fs.c's own entry
+// points call each other (fs_exec_info_any -> fs_exec_info), and a
+// syscall handler that calls fs_* nests inside the dispatcher's own
+// increment. Every enter has exactly one matching leave.
+void k_fs_enter(void) {
+	if (k_no_preempt == 0) k_no_preempt_start = z_kernel_ticks;
+	k_no_preempt++;
+}
+
+void k_fs_leave(void) {
+	if (k_no_preempt) k_no_preempt--;
+}
+
+// Which syscalls reach FatFs, and therefore must run to completion.
+//
+// PROC_RUN is in here and is the important one: it resolves and LOADS
+// an executable, so init starting `net` and wm's dock_build() probing
+// for apps are two processes in FatFs at the same time -- which is
+// exactly the overlap that left the card returning FR_DISK_ERR for
+// the rest of the boot.
+//
+// Deliberately a switch rather than a flag in syscalls.def: that file
+// is shared with app-side code, and its comment warns that inserting
+// an entry shifts every later enum value.
+static int k_syscall_touches_fs(uint32_t id) {
+	switch (id) {
+		case Z_SYS_PROC_RUN:
+		case Z_SYS_FS_SIZE:
+		case Z_SYS_FS_READ:
+		case Z_SYS_FS_WRITE:
+		case Z_SYS_FS_UNLINK:
+		case Z_SYS_FS_LIST:
+		case Z_SYS_FS_OPEN_WRITE:
+		case Z_SYS_FS_OPEN_READ:
+		case Z_SYS_FS_READ_CHUNK:
+		case Z_SYS_FS_WRITE_CHUNK:
+		case Z_SYS_FS_CLOSE:
+		case Z_SYS_FS_MKDIR:
+		case Z_SYS_FS_TOUCH:
+		case Z_SYS_FS_SEEK:
+		case Z_SYS_FS_DF:
+		case Z_SYS_EXEC_EXISTS:
+			return 1;
+		default:
+			return 0;
+	}
+}
+
 extern char _start, _end;
 
 // linker-provided, see riscv-os.ld's .sdata section ("__global_pointer$
@@ -616,7 +701,38 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 		if (syscall_id >= Z_SYSCALL_COUNT || !z_syscall_table[syscall_id]) {
 			ret = (uint32_t *)&z_fail;
 		} else {
+			// Hold off the KTIMER swap for the duration of anything
+			// that touches FatFs. FF_FS_REENTRANT is 0 (ffconf.h) --
+			// FatFs is explicitly not reentrant -- and underneath it
+			// sdmm.c drives CS and clocks a command through the SPI
+			// shifter. Swapping to another process mid-transaction
+			// leaves the card mid-command and corrupts the shared
+			// FATFS window buffer; the card then returns FR_DISK_ERR
+			// to everyone until disk_initialize() is re-run by a
+			// manual `mount`.
+			//
+			// Deferring rather than taking a blocking mutex is
+			// deliberate. A mutex would let the holder be preempted,
+			// which is fine for the card (SPI mode tolerates gaps
+			// between bytes) but not for this driver: dly_us()
+			// (sdmm.c) measures with rdcycle, a free-running counter
+			// that keeps advancing while the process is descheduled.
+			// Every timeout in the driver would then depend on
+			// scheduling rather than on the card.
+			//
+			// Nested by construction -- a syscall cannot be made from
+			// inside a syscall handler -- but counted rather than set
+			// so that stays true if it ever stops being.
+			int fslock = k_syscall_touches_fs(syscall_id);
+
+			if (fslock) k_fs_enter();
+
 			ret = (uint32_t *)z_syscall_table[syscall_id]((z_obj_t *)regs);
+
+			// Single exit -- this path has no early returns between
+			// the enter and here, which is what keeps the counter from
+			// leaking.
+			if (fslock) k_fs_leave();
 		}
 
 		goto done;
@@ -696,6 +812,21 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 
 	// swap process on KTIMER interrupt
 	if ((irqs & (1 << Z_IRQ_KTIMER)) != 0) {
+
+		// A process is inside a FatFs syscall -- let it finish rather
+		// than corrupting the card (see the note at the dispatch site
+		// above). z_kernel_ticks has already been advanced by this
+		// point, so timers and z_msg_wait_timeout() are unaffected;
+		// only the process swap is postponed. Interrupts stay enabled
+		// throughout, so ethernet RX still lands in its buffer.
+		//
+		// The cap is the escape hatch: past it, swap anyway. See
+		// K_NO_PREEMPT_MAX_TICKS.
+		if (k_no_preempt &&
+			(z_kernel_ticks - k_no_preempt_start) < K_NO_PREEMPT_MAX_TICKS) {
+			ret = regs;
+			goto done;
+		}
 
 		// Wake anything whose timeout has expired, BEFORE counting
 		// runnable processes or picking the next one -- otherwise a
@@ -793,7 +924,6 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 			// reusing this same pid slot would inherit stale name
 			// registrations that were never its own)
 			k_pidreg_release_all(z_pid);
-			fs_lock_release_pid(z_pid);
 			// kill the process
 			z_procs[z_pid].base = 0x00000000;
 			z_procs[z_pid].flags = 0x00000000;

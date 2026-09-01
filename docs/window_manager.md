@@ -58,14 +58,38 @@ the lower-right corner, drawn by `draw_window_box()` so they move with
 the wireframe during a drag rather than vanishing until release the way
 titlebar text does.
 
-The focused window gets a second, 1px-inset outline drawn on top of
-the first (4 extra lines) as a simple "bolder border" focus
-indicator, since there's no text rendering wired up yet to do
-something like a filled/inverted titlebar.
+The focused window's **titlebar is inverted** -- one XOR fill over the
+strip, applied by `draw_titlebar_content()` after its text and icons
+are down, so title and background swap together.
 
-Window titles are stored (`wm_window_t.title`) and logged to the UART
-console when a window is created, but not yet drawn on screen --
-rendering text needs font-blitting support that doesn't exist yet.
+It was a 1px ring around the window's whole perimeter, drawn just
+*outside* its bounds. That could not survive visible regions: those
+pixels belong to whatever is underneath, and are inside *that* window's
+region legitimately, so it was erased the moment that window
+repainted -- a clock ticking behind a focused window rubbed the ring
+away a hand-sweep at a time.
+
+An indicator drawn outside a window and a rule that a window may only
+draw inside its own region cannot both hold. The region rule is what
+stops windows painting over each other, so the indicator moved inside
+the titlebar, which `wm` owns and no app can reach.
+
+XOR rather than a reverse-video text path: the icons are bitmaps and
+the title is hardware-blitted, so inverting once at the end costs a
+single fill, needs no second code path for either, and cannot get out
+of step with what was drawn. It stops one row short of the separator,
+which would otherwise vanish on the focused window.
+
+Two consequences worth knowing. Losing focus now changes **exactly one
+thing**, so a focus change repairs titlebar strips rather than whole
+windows -- a full repair is only needed when the z-order actually
+changed and a window may have been uncovered. And the hardware cursor
+had to become XOR too (`rtl/gpu/gpu_video.v`): it was OR'd with the
+framebuffer, so it was always white and vanished into the inverted
+bar.
+
+Window titles are drawn by `draw_titlebar_content()`, hardware-blitted
+from glyph memory.
 
 ## Redraw strategy
 
@@ -442,12 +466,24 @@ knowing exactly why that exists and how much it costs, because the
 obvious reaction — fix it in hardware and delete the fallback — is not
 worth doing.
 
-**Why it exists.** Glyph mode in `rtl/gpu/gpu_blit.v` is genuinely
-unclipped: `CTRL_GLYPH` branches straight to `ST_GLYPH_SETUP` and never
-enters `ST_CLIP`, and `CTRL_CLIP` is documented there as "ignored in
-glyph mode". There is not even a screen bounds check, which is why the
-`fits` test checks the screen as well as the clip rect — an
+**Why it existed.** Glyph mode in `rtl/gpu/gpu_blit.v` used to be
+genuinely unclipped: `CTRL_CLIP` was documented there as "ignored in
+glyph mode", with no screen bounds check either — which is why the
+`fits` test checks the screen as well as the clip rect, since an
 out-of-range destination can hang the blitter's state machine.
+
+**That is no longer true.** Glyph mode honours the scissor now:
+vertically by skipping rows outside it, horizontally by masking the
+cell. The *cell* is masked, not just the glyph bits — glyph mode paints
+a solid cell, so clipping only the bits would let the background erase
+pixels outside the region, which for a partially occluded terminal
+means erasing the window in front of it in the shape of its own text.
+`rtl/gpu/bench/tb_glyph_clip.v` tests exactly that.
+
+So the fallback is no longer needed for clipping. It is still the path
+for a font that is not resident in glyph memory, and still the path on
+a bitstream that predates the scissor. The measurements below describe
+how rarely it fired even when clipping was its main job.
 
 **How often it fires.** Measured against the real geometry of every
 clipped call site: **zero** for a full text-editor repaint at any
@@ -699,6 +735,23 @@ shapes. Summary:
 | wm → app | `Z_WM_KEY` | packed `Z_UINT32` (`Z_WM_PACK_KEY`) | key press/release, focused window only -- see `docs/user_input.md` |
 | app → wm | `Z_WM_SET_TITLE` | `Z_MAP{id, title}` | retitle an existing window -- repairs the titlebar strip only |
 | wm → app | `Z_WM_TITLEBAR_ICON` | packed `Z_UINT32` (`Z_WM_PACK_TBICON`) | a new/save/open/font titlebar icon was clicked |
+| wm → app | `Z_WM_SET_CLIP` | `Z_BLOB` of `z_wm_cliprect_t[]` | the part of this window not covered by the windows in front of it |
+| app → wm | `Z_WM_CLIP_DONE` | `Z_UINT32` (window id) | acknowledges a `Z_WM_SET_CLIP` |
+
+**Every windowed app must handle `Z_WM_SET_CLIP`.** Three lines:
+
+```c
+case Z_WM_SET_CLIP:
+    z_win_apply_clip(&win, &msg.obj);   // &msg->obj in some loops
+    break;
+```
+
+The ack `z_win_apply_clip()` sends is not optional -- `wm` waits for
+it when a region *narrows*, and an app that applies the region without
+acking stalls `wm` for the full timeout on every overlap. An app that
+handles the message not at all is simply unclipped, which is safe but
+means it can draw over the windows in front of it. See "Visible
+regions".
 
 A client app's request/reply exchange looks like:
 
@@ -794,6 +847,61 @@ moving on to the next (more frontmost) window. `z_win_redraw_done()`
 in `zwin.c` is the app-side call -- `hello_win` sends it right after
 finishing the redraw that `Z_WM_REDRAW` triggered, not for redraws it
 initiates on its own (the wm isn't waiting on those).
+
+### Visible regions
+
+The ack ordering above keeps *repairs* correct, but it only covers
+drawing an app does **because wm asked it to**. An app that redraws on
+its own -- a clock ticking, a terminal receiving output -- was clipped
+only to its own content rect, not to the part of that rect actually on
+screen. So a clock running behind a text editor drew its hands
+straight through the editor.
+
+Each window now has a **visible region**: its own rectangle minus every
+window in front of it. `wm` computes it (`region_compute()` in `wm.c`)
+and sends it as `Z_WM_SET_CLIP`; the app calls `z_win_apply_clip()`
+(`zwin.c`), which hands it to `z_gfx_set_visible()` (`zgfx.c`), which
+confines every drawing primitive to it.
+
+It is a **list** of rectangles, not one. A window covered in its middle
+is visible as a ring, and a bounding box around that is a *superset* --
+it would permit exactly the drawing this prevents.
+`sw/apps/wm/tests/test_region.c` checks the computation pixel by pixel
+and asserts that a bounding box gets it wrong.
+
+**An empty list means unrestricted, not invisible.** That is the state
+before wm has said anything, and it has to mean "draw normally" or a
+process would be blank until its first region message. A fully
+occluded window is sent **one empty rectangle**, never zero of them.
+
+**Only narrowing waits.** A shrinking region means a window moved in
+front, and the app must stop drawing into those pixels *before* that
+window is drawn -- so wm sends and waits for `Z_WM_CLIP_DONE`. A
+widening region means a window was uncovered: drawing less than
+permitted for a moment is stale, not wrong, so that one is
+fire-and-forget. Waiting on both would cost a round trip per window on
+every mouse-move during a drag.
+
+A window's **first** region is not a narrowing. It has never been told
+it owns anything, so there is nothing to take away -- and waiting for
+it deadlocks, because the app is still inside `z_win_create()` and its
+first repaint, neither of which reads the message queue.
+
+**A widening region needs a redraw.** The area a window just uncovered
+still holds whatever was on top of it, and the region message does not
+ask for a repaint. `send_clip()` sends one -- and waits for it, because
+`wait_for_redraw_done()` matches any ack from a pid rather than a
+particular request, so more than one outstanding redraw per app lets a
+stale ack satisfy the wrong wait.
+
+**Copies cannot be clipped.** `z_fb_hw_scroll()` and
+`z_fb_hw_blit_vram()` are refused while a region is set: the blitter's
+copy source aligns to the destination *word*, so a scissor that moves
+the first written word feeds the engine the wrong data, and rounding
+the region down to a word boundary would let the copy write up to 31
+pixels over the window in front. A partially occluded window repaints
+instead of scrolling. See `docs/gpu_blitter.md`, "Copy and the
+scissor".
 
 `repair_region()` takes an `exclude_idx` parameter for one specific
 case: right after `create_window()`, the brand-new window's own chrome
@@ -1062,14 +1170,16 @@ fills especially).
   in `term.c`), will still corrupt glyph memory for everyone. It's a
   convention, not a guarantee, same category of tradeoff as the app
   trust model below.
-- The hardware blit is **unclipped by design** -- it doesn't do the
-  general partial-word clipping the fill/copy path does. `z_fb_draw_char`
-  checks whether the glyph is fully on-screen and (if a clip rect was
-  given) fully inside it; if not, it falls back to the same
-  per-pixel software path used when `Z_GFX_HW_BLIT` isn't defined at
-  all. In practice this only affects glyphs that would land partially
-  outside a window's edge, which shouldn't be common if windows are
-  sized to fit whole character cells.
+- The hardware blit **clips now**, and the cell is clipped along with
+  the glyph bits -- glyph mode paints a solid cell, so masking only
+  the bits would let the background erase pixels outside the region.
+  `z_fb_draw_char` still checks whether the glyph is fully on-screen
+  and falls back to the per-pixel software path if not, because an
+  out-of-range destination can hang the blitter regardless of
+  clipping, and because a font that is not resident in glyph memory
+  has to go through software anyway. What no longer forces the
+  fallback is a glyph landing partly outside a window's edge or
+  outside its visible region.
 - **Bit order matters and was a real source of bugs earlier in this
   project** (see the font orientation notes above) -- worth being
   extra careful here. Framebuffer words have increasing x = increasing
@@ -1281,6 +1391,32 @@ a convenient API, not a hard guarantee.
 
 ## Known limitations / future work
 
+- **A partially occluded window cannot scroll in hardware.**
+  `z_fb_hw_scroll()` and `z_fb_hw_blit_vram()` are refused while a
+  visible region is set, so `term` repaints instead of scrolling when
+  something overlaps it. The blitter's copy source aligns to the
+  destination *word*, so a scissor that moves the first written word
+  feeds it the wrong data -- and rounding the region down to a word
+  boundary would let the copy write up to 31 pixels over the window in
+  front, which is the bug regions exist to prevent. The real fix is in
+  `gpu_blit.v`'s shifter priming; see `docs/gpu_blitter.md`, "Copy and
+  the scissor".
+
+- **A visible region is capped at 8 rectangles.** Past that the region
+  *shrinks* rather than dropping rectangles: a region larger than the
+  truth is unsafe (an app draws over its neighbour) while one smaller
+  is merely stale (pixels do not refresh until the next repaint).
+  `sw/apps/wm/tests/test_region.c` asserts overflow produces zero
+  unsafe pixels.
+
+- **`wait_for_redraw_done()` matches by pid, not by request.** Safe
+  only while `wm` keeps one redraw outstanding per app at a time,
+  which it does. Breaking that assumption lets a stale ack satisfy a
+  later wait -- `wm` then proceeds believing a repaint happened that
+  did not, having already cleared the region. If several outstanding
+  redraws are ever wanted, the fix is a request tag in `Z_WM_REDRAW`
+  and its `DONE`, not more careful sequencing.
+
 - **`repair_region()` reentrancy during an ack wait.** Covered in
   detail under "Content z-order" above: `wait_for_redraw_done()`
   processes other apps' requests (including ones that call
@@ -1314,7 +1450,15 @@ a convenient API, not a hard guarantee.
   moving a window, or a delay before content catches up, this is why
   -- try a smaller `POLL_CHUNK` first.
 - **~~The focused-window bold border can still get drawn over~~ --
-  fixed, then superseded, then given real breathing room.** Was:
+  fixed, superseded, given breathing room, and finally removed
+  entirely.** The whole entry below is now history: there is no focus
+  border. It became untenable with visible regions -- a ring drawn
+  outside a window's bounds sits on pixels belonging to whatever is
+  underneath, and that window erases it the moment it repaints. Focus
+  is the inverted titlebar now (see "Window representation"), which is
+  inside the chrome `wm` owns and cannot be reached by any app. The
+  1px margin `repair_region()` grew to service the ring is now dead
+  weight and can go. Kept for the reasoning: Was:
   `zwin.c`'s content clip inset only 1px from the window's outer
   edge, far enough to clear the *regular* (unfocused) border but not
   wm's additional bold focus-border (`draw_window_box()`'s extra

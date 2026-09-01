@@ -437,6 +437,7 @@ DSTATUS disk_initialize (
 	if (ty) sd_set_speed(Z_SPISD_DIV_FAST);
 
 	s = ty ? 0 : STA_NOINIT;
+
 	Stat = s;
 
 	deselect();

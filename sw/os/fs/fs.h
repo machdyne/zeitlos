@@ -25,6 +25,11 @@ int fs_load_exec(uint32_t dst, char *path, const z_exec_info_t *info);
 // Filesystem first, flash core-app archive underneath -- see fs.c.
 // Every process-launch path should use these rather than the two
 // above, so that a card-less board behaves identically.
+// Executable resolution. A bare name is searched for in the root,
+// then apps/, then the flash archive; a name containing '/' is taken
+// literally. All three of these share one resolver in fs.c so they
+// cannot disagree -- see its comment for why the search lives here
+// rather than as an "apps/" prefix at every call site.
 int fs_exec_info_any(char *path, z_exec_info_t *info);
 
 // Both capacity figures in KB from a single FAT scan -- see fs.c for
@@ -61,9 +66,4 @@ int fs_open_read(FIL *f, char *path);
 int32_t fs_read_chunk(FIL *f, void *buf, uint32_t maxlen);
 int fs_close_read(FIL *f);
 
-
-// FatFs/SD mutual exclusion -- see fs.c
-void fs_lock(void);
-void fs_unlock(void);
-void fs_lock_release_pid(uint32_t pid);
 #endif

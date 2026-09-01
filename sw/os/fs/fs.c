@@ -1,63 +1,20 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <string.h>
 
 #include "fatfs/ff.h"
 #include "fs.h"
-#include "../kernel.h"	// maskirq(), z_pid (fs_lock)
 #include "../../common/zexec.h"
 #include "../../common/zsoc.h"
 #include "../zar.h"
+#include "../kernel.h"		// k_fs_enter()/k_fs_leave() -- see
+								// docs/filesystem.md
 
 FATFS sdvol0;
 
-
-// -- mutual exclusion for FatFs + the SD driver --------------------------
-// Neither is re-entrant, and syscalls run in the caller's own context
-// with interrupts enabled: a KTIMER swap in the middle of one f_read()
-// onto another process that also touches the card interleaves two SPI
-// transactions (fsapi.h's "Concurrency note"). Seen on the ULX3S:
-// 2026-08-27 net reading NET.CFG while init() streamed repl (desktop
-// frozen), 2026-08-28 wm's dock scan (11 EXEC_EXISTS syscalls) while
-// init() loaded net/repl ("not installed", net image corrupted, reset).
-// Recursive per pid because fs.c's functions call each other; waits
-// with interrupts enabled so the holder keeps getting scheduled.
-static volatile uint32_t fs_lock_owner = 0xFFFFFFFFu;
-static volatile uint32_t fs_lock_depth = 0;
-
-void fs_lock(void) {
-	for (;;) {
-		uint32_t m = maskirq(0xFFFFFFFF);
-		if (fs_lock_depth == 0 || fs_lock_owner == z_pid) {
-			fs_lock_owner = z_pid;
-			fs_lock_depth++;
-			maskirq(m);
-			return;
-		}
-		maskirq(m);
-	}
-}
-
-void fs_unlock(void) {
-	uint32_t m = maskirq(0xFFFFFFFF);
-	if (fs_lock_depth > 0 && --fs_lock_depth == 0)
-		fs_lock_owner = 0xFFFFFFFFu;
-	maskirq(m);
-}
-
-// scheduler death cleanup: a process killed while inside the
-// filesystem must not leave everyone else spinning forever
-void fs_lock_release_pid(uint32_t pid) {
-	uint32_t m = maskirq(0xFFFFFFFF);
-	if (fs_lock_owner == pid) {
-		fs_lock_depth = 0;
-		fs_lock_owner = 0xFFFFFFFFu;
-	}
-	maskirq(m);
-}
-
-static int fs_load__unlocked(uint32_t dst, char *path) {
+int fs_load(uint32_t dst, char *path) {
 
 	FIL f;
 	FRESULT res;
@@ -67,10 +24,12 @@ static int fs_load__unlocked(uint32_t dst, char *path) {
 	char buf[1024];
 	char *dst_ptr = (char *)dst;
 
+	// see docs/filesystem.md
+	k_fs_enter();
+
 	res = f_open(&f, path, FA_READ | FA_OPEN_EXISTING);
 
-	if (res != FR_OK)
-		return 1;
+	if (res != FR_OK) { k_fs_leave(); return 1; }
 
 	sz = f_size(&f);
 
@@ -82,20 +41,22 @@ static int fs_load__unlocked(uint32_t dst, char *path) {
 		res = f_read(&f, buf, 1024, &br);
 		memcpy(dst_ptr, &buf, 1024);
 		dst_ptr += 1024;
-		if (res != FR_OK) return 1;
+		if (res != FR_OK) { f_close(&f); k_fs_leave(); return 1; }
 	}
 
 	res = f_read(&f, buf, sz - (blks * 1024), &br);
 	memcpy(dst_ptr, &buf, sz - (blks * 1024));
-	if (res != FR_OK) return 1;
+	if (res != FR_OK) { f_close(&f); k_fs_leave(); return 1; }
 
 	f_close(&f);
+
+	k_fs_leave();
 
 	return 0;
 
 }
 
-static void * fs_mallocfile__unlocked(char *path) {
+void *fs_mallocfile(char *path) {
 
 	FIL f;
 	FRESULT res;
@@ -122,7 +83,7 @@ static void * fs_mallocfile__unlocked(char *path) {
 
 }
 
-static int fs_touch__unlocked(char *path) {
+int fs_touch(char *path) {
 
 	FIL f;
 	FRESULT res;
@@ -140,7 +101,8 @@ static int fs_touch__unlocked(char *path) {
 
 }
 
-static int fs_mount__unlocked(void) {
+int fs_mount(void)
+{
 	FRESULT res;
 	res = f_mount(&sdvol0, "", 0);
 	if (res == FR_OK)
@@ -166,7 +128,8 @@ static int fs_mount__unlocked(void) {
 //
 // Returns 0 on success. A slow card may need a few attempts, so
 // callers should retry rather than treating one failure as final.
-static int fs_mount_now__unlocked(void) {
+int fs_mount_now(void)
+{
 	FRESULT res;
 	res = f_mount(&sdvol0, "", 1);
 	if (res == FR_OK)
@@ -175,7 +138,7 @@ static int fs_mount_now__unlocked(void) {
 		return 1;
 }
 
-static int fs_format__unlocked(void) {
+int fs_format(void) {
 
 	FRESULT res;
 	BYTE work[FF_MAX_SS];
@@ -194,7 +157,7 @@ static int fs_format__unlocked(void) {
 
 }
 
-static uint32_t fs_total__unlocked(void) {
+uint32_t fs_total(void) {
 	FATFS *fs;
 	FRESULT res;
 	DWORD fre_clust;
@@ -222,7 +185,7 @@ static uint32_t fs_total__unlocked(void) {
 // when something like a file browser or a system monitor asks.
 //
 // Both figures in KB, matching fs_total()/fs_free().
-static void fs_df_kb__unlocked(uint32_t *total_kb, uint32_t *free_kb) {
+void fs_df_kb(uint32_t *total_kb, uint32_t *free_kb) {
 
 	FATFS *fs;
 	DWORD fre_clust;
@@ -237,7 +200,7 @@ static void fs_df_kb__unlocked(uint32_t *total_kb, uint32_t *free_kb) {
 
 }
 
-static uint32_t fs_free__unlocked(void) {
+uint32_t fs_free(void) {
 	FATFS *fs;
 	FRESULT res;
 	DWORD fre_clust;
@@ -251,19 +214,21 @@ static uint32_t fs_free__unlocked(void) {
 	return 0;
 }
 
-static uint32_t fs_size__unlocked(char *path) {
+uint32_t fs_size(char *path) {
 	FIL f;
 	FRESULT res;
 	FSIZE_t fs = 0;
+	k_fs_enter();				// see docs/filesystem.md
 	res = f_open(&f, path, FA_WRITE | FA_OPEN_EXISTING);
 	if (res == FR_OK) {
 		fs = f_size(&f);
 	}
 	f_close(&f);
+	k_fs_leave();
 	return(fs);
 }
 
-static int fs_write_file__unlocked(char *path, char *buf, uint32_t len) {
+int fs_write_file(char *path, char *buf, uint32_t len) {
 
 	FIL f;
 	FRESULT res;
@@ -290,7 +255,7 @@ static int fs_write_file__unlocked(char *path, char *buf, uint32_t len) {
 // Bytes written since the last metadata flush. See FS_SYNC_INTERVAL.
 static uint32_t chunk_unsynced;
 
-static int fs_open_write__unlocked(FIL *f, char *path) {
+int fs_open_write(FIL *f, char *path) {
 	chunk_unsynced = 0;
 	FRESULT res = f_open(f, path, FA_WRITE | FA_CREATE_ALWAYS);
 	if (res != FR_OK) {
@@ -309,7 +274,7 @@ static int fs_open_write__unlocked(FIL *f, char *path) {
 // itself.
 #define FS_SYNC_INTERVAL   (64 * 1024)
 
-static int fs_write_chunk__unlocked(FIL *f, const void *buf, uint32_t len) {
+int fs_write_chunk(FIL *f, const void *buf, uint32_t len) {
 	UINT bw;
 	FRESULT res = f_write(f, buf, len, &bw);
 	if (res != FR_OK) {
@@ -349,7 +314,7 @@ static int fs_write_chunk__unlocked(FIL *f, const void *buf, uint32_t len) {
 // f_sync() does what f_close() does to the metadata while leaving the
 // file open, so this bounds the damage to whatever was written since
 // the last call rather than the whole transfer.
-static int fs_sync__unlocked(FIL *f) {
+int fs_sync(FIL *f) {
 	if (!f) return 0;
 	return (f_sync(f) == FR_OK) ? 1 : 0;
 }
@@ -357,17 +322,17 @@ static int fs_sync__unlocked(FIL *f) {
 // Flush and unmount the volume. Call before deliberately cutting power
 // or reprogramming; after this the card is consistent and can be
 // removed. fs_mount_now() brings it back.
-static int fs_unmount__unlocked(void) {
+int fs_unmount(void) {
 	FRESULT res = f_mount(NULL, "", 0);
 	return (res == FR_OK) ? 0 : 1;
 }
 
-static int fs_close_write__unlocked(FIL *f) {
+int fs_close_write(FIL *f) {
 	FRESULT res = f_close(f);
 	return (res == FR_OK) ? 1 : 0;
 }
 
-static int fs_open_read__unlocked(FIL *f, char *path) {
+int fs_open_read(FIL *f, char *path) {
 	FRESULT res = f_open(f, path, FA_READ | FA_OPEN_EXISTING);
 	if (res != FR_OK) {
 		printf("fs_open_read: failed; error code: %i\n", res);
@@ -376,7 +341,7 @@ static int fs_open_read__unlocked(FIL *f, char *path) {
 	return 1;
 }
 
-static int32_t fs_read_chunk__unlocked(FIL *f, void *buf, uint32_t maxlen) {
+int32_t fs_read_chunk(FIL *f, void *buf, uint32_t maxlen) {
 	UINT br;
 	FRESULT res = f_read(f, buf, maxlen, &br);
 	if (res != FR_OK) {
@@ -386,12 +351,12 @@ static int32_t fs_read_chunk__unlocked(FIL *f, void *buf, uint32_t maxlen) {
 	return (int32_t)br;	// 0 means EOF (nothing left to read), matching f_read()'s own convention
 }
 
-static int fs_close_read__unlocked(FIL *f) {
+int fs_close_read(FIL *f) {
 	FRESULT res = f_close(f);
 	return (res == FR_OK) ? 1 : 0;
 }
 
-static int fs_mkdir__unlocked(char *path) {
+int fs_mkdir(char *path) {
 
 	FRESULT res;
 
@@ -408,7 +373,7 @@ static int fs_mkdir__unlocked(char *path) {
 
 }
 
-static int fs_unlink__unlocked(char *path) {
+int fs_unlink(char *path) {
 
 	FRESULT res;
 
@@ -425,11 +390,13 @@ static int fs_unlink__unlocked(char *path) {
 
 }
 
-static void fs_list_dir__unlocked(char *path) {
+void fs_list_dir(char *path) {
 
 	FRESULT res;
 	DIR dir;
 	static FILINFO fno;
+
+	k_fs_enter();				// see docs/filesystem.md
 
 	res = f_opendir(&dir, path);
 
@@ -517,6 +484,10 @@ static void fs_list_dir__unlocked(char *path) {
 
 	}
 
+	// Released only here: the flash-archive loop above calls f_stat(),
+	// which is a FatFs call like any other.
+	k_fs_leave();
+
 	return;
 
 }
@@ -537,7 +508,7 @@ static void fs_list_dir__unlocked(char *path) {
 // magic is not an error -- it reports as a legacy raw binary, which is
 // exactly right for an old --pad-to image whose bss is already present
 // as zeros (see z_exec_parse()).
-static int fs_exec_info__unlocked(char *path, z_exec_info_t *info) {
+int fs_exec_info(char *path, z_exec_info_t *info) {
 
 	FIL f;
 	FRESULT res;
@@ -546,13 +517,21 @@ static int fs_exec_info__unlocked(char *path, z_exec_info_t *info) {
 
 	if (!path || !info) return 1;
 
+	// Serialised against every other FatFs user -- see
+	// docs/filesystem.md. Needed here and not only in the syscall
+	// dispatcher because sh.c's init() reaches this function directly,
+	// without a syscall.
+	k_fs_enter();
+
 	res = f_open(&f, path, FA_READ | FA_OPEN_EXISTING);
-	if (res != FR_OK) return 1;
+	if (res != FR_OK) { k_fs_leave(); return 1; }
 
 	uint32_t sz = (uint32_t)f_size(&f);
 
 	res = f_read(&f, hdr, Z_EXEC_HEADER_SIZE, &br);
 	f_close(&f);
+
+	k_fs_leave();
 
 	if (res != FR_OK) return 1;
 
@@ -598,40 +577,141 @@ static int fs_exec_info__unlocked(char *path, z_exec_info_t *info) {
 // putting it there. Callers that want to report which source was used
 // can compare fs_exec_info()'s result themselves; both sh.c's init and
 // `run` print it.
-static int fs_exec_info_any__unlocked(char *path, z_exec_info_t *info) {
+// -- the search path --
+//
+// A bare program name is looked for in the root, then in APPS/, then
+// in the flash archive. A name containing '/' is taken literally and
+// not searched at all.
+//
+// WHY A SEARCH PATH AND NOT A PREFIX. Moving the apps into APPS/
+// without one would mean every reference to a program grows a
+// constant "apps/": dock_candidates[] in wm, the extension->app table
+// in ztype.c, z_proc_stack_size_for() in kernel.h, pidreg
+// registrations, `run apps/term` at the shell, and the names inside
+// the flash archive -- where it would also spend 5 of
+// Z_ZAR_NAME_MAX's 16 bytes on a prefix that carries no information
+// anywhere it appears. A prefix repeated at every call site is a
+// prefix that belongs in the resolver instead.
+//
+// Doing it here means the directory move costs nothing above this
+// line: bare names keep working everywhere, the archive stays flat,
+// and a card written before the move still boots, because the root is
+// still searched.
+//
+// This is NOT the drive-letter idea rejected below returning by
+// another name. It applies to EXECUTABLE RESOLUTION only. Files are
+// still opened by exact path -- fs_open/size/read/write, ls, te,
+// repl's file API, tget/tput are all untouched, and none of them
+// gains a way for the same string to mean two different files. The
+// split is the ordinary one: data is addressed, programs are
+// resolved.
+//
+// ROOT IS SEARCHED BEFORE APPS/, deliberately. It preserves the
+// shadowing rule the underlay already documents -- the only way a
+// file gets to the card root is somebody deliberately putting it
+// there -- so `xf wm` still hot-swaps a single app during development
+// exactly as it did before APPS/ existed. The cost is one failed
+// f_open per launch on a normally-laid-out card, which is not
+// measurable next to loading the executable itself.
+#define FS_APPS_DIR "apps/"
 
-	if (fs_exec_info(path, info) == 0 && info->total)
-		return 0;
+// Long enough for APPS_DIR plus any name k_proc_run() can pass in
+// (Z_PROC_RUN_NAME_MAX, 64) plus the NUL. A name that would not fit is
+// one that could not have been launched anyway.
+#define FS_RESOLVED_MAX (64 + sizeof(FS_APPS_DIR))
 
-	if (z_zar_exec_info(path, info) == 0 && info->total)
-		return 0;
+typedef enum {
+	FS_EXEC_NONE = 0,	// no such program anywhere
+	FS_EXEC_FS,			// found on the filesystem, at `resolved`
+	FS_EXEC_ZAR			// found in the flash archive, under the bare name
+} fs_exec_src_t;
 
-	return 1;
+// The one function that decides what a program name means. Everything
+// below calls it; nothing below does its own searching.
+//
+// `resolved` receives the path that actually matched (for FS_EXEC_FS)
+// or the archive name (for FS_EXEC_ZAR), so a caller that has already
+// resolved can act on the result without repeating the search.
+static fs_exec_src_t fs_exec_resolve(const char *name, char *resolved,
+	z_exec_info_t *info) {
+
+	z_exec_info_t tmp;
+	if (!info) info = &tmp;
+	if (!name || !*name) return FS_EXEC_NONE;
+
+	// Anything with a separator in it is a path the caller means
+	// literally -- the file browser launching something several
+	// directories deep, for instance. Searching it would be wrong:
+	// "docs/term" must not find APPS/term.
+	bool is_path = false;
+	for (const char *p = name; *p; p++)
+		if (*p == '/' || *p == '\\') { is_path = true; break; }
+
+	size_t len = strlen(name);
+	if (len + sizeof(FS_APPS_DIR) > FS_RESOLVED_MAX) return FS_EXEC_NONE;
+
+	// 1. literal -- the root for a bare name, the given path otherwise
+	strcpy(resolved, name);
+	if (fs_exec_info(resolved, info) == 0 && info->total)
+		return FS_EXEC_FS;
+
+	// 2. APPS/, for bare names only
+	if (!is_path) {
+		strcpy(resolved, FS_APPS_DIR);
+		strcpy(resolved + sizeof(FS_APPS_DIR) - 1, name);
+		if (fs_exec_info(resolved, info) == 0 && info->total)
+			return FS_EXEC_FS;
+	}
+
+	// 3. the flash archive, under the bare name. Entries there are
+	// flat -- no "apps/" prefix -- precisely because this resolver
+	// exists; see sw/os/zar.h.
+	strcpy(resolved, name);
+	if (z_zar_exec_info(resolved, info) == 0 && info->total)
+		return FS_EXEC_ZAR;
+
+	return FS_EXEC_NONE;
+
+}
+
+int fs_exec_info_any(char *path, z_exec_info_t *info) {
+
+	char resolved[FS_RESOLVED_MAX];
+	return (fs_exec_resolve(path, resolved, info) == FS_EXEC_NONE) ? 1 : 0;
 
 }
 
 // true if `path` resolved to the flash copy rather than the card.
 // Only for reporting -- the loader below re-resolves on its own.
-static int fs_exec_is_flash__unlocked(char *path) {
-	z_exec_info_t tmp;
-	if (fs_exec_info(path, &tmp) == 0 && tmp.total) return 0;
-	return (z_zar_exec_info(path, &tmp) == 0 && tmp.total) ? 1 : 0;
+int fs_exec_is_flash(char *path) {
+	char resolved[FS_RESOLVED_MAX];
+	return (fs_exec_resolve(path, resolved, NULL) == FS_EXEC_ZAR) ? 1 : 0;
 }
 
 // Loads whichever copy fs_exec_info_any() would have chosen. Re-runs
-// the same test rather than taking a source argument: two functions
+// the same search rather than taking a source argument: two functions
 // that must be called with matching arguments is exactly the kind of
 // pairing that eventually gets called with mismatched ones.
-static int fs_load_exec_any__unlocked(uint32_t dst, char *path, const z_exec_info_t *info) {
+//
+// Re-running it is also what makes the search safe to have at all --
+// all three entry points share fs_exec_resolve(), so they cannot
+// disagree about which of root, APPS/ or flash a name meant.
+int fs_load_exec_any(uint32_t dst, char *path, const z_exec_info_t *info) {
 
-	if (fs_exec_is_flash(path))
-		return z_zar_load_exec(dst, path, info);
+	char resolved[FS_RESOLVED_MAX];
+	fs_exec_src_t src = fs_exec_resolve(path, resolved, NULL);
 
-	return fs_load_exec(dst, path, info);
+	if (src == FS_EXEC_ZAR)
+		return z_zar_load_exec(dst, resolved, info);
+
+	if (src == FS_EXEC_FS)
+		return fs_load_exec(dst, resolved, info);
+
+	return 1;
 
 }
 
-static int fs_load_exec__unlocked(uint32_t dst, char *path, const z_exec_info_t *info) {
+int fs_load_exec(uint32_t dst, char *path, const z_exec_info_t *info) {
 
 	FIL f;
 	FRESULT res;
@@ -642,14 +722,17 @@ static int fs_load_exec__unlocked(uint32_t dst, char *path, const z_exec_info_t 
 
 	if (!path || !info) return 1;
 
+	// see docs/filesystem.md
+	k_fs_enter();
+
 	res = f_open(&f, path, FA_READ | FA_OPEN_EXISTING);
-	if (res != FR_OK) return 1;
+	if (res != FR_OK) { k_fs_leave(); return 1; }
 
 	// skip the header -- legacy files have data_off 0, so this is a
 	// no-op for them and the same code path serves both formats.
 	if (info->data_off) {
 		res = f_lseek(&f, info->data_off);
-		if (res != FR_OK) { f_close(&f); return 1; }
+		if (res != FR_OK) { f_close(&f); k_fs_leave(); return 1; }
 	}
 
 	uint32_t left = info->data_size;
@@ -657,13 +740,19 @@ static int fs_load_exec__unlocked(uint32_t dst, char *path, const z_exec_info_t 
 	while (left) {
 		uint32_t n = (left > sizeof(buf)) ? (uint32_t)sizeof(buf) : left;
 		res = f_read(&f, buf, n, &br);
-		if (res != FR_OK || br != n) { f_close(&f); return 1; }
+		if (res != FR_OK || br != n) { f_close(&f); k_fs_leave(); return 1; }
 		memcpy(dst_ptr, buf, n);
 		dst_ptr += n;
 		left -= n;
 	}
 
 	f_close(&f);
+
+	// Released here rather than at the end: everything below this
+	// point (the bss memset and the icache flush) touches RAM only,
+	// never FatFs, and there is no reason to hold the scheduler off
+	// across a memset that can be tens of kilobytes.
+	k_fs_leave();
 
 	// Nothing else zeroes .bss on this OS -- there is no crt0 doing it,
 	// which is why the old format shipped it as literal zeros in the
@@ -686,192 +775,4 @@ static int fs_load_exec__unlocked(uint32_t dst, char *path, const z_exec_info_t 
 
 	return 0;
 
-}
-
-// -- locked entry points (see fs_lock() in fs.c) --------------------
-int fs_load(uint32_t dst, char *path) {
-	fs_lock();
-	int r = fs_load__unlocked(dst, path);
-	fs_unlock();
-	return r;
-}
-
-void * fs_mallocfile(char *path) {
-	fs_lock();
-	void * r = fs_mallocfile__unlocked(path);
-	fs_unlock();
-	return r;
-}
-
-int fs_touch(char *path) {
-	fs_lock();
-	int r = fs_touch__unlocked(path);
-	fs_unlock();
-	return r;
-}
-
-int fs_mount(void) {
-	fs_lock();
-	int r = fs_mount__unlocked();
-	fs_unlock();
-	return r;
-}
-
-int fs_mount_now(void) {
-	fs_lock();
-	int r = fs_mount_now__unlocked();
-	fs_unlock();
-	return r;
-}
-
-int fs_format(void) {
-	fs_lock();
-	int r = fs_format__unlocked();
-	fs_unlock();
-	return r;
-}
-
-uint32_t fs_total(void) {
-	fs_lock();
-	uint32_t r = fs_total__unlocked();
-	fs_unlock();
-	return r;
-}
-
-void fs_df_kb(uint32_t *total_kb, uint32_t *free_kb) {
-	fs_lock();
-	fs_df_kb__unlocked(total_kb, free_kb);
-	fs_unlock();
-}
-
-uint32_t fs_free(void) {
-	fs_lock();
-	uint32_t r = fs_free__unlocked();
-	fs_unlock();
-	return r;
-}
-
-uint32_t fs_size(char *path) {
-	fs_lock();
-	uint32_t r = fs_size__unlocked(path);
-	fs_unlock();
-	return r;
-}
-
-int fs_write_file(char *path, char *buf, uint32_t len) {
-	fs_lock();
-	int r = fs_write_file__unlocked(path, buf, len);
-	fs_unlock();
-	return r;
-}
-
-int fs_open_write(FIL *f, char *path) {
-	fs_lock();
-	int r = fs_open_write__unlocked(f, path);
-	fs_unlock();
-	return r;
-}
-
-int fs_write_chunk(FIL *f, const void *buf, uint32_t len) {
-	fs_lock();
-	int r = fs_write_chunk__unlocked(f, buf, len);
-	fs_unlock();
-	return r;
-}
-
-int fs_sync(FIL *f) {
-	fs_lock();
-	int r = fs_sync__unlocked(f);
-	fs_unlock();
-	return r;
-}
-
-int fs_unmount(void) {
-	fs_lock();
-	int r = fs_unmount__unlocked();
-	fs_unlock();
-	return r;
-}
-
-int fs_close_write(FIL *f) {
-	fs_lock();
-	int r = fs_close_write__unlocked(f);
-	fs_unlock();
-	return r;
-}
-
-int fs_open_read(FIL *f, char *path) {
-	fs_lock();
-	int r = fs_open_read__unlocked(f, path);
-	fs_unlock();
-	return r;
-}
-
-int32_t fs_read_chunk(FIL *f, void *buf, uint32_t maxlen) {
-	fs_lock();
-	int32_t r = fs_read_chunk__unlocked(f, buf, maxlen);
-	fs_unlock();
-	return r;
-}
-
-int fs_close_read(FIL *f) {
-	fs_lock();
-	int r = fs_close_read__unlocked(f);
-	fs_unlock();
-	return r;
-}
-
-int fs_mkdir(char *path) {
-	fs_lock();
-	int r = fs_mkdir__unlocked(path);
-	fs_unlock();
-	return r;
-}
-
-int fs_unlink(char *path) {
-	fs_lock();
-	int r = fs_unlink__unlocked(path);
-	fs_unlock();
-	return r;
-}
-
-void fs_list_dir(char *path) {
-	fs_lock();
-	fs_list_dir__unlocked(path);
-	fs_unlock();
-}
-
-int fs_exec_info(char *path, z_exec_info_t *info) {
-	fs_lock();
-	int r = fs_exec_info__unlocked(path, info);
-	fs_unlock();
-	return r;
-}
-
-int fs_exec_info_any(char *path, z_exec_info_t *info) {
-	fs_lock();
-	int r = fs_exec_info_any__unlocked(path, info);
-	fs_unlock();
-	return r;
-}
-
-int fs_exec_is_flash(char *path) {
-	fs_lock();
-	int r = fs_exec_is_flash__unlocked(path);
-	fs_unlock();
-	return r;
-}
-
-int fs_load_exec_any(uint32_t dst, char *path, const z_exec_info_t *info) {
-	fs_lock();
-	int r = fs_load_exec_any__unlocked(dst, path, info);
-	fs_unlock();
-	return r;
-}
-
-int fs_load_exec(uint32_t dst, char *path, const z_exec_info_t *info) {
-	fs_lock();
-	int r = fs_load_exec__unlocked(dst, path, info);
-	fs_unlock();
-	return r;
 }

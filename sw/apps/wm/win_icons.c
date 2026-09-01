@@ -23,58 +23,43 @@ const uint8_t z_icon_close_data[Z_ICON_H] = {
 	0b00000000,
 };
 
-// A blank page with a folded top-right corner -- the universal "new
-// document" shape, and the only one of these that reads correctly at
-// 8x8 without any interior detail at all. The fold is what
-// distinguishes it from Z_ICON_CLOSE's plain box; without it the two
-// are nearly indistinguishable in a titlebar, which is exactly the
-// failure mode Z_ICON_CLOSE's own comment warns about for the cursor.
+// box with x
 const uint8_t z_icon_new_data[Z_ICON_H] = {
-	0b00111100,
-	0b00100110,
-	0b00100010,
-	0b00111111,
-	0b00100001,
-	0b00100001,
-	0b00100001,
-	0b00111111,
+	0b00100100,
+	0b00011000,
+	0b00100100,
+	0b00000000,
+	0b01111110,
+	0b01000010,
+	0b01111110,
+	0b00000000,
 };
 
-// A floppy disk: outer body, a shutter across the top, and a label
-// block at the bottom. Anachronistic and completely unambiguous,
-// which at 8x8 beats being clever -- there is no room for a shape
-// that has to be explained.
+// box with down arrow
 const uint8_t z_icon_save_data[Z_ICON_H] = {
+	0b01111110,
+	0b00111100,
+	0b00011000,
 	0b00000000,
 	0b01111110,
-	0b01011010,
-	0b01011010,
 	0b01000010,
 	0b01111110,
-	0b01000010,
-	0b01111110,
+	0b00000000,
 };
 
-// An open folder: a back panel with a tab, and a front panel angled
-// away from it. Deliberately different in outline from Z_ICON_FOLDER
-// below (which is the closed one) -- these two can appear in the same
-// field of view, one in a titlebar and one in a file list, and if
-// they looked the same the list would read as a row of open-file
-// buttons.
+// box with up arrow
 const uint8_t z_icon_open_data[Z_ICON_H] = {
+	0b00011000,
+	0b00111100,
+	0b01111110,
 	0b00000000,
-	0b01110000,
-	0b10001000,
-	0b10000100,
-	0b11111110,
-	0b01111100,
-	0b00111000,
+	0b01111110,
+	0b01000010,
+	0b01111110,
 	0b00000000,
 };
 
-// Two letter A's at different sizes, side by side -- the standard
-// "text size" mark. Nothing uses this yet; see Z_WIN_FLAG_FONT_ICON
-// in zwm.h for what it's reserved for.
+// two letter A's at different sizes
 const uint8_t z_icon_font_data[Z_ICON_H] = {
 	0b00000000,
 	0b00100000,

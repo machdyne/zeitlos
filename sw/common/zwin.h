@@ -23,10 +23,32 @@
 #include "zobj.h"
 #include "zfont.h"
 #include "zgfx.h"
+#include "zwm.h"		// Z_WM_MAX_CLIP, for the per-window region below
 
 typedef struct {
 	int32_t		id;	// -1 if creation failed
 	uint32_t	x, y, w, h;
+
+	// The part of this window not covered by the windows in front of
+	// it, as last told to us by wm (Z_WM_SET_CLIP).
+	//
+	// PER WINDOW, not per process. zgfx's visible region is one
+	// process-global thing -- there is one framebuffer and one
+	// hardware scissor -- but an app owns MORE THAN ONE WINDOW as
+	// soon as it opens a dialog, and the two have different visible
+	// regions. Storing it globally meant whichever region arrived
+	// last won, so a dialog drew against its parent's region: its
+	// button outlines and list-box frame sat outside that region and
+	// were clipped away.
+	//
+	// Every z_win_* drawing call loads this into zgfx before it
+	// draws, so the region in force always belongs to the window
+	// being drawn.
+	//
+	// clip_n == 0 means "not yet told", which zgfx reads as
+	// unrestricted -- the right default before wm has said anything.
+	z_clip_t	clip[Z_WM_MAX_CLIP];
+	int			clip_n;
 } z_win_t;
 
 // sends Z_WM_CREATE_WINDOW and blocks for the reply. title may be
@@ -108,6 +130,17 @@ bool z_win_parse_rect(z_win_t *win, z_obj_t *obj);
 // applies a Z_WM_REDRAW payload (a packed Z_UINT32, not a Z_MAP --
 // see zwm.h) to *win, updating x/y only. w/h are left untouched (they
 // don't change -- there's no resize support yet).
+// Applies a Z_WM_SET_CLIP and acknowledges it. Call from the app's
+// message loop:
+//
+//     case Z_WM_SET_CLIP:
+//         z_win_apply_clip(&win, &msg.obj);
+//         break;
+//
+// The ack is not optional -- wm waits for it when a region narrows.
+// See the definition in zwin.c.
+bool z_win_apply_clip(z_win_t *win, z_obj_t *obj);
+
 void z_win_apply_redraw(z_win_t *win, uint32_t packed);
 
 // applies a Z_WM_WINDOW_RESIZED payload to *win. That message carries
@@ -185,6 +218,12 @@ void z_win_draw_text(const z_win_t *win, int x, int y, const char *s, int color,
 // -- that's now drawn just outside the window's own frame (wm.c's
 // draw_window_box()), not inside it, so it never overlaps content
 // regardless of focus state.
+// Content-area rect, in screen coordinates.
+//
+// ALSO loads this window's visible region into zgfx, so that drawing
+// straight to z_fb_* with the rect returned here is clipped to the
+// part of the window actually on screen. See zwin.c for why this
+// chokepoint carries that rather than every app remembering to.
 void z_win_content_rect(const z_win_t *win, z_clip_t *out);
 
 // hardware-accelerated line/box draw via the GPU line rasterizer

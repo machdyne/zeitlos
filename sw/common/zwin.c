@@ -273,6 +273,79 @@ bool z_win_parse_rect(z_win_t *win, z_obj_t *obj) {
 
 }
 
+// Applies a Z_WM_SET_CLIP and acknowledges it.
+//
+// Call this from an app's message loop for Z_WM_SET_CLIP. It is one
+// line at each call site rather than something zwin can do on the
+// app's behalf, because there is no central message dispatch -- every
+// app owns its own loop, the same way each already handles
+// Z_WM_REDRAW and Z_WM_WINDOW_MOVED itself.
+//
+// THE ACK IS NOT OPTIONAL. wm waits for it when a region NARROWS,
+// before it draws the window that did the narrowing -- that wait is
+// the whole reason an app cannot still be drawing into pixels that
+// are about to belong to someone else. An app that applies the region
+// without acking will stall wm for the full timeout on every overlap.
+//
+// Returns false if the message was not a well-formed region, in which
+// case nothing is changed and nothing is acked.
+// Loads a window's own region into zgfx, so the region in force
+// belongs to the window about to be drawn. See z_win_t.clip.
+//
+// Called at the top of every z_win_* drawing call. Cheap -- a memcpy
+// of at most eight rectangles, and usually one -- and it is the only
+// thing that makes an app with a dialog open draw both windows
+// correctly.
+static void win_use_clip(const z_win_t *win) {
+	if (!win || win->clip_n <= 0) z_gfx_clear_visible();
+	else z_gfx_set_visible(win->clip, win->clip_n);
+}
+
+bool z_win_apply_clip(z_win_t *win, z_obj_t *obj) {
+
+	if (!obj || obj->type != Z_BLOB) return false;
+
+	uint32_t len = z_blob_len(obj);
+	const z_wm_cliprect_t *r = z_blob_data(obj);
+
+	if (!r || (len % sizeof(z_wm_cliprect_t)) != 0) return false;
+
+	int n = (int)(len / sizeof(z_wm_cliprect_t));
+	if (n > Z_WM_MAX_CLIP) n = Z_WM_MAX_CLIP;
+
+	z_clip_t rects[Z_WM_MAX_CLIP];
+	for (int i = 0; i < n; i++) {
+		rects[i].x0 = r[i].x0;
+		rects[i].y0 = r[i].y0;
+		rects[i].x1 = r[i].x1;
+		rects[i].y1 = r[i].y1;
+	}
+
+	// n == 0 would mean "unrestricted" to zgfx, which is the opposite
+	// of what an empty region means. wm never sends that -- a fully
+	// occluded window arrives as one empty rectangle -- but a
+	// malformed message must not be able to silently unclip an app.
+	if (n == 0) return false;
+
+	// Stored on the WINDOW, not applied globally here. The window
+	// being drawn decides which region is in force, and that is
+	// win_use_clip()'s job -- applying it here would mean the last
+	// message received won, which is wrong the moment an app owns a
+	// dialog as well as its main window.
+	if (win) {
+		for (int i = 0; i < n; i++) win->clip[i] = rects[i];
+		win->clip_n = n;
+	}
+
+	uint32_t wmpid = resolve_wm_pid();
+	if (wmpid)
+		z_msg_new_send(wmpid, Z_WM_CLIP_DONE, 0,
+			z_obj_uint32(win ? (uint32_t)win->id : 0));
+
+	return true;
+
+}
+
 void z_win_apply_redraw(z_win_t *win, uint32_t packed) {
 	win->x = Z_WM_UNPACK_X(packed);
 	win->y = Z_WM_UNPACK_Y(packed);
@@ -318,6 +391,21 @@ void z_win_redraw_done(const z_win_t *win) {
 }
 
 void z_win_content_rect(const z_win_t *win, z_clip_t *out) {
+
+	// Loads this window's visible region as a side effect.
+	//
+	// Deliberate, and worth the impurity. Apps that draw through
+	// z_win_* get their region loaded by those calls, but plenty draw
+	// straight to z_fb_* with a clip they got from HERE -- clock's
+	// hands, draw's canvas, gpu3d's cube. This is the one call every
+	// one of those makes immediately before drawing, so it is the
+	// only chokepoint that covers them without adding a line to a
+	// dozen apps and relying on nobody forgetting it in the
+	// thirteenth.
+	//
+	// It also reads correctly at the call site: "give me where I may
+	// draw" now sets up where you may draw.
+	win_use_clip(win);
 	// inset by 2px on every content-bearing edge: 1px to clear the
 	// window's own outer border/titlebar-separator line, plus a
 	// genuine 1px blank margin beyond that so content never sits
@@ -344,6 +432,8 @@ void z_win_content_rect(const z_win_t *win, z_clip_t *out) {
 }
 
 void z_win_fill_rect(const z_win_t *win, int x, int y, int w, int h, int color) {
+
+	win_use_clip(win);
 
 	z_clip_t clip;
 	z_win_content_rect(win, &clip);
@@ -384,6 +474,8 @@ void z_win_fill_rect(const z_win_t *win, int x, int y, int w, int h, int color) 
 }
 
 void z_win_clear(const z_win_t *win) {
+
+	win_use_clip(win);
 	// oversized on purpose -- z_win_content_rect() (via
 	// z_win_fill_rect's clip) cuts this down to the actual content
 	// area regardless.
@@ -391,6 +483,8 @@ void z_win_clear(const z_win_t *win) {
 }
 
 void z_win_draw_text(const z_win_t *win, int x, int y, const char *s, int color, const z_font_t *font) {
+
+	win_use_clip(win);
 
 	z_clip_t clip;
 	z_win_content_rect(win, &clip);
@@ -416,6 +510,8 @@ void z_win_draw_text(const z_win_t *win, int x, int y, const char *s, int color,
 }
 
 void z_win_hw_line(const z_win_t *win, int x0, int y0, int x1, int y1, int color) {
+
+	win_use_clip(win);
 	z_clip_t clip;
 	z_win_content_rect(win, &clip);
 	z_fb_hw_line(x0, y0, x1, y1, color, &clip);
@@ -429,6 +525,8 @@ void z_win_hw_line(const z_win_t *win, int x0, int y0, int x1, int y1, int color
 // off the window when the model is scaled up or rotated near the edge.
 void z_win_hw_fill_shade(const z_win_t *win, int x, int y, int w, int h,
 	int level) {
+
+	win_use_clip(win);
 	z_clip_t clip;
 	z_win_content_rect(win, &clip);
 	/* z_clip_t is INCLUSIVE bounds (x0..x1), not origin-plus-size --
@@ -445,6 +543,8 @@ void z_win_hw_fill_shade(const z_win_t *win, int x, int y, int w, int h,
 }
 
 void z_win_hw_box(const z_win_t *win, int x0, int y0, int x1, int y1, int color) {
+
+	win_use_clip(win);
 	z_clip_t clip;
 	z_win_content_rect(win, &clip);
 	z_fb_hw_box(x0, y0, x1, y1, color, &clip);

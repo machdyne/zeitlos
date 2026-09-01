@@ -71,6 +71,7 @@ With the MTU, there is no need for position independent code or complicated addr
 | clock | Analog and digital clock |
 | settings | System settings |
 | track | MOD audio file player |
+| gamedemo | 2D side-scrolling platformer game |
 | space3d | First-person 3D space shooter game |
 | gpu3d | Spinning 3D cube demo + STL viewer |
 
@@ -86,7 +87,7 @@ The following boards are currently supported:
  - [Machdyne Lebkuchen](https://github.com/machdyne/lebkuchen)
  - [Machdyne Mozart](https://github.com/machdyne/mozart) / [ML1](https://github.com/machdyne/sechzig)
  - [Machdyne Sergei](https://github.com/machdyne/sergei) / [ML1](https://github.com/machdyne/sechzig)
- - [ULX3S](https://radiona.org/ulx3s/) (85F tested, see [docs/ulx3s.md](docs/ulx3s.md))
+ - [Radiona ULX3S](https://radiona.org/ulx3s/) (85F tested, see [docs/ulx3s.md](docs/ulx3s.md))
  - (more soon)
 
 If you have an unsupported board and want to try Zeitlos, please open an issue.
@@ -111,6 +112,8 @@ USB-UART PMOD:
 ```
 $ curl -LO https://github.com/machdyne/zeitlos/releases/latest/download/zeitlos-lakritz_uart.img
 $ openFPGALoader -c dirtyJtag -f -o 0 zeitlos-lakritz_uart.img
+or
+$ sudo dfu-util -a 0 -D zeitlos-lakritz_uart.img
 ```
 
 Adjust `-c` to match your programming cable. The release page and the

@@ -55,10 +55,16 @@ of the box if you're on a wired network):
 
 ```
 > ls
-("/WM" "/TERM" "/NET" "/REPL")
+("/APPS" "/DOCS" "/ARK" "/USER")
+> ls /APPS
+("/APPS/FILES" "/APPS/TEXT" "/APPS/READ" ...)
 > tget 192.168.1.100 firmware.bin
 > tput 192.168.1.100 notes.txt
 ```
+
+Applications live in `/APPS`, but you never have to type that: `run
+term` searches the root, then `/APPS`, then the flash archive. See
+`docs/flash_apps.md`.
 
 ### Connecting to a remote machine
 

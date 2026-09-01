@@ -86,11 +86,6 @@
  * uses) if concurrent FS access from more than one process ever
  * proves to matter in practice. See docs/editor.md for where this is
  * written up alongside `te`'s own memory-budget caveats.
- *
- * It did prove to matter (ULX3S, 2026-08: wm's dock scan during
- * init()'s loads), and fs.c's fs_lock()/fs_unlock() now wrap every
- * handler here and every fs.c entry point -- recursive per pid, waits
- * with interrupts enabled, released if the holder dies.
  */
 
 // -- syscall handlers, registered in syscalls.def -- args are

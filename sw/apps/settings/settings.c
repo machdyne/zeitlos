@@ -286,7 +286,15 @@ int main(void) {
 
 					break;
 
-				case Z_WM_REDRAW:
+				// The part of this window not covered by the windows in front
+		// of it. Confines every subsequent draw to it -- see
+		// z_win_apply_clip() in zwin.c. The ack it sends is not
+		// optional: wm waits for it when a region narrows.
+		case Z_WM_SET_CLIP:
+			z_win_apply_clip(&win, &msg.obj);
+			break;
+
+		case Z_WM_REDRAW:
 
 					if (msg.obj.type != Z_UINT32) break;
 					if (z_win_redraw_id(msg.obj.val.uint32) != win.id) break;

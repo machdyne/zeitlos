@@ -341,6 +341,55 @@
 // handler in wm.c.
 #define Z_WM_SET_TITLE           111
 
+// -- visible regions --
+//
+// wm -> app: the part of the app's window NOT covered by the windows
+// in front of it. The app confines its drawing to it
+// (z_gfx_set_visible(), sw/common/zgfx.c), which is what stops a
+// window painting over the ones above it.
+//
+// A LIST of rectangles, not one. A window covered in its middle is
+// visible as a ring, and a bounding box around that is a SUPERSET --
+// it would permit exactly the drawing this exists to prevent.
+//
+// Payload is a Z_BLOB of z_wm_cliprect_t, one per rectangle, at most
+// Z_WM_MAX_CLIP of them. int16 rather than the packed-into-uint32
+// form Z_WM_PACK_XY uses, because a clip rectangle needs four
+// coordinates and two of them can legitimately be -1 (an empty
+// rectangle), which an unsigned 10-bit field cannot express.
+//
+// AN EMPTY LIST IS NOT "NO CLIPPING". Zero rectangles would be read
+// by zgfx as "unrestricted", which is the opposite of what a fully
+// occluded window needs. wm sends a fully occluded window as ONE
+// EMPTY rectangle (x1 < x0), never as an empty list.
+#define Z_WM_SET_CLIP            119
+
+// app -> wm: acknowledges a Z_WM_SET_CLIP, the same way
+// Z_WM_REDRAW_DONE acknowledges a redraw.
+//
+// Needed because the ORDER matters and only one direction is safe to
+// leave unacknowledged. A region that SHRINKS -- because a window
+// moved in front -- has to reach the app before the occluding window
+// is drawn, or the app can still be drawing into pixels that are
+// about to belong to someone else. A region that GROWS, because a
+// window was uncovered, can arrive whenever: drawing less than
+// permitted for a moment is stale, not wrong.
+//
+// So wm sends-and-waits when narrowing, and fires and forgets when
+// widening.
+#define Z_WM_CLIP_DONE           120
+
+// Ceiling on rectangles in one region. Eight covers a window with two
+// overlapping neighbours; beyond that wm SHRINKS the region rather
+// than dropping rectangles, because a region larger than the truth is
+// unsafe while one smaller is merely stale. See
+// sw/apps/wm/tests/test_region.c.
+#define Z_WM_MAX_CLIP            8
+
+typedef struct {
+	int16_t x0, y0, x1, y1;   // inclusive; x1 < x0 means empty
+} z_wm_cliprect_t;
+
 // -- launch arguments --
 //
 // There is no argv. z_proc_run() (zeitlos.h) takes a program name and

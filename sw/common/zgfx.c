@@ -15,6 +15,165 @@
 
 #define VRAM ((volatile uint32_t *)0x20000000)
 
+/*
+ * -- the visible region --
+ *
+ * A window's CLIP RECT is where its own content lives. Its VISIBLE
+ * REGION is the part of that not covered by a window in front of it,
+ * and the two are different the moment anything overlaps.
+ *
+ * Drawing to the clip rect alone is what let an app paint over the
+ * windows above it -- a clock running behind a text editor redrew its
+ * hands straight through the editor's content, and every app had the
+ * same exposure whenever wm asked it to repaint while occluded.
+ *
+ * The region is a SET of rectangles, not one: a window covered in the
+ * middle is visible as a ring, and a bounding box around that would
+ * be a superset -- it would permit exactly the drawing this exists to
+ * prevent. So the set is stored as-is and every primitive is issued
+ * once per rectangle.
+ *
+ * Empty (count 0) means UNRESTRICTED, not "invisible". That is the
+ * state before wm has said anything, and it has to mean "draw
+ * normally" or a process would be blank until its first region
+ * message arrived. wm sends a genuinely empty region as a
+ * fully-occluded window, which is represented as count 1 with an
+ * empty rectangle.
+ *
+ * Process-global rather than per-window: the hardware has one
+ * framebuffer and one scissor, and a process draws to one window at a
+ * time. z_win_clip_begin()/end() (zwin.c) set it around a window's
+ * drawing.
+ */
+
+static void z_fb_hw_line_one(int x0, int y0, int x1, int y1, int color,
+	const z_clip_t *clip);
+static void hw_fill_rect_one(int x, int y, int w, int h, int color,
+	bool wait);
+
+// Raster op for the next hardware fill. Z_ROP_COPY for every caller
+// but z_fb_hw_fill_rect_rop(), which sets it, fills, and puts it back.
+//
+// A file-scope variable rather than another parameter threaded through
+// hw_fill_rect_core(), hw_fill_rect_one() and the three public entry
+// points: the alternative is four signatures changed for one caller.
+// Safe because the whole sequence -- set, fill, restore -- happens
+// with no yield in between, and the register write it feeds is inside
+// gpu_blit_acquire()'s masked section.
+static int fill_rop = Z_ROP_COPY;
+static void hw_fill_shade_one(int x, int y, int w, int h, int level,
+	bool wait);
+static void hw_fill_pattern_one(int x, int y, int w, int h,
+	const uint8_t *pat);
+static void z_fb_hw_box_one(int x0, int y0, int x1, int y1, int color,
+	const z_clip_t *clip);
+
+#define Z_GFX_MAX_CLIP  8
+
+static z_clip_t gfx_region[Z_GFX_MAX_CLIP];
+static int gfx_region_n;	// 0 = unrestricted
+
+void z_gfx_set_visible(const z_clip_t *rects, int n) {
+	if (n > Z_GFX_MAX_CLIP) n = Z_GFX_MAX_CLIP;
+	if (n < 0) n = 0;
+	for (int i = 0; i < n; i++) gfx_region[i] = rects[i];
+	gfx_region_n = n;
+}
+
+void z_gfx_clear_visible(void) {
+	gfx_region_n = 0;
+}
+
+int z_gfx_visible_count(void) {
+	return gfx_region_n;
+}
+
+// Effective clip for pass `i`: the caller's clip intersected with
+// region rectangle i. Returns false if that intersection is empty, so
+// the caller can skip the pass entirely.
+bool z_gfx_visible_clip(int i, const z_clip_t *clip, z_clip_t *out) {
+
+	z_clip_t r;
+
+	if (gfx_region_n == 0) {
+		r.x0 = 0; r.y0 = 0;
+		r.x1 = Z_SCREEN_W - 1; r.y1 = Z_SCREEN_H - 1;
+	} else {
+		if (i < 0 || i >= gfx_region_n) return false;
+		r = gfx_region[i];
+	}
+
+	if (clip) {
+		if (clip->x0 > r.x0) r.x0 = clip->x0;
+		if (clip->y0 > r.y0) r.y0 = clip->y0;
+		if (clip->x1 < r.x1) r.x1 = clip->x1;
+		if (clip->y1 < r.y1) r.y1 = clip->y1;
+	}
+
+	if (r.x1 < r.x0 || r.y1 < r.y0) return false;
+
+	*out = r;
+	return true;
+
+}
+
+// Programs the BLITTER's scissor (rtl/gpu/gpu_blit.v registers 20..23)
+// from region rectangle `i`, intersected with `clip`. Returns false
+// when that intersection is empty, so the caller skips the pass.
+//
+// The blitter's scissor is half-open on the high side -- [x0,x1) --
+// while z_clip_t is inclusive, hence the +1.
+//
+// Every blitter primitive must call this (or clear it) before
+// triggering, because the scissor is PERSISTENT hardware state: a
+// rectangle left over from a previous, unrelated blit would silently
+// clip the next one. Restoring the full screen is what
+// z_gfx_blit_scissor_reset() is for.
+bool z_gfx_blit_scissor(int i, const z_clip_t *clip) {
+
+	z_clip_t eff;
+
+	if (!z_gfx_visible_clip(i, clip, &eff)) return false;
+
+	gpu_blit_clip_x0 = (uint32_t)eff.x0;
+	gpu_blit_clip_y0 = (uint32_t)eff.y0;
+	gpu_blit_clip_x1 = (uint32_t)(eff.x1 + 1);
+	gpu_blit_clip_y1 = (uint32_t)(eff.y1 + 1);
+
+	return true;
+
+}
+
+void z_gfx_blit_scissor_reset(void) {
+	gpu_blit_clip_x0 = 0;
+	gpu_blit_clip_y0 = 0;
+	gpu_blit_clip_x1 = Z_SCREEN_W;
+	gpu_blit_clip_y1 = Z_SCREEN_H;
+}
+
+// True if (x,y) is inside the visible region.
+//
+// This is where every SOFTWARE primitive gets clipped: set_pixel,
+// fill_rect, draw_char/text/icon and their _2 variants all funnel
+// through clip_allows(), so testing the region here covers all of
+// them at once rather than growing a loop in each.
+//
+// The hardware paths cannot use it -- they hand a rectangle to the
+// GPU rather than visiting pixels -- and are handled per primitive.
+static inline bool region_allows(int x, int y) {
+
+	if (gfx_region_n == 0) return true;
+
+	for (int i = 0; i < gfx_region_n; i++) {
+		const z_clip_t *r = &gfx_region[i];
+		if (x >= r->x0 && x <= r->x1 && y >= r->y0 && y <= r->y1)
+			return true;
+	}
+
+	return false;
+
+}
+
 static inline bool clip_allows(int x, int y, const z_clip_t *clip) {
 
 	if (x < 0 || x >= Z_SCREEN_W || y < 0 || y >= Z_SCREEN_H)
@@ -25,7 +184,7 @@ static inline bool clip_allows(int x, int y, const z_clip_t *clip) {
 			return false;
 	}
 
-	return true;
+	return region_allows(x, y);
 
 }
 
@@ -80,7 +239,30 @@ static inline void gpu_wait_fifo(void) {
 	}
 }
 
-void z_fb_hw_line(int x0, int y0, int x1, int y1, int color, const z_clip_t *clip) {
+// Issued once per visible-region rectangle.
+//
+// The rasterizer has a hardware scissor (gpu_clip_*), so each pass
+// costs five register writes plus a draw whose out-of-clip pixels the
+// hardware discards -- no software line clipping. With no region set,
+// or one rectangle, this is exactly the single call it always was.
+void z_fb_hw_line(int x0, int y0, int x1, int y1, int color,
+	const z_clip_t *clip) {
+
+	int n = z_gfx_visible_count();
+	z_clip_t eff;
+
+	if (n == 0) {
+		z_fb_hw_line_one(x0, y0, x1, y1, color, clip);
+		return;
+	}
+
+	for (int i = 0; i < n; i++)
+		if (z_gfx_visible_clip(i, clip, &eff))
+			z_fb_hw_line_one(x0, y0, x1, y1, color, &eff);
+
+}
+
+static void z_fb_hw_line_one(int x0, int y0, int x1, int y1, int color, const z_clip_t *clip) {
 
 	// unconditional, regardless of clip -- clip only ever narrows
 	// where on screen a line can land, it was never a bounds check
@@ -141,7 +323,30 @@ void z_fb_hw_line(int x0, int y0, int x1, int y1, int color, const z_clip_t *cli
 
 }
 
-void z_fb_hw_box(int x0, int y0, int x1, int y1, int color, const z_clip_t *clip) {
+// Issued once per visible-region rectangle.
+//
+// The rasterizer has a hardware scissor (gpu_clip_*), so each pass
+// costs five register writes plus a draw whose out-of-clip pixels the
+// hardware discards -- no software line clipping. With no region set,
+// or one rectangle, this is exactly the single call it always was.
+void z_fb_hw_box(int x0, int y0, int x1, int y1, int color,
+	const z_clip_t *clip) {
+
+	int n = z_gfx_visible_count();
+	z_clip_t eff;
+
+	if (n == 0) {
+		z_fb_hw_box_one(x0, y0, x1, y1, color, clip);
+		return;
+	}
+
+	for (int i = 0; i < n; i++)
+		if (z_gfx_visible_clip(i, clip, &eff))
+			z_fb_hw_box_one(x0, y0, x1, y1, color, &eff);
+
+}
+
+static void z_fb_hw_box_one(int x0, int y0, int x1, int y1, int color, const z_clip_t *clip) {
 
 	// The verticals deliberately stop one pixel short at BOTH ends, so
 	// that every pixel of the outline is drawn EXACTLY ONCE.
@@ -344,7 +549,27 @@ void z_fb_hw_fill_shade_async(int x, int y, int w, int h, int level) {
 // black or white fill on a bitstream without dither support, which is
 // wrong but legible, rather than filling with the level as a bit
 // pattern, which would be noise.
+// Same shape, and the same reasoning, as hw_fill_rect_core() above.
 static void hw_fill_shade_core(int x, int y, int w, int h, int level,
+	bool wait) {
+
+	int n = z_gfx_visible_count();
+
+	if (n == 0) {
+		hw_fill_shade_one(x, y, w, h, level, wait);
+		return;
+	}
+
+	for (int i = 0; i < n; i++) {
+		if (!z_gfx_blit_scissor(i, NULL)) continue;
+		hw_fill_shade_one(x, y, w, h, level, wait);
+	}
+
+	z_gfx_blit_scissor_reset();
+
+}
+
+static void hw_fill_shade_one(int x, int y, int w, int h, int level,
 	bool wait) {
 
 	if (level < 0) level = 0;
@@ -424,6 +649,20 @@ void z_fb_hw_span(int x, int y, int w) {
 
 	if (w <= 0) return;
 
+	// A span is a one-row shaded fill, and z_fb_hw_span_begin()
+	// hoists the register setup out so this writes only what varies.
+	// That lean path cannot carry a per-rectangle scissor: the
+	// scissor would have to be rewritten between passes, which is
+	// exactly the setup span_begin() exists to avoid.
+	//
+	// So while a region is set, route through the shaded fill, which
+	// already loops and scissors correctly. Slower per span, and only
+	// while something is actually occluding this window.
+	if (z_gfx_visible_count() != 0) {
+		hw_fill_shade_core(x, y, w, 1, span_level_cached, false);
+		return;
+	}
+
 	// Falls back to a whole fill where the bitstream has no dither --
 	// slower, but this path is only reached on old gateware and
 	// correctness matters more than speed there.
@@ -456,6 +695,13 @@ void z_fb_hw_span(int x, int y, int w) {
 void z_fb_hw_span_clear(int x, int y, int w) {
 
 	if (w <= 0) return;
+
+	// See z_fb_hw_span() above -- same lean-path reasoning, and this
+	// one is a plain fill so it routes to the plain filler.
+	if (z_gfx_visible_count() != 0) {
+		hw_fill_rect_core(x, y, w, 1, 0, false);
+		return;
+	}
 
 	{
 		uint32_t old_mask = gpu_blit_acquire();
@@ -591,7 +837,47 @@ void z_fb_hw_scroll_probe(uint32_t expect_adr) {
 
 }
 
+// -- copies and the region --
+//
+// A copy CANNOT simply be issued once per region rectangle the way a
+// fill can. The blitter's copy source is aligned to the destination
+// WORD, not to dst_x, so a scissor that pushes the first written word
+// later than the one this address was computed for feeds the engine
+// the wrong source data -- see "Copy and the scissor" in
+// docs/gpu_blitter.md, and rtl/gpu/bench/tb_clip.v, which asserts the
+// current behaviour.
+//
+// Rounding each region rectangle's left edge DOWN to a 32-pixel
+// boundary would keep the source aligned, but it would also let the
+// copy write up to 31 pixels outside the region -- over the window in
+// front. That is the exact bug this whole exercise exists to remove,
+// so it is not an acceptable trade.
+//
+// So while a region is set, a copy is refused rather than issued
+// wrong or issued over its neighbour. Callers that need to scroll
+// while partially occluded must repaint instead, which is what the
+// terminal already does when wm asks it to.
+//
+// Returns true when the caller should go ahead unclipped.
+static bool copy_region_allows(void) {
+
+	if (z_gfx_visible_count() == 0) return true;
+
+	// A single rectangle that is word-aligned on its left edge and
+	// covers the full width it needs is the one case that IS safe --
+	// but proving that here needs the destination rectangle, which
+	// these entry points have. Left for when a caller actually needs
+	// it; today nothing scrolls while occluded except by repainting.
+	return false;
+
+}
+
 void z_fb_hw_scroll(int x, int y, int w, int h, int dy) {
+
+	// See copy_region_allows(): a partially occluded window must
+	// repaint rather than scroll, because the blitter cannot clip a
+	// copy without either corrupting it or overrunning the region.
+	if (!copy_region_allows()) return;
 
 	if (dy == 0 || w <= 0 || h <= 0) return;
 
@@ -698,7 +984,38 @@ void z_fb_hw_fill_rect_async(int x, int y, int w, int h, int color) {
 	hw_fill_rect_core(x, y, w, h, color, false);
 }
 
+// Issued once per visible-region rectangle, via the blitter's
+// hardware scissor (rtl/gpu/gpu_blit.v registers 20..23).
+//
+// Fills are the easy half of clipping a blit: there is no source to
+// keep in step, so the scissor can cut anywhere, including through
+// the middle of a word. Copies are not -- see z_fb_hw_scroll() and
+// z_fb_hw_blit_vram() below, and "Copy and the scissor" in
+// docs/gpu_blitter.md.
+//
+// The scissor is PERSISTENT hardware state, so this resets it to the
+// full screen on the way out. Leaving it set would silently clip
+// whatever blit came next, in this process or the next one scheduled.
 static void hw_fill_rect_core(int x, int y, int w, int h, int color,
+	bool wait) {
+
+	int n = z_gfx_visible_count();
+
+	if (n == 0) {
+		hw_fill_rect_one(x, y, w, h, color, wait);
+		return;
+	}
+
+	for (int i = 0; i < n; i++) {
+		if (!z_gfx_blit_scissor(i, NULL)) continue;
+		hw_fill_rect_one(x, y, w, h, color, wait);
+	}
+
+	z_gfx_blit_scissor_reset();
+
+}
+
+static void hw_fill_rect_one(int x, int y, int w, int h, int color,
 	bool wait) {
 
 	// clamp to actual screen bounds -- unconditional, regardless of
@@ -722,7 +1039,9 @@ static void hw_fill_rect_core(int x, int y, int w, int h, int color,
 	gpu_blit_width = (uint32_t)w;
 	gpu_blit_height = (uint32_t)h;
 	gpu_blit_pattern = color ? 0xFFFFFFFFu : 0x00000000u;
-	gpu_blit_ctrl = GPU_BLIT_CTRL_START | GPU_BLIT_CTRL_FILL | GPU_BLIT_CTRL_CLIP;
+	gpu_blit_ctrl = GPU_BLIT_CTRL_START | GPU_BLIT_CTRL_FILL |
+		GPU_BLIT_CTRL_CLIP |
+		((uint32_t)(fill_rop & 3) << GPU_BLIT_CTRL_ROP_LSB);
 
 	maskirq(old_mask);
 
@@ -763,7 +1082,27 @@ static uint32_t pattern_row_word(uint8_t row) {
 
 }
 
+// Same shape as the fills above.
 void z_fb_hw_fill_pattern(int x, int y, int w, int h, const uint8_t *pat) {
+
+	int n = z_gfx_visible_count();
+
+	if (n == 0) {
+		hw_fill_pattern_one(x, y, w, h, pat);
+		return;
+	}
+
+	for (int i = 0; i < n; i++) {
+		if (!z_gfx_blit_scissor(i, NULL)) continue;
+		hw_fill_pattern_one(x, y, w, h, pat);
+	}
+
+	z_gfx_blit_scissor_reset();
+
+}
+
+static void hw_fill_pattern_one(int x, int y, int w, int h,
+	const uint8_t *pat) {
 
 	if (!pat) return;
 
@@ -1137,6 +1476,9 @@ bool z_fb_hw_blit_sprite_async(const void *data, const void *mask,
 void z_fb_hw_blit_vram(int src_x, int src_y,
 	int dst_x, int dst_y, int w, int h) {
 
+	// See copy_region_allows() above.
+	if (!copy_region_allows()) return;
+
 	// Only the destination is clamped here, and only against the visible
 	// screen. The source is deliberately NOT clamped to Z_SCREEN_H: on a
 	// bitstream with more VRAM than the visible framebuffer, a legitimate
@@ -1341,20 +1683,51 @@ void z_fb_draw_char(int x, int y, char c, int color, const z_font_t *font, const
 	// comment for the full writeup, including why this is suspected
 	// to be the actual cause of the "horizontal garbage near
 	// freshly-typed text" report (docs/window_manager.md).
-	uint32_t old_mask = gpu_blit_acquire();
+	// Once per visible-region rectangle.
+	//
+	// The blitter's glyph mode honours the scissor now
+	// (rtl/gpu/gpu_blit.v, phase 2), including partial cells -- so a
+	// character the region cuts through renders in hardware rather
+	// than falling back to the software renderer. Both the glyph bits
+	// AND the cell are clipped, which matters: glyph mode paints a
+	// solid cell, so clipping only the bits would let the background
+	// erase pixels outside the region.
+	//
+	// The scissor is written INSIDE the masked section, alongside the
+	// rest of the setup, for the reason the comment above gives: every
+	// register in this sequence is unprotected, and a scissor written
+	// outside it could be overwritten by another process's glyph blit
+	// before this one's trigger fires.
+	int rn = z_gfx_visible_count();
 
-	gpu_blit_dst_x = x;
-	gpu_blit_dst_y = y;
-	gpu_blit_glyph_addr = glyph_base + (uint32_t)(uc - font->first) * font->h;
-	gpu_blit_glyph_w = font->w;
-	gpu_blit_glyph_h = font->h;
-	gpu_blit_fg_color = color ? 1 : 0;
-	gpu_blit_bg_color = 0;	// solid cell fill -- see zgfx.h/docs for how
-							// this differs from the software renderer's
-							// transparent-overlay behavior
-	gpu_blit_ctrl = GPU_BLIT_CTRL_START | GPU_BLIT_CTRL_GLYPH;
+	for (int ri = 0; ri < (rn ? rn : 1); ri++) {
 
-	maskirq(old_mask);
+		uint32_t old_mask = gpu_blit_acquire();
+
+		if (rn) {
+			if (!z_gfx_blit_scissor(ri, clip)) {
+				maskirq(old_mask);
+				continue;
+			}
+		}
+
+		gpu_blit_dst_x = x;
+		gpu_blit_dst_y = y;
+		gpu_blit_glyph_addr = glyph_base + (uint32_t)(uc - font->first) * font->h;
+		gpu_blit_glyph_w = font->w;
+		gpu_blit_glyph_h = font->h;
+		gpu_blit_fg_color = color ? 1 : 0;
+		gpu_blit_bg_color = 0;	// solid cell fill -- see zgfx.h/docs for
+								// how this differs from the software
+								// renderer's transparent-overlay behavior
+		gpu_blit_ctrl = GPU_BLIT_CTRL_START | GPU_BLIT_CTRL_GLYPH |
+			(rn ? GPU_BLIT_CTRL_CLIP : 0);
+
+		maskirq(old_mask);
+
+	}
+
+	if (rn) z_gfx_blit_scissor_reset();
 
 }
 
@@ -1689,3 +2062,22 @@ void z_fb_draw_icon(int x, int y, int icon_id, int fg_color, int bg_color, const
 }
 
 #endif
+
+
+// Declared in zgfx.h since the raster ops were added, and never
+// defined -- nothing had needed a non-COPY fill until wm started
+// inverting the focused window's titlebar. The link error it produced
+// was the first thing to notice.
+//
+// XOR over a strip is what makes the focus indicator work at all:
+// the title is hardware-blitted and the icons are bitmaps, so
+// inverting the finished pixels is the only way to reverse-video both
+// without a second drawing path for each.
+void z_fb_hw_fill_rect_rop(int x, int y, int w, int h, int color, int rop) {
+
+	int prev = fill_rop;
+	fill_rop = rop;
+	hw_fill_rect_core(x, y, w, h, color, true);
+	fill_rop = prev;
+
+}

@@ -49,29 +49,34 @@ LABEL = "ZEITLOS"
 
 # Mirrors tools/mkfatimg.sh. Grouped the same way and in the same
 # order, so the two can be read side by side.
+# Destinations are apps/-prefixed: the card holds executables in
+# apps/ rather than loose in the root, alongside docs/, ark/ and
+# user/. sw/os/fs/fs.c's fs_exec_resolve() searches the root and then
+# apps/, so a bare `run term` still works and a card written before
+# the move still boots.
 SUPPLEMENTAL = [
-    ("files", "sw/apps/files/files.bin"),
-    ("text", "sw/apps/text/text.bin"),
-    ("read", "sw/apps/read/read.bin"),
-    ("draw", "sw/apps/draw/draw.bin"),
-    ("info", "sw/apps/info/info.bin"),
-    ("calc", "sw/apps/calc/calc.bin"),
-    ("clock", "sw/apps/clock/clock.bin"),
-    ("settings", "sw/apps/settings/settings.bin"),
-    ("track", "sw/apps/track/track.bin"),
+    ("apps/files", "sw/apps/files/files.bin"),
+    ("apps/text", "sw/apps/text/text.bin"),
+    ("apps/read", "sw/apps/read/read.bin"),
+    ("apps/draw", "sw/apps/draw/draw.bin"),
+    ("apps/info", "sw/apps/info/info.bin"),
+    ("apps/calc", "sw/apps/calc/calc.bin"),
+    ("apps/clock", "sw/apps/clock/clock.bin"),
+    ("apps/settings", "sw/apps/settings/settings.bin"),
+    ("apps/track", "sw/apps/track/track.bin"),
 ]
 
 GAMES_DEMOS = [
-    ("space3d", "sw/apps/space3d/space3d.bin"),
-    ("gamedemo", "sw/apps/gamedemo/gamedemo.bin"),
-    ("gpu3d", "sw/apps/gpu3d/gpu3d.bin"),
+    ("apps/space3d", "sw/apps/space3d/space3d.bin"),
+    ("apps/gamedemo", "sw/apps/gamedemo/gamedemo.bin"),
+    ("apps/gpu3d", "sw/apps/gpu3d/gpu3d.bin"),
 ]
 
 MISC = [
-    ("portdemo", "sw/apps/portdemo/portdemo.bin"),
+    ("apps/portdemo", "sw/apps/portdemo/portdemo.bin"),
 ]
 
-DIRS = ["docs", "ark", "user"]
+DIRS = ["apps", "docs", "ark", "user"]
 
 TOOLS = ["mkfs.fat", "fsck.fat", "mmd", "mcopy"]
 
@@ -121,7 +126,7 @@ def check_against_script(root):
 
     # cp sw/apps/foo/foo.bin "$MOUNT_DIR/foo"
     script = {}
-    for m in re.finditer(r'^\s*cp\s+(\S+\.bin)\s+"\$MOUNT_DIR/([\w.]+)"',
+    for m in re.finditer(r'^\s*cp\s+(\S+\.bin)\s+"\$MOUNT_DIR/([\w./]+)"',
                          text, re.M):
         script[m.group(2)] = m.group(1)
 
@@ -142,7 +147,8 @@ def check_against_script(root):
     # The core apps must not be on the card at all -- see this module's
     # header. Worth checking separately because it is the one difference
     # that is silently harmful rather than merely inconsistent.
-    for core in ("wm", "net", "repl", "term"):
+    for core in ("wm", "net", "repl", "term",
+                 "apps/wm", "apps/net", "apps/repl", "apps/term"):
         if core in script:
             problems.append(
                 "tools/mkfatimg.sh copies the core app '%s' onto the card. "

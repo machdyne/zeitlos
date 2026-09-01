@@ -657,7 +657,11 @@ module sysctl #()
 `ifdef ICACHE
 `endif
 
-	wire cs_bram = (wbm_adr < 8192);
+	// Equivalent to (wbm_adr < 8192), but written as an equality on the
+	// upper bits so yosys builds a LUT tree rather than a 32-bit
+	// subtractor: the `<` form came out as a 14-stage CCU2C carry chain
+	// on the critical path.
+	wire cs_bram = (wbm_adr[31:13] == 19'd0);
 	wire cs_mtu = ((wbm_adr & 32'hf000_0000) == 32'h9000_0000);
 
 `ifdef MEM_SRAM
@@ -869,73 +873,81 @@ module sysctl #()
 	wire cs_esp32rx = ((wbm_adr & 32'hf000_0300) == 32'hf000_0300);
 `endif
 
+	// Both muxes below are AND-OR, not priority chains. Every cs_* is
+	// one-hot by construction (distinct top nibbles; usb0/usb1 split on
+	// bit 5; the 0x7 region sub-decodes on bits [10:8] with cs_csrs
+	// excluding the others), so priority buys nothing and costs a mux
+	// level per peripheral -- a chain that grew with every slave added
+	// and became the long pole on the 48MHz bus. AND-OR maps to a
+	// balanced OR tree instead: ~3 LUT levels regardless of slave count.
+	// Nothing selected still yields zero, as before.
 	assign wbm_dat_i =
-		cs_bram ? wbs_bram_dat_o :
-		cs_mtu ? wbs_mtu_dat_o :
+		({32{cs_bram}} & wbs_bram_dat_o) |
+		({32{cs_mtu}} & wbs_mtu_dat_o) |
 `ifdef MEM_SRAM
-		cs_sram ? wbs_sram_dat_o :
+		({32{cs_sram}} & wbs_sram_dat_o) |
 `elsif MEM_SDRAM
-		cs_sdram ? wbs_sdram_dat_o :
+		({32{cs_sdram}} & wbs_sdram_dat_o) |
 `elsif MEM_QQSPI
-		cs_qqspi ? wbs_qqspi_dat_o :
+		({32{cs_qqspi}} & wbs_qqspi_dat_o) |
 `endif
 `ifdef MEM_VRAM
 `ifdef GPU_RASTER
-		cs_vram ? wbm_cpu_arb0_dat_i :
+		({32{cs_vram}} & wbm_cpu_arb0_dat_i) |
 `else
-		cs_vram ? wbs_vram_dat_o :
+		({32{cs_vram}} & wbs_vram_dat_o) |
 `endif
 `endif
 `ifdef MEM_ROM
-		cs_rom ? wbs_rom_dat_o :
+		({32{cs_rom}} & wbs_rom_dat_o) |
 `endif
 `ifdef DEBUG
-		cs_debug ? wbs_debug_dat_o :
+		({32{cs_debug}} & wbs_debug_dat_o) |
 `endif
-		cs_uart0 ? wbs_uart0_dat_o :
+		({32{cs_uart0}} & wbs_uart0_dat_o) |
 `ifdef UART1
-		cs_uart1 ? wbs_uart1_dat_o :
+		({32{cs_uart1}} & wbs_uart1_dat_o) |
 `endif
 `ifdef ESP32_LINK
-		cs_esp32ctl ? wbs_esp32ctl_dat_o :
-		cs_esp32rx ? wbs_esp32rx_dat_o :
+		({32{cs_esp32ctl}} & wbs_esp32ctl_dat_o) |
+		({32{cs_esp32rx}} & wbs_esp32rx_dat_o) |
 `endif
 `ifdef SPI_SDCARD
-		cs_spisdcard ? wbs_spisdcard_dat_o :
+		({32{cs_spisdcard}} & wbs_spisdcard_dat_o) |
 `endif
 `ifdef USB_HID
-		cs_usb0 ? wbs_usb0_dat_o :
-		cs_usb1 ? wbs_usb1_dat_o :
+		({32{cs_usb0}} & wbs_usb0_dat_o) |
+		({32{cs_usb1}} & wbs_usb1_dat_o) |
 `endif
 `ifdef GPU_RASTER
-		cs_gpu ? wbs_gpu_dat_o :
+		({32{cs_gpu}} & wbs_gpu_dat_o) |
 `endif
 `ifdef GPU_BLIT
-		cs_gpu_blit ? wbs_gpu_blit_dat_o :
+		({32{cs_gpu_blit}} & wbs_gpu_blit_dat_o) |
 `endif
 `ifdef MEM_GLYPH
-		cs_glyph ? wbs_glyph_dat_o :
+		({32{cs_glyph}} & wbs_glyph_dat_o) |
 `endif
 `ifdef SPI_ETH
-		cs_spieth ? wbs_spieth_dat_o :
+		({32{cs_spieth}} & wbs_spieth_dat_o) |
 `endif
 `ifdef ETH_RMII
-		cs_ethmac ? wbs_ethmac_dat_o :
+		({32{cs_ethmac}} & wbs_ethmac_dat_o) |
 `endif
-		cs_socctl ? wbs_socctl_dat_o :
+		({32{cs_socctl}} & wbs_socctl_dat_o) |
 `ifdef RTC
-		cs_rtc ? wbs_rtc_dat_o :
+		({32{cs_rtc}} & wbs_rtc_dat_o) |
 `endif
 `ifdef TRNG
-		cs_trng ? wbs_trng_dat_o :
+		({32{cs_trng}} & wbs_trng_dat_o) |
 `endif
 `ifdef AUDIO
-		cs_audio ? wbs_audio_dat_o :
+		({32{cs_audio}} & wbs_audio_dat_o) |
 `endif
-		cs_csrs ? wbs_csrs_dat_o :
+		({32{cs_csrs}} & wbs_csrs_dat_o) |
 `ifdef ICACHE
 `endif
-		32'hzzzz_zzzz;
+		32'd0;
 
 	wire wbs_bram_ack_o;
 	wire wbs_mtu_ack_o;
@@ -993,69 +1005,69 @@ module sysctl #()
 `endif
 
 	assign wbm_ack =
-		cs_bram ? wbs_bram_ack_o :
-		cs_mtu ? wbs_mtu_ack_o :
+		(cs_bram & wbs_bram_ack_o) |
+		(cs_mtu & wbs_mtu_ack_o) |
 `ifdef MEM_SRAM
-		cs_sram ? wbs_sram_ack_o :
+		(cs_sram & wbs_sram_ack_o) |
 `elsif MEM_SDRAM
-		cs_sdram ? wbs_sdram_ack_o :
+		(cs_sdram & wbs_sdram_ack_o) |
 `elsif MEM_QQSPI
-		cs_qqspi ? wbs_qqspi_ack_o :
+		(cs_qqspi & wbs_qqspi_ack_o) |
 `endif
 `ifdef MEM_VRAM
 `ifdef GPU_RASTER
-		cs_vram ? wbm_cpu_arb0_ack :
+		(cs_vram & wbm_cpu_arb0_ack) |
 `else
-		cs_vram ? wbs_vram_ack_o :
+		(cs_vram & wbs_vram_ack_o) |
 `endif
 `endif
 `ifdef MEM_ROM
-		cs_rom ? wbs_rom_ack_o :
+		(cs_rom & wbs_rom_ack_o) |
 `endif
 `ifdef DEBUG
-		cs_debug ? wbs_debug_ack_o :
+		(cs_debug & wbs_debug_ack_o) |
 `endif
-		cs_uart0 ? wbs_uart0_ack_o :
+		(cs_uart0 & wbs_uart0_ack_o) |
 `ifdef UART1
-		cs_uart1 ? wbs_uart1_ack_o :
+		(cs_uart1 & wbs_uart1_ack_o) |
 `endif
 `ifdef ESP32_LINK
-		cs_esp32ctl ? wbs_esp32ctl_ack_o :
-		cs_esp32rx ? wbs_esp32rx_ack_o :
+		(cs_esp32ctl & wbs_esp32ctl_ack_o) |
+		(cs_esp32rx & wbs_esp32rx_ack_o) |
 `endif
 `ifdef SPI_SDCARD
-		cs_spisdcard ? wbs_spisdcard_ack_o :
+		(cs_spisdcard & wbs_spisdcard_ack_o) |
 `endif
 `ifdef USB_HID
-		cs_usb0 ? wbs_usb0_ack_o :
-		cs_usb1 ? wbs_usb1_ack_o :
+		(cs_usb0 & wbs_usb0_ack_o) |
+		(cs_usb1 & wbs_usb1_ack_o) |
 `endif
 `ifdef GPU_RASTER
-		cs_gpu ? wbs_gpu_ack_o :
+		(cs_gpu & wbs_gpu_ack_o) |
 `endif
 `ifdef GPU_BLIT
-		cs_gpu_blit ? wbs_gpu_blit_ack_o :
+		(cs_gpu_blit & wbs_gpu_blit_ack_o) |
 `endif
 `ifdef MEM_GLYPH
-		cs_glyph ? wbs_glyph_ack_o :
+		(cs_glyph & wbs_glyph_ack_o) |
 `endif
 `ifdef SPI_ETH
-		cs_spieth ? wbs_spieth_ack_o :
+		(cs_spieth & wbs_spieth_ack_o) |
 `endif
 `ifdef ETH_RMII
-		cs_ethmac ? wbs_ethmac_ack_o :
+		(cs_ethmac & wbs_ethmac_ack_o) |
 `endif
-		cs_socctl ? wbs_socctl_ack_o :
+		(cs_socctl & wbs_socctl_ack_o) |
 `ifdef RTC
-		cs_rtc ? wbs_rtc_ack_o :
+		(cs_rtc & wbs_rtc_ack_o) |
 `endif
 `ifdef TRNG
-		cs_trng ? wbs_trng_ack_o :
+		(cs_trng & wbs_trng_ack_o) |
 `endif
 `ifdef AUDIO
-		cs_audio ? wbs_audio_ack_o :
+		(cs_audio & wbs_audio_ack_o) |
 `endif
-		cs_csrs ? wbs_csrs_ack_o :
+		(cs_csrs & wbs_csrs_ack_o) |
 `ifdef ICACHE
 `endif
 		1'b0;

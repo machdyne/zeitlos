@@ -53,6 +53,39 @@ typedef struct {
 	int32_t x0, y0, x1, y1;
 } z_clip_t;
 
+/*
+ * -- the visible region --
+ *
+ * The part of a window not covered by the windows in front of it. Set
+ * it and every primitive below is confined to it; without it an app
+ * paints over whatever is above it, which is what let a clock running
+ * behind a text editor redraw its hands through the editor.
+ *
+ * A SET of rectangles, because a window covered in the middle is
+ * visible as a ring and a bounding box around that would be a
+ * superset -- it would permit exactly the drawing this prevents.
+ *
+ * Count 0 means UNRESTRICTED, not invisible: that is the state before
+ * wm has said anything, and it has to mean "draw normally". A
+ * fully-occluded window is one empty rectangle, not zero rectangles.
+ *
+ * Process-global: one framebuffer, one scissor, one window being
+ * drawn at a time. zwin.c sets it around a window's drawing.
+ */
+void z_gfx_set_visible(const z_clip_t *rects, int n);
+void z_gfx_clear_visible(void);
+int  z_gfx_visible_count(void);
+
+// Effective clip for pass `i` -- the caller's clip intersected with
+// region rectangle i. false when empty, so the pass can be skipped.
+bool z_gfx_visible_clip(int i, const z_clip_t *clip, z_clip_t *out);
+
+// Programs the blitter's hardware scissor for pass `i`. false when
+// empty. The scissor is persistent state -- reset it when done, or a
+// later unrelated blit inherits it.
+bool z_gfx_blit_scissor(int i, const z_clip_t *clip);
+void z_gfx_blit_scissor_reset(void);
+
 // clip may be NULL to clip to the screen only
 void z_fb_set_pixel(int x, int y, int color, const z_clip_t *clip);
 void z_fb_fill_rect(int x, int y, int w, int h, int color, const z_clip_t *clip);

@@ -101,17 +101,30 @@ module tb_glyph;
         // directly into glyph memory (hierarchical poke -- simulation
         // only, mirrors what z_gfx_hw_font_load() does via the real
         // wishbone port A in hardware)
-        // glyph 0 rows (MSB-first, top 5 bits used):
-        gmem.mem[0] = 8'b10000000; // row0: col0 only
-        gmem.mem[1] = 8'b01000000; // row1: col1 only
-        gmem.mem[2] = 8'b00100000; // row2: col2 only
-        gmem.mem[3] = 8'b00010000; // row3: col3 only
-        // glyph 1 rows -- deliberately different so any bleed from
-        // glyph 0's last row is obvious
-        gmem.mem[4] = 8'b11111000; // row0: all 5 cols on
-        gmem.mem[5] = 8'b00000000; // row1: all off
-        gmem.mem[6] = 8'b11111000; // row2: all 5 cols on
-        gmem.mem[7] = 8'b00000000; // row3: all off
+        // FOUR ROWS PER WORD, not one per element.
+        //
+        // rtl/mem/glyph.v stores `reg [31:0] mem[]` and the blit port
+        // extracts mem[addr>>2][addr[1:0]*8 +: 8] -- byte lanes, low
+        // lane first. This bench used to poke one 8-bit row per array
+        // element, which was right when the array was byte-wide and
+        // silently wrong once it became word-wide to match
+        // rtl/mem/vram.v's shape. Every read then returned row N's
+        // byte from word N, so only row 0 of each glyph had any data
+        // and the test had been failing ever since.
+        //
+        // Rows are MSB-first within the byte, top 5 bits used.
+        //
+        // glyph 0: one pixel per row, marching right
+        gmem.mem[0] = {8'b00010000,   // row3: col3
+                       8'b00100000,   // row2: col2
+                       8'b01000000,   // row1: col1
+                       8'b10000000};  // row0: col0
+        // glyph 1 -- deliberately different so any bleed from glyph
+        // 0's last row is obvious
+        gmem.mem[1] = {8'b00000000,   // row3: all off
+                       8'b11111000,   // row2: all 5 cols on
+                       8'b00000000,   // row1: all off
+                       8'b11111000};  // row0: all 5 cols on
 
         rst = 1;
         repeat (4) @(posedge clk);

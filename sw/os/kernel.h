@@ -220,6 +220,23 @@ z_rv k_kernel_dump(void);
 void kprint(const char *s);
 void kprint_hex32(uint32_t val);
 
+// Non-zero while a syscall that touches FatFs is running, which tells
+// the KTIMER scheduler in kernel.c not to swap that process out.
+// FatFs is built non-reentrant (FF_FS_REENTRANT 0) and sdmm.c holds CS
+// asserted across a whole SPI transaction, so two processes in the
+// filesystem at once leaves the card returning FR_DISK_ERR until it is
+// re-initialised. Maintained ONLY by the syscall dispatcher -- see the
+// full writeup there.
+extern volatile uint32_t k_no_preempt;
+
+// Bracket any code that reaches FatFs without going through the
+// syscall dispatcher -- i.e. kernel code calling fs_* directly. Nests
+// safely; every k_fs_enter() needs exactly one k_fs_leave() on every
+// return path. fs.c's public entry points already do this, so callers
+// of fs_* do NOT need to.
+void k_fs_enter(void);
+void k_fs_leave(void);
+
 // --
 
 /*

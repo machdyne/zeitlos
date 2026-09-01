@@ -53,6 +53,11 @@ module tb_gpu_blit;
 
 	reg m_ack_a, m_ack_b, s_ack_a, s_ack_b;
 	reg [31:0] m_dat_i_a, m_dat_i_b;
+	// main-memory source model for the s port (copy mode with
+	// CTRL_SRCMEM). Read-only, shared contents, so a divergence between
+	// the two DUTs can only be theirs.
+	reg [31:0] s_dat_i_a, s_dat_i_b;
+	reg [31:0] mem_s [0:4095];
 
 	integer errors = 0;
 	integer writes_a = 0, writes_b = 0;
@@ -72,7 +77,7 @@ module tb_gpu_blit;
 		.m_sel_o(m_sel_a), .m_adr_o(m_adr_a), .m_dat_o(m_dat_a),
 		.m_dat_i(m_dat_i_a), .m_ack_i(m_ack_a),
 		.s_cyc_o(s_cyc_a), .s_stb_o(s_stb_a), .s_we_o(s_we_a),
-		.s_sel_o(s_sel_a), .s_adr_o(s_adr_a), .s_dat_i(32'h0),
+		.s_sel_o(s_sel_a), .s_adr_o(s_adr_a), .s_dat_i(s_dat_i_a),
 		.s_ack_i(s_ack_a),
 		.glyph_addr_o(g_adr_a), .glyph_data_i(8'hA5), .busy(busy_a)
 	);
@@ -87,7 +92,7 @@ module tb_gpu_blit;
 		.m_sel_o(m_sel_b), .m_adr_o(m_adr_b), .m_dat_o(m_dat_b),
 		.m_dat_i(m_dat_i_b), .m_ack_i(m_ack_b),
 		.s_cyc_o(s_cyc_b), .s_stb_o(s_stb_b), .s_we_o(s_we_b),
-		.s_sel_o(s_sel_b), .s_adr_o(s_adr_b), .s_dat_i(32'h0),
+		.s_sel_o(s_sel_b), .s_adr_o(s_adr_b), .s_dat_i(s_dat_i_b),
 		.s_ack_i(s_ack_b),
 		.glyph_addr_o(g_adr_b), .glyph_data_i(8'hA5), .busy(busy_b)
 	);
@@ -136,6 +141,8 @@ module tb_gpu_blit;
 	always @(posedge clk) begin
 		s_ack_a <= s_cyc_a && s_stb_a && !s_ack_a;
 		s_ack_b <= s_cyc_b && s_stb_b && !s_ack_b;
+		s_dat_i_a <= mem_s[s_adr_a[13:2]];
+		s_dat_i_b <= mem_s[s_adr_b[13:2]];
 	end
 
 	task wr;
@@ -221,6 +228,46 @@ module tb_gpu_blit;
 		end
 	endtask
 
+	/* One copy blit: VRAM->VRAM (srcmem=0, source read on the m port)
+	 * or main memory->VRAM (srcmem=1, source read on the s port), with
+	 * an arbitrary window bit offset, optional SRC_PRIME_ZERO, a ROP,
+	 * and optional cookie-cut against src_b. This is the path that goes
+	 * through the barrel shifter (mem_blend), which the fills and glyph
+	 * blits above never touch. */
+	task copy;
+		input [31:0] x, y, w, h;
+		input [31:0] src, stride, shift, srcb;
+		input srcmem, cookie;
+		input [1:0] rop;
+		input clipen;
+		input integer gap;
+		integer t;
+		begin
+			wr(4'd2, x); wr(4'd3, y); wr(4'd4, w); wr(4'd5, h);
+			wr(4'd12, src); wr(4'd13, stride); wr(4'd14, shift);
+			wr(4'd15, srcb);
+			for (t = 0; t < gap; t = t + 1) @(posedge clk);
+			wr(4'd0, { 23'h0, 1'b0, cookie, rop, srcmem, 1'b0, clipen,
+				1'b0, 1'b1 });   // dither=0|cookie|rop|srcmem|glyph=0|clip|fill=0|start
+
+			t = 0;
+			while ((busy_a
+`ifndef REF_ONLY
+				|| busy_b
+`endif
+				) && t < 400000) begin
+				@(posedge clk);
+				t = t + 1;
+			end
+			if (t >= 400000) begin
+				$display("FAIL copy x=%0d y=%0d w=%0d h=%0d shift=%0h srcmem=%0d cookie=%0d: STUCK",
+					x, y, w, h, shift, srcmem, cookie);
+				errors = errors + 1;
+			end
+			repeat (4) @(posedge clk);
+		end
+	endtask
+
 	task compare;
 		input [255:0] what;
 		integer k;
@@ -251,7 +298,11 @@ module tb_gpu_blit;
 		for (i = 0; i < 4096; i = i + 1) begin
 			fb_a[i] = 32'hDEAD0000 + i;
 			fb_b[i] = 32'hDEAD0000 + i;
+			// something with structure in every bit position, so a
+			// shift by the wrong amount cannot look like the right one
+			mem_s[i] = (32'h9E3779B9 * (i + 1)) ^ (i << 7) ^ 32'h5A5A00FF;
 		end
+		s_dat_i_a = 0; s_dat_i_b = 0;
 
 		repeat (8) @(posedge clk);
 		rst = 0;
@@ -343,6 +394,66 @@ module tb_gpu_blit;
 
 		glyph(32'd8,  32'd80, 32'd5,  32'd8, 32'h1, 32'h0, 0);
 		compare("glyph START with zero gap after parameters");
+
+
+		// ---- copy mode: the barrel-shifter path ----
+		//
+		// Source VRAM rows are whatever the fills above left behind;
+		// both DUTs see the same, so any divergence is the shifter's.
+
+		// VRAM -> VRAM, aligned, shift 0
+		copy(32'd0,  32'd100, 32'd64, 32'd3, 32'd0,    32'd80, 32'h0,  32'd0, 1'b0, 1'b0, 2'd0, 1'b1, 4);
+		compare("vram copy 64x3 shift 0");
+		// VRAM -> VRAM, every kind of misalignment
+		copy(32'd5,  32'd110, 32'd53, 32'd3, 32'd160,  32'd80, 32'h3,  32'd0, 1'b0, 1'b0, 2'd0, 1'b1, 4);
+		compare("vram copy 53x3 at x=5 shift 3");
+		copy(32'd37, 32'd120, 32'd100,32'd2, 32'd324,  32'd80, 32'h11, 32'd0, 1'b0, 1'b0, 2'd0, 1'b1, 4);
+		compare("vram copy 100x2 at x=37 shift 17");
+		copy(32'd1,  32'd130, 32'd31, 32'd2, 32'd400,  32'd80, 32'h1f, 32'd0, 1'b0, 1'b0, 2'd0, 1'b1, 4);
+		compare("vram copy 31x2 shift 31");
+		// SRC_PRIME_ZERO: window starts with zeros, first word not read
+		copy(32'd40, 32'd140, 32'd48, 32'd2, 32'd480,  32'd80, 32'h11d,32'd0, 1'b0, 1'b0, 2'd0, 1'b1, 4);
+		compare("vram copy with SRC_PRIME_ZERO");
+		// ROPs through the shifter
+		copy(32'd8,  32'd150, 32'd70, 32'd2, 32'd560,  32'd80, 32'h9,  32'd0, 1'b0, 1'b0, 2'd1, 1'b1, 4);
+		compare("vram copy rop 1");
+		copy(32'd8,  32'd160, 32'd70, 32'd2, 32'd640,  32'd80, 32'h9,  32'd0, 1'b0, 1'b0, 2'd2, 1'b1, 4);
+		compare("vram copy rop 2");
+		copy(32'd8,  32'd170, 32'd70, 32'd2, 32'd720,  32'd80, 32'h9,  32'd0, 1'b0, 1'b0, 2'd3, 1'b1, 4);
+		compare("vram copy rop 3");
+		// cookie cut, VRAM source: A at src, B at srcb, same shift
+		copy(32'd13, 32'd180, 32'd60, 32'd3, 32'd800,  32'd80, 32'h7,  32'd1040, 1'b0, 1'b1, 2'd0, 1'b1, 4);
+		compare("vram cookie-cut 60x3 shift 7");
+		copy(32'd0,  32'd190, 32'd64, 32'd2, 32'd1280, 32'd80, 32'h0,  32'd1440, 1'b0, 1'b1, 2'd0, 1'b1, 4);
+		compare("vram cookie-cut aligned shift 0");
+
+		// main memory -> VRAM (s port). This is the exact path nextpnr
+		// reported as critical: bus read data straight into the shifter.
+		copy(32'd0,  32'd200, 32'd64, 32'd3, 32'd0,    32'd16, 32'h0,  32'd0, 1'b1, 1'b0, 2'd0, 1'b1, 4);
+		compare("mem copy 64x3 shift 0");
+		copy(32'd5,  32'd210, 32'd53, 32'd3, 32'd256,  32'd16, 32'h3,  32'd0, 1'b1, 1'b0, 2'd0, 1'b1, 4);
+		compare("mem copy 53x3 at x=5 shift 3");
+		copy(32'd37, 32'd220, 32'd100,32'd2, 32'd512,  32'd20, 32'h11, 32'd0, 1'b1, 1'b0, 2'd0, 1'b1, 4);
+		compare("mem copy 100x2 at x=37 shift 17");
+		copy(32'd1,  32'd230, 32'd31, 32'd2, 32'd768,  32'd8,  32'h1f, 32'd0, 1'b1, 1'b0, 2'd0, 1'b1, 4);
+		compare("mem copy 31x2 shift 31");
+		copy(32'd40, 32'd240, 32'd48, 32'd2, 32'd1024, 32'd12, 32'h11d,32'd0, 1'b1, 1'b0, 2'd0, 1'b1, 4);
+		compare("mem copy with SRC_PRIME_ZERO");
+		copy(32'd8,  32'd250, 32'd70, 32'd2, 32'd1536, 32'd16, 32'h9,  32'd0, 1'b1, 1'b0, 2'd2, 1'b1, 4);
+		compare("mem copy rop 2");
+		copy(32'd13, 32'd260, 32'd60, 32'd3, 32'd2048, 32'd16, 32'h7,  32'd3072, 1'b1, 1'b1, 2'd0, 1'b1, 4);
+		compare("mem cookie-cut 60x3 shift 7");
+		copy(32'd600,32'd270, 32'd100,32'd2, 32'd2304, 32'd16, 32'h5,  32'd0, 1'b1, 1'b0, 2'd0, 1'b1, 4);
+		compare("mem copy clipped at right edge");
+		copy(32'd0,  32'd280, 32'd64, 32'd2, 32'd2560, 32'd16, 32'h2,  32'd0, 1'b1, 1'b0, 2'd0, 1'b1, 0);
+		compare("mem copy START with zero gap");
+		copy(32'd0,  32'd290, 32'd64, 32'd2, 32'd2816, 32'd16, 32'h2,  32'd0, 1'b1, 1'b0, 2'd0, 1'b0, 4);
+		compare("mem copy clip disabled");
+		// back-to-back copies, so the register capture from the previous
+		// blit cannot leak into the next
+		copy(32'd3,  32'd300, 32'd40, 32'd1, 32'd3200, 32'd16, 32'h1,  32'd0, 1'b1, 1'b0, 2'd0, 1'b1, 0);
+		copy(32'd3,  32'd301, 32'd40, 32'd1, 32'd1600, 32'd80, 32'h1e, 32'd0, 1'b0, 1'b0, 2'd0, 1'b1, 0);
+		compare("mem copy then vram copy, zero gap");
 
 		$display("");
 		if (errors == 0) $display("=== tb_gpu_blit: PASS ===");

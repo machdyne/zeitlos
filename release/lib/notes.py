@@ -107,11 +107,16 @@ def notes(version, commit, targets, sdcard, layout, prev_version=None):
                    "status=progress conv=fsync" % sdcard["file"])
         out.append("```")
         out.append("")
+        out.append("Applications live in `apps/` on the card, alongside "
+                   "`docs/`, `ark/` and `user/`. You never need to type "
+                   "that path: `run term` searches the card root, then "
+                   "`apps/`, then the flash archive.")
+        out.append("")
         out.append("The core apps (`wm`, `repl`, `term`, and `net` where "
                    "the hardware has a NIC) are not on the card -- they are "
-                   "in flash. A copy on the card takes precedence over the "
-                   "flash copy, so putting one there is how you hot-swap a "
-                   "single app during development.")
+                   "in flash. A copy at the card ROOT takes precedence over "
+                   "the flash copy, so dropping one there is how you "
+                   "hot-swap a single app during development.")
         out.append("")
 
     out.append("## Flash layout")
@@ -212,8 +217,9 @@ def asset_readme(version, commit, targets, sdcard, layout):
     if sdcard:
         out.append("  %s" % sdcard["file"])
         out.append("      Optional sdcard image (64MB, FAT32). The same for")
-        out.append("      every board. Holds the additional apps, the")
-        out.append("      documentation and the ARK scroll.")
+        out.append("      every board. Holds the additional apps (in")
+        out.append("      apps/), the documentation (docs/) and the ARK")
+        out.append("      scroll (ark/).")
         out.append("")
         out.append("      $ gzip -dc %s \\" % sdcard["file"])
         out.append("          | sudo dd of=/dev/sdX bs=4M status=progress "
@@ -275,9 +281,13 @@ def asset_readme(version, commit, targets, sdcard, layout):
     out.append("does -- on a board that shipped with a DFU bootloader in")
     out.append("that space, this replaces it.")
     out.append("")
-    out.append("The core apps are in flash, not on the sdcard. A copy on")
-    out.append("the card takes precedence over the flash copy, which is")
-    out.append("how a single app is hot-swapped during development.")
+    out.append("Applications live in apps/ on the card, but you never")
+    out.append("need to type that path: `run term` searches the card root,")
+    out.append("then apps/, then the flash archive.")
+    out.append("")
+    out.append("The core apps are in flash, not on the sdcard. A copy at")
+    out.append("the card ROOT takes precedence over the flash copy, which")
+    out.append("is how a single app is hot-swapped during development.")
     out.append("")
     out.append("If your board is not listed, please open an issue.")
     out.append("")

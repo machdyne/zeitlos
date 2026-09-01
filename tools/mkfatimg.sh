@@ -47,33 +47,39 @@ mount -o loop "$IMAGE" "$MOUNT_DIR"
 # we exclude core apps since they should exist on flash
 
 # make directory skeleton
+#
+# apps/ joins docs/, ark/ and user/ rather than leaving a dozen
+# executables loose in the root. sw/os/fs/fs.c's fs_exec_resolve()
+# searches the root first and then apps/, so a bare `run term` still
+# works and nothing above that function had to learn the new location.
+mkdir "$MOUNT_DIR/apps"
 mkdir "$MOUNT_DIR/docs"
 mkdir "$MOUNT_DIR/ark"
 mkdir "$MOUNT_DIR/user"
 
 # supplemental apps
-cp sw/apps/files/files.bin "$MOUNT_DIR/files"
-cp sw/apps/text/text.bin "$MOUNT_DIR/text"
-cp sw/apps/read/read.bin "$MOUNT_DIR/read"
-cp sw/apps/draw/draw.bin "$MOUNT_DIR/draw"
-cp sw/apps/info/info.bin "$MOUNT_DIR/info"
-cp sw/apps/calc/calc.bin "$MOUNT_DIR/calc"
-cp sw/apps/clock/clock.bin "$MOUNT_DIR/clock"
-cp sw/apps/settings/settings.bin "$MOUNT_DIR/settings"
-cp sw/apps/track/track.bin "$MOUNT_DIR/track"
+cp sw/apps/files/files.bin "$MOUNT_DIR/apps/files"
+cp sw/apps/text/text.bin "$MOUNT_DIR/apps/text"
+cp sw/apps/read/read.bin "$MOUNT_DIR/apps/read"
+cp sw/apps/draw/draw.bin "$MOUNT_DIR/apps/draw"
+cp sw/apps/info/info.bin "$MOUNT_DIR/apps/info"
+cp sw/apps/calc/calc.bin "$MOUNT_DIR/apps/calc"
+cp sw/apps/clock/clock.bin "$MOUNT_DIR/apps/clock"
+cp sw/apps/settings/settings.bin "$MOUNT_DIR/apps/settings"
+cp sw/apps/track/track.bin "$MOUNT_DIR/apps/track"
 
 # games and demos
-cp sw/apps/space3d/space3d.bin "$MOUNT_DIR/space3d"
-cp sw/apps/gamedemo/gamedemo.bin "$MOUNT_DIR/gamedemo"
-cp sw/apps/gpu3d/gpu3d.bin "$MOUNT_DIR/gpu3d"
+cp sw/apps/space3d/space3d.bin "$MOUNT_DIR/apps/space3d"
+cp sw/apps/gamedemo/gamedemo.bin "$MOUNT_DIR/apps/gamedemo"
+cp sw/apps/gpu3d/gpu3d.bin "$MOUNT_DIR/apps/gpu3d"
 
 # misc
-cp sw/apps/portdemo/portdemo.bin "$MOUNT_DIR/portdemo"
+cp sw/apps/portdemo/portdemo.bin "$MOUNT_DIR/apps/portdemo"
 cp docs/*.md "$MOUNT_DIR/docs/"
 cp sw/data/ark/*.md "$MOUNT_DIR/ark/"
 
 sync
-ls -l "$MOUNT_DIR"
+ls -l "$MOUNT_DIR" "$MOUNT_DIR/apps"
 umount "$MOUNT_DIR"
 
 fsck.fat -v "$IMAGE"
