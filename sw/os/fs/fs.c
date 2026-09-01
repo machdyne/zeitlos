@@ -24,12 +24,13 @@ int fs_load(uint32_t dst, char *path) {
 	char buf[1024];
 	char *dst_ptr = (char *)dst;
 
-	// see docs/filesystem.md
+	// see docs/filesystem.md, and fs_load_exec() below for why the
+	// guard is per call rather than around the whole transfer.
 	k_fs_enter();
-
 	res = f_open(&f, path, FA_READ | FA_OPEN_EXISTING);
+	k_fs_leave();
 
-	if (res != FR_OK) { k_fs_leave(); return 1; }
+	if (res != FR_OK) return 1;
 
 	sz = f_size(&f);
 
@@ -38,18 +39,22 @@ int fs_load(uint32_t dst, char *path) {
 	int blks = sz / 1024;
 
 	for (int i = 0; i < blks; i++) {
+		k_fs_enter();
 		res = f_read(&f, buf, 1024, &br);
+		k_fs_leave();
 		memcpy(dst_ptr, &buf, 1024);
 		dst_ptr += 1024;
-		if (res != FR_OK) { f_close(&f); k_fs_leave(); return 1; }
+		if (res != FR_OK) { k_fs_enter(); f_close(&f); k_fs_leave(); return 1; }
 	}
 
+	k_fs_enter();
 	res = f_read(&f, buf, sz - (blks * 1024), &br);
+	k_fs_leave();
 	memcpy(dst_ptr, &buf, sz - (blks * 1024));
-	if (res != FR_OK) { f_close(&f); k_fs_leave(); return 1; }
+	if (res != FR_OK) { k_fs_enter(); f_close(&f); k_fs_leave(); return 1; }
 
+	k_fs_enter();
 	f_close(&f);
-
 	k_fs_leave();
 
 	return 0;
@@ -723,35 +728,55 @@ int fs_load_exec(uint32_t dst, char *path, const z_exec_info_t *info) {
 	if (!path || !info) return 1;
 
 	// see docs/filesystem.md
+	//
+	// One FatFs call per guarded region, NOT the whole transfer.
+	// Loading an app is not a single read: `net` is 250KB and takes
+	// ~820ms off the card here, an order of magnitude past
+	// K_NO_PREEMPT_MAX_TICKS (~87ms, sized in kernel.c against a
+	// single large k_fs_read). Held across the loop, the cap fires
+	// mid-load, the swap it was deferring happens anyway, and whatever
+	// probes the filesystem next -- wm's dock_build(), typically --
+	// lands inside FatFs while this one is still reading. That is the
+	// very interleave the guard exists to prevent, and it leaves the
+	// card returning FR_DISK_ERR for the rest of the boot.
+	//
+	// Guarding each call keeps every SPI transaction atomic (CS is
+	// deasserted between them) while letting the scheduler run between
+	// 1KB chunks. Alternating FatFs calls from different processes is
+	// ordinary single-threaded FatFs usage; what it does not tolerate
+	// is two at once, and that is still impossible.
 	k_fs_enter();
-
 	res = f_open(&f, path, FA_READ | FA_OPEN_EXISTING);
-	if (res != FR_OK) { k_fs_leave(); return 1; }
+	k_fs_leave();
+	if (res != FR_OK) return 1;
 
 	// skip the header -- legacy files have data_off 0, so this is a
 	// no-op for them and the same code path serves both formats.
 	if (info->data_off) {
+		k_fs_enter();
 		res = f_lseek(&f, info->data_off);
-		if (res != FR_OK) { f_close(&f); k_fs_leave(); return 1; }
+		k_fs_leave();
+		if (res != FR_OK) { k_fs_enter(); f_close(&f); k_fs_leave(); return 1; }
 	}
 
 	uint32_t left = info->data_size;
 
 	while (left) {
 		uint32_t n = (left > sizeof(buf)) ? (uint32_t)sizeof(buf) : left;
+		k_fs_enter();
 		res = f_read(&f, buf, n, &br);
-		if (res != FR_OK || br != n) { f_close(&f); k_fs_leave(); return 1; }
+		k_fs_leave();
+		if (res != FR_OK || br != n) {
+			k_fs_enter(); f_close(&f); k_fs_leave();
+			return 1;
+		}
 		memcpy(dst_ptr, buf, n);
 		dst_ptr += n;
 		left -= n;
 	}
 
+	k_fs_enter();
 	f_close(&f);
-
-	// Released here rather than at the end: everything below this
-	// point (the bss memset and the icache flush) touches RAM only,
-	// never FatFs, and there is no reason to hold the scheduler off
-	// across a memset that can be tens of kilobytes.
 	k_fs_leave();
 
 	// Nothing else zeroes .bss on this OS -- there is no crt0 doing it,
