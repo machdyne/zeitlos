@@ -112,6 +112,8 @@ USB-UART PMOD:
 ```
 $ curl -LO https://github.com/machdyne/zeitlos/releases/latest/download/zeitlos-lakritz_uart.img
 $ openFPGALoader -c dirtyJtag -f -o 0 zeitlos-lakritz_uart.img
+or
+$ sudo dfu-util -a 0 -D zeitlos-lakritz_uart.img
 ```
 
 Adjust `-c` to match your programming cable. The release page and the
