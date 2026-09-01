@@ -23,6 +23,7 @@
 #include "fs/fs.h"
 #include "fsapi.h"
 #include "fs/fatfs/ff.h"
+#include "fs/fatfs/diskio.h"	// disk_status() -- instrumentation, see below
 #include "msg.h"
 #include "pidreg.h"
 #include "xmodem.h"
@@ -316,9 +317,29 @@ void sh(void) {
 	// waiting for hardware that isn't there. When they are not, the
 	// card is the only source of apps, so it is worth waiting for.
 	bool card_ready;
-	if (z_zar_present())
-		card_ready = (fs_mount_now() == 0);
-	else
+	if (z_zar_present()) {
+		// INSTRUMENTATION -- remove once the dock-at-boot question is
+		// settled.
+		//
+		// This branch makes exactly ONE attempt, while fs.c's own
+		// fs_mount_now() comment says "a slow card may need a few
+		// attempts, so callers should retry rather than treating one
+		// failure as final". The retry helper (wait_for_card_ready())
+		// is right there but is skipped whenever a flash archive is
+		// present, so that a cardless board doesn't stall.
+		//
+		// disk_status() bit 0 is STA_NOINIT (sdmm.c's `Stat`). If that
+		// bit is SET while card_ready is true, f_mount returned OK on a
+		// card that was never actually initialised -- which is the
+		// whole question.
+		int mres = fs_mount_now();
+		kprint("init: fs_mount_now = 0x");
+		kprint_hex32((uint32_t)mres);
+		kprint("  disk_status = 0x");
+		kprint_hex32((uint32_t)disk_status(0));
+		kprint("\n");
+		card_ready = (mres == 0);
+	} else
 		card_ready = wait_for_card_ready();
 
 	if (card_ready)

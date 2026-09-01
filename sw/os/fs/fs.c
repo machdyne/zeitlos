@@ -8,6 +8,8 @@
 #include "../../common/zexec.h"
 #include "../../common/zsoc.h"
 #include "../zar.h"
+#include "../kernel.h"		// k_fs_enter()/k_fs_leave() -- see
+								// docs/filesystem.md
 
 FATFS sdvol0;
 
@@ -21,10 +23,12 @@ int fs_load(uint32_t dst, char *path) {
 	char buf[1024];
 	char *dst_ptr = (char *)dst;
 
+	// see docs/filesystem.md
+	k_fs_enter();
+
 	res = f_open(&f, path, FA_READ | FA_OPEN_EXISTING);
 
-	if (res != FR_OK)
-		return 1;
+	if (res != FR_OK) { k_fs_leave(); return 1; }
 
 	sz = f_size(&f);
 
@@ -36,14 +40,16 @@ int fs_load(uint32_t dst, char *path) {
 		res = f_read(&f, buf, 1024, &br);
 		memcpy(dst_ptr, &buf, 1024);
 		dst_ptr += 1024;
-		if (res != FR_OK) return 1;
+		if (res != FR_OK) { f_close(&f); k_fs_leave(); return 1; }
 	}
 
 	res = f_read(&f, buf, sz - (blks * 1024), &br);
 	memcpy(dst_ptr, &buf, sz - (blks * 1024));
-	if (res != FR_OK) return 1;
+	if (res != FR_OK) { f_close(&f); k_fs_leave(); return 1; }
 
 	f_close(&f);
+
+	k_fs_leave();
 
 	return 0;
 
@@ -211,11 +217,13 @@ uint32_t fs_size(char *path) {
 	FIL f;
 	FRESULT res;
 	FSIZE_t fs = 0;
+	k_fs_enter();				// see docs/filesystem.md
 	res = f_open(&f, path, FA_WRITE | FA_OPEN_EXISTING);
 	if (res == FR_OK) {
 		fs = f_size(&f);
 	}
 	f_close(&f);
+	k_fs_leave();
 	return(fs);
 }
 
@@ -387,6 +395,8 @@ void fs_list_dir(char *path) {
 	DIR dir;
 	static FILINFO fno;
 
+	k_fs_enter();				// see docs/filesystem.md
+
 	res = f_opendir(&dir, path);
 
 	// Say so, rather than printing nothing. An unreadable card and
@@ -473,6 +483,10 @@ void fs_list_dir(char *path) {
 
 	}
 
+	// Released only here: the flash-archive loop above calls f_stat(),
+	// which is a FatFs call like any other.
+	k_fs_leave();
+
 	return;
 
 }
@@ -502,13 +516,21 @@ int fs_exec_info(char *path, z_exec_info_t *info) {
 
 	if (!path || !info) return 1;
 
+	// Serialised against every other FatFs user -- see
+	// docs/filesystem.md. Needed here and not only in the syscall
+	// dispatcher because sh.c's init() reaches this function directly,
+	// without a syscall.
+	k_fs_enter();
+
 	res = f_open(&f, path, FA_READ | FA_OPEN_EXISTING);
-	if (res != FR_OK) return 1;
+	if (res != FR_OK) { k_fs_leave(); return 1; }
 
 	uint32_t sz = (uint32_t)f_size(&f);
 
 	res = f_read(&f, hdr, Z_EXEC_HEADER_SIZE, &br);
 	f_close(&f);
+
+	k_fs_leave();
 
 	if (res != FR_OK) return 1;
 
@@ -598,14 +620,17 @@ int fs_load_exec(uint32_t dst, char *path, const z_exec_info_t *info) {
 
 	if (!path || !info) return 1;
 
+	// see docs/filesystem.md
+	k_fs_enter();
+
 	res = f_open(&f, path, FA_READ | FA_OPEN_EXISTING);
-	if (res != FR_OK) return 1;
+	if (res != FR_OK) { k_fs_leave(); return 1; }
 
 	// skip the header -- legacy files have data_off 0, so this is a
 	// no-op for them and the same code path serves both formats.
 	if (info->data_off) {
 		res = f_lseek(&f, info->data_off);
-		if (res != FR_OK) { f_close(&f); return 1; }
+		if (res != FR_OK) { f_close(&f); k_fs_leave(); return 1; }
 	}
 
 	uint32_t left = info->data_size;
@@ -613,13 +638,19 @@ int fs_load_exec(uint32_t dst, char *path, const z_exec_info_t *info) {
 	while (left) {
 		uint32_t n = (left > sizeof(buf)) ? (uint32_t)sizeof(buf) : left;
 		res = f_read(&f, buf, n, &br);
-		if (res != FR_OK || br != n) { f_close(&f); return 1; }
+		if (res != FR_OK || br != n) { f_close(&f); k_fs_leave(); return 1; }
 		memcpy(dst_ptr, buf, n);
 		dst_ptr += n;
 		left -= n;
 	}
 
 	f_close(&f);
+
+	// Released here rather than at the end: everything below this
+	// point (the bss memset and the icache flush) touches RAM only,
+	// never FatFs, and there is no reason to hold the scheduler off
+	// across a memset that can be tens of kilobytes.
+	k_fs_leave();
 
 	// Nothing else zeroes .bss on this OS -- there is no crt0 doing it,
 	// which is why the old format shipped it as literal zeros in the
