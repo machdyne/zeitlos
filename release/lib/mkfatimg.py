@@ -76,7 +76,17 @@ MISC = [
     ("apps/portdemo", "sw/apps/portdemo/portdemo.bin"),
 ]
 
-DIRS = ["apps", "docs", "ark", "user"]
+DIRS = ["apps", "audio", "docs", "ark", "user"]
+
+# Tracker modules, from sw/data/audio. Whatever is there is shipped --
+# a glob rather than a list, because these are data files somebody
+# drops in, not build products with a Makefile rule each.
+#
+# sw/apps/track scans /audio first and then the root, so a card
+# written before this existed still plays and dropping one in the root
+# still works.
+AUDIO_DIR = "sw/data/audio"
+AUDIO_EXT = ".mod"
 
 TOOLS = ["mkfs.fat", "fsck.fat", "mmd", "mcopy"]
 
@@ -160,6 +170,18 @@ def check_against_script(root):
             problems.append("release/lib/mkfatimg.py ships core app '%s'"
                             % core)
 
+    # The audio glob is not in the app table above, so the name-by-name
+    # comparison cannot see it. Check it separately, or the two
+    # builders drift on exactly the thing that was just added.
+    if ("$MOUNT_DIR/audio" not in text) and (AUDIO_DIR not in text):
+        problems.append(
+            "release/lib/mkfatimg.py ships %s/*%s but tools/mkfatimg.sh "
+            "does not copy anything to /audio" % (AUDIO_DIR, AUDIO_EXT))
+    if "mkdir \"$MOUNT_DIR/audio\"" not in text:
+        problems.append(
+            "tools/mkfatimg.sh does not create /audio, so its copy would "
+            "fail with FR_NO_PATH on a fresh image")
+
     return problems
 
 
@@ -179,6 +201,18 @@ def build(root, out_path, ark_dir=None, verbose=True):
     if missing:
         raise FatError("not built yet:\n  %s\n"
                        "  Run the app builds first." % "\n  ".join(missing))
+
+    audio_src = os.path.join(root, AUDIO_DIR)
+    audio = sorted(f for f in os.listdir(audio_src)
+                   if f.lower().endswith(AUDIO_EXT)) \
+        if os.path.isdir(audio_src) else []
+
+    # Not an error if there are none -- the directory is data, and a
+    # tree without it still produces a usable card. It IS worth saying
+    # so, because a silently music-less release is hard to notice.
+    if not audio:
+        print("    note: no %s files in %s, card will have none"
+              % (AUDIO_EXT, AUDIO_DIR))
 
     docs = sorted(f for f in os.listdir(os.path.join(root, "docs"))
                   if f.endswith(".md"))
@@ -217,6 +251,8 @@ def build(root, out_path, ark_dir=None, verbose=True):
 
     for name, rel in apps:
         copy(os.path.join(root, rel), "/" + name)
+    for a in audio:
+        copy(os.path.join(audio_src, a), "/audio/" + a)
     for d in docs:
         copy(os.path.join(root, "docs", d), "/docs/" + d)
     for a in ark:

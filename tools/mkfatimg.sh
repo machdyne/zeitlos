@@ -53,6 +53,7 @@ mount -o loop "$IMAGE" "$MOUNT_DIR"
 # searches the root first and then apps/, so a bare `run term` still
 # works and nothing above that function had to learn the new location.
 mkdir "$MOUNT_DIR/apps"
+mkdir "$MOUNT_DIR/audio"
 mkdir "$MOUNT_DIR/docs"
 mkdir "$MOUNT_DIR/ark"
 mkdir "$MOUNT_DIR/user"
@@ -75,11 +76,13 @@ cp sw/apps/gpu3d/gpu3d.bin "$MOUNT_DIR/apps/gpu3d"
 
 # misc
 cp sw/apps/portdemo/portdemo.bin "$MOUNT_DIR/apps/portdemo"
+# modules -- sw/apps/track scans /audio first, then the root
+cp sw/data/audio/*.mod "$MOUNT_DIR/audio/"
 cp docs/*.md "$MOUNT_DIR/docs/"
 cp sw/data/ark/*.md "$MOUNT_DIR/ark/"
 
 sync
-ls -l "$MOUNT_DIR" "$MOUNT_DIR/apps"
+ls -l "$MOUNT_DIR" "$MOUNT_DIR/apps" "$MOUNT_DIR/audio"
 umount "$MOUNT_DIR"
 
 fsck.fat -v "$IMAGE"

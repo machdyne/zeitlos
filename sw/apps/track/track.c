@@ -363,13 +363,13 @@ static int has_suffix(const char *s, const char *suf) {
 	return 1;
 }
 
-static void find_modules(void) {
+/* Collect .mod files from one directory into files[]. */
+static void scan_dir(const char *dir) {
 	uint32_t count = 0;
 	char **list;
 	uint32_t i;
 
-	nfiles = 0;
-	list = fs_list("/", 0, &count);
+	list = fs_list((char *)dir, 0, &count);
 	if (!list) return;
 
 	for (i = 0; i < count; i++) {
@@ -381,6 +381,29 @@ static void find_modules(void) {
 	for (i = 0; i < count; i++)
 		if (list[i]) free(list[i]);
 	free(list);
+}
+
+/*
+ * /audio first, then the root.
+ *
+ * The sdcard image ships its modules in /audio, alongside apps/,
+ * docs/ and ark/ -- 440KB of .mod loose in the root would bury
+ * everything else in a directory listing.
+ *
+ * The root is still scanned, and second rather than not at all, for
+ * two reasons. A card written before /audio existed still plays, and
+ * dropping a module in the root remains the quickest way to try one
+ * without making a directory for it. Second means the shipped set
+ * comes first in the list, which is the order somebody who has done
+ * neither would expect.
+ *
+ * fs_list() returns full paths ("/AUDIO/AI.MOD"), so load_module()
+ * opens what it is given and needs no directory of its own.
+ */
+static void find_modules(void) {
+	nfiles = 0;
+	scan_dir("/audio");
+	scan_dir("/");
 }
 
 /*
@@ -1302,7 +1325,7 @@ int main(void) {
 	find_modules();
 
 	if (nfiles == 0) {
-		printf("No .mod files in the root directory.\n");
+		printf("No .mod files in /audio or the root directory.\n");
 		z_audio_stop();
 		return 1;
 	}

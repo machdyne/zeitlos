@@ -98,9 +98,10 @@ def notes(version, commit, targets, sdcard, layout, prev_version=None):
     if sdcard:
         out.append("## SD card")
         out.append("")
-        out.append("`%s` is a 64MB FAT32 image with the non-core apps, the "
-                   "documentation and the ARK scroll. It is the same for "
-                   "every target." % sdcard["file"])
+        out.append("`%s` is a 64MB FAT32 image with the non-core apps, a "
+                   "few tracker modules, the documentation and the ARK "
+                   "scroll. It is the same for every target."
+                   % sdcard["file"])
         out.append("")
         out.append("```")
         out.append("gzip -dc %s | sudo dd of=/dev/sdX bs=4M "
@@ -217,9 +218,9 @@ def asset_readme(version, commit, targets, sdcard, layout):
     if sdcard:
         out.append("  %s" % sdcard["file"])
         out.append("      Optional sdcard image (64MB, FAT32). The same for")
-        out.append("      every board. Holds the additional apps (in")
-        out.append("      apps/), the documentation (docs/) and the ARK")
-        out.append("      scroll (ark/).")
+        out.append("      every board. Holds the additional apps (apps/),")
+        out.append("      tracker modules (audio/), the documentation")
+        out.append("      (docs/) and the ARK scroll (ark/).")
         out.append("")
         out.append("      $ gzip -dc %s \\" % sdcard["file"])
         out.append("          | sudo dd of=/dev/sdX bs=4M status=progress "

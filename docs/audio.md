@@ -672,7 +672,7 @@ doubles as the probe). The console path is not kept for nostalgia — it
 is the one to use when something is wrong, because it depends on
 nothing but the audio block and stdout.
 
-Scans the root directory for `.mod` files and plays through them,
+Scans `/audio` and then the root for `.mod` files and plays through them,
 wrapping rather than exiting: this is a player meant to be left running
 while other things happen.
 
