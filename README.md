@@ -70,6 +70,7 @@ With the MTU, there is no need for position independent code or complicated addr
 | info | System info |
 | clock | Analog and digital clock |
 | settings | System settings |
+| play | WAV/AU/RAW audio file player |
 | track | MOD audio file player |
 | gamedemo | 2D side-scrolling platformer game |
 | space3d | First-person 3D space shooter game |
