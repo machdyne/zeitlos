@@ -24,7 +24,7 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 | Video | VGA, DVI, DVI over HDMI, composite NTSC and PAL |
 | Audio | 8 channel hardware mixer with stereo output |
 | Storage | MicroSD |
-| Network | Ethernet (SPI) and Ethernet MAC (for RMII PHY) |
+| Network | Ethernet (SPI), Ethernet MAC (for RMII PHY) or ESP32 |
 | Entropy | Ring-oscillator TRNG |
 | HID | USB keyboard + optional USB mouse/gamepad |
 | I/O | GPIO, SPI, 16550 UART |
@@ -79,18 +79,27 @@ With the MTU, there is no need for position independent code or complicated addr
 
 Zeitlos will initially support ECP5, Artix-7, GateMate FPGAs.
 
-The following boards are currently supported:
+The following boards are fully supported:
 
  - [Machdyne Obst](https://github.com/machdyne/obst)
  - [Machdyne Lakritz](https://github.com/machdyne/lakritz)
- - [Machdyne Kölsch](https://github.com/machdyne/kolsch)
- - [Machdyne Lebkuchen](https://github.com/machdyne/lebkuchen)
  - [Machdyne Mozart](https://github.com/machdyne/mozart) / [ML1](https://github.com/machdyne/sechzig)
  - [Machdyne Sergei](https://github.com/machdyne/sergei) / [ML1](https://github.com/machdyne/sechzig)
  - [Radiona ULX3S](https://radiona.org/ulx3s/) (85F tested, see [docs/ulx3s.md](docs/ulx3s.md))
  - (more soon)
 
-If you have an unsupported board and want to try Zeitlos, please open an issue.
+The following boards are currently partially supported or untested:
+
+ - [Machdyne Kölsch](https://github.com/machdyne/kolsch)
+ - [Machdyne Lebkuchen](https://github.com/machdyne/lebkuchen)
+
+**If you have an unsupported board and want to try Zeitlos, please open an issue.**
+
+#### Minimum Hardware Requirements
+
+ - ECP5 LFE5U-25F (25K LUTs with open-source tools) or above
+ - 1MB of main memory
+ - 2MB of NOR flash
 
 ## Usage
 
