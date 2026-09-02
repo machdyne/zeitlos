@@ -28,6 +28,7 @@ APPS = \
 	repl \
 	space3d \
 	audiotest \
+	play \
 	track \
 	gamedemo
 

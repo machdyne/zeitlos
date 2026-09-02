@@ -37,6 +37,8 @@ module tb_audio_mixer;
 	reg [2:0] cfg_reg;
 	reg [31:0] cfg_dat;
 	reg [7:0] mixvol;
+	reg [2:0] pos_sel;
+	wire [31:0] pos_o;
 
 	wire [31:0] m_adr;
 	wire [31:0] m_dat_o;
@@ -85,7 +87,9 @@ module tb_audio_mixer;
 		.m_ack_i(m_ack),
 		.out_l(out_l),
 		.out_r(out_r),
-		.active_o(active)
+		.active_o(active),
+		.pos_sel(pos_sel),
+		.pos_o(pos_o)
 	);
 
 	initial begin
@@ -178,6 +182,23 @@ module tb_audio_mixer;
 	// helpers
 	// ------------------------------------------------------------
 
+	// Select a channel for MIXPOS and let the readback register catch
+	// up. pos_o is one cycle behind ch_pos and two behind a write to
+	// pos_sel (audio_mixer.v explains why it is registered at all), so
+	// a testbench that reads it immediately would be testing the
+	// pipeline rather than the position -- and would "fail" a correct
+	// design in a way that reads as a mixer bug.
+	task pos_select;
+		input [2:0] ch;
+		begin
+			@(posedge clk);
+			pos_sel <= ch;
+			@(posedge clk);
+			@(posedge clk);
+			#1;
+		end
+	endtask
+
 	task check;
 		input [511:0] name;
 		input integer got;
@@ -251,6 +272,184 @@ module tb_audio_mixer;
 	// The #1 is the same defence in the other direction: it moves the
 	// sample off the edge entirely rather than relying on event
 	// ordering within a timestep.
+	// ------------------------------------------------------------
+	// group: MIXPOS position readback
+	//
+	// This is the register sw/apps/play's streaming path is built on,
+	// so what is checked is the thing that path actually relies on:
+	// that the reported position tracks consumption exactly, that it
+	// follows the RING WRAP rather than running off the end, and that
+	// it describes the channel that was asked for rather than
+	// whichever one the sequencer touched last -- which is the exact
+	// failing of dbg_adr_o that this register exists to fix.
+	// ------------------------------------------------------------
+	/* Channel setup with an explicit sample format. setup_ch() builds
+	 * an 8-bit channel and is left exactly as it was, because every
+	 * check written before FMT16 existed must keep passing unchanged
+	 * -- that is the evidence for backwards compatibility, and
+	 * editing it would destroy it. */
+	task setup_ch_fmt;
+		input [2:0] ch;
+		input [31:0] off;
+		input [31:0] len;
+		input [31:0] step;
+		input [7:0] gl;
+		input [7:0] gr;
+		input fmt16;
+		begin
+			cfg(ch, 3'd0, MEM_BASE + off);
+			cfg(ch, 3'd1, len);
+			cfg(ch, 3'd2, 32'd0);
+			cfg(ch, 3'd3, 32'd0);
+			cfg(ch, 3'd4, step);
+			cfg(ch, 3'd5, { 8'd0, 5'b0, fmt16, 1'b1, 1'b1, gr, gl });
+		end
+	endtask
+
+	/* ------------------------------------------------------------
+	 * group: 16-bit samples, and 8-bit and 16-bit channels together
+	 *
+	 * The memory is a byte ramp (mem[i] = i), so a little-endian
+	 * halfword at byte address a is (a+1)<<8 | a -- every fetched
+	 * sample still names its own address, which is what makes the
+	 * expected values below arithmetic rather than a golden capture.
+	 *
+	 * The output stage is sum(sample * gain) * mixvol >>> 18, with
+	 * 8-bit samples promoted into the high byte. So an 8-bit sample
+	 * of V and a 16-bit sample of V<<8 must produce IDENTICAL output,
+	 * and that equivalence is checked directly rather than assumed --
+	 * it is the whole reason both depths can share one accumulator.
+	 * ------------------------------------------------------------ */
+	task fmt16_test;
+		integer k;
+		begin
+			$display("");
+			$display("-- 16-bit samples --");
+
+			for (k = 0; k < 8; k = k + 1) disable_ch(k[2:0]);
+			mixvol = 8'd255;
+
+			// -- a lone 16-bit channel, stepping one sample (2 bytes)
+			//    per frame --
+			setup_ch_fmt(3'd0, 32'd0, 32'd4096, 32'd2 << FRAC,
+				8'd128, 8'd128, 1'b1);
+			one_frame;
+			// halfword at byte 0 = 0x0100 = 256
+			check("16-bit frame 0", out_l, (256 * 128 * 255) >>> 18);
+			one_frame;
+			// halfword at byte 2 = 0x0302 = 770
+			check("16-bit frame 1", out_l, (770 * 128 * 255) >>> 18);
+
+			// -- NEGATIVE, because a signed datapath tested only with
+			//    positive values is not tested. This file's own
+			//    history says so; see docs/audio.md on the >>> 1
+			//    part-select bug, which passed 22 checks because the
+			//    test memory only ever read positive bytes.
+			//
+			//    Two of them, and the LARGE one is the point: a
+			//    halfword at byte 254 is 0xFFFE = -2, which is so
+			//    close to zero that a sign-extension fault would
+			//    round away to the same answer. Byte 128 gives
+			//    0x8180 = -32384, near full negative scale, where a
+			//    lost sign bit comes out as a large POSITIVE number
+			//    and clamps.
+			for (k = 0; k < 8; k = k + 1) disable_ch(k[2:0]);
+			setup_ch_fmt(3'd0, 32'd254, 32'd4096, 32'd0,
+				8'd128, 8'd128, 1'b1);
+			one_frame;
+			check("16-bit small negative", out_l,
+				(-2 * 128 * 255) >>> 18);
+
+			for (k = 0; k < 8; k = k + 1) disable_ch(k[2:0]);
+			setup_ch_fmt(3'd0, 32'd128, 32'd4096, 32'd0,
+				8'd128, 8'd128, 1'b1);
+			one_frame;
+			check("16-bit near full negative", out_l,
+				(-32384 * 128 * 255) >>> 18);
+
+			// -- level equivalence: 8-bit V and 16-bit V<<8 --
+			//
+			// 8-bit channel reading byte 1 (value 1, promoted to 256)
+			// against a 16-bit channel reading halfword 0 (also 256).
+			// Same gain, so the two must contribute the same amount.
+			for (k = 0; k < 8; k = k + 1) disable_ch(k[2:0]);
+			setup_ch(3'd0, 32'd1, 32'd4096, 32'd0, 32'd0, 32'd0,
+				8'd128, 8'd128);
+			one_frame;
+			check("8-bit byte 1 alone", out_l, (256 * 128 * 255) >>> 18);
+
+			// -- BOTH DEPTHS IN ONE FRAME --
+			//
+			// This is the claim that matters: an 8-bit channel and a
+			// 16-bit channel summing correctly in the same
+			// accumulator. If the promotion were missing, the 8-bit
+			// contribution would be 256x too small and this would come
+			// out at half.
+			for (k = 0; k < 8; k = k + 1) disable_ch(k[2:0]);
+			setup_ch_fmt(3'd0, 32'd0, 32'd4096, 32'd0,
+				8'd128, 8'd128, 1'b1);          // 16-bit, 256
+			setup_ch(3'd1, 32'd1, 32'd4096, 32'd0, 32'd0, 32'd0,
+				8'd128, 8'd128);                 // 8-bit, 1 -> 256
+			one_frame;
+			check("8-bit + 16-bit mixed in one frame", out_l,
+				((256 * 128) + (256 * 128)) * 255 >>> 18);
+			check("both channels active", active[1:0], 3);
+
+			for (k = 0; k < 8; k = k + 1) disable_ch(k[2:0]);
+		end
+	endtask
+
+	task pos_test;
+		integer k;
+		begin
+			$display("");
+			$display("-- position readback --");
+
+			for (k = 0; k < 8; k = k + 1) disable_ch(k[2:0]);
+
+			// A 256-byte ring at MEM_BASE, looping the whole of
+			// itself, stepping exactly one byte per frame so the
+			// position is countable by hand.
+			setup_ch(3'd0, 32'd0, 32'd256, 32'd0, 32'd256,
+				32'd1 << FRAC, 8'd128, 8'd128);
+			// A second channel left idle at a DIFFERENT position, so
+			// "reports the selected channel" is a claim with teeth.
+			setup_ch(3'd1, 32'd512, 32'd256, 32'd0, 32'd256,
+				32'd1 << FRAC, 8'd0, 8'd0);
+			disable_ch(3'd1);
+
+			pos_select(3'd0);
+			check("pos after trigger", pos_o >> FRAC, 0);
+
+			for (k = 0; k < 10; k = k + 1) one_frame;
+			pos_select(3'd0);
+			check("pos after 10 frames", pos_o >> FRAC, 10);
+
+			// The fractional part matters as much as the integer one:
+			// software divides by it to convert a position into a
+			// count of source frames consumed.
+			check("pos is exact in 18.14", pos_o, 10 << FRAC);
+
+			// An idle channel still has a position, and it is its own.
+			// dbg_adr_o cannot do this, which is the whole point.
+			pos_select(3'd1);
+			check("idle channel reports its own pos", pos_o, 0);
+
+			// 250 more frames takes the total to 260, which is past
+			// the end of a 256-byte ring. It must WRAP, not stop:
+			// 260 mod 256 = 4. A channel that hit cur_past_end instead
+			// would deactivate and freeze here, which is exactly the
+			// failure a streaming buffer must not have.
+			pos_select(3'd0);
+			for (k = 0; k < 250; k = k + 1) one_frame;
+			pos_select(3'd0);
+			check("pos wrapped around the ring", pos_o >> FRAC, 4);
+			check("channel still active after wrap", active[0], 1);
+
+			for (k = 0; k < 8; k = k + 1) disable_ch(k[2:0]);
+		end
+	endtask
+
 	task one_frame;
 		begin
 			@(posedge clk);
@@ -333,6 +532,7 @@ module tb_audio_mixer;
 		cfg_ch = 3'd0;
 		cfg_reg = 3'd0;
 		cfg_dat = 32'd0;
+		pos_sel = 3'd0;
 		mixvol = 8'd255;
 		waits = 2;
 		m_dat_i = 32'd0;
@@ -557,6 +757,9 @@ module tb_audio_mixer;
 		stream_test(32'd1024, 20);    // ...SDRAM-like, contended
 		stream_test(32'd1024, 60);    // ...pathological
 		stream_test(32'd1024, 110);   // ...where it must finally break
+
+		pos_test;
+		fmt16_test;
 
 		$display("");
 		if (errors == 0)

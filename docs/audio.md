@@ -333,6 +333,10 @@ No decode mask change was needed: `sysctl.v` widened the tenant mask to
 | 7 | `051c` | `CLKHZ` | R | `CLK_HZ`, for computing fs exactly |
 | 8 | `0520` | `MIXVOL` | RW | `[7:0]` mixer master scale, `[11:8]` S/PDIF `fs_code` |
 | 9 | `0524` | `MIXSTAT` | R | `[7:0]` bit per channel, set while sounding |
+| 10 | `0528` | `MIXDBG_ADR` | R | address of the mixer's last fetch |
+| 11 | `052c` | `MIXDBG_DAT` | R | the word it read |
+| 12 | `0530` | `MIXPOSSEL` | RW | `[2:0]` which channel `MIXPOS` reports |
+| 13 | `0534` | `MIXPOS` | R | that channel's phase, 18.14, integer part is a byte offset from `BASE` |
 | 16..63 | `0540`+ | per-channel mixer state | W | six words per channel |
 
 `CTRL`: 0 `EN`, 1 `IRQEN`, 2 `SWAPLR`, 3 `FLUSH`, 4 `CLRUR`, 5
@@ -523,8 +527,18 @@ Phase accumulator is 32-bit with 14 fractional bits, the same split the
 software engine uses and for the same reason: 131070 bytes needs 18
 integer bits, and 131070 × 2¹⁴ still fits.
 
-Sample data is 8-bit signed only. Every tracker format in this family
-uses it; a 16-bit path would double the fetch for nothing.
+Sample data was 8-bit signed only, and this paragraph used to end
+"a 16-bit path would double the fetch for nothing". Two things about
+that were wrong and it took a streaming player to notice.
+
+It does not double the fetch: the mixer reads a 32-bit word and selects
+a slice of it, so a halfword costs exactly the same bus transaction as
+a byte. And "for nothing" was true only while the sole consumer was a
+tracker. See [16-bit samples](#16-bit-samples) -- the real cost turned
+out to be 62 `TRELLIS_COMB` and no DSP, which nobody had measured
+because nobody had needed it.
+
+8-bit remains the default and every existing app still uses it.
 
 ### Cost
 
@@ -600,6 +614,204 @@ reads 0 where no translation is active — so `phys_of()` in `mod.c` is
 correct in both contexts with no special case. Same class of mistake as
 the `k_proc_create()` bug in `docs/app_runtime.md`.
 
+### Position readback: `MIXPOSSEL` / `MIXPOS`
+
+Added so the mixer can be used as a **streaming engine** rather than
+only as a tracker back end.
+
+Set a channel's `LOOPST` to 0 and its `LOOPLEN` to a buffer size and it
+walks that buffer as a ring, forever, fetching one byte per frame and
+costing the CPU nothing per frame. That much has always worked — the
+wrap arithmetic in `ST_PREP2` does not care whether it is looping a
+sample or a ring. What was missing is the one thing software cannot
+work out for itself: **how much of the ring has been consumed**, which
+is exactly what it needs in order to know how much is safe to
+overwrite.
+
+`MIXDBG_ADR` cannot answer it. That is the last fetch made by
+*whichever channel fetched most recently*, so with two channels running
+it reports one of them at random — fine as the bus probe it was built
+to be, useless as a position.
+
+Write a channel index to `MIXPOSSEL`, read that channel's phase from
+`MIXPOS`. `sw/common/zaudio.h` wraps both as `z_audio_ch_pos()`.
+
+#### It is a register, not a combinational mux, and that is the point
+
+The obvious implementation is `assign pos_o = ch_pos[pos_sel];`, or
+mapping the eight positions into eight addresses in `audio.v`'s read
+case. Either puts a 32-bit 8:1 mux fed by eight flip-flop arrays
+**into the wishbone read path**, in series with the register mux
+`audio.v` already has and whatever routing separates the two blocks.
+That is a new combinational path spanning two modules, in a design at
+79% `TRELLIS_COMB` on Obst whose placement is already seed-sensitive.
+
+Registering it splits that into two paths that are each trivially
+short:
+
+    ch_pos[*] -> 8:1 mux -> pos_o        flop to flop, one mux
+    pos_o -> audio.v's wb_dat_o case     one more arm on a case that
+                                         already had twelve
+
+Nothing touches the sequencer, the multiplier, the accumulators, or the
+`ch_pos` **write** path. The only effect on anything that already
+existed is one extra load on each `ch_pos` bit — and its existing
+reader, `ST_FETCH`, is deliberately the shallowest state in the machine
+(register reads and nothing else), so this landed where there was the
+most slack to give.
+
+The cost is that `pos_o` is one cycle behind `ch_pos` and two cycles
+behind a write to `MIXPOSSEL`. Neither is reachable from software: a
+CPU read is a whole bus transaction later, and the value describes a
+position that advances once per audio frame — 1088 `sys_clk` apart at
+44.1kHz. A one-cycle-old answer is not a different answer.
+
+#### Measured cost
+
+`synth_ecp5` on `audio_mixer.v` alone, then packed by `nextpnr-ecp5`:
+
+| | before | after | |
+|---|---|---|---|
+| LUT4 (pre-pack) | 912 | 1099 | +187 |
+| `TRELLIS_COMB` (packed) | 1332 | 1492 | **+160** |
+| `TRELLIS_FF` | 884 | 916 | +32 |
+| `MULT18X18D` | 2 | 2 | — |
+| `TRELLIS_DPR16X4` | 36 | 36 | — |
+| block RAM | 0 | 0 | — |
+
+The 32 flip-flops are `pos_o`; the 160 `TRELLIS_COMB` are the 8:1 mux
+feeding it. **No block RAM, no DSP, no distributed RAM.** On Obst,
+where the whole design sits at 79% of 24288 `TRELLIS_COMB`, this is
+about **+0.7 percentage points**.
+
+`yosys`'s `ltp` reports the longest topological path lengthening from
+523 to 527 cells, and `pos_o` **does not appear on it** — the critical
+path is still the sequencer's state decode, unchanged in character.
+
+#### Verifying on a real board
+
+The numbers above come from synthesising the mixer on its own. They
+bound the area but they cannot tell you what happened to the whole
+design's `Fmax`, because a submodule's critical path is not the
+system's. Do this per board and compare against the same figure before
+the change:
+
+    make BOARD=<board> timing
+    # then: OUTDIR/pnr.log, "Max frequency for clock ... wb_clk"
+
+If any board loses margin it did not have to spare, the fallback is
+cheap and does not lose the feature: lower `AUDIO_MIXER_CH_BITS` from 3
+to 2. The mux is the only thing here that scales with channel count, so
+four channels roughly halves it — and `docs/audio.md` already records
+that dropping to four channels costs almost nothing else (224 of the
+mixer's 1733 `TRELLIS_COMB`, because the expense is the sequencer
+datapath rather than per-channel storage).
+
+### 16-bit samples
+
+Asked for by `sw/apps/play`, which truncates every source to 8 bits on
+the way into its ring. The question was what a 16-bit fetch path would
+cost. It was built as a working variant and synthesised rather than
+estimated, and the numbers are much better than expected.
+
+**Design.** One per-channel bit, `CH_CTRL[18]` (`FMT16`), picks a
+halfword fetch instead of a byte. To keep one output shift for both
+depths, an 8-bit sample is promoted into the HIGH byte of a 16-bit
+`sample` and the final scale moves from `>>> 10` to `>>> 18` — the two
+cancel exactly, so **8-bit playback is bit-identical** and
+`tb_audio_mixer.v` passes all 28 checks unmodified.
+
+The rest is width: `acc_l`/`acc_r` 24 to 27 bits (eight channels of a
+16x8 product), `mul_a` 24 to 27, `mul_r` 33 to 36.
+
+**Measured**, `synth_ecp5 -abc9` then packed by `nextpnr-ecp5`:
+
+| | 8-bit | 16-bit | delta |
+|---|---|---|---|
+| `TRELLIS_COMB` | 1492 | 1554 | **+62** |
+| `TRELLIS_FF` | 916 | 927 | +11 |
+| `MULT18X18D` | 2 | 2 | **0** |
+| `TRELLIS_RAMW` | 36 | 36 | 0 |
+| block RAM | 0 | 0 | 0 |
+
+**+62 `TRELLIS_COMB` — about a quarter of one percentage point on
+Obst**, and *no extra DSP*, which was the real worry: a 27x8 multiply
+still packs into the same two `MULT18X18D` the 24x8 one used. Logic
+depth by `ltp` goes 527 to 536 cells.
+
+**One channel would not be cheaper than eight.** The datapath is
+time-multiplexed — one sequencer, one multiplier, one accumulator pair,
+shared by every channel — so the cost is in the shared datapath, not
+per channel. Restricting the feature to channel 0 would save one bit of
+`ch_ctrl` and nothing else. If it is built, build it for all of them.
+
+**What one 16-bit channel buys, though, is mono.** A channel produces
+one sample stream that is panned to both sides by its gains, so 16-bit
+*stereo* needs two channels regardless. That is a software question,
+not a cost one.
+
+**Backwards compatibility.** `CH_CTRL[18]` is clear at reset and
+`z_audio_ch_ctrl()` has never set it, so every channel comes up 8-bit.
+The three existing users -- `sw/apps/track`, `sw/apps/gamedemo`,
+`sw/apps/audiotest` -- all build CH_CTRL through that one helper and
+need **no changes**; all three were rebuilt to confirm it. 8-bit output
+is bit-identical, not merely equivalent, which is what
+`tb_audio_mixer.v` passing unmodified actually proves.
+
+**Software must check before using it.** `CONFIG` bit 13 says the
+channels can fetch 16 bits; `z_audio_mixer_fmt16()` reads it. An older
+bitstream *accepts* `CH_CTRL[18]` and ignores it, so a 16-bit buffer
+plays as 8-bit garbage at half the intended rate -- considerably worse
+than "not supported", and the reason this is a capability bit rather
+than an assumption. Same argument, same remedy, as bit 12 for the
+mixer itself.
+
+Note the sample position registers still count **bytes** in this mode,
+so a 16-bit mono stream steps two bytes per source frame and an
+interleaved 16-bit stereo pair steps four.
+
+**Both depths at once, per channel.** `CH_CTRL[18]` is per channel, so
+channel 0 can fetch 16-bit while channel 1 fetches 8-bit **in the same
+frame**. That works because the promotion happens at the FETCH, before
+the accumulator -- by the time samples reach `acc_l`/`acc_r` they are
+all in the same units, and one output shift is correct for the sum.
+
+Keeping `>>> 10` for 8-bit and `>>> 18` for 16-bit would not have
+worked: the shift would depend on which channel the sequencer last
+visited, while the accumulator holds a sum over all of them, so a
+mixed frame would have no correct answer at all. Normalising at the
+fetch is what makes coexistence possible rather than merely convenient.
+
+`tb_audio_mixer.v` checks this directly rather than assuming it:
+
+    -- 16-bit samples --
+      ok  16-bit frame 0 = 31
+      ok  16-bit frame 1 = 95
+      ok  16-bit small negative = -1
+      ok  16-bit near full negative = -4033
+      ok  8-bit byte 1 alone = 31
+      ok  8-bit + 16-bit mixed in one frame = 63
+      ok  both channels active = 3
+
+The third and fourth lines are one check split in two, and the split is
+deliberate. A halfword of `0xFFFE` is -2, close enough to zero that a
+lost sign bit rounds away to the same answer; `0x8180` is -32384, where
+a sign-extension fault comes out as a large *positive* number and
+clamps. This file's own history is the reason: the `>>> 1` part-select
+bug passed 22 checks because the test memory only ever read positive
+bytes.
+
+Lines five and six are the pair that matters. `8-bit byte 1 alone`
+reads byte value 1, promoted to 256, and produces 31 -- exactly what
+the 16-bit channel reading a halfword of 256 produces on line two. The
+depths are interchangeable at equal value, which is what lets line six
+sum them and get twice one of them. Without the promotion the 8-bit
+contribution would be 256x too small and that line would read 31.
+
+**Still to verify on hardware:** `make BOARD=<board> timing` per board.
++62 `TRELLIS_COMB` is small, but it is a change to a block whose
+placement was already seed-sensitive.
+
 ### Trigger vs enable
 
 `CH_CTRL` carries both. **`TRIG` restarts the sample; `EN` without
@@ -623,7 +835,12 @@ fixed in one living on in the other.
 one-shot end detection, loop wrap over 200 frames, eight-channel
 summing, `mixvol` scaling, trigger offset, gain-change-without-restart,
 and correctness under a deliberately slow bus (10 wait states per
-read). The behavioural memory checks the mixer holds `cyc`/`adr` stable
+read), plus a group for `MIXPOS`: that the reported position tracks
+consumption exactly in 18.14, that it follows the ring **wrap** rather
+than running off the end and deactivating the channel, and that it
+describes the channel that was asked for rather than whichever one the
+sequencer touched last — which is the exact failing of `dbg_adr_o` that
+this register exists to fix. The behavioural memory checks the mixer holds `cyc`/`adr` stable
 for a whole transaction and never asserts `we`.
 
 Bugs it caught: the trigger offset was built as `{offset, 24'b0}` and
@@ -1136,6 +1353,13 @@ Software side, in `sw/apps/track/Makefile`:
 
 ## Still to do
 
+- **Streaming playback is built** and lives in `sw/apps/play`; see
+  `docs/play_app.md`. It is what `MIXPOSSEL`/`MIXPOS` were added for,
+  and the short version of why is that the CPU on this machine cannot
+  visit 46875 output frames a second: measured IPC is 0.08, so the
+  budget works out at about 29 instructions per output frame for
+  decode, resample and the FIFO store combined. The mixer does all of
+  it in gateware.
 - **Editing.** `track` is a player. Pattern editing is real UI work and
   wants its own pass.
 - **`CTRL` bit 5**, reserved for enabling the digital output

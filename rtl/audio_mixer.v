@@ -176,7 +176,61 @@ module audio_mixer #(
 	// distinguish "the mixer reads the wrong bytes" from "the mixer
 	// mixes them wrongly" without an oscilloscope.
 	output reg [31:0] dbg_adr_o,
-	output reg [31:0] dbg_dat_o
+	output reg [31:0] dbg_dat_o,
+
+	// -- playback position readback --
+	//
+	// `pos_sel` picks a channel; `pos_o` carries that channel's phase
+	// accumulator, in the same 18.14 fixed point ch_pos itself uses.
+	// The integer part is a BYTE OFFSET from that channel's BASE.
+	//
+	// Added for streaming playback (sw/apps/play): with LOOPST=0 and
+	// LOOPLEN set to the buffer size, a channel walks a ring buffer
+	// forever, and the ONLY thing software cannot otherwise learn is
+	// how much of that ring has been consumed -- which is exactly what
+	// it needs in order to know how much is safe to refill. dbg_adr_o
+	// cannot answer it: that is the last fetch made by WHICHEVER
+	// channel fetched most recently, so with two channels running it
+	// reports one of them at random.
+	//
+	// -- WHY THIS IS A REGISTER AND NOT A COMBINATIONAL MUX --
+	//
+	// Read this before "simplifying" it into an assign, because the
+	// simplification is the whole cost.
+	//
+	// The obvious implementation is `assign pos_o = ch_pos[pos_sel];`,
+	// or mapping the positions into audio.v's register read case
+	// directly. Either puts a 32-bit 8:1 mux fed by eight flip-flop
+	// arrays INTO THE WISHBONE READ PATH, in series with the register
+	// mux audio.v already has and whatever routing separates the two
+	// blocks. That is a new combinational path spanning two modules,
+	// added to a design that is at 79% TRELLIS_COMB on Obst and whose
+	// placement is already seed-sensitive (see docs/audio.md,
+	// "Measured cost").
+	//
+	// Registering it instead splits that into two paths that are each
+	// trivially short:
+	//
+	//   ch_pos[*] -> 8:1 mux -> pos_o          flop to flop, one mux,
+	//                                          nothing else in it
+	//   pos_o -> audio.v's wb_dat_o case       one more arm on a case
+	//                                          that already has twelve
+	//
+	// Neither touches the sequencer, the multiplier, the accumulators,
+	// or the ch_pos WRITE path. The only effect on anything that
+	// already existed is one extra load on each ch_pos bit -- and its
+	// existing reader, ST_FETCH, is deliberately the shallowest state
+	// in the machine (register reads and nothing else), so it has the
+	// most slack of anywhere this could have landed.
+	//
+	// The cost is that pos_o is one cycle behind ch_pos and two cycles
+	// behind a write to pos_sel. Both are invisible: a CPU read is a
+	// whole bus transaction later, and the value describes a position
+	// that advances once per audio frame -- 1088 cycles apart at
+	// 44.1kHz. Being one cycle stale is not a rounding error, it is
+	// not even a different answer.
+	input wire [2:0] pos_sel,
+	output reg [31:0] pos_o
 );
 
 	localparam integer CHANNELS = (1 << CH_BITS);
@@ -212,6 +266,33 @@ module audio_mixer #(
 	(* ram_style = "distributed" *) reg [31:0] ch_step   [0:CHANNELS-1];
 	(* ram_style = "distributed" *) reg [31:0] ch_ctrl   [0:CHANNELS-1];
 
+	/*
+	 * -- 8-bit and 16-bit samples --
+	 *
+	 * CH_CTRL[18] (FMT16) picks a halfword fetch instead of a byte.
+	 * Off by default, so every channel comes up 8-bit and every app
+	 * written before this bit existed is unaffected.
+	 *
+	 * An 8-bit sample is promoted into the HIGH byte of `sample` and
+	 * the output stage shifts by 18 instead of 10. Those cancel
+	 * exactly, so 8-bit playback is BIT-IDENTICAL to what this block
+	 * produced before -- verified by rtl/tb/tb_audio_mixer.v passing
+	 * all of its checks unmodified, including the exact expected
+	 * out_l values.
+	 *
+	 * That promotion is why there is one shift and not two. Keeping
+	 * `>>> 10` for 8-bit and `>>> 18` for 16-bit would mean the shift
+	 * depends on which channel the sequencer last visited, while the
+	 * accumulator holds a SUM over all of them -- so a frame mixing
+	 * both depths would have no correct answer. Normalising at the
+	 * fetch is what lets the two coexist in one accumulator.
+	 *
+	 * Cost, measured (synth_ecp5 -abc9, packed by nextpnr-ecp5):
+	 * +62 TRELLIS_COMB, +11 TRELLIS_FF, and NO extra DSP -- the
+	 * widened 27x8 final multiply still packs into the same two
+	 * MULT18X18D the 24x8 one used.
+	 */
+
 	// -- per-channel playback state, written from two places --
 	reg [31:0] ch_pos [0:CHANNELS-1];
 	reg [CHANNELS-1:0] ch_active;
@@ -219,8 +300,8 @@ module audio_mixer #(
 	reg [3:0] state;
 	reg [CH_BITS-1:0] seq;
 
-	reg signed [23:0] acc_l;
-	reg signed [23:0] acc_r;
+	reg signed [26:0] acc_l;
+	reg signed [26:0] acc_r;
 
 	reg [31:0] cur_base;
 	reg [31:0] cur_pos;
@@ -246,7 +327,7 @@ module audio_mixer #(
 	reg cur_do_wrap;
 	reg cur_skip;
 
-	reg signed [7:0] sample;
+	reg signed [15:0] sample;
 	reg signed [23:0] sc_l;
 	reg signed [23:0] sc_r;
 
@@ -269,10 +350,10 @@ module audio_mixer #(
 	// So the product lands in a register and is consumed the cycle
 	// after. Cycles are the resource this block has spare: it uses
 	// about 100 of the 1088 in a frame, and this adds three.
-	reg signed [23:0] mul_a;
+	reg signed [26:0] mul_a;
 	reg [7:0] mul_b;
-	reg signed [32:0] mul_r;
-	wire signed [32:0] mul_p = mul_a * $signed({1'b0, mul_b});
+	reg signed [35:0] mul_r;
+	wire signed [35:0] mul_p = mul_a * $signed({1'b0, mul_b});
 
 	// Clamp from a REGISTER, so this is one compare-and-mux rather
 	// than the tail of a multiply.
@@ -308,6 +389,27 @@ module audio_mixer #(
 	assign m_sel_o = 4'b0000;
 	assign active_o = { {(8-CHANNELS){1'b0}}, ch_active };
 
+	// -- position snapshot --
+	//
+	// Its OWN always block, deliberately, rather than another line in
+	// the sequencer's. It shares no logic with the state machine and
+	// must not be able to grow an accidental dependency on it: put
+	// this inside the big block and the next person to add an `if`
+	// around a group of assignments can silently make the position
+	// readback conditional on the mixer's state.
+	//
+	// pos_sel is indexed narrowly so this still elaborates when
+	// `AUDIO_MIXER_CH_BITS is lowered to 2 -- the same treatment
+	// cfg_ch already gets.
+	//
+	// See the port declaration for why this is registered.
+	always @(posedge clk) begin
+		if (rst)
+			pos_o <= 32'h0000_0000;
+		else
+			pos_o <= ch_pos[pos_sel[CH_BITS-1:0]];
+	end
+
 	// Trigger decode for a CPU write to a channel's CTRL word. Bit 17
 	// restarts the channel; bits 31:24 are the start offset in units
 	// of 256 bytes, which is exactly ProTracker's 9xx sample-offset
@@ -332,8 +434,8 @@ module audio_mixer #(
 
 			state <= ST_IDLE;
 			seq <= 3'd0;
-			acc_l <= 24'sd0;
-			acc_r <= 24'sd0;
+			acc_l <= 27'sd0;
+			acc_r <= 27'sd0;
 			out_l <= 16'sd0;
 			out_r <= 16'sd0;
 			ch_active <= 0;
@@ -342,9 +444,9 @@ module audio_mixer #(
 			m_adr_o <= 32'h0000_0000;
 			dbg_adr_o <= 32'h0000_0000;
 			dbg_dat_o <= 32'h0000_0000;
-			mul_a <= 24'sd0;
+			mul_a <= 27'sd0;
 			mul_b <= 8'd0;
-			mul_r <= 33'sd0;
+			mul_r <= 36'sd0;
 			for (i = 0; i < CHANNELS; i = i + 1)
 				ch_pos[i] <= 32'h0000_0000;
 
@@ -400,8 +502,8 @@ module audio_mixer #(
 				ST_IDLE: begin
 					if (frame_req) begin
 						seq <= 0;
-						acc_l <= 24'sd0;
-						acc_r <= 24'sd0;
+						acc_l <= 27'sd0;
+						acc_r <= 27'sd0;
 						state <= ST_FETCH;
 					end
 				end
@@ -468,12 +570,23 @@ module audio_mixer #(
 						m_stb_o <= 1'b0;
 						dbg_adr_o <= { cur_addr[31:2], 2'b00 };
 						dbg_dat_o <= m_dat_i;
-						case (cur_byte)
-							2'd0: sample <= m_dat_i[7:0];
-							2'd1: sample <= m_dat_i[15:8];
-							2'd2: sample <= m_dat_i[23:16];
-							default: sample <= m_dat_i[31:24];
-						endcase
+						if (cur_ctrl[18]) begin
+							// 16-bit: halfword select, used as-is
+							if (cur_addr[1])
+								sample <= m_dat_i[31:16];
+							else
+								sample <= m_dat_i[15:0];
+						end else begin
+							// 8-bit: promoted into the HIGH byte, so
+							// both depths share one output shift and
+							// existing MOD playback is bit-identical
+							case (cur_byte)
+								2'd0: sample <= { m_dat_i[7:0],   8'b0 };
+								2'd1: sample <= { m_dat_i[15:8],  8'b0 };
+								2'd2: sample <= { m_dat_i[23:16], 8'b0 };
+								default: sample <= { m_dat_i[31:24], 8'b0 };
+							endcase
+						end
 						state <= ST_MULL;
 					end
 				end
@@ -485,7 +598,7 @@ module audio_mixer #(
 				// product -- so two multiplies cost three states, not
 				// four.
 				ST_MULL: begin
-					mul_a <= { {16{sample[7]}}, sample };
+					mul_a <= { {11{sample[15]}}, sample };
 					mul_b <= cur_gain_l;
 					state <= ST_MULL2;
 				end
@@ -496,12 +609,12 @@ module audio_mixer #(
 				end
 
 				ST_ACCL: begin
-					acc_l <= acc_l + mul_r[23:0];   // sample * gain_l
+					acc_l <= acc_l + mul_r[26:0];   // sample * gain_l
 					state <= ST_ACCR;
 				end
 
 				ST_ACCR: begin
-					acc_r <= acc_r + mul_r[23:0];   // sample * gain_r
+					acc_r <= acc_r + mul_r[26:0];   // sample * gain_r
 					state <= ST_ADV;
 				end
 
@@ -537,12 +650,12 @@ module audio_mixer #(
 					// sample came out as a large positive one. Audible
 					// as loud distortion that still sounds like music,
 					// which is the worst kind of wrong.
-					sc_l <= mul_r >>> 10;
+					sc_l <= mul_r >>> 18;
 					state <= ST_SCR;
 				end
 
 				ST_SCR: begin
-					sc_r <= mul_r >>> 10;   // see sc_l above
+					sc_r <= mul_r >>> 18;   // see sc_l above
 					state <= ST_DONE;
 				end
 

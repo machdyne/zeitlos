@@ -111,6 +111,24 @@
 #define reg_audio_mixdbg_adr (*(volatile uint32_t*)0x70000528)
 #define reg_audio_mixdbg_dat (*(volatile uint32_t*)0x7000052c)
 
+/* Playback position readback (rtl/audio_mixer.v's pos_sel/pos_o).
+ *
+ * MIXPOSSEL selects a channel, MIXPOS reports that channel's phase
+ * accumulator in the same 18.14 fixed point CH_STEP uses -- so the
+ * integer part is a BYTE OFFSET from that channel's CH_BASE.
+ *
+ * Why this exists: with CH_LOOPST 0 and CH_LOOPLEN set to a buffer
+ * size, a channel walks a RING BUFFER forever, and the mixer becomes a
+ * playback engine that costs the CPU nothing per frame. The one thing
+ * software then cannot work out for itself is how much of the ring has
+ * been consumed, which is exactly what it needs in order to know how
+ * much is safe to overwrite. mixdbg_adr cannot answer it: that is the
+ * last fetch made by WHICHEVER channel fetched most recently, so with
+ * two channels running it reports one of them at random.
+ */
+#define reg_audio_mixpossel  (*(volatile uint32_t*)0x70000530)
+#define reg_audio_mixpos     (*(volatile uint32_t*)0x70000534)
+
 /*
  * Hardware mixer channel registers (rtl/audio_mixer.v).
  *
@@ -131,6 +149,26 @@
 
 #define Z_AUDIO_CH_EN    (1u << 16)
 #define Z_AUDIO_CH_TRIG  (1u << 17)   /* restart from the offset field */
+
+/*
+ * Fetch 16-bit samples instead of 8-bit.
+ *
+ * Clear by default, so a channel comes up 8-bit and every app written
+ * before this bit existed is unaffected -- z_audio_ch_ctrl() has never
+ * set it and still does not.
+ *
+ * CHECK Z_AUDIO_MIXER_FMT16 FIRST. An older bitstream accepts this bit
+ * and ignores it, so the channel plays a 16-bit buffer as 8-bit
+ * garbage at half the intended rate. That is a considerably worse
+ * failure than "not supported", and it is exactly why the capability
+ * is reported in CONFIG rather than assumed.
+ *
+ * The sample position (CH_STEP, CH_BASE, CH_LEN, CH_LOOPST,
+ * CH_LOOPLEN) is still counted in BYTES in this mode -- so a 16-bit
+ * mono stream steps two bytes per source frame, and an interleaved
+ * 16-bit stereo pair steps four.
+ */
+#define Z_AUDIO_CH_FMT16 (1u << 18)
 
 /* Fractional bits in CH_STEP and in the mixer's phase accumulator.
  * MUST match FRAC_BITS in rtl/audio_mixer.v -- there is no shared
@@ -160,6 +198,8 @@
 #define Z_AUDIO_FORMAT_SD      (1u << 8)   // 1-bit sigma-delta stereo
 #define Z_AUDIO_FORMAT_PT8211  (1u << 9)   // PT8211/TM8211
 #define Z_AUDIO_MIXER_PRESENT  (1u << 12)  // hardware mixer is built
+#define Z_AUDIO_MIXER_FMT16    (1u << 13)  // ...and its channels can
+                                           // fetch 16-bit samples
 #define Z_AUDIO_FORMAT_SPDIF   (1u << 10)  // RESERVED -- optical S/PDIF
                                            // (Sergei). Nothing sets
                                            // this yet; see docs/audio.md.
@@ -401,6 +441,72 @@ static inline bool z_audio_mixer_present(void) {
 	uint32_t cfg = reg_audio_config;
 	if ((cfg >> 16) != Z_AUDIO_CONFIG_SIG) return false;
 	return (cfg & Z_AUDIO_MIXER_PRESENT) != 0;
+}
+
+/*
+ * Channel `c`'s current position, in bytes from its CH_BASE.
+ *
+ * Two bus transactions, because the hardware stores the selection
+ * rather than decoding eight addresses -- see rtl/audio_mixer.v's
+ * pos_o comment for why that trade was made in favour of timing.
+ *
+ * pos_o is registered and therefore one cycle behind ch_pos, and two
+ * cycles behind the select write. Neither is reachable from here: the
+ * read below is a whole separate bus transaction after the write, and
+ * the value describes a position that only advances once per audio
+ * frame -- 1088 sys_clk apart at 44.1kHz. A one-cycle-old answer is
+ * not a different answer.
+ *
+ * Returns 0 on a build with no mixer, which is indistinguishable from
+ * a channel sitting at offset 0. Check z_audio_mixer_present() first
+ * if that matters, exactly as for every other mixer register here.
+ */
+static inline uint32_t z_audio_ch_pos(int c) {
+	reg_audio_mixpossel = (uint32_t)c;
+	return reg_audio_mixpos;
+}
+
+/*
+ * The same, as a whole number of bytes consumed.
+ *
+ * Named _bytes rather than _frames deliberately: the phase counts
+ * BYTES, so for a stereo stream interleaved in one ring -- where both
+ * channels share a base and step two bytes per frame -- this is twice
+ * the frame count, and a helper that quietly picked one interpretation
+ * would be wrong for the other.
+ */
+static inline uint32_t z_audio_ch_pos_bytes(int c) {
+	return z_audio_ch_pos(c) >> Z_AUDIO_STEP_FRAC;
+}
+
+/*
+ * True if this bitstream's mixer can fetch 16-bit samples.
+ *
+ * Separate from z_audio_mixer_present() and checked separately: a
+ * bitstream can have the mixer and predate the 16-bit path, and the
+ * failure mode of assuming otherwise is audible garbage rather than
+ * silence. Same reasoning, same shape, as the mixer's own bit.
+ */
+static inline bool z_audio_mixer_fmt16(void) {
+	uint32_t cfg = reg_audio_config;
+	if ((cfg >> 16) != Z_AUDIO_CONFIG_SIG) return false;
+	return (cfg & Z_AUDIO_MIXER_FMT16) != 0;
+}
+
+/*
+ * CH_CTRL with the sample format chosen explicitly.
+ *
+ * z_audio_ch_ctrl() is unchanged and still builds an 8-bit channel --
+ * every existing caller (sw/apps/track, sw/apps/gamedemo,
+ * sw/apps/audiotest) keeps working with no edit. This is the one to
+ * call when you want 16 bits, and only after z_audio_mixer_fmt16()
+ * says the hardware has it.
+ */
+static inline uint32_t z_audio_ch_ctrl_fmt(uint8_t gain_l, uint8_t gain_r,
+	bool enable, bool trig, uint8_t offset, bool fmt16)
+{
+	return z_audio_ch_ctrl(gain_l, gain_r, enable, trig, offset)
+		| (fmt16 ? Z_AUDIO_CH_FMT16 : 0u);
 }
 
 static inline void z_audio_mixer_enable(bool on) {

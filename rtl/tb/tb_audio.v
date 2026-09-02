@@ -338,7 +338,20 @@ module tb_audio;
 		check("MAGIC", rd, 32'h5A41_5544);
 
 		wb_read(REG_CONFIG, rd);
-		check("CONFIG", rd, { 16'h5A41, 3'b0, 1'b1, 4'b0011, 8'd10 });
+		// Spelled out field by field rather than as one constant, so
+		// that adding a capability bit is a one-line edit here with an
+		// obvious meaning instead of a hunt for which hex digit moved.
+		// Bit 13 (FMT16) arrived exactly that way and this check
+		// caught it, which is the check doing its job -- but "got
+		// 5a41330a want 5a41130a" is not a helpful way to be told.
+		check("CONFIG", rd, {
+			16'h5A41,      // signature
+			2'b0,          // reserved
+			1'b1,          // bit 13: mixer channels can fetch 16-bit
+			1'b1,          // bit 12: hardware mixer present
+			4'b0011,       // formats: sigma-delta + PT8211
+			8'd10          // FIFO depth log2
+		});
 
 		wb_read(REG_CLKHZ, rd);
 		check("CLKHZ", rd, 32'd48000000);

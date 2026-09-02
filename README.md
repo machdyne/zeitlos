@@ -22,7 +22,7 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 | Framebuffer | 640x480x1bpp (monochrome; white, green, or amber) |
 | Viewport | Optional 320x240 pixel-doubled viewport |
 | Video | VGA, DVI, DVI over HDMI, composite NTSC and PAL |
-| Audio | 8 channel hardware mixer with stereo output |
+| Audio | 8 channel 16-bit hardware mixer with stereo output |
 | Storage | MicroSD |
 | Network | Ethernet (SPI), Ethernet MAC (for RMII PHY) or ESP32 |
 | Entropy | Ring-oscillator TRNG |

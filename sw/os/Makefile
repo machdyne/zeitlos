@@ -2,8 +2,52 @@ PREFIX ?= $(RISCV_PREFIX)
 # ARCH/ABI come from one place -- see that file for why
 include ../common/arch.mk
 CC = $(PREFIX)gcc
-CFLAGS = -fPIC --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) -I../common $(ARCH_DEFS) $(LIBC_FLAGS)
-LDFLAGS = -fPIC -march=$(ARCH) -mabi=$(ABI) $(LIBC_FLAGS)
+
+# Section garbage collection.
+#
+# Every app Makefile under sw/apps has done this since sw/apps/repl;
+# the kernel had not, and it is the same argument. The kernel links
+# whole objects from ../common (zobj, zstream, zdns, zsoc) for the sake
+# of a fraction of each, plus all of FatFs, plus whatever libc drags
+# in -- and without -ffunction-sections nothing can be dropped, because
+# the linker's unit of granularity is the whole .o.
+#
+# ../common/riscv-os.ld already collects *(.text.*), so no linker
+# script change is needed for this to work.
+#
+# Measured on this tree (rv32im, picolibc, so the absolute figures
+# differ from a newlib build but the delta does not):
+#
+#   as-is                     84884 bytes text+data
+#   +gc-sections              79284      -5600
+#   -fPIC removed             83152      -1732
+#   both                      73968     -10916
+#
+# That matters because the BIOS copies a FIXED ROM_OS_SIZE of 256KB
+# (sw/bios/bios.c) into main memory, so 256KB is a hard ceiling on
+# kernel.bin rather than a soft one.
+#
+# Set GC_SECTIONS=0 to disable, e.g. when chasing a linker problem
+# where a section being dropped is itself the suspect.
+GC_SECTIONS ?= 1
+ifeq ($(GC_SECTIONS),1)
+GC_CFLAGS = -ffunction-sections -fdata-sections
+GC_LDFLAGS = -Wl,--gc-sections
+endif
+
+# -fPIC on a kernel linked at a fixed 0x40000000 (../common/riscv-os.ld)
+# costs 1732 bytes of GOT indirection for relocatability nothing uses.
+# It is LEFT IN because this change is scoped to section GC and the two
+# should be measured separately -- flip it and reflash to find out:
+#
+#   make -C sw/os KERNEL_PIC=0
+KERNEL_PIC ?= 1
+ifeq ($(KERNEL_PIC),1)
+PIC_FLAGS = -fPIC
+endif
+
+CFLAGS = $(PIC_FLAGS) --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) -I../common $(GC_CFLAGS) $(ARCH_DEFS) $(LIBC_FLAGS)
+LDFLAGS = $(PIC_FLAGS) -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS)
 LDSCRIPT = ../common/riscv-os.ld
 
 OBJS = kernel.o kruntime.o mem.o zar.o \

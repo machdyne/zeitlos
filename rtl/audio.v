@@ -418,6 +418,15 @@ module audio_wb #(
 	reg [7:0] ctrl;
 	reg [7:0] rate;
 	reg [7:0] mixvol;
+
+	// Which channel MIXPOS reports. A stored select plus a separate
+	// read register, rather than eight positions mapped into eight
+	// addresses: the latter needs a mux driven by the bus address
+	// feeding the read path combinationally, which is precisely the
+	// path audio_mixer.v's pos_o comment explains is not worth
+	// spending here. Two bus transactions instead of one, on
+	// something read a few times a second.
+	reg [2:0] mixpos_sel;
 	// Channel status sampling-frequency nibble. Advisory -- receivers
 	// PLL to the line -- so software can say "48 kHz" while the line
 	// runs at 46875. See rtl/audio_spdif.v.
@@ -458,12 +467,15 @@ module audio_wb #(
 `endif
 
 `ifdef AUDIO_MIXER
+	localparam HAS_MIXER_FMT16 = 1'b1;
 	wire signed [15:0] mix_l;
 	wire signed [15:0] mix_r;
 	wire [7:0] mix_active;
 	wire [31:0] mix_dbg_adr;
 	wire [31:0] mix_dbg_dat;
+	wire [31:0] mix_pos;
 `else
+	localparam HAS_MIXER_FMT16 = 1'b0;
 	// No mixer in this build: MIXEN does nothing, MIXSTAT reads zero,
 	// and the channel registers are written into a void. Software sees
 	// mixstat == 0 with a valid CONFIG signature, which is what
@@ -474,6 +486,7 @@ module audio_wb #(
 	wire [7:0] mix_active = 8'h00;
 	wire [31:0] mix_dbg_adr = 32'h0;
 	wire [31:0] mix_dbg_dat = 32'h0;
+	wire [31:0] mix_pos = 32'h0;
 `endif
 
 	// Channel-register writes are decoded here and handed straight to
@@ -591,7 +604,9 @@ module audio_wb #(
 		.out_r(mix_r),
 		.active_o(mix_active),
 		.dbg_adr_o(mix_dbg_adr),
-		.dbg_dat_o(mix_dbg_dat)
+		.dbg_dat_o(mix_dbg_dat),
+		.pos_sel(mixpos_sel),
+		.pos_o(mix_pos)
 	);
 `else
 	assign mx_adr_o = 32'h0000_0000;
@@ -636,6 +651,7 @@ module audio_wb #(
 			ctrl <= CTRL_RESET;
 			rate <= RATE_RESET;
 			mixvol <= 8'd128;
+			mixpos_sel <= 3'd0;
 			spdif_fs <= 4'b0100;   // "48 kHz"
 			wmark <= DEPTH / 2;
 			underrun <= 1'b0;
@@ -782,6 +798,13 @@ module audio_wb #(
 						if (wb_sel_i[1]) spdif_fs <= wb_dat_i[11:8];
 					end
 
+					// MIXPOSSEL. Byte lane 0 only -- three bits wide
+					// and everything above is reserved, same rule as
+					// CTRL and RATE.
+					if (wb_adr_i == 32'd12) begin
+						if (wb_sel_i[0]) mixpos_sel <= wb_dat_i[2:0];
+					end
+
 				end else begin
 
 					case (wb_adr_i)
@@ -804,9 +827,17 @@ module audio_wb #(
 						// channel idle, so a build without it used to
 						// report "mixing in HARDWARE" and then play
 						// silence.
+						// Bit 13 says the mixer's channels can fetch
+						// 16-BIT samples (CH_CTRL[18]). Software
+						// cannot infer it: an older mixer accepts the
+						// bit, ignores it, and plays the same buffer
+						// as 8-bit garbage at the wrong pitch --
+						// which is a much worse failure than "not
+						// supported". Same argument, and the same
+						// remedy, as bit 12 for the mixer itself.
 						32'd6: wb_dat_o <= {
-							CONFIG_SIG, 3'b0, HAS_MIXER, FORMATS,
-							DEPTH_LOG2_B
+							CONFIG_SIG, 2'b0, HAS_MIXER_FMT16,
+							HAS_MIXER, FORMATS, DEPTH_LOG2_B
 						};
 						32'd7: wb_dat_o <= CLK_HZ;
 						32'd8: wb_dat_o <= { 20'b0, spdif_fs, mixvol };
@@ -814,6 +845,14 @@ module audio_wb #(
 						// bus read probe -- see audio_mixer.v
 						32'd10: wb_dat_o <= mix_dbg_adr;
 						32'd11: wb_dat_o <= mix_dbg_dat;
+						// MIXPOSSEL reads back so a register dump
+						// shows which channel MIXPOS is describing --
+						// without it the next word is a number with no
+						// stated subject.
+						32'd12: wb_dat_o <= { 29'b0, mixpos_sel };
+						// MIXPOS. Registered inside the mixer; see
+						// audio_mixer.v's pos_o comment.
+						32'd13: wb_dat_o <= mix_pos;
 						default: wb_dat_o <= 32'h0000_0000;
 					endcase
 
