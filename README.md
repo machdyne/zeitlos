@@ -97,7 +97,7 @@ The following boards are currently partially supported or untested:
 
 #### Minimum Hardware Requirements
 
- - ECP5 LFE5U-25F (25K LUTs with open-source tools) or above
+ - ECP5 LFE5U-12F (25K LUTs with open-source tools) or above
  - 1MB of main memory
  - 2MB of NOR flash
 
