@@ -61,7 +61,24 @@ void readline(char *buf, int maxlen) {
 		if (c == CH_CR || c == CH_LF) {
 			break;
 		}
-		else if (pl && (c == CH_BS || c == CH_DEL)) {
+		else if (c == CH_BS || c == CH_DEL) {
+
+			// The empty-line test belongs INSIDE this branch, not in
+			// its condition. With `pl &&` up there, a backspace on an
+			// empty line matched no branch above and fell through to
+			// the printable case below, which echoed it and stored it
+			// -- so the terminal walked its cursor back over the
+			// prompt and 0x08 went into the command. Swallowing it
+			// here is what makes backspace stop at column 0.
+			if (!pl) continue;
+
+			// pl is the INSERT position -- one past the last
+			// character -- so the character to remove is at pl-1 and
+			// the index has to move back with it. Clearing buf[pl]
+			// and leaving pl alone erased the character on screen and
+			// left it in the buffer: typing `ls`, backspace, `d`
+			// showed "ld" and ran "lsd".
+			pl--;
 			buf[pl] = 0x00;
 			printf(VT100_CURSOR_LEFT);
 			printf(" ");

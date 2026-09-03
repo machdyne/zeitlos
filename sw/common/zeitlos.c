@@ -448,7 +448,13 @@ void readline(char *buf, int maxlen) {
 		if (c == CH_CR || c == CH_LF) {
 			break;
 		}
-		else if (pl && (c == CH_BS || c == CH_DEL)) {
+		else if (c == CH_BS || c == CH_DEL) {
+			// Test inside the branch, not in its condition: with
+			// `pl &&` above, a backspace on an empty line fell
+			// through to the printable case below, which echoed it
+			// and stored it -- eating the prompt and putting 0x08 in
+			// the buffer. Same fix as sw/os/kruntime.c's copy.
+			if (!pl) continue;
 			pl--;
 			buf[pl] = 0x00;
 			printf(VT100_CURSOR_LEFT);

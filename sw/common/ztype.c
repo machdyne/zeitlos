@@ -29,7 +29,29 @@ const z_ftype_t z_ftypes[] = {
 	{ "MD",  "read", "Markdown text" },
 
 	// Zeitlos bitmap -- sw/common/zbm.h, written by sw/apps/draw.
+	//
+	// Stays mapped to `draw` rather than `view`, deliberately: a ZBM
+	// is this system's own editable drawing, so the editor is what
+	// you want on a double-click. `view` opens one perfectly well
+	// when asked directly (it decodes ZBM too), the same way `text`
+	// still opens a .MD.
 	{ "ZBM", "draw", "Bitmap image"  },
+
+	// Images -- sw/apps/view, decoders in sw/common/zimg.c.
+	//
+	// PNG is listed even though its decoder is compiled out by
+	// default (Z_IMG_HAVE_PNG, zimg.h). view recognises the file and
+	// says the format isn't built in, which is a far more useful
+	// answer than the file browser's "no application handles this".
+	{ "BMP", "view", "Bitmap image"  },
+	{ "GIF", "view", "GIF image"     },
+	{ "JPG", "view", "JPEG image"    },
+	{ "JPEG","view", "JPEG image"    },
+	{ "PNG", "view", "PNG image"     },
+	{ "PNM", "view", "Netpbm image"  },
+	{ "PBM", "view", "Netpbm image"  },
+	{ "PGM", "view", "Netpbm image"  },
+	{ "PPM", "view", "Netpbm image"  },
 
 	{ NULL,  NULL,   NULL            },
 

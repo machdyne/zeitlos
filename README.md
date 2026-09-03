@@ -65,6 +65,7 @@ With the MTU, there is no need for position independent code or complicated addr
 | text | Text editor |
 | read | Text reader for files of unlimited size (with rendered Markdown) |
 | draw | MacPaint-inspired drawing app |
+| view | Image viewer |
 | files | File browser |
 | calc | Calculator |
 | info | System info |

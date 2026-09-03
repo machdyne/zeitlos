@@ -12,14 +12,38 @@ those bytes decides what they mean. So editing belongs at the reading
 end, not in the terminal — which also means it works unchanged if
 `term` ever talks to something remote.
 
-There are two readers, and only one of them got this:
+There are three readers, and only one of them got this:
 
-- **`readline()` (`sw/common/zeitlos.c`)** — the serial console's
-  reader, used by `sh`. Stays minimal: Enter and backspace, plus
-  swallowing escape sequences so arrows can't corrupt the line. The
-  console is the recovery path of last resort, and complexity there is
-  complexity in the one thing that has to work when nothing else does.
+- **`readline()` (`sw/common/zeitlos.c`)** — the APP-side minimal
+  reader. Enter and backspace, plus swallowing escape sequences so
+  arrows can't corrupt the line.
+- **`readline()` (`sw/os/kruntime.c`)** — a SECOND, separate copy,
+  and the one the kernel shell (`sw/os/sh.c`) actually calls. The
+  kernel does not link `sw/common/zeitlos.c`.
 - **`zline`** — this. Full editing.
+
+**The first two are independent copies of the same function and have
+drifted.** That is worth stating plainly, because it hid two real bugs
+in the kernel copy for as long as it existed:
+
+  - Backspace cleared `buf[pl]` without decrementing `pl`, so it
+    erased the character on screen and left it in the buffer. Typing
+    `ls`, backspace, `d` displayed "ld" and ran "lsd". The app-side
+    copy always had the decrement.
+  - Backspace on an empty line matched no branch (the emptiness test
+    was in the condition, not the body) and fell through to the
+    printable case, which echoed it and stored it — walking the
+    terminal cursor back over the prompt and putting `0x08` in the
+    command. This one was present in BOTH copies.
+
+Both are fixed. Neither would have survived a doc that said there were
+two copies to keep in step; this file said there was one. If a third
+behaviour is ever added to either, add it to both or delete one.
+
+The minimalism is deliberate in both: the console is the recovery path
+of last resort, and complexity there is complexity in the one thing
+that has to work when nothing else does. Richer editing belongs in
+`zline`.
 
 ## What it does
 

@@ -15,6 +15,7 @@ APPS = \
 	wm \
 	hello_win \
 	draw \
+	view \
 	text \
 	files \
 	info \
