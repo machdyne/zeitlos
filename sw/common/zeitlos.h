@@ -423,6 +423,30 @@ bool z_video_mode_set(uint32_t mode);
 // an unpredictable time -- this is for short, fixed delays only.
 void delay_ms(uint32_t ms);
 
+// -- HID pointer wakeups --
+//
+// Registers this process as the one the HID interrupt wakes when a
+// pointer report arrives (sw/os/hid.c).
+//
+// Why this exists: the mouse interrupt was ALWAYS firing --
+// rtl/usb_hid.v's `report` pulse drives cpu_irq[5]/[6] for keyboard,
+// mouse and gamepad alike -- but the ISR only acted on keyboard
+// reports, so the only way to notice the pointer moving was to poll
+// reg_usbN_cursor. wm did that at 732Hz forever, awake and taking a
+// scheduler share whether or not the mouse had moved.
+//
+// Nothing is delivered. The cursor is level state in a register and
+// coalescing is desirable (see Z_WM_MOUSE in zwm.h), so this only
+// wakes the caller; it then reads the current position as it always
+// has. That keeps the existing model and means there is no event
+// queue to overflow under fast motion.
+//
+// Returns false on a kernel that predates the syscall, in which case
+// the caller must keep polling on a timeout -- which is why wm still
+// passes a (much longer) timeout to z_proc_wait() rather than
+// blocking indefinitely.
+bool z_hid_pointer_subscribe(void);
+
 // -- PID name registry (sw/os/pidreg.c/h) --
 //
 // Registers `basename` for the calling process; the kernel appends a

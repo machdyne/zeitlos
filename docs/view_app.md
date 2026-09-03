@@ -296,7 +296,8 @@ Second profile, after those four changes:
 ```
 
 720.7M -> 421.1M cycles, 15.0s -> 8.8s. Derived instruction counts
-(`ipc x cycles`, which unlike raw cycles are immune to preemption):
+(`ipc x cycles` — but see the correction under "Fourth profile" below:
+these are NOT this process's instructions alone):
 
 | phase | instructions before | after | ratio |
 |---|---:|---:|---:|
@@ -333,8 +334,18 @@ attached, not a known win.
 | read | 0.42M | 0.44M | +4% |
 | total | 36.4M | 32.3M | **-11%** |
 
-8.8s -> 7.7s. Two things came out of it, one of them against the
-hypothesis that motivated the experiment:
+8.8s -> 7.7s.
+
+These instruction figures carry the same caveat as the previous
+table — they are system-wide, not this process's — but the COMPARISON
+is sound here in a way it is not for the fourth profile below: both
+runs had the same processes doing the same things alongside `view`, so
+the contamination is roughly equal on each side and the differences
+are real. It is only when the process load itself changes that
+comparing these numbers stops meaning anything.
+
+Two things came out of it, one of them against the hypothesis that
+motivated the experiment:
 
 **The spilling theory was wrong.** `-O2` moved the IDCT only 5%. If
 ~7,400 instructions per block were register spilling, a compiler with
@@ -356,6 +367,61 @@ Net position: **16.2s -> 7.7s, 2.1x**, output bit-identical throughout.
 The three remaining phases are now comparable in cost (entropy 37%,
 idct 35%, dither 27%), which is the shape of diminishing returns. The
 one lever left with real headroom is the AAN IDCT.
+
+### Fourth profile: the scheduler changes
+
+After `wm` and pid 0 stopped spinning (see `docs/user_input.md`), with
+no change whatever to the decoders:
+
+```
+  phase     calls      cycles       min       avg   ipc/1000
+  read        211     4248770       563     20136        90
+  entropy    2400    58365214      1215     24318        82
+  idct       1600    50381377       674     31488        87
+  dither      256    34597571     97608    135146       109
+```
+
+370.8M -> 147.6M cycles. **7.7s -> 3.1s**, and 16.2s -> 3.1s overall,
+a factor of 5.2 from where this started.
+
+**The decoders did not get faster. `view` got a bigger share of the
+machine.** That is worth stating plainly because the profile at first
+glance appears to show entropy and idct improving 60%, and they did
+not.
+
+### Correction: the counters are global
+
+An earlier version of this document said instruction counts derived
+from `ipc x cycles` were "immune to preemption". **That is wrong**, and
+`sh.c`'s own benchmark says so in as many words: *"BOTH columns include
+time/instructions from other processes — picorv32's counters are
+global, not per process."* `rdinstret` is contaminated exactly as
+`rdcycle` is. When `wm` and the shell stopped burning cycles, both
+columns fell together, because less foreign work landed inside each
+bracket.
+
+The column that actually held still is `min`:
+
+| phase | min before | min after |
+|---|---:|---:|
+| read | 563 | 563 |
+| entropy | 1,217 | 1,215 |
+| idct | 674 | 674 |
+
+Identical, which is the proof that per-unit decoder cost is unchanged.
+Those three phases are shorter than one KTIMER slice (65,664 cycles),
+so their cheapest samples are genuinely uninterrupted.
+
+`dither` is the exception and shows the effect directly: its min fell
+from 232,807 to 97,608. A dithered row spans more than one slice
+either way, so its min was never clean — it simply now contains less
+foreign work. Its true cost is at or a little under 97,608 cycles, and
+that number will keep drifting down as the system gets quieter without
+the code changing at all.
+
+The practical rule: **trust `min` for phases under ~65,000 cycles,
+treat everything else as an upper bound, and never compare absolute
+instruction counts across runs with different process loads.**
 
 Two earlier ideas were dropped on this evidence. Replacing `luma()`'s
 multiplies with shift-adds is worthless — at 29 cycles a `MUL` is

@@ -727,7 +727,8 @@ rather than being missed.
 | `info` | sample interval | samples periodically |
 | `net` | 1 tick | polls the ENC28J60 |
 | `repl` | `Z_TICK_HZ / 20` | message-driven; see below |
-| `wm` | 1 tick | polls the pointer |
+| `wm` | 16 ticks | pointer arrives by IRQ; timeout covers dock deadlines |
+| `sh` (pid 0) | `Z_TICK_HZ / 4` | console input arrives by IRQ |
 
 **`repl`** was a pure spin — it read an empty mailbox and went round
 again, forever. Every branch in its loop is message-driven, so it could
@@ -738,26 +739,69 @@ forever is correct today and would stall silently the first time that
 stops being true. Waking 20 times a second costs nothing and removes
 the trap.
 
-**`wm`** cannot block indefinitely: the pointer is polled from
-`usb_hid.v`'s cursor register, not delivered as a message, so nothing
-would wake it when the mouse moves. One tick wakes it at ~732Hz — over
-twelve times the display refresh, far finer than anyone can see in a
-pointer — while returning the ~99% of each timeslice previously spent
-re-reading an unchanged register. An arriving message cuts the wait
-short, so app requests are still serviced immediately.
+**`wm`** used to wait exactly one tick, because the pointer was polled
+from `usb_hid.v`'s cursor register and nothing would wake it when the
+mouse moved.
+
+That is no longer true. The HID interrupt was always firing for mouse
+reports — `rtl/usb_hid.v`'s `report` pulse drives `cpu_irq[5]`/`[6]`
+for keyboard, mouse and gamepad alike — and the ISR simply ignored the
+non-keyboard ones. It now wakes a registered subscriber
+(`z_hid_pointer_subscribe()`, `zeitlos.h`), and `wm` registers at
+startup. Nothing is *delivered*: the cursor is level state in a
+register and coalescing is desirable, so the ISR wakes the reader and
+lets it read the current position. See `docs/user_input.md`,
+"Pointer wakeups".
+
+It still passes a timeout rather than blocking indefinitely, because
+`wm` has work driven by neither the pointer nor messages — dock launch
+deadlines, the pending launch-argument timeout, and
+`check_core_services()` at startup are all polled against
+`z_uptime_ticks()`. Those are coarse, so 16 ticks (~22ms) serves them
+while being 16x fewer wakeups than before. On a kernel predating the
+syscall the subscription fails and the old one-tick behaviour is kept,
+so the same binary runs on both.
 
 ### Still outstanding
 
-**Process 0** (kernel and serial console) does not block. It was left
-alone deliberately: it may double as the idle fallback, and making the
-scheduler's own process blockable is not a change to guess at. With
-everything else killed the game still measured `dt 2`, so pid 0 is worth
-investigating — but the remaining gap there is as likely to be the
-drawing as the scheduling.
+**`net` polls the ENC28J60** — see below. That is now the last
+timer-driven poll of a device that has an interrupt available.
 
 **`net` polls the ENC28J60** on a 1-tick timer. Its own comment notes
-the controller's INT pin is already wired to `spim.v`'s STATUS bit 2, so
-waking on the interrupt would be strictly better than a timer.
+the controller's INT pin is already wired to `spim.v`'s STATUS bit 2,
+so waking on the interrupt would be strictly better than a timer — and
+the HID pointer change above is now a worked precedent for exactly
+that shape of fix.
+
+## pid 0 blocks now too
+
+`readline()` (`sw/os/kruntime.c`) called `getch()`, which returns `EOF`
+immediately on an empty UART FIFO, and then `continue`d — a tight spin
+at full speed, with no throttle at all, for as long as the shell sat
+at its prompt. It was the worst offender in the system: `wm` at least
+yielded a tick.
+
+This was previously left alone on the grounds that pid 0 might double
+as the idle fallback and that making the scheduler's own process
+blockable was not a change to guess at. That concern turned out to be
+already handled: `k_proc_next()`'s scan is explicitly bounded against
+the case where *every* process is unschedulable at once, which its own
+comment calls out as newly possible once `Z_PROC_FLAG_BLOCKED`
+existed.
+
+The UART was already interrupt-driven (`cpu_irq[4]` -> `z_uart_irq()`
+-> FIFO), so the wake was nearly free: the RDA path calls
+`k_proc_unblock(0)` after pushing bytes, and `readline()` waits with a
+`Z_TICK_HZ / 4` backstop. The keystroke itself does the waking; the
+timeout only bounds the damage if a wakeup were ever lost.
+
+pid 0 is hardcoded rather than subscribable, unlike the pointer: there
+is exactly one serial console and it belongs to the shell.
+
+**Measured effect.** A JPEG decode in `view` that took 7.7s with `wm`
+and the shell both spinning took 3.1s afterwards, with no change to
+the decoder at all — the process simply got most of the machine
+instead of a share of it. See `docs/view_app.md`, "Fourth profile".
 
 ## term and text were spinning too
 

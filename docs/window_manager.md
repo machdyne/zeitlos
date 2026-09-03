@@ -144,8 +144,18 @@ a mouse -- there's no fixed port-to-device mapping anymore, and no
 guarantee it's the same port from one boot to the next. See
 `docs/user_input.md` for the dual-port hardware and register layout
 this reads from; this section stays focused on what `wm` does with
-the result. `wm` polls this once per main-loop iteration; there's no
-mouse event queue.
+the result. `wm` reads this once per main-loop iteration; there is no
+mouse event queue, and deliberately so -- the cursor is level state in
+a register, and coalescing is what apps want anyway (see `Z_WM_MOUSE`
+below, which tells an app to act on the LAST sample it finds rather
+than every one).
+
+What changed is when that loop runs. It used to wake every tick
+(~732Hz) purely so it would notice the pointer moving; the HID
+interrupt now wakes it on each report instead, so an idle desktop
+stops waking `wm` almost entirely. The register read is unchanged --
+only the polling schedule went away. See `docs/user_input.md`,
+"Pointer wakeups", and `docs/app_runtime.md`, "Who blocks, and how".
 
 - **Click on a window** brings it to front and focuses it -- but only
   repaints if focus or z-order actually changed (clicking an

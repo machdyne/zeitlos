@@ -55,6 +55,25 @@
 #include "kernel.h"
 #include "hid.h"
 
+/*
+ * The process to wake when a POINTER report arrives, or 0 for nobody.
+ *
+ * The pointer is not an event queue and deliberately is not becoming
+ * one. rtl/usb_hid.v maintains the cursor position as level state in
+ * reg_usbN_cursor, and coalescing is a feature here rather than a
+ * loss -- zwm.h already tells apps to act on the LAST mouse sample
+ * they find rather than every one. So this wakes the reader and lets
+ * it read the current position; it does not deliver anything.
+ *
+ * That also means no queue to overflow under fast motion, and no
+ * allocation in an ISR.
+ *
+ * Set through Z_SYS_HID_PTR_SUBSCRIBE (k_hid_ptr_subscribe below).
+ * One subscriber, because there is one pointer and one wm; a second
+ * caller simply replaces the first.
+ */
+static uint32_t hid_ptr_pid;
+
 #define HID_FIFO_SIZE 32
 
 // packed raw event: bit0 = pressed(1)/released(0), bits 8:1 = HID
@@ -132,6 +151,19 @@ static void hid_irq_common(hid_port_t *st, uint32_t info, uint32_t keys) {
 	// already the evidence a report just arrived; typ/modifiers/keys
 	// below are ordinary registered state that stays valid between
 	// reports, not the pulse itself.
+
+	// A pointer (or gamepad) report. Wake whoever asked to be told.
+	//
+	// This is the whole reason wm can stop polling: the interrupt was
+	// always firing for mouse reports -- rtl/usb_hid.v's `report`
+	// pulse is wired to cpu_irq[5]/[6] for keyboard, mouse and
+	// gamepad alike, see this file's header -- the ISR just dropped
+	// them on the floor. Waking here costs a flag write.
+	//
+	// Before the typ != 1 flush below, deliberately: an unplug is
+	// also a report, and a reader waiting on pointer activity should
+	// be woken for that too rather than waiting out its timeout.
+	if (typ != 1 && hid_ptr_pid) k_proc_unblock(hid_ptr_pid);
 
 	if (typ != 1) {
 
@@ -225,6 +257,20 @@ void z_hid_irq0(void) {
 // called from z_kernel_entry() on Z_IRQ_HID1 (port 1)
 void z_hid_irq1(void) {
 	hid_irq_common(&port1, reg_usb1_info, reg_usb1_keys);
+}
+
+// Z_SYS_HID_PTR_SUBSCRIBE. Registers the caller as the process to
+// wake on pointer reports. Returns the pid registered, so a caller
+// can confirm it took.
+z_obj_t *k_hid_ptr_subscribe(z_obj_t *obj) {
+
+	hid_ptr_pid = z_pid;
+
+	obj->type = Z_UINT32;
+	obj->val.uint32 = hid_ptr_pid;
+
+	return (&z_ok);
+
 }
 
 int32_t k_hid_read_key(void) {

@@ -197,6 +197,25 @@ void delay_ms(uint32_t ms) {
 	while (z_uptime_ticks() - start < ticks);
 }
 
+// -- HID pointer wakeups -- see zeitlos.h --
+
+bool z_hid_pointer_subscribe(void) {
+
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_obj_t obj;
+
+	obj.type = Z_UINT32;
+	obj.val.uint32 = 0;
+
+	z_kernel_ptr(Z_SYS_HID_PTR_SUBSCRIBE, (uint32_t *)&obj, 0);
+
+	// The kernel writes back the pid it registered. Nonzero means it
+	// took; zero means this kernel predates the syscall, in which
+	// case the caller must keep polling.
+	return obj.val.uint32 != 0;
+
+}
+
 // -- PID name registry -- see zeitlos.h --
 
 bool z_pid_register(const char *basename, char *out, uint32_t outlen) {

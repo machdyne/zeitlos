@@ -700,6 +700,12 @@ static void draw_titlebar_content(wm_window_t *w) {
 // See wm_busy_set()/wm_busy_clear().
 #define WM_BUSY_STARTUP   (1u << 0)   // core services not up yet
 
+// True once the HID interrupt has agreed to wake us on pointer
+// reports (z_hid_pointer_subscribe(), zeitlos.h). False on an older
+// kernel, where the pointer can only be noticed by polling and the
+// idle wait below has to stay short.
+static bool ptr_wakeups;
+
 static uint32_t wm_busy_mask;
 
 // Reports what it wrote and whether the hardware is even there. This
@@ -3391,6 +3397,13 @@ int main(void) {
 	// this process) but the services term depends on are started by
 	// init() alongside it and take a moment to appear.
 	wm_busy_set(WM_BUSY_STARTUP);
+
+	// Ask the HID interrupt to wake us on pointer reports, so the
+	// loop below can wait on a long timeout instead of re-reading the
+	// cursor register 732 times a second. Returns false on a kernel
+	// that predates the syscall, and the timeout still covers that
+	// case -- see ptr_wakeups and the wait at the bottom of main().
+	ptr_wakeups = z_hid_pointer_subscribe();
 	if (dock_idx >= 0)
 		repair_region(windows[dock_idx].x, windows[dock_idx].y,
 			windows[dock_idx].w, windows[dock_idx].h, -1);
@@ -3918,20 +3931,31 @@ int main(void) {
 
 		/* Yield the rest of this timeslice.
 		 *
-		 * wm cannot block indefinitely the way repl can: the pointer
-		 * is POLLED from rtl/usb_hid.v's cursor register, not
-		 * delivered as a message, so nothing would wake it when the
-		 * mouse moves.
+		 * This used to wait exactly ONE tick, because the pointer was
+		 * polled from rtl/usb_hid.v's cursor register and nothing
+		 * would wake wm when the mouse moved. That is no longer true:
+		 * the HID interrupt fires on pointer reports and now wakes
+		 * this process (z_hid_pointer_subscribe() above), so a moving
+		 * mouse and an arriving message both cut the wait short.
 		 *
-		 * But spinning is not the alternative. Waiting one tick wakes
-		 * this loop at Z_TICK_HZ (732Hz), which is more than twelve
-		 * times the display's refresh rate -- far finer than anything
-		 * a person can see in a pointer -- while handing back the
-		 * ~99% of each timeslice that was previously spent re-reading
-		 * a register that had not changed.
+		 * WHY THERE IS STILL A TIMEOUT AT ALL, rather than blocking
+		 * indefinitely: wm has work that is driven by neither. The
+		 * dock's launch deadlines (dock_launching_deadline[]), the
+		 * pending launch-argument timeout (pending_arg_tick) and
+		 * check_core_services() at startup are all polled against
+		 * z_uptime_ticks(), and blocking forever would stall every
+		 * one of them until the user happened to move the mouse.
 		 *
-		 * A message arriving cuts the wait short, so app requests are
-		 * still serviced immediately rather than up to a tick late.
+		 * Those are all coarse -- seconds, not frames -- so the
+		 * timeout only has to be fine enough for them, not for the
+		 * pointer. 16 ticks is ~22ms (46Hz), which is 16x fewer
+		 * wakeups than before while leaving every deadline above
+		 * measured to well within its own tolerance.
+		 *
+		 * On a kernel with no HID_PTR_SUBSCRIBE the subscription
+		 * fails, the pointer really is poll-only, and the old
+		 * one-tick behaviour is kept -- the same binary has to run on
+		 * both.
 		 *
 		 * This matters well beyond wm's own responsiveness: the
 		 * scheduler divides the CPU between RUNNABLE processes, so a
@@ -3939,7 +3963,7 @@ int main(void) {
 		 * foreground. A full-screen app measured a quarter of the
 		 * machine with three such spinners running alongside it, and
 		 * a quarter of the CPU means a quarter of the frame rate. */
-		z_proc_wait(1);
+		z_proc_wait(ptr_wakeups ? 16 : 1);
 
 	}
 

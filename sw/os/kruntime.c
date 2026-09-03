@@ -14,6 +14,8 @@
 #include <unistd.h>
 
 #include "../common/zeitlos.h"
+#include "../common/zsoc.h"	// Z_TICK_HZ
+#include "kernel.h"
 #include "uart.h"
 
 bool term_echo = true;
@@ -56,7 +58,41 @@ void readline(char *buf, int maxlen) {
 	while (1) {
 
 		c = getch();
-		if (c == EOF) continue;
+
+		if (c == EOF) {
+
+			// Nothing in the FIFO. This used to `continue`, i.e. spin
+			// at full speed for as long as the prompt sat idle -- and
+			// pid 0 spinning is not free: the scheduler divides the
+			// CPU between RUNNABLE processes, so an idle shell was
+			// taking a full share out of whatever was in the
+			// foreground. wm at least yielded a tick.
+			//
+			// z_uart_irq() (sw/os/uart.c) calls k_proc_unblock(0) as
+			// soon as a byte lands, so this wakes on the very next
+			// keystroke rather than at the end of the timeout.
+			//
+			// The timeout is a backstop, not the mechanism. It covers
+			// a byte that arrived in the window between getch()
+			// finding the FIFO empty and this call marking us blocked
+			// -- k_proc_unblock() records that case in
+			// Z_PROC_FLAG_WAKE so it cannot actually be lost, but a
+			// bounded wait means a missed wakeup degrades to a small
+			// latency rather than a hung console.
+			// k_proc_wait() is the syscall handler and takes its
+			// timeout in a z_obj_t, so it is called the same way
+			// here as from the dispatch table -- the kernel is not
+			// going through reg_kernel to reach its own function.
+			{
+				z_obj_t w;
+				w.type = Z_UINT32;
+				w.val.uint32 = Z_TICK_HZ / 4;
+				k_proc_wait(&w);
+			}
+
+			continue;
+
+		}
 
 		if (c == CH_CR || c == CH_LF) {
 			break;

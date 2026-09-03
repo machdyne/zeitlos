@@ -134,6 +134,26 @@ void z_uart_irq(void) {
 	
 				}
 
+				// Wake the console reader.
+				//
+				// pid 0 (the kernel shell, sw/os/sh.c) is the only
+				// process that reads this port's FIFO as a console,
+				// and readline() now blocks rather than spinning on
+				// an empty FIFO -- so without this the prompt would
+				// never wake up and the serial console would be dead.
+				//
+				// Hardcoded rather than a subscription like the HID
+				// pointer's: there is exactly one serial console and
+				// it belongs to the shell, whereas the pointer has a
+				// real choice of consumer.
+				//
+				// Safe on a pid 0 that is not currently blocked --
+				// k_proc_unblock() records the wakeup in
+				// Z_PROC_FLAG_WAKE rather than losing it, which is
+				// also what closes the race between deciding to wait
+				// and actually being marked BLOCKED.
+				k_proc_unblock(0);
+
 				break;
 
 			default:

@@ -360,3 +360,78 @@ There is no software-side sensitivity control, and no sub-pixel
 accumulator: 1:1 is already the finest the 10-bit cursor registers can
 express, so precision below that would need fractional position bits
 rather than a different curve.
+
+## Pointer wakeups, and why wm stopped polling
+
+`wm` used to wake 732 times a second whether or not the mouse had
+moved, because the pointer was polled from `reg_usbN_cursor` and
+nothing would wake it otherwise. `wm.c` said as much in its idle
+comment.
+
+That turned out to be a software gap, not a hardware one. **The mouse
+interrupt was always firing.** `rtl/usb_hid.v`'s `report` pulse drives
+`cpu_irq[5]`/`cpu_irq[6]` for keyboard, mouse *and* gamepad reports
+alike (see `sw/os/hid.c`'s header); the ISRs simply acted on `typ==1`
+and dropped everything else. No RTL change was needed — `LATCHED_IRQ`
+already covers those bits, because `report` is a single 12MHz-domain
+cycle and would not otherwise survive to the ISR.
+
+So `hid_irq_common()` now calls `k_proc_unblock()` on a registered
+subscriber for any non-keyboard report, and `wm` registers itself
+through `Z_SYS_HID_PTR_SUBSCRIBE` (`z_hid_pointer_subscribe()`,
+`zeitlos.h`).
+
+**Nothing is delivered.** The cursor is level state in a register and
+coalescing is desirable — `zwm.h` already tells apps to act on the
+last mouse sample rather than every one — so the ISR wakes the reader
+and lets it read the current position. That keeps the existing model,
+and means there is no event queue to overflow under fast motion and no
+allocation in an ISR.
+
+### Why wm still passes a timeout
+
+`z_proc_wait(16)`, not indefinite. `wm` has work driven by neither the
+pointer nor messages: the dock's launch deadlines, the pending
+launch-argument timeout, and `check_core_services()` at startup are
+all polled against `z_uptime_ticks()`. Blocking forever would stall
+every one of them until the user happened to move the mouse.
+
+Those deadlines are coarse — seconds, not frames — so 16 ticks (~22ms)
+is ample for them while being 16x fewer wakeups than before. The
+pointer's own responsiveness no longer depends on the timeout at all.
+
+On a kernel predating the syscall the subscription returns false and
+`wm` keeps the old one-tick behaviour; the same binary has to run on
+both.
+
+## pid 0 no longer spins
+
+`readline()` in `sw/os/kruntime.c` called `getch()`, which returns
+`EOF` immediately when the UART FIFO is empty, and then `continue`d --
+a tight spin at full speed, with no throttle at all, for as long as
+the shell sat at its prompt. `wm` at least yielded a tick.
+
+That is not free: the scheduler divides the CPU between RUNNABLE
+processes, so an idle serial console was taking a full share out of
+whatever was in the foreground.
+
+The UART was already interrupt-driven (`cpu_irq[4]` -> `z_uart_irq()`
+-> FIFO), so the wake was almost free: the RDA path now calls
+`k_proc_unblock(0)` after pushing bytes. `readline()` blocks with a
+`Z_TICK_HZ / 4` timeout, which is a backstop rather than the
+mechanism -- the keystroke itself wakes it.
+
+pid 0 is hardcoded rather than made subscribable, unlike the pointer:
+there is exactly one serial console and it belongs to the shell,
+whereas the pointer has a real choice of consumer.
+
+### The race, and why it is already handled
+
+Both wakeups can fire in the window between a process deciding to wait
+and actually being marked `BLOCKED`. `k_proc_unblock()` is explicitly
+built for this: on a process that has not blocked yet it records the
+wakeup in `Z_PROC_FLAG_WAKE` rather than losing it, and the next
+`k_proc_wait()` consumes it and returns immediately. The bounded
+timeouts above mean that even if that mechanism were ever broken, a
+missed wakeup would degrade to a small latency rather than a hung
+console or a dead pointer.

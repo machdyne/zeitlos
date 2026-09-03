@@ -119,3 +119,11 @@ Z_MKSYSCALL(EXEC_EXISTS, k_exec_exists)
 // arbitration would go, not that it already happens.
 Z_MKSYSCALL(VIDEO_GET_MODE, k_video_get_mode)
 Z_MKSYSCALL(VIDEO_SET_MODE, k_video_set_mode)
+
+// Registers the caller as the process the HID ISR wakes when a
+// pointer report arrives (sw/os/hid.c). Lets wm stop polling
+// reg_usbN_cursor at 732Hz and block instead -- see
+// docs/user_input.md, "Pointer wakeups".
+//
+// AT THE END, like every other addition here. See the warning above.
+Z_MKSYSCALL(HID_PTR_SUBSCRIBE, k_hid_ptr_subscribe)
