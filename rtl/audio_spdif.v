@@ -122,6 +122,48 @@ module audio_spdif (
 	output reg spdif
 );
 
+	/*
+	 * The sample pair, STAGED at frame_req and TRANSFERRED at the
+	 * S/PDIF frame boundary.
+	 *
+	 * -- why there are two registers and not one --
+	 *
+	 * frame_req comes from audio_out.v, which raises it at phase 62 of
+	 * its own 64-slot counter. This module's frame is defined by its
+	 * own half-cell counter, hc. Both run off the same clock at the
+	 * same ratio so they cannot DRIFT -- but nothing aligns their
+	 * PHASE, and whatever offset they come out of reset with persists
+	 * forever.
+	 *
+	 * Latching the sample straight into hold_l/hold_r on frame_req
+	 * therefore changes it at an arbitrary but FIXED point in the
+	 * frame. If that point falls inside a subframe that is being
+	 * transmitted, the slots already on the wire carry the old sample
+	 * and the rest carry the new one -- and since the audio field is
+	 * sent LSB first, it is the HIGH bits that get replaced. The
+	 * parity bit, computed from the current value, then no longer
+	 * matches what was sent.
+	 *
+	 * Every frame. Consistently. On one channel, because the phase
+	 * does not move. That is audible as static behind the music, worst
+	 * on sparse material where there is little to mask it, and it
+	 * affects every app that uses this output -- it is not a property
+	 * of what is being played.
+	 *
+	 * Staging fixes it: hold_l/hold_r change only at hc == 127, one
+	 * half-cell before subframe A begins, so both are stable for the
+	 * whole frame they are transmitted in. The cost is up to one frame
+	 * of extra latency, which at 46875Hz is 21 microseconds.
+	 *
+	 * The analogue path does not have this problem and that is why it
+	 * went unnoticed: audio_out.v feeds hold_l/hold_r to a
+	 * sigma-delta, which simply tracks its input, so a change partway
+	 * through a conversion is not a corruption. Only a SERIAL format
+	 * cares when the value moves.
+	 */
+	reg signed [15:0] stage_l;
+	reg signed [15:0] stage_r;
+
 	reg [15:0] acc;
 	reg [6:0] hc;          // half-cell within the frame, 0..127
 	reg [7:0] blkframe;    // frame within the 192-frame block
@@ -219,6 +261,8 @@ module audio_spdif (
 			spdif <= 1'b0;
 			hold_l <= 16'sd0;
 			hold_r <= 16'sd0;
+			stage_l <= 16'sd0;
+			stage_r <= 16'sd0;
 
 		end else begin
 
@@ -238,9 +282,13 @@ module audio_spdif (
 			// emitted, and every channel-status bit read back zero. A
 			// receiver would have decoded the audio perfectly and
 			// never found the start of a block.
+			// frame_req only STAGES. See stage_l's comment: the two
+			// counters share a ratio but not a phase, so this fires at
+			// an arbitrary point in the S/PDIF frame and must not
+			// touch anything currently on the wire.
 			if (frame_req) begin
-				hold_l <= enable ? sample_l : 16'sd0;
-				hold_r <= enable ? sample_r : 16'sd0;
+				stage_l <= enable ? sample_l : 16'sd0;
+				stage_r <= enable ? sample_r : 16'sd0;
 			end
 
 			acc <= tick ? (acc - frame_cycles + 16'd128) : (acc + 16'd128);
@@ -250,8 +298,13 @@ module audio_spdif (
 				hc <= hc + 7'd1;
 
 				if (hc == 7'd127) begin
-					// frame boundary: advance the block counter and
-					// start subframe A's preamble
+					// frame boundary: take the staged pair, advance
+					// the block counter and start subframe A's
+					// preamble. This is the ONLY place hold_l/hold_r
+					// move, which is what makes them stable for the
+					// whole of both subframes.
+					hold_l <= stage_l;
+					hold_r <= stage_r;
 					blkframe <= blk_next;
 					pre_inv <= spdif;
 					pre_cur <= pre_frame;

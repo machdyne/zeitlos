@@ -392,6 +392,14 @@ passes for 32512 frames — 21 frames a pass — and the fixed per-pass
 overhead came to 180 cycles per output frame against a 350-cycle
 budget. The same workload with 85 large passes ran a third faster.
 
+### If you hear static on one channel
+
+Not this app. `rtl/audio_spdif.v` corrupted one subframe on every
+frame, consistently, on whichever channel the counter phase happened to
+land in -- see `docs/audio.md`, "S/PDIF sample staging". It affected
+every app using the optical output. Fixed in the encoder; nothing in
+`play` changed.
+
 ### Two failure modes, reported separately
 
 They sound identical and want opposite fixes.
@@ -800,7 +808,8 @@ the mixer took that — but it is what would make IMA viable and 44.1 kHz
 comfortable.
 
 **An audio server.** The right answer to "one device, several
-processes", and still out of scope.
+processes", and still out of scope -- now more pressing, because
+`sw/apps/midi` is a third app that takes the mixer exclusively.
 
 ---
 

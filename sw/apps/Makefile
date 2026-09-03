@@ -31,6 +31,7 @@ APPS = \
 	audiotest \
 	play \
 	track \
+	midi \
 	gamedemo
 
 all:

@@ -395,6 +395,46 @@ module tb_audio_mixer;
 				((256 * 128) + (256 * 128)) * 255 >>> 18);
 			check("both channels active", active[1:0], 3);
 
+			// -- THE RIGHT CHANNEL --
+			//
+			// Every check above this point in the 16-bit group tested
+			// out_l and nothing else, which is testing half of a
+			// stereo datapath and calling it done. acc_r has its own
+			// accumulate, its own scale step and its own clamp; none
+			// of them were exercised at 16 bits.
+			for (k = 0; k < 8; k = k + 1) disable_ch(k[2:0]);
+			setup_ch_fmt(3'd0, 32'd0, 32'd4096, 32'd0,
+				8'd0, 8'd128, 1'b1);        // hard right
+			one_frame;
+			check("16-bit right channel", out_r, (256 * 128 * 255) >>> 18);
+			check("16-bit left is silent", out_l, 0);
+
+			for (k = 0; k < 8; k = k + 1) disable_ch(k[2:0]);
+			setup_ch_fmt(3'd0, 32'd128, 32'd4096, 32'd0,
+				8'd0, 8'd128, 1'b1);        // negative, hard right
+			one_frame;
+			check("16-bit right, negative sample", out_r,
+				(-32384 * 128 * 255) >>> 18);
+
+			// Different gains either side, so a datapath that shared
+			// one product between them would be caught.
+			for (k = 0; k < 8; k = k + 1) disable_ch(k[2:0]);
+			setup_ch_fmt(3'd0, 32'd0, 32'd4096, 32'd0,
+				8'd64, 8'd192, 1'b1);
+			one_frame;
+			check("16-bit L at gain 64", out_l, (256 * 64 * 255) >>> 18);
+			check("16-bit R at gain 192", out_r, (256 * 192 * 255) >>> 18);
+
+			// Eight 16-bit channels at once, both sides -- the only
+			// case that can overflow a 27-bit accumulator.
+			for (k = 0; k < 8; k = k + 1)
+				setup_ch_fmt(k[2:0], 32'd0, 32'd4096, 32'd0,
+					8'd255, 8'd255, 1'b1);
+			one_frame;
+			check("8x16-bit L does not wrap", out_l > 0, 1);
+			check("8x16-bit R does not wrap", out_r > 0, 1);
+			check("8x16-bit L equals R", out_l, out_r);
+
 			for (k = 0; k < 8; k = k + 1) disable_ch(k[2:0]);
 		end
 	endtask

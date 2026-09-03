@@ -60,8 +60,32 @@ module tb_audio_spdif;
 	// ------------------------------------------------------------
 	integer fcount = 0;
 
+	// PHASE OFFSET between this generator and the transmitter's own
+	// half-cell counter, in clocks. Zero is what the suite has always
+	// used, and it is the ONE value at which the two happen to agree.
+	// Real hardware has no reason to: audio_out.v raises frame_req at
+	// phase 62 of its own 64-slot counter, and audio_spdif.v's hc
+	// counter starts wherever reset left it.
+	//
+	// This suite passed for a long time at offset 0 and only at offset
+	// 0. Run it across the frame and it fails at roughly a quarter of
+	// the phases with parity errors -- the transmitter was latching
+	// the sample straight into hold_l/hold_r on frame_req, so a
+	// sample that arrived mid-subframe replaced the high bits of a
+	// value already partly on the wire.
+	//
+	//   make -C rtl spdif-phase     sweeps every phase
+	//   vvp tb +offset=300          reproduces the original failure
+	//
+	// A testbench that only ever exercises one phase relationship
+	// between two independent counters is testing one point of a
+	// space, and this is what was hiding in the rest of it.
+	integer frame_offset = 0;
+
 	initial begin
 		@(negedge rst);
+		if (!$value$plusargs("offset=%d", frame_offset)) frame_offset = 0;
+		repeat (frame_offset) @(posedge clk);
 		forever begin
 			// EXACTLY 64*RATE cycles per frame, pulse included. The
 			// first version added two more for the pulse itself, so

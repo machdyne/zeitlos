@@ -11,6 +11,8 @@ sigma-delta, PT8211, or S/PDIF.
     sw/common/zaudio.h   register map and helpers
     sw/apps/audiotest    tone / sweep / L-R / silence
     sw/apps/track        ProTracker MOD player
+    sw/apps/play         streaming audio player  -- docs/play_app.md
+    sw/apps/midi         General MIDI player     -- docs/midi_app.md
 
 All three phases are built. The subsystem grew in order — FIFO and
 output stage first, then a software MOD player, then the hardware mixer
@@ -24,7 +26,7 @@ reasons still apply to anything added next.
 | | |
 |---|---|
 | Channels | 8 in hardware, time-multiplexed |
-| Format | 8-bit signed samples in main memory; 16-bit stereo out |
+| Format | 8- or 16-bit signed samples in main memory, per channel; 16-bit stereo out |
 | Rate | programmable, 44117.6 Hz default (46875 on S/PDIF boards) |
 | Buffer | 1024 frames, block RAM — software-mixing path only |
 | Interrupt | `cpu_irq[7]`, level, on FIFO below watermark |
@@ -483,6 +485,12 @@ gets designed *against* rather than guessed at. See
 
 **Phase 3 — hardware mixer and arbiter extension.** Done. See below.
 
+Everything since has followed the same rule and is recorded in place
+rather than as a fourth phase: `MIXPOS` (position readback, for
+streaming), 16-bit sample fetch, and the S/PDIF staging fix. Each was
+asked for by an app that had run into its absence on hardware, which
+is the only reliable way this file has ever grown.
+
 The point of the hardware mixer is not audio quality. It is that
 software mixing costs 15% of a CPU that is simultaneously running game
 logic and filling a 320×240 back buffer. It is the difference between
@@ -811,6 +819,54 @@ contribution would be 256x too small and that line would read 31.
 **Still to verify on hardware:** `make BOARD=<board> timing` per board.
 +62 `TRELLIS_COMB` is small, but it is a change to a block whose
 placement was already seed-sensitive.
+
+### S/PDIF sample staging
+
+`frame_req` **stages** the sample pair; `hold_l`/`hold_r` take it at
+the S/PDIF frame boundary (`hc == 127`). Two registers, not one, and
+the reason is a bug that was audible on every app that used this
+output.
+
+`audio_out.v` raises `frame_req` at phase 62 of **its own** 64-slot
+counter. `audio_spdif.v`'s frame is defined by **its own** half-cell
+counter. Both run off the same clock at the same ratio so they cannot
+*drift* — but nothing aligns their *phase*, and whatever offset they
+leave reset with persists forever.
+
+Latching straight into `hold_l`/`hold_r` on `frame_req` therefore moved
+the sample at an arbitrary but **fixed** point in the frame. When that
+point fell inside a subframe in flight, the slots already on the wire
+carried the old sample and the rest the new one — and since the audio
+field is sent LSB first, it is the **high bits** that got replaced. The
+parity bit, computed from the current value, then no longer matched
+what was sent.
+
+Every frame, consistently, on **one channel**, because the phase does
+not move. Audible as static behind the music, worst on sparse material
+where there is little to mask it.
+
+**The analogue path never had this**, which is why it went unnoticed
+for so long: `audio_out.v` feeds `hold_l`/`hold_r` to a sigma-delta,
+which simply tracks its input, so a change partway through a conversion
+is not a corruption. Only a *serial* format cares when the value moves.
+
+Cost of the fix: up to one extra frame of latency, 21 microseconds at
+46875Hz.
+
+#### The testbench was testing one point of a space
+
+`tb_audio_spdif.v` passed for a long time — and only because its frame
+generator started from the same reset as the transmitter, so the two
+counters happened to agree. It now takes a `+offset=N` plusarg that
+delays the generator by N clocks:
+
+    before the fix:   0:ok  64:ok  128:ok  192:ok  256:FAIL  320:FAIL
+                    384:ok  448:FAIL  512:ok  ...  768:FAIL  ...
+    after the fix:    all 64 phases pass
+
+A testbench that only ever exercises one phase relationship between two
+independent counters is testing one point of a space. That is where
+this was hiding.
 
 ### Trigger vs enable
 
@@ -1360,6 +1416,12 @@ Software side, in `sw/apps/track/Makefile`:
   budget works out at about 29 instructions per output frame for
   decode, resample and the FIFO store combined. The mixer does all of
   it in gateware.
+- **Arbitration.** THREE apps now take the audio block exclusively --
+  `track`, `play` and `midi` -- and each clears every mixer channel on
+  startup, stopping the others dead. That is deliberate in each of
+  them (a player that left `MIXEN` where it found it would produce
+  silence with no indication why) but it is a workaround for a missing
+  service, not a design.
 - **Editing.** `track` is a player. Pattern editing is real UI work and
   wants its own pass.
 - **`CTRL` bit 5**, reserved for enabling the digital output
