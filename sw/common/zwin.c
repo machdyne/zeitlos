@@ -509,6 +509,19 @@ void z_win_draw_text(const z_win_t *win, int x, int y, const char *s, int color,
 
 }
 
+void z_win_draw_text2(const z_win_t *win, int x, int y, const char *s,
+	int fg_color, int bg_color, const z_font_t *font) {
+
+	win_use_clip(win);
+
+	z_clip_t clip;
+	z_win_content_rect(win, &clip);
+
+	z_fb_draw_text2(clip.x0 + x, clip.y0 + y, s, fg_color, bg_color,
+		font, &clip);
+
+}
+
 void z_win_hw_line(const z_win_t *win, int x0, int y0, int x1, int y1, int color) {
 
 	win_use_clip(win);

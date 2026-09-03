@@ -10,6 +10,9 @@ through `rtl/audio_mixer.v` using generated waveforms.
 
     make -C sw/apps/midi
     > run midi
+
+It is on the `wm` dock; `sw/data/icons/icon-midi.png` goes through
+`gen_dock_icon_data.py` like every other dock icon.
     > run midi /MIDI/SONG.MID
 
 Requires a bitstream with `AUDIO_MIXER`. It refuses to run without one
@@ -268,23 +271,152 @@ behind.
 
 ---
 
+## It opens as an instrument
+
+The app starts with a file **loaded but not playing**, and the
+keyboard live. Space starts the file.
+
+Auto-playing on launch is the wrong default for something you might
+have opened to play rather than to listen to, and it is a worse
+surprise besides: the first thing it would do is take the audio device
+and start making noise. Once started, a finished track still advances
+to the next one — `open_file()` leaves a file stopped, and the
+end-of-track path overrides that.
+
+**Play-along works.** The keyboard is on MIDI channel 16, which is its
+alone, so pausing or stopping the file releases only the file's notes
+and leaves whatever is under the player's fingers sounding. Playing
+over a paused backing track is a normal thing to want.
+
+Pause deliberately does **not** touch the audio block's `EN` bit. It
+used to, and that bit is the DAC's output enable for the whole device
+rather than a property of the file — so the sequencer stopped, the
+keyboard kept triggering voices, the mixer kept mixing them, and none
+of it reached the output. Pressing pause silenced the instrument. That
+was correct before there was a keyboard, when "paused" and "silent"
+meant the same thing; now they do not. `z_audio_start()` sets that bit
+at startup and `z_audio_stop()` clears it on the way out, and nothing
+in between goes near it. Silence is a frame of zeros.
+
+## The keyboard
+
+Two rows of the computer keyboard laid out as two octaves, with the
+letter drawn on each key:
+
+    upper octave    Q W E R T Y U I O P     sharps  2 3   5 6 7   9 0
+    lower octave    Z X C V B N M , . /     sharps  S D   G H J   L ;
+
+### It is a real standard, and this matches it exactly
+
+There is a de facto standard for this and it is the **Fasttracker II /
+Impulse Tracker** layout, carried forward by OpenMPT, MilkyTracker,
+Schism, Renoise and — with variations — Ableton Live, FL Studio, LMMS
+and Reaper. It has been the same since the early nineties.
+
+The map in `kbd_map[]` is that layout, checked entry by entry against
+the reference rather than reproduced from memory:
+
+    lower  z=C s=C# x=D d=D# c=E v=F g=F# b=G h=G# n=A j=A# m=B
+           ,=C l=C# .=D ;=D# /=E
+    upper  q=C 2=C# w=D 3=D# e=E r=F 5=F# t=G 6=G# y=A 7=A# u=B
+           i=C 9=C# o=D 0=D# p=E
+
+All 34 entries match. Anyone who has typed music before already knows
+it, and anyone who has not can read it off the screen.
+
+**A note for non-US keyboards.** `z_kbd_usage_to_keysym()` maps USB HID
+usage codes, which are physical key POSITIONS, to US letters. So the
+layout keeps its shape on a QWERTZ or AZERTY board — the key at the
+bottom-left of the letter block is still low C — but the letter drawn
+on screen is the US one and will not match the keycap. On a German
+board, low C is the key labelled `Y`.
+
+The two rows **deliberately overlap**: QWERTY starts an octave above
+ZXCV, so semitones 12–16 are reachable from both (`,` and `q` are the
+same note). That is how the original layout works and it is not a bug
+to be tidied up — it lets a two-handed player cross rows without a gap.
+
+Up and Down shift the whole keyboard an octave, releasing anything held
+first: the note a key is holding would otherwise never get its
+note-off, because the key now means something different. `[` and `]`
+change the instrument.
+
+**The keys can be clicked too.** Held rather than triggered: the note
+lasts as long as the button is down, the same as a computer key, so the
+envelope's release means something — a click that fired a fixed-length
+blip would make every instrument sound the same regardless of its ADSR.
+Dragging across the keyboard slides from note to note, which falls out
+of tracking which key the mouse holds rather than being written on
+purpose. Black keys are hit-tested first because they are drawn over
+the whites and overlap them, so a click in the overlap belongs to the
+black key — which is what a real keyboard does and what the picture on
+screen says.
+
+Key **releases** are what make this playable rather than a fixed-length
+blip per press, and `wm` delivers them
+(`Z_WM_UNPACK_KEY_PRESSED`). Key **repeat** is suppressed by tracking
+which keys are down — retriggering on every repeat would be a machine
+gun, not a held note.
+
+Console mode is transport only: `hid_read_key()` has no release edge,
+so notes would sustain forever.
+
 ## Controls
+
+The note keys consume nearly the whole alphanumeric area, so the
+transport lives on keys the layout does not touch.
 
 | | |
 |---|---|
-| space | play / pause |
-| `s` | stop, rewind |
-| `o` | open a file (also the titlebar icon) |
-| `n` / `p` | next / previous file |
+| ZXCV… / QWER… | play notes — see above |
+| Up / Down | shift the keyboard an octave |
+| `[` / `]` | keyboard instrument |
+| space | start / pause the file |
+| Enter | stop, rewind |
+| Tab | open a file (also the titlebar icon) |
+| Left / Right | previous / next file |
 | `-` / `=` | volume |
-| `1`..`9`, `0` | mute / unmute MIDI channels 1..10 |
-| `d` | mute / unmute drums (channel 10) |
-| `y` | force mono — a diagnostic, see below |
-| `h` or `?` | help |
-| `q`, Escape, close icon | quit |
+| F1 | help |
+| F2 | mute / unmute drums |
+| F3 | force mono — a diagnostic, see below |
+| F4 | panic — all notes off |
+| Escape, close icon | quit |
 
-Sixteen channel activity bars sit below the status rows, refreshed at
-about 10 Hz. A muted channel shows a floor line rather than nothing, so
+Per-channel muting on `1`..`9` and `0` is **gone**: those are black
+keys now. It was a diagnostic aid and the keyboard is worth more.
+
+Sixteen channel activity bars sit between the status rows and the
+keyboard, refreshed at about 10 Hz. Twelve pixels tall — they read fine
+at that, being an activity indicator rather than a measurement.
+
+### The window is sized to the layout, not the other way round
+
+It was 344x236 and **nearly half of it was empty**. The text rows were
+placed from the top and the keyboard and buttons from the bottom, with
+the meters taking whatever was left in between — capped, so every pixel
+of window height past the cap became a gap between the meters and the
+keyboard. About 95 of them.
+
+The layout now packs downwards and the window is exactly what it needs:
+
+    text rows    2..47
+    meters      49..61
+    keyboard    64..94
+    buttons     97..115      content needed: 117
+
+    304x134, half the old area
+    41% of a 512x384 screen -> 21%
+
+Packing downwards is what stops this recurring: slack in a bigger
+window ends up in one place at the bottom, where it is obvious, rather
+than as a hole in the middle. Screen space is scarce at this
+resolution and a window that is mostly nothing is not a neutral
+default.
+
+`layout()` computes the same total it places against, so a window
+shorter than the layout needs degrades in reverse order of importance —
+the keyboard goes first, then the meters. The buttons and status rows
+always stay. A muted channel shows a floor line rather than nothing, so
 "silent because muted" and "silent because nothing is playing" are
 distinguishable at a glance.
 
@@ -301,7 +433,30 @@ refresh, each re-deriving the window's clip rectangle, for a display
 where a typical file uses two or three channels. Tracking the last
 height drawn takes ~320 fills a second down to ~30.
 
-A changed bar is also **one** fill rather than two — growing paints only
+### Labels need an explicit background
+
+Key letters go through `z_win_draw_text2()`, not `z_win_draw_text()`.
+
+The one-colour call hard-wires the glyph background to 0
+(`z_fb_draw_char()` in `zgfx.c`) because the blitter paints a **solid
+cell** rather than just ink. So a colour-0 letter on a light key is ink
+of 0 on a cell of 0: not merely invisible, the cell *erases the key
+underneath it*. That is exactly how the black keys came out with no
+letters on them.
+
+`z_win_draw_text2()` is new — `z_fb_draw_text2()` already existed and
+the window-level wrapper did not, which is why nothing had hit this
+before: everything else in the tree draws light text on the window
+background. Anything drawing a label on a filled shape wants it.
+
+The keyboard follows the same rule as the meters: a note on or off
+repaints **one key**, not twenty-nine keys and their letters. A black key's white
+neighbours are repainted after it, so the overlap is not left
+half-erased, and a full draw paints all the whites before any black —
+painting a black key second is what makes the overlap look right
+rather than leaving a notch.
+
+A changed meter bar is also **one** fill rather than two — growing paints only
 the new part, shrinking erases only the part that left. Clearing the
 column and redrawing the bar is twice the traffic and it *flickers*,
 because there is a window between the two fills where the bar is not

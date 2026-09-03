@@ -202,6 +202,24 @@ void z_win_fill_rect(const z_win_t *win, int x, int y, int w, int h, int color);
 // &z_font_6x12 or &z_font_8x16 (zfont.h) for font.
 void z_win_draw_text(const z_win_t *win, int x, int y, const char *s, int color, const z_font_t *font);
 
+/*
+ * Text with an explicit background colour.
+ *
+ * z_win_draw_text() above takes one colour and the glyph blitter
+ * paints a SOLID CELL -- z_fb_draw_char() sets the background to 0
+ * unconditionally (see zgfx.c). So drawing with color = 0 gives ink
+ * of 0 on a cell of 0: the letter is not merely invisible, the cell
+ * erases whatever it was drawn over.
+ *
+ * That is fine while everything is light text on a dark window, which
+ * it was until something wanted a label on a light-filled shape --
+ * sw/apps/midi's black keys, where it showed up as keys with no
+ * letters on them at all. Use this whenever the background under the
+ * text is not the window background.
+ */
+void z_win_draw_text2(const z_win_t *win, int x, int y, const char *s,
+	int fg_color, int bg_color, const z_font_t *font);
+
 // the window's content area (below the titlebar, inset to clear wm's
 // own outer border) in absolute screen coordinates. This is exactly
 // what z_win_clear()/z_win_fill_rect()/z_win_draw_text()/
