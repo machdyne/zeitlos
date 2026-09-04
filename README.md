@@ -14,19 +14,19 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 
 | Component | Features/Notes |
 |-----------|----------|
-| CPU | 32-bit RISC-V (PicoRV32 or Zeitlos32) RV32IM @ 48MHz |
-| GPU | Line rasterizer and blitter |
+| CPU | 32-bit RISC-V (PicoRV32 or [Zeitlos32](docs/zeitlos32.md)) RV32IM @ 48MHz |
+| GPU | [Line rasterizer](docs/gpu_raster.md) and [blitter](docs/blitter.md) |
 | MTU | Virtual addressing through Memory Translation Unit |
 | Bus | 32-bit Wishbone |
 | Main Memory | SDRAM, PSRAM or SRAM (1MB minimum) |
 | Framebuffer | 640x480x1bpp (monochrome; white, green, or amber) |
-| Viewport | Optional 320x240 pixel-doubled viewport |
+| Viewport | Optional 320x240 [pixel-doubled viewport](docs/gamemode.md) |
 | Video | VGA, DVI, DVI over HDMI, composite NTSC and PAL |
-| Audio | 8 channel 16-bit hardware mixer with stereo output |
+| Audio | 8 channel 16-bit [hardware mixer](docs/audio.md) with stereo output |
 | Storage | MicroSD |
-| Network | Ethernet (SPI), Ethernet MAC (for RMII PHY) or ESP32 |
-| Entropy | Ring-oscillator TRNG |
-| HID | USB keyboard + optional USB mouse/gamepad |
+| Network | Ethernet (SPI), Ethernet MAC (for RMII PHY) or [ESP32](docs/esp32link.md) |
+| Entropy | Ring-oscillator [TRNG](docs/trng.md) |
+| HID | USB keyboard + optional USB mouse/[gamepad](docs/gamepad.md) |
 | I/O | Optional [GPIO](docs/gpio.md) on PMOD ports with bit-banged [I2C](docs/i2c.md) and [SPI](docs/spi.md), hardware SPI, 16550 UART, optional second [UART](docs/uart1.md) |
 
 ### OS
