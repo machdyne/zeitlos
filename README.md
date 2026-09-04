@@ -33,10 +33,10 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 
  - Pre-emptive multitasking
  - Flat memory model with virtual address space for apps
- - FAT16/32 filesystem
- - Core apps in flash -- boots to a desktop with no sdcard ([docs/flash_apps.md](docs/flash_apps.md))
- - Object-based interprocess messaging and streaming
- - IP/ARP/ICMP/UDP/DHCP/NTP/DNS/TFTP/TCP/telnet/ssh networking
+ - FAT filesystem
+ - [Core apps in flash](docs/flash_apps.md) -- boots to a desktop with no sdcard
+ - Object-based interprocess [messaging](docs/messaging.md), streaming and [ports](docs/ports.md)
+ - IP/ARP/ICMP/UDP/DHCP/NTP/DNS/TFTP/TCP/telnet/ssh [networking](docs/networking.md)
 
 #### Memory Translation Unit
 
@@ -53,10 +53,10 @@ With the MTU, there is no need for position independent code or complicated addr
 | App | Description |
 |-----|-------------|
 | kernel | Kernel + kernel shell (serial console) |
-| wm | Window manager + dock |
-| net | Networking server |
+| [wm](docs/window_manager.md) | Window manager + dock |
+| [net](docs/networking.md) | Networking server |
 | repl | App server + [Lisp interpreter (subset of R4RS Scheme)](https://github.com/machdyne/ms) |
-| term | Terminal emulator (connects to services; VT100 emulation) |
+| [term](docs/terminal.md) | Terminal emulator (connects to services; VT100 emulation) |
 
 #### Additional Apps
 

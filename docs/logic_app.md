@@ -3,8 +3,6 @@
 A logic analyser, pin driver, burst generator and I2C decoder for the
 GPIO ports, on the same machine as the pins.
 
-This app is still under development.
-
 ```
 > run wm
 > run logic
@@ -101,6 +99,28 @@ would be wrong by the same factor.
 
 `MAX` is a real setting, not a placeholder: it is the only one that
 shows what the hardware can actually do.
+
+### The trigger wait is NOT masked
+
+The mask starts the instant the trigger fires, not when you press RUN.
+
+That distinction is the difference between the app working and not.
+The signal worth triggering on is almost always produced by **another
+process** — `repl` bit-banging I2C, `mmod` clocking SPI. With
+interrupts masked the scheduler cannot run, so that process cannot
+run, so the edge never arrives and the capture times out against a bus
+frozen solid for the whole window. An earlier version did exactly that
+and could only ever capture a flat line.
+
+So: **arm and wait unmasked, mask on the edge.** The trigger budget is
+3 seconds rather than 20ms, because waiting now costs nothing but this
+app's own scheduler slice.
+
+The cost is a narrow race: between seeing the edge and masking there
+are a handful of instructions, and being preempted in that gap loses
+the front of the trace. A slice is 1.365ms against a window of a few
+hundred nanoseconds, so it is rare — and the symptom is a capture that
+starts mid-byte, not a corrupt one.
 
 ### Interrupts are masked, and that is what bounds the capture
 
@@ -258,6 +278,16 @@ sample and half the rate, for a case nothing has needed yet.
 
 **No storage.** A capture lives until the next one. There is no save,
 no reference trace, no cursors.
+
+**No SPI decode**, and no I2C scan or register poke from the panel —
+`DECODE` reads a captured trace and that is all. The Scheme API
+(`docs/i2c.md`) covers scanning and register access from a prompt,
+which is where those belong until there is a reason to put them here.
+
+**A narrow port shows eight channels anyway.** On `sergei_gpio` only
+four pins exist, and channels 4–7 sit flat at zero rather than being
+marked absent, because the hardware carries no per-port pin count.
+`docs/gpio.md` explains why that register was not added.
 
 **The machine visibly hitches** on every capture. That is the masked
 window, and it is the correct trade for a trace you can trust.

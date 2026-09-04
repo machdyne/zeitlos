@@ -21,6 +21,7 @@ faster.
 | Shift + move | scale (away from you = bigger); no button needed |
 | Space | toggle spin |
 | `r` | reset rotation and scale |
+| `s` | toggle dithering shader (experimental) |
 | `e` | switch erase mode (interleaved / clear) |
 | `o`, or the titlebar open icon | open an STL file |
 | `+` / `-` | scale in steps |

@@ -97,7 +97,7 @@
 // waveform area is the only thing that would benefit -- at the cost of
 // re-laying-out four panels' worth of controls on every drag.
 #define CONTENT_W 576
-#define CONTENT_H 356
+#define CONTENT_H 344
 
 #define WIN_W (CONTENT_W + 4)
 #define WIN_H (CONTENT_H + Z_WM_TITLEBAR_H + 4)
@@ -108,6 +108,12 @@
 // hitch if you are watching a clock, short enough that nothing times
 // out and no keystroke is lost (the PS/2 controller buffers).
 #define CAPTURE_MAX_MS 20
+
+// How long to wait for a trigger edge. Long, because the wait is
+// unmasked -- see do_capture(). Bounded anyway: an armed capture that
+// never fires should give up and say so rather than sit there looking
+// like a hang.
+#define TRIGGER_MAX_MS 3000
 
 #define MAX_DEPTH 2048
 
@@ -131,14 +137,14 @@ static z_win_t win;
 // left: the channel strip
 #define CH_X      MARGIN
 #define CH_W      196
-#define CH_ROW_H  24
+#define CH_ROW_H  26
 #define CH_TOP    36
 
 // right: the waveform screen
 #define WV_X      (CH_X + CH_W + 6)
 #define WV_TOP    CH_TOP
 #define WV_W      (CONTENT_W - WV_X - MARGIN - 2)
-#define WV_ROW_H  24
+#define WV_ROW_H  26
 #define WV_H      (8 * WV_ROW_H)
 
 // bottom: the control deck
@@ -568,7 +574,12 @@ static bool do_capture(void) {
 	uint32_t want = depths[depth_idx];
 	uint32_t budget = depth_budget(rate);
 	uint32_t per = rate ? (Z_SYSCLK_HZ / rate) : 0;
-	uint32_t trig_budget = (Z_SYSCLK_HZ / 1000u) * CAPTURE_MAX_MS;
+	// Seconds, not milliseconds. The old budget matched the masked
+	// capture window because the wait used to be inside it; now that
+	// waiting costs nothing but this app's own scheduler slice, it can
+	// be long enough for a human to go and press a key in another
+	// window.
+	uint32_t trig_budget = (Z_SYSCLK_HZ / 1000u) * TRIGGER_MAX_MS;
 	uint32_t i, t0, next, saved;
 	uint8_t trig_mask = (uint8_t)(1u << trig_ch);
 	bool triggered = true;
@@ -582,9 +593,28 @@ static bool do_capture(void) {
 	if (want > MAX_DEPTH) want = MAX_DEPTH;
 	if (want < 2) want = 2;
 
-	saved = maskirq(~0u);
-
-	// -- trigger --
+	// -- trigger, UNMASKED --
+	//
+	// This wait must NOT hold interrupts off, and that is the whole
+	// reason the mask moved down here rather than wrapping the
+	// function.
+	//
+	// The signal worth triggering on is almost always produced by
+	// ANOTHER PROCESS -- sw/apps/repl bit-banging I2C, sw/apps/mmod
+	// clocking SPI. With interrupts masked the scheduler cannot run,
+	// so that process cannot run, so the edge never arrives and the
+	// capture times out against a bus that has been frozen solid for
+	// the whole window. An earlier version did exactly that and could
+	// only ever capture a flat line.
+	//
+	// So: wait unmasked, and mask the instant the edge is seen.
+	//
+	// THE COST IS A NARROW RACE. Between detecting the edge and
+	// masking there are a handful of instructions, and being
+	// preempted in that gap loses the front of the trace. A slice is
+	// 1.365ms against a window of a few hundred nanoseconds, so it is
+	// rare -- and when it happens the symptom is a capture that
+	// starts mid-byte, not a corrupt one.
 	if (trig_edge != T_NONE) {
 
 		uint8_t prev = (uint8_t)(*in_reg & 0xffu);
@@ -602,7 +632,14 @@ static bool do_capture(void) {
 			if ((z_cycles() - tstart) > trig_budget) break;
 		}
 
+		if (!triggered) {
+			sample_count = 0;
+			return false;
+		}
+
 	}
+
+	saved = maskirq(~0u);
 
 	// -- sample --
 	//
@@ -1022,7 +1059,9 @@ static void after_capture(bool triggered) {
 		snprintf(status, sizeof(status),
 			"NO TRIG: no %s edge on ch%d within %d ms",
 			trig_edge == T_RISE ? "rising" : "falling",
-			trig_ch, CAPTURE_MAX_MS);
+			trig_ch, TRIGGER_MAX_MS);
+		snprintf(decode, sizeof(decode), "Waiting for a trigger does not "
+			"block other apps -- start the traffic, then press RUN.");
 		return;
 	}
 

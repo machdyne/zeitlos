@@ -56,6 +56,12 @@
 #define WIN_W (CONTENT_W + 4)
 #define WIN_H (CONTENT_H + Z_WM_TITLEBAR_H + 4)
 
+// The memory-mapped boot flash: gateware, kernel and core apps
+// (docs/flash_apps.md). Fixed window, not an address the user can
+// type -- see mmod.c's src_read().
+#define Z_ROM_BASE 0x10000000u
+#define Z_ROM_SIZE 0x00200000u
+
 #define MARGIN 6
 #define FH     (z_font_5x8.h)
 #define FW     (z_font_5x8.w)
@@ -78,6 +84,16 @@ static int16_t row_y[7];
 static int16_t act_y, prog_bar_y, prog_txt_y;
 
 // -- state ------------------------------------------------------
+
+// Where WRITE and VERIFY get their bytes.
+//
+// ROM is the memory-mapped boot flash at Z_ROM_BASE -- gateware,
+// kernel and core apps (docs/flash_apps.md). Backing it up to an MMOD
+// is the reason this selector exists.
+//
+// READ has no ROM setting because ROM is read-only: there is nowhere
+// for the device's contents to go.
+typedef enum { SRC_FILE = 0, SRC_ROM } src_t;
 
 typedef enum { C_UNKNOWN = 0, C_NOR, C_FRAM, C_EEPROM } class_t;
 static const char *class_name[] = { "?", "NOR", "FRAM", "EEPROM" };
@@ -106,6 +122,8 @@ static uint32_t range_start, range_len;
 // The name shown in the panel, and the full path operations use.
 // Split because the FILE well is not wide enough for a path and the
 // directory is not what anyone checks at a glance.
+static src_t src;
+
 static char file_name[40];
 static char file_path[160];
 static uint32_t file_size;
@@ -118,12 +136,13 @@ static int progress;			// -1 = idle, else 0..100
 // so these have to stay valid and be ours to rewrite.
 static char lbl_id[16], lbl_class[10], lbl_size[12], lbl_addr[10];
 static char lbl_port[8];
+static char lbl_src[8];
 static char lbl_page[14], lbl_erase[14], lbl_ss[10];
 static char lbl_file[44], lbl_bytes[16], lbl_start[12], lbl_len[12];
 static char lbl_range[40], lbl_backend[20], lbl_rate[20];
 
 enum {
-	W_PORT, W_DETECT,
+	W_PORT, W_DETECT, W_SRC,
 	W_CLASS, W_SIZE, W_ADDR, W_PROBE,
 	W_START, W_LEN, W_ALL,
 	W_READ, W_WRITE, W_VERIFY, W_ERASE, W_CANCEL,
@@ -185,6 +204,9 @@ static void layout(void) {
 	cx = put_btn(dev_val_x, row_y[4], W_ADDR, 60, BTN_H);
 	put_btn(cx, row_y[4], W_PROBE, 46, BTN_H);
 
+	put_btn(file_val_x + (col_w - (file_val_x - right_x) - 8) - 54,
+		row_y[0], W_SRC, 54, BTN_H);
+
 	put_btn(file_val_x, row_y[3], W_START, 76, BTN_H);
 	cx = put_btn(file_val_x, row_y[4], W_LEN, 76, BTN_H);
 	put_btn(cx, row_y[4], W_ALL, 34, BTN_H);
@@ -241,13 +263,23 @@ static void relabel(void) {
 	snprintf(lbl_ss, sizeof(lbl_ss), "%s",
 		!dev_detected ? "?" : (ss_ok ? "ok" : "FAILED"));
 
-	snprintf(lbl_file, sizeof(lbl_file), "%s",
-		file_name[0] ? file_name : "(none -- open or save icon)");
-	if (file_name[0])
+	snprintf(lbl_src, sizeof(lbl_src), "%s",
+		src == SRC_ROM ? "ROM" : "FILE");
+
+	if (src == SRC_ROM) {
+		snprintf(lbl_file, sizeof(lbl_file), "%08lx boot flash",
+			(unsigned long)Z_ROM_BASE);
 		snprintf(lbl_bytes, sizeof(lbl_bytes), "%lu",
-			(unsigned long)file_size);
-	else
-		snprintf(lbl_bytes, sizeof(lbl_bytes), "-");
+			(unsigned long)Z_ROM_SIZE);
+	} else {
+		snprintf(lbl_file, sizeof(lbl_file), "%s",
+			file_name[0] ? file_name : "(none -- open or save icon)");
+		if (file_name[0])
+			snprintf(lbl_bytes, sizeof(lbl_bytes), "%lu",
+				(unsigned long)file_size);
+		else
+			snprintf(lbl_bytes, sizeof(lbl_bytes), "-");
+	}
 
 	snprintf(lbl_start, sizeof(lbl_start), "%08lx",
 		(unsigned long)range_start);
@@ -261,9 +293,13 @@ static void relabel(void) {
 	// the SS check passed. An interlock, not a hint: if SS cannot
 	// deassert, the module is permanently selected and a write lands
 	// somewhere nobody chose.
-	widgets[W_WRITE].enabled = dev_detected && ss_ok && file_name[0] != 0;
+	// ROM needs no file, so WRITE and VERIFY are available with one
+	// selected even when nothing has been opened.
+	widgets[W_WRITE].enabled = dev_detected && ss_ok
+		&& (src == SRC_ROM || file_name[0] != 0);
 	widgets[W_ERASE].enabled = dev_detected && ss_ok && dev_class != C_FRAM;
-	widgets[W_VERIFY].enabled = dev_detected && file_name[0] != 0;
+	widgets[W_VERIFY].enabled = dev_detected
+		&& (src == SRC_ROM || file_name[0] != 0);
 	widgets[W_READ].enabled = dev_detected;
 	widgets[W_CANCEL].enabled = (progress >= 0);
 
@@ -376,8 +412,11 @@ static void draw_file(void) {
 	heading(file_f.x, 2, file_f.w, "FILE / RANGE");
 	frame_raised(file_f.x, file_f.y, file_f.w, file_f.h);
 
-	label(file_lbl_x, row_y[0], "FILE");
-	value(file_val_x, row_y[0], wide, lbl_file);
+	// SRC sits on the FILE row rather than on one of its own: it
+	// changes what that row MEANS, and putting it anywhere else would
+	// separate the switch from the thing it switches.
+	label(file_lbl_x, row_y[0], src == SRC_ROM ? "FROM" : "FILE");
+	value(file_val_x, row_y[0], wide - 58, lbl_file);
 
 	label(file_lbl_x, row_y[1], "BYTES");
 	value(file_val_x, row_y[1], 84, lbl_bytes);
@@ -456,6 +495,7 @@ static void widgets_init(void) {
 
 	widgets[W_PORT].label = lbl_port;
 	widgets[W_DETECT].label = "DETECT";
+	widgets[W_SRC].label = lbl_src;
 	widgets[W_CLASS].label = lbl_class;
 	widgets[W_SIZE].label = lbl_size;
 	widgets[W_ADDR].label = lbl_addr;

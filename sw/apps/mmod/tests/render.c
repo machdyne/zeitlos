@@ -75,15 +75,17 @@ int main(int argc, char **argv) {
 	dev_erase = 4096;
 	addr_idx = 2;
 	range_start = 0;
-	range_len = 0x02000000;
+	range_len = 0x00200000;
 	snprintf(file_name, sizeof(file_name), "firmware-2026-09.bin");
 	snprintf(file_path, sizeof(file_path), "/sd/firmware-2026-09.bin");
 	file_size = 33554432;
+	src = SRC_ROM;
 	progress = 47;
 	snprintf(status, sizeof(status),
-		"READ 15.4 MB / 32.0 MB   62 KB/s   ETA 4m28s");
+		"WRITE 987136 / 2097152 bytes   62 KB/s");
 	snprintf(detail, sizeof(detail),
-		"sector 0x01f0f000 of 0x02000000   cancel is safe between sectors");
+		"about 18s remaining   CANCEL stops cleanly, but what is already "
+		"written stays that way");
 	snprintf(lbl_backend, sizeof(lbl_backend), "bit-bang");
 	snprintf(lbl_rate, sizeof(lbl_rate), "62 KB/s");
 

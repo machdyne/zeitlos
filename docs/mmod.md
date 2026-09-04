@@ -1,13 +1,24 @@
 # MMOD
 
-`sw/apps/mmod` — identify the SPI memory module in an MMOD socket.
+`sw/apps/mmod` — read, write, verify and erase an SPI memory module in
+an MMOD socket, and back the boot ROM up to one.
 
 ```
+> run wm
 > run mmod
 ```
 
-Prints the JEDEC ID to the serial console and exits. That is all it
-does today.
+| | |
+|---|---|
+| **DETECT** | identify the module and prove the chip select |
+| **READ** | device → file |
+| **WRITE** | file *or* boot ROM → device |
+| **VERIFY** | compare device against file or ROM |
+| **ERASE** | sector-aligned, confirmed |
+
+`panel.c` holds layout, drawing and state; `mmod.c` includes it and
+adds the device code and event loop. The split is so `tests/render.c`
+can draw the panel on a build machine without the event loop.
 
 ## What MMOD is
 
@@ -29,7 +40,7 @@ The spec requires a **10k pull-up on SS** and **none** on the other
 three. That pull-up is what holds the device deselected while the FPGA
 is being configured and its pins are tri-stated.
 
-## Why identify first, and why it is read-only
+## DETECT first, always
 
 Reading the ID exercises every wire at once: SS has to assert and
 deassert, SCK has to clock, MOSI has to carry a command byte and MISO
@@ -38,8 +49,10 @@ has to bring three bytes back. A plausible ID means all four pins work.
 **Writing before the bus is proven is how you lose a module.** If SS
 cannot deassert, the device is permanently selected, every clock edge
 on the bus is a command byte to it, and a write or erase lands
-somewhere nobody chose. There is no read-only failure mode of that. So
-this identifies, and load/save/verify comes after the bus is proven.
+somewhere nobody chose. There is no read-only failure mode of that.
+
+So it is an interlock rather than advice: **WRITE and ERASE stay
+disabled until DETECT has run and the SS check has passed.**
 
 ## The SS check
 
@@ -88,17 +101,24 @@ otherwise — a byte outside that range is either a device that doesn't
 follow the convention or a misread, and printing "size 2^195" would be
 worse than saying nothing.
 
-**FRAM and EEPROM report differently and are not decoded yet.** Many
-25-series EEPROMs have no `9F` command at all and will read as `ff ff
-ff`, which this app currently reports as an empty socket. That is a
-real limitation, not a bug to be surprised by later.
+**A leading `7f` is a JEDEC continuation code, and a positive FRAM
+signature** rather than a failed read — the real manufacturer follows
+it, and Infineon/Cypress FRAM identifies this way. DETECT sets CLASS
+to FRAM and clears `needs_erase`, but **not SIZE**: the density is not
+in the first three bytes, so set it by hand.
+
+**Devices with no `9F` at all cannot be told from an empty socket.**
+Small FRAM and the 25AA/25LC EEPROMs read as `ff ff ff`, which is
+exactly what an empty socket reads as. No probe fixes that — telling
+"device that ignores `9F`" from "nothing there" requires writing, and
+writing is what the SS check and the profile exist to make safe. Set
+CLASS, SIZE and ADDR by hand; `PROBE` settles the address width.
 
 ## Configuration
 
-`MMOD_PORT` at the top of `sw/apps/mmod/mmod.c`, currently 0 — the only
-port any board builds. `MMOD_KHZ` is 400, modest on purpose: this is
-bring-up, the ID is four bytes, and the bit-bang loop won't reach it
-anyway (`docs/spi.md`).
+**PORT** on the panel selects the GPIO port, so nothing needs editing
+to move the socket. `MMOD_KHZ` in `mmod.c` is 400 — modest on purpose,
+and the bit-bang loop will not reach it anyway (`docs/spi.md`).
 
 The app releases all four pins to inputs on exit. SS in particular:
 leaving it driven low would hold the module selected after the app
@@ -222,6 +242,38 @@ opcodes are stateless.
 Page splitting is automatic: page program wraps *within* the page
 rather than advancing, so an over-long write overwrites its own start.
 
+## How each operation behaves
+
+### All three destructive operations confirm
+
+| | destroys |
+|---|---|
+| READ | the **file** |
+| WRITE | the device range |
+| ERASE | the device sectors |
+
+READ is the one that is easy to overlook, and it is the reason all
+three ask. The panel keeps **one filename across every operation**, so
+the path sitting there after a WRITE or a VERIFY is the *source* for
+that operation — and pressing READ next would replace the image you
+just wrote from, leaving the device as the only remaining copy.
+
+So READ confirms whenever the destination already exists, and says
+when it is the file the last operation used:
+
+```
+Replace firmware-2026-09.bin?
+It already exists -- 19304 bytes.
+This is the file the last operation used.
+Use the save icon to read into a different file.
+```
+
+`sw/common/zdialog.h`'s save dialog deliberately does not ask about
+overwriting — "that is the caller's decision to make" — so this is
+where it gets asked, and it covers both routes in: a path carried over
+from an earlier operation, and one just chosen in the save dialog that
+happens to exist.
+
 ### VERIFY compares the file, not the range
 
 The question VERIFY answers is "does the device match this file", so
@@ -276,6 +328,63 @@ The write length is the smaller of the range and the file. Running out
 of file ends the write normally rather than as an error, since a range
 longer than its source is an ordinary thing to ask for.
 
+## Backing up the boot ROM
+
+`SRC` switches WRITE and VERIFY between a file and the **memory-mapped
+boot flash** — gateware, kernel and core apps (`docs/flash_apps.md`).
+So a spare MMOD can hold a copy of the machine's own ROM:
+
+```
+SRC   ROM
+START 00000000
+LEN   00200000     (or press ALL if the device is smaller)
+ERASE, then WRITE, then VERIFY
+```
+
+**VERIFY is what makes it a backup rather than a hope.** It compares
+the device against ROM directly, so you can confirm the copy without
+an intermediate file and without trusting that the write reported
+honestly.
+
+That is also why this is a source selector rather than a "DUMP ROM"
+button. Dumping ROM to a file is one useful thing; being able to
+*verify* a device against ROM is the other half, and a dump button
+cannot express it.
+
+### The window is fixed, on purpose
+
+`0x1000_0000`, 2MB — not an address anyone types. On a machine with no
+MMU an arbitrary address field is a way to read a peripheral register
+or an unmapped window and hang the bus, and no amount of validating a
+typed address is as reliable as not having one.
+
+`SRC` refuses to select ROM when `Z_FEATURE_MEM_ROM` is clear, since
+the window would otherwise read as whatever the bus resolves to.
+
+### ROM offsets track device addresses
+
+A range means the same place in both, so `START 0` is a whole-device
+copy and backing up just the kernel uses its own offset at both ends —
+which is the behaviour that makes a partial backup restorable to where
+it came from.
+
+### READ has no ROM setting
+
+ROM is read-only, so there is nowhere for the device's contents to go.
+Pressing READ with `SRC` on ROM says so rather than silently switching
+the selector.
+
+### What this does not do
+
+**Restoring.** This makes a copy; putting one back is a job for a
+flashing tool, not for an app running out of the flash it would be
+overwriting.
+
+**ROM to a file.** The selector chooses a *source* for a device
+operation, and ROM-to-file involves no device at all. Worth adding as
+its own thing if archiving off-machine matters; it is not this
+selector.
+
 ## Testing the device layer
 
 ```
@@ -299,14 +408,35 @@ emit correct command sequences, so the SPI layer is the right seam.
 It therefore **cannot catch** anything below `z_spi_xfer()` — clock
 modes, bit order, chip-select timing. `test_bitbang.c` covers those.
 
-## Next
+## Known limits
 
-Load, save and verify a file against the module — `z_mmod_read/write/erase` on top of `sw/common/zspi.h`, with
-status polling and a device table covering NOR, FRAM and EEPROM. Not
-before an SS check passes on the board it will run on.
+**Nothing here has run on hardware except DETECT.** The device layer
+below the app is covered by `test_mmod.c` against a simulated flash;
+the state machine, file I/O and dialogs are covered by nothing. Start
+with a few KB on a range you do not mind losing: READ it, ERASE it,
+WRITE it back, VERIFY. Each step checks the one before it.
+
+**Bit-bang only.** `SPI_MMOD` — a third instantiation of `rtl/spim.v`,
+selected at runtime with the bit-bang path as fallback — is designed
+but not built. `docs/gpio.md` carries the measurements that justify
+it: about 60 KB/s bit-banged against roughly 18x that in gateware.
+
+**No FRAM or EEPROM auto-detection**, and there cannot be. Many
+25-series EEPROMs have no `9F` command at all and read as `ff ff ff`,
+which is indistinguishable from an empty socket. Set CLASS, SIZE and
+ADDR by hand; `PROBE` settles the address width.
+
+**No 25xx010/020/040 support.** Those put address bit A8 inside the
+opcode, and that mangling would infect every command path for the
+smallest parts.
+
+See also "What this does not do" under the ROM section: this makes a
+copy, it does not restore one.
 
 ## See also
 
 - `docs/spi.md` — the bit-bang SPI this runs on, including the clock modes
 - `docs/gpio.md` — the pins, and Sergei's pin 1 in particular
 - `docs/logic_app.md` — for watching the bus while this runs
+- `docs/flash_apps.md` — what is in the boot ROM this can back up
+- `sw/common/zmmod.h` — the device layer, and the reasoning for each choice

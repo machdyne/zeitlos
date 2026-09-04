@@ -408,6 +408,57 @@ static uint32_t op_base;		// where this operation actually began
 static int op_fh = -1;
 static uint8_t op_buf[OP_CHUNK];
 static uint8_t op_cmp[OP_CHUNK];
+static uint32_t src_off;		// where the source is up to
+
+// Read the next `n` bytes from whichever source is selected.
+//
+// ROM IS A FIXED WINDOW, not an address anyone types. Restricting it
+// to Z_ROM_SIZE at Z_ROM_BASE is the whole safety story: an arbitrary
+// address field on a machine with no MMU is a way to read a
+// peripheral register or an unmapped window and hang the bus, and no
+// amount of validation on a typed address is as reliable as not
+// having one.
+//
+// Returns bytes read, 0 at the end of the source, negative on error.
+static int src_read(uint8_t *buf, uint32_t n) {
+
+	if (src == SRC_ROM) {
+
+		const volatile uint8_t *rom = (const volatile uint8_t *)Z_ROM_BASE;
+		uint32_t i;
+
+		if (src_off >= Z_ROM_SIZE) return 0;
+		if (n > Z_ROM_SIZE - src_off) n = Z_ROM_SIZE - src_off;
+
+		// Byte at a time rather than memcpy: this is memory-mapped
+		// SPI flash, and going through a volatile pointer keeps the
+		// compiler from turning it into something wider than the
+		// window's read path expects.
+		for (i = 0; i < n; i++) buf[i] = rom[src_off + i];
+
+		src_off += n;
+
+		return (int)n;
+
+	}
+
+	{
+		int got = fs_read_chunk(op_fh, buf, (int)n);
+		if (got > 0) src_off += (uint32_t)got;
+		return got;
+	}
+
+}
+
+// How long the source is, or 0 if that is not knowable.
+static uint32_t src_len(void) {
+	if (src == SRC_ROM) return Z_ROM_SIZE;
+	return file_size;
+}
+
+static const char *src_name(void) {
+	return src == SRC_ROM ? "ROM" : file_name;
+}
 
 static void op_finish(const char *how) {
 
@@ -538,11 +589,11 @@ static bool op_step(void) {
 	// -- write: file in, device out --
 	if (op == OP_WRITE) {
 
-		int got = fs_read_chunk(op_fh, op_buf, (int)n);
+		int got = src_read(op_buf, n);
 
 		if (got <= 0) {
-			// Running out of file is the normal end of a write whose
-			// range was longer than its source, not an error.
+			// Running out of source is the normal end of a write whose
+			// range was longer than it, not an error.
 			op_rate_line();
 			{
 				char done[80];
@@ -613,7 +664,7 @@ static bool op_step(void) {
 
 	} else {
 
-		int got = fs_read_chunk(op_fh, op_cmp, (int)n);
+		int got = src_read(op_cmp, n);
 
 		// End of file ENDS THE VERIFY SUCCESSFULLY.
 		//
@@ -635,7 +686,7 @@ static bool op_step(void) {
 			if (!op_done) {
 				snprintf(status, sizeof(status),
 					"'%s' is empty or unreadable -- nothing to compare.",
-					file_name);
+					src_name());
 				op_finish("Stopped.");
 				return false;
 			}
@@ -706,9 +757,64 @@ static void op_start(op_t which) {
 
 	// No file yet? Ask, rather than reporting an error the user did
 	// nothing to cause. Cancelling the dialog abandons quietly.
-	if (!file_path[0]) {
+	// READ has no ROM setting: ROM is read-only, so there is nowhere
+	// for the device's contents to go. Say so rather than silently
+	// switching the selector under the user.
+	if (which == OP_READ && src == SRC_ROM) {
+		snprintf(status, sizeof(status),
+			"READ writes to a file. Set SRC to FILE first.");
+		snprintf(detail, sizeof(detail),
+			"ROM is read-only -- it can be a source, not a destination.");
+		return;
+	}
+
+	if (!file_path[0] && src == SRC_FILE) {
 		if (which == OP_READ) { if (!do_save()) return; }
 		else { do_open(); if (!file_path[0]) return; }
+	}
+
+	// READ REPLACES THE FILE, and the file is very likely one that
+	// was just used for something else.
+	//
+	// The panel keeps one filename across every operation, so the
+	// path sitting in it after a WRITE or a VERIFY is the SOURCE for
+	// that operation -- and pressing READ next would destroy the
+	// image you just wrote from, with the device as the only
+	// remaining copy. That is a bad way to lose a firmware image.
+	//
+	// sw/common/zdialog.h's save dialog deliberately does not ask
+	// about overwriting ("that is the caller's decision to make"),
+	// so this is where it gets asked. It covers both routes in: a
+	// path carried over from an earlier operation, and one just
+	// chosen in the save dialog that happens to exist.
+	if (which == OP_READ) {
+
+		uint32_t existing = (uint32_t)fs_size(file_path);
+
+		if (existing) {
+
+			char msg[220];
+
+			snprintf(msg, sizeof(msg),
+				"Replace %s?\n"
+				"It already exists -- %lu bytes.\n"
+				"%s\n"
+				"Use the save icon to read into a different file.",
+				file_name, (unsigned long)existing,
+				(existing == file_size && file_size)
+					? "This is the file the last operation used."
+					: "Its contents will be lost.");
+
+			if (z_dialog_confirm(&dlg, "Read", msg, Z_DIALOG_YES_NO)
+				!= Z_DIALOG_YES) {
+				snprintf(status, sizeof(status), "Read cancelled -- %s "
+					"was not touched.", file_name);
+				detail[0] = 0;
+				return;
+			}
+
+		}
+
 	}
 
 	panel_to_profile();
@@ -724,8 +830,8 @@ static void op_start(op_t which) {
 	//
 	// A file LONGER than the range still verifies only the range: the
 	// user set that deliberately.
-	if (which == OP_VERIFY && file_size && len > file_size)
-		len = file_size;
+	if (which == OP_VERIFY && src_len() && len > src_len())
+		len = src_len();
 
 	if (!len || (dev.size && range_start + len > dev.size)) {
 		snprintf(status, sizeof(status), "Range %08lx + %08lx is outside a "
@@ -735,10 +841,15 @@ static void op_start(op_t which) {
 		return;
 	}
 
-	op_fh = (which == OP_READ)
-		? fs_open_write(file_path) : fs_open_read(file_path);
+	// ROM needs no handle. Left at -1 so op_finish()'s close is a
+	// no-op and there is one exit path rather than two.
+	op_fh = -1;
 
-	if (op_fh < 0) {
+	if (src == SRC_FILE || which == OP_READ)
+		op_fh = (which == OP_READ)
+			? fs_open_write(file_path) : fs_open_read(file_path);
+
+	if (op_fh < 0 && (src == SRC_FILE || which == OP_READ)) {
 		snprintf(status, sizeof(status), "Could not open '%s' for %s.",
 			file_path, which == OP_READ ? "writing" : "reading");
 		snprintf(detail, sizeof(detail), "Is the SD card mounted?");
@@ -753,14 +864,22 @@ static void op_start(op_t which) {
 	op_t0 = z_uptime_ticks();
 	progress = 0;
 
+	// ROM offsets track device addresses, so a range means the same
+	// place in both. Backing up the whole thing is START 0, and
+	// backing up just the kernel is its own offset in both -- which
+	// is the behaviour that makes a partial backup restorable to
+	// where it came from.
+	src_off = (src == SRC_ROM) ? range_start : 0;
+
 	op_rate_line();
 
 	// Say when the length came from the file rather than the range,
 	// so a run that compares less than the range was asked for does
 	// not look like it stopped early.
 	if (which == OP_VERIFY && len < range_len)
-		snprintf(detail, sizeof(detail), "Comparing %lu bytes -- the file "
-			"is shorter than the range.", (unsigned long)len);
+		snprintf(detail, sizeof(detail), "Comparing %lu bytes -- the %s is "
+			"shorter than the range.", (unsigned long)len,
+			src == SRC_ROM ? "ROM window" : "file");
 
 }
 
@@ -852,7 +971,7 @@ static void write_start(void) {
 		return;
 	}
 
-	if (!file_path[0]) {
+	if (!file_path[0] && src == SRC_FILE) {
 		do_open();
 		if (!file_path[0]) return;
 	}
@@ -860,7 +979,7 @@ static void write_start(void) {
 	panel_to_profile();
 
 	len = range_len;
-	if (file_size && len > file_size) len = file_size;
+	if (src_len() && len > src_len()) len = src_len();
 
 	if (!len) {
 		snprintf(status, sizeof(status), "Nothing to write -- "
@@ -876,13 +995,26 @@ static void write_start(void) {
 		return;
 	}
 
-	snprintf(msg, sizeof(msg),
-		"Write %lu bytes from\n%s\nto %08lx - %08lx?\n%s",
-		(unsigned long)len, file_name,
-		(unsigned long)range_start, (unsigned long)(range_start + len - 1),
-		dev.needs_erase
-			? "The range must already be erased."
-			: "This overwrites whatever is there.");
+	if (src == SRC_ROM)
+		snprintf(msg, sizeof(msg),
+			"Write %lu bytes from\nROM %08lx (boot flash)\n"
+			"to %08lx - %08lx?\n%s",
+			(unsigned long)len,
+			(unsigned long)(Z_ROM_BASE + range_start),
+			(unsigned long)range_start,
+			(unsigned long)(range_start + len - 1),
+			dev.needs_erase
+				? "The range must already be erased."
+				: "This overwrites whatever is there.");
+	else
+		snprintf(msg, sizeof(msg),
+			"Write %lu bytes from\n%s\nto %08lx - %08lx?\n%s",
+			(unsigned long)len, file_name,
+			(unsigned long)range_start,
+			(unsigned long)(range_start + len - 1),
+			dev.needs_erase
+				? "The range must already be erased."
+				: "This overwrites whatever is there.");
 
 	if (z_dialog_confirm(&dlg, "Write", msg, Z_DIALOG_YES_NO)
 		!= Z_DIALOG_YES) {
@@ -891,12 +1023,16 @@ static void write_start(void) {
 		return;
 	}
 
-	op_fh = fs_open_read(file_path);
+	op_fh = -1;
 
-	if (op_fh < 0) {
-		snprintf(status, sizeof(status), "Could not open '%s'.", file_path);
-		detail[0] = 0;
-		return;
+	if (src == SRC_FILE) {
+		op_fh = fs_open_read(file_path);
+		if (op_fh < 0) {
+			snprintf(status, sizeof(status), "Could not open '%s'.",
+				file_path);
+			detail[0] = 0;
+			return;
+		}
 	}
 
 	op = OP_WRITE;
@@ -906,6 +1042,7 @@ static void write_start(void) {
 	op_done = 0;
 	op_t0 = z_uptime_ticks();
 	progress = 0;
+	src_off = (src == SRC_ROM) ? range_start : 0;
 
 	op_rate_line();
 
@@ -956,6 +1093,32 @@ static void act(int idx) {
 
 	case W_DETECT:
 		do_detect();
+		full = true;
+		break;
+
+	case W_SRC:
+		if (src == SRC_FILE && !z_soc_has_feature(Z_FEATURE_MEM_ROM)) {
+			// No mapped boot flash on this board, so offering it
+			// would be offering a window that reads as whatever the
+			// bus resolves to.
+			snprintf(status, sizeof(status),
+				"This bitstream has no memory-mapped ROM.");
+			snprintf(detail, sizeof(detail), "Z_FEATURE_MEM_ROM is clear "
+				"-- see docs/csrs.md.");
+			full = true;
+			break;
+		}
+		src = (src == SRC_FILE) ? SRC_ROM : SRC_FILE;
+		if (src == SRC_ROM) {
+			snprintf(status, sizeof(status), "Source is the boot flash at "
+				"%08lx, %lu bytes.", (unsigned long)Z_ROM_BASE,
+				(unsigned long)Z_ROM_SIZE);
+			snprintf(detail, sizeof(detail), "WRITE copies it to the "
+				"device; VERIFY compares them. READ needs a file.");
+		} else {
+			snprintf(status, sizeof(status), "Source is a file.");
+			detail[0] = 0;
+		}
 		full = true;
 		break;
 

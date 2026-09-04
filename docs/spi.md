@@ -7,9 +7,9 @@ bit order, optional chip select, optional MISO.
 
 ## This is not the SD card's SPI
 
-The SD card goes through `rtl/spim.v` and the ethernet PMOD through
+The SD card goes through `rtl/spisd.v` and the ethernet PMOD through
 `rtl/spim.v`, both of which generate SCLK in gateware. That is
-deliberate, and `rtl/spim.v`'s own header explains why: the SD card
+deliberate, and `rtl/spisd.v`'s own header explains why: the SD card
 *was* bit-banged once, which made the SPI clock rate a function of
 compiler codegen, and it broke when the toolchain changed.
 
