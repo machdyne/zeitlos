@@ -515,6 +515,38 @@ void main() {
 	cmd_info();
 	cmd_help();
 
+	/* Discard whatever the host sent while the console was still
+	 * blocked waiting to be opened.
+	 *
+	 * On a `USB_CDC board (rtl/usb_cdc_uart.v, docs/usb_cdc.md) this
+	 * is not defensive tidying, it is load-bearing. That console
+	 * blocks in putchar() until a terminal opens the port -- which is
+	 * how the banner above survives with no buffer to hold it -- and
+	 * a terminal opening a port is also the moment it sends its
+	 * greeting: minicom's default modem init string, or
+	 * ModemManager's AT probes on a Linux box without the udev rule.
+	 * So by the time we get here there are already bytes waiting, and
+	 * the loop below treats ANY byte as interaction and cancels
+	 * autoboot for good (ctr is never reset, and its test is an exact
+	 * equality that never matches again). The board sat at this
+	 * prompt instead of booting, every single time.
+	 *
+	 * Here rather than in uart_init(): that runs before the banner,
+	 * so it flushes a port nothing has opened yet. THIS is the point
+	 * at which the console genuinely becomes usable.
+	 *
+	 * Harmless on a 16550 board, where it discards at most a few
+	 * bytes typed during the kernel copy.
+	 *
+	 * Both halves are needed. FCR bit 1 empties the hardware receive
+	 * FIFO in one write; the getchar() loop catches anything that
+	 * lands in the gap afterwards. Neither closes the window
+	 * completely -- a byte still on the wire will arrive -- but a
+	 * terminal sends its greeting at open(), which is squarely inside
+	 * the window this covers. */
+	reg_uart0_fcr = (uint8_t)0b00000111;
+	while (getchar() != EOF);
+
 	while (1) {
 
 		print("@");

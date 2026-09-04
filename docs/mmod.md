@@ -410,11 +410,7 @@ modes, bit order, chip-select timing. `test_bitbang.c` covers those.
 
 ## Known limits
 
-**Nothing here has run on hardware except DETECT.** The device layer
-below the app is covered by `test_mmod.c` against a simulated flash;
-the state machine, file I/O and dialogs are covered by nothing. Start
-with a few KB on a range you do not mind losing: READ it, ERASE it,
-WRITE it back, VERIFY. Each step checks the one before it.
+**FRAM and EEPROM not tested in hardware** Only flash has been tested.
 
 **Bit-bang only.** `SPI_MMOD` — a third instantiation of `rtl/spim.v`,
 selected at runtime with the bit-bang path as fallback — is designed

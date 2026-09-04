@@ -16,6 +16,31 @@ IOBUF PORT "usb_host_dp[1]" IO_TYPE=LVCMOS33;
 LOCATE COMP "usb_host_dm[1]" SITE "C2";
 IOBUF PORT "usb_host_dm[1]" IO_TYPE=LVCMOS33;
 
+# USB DEVICE (upstream-facing port) -- the USB-C socket.
+#
+# The console when the bitstream is built with `USB_CDC
+# (rtl/boards.vh, rtl/usb_cdc_uart.v, docs/usb_cdc.md). These are the
+# same three balls the DFU bootloader drives, named the same way, so
+# the bootloader and the user gateware describe the same hardware
+# identically -- see tinydfu-bootloader/boards/obst/obst_v0.lpf.
+#
+# usb_ufp_pull switches the 1.5k pull-up on D+. It is driven HIGH to
+# announce a full-speed device and released to high impedance
+# otherwise, never driven low; rtl/usb_cdc_uart.v's line-buffer
+# section says why those differ.
+#
+# UNCONDITIONAL, like every other LOCATE in this file. Without
+# `USB_CDC the ports do not exist and these three become constraints
+# naming ports that are not there, which nextpnr reports as a warning
+# and ignores -- the same arrangement as the GPIO block below and as
+# boards/sergei_ml1.lpf's audio/GPIO pair.
+LOCATE COMP "usb_ufp_dp" SITE "M1";
+IOBUF PORT "usb_ufp_dp" IO_TYPE=LVCMOS33;
+LOCATE COMP "usb_ufp_dm" SITE "M2";
+IOBUF PORT "usb_ufp_dm" IO_TYPE=LVCMOS33;
+LOCATE COMP "usb_ufp_pull" SITE "R1";
+IOBUF PORT "usb_ufp_pull" IO_TYPE=LVCMOS33;
+
 # PMOD A ball map, for reference. Only the four USB-UART pins below
 # were ever written down in this file; the other four are real and are
 # what a GPIO port on this connector would use. Taken from the board's

@@ -1,0 +1,32 @@
+# Zeitlos USB CDC-ACM console (docs/usb_cdc.md)
+#
+#   $ sudo cp tools/70-zeitlos.rules /etc/udev/rules.d/
+#   $ sudo udevadm control --reload-rules
+#   $ minicom -D /dev/zeitlos
+#
+# 16d0:116d is Machdyne's USB identity, shared between the DFU
+# bootloader and the Zeitlos console -- see docs/usb_cdc.md's identity
+# section for why. SUBSYSTEM=="tty" is what makes that sharing
+# harmless here: the bootloader presents a DFU interface and has no
+# tty, so this rule only ever matches the console.
+#
+# ID_MM_DEVICE_IGNORE is the important part, and not merely a tidiness
+# measure. ModemManager probes new ttyACM devices and fires AT
+# commands at them for several seconds after they appear -- which is
+# exactly the window in which the BIOS is stalled on THRE waiting for
+# something to open the port. Without this, ModemManager opens it
+# first, the endpoint FIFO drains into ModemManager, and the boot
+# banner is consumed before a terminal ever sees it.
+#
+# The SYMLINK is a convenience: /dev/ttyACM* numbering moves around
+# when other devices are plugged in, and it moves on every DFU cycle
+# because the bootloader and the console are separate enumerations.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="16d0", ATTRS{idProduct}=="116d", \
+    ENV{ID_MM_DEVICE_IGNORE}="1", MODE="0660", GROUP="dialout", \
+    SYMLINK+="zeitlos"
+
+# The DFU bootloader on the same socket, so that dfu-util does not
+# need root. Harmless if you already have a rule for it -- udev
+# applies both.
+SUBSYSTEM=="usb", ATTRS{idVendor}=="16d0", ATTRS{idProduct}=="116d", \
+    MODE="0660", GROUP="plugdev"

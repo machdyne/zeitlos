@@ -346,6 +346,43 @@
 `define AUDIO_SD
 `define AUDIO_MIXER
 
+// USB CDC-ACM console on the USB-C socket (rtl/usb_cdc_uart.v,
+// docs/usb_cdc.md). OFF by default; uncommenting it is the whole
+// change, because the `undef at the bottom of this file removes
+// `UART0 for you and rtl/sysctl.v then hands the 0xf000_00xx window
+// to the USB device instead of to rtl/ext/uart16550.
+//
+// WHAT IT BUYS. The console stops needing a PMOD. Obst's USB-C port
+// is wired straight to the FPGA through series resistors and, after
+// the DFU bootloader hands over, does nothing but supply power --
+// so this is a console on a socket that was already occupied by the
+// cable you are already using, and PMOD A comes free. It also means
+// a new user needs no USB-UART PMOD to see anything at all, which
+// on a board whose first-run experience is a serial banner is worth
+// more than the connector.
+//
+// WHAT IT COSTS on this board specifically, measured rather than
+// estimated: rtl/ext/usb_cdc is 1257 LUT4 at `USB_CDC_MPS 8 and
+// rtl/ext/uart16550 that it displaces is 583, so the net is roughly
+// +700 LUT4 and ZERO block RAM -- which matters here, because Obst
+// sits at 52 of 56 DP16KD before any of this. Every byte of buffer
+// in that core is flip-flops.
+//
+// WHAT TO WATCH. This board is an ECP5 12F at ~70% TRELLIS_COMB with
+// about 3% of margin on the 48MHz clock before the block is added.
+// Check `make timing BOARD=obst` after building, and do not raise
+// `USB_CDC_MPS here without re-checking it.
+//
+// THE BOOT BANNER BLOCKS until something opens the port -- that is
+// deliberate and is how the banner survives at all with no buffer to
+// hold it. It gives up after `USB_CDC_STALL_CYCLES so an unattended
+// board still boots. See rtl/usb_cdc_uart.v's header.
+//
+// Uncommenting this does NOT free PMOD A on its own; it only stops
+// the console needing it. To put GPIO there as well, uncomment
+// `GPIO_PORT0 below and the PMOD A block in boards/obst_v0.lpf.
+`define USB_CDC
+
 // GPIO (rtl/gpio.v, docs/gpio.md) is OFF in the plain board build and
 // deliberately so: Obst has two PMOD connectors and this block claims
 // both of them already. PMOD A is the serial console (`UART0) and
@@ -405,6 +442,30 @@
 `define AUDIO
 `define AUDIO_SD
 `define AUDIO_MIXER
+
+// USB CDC-ACM console on the USB-C socket (rtl/usb_cdc_uart.v,
+// docs/usb_cdc.md). OFF by default; uncommenting it is the whole
+// change, because the `undef at the bottom of this file removes
+// `UART0 for you.
+//
+// THIS BOARD IS WHERE IT MATTERS MOST. Everything the GPIO note below
+// says -- one PMOD connector, the console is on it, so GPIO and a
+// console are mutually exclusive and lakritz_gpio has to give up the
+// console to get eight pins -- stops being true the moment the
+// console lives on the USB-C socket instead. It is not a swap any
+// more. The machine keeps its console AND gains a PMOD.
+//
+// Lakritz has fabric to spare for it: an ECP5 25F against Obst's 12F.
+// `USB_CDC_MPS could reasonably go to 16 or 32 here for a faster
+// link, at 1463 or 1901 LUT4 against 1257 at the default 8 -- though
+// 8 is already worth about what the 1 Mbaud console it replaces was
+// worth, so there is no need unless something actually wants the
+// bandwidth.
+//
+// The boot banner blocks until something opens the port, and gives up
+// after `USB_CDC_STALL_CYCLES so an unattended board still boots. See
+// rtl/usb_cdc_uart.v's header.
+`define USB_CDC
 
 // GPIO off in the plain board build, for the same reason as Obst above
 // but harder: Lakritz has exactly ONE PMOD connector and the serial
@@ -592,5 +653,38 @@
 `endif
 
 `endif	// ZSPEC
+
+// -- `USB_CDC displaces `UART0 --
+//
+// Outside the ZSPEC guard above, deliberately: this applies to a
+// release target composed by release/lib/gen.py exactly as it does to
+// a hand-edited board block, and a target that adds `USB_CDC without
+// remembering to write `-UART0` should get the same machine either
+// way rather than a subtly different one.
+//
+// The two are alternatives rather than additions. They answer the
+// same address window (0xf000_00xx, cs_uart0 in rtl/sysctl.v), and
+// only one thing can. Building both would also declare UART0_TX with
+// nothing driving it, which is not a harmless dangling net: it
+// synthesises to a pin held at a constant, so a PMOD plugged into
+// that connector would see a dead line rather than no line -- the
+// same failure the `GPU_COMPOSITE port guards in rtl/sysctl.v exist
+// to avoid.
+//
+// Done here, once, rather than by asking each board block to comment
+// out `UART0 next to its `USB_CDC. Two defines that must always
+// disagree are a rule, and a rule belongs in one place; the
+// alternative is a board that has both because somebody uncommented
+// one line and not the other, and the resulting build is a placement
+// conflict several minutes into nextpnr rather than an obvious
+// mistake.
+//
+// Note the direction. `USB_CDC wins because it is the deliberate,
+// newly-added thing and `UART0 is on nearly every board by default --
+// so a board gains a USB console by adding one line, which is the
+// change somebody actually wants to make.
+`ifdef USB_CDC
+`undef UART0
+`endif
 
 `endif

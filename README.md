@@ -147,6 +147,39 @@ first — writing to the wrong device will destroy its contents).
 If there's no image for your board, build from source below and please
 open an issue.
 
+### Connecting to the console
+
+With a USB-UART PMOD:
+
+```
+$ minicom -o -D /dev/ttyUSB0 -b 1000000
+```
+
+On Obst and Lakritz the console can instead be a USB CDC-ACM device on
+the board's own USB-C socket, freeing the PMOD connector entirely and
+removing the need for a USB-UART adapter at all — see
+[docs/usb\_cdc.md](docs/usb_cdc.md). There the baud rate is ignored:
+
+```
+$ minicom -o -D /dev/ttyACM0
+```
+
+**Use `-o`.** Without it minicom sends a modem init string when it
+opens the port, which the BIOS reads as a keypress and which cancels
+autoboot. On a USB-CDC console that happens on every single boot,
+because the console blocks until a terminal opens the port and opening
+the port is exactly when the greeting is sent.
+
+Linux users should also install the udev rule, which stops
+ModemManager doing the same thing with AT probes and gives the console
+a stable name:
+
+```
+$ sudo cp tools/70-zeitlos.rules /etc/udev/rules.d/
+$ sudo udevadm control --reload-rules
+$ minicom -o -D /dev/zeitlos
+```
+
 ### Building from source
 
 1. Build and flash the system:
@@ -258,5 +291,6 @@ The contents of this repo are released under the [Lone Dynamics Open License](LI
 - rtl/ext/uart16550 uses the LGPL license.
 - rtl/mem/sdram\_kianv uses the Apache 2.0 license.
 - rtl/ext/usb\_hid\_host uses the Apache 2.0 license.
+- rtl/ext/usb\_cdc uses the MIT license.
 - sw/os/fs/fatfs uses a BSD compatible license.
 - sw/data/ark uses Creative Commons Attribution-ShareAlike 4.0 International License (CC BY-SA) and the GNU Free Documentation License (GFDL).

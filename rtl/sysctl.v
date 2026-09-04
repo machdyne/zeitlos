@@ -28,6 +28,36 @@ localparam SYSCLK = 48_000_000;
 `endif
 `endif
 
+// USB CDC-ACM console defaults, if a board enabled `USB_CDC without
+// pinning them (rtl/boards.vh). See rtl/usb_cdc_uart.v's parameter
+// block for what each one costs.
+`ifdef USB_CDC
+// Machdyne's USB identity, shared with the DFU bootloader on these
+// same boards -- see docs/usb_cdc.md's identity section for why that
+// is deliberate and what it costs on Windows.
+`ifndef USB_CDC_VID
+`define USB_CDC_VID 16'h16d0
+`endif
+`ifndef USB_CDC_PID
+`define USB_CDC_PID 16'h116d
+`endif
+// Bulk packet size. 8 bytes, which is worth about what the 1 Mbaud
+// console it replaces was worth -- and the FIFOs behind it are
+// flip-flops, so this is the dominant cost in the block: 1257 LUT4 at
+// 8 against 3038 at 64, measured on ECP5.
+`ifndef USB_CDC_MPS
+`define USB_CDC_MPS 8
+`endif
+// Ten seconds at 48MHz before a transmit that nothing is draining
+// gives up and starts discarding. Without this the BIOS blocks
+// forever on a board whose USB-C socket is plugged into a charger,
+// which is not a degraded console but a machine that never reaches
+// load_zeitlos(). See rtl/usb_cdc_uart.v.
+`ifndef USB_CDC_STALL_CYCLES
+`define USB_CDC_STALL_CYCLES 32'd480_000_000
+`endif
+`endif
+
 // Audio geometry defaults, if a board enabled `AUDIO without pinning
 // them (rtl/boards.vh).
 //
@@ -149,6 +179,31 @@ module sysctl #()
 `ifdef UART0
    output UART0_TX,
    input UART0_RX,
+`endif
+
+	// USB CDC-ACM console (rtl/usb_cdc_uart.v, docs/usb_cdc.md) --
+	// the USB-C socket, which on Obst and Lakritz is wired straight
+	// to the FPGA through series resistors and is otherwise doing
+	// nothing but supplying power once the DFU bootloader has handed
+	// over.
+	//
+	// "ufp" is upstream-facing port, the USB term for the device end
+	// of a link, and the names match the board's own bootloader
+	// constraints (tinydfu-bootloader/boards/obst) so that the two
+	// bitstreams describe the same three balls the same way.
+	//
+	// All three are inout. dp/dm turn around every transaction, and
+	// the pull-up pin is driven high or RELEASED rather than driven
+	// low -- see rtl/usb_cdc_uart.v's line-buffer section for why
+	// those are not the same thing.
+	//
+	// This is mutually exclusive with `UART0; rtl/boards.vh enforces
+	// that with an `undef rather than leaving it to each board to
+	// remember.
+`ifdef USB_CDC
+	inout usb_ufp_dp,
+	inout usb_ufp_dm,
+	inout usb_ufp_pull,
 `endif
 
 `ifdef UART1
@@ -1979,7 +2034,54 @@ module sysctl #()
 	assign gpio_in[63:32] = 32'h0000_0000;
 
 	// WISHBONE SLAVE: UART0
-`ifdef UART0
+	//
+	// Three mutually exclusive things can answer this window, and the
+	// software half of the tree cannot tell them apart -- which is
+	// the whole design. sw/bios/bios.c, sw/os/uart.c and sw/os/sh.c
+	// reach the console through sw/common/zeitlos.h's reg_uart0_*
+	// macros and are identical on all three:
+	//
+	//   `USB_CDC   rtl/usb_cdc_uart.v -- a real console, on the
+	//              USB-C socket, with a 16550 register map in front
+	//              of a CDC-ACM device. No PMOD, no USB-UART dongle.
+	//   `UART0     rtl/ext/uart16550 -- a real console, on PMOD pins.
+	//   neither    rtl/uart_null.v -- a UART-shaped hole that acks
+	//              and discards, so a board with no console at all
+	//              still boots.
+	//
+	// rtl/boards.vh `undef's `UART0 when `USB_CDC is set, so the
+	// first two cannot both be built and the UART0_TX/UART0_RX pins
+	// cannot be declared with nothing driving them.
+`ifdef USB_CDC
+	wire wbm_cyc_uart0 = cs_uart0 && wbm_cyc;
+	wire wbm_stb_uart0 = cs_uart0 && wbm_stb;
+
+	wire usb_cdc_configured;
+
+	usb_cdc_uart #(
+		.VENDORID(`USB_CDC_VID),
+		.PRODUCTID(`USB_CDC_PID),
+		.MAXPACKETSIZE(`USB_CDC_MPS),
+		.STALL_CYCLES(`USB_CDC_STALL_CYCLES)
+	) wbs_uart0_i
+	(
+		.wb_clk_i(wbm_clk),
+		.wb_rst_i(wbm_rst),
+		.wb_adr_i(wbm_adr_sel_word),
+		.wb_dat_i(wbm_dat_o),
+		.wb_dat_o(wbs_uart0_dat_o),
+		.wb_we_i(wbm_we),
+		.wb_sel_i(wbm_sel),
+		.wb_stb_i(wbm_stb_uart0),
+		.wb_cyc_i(wbm_cyc_uart0),
+		.wb_ack_o(wbs_uart0_ack_o),
+		.int_o(wbs_uart0_int),
+		.usb_dp(usb_ufp_dp),
+		.usb_dn(usb_ufp_dm),
+		.usb_pu(usb_ufp_pull),
+		.configured_o(usb_cdc_configured)
+	);
+`elsif UART0
 	wire wbm_cyc_uart0 = cs_uart0 && wbm_cyc;
 	wire wbm_stb_uart0 = cs_uart0 && wbm_stb;
 

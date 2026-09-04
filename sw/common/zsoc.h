@@ -279,6 +279,28 @@
 // So: this bit means there is a second 16550 AND it is yours. See
 // docs/uart1.md.
 #define Z_FEATURE2_UART1      (1u << 1)
+
+// The console at 0xf000_00xx is a USB CDC-ACM device (rtl/usb_cdc_uart.v)
+// wearing a 16550 register map, not a real 16550. See docs/usb_cdc.md.
+//
+// DO NOT CHECK THIS TO FIND OUT WHETHER THERE IS A CONSOLE. That is
+// Z_FEATURE_UART0, which is set on both kinds -- and on a `USB_CDC
+// board the console is not merely present but is the ONLY one, so
+// treating this bit as "no real UART, therefore no console" gets it
+// exactly backwards.
+//
+// What it is actually for: the line settings are not real. DLL, DLM
+// and LCR are stored and read back so that the BIOS's uart_init()
+// sequence behaves, and they control nothing -- a CDC-ACM link runs
+// at USB speed and its line coding is advisory. Anything that would
+// offer the user a baud rate should check this bit and decline to,
+// rather than presenting a control that does nothing.
+//
+// Secondarily, it answers "which socket am I typing into" on a board
+// where the PMOD connector and the USB-C connector are equally
+// plausible candidates -- worth a line in `info`.
+#define Z_FEATURE2_USB_CDC    (1u << 2)
+
 // -- feature table (sw/common/zsoc.c) --
 //
 // The human-readable half of the Z_FEATURE_* bits above, kept in the

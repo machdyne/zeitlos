@@ -51,7 +51,24 @@ localparam CSR_FEATURES =
 `ifdef GPU_DDMI
 	(32'h1 << 11) |
 `endif
+// A console at 0xf000_00xx that is really there -- as opposed to
+// rtl/uart_null.v, which acks and discards.
+//
+// SET FOR `USB_CDC TOO, and that is the point rather than a
+// convenience. The question this bit answers is "is there somewhere
+// for my output to go", not "is there a 16550 behind it": software
+// that checks it is deciding whether to tell the user there is no
+// serial console (see rtl/uart_null.v's header), and on a `USB_CDC
+// board there very much is one. Which KIND it is lives in FEATURES2
+// bit 2 below, where something that genuinely cares -- an app
+// offering to change the baud rate, say -- can find out.
+//
+// rtl/boards.vh `undef's `UART0 whenever `USB_CDC is set, so these
+// two arms cannot both be taken and the `elsif is exact rather than
+// a priority.
 `ifdef UART0
+	(32'h1 << 12) |
+`elsif USB_CDC
 	(32'h1 << 12) |
 `endif
 `ifdef USB_HID
@@ -256,5 +273,23 @@ localparam CSR_FEATURES2 =
 `ifndef ESP32_LINK
 	(32'h1 << 1) |
 `endif
+`endif
+// The console at 0xf000_00xx is rtl/usb_cdc_uart.v -- a CDC-ACM USB
+// device with a 16550 register map painted on the front -- rather
+// than a real rtl/ext/uart16550. See docs/usb_cdc.md.
+//
+// CSR_FEATURES bit 12 is set either way and is the bit to check for
+// "is there a console at all". This one exists for the narrower
+// question, and there is exactly one kind of software that has it:
+// anything that would otherwise offer to change the line settings.
+// DLL/DLM/LCR are stored and read back on a `USB_CDC board and change
+// nothing, so a baud-rate control there is a dial connected to
+// nought -- better to grey it out than to let it lie.
+//
+// It also tells a user staring at `info` why their USB-UART PMOD is
+// not the thing they are typing into, which is a real question on a
+// board where both connectors look equally plausible.
+`ifdef USB_CDC
+	(32'h1 << 2) |
 `endif
 	32'h0;

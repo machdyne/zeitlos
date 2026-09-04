@@ -95,6 +95,36 @@ IOBUF PORT "usb_host_dm[0]" IO_TYPE=LVCMOS33;
 LOCATE COMP "usb_host_dm[1]" SITE "B2";
 IOBUF PORT "usb_host_dm[1]" IO_TYPE=LVCMOS33;
 
+# USB DEVICE (upstream-facing port) -- the USB-C socket.
+#
+# The console when the bitstream is built with `USB_CDC
+# (rtl/boards.vh, rtl/usb_cdc_uart.v, docs/usb_cdc.md). Worth more on
+# Lakritz than anywhere else: this board has exactly ONE PMOD
+# connector, so a console that does not need it is the difference
+# between having GPIO and having a console, rather than a choice
+# between two connectors.
+#
+# The balls are NOT in the board's published lakritz_v0.lpf
+# (github.com/machdyne/lakritz), which never declares this port --
+# they were read out of the board's own KiCad netlist, where nets
+# USB0_DP/USB0_DN/USB0_DP_PU land on U1 pads T6/R6/R7. R7 and R8 are
+# the 22R series resistors and R6 is the 1K5 pull-up that
+# usb_ufp_pull switches.
+#
+# usb_ufp_pull is driven HIGH to announce a full-speed device and
+# released to high impedance otherwise, never driven low; see
+# rtl/usb_cdc_uart.v's line-buffer section.
+#
+# UNCONDITIONAL, like every other LOCATE in this file -- without
+# `USB_CDC these name ports that do not exist, which nextpnr reports
+# as a warning and ignores.
+LOCATE COMP "usb_ufp_dp" SITE "T6";
+IOBUF PORT "usb_ufp_dp" IO_TYPE=LVCMOS33;
+LOCATE COMP "usb_ufp_dm" SITE "R6";
+IOBUF PORT "usb_ufp_dm" IO_TYPE=LVCMOS33;
+LOCATE COMP "usb_ufp_pull" SITE "R7";
+IOBUF PORT "usb_ufp_pull" IO_TYPE=LVCMOS33;
+
 LOCATE COMP "DDMI_CK_P" SITE "L1";
 IOBUF PORT "DDMI_CK_P" IO_TYPE=LVCMOS33D;
 IOBUF PORT "DDMI_CK_P" DRIVE=4;

@@ -50,7 +50,16 @@ RTL_PICO = \
 	rtl/ext/uart16550/rtl/verilog/raminfr.v \
 	rtl/usb_hid.v \
 	rtl/ext/usb_hid_host/src/usb_hid_host.v \
-	rtl/ext/usb_hid_host/src/usb_hid_host_rom.v
+	rtl/ext/usb_hid_host/src/usb_hid_host_rom.v \
+	rtl/usb_cdc_uart.v \
+	rtl/ext/usb_cdc/usb_cdc.v \
+	rtl/ext/usb_cdc/sie.v \
+	rtl/ext/usb_cdc/phy_rx.v \
+	rtl/ext/usb_cdc/phy_tx.v \
+	rtl/ext/usb_cdc/ctrl_endp.v \
+	rtl/ext/usb_cdc/bulk_endp.v \
+	rtl/ext/usb_cdc/in_fifo.v \
+	rtl/ext/usb_cdc/out_fifo.v
 
 ifndef CABLE
 	CABLE = dirtyJtag
