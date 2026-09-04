@@ -62,22 +62,22 @@ With the MTU, there is no need for position independent code or complicated addr
 
 | App | Description |
 |-----|-------------|
-| text | Text editor |
-| read | Text reader for files of unlimited size (with rendered Markdown) |
+| [text](docs/text_editor.md) | Text editor |
+| [read](docs/read_app.md) | Text reader for files of unlimited size (with rendered Markdown) |
 | draw | MacPaint-inspired drawing app |
-| view | Image viewer |
+| [view](docs/view_app.md) | Image viewer |
 | files | File browser |
-| calc | Calculator |
-| info | System info |
-| clock | Analog and digital clock |
-| settings | System settings |
-| play | WAV/AU/RAW audio file player |
+| [calc](docs/calc_app.md) | Calculator |
+| [info](docs/info_app.md) | System info |
+| [clock](docs/clock_app.md) | Analog and digital clock |
+| [settings](docs/settings_app.md) | System settings |
+| [play](docs/play_app.md) | WAV/AU/RAW audio file player |
 | track | MOD audio file player |
-| mmod | [MMOD](https://github.com/machdyne/mmod) reader/writer |
-| logic | Logic analyzer (under development) |
-| gamedemo | 2D side-scrolling platformer game |
+| [mmod](docs/mmod.md) | [MMOD](https://github.com/machdyne/mmod) reader/writer |
+| [logic](docs/logic_app.md) | Logic analyzer (under development) |
+| [gamedemo](docs/gamedemo.md) | 2D side-scrolling platformer game |
 | space3d | First-person 3D space shooter game |
-| gpu3d | Spinning 3D cube demo + STL viewer |
+| [gpu3d](docs/gpu3d_app.md) | Spinning 3D cube demo + STL viewer |
 
 ### Boards
 
