@@ -1,9 +1,9 @@
 # Zeitlos Ports Design
 
 **Status: phases 1-4 below are implemented** (`sw/common/zport.h`/`.c`,
-`sw/apps/portdemo`, `term` wired to it, and now `sw/apps/net`'s telnet
-provider). Phase 4's UART port is still not done (only telnet landed
-so far); phase 5 and "Open questions" are still just plan. Written up
+`sw/apps/portdemo`, `term` wired to it, `sw/apps/net`'s telnet and ssh
+providers, and `sw/apps/serial`'s UART1 provider). Phase 5 and "Open
+questions" are still just plan. Written up
 ahead of the code originally, the way `docs/networking.md`'s "Staged
 plan" section tracks done vs. not-done work for that subsystem --
 update this document as the remaining phases land.
@@ -33,10 +33,26 @@ Type `help` -- `repl`'s banner should appear on connect, followed by a
 like an ordinary line-oriented command prompt, not a raw echo (see
 `sw/common/zline.h` for how `repl` does this on its end -- `term`
 itself still only relays bytes, it does none of this). `ping`/`uptime`
-are good next things to try; anything not yet recognized says so
-plainly rather than pretending to understand it (Scheme evaluation
-isn't wired in yet -- see `sw/apps/repl/repl.c`'s own header comment
-for where that lands).
+are good next things to try; anything not recognized says so plainly
+rather than pretending to understand it.
+
+Scheme evaluation IS wired in now -- a bare word is a call, so `ps` is
+`(ps)`. See `docs/scheme_api.md`.
+
+To test the UART1 provider, on a board that has one
+(`obst_uart_uart1`):
+
+```
+> init
+> run serial
+> run term
+```
+
+then `serial 9600` at the `repl` prompt, or F11 in `term` and type
+`serial 9600`. F12 comes back. With nothing plugged into the port you
+should see the provider's banner and then silence, which is the
+correct result -- it proves the handover without needing a device on
+the other end.
 
 `portdemo` (`sw/apps/portdemo/portdemo.c`) is still there, and still
 useful as a minimal test harness for the *port protocol itself* in
@@ -56,8 +72,22 @@ need to know or care whether it's talking to a real hardware UART, a
 real telnet server over TCP, or a test harness. Example port
 providers:
 
-- A hardware UART port -- thin wrapper over the existing
-  `Z_SYS_UART_*` syscalls (`docs/app_runtime.md`).
+- A hardware UART port -- **done**, `sw/apps/serial`, over UART1
+  (`docs/uart1.md`).
+
+  NOT a wrapper over the `Z_SYS_UART_*` syscalls, which is what this
+  bullet originally said. Those are UART0, and UART0 is the console:
+  `sw/bios/bios.c` writes to it before anything else in the system
+  exists, the kernel prints to it and `sh` reads from it. Handing it
+  to a `term` window would take the machine's only diagnostic channel
+  with it, and on a board where the console is the only I/O that is
+  unrecoverable without a reflash.
+
+  So the port provider is UART1, a second 16550 that exists only when
+  a board builds it, reached through plain MMIO (`sw/common/zuart.h`)
+  rather than a syscall. That also means `serial` exits at startup on
+  a board without one, rather than staying resident to refuse every
+  connection.
 - A telnet client, riding on `sw/apps/net` (`docs/networking.md`) --
   **done**, see `docs/networking.md`'s "TCP + telnet" section. (This
   was originally sketched here as a "telnet-over-UDP proxy" gated on
@@ -159,6 +189,21 @@ distinction.
 
 ### Flow control: an explicit, deliberate gap for v1
 
+**`sw/apps/serial` is the first provider where this is not purely
+theoretical.** A UART has a far end that does not wait: the 16550's
+receive FIFO is 16 bytes, a scheduler slice is 1.365ms, and at 115200
+that is 15.7 bytes of arrival per slice. So bytes CAN be lost, and are
+lost in the wire's direction rather than in the port protocol's.
+
+That is not this gap, though, and the distinction matters: the loss
+happens between the wire and the provider, before any port message
+exists. `serial` reports it from the 16550's own overrun bit rather
+than hiding it, and no amount of port-level flow control would prevent
+it -- the fix there is a deeper FIFO in gateware
+(`rtl/esp32_rxfifo.v` is the precedent) or a slower baud rate. See
+`docs/uart1.md`.
+
+
 Fire-and-forget `Z_BLOB` messages have no backpressure beyond "the
 mailbox is only `Z_MAILBOX_DEPTH` deep and `z_msg_send()` fails when
 it's full" (`docs/messaging.md`). **Real-hardware finding: this
@@ -228,7 +273,14 @@ general solution would need.
    port provider answering within the connect timeout means `term`
    still works standalone via local echo (phase 3's behavior),
    printing which mode it ended up in at startup.
-4. Real providers: UART port (not yet done), and telnet -- **done**,
+4. Real providers: ~~UART port~~ -- done, `sw/apps/serial` over UART1
+   (`docs/uart1.md`), reachable via `repl`'s `serial [baud]` command
+   or `term`'s F11 Open bar. One connection at a time, and here that
+   is the point rather than a phase-1 limitation: there is one wire,
+   and two `term` windows on it would interleave their keystrokes into
+   one byte stream and split the replies between them at random.
+
+   And telnet -- **done**,
    as a real TCP client (`sw/apps/net/tcp.c`/`telnet.c`), not the
    "telnet-over-UDP proxy" originally sketched in "Overview" above
    (see that section's own note on why the plan changed). Reachable
@@ -240,6 +292,16 @@ general solution would need.
    a `quit`/`exit` command instead).
 5. Revisit flow control (above) only if real usage shows the
    fire-and-forget gap actually matters.
+
+## Choosing a port from the outside
+
+`sw/common/zconnect.h` turns a target -- `port <name>`, `serial
+[baud]`, `telnet <host>`, `ssh [user@]host` -- into the provider name
+and scalar CONNECT argument this protocol carries. Both `repl`'s
+commands and `term`'s F11 Open bar go through it, so there is one
+implementation of each kind rather than two that drift.
+
+See `docs/connections.md`.
 
 ## Open questions
 
