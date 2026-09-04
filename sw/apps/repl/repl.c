@@ -80,6 +80,7 @@
 #include "../../common/zterm.h"
 #include "../../common/zwm.h"
 #include "../../common/zdns.h"
+#include "../../common/zconnect.h"
 #include "../../common/znet.h"	// Z_NET_SSH_PREPARE, see the `ssh` command
 #include "ms_api.h"
 #include "te_bridge.h"
@@ -280,8 +281,8 @@ static bool form_complete(const char *s, void *user) {
 // Shortening the text is the cheap answer and has been the right one
 // so far.
 static const char HELP_TEXT[] =
-	"builtins: help ping echo te <f> page <f> port <n> telnet <h> ssh <h>\r\n"
-	"          scheme <e> quit\r\n"
+	"builtins: help ping echo te <f> page <f> scheme <e> quit\r\n"
+	"connect:  port <n> serial [baud] telnet <h> ssh <h>  (F11 in term)\r\n"
 	"scheme:   ls ps free uptime run kill load mkdir delay-ms ...\r\n"
 	"F12 returns here from any port; bare word = call, so `ps` is (ps)";
 
@@ -684,328 +685,98 @@ static bool dispatch_line(const char *line, char *out, uint32_t out_cap,
 		return false;
 	}
 
-	if (!strncmp(line, "port ", 5)) {
+	// -- connection commands --
+	//
+	// `port <name>`, `serial [baud]`, `telnet <host>` and
+	// `ssh [user@]host` all do the same thing: work out a provider
+	// and a scalar argument, then tell the requesting term window to
+	// go and connect there (Z_TERM_SET_PORT, sw/common/zterm.h).
+	//
+	// The working-out moved to sw/common/zconnect.c, because `term`
+	// needs it too -- its Open dialog reaches the same four kinds of
+	// target without going through a repl at all. What is left here
+	// is the part that IS repl's business: recognising the word,
+	// refusing when there is no term window behind the request, and
+	// writing the confirmation line.
+	//
+	// See zconnect.h. In particular, z_conn_prepare() BLOCKS for
+	// telnet and ssh, and in this process that stalls every OTHER
+	// connected window's output too, because they all share one
+	// mailbox. Bounded, and a literal IP never touches that path.
+	{
+		z_conn_kind_t kind;
+		const char *rest = NULL;
+		char word[12];
+		size_t wl = 0;
 
-		const char *target = line + 5;
-		while (*target == ' ') target++;
-
-		if (*target == 0) {
-			snprintf(out, out_cap,
-				"usage: port <name>  (e.g. port portdemo0)");
-			return false;
+		while (line[wl] && line[wl] != ' ' && wl < sizeof(word) - 1) {
+			word[wl] = line[wl];
+			wl++;
 		}
+		word[wl] = 0;
 
-		if (!requester_pid) {
-			// a bare REPL_EVAL request, not a real term connection --
-			// see this function's own header comment on why there's
-			// nothing to redirect in that case.
-			snprintf(out, out_cap,
-				"repl: 'port' only works from an interactive term "
-				"connection, not a REPL_EVAL request");
-			return false;
-		}
+		if (z_conn_kind_from_word(word, &kind)) {
 
-		// see sw/common/zterm.h for the full protocol/reasoning --
-		// fire-and-forget, no reply. term.c closes ITS side of the
-		// current connection itself (connect_port(), term.c) before
-		// attempting the new one -- but this side (repl's own) closes
-		// proactively too, right here (the `return true` below --
-		// same "end this connection" signal "quit" uses, see
-		// handle_data()'s own handling of it), rather than waiting
-		// for term's own Z_PORT_CLOSE to arrive: repl is the one
-		// telling this peer to leave, so there's no reason to still
-		// send a PROMPT down a connection that's already ending on
-		// purpose, the way handle_data() otherwise would for any
-		// response that doesn't end the session.
-		//
-		// NOTE: term will very likely never actually SHOW the
-		// "disconnecting now" text below on screen -- Z_TERM_SET_PORT
-		// is sent first (this line), and once term's own main loop
-		// processes it, connect_port() (term.c) blocks inside
-		// z_port_connect(), which discards any other queued message
-		// (including the Z_PORT_DATA that's about to carry this exact
-		// response, plus the Z_PORT_CLOSE right after it) while it
-		// waits for the NEW connection's own CONNECTED reply.
-		// Harmless -- just don't be surprised the confirmation text
-		// doesn't linger on screen; the real evidence the switch
-		// worked is the new provider's own banner showing up right
-		// after.
-		z_msg_new_send(requester_pid, Z_TERM_SET_PORT, 0, z_obj_str(target));
-		snprintf(out, out_cap,
-			"requested switch to port '%s' -- disconnecting now", target);
-		return true;
+			rest = line + wl;
+			while (*rest == ' ') rest++;
 
-	}
-
-	if (!strcmp(line, "port")) {
-		snprintf(out, out_cap,
-			"usage: port <name>  (e.g. port portdemo0, port repl1)");
-		return false;
-	}
-
-	if (!strncmp(line, "telnet ", 7)) {
-
-		const char *target = line + 7;
-		while (*target == ' ') target++;
-
-		if (*target == 0) {
-			snprintf(out, out_cap,
-				"usage: telnet <ip-or-hostname>  (e.g. telnet 192.168.178.100, "
-				"telnet myserver.local)");
-			return false;
-		}
-
-		if (!requester_pid) {
-			// same reasoning as "port" above -- nothing to redirect
-			// for a bare REPL_EVAL request, there's no term
-			// connection behind it.
-			snprintf(out, out_cap,
-				"repl: 'telnet' only works from an interactive term "
-				"connection, not a REPL_EVAL request");
-			return false;
-		}
-
-		// z_resolve_host() (sw/common/zdns.h) tries a plain dotted-
-		// quad parse first (instant, no messaging) and only falls
-		// back to an actual DNS query -- via `net`'s dns.c, see
-		// znet.h's Z_NET_DNS_RESOLVE -- if that fails. That fallback
-		// blocks this call for up to a few seconds in the worst case
-		// (no response/net not running/genuine NXDOMAIN) -- see
-		// z_dns_resolve()'s own header comment. Worth knowing here
-		// specifically: repl's own main loop (below) services EVERY
-		// connected port/REPL_EVAL request from one shared mailbox,
-		// so a slow hostname lookup from one `term` window stalls
-		// repl's response to every OTHER connected window too, not
-		// just this one, for as long as it blocks. Bounded and rare
-		// in practice (a real nameserver on a local network answers
-		// in single-digit milliseconds, and a literal IP never
-		// touches this path at all), but a real cost, not a
-		// theoretical one -- worth revisiting with a real
-		// non-blocking resolve-then-connect flow if it ever proves
-		// to matter with several people using `term` at once.
-		uint32_t ip;
-		char err[64];
-		if (!z_resolve_host(target, &ip, err, sizeof(err))) {
-			snprintf(out, out_cap, "telnet: %s", err);
-			return false;
-		}
-
-		// same SET_PORT mechanism the "port" command above uses --
-		// just the Z_MAP form (sw/common/zterm.h) so `net`
-		// (sw/apps/net) gets the target IP as part of the CONNECT
-		// itself (sw/common/zport.h's z_port_connect_arg()), not a
-		// separate message racing against this one. "net0" is net's
-		// own pidreg name (net.c registers itself under "net", same
-		// convention as repl/term); if net isn't running, term's own
-		// name lookup just fails and it stays in local echo, same as
-		// any other unreachable "port" target -- no fixed-pid
-		// fallback here, matching "port <name>"'s own precedent
-		// above (unlike term's OWN startup connection to
-		// "repl0"/Z_PID_REPL, which does have one).
-		//
-		// `arg` (like `port`'s own z_obj_str(target) just above) is
-		// intentionally never freed -- a fire-and-forget message with
-		// a heap-allocated payload is only safe long-term if nothing
-		// ever reuses or frees the memory out from under a receiver
-		// that hasn't read it yet (docs/messaging.md); leaving it
-		// permanently allocated sidesteps that lifetime question at
-		// the cost of a small, deliberate, already-accepted-elsewhere
-		// leak (one map + one string per `telnet`/`port` command
-		// typed, not a per-byte or per-message cost).
-		z_obj_t arg = z_obj_map(2);
-		z_map_set(&arg, "name", z_obj_str("net0"));
-		z_map_set(&arg, "arg", z_obj_uint32(ip));
-		z_msg_new_send(requester_pid, Z_TERM_SET_PORT, 0, arg);
-
-		// shows the resolved address alongside whatever was typed --
-		// makes it obvious when `target` was a hostname (as opposed
-		// to already being the IP itself, where this is redundant but
-		// harmless) which actual address the connection is using.
-		snprintf(out, out_cap,
-			"connecting to %s (%ld.%ld.%ld.%ld) -- disconnecting now "
-			"(F12 returns to repl)",
-			target,
-			(long)((ip >> 24) & 0xFF), (long)((ip >> 16) & 0xFF),
-			(long)((ip >> 8) & 0xFF), (long)(ip & 0xFF));
-		return true;
-
-	}
-
-	if (!strncmp(line, "ssh ", 4)) {
-
-		const char *target = line + 4;
-		const char *at;
-		char user[64];
-		char host[128];
-		uint32_t ip;
-		char err[64];
-		z_msg_t reply;
-		uint32_t net_pid = 0;
-		z_obj_t req, arg;
-		z_obj_t *ok_obj, *tok_obj, *err_obj;
-		uint32_t token;
-
-		while (*target == ' ') target++;
-
-		if (*target == 0) {
-			snprintf(out, out_cap,
-				"usage: ssh [user@]<ip-or-hostname>  (e.g. ssh me@192.168.178.10)");
-			return false;
-		}
-
-		if (!requester_pid) {
-			// Same reasoning as "telnet" -- there is no term
-			// connection behind a bare REPL_EVAL request to redirect,
-			// and SSH additionally needs one for its own prompts.
-			snprintf(out, out_cap,
-				"repl: 'ssh' only works from an interactive term connection");
-			return false;
-		}
-
-		// Split user@host. A missing username is not an error: net
-		// prompts for one in band, the way PuTTY does, which is one
-		// less thing to get wrong on a keyboard.
-		user[0] = 0;
-		at = strchr(target, '@');
-		if (at) {
-			size_t n = (size_t)(at - target);
-			if (n >= sizeof(user)) {
-				snprintf(out, out_cap, "ssh: username too long");
+			if (!*rest && z_conn_kind_needs_text(kind)) {
+				// Bare `port`/`telnet`/`ssh` is a usage question, not
+				// an attempt -- answer it without involving net or
+				// the pid registry. `serial` alone is meaningful and
+				// falls through.
+				char e[128];
+				z_conn_target_t t;
+				z_conn_prepare(kind, "", &t, e, sizeof(e));
+				snprintf(out, out_cap, "%s", e);
 				return false;
 			}
-			memcpy(user, target, n);
-			user[n] = 0;
-			target = at + 1;
-		}
 
-		if (strlen(target) >= sizeof(host)) {
-			snprintf(out, out_cap, "ssh: hostname too long");
-			return false;
-		}
-		strcpy(host, target);
-
-		// Same blocking resolve the telnet command uses, with the same
-		// caveat: it stalls repl's single mailbox for every connected
-		// window, not just this one. See the telnet command above.
-		if (!z_resolve_host(host, &ip, err, sizeof(err))) {
-			snprintf(out, out_cap, "ssh: %s", err);
-			return false;
-		}
-
-		// Step one of the two-step setup in sw/common/znet.h: hand
-		// `net` the username directly, in one hop, because forwarding
-		// a string through term's SET_PORT would have its pointer
-		// translated twice and land on garbage. What comes back is a
-		// scalar token that CAN be forwarded safely.
-		// By name, not the fixed Z_PID_NET, for the same reason
-		// zdns.c's own lookup avoids it: if net is not running, a
-		// fixed pid sends this into whatever else happens to occupy
-		// slot 2, and the command hangs waiting for a reply that
-		// process will never send.
-		{
-			if (!z_pid_lookup("net0", &net_pid)) {
-				snprintf(out, out_cap, "ssh: net is not running");
-				return false;
-			}
-			req = z_obj_map(3);
-			z_map_set(&req, "user", z_obj_str(user));
-			z_map_set(&req, "ip", z_obj_uint32(ip));
-			z_map_set(&req, "port", z_obj_uint32(22));
-			printf("repl: ssh prepare -> net pid %ld, user '%s', ip %ld.%ld.%ld.%ld\n",
-				(long)net_pid, user,
-				(long)((ip >> 24) & 0xFF), (long)((ip >> 16) & 0xFF),
-				(long)((ip >> 8) & 0xFF), (long)(ip & 0xFF));
-			z_msg_new_send(net_pid, Z_NET_SSH_PREPARE, 0, req);
-		}
-
-		// BOUNDED wait, following zdns.c's own loop rather than
-		// z_msg_wait(). That function spins FOREVER if the reply
-		// never comes (zeitlos.c) -- and there is a very ordinary way
-		// for it never to come: a `net` that predates
-		// Z_NET_SSH_PREPARE, or one built with SSH_ENABLE=0, does not
-		// recognise the subject and silently drops it. Since core apps
-		// live in the flash ZAR archive (sw/os/zar.h), rebuilding repl
-		// while running a stale net is easy to do by accident.
-		//
-		// The symptom of getting this wrong is the worst kind:
-		// repl's single main loop serves EVERY connected term window,
-		// so an unbounded wait here freezes all of them at once, with
-		// no output anywhere. Found exactly that way.
-		{
-			uint32_t start = z_uptime_ticks();
-			bool got = false;
-
-			while ((z_uptime_ticks() - start) < (732u * 5)) {
-				if (z_msg_read(&reply) != Z_OK) continue;
-				if (reply.subject == Z_NET_SSH_PREPARE_REPLY) { got = true; break; }
-				// anything else is discarded, same as zdns.c's own
-				// loop and zport.c's connect wait
-			}
-
-			if (!got) {
-				printf("repl: no Z_NET_SSH_PREPARE_REPLY from net (pid %ld)\n",
-					(long)net_pid);
+			if (!requester_pid) {
+				// There is no term connection behind a bare
+				// REPL_EVAL request, so there is nothing to redirect
+				// -- and ssh additionally needs one for its own
+				// prompts.
 				snprintf(out, out_cap,
-					"ssh: net (pid %ld) did not answer. Check the SERIAL "
-					"console at boot for 'net: ssh support built in' -- if "
-					"that line is absent, net is stale or built "
-					"SSH_ENABLE=0; rebuild and reflash it.",
-					(long)net_pid);
+					"repl: '%s' only works from an interactive term "
+					"connection, not a REPL_EVAL request",
+					z_conn_kind_name(kind));
 				return false;
 			}
+
+			{
+				z_conn_target_t t;
+				char e[128];
+
+				if (!z_conn_prepare(kind, rest, &t, e, sizeof(e))) {
+					snprintf(out, out_cap, "%s", e);
+					return false;
+				}
+
+				z_conn_handoff(requester_pid, &t);
+
+				// Returning true ends this connection from repl's
+				// side too -- the same signal `quit` uses -- rather
+				// than waiting for term's own Z_PORT_CLOSE. repl is
+				// the one telling this peer to leave, so there is no
+				// reason to send a PROMPT down a connection that is
+				// ending on purpose.
+				//
+				// term will very likely never SHOW the text below.
+				// Z_TERM_SET_PORT went first, and once term's main
+				// loop picks it up, connect_port() (term.c) is
+				// waiting on the NEW connection's CONNECTED reply and
+				// discards the Z_PORT_DATA carrying this response.
+				// Harmless -- the real evidence the switch worked is
+				// the new provider's banner appearing right after.
+				snprintf(out, out_cap,
+					"connecting to %s -- disconnecting now "
+					"(F12 returns to repl)", t.detail);
+
+				return true;
+			}
+
 		}
-
-		ok_obj = z_map_find(&reply.obj, "ok");
-		if (!ok_obj || ok_obj->type != Z_UINT32 || !ok_obj->val.uint32) {
-			err_obj = z_map_find(&reply.obj, "error");
-			snprintf(out, out_cap, "%s",
-				(err_obj && err_obj->type == Z_STR && err_obj->val.str)
-					? err_obj->val.str : "ssh: net refused the request");
-			return false;
-		}
-
-		tok_obj = z_map_find(&reply.obj, "token");
-		if (!tok_obj || tok_obj->type != Z_UINT32) {
-			snprintf(out, out_cap, "ssh: net returned no token");
-			return false;
-		}
-		token = tok_obj->val.uint32;
-		printf("repl: ssh token %08lx, handing term pid %ld to net0\n",
-			(unsigned long)token, (long)requester_pid);
-
-		// Step two: exactly the mechanism `telnet` uses, and
-		// deliberately the same SCALAR shape -- the token stands in
-		// for telnet's target IP. net tells them apart by checking the
-		// value against the token it just issued.
-		//
-		// `arg` intentionally never freed, same accepted one-per-
-		// command leak the telnet and port commands already document.
-		arg = z_obj_map(2);
-		z_map_set(&arg, "name", z_obj_str("net0"));
-		z_map_set(&arg, "arg", z_obj_uint32(token));
-		z_msg_new_send(requester_pid, Z_TERM_SET_PORT, 0, arg);
-
-		snprintf(out, out_cap,
-			"connecting to %s (%ld.%ld.%ld.%ld) -- disconnecting now "
-			"(F12 returns to repl)",
-			host,
-			(long)((ip >> 24) & 0xFF), (long)((ip >> 16) & 0xFF),
-			(long)((ip >> 8) & 0xFF), (long)(ip & 0xFF));
-		return true;
-
-	}
-
-	if (!strcmp(line, "ssh")) {
-		snprintf(out, out_cap,
-			"usage: ssh [user@]<ip-or-hostname>  (e.g. ssh me@192.168.178.10)");
-		return false;
-	}
-
-	if (!strcmp(line, "telnet")) {
-		snprintf(out, out_cap,
-			"usage: telnet <ip-or-hostname>  (e.g. telnet 192.168.178.100, "
-			"telnet myserver.local)");
-		return false;
 	}
 
 	if (!strncmp(line, "te ", 3)) {

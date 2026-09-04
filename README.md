@@ -27,7 +27,7 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 | Network | Ethernet (SPI), Ethernet MAC (for RMII PHY) or ESP32 |
 | Entropy | Ring-oscillator TRNG |
 | HID | USB keyboard + optional USB mouse/gamepad |
-| I/O | GPIO, SPI, 16550 UART |
+| I/O | GPIO on PMOD ports ([docs/gpio.md](docs/gpio.md)) with bit-banged I2C ([docs/i2c.md](docs/i2c.md)) and SPI ([docs/spi.md](docs/spi.md)), hardware SPI, 16550 UART, optional second UART ([docs/uart1.md](docs/uart1.md)) |
 
 ### OS
 
@@ -73,6 +73,8 @@ With the MTU, there is no need for position independent code or complicated addr
 | settings | System settings |
 | play | WAV/AU/RAW audio file player |
 | track | MOD audio file player |
+| mmod | [MMOD](https://github.com/machdyne/mmod) reader/writer |
+| logic | Logic analyzer (under development) |
 | gamedemo | 2D side-scrolling platformer game |
 | space3d | First-person 3D space shooter game |
 | gpu3d | Spinning 3D cube demo + STL viewer |

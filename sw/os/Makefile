@@ -52,7 +52,7 @@ LDSCRIPT = ../common/riscv-os.ld
 
 OBJS = kernel.o kruntime.o mem.o zar.o \
 	fs/fs.o fs/fatfs/sdmm.o fs/fatfs/ff.o \
-	uart.o hid.o sh.o xfer.o xmodem.o ui.o msg.o pidreg.o fsapi.o procapi.o zobj.o zstream.o zdns.o zsoc.o logo.o
+	uart.o hid.o sh.o xfer.o xmodem.o ui.o msg.o pidreg.o fsapi.o procapi.o zobj.o zstream.o zdns.o zsoc.o zgpio.o logo.o
 
 # kernel.o's recipe below builds every object in one go (they're not
 # independent processes, and mostly don't need to be) -- but for
@@ -93,6 +93,7 @@ kernel.o: $(KSRCS)
 	$(CC) $(CFLAGS) -c ../common/zdns.c -o zdns.o
 	$(CC) $(CFLAGS) -c kernel.c -S -o kernel.asm
 	$(CC) $(CFLAGS) -c ../common/zsoc.c -o zsoc.o
+	$(CC) $(CFLAGS) -c ../common/zgpio.c -o zgpio.o
 	$(CC) $(CFLAGS) -c sh.c -S -o sh.asm
 
 kernel.elf: $(OBJS)

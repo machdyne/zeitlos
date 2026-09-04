@@ -1313,7 +1313,7 @@ static void do_open(void) {
     ctx.parent = &win;
     ctx.on_msg = on_dialog_msg;
 
-    if (z_dialog_open(&ctx, "/MIDI", path, sizeof(path))) {
+    if (z_dialog_open(&ctx, "/AUDIO", path, sizeof(path))) {
         int i;
         cur_file = -1;
         for (i = 0; i < nfiles; i++)
@@ -1591,8 +1591,23 @@ int main(void) {
     arg[0] = 0;
     z_launch_arg_take(arg, sizeof(arg));
 
-    scan_dir("/MIDI");
-    if (!nfiles) scan_dir("/midi");
+    /*
+     * /AUDIO, the same directory sw/apps/track and sw/apps/play use.
+     *
+     * One place for everything that makes a sound, rather than a
+     * directory per app -- a card with AUDIO, MIDI and MOD folders
+     * makes you remember which app wanted which, and the only thing
+     * that actually distinguishes them is the extension, which
+     * ext_is_mid() already checks. .MOD and .WAV files sitting
+     * alongside are simply not listed here, and this app's .MID files
+     * are not listed by the other two.
+     *
+     * Both cases are tried because FatFs is built with FF_USE_LFN 0
+     * and matches 8.3 names case-insensitively, but the path given to
+     * f_opendir() is taken as written.
+     */
+    scan_dir("/AUDIO");
+    if (!nfiles) scan_dir("/audio");
     if (!nfiles) scan_dir("/");
     printf("midi: %d file%s\n", nfiles, nfiles == 1 ? "" : "s");
 

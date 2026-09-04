@@ -41,7 +41,7 @@
  *
  * Register map (word-addressed -- wb_adr_i here is rtl/sysctl.v's
  * wbm_adr_sel_word, matching every other simple slave in this
- * codebase, e.g. rtl/debug.v, rtl/csrs.v):
+ * codebase, e.g. rtl/gpio.v, rtl/csrs.v):
  *
  *   0  CTRL   bit 0: cursor shape. 0 = normal (X), 1 = busy (Z).
  *             Resets to 1. bits 31:1 reserved, must be written 0.

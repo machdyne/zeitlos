@@ -82,6 +82,42 @@ const z_feature_info_t z_soc_features[] = {
 const int z_soc_features_count =
 	(int)(sizeof(z_soc_features) / sizeof(z_soc_features[0]));
 
+// The FEATURES2 half (rtl/csrs.v word 3, rtl/csrs.vh's CSR_FEATURES2).
+//
+// ============================================================
+//  KEEP THIS FILE IN SYNC WITH rtl/csrs.vh's CSR_FEATURES2
+// ============================================================
+//
+// Everything the header comment at the top of this file says about
+// the FEATURES table applies here unchanged: bit position is the only
+// thing that has to match the Verilog, nothing checks that it does,
+// and a shifted bit shows up as a board reporting hardware it does
+// not have.
+//
+// A SEPARATE TABLE rather than more rows in the one above, because
+// the bits live in a DIFFERENT REGISTER and are tested with a
+// different accessor (z_soc_has_feature2(), which has a signature
+// check the FEATURES one does not need). One table would have meant a
+// `word` column, thirty existing rows edited to say 0, and a consumer
+// that has to switch on it per row -- which is more places to get it
+// wrong than simply walking two arrays.
+//
+// Rows here MUST sort by `group` like the ones above, AND every group
+// used here must come after every group used there: k_soc_report()
+// (sw/os/kernel.c) walks this table straight after that one and starts
+// a new output line whenever the group changes, so a group that
+// appeared in both would print its heading twice. Z_FEAT_GROUP_IO is
+// last in the enum for exactly this reason.
+const z_feature_info_t z_soc_features2[] = {
+
+	{ Z_FEATURE2_GPIO,      "gpio",    Z_FEAT_GROUP_IO      },
+	{ Z_FEATURE2_UART1,     "uart1",   Z_FEAT_GROUP_IO      },
+
+};
+
+const int z_soc_features2_count =
+	(int)(sizeof(z_soc_features2) / sizeof(z_soc_features2[0]));
+
 // Padded to a common width so a consumer printing them in a column
 // doesn't have to. Indexed by Z_FEAT_GROUP_*, so this array's order is
 // fixed by that enum, not by anything here.
@@ -106,6 +142,7 @@ const char *const z_soc_feature_groups[] = {
 	"entropy",
 	"audio  ",
 	"led    ",
+	"io     ",
 };
 
 // Compile-time assertion that the table above and the enum in zsoc.h

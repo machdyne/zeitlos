@@ -2,7 +2,7 @@
 
 ## Overview
 
-Zeitlos runs FatFs on a single SD card reached over SPI (`rtl/spisd.v`,
+Zeitlos runs FatFs on a single SD card reached over SPI (`rtl/spim.v`,
 driven by `sw/os/fs/fatfs/sdmm.c`). FatFs is built **non-reentrant**,
 and the kernel is **preemptive**. Those two facts are in direct
 conflict, and reconciling them is what this document is about.

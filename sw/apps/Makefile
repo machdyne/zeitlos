@@ -25,7 +25,10 @@ APPS = \
 	read \
 	net \
 	term \
+	logic \
+	mmod \
 	portdemo \
+	serial \
 	repl \
 	space3d \
 	audiotest \

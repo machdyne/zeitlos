@@ -16,6 +16,18 @@ IOBUF PORT "usb_host_dp[1]" IO_TYPE=LVCMOS33;
 LOCATE COMP "usb_host_dm[1]" SITE "C2";
 IOBUF PORT "usb_host_dm[1]" IO_TYPE=LVCMOS33;
 
+# PMOD A ball map, for reference. Only the four USB-UART pins below
+# were ever written down in this file; the other four are real and are
+# what a GPIO port on this connector would use. Taken from the board's
+# own obst_v0.lpf (github.com/machdyne/obst), and duplicated in
+# machine-readable form as pmod.a in release/hw/boards/obst.spec.
+#
+#   pin   ball      pin   ball
+#   1     E5        7     E4
+#   2     D4        8     C4
+#   3     B5        9     B6
+#   4     C6        10    D6
+
 # PMOD A (USB-UART)
 LOCATE COMP "UART0_RTS" SITE "E5";
 IOBUF PORT "UART0_RTS" IO_TYPE=LVCMOS33;
@@ -73,6 +85,62 @@ LOCATE COMP "DBG[6]" SITE "B10";
 IOBUF PORT "DBG[6]" IO_TYPE=LVCMOS33;
 LOCATE COMP "DBG[7]" SITE "D10";
 IOBUF PORT "DBG[7]" IO_TYPE=LVCMOS33;
+
+# PMOD B (GPIO)
+#
+# Commented out for the same reason the QQSPI block above is: PMOD B
+# already carries the Langkatze ethernet PMOD in the default Obst
+# build, and two top-level ports on one ball is a placement conflict,
+# not a configuration.
+#
+# The release build does NOT use these lines -- release/hw/pmods/
+# gpio.spec plus the pmod.b ball map in release/hw/boards/obst.spec
+# generate the same constraints and drop whatever the base file put on
+# those balls. These are here for a hand build:
+#
+#     comment out `SPI_ETH in rtl/boards.vh's BOARD_OBST block,
+#     uncomment `GPIO_PORT0 there, and uncomment the eight lines below
+#
+# Bit order is PMOD pin order -- bits 0-3 are pins 1-4 (the top row)
+# and bits 4-7 are pins 7-10 (the bottom row). PULLMODE=UP is a
+# deliberate choice, not a default; see release/hw/pmods/gpio.spec.
+# See docs/gpio.md.
+#LOCATE COMP "GPIO0[0]" SITE "C8";				# PMODB1
+#IOBUF PORT "GPIO0[0]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+#LOCATE COMP "GPIO0[1]" SITE "B9";				# PMODB2
+#IOBUF PORT "GPIO0[1]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+#LOCATE COMP "GPIO0[2]" SITE "A10";				# PMODB3
+#IOBUF PORT "GPIO0[2]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+#LOCATE COMP "GPIO0[3]" SITE "C10";				# PMODB4
+#IOBUF PORT "GPIO0[3]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+#LOCATE COMP "GPIO0[4]" SITE "B8";				# PMODB7
+#IOBUF PORT "GPIO0[4]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+#LOCATE COMP "GPIO0[5]" SITE "A9";				# PMODB8
+#IOBUF PORT "GPIO0[5]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+#LOCATE COMP "GPIO0[6]" SITE "B10";				# PMODB9
+#IOBUF PORT "GPIO0[6]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+#LOCATE COMP "GPIO0[7]" SITE "D10";				# PMODB10
+#IOBUF PORT "GPIO0[7]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+
+# PMOD B (UART1)
+#
+# A second, general-purpose serial port. Commented out for the same
+# reason as the GPIO block above -- PMOD B already carries the
+# ethernet PMOD in the default build, and this and GPIO both want the
+# whole connector.
+#
+# The release build generates these from release/hw/pmods/usbuart1.spec
+# and ignores the lines below; they are here for a hand build with
+# `SPI_ETH commented out and `UART1 uncommented in rtl/boards.vh.
+#
+# Pins 2 and 3, matching usbuart.spec -- so the same USB-UART PMOD that
+# serves as a console in port A works here without rewiring. Flow
+# control is not connected on either UART (rtl/sysctl.v ties the
+# 16550's CTS/DSR/RI/DCD to 1), which is why pins 1 and 4 are absent.
+#LOCATE COMP "UART1_TX" SITE "B9";				# PMODB2
+#IOBUF PORT "UART1_TX" IO_TYPE=LVCMOS33;
+#LOCATE COMP "UART1_RX" SITE "A10";				# PMODB3
+#IOBUF PORT "UART1_RX" IO_TYPE=LVCMOS33;
 
 # AUDIO -- 1-bit stereo sigma-delta DAC (rtl/audio_out.v's audio_sd).
 # Enabled by `AUDIO + `AUDIO_SD in rtl/boards.vh. See docs/audio.md.

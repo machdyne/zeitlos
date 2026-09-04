@@ -128,6 +128,49 @@ IOBUF PORT "SD_DAT1" IO_TYPE=LVCMOS33 PULLMODE=NONE;
 LOCATE COMP "SD_DAT2" SITE "K3";
 IOBUF PORT "SD_DAT2" IO_TYPE=LVCMOS33 PULLMODE=NONE;
 
+# PMOD A ball map (github.com/machdyne/lakritz), duplicated in
+# machine-readable form as pmod.a in release/hw/boards/lakritz.spec.
+# This is Lakritz's ONLY PMOD connector, which is why the console and
+# a GPIO port are mutually exclusive here -- see the GPIO block below.
+#
+#   pin   ball      pin   ball
+#   1     B11       7     A11
+#   2     B12       8     A12
+#   3     B13       9     A13
+#   4     B14       10    A14
+
+# PMOD A (GPIO)
+#
+# Commented out because uncommenting it alone would put GPIO0[1] and
+# UART0_TX on B12, and GPIO0[2] and UART0_RX on B13. A hand build needs
+# `UART0 commented out of rtl/boards.vh's BOARD_LAKRITZ block AND
+# `GPIO_PORT0 uncommented there; the console then goes to
+# rtl/uart_null.v and the machine comes up on HDMI only.
+#
+# The supported path is `./release/zrelease build lakritz_gpio`, which
+# does all of that from one spec file. The release build generates its
+# own constraints from release/hw/pmods/gpio.spec and ignores these.
+#
+# Bit order is PMOD pin order -- bits 0-3 are pins 1-4, bits 4-7 are
+# pins 7-10. PULLMODE=UP is a deliberate choice, not a default; see
+# release/hw/pmods/gpio.spec. See docs/gpio.md.
+#LOCATE COMP "GPIO0[0]" SITE "B11";				# PMODA1
+#IOBUF PORT "GPIO0[0]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+#LOCATE COMP "GPIO0[1]" SITE "B12";				# PMODA2
+#IOBUF PORT "GPIO0[1]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+#LOCATE COMP "GPIO0[2]" SITE "B13";				# PMODA3
+#IOBUF PORT "GPIO0[2]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+#LOCATE COMP "GPIO0[3]" SITE "B14";				# PMODA4
+#IOBUF PORT "GPIO0[3]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+#LOCATE COMP "GPIO0[4]" SITE "A11";				# PMODA7
+#IOBUF PORT "GPIO0[4]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+#LOCATE COMP "GPIO0[5]" SITE "A12";				# PMODA8
+#IOBUF PORT "GPIO0[5]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+#LOCATE COMP "GPIO0[6]" SITE "A13";				# PMODA9
+#IOBUF PORT "GPIO0[6]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+#LOCATE COMP "GPIO0[7]" SITE "A14";				# PMODA10
+#IOBUF PORT "GPIO0[7]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+
 LOCATE COMP "UART0_TX" SITE "B12";
 IOBUF PORT "UART0_TX" IO_TYPE=LVCMOS33;
 LOCATE COMP "UART0_RX" SITE "B13";

@@ -43,6 +43,20 @@
 #define ZS_USB_BASE       0xc0000000u
 #define ZS_BLIT_BASE      0xd0000000u
 #define ZS_LED_BASE       0xe0000000u
+
+/* GPIO (rtl/gpio.v) shares the 0xE nibble with the LED registers: the
+ * LEDs are words 0 and 1 of the same block, which is why ZS_LED_BASE
+ * above and ZS_GPIO_BASE here are the same address. The ports start
+ * 4KB in, eight words (32 bytes) each. See docs/gpio.md. */
+#define ZS_GPIO_BASE      0xe0000000u
+#define ZS_GPIO_PORT_BASE 0xe0001000u
+#define ZS_GPIO_PORT_SIZE 0x20u
+
+/* How many ports the simulated machine has. Two rather than the one a
+ * real Obst or Lakritz builds, so an app that gets its port indexing
+ * wrong fails HERE rather than on hardware -- with a single port,
+ * every wrong index still lands on port 0 and looks fine. */
+#define ZS_GPIO_NPORTS    2
 #define ZS_UART_BASE      0xf0000000u
 
 #define ZS_REG_KERNEL_ADDR 0x0000000cu
@@ -92,6 +106,19 @@ typedef struct machine {
 	uart_t   uart;
 
 	uint32_t reg_led, reg_leds;
+
+	/* GPIO port state, one byte per port. See bus_read32()/bus_write32()
+	 * in machine.c for the loopback model the `in` side uses. */
+	uint8_t gpio_dir[ZS_GPIO_NPORTS];
+	uint8_t gpio_out[ZS_GPIO_NPORTS];
+	/* What the far end of the connector is driving, and whether it is
+	 * driving at all. Nothing sets these yet -- there is no simulated
+	 * PMOD -- but they are what a future one would poke, and having the
+	 * model read them means it does not have to change when one exists.
+	 * Zero-initialised, so by default nothing external drives anything
+	 * and the pull-ups win. */
+	uint8_t gpio_ext_dir[ZS_GPIO_NPORTS];
+	uint8_t gpio_ext_out[ZS_GPIO_NPORTS];
 	uint32_t usb_cursor;   /* bits: x[9:0] y[19:10] buttons[23:20] */
 
 	int running;

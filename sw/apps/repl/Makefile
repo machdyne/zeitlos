@@ -93,7 +93,7 @@ TE_CFLAGS = -DEMBEDDED -DTE_HOST_IO \
 # procedure and --gc-sections drops it from any build where zapi.c
 # stops calling it.
 OBJS = zeitlos.o zobj.o zport.o zline.o zrepl.o zdns.o zfsapp.o zstream.o \
-	zgfx.o zfont_data.o zwin.o zrtc.o zrng.o ms.o \
+	zgfx.o zfont_data.o zwin.o zrtc.o zrng.o zgpio.o zi2c.o zspi.o zuart.o zconnect.o ms.o \
 	te.o te_bridge.o page.o zapi.o repl.o
 
 repl: repl.elf repl.bin
@@ -120,6 +120,30 @@ zrtc.o: ../../common/zrtc.c ../../common/zrtc.h
 # there is no build where leaving it out would be the right call.
 zrng.o: ../../common/zrng.c ../../common/zrng.h ../../common/zsoc.h
 	$(CC) $(CFLAGS) -c ../../common/zrng.c -o zrng.o
+
+# The (gpio-*) procedures in zapi.c.
+zgpio.o: ../../common/zgpio.c ../../common/zgpio.h ../../common/zsoc.h
+	$(CC) $(CFLAGS) -c ../../common/zgpio.c -o zgpio.o
+
+# The (i2c-*) and (spi-*) procedures. Both are bit-banged over the
+# GPIO pins above; neither has any hardware of its own.
+zi2c.o: ../../common/zi2c.c ../../common/zi2c.h ../../common/zgpio.h \
+	../../common/zcycles.h
+	$(CC) $(CFLAGS) -c ../../common/zi2c.c -o zi2c.o
+
+zspi.o: ../../common/zspi.c ../../common/zspi.h ../../common/zgpio.h \
+	../../common/zcycles.h
+	$(CC) $(CFLAGS) -c ../../common/zspi.c -o zspi.o
+
+# The (uart1-*) procedures. UART1 only -- UART0 is the console and has
+# no API by design; see ../../common/zuart.h.
+zuart.o: ../../common/zuart.c ../../common/zuart.h ../../common/zsoc.h
+	$(CC) $(CFLAGS) -c ../../common/zuart.c -o zuart.o
+
+# The port/serial/telnet/ssh commands' target-building, shared with
+# sw/apps/term's Open dialog. See ../../common/zconnect.h.
+zconnect.o: ../../common/zconnect.c ../../common/zconnect.h
+	$(CC) $(CFLAGS) -c ../../common/zconnect.c -o zconnect.o
 
 zrepl.o:
 	$(CC) $(CFLAGS) -c ../../common/zrepl.c -o zrepl.o

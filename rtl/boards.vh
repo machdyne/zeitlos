@@ -4,7 +4,20 @@
 // UNIVERSAL CONFIG
 // ----------------
 
-`define DEBUG
+// `DEBUG IS GONE. It used to guard rtl/debug.v, the block at
+// 0xe000_0000 that owns the board LEDs. That block is now rtl/gpio.v
+// and rtl/sysctl.v instantiates it unconditionally, the same way it
+// does rtl/csrs.v and rtl/socctl.v.
+//
+// The define was universal, so removing it changes no board's
+// gateware. What it removes is a branch that would have been fatal if
+// anyone had ever taken it: without `DEBUG nothing decoded the 0xE
+// nibble, an undecoded address gets no ack on this bus, and the first
+// LED write in sw/bios/bios.c would have stalled the CPU before a
+// single character of the boot banner. That was tolerable while the
+// block held two LED bits nobody probes; it is not now that software
+// reads a MAGIC there to ask whether GPIO exists. See rtl/gpio.v.
+
 `define ARBITER
 
 // RTC: the wall clock (rtl/rtc.v) -- seconds since the Unix epoch plus
@@ -333,6 +346,42 @@
 `define AUDIO_SD
 `define AUDIO_MIXER
 
+// GPIO (rtl/gpio.v, docs/gpio.md) is OFF in the plain board build and
+// deliberately so: Obst has two PMOD connectors and this block claims
+// both of them already. PMOD A is the serial console (`UART0) and
+// PMOD B is the Langkatze ethernet PMOD (`SPI_ETH), so there is no
+// free connector for a GPIO port to land on, and uncommenting the
+// line below WITHOUT also removing one of those puts two top-level
+// ports on the same balls -- which nextpnr reports as a placement
+// conflict rather than silently mis-building, but is still not a
+// useful thing to hand somebody.
+//
+// The supported way to build a GPIO Obst is the release system, which
+// exists precisely because a variant is not always a superset of its
+// base (see the ZSPEC note above):
+//
+//     ./release/zrelease build obst_uart_gpio
+//
+// That target keeps the console on PMOD A, puts GPIO port 0 on PMOD B
+// and drops `SPI_ETH, which a command-line -D cannot express.
+//`define GPIO_PORT0
+
+// UART1, a second 16550 at 0xf000_0100, is off for the same reason and
+// with the same fix. rtl/sysctl.v has had the block, the decode and
+// the UART1_TX/UART1_RX pins behind `ifdef UART1 all along -- it was
+// only ever reachable on the ULX3S, where that UART is soldered to the
+// on-board ESP32. There is nowhere on Obst for its pins to go without
+// giving up PMOD B:
+//
+//     ./release/zrelease build obst_uart_uart1
+//
+// keeps the console on PMOD A, puts UART1 on PMOD B pins 2 and 3, and
+// drops `SPI_ETH. See docs/uart1.md.
+//
+// NOTE that this target and obst_uart_gpio are alternatives: both want
+// PMOD B, and Obst has two connectors.
+//`define UART1
+
 `elsif BOARD_LAKRITZ
 
 `define FPGA_ECP5
@@ -356,6 +405,31 @@
 `define AUDIO
 `define AUDIO_SD
 `define AUDIO_MIXER
+
+// GPIO off in the plain board build, for the same reason as Obst above
+// but harder: Lakritz has exactly ONE PMOD connector and the serial
+// console is on it (boards/lakritz_v0.lpf puts UART0_TX/RX on B12/B13,
+// which are PMOD_A2 and PMOD_A3). A GPIO port here is therefore not an
+// addition, it is a swap, and the console goes away with it.
+//
+//     ./release/zrelease build lakritz_gpio
+//
+// builds exactly that: GPIO port 0 on PMOD A, `UART0 removed, and
+// rtl/uart_null.v answering the console window so the BIOS and kernel
+// print into a hole instead of hanging on a UART that is not there.
+// The machine still comes up on HDMI with a keyboard, which is the
+// only reason this is a sane thing to ship at all.
+//`define GPIO_PORT0
+
+// UART1 is not offered on Lakritz at all, and that is a board fact
+// rather than an omission: it has ONE PMOD connector and the console
+// is on it. A second serial port would mean no first one, which is a
+// configuration nobody wants -- unlike lakritz_gpio, where giving up
+// the console buys eight pins that HDMI and a keyboard cannot
+// replace. Two serial ports and no console is just one serial port
+// with extra steps.
+//
+// Obst has two connectors; see obst_uart_uart1 there.
 
 `elsif BOARD_MOZART_ML1
 
@@ -416,6 +490,31 @@
 // 46875Hz -- the only rate whose S/PDIF half-cell is an exact whole
 // number of sys_clk. See the `AUDIO_SPDIF note above.
 `define AUDIO_RATE_RESET 8'd16
+
+// GPIO on the 6-pin PMOD, four pins, off by default.
+//
+// TWO reasons it is not simply uncommentable here. The connector has
+// four signal pins rather than eight, so the port is declared NARROW
+// (rtl/sysctl.v) -- and pin 1 is A13, which is the optical S/PDIF
+// output. `AUDIO_SPDIF has to go, and on this board that is the ONLY
+// audio output, so the trade is optical audio or four GPIO pins.
+//
+//     ./release/zrelease build sergei_gpio
+//
+// does both. See docs/gpio.md.
+//
+// Software still sees an eight-bit port: DIR and OUT bits 4-7 exist
+// and drive nothing, and IN bits 4-7 read 0 where a real floating pin
+// would read 1 (the pull-ups). That asymmetry is the cost of not
+// carrying a per-port pin-count register on every board for one
+// connector on one board.
+// A hand build ALSO needs boards/sergei_ml1.lpf edited -- comment out
+// the AUD_OPTICAL LOCATE and uncomment the four GPIO ones. Removing
+// `AUDIO_SPDIF here deletes the port but not the constraint, and a
+// LOCATE naming a port that does not exist is only a warning, so the
+// build completes with GPIO0[0] quietly not working. See that file.
+//`define GPIO_PORT0
+//`define GPIO_PORT0_NARROW
 
 `elsif BOARD_LEBKUCHEN
 

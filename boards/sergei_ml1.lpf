@@ -22,9 +22,60 @@ IOBUF PORT "CSPI_MISO" IO_TYPE=LVCMOS33;
 LOCATE COMP "CSPI_MOSI" SITE "T8";
 IOBUF PORT "CSPI_MOSI" IO_TYPE=LVCMOS33;
 
+# PMOD A ball map. Six pins, four of them signals -- so a GPIO port
+# here is half width. Duplicated in machine-readable form as pmod.a in
+# release/hw/boards/sergei_ml1.spec.
+#
+#   pin   ball
+#   1     A13     also the optical S/PDIF output, below -- and it
+#                   reaches the connector THROUGH that transmitter's
+#                   series resistor, so as a GPIO it is output-only:
+#                   the load holds it low against the internal
+#                   pull-up and it can never read high. Measured, not
+#                   assumed. See release/targets/sergei_gpio.spec.
+#   2     R12
+#   3     T13
+#   4     T14
+
 # Optical SPDIF audio output (shared with PMOD_A1)
 LOCATE COMP "AUD_OPTICAL" SITE "A13";
 IOBUF PORT "AUD_OPTICAL" IO_TYPE=LVCMOS33;
+
+# PMOD A (GPIO, 4 pins)
+#
+# Commented out because pin 1 IS the line above: A13 carries either the
+# optical output or GPIO0[0], never both.
+#
+# A HAND BUILD NEEDS THREE EDITS, NOT TWO, and the third is easy to
+# miss:
+#
+#   1. comment out `AUDIO_SPDIF in rtl/boards.vh's BOARD_SERGEI_ML1
+#   2. uncomment `GPIO_PORT0 and `GPIO_PORT0_NARROW there
+#   3. COMMENT OUT THE AUD_OPTICAL LOCATE ABOVE, and uncomment the
+#      four lines below
+#
+# Miss (3) and two COMPs claim A13. Removing `AUDIO_SPDIF deletes the
+# PORT but not this file's constraint on it, and a LOCATE naming a
+# port that no longer exists is a warning rather than an error -- so
+# the build still completes and GPIO0[0] is the pin that quietly does
+# not work.
+#
+# The release path has none of this: `./release/zrelease build
+# sergei_gpio` generates the four constraints and drops the
+# AUD_OPTICAL one automatically, because a PMOD spec takes over every
+# ball in its port.
+#
+# The supported path is `./release/zrelease build sergei_gpio`, which
+# generates these from release/hw/pmods/gpio4.spec and drops the
+# AUD_OPTICAL constraint above automatically.
+#LOCATE COMP "GPIO0[0]" SITE "A13";				# PMODA1
+#IOBUF PORT "GPIO0[0]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+#LOCATE COMP "GPIO0[1]" SITE "R12";				# PMODA2
+#IOBUF PORT "GPIO0[1]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+#LOCATE COMP "GPIO0[2]" SITE "T13";				# PMODA3
+#IOBUF PORT "GPIO0[2]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+#LOCATE COMP "GPIO0[3]" SITE "T14";				# PMODA4
+#IOBUF PORT "GPIO0[3]" IO_TYPE=LVCMOS33 PULLMODE=UP;
 
 # UART Debug
 LOCATE COMP "UART0_TX" SITE "B3";

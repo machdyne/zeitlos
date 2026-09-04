@@ -50,11 +50,20 @@
 
 // register map -- word-addressed at the hardware level, see
 // rtl/csrs.v's own header comment for the authoritative description.
-#define reg_csr_magic    (*(volatile uint32_t*)0x70000000)
-#define reg_csr_mem_mb   (*(volatile uint32_t*)0x70000004)
-#define reg_csr_features (*(volatile uint32_t*)0x70000008)
+#define reg_csr_magic     (*(volatile uint32_t*)0x70000000)
+#define reg_csr_mem_mb    (*(volatile uint32_t*)0x70000004)
+#define reg_csr_features  (*(volatile uint32_t*)0x70000008)
+#define reg_csr_features2 (*(volatile uint32_t*)0x7000000c)
 
 #define Z_CSR_MAGIC 0x5A454954u	// "ZEIT" -- see rtl/csrs.v
+
+// Top half of FEATURES2. Reads back in every bitstream that HAS a
+// FEATURES2; a bitstream that predates it answers 0x7000_000c from
+// csrs.v's default case, which returns 0 -- and 0 is exactly what a
+// working block reporting "no GPIO, no UART1" also returns. Checking
+// this half is the only way to tell those apart. z_soc_has_feature2()
+// below does it; prefer that over reading the register directly.
+#define Z_CSR_FEATURES2_SIG 0x5A46u	// "ZF" -- see rtl/csrs.v
 
 // -- system clock --
 //
@@ -211,6 +220,65 @@
 // deliberately -- a one-board peripheral stays out of the way of
 // anything universal that comes later. See docs/esp32link.md.
 #define Z_FEATURE_ESP32_LINK  (1u << 30)
+
+// BIT 31 OF FEATURES IS THE LAST ONE AND IS DELIBERATELY UNSPENT.
+// Bits 0-30 above are all assigned. When GPIO and UART1 arrived
+// together they needed two bits, which is what forced the question --
+// and spending the last one on the first of them would have left the
+// second with nowhere to go and the next feature after that in the
+// same position. So the register file grew a second word instead (see
+// below), and this bit is kept as the escape hatch for something that
+// genuinely has to be reachable from a single 32-bit read.
+
+// -- FEATURES2 (rtl/csrs.v word 3, 0x7000_000c) --
+//
+// The continuation of the bitmask above. KEEP IN SYNC with
+// rtl/csrs.vh's CSR_FEATURES2 localparam, exactly as the Z_FEATURE_*
+// bits are kept in sync with CSR_FEATURES -- bit position is the only
+// thing that has to match between the two sides and nothing checks
+// that it does.
+//
+// Only sixteen bits, because the top half is a signature (see
+// Z_CSR_FEATURES2_SIG above for why one is needed here in particular).
+// When these fill, FEATURES3 goes at word 4 with the same shape and
+// the same helper below; rtl/csrs.v reserves words 4-7 for that and
+// says so.
+//
+// ALWAYS go through z_soc_has_feature2() rather than reading
+// reg_csr_features2 yourself. Unlike FEATURES, where a missing block
+// and a clear bit both correctly mean "don't use it", here a raw read
+// on an older bitstream returns a plausible-looking zero that the
+// signature check is the only defence against.
+
+// rtl/gpio.v with at least one port that has pins.
+//
+// NOT "the GPIO block exists" -- it always exists now, on every board,
+// because it also owns the LED registers and software probes its
+// MAGIC (see rtl/gpio.v's header on why a block that gets probed must
+// not be one of the things that can be missing). A bit meaning "the
+// block is instantiated" would be a constant 1 and would tell nobody
+// anything. This bit means there is somewhere for a pin to go.
+//
+// For the port COUNT, read gpio.v's own CONFIG register --
+// z_gpio_port_count() (sw/common/zgpio.h). This bit says "at least
+// one"; that register says how many.
+#define Z_FEATURE2_GPIO       (1u << 0)
+
+// A second 16550 at 0xf000_0100 that is AVAILABLE TO SOFTWARE as a
+// general-purpose serial port. UART0 is the console and is never this.
+//
+// Deliberately clear on a board with `ESP32_LINK, even though such a
+// board does have a UART1 and always has: on the ULX3S that UART is
+// soldered to the on-board ESP32 and is sw/apps/net's data plane. It
+// has no header, no connector and no second owner. A bit that said
+// "this board has a serial port you can open" would be true of the
+// gateware and false of the board, and an app that believed it would
+// take the network down to say hello to nothing. Z_FEATURE_ESP32_LINK
+// is how software finds that UART, and it always was.
+//
+// So: this bit means there is a second 16550 AND it is yours. See
+// docs/uart1.md.
+#define Z_FEATURE2_UART1      (1u << 1)
 // -- feature table (sw/common/zsoc.c) --
 //
 // The human-readable half of the Z_FEATURE_* bits above, kept in the
@@ -250,6 +318,20 @@ typedef enum {
 	// rows in zsoc.c stay sorted by group, which consumers rely on.
 	Z_FEAT_GROUP_AUDIO,
 	Z_FEAT_GROUP_LED,
+	// GPIO and the general-purpose UART1 -- the FEATURES2 features.
+	//
+	// LAST, and that is not arbitrary. Consumers walk the tables in
+	// order and start a new line whenever the group changes, so the
+	// rows have to be sorted by group; there are now TWO tables
+	// (z_soc_features and z_soc_features2) walked back to back, and
+	// keeping every FEATURES2 group after every FEATURES group is
+	// what lets the second table simply continue where the first
+	// left off instead of needing a merge.
+	//
+	// Adding a FEATURES2 group means adding it HERE, after this one,
+	// and adding its name to z_soc_feature_groups[] in the same
+	// position -- see the warning below, which applies identically.
+	Z_FEAT_GROUP_IO,
 	// Adding a group here REQUIRES adding its display name to
 	// z_soc_feature_groups[] in zsoc.c, at the same position. That
 	// table is indexed by this enum and nothing links the two but
@@ -270,6 +352,20 @@ typedef struct {
 // Sorted by `group` -- see zsoc.c on why that matters to consumers.
 extern const z_feature_info_t z_soc_features[];
 extern const int z_soc_features_count;
+
+// The same, for the FEATURES2 bits. A SECOND TABLE rather than a
+// `word` column on the first one: adding a column would have meant
+// editing all thirty existing rows to say "0", and every future row
+// would carry a field that is almost always the same value. The cost
+// of the split is that a consumer walks two arrays instead of one,
+// which is three lines in k_soc_report() (sw/os/kernel.c) and nothing
+// anywhere else.
+//
+// Test these with z_soc_has_feature2(), not z_soc_has_feature() --
+// they are bits in a different register and the two are not
+// interchangeable.
+extern const z_feature_info_t z_soc_features2[];
+extern const int z_soc_features2_count;
 
 // Indexed by z_feat_group_t, padded to a common width for column
 // output.
@@ -309,6 +405,36 @@ static inline uint32_t z_soc_mem_mb(void) {
 static inline bool z_soc_has_feature(uint32_t feature) {
 	if (!z_soc_csrs_present()) return false;
 	return (reg_csr_features & feature) != 0;
+}
+
+// true only if this bitstream actually HAS a FEATURES2 register --
+// i.e. it is new enough for the answers below to mean anything.
+//
+// This check has no equivalent for FEATURES, and the difference is
+// worth understanding rather than copying. A bitstream without
+// rtl/csrs.v at all fails z_soc_csrs_present() and every query
+// correctly returns "can't confirm". But a bitstream WITH csrs.v and
+// WITHOUT this register passes that check and then answers word 3
+// from csrs.v's default case, which returns a clean 32'h0 -- so
+// reg_csr_features2 reads as a perfectly well-formed "no features",
+// indistinguishable from a current bitstream on a board that has
+// neither GPIO nor a spare UART. The signature in the top half is the
+// only thing that separates those two, which is why it is there.
+static inline bool z_soc_features2_present(void) {
+	if (!z_soc_csrs_present()) return false;
+	return ((reg_csr_features2 >> 16) & 0xffffu) == Z_CSR_FEATURES2_SIG;
+}
+
+// true only if FEATURES2 is present AND `feature` (one of the
+// Z_FEATURE2_* bits) was actually synthesized into this bitstream.
+//
+// Same contract as z_soc_has_feature(): false means "not confirmed
+// present", which covers both "confirmed absent" and "this bitstream
+// cannot answer". Do not read reg_csr_features2 directly -- see
+// z_soc_features2_present() directly above for what goes wrong.
+static inline bool z_soc_has_feature2(uint32_t feature) {
+	if (!z_soc_features2_present()) return false;
+	return (reg_csr_features2 & feature) != 0;
 }
 
 // Name of the CPU core in the running bitstream. Returns "unknown" if

@@ -1153,6 +1153,192 @@ one-shot at a prompt; a Scheme loop calling it sixty times a second is
 not what this interpreter is for, and the answer to wanting that is a C
 program against `sw/common/zgame.h`.
 
+### GPIO -- IMPLEMENTED
+
+| Procedure | Behavior |
+|---|---|
+| `(gpio-ports)` | how many GPIO ports this bitstream has pins for; `0` if none |
+| `(gpio-dir p)` / `(gpio-dir p mask)` | the port's DIR register, one bit per pin, 1 = output. Returns what it reads back as |
+| `(gpio-out p)` / `(gpio-out p v)` | the port's OUT register. Not the pins |
+| `(gpio-in p)` | the pins, as a number. Read-only |
+| `(gpio-mode p n)` / `(gpio-mode p n m)` | `"in"`, `"out"` or `"od"`. Returns the mode afterwards |
+| `(gpio-get p n)` | the pin, `#t` or `#f` |
+| `(gpio-set p n v)` | drive it. Returns the pin afterwards |
+| `(gpio-toggle p n)` | flip OUT. Returns the pin afterwards |
+| `(gpio-od p n v)` | open-drain write; `v` is the level the line ends up at |
+| `(led)` / `(led v)` | the board LED |
+| `(leds)` / `(leds v)` | the `` `LED_DEBUG `` LED bar, as a number |
+
+See `docs/gpio.md`.
+
+**Ports and pins are numbers, and that is what makes bare-word syntax
+work here.** `gpio-set 0 3 1` reaches `(gpio-set 0 3 1)` with no
+quoting, because a token that parses wholly as a number passes through
+unquoted (\S1b). An earlier design used single-token pin names --
+`"B3"` -- and every one of these procedures would have had to unpack a
+string that arrived quoted. It was dropped for an unrelated and better
+reason (letters already mean PMOD connectors in `release/hw/boards/*.spec`),
+but this is what was gained.
+
+**Whole-port procedures are named after the registers; per-pin ones are
+not.** `gpio-dir`, `gpio-out` and `gpio-in` are what `docs/gpio.md`
+documents and what somebody reading a register dump is holding in their
+head. At the per-pin level nobody is thinking about registers, so those
+get verbs.
+
+**Setters take `#t`/`#f` or `1`/`0`, and `0` is false.** That last part
+deviates from Scheme, where every number is true, and it is deliberate:
+`(gpio-set 0 3 0)` meaning "drive it high" would be an afternoon lost,
+and the shell's own `gpio 0 3 0` (`sw/os/sh.c`) means low. Accepting
+both spellings means `(gpio-set 0 3 (gpio-get 0 2))` mirrors a pin and
+`gpio-set 0 3 1` still works from the bare prompt.
+
+Implemented with `zapi_arg_truthy()`, which needs no change to `ms.c`:
+`#t` and `#f` are singletons in the interpreter, so `ms_mk_bool(false)`
+hands back the one and only `#f` object and identity against it is the
+entire test -- exactly `ms.c`'s own `truthy()`. Worth knowing about,
+since `ms_api.h` exports no boolean predicate and the next procedure
+that wants one has the same option.
+
+**Every reader returns the pin, not the argument.** `(gpio-set 0 3 1)`
+on a pin still configured as an input returns `#f`: nothing is driving
+it, and the value was staged for whenever it becomes an output. An echo
+would have been a lie, and this is a mistake worth having reported by
+the value rather than by a silent nothing.
+
+That matters most for `gpio-od`. On a working bus with a pull-up,
+`(gpio-od 0 3 #t)` reads back `#t`; on a bus another device is holding
+down it reads back `#f`. That is how you see a stuck I2C slave from a
+prompt, in one call.
+
+**`(gpio-mode p n "od")` reads back as `"in"`.** Open drain is not a
+hardware mode and there is nowhere to record it (`sw/common/zgpio.h`);
+a pin set that way is an input that `gpio-od` drives low on demand,
+which is exactly what DIR says about it.
+
+**Out-of-range ports panic rather than returning `#f`.** Unlike
+`(gamepad n)` above, where "there isn't one" is a real answer to a
+question, writing to a port that does not exist is silently dropped by
+the hardware with no way to report it -- so a panic is the only place a
+caller can find out they typed the wrong number. `(gpio-ports)` is the
+question form.
+
+`(led)` and `(leds)` are not gated on `(gpio-ports)`: they are words 0
+and 1 of the same block and exist on every board, with or without any
+GPIO pins.
+
+### I2C and SPI -- IMPLEMENTED
+
+Bit-banged over the GPIO pins above. There is no I2C or SPI hardware
+behind these; see `docs/i2c.md` and `docs/spi.md`.
+
+| Procedure | Behavior |
+|---|---|
+| `(i2c-init port scl sda [khz])` | bus handle, or `#f` if the bus is unusable right now |
+| `(i2c-scan bus)` | 7-bit addresses that answered, as a list |
+| `(i2c-write bus addr data)` | `data` is a list of bytes or a string |
+| `(i2c-read bus addr [n])` | list of bytes, or `#f` |
+| `(i2c-reg bus addr reg)` / `(i2c-reg bus addr reg val)` | read or write one register |
+| `(i2c-recover bus)` | clock a stuck slave off SDA |
+| `(i2c-error)` | why the last i2c call failed |
+| `(i2c-khz bus)` | rate the last transfer actually managed |
+| `(spi-init port sck mosi miso cs [mode [khz]])` | bus handle; `-1` for a pin the device lacks |
+| `(spi-select bus v)` | assert or release CS |
+| `(spi-xfer bus data)` / `(spi-xfer bus n)` | send bytes, or `n` idle bytes, and return what came back |
+
+**Buses are handles, and handles are numbers**, the same convention
+window handles use. Passing the pins to every call instead would mean
+five arguments on every read, no place to keep the derived timing, and
+reconfiguring a bus meaning "remember to change it everywhere".
+
+**A bus lives on one port.** The C API lets each pin be on any port;
+these take a single port and pin numbers within it. Not a
+simplification for its own sake: `(spi-init)` would otherwise need ten
+arguments, and a four-pin SPI device is plugged into one PMOD
+connector essentially always. A bus genuinely spanning two ports is a
+C program.
+
+**Bus failures return `#f`; caller mistakes raise.** "Nothing
+answered" is an ordinary result on an I2C bus — it is what a scan is
+made of, and what a device that is still busy gives you — so a
+procedure that blew up the whole expression on a NACK would be
+unusable in a loop. A bad handle or a byte outside 0-255 is the
+caller's error and raises normally.
+
+`(i2c-error)` is how to tell which happened, and the distinction is
+the point: `"nack"` means the bus works and nobody answered, so a
+retry might help; `"timeout"` means a released line never came back
+up, which is a missing pull-up or a short and no amount of retrying
+will fix it.
+
+**Addresses are 7-bit** — `0x3c`, not `0x78`. Getting this wrong is
+the single most common I2C mistake and the only defence is to be
+consistent about it and say so.
+
+`i2c-write` accepts a string as well as a list because
+`(i2c-write bus 60 "hello")` is what anyone driving a character
+display wants to type.
+
+`(spi-xfer bus n)` with a count rather than a list is the read case:
+SPI is full duplex, so reading means sending something, and it sends
+`255` — which is what a device expects to see while it is talking, and
+is not a meaningful command byte on most parts the way `0` is.
+
+**`spi-xfer` does not touch CS**; wrap it in `spi-select` calls.
+Almost every real device wants several transfers inside one selection
+(a command, an address, then a burst), and a select-per-transfer API
+cannot express that.
+
+At most 32 bytes per call and 2 open buses of each kind -- this is the
+interactive layer, and a driver moving more than that belongs in C.
+
+### UART1 -- IMPLEMENTED
+
+A second 16550, independent of the console. See `docs/uart1.md`.
+
+| Procedure | Behavior |
+|---|---|
+| `(uart1?)` | is there a general-purpose UART1 in this bitstream |
+| `(uart1-open [baud])` | 8N1, default 115200. `#f` if absent or the rate is unreachable |
+| `(uart1-close)` | |
+| `(uart1-baud-error baud)` | how far off that rate would be, in percent |
+| `(uart1-write data)` | string or list of bytes; blocks. Returns how many went |
+| `(uart1-read [n])` | list of bytes; never blocks. `()` if nothing waiting |
+| `(uart1-ready?)` | is a byte waiting |
+| `(uart1-status)` | errors since the last call: `(overrun)`, `(framing)`, `()`, ... |
+
+**UART0 is deliberately absent from this API**, and from
+`sw/common/zuart.h`. It is the console -- `sw/bios/bios.c` writes to it
+before anything else in the system exists. A Scheme one-liner that
+changed its baud rate would take the machine's only diagnostic channel
+with it.
+
+**These talk to UART1 directly**, so this process competes with
+`sw/apps/serial` for it if that is running. Nothing arbitrates MMIO
+(`docs/app_runtime.md`). The honest reading: these are for poking at a
+serial port from a prompt -- send an AT command, see what a device says
+on power-up, check a baud rate -- and repl's `serial` command is for
+actually using one. Doing both at once produces interleaved bytes and
+two processes that each think they set the baud rate.
+
+**`(uart1-read)` never blocks** and returns what is there rather than
+waiting for `n`. A blocking read at a prompt with nothing on the other
+end would hang the REPL with no way out, and the FIFO is 16 bytes deep
+so there is rarely more to wait for. Call it again.
+
+**`(uart1-baud-error)` is worth asking before blaming a cable.** At
+48MHz the divisor makes 921600 land on 1 Mbaud -- 8.5% off, far outside
+what a UART tolerates -- so `(uart1-open 921600)` returns `#f` rather
+than silently giving you a port that works at 115200 and produces
+garbage above it. `docs/uart1.md` has the table.
+
+**`(uart1-status)` is sticky and cleared by reading**, because the
+16550's own error bits are cleared by any read of its status register
+and every data read goes past it. `(overrun)` means bytes were LOST,
+silently, from the middle of the stream -- on a polled receiver at
+115200 that is a real possibility, not a theoretical one: one
+scheduler slice is 15.7 bytes of arrival against a 16-byte FIFO.
+
 ### Messaging -- IMPLEMENTED
 
 | Procedure | Behavior |

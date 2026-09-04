@@ -2163,3 +2163,42 @@ not touched it stays accurate and the compare would draw only what
 changed. Dropping that invalidate makes scrolling cheaper than the
 pre-blit baseline with no blit involved at all -- but it should land
 as its own change, measured on its own.
+
+## Copies, the scissor, and fully visible windows
+
+Two things must both be right before a VRAM-to-VRAM copy is issued.
+
+**The scissor must be programmed.** It is persistent hardware state
+(`gpu_blit_clip_*`, registers 20..23), so a rectangle left behind by an
+earlier, unrelated operation silently clips the next copy. Every
+blitter primitive is supposed to program it -- `z_gfx_blit_scissor()`
+says so in as many words -- but `z_fb_hw_blit_vram()` did not: it set
+`CTRL_CLIP` and inherited whatever was there. After a window had drawn
+a row of text, that leftover was a single text row. It now iterates the
+visible region like the fills do.
+
+**A copy must be refused only when it actually cannot be clipped.**
+`copy_region_allows()` refused whenever a region was set at all. That
+is safe but far too broad: a FULLY VISIBLE window still has a region --
+one rectangle covering all of it -- so hardware scrolling silently
+stopped for every unoccluded window the moment apps began handling
+`Z_WM_SET_CLIP`. In `read` the scroll returned without moving a pixel
+and only the strip drawn afterwards changed, which looks like a broken
+scroll rather than a declined one.
+
+The rule now: allowed when the destination rectangle lies entirely
+inside a SINGLE region rectangle. The source-alignment hazard only
+arises when the scissor moves the first written word, so a scissor that
+cannot cut the copy cannot corrupt it -- and nothing can be written
+outside the region, because the destination started inside it. Word
+alignment of the region's left edge is irrelevant in that case, since
+that edge is never reached.
+
+Multiple rectangles are still refused. Their union may well contain the
+destination, but proving that needs coverage rather than containment,
+and an occluded window repainting instead is correct.
+
+**Still outstanding:** `hw_blit_mem_core()` has the same missing
+scissor programming as `z_fb_hw_blit_vram()` had. It affects `draw`,
+`gamedemo` and `view` rather than scrolling, so it was left alone here
+rather than changed without a way to test it.

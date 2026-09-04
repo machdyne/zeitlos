@@ -333,9 +333,18 @@ static void bar(int cx, int cy, int w, uint32_t used, uint32_t total) {
 // Feature bits worth showing, in the order they read best. Only the
 // ones actually present are drawn, so this is a menu rather than a
 // list -- a board without ethernet simply doesn't show it.
+//
+// `f2` says which register the bit lives in: 0 for FEATURES, 1 for
+// FEATURES2 (rtl/csrs.v word 3). A flag rather than two tables,
+// because everything downstream of here -- the wrap arithmetic, the
+// draw loop, the ordering -- wants one list, and the tags read best
+// interleaved by subject rather than grouped by which CSR word they
+// happen to come from. feat_present() below is the only place that
+// cares.
 typedef struct {
 	uint32_t	bit;
 	const char	*name;
+	uint8_t		f2;
 } feat_t;
 
 static const feat_t features[] = {
@@ -355,8 +364,24 @@ static const feat_t features[] = {
 	{ Z_FEATURE_ETH_RMII,   "ETH"    },
 	{ Z_FEATURE_SPI_ETH,    "ETHSPI" },
 	{ Z_FEATURE_UART0,      "UART"   },
+	{ Z_FEATURE2_UART1,     "UART1",  1 },
+	{ Z_FEATURE2_GPIO,      "GPIO",   1 },
 };
 #define FEAT_COUNT (int)(sizeof(features) / sizeof(features[0]))
+
+// Is this tag's feature actually in the running bitstream?
+//
+// The FEATURES2 half MUST go through z_soc_has_feature2() rather than
+// masking a register read like the FEATURES half does. A bitstream
+// built before that register existed answers word 3 with a clean zero
+// -- which is a perfectly well-formed "no GPIO, no UART1" -- so a raw
+// mask would quietly report the right answer for the wrong reason on
+// current gateware and the wrong answer on nothing at all. The helper
+// checks the signature. See sw/common/zsoc.h.
+static bool feat_present(int i) {
+	if (features[i].f2) return z_soc_has_feature2(features[i].bit);
+	return (reg_csr_features & features[i].bit) != 0;
+}
 
 // How many lines the feature tags wrap to at this width. Computed
 // rather than assumed, since which features exist varies per board.
@@ -366,11 +391,10 @@ static int feature_line_count(int cw) {
 	int per = avail / z_font_5x8.w;
 	if (per < 1) return 1;
 
-	uint32_t f = reg_csr_features;
 	int col = 0, lines = 1;
 
 	for (int i = 0; i < FEAT_COUNT; i++) {
-		if (!(f & features[i].bit)) continue;
+		if (!feat_present(i)) continue;
 		int need = (int)strlen(features[i].name) + 1;
 		if (col && col + need > per) { lines++; col = 0; }
 		col += need;
@@ -537,7 +561,6 @@ static void draw_static(void) {
 	// feature tags, wrapped
 	fill(0, y_feat, cw, feat_lines * LINE_H, 0);
 
-	uint32_t f = reg_csr_features;
 	int per = (cw - 2 * MARGIN) / z_font_5x8.w;
 	int col = 0, line = 0;
 
@@ -546,7 +569,7 @@ static void draw_static(void) {
 
 	for (int i = 0; i < FEAT_COUNT; i++) {
 
-		if (!(f & features[i].bit)) continue;
+		if (!feat_present(i)) continue;
 
 		int need = (int)strlen(features[i].name) + 1;
 

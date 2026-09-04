@@ -20,6 +20,17 @@ flash_cmd = openFPGALoader -c dirtyJtag -f -o 0 {file}
 
 core_apps = wm net repl term
 
+# PMOD port. SIX pins, four of them signals -- so a GPIO port here is
+# half width (release/hw/pmods/gpio4.spec).
+#
+# Pin 1 is A13, which the base .lpf also uses for the optical S/PDIF
+# output. A target that plugs something into this port takes over
+# every ball in it, so the generator drops that constraint
+# automatically -- but `AUDIO_SPDIF still has to be removed for the
+# PORT to go away too. See targets/sergei_gpio.spec.
+pmod.a =
+	1=A13  2=R12  3=T13  4=T14
+
 defines =
     FPGA_ECP5
     OSC48

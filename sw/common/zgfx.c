@@ -859,25 +859,52 @@ void z_fb_hw_scroll_probe(uint32_t expect_adr) {
 // terminal already does when wm asks it to.
 //
 // Returns true when the caller should go ahead unclipped.
-static bool copy_region_allows(void) {
+//
+// The case the comment above left open is now implemented, because a
+// caller does need it: a window that is FULLY VISIBLE still has a
+// region -- one rectangle, covering all of it -- and refusing on
+// "a region is set" alone disabled hardware scrolling for every
+// unoccluded window. `read` and `text` both scroll, and both silently
+// stopped: the copy returned without moving a pixel, so only the strip
+// the caller drew afterwards changed. That looks exactly like a broken
+// scroll rather than a declined one.
+//
+// When the destination rectangle lies entirely inside a single region
+// rectangle, the scissor cannot cut this copy. The source-alignment
+// hazard only arises when the scissor moves the first written word, so
+// if it cannot cut, there is nothing to get wrong -- and word alignment
+// of the region's left edge is irrelevant, because that edge is never
+// reached. Nothing can be written outside the region either, since the
+// destination is inside it to begin with.
+//
+// Multiple rectangles are still refused. The union of them might well
+// contain the destination, but proving that needs rectangle coverage
+// rather than containment, and an occluded window repainting is
+// correct and already what happens.
+static bool copy_region_allows_rect(int x, int y, int w, int h) {
 
-	if (z_gfx_visible_count() == 0) return true;
+	int n = z_gfx_visible_count();
 
-	// A single rectangle that is word-aligned on its left edge and
-	// covers the full width it needs is the one case that IS safe --
-	// but proving that here needs the destination rectangle, which
-	// these entry points have. Left for when a caller actually needs
-	// it; today nothing scrolls while occluded except by repainting.
-	return false;
+	if (n == 0) return true;
+	if (n != 1) return false;
+	if (w <= 0 || h <= 0) return false;
+
+	z_clip_t r;
+
+	if (!z_gfx_visible_clip(0, NULL, &r)) return false;
+
+	return (x >= r.x0 && y >= r.y0 &&
+		x + w - 1 <= r.x1 && y + h - 1 <= r.y1);
 
 }
 
 void z_fb_hw_scroll(int x, int y, int w, int h, int dy) {
 
-	// See copy_region_allows(): a partially occluded window must
+	// See copy_region_allows_rect(): a partially occluded window must
 	// repaint rather than scroll, because the blitter cannot clip a
 	// copy without either corrupting it or overrunning the region.
-	if (!copy_region_allows()) return;
+	// A fully visible one scrolls normally.
+	if (!copy_region_allows_rect(x, y, w, h)) return;
 
 	if (dy == 0 || w <= 0 || h <= 0) return;
 
@@ -1473,11 +1500,51 @@ bool z_fb_hw_blit_sprite_async(const void *data, const void *mask,
 		dst_x, dst_y, w, h, false);
 }
 
+static void hw_blit_vram_one(int src_x, int src_y,
+	int dst_x, int dst_y, int w, int h);
+
+// VRAM-to-VRAM copy, clipped to the visible region like every other
+// blitter primitive.
+//
+// This used to trigger the blit directly, with CTRL_CLIP set but
+// WITHOUT programming the scissor. The scissor is persistent hardware
+// state -- see z_gfx_blit_scissor() -- so the copy inherited whatever
+// rectangle the previous, unrelated operation had left in it. After a
+// window had drawn a row of text, that leftover was a single text
+// row, and z_fb_hw_scroll()'s copy was clipped to it: the scroll moved
+// almost nothing, and only the newly drawn bottom line appeared to
+// change. Same class as the raster/blit hazards documented in zgfx.h,
+// and the reason the comment on z_gfx_blit_scissor() says EVERY
+// primitive must program it.
 void z_fb_hw_blit_vram(int src_x, int src_y,
 	int dst_x, int dst_y, int w, int h) {
 
-	// See copy_region_allows() above.
-	if (!copy_region_allows()) return;
+	int n = z_gfx_visible_count();
+
+	if (n == 0) {
+		// No region set: full screen, but still program the scissor
+		// rather than inherit one.
+		z_gfx_blit_scissor_reset();
+		hw_blit_vram_one(src_x, src_y, dst_x, dst_y, w, h);
+		return;
+	}
+
+	for (int i = 0; i < n; i++) {
+		if (!z_gfx_blit_scissor(i, NULL)) continue;
+		hw_blit_vram_one(src_x, src_y, dst_x, dst_y, w, h);
+	}
+
+	z_gfx_blit_scissor_reset();
+
+}
+
+static void hw_blit_vram_one(int src_x, int src_y,
+	int dst_x, int dst_y, int w, int h) {
+
+	// See copy_region_allows_rect() above. Tested against THIS copy's
+	// destination, so a fully visible window copies normally and an
+	// occluded one still declines.
+	if (!copy_region_allows_rect(dst_x, dst_y, w, h)) return;
 
 	// Only the destination is clamped here, and only against the visible
 	// screen. The source is deliberately NOT clamped to Z_SCREEN_H: on a

@@ -341,7 +341,7 @@ module wb_icache #(
     // -- control register slave ------------------------------------
     //
     // cfg_adr_i is word-addressed, matching every other simple slave
-    // in this codebase (see rtl/csrs.v, rtl/debug.v).
+    // in this codebase (see rtl/csrs.v, rtl/gpio.v).
     //
     //   0  CTRL    bit0 = enable, bit1 = flush (write 1, self-clearing)
     //   1  HITS    fetch hits since last flush

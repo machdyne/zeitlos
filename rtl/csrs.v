@@ -20,7 +20,8 @@
  *
  * Deliberately just a handful of read-only registers, no state
  * machine, no side effects on read -- same "keep it simple" spirit
- * as rtl/debug.v, which this file's own structure closely follows.
+ * as rtl/gpio.v's LED half, which this file's own structure grew
+ * out of.
  *
  * Unlike every other peripheral in rtl/sysctl.v, this one has NO
  * `ifdef guarding whether it exists at all -- it's always
@@ -31,7 +32,7 @@
  *
  * Register map (word-addressed -- wb_adr_i here is
  * rtl/sysctl.v's wbm_adr_sel_word, matching every other simple slave
- * in this codebase, e.g. rtl/debug.v):
+ * in this codebase, e.g. rtl/gpio.v):
  *
  *   0  MAGIC     fixed 32'h5A45_4954 ("ZEIT" in ASCII). Check this
  *                FIRST, before trusting any other register here --
@@ -56,11 +57,43 @@
  *                together and kept in sync deliberately, same as
  *                e.g. rtl/usb_hid.v/sw/common/zkbd.h's own HID-usage
  *                translation is split the same way.
+ *   3  FEATURES2 { 16'h5A46, features2[15:0] } -- the continuation
+ *                of FEATURES, which ran out. Bits 0 through 30 of
+ *                that register are assigned and bit 31 is the last
+ *                one; GPIO and UART1 arrived together and needed two,
+ *                so rather than spend the last bit and face the same
+ *                question immediately, the register file grew a
+ *                second word. Bit 31 of FEATURES is deliberately
+ *                still free.
+ *
+ *                THE SIGNATURE IS NOT DECORATION, and this is the
+ *                register that most needs one. A bitstream built
+ *                before this word existed answers a read here from
+ *                the default case below, which returns 0 -- and 0 is
+ *                indistinguishable from a perfectly working block
+ *                reporting "no GPIO, no UART1". Software checking the
+ *                top half gets a real answer either way. Same trick,
+ *                and the same reason for it, as rtl/socctl.v's
+ *                VIDEO_SIG and GAME_SIG.
+ *
+ *                Sixteen bits is not a lot, and that is fine: when
+ *                THIS one fills, FEATURES3 goes at word 4 with the
+ *                same signature in its top half and the same helper
+ *                shape in sw/common/zsoc.h. WORDS 4 THROUGH 7 ARE
+ *                RESERVED FOR EXACTLY THAT and read 0 today -- do not
+ *                put anything else there. The 0x7000_00xx window has
+ *                room for 64 of these words; the third one being the
+ *                second feature register rather than something
+ *                unrelated is what keeps the growth path obvious.
+ *   4-7          reserved -- FEATURES3 and onward. See above.
  */
 
 module csrs_wb #(
 	parameter MEM_MB = 1,
-	parameter FEATURES = 32'h0
+	parameter FEATURES = 32'h0,
+	// Only the low 16 bits are used -- the top half of the register
+	// is the signature. See the header.
+	parameter FEATURES2 = 32'h0
 )
 (
 	input wb_clk_i,
@@ -76,6 +109,10 @@ module csrs_wb #(
 );
 
 	localparam MAGIC = 32'h5A45_4954; // "ZEIT"
+
+	// Top half of FEATURES2 -- "ZF", zeitlos features. See the header
+	// on why a second signature is needed when MAGIC already exists.
+	localparam FEATURES2_SIG = 16'h5A46;
 
 	// Registered, like every other slave on this bus. It was
 	// combinational (`assign wb_ack_o = cyc && stb`) -- the ONE slave
@@ -103,6 +140,8 @@ module csrs_wb #(
 				(wb_adr_i == 32'd0) ? MAGIC :
 				(wb_adr_i == 32'd1) ? MEM_MB :
 				(wb_adr_i == 32'd2) ? FEATURES :
+				(wb_adr_i == 32'd3) ?
+					{ FEATURES2_SIG, FEATURES2[15:0] } :
 				32'h0;
 		end
 	end

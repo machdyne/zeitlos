@@ -13,7 +13,7 @@ through `rtl/audio_mixer.v` using generated waveforms.
 
 It is on the `wm` dock; `sw/data/icons/icon-midi.png` goes through
 `gen_dock_icon_data.py` like every other dock icon.
-    > run midi /MIDI/SONG.MID
+    > run midi /AUDIO/SONG.MID
 
 Requires a bitstream with `AUDIO_MIXER`. It refuses to run without one
 and says so, because there is no fallback worth having — see below.
@@ -297,6 +297,24 @@ was correct before there was a keyboard, when "paused" and "silent"
 meant the same thing; now they do not. `z_audio_start()` sets that bit
 at startup and `z_audio_stop()` clears it on the way out, and nothing
 in between goes near it. Silence is a frame of zeros.
+
+## Where the files live
+
+`/AUDIO`, then `/audio`, then the root — the **same directory**
+`sw/apps/track` and `sw/apps/play` use. One place for everything that
+makes a sound, rather than a folder per app: a card with `AUDIO`,
+`MIDI` and `MOD` directories makes you remember which app wanted which,
+and the only thing that actually distinguishes them is the extension.
+
+`.MOD` and `.WAV` files sitting alongside are simply not listed here,
+and this app's `.MID` files are not listed by the other two. The filter
+takes the **last** dot and requires exactly `mid` or `midi`, so
+`SONG.mid.wav` is correctly skipped rather than matched on the `.mid`
+in the middle.
+
+Both letter cases are tried because FatFs is built with `FF_USE_LFN 0`
+and matches 8.3 names case-insensitively, but the path handed to
+`f_opendir()` is taken as written.
 
 ## The keyboard
 

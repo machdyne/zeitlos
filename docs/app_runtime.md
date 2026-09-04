@@ -428,6 +428,16 @@ system and mailbox model these operate on; this file only exists to
 point at that one so app code and this document don't drift apart
 the way a few other things in this project already have.
 
+## Checking a panel before it reaches a screen
+
+An app with a laid-out panel can be drawn on the build machine and
+written out as an image -- `sw/common/tests/zrender.h`, and see
+`docs/window_manager.md`, "Rendering a panel on the build machine".
+
+Worth knowing about before laying out anything: it exists because a
+panel shipped wrong three times against a passing arithmetic test, and
+the same section documents the coordinate-space trap that caused it.
+
 ## Direct hardware register access
 
 `zeitlos.h` `#define`s every peripheral register this SoC exposes as
@@ -436,6 +446,14 @@ a plain volatile pointer dereference -- `reg_uart0_*`, `reg_led`/
 `gpu_blit_*` (blitter), `GLYPH_MEM_*`, `reg_eth`, `reg_mtu`. Any app
 can read/write any of these directly, with zero OS-level mediation --
 see "Trust model" below for what that means and doesn't mean.
+
+The GPIO ports (`rtl/gpio.v`) are the same kind of thing, but their
+registers live in `sw/common/zgpio.h` rather than here, with an API
+over the top -- the per-pin operations have to be single stores to the
+set/clear registers to be usable from a bit-bang loop, and that is
+knowledge worth having in one place instead of at each call site. See
+`docs/gpio.md`. `reg_led`/`reg_leds` above are words 0 and 1 of that
+same block, and keep working from `zeitlos.h` exactly as before.
 
 Most of the actual protocol/timing knowledge for using any of these
 correctly lives with their respective drivers/consumers, not here --

@@ -75,7 +75,7 @@
  * Word-addressed: wb_adr_i here is the low 3 bits of rtl/sysctl.v's
  * wbm_adr_sel_word, so register n is at byte address
  * 0x7000_0300 + 4n. Same convention as every other simple slave in
- * this codebase (rtl/debug.v, rtl/csrs.v, rtl/socctl.v).
+ * this codebase (rtl/gpio.v, rtl/csrs.v, rtl/socctl.v).
  *
  *   0  MAGIC  ro  fixed 32'h5A52_5443 ("ZRTC"). Check this before
  *                 trusting anything else here, for exactly the reason

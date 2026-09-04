@@ -20,7 +20,7 @@ RTL_PICO = \
 	rtl/spiflashro.v \
 	rtl/uart_null.v \
 	rtl/ethmac_rmii.v \
-	rtl/debug.v \
+	rtl/gpio.v \
 	rtl/csrs.v \
 	rtl/esp32_rxfifo.v \
 	rtl/socctl.v \

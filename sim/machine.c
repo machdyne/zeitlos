@@ -273,6 +273,110 @@ static void do_syscall(machine_t *m) {
 /* ------------------------------------------------------------------- */
 /* bus dispatch */
 
+/* -- GPIO (rtl/gpio.v) --------------------------------------------
+ *
+ * Enough of the block to run sw/common/zgpio.c and the bit-bang I2C
+ * and SPI libraries on top of it, without a board.
+ *
+ * THE PIN MODEL IS THE WHOLE POINT and is worth stating plainly,
+ * because a simulator that gets this wrong is worse than no simulator:
+ * it lets code pass that will fail on hardware. A pin reads as
+ *
+ *   driven by us            -> gpio_out bit
+ *   driven by the far end   -> gpio_ext_out bit
+ *   nobody driving          -> 1
+ *
+ * That last line is the pull-up (release/hw/pmods/gpio.spec sets
+ * PULLMODE=UP), and it is what makes the open-drain idiom behave here
+ * the way it does on a board: park OUT at 0, and DIR becomes the data
+ * with float meaning high. An I2C library developed against a model
+ * that returned 0 for a floating pin would appear to work and then
+ * read nothing but zeros from a real bus.
+ *
+ * BOTH DRIVING AT ONCE resolves to whatever we are driving, and that
+ * is a LIE -- on hardware it is contention, a hot pin and an
+ * indeterminate level. The model cannot represent that usefully, so it
+ * picks the answer that makes the bug quiet rather than loud, which is
+ * the one thing in here worth being suspicious of. Nothing currently
+ * sets gpio_ext_dir, so it cannot arise yet.
+ *
+ * Not modelled: the synchroniser (reads are immediate rather than two
+ * cycles late, which no software can tell apart) and the address
+ * aliasing gpio.v documents (the window is bounded at 8KB here, so an
+ * access above that reads as open bus rather than wrapping). Software
+ * that relies on either is wrong anyway.
+ */
+
+static uint32_t gpio_pin_state(machine_t *m, int p)
+{
+	/* pulled high wherever nobody is driving -- see the note above */
+	uint8_t undriven = (uint8_t)~(m->gpio_dir[p] | m->gpio_ext_dir[p]);
+	return (uint32_t)((m->gpio_out[p] & m->gpio_dir[p])
+	                | (m->gpio_ext_out[p] & m->gpio_ext_dir[p]
+	                   & (uint8_t)~m->gpio_dir[p])
+	                | undriven);
+}
+
+static uint32_t gpio_read(machine_t *m, uint32_t addr)
+{
+	uint32_t off = addr - ZS_GPIO_BASE;
+
+	if (off < 0x1000) {
+		switch (off) {
+		case 0x00: return m->reg_led;
+		case 0x04: return m->reg_leds;
+		case 0x08: return 0x5A475049u;                 /* MAGIC "ZGPI" */
+		case 0x0c: return 0x47500000u | ZS_GPIO_NPORTS; /* CONFIG "GP" */
+		default:   return 0;
+		}
+	}
+
+	{
+		uint32_t rel = off - 0x1000;
+		int p = (int)(rel / ZS_GPIO_PORT_SIZE);
+		uint32_t r = rel % ZS_GPIO_PORT_SIZE;
+
+		if (p >= ZS_GPIO_NPORTS) return 0;
+
+		switch (r) {
+		case 0x00: case 0x14: case 0x18: return m->gpio_dir[p];
+		case 0x04: case 0x0c: case 0x10: return m->gpio_out[p];
+		case 0x08: return gpio_pin_state(m, p);
+		default:   return 0;
+		}
+	}
+}
+
+static void gpio_write(machine_t *m, uint32_t addr, uint32_t val)
+{
+	uint32_t off = addr - ZS_GPIO_BASE;
+	uint8_t v = (uint8_t)(val & 0xff);
+
+	if (off < 0x1000) {
+		if (off == 0x00) m->reg_led = val;
+		else if (off == 0x04) m->reg_leds = val;
+		return;					/* MAGIC/CONFIG are read-only */
+	}
+
+	{
+		uint32_t rel = off - 0x1000;
+		int p = (int)(rel / ZS_GPIO_PORT_SIZE);
+		uint32_t r = rel % ZS_GPIO_PORT_SIZE;
+
+		if (p >= ZS_GPIO_NPORTS) return;	/* dropped, as in gpio.v */
+
+		switch (r) {
+		case 0x00: m->gpio_dir[p] = v; break;			/* DIR */
+		case 0x04: m->gpio_out[p] = v; break;			/* OUT */
+		case 0x0c: m->gpio_out[p] |= v; break;			/* OUTSET */
+		case 0x10: m->gpio_out[p] &= (uint8_t)~v; break;	/* OUTCLR */
+		case 0x14: m->gpio_dir[p] |= v; break;			/* DIRSET */
+		case 0x18: m->gpio_dir[p] &= (uint8_t)~v; break;	/* DIRCLR */
+		default: break;
+		}
+	}
+}
+
 uint32_t bus_read32(machine_t *m, uint32_t addr) {
 	if (addr < ZS_LOWMEM_SIZE) {
 		uint32_t v;
@@ -333,8 +437,8 @@ uint32_t bus_read32(machine_t *m, uint32_t addr) {
 		if (addr - ZS_USB_BASE == 0x0c) return m->usb_cursor;
 		return 0;
 	}
-	if (addr >= ZS_LED_BASE && addr < ZS_LED_BASE + 0x8) {
-		return (addr - ZS_LED_BASE == 0) ? m->reg_led : m->reg_leds;
+	if (addr >= ZS_GPIO_BASE && addr < ZS_GPIO_BASE + 0x2000) {
+		return gpio_read(m, addr);
 	}
 	/* MTU, SD card, anything else unmapped: open bus reads as 0 */
 	return 0;
@@ -404,8 +508,8 @@ void bus_write32(machine_t *m, uint32_t addr, uint32_t val) {
 		return;
 	}
 	if (addr >= ZS_USB_BASE && addr < ZS_USB_BASE + 0x10) return; /* read-only from app's POV */
-	if (addr >= ZS_LED_BASE && addr < ZS_LED_BASE + 0x8) {
-		if (addr - ZS_LED_BASE == 0) m->reg_led = val; else m->reg_leds = val;
+	if (addr >= ZS_GPIO_BASE && addr < ZS_GPIO_BASE + 0x2000) {
+		gpio_write(m, addr, val);
 		return;
 	}
 	/* MTU, SD card, anything else unmapped: open bus write, ignored */

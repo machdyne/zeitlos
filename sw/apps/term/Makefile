@@ -43,7 +43,8 @@ ifdef FONT
 override CFLAGS += -DTERM_FONT_NAME=$(FONT)
 endif
 
-OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zkbd.o zvt100.o zport.o term.o
+OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zkbd.o zvt100.o zport.o \
+	zdns.o zconnect.o term.o
 
 term: term.elf term.bin
 
@@ -70,6 +71,14 @@ zvt100.o:
 
 zport.o:
 	$(CC) $(CFLAGS) -c ../../common/zport.c -o zport.o
+
+# The F11 Open bar (term.c) -- shared with repl's port/serial/telnet/
+# ssh commands. zdns comes with it: telnet and ssh resolve hostnames.
+zdns.o:
+	$(CC) $(CFLAGS) -c ../../common/zdns.c -o zdns.o
+
+zconnect.o:
+	$(CC) $(CFLAGS) -c ../../common/zconnect.c -o zconnect.o
 
 term.o:
 	$(CC) $(CFLAGS) -c term.c -S -o term.asm

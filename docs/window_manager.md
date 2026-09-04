@@ -1121,6 +1121,123 @@ See `docs/app_runtime.md` for the full app-runtime picture this all
 sits within (`zeitlos.h/c`, the syscall trampoline, process startup)
 -- this document stays focused on the window manager's own protocol.
 
+## Two coordinate spaces, and the trap between them
+
+**`z_win_hw_line()` and `z_win_hw_box()` take absolute screen
+coordinates. Everything else an app draws with is content-relative.**
+
+| call | coordinates |
+|---|---|
+| `z_win_fill_rect()`, `z_win_draw_text()`, `z_win_clear()` | content-relative |
+| `zwidget.c` (`z_widget_t.x`/`.y`) | content-relative |
+| `z_win_hw_line()`, `z_win_hw_box()` | **absolute screen** |
+
+The reason is in the API's own history: apps using the hardware
+rasterizer typically already compute absolute coordinates (a 3D
+projection, a clock hand), so those two calls take over clip-region
+and IRQ-mask management but not coordinate translation.
+
+**This is a footgun and it has cost real time.** The two families sit
+next to each other in `zwin.h` and take identical-looking arguments,
+so mixing them is easy — and it does not fail loudly. Frames land at
+the window's screen position instead of its content origin: off by
+(2, `Z_WM_TITLEBAR_H`+2) with the window at the top-left of the
+screen, and off by the whole window position anywhere else. `sw/apps/logic`
+had every frame, rule and lamp outline drawn this way, and it was
+misdiagnosed twice as a spacing problem before anyone looked at a
+render.
+
+If a panel draws frames in content coordinates, wrap them once:
+
+```c
+static void abs_box(int x0, int y0, int x1, int y1, int color) {
+	z_clip_t clip;
+	z_win_content_rect(&win, &clip);
+	z_win_hw_box(&win, clip.x0 + x0, clip.y0 + y0,
+		clip.x0 + x1, clip.y0 + y1, color);
+}
+```
+
+and call nothing else. `sw/apps/mmod/panel.c` and `sw/apps/logic/logic.c`
+both do.
+
+## Rendering a panel on the build machine
+
+`sw/common/tests/zrender.h` draws an app's panel on a host and writes
+a PBM, so it can be **looked at** before it reaches a screen.
+
+```
+cc -std=gnu99 -Wall -I sw/common -o /tmp/render \
+   sw/apps/<app>/tests/render.c \
+   sw/common/zwin.c sw/common/zwidget.c sw/common/zfont_data.c \
+   sw/common/zobj.c sw/common/zeitlos.c
+/tmp/render /tmp/panel.pbm
+```
+
+An app's `tests/render.c` is around sixty lines: include `zrender.h`,
+include the panel source, set up the state you want to see, call
+`layout()` and `repaint()`, then `z_render_write()`.
+
+### Why this rather than more assertions
+
+`sw/apps/logic`'s panel shipped wrong three times, and its arithmetic
+test passed every time:
+
+1. Window coordinates where content coordinates were needed, so the
+   bottom 15 rows were off the window.
+2. Widgets inside the window but across the frames they were meant to
+   be inside.
+3. The coordinate-space bug above — which was the actual cause of 1
+   and 2.
+
+After each one the assertions were extended, and each time the next
+mistake was of a kind the new assertion did not cover. That is the
+shape of the technique, not bad luck: **a geometry assertion can only
+check a relationship somebody thought to write down.** A render checks
+every relationship at once, including the ones nobody anticipated —
+text wider than its well, a frame over a readout, two things two
+pixels apart that are legal and look wrong. The third bug was found in
+one look.
+
+It does not replace `tests/test_layout.c`, which runs unattended and
+fails loudly on the relationships that *are* known. The renderer is
+the step before shipping.
+
+### What it does and does not run
+
+`zwin.c`, `zwidget.c` and the app's panel are the **real sources** —
+which matters, because the content-rect inset and the widget geometry
+are where those bugs lived.
+
+`zgfx.c` is **not linked**. Its box, line and fill primitives all
+program the GPU rasterizer and blitter, which on a build machine write
+to unmapped MMIO and draw nothing. So `zrender.h` supplies software
+implementations of the dozen `z_fb_*` entry points `zwin.c` and
+`zwidget.c` call.
+
+That split is deliberate: pixel plotting is not where layout bugs
+live. A wrongly *drawn* line is obvious the moment you look; a wrongly
+*placed* one is not. It does mean a render **cannot catch a bug in
+`zgfx.c` itself**, or one that depends on the blitter's exact
+clipping.
+
+### Practical notes
+
+- Populate the panel with the **longest text each field will ever
+  hold**. An idle panel of dashes hides exactly the overflow this
+  exists to find.
+- The image is exactly the content rect, so anything drawn outside it
+  is missing rather than shown — which is itself the signal.
+- Scale up. At 1x a 1bpp panel is too small on a modern display to
+  judge, and judging it is the point.
+- `maskirq()` (`sw/common/zeitlos.h`) has a non-RISC-V branch so the
+  window layer compiles on a host at all.
+- Linux and x86-64 only; it needs `MAP_FIXED_NOREPLACE` at a low
+  address, and exits 77 elsewhere so CI skips rather than fails.
+
+Existing examples: `sw/apps/mmod/tests/render.c`,
+`sw/apps/logic/tests/render.c`.
+
 ## Hardware glyph blitting
 
 `z_fb_draw_char`/`z_fb_draw_text` have two implementations, selected

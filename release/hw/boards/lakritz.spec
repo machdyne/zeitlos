@@ -11,7 +11,7 @@
 # duplication is checked rather than merely hoped about.
 #
 # NOT listed here: `RTC, `TRNG, `GAME, `CPU_MUL, `CPU_MUL_FAST,
-# `CPU_DIV, `DEBUG, `ARBITER. Those are the universal section of
+# `CPU_DIV, `ARBITER. Those are the universal section of
 # rtl/boards.vh, they stay outside the ZSPEC guard, and boards.vh
 # explains for each one why it is not a per-board choice.
 

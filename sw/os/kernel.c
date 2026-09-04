@@ -386,11 +386,10 @@ static void k_soc_report(void) {
 
 	printf(" - soc features:\n");
 
-	int n = z_soc_features_count;
 	int cur = -1;
 	bool any_on_line = false;
 
-	for (int i = 0; i < n; i++) {
+	for (int i = 0; i < z_soc_features_count; i++) {
 
 		if (!z_soc_has_feature(z_soc_features[i].bit)) continue;
 
@@ -402,6 +401,36 @@ static void k_soc_report(void) {
 		}
 
 		printf("%s ", z_soc_features[i].name);
+
+	}
+
+	// The FEATURES2 half (sw/common/zsoc.c), continuing the same run
+	// of lines rather than starting its own section -- which register
+	// a bit lives in is an implementation detail of the CSR block, not
+	// something a boot log should make the reader think about.
+	//
+	// Continuing works because `cur` and `any_on_line` carry over and
+	// every group used by this table sorts after every group used by
+	// the one above (see zsoc.c, and Z_FEAT_GROUP_IO's own note in
+	// zsoc.h on why it is last in the enum). If that ever stops being
+	// true, the symptom is a duplicated group heading, not an error.
+	//
+	// z_soc_has_feature2() silently reports false on a bitstream with
+	// no FEATURES2 register at all, so an older gateware prints
+	// exactly what it used to print rather than an "io (none)" line
+	// about a register it does not have.
+	for (int i = 0; i < z_soc_features2_count; i++) {
+
+		if (!z_soc_has_feature2(z_soc_features2[i].bit)) continue;
+
+		if (z_soc_features2[i].group != cur) {
+			if (any_on_line) printf("\n");
+			printf("     %s ", z_soc_feature_groups[z_soc_features2[i].group]);
+			cur = z_soc_features2[i].group;
+			any_on_line = true;
+		}
+
+		printf("%s ", z_soc_features2[i].name);
 
 	}
 

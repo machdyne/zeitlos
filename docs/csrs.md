@@ -55,11 +55,13 @@ in `rtl/sysctl.v`'s address decode at the time this was added --
 | `0x00` | `MAGIC`    | Fixed `0x5A45_4954` ("ZEIT"). Check this first. |
 | `0x04` | `MEM_MB`   | Total main RAM, in megabytes, from `rtl/boards.vh`'s `` `MEM ``. |
 | `0x08` | `FEATURES` | Bitmask of which optional peripherals this build actually has -- see below. |
+| `0x0c` | `FEATURES2` | `{16'h5A46, features2[15:0]}` -- the continuation of `FEATURES`, which filled up. See below. |
+| `0x10`-`0x1c` | | Reserved for `FEATURES3` and onward. Read 0. Don't put anything else here. |
 
-Read-only, no side effects, no clocked state -- `rtl/csrs.v`'s whole
-implementation is a handful of combinational `assign`s, same "keep it
-simple" spirit as `rtl/debug.v`. Writes are silently ignored, not
-errors.
+Read-only, no side effects -- `rtl/csrs.v` is a handful of constants
+behind one registered read, same "keep it simple" spirit as
+`rtl/gpio.v` (which is where `rtl/debug.v`, this file's original model,
+now lives). Writes are silently ignored, not errors.
 
 Unlike every other peripheral in `rtl/sysctl.v`, this one has **no**
 `` `ifdef `` guarding whether it exists at all -- it's unconditionally
@@ -87,7 +89,12 @@ the software side in `sw/common/zsoc.h`'s `Z_FEATURE_*` constants.
 | 7 | `GPU_RASTER` | 17 | `ETH_RMII` |
 | 8 | `GPU_BLIT` | 18 | `LED_RGB` |
 | 9 | `GPU_CURSOR` | 19 | `LED_DEBUG` |
-| 25 | `ESP32_LINK` | | ULX3S: UART1 + ESP32 control + rx fifo (moved from 20) |
+| 20 | `CPU_MUL` | 26 | `AUDIO` |
+| 21 | `CPU_DIV` | 27 | `GAME` |
+| 22 | `CPU_MUL_FAST` | 28 | `GPU_COMPOSITE` |
+| 23 | `CPU_ZEITLOS32` | 29 | `GPU_COMPOSITE_PAL` |
+| 24 | `RTC` | 30 | `ESP32_LINK` |
+| 25 | `TRNG` | 31 | *deliberately unspent -- see below* |
 
 There's no single source shared between the Verilog and C sides here
 -- both have to be hand-edited together and kept in sync deliberately
@@ -95,7 +102,70 @@ whenever a bit is added, same split `rtl/usb_hid.v`/`sw/common/zkbd.h`
 already have for HID-usage translation. Only bit *position* has to
 match between the two; the C-side name is just documentation.
 
-Room for future bits: 20-31 are unused so far.
+### `FEATURES` is full
+
+Bits 0 through 30 are assigned. **Bit 31 is the last one and is
+deliberately unspent.**
+
+That became a live question when GPIO and a general-purpose UART1
+arrived together and needed two bits. Spending the last one on the
+first of them would have left the second with nowhere to go, and the
+feature after that in exactly the same position. So the register file
+grew a second word instead, and bit 31 is kept as the escape hatch for
+something that genuinely has to be reachable from a single 32-bit read.
+
+## `FEATURES2` (word 3)
+
+Same idea as `FEATURES`, one word along. Assigned in `rtl/csrs.vh`'s
+`CSR_FEATURES2` localparam; mirrored in `sw/common/zsoc.h`'s
+`Z_FEATURE2_*` constants, with the same hand-edit-both-sides rule.
+
+| Bit | Flag | |
+|---|---|---|
+| 0 | `GPIO` | `rtl/gpio.v` with at least one port that has pins -- see `docs/gpio.md` |
+| 1 | `UART1` | a second 16550 that is available to software -- see `docs/uart1.md` |
+
+Only sixteen bits are carried, because the top half is a signature.
+When these fill, `FEATURES3` goes at word 4 with the same shape; words
+4-7 are reserved for it.
+
+### Why this one needs a signature and `FEATURES` doesn't
+
+**Always test `FEATURES2` bits with `z_soc_has_feature2()`. Never read
+`reg_csr_features2` directly.**
+
+For `FEATURES`, a bitstream that can't answer is caught by the `MAGIC`
+check: no `rtl/csrs.v` at all means `z_soc_csrs_present()` is false and
+every query correctly returns "can't confirm".
+
+`FEATURES2` has a gap that check doesn't cover. A bitstream **with**
+`csrs.v` and **without** this register passes the magic check and then
+answers word 3 from `csrs.v`'s default case, which returns a clean
+`32'h0`. That is a perfectly well-formed "no features" -- and it is
+indistinguishable from a current bitstream on a board that has neither
+GPIO nor a spare UART. The `"ZF"` in the top half is the only thing
+that separates them, and `z_soc_features2_present()` is the check.
+
+This is the same trick, for the same reason, as `rtl/socctl.v`'s
+`VIDEO_SIG` and `GAME_SIG`.
+
+### Two bits that don't mean quite what their names suggest
+
+**`GPIO` means at least one port has pins, not that the block exists.**
+`rtl/gpio.v` is instantiated on every board unconditionally, because it
+also owns the LED registers and software probes its `MAGIC` -- so a bit
+meaning "the block is present" would be a constant 1 and would tell
+nobody anything. For the port *count*, read `gpio.v`'s own `CONFIG`
+register.
+
+**`UART1` is clear on a board with `ESP32_LINK`, even though such a
+board has a UART1.** On the ULX3S that UART is soldered to the on-board
+ESP32 and is `sw/apps/net`'s data plane; it has no header, no connector
+and no second owner. A bit claiming "this board has a serial port you
+can open" would be true of the gateware and false of the board, and an
+app that believed it would take the network down to say hello to
+nothing. `Z_FEATURE_ESP32_LINK` is how software finds that UART, and it
+always was.
 
 ## Software access
 
@@ -208,7 +278,7 @@ iverilog -g2005 -o /tmp/tb rtl/csrs.v testbench.v && vvp /tmp/tb
 ```
 (strip the trailing comma from `csrs.v`'s own port list first for
 plain `iverilog` -- same Yosys-tolerated-but-not-`iverilog`-tolerated
-convention already used throughout `rtl/`, e.g. `rtl/debug.v`'s port
+convention already used throughout `rtl/`, e.g. `rtl/gpio.v`'s port
 list ends the same way.)
 
 `rtl/sysctl.v`'s integration (the `CSR_FEATURES` localparam's

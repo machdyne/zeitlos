@@ -20,6 +20,7 @@
 #include "zar.h"
 #include "../common/zsoc.h"	// Z_TICK_HZ	// k_uart_getc()/k_uart_rx_empty() -- see
 					// boot_cancel_requested() below
+#include "../common/zgpio.h"	// the `gpio` command below
 #include "fs/fs.h"
 #include "fsapi.h"
 #include "fs/fatfs/ff.h"
@@ -38,6 +39,31 @@ uint32_t xfer_recv(uint32_t addr_ptr);
 void cls(void);
 void init(void);
 void screenshot(void);
+
+// Strict small-decimal parse, for the `gpio` command's port and pin
+// arguments.
+//
+// Strict rather than atoi(), because atoi("out") is 0 -- so
+// `gpio 0 out` would silently be read as port 0, pin 0, and drive a
+// pin the user never named. Rejecting trailing junk is what turns
+// that into an error message.
+static bool sh_small_num(const char *s, uint32_t *out) {
+
+	uint32_t v = 0;
+
+	if (!s || !*s) return false;
+
+	for (; *s; s++) {
+		if (*s < '0' || *s > '9') return false;
+		v = v * 10 + (uint32_t)(*s - '0');
+		if (v > 999) return false;		// nothing here is ever that big
+	}
+
+	*out = v;
+
+	return true;
+
+}
 
 // framebuffer: fixed native resolution, 1 bit per pixel, packed rows
 // -- see docs/gpu_blitter.md/docs/gpu_raster.md for the hardware side
@@ -900,6 +926,115 @@ void sh(void) {
 			}
 		}
 
+		// GPIO (rtl/gpio.v, docs/gpio.md)
+		//
+		//   gpio                            report every port
+		//   gpio <port> <pin>               read a pin
+		//   gpio <port> <pin> in|out|od     set its mode
+		//   gpio <port> <pin> 0|1           drive it
+		//
+		// Ports and pins are both plain numbers, 0-based. There is no
+		// letter form: letters in this project mean PMOD connectors
+		// (release/hw/boards/*.spec's pmod.a / pmod.b), and a port
+		// index is not a connector -- see sw/common/zgpio.h.
+		//
+		// This lives in the console shell, which is a slightly odd
+		// home given that lakritz_gpio has no console at all. It is
+		// here for obst_uart_gpio and for bring-up: the first thing
+		// anyone does with a new board and a new PMOD is wiggle a pin
+		// and look at it with a meter, and that should not require
+		// the window manager, an app loader and a working SD card to
+		// have come up first. The Scheme API (docs/scheme_api.md)
+		// is the one to use from a running desktop.
+		//
+		// Kernel code, so it calls zgpio.h directly, same as the
+		// `color` command below calls zsoc.h -- sh.c IS the kernel.
+		else if (!strncmp(buffer, "gpio", cmdlen)) {
+
+			uint32_t nports = z_gpio_port_count();
+
+			if (!z_gpio_present()) {
+				// Two different failures, deliberately not merged:
+				// a bitstream with no GPIO block at all and one
+				// whose ports have no pins need the same fix (a
+				// different gateware) but are not the same mistake,
+				// and saying which one saves someone checking.
+				if (reg_gpio_magic == Z_GPIO_MAGIC)
+					printf("gpio: this bitstream has the block but no ports with pins\n");
+				else
+					printf("gpio: no gpio in this bitstream\n");
+				printf("(this is an RTL change -- try `zrelease build obst_uart_gpio`)\n");
+			}
+			else {
+
+				char *portarg = get_arg(buffer, 1);
+				char *pinarg = get_arg(buffer, 2);
+				char *valarg = get_arg(buffer, 3);
+				uint32_t port = 0, pin = 0;
+
+				if (portarg == NULL) {
+
+					printf("%lu gpio port%s\n", (unsigned long)nports,
+						nports == 1 ? "" : "s");
+
+					for (uint32_t i = 0; i < nports; i++)
+						printf(" %lu: dir %02x out %02x in %02x\n",
+							(unsigned long)i, z_gpio_dir_get(i),
+							z_gpio_out_get(i), z_gpio_in_get(i));
+
+					printf("usage: gpio <port> <pin> [in|out|od|0|1]"
+						"  e.g. gpio 0 3 out\n");
+
+				}
+				else if (!sh_small_num(portarg, &port)
+					|| !sh_small_num(pinarg, &pin)) {
+					printf("usage: gpio <port> <pin> [in|out|od|0|1]"
+						"  e.g. gpio 0 3 out\n");
+				}
+				else if (port >= nports) {
+					// A real port number that this board does not
+					// have, which is a different problem from a
+					// malformed argument above and gets a different
+					// message.
+					printf("gpio: no port %lu on this board (have 0..%lu)\n",
+						(unsigned long)port,
+						(unsigned long)(nports ? nports - 1 : 0));
+				}
+				else if (pin >= Z_GPIO_PINS_PER_PORT) {
+					printf("gpio: no pin %lu (a port has 0..%d)\n",
+						(unsigned long)pin, Z_GPIO_PINS_PER_PORT - 1);
+				}
+				else if (valarg == NULL) {
+					printf("%lu.%lu = %d (%s)\n",
+						(unsigned long)port, (unsigned long)pin,
+						z_gpio_read(port, pin) ? 1 : 0,
+						z_gpio_mode_get(port, pin) == Z_GPIO_OUT
+							? "output" : "input");
+				}
+				else if (!strcmp(valarg, "in"))
+					z_gpio_mode(port, pin, Z_GPIO_IN);
+				else if (!strcmp(valarg, "out"))
+					z_gpio_mode(port, pin, Z_GPIO_OUT);
+				else if (!strcmp(valarg, "od"))
+					z_gpio_mode(port, pin, Z_GPIO_OD);
+				else if (!strcmp(valarg, "0") || !strcmp(valarg, "1")) {
+					// Drives OUT, not DIR, even on a pin that was set
+					// to `od`. There is nowhere in hardware to record
+					// that a pin is "open drain" (see zgpio.h), so
+					// this command cannot know -- and guessing wrong
+					// in the other direction would mean `gpio 0 3 1`
+					// silently doing nothing visible. Open-drain
+					// bit-banging belongs in a library, not at a
+					// prompt.
+					z_gpio_write(port, pin, valarg[0] == '1');
+				}
+				else
+					printf("gpio: expected in, out, od, 0 or 1\n");
+
+			}
+
+		}
+
 		// VIRTUAL PHOSPHOR MODE (rtl/socctl.v's VIDEO register)
 		//
 		// `color` alone reports the current mode; `color <name>` sets
@@ -1540,6 +1675,7 @@ void sh_help(void) {
 	printf(" rm [path]         remove a file\n");
 	printf(" cache [on|off|flush]  instruction cache stats/control\n");
 	printf(" color [white|amber|green|paper]  display phosphor mode\n");
+	printf(" gpio [port] [pin] [in|out|od|0|1]  read/drive gpio pins (e.g. gpio 0 3 out)\n");
 	printf(" bench             cpu/memory micro-benchmarks\n");
 
 }

@@ -97,6 +97,34 @@ localparam [3:0] AUDIO_FORMATS =
 `endif
 	4'b0000;
 
+// How many GPIO ports this build has pins for, handed to rtl/gpio.v as
+// its NPORTS parameter and reported to software in that block's CONFIG
+// register (and in rtl/csrs.v's FEATURES2).
+//
+// Derived from the `GPIO_PORT0..3 defines rather than being a define of
+// its own, so there is exactly one thing to edit when a board gains a
+// port and no way for a count and a pin declaration to disagree. It is
+// a SUM rather than a highest-index search, which makes a gap
+// (`GPIO_PORT0 and `GPIO_PORT2 but not `GPIO_PORT1) come out as 2 --
+// wrong, and deliberately so: gpio.v numbers its ports densely from 0,
+// so a gap is a board description error and reporting a count that
+// does not match the pins is how it gets noticed. Define them in
+// order.
+localparam GPIO_NPORTS = 0
+`ifdef GPIO_PORT0
+	+ 1
+`endif
+`ifdef GPIO_PORT1
+	+ 1
+`endif
+`ifdef GPIO_PORT2
+	+ 1
+`endif
+`ifdef GPIO_PORT3
+	+ 1
+`endif
+	;
+
 module sysctl #()
 (
 
@@ -130,6 +158,56 @@ module sysctl #()
 
 `ifdef LED_DEBUG
 	output [7:0] DBG,
+`endif
+
+	// GPIO ports (rtl/gpio.v). Bidirectional, eight pins each, one
+	// port per PMOD connector by convention -- bit 0 is PMOD pin 1,
+	// and bits 4-7 are pins 7-10, so a port maps onto a connector in
+	// the order the pins are numbered on it. See docs/gpio.md.
+	//
+	// Declared one at a time rather than derived from a count,
+	// because the preprocessor cannot compare numbers: a single
+	// `GPIO_PORTS 3 could not gate three port declarations and not a
+	// fourth. So the defines ARE the count -- GPIO_NPORTS below is
+	// derived from them, not the other way round, and there is one
+	// place to change to add a port.
+	//
+	// Four, not eight. The register map in rtl/gpio.v reserves eight
+	// (an ECPIX-5 has that many PMOD connectors) but nothing in the
+	// current lineup has more than two, and each port declared here
+	// is eight more balls the placer has to find. Adding ports 4-7 is
+	// this block plus the matching tri-state section further down and
+	// nothing else -- gpio.v already handles them.
+`ifdef GPIO_PORT0
+`ifdef GPIO_PORT0_NARROW
+	// Four pins, not eight -- for a board whose connector is a 6-pin
+	// PMOD (Sergei). The pins that do not exist are not in the port
+	// at all, which is the only thing that works: an unconstrained
+	// top-level IO is a hard nextpnr-ecp5 error, and the flag that
+	// suppresses it would place them on whatever balls happen to be
+	// free -- which on a populated board includes the SDRAM, the PHY
+	// and the SD card.
+	//
+	// Software still sees an eight-bit port. DIR and OUT bits 4-7
+	// exist and drive nothing; IN bits 4-7 read 0 (tied off below)
+	// where a real floating pin would read 1. That asymmetry is the
+	// whole cost of doing this the cheap way, and it is deliberate:
+	// a register reporting per-port pin counts would be honest but is
+	// machinery on every board for one connector on one board. The
+	// release notes for such a target say how many pins it has.
+	inout [3:0] GPIO0,
+`else
+	inout [7:0] GPIO0,
+`endif
+`endif
+`ifdef GPIO_PORT1
+	inout [7:0] GPIO1,
+`endif
+`ifdef GPIO_PORT2
+	inout [7:0] GPIO2,
+`endif
+`ifdef GPIO_PORT3
+	inout [7:0] GPIO3,
 `endif
 
 `ifdef MEM_SRAM
@@ -411,7 +489,7 @@ module sysctl #()
 	// those pins float to pulldown on unused ECP5 IOs and would
 	// otherwise freeze SPI reads of the kernel. LED1/LED2 are
 	// bring-up taps that do not depend on the CPU: PLL lock and
-	// released reset. LED_B (LED0) stays the debug_wb software LED.
+	// released reset. LED_B (LED0) stays the gpio_wb software LED.
 `ifndef ESP32_LINK
 	assign wifi_en = 1'b0;
 	assign wifi_gpio0 = 1'b0;
@@ -629,7 +707,7 @@ module sysctl #()
 	wire [31:0] wbs_qqspi_dat_o;
 	wire [31:0] wbs_vram_dat_o;
 	wire [31:0] wbs_rom_dat_o;
-	wire [31:0] wbs_debug_dat_o;
+	wire [31:0] wbs_gpio_dat_o;
 	wire [31:0] wbs_uart0_dat_o;
 `ifdef UART1
 	wire [31:0] wbs_uart1_dat_o;
@@ -852,9 +930,13 @@ module sysctl #()
 		&& !cs_audio
 `endif
 		;
-`ifdef DEBUG
-	wire cs_debug = ((wbm_adr & 32'hf000_0000) == 32'he000_0000);
-`endif
+	// Unconditional, like cs_uart0 below and unlike the `ifdef-guarded
+	// decodes above -- rtl/gpio.v is always instantiated. It used to
+	// be guarded by `DEBUG, which was universal so the guard never
+	// fired; that define is gone (see rtl/gpio.v's header on why a
+	// block software PROBES must not be one of the things that can be
+	// missing).
+	wire cs_gpio = ((wbm_adr & 32'hf000_0000) == 32'he000_0000);
 	// Unconditional, unlike the `ifdef-guarded decodes above. Without
 	// `UART0 this window is answered by rtl/uart_null.v instead of by
 	// uart_top -- see the instantiation below for why it must be
@@ -904,9 +986,7 @@ module sysctl #()
 `ifdef MEM_ROM
 		({32{cs_rom}} & wbs_rom_dat_o) |
 `endif
-`ifdef DEBUG
-		({32{cs_debug}} & wbs_debug_dat_o) |
-`endif
+		({32{cs_gpio}} & wbs_gpio_dat_o) |
 		({32{cs_uart0}} & wbs_uart0_dat_o) |
 `ifdef UART1
 		({32{cs_uart1}} & wbs_uart1_dat_o) |
@@ -959,7 +1039,7 @@ module sysctl #()
 	wire wbs_qqspi_ack_o;
 	wire wbs_vram_ack_o;
 	wire wbs_rom_ack_o;
-	wire wbs_debug_ack_o;
+	wire wbs_gpio_ack_o;
 	wire wbs_uart0_ack_o;
 	// Declared here rather than inside `ifdef UART0 below, because
 	// cpu_irq[4] reads it unconditionally. It used to be a `reg` in
@@ -1027,9 +1107,7 @@ module sysctl #()
 `ifdef MEM_ROM
 		(cs_rom & wbs_rom_ack_o) |
 `endif
-`ifdef DEBUG
-		(cs_debug & wbs_debug_ack_o) |
-`endif
+		(cs_gpio & wbs_gpio_ack_o) |
 		(cs_uart0 & wbs_uart0_ack_o) |
 `ifdef UART1
 		(cs_uart1 & wbs_uart1_ack_o) |
@@ -1774,31 +1852,131 @@ module sysctl #()
 	);
 `endif
 
-	// WISHBONE SLAVE: LED DEBUG INTERFACE
-`ifdef DEBUG
-	wire wbm_cyc_debug = cs_debug && wbm_cyc;
+	// WISHBONE SLAVE: GPIO + BOARD LEDS
+	//
+	// Always instantiated -- see rtl/gpio.v's header. NPORTS is the
+	// count derived from `GPIO_PORT0..3 at the top of this file; on a
+	// board with none it is 0 and this is the LED block rtl/debug.v
+	// used to be, with the port register file optimised away.
+	wire wbm_cyc_gpio = cs_gpio && wbm_cyc;
 
-	debug_wb #() wbs_debug0_i
+	wire [63:0] gpio_dir;
+	wire [63:0] gpio_out;
+	wire [63:0] gpio_in;
+
+	gpio_wb #(
+		.NPORTS(GPIO_NPORTS)
+	) wbs_gpio0_i
 	(
 		.wb_clk_i(wbm_clk),
 		.wb_rst_i(wbm_rst),
 		.wb_adr_i(wbm_adr_sel_word),
 		.wb_dat_i(wbm_dat_o),
-		.wb_dat_o(wbs_debug_dat_o),
+		.wb_dat_o(wbs_gpio_dat_o),
 		.wb_we_i(wbm_we),
 		.wb_sel_i(wbm_sel),
 		.wb_stb_i(wbm_stb),
-		.wb_ack_o(wbs_debug_ack_o),
-		.wb_cyc_i(wbm_cyc_debug),
+		.wb_ack_o(wbs_gpio_ack_o),
+		.wb_cyc_i(wbm_cyc_gpio),
 		.led(LED_B),
-
-
 `ifdef LED_DEBUG
-		.leds(DBG)
+		.leds(DBG),
+`endif
+		.gpio_dir_o(gpio_dir),
+		.gpio_out_o(gpio_out),
+		.gpio_in_i(gpio_in)
+	);
+
+	// -- GPIO tri-state buffers --
+	//
+	// These live HERE rather than inside gpio.v because this is the
+	// file that knows about board pins, and because it keeps gpio.v a
+	// plain register file with no `z in it -- which is what makes it
+	// simulatable in rtl/tb/tb_gpio.v without a pad model.
+	//
+	// ONE DRIVER PER PIN, and that is the whole reason this is written
+	// as eight separate single-bit assigns per port rather than
+	// anything cleverer: a vector-wide conditional cannot express
+	// per-bit high-Z (`dir ? out : 8'bz` turns the WHOLE byte off when
+	// any bit of dir is 0 under some tools' interpretation), and a
+	// second continuous assign to the same net is a multiply-driven
+	// net that yosys resolves to X in simulation and to whatever it
+	// feels like in hardware.
+	//
+	// A lane with no port built is tied to zero rather than left
+	// floating: an undriven input to gpio.v's synchroniser would be an
+	// implicit net feeding flops, which is not something anything
+	// reports -- the same class of bug as the wbs_uart0_int wire
+	// further down. Tying it low also lets synthesis prove those
+	// synchroniser flops constant and remove them.
+`ifdef GPIO_PORT0
+	assign GPIO0[0] = gpio_dir[0] ? gpio_out[0] : 1'bz;
+	assign GPIO0[1] = gpio_dir[1] ? gpio_out[1] : 1'bz;
+	assign GPIO0[2] = gpio_dir[2] ? gpio_out[2] : 1'bz;
+	assign GPIO0[3] = gpio_dir[3] ? gpio_out[3] : 1'bz;
+`ifdef GPIO_PORT0_NARROW
+	// The upper half has no pins. Tied low rather than left dangling
+	// for the same reason an unbuilt port is: an implicit net feeding
+	// gpio.v's synchroniser is not something anything reports.
+	assign gpio_in[7:0] = { 4'h0, GPIO0 };
+`else
+	assign GPIO0[4] = gpio_dir[4] ? gpio_out[4] : 1'bz;
+	assign GPIO0[5] = gpio_dir[5] ? gpio_out[5] : 1'bz;
+	assign GPIO0[6] = gpio_dir[6] ? gpio_out[6] : 1'bz;
+	assign GPIO0[7] = gpio_dir[7] ? gpio_out[7] : 1'bz;
+	assign gpio_in[7:0] = GPIO0;
+`endif
+`else
+	assign gpio_in[7:0] = 8'h00;
 `endif
 
-	);
+`ifdef GPIO_PORT1
+	assign GPIO1[0] = gpio_dir[8] ? gpio_out[8] : 1'bz;
+	assign GPIO1[1] = gpio_dir[9] ? gpio_out[9] : 1'bz;
+	assign GPIO1[2] = gpio_dir[10] ? gpio_out[10] : 1'bz;
+	assign GPIO1[3] = gpio_dir[11] ? gpio_out[11] : 1'bz;
+	assign GPIO1[4] = gpio_dir[12] ? gpio_out[12] : 1'bz;
+	assign GPIO1[5] = gpio_dir[13] ? gpio_out[13] : 1'bz;
+	assign GPIO1[6] = gpio_dir[14] ? gpio_out[14] : 1'bz;
+	assign GPIO1[7] = gpio_dir[15] ? gpio_out[15] : 1'bz;
+	assign gpio_in[15:8] = GPIO1;
+`else
+	assign gpio_in[15:8] = 8'h00;
 `endif
+
+`ifdef GPIO_PORT2
+	assign GPIO2[0] = gpio_dir[16] ? gpio_out[16] : 1'bz;
+	assign GPIO2[1] = gpio_dir[17] ? gpio_out[17] : 1'bz;
+	assign GPIO2[2] = gpio_dir[18] ? gpio_out[18] : 1'bz;
+	assign GPIO2[3] = gpio_dir[19] ? gpio_out[19] : 1'bz;
+	assign GPIO2[4] = gpio_dir[20] ? gpio_out[20] : 1'bz;
+	assign GPIO2[5] = gpio_dir[21] ? gpio_out[21] : 1'bz;
+	assign GPIO2[6] = gpio_dir[22] ? gpio_out[22] : 1'bz;
+	assign GPIO2[7] = gpio_dir[23] ? gpio_out[23] : 1'bz;
+	assign gpio_in[23:16] = GPIO2;
+`else
+	assign gpio_in[23:16] = 8'h00;
+`endif
+
+`ifdef GPIO_PORT3
+	assign GPIO3[0] = gpio_dir[24] ? gpio_out[24] : 1'bz;
+	assign GPIO3[1] = gpio_dir[25] ? gpio_out[25] : 1'bz;
+	assign GPIO3[2] = gpio_dir[26] ? gpio_out[26] : 1'bz;
+	assign GPIO3[3] = gpio_dir[27] ? gpio_out[27] : 1'bz;
+	assign GPIO3[4] = gpio_dir[28] ? gpio_out[28] : 1'bz;
+	assign GPIO3[5] = gpio_dir[29] ? gpio_out[29] : 1'bz;
+	assign GPIO3[6] = gpio_dir[30] ? gpio_out[30] : 1'bz;
+	assign GPIO3[7] = gpio_dir[31] ? gpio_out[31] : 1'bz;
+	assign gpio_in[31:24] = GPIO3;
+`else
+	assign gpio_in[31:24] = 8'h00;
+`endif
+
+	// Ports 4-7 are reserved in gpio.v's register map but have no pins
+	// on any board here. Tied low so the synchroniser folds away; see
+	// the port declarations at the top of this file for what adding
+	// one involves.
+	assign gpio_in[63:32] = 32'h0000_0000;
 
 	// WISHBONE SLAVE: UART0
 `ifdef UART0
@@ -2184,7 +2362,8 @@ module sysctl #()
 
 	csrs_wb #(
 		.MEM_MB(`MEM),
-		.FEATURES(CSR_FEATURES)
+		.FEATURES(CSR_FEATURES),
+		.FEATURES2(CSR_FEATURES2)
 	) wbs_csrs0_i
 	(
 		.wb_clk_i(wbm_clk),

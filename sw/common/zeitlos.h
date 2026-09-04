@@ -340,7 +340,23 @@ typedef uint32_t *(*z_kernel_ptr_t)(uint32_t, uint32_t *, uint32_t);
 // trigger need to complete as one atomic unit, since the rasterizer's
 // registers (rtl/gpu/gpu_raster.v) are global, shared peripheral
 // state with no per-process isolation -- see zgfx.c's z_fb_hw_line().
+//
+// The non-RISC-V branch is not portability for its own sake. It is
+// what lets the graphics stack -- zgfx.c, which calls this around its
+// rasterizer register writes -- be COMPILED AND RUN on the build
+// machine, so an app's panel can be rendered to an image and looked
+// at before it reaches a screen (sw/apps/mmod/tests/render.c).
+//
+// That capability was worth four lines here. sw/apps/logic's panel
+// shipped wrong twice, both times passing its own arithmetic checks,
+// because a geometry assertion only tests a relationship somebody
+// thought to write down. Rendering tests all of them at once.
+//
+// Nothing is masked in a host build because nothing is running: there
+// is no scheduler, no interrupt and no shared rasterizer, so the
+// atomicity this provides on target has nothing to protect.
 static inline uint32_t maskirq(uint32_t new_mask) {
+#if defined(__riscv)
 	uint32_t old_mask;
 	__asm__ volatile (
 		".insn r 0x0B, 0x6, 0x03, %0, %1, zero"
@@ -349,6 +365,10 @@ static inline uint32_t maskirq(uint32_t new_mask) {
 		: "memory"
 	);
 	return old_mask;
+#else
+	(void)new_mask;
+	return 0;
+#endif
 }
 
 // --

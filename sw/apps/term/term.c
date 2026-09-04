@@ -59,6 +59,7 @@
 #include "../../common/zvt100.h"
 #include "../../common/zport.h"
 #include "../../common/zterm.h"
+#include "../../common/zconnect.h"	// the F11 Open bar -- see open_bar_*() below
 #include "../../common/zrepl.h"	// for Z_PID_REPL, the fixed-pid
 									// fallback below -- term itself
 									// never sends/receives REPL_EVAL,
@@ -937,6 +938,188 @@ static void handle_mouse_event(uint32_t packed) {
 
 }
 
+// -- the Open bar (F11) -----------------------------------------
+//
+// A one-line prompt across the bottom row of the window where you
+// type a connection target -- "telnet 10.0.0.5", "serial 9600",
+// "port portdemo0", "ssh me@host" -- and Enter connects. Escape
+// cancels.
+//
+// This is what makes `term` able to open a connection ON ITS OWN.
+// Until now every target came from repl telling term where to go
+// (Z_TERM_SET_PORT), which is fine when you are already at a repl
+// prompt and useless when the thing you want to reach IS the terminal
+// you are sitting in -- or when repl is not what this window is
+// connected to. The four kinds and all the work of resolving them
+// live in sw/common/zconnect.h, shared with the repl commands, so
+// there is one implementation of the ssh token dance rather than two.
+//
+// -- Why a line and not a dialog --
+//
+// Because this is a terminal. A widget panel would need its own
+// window (wm has no modal dialogs), which means a second window
+// appearing in front of the one you were typing in, and a focus
+// question to answer when it closes. A prompt bar is what a terminal
+// already is, it needs no new window, and it is unambiguously
+// keyboard-driven -- which matters, because F11 is most useful
+// exactly when the thing you were connected to has stopped answering.
+//
+// -- Why it draws directly instead of through the VT --
+//
+// Writing the prompt into the vt100 screen would destroy a row of
+// whatever the session had on it, and there is nothing to restore it
+// from -- the vt holds one screen, not a stack. So the bar is painted
+// over the bottom row with z_win_draw_text() and, on dismissal, that
+// row is marked dirty so the ordinary redraw path puts the session's
+// own content back. Nothing in the session ever knows it happened.
+
+#define OPEN_BAR_MAX 72
+
+static bool open_bar_active;
+static char open_bar_buf[OPEN_BAR_MAX];
+static int  open_bar_len;
+static char open_bar_msg[OPEN_BAR_MAX];
+
+static void open_bar_draw(void) {
+
+	char line[OPEN_BAR_MAX + 12];
+	int row = VT_ROWS - 1;
+	int i;
+
+	if (open_bar_msg[0])
+		snprintf(line, sizeof(line), "%s", open_bar_msg);
+	else
+		snprintf(line, sizeof(line), "open> %s_", open_bar_buf);
+
+	// Drawn cell by cell through draw_cell(), the same path the
+	// session uses, rather than with z_win_draw_text(). Two reasons:
+	// it lands on the character grid exactly (draw_cell() does the
+	// content-rect offset), and the row is fully overwritten to its
+	// last column, so whatever the session had underneath is covered
+	// rather than partly showing through past the end of the text.
+	//
+	// Reverse video, so the bar reads as chrome and not as something
+	// the far end printed.
+	{
+		// Length taken once, not inferred from line[i] being non-zero:
+		// the bytes past the terminator are whatever was on the stack,
+		// and testing them would put stack garbage on screen on the
+		// runs where it happens not to be zero.
+		int n = (int)strlen(line);
+		for (i = 0; i < VT_COLS; i++)
+			draw_cell(i, row, i < n ? line[i] : ' ', true);
+	}
+
+}
+
+static void open_bar_dismiss(void) {
+	open_bar_active = false;
+	open_bar_msg[0] = 0;
+	// Hand the row back to the session. vt_mark_all_dirty() rather
+	// than a per-row call because the row index the bar used is a
+	// screen coordinate, and there is no vt API for "this row is
+	// stale on screen but unchanged in the buffer" -- a full repaint
+	// is one frame and always correct.
+	vt_mark_all_dirty(&vt);
+}
+
+// Parse what was typed and go. Never called with an empty buffer.
+static void open_bar_submit(void) {
+
+	z_conn_kind_t kind;
+	z_conn_target_t target;
+	char word[12], err[128];
+	const char *rest;
+	size_t wl = 0;
+
+	while (open_bar_buf[wl] && open_bar_buf[wl] != ' '
+		&& wl < sizeof(word) - 1) {
+		word[wl] = open_bar_buf[wl];
+		wl++;
+	}
+	word[wl] = 0;
+
+	if (!z_conn_kind_from_word(word, &kind)) {
+		snprintf(open_bar_msg, sizeof(open_bar_msg),
+			"open: try port|serial|telnet|ssh   (Esc cancels)");
+		open_bar_draw();
+		return;
+	}
+
+	rest = open_bar_buf + wl;
+	while (*rest == ' ') rest++;
+
+	// z_conn_prepare() BLOCKS for telnet and ssh -- a DNS lookup or
+	// an ssh prepare can take seconds, during which this process
+	// reads no messages and this window does not repaint. So say what
+	// is happening BEFORE calling it, or the terminal simply freezes
+	// with no explanation. See zconnect.h.
+	snprintf(open_bar_msg, sizeof(open_bar_msg), "open: %s %s ...",
+		z_conn_kind_name(kind), rest);
+	open_bar_draw();
+
+	if (!z_conn_prepare(kind, rest, &target, err, sizeof(err))) {
+		snprintf(open_bar_msg, sizeof(open_bar_msg), "%s", err);
+		open_bar_draw();
+		// Left on screen rather than dismissed: an error you have to
+		// press a key to clear is an error you actually read.
+		return;
+	}
+
+	open_bar_dismiss();
+
+	// term connects DIRECTLY here, rather than sending itself a
+	// Z_TERM_SET_PORT. Same destination, one less hop, and no
+	// question about what happens if the message arrives while this
+	// function is still on the stack.
+	connect_port(target.provider, 0, target.arg, target.timeout_ticks);
+
+}
+
+// Returns true if the key was consumed by the bar.
+static bool open_bar_key(uint32_t keysym) {
+
+	if (!open_bar_active) return false;
+
+	// Any key clears a message and returns to editing, so an error
+	// does not have to be dismissed separately from the prompt.
+	if (open_bar_msg[0]) {
+		open_bar_msg[0] = 0;
+		if (keysym == 0x1b) { open_bar_dismiss(); return true; }
+		open_bar_draw();
+		return true;
+	}
+
+	switch (keysym) {
+
+	case 0x1b:					// Esc
+		open_bar_dismiss();
+		return true;
+
+	case 0x0d:					// Enter
+		if (!open_bar_len) { open_bar_dismiss(); return true; }
+		open_bar_submit();
+		return true;
+
+	case 0x08:					// Backspace
+	case 0x7f:
+		if (open_bar_len) open_bar_buf[--open_bar_len] = 0;
+		open_bar_draw();
+		return true;
+
+	default:
+		if (keysym >= 0x20 && keysym < 0x7f
+			&& open_bar_len < OPEN_BAR_MAX - 1) {
+			open_bar_buf[open_bar_len++] = (char)keysym;
+			open_bar_buf[open_bar_len] = 0;
+		}
+		open_bar_draw();
+		return true;
+
+	}
+
+}
+
 static void handle_key_event(uint32_t packed) {
 
 	uint32_t keysym = Z_WM_UNPACK_KEY_KEYSYM(packed);
@@ -989,6 +1172,24 @@ static void handle_key_event(uint32_t packed) {
 	// no port connected still local-echoes nothing, same as any
 	// other unmapped key) if already talking to "repl0" -- harmless
 	// either way, connect_port() itself is safe to call redundantly.
+	// The Open bar owns every key while it is up, including F12 --
+	// otherwise Escape and F12 would both be "get me out", which is
+	// two answers to one question.
+	if (open_bar_key(keysym)) return;
+
+	// F11 opens it. Next to F12's escape-to-repl on the keyboard and
+	// in meaning: F12 goes back to where you started, F11 goes
+	// somewhere new. Neither is a VT100 key anything sends on
+	// purpose.
+	if (keysym == Z_KEY_F11) {
+		open_bar_active = true;
+		open_bar_buf[0] = 0;
+		open_bar_len = 0;
+		open_bar_msg[0] = 0;
+		open_bar_draw();
+		return;
+	}
+
 	if (keysym == Z_KEY_F12) {
 		connect_port("repl0", Z_PID_REPL, z_obj_none(), Z_PORT_CONNECT_TIMEOUT_TICKS);
 		return;

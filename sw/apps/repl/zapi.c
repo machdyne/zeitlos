@@ -34,6 +34,13 @@
 								// (current-date) below
 #include "../../common/zrng.h"	// the system CSPRNG -- see (random) below
 #include "../../common/zpad.h"	// gamepads -- see (gamepad ...) below
+#include "../../common/zuart.h"	// UART1 -- see (uart1-* ...) below
+#include "../../common/zi2c.h"	// bit-bang I2C -- see (i2c-* ...) below
+#include "../../common/zspi.h"	// bit-bang SPI -- see (spi-* ...) below
+#include "../../common/zgpio.h"	// the GPIO ports -- see (gpio-* ...)
+								// below. Direct MMIO, no syscall: this is
+								// a peripheral an app touches itself, same
+								// as zpad.h above. See docs/gpio.md.
 #include "../../common/zsoc.h"	// Z_VIDEO_MODE_*, z_video_mode_name(),
 								// z_video_mode_from_name() -- the naming
 								// helpers only. The actual get/set go
@@ -52,6 +59,27 @@ static const char *zapi_arg_str(ms_val *v, const char *who) {
 static int zapi_arg_int(ms_val *v, const char *who) {
 	if (!ms_is_num(v)) ms_log(MS_PANIC, "%s: expected a number", who);
 	return (int)ms_num_val(v);
+}
+
+// Is this argument a "yes"? Used by the GPIO setters below.
+//
+// ms_api.h exports no boolean predicate -- only ms_mk_bool() -- and
+// this file is deliberately the place where new procedures live
+// WITHOUT touching the ms submodule (see docs/scheme_api.md). It does
+// not need one: #t and #f are singletons in ms.c, so ms_mk_bool(false)
+// hands back the one and only #f object and identity against it is the
+// entire test. That is precisely ms.c's own truthy().
+//
+// WITH ONE DELIBERATE DEVIATION: a NUMBER is judged by its value, so 0
+// is false here where Scheme says every number is true. This is for
+// hardware, and `(gpio-set 0 3 0)` meaning "drive it high" would be an
+// afternoon lost -- especially since the shell's own `gpio 0 3 0`
+// (sw/os/sh.c) means low, and somebody moving between the two should
+// not have to hold two rules. #f is still false, so both spellings
+// work and neither surprises.
+static bool zapi_arg_truthy(ms_val *v) {
+	if (ms_is_num(v)) return ms_num_val(v) != 0;
+	return v != ms_mk_bool(false);
 }
 
 // -- Files --
@@ -1632,6 +1660,991 @@ static ms_val *zapi_gamepad(ms_val *args) {
 
 }
 
+// -- GPIO --
+//
+// rtl/gpio.v, via sw/common/zgpio.h. See docs/gpio.md.
+//
+// PORTS AND PINS ARE NUMBERS, both 0-based, and every procedure here
+// takes them as two separate arguments. That is not just consistency
+// with the C API -- it is what makes bare-word syntax work without
+// quoting:
+//
+//     gpio-set 0 3 #t
+//
+// reaches (gpio-set 0 3 #t) directly, because repl's translator passes
+// a token that parses wholly as a number through unquoted (see
+// docs/scheme_api.md's argument translation table). A single-token pin
+// name would have arrived as the string "0.3" and needed unpacking in
+// every procedure below.
+//
+// Names mirror the REGISTERS for the whole-port procedures -- (gpio-dir),
+// (gpio-out), (gpio-in) -- because those are what docs/gpio.md
+// documents and what someone reading a register dump is holding in
+// their head. The per-pin procedures use plain verbs instead, since at
+// that level nobody is thinking about registers.
+
+// Shared argument checking. Range is checked against what this
+// BITSTREAM actually built, not against the map's reserved maximum:
+// a write to a port that does not exist is silently dropped by the
+// hardware (rtl/gpio.v, and there is no way to report an error on that
+// bus), so this is the only place a caller can find out. Panicking is
+// right rather than harsh -- a Scheme user who typed the wrong port
+// number wants to be told, not to watch nothing happen.
+static void zapi_gpio_check(int port, int pin, const char *who) {
+
+	uint32_t n = z_gpio_port_count();
+
+	if (n == 0)
+		ms_log(MS_PANIC, "%s: this bitstream has no gpio "
+			"(needs different gateware -- see docs/gpio.md)", who);
+
+	if (port < 0 || (uint32_t)port >= n)
+		ms_log(MS_PANIC, "%s: no port %d on this board (have 0..%d)",
+			who, port, (int)n - 1);
+
+	// pin < 0 is the check that matters here; a pin is not a thing
+	// that varies per board, so 0..7 is always the answer.
+	if (pin < 0 || pin >= Z_GPIO_PINS_PER_PORT)
+		ms_log(MS_PANIC, "%s: no pin %d (a port has 0..%d)",
+			who, pin, Z_GPIO_PINS_PER_PORT - 1);
+
+}
+
+// Same, for the whole-port procedures, which have no pin.
+static void zapi_gpio_check_port(int port, const char *who) {
+	zapi_gpio_check(port, 0, who);
+}
+
+// (gpio-ports) -- how many GPIO ports this bitstream has pins for.
+//
+// 0 on a board without GPIO, which makes this the presence test too:
+// there is no separate (gpio?), because "how many" already answers
+// "any" and one procedure is easier to remember than two.
+static ms_val *zapi_gpio_ports(ms_val *args) {
+	(void)args;
+	return ms_mk_num((double)z_gpio_port_count());
+}
+
+// (gpio-dir p)        -- the DIR register, 1 bit per pin, 1 = output
+// (gpio-dir p mask)   -- set it, returning what it reads back as
+static ms_val *zapi_gpio_dir(ms_val *args) {
+
+	int port;
+
+	if (ms_is_nil(args)) ms_log(MS_PANIC, "gpio-dir: expected a port");
+
+	port = zapi_arg_int(ms_car(args), "gpio-dir");
+	zapi_gpio_check_port(port, "gpio-dir");
+
+	args = ms_cdr(args);
+
+	if (!ms_is_nil(args)) {
+		int mask = zapi_arg_int(ms_car(args), "gpio-dir");
+		if (mask < 0 || mask > 255)
+			ms_log(MS_PANIC, "gpio-dir: mask out of range (want 0..255)");
+		z_gpio_dir_set((uint32_t)port, (uint8_t)mask);
+	}
+
+	// Read back rather than echo, the same way (video-mode) and
+	// (game-mode) do: it reports what the hardware is actually doing.
+	return ms_mk_num((double)z_gpio_dir_get((uint32_t)port));
+
+}
+
+// (gpio-out p)       -- the OUT register
+// (gpio-out p v)     -- set it, returning what it reads back as
+//
+// NOT the pin state. On a pin configured as an input this is the value
+// staged for whenever it becomes an output; (gpio-in) is what the wire
+// is actually doing.
+static ms_val *zapi_gpio_out(ms_val *args) {
+
+	int port;
+
+	if (ms_is_nil(args)) ms_log(MS_PANIC, "gpio-out: expected a port");
+
+	port = zapi_arg_int(ms_car(args), "gpio-out");
+	zapi_gpio_check_port(port, "gpio-out");
+
+	args = ms_cdr(args);
+
+	if (!ms_is_nil(args)) {
+		int v = zapi_arg_int(ms_car(args), "gpio-out");
+		if (v < 0 || v > 255)
+			ms_log(MS_PANIC, "gpio-out: value out of range (want 0..255)");
+		z_gpio_out_put((uint32_t)port, (uint8_t)v);
+	}
+
+	return ms_mk_num((double)z_gpio_out_get((uint32_t)port));
+
+}
+
+// (gpio-in p) -- the pins, all eight, as a number.
+//
+// Read-only, unlike the two above: there is no writing to a pin.
+// With nothing connected this reads 255, because every pin has a weak
+// pull-up (docs/gpio.md) -- that is a working port at rest, not a
+// fault.
+static ms_val *zapi_gpio_in(ms_val *args) {
+
+	int port;
+
+	if (ms_is_nil(args)) ms_log(MS_PANIC, "gpio-in: expected a port");
+
+	port = zapi_arg_int(ms_car(args), "gpio-in");
+	zapi_gpio_check_port(port, "gpio-in");
+
+	return ms_mk_num((double)z_gpio_in_get((uint32_t)port));
+
+}
+
+// (gpio-mode p n)          -- "in" or "out"
+// (gpio-mode p n "out")    -- set it; also "in" and "od"
+//
+// Returns the mode read back from DIR, which is why asking after
+// setting "od" answers "in": open drain is not a hardware mode and
+// there is nowhere to record it (see sw/common/zgpio.h). A pin set to
+// "od" is an input that (gpio-od) will drive low on demand, and that
+// is exactly what DIR says about it.
+static ms_val *zapi_gpio_mode(ms_val *args) {
+
+	int port, pin;
+	char *s;
+
+	if (ms_is_nil(args)) ms_log(MS_PANIC, "gpio-mode: expected a port");
+	port = zapi_arg_int(ms_car(args), "gpio-mode");
+	args = ms_cdr(args);
+
+	if (ms_is_nil(args)) ms_log(MS_PANIC, "gpio-mode: expected a pin");
+	pin = zapi_arg_int(ms_car(args), "gpio-mode");
+	args = ms_cdr(args);
+
+	zapi_gpio_check(port, pin, "gpio-mode");
+
+	if (!ms_is_nil(args)) {
+
+		const char *m = zapi_arg_str(ms_car(args), "gpio-mode");
+
+		if (!strcmp(m, "in"))
+			z_gpio_mode((uint32_t)port, (uint32_t)pin, Z_GPIO_IN);
+		else if (!strcmp(m, "out"))
+			z_gpio_mode((uint32_t)port, (uint32_t)pin, Z_GPIO_OUT);
+		else if (!strcmp(m, "od"))
+			z_gpio_mode((uint32_t)port, (uint32_t)pin, Z_GPIO_OD);
+		else
+			ms_log(MS_PANIC, "gpio-mode: unknown mode '%s' "
+				"(want in, out or od)", m);
+
+	}
+
+	s = strdup(z_gpio_mode_get((uint32_t)port, (uint32_t)pin) == Z_GPIO_OUT
+		? "out" : "in");
+	if (!s) ms_log(MS_PANIC, "gpio-mode: out of memory");
+
+	return ms_mk_str(s);	// takes ownership
+
+}
+
+// (gpio-get p n) -- the pin, as #t or #f.
+//
+// Reads the PIN, not OUT: on an output this is normally what is being
+// driven, but if something else is fighting it, this is what actually
+// won.
+static ms_val *zapi_gpio_get(ms_val *args) {
+
+	int port, pin;
+
+	if (ms_is_nil(args)) ms_log(MS_PANIC, "gpio-get: expected a port");
+	port = zapi_arg_int(ms_car(args), "gpio-get");
+	args = ms_cdr(args);
+
+	if (ms_is_nil(args)) ms_log(MS_PANIC, "gpio-get: expected a pin");
+	pin = zapi_arg_int(ms_car(args), "gpio-get");
+
+	zapi_gpio_check(port, pin, "gpio-get");
+
+	return ms_mk_bool(z_gpio_read((uint32_t)port, (uint32_t)pin));
+
+}
+
+// (gpio-set p n v) -- drive a pin. Returns the pin afterwards.
+//
+// Does NOT change the mode. A pin still configured as an input will
+// not start driving because of this; the value is staged for whenever
+// it does. That is why the return value is a read of the PIN rather
+// than an echo of `v` -- calling this on an input and getting `v` back
+// would be a lie, and it is a mistake worth having reported by the
+// value rather than by a silent nothing.
+static ms_val *zapi_gpio_set(ms_val *args) {
+
+	int port, pin;
+	bool v;
+
+	if (ms_is_nil(args)) ms_log(MS_PANIC, "gpio-set: expected a port");
+	port = zapi_arg_int(ms_car(args), "gpio-set");
+	args = ms_cdr(args);
+
+	if (ms_is_nil(args)) ms_log(MS_PANIC, "gpio-set: expected a pin");
+	pin = zapi_arg_int(ms_car(args), "gpio-set");
+	args = ms_cdr(args);
+
+	if (ms_is_nil(args)) ms_log(MS_PANIC, "gpio-set: expected a value");
+
+	// Accepts #t/#f or 1/0 -- see zapi_arg_truthy(). Both spellings
+	// exist in the wild here: #f is what (gpio-get) hands back, so a
+	// pin can be mirrored with (gpio-set 0 3 (gpio-get 0 2)), and 1/0
+	// is what somebody types who has just been using the shell.
+	v = zapi_arg_truthy(ms_car(args));
+
+	zapi_gpio_check(port, pin, "gpio-set");
+
+	z_gpio_write((uint32_t)port, (uint32_t)pin, v);
+
+	return ms_mk_bool(z_gpio_read((uint32_t)port, (uint32_t)pin));
+
+}
+
+// (gpio-toggle p n) -- flip OUT, returning the pin afterwards.
+static ms_val *zapi_gpio_toggle(ms_val *args) {
+
+	int port, pin;
+
+	if (ms_is_nil(args)) ms_log(MS_PANIC, "gpio-toggle: expected a port");
+	port = zapi_arg_int(ms_car(args), "gpio-toggle");
+	args = ms_cdr(args);
+
+	if (ms_is_nil(args)) ms_log(MS_PANIC, "gpio-toggle: expected a pin");
+	pin = zapi_arg_int(ms_car(args), "gpio-toggle");
+
+	zapi_gpio_check(port, pin, "gpio-toggle");
+
+	z_gpio_toggle((uint32_t)port, (uint32_t)pin);
+
+	return ms_mk_bool(z_gpio_read((uint32_t)port, (uint32_t)pin));
+
+}
+
+// (gpio-od p n v) -- open-drain write. Returns the pin afterwards.
+//
+// `v` is THE LEVEL THE LINE ENDS UP AT, not a direction: #f pulls it
+// low, #t releases it and lets the pull-up (or whatever else is on the
+// bus) decide. That is the mental model of an open-drain bus and it
+// matches (gpio-set)'s argument, even though underneath it moves DIR
+// rather than OUT.
+//
+// Which makes the return value more than a formality here: on a
+// working bus with a pull-up, (gpio-od p n #t) reads back #t, and on a
+// bus where another device is holding the line down it reads back #f.
+// That is how you see a stuck I2C slave from a prompt.
+//
+// Assumes the pin's OUT bit is 0, which (gpio-mode p n "od") arranges
+// and which is also the reset state of every pin -- so this is correct
+// without any setup on a freshly booted machine.
+static ms_val *zapi_gpio_od(ms_val *args) {
+
+	int port, pin;
+	bool v;
+
+	if (ms_is_nil(args)) ms_log(MS_PANIC, "gpio-od: expected a port");
+	port = zapi_arg_int(ms_car(args), "gpio-od");
+	args = ms_cdr(args);
+
+	if (ms_is_nil(args)) ms_log(MS_PANIC, "gpio-od: expected a pin");
+	pin = zapi_arg_int(ms_car(args), "gpio-od");
+	args = ms_cdr(args);
+
+	if (ms_is_nil(args)) ms_log(MS_PANIC, "gpio-od: expected a value");
+
+	v = zapi_arg_truthy(ms_car(args));
+
+	zapi_gpio_check(port, pin, "gpio-od");
+
+	z_gpio_od_write((uint32_t)port, (uint32_t)pin, v);
+
+	return ms_mk_bool(z_gpio_read((uint32_t)port, (uint32_t)pin));
+
+}
+
+// (led)    -- the board LED, as #t/#f
+// (led v)  -- set it
+//
+// Not gated on (gpio-ports): this is rtl/gpio.v's word 0 and it exists
+// on every board whether or not any port has pins. It is the block's
+// oldest register -- sw/bios/bios.c writes it before anything else in
+// the system is alive.
+static ms_val *zapi_led(ms_val *args) {
+
+	if (!ms_is_nil(args))
+		z_led_set(zapi_arg_truthy(ms_car(args)));
+
+	return ms_mk_bool((reg_gpio_led & 1u) != 0);
+
+}
+
+// (leds)   -- the `LED_DEBUG LED bar, as a number
+// (leds v) -- set it
+//
+// Harmless on a board with no pins for it: the register exists on
+// every build and the bits simply go nowhere. Check
+// Z_FEATURE_LED_DEBUG (sw/common/zsoc.h) if you need to know whether
+// anyone can see them.
+static ms_val *zapi_leds(ms_val *args) {
+
+	if (!ms_is_nil(args)) {
+		int v = zapi_arg_int(ms_car(args), "leds");
+		if (v < 0 || v > 255)
+			ms_log(MS_PANIC, "leds: value out of range (want 0..255)");
+		z_led_bar_set((uint8_t)v);
+	}
+
+	return ms_mk_num((double)(reg_gpio_leds & 0xffu));
+
+}
+
+// -- I2C and SPI (bit-banged over GPIO) --
+//
+// sw/common/zi2c.h and sw/common/zspi.h. See docs/i2c.md and
+// docs/spi.md.
+//
+// -- Buses are handles, and handles are numbers --
+//
+// Same convention as window handles (\S4): (i2c-init ...) returns a
+// small integer and every other procedure takes it. The alternative --
+// passing the pins to every call -- would mean five arguments on every
+// read and no place to keep the derived timing, and it would make
+// reconfiguring a bus mean remembering to change it everywhere.
+//
+// -- Scheme buses live on ONE port --
+//
+// The C API lets each pin be on any port; these procedures take a
+// single port and then pin numbers within it. That is not a
+// simplification for its own sake: (spi-init) would otherwise need ten
+// arguments, and a four-pin SPI device is plugged into one PMOD
+// connector essentially always. A bus genuinely spanning two ports is
+// a C program.
+
+#define ZAPI_I2C_MAX 2
+#define ZAPI_SPI_MAX 2
+
+static z_i2c_t zapi_i2c[ZAPI_I2C_MAX];
+static bool zapi_i2c_used[ZAPI_I2C_MAX];
+
+static z_spi_t zapi_spi[ZAPI_SPI_MAX];
+static bool zapi_spi_used[ZAPI_SPI_MAX];
+
+static z_i2c_t *zapi_i2c_bus(ms_val *v, const char *who) {
+	int h = zapi_arg_int(v, who);
+	if (h < 0 || h >= ZAPI_I2C_MAX || !zapi_i2c_used[h])
+		ms_log(MS_PANIC, "%s: %d is not an open i2c bus "
+			"(use the handle (i2c-init) returned)", who, h);
+	return &zapi_i2c[h];
+}
+
+static z_spi_t *zapi_spi_bus(ms_val *v, const char *who) {
+	int h = zapi_arg_int(v, who);
+	if (h < 0 || h >= ZAPI_SPI_MAX || !zapi_spi_used[h])
+		ms_log(MS_PANIC, "%s: %d is not an open spi bus "
+			"(use the handle (spi-init) returned)", who, h);
+	return &zapi_spi[h];
+}
+
+// Next positional argument as an int, or `dflt` if the list ran out.
+static int zapi_opt_int(ms_val **args, int dflt, const char *who) {
+	int v;
+	if (ms_is_nil(*args)) return dflt;
+	v = zapi_arg_int(ms_car(*args), who);
+	*args = ms_cdr(*args);
+	return v;
+}
+
+// A Scheme list of numbers, or a string, into bytes.
+//
+// Strings are accepted because (i2c-write bus 60 "hello") is what
+// anyone talking to a character display will want to type, and the
+// alternative is a list of 5 numbers they have to look up.
+static uint32_t zapi_bytes_in(ms_val *v, uint8_t *out, uint32_t cap,
+	const char *who) {
+
+	uint32_t n = 0;
+
+	if (ms_is_str(v)) {
+		const char *p = ms_str_val(v);
+		while (*p && n < cap) out[n++] = (uint8_t)*p++;
+		return n;
+	}
+
+	while (ms_is_pair(v)) {
+		int b;
+		if (n >= cap)
+			ms_log(MS_PANIC, "%s: at most %lu bytes at a time",
+				who, (unsigned long)cap);
+		b = zapi_arg_int(ms_car(v), who);
+		if (b < 0 || b > 255)
+			ms_log(MS_PANIC, "%s: %d is not a byte (want 0..255)", who, b);
+		out[n++] = (uint8_t)b;
+		v = ms_cdr(v);
+	}
+
+	return n;
+
+}
+
+// Bytes back out as a Scheme list, built as source text and read --
+// the same approach (ps), (df) and (gamepad) use, and the same
+// reasoning: far cheaper in code size than a builder, and everything
+// in the buffer is generated here so there is nothing to inject. See
+// zapi_read_form().
+#define ZAPI_BB_MAX 32
+
+static ms_val *zapi_bytes_out(const uint8_t *b, uint32_t n) {
+
+	char buf[8 + ZAPI_BB_MAX * 5];
+	size_t k = 0;
+	uint32_t i;
+
+	k += (size_t)snprintf(buf + k, sizeof(buf) - k, "'(");
+	for (i = 0; i < n; i++)
+		k += (size_t)snprintf(buf + k, sizeof(buf) - k, "%s%u",
+			i ? " " : "", (unsigned)b[i]);
+	snprintf(buf + k, sizeof(buf) - k, ")");
+
+	return zapi_read_form(buf);
+
+}
+
+// Every i2c procedure that can fail reports the same way: #f, with the
+// reason left for (i2c-error). Not a panic, because "nothing answered"
+// is an ordinary result on a bus -- it is what a scan is made of and
+// what you get for a device that is still busy -- and a procedure that
+// blew up the whole expression on a NACK would be unusable in a loop.
+//
+// Setup mistakes DO panic (a bad handle, a byte out of range), because
+// those are the caller's error rather than the bus's.
+static z_i2c_rv zapi_i2c_last = Z_I2C_OK;
+
+static ms_val *zapi_i2c_result(z_i2c_rv rv) {
+	zapi_i2c_last = rv;
+	return ms_mk_bool(rv == Z_I2C_OK);
+}
+
+// (i2c-init port scl-pin sda-pin)        -- 100kHz
+// (i2c-init port scl-pin sda-pin khz)
+//
+// Returns a bus handle, or #f if the bus is unusable right now -- both
+// lines should be high on an idle bus, and if they are not, nothing
+// this returns would work. (i2c-recover) is the thing to try.
+static ms_val *zapi_i2c_init(ms_val *args) {
+
+	int port, scl, sda, khz;
+	int h;
+	z_i2c_rv rv;
+
+	if (ms_is_nil(args)) ms_log(MS_PANIC, "i2c-init: expected a port");
+	port = zapi_arg_int(ms_car(args), "i2c-init"); args = ms_cdr(args);
+
+	if (ms_is_nil(args)) ms_log(MS_PANIC, "i2c-init: expected an scl pin");
+	scl = zapi_arg_int(ms_car(args), "i2c-init"); args = ms_cdr(args);
+
+	if (ms_is_nil(args)) ms_log(MS_PANIC, "i2c-init: expected an sda pin");
+	sda = zapi_arg_int(ms_car(args), "i2c-init"); args = ms_cdr(args);
+
+	khz = zapi_opt_int(&args, 100, "i2c-init");
+
+	zapi_gpio_check(port, scl, "i2c-init");
+	zapi_gpio_check(port, sda, "i2c-init");
+
+	if (scl == sda)
+		ms_log(MS_PANIC, "i2c-init: scl and sda cannot be the same pin");
+
+	for (h = 0; h < ZAPI_I2C_MAX; h++) if (!zapi_i2c_used[h]) break;
+	if (h == ZAPI_I2C_MAX)
+		ms_log(MS_PANIC, "i2c-init: no free bus (at most %d)", ZAPI_I2C_MAX);
+
+	zapi_i2c[h].scl_port = (uint8_t)port;
+	zapi_i2c[h].scl_pin = (uint8_t)scl;
+	zapi_i2c[h].sda_port = (uint8_t)port;
+	zapi_i2c[h].sda_pin = (uint8_t)sda;
+	zapi_i2c[h].khz = (uint32_t)(khz < 0 ? 0 : khz);
+	zapi_i2c[h].timeout_us = 1000;
+
+	rv = z_i2c_init(&zapi_i2c[h]);
+	zapi_i2c_last = rv;
+
+	if (rv != Z_I2C_OK) return ms_mk_bool(false);
+
+	zapi_i2c_used[h] = true;
+
+	return ms_mk_num((double)h);
+
+}
+
+// (i2c-error) -- why the last i2c call failed: "ok", "nack",
+// "timeout" or "busy".
+//
+// The distinction that matters: "nack" means the bus works and nobody
+// answered, "timeout" means a released line never came up, which is a
+// missing pull-up or a short and no amount of retrying will fix it.
+static ms_val *zapi_i2c_error(ms_val *args) {
+	char *s;
+	(void)args;
+	s = strdup(z_i2c_strerror(zapi_i2c_last));
+	if (!s) ms_log(MS_PANIC, "i2c-error: out of memory");
+	return ms_mk_str(s);
+}
+
+// (i2c-scan bus) -- addresses that answered, as a list.
+static ms_val *zapi_i2c_scan(ms_val *args) {
+
+	z_i2c_t *b;
+	uint8_t found[ZAPI_BB_MAX];
+	int n;
+
+	if (ms_is_nil(args)) ms_log(MS_PANIC, "i2c-scan: expected a bus");
+	b = zapi_i2c_bus(ms_car(args), "i2c-scan");
+
+	n = z_i2c_scan(b, found, ZAPI_BB_MAX);
+	if (n > ZAPI_BB_MAX) n = ZAPI_BB_MAX;
+
+	zapi_i2c_last = Z_I2C_OK;
+
+	return zapi_bytes_out(found, (uint32_t)n);
+
+}
+
+// (i2c-recover bus) -- unwedge a slave stuck holding SDA down.
+static ms_val *zapi_i2c_recover(ms_val *args) {
+	z_i2c_t *b;
+	if (ms_is_nil(args)) ms_log(MS_PANIC, "i2c-recover: expected a bus");
+	b = zapi_i2c_bus(ms_car(args), "i2c-recover");
+	return zapi_i2c_result(z_i2c_recover(b));
+}
+
+// (i2c-write bus addr data) -- data is a list of bytes or a string.
+// `addr` is the 7-BIT address (0x3c, not 0x78) as everywhere else.
+static ms_val *zapi_i2c_write(ms_val *args) {
+
+	z_i2c_t *b;
+	int addr;
+	uint8_t buf[ZAPI_BB_MAX];
+	uint32_t n;
+
+	if (ms_is_nil(args)) ms_log(MS_PANIC, "i2c-write: expected a bus");
+	b = zapi_i2c_bus(ms_car(args), "i2c-write"); args = ms_cdr(args);
+
+	if (ms_is_nil(args)) ms_log(MS_PANIC, "i2c-write: expected an address");
+	addr = zapi_arg_int(ms_car(args), "i2c-write"); args = ms_cdr(args);
+	if (addr < 0 || addr > 0x7f)
+		ms_log(MS_PANIC, "i2c-write: %d is not a 7-bit address", addr);
+
+	n = ms_is_nil(args) ? 0
+		: zapi_bytes_in(ms_car(args), buf, ZAPI_BB_MAX, "i2c-write");
+
+	return zapi_i2c_result(z_i2c_write(b, (uint8_t)addr, buf, n, true));
+
+}
+
+// (i2c-read bus addr n) -- a list of n bytes, or #f.
+static ms_val *zapi_i2c_read(ms_val *args) {
+
+	z_i2c_t *b;
+	int addr, n;
+	uint8_t buf[ZAPI_BB_MAX];
+	z_i2c_rv rv;
+
+	if (ms_is_nil(args)) ms_log(MS_PANIC, "i2c-read: expected a bus");
+	b = zapi_i2c_bus(ms_car(args), "i2c-read"); args = ms_cdr(args);
+
+	if (ms_is_nil(args)) ms_log(MS_PANIC, "i2c-read: expected an address");
+	addr = zapi_arg_int(ms_car(args), "i2c-read"); args = ms_cdr(args);
+
+	n = zapi_opt_int(&args, 1, "i2c-read");
+
+	if (addr < 0 || addr > 0x7f)
+		ms_log(MS_PANIC, "i2c-read: %d is not a 7-bit address", addr);
+	if (n < 1 || n > ZAPI_BB_MAX)
+		ms_log(MS_PANIC, "i2c-read: want 1..%d bytes", ZAPI_BB_MAX);
+
+	rv = z_i2c_read(b, (uint8_t)addr, buf, (uint32_t)n, true);
+	zapi_i2c_last = rv;
+
+	if (rv != Z_I2C_OK) return ms_mk_bool(false);
+
+	return zapi_bytes_out(buf, (uint32_t)n);
+
+}
+
+// (i2c-reg bus addr reg)     -- read one register, or #f
+// (i2c-reg bus addr reg val) -- write it, returning #t or #f
+//
+// One procedure rather than two, on the pattern (gpio-dir) and
+// (video-mode) already set here: the getter and the setter differ by
+// one argument and reading like a getter is what a caller wants at a
+// prompt.
+//
+// This is a write-then-REPEATED-START-read underneath, not a write,
+// a stop and a read. Devices are entitled to forget a register
+// pointer after a STOP and some do, intermittently, which is a
+// miserable thing to debug.
+static ms_val *zapi_i2c_reg(ms_val *args) {
+
+	z_i2c_t *b;
+	int addr, reg;
+	uint8_t v;
+	z_i2c_rv rv;
+
+	if (ms_is_nil(args)) ms_log(MS_PANIC, "i2c-reg: expected a bus");
+	b = zapi_i2c_bus(ms_car(args), "i2c-reg"); args = ms_cdr(args);
+
+	if (ms_is_nil(args)) ms_log(MS_PANIC, "i2c-reg: expected an address");
+	addr = zapi_arg_int(ms_car(args), "i2c-reg"); args = ms_cdr(args);
+
+	if (ms_is_nil(args)) ms_log(MS_PANIC, "i2c-reg: expected a register");
+	reg = zapi_arg_int(ms_car(args), "i2c-reg"); args = ms_cdr(args);
+
+	if (addr < 0 || addr > 0x7f)
+		ms_log(MS_PANIC, "i2c-reg: %d is not a 7-bit address", addr);
+	if (reg < 0 || reg > 255)
+		ms_log(MS_PANIC, "i2c-reg: %d is not a register (want 0..255)", reg);
+
+	if (!ms_is_nil(args)) {
+		int val = zapi_arg_int(ms_car(args), "i2c-reg");
+		if (val < 0 || val > 255)
+			ms_log(MS_PANIC, "i2c-reg: %d is not a byte (want 0..255)", val);
+		return zapi_i2c_result(z_i2c_reg_write8(b, (uint8_t)addr,
+			(uint8_t)reg, (uint8_t)val));
+	}
+
+	rv = z_i2c_reg_read8(b, (uint8_t)addr, (uint8_t)reg, &v);
+	zapi_i2c_last = rv;
+
+	if (rv != Z_I2C_OK) return ms_mk_bool(false);
+
+	return ms_mk_num((double)v);
+
+}
+
+// (i2c-khz bus) -- what the bus actually managed on the last transfer.
+//
+// Usually below what was asked for, and how far below is diagnostic:
+// the delay loop cannot go under the cost of the bus transactions, and
+// a weak pull-up adds real rise time to every released edge. Far under
+// on a bus that should be fast means the pull-ups need help.
+static ms_val *zapi_i2c_khz(ms_val *args) {
+	z_i2c_t *b;
+	if (ms_is_nil(args)) ms_log(MS_PANIC, "i2c-khz: expected a bus");
+	b = zapi_i2c_bus(ms_car(args), "i2c-khz");
+	return ms_mk_num((double)z_i2c_measured_khz(b));
+}
+
+// (spi-init port sck mosi miso cs)             -- mode 0, 1MHz
+// (spi-init port sck mosi miso cs mode)
+// (spi-init port sck mosi miso cs mode khz)
+//
+// -1 for miso or cs means the device has no such pin: a write-only
+// display needs no MISO, and a lone device with CS tied low needs no
+// chip select.
+static ms_val *zapi_spi_init(ms_val *args) {
+
+	int port, sck, mosi, miso, cs, mode, khz;
+	int h;
+
+	if (ms_is_nil(args)) ms_log(MS_PANIC, "spi-init: expected a port");
+	port = zapi_arg_int(ms_car(args), "spi-init"); args = ms_cdr(args);
+
+	if (ms_is_nil(args)) ms_log(MS_PANIC, "spi-init: expected an sck pin");
+	sck = zapi_arg_int(ms_car(args), "spi-init"); args = ms_cdr(args);
+
+	if (ms_is_nil(args)) ms_log(MS_PANIC, "spi-init: expected a mosi pin");
+	mosi = zapi_arg_int(ms_car(args), "spi-init"); args = ms_cdr(args);
+
+	miso = zapi_opt_int(&args, -1, "spi-init");
+	cs = zapi_opt_int(&args, -1, "spi-init");
+	mode = zapi_opt_int(&args, 0, "spi-init");
+	khz = zapi_opt_int(&args, 1000, "spi-init");
+
+	zapi_gpio_check(port, sck, "spi-init");
+	zapi_gpio_check(port, mosi, "spi-init");
+	if (miso >= 0) zapi_gpio_check(port, miso, "spi-init");
+	if (cs >= 0) zapi_gpio_check(port, cs, "spi-init");
+
+	if (mode < 0 || mode > 3)
+		ms_log(MS_PANIC, "spi-init: mode %d is not 0..3", mode);
+
+	for (h = 0; h < ZAPI_SPI_MAX; h++) if (!zapi_spi_used[h]) break;
+	if (h == ZAPI_SPI_MAX)
+		ms_log(MS_PANIC, "spi-init: no free bus (at most %d)", ZAPI_SPI_MAX);
+
+	zapi_spi[h].sck_port = (uint8_t)port;
+	zapi_spi[h].sck_pin = (uint8_t)sck;
+	zapi_spi[h].mosi_port = (uint8_t)port;
+	zapi_spi[h].mosi_pin = (uint8_t)mosi;
+	zapi_spi[h].miso_port = miso < 0 ? Z_SPI_NO_PIN : (uint8_t)port;
+	zapi_spi[h].miso_pin = miso < 0 ? 0 : (uint8_t)miso;
+	zapi_spi[h].cs_port = cs < 0 ? Z_SPI_NO_PIN : (uint8_t)port;
+	zapi_spi[h].cs_pin = cs < 0 ? 0 : (uint8_t)cs;
+	zapi_spi[h].mode = (uint8_t)mode;
+	zapi_spi[h].lsb_first = false;
+	zapi_spi[h].cs_active_high = false;
+	zapi_spi[h].khz = (uint32_t)(khz < 0 ? 0 : khz);
+
+	if (!z_spi_init(&zapi_spi[h]))
+		ms_log(MS_PANIC, "spi-init: rejected (mode out of range?)");
+
+	zapi_spi_used[h] = true;
+
+	return ms_mk_num((double)h);
+
+}
+
+// (spi-select bus v) -- assert or release CS. A no-op with no CS pin.
+//
+// Separate from (spi-xfer) because almost every real device wants
+// several transfers inside one selection -- a command, an address,
+// then a burst -- and a select-per-transfer API cannot express that.
+static ms_val *zapi_spi_select(ms_val *args) {
+
+	z_spi_t *b;
+	bool on;
+
+	if (ms_is_nil(args)) ms_log(MS_PANIC, "spi-select: expected a bus");
+	b = zapi_spi_bus(ms_car(args), "spi-select"); args = ms_cdr(args);
+
+	if (ms_is_nil(args)) ms_log(MS_PANIC, "spi-select: expected a value");
+	on = zapi_arg_truthy(ms_car(args));
+
+	z_spi_select(b, on);
+
+	return ms_mk_bool(on);
+
+}
+
+// (spi-xfer bus data) -- send bytes and return what came back.
+//
+// SPI is full duplex: every byte out produces a byte in, and this
+// returns as many as were sent. To read without sending anything
+// meaningful, send 255s -- which is what a device expects to see while
+// it is talking, and is what (spi-xfer bus n) does if given a count
+// instead of a list.
+//
+// CS IS NOT TOUCHED. Wrap this in (spi-select ...) calls; see there.
+static ms_val *zapi_spi_xfer(ms_val *args) {
+
+	z_spi_t *b;
+	uint8_t buf[ZAPI_BB_MAX];
+	uint32_t n;
+	ms_val *d;
+
+	if (ms_is_nil(args)) ms_log(MS_PANIC, "spi-xfer: expected a bus");
+	b = zapi_spi_bus(ms_car(args), "spi-xfer"); args = ms_cdr(args);
+
+	if (ms_is_nil(args)) ms_log(MS_PANIC, "spi-xfer: expected data or a count");
+
+	d = ms_car(args);
+
+	if (ms_is_num(d)) {
+		int k = zapi_arg_int(d, "spi-xfer");
+		if (k < 1 || k > ZAPI_BB_MAX)
+			ms_log(MS_PANIC, "spi-xfer: want 1..%d bytes", ZAPI_BB_MAX);
+		n = (uint32_t)k;
+		for (uint32_t i = 0; i < n; i++) buf[i] = Z_SPI_TX_IDLE;
+	} else {
+		n = zapi_bytes_in(d, buf, ZAPI_BB_MAX, "spi-xfer");
+	}
+
+	// In place: z_spi_xfer() reads tx[i] before writing rx[i]
+	// precisely so this works.
+	z_spi_xfer(b, buf, buf, n);
+
+	return zapi_bytes_out(buf, n);
+
+}
+
+// -- UART1 --
+//
+// sw/common/zuart.h. See docs/uart1.md.
+//
+// These talk to UART1 DIRECTLY, which means this process is competing
+// with sw/apps/serial for it if that is running. Nothing arbitrates
+// MMIO (docs/app_runtime.md), and the honest reading of that is: these
+// procedures are for poking at a serial port from a prompt --
+// send an AT command, see what a device says on power-up, check a baud
+// rate -- and (serial) in repl is for actually USING one. Doing both
+// at once produces interleaved bytes and two processes that each think
+// they set the baud rate.
+//
+// UART0 is deliberately absent from this API and from zuart.h. It is
+// the console: sw/bios/bios.c writes to it before anything else in the
+// system exists. A Scheme one-liner that changed its baud rate would
+// take the machine's only diagnostic channel with it.
+
+// (uart1?) -- is there a general-purpose UART1 in this bitstream?
+//
+// #f on a ULX3S even though it has a UART1, because there that UART is
+// soldered to the on-board ESP32 with no header and no second owner.
+// See sw/common/zsoc.h's Z_FEATURE2_UART1.
+static ms_val *zapi_uart1_p(ms_val *args) {
+	(void)args;
+	return ms_mk_bool(z_uart1_present());
+}
+
+// (uart1-open)       -- 115200, 8N1
+// (uart1-open baud)
+//
+// Returns #t, or #f if there is no UART1 or the rate cannot be
+// produced from this clock. That second case is not hypothetical: at
+// 48MHz the 16550's divisor makes 921600 land on 1 Mbaud, 8.5% off and
+// far outside what a UART tolerates. (uart1-baud-error) says how far.
+static ms_val *zapi_uart1_open(ms_val *args) {
+
+	int baud = 115200;
+
+	if (!ms_is_nil(args)) baud = zapi_arg_int(ms_car(args), "uart1-open");
+
+	if (baud < 50 || baud > 3000000)
+		ms_log(MS_PANIC, "uart1-open: %d is outside 50..3000000", baud);
+
+	return ms_mk_bool(z_uart1_open((uint32_t)baud));
+
+}
+
+// (uart1-baud-error baud) -- how far off `baud` would be, in percent.
+//
+// A real number, so 8.5 means 8.5%. Anything over 3 is refused by
+// (uart1-open); a UART samples mid-bit and accumulates the error over
+// ten bit times, so a few percent walks the sample point off the end
+// of the byte.
+//
+// Worth asking BEFORE blaming a cable. The symptom of a bad divisor is
+// a port that works at 115200 and produces garbage at 921600, which
+// looks exactly like a hardware problem.
+static ms_val *zapi_uart1_baud_error(ms_val *args) {
+
+	int baud;
+
+	if (ms_is_nil(args))
+		ms_log(MS_PANIC, "uart1-baud-error: expected a baud rate");
+
+	baud = zapi_arg_int(ms_car(args), "uart1-baud-error");
+	if (baud < 1) ms_log(MS_PANIC, "uart1-baud-error: %d is not a rate", baud);
+
+	return ms_mk_num((double)z_uart1_baud_error((uint32_t)baud) / 100.0);
+
+}
+
+// (uart1-close) -- stop. Leaves the divisor alone, so reopening at the
+// same rate costs nothing.
+static ms_val *zapi_uart1_close(ms_val *args) {
+	(void)args;
+	z_uart1_close();
+	return ms_mk_bool(true);
+}
+
+// (uart1-write "text") or (uart1-write '(1 2 3)) -- returns how many
+// bytes went out.
+//
+// BLOCKS until the transmitter has taken them all. Bounded by the
+// length at the current baud rate, which at 9600 is about a
+// millisecond per byte -- a 32-byte string is 33ms of this process not
+// answering messages. Fine at a prompt; see zuart.h's
+// z_uart1_write_nb() for the version a port server wants.
+static ms_val *zapi_uart1_write(ms_val *args) {
+
+	uint8_t buf[ZAPI_BB_MAX];
+	uint32_t n;
+
+	if (!z_uart1_present())
+		ms_log(MS_PANIC, "uart1-write: no general-purpose uart1 in this "
+			"bitstream (see docs/uart1.md)");
+
+	if (ms_is_nil(args)) ms_log(MS_PANIC, "uart1-write: expected data");
+
+	n = zapi_bytes_in(ms_car(args), buf, ZAPI_BB_MAX, "uart1-write");
+
+	return ms_mk_num((double)z_uart1_write(buf, n));
+
+}
+
+// (uart1-read)    -- up to 32 bytes, as a list. () if nothing waiting.
+// (uart1-read n)
+//
+// NEVER BLOCKS, and returns what is there rather than waiting for `n`.
+// A blocking read at a prompt with nothing on the other end would hang
+// the REPL with no way out, and the 16550's FIFO is 16 bytes deep so
+// there is rarely more to wait for anyway. Call it again.
+static ms_val *zapi_uart1_read(ms_val *args) {
+
+	uint8_t buf[ZAPI_BB_MAX];
+	int n = ZAPI_BB_MAX;
+	uint32_t got;
+
+	if (!z_uart1_present())
+		ms_log(MS_PANIC, "uart1-read: no general-purpose uart1 in this "
+			"bitstream (see docs/uart1.md)");
+
+	if (!ms_is_nil(args)) {
+		n = zapi_arg_int(ms_car(args), "uart1-read");
+		if (n < 1 || n > ZAPI_BB_MAX)
+			ms_log(MS_PANIC, "uart1-read: want 1..%d bytes", ZAPI_BB_MAX);
+	}
+
+	got = z_uart1_read(buf, (uint32_t)n);
+
+	return zapi_bytes_out(buf, got);
+
+}
+
+// (uart1-ready?) -- is there at least one byte waiting?
+static ms_val *zapi_uart1_ready(ms_val *args) {
+	(void)args;
+	return ms_mk_bool(z_uart1_rx_ready());
+}
+
+// (uart1-status) -- errors since the last call, as a list of symbols:
+// (overrun), (framing), (parity), (break), or () if all is well.
+//
+// Sticky and cleared by reading, because the 16550's own error bits
+// are cleared by any read of its status register and every data read
+// goes past it -- an overrun between two (uart1-read) calls would
+// otherwise be gone before anyone asked.
+//
+// OVERRUN MEANS BYTES WERE LOST, silently, from the middle of the
+// stream. On a polled receiver at 115200 that is a real possibility:
+// one scheduler slice is 15.7 bytes of arrival against a 16-byte FIFO.
+// FRAMING usually means the baud rate is wrong rather than the wire
+// being bad -- check (uart1-baud-error) first.
+static ms_val *zapi_uart1_status(ms_val *args) {
+
+	static const struct { uint32_t bit; const char *name; } names[] = {
+		{ Z_UART1_OVERRUN, "overrun" },
+		{ Z_UART1_FRAMING, "framing" },
+		{ Z_UART1_PARITY,  "parity"  },
+		{ Z_UART1_BREAK,   "break"   },
+	};
+
+	uint32_t st;
+	char buf[64];
+	size_t k = 0;
+	size_t i;
+
+	(void)args;
+
+	st = z_uart1_status();
+
+	// Built as source text and read back, same as (gamepad) and for
+	// the same reason -- see zapi_read_form(). Every character comes
+	// from the table above.
+	k += (size_t)snprintf(buf + k, sizeof(buf) - k, "'(");
+	for (i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+		if (!(st & names[i].bit)) continue;
+		k += (size_t)snprintf(buf + k, sizeof(buf) - k, "%s%s",
+			(k > 2) ? " " : "", names[i].name);
+	}
+	snprintf(buf + k, sizeof(buf) - k, ")");
+
+	return zapi_read_form(buf);
+
+}
+
 // -- Randomness --
 
 // (random)    -- a real in [0, 1)
@@ -1787,4 +2800,34 @@ void zapi_register(void) {
 	ms_def_builtin("random-hex", zapi_random_hex);
 	ms_def_builtin("random-secure?", zapi_random_secure);
 	ms_def_builtin("random-stir", zapi_random_stir);
+	ms_def_builtin("gpio-ports", zapi_gpio_ports);
+	ms_def_builtin("gpio-dir", zapi_gpio_dir);
+	ms_def_builtin("gpio-out", zapi_gpio_out);
+	ms_def_builtin("gpio-in", zapi_gpio_in);
+	ms_def_builtin("gpio-mode", zapi_gpio_mode);
+	ms_def_builtin("gpio-get", zapi_gpio_get);
+	ms_def_builtin("gpio-set", zapi_gpio_set);
+	ms_def_builtin("gpio-toggle", zapi_gpio_toggle);
+	ms_def_builtin("gpio-od", zapi_gpio_od);
+	ms_def_builtin("led", zapi_led);
+	ms_def_builtin("leds", zapi_leds);
+	ms_def_builtin("i2c-init", zapi_i2c_init);
+	ms_def_builtin("i2c-error", zapi_i2c_error);
+	ms_def_builtin("i2c-scan", zapi_i2c_scan);
+	ms_def_builtin("i2c-recover", zapi_i2c_recover);
+	ms_def_builtin("i2c-write", zapi_i2c_write);
+	ms_def_builtin("i2c-read", zapi_i2c_read);
+	ms_def_builtin("i2c-reg", zapi_i2c_reg);
+	ms_def_builtin("i2c-khz", zapi_i2c_khz);
+	ms_def_builtin("spi-init", zapi_spi_init);
+	ms_def_builtin("spi-select", zapi_spi_select);
+	ms_def_builtin("spi-xfer", zapi_spi_xfer);
+	ms_def_builtin("uart1?", zapi_uart1_p);
+	ms_def_builtin("uart1-open", zapi_uart1_open);
+	ms_def_builtin("uart1-close", zapi_uart1_close);
+	ms_def_builtin("uart1-baud-error", zapi_uart1_baud_error);
+	ms_def_builtin("uart1-write", zapi_uart1_write);
+	ms_def_builtin("uart1-read", zapi_uart1_read);
+	ms_def_builtin("uart1-ready?", zapi_uart1_ready);
+	ms_def_builtin("uart1-status", zapi_uart1_status);
 }
