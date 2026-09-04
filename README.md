@@ -15,7 +15,7 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 | Component | Features/Notes |
 |-----------|----------|
 | CPU | 32-bit RISC-V (PicoRV32 or [Zeitlos32](docs/zeitlos32.md)) RV32IM @ 48MHz |
-| GPU | [Line rasterizer](docs/gpu_raster.md) and [blitter](docs/blitter.md) |
+| GPU | [Line rasterizer](docs/gpu_raster.md) and [blitter](docs/gpu_blitter.md) |
 | MTU | Virtual addressing through Memory Translation Unit |
 | Bus | 32-bit Wishbone |
 | Main Memory | SDRAM, PSRAM or SRAM (1MB minimum) |
