@@ -27,7 +27,7 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 | Network | Ethernet (SPI), Ethernet MAC (for RMII PHY) or [ESP32](docs/esp32link.md) |
 | Entropy | Ring-oscillator [TRNG](docs/trng.md) |
 | HID | USB keyboard + optional USB mouse/[gamepad](docs/gamepad.md) |
-| I/O | Optional [GPIO](docs/gpio.md) on PMOD ports with bit-banged [I2C](docs/i2c.md) and [SPI](docs/spi.md), hardware SPI, 16550 UART, optional second [UART](docs/uart1.md) |
+| I/O | Optional [GPIO](docs/gpio.md) on PMOD ports with bit-banged [I2C](docs/i2c.md) and [SPI](docs/spi.md), hardware SPI, 16550 [UART](docs/uart.md), optional second [UART](docs/uart1.md) |
 
 ### OS
 
