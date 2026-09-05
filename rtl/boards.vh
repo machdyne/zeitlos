@@ -381,7 +381,7 @@
 // Uncommenting this does NOT free PMOD A on its own; it only stops
 // the console needing it. To put GPIO there as well, uncomment
 // `GPIO_PORT0 below and the PMOD A block in boards/obst_v0.lpf.
-`define USB_CDC
+//`define USB_CDC
 
 // GPIO (rtl/gpio.v, docs/gpio.md) is OFF in the plain board build and
 // deliberately so: Obst has two PMOD connectors and this block claims

@@ -37,15 +37,20 @@
  * replies between them at random. A second CONNECT is refused with a
  * message saying so.
  *
- * -- Flow control does not exist --
+ * -- Flow control is not built on any current target --
  *
- * rtl/sysctl.v ties the 16550's CTS/DSR/RI/DCD inputs to 1, and
+ * rtl/uart.v can do auto-RTS/auto-CTS behind `UART1_FLOW (docs/uart.md),
+ * but no target defines it, so rtl/sysctl.v ties cts_pad_i to 1, and
  * release/hw/pmods/usbuart1.spec only wires TX and RX. So there is no
  * hardware flow control in either direction, and this app does not
  * implement software flow control either.
  *
+ * If a target ever wires the pins, the banner below and this comment
+ * both become wrong -- check z_soc_has_feature2() rather than
+ * assuming, or drop the claim from the banner entirely.
+ *
  * WHAT THAT MEANS IN PRACTICE: a far end that sends faster than this
- * process is scheduled will overrun the 16550's 16-byte receive FIFO
+ * process is scheduled will overrun the UART's 16-byte receive FIFO
  * and bytes will be LOST. Not corrupted -- lost, silently, from the
  * middle of the stream. z_uart1_status()'s overrun bit is how this app
  * finds out, and it says so on the connection rather than hiding it:
@@ -74,7 +79,7 @@
 // almost always set to.
 #define DEFAULT_BAUD 115200
 
-// One RX poll's worth. Sized to the 16550's FIFO -- there is never
+// One RX poll's worth. Sized to the UART's FIFO -- there is never
 // more than 16 bytes to collect, so a bigger buffer would only make
 // the code look like it was doing something it is not.
 #define RX_CHUNK 16

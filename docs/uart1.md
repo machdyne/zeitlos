@@ -1,7 +1,13 @@
 # UART1
 
-A second 16550 at `0xf000_0100`, available to software as a
-general-purpose serial port. `sw/common/zuart.h`, `sw/apps/serial`.
+A second `rtl/uart.v` instance at `0xf000_0100`, available to software
+as a general-purpose serial port. `sw/common/zuart.h`,
+`sw/apps/serial`.
+
+Since the move off `rtl/ext/uart16550` this is **our** core rather than
+a third-party one — see `docs/uart.md`. The register interface is
+unchanged and no API here changed with it, but three things in this
+document did, and they are marked below.
 
 ## UART0 is not this, and never will be
 
@@ -69,15 +75,32 @@ HDMI and a keyboard cannot replace.
 Pins 2 and 3 match `usbuart.spec`, so the same USB-UART PMOD that
 serves as a console in port A works here without rewiring.
 
-## No flow control
+## No flow control — but it is available now
 
-`rtl/sysctl.v` ties the 16550's CTS, DSR, RI and DCD inputs to 1
-(asserted), and `usbuart1.spec` wires only TX and RX. There is no
-hardware flow control in either direction, and `sw/apps/serial` does
-not implement software flow control either.
+**Changed.** `rtl/uart.v` implements auto-RTS/auto-CTS, and UART1 can
+have it:
 
-Connector pins 1 and 4 are therefore free. A target could hand them to
-something else; nothing does yet.
+```
+`define UART1_FLOW      // rtl/boards.vh, per board
+```
+
+**No board defines it**, so as shipped the statement above still
+holds: `sysctl.v` ties `cts_pad_i` to 1 and `usbuart1.spec` wires only
+TX and RX. `sw/apps/serial` does not implement software flow control
+either, and its banner saying "no flow control" is accurate for every
+current target.
+
+What changed is that it is now a target's decision rather than a
+missing feature. Turning it on costs +5 LUT4 and needs LPF entries for
+`UART1_RTS`/`UART1_CTS`; connector pins 1 and 4 are the ones, matching
+the PMOD USB-UART pinout. See `docs/uart.md` for the thresholds and
+for why RTS is the half that protects you.
+
+`z_uart1_config()` does not touch MCR, and MCR resets to zero with AFE
+clear, so even on a board that builds it nothing happens until
+software asks. There is deliberately **no `zuart.h` API for it yet** —
+an API that no board can exercise is untested surface. When a target
+wires the pins, the call is one write of MCR bit 5.
 
 ## Polled, not interrupt-driven
 
@@ -92,8 +115,16 @@ the FIFO and lowers the level; UART1 has no handler. Wiring it as a
 *latched* IRQ instead avoids the storm but gives one spurious ISR entry
 per edge for no benefit.
 
-The 16550's `IER` resets to 0 and `z_uart1_config()` writes 0 to it
-explicitly, so the source is quiet either way.
+`IER` resets to 0 and `z_uart1_config()` writes 0 to it explicitly, so
+the source is quiet either way.
+
+**Changed.** One thing to know before wiring it: `rtl/uart.v` has a
+fixed receive trigger level of one byte and therefore never generates
+the character timeout interrupt (IIR `0x0c`). A driver written against
+it sees RDA (`0x04`) per byte and nothing else. `sw/os/uart.c` treats
+the two identically in any case, so a UART1 handler modelled on it
+needs no change — but a handler that waited for a timeout to flush a
+partial buffer would wait forever.
 
 When a driver wants it, the change is two lines and no more work later
 than now:
@@ -133,7 +164,7 @@ ever needs to go that fast here, that is the shape of the answer.
 
 ## Baud rates that don't exist
 
-The 16550 divides `sys_clk` by `16 × n` with `n` an integer, and at
+`rtl/uart.v` divides `sys_clk` by `16 × n` with `n` an integer, and at
 48MHz that makes some common rates unreachable:
 
 | requested | n | actual | error | |
@@ -245,17 +276,34 @@ answering messages and `term` appears to hang.
 speed a live sender can refill the FIFO as fast as this drains it, and
 an unbounded loop would never return.
 
-**`z_uart1_status()` is sticky** because the 16550's own LSR bits are
-cleared by a read of that register, and every read of the data register
-goes past it. An overrun between two `z_uart1_read()` calls would be
-gone before anyone asked.
+**`z_uart1_status()` is sticky** because the hardware's own LSR bits
+are cleared by a read of that register, and every read of the data
+register goes past it. An overrun between two `z_uart1_read()` calls
+would be gone before anyone asked.
+
+**Changed, and the change makes this more true rather than less.**
+`rtl/uart.v` keeps PE, FE and BI as global bits cleared on an LSR read
+rather than tagging each FIFO entry with its own, which is what the
+16550 did (see `docs/uart.md`). So an error is now attached to "since
+you last looked" rather than to a particular byte — which is exactly
+the model `lsr_poll()` was already written for. The practical
+difference: an error on a byte the caller never reads is no longer
+silently discarded with it.
 
 There is no magic register to cross-check presence against, unlike
-`rtl/gpio.v`. The 16550 is a third-party core with no identity
-register, and on a board without one this address falls through to
+`rtl/gpio.v`. On a board without a UART1 this address falls through to
 whatever the bus resolves to — so the feature bit is the only answer,
 and calling anything above without checking it first is reading a
 register that may not exist.
+
+**Changed.** The old reason was that the 16550 was somebody else's
+core. It is ours now, so an identity register is technically
+available — but there is nowhere in the 16550 map to put one. Every
+offset means something, and the only unused one, SCR at `0x1c`, is a
+scratch register that software is entitled to expect behaves as
+scratch. Spending it on a magic value would trade drop-in
+compatibility for a check the feature bit already answers. Left
+alone deliberately.
 
 ## Scheme API
 

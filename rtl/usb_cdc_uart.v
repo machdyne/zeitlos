@@ -13,7 +13,7 @@
  * handshaking.
  *
  * This module puts a 16550 register map in front of that pipe and sits
- * in the 0xf000_00xx window where rtl/ext/uart16550 used to be. That
+ * in the 0xf000_00xx window where rtl/uart.v otherwise sits. That
  * is the entire point of the exercise: sw/bios/bios.c, sw/os/uart.c
  * and sw/os/sh.c reach the console through sw/common/zeitlos.h's
  * reg_uart0_* macros, and none of them change. A board built with

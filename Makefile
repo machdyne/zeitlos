@@ -37,17 +37,7 @@ RTL_PICO = \
 	rtl/gpu/gpu_cursor.v \
 	rtl/gpu/gpu_ddmi.v \
 	rtl/gpu/tmds_encoder.v \
-	rtl/ext/uart16550/rtl/verilog/uart_top.v \
-	rtl/ext/uart16550/rtl/verilog/uart_wb.v \
-	rtl/ext/uart16550/rtl/verilog/uart_debug_if.v \
-	rtl/ext/uart16550/rtl/verilog/uart_defines.v \
-	rtl/ext/uart16550/rtl/verilog/uart_regs.v \
-	rtl/ext/uart16550/rtl/verilog/uart_rfifo.v \
-	rtl/ext/uart16550/rtl/verilog/uart_tfifo.v \
-	rtl/ext/uart16550/rtl/verilog/uart_sync_flops.v \
-	rtl/ext/uart16550/rtl/verilog/uart_transmitter.v \
-	rtl/ext/uart16550/rtl/verilog/uart_receiver.v \
-	rtl/ext/uart16550/rtl/verilog/raminfr.v \
+	rtl/uart.v \
 	rtl/usb_hid.v \
 	rtl/ext/usb_hid_host/src/usb_hid_host.v \
 	rtl/ext/usb_hid_host/src/usb_hid_host_rom.v \
@@ -573,6 +563,19 @@ timing:
 #
 #   make test_blit                    reference against itself
 #   make test_blit CAND=/tmp/new.v    reference against a candidate
+# rtl/uart.v against itself: loopback at several line settings, FIFO
+# depth, overrun, the divisor latch and both interrupt sources.
+#
+# Worth running before every flash that touches it, because this block
+# answers the window sw/bios/bios.c writes its FIRST character into.
+# A fault here does not degrade the console, it produces a board that
+# prints nothing at all -- and the same fault in rtl/ext/uart16550
+# would have been somebody else's bug, whereas this one is ours.
+test_uart:
+	@mkdir -p output
+	iverilog -g2005 -o output/tb_uart rtl/tb/tb_uart.v rtl/uart.v
+	@vvp output/tb_uart
+
 CAND ?= rtl/gpu/gpu_blit.v
 test_blit:
 	@mkdir -p output
@@ -612,4 +615,4 @@ clean_bios:
 clean_apps:
 	cd sw/apps && make clean
 
-.PHONY: clean_bios bios apps tftp-dist timing path util test_blit
+.PHONY: clean_bios bios apps tftp-dist timing path util test_blit test_uart

@@ -2044,7 +2044,7 @@ module sysctl #()
 	//   `USB_CDC   rtl/usb_cdc_uart.v -- a real console, on the
 	//              USB-C socket, with a 16550 register map in front
 	//              of a CDC-ACM device. No PMOD, no USB-UART dongle.
-	//   `UART0     rtl/ext/uart16550 -- a real console, on PMOD pins.
+	//   `UART0     rtl/uart.v -- a real console, on PMOD pins.
 	//   neither    rtl/uart_null.v -- a UART-shaped hole that acks
 	//              and discards, so a board with no console at all
 	//              still boots.
@@ -2085,7 +2085,12 @@ module sysctl #()
 	wire wbm_cyc_uart0 = cs_uart0 && wbm_cyc;
 	wire wbm_stb_uart0 = cs_uart0 && wbm_stb;
 
-	uart_top #() wbs_uart0_i
+	// rtl/uart.v, not rtl/ext/uart16550. Same registers, same bits,
+	// written from scratch under this repo's own license -- see that
+	// file's header. The modem pads are gone with it: this SOC tied
+	// all four inputs to 1'b1 on every board, so MSR was a constant
+	// and nothing ever read it.
+	uart_wb #() wbs_uart0_i
 	(
 		.wb_clk_i(wbm_clk),
 		.wb_rst_i(wbm_rst),
@@ -2099,10 +2104,6 @@ module sysctl #()
 		.wb_cyc_i(wbm_cyc_uart0),
 		.stx_pad_o(UART0_TX),
 		.srx_pad_i(UART0_RX),
-		.cts_pad_i(1'b1),
-		.dsr_pad_i(1'b1),
-		.ri_pad_i(1'b1),
-		.dcd_pad_i(1'b1),
 		.int_o(wbs_uart0_int)
 	);
 `else
@@ -2150,7 +2151,7 @@ module sysctl #()
 	wire wbm_cyc_uart1 = cs_uart1 && wbm_cyc;
 	wire wbm_stb_uart1 = cs_uart1 && wbm_stb;
 
-	uart_top #() wbs_uart1_i
+	uart_wb #() wbs_uart1_i
 	(
 		.wb_clk_i(wbm_clk),
 		.wb_rst_i(wbm_rst),
@@ -2164,10 +2165,6 @@ module sysctl #()
 		.wb_cyc_i(wbm_cyc_uart1),
 		.stx_pad_o(UART1_TX),
 		.srx_pad_i(UART1_RX),
-		.cts_pad_i(1'b1),
-		.dsr_pad_i(1'b1),
-		.ri_pad_i(1'b1),
-		.dcd_pad_i(1'b1),
 		.int_o(wbs_uart1_int)
 	);
 `endif

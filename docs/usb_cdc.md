@@ -36,7 +36,7 @@ that powers the board is the cable that carries the console.
 Nothing. That is the design.
 
 `rtl/usb_cdc_uart.v` presents a 16550 register map at `0xf000_0000` --
-the same window `rtl/ext/uart16550` answered -- so `sw/bios/bios.c`,
+the same window `rtl/uart.v` answers -- so `sw/bios/bios.c`,
 `sw/os/uart.c`, `sw/os/sh.c` and everything reaching the console
 through `sw/common/zeitlos.h`'s `reg_uart0_*` macros are byte-for-byte
 identical on a `` `USB_CDC `` board. `xf` uploads, the kernel shell,
@@ -166,7 +166,7 @@ Measured on ECP5, `-abc9`, at `` `USB_CDC_MPS `` 8:
 |---|---|---|---|
 | `rtl/ext/usb_cdc` core | 1144 | 395 | 0 |
 | whole `usb_cdc_uart` block | 1276 | 524 | 0 |
-| `rtl/ext/uart16550` it displaces | 583 | 308 | 0 |
+| `rtl/uart.v` it displaces | 256 | 152 | 0 |
 
 **Zero block RAM at any packet size.** That is the property that made
 this core the right choice; every byte of buffering in it is

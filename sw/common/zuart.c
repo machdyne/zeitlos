@@ -15,7 +15,7 @@
 
 #include "zuart.h"
 
-// 16550 LSR bits.
+// LSR bits (rtl/uart.v, 16550 layout).
 #define LSR_DR   0x01u		// data ready
 #define LSR_OE   0x02u		// overrun
 #define LSR_PE   0x04u		// parity
@@ -45,12 +45,12 @@ static uint8_t lsr_poll(void) {
 
 bool z_uart1_present(void) {
 	// The feature bit is the only answer available. See zuart.h: the
-	// 16550 has no identity register, and on a board without one this
+	// hardware has no identity register, and on a board without one this
 	// address falls through to whatever the bus resolves to.
 	return z_soc_has_feature2(Z_FEATURE2_UART1);
 }
 
-// The 16550 divides sys_clk by 16 * n. Rounded rather than truncated,
+// rtl/uart.v divides sys_clk by 16 * n. Rounded rather than truncated,
 // which matters at the top of the range: truncating 921600 at 48MHz
 // gives n=3 (1 Mbaud, 8.5% fast) where rounding also gives 3 -- but
 // truncating 460800 gives 6 (500k, 8.5% fast) where rounding gives 7
@@ -110,7 +110,7 @@ bool z_uart1_config(uint32_t baud, uint8_t bits, char parity, uint8_t stop) {
 
 	// Interrupts stay off. Nothing handles cpu_irq[9] -- see zuart.h
 	// on why that is deliberate -- and enabling them here would leave
-	// the 16550 asserting a level nobody lowers.
+	// the UART asserting a level nobody lowers.
 	reg_uart1_ier = 0x00;
 
 	// DLAB set to reach the divisor latches, then cleared. The order

@@ -5,7 +5,7 @@
  * Zeitlos
  * Copyright (c) 2025 Lone Dynamics Corporation. All rights reserved.
  *
- * UART1 -- a second 16550 at 0xf000_0100, available to software as a
+ * UART1 -- a second rtl/uart.v at 0xf000_0100, available to software as a
  * general-purpose serial port. See docs/uart1.md.
  *
  * -- UART0 IS NOT THIS AND NEVER WILL BE --
@@ -34,7 +34,7 @@
  *
  * -- Polled, not interrupt-driven --
  *
- * There is no ISR behind this. rtl/sysctl.v does NOT wire the 16550's
+ * There is no ISR behind this. rtl/sysctl.v does NOT wire the UART's
  * interrupt output to cpu_irq[9], and that is a considered omission
  * rather than unfinished work: a level-sensitive source with no
  * handler is a livelock, and one with a latched handler that ignores
@@ -43,7 +43,7 @@
  * reason bits 4 and 7 are clear) is described in docs/uart1.md, and it
  * is no more work later than now.
  *
- * WHAT THAT COSTS: the 16550's receive FIFO is 16 bytes. A reader that
+ * WHAT THAT COSTS: the receive FIFO is 16 bytes. A reader that
  * polls once per scheduler slice sees 16 bytes per 1.365ms, which is
  * about 11.7 kB/s -- comfortable at 115200 (14.4 kB/s is close, so a
  * busy system will drop) and hopeless at 1 Mbaud. z_uart1_status()
@@ -71,7 +71,7 @@
 // no header and no second owner. See sw/common/zsoc.h.
 //
 // There is no magic register to cross-check against, unlike
-// sw/common/zgpio.h -- the 16550 is a third-party core with no
+// sw/common/zgpio.h -- rtl/uart.v has no
 // identity register, and its LSR reads as 0x60 whether it is there or
 // not (on a board without it, 0xf000_0100 falls through to whatever
 // the bus resolves to). So the feature bit is the only answer, and
@@ -95,7 +95,7 @@ bool z_uart1_config(uint32_t baud, uint8_t bits, char parity, uint8_t stop);
 // Percent error between the requested baud rate and what the divisor
 // actually produces, times 100 (so 137 means 1.37%).
 //
-// Worth checking rather than assuming, because the 16550 divides
+// Worth checking rather than assuming, because the hardware divides
 // Z_SYSCLK_HZ by 16*n with n an integer, and at high baud rates n gets
 // small enough that the rounding matters: at 48MHz, 1000000 baud is
 // exactly n=3, but 921600 wants n=3.26 and lands on 3, which is 1
@@ -106,7 +106,7 @@ bool z_uart1_config(uint32_t baud, uint8_t bits, char parity, uint8_t stop);
 // z_uart1_open() refuses anything worse than 3%.
 uint32_t z_uart1_baud_error(uint32_t baud);
 
-// Stop driving TX. Does not reset the 16550 -- there is no need, and
+// Stop driving TX. Does not reset the UART -- there is no need, and
 // leaving the divisor alone means reopening at the same rate is free.
 //
 // Nothing is released or freed; this exists so a process can say it is
@@ -145,7 +145,7 @@ void     z_uart1_flush_rx(void);
 
 // Sticky error bits since the last call, cleared by reading.
 //
-// Sticky because the 16550's own LSR bits are cleared by a read of
+// Sticky because the hardware's own LSR bits are cleared by a read of
 // that register, and every read of the data register goes past it --
 // so an overrun that happened between two z_uart1_read() calls would
 // be gone before anyone asked. This accumulates them instead.

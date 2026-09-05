@@ -288,7 +288,6 @@ This project makes use of LLMs for code and documentation.
 The contents of this repo are released under the [Lone Dynamics Open License](LICENSE.md) with the following exceptions:
 
 - rtl/cpu/picorv32 uses the ISC license.
-- rtl/ext/uart16550 uses the LGPL license.
 - rtl/mem/sdram\_kianv uses the Apache 2.0 license.
 - rtl/ext/usb\_hid\_host uses the Apache 2.0 license.
 - rtl/ext/usb\_cdc uses the MIT license.
