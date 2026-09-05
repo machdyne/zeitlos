@@ -73,7 +73,7 @@ With the MTU, there is no need for position independent code or complicated addr
 | [clock](docs/clock_app.md) | Analog and digital clock |
 | [settings](docs/settings_app.md) | System settings |
 | [play](docs/play_app.md) | WAV/AU/RAW audio file player |
-| track | MOD audio file player |
+| [track](docs/tracker_app.md) | MOD audio file player |
 | [mmod](docs/mmod.md) | [MMOD](https://github.com/machdyne/mmod) reader/writer |
 | [logic](docs/logic_app.md) | Logic analyzer (under development) |
 | [gamedemo](docs/gamedemo.md) | 2D side-scrolling platformer game |
