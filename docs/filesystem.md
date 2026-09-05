@@ -189,8 +189,20 @@ FS_SIZE         FS_OPEN_READ      FS_TOUCH
 FS_READ         FS_READ_CHUNK     FS_SEEK
 FS_WRITE        FS_WRITE_CHUNK    FS_DF
 FS_UNLINK       FS_CLOSE          EXEC_EXISTS
-FS_LIST
+FS_LIST         FS_OPEN_RW        FS_SYNC
+FS_TRUNCATE
 ```
+
+`FS_OPEN_RW` / `FS_SYNC` / `FS_TRUNCATE` are the in-place editing
+calls added for `sw/apps/hex` (`docs/hex_editor.md`). Nothing about
+them is special here — they reach FatFs like every other entry, so
+they belong in the list for the same reason.
+
+**`FS_TRUNCATE` is the one to watch for the cap below.** Growing a file
+allocates clusters and updates the FAT, so a large expansion is the
+longest single trip into FatFs this list contains — longer than a 64KB
+`FS_READ`. A caller growing a file by a lot should do it in steps
+rather than one call, for the same reason the chunked API exists.
 
 It is a `switch` rather than a flag in `sw/common/syscalls.def`
 deliberately: that file is shared with app-side code, and its own

@@ -959,11 +959,26 @@ building anyway.
 
 A small always-on-top launcher bar, anchored to the bottom left of
 the screen, with one 32x32 icon per app (`sw/apps/wm/wm.c`,
-`dock_candidates[]`). Currently `term`, `gpu3d` and `draw`; adding
-another is one more `{ "name", z_icon_<name>_data }` entry there, plus
-a 32x32 PNG in `sw/data/icons/` and a run of
-`gen_dock_icon_data.py` -- see that script's own usage comment.
-Nothing else.
+`dock_candidates[]`). Adding another is one more
+`{ "name", z_icon_<name>_data }` entry there, plus a 32x32 PNG in
+`sw/data/icons/` and a run of `gen_dock_icon_data.py` -- see that
+script's own usage comment. Nothing else.
+
+The list is deliberately not reproduced here. It went stale the moment
+apps were added -- it used to say "currently `term`, `gpu3d` and
+`draw`" long after there were a dozen -- and `dock_candidates[]` is two
+lines of scrolling away.
+
+**There is a ceiling, and nothing enforces it.** The dock is one row,
+`create_dock()` sizes the window from `DOCK_APP_COUNT` and places it at
+`x = DOCK_MARGIN`, and nothing clamps the result. At `DOCK_ICON_SIZE`
+32 plus `DOCK_ICON_GAP` 4 that is 36 pixels per icon, so on a 640px
+screen **seventeen** resolved apps fit and an eighteenth runs off the
+right edge -- drawn past the screen, unreachable by mouse or by the
+dock's own keyboard navigation. Sixteen are listed today. Past
+seventeen the dock needs to wrap, scroll, or drop what does not fit;
+`dock_candidates[]` carries the same warning where somebody would add
+the eighteenth.
 
 A candidate is only an *offer*: `dock_build()` keeps the ones that
 actually resolve via `z_exec_exists()` at startup, so an app that isn't

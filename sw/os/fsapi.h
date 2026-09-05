@@ -157,4 +157,15 @@ z_obj_t *k_fs_read_chunk(z_obj_t *args);
 z_obj_t *k_fs_write_chunk(z_obj_t *args);
 z_obj_t *k_fs_close(z_obj_t *args);
 
+// In-place modification of an existing file -- open without truncating,
+// commit without closing, and set the size. Added for sw/apps/hex
+// (docs/hex_editor.md); see sw/common/zfs.h for the design writeup on
+// each, including why FS_OPEN_RW refuses to create and why FS_TRUNCATE
+// does not zero what it grows.
+//
+// Args: z_fs_open_args_t, z_fs_close_args_t, z_fs_truncate_args_t.
+z_obj_t *k_fs_open_rw(z_obj_t *args);
+z_obj_t *k_fs_sync(z_obj_t *args);
+z_obj_t *k_fs_truncate(z_obj_t *args);
+
 #endif

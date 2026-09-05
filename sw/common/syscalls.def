@@ -127,3 +127,27 @@ Z_MKSYSCALL(VIDEO_SET_MODE, k_video_set_mode)
 //
 // AT THE END, like every other addition here. See the warning above.
 Z_MKSYSCALL(HID_PTR_SUBSCRIBE, k_hid_ptr_subscribe)
+
+// In-place file modification -- the three calls a file EDITOR needs and
+// that nothing here previously offered. Added for sw/apps/hex
+// (docs/hex_editor.md), deliberately general.
+//
+// Every existing way to write a file destroys what was there:
+// FS_WRITE rewrites the whole thing from a buffer, and FS_OPEN_WRITE is
+// FA_CREATE_ALWAYS, so it truncates on open. That is the right shape
+// for `te`'s small documents and for a TFTP transfer, and the wrong one
+// for editing a file too large to hold in memory -- there was no way to
+// change byte 900,000 of a 4MB file without rewriting all 4MB.
+//
+// FS_OPEN_RW opens an existing file for read AND write, positioned at 0
+// and truncating nothing; FS_SEEK (above) then reaches any offset in
+// it. FS_SYNC commits without giving up the handle. FS_TRUNCATE sets
+// the size, which is the one thing seek+write cannot express.
+//
+// All three go through the same kernel-side handle table, the same
+// owner-pid check, and the same k_syscall_touches_fs() deferral as the
+// rest of the chunked API -- see sw/common/zfs.h and
+// docs/filesystem.md.
+Z_MKSYSCALL(FS_OPEN_RW, k_fs_open_rw)
+Z_MKSYSCALL(FS_SYNC, k_fs_sync)
+Z_MKSYSCALL(FS_TRUNCATE, k_fs_truncate)

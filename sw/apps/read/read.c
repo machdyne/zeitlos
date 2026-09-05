@@ -2550,11 +2550,18 @@ static bool open_path(const char *p) {
 	// This used to open first and close after, so that a failed open
 	// left the reader with the document it already had. Sound in
 	// principle, but it means holding TWO handles across the open --
-	// and there are only Z_FS_MAX_OPEN (4) in the whole system,
-	// shared by every process. With the file dialog holding one or
-	// two of its own, opening a second document intermittently ran
-	// out and reported "Can't open" for a file that was perfectly
-	// readable.
+	// and Z_FS_MAX_OPEN was 4 at the time, shared by every process.
+	// With the file dialog holding one or two of its own, opening a
+	// second document intermittently ran out and reported "Can't
+	// open" for a file that was perfectly readable.
+	//
+	// The table is 8 now (raised when sw/apps/hex arrived, which also
+	// holds one for its whole lifetime -- see zfs.h), so this
+	// particular collision no longer has to happen. Closing first is
+	// kept anyway: it is not a workaround for the old limit, it is
+	// simply the smaller footprint, and this app has no reason to
+	// hold two handles on two documents it is not reading from at
+	// once.
 	//
 	// The safety it was buying is kept by reopening the previous
 	// path when the new one fails, which costs nothing in the normal

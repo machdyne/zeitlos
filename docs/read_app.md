@@ -142,12 +142,17 @@ reader optimisation above.
 
 **Only one handle at a time.** `open_path()` opened the new document
 before closing the old, so a failed open left the reader with what it
-already had. Sound in principle, but there are only `Z_FS_MAX_OPEN`
-(4) handles in the WHOLE SYSTEM, shared by every process -- and the
-file dialog holds one or two of its own while it is up. Opening a
-second document intermittently ran out and reported "Can't open" for a
-perfectly readable file. It now closes first and reopens the previous
-path if the new open fails, which keeps the safety and the handle.
+already had. Sound in principle, but `Z_FS_MAX_OPEN` was 4 at the time,
+in the WHOLE SYSTEM, shared by every process -- and the file dialog
+holds one or two of its own while it is up. Opening a second document
+intermittently ran out and reported "Can't open" for a perfectly
+readable file. It now closes first and reopens the previous path if the
+new open fails, which keeps the safety and the handle.
+
+The table is 8 now, raised when `hex` arrived (it holds one open
+read-write for its whole lifetime), so this particular collision no
+longer has to happen. Closing first is kept regardless -- it is the
+smaller footprint, not a workaround.
 
 **The buffer outlived the file.** `rd_seek()` serves a target straight
 from `rbuf` when the offset falls inside it, without touching the

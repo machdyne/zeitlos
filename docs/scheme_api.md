@@ -315,7 +315,7 @@ position. repl stays fully responsive to its other connections
 throughout -- paging is driven one keystroke at a time through the
 normal message loop and never blocks it. On `Z_PORT_CLOSE`,
 `page_abort()` closes the open handle, which matters: handles live in
-a bounded kernel-side table (`Z_FS_MAX_OPEN` is 4) with no
+a bounded kernel-side table (`Z_FS_MAX_OPEN` is 8) with no
 process-exit sweep.
 
 ## 3. The registration mechanism (implemented -- 4th patch to `ms.c`)
@@ -989,7 +989,7 @@ existing "no kernel `malloc()`, caller-owned buffers" conventions --
 plus one new thing the earlier whole-file syscalls didn't need: a
 file open across several syscalls needs somewhere to keep the live
 FatFs `FIL` between them. Kept kernel-side, in a small (`Z_FS_MAX_OPEN
-= 4`) bounded table, not in the caller's own memory -- `FIL` is a
+= 8`) bounded table, not in the caller's own memory -- `FIL` is a
 FatFs-internal struct no app translation unit has ever included the
 layout of, so handing the caller an opaque "allocate exactly
 `sizeof(FIL)` bytes" contract would be fragile (a size mismatch

@@ -225,7 +225,7 @@ typedef struct {
 
 // Returns Z_IMG_OK or Z_IMG_E_IO. On success the caller must
 // z_img_file_close() -- a leaked handle permanently consumes one of
-// only Z_FS_MAX_OPEN (4) slots and nothing sweeps them at process
+// only Z_FS_MAX_OPEN (8) slots and nothing sweeps them at process
 // exit. See zfs.h.
 int  z_img_file_open(z_img_file_t *f, const char *path);
 int  z_img_file_read(void *ctx, uint8_t *buf, int len);	// z_img_read_fn

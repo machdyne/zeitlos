@@ -110,10 +110,22 @@ typedef struct {
 // candidate here is therefore an offer, not a promise -- adding a new
 // app to the dock needs no conditional logic, just an entry and an
 // icon.
+// The dock is laid out in one row and NOTHING CLAMPS ITS WIDTH -- see
+// create_dock(), which sizes the window from DOCK_APP_COUNT and places
+// it at x = DOCK_MARGIN. At DOCK_ICON_SIZE 32 and DOCK_ICON_GAP 4 that
+// is 36 pixels per icon, so on a 640px screen the ceiling is
+// SEVENTEEN resolved apps before the dock runs off the right edge and
+// its last icons stop being reachable.
+//
+// Sixteen are listed below. That is not a problem today and it is one
+// entry from being one, so: if an eighteenth is ever wanted, the dock
+// needs to wrap, scroll, or drop candidates that do not fit -- rather
+// than this list quietly growing past it. Nothing warns.
 static const dock_app_t dock_candidates[] = {
 	{ "term",		z_icon_term_data  },
 	{ "files",		z_icon_files_data },
 	{ "text",		z_icon_text_data  },
+	{ "hex",		z_icon_hex_data   },
 	{ "read",		z_icon_read_data  },
 	{ "draw",		z_icon_draw_data  },
 	{ "track",		z_icon_track_data },

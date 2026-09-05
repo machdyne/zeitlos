@@ -28,6 +28,27 @@ const z_ftype_t z_ftypes[] = {
 	// opens one perfectly well when asked directly.
 	{ "MD",  "read", "Markdown text" },
 
+	// Binary data -- sw/apps/hex, which edits any file in place
+	// (docs/hex_editor.md).
+	//
+	// A deliberately SHORT list. hex opens absolutely anything, so it
+	// is tempting to make it the fallback for every extension nothing
+	// else claims -- and that would be wrong: the file browser's "no
+	// application is associated with this file" is a useful answer,
+	// and turning every unknown double-click into a hex dump would
+	// bury a real question under something that always technically
+	// works. These four are extensions whose whole meaning is
+	// "undifferentiated bytes", where a hex dump is the best available
+	// reading rather than a fallback.
+	//
+	// Note there is no entry for a file with NO extension: that is the
+	// executable case (z_ftype_is_executable() below), and mapping it
+	// here would break launching programs from the browser.
+	{ "BIN", "hex",  "Binary data"   },
+	{ "ROM", "hex",  "ROM image"     },
+	{ "IMG", "hex",  "Disk image"    },
+	{ "DAT", "hex",  "Binary data"   },
+
 	// Zeitlos bitmap -- sw/common/zbm.h, written by sw/apps/draw.
 	//
 	// Stays mapped to `draw` rather than `view`, deliberately: a ZBM

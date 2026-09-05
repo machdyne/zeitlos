@@ -1223,7 +1223,7 @@ static bool write_canvas(const char *path) {
 		ok = false;
 
 	// Always close, including on the error path -- a leaked handle is
-	// a permanently lost slot in a table of Z_FS_MAX_OPEN (4), and
+	// a permanently lost slot in a table of Z_FS_MAX_OPEN (8), and
 	// nothing sweeps them when a process exits (see zfs.h).
 	fs_close_handle(h);
 

@@ -109,7 +109,7 @@ bool page_active(void);
 // forcibly ends whatever session is live -- for a connection that
 // disappeared (Z_PORT_CLOSE) while it owned the pager. Closes the open
 // file handle, which matters: handles live in a small, bounded,
-// kernel-side table (Z_FS_MAX_OPEN is 4, sw/common/zfs.h) that has no
+// kernel-side table (Z_FS_MAX_OPEN is 8, sw/common/zfs.h) that has no
 // process-exit sweep, so leaking one is a genuine, if small, resource
 // loss. Safe to call when nothing is active (a no-op).
 void page_abort(void);

@@ -335,6 +335,66 @@ int fs_seek(int handle, uint32_t offset) {
 
 }
 
+// -- in-place modification --
+//
+// Same shape as everything above; see zfsapp.h for what each one
+// promises and sw/common/zfs.h for the kernel-side design.
+//
+// One thing worth knowing at every call site: these three are the
+// NEWEST syscalls in this tree, so they are the first that an app can
+// find missing. A kernel built before them has no entry at their id,
+// and k_syscall_entry()'s bounds/NULL check returns z_fail rather than
+// jumping somewhere -- so fs_open_rw() on an old kernel returns -1,
+// which is indistinguishable from "no such file". An app that wants to
+// tell the user WHICH it was has to check the file exists first (see
+// sw/apps/hex's open path, which does exactly that).
+
+int fs_open_rw(const char *filename) {
+
+	if (!filename) return -1;
+
+	z_fs_open_args_t args;
+	args.name = (char *)filename;
+	args.handle = -1;
+
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_obj_t *rv = (z_obj_t *)z_kernel_ptr(Z_SYS_FS_OPEN_RW, (uint32_t *)&args, 0);
+	if (rv->val.uint32 != Z_OK) return -1;
+
+	return args.handle;
+
+}
+
+int fs_sync(int handle) {
+
+	if (handle < 0) return 0;
+
+	z_fs_close_args_t args;
+	args.handle = (int32_t)handle;
+
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_obj_t *rv = (z_obj_t *)z_kernel_ptr(Z_SYS_FS_SYNC, (uint32_t *)&args, 0);
+
+	return (rv->val.uint32 == Z_OK) ? 1 : 0;
+
+}
+
+int fs_truncate(int handle, uint32_t size) {
+
+	if (handle < 0) return 0;
+
+	z_fs_truncate_args_t args;
+	args.handle = (int32_t)handle;
+	args.size = size;
+	args.result = 0;
+
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_obj_t *rv = (z_obj_t *)z_kernel_ptr(Z_SYS_FS_TRUNCATE, (uint32_t *)&args, 0);
+
+	return (rv->val.uint32 == Z_OK) ? 1 : 0;
+
+}
+
 // Named fs_df(), NOT fs_free() -- the kernel-native fs_free()
 // (sw/os/fs/fs.c) already owns that name, and sw/common/zeitlos.h's own
 // note explains what happens when an app-facing wrapper collides with a

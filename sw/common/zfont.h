@@ -33,5 +33,15 @@ extern const z_font_t z_font_5x8;	// same width as z_font_5x7, one extra
 									// the extra row works around that rather than
 									// being a confirmed fix for its root cause,
 									// which hasn't been separately diagnosed.
+									//
+									// LOCALLY MODIFIED, not stock misc-fixed:
+									// '.' was a three-pixel diamond straddling
+									// the baseline, and a column of them (hex's
+									// non-printable placeholder) read as content
+									// rather than padding. It is now the same
+									// 2x2 baseline dot ':' already used. See
+									// sw/data/font/5x8.bdf's own COMMENT block,
+									// which is where the change lives -- the
+									// .mem and zfont_data.c are both generated.
 
 #endif

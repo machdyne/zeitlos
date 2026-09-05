@@ -155,6 +155,46 @@ int fs_touch(const char *path);
 // to hold in memory; every other chunked call only moves forward.
 int fs_seek(int handle, uint32_t offset);
 
+// -- in-place modification -- the three calls a file EDITOR needs.
+//
+// Everything above either reads a file or replaces it. fs_write_file()
+// rewrites the whole thing from a buffer, and fs_open_write() is
+// FA_CREATE_ALWAYS, so it truncates the moment it opens. Neither can
+// change a byte in the middle of a file too large to hold in memory,
+// which is what sw/apps/hex is (docs/hex_editor.md).
+//
+// Opens `filename` for reading AND writing without truncating it,
+// positioned at byte 0. Returns a handle (>= 0) usable with
+// fs_read_chunk()/fs_write_chunk()/fs_seek()/fs_close_handle() exactly
+// as the other two open calls' handles are, or -1 on failure.
+//
+// REFUSES TO CREATE. A path that doesn't exist is a failure, not an
+// empty new file -- call fs_touch() first if creating is what you
+// meant. -1 therefore covers "no such file", "no free handle slot"
+// (Z_FS_MAX_OPEN is 8, board-wide) and "this kernel predates the
+// syscall"; none of them is distinguishable from the return alone,
+// same limitation fs_mallocfile() already documents.
+int fs_open_rw(const char *filename);
+
+// Commits an open write handle -- its buffered data AND its directory
+// entry -- without closing it. 1 on success, 0 on failure.
+//
+// Worth calling at every point the user would consider their work
+// saved. Until it happens, a file written through a handle has the
+// right data in the right clusters and the wrong size in the
+// directory, so pulling the card leaves the edit unfindable. Harmless
+// (and successful) on a read handle.
+int fs_sync(int handle);
+
+// Sets an open handle's file size, growing or shrinking. 1 on success,
+// 0 on failure. Leaves the handle positioned at the new end of file.
+//
+// GROWING DOES NOT ZERO. The new region reads back as whatever was
+// left on those sectors by whatever used them last, so a caller that
+// wants zeros must write them itself -- see z_fs_truncate_args_t in
+// sw/common/zfs.h for why that is the deliberate choice.
+int fs_truncate(int handle, uint32_t size);
+
 // filesystem capacity, both figures in KB (not bytes -- a 32GB card
 // overflows a uint32_t of bytes; see z_fs_df_args_t in zfs.h). Either
 // pointer may be NULL. Returns false if the syscall itself failed;

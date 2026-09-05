@@ -27,7 +27,7 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 | Network | Ethernet (SPI), Ethernet MAC (for RMII PHY) or [ESP32](docs/esp32link.md) |
 | Entropy | Ring-oscillator [TRNG](docs/trng.md) |
 | HID | USB keyboard + optional USB mouse/[gamepad](docs/gamepad.md) |
-| I/O | Optional [GPIO](docs/gpio.md) on PMOD ports with bit-banged [I2C](docs/i2c.md) and [SPI](docs/spi.md), hardware SPI, 16550 [UART](docs/uart.md), optional second [UART](docs/uart1.md) |
+| I/O | Optional [GPIO](docs/gpio.md) on PMOD ports with bit-banged [I2C](docs/i2c.md) and [SPI](docs/spi.md), hardware SPI, 16550 UART, optional second [UART](docs/uart1.md) |
 
 ### OS
 
@@ -64,6 +64,7 @@ With the MTU, there is no need for position independent code or complicated addr
 |-----|-------------|
 | [text](docs/text_editor.md) | Text editor |
 | [read](docs/read_app.md) | Text reader for files of unlimited size (with rendered Markdown) |
+| [hex](docs/hex_editor.md) | Hex editor for files of unlimited size |
 | draw | MacPaint-inspired drawing app |
 | [view](docs/view_app.md) | Image viewer |
 | files | File browser |

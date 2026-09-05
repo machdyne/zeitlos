@@ -73,7 +73,7 @@
  *
  * Rewinding is fs_seek() (zfsapp.h), not close-and-reopen -- the
  * handle stays owned by this process throughout, and the kernel-side
- * handle table is only Z_FS_MAX_OPEN (4) entries deep, so it is worth
+ * handle table is only Z_FS_MAX_OPEN (8) entries deep, so it is worth
  * not churning it.
  *
  * This is the cost of not having the file in memory: it is read more

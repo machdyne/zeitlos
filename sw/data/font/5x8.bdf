@@ -1,4 +1,25 @@
 STARTFONT 2.1
+COMMENT
+COMMENT LOCAL MODIFICATION, not upstream misc-fixed.
+COMMENT
+COMMENT U+002E FULL STOP was 20/70/20 -- a three-pixel diamond
+COMMENT straddling the baseline into the descender row. It is now
+COMMENT 60/60, the same 2x2 block U+003A COLON already uses for its
+COMMENT lower dot, sitting on the baseline like every other
+COMMENT punctuation mark here.
+COMMENT
+COMMENT The diamond is legible in prose, where periods are rare. It
+COMMENT stops being legible in a column of them: sw/apps/hex draws a
+COMMENT '.' for every non-printable byte, so a binary file rendered
+COMMENT a wall of three-pixel crosses dense enough to read as
+COMMENT content rather than as padding. z_font_6x12 already had a
+COMMENT proper 2x2 dot, which is what made the 5x8 one look like an
+COMMENT outlier rather than a house style.
+COMMENT
+COMMENT Regenerate after editing this file:
+COMMENT   python3 bdf_to_mem.py 5x8.bdf 5 8
+COMMENT   python3 gen_font_data.py
+COMMENT
 FONT -Misc-Fixed-Medium-R-Normal--8-80-75-75-C-50-ISO10646-1
 SIZE 8 75 75
 FONTBOUNDINGBOX 5 8 0 -1
@@ -283,9 +304,9 @@ BITMAP
 00
 00
 00
-20
-70
-20
+60
+60
+00
 ENDCHAR
 
 STARTCHAR slash

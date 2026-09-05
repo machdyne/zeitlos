@@ -173,6 +173,9 @@ static int k_syscall_touches_fs(uint32_t id) {
 		case Z_SYS_FS_TOUCH:
 		case Z_SYS_FS_SEEK:
 		case Z_SYS_FS_DF:
+		case Z_SYS_FS_OPEN_RW:
+		case Z_SYS_FS_SYNC:
+		case Z_SYS_FS_TRUNCATE:
 		case Z_SYS_EXEC_EXISTS:
 			return 1;
 		default:

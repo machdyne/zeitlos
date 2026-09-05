@@ -496,7 +496,7 @@ static void seek_to_frame(uint32_t frame);
  * Open `path` and get ready to play it.
  *
  * Every failure path closes the handle. There are only Z_FS_MAX_OPEN
- * (4) handles in the whole system and zfs.h documents that a handle
+ * (8) handles in the whole system and zfs.h documents that a handle
  * belonging to a process that dies without closing it is never
  * released -- so a player that leaks one on a bad file runs out after
  * four bad files and then cannot open a good one either.

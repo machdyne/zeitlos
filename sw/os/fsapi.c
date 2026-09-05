@@ -454,6 +454,111 @@ z_obj_t *k_fs_seek(z_obj_t *args) {
 
 }
 
+// Opens an EXISTING file for reading AND writing, truncating nothing.
+//
+// FA_OPEN_EXISTING rather than FA_OPEN_ALWAYS, deliberately. "Open it,
+// and create it if it isn't there" sounds convenient and is the wrong
+// default for the caller this exists for: an editor asked to open a
+// path that does not exist should say so, not silently produce an empty
+// file at a mistyped name and then act as though it opened something.
+// Creating is already a separate, explicit operation (FS_TOUCH, or
+// FS_OPEN_WRITE), so a caller that wants create-then-edit can ask for
+// exactly that in two calls and know which one happened.
+//
+// Otherwise identical to k_fs_open_read()/k_fs_open_write() above --
+// same slot allocation, same owner_pid stamp, same z_fs_open_args_t.
+z_obj_t *k_fs_open_rw(z_obj_t *args) {
+
+	z_fs_open_args_t *a = (z_fs_open_args_t *)args;
+	if (a) a->handle = -1;
+
+	if (!a || !a->name) return (&z_fail);
+
+	int slot = z_fs_alloc_handle();
+	if (slot < 0) return (&z_fail);
+
+	FRESULT res = f_open(&z_fs_handles[slot].fil, a->name,
+		FA_READ | FA_WRITE | FA_OPEN_EXISTING);
+	if (res != FR_OK) return (&z_fail);
+
+	z_fs_handles[slot].used = true;
+	z_fs_handles[slot].owner_pid = z_pid;
+	a->handle = slot;
+
+	return (&z_ok);
+
+}
+
+// Flushes an open handle without closing it.
+//
+// f_write() leaves data in the FIL's own sector buffer and, more
+// importantly, does not update the directory entry -- so a file written
+// but not closed has the right clusters allocated and the wrong size
+// recorded. On a machine with no orderly shutdown and a card the user
+// can pull, that gap is the difference between "the edit is on disk"
+// and "the edit is on disk and findable".
+//
+// Harmless on a read handle: FatFs's f_sync() returns FR_OK immediately
+// for anything not opened with FA_WRITE, so a caller need not track
+// which kind of handle it holds.
+z_obj_t *k_fs_sync(z_obj_t *args) {
+
+	z_fs_close_args_t *a = (z_fs_close_args_t *)args;
+
+	if (!a || a->handle < 0 || a->handle >= Z_FS_MAX_OPEN) return (&z_fail);
+
+	if (!z_fs_handles[a->handle].used || z_fs_handles[a->handle].owner_pid != z_pid)
+		return (&z_fail);
+
+	FRESULT res = f_sync(&z_fs_handles[a->handle].fil);
+
+	return (res == FR_OK) ? (&z_ok) : (&z_fail);
+
+}
+
+// Sets an open handle's file size, growing or shrinking it.
+//
+// Implemented as seek-then-truncate because FatFs has no set-size call:
+// f_truncate() cuts the file at the CURRENT position, and f_lseek()
+// past the end of a file opened for writing extends it. So one
+// f_lseek() to the requested size handles growth on its own, and the
+// f_truncate() after it handles the shrink case and is a no-op for the
+// grow case (position already equals size).
+//
+// GROWTH LEAVES UNDEFINED BYTES -- see z_fs_truncate_args_t in
+// sw/common/zfs.h for why that is deliberate and whose job zeroing is.
+//
+// The handle is left positioned at the new end of file, which is where
+// the seek put it. Callers that care where they are should seek again;
+// saying so here is cheaper than a second syscall to find out.
+z_obj_t *k_fs_truncate(z_obj_t *args) {
+
+	z_fs_truncate_args_t *a = (z_fs_truncate_args_t *)args;
+	if (a) a->result = 0;
+
+	if (!a || a->handle < 0 || a->handle >= Z_FS_MAX_OPEN) return (&z_fail);
+
+	if (!z_fs_handles[a->handle].used || z_fs_handles[a->handle].owner_pid != z_pid)
+		return (&z_fail);
+
+	FRESULT res = f_lseek(&z_fs_handles[a->handle].fil, (FSIZE_t)a->size);
+	if (res != FR_OK) return (&z_fail);
+
+	// A short seek means the expansion ran out of card. Reporting
+	// success here would tell the caller it has a file of the size it
+	// asked for, which is the one thing it must not believe.
+	if ((uint32_t)f_tell(&z_fs_handles[a->handle].fil) != a->size)
+		return (&z_fail);
+
+	res = f_truncate(&z_fs_handles[a->handle].fil);
+	if (res != FR_OK) return (&z_fail);
+
+	a->result = (uint32_t)f_size(&z_fs_handles[a->handle].fil);
+
+	return (&z_ok);
+
+}
+
 // Filesystem capacity. Both numbers come straight from fs_total()/
 // fs_free() (sw/os/fs/fs.c), which wrap FatFs's f_getfree() and have
 // been sitting there unused since long before this syscall existed --
