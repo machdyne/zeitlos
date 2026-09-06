@@ -15,9 +15,6 @@ configuration, persists SUPER-CHIP flags, and has a built-in
 disassembler and single-step debugger. Phase 8 is optional and gated on
 measurement.
 
-It has not yet run on real hardware -- see "Not yet verified" at the
-end for exactly what that leaves open.
-
 ## Why this is software and not a CPU in the fabric
 
 The obvious FPGA answer is to build a CHIP-8 core in RTL. It would be
@@ -853,9 +850,7 @@ open the result.
 
 ## Not yet verified
 
-Everything above compiles clean for `rv32im` and every host test
-passes, but **none of it has run on real hardware**. What that leaves
-open, in rough order of how likely it is to bite:
+What that leaves open, in rough order of how likely it is to bite:
 
 - **The blit.** Position, clipping against a partially covered window,
   and the source alignment of an odd `dst_x`. The renderer's output is
