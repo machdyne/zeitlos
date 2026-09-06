@@ -23,8 +23,8 @@ gets it there while keeping a system that boots to a desktop without
 an sdcard.
 
 The original bootloader reserves a megabyte for itself and uses about an
-eighth of it — the Lakritz image is 124,643 bytes and the Obst image
-126,079. The *updated* bootloader takes 256 KB, twice what it needs,
+eighth of it — the Lakritz image is 124,910 bytes and the Obst image
+126,143. The *updated* bootloader takes 256 KB, twice what it needs,
 and gives the rest to you:
 
 ```
@@ -76,9 +76,11 @@ step 4, while the new bootloader is being written. A power loss or a
 disconnected cable there is what costs you a programmer. Before and
 after, the board is fine.
 
-**If you would rather not take that on,** you do not have to. Stay on
-the original bootloader and skip to
-[Staying on the old bootloader](#staying-on-the-old-bootloader).
+**If you would rather not take that on,** you do not have to — but
+staying on the original bootloader means you cannot install Zeitlos
+over USB at all. The alternative is a JTAG cable or an SPI programmer:
+see [If you would rather not upgrade the
+bootloader](#if-you-would-rather-not-upgrade-the-bootloader).
 
 Practical precautions, in order of how much they matter:
 
@@ -120,31 +122,36 @@ want here.
 
 ### 2. Verify what you downloaded
 
-```
-$ sha256sum tinydfu_lakritz_25f_256k.bit    # or tinydfu_obst_256k.bit
-```
+`SHA256SUMS` sits next to the image in the same directory. Fetch it
+and check.
 
-Expected:
-
-```
-501c8fd3054d9e4f0456e547cabc6ccb3f8fd07a16c9ea86ec0f4a5d250501e1  tinydfu_lakritz_25f_256k.bit
-33d95b8d15308adf222481cb7e0b7e2601061bf587c197d2418a719cfe38d4bb  tinydfu_obst_256k.bit
-```
-
-If a `SHA256SUMS` sits alongside the image in the repository, prefer
-it — these values were correct when this document was written and the
-images may have been rebuilt since:
+**Lakritz:**
 
 ```
+$ curl -LO https://raw.githubusercontent.com/machdyne/lakritz/main/images/SHA256SUMS
 $ sha256sum -c SHA256SUMS
+tinydfu_lakritz_25f_256k.bit: OK
+```
+
+**Obst:**
+
+```
+$ curl -LO https://raw.githubusercontent.com/machdyne/obst/main/images/SHA256SUMS
+$ sha256sum -c SHA256SUMS
+tinydfu_obst_256k.bit: OK
 ```
 
 Do not skip this. A truncated download that writes cleanly is exactly
 the failure that costs you a programmer, and it is the one failure
 this step eliminates entirely.
 
-As a second check, the sizes are **125,170** bytes for Lakritz and
-**125,265** for Obst. Anything much outside that is not a bootloader --
+`SHA256SUMS` covers every image in that directory, so `sha256sum -c`
+will say `No such file or directory` for the ones you did not
+download. That is expected — what matters is that your file says `OK`
+and that nothing says **FAILED**.
+
+As a second check, the bootloader is around 125 KB. Anything much
+outside that is not one --
 most likely a GitHub error page, which downloads as a perfectly valid
 file of a few hundred KB and would brick the board if written.
 
@@ -166,6 +173,22 @@ On the original bootloader `alt=2` is named `Bootloader` and `alt=0`
 is `User Image`, with no sizes. The updated one names them
 `Boot Image (256KB)` and `User Image (1792KB)`, which is what makes
 step 6 a one-glance check.
+
+**Ignore this, on either bootloader:**
+
+```
+dfu-util: Failed to retrieve string descriptor 5
+... alt=1, name="UNKNOWN"
+```
+
+`alt=1` is the data partition. It is **zero bytes** on these boards —
+the flash is entirely taken by the bootloader and the user image — and
+its name does not read back. It is a cosmetic fault in the
+bootloader's USB string handling. It affects nothing in this
+procedure, and there is nothing to write to `alt=1` in any case.
+
+What matters on this screen is that `alt=2` is present and that
+`alt=0` and `alt=2` read sensibly. If those are right, continue.
 
 ### 4. Write it
 
@@ -282,7 +305,7 @@ the honest answer is that this board cannot run Zeitlos yet.
 
 The bootloader is a USB device and an SPI flash writer — a few
 thousand LUTs on a part that has 24,288. Compressed, it comes to
-124,643 bytes on Lakritz and 126,079 on Obst. 256 KB is a little over
+124,910 bytes on Lakritz and 126,143 on Obst. 256 KB is a little over
 twice that, and it is a power of two on a part that erases in 4 KB
 sectors.
 
