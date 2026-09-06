@@ -39,6 +39,18 @@ def manifest(version, commit, dirty, targets, sdcard, layout, ark_commit):
     }
 
 
+# Where the DFU upgrade guide lives.
+#
+# The REPOSITORY, not a release asset and not the sdcard. Somebody who
+# needs this has a board that cannot run Zeitlos yet -- telling them to
+# read it from the sdcard is telling them to read it on the machine
+# they are trying to get working, and telling them to find it among
+# the release assets assumes they have already downloaded the right
+# ones. A URL works from the phone in their other hand.
+DFU_DOC_URL = ("https://github.com/machdyne/zeitlos/blob/main/"
+               "docs/dfu_upgrade.md")
+
+
 def _clock(name):
     """nextpnr reports '$glbnet$clk_48'; humans want 'clk_48'."""
     return name.rsplit("$", 1)[-1]
@@ -93,6 +105,14 @@ def notes(version, commit, targets, sdcard, layout, prev_version=None):
                "which is what `make flash` does today -- on a board that "
                "shipped with a DFU bootloader in that space, this replaces "
                "it.")
+    out.append("")
+    out.append("`zeitlos-<target>-dfu.bin`, where a target provides one, is "
+               "the same system packaged for `dfu-util -a 0 -D`.")
+    out.append("")
+    out.append("**Flashing a Lakritz or Obst over USB?** They ship a DFU "
+               "bootloader whose user partition is too small for Zeitlos, "
+               "so the `-dfu.bin` will not fit until you update it. "
+               "[Read this first](%s)." % DFU_DOC_URL)
     out.append("")
 
     if sdcard:
@@ -282,9 +302,11 @@ def asset_readme(version, commit, targets, sdcard, layout):
     out.append("dfu-util -a 0 -D. It requires the 256KB bootloader.")
     out.append("")
     out.append("FLASHING OVER USB (dfu-util)? Lakritz and Obst ship a DFU")
-    out.append("bootloader whose user partition is too small for Zeitlos.")
-    out.append("See dfu_upgrade.md, included here and on the sdcard under")
-    out.append("docs/, before you start.")
+    out.append("bootloader whose user partition is too small for Zeitlos,")
+    out.append("so -dfu.bin will not work until you update it. Read this")
+    out.append("first:")
+    out.append("")
+    out.append("  " + DFU_DOC_URL)
     out.append("")
     out.append("Flashing writes from offset 0, which is what `make flash`")
     out.append("does -- on a board that shipped with a DFU bootloader in")
