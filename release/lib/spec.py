@@ -175,6 +175,7 @@ class Target:
         self.pmods = []             # [Pmod] actually plugged in
         self.lpf_drop = []          # extra base-.lpf ports to release
         self.make_vars = []         # extra VAR=VALUE for the top-level make
+        self.dfu_base = None        # USERPART_START, if the board ships DFU
         self.defines = {}           # ordered: name -> value or None
         self.flash_cmd = None       # template, {file} {offset}
         self.core_apps = []
@@ -257,6 +258,22 @@ def load_target(root, name):
     # another -- so the spec has to say which, and a target that does
     # not say gets whatever the Makefile happens to default to.
     t.make_vars = _words(bdata, "make_vars")
+
+    # USERPART_START of the board's DFU bootloader, if it has one.
+    #
+    # Set it and the release emits a second image with the gateware at
+    # this offset, for `dfu-util -a 0 -D`. Everything above the
+    # gateware keeps its absolute offset, so this is the only number
+    # the DFU variant needs -- see mkflashimg.build_dfu().
+    #
+    # It must match USERPART_START in the board's boardinfo.vh AND
+    # BOOTADDR in its Makefile, both in the tinydfu-bootloader tree.
+    # Those two already have to agree with each other; this is a third
+    # copy, in a different repository, and the only one that fails
+    # loudly -- a mismatch here produces an image the bootloader
+    # writes to the wrong place.
+    dfu = _one(bdata, "dfu_base", default="", where=bpath)
+    t.dfu_base = int(dfu, 0) if dfu else None
     t.core_apps = _words(bdata, "core_apps") or ["wm", "net", "repl", "term"]
     t.description = _one(tdata, "description",
                          default=_one(bdata, "description", default=name,
@@ -565,8 +582,24 @@ def check_equivalence(root, target, zspec_text):
     via_spec = preprocess_defines(root, ["ZSPEC"], zspec_text=zspec_text,
                                   probe_names=probe)
 
-    expected_extra = set(target.defines) - set(base_defs)
-    expected_gone = set(base_defs) - set(target.defines)
+    # Expectations are computed against what the board path ACTUALLY
+    # yields, not against the raw spec text.
+    #
+    # rtl/boards.vh has rules that fire after the per-board block --
+    # `ifdef USB_CDC / `undef UART0 is the live one -- and they sit
+    # outside the ZSPEC guard, so both paths get them. A target that
+    # removes `UART0 on a board where USB_CDC has already undefined it
+    # is asking for something that has happened anyway, and comparing
+    # against the spec text alone reported that as "a spec removes
+    # UART0 but it is still defined", which is both wrong and
+    # backwards.
+    #
+    # Intersecting with via_board keeps the check honest about the one
+    # thing it exists to catch -- the two paths producing different
+    # macro sets -- without inventing differences from defines that
+    # were never there to remove.
+    expected_extra = (set(target.defines) - set(base_defs)) & via_spec
+    expected_gone = (set(base_defs) - set(target.defines)) & via_board
 
     got_extra = via_spec - via_board
     got_gone = via_board - via_spec

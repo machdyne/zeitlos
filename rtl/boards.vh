@@ -439,6 +439,7 @@
 `define UART0
 `define USB_HID
 `define SPI_SDCARD
+`define SPI_ETH
 `define AUDIO
 `define AUDIO_SD
 `define AUDIO_MIXER

@@ -65,6 +65,16 @@ flash_cmd = openFPGALoader -v -c dirtyJtag -f -o 0 {file}
 # feature CSR and immediately gives up is still an app that was
 # fetched from flash and given a pid. Targets that keep the NIC can
 # add it back.
+# This board ships a DFU bootloader whose user partition starts here
+# (BOOTPART_SIZE = 256K in tinydfu-bootloader's boardinfo.vh, and
+# BOOTADDR in the same board's Makefile). Setting it makes the release
+# emit a -dfu.bin alongside the .img.
+#
+# 256K, not 512K, is what keeps this cheap: the gateware still ends
+# before the boot splash at 0x0F0000, so nothing else in the flash map
+# moves and the DFU image is the JTAG image with one region relocated.
+dfu_base = 0x040000
+
 core_apps = wm repl term
 
 defines =

@@ -513,6 +513,36 @@ def build_target(root, target, version, outdir, software, dry=False,
         shutil.copy2(parts["gateware"], dst)
         result["artifacts"]["gateware"] = os.path.basename(dst)
 
+        # -- DFU variant ------------------------------------------------
+        #
+        # The same four artifacts with the gateware relocated to the
+        # bootloader's user partition, trimmed to start there. This is
+        # what `dfu-util -a 0 -D` writes, so it must not be padded at
+        # the front and must not be the full 2MB.
+        #
+        # Emitted alongside the .img rather than instead of it: a board
+        # with a DFU bootloader can still be flashed over JTAG, and the
+        # .img is what does that.
+        if target.dfu_base:
+            dimg, drows = mkflashimg.build_dfu(lay, parts, target.dfu_base)
+            dfu_path = os.path.join(outdir, stem + "-dfu.bin")
+            with open(dfu_path, "wb") as f:
+                f.write(dimg)
+            print("    DFU image (dfu-util -a 0 -D), user partition at "
+                  "0x%06x:" % target.dfu_base)
+            print("      %-28s %7d bytes (%d KB)"
+                  % (os.path.basename(dfu_path), len(dimg), len(dimg) // 1024))
+            gwrow = next((r for r in drows if r[0].key == "gateware"), None)
+            if gwrow:
+                print("      gateware %d of %d bytes (%d%% -- the rest of "
+                      "the partition is the same regions at the same "
+                      "absolute offsets)"
+                      % (gwrow[2], gwrow[3], gwrow[2] * 100 // gwrow[3]))
+            print()
+            result["artifacts"]["dfu_image"] = os.path.basename(dfu_path)
+            result["dfu_base"] = target.dfu_base
+            result["dfu_image_bytes"] = len(dimg)
+
         result["artifacts"]["flash_image"] = os.path.basename(img_path)
         result["image_bytes"] = len(img)
         result["regions"] = [

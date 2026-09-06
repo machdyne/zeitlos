@@ -35,6 +35,6 @@
  * in a checked-out tree is always the value that was built.
  */
 
-#define Z_OS_VERSION  "0.0.2"
+#define Z_OS_VERSION  "0.0.3"
 
 #endif

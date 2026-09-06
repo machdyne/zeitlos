@@ -19,13 +19,24 @@
 # WHAT GOES ON THE CARD, and what does not:
 #
 #   - The core apps (wm, net, repl, term) are DELIBERATELY ABSENT.
-#     They live in flash, in the ZAR. sw/os/zar.h's rule is that a copy
-#     on the card wins over the flash copy, so shipping them here would
-#     shadow the flash build -- and for `net` that is not academic:
-#     the flash copy is built per target with the right driver
-#     (ENC28J60 or RMII) and a card copy could only be built with one
-#     of them, so an SD image shared across targets would hand half of
-#     them the wrong NIC driver.
+#     They live in flash, in the ZAR, and sw/os/zar.h's rule is that a
+#     copy on the card wins over the flash copy -- so shipping them
+#     here would shadow the flash build.
+#
+#     That used to be forced rather than chosen: `net` was compiled
+#     against one NIC driver, so one shared card image could only ever
+#     have carried the wrong one for some boards. It links all three
+#     and picks at runtime now, so a card copy would be correct
+#     everywhere and this is a choice again.
+#
+#     It stays a choice for two reasons. Flash winning unless you
+#     deliberately put something on the card is a rule worth keeping,
+#     and it is what makes dropping one app at the card root a
+#     hot-swap rather than an accident. And every board this release
+#     supports can hold the ZAR in flash -- including over DFU, where
+#     the 256KB bootloader split leaves the flash map untouched. No
+#     shipped configuration needs core apps on the card, so putting
+#     them there would buy nothing and cost the rule.
 #
 #   - Everything else is board-independent, which is why there is ONE
 #     card image per release rather than one per target. The apps here
