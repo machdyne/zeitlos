@@ -110,30 +110,33 @@ typedef struct {
 // candidate here is therefore an offer, not a promise -- adding a new
 // app to the dock needs no conditional logic, just an entry and an
 // icon.
-// The dock is laid out in one row and NOTHING CLAMPS ITS WIDTH -- see
-// create_dock(), which sizes the window from DOCK_APP_COUNT and places
-// it at x = DOCK_MARGIN. At DOCK_ICON_SIZE 32 and DOCK_ICON_GAP 4 that
-// is 36 pixels per icon, so on a 640px screen the ceiling is
-// SEVENTEEN resolved apps before the dock runs off the right edge and
-// its last icons stop being reachable.
+// THE LIST MAY NOW GROW FREELY. It used to be capped by geometry:
+// DOCK_SLOTS_MAX icons fit across the screen in one row, and an
+// eighteenth simply ran off the right edge and stopped being
+// reachable, with nothing to warn you. The dock pages instead now --
+// see DOCK_PAGE_SIZE and dock_set_page() below.
 //
-// Sixteen are listed below. That is not a problem today and it is one
-// entry from being one, so: if an eighteenth is ever wanted, the dock
-// needs to wrap, scroll, or drop candidates that do not fit -- rather
-// than this list quietly growing past it. Nothing warns.
+// Paging only engages when the icons genuinely do not all fit. Up to
+// DOCK_SLOTS_MAX resolved apps, the dock is exactly what it always
+// was: one row, grown from the left, every icon visible, no NEXT
+// button and no pages. That matters because most machines will never
+// reach it, and they should not pay for a mechanism they do not
+// need.
 static const dock_app_t dock_candidates[] = {
 	{ "term",		z_icon_term_data  },
 	{ "files",		z_icon_files_data },
 	{ "text",		z_icon_text_data  },
-	{ "hex",		z_icon_hex_data   },
 	{ "read",		z_icon_read_data  },
+	{ "hex",			z_icon_hex_data   },
 	{ "draw",		z_icon_draw_data  },
+	{ "view ",		z_icon_view_data  },
 	{ "track",		z_icon_track_data },
 	{ "midi",		z_icon_midi_data },
 	{ "play",		z_icon_play_data  },
 	{ "space3d",	z_icon_space3d_data },
 	{ "gpu3d",		z_icon_gpu3d_data },
 	{ "gamedemo",	z_icon_gamedemo_data },
+	{ "chip8",		z_icon_chip8_data },
 	{ "calc",		z_icon_calc_data  },
 	{ "clock",		z_icon_clock_data },
 	{ "info",		z_icon_info_data  },
@@ -152,10 +155,12 @@ static int dock_app_count;
 // it always was.
 #define DOCK_APP_COUNT   dock_app_count
 
-#define DOCK_ICON_SIZE   32	// fixed icon size, see file header comment
-#define DOCK_ICON_GAP     4	// space between adjacent icons
-#define DOCK_PADDING      4	// space between icons and the dock's own border
-#define DOCK_MARGIN       8	// space between the dock and the screen edges
+// Icon sizes, slot counts and every piece of dock geometry live in
+// dock_layout.h, as pure functions of "how many apps" and "which
+// page". See that file's own header for why they are not here: three
+// call sites have to agree on the answer, and it needs to be testable
+// without a window manager.
+#include "dock_layout.h"
 
 // index into windows[]/zorder of the dock, or -1 before it's created
 // -- set once in main() and never destroyed, so unlike other window
@@ -175,6 +180,25 @@ static int dock_idx = -1;
 // last was even after focus moves elsewhere, and picks up right where
 // it left off next time.
 static int dock_selected = -1;
+
+// dock_selected value meaning "the NEXT icon", which is a position
+// rather than an app and so has no app index to be. -1 is already
+// taken by "nothing selected yet".
+#define DOCK_SEL_NEXT (-2)
+
+// -- paging --
+//
+// dock_paged is false on any machine whose apps all fit, and then
+// everything below is inert: one page, no NEXT icon, dock sized to its
+// contents exactly as before.
+static bool dock_paged;
+static int  dock_pages = 1;
+static int  dock_page;
+
+// Defined down with dock_click(), which is where the rest of the
+// dock's input handling lives; declared here because both the keyboard
+// hotkey in dispatch_keys() and dock_handle_key() reach it from above.
+static void dock_set_page(int p);
 
 // per-slot "an app launched from this icon hasn't created its first
 // window yet" state -- drawn as an inverted icon (draw_dock()) and
@@ -834,6 +858,7 @@ static bool check_core_services(void) {
 static void dock_build(void) {
 
 	dock_app_count = 0;
+	dock_page = 0;
 
 	for (int i = 0; i < DOCK_CANDIDATE_COUNT; i++) {
 		if (!z_exec_exists(dock_candidates[i].name)) {
@@ -846,6 +871,16 @@ static void dock_build(void) {
 
 	printf("wm: dock: %d of %d apps available\n",
 		dock_app_count, DOCK_CANDIDATE_COUNT);
+
+	// Paging engages only when the icons genuinely do not all fit.
+	// At exactly DOCK_SLOTS_MAX they do, and showing a NEXT button
+	// that leads to an empty page would be worse than useless.
+	dock_paged = z_dock_paged(dock_app_count);
+	dock_pages = z_dock_pages(dock_app_count);
+
+	if (dock_paged)
+		printf("wm: dock: %d apps, %d pages of %d\n",
+			dock_app_count, dock_pages, DOCK_PAGE_SIZE);
 
 }
 
@@ -914,6 +949,33 @@ static void draw_icon_bitmap_inverted(int x0, int y0, const uint8_t *bitmap) {
 // called while the dock itself has keyboard focus (see draw_dock()
 // below), same as a window's focus ring is only ever drawn for the
 // currently-focused window.
+// -- dock geometry ---------------------------------------------------
+//
+// wm's own state, passed to the pure layout functions in
+// dock_layout.h. Wrappers rather than call sites spelling out
+// `DOCK_APP_COUNT, dock_page` fifteen times, which is how one of them
+// eventually gets the page wrong.
+
+static int dock_page_apps(int page) {
+	return z_dock_page_apps(DOCK_APP_COUNT, page);
+}
+
+static int dock_app_at(int slot) {
+	return z_dock_app_at(DOCK_APP_COUNT, dock_page, slot);
+}
+
+static bool dock_slot_is_next(int slot) {
+	return z_dock_slot_is_next(DOCK_APP_COUNT, slot);
+}
+
+static int dock_slot_x(int slot) {
+	return z_dock_slot_x(DOCK_APP_COUNT, slot);
+}
+
+static int dock_slot_at_x(int local_x) {
+	return z_dock_slot_at_x(DOCK_APP_COUNT, dock_page, local_x);
+}
+
 static void draw_dock_selection_ring(int ix, int iy) {
 	z_fb_hw_box(ix - 1, iy - 1, ix + DOCK_ICON_SIZE, iy + DOCK_ICON_SIZE, 1, NULL);
 }
@@ -931,23 +993,39 @@ static void draw_dock(void) {
 	// region() clears+redraws whatever it covers regardless).
 	bool dock_focused = (focused == dock_idx);
 
-	for (int i = 0; i < DOCK_APP_COUNT; i++) {
+	for (int slot = 0; slot < DOCK_SLOTS_MAX; slot++) {
 
-		int ix = x0 + DOCK_PADDING + i * (DOCK_ICON_SIZE + DOCK_ICON_GAP);
-		int iy = y0 + DOCK_PADDING;
+		bool is_next = dock_slot_is_next(slot);
+		int app = dock_app_at(slot);
+		int ix, iy;
+		bool selected;
 
-		if (dock_focused && i == dock_selected)
+		// A position past the end of a short page draws nothing at
+		// all -- no box, no icon. That empty space inside a
+		// full-width frame is what tells you at a glance that you are
+		// not on the first page.
+		if (app < 0 && !is_next) continue;
+
+		ix = x0 + dock_slot_x(slot);
+		iy = y0 + DOCK_PADDING;
+
+		selected = is_next ? (dock_selected == DOCK_SEL_NEXT)
+		                   : (dock_selected == app);
+
+		if (dock_focused && selected)
 			draw_dock_selection_ring(ix, iy);
 
 		z_fb_hw_box(ix, iy, ix + DOCK_ICON_SIZE - 1, iy + DOCK_ICON_SIZE - 1, 1, NULL);
 
-		if (dock_launching[i]) {
+		if (is_next) {
+			draw_icon_bitmap(ix, iy, z_icon_next_data);
+		} else if (dock_launching[app]) {
 			// see dock_launching[]'s own comment -- solid fill, then
 			// the icon's own ink pixels punched back out to 0 on top.
 			z_fb_hw_fill_rect(ix, iy, DOCK_ICON_SIZE, DOCK_ICON_SIZE, 1);
-			draw_icon_bitmap_inverted(ix, iy, dock_apps[i]->bitmap);
+			draw_icon_bitmap_inverted(ix, iy, dock_apps[app]->bitmap);
 		} else {
-			draw_icon_bitmap(ix, iy, dock_apps[i]->bitmap);
+			draw_icon_bitmap(ix, iy, dock_apps[app]->bitmap);
 		}
 
 	}
@@ -1379,23 +1457,46 @@ static bool dock_handle_key(uint32_t keysym, bool pressed) {
 	if (!prev && !next && !activate) return false;
 	if (!pressed) return true;   // own the key, but only act on press
 
-	if (dock_selected < 0) dock_selected = 0;
+	// Selection moves within the CURRENT PAGE, and the NEXT icon is
+	// part of that cycle rather than a special case -- it is one more
+	// thing to land on, and Enter on it does what clicking it does.
+	// So the keyboard and the mouse offer exactly the same set of
+	// targets, which is the only way the two stay explicable to the
+	// same person.
+	{
+		int first = dock_paged ? dock_page * DOCK_PAGE_SIZE : 0;
+		int count = dock_page_apps(dock_page);
+		int last  = first + count - 1;
 
-	if (prev || next) {
+		if (dock_selected < first || dock_selected > last) {
+			if (dock_selected != DOCK_SEL_NEXT) dock_selected = first;
+		}
 
-		int old_selected = dock_selected;
+		if (prev || next) {
 
-		if (prev)
-			dock_selected = (dock_selected == 0) ? DOCK_APP_COUNT - 1 : dock_selected - 1;
-		else
-			dock_selected = (dock_selected == DOCK_APP_COUNT - 1) ? 0 : dock_selected + 1;
+			int old_selected = dock_selected;
 
-		if (dock_selected != old_selected)
-			repair_region(windows[dock_idx].x, windows[dock_idx].y,
-				windows[dock_idx].w, windows[dock_idx].h, -1);
+			if (next) {
+				if (dock_selected == DOCK_SEL_NEXT) dock_selected = first;
+				else if (dock_selected == last)
+					dock_selected = dock_paged ? DOCK_SEL_NEXT : first;
+				else dock_selected++;
+			} else {
+				if (dock_selected == DOCK_SEL_NEXT) dock_selected = last;
+				else if (dock_selected == first)
+					dock_selected = dock_paged ? DOCK_SEL_NEXT : last;
+				else dock_selected--;
+			}
 
-	} else {
-		dock_launch(dock_selected);
+			if (dock_selected != old_selected)
+				repair_region(windows[dock_idx].x, windows[dock_idx].y,
+					windows[dock_idx].w, windows[dock_idx].h, -1);
+
+		} else if (dock_selected == DOCK_SEL_NEXT) {
+			dock_set_page(dock_page + 1);
+		} else {
+			dock_launch(dock_selected);
+		}
 	}
 
 	return true;
@@ -2049,6 +2150,21 @@ static void dispatch_keys(void) {
 			continue;
 		}
 
+		// Alt+[ and Alt+] -- previous/next dock page.
+		//
+		// Global rather than dock-focused, and deliberately: the
+		// point of a keyboard shortcut here is to reach an app on
+		// another page without first having to focus the dock, which
+		// is itself several keystrokes. Consumed even when the dock
+		// is not paging, so the keys behave the same on every machine
+		// rather than falling through to the focused app on the ones
+		// that happen to have fewer apps installed.
+		if ((modifiers & Z_KBD_MOD_ALT) &&
+			(keysym == '[' || keysym == ']')) {
+			if (pressed) dock_set_page(dock_page + (keysym == ']' ? 1 : -1));
+			continue;
+		}
+
 		// Ctrl+Alt+Arrow -- move the game mode viewport. MUST be
 		// tested before the plain Alt+Arrow case directly below:
 		// Ctrl+Alt+Left also satisfies that test, so the other order
@@ -2187,8 +2303,11 @@ static int create_dock(void) {
 		return -1;
 	}
 
-	uint32_t w = DOCK_PADDING * 2 + DOCK_APP_COUNT * DOCK_ICON_SIZE +
-		(DOCK_APP_COUNT - 1) * DOCK_ICON_GAP;
+	// Full width while paging, so NEXT sits at the far right and the
+	// unused positions on a short page read as deliberate empty
+	// space. Sized to its contents otherwise -- unchanged behaviour
+	// for any machine that has not overflowed.
+	uint32_t w = (uint32_t)z_dock_width(DOCK_APP_COUNT);
 	uint32_t h = DOCK_PADDING * 2 + DOCK_ICON_SIZE;
 
 	int32_t x = DOCK_MARGIN;
@@ -2529,6 +2648,38 @@ static void handle_close_click(int idx) {
 
 }
 
+// Show page `p`, wrapping in both directions.
+//
+// Wrapping is what makes ONE button enough. A NEXT that stopped at the
+// last page would need a PREV beside it to get back, which is a second
+// slot spent and a second thing to explain; wrapping means the same
+// icon always does something and the way back is simply forward. That
+// only holds while the number of pages is small -- at two it is
+// instant, at four it is three clicks -- which is the range this is
+// for. Alt+[ and Alt+] exist for anyone who wants to go straight back.
+static void dock_set_page(int p) {
+
+	if (!dock_paged || dock_pages <= 1) return;
+
+	p %= dock_pages;
+	if (p < 0) p += dock_pages;
+
+	if (p == dock_page) return;
+
+	dock_page = p;
+
+	// Keyboard selection follows the page rather than staying on an
+	// app that is no longer shown. Selection ON the NEXT icon stays
+	// put, so Enter can be pressed repeatedly to walk the pages.
+	if (dock_selected != DOCK_SEL_NEXT)
+		dock_selected = dock_page * DOCK_PAGE_SIZE;
+
+	if (dock_idx >= 0)
+		repair_region(windows[dock_idx].x, windows[dock_idx].y,
+			windows[dock_idx].w, windows[dock_idx].h, -1);
+
+}
+
 // handles a click already known to have landed inside the dock's own
 // rect (see the dock_idx branch in main()'s click handling below) --
 // maps the click to an icon slot, if any (clicks in the padding
@@ -2544,20 +2695,25 @@ static void dock_click(int cx, int cy) {
 
 	wm_window_t *w = &windows[dock_idx];
 
-	int local_x = cx - (int)w->x - DOCK_PADDING;
+	int local_x = cx - (int)w->x;
 	int local_y = cy - (int)w->y - DOCK_PADDING;
+	int slot, app;
 
 	if (local_y < 0 || local_y >= DOCK_ICON_SIZE) return;	// in the padding, not an icon
-	if (local_x < 0) return;
 
-	int stride = DOCK_ICON_SIZE + DOCK_ICON_GAP;
-	int slot = local_x / stride;
-	int slot_x = local_x % stride;
+	// Asked rather than computed: NEXT is right-aligned and so is not
+	// on the stride, and an empty position on a short page must not
+	// answer to a click. See dock_slot_at_x().
+	slot = dock_slot_at_x(local_x);
+	if (slot < 0) return;
 
-	if (slot < 0 || slot >= DOCK_APP_COUNT) return;
-	if (slot_x >= DOCK_ICON_SIZE) return;	// in the gap between icons
+	if (dock_slot_is_next(slot)) {
+		dock_set_page(dock_page + 1);
+		return;
+	}
 
-	dock_launch(slot);
+	app = dock_app_at(slot);
+	if (app >= 0) dock_launch(app);
 
 }
 

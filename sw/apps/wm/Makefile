@@ -90,7 +90,26 @@ wm.bin: wm.elf
 clean:
 	rm -f wm.elf wm.bin wm.data wm.asm wm.dasm wm.map *.o *.d
 
-.PHONY: wm clean
+# -- host tests ------------------------------------------------------
+#
+# Need only `cc`. No toolchain, no board. tests/test_dock.c includes
+# dock_layout.h directly, so it tests the arithmetic that actually
+# runs rather than a copy of it -- see that file's own header.
+#
+# tests/test_region.c predates that arrangement and still carries its
+# own lifted copy of the region code; it is built here too so both run
+# from one command.
+
+HOSTCC ?= cc
+HOSTFLAGS = -std=gnu99 -Wall -Wextra -O1 -g
+
+test:
+	@$(HOSTCC) $(HOSTFLAGS) -o /tmp/wm_test_dock tests/test_dock.c
+	@/tmp/wm_test_dock
+	@$(HOSTCC) $(HOSTFLAGS) -o /tmp/wm_test_region tests/test_region.c
+	@/tmp/wm_test_region
+
+.PHONY: wm test clean
 
 # Header dependency tracking.
 #

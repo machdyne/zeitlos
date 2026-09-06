@@ -570,6 +570,11 @@ prevent. Icons are 16x16 and redrawn only when a widget's state changes,
 so software is genuinely fine -- the same tradeoff `wm` already makes
 for the dock's own 32x32 icons.
 
+`icon-next.png` is in the same directory and goes through the same
+generator, but is not an app icon -- it is the dock's own NEXT button.
+It is there rather than hand-written into `wm.c` so that the one place
+32x32 dock artwork is authored stays the one place.
+
 `z_fb_hw_fill_pattern()` (`zgfx.h`) is new alongside this: the
 blitter's `BLIT_PATTERN` register was always a full 32-bit word, and
 `z_fb_hw_fill_rect()` simply hardcoded it to all-0s or all-1s. Patterns
@@ -969,16 +974,64 @@ apps were added -- it used to say "currently `term`, `gpu3d` and
 `draw`" long after there were a dozen -- and `dock_candidates[]` is two
 lines of scrolling away.
 
-**There is a ceiling, and nothing enforces it.** The dock is one row,
-`create_dock()` sizes the window from `DOCK_APP_COUNT` and places it at
-`x = DOCK_MARGIN`, and nothing clamps the result. At `DOCK_ICON_SIZE`
-32 plus `DOCK_ICON_GAP` 4 that is 36 pixels per icon, so on a 640px
-screen **seventeen** resolved apps fit and an eighteenth runs off the
-right edge -- drawn past the screen, unreachable by mouse or by the
-dock's own keyboard navigation. Sixteen are listed today. Past
-seventeen the dock needs to wrap, scroll, or drop what does not fit;
-`dock_candidates[]` carries the same warning where somebody would add
-the eighteenth.
+### Paging
+
+The dock is one row and stays one row -- vertical space is the scarcest
+thing on a 480px screen, so it does not grow a second one. Icons are 36
+pixels apart (`DOCK_ICON_SIZE` 32 plus `DOCK_ICON_GAP` 4), which puts
+**seventeen** across a 640px screen margin to margin.
+
+Up to seventeen resolved apps, nothing below applies: the dock is sized
+to its contents and grown from the left, every icon visible, no NEXT
+button and one page. Most machines will never reach that, and they
+should not pay for a mechanism they do not need.
+
+Past seventeen it pages:
+
+```
++------------------------------------------------------+
+| [a][b][c][d][e][f][g][h][i][j][k][l][m][n][o][p]  [>] |
++------------------------------------------------------+
+```
+
+- The frame spans the **full screen width** and the NEXT icon is
+  **right-aligned** inside it, so NEXT is in the same place on every
+  page. A NEXT that trailed the last icon of each page would sit
+  somewhere different on a short final page, which is exactly the
+  behaviour that makes a button annoying to hit.
+- Sixteen apps per page (`DOCK_PAGE_SIZE`), since NEXT occupies the
+  seventeenth position. Crossing the threshold therefore costs one
+  visible app: 17 shown, then 16 plus a button.
+- **NEXT wraps.** That is what makes one button enough. A NEXT that
+  stopped at the last page would need a PREV beside it, which is a
+  second slot spent and a second thing to explain; wrapping means the
+  same icon always does something and the way back is simply forward.
+  That holds while the page count is small -- two is instant, four is
+  three clicks -- which is the range this is for.
+- **Empty space is the page indicator.** Page 0 is always full, so the
+  unused positions on a short page can only mean a later one. No
+  counter, no label, no chrome.
+- **Alt+[** and **Alt+]** step pages directly, for anyone who does not
+  want to walk the cycle. Global rather than dock-focused: the point is
+  to reach an app on another page without first focusing the dock.
+- Keyboard navigation treats NEXT as one more icon in the cycle --
+  Left/Right lands on it and Enter activates it -- so the keyboard and
+  the mouse offer exactly the same targets.
+
+Capacity is now bounded by `dock_candidates[]` rather than by geometry,
+so the list may grow freely.
+
+**The arithmetic lives in `sw/apps/wm/dock_layout.h`, not in `wm.c`.**
+`draw_dock()`, `dock_click()` and `dock_handle_key()` all have to agree
+on where an icon is and which app is under it; while that was one
+multiplication each, three copies was survivable, and with a page
+offset and an off-stride NEXT it is three chances for a click to launch
+the icon next to the one that was pressed. Those functions are pure --
+they take "how many apps" and "which page" as arguments rather than
+reading wm's globals -- which is also what makes
+`sw/apps/wm/tests/test_dock.c` able to check a forty-app dock on a
+machine that has six. `make -C sw/apps/wm test` runs it, and needs no
+toolchain and no board.
 
 A candidate is only an *offer*: `dock_build()` keeps the ones that
 actually resolve via `z_exec_exists()` at startup, so an app that isn't
