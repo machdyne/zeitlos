@@ -1,0 +1,3 @@
+# Test-suite ROMs are downloaded by tests/fetch_roms.sh, not committed.
+# See docs/chip8_app.md, "Testing", for why.
+tests/roms/

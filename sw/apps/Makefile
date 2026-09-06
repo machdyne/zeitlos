@@ -36,7 +36,8 @@ APPS = \
 	play \
 	track \
 	midi \
-	gamedemo
+	gamedemo \
+	chip8
 
 all:
 	@for a in $(APPS); do \

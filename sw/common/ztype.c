@@ -49,6 +49,23 @@ const z_ftype_t z_ftypes[] = {
 	{ "IMG", "hex",  "Disk image"    },
 	{ "DAT", "hex",  "Binary data"   },
 
+	// CHIP-8 ROMs -- sw/apps/chip8 (docs/chip8_app.md).
+	//
+	// Three extensions rather than one because the emulator covers
+	// three machines and the extension is the only hint it gets about
+	// which: CH8 is plain CHIP-8, SC8 is SUPER-CHIP, XO8 is XO-CHIP.
+	// A ROM directory can override the guess per file (CHIP8.CFG),
+	// but that only helps once the right app is already running --
+	// this table is what decides that.
+	//
+	// All three are 3 characters, which is not a coincidence: FAT
+	// short names have no room for the ".xochip" the Octo toolchain
+	// tends to produce, so a ROM copied onto a card arrives with a
+	// truncated extension anyway.
+	{ "CH8", "chip8", "CHIP-8 ROM"     },
+	{ "SC8", "chip8", "SUPER-CHIP ROM" },
+	{ "XO8", "chip8", "XO-CHIP ROM"    },
+
 	// Zeitlos bitmap -- sw/common/zbm.h, written by sw/apps/draw.
 	//
 	// Stays mapped to `draw` rather than `view`, deliberately: a ZBM

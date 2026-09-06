@@ -1,0 +1,43 @@
+# chip8 -- example per-ROM configuration.
+#
+# Copy this to a ROM directory on the sdcard as CHIP8.CFG (uppercase,
+# 8.3 -- FAT short names are all this filesystem has). The emulator
+# reads the one in the directory the ROM it is opening lives in.
+#
+# See docs/chip8_app.md for the full field list.
+
+# [*] applies to every ROM in this directory. A named section is
+# applied on top of it, whichever order the two appear in the file.
+[*]
+speed 15
+
+# SUPER-CHIP titles written against 1.0 rather than 1.1 need I
+# advanced after FX55/FX65. Symptom without it: arrays read back from
+# the wrong offset, so graphics are garbled but nothing errors.
+[BLINKY.CH8]
+name Blinky
+profile schip
+speed 30
+set mem_inc=x1
+pad up=3 down=6 left=7 right=8
+
+# XO-CHIP wants its 64K address space and its own quirk set. The
+# profile covers all of that.
+#
+# `palette` decides how the four XO-CHIP colours become greys on a 1bpp
+# display. The default, `fill`, puts the primary fill colour at full
+# brightness. Use `solid` for a title whose text is unreadable against
+# its own drop shadow, or `index` for one that genuinely uses its four
+# colours as a greyscale ramp.
+[SUPERNEA.XO8]
+name Super Neat Boy
+profile xochip
+speed 200
+palette fill
+
+# An ordinary CHIP-8 game that happens to want the CHIP-48 shift
+# behaviour. Everything not named keeps the profile's own value.
+[TETRIS.CH8]
+name Tetris
+set shift=on
+pad left=5 right=6 a=4 b=7
