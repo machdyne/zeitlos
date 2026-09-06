@@ -24,6 +24,7 @@ extern const uint8_t z_icon_gpu3d_data[32 * 4];
 extern const uint8_t z_icon_hex_data[32 * 4];
 extern const uint8_t z_icon_info_data[32 * 4];
 extern const uint8_t z_icon_midi_data[32 * 4];
+extern const uint8_t z_icon_mmod_data[32 * 4];
 extern const uint8_t z_icon_next_data[32 * 4];
 extern const uint8_t z_icon_play_data[32 * 4];
 extern const uint8_t z_icon_read_data[32 * 4];

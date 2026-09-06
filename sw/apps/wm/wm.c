@@ -133,14 +133,15 @@ static const dock_app_t dock_candidates[] = {
 	{ "track",		z_icon_track_data },
 	{ "midi",		z_icon_midi_data },
 	{ "play",		z_icon_play_data  },
-	{ "space3d",	z_icon_space3d_data },
-	{ "gpu3d",		z_icon_gpu3d_data },
-	{ "gamedemo",	z_icon_gamedemo_data },
-	{ "chip8",		z_icon_chip8_data },
 	{ "calc",		z_icon_calc_data  },
 	{ "clock",		z_icon_clock_data },
 	{ "info",		z_icon_info_data  },
 	{ "settings",	z_icon_settings_data },
+	{ "chip8",		z_icon_chip8_data },
+	{ "space3d",	z_icon_space3d_data },
+	{ "gpu3d",		z_icon_gpu3d_data },
+	{ "gamedemo",	z_icon_gamedemo_data },
+	{ "mmod",		z_icon_mmod_data },
 };
 #define DOCK_CANDIDATE_COUNT \
 	(int)(sizeof(dock_candidates) / sizeof(dock_candidates[0]))

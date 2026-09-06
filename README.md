@@ -76,7 +76,7 @@ With the MTU, there is no need for position independent code or complicated addr
 | [track](docs/track_app.md) | MOD audio file player |
 | [mmod](docs/mmod.md) | [MMOD](https://github.com/machdyne/mmod) reader/writer |
 | [logic](docs/logic_app.md) | Logic analyzer (under development) |
-| [chip8](docs/chip8_app.md) | CHIP8 game emulator |
+| [chip8](docs/chip8_app.md) | CHIP-8 game emulator |
 | [gamedemo](docs/gamedemo.md) | 2D side-scrolling platformer game |
 | space3d | First-person 3D space shooter game |
 | [gpu3d](docs/gpu3d_app.md) | Spinning 3D cube demo + STL viewer |
