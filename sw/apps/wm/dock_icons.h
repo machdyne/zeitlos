@@ -14,6 +14,7 @@
  * comment for how to wire a new icon in after regenerating this file.
  */
 
+extern const uint8_t z_icon_cal_data[32 * 4];
 extern const uint8_t z_icon_calc_data[32 * 4];
 extern const uint8_t z_icon_chip8_data[32 * 4];
 extern const uint8_t z_icon_clock_data[32 * 4];

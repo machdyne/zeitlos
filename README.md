@@ -71,6 +71,7 @@ With the MTU, there is no need for position independent code or complicated addr
 | [calc](docs/calc_app.md) | Calculator |
 | [info](docs/info_app.md) | System info |
 | [clock](docs/clock_app.md) | Analog and digital clock |
+| [cal](docs/cal_app.md) | Month calendar |
 | [settings](docs/settings_app.md) | System settings |
 | [play](docs/play_app.md) | WAV/AU/RAW audio file player |
 | [track](docs/track_app.md) | MOD audio file player |

@@ -218,7 +218,24 @@ void z_widget_draw(z_widget_set_t *set, int idx) {
 		case Z_WIDGET_TOGGLE:
 		default: {
 
-			bool lit = wd->on || (set->pressed == idx);
+			// A disabled widget is never lit, whatever its `on`
+			// says. Everything else here already refuses to touch
+			// one -- widget_hit() skips it, so the pointer cannot
+			// press it; z_widget_focus_next() skips it, so Tab
+			// cannot reach it; z_widget_key_activate() returns -1
+			// for it. Only the DRAWING did not know, so a disabled
+			// button was pixel-for-pixel identical to a live one
+			// and simply did nothing when clicked.
+			//
+			// That was latent rather than broken -- nothing in the
+			// tree set enabled = false until sw/apps/cal's month
+			// arrows, which are disabled at the ends of the
+			// representable date range and reach that state on the
+			// very first launch on a machine with no clock (the
+			// app opens on the epoch, where `<` has nowhere to
+			// go). A dead-looking button is the point; a live one
+			// that ignores you is a bug report.
+			bool lit = wd->enabled && (wd->on || (set->pressed == idx));
 
 			// body: solid when lit, empty when not. The pressed state
 			// borrows the same visual as "on" deliberately -- with one
@@ -258,6 +275,22 @@ void z_widget_draw(z_widget_set_t *set, int idx) {
 					set->focused == idx ? 1 : 0);
 
 			int ink = lit ? 0 : 1;
+
+			// An empty frame is the disabled appearance.
+			//
+			// 1bpp leaves no room for the usual answer. Greying a
+			// label needs a per-pixel AND against a 50% pattern,
+			// and neither the blitter nor z_fb_hw_fill_pattern()
+			// does a masked write -- the pattern fill OVERWRITES,
+			// so it would erase the button rather than dim it.
+			// Drawing the label anyway and hoping the user notices
+			// it does nothing is the option this replaces.
+			//
+			// So: keep the frame, which holds the layout and shows
+			// something is there, and drop the contents. It reads
+			// as unavailable at a glance and costs no new drawing
+			// primitive.
+			if (!wd->enabled) break;
 
 			if (wd->icon) {
 

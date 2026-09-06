@@ -269,4 +269,19 @@ uint32_t z_tm_to_time(const z_tm_t *tm);
 const char *z_wday_name(uint8_t wday);
 const char *z_month_name(uint8_t month);
 
+// "January".."December", same contract, "???" out of range.
+//
+// A second table of the same twelve months needs a reason, and the
+// reason is width rather than taste. The short names exist because
+// sw/apps/clock's date line has 15 characters to work with; a
+// calendar's header has a whole window and reads as a heading, where
+// "Sep 2026" is an abbreviation of something nothing else on screen
+// ever spells out.
+//
+// About 90 bytes of .rodata, and --gc-sections drops it from every
+// binary that doesn't call this -- which today is all of them except
+// sw/apps/cal. That is the same trade z_wday_name() already makes and
+// the reason these live in zrtc.c rather than being inline.
+const char *z_month_name_long(uint8_t month);
+
 #endif

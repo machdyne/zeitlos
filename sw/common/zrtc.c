@@ -143,3 +143,17 @@ const char *z_month_name(uint8_t month) {
 	if (month < 1 || month > 12) return "???";
 	return month_names[month - 1];
 }
+
+// Spelled out, for a caller with room for it -- see zrtc.h on why
+// this is a second table rather than the short names with a suffix
+// rule. There isn't one: "Sep" -> "September" but "Jun" -> "June",
+// and a rule with two exceptions is longer than the table.
+static const char *const month_names_long[12] = {
+	"January", "February", "March", "April", "May", "June",
+	"July", "August", "September", "October", "November", "December"
+};
+
+const char *z_month_name_long(uint8_t month) {
+	if (month < 1 || month > 12) return "???";
+	return month_names_long[month - 1];
+}

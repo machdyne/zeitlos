@@ -73,6 +73,7 @@ SUPPLEMENTAL = [
     ("apps/info", "sw/apps/info/info.bin"),
     ("apps/calc", "sw/apps/calc/calc.bin"),
     ("apps/clock", "sw/apps/clock/clock.bin"),
+    ("apps/cal", "sw/apps/cal/cal.bin"),
     ("apps/settings", "sw/apps/settings/settings.bin"),
     ("apps/track", "sw/apps/track/track.bin"),
 ]

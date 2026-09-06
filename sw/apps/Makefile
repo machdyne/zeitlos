@@ -23,6 +23,7 @@ APPS = \
 	settings \
 	calc \
 	clock \
+	cal \
 	read \
 	net \
 	term \

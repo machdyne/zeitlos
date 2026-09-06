@@ -66,6 +66,7 @@ cp sw/apps/draw/draw.bin "$MOUNT_DIR/apps/draw"
 cp sw/apps/info/info.bin "$MOUNT_DIR/apps/info"
 cp sw/apps/calc/calc.bin "$MOUNT_DIR/apps/calc"
 cp sw/apps/clock/clock.bin "$MOUNT_DIR/apps/clock"
+cp sw/apps/cal/cal.bin "$MOUNT_DIR/apps/cal"
 cp sw/apps/settings/settings.bin "$MOUNT_DIR/apps/settings"
 cp sw/apps/track/track.bin "$MOUNT_DIR/apps/track"
 

@@ -372,6 +372,28 @@ all three agree. Working range is 1970 to 2106.
 
 Verified against `gmtime()` across the whole range, both directions.
 
+### Names
+
+`z_wday_name()` gives `"Sun".."Sat"`, `z_month_name()` gives
+`"Jan".."Dec"`, and `z_month_name_long()` gives
+`"January".."December"`. All three return `"???"` out of range, so a
+caller can print the result without checking first.
+
+The long names are a second table rather than the short ones with a
+suffix rule, because there isn't one: `Sep` → `September` but `Jun` →
+`June`, and a rule with two exceptions is longer than the table. It
+costs about 90 bytes of `.rodata` and `--gc-sections` drops it from
+every binary that doesn't call it — which today is all of them except
+`sw/apps/cal`, whose heading has room to spell the month out.
+
+### 2106 is not a usable ceiling for a *month*
+
+The range above is the span of a `uint32` second count, and it ends
+mid-February 2106. Anything working a month at a time needs the *next*
+month's first to be representable too, which makes December 2105 the
+last complete one — see `docs/cal_app.md`, which stops there for
+exactly this reason.
+
 Exposed to Scheme as `(current-time)` and `(current-date)` — see
 `docs/scheme_api.md`.
 

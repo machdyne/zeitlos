@@ -611,6 +611,38 @@ ordering lives in the app, which is the only place that knows about
 both. Note arrows deliberately do *not* move between buttons there —
 they belong to the list, and Tab is the only way across.
 
+### Disabled widgets
+
+`enabled = false` makes a widget inert everywhere: `widget_hit()`
+skips it so the pointer can't press it, `z_widget_focus_next()` skips
+it so Tab can't reach it, and `z_widget_key_activate()` returns -1 for
+it.
+
+It also **draws as an empty frame** — the body outline, no label, no
+icon, never lit. That reads as unavailable at a glance, which is the
+whole point.
+
+Until `sw/apps/cal` nothing in the tree ever set the flag, and the
+drawing didn't know about it: a disabled button was pixel-for-pixel
+identical to a live one and simply did nothing when clicked. That's
+latent rather than broken while nobody uses it, and a bug report the
+moment somebody does.
+
+1bpp leaves no room for the usual answer. Greying a label needs a
+per-pixel AND against a 50% pattern, and neither the blitter nor
+`z_fb_hw_fill_pattern()` does a masked write — the pattern fill
+*overwrites*, so it would erase the button rather than dim it. Keeping
+the frame and dropping the contents costs no new drawing primitive.
+
+`sw/apps/cal` is the worked example: its month arrows go dead at the
+ends of the representable date range, and the back arrow is disabled
+on the very first launch on a machine with no clock, since the app
+opens on the epoch and has nowhere earlier to go.
+
+**Move focus off a widget you disable.** `z_widget_key_activate()`
+returns -1 for a disabled widget, so leaving focus there means Enter
+appears to do nothing at all.
+
 ## Clipboard
 
 System-wide, hosted by wm for the same reason the launch argument is:
