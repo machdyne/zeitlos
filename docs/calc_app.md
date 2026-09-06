@@ -64,6 +64,21 @@ against the display: the app is deliberately narrow, and spending more
 characters on fraction than integer is the wrong trade for a pocket
 calculator. Results are shown to `CALC_DIGITS` (10) significant digits.
 
+**The arithmetic itself now lives in `sw/common/zfix.c`.** The four
+overflow-refusing operations, the decimal formatter and the parser
+were static functions in `calc_core.c` until `sw/apps/sheet` wanted
+the same ones — which is why `zfix.h` takes the number of decimal
+places as a *parameter* rather than compiling it in: calc runs at 6
+places, sheet at 4, and neither wants the other's trade between
+fraction and integer range. See `docs/sheet_app.md`, "Fixed point at
+two precisions".
+
+What stayed in `calc_core.c` is the **entry state machine**, which is
+where a calculator's bugs actually live and which means nothing in a
+spreadsheet — there is no "a digit typed after `=` replaces the
+answer" when there is no `=` key. The move is verified by this app's
+own 62 checks passing unchanged; that was the acceptance test for it.
+
 64-bit arithmetic does pull in libgcc's `__muldi3`/`__divdi3` on this
 target — a few hundred bytes for exactness, and the only cost in this
 app that isn't obvious from the source, so it's called out in

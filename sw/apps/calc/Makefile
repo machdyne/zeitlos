@@ -32,10 +32,12 @@ override CFLAGS += --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) -DZ_GFX
 LDFLAGS = -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS)
 LDSCRIPT = ../../common/riscv-app.ld
 
-# calc_core.o is the arithmetic, kept free of any I/O so the test
-# suite below can build it for the host -- see calc_test.c.
+# calc_core.o is the entry state machine, kept free of any I/O so the
+# test suite below can build it for the host -- see calc_test.c.
+# zfix.o is the arithmetic itself, shared with sw/apps/sheet
+# (sw/common/zfix.c).
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o \
-	calc_core.o calc.o
+	zfix.o calc_core.o calc.o
 
 calc: calc.elf calc.bin
 
@@ -56,6 +58,9 @@ zwin.o:
 
 zwidget.o:
 	$(CC) $(CFLAGS) -c ../../common/zwidget.c -o zwidget.o
+
+zfix.o:
+	$(CC) $(CFLAGS) -c ../../common/zfix.c -o zfix.o
 
 calc_core.o: calc_core.c calc_core.h
 	$(CC) $(CFLAGS) -c calc_core.c -o calc_core.o
@@ -92,7 +97,8 @@ calc.bin: calc.elf
 # answers -- which is why the arithmetic is in a file with no I/O in
 # it at all.
 test:
-	cc --std=gnu99 -Wall -Wextra -o calc_test calc_test.c calc_core.c
+	cc --std=gnu99 -Wall -Wextra -I ../../common \
+		-o calc_test calc_test.c calc_core.c ../../common/zfix.c
 	./calc_test
 
 clean:

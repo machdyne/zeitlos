@@ -487,7 +487,11 @@ make render    # writes /tmp/hex.pbm -- then LOOK at it
 
 Both need `-no-pie` and `vm.mmap_min_addr=0`; the Makefile passes the
 first and the tests exit 77 with an explanation rather than crashing if
-either is missing. `tests/trampoline.h` says why.
+either is missing. `tests/trampoline.h` says why — it is now a one-line
+shim onto `sw/common/tests/ztramp.h`, which is where the thing itself
+lives since `sw/apps/sheet`'s render wanted it too. That was the
+condition the original file's own note said to promote it on. Nothing
+here had to change.
 
 That header is worth knowing about. `zrender.h` makes an app's
 *drawing* run on a host by mapping real memory at VRAM's fixed address;

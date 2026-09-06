@@ -2,13 +2,24 @@
  * Zeitlos
  * Copyright (c) 2025 Lone Dynamics Corporation. All rights reserved.
  *
- * Calculator arithmetic. See calc_core.h.
+ * Calculator entry state. See calc_core.h.
+ *
+ * The arithmetic itself is in sw/common/zfix.c -- these four
+ * operations and the decimal formatter were static functions here
+ * until sw/apps/sheet needed the same ones at a different precision.
+ * What remains is the part that is about a keypad.
  */
 
 #include <stdint.h>
 #include <stdbool.h>
 
 #include "calc_core.h"
+
+// CALC_SCALE is spelled out in the header so it can be used in a
+// constant expression (CALC_MAX). This is what stops it drifting away
+// from CALC_DP.
+_Static_assert(CALC_SCALE == 1000000LL && CALC_DP == 6,
+	"CALC_SCALE must be 10^CALC_DP -- see calc_core.h");
 
 void calc_reset(calc_t *c) {
 
@@ -28,97 +39,6 @@ calc_fix_t calc_display(const calc_t *c) {
 	return c->entering ? c->entry : c->acc;
 }
 
-// -- arithmetic, with overflow refused rather than wrapped --
-//
-// Every one of these returns false instead of producing a wrong
-// answer. Wrapping is the worst possible behaviour here: it yields a
-// number that looks entirely reasonable and is completely wrong, on a
-// device whose only purpose is to be trusted.
-
-static bool fix_add(calc_fix_t a, calc_fix_t b, calc_fix_t *out) {
-
-	// Signed overflow is undefined behaviour, so this has to be
-	// checked BEFORE the addition, not by inspecting the result.
-	if (b > 0 && a > INT64_MAX - b) return false;
-	if (b < 0 && a < INT64_MIN - b) return false;
-
-	*out = a + b;
-	return true;
-
-}
-
-static bool fix_sub(calc_fix_t a, calc_fix_t b, calc_fix_t *out) {
-
-	if (b < 0 && a > INT64_MAX + b) return false;
-	if (b > 0 && a < INT64_MIN + b) return false;
-
-	*out = a - b;
-	return true;
-
-}
-
-static bool fix_mul(calc_fix_t a, calc_fix_t b, calc_fix_t *out) {
-
-	if (a == 0 || b == 0) { *out = 0; return true; }
-
-	// a and b are both scaled, so the product is scaled TWICE and has
-	// to come back down by CALC_SCALE. The intermediate is what
-	// overflows, long before either operand does -- two values of a
-	// million each are 1e12 scaled, and their product is 1e24.
-	//
-	// Checked by division rather than by computing and looking,
-	// because the overflow itself would be undefined behaviour.
-	calc_fix_t aa = a < 0 ? -a : a;
-	calc_fix_t bb = b < 0 ? -b : b;
-
-	if (aa > INT64_MAX / bb) return false;
-
-	calc_fix_t p = a * b;
-
-	// Round to nearest on the way back down, rather than truncating.
-	// Truncation makes 1.5 * 1.5 come out as 2.249999 on operands
-	// that are themselves exact.
-	calc_fix_t half = CALC_SCALE / 2;
-	if (p >= 0) {
-		if (p > INT64_MAX - half) return false;
-		*out = (p + half) / CALC_SCALE;
-	} else {
-		if (p < INT64_MIN + half) return false;
-		*out = (p - half) / CALC_SCALE;
-	}
-
-	return true;
-
-}
-
-static bool fix_div(calc_fix_t a, calc_fix_t b, calc_fix_t *out) {
-
-	if (b == 0) return false;
-
-	// Scale the numerator up before dividing, or every result would
-	// be a whole number. That is the step that can overflow.
-	calc_fix_t aa = a < 0 ? -a : a;
-
-	if (aa > INT64_MAX / CALC_SCALE) return false;
-
-	calc_fix_t n = a * CALC_SCALE;
-
-	// Round to nearest, matching fix_mul(). The sign of the remainder
-	// follows the numerator in C, so the half has to follow it too.
-	calc_fix_t half = (b < 0 ? -b : b) / 2;
-
-	if (n >= 0) {
-		if (n > INT64_MAX - half) return false;
-		*out = (n + half) / b;
-	} else {
-		if (n < INT64_MIN + half) return false;
-		*out = (n - half) / b;
-	}
-
-	return true;
-
-}
-
 // True if `v` fits the display. Checked after every result, so a
 // number too big to show is reported rather than displayed truncated.
 static bool fits(calc_fix_t v) {
@@ -133,10 +53,10 @@ static void apply(calc_t *c, char op, calc_fix_t a, calc_fix_t b) {
 	bool ok;
 
 	switch (op) {
-		case '+': ok = fix_add(a, b, &r); break;
-		case '-': ok = fix_sub(a, b, &r); break;
-		case '*': ok = fix_mul(a, b, &r); break;
-		case '/': ok = fix_div(a, b, &r); break;
+		case '+': ok = z_fix_add(a, b, &r); break;
+		case '-': ok = z_fix_sub(a, b, &r); break;
+		case '*': ok = z_fix_mul(a, b, CALC_DP, &r); break;
+		case '/': ok = z_fix_div(a, b, CALC_DP, &r); break;
 		default:  r = b; ok = true; break;
 	}
 
@@ -169,8 +89,8 @@ void calc_digit(calc_t *c, int d) {
 
 		// Integer part: shift left and add.
 		//
-		// A plain integer multiply by 10, NOT fix_mul(entry, 10 *
-		// CALC_SCALE). Both scale the value by ten, but fix_mul
+		// A plain integer multiply by 10, NOT z_fix_mul(entry, 10 *
+		// CALC_SCALE, CALC_DP). Both scale the value by ten, but z_fix_mul
 		// forms the doubly-scaled product first and only then brings
 		// it back down -- and that intermediate overflows an int64
 		// at around seven typed digits, far short of the ten the
@@ -342,70 +262,30 @@ int calc_format(const calc_t *c, char *out, int cap) {
 		return n;
 	}
 
-	calc_fix_t v = calc_display(c);
-
-	int n = 0;
-
-	if (v < 0) {
-		out[n++] = '-';
-		v = -v;
-	}
-
-	calc_fix_t ip = v / CALC_SCALE;
-	calc_fix_t fp = v % CALC_SCALE;
-
-	// integer part, most significant first
-	char tmp[24];
-	int t = 0;
-
-	if (!ip) tmp[t++] = '0';
-	while (ip && t < (int)sizeof(tmp)) { tmp[t++] = (char)('0' + ip % 10); ip /= 10; }
-
-	while (t && n < cap - 1) out[n++] = tmp[--t];
-
-	// Fraction, trailing zeros stripped -- 1/2 reads as "0.5", not
-	// "0.500000", and a whole number gets no point at all.
-	//
 	// While ENTERING, the typed decimal places are shown as typed
-	// instead: someone part way through "1.50" should see what they
-	// pressed, not have it tidied to "1.5" under their fingers.
-	int places = CALC_DP;
+	// rather than stripped: someone part way through "1.50" should see
+	// what they pressed, not have it tidied to "1.5" under their
+	// fingers. Everywhere else, trailing zeros go -- 1/2 reads as
+	// "0.5", not "0.500000".
+	//
+	// Asking z_fix_format() for entry_dp places is safe even though it
+	// ROUNDS to that many: while entering, every digit below entry_dp
+	// is zero by construction (see calc_digit()), so there is nothing
+	// for the rounding to do.
+	int places = (c->entering && c->entry_dp >= 0)
+		? c->entry_dp : Z_FIX_STRIP;
 
-	if (c->entering && c->entry_dp >= 0) {
-		places = c->entry_dp;
-	} else {
-		while (places > 0 && (fp % 10) == 0) { fp /= 10; places--; }
+	int n = z_fix_format(calc_display(c), CALC_DP, places, out, cap);
+
+	// The point has been typed but no digit after it yet. Showing it
+	// is the only feedback that the keypress registered -- and it is
+	// not something a formatter can know, since the value is a whole
+	// number at this moment and indistinguishable from any other.
+	if (c->entering && c->entry_dp == 0 && n < cap - 1) {
+		out[n++] = '.';
+		out[n] = 0;
 	}
 
-	if (c->entering && c->entry_dp == 0) {
-
-		// The point has been typed but no digit after it yet. Showing
-		// it is the only feedback that the keypress registered.
-		if (n < cap - 1) out[n++] = '.';
-
-	} else if (places > 0) {
-
-		if (n < cap - 1) out[n++] = '.';
-
-		// Re-derive the digits at the chosen precision.
-		calc_fix_t scale = CALC_SCALE;
-		for (int i = 0; i < places; i++) scale /= 10;
-
-		calc_fix_t f = (v % CALC_SCALE) / scale;
-
-		char ftmp[CALC_DP + 1];
-		int ft = 0;
-
-		for (int i = 0; i < places; i++) {
-			ftmp[ft++] = (char)('0' + f % 10);
-			f /= 10;
-		}
-
-		while (ft && n < cap - 1) out[n++] = ftmp[--ft];
-
-	}
-
-	out[n] = 0;
 	return n;
 
 }

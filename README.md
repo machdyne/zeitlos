@@ -63,6 +63,7 @@ With the MTU, there is no need for position independent code or complicated addr
 | App | Description |
 |-----|-------------|
 | [text](docs/text_editor.md) | Text editor |
+| [sheet](docs/sheet_app.md) | Spreadsheet |
 | [read](docs/read_app.md) | Text reader for files of unlimited size (with rendered Markdown) |
 | [hex](docs/hex_editor.md) | Hex editor for files of unlimited size |
 | draw | MacPaint-inspired drawing app |

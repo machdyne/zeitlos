@@ -66,6 +66,25 @@ const z_ftype_t z_ftypes[] = {
 	{ "SC8", "chip8", "SUPER-CHIP ROM" },
 	{ "XO8", "chip8", "XO-CHIP ROM"    },
 
+	// Spreadsheets -- sw/apps/sheet (docs/sheet_app.md).
+	//
+	// ZSS is this system's own format: line-oriented text, one line per
+	// non-empty cell, formulas included. CSV opens in the same app,
+	// which reads and writes it for interchange -- but note the two are
+	// not interchangeable in what they PRESERVE. Saving a sheet as CSV
+	// writes the values of its formulas, not the formulas, because
+	// that is what everything else expects to read out of a .csv. That
+	// is exactly why ZSS exists rather than CSV being the native
+	// format: a save that quietly destroys the model is worse than no
+	// save at all.
+	//
+	// CSV is mapped here rather than left to `text` deliberately. A
+	// spreadsheet is the thing a person opening a .csv almost always
+	// wants, and `text` still opens one perfectly well when asked
+	// directly -- the same arrangement MD already has with `read`.
+	{ "ZSS", "sheet", "Spreadsheet"   },
+	{ "CSV", "sheet", "CSV table"     },
+
 	// Zeitlos bitmap -- sw/common/zbm.h, written by sw/apps/draw.
 	//
 	// Stays mapped to `draw` rather than `view`, deliberately: a ZBM

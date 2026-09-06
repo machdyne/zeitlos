@@ -33,14 +33,37 @@
  * target. That is a few hundred bytes for exactness, and it is the
  * only place in this app where the cost is not obvious, so: it is
  * deliberate.
+ *
+ * -- where the arithmetic actually lives --
+ *
+ * In sw/common/zfix.c, not here. The four overflow-refusing
+ * operations and the decimal formatter used to be static functions in
+ * calc_core.c; they moved out when sw/apps/sheet needed the same
+ * arithmetic at a different precision, which is the whole reason
+ * zfix.h takes `dp` as a parameter rather than compiling it in.
+ *
+ * What is left here is the ENTRY STATE MACHINE -- which is where a
+ * calculator's bugs actually live, and which is specific to a thing
+ * with keys on it. A spreadsheet has no notion of "a digit typed
+ * after `=` replaces the answer rather than extending it", so none of
+ * this was worth sharing.
  */
 
 #include <stdint.h>
 #include <stdbool.h>
 
-typedef int64_t calc_fix_t;
+#include "../../common/zfix.h"
+
+// Kept as its own name rather than spelled z_fix_t at every call
+// site: this file's functions are about a calculator, and the typedef
+// says which precision they operate at.
+typedef z_fix_t calc_fix_t;
 
 // 6 decimal places.
+//
+// CALC_SCALE is written out rather than taken from z_fix_scale(), so
+// it can be used in the constant expression below. The two must
+// agree; the assertion in calc_core.c is what makes sure of it.
 #define CALC_DP     6
 #define CALC_SCALE  1000000LL
 

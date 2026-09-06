@@ -30,6 +30,7 @@ extern const uint8_t z_icon_next_data[32 * 4];
 extern const uint8_t z_icon_play_data[32 * 4];
 extern const uint8_t z_icon_read_data[32 * 4];
 extern const uint8_t z_icon_settings_data[32 * 4];
+extern const uint8_t z_icon_sheet_data[32 * 4];
 extern const uint8_t z_icon_space3d_data[32 * 4];
 extern const uint8_t z_icon_term_data[32 * 4];
 extern const uint8_t z_icon_text_data[32 * 4];

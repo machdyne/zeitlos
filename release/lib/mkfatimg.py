@@ -68,6 +68,7 @@ LABEL = "ZEITLOS"
 SUPPLEMENTAL = [
     ("apps/files", "sw/apps/files/files.bin"),
     ("apps/text", "sw/apps/text/text.bin"),
+    ("apps/sheet", "sw/apps/sheet/sheet.bin"),
     ("apps/read", "sw/apps/read/read.bin"),
     ("apps/draw", "sw/apps/draw/draw.bin"),
     ("apps/info", "sw/apps/info/info.bin"),

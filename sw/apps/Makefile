@@ -17,6 +17,7 @@ APPS = \
 	draw \
 	view \
 	text \
+	sheet \
 	hex \
 	files \
 	info \
