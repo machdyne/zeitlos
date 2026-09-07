@@ -3,16 +3,7 @@
 A FatFs volume backed by main memory, created at boot and reachable
 from every app as `/ram`.
 
-## Why
-
-The SD card is bit-banged SPI and it shows. Measured on hardware,
-`sw/apps/web` spent **13.3 seconds** re-reading a 258KB page off the
-card to index it, against 1.4 seconds writing it — roughly 19 KB/s
-read. A browser wants scratch space for one page, not durable
-storage, and so does anything else that needs to put a few hundred
-kilobytes somewhere and read it back.
-
-## What it achieved
+## What it achieves
 
 Measured on the same page after the change:
 
