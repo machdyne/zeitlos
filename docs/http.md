@@ -16,7 +16,7 @@ provider underneath.
     |
   http.c       builds the request, parses the response
     |
-  tls.c        Phase 2 -- absent today
+  tls.c        TLS 1.3 record layer and handshake
     |
   zport        Z_PORT_CONNECT {ip, port} / Z_PORT_DATA
     |
@@ -78,10 +78,6 @@ Some specifics that are easy to get wrong and are checked directly:
 
 ### What it does not handle, and why
 
-- **No compression.** No `Accept-Encoding` is sent, so nothing
-  arrives gzipped. That costs bandwidth on a link with little to
-  spare and saves an inflate implementation plus a decompression
-  buffer. Phase 5.
 - **No pipelining.** One request is outstanding at a time.
   Connections ARE reused across same-host requests -- see "Persistent
   connections" below.
@@ -162,7 +158,7 @@ cd sw/apps/web
 make test
 ```
 
-`tests/test_http.c` is 173 checks, and most of them are malformed
+`tests/test_http.c` is 214 checks, and most of them are malformed
 input. Every response is also fed at chunk sizes of 1, 3, 17 and 512
 bytes as well as whole, and all of them must produce identical
 output — the same invariant `tests/test_html.c` uses, for the same

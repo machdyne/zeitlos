@@ -12,6 +12,21 @@ read. A browser wants scratch space for one page, not durable
 storage, and so does anything else that needs to put a few hundred
 kilobytes somewhere and read it back.
 
+## What it achieved
+
+Measured on the same page after the change:
+
+| | card | `/ram` |
+|---|---|---|
+| re-reading 258KB to index it | 13.3 s | **0.43 s** |
+
+Thirty times faster, and it moved the bottleneck: indexing a page is
+now **12.2 seconds of parsing and 0.4 seconds of reading**, where
+before it was 13.3 seconds of reading. `html.c` is what to optimise
+next, which was not visible while the card dominated.
+
+The card is still the fallback, and still works.
+
 ## Why a disk rather than a buffer
 
 An app-private buffer would have been a smaller change to `web`. But

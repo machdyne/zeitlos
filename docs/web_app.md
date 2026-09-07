@@ -271,66 +271,101 @@ record a new one.
 
 ### Where the time goes
 
-Measured on Lakritz loading `en.wikipedia.org/wiki/Main_Page`, 258KB:
+Measured on Lakritz loading `en.wikipedia.org/wiki/Main_Page`, 258KB
+of HTML:
 
 | | |
 |---|---|
-| body transfer | ~23s -- see [networking.md](networking.md) |
-| HTML parse and index | ~12s |
-| TLS handshake | ~15s, of which ~10s is certificate verification |
+| HTML parse and index | ~12.5s |
+| body transfer | ~10s (62KB on the wire, gzipped) |
+| TLS handshake | ~14s, of which ~10s is certificate verification |
 | storage, DNS, connect | under 1s |
-| **total** | **~52s** |
+| **total** | **~36s** |
 
-It started at 100s. The three that remain are independent of each
-other: TCP reassembly, the HTML parser, and RSA verification.
+It started at **100s**. Three changes did most of that: a hardware
+Montgomery multiplier (verification 36s -> 10s), gzip (body 23s ->
+10s), and matching the TCP window to the NIC's buffer, which stopped
+the transfer failing outright.
+
+What is left is independent of each other: the **HTML parser** (pure
+CPU, no data cache), **TCP reassembly** (which would let the window
+exceed the NIC buffer), and **RSA** verification on sites that use it.
 
 ### Known risks, ranked
 
-1. **`net`'s TCP was written for a LAN.** Stop-and-wait, no
-   out-of-order reassembly, a 2048-byte window. Over the open
-   internet with 100ms of round-trip time that is roughly 20KB/s at
-   best, and a single reordered segment costs a retransmit timeout.
-   This should be measured early in Phase 1b, before anything is
-   built on top of it.
-2. **One TCB.** No browsing while an SSH session is open, and no
-   parallel fetches.
-3. **X.509 parsing is attacker-controlled DER.** It needs host
-   fuzzing before it is trusted, not after.
-4. **Card I/O may dominate page load.** Everything is spooled through
-   a bit-banged SD interface.
+Written before any of this ran. Kept, with what actually happened.
+
+1. **`net`'s TCP was written for a LAN.** *Correct, and the biggest
+   one.* But the mechanism was not what this predicted: throughput is
+   bounded by the NIC's receive buffer, not by round-trip time, because
+   there is no out-of-order reassembly and a frame the hardware cannot
+   hold is discarded along with everything behind it. See
+   [networking.md](networking.md).
+2. **One TCB.** *Correct and unchanged.* No browsing while an SSH
+   session is open, and no parallel fetches. `web` now keeps that one
+   connection alive across same-host requests rather than reopening
+   it.
+3. **X.509 parsing is attacker-controlled DER.** *Still true, still
+   the right worry.* `der.c` has a mutation sweep under ASan;
+   `sw/common/zinflate.c` joined it as a second attacker-controlled
+   parser and got the same treatment.
+4. **Card I/O may dominate page load.** *Wrong.* Storage is well under
+   a second. The HTML parser is 12s and the body transfer is 10s;
+   spooling never showed up.
+
+The one nobody wrote down: **certificate verification**, which was 36
+of the first 85 seconds and needed a hardware multiplier to fix.
 
 ---
 
 ## Where this stands
 
-Phase 1 is complete as source. **It has never been run.** There is no
-bare-metal RISC-V toolchain in the environment it was written in, so
-nothing here has been compiled for the target, linked, or executed.
-What has been done instead:
+**It runs.** On a Lakritz board it fetches, verifies and renders real
+pages from the public internet -- en.wikipedia.org and google.com
+among them -- over TLS 1.3 with a verified certificate chain.
+
+This section used to say "Phase 1 is complete as source. It has never
+been run", because there was no bare-metal RISC-V toolchain where it
+was written. Everything below that line is still true and still how
+the code is developed; what changed is that the result is now checked
+against hardware as well.
 
 - Every module with logic in it is compiled and tested on the build
-  machine: 780 assertions across five suites, plus an off-device
-  renderer that draws a real page to a PBM.
+  machine: **1,006 assertions across fourteen suites**, plus an
+  off-device renderer that draws a real page to a PBM.
 - `net.c` syntax-checks clean with the host compiler in all four
   combinations of `NET_SOCK` and `SSH_ENABLE`.
-- `web.c` **links** against the real `sw/common` objects with no
-  undefined symbols, which verifies every API call it makes exists
-  with the right name and signature. It does not verify that it
-  works.
+- `make check-sources` verifies every `.c` in the app is actually
+  linked -- added after `toolbar.c` was written, tested, and left out
+  of `OBJS`, which nothing noticed until the target linker did.
 
 | File | What it is | Tested by |
 |---|---|---|
 | `url.c` | RFC 3986 parsing and resolution | `test_url.c`, 94 checks |
-| `http.c` | request building, response parsing | `test_http.c`, 173 checks |
+| `toolbar.c` | URL bar and button geometry | `test_toolbar.c`, 23 checks over a width sweep |
+| `http.c` | request building, response parsing, gzip | `test_http.c`, 214 checks |
 | `uni.c` | UTF-8 decoding and folding to ASCII | `test_html.c` |
-| `html.c` | streaming HTML parser | `test_html.c`, 90 + invariants |
-| `layout.c` | wrapping, styles, hit testing | `test_layout.c`, 230 checks |
+| `html.c` | streaming HTML parser | `test_html.c`, 97 + invariants |
+| `layout.c` | wrapping, styles, images, hit testing | `test_layout.c`, 249 checks |
 | `page.c` | checkpoint index, scroll arithmetic | `test_page.c`, 193 checks |
-| `tls_crypto.c` | HMAC, HKDF, key schedule, AEAD | `test_tls_crypto.c`, 38 checks vs generated vectors |
-| `tls.c` | record layer, TLS 1.3 handshake | `test_tls.c`, a live handshake against OpenSSL |
+| `tls_crypto.c` | HMAC, HKDF, key schedule, AEAD | `test_tls_crypto.c`, 38 checks |
+| `tls.c` | record layer, TLS 1.3 handshake | `test_tls.c`, live handshakes against OpenSSL |
 | `der.c` | DER reader | `test_x509.c`, plus a mutation sweep under ASan |
 | `x509.c` | certificate parsing, hostname matching | `test_x509.c`, 54 checks vs real certificates |
+| `rsa.c` | PKCS#1 v1.5 and PSS | `test_rsa.c`, 20 checks |
+| `ecdsa.c` | P-256 and P-384, software and hardware paths | `test_ecdsa.c` 10, plus 10 through a model of `rtl/montmul.v` |
+| `sha384.c` | SHA-384 | `test_sha384.c`, 3 published vectors |
+| `verify.c` | chain building and validation | `test_verify.c`, 44 checks |
 | `web.c` | window, transport, fetch service | nothing. It needs the machine. |
+
+Also outside this directory but load-bearing here:
+`sw/common/zinflate.c` (30 checks against real gzip data),
+`sw/common/zedit.c` (17), and `rtl/tests/tb_montmul.v` (51 products
+in simulation).
+
+**`web.c` remains untested by anything but the board**, and that is
+where most of the bugs found on hardware have been -- spool handles,
+fetch state, and which buffer a callback writes to.
 
 ```
 cd sw/apps/web
@@ -374,11 +409,11 @@ Things that are known-missing rather than broken:
 
 In rough order of my own confidence:
 
-1. **`tcp.c` over the open internet.** Stop-and-wait, a 2048-byte
-   window, no fast retransmit. Roughly 20KB/s at 100ms RTT if
-   everything goes well. This is the thing to measure first, before
-   anything is built on top of it, because if it is the real ceiling
-   it changes what Phase 5 has to be.
+1. **`tcp.c` over the open internet.** *Measured since: roughly
+   25KB/s against a real host, about 1% of the 10Mbit link.* The
+   window is now matched to the NIC's receive buffer, which stopped
+   transfers failing; out-of-order reassembly is what would raise the
+   ceiling. See [networking.md](networking.md).
 2. **The blocking DNS resolve in `start_fetch()`.** It draws the
    status line first and then stops reading messages, which is the
    shape that made wm report a missed redraw ack for `term`.

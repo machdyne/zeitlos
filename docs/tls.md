@@ -72,7 +72,7 @@ The signed content is 64 bytes of `0x20`, the string
 hash **through** `Certificate`. The preamble exists to make the
 signature useless in any other protocol, so getting it byte-exact is
 the entire point of it being there. `tls.h`'s `th_pre_msg` — added in
-Phase 2 for the Finished snapshot — already provides the transcript
+for the Finished snapshot — already provides the transcript
 at exactly the right instant.
 
 PKCS#1 v1.5 is **rejected** here even though certificates use it
@@ -268,7 +268,8 @@ the server's only response is `decrypt_error`.
 ## Still true
 
 `tcp.c` remains unmeasured over the open internet — stop-and-wait, a
-2048-byte window, no fast retransmit. TLS adds a full round trip
+window matched to the NIC's buffer, no fast retransmit. TLS adds a
+full round trip
 before any request goes out, so whatever that number is, HTTPS pays it
 twice. See
 [networking.md](networking.md#still-unmeasured).

@@ -26,6 +26,7 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 | Storage | MicroSD |
 | Network | Ethernet (SPI), Ethernet MAC (for RMII PHY) or [ESP32](docs/esp32link.md) |
 | Entropy | Ring-oscillator [TRNG](docs/trng.md) |
+| Crypto | Optional [Montgomery multiplier](docs/montmul.md) for TLS (~1000 LUTs, no BRAM) |
 | HID | USB keyboard + optional USB mouse/[gamepad](docs/gamepad.md) |
 | I/O | Optional [GPIO](docs/gpio.md) on PMOD ports with bit-banged [I2C](docs/i2c.md) and [SPI](docs/spi.md), hardware SPI, 16550 UART, optional second [UART](docs/uart1.md) |
 
@@ -33,10 +34,11 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 
  - Pre-emptive multitasking
  - Flat memory model with virtual address space for apps
- - FAT filesystem
+ - FAT filesystem, on MicroSD and on an optional [RAM disk](docs/ramdisk.md)
  - [Core apps in flash](docs/flash_apps.md) -- boots to a desktop with no sdcard
  - Object-based interprocess [messaging](docs/messaging.md), streaming and [ports](docs/ports.md)
  - IP/ARP/ICMP/UDP/DHCP/NTP/DNS/TFTP/TCP/telnet/ssh [networking](docs/networking.md)
+ - TLS 1.3 with X.509 certificate verification -- see [tls](docs/tls.md) and [x509](docs/x509.md)
 
 #### Memory Translation Unit
 
@@ -64,6 +66,7 @@ With the MTU, there is no need for position independent code or complicated addr
 |-----|-------------|
 | [text](docs/text_editor.md) | Text editor |
 | [sheet](docs/sheet_app.md) | Spreadsheet |
+| [web](docs/web_app.md) | Web browser: HTTP/1.1 and TLS 1.3, gzip, in-place images |
 | [read](docs/read_app.md) | Text reader for files of unlimited size (with rendered Markdown) |
 | [hex](docs/hex_editor.md) | Hex editor for files of unlimited size |
 | draw | MacPaint-inspired drawing app |
