@@ -41,7 +41,7 @@ LDSCRIPT = ../../common/riscv-app.ld
 # as well as by text.c itself, and zdialog.o/zflist.o are what make
 # this the first app to link either.
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o \
-	zfsapp.o zflist.o zdialog.o text.o
+	zfsapp.o zflist.o zdialog.o zedit.o text.o
 
 text: text.elf text.bin
 
@@ -105,3 +105,11 @@ clean:
 -include $(wildcard *.d)
 -include $(wildcard */*.d)
 -include $(wildcard */*/*.d)
+
+# sw/common/zedit.c -- the single-line text field.
+#
+# zdialog.c owned it privately until sw/apps/web's URL bar became its
+# second caller. Every app that links the dialog needs this too: a
+# shared widget is only shared if the build says so.
+zedit.o:
+	$(CC) $(CFLAGS) -c ../../common/zedit.c -o zedit.o

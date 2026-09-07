@@ -36,5 +36,6 @@ extern const uint8_t z_icon_term_data[32 * 4];
 extern const uint8_t z_icon_text_data[32 * 4];
 extern const uint8_t z_icon_track_data[32 * 4];
 extern const uint8_t z_icon_view_data[32 * 4];
+extern const uint8_t z_icon_web_data[32 * 4];
 
 #endif

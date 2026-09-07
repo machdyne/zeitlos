@@ -677,6 +677,34 @@ int main(void) {
 //		if ((z_kernel_ticks % 100) == 0) z_kernel_dump();
 //	};
 
+	// The ramdisk, at /ram.
+	//
+	// A fixed share of main memory rather than a fixed size: the
+	// point is scratch space proportional to the machine, and a
+	// number that suits a 32MB board is most of a 1MB one.
+	//
+	// SKIPPED entirely at 1MB. There the pool is the whole of memory
+	// and every megabyte is already spoken for; an app wanting
+	// scratch on such a board should use the card, which is what it
+	// had to do anyway.
+	//
+	// -- WHY IT IS HERE, AND NOT NEXT TO k_mem_init() --
+	//
+	// It has to come after k_proc_create() has reserved process
+	// zero. The kernel runs from Z_MEM_BASE (0x40000000) and the pool
+	// starts there too; nothing tells k_mem_alloc() that the running
+	// kernel occupies the bottom of it until process zero is created.
+	//
+	// Allocating before that returns the kernel's OWN image and
+	// stack, and f_mkfs() then writes a FAT over it. The symptom is a
+	// hang immediately after "memory initialized", which is
+	// indistinguishable from k_mem_init() itself having failed.
+	if (mem_total > (1024 * 1024)) {
+		uint32_t ram_bytes = mem_total / Z_RAMDISK_DIVISOR;
+		if (ram_bytes > Z_RAMDISK_MAX) ram_bytes = Z_RAMDISK_MAX;
+		fs_ramdisk_create(ram_bytes);
+	}
+
 	printf(" - starting shell.\n");
 
 	// the kernel shell is process zero

@@ -78,7 +78,9 @@ z_obj_t *k_fs_read(z_obj_t *args) {
 	a->len = 0;
 
 	FIL f;
-	FRESULT res = f_open(&f, a->name, FA_READ | FA_OPEN_EXISTING);
+	char rp_[FS_PATH_MAX];
+	FRESULT res = f_open(&f, fs_path_resolve(a->name, rp_, sizeof(rp_)),
+		FA_READ | FA_OPEN_EXISTING);
 	if (res != FR_OK) return (&z_fail);
 
 	FSIZE_t sz = f_size(&f);
@@ -117,7 +119,9 @@ z_obj_t *k_fs_write(z_obj_t *args) {
 	a->written = 0;
 
 	FIL f;
-	FRESULT res = f_open(&f, a->name, FA_WRITE | FA_CREATE_ALWAYS);
+	char rp_[FS_PATH_MAX];
+	FRESULT res = f_open(&f, fs_path_resolve(a->name, rp_, sizeof(rp_)),
+		FA_WRITE | FA_CREATE_ALWAYS);
 	if (res != FR_OK) return (&z_fail);
 
 	UINT bw = 0;
@@ -191,7 +195,10 @@ z_obj_t *k_fs_open_write(z_obj_t *args) {
 	int slot = z_fs_alloc_handle();
 	if (slot < 0) return (&z_fail);
 
-	FRESULT res = f_open(&z_fs_handles[slot].fil, a->name, FA_WRITE | FA_CREATE_ALWAYS);
+	char rp_[FS_PATH_MAX];
+	FRESULT res = f_open(&z_fs_handles[slot].fil,
+		fs_path_resolve(a->name, rp_, sizeof(rp_)),
+		FA_WRITE | FA_CREATE_ALWAYS);
 	if (res != FR_OK) return (&z_fail);
 
 	z_fs_handles[slot].used = true;
@@ -212,7 +219,10 @@ z_obj_t *k_fs_open_read(z_obj_t *args) {
 	int slot = z_fs_alloc_handle();
 	if (slot < 0) return (&z_fail);
 
-	FRESULT res = f_open(&z_fs_handles[slot].fil, a->name, FA_READ | FA_OPEN_EXISTING);
+	char rp_[FS_PATH_MAX];
+	FRESULT res = f_open(&z_fs_handles[slot].fil,
+		fs_path_resolve(a->name, rp_, sizeof(rp_)),
+		FA_READ | FA_OPEN_EXISTING);
 	if (res != FR_OK) return (&z_fail);
 
 	z_fs_handles[slot].used = true;
@@ -309,10 +319,16 @@ z_obj_t *k_fs_list(z_obj_t *args) {
 	a->count = 0;
 	a->truncated = 0;
 
+	char rp_[FS_PATH_MAX];
 	const char *dir_path = (a->path && a->path[0]) ? a->path : "/";
 
+	// The listing keeps the CALLER's path for the names it returns,
+	// and resolves only the one it hands to FatFs -- so `ls /RAM`
+	// reports /RAM/... rather than leaking "1:/" back to the user.
+	const char *dir_real = fs_path_resolve(dir_path, rp_, sizeof(rp_));
+
 	DIR dir;
-	FRESULT res = f_opendir(&dir, dir_path);
+	FRESULT res = f_opendir(&dir, dir_real);
 	if (res != FR_OK) return (&z_fail);
 
 	char prefix[64];
@@ -477,7 +493,9 @@ z_obj_t *k_fs_open_rw(z_obj_t *args) {
 	int slot = z_fs_alloc_handle();
 	if (slot < 0) return (&z_fail);
 
-	FRESULT res = f_open(&z_fs_handles[slot].fil, a->name,
+	char rp2_[FS_PATH_MAX];
+	FRESULT res = f_open(&z_fs_handles[slot].fil,
+		fs_path_resolve(a->name, rp2_, sizeof(rp2_)),
 		FA_READ | FA_WRITE | FA_OPEN_EXISTING);
 	if (res != FR_OK) return (&z_fail);
 

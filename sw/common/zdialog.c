@@ -22,6 +22,7 @@
 #include "zwidget.h"
 #include "zflist.h"
 #include "zdialog.h"
+#include "zedit.h"
 
 // -- shared dialog state --
 //
@@ -57,9 +58,11 @@ static struct {
 
 	// -- open/save --
 	z_flist_t		flist;
-	char			field[DLG_FIELD_MAX];	// save: the filename being typed
-	int				field_len;
-	int				field_cur;
+	// The text being typed. The buffer stays here -- z_edit_t does
+	// not own storage, so an app can keep one in static state without
+	// a heap -- and the editing lives in sw/common/zedit.c.
+	char			field[DLG_FIELD_MAX];
+	z_edit_t		edit;
 	bool			field_focus;			// caret in the field vs the list
 
 	// -- confirm --
@@ -407,165 +410,30 @@ static void dlg_buttons_init(const char *const *labels, int count) {
 
 }
 
-// -- the filename field (save dialog only) --
+// -- the text field --
 //
-// A single-line text entry, kept private to this file rather than
-// promoted into zwidget.h. There is exactly one caller, and the
-// version a general widget would need -- selection, scrolling for
-// text wider than the box, a caret that survives losing focus -- is
-// several times this size. If a second caller appears, that is the
-// moment to move it, not before.
+// Now sw/common/zedit.c, shared with sw/apps/web's URL bar. This
+// file's own comment used to say the field was private "until a
+// second caller appears" -- one has, and the version here could not
+// scroll, so a filename wider than the box ran off the end of its own
+// frame. Both callers get that fixed by sharing one widget.
 
 static void field_set(const char *s) {
-
-	dlg.field_len = 0;
-
-	if (s)
-		for (; s[dlg.field_len] && dlg.field_len < DLG_FIELD_MAX - 1;
-			dlg.field_len++)
-			dlg.field[dlg.field_len] = s[dlg.field_len];
-
-	dlg.field[dlg.field_len] = 0;
-	dlg.field_cur = dlg.field_len;
-
+	// Re-binds the buffer as well as the text: dlg is reused across
+	// dialogs and z_edit_t holds a pointer, so binding once at
+	// startup would leave a stale one after the struct is cleared.
+	z_edit_init(&dlg.edit, dlg.field, DLG_FIELD_MAX, s);
 }
 
 static void field_draw(void) {
-
-	z_clip_t content;
-	z_win_content_rect(&dlg.win, &content);
-
-	int cw = z_win_content_w(&dlg.win);
-
-	int x0 = content.x0 + DLG_MARGIN;
-	int y0 = content.y0 + dlg.field_y;
-	int x1 = content.x0 + cw - DLG_MARGIN - 1;
-	int y1 = y0 + DLG_FIELD_H - 1;
-
-	if (x1 <= x0 || y1 <= y0) return;
-
-	// Everything here is drawn with the BLITTER -- including the
-	// frame, which would more naturally be a z_win_hw_box().
-	//
-	// The blitter and the line rasterizer are independent engines
-	// writing the same VRAM with no ordering between them:
-	// z_fb_hw_fill_rect() waits for the BLITTER to finish, while
-	// z_fb_hw_line() only waits for FIFO space and returns with the
-	// line still queued. The blitter read-modify-writes whole 32-bit
-	// words, so a rasterizer pixel that hasn't landed when the blitter
-	// reads a word is lost when it writes the word back.
-	//
-	// This field is unusually exposed to that. Its left border sits at
-	// content.x0 + DLG_MARGIN, which for a dialog at x=88 is absolute
-	// x=96 -- exactly a 32-pixel word boundary -- and the first six
-	// glyphs (x=99 through 123) all fall inside that same word. Frame
-	// and text therefore share one word, drawn by two engines, in an
-	// order nothing enforces.
-	//
-	// HONEST CAVEAT: that the two engines can race over a shared word
-	// is demonstrable from the code above; that it is the whole
-	// explanation for the reported symptom (the outline partly
-	// missing, filling in as characters were typed, complete at six)
-	// is NOT confirmed. A pure race would if anything get worse with
-	// more glyphs, not better. Something about the observed pattern is
-	// still unaccounted for.
-	//
-	// What this change does is remove the ambiguity rather than
-	// diagnose it: with one engine, program order IS drawing order and
-	// there is nothing left to race. If the outline still misbehaves
-	// after this, the cause is somewhere else entirely and this
-	// comment should be corrected rather than trusted.
-
-	// interior
-	z_fb_hw_fill_rect(x0 + 1, y0 + 1, x1 - x0 - 1, y1 - y0 - 1, 0);
-
-	// frame, as four one-pixel fills
-	z_fb_hw_fill_rect(x0, y0, x1 - x0 + 1, 1, 1);			// top
-	z_fb_hw_fill_rect(x0, y1, x1 - x0 + 1, 1, 1);			// bottom
-	z_fb_hw_fill_rect(x0, y0, 1, y1 - y0 + 1, 1);			// left
-	z_fb_hw_fill_rect(x1, y0, 1, y1 - y0 + 1, 1);			// right
-
-	z_clip_t clip;
-	clip.x0 = x0 + 2;
-	clip.y0 = y0 + 1;
-	clip.x1 = x1 - 2;
-	clip.y1 = y1 - 1;
-
-	if (clip.x1 < clip.x0) return;
-
-	z_fb_draw_text(x0 + 3, y0 + 3, dlg.field, 1, &z_font_5x8, &clip);
-
-	// Caret. Only drawn while the field has focus -- otherwise a
-	// dialog with a caret in the field AND a highlighted row in the
-	// list gives two equally strong claims on where typing goes.
-	//
-	// A one-pixel fill rather than a rasterizer line, for the same
-	// single-engine reason as the frame above.
-	if (dlg.field_focus) {
-		int cx = x0 + 3 + dlg.field_cur * z_font_5x8.w;
-		if (cx <= clip.x1)
-			z_fb_hw_fill_rect(cx, y0 + 2, 1, y1 - y0 - 3, 1);
-	}
-
+	dlg.edit.focus = dlg.field_focus;
+	z_edit_draw(&dlg.win, &dlg.edit, DLG_MARGIN, dlg.field_y,
+		z_win_content_w(&dlg.win) - 2 * DLG_MARGIN, DLG_FIELD_H,
+		&z_font_5x8);
 }
 
 static void field_key(uint32_t keysym) {
-
-	switch (keysym) {
-
-		case Z_KEY_LEFT:
-			if (dlg.field_cur > 0) dlg.field_cur--;
-			break;
-
-		case Z_KEY_RIGHT:
-			if (dlg.field_cur < dlg.field_len) dlg.field_cur++;
-			break;
-
-		case Z_KEY_HOME:
-			dlg.field_cur = 0;
-			break;
-
-		case Z_KEY_END:
-			dlg.field_cur = dlg.field_len;
-			break;
-
-		case 0x7f:		// Backspace -- DEL, see zkbd.c
-			if (dlg.field_cur > 0) {
-				memmove(&dlg.field[dlg.field_cur - 1],
-					&dlg.field[dlg.field_cur],
-					(size_t)(dlg.field_len - dlg.field_cur + 1));
-				dlg.field_cur--;
-				dlg.field_len--;
-			}
-			break;
-
-		case Z_KEY_DELETE:
-			if (dlg.field_cur < dlg.field_len) {
-				memmove(&dlg.field[dlg.field_cur],
-					&dlg.field[dlg.field_cur + 1],
-					(size_t)(dlg.field_len - dlg.field_cur));
-				dlg.field_len--;
-			}
-			break;
-
-		default:
-
-			if (keysym < 0x20 || keysym > 0x7e) return;
-			if (dlg.field_len >= DLG_FIELD_MAX - 1) return;
-
-			memmove(&dlg.field[dlg.field_cur + 1],
-				&dlg.field[dlg.field_cur],
-				(size_t)(dlg.field_len - dlg.field_cur + 1));
-			dlg.field[dlg.field_cur] = (char)keysym;
-			dlg.field_cur++;
-			dlg.field_len++;
-
-			break;
-
-	}
-
-	field_draw();
-
+	if (z_edit_key(&dlg.edit, keysym)) field_draw();
 }
 
 // -- painting --
@@ -722,21 +590,21 @@ static void dlg_accept(char *out, int outlen) {
 
 	// -- save --
 
-	if (dlg.field_len == 0) return;		// nothing typed, nothing to do
+	if (dlg.edit.len == 0) return;		// nothing typed, nothing to do
 
 	// Absolute names are taken as-is; anything else is relative to
 	// the directory being browsed. That lets a user type a full path
 	// into the field and have it mean what it says.
 	int n = 0;
 
-	if (dlg.field[0] != '/') {
+	if (dlg.edit.buf[0] != '/') {
 		for (const char *s = dlg.flist.path; *s && n < outlen - 1; s++)
 			out[n++] = *s;
 		if (n > 0 && out[n - 1] != '/' && n < outlen - 1) out[n++] = '/';
 	}
 
-	for (int i = 0; i < dlg.field_len && n < outlen - 1; i++)
-		out[n++] = dlg.field[i];
+	for (int i = 0; i < dlg.edit.len && n < outlen - 1; i++)
+		out[n++] = dlg.edit.buf[i];
 
 	out[n] = 0;
 
@@ -767,7 +635,7 @@ static void dlg_activate_button(int act) {
 		// OK only counts with something typed -- an empty name is
 		// not an answer, and silently accepting one would have the
 		// caller create "" and fail.
-		if (act == 0 && dlg.field_len > 0) {
+		if (act == 0 && dlg.edit.len > 0) {
 			dlg.result = Z_DIALOG_YES;
 			dlg.done = true;
 		} else if (act != 0) {
@@ -945,7 +813,7 @@ static void dlg_key(uint32_t keysym, uint8_t mods) {
 	if (dlg.kind == DLG_KIND_PROMPT) {
 
 		if (keysym == 0x0d) {
-			if (dlg.field_len > 0) {
+			if (dlg.edit.len > 0) {
 				dlg.result = Z_DIALOG_YES;
 				dlg.done = true;
 			}
@@ -1151,7 +1019,7 @@ bool z_dialog_prompt(const z_dialog_ctx_t *ctx, const char *title,
 	if (dlg_run() != Z_DIALOG_YES) return false;
 
 	int i = 0;
-	for (; i < outlen - 1 && dlg.field[i]; i++) out[i] = dlg.field[i];
+	for (; i < outlen - 1 && dlg.edit.buf[i]; i++) out[i] = dlg.edit.buf[i];
 	out[i] = 0;
 
 	return out[0] != 0;

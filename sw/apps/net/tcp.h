@@ -57,9 +57,20 @@
  *   been measured losing packets on this hardware, and any change
  *   here wants a host harness that deliberately drops, reorders and
  *   duplicates segments first.
- * - **No options at all** -- no MSS negotiation, no window scaling.
- *   Both ends fall back to RFC 879's 536-byte default MSS since
- *   neither side advertises one. TCP_MAX_PAYLOAD below matches that.
+ * - **One option: MSS, on the SYN.** No window scaling, no SACK, no
+ *   timestamps. Without the MSS option both ends fall back to RFC
+ *   879's 536 bytes, and a 258KB transfer then arrives as roughly 480
+ *   segments rather than 180 -- each one an interrupt, a wake-up and
+ *   an ACK. Measured on hardware, that per-segment cost rather than
+ *   the 10Mbit link was what held a body transfer to about 14 KB/s.
+ *
+ *   We advertise TCP_MAX_RX_PAYLOAD, which is the Ethernet MTU less
+ *   headers and is also the largest segment this stack will deliver
+ *   whole. Those two must stay in step.
+ *
+ *   TCP_MAX_PAYLOAD below still governs what we SEND, and stays at
+ *   536: the peer's MSS is whatever it advertises, which is not
+ *   parsed here.
  * - **No half-close support.** A remote-initiated FIN gets our own
  *   FIN sent right back immediately (see tcp.c) instead of going
  *   through CLOSE_WAIT and waiting for the application to decide --
@@ -105,6 +116,107 @@
 // listener's own buffer size), and telnet.c's clean[] is now sized to
 // match this constant instead of the send-side one.
 #define TCP_MAX_RX_PAYLOAD  (1480 - 20)
+
+// -- MSS we advertise, and the window that goes with it --
+//
+// Set from MEASUREMENT, not from a buffer size. This tree supports
+// three ethernet controllers -- RMII (rtl/ethmac_rmii.v), ENC28J60
+// over SPI, and esp32link (rtl/esp32_rxfifo.v) -- with different
+// buffering, some of it inside an external chip. `web` has to work on
+// all three, so numbers derived from any one of them are wrong
+// somewhere else.
+//
+// Measured on Lakritz (ENC28J60) against en.wikipedia.org, 258KB:
+//
+//   MSS  536, window 8192   18.3s
+//   MSS 1460, window 8192   23.8s   208 in order, 0 dup, 125 gap
+//   MSS  536, window 1608   23.5s   506 in order, 0 dup,  65 gap
+//
+// A larger MSS was worse, and so was a smaller window. 536 with a
+// generous window is what actually performs, so that is the default.
+//
+//   make TCP_ADVERTISE_MSS=1460 TCP_RX_WINDOW=16384
+//
+// is how to try otherwise on a controller with more buffer. The MSS
+// option is still sent explicitly: an absent option means 536 to the
+// peer anyway, but saying it documents itself.
+//
+// What the `gap` counts show is that the remaining cost is LOSS, not
+// packet rate -- and with out-of-order reassembly (below) a gap costs
+// one retransmit instead of discarding everything behind it.
+#ifndef TCP_ADVERTISE_MSS
+#define TCP_ADVERTISE_MSS 536
+#endif
+
+
+#ifndef TCP_RX_WINDOW
+#define TCP_RX_WINDOW 8192
+#endif
+
+// Lowers the advertised receive window, and announces it reopening.
+//
+// This is the only way a listener that cannot keep up can slow the
+// peer down. Data arrives from the interrupt path and is ACKed
+// immediately, so by the time the listener knows it is behind,
+// refusing the bytes is no longer available -- the peer believes they
+// were delivered. Shrinking the window is what stops more arriving.
+//
+// tcp_ack_now() matters as much as tcp_set_rx_window(): a peer told
+// the window is zero waits for an update, and in a stop-and-wait
+// sender nothing else will produce one.
+// Receive-path counters since the last reset: segments accepted in
+// order, duplicates re-ACKed, and out-of-order segments dropped.
+//
+// Throughput far below the link rate has two very different causes --
+// per-segment overhead, or loss and retransmission -- and from
+// outside they look the same. A clean transfer is nearly all
+// in_order; anything else points at the RX ring or the window rather
+// than at cost per packet.
+// -- out-of-order reassembly: EXPERIMENTAL, OFF --
+//
+// tcp.c can hold one contiguous run of data that arrives ahead of
+// rcv_nxt and deliver it when the hole fills. The logic passes
+// sw/apps/net/tests/test_tcp_ooo.c. On hardware it did not pass
+// anything:
+//
+//   without   506 in order,  0 dup,  65 gap   23.5s, page rendered
+//   with      379 in order, 50 dup, 240 gap   body arrived 127 bytes
+//                                             SHORT and the fetch failed
+//
+// More gaps, duplicates appearing where there were none, and lost
+// bytes -- so an interaction with the real sender's retransmit
+// behaviour that the host test does not model. It is kept behind
+// this switch rather than deleted because the idea is right and the
+// test is worth having; it is OFF because a stack that loses bytes
+// is worse than one that is slow.
+//
+//   make TCP_REASSEMBLY=1
+//
+// to pick it up again. The first thing to instrument is which of the
+// ooo_store() rejection branches fires against a real peer.
+#ifndef TCP_REASSEMBLY
+#define TCP_REASSEMBLY 0
+#endif
+
+#ifndef TCP_OOO_BUF
+#define TCP_OOO_BUF 4096
+#endif
+
+void tcp_stats(uint32_t *in_order, uint32_t *dup, uint32_t *gap);
+void tcp_stats_reset(void);
+
+// The CEILING on the advertised window, set once from the PHY's
+// receive capacity (net_phy.h). Until it is called the compile-time
+// TCP_RX_WINDOW applies.
+//
+// This is the number that decides whether a bulk transfer runs or
+// stalls, and it is a property of the NIC, not of TCP: with no
+// out-of-order reassembly, a frame the hardware cannot hold is
+// discarded along with everything behind it.
+void tcp_set_rx_window_max(uint16_t w);
+
+void tcp_set_rx_window(uint16_t w);
+void tcp_ack_now(void);
 
 typedef enum {
 	// the handshake completed -- data/tcp_send() usable from here.

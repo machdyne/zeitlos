@@ -1,3 +1,40 @@
+# Networking
+
+`sw/apps/net` is the whole network stack: a MAC driver, ARP, IP, UDP,
+DHCP, DNS, NTP, TCP, and the services built on them — telnet, SSH,
+TFTP, and raw sockets for other applications.
+
+It is one process, and it holds **one TCP connection**. That single
+fact shapes everything below: there is no connection table, no
+listening socket, and an application that wants the network asks
+`net` for it over the message port rather than opening a socket
+itself.
+
+## What is here
+
+| | |
+|---|---|
+| **Hardware** | three MACs, chosen at runtime; a receive interrupt |
+| **Raw sockets** | how an app gets a TCP connection of its own |
+| **Throughput** | why bulk transfer is slow, and what actually bounds it |
+| **Diagnostics** | the counters, and what each one rules out |
+
+## Three MACs, chosen at runtime
+
+`net_phy.c` picks a driver from the SOC feature CSR at startup, so one
+binary serves every board:
+
+| driver | hardware | receive buffering |
+|---|---|---|
+| `enc28j60.c` | SPI ethernet chip (Lakritz) | 6656-byte ring, on the chip |
+| `rmii_eth.c` | `rtl/ethmac_rmii.v` | 4 frame slots |
+| `esp32link.c` | `rtl/esp32_rxfifo.v` | 2048-byte FIFO |
+
+**The third column is not trivia.** It bounds TCP throughput directly,
+and a number derived from one of these is wrong on the other two —
+which is why `net_phy_t` carries `rx_capacity` as a runtime field
+rather than a constant. See "Throughput" below.
+
 
 ## Receive interrupt
 
@@ -71,7 +108,11 @@ an asynchronous pin from another chip, and an unsynchronised signal
 feeding an edge detector produces spurious pulses on metastability —
 which for an interrupt means a storm that appears at random.
 
-### The RX buffer holds four frames, not one
+### The RMII RX buffer holds four frames, not one
+
+**This section is about `rtl/ethmac_rmii.v` only.** It was later
+misapplied to Lakritz, which is ENC28J60 and has its own ring on the
+chip — see "Throughput" for what actually bounds the window there.
 
 The RMII MAC held exactly ONE received frame, and dropped anything
 that arrived before software had popped it:
@@ -212,3 +253,223 @@ Ethernet PMOD nor an RMII PHY: its onboard ESP32 acts as the network
 interface over UART1 (`esp32link.c`, selected by the same runtime
 probe). See [esp32link.md](esp32link.md).
 
+## Raw TCP sockets
+
+`sock.c` lets another process open an arbitrary TCP connection
+through `net`, with nothing added to or removed from the byte stream
+in either direction. It is behind `NET_SOCK` (default 1).
+
+This exists for `sw/apps/web` (see [web_app.md](web_app.md)), which
+carries HTTP and TLS itself so that neither has to live in this app.
+`net` is a core app in the ZAR archive and has to stay small enough
+for a 1MB board; HTTP plus TLS plus X.509 is roughly 90KB that
+nothing else would ever call.
+
+### Why it is not telnet with a port number
+
+`handle_telnet_port_connect()` already had almost everything needed:
+the port state machine, the transmit queue, the ack-based flow
+control. The one thing that made reuse impossible is a single line in
+`telnet_send()` — it rewrites every literal `0xFF` byte as `IAC IAC`,
+as RFC 854 requires.
+
+In a terminal session that is a rare, harmless detail. In a TLS
+record it is fatal, and quietly so: ciphertext is uniform random, so
+roughly one byte in 256 is `0xFF`. Every record beyond a few hundred
+bytes would be silently corrupted, and the failure would surface as a
+Poly1305 tag mismatch several layers away from the cause.
+
+So `sock.c` is telnet's structure with the option negotiation and the
+escaping removed. About 100 lines, and it reuses `tcp.c` entirely.
+
+### Three session types, one subject
+
+`net` is now a zport provider for three things, all arriving on
+`Z_PORT_CONNECT`. They are told apart by the **shape** of the
+argument rather than by a discriminator:
+
+| Argument | Meaning |
+|---|---|
+| `Z_MAP {ip, port}` | raw socket |
+| `Z_UINT32` matching a live `Z_NET_SSH_PREPARE` token | ssh |
+| `Z_UINT32`, anything else | telnet, port 23 |
+
+The map is tested first, because a type test cannot be wrong where
+the ssh token test has to guess. Testing it second would also make
+ssh log a "did not match a token" line for every socket connect.
+
+A map argument is safe here even though `znet.h` documents at length
+why SSH had to keep its argument scalar. That problem is about
+**hops**, not types: `z_resolve_obj()` rewrites payload pointers to
+physical addresses when a message is read, so an object that is read
+by one process and re-sent by another gets translated twice and
+underflows. A socket client builds this map and sends it straight to
+`net`. It is translated once, and nothing forwards it.
+
+### One TCB means one session
+
+A socket, a telnet session and an SSH session are mutually exclusive,
+system-wide. That is not new — telnet and SSH already excluded each
+other — but it now means **browsing and an SSH session cannot happen
+at the same time**. Both the socket handler and the telnet handler
+check all three states, because either can be started first.
+
+### Unsent bytes are an error here, not a dropped keystroke
+
+`handle_telnet_port_data()` drops bytes when `telnet_send()` fails,
+which `docs/ports.md` already documents as an accepted gap: a lost
+keystroke is visible and retypable.
+
+The socket path does not do that. A dropped fragment of a TLS record
+makes the connection unrecoverable in a way that surfaces much later
+as a decryption failure, so a full queue tears the connection down
+and tells the client instead.
+
+## Throughput
+
+Bulk transfer is the slow part of this stack, and the reasons took a
+long time to find. Recorded here in the order they actually bind,
+rather than the order they were discovered.
+
+### The window is bounded by the NIC's receive buffer
+
+**This is the one that matters.** `tcp.c` does no out-of-order
+reassembly, so a frame the NIC cannot hold is not delayed — it is
+*discarded*, and every segment behind it goes too, however cleanly it
+arrived.
+
+Advertising a window larger than the NIC's buffer therefore invites
+the peer to put more in flight than can possibly be received. On an
+ENC28J60 the ring is 6656 bytes and each 536-byte segment occupies
+about 600 of it once the Ethernet header, CRC and the chip's own
+6-byte status vector are counted — so **eleven segments fit**.
+Advertising 8192 invites fifteen.
+
+Measured against en.wikipedia.org at that setting:
+
+```
+net: segments: 506 in order, 0 dup, 153 gap
+```
+
+37% of arriving segments discarded, and a body that arrived short.
+
+The ceiling now comes from the driver, through `net_phy_t.rx_capacity`,
+and `net` prints both numbers at startup so they cannot silently
+diverge:
+
+```
+net: buffers: rx queue 16384, window 8192 (phy 5360), mss 536, ...
+```
+
+### MSS: measured, not derived
+
+Both MSS and window were tuned against each other for several rounds
+*before* the buffer constraint above was understood, which is why the
+results looked contradictory. With that constraint known they make
+sense: on Lakritz, 258KB from en.wikipedia.org —
+
+| MSS | window | body | segments |
+|---|---|---|---|
+| 536 | 8192 | 18.3s | — |
+| 1460 | 8192 | 23.8s | 208 in order, 125 gap |
+| 536 | 1608 | 23.5s | 506 in order, 65 gap |
+
+A **larger** MSS was worse, because bigger frames fill the same ring
+sooner. A **smaller** window was also worse, because it throttled the
+sender below what the link could carry. 536 with a window sized to
+the NIC is the combination that performs, and both are build options
+(`TCP_ADVERTISE_MSS`, `TCP_RX_WINDOW`) for a board with more buffer.
+
+### Out-of-order reassembly: written, tested, and OFF
+
+`tcp.c` can hold one contiguous run of data arriving ahead of
+`rcv_nxt` and deliver it when the hole fills, which would turn a gap
+from a retransmit-timeout stall into a single cheap retransmit. The
+logic passes `sw/apps/net/tests/test_tcp_ooo.c`.
+
+On hardware it did not pass anything:
+
+| | in order | dup | gap | result |
+|---|---|---|---|---|
+| off | 506 | 0 | 65 | 23.5s, page rendered |
+| on | 379 | 50 | 240 | body 127 bytes SHORT, fetch failed |
+
+More gaps, duplicates where there had been none, and lost bytes — an
+interaction with a real sender's retransmit behaviour that the host
+test does not model. It is kept behind `TCP_REASSEMBLY=0` rather than
+deleted, because the idea is right and the test is worth having.
+
+**It remains the change that would unlock real throughput.** With
+reassembly the window could exceed the NIC buffer safely, which is
+the only way this stack reaches the 10Mbit link it is attached to.
+The first thing to instrument when picking it up is which of
+`ooo_store()`'s rejection branches fires against a real peer.
+
+### Cost per segment
+
+Between `net` and a consuming app, every chunk is a message, a blob
+allocation and two context switches. A 258KB body moved in 1024-byte
+chunks was 250 of them; at 4096 it is 63. That change alone took a
+body transfer from 28.1s to 18.3s.
+
+`net` relays in `SOCK_CHUNK` (4096) pieces and the peer sizes its
+receive copy to match — the two must be raised together.
+
+### Backpressure
+
+The relay queue bounds how far the consuming app may fall behind; the
+window bounds what is in flight. **They are different quantities and
+sizing one from the other was a mistake**: shrinking a window does not
+recall what is already on the wire, so granting exactly the space
+remaining lets the last grant plus in-flight data overrun the queue by
+a segment.
+
+The advertisement now reserves a segment of headroom, and the queue is
+a flat 16KB — sized to absorb the app stalling for a hundred
+milliseconds on storage or a repaint, which is what it is for.
+
+## Diagnostics
+
+Below-line-rate throughput has two causes that look identical from
+outside: cost per packet, or loss and retransmission. `tcp_stats()`
+separates them, and `net` prints the counts when a session ends:
+
+```
+net: socket session ended, 269929 bytes, queue peak 6968
+net: segments: 506 in order, 0 dup, 104 gap
+```
+
+| | means |
+|---|---|
+| nearly all `in order` | overhead, not loss — look at cost per segment |
+| significant `gap` | the NIC buffer is overflowing |
+| significant `dup` | our ACKs are not getting back fast enough |
+
+`queue peak` is how far the consuming app fell behind. A peak near the
+queue size means the app, not the network, is the constraint.
+
+## Known limits
+
+`tcp.c` was written for a LAN and still says so in places.
+
+| | |
+|---|---|
+| **Stop-and-wait sending** | one segment outstanding. Fine for telnet and requests; it caps uploads. |
+| **No out-of-order reassembly** | the big one. A lost segment discards everything behind it. See "Throughput". |
+| **One TCB** | one TCP connection in the whole system. `web` keeps it alive across same-host requests rather than reopening. |
+| **No window scaling, SACK or timestamps** | only an MSS option, on the SYN. |
+| **No half-close** | a remote FIN gets ours straight back. |
+
+Measured against a real internet host, a 258KB body takes about 23
+seconds — roughly 11 KB/s, or **1% of the 10Mbit link**. The link has
+never been the constraint at any point in this document.
+
+What would change that, in order of value:
+
+1. **Out-of-order reassembly**, which lets the window exceed the NIC
+   buffer. Everything else is bounded by that ceiling.
+2. **A larger NIC receive buffer**, which raises the ceiling itself —
+   `rtl/esp32_rxfifo.v` has a `DEPTH_BITS` parameter; the ENC28J60's
+   ring is fixed by the chip.
+3. **A data cache on the CPU**, which would help the relay path along
+   with everything else in the system.

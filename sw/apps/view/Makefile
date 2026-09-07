@@ -110,7 +110,7 @@ LDSCRIPT = ../../common/riscv-app.ld
 # zimg.o is the decoders themselves (sw/common/zimg.c), shared with
 # any other app that wants to read images.
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o \
-	zfsapp.o zflist.o zdialog.o zimg.o zprof.o view.o
+	zfsapp.o zflist.o zdialog.o zedit.o zimg.o zprof.o view.o
 
 view: view.elf view.bin
 
@@ -181,3 +181,11 @@ clean:
 -include $(wildcard *.d)
 -include $(wildcard */*.d)
 -include $(wildcard */*/*.d)
+
+# sw/common/zedit.c -- the single-line text field.
+#
+# zdialog.c owned it privately until sw/apps/web's URL bar became its
+# second caller. Every app that links the dialog needs this too: a
+# shared widget is only shared if the build says so.
+zedit.o:
+	$(CC) $(CFLAGS) -c ../../common/zedit.c -o zedit.o

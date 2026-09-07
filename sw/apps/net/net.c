@@ -116,6 +116,10 @@
 #include "tcp.h"
 #include "../../common/zrng.h"
 #include "telnet.h"
+#if NET_SOCK
+#include "sock.h"
+#include "tcp.h"		// tcp_set_rx_window(), tcp_ack_now()
+#endif
 #include "netcfg.h"
 #if SSH_ENABLE
 #include "ssh/ssh.h"
@@ -225,6 +229,44 @@ static z_port_t telnet_port;
 static uint32_t telnet_client_pid;	// valid once state != TN_IDLE
 #define TELNET_CONN_ID 1			// only one connection ever -- no
 									// need to hand out distinct ids
+
+#if NET_SOCK
+
+// -- sock: a raw TCP session type through the same single TCB --
+//
+// The third and last consumer of tcp.c's one connection. Same shape
+// as telnet's state machine above and for the same reasons -- the
+// CONNECTED/REFUSED reply has to wait for the TCP handshake, so there
+// is a SO_CONNECTING state in between.
+//
+// This exists so that `web` (sw/apps/web, docs/web_app.md) can carry
+// HTTP and TLS itself rather than putting either into this app. See
+// sock.h on why it cannot simply be telnet with a port number.
+typedef enum { SO_IDLE, SO_CONNECTING, SO_ACTIVE } sock_session_state_t;
+
+static sock_session_state_t sock_state = SO_IDLE;
+static z_port_t sock_port;
+static uint32_t sock_client_pid;
+// A FRESH connection id per socket session, not a fixed one.
+//
+// Telnet and SSH can use constants because a stale DATA from one is
+// distinguishable from the other. That is not enough here: a client
+// that closes a socket and immediately opens another -- which is
+// exactly what following a redirect does -- would find data queued
+// from the OLD session arriving on the new one, since this app does
+// not learn about the close until it reads the message, and by then
+// it has already relayed whatever TCP handed it.
+//
+// The peer then feeds those bytes into a fresh TLS context as if they
+// were its ServerHello, and the first thing it sees is a record
+// length made of the middle of somebody's certificate.
+//
+// Starts at 3 so it never collides with TELNET_CONN_ID or
+// SSH_CONN_ID, and steps by 1 per session.
+static uint32_t sock_conn_seq = 3;
+static uint32_t sock_conn_id = 3;
+
+#endif
 
 #if SSH_ENABLE
 
@@ -452,6 +494,235 @@ static void telnet_on_closed(void) {
 	telnet_state = TN_IDLE;
 
 }
+
+#if NET_SOCK
+
+// -- sock: sock.c callbacks --
+
+// The TCP handshake completed. Same deferral telnet uses, and for the
+// same reason: z_port_accept() needs the original z_msg_t, which is
+// long gone by the time an async handshake resolves.
+static void sock_on_established(void) {
+	sock_port.peer_pid = sock_client_pid;
+	sock_port.conn_id = sock_conn_id;
+	sock_port.connected = true;
+	sock_state = SO_ACTIVE;
+	z_msg_new_send(sock_client_pid, Z_PORT_CONNECTED, 0,
+		z_obj_uint32(sock_conn_id));
+	printf("net: socket connected, relaying to pid %ld\n",
+		(long)sock_client_pid);
+}
+
+// -- inbound relay, with a queue --
+//
+// TCP hands us bytes from the interrupt path and has ALREADY ACKED
+// them, so there is no way to refuse them later: whatever we do not
+// pass on is simply lost from a stream the peer believes was
+// delivered.
+//
+// z_port_send() fails once the peer has left Z_PORT_MAX_PENDING_SENDS
+// sends unacknowledged (zport.h), and a peer only has to be busy for
+// a few milliseconds for that to happen -- a TLS client parsing a
+// certificate, say. The first version of this dropped the connection
+// at that point, which at least named itself, and measured on real
+// traffic it fired after three chunks.
+//
+// So the bytes are QUEUED instead, and drained as the peer acks. The
+// queue is what turns "the app was briefly busy" from a dropped
+// connection into a short delay.
+//
+// Everything goes through the queue even when it is empty, because
+// sending directly while anything is queued would REORDER the stream
+// -- and a TLS record delivered out of order fails to decrypt with
+// no indication of why.
+// FOUR TIMES the advertised window, not equal to it.
+//
+// Shrinking a window does not recall what is already in flight. With
+// an 8KB queue and an 8KB window, a peer allowed to fill the window
+// fills the queue exactly -- and every segment already on the wire
+// then overflows it. That is what "queue full at 34520 bytes" was:
+// not a peer ignoring the window, just the window being the same size
+// as the space it was rationing.
+//
+// The queue therefore has to absorb a full window on top of whatever
+// is already waiting. 4x leaves room for the advertisement to take a
+// round trip to have any effect.
+// Generous, and deliberately not tied to the window.
+//
+// The window bounds what is IN FLIGHT; this bounds how far the
+// consuming app may fall behind. Those are different quantities: web
+// keeps up on average and then stalls for a hundred milliseconds
+// flushing to storage or repainting, and the queue is what absorbs
+// that without dropping a connection.
+//
+// 16KB.
+//
+// This was raised to 64KB in one step, on the reasoning that it is a
+// 32MB board and the memory is cheap. That was careless: `net` is a
+// CORE app that has to keep working on every board this tree
+// supports, and its static footprint is not free just because one
+// board has room. 16KB absorbs the app stalling for a hundred
+// milliseconds, which is what it is actually for, at a quarter of the
+// cost.
+#define SOCK_RX_QUEUE_LEN 16384
+
+// Bytes per relayed message. See sock_rx_flush().
+#define SOCK_CHUNK 4096
+
+static uint8_t sock_rx_queue[SOCK_RX_QUEUE_LEN];
+static uint32_t sock_rx_len;
+static uint32_t sock_rx_total;
+static uint32_t sock_rx_relayed;
+static uint32_t sock_rx_high;			// deepest the queue has been
+
+// Tells TCP how much room is left, so the peer slows down instead of
+// overrunning us.
+//
+// The queue exists because z_port_send() can refuse; the WINDOW
+// exists because the queue can fill. Without it the only response to
+// a full queue is dropping the connection, which is what
+// "socket rx queue full at 34519 bytes" was.
+//
+// Advertising a window smaller than one segment is pointless -- the
+// peer cannot use it -- so anything under an MSS is advertised as
+// zero, and the peer waits for the update that tcp_ack_now() sends
+// when room appears. A peer told zero will otherwise wait
+// indefinitely: nothing else prompts it.
+static uint16_t sock_win_last = 0xFFFF;
+static bool sock_win_reopened;
+
+static void sock_update_window(void) {
+
+	uint32_t space = SOCK_RX_QUEUE_LEN - sock_rx_len;
+	uint32_t w;
+
+	// A SEGMENT of headroom beyond whatever is advertised.
+	//
+	// Shrinking a window does not recall what is already in flight,
+	// so granting exactly the remaining space means the last grant
+	// and the data already on the wire together overrun the queue by
+	// up to one segment. That is not hypothetical: it dropped a
+	// connection at "queue full at 108400 bytes".
+	if (space > TCP_ADVERTISE_MSS) space -= TCP_ADVERTISE_MSS;
+	else space = 0;
+
+	if (space > TCP_RX_WINDOW) space = TCP_RX_WINDOW;
+
+	// Below one segment the peer cannot use the window at all, so
+	// say zero and let tcp_ack_now() reopen it.
+	w = (space < TCP_ADVERTISE_MSS) ? 0 : space;
+
+	if ((uint16_t)w == sock_win_last) return;
+
+	tcp_set_rx_window((uint16_t)w);
+
+	// Reopening has to be announced -- but NOT from here.
+	//
+	// sock_update_window() runs from sock_on_data(), which tcp.c
+	// calls from inside tcp_handle(). Sending a segment there would
+	// re-enter the transmit path while the receive path is still
+	// running. Flagged instead, and sent from the main loop.
+	//
+	// Closing needs no announcement: the next ordinary ACK carries
+	// it, and there is always one, because every segment received
+	// produces one.
+	if (sock_win_last == 0 && w != 0) sock_win_reopened = true;
+
+	sock_win_last = (uint16_t)w;
+
+}
+
+// Pushes as much of the queue to the port as it will take.
+static void sock_rx_flush(void) {
+
+	while (sock_rx_len && sock_state == SO_ACTIVE && sock_port.connected) {
+
+		// One chunk per z_port_send: the peer sees the same framing
+		// either way, since a byte stream has none.
+		//
+		// 4096, not 1024. Every chunk is a message, a blob
+		// allocation and at least one context switch each way, and
+		// measured on hardware a 258KB body took 28 seconds of which
+		// only 4.4 were decryption and 0.07 were storage -- the rest
+		// was the cost of moving it between two processes 250 times.
+		//
+		// The peer sizes its receive copy from this, so raising it
+		// here means raising SOCK_CHUNK's counterpart in
+		// sw/apps/web/web.c too.
+		uint32_t n = sock_rx_len > SOCK_CHUNK ? SOCK_CHUNK : sock_rx_len;
+
+		if (z_port_send(&sock_port, sock_rx_queue, n) != Z_OK) return;
+
+		memmove(sock_rx_queue, sock_rx_queue + n, sock_rx_len - n);
+		sock_rx_len -= n;
+		sock_rx_relayed += n;
+
+	}
+
+	sock_update_window();
+
+}
+
+static void sock_on_data(const uint8_t *data, uint16_t len) {
+
+	if (sock_state != SO_ACTIVE) return;
+
+	sock_rx_total += len;
+
+	if (sock_rx_len + len > SOCK_RX_QUEUE_LEN) {
+		// Genuinely out of room: the peer has not acked anything for
+		// 8KB. That is not a busy moment, it is a stuck process.
+		printf("net: socket rx queue full at %lu bytes "
+			"(relayed %lu) -- dropping connection\n",
+			(unsigned long)sock_rx_total, (unsigned long)sock_rx_relayed);
+		sock_abort();
+		z_port_close(&sock_port);
+		sock_state = SO_IDLE;
+		return;
+	}
+
+	memcpy(sock_rx_queue + sock_rx_len, data, len);
+	sock_rx_len += len;
+	if (sock_rx_len > sock_rx_high) sock_rx_high = sock_rx_len;
+
+	sock_rx_flush();
+	sock_update_window();
+
+}
+
+// Covers both "the handshake never completed" (SO_CONNECTING) and "an
+// established session ended" (SO_ACTIVE), the same two-in-one shape
+// tcp.h's TCP_EVENT_CLOSED has.
+//
+// The distinction matters more here than it does for telnet: a client
+// of this port is a program, not a person, and "the connection was
+// refused" and "the server hung up after sending a response" need
+// different handling on its side. Z_PORT_REFUSED versus Z_PORT_CLOSE
+// is what carries that.
+static void sock_on_closed(void) {
+
+	if (sock_state == SO_CONNECTING) {
+		z_msg_new_send(sock_client_pid, Z_PORT_REFUSED, 0,
+			z_obj_str("net: tcp connection failed"));
+		printf("net: socket connect for pid %ld failed\n",
+			(long)sock_client_pid);
+	} else if (sock_state == SO_ACTIVE) {
+		z_port_close(&sock_port);
+		{
+			uint32_t io = 0, dup = 0, gap = 0;
+			tcp_stats(&io, &dup, &gap);
+			printf("net: socket session ended, %lu bytes, queue peak %lu\n",
+				(unsigned long)sock_rx_total, (unsigned long)sock_rx_high);
+			printf("net: segments: %lu in order, %lu dup, %lu gap\n",
+				(unsigned long)io, (unsigned long)dup, (unsigned long)gap);
+		}
+	}
+
+	sock_state = SO_IDLE;
+
+}
+
+#endif
 
 #if SSH_ENABLE
 
@@ -681,7 +952,166 @@ static bool handle_ssh_port_close(const z_msg_t *msg) {
 // obj=Z_UINT32 (the target IP) -- see zport.h's
 // z_port_connect_arg()/zterm.h's Z_TERM_SET_PORT Z_MAP form for how a
 // `term` ends up sending that instead of the default Z_NONE.
+#if NET_SOCK
+
+// A Z_PORT_CONNECT carrying a Z_MAP means "open a raw TCP socket".
+//
+// Three provider types now share this one subject, and they are told
+// apart by the SHAPE of the argument rather than by a discriminator
+// field:
+//
+//   Z_MAP {ip, port}  -> raw socket (here)
+//   Z_UINT32 token    -> ssh, if it matches a live token it issued
+//   Z_UINT32 ip       -> telnet
+//
+// A map is checked FIRST because it is a type test that cannot be
+// wrong, where ssh's is a value test that has to guess. Doing it the
+// other way round would also make ssh log a "did not match a token"
+// line for every socket connect, which is noise on the one path that
+// is going to be busiest.
+//
+// The map may carry pointers, unlike telnet's and ssh's bare scalars,
+// and that is safe HERE for a reason worth stating: the
+// double-translation bug that forced ssh's token handshake (see
+// znet.h) happens when a message object is read by one process and
+// re-sent by another. `web` builds this map and sends it straight to
+// `net` in one hop, so it is translated exactly once. Nothing
+// forwards it.
+static bool handle_sock_port_connect(const z_msg_t *msg) {
+
+	z_obj_t *ip_obj, *port_obj;
+	uint32_t ip;
+	uint32_t port;
+
+	if (msg->obj.type != Z_MAP) return false;
+
+	ip_obj = z_map_find((z_obj_t *)&msg->obj, "ip");
+	port_obj = z_map_find((z_obj_t *)&msg->obj, "port");
+
+	if (!ip_obj || !port_obj ||
+		ip_obj->type != Z_UINT32 || port_obj->type != Z_UINT32) {
+		z_port_refuse(msg, "net: socket connect needs {ip, port}");
+		return true;
+	}
+
+	ip = ip_obj->val.uint32;
+	port = port_obj->val.uint32;
+
+	if (port == 0 || port > 65535) {
+		z_port_refuse(msg, "net: socket port out of range");
+		return true;
+	}
+
+	if (sock_state != SO_IDLE || telnet_state != TN_IDLE
+#if SSH_ENABLE
+		|| ssh_state != SSH_IDLE
+#endif
+		) {
+		// One TCB, so one session of any kind. Worth naming the
+		// constraint in the message: a client seeing this while its
+		// user has an ssh window open otherwise has no way to know
+		// why its fetch failed.
+		z_port_refuse(msg, "net: tcp busy with another session");
+		return true;
+	}
+
+	sock_client_pid = msg->from;
+
+	// A new id for this session. Anything still in flight from the
+	// last one carries the old one and will be ignored by the peer.
+	if (++sock_conn_seq < 3) sock_conn_seq = 3;
+	sock_conn_id = sock_conn_seq;
+
+	sock_rx_total = 0;
+	sock_rx_relayed = 0;
+	sock_rx_len = 0;
+	sock_rx_high = 0;
+	tcp_stats_reset();
+	sock_win_last = 0xFFFF;			// force a fresh advertisement
+	sock_win_reopened = false;
+	tcp_set_rx_window(TCP_RX_WINDOW);
+
+	printf("net: socket connecting to ");
+	print_ip(ip);
+	printf(":%lu for pid %ld\n", (unsigned long)port, (long)sock_client_pid);
+
+	if (!sock_connect(ip, (uint16_t)port, sock_on_established,
+			sock_on_data, sock_on_closed)) {
+		z_port_refuse(msg, "net: tcp busy with another connection");
+		return true;
+	}
+
+	sock_state = SO_CONNECTING;
+	// Deliberately no CONNECTED/REFUSED yet -- see sock_on_established()
+	// and sock_on_closed().
+	return true;
+
+}
+
+static bool handle_sock_port_data(const z_msg_t *msg) {
+
+	if (sock_state != SO_ACTIVE || !sock_port.connected ||
+		msg->tag != sock_port.conn_id) return false;
+
+	{
+		uint32_t len = z_blob_len(&msg->obj);
+		void *data = z_blob_data(&msg->obj);
+		// Unlike telnet's equivalent, a failed send here is NOT
+		// silently dropped. Telnet loses a keystroke; this loses part
+		// of a TLS record, and the connection is then unrecoverable in
+		// a way that surfaces as a decryption failure much later. The
+		// client is told instead, and can retry or give up knowing why.
+		if (data && len && !sock_send((const uint8_t *)data, (uint16_t)len)) {
+			printf("net: socket tx queue full, dropping connection\n");
+			sock_abort();
+			z_port_close(&sock_port);
+			sock_state = SO_IDLE;
+		}
+	}
+
+	// Sent unconditionally once we are done reading `data`, for the
+	// same reason handle_telnet_port_data() does it -- the peer's
+	// pending-sends slot needs an ack to be freed regardless.
+	z_port_send_ack(msg);
+	return true;
+
+}
+
+static bool handle_sock_port_close(const z_msg_t *msg) {
+
+	if (sock_state != SO_ACTIVE || !sock_port.connected ||
+		msg->tag != sock_port.conn_id) return false;
+
+	printf("net: socket closed by peer after %lu bytes received "
+		"(relayed %lu, queue peak %lu)\n",
+		(unsigned long)sock_rx_total, (unsigned long)sock_rx_relayed,
+		(unsigned long)sock_rx_high);
+
+	sock_port.connected = false;
+	sock_abort();		// the client is gone -- no reason to wait out a
+						// graceful FIN exchange with the remote server
+	sock_state = SO_IDLE;
+	return true;
+
+}
+
+#endif
+
 static void handle_telnet_port_connect(const z_msg_t *msg) {
+
+#if NET_SOCK
+	// A map argument is unambiguously a socket connect. See above.
+	if (handle_sock_port_connect(msg)) return;
+#else
+	// Without NET_SOCK the map form is not merely unsupported, it is
+	// unrecognisable -- and falling through to telnet would refuse it
+	// with "telnet requires a target IP", which is true and useless.
+	// Name the build option instead.
+	if (msg->obj.type == Z_MAP) {
+		z_port_refuse(msg, "net: built without NET_SOCK -- no raw sockets");
+		return;
+	}
+#endif
 
 #if SSH_ENABLE
 	// An SSH token looks exactly like a telnet target IP on the wire --
@@ -700,6 +1130,16 @@ static void handle_telnet_port_connect(const z_msg_t *msg) {
 		z_port_refuse(msg, "net: already busy with another telnet session");
 		return;
 	}
+
+#if NET_SOCK
+	// One TCB: a socket session blocks telnet exactly as an ssh
+	// session does. Checked here as well as in the socket handler
+	// because either can be started first.
+	if (sock_state != SO_IDLE) {
+		z_port_refuse(msg, "net: already busy with a socket session");
+		return;
+	}
+#endif
 
 	if (msg->obj.type != Z_UINT32) {
 		z_port_refuse(msg, "net: telnet requires a target IP");
@@ -939,6 +1379,34 @@ int main(void) {
 		return 1;
 	}
 
+	// Static footprint, so a change to the buffers is visible rather
+	// than something to infer from a board that stopped booting.
+	//
+	// `net` is a CORE app that runs on every board this tree
+	// supports, and the receive queue and reassembly buffer here were
+	// each raised in a hurry at one point. Printing them keeps that
+	// honest.
+#if NET_SOCK
+	printf("net: buffers: rx queue %d, window %d (phy %d), mss %d, "
+		"reassembly %s\n",
+		(int)SOCK_RX_QUEUE_LEN, (int)TCP_RX_WINDOW,
+		(int)phy_rx_capacity(), (int)TCP_ADVERTISE_MSS,
+		TCP_REASSEMBLY ? "on" : "off");
+#else
+	printf("net: buffers: window %d, mss %d, reassembly %s\n",
+		(int)TCP_RX_WINDOW, (int)TCP_ADVERTISE_MSS,
+		TCP_REASSEMBLY ? "on" : "off");
+#endif
+
+	// The window ceiling comes from the NIC, not from a constant.
+	//
+	// The driver is chosen at runtime and the three differ by 3x in
+	// receive buffering, so a single compile-time number is either
+	// unsafe on the smallest or wasteful on the largest. Advertising
+	// more than the hardware can hold is what produced 153 dropped
+	// segments in a 258KB transfer.
+	tcp_set_rx_window_max(phy_rx_capacity());
+
 	printf("net: initializing %s...\n", NET_PHY_NAME);
 
 	netcfg_t cfg;
@@ -1105,6 +1573,9 @@ int main(void) {
 #endif
 			else if (msg.subject == Z_PORT_CONNECT) handle_telnet_port_connect(&msg);
 			else if (msg.subject == Z_PORT_DATA) {
+#if NET_SOCK
+				if (!handle_sock_port_data(&msg))
+#endif
 #if SSH_ENABLE
 				if (!handle_ssh_port_data(&msg))
 #endif
@@ -1115,8 +1586,17 @@ int main(void) {
 #if SSH_ENABLE
 				z_port_handle_ack(&ssh_port, &msg);
 #endif
+#if NET_SOCK
+				z_port_handle_ack(&sock_port, &msg);
+				// An ack frees a pending slot, which is exactly when
+				// more of the queue can move.
+				if (sock_rx_len) sock_rx_flush();
+#endif
 			}
 			else if (msg.subject == Z_PORT_CLOSE) {
+#if NET_SOCK
+				if (!handle_sock_port_close(&msg))
+#endif
 #if SSH_ENABLE
 				if (!handle_ssh_port_close(&msg))
 #endif
@@ -1136,6 +1616,14 @@ int main(void) {
 		check_tftp_progress();
 		tcp_poll();
 		telnet_poll();
+#if NET_SOCK
+		sock_poll();
+		// Drain anything the peer was too busy to take earlier.
+		if (sock_rx_len) sock_rx_flush();
+		// And announce a window that has reopened, from out here
+		// rather than from inside tcp.c's receive path.
+		if (sock_win_reopened) { sock_win_reopened = false; tcp_ack_now(); }
+#endif
 #if SSH_ENABLE
 		ssh_poll();
 #endif

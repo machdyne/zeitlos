@@ -301,6 +301,32 @@
 // plausible candidates -- worth a line in `info`.
 #define Z_FEATURE2_USB_CDC    (1u << 2)
 
+// rtl/montmul.v -- a Montgomery modular multiplier at 0x7000_0600.
+//
+// KEEP IN SYNC with rtl/csrs.vh's CSR_FEATURES2 bit 3.
+//
+// Says the block was BUILT, not how wide: read its CONFIG register
+// for the limb count before handing it a modulus. A 12-limb operand
+// written to an 8-limb block is silently truncated, which produces a
+// wrong answer rather than an error.
+//
+// sw/apps/web checks this and falls back to software field arithmetic
+// when it is clear. Both paths give the same results; one takes ~600
+// cycles per field multiply and the other ~60,000.
+#define Z_FEATURE2_MONTMUL    (1u << 3)
+
+// Register map, word offsets from the base. See rtl/montmul.v.
+#define Z_MONTMUL_BASE        0x70000600u
+#define Z_MONTMUL_MAGIC       0x5A4D4F4Eu   // "ZMON"
+#define Z_MONTMUL_W_MAGIC     0u
+#define Z_MONTMUL_W_CTRL      1u            // W: bit0 START. R: bit0 BUSY
+#define Z_MONTMUL_W_CONFIG    2u            // R: limbs it was built for
+#define Z_MONTMUL_W_N0INV     3u
+#define Z_MONTMUL_W_A         16u
+#define Z_MONTMUL_W_B         28u
+#define Z_MONTMUL_W_N         40u
+#define Z_MONTMUL_W_R         52u
+
 // -- feature table (sw/common/zsoc.c) --
 //
 // The human-readable half of the Z_FEATURE_* bits above, kept in the

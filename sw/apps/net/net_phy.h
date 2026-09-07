@@ -73,6 +73,32 @@ typedef struct {
 	// association from net's main loop rather than blocking phy_init(),
 	// so that wm keeps being scheduled while it happens.
 	void (*poll_wifi)(const char *ssid, const char *psk);
+
+	// Bytes of RECEIVE buffering this hardware has, as TCP payload.
+	//
+	// This is what bounds the TCP receive window, and it is the
+	// number that decides whether a transfer runs or stalls. tcp.c
+	// does no out-of-order reassembly, so a frame that does not fit
+	// is not delayed, it is DISCARDED -- and every segment behind it
+	// goes too, however cleanly it arrived.
+	//
+	// Advertising more than this invites the peer to put more in
+	// flight than the NIC can hold. Measured against
+	// en.wikipedia.org with an 8192 window on an ENC28J60 whose ring
+	// is 6656 bytes: 153 gaps in a 258KB transfer, and a body that
+	// arrived short.
+	//
+	// It is a runtime field rather than a constant because the driver
+	// is chosen at runtime, and the three differ by 3x:
+	//
+	//   ENC28J60   6656 byte ring, ~600 bytes per 536-byte segment
+	//   RMII       4 frame slots  (rtl/ethmac_rmii.v)
+	//   esp32link  2048 byte FIFO (rtl/esp32_rxfifo.v)
+	//
+	// Each driver reports PAYLOAD capacity, not raw buffer: the
+	// per-frame overhead differs and only the driver knows it.
+	uint16_t rx_capacity;
+
 } net_phy_t;
 
 // The active driver. NULL until net_phy_select() has run, which
@@ -91,5 +117,6 @@ const net_phy_t *net_phy_select(void);
 #define phy_recv(b, l)   (net_phy->recv((b), (l)))
 #define phy_send(b, l)   (net_phy->send((b), (l)))
 #define phy_debug_dump() (net_phy->debug_dump())
+#define phy_rx_capacity() (net_phy->rx_capacity)
 
 #endif

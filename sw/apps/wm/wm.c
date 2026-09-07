@@ -42,7 +42,15 @@
 #define WM_MAX_WINDOWS    16
 #define WM_SCREEN_W       640
 #define WM_SCREEN_H       480
-#define WM_TITLE_MAX      24
+// Long enough for a real page title. 24 truncated
+// "Wikipedia, the free encyclopedia" to "Wikipedia, the free enc",
+// which is exactly where a title stops being useful.
+//
+// The cost is WM_TITLE_MAX bytes per window slot and nothing else --
+// the titlebar already clips whatever it is given to the space
+// available, so a longer string cannot overflow anything it is drawn
+// into.
+#define WM_TITLE_MAX      64
 
 typedef struct {
 	bool		used;
@@ -127,6 +135,7 @@ static const dock_app_t dock_candidates[] = {
 	{ "files",		z_icon_files_data },
 	{ "text",		z_icon_text_data  },
 	{ "read",		z_icon_read_data  },
+	{ "web",			z_icon_web_data  },
 	{ "sheet",		z_icon_sheet_data },
 	{ "hex",			z_icon_hex_data   },
 	{ "draw",		z_icon_draw_data  },

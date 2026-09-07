@@ -429,6 +429,16 @@
 `define MEM_ROM
 `define MEM_GLYPH
 `define ICACHE
+// rtl/montmul.v -- Montgomery modular multiplier for TLS.
+//
+// Optional and off by default elsewhere; on here because Lakritz is
+// the board sw/apps/web is developed against, and certificate
+// verification was 36 of the 85 seconds a page load took.
+//
+// Costs a handful of DSP slices and ~50 words of distributed LUT RAM.
+// NO BRAM. Drop it if the design stops fitting -- software falls back
+// to its own field arithmetic and everything still works, slowly.
+`define MONTMUL
 `define ICACHE_KB 4
 `define ICACHE_LINE_WORDS 4
 `define GPU

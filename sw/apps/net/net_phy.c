@@ -23,6 +23,12 @@ static const net_phy_t phy_enc28j60 = {
 	enc28j60_send,
 	enc28j60_debug_dump,
 	0,
+	// 6656-byte ring (RXSTART_INIT..RXSTOP_INIT in enc28j60.c). Each
+	// 536-byte segment occupies about 600 bytes of it once the
+	// Ethernet header, the CRC and the chip's own 6-byte status
+	// vector are counted, so eleven fit: 11 * 536 = 5896. Rounded
+	// down to a whole number of segments with one spare.
+	10 * 536,
 };
 
 static const net_phy_t phy_esp32link = {
@@ -32,6 +38,9 @@ static const net_phy_t phy_esp32link = {
 	esp32link_send,
 	esp32link_debug_dump,
 	esp32link_poll_wifi,
+	// 2048-byte FIFO (rtl/esp32_rxfifo.v). Three segments fit with
+	// their framing; two is the safe advertisement.
+	2 * 536,
 };
 
 static const net_phy_t phy_rmii = {
@@ -41,6 +50,10 @@ static const net_phy_t phy_rmii = {
 	rmii_eth_send,
 	rmii_eth_debug_dump,
 	0,
+	// Four frame slots, one frame each whatever its size
+	// (rtl/ethmac_rmii.v RX_SLOTS). Three segments, leaving a slot
+	// for the gap between a frame landing and net being scheduled.
+	3 * 536,
 };
 
 const net_phy_t *net_phy = 0;

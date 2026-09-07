@@ -54,7 +54,7 @@ LDSCRIPT = ../../common/riscv-app.ld
 # md.o is the Markdown parser, deliberately free of I/O so the test
 # suite below can build it for the host -- see md_test.c.
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o \
-	zfsapp.o zflist.o zdialog.o ztype.o md.o read.o
+	zfsapp.o zflist.o zdialog.o zedit.o ztype.o md.o read.o
 
 read: read.elf read.bin
 
@@ -161,3 +161,11 @@ clean:
 -include $(wildcard *.d)
 -include $(wildcard */*.d)
 -include $(wildcard */*/*.d)
+
+# sw/common/zedit.c -- the single-line text field.
+#
+# zdialog.c owned it privately until sw/apps/web's URL bar became its
+# second caller. Every app that links the dialog needs this too: a
+# shared widget is only shared if the build says so.
+zedit.o:
+	$(CC) $(CFLAGS) -c ../../common/zedit.c -o zedit.o

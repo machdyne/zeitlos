@@ -361,7 +361,7 @@ BYTE send_cmd (		/* Returns command response (bit7==1:Send failed)*/
 /* Get Disk Status                                                       */
 /*-----------------------------------------------------------------------*/
 
-DSTATUS disk_status (
+DSTATUS sd_disk_status (
 	BYTE drv			/* Drive number (always 0) */
 )
 {
@@ -376,7 +376,7 @@ DSTATUS disk_status (
 /* Initialize Disk Drive                                                 */
 /*-----------------------------------------------------------------------*/
 
-DSTATUS disk_initialize (
+DSTATUS sd_disk_initialize (
 	BYTE drv		/* Physical drive nmuber (0) */
 )
 {
@@ -451,7 +451,7 @@ DSTATUS disk_initialize (
 /* Read Sector(s)                                                        */
 /*-----------------------------------------------------------------------*/
 
-DRESULT disk_read (
+DRESULT sd_disk_read (
 	BYTE drv,			/* Physical drive nmuber (0) */
 	BYTE *buff,			/* Pointer to the data buffer to store read data */
 	LBA_t sector,		/* Start sector number (LBA) */
@@ -462,7 +462,7 @@ DRESULT disk_read (
 	DWORD sect = (DWORD)sector;
 
 
-	if (disk_status(drv) & STA_NOINIT) return RES_NOTRDY;
+	if (sd_disk_status (drv) & STA_NOINIT) return RES_NOTRDY;
 	if (!(CardType & CT_BLOCK)) sect *= 512;	/* Convert LBA to byte address if needed */
 
 	cmd = count > 1 ? CMD18 : CMD17;			/*  READ_MULTIPLE_BLOCK : READ_SINGLE_BLOCK */
@@ -484,7 +484,7 @@ DRESULT disk_read (
 /* Write Sector(s)                                                       */
 /*-----------------------------------------------------------------------*/
 
-DRESULT disk_write (
+DRESULT sd_disk_write (
 	BYTE drv,			/* Physical drive nmuber (0) */
 	const BYTE *buff,	/* Pointer to the data to be written */
 	LBA_t sector,		/* Start sector number (LBA) */
@@ -494,7 +494,7 @@ DRESULT disk_write (
 	DWORD sect = (DWORD)sector;
 
 
-	if (disk_status(drv) & STA_NOINIT) return RES_NOTRDY;
+	if (sd_disk_status (drv) & STA_NOINIT) return RES_NOTRDY;
 	if (!(CardType & CT_BLOCK)) sect *= 512;	/* Convert LBA to byte address if needed */
 
 	if (count == 1) {	/* Single block write */
@@ -523,7 +523,7 @@ DRESULT disk_write (
 /* Miscellaneous Functions                                               */
 /*-----------------------------------------------------------------------*/
 
-DRESULT disk_ioctl (
+DRESULT sd_disk_ioctl (
 	BYTE drv,		/* Physical drive nmuber (0) */
 	BYTE ctrl,		/* Control code */
 	void *buff		/* Buffer to send/receive control data */
@@ -534,7 +534,7 @@ DRESULT disk_ioctl (
 	DWORD cs;
 
 
-	if (disk_status(drv) & STA_NOINIT) return RES_NOTRDY;	/* Check if card is in the socket */
+	if (sd_disk_status (drv) & STA_NOINIT) return RES_NOTRDY;	/* Check if card is in the socket */
 
 	res = RES_ERROR;
 	switch (ctrl) {

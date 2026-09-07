@@ -47,7 +47,7 @@ LDSCRIPT = ../../common/riscv-app.ld
 # zflist.o (the file browser inside the dialog). zfont_data.o arrived
 # with the FPS readout -- this app drew no text at all before.
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o \
-	zfsapp.o zflist.o zdialog.o stl.o gpu3d.o
+	zfsapp.o zflist.o zdialog.o zedit.o stl.o gpu3d.o
 
 gpu3d: gpu3d.elf gpu3d.bin
 
@@ -114,3 +114,11 @@ clean:
 -include $(wildcard *.d)
 -include $(wildcard */*.d)
 -include $(wildcard */*/*.d)
+
+# sw/common/zedit.c -- the single-line text field.
+#
+# zdialog.c owned it privately until sw/apps/web's URL bar became its
+# second caller. Every app that links the dialog needs this too: a
+# shared widget is only shared if the build says so.
+zedit.o:
+	$(CC) $(CFLAGS) -c ../../common/zedit.c -o zedit.o

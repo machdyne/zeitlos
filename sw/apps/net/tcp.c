@@ -146,6 +146,155 @@ static uint16_t tcp_checksum(uint32_t src_ip, uint32_t dst_ip,
 	return (uint16_t)(~sum);
 
 }
+// The window currently advertised. Starts at the configured maximum
+// and is lowered by the listener when it cannot keep up.
+//
+// Without this it is a constant, which means this stack ACKs
+// everything immediately and then has nowhere to put it: the peer
+// never learns the application is behind, and the only response
+// available to a full queue is to drop the connection. Advertising a
+// smaller window is how TCP is supposed to say "wait".
+static uint16_t rx_window = TCP_RX_WINDOW;
+
+// Receive-path counters, reported by tcp_stats().
+//
+// Throughput being far below the link rate has two very different
+// causes -- per-segment overhead, or loss and retransmission -- and
+// they look identical from outside. in_order versus dup versus gap
+// separates them: a clean transfer is nearly all in_order.
+static uint32_t rx_in_order, rx_dup, rx_gap;
+
+static void send_ack(void);
+static void notify(tcp_event_t ev, const uint8_t *data, uint16_t len);
+
+#if TCP_REASSEMBLY
+// -- out-of-order reassembly --
+//
+// ONE contiguous run held beyond rcv_nxt.
+//
+// Without this, a single lost segment discards every segment behind
+// it, and the peer has to resend all of them after a retransmit
+// timeout. Measured on hardware that was 65 gaps in a 258KB transfer
+// -- 65 stalls of a couple of hundred milliseconds each, which is
+// most of the time the transfer took.
+//
+// With it, a gap costs exactly one retransmit: the data that arrived
+// early is kept, the dup-ACKs this stack already sends prompt a fast
+// retransmit of the hole, and the run is delivered the moment it is
+// filled.
+//
+// One run rather than a queue because that is the case that actually
+// happens -- one segment lost, the rest of the burst fine. A second
+// gap opening while one is pending is still dropped, which needs a
+// real queue and buys much less.
+static uint8_t ooo_buf[TCP_OOO_BUF];
+static uint32_t ooo_seq;			// sequence number of ooo_buf[0]
+static uint32_t ooo_len;			// contiguous bytes held
+static bool ooo_valid;
+
+static void ooo_reset(void) {
+	ooo_valid = false;
+	ooo_seq = 0;
+	ooo_len = 0;
+}
+
+// Hands the listener whatever the buffer now completes, in
+// TCP_MAX_RX_PAYLOAD pieces.
+static void ooo_drain(void) {
+
+	uint32_t off;
+
+	if (!ooo_valid) return;
+
+	// Only useful once rcv_nxt has reached the run. A run that starts
+	// beyond rcv_nxt is still waiting for its hole to be filled.
+	if ((int32_t)(tcb.rcv_nxt - ooo_seq) < 0) return;
+
+	off = tcb.rcv_nxt - ooo_seq;
+	if (off >= ooo_len) { ooo_reset(); return; }
+
+	{
+		uint32_t remain = ooo_len - off;
+
+		tcb.rcv_nxt += remain;
+		send_ack();
+
+		while (remain) {
+			uint16_t n = remain > TCP_MAX_RX_PAYLOAD
+				? TCP_MAX_RX_PAYLOAD : (uint16_t)remain;
+			notify(TCP_EVENT_DATA, ooo_buf + off, n);
+			off += n;
+			remain -= n;
+		}
+	}
+
+	ooo_reset();
+
+}
+
+// Files a segment that arrived ahead of rcv_nxt.
+static void ooo_store(uint32_t seq, const uint8_t *data, uint16_t len) {
+
+	if (len == 0) return;
+
+	if (!ooo_valid) {
+		if (len > TCP_OOO_BUF) return;
+		memcpy(ooo_buf, data, len);
+		ooo_seq = seq;
+		ooo_len = len;
+		ooo_valid = true;
+		return;
+	}
+
+	// Contiguous with what is already held: extend it. Anything else
+	// -- a second separate gap, or something that overlaps
+	// awkwardly -- is dropped, and the peer's retransmit sorts it
+	// out. Signed comparison throughout: sequence numbers wrap.
+	{
+		int32_t delta = (int32_t)(seq - ooo_seq);
+
+		if (delta < 0) return;
+		if ((uint32_t)delta > ooo_len) return;		// leaves a second hole
+
+		{
+			uint32_t at = (uint32_t)delta;
+			uint32_t end = at + len;
+
+			if (end <= ooo_len) return;				// wholly duplicate
+			if (end > TCP_OOO_BUF) return;			// no room
+
+			memcpy(ooo_buf + at, data, len);
+			ooo_len = end;
+		}
+	}
+
+}
+#else
+static void ooo_reset(void) { }
+#endif
+
+void tcp_stats(uint32_t *in_order, uint32_t *dup, uint32_t *gap) {
+	if (in_order) *in_order = rx_in_order;
+	if (dup) *dup = rx_dup;
+	if (gap) *gap = rx_gap;
+}
+
+void tcp_stats_reset(void) { rx_in_order = rx_dup = rx_gap = 0; }
+
+// The ceiling, from the PHY. See tcp.h.
+static uint16_t rx_window_max = TCP_RX_WINDOW;
+
+void tcp_set_rx_window_max(uint16_t w) {
+	if (w < TCP_MAX_PAYLOAD) w = TCP_MAX_PAYLOAD;
+	rx_window_max = (w > TCP_RX_WINDOW) ? TCP_RX_WINDOW : w;
+	if (rx_window > rx_window_max) rx_window = rx_window_max;
+}
+
+void tcp_set_rx_window(uint16_t w) {
+	rx_window = w > rx_window_max ? rx_window_max : w;
+}
+
+
 
 // builds and sends one segment. does NOT touch tcb.tx_* itself --
 // callers that need retransmit tracking (send_tracked() below) handle
@@ -170,29 +319,66 @@ static bool tcp_send_segment(uint32_t seq, uint8_t flags,
 	// we've received anything (harmless/ignored by the peer if the
 	// ACK flag isn't actually set) -- simpler than tracking whether
 	// this exact segment "needs" an ack field filled in.
+	uint16_t opt_len = 0;
 	uint32_t ack = tcb.rcv_nxt;
 	pkt[8] = (ack >> 24) & 0xFF;
 	pkt[9] = (ack >> 16) & 0xFF;
 	pkt[10] = (ack >> 8) & 0xFF;
 	pkt[11] = ack & 0xFF;
 
-	pkt[12] = (5 << 4);	// data offset: 5 words (20 bytes), no options
+	// A SYN carries an MSS option; nothing else carries any option.
+	//
+	// Without one, RFC 879 says both ends use 536 -- and a 258KB
+	// transfer then arrives as roughly 480 segments instead of 180.
+	// Every segment is an interrupt, a wake-up and an ACK on this
+	// side, and measured on hardware that per-segment cost, not the
+	// 10Mbit link, was what held a body transfer to about 14 KB/s.
+	//
+	// What we advertise is TCP_ADVERTISE_MSS, which is bounded by the
+	// board's ethernet receive buffer rather than by the MTU -- see
+	// tcp.h. It must never exceed TCP_MAX_RX_PAYLOAD, which is the
+	// largest segment this stack will deliver to a listener whole.
+	if (flags & TCP_FLAG_SYN) {
+		pkt[12] = (6 << 4);			// data offset: 6 words (24 bytes)
+		opt_len = 4;
+	} else {
+		pkt[12] = (5 << 4);			// data offset: 5 words, no options
+	}
 	pkt[13] = flags;
 
-	uint16_t window = 2048;	// fixed, generous relative to
-								// TCP_MAX_PAYLOAD -- never actually
-								// constrains anything since we only
-								// ever have one segment outstanding
-								// ourselves either way (see tcp.h)
+	// The RECEIVE window: how much the PEER may have in flight to us.
+	//
+	// The old comment here justified 2048 as "never actually
+	// constrains anything since we only ever have one segment
+	// outstanding ourselves" -- but that reasoning is about the SEND
+	// side. This field governs what the peer may send, and it does
+	// constrain that.
+	//
+	// It never showed because telnet and SSH both reply within a
+	// segment or two, so a peer is never left sitting on a full
+	// window waiting for an application with nothing to say yet. A
+	// TLS 1.3 client is silent between ClientHello and Finished while
+	// the server sends its entire flight, certificates included --
+	// the first thing here that actually fills this.
+	//
+	// See tcp.h on why raising it is not free.
+	uint16_t window = rx_window;
 	pkt[14] = (window >> 8) & 0xFF;
 	pkt[15] = window & 0xFF;
 
 	pkt[16] = 0; pkt[17] = 0;	// checksum, filled in below
 	pkt[18] = 0; pkt[19] = 0;	// urgent pointer, unused
 
-	if (len) memcpy(pkt + TCP_HDR_LEN, data, len);
+	if (opt_len) {
+		pkt[20] = 2;				// kind: maximum segment size
+		pkt[21] = 4;				// length, including these two bytes
+		pkt[22] = (TCP_ADVERTISE_MSS >> 8) & 0xFF;
+		pkt[23] = TCP_ADVERTISE_MSS & 0xFF;
+	}
 
-	uint16_t seg_len = TCP_HDR_LEN + len;
+	if (len) memcpy(pkt + TCP_HDR_LEN + opt_len, data, len);
+
+	uint16_t seg_len = TCP_HDR_LEN + opt_len + len;
 	uint16_t csum = tcp_checksum(our_ip, tcb.remote_ip, pkt, seg_len);
 	pkt[16] = (csum >> 8) & 0xFF;
 	pkt[17] = csum & 0xFF;
@@ -247,6 +433,7 @@ static void reset_to_closed(void) {
 // -- public API --
 
 bool tcp_connect(uint32_t dst_ip, uint16_t dst_port, tcp_event_handler_t handler) {
+	ooo_reset();
 
 	if (tcb.state != TCP_CLOSED) return false;
 
@@ -300,7 +487,17 @@ bool tcp_close(void) {
 
 }
 
+// A bare ACK carrying the current window.
+//
+// Needed when the window REOPENS: a peer told zero is waiting for an
+// update and nothing else will produce one. Without this the transfer
+// stalls exactly as if the window had never reopened.
+void tcp_ack_now(void) {
+	if (tcb.state == TCP_ESTABLISHED) send_ack();
+}
+
 void tcp_abort(void) {
+	ooo_reset();
 	if (tcb.state != TCP_CLOSED) send_rst();
 	reset_to_closed();
 }
@@ -431,6 +628,7 @@ void tcp_handle(uint32_t src_ip, const uint8_t *p, uint16_t len) {
 
 		if (data_len > 0) {
 			if (seq == tcb.rcv_nxt) {
+				rx_in_order++;
 				tcb.rcv_nxt += data_len;
 				send_ack();
 				// deliver at most TCP_MAX_RX_PAYLOAD bytes to the
@@ -456,7 +654,16 @@ void tcp_handle(uint32_t src_ip, const uint8_t *p, uint16_t len) {
 				if (deliver_len > TCP_MAX_RX_PAYLOAD)
 					deliver_len = TCP_MAX_RX_PAYLOAD;
 				notify(TCP_EVENT_DATA, data, deliver_len);
+
+#if TCP_REASSEMBLY
+				// This segment may have filled the hole a previous
+				// burst left, in which case everything held behind it
+				// can go to the listener now.
+				ooo_drain();
+#endif
+
 			} else if ((int32_t)(seq - tcb.rcv_nxt) < 0) {
+				rx_dup++;
 				// already-seen retransmit -- re-ack so the peer
 				// stops retransmitting it, don't deliver it again.
 				//
@@ -486,10 +693,34 @@ void tcp_handle(uint32_t src_ip, const uint8_t *p, uint16_t len) {
 				// (seq == rcv_nxt, fin_seq == rcv_nxt) are wrap-safe
 				// as written, since equality is unaffected.
 				send_ack();
+			} else {
+				rx_gap++;
+
+#if TCP_REASSEMBLY
+				// Keep it rather than discard it -- see ooo_store().
+				ooo_store(seq, data, data_len);
+#endif
+
+				// seq > rcv_nxt: a gap. The segment is now HELD
+				// rather than dropped, and we send an immediate
+				// DUPLICATE ACK for what we do have.
+				//
+				// RFC 5681 asks for this, and tcp.h has described it
+				// as "one line, not done yet, on purpose" since SSH
+				// was written. Without it the peer never sees the
+				// three dup-ACKs that trigger fast retransmit, and
+				// waits a full RTO instead of about one RTT.
+				//
+				// Done now because a stalled TLS handshake is the
+				// first thing here that suffers visibly: a server
+				// sending a multi-KB flight to a silent client has
+				// nothing else to prompt a retransmit with.
+				//
+				// It cannot make correctness worse -- it advertises
+				// exactly the rcv_nxt we already believe -- and the
+				// cost of being wrong is one redundant ACK.
+				send_ack();
 			}
-			// seq > rcv_nxt: a real gap -- no reassembly (tcp.h),
-			// drop silently and let the peer's own timeout resend it
-			// in order.
 		}
 
 		if (flags & TCP_FLAG_FIN) {

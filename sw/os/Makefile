@@ -51,7 +51,7 @@ LDFLAGS = $(PIC_FLAGS) -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS)
 LDSCRIPT = ../common/riscv-os.ld
 
 OBJS = kernel.o kruntime.o mem.o zar.o \
-	fs/fs.o fs/fatfs/sdmm.o fs/fatfs/ff.o \
+	fs/fs.o fs/ramdisk.o fs/fatfs/sdmm.o fs/fatfs/diskio_mux.o fs/fatfs/ff.o \
 	uart.o hid.o sh.o xfer.o xmodem.o ui.o msg.o pidreg.o fsapi.o procapi.o zobj.o zstream.o zdns.o zsoc.o zgpio.o logo.o
 
 # kernel.o's recipe below builds every object in one go (they're not
@@ -64,7 +64,7 @@ OBJS = kernel.o kruntime.o mem.o zar.o \
 # any edit. bit us for real with fs/fs.c during this session's
 # zstream/TFTP work -- see docs/networking.md.
 KSRCS = kernel.c kruntime.c mem.c \
-	fs/fs.c fs/fatfs/sdmm.c fs/fatfs/ff.c \
+	fs/fs.c fs/ramdisk.c fs/fatfs/sdmm.c fs/fatfs/diskio_mux.c fs/fatfs/ff.c \
 	uart.c hid.c sh.c xfer.c xmodem.c ui.c msg.c pidreg.c fsapi.c procapi.c logo.c \
 	../common/zobj.c ../common/zstream.c ../common/zdns.c ../common/zsoc.c
 
@@ -76,6 +76,12 @@ kernel.o: $(KSRCS)
 	$(CC) $(CFLAGS) -c mem.c -o mem.o
 	$(CC) $(CFLAGS) -c fs/fs.c -o fs/fs.o
 	$(CC) $(CFLAGS) -c fs/fatfs/sdmm.c -o fs/fatfs/sdmm.o
+
+fs/fatfs/diskio_mux.o: fs/fatfs/diskio_mux.c fs/ramdisk.h
+	$(CC) $(CFLAGS) -c fs/fatfs/diskio_mux.c -o fs/fatfs/diskio_mux.o
+
+fs/ramdisk.o: fs/ramdisk.c fs/ramdisk.h
+	$(CC) $(CFLAGS) -c fs/ramdisk.c -o fs/ramdisk.o
 	$(CC) $(CFLAGS) -c fs/fatfs/ff.c -o fs/fatfs/ff.o
 	$(CC) $(CFLAGS) -c sh.c -o sh.o
 	$(CC) $(CFLAGS) -c xfer.c -o xfer.o

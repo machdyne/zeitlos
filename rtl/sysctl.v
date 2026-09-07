@@ -786,6 +786,7 @@ module sysctl #()
 `endif
 `ifdef TRNG
 	wire [31:0] wbs_trng_dat_o;
+	wire [31:0] wbs_montmul_dat_o;
 `endif
 `ifdef AUDIO
 	wire [31:0] wbs_audio_dat_o;
@@ -971,6 +972,15 @@ module sysctl #()
 	wire cs_audio = ((wbm_adr & 32'hf000_0700) == 32'h7000_0500);
 	wire wbm_cyc_audio = cs_audio && wbm_cyc;
 `endif
+	// rtl/montmul.v -- the SEVENTH tenant of nibble 7, at 0x7000_06xx.
+	// Sixty-four words rather than the eight the other tenants use,
+	// because it carries three operand arrays and a result; the 0x700
+	// tenant mask still separates it cleanly and 0x7000_07xx remains
+	// free for an eighth.
+`ifdef MONTMUL
+	wire cs_montmul = ((wbm_adr & 32'hf000_0700) == 32'h7000_0600);
+	wire wbm_cyc_montmul = cs_montmul && wbm_cyc;
+`endif
 	wire cs_csrs = ((wbm_adr & 32'hf000_0000) == 32'h7000_0000)
 		&& !cs_socctl
 `ifdef ICACHE
@@ -983,6 +993,9 @@ module sysctl #()
 `endif
 `ifdef AUDIO
 		&& !cs_audio
+`endif
+`ifdef MONTMUL
+		&& !cs_montmul
 `endif
 		;
 	// Unconditional, like cs_uart0 below and unlike the `ifdef-guarded
@@ -1078,6 +1091,9 @@ module sysctl #()
 `endif
 `ifdef TRNG
 		({32{cs_trng}} & wbs_trng_dat_o) |
+`ifdef MONTMUL
+		({32{cs_montmul}} & wbs_montmul_dat_o) |
+`endif
 `endif
 `ifdef AUDIO
 		({32{cs_audio}} & wbs_audio_dat_o) |
@@ -1124,6 +1140,9 @@ module sysctl #()
 `endif
 `ifdef TRNG
 	wire wbs_trng_ack_o;
+`ifdef MONTMUL
+	wire wbs_montmul_ack_o;
+`endif
 `endif
 `ifdef AUDIO
 	wire wbs_audio_ack_o;
@@ -1199,6 +1218,9 @@ module sysctl #()
 `endif
 `ifdef TRNG
 		(cs_trng & wbs_trng_ack_o) |
+`ifdef MONTMUL
+		(cs_montmul & wbs_montmul_ack_o) |
+`endif
 `endif
 `ifdef AUDIO
 		(cs_audio & wbs_audio_ack_o) |
@@ -2541,6 +2563,44 @@ module sysctl #()
 		.wb_stb_i(wbm_stb),
 		.wb_ack_o(wbs_trng_ack_o),
 		.wb_cyc_i(wbm_cyc_trng)
+	);
+`endif
+
+	// WISHBONE SLAVE: MONTMUL (rtl/montmul.v)
+	//
+	// Optional, `MONTMUL in rtl/boards.vh. A Montgomery modular
+	// multiplier, used by sw/apps/web for TLS certificate
+	// verification -- three ECDSA P-384 signatures were 36 of the 85
+	// seconds a page load took, and this block is ~100x on the
+	// operation they are made of.
+	//
+	// Six address bits, not three: the block has 64 words of register
+	// map (three operand arrays and a result), where every other
+	// tenant of nibble 7 has eight.
+	//
+	// LIMBS is the widest modulus in 32-bit words. 12 covers P-384
+	// and everything below it; 8 builds a P-256-only version at two
+	// thirds the storage, for a board that cannot spare the LUTs.
+	// Software reads the block's own CONFIG register rather than
+	// assuming.
+`ifdef MONTMUL
+	montmul #(
+`ifdef MONTMUL_LIMBS
+		.LIMBS(`MONTMUL_LIMBS)
+`else
+		.LIMBS(12)
+`endif
+	) montmul_i (
+		.clk(wbm_clk),
+		.resetn(!wbm_rst),
+		.wb_adr_i({ 26'b0, wbm_adr_sel_word[5:0] }),
+		.wb_dat_i(wbm_dat_o),
+		.wb_dat_o(wbs_montmul_dat_o),
+		.wb_we_i(wbm_we),
+		.wb_sel_i(wbm_sel),
+		.wb_stb_i(wbm_stb),
+		.wb_ack_o(wbs_montmul_ack_o),
+		.wb_cyc_i(wbm_cyc_montmul)
 	);
 `endif
 

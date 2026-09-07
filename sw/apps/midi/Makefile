@@ -48,7 +48,7 @@ LDSCRIPT = ../../common/riscv-app.ld
 # zfsapp.o is needed by zflist.o (the file browser inside the open
 # dialog) as well as by midi.c's own file loading.
 OBJS = zeitlos.o zobj.o zsoc.o zgfx.o zfont_data.o zwin.o zwidget.o \
-	zfsapp.o zflist.o zdialog.o zkbd.o \
+	zfsapp.o zflist.o zdialog.o zedit.o zkbd.o \
 	smf.o synth.o midi_icons.o midi.o
 
 midi: midi.elf midi.bin
@@ -125,3 +125,11 @@ clean:
 # prerequisites, so without this an existing .o is considered
 # permanently up to date and edits silently link stale objects.
 -include $(wildcard *.d)
+
+# sw/common/zedit.c -- the single-line text field.
+#
+# zdialog.c owned it privately until sw/apps/web's URL bar became its
+# second caller. Every app that links the dialog needs this too: a
+# shared widget is only shared if the build says so.
+zedit.o:
+	$(CC) $(CFLAGS) -c ../../common/zedit.c -o zedit.o

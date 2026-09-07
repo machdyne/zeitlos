@@ -254,6 +254,20 @@ localparam CSR_FEATURES2 =
 `ifdef GPIO_PORT0
 	(32'h1 << 0) |
 `endif
+// rtl/montmul.v -- a Montgomery modular multiplier at 0x7000_0600.
+//
+// Set when the block is BUILT, which is the whole question software
+// has: sw/apps/web falls back to its own Solinas field arithmetic
+// when this is clear, and both paths compute the same answers -- one
+// takes ~600 cycles per field multiply and the other ~60,000.
+//
+// Also read montmul.v's own CONFIG register before using it: this bit
+// says the block exists, that register says how many limbs wide it
+// was built, and a 12-limb caller on an 8-limb block would otherwise
+// silently truncate a P-384 modulus.
+`ifdef MONTMUL
+	(32'h1 << 3) |
+`endif
 // A second 16550 (rtl/ext/uart16550) at 0xf000_0100, available to
 // software as a general-purpose serial port. UART0 is the console and
 // is never this.

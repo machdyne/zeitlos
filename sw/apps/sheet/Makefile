@@ -42,7 +42,7 @@ LDSCRIPT = ../../common/riscv-app.ld
 # ztype.o is only for z_ftype_ext(), which is how a .CSV is told from a
 # .ZSS on the way in and out.
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o \
-	zfsapp.o zflist.o zdialog.o zfix.o ztype.o sheet_core.o sheet.o
+	zfsapp.o zflist.o zdialog.o zedit.o zfix.o ztype.o sheet_core.o sheet.o
 
 sheet: sheet.elf sheet.bin
 
@@ -162,3 +162,11 @@ clean:
 -include $(wildcard *.d)
 -include $(wildcard */*.d)
 -include $(wildcard */*/*.d)
+
+# sw/common/zedit.c -- the single-line text field.
+#
+# zdialog.c owned it privately until sw/apps/web's URL bar became its
+# second caller. Every app that links the dialog needs this too: a
+# shared widget is only shared if the build says so.
+zedit.o:
+	$(CC) $(CFLAGS) -c ../../common/zedit.c -o zedit.o

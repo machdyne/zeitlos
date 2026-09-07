@@ -26,6 +26,7 @@ APPS = \
 	clock \
 	cal \
 	read \
+	web \
 	net \
 	term \
 	logic \

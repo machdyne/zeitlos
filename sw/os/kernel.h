@@ -164,9 +164,20 @@ z_obj_t *k_proc_wait(z_obj_t *args);
 //   figure (docs/scheme_api.md) is the number to watch, and putting
 //   repl back on LARGE is the fix.
 //
-// - Z_PROC_STACK_SIZE_LARGE (64KB): nothing, currently. Kept defined
-//   rather than deleted precisely so the line above is a one-word
-//   change if MEDIUM proves too tight for either of them.
+// - Z_PROC_STACK_SIZE_LARGE (64KB): `web`.
+//
+//   The browser's draw path nests in a way nothing else here does:
+//   putting a screen together runs the HTML parser over a replayed
+//   section of the document, and the parser context alone is nearly
+//   6KB (sw/apps/web/page.c keeps exactly one, deliberately, for this
+//   reason). On top of that sit a screen's worth of html_line_t
+//   blocks and the wrapping arithmetic.
+//
+//   MEDIUM would very likely do. LARGE is chosen anyway because the
+//   symptom of being wrong is the silent heap/stack exhaustion this
+//   whole tier system exists to prevent, and `web` is an app for
+//   32MB boards regardless -- see docs/web_app.md. It is not a
+//   candidate for a 1MB machine whether it gets 32KB or 64KB.
 #define Z_PROC_STACK_SIZE_SMALL    8*1024
 #define Z_PROC_STACK_SIZE_DEFAULT  16*1024
 #define Z_PROC_STACK_SIZE_MEDIUM   32*1024
@@ -180,6 +191,14 @@ z_obj_t *k_proc_wait(z_obj_t *args);
 // tier change doesn't require finding and updating every call site
 // individually the way `net` joining `repl` here once did.
 static inline uint32_t z_proc_stack_size_for(const char *name) {
+	// web parses HTML, lays it out and holds a checkpoint index, and
+	// its per-screen block buffer alone is larger than the DEFAULT
+	// tier's whole allowance. LARGE rather than MEDIUM because the
+	// draw path nests -- page_fetch() runs the parser, which calls
+	// back into the layout engine -- and running out of stack here
+	// is not a clean failure.
+	if (!strcmp(name, "web"))
+		return Z_PROC_STACK_SIZE_LARGE;
 	if (!strcmp(name, "repl") || !strcmp(name, "net"))
 		return Z_PROC_STACK_SIZE_MEDIUM;
 	if (!strcmp(name, "wm") || !strcmp(name, "term"))

@@ -113,6 +113,73 @@ NET_STATIC_NTP     ?= 0.0.0.0
 NTP_ENABLE ?= 1
 override CFLAGS += -DNTP_ENABLE=$(NTP_ENABLE)
 
+# -- raw TCP sockets (sock.c) --
+#
+# On by default. Set NET_SOCK=0 to build net without the raw socket
+# provider: sock.o is not linked, and a Z_PORT_CONNECT carrying a map
+# is refused with a message naming this option rather than falling
+# through to telnet and failing somewhere confusing.
+#
+# This is what lets another process open an arbitrary TCP connection
+# through net -- specifically sw/apps/web (docs/web_app.md), which
+# carries HTTP and TLS itself so that neither has to live in this app.
+# It is small (sock.c is about 100 lines and reuses tcp.c entirely),
+# but net is a core app in the ZAR archive (sw/os/zar.h) and has to
+# stay small enough for a 1MB board, so it is optional on the same
+# principle as SSH_ENABLE and NTP_ENABLE.
+#
+# Turning this off does not save a browser's worth of space -- all of
+# that is in `web`. It saves sock.o.
+NET_SOCK ?= 1
+override CFLAGS += -DNET_SOCK=$(NET_SOCK)
+
+# -- TCP receive window (tcp.h, TCP_RX_WINDOW) --
+#
+# DERIVED from the RX ring by default -- see tcp.h. Three full
+# segments against a four-slot ring, because without out-of-order
+# reassembly anything the ring cannot hold is discarded rather than
+# delayed, and everything behind it with it.
+#
+# Overriding this is a measurement, not a tuning knob: a bigger window
+# without reassembly made a real transfer 30% SLOWER and threw away
+# 37% of the segments that arrived.
+#
+#   make TCP_RX_WINDOW=8192
+#
+# Empty means "use tcp.h's derivation".
+# -- advertised MSS (tcp.h, TCP_ADVERTISE_MSS) --
+#
+# Bounded by the board's ETHERNET RECEIVE BUFFER, not by the MTU:
+#
+#   SPI_ETH  (Lakritz)  a 2048-byte FIFO   -> 536 fits ~3 frames
+#   ETH_RMII (ML1)      4 one-frame slots  -> 1460 fits 4
+#
+# Default 536, which suits the smaller. Measured on Lakritz, raising
+# it to 1460 made a 258KB transfer 30% SLOWER and discarded 37% of
+# arriving segments, because this stack does no reassembly and a
+# frame that will not fit is dropped along with everything behind it.
+#
+# Raise BOTH together, and only where the receive buffer allows:
+#
+#   make TCP_ADVERTISE_MSS=1460 TCP_RX_WINDOW=8192
+# -- out-of-order reassembly (tcp.h, TCP_REASSEMBLY) --
+#
+# OFF. It lost bytes against a real peer; see tcp.h for the numbers.
+# `make TCP_REASSEMBLY=1` to pick it up again.
+TCP_REASSEMBLY ?= 0
+override CFLAGS += -DTCP_REASSEMBLY=$(TCP_REASSEMBLY)
+
+TCP_ADVERTISE_MSS ?=
+
+ifneq ($(TCP_ADVERTISE_MSS),)
+override CFLAGS += -DTCP_ADVERTISE_MSS=$(TCP_ADVERTISE_MSS)
+endif
+
+TCP_RX_WINDOW ?=
+ifneq ($(TCP_RX_WINDOW),)
+override CFLAGS += -DTCP_RX_WINDOW=$(TCP_RX_WINDOW)
+endif
+
 # -- SSH (sw/apps/net/ssh/) --
 #
 # On by default. Set SSH_ENABLE=0 to build net without the SSH client
@@ -164,9 +231,15 @@ endif
 # (23KB linked) -- see sw/ext/monocypher/README.md. GC_SECTIONS above
 # is what makes that true, so do not build this app with GC_SECTIONS=0
 # and then be surprised by the size.
+ifeq ($(NET_SOCK), 1)
+SOCK_OBJ = sock.o
+else
+SOCK_OBJ =
+endif
+
 ifeq ($(SSH_ENABLE), 1)
 SSH_OBJ = monocypher.o monocypher-ed25519.o \
-	ssh_sha256.o ssh_wire.o ssh_crypto.o ssh_proto.o ssh.o
+	zsha256.o ssh_wire.o ssh_crypto.o ssh_proto.o ssh.o
 else
 SSH_OBJ =
 endif
@@ -178,7 +251,7 @@ endif
 # zrtc.o rides with ntp.o rather than being listed separately: it is
 # the calendar arithmetic ntp.c uses to print the time it just set, and
 # nothing else in this app has any use for a date.
-OBJS = zeitlos.o zobj.o zstream.o zport.o zrng.o zfsapp.o netcfg.o $(PHY_OBJ) eth.o arp.o ip.o udp.o $(DHCP_OBJ) dns.o $(NTP_OBJ) tcp.o telnet.o $(SSH_OBJ) tftp.o net.o
+OBJS = zeitlos.o zobj.o zstream.o zport.o zrng.o zfsapp.o netcfg.o $(PHY_OBJ) eth.o arp.o ip.o udp.o $(DHCP_OBJ) dns.o $(NTP_OBJ) tcp.o telnet.o $(SOCK_OBJ) $(SSH_OBJ) tftp.o net.o
 
 net: net.elf net.bin
 
@@ -209,7 +282,7 @@ net: net.elf net.bin
 FORCE:
 
 .net_config_selected: FORCE
-	@cur="$(NET_DHCP) $(NET_STATIC_IP) $(NET_STATIC_NETMASK) $(NET_STATIC_GATEWAY) $(NET_STATIC_DNS) $(NET_STATIC_NTP) $(NTP_SERVER) $(NTP_ENABLE) $(SSH_ENABLE) $(SSH_MAX_PACKET)"; \
+	@cur="$(NET_DHCP) $(NET_STATIC_IP) $(NET_STATIC_NETMASK) $(NET_STATIC_GATEWAY) $(NET_STATIC_DNS) $(NET_STATIC_NTP) $(NTP_SERVER) $(NTP_ENABLE) $(SSH_ENABLE) $(SSH_MAX_PACKET) $(NET_SOCK) $(TCP_RX_WINDOW) $(TCP_ADVERTISE_MSS) $(TCP_REASSEMBLY)"; \
 	if [ ! -f $@ ] || [ "$$(cat $@ 2>/dev/null)" != "$$cur" ]; then \
 		echo "$$cur" > $@; \
 	fi
@@ -288,13 +361,17 @@ monocypher.o: $(MONO)/monocypher.c $(MONO)/monocypher.h
 monocypher-ed25519.o: $(MONO)/monocypher-ed25519.c $(MONO)/monocypher-ed25519.h $(MONO)/monocypher.h
 	$(CC) $(CFLAGS) -I$(MONO) -c $(MONO)/monocypher-ed25519.c -o monocypher-ed25519.o
 
-ssh_sha256.o: ssh/ssh_sha256.c ssh/ssh_sha256.h
-	$(CC) $(CFLAGS) -c ssh/ssh_sha256.c -o ssh_sha256.o
+# SHA-256 now comes from sw/common, not from ssh/. It moved when
+# sw/apps/web needed it too (docs/tls.md); ssh/ssh_sha256.h is a shim
+# over the z_ names so the rest of the SSH client did not change, and
+# ssh/ssh_sha256.c is empty and can be deleted.
+zsha256.o: ../../common/zsha256.c ../../common/zsha256.h
+	$(CC) $(CFLAGS) -c ../../common/zsha256.c -o zsha256.o
 
 ssh_wire.o: ssh/ssh_wire.c ssh/ssh_wire.h
 	$(CC) $(CFLAGS) -c ssh/ssh_wire.c -o ssh_wire.o
 
-ssh_crypto.o: ssh/ssh_crypto.c ssh/ssh_crypto.h ssh/ssh_sha256.h $(MONO)/monocypher.h
+ssh_crypto.o: ssh/ssh_crypto.c ssh/ssh_crypto.h ssh/ssh_sha256.h ../../common/zsha256.h $(MONO)/monocypher.h
 	$(CC) $(CFLAGS) -I$(MONO) -c ssh/ssh_crypto.c -o ssh_crypto.o
 
 ssh_proto.o: ssh/ssh_proto.c ssh/ssh_proto.h ssh/ssh_wire.h ssh/ssh_crypto.h \
@@ -307,10 +384,13 @@ ssh.o: ssh/ssh.c ssh/ssh.h ssh/ssh_proto.h tcp.h ../../common/zrng.h
 telnet.o: telnet.c telnet.h tcp.h
 	$(CC) $(CFLAGS) -c telnet.c -o telnet.o
 
+sock.o: sock.c sock.h tcp.h
+	$(CC) $(CFLAGS) -c sock.c -o sock.o
+
 tftp.o: tftp.c tftp.h
 	$(CC) $(CFLAGS) -c tftp.c -o tftp.o
 
-net.o: net.c net_phy.h netcfg.h ssh/ssh.h ../../common/znet.h .net_config_selected ../../common/zsoc.h ../../common/zntp.h dhcp.h dns.h ntp.h
+net.o: net.c net_phy.h netcfg.h ssh/ssh.h sock.h ../../common/znet.h .net_config_selected ../../common/zsoc.h ../../common/zntp.h dhcp.h dns.h ntp.h
 	$(CC) $(CFLAGS) -c net.c -S -o net.asm
 	$(CC) $(CFLAGS) -c net.c -o net.o
 
@@ -360,3 +440,16 @@ clean:
 -include $(wildcard *.d)
 -include $(wildcard */*.d)
 -include $(wildcard */*/*.d)
+
+# -- host tests --
+#
+# Only the parts of this app that can run off-target. tcp.c's
+# reassembly is the one with real logic and no hardware in it.
+HOSTCC ?= cc
+
+.PHONY: test
+test:
+	$(HOSTCC) --std=gnu99 -w -I. -I../../common -o /tmp/test_tcp_ooo \
+		tests/test_tcp_ooo.c
+	/tmp/test_tcp_ooo
+

@@ -68,7 +68,15 @@ static char create_title[64];
 static z_obj_t title_keys[Z_WIN_TITLE_SLOTS][2];
 static z_obj_t title_vals[Z_WIN_TITLE_SLOTS][2];
 static z_obj_table_t title_tbl[Z_WIN_TITLE_SLOTS];
-static char title_text[Z_WIN_TITLE_SLOTS][32];
+// 64, matching WM_TITLE_MAX in sw/apps/wm/wm.c and create_title
+// above.
+//
+// At 32 this silently cut "Wikipedia, the free encyclopedia" to
+// "Wikipedia, the free encyclopedi" -- and raising the window
+// manager's limit alone changed nothing, because the string was
+// already truncated before it was ever sent. Three buffers carry a
+// title between an app and the titlebar; all three have to agree.
+static char title_text[Z_WIN_TITLE_SLOTS][64];
 static int title_slot;
 
 z_rv z_win_create(z_win_t *win, const char *title, uint32_t w, uint32_t h) {

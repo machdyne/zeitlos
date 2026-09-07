@@ -17,6 +17,21 @@
 
 #define Z_MEM_MAX_BLOCKS	256
 
+// -- ramdisk sizing (fs/ramdisk.h, mounted at /ram) --
+//
+// A SHARE of main memory, not a fixed size: scratch space should be
+// proportional to the machine, and a figure that suits a 32MB board
+// is most of a 1MB one.
+//
+// An eighth is enough for the case that motivated it -- sw/apps/web
+// spooling a page, where 258KB was a large one -- while leaving seven
+// eighths for everything else. The cap stops a very large board from
+// reserving tens of megabytes nothing has asked for.
+//
+// Not created at all at 1MB; see kernel.c.
+#define Z_RAMDISK_DIVISOR	8
+#define Z_RAMDISK_MAX		(4 * 1024 * 1024)
+
 #define Z_MEM_ALIGNMENT				4096
 #define Z_MEM_MIN_BLOCK_SIZE		32768
 

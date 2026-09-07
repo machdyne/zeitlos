@@ -133,5 +133,46 @@
 #define Z_NET_SSH_PREPARE        308
 #define Z_NET_SSH_PREPARE_REPLY  309
 
+// The next subject added anywhere in this shared sequence starts at
+// 310. sw/common/zweb.h has taken 310-312.
+
+// -- Z_PORT_CONNECT to net: three meanings, told apart by SHAPE --
+//
+// `net` is a zport provider (sw/common/zport.h, docs/ports.md) for
+// three different kinds of session, all through tcp.c's single TCB
+// and all arriving on the one Z_PORT_CONNECT subject. There is no
+// discriminator field; they are distinguished by the type of the
+// argument object:
+//
+//   Z_MAP { "ip": Z_UINT32, "port": Z_UINT32 }
+//       A RAW TCP SOCKET. Everything sent through the port goes out
+//       verbatim and everything received comes back verbatim -- no
+//       telnet option stripping, no IAC escaping. Requires a build
+//       with NET_SOCK=1 (the default); see sw/apps/net/sock.h.
+//
+//       This is what sw/apps/web uses, so that HTTP and TLS can live
+//       in that app rather than in this one -- see docs/web_app.md.
+//
+//   Z_UINT32, matching a live token from Z_NET_SSH_PREPARE
+//       An SSH session. See the long comment above.
+//
+//   Z_UINT32, anything else
+//       A telnet session to that IP on port 23.
+//
+// The map is tested FIRST, because a type test cannot be wrong where
+// the ssh token test has to guess.
+//
+// Note that a map is safe here, where the SSH handshake above had to
+// go to great lengths to keep its argument scalar. The reason is the
+// number of hops, not the type: the pointer double-translation
+// described above happens when one process READS a message object and
+// then RE-SENDS it, as `term` does. A socket client builds this map
+// and sends it straight to `net`, so it is translated exactly once and
+// nothing forwards it.
+//
+// ONE TCB MEANS ONE SESSION, system-wide. A socket connect while an
+// ssh or telnet session is open is refused, and vice versa. That is
+// not new -- telnet and ssh already excluded each other -- but it now
+// means browsing and an ssh session cannot happen at the same time.
 
 #endif

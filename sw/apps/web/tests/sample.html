@@ -1,0 +1,32 @@
+<!DOCTYPE html><html><head><title>Zeitlos &mdash; a test page</title></head>
+<body>
+<h1>Timeless Computing</h1>
+<p>Zeitlos is a work-in-progress SOC and OS developed in tandem, intended to
+provide a responsive graphical environment for running timeless applications
+on FPGA computers. It is the successor to <a href="/zucker">Zucker</a>.</p>
+<h2>Features</h2>
+<p>The SOC provides a 32-bit RISC-V CPU (PicoRV32), a line rasteriser and
+blitter with clipping, and virtual addressing through a Memory Translation
+Unit. See the <a href="https://github.com/machdyne/zeitlos">repository</a>
+for details &mdash; there&rsquo;s rather a lot of it.</p>
+<ul>
+<li>Pre-emptive multitasking</li>
+<li>Flat memory model with a virtual address space for apps</li>
+<li>FAT16/32 filesystem, with a <code>zexec</code> loader</li>
+</ul>
+<h3>Memory Translation Unit</h3>
+<p>Zeitlos doesn't have an MMU but instead has a single virtual address space
+that is remapped to a main memory address during context switches.</p>
+<blockquote><p>With the MTU, there is no need for position independent code
+or complicated address relocation.</p></blockquote>
+<h3>Boards</h3>
+<table>
+<tr><th>Board</th><th>FPGA</th><th>RAM</th></tr>
+<tr><td>Lakritz</td><td>ECP5-45</td><td>32MB</td></tr>
+<tr><td>Obst</td><td>ECP5-25</td><td>1MB</td></tr>
+</table>
+<hr>
+<pre>$ make BOARD=lakritz CABLE=dirtyJtag flash
+$ minicom -D /dev/ttyACM0 -b 1000000</pre>
+<p>Naïve caf&eacute; test: Gödel, Escher, Bach &#8212; 5&nbsp;&times;&nbsp;3.</p>
+</body></html>

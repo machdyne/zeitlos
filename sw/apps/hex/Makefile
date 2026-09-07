@@ -38,7 +38,7 @@ LDSCRIPT = ../../common/riscv-app.ld
 # zfsapp.o is needed by zflist.o (the file browser inside the dialogs)
 # as well as by hex.c itself.
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o \
-	zfsapp.o zflist.o zdialog.o hex.o
+	zfsapp.o zflist.o zdialog.o zedit.o hex.o
 
 hex: hex.elf hex.bin
 
@@ -138,3 +138,11 @@ clean:
 -include $(wildcard *.d)
 -include $(wildcard */*.d)
 -include $(wildcard */*/*.d)
+
+# sw/common/zedit.c -- the single-line text field.
+#
+# zdialog.c owned it privately until sw/apps/web's URL bar became its
+# second caller. Every app that links the dialog needs this too: a
+# shared widget is only shared if the build says so.
+zedit.o:
+	$(CC) $(CFLAGS) -c ../../common/zedit.c -o zedit.o

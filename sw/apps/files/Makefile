@@ -35,7 +35,7 @@ LDSCRIPT = ../../common/riscv-app.ld
 # zflist.o is the browsing widget this app is mostly made of, zdialog.o
 # the confirm/prompt dialogs, ztype.o the extension-to-app table.
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o \
-	zfsapp.o zflist.o zdialog.o ztype.o files.o
+	zfsapp.o zflist.o zdialog.o zedit.o ztype.o files.o
 
 files: files.elf files.bin
 
@@ -102,3 +102,11 @@ clean:
 -include $(wildcard *.d)
 -include $(wildcard */*.d)
 -include $(wildcard */*/*.d)
+
+# sw/common/zedit.c -- the single-line text field.
+#
+# zdialog.c owned it privately until sw/apps/web's URL bar became its
+# second caller. Every app that links the dialog needs this too: a
+# shared widget is only shared if the build says so.
+zedit.o:
+	$(CC) $(CFLAGS) -c ../../common/zedit.c -o zedit.o

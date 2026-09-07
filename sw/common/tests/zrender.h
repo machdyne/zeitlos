@@ -151,6 +151,34 @@ void z_fb_hw_fill_pattern(int x, int y, int w, int h, const uint8_t *pat) {
 				pat ? (pat[(y + j) & 7] >> ((x + i) & 7)) & 1 : 0, NULL);
 }
 
+// Blits a 1bpp source into the page, in framebuffer packing.
+//
+// Present so the off-device renderer can draw an in-place image
+// exactly as the hardware blitter would -- which is how the layout
+// tests can check that a supplied bitmap REPLACES the placeholder box
+// rather than being drawn on top of it.
+bool z_fb_hw_blit_mem(const void *src, int src_stride,
+	int src_x, int src_y, int dst_x, int dst_y, int w, int h) {
+
+	const uint32_t *s = (const uint32_t *)src;
+	int stride_w = src_stride / 4;		// BYTES on the way in, as the
+	int x, y;							// hardware call takes them
+
+	for (y = 0; y < h; y++) {
+		for (x = 0; x < w; x++) {
+			int sx = src_x + x, sy = src_y + y;
+			uint32_t word = s[sy * stride_w + (sx >> 5)];
+			// LEAST significant bit leftmost, as zbm.h describes --
+			// the opposite of font and icon data.
+			int bit = (int)((word >> (sx & 31)) & 1);
+			if (bit) z_fb_set_pixel(dst_x + x, dst_y + y, 1, NULL);
+		}
+	}
+
+	return true;
+
+}
+
 void z_fb_hw_line(int x0, int y0, int x1, int y1, int color,
 	const z_clip_t *c) {
 	int dx = x1 > x0 ? x1 - x0 : x0 - x1;
@@ -214,6 +242,26 @@ void z_fb_draw_text2(int x, int y, const char *s, int fg, int bg,
 //
 // Returns false if the address cannot be mapped; the caller should
 // return 77 so CI skips.
+// Reads and clears the shim's framebuffer.
+//
+// For tests that need to assert what was DRAWN rather than only that
+// drawing did not crash -- checking, for instance, that an in-place
+// image replaces its placeholder frame instead of being drawn inside
+// it.
+static int z_render_get(int x, int y) {
+	volatile uint32_t *vram = Z_RENDER_VRAM;
+	uint32_t bit;
+	if (x < 0 || y < 0 || x >= Z_SCREEN_W || y >= Z_SCREEN_H) return 0;
+	bit = (uint32_t)y * Z_SCREEN_W + (uint32_t)x;
+	return (int)((vram[bit / 32] >> (bit % 32)) & 1);
+}
+
+static void z_render_clear(void) {
+	volatile uint32_t *vram = Z_RENDER_VRAM;
+	for (long i = 0; i < ((long)Z_SCREEN_W * Z_SCREEN_H) / 32; i++)
+		vram[i] = 0;
+}
+
 static bool z_render_open(z_win_t *win, int win_w, int win_h) {
 
 	void *m = mmap(Z_RENDER_VRAM, Z_RENDER_VRAM_LEN,

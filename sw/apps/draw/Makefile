@@ -35,7 +35,7 @@ LDSCRIPT = ../../common/riscv-app.ld
 # zfsapp.o/zflist.o/zdialog.o are the file dialogs (new/open/save) --
 # zflist.o needs zfsapp.o, and draw.c needs both plus zdialog.o.
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o \
-	zfsapp.o zflist.o zdialog.o draw_icons.o draw.o
+	zfsapp.o zflist.o zdialog.o zedit.o draw_icons.o draw.o
 
 draw: draw.elf draw.bin
 
@@ -105,3 +105,11 @@ clean:
 -include $(wildcard *.d)
 -include $(wildcard */*.d)
 -include $(wildcard */*/*.d)
+
+# sw/common/zedit.c -- the single-line text field.
+#
+# zdialog.c owned it privately until sw/apps/web's URL bar became its
+# second caller. Every app that links the dialog needs this too: a
+# shared widget is only shared if the build says so.
+zedit.o:
+	$(CC) $(CFLAGS) -c ../../common/zedit.c -o zedit.o

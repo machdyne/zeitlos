@@ -84,7 +84,7 @@ LDSCRIPT = ../../common/riscv-app.ld
 # zfsapp.o is needed by zflist.o (the file browser inside the open
 # dialog) as well as by play.c's own streaming reads.
 OBJS = zeitlos.o zobj.o zsoc.o zgfx.o zfont_data.o zwin.o zwidget.o \
-	zfsapp.o zflist.o zdialog.o zkbd.o \
+	zfsapp.o zflist.o zdialog.o zedit.o zkbd.o \
 	adec.o stream.o play_icons.o prof.o play.o
 
 play: play.elf play.bin
@@ -186,3 +186,11 @@ clean:
 # considered permanently up to date and edits silently link stale
 # objects.
 -include $(wildcard *.d)
+
+# sw/common/zedit.c -- the single-line text field.
+#
+# zdialog.c owned it privately until sw/apps/web's URL bar became its
+# second caller. Every app that links the dialog needs this too: a
+# shared widget is only shared if the build says so.
+zedit.o:
+	$(CC) $(CFLAGS) -c ../../common/zedit.c -o zedit.o

@@ -2,6 +2,7 @@
 #define Z_FS_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 #include "fatfs/ff.h"
 #include "../../common/zexec.h"
@@ -61,6 +62,28 @@ int fs_close_write(FIL *f);
 int fs_sync(FIL *f);
 // flush and unmount; call before cutting power or reprogramming
 int fs_unmount(void);
+
+// -- the ramdisk, mounted at /ram --
+//
+// Created at boot on any machine with more than 1MB of RAM (see
+// kernel.c). Backed by ramdisk.c and reachable through every path
+// function here: /ram/foo is FatFs 1:/foo.
+//
+// Not persistent, not reserved, not arbitrated -- see ramdisk.h.
+// Callers must cope with it being absent or full rather than assume
+// it is there.
+// Rewrites a mount prefix (/ram) into a FatFs volume prefix (1:).
+// Returns `path` unchanged when nothing matches.
+//
+// Must be applied to EVERY path that reaches FatFs. The functions in
+// this file do it themselves; sw/os/fsapi.c has to call it explicitly
+// because it goes to f_open()/f_opendir() directly.
+#define FS_PATH_MAX 320
+const char *fs_path_resolve(const char *path, char *buf, uint32_t cap);
+
+bool fs_ramdisk_create(uint32_t bytes);
+void fs_ramdisk_destroy(void);
+bool fs_ramdisk_present(void);
 
 int fs_open_read(FIL *f, char *path);
 int32_t fs_read_chunk(FIL *f, void *buf, uint32_t maxlen);

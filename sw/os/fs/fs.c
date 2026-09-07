@@ -14,7 +14,144 @@
 
 FATFS sdvol0;
 
+#include "ramdisk.h"
+
+// The ramdisk volume, FatFs drive 1, reachable as /ram.
+static FATFS ramvol1;
+static bool ram_mounted;
+
+// -- path routing --
+//
+// One namespace for apps: /ram/x rather than a drive letter.
+//
+// FatFs would have given drive prefixes for free -- "1:/x", or "ram:/x"
+// with FF_STR_VOLUME_ID -- and that syntax would then have leaked into
+// every path string in the tree, every listing, every file dialog and
+// the docs. Translating in one place costs this table and keeps `ls
+// /ram` working like `ls` anywhere else.
+//
+// A table rather than a hardcoded comparison because flash-as-a-volume
+// is the obvious next one, and app-facing syntax should not have to
+// change again for it.
+//
+// The wart, stated plainly: /ram is now a RESERVED NAME at the root. A
+// directory called /ram on the card becomes unreachable.
+static const struct {
+	const char	*prefix;
+	const char	*vol;
+} fs_mounts[] = {
+	{ "/ram", "1:" },
+};
+
+// Case-insensitive, because paths here are not.
+//
+// sh.c presents and passes paths uppercased, FAT-style, so "/RAM" and
+// "/ram" are the same place and a case-sensitive compare silently
+// routes one of them to the SD card instead. That is exactly what
+// `ls /RAM` showing nothing was.
+static int fs_prefix_eq(const char *a, const char *b, uint32_t n) {
+	for (uint32_t i = 0; i < n; i++) {
+		char x = a[i], y = b[i];
+		if (x >= 'A' && x <= 'Z') x = (char)(x - 'A' + 'a');
+		if (y >= 'A' && y <= 'Z') y = (char)(y - 'A' + 'a');
+		if (x != y || !x) return 0;
+	}
+	return 1;
+}
+
+// Rewrites a mount prefix into a FatFs volume prefix. Returns `path`
+// unchanged when nothing matches, so the common case copies nothing.
+//
+// PUBLIC, because the app-facing syscalls do not come through this
+// file: sw/os/fsapi.c calls f_open()/f_opendir() directly, so a
+// resolver private to fs.c never ran for anything an application did.
+// Every path entering FatFs has to pass through here, wherever it
+// enters from.
+const char *fs_path_resolve(const char *path, char *buf, uint32_t cap) {
+
+	if (!path) return path;
+
+	for (unsigned i = 0; i < sizeof(fs_mounts) / sizeof(fs_mounts[0]); i++) {
+
+		const char *p = fs_mounts[i].prefix;
+		uint32_t n = (uint32_t)strlen(p);
+
+		if (!fs_prefix_eq(path, p, n)) continue;
+
+		// "/ram" and "/ram/..." match; "/rambling" must not.
+		if (path[n] != '\0' && path[n] != '/') continue;
+
+		snprintf(buf, cap, "%s%s", fs_mounts[i].vol,
+			path[n] ? path + n : "/");
+		return buf;
+
+	}
+
+	return path;
+
+}
+
+// Creates the ramdisk and puts a fresh filesystem on it.
+//
+// Formatted every time rather than preserved: nothing on it is meant
+// to outlive a boot, and a volume that survives a crashed app
+// accumulates files nobody owns.
+bool fs_ramdisk_create(uint32_t bytes) {
+
+	static BYTE work[FF_MAX_SS];
+	MKFS_PARM opt;
+	FRESULT res;
+
+	if (ram_mounted) return true;
+
+	if (!ramdisk_init(bytes)) {
+		printf("fs: ramdisk: could not allocate %lu bytes\n",
+			(unsigned long)bytes);
+		return false;
+	}
+
+	memset(&opt, 0, sizeof(opt));
+	opt.fmt = FM_FAT;			// FAT16: no FAT32 reserved-sector overhead
+	opt.n_fat = 1;				// no redundancy worth having in RAM
+	opt.au_size = 4096;
+
+	res = f_mkfs("1:", &opt, work, sizeof work);
+	if (res != FR_OK) {
+		printf("fs: ramdisk: mkfs failed (%d)\n", (int)res);
+		ramdisk_free();
+		return false;
+	}
+
+	res = f_mount(&ramvol1, "1:", 1);
+	if (res != FR_OK) {
+		printf("fs: ramdisk: mount failed (%d)\n", (int)res);
+		ramdisk_free();
+		return false;
+	}
+
+	ram_mounted = true;
+
+	printf(" - ramdisk: %lu KB at /ram\n",
+		(unsigned long)(ramdisk_size() / 1024));
+
+	return true;
+
+}
+
+void fs_ramdisk_destroy(void) {
+	if (!ram_mounted) return;
+	f_mount(NULL, "1:", 0);
+	ramdisk_free();
+	ram_mounted = false;
+}
+
+bool fs_ramdisk_present(void) { return ram_mounted; }
+
 int fs_load(uint32_t dst, char *path) {
+
+	char rp_[FS_PATH_MAX];
+	path = (char *)fs_path_resolve(path, rp_, sizeof(rp_));
+
 
 	FIL f;
 	FRESULT res;
@@ -63,6 +200,10 @@ int fs_load(uint32_t dst, char *path) {
 
 void *fs_mallocfile(char *path) {
 
+	char rp_[FS_PATH_MAX];
+	path = (char *)fs_path_resolve(path, rp_, sizeof(rp_));
+
+
 	FIL f;
 	FRESULT res;
 	FSIZE_t sz;
@@ -89,6 +230,10 @@ void *fs_mallocfile(char *path) {
 }
 
 int fs_touch(char *path) {
+
+	char rp_[FS_PATH_MAX];
+	path = (char *)fs_path_resolve(path, rp_, sizeof(rp_));
+
 
 	FIL f;
 	FRESULT res;
@@ -220,6 +365,10 @@ uint32_t fs_free(void) {
 }
 
 uint32_t fs_size(char *path) {
+
+	char rp_[FS_PATH_MAX];
+	path = (char *)fs_path_resolve(path, rp_, sizeof(rp_));
+
 	FIL f;
 	FRESULT res;
 	FSIZE_t fs = 0;
@@ -234,6 +383,10 @@ uint32_t fs_size(char *path) {
 }
 
 int fs_write_file(char *path, char *buf, uint32_t len) {
+
+	char rp_[FS_PATH_MAX];
+	path = (char *)fs_path_resolve(path, rp_, sizeof(rp_));
+
 
 	FIL f;
 	FRESULT res;
@@ -261,6 +414,10 @@ int fs_write_file(char *path, char *buf, uint32_t len) {
 static uint32_t chunk_unsynced;
 
 int fs_open_write(FIL *f, char *path) {
+
+	char rp_[FS_PATH_MAX];
+	path = (char *)fs_path_resolve(path, rp_, sizeof(rp_));
+
 	chunk_unsynced = 0;
 	FRESULT res = f_open(f, path, FA_WRITE | FA_CREATE_ALWAYS);
 	if (res != FR_OK) {
@@ -338,6 +495,10 @@ int fs_close_write(FIL *f) {
 }
 
 int fs_open_read(FIL *f, char *path) {
+
+	char rp_[FS_PATH_MAX];
+	path = (char *)fs_path_resolve(path, rp_, sizeof(rp_));
+
 	FRESULT res = f_open(f, path, FA_READ | FA_OPEN_EXISTING);
 	if (res != FR_OK) {
 		printf("fs_open_read: failed; error code: %i\n", res);
@@ -363,6 +524,10 @@ int fs_close_read(FIL *f) {
 
 int fs_mkdir(char *path) {
 
+	char rp_[FS_PATH_MAX];
+	path = (char *)fs_path_resolve(path, rp_, sizeof(rp_));
+
+
 	FRESULT res;
 
 	printf("making directory '%s' ...\n", path);
@@ -380,6 +545,10 @@ int fs_mkdir(char *path) {
 
 int fs_unlink(char *path) {
 
+	char rp_[FS_PATH_MAX];
+	path = (char *)fs_path_resolve(path, rp_, sizeof(rp_));
+
+
 	FRESULT res;
 
 	printf("deleting '%s' ...\n", path);
@@ -396,6 +565,10 @@ int fs_unlink(char *path) {
 }
 
 void fs_list_dir(char *path) {
+
+	char rp_[FS_PATH_MAX];
+	path = (char *)fs_path_resolve(path, rp_, sizeof(rp_));
+
 
 	FRESULT res;
 	DIR dir;
@@ -514,6 +687,10 @@ void fs_list_dir(char *path) {
 // exactly right for an old --pad-to image whose bss is already present
 // as zeros (see z_exec_parse()).
 int fs_exec_info(char *path, z_exec_info_t *info) {
+
+	char rp_[FS_PATH_MAX];
+	path = (char *)fs_path_resolve(path, rp_, sizeof(rp_));
+
 
 	FIL f;
 	FRESULT res;
@@ -681,6 +858,10 @@ static fs_exec_src_t fs_exec_resolve(const char *name, char *resolved,
 
 int fs_exec_info_any(char *path, z_exec_info_t *info) {
 
+	char rp_[FS_PATH_MAX];
+	path = (char *)fs_path_resolve(path, rp_, sizeof(rp_));
+
+
 	char resolved[FS_RESOLVED_MAX];
 	return (fs_exec_resolve(path, resolved, info) == FS_EXEC_NONE) ? 1 : 0;
 
@@ -689,6 +870,10 @@ int fs_exec_info_any(char *path, z_exec_info_t *info) {
 // true if `path` resolved to the flash copy rather than the card.
 // Only for reporting -- the loader below re-resolves on its own.
 int fs_exec_is_flash(char *path) {
+
+	char rp_[FS_PATH_MAX];
+	path = (char *)fs_path_resolve(path, rp_, sizeof(rp_));
+
 	char resolved[FS_RESOLVED_MAX];
 	return (fs_exec_resolve(path, resolved, NULL) == FS_EXEC_ZAR) ? 1 : 0;
 }
@@ -702,6 +887,10 @@ int fs_exec_is_flash(char *path) {
 // all three entry points share fs_exec_resolve(), so they cannot
 // disagree about which of root, APPS/ or flash a name meant.
 int fs_load_exec_any(uint32_t dst, char *path, const z_exec_info_t *info) {
+
+	char rp_[FS_PATH_MAX];
+	path = (char *)fs_path_resolve(path, rp_, sizeof(rp_));
+
 
 	char resolved[FS_RESOLVED_MAX];
 	fs_exec_src_t src = fs_exec_resolve(path, resolved, NULL);
@@ -717,6 +906,10 @@ int fs_load_exec_any(uint32_t dst, char *path, const z_exec_info_t *info) {
 }
 
 int fs_load_exec(uint32_t dst, char *path, const z_exec_info_t *info) {
+
+	char rp_[FS_PATH_MAX];
+	path = (char *)fs_path_resolve(path, rp_, sizeof(rp_));
+
 
 	FIL f;
 	FRESULT res;

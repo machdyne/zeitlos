@@ -17,7 +17,7 @@ LDFLAGS = -march=$(ARCH) -mabi=$(ABI) $(LIBC_FLAGS)
 LDSCRIPT = ../../common/riscv-app.ld
 
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o \
-	zsoc.o zgpio.o zspi.o zmmod.o zfsapp.o zflist.o zdialog.o mmod.o
+	zsoc.o zgpio.o zspi.o zmmod.o zfsapp.o zflist.o zdialog.o zedit.o mmod.o
 
 mmod: mmod.elf mmod.bin
 
@@ -106,3 +106,11 @@ clean:
 -include $(wildcard *.d)
 -include $(wildcard */*.d)
 -include $(wildcard */*/*.d)
+
+# sw/common/zedit.c -- the single-line text field.
+#
+# zdialog.c owned it privately until sw/apps/web's URL bar became its
+# second caller. Every app that links the dialog needs this too: a
+# shared widget is only shared if the build says so.
+zedit.o:
+	$(CC) $(CFLAGS) -c ../../common/zedit.c -o zedit.o

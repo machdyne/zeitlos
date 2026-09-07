@@ -1,54 +1,52 @@
 #ifndef SSH_SHA256_H
 #define SSH_SHA256_H
 
-#include <stdint.h>
-#include <stddef.h>
-
 /*
  * Zeitlos
- * Copyright (c) 2025 Lone Dynamics Corporation. All rights reserved.
+ * Copyright (c) 2025-2026 Lone Dynamics Corporation. All rights reserved.
  *
- * SHA-256 (FIPS 180-4).
+ * THIS IS A FORWARDING SHIM. The implementation moved to
+ * sw/common/zsha256.c when sw/apps/web needed SHA-256 for TLS 1.3 and
+ * two apps ended up compiling the same file out of ssh's private
+ * directory.
  *
- * -- Why this file exists at all --
+ * The old names are kept working here rather than renamed at their 35
+ * call sites across ssh_crypto.c, ssh_proto.c and sw/test/. Those are
+ * a working SSH client; changing them would be a mechanical edit with
+ * no upside and a real chance of a typo in code that is hard to test.
  *
- * sw/ext/monocypher provides BLAKE2b and SHA-512 and NO SHA-256, and
- * SSH needs SHA-256 in two places that are not optional: the
- * `curve25519-sha256` exchange hash (RFC 8731) and the key derivation
- * in RFC 4253 section 7.2. So it is supplied here.
+ * New code should include sw/common/zsha256.h and use the z_ names
+ * directly. Nothing here is deprecated in the sense of going away --
+ * it costs one header and no instructions, since the wrappers below
+ * are static inline and compile to nothing.
  *
- * Deliberately NOT added to sw/ext/monocypher/, even though that is
- * where it would sit most naturally. That directory is a vendored,
- * unmodified, hash-checkable copy of an upstream release (see its
- * README.md), and the moment anything local lives in it, the next
- * person to update Monocypher either loses this silently or has to
- * re-merge it by hand.
- *
- * -- Streaming, because the exchange hash needs it --
- *
- * The incremental API is not decoration. The SSH exchange hash covers
- * V_C || V_S || I_C || I_S || K_S || Q_C || Q_S || K, and I_S (the
- * server's KEXINIT) can be well over a kilobyte. Feeding it in as it
- * is parsed means never storing a second copy -- see ssh_kex.c, which
- * hashes V_C, V_S and I_C the moment our own KEXINIT goes out, long
- * before the server's reply arrives.
+ * ssh_sha256.c is now an empty stub and can be deleted.
  */
 
-#define SSH_SHA256_DIGEST 32
-#define SSH_SHA256_BLOCK  64
+#include "../../../common/zsha256.h"
 
-typedef struct {
-	uint32_t state[8];
-	uint64_t count;					// total bytes fed, for the length field
-	uint8_t  buf[SSH_SHA256_BLOCK];
-	uint32_t buf_len;
-} ssh_sha256_ctx;
+#define SSH_SHA256_DIGEST Z_SHA256_DIGEST
+#define SSH_SHA256_BLOCK  Z_SHA256_BLOCK
 
-void ssh_sha256_init(ssh_sha256_ctx *ctx);
-void ssh_sha256_update(ssh_sha256_ctx *ctx, const void *data, uint32_t len);
-void ssh_sha256_final(ssh_sha256_ctx *ctx, uint8_t out[SSH_SHA256_DIGEST]);
+typedef z_sha256_ctx ssh_sha256_ctx;
 
-// One-shot convenience -- same result as init/update/final.
-void ssh_sha256(uint8_t out[SSH_SHA256_DIGEST], const void *data, uint32_t len);
+static inline void ssh_sha256_init(ssh_sha256_ctx *ctx) {
+	z_sha256_init(ctx);
+}
+
+static inline void ssh_sha256_update(ssh_sha256_ctx *ctx,
+	const void *data, uint32_t len) {
+	z_sha256_update(ctx, data, len);
+}
+
+static inline void ssh_sha256_final(ssh_sha256_ctx *ctx,
+	uint8_t out[SSH_SHA256_DIGEST]) {
+	z_sha256_final(ctx, out);
+}
+
+static inline void ssh_sha256(uint8_t out[SSH_SHA256_DIGEST],
+	const void *data, uint32_t len) {
+	z_sha256(out, data, len);
+}
 
 #endif
