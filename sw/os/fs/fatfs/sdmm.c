@@ -148,7 +148,7 @@ BYTE CardType;			/* b0:MMC, b1:SDv1, b2:SDv2, b3:Block addressing */
 
 
 /*-----------------------------------------------------------------------*/
-/* Transmit bytes to the card (bitbanging)                               */
+/* Transmit bytes to the card (hardware SPI master, see spi_xchg)        */
 /*-----------------------------------------------------------------------*/
 
 static
@@ -167,7 +167,7 @@ void xmit_mmc (
 
 
 /*-----------------------------------------------------------------------*/
-/* Receive bytes from the card (bitbanging)                              */
+/* Receive bytes from the card (hardware SPI master, see spi_xchg)       */
 /*-----------------------------------------------------------------------*/
 
 static
