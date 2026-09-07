@@ -5,14 +5,26 @@ documents, follows links, and acts as a **fetch service** so that
 other apps can make HTTP and HTTPS requests without containing any
 network code of their own.
 
-It is roughly a Lynx-class browser: no JavaScript, no CSS, no images
-in the page flow. That is a smaller thing than a modern browser by
-several orders of magnitude, and it is still enough to read
+It is roughly a Lynx-class browser: no JavaScript, no CSS, no layout
+beyond a single column. That is a smaller thing than a modern browser
+by several orders of magnitude, and it is still enough to read
 Wikipedia, documentation, mailing list archives, RFCs, plain-text
 news, and the parts of the web that are still documents.
 
-**Status: partially implemented.** See "Where this stands" at the end
-for exactly what exists today.
+**Images are drawn**, as placeholder boxes that load in place when
+clicked -- see [html_layout.md](html_layout.md).
+
+**Status: it runs.** On a Lakritz board it fetches, verifies and
+renders real pages from the public internet over TLS 1.3 with a
+verified certificate chain. See "Where this stands" at the end.
+
+| | |
+|---|---|
+| HTTP/1.1 | keep-alive, chunked, redirects, `Content-Encoding: gzip` |
+| TLS 1.3 | ChaCha20-Poly1305, X.509 chain verification against a root store on the card |
+| Signatures | RSA PKCS#1 and PSS, ECDSA P-256 and P-384, optionally hardware-accelerated |
+| Documents | streaming HTML parser, sparse checkpoint index, unlimited page size |
+| Images | BMP, PNM, GIF and JPEG, decoded and dithered to 1bpp |
 
 ---
 
@@ -73,8 +85,8 @@ it lives in `web`, which registers itself as a fetch service.
       |                       |   {ip, port}         |   (sock.c)
       |                       |<-- Z_PORT_DATA ----->|
       |                       |                      |
-      |                       | TLS, HTTP, spool     |
-      |                       | to the card          |
+      |                       | TLS, HTTP, gzip,     |
+      |                       | spool to /ram or card|
       |<-- Z_STREAM_CHUNK ----|                      |
 ```
 
@@ -108,18 +120,25 @@ One TCB means one connection at a time, system-wide. Browsing and an
 SSH session are mutually exclusive, exactly as telnet and SSH already
 are.
 
-### Everything fetched is spooled to the card
+### Everything fetched is spooled
 
-`web` writes every response body to a cache file as it arrives, and
-serves the stream to its client from that file. Three things fall out
-of it:
+`web` writes every response body to a spool file as it arrives, and
+serves the stream to its client from that file.
+
+The spool goes on the **RAM disk** when there is one and the card
+otherwise -- `/ram/webspool`, falling back to `/web/spool`. That is
+worth thirty times the read speed when re-reading a page to index it;
+see [ramdisk.md](ramdisk.md). `web` prints which it chose.
+
+Three things fall out of spooling at all:
 
 - The renderer and an external client use the same path, so the
   public API is the one the browser itself exercises.
 - Back and forward are free, and re-rendering at a new window width
   costs no network.
 - The connection is never stalled waiting for a slow consumer, which
-  matters when the window is 2048 bytes.
+  matters when the receive window is only as large as the NIC's
+  buffer -- see [networking.md](networking.md).
 
 ### Reading a page too large to hold
 
@@ -264,9 +283,13 @@ record a new one.
 | 3b | RSA, ECDSA P-256 and P-384, SHA-384 | **done** -- see [x509.md](x509.md) |
 | 3c | Chain validation, root store on the card | **done**. `WEB_TLS_INSECURE` is gone |
 | 3d | Hardware Montgomery multiplier | **done** -- `rtl/montmul.v`, see [crypto_hw_options.md](crypto_hw_options.md) |
-| 4a | HTTP keep-alive, RAM disk, indexed trust store | **done** |
-| 4b | Progressive rendering, reader mode, anchors, better tables, GET forms, bookmarks, find-in-page, a real cache | |
-| 5 | gzip inflate, TCP throughput work, TLS session resumption | |
+| 4a | HTTP keep-alive, RAM disk, indexed trust store, editable URL bar with history | **done** |
+| 4b | gzip (`Content-Encoding`) | **done** -- `sw/common/zinflate.c`, see [http.md](http.md) |
+| 4c | Image placeholders, loaded in place on click | **done** -- see [html_layout.md](html_layout.md) |
+| 5a | PNG decoding | `zinflate.c` exists; the chunk and filter layers do not |
+| 5b | TCP out-of-order reassembly | written, tested, and OFF -- see [networking.md](networking.md) |
+| 5c | TLS session resumption | see [tls_resumption.md](tls_resumption.md) |
+| 5d | Progressive rendering, reader mode, anchors, GET forms, bookmarks, find-in-page, a real cache | |
 | 6 | Optional off-board proxy for the scripted web | |
 
 ### Where the time goes
@@ -380,18 +403,34 @@ make render DOC=~/pages/wikipedia.html && display /tmp/web.pbm
 `run net`, then `run web`, then press `g`.
 
 Keys: arrows and PageUp/PageDown scroll, Home/End jump, Tab selects a
-link, Enter follows it, `g` or Ctrl+L opens a URL, `b` or Backspace
-goes back, `f` forward, `r` reloads. The mouse works on links and the
-scrollbar.
+link, Enter follows it, `g` or Ctrl+L focuses the URL bar, `b` or
+Backspace goes back, `f` forward, `r` reloads. In the URL bar, Enter
+navigates and Escape restores what was there.
 
-`/web` must exist on the card, or the first fetch reports that it
-cannot write the spool.
+The mouse works on links, images, the URL bar, the Back and Forward
+buttons, and the scrollbar.
+
+`/web` must exist on the card, and `/web/roots.der` must be there for
+HTTPS -- `make roots` builds it, see `sw/apps/web/roots/README.md`.
+The clock must be set, which `net` does over NTP; a certificate
+cannot be checked for expiry without one and `web` refuses rather
+than skipping the check.
+
+Clicking an image box loads the picture in place. Clicking a link
+follows it.
 
 Things that are known-missing rather than broken:
 
 - **No progressive rendering.** A page downloads completely, then
   appears. `page.c` is written and tested for the streaming case, so
   this is a change in `web.c` rather than a redesign.
+- **No PNG.** BMP, PNM, GIF and JPEG decode; PNG is recognised and
+  refused. `sw/common/zinflate.c` is what its compressed stream
+  needs and already exists for gzip, so what remains is the chunk
+  and unfilter layers.
+- **One image at a time.** A decoded bitmap is the size of its box
+  and there is no dynamic memory, so clicking a second image
+  replaces the first.
 - **Fragment links jump to the top**, because there is no anchor
   index yet.
 - **One TCB**, so browsing and an SSH session are mutually exclusive,
