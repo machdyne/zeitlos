@@ -226,13 +226,13 @@ static uint32_t spool_pos;
 // HTTP chunk at a time.
 //
 // on_body() is called with whatever a record decrypted to -- often a
-// kilobyte -- and a bit-banged SD write has a fixed cost per call
+// kilobyte -- and an SD write has a fixed cost per call
 // that dwarfs the bytes. net's queue filling at 34KB while the app
 // had relayed only 25KB is that cost: the card, not the network, was
 // setting the pace.
 // 16KB, matching a maximum TLS record.
 //
-// A bit-banged SD write costs far more per CALL than per byte, so the
+// An SD write costs far more per CALL than per byte, so the
 // batch size is close to a direct multiplier on how fast the body can
 // be drained -- and the body is drained on the same thread that has
 // to keep acking net.
@@ -614,7 +614,7 @@ static tls_ctx_t tls;
 // measurement arrived: against en.wikipedia.org the handshake
 // finished only AFTER the server had given up and closed the
 // connection -- net logged "session ended" before web logged "tls:
-// up". A few hundred kilobytes off a bit-banged SD card, per
+// up". A few hundred kilobytes off an SPI SD card, per
 // connection, is seconds.
 //
 // The index holds a hash of each subject DN and where that
@@ -684,7 +684,7 @@ static uint32_t root_read_at(int fd, uint32_t off, uint32_t *pos) {
 // the file to find one.
 //
 // That cost 1.65 SECONDS on the first HTTPS fetch of every run, off a
-// bit-banged SD card. It is build-time work and it belongs at build
+// SPI SD card. It is build-time work and it belongs at build
 // time.
 //
 // A store WITHOUT the header still works -- it is read as a plain

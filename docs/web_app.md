@@ -458,7 +458,7 @@ In rough order of my own confidence:
    shape that made wm report a missed redraw ack for `term`.
    Bounded, but not free.
 3. **Card I/O.** Every byte goes to the spool and comes back out of
-   it over a bit-banged SD interface. `page.c` seeks only when the
+   it over an SPI SD interface. `page.c` seeks only when the
    handle is not already in the right place, which is the same
    optimisation `read` needed, but it has not been measured here.
 4. **The service provider's stream path**, which is the least

@@ -66,7 +66,7 @@
  *
  * -- Chunking is the caller's job --
  *
- * Nothing here yields. A 32MB read over bit-banged SPI is minutes, so
+ * Nothing here yields. A 32MB read over SPI is minutes, so
  * an interactive caller must break it into pieces and do something
  * else in between; z_mmod_read() moves exactly what it is asked for
  * and returns. Z_MMOD_CHUNK is a reasonable slice.
@@ -84,7 +84,7 @@
 #include "zspi.h"
 
 // A sensible amount to move per call from an interactive caller.
-// Small enough that a slice is milliseconds even bit-banged, large
+// Small enough that a slice is milliseconds even over SPI, large
 // enough that the per-call command overhead is amortised.
 #define Z_MMOD_CHUNK 256
 

@@ -3,7 +3,18 @@
 A FatFs volume backed by main memory, created at boot and reachable
 from every app as `/ram`.
 
-## What it achieves
+## Why
+
+The SD card is SPI, through the SOC's hardware SPI master
+(`reg_spisd_*`, one byte per exchange with a busy poll), and it
+shows. Measured on hardware,
+`sw/apps/web` spent **13.3 seconds** re-reading a 258KB page off the
+card to index it, against 1.4 seconds writing it — roughly 19 KB/s
+read. A browser wants scratch space for one page, not durable
+storage, and so does anything else that needs to put a few hundred
+kilobytes somewhere and read it back.
+
+## What it achieved
 
 Measured on the same page after the change:
 
@@ -32,22 +43,41 @@ support, so a second drive costs one small driver and one line of
 configuration — and every app gets it through the file API it already
 uses, with **no new API at all**.
 
-## Why `/ram` and not a drive letter
+## `/ram` is the name to use; `1:` still works
 
-FatFs would have given drive prefixes for free — `1:/x`, or `ram:/x`
-with `FF_STR_VOLUME_ID` — with no translation code at all. That
-syntax then leaks into every path string in the tree, every listing,
-every file dialog, and the docs.
+Both reach the same volume.
 
-`/ram` keeps one namespace: `ls /ram` works like `ls` anywhere else,
-the file browser walks into it, and no app learns new syntax. The
-cost is a translation step in `fs.c` and a **reserved name at the
-root** — a directory called `/ram` on the card is now unreachable.
-That is a real wart, accepted deliberately.
+`fs_path_resolve()` rewrites a known prefix and **passes everything
+else through unchanged**, so FatFs's own drive syntax was never
+removed — `1:/scratch` reaches the ramdisk exactly as `/ram/scratch`
+does. It shows up in the wild: the kernel's delete message prints the
+resolved path, so an app that wrote to `/ram/webspool.img` produces
+
+```
+deleting '1:/webspool.img' ...
+```
+
+which is the same file under its FatFs name, not a second one.
+
+**`/ram` is the form to write.** It keeps one namespace: `ls /ram`
+works like `ls` anywhere else, the file browser walks into it, and no
+app learns new syntax. Drive prefixes would otherwise leak into every
+path string in the tree, every listing, every file dialog, and these
+docs.
+
+The cost is a translation step in `fs.c` and a **reserved name at the
+root** — a directory called `/ram` on the card is unreachable. A real
+wart, accepted deliberately.
 
 It is a small mount table rather than a hardcoded comparison, because
 flash-as-a-volume is the obvious next one and app-facing syntax
-should not have to change again for it.
+should not have to change again for it:
+
+```c
+static const struct { const char *prefix, *vol; } fs_mounts[] = {
+    { "/ram", "1:" },
+};
+```
 
 ## Two places resolve paths, not one
 
@@ -141,6 +171,7 @@ web: spool: /ram/webspool
 | `sw/os/fs/fatfs/diskio_mux.c` | drive dispatch: 0 = SD, 1 = RAM |
 | `sw/os/fs/fatfs/sdmm.c` | entry points renamed `sd_disk_*` |
 | `sw/os/fs/fs.c` | mount table, `/ram` routing, `fs_ramdisk_create()` |
+| `sw/os/fsapi.c` | resolves paths for the app-facing syscalls |
 | `sw/os/mem.h` | `Z_RAMDISK_DIVISOR`, `Z_RAMDISK_MAX` |
 | `sw/os/kernel.c` | creation at boot |
 

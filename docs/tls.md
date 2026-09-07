@@ -101,7 +101,7 @@ done > roots.der
 ```
 
 The store is scanned **linearly** per handshake. A full Mozilla set is
-around 150 certificates and 250KB off a bit-banged SD card, which is
+around 150 certificates and 250KB off an SPI SD card, which is
 not free; an index keyed on the issuer DN is the obvious fix and is
 deferred until there is a measurement to justify a format.
 

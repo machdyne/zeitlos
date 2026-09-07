@@ -28,7 +28,8 @@
  *
  * Flash is memory-mapped on this SOC, which is what makes this cheap:
  * loading from it is a memcpy, no filesystem and no SPI driver, and it
- * is FASTER than the SD card (which is bit-banged SPI, sdmm.c). The
+ * is FASTER than the SD card (which is SPI through the SOC's
+ * hardware master, sdmm.c). The
  * BIOS already loads the kernel this way (load_zeitlos(), bios.c) and
  * sw/os/logo.c already reads the boot splash straight out of it -- see
  * logo.h's own comment. This is the same trick a third time.

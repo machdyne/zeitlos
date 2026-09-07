@@ -17,7 +17,7 @@
  * zeros-in-the-file IS the mechanism -- but it means every process
  * launch reads its whole .bss off the SD card. For `repl` that is
  * ~110KB of zeros out of a 293KB file, roughly a third of its load
- * time spent transferring nothing, on a bit-banged SPI card.
+ * time spent transferring nothing, on an SPI card.
  *
  * It was also a format with no identity: a bare `.bin` says nothing
  * about itself, so the loader had to infer everything from the file

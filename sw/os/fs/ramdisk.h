@@ -13,7 +13,8 @@
  *
  * -- why --
  *
- * The SD card is bit-banged SPI, and it shows: sw/apps/web spends
+ * The SD card is SPI through the SOC's hardware master, and it still
+ * shows: sw/apps/web spends
  * roughly 13 seconds re-reading a 258KB page off the card to index
  * it, against 1.4 seconds writing it. A browser wants a scratch area
  * for one page, not durable storage, and so does anything else that

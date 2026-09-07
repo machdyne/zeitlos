@@ -11,7 +11,7 @@
 
 // Bytes read from the source per parser feed. 1024 rather than the
 // transport's 512 because this is card I/O, not network: the read
-// callback goes to a bit-banged SD interface where per-call overhead
+// callback goes to an SPI SD interface where per-call overhead
 // dominates, and html.c is indifferent to the chunk size (its own
 // tests feed it at 1, 7, 512 and 4096 and require identical output).
 #define PAGE_IO_CHUNK  1024
