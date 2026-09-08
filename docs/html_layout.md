@@ -433,13 +433,17 @@ line is not the unit the content is made of.
 
 ### Formats
 
-Whatever `sw/common/zimg.c` decodes -- BMP, PNM, GIF and JPEG today.
-**PNG is recognised and not yet decoded**; `sw/common/zinflate.c`
-exists and is what its IDAT stream needs, so the remaining work is the
-chunk and filter layer. See docs/http.md for the decompressor.
+Whatever `sw/common/zimg.c` decodes: **BMP, PNM, GIF, JPEG and PNG**
+(see docs/png.md), plus **SVG** through `sw/common/zsvg.c` (see
+docs/svg.md), which is rendered rather than decoded.
+
+SVG matters most of the four on this display. A photograph dithered to
+one bit is mush; a diagram is nearly lossless, and site logos and
+Wikipedia's diagrams are SVG.
 
 The format is sniffed from CONTENT, not the filename: a `.jpg` that is
 really a PNG is common on real sites.
 
 On a 1bpp screen a photograph is mostly noise, so line art and
-diagrams are what this is really for.
+diagrams are what this is really for -- which is the argument for SVG
+over any of the raster formats.

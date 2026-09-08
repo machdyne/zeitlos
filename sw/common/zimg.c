@@ -24,6 +24,10 @@
 #include <string.h>
 
 #include "zimg.h"
+
+#if Z_IMG_HAVE_PNG
+#include "zinflate.h"
+#endif
 #include "zprof.h"
 #include "zfsapp.h"
 
@@ -106,6 +110,28 @@ typedef union {
 		int32_t			ws[64];
 		int16_t			coef[64];
 	} jpg;
+
+#if Z_IMG_HAVE_PNG
+	// PNG. The 32KB is the DEFLATE window, which is not optional --
+	// back-references reach 32768 bytes, so a decoder must keep that
+	// much history (sw/common/zinflate.h).
+	//
+	// It sits in this union like every other decoder's working set,
+	// so the cost against the largest existing member (GIF, ~17.6KB)
+	// is about 15KB rather than a fresh 32KB.
+	//
+	// Two scanlines because every PNG filter except None refers to
+	// the row above, so the previous one has to survive until the
+	// current one is complete.
+	struct {
+		uint8_t		window[Z_INFLATE_WINDOW];
+		uint8_t		cur[Z_IMG_PNG_ROW_MAX];
+		uint8_t		prev[Z_IMG_PNG_ROW_MAX];
+		uint8_t		pal[256 * 3];
+		uint8_t		pal_y[256];
+		uint8_t		zin[512];		// compressed bytes in flight
+	} png;
+#endif
 
 } z_img_scratch_t;
 
@@ -1683,6 +1709,395 @@ static void jpg_block(z_img_t *im, z_jpg_comp_t *c, bool keep) {
 
 }
 
+
+// -- PNG ------------------------------------------------------------
+//
+// Baseline PNG: 8-bit grayscale, RGB, palette, and either with alpha.
+// Refused rather than guessed at: 16-bit samples, and INTERLACED
+// (Adam7) images.
+//
+// Adam7 is refused because it breaks row streaming outright. The
+// seven passes each have their own geometry, so a "row" arriving from
+// the decompressor is not a row of the picture, and reassembling one
+// needs the whole image resident -- which is the one thing this file
+// is built never to require. Interlaced PNG is rare on the web and a
+// clear refusal beats a wrong picture.
+//
+// The compressed data is a zlib stream (RFC 1950) spread across one
+// or more IDAT chunks. Those chunk boundaries have nothing to do with
+// the deflate structure, so the stream is fed to zinflate.c in
+// whatever pieces the chunks provide -- which is exactly the case
+// that decoder was written to survive.
+
+#if Z_IMG_HAVE_PNG
+
+static int png_u32(z_img_t *im, uint32_t *out) {
+	uint8_t b[4];
+	if (im->read(im->ctx, b, 4) != 4) return Z_IMG_E_IO;
+	*out = ((uint32_t)b[0] << 24) | ((uint32_t)b[1] << 16) |
+		((uint32_t)b[2] << 8) | b[3];
+	return Z_IMG_OK;
+}
+
+// Paeth, from the PNG spec. The predictor picks whichever of left,
+// above and above-left is closest to their linear estimate.
+static int png_paeth(int a, int b, int c) {
+	int p = a + b - c;
+	int pa = p > a ? p - a : a - p;
+	int pb = p > b ? p - b : b - p;
+	int pc = p > c ? p - c : c - p;
+	if (pa <= pb && pa <= pc) return a;
+	return pb <= pc ? b : c;
+}
+
+// Reverses one scanline's filter, in place, using the previous row.
+//
+// `bpp` is bytes per complete pixel, rounded UP, which is what the
+// spec means by the distance to the pixel on the left -- for depths
+// under 8 it is 1, and the filter then operates on packed bytes
+// rather than on pixels.
+static void png_unfilter(uint8_t *cur, const uint8_t *prev,
+	int len, int bpp, int filter) {
+
+	int i;
+
+	switch (filter) {
+
+	case 0:									// None
+		break;
+
+	case 1:									// Sub
+		for (i = bpp; i < len; i++)
+			cur[i] = (uint8_t)(cur[i] + cur[i - bpp]);
+		break;
+
+	case 2:									// Up
+		for (i = 0; i < len; i++)
+			cur[i] = (uint8_t)(cur[i] + prev[i]);
+		break;
+
+	case 3:									// Average
+		for (i = 0; i < bpp && i < len; i++)
+			cur[i] = (uint8_t)(cur[i] + (prev[i] >> 1));
+		for (; i < len; i++)
+			cur[i] = (uint8_t)(cur[i] +
+				((cur[i - bpp] + prev[i]) >> 1));
+		break;
+
+	default:								// 4, Paeth
+		for (i = 0; i < bpp && i < len; i++)
+			cur[i] = (uint8_t)(cur[i] + png_paeth(0, prev[i], 0));
+		for (; i < len; i++)
+			cur[i] = (uint8_t)(cur[i] +
+				png_paeth(cur[i - bpp], prev[i], prev[i - bpp]));
+		break;
+
+	}
+
+}
+
+// One sample from a row packed at 1, 2, 4 or 8 bits.
+static int png_sample(const uint8_t *row, int idx, int depth) {
+	switch (depth) {
+	case 8: return row[idx];
+	case 4: return (row[idx >> 1] >> ((idx & 1) ? 0 : 4)) & 0x0f;
+	case 2: return (row[idx >> 2] >> (6 - 2 * (idx & 3))) & 0x03;
+	default: return (row[idx >> 3] >> (7 - (idx & 7))) & 0x01;
+	}
+}
+
+static int decode_png(z_img_t *im) {
+
+	uint8_t sig[8];
+	uint32_t w = 0, h = 0;
+	int depth = 0, ctype = 0, chans = 1, bpp = 1;
+	int stride = 0, sy = 0, step, rv;
+	int have_ihdr = 0, npal = 0;
+	uint32_t idat_left = 0;
+	int at_end = 0;
+	z_inflate_t z;
+
+	// Two fixed buffers, alternated by a flag.
+	//
+	// Not swapped pointers: the filter byte sits at [0] and the
+	// pixels at [1], so a naive `prev = cur + 1; cur = t` makes `cur`
+	// creep forward by one byte every row. The flag cannot drift.
+	int parity = 0;
+	uint8_t *cur = S.png.cur, *prev = S.png.prev;
+	int row_have = 0;						// bytes of `cur` filled
+	int zin_have = 0, zin_pos = 0;
+
+	if (im->read(im->ctx, sig, 8) != 8) return Z_IMG_E_IO;
+	if (sig[0] != 0x89 || sig[1] != 'P' || sig[2] != 'N' || sig[3] != 'G')
+		return Z_IMG_E_FORMAT;
+
+	// -- header chunks, up to the first IDAT --
+	for (;;) {
+
+		uint32_t len, type, crc;
+
+		if (png_u32(im, &len) != Z_IMG_OK) return Z_IMG_E_IO;
+		if (png_u32(im, &type) != Z_IMG_OK) return Z_IMG_E_IO;
+
+		if (type == 0x49484452u) {			// IHDR
+
+			uint8_t b[13];
+			if (len != 13) return Z_IMG_E_FORMAT;
+			if (im->read(im->ctx, b, 13) != 13) return Z_IMG_E_IO;
+
+			w = ((uint32_t)b[0] << 24) | ((uint32_t)b[1] << 16) |
+				((uint32_t)b[2] << 8) | b[3];
+			h = ((uint32_t)b[4] << 24) | ((uint32_t)b[5] << 16) |
+				((uint32_t)b[6] << 8) | b[7];
+			depth = b[8];
+			ctype = b[9];
+
+			if (w == 0 || h == 0) return Z_IMG_E_FORMAT;
+			if (b[10] != 0 || b[11] != 0) return Z_IMG_E_UNSUPPORTED;
+			if (b[12] != 0) return Z_IMG_E_UNSUPPORTED;	// Adam7
+			if (depth == 16) return Z_IMG_E_UNSUPPORTED;
+			if (depth != 1 && depth != 2 && depth != 4 && depth != 8)
+				return Z_IMG_E_FORMAT;
+
+			switch (ctype) {
+			case 0: chans = 1; break;					// gray
+			case 2: chans = 3; break;					// RGB
+			case 3: chans = 1; break;					// palette
+			case 4: chans = 2; break;					// gray + alpha
+			case 6: chans = 4; break;					// RGBA
+			default: return Z_IMG_E_FORMAT;
+			}
+
+			// Palette and alpha are only defined at certain depths.
+			if ((ctype == 2 || ctype == 4 || ctype == 6) && depth != 8)
+				return Z_IMG_E_UNSUPPORTED;
+			if (ctype == 3 && depth > 8) return Z_IMG_E_FORMAT;
+
+			if (w > Z_IMG_PNG_MAX_W) return Z_IMG_E_TOOBIG;
+			if (h > Z_IMG_SRC_MAX_H) return Z_IMG_E_TOOBIG;
+
+			stride = (int)((w * (uint32_t)chans * (uint32_t)depth + 7) / 8);
+			bpp = (chans * depth + 7) / 8;
+			if (bpp < 1) bpp = 1;
+			if (stride + 1 > Z_IMG_PNG_ROW_MAX) return Z_IMG_E_TOOBIG;
+
+			have_ihdr = 1;
+
+		} else if (type == 0x504c5445u) {	// PLTE
+
+			if (len > 256 * 3 || (len % 3)) return Z_IMG_E_FORMAT;
+			if (im->read(im->ctx, S.png.pal, (int)len) != (int)len)
+				return Z_IMG_E_IO;
+			npal = (int)len / 3;
+			for (int i = 0; i < npal; i++)
+				S.png.pal_y[i] = luma(S.png.pal[i * 3],
+					S.png.pal[i * 3 + 1], S.png.pal[i * 3 + 2]);
+
+		} else if (type == 0x49444154u) {	// IDAT
+
+			idat_left = len;
+			break;
+
+		} else if (type == 0x49454e44u) {	// IEND
+
+			return Z_IMG_E_FORMAT;			// no image data at all
+
+		} else {
+
+			// Every other chunk is skipped. Ancillary chunks are
+			// optional by definition, and the critical ones this
+			// decoder does not implement (there are none at present)
+			// would have to be handled above.
+			uint8_t junk[64];
+			while (len) {
+				uint32_t take = len > sizeof(junk) ? sizeof(junk) : len;
+				if (im->read(im->ctx, junk, (int)take) != (int)take)
+					return Z_IMG_E_IO;
+				len -= take;
+			}
+
+		}
+
+		if (type != 0x49444154u) {
+			if (png_u32(im, &crc) != Z_IMG_OK) return Z_IMG_E_IO;
+			(void)crc;						// see the note on CRCs below
+		}
+
+	}
+
+	if (!have_ihdr) return Z_IMG_E_FORMAT;
+	if (ctype == 3 && npal == 0) return Z_IMG_E_FORMAT;
+
+	rv = fit_scale(im, (int)w, (int)h);
+	if (rv != Z_IMG_OK) return rv;
+
+	step = 1 << im->shift;
+
+	// The first row's filter refers to a row of zeros.
+	memset(S.png.prev, 0, (size_t)stride + 1);
+	memset(S.png.cur, 0, (size_t)stride + 1);
+	cur = S.png.cur;
+	prev = S.png.prev + 1;
+	dither_reset();
+
+	z_inflate_init(&z, S.png.window, Z_INFLATE_ZLIB,
+		(uint32_t)(stride + 1) * h);
+
+	// -- the pixel loop --
+	//
+	// Two nested streams: IDAT chunks supply bytes, zinflate turns
+	// them into scanlines. Neither boundary lines up with the other,
+	// so both are driven a piece at a time rather than a row at a
+	// time.
+	while (sy < (int)h) {
+
+		uint8_t out[256];
+		uint32_t il, ol;
+		int irv;
+
+		// Refill compressed input when the decoder has drained it.
+		if (zin_pos >= zin_have) {
+
+			if (idat_left == 0) {
+
+				uint32_t len, type, crc;
+
+				if (at_end) return Z_IMG_E_FORMAT;	// truncated
+
+				if (png_u32(im, &crc) != Z_IMG_OK) return Z_IMG_E_IO;
+				(void)crc;
+
+				if (png_u32(im, &len) != Z_IMG_OK) return Z_IMG_E_IO;
+				if (png_u32(im, &type) != Z_IMG_OK) return Z_IMG_E_IO;
+
+				if (type == 0x49444154u) {
+					idat_left = len;
+				} else {
+					// The image data ended before the rows did.
+					at_end = 1;
+					return Z_IMG_E_FORMAT;
+				}
+
+			}
+
+			{
+				uint32_t take = idat_left;
+				if (take > sizeof(S.png.zin)) take = sizeof(S.png.zin);
+				zin_have = im->read(im->ctx, S.png.zin, (int)take);
+				if (zin_have <= 0) return Z_IMG_E_IO;
+				idat_left -= (uint32_t)zin_have;
+				zin_pos = 0;
+			}
+
+		}
+
+		il = (uint32_t)(zin_have - zin_pos);
+		ol = sizeof(out);
+
+		irv = z_inflate(&z, S.png.zin + zin_pos, &il, out, &ol);
+		zin_pos += (int)il;
+
+		if (irv != Z_INFLATE_OK && irv != Z_INFLATE_DONE)
+			return Z_IMG_E_FORMAT;
+
+		// Assemble scanlines from whatever came out.
+		{
+			uint32_t k = 0;
+
+			while (k < ol) {
+
+				int want = stride + 1 - row_have;
+				int take = (int)(ol - k);
+
+				if (take > want) take = want;
+				memcpy(cur + row_have, out + k, (size_t)take);
+				row_have += take;
+				k += (uint32_t)take;
+
+				if (row_have < stride + 1) continue;
+
+				// A complete filtered row.
+				{
+					int filter = cur[0];
+					uint8_t *px = cur + 1;
+
+					if (filter > 4) return Z_IMG_E_FORMAT;
+
+					png_unfilter(px, prev, stride, bpp, filter);
+
+					if ((sy & (step - 1)) == 0) {
+
+						int ox = 0, sx;
+
+						for (sx = 0; sx < (int)w && ox < im->out_w;
+							sx += step) {
+
+							int g;
+
+							switch (ctype) {
+							case 0:			// gray
+								g = png_sample(px, sx, depth);
+								if (depth < 8)
+									g = g * 255 / ((1 << depth) - 1);
+								break;
+							case 3: {		// palette
+								int idx = png_sample(px, sx, depth);
+								g = (idx < npal) ? S.png.pal_y[idx] : 0;
+								break;
+							}
+							case 2:			// RGB
+								g = luma(px[sx * 3], px[sx * 3 + 1],
+									px[sx * 3 + 2]);
+								break;
+							case 4:			// gray + alpha
+								g = px[sx * 2];
+								break;
+							default:		// RGBA
+								g = luma(px[sx * 4], px[sx * 4 + 1],
+									px[sx * 4 + 2]);
+								break;
+							}
+
+							grayrow[ox++] = (uint8_t)g;
+
+						}
+
+						emit_row(im, grayrow, sy >> im->shift);
+
+					}
+
+					// This row becomes the filter reference for the
+					// next. The reference is the PIXELS, so it points
+					// one past the filter byte.
+					parity ^= 1;
+					cur  = parity ? S.png.prev : S.png.cur;
+					prev = (parity ? S.png.cur : S.png.prev) + 1;
+
+					row_have = 0;
+					sy++;
+
+					if (sy >= (int)h) break;
+
+				}
+
+			}
+		}
+
+		// No progress and nothing left to give: a truncated stream.
+		if (il == 0 && ol == 0 && zin_pos >= zin_have && idat_left == 0
+			&& irv == Z_INFLATE_DONE)
+			break;
+
+	}
+
+	if (sy < (int)h) return Z_IMG_E_FORMAT;
+
+	return Z_IMG_OK;
+
+}
+
+#endif	/* Z_IMG_HAVE_PNG */
+
 static int decode_jpg(z_img_t *im) {
 
 	uint8_t b[2];
@@ -2017,12 +2432,18 @@ int z_img_decode(z_img_t *im, z_img_fmt_t fmt) {
 		case Z_IMG_FMT_JPG:
 			return decode_jpg(im);
 #endif
+#if Z_IMG_HAVE_PNG
+		case Z_IMG_FMT_PNG:
+			return decode_png(im);
+#endif
 
+#if !Z_IMG_HAVE_PNG
 		case Z_IMG_FMT_PNG:
 			// Recognised by z_img_sniff() whether or not the decoder
 			// is built, so the app can say "PNG is not supported"
 			// rather than "this is not an image".
 			return Z_IMG_E_NOTBUILT;
+#endif
 
 		default:
 			return Z_IMG_E_FORMAT;

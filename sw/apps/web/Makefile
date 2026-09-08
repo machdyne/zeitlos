@@ -83,6 +83,15 @@ CRYPTO_CFLAGS = -O2
 # self-test before using it, and falls back to software otherwise.
 override CFLAGS += -DEC_HW
 
+# SVG (sw/common/zsvg.c). On: site logos and Wikipedia's diagrams are
+# SVG, and a diagram in one bit is nearly lossless where a photograph
+# is mush.
+WEB_SVG       ?= 1
+WEB_SVG_MAX   ?= 32768
+WEB_SVG_EDGES ?= 1024
+override CFLAGS += -DWEB_SVG=$(WEB_SVG) \
+	-DWEB_SVG_MAX=$(WEB_SVG_MAX) -DWEB_SVG_EDGES=$(WEB_SVG_EDGES)
+
 # Forces the software image blit (layout.c's blit_rows()).
 #
 #   make WEB_IMG_SW=1
@@ -112,7 +121,8 @@ TLS_OBJ =
 endif
 
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o \
-	zfsapp.o zflist.o zedit.o zinflate.o zimg.o zport.o zstream.o zdns.o \
+	zfsapp.o zflist.o zedit.o zinflate.o zimg.o zsvg.o \
+	zport.o zstream.o zdns.o \
 	url.o uni.o http.o html.o layout.o page.o toolbar.o $(TLS_OBJ) web.o
 
 web: web.elf web.bin
@@ -177,8 +187,20 @@ zinflate.o:
 # sw/common/zimg.c -- the image decoders, for in-place images. PNG is
 # off until its decoder exists; BMP, PNM, GIF and JPEG are on, which
 # is what the in-place path is being tested against.
+# PNG is built in here: sw/common/zinflate.c is already linked for
+# HTTP's Content-Encoding, so the only new cost is the decoder itself
+# and the difference between its scratch and the largest other one --
+# about 33KB.
+#
+# It is worth that here more than anywhere: diagrams, screenshots and
+# logos on the web are PNG, and line art survives 1bpp far better than
+# a photograph does.
+# sw/common/zsvg.c -- vector rendering for in-page SVG.
+zsvg.o:
+	$(CC_TARGET) $(CFLAGS) -c ../../common/zsvg.c -o zsvg.o
+
 zimg.o:
-	$(CC_TARGET) $(CFLAGS) -c ../../common/zimg.c -o zimg.o
+	$(CC_TARGET) $(CFLAGS) -DZ_IMG_HAVE_PNG=1 -c ../../common/zimg.c -o zimg.o
 
 zport.o:
 	$(CC_TARGET) $(CFLAGS) -c ../../common/zport.c -o zport.o

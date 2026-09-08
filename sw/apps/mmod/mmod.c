@@ -380,7 +380,7 @@ static void edit_range(bool is_start) {
 
 // -- the operation state machine ---------------------------------
 //
-// A 32MB read over bit-banged SPI is minutes, so an operation cannot
+// A 32MB read over SPI is minutes, so an operation cannot
 // be a function call: it is a state advanced one chunk at a time from
 // the event loop, between message polls. That keeps the window
 // repainting, the CANCEL button live, and wm's redraw acks flowing --

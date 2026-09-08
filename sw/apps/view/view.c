@@ -69,6 +69,9 @@
 #include "../../common/zdialog.h"
 #include "../../common/zfsapp.h"
 #include "../../common/zimg.h"
+#if VIEW_SVG
+#include "../../common/zsvg.h"
+#endif
 #include "../../common/zprof.h"
 
 #define VRAM        ((volatile uint32_t *)0x20000000)
@@ -513,9 +516,89 @@ static void show_error(const char *what, int rv) {
 
 }
 
+#if VIEW_SVG
+
+// SVG is TEXT, so unlike the raster formats the whole file is read
+// before anything is drawn: a transform on a <g> applies to children
+// that appear later, so the document has to be walked as a tree.
+//
+// That is affordable because SVG files are kilobytes. A file larger
+// than the buffer is refused rather than truncated -- half a drawing
+// is not a drawing.
+static void load_svg(z_img_file_t *src, const char *path) {
+
+	static char text[VIEW_SVG_MAX] __attribute__((section(".bss")));
+	static z_svg_edge_t edges[VIEW_SVG_EDGES]
+		__attribute__((section(".bss")));
+
+	z_svg_t sv;
+	int n, rv;
+
+	(void)path;
+
+	if (z_img_file_rewind(src) != Z_IMG_OK) {
+		show_error("rewind", Z_IMG_E_IO);
+		return;
+	}
+
+	n = z_img_file_read(src, (uint8_t *)text, VIEW_SVG_MAX);
+	if (n <= 0) { show_error("read", Z_IMG_E_IO); return; }
+
+	if (n >= VIEW_SVG_MAX) {
+		z_dialog_confirm(&dlg_ctx, "Cannot open",
+			"This SVG is larger than\nview can hold.",
+			Z_DIALOG_OK_CANCEL);
+		return;
+	}
+
+	memset(&sv, 0, sizeof(sv));
+	sv.doc = text;
+	sv.len = (uint32_t)n;
+	sv.x = 0;
+	sv.y = 0;
+
+	// Rendered at the SCREEN size, not the document's. A vector
+	// drawing has no natural pixel size, and the point of it is that
+	// it can be drawn at whatever size is wanted -- so it is fitted
+	// to the window rather than scaled after the fact like a bitmap.
+	sv.w = DOC_W;
+	sv.h = DOC_H;
+	sv.edges = edges;
+	sv.max_edges = VIEW_SVG_EDGES;
+
+	memset(doc, 0, sizeof(doc));
+
+	rv = z_svg_render_bitmap(&sv, &doc[0][0], DOC_WPL);
+
+	if (rv != Z_SVG_OK) {
+		z_dialog_confirm(&dlg_ctx, "Cannot draw",
+			z_svg_strerror(rv), Z_DIALOG_OK_CANCEL);
+		return;
+	}
+
+	img_w = DOC_W;
+	img_h = DOC_H;
+	scroll_x = 0;
+	scroll_y = 0;
+
+	repaint();
+
+}
+
+#endif
+
 static void load_file(const char *path) {
 
-	uint8_t hdr[16];
+	// 1KB, not the handful of bytes a raster magic number needs.
+	//
+	// SVG is text: an XML declaration, a DOCTYPE and a generator
+	// comment all come before the <svg> tag. Inkscape puts it at
+	// offset 114 in an ordinary file, so a 16-byte sniff reported
+	// every real SVG as unrecognised.
+	//
+	// Static rather than on the stack: an app's stack is not the
+	// place for a kilobyte that is used once per file open.
+	static uint8_t hdr[1024];
 	z_img_t im;
 	z_img_fmt_t fmt;
 	int n, rv;
@@ -534,6 +617,17 @@ static void load_file(const char *path) {
 	// at byte 0; identifying by extension instead would be shorter
 	// but gets a surprising number of real files wrong.
 	n = z_img_file_read(&src, hdr, sizeof(hdr));
+
+#if VIEW_SVG
+	// SVG before the raster sniff, because it is not one of zimg's
+	// formats: it is text, and it is rendered rather than decoded.
+	if (z_svg_sniff((const char *)hdr, (uint32_t)n)) {
+		load_svg(&src, path);
+		z_img_file_close(&src);
+		return;
+	}
+#endif
+
 	fmt = z_img_sniff(hdr, n);
 
 	if (fmt == Z_IMG_FMT_NONE) {

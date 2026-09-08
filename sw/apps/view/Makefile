@@ -19,18 +19,36 @@ endif
 # zimg.h so an app can pay only for what it uses -- see that file's
 # Z_IMG_HAVE_* block.
 #
-# PNG IS OFF BY DEFAULT AND THAT IS A DELIBERATE COST DECISION, not an
-# oversight. Its inflate window alone is 32KB of .bss -- more than
-# every other decoder here combined -- and DEFLATE is by a wide margin
-# the slowest thing that would run on this CPU. Turn it on with:
+# PNG IS ON. It costs about 33KB of .bss -- the inflate window is
+# 32KB, but it shares zimg.c's decoder union with the others, so the
+# real cost is the difference against the largest existing member.
 #
-#     make VIEW_PNG=1
+# Turn it off with `make VIEW_PNG=0` on a board that cannot spare it;
+# a PNG then reports "not supported" rather than failing to open.
 #
-# once the JPEG timings (VIEW_INSTRUMENT below) have shown what a
-# comparable decode actually costs on real hardware. See
-# docs/view_app.md, "Why PNG is optional".
-VIEW_PNG ?= 0
-IMG_DEFS = -DZ_IMG_HAVE_PNG=$(VIEW_PNG)
+# PNG matters more than its cost suggests: it is what diagrams,
+# screenshots and logos on the web actually are, and line art survives
+# 1bpp far better than a photograph does.
+VIEW_PNG ?= 1
+
+# SVG (sw/common/zsvg.c).
+#
+# On, because it is what view is BEST at: a diagram in one bit is
+# nearly lossless, where a photograph is mush. Turn it off with
+# `make VIEW_SVG=0` on a board that cannot spare the buffers below.
+#
+# VIEW_SVG_MAX is the document buffer -- SVG is text and the whole
+# file is walked, since a transform on a <g> applies to children that
+# appear later. VIEW_SVG_EDGES is the flattened outline of ONE shape;
+# past it a drawing is refused rather than half-drawn.
+VIEW_SVG       ?= 1
+VIEW_SVG_MAX   ?= 65536
+VIEW_SVG_EDGES ?= 2048
+
+IMG_DEFS = -DZ_IMG_HAVE_PNG=$(VIEW_PNG) \
+	-DVIEW_SVG=$(VIEW_SVG) \
+	-DVIEW_SVG_MAX=$(VIEW_SVG_MAX) \
+	-DVIEW_SVG_EDGES=$(VIEW_SVG_EDGES)
 
 # Decode timing to UART0, off by default.
 #
@@ -110,7 +128,8 @@ LDSCRIPT = ../../common/riscv-app.ld
 # zimg.o is the decoders themselves (sw/common/zimg.c), shared with
 # any other app that wants to read images.
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o \
-	zfsapp.o zflist.o zdialog.o zedit.o zimg.o zprof.o view.o
+	zfsapp.o zflist.o zdialog.o zedit.o zimg.o zinflate.o zsvg.o \
+	zprof.o view.o
 
 view: view.elf view.bin
 
@@ -142,6 +161,17 @@ zdialog.o:
 	$(CC) $(CFLAGS) -c ../../common/zdialog.c -o zdialog.o
 
 # $(ZIMG_OPT) last so it overrides the -Os in CFLAGS.
+# sw/common/zinflate.c -- DEFLATE, which PNG's IDAT stream needs.
+# Linked unconditionally: it is small, and a VIEW_PNG=0 build simply
+# does not call it.
+# sw/common/zsvg.c -- vector rendering. Needs libm for the curve and
+# arc maths; the toolchain links it by default for this target.
+zsvg.o:
+	$(CC) $(CFLAGS) -c ../../common/zsvg.c -o zsvg.o
+
+zinflate.o:
+	$(CC) $(CFLAGS) -c ../../common/zinflate.c -o zinflate.o
+
 zimg.o:
 	$(CC) $(CFLAGS) $(ZIMG_OPT) -c ../../common/zimg.c -o zimg.o
 

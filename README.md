@@ -37,6 +37,7 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
  - FAT filesystem, on MicroSD and on an optional [RAM disk](docs/ramdisk.md)
  - [Core apps in flash](docs/flash_apps.md) -- boots to a desktop with no sdcard
  - Object-based interprocess [messaging](docs/messaging.md), streaming and [ports](docs/ports.md)
+ - Image decoding and [vector rendering](docs/svg.md) shared by every app (`sw/common`)
  - IP/ARP/ICMP/UDP/DHCP/NTP/DNS/TFTP/TCP/telnet/ssh [networking](docs/networking.md)
  - TLS 1.3 with X.509 certificate verification -- see [tls](docs/tls.md) and [x509](docs/x509.md)
 
@@ -66,11 +67,11 @@ With the MTU, there is no need for position independent code or complicated addr
 |-----|-------------|
 | [text](docs/text_editor.md) | Text editor |
 | [sheet](docs/sheet_app.md) | Spreadsheet |
-| [web](docs/web_app.md) | Web browser: HTTP/1.1 and TLS 1.3, gzip, in-place images |
+| [web](docs/web_app.md) | Web browser: HTTP/1.1 and TLS 1.3, gzip, in-place images and SVG |
 | [read](docs/read_app.md) | Text reader for files of unlimited size (with rendered Markdown) |
 | [hex](docs/hex_editor.md) | Hex editor for files of unlimited size |
 | draw | MacPaint-inspired drawing app |
-| [view](docs/view_app.md) | Image viewer |
+| [view](docs/view_app.md) | Image viewer: BMP, PNM, GIF, JPEG, [PNG](docs/png.md) and [SVG](docs/svg.md) |
 | files | File browser |
 | [calc](docs/calc_app.md) | Calculator |
 | [info](docs/info_app.md) | System info |

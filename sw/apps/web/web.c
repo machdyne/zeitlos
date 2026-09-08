@@ -87,6 +87,9 @@
 #include "../../common/zedit.h"
 #include "../../common/zinflate.h"
 #include "../../common/zimg.h"
+#if WEB_SVG
+#include "../../common/zsvg.h"
+#endif
 #include "toolbar.h"
 #include "http.h"
 #if WEB_TLS
@@ -398,10 +401,77 @@ static int img_read(void *ctx, uint8_t *buf, int len) {
 // declared size. A box that says 320x120 may therefore hold a 300x113
 // picture -- which is honest about what was decoded, and better than
 // resampling a dithered bitmap.
+#if WEB_SVG
+
+// Renders a spooled SVG into img_bits.
+//
+// Fitted to the placeholder box, which for a vector drawing is not a
+// compromise: there is no native pixel size to lose. A logo declared
+// 24x24 in the markup is drawn at 24x24 and looks right, where the
+// same logo as a PNG would have been a blurry thumbnail.
+static bool img_render_svg(int box_w, int box_h) {
+
+	static char text[WEB_SVG_MAX];
+	static z_svg_edge_t edges[WEB_SVG_EDGES];
+
+	z_svg_t sv;
+	int n, rv;
+
+	if (fs_seek(img_fd, 0) < 0) return false;
+
+	n = fs_read_chunk(img_fd, text, WEB_SVG_MAX);
+	if (n <= 0) {
+		snprintf(img_status, sizeof(img_status), "empty file");
+		return false;
+	}
+
+	if (n >= WEB_SVG_MAX) {
+		snprintf(img_status, sizeof(img_status), "SVG too large");
+		return false;
+	}
+
+	if (box_w > IMG_MAX_W) box_w = IMG_MAX_W;
+	if (box_h > IMG_MAX_H) box_h = IMG_MAX_H;
+
+	memset(&sv, 0, sizeof(sv));
+	sv.doc = text;
+	sv.len = (uint32_t)n;
+	sv.x = 0; sv.y = 0;
+	sv.w = box_w; sv.h = box_h;
+	sv.edges = edges;
+	sv.max_edges = WEB_SVG_EDGES;
+
+	memset(img_bits, 0, sizeof(img_bits));
+
+	rv = z_svg_render_bitmap(&sv, img_bits, IMG_WPL);
+
+	if (rv != Z_SVG_OK) {
+		snprintf(img_status, sizeof(img_status), "%s",
+			z_svg_strerror(rv));
+		return false;
+	}
+
+	img_w = box_w;
+	img_h = box_h;
+
+	printf("web: image SVG %.0fx%.0f -> %dx%d, %d shapes, %d edges\n",
+		sv.src_w, sv.src_h, img_w, img_h, sv.n_shapes, sv.n_edges);
+
+	return true;
+
+}
+
+#endif
+
 static bool img_decode_spooled(int box_w, int box_h) {
 
 	z_img_t im;
-	uint8_t hdr[16];
+	// 1KB. SVG is text, and its <svg> tag sits after an XML
+	// declaration, a DOCTYPE and often a generator comment -- offset
+	// 114 in an ordinary Inkscape file. A 16-byte sniff, which is all
+	// a raster magic number needs, reported every real SVG as
+	// unrecognised.
+	static uint8_t hdr[1024];
 	z_img_fmt_t fmt;
 	int n, rv;
 
@@ -410,6 +480,13 @@ static bool img_decode_spooled(int box_w, int box_h) {
 
 	n = fs_read_chunk(img_fd, (char *)hdr, (int)sizeof(hdr));
 	if (n <= 0) { snprintf(img_status, sizeof(img_status), "empty file"); return false; }
+
+#if WEB_SVG
+	// SVG first: it is text, not one of zimg's formats, and it is
+	// what site logos and Wikipedia's diagrams actually are.
+	if (z_svg_sniff((const char *)hdr, (uint32_t)n))
+		return img_render_svg(box_w, box_h);
+#endif
 
 	fmt = z_img_sniff(hdr, n);
 	if (fmt == Z_IMG_FMT_NONE) {
@@ -1189,6 +1266,32 @@ static void draw_scrollbar(void) {
 // seconds to appear, because the dialog is a window in front of this
 // one and wm is waiting on an ordering that will never resolve.
 static void repaint(void) {
+
+	relayout();
+	draw_bar();
+
+	// The page is left alone while an image loads.
+	//
+	// draw_body() clears the whole content area before redrawing it,
+	// so a repaint driven by a changing status line -- resolving,
+	// connecting, handshaking, receiving -- blanked and redrew the
+	// page several times over the course of one image fetch. On this
+	// CPU that is visible as flicker, and the page did not change:
+	// only the status did.
+	//
+	// The one body redraw an image DOES need -- to put "Loading
+	// image..." in its box -- is done explicitly by load_image()
+	// before this takes effect, and another follows when the picture
+	// arrives.
+	if (!fetching_image) draw_body();
+
+	draw_scrollbar();
+
+}
+
+// A full repaint including the body, for the moments an image fetch
+// genuinely changes what is on the page.
+static void repaint_all(void) {
 	relayout();
 	draw_bar();
 	draw_body();
@@ -1436,6 +1539,22 @@ static void fetch_failed(const char *why) {
 	sock_disconnect();
 	spool_close();
 
+	// An image that failed leaves the PAGE alone -- it is still
+	// there, still readable, and the reader only asked for a
+	// picture. The box says what went wrong; the document does not
+	// become an error screen because one image was unreachable.
+	if (fetching_image) {
+		fetching_image = false;
+		img_loading = false;
+		if (img_wr >= 0) { fs_close_handle(img_wr); img_wr = -1; }
+		if (!img_status[0])
+			snprintf(img_status, sizeof(img_status), "%s", why);
+		state = W_READY;
+		printf("web: image fetch failed: %s\n", why);
+		repaint_all();
+		return;
+	}
+
 	state = W_ERROR;
 	snprintf(status, sizeof(status), "%s", why);
 
@@ -1611,7 +1730,8 @@ static void response_done(void) {
 		if (!img_have && !img_status[0])
 			snprintf(img_status, sizeof(img_status), "could not decode");
 
-		repaint();
+		// The body, explicitly: this is the moment the page changes.
+		repaint_all();
 		return;
 
 	}
@@ -1707,10 +1827,14 @@ static void load_image(uint32_t block, const html_line_t *l) {
 	img_block = block;
 	snprintf(img_src, sizeof(img_src), "%s", l->links[0]);
 	snprintf(img_status, sizeof(img_status), "Loading image...");
-	repaint();
 
-	// Tells spool_begin() and the completion path that this fetch is
-	// an image. The page's own URL and index are left untouched.
+	// Before fetching_image is set, so the body is drawn once with
+	// the caption in it. Everything after this leaves the page alone.
+	repaint_all();
+
+	// Tells spool_begin(), repaint() and the completion path that
+	// this fetch is an image. The page's own URL, index and pixels
+	// are all left untouched.
 	fetching_image = true;
 
 	start_fetch(&dest, false);
@@ -2649,7 +2773,16 @@ int main(void) {
 		printf("web: spool: %s\n", spool_path);
 	}
 
-	z_edit_init(&url_edit, url_buf, sizeof(url_buf), "");
+	// The URL bar starts focused, holding "https://".
+	//
+	// There is nothing else to do in an empty browser, and the caret
+	// sits after the scheme so a hostname can simply be typed. https
+	// rather than http because a bare hostname on port 80 is a
+	// redirect at best on most of the web now, and this browser pays
+	// for a whole extra connection to follow one.
+	z_edit_init(&url_edit, url_buf, sizeof(url_buf), "https://");
+	url_focus = true;
+	url_editing = true;
 
 	page_init(&pg, spool_read, NULL);
 
@@ -2657,13 +2790,19 @@ int main(void) {
 	verify_set_clock(web_ms);
 #endif
 
-	snprintf(status, sizeof(status), "web -- press g to open a URL");
+	snprintf(status, sizeof(status), "web -- type a URL and press Enter");
 	relayout();
 	repaint();
 
 	{
 		char arg[URL_MAX];
-		if (z_launch_arg_take(arg, sizeof(arg))) go_to_text(arg);
+		if (z_launch_arg_take(arg, sizeof(arg))) {
+			// Launched with a URL: that is where the reader wants to
+			// be, so the bar gives up focus and the page gets it.
+			url_focus = false;
+			url_editing = false;
+			go_to_text(arg);
+		}
 	}
 
 	for (;;) {

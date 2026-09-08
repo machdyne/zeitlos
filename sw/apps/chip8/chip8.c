@@ -99,7 +99,7 @@ static char flags_path[Z_WM_ARG_MAX];
 
 /* Last RPL flag block written to disk, so a save only happens when the
  * guest actually changed something. Sixteen bytes to compare against a
- * filesystem write on a bit-banged SD card is not a close call. */
+ * filesystem write on a SPI SD card is not a close call. */
 static uint8_t flags_saved[C8_FLAGS];   /* what is on disk */
 static uint8_t flags_last[C8_FLAGS];    /* what the guest had last frame */
 static int flags_settle;
@@ -111,7 +111,7 @@ static bool flags_have_file;
  * registers, so a sixteen-flag save is up to sixteen separate
  * instructions and, with a low tickrate, several frames. Writing on
  * every one of those would be several full file writes to a
- * bit-banged SD card for one logical save, during gameplay. Half a
+ * SPI SD card for one logical save, during gameplay. Half a
  * second of quiet is far longer than any burst and far shorter than a
  * player notices. */
 #define C8_FLAGS_SETTLE 30
@@ -562,7 +562,7 @@ static void load_flags(void) {
 
 /* Called once a frame, and once more with force at shutdown.
  *
- * Sixteen bytes compared against a write to a bit-banged SD card is
+ * Sixteen bytes compared against a write to a SPI SD card is
  * not a close call, so the comparison is unconditional and the write
  * is not.
  *

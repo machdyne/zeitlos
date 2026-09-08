@@ -24,7 +24,7 @@ verified certificate chain. See "Where this stands" at the end.
 | TLS 1.3 | ChaCha20-Poly1305, X.509 chain verification against a root store on the card |
 | Signatures | RSA PKCS#1 and PSS, ECDSA P-256 and P-384, optionally hardware-accelerated |
 | Documents | streaming HTML parser, sparse checkpoint index, unlimited page size |
-| Images | BMP, PNM, GIF and JPEG, decoded and dithered to 1bpp |
+| Images | BMP, PNM, GIF, JPEG and PNG, dithered to 1bpp; SVG rendered as vectors |
 
 ---
 
@@ -286,10 +286,11 @@ record a new one.
 | 4a | HTTP keep-alive, RAM disk, indexed trust store, editable URL bar with history | **done** |
 | 4b | gzip (`Content-Encoding`) | **done** -- `sw/common/zinflate.c`, see [http.md](http.md) |
 | 4c | Image placeholders, loaded in place on click | **done** -- see [html_layout.md](html_layout.md) |
-| 5a | PNG decoding | `zinflate.c` exists; the chunk and filter layers do not |
-| 5b | TCP out-of-order reassembly | written, tested, and OFF -- see [networking.md](networking.md) |
-| 5c | TLS session resumption | see [tls_resumption.md](tls_resumption.md) |
-| 5d | Progressive rendering, reader mode, anchors, GET forms, bookmarks, find-in-page, a real cache | |
+| 5a | PNG decoding | **done** -- see [png.md](png.md) |
+| 5b | SVG rendering | **done** -- see [svg.md](svg.md) |
+| 5c | TCP out-of-order reassembly | written, tested, and OFF -- see [networking.md](networking.md) |
+| 5d | TLS session resumption | see [tls_resumption.md](tls_resumption.md) |
+| 5e | Progressive rendering, reader mode, anchors, GET forms, bookmarks, find-in-page, a real cache | |
 | 6 | Optional off-board proxy for the scripted web | |
 
 ### Where the time goes
@@ -424,10 +425,9 @@ Things that are known-missing rather than broken:
 - **No progressive rendering.** A page downloads completely, then
   appears. `page.c` is written and tested for the streaming case, so
   this is a change in `web.c` rather than a redesign.
-- **No PNG.** BMP, PNM, GIF and JPEG decode; PNG is recognised and
-  refused. `sw/common/zinflate.c` is what its compressed stream
-  needs and already exists for gzip, so what remains is the chunk
-  and unfilter layers.
+- **No text in SVG.** `<text>` needs font metrics, and every
+  substitute gives a diagram whose labels are wrong rather than
+  missing. Unknown elements are skipped, not fatal.
 - **One image at a time.** A decoded bitmap is the size of its box
   and there is no dynamic memory, so clicking a second image
   replaces the first.

@@ -11,7 +11,7 @@ reads the index once and then seeks straight to the root it needs,
 instead of parsing every certificate in the file to find one.
 
 That is not a micro-optimisation. Measured on hardware, scanning 147
-certificates off a bit-banged SD card took 1.65 SECONDS on the first
+certificates off an SPI SD card took 1.65 SECONDS on the first
 HTTPS fetch of every run. The index makes it a few kilobytes and one
 seek.
 

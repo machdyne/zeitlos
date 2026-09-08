@@ -66,6 +66,24 @@
 
 // Largest source the power-of-two downscale can bring into range.
 // shift caps at 3 (1/8), so 640*8 across and 480*8 down.
+// PNG limits.
+//
+// Narrower than the other formats, and deliberately. PNG needs TWO
+// unfiltered scanlines resident -- every filter except None refers to
+// the row above -- on top of a 32KB inflate window, and all of it
+// lives in the shared decoder union. At Z_IMG_SRC_MAX_W (5120) with
+// 16-bit RGBA that would be 80KB of scanline alone.
+//
+// 2048 still allows a 1/2 or 1/4 reduction to a 640-pixel screen,
+// which is what a page image needs, and costs 16KB of scanline. A
+// wider PNG is refused with Z_IMG_E_TOOBIG rather than decoded
+// wrongly.
+#define Z_IMG_PNG_MAX_W   2048
+
+// Widest filtered row: 8-bit RGBA plus the filter byte. 16-bit
+// samples are refused (Z_IMG_E_UNSUPPORTED), as they are for PNM.
+#define Z_IMG_PNG_ROW_MAX ((Z_IMG_PNG_MAX_W) * 4 + 1)
+
 #define Z_IMG_SRC_MAX_W (Z_IMG_MAX_W << 3)
 #define Z_IMG_SRC_MAX_H (Z_IMG_MAX_H << 3)
 
@@ -76,7 +94,7 @@ typedef enum {
 	Z_IMG_FMT_PNM,			// P1..P6
 	Z_IMG_FMT_GIF,
 	Z_IMG_FMT_JPG,
-	Z_IMG_FMT_PNG,			// recognised; decoder not built yet
+	Z_IMG_FMT_PNG,			// 8-bit, non-interlaced (Z_IMG_HAVE_PNG)
 } z_img_fmt_t;
 
 // Return codes. Negative is failure; z_img_strerror() renders any of
@@ -91,8 +109,9 @@ typedef enum {
 // Which decoders are compiled in. PNG is off by default: its inflate
 // window alone is 32KB of .bss, which is more than every other
 // decoder here put together, and it is the slowest of them by a wide
-// margin. Turn it on with -DZ_IMG_HAVE_PNG=1 once that cost has been
-// measured against something real.
+// margin. It lives in the shared decoder union, so the real cost is
+// the difference against the largest other member -- about 33KB, not
+// 50. Turn it on with -DZ_IMG_HAVE_PNG=1.
 #ifndef Z_IMG_HAVE_BMP
 #define Z_IMG_HAVE_BMP 1
 #endif

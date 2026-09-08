@@ -25,7 +25,8 @@ from the keyboard.
 | GIF | 87a/89a, LZW, interlaced | first frame only |
 | JPEG | baseline sequential, 4:4:4 / 4:2:2 / 4:2:0 | progressive refused |
 | ZBM | `zbm.h` | draw's own format, no dithering needed |
-| PNG | — | recognised, decoder off by default |
+| PNG | 8-bit gray/RGB/palette/alpha, depths 1-8 | interlaced and 16-bit refused |
+| SVG | paths, shapes, groups, transforms, both fill rules | rendered, not decoded -- see [svg.md](svg.md) |
 
 ## The constraint everything follows from
 
@@ -90,9 +91,30 @@ entropy staging buffer added during optimisation. Both were free in
 `.bss`: GIF still sets the union size, and JPEG had headroom
 underneath it.
 
-## Why PNG is optional
+## PNG and SVG
 
-`Z_IMG_HAVE_PNG` defaults to 0; build with `make VIEW_PNG=1`.
+Both are **on** (`VIEW_PNG=1`, `VIEW_SVG=1`).
+
+PNG costs about 33KB of .bss -- its 32KB inflate window shares the
+decoder union with the other formats, so the net cost is the
+difference against the largest existing member, not the whole thing.
+See [png.md](png.md).
+
+SVG is not a `zimg` format at all: it is text, and it is rendered by
+`sw/common/zsvg.c` into the same document bitmap the decoders write
+to, so panning and zooming work identically. It is sniffed BEFORE the
+raster formats. See [svg.md](svg.md).
+
+**SVG is what view is best at.** A photograph dithered to one bit is
+mush; a diagram is nearly lossless, and it scales -- the same file
+serves a 24-pixel icon and a full-screen drawing.
+
+## The original argument for PNG being optional
+
+*Kept for the reasoning; the default has since changed to on.*
+
+`Z_IMG_HAVE_PNG` now defaults to 1; build with `make VIEW_PNG=0` to
+leave it out on a board that cannot spare the .bss.
 
 DEFLATE's 32KB sliding window is not negotiable — it is what the
 format is defined against, and a smaller one silently corrupts any
@@ -423,11 +445,17 @@ The practical rule: **trust `min` for phases under ~65,000 cycles,
 treat everything else as an upper bound, and never compare absolute
 instruction counts across runs with different process loads.**
 
-Two earlier ideas were dropped on this evidence. Replacing `luma()`'s
+One earlier idea was dropped on this evidence: replacing `luma()`'s
 multiplies with shift-adds is worthless — at 29 cycles a `MUL` is
-cheap next to these instruction counts. And PNG stays off: inflate is
-worse per byte than JPEG's entropy stage, whatever this decode now
-costs.
+cheap next to these instruction counts.
+
+The other conclusion drawn here — *"PNG stays off: inflate is worse
+per byte than JPEG's entropy stage"* — **was overturned**. The
+per-byte cost is real, but it was the wrong thing to weigh: PNG is
+what diagrams, screenshots and logos on the web actually are, and line
+art survives 1bpp far better than a photograph does. A format being
+slower matters less than a format being the one the material is in.
+PNG is on; see [png.md](png.md).
 
 ## Bilevel GIF: no dither at all
 
