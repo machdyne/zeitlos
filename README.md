@@ -86,6 +86,8 @@ With the MTU, there is no need for position independent code or complicated addr
 | [gamedemo](docs/gamedemo.md) | 2D side-scrolling platformer game |
 | space3d | First-person 3D space shooter game |
 | [gpu3d](docs/gpu3d_app.md) | Spinning 3D cube demo + STL viewer |
+| [posix](docs/posix.md) | POSIX compatibility layer |
+| [zcc](docs/zcc.md) | C compiler |
 
 ### Boards
 
