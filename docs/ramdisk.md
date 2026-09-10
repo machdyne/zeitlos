@@ -22,6 +22,20 @@ Measured on the same page after the change:
 |---|---|---|
 | re-reading 258KB to index it | 13.3 s | **0.43 s** |
 
+**The 13.3s figure was wrong.** Measured on hardware, the card does
+239-274 KB/s, not 19 -- about thirteen times better. See
+`docs/sdcard.md` for the full results. `/ram` is still faster and is
+still the right place for a build directory, but the ratio is roughly
+2x, not 30x, and nothing should be designed around the old number.
+
+Original note, kept for the reasoning: It predates the yield/blocking
+fixes in `docs/app_runtime.md` (which alone took a `view` JPEG decode
+from 7.7s to 3.1s), and 19 KB/s is roughly fifty times slower than the
+gateware SPI master and the DIV=1 divider should permit. See
+`docs/sdcard.md`, which has the arithmetic, one cause already fixed, and
+`sdbench` to measure the rest. The *ratio* to `/ram` may narrow; the
+argument for `/ram` does not depend on it.
+
 Thirty times faster, and it moved the bottleneck: indexing a page is
 now **12.2 seconds of parsing and 0.4 seconds of reading**, where
 before it was 13.3 seconds of reading. `html.c` is what to optimise

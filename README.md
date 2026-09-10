@@ -32,7 +32,7 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 
 ### OS
 
- - Pre-emptive multitasking
+ - Pre-emptive multitasking [kernel](docs/kernel.md) with processes, mailboxes and a memory pool
  - Flat memory model with virtual address space for apps
  - FAT filesystem, on MicroSD and on an optional [RAM disk](docs/ramdisk.md)
  - [Core apps in flash](docs/flash_apps.md) -- boots to a desktop with no sdcard

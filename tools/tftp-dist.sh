@@ -39,6 +39,10 @@
 #     doesn't match its directory isn't an app binary and is skipped,
 #     rather than being published under a name nothing will ask for.
 #
+#   - The two zcc runtime files (sw/apps/zcc/libz/libz.bin and
+#     libz.sym) are copied as well, since they are not app binaries
+#     and would otherwise be missed -- see the block near the end.
+#
 #   - The core apps (wm, net, repl, term) are copied too, even though
 #     they are already in flash (sw/os/zar.h). Pulling a newer one
 #     over the network is exactly how you'd test a change to it
@@ -119,6 +123,41 @@ for dir in "$APPS_DIR"/*/; do
 	size=$(wc -c < "$bin" | tr -d ' ')
 	printf 'tftp-dist: %-12s -> %s/%-12s (%s bytes)\n' \
 		"$name.bin" "$DEST" "$name" "$size"
+
+	copied=$((copied + 1))
+
+done
+
+# -- the zcc runtime --
+#
+# libz.bin and libz.sym are not app binaries and do not match the
+# <name>/<name>.bin rule above, but a fetched zcc cannot compile
+# anything without them: they are the runtime it embeds into what it
+# builds, and they are a DIFFERENT copy from the one linked inside
+# zcc.bin itself (docs/zcc.md, "Where libz comes from").
+#
+# Published under the same bare names. Both are 8.3-valid, which is
+# why they are not called libz.blob and libz.syms -- FatFs here is
+# built with FF_USE_LFN 0, so a four-character extension cannot be
+# written to the card at all.
+LIBZ_DIR="$APPS_DIR/zcc/libz"
+
+for f in libz.bin libz.sym; do
+
+	src="$LIBZ_DIR/$f"
+
+	if [ ! -f "$src" ]; then
+		echo "tftp-dist: NOTE: $f not built -- 'make -C sw/apps/zcc' first;"
+		echo "tftp-dist:       zcc cannot compile anything without it"
+		continue
+	fi
+
+	cp -f "$src" "$DEST/$f"
+	chmod 644 "$DEST/$f"
+
+	size=$(wc -c < "$src" | tr -d ' ')
+	printf 'tftp-dist: %-12s -> %s/%-12s (%s bytes)\n' \
+		"$f" "$DEST" "$f" "$size"
 
 	copied=$((copied + 1))
 

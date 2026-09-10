@@ -297,6 +297,24 @@ uint32_t z_proc_run(const char *name) {
 // still compiles unchanged -- and the Scheme API's (kill ...) wants a
 // real #t/#f rather than an unconditional "sure, probably" (see
 // docs/scheme_api.md).
+z_rv z_proc_status(uint32_t pid, uint32_t *state, int32_t *status) {
+
+	z_proc_status_args_t args;
+	args.pid = pid;
+	args.state = Z_PROC_STATE_UNKNOWN;
+	args.status = 0;
+
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_obj_t *rv = (z_obj_t *)z_kernel_ptr(Z_SYS_PROC_STATUS,
+		(uint32_t *)&args, 0);
+
+	if (state) *state = args.state;
+	if (status) *status = args.status;
+
+	return rv->val.uint32;
+
+}
+
 z_rv z_proc_kill(uint32_t pid) {
 	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
 	z_obj_t obj;

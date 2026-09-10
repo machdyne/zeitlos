@@ -8,9 +8,38 @@ static inline int32_t sext(uint32_t v, int bits) {
 }
 
 void cpu_reset(cpu_t *cpu, uint32_t pc, uint32_t sp) {
-	memset(cpu->regs, 0, sizeof(cpu->regs));
+
+	/* Registers are POISONED, not zeroed.
+	 *
+	 * They used to be zeroed, which is tidy and hides a whole class
+	 * of bug: real hardware leaves whatever the kernel last had in
+	 * them, so code that reads an argument register it was never
+	 * given sees 0 here and garbage there. That is not hypothetical
+	 * -- sw/apps/zcc's main() read an argc it had never been passed,
+	 * ran clean under this simulator for days, and took a real
+	 * machine down the first time it was typed with no arguments.
+	 *
+	 * 0xDEADBEEF is recognisable in a register dump and is far
+	 * outside any process's window when used as a pointer.
+	 *
+	 * It is NOT a substitute for not reading the register. Poison
+	 * catches a use, it does not predict the consequence: as a
+	 * SIGNED int 0xDEADBEEF is negative, so the very loop that
+	 * crashed the machine -- `for (i = 1; i < argc; i++)` -- still
+	 * did not run under it. What a real kernel leaves in a0 is more
+	 * likely to be a small positive leftover from the last syscall,
+	 * which is the case that walks off into memory. So this makes
+	 * the class of bug more likely to show, and the fix still has to
+	 * be in the code that was reading a register nobody set.
+	 *
+	 * x0 is hardwired to zero and sp/pc are set by the caller
+	 * because the kernel really does set those (k_proc_create,
+	 * docs/app_runtime.md). Everything else is fair game. */
+	for (int i = 0; i < 32; i++) cpu->regs[i] = 0xdeadbeefu;
+
+	cpu->regs[0] = 0;
+	cpu->regs[2] = sp;
 	cpu->pc = pc;
-	cpu->regs[2] = sp;   /* x2 = sp */
 	cpu->insn_count = 0;
 	cpu->trapped = 0;
 	cpu->trap_pc = 0;
@@ -134,7 +163,72 @@ int cpu_step(cpu_t *cpu, struct machine *m) {
 		}
 		break;
 
-	case 0x33: /* ALU register-register (RV32I subset only: no mul/div) */
+	case 0x33: /* ALU register-register, RV32I + RV32M */
+
+		/* RV32M.
+		 *
+		 * This used to be absent, on the grounds that rtl/sysctl.v
+		 * builds picorv32 with ENABLE_MUL=0/ENABLE_DIV=0 so no mul or
+		 * div instruction could ever reach here. That stopped being
+		 * true: sw/common/arch.mk now defaults ARCH to rv32im, every
+		 * binary in the tree is built with M, and the boards that
+		 * enable `CPU_MUL/`CPU_DIV (rtl/boards.vh) run them natively.
+		 * A simulator that traps on `mul` cannot run anything the
+		 * current toolchain produces.
+		 *
+		 * There is no flag to turn this off. An rv32i binary simply
+		 * contains no M-extension encodings, so supporting them costs
+		 * such a binary nothing -- whereas a switch would have to be
+		 * set correctly to get a correct answer, which is the failure
+		 * mode arch.mk's own header comment is about.
+		 *
+		 * Division follows the RISC-V spec's defined results for the
+		 * two cases C leaves undefined, rather than dividing in host
+		 * C and inheriting whatever it does: divide by zero gives all
+		 * ones (or the dividend, for remainder), and the signed
+		 * overflow case INT_MIN / -1 gives INT_MIN. Getting these
+		 * wrong produces a simulator that disagrees with hardware
+		 * only on inputs a test suite is unlikely to generate. */
+		if (funct7 == 0x01) {
+			switch (funct3) {
+			case 0: /* MUL */
+				rset(cpu, rd, (uint32_t)((int32_t)a * (int32_t)b));
+				break;
+			case 1: /* MULH */
+				rset(cpu, rd, (uint32_t)(((int64_t)(int32_t)a *
+					(int64_t)(int32_t)b) >> 32));
+				break;
+			case 2: /* MULHSU */
+				rset(cpu, rd, (uint32_t)(((int64_t)(int32_t)a *
+					(int64_t)(uint64_t)b) >> 32));
+				break;
+			case 3: /* MULHU */
+				rset(cpu, rd, (uint32_t)(((uint64_t)a * (uint64_t)b) >> 32));
+				break;
+			case 4: /* DIV */
+				if (b == 0) rset(cpu, rd, 0xffffffffu);
+				else if (a == 0x80000000u && b == 0xffffffffu)
+					rset(cpu, rd, 0x80000000u);
+				else rset(cpu, rd, (uint32_t)((int32_t)a / (int32_t)b));
+				break;
+			case 5: /* DIVU */
+				if (b == 0) rset(cpu, rd, 0xffffffffu);
+				else rset(cpu, rd, a / b);
+				break;
+			case 6: /* REM */
+				if (b == 0) rset(cpu, rd, a);
+				else if (a == 0x80000000u && b == 0xffffffffu)
+					rset(cpu, rd, 0);
+				else rset(cpu, rd, (uint32_t)((int32_t)a % (int32_t)b));
+				break;
+			case 7: /* REMU */
+				if (b == 0) rset(cpu, rd, a);
+				else rset(cpu, rd, a % b);
+				break;
+			}
+			break;
+		}
+
 		switch (funct3) {
 		case 0:
 			if (funct7 == 0x20) rset(cpu, rd, a - b);       /* SUB */
@@ -176,6 +270,35 @@ int cpu_step(cpu_t *cpu, struct machine *m) {
 	case 0x0f: /* FENCE / FENCE.I -- no-op, single-hart, no caches to sync */
 		break;
 
+	case 0x0b: /* PicoRV32 custom instructions.
+	            *
+	            * Only maskirq, which is the one the software actually
+	            * uses: sw/common/zeitlos.h wraps it, and now so does
+	            * libz (sw/apps/zcc/libz/syscall.c) -- so the FIRST
+	            * zcc-compiled program to call maskirq trapped here
+	            * with an illegal instruction, which is how this got
+	            * noticed.
+	            *
+	            * It writes the previous mask to rd and takes the new
+	            * one from rs1. There are no interrupts in this
+	            * simulator, so the mask is a register and nothing
+	            * else -- which is faithful for every use in the tree,
+	            * since maskirq's callers only ever save, mask and
+	            * restore. See docs/app_runtime.md, "maskirq".
+	            *
+	            * The other picorv32 custom ops (getq/setq/retirq/
+	            * waitirq/timer) belong to the interrupt path in
+	            * sw/bios/boot_picorv32.S, which no app executes and
+	            * this simulator does not run. */
+		if (funct3 == 0x6 && funct7 == 0x03) {
+			rset(cpu, rd, m->irq_mask);
+			m->irq_mask = a;
+			break;
+		}
+		cpu->trapped = 1;
+		cpu->trap_pc = pc;
+		return -1;
+
 	case 0x73: /* ECALL / EBREAK / CSR -- not used by the syscall-gate ABI,
 	            * but handled gracefully rather than crashing the interpreter. */
 		if (insn == 0x00000073 || insn == 0x00100073) {
@@ -184,9 +307,50 @@ int cpu_step(cpu_t *cpu, struct machine *m) {
 			cpu->trap_pc = pc;
 			return -1;
 		}
-		/* CSR* instructions: read as 0, ignore writes. Good enough since
-		 * this SOC's apps never touch machine-mode CSRs directly. */
-		rset(cpu, rd, 0);
+		/* CSR reads.
+		 *
+		 * These used to all read as 0, with a comment saying apps
+		 * never touch machine-mode CSRs directly. Two things in the
+		 * tree do, and one of them HANGS on a zero:
+		 * sw/os/fs/fatfs/sdmm.c's dly_us() spins until
+		 * (rdcycle() - start) reaches a target, so a counter that is
+		 * always 0 never gets there. sh.c's `bench` and
+		 * sw/common/zcycles.h read the same counters and would simply
+		 * report nothing.
+		 *
+		 * cycle and instret both return the retired-instruction count
+		 * rather than a modelled cycle count. That is honest about
+		 * what this simulator knows -- it does not model bus latency,
+		 * cache misses or the multicycle FSM, so any "cycle" figure it
+		 * invented would be a lie with a plausible shape. Code that
+		 * uses rdcycle as a monotonic clock (dly_us, timeouts) works
+		 * correctly; code that uses it to measure performance gets a
+		 * number that is obviously an instruction count, which is the
+		 * right way to find out that this is not the tool for that.
+		 *
+		 * Writes are still ignored. cycle/instret are read-only in
+		 * unprivileged mode anyway, and nothing here has the machine
+		 * mode that would make the writable ones meaningful. */
+		{
+			unsigned csr = insn >> 20;
+			uint32_t v = 0;
+
+			switch (csr) {
+			case 0xc00: /* cycle    */
+			case 0xc02: /* instret  */
+				v = (uint32_t)cpu->insn_count;
+				break;
+			case 0xc80: /* cycleh   */
+			case 0xc82: /* instreth */
+				v = (uint32_t)(cpu->insn_count >> 32);
+				break;
+			default:
+				v = 0;
+				break;
+			}
+
+			rset(cpu, rd, v);
+		}
 		break;
 
 	default:

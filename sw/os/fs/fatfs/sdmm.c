@@ -37,6 +37,7 @@
 
 #include "zeitlos.h"
 #include "zsoc.h"			/* Z_SYSCLK_HZ, for dly_us() */		/* Include device specific declareation file here */
+#include "../sdbench.h"		/* sd_stat_t, and the hooks sdbench uses */
 
 /*--------------------------------------------------------------------------
 
@@ -64,10 +65,25 @@
    byte sent produces a byte received, so a "send" discards the result
    and a "receive" sends 0xFF (which is what the card expects to see
    while it is the one talking). */
+/* Set once at init: true when the gateware is "SPI1" (rtl/spim.v),
+   which stalls a DATA access while busy and can transfer 32 bits at a
+   time. Checked rather than assumed -- see Z_SPISD_MAGIC_V1 in
+   zeitlos.h for what taking the fast path against an SPI0 bitstream
+   would silently do. */
+static int sd_spi_v1;
+
 static BYTE spi_xchg (BYTE d)
 {
 	reg_spisd_data = d;
-	while (reg_spisd_status & Z_SPISD_BUSY) ;
+
+	/* On SPI1 the read below stalls until the transfer completes, so
+	   the poll is not merely unnecessary, it is the cost being
+	   removed: sdbench measured 190 CPU cycles per byte against 32
+	   cycles of wire time, and this loop is most of the difference.
+	   See docs/sdcard.md. */
+	if (!sd_spi_v1)
+		while (reg_spisd_status & Z_SPISD_BUSY) ;
+
 	return (BYTE)(reg_spisd_data & 0xFF);
 }
 
@@ -88,6 +104,123 @@ static void sd_set_speed (BYTE div)
 		((reg_spisd_ctrl & Z_SPISD_CTRL_CS) ? Z_SPISD_CTRL_CS : 0);
 }
 
+/* -- hooks for sw/os/fs/sdbench.c --
+
+   These exist so the benchmark can measure the layers separately. The
+   whole point of `sdbench` is to answer "is the card slow, is the bus
+   slow, or is the software slow", and that question cannot be answered
+   from outside this file: spi_xchg() and the divider are both static,
+   deliberately.
+
+   sd_bench_xchg() clocks bytes with CS DEASSERTED, so nothing on the
+   card sees them as a command -- it measures the wishbone round trip
+   plus the gateware shift register and nothing else. That is the
+   number to compare against the divider's theoretical rate: if they
+   disagree, the bottleneck is the CPU's bus access, not SPI. */
+
+void sd_bench_xchg (uint32_t n)
+{
+	while (n--) (void)spi_xchg(0xFF);
+}
+
+/* The same measurement through the WIDE path.
+ *
+ * Layer 0 exists to be the floor under layers 1-3, and it stopped
+ * being one the moment rcvr_mmc() started using 32-bit transfers: a
+ * benchmark reporting 285 KB/s for the raw exchange under a 848 KB/s
+ * multi-block read is not measuring the same thing twice, it is
+ * measuring two different paths and inviting the reader to compare
+ * them. Both are reported now. */
+void sd_bench_xchg32 (uint32_t n)
+{
+	uint32_t saved = reg_spisd_ctrl;
+
+	reg_spisd_ctrl = Z_SPISD_CTRL_DIV(sd_div) | Z_SPISD_CTRL_W32 |
+		((saved & Z_SPISD_CTRL_CS) ? Z_SPISD_CTRL_CS : 0);
+
+	while (n >= 4) {
+		reg_spisd_data = 0xFFFFFFFFu;
+		(void)reg_spisd_data;
+		n -= 4;
+	}
+
+	reg_spisd_ctrl = saved;
+
+	while (n--) (void)spi_xchg(0xFF);
+}
+
+int sd_bench_is_v1 (void)
+{
+	return sd_spi_v1;
+}
+
+BYTE sd_bench_get_div (void)
+{
+	return sd_div;
+}
+
+void sd_bench_set_div (BYTE div)
+{
+	sd_set_speed(div);
+}
+
+
+/* -- Polling, and why there is no longer a dly_us() in the two wait
+   loops below --
+
+   Upstream's loops poll the card once and then sleep 100us. That number
+   was chosen for a BIT-BANGED SPI port, where one poll byte cost around
+   100 CPU cycles per BIT -- about 17us at 48MHz -- so a 100us sleep was
+   the same order as the poll it was throttling.
+
+   rtl/spim.v made that false. A poll byte is now a hardware transfer:
+   eight SCLKs at DIV=1 is 0.67us, plus a handful of wishbone accesses
+   either side. The sleep is over a hundred times the cost of the thing
+   it throttles, and worse, it QUANTISES every wait to a 100us grid. A
+   card that answers a data-token poll in 5us still costs 100us, and in
+   a CMD18 multi-block read EVERY sector pays that, on top of the 384us
+   the 512 bytes themselves take. See docs/sdcard.md.
+
+   A tight poll is the right shape now: the SPI transfer is itself the
+   throttle, and it polls exactly as fast as the card can answer.
+
+   The timeouts still mean what they say only because they are measured
+   with rdcycle rather than counted in iterations. An iteration count
+   calibrated against a 100us sleep expires in a completely different
+   wall-clock time without one, which is the trap this replaces rather
+   than walks into -- 5000 iterations of a tight poll is about 3ms, not
+   the 500ms the original comment claims.
+
+   Same rdcycle caveat docs/filesystem.md already records applies: this
+   measures WALL cycles, so it keeps meaning what it says only because
+   the syscall dispatcher's preempt-deferral stops the holder being
+   descheduled mid-operation. Nothing here changes that arrangement.
+
+   SD_POLL_TIGHT=0 restores the original sleep, so the two can be
+   measured against each other from one build flag rather than an edit:
+
+       make -C sw/os clean && make -C sw/os EXTRA_CFLAGS=-DSD_POLL_TIGHT=0
+*/
+/* SD_POLL_TIGHT's default lives in ../sdbench.h, so that the benchmark
+   reports the same value this file compiled against. */
+
+/* Cheap counters, so `sdbench` (sw/os/fs/sdbench.c) can report WHERE
+   the time went rather than only how long it took. Counted per poll
+   and per sector, never per byte -- a per-byte counter would be a real
+   cost inside the transfer loop it is trying to measure. */
+sd_stat_t sd_stat;
+
+static inline uint32_t sd_cycles (void)
+{
+	uint32_t v;
+	__asm__ volatile ("rdcycle %0" : "=r"(v));
+	return v;
+}
+
+/* 500ms is 24,000,000 cycles at 48MHz, which fits a uint32 with room
+   to spare; anything longer would not, so do not raise these without
+   checking that first. */
+#define SD_US_TO_CYC(us)	((Z_SYSCLK_HZ / 1000000u) * (uint32_t)(us))
 
 static
 void dly_us (UINT n)	/* Delay n microseconds */
@@ -157,6 +290,36 @@ void xmit_mmc (
 	UINT bc				/* Number of bytes to send */
 )
 {
+	/* Same wide path as rcvr_mmc(), same alignment caveat. */
+	if (sd_spi_v1) {
+
+		while (bc && ((uintptr_t)buff & 3)) {
+			spi_xchg(*buff++);
+			bc--;
+		}
+
+		if (bc >= 4) {
+			reg_spisd_ctrl = Z_SPISD_CTRL_DIV(sd_div) |
+				Z_SPISD_CTRL_W32 |
+				((reg_spisd_ctrl & Z_SPISD_CTRL_CS) ? Z_SPISD_CTRL_CS : 0);
+
+			while (bc >= 4) {
+				reg_spisd_data = *(const uint32_t *)buff;
+				(void)reg_spisd_data;   /* completes the transfer: the
+										   read stalls until the shift
+										   register is free */
+				buff += 4;
+				bc -= 4;
+			}
+
+			reg_spisd_ctrl = Z_SPISD_CTRL_DIV(sd_div) |
+				((reg_spisd_ctrl & Z_SPISD_CTRL_CS) ? Z_SPISD_CTRL_CS : 0);
+		}
+
+		while (bc--) spi_xchg(*buff++);
+		return;
+	}
+
 	do {
 		spi_xchg(*buff++);	/* result discarded: the card is listening,
 							   not talking, during a send */
@@ -176,6 +339,41 @@ void rcvr_mmc (
 	UINT bc		/* Number of bytes to receive */
 )
 {
+	/* The wide path, when the gateware supports it and the buffer is
+	   aligned: one bus access per four bytes instead of per byte.
+
+	   Head and tail bytes go the narrow way. A 512-byte sector divides
+	   by four, so in practice that is a few bytes at each end or none
+	   at all -- but FatFs makes no alignment promise about the buffer
+	   it hands us, and a misaligned 32-bit store on this core does not
+	   fault, it silently writes the wrong bytes. */
+	if (sd_spi_v1) {
+
+		while (bc && ((uintptr_t)buff & 3)) {
+			*buff++ = spi_xchg(0xFF);
+			bc--;
+		}
+
+		if (bc >= 4) {
+			reg_spisd_ctrl = Z_SPISD_CTRL_DIV(sd_div) |
+				Z_SPISD_CTRL_W32 |
+				((reg_spisd_ctrl & Z_SPISD_CTRL_CS) ? Z_SPISD_CTRL_CS : 0);
+
+			while (bc >= 4) {
+				reg_spisd_data = 0xFFFFFFFFu;
+				*(uint32_t *)buff = reg_spisd_data;
+				buff += 4;
+				bc -= 4;
+			}
+
+			reg_spisd_ctrl = Z_SPISD_CTRL_DIV(sd_div) |
+				((reg_spisd_ctrl & Z_SPISD_CTRL_CS) ? Z_SPISD_CTRL_CS : 0);
+		}
+
+		while (bc--) *buff++ = spi_xchg(0xFF);
+		return;
+	}
+
 	do {
 		*buff++ = spi_xchg(0xFF);	/* 0xFF holds MOSI high, which is
 									   what the card expects while it
@@ -197,13 +395,23 @@ int wait_ready (void)	/* 1:OK, 0:Timeout */
 	UINT tmr;
 
 
-	for (tmr = 5000; tmr; tmr--) {	/* Wait for ready in timeout of 500ms */
-		rcvr_mmc(&d, 1);
-		if (d == 0xFF) break;
-		dly_us(100);
-	}
+	uint32_t t0 = sd_cycles();
+	uint32_t limit = SD_US_TO_CYC(500000u);		/* 500ms, as before */
 
-	return tmr ? 1 : 0;
+	(void)tmr;
+
+	do {
+		rcvr_mmc(&d, 1);
+		sd_stat.ready_polls++;
+		if (d == 0xFF) return 1;
+#if !SD_POLL_TIGHT
+		dly_us(100);
+#endif
+	} while ((uint32_t)(sd_cycles() - t0) < limit);
+
+	sd_stat.ready_timeouts++;
+
+	return 0;
 }
 
 
@@ -256,15 +464,35 @@ int rcvr_datablock (	/* 1:OK, 0:Failed */
 	UINT tmr;
 
 
-	for (tmr = 1000; tmr; tmr--) {	/* Wait for data packet in timeout of 100ms */
+	uint32_t t0 = sd_cycles();
+	uint32_t limit = SD_US_TO_CYC(100000u);		/* 100ms, as before */
+
+	(void)tmr;
+
+	/* This is the loop that mattered. In a CMD18 multi-block read it
+	   runs once per SECTOR, and with the old 100us sleep it added that
+	   sleep to every one of them -- roughly a quarter again on top of
+	   the 384us the 512 bytes themselves cost at DIV=1, for a card
+	   that had usually already answered. */
+	d[0] = 0xFF;
+	do {
 		rcvr_mmc(d, 1);
+		sd_stat.token_polls++;
 		if (d[0] != 0xFF) break;
+#if !SD_POLL_TIGHT
 		dly_us(100);
+#endif
+	} while ((uint32_t)(sd_cycles() - t0) < limit);
+
+	if (d[0] != 0xFE) {				/* If not valid data token, return with error */
+		sd_stat.token_timeouts++;
+		return 0;
 	}
-	if (d[0] != 0xFE) return 0;		/* If not valid data token, return with error */
 
 	rcvr_mmc(buff, btr);			/* Receive the data block into buffer */
 	rcvr_mmc(d, 2);					/* Discard CRC */
+
+	sd_stat.sectors_read++;
 
 	return 1;						/* Return with success */
 }
@@ -294,6 +522,7 @@ int xmit_datablock (	/* 1:OK, 0:Failed */
 		rcvr_mmc(d, 1);			/* Receive data response */
 		if ((d[0] & 0x1F) != 0x05)	/* If not accepted, return with error */
 			return 0;
+		sd_stat.sectors_written++;
 	}
 
 	return 1;
@@ -325,6 +554,8 @@ BYTE send_cmd (		/* Returns command response (bit7==1:Send failed)*/
 		deselect();
 		if (!select()) return 0xFF;
 	}
+
+	sd_stat.commands++;
 
 	/* Send a command packet */
 	buf[0] = 0x40 | cmd;			/* Start + Command index */
@@ -392,6 +623,12 @@ DSTATUS sd_disk_initialize (
 	   with CS deasserted and SCLK idle low. Cards must be clocked at
 	   400kHz or below until they leave idle state, hence the slow
 	   divider here; it is raised once initialisation succeeds. */
+	/* Which gateware is underneath us. Checked once, here, before any
+	   transfer: everything below assumes one answer or the other and
+	   getting it wrong is silent corruption rather than a failure.
+	   See Z_SPISD_MAGIC_V1 in zeitlos.h. */
+	sd_spi_v1 = (reg_spisd_magic == Z_SPISD_MAGIC_V1);
+
 	sd_set_speed(Z_SPISD_DIV_INIT);
 	CS_H();
 

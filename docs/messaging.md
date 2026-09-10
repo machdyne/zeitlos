@@ -163,7 +163,7 @@ own `z_msg_t`. Current limits (`sw/common/zmsg.h`):
 
 | Constant | Default | Meaning |
 |---|---|---|
-| `Z_MAILBOX_DEPTH` | 8 | pending messages a process's mailbox can hold before `z_msg_send()` starts failing |
+| `Z_MAILBOX_DEPTH` | 32 | pending messages a process's mailbox can hold before `z_msg_send()` starts failing |
 | `Z_MSG_MAX_TABLES` | 4 | `z_obj_table_t` nodes (list/map instances) a single message payload can reference |
 | `Z_MSG_MAX_ITEMS` | 16 | total `z_obj_t` slots across all of a payload's table arrays |
 
@@ -225,7 +225,21 @@ a global registry. Convention so far:
 
 Mailboxes live in kernel-owned static memory (`sw/os/msg.c`), one
 fixed-depth ring buffer per process slot -- not inside any process's
-own memory. `z_msg_send()` (syscall handler `k_msg_send`) copies a
+own memory.
+
+**What is in the ring is `z_msg_envelope_t`, not `z_msg_t`**, and the
+difference matters more than it looks: the envelope is
+`to`/`from`/`subject`/`tag`/`obj` and **24 bytes**, while `z_msg_t` is
+216 because it carries the `_tables`/`_items` scratch arrays that
+`z_msg_read()` resolves a `Z_LIST`/`Z_MAP` payload INTO. Those arrays
+are the receiver's, in the receiver's `z_msg_t`, and the kernel never
+holds one.
+
+So a whole mailbox is 780 bytes and all `Z_PROCS_MAX` of them are
+12KB. Confusing the two structures makes the static allocation look
+nine times more expensive than it is, and that arithmetic error was
+enough to produce a serious proposal to replace it -- see
+`docs/kernel.md`, "Mailboxes stay static". `z_msg_send()` (syscall handler `k_msg_send`) copies a
 small envelope (`to`/`from`/`subject`/`tag`/`obj`) into the
 destination's ring; any `Z_STR`/`Z_LIST`/`Z_MAP` pointer in `obj` is
 left exactly as the sender wrote it (still expressed in the sender's

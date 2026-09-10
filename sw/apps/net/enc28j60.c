@@ -77,14 +77,53 @@ static void eth_delay_ms(uint32_t n) {
 	while (n--) eth_delay_us(1000);
 }
 
+/* Which SPI gateware is underneath us -- see Z_SPISD_MAGIC_V1 in
+   sw/common/zeitlos.h. "SPI1" stalls a DATA access while busy and can
+   transfer 32 bits at a time; "SPI0" does neither.
+ 
+   The SD driver (sw/os/fs/fatfs/sdmm.c) makes exactly the same check
+   against its own instance of the same module. Two instances, two
+   checks: they are separate peripherals and a board could in principle
+   carry different gateware for each, though none does. */
+static int eth_spi_v1;
+
+static void eth_spi_probe(void) {
+	eth_spi_v1 = (reg_spieth_magic == Z_SPISD_MAGIC_V1);
+}
+
 static uint8_t spi_xfer(uint8_t out) {
 
 	/* Full duplex, one byte, in hardware. The eight-iteration bit loop
 	   this replaces cost roughly 800 CPU cycles; this costs about 48. */
 	reg_spieth_data = out;
-	while (reg_spieth_status & Z_SPISD_BUSY) ;
+
+	/* On SPI1 the read below stalls until the transfer completes, so
+	   the poll is not just unnecessary -- it is most of the cost.
+	   sdbench measured the same loop on the SD instance at 190 CPU
+	   cycles per byte against 32 cycles of wire time (docs/sdcard.md);
+	   there is no reason to think this one is different. */
+	if (!eth_spi_v1)
+		while (reg_spieth_status & Z_SPISD_BUSY) ;
+
 	return (uint8_t)(reg_spieth_data & 0xFF);
 
+}
+
+/* -- 32-bit bulk transfers --
+ *
+ * Only the packet buffer paths use these. A control-register access is
+ * two or three bytes and would gain nothing; RBM and WBM move whole
+ * frames, up to 1500 bytes, and are where all of the time is.
+ *
+ * Head and tail bytes go the narrow way, because the caller's buffer
+ * carries no alignment promise and a misaligned 32-bit access on this
+ * core does not fault -- it silently moves the wrong bytes.
+ */
+static void eth_spi_wide(int on) {
+	uint32_t ctrl = Z_SPISD_CTRL_DIV(Z_SPIETH_DIV);
+	if (reg_spieth_ctrl & Z_SPISD_CTRL_CS) ctrl |= Z_SPISD_CTRL_CS;
+	if (on) ctrl |= Z_SPISD_CTRL_W32;
+	reg_spieth_ctrl = ctrl;
 }
 
 // -- ENC28J60 SPI opcodes --
@@ -323,8 +362,28 @@ static void eth_read_buffer(uint8_t *buf, uint16_t len) {
 	uint32_t old_mask = maskirq(0xFFFFFFFF);
 	ETH_CS_L();
 	spi_xfer(OP_RBM);
-	for (uint16_t i = 0; i < len; i++)
-		buf[i] = spi_xfer(0x00);
+
+	if (eth_spi_v1) {
+		uint16_t i = 0;
+		while (i < len && (((uintptr_t)(buf + i)) & 3)) {
+			buf[i] = spi_xfer(0x00);
+			i++;
+		}
+		if (len - i >= 4) {
+			eth_spi_wide(1);
+			while (len - i >= 4) {
+				reg_spieth_data = 0xFFFFFFFFu;
+				*(uint32_t *)(buf + i) = reg_spieth_data;
+				i += 4;
+			}
+			eth_spi_wide(0);
+		}
+		while (i < len) { buf[i] = spi_xfer(0x00); i++; }
+	} else {
+		for (uint16_t i = 0; i < len; i++)
+			buf[i] = spi_xfer(0x00);
+	}
+
 	ETH_CS_H();
 	maskirq(old_mask);
 }
@@ -333,8 +392,29 @@ static void eth_write_buffer(const uint8_t *buf, uint16_t len) {
 	uint32_t old_mask = maskirq(0xFFFFFFFF);
 	ETH_CS_L();
 	spi_xfer(OP_WBM);
-	for (uint16_t i = 0; i < len; i++)
-		spi_xfer(buf[i]);
+
+	if (eth_spi_v1) {
+		uint16_t i = 0;
+		while (i < len && (((uintptr_t)(buf + i)) & 3)) {
+			spi_xfer(buf[i]);
+			i++;
+		}
+		if (len - i >= 4) {
+			eth_spi_wide(1);
+			while (len - i >= 4) {
+				reg_spieth_data = *(const uint32_t *)(buf + i);
+				(void)reg_spieth_data;  /* the read stalls until the
+										   transfer completes */
+				i += 4;
+			}
+			eth_spi_wide(0);
+		}
+		while (i < len) { spi_xfer(buf[i]); i++; }
+	} else {
+		for (uint16_t i = 0; i < len; i++)
+			spi_xfer(buf[i]);
+	}
+
 	ETH_CS_H();
 	maskirq(old_mask);
 }
@@ -362,6 +442,11 @@ static void eth_phy_write(uint8_t phy_reg, uint16_t data) {
 // -- public API --
 
 bool enc28j60_init(const uint8_t mac[6]) {
+
+	// Which SPI gateware, checked once and before any transfer --
+	// everything below assumes one answer or the other, and getting it
+	// wrong is silent corruption rather than a failure.
+	eth_spi_probe();
 
 	// No pin setup needed: rtl/spim.v owns the pins and comes out of
 	// reset with CS deasserted and SCLK idle low.

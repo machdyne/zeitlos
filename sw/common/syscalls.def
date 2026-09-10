@@ -151,3 +151,26 @@ Z_MKSYSCALL(HID_PTR_SUBSCRIBE, k_hid_ptr_subscribe)
 Z_MKSYSCALL(FS_OPEN_RW, k_fs_open_rw)
 Z_MKSYSCALL(FS_SYNC, k_fs_sync)
 Z_MKSYSCALL(FS_TRUNCATE, k_fs_truncate)
+
+// -- child lifecycle: how a shell learns that a program finished --
+//
+// z_exit()'s argument used to be DISCARDED. It called k_proc_kill()
+// and dropped the object on the floor, so every exit status in the
+// system was thrown away at the first step -- sw/apps/zcc's entry stub
+// carefully packs one and nothing ever looked at it.
+//
+// Two things needed it. `posix` cannot make `a && b` mean anything
+// without a status ("did the compiler SUCCEED", not "did it START"),
+// and it cannot hand the terminal to a full-screen program and take it
+// back without knowing when that program ended.
+//
+// The status is kept in a small ring of recently-exited processes
+// (K_EXIT_RING_SIZE, sw/os/kernel.c) rather than by holding the
+// process slot until someone reads it. Zombie slots would be the
+// textbook answer and they leak: nothing in this system is obliged to
+// reap anything, so an unreaped child would occupy a slot forever. A
+// ring cannot leak; it can only forget, and it forgets in the order
+// nobody is waiting for.
+//
+// Args are z_proc_status_args_t (sw/common/zproc.h).
+Z_MKSYSCALL(PROC_STATUS, k_proc_status)

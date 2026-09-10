@@ -1,5 +1,12 @@
 # Boot
 
+See `docs/kernel.md` for the kernel side: processes, the scheduler, the
+memory pool, and the syscall boundary -- including **"The 256KB image
+budget"**, which explains why `kernel.bin` is padded to `_end`, why
+every static array in the kernel costs flash, and what the options are
+if it ever needs more. `sw/os/Makefile` fails the build if the image
+exceeds it.
+
 What happens between power-on and a usable desktop, and the two places
 you can intervene.
 

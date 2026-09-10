@@ -51,7 +51,7 @@ LDFLAGS = $(PIC_FLAGS) -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS)
 LDSCRIPT = ../common/riscv-os.ld
 
 OBJS = kernel.o kruntime.o mem.o zar.o \
-	fs/fs.o fs/ramdisk.o fs/fatfs/sdmm.o fs/fatfs/diskio_mux.o fs/fatfs/ff.o \
+	fs/fs.o fs/ramdisk.o fs/sdbench.o fs/fatfs/sdmm.o fs/fatfs/diskio_mux.o fs/fatfs/ff.o \
 	uart.o hid.o sh.o xfer.o xmodem.o ui.o msg.o pidreg.o fsapi.o procapi.o zobj.o zstream.o zdns.o zsoc.o zgpio.o logo.o
 
 # kernel.o's recipe below builds every object in one go (they're not
@@ -64,7 +64,7 @@ OBJS = kernel.o kruntime.o mem.o zar.o \
 # any edit. bit us for real with fs/fs.c during this session's
 # zstream/TFTP work -- see docs/networking.md.
 KSRCS = kernel.c kruntime.c mem.c \
-	fs/fs.c fs/ramdisk.c fs/fatfs/sdmm.c fs/fatfs/diskio_mux.c fs/fatfs/ff.c \
+	fs/fs.c fs/ramdisk.c fs/sdbench.c fs/fatfs/sdmm.c fs/fatfs/diskio_mux.c fs/fatfs/ff.c \
 	uart.c hid.c sh.c xfer.c xmodem.c ui.c msg.c pidreg.c fsapi.c procapi.c logo.c \
 	../common/zobj.c ../common/zstream.c ../common/zdns.c ../common/zsoc.c
 
@@ -75,6 +75,7 @@ kernel.o: $(KSRCS)
 	$(CC) $(CFLAGS) -c kruntime.c -o kruntime.o
 	$(CC) $(CFLAGS) -c mem.c -o mem.o
 	$(CC) $(CFLAGS) -c fs/fs.c -o fs/fs.o
+	$(CC) $(CFLAGS) -c fs/sdbench.c -o fs/sdbench.o
 	$(CC) $(CFLAGS) -c fs/fatfs/sdmm.c -o fs/fatfs/sdmm.o
 
 fs/fatfs/diskio_mux.o: fs/fatfs/diskio_mux.c fs/ramdisk.h
@@ -106,15 +107,92 @@ kernel.elf: $(OBJS)
 	$(CC) $(LDFLAGS) -T $(LDSCRIPT) -Wl,-Map,kernel.map -o kernel.elf $(OBJS)
 	$(PREFIX)objdump -S --disassemble kernel.elf > kernel.dasm
 
+# NOTE: no `strip` here any more.
+#
+# It used to run on kernel.elf, in place, between reading _end and the
+# objcopy. It cannot have affected the output: `objcopy -O binary`
+# emits allocated section CONTENTS and nothing else, so a symbol table
+# never reaches kernel.bin whether it is stripped or not.
+#
+# What it did do was destroy the only record of what is in the image,
+# which is exactly what you need when the image is too big -- and the
+# image being too big is the failure this rule exists to catch. Two
+# rounds of reasoning about kernel size from struct arithmetic gave two
+# wrong answers, and the measurement that would have settled it had
+# been deleted by the build.
+#
+# The BIOS copies a FIXED 256KB from flash (ROM_OS_SIZE, sw/bios/bios.c)
+# and that copy is what zeroes .bss -- which is why the image is padded
+# to _end rather than stopping at _edata. Two consequences:
+#
+#   - every byte of kernel .bss costs a byte of flash image;
+#   - an image past 256KB is silently TRUNCATED by the BIOS, and the
+#     kernel starts with its tail missing.
+#
+# The check below turns that into a build failure. It was added after
+# Z_PROCS_MAX went to 64, put the image 7,640 bytes over, and was found
+# by flashing a board -- which is the worst possible place to find it,
+# because the symptom is a kernel that boots and then misbehaves rather
+# than one that fails to link.
+KERNEL_MAX_SIZE ?= 262144
+
+# Below this much headroom the build prints what is taking the space,
+# rather than waiting until it fails. 16KB is about two Z_PROCS_MAX
+# slots' worth of change -- enough warning to act on.
+KERNEL_WARN_FREE ?= 16384
+
 kernel.bin: kernel.elf
 	@END=$$($(PREFIX)nm kernel.elf | awk '$$3=="_end"{print "0x"$$1}'); \
-	$(PREFIX)strip kernel.elf; \
-	$(PREFIX)objcopy -O binary --pad-to=$$END kernel.elf kernel.bin
+	START=$$($(PREFIX)nm kernel.elf | awk '$$3=="_start"{print "0x"$$1}'); \
+	$(PREFIX)objcopy -O binary --pad-to=$$END kernel.elf kernel.bin; \
+	SIZE=$$(wc -c < kernel.bin); \
+	if [ $$SIZE -gt $(KERNEL_MAX_SIZE) ]; then \
+		echo ""; \
+		echo "*** kernel.bin is $$SIZE bytes, over the $(KERNEL_MAX_SIZE) the BIOS copies."; \
+		echo "*** The BIOS would truncate it and the kernel would start incomplete."; \
+		echo "***"; \
+		echo "*** This is usually .bss, which is padded into the image so the"; \
+		echo "*** BIOS copy zeroes it. Check any static array you just added,"; \
+		echo "*** and Z_PROCS_MAX / Z_MAILBOX_DEPTH in kernel.h. See"; \
+		echo "*** docs/kernel.md, 'The 256KB image budget'."; \
+		echo ""; \
+		rm -f kernel.bin; \
+		exit 1; \
+	fi; \
+	FREE=$$(( $(KERNEL_MAX_SIZE) - $$SIZE )); \
+	echo "kernel.bin: $$SIZE bytes ($$FREE free of $(KERNEL_MAX_SIZE))"; \
+	if [ $$FREE -lt $(KERNEL_WARN_FREE) ]; then \
+		echo ""; \
+		echo "kernel.bin has less than $(KERNEL_WARN_FREE) bytes of headroom."; \
+		echo "Largest symbols (mostly .bss -- see docs/kernel.md):"; \
+		$(MAKE) --no-print-directory kernel-size; \
+	fi
+
+# What is actually in the image.
+#
+# Added because two rounds of reasoning about kernel size from struct
+# arithmetic produced two wrong answers -- the sizes were right and the
+# total was not, which means the model was missing something the model
+# could not see. A build that reports its own composition does not have
+# that problem.
+#
+#   make -C sw/os kernel-size
+#
+# `size` gives text/data/bss; the symbol list gives the ten arrays
+# actually responsible. .bss is what usually moves, and .bss is flash
+# image here -- see docs/kernel.md, "The 256KB image budget".
+kernel-size: kernel.elf
+	@$(PREFIX)size kernel.elf || true
+	@echo ""
+	@# --radix=d rather than piping hex through awk's strtonum(), which
+	@# is a gawk extension and absent from mawk and busybox awk.
+	@$(PREFIX)nm --size-sort -S --radix=d kernel.elf | tail -12 | \
+		awk '{printf "  %8s  %-4s %s\n", $$2, $$3, $$4}'
 
 clean:
 	rm -f kernel.elf kernel.bin kernel.asm kernel.dasm kernel.map sh.asm *.o *.d fs/*.o fs/*.d fs/fatfs/*.o fs/fatfs/*.d
 
-.PHONY: kernel clean
+.PHONY: kernel-size kernel clean
 
 # Header dependency tracking.
 #

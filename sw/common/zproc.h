@@ -139,6 +139,24 @@ typedef struct {
 	uint32_t	cpu_ticks;
 } z_proc_info_t;
 
+// -- Z_SYS_PROC_STATUS --
+//
+// `state` is one of these. UNKNOWN means "not running, and not in the
+// exit ring" -- which is a process that finished long enough ago to
+// have been forgotten, or one that never existed. The two are not
+// distinguishable and deliberately so: a caller that wants the
+// difference should have asked sooner.
+#define Z_PROC_STATE_UNKNOWN	0
+#define Z_PROC_STATE_RUNNING	1
+#define Z_PROC_STATE_EXITED		2
+
+typedef struct {
+	uint32_t	pid;		// IN
+	uint32_t	state;		// OUT: Z_PROC_STATE_*
+	int32_t		status;		// OUT: the value passed to z_exit(),
+							// meaningful only when state is EXITED
+} z_proc_status_args_t;
+
 typedef struct {
 	z_proc_info_t	*out;		// OUT: caller-owned array, >= max entries
 	uint32_t		max;		// capacity of `out`, in entries

@@ -93,6 +93,12 @@ typedef struct {
 // Scheduler helpers -- k_proc_unblock() is called from msg.c on every
 // delivery, so it has to be visible outside kernel.c.
 uint32_t k_proc_runnable_count(void);
+
+// Records a process's exit status in the ring k_proc_status() reads.
+// Called from z_exit(); see syscalls.def's PROC_STATUS entry for why a
+// ring rather than a zombie slot.
+void k_proc_exit_record(uint32_t pid, int32_t status);
+z_obj_t *k_proc_status(z_obj_t *args);
 void k_proc_unblock(uint32_t pid);
 z_obj_t *k_proc_wait(z_obj_t *args);
 
@@ -101,7 +107,43 @@ z_obj_t *k_proc_wait(z_obj_t *args);
 	(((p).flags & (Z_PROC_FLAG_ACTIVE | Z_PROC_FLAG_BLOCKED)) \
 		== Z_PROC_FLAG_ACTIVE)
 
-#define Z_PROCS_MAX 16
+// 32, not 16 -- and NOT 64, which was tried and did not fit.
+//
+// Each slot is z_procs[] at 148 bytes plus z_mailboxes[] at 780, so
+// 928 bytes; 32 slots is 29KB against 16's 15KB.
+//
+// -- why this is a FLASH budget, not just a RAM one --
+//
+// Kernel .bss costs image bytes, one for one. sw/os/Makefile links
+// kernel.bin with `objcopy --pad-to=_end`, so .bss is present in the
+// file as zeros, because the BIOS copies a FIXED 256KB from flash
+// (ROM_OS_SIZE, sw/bios/bios.c) and that copy is what zeroes .bss.
+// Anything past the end of the file would be filled with whatever
+// happens to be in flash after it.
+//
+// So `_end` must stay under 256KB, and every static array in the
+// kernel spends that budget. 64 slots put the image at 269,784 bytes
+// -- 7,640 over -- and the first sign of it was the BIOS truncating
+// the kernel on a real board.
+//
+// 32 is comfortably enough for what raised it: docs/posix.md's Phase 5
+// runs one process per pipeline stage, and a four-stage pipeline
+// alongside wm/net/repl/term/posix/zcc is about a dozen.
+//
+// The padding is NOT the thing to remove if more slots are ever
+// wanted -- it is load-bearing, and dropping it would leave .bss
+// holding whatever the BIOS copied out of the flash beyond the image.
+// The options, in order of how much they disturb:
+//
+//   1. Z_MAILBOX_DEPTH (zmsg.h), which is 84% of a slot's cost at 780
+//      bytes against z_procs[]'s 148. Halving it to 16 halves that.
+//   2. A per-board Z_PROCS_MAX, which needs a board define in the
+//      kernel build -- sw/os/Makefile passes only ARCH_DEFS today.
+//   3. Moving Z_ZAR_FLASH_OFFSET (zar.h, 0x140000) and ROM_OS_SIZE
+//      (sw/bios/bios.c) to give the kernel more than 256KB. That is a
+//      flash-layout change: it moves the core-app archive, so a board
+//      flashed with the old layout and a new BIOS finds neither.
+#define Z_PROCS_MAX 32
 
 // Per-process stack+heap allowance (see mem.h's own comment on why
 // there's no separate heap region at all -- this is the ONLY room a
@@ -178,10 +220,52 @@ z_obj_t *k_proc_wait(z_obj_t *args);
 //   whole tier system exists to prevent, and `web` is an app for
 //   32MB boards regardless -- see docs/web_app.md. It is not a
 //   candidate for a 1MB machine whether it gets 32KB or 64KB.
+//
+// - Z_PROC_STACK_SIZE_HUGE (4MB): `zcc` and `posix`.
+//
+//   A different KIND of tier from the four above, and worth reading as
+//   such rather than as "LARGE but more". The others differ by factors
+//   of two and exist to trim margin off apps that were measured not to
+//   need it. This one is sixty-four times LARGE, because a compiler's
+//   working set is not a margin question: the token stream, the symbol
+//   and macro tables, the IR for the function being generated and the
+//   output buffer all have to be live at once, and they scale with the
+//   source rather than with anything the tier system can bound. See
+//   docs/posix.md's memory budget, which sizes a 2,000-line
+//   translation unit at roughly 1MB and picks 4MB to leave the
+//   headroom that estimate does not deserve to be trusted without.
+//
+//   THREE THINGS FOLLOW FROM THE SIZE, and all three are deliberate:
+//
+//   1. This does not fit on a 1MB board and is not meant to. Obst has
+//      a 1MB pool with the kernel's own 233KB image already in it, so
+//      a 4MB request cannot succeed there under any circumstances.
+//      That is the correct outcome -- see docs/posix.md, "Board RAM
+//      decides who gets this at all" -- and it is not a silent one:
+//      k_mem_alloc() returns NULL, k_proc_create() returns 0, and
+//      every caller already treats 0 as "did not start". That path was
+//      made trustworthy by the Z_FAIL bug fixed in k_proc_create()
+//      (see docs/app_runtime.md); this tier is the first thing to lean
+//      on it deliberately rather than by accident.
+//
+//   2. It is a large enough share of an 8MB board to matter to
+//      everything else on it. 4MB of 8MB, with the kernel, wm, net,
+//      repl and a 1MB ramdisk also wanting room, is most of the
+//      machine. On 8MB, expect to run `posix` OR the desktop, not
+//      comfortably both; on 32MB it is unremarkable.
+//
+//   3. k_mem_alloc() is a first-fit walk over a block list with
+//      Z_MEM_ALIGNMENT of 4096 (mem.h), so a 4MB request late in a
+//      fragmented pool can fail while 4MB is nominally free. `free`
+//      (k_mem_dump()) reports fragmentation, and starting the compiler
+//      early is the cheap mitigation. Worth knowing before reading a
+//      refusal as "out of memory" when it is really "out of one
+//      contiguous piece".
 #define Z_PROC_STACK_SIZE_SMALL    8*1024
 #define Z_PROC_STACK_SIZE_DEFAULT  16*1024
 #define Z_PROC_STACK_SIZE_MEDIUM   32*1024
 #define Z_PROC_STACK_SIZE_LARGE    64*1024
+#define Z_PROC_STACK_SIZE_HUGE     4*1024*1024
 
 // which tier (above) a process named `name` should get -- the one
 // place this decision is made, used by every path that can start a
@@ -197,6 +281,17 @@ static inline uint32_t z_proc_stack_size_for(const char *name) {
 	// draw path nests -- page_fetch() runs the parser, which calls
 	// back into the layout engine -- and running out of stack here
 	// is not a clean failure.
+	// The compiler and the POSIX layer, which hosts it. Both are
+	// 8MB-and-up features that refuse to start below that; see
+	// Z_PROC_STACK_SIZE_HUGE above and docs/posix.md.
+	//
+	// Named here rather than given a flag in the executable header,
+	// because the header is a stable on-disk format (docs/executables.md)
+	// and this is a policy that will change more often than that format
+	// should. It is the same trade every other name in this function
+	// makes.
+	if (!strcmp(name, "zcc") || !strcmp(name, "posix"))
+		return Z_PROC_STACK_SIZE_HUGE;
 	if (!strcmp(name, "web"))
 		return Z_PROC_STACK_SIZE_LARGE;
 	if (!strcmp(name, "repl") || !strcmp(name, "net"))

@@ -33,14 +33,63 @@
  * roughly 100 CPU cycles per BIT, this costs roughly 48 cycles per
  * BYTE, which is about an 18x improvement.
  *
+ * -- Version 1: stall-on-DATA, and 32-bit transfers --
+ *
+ * `sdbench` on hardware (docs/sdcard.md) measured the SD path at 190
+ * CPU cycles per byte against 32 cycles of actual wire time at DIV=1.
+ * Layers above this module -- the card, the command protocol, FatFs --
+ * accounted for under 15% between them. Essentially all of the cost
+ * was software crossing the wishbone bus three or more times per byte:
+ * a write to DATA, a poll loop over STATUS, and a read of DATA.
+ *
+ * Two additions remove most of that, neither of which needs a bus
+ * master, an arbiter port, or a single bit of block RAM:
+ *
+ *   1. A DATA access STALLS while busy instead of being ignored (write)
+ *      or returning stale data (read). The driver no longer polls at
+ *      all: `write DATA; read DATA` is a complete exchange.
+ *
+ *   2. A transfer can be 32 bits instead of 8 (CTRL bit 1). One bus
+ *      access moves four bytes.
+ *
+ * Both are additive and default off, so an unmodified driver behaves
+ * exactly as before -- but a driver that uses them against an OLD
+ * bitstream would be silently wrong, so MAGIC is now "SPI1" and
+ * software must check it before taking the fast path. See
+ * Z_SPISD_MAGIC in sw/common/zeitlos.h.
+ *
+ * -- What stalling costs --
+ *
+ * The arbiter holds a grant for a whole transaction (rtl/arbiter_main.v),
+ * so a stalled access holds the main bus for the duration of the
+ * transfer: 32 cycles for a byte at DIV=1, 128 for a 32-bit word, and
+ * proportionally more at a larger divider. The CPU previously spun in
+ * a poll loop and held the bus nearly as hard, so this is closer to
+ * honest accounting than to a regression.
+ *
+ * The case to keep in mind is card INITIALISATION, which runs at
+ * DEFAULT_DIV (59): a byte there stalls the bus for ~960 cycles. The
+ * audio mixer wants eight words per sample period (~1090 cycles at
+ * 44.1kHz), so a stall that long could starve it. Initialisation
+ * happens once, at boot, before anything is playing -- but a future
+ * caller that drops the clock back down while audio is running would
+ * be the one to watch.
+ *
  * -- Register map (word addressed, like every simple slave here) --
  *
- *   0  DATA    write: start a transfer, sending this byte
- *              read:  the byte received by the last transfer
+ *   0  DATA    write: start a transfer, sending this byte (or word,
+ *                     if CTRL.XFER32 is set)
+ *              read:  what the last transfer received
  *
- *              A write while busy is IGNORED (see BUSY). Reading
- *              DATA does not start anything, so the usual
- *              full-duplex exchange is: write, poll BUSY, read.
+ *              A DATA access while busy STALLS -- the wishbone ack is
+ *              withheld until the shift register is free. So the whole
+ *              full-duplex exchange is `write DATA; read DATA`, with
+ *              no polling, and back-to-back writes need no polling
+ *              either.
+ *
+ *              STATUS.BUSY is still there and still correct, for a
+ *              driver that wants to look without blocking, and for
+ *              every existing user of this module.
  *
  *   1  STATUS  bit 0  BUSY   1 while a transfer is in progress
  *              bit 1  CS     current chip-select level
@@ -106,12 +155,27 @@ module spim_wb #(
     input spi_int
 );
 
-    localparam MAGIC = 32'h5350_4930;   // "SPI0"
+    // "SPI1", not "SPI0". Bumped because the stall and the 32-bit mode
+    // are things software must not assume: a driver that skips the
+    // BUSY poll against a bitstream that does not stall reads DATA
+    // mid-transfer and gets a byte that is half old and half new. A
+    // version register exists precisely so that pairing cannot go
+    // wrong silently -- see sdmm.c's own check.
+    localparam MAGIC = 32'h5350_4931;   // "SPI1"
 
-    reg [7:0] shift_tx;      // what is left to send, MSB first
-    reg [7:0] shift_rx;      // what has been received so far
-    reg [7:0] data_rx;       // last completed byte, readable at DATA
-    reg [3:0] bit_cnt;       // bits remaining in this transfer
+    // 32 bits wide so that one transfer can move four bytes. In 8-bit
+    // mode only the top byte of shift_tx and the bottom byte of
+    // shift_rx are used, which is exactly what the 8-bit version did.
+    //
+    // Cost of the widening: about seventy flip-flops and a handful of
+    // LUTs. No block RAM -- a FIFO would need one and is not what this
+    // needs. What buys the speed is fewer BUS ACCESSES per byte, not
+    // buffering.
+    reg [31:0] shift_tx;     // what is left to send, MSB first
+    reg [31:0] shift_rx;     // what has been received so far
+    reg [31:0] data_rx;      // what the last transfer received
+    reg [5:0] bit_cnt;       // bits remaining in this transfer
+    reg xfer32;              // 1 = 32-bit transfers, 0 = 8-bit
     reg [7:0] clk_div;
     reg [7:0] clk_cnt;
     reg busy;
@@ -130,10 +194,11 @@ module spim_wb #(
             spi_cs_n <= 1'b1;          // deasserted (active low)
             spi_sck <= 1'b0;         // CPOL=0 idles low
             spi_mosi <= 1'b1;        // idle high, as MMC/SD expect
-            shift_tx <= 8'hFF;
-            shift_rx <= 8'h00;
-            data_rx <= 8'hFF;
-            bit_cnt <= 4'd0;
+            shift_tx <= 32'hFFFFFFFF;
+            shift_rx <= 32'h0;
+            data_rx <= 32'hFF;
+            bit_cnt <= 6'd0;
+            xfer32 <= 1'b0;
             clk_div <= DEFAULT_DIV;
             clk_cnt <= 8'd0;
             busy <= 1'b0;
@@ -159,7 +224,7 @@ module spim_wb #(
                         // rising edge: the card has had a full half
                         // period to drive MISO, so sample it here
                         spi_sck <= 1'b1;
-                        shift_rx <= { shift_rx[6:0], spi_miso };
+                        shift_rx <= { shift_rx[30:0], spi_miso };
                         sck_phase <= 1'b1;
                     end else begin
                         // falling edge: present the next bit, giving
@@ -168,24 +233,45 @@ module spim_wb #(
                         spi_sck <= 1'b0;
                         sck_phase <= 1'b0;
 
-                        if (bit_cnt == 4'd1) begin
-                            // shift_rx already holds the whole byte:
-                            // the 8th and final sample happened on the
-                            // rising edge just gone. Shifting one more
-                            // bit in here would drop bit 7 and append
-                            // a stale MISO level.
+                        if (bit_cnt == 6'd1) begin
+                            // shift_rx already holds the whole
+                            // transfer: the final sample happened on
+                            // the rising edge just gone. Shifting one
+                            // more bit in here would drop the first
+                            // bit and append a stale MISO level.
                             busy <= 1'b0;
-                            data_rx <= shift_rx;
                             spi_mosi <= 1'b1;
-                            bit_cnt <= 4'd0;
+                            bit_cnt <= 6'd0;
+
+                            // Byte order.
+                            //
+                            // Bits arrive MSB-first, so after a 32-bit
+                            // transfer the FIRST byte off the wire is
+                            // in shift_rx[31:24]. The CPU is
+                            // little-endian and will store this word
+                            // to a buffer with bits 7:0 landing at
+                            // byte 0 -- so the lanes are reversed here
+                            // to put the first byte received where a
+                            // byte-at-a-time driver would have put it.
+                            //
+                            // Doing this in software instead would
+                            // give back a good part of what the wide
+                            // transfer just bought: four shifts and
+                            // three ors per word, on a machine where
+                            // that is most of the cost.
+                            if (xfer32)
+                                data_rx <= { shift_rx[7:0], shift_rx[15:8],
+                                             shift_rx[23:16], shift_rx[31:24] };
+                            else
+                                data_rx <= { 24'b0, shift_rx[7:0] };
                         end else begin
-                            bit_cnt <= bit_cnt - 4'd1;
-                            // [7], not [6]: shift_tx holds the bits
+                            bit_cnt <= bit_cnt - 6'd1;
+                            // [31], not [30]: shift_tx holds the bits
                             // still to send left-aligned, so its MSB
-                            // is the next one out. Taking [6] would
+                            // is the next one out. Taking [30] would
                             // skip a bit.
-                            spi_mosi <= shift_tx[7];
-                            shift_tx <= { shift_tx[6:0], 1'b1 };
+                            spi_mosi <= shift_tx[31];
+                            shift_tx <= { shift_tx[30:0], 1'b1 };
                         end
                     end
                 end
@@ -194,7 +280,17 @@ module spim_wb #(
 
             // -- wishbone ------------------------------------------
 
-            if (wb_cyc_i && wb_stb_i && !wb_ack_o) begin
+            // A DATA access while busy is STALLED: no ack until the
+            // shift register is free. Every other register acks
+            // immediately, as before -- STATUS in particular has to,
+            // or a driver polling BUSY would deadlock against the very
+            // condition it is waiting for.
+            //
+            // Bounded by construction: the longest possible transfer
+            // is 32 bits at the largest divider, 32 * 2 * 256 = 16384
+            // cycles. It cannot hang.
+            if (wb_cyc_i && wb_stb_i && !wb_ack_o &&
+                !(wb_adr_i == 32'd0 && busy)) begin
 
                 wb_ack_o <= 1'b1;
 
@@ -203,26 +299,41 @@ module spim_wb #(
                     case (wb_adr_i)
 
                         32'd0: begin
-                            // Ignored while busy rather than queued or
-                            // clobbering the transfer in flight. The
-                            // driver polls BUSY first; silently
-                            // corrupting a byte would be worse than
-                            // doing nothing.
-                            if (!busy) begin
-                                shift_tx <= { wb_dat_i[6:0], 1'b1 };
+                            // Cannot be reached while busy -- the ack
+                            // is withheld above until the shift
+                            // register is free -- so the transfer in
+                            // flight can never be clobbered. The
+                            // `if (!busy)` that used to guard this is
+                            // gone with the condition it tested.
+                            shift_rx <= 32'h0;
+                            clk_cnt <= 8'd0;
+                            sck_phase <= 1'b0;
+                            spi_sck <= 1'b0;
+                            busy <= 1'b1;
+
+                            if (xfer32) begin
+                                // Lanes reversed for the same reason
+                                // as on receive: byte 0 of the
+                                // caller's buffer is in bits 7:0, and
+                                // it has to go out first.
+                                spi_mosi <= wb_dat_i[7];
+                                shift_tx <= { wb_dat_i[6:0],
+                                              wb_dat_i[15:8],
+                                              wb_dat_i[23:16],
+                                              wb_dat_i[31:24],
+                                              1'b1 };
+                                bit_cnt <= 6'd32;
+                            end else begin
                                 spi_mosi <= wb_dat_i[7];   // MSB first
-                                shift_rx <= 8'h00;
-                                bit_cnt <= 4'd8;
-                                clk_cnt <= 8'd0;
-                                sck_phase <= 1'b0;
-                                spi_sck <= 1'b0;
-                                busy <= 1'b1;
+                                shift_tx <= { wb_dat_i[6:0], 25'h1FFFFFF };
+                                bit_cnt <= 6'd8;
                             end
                         end
 
                         32'd2: begin
                             cs_assert <= wb_dat_i[0];
                             spi_cs_n <= ~wb_dat_i[0];   // active low
+                            xfer32 <= wb_dat_i[1];
                             clk_div <= wb_dat_i[15:8];
                         end
 
@@ -233,9 +344,10 @@ module spim_wb #(
                 end else begin
 
                     case (wb_adr_i)
-                        32'd0: wb_dat_o <= { 24'b0, data_rx };
+                        32'd0: wb_dat_o <= data_rx;
                         32'd1: wb_dat_o <= { 29'b0, spi_int, cs_assert, busy };
-                        32'd2: wb_dat_o <= { 16'b0, clk_div, 7'b0, cs_assert };
+                        32'd2: wb_dat_o <= { 16'b0, clk_div, 6'b0,
+                                             xfer32, cs_assert };
                         32'd3: wb_dat_o <= MAGIC;
                         default: wb_dat_o <= 32'b0;
                     endcase

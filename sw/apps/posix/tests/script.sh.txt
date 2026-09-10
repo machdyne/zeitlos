@@ -1,0 +1,52 @@
+# posix shell test script.
+#
+# Lines starting with # are comments and are not run. Every other line
+# is fed to px_exec_line() exactly as a terminal would send it.
+#
+# Read the transcript when it changes -- this is a golden-file test and
+# it will happily record a wrong answer as the new right one.
+pwd
+ls
+cd src
+pwd
+ls
+cat a.c
+cd ..
+cat notes.txt
+# -- paths --
+cd /src
+cd ../docs
+pwd
+cd ../..
+pwd
+cat ../../etc/passwd
+# -- output --
+echo one two three
+echo written > out.txt
+cat out.txt
+echo appended >> out.txt
+cat out.txt
+echo third >> out.txt
+cat out.txt
+# -- status and chaining --
+cat missing.txt
+nosuchprog && echo should-not-appear
+nosuchprog || echo recovered
+zcc && echo compiler-started
+# -- launch arguments: what Phase 3 was waiting for --
+zcc src/a.c -o a -v
+# -- exit status: && and || must test what the CHILD did, not whether
+# -- it started. `failprog` exits 1, `zcc` exits 0.
+zcc && echo compiler-succeeded
+failprog && echo should-not-appear
+failprog || echo recovered-from-failure
+zcc && echo first && echo second
+failprog && echo skipped || echo fallback
+# -- files --
+mkdir newdir
+ls
+rm out.txt
+ls
+rm missing.txt
+help
+exit

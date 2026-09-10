@@ -1378,8 +1378,106 @@ void kprint_hex32(uint32_t val) {
 
 // --
 
+/* -- the exit ring --
+ *
+ * Sixteen recently-exited processes and their statuses.
+ *
+ * A zombie slot is the textbook answer and it leaks: nothing in this
+ * system is obliged to reap anything, so an unreaped child holds a
+ * process slot forever, and the shell that forgets to ask is exactly
+ * the shell that will run many children. A ring cannot leak. It can
+ * only forget, and it forgets oldest-first -- which is the order
+ * nobody is still waiting on.
+ *
+ * Sixteen because a shell asks within a few hundred milliseconds of
+ * the exit and nothing else asks at all. If something ever misses, the
+ * symptom is Z_PROC_STATE_UNKNOWN rather than a wrong answer.
+ *
+ * .bss-attributed for the same reason as z_procs[] and z_mailboxes[]:
+ * kernel globals reached through a syscall run with the CALLER's gp
+ * (docs/kernel.md, "The gp hazard").
+ */
+#define K_EXIT_RING_SIZE 16
+
+typedef struct {
+	uint32_t	pid;
+	int32_t		status;
+	bool		valid;
+} k_exit_entry_t;
+
+static __attribute__((section(".bss"))) k_exit_entry_t
+	k_exit_ring[K_EXIT_RING_SIZE];
+static __attribute__((section(".bss"))) uint32_t k_exit_next;
+
+void k_proc_exit_record(uint32_t pid, int32_t status) {
+
+	/* An earlier entry for the same pid is replaced rather than
+	 * duplicated. Pids are reused, and a stale entry for a slot that
+	 * has since been recycled would answer a question about the NEW
+	 * process with the OLD one's status -- which is worse than
+	 * answering UNKNOWN. */
+	for (uint32_t i = 0; i < K_EXIT_RING_SIZE; i++) {
+		if (k_exit_ring[i].valid && k_exit_ring[i].pid == pid) {
+			k_exit_ring[i].status = status;
+			return;
+		}
+	}
+
+	k_exit_ring[k_exit_next].pid = pid;
+	k_exit_ring[k_exit_next].status = status;
+	k_exit_ring[k_exit_next].valid = true;
+	k_exit_next = (k_exit_next + 1) % K_EXIT_RING_SIZE;
+}
+
+z_obj_t *k_proc_status(z_obj_t *args) {
+
+	z_proc_status_args_t *a = (z_proc_status_args_t *)args;
+
+	if (!a) return &z_fail;
+
+	a->state = Z_PROC_STATE_UNKNOWN;
+	a->status = 0;
+
+	if (a->pid < Z_PROCS_MAX &&
+		(z_procs[a->pid].flags & Z_PROC_FLAG_ACTIVE) &&
+		!(z_procs[a->pid].flags & Z_PROC_FLAG_DIE)) {
+		a->state = Z_PROC_STATE_RUNNING;
+		return &z_ok;
+	}
+
+	for (uint32_t i = 0; i < K_EXIT_RING_SIZE; i++) {
+		if (k_exit_ring[i].valid && k_exit_ring[i].pid == a->pid) {
+			a->state = Z_PROC_STATE_EXITED;
+			a->status = k_exit_ring[i].status;
+			return &z_ok;
+		}
+	}
+
+	/* UNKNOWN is a successful answer, not a failure: "I do not know"
+	 * is information, and a caller that got Z_FAIL could not tell it
+	 * apart from a malformed call. */
+	return &z_ok;
+}
+
 z_obj_t *z_exit(z_obj_t *obj) {
 	uint32_t pid = z_pid;
+
+	/* The status used to be dropped here.
+	 *
+	 * This function took its argument and ignored it, so every exit
+	 * status in the system was discarded at the first step -- and
+	 * sw/apps/zcc's entry stub packs one, carefully, for nobody. A
+	 * shell cannot make `a && b` mean anything without it: the best it
+	 * can do is report whether the program STARTED.
+	 *
+	 * Z_INT32 is what an exit status is; anything else is recorded as
+	 * 0, which is the same thing falling off the end of main() means. */
+	int32_t status = 0;
+	if (obj && obj->type == Z_INT32) status = obj->val.int32;
+	else if (obj && obj->type == Z_UINT32) status = (int32_t)obj->val.uint32;
+
+	k_proc_exit_record(pid, status);
+
 	k_proc_kill(pid);
 	while (1) /* wait to die */;
 }

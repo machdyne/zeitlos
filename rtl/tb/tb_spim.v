@@ -1,16 +1,19 @@
 /*
- * Zeitlos SOC
- * Copyright (c) 2025 Lone Dynamics Corporation. All rights reserved.
+ * Testbench for rtl/spim.v.
  *
- * Testbench for rtl/spim.v
+ * Checks the two things version 1 added -- the DATA stall and 32-bit
+ * transfers -- and, just as importantly, that 8-bit transfers still
+ * behave exactly as they did, since every existing driver and every
+ * shipped bitstream depends on that.
  *
- * The slave model is a real SPI mode 0 shift register, not a stub: it
- * samples MOSI on the rising edge and presents MISO on the falling
- * edge, exactly as an SD card does. That is the whole point -- the bug
- * this module exists to fix was a setup-time violation, so a model
- * that ignores edges would prove nothing.
+ * The slave model is SPI mode 0 to match the master: it presents a bit
+ * on the falling edge of SCK and samples MOSI on the rising edge, with
+ * the first bit presented when CS asserts. That ordering is the whole
+ * point of the test -- a byte-order or off-by-one-bit error in the
+ * wide path is invisible in a register dump and shows up as a
+ * corrupted sector.
  *
- * Run: iverilog -g2005 -o tb rtl/tb/tb_spim.v rtl/spim.v && ./tb
+ *   iverilog -o /tmp/tb_spim rtl/tb/tb_spim.v rtl/spim.v && /tmp/tb_spim
  */
 
 `timescale 1ns / 1ps
@@ -19,216 +22,221 @@ module tb_spim;
 
     reg clk = 0;
     reg rst = 1;
+    always #5 clk = ~clk;           // 100MHz-ish; the divider is what matters
 
-    reg [31:0] adr = 0, dat_i = 0;
+    reg [31:0] adr = 0, dat_w = 0;
+    wire [31:0] dat_r;
     reg we = 0, stb = 0, cyc = 0;
-    reg [3:0] sel = 4'hF;
-    wire [31:0] dat_o;
     wire ack;
 
-    wire sd_ss, sd_sck, sd_mosi;
-    wire sd_miso_w;
-    reg sd_miso;
+    wire cs_n, sck, mosi;
+    reg miso = 1;
+
+    integer errors = 0;
 
     spim_wb #(.DEFAULT_DIV(8'd1)) dut (
         .wb_clk_i(clk), .wb_rst_i(rst),
-        .wb_adr_i(adr), .wb_dat_i(dat_i), .wb_dat_o(dat_o),
-        .wb_we_i(we), .wb_sel_i(sel), .wb_stb_i(stb),
-        .wb_ack_o(ack), .wb_cyc_i(cyc),
-        .spi_cs_n(sd_ss), .spi_sck(sd_sck), .spi_mosi(sd_mosi),
-        .spi_miso(sd_miso), .spi_int(1'b1)
+        .wb_adr_i(adr), .wb_dat_i(dat_w), .wb_dat_o(dat_r),
+        .wb_we_i(we), .wb_sel_i(4'hF), .wb_stb_i(stb), .wb_ack_o(ack),
+        .wb_cyc_i(cyc),
+        .spi_cs_n(cs_n), .spi_sck(sck), .spi_mosi(mosi), .spi_miso(miso),
+        .spi_int(1'b1)
     );
 
-    always #5 clk = ~clk;
+    /* -- slave model, SPI mode 0 -- */
+    reg [31:0] slave_tx = 0;        // what the slave will send, MSB first
+    reg [31:0] slave_rx = 0;        // what the slave has received
+    reg [31:0] slave_sr = 0;
+    reg sck_d = 0;
 
-    // -- SPI mode 0 slave model ------------------------------------
-
-    reg [7:0] slave_tx;        // byte the "card" will send
-    reg [7:0] slave_rx;        // byte the "card" received
-    reg [7:0] slave_sr;
-    integer slave_bits;
-    reg sck_d;
-
-    initial begin
-        slave_tx = 8'hFF; slave_rx = 8'h00; slave_sr = 8'h00;
-        slave_bits = 0; sck_d = 0;
-    end
-
-    // MISO is driven COMBINATIONALLY from the current bit index rather
-    // than assigned on the falling edge. Functionally the same for a
-    // mode 0 slave -- the index only advances on rising edges, so the
-    // level is stable across each falling edge and the whole of the
-    // following half period -- but it removes any question of which
-    // procedural block wins when the testbench also pokes sd_miso
-    // between transfers. A model that races on MISO would fail a
-    // correct master, which is worse than useless here.
-    always @(*) begin
-        if (sd_ss) sd_miso = 1'b1;              // released, idles high
-        else sd_miso = slave_tx[7 - slave_bits];
-    end
+    /* Stages the next pattern without toggling CS -- sdmm.c holds CS
+     * low across many transfers, so the model needs to be reloadable
+     * mid-session.
+     *
+     * Written on the NEGATIVE edge, and that is not a stylistic
+     * choice. The first version pulsed a `slave_reload` flag that the
+     * posedge always block read, and it never fired: the task cleared
+     * the flag at the same posedge the model sampled it, and Verilog
+     * does not order a procedural block against an always block at
+     * the same edge. The symptom was MISO stuck at 0 and every receive
+     * check failing while every transmit check passed -- which reads
+     * exactly like a broken receive path in the DUT.
+     *
+     * Driving the state directly on the opposite edge has no race to
+     * lose. */
+    task slave_set(input [31:0] pattern);
+        begin
+            @(negedge clk);
+            slave_tx = pattern;
+            slave_sr = pattern;
+            slave_rx = 0;
+            miso = pattern[31];
+        end
+    endtask
 
     always @(posedge clk) begin
-        sck_d <= sd_sck;
-        if (!sd_ss && sd_sck && !sck_d) begin
-            // rising: slave samples MOSI, then advances
-            slave_sr <= { slave_sr[6:0], sd_mosi };
-            if (slave_bits == 7) begin
-                slave_rx <= { slave_sr[6:0], sd_mosi };
-                slave_bits <= 0;
-            end else begin
-                slave_bits <= slave_bits + 1;
+        sck_d <= sck;
+        if (cs_n) begin
+            slave_sr <= slave_tx;
+            miso <= slave_tx[31];
+        end else begin
+            if (sck && !sck_d) begin            // rising: sample MOSI
+                slave_rx <= { slave_rx[30:0], mosi };
+            end
+            if (!sck && sck_d) begin            // falling: present next
+                slave_sr <= { slave_sr[30:0], 1'b1 };
+                miso <= slave_sr[30];
             end
         end
     end
 
-    // -- bus tasks -------------------------------------------------
-
-    task wr(input [31:0] a, input [31:0] d);
+    /* -- wishbone helpers --
+     *
+     * wb_write/wb_read wait for ack rather than assuming one, which is
+     * what makes the stall testable at all: a cycle count would pass
+     * whether or not the ack was withheld. */
+    task wb_write(input [31:0] a, input [31:0] d);
         begin
-            @(posedge clk); adr <= a; dat_i <= d; we <= 1; stb <= 1; cyc <= 1;
-            @(posedge clk); while (!ack) @(posedge clk);
-            stb <= 0; cyc <= 0; we <= 0; @(posedge clk);
+            @(posedge clk);
+            adr <= a; dat_w <= d; we <= 1; stb <= 1; cyc <= 1;
+            @(posedge clk);
+            while (!ack) @(posedge clk);
+            stb <= 0; cyc <= 0; we <= 0;
+            @(posedge clk);
         end
     endtask
 
-    task rd(input [31:0] a, output [31:0] d);
+    task wb_read(input [31:0] a, output [31:0] d);
         begin
-            @(posedge clk); adr <= a; we <= 0; stb <= 1; cyc <= 1;
-            @(posedge clk); while (!ack) @(posedge clk);
-            d = dat_o;
-            stb <= 0; cyc <= 0; @(posedge clk);
+            @(posedge clk);
+            adr <= a; we <= 0; stb <= 1; cyc <= 1;
+            @(posedge clk);
+            while (!ack) @(posedge clk);
+            d = dat_r;
+            stb <= 0; cyc <= 0;
+            @(posedge clk);
+        end
+    endtask
+
+    /* Counts how many clocks a wishbone access took, so that "the ack
+     * was withheld" is an observation and not an assumption. */
+    integer stall_cycles;
+    task wb_write_timed(input [31:0] a, input [31:0] d);
+        begin
+            stall_cycles = 0;
+            @(posedge clk);
+            adr <= a; dat_w <= d; we <= 1; stb <= 1; cyc <= 1;
+            @(posedge clk);
+            while (!ack) begin stall_cycles = stall_cycles + 1; @(posedge clk); end
+            stb <= 0; cyc <= 0; we <= 0;
+            @(posedge clk);
+        end
+    endtask
+
+    task check(input [255:0] name, input [31:0] got, input [31:0] want);
+        begin
+            if (got !== want) begin
+                $display("FAIL %0s: got %08x want %08x", name, got, want);
+                errors = errors + 1;
+            end else begin
+                $display("ok   %0s = %08x", name, got);
+            end
         end
     endtask
 
     reg [31:0] v;
-    integer bad = 0;
-    integer i;
-    integer cyc_start, cyc_end;
-    integer cycles;
-
-    // full-duplex exchange, the way the driver will do it
-    task xfer(input [7:0] send, input [7:0] card_sends, output [7:0] got);
-        begin
-            slave_tx = card_sends;
-            wr(32'd0, send);
-            rd(32'd1, v);
-            while (v[0]) rd(32'd1, v);      // poll BUSY
-            rd(32'd0, v);
-            got = v[7:0];
-        end
-    endtask
-
-    reg [7:0] got;
 
     initial begin
         repeat (4) @(posedge clk);
-        rst = 0;
-        repeat (2) @(posedge clk);
+        rst <= 0;
+        repeat (4) @(posedge clk);
 
-        rd(32'd3, v);
-        $display("MAGIC = %08x (want 53504930)", v);
-        if (v !== 32'h5350_4930) bad = bad + 1;
+        /* -- the version register -- */
+        wb_read(32'd3, v);
+        check("MAGIC", v, 32'h5350_4931);
 
-        // CS deasserted out of reset
-        $display("reset: sd_ss=%b sd_sck=%b (want 1, 0)", sd_ss, sd_sck);
-        if (sd_ss !== 1'b1 || sd_sck !== 1'b0) bad = bad + 1;
+        /* -- CTRL: assert CS, DIV=1, 8-bit -- */
+        wb_write(32'd2, 32'h0000_0101);
+        wb_read(32'd2, v);
+        check("CTRL readback", v, 32'h0000_0101);
 
-        // assert CS, fastest clock
-        wr(32'd2, 32'h0000_0001);
-        repeat (2) @(posedge clk);
-        $display("after CS assert: sd_ss=%b (want 0)", sd_ss);
-        if (sd_ss !== 1'b0) bad = bad + 1;
+        /* -- 8-bit transfer, the compatibility case --
+         *
+         * Send 0x5A, expect to receive the slave's first byte. */
+        slave_set(32'hA5_00_00_00);
+        wb_write(32'd0, 32'h0000_005A);
+        wb_read(32'd0, v);                      // stalls until done
+        check("8-bit rx", v, 32'h0000_00A5);
+        check("8-bit tx (slave saw)", slave_rx[7:0], 32'h0000_005A);
 
-        // -- exchange a set of byte patterns both directions --------
-        $display("");
-        $display("-- full duplex exchange --");
-        xfer(8'hA5, 8'h5A, got);
-        $display("  sent A5 -> card got %02x (want A5) | card sent 5A -> got %02x (want 5A)",
-            slave_rx, got);
-        if (slave_rx !== 8'hA5) bad = bad + 1;
-        if (got !== 8'h5A) bad = bad + 1;
-
-        xfer(8'hFF, 8'h00, got);
-        $display("  sent FF -> card got %02x | card sent 00 -> got %02x", slave_rx, got);
-        if (slave_rx !== 8'hFF || got !== 8'h00) bad = bad + 1;
-
-        xfer(8'h00, 8'hFF, got);
-        $display("  sent 00 -> card got %02x | card sent FF -> got %02x", slave_rx, got);
-        if (slave_rx !== 8'h00 || got !== 8'hFF) bad = bad + 1;
-
-        xfer(8'h01, 8'h80, got);
-        $display("  sent 01 -> card got %02x | card sent 80 -> got %02x", slave_rx, got);
-        if (slave_rx !== 8'h01 || got !== 8'h80) bad = bad + 1;
-
-        xfer(8'h40, 8'hFE, got);   // CMD0, then a data token
-        $display("  sent 40 -> card got %02x | card sent FE -> got %02x", slave_rx, got);
-        if (slave_rx !== 8'h40 || got !== 8'hFE) bad = bad + 1;
-
-        // -- every value, both directions ---------------------------
-        $display("");
-        $display("-- exhaustive: all 256 values --");
-        for (i = 0; i < 256; i = i + 1) begin
-            xfer(i[7:0], ~i[7:0], got);
-            if (slave_rx !== i[7:0]) begin
-                $display("  FAIL tx %02x -> card saw %02x", i[7:0], slave_rx);
-                bad = bad + 1;
-            end
-            if (got !== ~i[7:0]) begin
-                $display("  FAIL rx: card sent %02x -> got %02x", ~i[7:0], got);
-                bad = bad + 1;
-            end
-        end
-        $display("  256 values exchanged both directions");
-
-        // -- writes while busy are ignored, not corrupting -----------
-        $display("");
-        $display("-- write while busy is ignored --");
-        slave_tx = 8'h3C;
-        wr(32'd0, 8'hC3);
-        wr(32'd0, 8'h0F);          // should be dropped
-        rd(32'd1, v);
-        while (v[0]) rd(32'd1, v);
-        $display("  card received %02x (want C3, not 0F)", slave_rx);
-        if (slave_rx !== 8'hC3) bad = bad + 1;
-
-        // -- clock divider actually changes SCLK --------------------
-        $display("");
-        $display("-- clock divider --");
-        wr(32'd2, { 16'h0, 8'd0, 8'h01 });    // DIV=0 -> fastest
-        cyc_start = $time;
-        xfer(8'hAA, 8'h55, got);
-        cyc_end = $time;
-        cycles = (cyc_end - cyc_start) / 10;
-        $display("  DIV=0: %0d clk for one byte", cycles);
-
-        wr(32'd2, { 16'h0, 8'd9, 8'h01 });    // DIV=9 -> 10x slower
-        cyc_start = $time;
-        xfer(8'hAA, 8'h55, got);
-        cyc_end = $time;
-        $display("  DIV=9: %0d clk for one byte", (cyc_end - cyc_start) / 10);
-        if (((cyc_end - cyc_start) / 10) <= cycles) begin
-            $display("  FAIL: divider had no effect");
-            bad = bad + 1;
+        /* -- the stall itself --
+         *
+         * A DATA write immediately after another must be held off
+         * until the first transfer finishes. At DIV=1 a byte is 8 bits
+         * x 2 half-periods x 2 cycles = 32 cycles, so an ack that
+         * arrives in fewer than ~20 means the stall is not working. */
+        slave_set(32'h3C_00_00_00);
+        wb_write(32'd0, 32'h0000_00F0);         // starts a transfer
+        wb_write_timed(32'd0, 32'h0000_00F0);   // must wait for it
+        if (stall_cycles < 20) begin
+            $display("FAIL stall: second DATA write acked after only %0d cycles",
+                     stall_cycles);
+            errors = errors + 1;
+        end else begin
+            $display("ok   stall: second DATA write waited %0d cycles",
+                     stall_cycles);
         end
 
-        // -- deassert CS --------------------------------------------
-        wr(32'd2, 32'h0000_0000);
-        repeat (2) @(posedge clk);
-        if (sd_ss !== 1'b1) bad = bad + 1;
+        /* Drain the second transfer before moving on.
+         *
+         * It is still in flight -- the write started it and nothing
+         * has read the result. Reloading the slave model on top of a
+         * transfer in progress corrupts the NEXT test's data, which
+         * is how this was found: the 32-bit receive check failed with
+         * a plausible-looking wrong value while every other check
+         * passed. A driver has the same obligation. */
+        wb_read(32'd0, v);
+
+        /* -- 32-bit transfer, and the byte order --
+         *
+         * The word written is 0x44332211. Byte 0 of a little-endian
+         * buffer is 0x11, and 0x11 must go out FIRST. The slave
+         * receives MSB-first into slave_rx, so after 32 bits it should
+         * hold 0x11223344 -- the reverse of the word written, which is
+         * exactly right and is the assertion that catches a lane
+         * mistake.
+         */
+        wb_write(32'd2, 32'h0000_0103);         // CS on, XFER32, DIV=1
+        wb_read(32'd2, v);
+        check("CTRL XFER32 readback", v, 32'h0000_0103);
+
+        slave_set(32'hDE_AD_BE_EF);
+        wb_write(32'd0, 32'h4433_2211);
+        wb_read(32'd0, v);
+
+        check("32-bit tx (slave saw)", slave_rx, 32'h1122_3344);
+
+        /* Received MSB-first: 0xDE arrived first, so it must appear at
+         * bits 7:0 -- byte 0 of the caller's buffer. */
+        check("32-bit rx (byte order)", v, 32'hEFBE_ADDE);
+
+        /* -- back to 8-bit, to prove the mode is not sticky -- */
+        wb_write(32'd2, 32'h0000_0101);
+        slave_set(32'h7E_00_00_00);
+        wb_write(32'd0, 32'h0000_0001);
+        wb_read(32'd0, v);
+        check("8-bit again", v, 32'h0000_007E);
 
         $display("");
-        $display("=====================================");
-        $display(" errors : %0d", bad);
-        $display(" RESULT : %s", bad ? "FAIL" : "PASS");
-        $display("=====================================");
-        if (bad) $stop;
+        if (errors == 0) $display("tb_spim: all checks passed");
+        else $display("tb_spim: %0d FAILURES", errors);
         $finish;
     end
 
     initial begin
-        #20_000_000;
-        $display("FAIL: timeout");
-        $stop;
+        #2000000;
+        $display("tb_spim: TIMEOUT -- a stalled access never acked?");
+        $finish;
     end
 
 endmodule

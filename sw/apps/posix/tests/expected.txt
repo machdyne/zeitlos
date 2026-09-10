@@ -1,0 +1,120 @@
+$ pwd
+/
+$ ls
+docs/
+failprog
+notes.txt
+src/
+zcc
+$ cd src
+$ pwd
+/src
+$ ls
+a.c
+$ cat a.c
+int main(void){return 0;}
+$ cd ..
+$ cat notes.txt
+hello from a file
+second line
+$ cd /src
+$ cd ../docs
+$ pwd
+/docs
+$ cd ../..
+$ pwd
+/
+$ cat ../../etc/passwd
+cat: ../../etc/passwd: cannot open
+[status 1]
+$ echo one two three
+one two three
+$ echo written > out.txt
+$ cat out.txt
+written
+$ echo appended >> out.txt
+$ cat out.txt
+written
+appended
+$ echo third >> out.txt
+$ cat out.txt
+written
+appended
+third
+$ cat missing.txt
+cat: missing.txt: cannot open
+[status 1]
+$ nosuchprog && echo should-not-appear
+[proc_run nosuchprog arg='' -> not found]
+run: nosuchprog: cannot start
+[status 1]
+$ nosuchprog || echo recovered
+[proc_run nosuchprog arg='' -> not found]
+run: nosuchprog: cannot start
+recovered
+$ zcc && echo compiler-started
+[proc_run zcc arg='' -> ok]
+[child 7 exited 0]
+compiler-started
+$ zcc src/a.c -o a -v
+[proc_run zcc arg='src/a.c -o a -v' -> ok]
+[child 7 exited 0]
+$ zcc && echo compiler-succeeded
+[proc_run zcc arg='' -> ok]
+[child 7 exited 0]
+compiler-succeeded
+$ failprog && echo should-not-appear
+[proc_run failprog arg='' -> ok]
+[child 7 exited 1]
+[status 1]
+$ failprog || echo recovered-from-failure
+[proc_run failprog arg='' -> ok]
+[child 7 exited 1]
+recovered-from-failure
+$ zcc && echo first && echo second
+[proc_run zcc arg='' -> ok]
+[child 7 exited 0]
+first
+second
+$ failprog && echo skipped || echo fallback
+[proc_run failprog arg='' -> ok]
+[child 7 exited 1]
+fallback
+$ mkdir newdir
+$ ls
+docs/
+failprog
+newdir/
+notes.txt
+out.txt
+src/
+zcc
+$ rm out.txt
+$ ls
+docs/
+failprog
+newdir/
+notes.txt
+src/
+zcc
+$ rm missing.txt
+rm: missing.txt: failed
+[status 1]
+$ help
+posix -- see docs/posix.md
+  cd       change directory
+  pwd      print the working directory
+  ls       list a directory
+  cat      print files
+  echo     print arguments
+  rm       delete files
+  mkdir    make directories
+  df       filesystem usage
+  run      run a Zeitlos program, passing arguments
+  help     this list
+  exit     close this session
+
+anything else is run as a program: 'zcc hello.c -o hello'
+redirection: > and >>   chaining: && and ||
+$ exit
+[exit]

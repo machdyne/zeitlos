@@ -22,6 +22,7 @@
 					// boot_cancel_requested() below
 #include "../common/zgpio.h"	// the `gpio` command below
 #include "fs/fs.h"
+#include "fs/sdbench.h"	// sh_sdbench() -- the `sdbench` command, docs/sdcard.md
 #include "fsapi.h"
 #include "fs/fatfs/ff.h"
 #include "fs/fatfs/diskio.h"	// disk_status() -- instrumentation, see below
@@ -32,6 +33,53 @@
 // --
 
 char *get_arg(char *str, int n);
+/*
+ * Parses an unsigned integer. Replaces three sscanf() calls.
+ *
+ * Those three -- two "%lx" and one "%ld" -- were costing this kernel
+ * something like forty kilobytes of FLASH IMAGE, which is a sixth of
+ * the 256KB the BIOS copies (docs/kernel.md, "The 256KB image
+ * budget"). Not the scanf machinery alone: a generic scanf must be
+ * able to handle "%f", so it drags in strtod, strtod drags in the
+ * locale tables (`categories`, 13,788 bytes of .rodata) and the
+ * decimal power tables the float conversion needs.
+ *
+ * None of that is reachable from a kernel that only ever parses an
+ * address and a pid, and none of it was visible until `make -C sw/os
+ * kernel-size` was there to be run. The same trap docs/app_runtime.md
+ * documents for apps, in the one place nobody had applied it.
+ *
+ * Returns 1 on success, 0 on a NULL/empty/malformed argument, which is
+ * the same contract the sscanf() calls were being used for -- trailing
+ * junk is rejected rather than ignored, which is stricter than sscanf
+ * was and better for a command line.
+ */
+static int parse_uint(const char *s, int base, uint32_t *out) {
+
+	uint32_t v = 0;
+	int digits = 0;
+
+	if (!s || !*s) return 0;
+
+	while (*s == ' ' || *s == '\t') s++;
+	if (base == 16 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) s += 2;
+
+	for (; *s; s++) {
+		int d;
+		if (*s >= '0' && *s <= '9') d = *s - '0';
+		else if (base == 16 && *s >= 'a' && *s <= 'f') d = *s - 'a' + 10;
+		else if (base == 16 && *s >= 'A' && *s <= 'F') d = *s - 'A' + 10;
+		else return 0;
+		if (d >= base) return 0;
+		v = v * (uint32_t)base + (uint32_t)d;
+		digits++;
+	}
+
+	if (!digits) return 0;
+	*out = v;
+	return 1;
+}
+
 void sh_help(void);
 static void sh_bench(void);
 void hex_dump(uint32_t addr);
@@ -408,7 +456,7 @@ void sh(void) {
 		else if (!strncmp(buffer, "hd", cmdlen)) {
 			arg = get_arg(buffer, 1);
 			uint32_t addr;
-			if (sscanf(arg, "%lx", &addr))
+			if (parse_uint(arg, 16, &addr))
 				hex_dump(addr);
 		}
 
@@ -452,7 +500,7 @@ void sh(void) {
 		else if (!strncmp(buffer, "xa", cmdlen)) {
 			arg = get_arg(buffer, 1);
 			uint32_t addr, bytes;
-			if (!sscanf(arg, "%lx", &addr)) {
+			if (!parse_uint(arg, 16, &addr)) {
 				printf("bad address\n");
 				continue;
 			}
@@ -813,7 +861,7 @@ void sh(void) {
 		else if (!strncmp(buffer, "kill", cmdlen)) {
 			arg = get_arg(buffer, 1);
 			uint32_t pid;
-			if ((!sscanf(arg, "%ld", &pid)) || pid == 0) {
+			if ((!parse_uint(arg, 10, &pid)) || pid == 0) {
 				printf("bad pid\n");
 				continue;
 			}
@@ -877,6 +925,19 @@ void sh(void) {
 		// enough on its own.
 		else if (!strncmp(buffer, "bench", cmdlen)) {
 			sh_bench();
+		}
+
+		// SD CARD I/O BENCHMARK
+		//
+		// Separate command from `bench` above rather than another
+		// figure inside it: `bench` measures the CPU and memory and
+		// costs milliseconds, this one drives real card traffic for a
+		// couple of seconds and must not interleave with another
+		// process inside FatFs. Nobody should get that by accident
+		// from typing `bench`. See docs/sdcard.md.
+		else if (!strncmp(buffer, "sdbench", cmdlen)) {
+			arg = get_arg(buffer, 1);
+			sh_sdbench(arg);
 		}
 
 		else if (!strncmp(buffer, "cache", cmdlen)) {
@@ -1677,5 +1738,6 @@ void sh_help(void) {
 	printf(" color [white|amber|green|paper]  display phosphor mode\n");
 	printf(" gpio [port] [pin] [in|out|od|0|1]  read/drive gpio pins (e.g. gpio 0 3 out)\n");
 	printf(" bench             cpu/memory micro-benchmarks\n");
+	printf(" sdbench [file]    layered sdcard throughput benchmark (docs/sdcard.md)\n");
 
 }

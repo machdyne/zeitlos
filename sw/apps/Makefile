@@ -34,6 +34,8 @@ APPS = \
 	portdemo \
 	serial \
 	repl \
+	posix \
+	zcc \
 	space3d \
 	audiotest \
 	play \
@@ -41,6 +43,16 @@ APPS = \
 	midi \
 	gamedemo \
 	chip8
+
+# zcc is in this list and builds its own runtime as a side effect:
+# sw/apps/zcc/Makefile has $(LIBZOBJS) depend on a recursive make into
+# libz/, so a clean `make -C sw/apps` produces libz.bin and libz.sym
+# before it links the compiler. Nothing here has to know the order.
+#
+# Both zcc and libz.bin/libz.sym have to reach the card for on-device
+# compiling to work, and they are NOT the same copy of the runtime --
+# see docs/zcc.md, "Where libz comes from". tools/tftp-dist.sh
+# publishes all three.
 
 all:
 	@for a in $(APPS); do \

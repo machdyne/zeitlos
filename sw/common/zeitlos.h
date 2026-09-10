@@ -116,9 +116,24 @@ typedef uint32_t *(*z_kernel_ptr_t)(uint32_t, uint32_t *, uint32_t);
 #define reg_spisd_ctrl   (*(volatile uint32_t*)0xb0000008)
 #define reg_spisd_magic  (*(volatile uint32_t*)0xb000000c)
 
-#define Z_SPISD_MAGIC     0x53504930u   // "SPI0"
+// "SPI0" is the original gateware; "SPI1" adds two things a driver
+// must not assume without checking (rtl/spim.v):
+//
+//   - a DATA access STALLS while busy instead of being ignored (write)
+//     or returning stale data (read), so no BUSY polling is needed;
+//   - CTRL bit 1 selects 32-bit transfers, moving four bytes per bus
+//     access.
+//
+// A driver that skips the poll against an SPI0 bitstream reads DATA
+// mid-transfer and gets a byte that is half old and half new -- a
+// corruption with no error anywhere. sdmm.c checks this once at init
+// and picks its path from the answer; do the same in any other driver
+// that wants the fast path.
+#define Z_SPISD_MAGIC     0x53504930u   // "SPI0" -- original
+#define Z_SPISD_MAGIC_V1  0x53504931u   // "SPI1" -- stall + 32-bit
 #define Z_SPISD_BUSY      (1u << 0)     // STATUS: transfer in progress
 #define Z_SPISD_CTRL_CS   (1u << 0)     // CTRL: 1 = assert (pin low)
+#define Z_SPISD_CTRL_W32  (1u << 1)     // CTRL: 1 = 32-bit transfers (SPI1)
 #define Z_SPISD_CTRL_DIV(d) (((d) & 0xffu) << 8)
 
 // SCLK = 48MHz / (2 * (DIV + 1)).
@@ -274,6 +289,15 @@ typedef uint32_t *(*z_kernel_ptr_t)(uint32_t, uint32_t *, uint32_t);
 // of a whole SPI transaction.
 #define Z_SPI_INT         (1u << 2)
 
+// 12MHz. DO NOT set this to 0 the way Z_SPISD_DIV_FAST can be: DIV=0
+// is 24MHz and the ENC28J60's SPI maximum is 20MHz.
+//
+// Worth stating because the two peripherals are the same gateware
+// module (rtl/spim.v) and the SD side has a measured 29% waiting at
+// DIV=0 (docs/sdcard.md). It is exactly the sort of tuning that gets
+// applied to "the SPI divider" globally, and here it would be out of
+// spec -- with the failure mode of intermittent corruption rather than
+// a clean stop.
 #define Z_SPIETH_DIV      1     // 12MHz; ENC28J60 SPI maximum is 20MHz
 
 // kept for compatibility with anything still poking the old register
@@ -355,6 +379,23 @@ typedef uint32_t *(*z_kernel_ptr_t)(uint32_t, uint32_t *, uint32_t);
 // Nothing is masked in a host build because nothing is running: there
 // is no scheduler, no interrupt and no shared rasterizer, so the
 // atomicity this provides on target has nothing to protect.
+#if defined(__zcc__)
+
+// zcc (docs/zcc.md) has no inline assembler and is not getting one.
+// maskirq comes from the libz runtime instead, where it is ordinary
+// GCC-built code behind a jump-table slot -- see docs/libz.md, "The
+// maskirq problem". So this is a DECLARATION here, and the call site
+// is unchanged.
+//
+// This arm exists because the alternative was compiling zcc programs
+// with -U__riscv, which takes the host branch below and silently
+// returns 0 -- disabling the atomicity z_fb_hw_line() and the ENC28J60
+// driver depend on, on a target where they need it. A wrong answer
+// that compiles is worse than a compiler that cannot read the header.
+uint32_t maskirq(uint32_t new_mask);
+
+#else
+
 static inline uint32_t maskirq(uint32_t new_mask) {
 #if defined(__riscv)
 	uint32_t old_mask;
@@ -370,6 +411,8 @@ static inline uint32_t maskirq(uint32_t new_mask) {
 	return 0;
 #endif
 }
+
+#endif  // __zcc__
 
 // --
 
@@ -508,6 +551,16 @@ uint32_t z_proc_run(const char *name);
 // (sw/common/zwm.h) -- wm calling this on a window's owner_pid when
 // its titlebar close icon is clicked with that flag set.
 //
+// Asks what happened to a process: still running, exited with a
+// status, or unknown (finished long enough ago to have been forgotten
+// -- see syscalls.def's PROC_STATUS entry).
+//
+// `status` and `state` may be NULL if the caller only wants the other.
+// Returns Z_OK whenever the question was answerable at all, including
+// when the answer is UNKNOWN: "I do not know" is information, and a
+// caller that got Z_FAIL could not tell it from a malformed call.
+z_rv z_proc_status(uint32_t pid, uint32_t *state, int32_t *status);
+
 // Returns Z_OK/Z_FAIL (it returned void until the Scheme API's (kill
 // ...) needed a real answer -- see zeitlos.c). Existing callers that
 // ignore the value are unaffected and need no change.

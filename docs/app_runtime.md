@@ -1,5 +1,8 @@
 # Zeitlos App Runtime
 
+See `docs/kernel.md` for the kernel side: processes, the scheduler,
+the memory pool, and the syscall boundary.
+
 
 
 ## Do not override CFLAGS from the command line
@@ -35,6 +38,26 @@ reverted to defaults with nothing said. For one-off options prefer:
 
 `clean` first, because `-MD` tracks header dependencies, not flag
 changes.
+
+## Asking what happened to a child
+
+```c
+z_rv z_proc_status(uint32_t pid, uint32_t *state, int32_t *status);
+```
+
+`state` is `Z_PROC_STATE_RUNNING`, `_EXITED` or `_UNKNOWN`
+(`sw/common/zproc.h`). UNKNOWN means the process is not running and has
+fallen out of the kernel's 16-entry exit ring -- it finished long
+enough ago to have been forgotten. That is a **successful** reply, not
+an error; treat it as "finished, status unknown".
+
+The status is whatever the process passed to `z_exit()`. Note that a
+process returning from `main()` normally exits 0 through its crt0, and
+one that is killed never runs `z_exit()` at all, so its status is
+whatever the ring last recorded for that pid -- or UNKNOWN.
+
+See `docs/kernel.md` for the ring and why it is not a zombie table,
+and `docs/posix.md` for the shell that motivated it.
 
 ## printf pulls in ~100KB, and fputs/stdout ~40KB
 

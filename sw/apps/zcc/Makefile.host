@@ -1,0 +1,38 @@
+# zcc, built for the development host.
+#
+# This is Phase 1 of docs/posix.md: the compiler runs on Linux and
+# emits ZEXE images that run on Zeitlos (or under sim/). Phase 3 adds a
+# plain `Makefile` alongside this one that builds the same sources as a
+# Zeitlos app -- which is why the sources live here in sw/apps/zcc and
+# not in tools/, so that nothing has to move when that happens.
+#
+# -Wall -Wextra with nothing switched off, because a compiler that
+# cannot be built warning-free has no business emitting diagnostics.
+
+CC      ?= cc
+CFLAGS  ?= -O2 -g -std=c11 -Wall -Wextra -Werror -Wno-unused-parameter
+
+SRCS = main.c lex.c cpp.c parse.c emit.c util.c port_host.c
+OBJS = $(SRCS:.c=.o)
+
+zcc: $(OBJS)
+	$(CC) $(CFLAGS) -o $@ $(OBJS)
+
+%.o: %.c zcc.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+# The runtime blob. Needs the RISC-V toolchain, unlike zcc itself,
+# which is why it is a separate target rather than a dependency of the
+# default one -- zcc builds and runs on a machine with no cross
+# compiler, it just cannot link anything against the runtime there.
+libz:
+	$(MAKE) -C libz
+
+test: zcc
+	@./tests/run.sh
+
+clean:
+	rm -f zcc $(OBJS)
+	$(MAKE) -C libz clean
+
+.PHONY: libz test clean

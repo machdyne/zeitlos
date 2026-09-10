@@ -6,23 +6,33 @@
 #include <sys/select.h>
 
 #include "machine.h"
+#include "simos.h"
 
 /* ------------------------------------------------------------------- */
 /* z_obj_t layout (sw/common/zobj.h): { int32 type; union { ... } val; }
  * On a 32-bit target this is 8 bytes: type at +0, val at +4. */
 #define ZOBJ_VAL_OFFSET 4
 
-/* z_syscall_id_t values (sw/common/zeitlos.h + syscalls.def), in order:
- * Z_SYSCALL_NONE=0, then EXIT, UI_PRINT, UART_GETC, UART_PUTC,
- * UART_RX_EMPTY, UART_TX_FULL. */
+/* Syscall ids.
+ *
+ * Generated from sw/common/syscalls.def by the same X-macro the real
+ * z_syscall_id_t is (sw/common/zeitlos.h), rather than hand-copied.
+ *
+ * That matters more here than tidiness usually would. syscalls.def's
+ * own header carries a long warning about never inserting an entry in
+ * the middle, because every id after the insertion point shifts and an
+ * app built against a newer file calls the WRONG handler -- silently.
+ * A hand-maintained copy in the simulator is a second place for that
+ * to go wrong, with the added twist that the simulator would be the
+ * thing you reached for to debug it. The list used to stop at
+ * UART_TX_FULL and everything past it fell through to "unimplemented",
+ * which is what prompted this. */
 enum {
 	ZSYS_NONE = 0,
-	ZSYS_EXIT,
-	ZSYS_UI_PRINT,
-	ZSYS_UART_GETC,
-	ZSYS_UART_PUTC,
-	ZSYS_UART_RX_EMPTY,
-	ZSYS_UART_TX_FULL,
+#define Z_MKSYSCALL(name, handler) ZSYS_##name,
+#include "../sw/common/syscalls.def"
+#undef Z_MKSYSCALL
+	ZSYS_MAX
 };
 
 /* ------------------------------------------------------------------- */
@@ -223,6 +233,7 @@ static void blit_run(machine_t *m) {
 static void do_syscall(machine_t *m) {
 	uint32_t id  = m->cpu.regs[10]; /* a0 */
 	uint32_t obj = m->cpu.regs[11]; /* a1 */
+	int ok = 1;
 
 	switch (id) {
 
@@ -261,13 +272,18 @@ static void do_syscall(machine_t *m) {
 		break;
 
 	default:
-		fprintf(stderr, "zeitlos-sim: unimplemented syscall id=%u\n", id);
+		/* Everything OS-shaped -- the filesystem, uptime, pids --
+		 * lives in simos.c rather than here, so this file stays about
+		 * the machine and that one stays about the operating system
+		 * the machine does not have. It reports its own misses. */
+		ok = simos_syscall(m, id, obj);
 		break;
 	}
 
-	/* return value convention: pointer to a result object; NULL is fine
-	 * for calls apps don't actually inspect the return value of. */
-	m->cpu.regs[10] = 0;
+	/* Return value convention: a POINTER to a z_obj_t, which the caller
+	 * dereferences -- see ZS_RETOBJ_OK in machine.h for why this used
+	 * to be 0 and why that was wrong. */
+	m->cpu.regs[10] = ok ? ZS_RETOBJ_OK : ZS_RETOBJ_FAIL;
 }
 
 /* ------------------------------------------------------------------- */
@@ -546,6 +562,14 @@ int machine_init(machine_t *m, size_t ram_size) {
 	uint32_t trap = ZS_SYSCALL_TRAP_PC;
 	memcpy(&m->lowmem[ZS_REG_KERNEL_ADDR], &trap, 4);
 
+	/* the two shared return objects -- see ZS_RETOBJ_OK in machine.h */
+	{
+		uint32_t ok[2]   = { ZS_Z_RETVAL, ZS_Z_OK };
+		uint32_t fail[2] = { ZS_Z_RETVAL, ZS_Z_FAIL };
+		memcpy(&m->lowmem[ZS_RETOBJ_OK], ok, sizeof(ok));
+		memcpy(&m->lowmem[ZS_RETOBJ_FAIL], fail, sizeof(fail));
+	}
+
 	uart_enter_raw();
 	return 0;
 }
@@ -555,24 +579,87 @@ void machine_destroy(machine_t *m) {
 	free(m->ram);
 }
 
+/* Loads a ZEXE image, or a raw one.
+ *
+ * The header (sw/common/zexec.h, docs/executables.md) is 16 bytes of
+ * magic, version, flags, bss_size and entry, followed by the loadable
+ * image verbatim. A file WITHOUT the magic is the old raw format, and
+ * the correct reading of that is data_size = file_size, bss_size = 0 --
+ * a --pad-to binary already carries its .bss as literal zeros. Same
+ * rule z_exec_parse() applies on hardware, and the same reason both
+ * formats can sit on one card.
+ *
+ * The simulator has to zero .bss for the same reason the kernel does:
+ * nothing else will. There is no crt0 doing it on this OS, so with a
+ * ZEXE image the zeros are a NUMBER in the header rather than bytes in
+ * the file, and a loader that skips the memset() hands the app a .bss
+ * full of whatever the previous run left there. That is a bug class
+ * this tree has already been bitten by twice on real hardware (see
+ * docs/app_runtime.md on the pid registry and mem_block_count), and
+ * the last thing a simulator should do is fail to reproduce it -- or,
+ * worse, appear to work because malloc'd RAM happened to be zero.
+ *
+ * An unknown VERSION is refused rather than guessed at, matching
+ * z_exec_parse(): half-loading a future format corrupts memory
+ * silently, where refusing says so.
+ */
+static uint32_t rd32le(const uint8_t *p) {
+	return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+	       ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
 int machine_load_bin(machine_t *m, const char *path) {
 	FILE *f = fopen(path, "rb");
 	if (!f) { perror(path); return -1; }
 	fseek(f, 0, SEEK_END);
 	long sz = ftell(f);
 	fseek(f, 0, SEEK_SET);
-	if (sz < 0 || (size_t)sz > m->ram_size) {
-		fprintf(stderr, "zeitlos-sim: %s (%ld bytes) too large for %zu byte RAM\n",
-			path, sz, m->ram_size);
+	if (sz < 0) { fclose(f); return -1; }
+
+	uint8_t hdr[16];
+	size_t  data_off = 0;
+	uint32_t bss_size = 0;
+
+	if (sz >= 16 && fread(hdr, 1, 16, f) == 16 &&
+	    hdr[0] == 'Z' && hdr[1] == 'E' && hdr[2] == 'X' && hdr[3] == 'E') {
+
+		uint32_t version = (uint32_t)hdr[4] | ((uint32_t)hdr[5] << 8);
+
+		if (version != 1) {
+			fprintf(stderr, "zeitlos-sim: %s is ZEXE version %u, "
+				"this loader only knows version 1\n", path, version);
+			fclose(f);
+			return -1;
+		}
+
+		bss_size = rd32le(hdr + 8);
+		data_off = 16;
+	}
+
+	fseek(f, (long)data_off, SEEK_SET);
+
+	size_t data_size = (size_t)sz - data_off;
+
+	if (data_size + bss_size > m->ram_size) {
+		fprintf(stderr, "zeitlos-sim: %s needs %zu bytes (%zu data + %u bss), "
+			"RAM is %zu -- try -m\n",
+			path, data_size + bss_size, data_size, bss_size, m->ram_size);
 		fclose(f);
 		return -1;
 	}
-	if (fread(m->ram, 1, (size_t)sz, f) != (size_t)sz) {
+
+	if (fread(m->ram, 1, data_size, f) != data_size) {
 		fprintf(stderr, "zeitlos-sim: short read on %s\n", path);
 		fclose(f);
 		return -1;
 	}
 	fclose(f);
+
+	memset(m->ram + data_size, 0, bss_size);
+
+	if (data_off)
+		fprintf(stderr, "zeitlos-sim: %s: ZEXE, %zu data + %u bss\n",
+			path, data_size, bss_size);
 
 	/* Matches sw/os/kernel.c's k_proc_create(): pc at the app's link
 	 * address, sp at the top of its memory region, with the sentinel

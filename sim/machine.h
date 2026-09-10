@@ -66,6 +66,33 @@
  * than executing any instruction there -- see machine_run(). */
 #define ZS_SYSCALL_TRAP_PC 0x00000004u
 
+/* The two shared return objects every syscall handler answers with.
+ *
+ * On hardware these are &z_ok / &z_fail (sw/common/zobj.c), two real
+ * z_obj_t globals in the kernel's own memory. The simulator has no
+ * kernel, but it cannot simply return 0 either: every app-side wrapper
+ * DEREFERENCES the returned pointer -- `rv->val.uint32 != Z_OK` in
+ * fs_open_read(), z_msg_read() and a dozen others -- so a null return
+ * is a guest-side load through address 0.
+ *
+ * That happened to appear to work, which is the interesting part and
+ * the reason this is spelled out: Z_OK is 0, unwritten low memory
+ * reads as 0, so every syscall silently looked successful and there
+ * was no way for one to report failure at all. Two real objects in low
+ * memory fix it, and cost 16 bytes of a page that was otherwise
+ * holding one word.
+ *
+ * Placed clear of ZS_REG_KERNEL_ADDR (0x0c) and ZS_SYSCALL_TRAP_PC
+ * (0x04), both of which already live in this page. */
+#define ZS_RETOBJ_OK   0x00000020u
+#define ZS_RETOBJ_FAIL 0x00000028u
+
+/* z_obj_t.type == Z_RETVAL (sw/common/zobj.h), val == Z_OK / Z_FAIL
+ * (sw/common/zmsg.h). Written into low memory by machine_init(). */
+#define ZS_Z_RETVAL 1
+#define ZS_Z_OK     0
+#define ZS_Z_FAIL   1
+
 /* --- line rasterizer state (mirrors rtl/gpu/gpu_raster.v) --- */
 typedef struct {
 	uint32_t x0, y0, x1, y1;
@@ -120,6 +147,13 @@ typedef struct machine {
 	uint8_t gpio_ext_dir[ZS_GPIO_NPORTS];
 	uint8_t gpio_ext_out[ZS_GPIO_NPORTS];
 	uint32_t usb_cursor;   /* bits: x[9:0] y[19:10] buttons[23:20] */
+
+	/* PicoRV32's interrupt mask, as read and written by the maskirq
+	 * custom instruction (cpu.c, opcode 0x0b). Nothing here raises an
+	 * interrupt, so this is state that is only ever read back by the
+	 * code that set it -- which is exactly what every caller in the
+	 * tree does with it. */
+	uint32_t irq_mask;
 
 	int running;
 	int exit_requested;
