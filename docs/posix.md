@@ -1,11 +1,20 @@
 # A POSIX layer and an on-device C compiler
 
-**Status: proposal. Nothing here is implemented.** Written ahead of the
-code the same way `docs/ports.md` was, so the reasoning is on record
-before it becomes hard to reconstruct. Update this file as phases land;
-mark them done in place rather than deleting the reasoning.
+**Status: phases 0-4 are done, and 5.1 of phase 5.** Sections 9 to 9e
+record what each one actually did, including where it departed from the
+plan above it. Phases 5.2 onward, 6, 7 and 8 are still proposal.
 
-Measured against commit `9efca5f`.
+Written ahead of the code the same way `docs/ports.md` was, so the
+reasoning is on record before it becomes hard to reconstruct. Sections
+1-8 are the ORIGINAL proposal and are deliberately left as written --
+the corrections live in 9 onward, because what was predicted and what
+happened are both worth having.
+
+**Not verified on hardware:** `posix`'s port plumbing under load
+(`sw/apps/posix/main.c` has run only on a board, never under a test),
+and everything in phase 5 beyond 5.1.
+
+Started against commit `9efca5f`.
 
 ---
 
@@ -379,7 +388,8 @@ makes a C compiler pleasant to drive, and it is all achievable in
 
 Concretely, `posix` is a port provider (`docs/ports.md`) registering as
 `posix0`, exactly parallel to `repl`. `term` reaches it through
-`zconnect.h` with a new target name, so `repl` and `posix` coexist and
+`zconnect.h` with a new target name (**not needed in the event** --
+section 9d), so `repl` and `posix` coexist and
 `term`'s F11 bar picks between them. Nothing about `repl` changes.
 
 ### 4.2 The process model — three options
@@ -431,7 +441,7 @@ by a program that hangs.
 | | |
 |---|---|
 | `sw/apps/posix/` | everything: VFS, fd table, shell, tools |
-| `sw/common/zconnect.c` | one new target name |
+| `sw/common/zconnect.c` | one new target name — **not needed**, see 9d |
 | `sw/os/kernel.h` | one new stack/heap tier (§2.1) |
 | `sw/apps/Makefile` | one word in `APPS` |
 
@@ -664,7 +674,11 @@ behaves like one, checked by `sw/apps/posix/tests`. The port half
 compiles but cannot be linked or run here -- see section 9d.
 *Docs:* this section, and `sw/apps/posix/posix.h`.
 
-### Phase 5 — userland
+### Phase 5 — userland — 5.1 DONE, rest in progress
+
+Broken into 5.1-5.5 once the tree's existing mechanisms were read
+properly; see section 9e. 5.1 (child lifecycle) is done.
+
 
 Pipes between in-process commands, `|`/`>`/`>>`/`<`, exit statuses,
 `&&`/`||`, and the tools that make a compiler usable: `cp`, `mv`, `rm`,
@@ -1249,15 +1263,15 @@ than an afternoon:
 - **Every child has to opt in.** A program that does not know about
   the hook still writes to the console. That is fine for `zcc`, which
   is ours, and not fine as a general answer for `run`.
-- **The shell has to wait.** Right now `run` returns as soon as the
-  process starts, so there is no window during which output could be
-  relayed and no exit status to report. Waiting means the shell stops
-  serving its other connections unless it does so by message rather
-  than by blocking.
+- **The shell has to wait.** `run` returned as soon as the process
+  started, so there was no window during which output could be relayed
+  and no exit status to report. Waiting means the shell stops serving
+  its other connections unless it does so by message rather than by
+  blocking.
 
-Both are Phase 5, alongside pipes, and for the same underlying reason:
-this shell has no notion of a running child yet, only of a started
-one.
+The second is **done** -- 5.1, section 9e. The first is not, and it is
+the real limit on this mechanism: `zcc` opts in because it is ours, and
+`run` has no general answer for a program that does not.
 
 ### Pipes are Phase 5 -- and coroutines were the wrong answer
 
@@ -1279,32 +1293,40 @@ its `getch()`/`write()` with three functions repl implements. It does
 not block; it is fed bytes.
 
 Between them those cover every case pipes and full-screen programs
-need, and neither requires a scheduler inside this process. What is
-actually missing is smaller and more boring than a coroutine
-discipline: **posix has no notion of a running child**, only of a
-started one. Section 9e is the plan.
+need, and neither requires a scheduler inside this process. What was
+actually missing was smaller and more boring than a coroutine
+discipline: **posix had no notion of a running child**, only of a
+started one.
+
+That is 5.1, and it is now done (section 9e). Pipes are 5.3 and need
+5.2 first.
 
 
 
 ---
 
-## 9e. Phase 5: the plan
+## 9e. Phase 5: the plan, and 5.1
 
-Ordered so that each item unblocks the next. The first is the keystone
-and everything else is waiting on it.
+Ordered so that each item unblocks the next. **5.1 is done**; the rest
+are proposal. It was the keystone, and the writeup below keeps the
+"what it needs" framing as it was written so that the change reads
+against the reasoning that produced it.
 
 ### 5.1 Child lifecycle -- wait, and exit status -- DONE
 
 `run` returns the moment `z_proc_run()` starts a process. Three things
 are wrong because of that, and they are all the same thing:
 
-- `zcc x.c && run x` tests whether the **compiler started**, not
+- `zcc x.c && run x` tested whether the **compiler started**, not
   whether it succeeded.
-- The stdout relay (section 9d) re-prompts when the child's output
-  connection closes, which is a proxy for "the child finished" and not
-  the same claim.
-- Nothing can hand the terminal to a full-screen program and take it
-  back afterwards, because there is no "afterwards".
+- The stdout relay (section 9d) re-prompted when the child's output
+  connection closed, which is a proxy for "the child finished" and not
+  the same claim. **That proxy is gone**: the main loop watches the
+  process now, so a program that closes its output early -- or never
+  opens one -- is handled the same as one that does.
+- Nothing could hand the terminal to a full-screen program and take it
+  back afterwards, because there was no "afterwards". 5.2 can now be
+  built on top of this.
 
 **What was built.** The kernel keeps the last 16 exit statuses in a
 ring and answers `Z_SYS_PROC_STATUS` from it (`docs/kernel.md`) --
@@ -1493,26 +1515,59 @@ this migration stays possible, and ship copy-per-output first.
 
 ## 11. Still open
 
-1. **When to schedule section 10**, if at all.
-2. **Whether `sdbench` justifies raising `Z_SPISD_DIV_FAST` to 0.**
-   Answerable only from hardware, and per board -- see
-   `docs/sdcard.md`, "Trying DIV=0".
+**Next up, in order:**
+
+1. **5.2, the terminal handoff** (`Z_TERM_SET_PORT`). Unblocks a real
+   `vi` and any other full-screen program. Section 9e has the design.
+2. **5.3, pipes as processes.** Needs 5.1 (done) and 5.2.
+3. **A `vi` licence survey** before any `vi` engineering --
+   `busybox vi` is GPL, which is the objection that ruled out TinyCC
+   for `zcc`; `nvi` is BSD but large. Section 9e, 5.4.
+
+**Open questions with no owner yet:**
+
+4. **`Z_MEM_MIN_BLOCK_SIZE` 32KB -> 4KB** (`docs/kernel.md`). Halves the
+   cost of a pipeline stage and is the one change that could regress
+   `zcc`'s 4MB allocation through fragmentation. Needs `free` output
+   either side, not reasoning.
+5. **When to schedule section 10**, if at all. Its payoff is the memory
+   budget on small boards, and the board it helps most is the one that
+   cannot run `posix` anyway.
+6. **Whether `sdbench` justifies raising `Z_SPISD_DIV_FAST` to 0.**
+   Now more likely to be worth something than it was: the wide SPI
+   transfer made the wire 58% of a word's cost where it had been 17%
+   of a byte's. SD card only -- 24MHz is out of spec for the ENC28J60.
+   See `docs/sdcard.md`.
+
+**Not verified on hardware:**
+
+7. `sw/apps/posix/main.c` -- the port protocol, connection handling and
+   output batching. It works on a board; it has never been under a
+   test, and its batching is a copy of a lesson `repl` learned the hard
+   way rather than something proven here.
+8. The ethernet half of the `spim.v` change (`docs/sdcard.md`, "It
+   applies to ethernet too"). There is no `sdbench` equivalent for that
+   path and there should be before anyone claims a number.
 
 ---
 
 ## 12. See also
 
-- `docs/zcc_bringup.md` — hardware bring-up: what has never run on
-  a board, and in what order to try it
 - `docs/zcc.md` — the compiler
 - `docs/libz.md` — the runtime blob and the jump table
-- `docs/sdcard.md` — the outstanding throughput measurement
+- `docs/kernel.md` — processes, the exit ring, and the 256KB image
+  budget
+- `docs/zcc_bringup.md` — hardware bring-up, and what is still
+  unverified
+- `docs/sdcard.md` — the SD path: measured, diagnosed and fixed
 - `docs/executables.md` — ZEXE, the compiler's output format
 - `docs/app_runtime.md` — the runtime `libz` would wrap, and the
   `printf` size trap
 - `docs/filesystem.md` — FatFs non-reentrancy and the preempt deferral
-- `docs/ramdisk.md` — `/ram`, and the SD throughput figure to re-check
+- `docs/ramdisk.md` — `/ram`; its old 19 KB/s figure was wrong by 13x
+  and is corrected there
 - `docs/ports.md` — the provider protocol `posix` implements
 - `docs/boot.md` — the memory budget these numbers come out of
-- `sim/README.md` — where the code generator should be developed
+- `sim/README.md` — where the code generator was developed, and what
+  the simulator does and does not model
 - `docs/zeitlos32.md` — the core that would have to grow an MMU for §6.1
