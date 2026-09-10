@@ -1,0 +1,3968 @@
+{
+ "input_sha256": "2ba8d9c255b0b4d33ff7a4a4fed2e4540d25fa1aeab80ab542859b8f5a686536",
+ "model": {
+  "alternatives": [
+   {
+    "blocks": [
+     "pll0_i:pll0",
+     "pll0_i:pll0_25"
+    ],
+    "key": "pll0_i",
+    "kind": "instance"
+   },
+   {
+    "blocks": [
+     "pll1_i:pll1",
+     "pll1_i:pll1_25"
+    ],
+    "key": "pll1_i",
+    "kind": "instance"
+   },
+   {
+    "blocks": [
+     "wbm_cpu0_i:zeitlos32_wb",
+     "wbm_cpu0_i:picorv32_wb"
+    ],
+    "key": "wbm_cpu0_i",
+    "kind": "instance"
+   },
+   {
+    "blocks": [
+     "wbs_uart0_i:usb_cdc_uart",
+     "wbs_uart0_i:uart_wb",
+     "wbs_uart0_null_i"
+    ],
+    "key": "wbs_uart0_i",
+    "kind": "instance"
+   },
+   {
+    "blocks": [
+     "varb0_i",
+     "wbs_vram_i"
+    ],
+    "key": "cs_vram",
+    "kind": "slot"
+   }
+  ],
+  "blocks": [
+   {
+    "alt_group": "alt0",
+    "children": [],
+    "id": "pll0_i:pll0",
+    "instance": "pll0_i",
+    "interfaces": {},
+    "line": 446,
+    "module": "pll0",
+    "primitive": false,
+    "roles": [
+     "clkgen"
+    ],
+    "when": "ECP5 & OSC48"
+   },
+   {
+    "alt_group": "alt1",
+    "children": [],
+    "id": "pll1_i:pll1",
+    "instance": "pll1_i",
+    "interfaces": {},
+    "line": 454,
+    "module": "pll1",
+    "primitive": false,
+    "roles": [
+     "clkgen"
+    ],
+    "when": "ECP5 & OSC48"
+   },
+   {
+    "alt_group": "alt0",
+    "children": [],
+    "id": "pll0_i:pll0_25",
+    "instance": "pll0_i",
+    "interfaces": {},
+    "line": 463,
+    "module": "pll0_25",
+    "primitive": false,
+    "roles": [
+     "clkgen"
+    ],
+    "when": "ECP5 & OSC25 & !OSC48"
+   },
+   {
+    "alt_group": "alt1",
+    "children": [],
+    "id": "pll1_i:pll1_25",
+    "instance": "pll1_i",
+    "interfaces": {},
+    "line": 470,
+    "module": "pll1_25",
+    "primitive": false,
+    "roles": [
+     "clkgen"
+    ],
+    "when": "ECP5 & OSC25 & !OSC48"
+   },
+   {
+    "alt_group": null,
+    "children": [],
+    "id": "pll_inst0",
+    "instance": "pll_inst0",
+    "interfaces": {},
+    "line": 486,
+    "module": "CC_PLL",
+    "primitive": true,
+    "roles": [
+     "clkgen"
+    ],
+    "when": "GATEMATE & !ECP5"
+   },
+   {
+    "alt_group": null,
+    "children": [],
+    "id": "pll_inst1",
+    "instance": "pll_inst1",
+    "interfaces": {},
+    "line": 500,
+    "module": "CC_PLL",
+    "primitive": true,
+    "roles": [
+     "clkgen"
+    ],
+    "when": "GATEMATE & !ECP5"
+   },
+   {
+    "alt_group": null,
+    "children": [],
+    "id": "pll_inst2",
+    "instance": "pll_inst2",
+    "interfaces": {},
+    "line": 514,
+    "module": "CC_PLL",
+    "primitive": true,
+    "roles": [
+     "clkgen"
+    ],
+    "when": "GATEMATE & !ECP5"
+   },
+   {
+    "alt_group": "alt2",
+    "children": [
+     {
+      "instance": "muldiv_i",
+      "module": "zeitlos32_muldiv",
+      "when": "always"
+     }
+    ],
+    "id": "wbm_cpu0_i:zeitlos32_wb",
+    "instance": "wbm_cpu0_i",
+    "interfaces": {
+     "wbm_": "initiator"
+    },
+    "line": 1261,
+    "module": "zeitlos32_wb",
+    "primitive": false,
+    "roles": [
+     "master"
+    ],
+    "when": "CPU_ZEITLOS32"
+   },
+   {
+    "alt_group": "alt2",
+    "children": [
+     {
+      "instance": "picorv32_core",
+      "module": "picorv32",
+      "when": "always"
+     }
+    ],
+    "id": "wbm_cpu0_i:picorv32_wb",
+    "instance": "wbm_cpu0_i",
+    "interfaces": {
+     "wbm_": "initiator"
+    },
+    "line": 1308,
+    "module": "picorv32_wb",
+    "primitive": false,
+    "roles": [
+     "master"
+    ],
+    "when": "!CPU_ZEITLOS32"
+   },
+   {
+    "alt_group": null,
+    "children": [],
+    "id": "mtu_i",
+    "instance": "mtu_i",
+    "interfaces": {
+     "cfg_": "target"
+    },
+    "line": 1375,
+    "module": "wb_mtu",
+    "primitive": false,
+    "roles": [
+     "stage",
+     "tenant"
+    ],
+    "when": "always"
+   },
+   {
+    "alt_group": null,
+    "children": [],
+    "id": "icache_i",
+    "instance": "icache_i",
+    "interfaces": {
+     "c_": "target",
+     "m_": "initiator"
+    },
+    "line": 1412,
+    "module": "wb_icache",
+    "primitive": false,
+    "roles": [
+     "bridge"
+    ],
+    "when": "ICACHE"
+   },
+   {
+    "alt_group": null,
+    "children": [],
+    "id": "marb0_i",
+    "instance": "marb0_i",
+    "interfaces": {
+     "m0_": "target",
+     "m1_": "target",
+     "m2_": "target",
+     "s_": "initiator"
+    },
+    "line": 1487,
+    "module": "wb_arbiter_main",
+    "primitive": false,
+    "roles": [
+     "arbiter"
+    ],
+    "when": "GPU_BLIT"
+   },
+   {
+    "alt_group": null,
+    "children": [],
+    "id": "wbm_gpu0_i",
+    "instance": "wbm_gpu0_i",
+    "interfaces": {
+     "m_": "initiator",
+     "wb_": "target"
+    },
+    "line": 1581,
+    "module": "gpu_raster_wb",
+    "primitive": false,
+    "roles": [
+     "master",
+     "tenant"
+    ],
+    "when": "GPU_RASTER"
+   },
+   {
+    "alt_group": null,
+    "children": [],
+    "id": "glyph0_i",
+    "instance": "glyph0_i",
+    "interfaces": {
+     "wb_": "target"
+    },
+    "line": 1621,
+    "module": "glyph_mem",
+    "primitive": false,
+    "roles": [
+     "tenant"
+    ],
+    "when": "MEM_GLYPH"
+   },
+   {
+    "alt_group": null,
+    "children": [],
+    "id": "wbm_blit0_i",
+    "instance": "wbm_blit0_i",
+    "interfaces": {
+     "m_": "initiator",
+     "s_": "initiator",
+     "wb_": "target"
+    },
+    "line": 1661,
+    "module": "gpu_blit_wb",
+    "primitive": false,
+    "roles": [
+     "master",
+     "tenant"
+    ],
+    "when": "GPU_BLIT"
+   },
+   {
+    "alt_group": "alt4",
+    "children": [],
+    "id": "varb0_i",
+    "instance": "varb0_i",
+    "interfaces": {
+     "m0_": "target",
+     "m1_": "target",
+     "m2_": "target",
+     "s_": "initiator"
+    },
+    "line": 1714,
+    "module": "wb_arbiter_vram",
+    "primitive": false,
+    "roles": [
+     "arbiter",
+     "tenant"
+    ],
+    "when": "ARBITER"
+   },
+   {
+    "alt_group": null,
+    "children": [],
+    "id": "wbs_bram0_i",
+    "instance": "wbs_bram0_i",
+    "interfaces": {
+     "wb_": "target"
+    },
+    "line": 1783,
+    "module": "bram_wb",
+    "primitive": false,
+    "roles": [
+     "tenant"
+    ],
+    "when": "always"
+   },
+   {
+    "alt_group": null,
+    "children": [],
+    "id": "wbs_sram_i",
+    "instance": "wbs_sram_i",
+    "interfaces": {
+     "wb_": "target"
+    },
+    "line": 1801,
+    "module": "sram_wb",
+    "primitive": false,
+    "roles": [
+     "tenant"
+    ],
+    "when": "MEM_SRAM"
+   },
+   {
+    "alt_group": null,
+    "children": [],
+    "id": "sdram_i",
+    "instance": "sdram_i",
+    "interfaces": {
+     "wb_": "target"
+    },
+    "line": 1828,
+    "module": "sdram_wb",
+    "primitive": false,
+    "roles": [
+     "tenant"
+    ],
+    "when": "MEM_SDRAM"
+   },
+   {
+    "alt_group": "alt4",
+    "children": [],
+    "id": "wbs_vram_i",
+    "instance": "wbs_vram_i",
+    "interfaces": {
+     "wb_": "target"
+    },
+    "line": 1859,
+    "module": "vram_wb",
+    "primitive": false,
+    "roles": [
+     "p2p",
+     "tenant"
+    ],
+    "when": "MEM_VRAM"
+   },
+   {
+    "alt_group": null,
+    "children": [
+     {
+      "instance": "align_wdata_i",
+      "module": "align_wdata",
+      "when": "always"
+     }
+    ],
+    "id": "wbs_qqspi_i",
+    "instance": "wbs_qqspi_i",
+    "interfaces": {
+     "wb_": "target"
+    },
+    "line": 1880,
+    "module": "qqspi_wb",
+    "primitive": false,
+    "roles": [
+     "tenant"
+    ],
+    "when": "MEM_QQSPI"
+   },
+   {
+    "alt_group": null,
+    "children": [],
+    "id": "usrmclk0",
+    "instance": "usrmclk0",
+    "interfaces": {},
+    "line": 1910,
+    "module": "USRMCLK",
+    "primitive": true,
+    "roles": [],
+    "when": "FPGA_ECP5 & MEM_ROM"
+   },
+   {
+    "alt_group": null,
+    "children": [],
+    "id": "wbs_rom0_i",
+    "instance": "wbs_rom0_i",
+    "interfaces": {
+     "wb_": "target"
+    },
+    "line": 1913,
+    "module": "spiflashro_wb",
+    "primitive": false,
+    "roles": [
+     "tenant"
+    ],
+    "when": "MEM_ROM"
+   },
+   {
+    "alt_group": null,
+    "children": [],
+    "id": "wbs_gpio0_i",
+    "instance": "wbs_gpio0_i",
+    "interfaces": {
+     "wb_": "target"
+    },
+    "line": 1944,
+    "module": "gpio_wb",
+    "primitive": false,
+    "roles": [
+     "tenant"
+    ],
+    "when": "always"
+   },
+   {
+    "alt_group": "alt3",
+    "children": [
+     {
+      "instance": "usb_cdc_i",
+      "module": "usb_cdc",
+      "when": "always"
+     }
+    ],
+    "id": "wbs_uart0_i:usb_cdc_uart",
+    "instance": "wbs_uart0_i",
+    "interfaces": {
+     "wb_": "target"
+    },
+    "line": 2083,
+    "module": "usb_cdc_uart",
+    "primitive": false,
+    "roles": [
+     "tenant"
+    ],
+    "when": "USB_CDC"
+   },
+   {
+    "alt_group": "alt3",
+    "children": [],
+    "id": "wbs_uart0_i:uart_wb",
+    "instance": "wbs_uart0_i",
+    "interfaces": {
+     "wb_": "target"
+    },
+    "line": 2115,
+    "module": "uart_wb",
+    "primitive": false,
+    "roles": [
+     "tenant"
+    ],
+    "when": "UART0 & !USB_CDC"
+   },
+   {
+    "alt_group": "alt3",
+    "children": [],
+    "id": "wbs_uart0_null_i",
+    "instance": "wbs_uart0_null_i",
+    "interfaces": {
+     "wb_": "target"
+    },
+    "line": 2154,
+    "module": "uart_null",
+    "primitive": false,
+    "roles": [
+     "tenant"
+    ],
+    "when": "!UART0 & !USB_CDC"
+   },
+   {
+    "alt_group": null,
+    "children": [],
+    "id": "wbs_uart1_i",
+    "instance": "wbs_uart1_i",
+    "interfaces": {
+     "wb_": "target"
+    },
+    "line": 2176,
+    "module": "uart_wb",
+    "primitive": false,
+    "roles": [
+     "tenant"
+    ],
+    "when": "UART1"
+   },
+   {
+    "alt_group": null,
+    "children": [],
+    "id": "wbs_esp32rx_i",
+    "instance": "wbs_esp32rx_i",
+    "interfaces": {
+     "wb_": "target"
+    },
+    "line": 2228,
+    "module": "esp32_rxfifo",
+    "primitive": false,
+    "roles": [
+     "tenant"
+    ],
+    "when": "ESP32_LINK"
+   },
+   {
+    "alt_group": null,
+    "children": [],
+    "id": "wbs_spisd0_i",
+    "instance": "wbs_spisd0_i",
+    "interfaces": {
+     "wb_": "target"
+    },
+    "line": 2251,
+    "module": "spim_wb",
+    "primitive": false,
+    "roles": [
+     "tenant"
+    ],
+    "when": "SPI_SDCARD"
+   },
+   {
+    "alt_group": null,
+    "children": [],
+    "id": "wbs_spieth0_i",
+    "instance": "wbs_spieth0_i",
+    "interfaces": {
+     "wb_": "target"
+    },
+    "line": 2282,
+    "module": "spim_wb",
+    "primitive": false,
+    "roles": [
+     "tenant"
+    ],
+    "when": "SPI_ETH"
+   },
+   {
+    "alt_group": null,
+    "children": [],
+    "id": "wbs_ethmac0_i",
+    "instance": "wbs_ethmac0_i",
+    "interfaces": {
+     "wb_": "target"
+    },
+    "line": 2335,
+    "module": "ethmac_rmii_wb",
+    "primitive": false,
+    "roles": [
+     "tenant"
+    ],
+    "when": "ETH_RMII"
+   },
+   {
+    "alt_group": null,
+    "children": [],
+    "id": "socctl_i",
+    "instance": "socctl_i",
+    "interfaces": {
+     "wb_": "target"
+    },
+    "line": 2443,
+    "module": "socctl_wb",
+    "primitive": false,
+    "roles": [
+     "tenant"
+    ],
+    "when": "always"
+   },
+   {
+    "alt_group": null,
+    "children": [],
+    "id": "wbs_csrs0_i",
+    "instance": "wbs_csrs0_i",
+    "interfaces": {
+     "wb_": "target"
+    },
+    "line": 2484,
+    "module": "csrs_wb",
+    "primitive": false,
+    "roles": [
+     "tenant"
+    ],
+    "when": "always"
+   },
+   {
+    "alt_group": null,
+    "children": [],
+    "id": "rtc_i",
+    "instance": "rtc_i",
+    "interfaces": {
+     "wb_": "target"
+    },
+    "line": 2530,
+    "module": "rtc_wb",
+    "primitive": false,
+    "roles": [
+     "tenant"
+    ],
+    "when": "RTC"
+   },
+   {
+    "alt_group": null,
+    "children": [],
+    "id": "trng_i",
+    "instance": "trng_i",
+    "interfaces": {
+     "wb_": "target"
+    },
+    "line": 2553,
+    "module": "trng_wb",
+    "primitive": false,
+    "roles": [
+     "tenant"
+    ],
+    "when": "TRNG"
+   },
+   {
+    "alt_group": null,
+    "children": [],
+    "id": "montmul_i",
+    "instance": "montmul_i",
+    "interfaces": {
+     "wb_": "target"
+    },
+    "line": 2587,
+    "module": "montmul",
+    "primitive": false,
+    "roles": [
+     "tenant"
+    ],
+    "when": "MONTMUL"
+   },
+   {
+    "alt_group": null,
+    "children": [
+     {
+      "instance": "spdif_i",
+      "module": "audio_spdif",
+      "when": "AUDIO_SPDIF"
+     },
+     {
+      "instance": "mixer_i",
+      "module": "audio_mixer",
+      "when": "AUDIO_MIXER"
+     },
+     {
+      "instance": "out_i",
+      "module": "audio_out",
+      "when": "always"
+     }
+    ],
+    "id": "audio_i",
+    "instance": "audio_i",
+    "interfaces": {
+     "mx_": "initiator",
+     "wb_": "target"
+    },
+    "line": 2629,
+    "module": "audio_wb",
+    "primitive": false,
+    "roles": [
+     "master",
+     "tenant"
+    ],
+    "when": "AUDIO"
+   },
+   {
+    "alt_group": null,
+    "children": [
+     {
+      "instance": "usb_hid_host_i",
+      "module": "usb_hid_host",
+      "when": "USB_HID"
+     }
+    ],
+    "id": "wbs_usb0_i",
+    "instance": "wbs_usb0_i",
+    "interfaces": {
+     "wb_": "target"
+    },
+    "line": 2698,
+    "module": "usb_hid_wb",
+    "primitive": false,
+    "roles": [
+     "tenant"
+    ],
+    "when": "USB_HID"
+   },
+   {
+    "alt_group": null,
+    "children": [
+     {
+      "instance": "usb_hid_host_i",
+      "module": "usb_hid_host",
+      "when": "USB_HID"
+     }
+    ],
+    "id": "wbs_usb1_i",
+    "instance": "wbs_usb1_i",
+    "interfaces": {
+     "wb_": "target"
+    },
+    "line": 2732,
+    "module": "usb_hid_wb",
+    "primitive": false,
+    "roles": [
+     "tenant"
+    ],
+    "when": "USB_HID"
+   },
+   {
+    "alt_group": null,
+    "children": [
+     {
+      "instance": "gpu_ddmi_i",
+      "module": "gpu_ddmi",
+      "when": "GPU_DDMI"
+     }
+    ],
+    "id": "gpu_video_i",
+    "instance": "gpu_video_i",
+    "interfaces": {},
+    "line": 2810,
+    "module": "gpu_video",
+    "primitive": false,
+    "roles": [],
+    "when": "GPU"
+   },
+   {
+    "alt_group": null,
+    "children": [],
+    "id": "gpu_cursor_i",
+    "instance": "gpu_cursor_i",
+    "interfaces": {},
+    "line": 2901,
+    "module": "gpu_cursor",
+    "primitive": false,
+    "roles": [],
+    "when": "GPU_CURSOR"
+   }
+  ],
+  "buses": [
+   {
+    "decodes": [
+     "cs_audio",
+     "cs_bram",
+     "cs_csrs",
+     "cs_esp32ctl",
+     "cs_esp32rx",
+     "cs_ethmac",
+     "cs_glyph",
+     "cs_gpio",
+     "cs_gpu",
+     "cs_gpu_blit",
+     "cs_montmul",
+     "cs_mtu",
+     "cs_qqspi",
+     "cs_rom",
+     "cs_rtc",
+     "cs_sdram",
+     "cs_socctl",
+     "cs_spieth",
+     "cs_spisdcard",
+     "cs_sram",
+     "cs_trng",
+     "cs_uart0",
+     "cs_uart1",
+     "cs_usb0",
+     "cs_usb1",
+     "cs_vram"
+    ],
+    "net": "wbm_adr"
+   }
+  ],
+  "clocks": [
+   {
+    "mhz": 126.0,
+    "net": "clk126mhz",
+    "sources": [
+     {
+      "block": "pll1_i:pll1",
+      "logic": null,
+      "pin": null,
+      "port": "clkout0",
+      "when": "ECP5 & OSC48"
+     },
+     {
+      "block": "pll1_i:pll1_25",
+      "logic": null,
+      "pin": null,
+      "port": "clkout2",
+      "when": "ECP5 & OSC25 & !OSC48"
+     },
+     {
+      "block": "pll_inst0",
+      "logic": null,
+      "pin": null,
+      "port": "CLK0",
+      "when": "GATEMATE & !ECP5"
+     }
+    ],
+    "users": [
+     "gpu_video_i"
+    ]
+   },
+   {
+    "mhz": 50.0,
+    "net": "clk50mhz",
+    "sources": [
+     {
+      "block": "pll0_i:pll0",
+      "logic": null,
+      "pin": null,
+      "port": "clkout2",
+      "when": "ECP5 & OSC48"
+     }
+    ],
+    "users": [
+     "wbs_ethmac0_i"
+    ]
+   },
+   {
+    "mhz": 48.0,
+    "net": "clk48mhz",
+    "sources": [
+     {
+      "block": null,
+      "logic": null,
+      "pin": "CLK_48",
+      "port": null,
+      "when": "OSC48"
+     },
+     {
+      "block": "pll0_i:pll0_25",
+      "logic": null,
+      "pin": null,
+      "port": "clkout2",
+      "when": "ECP5 & OSC25 & !OSC48"
+     }
+    ],
+    "users": [
+     "audio_i",
+     "glyph0_i",
+     "gpu_video_i",
+     "icache_i",
+     "marb0_i",
+     "montmul_i",
+     "mtu_i",
+     "pll0_i:pll0",
+     "pll1_i:pll1",
+     "rtc_i",
+     "sdram_i",
+     "socctl_i",
+     "trng_i",
+     "varb0_i",
+     "wbm_blit0_i",
+     "wbm_cpu0_i:picorv32_wb",
+     "wbm_cpu0_i:zeitlos32_wb",
+     "wbm_gpu0_i",
+     "wbs_bram0_i",
+     "wbs_csrs0_i",
+     "wbs_esp32rx_i",
+     "wbs_ethmac0_i",
+     "wbs_gpio0_i",
+     "wbs_qqspi_i",
+     "wbs_rom0_i",
+     "wbs_spieth0_i",
+     "wbs_spisd0_i",
+     "wbs_sram_i",
+     "wbs_uart0_i:uart_wb",
+     "wbs_uart0_i:usb_cdc_uart",
+     "wbs_uart0_null_i",
+     "wbs_uart1_i",
+     "wbs_usb0_i",
+     "wbs_usb1_i",
+     "wbs_vram_i"
+    ]
+   },
+   {
+    "mhz": 25.2,
+    "net": "clk25_2mhz",
+    "sources": [
+     {
+      "block": "pll1_i:pll1",
+      "logic": null,
+      "pin": null,
+      "port": "clkout1",
+      "when": "ECP5 & OSC48"
+     },
+     {
+      "block": "pll1_i:pll1_25",
+      "logic": null,
+      "pin": null,
+      "port": "clkout3",
+      "when": "ECP5 & OSC25 & !OSC48"
+     },
+     {
+      "block": "pll_inst1",
+      "logic": null,
+      "pin": null,
+      "port": "CLK0",
+      "when": "GATEMATE & !ECP5"
+     }
+    ],
+    "users": [
+     "gpu_cursor_i",
+     "gpu_video_i"
+    ]
+   },
+   {
+    "mhz": 25.0,
+    "net": "clk25mhz",
+    "sources": [
+     {
+      "block": null,
+      "logic": null,
+      "pin": "CLK_25",
+      "port": null,
+      "when": "OSC25 & !OSC48"
+     }
+    ],
+    "users": [
+     "pll0_i:pll0_25",
+     "pll1_i:pll1_25"
+    ]
+   },
+   {
+    "mhz": 12.0,
+    "net": "clk12mhz",
+    "sources": [
+     {
+      "block": "pll0_i:pll0",
+      "logic": null,
+      "pin": null,
+      "port": "clkout3",
+      "when": "ECP5 & OSC48"
+     },
+     {
+      "block": "pll0_i:pll0_25",
+      "logic": null,
+      "pin": null,
+      "port": "clkout3",
+      "when": "ECP5 & OSC25 & !OSC48"
+     },
+     {
+      "block": "pll_inst2",
+      "logic": null,
+      "pin": null,
+      "port": "CLK0",
+      "when": "GATEMATE & !ECP5"
+     }
+    ],
+    "users": [
+     "wbs_usb0_i",
+     "wbs_usb1_i"
+    ]
+   },
+   {
+    "mhz": null,
+    "net": "ETH_REFCLK",
+    "sources": [
+     {
+      "block": null,
+      "logic": null,
+      "pin": "ETH_REFCLK",
+      "port": null,
+      "when": "ETH_RMII & !ETH_RMII_DRIVE_REFCLK"
+     },
+     {
+      "block": "pll0_i:pll0",
+      "logic": null,
+      "pin": null,
+      "port": "clkout2",
+      "when": "ECP5 & ETH_RMII & ETH_RMII_DRIVE_REFCLK & OSC48"
+     }
+    ],
+    "users": [
+     "wbs_ethmac0_i"
+    ]
+   }
+  ],
+  "decodes": {
+   "cs_audio": {
+    "mux": [
+     {
+      "kind": "dat",
+      "line": 1099,
+      "signal": "wbs_audio_dat_o",
+      "when": "AUDIO"
+     },
+     {
+      "kind": "ack",
+      "line": 1226,
+      "signal": "wbs_audio_ack_o",
+      "when": "AUDIO"
+     }
+    ],
+    "tenants": [
+     {
+      "block": "audio_i",
+      "iface": "wb_",
+      "inline": null,
+      "when": "AUDIO"
+     }
+    ],
+    "windows": [
+     {
+      "base": "0x70000500",
+      "excludes": [],
+      "line": 972,
+      "mask": "0xF0000700",
+      "when": "AUDIO"
+     }
+    ]
+   },
+   "cs_bram": {
+    "mux": [
+     {
+      "kind": "dat",
+      "line": 1038,
+      "signal": "wbs_bram_dat_o",
+      "when": "always"
+     },
+     {
+      "kind": "ack",
+      "line": 1165,
+      "signal": "wbs_bram_ack_o",
+      "when": "always"
+     }
+    ],
+    "tenants": [
+     {
+      "block": "wbs_bram0_i",
+      "iface": "wb_",
+      "inline": null,
+      "when": "always"
+     }
+    ],
+    "windows": [
+     {
+      "base": "0x00000000",
+      "excludes": [],
+      "line": 801,
+      "mask": "0xFFFFE000",
+      "when": "always"
+     }
+    ]
+   },
+   "cs_csrs": {
+    "mux": [
+     {
+      "kind": "dat",
+      "line": 1101,
+      "signal": "wbs_csrs_dat_o",
+      "when": "always"
+     },
+     {
+      "kind": "ack",
+      "line": 1228,
+      "signal": "wbs_csrs_ack_o",
+      "when": "always"
+     }
+    ],
+    "tenants": [
+     {
+      "block": "wbs_csrs0_i",
+      "iface": "wb_",
+      "inline": null,
+      "when": "always"
+     }
+    ],
+    "windows": [
+     {
+      "base": "0x70000000",
+      "excludes": [
+       {
+        "decode": "cs_socctl",
+        "when": "always"
+       },
+       {
+        "decode": "cs_rtc",
+        "when": "RTC"
+       },
+       {
+        "decode": "cs_trng",
+        "when": "TRNG"
+       },
+       {
+        "decode": "cs_audio",
+        "when": "AUDIO"
+       },
+       {
+        "decode": "cs_montmul",
+        "when": "MONTMUL"
+       }
+      ],
+      "line": 984,
+      "mask": "0xF0000000",
+      "when": "always"
+     }
+    ]
+   },
+   "cs_esp32ctl": {
+    "mux": [
+     {
+      "kind": "dat",
+      "line": 1063,
+      "signal": "wbs_esp32ctl_dat_o",
+      "when": "ESP32_LINK"
+     },
+     {
+      "kind": "ack",
+      "line": 1190,
+      "signal": "wbs_esp32ctl_ack_o",
+      "when": "ESP32_LINK"
+     }
+    ],
+    "tenants": [
+     {
+      "block": null,
+      "iface": null,
+      "inline": "cs_esp32ctl",
+      "when": "ESP32_LINK"
+     }
+    ],
+    "windows": [
+     {
+      "base": "0xF0000200",
+      "excludes": [],
+      "line": 1025,
+      "mask": "0xF0000300",
+      "when": "ESP32_LINK"
+     }
+    ]
+   },
+   "cs_esp32rx": {
+    "mux": [
+     {
+      "kind": "dat",
+      "line": 1064,
+      "signal": "wbs_esp32rx_dat_o",
+      "when": "ESP32_LINK"
+     },
+     {
+      "kind": "ack",
+      "line": 1191,
+      "signal": "wbs_esp32rx_ack_o",
+      "when": "ESP32_LINK"
+     }
+    ],
+    "tenants": [
+     {
+      "block": "wbs_esp32rx_i",
+      "iface": "wb_",
+      "inline": null,
+      "when": "ESP32_LINK"
+     }
+    ],
+    "windows": [
+     {
+      "base": "0xF0000300",
+      "excludes": [],
+      "line": 1026,
+      "mask": "0xF0000300",
+      "when": "ESP32_LINK"
+     }
+    ]
+   },
+   "cs_ethmac": {
+    "mux": [
+     {
+      "kind": "dat",
+      "line": 1086,
+      "signal": "wbs_ethmac_dat_o",
+      "when": "ETH_RMII"
+     },
+     {
+      "kind": "ack",
+      "line": 1213,
+      "signal": "wbs_ethmac_ack_o",
+      "when": "ETH_RMII"
+     }
+    ],
+    "tenants": [
+     {
+      "block": "wbs_ethmac0_i",
+      "iface": "wb_",
+      "inline": null,
+      "when": "ETH_RMII"
+     }
+    ],
+    "windows": [
+     {
+      "base": "0x60000000",
+      "excludes": [],
+      "line": 872,
+      "mask": "0xF0000000",
+      "when": "ETH_RMII"
+     }
+    ]
+   },
+   "cs_glyph": {
+    "mux": [
+     {
+      "kind": "dat",
+      "line": 1080,
+      "signal": "wbs_glyph_dat_o",
+      "when": "MEM_GLYPH"
+     },
+     {
+      "kind": "ack",
+      "line": 1207,
+      "signal": "wbs_glyph_ack_o",
+      "when": "MEM_GLYPH"
+     }
+    ],
+    "tenants": [
+     {
+      "block": "glyph0_i",
+      "iface": "wb_",
+      "inline": null,
+      "when": "MEM_GLYPH"
+     }
+    ],
+    "windows": [
+     {
+      "base": "0x30000000",
+      "excludes": [],
+      "line": 866,
+      "mask": "0xF0000000",
+      "when": "MEM_GLYPH"
+     }
+    ]
+   },
+   "cs_gpio": {
+    "mux": [
+     {
+      "kind": "dat",
+      "line": 1057,
+      "signal": "wbs_gpio_dat_o",
+      "when": "always"
+     },
+     {
+      "kind": "ack",
+      "line": 1184,
+      "signal": "wbs_gpio_ack_o",
+      "when": "always"
+     }
+    ],
+    "tenants": [
+     {
+      "block": "wbs_gpio0_i",
+      "iface": "wb_",
+      "inline": null,
+      "when": "always"
+     }
+    ],
+    "windows": [
+     {
+      "base": "0xE0000000",
+      "excludes": [],
+      "line": 1007,
+      "mask": "0xF0000000",
+      "when": "always"
+     }
+    ]
+   },
+   "cs_gpu": {
+    "mux": [
+     {
+      "kind": "dat",
+      "line": 1074,
+      "signal": "wbs_gpu_dat_o",
+      "when": "GPU_RASTER"
+     },
+     {
+      "kind": "ack",
+      "line": 1201,
+      "signal": "wbs_gpu_ack_o",
+      "when": "GPU_RASTER"
+     }
+    ],
+    "tenants": [
+     {
+      "block": "wbm_gpu0_i",
+      "iface": "wb_",
+      "inline": null,
+      "when": "GPU_RASTER"
+     }
+    ],
+    "windows": [
+     {
+      "base": "0xA0000000",
+      "excludes": [],
+      "line": 860,
+      "mask": "0xF0000000",
+      "when": "GPU_RASTER"
+     }
+    ]
+   },
+   "cs_gpu_blit": {
+    "mux": [
+     {
+      "kind": "dat",
+      "line": 1077,
+      "signal": "wbs_gpu_blit_dat_o",
+      "when": "GPU_BLIT"
+     },
+     {
+      "kind": "ack",
+      "line": 1204,
+      "signal": "wbs_gpu_blit_ack_o",
+      "when": "GPU_BLIT"
+     }
+    ],
+    "tenants": [
+     {
+      "block": "wbm_blit0_i",
+      "iface": "wb_",
+      "inline": null,
+      "when": "GPU_BLIT"
+     }
+    ],
+    "windows": [
+     {
+      "base": "0xD0000000",
+      "excludes": [],
+      "line": 863,
+      "mask": "0xF0000000",
+      "when": "GPU_BLIT"
+     }
+    ]
+   },
+   "cs_montmul": {
+    "mux": [
+     {
+      "kind": "dat",
+      "line": 1095,
+      "signal": "wbs_montmul_dat_o",
+      "when": "MONTMUL & TRNG"
+     },
+     {
+      "kind": "ack",
+      "line": 1222,
+      "signal": "wbs_montmul_ack_o",
+      "when": "MONTMUL & TRNG"
+     }
+    ],
+    "tenants": [
+     {
+      "block": "montmul_i",
+      "iface": "wb_",
+      "inline": null,
+      "when": "MONTMUL & TRNG"
+     }
+    ],
+    "windows": [
+     {
+      "base": "0x70000600",
+      "excludes": [],
+      "line": 981,
+      "mask": "0xF0000700",
+      "when": "MONTMUL"
+     }
+    ]
+   },
+   "cs_mtu": {
+    "mux": [
+     {
+      "kind": "dat",
+      "line": 1039,
+      "signal": "wbs_mtu_dat_o",
+      "when": "always"
+     },
+     {
+      "kind": "ack",
+      "line": 1166,
+      "signal": "wbs_mtu_ack_o",
+      "when": "always"
+     }
+    ],
+    "tenants": [
+     {
+      "block": "mtu_i",
+      "iface": "cfg_",
+      "inline": null,
+      "when": "always"
+     }
+    ],
+    "windows": [
+     {
+      "base": "0x90000000",
+      "excludes": [],
+      "line": 802,
+      "mask": "0xF0000000",
+      "when": "always"
+     }
+    ]
+   },
+   "cs_qqspi": {
+    "mux": [
+     {
+      "kind": "dat",
+      "line": 1045,
+      "signal": "wbs_qqspi_dat_o",
+      "when": "MEM_QQSPI & !MEM_SDRAM & !MEM_SRAM"
+     },
+     {
+      "kind": "ack",
+      "line": 1172,
+      "signal": "wbs_qqspi_ack_o",
+      "when": "MEM_QQSPI & !MEM_SDRAM & !MEM_SRAM"
+     }
+    ],
+    "tenants": [
+     {
+      "block": "wbs_qqspi_i",
+      "iface": "wb_",
+      "inline": null,
+      "when": "MEM_QQSPI & !MEM_SDRAM & !MEM_SRAM"
+     }
+    ],
+    "windows": [
+     {
+      "base": "0x40000000",
+      "excludes": [],
+      "line": 809,
+      "mask": "0xF0000000",
+      "when": "MEM_QQSPI & !MEM_SDRAM & !MEM_SRAM"
+     }
+    ]
+   },
+   "cs_rom": {
+    "mux": [
+     {
+      "kind": "dat",
+      "line": 1055,
+      "signal": "wbs_rom_dat_o",
+      "when": "MEM_ROM"
+     },
+     {
+      "kind": "ack",
+      "line": 1182,
+      "signal": "wbs_rom_ack_o",
+      "when": "MEM_ROM"
+     }
+    ],
+    "tenants": [
+     {
+      "block": "wbs_rom0_i",
+      "iface": "wb_",
+      "inline": null,
+      "when": "MEM_ROM"
+     }
+    ],
+    "windows": [
+     {
+      "base": "0x10000000",
+      "excludes": [],
+      "line": 815,
+      "mask": "0xF0000000",
+      "when": "MEM_ROM"
+     }
+    ]
+   },
+   "cs_rtc": {
+    "mux": [
+     {
+      "kind": "dat",
+      "line": 1090,
+      "signal": "wbs_rtc_dat_o",
+      "when": "RTC"
+     },
+     {
+      "kind": "ack",
+      "line": 1217,
+      "signal": "wbs_rtc_ack_o",
+      "when": "RTC"
+     }
+    ],
+    "tenants": [
+     {
+      "block": "rtc_i",
+      "iface": "wb_",
+      "inline": null,
+      "when": "RTC"
+     }
+    ],
+    "windows": [
+     {
+      "base": "0x70000300",
+      "excludes": [],
+      "line": 959,
+      "mask": "0xF0000700",
+      "when": "RTC"
+     }
+    ]
+   },
+   "cs_sdram": {
+    "mux": [
+     {
+      "kind": "dat",
+      "line": 1043,
+      "signal": "wbs_sdram_dat_o",
+      "when": "MEM_SDRAM & !MEM_SRAM"
+     },
+     {
+      "kind": "ack",
+      "line": 1170,
+      "signal": "wbs_sdram_ack_o",
+      "when": "MEM_SDRAM & !MEM_SRAM"
+     }
+    ],
+    "tenants": [
+     {
+      "block": "sdram_i",
+      "iface": "wb_",
+      "inline": null,
+      "when": "MEM_SDRAM & !MEM_SRAM"
+     }
+    ],
+    "windows": [
+     {
+      "base": "0x40000000",
+      "excludes": [],
+      "line": 807,
+      "mask": "0xF0000000",
+      "when": "MEM_SDRAM & !MEM_SRAM"
+     }
+    ]
+   },
+   "cs_socctl": {
+    "mux": [
+     {
+      "kind": "dat",
+      "line": 1088,
+      "signal": "wbs_socctl_dat_o",
+      "when": "always"
+     },
+     {
+      "kind": "ack",
+      "line": 1215,
+      "signal": "wbs_socctl_ack_o",
+      "when": "always"
+     }
+    ],
+    "tenants": [
+     {
+      "block": "socctl_i",
+      "iface": "wb_",
+      "inline": null,
+      "when": "always"
+     }
+    ],
+    "windows": [
+     {
+      "base": "0x70000200",
+      "excludes": [],
+      "line": 945,
+      "mask": "0xF0000700",
+      "when": "always"
+     }
+    ]
+   },
+   "cs_spieth": {
+    "mux": [
+     {
+      "kind": "dat",
+      "line": 1083,
+      "signal": "wbs_spieth_dat_o",
+      "when": "SPI_ETH"
+     },
+     {
+      "kind": "ack",
+      "line": 1210,
+      "signal": "wbs_spieth_ack_o",
+      "when": "SPI_ETH"
+     }
+    ],
+    "tenants": [
+     {
+      "block": "wbs_spieth0_i",
+      "iface": "wb_",
+      "inline": null,
+      "when": "SPI_ETH"
+     }
+    ],
+    "windows": [
+     {
+      "base": "0x50000000",
+      "excludes": [],
+      "line": 869,
+      "mask": "0xF0000000",
+      "when": "SPI_ETH"
+     }
+    ]
+   },
+   "cs_spisdcard": {
+    "mux": [
+     {
+      "kind": "dat",
+      "line": 1067,
+      "signal": "wbs_spisdcard_dat_o",
+      "when": "SPI_SDCARD"
+     },
+     {
+      "kind": "ack",
+      "line": 1194,
+      "signal": "wbs_spisdcard_ack_o",
+      "when": "SPI_SDCARD"
+     }
+    ],
+    "tenants": [
+     {
+      "block": "wbs_spisd0_i",
+      "iface": "wb_",
+      "inline": null,
+      "when": "SPI_SDCARD"
+     }
+    ],
+    "windows": [
+     {
+      "base": "0xB0000000",
+      "excludes": [],
+      "line": 820,
+      "mask": "0xF0000000",
+      "when": "SPI_SDCARD"
+     }
+    ]
+   },
+   "cs_sram": {
+    "mux": [
+     {
+      "kind": "dat",
+      "line": 1041,
+      "signal": "wbs_sram_dat_o",
+      "when": "MEM_SRAM"
+     },
+     {
+      "kind": "ack",
+      "line": 1168,
+      "signal": "wbs_sram_ack_o",
+      "when": "MEM_SRAM"
+     }
+    ],
+    "tenants": [
+     {
+      "block": "wbs_sram_i",
+      "iface": "wb_",
+      "inline": null,
+      "when": "MEM_SRAM"
+     }
+    ],
+    "windows": [
+     {
+      "base": "0x40000000",
+      "excludes": [],
+      "line": 805,
+      "mask": "0xF0000000",
+      "when": "MEM_SRAM"
+     }
+    ]
+   },
+   "cs_trng": {
+    "mux": [
+     {
+      "kind": "dat",
+      "line": 1093,
+      "signal": "wbs_trng_dat_o",
+      "when": "TRNG"
+     },
+     {
+      "kind": "ack",
+      "line": 1220,
+      "signal": "wbs_trng_ack_o",
+      "when": "TRNG"
+     }
+    ],
+    "tenants": [
+     {
+      "block": "trng_i",
+      "iface": "wb_",
+      "inline": null,
+      "when": "TRNG"
+     }
+    ],
+    "windows": [
+     {
+      "base": "0x70000400",
+      "excludes": [],
+      "line": 963,
+      "mask": "0xF0000700",
+      "when": "TRNG"
+     }
+    ]
+   },
+   "cs_uart0": {
+    "mux": [
+     {
+      "kind": "dat",
+      "line": 1058,
+      "signal": "wbs_uart0_dat_o",
+      "when": "always"
+     },
+     {
+      "kind": "ack",
+      "line": 1185,
+      "signal": "wbs_uart0_ack_o",
+      "when": "always"
+     }
+    ],
+    "tenants": [
+     {
+      "block": "wbs_uart0_i:usb_cdc_uart",
+      "iface": "wb_",
+      "inline": null,
+      "when": "USB_CDC"
+     },
+     {
+      "block": "wbs_uart0_i:uart_wb",
+      "iface": "wb_",
+      "inline": null,
+      "when": "UART0 & !USB_CDC"
+     },
+     {
+      "block": "wbs_uart0_null_i",
+      "iface": "wb_",
+      "inline": null,
+      "when": "!UART0 & !USB_CDC"
+     }
+    ],
+    "windows": [
+     {
+      "base": "0xF0000000",
+      "excludes": [],
+      "line": 1019,
+      "mask": "0xF0000300",
+      "when": "UART1"
+     },
+     {
+      "base": "0xF0000000",
+      "excludes": [],
+      "line": 1022,
+      "mask": "0xF0000000",
+      "when": "!UART1"
+     }
+    ]
+   },
+   "cs_uart1": {
+    "mux": [
+     {
+      "kind": "dat",
+      "line": 1060,
+      "signal": "wbs_uart1_dat_o",
+      "when": "UART1"
+     },
+     {
+      "kind": "ack",
+      "line": 1187,
+      "signal": "wbs_uart1_ack_o",
+      "when": "UART1"
+     }
+    ],
+    "tenants": [
+     {
+      "block": "wbs_uart1_i",
+      "iface": "wb_",
+      "inline": null,
+      "when": "UART1"
+     }
+    ],
+    "windows": [
+     {
+      "base": "0xF0000100",
+      "excludes": [],
+      "line": 1020,
+      "mask": "0xF0000300",
+      "when": "UART1"
+     }
+    ]
+   },
+   "cs_usb0": {
+    "mux": [
+     {
+      "kind": "dat",
+      "line": 1070,
+      "signal": "wbs_usb0_dat_o",
+      "when": "USB_HID"
+     },
+     {
+      "kind": "ack",
+      "line": 1197,
+      "signal": "wbs_usb0_ack_o",
+      "when": "USB_HID"
+     }
+    ],
+    "tenants": [
+     {
+      "block": "wbs_usb0_i",
+      "iface": "wb_",
+      "inline": null,
+      "when": "USB_HID"
+     }
+    ],
+    "windows": [
+     {
+      "base": "0xC0000000",
+      "excludes": [],
+      "line": 856,
+      "mask": "0xF0000020",
+      "when": "USB_HID"
+     }
+    ]
+   },
+   "cs_usb1": {
+    "mux": [
+     {
+      "kind": "dat",
+      "line": 1071,
+      "signal": "wbs_usb1_dat_o",
+      "when": "USB_HID"
+     },
+     {
+      "kind": "ack",
+      "line": 1198,
+      "signal": "wbs_usb1_ack_o",
+      "when": "USB_HID"
+     }
+    ],
+    "tenants": [
+     {
+      "block": "wbs_usb1_i",
+      "iface": "wb_",
+      "inline": null,
+      "when": "USB_HID"
+     }
+    ],
+    "windows": [
+     {
+      "base": "0xC0000020",
+      "excludes": [],
+      "line": 857,
+      "mask": "0xF0000020",
+      "when": "USB_HID"
+     }
+    ]
+   },
+   "cs_vram": {
+    "mux": [
+     {
+      "kind": "dat",
+      "line": 1049,
+      "signal": "wbm_cpu_arb0_dat_i",
+      "when": "GPU_RASTER & MEM_VRAM"
+     },
+     {
+      "kind": "dat",
+      "line": 1051,
+      "signal": "wbs_vram_dat_o",
+      "when": "MEM_VRAM & !GPU_RASTER"
+     },
+     {
+      "kind": "ack",
+      "line": 1176,
+      "signal": "wbm_cpu_arb0_ack",
+      "when": "GPU_RASTER & MEM_VRAM"
+     },
+     {
+      "kind": "ack",
+      "line": 1178,
+      "signal": "wbs_vram_ack_o",
+      "when": "MEM_VRAM & !GPU_RASTER"
+     }
+    ],
+    "tenants": [
+     {
+      "block": "varb0_i",
+      "iface": "m0_",
+      "inline": null,
+      "when": "ARBITER & GPU_RASTER & MEM_VRAM"
+     },
+     {
+      "block": "wbs_vram_i",
+      "iface": "wb_",
+      "inline": null,
+      "when": "MEM_VRAM & !GPU_RASTER"
+     }
+    ],
+    "windows": [
+     {
+      "base": "0x20000000",
+      "excludes": [],
+      "line": 812,
+      "mask": "0xF0000000",
+      "when": "MEM_VRAM"
+     }
+    ]
+   }
+  },
+  "defaults": {
+   "AUDIO_CTRL_RESET": "8'h00",
+   "AUDIO_FIFO_LOG2": "10",
+   "AUDIO_MIXER_CH_BITS": "3",
+   "AUDIO_RATE_RESET": "8'd17",
+   "ICACHE_FAST_HIT": "1",
+   "ICACHE_KB": "8",
+   "ICACHE_LINE_WORDS": "4",
+   "MEM": "1",
+   "USB_CDC_MPS": "8",
+   "USB_CDC_PID": "16'h116d",
+   "USB_CDC_STALL_CYCLES": "32'd480_000_000",
+   "USB_CDC_VID": "16'h16d0"
+  },
+  "features": {
+   "ARBITER": {
+    "with": [
+     "block VRAM arbiter"
+    ],
+    "without": []
+   },
+   "AUDIO": {
+    "with": [
+     "block Audio",
+     "decode cs_audio",
+     "pins PWM audio L/R",
+     "pins PT8211 DAC",
+     "pins S/PDIF optical",
+     "IRQ 7",
+     "localparam CSR_FEATURES",
+     "CSR_FEATURES bit 26",
+     "value of cs_csrs",
+     "value of wbm_dat_i",
+     "value of wbm_ack"
+    ],
+    "without": []
+   },
+   "AUDIO_CTRL_RESET": {
+    "with": [
+     "value audio_i.CTRL_RESET"
+    ],
+    "without": []
+   },
+   "AUDIO_FIFO_LOG2": {
+    "with": [
+     "value audio_i.DEPTH_LOG2"
+    ],
+    "without": []
+   },
+   "AUDIO_MIXER": {
+    "with": [
+     "inside audio_wb"
+    ],
+    "without": [
+     "inside audio_wb"
+    ]
+   },
+   "AUDIO_PT8211": {
+    "with": [
+     "pins PT8211 DAC",
+     "localparam AUDIO_FORMATS"
+    ],
+    "without": []
+   },
+   "AUDIO_RATE_RESET": {
+    "with": [
+     "value audio_i.RATE_RESET"
+    ],
+    "without": []
+   },
+   "AUDIO_SD": {
+    "with": [
+     "pins PWM audio L/R",
+     "localparam AUDIO_FORMATS"
+    ],
+    "without": []
+   },
+   "AUDIO_SPDIF": {
+    "with": [
+     "inside audio_wb",
+     "pins S/PDIF optical",
+     "localparam AUDIO_FORMATS"
+    ],
+    "without": [
+     "inside audio_wb"
+    ]
+   },
+   "BOARD_ULX3S": {
+    "with": [
+     "pins ESP32 control"
+    ],
+    "without": []
+   },
+   "CPU_DIV": {
+    "with": [
+     "wbm_cpu0_i.ENABLE_DIV",
+     "localparam CSR_FEATURES",
+     "CSR_FEATURES bit 21"
+    ],
+    "without": [
+     "wbm_cpu0_i.ENABLE_DIV"
+    ]
+   },
+   "CPU_MUL": {
+    "with": [
+     "wbm_cpu0_i.ENABLE_MUL",
+     "wbm_cpu0_i.FAST_MUL",
+     "wbm_cpu0_i.ENABLE_FAST_MUL",
+     "localparam CSR_FEATURES",
+     "CSR_FEATURES bit 20"
+    ],
+    "without": [
+     "wbm_cpu0_i.ENABLE_MUL",
+     "wbm_cpu0_i.FAST_MUL",
+     "wbm_cpu0_i.ENABLE_FAST_MUL"
+    ]
+   },
+   "CPU_MUL_FAST": {
+    "with": [
+     "wbm_cpu0_i.ENABLE_MUL",
+     "wbm_cpu0_i.FAST_MUL",
+     "wbm_cpu0_i.ENABLE_FAST_MUL",
+     "localparam CSR_FEATURES",
+     "CSR_FEATURES bit 22"
+    ],
+    "without": [
+     "wbm_cpu0_i.ENABLE_MUL",
+     "wbm_cpu0_i.FAST_MUL",
+     "wbm_cpu0_i.ENABLE_FAST_MUL"
+    ]
+   },
+   "CPU_ZEITLOS32": {
+    "with": [
+     "block Zeitlos32",
+     "localparam MTU_ON_BUS",
+     "localparam CSR_FEATURES",
+     "CSR_FEATURES bit 23"
+    ],
+    "without": [
+     "block PicoRV32",
+     "localparam MTU_ON_BUS"
+    ]
+   },
+   "ECP5": {
+    "with": [
+     "block PLL0",
+     "block PLL1",
+     "block PLL0 (25M in)",
+     "block PLL1 (25M in)"
+    ],
+    "without": [
+     "block GateMate PLL"
+    ]
+   },
+   "ESP32_LINK": {
+    "with": [
+     "block ESP32 RX FIFO",
+     "decode cs_esp32ctl",
+     "decode cs_esp32rx",
+     "localparam CSR_FEATURES",
+     "CSR_FEATURES bit 30",
+     "value of wbm_dat_i",
+     "value of wbm_ack"
+    ],
+    "without": [
+     "localparam CSR_FEATURES2",
+     "CSR_FEATURES2 bit 1"
+    ]
+   },
+   "ETH_RMII": {
+    "with": [
+     "block Ethernet MAC",
+     "decode cs_ethmac",
+     "pins Ethernet",
+     "pins ETH_REFCLK",
+     "localparam CSR_FEATURES",
+     "CSR_FEATURES bit 17",
+     "value of wbm_dat_i",
+     "value of wbm_ack"
+    ],
+    "without": []
+   },
+   "ETH_RMII_DRIVE_REFCLK": {
+    "with": [
+     "pins ETH_REFCLK"
+    ],
+    "without": [
+     "pins ETH_REFCLK"
+    ]
+   },
+   "ETH_RX_SLOTS": {
+    "with": [
+     "inside ethmac_rmii_wb"
+    ],
+    "without": [
+     "inside ethmac_rmii_wb"
+    ]
+   },
+   "FPGA_ECP5": {
+    "with": [
+     "block ECP5 config-clock primitive"
+    ],
+    "without": [
+     "pins config flash"
+    ]
+   },
+   "GAME": {
+    "with": [
+     "localparam GAME_AVAILABLE",
+     "localparam CSR_FEATURES",
+     "CSR_FEATURES bit 27"
+    ],
+    "without": [
+     "localparam GAME_AVAILABLE"
+    ]
+   },
+   "GATEMATE": {
+    "with": [
+     "block GateMate PLL"
+    ],
+    "without": []
+   },
+   "GPIO_PORT0": {
+    "with": [
+     "pins GPIO0",
+     "localparam CSR_FEATURES2",
+     "CSR_FEATURES2 bit 0",
+     "localparam GPIO_NPORTS"
+    ],
+    "without": []
+   },
+   "GPIO_PORT0_NARROW": {
+    "with": [
+     "pins GPIO0"
+    ],
+    "without": [
+     "pins GPIO0"
+    ]
+   },
+   "GPIO_PORT1": {
+    "with": [
+     "pins GPIO1",
+     "localparam GPIO_NPORTS"
+    ],
+    "without": []
+   },
+   "GPIO_PORT2": {
+    "with": [
+     "pins GPIO2",
+     "localparam GPIO_NPORTS"
+    ],
+    "without": []
+   },
+   "GPIO_PORT3": {
+    "with": [
+     "pins GPIO3",
+     "localparam GPIO_NPORTS"
+    ],
+    "without": []
+   },
+   "GPU": {
+    "with": [
+     "block Video out",
+     "localparam GAME_AVAILABLE",
+     "localparam VID_H_DISP",
+     "localparam VID_H_FP",
+     "localparam VID_H_PW",
+     "localparam VID_H_BP",
+     "localparam VID_V_DISP",
+     "localparam VID_V_FP",
+     "localparam VID_V_PW",
+     "localparam VID_V_BP",
+     "localparam VID_H_DIV",
+     "localparam VID_FIXED_VP",
+     "localparam CSR_FEATURES",
+     "CSR_FEATURES bit 6"
+    ],
+    "without": [
+     "localparam GAME_AVAILABLE"
+    ]
+   },
+   "GPU_AMBER": {
+    "with": [
+     "localparam VIDEO_MODE_DEFAULT"
+    ],
+    "without": []
+   },
+   "GPU_BLIT": {
+    "with": [
+     "block Main bus arbiter",
+     "block Blitter",
+     "decode cs_gpu_blit",
+     "localparam CSR_FEATURES",
+     "CSR_FEATURES bit 8",
+     "value of wbm_dat_i",
+     "value of wbm_ack"
+    ],
+    "without": []
+   },
+   "GPU_COMPOSITE": {
+    "with": [
+     "inside gpu_video",
+     "pins composite DAC",
+     "localparam VID_H_DISP",
+     "localparam VID_H_FP",
+     "localparam VID_H_PW",
+     "localparam VID_H_BP",
+     "localparam VID_V_DISP",
+     "localparam VID_V_FP",
+     "localparam VID_V_PW",
+     "localparam VID_V_BP",
+     "localparam VID_H_DIV",
+     "localparam VID_FIXED_VP",
+     "localparam CSR_FEATURES",
+     "CSR_FEATURES bit 28"
+    ],
+    "without": [
+     "inside gpu_video",
+     "pins HDMI (DDMI)",
+     "pins VGA",
+     "localparam VID_H_DISP",
+     "localparam VID_H_FP",
+     "localparam VID_H_PW",
+     "localparam VID_H_BP",
+     "localparam VID_V_DISP",
+     "localparam VID_V_FP",
+     "localparam VID_V_PW",
+     "localparam VID_V_BP",
+     "localparam VID_H_DIV",
+     "localparam VID_FIXED_VP"
+    ]
+   },
+   "GPU_COMPOSITE_PAL": {
+    "with": [
+     "localparam VID_H_DISP",
+     "localparam VID_H_FP",
+     "localparam VID_H_PW",
+     "localparam VID_H_BP",
+     "localparam VID_V_DISP",
+     "localparam VID_V_FP",
+     "localparam VID_V_PW",
+     "localparam VID_V_BP",
+     "localparam CSR_FEATURES",
+     "CSR_FEATURES bit 29"
+    ],
+    "without": [
+     "localparam VID_H_DISP",
+     "localparam VID_H_FP",
+     "localparam VID_H_PW",
+     "localparam VID_H_BP",
+     "localparam VID_V_DISP",
+     "localparam VID_V_FP",
+     "localparam VID_V_PW",
+     "localparam VID_V_BP"
+    ]
+   },
+   "GPU_CURSOR": {
+    "with": [
+     "block HW cursor",
+     "localparam CSR_FEATURES",
+     "CSR_FEATURES bit 9",
+     "value of gpu_pixel"
+    ],
+    "without": []
+   },
+   "GPU_DDMI": {
+    "with": [
+     "inside gpu_video",
+     "pins HDMI (DDMI)",
+     "localparam CSR_FEATURES",
+     "CSR_FEATURES bit 11"
+    ],
+    "without": []
+   },
+   "GPU_RASTER": {
+    "with": [
+     "block Line rasterizer",
+     "decode cs_gpu",
+     "localparam CSR_FEATURES",
+     "CSR_FEATURES bit 7",
+     "value of wbm_dat_i",
+     "value of wbm_ack"
+    ],
+    "without": [
+     "value of wbm_dat_i",
+     "value of wbm_ack"
+    ]
+   },
+   "GPU_VGA": {
+    "with": [
+     "pins VGA",
+     "localparam CSR_FEATURES",
+     "CSR_FEATURES bit 10"
+    ],
+    "without": []
+   },
+   "ICACHE": {
+    "with": [
+     "block Instruction cache"
+    ],
+    "without": []
+   },
+   "ICACHE_FAST_HIT": {
+    "with": [
+     "value icache_i.FAST_HIT"
+    ],
+    "without": []
+   },
+   "ICACHE_KB": {
+    "with": [
+     "value icache_i.CACHE_KB"
+    ],
+    "without": []
+   },
+   "ICACHE_LINE_WORDS": {
+    "with": [
+     "value icache_i.LINE_WORDS"
+    ],
+    "without": []
+   },
+   "LED_DEBUG": {
+    "with": [
+     "pins debug LEDs",
+     "localparam CSR_FEATURES",
+     "CSR_FEATURES bit 19"
+    ],
+    "without": []
+   },
+   "LED_RGB": {
+    "with": [
+     "pins trap LED",
+     "pins IRQ LED",
+     "localparam CSR_FEATURES",
+     "CSR_FEATURES bit 18"
+    ],
+    "without": []
+   },
+   "MEM": {
+    "with": [
+     "value wbs_csrs0_i.MEM_MB"
+    ],
+    "without": []
+   },
+   "MEM_GLYPH": {
+    "with": [
+     "block Glyph RAM",
+     "decode cs_glyph",
+     "localparam CSR_FEATURES",
+     "CSR_FEATURES bit 5",
+     "value of wbm_dat_i",
+     "value of wbm_ack"
+    ],
+    "without": []
+   },
+   "MEM_QQSPI": {
+    "with": [
+     "block PSRAM",
+     "decode cs_qqspi",
+     "pins QSPI PSRAM",
+     "localparam CSR_FEATURES",
+     "CSR_FEATURES bit 3",
+     "value of wbm_dat_i",
+     "value of wbm_ack"
+    ],
+    "without": []
+   },
+   "MEM_QQSPI_SINGLE": {
+    "with": [],
+    "without": [
+     "pins QSPI PSRAM"
+    ]
+   },
+   "MEM_ROM": {
+    "with": [
+     "block ECP5 config-clock primitive",
+     "block SPI flash",
+     "decode cs_rom",
+     "pins config flash",
+     "localparam CSR_FEATURES",
+     "CSR_FEATURES bit 4",
+     "value of wbm_dat_i",
+     "value of wbm_ack"
+    ],
+    "without": []
+   },
+   "MEM_SDRAM": {
+    "with": [
+     "block SDRAM",
+     "decode cs_sdram",
+     "pins SDRAM",
+     "localparam CSR_FEATURES",
+     "CSR_FEATURES bit 1",
+     "value of wbm_dat_i",
+     "value of wbm_ack"
+    ],
+    "without": [
+     "decode cs_qqspi",
+     "value of wbm_dat_i",
+     "value of wbm_ack"
+    ]
+   },
+   "MEM_SRAM": {
+    "with": [
+     "block SRAM",
+     "decode cs_sram",
+     "pins SRAM",
+     "localparam CSR_FEATURES",
+     "CSR_FEATURES bit 0",
+     "value of wbm_dat_i",
+     "value of wbm_ack"
+    ],
+    "without": [
+     "decode cs_sdram",
+     "decode cs_qqspi",
+     "value of wbm_dat_i",
+     "value of wbm_ack"
+    ]
+   },
+   "MEM_VRAM": {
+    "with": [
+     "block VRAM",
+     "decode cs_vram",
+     "localparam CSR_FEATURES",
+     "CSR_FEATURES bit 2",
+     "value of wbm_dat_i",
+     "value of wbm_ack"
+    ],
+    "without": []
+   },
+   "MONTMUL": {
+    "with": [
+     "block Montgomery mult.",
+     "decode cs_montmul",
+     "localparam CSR_FEATURES2",
+     "CSR_FEATURES2 bit 3",
+     "value of cs_csrs",
+     "value of wbm_dat_i",
+     "value of wbm_ack"
+    ],
+    "without": []
+   },
+   "MONTMUL_LIMBS": {
+    "with": [
+     "montmul_i.LIMBS",
+     "value montmul_i.LIMBS"
+    ],
+    "without": []
+   },
+   "OSC100": {
+    "with": [
+     "pins CLK_100"
+    ],
+    "without": []
+   },
+   "OSC25": {
+    "with": [
+     "block PLL0 (25M in)",
+     "inside pll0_25",
+     "block PLL1 (25M in)",
+     "inside pll1_25",
+     "pins CLK_25"
+    ],
+    "without": []
+   },
+   "OSC48": {
+    "with": [
+     "block PLL0",
+     "inside pll0",
+     "block PLL1",
+     "inside pll1",
+     "pins CLK_48"
+    ],
+    "without": [
+     "block PLL0 (25M in)",
+     "block PLL1 (25M in)"
+    ]
+   },
+   "OSC50": {
+    "with": [
+     "pins CLK_50"
+    ],
+    "without": []
+   },
+   "RISCV_FORMAL": {
+    "with": [
+     "inside picorv32_wb"
+    ],
+    "without": []
+   },
+   "RTC": {
+    "with": [
+     "block RTC",
+     "decode cs_rtc",
+     "localparam CSR_FEATURES",
+     "CSR_FEATURES bit 24",
+     "value of cs_csrs",
+     "value of wbm_dat_i",
+     "value of wbm_ack"
+    ],
+    "without": []
+   },
+   "SPI_ETH": {
+    "with": [
+     "block SPI master",
+     "decode cs_spieth",
+     "pins Ethernet",
+     "localparam CSR_FEATURES",
+     "CSR_FEATURES bit 15",
+     "value of wbm_dat_i",
+     "value of wbm_ack"
+    ],
+    "without": []
+   },
+   "SPI_FLASH": {
+    "with": [
+     "localparam CSR_FEATURES",
+     "CSR_FEATURES bit 16"
+    ],
+    "without": []
+   },
+   "SPI_SDCARD": {
+    "with": [
+     "block SPI master",
+     "decode cs_spisdcard",
+     "pins microSD",
+     "localparam CSR_FEATURES",
+     "CSR_FEATURES bit 14",
+     "value of wbm_dat_i",
+     "value of wbm_ack"
+    ],
+    "without": []
+   },
+   "TRNG": {
+    "with": [
+     "block TRNG",
+     "decode cs_trng",
+     "localparam CSR_FEATURES",
+     "CSR_FEATURES bit 25",
+     "value of cs_csrs",
+     "value of wbm_dat_i",
+     "value of wbm_ack"
+    ],
+    "without": []
+   },
+   "TRNG_SIM": {
+    "with": [
+     "inside trng_wb"
+    ],
+    "without": [
+     "inside trng_wb"
+    ]
+   },
+   "UART0": {
+    "with": [
+     "block UART 16550",
+     "pins UART0",
+     "localparam CSR_FEATURES",
+     "CSR_FEATURES bit 12"
+    ],
+    "without": [
+     "block UART stub",
+     "localparam CSR_FEATURES",
+     "CSR_FEATURES bit 12"
+    ]
+   },
+   "UART1": {
+    "with": [
+     "block UART 16550",
+     "decode cs_uart0",
+     "decode cs_uart1",
+     "pins UART1 RX",
+     "pins UART1",
+     "localparam CSR_FEATURES2",
+     "CSR_FEATURES2 bit 1",
+     "value of wbm_dat_i",
+     "value of wbm_ack"
+    ],
+    "without": [
+     "decode cs_uart0"
+    ]
+   },
+   "USB_CDC": {
+    "with": [
+     "block USB CDC console",
+     "pins USB-C device",
+     "localparam CSR_FEATURES",
+     "CSR_FEATURES bit 12",
+     "localparam CSR_FEATURES2",
+     "CSR_FEATURES2 bit 2"
+    ],
+    "without": [
+     "block UART 16550",
+     "block UART stub"
+    ]
+   },
+   "USB_CDC_MPS": {
+    "with": [
+     "value wbs_uart0_i.MAXPACKETSIZE"
+    ],
+    "without": []
+   },
+   "USB_CDC_PID": {
+    "with": [
+     "value wbs_uart0_i.PRODUCTID"
+    ],
+    "without": []
+   },
+   "USB_CDC_STALL_CYCLES": {
+    "with": [
+     "value wbs_uart0_i.STALL_CYCLES"
+    ],
+    "without": []
+   },
+   "USB_CDC_VID": {
+    "with": [
+     "value wbs_uart0_i.VENDORID"
+    ],
+    "without": []
+   },
+   "USB_HID": {
+    "with": [
+     "block USB HID host",
+     "inside usb_hid_wb",
+     "decode cs_usb0",
+     "decode cs_usb1",
+     "pins USB host",
+     "IRQ 6",
+     "localparam USB_HID_SENS",
+     "localparam CSR_FEATURES",
+     "CSR_FEATURES bit 13",
+     "value of wbm_dat_i",
+     "value of wbm_ack"
+    ],
+    "without": []
+   },
+   "USB_HID_ACCEL": {
+    "with": [
+     "inside usb_hid_wb"
+    ],
+    "without": [
+     "inside usb_hid_wb"
+    ]
+   },
+   "USB_HID_SENS_SHIFT": {
+    "with": [
+     "localparam USB_HID_SENS"
+    ],
+    "without": [
+     "localparam USB_HID_SENS"
+    ]
+   }
+  },
+  "files": [
+   "rtl/sysctl.v",
+   "rtl/clk/pll0.v",
+   "rtl/clk/pll1.v",
+   "rtl/clk/pll0_25.v",
+   "rtl/clk/pll1_25.v",
+   "rtl/cpu/picorv32/picorv32.v",
+   "rtl/cpu/zeitlos32/zeitlos32.v",
+   "rtl/cpu/zeitlos32/zeitlos32_muldiv.v",
+   "rtl/mtu.v",
+   "rtl/cache.v",
+   "rtl/arbiter_vram.v",
+   "rtl/arbiter_main.v",
+   "rtl/mem/bram.v",
+   "rtl/mem/sram.v",
+   "rtl/mem/sdram_kianv.v",
+   "rtl/mem/qqspi.v",
+   "rtl/mem/vram.v",
+   "rtl/mem/glyph.v",
+   "rtl/spiflashro.v",
+   "rtl/uart_null.v",
+   "rtl/ethmac_rmii.v",
+   "rtl/gpio.v",
+   "rtl/csrs.v",
+   "rtl/esp32_rxfifo.v",
+   "rtl/socctl.v",
+   "rtl/rtc.v",
+   "rtl/trng.v",
+   "rtl/montmul.v",
+   "rtl/audio.v",
+   "rtl/audio_out.v",
+   "rtl/audio_mixer.v",
+   "rtl/audio_spdif.v",
+   "rtl/spim.v",
+   "rtl/gpu/gpu_raster.v",
+   "rtl/gpu/gpu_blit.v",
+   "rtl/gpu/gpu_video.v",
+   "rtl/gpu/gpu_cursor.v",
+   "rtl/gpu/gpu_ddmi.v",
+   "rtl/gpu/tmds_encoder.v",
+   "rtl/uart.v",
+   "rtl/usb_hid.v",
+   "rtl/ext/usb_hid_host/src/usb_hid_host.v",
+   "rtl/ext/usb_hid_host/src/usb_hid_host_rom.v",
+   "rtl/usb_cdc_uart.v",
+   "rtl/ext/usb_cdc/usb_cdc.v",
+   "rtl/ext/usb_cdc/sie.v",
+   "rtl/ext/usb_cdc/phy_rx.v",
+   "rtl/ext/usb_cdc/phy_tx.v",
+   "rtl/ext/usb_cdc/ctrl_endp.v",
+   "rtl/ext/usb_cdc/bulk_endp.v",
+   "rtl/ext/usb_cdc/in_fifo.v",
+   "rtl/ext/usb_cdc/out_fifo.v"
+  ],
+  "findings": [
+   {
+    "items": [
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "no-ack",
+      "line": 981,
+      "msg": "cs_montmul decodes 0x7000_0600 but no slave acks it (bus hang)",
+      "severity": "E"
+     },
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "no-ack",
+      "line": 981,
+      "msg": "cs_montmul decodes 0x7000_0600 but has no data mux term",
+      "severity": "E"
+     },
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "undeclared",
+      "line": 2598,
+      "msg": "wbs_montmul_dat_o is used here but declared only when TRNG",
+      "severity": "E"
+     },
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "undeclared",
+      "line": 2602,
+      "msg": "wbs_montmul_ack_o is used here but declared only when MONTMUL & TRNG",
+      "severity": "E"
+     }
+    ],
+    "severity": "E",
+    "when": "MONTMUL & !TRNG"
+   },
+   {
+    "items": [
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "no-ack",
+      "line": 812,
+      "msg": "cs_vram decodes 0x2000_0000 but no slave acks it (bus hang)",
+      "severity": "E"
+     },
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "undeclared",
+      "line": 1049,
+      "msg": "wbm_cpu_arb0_dat_i is used here but declared only when ARBITER",
+      "severity": "E"
+     },
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "undeclared",
+      "line": 1176,
+      "msg": "wbm_cpu_arb0_ack is used here but declared only when ARBITER",
+      "severity": "E"
+     }
+    ],
+    "severity": "E",
+    "when": "GPU_RASTER & MEM_VRAM & !ARBITER"
+   },
+   {
+    "items": [
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "overlap",
+      "line": 1022,
+      "msg": "cs_esp32ctl (0xF000_0200) and cs_uart0 (0xF000_0000) decode the same addresses",
+      "severity": "E"
+     },
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "overlap",
+      "line": 1022,
+      "msg": "cs_esp32rx (0xF000_0300) and cs_uart0 (0xF000_0000) decode the same addresses",
+      "severity": "E"
+     },
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "undeclared",
+      "line": 2231,
+      "msg": "UART1_RX is used here but declared only when UART1",
+      "severity": "E"
+     }
+    ],
+    "severity": "E",
+    "when": "ESP32_LINK & !UART1"
+   },
+   {
+    "items": [
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "drivers",
+      "line": 2321,
+      "msg": "eth_rx_ready has two drivers: assign (line 2321) and wbs_ethmac0_i.eth_int_o (line 2353)",
+      "severity": "E"
+     }
+    ],
+    "severity": "E",
+    "when": "ETH_RMII & SPI_ETH"
+   },
+   {
+    "items": [
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "undeclared",
+      "line": 633,
+      "msg": "wbs_usb0_int is used here but declared only when USB_HID",
+      "severity": "E"
+     }
+    ],
+    "severity": "E",
+    "when": "!USB_HID"
+   },
+   {
+    "items": [
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "undeclared",
+      "line": 535,
+      "msg": "pll_locked is used here but declared only when ECP5 | GATEMATE",
+      "severity": "E"
+     },
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "no-clock",
+      "line": 2711,
+      "msg": "clock clk12mhz has no source (read by wbs_usb0_i.usb_clk)",
+      "severity": "W"
+     },
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "no-clock",
+      "line": 2822,
+      "msg": "clock clk25_2mhz has no source (read by gpu_video_i.pclk)",
+      "severity": "W"
+     },
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "no-clock",
+      "line": 2823,
+      "msg": "clock clk126mhz has no source (read by gpu_video_i.bclk)",
+      "severity": "W"
+     }
+    ],
+    "severity": "E",
+    "when": "!ECP5 & !GATEMATE"
+   },
+   {
+    "items": [
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "undeclared",
+      "line": 1712,
+      "msg": "cs_vram is used here but declared only when MEM_VRAM",
+      "severity": "E"
+     },
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "unconnected",
+      "line": 1714,
+      "msg": "VRAM arbiter (varb0_i) initiator s_* is connected to no bus",
+      "severity": "W"
+     },
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "undriven",
+      "line": 1755,
+      "msg": "varb0_i.s_dat_i reads wbs_vram_dat_o, which nothing drives",
+      "severity": "W"
+     },
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "undriven",
+      "line": 1761,
+      "msg": "varb0_i.s_ack_i reads wbs_vram_ack_o, which nothing drives",
+      "severity": "W"
+     }
+    ],
+    "severity": "E",
+    "when": "ARBITER & !MEM_VRAM"
+   },
+   {
+    "items": [
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "undeclared",
+      "line": 2850,
+      "msg": "gb_adr is used here but declared only when MEM_VRAM",
+      "severity": "E"
+     },
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "undeclared",
+      "line": 2851,
+      "msg": "gb_dat is used here but declared only when MEM_VRAM",
+      "severity": "E"
+     }
+    ],
+    "severity": "E",
+    "when": "GPU & !MEM_VRAM"
+   },
+   {
+    "items": [
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "undeclared",
+      "line": 2905,
+      "msg": "gpu_x is used here but declared only when GPU",
+      "severity": "E"
+     },
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "undeclared",
+      "line": 2906,
+      "msg": "gpu_y is used here but declared only when GPU",
+      "severity": "E"
+     }
+    ],
+    "severity": "E",
+    "when": "GPU_CURSOR & !GPU"
+   },
+   {
+    "items": [
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "undeclared",
+      "line": 494,
+      "msg": "CLK_48 is used here but declared only when OSC48",
+      "severity": "E"
+     }
+    ],
+    "severity": "E",
+    "when": "GATEMATE & !ECP5 & !OSC48"
+   },
+   {
+    "items": [
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "unconnected",
+      "line": 2629,
+      "msg": "Audio (audio_i) initiator mx_* is connected to no bus",
+      "severity": "W"
+     },
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "undriven",
+      "line": 2677,
+      "msg": "audio_i.mx_dat_i reads wbm_audio_dat_i, which nothing drives",
+      "severity": "W"
+     },
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "undriven",
+      "line": 2682,
+      "msg": "audio_i.mx_ack_i reads wbm_audio_ack, which nothing drives",
+      "severity": "W"
+     }
+    ],
+    "severity": "W",
+    "when": "AUDIO & !GPU_BLIT"
+   },
+   {
+    "items": [
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "unconnected",
+      "line": 1661,
+      "msg": "Blitter (wbm_blit0_i) initiator m_* is connected to no bus",
+      "severity": "W"
+     },
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "undriven",
+      "line": 1678,
+      "msg": "wbm_blit0_i.m_dat_i reads wbm_gpu_blit_dat_i, which nothing drives",
+      "severity": "W"
+     },
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "undriven",
+      "line": 1684,
+      "msg": "wbm_blit0_i.m_ack_i reads wbm_gpu_blit_ack, which nothing drives",
+      "severity": "W"
+     }
+    ],
+    "severity": "W",
+    "when": "GPU_BLIT & !ARBITER"
+   },
+   {
+    "items": [
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "unconnected",
+      "line": 1581,
+      "msg": "Line rasterizer (wbm_gpu0_i) initiator m_* is connected to no bus",
+      "severity": "W"
+     },
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "undriven",
+      "line": 1598,
+      "msg": "wbm_gpu0_i.m_dat_i reads wbm_gpu_dat_i, which nothing drives",
+      "severity": "W"
+     },
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "undriven",
+      "line": 1604,
+      "msg": "wbm_gpu0_i.m_ack_i reads wbm_gpu_ack, which nothing drives",
+      "severity": "W"
+     }
+    ],
+    "severity": "W",
+    "when": "GPU_RASTER & !ARBITER"
+   },
+   {
+    "items": [
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "undriven",
+      "line": 2907,
+      "msg": "gpu_cursor_i.curs_x reads gpu_curs_x, which nothing drives",
+      "severity": "W"
+     },
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "undriven",
+      "line": 2908,
+      "msg": "gpu_cursor_i.curs_y reads gpu_curs_y, which nothing drives",
+      "severity": "W"
+     }
+    ],
+    "severity": "W",
+    "when": "GPU_CURSOR & !USB_HID"
+   },
+   {
+    "items": [
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "undriven",
+      "line": 1634,
+      "msg": "glyph0_i.blit_addr reads wbm_blit_glyph_addr, which nothing drives",
+      "severity": "W"
+     }
+    ],
+    "severity": "W",
+    "when": "MEM_GLYPH & !GPU_BLIT"
+   },
+   {
+    "items": [
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "undriven",
+      "line": 1871,
+      "msg": "wbs_vram_i.gb_adr_i reads gb_adr, which nothing drives",
+      "severity": "W"
+     }
+    ],
+    "severity": "W",
+    "when": "MEM_VRAM & !GPU"
+   },
+   {
+    "items": [
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "no-clock",
+      "line": 2711,
+      "msg": "clock clk12mhz has no source (read by wbs_usb0_i.usb_clk)",
+      "severity": "W"
+     },
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "no-clock",
+      "line": 2822,
+      "msg": "clock clk25_2mhz has no source (read by gpu_video_i.pclk)",
+      "severity": "W"
+     },
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "no-clock",
+      "line": 2823,
+      "msg": "clock clk126mhz has no source (read by gpu_video_i.bclk)",
+      "severity": "W"
+     }
+    ],
+    "severity": "W",
+    "when": "ECP5 & !OSC25 & !OSC48"
+   },
+   {
+    "items": [
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "exclusive",
+      "line": 1878,
+      "msg": "MEM_QQSPI and MEM_SDRAM cannot both be defined (cs_qqspi is declared in an `elsif chain but used outside it)",
+      "severity": "N"
+     }
+    ],
+    "severity": "N",
+    "when": "MEM_QQSPI & MEM_SDRAM"
+   },
+   {
+    "items": [
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "exclusive",
+      "line": 1878,
+      "msg": "MEM_QQSPI and MEM_SRAM cannot both be defined (cs_qqspi is declared in an `elsif chain but used outside it)",
+      "severity": "N"
+     }
+    ],
+    "severity": "N",
+    "when": "MEM_QQSPI & MEM_SRAM"
+   },
+   {
+    "items": [
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "exclusive",
+      "line": 1826,
+      "msg": "MEM_SDRAM and MEM_SRAM cannot both be defined (cs_sdram is declared in an `elsif chain but used outside it)",
+      "severity": "N"
+     }
+    ],
+    "severity": "N",
+    "when": "MEM_SDRAM & MEM_SRAM"
+   }
+  ],
+  "format": "zeitlos-hwmap-model/1",
+  "ghost_windows": [
+   {
+    "base": "0x70000100",
+    "block": "icache_i",
+    "decode": "cs_csrs",
+    "param": "CFG_BASE",
+    "when": "ICACHE"
+   }
+  ],
+  "irqs": [
+   {
+    "line": 631,
+    "n": 3,
+    "signal": "irq_timer",
+    "sources": [
+     {
+      "block": null,
+      "logic": "irq_timer",
+      "pin": null,
+      "port": null,
+      "when": "always"
+     }
+    ],
+    "when": "always"
+   },
+   {
+    "line": 632,
+    "n": 4,
+    "signal": "wbs_uart0_int",
+    "sources": [
+     {
+      "block": "wbs_uart0_i:usb_cdc_uart",
+      "logic": null,
+      "pin": null,
+      "port": "int_o",
+      "when": "USB_CDC"
+     },
+     {
+      "block": "wbs_uart0_i:uart_wb",
+      "logic": null,
+      "pin": null,
+      "port": "int_o",
+      "when": "UART0 & !USB_CDC"
+     },
+     {
+      "block": "wbs_uart0_null_i",
+      "logic": null,
+      "pin": null,
+      "port": "int_o",
+      "when": "!UART0 & !USB_CDC"
+     }
+    ],
+    "when": "always"
+   },
+   {
+    "line": 633,
+    "n": 5,
+    "signal": "wbs_usb0_int",
+    "sources": [
+     {
+      "block": "wbs_usb0_i",
+      "logic": null,
+      "pin": null,
+      "port": "int_o",
+      "when": "USB_HID"
+     }
+    ],
+    "when": "always"
+   },
+   {
+    "line": 635,
+    "n": 6,
+    "signal": "wbs_usb1_int",
+    "sources": [
+     {
+      "block": "wbs_usb1_i",
+      "logic": null,
+      "pin": null,
+      "port": "int_o",
+      "when": "USB_HID"
+     }
+    ],
+    "when": "USB_HID"
+   },
+   {
+    "line": 643,
+    "n": 7,
+    "signal": "wbs_audio_int",
+    "sources": [
+     {
+      "block": "audio_i",
+      "logic": null,
+      "pin": null,
+      "port": "int_o",
+      "when": "AUDIO"
+     }
+    ],
+    "when": "AUDIO"
+   },
+   {
+    "line": 661,
+    "n": 8,
+    "signal": "eth_rx_int",
+    "sources": [
+     {
+      "block": null,
+      "logic": "eth_rx_ready",
+      "pin": null,
+      "port": null,
+      "when": "!ETH_RMII & !SPI_ETH"
+     },
+     {
+      "block": null,
+      "logic": null,
+      "pin": "ETH_INT",
+      "port": null,
+      "when": "SPI_ETH"
+     },
+     {
+      "block": "wbs_ethmac0_i",
+      "logic": null,
+      "pin": null,
+      "port": "eth_int_o",
+      "when": "ETH_RMII"
+     }
+    ],
+    "when": "always"
+   }
+  ],
+  "links": [
+   {
+    "dst": "wbm_blit0_i",
+    "signals": [
+     "blit_data>glyph_data_i"
+    ],
+    "src": "glyph0_i",
+    "when": "GPU_BLIT & MEM_GLYPH"
+   },
+   {
+    "dst": "gpu_video_i",
+    "signals": [
+     "pixel>pixel"
+    ],
+    "src": "gpu_cursor_i",
+    "when": "GPU & GPU_CURSOR"
+   },
+   {
+    "dst": "gpu_cursor_i",
+    "signals": [
+     "x>gpu_x",
+     "y>gpu_y"
+    ],
+    "src": "gpu_video_i",
+    "when": "GPU & GPU_CURSOR"
+   },
+   {
+    "dst": "socctl_i",
+    "signals": [
+     "frame_ctr>frame_ctr",
+     "in_vblank>in_vblank"
+    ],
+    "src": "gpu_video_i",
+    "when": "GPU"
+   },
+   {
+    "dst": "wbs_vram_i",
+    "signals": [
+     "gb_adr_o>gb_adr_i"
+    ],
+    "src": "gpu_video_i",
+    "when": "GPU & MEM_VRAM"
+   },
+   {
+    "dst": "wbm_cpu0_i:zeitlos32_wb",
+    "signals": [
+     "base_o>mtu_base"
+    ],
+    "src": "mtu_i",
+    "when": "CPU_ZEITLOS32"
+   },
+   {
+    "dst": "gpu_cursor_i",
+    "signals": [
+     "cursor_busy>curs_alt"
+    ],
+    "src": "socctl_i",
+    "when": "GPU_CURSOR"
+   },
+   {
+    "dst": "gpu_video_i",
+    "signals": [
+     "video_mode>video_mode",
+     "view_load>view_load",
+     "game_en>game_en",
+     "game_wrap>game_wrap",
+     "view_x>view_x",
+     "view_y>view_y"
+    ],
+    "src": "socctl_i",
+    "when": "GPU"
+   },
+   {
+    "dst": "glyph0_i",
+    "signals": [
+     "glyph_addr_o>blit_addr"
+    ],
+    "src": "wbm_blit0_i",
+    "when": "GPU_BLIT & MEM_GLYPH"
+   },
+   {
+    "dst": "gpu_cursor_i",
+    "signals": [
+     "curs_x>curs_x",
+     "curs_y>curs_y",
+     "typ>curs_x",
+     "typ>curs_y"
+    ],
+    "src": "wbs_usb0_i",
+    "when": "GPU_CURSOR & USB_HID"
+   },
+   {
+    "dst": "gpu_cursor_i",
+    "signals": [
+     "curs_x>curs_x",
+     "curs_y>curs_y",
+     "typ>curs_x",
+     "typ>curs_y"
+    ],
+    "src": "wbs_usb1_i",
+    "when": "GPU_CURSOR & USB_HID"
+   },
+   {
+    "dst": "gpu_video_i",
+    "signals": [
+     "gb_dat_o>gb_dat_i"
+    ],
+    "src": "wbs_vram_i",
+    "when": "GPU & MEM_VRAM"
+   }
+  ],
+  "main_tree": {
+   "blocks": [
+    {
+     "id": "marb0_i",
+     "when": "GPU_BLIT"
+    }
+   ],
+   "bypass": true,
+   "iface": "s_",
+   "inputs": [
+    {
+     "node": {
+      "blocks": [
+       {
+        "id": "icache_i",
+        "when": "ICACHE"
+       }
+      ],
+      "bypass": true,
+      "iface": "m_",
+      "kind": "bridge",
+      "up": {
+       "blocks": [
+        {
+         "id": "mtu_i",
+         "when": "always"
+        }
+       ],
+       "bypass": false,
+       "kind": "stage",
+       "up": {
+        "blocks": [
+         {
+          "id": "wbm_cpu0_i:zeitlos32_wb",
+          "when": "CPU_ZEITLOS32"
+         },
+         {
+          "id": "wbm_cpu0_i:picorv32_wb",
+          "when": "!CPU_ZEITLOS32"
+         }
+        ],
+        "bypass": false,
+        "iface": "wbm_",
+        "kind": "master"
+       }
+      }
+     },
+     "port": "m0_"
+    },
+    {
+     "node": {
+      "blocks": [
+       {
+        "id": "wbm_blit0_i",
+        "when": "GPU_BLIT"
+       }
+      ],
+      "bypass": false,
+      "iface": "s_",
+      "kind": "master"
+     },
+     "port": "m1_"
+    },
+    {
+     "node": {
+      "blocks": [
+       {
+        "id": "audio_i",
+        "when": "AUDIO"
+       }
+      ],
+      "bypass": false,
+      "iface": "mx_",
+      "kind": "master"
+     },
+     "port": "m2_"
+    }
+   ],
+   "kind": "arbiter"
+  },
+  "pins": [
+   {
+    "block": "audio_i",
+    "kind": "io",
+    "label": "AUDIO_*",
+    "ports": [
+     "AUDIO_L",
+     "AUDIO_R"
+    ],
+    "when": "AUDIO & AUDIO_SD"
+   },
+   {
+    "block": "audio_i",
+    "kind": "io",
+    "label": "AUD_*",
+    "ports": [
+     "AUD_BCK",
+     "AUD_WS",
+     "AUD_DIN"
+    ],
+    "when": "AUDIO & AUDIO_PT8211"
+   },
+   {
+    "block": "audio_i",
+    "kind": "io",
+    "label": "AUD_OPTICAL",
+    "ports": [
+     "AUD_OPTICAL"
+    ],
+    "when": "AUDIO & AUDIO_SPDIF"
+   },
+   {
+    "block": "gpu_video_i",
+    "kind": "io",
+    "label": "COMP_DAC",
+    "ports": [
+     "COMP_DAC"
+    ],
+    "when": "GPU_COMPOSITE"
+   },
+   {
+    "block": "gpu_video_i",
+    "kind": "io",
+    "label": "DDMI_*",
+    "ports": [
+     "DDMI_D0_P",
+     "DDMI_D1_P",
+     "DDMI_D2_P",
+     "DDMI_CK_P"
+    ],
+    "when": "GPU_DDMI & !GPU_COMPOSITE"
+   },
+   {
+    "block": "gpu_video_i",
+    "kind": "io",
+    "label": "VGA_*",
+    "ports": [
+     "VGA_R",
+     "VGA_G",
+     "VGA_B",
+     "VGA_HS",
+     "VGA_VS"
+    ],
+    "when": "GPU_VGA & !GPU_COMPOSITE"
+   },
+   {
+    "block": "sdram_i",
+    "kind": "io",
+    "label": "sdram_*",
+    "ports": [
+     "sdram_a",
+     "sdram_dq",
+     "sdram_cs_n",
+     "sdram_cke",
+     "sdram_ras_n",
+     "sdram_cas_n",
+     "sdram_we_n",
+     "sdram_dm",
+     "sdram_ba",
+     "sdram_clock"
+    ],
+    "when": "MEM_SDRAM"
+   },
+   {
+    "block": "wbm_cpu0_i:picorv32_wb",
+    "kind": "io",
+    "label": "LED_R",
+    "ports": [
+     "LED_R"
+    ],
+    "when": "LED_RGB"
+   },
+   {
+    "block": "wbm_cpu0_i:zeitlos32_wb",
+    "kind": "io",
+    "label": "LED_R",
+    "ports": [
+     "LED_R"
+    ],
+    "when": "LED_RGB"
+   },
+   {
+    "block": "wbs_esp32rx_i",
+    "kind": "io",
+    "label": "UART1_RX",
+    "ports": [
+     "UART1_RX"
+    ],
+    "when": "UART1"
+   },
+   {
+    "block": "wbs_ethmac0_i",
+    "kind": "io",
+    "label": "ETH_*",
+    "ports": [
+     "ETH_RXD",
+     "ETH_TXD",
+     "ETH_TX_EN",
+     "ETH_CRS_DV",
+     "ETH_RST_N"
+    ],
+    "when": "ETH_RMII"
+   },
+   {
+    "block": "wbs_ethmac0_i",
+    "kind": "clock",
+    "label": "ETH_REFCLK",
+    "ports": [
+     "ETH_REFCLK"
+    ],
+    "when": "ETH_RMII & ETH_RMII_DRIVE_REFCLK"
+   },
+   {
+    "block": "wbs_ethmac0_i",
+    "kind": "clock",
+    "label": "ETH_REFCLK",
+    "ports": [
+     "ETH_REFCLK"
+    ],
+    "when": "ETH_RMII & !ETH_RMII_DRIVE_REFCLK"
+   },
+   {
+    "block": "wbs_gpio0_i",
+    "kind": "io",
+    "label": "DBG",
+    "ports": [
+     "DBG"
+    ],
+    "when": "LED_DEBUG"
+   },
+   {
+    "block": "wbs_gpio0_i",
+    "kind": "io",
+    "label": "GPIO0",
+    "ports": [
+     "GPIO0"
+    ],
+    "when": "GPIO_PORT0 & GPIO_PORT0_NARROW"
+   },
+   {
+    "block": "wbs_gpio0_i",
+    "kind": "io",
+    "label": "GPIO0",
+    "ports": [
+     "GPIO0"
+    ],
+    "when": "GPIO_PORT0 & !GPIO_PORT0_NARROW"
+   },
+   {
+    "block": "wbs_gpio0_i",
+    "kind": "io",
+    "label": "GPIO1",
+    "ports": [
+     "GPIO1"
+    ],
+    "when": "GPIO_PORT1"
+   },
+   {
+    "block": "wbs_gpio0_i",
+    "kind": "io",
+    "label": "GPIO2",
+    "ports": [
+     "GPIO2"
+    ],
+    "when": "GPIO_PORT2"
+   },
+   {
+    "block": "wbs_gpio0_i",
+    "kind": "io",
+    "label": "GPIO3",
+    "ports": [
+     "GPIO3"
+    ],
+    "when": "GPIO_PORT3"
+   },
+   {
+    "block": "wbs_gpio0_i",
+    "kind": "io",
+    "label": "LED_B",
+    "ports": [
+     "LED_B"
+    ],
+    "when": "always"
+   },
+   {
+    "block": "wbs_qqspi_i",
+    "kind": "io",
+    "label": "QQSPI_*",
+    "ports": [
+     "QQSPI_CS1",
+     "QQSPI_CS0"
+    ],
+    "when": "MEM_QQSPI & !MEM_QQSPI_SINGLE"
+   },
+   {
+    "block": "wbs_qqspi_i",
+    "kind": "io",
+    "label": "QQSPI_*",
+    "ports": [
+     "QQSPI_SS",
+     "QQSPI_SCK",
+     "QQSPI_MOSI",
+     "QQSPI_MISO",
+     "QQSPI_SIO2",
+     "QQSPI_SIO3"
+    ],
+    "when": "MEM_QQSPI"
+   },
+   {
+    "block": "wbs_rom0_i",
+    "kind": "io",
+    "label": "CSPI_*",
+    "ports": [
+     "CSPI_SS_FLASH",
+     "CSPI_MISO",
+     "CSPI_MOSI"
+    ],
+    "when": "MEM_ROM"
+   },
+   {
+    "block": "wbs_rom0_i",
+    "kind": "io",
+    "label": "CSPI_SCK",
+    "ports": [
+     "CSPI_SCK"
+    ],
+    "when": "MEM_ROM & !FPGA_ECP5"
+   },
+   {
+    "block": "wbs_spieth0_i",
+    "kind": "io",
+    "label": "ETH_*",
+    "ports": [
+     "ETH_SS",
+     "ETH_MISO",
+     "ETH_MOSI",
+     "ETH_SCLK",
+     "ETH_INT"
+    ],
+    "when": "SPI_ETH"
+   },
+   {
+    "block": "wbs_spisd0_i",
+    "kind": "io",
+    "label": "SD_*",
+    "ports": [
+     "SD_SS",
+     "SD_MISO",
+     "SD_MOSI",
+     "SD_SCK"
+    ],
+    "when": "SPI_SDCARD"
+   },
+   {
+    "block": "wbs_sram_i",
+    "kind": "io",
+    "label": "SRAM_*",
+    "ports": [
+     "SRAM_D",
+     "SRAM_A",
+     "SRAM1_CE",
+     "SRAM0_CE",
+     "SRAM1_OE",
+     "SRAM0_OE",
+     "SRAM1_WE",
+     "SRAM0_WE",
+     "SRAM1_UB",
+     "SRAM0_UB",
+     "SRAM1_LB",
+     "SRAM0_LB"
+    ],
+    "when": "MEM_SRAM"
+   },
+   {
+    "block": "wbs_uart0_i:uart_wb",
+    "kind": "io",
+    "label": "UART0_*",
+    "ports": [
+     "UART0_TX",
+     "UART0_RX"
+    ],
+    "when": "UART0"
+   },
+   {
+    "block": "wbs_uart0_i:usb_cdc_uart",
+    "kind": "io",
+    "label": "usb_ufp_*",
+    "ports": [
+     "usb_ufp_dp",
+     "usb_ufp_dm",
+     "usb_ufp_pull"
+    ],
+    "when": "USB_CDC"
+   },
+   {
+    "block": "wbs_uart1_i",
+    "kind": "io",
+    "label": "UART1_*",
+    "ports": [
+     "UART1_TX",
+     "UART1_RX"
+    ],
+    "when": "UART1"
+   },
+   {
+    "block": "wbs_usb0_i",
+    "kind": "io",
+    "label": "usb_host_*",
+    "ports": [
+     "usb_host_dp",
+     "usb_host_dm"
+    ],
+    "when": "USB_HID"
+   },
+   {
+    "block": "wbs_usb1_i",
+    "kind": "io",
+    "label": "usb_host_*",
+    "ports": [
+     "usb_host_dp",
+     "usb_host_dm"
+    ],
+    "when": "USB_HID"
+   },
+   {
+    "block": null,
+    "kind": "unused",
+    "label": "CLK_100",
+    "ports": [
+     "CLK_100"
+    ],
+    "when": "OSC100"
+   },
+   {
+    "block": null,
+    "kind": "clock",
+    "label": "CLK_25",
+    "ports": [
+     "CLK_25"
+    ],
+    "when": "OSC25"
+   },
+   {
+    "block": null,
+    "kind": "clock",
+    "label": "CLK_48",
+    "ports": [
+     "CLK_48"
+    ],
+    "when": "OSC48"
+   },
+   {
+    "block": null,
+    "kind": "unused",
+    "label": "CLK_50",
+    "ports": [
+     "CLK_50"
+    ],
+    "when": "OSC50"
+   },
+   {
+    "block": null,
+    "kind": "io",
+    "label": "LED_G",
+    "ports": [
+     "LED_G"
+    ],
+    "when": "LED_RGB"
+   },
+   {
+    "block": null,
+    "kind": "io",
+    "label": "wifi_en_*",
+    "ports": [
+     "wifi_en",
+     "wifi_gpio0",
+     "flash_holdn",
+     "flash_wpn",
+     "LED1",
+     "LED2",
+     "usb_fpga_pu_dp",
+     "usb_fpga_pu_dn",
+     "SD_DAT1",
+     "SD_DAT2"
+    ],
+    "when": "BOARD_ULX3S"
+   }
+  ],
+  "secondary": [
+   {
+    "iface": "wb_",
+    "target": "wbs_vram_i",
+    "tree": {
+     "blocks": [
+      {
+       "id": "varb0_i",
+       "when": "ARBITER"
+      }
+     ],
+     "bypass": true,
+     "iface": "s_",
+     "inputs": [
+      {
+       "node": {
+        "blocks": [
+         {
+          "id": "wbm_cpu0_i:zeitlos32_wb",
+          "when": "CPU_ZEITLOS32"
+         },
+         {
+          "id": "wbm_cpu0_i:picorv32_wb",
+          "when": "!CPU_ZEITLOS32"
+         }
+        ],
+        "bypass": false,
+        "iface": "wbm_",
+        "kind": "master"
+       },
+       "port": "m0_"
+      },
+      {
+       "node": {
+        "blocks": [
+         {
+          "id": "wbm_gpu0_i",
+          "when": "GPU_RASTER"
+         }
+        ],
+        "bypass": false,
+        "iface": "m_",
+        "kind": "master"
+       },
+       "port": "m1_"
+      },
+      {
+       "node": {
+        "blocks": [
+         {
+          "id": "wbm_blit0_i",
+          "when": "GPU_BLIT"
+         }
+        ],
+        "bypass": false,
+        "iface": "m_",
+        "kind": "master"
+       },
+       "port": "m2_"
+      }
+     ],
+     "kind": "arbiter"
+    }
+   }
+  ],
+  "top": "rtl/sysctl.v",
+  "virtual_windows": [
+   {
+    "base": "0x80000000",
+    "block": "mtu_i",
+    "mask": "0xF0000000",
+    "when": "always"
+   }
+  ]
+ }
+}

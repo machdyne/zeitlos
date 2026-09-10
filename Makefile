@@ -586,6 +586,18 @@ test_blit:
 		rtl/gpu/gpu_blit.v output/gpu_blit_cand.v
 	@vvp output/tb_gpu_blit
 
+# Hardware map: every optional feature of rtl/sysctl.v on one A4 page,
+# with reference tables and a check of define combinations that would
+# not build or would hang the bus. No BOARD needed -- the map is not of
+# any one board; each optional block is labelled with its define.
+#
+#   make hwmap                    output/docs/hwmap.{pdf,png,svg}
+#   tools/hwmap/hwmap --check     just the checks
+#
+# See docs/hwmap.md.
+hwmap:
+	@tools/hwmap/hwmap
+
 path:
 	@test -f $(PNR_LOG) || { echo "no $(PNR_LOG) -- build first"; exit 1; }
 	@awk '/Critical path report/{f=1} f' $(PNR_LOG)
@@ -616,4 +628,4 @@ clean_bios:
 clean_apps:
 	cd sw/apps && make clean
 
-.PHONY: clean_bios bios apps tftp-dist timing path util test_blit test_uart
+.PHONY: clean_bios bios apps tftp-dist timing path util test_blit test_uart hwmap

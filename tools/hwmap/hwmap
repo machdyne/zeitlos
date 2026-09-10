@@ -1,0 +1,318 @@
+#!/usr/bin/env python3
+#
+# Zeitlos hardware map.
+#
+#   hwmap                     write output/docs/hwmap.{pdf,png,svg}
+#   hwmap --json              ... and output/docs/hwmap.json (the model)
+#   hwmap --check             only run the checks, print them, write nothing
+#   hwmap --strict            exit 1 if a check finds an error combination
+#   hwmap --selftest          test hwmap itself (synthetic SoC + golden model)
+#   hwmap --diff              how the model differs from the golden copy
+#   hwmap --update-golden     accept the current model as the golden copy
+#
+# The map shows EVERY optional feature of rtl/sysctl.v, each tagged with
+# the define(s) that include it. Nothing is preprocessed and no board is
+# selected: `ifdef conditions are read, never evaluated. See
+# docs/hwmap.md for how to read the map and what the RTL has to look
+# like for hwmap to understand it.
+#
+# Standard library only. PNG export uses pdftoppm (poppler-utils) if it
+# is installed, else rsvg-convert, else ImageMagick; without any of them
+# the PDF and SVG are still written and the PNG is skipped with a note.
+#
+
+import sys as _sys
+
+# No __pycache__ in the source tree -- same reasoning as release/zrelease:
+# running a documentation tool must not make `git status` dirty.
+_sys.dont_write_bytecode = True
+
+import argparse
+import difflib
+import json
+import os
+import shutil
+import subprocess
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(HERE))
+sys.path.insert(0, HERE)
+
+from lib import check as check_mod     # noqa: E402
+from lib import cond as C              # noqa: E402
+from lib import design as design_mod   # noqa: E402
+from lib import export                 # noqa: E402
+from lib import hints as hints_mod     # noqa: E402
+from lib import layout                 # noqa: E402
+from lib import model as model_mod     # noqa: E402
+from lib import pdf                    # noqa: E402
+from lib import svg                    # noqa: E402
+
+GOLDEN = os.path.join(HERE, "golden", "sysctl.model")
+
+
+def err(msg):
+    print("hwmap: " + msg, file=sys.stderr)
+
+
+def git(root, *args):
+    try:
+        r = subprocess.run(["git", "-C", root] + list(args), capture_output=True,
+                           text=True, timeout=10)
+        return r.stdout.strip() if r.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def revision(root, files):
+    rev = git(root, "rev-parse", "--short", "HEAD")
+    if not rev:
+        return "not a git checkout"
+    date = git(root, "log", "-1", "--format=%cd", "--date=short") or ""
+    dirty = git(root, "status", "--porcelain", "--", "Makefile", "rtl")
+    s = "commit %s (%s)" % (rev, date)
+    if dirty:
+        s += ", uncommitted changes in Makefile/rtl"
+    return s
+
+
+def build(root, quiet=False):
+    warnings = []
+    d = design_mod.Design(root, warn=warnings.append)
+    h = hints_mod.Hints()
+    m = model_mod.Model(d, h)
+    findings = check_mod.run(m)
+    groups = check_mod.group(findings)
+    for w in warnings:
+        err("warning: " + w)
+    return d, h, m, findings, groups
+
+
+def print_findings(groups, out=sys.stderr, limit=None):
+    sev = {"E": "error", "W": "warning", "N": "note"}
+    for g in groups[:limit]:
+        print("  %-7s when %s" % (sev[g["severity"]], C.fmt(g["when"])), file=out)
+        for it in g["items"]:
+            where = "%s:%s" % (it["file"], it["line"]) if it["file"] else ""
+            print("            %s  [%s]" % (it["msg"], where), file=out)
+
+
+def to_png(pdf_path, svg_path, png_path, dpi):
+    base = png_path[:-4]
+    if shutil.which("pdftoppm"):
+        r = subprocess.run(["pdftoppm", "-png", "-r", str(dpi), "-f", "1", "-l", "1",
+                            "-singlefile", pdf_path, base], capture_output=True)
+        if r.returncode == 0 and os.path.exists(png_path):
+            return "pdftoppm"
+    if shutil.which("rsvg-convert"):
+        r = subprocess.run(["rsvg-convert", "-d", str(dpi), "-p", str(dpi),
+                            "-o", png_path, svg_path], capture_output=True)
+        if r.returncode == 0:
+            return "rsvg-convert"
+    for tool in ("magick", "convert"):
+        if shutil.which(tool):
+            r = subprocess.run([tool, "-density", str(dpi), pdf_path + "[0]",
+                                "-background", "white", "-flatten", png_path],
+                               capture_output=True)
+            if r.returncode == 0:
+                return tool
+    return None
+
+
+def generate(args):
+    root = os.path.abspath(args.root)
+    d, h, m, findings, groups = build(root)
+    info = dict(rev=revision(root, d.files),
+                stats="%d RTL files, %d instances, %d defines"
+                      % (len(d.files), len(d.top.instances), len(m.features)),
+                files=os.path.relpath(os.path.join(root, d.top.file), root))
+    v = layout.View(m, h, findings, groups, info)
+    page = layout.MapPage(v)
+    p1 = page.draw()
+    pages = [p1] + layout.reference_pages(v)
+
+    out = os.path.join(root, args.out) if not os.path.isabs(args.out) else args.out
+    os.makedirs(out, exist_ok=True)
+    pdf_path = os.path.join(out, "hwmap.pdf")
+    svg_path = os.path.join(out, "hwmap.svg")
+    png_path = os.path.join(out, "hwmap.png")
+    pdf.write(pdf_path, pages, title="Zeitlos SoC hardware map",
+              subject=info["rev"])
+    svg.write(svg_path, p1)
+    written = [pdf_path, svg_path]
+    if not args.no_png:
+        tool = to_png(pdf_path, svg_path, png_path, args.dpi)
+        if tool:
+            written.append(png_path)
+        else:
+            err("note: no pdftoppm, rsvg-convert or ImageMagick found; "
+                "PNG skipped (PDF and SVG written)")
+    if args.json:
+        jp = os.path.join(out, "hwmap.json")
+        with open(jp, "w") as f:
+            f.write(export.dumps(export.model_dict(m, groups)))
+        written.append(jp)
+
+    for p in written:
+        print(os.path.relpath(p, os.getcwd()))
+    problems = 0
+    if page.unplaced:
+        problems += 1
+        err("warning: not drawn on the map (no region fits them): %s -- see "
+            "docs/hwmap.md, 'Troubleshooting'"
+            % ", ".join("%s (%s)" % (b.inst.name, b.module) for b in page.unplaced))
+    if page.squeezed:
+        err("warning: column(s) %s too full, some notes dropped from the map "
+            "(the reference pages are complete)" % ", ".join(sorted(set(page.squeezed))))
+    missing = sorted(x for x in h.missing if not d.is_primitive(x))
+    if missing:
+        err("note: no display hint for module(s) %s; drawn under the module name "
+            "(add them to tools/hwmap/lib/hints.py)" % ", ".join(missing))
+    report(groups, args)
+    if args.strict and (problems or any(g["severity"] == "E" for g in groups)):
+        return 1
+    return 0
+
+
+def report(groups, args):
+    cnt = {"E": 0, "W": 0, "N": 0}
+    for g in groups:
+        cnt[g["severity"]] += 1
+    if not groups:
+        err("check: no findings")
+        return
+    err("check: %d define combination(s) with errors, %d with warnings, %d notes%s"
+        % (cnt["E"], cnt["W"], cnt["N"],
+           "" if args.verbose else " (-v to list, or see the last page of the PDF)"))
+    if args.verbose:
+        print_findings(groups)
+
+
+def do_check(args):
+    root = os.path.abspath(args.root)
+    _, _, _, _, groups = build(root)
+    print_findings(groups, out=sys.stdout)
+    if not groups:
+        print("no findings")
+    return 1 if args.strict and any(g["severity"] == "E" for g in groups) else 0
+
+
+def current_golden(root):
+    d, h, m, findings, groups = build(root)
+    return dict(input_sha256=export.input_hash(d), model=export.model_dict(m, groups))
+
+
+def load_golden():
+    if not os.path.exists(GOLDEN):
+        return None
+    with open(GOLDEN) as f:
+        return json.load(f)
+
+
+def diff_text(a, b):
+    return "".join(difflib.unified_diff(export.dumps(a).splitlines(True),
+                                        export.dumps(b).splitlines(True),
+                                        "golden", "current", n=2))
+
+
+def do_selftest(args):
+    from lib import selftest
+    failed = 0
+    for name, ok, detail in selftest.run():
+        print("%s  %s" % ("ok  " if ok else "FAIL", name))
+        if not ok:
+            failed += 1
+            for ln in (detail or "").splitlines():
+                print("        " + ln)
+    root = os.path.abspath(args.root)
+    gold = load_golden()
+    if gold is None:
+        print("skip  golden model: %s does not exist (hwmap --update-golden)"
+              % os.path.relpath(GOLDEN, root))
+    else:
+        cur = current_golden(root)
+        if cur["input_sha256"] != gold["input_sha256"]:
+            print("skip  golden model: the RTL has changed since it was recorded; "
+                  "review with hwmap --diff, accept with hwmap --update-golden")
+        elif cur["model"] != gold["model"]:
+            failed += 1
+            print("FAIL  golden model: same RTL, different model -- hwmap's analysis "
+                  "changed:")
+            txt = diff_text(gold["model"], cur["model"]).splitlines()
+            for ln in txt[:60]:
+                print("        " + ln)
+            if len(txt) > 60:
+                print("        ... (%d more lines; hwmap --diff)" % (len(txt) - 60))
+        else:
+            print("ok    golden model matches")
+    print("%s" % ("all passed" if not failed else "%d FAILED" % failed))
+    return 1 if failed else 0
+
+
+def do_diff(args):
+    root = os.path.abspath(args.root)
+    gold = load_golden()
+    if gold is None:
+        err("no golden model yet (hwmap --update-golden)")
+        return 1
+    cur = current_golden(root)
+    txt = diff_text(gold["model"], cur["model"])
+    sys.stdout.write(txt or "no difference\n")
+    return 0
+
+
+def do_update_golden(args):
+    root = os.path.abspath(args.root)
+    cur = current_golden(root)
+    os.makedirs(os.path.dirname(GOLDEN), exist_ok=True)
+    with open(GOLDEN, "w") as f:
+        f.write(export.dumps(cur))
+    print(os.path.relpath(GOLDEN, os.getcwd()))
+    return 0
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        prog="hwmap",
+        description="Draw the Zeitlos SoC hardware map (every optional feature) "
+                    "from rtl/sysctl.v.")
+    ap.add_argument("--root", default=ROOT, help="project root (default: %(default)s)")
+    ap.add_argument("--out", default=os.path.join("output", "docs"),
+                    help="output directory, relative to the root (default: %(default)s)")
+    ap.add_argument("--json", action="store_true", help="also write hwmap.json")
+    ap.add_argument("--no-png", action="store_true", help="skip the PNG")
+    ap.add_argument("--dpi", type=int, default=200, help="PNG resolution (default: 200)")
+    ap.add_argument("--strict", action="store_true",
+                    help="exit 1 when a check finds an error combination")
+    ap.add_argument("-v", "--verbose", action="store_true", help="list check findings")
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument("--check", action="store_true", help="only run the checks")
+    mode.add_argument("--selftest", action="store_true", help="test hwmap itself")
+    mode.add_argument("--diff", action="store_true", help="model vs golden copy")
+    mode.add_argument("--update-golden", action="store_true",
+                      help="record the current model as golden")
+    args = ap.parse_args()
+    try:
+        if args.selftest:
+            return do_selftest(args)
+        if args.check:
+            return do_check(args)
+        if args.diff:
+            return do_diff(args)
+        if args.update_golden:
+            return do_update_golden(args)
+        return generate(args)
+    except (design_mod.LoadError, ) as e:
+        err(str(e))
+        return 2
+    except Exception as e:
+        from lib.vparse import ParseError
+        if isinstance(e, ParseError):
+            err("cannot read the RTL: %s" % e)
+            return 2
+        raise
+
+
+if __name__ == "__main__":
+    sys.exit(main())
