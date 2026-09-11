@@ -69,7 +69,7 @@ On the sdcard, started at boot when a card is present. A `term` window can conne
 
 | App | Description |
 |-----|-------------|
-| repl | App server + [Lisp interpreter (subset of R4RS Scheme)](https://github.com/machdyne/ms) |
+| [repl](docs/scheme.md) | App server + [Lisp interpreter (subset of R4RS Scheme)](https://github.com/machdyne/ms) |
 | [posix](docs/posix.md) | POSIX compatibility layer |
 
 #### Windowed Apps
