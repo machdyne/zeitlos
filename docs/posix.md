@@ -80,18 +80,32 @@ refuses.
 
 A program that includes `libz.h` gets `printf`, `malloc`, the string
 functions, the filesystem, graphics and windows. The headers and the
-runtime live in `/libz` on the card:
+runtime live in `/libz` on the card, and `zcc` looks there by default
+-- so there is nothing to type:
 
 ```
-$ zcc -I /libz/include -L /libz -o prog prog.c
+$ zcc -o prog prog.c
 ```
 
 Without `-L` you get a freestanding binary: no `printf`, no `malloc`.
 `zcc` will tell you so rather than leaving you to discover it at the
 first undefined symbol.
 
-`sw/apps/zcc/examples/` has two programs to start from -- one with no
-includes at all, one using the runtime.
+`sw/apps/zcc/examples/` has three programs to start from, and they
+ship on the card in `user/`:
+
+| | |
+|---|---|
+| `hello.c` | no includes at all -- compile with `-nolibz` |
+| `hellolz.c` | `printf`, `malloc`, the string functions |
+| `hellotrm.c` | output to the **term window** rather than the console |
+
+The third is the one worth reading. **A program's output goes to the
+serial console unless it asks otherwise** -- that is the right default
+for something started from the kernel shell, and it means a program
+run from `posix` prints where nobody is looking. `posix` relays for a
+program that opens a second connection tagged `"stdout"`, which is
+about fifteen lines, and `zcc` itself does exactly that.
 
 ## The editor
 
@@ -117,7 +131,8 @@ The window is always 80x25 regardless of how large you make it.
 - **A program's output does not come back to the shell unless the
   program asks.** `zcc` asks. Something you compile yourself will
   print to the serial console instead, which looks like silence if you
-  have no cable attached.
+  have no cable attached -- see `user/hellotrm.c` for the fifteen
+  lines that fix it.
 - **Typing while a command runs is discarded**, not queued.
 - **`&&` waits for the program to finish**, so `zcc x.c && run x` does
   what it looks like.

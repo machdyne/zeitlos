@@ -882,7 +882,33 @@ static val_t funcall(symbol_t *fsym, val_t callee) {
     if (!at(")")) {
         for (;;) {
             val_t a = rvalue(assign_expr());
-            (void)a;
+
+            /*
+             * A struct or union passed BY VALUE is refused, not
+             * miscompiled.
+             *
+             * zcc's accumulator model puts one word in a0 per
+             * argument. A struct argument therefore passed its
+             * ADDRESS where the callee expected its contents -- and
+             * the compiler said nothing, which is the worst possible
+             * behaviour.
+             *
+             * It was found the long way: a program called
+             * z_obj_str("stdout"), got Z_NONE back, and `posix`
+             * correctly declined to treat a Z_NONE as a request to
+             * route output. Nothing in the chain was wrong except
+             * this, and nothing in the chain could report it.
+             *
+             * The limitation is real and is listed in docs/zcc.md.
+             * What was missing is this error. A compiler that refuses
+             * is a compiler you can trust about everything it does
+             * accept.
+             */
+            if (a.ty && (a.ty->kind == TY_STRUCT || a.ty->kind == TY_UNION))
+                zcc_error_at_tok("passing a %s by value is not supported "
+                                 "(see docs/zcc.md) -- pass a pointer to it",
+                                 a.ty->kind == TY_UNION ? "union" : "struct");
+
             gen_push();
             if (++nargs > 8)
                 zcc_error_at_tok("more than 8 arguments is not supported "
@@ -906,7 +932,51 @@ static val_t funcall(symbol_t *fsym, val_t callee) {
         ei_jalr(REG_RA, REG_T0, 0);
     }
 
-    val_t r = { .ty = fnty->kind == TY_FUNC ? fnty->base : ty_int };
+    type_t *rty = fnty->kind == TY_FUNC ? fnty->base : ty_int;
+
+    /*
+     * A struct or union RETURNED by value is refused for the same
+     * reason as one passed by value, and this is the direction that
+     * actually bit: the result arrives in a0 alone, so a caller of
+     * z_obj_str() got a pointer-sized fragment of an 8-byte object and
+     * read it as Z_NONE.
+     *
+     * Every constructor in sw/common/zobj.h returns z_obj_t by value,
+     * so ABI 2's z_obj_* entries, ABI 3's containers and ABI 4's
+     * z_port_connect_arg() were all reachable from a compiled program
+     * and none of them worked. They were in the jump table and they
+     * were not callable, which nothing detected because the compiler
+     * did not complain and the runtime could not tell.
+     */
+    if (rty && (rty->kind == TY_STRUCT || rty->kind == TY_UNION)) {
+
+        /*
+         * Name the way out when there is one.
+         *
+         * Everything in sw/common/zobj.h returns z_obj_t by value, so
+         * this error is most often hit by a program trying to build a
+         * message payload -- and libz carries pointer-shaped wrappers
+         * for exactly that (ABI 5, sw/apps/zcc/libz/glue.c). An error
+         * that names them turns a dead end into a one-line change.
+         */
+        const char *hint = "";
+        if (fsym && fsym->name) {
+            if (!strcmp(fsym->name, "z_port_connect_arg"))
+                hint = " -- use z_port_connect_str()";
+            else if (!strcmp(fsym->name, "z_msg_new_send"))
+                hint = " -- use z_msg_send_str() or z_msg_send_u32()";
+            else if (!strncmp(fsym->name, "z_obj_", 6))
+                hint = " -- libz has pointer-shaped wrappers for the "
+                       "common cases; see docs/libz.md, ABI 5";
+        }
+
+        zcc_error_at_tok("%s() returns a %s by value, which this compiler "
+                         "cannot do (docs/zcc.md)%s",
+                         fsym && fsym->name ? fsym->name : "this function",
+                         rty->kind == TY_UNION ? "union" : "struct", hint);
+    }
+
+    val_t r = { .ty = rty };
     return r;
 }
 

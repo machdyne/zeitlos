@@ -39,6 +39,53 @@ because deleting the line shifts everything after it. Nothing is
 retired yet -- it is recorded now because the moment it is needed is
 the moment deleting the line looks harmless.
 
+## ABI 5: pointer-shaped wrappers
+
+Every constructor in `zobj.h` returns `z_obj_t` **by value**, and zcc
+cannot pass or return a struct that way. So the entries added in ABI 2,
+3 and 4 were in the table and **not callable from a program zcc
+compiles** -- silently, because the compiler accepted the call and
+emitted a 4-byte fragment of an 8-byte object.
+
+That was found the long way. A program asked `posix` to route its
+output, `z_obj_str("stdout")` returned `Z_NONE`, `posix` correctly
+declined to treat a `Z_NONE` as a routing request and accepted an
+ordinary session instead -- so the program's output arrived as shell
+input and was executed. Nothing in the chain was wrong except the
+compiler, and nothing in the chain could report it.
+
+Two fixes, and the first is the one that matters:
+
+- **zcc now refuses** a struct passed or returned by value, rather
+  than miscompiling it. A compiler that refuses is one you can trust
+  about everything it accepts.
+- **Six wrappers** do the same jobs through pointers and scalars:
+  `z_port_connect_str`, `z_msg_send_str`, `z_msg_send_u32`,
+  `z_msg_obj_type`, `z_msg_obj_str`, `z_msg_obj_u32`.
+
+These are not a second API -- each is two lines over the real one, and
+a GCC-built app should call the real one. The proper fix is two-word
+struct passing in zcc: `z_obj_t` is exactly 8 bytes, which is the
+RISC-V ABI's register case, so it is bounded work rather than a
+rewrite.
+
+## ABI 4: ports
+
+A compiled program had `z_msg_send()` and `z_pid_lookup()` and **no way
+to open a connection with them**. Ports are only messages underneath,
+so it was possible in principle -- and in practice meant hand-rolling
+`Z_PORT_CONNECT`, the conn_id, and the eight-deep unacked-send window,
+which is the part everything else in this tree has got wrong at least
+once (`docs/ports.md`).
+
+Nine entries: `z_port_connect`, `_connect_arg`, `_connect_arg_timeout`,
+`_send`, `_close`, `_send_ack`, `_handle_ack`, `_accept`, `_refuse`.
+
+What it buys is the thing a user notices first: **a program can send
+its output to the terminal somebody is looking at** rather than to the
+serial console. `sw/apps/zcc/examples/hello_term.c` is fifteen lines
+of it.
+
 ## ABI 3: the object system
 
 `z_obj_uint32`, `_int32`, `_str` and `_none` went in with ABI 2

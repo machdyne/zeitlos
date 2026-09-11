@@ -167,6 +167,51 @@ LIBZ_ENTRY(z_obj_equal)
 /* 112 */
 LIBZ_ENTRY(z_obj_float32)
 
+/* ===================================================================
+ * ABI 4 -- ports.
+ *
+ * A compiled program had z_msg_send() and z_pid_lookup() and no way to
+ * open a CONNECTION with them. Ports are only messages underneath, so
+ * it was possible in principle -- and in practice it meant
+ * hand-rolling Z_PORT_CONNECT, the conn_id, and the eight-deep
+ * unacked-send window, which is the part everything else in this tree
+ * has got wrong at least once (docs/ports.md).
+ *
+ * With these, a program can send its output to the terminal the user
+ * is actually looking at instead of to the serial console. See
+ * sw/apps/zcc/examples/hello_term.c.
+ * ===================================================================
+ */
+LIBZ_ENTRY(z_port_connect)
+LIBZ_ENTRY(z_port_connect_arg)
+LIBZ_ENTRY(z_port_connect_arg_timeout)
+LIBZ_ENTRY(z_port_send)
+LIBZ_ENTRY(z_port_close)
+LIBZ_ENTRY(z_port_send_ack)
+LIBZ_ENTRY(z_port_handle_ack)
+LIBZ_ENTRY(z_port_accept)
+LIBZ_ENTRY(z_port_refuse)
+
+/* ===================================================================
+ * ABI 5 -- pointer-shaped wrappers.
+ *
+ * zcc cannot pass or return a struct by value, and every z_obj_t
+ * constructor does exactly that -- so the object and port entries
+ * added in ABI 2, 3 and 4 were in the table and not callable from a
+ * compiled program. The compiler now REFUSES those calls rather than
+ * miscompiling them, which was the urgent half of the fix.
+ *
+ * These are the other half: the same operations through pointers and
+ * scalars. See glue.c, which also says what the proper fix is.
+ * ===================================================================
+ */
+LIBZ_ENTRY(z_port_connect_str)
+LIBZ_ENTRY(z_msg_send_str)
+LIBZ_ENTRY(z_msg_send_u32)
+LIBZ_ENTRY(z_msg_obj_type)
+LIBZ_ENTRY(z_msg_obj_str)
+LIBZ_ENTRY(z_msg_obj_u32)
+
 /*
  * -- RETIRED entries --
  *

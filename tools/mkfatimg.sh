@@ -75,6 +75,18 @@ cp sw/apps/clock/clock.bin "$MOUNT_DIR/apps/clock"
 cp sw/apps/cal/cal.bin "$MOUNT_DIR/apps/cal"
 cp sw/apps/settings/settings.bin "$MOUNT_DIR/apps/settings"
 cp sw/apps/track/track.bin "$MOUNT_DIR/apps/track"
+cp sw/apps/view/view.bin "$MOUNT_DIR/apps/view"
+cp sw/apps/web/web.bin "$MOUNT_DIR/apps/web"
+cp sw/apps/hex/hex.bin "$MOUNT_DIR/apps/hex"
+cp sw/apps/play/play.bin "$MOUNT_DIR/apps/play"
+cp sw/apps/midi/midi.bin "$MOUNT_DIR/apps/midi"
+cp sw/apps/mmod/mmod.bin "$MOUNT_DIR/apps/mmod"
+cp sw/apps/logic/logic.bin "$MOUNT_DIR/apps/logic"
+cp sw/apps/serial/serial.bin "$MOUNT_DIR/apps/serial"
+cp sw/apps/gpudemo/gpudemo.bin "$MOUNT_DIR/apps/gpudemo"
+cp sw/apps/chip8/chip8.bin "$MOUNT_DIR/apps/chip8"
+cp sw/apps/hello_win/hello_win.bin "$MOUNT_DIR/apps/hellowin"
+cp sw/apps/audiotest/audiotest.bin "$MOUNT_DIR/apps/audiotst"
 
 # The two shells. init() starts both from the card; neither is in the
 # flash archive, so these are the only copies. See docs/flash_apps.md.
@@ -120,6 +132,12 @@ cp sw/apps/zcc/libz/libz.h "$MOUNT_DIR/libz/include/libz.h"
 # docs/config.md. At the root, where the kernel reads it.
 cp sw/data/zeitlos.cfg "$MOUNT_DIR/zeitlos.cfg"
 cp sw/common/syscalls.def "$MOUNT_DIR/libz/include/syscalls.def"
+
+# Something to compile. hellolz/helloterm rather than hello_libz --
+# 8.3 has eight characters for the name and no underscore to spare.
+cp sw/apps/zcc/examples/hello.c "$MOUNT_DIR/user/hello.c"
+cp sw/apps/zcc/examples/hello_libz.c "$MOUNT_DIR/user/hellolz.c"
+cp sw/apps/zcc/examples/hello_term.c "$MOUNT_DIR/user/hellotrm.c"
 cp sw/common/*.h "$MOUNT_DIR/libz/include/"
 cp sw/apps/zcc/include/*.h "$MOUNT_DIR/libz/include/"
 

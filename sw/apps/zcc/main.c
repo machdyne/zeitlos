@@ -21,7 +21,7 @@
 /* The libz ABI this compiler was built to speak. Must match
  * LIBZ_ABI_VERSION in libz/libz.h; the two are checked against each
  * other every time a blob is loaded. */
-#define LIBZ_EXPECTED_ABI 3
+#define LIBZ_EXPECTED_ABI 5
 
 /*
  * Loads libz.bin and libz.sym from a directory.
@@ -165,7 +165,14 @@ static void usage(const char *argv0) {
         "\n"
         "Produces a ZEXE image (docs/executables.md) linked at\n"
         "0x80000000, ready to run. There is no separate assembly or\n"
-        "link step -- see docs/zcc.md.\n",
+        "link step -- see docs/zcc.md.\n"
+#if !ZCC_HOSTED
+        "\n"
+        "/libz/include and /libz are searched by default, so\n"
+        "  zcc -o hello hello.c\n"
+        "finds the runtime and its headers without being told.\n"
+#endif
+        ,
         argv0);
 }
 
@@ -317,6 +324,31 @@ int main(int argc, char **argv) {
         if (!strncmp(argv[i], "-U", 2) && argv[i][2])
             cpp_undef_cli(argv[i] + 2);
 
+    /*
+     * -- the card's own layout, as a default --
+     *
+     * On the device, `/libz/include` and `/libz` are where the release
+     * puts the runtime and its headers (release/lib/mkfatimg.py), and
+     * that layout is fixed. So they are searched without being asked
+     * for, and
+     *
+     *     zcc -o hello hello.c
+     *
+     * works the way somebody would expect it to.
+     *
+     * NOT on the host, where the paths depend on where the tree is
+     * checked out -- a default there would be wrong everywhere except
+     * one machine, and wrong silently.
+     *
+     * Added AFTER any -I the user gave, so an explicit path is
+     * searched first and still wins. Adding it even under -nolibz is
+     * deliberate: a freestanding program still wants <stdint.h>.
+     */
+#if !ZCC_HOSTED
+    cpp_add_include_dir("/libz/include");
+    if (nlibdirs < 8) libdirs[nlibdirs++] = "/libz";
+#endif
+
     if (!nolibz)
         for (int i = 0; i < nlibdirs && !lz.have; i++)
             libz_load(&lz, libdirs[i]);
@@ -328,10 +360,9 @@ int main(int argc, char **argv) {
      * mistyped path. Asking for a runtime and not getting one should
      * say so where it happened. */
     if (!nolibz && nlibdirs && !lz.have)
-        zcc_fatal("no libz.sym in any -L directory (looked in %s%s) -- "
-                  "build it with 'make -C libz', or pass -nolibz for a "
-                  "freestanding build",
-                  libdirs[0], nlibdirs > 1 ? ", ..." : "");
+        zcc_fatal("no libz.sym in %s%s -- the runtime is missing, or "
+                  "pass -nolibz for a freestanding build",
+                  libdirs[0], nlibdirs > 1 ? " (or any other -L)" : "");
 
     /* Before anything is printed, and after the arguments are known --
      * see zio_out_open(). On the device this connects back to `posix`

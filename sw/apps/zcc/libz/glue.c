@@ -26,6 +26,7 @@
 #include "zeitlos.h"
 #include "zobj.h"
 #include "zmsg.h"
+#include "zport.h"
 
 typedef struct { int type; unsigned val; } zobj_raw_t;
 
@@ -90,3 +91,53 @@ const z_font_t *z_font_8x16_get(void) { return &z_font_8x16; }
 const z_font_t *z_font_6x12_get(void) { return &z_font_6x12; }
 const z_font_t *z_font_5x7_get(void)  { return &z_font_5x7; }
 const z_font_t *z_font_5x8_get(void)  { return &z_font_5x8; }
+
+/*
+ * -- pointer-shaped wrappers, for programs zcc compiles --
+ *
+ * Every constructor in sw/common/zobj.h returns z_obj_t BY VALUE, and
+ * zcc cannot pass or return a struct by value (docs/zcc.md). So the
+ * z_obj_* entries in the jump table, the containers, and
+ * z_port_connect_arg() were all reachable from a compiled program and
+ * none of them was callable. The compiler now says so instead of
+ * miscompiling, which is an improvement and not a solution.
+ *
+ * These take and return the same information through pointers and
+ * scalars, which zcc handles. They are not a second API: each is two
+ * lines over the real one, and a program built by GCC should call the
+ * real one.
+ *
+ * The proper fix is two-word struct passing in zcc -- z_obj_t is
+ * exactly 8 bytes, which is the RISC-V ABI's register case (a0/a1), so
+ * it is bounded work rather than a general rewrite. Until then these
+ * exist so that the machine can build a program that talks to `posix`.
+ */
+
+z_rv z_port_connect_str(z_port_t *port, uint32_t provider_pid,
+	const char *arg) {
+	return z_port_connect_arg(port, provider_pid, z_obj_str(arg));
+}
+
+z_rv z_msg_send_str(uint32_t to, uint32_t subject, uint32_t tag,
+	const char *s) {
+	return z_msg_new_send(to, subject, tag, z_obj_str(s));
+}
+
+z_rv z_msg_send_u32(uint32_t to, uint32_t subject, uint32_t tag,
+	uint32_t v) {
+	return z_msg_new_send(to, subject, tag, z_obj_uint32(v));
+}
+
+/* The receiving half: read a message's payload without ever holding a
+ * z_obj_t. Returns the type; the value goes through the pointer. */
+int z_msg_obj_type(const z_msg_t *msg) {
+	return msg ? (int)msg->obj.type : Z_NONE;
+}
+
+const char *z_msg_obj_str(const z_msg_t *msg) {
+	return (msg && msg->obj.type == Z_STR) ? msg->obj.val.str : 0;
+}
+
+uint32_t z_msg_obj_u32(const z_msg_t *msg) {
+	return (msg && msg->obj.type == Z_UINT32) ? msg->obj.val.uint32 : 0;
+}

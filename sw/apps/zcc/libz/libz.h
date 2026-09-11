@@ -33,7 +33,7 @@
  * against one table being run against another -- see libz_table.def's
  * own header for why that failure is silent otherwise.
  */
-#define LIBZ_ABI_VERSION 3
+#define LIBZ_ABI_VERSION 5
 
 /* start.S includes this header for LIBZ_ABI_VERSION alone, so the
  * declarations below have to be invisible to the assembler. The
@@ -107,7 +107,24 @@ int vsnprintf(char *buf, size_t cap, const char *fmt, void *ap);
  * annotation, no second API.
  */
 #include "zeitlos.h"
+#include "zport.h"
+#include "zmsg.h"
 #include "zfsapp.h"
+
+/* -- pointer-shaped wrappers (glue.c) --
+ *
+ * zcc cannot pass or return a struct by value, so the z_obj_t
+ * constructors are not callable from a program it compiles. These do
+ * the same jobs without one crossing the call boundary. */
+z_rv z_port_connect_str(z_port_t *port, uint32_t provider_pid,
+	const char *arg);
+z_rv z_msg_send_str(uint32_t to, uint32_t subject, uint32_t tag,
+	const char *s);
+z_rv z_msg_send_u32(uint32_t to, uint32_t subject, uint32_t tag,
+	uint32_t v);
+int z_msg_obj_type(const z_msg_t *msg);
+const char *z_msg_obj_str(const z_msg_t *msg);
+uint32_t z_msg_obj_u32(const z_msg_t *msg);
 
 /* -- the runtime's own --
  *

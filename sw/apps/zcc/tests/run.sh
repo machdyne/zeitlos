@@ -106,7 +106,8 @@ for src in "$here"/t*.c "$here"/l*.c; do
                      $here/../libz/str.o $here/../libz/fmt.o \
                      $here/../libz/glue.o $here/../libz/zgfx.o \
                      $here/../libz/zwin.o $here/../libz/zobj.o \
-                     $here/../libz/zkbd.o $here/../libz/zfont_data.o -lgcc"
+                     $here/../libz/zkbd.o $here/../libz/zfont_data.o \
+                     $here/../libz/zport.o -lgcc"
             refinc="-I $here/../libz"
         else
             refstart="$here/ref_start.S"

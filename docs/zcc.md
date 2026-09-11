@@ -160,6 +160,8 @@ family with a real constant-expression evaluator, `defined`, `#undef`,
 | structs by value as arguments or return values | Needs the indirect-return ABI. Pointers work. |
 | designated initialisers, compound literals | C99 conveniences; nothing in the tree needs them yet. |
 | VLAs, `_Generic`, atomics, threads | No. |
+| **structs or unions by value** | **No, and now REFUSED rather than miscompiled.** An argument passed one word in `a0`, so a struct passed its address where the callee wanted its contents; a return arrived in `a0` alone, so an 8-byte `z_obj_t` came back as a 4-byte fragment that reads as `Z_NONE`. Both compiled silently and produced wrong answers. |
+| two-word structs by value | Not yet, and this is the bounded fix. `z_obj_t` is exactly 8 bytes, which is the RISC-V ABI's register case -- `a0`/`a1` for an argument and for a return. Supporting that one size makes the whole `z_obj_*` family callable, which is most of libz ABI 2-4. |
 | designated initialisers | **This is what blocks self-hosting.** `parse.c` uses `.kind = TY_VOID` in its own type table, so zcc cannot yet compile zcc. Phase 6's first job. |
 | inline assembly | Anything needing it becomes a libz table entry instead -- see "The `maskirq` problem" below. |
 
@@ -439,6 +441,28 @@ improvement**, and it costs nothing to use one because this allocator
 already never frees. That fix was written down as the eventual answer
 in `util.c` before it was needed; it was needed sooner than expected,
 and only the device build could have shown it.
+
+### The card's layout is the default search path
+
+On the device, `zcc` searches `/libz/include` and `/libz` without being
+asked, so:
+
+```
+zcc -o hello hello.c
+```
+
+finds the runtime and its headers. That is where the release puts them
+(`release/lib/mkfatimg.py`) and the layout is fixed, so the default is
+always right.
+
+**Not on the host**, where the paths depend on where the tree is
+checked out -- a default there would be wrong everywhere except one
+machine, and wrong silently. The host build still wants
+`-I include -I libz -I ../../common -L libz`.
+
+The defaults are appended AFTER any `-I` given on the command line, so
+an explicit path is still searched first. They apply under `-nolibz`
+too: a freestanding program still wants `<stdint.h>`.
 
 ### Getting arguments to it
 

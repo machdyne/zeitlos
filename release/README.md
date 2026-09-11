@@ -26,6 +26,16 @@ So: anything worth writing down goes in `docs/releases.md`.
 
 ## What the card holds
 
+**Every app in `sw/apps` except the core ones.** `wm`, `net` and `term`
+live in the flash archive and must NOT be duplicated onto the card: a
+card copy would shadow the per-target `net` build with the wrong PHY
+driver, which is the bug `check_against_script()` was written after.
+
+Two names are shortened because FatFs here is `FF_USE_LFN 0` and 8.3 is
+the whole namespace: `hello_win` ships as `hellowin` and `audiotest` as
+`audiotst`. `run` takes the name on the card.
+
+
 Beyond the apps, docs and the ARK scroll:
 
 - **`apps/posix`, `apps/zcc`, `apps/vi`** -- the self-hosting set. With

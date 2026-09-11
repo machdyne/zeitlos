@@ -25,8 +25,20 @@ GC_CFLAGS = -ffunction-sections -fdata-sections
 GC_LDFLAGS = -Wl,--gc-sections
 endif
 
+# -DZCC_HOSTED=0 on EVERYTHING, not just port_dev.c.
+#
+# It used to be on that one object, which was enough to select the
+# right port and not enough for anything else. main.c also tests it --
+# for the argv handling, where the host branch trusts the argc/argv
+# main() was called with and the device has none to trust. That is the
+# bug that crashed a machine once (see main.c), and it was quietly
+# back the moment zcc became an ordinary app.
+#
+# A flag that selects "which machine is this for" belongs on the whole
+# build, not on the file that most obviously needs it.
 override CFLAGS += --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) \
-	$(GC_CFLAGS) $(ARCH_DEFS) $(LIBC_FLAGS) -I../../common -I.
+	$(GC_CFLAGS) $(ARCH_DEFS) $(LIBC_FLAGS) -I../../common -I. \
+	-DZCC_HOSTED=0
 LDFLAGS = -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS)
 LDSCRIPT = ../../common/riscv-app.ld
 
@@ -88,7 +100,7 @@ $(B)/emit.o: emit.c zcc.h zcc_port.h | $(B)
 $(B)/util.o: util.c zcc.h zcc_port.h | $(B)
 	$(CC) $(APP_CFLAGS) -c util.c -o $@
 $(B)/port_dev.o: port_dev.c zcc.h zcc_port.h | $(B)
-	$(CC) $(APP_CFLAGS) -DZCC_HOSTED=0 -c port_dev.c -o $@
+	$(CC) $(APP_CFLAGS) -c port_dev.c -o $@
 
 $(B):
 	mkdir -p $(B)

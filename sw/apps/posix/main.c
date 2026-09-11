@@ -370,6 +370,12 @@ static void handle_connect(const z_msg_t *msg) {
          * happens to know our name -- its output goes nowhere rather
          * than to an arbitrary terminal. */
         conns[slot].owner = px_current_conn;
+        /* To the console, not to the terminal: this is about whether
+         * the terminal routing works, so sending it through the thing
+         * being diagnosed would tell us nothing. */
+        printf("posix: stdout sink from pid %lu as conn %d, owner %s\n",
+               (unsigned long)msg->from, slot + 1,
+               px_current_conn ? "set" : "NONE -- output will be dropped");
         return;                 /* no banner, no prompt: not a session */
     }
 
@@ -513,6 +519,13 @@ static void handle_data(const z_msg_t *msg) {
     if (c->is_sink) {
 
         px_conn_t *dest = (px_conn_t *)c->owner;
+
+        if (!dest)
+            printf("posix: %lu bytes from a sink with no owner, dropped\n",
+                   (unsigned long)len);
+        else if (!dest->port.connected)
+            printf("posix: %lu bytes for a session that has gone, dropped\n",
+                   (unsigned long)len);
 
         if (data && len && dest && dest->port.connected)
             conn_out(dest, (const char *)data, (int)len);

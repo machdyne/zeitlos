@@ -32,7 +32,7 @@ LDFLAGS = -march=$(ARCH) -mabi=$(ABI) -nostdlib -mno-relax \
 	-Wl,--build-id=none
 
 OBJS = start.o syscall.o mem.o str.o fmt.o glue.o \
-	zgfx.o zwin.o zobj.o zkbd.o zfont_data.o
+	zgfx.o zwin.o zobj.o zkbd.o zfont_data.o zport.o
 
 # libz.bin and libz.sym, NOT libz.blob and libz.syms.
 #
@@ -68,6 +68,13 @@ glue.o: glue.c
 
 zgfx.o: $(COMMON)/zgfx.c
 	$(CC) $(CFLAGS) $(SHIMFLAGS) -c $< -o $@
+
+# The port protocol. A program compiled by zcc had z_msg_send() and no
+# way to open a connection with it -- so it could talk to another
+# process only by hand-rolling Z_PORT_CONNECT and the ack discipline,
+# which is exactly the part that is easy to get wrong (docs/ports.md).
+zport.o: $(COMMON)/zport.c
+	$(CC) $(OWN_CFLAGS) $(SHIMFLAGS) -c $< -o $@
 
 zwin.o: $(COMMON)/zwin.c
 	$(CC) $(CFLAGS) $(SHIMFLAGS) -c $< -o $@

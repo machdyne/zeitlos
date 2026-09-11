@@ -65,6 +65,15 @@ LABEL = "ZEITLOS"
 # user/. sw/os/fs/fs.c's fs_exec_resolve() searches the root and then
 # apps/, so a bare `run term` still works and a card written before
 # the move still boots.
+# Everything in sw/apps that is not a CORE app.
+#
+# Core apps (wm, net, term -- release/hw/boards/*.spec) live in flash
+# and must NOT be duplicated here: a card copy would shadow the
+# per-target `net` build with the wrong PHY driver, which is the bug
+# check_against_script() was written after.
+#
+# Everything else ships. The lists below are grouped for reading only;
+# nothing depends on which group an app is in.
 SUPPLEMENTAL = [
     ("apps/files", "sw/apps/files/files.bin"),
     ("apps/text", "sw/apps/text/text.bin"),
@@ -77,16 +86,28 @@ SUPPLEMENTAL = [
     ("apps/cal", "sw/apps/cal/cal.bin"),
     ("apps/settings", "sw/apps/settings/settings.bin"),
     ("apps/track", "sw/apps/track/track.bin"),
+    ("apps/view", "sw/apps/view/view.bin"),
+    ("apps/web", "sw/apps/web/web.bin"),
+    ("apps/hex", "sw/apps/hex/hex.bin"),
+    ("apps/play", "sw/apps/play/play.bin"),
+    ("apps/midi", "sw/apps/midi/midi.bin"),
+    ("apps/mmod", "sw/apps/mmod/mmod.bin"),
+    ("apps/logic", "sw/apps/logic/logic.bin"),
+    ("apps/serial", "sw/apps/serial/serial.bin"),
 ]
 
 GAMES_DEMOS = [
     ("apps/space3d", "sw/apps/space3d/space3d.bin"),
     ("apps/gamedemo", "sw/apps/gamedemo/gamedemo.bin"),
     ("apps/gpu3d", "sw/apps/gpu3d/gpu3d.bin"),
+    ("apps/gpudemo", "sw/apps/gpudemo/gpudemo.bin"),
+    ("apps/chip8", "sw/apps/chip8/chip8.bin"),
 ]
 
 MISC = [
     ("apps/portdemo", "sw/apps/portdemo/portdemo.bin"),
+    ("apps/hellowin", "sw/apps/hello_win/hello_win.bin"),
+    ("apps/audiotst", "sw/apps/audiotest/audiotest.bin"),
 ]
 
 # The two shells a term window connects to. init() starts both from the
@@ -145,6 +166,18 @@ LIBZ_HEADER_DIRS = [
 # header in everything but name and extension.
 LIBZ_EXTRA = [
     ("libz/include/syscalls.def", "sw/common/syscalls.def"),
+]
+
+# Something to compile.
+#
+# A card with a compiler and no example is a card where the first
+# thing anyone does is guess at the include paths. These are small and
+# they are the three stages: no runtime, the runtime, and output that
+# reaches the terminal rather than the serial console.
+EXAMPLES = [
+    ("user/hello.c", "sw/apps/zcc/examples/hello.c"),
+    ("user/hellolz.c", "sw/apps/zcc/examples/hello_libz.c"),
+    ("user/hellotrm.c", "sw/apps/zcc/examples/hello_term.c"),
 ]
 
 # The configuration file, at the card root where the kernel reads it
@@ -234,10 +267,18 @@ def check_against_script(root):
     # of `mine` made the check report the script shipping something
     # this module does not. The check was right and the list was
     # incomplete.
+    # SHELLS was missing from this set, so the check reported `repl`
+    # and `posix` as shipped by the script and not by this module --
+    # and the obvious reading of that (add them) produced DUPLICATES,
+    # which mcopy then refused halfway through a build.
+    #
+    # A check that names the wrong cause is worse than no check. The
+    # lesson is narrow: every list that feeds `apps` has to feed this
+    # too, so they are written out together below rather than in two
+    # places that can drift.
     mine = dict((n, p) for n, p in SUPPLEMENTAL + GAMES_DEMOS + MISC
-                + SHELLS + SELFHOST + LIBZ_FILES + LIBZ_EXTRA
+                + SHELLS + SELFHOST + LIBZ_FILES + LIBZ_EXTRA + EXAMPLES
                 + CONFIG_FILES)
-
     problems = []
     for name in sorted(set(mine) | set(script)):
         if name not in script:
@@ -289,6 +330,14 @@ def build(root, out_path, ark_dir=None, verbose=True):
 
     apps = SUPPLEMENTAL + GAMES_DEMOS + MISC + SHELLS + SELFHOST
 
+    # A name listed twice copies once and then fails, halfway through a
+    # 64MB image, with mcopy's own silence for an error message. Said
+    # here instead.
+    seen = set()
+    dupes = sorted(n for n, _ in apps if n in seen or seen.add(n))
+    if dupes:
+        raise FatError("listed more than once: %s" % ", ".join(dupes))
+
     # Check every input up front. Finding out that gamedemo.bin was
     # never built after formatting a 64MB image and copying twelve
     # other files is a slower way to learn the same thing.
@@ -300,6 +349,7 @@ def build(root, out_path, ark_dir=None, verbose=True):
     # them compiles only freestanding programs -- so their absence is
     # an error here rather than a quiet omission.
     missing += [p for _, p in LIBZ_FILES + LIBZ_EXTRA + CONFIG_FILES
+                + EXAMPLES
                 if not os.path.exists(os.path.join(root, p))]
 
     if missing:
@@ -355,6 +405,17 @@ def build(root, out_path, ark_dir=None, verbose=True):
         shipped.append((dest.lstrip("/"), os.path.getsize(src_abs)))
 
     for name, rel in apps:
+        # 8.3 is not advice: FatFs here is FF_USE_LFN 0
+        # (sw/os/fs/fatfs/ffconf.h), so a name longer than eight
+        # characters cannot be written to the card at all. The header
+        # copy below has always checked this; the app copy did not,
+        # and `audiotest` and `hello_win` are both nine.
+        base = name.split("/")[-1]
+        stem, _, ext = base.partition(".")
+        if len(stem) > 8 or len(ext) > 3:
+            raise FatError(
+                "'%s' does not fit an 8.3 name and cannot go on the card "
+                "(FatFs here is FF_USE_LFN 0)" % name)
         copy(os.path.join(root, rel), "/" + name)
     for a in audio:
         copy(os.path.join(audio_src, a), "/audio/" + a)
@@ -364,7 +425,7 @@ def build(root, out_path, ark_dir=None, verbose=True):
         copy(os.path.join(ark_dir, a), "/ark/" + a)
 
     # -- the zcc runtime --
-    for name, rel in LIBZ_FILES + LIBZ_EXTRA:
+    for name, rel in LIBZ_FILES + LIBZ_EXTRA + EXAMPLES:
         copy(os.path.join(root, rel), "/" + name)
 
     # -- the configuration template --
