@@ -267,7 +267,7 @@ write the image.
 
 ### Core apps in flash
 
-`wm`, `net`, `repl` and `term` are written to flash as part of a normal
+`wm`, `net`, and `term` are written to flash as part of a normal
 `make flash`, immediately after the kernel. They are an *underlay*
 beneath the filesystem, not a separate namespace: there is still exactly
 one name for `term`, and `run term` behaves identically whether it came
