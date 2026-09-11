@@ -2,7 +2,7 @@
 
 Zeitlos is a work-in-progress SOC (System-on-a-Chip) and OS (Operating System) developed in tandem and intended to provide a responsive graphical environment for using and developing timeless applications on FPGA computers.
 
-The core applications allow Zeitlos to be used as an extensible multi-window network terminal with scripting and graphics.
+The core applications allow Zeitlos to be used as an extensible multi-window network terminal.
 
 ![Zeitlos Screenshot #0](https://github.com/machdyne/zeitlos/blob/a248944a4e42393ce93cabf0eae6cbc2d1255f9b/ss0.png)
 
@@ -70,6 +70,7 @@ On the sdcard, started at boot when a card is present. A `term` window's start p
 | App | Description |
 |-----|-------------|
 | repl | App server + [Lisp interpreter (subset of R4RS Scheme)](https://github.com/machdyne/ms) |
+| [posix](docs/posix.md) | POSIX compatibility layer |
 
 #### Additional Apps
 
@@ -96,7 +97,6 @@ On the sdcard, started at boot when a card is present. A `term` window's start p
 | [gamedemo](docs/gamedemo.md) | 2D side-scrolling platformer game |
 | space3d | First-person 3D space shooter game |
 | [gpu3d](docs/gpu3d_app.md) | Spinning 3D cube demo + STL viewer |
-| [posix](docs/posix.md) | POSIX compatibility layer |
 | [zcc](docs/zcc.md) | C compiler |
 | vi | Port of the [nextvi](https://github.com/kyx0r/nextvi) terminal text editor |
 
