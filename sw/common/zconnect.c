@@ -62,7 +62,7 @@ static bool prep_port(const char *text, z_conn_target_t *t,
 
 	if (!text || !*text) {
 		snprintf(err, errlen,
-			"usage: port <name>  (e.g. port portdemo0, port repl1)");
+			"usage: port <name>  (e.g. port posix0, port repl1)");
 		return false;
 	}
 

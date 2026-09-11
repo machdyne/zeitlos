@@ -1327,7 +1327,23 @@ int main(void) {
 			} else if (msg.subject == Z_PORT_DATA_ACK) {
 				z_port_handle_ack(&port, &msg);
 			} else if (msg.subject == Z_PORT_CLOSE) {
-				if (port.connected && msg.tag == port.conn_id) {
+				// The SENDER is checked as well as the tag, and the
+				// tag alone is not enough.
+				//
+				// conn_id is assigned by each provider from its own
+				// table -- repl, posix and portdemo all use slot+1 --
+				// so two different providers routinely both call a
+				// connection 1. When this window is handed from one
+				// provider to another (Z_TERM_SET_PORT), a CLOSE from
+				// the OLD one can arrive after the new connection is
+				// up, carrying a tag that matches it.
+				//
+				// That is not hypothetical: it dropped `vi` to local
+				// echo the moment posix handed the terminal over.
+				// posix no longer sends that close, and this makes the
+				// window immune to any provider that does.
+				if (port.connected && msg.tag == port.conn_id &&
+					msg.from == port.peer_pid) {
 					port.connected = false;
 					printf("term: port closed by peer -- local echo only from here on\n");
 				}

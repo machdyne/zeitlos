@@ -265,6 +265,30 @@ z_obj_t *k_proc_wait(z_obj_t *args);
 #define Z_PROC_STACK_SIZE_DEFAULT  16*1024
 #define Z_PROC_STACK_SIZE_MEDIUM   32*1024
 #define Z_PROC_STACK_SIZE_LARGE    64*1024
+// 1MB. Between LARGE and HUGE, and added because there was nothing
+// there.
+//
+// The number is MEASURED, and it moved twice before it was right.
+// `vi` was tried at 4MB (HUGE), then 2MB, on the strength of a startup
+// cost of about 1.1MB -- which turned out not to be nextvi's at all.
+// sw/apps/vi's _fstat() reported st_size as 0, and nextvi's lbuf_rd()
+// falls back to a 1048575-byte read buffer when it cannot learn a
+// file's size. Every file opened allocated a megabyte.
+//
+// With the size reported properly, nextvi starts in UNDER 50KB with
+// full syntax highlighting, and the file itself becomes the term that
+// matters: nextvi allocates per LINE, so a source file costs roughly
+// three times its own size.
+//
+// Measured on a 154KB source file: it needs between 273KB and 529KB of
+// heap, so about 3.4 times the file. 1MB covers that with room, and
+// covers anything this tree contains.
+//
+// 1MB was the first proposal and was rejected because `vi` would not
+// start in it. That was the _fstat() bug, not the size: the editor was
+// spending a megabyte before it read a line. The original instinct was
+// right.
+#define Z_PROC_STACK_SIZE_BIG      1024*1024
 #define Z_PROC_STACK_SIZE_HUGE     4*1024*1024
 
 // which tier (above) a process named `name` should get -- the one
@@ -290,8 +314,18 @@ static inline uint32_t z_proc_stack_size_for(const char *name) {
 	// and this is a policy that will change more often than that format
 	// should. It is the same trade every other name in this function
 	// makes.
+	// An app's heap and stack share this allowance: _sbrk grows up
+	// from _end and refuses to pass sp.
+	//
+	// `vi` was briefly HUGE, on the reasoning that an editor holds a
+	// whole file plus its undo history and nextvi allocates per LINE
+	// -- so a file costs roughly three times its own size. That
+	// arithmetic is right and the conclusion was not: it argues for
+	// more than LARGE's 64KB, not for 4MB. BIG exists for that gap.
 	if (!strcmp(name, "zcc") || !strcmp(name, "posix"))
 		return Z_PROC_STACK_SIZE_HUGE;
+	if (!strcmp(name, "vi"))
+		return Z_PROC_STACK_SIZE_BIG;
 	if (!strcmp(name, "web"))
 		return Z_PROC_STACK_SIZE_LARGE;
 	if (!strcmp(name, "repl") || !strcmp(name, "net"))

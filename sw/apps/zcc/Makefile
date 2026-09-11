@@ -38,43 +38,60 @@ LDSCRIPT = ../../common/riscv-app.ld
 # declarations nobody read.
 APP_CFLAGS = $(CFLAGS) -Werror
 
-OBJS = zeitlos.o zobj.o zport.o zfsapp.o zwin.o zgfx.o zfont_data.o \
-	main.o lex.o cpp.o parse.o emit.o util.o port_dev.o
+# Objects go in build/, NOT beside the sources.
+#
+# Makefile.host compiles main.c, lex.c, parse.c and the rest for the
+# DEVELOPMENT HOST from this same directory. With both writing main.o
+# here, whichever built last wins and the other link fails with "file
+# in wrong format" -- which is at least loud. The quieter version of
+# the same accident is a stale object that happens to be the right
+# architecture.
+#
+# This was fixed once and reintroduced when zcc became an ordinary app,
+# which is the argument for the comment rather than just the fix.
+B = build
+OBJS = $(B)/zeitlos.o $(B)/zobj.o $(B)/zport.o $(B)/zfsapp.o $(B)/zwin.o \
+	$(B)/zgfx.o $(B)/zfont_data.o \
+	$(B)/main.o $(B)/lex.o $(B)/cpp.o $(B)/parse.o $(B)/emit.o \
+	$(B)/util.o $(B)/port_dev.o
 
 zcc: zcc.elf zcc.bin libz.data
 
-zeitlos.o:
-	$(CC) $(CFLAGS) -c ../../common/zeitlos.c -o zeitlos.o
-zobj.o:
-	$(CC) $(CFLAGS) -c ../../common/zobj.c -o zobj.o
-zport.o:
-	$(CC) $(CFLAGS) -c ../../common/zport.c -o zport.o
-zfsapp.o:
-	$(CC) $(CFLAGS) -c ../../common/zfsapp.c -o zfsapp.o
+$(B)/zeitlos.o: | $(B)
+	$(CC) $(CFLAGS) -c ../../common/zeitlos.c -o $@
+$(B)/zobj.o: | $(B)
+	$(CC) $(CFLAGS) -c ../../common/zobj.c -o $@
+$(B)/zport.o: | $(B)
+	$(CC) $(CFLAGS) -c ../../common/zport.c -o $@
+$(B)/zfsapp.o: | $(B)
+	$(CC) $(CFLAGS) -c ../../common/zfsapp.c -o $@
 # zwin for z_launch_arg_take() alone -- how `posix` hands zcc a command
 # line. It pulls in zgfx/zfont_data, which --gc-sections then drops
 # almost all of.
-zwin.o:
-	$(CC) $(CFLAGS) -c ../../common/zwin.c -o zwin.o
-zgfx.o:
-	$(CC) $(CFLAGS) -c ../../common/zgfx.c -o zgfx.o
-zfont_data.o:
-	$(CC) $(CFLAGS) -c ../../common/zfont_data.c -o zfont_data.o
+$(B)/zwin.o: | $(B)
+	$(CC) $(CFLAGS) -c ../../common/zwin.c -o $@
+$(B)/zgfx.o: | $(B)
+	$(CC) $(CFLAGS) -c ../../common/zgfx.c -o $@
+$(B)/zfont_data.o: | $(B)
+	$(CC) $(CFLAGS) -c ../../common/zfont_data.c -o $@
 
-main.o: main.c zcc.h zcc_port.h
-	$(CC) $(APP_CFLAGS) -c main.c -o main.o
-lex.o: lex.c zcc.h zcc_port.h
-	$(CC) $(APP_CFLAGS) -c lex.c -o lex.o
-cpp.o: cpp.c zcc.h zcc_port.h
-	$(CC) $(APP_CFLAGS) -c cpp.c -o cpp.o
-parse.o: parse.c zcc.h zcc_port.h
-	$(CC) $(APP_CFLAGS) -c parse.c -o parse.o
-emit.o: emit.c zcc.h zcc_port.h
-	$(CC) $(APP_CFLAGS) -c emit.c -o emit.o
-util.o: util.c zcc.h zcc_port.h
-	$(CC) $(APP_CFLAGS) -c util.c -o util.o
-port_dev.o: port_dev.c zcc.h zcc_port.h
-	$(CC) $(APP_CFLAGS) -DZCC_HOSTED=0 -c port_dev.c -o port_dev.o
+$(B)/main.o: main.c zcc.h zcc_port.h | $(B)
+	$(CC) $(APP_CFLAGS) -c main.c -o $@
+$(B)/lex.o: lex.c zcc.h zcc_port.h | $(B)
+	$(CC) $(APP_CFLAGS) -c lex.c -o $@
+$(B)/cpp.o: cpp.c zcc.h zcc_port.h | $(B)
+	$(CC) $(APP_CFLAGS) -c cpp.c -o $@
+$(B)/parse.o: parse.c zcc.h zcc_port.h | $(B)
+	$(CC) $(APP_CFLAGS) -c parse.c -o $@
+$(B)/emit.o: emit.c zcc.h zcc_port.h | $(B)
+	$(CC) $(APP_CFLAGS) -c emit.c -o $@
+$(B)/util.o: util.c zcc.h zcc_port.h | $(B)
+	$(CC) $(APP_CFLAGS) -c util.c -o $@
+$(B)/port_dev.o: port_dev.c zcc.h zcc_port.h | $(B)
+	$(CC) $(APP_CFLAGS) -DZCC_HOSTED=0 -c port_dev.c -o $@
+
+$(B):
+	mkdir -p $(B)
 
 zcc.elf: $(OBJS)
 	$(CC) $(LDFLAGS) -T $(LDSCRIPT) -Wl,-Map,zcc.map -o zcc.elf $(OBJS)
@@ -93,9 +110,9 @@ libz.data:
 	$(MAKE) -C libz
 
 clean:
-	rm -f zcc.elf zcc.bin zcc.data zcc.map zcc.dasm *.o *.d
+	rm -rf zcc.elf zcc.bin zcc.data zcc.map zcc.dasm $(B)
 	$(MAKE) -C libz clean
 	rm -rf build
 
 .PHONY: zcc libz.data clean
--include $(wildcard *.d)
+-include $(wildcard $(B)/*.d)

@@ -1,0 +1,171 @@
+# posix builtin behaviour.
+#
+# These ASSERT what each command should produce. The transcript suite
+# (script.sh.txt) records the shell's overall shape and catches
+# regressions; this one says what the answers are.
+#
+# The fixture is built by tests/run.sh: notes.txt is two lines,
+# src/a.c is one, numbers.txt is 1..12 one per line.
+
+# -- cat, echo --
+$ echo hello world
+hello world
+$ cat notes.txt
+hello from a file
+second line
+$ cat missing.txt
+cat: missing.txt: cannot open
+? 1
+
+# -- wc --
+$ wc notes.txt
+2 6 30 notes.txt
+$ wc numbers.txt
+12 12 27 numbers.txt
+
+# -- head and tail --
+$ head -2 numbers.txt
+1
+2
+$ head -1 notes.txt
+hello from a file
+$ tail -3 numbers.txt
+10
+11
+12
+$ tail -1 numbers.txt
+12
+
+# head/tail default to 10 lines
+$ head numbers.txt
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+
+# -- grep --
+$ grep second notes.txt
+second line
+$ grep nothing-here notes.txt
+? 1
+$ grep 1 numbers.txt
+1
+10
+11
+12
+
+# -- pipes --
+$ cat numbers.txt | head -3
+1
+2
+3
+$ cat numbers.txt | tail -2
+11
+12
+$ cat numbers.txt | wc
+12 12 27
+$ cat numbers.txt | grep 1 | wc
+4 4 11
+$ echo one two three | wc
+1 3 14
+
+# a pipeline's exit status is the last stage's
+$ cat notes.txt | grep nothing-here
+? 1
+
+# -- sort and uniq --
+$ sort words.txt
+apple
+apple
+banana
+cherry
+$ sort words.txt | uniq
+apple
+banana
+cherry
+$ uniq words.txt
+cherry
+apple
+banana
+apple
+$ sort words.txt | uniq | wc
+3 3 20
+
+# wc counts the raw byte stream, so a line longer than PX_LINE_MAX is
+# still counted exactly -- 699 x's plus a newline. The line-based
+# filters cut it and say so; that is asserted by eye rather than here,
+# because the expected output would be 511 x's.
+$ wc long.txt
+1 1 700 long.txt
+
+# -- rmdir --
+$ mkdir emptydir
+$ rmdir emptydir
+$ rmdir src
+rmdir: src: failed (not empty?)
+? 1
+$ rmdir nosuchdir
+rmdir: nosuchdir: failed (not empty?)
+? 1
+
+# -- cp, mv, touch --
+$ cp notes.txt t1.txt
+$ cat t1.txt
+hello from a file
+second line
+$ mv t1.txt t2.txt
+$ cat t1.txt
+cat: t1.txt: cannot open
+? 1
+$ wc t2.txt
+2 6 30 t2.txt
+$ rm t2.txt
+
+# touch must not truncate an existing file
+$ echo keepme > t3.txt
+$ touch t3.txt
+$ cat t3.txt
+keepme
+$ rm t3.txt
+
+$ cp notes.txt notes.txt
+cp: 'notes.txt' and 'notes.txt' are the same file
+? 1
+
+# -- redirection --
+$ echo first > r.txt
+$ echo second >> r.txt
+$ cat r.txt
+first
+second
+$ wc r.txt
+2 2 13 r.txt
+$ rm r.txt
+
+# -- paths --
+$ pwd
+/
+$ cd src
+$ pwd
+/src
+$ cd ..
+$ pwd
+/
+$ cd ..
+$ pwd
+/
+
+# -- chaining --
+$ grep second notes.txt && echo found
+second line
+found
+$ grep nope notes.txt || echo missing
+missing
+$ grep nope notes.txt && echo yes || echo no
+no

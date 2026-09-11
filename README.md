@@ -30,9 +30,11 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 | HID | USB keyboard + optional USB mouse/[gamepad](docs/gamepad.md) |
 | I/O | Optional [GPIO](docs/gpio.md) on PMOD ports with bit-banged [I2C](docs/i2c.md) and [SPI](docs/spi.md), hardware SPI, 16550 UART, optional second [UART](docs/uart1.md) |
 
+For a diagram of all of it -- buses, arbiters, the address map, clocks, interrupts, and which define enables each optional block -- run `make hwmap` (see [docs/hwmap.md](docs/hwmap.md)).
+
 ### OS
 
- - Pre-emptive multitasking [kernel](docs/kernel.md) with processes, mailboxes and a memory pool
+ - Pre-emptive multitasking
  - Flat memory model with virtual address space for apps
  - FAT filesystem, on MicroSD and on an optional [RAM disk](docs/ramdisk.md)
  - [Core apps in flash](docs/flash_apps.md) -- boots to a desktop with no sdcard
@@ -86,8 +88,6 @@ With the MTU, there is no need for position independent code or complicated addr
 | [gamedemo](docs/gamedemo.md) | 2D side-scrolling platformer game |
 | space3d | First-person 3D space shooter game |
 | [gpu3d](docs/gpu3d_app.md) | Spinning 3D cube demo + STL viewer |
-| [posix](docs/posix.md) | POSIX compatibility layer |
-| [zcc](docs/zcc.md) | C compiler |
 
 ### Boards
 
@@ -283,6 +283,10 @@ The Zeitlos documentation will be the [Timeless Computing](https://github.com/ma
 
 The Zeitlos implementation portions of the book are currently located in the `docs` directory.
 
+### Hardware map
+
+`make hwmap` draws the SoC from `rtl/sysctl.v` into `output/docs/hwmap.pdf` (plus PNG and SVG), showing every optional feature with the define that includes it, and checks the RTL for define combinations that would not build or would hang the bus. See [docs/hwmap.md](docs/hwmap.md).
+
 ### Releases
 
 Prebuilt images are built and published by `release/zrelease`, which
@@ -303,3 +307,4 @@ The contents of this repo are released under the [Lone Dynamics Open License](LI
 - rtl/ext/usb\_cdc uses the MIT license.
 - sw/os/fs/fatfs uses a BSD compatible license.
 - sw/data/ark uses Creative Commons Attribution-ShareAlike 4.0 International License (CC BY-SA) and the GNU Free Documentation License (GFDL).
+- sw/ext/nextvi uses an ISC license.

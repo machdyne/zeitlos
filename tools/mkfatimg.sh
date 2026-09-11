@@ -58,9 +58,15 @@ mkdir "$MOUNT_DIR/docs"
 mkdir "$MOUNT_DIR/ark"
 mkdir "$MOUNT_DIR/user"
 
+# libz/ holds the zcc runtime and the headers a program compiled ON the
+# machine includes. See the block near the end of this file.
+mkdir "$MOUNT_DIR/libz"
+mkdir "$MOUNT_DIR/libz/include"
+
 # supplemental apps
 cp sw/apps/files/files.bin "$MOUNT_DIR/apps/files"
 cp sw/apps/text/text.bin "$MOUNT_DIR/apps/text"
+cp sw/apps/sheet/sheet.bin "$MOUNT_DIR/apps/sheet"
 cp sw/apps/read/read.bin "$MOUNT_DIR/apps/read"
 cp sw/apps/draw/draw.bin "$MOUNT_DIR/apps/draw"
 cp sw/apps/info/info.bin "$MOUNT_DIR/apps/info"
@@ -69,6 +75,14 @@ cp sw/apps/clock/clock.bin "$MOUNT_DIR/apps/clock"
 cp sw/apps/cal/cal.bin "$MOUNT_DIR/apps/cal"
 cp sw/apps/settings/settings.bin "$MOUNT_DIR/apps/settings"
 cp sw/apps/track/track.bin "$MOUNT_DIR/apps/track"
+
+# The self-hosting set: a shell, a compiler, an editor. These are what
+# make the card able to extend itself rather than only run what was
+# cross-compiled onto it. See docs/posix.md.
+cp sw/apps/posix/posix.bin "$MOUNT_DIR/apps/posix"
+cp sw/apps/zcc/zcc.bin "$MOUNT_DIR/apps/zcc"
+cp sw/apps/vi/vi.bin "$MOUNT_DIR/apps/vi"
+cp sw/apps/ttytest/ttytest.bin "$MOUNT_DIR/apps/ttytest"
 
 # games and demos
 cp sw/apps/space3d/space3d.bin "$MOUNT_DIR/apps/space3d"
@@ -79,6 +93,28 @@ cp sw/apps/gpu3d/gpu3d.bin "$MOUNT_DIR/apps/gpu3d"
 cp sw/apps/portdemo/portdemo.bin "$MOUNT_DIR/apps/portdemo"
 # modules -- sw/apps/track scans /audio first, then the root
 cp sw/data/audio/*.mod "$MOUNT_DIR/audio/"
+
+# -- the zcc runtime --
+#
+# Two files and a pile of headers. A zcc that cannot find libz.bin
+# produces a freestanding binary with no printf and no malloc; one that
+# cannot find the headers cannot compile anything that includes them.
+#
+# This libz.bin is NOT the copy linked inside zcc.bin. That one is for
+# the compiler's own use; this one is the runtime it EMBEDS into the
+# programs it builds, and the two land at different processes'
+# 0x8000_0000 so they cannot be shared. See docs/zcc.md.
+#
+# Headers are copied by directory rather than named one by one: the set
+# is "whatever sw/common exports" and a list here would go stale
+# silently, the symptom being a missing include on the device.
+cp sw/apps/zcc/libz/libz.bin "$MOUNT_DIR/libz/libz.bin"
+cp sw/apps/zcc/libz/libz.sym "$MOUNT_DIR/libz/libz.sym"
+cp sw/apps/zcc/libz/libz.h "$MOUNT_DIR/libz/include/libz.h"
+cp sw/common/syscalls.def "$MOUNT_DIR/libz/include/syscalls.def"
+cp sw/common/*.h "$MOUNT_DIR/libz/include/"
+cp sw/apps/zcc/include/*.h "$MOUNT_DIR/libz/include/"
+
 cp docs/*.md "$MOUNT_DIR/docs/"
 cp sw/data/ark/*.md "$MOUNT_DIR/ark/"
 

@@ -36,6 +36,8 @@ APPS = \
 	repl \
 	posix \
 	zcc \
+	ttytest \
+	vi \
 	space3d \
 	audiotest \
 	play \

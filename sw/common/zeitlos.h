@@ -141,7 +141,24 @@ typedef uint32_t *(*z_kernel_ptr_t)(uint32_t, uint32_t *, uint32_t);
 //    1 -> 12MHz
 //    0 -> 24MHz
 #define Z_SPISD_DIV_INIT  59
-#define Z_SPISD_DIV_FAST  1
+
+// 0 -- 24MHz.
+//
+// Was 1 (12MHz). The change is worth far more than it was before the
+// wide SPI transfer landed: `sdbench` measured the wire at 17% of a
+// BYTE's cost and 58% of a WORD's, so halving it now moves the total
+// where before it barely showed (docs/sdcard.md).
+//
+// SD cards are specified to 25MHz in the default speed mode, so 24MHz
+// is inside spec rather than an overclock. What it is sensitive to is
+// the BOARD: trace length, the card socket and the card itself. If a
+// card that worked at DIV=1 misbehaves -- CRC failures, f_read
+// returning short, a filesystem that mounts and then does not -- put
+// this back to 1 before suspecting anything else.
+//
+// This is the SD card only. Z_SPIETH_DIV must stay at 1: the ENC28J60
+// is specified to 20MHz and 24MHz is over it. See its own comment.
+#define Z_SPISD_DIV_FAST  0
 
 // kept for compatibility with anything still poking the old register
 #define reg_sdcard (*(volatile uint32_t*)0xb0000000)
@@ -608,6 +625,29 @@ bool z_mem_stats(z_mem_stats_args_t *out);
 // buffer-then-flush structure that avoids re-entering this path.
 typedef void (*z_stdout_hook_t)(const char *data, uint32_t len);
 extern z_stdout_hook_t z_stdout_hook;
+
+// The input half, and the mirror of the above.
+//
+// Installed by an app whose stdin is not the serial console -- one
+// talking over a port, where the bytes arrive as Z_PORT_DATA rather
+// than from the UART. _read() calls this instead of waiting on the
+// UART when it is set.
+//
+// Called for fd 0 only -- reads of ordinary files go to the
+// filesystem, as they must. (_write()'s hook is fd 1 only for the
+// same reason, and stderr deliberately stays on the UART.)
+//
+// Returns the number of bytes placed in `buf`, or 0 for end of input,
+// which is how a program running over a port learns that the far end
+// went away. It may block; a hook that has to wait for a message
+// should do so with z_proc_wait() rather than spinning, for the reason
+// docs/app_runtime.md gives.
+//
+// There was no such hook until sw/apps/vi needed one: `repl` feeds its
+// embedded editor directly (te_bridge.c) rather than through stdio, so
+// nothing had previously wanted the input side.
+typedef uint32_t (*z_stdin_hook_t)(char *buf, uint32_t len);
+extern z_stdin_hook_t z_stdin_hook;
 
 // NOTE: app-facing filesystem access (fs_size()/fs_mallocfile()/
 // fs_write_file(), backed by the new Z_SYS_FS_SIZE/_READ/_WRITE

@@ -410,16 +410,48 @@ void print_ptr_hex(const void *ptr) {
 //
 //
 
+__attribute__((weak))
 ssize_t _read(int fd, void *ptr, size_t len)
 {
    unsigned char *p = ptr;
 	ssize_t i;
 	int c;
+
+	// fd 0 ONLY, exactly as _write() hooks fd 1 only.
+	//
+	// Without one this reads the serial console, which is right for
+	// the kernel shell and wrong for anything talking over a port: a
+	// program whose output goes to a term window (z_stdout_hook) but
+	// whose input comes from the UART is reading a keyboard nobody is
+	// typing at. sw/apps/vi is the first program to need both halves.
+	//
+	// The `fd == 0` is the whole of a bug that took a round trip to
+	// hardware. Without it EVERY read goes to the hook, including
+	// reads of ordinary FILES -- so `vi hello.c` opened the file,
+	// called read(), and got the keyboard. The editor then sat waiting
+	// for a keystroke that was meant to be the file's contents.
+	//
+	// _write() had the check from the start and this was written by
+	// copying its shape without its condition.
+	if (fd == 0 && z_stdin_hook)
+		return (ssize_t)z_stdin_hook((char *)ptr, (uint32_t)len);
+
    for (i = 0; i < len; i++) {
 
 		// wait for character
 		while (uart_rx_empty());
-		
+
+		// uart_getc(), which was MISSING.
+		//
+		// `c` was declared, the loop waited for a byte to arrive, and
+		// then p[i] was assigned from `c` without ever reading it --
+		// so this returned uninitialised stack, one byte at a time,
+		// for as long as it has been here. It survived because
+		// nothing in the tree reads stdin through newlib: the console
+		// uses getch()/readline() below, and every app takes input
+		// from a port or from HID.
+		c = uart_getc();
+
 		p[i] = (char)c;
 		if (p[i] == 0x0a) return i + 1;
 		if (p[i] == 0x0d) { p[i] = 0x0a; return i + 1; }
@@ -517,7 +549,9 @@ void readline(char *buf, int maxlen) {
 // only possibility until sw/apps/repl started using it) means every
 // byte goes to the UART exactly as it always has.
 z_stdout_hook_t z_stdout_hook = NULL;
+z_stdin_hook_t z_stdin_hook = NULL;
 
+__attribute__((weak))
 ssize_t _write(int fd, const void *ptr, size_t len)
 {
 	// fd 1 only. stderr (fd 2) deliberately stays on the UART even
@@ -544,15 +578,35 @@ ssize_t _write(int fd, const void *ptr, size_t len)
 	return len;
 }
 
+/*
+ * -- newlib's file syscalls --
+ *
+ * WEAK, so that an app can provide real ones.
+ *
+ * These have always failed: nothing in this tree reads a file through
+ * newlib, because sw/common/zfsapp.h is the filesystem API and every
+ * app uses it directly. That is fine for code written here and not
+ * fine for code ported from elsewhere -- sw/apps/vi was the first, and
+ * it opened its file, got -1, and displayed an empty buffer.
+ *
+ * Marking them weak rather than implementing them here keeps the
+ * dependency out of every other app: a real implementation needs
+ * zfsapp.o, and linking that into the runtime would put it in binaries
+ * that never touch a file. An app that wants POSIX file I/O defines
+ * its own and the linker prefers it -- see sw/apps/vi/posix_stubs.c.
+ */
+__attribute__((weak))
 int _open(const char *pathname, int flags) {
 	errno = ENOENT;
 	return -1;
 }
 
+__attribute__((weak))
 int _close(int fd) {
 	return 0;
 }
 
+__attribute__((weak))
 int _fstat(int fd, struct stat *st) {
 	errno = ENOENT;
 	return -1;

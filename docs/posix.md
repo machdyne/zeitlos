@@ -1,22 +1,137 @@
-# A POSIX layer and an on-device C compiler
+# posix -- a Unix-shaped userland for Zeitlos
 
-**Status: phases 0-4 are done, and 5.1 of phase 5.** Sections 9 to 9e
-record what each one actually did, including where it departed from the
-plan above it. Phases 5.2 onward, 6, 7 and 8 are still proposal.
+A shell, a C compiler and a vi, running on the machine itself. Edit a
+file, compile it, run it, without a cross-compiler and without another
+computer.
 
-Written ahead of the code the same way `docs/ports.md` was, so the
-reasoning is on record before it becomes hard to reconstruct. Sections
-1-8 are the ORIGINAL proposal and are deliberately left as written --
-the corrections live in 9 onward, because what was predicted and what
-happened are both worth having.
-
-**Not verified on hardware:** `posix`'s port plumbing under load
-(`sw/apps/posix/main.c` has run only on a board, never under a test),
-and everything in phase 5 beyond 5.1.
-
-Started against commit `9efca5f`.
+**Status: working.** What is not done is listed at the end.
 
 ---
+
+## Getting there
+
+`posix` is a port provider, like `repl`. Start it and connect a
+terminal to it:
+
+```
+> run wm
+> run posix
+> run term
+```
+
+Then in the `term` window press **F11** and type `port posix0`, or
+from a `repl` prompt type `port posix0`. Either reaches the same
+place. **F12** always returns you to `repl`.
+
+You get a `$` prompt.
+
+## The shell
+
+Commands, redirection `>` and `>>`, pipes `|`, and `&&` / `||`.
+There is no quoting and no globbing -- a Zeitlos path has no spaces in
+it, and every argument is a path or a flag.
+
+```
+$ ls
+$ cat notes.txt
+$ wc *.c            <- NO. globbing does not exist
+$ cat a.c | grep printf | wc
+$ zcc hello.c -o hello && run hello
+```
+
+| | |
+|---|---|
+| files | `ls` `cat` `cp` `mv` `rm` `touch` `mkdir` `rmdir` |
+| text | `wc` `head` `tail` `grep` `sort` `uniq` |
+| places | `cd` `pwd` |
+| other | `echo` `clear` `df` `run` `help` `exit` |
+
+`grep` matches a **fixed string**, not a regular expression. `vi` has
+regular expressions (`:g`, `:s`) if you need them.
+
+Anything that is not a builtin is run as a program, so `zcc hello.c`
+and `run zcc hello.c` are the same thing.
+
+### What streams and what does not
+
+`cat`, `cp`, `wc`, `grep`, `head`, `tail` and `uniq` read a file in
+chunks and have **no size limit**. `sort` has to hold every line and
+refuses above 512 lines or 16KB rather than dropping the rest.
+
+**A pipe holds its intermediate in memory, capped at 16KB**, and says
+so when it truncates. So `wc big.c` is fine and `cat big.c | wc` may
+not be.
+
+## The compiler
+
+```
+$ zcc hello.c -o hello
+$ run hello
+```
+
+`zcc` is a C compiler that runs on the machine. It handles most of C89
+plus parts of C99 -- see `docs/zcc.md` for exactly what, and what it
+refuses.
+
+A program that includes `libz.h` gets `printf`, `malloc`, the string
+functions, the filesystem, graphics and windows. The headers and the
+runtime live in `/libz` on the card:
+
+```
+$ zcc -I /libz/include -L /libz -o prog prog.c
+```
+
+Without `-L` you get a freestanding binary: no `printf`, no `malloc`.
+`zcc` will tell you so rather than leaving you to discover it at the
+first undefined symbol.
+
+`sw/apps/zcc/examples/` has two programs to start from -- one with no
+includes at all, one using the runtime.
+
+## The editor
+
+```
+$ vi notes.txt
+```
+
+This is `nextvi`, a real vi. Movement is `hjkl` **and** the arrow
+keys; `:w` writes, `:q` quits, `:wq` does both. Search with `/`, and
+`:s` substitutes with real regular expressions.
+
+Three things do not work, and will tell you so:
+
+- **`:!`** cannot run a command -- there is no `fork` on this machine.
+- **`:e` filename completion** offers nothing.
+- **Syntax highlighting** is inert: the display is one bit per pixel,
+  so there are no colours to highlight with.
+
+The window is always 80x25 regardless of how large you make it.
+
+## Gotchas worth knowing
+
+- **A program's output does not come back to the shell unless the
+  program asks.** `zcc` asks. Something you compile yourself will
+  print to the serial console instead, which looks like silence if you
+  have no cable attached.
+- **Typing while a command runs is discarded**, not queued.
+- **`&&` waits for the program to finish**, so `zcc x.c && run x` does
+  what it looks like.
+- **There is one current directory**, shared by every terminal
+  connected to the same `posix`.
+
+---
+
+# The development record
+
+Everything below is how this was built and why, kept in the order it
+happened. Sections 1-8 are the ORIGINAL proposal, written before any
+code; sections 9 onward record what each phase actually did, including
+where it departed from the plan above it.
+
+It is deliberately not tidied into a clean design document. What was
+predicted and what happened are both useful, and the gap between them
+is the most useful part -- several decisions here were reversed by
+measurement, and the reversals are the load-bearing content.
 
 ## 1. What is actually being asked for
 
@@ -674,10 +789,11 @@ behaves like one, checked by `sw/apps/posix/tests`. The port half
 compiles but cannot be linked or run here -- see section 9d.
 *Docs:* this section, and `sw/apps/posix/posix.h`.
 
-### Phase 5 — userland — 5.1 DONE, rest in progress
+### Phase 5 — userland — 5.1 and 5.2 DONE, rest in progress
 
 Broken into 5.1-5.5 once the tree's existing mechanisms were read
-properly; see section 9e. 5.1 (child lifecycle) is done.
+properly; see section 9e. 5.1 (child lifecycle) and 5.2 (terminal
+handoff) are done.
 
 
 Pipes between in-process commands, `|`/`>`/`>>`/`<`, exit statuses,
@@ -1166,10 +1282,16 @@ chaining and eleven builtins.
 ### Zero core changes -- fewer than section 4.4 predicted
 
 Section 4.4 budgeted one new target name in `sw/common/zconnect.c`.
-**That was not needed.** The `port` target already takes any
-registered name, so `port posix0` at a `term` prompt works with
-nothing added. `repl` is untouched and the two coexist exactly as
-intended.
+**That was not needed.** `prep_port()` takes an arbitrary name and
+passes it through with no lookup and no fixed list, so `posix0` is
+reachable three ways with nothing added:
+
+- `port posix0` from a `repl` prompt;
+- **F11 in `term`, then `open> port posix0`** -- the same
+  `z_conn_prepare()` path, differing only in who initiates it;
+- `Z_TERM_SET_PORT` from any other provider.
+
+`repl` is untouched and the two coexist exactly as intended.
 
 So the whole core-system footprint of Phase 4 is: nothing. The heap
 tier from Phase 0 already names `posix`.
@@ -1305,10 +1427,10 @@ That is 5.1, and it is now done (section 9e). Pipes are 5.3 and need
 
 ---
 
-## 9e. Phase 5: the plan, and 5.1
+## 9e. Phase 5: the plan, and 5.1-5.2
 
-Ordered so that each item unblocks the next. **5.1 is done**; the rest
-are proposal. It was the keystone, and the writeup below keeps the
+Ordered so that each item unblocks the next. **5.1 and 5.2 are done**;
+the rest are proposal. It was the keystone, and the writeup below keeps the
 "what it needs" framing as it was written so that the change reads
 against the reasoning that produced it.
 
@@ -1376,7 +1498,7 @@ having one:
   easy to get wrong, and invisible until somebody writes a third
   clause.
 
-### 5.2 Raw mode and the terminal handoff
+### 5.2 Raw mode and the terminal handoff -- DONE
 
 A full-screen program needs unprocessed bytes, and `posix` currently
 runs every byte through `z_line_feed()`, which does line editing and
@@ -1391,6 +1513,217 @@ exits, which is 5.1.
 This is strictly better than a raw-mode flag on the connection: the
 bytes never pass through this process at all, so there is no relaying,
 no batching, and no shell latency between a keystroke and the editor.
+
+**This is the opposite direction from connecting TO posix.** Reaching
+`posix0` from `term` -- by F11, or `port posix0` from `repl` -- has
+worked since Phase 4 and needed no code (section 9d). What 5.2 adds is
+`posix` GIVING its terminal away to a child and taking it back. Same
+`Z_TERM_SET_PORT` message, opposite end.
+
+**What was built.** A child asks for the terminal by opening a
+connection to `posix0` with the connect argument `"tty:<name>"`, where
+`<name>` is the provider name it registered with `z_pid_register()`.
+`posix` accepts, tells the term window on the far end of the session to
+go and connect there instead (`z_conn_handoff()`, the same helper
+`repl`'s `telnet` uses), closes the request channel, and marks that
+session's terminal as away. When the child exits -- which 5.1's watcher
+already detects -- the terminal is handed back before anything is
+written to it.
+
+**The child asks; `posix` does not decide.** A list of full-screen
+programs in the shell would be wrong twice: it has to be edited for
+every new program, and it has to be consulted BEFORE the child has
+started, which is before the child has registered a name for term to
+resolve. Asking inverts both -- the child asks once it is running and
+registered, so there is no race, and a program that never asks behaves
+exactly as it does today.
+
+**The name travels in the connect argument** because
+`z_conn_handoff()` carries a provider NAME and term resolves it through
+the pid registry. The connect argument is already a free-form string,
+so this needs no change to `zport`, `zconnect`, `zterm` or `term` --
+which is why this shape was chosen over adding a pid form to the
+handoff message.
+
+Two details that are easy to get wrong:
+
+- The request is **accepted and then closed**, not refused. Refusing
+  was the first version and says the wrong thing: the request
+  succeeded. A child reading REFUSED cannot tell "posix is not there"
+  from "posix did what you asked", and those want opposite responses --
+  fall back to the console, or start drawing.
+- Output to a session whose terminal is away is **dropped, not
+  queued**. Queuing would replay a compiler's output over the editor's
+  screen the moment the editor exits.
+
+**Writing a client.** `sw/apps/ttytest` is the worked example and is
+about 200 lines including its reasoning. The sequence:
+
+1. **register a name** -- before asking, or term resolves a name that
+   does not exist yet;
+2. connect to `posix0` with `"tty:" + name`;
+3. accept the connection term then makes to you;
+4. draw, read keys;
+5. close and exit -- `posix` takes the terminal back.
+
+Step 1 before step 2 is what makes it work at all.
+
+**The trap, which cost two attempts to get right.** A client of this
+mechanism holds **two** connections: the request channel to `posix`,
+and the session with `term`. Both can send `DATA`, `DATA_ACK` and
+`CLOSE`, and acting on the wrong one closes the terminal you were just
+given -- which on hardware looks like `term: port closed by peer --
+local echo only from here on`, moments after a successful handoff.
+
+Two plausible ways to tell them apart, both wrong:
+
+- **By state** ("ignore a CLOSE while nothing is connected"). That is a
+  guess about which message ARRIVES FIRST, and it is wrong: `posix`'s
+  CLOSE for the request channel can land *after* term's CONNECT.
+- **By tag.** `zport.h` suggests it -- "an app with exactly one
+  connection can just check `msg.tag == port.conn_id`" -- and that is
+  right for an app with one connection. This one has two, and their
+  conn_ids **can collide**: `posix` assigns `slot + 1`, so a request
+  landing in its slot 0 gets conn_id 1, and a provider that assigns
+  its own conn_id 1 to term then cannot distinguish them.
+
+**Filter by sender.** `msg.from` is the pid the message came from, and
+`posix` and `term` are different processes, so it cannot collide.
+`ttytest` ignores any non-CONNECT message whose `from` is not term's
+pid.
+
+`posix` itself does not have this problem: it is always the provider
+and assigns every conn_id from one namespace.
+
+F12 remains term's unconditional escape to `repl0` if a child hangs,
+which is the same safety net a telnet session to a dead host has.
+
+**The return path is the hard half, and the first version did not
+work.** Handing the terminal over is one message; getting it back is a
+sequence, and it turns on something that is obvious only once seen:
+
+**term disconnects from `posix` before connecting to the child.** That
+is what handing over means. So the moment the handoff succeeds, the
+session's port is closed, `port.connected` is false and
+`port.peer_pid` is gone. The first version early-returned on exactly
+that in both the watcher and the return call, so the terminal was
+handed away and never asked back -- on hardware, `ttytest` exited
+cleanly and term sat in local echo.
+
+Three things follow, all of them in `main.c`:
+
+- **term's CLOSE during a handoff is not the session ending.** The
+  slot keeps its shell state, its pending line and its `waiting` flag.
+  Tearing it down leaves nothing to return the terminal TO.
+- **The term pid is remembered before the handoff**, because
+  `port.peer_pid` does not survive it.
+- **term comes back as a fresh `Z_PORT_CONNECT`**, which is matched by
+  pid to the slot that gave its terminal away. A new slot would mean a
+  banner and a lost command line; matching means `ttytest && echo done`
+  still prints `done`.
+
+The child's exit status therefore waits with the slot: the watcher
+notices the exit, asks for the terminal back, and stops. The line
+resumes when term actually arrives, because nothing can be printed
+before then.
+
+**Still not verified beyond that.** All of this is in
+`sw/apps/posix/main.c`, the half no test reaches -- it needs a second
+process, `term` and `wm`. F12 remains the escape if a child hangs
+while holding the terminal.
+
+### How a child reaches the terminal: three cases, two built
+
+Worth stating together, because the right mechanism is not obvious
+from the program's point of view and picking the wrong one produces
+output on the serial console instead of the screen.
+
+| the child | mechanism | status |
+|---|---|---|
+| writes, never reads, does not draw | `PX_STDOUT_TAG` relay | **built** (5.1/9d) |
+| owns the screen and the keyboard | `PX_TTY_TAG` handoff | **built** (5.2) |
+| reads input but does not draw | -- | **nothing** |
+
+**`zcc` is the first case and does NOT need 5.2.** It opens a second
+connection tagged `stdout`, `posix` relays what arrives to whichever
+session ran the command, and the compiler never touches the terminal
+itself. That is already in `sw/apps/zcc/port_dev.c`.
+
+Worth knowing its failure mode: if `z_pid_lookup("posix0")` fails --
+no `posix` running, or a second instance registered as `posix1` --
+`zio_out()` falls back to the UART. **That looks exactly like the
+relay not being built**, so "zcc printed to the serial console" is not
+evidence either way without checking whether a `posix0` was up.
+
+**`vi` is the second case.** It wants raw keystrokes and cursor
+addressing, and relaying every byte through `posix` would add latency
+to each one and require `posix` not to interpret them. Handing the
+terminal over removes this process from the path entirely.
+
+**The third case has no mechanism yet**, and 5.3 needs one: a program
+that reads standard input without drawing -- the receiving end of a
+pipe, or anything that prompts. The `stdout` relay is one-way, and
+input arriving while a child runs is currently dropped (9e, 5.1).
+
+The obvious shape is to make that connection **bidirectional**: while
+a child holds one, keystrokes go to the child instead of to the line
+editor. That subsumes the first case rather than competing with it,
+and it does not replace the handoff -- a full-screen program still
+wants `posix` out of the path. Left undone deliberately until 5.3
+gives it a user, because a mechanism with no client is a mechanism
+nobody has tested.
+
+### Flow control on the relay, and the one ack that goes last
+
+`posix: z_port_send failed (44 bytes)` on hardware, with a child's
+output losing its tail.
+
+`z_port_send()` refuses past `Z_PORT_MAX_PENDING_SENDS` (8) unacked
+messages. `posix` drains its mailbox once per idle pass -- every
+`Z_TICK_HZ / 10` -- so a child producing fifteen lines in a burst
+overran the window long before any ack was read, and the old
+`out_flush()` **dropped on the first refusal**.
+
+Three changes, and the middle one is the interesting one:
+
+- **The batch is retried, not dropped.** `out_flush()` keeps the bytes
+  and returns false; the main loop tries again next pass.
+- **A sink is acked LAST.** A terminal is acked first so that typing is
+  never held up by a slow command. A sink is the opposite case -- it is
+  a PRODUCER, and the ack is the only backpressure there is. Holding it
+  until the bytes are buffered makes the child wait instead of
+  overrunning us.
+- **The buffer is sized to the ceiling rather than guessed.** A child
+  can have 8 messages in flight and `zcc` batches at 512 bytes
+  (`OUT_BUF`), so 4KB is the most that can arrive before it must wait,
+  and `OUT_BATCH` is 4KB. Nothing is dropped. A child sending larger
+  messages can still overrun it, which `out_dropped` counts and
+  reports -- a deliberate ceiling, because buffering without limit
+  turns a misbehaving child into an out-of-memory failure in the shell.
+
+**The retry is in the main loop, not in `out_flush()`, and that is not
+a style choice.** Pumping acks inline would mean calling
+`z_msg_read()` from inside the send path, which re-enters
+`handle_data()`, which calls `conn_out()`, which calls the send path --
+unbounded recursion on a 16KB stack, reachable only under exactly the
+load that triggers it. The main loop has no call stack to grow.
+
+### Where `te` fits
+
+`te` already runs inside `repl`'s process, built `-DEMBEDDED
+-DTE_HOST_IO` so that its `getch()`/`write()` become three functions
+the host implements (`sw/apps/repl/te_bridge.c`). There is no
+standalone `te` app; the editor exists only as that submodule and that
+bridge.
+
+That adaptation is the valuable part and it already exists -- which is
+why `te` is the right first client for a port-based editor even if
+`nextvi` (5.4) is the eventual answer. The glue is the same either way.
+
+**Embedding it in `posix` as well would be the wrong move**, and 5.4c
+says why: it would put the editor in the tree twice, and an editor
+holding a file in the shell's address space means a crash in either
+loses both. 5.2 exists so that is not the only option.
 
 ### 5.3 Pipes, as processes rather than coroutines
 
@@ -1419,40 +1752,376 @@ A builtin-to-builtin pipe still wants an in-process buffer, and that
 IS the coroutine case -- but it is now an optimisation for the common
 short pipeline rather than the mechanism everything rests on.
 
-### 5.4 A real `vi`
+### 5.4 A real `vi` -- the survey
 
-Possible, and 5.2 is what makes it so. Two routes, both with precedent
-here:
+**A permissive real vi exists and the port is small.** The licence
+question that ruled out `busybox vi` (GPL, the same objection that
+ruled out TinyCC for `zcc`) does not apply to either serious
+candidate.
 
-**As its own process** (the `telnet` shape). `vi` becomes a port
-provider; `posix`'s `vi file` spawns it with the filename as a launch
-argument and hands the terminal over with `Z_TERM_SET_PORT`. `vi`
-blocks on input all it likes -- it is its own process, and `posix` is
-not waiting on it, only watching for its exit.
+| | licence | C lines | terminal layer |
+|---|---|---|---|
+| **neatvi** (Ali Gholami Rudi) | **ISC** | 10,049 | `term.c`, 232 lines |
+| **nextvi** (Kyryl Melekhin, a neatvi rewrite) | **ISC** | 9,085 | `term.c`, 352 lines |
+| `busybox vi` | GPL | -- | -- |
+| `nvi` | BSD | ~30,000 | wants curses and a db library |
 
-This is the better route and the reason is not effort, it is
-isolation: an editor holding a file in memory in the same process as
-the shell means a crash in either loses both. It also costs a process
-slot and a memory block, which on a 32MB board is nothing.
+ISC is the same class as QBE and cproc -- permission to use, copy,
+modify and distribute, with the notice retained. No objection.
 
-**In-process** (the `te` shape). Needs the editor's `getch()`/`write()`
-replaced with functions the host implements, which is what
-`-DTE_HOST_IO` does to te.c. Feasible for a small vi clone, invasive
-for a real one -- nvi is ~30k lines and expects curses and a database
-library.
+**What either needs from the system**, counted rather than guessed:
 
-**On which `vi`:** the licence question has to be settled before the
-engineering one. `busybox vi` is GPL, which is the same objection that
-ruled out TinyCC for `zcc` (section 3.2). `nvi` is BSD but large and
-dependency-heavy. A small BSD- or public-domain-licensed vi clone is
-the likely answer and none has been surveyed yet -- that survey is the
-first task of 5.4, not the last.
+- `tcsetattr` -- raw mode. Not needed: a port connection is already
+  raw. Stub.
+- `ioctl(TIOCGWINSZ)` -- terminal size. One call; `term` knows the
+  answer and the port can carry it, or a fixed 80x25 to begin with.
+- `fork`/`execvp` -- `:!` shell-outs and filters, two call sites. Stub
+  to "not supported" first; `posix` could serve them later.
+- `signal`, `poll`, `dirent` -- stub, stub, and only for directory
+  listings.
+- Otherwise plain C: `string`, `stdio`, `stdlib`, `ctype`, `stdarg`.
 
-Worth noting where this ends up: a `vi` that runs as its own process
-and talks a port needs `getch`, `putchar` and file I/O and nothing
-else. That is within what `zcc` can compile and what `libz` provides,
-so **`vi` is a plausible first substantial program to build on the
-machine rather than for it.**
+Everything else funnels through `term_read()` and `term_write()`. **So
+the port is one file plus a handful of stubs** -- which is the same
+shape as `sw/apps/ttytest`, and roughly the same size.
+
+**Lean: `nextvi`.** Tighter (9,085 lines against 10,049), self-contained
+regex, and without neatvi's LSP client and JSON parser, which are
+several hundred lines this machine will never use. `neatvi` has the
+smaller `term.c` and is the more established upstream, so it is a
+reasonable second choice rather than a wrong one.
+
+**Unverified:** neither has been compiled for rv32. 9,000 lines at
+`-Os` is plausibly 80-120KB, which is an app-sized binary and not a
+problem, but nobody has measured it.
+
+### 5.4a UTF-8, on a machine that has none -- resolved
+
+nextvi is built around UTF-8 and Zeitlos has no UTF-8 support at all.
+That looked like the blocking objection and it is not one.
+
+**The whole of UTF-8 in nextvi is one 256-byte table.** Every
+multi-byte decision routes through `uc_len(s)`, which is
+`utf8_length[(unsigned char)s[0]]`. Set entries 1-255 to 1 and every
+byte is one character. The table IS the switch; no `#ifdef` touches
+the editor's logic. `sw/ext/nextvi` carries that as `uc_bytemode()`,
+three lines behind `#ifdef ZEITLOS`.
+
+**And it is required, not optional.** Zeitlos terminal fonts cover
+0x20-0x7f (`sw/common/zfont_data.c`) and `sw/common/zgfx.c` draws
+nothing for a byte outside that range -- so a screen cell is exactly
+one byte. Leave the table as upstream has it and a two-byte sequence
+is one character to nextvi and two blank cells to the terminal: the
+cursor column and the screen disagree from there on, and every redraw
+after it is wrong. Flattened, the arithmetic matches the rendering
+exactly.
+
+A file containing high bytes therefore displays as blanks and edits
+without corruption, which is the behaviour to want -- the editor and
+the screen agree about where everything is.
+
+Three things follow without needing their own switch, which is why
+this is a small change rather than a fork:
+
+- `ren.c`'s two non-ASCII outputs -- a combining-character joiner and
+  a replacement glyph -- are both behind `if (l == 1) return NULL`, so
+  they become unreachable.
+- `conf.c`'s right-to-left character ranges are matched against file
+  content, and ASCII never matches them.
+- `xshape` and `xorder` (Arabic shaping, bidi reordering) are runtime
+  flags the front end sets to 0. Already no-ops on ASCII; off for size
+  and speed.
+
+`sw/ext/nextvi/ZEITLOS.md` is the full list of local changes, kept
+short so that re-vendoring upstream is mechanical.
+
+### 5.4d What the port actually needed
+
+Built as `sw/apps/vi`. **No line of `sw/ext/nextvi` is modified**
+beyond the three-line `uc_bytemode()` in 5.4a.
+
+The port is smaller than the survey suggested, because of one thing
+the survey missed: nextvi's `term.c` reaches the outside world through
+exactly two calls -- `write(1, ...)` behind the `term_write` macro,
+and `read(fd, ..., 1)` in `term_read()`. Both are newlib, and
+`sw/common/zeitlos.c` already routes `_write()` through
+`z_stdout_hook`. So **`term.c` runs as upstream wrote it** and the
+port is two hooks. Replacing `term.c` would have meant re-porting 352
+lines on every re-vendor, including the input-buffer and recording
+machinery the rest of the editor depends on.
+
+Three things it turned up:
+
+**A real bug in `_read()`** (`sw/common/zeitlos.c`). It waited for a
+UART byte and then never called `uart_getc()` -- `p[i] = (char)c;`
+with `c` uninitialised. It has been returning uninitialised stack for
+as long as it has been in the tree. Nothing noticed because nothing
+reads stdin through newlib: the console uses `getch()`/`readline()`,
+and apps take input from a port or from HID. Fixed, and
+`z_stdin_hook` added as the partner to the existing stdout hook.
+
+**nextvi is a unity build.** `vi.c` `#include`s the other eight `.c`
+files and they do not compile standalone. The file list looks exactly
+like a set of translation units, which is the trap.
+
+**Four headers have to be shimmed**: `<poll.h>`, `<dirent.h>`,
+`<sys/ioctl.h>`, `<termios.h>`. Absent or `#error`-ing in embedded
+newlib and picolibc alike -- they are hosted-OS headers. `sw/apps/vi/shim`
+provides them and `posix_stubs.c` implements what is behind them.
+
+**And three symbols have to be renamed** -- `main`, `itoa` and
+`lstat`, all with `-D` rather than an edit to the vendored tree. `itoa`
+is the interesting one: newlib declares it as a three-argument
+extension and nextvi defines its own two-argument version, which is a
+conflicting declaration rather than a warning. `lstat` becomes `stat`
+because FAT has no symbolic links.
+
+**What is stubbed, and what each one costs**, is the honest measure of
+how well this machine passes for POSIX:
+
+| stub | cost |
+|---|---|
+| `tcsetattr`, `tcgetattr` | none -- a port is already raw |
+| `poll` | none -- the read underneath does its own blocking |
+| `ioctl(TIOCGWINSZ)` | fixed 80x25 instead of the real window size |
+| `isatty` | none -- must return true or the editor exits at once |
+| `signal`, `kill` | none |
+| `getenv` | none -- all four names it asks for have the same answer without an environment |
+| `getcwd`, `chdir` | `:cd` reports it cannot determine the directory |
+| `opendir`, `readdir` | `:e` filename completion offers nothing |
+| `stat` | none -- only reached through the completion walk |
+| `fork`, `execvp`, `pipe`, `dup2`, `getpgrp`, `tcsetpgrp` | **`:!` cannot run anything** |
+| `sigaction` | none |
+
+`signal()` is deliberately NOT stubbed: newlib's `signal.o` is linked
+anyway for other things in that object, so defining one is a
+duplicate-symbol error rather than an override. Its implementation
+records the handler and never calls it, which is exactly what is
+wanted.
+
+**It builds and links**, with the tree's own toolchain: `vi.bin` is
+228KB against `zcc`'s 118KB and `ttytest`'s 110KB.
+
+Two of those losses are real, and both have a clear route back:
+directory listing exists as `fs_list_into()` and is simply not
+`opendir`-shaped, and a `:!` that asked `posix` to run something is a
+message rather than a fork.
+
+**One real loss of function**: `:!` cannot run anything, because there
+is no fork (section 4.3). The route back is clear -- `posix` can
+already start a program and collect its output -- so a `:!` that asked
+`posix` to run something is a message, not a fork. `:e` filename
+completion is also inert, because `opendir()` returns NULL; Zeitlos
+has directory listing (`fs_list_into()`), it is simply not
+opendir-shaped.
+
+**CR has to become LF on input**, in the stdin hook. `term` sends 0x0d
+for Enter and a POSIX tty driver would translate it before the editor
+saw it -- `ICRNL` is an input flag, on by default, and nextvi clears
+only `c_lflag` bits, so it relies on that translation rather than
+disabling it. There is no tty driver here. Without it, Enter inserts a
+literal CR which renders as `^M` and no line ever breaks.
+
+That generalises: **anything ported here that assumed a tty was in
+front of it will want the same.**
+
+### 5.4g The stray CLOSE, and why conn_id is not an identity
+
+The last bug in the handoff, and the one that had been intermittent
+since 5.2 was built.
+
+**`z_port_close()` sends a CLOSE to the peer.** When term leaves
+`posix` for a child, posix's `handle_close()` called it -- and that
+message arrived at term AFTER term was connected to the child,
+carrying posix's conn_id. Both sides assign `slot + 1` from their own
+tables, so both are usually **1**. term checked `msg.tag ==
+port.conn_id`, matched, and dropped to local echo.
+
+Two fixes, and the first is the real one:
+
+- **`posix` no longer sends it.** There is nothing to tell: term
+  initiated the close and knows about it. The port is marked closed
+  locally instead.
+- **`term` checks the sender too**, so the window is immune to any
+  provider that closes late. One condition added to a check that was
+  already there.
+
+**This is the third time conn_id collision has caused a bug here** --
+`ttytest` first, then `vi`, now this. Worth stating plainly:
+**`conn_id` identifies a connection WITHIN one provider's table, not
+across the system.** Anything holding two connections, or outliving a
+handoff, has to use `msg.from`. `zport.h`'s advice to check the tag is
+correct for its stated case -- "an app with exactly one connection" --
+and that case stops applying the moment terminals start moving between
+providers.
+
+### 5.4h The terminal was missing two sequences
+
+Moving down past the last line redrew only that line; the screen did
+not scroll.
+
+nextvi scrolls by emitting `ESC[nM` (delete lines) and `ESC[nL`
+(insert lines) -- `term_room()` -- and never by redrawing. `zvt100`
+implemented `A B C D H J K f m` and neither `L` nor `M`, so the
+sequences were parsed and discarded. From the application's side that
+is indistinguishable from a broken editor.
+
+Both are implemented now (`docs/terminal.md`), with `DL` at the top of
+the screen routing through the existing `scroll_up()` so the renderer
+moves pixels instead of repainting rows.
+
+**This is the useful kind of finding**: a real terminal feature that
+nothing had needed until a program written for a real terminal asked
+for it. The same is true of the CR/LF translation and of newlib file
+I/O -- three gaps that existed for as long as the tree has, and were
+invisible because everything here was written to the shape of what
+already worked.
+
+### 5.4f Things that look like bugs and are not
+
+**Arrow keys** needed work, and the constraint shaped the answer.
+`term` sends `ESC [ A` for Up and **must keep doing so** -- `repl`,
+telnet and ssh all depend on it, and the far end of those is a real
+terminal. So the fix belongs in the one program that cannot use the
+sequences, not in `term`.
+
+`sw/apps/vi` translates them to `h`/`j`/`k`/`l` in its stdin hook,
+**only when the editor is reading commands**. Doing it unconditionally
+types the letter into the document in insert mode. nextvi gained a
+`vi_typing` counter for that (`sw/ext/nextvi/ZEITLOS.md`), set around
+the two functions that read typed text.
+
+A lone `ESC` passes through untouched: the translation fires only when
+the whole three-byte sequence is already in the input ring, and a real
+Escape keypress arrives in its own message.
+
+**`:e` completion offers nothing and `:!` runs nothing.** Both are
+stubbed, both are listed above with what they cost.
+
+**There is no syntax highlighting**, and there cannot be: the
+framebuffer is 1bpp and `vt_cell_t` carries only `reverse`, so the
+colour SGR nextvi emits is parsed and discarded. The rules are still
+compiled, and measurement says leave them: removing all 135 of them
+saves about 100KB of heap and 11KB of binary, which is not worth a
+local change to a vendored tree that would have to be reapplied on
+every update.
+
+### 5.4e What it took to make it actually run
+
+The build linking was not the end of it. Four things, and three were
+mine:
+
+**`_read()` hooked every descriptor, not just stdin.** `_write()` in
+`sw/common/zeitlos.c` has checked `fd == 1` from the start; I wrote the
+input half by copying its shape without its condition. So `vi hello.c`
+opened the file, called `read()`, and got the KEYBOARD -- the editor
+sat waiting for a keystroke that was meant to be the file's contents.
+Cost a round trip to hardware.
+
+**newlib file I/O has never worked here.** `_open()` in `zeitlos.c`
+returns `ENOENT` unconditionally, and always has: nothing written for
+this machine reads a file through newlib, because `zfsapp.h` is the
+filesystem API and every app calls it directly. Ported code does not
+know that. nextvi opened its file, got -1, and displayed an empty
+buffer -- `0L` with a filename in the status line.
+
+`sw/apps/vi/fileio.c` is the adapter: a descriptor table over
+`fs_open_read()` and friends. The runtime's versions are now **weak**,
+so an app can provide real ones without every binary that includes
+`zeitlos.c` gaining a dependency on `zfsapp.o`.
+
+**CR has to become LF on input** -- see below.
+
+**A console fallback, which was not planned and should have been.**
+`vi` with no `posix0` now runs on the serial console instead of
+refusing, and reads `/vi.args` when there is no launch argument, the
+same stopgap `zcc` carries. That is worth having on its own (an editor
+on the console is the recovery path when `wm` is not running) and it is
+what made the editor testable under `sim/`, which has no `posix`, no
+`term` and no `wm`.
+
+It paid for itself immediately: running `vi` under the simulator showed
+a full editor screen, which proved the port was sound and the fault was
+in the plumbing. Both remaining bugs were found that way rather than on
+hardware.
+
+`vi` is in the new `Z_PROC_STACK_SIZE_BIG` tier -- **1MB**, between
+`LARGE`'s 64KB and `HUGE`'s 4MB.
+
+**The number moved three times and the story is the useful part.** 4MB
+first, then 2MB, on the strength of an apparent startup cost of about
+1.1MB. Then the cost was traced, and it was not nextvi's: **`_fstat()`
+reported `st_size` as 0**, and `lbuf_rd()` falls back to a
+**1,048,575-byte** read buffer when it cannot learn a file's size. Every
+file opened allocated a megabyte before a line was read.
+
+With the size recorded at `open()` and reported properly, nextvi starts
+in **under 50KB with full syntax highlighting**, and a 154KB source
+file needs about 3.4 times its own size. 1MB covers anything in this
+tree -- which was the first proposal, rejected because `vi` would not
+start in it. The instinct was right; the bug was mine.
+
+**A stub that returns "no information" is not neutral.** Callers have
+fallbacks, and a fallback chosen for a hosted system can be wildly
+wrong here. That is the third time in this port -- `poll` returning
+ready, `getcwd` returning NULL and this -- and only this one was
+expensive.
+An editor holds the file plus its undo history in that allowance, and
+nextvi allocates per LINE, so a file costs roughly three times its own
+size. `LARGE`'s 64KB does not hold a 60KB source file at all -- but
+that argues for more than 64KB, not for 4MB, and `HUGE` would reserve a
+quarter of an 8MB board for one editor. It was briefly `HUGE` on
+exactly that mistaken step.
+
+### 5.4b Where that leaves `te`
+
+`te` is this tree's own tiny vi, and the choice is not exclusive.
+`te` is far smaller and is the right editor for a board that cannot
+spare 100KB; a real vi is the right one where the muscle memory
+matters. Both can exist -- they are two apps.
+
+**What should NOT persist either way is te being compiled into
+`repl`.** See below.
+
+### 5.4c `repl` should run the editor as a process too
+
+Raised while discussing this, and the answer is yes.
+
+`te` is currently linked INTO `repl`, built `-DEMBEDDED -DTE_HOST_IO`
+with `te_bridge.c` supplying its I/O. If `te` also becomes a
+standalone app for `posix`, the editor exists twice in the tree and
+twice in flash.
+
+Making it one standalone provider that both shells hand the terminal
+to is better on four counts, and the last one is the one that matters:
+
+- **One copy** of the editor, one set of bugs.
+- **`repl` shrinks** by whatever `te` costs it today, which is real
+  flash and real RAM for every user of `repl` whether they edit or not.
+- **Isolation.** An editor holding a file in the shell's address space
+  means a crash in either loses both -- and an editor is where the
+  unsaved work is.
+- **The glue is written once.** Whatever terminal layer a port-based
+  `te` needs is the same layer a port-based `nextvi` needs. Choosing
+  the editor stops being an architectural decision and becomes a
+  build-time one.
+
+**The cost is that `repl` needs a child watcher**, which it does not
+have. `posix` grew one in 5.1 (`Z_SYS_PROC_STATUS` polled on the idle
+path) precisely so it could take the terminal back when a child exits.
+`repl` would need the same ~30 lines.
+
+There is a cheaper-looking alternative -- **the child hands the
+terminal back itself** on exit, by sending `Z_TERM_SET_PORT` to term
+pointing at whoever gave it over. It needs no change to `repl` at all.
+It is worse, and the reason is the case that matters: **a child that
+crashes never returns the terminal.** Parent-driven recovery survives
+a crashing editor; child-driven recovery does not, and an editor is
+exactly the program a user most wants to survive crashing.
+
+Doing both is defensible -- the child returns it promptly, the parent's
+watcher is the safety net -- and is what a second pass should look
+like. F12 remains the unconditional escape underneath either.
 
 ### 5.5 More builtins
 
@@ -1513,43 +2182,71 @@ this migration stays possible, and ship copy-per-output first.
 
 ---
 
-## 11. Still open
+## 11. What is not done
 
-**Next up, in order:**
+### In `posix`
 
-1. **5.2, the terminal handoff** (`Z_TERM_SET_PORT`). Unblocks a real
-   `vi` and any other full-screen program. Section 9e has the design.
-2. **5.3, pipes as processes.** Needs 5.1 (done) and 5.2.
-3. **A `vi` licence survey** before any `vi` engineering --
-   `busybox vi` is GPL, which is the objection that ruled out TinyCC
-   for `zcc`; `nvi` is BSD but large. Section 9e, 5.4.
+- **No quoting, no globbing.** `cat "two words.txt"` and `rm *.o` do
+  not work. A Zeitlos path cannot contain a space, so quoting has no
+  job; globbing is a real absence and would go in `split()`.
+- **A pipe is capped at 16KB** and holds its intermediate in memory.
+  Process-to-process pipes would lift that and are unbuilt: nothing
+  puts a compiler or an editor in a pipeline.
+- **A spawned program's output only comes back if it asks** -- by
+  opening a second connection tagged `stdout`. `zcc` does; a program
+  you write does not unless you make it.
+- **No job control**, no `&`, no signals. There are none to send.
+- **One current directory** for every connection, not one per session.
 
-**Open questions with no owner yet:**
+### In `zcc`
 
-4. **`Z_MEM_MIN_BLOCK_SIZE` 32KB -> 4KB** (`docs/kernel.md`). Halves the
-   cost of a pipeline stage and is the one change that could regress
-   `zcc`'s 4MB allocation through fragmentation. Needs `free` output
-   either side, not reasoning.
-5. **When to schedule section 10**, if at all. Its payoff is the memory
-   budget on small boards, and the board it helps most is the one that
-   cannot run `posix` anyway.
-6. **Whether `sdbench` justifies raising `Z_SPISD_DIV_FAST` to 0.**
-   Now more likely to be worth something than it was: the wide SPI
-   transfer made the wire 58% of a word's cost where it had been 17%
-   of a byte's. SD card only -- 24MHz is out of spec for the ENC28J60.
-   See `docs/sdcard.md`.
+- **No `long long`, no floating-point arithmetic**, no bitfields, no
+  variadic definitions, more than 8 arguments, or structs by value.
+  `docs/zcc.md` has the full list.
+- **No designated initialisers**, which is the one thing standing
+  between here and self-hosting: `parse.c` uses them in its own type
+  table, so `zcc` cannot yet compile `zcc`. Bounded work, and section
+  8's decision 5 says it is a real goal.
 
-**Not verified on hardware:**
+### In `vi`
 
-7. `sw/apps/posix/main.c` -- the port protocol, connection handling and
-   output batching. It works on a board; it has never been under a
-   test, and its batching is a copy of a lesson `repl` learned the hard
-   way rather than something proven here.
-8. The ethernet half of the `spim.v` change (`docs/sdcard.md`, "It
-   applies to ethernet too"). There is no `sdbench` equivalent for that
-   path and there should be before anyone claims a number.
+- `:!` (no `fork`), `:e` completion (no `opendir`), and a fixed 80x25
+  window (nothing asks `term` for its size). Syntax highlighting is
+  compiled and inert -- the display is 1bpp.
 
----
+### Elsewhere, and measurable
+
+- **`Z_MEM_MIN_BLOCK_SIZE` is 32KB.** Dropping it to 4KB would quarter
+  the cost of a small process, and risks fragmenting the pool against
+  `zcc`'s 4MB request. Needs `free` either side, not reasoning
+  (`docs/kernel.md`).
+- **Integer-only printf in the kernel** is worth about 33KB of the
+  256KB image. There is headroom now, so this is for when the space is
+  wanted.
+- **The ethernet half of the SPI change is unverified.** There is no
+  `sdbench` equivalent for that path and there should be before anyone
+  claims a number (`docs/sdcard.md`).
+- **`repl` still links its own copy of `te`.** Now that `vi` is a
+  standalone port provider, `repl` could hand the terminal over the
+  same way `posix` does and drop the editor from its binary -- which
+  needs `repl` to grow the child watcher `posix` has (section 9e,
+  5.4c).
+- **Section 10, the shared runtime**, remains unscheduled. Its payoff
+  is the memory budget on small boards, and the board it helps most
+  cannot run `posix` anyway.
+
+### Not verified on hardware
+
+`sw/apps/posix/main.c` has no automated test and cannot have one here:
+the port protocol needs a second process, `term` and `wm`, none of
+which `sim/` has. Every bug in the terminal handoff was found on a
+board, which is why `sw/apps/ttytest` exists at 200 lines -- it is the
+smallest thing that exercises that path.
+
+`sh.c` and `vfs.c` ARE covered, by two suites with different jobs:
+`tests/cases.txt` asserts what each command produces, and
+`tests/script.sh.txt` records a transcript and diffs it. The first
+caught a pipe bug the second would have recorded as correct.
 
 ## 12. See also
 

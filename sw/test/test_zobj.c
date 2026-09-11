@@ -617,6 +617,149 @@ void manual_test_print(void) {
     printf("\n");
 }
 
+
+/*
+ * -- blobs --
+ *
+ * Untested until now, and untested is how z_obj_blob() also came to be
+ * missing from libz's jump table: nothing exercised it, so nothing
+ * noticed it was unreachable from a zcc-compiled program.
+ *
+ * A blob is the payload every port message carries (docs/ports.md), so
+ * it is not an obscure corner -- it is the type the system moves bytes
+ * with.
+ */
+int test_blob_object(void) {
+    TEST_START("blob object creation and access");
+
+    const char data[] = { 0x00, 0x01, 0x7f, (char)0x80, (char)0xff, 0x00, 0x42 };
+
+    z_obj_t obj = z_obj_blob(data, sizeof(data));
+    TEST_ASSERT(obj.type == Z_BLOB, "blob object has correct type");
+
+    uint32_t len = z_blob_len(&obj);
+    TEST_ASSERT(len == sizeof(data), "blob reports the length it was given");
+
+    void *p = z_blob_data(&obj);
+    TEST_ASSERT(p != NULL, "blob data is reachable");
+    TEST_ASSERT(memcmp(p, data, sizeof(data)) == 0,
+                "blob preserves every byte, including NULs and high bytes");
+
+    z_obj_free(&obj);
+    TEST_END();
+}
+
+int test_blob_empty(void) {
+    TEST_START("zero-length blob");
+
+    z_obj_t obj = z_obj_blob("", 0);
+    TEST_ASSERT(obj.type == Z_BLOB, "empty blob is still a blob");
+    TEST_ASSERT(z_blob_len(&obj) == 0, "empty blob has length 0");
+
+    z_obj_free(&obj);
+    TEST_END();
+}
+
+int test_blob_on_wrong_type(void) {
+    TEST_START("blob accessors on a non-blob");
+
+    /* A caller that reaches for blob data on a scalar should get
+     * nothing rather than a pointer into the union. This is the case a
+     * message handler hits when a peer sends the wrong payload type,
+     * which is not hypothetical -- it is what a protocol mismatch
+     * looks like from the receiving side. */
+    z_obj_t num = z_obj_uint32(0xDEADBEEF);
+    TEST_ASSERT(z_blob_len(&num) == 0, "length of a non-blob is 0");
+    TEST_ASSERT(z_blob_data(&num) == NULL, "data of a non-blob is NULL");
+
+    TEST_END();
+}
+
+/*
+ * -- the container builders the table was missing --
+ *
+ * z_list_append() and z_map_set() were exercised only indirectly, by
+ * tests that built a container and read it back. Asserted directly
+ * here, including the growth path, because these are the two calls a
+ * zcc-compiled program now reaches through the jump table.
+ */
+/*
+ * z_list_append() does NOT grow the list.
+ *
+ * It fills the first Z_NONE slot and returns 0 when there is none --
+ * zobj.c says so in a comment and this pins it as a contract, because
+ * the return value is the ONLY signal. A caller that ignores it (and
+ * the convenience of `z_list_append(&l, x);` invites exactly that)
+ * silently drops the element.
+ *
+ * Worth a test rather than a comment: this is the shape of bug that
+ * shows up as a message arriving with fewer fields than it was sent
+ * with, which is very hard to trace from the receiving end.
+ */
+int test_list_append_capacity(void) {
+    TEST_START("list append respects capacity and reports failure");
+
+    z_obj_t list = z_obj_list(2);
+    TEST_ASSERT(list.type == Z_LIST, "list created");
+
+    TEST_ASSERT(z_list_append(&list, z_obj_uint32(10)) == 1, "first append fits");
+    TEST_ASSERT(z_list_append(&list, z_obj_uint32(20)) == 1, "second append fits");
+    TEST_ASSERT(z_list_append(&list, z_obj_uint32(30)) == 0,
+                "third append REPORTS failure rather than growing");
+
+    z_obj_t *a = z_list_get(&list, 0);
+    z_obj_t *b = z_list_get(&list, 1);
+    TEST_ASSERT(a && a->val.uint32 == 10, "first element intact");
+    TEST_ASSERT(b && b->val.uint32 == 20, "second element intact");
+
+    z_obj_free(&list);
+    TEST_END();
+}
+
+int test_map_set_replaces(void) {
+    TEST_START("map set replaces an existing key");
+
+    z_obj_t map = z_obj_map(4);
+    z_map_set(&map, "k", z_obj_uint32(1));
+    z_map_set(&map, "k", z_obj_uint32(2));
+
+    z_obj_t *v = z_map_find(&map, "k");
+    TEST_ASSERT(v != NULL, "the key is present");
+    TEST_ASSERT(v->type == Z_UINT32 && v->val.uint32 == 2,
+                "the second value replaced the first");
+
+    z_obj_free(&map);
+    TEST_END();
+}
+
+/*
+ * z_obj_size() is a PAYLOAD size, not sizeof.
+ *
+ * Elements for a list or map, characters for a string, bytes for a
+ * blob -- and ZERO for a scalar, which has no payload. The name reads
+ * like "how big is this object" and the answer for a uint32 is 0,
+ * which is the sort of thing a test should pin before somebody uses it
+ * to size a buffer.
+ */
+int test_obj_size(void) {
+    TEST_START("z_obj_size reports payload, not object size");
+
+    z_obj_t n = z_obj_uint32(1);
+    z_obj_t s = z_obj_str("hello");
+    z_obj_t b = z_obj_blob("1234", 4);
+    z_obj_t l = z_obj_list(3);
+
+    TEST_ASSERT(z_obj_size(&n) == 0, "a scalar has no payload, so size is 0");
+    TEST_ASSERT(z_obj_size(&s) == 5, "a string is its character count");
+    TEST_ASSERT(z_obj_size(&b) == 4, "a blob is its byte count");
+    TEST_ASSERT(z_obj_size(&l) == 3, "a list is its capacity");
+
+    z_obj_free(&s);
+    z_obj_free(&b);
+    z_obj_free(&l);
+    TEST_END();
+}
+
 int main(void) {
     printf("=== ZObj Test Suite ===\n\n");
     
@@ -641,6 +784,12 @@ int main(void) {
     test_copy_function();
     test_map_find_function();
     test_convenience_aliases();
+    test_blob_object();
+    test_blob_empty();
+    test_blob_on_wrong_type();
+    test_list_append_capacity();
+    test_map_set_replaces();
+    test_obj_size();
     
     print_test_summary();
     printf("\n");

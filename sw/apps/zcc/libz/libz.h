@@ -33,7 +33,7 @@
  * against one table being run against another -- see libz_table.def's
  * own header for why that failure is silent otherwise.
  */
-#define LIBZ_ABI_VERSION 2
+#define LIBZ_ABI_VERSION 3
 
 /* start.S includes this header for LIBZ_ABI_VERSION alone, so the
  * declarations below have to be invisible to the assembler. The

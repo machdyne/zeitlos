@@ -166,6 +166,62 @@ static void csi_dispatch(vt_screen_t *vt, char final) {
 			break;
 		}
 
+		case 'L': { // IL -- insert lines at the cursor
+			int n = csi_param(vt, 0, 1);
+			if (n < 1) n = 1;
+			/* Rows below the cursor move DOWN by n; the n rows at the
+			 * cursor become blank; whatever falls off the bottom is
+			 * gone. The scrolling region is the whole screen -- DECSTBM
+			 * is not implemented, and nothing here sets one. */
+			for (int r = VT_ROWS - 1; r >= vt->cursor_y + n; r--)
+				for (int c = 0; c < VT_COLS; c++)
+					vt->cells[r][c] = vt->cells[r - n][c];
+			for (int r = vt->cursor_y; r < vt->cursor_y + n && r < VT_ROWS; r++)
+				for (int c = 0; c < VT_COLS; c++)
+					erase_cell(vt, r, c);
+			for (int r = vt->cursor_y; r < VT_ROWS; r++) mark_dirty(vt, r);
+			break;
+		}
+
+		case 'M': { // DL -- delete lines at the cursor
+			int n = csi_param(vt, 0, 1);
+			if (n < 1) n = 1;
+			/* The mirror of IL: rows below move UP by n and the bottom
+			 * n become blank.
+			 *
+			 * These two are how a full-screen editor scrolls. nextvi's
+			 * term_room() emits ESC[nL and ESC[nM and nothing else --
+			 * it never redraws the whole screen to scroll it. Without
+			 * them, moving past the last line redrew only that line
+			 * and the rest of the display stood still, which is
+			 * exactly what a terminal that silently ignores the
+			 * sequence looks like. */
+			/* At the top of the screen this IS a scroll, so use
+			 * scroll_up() -- which does the same shift and, crucially,
+			 * increments the counter that lets the renderer move
+			 * PIXELS instead of redrawing rows (vt_take_scrolls()).
+			 *
+			 * That is the case an editor actually hits: moving past
+			 * the last line scrolls the whole screen by one. Doing it
+			 * the general way below would mark every row dirty and
+			 * repaint the display, which on this machine is the
+			 * difference between a scroll and a visible redraw. */
+			if (vt->cursor_y == 0) {
+				for (int i = 0; i < n && i < VT_ROWS; i++) scroll_up(vt);
+				break;
+			}
+
+			for (int r = vt->cursor_y; r < VT_ROWS - n; r++)
+				for (int c = 0; c < VT_COLS; c++)
+					vt->cells[r][c] = vt->cells[r + n][c];
+			for (int r = VT_ROWS - n > vt->cursor_y ? VT_ROWS - n : vt->cursor_y;
+				 r < VT_ROWS; r++)
+				for (int c = 0; c < VT_COLS; c++)
+					erase_cell(vt, r, c);
+			for (int r = vt->cursor_y; r < VT_ROWS; r++) mark_dirty(vt, r);
+			break;
+		}
+
 		case 'K': { // EL -- erase in line
 			int mode = csi_param(vt, 0, 0);
 			if (mode == 0) {

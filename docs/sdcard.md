@@ -125,10 +125,19 @@ cycles of wire inside a 221-cycle total -- **58% wire**. So DIV=0
 should now be worth something substantial on layers 1-3 where it is
 worth nothing on layer 0. Estimated ~1.2 MB/s.
 
-**That is the next thing to measure.** One line (`Z_SPISD_DIV_FAST` in
-`zeitlos.h`), subject to signal integrity per board. SD card only --
-see the ethernet section for why the same edit on the other instance
-would be out of spec.
+**Now set to 0** (`Z_SPISD_DIV_FAST`, `sw/common/zeitlos.h`), and
+unmeasured on hardware.
+
+SD cards are specified to 25MHz in default speed mode, so 24MHz is
+inside spec rather than an overclock. What it is sensitive to is the
+BOARD -- trace length, socket, and the card itself. The failure mode is
+not subtle but it is easy to misattribute: CRC failures, `f_read`
+returning short, a filesystem that mounts and then does not. **If a
+card that worked at DIV=1 misbehaves, put this back to 1 before
+suspecting anything else.**
+
+SD card only. `Z_SPIETH_DIV` stays at 1: the ENC28J60 is specified to
+20MHz.
 
 ### A correction to `sdbench` itself
 

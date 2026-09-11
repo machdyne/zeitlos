@@ -6,6 +6,45 @@ Most of what it does is documented in the file itself; this covers
 selection, the clipboard, and where line editing actually lives —
 which is the thing most likely to be looked for in the wrong place.
 
+
+## Escape sequences the emulator implements
+
+`sw/common/zvt100.c`, as of the `vi` port:
+
+| | |
+|---|---|
+| `A` `B` `C` `D` | cursor up/down/right/left |
+| `H` `f` | cursor position |
+| `J` | erase in display |
+| `K` | erase in line |
+| `m` | SGR -- attributes |
+| **`L`** | **insert lines (IL)** |
+| **`M`** | **delete lines (DL)** |
+
+**`L` and `M` were added for `vi`, and their absence looked like a
+different bug entirely.** nextvi scrolls the screen by emitting
+`ESC[nM` and `ESC[nL` (`term_room()`) and never by redrawing -- so
+moving past the last line repainted only that line and the rest of the
+display stood still. That is what a terminal silently ignoring a
+sequence looks like from the application's side.
+
+`DL` at the top of the screen routes through the existing
+`scroll_up()`, which is the same path a newline scroll takes and which
+increments the counter `vt_take_scrolls()` exposes.
+
+**That counter buys nothing today**: `term.c`'s blit fast path is
+`if (0 && ...)`, disabled with a note pointing at `sw/apps/text`'s
+`scroll_repaint()`, so the count is consumed and the rows are
+repainted either way. Routing through `scroll_up()` is still right --
+it is one implementation of "the screen scrolled" rather than two, and
+`DL` benefits automatically if that blit is ever re-enabled.
+
+**Not implemented, and worth knowing before the next port:** DECSTBM
+(`ESC[r`, scrolling regions), insert/delete characters (`@`, `P`),
+save/restore cursor (`s`, `u`), and the alternate screen buffer
+(`ESC[?1049h`). nextvi emits the last of these only with `-a`, which
+this front end does not pass.
+
 ## Selection and clipboard
 
 Drag with the left button to select, release to keep it. Selection is

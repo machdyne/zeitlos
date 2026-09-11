@@ -21,7 +21,7 @@
 /* The libz ABI this compiler was built to speak. Must match
  * LIBZ_ABI_VERSION in libz/libz.h; the two are checked against each
  * other every time a blob is loaded. */
-#define LIBZ_EXPECTED_ABI 2
+#define LIBZ_EXPECTED_ABI 3
 
 /*
  * Loads libz.bin and libz.sym from a directory.

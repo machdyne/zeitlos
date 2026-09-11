@@ -3,8 +3,11 @@ $ pwd
 $ ls
 docs/
 failprog
+long.txt
 notes.txt
+numbers.txt
 src/
+words.txt
 zcc
 $ cd src
 $ pwd
@@ -80,22 +83,65 @@ $ failprog && echo skipped || echo fallback
 [proc_run failprog arg='' -> ok]
 [child 7 exited 1]
 fallback
+$ cp notes.txt copy.txt
+$ cat copy.txt
+hello from a file
+second line
+$ mv copy.txt moved.txt
+$ cat moved.txt
+hello from a file
+second line
+$ cat copy.txt
+cat: copy.txt: cannot open
+[status 1]
+$ touch brandnew.txt
+$ cat brandnew.txt
+$ echo content > keep.txt
+$ touch keep.txt
+$ cat keep.txt
+content
+$ cp notes.txt notes.txt
+cp: 'notes.txt' and 'notes.txt' are the same file
+[status 1]
+$ cp missing.txt out.txt
+cp: missing.txt: cannot open
+[status 1]
+$ ls
+brandnew.txt
+docs/
+failprog
+keep.txt
+long.txt
+moved.txt
+notes.txt
+numbers.txt
+out.txt
+src/
+words.txt
+zcc
+$ rm moved.txt brandnew.txt keep.txt
 $ mkdir newdir
 $ ls
 docs/
 failprog
+long.txt
 newdir/
 notes.txt
+numbers.txt
 out.txt
 src/
+words.txt
 zcc
 $ rm out.txt
 $ ls
 docs/
 failprog
+long.txt
 newdir/
 notes.txt
+numbers.txt
 src/
+words.txt
 zcc
 $ rm missing.txt
 rm: missing.txt: failed
@@ -108,7 +154,18 @@ posix -- see docs/posix.md
   cat      print files
   echo     print arguments
   rm       delete files
+  cp       copy a file
+  mv       rename a file
+  touch    create a file if it does not exist
+  clear    clear the screen
   mkdir    make directories
+  wc       count lines, words and characters
+  head     first lines of a file  (head -5 f)
+  tail     last lines of a file   (tail -5 f)
+  grep     lines containing text  (fixed string)
+  sort     sort lines
+  uniq     drop adjacent duplicate lines
+  rmdir    remove an empty directory
   df       filesystem usage
   run      run a Zeitlos program, passing arguments
   help     this list

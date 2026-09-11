@@ -31,7 +31,20 @@
  * "term0" an hour ago.
  */
 
-#define Z_PIDREG_MAX 32          // total live registrations, across all processes/names
+// 64, raised alongside Z_PROCS_MAX (16 -> 32, sw/os/kernel.h).
+//
+// This is a TOTAL across every process and every name, and it was
+// equal to the old process count -- which was already tight, since a
+// process may register more than one name and nine different apps in
+// this tree register at least one. At 32 processes it would be the
+// binding limit rather than the process table, and the failure is
+// quiet: z_pid_register() returns false, the app keeps running, and
+// nothing can find it by name afterwards. `term` cannot open a port to
+// a provider that failed to register.
+//
+// 64 entries cost about 2KB of kernel .bss, which is also 2KB of the
+// 256KB flash image -- see docs/kernel.md, "The 256KB image budget".
+#define Z_PIDREG_MAX 64          // total live registrations, across all processes/names
 #define Z_PIDREG_BASENAME_MAX 16 // caller-supplied base name, e.g. "term"
 #define Z_PIDREG_NAME_MAX 24     // full assigned name (base + digits)
 

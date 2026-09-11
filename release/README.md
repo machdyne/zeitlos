@@ -22,3 +22,20 @@ prose than to the code would be an odd choice.
 So: anything worth writing down goes in `docs/releases.md`.
 
 `release/zrelease --help` lists the commands.
+
+
+## What the card holds
+
+Beyond the apps, docs and the ARK scroll:
+
+- **`apps/posix`, `apps/zcc`, `apps/vi`** -- the self-hosting set. With
+  these the machine can edit, compile and run without another
+  computer (`docs/posix.md`).
+- **`libz/`** -- the zcc runtime: `libz.bin`, `libz.sym`, and the
+  headers a program compiled on the device includes.
+
+`libz.bin` is not the copy linked inside `zcc.bin`. That one is the
+compiler's own runtime; this one is what it EMBEDS into the programs it
+builds, and the two land at different processes' `0x8000_0000`, so they
+cannot be shared. `zcc` without it still runs and produces freestanding
+binaries with no `printf` and no `malloc`.

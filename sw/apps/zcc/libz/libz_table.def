@@ -1,33 +1,38 @@
 /*
- * libz -- the jump table, in order.
+ * libz -- the jump table.
  *
- * ===================================================================
- *  THE ORDER OF THIS FILE IS AN ABI. NEVER INSERT IN THE MIDDLE.
- * ===================================================================
+ * ORDER IS THE ABI. An entry's POSITION in this file is the offset a
+ * compiled program jumps to; nothing else identifies it. So:
  *
- * Every zcc-compiled binary calls into libz by INDEX, not by name:
- * `jal ra, table + 4*i`. So inserting an entry anywhere but the end
- * shifts every later index, and a binary built against the old order
- * silently calls the wrong function. Not a crash -- printf where
- * malloc was expected -- which is the worst kind of wrong.
+ *   ADD ONLY AT THE END. NEVER INSERT. NEVER REORDER. NEVER DELETE.
  *
- * This is the same discipline sw/common/syscalls.def documents for the
- * same reason, and the failure mode there is on record: HID_READ_KEY
- * was originally inserted ahead of MSG_SEND and had to be moved.
+ * Inserting one line moves every entry after it, and every binary
+ * built against the old table then calls the wrong function --
+ * silently, with plausible arguments, because the jump succeeds. That
+ * is the failure this file exists to prevent, which is why
+ * LIBZ_ABI_VERSION is checked before a single symbol is resolved
+ * (docs/libz.md).
  *
- * Two protections exist and neither replaces reading this comment:
+ * -- Why this list is flat --
  *
- *  - LIBZ_ABI_VERSION (libz.h) is bumped whenever the table changes,
- *    stamped into the blob, and checked by zcc against the value in
- *    libz.syms. A stale blob is refused rather than mis-called.
- *  - The build refuses to produce a table SHORTER than the previous
- *    one, since that can only mean an entry was removed.
+ * It used to be grouped, with headings for memory, strings, the
+ * filesystem and so on. That reads better and it fights the rule
+ * above: a grouped list invites putting a new string function with
+ * the other string functions, which is exactly the edit that breaks
+ * every existing binary. The grouping was a comfort that made the
+ * dangerous thing feel natural.
  *
- * Adding an entry at the end is always safe: an old binary simply
- * never reaches it.
+ * Flat, with the index every sixteen lines, so that the only place a
+ * new entry can go is obvious. Use `make` and read libz.sym if you
+ * want to know what lives where; that file is generated and always
+ * agrees with reality.
+ *
+ * Removing something is not allowed either. A function that is no
+ * longer wanted keeps its slot -- see the RETIRED convention at the
+ * end of this file.
  */
 
-/* -- memory -- */
+/* 0 */
 LIBZ_ENTRY(malloc)
 LIBZ_ENTRY(free)
 LIBZ_ENTRY(calloc)
@@ -37,8 +42,6 @@ LIBZ_ENTRY(memmove)
 LIBZ_ENTRY(memset)
 LIBZ_ENTRY(memcmp)
 LIBZ_ENTRY(memchr)
-
-/* -- strings -- */
 LIBZ_ENTRY(strlen)
 LIBZ_ENTRY(strcpy)
 LIBZ_ENTRY(strncpy)
@@ -46,11 +49,10 @@ LIBZ_ENTRY(strcat)
 LIBZ_ENTRY(strcmp)
 LIBZ_ENTRY(strncmp)
 LIBZ_ENTRY(strchr)
+/* 16 */
 LIBZ_ENTRY(strrchr)
 LIBZ_ENTRY(strstr)
 LIBZ_ENTRY(atoi)
-
-/* -- console I/O -- */
 LIBZ_ENTRY(putchar)
 LIBZ_ENTRY(puts)
 LIBZ_ENTRY(fputs_stdout)
@@ -59,20 +61,17 @@ LIBZ_ENTRY(kbhit)
 LIBZ_ENTRY(printf)
 LIBZ_ENTRY(snprintf)
 LIBZ_ENTRY(vsnprintf)
-
-/* -- process and messaging -- */
 LIBZ_ENTRY(z_exit)
 LIBZ_ENTRY(z_getpid)
 LIBZ_ENTRY(z_uptime_ticks)
 LIBZ_ENTRY(z_proc_run)
 LIBZ_ENTRY(z_proc_wait)
+/* 32 */
 LIBZ_ENTRY(z_proc_kill)
 LIBZ_ENTRY(z_pid_register)
 LIBZ_ENTRY(z_pid_lookup)
 LIBZ_ENTRY(z_msg_send)
 LIBZ_ENTRY(z_msg_read)
-
-/* -- filesystem -- */
 LIBZ_ENTRY(fs_size)
 LIBZ_ENTRY(fs_mallocfile)
 LIBZ_ENTRY(fs_write_file)
@@ -84,73 +83,26 @@ LIBZ_ENTRY(fs_read_chunk)
 LIBZ_ENTRY(fs_write_chunk)
 LIBZ_ENTRY(fs_seek)
 LIBZ_ENTRY(fs_close_handle)
-
-/* -- hardware --
- *
- * maskirq is the entry this whole mechanism was worth building for.
- * It wraps a picorv32 custom instruction that zcc cannot emit, and it
- * is the one function in sw/common/zeitlos.h that Phase 1 could not
- * compile. Here it is ordinary GCC-built code behind an ordinary
- * table slot -- no inline assembler needed in zcc, now or ever.
- * See docs/zcc.md, "The maskirq problem".
- */
+/* 48 */
 LIBZ_ENTRY(maskirq)
 LIBZ_ENTRY(z_syscall)
 LIBZ_ENTRY(z_heap_used)
-
-/* ===================================================================
- * ABI 2 -- graphics and windows.
- *
- * Appended, never inserted, so every ABI-1 binary keeps working: it
- * simply never reaches these slots. That is the whole point of the
- * ordering rule and this is the first time it has been exercised.
- *
- * These are the tree's OWN functions, compiled from sw/common/zgfx.c
- * and sw/common/zwin.c with no modification -- five small shim headers
- * (libz/shim) supply the freestanding <stdio.h>, <stdlib.h> and
- * <string.h> those files include, declaring only the handful of names
- * they actually call. Nothing in sw/common changed.
- *
- * The blob grows from about 5KB to about 50KB as a result, and every
- * zcc binary carries a copy. That is accepted: docs/posix.md section
- * 10's shared runtime turns it into a one-time cost later, and being
- * able to build a windowed app on the device is worth more now than
- * the megabyte it costs across a dozen of them.
- * ===================================================================
- */
-
-/* -- framebuffer, software path -- */
 LIBZ_ENTRY(z_fb_set_pixel)
 LIBZ_ENTRY(z_fb_fill_rect)
 LIBZ_ENTRY(z_fb_draw_char)
 LIBZ_ENTRY(z_fb_draw_text)
 LIBZ_ENTRY(z_fb_draw_char2)
 LIBZ_ENTRY(z_fb_draw_text2)
-
-/* -- framebuffer, GPU path --
- *
- * z_fb_hw_line and z_fb_hw_box are the sanctioned way into the line
- * rasterizer: they reassert the clip registers on every call and wrap
- * the register-writes-then-trigger sequence in maskirq, which is what
- * makes them safe against the two hazards docs/app_runtime.md
- * documents. An app reaching the registers directly gets neither --
- * and a zcc-compiled app CANNOT reach maskirq inline, so routing
- * through these is not merely advisable here, it is the only correct
- * option.
- */
 LIBZ_ENTRY(z_fb_hw_line)
 LIBZ_ENTRY(z_fb_hw_box)
 LIBZ_ENTRY(z_fb_hw_fill_rect)
 LIBZ_ENTRY(z_fb_hw_sync)
 LIBZ_ENTRY(z_gfx_hw_font_load)
-
-/* -- clipping -- */
 LIBZ_ENTRY(z_gfx_set_visible)
 LIBZ_ENTRY(z_gfx_clear_visible)
+/* 64 */
 LIBZ_ENTRY(z_gfx_visible_count)
 LIBZ_ENTRY(z_gfx_visible_clip)
-
-/* -- windows -- */
 LIBZ_ENTRY(z_win_create)
 LIBZ_ENTRY(z_win_create_flags)
 LIBZ_ENTRY(z_win_destroy)
@@ -165,32 +117,65 @@ LIBZ_ENTRY(z_win_content_h)
 LIBZ_ENTRY(z_win_content_rect)
 LIBZ_ENTRY(z_win_redraw_done)
 LIBZ_ENTRY(z_win_set_title)
+/* 80 */
 LIBZ_ENTRY(z_win_parse_rect)
 LIBZ_ENTRY(z_win_apply_clip)
 LIBZ_ENTRY(z_win_apply_redraw)
 LIBZ_ENTRY(z_win_apply_resized)
 LIBZ_ENTRY(z_win_redraw_id)
 LIBZ_ENTRY(z_win_mouse_content_xy)
-
-/* -- objects and keyboard --
- *
- * zobj.c is the object system the messaging protocol is built on
- * (docs/messaging.md); zkbd.c decodes wm's key messages. Both come
- * along because a windowed app needs them and neither is large.
- */
 LIBZ_ENTRY(z_obj_uint32)
 LIBZ_ENTRY(z_obj_int32)
 LIBZ_ENTRY(z_obj_str)
 LIBZ_ENTRY(z_obj_none)
 LIBZ_ENTRY(z_kbd_usage_to_keysym)
-
-/* zeitlos.c's messaging helpers, which cannot come from that file --
- * see glue.c. Appended, like everything in ABI 2. */
 LIBZ_ENTRY(z_msg_new_send)
 LIBZ_ENTRY(z_msg_wait)
-
-/* Fonts, as accessors rather than as data -- see glue.c. */
 LIBZ_ENTRY(z_font_8x16_get)
 LIBZ_ENTRY(z_font_6x12_get)
 LIBZ_ENTRY(z_font_5x7_get)
+/* 96 */
 LIBZ_ENTRY(z_font_5x8_get)
+
+/* ===================================================================
+ * ABI 3 -- the object system.
+ *
+ * z_obj_uint32/int32/str/none went in with ABI 2 because zgfx.c and
+ * zwin.c call them. The rest of sw/common/zobj.h did not, and the gap
+ * was not obvious until somebody looked: z_msg_send() was reachable
+ * from a zcc-compiled program and there was no way to BUILD anything
+ * to send but a scalar. A list, a map or a blob -- the payloads the
+ * messaging protocol is actually made of (docs/messaging.md) -- could
+ * not be constructed at all.
+ * ===================================================================
+ */
+LIBZ_ENTRY(z_obj_blob)
+LIBZ_ENTRY(z_blob_data)
+LIBZ_ENTRY(z_blob_len)
+LIBZ_ENTRY(z_obj_list)
+LIBZ_ENTRY(z_list_append)
+LIBZ_ENTRY(z_list_get)
+LIBZ_ENTRY(z_obj_map)
+LIBZ_ENTRY(z_map_set)
+LIBZ_ENTRY(z_map_find)
+LIBZ_ENTRY(z_map_get_key)
+LIBZ_ENTRY(z_map_get_val)
+LIBZ_ENTRY(z_obj_copy)
+LIBZ_ENTRY(z_obj_free)
+LIBZ_ENTRY(z_obj_size)
+LIBZ_ENTRY(z_obj_equal)
+/* 112 */
+LIBZ_ENTRY(z_obj_float32)
+
+/*
+ * -- RETIRED entries --
+ *
+ * If a function is ever withdrawn, do NOT delete its line: replace the
+ * name with libz_retired and leave it in place, so that everything
+ * after it keeps its offset. The stub returns 0 and is defined in
+ * syscall.c.
+ *
+ * Nothing is retired yet. The convention is written down now because
+ * the moment it is needed is the moment it is tempting to just delete
+ * the line.
+ */

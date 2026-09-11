@@ -41,6 +41,7 @@ LDFLAGS = -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS)
 LDSCRIPT = ../../common/riscv-app.ld
 
 OBJS = zeitlos.o zobj.o zport.o zline.o zfsapp.o zwin.o zgfx.o zfont_data.o \
+	zconnect.o \
 	vfs.o sh.o main.o
 
 posix: posix.elf posix.bin
@@ -53,6 +54,11 @@ zport.o:
 	$(CC) $(CFLAGS) -c ../../common/zport.c -o zport.o
 zline.o:
 	$(CC) $(CFLAGS) -c ../../common/zline.c -o zline.o
+# For z_conn_handoff() -- the Z_TERM_SET_PORT message that hands a term
+# window to a child and takes it back. Same helper `repl` uses for
+# `telnet`; see posix.h's PX_TTY_TAG.
+zconnect.o:
+	$(CC) $(CFLAGS) -c ../../common/zconnect.c -o zconnect.o
 zfsapp.o:
 	$(CC) $(CFLAGS) -c ../../common/zfsapp.c -o zfsapp.o
 # zwin is here for z_launch_arg_set() alone -- the mechanism the `run`

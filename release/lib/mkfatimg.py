@@ -89,7 +89,53 @@ MISC = [
     ("apps/portdemo", "sw/apps/portdemo/portdemo.bin"),
 ]
 
-DIRS = ["apps", "audio", "docs", "ark", "user"]
+# The self-hosting set: a shell, a compiler, an editor.
+#
+# These are what make the card able to extend itself rather than only
+# run what was cross-compiled onto it (docs/posix.md). `zcc` is useless
+# without libz/ below -- see LIBZ_FILES.
+SELFHOST = [
+    ("apps/posix", "sw/apps/posix/posix.bin"),
+    ("apps/zcc", "sw/apps/zcc/zcc.bin"),
+    ("apps/vi", "sw/apps/vi/vi.bin"),
+    ("apps/ttytest", "sw/apps/ttytest/ttytest.bin"),
+]
+
+DIRS = ["apps", "audio", "docs", "ark", "user", "libz", "libz/include"]
+
+# -- the zcc runtime, under libz/ --
+#
+# Two files and a pile of headers, and none of them is optional: a
+# compiler that cannot find libz.bin produces a freestanding binary
+# with no printf and no malloc, and one that cannot find the headers
+# cannot compile anything that includes them.
+#
+# libz.bin is NOT the copy linked inside zcc.bin. That one is for the
+# compiler's own use; this one is the runtime it embeds into the
+# programs it builds, and they land at different processes'
+# 0x8000_0000 so they cannot be shared. See docs/zcc.md, "Where libz
+# comes from".
+#
+# The headers are copied rather than listed one by one because the set
+# is "whatever sw/common exports", which changes as the system grows;
+# a list here would go stale silently and the symptom would be a
+# missing include on the device.
+LIBZ_FILES = [
+    ("libz/libz.bin", "sw/apps/zcc/libz/libz.bin"),
+    ("libz/libz.sym", "sw/apps/zcc/libz/libz.sym"),
+    ("libz/include/libz.h", "sw/apps/zcc/libz/libz.h"),
+]
+
+LIBZ_HEADER_DIRS = [
+    ("libz/include", "sw/common", (".h",)),
+    ("libz/include", "sw/apps/zcc/include", (".h",)),
+]
+
+# zeitlos.h generates its syscall enum from this by X-macro, so it is a
+# header in everything but name and extension.
+LIBZ_EXTRA = [
+    ("libz/include/syscalls.def", "sw/common/syscalls.def"),
+]
 
 # Tracker modules, from sw/data/audio. Whatever is there is shipped --
 # a glob rather than a list, because these are data files somebody
@@ -148,12 +194,30 @@ def check_against_script(root):
         text = f.read()
 
     # cp sw/apps/foo/foo.bin "$MOUNT_DIR/foo"
+    #
+    # ANY copied file, not only .bin. The pattern used to require a
+    # .bin suffix, which meant the check silently ignored everything
+    # else the script put on the card -- libz.sym and libz.h among
+    # them. A consistency check that only looks at some of the files
+    # is a check that agrees more often than it should.
+    #
+    # Wildcard sources (cp sw/common/*.h ...) are skipped: they copy a
+    # DIRECTORY whose contents are whatever is there, which is the
+    # point of them, and there is no single name to compare.
     script = {}
-    for m in re.finditer(r'^\s*cp\s+(\S+\.bin)\s+"\$MOUNT_DIR/([\w./]+)"',
+    for m in re.finditer(r'^\s*cp\s+(\S+)\s+"\$MOUNT_DIR/([\w./]+)"',
                          text, re.M):
+        if "*" in m.group(1):
+            continue
         script[m.group(2)] = m.group(1)
 
-    mine = dict((n, p) for n, p in SUPPLEMENTAL + GAMES_DEMOS + MISC)
+    # LIBZ_FILES is in here too: the regex above matches any .bin
+    # copied into the image, and libz.bin is one -- so leaving it out
+    # of `mine` made the check report the script shipping something
+    # this module does not. The check was right and the list was
+    # incomplete.
+    mine = dict((n, p) for n, p in SUPPLEMENTAL + GAMES_DEMOS + MISC
+                + SELFHOST + LIBZ_FILES + LIBZ_EXTRA)
 
     problems = []
     for name in sorted(set(mine) | set(script)):
@@ -204,16 +268,25 @@ def build(root, out_path, ark_dir=None, verbose=True):
 
     ark_dir = ark_dir or os.path.join(root, "sw/data/ark")
 
-    apps = SUPPLEMENTAL + GAMES_DEMOS + MISC
+    apps = SUPPLEMENTAL + GAMES_DEMOS + MISC + SELFHOST
 
     # Check every input up front. Finding out that gamedemo.bin was
     # never built after formatting a 64MB image and copying twelve
     # other files is a slower way to learn the same thing.
     missing = [p for _, p in apps
                if not os.path.exists(os.path.join(root, p))]
+
+    # libz.bin and libz.sym come from a separate make (sw/apps/zcc
+    # builds them as a dependency), and a card whose zcc cannot find
+    # them compiles only freestanding programs -- so their absence is
+    # an error here rather than a quiet omission.
+    missing += [p for _, p in LIBZ_FILES + LIBZ_EXTRA
+                if not os.path.exists(os.path.join(root, p))]
+
     if missing:
         raise FatError("not built yet:\n  %s\n"
-                       "  Run the app builds first." % "\n  ".join(missing))
+                       "  Run the app builds first (sw/apps, and "
+                       "sw/apps/zcc for libz)." % "\n  ".join(missing))
 
     audio_src = os.path.join(root, AUDIO_DIR)
     audio = sorted(f for f in os.listdir(audio_src)
@@ -270,6 +343,29 @@ def build(root, out_path, ark_dir=None, verbose=True):
         copy(os.path.join(root, "docs", d), "/docs/" + d)
     for a in ark:
         copy(os.path.join(ark_dir, a), "/ark/" + a)
+
+    # -- the zcc runtime --
+    for name, rel in LIBZ_FILES + LIBZ_EXTRA:
+        copy(os.path.join(root, rel), "/" + name)
+
+    # Headers by directory rather than by name: the set is "whatever
+    # sw/common exports", and a list here would go stale silently --
+    # the symptom being a missing include on the device, long after.
+    for dest, srcdir, exts in LIBZ_HEADER_DIRS:
+        d = os.path.join(root, srcdir)
+        for h in sorted(os.listdir(d)):
+            if not h.endswith(exts):
+                continue
+            # 8.3 is not advice here: FatFs is built with FF_USE_LFN 0
+            # (sw/os/fs/fatfs/ffconf.h), so a name that does not fit
+            # cannot be written to the card at all. Caught at build
+            # time rather than as a mysteriously absent header.
+            stem, _, ext = h.rpartition(".")
+            if len(stem) > 8 or len(ext) > 3:
+                raise FatError(
+                    "%s/%s does not fit an 8.3 name and cannot go on the "
+                    "card (FatFs here is FF_USE_LFN 0)" % (srcdir, h))
+            copy(os.path.join(d, h), "/%s/%s" % (dest, h))
 
     # fsck.fat is not a formality here. mcopy writing into an image it
     # has no exclusive claim on is the kind of thing that produces a

@@ -84,6 +84,18 @@ typedef struct {
      *
      * That is what makes `a && b` mean what it says: without it, `&&`
      * tested whether `a` STARTED. */
+    /*
+     * Standard input for a builtin: the output of the previous stage
+     * of a pipeline, or NULL.
+     *
+     * A filter takes a file argument OR reads this, which is what
+     * makes `wc x.c` and `cat x.c | wc` the same code. It is a plain
+     * buffer rather than a stream because a pipe between two builtins
+     * runs them one after the other -- see px_exec_line().
+     */
+    const char *in;
+    int         in_len;
+
     uint32_t    child_pid;
     char        pending[PX_LINE_MAX];   /* rest of the line, after the child */
     int         pending_join;           /* 0 none, 1 &&, 2 || */
@@ -102,6 +114,15 @@ void px_exec_line(px_shell_t *sh, char *line);
  * exited. `status` becomes the shell's, so `&&` and `||` test what the
  * child actually did. */
 void px_resume(px_shell_t *sh, int status);
+
+/* Hands the terminal to `provider` and back again.
+ *
+ * Implemented in main.c because it needs the port's peer pid, and
+ * declared here because sh.c has to know the concept exists -- a
+ * session whose terminal is away must not be prompted or written to.
+ */
+void px_tty_handoff(void *conn, const char *provider);
+void px_tty_return(void *conn);
 
 void px_shell_init(px_shell_t *sh, px_out_fn out, void *ctx);
 
@@ -131,5 +152,36 @@ extern void *px_current_conn;
  * protocol and no change to zport.
  */
 #define PX_STDOUT_TAG "stdout"
+
+/*
+ * The connect argument a child sends to ask for the TERMINAL.
+ *
+ * Sent as `"tty:<name>"`, where `<name>` is the provider name the child
+ * registered with z_pid_register() -- "vi0", say. posix then tells the
+ * term window on the other end of the session to go and connect there
+ * instead (Z_TERM_SET_PORT, via z_conn_handoff()), and tells it to come
+ * back here when the child exits.
+ *
+ * -- Why the child asks, rather than posix deciding --
+ *
+ * posix could keep a list of programs that want a full screen. It would
+ * be wrong twice over: a list in the shell has to be edited for every
+ * new program, and it has to be consulted BEFORE the child has started,
+ * which is before the child has registered a name for term to find.
+ *
+ * Asking inverts both problems. The child asks only once it is running
+ * and registered, so there is no race; and a program that does not ask
+ * behaves exactly as it does today, which is the right default for
+ * something that knows nothing about us.
+ *
+ * -- Why the name is in the argument --
+ *
+ * z_conn_handoff() carries a provider NAME and term resolves it through
+ * the pid registry (sw/common/zconnect.c). The connect argument is
+ * already a free-form string, so passing the name in it needs no change
+ * to zport, zconnect, zterm or term -- which is the whole reason this
+ * shape was chosen over adding a pid form to the handoff message.
+ */
+#define PX_TTY_TAG "tty:"
 
 #endif

@@ -255,6 +255,60 @@ up front: matches this project's own stated preference (see
 simple version against real use before adding the complexity a more
 general solution would need.
 
+### `conn_id` is not an identity
+
+`conn_id` identifies a connection **within one provider's table**, not
+across the system. Every provider here assigns `slot + 1` from its own
+table, so two unrelated connections are routinely both numbered 1.
+
+`zport.h` suggests checking `msg.tag == port.conn_id`, and that is
+correct for the case it states -- "an app with exactly one
+connection". That case stops applying as soon as terminals move
+between providers (`Z_TERM_SET_PORT`), because a message from the OLD
+provider can arrive after the new connection is up and match its tag.
+
+**Anything holding two connections, or outliving a handoff, must check
+`msg.from`.** Three bugs in `docs/posix.md`'s phase 5 came from this,
+in three different programs.
+
+### What `posix` does about it, and what it would take to close the gap
+
+`sw/apps/posix` hit this hard enough to need an answer, and the answer
+is small enough to be worth lifting into `zport` itself if the gap is
+ever closed properly.
+
+Three parts:
+
+- **Retry instead of drop.** `out_flush()` keeps the bytes and returns
+  false; the main loop tries again next pass. A provider that drops on
+  the first refusal loses the tail of any burst, and a burst is exactly
+  what a command's output is.
+- **Ack last on a producer.** A terminal connection is acked FIRST, so
+  typing is never held up by a slow command. A connection carrying a
+  child's output is the opposite -- it is a producer, and the ack is the
+  only backpressure available. Withholding it until the bytes are
+  buffered makes the child wait rather than overrun.
+- **Size the buffer to the real ceiling.** A peer can have
+  `Z_PORT_MAX_PENDING_SENDS` (8) messages in flight; multiply by the
+  peer's own batch size and that is the most that can arrive before it
+  must wait. Buffer that much and nothing is dropped.
+
+**The retry must not live in the send path.** Pumping acks inline means
+calling `z_msg_read()` from inside a send, which re-enters the data
+handler, which calls the sender -- unbounded recursion on a small
+stack, reachable only under the load that triggers it.
+
+`repl` predates all of this and still drops on refusal
+(`conn_send_str()`), which is visible as `repl: conn_send_str failed
+(N bytes)` under load. That is this documented gap rather than a
+regression, and the three points above are what a fix would look like.
+
+A general fix belongs in `z_port_send()` itself -- a small per-port
+queue and a drain call the provider makes from its idle path -- so that
+every provider gets it rather than each one rediscovering it. Three
+have now had to: `repl` (paste echo), `posix` (a compiler's output),
+and `sw/apps/zcc` on the client side.
+
 ## Planned phases
 
 1. ~~`zport.h`/`zport.c`~~ -- done. The protocol above, client +

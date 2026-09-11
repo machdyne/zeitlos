@@ -194,3 +194,4 @@ uint32_t z_proc_run(const char *name) {
 }
 
 int host_child_status(void) { return next_exit_status; }
+

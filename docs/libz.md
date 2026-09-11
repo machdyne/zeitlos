@@ -15,6 +15,49 @@ make -C sw/apps/zcc/libz          # needs the RISC-V toolchain
 sw/apps/zcc/zcc -I libz -L libz hello.c -o hello
 ```
 
+
+## Why the table is flat
+
+`libz_table.def` used to be grouped -- memory, strings, the filesystem,
+graphics -- with a heading over each. It reads better that way and it
+**fights the one rule the file has**: order is the ABI, so a new entry
+must go at the END and nowhere else.
+
+A grouped list invites putting a new string function with the other
+string functions. That is the single edit that breaks every binary
+built against the old table, silently, because the jump still succeeds
+and lands on the wrong function.
+
+So the groups are gone. The list is flat, with the index every sixteen
+lines, and the only place a new entry can go is obvious. `libz.sym` is
+generated and always agrees with reality, so nothing is lost by not
+having headings here.
+
+There is also a **RETIRED convention** written down at the end of the
+file: a withdrawn function keeps its slot with the name replaced,
+because deleting the line shifts everything after it. Nothing is
+retired yet -- it is recorded now because the moment it is needed is
+the moment deleting the line looks harmless.
+
+## ABI 3: the object system
+
+`z_obj_uint32`, `_int32`, `_str` and `_none` went in with ABI 2
+because `zgfx.c` and `zwin.c` call them. The rest of `zobj.h` did not,
+and the gap was invisible until somebody looked for it: `z_msg_send()`
+was reachable from a compiled program and there was **no way to build
+anything to send but a scalar.** Lists, maps and blobs -- the payloads
+the messaging protocol is made of -- could not be constructed at all.
+
+Sixteen entries added: `z_obj_blob`, `z_blob_data`, `z_blob_len`,
+`z_obj_list`, `z_list_append`, `z_list_get`, `z_obj_map`, `z_map_set`,
+`z_map_find`, `z_map_get_key`, `z_map_get_val`, `z_obj_copy`,
+`z_obj_free`, `z_obj_size`, `z_obj_equal`, `z_obj_float32`.
+
+`z_obj_blob` is the one worth naming: a blob is what every port
+message carries, and it was missing from the table **and** from
+`sw/test/test_zobj.c`. Untested and unreachable turned out to be the
+same oversight seen from two directions.
+
 ## The problem it solves
 
 `zcc` compiles one translation unit into a flat image. It cannot

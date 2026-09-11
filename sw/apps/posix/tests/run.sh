@@ -28,6 +28,18 @@ rm -rf "$work"
 mkdir -p "$work/src" "$work/docs"
 printf 'hello from a file\nsecond line\n' > "$work/notes.txt"
 printf 'int main(void){return 0;}\n' > "$work/src/a.c"
+# 1..12, one per line -- the fixture the assertion cases count.
+i=1; : > "$work/numbers.txt"
+while [ $i -le 12 ]; do echo $i >> "$work/numbers.txt"; i=$((i + 1)); done
+
+# For sort/uniq: deliberately unsorted, with an adjacent duplicate.
+printf 'cherry\napple\nbanana\napple\n' > "$work/words.txt"
+
+# One line of 699 characters plus a newline -- longer than PX_LINE_MAX,
+# so `wc` must still count it exactly while the line filters report a cut.
+awk 'BEGIN { s=""; while (length(s) < 699) s = s "x"; print s }' \
+    > "$work/long.txt" 2>/dev/null || \
+    python3 -c "print('x'*699)" > "$work/long.txt"
 # `zcc` has to EXIST for the run builtin to report success, since the
 # stub checks for it -- see host_fs.c's z_proc_run().
 printf 'not really a compiler\n' > "$work/zcc"
@@ -56,3 +68,11 @@ if ! diff -u "$here/expected.txt" "$out"; then
 fi
 
 echo "posix shell: transcript matches"
+
+# The assertion suite. Separate from the transcript above because it
+# answers a different question: the transcript says "nothing changed",
+# these say "the answers are right".
+if [ -x "$here/px_case_test" ]; then
+    echo
+    "$here/px_case_test" "$work" "$here/cases.txt" || exit 1
+fi

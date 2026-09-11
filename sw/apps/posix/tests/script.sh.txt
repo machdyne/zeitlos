@@ -42,6 +42,21 @@ failprog && echo should-not-appear
 failprog || echo recovered-from-failure
 zcc && echo first && echo second
 failprog && echo skipped || echo fallback
+# -- cp, mv, touch --
+cp notes.txt copy.txt
+cat copy.txt
+mv copy.txt moved.txt
+cat moved.txt
+cat copy.txt
+touch brandnew.txt
+cat brandnew.txt
+echo content > keep.txt
+touch keep.txt
+cat keep.txt
+cp notes.txt notes.txt
+cp missing.txt out.txt
+ls
+rm moved.txt brandnew.txt keep.txt
 # -- files --
 mkdir newdir
 ls

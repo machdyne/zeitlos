@@ -312,6 +312,25 @@ prompted looking at these.
 | `Z_MAILBOX_DEPTH` | 32 | 24 bytes per envelope per slot |
 | `Z_MEM_MIN_BLOCK_SIZE` | 32KB | not yet changed; see below |
 
+### `Z_PIDREG_MAX` 32 -> 64 -- DONE, and it was nearly missed
+
+Raising `Z_PROCS_MAX` had a consequence one layer up that the first
+pass did not consider: `Z_PIDREG_MAX` (`sw/os/pidreg.h`) is a total
+across every process and every NAME, and it was 32 -- equal to the old
+process count, and already tight, because a process may register more
+than one name and nine apps in this tree register at least one.
+
+At 32 processes the registry, not the process table, would have become
+the binding limit. The failure is quiet: `z_pid_register()` returns
+false, the app runs on, and nothing can find it by name -- `term`
+cannot open a port to a provider that never registered, and `posix`
+cannot hand a terminal to a child whose name does not resolve.
+
+64 entries, about 2KB.
+
+**A limit raised in one place tends to move the binding constraint
+somewhere else.** Worth looking one layer out each time.
+
 ### `Z_PROCS_MAX` 16 -> 32 -- DONE (64 was tried and did not fit)
 
 Two arrays scale with it, 928 bytes a slot between them:
