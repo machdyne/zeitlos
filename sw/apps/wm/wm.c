@@ -137,7 +137,6 @@ static const dock_app_t dock_candidates[] = {
 	{ "read",		z_icon_read_data  },
 	{ "web",			z_icon_web_data  },
 	{ "sheet",		z_icon_sheet_data },
-	{ "hex",			z_icon_hex_data   },
 	{ "draw",		z_icon_draw_data  },
 	{ "view",		z_icon_view_data  },
 	{ "track",		z_icon_track_data },
@@ -149,6 +148,7 @@ static const dock_app_t dock_candidates[] = {
 	{ "info",		z_icon_info_data  },
 	{ "settings",	z_icon_settings_data },
 
+	{ "hex",			z_icon_hex_data   },
 	{ "chip8",		z_icon_chip8_data },
 	{ "space3d",	z_icon_space3d_data },
 	{ "gpu3d",		z_icon_gpu3d_data },

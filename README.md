@@ -72,7 +72,7 @@ On the sdcard, started at boot when a card is present. A `term` window can conne
 | repl | App server + [Lisp interpreter (subset of R4RS Scheme)](https://github.com/machdyne/ms) |
 | [posix](docs/posix.md) | POSIX compatibility layer |
 
-#### Additional Apps
+#### Windowed Apps
 
 | App | Description |
 |-----|-------------|
@@ -97,6 +97,12 @@ On the sdcard, started at boot when a card is present. A `term` window can conne
 | [gamedemo](docs/gamedemo.md) | 2D side-scrolling platformer game |
 | space3d | First-person 3D space shooter game |
 | [gpu3d](docs/gpu3d_app.md) | Spinning 3D cube demo + STL viewer |
+
+#### Other Apps
+
+| App | Description |
+|-----|-------------|
+| [serial](docs/uart1.md) | Serial port server |
 | [zcc](docs/zcc.md) | C compiler |
 | vi | Port of the [nextvi](https://github.com/kyx0r/nextvi) terminal text editor |
 
