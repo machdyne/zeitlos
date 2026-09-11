@@ -370,8 +370,14 @@ static bool dlg_create(const z_dialog_ctx_t *ctx, dlg_kind_t kind,
 
 static void dlg_buttons_init(const char *const *labels, int count) {
 
-	bool kind_wants_button_focus =
-		(dlg.kind == DLG_KIND_CONFIRM || dlg.kind == DLG_KIND_PROMPT);
+	// Confirm only. A prompt used to be here too, and that was a bug
+	// every prompt in the system shared: with OK focused, the "Space
+	// presses the focused button" rule in dlg_key() fired while the
+	// person was TYPING in the field, so the first space submitted
+	// whatever was typed so far. sw/apps/settings is where it was
+	// found -- "port " came back as "port" and was rejected mid-edit.
+	// A prompt starts in its field, like the file dialogs.
+	bool kind_wants_button_focus = (dlg.kind == DLG_KIND_CONFIRM);
 
 
 	memset(dlg.widgets, 0, sizeof(dlg.widgets));
@@ -400,11 +406,10 @@ static void dlg_buttons_init(const char *const *labels, int count) {
 
 	z_widget_set_init(&dlg.wset, dlg.widgets, count, &dlg.win);
 
-	// Confirm and prompt dialogs start with the affirmative button
-	// focused, so Tab has an obvious starting point and Space works
-	// immediately. The file dialogs deliberately do NOT -- focus
-	// starts in the field or the list there, which is where typing
-	// should go.
+	// Confirm dialogs start with the affirmative button focused, so
+	// Tab has an obvious starting point and Space works immediately.
+	// Prompts and the file dialogs deliberately do NOT -- focus starts
+	// in the field or the list there, which is where typing goes.
 	if (kind_wants_button_focus)
 		z_widget_focus_set(&dlg.wset, 0);
 
@@ -434,6 +439,15 @@ static void field_draw(void) {
 
 static void field_key(uint32_t keysym) {
 	if (z_edit_key(&dlg.edit, keysym)) field_draw();
+}
+
+// Puts the caret in a prompt's field and takes the focus ring off the
+// buttons -- the one state in which typing edits the field.
+static void prompt_focus_field(void) {
+	dlg.field_focus = true;
+	z_widget_focus_set(&dlg.wset, -1);
+	z_widget_draw_all(&dlg.wset, false);
+	field_draw();
 }
 
 // -- painting --
@@ -688,6 +702,21 @@ static void dlg_mouse(int cx, int cy, uint8_t buttons) {
 
 	if (dlg.kind == DLG_KIND_CONFIRM) return;
 
+	// A prompt has a field and two buttons and nothing else. Clicking
+	// the field puts the caret back in it; nothing else here is
+	// clickable. It must return before the file list below: `dlg` is
+	// static, so the list can still hold a directory from an earlier
+	// Open or Save dialog in the same app, and a prompt has no business
+	// handing it a click.
+	if (dlg.kind == DLG_KIND_PROMPT) {
+		int cw = z_win_content_w(&dlg.win);
+		bool in_field = cx >= DLG_MARGIN && cx < cw - DLG_MARGIN &&
+			cy >= dlg.field_y && cy < dlg.field_y + DLG_FIELD_H;
+		if ((buttons & Z_MOUSE_BTN_LEFT) && in_field && !dlg.field_focus)
+			prompt_focus_field();
+		return;
+	}
+
 	// The filename field takes focus when clicked, and gives it back
 	// when the list is.
 	if (dlg.kind == DLG_KIND_SAVE && (buttons & Z_MOUSE_BTN_LEFT)) {
@@ -794,6 +823,28 @@ static void dlg_key(uint32_t keysym, uint8_t mods) {
 
 		}
 
+		// A prompt cycles field -> OK -> Cancel -> field, the same shape
+		// as the save dialog's field -> list -> buttons.
+		if (dlg.kind == DLG_KIND_PROMPT) {
+
+			if (dlg.field_focus) {
+				dlg.field_focus = false;
+				z_widget_focus_set(&dlg.wset, back ? dlg.widget_count - 1 : 0);
+			} else {
+				int next = dlg.wset.focused + (back ? -1 : 1);
+				if (next < 0 || next >= dlg.widget_count) {
+					prompt_focus_field();
+					return;
+				}
+				z_widget_focus_set(&dlg.wset, next);
+			}
+
+			z_widget_draw_all(&dlg.wset, false);
+			field_draw();
+			return;
+
+		}
+
 		z_widget_focus_next(&dlg.wset, back);
 		z_widget_draw_all(&dlg.wset, false);
 
@@ -801,16 +852,36 @@ static void dlg_key(uint32_t keysym, uint8_t mods) {
 
 	}
 
-	// Space presses the focused button, wherever focus happens to be.
+	// Space presses the focused button -- but never while a text field
+	// has the caret, where it is a character. The file dialogs already
+	// cleared the button focus when the field took it; a prompt now
+	// does too, and the field check makes that impossible to get wrong
+	// again from either side.
 	// Enter keeps its own meaning per dialog kind below -- in a file
 	// dialog it accepts the selection rather than pressing whatever
 	// is focused, which is what the hand expects there.
-	if (keysym == ' ' && dlg.wset.focused >= 0) {
+	bool typing = dlg.field_focus &&
+		(dlg.kind == DLG_KIND_PROMPT || dlg.kind == DLG_KIND_SAVE);
+
+	if (keysym == ' ' && dlg.wset.focused >= 0 && !typing) {
 		dlg_activate_button(dlg.wset.focused);
 		return;
 	}
 
 	if (dlg.kind == DLG_KIND_PROMPT) {
+
+		// A button has focus (Tab moved it there). Enter presses it,
+		// as Space does. Typing a character goes back to the field
+		// with that character, rather than being swallowed -- the
+		// person plainly meant to type.
+		if (!dlg.field_focus) {
+			if (keysym == 0x0d) {
+				dlg_activate_button(dlg.wset.focused);
+				return;
+			}
+			if (keysym < 0x20 || keysym >= 0x7f) return;
+			prompt_focus_field();
+		}
 
 		if (keysym == 0x0d) {
 			if (dlg.edit.len > 0) {
@@ -973,6 +1044,18 @@ bool z_dialog_save(const z_dialog_ctx_t *ctx, const char *start_dir,
 
 }
 
+// Buttons, field and focus for a prompt -- separate from
+// z_dialog_prompt() so the host test (sw/common/tests/test_dialog.c)
+// sets a prompt up exactly the way the real one is, without a window.
+static void prompt_setup(const char *initial) {
+
+	dlg_buttons_init(labels_ok_cancel, 2);
+
+	field_set(initial);
+	dlg.field_focus = true;		// typing is the entire point
+
+}
+
 bool z_dialog_prompt(const z_dialog_ctx_t *ctx, const char *title,
 	const char *msg, const char *initial, char *out, int outlen) {
 
@@ -1009,10 +1092,7 @@ bool z_dialog_prompt(const z_dialog_ctx_t *ctx, const char *title,
 	dlg.btn_y = ch - DLG_MARGIN - DLG_BTN_H;
 	dlg.field_y = dlg.btn_y - DLG_MARGIN - DLG_FIELD_H;
 
-	dlg_buttons_init(labels_ok_cancel, 2);
-
-	field_set(initial);
-	dlg.field_focus = true;		// typing is the entire point
+	prompt_setup(initial);
 
 	dlg_repaint();
 

@@ -356,6 +356,27 @@ Write your own line breaks; for the two or three sentences a confirm box
 holds that gives better results than automatic wrapping, and it's less
 code.
 
+### Keyboard focus in a prompt
+
+A text prompt (`z_dialog_prompt()`) starts with the caret **in its
+field**, and no button focused. While the field has focus every key
+edits it, **Space included**, and Enter is OK. Tab cycles field → OK →
+Cancel → field; on a focused button Space or Enter presses it, and
+typing a character returns to the field with that character.
+
+It used to start with OK focused, "so Space works immediately". Space
+presses the focused button, so the first space typed in the field
+submitted everything typed so far -- `port ` came back as `port`, and
+`sw/apps/settings` rejected it mid-edit. Every prompt had this.
+`sw/common/tests/test_dialog.c` drives the real prompt's key and mouse
+handlers and fails if a space in the field ever submits again. A confirm
+box, which has no field, still starts on its affirmative button.
+
+A click outside a prompt's buttons either focuses the field or does
+nothing -- it no longer falls through to the file-list code the Open and
+Save dialogs share, which could still hold an earlier dialog's
+directory.
+
 ### The callback is not optional
 
 This is the part that bites.
