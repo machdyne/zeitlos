@@ -201,6 +201,26 @@ static void expect(bool ok, const char *what) {
 	if (!ok) { failures++; printf("  FAIL: %s\n", what); }
 }
 
+// Pointer at a content-relative point: press, then release.
+static void click(int cx, int cy) {
+	z_clip_t c;
+	z_win_content_rect(&win, &c);
+	handle_mouse(Z_WM_PACK_MOUSE(c.x0 + cx, c.y0 + cy, Z_MOUSE_BTN_LEFT, 1));
+	handle_mouse(Z_WM_PACK_MOUSE(c.x0 + cx, c.y0 + cy, 0, 1));
+}
+
+// Clicks list row `row`, scrolling it into view first without selecting
+// it (the row above is selected, then the click moves the selection).
+static void click_row(int row) {
+	z_listbox_select(&tz_list, row > 0 ? row - 1 : row);
+	int r = row - tz_list.top;
+	click(tz_list.x + 20, tz_list.y + 1 + r * (z_font_5x8.h + 2) + 4);
+}
+
+static void click_widget(int idx) {
+	click(widgets[idx].x + widgets[idx].w / 2, widgets[idx].y + widgets[idx].h / 2);
+}
+
 static void render(const char *prefix, const char *name) {
 	char path[256];
 	z_render_clear();
@@ -285,9 +305,12 @@ int main(int argc, char **argv) {
 		!strcmp(z_tz_cities[z_listbox_selected(&tz_list) - 1].city, "Munich"),
 		"typing 'mun' finds Munich");
 	expect(!strstr(file, "Munich"), "selecting alone writes nothing");
+	expect(widgets[W_SET_TZ].enabled, "Set time zone enabled once a different zone is selected");
+	expect(strstr(status, "Munich selected") != NULL, "status line says how to use it");
 	handle_key(0x0d, 0);
 	expect(strstr(file, "system.rtc.timezone: Munich\n") != NULL, "Enter saves the zone");
 	expect(app_allocs == 0, "saving allocates nothing (static buffers)");
+	expect(!widgets[W_SET_TZ].enabled, "Set disabled once the selection is the zone in use");
 	expect(strstr(file, "# my config\r\n\r\napps.someone.else: keep this = exactly\r\n") == file,
 		"comment, blank line and unknown key untouched");
 	expect(strstr(file, "not a valid line!\r\n") != NULL, "invalid line untouched");
@@ -341,7 +364,8 @@ int main(int argc, char **argv) {
 	handle_key(Z_KEY_END, 0);
 	expect(z_listbox_selected(&tz_list) == TZ_ITEMS - 1, "End reaches UTC+14");
 	handle_key('\t', 0);
-	expect(!list_focus && wset.focused == W_RELOAD, "Tab leaves the list for Reload");
+	expect(!list_focus && wset.focused == W_SET_TZ,
+		"Tab leaves the list for Set while the selection is unsaved");
 
 	char before[sizeof(file)];
 	memcpy(before, file, sizeof(file));
@@ -378,6 +402,30 @@ int main(int argc, char **argv) {
 	expect(list_focus && !strcmp(SEL_CITY(), "Bangkok"),
 		"a letter while a button has focus moves focus to the list and jumps");
 	expect(!strstr(file, "Bangkok"), "jumping does not save");
+	handle_key('\t', 0);
+
+	// -- the mouse path: single click selects, the button saves --
+	ticks_bump();
+	click_row(tz_row_for("Berlin"));
+	expect(z_listbox_selected(&tz_list) == tz_row_for("Berlin"), "single click selects Berlin");
+	expect(!strstr(file, "Berlin"), "a single click does not save");
+	expect(widgets[W_SET_TZ].enabled && strstr(status, "Berlin selected"),
+		"button enabled and the hint shown");
+	render(prefix, "5-selected-unsaved");
+	click_widget(W_SET_TZ);
+	expect(strstr(file, "system.rtc.timezone: Berlin\n") != NULL, "clicking Set time zone saves");
+	expect(!strcmp(tz_value, "Berlin") && !widgets[W_SET_TZ].enabled,
+		"now in use; button disabled again");
+	expect(strstr(status, "saved") != NULL, "status confirms the save");
+	expect(list_focus, "focus returns to the list after Set");
+
+	// Tab from the list goes to Set while there is something to set
+	ticks_bump();
+	handle_key('t', 0);			// Taipei
+	handle_key('\t', 0);
+	expect(!list_focus && wset.focused == W_SET_TZ, "Tab from the list reaches Set");
+	handle_key(0x0d, 0);
+	expect(strstr(file, "system.rtc.timezone: Taipei\n") != NULL, "Enter on Set saves");
 	handle_key('\t', 0);
 
 	// a hand-written offset with minutes has no row, and is shown

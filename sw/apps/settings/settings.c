@@ -13,8 +13,14 @@
  * The time zone is chosen from a list -- UTC, about sixty cities with
  * their daylight-saving rules (z_tz_cities, zrtc.h), and whole-hour
  * offsets -- in a z_listbox_t (zwidget.h). Moving through the list only
- * selects; Enter or a double-click saves, so browsing does not write
- * the sdcard once per row.
+ * selects, so browsing does not write the sdcard once per row. The
+ * "Set time zone" button saves the selection; it is enabled only while
+ * the selection differs from the zone in use, and the status line says
+ * so. Enter and double-click save too.
+ *
+ * The button was added after a person selected a city, saw nothing
+ * happen, and reasonably concluded there was no way to save: Enter and
+ * double-click were the only ways, and nothing on the panel said so.
  *
  * plus Reload, which re-reads the file into the kernel after it has
  * been edited some other way.
@@ -90,8 +96,11 @@ static const uint32_t video_modes[] = {
 static const char *video_labels[] = { "White", "Amber", "Green", "Paper" };
 #define MODE_COUNT 4
 
+// Array order is Tab order, with the time zone list (not a widget)
+// between Edit and Set -- see handle_key().
 enum {
 	W_EDIT_TERM = MODE_COUNT,
+	W_SET_TZ,
 	W_RELOAD,
 	W_COUNT
 };
@@ -120,6 +129,7 @@ static pref_t prefs[] = {
 
 static int other_keys;			// settings in the file this app does not show
 static char status[64];
+static bool status_is_hint;		// status holds the "selected -- Set" hint
 
 static int y_display, y_modes, y_prefs, y_rows, y_tz, y_list, y_reload, y_status;
 
@@ -193,6 +203,8 @@ static int tz_row_for(const char *value) {
 
 }
 
+static void zone_selection_changed(void);
+
 // -- reading --
 
 static void read_values(void) {
@@ -205,6 +217,7 @@ static void read_values(void) {
 
 	tz_in_file = z_cfg_get("system.rtc.timezone", tz_value, sizeof(tz_value));
 	z_listbox_select(&tz_list, tz_row_for(tz_value));
+	zone_selection_changed();
 
 	// Counted so the panel can say they exist and are being kept --
 	// otherwise a person who put something else in the file has no way
@@ -274,6 +287,11 @@ static void layout(void) {
 	widgets[W_RELOAD].w = 96;
 	widgets[W_RELOAD].h = BTN_H;
 
+	widgets[W_SET_TZ].w = 110;
+	widgets[W_SET_TZ].h = BTN_H;
+	widgets[W_SET_TZ].x = (int16_t)(cw - MARGIN - 110);
+	widgets[W_SET_TZ].y = (int16_t)y_reload;
+
 	y_status = y_reload + BTN_H + 6;
 
 	z_widget_invalidate(&wset);
@@ -299,6 +317,23 @@ static void describe(const pref_t *p, char *out, size_t n) {
 
 static void draw_text(int x, int y, const char *s) {
 	z_win_draw_text(&win, x, y, s, 1, &z_font_5x8);
+}
+
+static void draw_status(void) {
+
+	char line[80];
+	int cw = z_win_content_w(&win);
+
+	z_win_fill_rect(&win, 0, y_status, cw, LINE_H, 0);
+
+	if (status[0]) {
+		draw_text(MARGIN, y_status, status);
+	} else if (other_keys) {
+		snprintf(line, sizeof(line), "%d other setting%s in the file, kept as is",
+			other_keys, other_keys == 1 ? "" : "s");
+		draw_text(MARGIN, y_status, line);
+	}
+
 }
 
 static void repaint(void) {
@@ -329,13 +364,7 @@ static void repaint(void) {
 		tz_in_file ? "" : "  (default)");
 	draw_text(MARGIN, y_tz, line);
 
-	if (status[0]) {
-		draw_text(MARGIN, y_status, status);
-	} else if (other_keys) {
-		snprintf(line, sizeof(line), "%d other setting%s in the file, kept as is",
-			other_keys, other_keys == 1 ? "" : "s");
-		draw_text(MARGIN, y_status, line);
-	}
+	draw_status();
 
 	z_widget_draw_all(&wset, true);
 	z_listbox_draw(&tz_list, true);
@@ -346,6 +375,41 @@ static void repaint(void) {
 
 static void set_status(const char *s) {
 	snprintf(status, sizeof(status), "%s", s);
+	status_is_hint = false;
+}
+
+// Enables "Set time zone" exactly when the list's selection is a zone
+// other than the one in use, and says so on the status line -- so the
+// way to save is visible the moment there is something to save.
+static void zone_selection_changed(void) {
+
+	char v[Z_CFG_VAL_MAX];
+	int row = z_listbox_selected(&tz_list);
+	bool pending = false;
+
+	if (row >= 0) {
+		tz_row_value(row, v, sizeof(v));
+		pending = strcmp(v, tz_value) != 0;
+	}
+
+	if (widgets[W_SET_TZ].enabled != pending) {
+		widgets[W_SET_TZ].enabled = pending;
+		widgets[W_SET_TZ].dirty = true;
+	}
+
+	if (pending) {
+		snprintf(status, sizeof(status), "%.14s selected -- Set time zone to use it", v);
+		status_is_hint = true;
+	} else if (status_is_hint) {
+		status[0] = 0;
+		status_is_hint = false;
+	}
+
+	if (wset.count) {
+		z_widget_draw_all(&wset, false);
+		draw_status();
+	}
+
 }
 
 // The file before and after an edit.
@@ -497,10 +561,13 @@ static void reload(void) {
 
 }
 
+static void choose_zone_and_return(void);
+
 static void activate(int idx) {
 	if (idx < 0) return;
 	if (idx < MODE_COUNT) { apply_video(idx); return; }
 	if (idx == W_EDIT_TERM) { edit(&prefs[0]); return; }
+	if (idx == W_SET_TZ) { choose_zone_and_return(); return; }
 	if (idx == W_RELOAD) { reload(); return; }
 }
 
@@ -519,13 +586,27 @@ static void choose_zone(void) {
 }
 
 // Moves keyboard focus onto or off the list. The list sits between the
-// Edit button and Reload in the Tab order; see handle_key().
+// Edit button and Set time zone in the Tab order; see handle_key().
 static void focus_list(bool on) {
 	list_focus = on;
 	z_listbox_set_focus(&tz_list, on);
 	if (on) z_widget_focus_set(&wset, -1);
 	z_widget_draw_all(&wset, false);
 	z_listbox_draw(&tz_list, false);
+}
+
+// The Set button, from a click or Enter on it. It disables itself once
+// the zone is saved, so focus goes back to the list -- where a keyboard
+// user was, and the one control near it still worth pressing.
+static void choose_zone_and_return(void) {
+	choose_zone();
+	focus_list(true);
+}
+
+// The control after the list in Tab order: Set while it is enabled,
+// otherwise Reload.
+static int after_list(void) {
+	return widgets[W_SET_TZ].enabled ? W_SET_TZ : W_RELOAD;
 }
 
 // -- input --
@@ -542,8 +623,9 @@ static void handle_mouse(uint32_t packed) {
 	// The list first, and for the whole of a scrollbar drag it started.
 	if (wset.pressed < 0 && z_listbox_has_pointer(&tz_list, cx, cy)) {
 		if ((buttons & Z_MOUSE_BTN_LEFT) && !list_focus) focus_list(true);
-		if (z_listbox_mouse(&tz_list, cx, cy, buttons) == Z_LIST_ACTIVATED)
-			choose_zone();
+		int r = z_listbox_mouse(&tz_list, cx, cy, buttons);
+		if (r == Z_LIST_ACTIVATED) choose_zone();
+		else if (r == Z_LIST_SELECTED) zone_selection_changed();
 		return;
 	}
 	z_listbox_mouse(&tz_list, cx, cy, buttons);		// keep its edges fed
@@ -561,17 +643,18 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 	// -- the list has focus --
 	//
 	// Every key it uses goes to it -- arrows move the selection there,
-	// not the focus -- and Tab leaves it: forward to Reload, back to
-	// Edit.
+	// not the focus -- and Tab leaves it: forward to Set (or Reload
+	// while Set is disabled), back to Edit.
 	if (list_focus) {
 		if (keysym == '\t') {
 			focus_list(false);
-			z_widget_focus_set(&wset, back ? W_EDIT_TERM : W_RELOAD);
+			z_widget_focus_set(&wset, back ? W_EDIT_TERM : after_list());
 			z_widget_draw_all(&wset, false);
 			return;
 		}
-		if (z_listbox_key(&tz_list, keysym) == Z_LIST_ACTIVATED)
-			choose_zone();
+		int r = z_listbox_key(&tz_list, keysym);
+		if (r == Z_LIST_ACTIVATED) choose_zone();
+		else if (r == Z_LIST_SELECTED) zone_selection_changed();
 		return;
 	}
 
@@ -581,7 +664,8 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 	if ((keysym >= 'a' && keysym <= 'z') || (keysym >= 'A' && keysym <= 'Z') ||
 		(keysym >= '0' && keysym <= '9')) {
 		focus_list(true);
-		z_listbox_key(&tz_list, keysym);
+		if (z_listbox_key(&tz_list, keysym) == Z_LIST_SELECTED)
+			zone_selection_changed();
 		return;
 	}
 
@@ -590,7 +674,7 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 		case '\t':
 			// Into the list from either side of it.
 			if ((!back && wset.focused == W_EDIT_TERM) ||
-				(back && wset.focused == W_RELOAD)) {
+				(back && wset.focused == after_list())) {
 				focus_list(true);
 				return;
 			}
@@ -663,6 +747,10 @@ static void widgets_init(void) {
 	widgets[W_EDIT_TERM].type = Z_WIDGET_BUTTON;
 	widgets[W_EDIT_TERM].label = "Edit";
 	widgets[W_EDIT_TERM].enabled = true;
+
+	widgets[W_SET_TZ].type = Z_WIDGET_BUTTON;
+	widgets[W_SET_TZ].label = "Set time zone";
+	widgets[W_SET_TZ].enabled = false;		// see zone_selection_changed()
 
 	widgets[W_RELOAD].type = Z_WIDGET_BUTTON;
 	widgets[W_RELOAD].label = "Reload file";

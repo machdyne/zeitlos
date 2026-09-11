@@ -169,9 +169,9 @@ What picks up a reload:
 `settings` edits the three settings above:
 
 - **Colour:** a row of buttons. Choosing one applies it and saves it.
-- **Time zone:** a scrolling list of cities and offsets. Press a letter
-  to jump (B is Bangkok, B again Beijing), and press Enter or
-  double-click to save.
+- **Time zone:** a scrolling list of cities and offsets. Select one
+  (click, arrows, or a letter: B is Bangkok, B again Beijing), then
+  **Set time zone** -- or Enter, or double-click.
 - **Terminal auto-connect:** an **Edit** button that opens a text
   prompt. Typing `default` removes the line. A connection that does not
   start with `port`/`serial`/`telnet`/`ssh`/`none` is refused, and
@@ -290,7 +290,8 @@ an in-memory `/zeitlos.cfg`. It checks the following:
 - editing through the UI leaves comments, unknown keys and invalid
   lines untouched;
 - the time zone list: first-letter jumps and walking the matches,
-  prefixes, Enter saves (selecting alone does not), the Tab order
+  prefixes, a single click selecting without saving, the Set time zone
+  button enabling, saving and disabling, Enter saving, the Tab order
   through it, every row round-trips, and a value with no row is still
   shown;
 - saving allocates nothing -- the device's 16KB heap-and-stack cannot

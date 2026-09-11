@@ -20,7 +20,8 @@ Time zone: Munich
 | Mumbai         UTC+5:30          |#|
 | Munich         UTC+1  summer +1  | |
 +----------------------------------+-+
-[ Reload file ]
+[ Reload file ]           [ Set time zone ]
+Berlin selected -- Set time zone to use it
 1 other setting in the file, kept as is
 ```
 
@@ -28,7 +29,7 @@ Time zone: Munich
 | --- | --- | --- |
 | Display buttons | `system.video.mode` | immediately, and saved |
 | Terminal connects to | `apps.term.auto_connect` | the next term window |
-| Time zone list | `system.rtc.timezone` | clock and cal, within a second |
+| Time zone list + Set time zone | `system.rtc.timezone` | clock and cal, within a second |
 | Reload file | -- | re-reads `/zeitlos.cfg` after editing it elsewhere |
 
 Each value line shows what is in effect, and `(default)` when the file
@@ -42,8 +43,16 @@ A `z_tz_cities[]` city list (`zrtc.h`), in a list box (`z_listbox_t`,
 - **Rows:** `UTC`, then every city with its standard offset (marked
   `summer +1` if it has daylight saving), then whole-hour offsets
   `UTC-12` .. `UTC+14`.
-- **Selecting only moves the highlight.** Enter or a double-click saves.
-  Browsing with the arrow keys must not write the sdcard once per row.
+- **Selecting only moves the highlight; Set time zone saves.** The button
+  is enabled only while the selected zone differs from the one in use,
+  and the status line then says "*city* selected -- Set time zone to use
+  it". Enter and double-click also save. Browsing with the arrow keys
+  must not write the sdcard once per row, which is why selecting alone
+  does not save.
+
+  The button exists because a single click used to select, show nothing,
+  and leave Enter and double-click -- mentioned nowhere on the panel --
+  as the only ways to save. Someone reasonably concluded there were none.
 - **Type to jump.** A letter jumps to the first city starting with it
   (**B** is Bangkok), and the same letter again walks on (Beijing,
   Berlin, ...). Letters typed within a second build a prefix (`mun` is
@@ -51,8 +60,9 @@ A `z_tz_cities[]` city list (`zrtc.h`), in a list box (`z_listbox_t`,
   there uses letters -- and moves focus to the list.
 - **A value with no row** (`UTC+5:30` typed into the file) shows no
   selection, and the line above the list shows it.
-- **Tab order.** The list sits between Edit and Reload. While it has
-  focus the arrow keys move its selection, and Tab moves on.
+- **Tab order.** Edit, the list, Set time zone (skipped while disabled),
+  Reload. While the list has focus the arrow keys move its selection, and
+  Tab moves on. After Set, focus returns to the list.
 
 ## Editing the terminal connection
 
