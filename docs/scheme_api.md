@@ -1,9 +1,7 @@
 # The Zeitlos Scheme API
 
 `repl` (`sw/apps/repl`) embeds [Machdyne Scheme](https://github.com/machdyne/ms)
-(`docs/scheme.md`). Since there is no C compiler on the system, **this
-is how most Zeitlos software will actually get written** -- this
-document is both the reference for what's callable from Scheme today,
+(`docs/scheme.md`). This document is both the reference for what's callable from Scheme today,
 and the design record for how new capabilities get added without
 regularly touching the `ms` submodule.
 
