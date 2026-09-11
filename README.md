@@ -65,7 +65,7 @@ With the MTU, there is no need for position independent code or complicated addr
 
 #### Shells
 
-On the sdcard, started at boot when a card is present. A `term` window's start panel connects to either `repl` or [`posix`](docs/posix.md) (below).
+On the sdcard, started at boot when a card is present. A `term` window can connect to either `repl` or `posix` (or a remote system).
 
 | App | Description |
 |-----|-------------|
