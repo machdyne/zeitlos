@@ -31,7 +31,7 @@ The same text the term Open bar (F11) takes:
 ```
 apps.term.auto_connect: port repl0
 apps.term.auto_connect: port posix0
-apps.term.auto_connect: telnet bbs.example.com
+apps.term.auto_connect: telnet bbs.machdyne.com
 apps.term.auto_connect: ssh me@10.0.0.5
 apps.term.auto_connect: serial 9600
 ```
