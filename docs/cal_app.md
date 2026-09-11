@@ -121,15 +121,20 @@ that happens the app jumps to the real month — **unless the user has
 already navigated somewhere**, in which case yanking the view out from
 under them is not a feature. `user_navigated` is that one bit.
 
-## UTC
+## Time zone
 
-"Today" is today in UTC, matching the RTC and everything else in the
-system (`docs/rtc.md`). West of Greenwich the highlight therefore moves
-several hours before local midnight.
+"Today" is today in the zone named by `system.rtc.timezone` in
+`/zeitlos.cfg` (`docs/config.md`), **UTC by default** -- the same
+conversion the clock uses (`z_tz_*()`, `zrtc.h`). Unconfigured, west of
+Greenwich the highlight moves several hours before local midnight.
 
-The status line says `UTC` for the same reason the clock's does: an
-unlabelled date that disagrees with the wall reads as broken rather
-than as correct-but-elsewhere.
+The status line ends with the zone's abbreviation (`UTC`, `CEST`) for
+the same reason the clock's does: an unlabelled date that disagrees with
+the wall reads as broken rather than as correct-but-elsewhere.
+
+The zone is re-read whenever the config generation changes, and the day
+index `check_clock()` compares is the LOCAL one, so `cfg reload` that
+moves the date across midnight redraws the grid on the next check.
 
 It spells the date out in full rather than just carrying the label,
 because the highlight only answers "what is today" while today's month
@@ -249,7 +254,7 @@ what turns the epoch into today. A minute of staring at 1970 after the
 network came up would read as the app being broken.
 
 The cost is one register read and a comparison per second.
-`check_clock()` compares the UTC *day index* (`seconds / 86400`) and
+`check_clock()` compares the local *day index* (local `seconds / 86400`) and
 returns immediately when it is unchanged, which is every time but one
 per day. A rollover repaints the grid and the status line only, never
 the whole window.

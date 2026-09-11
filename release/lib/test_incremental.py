@@ -140,7 +140,7 @@ def main():
     os.chdir(ROOT)
     failures = []
     created = [OUT, os.path.join(ROOT, "output", "releases")]
-    for app in ("wm", "net", "repl", "term"):
+    for app in ("wm", "net", "term"):
         created.append(os.path.join(ROOT, "sw/apps", app, app + ".bin"))
     created.append(os.path.join(ROOT, "sw/os/kernel.bin"))
 

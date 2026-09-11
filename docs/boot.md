@@ -13,7 +13,7 @@ you can intervene.
 ## Sequence
 
 ```
-gateware  ->  BIOS (BRAM)  ->  kernel (flash -> RAM)  ->  sh()  ->  init()  ->  wm, net, repl
+gateware  ->  BIOS (BRAM)  ->  kernel (flash -> RAM)  ->  sh()  ->  init()  ->  wm, net, repl, posix
 ```
 
 1. **BIOS** (`sw/bios/bios.c`) runs from block RAM baked into the
@@ -23,8 +23,13 @@ gateware  ->  BIOS (BRAM)  ->  kernel (flash -> RAM)  ->  sh()  ->  init()  ->  
 2. **Kernel** (`sw/os/kernel.c`) redraws the splash, brings up UART,
    HID and the memory pool, registers itself as pid 0, and calls
    `sh()`.
-3. **`sh()`** (`sw/os/sh.c`) mounts the filesystem, offers the
-   **init-cancel window** below, then runs `init()`.
+3. **`sh()`** (`sw/os/sh.c`) mounts the filesystem, **loads
+   `/zeitlos.cfg`** into the kernel's configuration store (no card or
+   no file: defaults, and a line saying so), offers the
+   **init-cancel window** below, then runs `init()`. Loading the config
+   first means every app sees the settings from its first instruction,
+   and even a cancelled boot has them. See
+   [`config.md`](config.md).
 
    If the core apps are in flash and nothing on the card shadows them,
    this happens immediately. Otherwise it waits up to
@@ -32,12 +37,30 @@ gateware  ->  BIOS (BRAM)  ->  kernel (flash -> RAM)  ->  sh()  ->  init()  ->  
    readable -- pointless on a board with no card at all, which is why
    the flash case is checked first. See
    [`flash_apps.md`](flash_apps.md).
-4. **`init()`** starts `wm`, `net` and `repl`, in that order. `term` is
-   launched on demand from wm's dock rather than at boot. `wm`'s
-   startup `clear_screen()` is what wipes the splash.
+4. **`init()`** starts `wm`, loads `net`, starts `repl` and then
+   `posix`, starts `net`, and registers **`init0`**. `term` is launched
+   on demand from wm's dock rather than at boot. `wm`'s startup
+   `clear_screen()` is what wipes the splash.
 
    Each app is resolved independently: filesystem first, flash
    underneath, and the source is printed (`init: wm (flash)`).
+
+   - **`wm` is the only fatal one.** Without it there is no desktop to
+     start anything else into.
+   - **`repl` and `posix` are optional and card-only.** Neither is in the
+     flash archive (`docs/flash_apps.md`), so on a board with no card
+     both print `not found (non-fatal -- it lives on the sdcard)`, and
+     that is the expected outcome.
+   - **`posix` needs RAM.** Its tier is 4MB (`Z_PROC_STACK_SIZE_HUGE`),
+     so on a board that cannot hold it, init prints `unable to create
+     posix process -- needs NKB` and carries on.
+   - **Nothing returns early.** `init()` used to `return` when `repl`
+     was missing, which also skipped starting `net`. Harmless while
+     repl was in flash, fatal to networking the moment it was not.
+   - **`init0`** is how `wm` knows boot has finished loading apps: the
+     dock stays disabled (the Z cursor) until it exists. See
+     `docs/socctl.md`. It is registered by pid 0, so `ps` shows the
+     kernel under that name.
 
 ## Cancelling init
 
@@ -287,20 +310,45 @@ costs zero Scheme cells.
 | SMALL | 8KB | `wm`, `term` |
 | DEFAULT | 16KB | anything unnamed |
 | MEDIUM | 32KB | `net`, `repl` |
-| LARGE | 64KB | (none -- kept for a one-word revert) |
+| LARGE | 64KB | `web` |
+| BIG | 1MB | `vi` |
+| HUGE | 4MB | `posix`, `zcc` |
 
-With those, and `GC_SECTIONS=1`, the 1MB board fits
-`wm net repl term0 term1` with ~44KB spare:
+Measured at the commit that moved `repl` to the card and gave `term`
+scrollback, built with every app Makefile's defaults (`GC_SECTIONS=1`,
+newlib, xpack gcc 15.2):
 
 | | image | tier | block |
 |---|---|---|---|
-| kernel | ~195K | 16K | 208K |
-| wm | 93,884 | 8K | 100K |
-| net | 121,004 | 32K | 152K |
-| repl | 293,048 | 32K | 320K |
-| term0 | 92,992 | 8K | 100K |
-| term1 | 92,992 | 8K | 100K |
-| | | | **980K of 1024K** |
+| kernel | 197,988 | 16K | 217,088 |
+| wm | 101,856 | 8K | 110,592 |
+| net | 282,408 | 32K | 315,392 |
+| term (each) | 150,792 | 8K | 159,744 |
+| repl (card only) | 333,668 | 32K | 368,640 |
+| posix (card only) | 190,776 | 4MB | 4,386,816 |
+
+**The table this replaces was stale.** It listed term at 92,992 and net
+at 121,004 and concluded the 1MB board fit `wm net repl term0 term1`.
+With today's default builds it does not, and never did:
+
+- **The core set alone is 1,142,784 bytes:** kernel, wm, net, repl and
+  one term, before this change.
+- **net's defaults are the difference.** They include ssh.
+
+What a 1MB board can hold now, since `repl` is only loaded when a card
+is present:
+
+| configuration | blocks |
+|---|---|
+| no card: kernel, wm, net, term0, term1 | **962K** |
+| no card, no net (Obst's default spec): kernel, wm, term0..term3 | 966K |
+| card, no net: kernel, wm, repl, term0 | 856K |
+| card, net, repl | 1,012K -- no room for a term; build net smaller or skip it |
+
+posix does not fit below roughly 5MB, and init says so.
+
+term's 159,744 includes 16,000 bytes of scrollback (`docs/terminal.md`,
+"Memory"); `make term SCROLLBACK=25` takes it back to one screen.
 
 SMALL is a return to what this project originally shipped with;
 DEFAULT doubled it as a blanket margin, and `kernel.h` notes no app

@@ -88,7 +88,7 @@ static char instance_name[24] = "posix";
  * recovered when the child exits.
  *
  * Fire and forget: there is no reply. If the provider name does not
- * resolve, term reports that itself and F12 returns it to `repl0`,
+ * resolve, term reports that itself and F12 disconnects it to the panel,
  * which is the escape hatch that already exists for a telnet session
  * to a host that stops answering.
  */
@@ -149,7 +149,7 @@ void px_tty_return(void *conn) {
 static const char *BANNER =
     "posix -- a Unix-shaped shell for Zeitlos\r\n"
     "type 'help' for the builtins; anything else runs as a program\r\n"
-    "F12 returns to repl\r\n";
+    "F12 disconnects\r\n";
 
 static const char *PROMPT = "$ ";
 

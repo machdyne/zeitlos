@@ -204,6 +204,64 @@ reason step arrows existed in the first draft; they were dropped because
 three extra hit regions and a pair of drawn triangles is a lot of
 surface for something the keyboard already does better.
 
+## List boxes
+
+`z_listbox_t` (`zwidget.h`) is a framed, scrolling, single-selection
+list of text rows with its own scrollbar. Its first user is the time
+zone list in `sw/apps/settings`.
+
+**Items come from a callback.** The list owns no storage. You give it a
+count and a `const char *label(void *user, int index)` function, and it
+asks only for the rows it is drawing. A table in `.rodata` costs nothing
+extra to show, and nothing is copied or allocated.
+
+```c
+static z_listbox_t list;
+
+z_listbox_init(&list, &win);
+z_listbox_set_items(&list, count, label_fn, NULL);
+z_listbox_set_geom(&list, x, y, w, rows * (z_font_5x8.h + 2) + 2);   // in layout()
+
+// message loop
+if (z_listbox_has_pointer(&list, cx, cy))
+    if (z_listbox_mouse(&list, cx, cy, buttons) == Z_LIST_ACTIVATED) choose();
+if (list_has_focus)
+    if (z_listbox_key(&list, keysym) == Z_LIST_ACTIVATED) choose();
+
+z_listbox_draw(&list, force);   // after Z_WM_REDRAW: invalidate, then force
+```
+
+**Keys and pointer:**
+
+- **Mouse:** click selects; double-click activates.
+- **Keys:** Up/Down, PgUp/PgDn and Home/End move; Enter activates.
+- **Type to jump:** a letter jumps to the **first** row starting with it
+  (B: Bangkok). If the selection already starts with that letter, it
+  moves to the next such row, wrapping, so pressing B again walks
+  Bangkok, Beijing, Berlin. Keys less than a second apart build a
+  prefix (`mun` finds Munich), matched against the first row in list
+  order.
+
+`z_listbox_key()` returns `Z_LIST_NONE` for keys it does not use, so the
+caller still gets Tab and Escape.
+
+**Selecting is not activating.** Arrow keys move the selection through
+every row in between. An app that acted on `Z_LIST_SELECTED` would act
+on all of them -- settings would write the sdcard once per keystroke.
+Act on `Z_LIST_ACTIVATED`.
+
+**Focus belongs to the app.** A list box is not part of a
+`z_widget_set_t`. The app decides when it has keyboard focus, calls
+`z_listbox_set_focus()`, and handles Tab into and out of it.
+`sw/apps/settings` puts one between two buttons in its Tab order. A
+focused list draws a ring one pixel outside its frame, so leave 2px.
+
+**It behaves like the file list on purpose.** Row height, selection bar,
+double-click interval, scrollbar inset and keys all match `z_flist_t`,
+so every list in the system feels the same. The file list could be
+rebuilt on top of this one; it has not been, because it works and has
+several callers.
+
 ## The file list
 
 `z_flist_t` is a scrolling, selectable directory listing with a

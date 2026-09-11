@@ -383,4 +383,132 @@ bool z_scrollbar_mouse(z_scrollbar_t *sb, int cx, int cy, uint8_t buttons);
 // still in progress), or if the given point is inside its rect.
 bool z_scrollbar_has_pointer(const z_scrollbar_t *sb, int cx, int cy);
 
+
+// ---------------------------------------------------------------
+// list boxes
+// ---------------------------------------------------------------
+
+/*
+ * A framed, scrolling, single-selection list of text rows, with its own
+ * vertical scrollbar.
+ *
+ * -- items come from a callback --
+ *
+ * The list owns no item storage. The app passes a count and a function
+ * that returns row `i`'s label, and the list asks for exactly the rows
+ * it is drawing. So a 60-city table in .rodata costs nothing extra to
+ * show, a list can present data that lives anywhere, and nothing is
+ * copied or allocated -- the same rule the rest of this file follows.
+ * The returned string only has to survive until the next call.
+ *
+ * -- why not z_flist_t --
+ *
+ * sw/common/zflist.h is a list of FILES: it owns a directory's worth of
+ * names, draws file and folder icons, navigates "..", and links the
+ * filesystem. This is the part of it that is not about files. The two
+ * behave the same way on purpose -- row height, selection bar,
+ * double-click interval, scrollbar placement and keys -- so a list
+ * feels the same wherever it appears. zflist could be rebuilt on top of
+ * this; it has not been, because it works and has callers.
+ *
+ * -- input --
+ *
+ *   click             select
+ *   double-click      activate (Z_LIST_ACTIVATED)
+ *   Up/Down           move one row
+ *   PgUp/PgDn         move one page
+ *   Home/End          first/last row
+ *   Enter             activate
+ *   letters/digits    a letter jumps to the first row starting with
+ *                     it (B: Bangkok); the same letter again moves to
+ *                     the next one (Beijing, Berlin...); keys less
+ *                     than a second apart build a prefix ("mun" finds
+ *                     Munich)
+ *
+ * Selecting does not activate. A list whose selection moves with the
+ * arrow keys must not act on every row it passes -- sw/apps/settings
+ * would write the sdcard once per keystroke. The app acts on
+ * Z_LIST_ACTIVATED.
+ *
+ * -- focus --
+ *
+ * A list box is not in a z_widget_set_t, so the app decides when it has
+ * keyboard focus (see sw/apps/settings, which puts one between two
+ * buttons in its Tab order) and says so with z_listbox_set_focus(). A
+ * focused list draws a ring one pixel outside its frame, like a focused
+ * widget, so leave 2px around it.
+ */
+
+#define Z_LIST_NONE       0	// nothing happened
+#define Z_LIST_SELECTED   1	// the selection moved
+#define Z_LIST_ACTIVATED  2	// the selected row was chosen
+
+typedef const char *(*z_list_label_fn)(void *user, int index);
+
+typedef struct {
+
+	const z_win_t	*win;
+
+	// content-relative rect, frame and scrollbar included
+	int16_t			x, y, w, h;
+
+	int				count;
+	z_list_label_fn	label;
+	void			*user;
+
+	int				sel;		// selected row, or -1
+	int				top;		// first visible row
+	bool			focused;
+
+	z_scrollbar_t	sb;
+
+	// double-click and type-to-find timing
+	int				last_press_row;
+	uint32_t		last_press_tick;
+	char			find[16];
+	uint8_t			find_len;
+	uint32_t		find_tick;
+
+	uint8_t			last_buttons;
+	bool			dirty;
+	bool			ring_drawn;	// so a lost focus ring is erased once
+
+} z_listbox_t;
+
+void z_listbox_init(z_listbox_t *lb, const z_win_t *win);
+
+// Content-relative rect. Call from layout() on every resize.
+void z_listbox_set_geom(z_listbox_t *lb, int x, int y, int w, int h);
+
+// Sets the items. The selection is kept if still in range, else
+// cleared; the view is scrolled to keep it visible.
+void z_listbox_set_items(z_listbox_t *lb, int count, z_list_label_fn label,
+	void *user);
+
+// Selects row `index` (-1 clears) and scrolls it into view. Marks dirty;
+// does not draw.
+void z_listbox_select(z_listbox_t *lb, int index);
+
+int z_listbox_selected(const z_listbox_t *lb);
+
+void z_listbox_set_focus(z_listbox_t *lb, bool focused);
+
+// Everything repaints on the next draw -- after a Z_WM_REDRAW.
+void z_listbox_invalidate(z_listbox_t *lb);
+
+// Draws if dirty, or always with `force`.
+void z_listbox_draw(z_listbox_t *lb, bool force);
+
+// True if the point is inside the list, or its scrollbar is mid-drag.
+bool z_listbox_has_pointer(const z_listbox_t *lb, int cx, int cy);
+
+// One pointer sample, content-relative. Returns Z_LIST_*. Redraws
+// what changed.
+int z_listbox_mouse(z_listbox_t *lb, int cx, int cy, uint8_t buttons);
+
+// One key press. Returns Z_LIST_*; Z_LIST_NONE for a key the list does
+// not use, so the caller can handle it (Tab, Escape). Redraws what
+// changed.
+int z_listbox_key(z_listbox_t *lb, uint32_t keysym);
+
 #endif

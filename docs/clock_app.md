@@ -30,18 +30,28 @@ feedback available is "asked, no idea yet", which is worse than not
 offering the button. `Z_NET_NTP_SYNC` (`sw/common/zntp.h`) still exists
 for anything that genuinely needs to prod it.
 
-## UTC
+## Time zone
 
-Displayed times are UTC, and the digital view says so on screen.
+The RTC counts UTC. The clock shows local time in the zone named by
+`system.rtc.timezone` in `/zeitlos.cfg` (`docs/config.md`), **UTC by
+default**, and the digital view always shows the zone's abbreviation
+under the date -- `UTC` with nothing configured, `CET` or `CEST` with
+`Berlin`.
 
-The label is not decoration. Nothing converts the clock, so anywhere
-other than Britain in winter the displayed hour is deliberately not
-local — and an unlabelled clock showing the wrong hour reads as broken
-rather than as correct-but-elsewhere.
+The label is not decoration. Unconfigured, the displayed hour is
+deliberately not local, and an unlabelled clock showing the wrong hour
+reads as broken rather than as correct-but-elsewhere. Configured, it is
+what tells CET from CEST in the week the clocks change.
 
-The RTC has a timezone-offset register but nothing sets it and nothing
-here reads it. See `docs/rtc.md` on why that is a decision rather than
-an oversight.
+A city carries its own daylight-saving rule from a built-in table --
+there is no zone database, and NTP carries only UTC; see `docs/config.md`
+and `z_tz_cities[]` in `zrtc.c`. A value
+that does not parse shows UTC, labelled UTC, with a console line saying
+why.
+
+`tick()` compares `z_cfg_generation()` on every pass, so after
+`cfg reload` (or Reload file in settings) the new zone is on screen
+within a second, without restarting the app.
 
 ## Three states, not two
 
@@ -117,7 +127,7 @@ through it.
 
 ## Digital view
 
-`HH:MM:SS`, the date, and the word `UTC`, drawn as `z_font_6x12` text
+`HH:MM:SS`, the date, and the zone's abbreviation, drawn as `z_font_6x12` text
 through the hardware glyph blitter.
 
 6x12 rather than the 5x8 most apps use because it is the larger of the

@@ -42,6 +42,8 @@
  */
 
 #include <stdint.h>
+#include <stdbool.h>
+#include <stddef.h>
 
 #include "zrtc.h"
 
@@ -156,4 +158,267 @@ static const char *const month_names_long[12] = {
 const char *z_month_name_long(uint8_t month) {
 	if (month < 1 || month > 12) return "???";
 	return month_names_long[month - 1];
+}
+
+// -- time zones -- see zrtc.h --
+
+#define H(h)      ((int16_t)((h) * 60))
+#define HM(h, m)  ((int16_t)((h) * 60 + ((h) < 0 ? -(m) : (m))))
+
+// Sorted by name -- sw/apps/settings shows it in this order, and
+// sw/common/tests/test_zcfg.c checks that it stays sorted. Standard
+// offsets and rules as of 2026.
+const z_tz_city_t z_tz_cities[] = {
+	{ "Adelaide",     HM(9, 30), Z_DST_AU,   "ACST", "ACDT" },
+	{ "Amsterdam",    H(1),      Z_DST_EU,   "CET",  "CEST" },
+	{ "Anchorage",    H(-9),     Z_DST_US,   "AKST", "AKDT" },
+	{ "Athens",       H(2),      Z_DST_EU,   "EET",  "EEST" },
+	{ "Auckland",     H(12),     Z_DST_NZ,   "NZST", "NZDT" },
+	{ "Bangkok",      H(7),      Z_DST_NONE, NULL,   NULL },
+	{ "Beijing",      H(8),      Z_DST_NONE, NULL,   NULL },
+	{ "Berlin",       H(1),      Z_DST_EU,   "CET",  "CEST" },
+	{ "Brisbane",     H(10),     Z_DST_NONE, "AEST", NULL },
+	{ "Brussels",     H(1),      Z_DST_EU,   "CET",  "CEST" },
+	{ "Bucharest",    H(2),      Z_DST_EU,   "EET",  "EEST" },
+	{ "Buenos Aires", H(-3),     Z_DST_NONE, NULL,   NULL },
+	{ "Chicago",      H(-6),     Z_DST_US,   "CST",  "CDT" },
+	{ "Copenhagen",   H(1),      Z_DST_EU,   "CET",  "CEST" },
+	{ "Denver",       H(-7),     Z_DST_US,   "MST",  "MDT" },
+	{ "Dubai",        H(4),      Z_DST_NONE, NULL,   NULL },
+	{ "Dublin",       H(0),      Z_DST_EU,   "GMT",  "IST" },
+	{ "Halifax",      H(-4),     Z_DST_US,   "AST",  "ADT" },
+	{ "Helsinki",     H(2),      Z_DST_EU,   "EET",  "EEST" },
+	{ "Hong Kong",    H(8),      Z_DST_NONE, "HKT",  NULL },
+	{ "Honolulu",     H(-10),    Z_DST_NONE, "HST",  NULL },
+	{ "Istanbul",     H(3),      Z_DST_NONE, NULL,   NULL },
+	{ "Jakarta",      H(7),      Z_DST_NONE, "WIB",  NULL },
+	{ "Johannesburg", H(2),      Z_DST_NONE, "SAST", NULL },
+	{ "Karachi",      H(5),      Z_DST_NONE, "PKT",  NULL },
+	{ "Kathmandu",    HM(5, 45), Z_DST_NONE, NULL,   NULL },
+	{ "Kolkata",      HM(5, 30), Z_DST_NONE, "IST",  NULL },
+	{ "Kyiv",         H(2),      Z_DST_EU,   "EET",  "EEST" },
+	{ "Lagos",        H(1),      Z_DST_NONE, "WAT",  NULL },
+	{ "Lima",         H(-5),     Z_DST_NONE, NULL,   NULL },
+	{ "Lisbon",       H(0),      Z_DST_EU,   "WET",  "WEST" },
+	{ "London",       H(0),      Z_DST_EU,   "GMT",  "BST" },
+	{ "Los Angeles",  H(-8),     Z_DST_US,   "PST",  "PDT" },
+	{ "Madrid",       H(1),      Z_DST_EU,   "CET",  "CEST" },
+	{ "Manila",       H(8),      Z_DST_NONE, NULL,   NULL },
+	{ "Melbourne",    H(10),     Z_DST_AU,   "AEST", "AEDT" },
+	{ "Mexico City",  H(-6),     Z_DST_NONE, "CST",  NULL },
+	{ "Moscow",       H(3),      Z_DST_NONE, "MSK",  NULL },
+	{ "Mumbai",       HM(5, 30), Z_DST_NONE, "IST",  NULL },
+	{ "Munich",       H(1),      Z_DST_EU,   "CET",  "CEST" },
+	{ "Nairobi",      H(3),      Z_DST_NONE, "EAT",  NULL },
+	{ "New York",     H(-5),     Z_DST_US,   "EST",  "EDT" },
+	{ "Oslo",         H(1),      Z_DST_EU,   "CET",  "CEST" },
+	{ "Paris",        H(1),      Z_DST_EU,   "CET",  "CEST" },
+	{ "Perth",        H(8),      Z_DST_NONE, "AWST", NULL },
+	{ "Phoenix",      H(-7),     Z_DST_NONE, "MST",  NULL },
+	{ "Prague",       H(1),      Z_DST_EU,   "CET",  "CEST" },
+	{ "Reykjavik",    H(0),      Z_DST_NONE, "GMT",  NULL },
+	{ "Rome",         H(1),      Z_DST_EU,   "CET",  "CEST" },
+	{ "Sao Paulo",    H(-3),     Z_DST_NONE, NULL,   NULL },
+	{ "Seoul",        H(9),      Z_DST_NONE, "KST",  NULL },
+	{ "Shanghai",     H(8),      Z_DST_NONE, NULL,   NULL },
+	{ "Singapore",    H(8),      Z_DST_NONE, NULL,   NULL },
+	{ "Stockholm",    H(1),      Z_DST_EU,   "CET",  "CEST" },
+	{ "Sydney",       H(10),     Z_DST_AU,   "AEST", "AEDT" },
+	{ "Taipei",       H(8),      Z_DST_NONE, NULL,   NULL },
+	{ "Tehran",       HM(3, 30), Z_DST_NONE, NULL,   NULL },
+	{ "Tokyo",        H(9),      Z_DST_NONE, "JST",  NULL },
+	{ "Toronto",      H(-5),     Z_DST_US,   "EST",  "EDT" },
+	{ "Vancouver",    H(-8),     Z_DST_US,   "PST",  "PDT" },
+	{ "Vienna",       H(1),      Z_DST_EU,   "CET",  "CEST" },
+	{ "Warsaw",       H(1),      Z_DST_EU,   "CET",  "CEST" },
+	{ "Zurich",       H(1),      Z_DST_EU,   "CET",  "CEST" },
+};
+
+const int z_tz_city_count = (int)(sizeof(z_tz_cities) / sizeof(z_tz_cities[0]));
+
+static char tz_lower(char c) {
+	return (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
+}
+
+static bool tz_same(const char *a, const char *b) {
+	while (*a && *b && tz_lower(*a) == tz_lower(*b)) { a++; b++; }
+	return *a == 0 && *b == 0;
+}
+
+static void tz_copy(char *dst, const char *src) {
+	int n = 0;
+	for (; src && src[n] && n < Z_TZ_NAME_MAX - 1; n++) dst[n] = src[n];
+	dst[n] = 0;
+}
+
+void z_tz_format_offset(int32_t minutes, char *out, int outlen) {
+
+	char buf[Z_TZ_NAME_MAX];
+	int n = 0;
+	uint32_t a = (uint32_t)(minutes < 0 ? -minutes : minutes);
+	uint32_t h = a / 60, m = a % 60;
+
+	buf[n++] = 'U'; buf[n++] = 'T'; buf[n++] = 'C';
+
+	if (minutes != 0) {
+		buf[n++] = minutes < 0 ? '-' : '+';
+		if (h >= 10) buf[n++] = (char)('0' + h / 10);
+		buf[n++] = (char)('0' + h % 10);
+		if (m) {
+			buf[n++] = ':';
+			buf[n++] = (char)('0' + m / 10);
+			buf[n++] = (char)('0' + m % 10);
+		}
+	}
+	buf[n] = 0;
+
+	for (n = 0; buf[n] && n < outlen - 1; n++) out[n] = buf[n];
+	if (outlen > 0) out[n] = 0;
+
+}
+
+static void tz_set_fixed(z_tz_t *tz, int32_t minutes) {
+	tz->std_off = minutes * 60;
+	tz->dst = Z_DST_NONE;
+	tz->city = NULL;
+	z_tz_format_offset(minutes, tz->std_name, Z_TZ_NAME_MAX);
+	tz->dst_name[0] = 0;
+}
+
+// "+2", "-5:30", "+05:30" -> minutes. Up to +-14 hours.
+static bool tz_offset(const char *p, int32_t *minutes) {
+
+	int sign, h = 0, m = 0, digits = 0;
+
+	if (*p != '+' && *p != '-') return false;
+	sign = (*p++ == '-') ? -1 : 1;
+
+	while (*p >= '0' && *p <= '9' && digits < 2) { h = h * 10 + (*p++ - '0'); digits++; }
+	if (!digits) return false;
+
+	if (*p == ':') {
+		p++;
+		if (p[0] < '0' || p[0] > '5' || p[1] < '0' || p[1] > '9') return false;
+		m = (p[0] - '0') * 10 + (p[1] - '0');
+		p += 2;
+	}
+
+	if (*p || h > 14 || (h == 14 && m)) return false;
+
+	*minutes = sign * (h * 60 + m);
+	return true;
+
+}
+
+bool z_tz_parse(const char *s, z_tz_t *tz) {
+
+	int32_t minutes;
+
+	if (!tz) return false;
+	tz_set_fixed(tz, 0);
+	if (!s) return false;
+
+	while (*s == ' ') s++;
+
+	if ((tz_lower(s[0]) == 'u' && tz_lower(s[1]) == 't' && tz_lower(s[2]) == 'c')) {
+		if (s[3] == 0) return true;
+		if (tz_offset(s + 3, &minutes)) { tz_set_fixed(tz, minutes); return true; }
+		return false;
+	}
+
+	for (int i = 0; i < z_tz_city_count; i++) {
+		const z_tz_city_t *c = &z_tz_cities[i];
+		if (!tz_same(s, c->city)) continue;
+
+		tz->std_off = (int32_t)c->std_min * 60;
+		tz->dst = c->dst;
+		tz->city = c;
+		if (c->std_abbr) tz_copy(tz->std_name, c->std_abbr);
+		else z_tz_format_offset(c->std_min, tz->std_name, Z_TZ_NAME_MAX);
+		if (c->dst_abbr) tz_copy(tz->dst_name, c->dst_abbr);
+		else z_tz_format_offset(c->std_min + 60, tz->dst_name, Z_TZ_NAME_MAX);
+		return true;
+	}
+
+	return false;
+
+}
+
+// Midnight UTC of the `week`th (5 = last) `wday` of `mon` in `year`, as
+// seconds since the epoch.
+static int64_t tz_nth_sunday(int32_t year, uint32_t mon, int week) {
+
+	int32_t first = days_from_civil(year, mon, 1);
+	int32_t next = (mon == 12) ? days_from_civil(year + 1, 1, 1)
+		: days_from_civil(year, mon + 1, 1);
+	int32_t dow = (int32_t)(((first % 7) + 7 + 4) % 7);	// 1970-01-01 was a Thursday
+
+	int32_t d = first + (7 - dow) % 7 + (week - 1) * 7;
+	while (d >= next) d -= 7;		// week 5 means "last"
+
+	return (int64_t)d * Z_SECS_PER_DAY;
+
+}
+
+uint32_t z_tz_local(const z_tz_t *tz, uint32_t utc, bool *is_dst) {
+
+	bool dst = false;
+	int32_t off;
+
+	if (!tz) { if (is_dst) *is_dst = false; return utc; }
+
+	off = tz->std_off;
+
+	if (tz->dst != Z_DST_NONE) {
+
+		z_tm_t tm;
+		int64_t std_local = (int64_t)utc + tz->std_off;
+		int64_t start = 0, end = 0;
+		int32_t so = tz->std_off, dso = tz->std_off + 3600;
+
+		z_time_to_tm(std_local < 0 ? 0 : (uint32_t)std_local, &tm);
+
+		// Transition instants in UTC. A local-time rule is given in
+		// the time in force just before the change: standard time for
+		// the start, daylight time for the end.
+		switch (tz->dst) {
+		case Z_DST_EU:
+			start = tz_nth_sunday(tm.year, 3, 5) + 3600;
+			end = tz_nth_sunday(tm.year, 10, 5) + 3600;
+			break;
+		case Z_DST_US:
+			start = tz_nth_sunday(tm.year, 3, 2) + 2 * 3600 - so;
+			end = tz_nth_sunday(tm.year, 11, 1) + 2 * 3600 - dso;
+			break;
+		case Z_DST_AU:
+			start = tz_nth_sunday(tm.year, 10, 1) + 2 * 3600 - so;
+			end = tz_nth_sunday(tm.year, 4, 1) + 3 * 3600 - dso;
+			break;
+		case Z_DST_NZ:
+			start = tz_nth_sunday(tm.year, 9, 5) + 2 * 3600 - so;
+			end = tz_nth_sunday(tm.year, 4, 1) + 3 * 3600 - dso;
+			break;
+		default:
+			break;
+		}
+
+		if (start < end)
+			dst = (int64_t)utc >= start && (int64_t)utc < end;	// north
+		else
+			dst = (int64_t)utc >= start || (int64_t)utc < end;	// south
+
+		if (dst) off = dso;
+
+	}
+
+	if (is_dst) *is_dst = dst;
+
+	int64_t local = (int64_t)utc + off;
+	return local < 0 ? 0 : (uint32_t)local;
+
+}
+
+const char *z_tz_name(const z_tz_t *tz, bool is_dst) {
+	if (!tz) return "UTC";
+	return (is_dst && tz->dst != Z_DST_NONE) ? tz->dst_name : tz->std_name;
 }

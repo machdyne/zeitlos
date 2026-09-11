@@ -36,6 +36,7 @@ For a diagram of all of it -- buses, arbiters, the address map, clocks, interrup
 
  - Pre-emptive multitasking
  - Flat memory model with virtual address space for apps
+ - Text [configuration file](docs/config.md) (`/zeitlos.cfg`), loaded at boot and reloadable
  - FAT filesystem, on MicroSD and on an optional [RAM disk](docs/ramdisk.md)
  - [Core apps in flash](docs/flash_apps.md) -- boots to a desktop with no sdcard
  - Object-based interprocess [messaging](docs/messaging.md), streaming and [ports](docs/ports.md)
@@ -60,8 +61,15 @@ With the MTU, there is no need for position independent code or complicated addr
 | kernel | Kernel + kernel shell (serial console) |
 | [wm](docs/window_manager.md) | Window manager + dock |
 | [net](docs/networking.md) | Networking server |
+| [term](docs/terminal.md) | Terminal emulator (VT100; start panel, scrollback; connects to shells and services) |
+
+#### Shells
+
+On the sdcard, started at boot when a card is present. A `term` window's start panel connects to either `repl` or [`posix`](docs/posix.md) (below).
+
+| App | Description |
+|-----|-------------|
 | repl | App server + [Lisp interpreter (subset of R4RS Scheme)](https://github.com/machdyne/ms) |
-| [term](docs/terminal.md) | Terminal emulator (connects to services; VT100 emulation) |
 
 #### Additional Apps
 
@@ -79,7 +87,7 @@ With the MTU, there is no need for position independent code or complicated addr
 | [info](docs/info_app.md) | System info |
 | [clock](docs/clock_app.md) | Analog and digital clock |
 | [cal](docs/cal_app.md) | Month calendar |
-| [settings](docs/settings_app.md) | System settings |
+| [settings](docs/settings_app.md) | System settings; editor for [`/zeitlos.cfg`](docs/config.md) |
 | [play](docs/play_app.md) | WAV/AU/RAW audio file player |
 | [track](docs/track_app.md) | MOD audio file player |
 | [mmod](docs/mmod.md) | [MMOD](https://github.com/machdyne/mmod) reader/writer |
@@ -88,6 +96,9 @@ With the MTU, there is no need for position independent code or complicated addr
 | [gamedemo](docs/gamedemo.md) | 2D side-scrolling platformer game |
 | space3d | First-person 3D space shooter game |
 | [gpu3d](docs/gpu3d_app.md) | Spinning 3D cube demo + STL viewer |
+| [posix](docs/posix.md) | POSIX compatibility layer |
+| [zcc](docs/zcc.md) | C compiler |
+| vi | Port of the [nextvi](https://github.com/kyx0r/nextvi) terminal text editor |
 
 ### Boards
 
@@ -117,10 +128,12 @@ The following boards are currently partially supported or untested:
 
 ## Usage
 
-**An sdcard is optional.** The core apps (`wm`, `net`, `repl`, `term`)
-are programmed into flash alongside the kernel, so a freshly flashed
-board boots straight to the graphical desktop with nothing else
-attached. See [Core apps in flash](#core-apps-in-flash) below.
+**An sdcard is optional.** The core apps (`wm`, `net`, `term`) are
+programmed into flash alongside the kernel, so a freshly flashed board
+boots straight to the graphical desktop with nothing else attached. The
+shells, `repl` and `posix`, come from the card -- without one, `term`
+still reaches telnet, ssh and serial through its Open bar (F11). See
+[Core apps in flash](#core-apps-in-flash) below.
 
 ### Quick start: prebuilt images
 

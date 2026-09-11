@@ -174,3 +174,15 @@ Z_MKSYSCALL(FS_TRUNCATE, k_fs_truncate)
 //
 // Args are z_proc_status_args_t (sw/common/zproc.h).
 Z_MKSYSCALL(PROC_STATUS, k_proc_status)
+
+// -- configuration: /zeitlos.cfg --
+//
+// The kernel reads the file at boot, before init(), and keeps the
+// settings; apps read them with these. GET with a NULL key reports just
+// the generation, which increments on every (re)load. RELOAD reaches
+// FatFs, so it is in kernel.c's k_syscall_touches_fs(). Args are
+// z_cfg_get_args_t / z_cfg_entry_args_t / z_cfg_reload_args_t
+// (sw/common/zcfg.h). See docs/config.md.
+Z_MKSYSCALL(CFG_GET, k_cfg_get)
+Z_MKSYSCALL(CFG_ENTRY, k_cfg_entry)
+Z_MKSYSCALL(CFG_RELOAD, k_cfg_reload)

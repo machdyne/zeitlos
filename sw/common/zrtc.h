@@ -219,20 +219,19 @@ static inline void z_rtc_invalidate(void) {
 //
 // The RTC counts UTC, NTP delivers UTC, z_time_to_tm() below breaks
 // down whatever it is given without applying anything, and
-// sw/apps/clock displays UTC with the word "UTC" on screen. There is
-// no conversion layer and no local-time API.
+// The RTC counts UTC, and so does everything that stores or compares a
+// time. Local time is a DISPLAY concern: sw/apps/clock and sw/apps/cal
+// convert with z_tz_*() below, using system.rtc.timezone from
+// /zeitlos.cfg (docs/config.md), and label what they show.
 //
-// That is a decision, not an omission. A timezone offset is easy; the
-// rules that produce the right offset are not, and there is no zone
-// database on this system and nothing in NTP that carries one. So the
-// choice was between a correct time honestly labelled and a plausible
-// time that is silently an hour out for half the year, which is a
-// worse thing to have on a wall clock than an unfamiliar one.
+// There is still no zone database. The earlier position here was that a
+// plausible time silently an hour out for half the year is worse than
+// UTC honestly labelled -- which is exactly right, and is why the
+// choice is a CITY with its own DST rule (z_tz_cities below) rather
+// than a bare offset, and why the default stays UTC.
 //
-// reg_rtc_tz above is the storage for when this is revisited. It is
-// deliberately not wrapped in accessors yet: a getter nothing calls
-// and a setter nothing sets is exactly the API that rots into being
-// wrong.
+// reg_rtc_tz above is still unused: the conversion is done in software
+// per app, so there is nothing to keep in a register.
 
 // -- calendar (sw/common/zrtc.c) --
 
@@ -268,6 +267,86 @@ uint32_t z_tm_to_time(const z_tm_t *tm);
 // without checking first.
 const char *z_wday_name(uint8_t wday);
 const char *z_month_name(uint8_t month);
+
+// -- time zones --
+//
+// A zone is either a CITY from the built-in table below or a fixed
+// offset, parsed by z_tz_parse():
+//
+//   Berlin  New York  Sydney  Kolkata      a city: its offset and its
+//                                          daylight-saving rule
+//   UTC  UTC+2  UTC-5  UTC+5:30            a fixed offset, no DST;
+//                                          UTC+2 is two hours AHEAD
+//
+// City names match case-insensitively. This is system.rtc.timezone in
+// /zeitlos.cfg (docs/config.md), and sw/apps/settings offers the table
+// as a list.
+//
+// -- why a table rather than a zone database --
+//
+// There is no tzdata on this system and NTP carries only UTC, so NTP
+// cannot correct for daylight saving: a fixed UTC+1 in Berlin is an
+// hour wrong from March to October. The table gives each city one of a
+// handful of DST rules, and the rules are what make the clocks change
+// by themselves.
+//
+// Four rules cover every city listed: the EU (all at 01:00 UTC on the
+// last Sundays of March and October), the US and Canada, south-east
+// Australia and New Zealand. Places whose rules are irregular or keep
+// changing -- Chile, Egypt, Israel, Morocco, Paraguay -- are left out
+// on purpose rather than listed with a rule that will be wrong; a
+// fixed UTC+n is available for them.
+//
+// The cost of a table is that it is compiled in: when a country changes
+// its rules, this file changes. That is true of any zone database; this
+// one just has no automatic updates.
+
+typedef enum {
+	Z_DST_NONE = 0,
+	Z_DST_EU,	// last Sun Mar 01:00 UTC .. last Sun Oct 01:00 UTC
+	Z_DST_US,	// 2nd Sun Mar 02:00 local .. 1st Sun Nov 02:00 local
+	Z_DST_AU,	// 1st Sun Oct 02:00 local .. 1st Sun Apr 03:00 local (south)
+	Z_DST_NZ,	// last Sun Sep 02:00 local .. 1st Sun Apr 03:00 local (south)
+} z_dst_rule_t;
+
+typedef struct {
+	const char	*city;
+	int16_t		std_min;	// standard offset, minutes EAST of UTC
+	uint8_t		dst;		// z_dst_rule_t; DST is always +1 hour
+	const char	*std_abbr;	// "CET", or NULL to show "UTC+1"
+	const char	*dst_abbr;	// "CEST", or NULL
+} z_tz_city_t;
+
+// Sorted by city name. About 60 entries, ~1.5KB of .rodata, and
+// --gc-sections drops it from anything that never parses a zone.
+extern const z_tz_city_t z_tz_cities[];
+extern const int z_tz_city_count;
+
+#define Z_TZ_NAME_MAX 12
+
+typedef struct {
+	int32_t	std_off;	// seconds EAST of UTC: local = utc + off
+	uint8_t	dst;		// z_dst_rule_t
+	char	std_name[Z_TZ_NAME_MAX];
+	char	dst_name[Z_TZ_NAME_MAX];
+	const z_tz_city_t *city;	// NULL for a fixed offset
+} z_tz_t;
+
+// Parses a city name or UTC+h[:mm]. On failure `tz` is set to UTC and
+// false is returned, so the result is always usable -- and the caller
+// should say the setting was not understood, since UTC labelled "UTC"
+// is honest and a silent fallback that looks local is not.
+bool z_tz_parse(const char *s, z_tz_t *tz);
+
+// Local seconds for `utc`. *is_dst (may be NULL) says which name
+// applies. Clamps to 0 rather than wrapping below the epoch.
+uint32_t z_tz_local(const z_tz_t *tz, uint32_t utc, bool *is_dst);
+
+// What to show: "CET"/"CEST", "UTC", "UTC+5:30".
+const char *z_tz_name(const z_tz_t *tz, bool is_dst);
+
+// Formats a signed offset in minutes as "UTC", "UTC+2" or "UTC-9:30".
+void z_tz_format_offset(int32_t minutes, char *out, int outlen);
 
 // "January".."December", same contract, "???" out of range.
 //

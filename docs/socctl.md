@@ -107,7 +107,7 @@ the register.
 rather than a bool or a counter:
 
 ```c
-#define WM_BUSY_STARTUP   (1u << 0)   // core services not up yet
+#define WM_BUSY_STARTUP   (1u << 0)   // init has not finished loading apps
 ```
 
 A bool breaks as soon as two things are busy at once -- whichever
@@ -123,14 +123,12 @@ place that touches the register.
 
 ### `WM_BUSY_STARTUP` and the dock
 
-`term` connects to `repl` over a port as soon as it starts, and that
-connect has a timeout. Launched before `repl` has registered itself, it
-comes up as a blank window with no indication why.
-
-So `wm` sets `WM_BUSY_STARTUP` at startup and clears it once both
-`net0` and `repl0` appear in the pid registry -- checked by name rather
-than by fixed pid, because registration is what actually signals "up
-and listening". While busy, `dock_launch()` refuses:
+`wm` sets `WM_BUSY_STARTUP` at startup and clears it once **`init0`**
+appears in the pid registry. `sw/os/sh.c`'s `init()` registers that name
+as its very last step -- after `repl` and `posix` have been loaded off
+the card and `net` has been started -- so it means exactly "boot has
+finished loading apps", and the dock does not launch anything into the
+middle of that. While busy, `dock_launch()` refuses:
 
 ```
 wm: dock: busy, not launching 'term' yet
@@ -138,6 +136,19 @@ wm: dock: busy, not launching 'term' yet
 
 Both dock paths (mouse click and keyboard Enter) go through
 `dock_launch()`, so the gating covers each.
+
+**It used to wait for `net0` and `repl0` instead**, because `term`
+connected to `repl` the moment it started and a term launched before
+repl was listening came up blank. term no longer connects to anything
+by itself (`docs/terminal.md`), and `repl` is no longer in flash -- so
+on a board with no card `repl0` would never appear and the cursor would
+have stayed Z forever. The same was already true of `net0` on a board
+built without `net`.
+
+**If `wm` was started by hand** (`run wm`, no `init`), there is no
+`init0`. After 20 seconds (`WM_BOOT_WAIT_MAX_TICKS`) the dock enables
+anyway, with a console line saying why. A real boot takes a small
+fraction of that -- `repl` and `posix` together are ~330KB on the card.
 
 ## Virtual phosphor modes
 
@@ -257,9 +268,8 @@ because the cursor is the only visible effect and a silent failure
 looks identical to "the feature doesn't work":
 
 ```
-wm: net0 up
-wm: repl0 up
-wm: core services ready
+init: done (registered init0)
+wm: init0 registered -- boot finished
 wm: busy=0x0 cursor=X
 ```
 
@@ -275,6 +285,7 @@ wm: busy=0x0 cursor=X
   monitor is showing it.
 - `READBACK MISMATCH` -- the write isn't landing. Check the address
   masking above.
-- No `net0 up` / `repl0 up` line -- that service never registered, so
-  `WM_BUSY_STARTUP` is never cleared and the cursor stays Z forever.
-  Check `ps` to see whether the process is even running.
+- No `init0 registered` line, and the Z cursor lasts 20 seconds before
+  `no init0 after 20s -- enabling the dock anyway` -- init never
+  finished, or wm was started without it. The serial console shows how
+  far init got.

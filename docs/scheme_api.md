@@ -126,7 +126,8 @@ every existing `bi_*` builtin already inside `ms.c`.
 ### What stays a builtin, and why
 
 `F12` is worth knowing about and is mentioned in both repl's connect
-banner and `help`: `term` intercepts it locally, before anything
+banner and `help` (it disconnects to term's start panel, where REPL
+returns here): `term` intercepts it locally, before anything
 reaches a port (`handle_key_event()` in `term.c`), so it works even
 when term is relaying raw bytes to a remote that has no quit command
 of its own -- which is exactly the situation you need it in, and

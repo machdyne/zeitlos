@@ -148,26 +148,37 @@ arbitrated between processes (see `docs/gpu_blitter.md` on the same
 hazard). The retry loop has neither problem and costs one extra load in
 the overwhelmingly common case.
 
-### No timezones: everything is UTC
+### Time zones: UTC underneath, rules on top
 
-The RTC counts UTC, NTP delivers UTC, `z_time_to_tm()` breaks down
-whatever it is given without applying anything, and `sw/apps/clock`
-displays UTC with the word `UTC` on screen. There is no conversion layer
-and no local-time API.
+The RTC counts UTC, NTP delivers UTC, and `z_time_to_tm()` breaks down
+whatever it is given without applying anything. Everything that stores
+or compares a time stays UTC.
 
-That is a decision, not an omission. A timezone *offset* is easy; the
-rules that produce the right offset are not, and there is no zone
-database on this system and nothing in NTP that carries one. So the
-choice was between a correct time honestly labelled and a plausible time
-that is silently an hour out for half the year — and the second is a
-worse thing to have on a wall clock than an unfamiliar one.
+Local time is a **display** concern. `sw/apps/clock` and `sw/apps/cal`
+convert with `z_tz_local()` (`sw/common/zrtc.h`) using
+`system.rtc.timezone` from `/zeitlos.cfg` (`docs/config.md`), and always
+show the zone's abbreviation. The default is still `UTC`.
+
+The original position here still holds: there is no zone database on
+this system and nothing in NTP carries one, and a plausible time that is
+silently an hour out for half the year is worse than a correct time
+honestly labelled. That is why the setting is a **city** from a small
+built-in table (`z_tz_cities[]`, `sw/common/zrtc.c`) rather than a bare
+offset: each city carries one of four daylight-saving rules (EU,
+US/Canada, south-east Australia, New Zealand), so the clocks change by
+themselves. Places with irregular rules are left out rather than listed
+wrongly, and a fixed `UTC+n` remains available.
+`sw/common/tests/test_zcfg.c` checks every rule against published 2026
+transitions in both hemispheres. See `docs/config.md`.
 
 The `TZ` register at `0x7000_0314` is the storage for when this is
 revisited: 16 bits of signed minutes east, sign-extended on read.
 Minutes rather than hours because several real zones are not whole hours
 off UTC (India is +5:30, Nepal +5:45, the Chatham Islands +12:45).
 
-**Nothing reads or writes it**, and `zrtc.h` deliberately wraps it in no
+**Nothing reads or writes it** -- the time-zone conversion above is done
+in software per app, from the config file, and needs no register -- and
+`zrtc.h` deliberately wraps it in no
 accessors — a getter nothing calls and a setter nothing sets is exactly
 the API that rots into being wrong. It is implemented in gateware rather
 than left out so the slot is already in flashed bitstreams when a

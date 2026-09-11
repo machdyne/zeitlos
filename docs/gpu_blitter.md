@@ -1224,6 +1224,16 @@ not a flag: several lines can scroll between two renders, and the
 renderer needs the total. "Take" because reading clears it — leaving
 the count for a second caller would shift the screen twice.
 
+*Later:* term's blit sat behind `if (0 && ...)` for a while after this,
+pending the stale-ack fix below, and is live again. It now also scrolls
+the **scrollback view** (Shift+Up/PgUp, the scrollbar), and asks
+`z_fb_hw_scroll_allowed()` before blitting — `z_fb_hw_scroll()` refuses
+silently for a partly covered window, and shifting the shadow for a blit
+that did not happen is the stale-text failure above. See
+`docs/terminal.md`, "The hardware scroll". `text` does not check yet:
+a partly covered `text` window that scrolls draws only the rows that
+scrolled in.
+
 **`text`** — a `scroll_repaint()` kept deliberately separate from
 `repaint()`. `repaint()` runs on `Z_WM_REDRAW` after wm has cleared the
 region, so it must not assume anything about what is on screen, which

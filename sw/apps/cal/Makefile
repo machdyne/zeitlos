@@ -45,7 +45,7 @@ LDSCRIPT = ../../common/riscv-app.ld
 # host -- see tests/cal_test.c. It has no date arithmetic of its own;
 # that is zrtc.o, which is the same code the kernel and clock use.
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zrtc.o \
-	cal_core.o cal.o
+	zcfg.o cal_core.o cal.o
 
 cal: cal.elf cal.bin
 
@@ -54,6 +54,10 @@ zeitlos.o:
 
 zobj.o:
 	$(CC) $(CFLAGS) -c ../../common/zobj.c -o zobj.o
+
+# system.rtc.timezone -- docs/config.md
+zcfg.o:
+	$(CC) $(CFLAGS) -c ../../common/zcfg.c -o zcfg.o
 
 zgfx.o:
 	$(CC) $(CFLAGS) -c ../../common/zgfx.c -o zgfx.o
@@ -116,11 +120,16 @@ HOSTCC ?= cc
 CORESRC = ../../common/zrtc.c cal_core.c
 
 # PANELSRC adds the real window and widget layers, for the two tests
+# that link cal.c -- and zcfg.c, which cal.c calls for
+# system.rtc.timezone (docs/config.md). With no kernel behind them the
+# config calls read as "not set", so these still exercise UTC.
+#
 # that do include zrender.h and therefore do have the software pixel
 # primitives. zgfx.c is deliberately absent -- see zrender.h's header
 # for why the plotting is stubbed and the layout is not.
 PANELSRC = $(CORESRC) ../../common/zwin.c ../../common/zwidget.c \
-	../../common/zfont_data.c ../../common/zobj.c ../../common/zeitlos.c
+	../../common/zfont_data.c ../../common/zobj.c ../../common/zeitlos.c \
+	../../common/zcfg.c
 
 HOSTFLAGS = -std=gnu99 -Wall -no-pie -I ../../common
 

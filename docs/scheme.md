@@ -194,7 +194,8 @@ data over one that already exists. `term.c`'s own connection logic
 (previously inline in `main()`, only ever run once at startup) is now
 `connect_port()`, a small reusable function called both at startup
 (`connect_port("repl0", Z_PID_REPL)`, with the well-known default's
-fixed-pid fallback) and on `Z_TERM_SET_PORT` (`connect_port(name, 0)`
+fixed-pid fallback -- since removed: term now starts disconnected, see
+`docs/terminal.md`) and on `Z_TERM_SET_PORT` (`connect_port(name, 0)`
 -- no fallback for a caller-specified name, if the lookup fails
 there's nothing sensible to guess). `repl` closes its own end of the
 connection proactively too (same "end this session" signal `quit`

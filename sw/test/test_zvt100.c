@@ -205,6 +205,143 @@ static int test_dirty_tracking(void) {
 	TEST_END();
 }
 
+
+/* -- scrollback history -- */
+
+/* Text of document line `doc` with trailing blanks dropped, reading
+ * through the public API only. */
+static const char *doc_text(const vt_screen_t *vt, int doc) {
+	static char buf[VT_COLS + 1];
+	int last = -1;
+	for (int c = 0; c < VT_COLS; c++) {
+		buf[c] = VT_PACK_CH(vt_doc_cell(vt, doc, c));
+		if (buf[c] != ' ') last = c;
+	}
+	buf[last + 1] = 0;
+	return buf;
+}
+
+static void feed_numbered(vt_screen_t *vt, int from, int to) {
+	char line[16];
+	for (int i = from; i <= to; i++) {
+		snprintf(line, sizeof(line), "L%d\r\n", i);
+		feed_str(vt, line);
+	}
+}
+
+static int test_history_detached(void) {
+	TEST_START("no history attached: scrolling works and keeps nothing");
+	vt_screen_t vt;
+	vt_init(&vt);
+	feed_numbered(&vt, 0, 40);
+	TEST_ASSERT(vt_history_count(&vt) == 0, "count stays 0");
+	TEST_ASSERT(vt_history_pushed(&vt) == 0, "pushed stays 0");
+	TEST_ASSERT(strcmp(doc_text(&vt, 0), "L17") == 0, "doc 0 is screen row 0");
+	TEST_END();
+}
+
+static int test_history_linefeed_pushes(void) {
+	TEST_START("a linefeed scroll pushes the departing top row");
+	static uint8_t buf[10 * VT_COLS];
+	vt_screen_t vt;
+	vt_init(&vt);
+	vt_history_attach(&vt, buf, 10);
+	/* 25 rows hold L0..L23 plus the blank row the last CRLF opened;
+	 * L24's CRLF is the first to scroll. */
+	feed_numbered(&vt, 0, 23);
+	TEST_ASSERT(vt_history_count(&vt) == 0, "nothing pushed while the screen fills");
+	feed_numbered(&vt, 24, 26);
+	TEST_ASSERT(vt_history_count(&vt) == 3, "three lines pushed");
+	TEST_ASSERT(strcmp(doc_text(&vt, 0), "L0") == 0, "oldest is L0");
+	TEST_ASSERT(strcmp(doc_text(&vt, 2), "L2") == 0, "newest is L2");
+	TEST_ASSERT(strcmp(doc_text(&vt, 3), "L3") == 0, "doc 3 is screen row 0");
+	TEST_ASSERT(vt.scrolls == 3, "scroll counter agrees");
+	TEST_END();
+}
+
+static int test_history_wraps_and_evicts(void) {
+	TEST_START("the ring evicts the oldest line once full");
+	static uint8_t buf[10 * VT_COLS];
+	vt_screen_t vt;
+	vt_init(&vt);
+	vt_history_attach(&vt, buf, 10);
+	feed_numbered(&vt, 0, 23 + 37);		/* 37 pushes into a 10-line ring */
+	TEST_ASSERT(vt_history_count(&vt) == 10, "count capped at 10");
+	TEST_ASSERT(vt_history_pushed(&vt) == 37, "pushed counts every line");
+	TEST_ASSERT(strcmp(doc_text(&vt, 0), "L27") == 0, "oldest retained is L27");
+	TEST_ASSERT(strcmp(doc_text(&vt, 9), "L36") == 0, "newest is L36");
+	TEST_ASSERT(strcmp(doc_text(&vt, 10), "L37") == 0, "then the screen");
+	TEST_END();
+}
+
+static int test_history_absolute_ids(void) {
+	TEST_START("absolute ids stay attached to their text");
+	static uint8_t buf[10 * VT_COLS];
+	vt_screen_t vt;
+	uint8_t b;
+	vt_init(&vt);
+	vt_history_attach(&vt, buf, 10);
+	feed_numbered(&vt, 0, 23 + 5);
+	/* screen row 4 holds L9; its id is pushed + 4 */
+	uint32_t id = vt_history_pushed(&vt) + 4;
+	TEST_ASSERT(vt_id_cell(&vt, id, 1, &b) && VT_PACK_CH(b) == '9', "row 4 is L9");
+	feed_numbered(&vt, 29, 35);			/* L9 scrolls into history */
+	TEST_ASSERT(vt_id_cell(&vt, id, 0, &b) && VT_PACK_CH(b) == 'L', "same id, same line (L)");
+	TEST_ASSERT(vt_id_cell(&vt, id, 1, &b) && VT_PACK_CH(b) == '9', "same id, same line (9)");
+	feed_numbered(&vt, 36, 60);			/* and out of the ring */
+	TEST_ASSERT(!vt_id_cell(&vt, id, 0, &b), "evicted id reports false");
+	TEST_ASSERT(!vt_id_cell(&vt, vt_history_pushed(&vt) + VT_ROWS, 0, &b),
+		"below the screen reports false");
+	TEST_END();
+}
+
+static int test_history_dl_does_not_push(void) {
+	TEST_START("DL at row 0 scrolls but does not save (editor scrolling)");
+	static uint8_t buf[10 * VT_COLS];
+	vt_screen_t vt;
+	vt_init(&vt);
+	vt_history_attach(&vt, buf, 10);
+	feed_str(&vt, "\x1b[1;1Htop line");
+	feed_str(&vt, "\x1b[1;1H\x1b[3M");
+	TEST_ASSERT(vt.scrolls == 3, "three scrolls counted for the renderer");
+	TEST_ASSERT(vt_history_count(&vt) == 0, "nothing saved");
+	TEST_END();
+}
+
+static int test_history_erase_display(void) {
+	TEST_START("ED 2 keeps history; ED 3 clears it and not the screen");
+	static uint8_t buf[10 * VT_COLS];
+	vt_screen_t vt;
+	vt_init(&vt);
+	vt_history_attach(&vt, buf, 10);
+	feed_numbered(&vt, 0, 23 + 4);
+	feed_str(&vt, "\x1b[2J");
+	TEST_ASSERT(vt_history_count(&vt) == 4, "ED 2 left history alone");
+	feed_str(&vt, "\x1b[1;1Hkeep");
+	feed_str(&vt, "\x1b[3J");
+	TEST_ASSERT(vt_history_count(&vt) == 0, "ED 3 emptied history");
+	TEST_ASSERT(vt_history_pushed(&vt) == 4, "pushed does not go backwards");
+	TEST_ASSERT(vt.cells[0][0].ch == 'k', "ED 3 left the screen alone");
+	TEST_END();
+}
+
+static int test_history_packs_reverse(void) {
+	TEST_START("reverse video survives the trip into history");
+	static uint8_t buf[4 * VT_COLS];
+	vt_screen_t vt;
+	vt_init(&vt);
+	vt_history_attach(&vt, buf, 4);
+	feed_str(&vt, "\x1b[7mR\x1b[0mn~\r\n");
+	for (int i = 0; i < VT_ROWS - 1; i++) feed_str(&vt, "\r\n");
+	TEST_ASSERT(vt_history_count(&vt) == 1, "one line pushed");
+	uint8_t a = vt_doc_cell(&vt, 0, 0), b = vt_doc_cell(&vt, 0, 1);
+	uint8_t c = vt_doc_cell(&vt, 0, 2);
+	TEST_ASSERT(VT_PACK_CH(a) == 'R' && VT_PACK_REV(a), "R is reverse");
+	TEST_ASSERT(VT_PACK_CH(b) == 'n' && !VT_PACK_REV(b), "n is normal");
+	TEST_ASSERT(VT_PACK_CH(c) == '~', "0x7e packs losslessly");
+	TEST_END();
+}
+
 static void print_test_summary(void) {
 	printf("=== Test Summary ===\n");
 	printf("Tests run: %d\n", tests_run);
@@ -228,6 +365,13 @@ int main(void) {
 	test_erase_in_display();
 	test_scrolling();
 	test_dirty_tracking();
+	test_history_detached();
+	test_history_linefeed_pushes();
+	test_history_wraps_and_evicts();
+	test_history_absolute_ids();
+	test_history_dl_does_not_push();
+	test_history_erase_display();
+	test_history_packs_reverse();
 
 	print_test_summary();
 	printf("\n");

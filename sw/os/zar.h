@@ -9,7 +9,7 @@
  *
  * -- Why --
  *
- * The core apps (wm, net, repl, term) used to live only on the SD
+ * The core apps (wm, net, term) used to live only on the SD
  * card, which meant a freshly flashed board booted to a shell and
  * nothing else. Two costs, and the second is the bigger one:
  *
@@ -23,6 +23,11 @@
  * So the core apps are also programmed into flash, immediately after
  * the kernel, and `make flash` writes them as part of a normal build.
  * An SD card becomes optional rather than required.
+ *
+ * `repl` was a core app until the shells moved to the card: it and
+ * `posix` are what a term window connects to, init() starts both from
+ * the card when one is present, and term's start panel says when they
+ * are not there. See docs/flash_apps.md.
  *
  * -- How --
  *

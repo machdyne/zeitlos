@@ -898,6 +898,10 @@ static bool copy_region_allows_rect(int x, int y, int w, int h) {
 
 }
 
+bool z_fb_hw_scroll_allowed(int x, int y, int w, int h) {
+	return copy_region_allows_rect(x, y, w, h);
+}
+
 void z_fb_hw_scroll(int x, int y, int w, int h, int dy) {
 
 	// See copy_region_allows_rect(): a partially occluded window must

@@ -59,13 +59,14 @@
  * network as with one. Only the highlight depends on the RTC, so
  * everything else stays fully live when there isn't one.
  *
- * -- UTC --
+ -- time zone --
  *
- * "Today" is today in UTC, matching the RTC, the clock app and
- * everything else in the system (docs/rtc.md). West of Greenwich the
- * highlight therefore moves several hours before local midnight. The
- * status line says UTC so that reads as correct-but-elsewhere rather
- * than broken -- the same reasoning as the clock's own label.
+ * "Today" is today in the zone system.rtc.timezone names in
+ * /zeitlos.cfg (docs/config.md), UTC by default -- the same conversion
+ * the clock app uses (z_tz_*(), zrtc.h). The status line ends with the
+ * zone's abbreviation, so with nothing configured it still says UTC and
+ * a highlight that moves hours before local midnight reads as
+ * correct-but-elsewhere rather than broken.
  */
 
 #include <stdio.h>
@@ -83,6 +84,7 @@
 #include "../../common/zkbd.h"
 #include "../../common/zwidget.h"
 
+#include "../../common/zcfg.h"		// system.rtc.timezone
 #include "cal_core.h"
 
 // -- geometry --
@@ -202,8 +204,30 @@ static int text_w5(const char *s) {
 
 // -- reading the clock --
 
-// Refreshes today_* from the RTC. Returns the current UTC day index,
-// or -1 if the date is not known.
+static z_tz_t tz;
+static uint32_t tz_generation = 0xFFFFFFFFu;
+static bool tz_dst;
+
+// Re-reads the zone when the config generation has moved. Cheap enough
+// to call on every clock check.
+static void tz_refresh(void) {
+
+	uint32_t gen = z_cfg_generation();
+	char v[Z_CFG_VAL_MAX];
+
+	if (gen == tz_generation) return;
+	tz_generation = gen;
+
+	z_cfg_get("system.rtc.timezone", v, sizeof(v));
+	if (!z_tz_parse(v, &tz))
+		printf("cal: system.rtc.timezone '%s' not understood -- using UTC "
+			"(see docs/config.md)\n", v);
+
+}
+
+// Refreshes today_* from the RTC. Returns the current LOCAL day index,
+// or -1 if the date is not known. A zone change moves the index too,
+// which is what makes check_clock() redraw after `cfg reload`.
 static int32_t read_today(void) {
 
 	uint32_t utc;
@@ -215,7 +239,8 @@ static int32_t read_today(void) {
 	if (!rtc_ok) return -1;
 	if (!z_rtc_valid()) return -1;
 
-	utc = z_rtc_seconds();
+	tz_refresh();
+	utc = z_tz_local(&tz, z_rtc_seconds(), &tz_dst);
 
 	// A timestamp outside the displayable range cannot come from a
 	// sane sync, but it can come from a garbage one, and a today
@@ -445,9 +470,10 @@ static void draw_status(void) {
 		// west of Greenwich this rolls over hours before local
 		// midnight, and an unlabelled date that disagrees with the
 		// wall reads as broken rather than as correct-but-elsewhere.
-		snprintf(buf, sizeof(buf), "Today %s %d %s %04ld UTC",
+		snprintf(buf, sizeof(buf), "Today %s %d %s %04ld %s",
 			z_wday_name(today_wday), (int)today_day,
-			z_month_name(today_month), (long)today_year);
+			z_month_name(today_month), (long)today_year,
+			z_tz_name(&tz, tz_dst));
 		s = buf;
 	}
 

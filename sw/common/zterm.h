@@ -54,9 +54,9 @@
  * which does notify that peer, see zport.c) before attempting the
  * new one, exactly the same connect_port() helper it uses for its
  * own startup connection -- if the new name can't be found or
- * doesn't answer, term is left in the same "local echo only"
- * fallback state a failed startup connection already leaves it in,
- * NOT still connected to whatever it just left.
+ * doesn't answer, term is left disconnected on its start panel, with
+ * the reason on the panel's status line -- NOT still connected to
+ * whatever it just left.
  */
 
 #define Z_TERM_SET_PORT   140

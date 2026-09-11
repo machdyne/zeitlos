@@ -181,7 +181,7 @@ int main(void) {
 
 				snprintf(msg_buf, sizeof(msg_buf),
 					"serial: UART1 at %ld baud, 8N1, no flow control. "
-					"F12 returns to repl.\r\n",
+					"F12 disconnects.\r\n",
 					(long)cur_baud);
 				say(msg_buf);
 

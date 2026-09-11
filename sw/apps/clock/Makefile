@@ -38,12 +38,16 @@ LDSCRIPT = ../../common/riscv-app.ld
 # document of any kind. zrtc.o is the one thing here that isn't in
 # every app's list -- it's the calendar arithmetic behind the date
 # line and the hour hand.
-OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zrtc.o clock.o
+OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zrtc.o zcfg.o clock.o
 
 clock: clock.elf clock.bin
 
 zeitlos.o: ../../common/zeitlos.c ../../common/zeitlos.h
 	$(CC) $(CFLAGS) -c ../../common/zeitlos.c -o zeitlos.o
+
+# system.rtc.timezone -- docs/config.md
+zcfg.o: ../../common/zcfg.c ../../common/zcfg.h
+	$(CC) $(CFLAGS) -c ../../common/zcfg.c -o zcfg.o
 
 zobj.o: ../../common/zobj.c ../../common/zobj.h
 	$(CC) $(CFLAGS) -c ../../common/zobj.c -o zobj.o

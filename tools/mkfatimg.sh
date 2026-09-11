@@ -76,10 +76,14 @@ cp sw/apps/cal/cal.bin "$MOUNT_DIR/apps/cal"
 cp sw/apps/settings/settings.bin "$MOUNT_DIR/apps/settings"
 cp sw/apps/track/track.bin "$MOUNT_DIR/apps/track"
 
-# The self-hosting set: a shell, a compiler, an editor. These are what
-# make the card able to extend itself rather than only run what was
-# cross-compiled onto it. See docs/posix.md.
+# The two shells. init() starts both from the card; neither is in the
+# flash archive, so these are the only copies. See docs/flash_apps.md.
+cp sw/apps/repl/repl.bin "$MOUNT_DIR/apps/repl"
 cp sw/apps/posix/posix.bin "$MOUNT_DIR/apps/posix"
+
+# The self-hosting set: a compiler and an editor, driven from posix.
+# These are what make the card able to extend itself rather than only
+# run what was cross-compiled onto it. See docs/posix.md.
 cp sw/apps/zcc/zcc.bin "$MOUNT_DIR/apps/zcc"
 cp sw/apps/vi/vi.bin "$MOUNT_DIR/apps/vi"
 cp sw/apps/ttytest/ttytest.bin "$MOUNT_DIR/apps/ttytest"
@@ -111,6 +115,10 @@ cp sw/data/audio/*.mod "$MOUNT_DIR/audio/"
 cp sw/apps/zcc/libz/libz.bin "$MOUNT_DIR/libz/libz.bin"
 cp sw/apps/zcc/libz/libz.sym "$MOUNT_DIR/libz/libz.sym"
 cp sw/apps/zcc/libz/libz.h "$MOUNT_DIR/libz/include/libz.h"
+
+# The configuration template, every setting commented out -- see
+# docs/config.md. At the root, where the kernel reads it.
+cp sw/data/zeitlos.cfg "$MOUNT_DIR/zeitlos.cfg"
 cp sw/common/syscalls.def "$MOUNT_DIR/libz/include/syscalls.def"
 cp sw/common/*.h "$MOUNT_DIR/libz/include/"
 cp sw/apps/zcc/include/*.h "$MOUNT_DIR/libz/include/"

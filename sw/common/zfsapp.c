@@ -64,6 +64,29 @@ char *fs_mallocfile(char *filename) {
 
 }
 
+int fs_read_file(char *filename, char *buf, int maxlen) {
+
+	if (!filename || !buf || maxlen < 0) return -1;
+
+	int sz = fs_size(filename);
+	if (sz <= 0) return 0;
+	if (sz > maxlen) return -1;
+
+	z_fs_read_args_t args;
+	args.name = filename;
+	args.buf = buf;
+	args.maxlen = (uint32_t)sz;
+	args.len = 0;
+
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_obj_t *rv = (z_obj_t *)z_kernel_ptr(Z_SYS_FS_READ, (uint32_t *)&args, 0);
+
+	if (rv->val.uint32 != Z_OK || (int)args.len != sz) return -1;
+
+	return sz;
+
+}
+
 int fs_write_file(char *filename, char *buf, int len) {
 
 	if (!filename || len < 0) return 0;

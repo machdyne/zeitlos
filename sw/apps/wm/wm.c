@@ -748,7 +748,7 @@ static void draw_titlebar_content(wm_window_t *w) {
 //
 // The visible effect is the mouse cursor: X normally, Z while busy.
 // See wm_busy_set()/wm_busy_clear().
-#define WM_BUSY_STARTUP   (1u << 0)   // core services not up yet
+#define WM_BUSY_STARTUP   (1u << 0)   // init has not finished loading apps
 
 // True once the HID interrupt has agreed to wake us on pointer
 // reports (z_hid_pointer_subscribe(), zeitlos.h). False on an older
@@ -808,48 +808,70 @@ static bool wm_is_busy(void) {
 	return wm_busy_mask != 0;
 }
 
-// -- core service readiness --
+// -- boot readiness --
 //
-// `term` connects to `repl` over a port as soon as it starts, and that
-// connect has a timeout. Launch it before repl has registered itself
-// and the connect simply fails -- term comes up as a blank window with
-// no indication of why, which is exactly the confusing failure this
-// gating exists to prevent.
+// The dock stays disabled (the Z cursor) until init has finished
+// loading things. sh.c's init() registers "init0" as its very last
+// step, after repl and posix have been streamed off the card and net
+// has been started, so that name existing is exactly "boot is done".
 //
-// Checked by name via the pid registry rather than by fixed pid: the
-// fixed Z_PID_* values are a fallback, and registration is what
-// actually signals "this service is up and listening".
-static bool core_services_ready(void) {
+// -- what this used to wait for, and why it changed --
+//
+// It waited for repl0 AND net0 to register. The stated reason was that
+// `term` connected to repl the moment it started, and a term launched
+// before repl was listening came up blank. term no longer connects to
+// anything at startup (it opens on a panel whose shell buttons come
+// alive as each shell registers), so that reason is gone -- and with
+// repl moved off flash onto the sdcard, a board with no card would
+// never have seen repl0 and the dock would have stayed disabled
+// forever. A board built without net had the same problem with net0.
+//
+// What is left is worth keeping for its own sake: not launching apps
+// from the dock while init is still loading apps. init0 says that
+// directly instead of by proxy.
+//
+// -- the fallback --
+//
+// If wm was started by hand (`run wm`) there is no init and no init0.
+// After WM_BOOT_WAIT_MAX_TICKS the dock enables anyway and the console
+// says so. That is far longer than a real boot takes -- repl and posix
+// together are ~330KB on the card, under two seconds at the card's
+// measured rate (docs/sdcard.md) -- so on a normal boot it never fires.
+#define WM_BOOT_WAIT_MAX_TICKS (Z_TICK_HZ * 20)
+
+static uint32_t wm_boot_wait_start;
+
+static bool init_finished(void) {
 
 	uint32_t pid;
-	bool net_up = z_pid_lookup("net0", &pid);
-	bool repl_up = z_pid_lookup("repl0", &pid);
 
-	// Log each service the first time it appears, so a service that
-	// never registers is obvious from the console rather than showing
-	// up only as a cursor that never changes.
-	static bool logged_net, logged_repl;
-	if (net_up && !logged_net) { logged_net = true; printf("wm: net0 up\n"); }
-	if (repl_up && !logged_repl) { logged_repl = true; printf("wm: repl0 up\n"); }
+	if (z_pid_lookup("init0", &pid)) {
+		printf("wm: init0 registered -- boot finished\n");
+		return true;
+	}
 
-	return net_up && repl_up;
+	if (!wm_boot_wait_start) wm_boot_wait_start = z_uptime_ticks();
+
+	if (z_uptime_ticks() - wm_boot_wait_start >= WM_BOOT_WAIT_MAX_TICKS) {
+		printf("wm: no init0 after %lus -- enabling the dock anyway "
+			"(started without init?)\n",
+			(unsigned long)(WM_BOOT_WAIT_MAX_TICKS / Z_TICK_HZ));
+		return true;
+	}
+
+	return false;
 
 }
 
 // Polled from the main loop until it goes true, then never again.
 // Clearing WM_BUSY_STARTUP is what re-enables the dock.
 //
-// Returns true on the transition, so the caller can repaint. Doing the
-// repaint here would need repair_region() forward-declared, and this
-// sits above it purely because the busy state has to be declared
-// before dock_launch() uses it -- not worth a declaration just to move
-// one line.
+// Returns true on the transition, so the caller can repaint.
 static bool check_core_services(void) {
 
 	if (!(wm_busy_mask & WM_BUSY_STARTUP)) return false;
-	if (!core_services_ready()) return false;
+	if (!init_finished()) return false;
 
-	printf("wm: core services ready\n");
 	wm_busy_clear(WM_BUSY_STARTUP);
 
 	return true;
@@ -1378,11 +1400,9 @@ static void dock_launch(int slot) {
 	if (slot < 0 || slot >= DOCK_APP_COUNT) return;
 
 	// Nothing launches while the system is busy. Right now the only
-	// reason is WM_BUSY_STARTUP -- `term` connects to `repl` the
-	// moment it starts, and if repl isn't listening yet that connect
-	// times out and term comes up as a blank window with no
-	// explanation. Refusing the launch is far better than producing a
-	// broken one, and the Z cursor is what tells the user to wait.
+	// reason is WM_BUSY_STARTUP -- init is still loading apps off the
+	// card (see init_finished()). The Z cursor is what tells the user
+	// to wait.
 	if (wm_is_busy()) {
 		printf("wm: dock: busy, not launching '%s' yet\n",
 			dock_apps[slot]->name);
@@ -3575,9 +3595,8 @@ int main(void) {
 	dock_build();
 	dock_idx = create_dock();
 
-	// Busy until net and repl register themselves. wm is up (it is
-	// this process) but the services term depends on are started by
-	// init() alongside it and take a moment to appear.
+	// Busy until init has finished -- see init_finished(). wm is up
+	// (it is this process) but init() is still loading the rest.
 	wm_busy_set(WM_BUSY_STARTUP);
 
 	// Ask the HID interrupt to wake us on pointer reports, so the
@@ -4103,7 +4122,7 @@ int main(void) {
 
 		last_btn = btn;
 
-		// clears WM_BUSY_STARTUP once net/repl are registered; repaint
+		// clears WM_BUSY_STARTUP once init0 is registered; repaint
 		// the dock on the transition so it stops looking disabled
 		if (check_core_services() && dock_idx >= 0)
 			repair_region(windows[dock_idx].x, windows[dock_idx].y,

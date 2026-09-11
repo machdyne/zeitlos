@@ -500,6 +500,11 @@ had to learn that beyond the destination paths:
 then the flash archive, so bare names still work everywhere and the
 ZAR entries stay flat. See `docs/flash_apps.md`.
 
+**The shells are on the card, and only there.** `repl` and `posix` are
+not core apps (`docs/flash_apps.md`, "Why repl is not a core app"), so
+`release/lib/mkfatimg.py`'s `SHELLS` group -- mirrored in
+`tools/mkfatimg.sh` -- is the only copy of either that a release ships.
+
 **The core apps are deliberately absent from the card.** `sw/os/zar.h`
 gives a card copy precedence over the flash copy, so shipping them here
 would shadow the flash build.

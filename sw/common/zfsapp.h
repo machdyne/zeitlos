@@ -50,6 +50,20 @@ int fs_size(char *filename);
 // documents for this exact function signature.
 char *fs_mallocfile(char *filename);
 
+// Reads the WHOLE file into a caller-owned buffer -- fs_mallocfile()
+// without the malloc. Returns the bytes read (the file's size; 0 for a
+// missing or empty file), or -1 if the file is larger than `maxlen` or
+// the read failed. Never truncates: a caller about to rewrite a file
+// must not be handed part of it.
+//
+// For apps whose heap cannot spare a file-sized allocation. An app's
+// heap and stack share one allowance (16KB by default, see
+// z_proc_stack_size_for() in sw/os/kernel.h), and _sbrk() refuses to
+// grow the heap into the stack -- so a few KB of malloc can fail on
+// the device while succeeding on any build machine. sw/apps/settings
+// found this reporting "out of memory" when saving.
+int fs_read_file(char *filename, char *buf, int maxlen);
+
 // creates (or truncates) `filename` and writes `len` bytes from
 // `buf`, returning the number of bytes actually written (0 on
 // failure).

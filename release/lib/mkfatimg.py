@@ -18,7 +18,7 @@
 #
 # WHAT GOES ON THE CARD, and what does not:
 #
-#   - The core apps (wm, net, repl, term) are DELIBERATELY ABSENT.
+#   - The core apps (wm, net, term) are DELIBERATELY ABSENT.
 #     They live in flash, in the ZAR, and sw/os/zar.h's rule is that a
 #     copy on the card wins over the flash copy -- so shipping them
 #     here would shadow the flash build.
@@ -89,13 +89,23 @@ MISC = [
     ("apps/portdemo", "sw/apps/portdemo/portdemo.bin"),
 ]
 
-# The self-hosting set: a shell, a compiler, an editor.
+# The two shells a term window connects to. init() starts both from the
+# card at boot, repl first -- neither is in the flash archive any more,
+# so these copies are the ONLY copies. See docs/flash_apps.md, "Why repl
+# is not a core app". posix is here rather than in SELFHOST because
+# that is what it is to a user; the compiler and editor it hosts stay
+# below.
+SHELLS = [
+    ("apps/repl", "sw/apps/repl/repl.bin"),
+    ("apps/posix", "sw/apps/posix/posix.bin"),
+]
+
+# The self-hosting set: a compiler and an editor, driven from posix.
 #
 # These are what make the card able to extend itself rather than only
 # run what was cross-compiled onto it (docs/posix.md). `zcc` is useless
 # without libz/ below -- see LIBZ_FILES.
 SELFHOST = [
-    ("apps/posix", "sw/apps/posix/posix.bin"),
     ("apps/zcc", "sw/apps/zcc/zcc.bin"),
     ("apps/vi", "sw/apps/vi/vi.bin"),
     ("apps/ttytest", "sw/apps/ttytest/ttytest.bin"),
@@ -135,6 +145,14 @@ LIBZ_HEADER_DIRS = [
 # header in everything but name and extension.
 LIBZ_EXTRA = [
     ("libz/include/syscalls.def", "sw/common/syscalls.def"),
+]
+
+# The configuration file, at the card root where the kernel reads it
+# (sw/os/cfg.c, docs/config.md). Every setting in it is commented out,
+# so a fresh card behaves exactly as if the file were absent -- it is
+# there as the documented place to start editing, not to set anything.
+CONFIG_FILES = [
+    ("zeitlos.cfg", "sw/data/zeitlos.cfg"),
 ]
 
 # Tracker modules, from sw/data/audio. Whatever is there is shipped --
@@ -217,7 +235,8 @@ def check_against_script(root):
     # this module does not. The check was right and the list was
     # incomplete.
     mine = dict((n, p) for n, p in SUPPLEMENTAL + GAMES_DEMOS + MISC
-                + SELFHOST + LIBZ_FILES + LIBZ_EXTRA)
+                + SHELLS + SELFHOST + LIBZ_FILES + LIBZ_EXTRA
+                + CONFIG_FILES)
 
     problems = []
     for name in sorted(set(mine) | set(script)):
@@ -234,8 +253,8 @@ def check_against_script(root):
     # The core apps must not be on the card at all -- see this module's
     # header. Worth checking separately because it is the one difference
     # that is silently harmful rather than merely inconsistent.
-    for core in ("wm", "net", "repl", "term",
-                 "apps/wm", "apps/net", "apps/repl", "apps/term"):
+    for core in ("wm", "net", "term",
+                 "apps/wm", "apps/net", "apps/term"):
         if core in script:
             problems.append(
                 "tools/mkfatimg.sh copies the core app '%s' onto the card. "
@@ -268,7 +287,7 @@ def build(root, out_path, ark_dir=None, verbose=True):
 
     ark_dir = ark_dir or os.path.join(root, "sw/data/ark")
 
-    apps = SUPPLEMENTAL + GAMES_DEMOS + MISC + SELFHOST
+    apps = SUPPLEMENTAL + GAMES_DEMOS + MISC + SHELLS + SELFHOST
 
     # Check every input up front. Finding out that gamedemo.bin was
     # never built after formatting a 64MB image and copying twelve
@@ -280,7 +299,7 @@ def build(root, out_path, ark_dir=None, verbose=True):
     # builds them as a dependency), and a card whose zcc cannot find
     # them compiles only freestanding programs -- so their absence is
     # an error here rather than a quiet omission.
-    missing += [p for _, p in LIBZ_FILES + LIBZ_EXTRA
+    missing += [p for _, p in LIBZ_FILES + LIBZ_EXTRA + CONFIG_FILES
                 if not os.path.exists(os.path.join(root, p))]
 
     if missing:
@@ -346,6 +365,10 @@ def build(root, out_path, ark_dir=None, verbose=True):
 
     # -- the zcc runtime --
     for name, rel in LIBZ_FILES + LIBZ_EXTRA:
+        copy(os.path.join(root, rel), "/" + name)
+
+    # -- the configuration template --
+    for name, rel in CONFIG_FILES:
         copy(os.path.join(root, rel), "/" + name)
 
     # Headers by directory rather than by name: the set is "whatever

@@ -74,8 +74,9 @@ term` searches the root, then `/APPS`, then the flash archive. See
 
 connects your `term` window out to a remote telnet server, the way a
 classic terminal client would -- everything you type after that goes
-to the remote system. Press **F12** at any time to disconnect and
-return to your local prompt.
+to the remote system. Press **F12** at any time to disconnect; the
+window returns to its start panel, where **REPL** gets you back to the
+prompt.
 
 ### The text editor
 

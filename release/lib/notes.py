@@ -133,11 +133,16 @@ def notes(version, commit, targets, sdcard, layout, prev_version=None):
                    "that path: `run term` searches the card root, then "
                    "`apps/`, then the flash archive.")
         out.append("")
-        out.append("The core apps (`wm`, `repl`, `term`, and `net` where "
+        out.append("The core apps (`wm`, `term`, and `net` where "
                    "the hardware has a NIC) are not on the card -- they are "
                    "in flash. A copy at the card ROOT takes precedence over "
                    "the flash copy, so dropping one there is how you "
                    "hot-swap a single app during development.")
+        out.append("")
+        out.append("The two shells, `repl` and `posix`, ARE on the card, and "
+                   "boot starts both when a card is present. Without a card "
+                   "`term` opens with both shell buttons disabled; OPEN "
+                   "(F11) still reaches telnet, ssh and serial.")
         out.append("")
 
     out.append("## Flash layout")

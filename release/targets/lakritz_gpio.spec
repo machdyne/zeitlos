@@ -25,8 +25,8 @@
 #     Boot messages, kernel diagnostics, panics. On a board with no
 #     serial port that is not a loss of information so much as a
 #     relocation of it: the machine comes up on HDMI with a USB
-#     keyboard and a window manager, and `repl` in a `term` window is
-#     the shell.
+#     keyboard and a window manager, and `repl` or `posix` in a `term`
+#     window is the shell (both from the card).
 #
 #   - rtl/csrs.v's UART0 feature bit goes clear, so software that
 #     wants to TELL the user there is no console can (sw/common/

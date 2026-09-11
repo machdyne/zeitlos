@@ -234,6 +234,37 @@ void z_fb_draw_text2(int x, int y, const char *s, int fg, int bg,
 	for (; s && *s; s++, x += f->w) z_fb_draw_char2(x, y, *s, fg, bg, f, c);
 }
 
+// Software VRAM scroll, with the same contract as zgfx.c's: content
+// moves by dy (negative = up), the strip that scrolls in is NOT
+// touched, and a partially occluded window is refused. Refusal is
+// decided by the same rule so a render test exercises the caller's
+// fallback path exactly when the hardware would.
+bool z_fb_hw_scroll_allowed(int x, int y, int w, int h) {
+	z_clip_t r;
+	if (zr_region_n == 0) return true;
+	if (zr_region_n != 1 || w <= 0 || h <= 0) return false;
+	r = zr_region[0];
+	return x >= r.x0 && y >= r.y0 && x + w - 1 <= r.x1 && y + h - 1 <= r.y1;
+}
+
+static int z_render_get(int x, int y);
+
+void z_fb_hw_scroll(int x, int y, int w, int h, int dy) {
+	if (!z_fb_hw_scroll_allowed(x, y, w, h)) return;
+	if (dy == 0 || dy <= -h || dy >= h) return;
+	if (dy < 0) {
+		for (int j = 0; j < h + dy; j++)
+			for (int i = 0; i < w; i++)
+				z_fb_set_pixel(x + i, y + j,
+					z_render_get(x + i, y + j - dy), NULL);
+	} else {
+		for (int j = h - 1; j >= dy; j--)
+			for (int i = 0; i < w; i++)
+				z_fb_set_pixel(x + i, y + j,
+					z_render_get(x + i, y + j - dy), NULL);
+	}
+}
+
 // -- harness -----------------------------------------------------
 
 // Map VRAM and set `win` up the way wm would, so the content rect the

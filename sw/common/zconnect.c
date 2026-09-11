@@ -73,9 +73,8 @@ static bool prep_port(const char *text, z_conn_target_t *t,
 
 	// No lookup here, and no fixed-pid fallback. If the provider is
 	// not running, the CONNECT simply fails at whoever tries it and
-	// that terminal stays in local echo -- the same clean failure any
-	// unreachable target gives. term's own startup connection to
-	// "repl0" has a fallback pid; nothing typed by a user does.
+	// that terminal shows its start panel saying so -- the same clean
+	// failure any unreachable target gives.
 	strcpy(t->provider, text);
 	t->arg = z_obj_none();
 	t->timeout_ticks = Z_CONN_TIMEOUT_LOCAL_TICKS;

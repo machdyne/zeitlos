@@ -27,7 +27,7 @@ both use it.
 ```
 
 repl works out the target and then tells the term window that asked to
-go there (`Z_TERM_SET_PORT`, `sw/common/zterm.h`). F12 comes back.
+go there (`Z_TERM_SET_PORT`, `sw/common/zterm.h`). F12 disconnects.
 
 **From term**, with **F11**:
 
@@ -85,11 +85,18 @@ session ever knows it happened.
 | | |
 |---|---|
 | **F11** | open the bar — go somewhere new |
-| **F12** | escape to `repl0` — go back where you started |
+| **F12** | disconnect — back to term's start panel |
 
 Adjacent on the keyboard and adjacent in meaning. Neither is a VT100
 key anything sends on purpose, which is why term can intercept them
 before the port sees them.
+
+F12 used to return to `repl0`. term no longer has a default connection
+-- it opens on a panel with REPL, POSIX and OPEN buttons -- so "back
+where you started" is that panel. See `docs/terminal.md`.
+
+On the panel, **typing anything opens the bar with it**, so a target can
+simply be typed without pressing F11 first.
 
 **The bar owns every key while it is up, including F12.** Otherwise
 Escape and F12 would both be "get me out of this", which is two answers
@@ -153,11 +160,12 @@ window at once, with no output anywhere. That is how it was found.
 ## No fallback pids
 
 Nothing a user types gets a fixed-pid fallback. If the provider is not
-running, the CONNECT fails and that terminal stays in local echo — the
-same clean failure any unreachable target gives.
+running, the CONNECT fails and that terminal shows its start panel with
+the reason — the same clean failure any unreachable target gives.
 
-term's own startup connection to `repl0` does have one, because there
-has to be something to talk to before anything has been typed.
+Nothing else has one either: term used to connect itself to `repl0` at
+startup with a fixed-pid fallback, and no longer connects to anything
+until asked.
 
 ## See also
 

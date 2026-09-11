@@ -87,6 +87,9 @@ z_obj_t *k_proc_wait(z_obj_t *args);
 z_obj_t *k_video_get_mode(z_obj_t *args);
 z_obj_t *k_video_set_mode(z_obj_t *args);
 
+// CFG_GET/_ENTRY/_RELOAD handlers -- see cfg.h.
+#include "cfg.h"
+
 typedef z_obj_t* (*z_syscall_t)(z_obj_t *args);
 
 z_syscall_t z_syscall_table[Z_SYSCALL_COUNT] = {
@@ -177,6 +180,7 @@ static int k_syscall_touches_fs(uint32_t id) {
 		case Z_SYS_FS_SYNC:
 		case Z_SYS_FS_TRUNCATE:
 		case Z_SYS_EXEC_EXISTS:
+		case Z_SYS_CFG_RELOAD:
 			return 1;
 		default:
 			return 0;

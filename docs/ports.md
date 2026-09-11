@@ -10,25 +10,21 @@ update this document as the remaining phases land.
 
 ## Testing this
 
-`term` looks up `repl0` by name (`sw/os/pidreg.h`) and connects to
-whatever pid that resolves to -- so `run repl` before `run term`, in
-any order relative to `wm`/`net`, is enough for `term` to find it. The
-fixed pid `Z_PID_REPL` (3, `sw/common/zrepl.h`) only matters as a
-**fallback**, if name lookup ever fails (registry full, or repl
-started before it managed to register) -- and that fallback is *only*
-guaranteed correct if `wm` (pid 1) and `net` (pid 2) started first, in
-that exact order, which `sw/os/sh.c`'s `init` shell command still does
-automatically, for whichever code path ends up needing it. `init`
-remains the easiest way to bring everything up in one step either way
--- it now starts `repl` itself too (in the same boot-order slot
-`portdemo` used to occupy, see `init()`'s own comment):
+`term` starts disconnected, on a panel (`docs/terminal.md`). Its REPL
+and POSIX buttons connect by pid-registry NAME (`repl0`, `posix0`,
+`sw/os/pidreg.h`) and come alive once that name is registered, so
+`run repl` before or after `run term` both work. There is no fixed-pid
+fallback any more: `Z_PID_REPL` (`sw/common/zrepl.h`) is unused. `init`
+remains the easiest way to bring everything up in one step -- it starts
+`repl` and `posix` from the sdcard when a card is present:
 
 ```
 > init
 > run term
 ```
 
-Type `help` -- `repl`'s banner should appear on connect, followed by a
+Click REPL (or press Enter on it) and type `help` -- `repl`'s banner
+should appear on connect, followed by a
 `>` prompt, and typed characters (including backspace) should behave
 like an ordinary line-oriented command prompt, not a raw echo (see
 `sw/common/zline.h` for how `repl` does this on its end -- `term`
@@ -49,7 +45,7 @@ To test the UART1 provider, on a board that has one
 ```
 
 then `serial 9600` at the `repl` prompt, or F11 in `term` and type
-`serial 9600`. F12 comes back. With nothing plugged into the port you
+`serial 9600`. F12 disconnects. With nothing plugged into the port you
 should see the provider's banner and then silence, which is the
 correct result -- it proves the handover without needing a device on
 the other end.
@@ -57,8 +53,8 @@ the other end.
 `portdemo` (`sw/apps/portdemo/portdemo.c`) is still there, and still
 useful as a minimal test harness for the *port protocol itself* in
 isolation from any command interpreter -- `run portdemo` starts it
-manually (it's no longer started by `init`), but `term` won't find it
-automatically anymore since it now looks for `repl0` first. Its own
+manually (it's no longer started by `init`), and `port portdemo0` in
+term's Open bar (or typed straight onto its start panel) reaches it. Its own
 header comment still accurately describes its byte-for-byte-echo,
 no-line-editing behavior.
 
@@ -323,10 +319,10 @@ and `sw/apps/zcc` on the client side.
    `docs/messaging.md`'s "Known limitations" for the full story.
 2. ~~A demo virtual port app~~ -- done, `sw/apps/portdemo`
    (echo/banner, no hardware). Single connection at a time.
-3. ~~`term` wired to the demo port~~ -- done, with a fallback: no
-   port provider answering within the connect timeout means `term`
-   still works standalone via local echo (phase 3's behavior),
-   printing which mode it ended up in at startup.
+3. ~~`term` wired to the demo port~~ -- done. The local-echo fallback
+   this originally had is gone: `term` now starts disconnected on a
+   start panel and returns there whenever a connection fails or ends
+   (`docs/terminal.md`).
 4. Real providers: ~~UART port~~ -- done, `sw/apps/serial` over UART1
    (`docs/uart1.md`), reachable via `repl`'s `serial [baud]` command
    or `term`'s F11 Open bar. One connection at a time, and here that
@@ -340,10 +336,11 @@ and `sw/apps/zcc` on the client side.
    (see that section's own note on why the plan changed). Reachable
    via `repl`'s `telnet <ip>` command; see `docs/networking.md`'s "TCP
    + telnet" section for the design, and its own "getting back out of
-   a telnet session" subsection for how `term`'s F12 key hands control
-   back to `repl` once connected to a real remote (something
-   `portdemo`/`repl` themselves don't need, since they can just answer
-   a `quit`/`exit` command instead).
+   a telnet session" subsection for why `term` reserves F12 once
+   connected to a real remote (something `portdemo`/`repl` themselves
+   don't need, since they can just answer a `quit`/`exit` command
+   instead). F12 now disconnects to term's start panel rather than
+   returning to `repl`.
 5. Revisit flow control (above) only if real usage shows the
    fire-and-forget gap actually matters.
 

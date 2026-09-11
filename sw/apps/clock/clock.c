@@ -22,13 +22,20 @@
  * and one whose only honest feedback ("asked, no idea yet") is worse
  * than not offering it.
  *
- * -- UTC --
+ -- time zone --
  *
- * Displayed times are UTC, and the window says so. The RTC has a
- * timezone-offset register (rtl/rtc.v) but nothing sets it and nothing
- * here reads it: a wrong offset silently applied is worse than a right
- * time honestly labelled, and there is no zone database on this system
- * to derive one from. See docs/rtc.md.
+ * The RTC counts UTC. What is displayed is local time in the zone
+ * system.rtc.timezone names in /zeitlos.cfg (docs/config.md) -- UTC by
+ * default -- and the zone's abbreviation is always shown under the
+ * digital time, so the reading is never ambiguous: "UTC" when nothing
+ * is configured, "CEST" in a Berlin summer.
+ *
+ * A zone is a city from the built-in table, which carries its own
+ * daylight-saving rule, or a fixed UTC+n -- there is no zone database
+ * here, and NTP carries only UTC; see zrtc.h. A
+ * setting that does not parse shows UTC, labelled UTC, and says so on
+ * the console, rather than guessing. `cfg reload` takes effect on the
+ * next second: the config generation is checked on every tick.
  *
  * So there are three states worth displaying, not two, and they are
  * genuinely different things:
@@ -89,6 +96,7 @@
 #include "../../common/zfont.h"
 #include "../../common/zkbd.h"
 #include "../../common/zwidget.h"
+#include "../../common/zcfg.h"		// system.rtc.timezone
 
 // Fixed size, and small: a clock is something you leave open in a
 // corner while doing something else, so the useful size is the
@@ -255,20 +263,44 @@ static void draw_dial(void) {
 
 }
 
+// -- the zone --
+
+static z_tz_t tz;
+static uint32_t tz_generation = 0xFFFFFFFFu;
+
+// Re-reads system.rtc.timezone if the config has been (re)loaded since
+// last time. Returns true when the zone was re-read, so the caller can
+// redraw even though the second has not changed.
+static bool tz_refresh(void) {
+
+	uint32_t gen = z_cfg_generation();
+	char v[Z_CFG_VAL_MAX];
+
+	if (gen == tz_generation) return false;
+	tz_generation = gen;
+
+	z_cfg_get("system.rtc.timezone", v, sizeof(v));
+	if (!z_tz_parse(v, &tz))
+		printf("clock: system.rtc.timezone '%s' not understood -- showing "
+			"UTC (see docs/config.md)\n", v);
+
+	return true;
+
+}
+
 // Digital: HH:MM:SS on one line in 6x12, with the date under it and
-// the "UTC" label under that.
+// the zone's abbreviation under that.
 //
-// The label is not decoration. This clock shows UTC and nothing
-// converts it, so on a machine anywhere other than Britain in winter
-// the displayed time is deliberately not local -- and an unlabelled
-// clock showing the wrong hour reads as broken rather than as
-// correct-but-elsewhere.
+// The label is not decoration. With no zone configured this clock
+// shows UTC, and an unlabelled clock showing the wrong hour reads as
+// broken rather than as correct-but-elsewhere. With one configured, it
+// is what distinguishes CET from CEST in the week the clocks change.
 //
 // z_font_6x12 rather than the 5x8 most apps use: it is the larger of
 // the two fonts wm loads into glyph memory, so it is the biggest text
 // available through the hardware blitter, and a clock is a thing you
 // read from across a room.
-static void draw_digital(const z_tm_t *tm, bool valid) {
+static void draw_digital(const z_tm_t *tm, bool valid, const char *zone) {
 
 	char line[32];
 
@@ -313,8 +345,8 @@ static void draw_digital(const z_tm_t *tm, bool valid) {
 	z_win_draw_text(&win, clock_x + (clock_w - text_w) / 2, y + lh, line, 1,
 		&z_font_6x12);
 
-	text_w = 3 * z_font_6x12.w;
-	z_win_draw_text(&win, clock_x + (clock_w - text_w) / 2, y + lh * 2, "UTC", 1,
+	text_w = (int)strlen(zone) * z_font_6x12.w;
+	z_win_draw_text(&win, clock_x + (clock_w - text_w) / 2, y + lh * 2, zone, 1,
 		&z_font_6x12);
 
 }
@@ -389,17 +421,20 @@ static void tick(bool force) {
 
 	if (!rtc_ok) return;
 
+	if (tz_refresh()) force = true;
+
 	bool valid = z_rtc_valid();
 	uint32_t utc = z_rtc_seconds();
 
 	if (!force && have_shown && valid && utc == last_shown_sec) return;
 	if (!force && have_shown && !valid) return;	// nothing changes while unset
 
+	bool dst;
 	z_tm_t tm;
-	z_time_to_tm(utc, &tm);
+	z_time_to_tm(z_tz_local(&tz, utc, &dst), &tm);
 
 	if (analog_view) draw_hands(&tm, valid);
-	else draw_digital(&tm, valid);
+	else draw_digital(&tm, valid, z_tz_name(&tz, dst));
 
 	last_shown_sec = utc;
 	have_shown = true;

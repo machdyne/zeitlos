@@ -1,7 +1,11 @@
 # Core Apps in Flash
 
-The core apps -- `wm`, `net`, `repl` and `term` -- are programmed into
-flash alongside the kernel and are available with no sdcard attached.
+The core apps -- `wm`, `net` and `term` -- are programmed into flash
+alongside the kernel and are available with no sdcard attached.
+
+The two shells, `repl` and `posix`, are **not** core apps: they live on
+the sdcard, and `init()` starts both from there when a card is present.
+See "Why repl is not a core app" below.
 
 ## Why
 
@@ -171,10 +175,51 @@ That check only decides *when* to call `init()`. `init()` still resolves
 per app, so a card holding only `wm` still gets its `wm` from the card
 and everything else from flash.
 
+## Why repl is not a core app
+
+`repl` was one, from the day core apps existed until the shells were
+reorganised. It left because of what a core app is *for*: the set a
+card-less board needs in order to be useful, and nothing more.
+
+- **A terminal without a card does not need a shell.** It needs a way
+  to reach one -- and `term`'s Open bar (F11) already reaches telnet,
+  ssh and serial through `net`. `repl` in flash made every card-less
+  board carry ~220KB of archive and a 368KB RAM block for a shell whose
+  file commands had no card to act on.
+- **There are two shells now.** `posix` has always been card-only (it
+  hosts `zcc`, whose runtime lives in `/libz` on the card, and its 4MB
+  tier rules out the small boards anyway). Having one shell in flash and
+  the other on the card made "which shell does term open" depend on
+  whether a card was inserted.
+- **RAM.** On a 1MB board, not loading `repl` unless there is a card to
+  load it from is ~368KB back -- more than two `term` windows.
+
+What changed with it, so nothing assumes the old arrangement:
+
+- **`init()`** starts `repl`, then `posix`, both non-fatal, and no
+  longer returns early when one is missing (it used to, which would have
+  left `net` loaded but never started on a card-less board). It
+  registers `init0` when it has finished. See `docs/boot.md`.
+- **`term`** starts disconnected, on a panel with REPL / POSIX / OPEN
+  buttons that come alive as each shell registers. F12 disconnects to
+  that panel instead of returning to `repl0`. See `docs/terminal.md`.
+- **`wm`** keeps the dock disabled until `init0` exists, rather than
+  until `repl0` and `net0` do -- which would never have happened without
+  a card. See `docs/socctl.md`, "The busy cursor".
+- **The release** ships `repl` on the card image beside `posix`
+  (`release/lib/mkfatimg.py`'s `SHELLS`, `tools/mkfatimg.sh`), and the
+  board specs' `core_apps` drop it.
+
 ## Adding or removing a core app
 
 1. Add or remove it in `Makefile`'s `output/$(BOARD_LC)/apps.zar` rule.
-2. Rebuild and reflash: `make BOARD=<board> flash_apps`.
+2. Do the same in `core_apps` in each `release/hw/boards/*.spec`, and
+   the default in `release/lib/spec.py`.
+3. If it is leaving flash but should still exist, add it to the card
+   image: `release/lib/mkfatimg.py` and `tools/mkfatimg.sh` (the release
+   checks the two lists agree), and remove it from their "core apps must
+   not be on the card" check.
+4. Rebuild and reflash: `make BOARD=<board> flash_apps`.
 
 The kernel accepts up to `Z_ZAR_MAX_ENTRIES` (32) entries. There is no
 requirement that a core app also appear in wm's dock -- the dock should

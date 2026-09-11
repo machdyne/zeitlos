@@ -95,7 +95,7 @@ def fake_run(pnr_text):
             with open(os.path.join(ROOT, "sw/os/kernel.bin"), "wb") as f:
                 f.write(os.urandom(118 * 1024))
         if "apps" in cmd:
-            for app in ("wm", "net", "repl", "term"):
+            for app in ("wm", "net", "term"):
                 p = os.path.join(ROOT, "sw/apps", app, app + ".bin")
                 os.makedirs(os.path.dirname(p), exist_ok=True)
                 with open(p, "wb") as f:
@@ -122,7 +122,7 @@ def main():
     # whole tree afterwards would delete a developer's working
     # bitstreams as the price of running the test suite.
     created = [out, os.path.join(ROOT, "output", "releases")]
-    for app in ("wm", "net", "repl", "term"):
+    for app in ("wm", "net", "term"):
         created.append(os.path.join(ROOT, "sw/apps", app, app + ".bin"))
     created.append(os.path.join(ROOT, "sw/os/kernel.bin"))
 

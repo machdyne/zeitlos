@@ -40,6 +40,53 @@ typedef struct {
 					// represent -- see the file header comment
 } vt_cell_t;
 
+/* -- scrollback history --
+ *
+ * Lines that scroll off the top of the screen can be kept in a ring
+ * the CALLER owns and hands over with vt_history_attach(). This module
+ * still allocates nothing: a test can attach a few kilobytes on the
+ * stack, `term` attaches a .bss array, and anything that attaches
+ * nothing gets exactly the old behaviour.
+ *
+ * -- one byte per cell --
+ *
+ * put_char() only ever stores 0x20..0x7e, so bit 7 of a cell is free,
+ * and reverse video is the only attribute there is. A history line is
+ * therefore VT_COLS bytes, half of what storing vt_cell_t would cost,
+ * and the packing is lossless. Every history byte is VT_PACK()ed; the
+ * live screen stays vt_cell_t so nothing that reads vt.cells changes.
+ *
+ * -- what goes in, and what does not --
+ *
+ * A line enters history only when a LINEFEED scrolls it off the top.
+ *
+ * Not when DL (ESC[M) deletes it at row 0, even though that shares
+ * scroll_up() with the linefeed. A full-screen editor scrolls with DL
+ * (nextvi's term_room()), and saving those would fill the history
+ * with successive pictures of the editor instead of the shell output
+ * underneath it. Not when ED 2 clears the screen either -- the same
+ * choice xterm makes. ED 3 (ESC[3J) clears the history itself, which
+ * is also what xterm does with it.
+ *
+ * -- addressing --
+ *
+ * Two ways to name a line, for two different jobs:
+ *
+ *   DOCUMENT index: 0 is the oldest retained history line, count-1
+ *   the newest, count..count+VT_ROWS-1 the live screen rows. Dense,
+ *   so it is what a scrolled view and a scrollbar want.
+ *
+ *   ABSOLUTE id: history_pushed - count + document index. Every push
+ *   shifts every document index by one, but a given line's absolute
+ *   id never changes -- screen row r is always id pushed + r, and the
+ *   same text is still that id after it scrolls into history. That is
+ *   what lets a selection stay attached to its text while output
+ *   keeps arriving. An id below pushed - count has been evicted.
+ */
+#define VT_PACK(ch, rev)	((uint8_t)(((uint8_t)(ch) & 0x7f) | ((rev) ? 0x80 : 0)))
+#define VT_PACK_CH(b)		((char)((b) & 0x7f))
+#define VT_PACK_REV(b)		(((b) & 0x80) != 0)
+
 typedef enum {
 	VT_PSTATE_NORMAL,	// ordinary bytes -- print, or act on C0 controls
 	VT_PSTATE_ESC,		// just saw ESC (0x1b), waiting for '[' (CSI) or
@@ -95,6 +142,17 @@ typedef struct {
 	 * wrong. */
 	uint16_t scrolls;
 
+	/* Scrollback ring -- see "scrollback history" above. hist_buf is
+	 * NULL when none is attached. hist_head is the slot the NEXT line
+	 * is written to; hist_count <= hist_cap. hist_pushed counts every
+	 * line ever pushed and never goes backwards (ED 3 included), so
+	 * an absolute id stays meaningful across a clear. */
+	uint8_t *hist_buf;
+	uint16_t hist_cap;
+	uint16_t hist_head;
+	uint16_t hist_count;
+	uint32_t hist_pushed;
+
 } vt_screen_t;
 
 /* How many rows have scrolled off the top since this was last called,
@@ -110,7 +168,35 @@ static inline uint16_t vt_take_scrolls(vt_screen_t *vt) {
 }
 
 // resets to a blank screen, cursor at (0,0), no pending escape state.
+// Detaches any history -- call vt_history_attach() AFTER this.
 void vt_init(vt_screen_t *vt);
+
+// Gives the screen a scrollback ring of `cap_lines` lines. `buf` must
+// be cap_lines * VT_COLS bytes and outlive the screen. Starts empty.
+// NULL or 0 detaches.
+void vt_history_attach(vt_screen_t *vt, uint8_t *buf, uint16_t cap_lines);
+
+// Lines currently retained, 0..cap.
+static inline uint16_t vt_history_count(const vt_screen_t *vt) {
+	return vt->hist_count;
+}
+
+// Total lines ever pushed. Absolute id of screen row r is this + r.
+static inline uint32_t vt_history_pushed(const vt_screen_t *vt) {
+	return vt->hist_pushed;
+}
+
+// Drops every retained line. hist_pushed is NOT reset -- see above.
+void vt_history_clear(vt_screen_t *vt);
+
+// One cell of DOCUMENT line `doc` (0 = oldest retained history line,
+// count.. = live screen), packed with VT_PACK(). Out of range reads as
+// a blank cell rather than failing, so a renderer never has to guard.
+uint8_t vt_doc_cell(const vt_screen_t *vt, int doc, int col);
+
+// One cell of ABSOLUTE line `id`. Returns false, and a blank cell, if
+// that line has been evicted or is below the bottom of the screen.
+bool vt_id_cell(const vt_screen_t *vt, uint32_t id, int col, uint8_t *out);
 
 // feed one byte through the parser -- printable characters are
 // written at the cursor (with wrap/scroll as needed); C0 controls

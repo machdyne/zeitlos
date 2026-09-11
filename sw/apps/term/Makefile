@@ -43,8 +43,16 @@ ifdef FONT
 override CFLAGS += -DTERM_FONT_NAME=$(FONT)
 endif
 
-OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zkbd.o zvt100.o zport.o \
-	zdns.o zconnect.o term.o
+# Scrollback depth in lines -- `make term SCROLLBACK=1000`. Each line is
+# VT_COLS (80) bytes of .bss, which is RAM for every term instance's
+# whole lifetime (docs/boot.md, "Memory budget"): 200 is eight screens
+# and 16,000 bytes. term.c refuses anything outside 25..8000. See
+# docs/terminal.md, "Scrollback".
+SCROLLBACK ?= 200
+override CFLAGS += -DTERM_HIST_LINES=$(SCROLLBACK)
+
+OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zkbd.o zvt100.o \
+	zport.o zdns.o zconnect.o zcfg.o term.o
 
 term: term.elf term.bin
 
@@ -63,6 +71,11 @@ zfont_data.o:
 zwin.o:
 	$(CC) $(CFLAGS) -c ../../common/zwin.c -o zwin.o
 
+# The start panel's buttons and the scrollback scrollbar. Section GC
+# drops the widget kinds term never uses (sliders, swatches).
+zwidget.o:
+	$(CC) $(CFLAGS) -c ../../common/zwidget.c -o zwidget.o
+
 zkbd.o:
 	$(CC) $(CFLAGS) -c ../../common/zkbd.c -o zkbd.o
 
@@ -76,6 +89,10 @@ zport.o:
 # ssh commands. zdns comes with it: telnet and ssh resolve hostnames.
 zdns.o:
 	$(CC) $(CFLAGS) -c ../../common/zdns.c -o zdns.o
+
+# apps.term.auto_connect -- docs/config.md
+zcfg.o:
+	$(CC) $(CFLAGS) -c ../../common/zcfg.c -o zcfg.o
 
 zconnect.o:
 	$(CC) $(CFLAGS) -c ../../common/zconnect.c -o zconnect.o

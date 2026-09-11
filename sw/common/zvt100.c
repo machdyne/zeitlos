@@ -24,9 +24,31 @@ static void mark_dirty(vt_screen_t *vt, int row) {
  * A COUNT rather than a flag, because several lines can scroll between
  * two renders -- a burst of output, a paste -- and the renderer needs
  * the total to know how far to shift. */
-static void scroll_up(vt_screen_t *vt) {
+/* Copies screen row 0 into the history ring, evicting the oldest line
+ * once the ring is full. Called only on the linefeed path -- see
+ * scroll_up()'s `save` and "scrollback history" in zvt100.h. */
+static void history_push_top(vt_screen_t *vt) {
+
+	if (!vt->hist_buf || !vt->hist_cap) return;
+
+	uint8_t *line = vt->hist_buf + (uint32_t)vt->hist_head * VT_COLS;
+	for (int c = 0; c < VT_COLS; c++)
+		line[c] = VT_PACK(vt->cells[0][c].ch, vt->cells[0][c].reverse);
+
+	vt->hist_head++;
+	if (vt->hist_head >= vt->hist_cap) vt->hist_head = 0;
+	if (vt->hist_count < vt->hist_cap) vt->hist_count++;
+	vt->hist_pushed++;
+
+}
+
+/* `save`: whether the row leaving the top belongs in history. True for
+ * a linefeed at the bottom, false for DL at row 0 -- see zvt100.h. */
+static void scroll_up(vt_screen_t *vt, bool save) {
 
 	if (vt->scrolls < 0xFFFF) vt->scrolls++;
+
+	if (save) history_push_top(vt);
 
 
 	for (int r = 0; r < VT_ROWS - 1; r++) {
@@ -50,7 +72,7 @@ static void newline(vt_screen_t *vt) {
 	vt->cursor_y++;
 	if (vt->cursor_y >= VT_ROWS) {
 		vt->cursor_y = VT_ROWS - 1;
-		scroll_up(vt);
+		scroll_up(vt, true);
 	}
 }
 
@@ -158,6 +180,14 @@ static void csi_dispatch(vt_screen_t *vt, char final) {
 				for (int r = 0; r < vt->cursor_y; r++)
 					for (int c = 0; c < VT_COLS; c++) erase_cell(vt, r, c);
 				for (int c = 0; c <= vt->cursor_x && c < VT_COLS; c++) erase_cell(vt, vt->cursor_y, c);
+			} else if (mode == 3) {
+				/* ED 3 -- erase SAVED lines, the screen untouched.
+				 * xterm's meaning; it used to fall into the branch
+				 * below and clear the screen, but nothing in this
+				 * tree sends it and every terminal that knows it
+				 * leaves the screen alone. */
+				vt_history_clear(vt);
+				break;
 			} else {
 				for (int r = 0; r < VT_ROWS; r++)
 					for (int c = 0; c < VT_COLS; c++) erase_cell(vt, r, c);
@@ -207,7 +237,9 @@ static void csi_dispatch(vt_screen_t *vt, char final) {
 			 * repaint the display, which on this machine is the
 			 * difference between a scroll and a visible redraw. */
 			if (vt->cursor_y == 0) {
-				for (int i = 0; i < n && i < VT_ROWS; i++) scroll_up(vt);
+				/* false: DL is how an editor scrolls, and its
+				 * screens are not scrollback -- see zvt100.h. */
+				for (int i = 0; i < n && i < VT_ROWS; i++) scroll_up(vt, false);
 				break;
 			}
 
@@ -351,6 +383,12 @@ void vt_init(vt_screen_t *vt) {
 
 	vt->scrolls = 0;
 
+	vt->hist_buf = 0;
+	vt->hist_cap = 0;
+	vt->hist_head = 0;
+	vt->hist_count = 0;
+	vt->hist_pushed = 0;
+
 	for (int r = 0; r < VT_ROWS; r++) {
 		for (int c = 0; c < VT_COLS; c++) {
 			vt->cells[r][c].ch = ' ';
@@ -385,4 +423,62 @@ void vt_clear_dirty(vt_screen_t *vt) {
 
 void vt_mark_all_dirty(vt_screen_t *vt) {
 	for (int r = 0; r < VT_ROWS; r++) vt->dirty[r] = true;
+}
+
+void vt_history_attach(vt_screen_t *vt, uint8_t *buf, uint16_t cap_lines) {
+
+	vt->hist_buf = (buf && cap_lines) ? buf : 0;
+	vt->hist_cap = (buf && cap_lines) ? cap_lines : 0;
+	vt->hist_head = 0;
+	vt->hist_count = 0;
+
+}
+
+void vt_history_clear(vt_screen_t *vt) {
+
+	/* The buffer itself is not wiped: nothing reads past hist_count,
+	 * and on an 8KB-stack app a memset of 16KB of .bss per clear buys
+	 * nothing. hist_pushed keeps counting -- see zvt100.h. */
+	vt->hist_head = 0;
+	vt->hist_count = 0;
+
+}
+
+/* Oldest retained line is at head - count, modulo the ring. */
+static const uint8_t *history_line(const vt_screen_t *vt, int idx) {
+
+	int slot = (int)vt->hist_head - (int)vt->hist_count + idx;
+	while (slot < 0) slot += vt->hist_cap;
+	while (slot >= vt->hist_cap) slot -= vt->hist_cap;
+
+	return vt->hist_buf + (uint32_t)slot * VT_COLS;
+
+}
+
+uint8_t vt_doc_cell(const vt_screen_t *vt, int doc, int col) {
+
+	if (col < 0 || col >= VT_COLS || doc < 0) return VT_PACK(' ', false);
+
+	if (doc < (int)vt->hist_count)
+		return history_line(vt, doc)[col];
+
+	int row = doc - (int)vt->hist_count;
+	if (row >= VT_ROWS) return VT_PACK(' ', false);
+
+	return VT_PACK(vt->cells[row][col].ch, vt->cells[row][col].reverse);
+
+}
+
+bool vt_id_cell(const vt_screen_t *vt, uint32_t id, int col, uint8_t *out) {
+
+	uint32_t first = vt->hist_pushed - vt->hist_count;
+
+	*out = VT_PACK(' ', false);
+
+	if (id < first) return false;
+	if (id - first >= (uint32_t)vt->hist_count + VT_ROWS) return false;
+
+	*out = vt_doc_cell(vt, (int)(id - first), col);
+	return true;
+
 }

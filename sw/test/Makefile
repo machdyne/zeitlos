@@ -165,8 +165,11 @@ $(ZVT100_OBJ): $(ZVT100_SRC) $(ZVT100_DIR)/zvt100.h | $(BUILD_DIR)
 $(TEST_ZVT100_OBJ): test_zvt100.c $(ZVT100_DIR)/zvt100.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -I$(ZVT100_DIR) -c $< -o $@
 
+# No $(LDFLAGS): those are the target's -march/-mabi, which host gcc
+# rejects -- and with arch.mk not included here they expand to empty
+# `-march= -mabi=`, which host gcc rejects too. This is a host binary.
 $(TEST_ZVT100_EXE): $(TEST_ZVT100_OBJ) $(ZVT100_OBJ) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
+	$(CC) $(CFLAGS) $^ -o $@
 
 test-zvt100: $(TEST_ZVT100_EXE)
 	@echo "Running zvt100 test suite..."

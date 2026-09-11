@@ -52,7 +52,8 @@ LDSCRIPT = ../common/riscv-os.ld
 
 OBJS = kernel.o kruntime.o mem.o zar.o \
 	fs/fs.o fs/ramdisk.o fs/sdbench.o fs/fatfs/sdmm.o fs/fatfs/diskio_mux.o fs/fatfs/ff.o \
-	uart.o hid.o sh.o xfer.o xmodem.o ui.o msg.o pidreg.o fsapi.o procapi.o zobj.o zstream.o zdns.o zsoc.o zgpio.o logo.o
+	uart.o hid.o sh.o xfer.o xmodem.o ui.o msg.o pidreg.o fsapi.o procapi.o zobj.o zstream.o zdns.o zsoc.o zgpio.o logo.o \
+	cfg.o zcfg.o
 
 # kernel.o's recipe below builds every object in one go (they're not
 # independent processes, and mostly don't need to be) -- but for
@@ -65,8 +66,8 @@ OBJS = kernel.o kruntime.o mem.o zar.o \
 # zstream/TFTP work -- see docs/networking.md.
 KSRCS = kernel.c kruntime.c mem.c \
 	fs/fs.c fs/ramdisk.c fs/sdbench.c fs/fatfs/sdmm.c fs/fatfs/diskio_mux.c fs/fatfs/ff.c \
-	uart.c hid.c sh.c xfer.c xmodem.c ui.c msg.c pidreg.c fsapi.c procapi.c logo.c \
-	../common/zobj.c ../common/zstream.c ../common/zdns.c ../common/zsoc.c
+	uart.c hid.c sh.c xfer.c xmodem.c ui.c msg.c pidreg.c fsapi.c procapi.c logo.c cfg.c \
+	../common/zobj.c ../common/zstream.c ../common/zdns.c ../common/zsoc.c ../common/zcfg.c
 
 kernel: kernel.elf kernel.bin
 
@@ -96,6 +97,10 @@ fs/ramdisk.o: fs/ramdisk.c fs/ramdisk.h
 	$(CC) $(CFLAGS) -c fsapi.c -o fsapi.o
 	$(CC) $(CFLAGS) -c procapi.c -o procapi.o
 	$(CC) $(CFLAGS) -c ../common/zobj.c -o zobj.o
+	$(CC) $(CFLAGS) -c cfg.c -o cfg.o
+	# -DZCFG_KERNEL: the parser and known-key table only; the app-side
+	# syscall wrappers call through reg_kernel -- see zcfg.h.
+	$(CC) $(CFLAGS) -DZCFG_KERNEL -c ../common/zcfg.c -o zcfg.o
 	$(CC) $(CFLAGS) -c ../common/zstream.c -o zstream.o
 	$(CC) $(CFLAGS) -c ../common/zdns.c -o zdns.o
 	$(CC) $(CFLAGS) -c kernel.c -S -o kernel.asm

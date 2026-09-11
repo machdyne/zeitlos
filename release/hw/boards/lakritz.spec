@@ -50,7 +50,9 @@ flash_cmd = openFPGALoader -c dirtyJtag -f -o 0 {file}
 # moves and the DFU image is the JTAG image with one region relocated.
 dfu_base = 0x040000
 
-core_apps = wm net repl term
+# repl is not a core app -- it and posix ship on the card image
+# (release/lib/mkfatimg.py) and init starts them from there.
+core_apps = wm net term
 
 defines =
     FPGA_ECP5

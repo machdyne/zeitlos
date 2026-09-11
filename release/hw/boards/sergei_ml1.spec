@@ -18,7 +18,9 @@ lpf         = sergei_ml1.lpf
 
 flash_cmd = openFPGALoader -c dirtyJtag -f -o 0 {file}
 
-core_apps = wm net repl term
+# repl is not a core app -- it and posix ship on the card image
+# (release/lib/mkfatimg.py) and init starts them from there.
+core_apps = wm net term
 
 # PMOD port. SIX pins, four of them signals -- so a GPIO port here is
 # half width (release/hw/pmods/gpio4.spec).

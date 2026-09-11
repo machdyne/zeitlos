@@ -75,7 +75,10 @@ flash_cmd = openFPGALoader -v -c dirtyJtag -f -o 0 {file}
 # moves and the DFU image is the JTAG image with one region relocated.
 dfu_base = 0x040000
 
-core_apps = wm repl term
+# repl is not a core app -- it and posix ship on the card image
+# (release/lib/mkfatimg.py) and init starts them from there. With 1MB
+# of RAM posix cannot start here (its tier is 4MB), and init says so.
+core_apps = wm term
 
 defines =
     FPGA_ECP5

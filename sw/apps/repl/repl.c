@@ -194,7 +194,8 @@ static const char *BANNER =
 	// of its own, which is exactly the situation someone needs it in
 	// and exactly the situation where they can't be told about it.
 	// Worth a line here, on the one screen every session starts at.
-	"F12 returns to repl from any port (telnet, portdemo, ...)\r\n";
+	// F12 leaves for term's start panel, where REPL comes back here.
+	"F12 disconnects from any port (telnet, portdemo, ...)\r\n";
 
 static const char *PROMPT = "> ";
 
@@ -284,7 +285,7 @@ static const char HELP_TEXT[] =
 	"builtins: help ping echo te <f> page <f> scheme <e> quit\r\n"
 	"connect:  port <n> serial [baud] telnet <h> ssh <h>  (F11 in term)\r\n"
 	"scheme:   ls ps free uptime run kill load mkdir delay-ms ...\r\n"
-	"F12 returns here from any port; bare word = call, so `ps` is (ps)";
+	"F12 leaves any port; bare word = call, so `ps` is (ps)";
 
 // build-time check -- see HELP_TEXT's own comment. A negative array
 // size rather than _Static_assert(): this tree builds with --std=gnu99
@@ -771,7 +772,7 @@ static bool dispatch_line(const char *line, char *out, uint32_t out_cap,
 				// the new provider's banner appearing right after.
 				snprintf(out, out_cap,
 					"connecting to %s -- disconnecting now "
-					"(F12 returns to repl)", t.detail);
+					"(F12 disconnects)", t.detail);
 
 				return true;
 			}

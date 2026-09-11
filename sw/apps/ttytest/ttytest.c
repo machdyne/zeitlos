@@ -86,7 +86,7 @@ static void paint(void) {
 	}
 
 	n += snprintf(screen + n, sizeof(screen) - n,
-		"\r\n  press q to quit -- F12 escapes to repl if this hangs\r\n");
+		"\r\n  press q to quit -- F12 disconnects if this hangs\r\n");
 
 	// Checked, because a refused send is silent otherwise and a blank
 	// terminal is indistinguishable from a handoff that did not

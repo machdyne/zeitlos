@@ -61,7 +61,13 @@
 #define Z_REPL_RESULT   131
 #define Z_REPL_ERROR    132
 
-// fallback pid for `repl` (sw/apps/repl) if name lookup ("repl0")
+// NOTHING IN THE TREE USES THIS ANY MORE, and it is no longer even
+// likely to be right: repl now starts from the sdcard only when one is
+// present, so which pid it lands on depends on the card. term, its
+// last user, now looks "repl0" up by name and never guesses. Kept so
+// out-of-tree code still builds; do not add new uses.
+//
+// Historical: fallback pid for `repl` (sw/apps/repl) if name lookup ("repl0")
 // fails -- same convention as Z_PID_PORTDEMO (zport.h) and
 // Z_PID_WM/Z_PID_NET before it. 3, not 4: sh.c's init() starts repl
 // in exactly the boot-order slot portdemo used to occupy (wm=1,

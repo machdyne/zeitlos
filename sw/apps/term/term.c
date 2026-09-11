@@ -1,47 +1,49 @@
 /*
  * term -- VT100 terminal emulator
  *
- * Phase 3: a real 80x25-character window (sw/common/zwin.h) driven by
- * live keyboard input (Z_WM_KEY, see docs/user_input.md) through the
- * VT100 core (sw/common/zvt100.h/.c, whose own correctness is
- * verified independently -- see sw/test/test_zvt100.c, run with
- * `make test-zvt100` from sw/test/, entirely on the host).
+ * An 80x25 VT100 window (sw/common/zvt100.h) that relays keystrokes to
+ * a PORT (sw/common/zport.h, docs/ports.md) and renders whatever comes
+ * back. It is a dumb terminal: line editing, echo and command
+ * interpretation all belong to whoever is on the other end -- see
+ * docs/terminal.md, "Line editing lives at the far end".
  *
- * Phase 4: connects to a port (sw/common/zport.h/.c, docs/ports.md)
- * at startup -- sw/apps/repl if it's running (started automatically
- * at boot, see sw/os/sh.c's init()), Zeitlos's command interpreter
- * (sw/apps/repl/repl.c). Typed keys go out through the port; whatever
- * comes back in (Z_PORT_DATA) is what actually reaches the VT100
- * parser now, not the keystroke directly -- this is the real
- * "keyboard -> wm -> term -> port -> repl -> term -> screen" path,
- * not a standalone loop anymore. `repl` does its own line editing,
- * echo, and backspace handling on the other end of the port (see
- * sw/common/zline.h's header comment for why that has to live on
- * repl's side, not here) -- term itself stays exactly as "dumb" a
- * VT100 renderer as before, just relaying bytes.
+ * -- It starts disconnected --
  *
- * Before repl existed, term connected to sw/apps/portdemo instead (a
- * raw echo/banner test harness, no command interpreter, no line
- * editing of its own -- see its own header comment) -- portdemo is
- * still there and still useful as a minimal test harness for the
- * port protocol itself, just no longer what term looks for by
- * default.
+ * term used to connect itself to `repl0` at startup, with a fixed-pid
+ * fallback, and drop to local echo if that failed. repl is no longer a
+ * core app (it lives on the sdcard now, next to posix -- see
+ * docs/flash_apps.md), so a card-less board would have come up with a
+ * terminal quietly echoing its own keys, and a board WITH a card has
+ * two equally good shells to choose between.
  *
- * If there's no port provider running (or it doesn't answer within
- * z_port_connect()'s timeout), term falls back to local echo -- typed
- * keys get fed straight back into the VT100 parser, same as phase 3 --
- * so it's still usable standalone without repl.
+ * So term now opens on a START PANEL: REPL, POSIX and OPEN (F11)
+ * buttons, each shell's button live only once that shell has
+ * registered. One click, or Tab/Enter, decides. Typing anything else
+ * starts the Open bar with it, so `telnet host` can simply be typed.
+ * F12 disconnects and returns here from any connection, and so does a
+ * connection the far end closes. There is no local echo any more:
+ * a terminal connected to nothing has nothing to say.
  *
- * Phase 5 (telnet, docs/networking.md/docs/ports.md): `repl`'s
- * `telnet <ip>` command redirects a term instance from repl to
- * sw/apps/net's telnet port provider instead (still via
- * Z_TERM_SET_PORT, sw/common/zterm.h -- see connect_port() below for
- * the mechanics). Once connected to a real remote that way, there's
- * no "quit"/"exit" command to hand control back with the way
- * repl/portdemo have -- so handle_key_event() below reserves F12 as a
- * fixed, always-available escape hotkey back to "repl0", intercepted
- * before it ever reaches the port. See that function's own comment
- * for why F12 specifically (not the classic telnet-client Ctrl-]).
+ * Unless /zeitlos.cfg says otherwise: apps.term.auto_connect (e.g.
+ * "port repl0", "telnet bbs.example.com") makes every new window
+ * connect there by itself, waiting a few seconds for the provider to
+ * register if boot has not got that far yet. See auto_*() below and
+ * docs/config.md.
+ *
+ * -- Scrollback --
+ *
+ * TERM_HIST_LINES lines (Makefile: SCROLLBACK, default 200 -- eight
+ * screens) of what scrolled off the top, one byte per cell in a .bss
+ * ring owned here and lent to zvt100. Shift+PgUp/PgDn/Up/Down/Home/End
+ * move through it, and so does the scrollbar down the right-hand side,
+ * which is why the window is Z_SB_THICK wider than 80 columns.
+ * Selection and copy work across it. See docs/terminal.md.
+ *
+ * -- Other ways in --
+ *
+ * Z_TERM_SET_PORT (sw/common/zterm.h) still hands this window to
+ * another provider: repl's `telnet`/`ssh`/`port` commands, and posix
+ * handing the terminal to a child such as `vi`.
  */
 
 #include <stdio.h>
@@ -50,550 +52,1017 @@
 #include <string.h>
 
 #include "../../common/zeitlos.h"
-#include "../../common/zsoc.h"	// Z_TICK_HZ, for the render instrumentation
+#include "../../common/zsoc.h"		// Z_TICK_HZ
 #include "../../common/zwm.h"
 #include "../../common/zwin.h"
+#include "../../common/zwidget.h"	// the start panel's buttons, the scrollbar
 #include "../../common/zfont.h"
 #include "../../common/zgfx.h"
 #include "../../common/zkbd.h"
 #include "../../common/zvt100.h"
 #include "../../common/zport.h"
 #include "../../common/zterm.h"
-#include "../../common/zconnect.h"	// the F11 Open bar -- see open_bar_*() below
-#include "../../common/zrepl.h"	// for Z_PID_REPL, the fixed-pid
-									// fallback below -- term itself
-									// never sends/receives REPL_EVAL,
-									// it only needs this one constant
+#include "../../common/zconnect.h"	// the Open bar -- see bar_*() below
+#include "../../common/zcfg.h"		// apps.term.auto_connect
 
 // which font to render with -- override at build time with
-// `make term FONT=z_font_6x12` (or any other font declared in
-// zfont.h) to switch sizes without touching this file. Defaults to
-// z_font_5x8 (sw/data/font/font5x8.mem) -- one row taller than the
-// original z_font_5x7 (sw/data/font/font5x7.mem, a public-domain BDF
-// conversion, see that file's own header), adopted after real-
-// hardware testing showed z_font_5x7's bottom pixel row getting cut
-// off on screen (see zfont.h's own z_font_5x8 comment) -- that's what
-// was actually settled on after ALSO testing 6x12 (too much blit work
-// per redraw, too little screen margin for wm to drag comfortably --
-// see docs/user_input.md's "Debugging notes" for that history) --
-// pass a different FONT to go back to 6x12 or try something else
-// entirely.
+// `make term FONT=z_font_6x12`. Defaults to z_font_5x8, adopted after
+// real-hardware testing showed z_font_5x7's bottom row cut off and
+// z_font_6x12 costing too much blit work and screen margin (see
+// docs/user_input.md's "Debugging notes").
 //
-// IMPORTANT as of the pid-registry/dock work: wm is now the only
-// process that ever loads glyph data into hardware glyph memory (see
-// its Makefile's own comment, and z_gfx_hw_font_load() in main()
-// below -- there isn't one anymore), and it only ever loads
-// z_font_5x8. Building term with a different FONT now means its
-// hardware-blitted text (Z_GFX_HW_BLIT builds) will render using
-// z_font_5x8's glyph *data* reinterpreted at this font's dimensions
-// -- garbled, not just wrong-sized. Software-only builds (no
-// Z_GFX_HW_BLIT) aren't affected, since those read glyph data
-// straight from this process's own zfont_data.o, not shared hardware
-// state. Don't override FONT for a Z_GFX_HW_BLIT build until wm loads
-// more than one font.
+// wm is the only process that loads glyph data into hardware glyph
+// memory, and it only ever loads z_font_5x8. A Z_GFX_HW_BLIT build
+// with a different FONT renders z_font_5x8's glyph data reinterpreted
+// at the wrong dimensions -- garbled, not just wrong-sized. Don't
+// override FONT for a hardware build until wm loads more than one.
 #ifndef TERM_FONT_NAME
 #define TERM_FONT_NAME z_font_5x8
 #endif
 #define TERM_FONT TERM_FONT_NAME
 
-// how long connect_port() (below) waits for CONNECTED/REFUSED when
-// connecting through the Z_TERM_SET_PORT Z_MAP form specifically --
-// currently only ever `repl`'s `telnet <ip>` command. Longer than
-// zport.h's own Z_PORT_CONNECT_TIMEOUT_TICKS default (~2s, right for
-// a provider that's simply up-or-not) because net.c's telnet port
-// provider doesn't reply CONNECTED/REFUSED until an actual TCP
-// handshake to the remote server resolves one way or the other --
-// that can legitimately take up to net's own tcp.c worst-case retry
-// budget (TCP_RTO_TICKS_BASE/_MAX_SHIFT/_MAX_RETRIES there sum to
-// ~31.5s before giving up). 45s -- ~13.5s of margin over that 31.5s
-// worst case, room for scheduling/message-passing overhead on top of
-// tcp.c's own numbers without needing to track them exactly. Found on
-// real hardware: without this, a telnet connect to a genuinely
-// unreachable/non-listening target always timed out on term's own
-// side (this constant, at its old 2s) before net's TCP layer had
-// even gotten partway through its own retries, let alone given up
-// and sent an explicit REFUSED -- see zport.c's own
-// Z_PORT_CONNECT_TIMEOUT_TICKS comment for the fuller story.
-#define TERM_TELNET_CONNECT_TIMEOUT_TICKS (732 * 45)
+// Scrollback depth, in lines. The Makefile's SCROLLBACK sets this.
+//
+// Costs TERM_HIST_LINES * VT_COLS bytes of .bss per term instance, and
+// .bss is RAM for the process's whole lifetime (docs/boot.md, "Memory
+// budget"). 200 lines is eight screens and 16,000 bytes.
+//
+// The upper bound is zvt100's uint16_t line count; the lower bound is
+// a screen, because anything less cannot show even the previous page.
+#ifndef TERM_HIST_LINES
+#define TERM_HIST_LINES 200
+#endif
+#if TERM_HIST_LINES < VT_ROWS || TERM_HIST_LINES > 8000
+#error "TERM_HIST_LINES (Makefile SCROLLBACK) must be 25..8000"
+#endif
 
-// window size such that z_win_content_rect()'s inset (2px on every
-// content-bearing edge -- see zwin.c) leaves EXACTLY VT_COLS*font.w x
-// VT_ROWS*font.h of content area: content width = win.w-4, content
-// height = win.h - (Z_WM_TITLEBAR_H+4) -- currently win.h-15, since
-// Z_WM_TITLEBAR_H is 11 (zwm.h) -- see zwin.c's z_win_content_rect().
-// This is why there's no separate z_win_clear() call anywhere below:
-// the 80x25 grid tiles the content area exactly, no leftover padding
-// pixels to clear separately, so a full dirty-cell redraw already
-// covers every pixel. Computed at runtime (not a macro) now that the
-// font itself is swappable -- TERM_FONT.w/.h aren't preprocessor
-// constants.
+// How long connect_port() waits for CONNECTED/REFUSED for a
+// Z_TERM_SET_PORT Z_MAP handoff. Longer than a local port needs because
+// net's telnet provider does not reply until a TCP handshake resolves
+// either way, and tcp.c's own retry budget alone is ~31.5s -- a shorter
+// timeout here gave up before net had finished trying, so the error
+// shown was never the real one. See Z_CONN_TIMEOUT_NETWORK_TICKS.
+#define TERM_TELNET_CONNECT_TIMEOUT_TICKS Z_CONN_TIMEOUT_NETWORK_TICKS
+
+// How long a connect runs silently before the bar says it is waiting.
+// A local port answers in a few ticks, and a bar that flashes up for
+// one frame on every REPL click reads as a glitch; anything slower than
+// this is slow enough to need explaining.
+#define TERM_CONNECT_QUIET_TICKS (Z_TICK_HZ / 4)
+
+// -- geometry --
+//
+// The window is sized so the content area (z_win_content_rect(): a
+// 2px inset on each side, and Z_WM_TITLEBAR_H + 2 at the top) is
+// EXACTLY the 80x25 text grid plus the scrollbar strip. Every content
+// pixel therefore belongs either to a glyph cell or to the scrollbar,
+// and each of those repaints its own pixels in full -- which is why
+// there is no z_win_clear() anywhere in this file.
+//
+// Runtime values rather than macros because the font is swappable and
+// z_font_t's w/h are not preprocessor constants.
+static int cell_w, cell_h;		// one character cell
+static int text_w, text_h;		// the 80x25 grid
 static int term_win_w, term_win_h;
 
 static vt_screen_t vt;
+static uint8_t hist_buf[TERM_HIST_LINES * VT_COLS];
 static z_win_t win;
 static z_port_t port;
+static z_scrollbar_t sbar;
 
-// last position the cursor overlay (see render() below) was actually
-// drawn at -- -1 means "not drawn yet, or just invalidated (a wm
-// redraw happened)". kept separate from vt.cursor_x/y because the
-// overlay needs to know where to ERASE from, not just where to draw.
-static int draw_cursor_x = -1;
-static int draw_cursor_y = -1;
+static char instance_name[24] = "term";
 
-// draws one character cell at content-relative (col,row), honoring
-// `reverse` by swapping which color is foreground vs. background.
-// Goes through z_fb_draw_char2() (zgfx.h) -- hardware-accelerated via
-// the GPU glyph blitter (rtl/gpu/gpu_blit.v) when built with
-// Z_GFX_HW_BLIT, which this app's Makefile does. An earlier version
-// of this function rendered every pixel itself via z_fb_set_pixel(),
-// because z_fb_draw_char()'s hardware path hardcodes its background
-// to 0 -- but the blitter's fg_color_reg/bg_color_reg are genuinely
-// independent registers in hardware (see z_fb_draw_char2()'s own
-// comment in zgfx.c), z_fb_draw_char() just never exposed the second
-// one. That per-pixel software path was correct but visibly slow
-// redrawing a full 80x25 grid; z_fb_draw_char2() does the same thing
-// in hardware.
-// -- selection --
-//
-// A rectangular-in-reading-order range over the visible grid: from
-// (sel_r0,sel_c0) to (sel_r1,sel_c1) inclusive, the way a terminal
-// selection actually works -- full rows in between, partial rows at
-// each end -- not a rectangle of columns.
-//
-// The VISIBLE grid only. There is no scrollback in zvt100
-// (vt.cells[VT_ROWS][VT_COLS] is the whole of it), so there is
-// nothing above the top row to select.
-//
-// Anchor plus current, in cell coordinates, so extending backwards
-// needs no special case -- the same shape sw/apps/text uses for text
-// offsets, for the same reason.
-static bool sel_active;
-static bool sel_dragging;
+// apps.term.auto_connect is waiting for its provider -- see auto_*().
+static bool auto_pending;
 
-// Previous button mask, for right-button edge detection -- see
-// handle_mouse_event().
+// Lines scrolled back from live. 0 is the live screen; the maximum is
+// vt_history_count(). Document line (count - view_off + row) is shown
+// at display row `row` -- see zvt100.h on document indices.
+static int view_off;
+
+// -- forward declarations --
+static void frame(void);
+static void handle_key_event(uint32_t packed);
+static void handle_mouse_event(uint32_t packed);
+static bool connect_port(const char *name, z_obj_t arg,
+	uint32_t timeout_ticks, const char *label);
+static void auto_cancel(const char *status);
+
+/* -- render instrumentation --
+ *
+ * 0 in a normal build. Set to 1 to print render counts to the serial
+ * console every two seconds. Prints to the console rather than the
+ * window because drawing the numbers with the blitter being measured
+ * would change the answer.
+ *
+ * Measured cost per glyph (docs/gpu_blitter.md): ~112 cycles. A full
+ * 2000-glyph repaint is ~4.7ms; the hardware scroll that replaces it
+ * for a one-line scroll is ~1.07ms plus one row of glyphs. */
+#define TERM_INSTRUMENT 0
+
+#if TERM_INSTRUMENT
+static uint32_t ins_renders, ins_glyphs, ins_blits, ins_full;
+static uint32_t ins_last_report;
+
+static void ins_report(void) {
+	uint32_t now = z_uptime_ticks();
+	if (ins_last_report == 0) { ins_last_report = now; return; }
+	if (now - ins_last_report < Z_TICK_HZ * 2) return;
+	if (ins_renders)
+		printf("term: %lu renders, %lu glyphs, %lu blits, %lu full\n",
+			(unsigned long)ins_renders, (unsigned long)ins_glyphs,
+			(unsigned long)ins_blits, (unsigned long)ins_full);
+	ins_renders = ins_glyphs = ins_blits = ins_full = 0;
+	ins_last_report = now;
+}
+#define INS(x) (x)
+#else
+#define ins_report() ((void)0)
+#define INS(x) ((void)0)
+#endif
+
+// ---------------------------------------------------------------
+// selection
+// ---------------------------------------------------------------
+//
+// Reading order, not a column rectangle: partial rows at each end and
+// whole rows between, the way a terminal selection works.
+//
+// Endpoints are ABSOLUTE line ids (zvt100.h), not screen rows. A line
+// keeps its id as it scrolls from the screen into history, so a
+// selection stays on its text while output keeps arriving and while
+// the view scrolls -- screen rows would leave the highlight standing
+// still while the text moved out from under it, which is what this
+// used to do.
+//
+// Anchor plus current, so extending backwards needs no special case.
+
+static bool sel_active;			// something is selected
+static bool sel_dragging;		// left button held since the press
+static uint32_t sel_a_id, sel_c_id;
+static int sel_a_col, sel_c_col;
+
+// Normalised bounds, recomputed by sel_prepare() for the render and
+// copy that follow it. sel_on is false when nothing selected survives.
+static bool sel_on;
+static uint32_t sel_id0, sel_id1;
+static int sel_col0, sel_col1;
+
+// Previous mouse button mask, for right-button edge detection.
 static uint8_t last_buttons;
-static int sel_ar, sel_ac;		// anchor
-static int sel_cr, sel_cc;		// current
 
-// Normalised selection bounds, in reading order.
-static void sel_bounds(int *r0, int *c0, int *r1, int *c1) {
+// Normalises and clamps against eviction. Returns true if that changed
+// what is highlighted -- the whole selection scrolled out of history,
+// and the cells that showed it must be repainted.
+static bool sel_prepare(void) {
 
-	if (sel_ar < sel_cr || (sel_ar == sel_cr && sel_ac <= sel_cc)) {
-		*r0 = sel_ar; *c0 = sel_ac; *r1 = sel_cr; *c1 = sel_cc;
+	bool was_on = sel_on;
+
+	sel_on = false;
+	if (!sel_active) return was_on;
+
+	if (sel_a_id < sel_c_id || (sel_a_id == sel_c_id && sel_a_col <= sel_c_col)) {
+		sel_id0 = sel_a_id; sel_col0 = sel_a_col;
+		sel_id1 = sel_c_id; sel_col1 = sel_c_col;
 	} else {
-		*r0 = sel_cr; *c0 = sel_cc; *r1 = sel_ar; *c1 = sel_ac;
+		sel_id0 = sel_c_id; sel_col0 = sel_c_col;
+		sel_id1 = sel_a_id; sel_col1 = sel_a_col;
+	}
+
+	uint32_t first = vt_history_pushed(&vt) - vt_history_count(&vt);
+
+	if (sel_id1 < first) {
+		sel_active = false;
+		return was_on;
+	}
+
+	if (sel_id0 < first) { sel_id0 = first; sel_col0 = 0; }
+
+	sel_on = true;
+	return false;
+
+}
+
+static bool sel_contains(uint32_t id, int col) {
+	if (id < sel_id0 || id > sel_id1) return false;
+	if (id == sel_id0 && col < sel_col0) return false;
+	if (id == sel_id1 && col > sel_col1) return false;
+	return true;
+}
+
+// ---------------------------------------------------------------
+// the glass model
+// ---------------------------------------------------------------
+//
+// shadow[][] is what is ON THE SCREEN for each cell: character in the
+// low 8 bits, inverted in bit 8. render() works out what each cell
+// SHOULD show -- the emulator's content at the current scroll offset,
+// inverted for the selection and for the cursor -- and draws only the
+// cells where the two differ.
+//
+// Everything that changes the picture goes through that one
+// comparison: output, the cursor, the selection, scrolling the view,
+// and an overlay (the Open bar, the start panel) arriving or leaving.
+// That is deliberate, and it is what fixed the Open bar that would not
+// go away: the bar used to be painted straight over the bottom row
+// with the shadow left describing the session underneath, so when the
+// bar was dismissed every cell compared EQUAL and nothing was redrawn.
+// Now any cell an overlay covers is marked GLASS_UNKNOWN, which can
+// never compare equal, so the session's cells come back by themselves
+// the moment the overlay stops covering them.
+
+#define GLASS_UNKNOWN 0xFFFF
+
+static uint16_t shadow[VT_ROWS][VT_COLS];
+
+// Examine every cell on the next render, not just dirty rows.
+static bool render_all;
+
+// What the shadow was last brought up to date against. drawn_valid is
+// false after a wm redraw, when the pixels are unknown and nothing may
+// be assumed about them -- in particular no hardware scroll.
+static bool drawn_valid;
+static int drawn_view_off;
+static uint16_t drawn_count;
+static uint32_t drawn_pushed;
+static int drawn_cursor_row = -1;
+
+static void shadow_invalidate(void) {
+	for (int r = 0; r < VT_ROWS; r++)
+		for (int c = 0; c < VT_COLS; c++)
+			shadow[r][c] = GLASS_UNKNOWN;
+}
+
+static void shadow_invalidate_rect(int r0, int c0, int r1, int c1) {
+	for (int r = r0; r <= r1; r++)
+		for (int c = c0; c <= c1; c++)
+			shadow[r][c] = GLASS_UNKNOWN;
+}
+
+// Moves the shadow by the same amount a hardware scroll just moved the
+// pixels: `up` rows up if positive, down if negative. The rows that
+// scrolled in hold nothing known.
+//
+// The blit and this shift MUST agree exactly. If they disagree the
+// comparison finds cells equal that are not, and the terminal shows
+// stale text with no way to notice.
+static void shadow_shift(int up) {
+
+	if (up > 0) {
+		for (int r = 0; r + up < VT_ROWS; r++)
+			for (int c = 0; c < VT_COLS; c++)
+				shadow[r][c] = shadow[r + up][c];
+		shadow_invalidate_rect(VT_ROWS - up, 0, VT_ROWS - 1, VT_COLS - 1);
+	} else if (up < 0) {
+		int dn = -up;
+		for (int r = VT_ROWS - 1; r >= dn; r--)
+			for (int c = 0; c < VT_COLS; c++)
+				shadow[r][c] = shadow[r - dn][c];
+		shadow_invalidate_rect(0, 0, dn - 1, VT_COLS - 1);
 	}
 
 }
 
-// Is this cell inside the selection? Reading order, so a row strictly
-// between the endpoints is selected end to end.
-static bool sel_has(int row, int col) {
+// One cell, straight to the glyph blitter (z_fb_draw_char2(), which
+// takes both colours -- see its comment in zgfx.c). `clip` is the
+// content rect, fetched once per render rather than once per cell.
+static void draw_glyph(const z_clip_t *clip, int col, int row, char ch,
+	bool inverted) {
 
-	if (!sel_active) return false;
+	z_fb_draw_char2(clip->x0 + col * cell_w, clip->y0 + row * cell_h, ch,
+		inverted ? 0 : 1, inverted ? 1 : 0, &TERM_FONT, clip);
 
-	int r0, c0, r1, c1;
-	sel_bounds(&r0, &c0, &r1, &c1);
-
-	if (row < r0 || row > r1) return false;
-	if (row == r0 && col < c0) return false;
-	if (row == r1 && col > c1) return false;
-
-	return true;
+	INS(ins_glyphs++);
 
 }
 
-// Defined further down, next to the selection code it drives --
-// connect_port()'s own message pump (above) services pointer events
-// while waiting, so it needs this visible here.
-static void handle_mouse_event(uint32_t packed);
+// -- overlays --
+//
+// The Open bar owns the bottom row while it is up; the start panel owns
+// a block of cells in the middle while it is visible. Both draw
+// themselves (bar_draw(), panel_draw()) after render(), which leaves
+// every cell they own alone and marks it GLASS_UNKNOWN.
 
-static void draw_cell(int col, int row, char ch, bool reverse) {
+#define PANEL_C0 12
+#define PANEL_C1 67
+#define PANEL_R0 5
+#define PANEL_R1 19
+
+static bool bar_active;
+static bool panel_visible;
+
+static bool overlay_owns(int row, int col) {
+
+	if (bar_active && row == VT_ROWS - 1) return true;
+
+	if (panel_visible && row >= PANEL_R0 && row <= PANEL_R1
+		&& col >= PANEL_C0 && col <= PANEL_C1)
+		return true;
+
+	return false;
+
+}
+
+// ---------------------------------------------------------------
+// render
+// ---------------------------------------------------------------
+
+static void render(void) {
 
 	z_clip_t clip;
 	z_win_content_rect(&win, &clip);
 
-	int x = clip.x0 + col * TERM_FONT.w;
-	int y = clip.y0 + row * TERM_FONT.h;
+	INS(ins_renders++);
 
-	// Selection inverts on top of whatever the cell already is, so a
-	// selected reverse-video cell comes back to normal video rather
-	// than staying indistinguishable from its neighbours.
-	if (sel_has(row, col)) reverse = !reverse;
+	uint16_t n = vt_take_scrolls(&vt);
+	uint16_t count = vt_history_count(&vt);
+	uint32_t pushed = vt_history_pushed(&vt);
+	uint32_t p = pushed - drawn_pushed;
 
-	int fg = reverse ? 0 : 1;
-	int bg = reverse ? 1 : 0;
-
-	z_fb_draw_char2(x, y, ch, fg, bg, &TERM_FONT, &clip);
-
-}
-
-// redraws whatever actually changed: dirty cells (from vt_feed()
-// since the last call) plus the cursor overlay, which needs its own
-// tracking since moving the cursor (e.g. an arrow key) doesn't dirty
-// any cell at all.
-/* -- render instrumentation --
- *
- * Prints to the serial console, not the window: the point is to see
- * what render() costs, and drawing the numbers with the very glyph
- * blitter being measured would change the answer.
- *
- * What is being tested: render() redraws whole DIRTY ROWS, all
- * VT_COLS of them, whichever cells actually changed. Typing one
- * character marks its row dirty, so one keystroke may cost 80 glyph
- * blits instead of 1. Whether that matters depends on the ratio these
- * counters report -- if glyphs-per-render is near VT_COLS while only
- * a cell or two changed, row granularity is the thing to fix and
- * per-glyph micro-optimisation is beside the point.
- *
- * Measured cost per glyph (docs/gpu_blitter.md): ~112 cycles, of
- * which ~80 is the blit and ~32 the eight register writes. So 80
- * glyphs is roughly 9000 cycles -- about 1% of a 60Hz frame, per
- * keystroke, which is fine; 25 rows of it is not.
- */
-/* 0 in a normal build. Set to 1 to print render counts to the serial
- * console every two seconds -- see the block below for what the
- * numbers mean and which questions they answer.
- *
- * Off by default because it is console noise once the question it was
- * written for has been answered, not because it is expensive: the
- * counters are increments and the clock is read once per main loop,
- * not per row. (It WAS per row at first, which made every repaint slow
- * enough to see as a flash on each keystroke.) */
-#define TERM_INSTRUMENT 0
-
-#if TERM_INSTRUMENT
-static uint32_t ins_renders, ins_glyphs, ins_rows, ins_skipped;
-static uint32_t ins_last_report;
-
-static void ins_report(void)
-{
-	uint32_t now = z_uptime_ticks();
-
-	if (ins_last_report == 0) { ins_last_report = now; return; }
-	if (now - ins_last_report < Z_TICK_HZ * 2) return;
-	if (ins_renders == 0) { ins_last_report = now; return; }
-
-	printf("term: %lu renders, %lu rows, %lu glyphs "
-		"(%lu glyphs/render, %lu/row), %lu no-ops\n",
-		(unsigned long)ins_renders,
-		(unsigned long)ins_rows,
-		(unsigned long)ins_glyphs,
-		(unsigned long)(ins_glyphs / (ins_renders ? ins_renders : 1)),
-		(unsigned long)(ins_rows ? ins_glyphs / ins_rows : 0),
-		(unsigned long)ins_skipped);
-
-	ins_renders = ins_glyphs = ins_rows = ins_skipped = 0;
-	ins_last_report = now;
-}
-#else
-#define ins_report() ((void)0)
-#endif
-
-/* What is currently on the glass: character in the low 8 bits, reverse
- * flag in bit 8. Compared against the vt model to find the cells that
- * actually need redrawing -- see render().
- *
- * Initialised to a value no cell can hold, so the first render draws
- * everything rather than trusting a zeroed shadow that says the screen
- * is full of NULs. */
-static uint16_t shadow[VT_ROWS][VT_COLS];
-
-static void shadow_invalidate(void)
-{
-	for (int r = 0; r < VT_ROWS; r++)
-		for (int c = 0; c < VT_COLS; c++)
-			shadow[r][c] = 0xFFFF;
-}
-
-static void render(void) {
-
-	bool was_dirty[VT_ROWS];
+	bool dirty[VT_ROWS];
 	bool any_dirty = false;
-	for (int row = 0; row < VT_ROWS; row++) {
-		was_dirty[row] = vt_row_dirty(&vt, row);
-		if (was_dirty[row]) any_dirty = true;
-	}
-
-#if TERM_INSTRUMENT
-	ins_renders++;
-#endif
-
-	/* -- move the pixels a scroll left behind, instead of redrawing --
-	 *
-	 * A scroll changes every cell in the model, so the shadow compare
-	 * below would find them all different and redraw the whole
-	 * screen: 2000 glyphs, ~4.7ms, and a visible hitch every time
-	 * output scrolls.
-	 *
-	 * But the pixels that survived a scroll are already correct --
-	 * just one row too low. Blitting them up and shifting the SHADOW
-	 * by the same amount makes the compare below find them matching,
-	 * so it draws only the rows that genuinely changed. One blit plus
-	 * one row of glyphs instead of twenty-five.
-	 *
-	 * The shadow shift is what makes this cheap to add: without it
-	 * this would need its own bookkeeping about which rows are now
-	 * correct. With it, the existing compare works out the answer.
-	 *
-	 * Note the blit and the shift must agree exactly. If they
-	 * disagree the compare concludes rows match when they do not, and
-	 * the terminal shows stale text with no way to notice. */
-	{
-		uint16_t n = vt_take_scrolls(&vt);
-
-		/* DISABLED -- see the note in sw/apps/text/text.c's
-		 * scroll_repaint(). Falls back to invalidating the shadow,
-		 * which makes the compare below redraw everything: the
-		 * behaviour before the blit was added, and correct.
-		 *
-		 * vt_take_scrolls() is still called, and must be: the count
-		 * has to be consumed either way or it accumulates and the
-		 * first re-enabled scroll shifts by everything since boot. */
-		if (0 && n > 0 && n < VT_ROWS) {
-
-			z_clip_t c;
-			z_win_content_rect(&win, &c);
-
-			z_fb_hw_scroll((int)c.x0, (int)c.y0,
-				VT_COLS * TERM_FONT.w, VT_ROWS * TERM_FONT.h,
-				-(int)n * TERM_FONT.h);
-
-			for (int r = 0; r + n < VT_ROWS; r++)
-				for (int col = 0; col < VT_COLS; col++)
-					shadow[r][col] = shadow[r + n][col];
-
-			/* The rows that scrolled in hold nothing known. */
-			for (int r = VT_ROWS - n; r < VT_ROWS; r++)
-				for (int col = 0; col < VT_COLS; col++)
-					shadow[r][col] = 0xFFFF;
-
-			/* The cursor overlay moved with the pixels, so where the
-			 * inverted cell used to be no longer describes anything. */
-			draw_cursor_y -= (int)n;
-			if (draw_cursor_y < 0) { draw_cursor_x = -1; draw_cursor_y = -1; }
-
-		} else if (n > 0) {
-			/* Deliberately NOT shadow_invalidate() here.
-			 *
-			 * The shadow models what is ON THE GLASS, not what is
-			 * in the vt model. Reaching this branch means the
-			 * pixels were not touched -- no blit ran -- so the
-			 * shadow is still exactly right, and the compare below
-			 * will redraw precisely the cells whose content
-			 * changed. Invalidating throws that away and forces all
-			 * 2000 cells, which is the one thing this shadow exists
-			 * to avoid.
-			 *
-			 * It costs most in exactly the case that felt slowest:
-			 * a full-screen application that REPAINTS rather than
-			 * streams (top, vi -- anything cursor-addressed) emits
-			 * a scroll when it writes its bottom line, then rewrites
-			 * the same layout. Almost every cell is unchanged, so
-			 * the compare should draw almost nothing; the invalidate
-			 * turned every refresh into a whole-screen redraw.
-			 *
-			 * For a STREAMING terminal nothing is lost: after a
-			 * scroll every row's content genuinely differs from what
-			 * is on the glass, so the compare redraws it anyway.
-			 * Strictly better or equal, and no blit involved. */
-		}
-	}
-
-	/* Redraw only the cells that actually CHANGED, not every cell of
-	 * every dirty row.
-	 *
-	 * vt tracks dirt per ROW, so typing one character marked its row
-	 * dirty and this redrew all VT_COLS of it -- measured at 80 glyph
-	 * blits per keystroke where 1 would do.
-	 *
-	 * Rather than push cell-level tracking down into zvt100 (which
-	 * would touch every routine that writes a cell), this keeps a
-	 * shadow of what is actually ON SCREEN and compares. The dirty
-	 * flags still decide which rows are worth looking at, so a quiet
-	 * screen costs nothing; within those rows the shadow decides what
-	 * is worth drawing.
-	 *
-	 * It also covers a case the dirty flags never could: a row marked
-	 * dirty whose contents happen to be unchanged (a redundant
-	 * repaint, a reverse-video toggle back to where it started) now
-	 * draws nothing at all. */
-	for (int row = 0; row < VT_ROWS; row++) {
-		if (!was_dirty[row]) continue;
-#if TERM_INSTRUMENT
-		ins_rows++;
-#endif
-		for (int col = 0; col < VT_COLS; col++) {
-			vt_cell_t *cell = &vt.cells[row][col];
-			uint16_t now = (uint16_t)((uint8_t)cell->ch |
-				(cell->reverse ? 0x100u : 0u));
-			if (shadow[row][col] == now) continue;
-			shadow[row][col] = now;
-			draw_cell(col, row, cell->ch, cell->reverse);
-#if TERM_INSTRUMENT
-			ins_glyphs++;
-#endif
-		}
+	for (int r = 0; r < VT_ROWS; r++) {
+		dirty[r] = vt_row_dirty(&vt, r);
+		if (dirty[r]) any_dirty = true;
 	}
 	vt_clear_dirty(&vt);
 
-	// clamp for the deferred-wrap pending state (cursor_x can
-	// transiently equal VT_COLS right after the last column is
-	// written -- see zvt100.h) -- the visual cursor has nowhere
-	// sensible to sit past the last real column.
-	int cur_x = (vt.cursor_x >= VT_COLS) ? VT_COLS - 1 : vt.cursor_x;
-	int cur_y = vt.cursor_y;
+	/* Scrolled back while output arrives: stay on the same TEXT.
+	 *
+	 * Each line pushed shifts every document index by one, so without
+	 * this the view would creep towards live one line per line of
+	 * output and a long build log would drag whatever you were reading
+	 * away from you. Bumping view_off by the push count keeps the top
+	 * line's absolute id where it was -- until the ring is full and
+	 * starts evicting, at which point there is nothing left to stay on
+	 * and the clamp below lets it go. */
+	if (view_off > 0 && p > 0) {
+		uint32_t v = (uint32_t)view_off + p;
+		view_off = (v > count) ? (int)count : (int)v;
+	}
+	if (view_off > (int)count) view_off = count;
+	if (view_off < 0) view_off = 0;
 
-	bool cursor_moved = (cur_x != draw_cursor_x || cur_y != draw_cursor_y);
-	if (!any_dirty && !cursor_moved) {
-#if TERM_INSTRUMENT
-		ins_skipped++;
-		ins_report();
-#endif
+	bool all = render_all || !drawn_valid;
+	render_all = false;
+
+	if (sel_prepare()) all = true;
+
+	// The cursor is drawn only while connected: disconnected, there is
+	// nothing to type at, and a block sitting in the corner of the old
+	// session reads as a prompt that is not there.
+	int cur_row = -1, cur_col = 0;
+	if (port.connected) {
+		cur_col = (vt.cursor_x >= VT_COLS) ? VT_COLS - 1 : vt.cursor_x;
+		cur_row = vt.cursor_y + view_off;
+		if (cur_row >= VT_ROWS) cur_row = -1;
+	}
+
+	/* -- move surviving pixels instead of redrawing them --
+	 *
+	 * Two cases shift the WHOLE picture uniformly, and only those two
+	 * are accelerated:
+	 *
+	 *   - live before and after, and the screen scrolled n rows. The
+	 *     whole display IS the screen, so everything moved up by n.
+	 *     That includes DL at row 0, which is how vi scrolls.
+	 *
+	 *   - no output at all since the last render, and the view offset
+	 *     changed. The whole display is the same document shown from a
+	 *     different line.
+	 *
+	 * Anything else -- output arriving while scrolled back, a history
+	 * clear, both at once -- is not a uniform shift, and the full
+	 * comparison below handles it correctly, just without the blit.
+	 *
+	 * Never while an overlay is up: its pixels would be carried along
+	 * with the text and nothing would put them back.
+	 *
+	 * z_fb_hw_scroll_allowed() first, because z_fb_hw_scroll() refuses
+	 * silently for a partly covered window. Shifting the shadow for a
+	 * blit that did not happen is precisely the stale-text failure the
+	 * shift exists to avoid. */
+	if (drawn_valid && !bar_active && !panel_visible) {
+
+		int shift = 0;
+
+		if (view_off == 0 && drawn_view_off == 0)
+			shift = n;
+		else if (n == 0 && p == 0 && count == drawn_count)
+			shift = drawn_view_off - view_off;
+
+		if (shift != 0 && shift > -VT_ROWS && shift < VT_ROWS &&
+			z_fb_hw_scroll_allowed(clip.x0, clip.y0, text_w, text_h)) {
+
+			z_fb_hw_scroll(clip.x0, clip.y0, text_w, text_h,
+				-shift * cell_h);
+			shadow_shift(shift);
+			all = true;
+			INS(ins_blits++);
+
+		}
+
+	}
+
+	if (view_off != drawn_view_off || count != drawn_count) all = true;
+	if (view_off > 0 && (any_dirty || n)) all = true;
+
+	INS(ins_full += all);
+
+	int doc0 = (int)count - view_off;
+	uint32_t top_id = pushed - (uint32_t)view_off;
+
+	for (int row = 0; row < VT_ROWS; row++) {
+
+		// Live and not forced: only rows the emulator touched, plus
+		// the rows the cursor is leaving and arriving on.
+		if (!all && !dirty[row] && row != cur_row && row != drawn_cursor_row)
+			continue;
+
+		int doc = doc0 + row;
+		uint32_t id = top_id + (uint32_t)row;
+
+		for (int col = 0; col < VT_COLS; col++) {
+
+			if (overlay_owns(row, col)) {
+				shadow[row][col] = GLASS_UNKNOWN;
+				continue;
+			}
+
+			uint8_t b;
+			if (doc >= (int)count) {
+				vt_cell_t *cell = &vt.cells[doc - count][col];
+				b = VT_PACK(cell->ch, cell->reverse);
+			} else {
+				b = vt_doc_cell(&vt, doc, col);
+			}
+
+			bool inv = VT_PACK_REV(b);
+			if (sel_on && sel_contains(id, col)) inv = !inv;
+			if (row == cur_row && col == cur_col) inv = !inv;
+
+			uint16_t want = (uint16_t)((uint8_t)VT_PACK_CH(b) | (inv ? 0x100u : 0u));
+			if (shadow[row][col] == want) continue;
+
+			shadow[row][col] = want;
+			draw_glyph(&clip, col, row, VT_PACK_CH(b), inv);
+
+		}
+
+	}
+
+	drawn_valid = true;
+	drawn_view_off = view_off;
+	drawn_count = count;
+	drawn_pushed = pushed;
+	drawn_cursor_row = cur_row;
+
+	ins_report();
+
+}
+
+// -- view --
+
+static void view_set(int off) {
+	int max = vt_history_count(&vt);
+	if (off < 0) off = 0;
+	if (off > max) off = max;
+	view_off = off;
+}
+
+static void view_scroll_by(int lines) { view_set(view_off + lines); }
+static void view_live(void) { view_set(0); }
+
+// ---------------------------------------------------------------
+// the Open bar (F11)
+// ---------------------------------------------------------------
+//
+// A one-line prompt across the bottom row where you type a target --
+// "telnet 10.0.0.5", "serial 9600", "port posix0", "ssh me@host" --
+// and Enter connects. Escape cancels. The four kinds and all the work
+// of resolving them live in sw/common/zconnect.h, shared with repl.
+//
+// A line, not a dialog: a widget panel would need its own window (wm
+// has no modal dialogs), and F11 is most useful exactly when whatever
+// you were connected to has stopped answering -- a prompt bar needs
+// nothing from anyone.
+//
+// It is an overlay (see overlay_owns()), not text written into the
+// emulator: writing it into the vt would destroy a row of the session
+// with nothing to restore it from.
+
+#define BAR_MAX 72
+
+static bool bar_dirty;
+static char bar_buf[BAR_MAX];
+static int  bar_len;
+static char bar_msg[VT_COLS + 1];	// shown instead of the prompt when set
+
+static void bar_draw(const z_clip_t *clip) {
+
+	if (!bar_active || !bar_dirty) return;
+
+	char line[VT_COLS + 1];
+	int row = VT_ROWS - 1;
+
+	if (bar_msg[0])
+		snprintf(line, sizeof(line), "%s", bar_msg);
+	else
+		snprintf(line, sizeof(line), "open> %s_", bar_buf);
+
+	// Every column, not just the text: the row is overwritten to its
+	// last cell so nothing of the session shows through past the end.
+	// Length taken once rather than testing line[i], because the bytes
+	// past the terminator are stack garbage.
+	int len = (int)strlen(line);
+	for (int i = 0; i < VT_COLS; i++)
+		draw_glyph(clip, i, row, i < len ? line[i] : ' ', true);
+
+	bar_dirty = false;
+
+}
+
+static void bar_open(void) {
+
+	// Reaching for the bar is taking over from auto-connect.
+	auto_cancel(NULL);
+
+	bar_active = true;
+	bar_buf[0] = 0;
+	bar_len = 0;
+	bar_msg[0] = 0;
+	bar_dirty = true;
+
+	// Ownership starts NOW, not at the next render: the shadow must
+	// stop describing the session's bottom row before the bar is drawn
+	// over it, or dismissing the bar finds nothing to redraw.
+	shadow_invalidate_rect(VT_ROWS - 1, 0, VT_ROWS - 1, VT_COLS - 1);
+
+}
+
+static void bar_dismiss(void) {
+
+	if (!bar_active) return;
+
+	bar_active = false;
+	bar_msg[0] = 0;
+
+	// The row's shadow is already GLASS_UNKNOWN, so examining it is
+	// all it takes to bring the session's own content back.
+	render_all = true;
+
+}
+
+static void bar_set_msg(const char *msg) {
+	snprintf(bar_msg, sizeof(bar_msg), "%s", msg);
+	bar_dirty = true;
+}
+
+static void bar_insert(uint32_t keysym) {
+	if (keysym >= 0x20 && keysym < 0x7f && bar_len < BAR_MAX - 1) {
+		bar_buf[bar_len++] = (char)keysym;
+		bar_buf[bar_len] = 0;
+	}
+	bar_dirty = true;
+}
+
+// Parse what was typed and go. Never called with an empty buffer.
+static void bar_submit(void) {
+
+	z_conn_kind_t kind;
+	z_conn_target_t target;
+	char word[12], err[128], msg[VT_COLS + 1];
+	const char *rest;
+	size_t wl = 0;
+
+	while (bar_buf[wl] && bar_buf[wl] != ' ' && wl < sizeof(word) - 1) {
+		word[wl] = bar_buf[wl];
+		wl++;
+	}
+	word[wl] = 0;
+
+	if (!z_conn_kind_from_word(word, &kind)) {
+		bar_set_msg("open: try port|serial|telnet|ssh   (Esc cancels)");
 		return;
 	}
 
-	// erase the old cursor cell back to its real (non-inverted)
-	// appearance -- unless that row was already covered by the
-	// dirty-cell redraw above, which already drew it correctly
-	if (draw_cursor_y >= 0 && draw_cursor_y < VT_ROWS && !was_dirty[draw_cursor_y]) {
-		vt_cell_t *old_cell = &vt.cells[draw_cursor_y][draw_cursor_x];
-		draw_cell(draw_cursor_x, draw_cursor_y, old_cell->ch, old_cell->reverse);
-		shadow[draw_cursor_y][draw_cursor_x] = (uint16_t)((uint8_t)old_cell->ch |
-			(old_cell->reverse ? 0x100u : 0u));
+	rest = bar_buf + wl;
+	while (*rest == ' ') rest++;
+
+	// z_conn_prepare() BLOCKS for telnet and ssh -- a DNS lookup or an
+	// ssh prepare can take seconds with no messages read and no
+	// repaint. Say so on the glass BEFORE calling it, or the terminal
+	// simply freezes with no explanation. See zconnect.h.
+	snprintf(msg, sizeof(msg), "open: %s %.60s ...", z_conn_kind_name(kind), rest);
+	bar_set_msg(msg);
+	frame();
+
+	if (!z_conn_prepare(kind, rest, &target, err, sizeof(err))) {
+		// Left up rather than dismissed: an error you have to press a
+		// key to clear is an error you actually read.
+		snprintf(msg, sizeof(msg), "%.80s", err);
+		bar_set_msg(msg);
+		return;
 	}
 
-	// draw the new cursor cell inverted
-	vt_cell_t *cur_cell = &vt.cells[cur_y][cur_x];
-	draw_cell(cur_x, cur_y, cur_cell->ch, !cur_cell->reverse);
-	/* Drawn INVERTED, so record the inverted form -- otherwise the
-	 * next render sees the shadow agreeing with the model and never
-	 * erases the cursor. */
-	shadow[cur_y][cur_x] = (uint16_t)((uint8_t)cur_cell->ch |
-		(!cur_cell->reverse ? 0x100u : 0u));
-
-	draw_cursor_x = cur_x;
-	draw_cursor_y = cur_y;
-
-#if TERM_INSTRUMENT
-	/* the cursor erase and redraw above are glyphs too */
-	ins_glyphs += 2;
-	ins_report();
-#endif
-
-	// NOTE: this used to also call a resweep_right_of_cursor()
-	// mitigation here (re-stamping a bounded run of columns after
-	// every dirty-row redraw, gated behind a TERM_RESWEEP_MITIGATION
-	// build flag) for a horizontal-garbage-near-typed-text artifact.
-	// Removed now that the actual root cause has been found and fixed
-	// at the source: rtl/gpu/gpu_blit.v's straddling-glyph state
-	// machine could capture the WRONG framebuffer word's data into a
-	// high-word read-modify-write, due to too narrow a bus-settle gap
-	// between the low-word write and the high-word read (see that
-	// file's own ST_GLYPH_HI_SETTLE1/2 states, and docs/gpu_blitter.md,
-	// "Bugs found (and fixed)" #5, for the full writeup and how this
-	// was actually confirmed via simulation this time, not just
-	// theorized). If garbage reappears after this fix on real
-	// hardware, that's strong evidence this specific fix isn't (the
-	// whole of) the cause after all -- see git history for
-	// resweep_right_of_cursor()'s implementation, which is safe to
-	// reintroduce (it can only ever redraw correct content, never
-	// destroy any) while investigating further.
+	connect_port(target.provider, target.arg, target.timeout_ticks,
+		target.detail[0] ? target.detail : target.provider);
 
 }
 
-static void feed_and_echo(const char *s) {
-	vt_feed(&vt, (const uint8_t *)s, (uint32_t)strlen(s));
+// Returns true if the key was consumed by the bar -- which, while the
+// bar is up, is every key: otherwise Escape and F12 would be two
+// answers to one question.
+static bool bar_key(uint32_t keysym) {
+
+	if (!bar_active) return false;
+
+	// Any key clears a message and returns to editing, so an error
+	// does not have to be dismissed separately from the prompt.
+	if (bar_msg[0]) {
+		bar_msg[0] = 0;
+		bar_dirty = true;
+		if (keysym == 0x1b) bar_dismiss();
+		return true;
+	}
+
+	switch (keysym) {
+
+	case 0x1b:					// Esc
+		bar_dismiss();
+		return true;
+
+	case 0x0d:					// Enter
+		if (!bar_len) { bar_dismiss(); return true; }
+		bar_submit();
+		return true;
+
+	case 0x08:					// Backspace
+	case 0x7f:
+		if (bar_len) bar_buf[--bar_len] = 0;
+		bar_dirty = true;
+		return true;
+
+	default:
+		bar_insert(keysym);
+		return true;
+
+	}
+
 }
 
-// closes the current port connection (if any -- harmless no-op via
-// z_port_close()'s own `if (!port->connected) return;` if there isn't
-// one) and attempts a new one to `name` (a pidreg name, e.g.
-// "repl0"/"portdemo0"), falling back to `fallback_pid` ONLY if that
-// lookup fails and `fallback_pid` is nonzero -- pass 0 for a
-// caller-specified name (Z_TERM_SET_PORT below) where there's no
-// sensible fixed-pid guess to fall back to, the way there is for the
-// well-known startup default (see main()'s own call to this).
+// ---------------------------------------------------------------
+// the start panel
+// ---------------------------------------------------------------
 //
-// blocks for up to z_port_connect()'s own timeout either way (same
-// accepted "discards unrelated messages while waiting" limitation
-// that already applied to the startup connection -- see
-// z_port_connect()'s own comment, zport.c) -- called from the main
-// message loop for Z_TERM_SET_PORT, not just at startup, so a
-// SET_PORT-triggered reconnect can now genuinely stall this term's
-// responsiveness to keystrokes/redraws for that same window, same as
-// it already could during the one that happens before the main loop
-// even starts.
-// `arg` is forwarded as-is into z_port_connect_arg() -- Z_NONE for
-// every existing caller (the startup connection, and repl's `port
-// <name>` command), non-Z_NONE only for the Z_TERM_SET_PORT Z_MAP
-// form (see zterm.h) -- e.g. repl's `telnet <ip>` command, which
-// needs `net` to see the target IP as part of the CONNECT itself.
-// `timeout_ticks`: how long to wait for CONNECTED/REFUSED --
-// Z_PORT_CONNECT_TIMEOUT_TICKS (zport.h) for the common case (default
-// arg, or a provider expected to answer almost immediately), longer
-// for a provider known to do something slow before it can reply
-// either way -- see the Z_MAP call site below (telnet) for the
-// motivating case and the actual number used.
-// forward declaration -- handle_key_event() itself is defined later
-// in this file (it needs `vt`/state connect_port() doesn't otherwise
-// depend on), but connect_port()'s own wait loop (below) needs to
-// call it to service Z_WM_KEY while blocked on a slow connect, same
-// as the main loop already does.
-static void handle_key_event(uint32_t packed);
+// Shown whenever this window is not connected to anything: at startup,
+// after F12, and when the far end closes the connection. Three
+// buttons -- REPL, POSIX, OPEN -- plus what each is and a status line
+// saying why you are here.
+//
+// A block of cells rather than a separate window, for the same reason
+// the Open bar is a line: a second window means a focus question when
+// it closes, and this is part of the terminal, not something in front
+// of it. The session's old text stays visible around it, and Esc hides
+// it to read what it covers.
+//
+// The shell buttons are enabled only while their provider is
+// REGISTERED (pidreg), rechecked twice a second while the panel is up.
+// At boot, term can be on screen before init has finished loading repl
+// and posix off the card; the buttons coming alive as each one appears
+// says that far better than a click that fails. On a card-less board
+// they stay disabled, which is the truth -- see docs/flash_apps.md.
 
-static bool connect_port(const char *name, uint32_t fallback_pid, z_obj_t arg,
-	uint32_t timeout_ticks) {
+enum { PB_REPL = 0, PB_POSIX, PB_OPEN, PB_COUNT };
 
-	if (port.connected) z_port_close(&port);
+static z_widget_t panel_items[PB_COUNT];
+static z_widget_set_t panel_set;
 
-	uint32_t target_pid;
-	if (!z_pid_lookup(name, &target_pid)) {
-		if (!fallback_pid) {
-			printf("term: '%s' not found -- local echo only\n", name);
-			return false;
-		}
-		target_pid = fallback_pid;
+static bool panel_dirty;
+static char panel_status[VT_COLS + 1];
+
+// Set once the user moves focus with Tab or an arrow. Until then focus
+// follows the first ready shell -- at boot the panel is often up before
+// repl0 has registered, and focus left on OPEN because that was the
+// only live button would make Enter do the less likely thing.
+static bool panel_focus_user;
+static bool repl_up, posix_up;
+static uint32_t panel_probe_at;
+
+// Pixel geometry, content-relative. The block is PANEL_C0..C1 x
+// PANEL_R0..R1 in cells, so it lands exactly on cell boundaries and
+// every pixel it covers belongs to a cell it owns.
+#define PANEL_TEXT_X   10
+#define PANEL_TITLE_Y   6
+#define PANEL_BTN_Y    22
+#define PANEL_BTN_W    72
+#define PANEL_BTN_H    16
+#define PANEL_BTN_GAP  16
+#define PANEL_DESC_Y   48
+#define PANEL_STATUS_Y 82
+#define PANEL_HINT_Y   96
+
+static int panel_px(void) { return PANEL_C0 * cell_w; }
+static int panel_py(void) { return PANEL_R0 * cell_h; }
+static int panel_pw(void) { return (PANEL_C1 - PANEL_C0 + 1) * cell_w; }
+static int panel_ph(void) { return (PANEL_R1 - PANEL_R0 + 1) * cell_h; }
+
+static void panel_layout(void) {
+
+	static const char *labels[PB_COUNT] = { "REPL", "POSIX", "OPEN F11" };
+
+	int total = PB_COUNT * PANEL_BTN_W + (PB_COUNT - 1) * PANEL_BTN_GAP;
+	int x = panel_px() + (panel_pw() - total) / 2;
+
+	memset(panel_items, 0, sizeof(panel_items));
+
+	for (int i = 0; i < PB_COUNT; i++) {
+		panel_items[i].type = Z_WIDGET_BUTTON;
+		panel_items[i].x = (int16_t)(x + i * (PANEL_BTN_W + PANEL_BTN_GAP));
+		panel_items[i].y = (int16_t)(panel_py() + PANEL_BTN_Y);
+		panel_items[i].w = PANEL_BTN_W;
+		panel_items[i].h = PANEL_BTN_H;
+		panel_items[i].label = labels[i];
+		panel_items[i].enabled = (i == PB_OPEN);
 	}
 
-	// inline reimplementation of z_port_connect_arg_timeout() (zport.c)
-	// rather than a direct call to it -- that function's own wait loop
-	// discards anything that isn't Z_PORT_CONNECTED/Z_PORT_REFUSED
-	// ("not a reply to our CONNECT -- discard and keep waiting"), which
-	// is the right call for its OTHER callers (a short, fixed ~2s
-	// timeout, and no window/keyboard traffic to lose in the first
-	// place for most of them) but wrong here: this function's own
-	// header comment already flagged, before TERM_TELNET_CONNECT_
-	// TIMEOUT_TICKS existed, that a SET_PORT-triggered reconnect could
-	// "stall this term's responsiveness to keystrokes/redraws for that
-	// same window" -- a real, accepted limitation at the original ~2s
-	// window. Extending that window to 45s for telnet specifically
-	// (TERM_TELNET_CONNECT_TIMEOUT_TICKS's own comment) turned a small,
-	// easy-to-miss accepted gap into a ~22x larger one: real-hardware
-	// symptom this was chasing was `wm`'s own "timed out waiting for
-	// pid N to ack a redraw" firing during an active telnet connect
-	// attempt (repair_region()/repair_drag(), wm.c) -- because THIS
-	// wait loop was discarding the exact Z_WM_REDRAW message that
-	// carries this window's own updated (x,y) after a move
-	// (z_win_apply_redraw(), below) and that `wm` needs a
-	// Z_WM_REDRAW_DONE reply to before it'll stop waiting. `win`'s own
-	// cached position went stale for the rest of this term's lifetime
-	// as a result -- silently wrong content-vs-chrome placement at
-	// best, a real, still only partially understood contributor to
-	// harder crashes reported on real hardware at worst.
-	//
-	// Services the same subset of messages the main loop below does
-	// (Z_WM_REDRAW/Z_WM_WINDOW_MOVED/Z_WM_KEY), matching wm.c's own
-	// wait_for_redraw_done() convention ("keeps servicing every other
-	// message normally while waiting... rather than discarding them").
-	// Z_PORT_DATA/Z_PORT_DATA_ACK/Z_PORT_CLOSE/Z_TERM_SET_PORT are
-	// deliberately NOT serviced here: the port this call is in the
-	// middle of (re)establishing isn't connected yet (or is the OLD
-	// one, already closed above), so there's no sensible connection
-	// for incoming data to belong to, and a nested SET_PORT arriving
-	// mid-connect is an edge case rare enough not to be worth this
-	// function calling itself recursively to handle.
+	z_widget_set_init(&panel_set, panel_items, PB_COUNT, &win);
+
+}
+
+// Looks the two shells up. `force` skips the half-second throttle.
+static void panel_probe(bool force) {
+
+	uint32_t now = z_uptime_ticks();
+	uint32_t pid;
+
+	if (!force && now - panel_probe_at < Z_TICK_HZ / 2) return;
+	panel_probe_at = now;
+
+	bool r = z_pid_lookup("repl0", &pid);
+	bool p = z_pid_lookup("posix0", &pid);
+
+	if (r == repl_up && p == posix_up && !force) return;
+
+	repl_up = r;
+	posix_up = p;
+
+	panel_items[PB_REPL].enabled = r;
+	panel_items[PB_POSIX].enabled = p;
+
+	// A focused button that just became disabled would leave Enter
+	// doing nothing, and until the user has chosen, the first ready
+	// shell is the better default than OPEN.
+	int f = panel_set.focused;
+	if (!panel_focus_user) {
+		int want = r ? PB_REPL : (p ? PB_POSIX : PB_OPEN);
+		if (want != f) z_widget_focus_set(&panel_set, want);
+	} else if (f < 0 || !panel_items[f].enabled) {
+		z_widget_focus_next(&panel_set, false);
+	}
+
+	panel_dirty = true;
+
+}
+
+static void panel_show(const char *status) {
+
+	if (status) snprintf(panel_status, sizeof(panel_status), "%s", status);
+
+	if (!panel_visible) {
+		shadow_invalidate_rect(PANEL_R0, PANEL_C0, PANEL_R1, PANEL_C1);
+		panel_focus_user = false;
+	}
+
+	panel_visible = true;
+	panel_dirty = true;
+	panel_probe(true);
+
+}
+
+static void panel_hide(void) {
+	if (!panel_visible) return;
+	panel_visible = false;
+	render_all = true;
+}
+
+static void panel_draw(void) {
+
+	if (!panel_visible) return;
+
+	if (!panel_dirty) {
+		// Focus moves and presses mark single widgets dirty.
+		z_widget_draw_all(&panel_set, false);
+		return;
+	}
+
+	z_clip_t clip;
+	z_win_content_rect(&win, &clip);
+
+	int x = panel_px(), y = panel_py(), w = panel_pw(), h = panel_ph();
+	char line[VT_COLS + 1];
+
+	z_win_fill_rect(&win, x, y, w, h, 0);
+	z_win_hw_box(&win, clip.x0 + x + 1, clip.y0 + y + 1,
+		clip.x0 + x + w - 2, clip.y0 + y + h - 2, 1);
+
+	snprintf(line, sizeof(line), "%s -- not connected", instance_name);
+	z_win_draw_text2(&win, x + (w - (int)strlen(line) * cell_w) / 2,
+		y + PANEL_TITLE_Y, line, 1, 0, &TERM_FONT);
+
+	z_widget_draw_all(&panel_set, true);
+
+	snprintf(line, sizeof(line), "%-6s %-31s %11s", "REPL",
+		"Scheme and system commands", repl_up ? "ready" : "not running");
+	z_win_draw_text2(&win, x + PANEL_TEXT_X, y + PANEL_DESC_Y, line, 1, 0, &TERM_FONT);
+
+	snprintf(line, sizeof(line), "%-6s %-31s %11s", "POSIX",
+		"Unix-style shell, zcc and vi", posix_up ? "ready" : "not running");
+	z_win_draw_text2(&win, x + PANEL_TEXT_X, y + PANEL_DESC_Y + 10, line, 1, 0, &TERM_FONT);
+
+	snprintf(line, sizeof(line), "%-6s %s", "OPEN",
+		"port, serial, telnet or ssh");
+	z_win_draw_text2(&win, x + PANEL_TEXT_X, y + PANEL_DESC_Y + 20, line, 1, 0, &TERM_FONT);
+
+	if (panel_status[0])
+		z_win_draw_text2(&win, x + PANEL_TEXT_X, y + PANEL_STATUS_Y,
+			panel_status, 1, 0, &TERM_FONT);
+
+	z_win_draw_text2(&win, x + PANEL_TEXT_X, y + PANEL_HINT_Y,
+		"Tab chooses, Enter connects, or type a target", 1, 0, &TERM_FONT);
+	z_win_draw_text2(&win, x + PANEL_TEXT_X, y + PANEL_HINT_Y + 10,
+		"F12 disconnects  Esc hides  Shift+PgUp scrolls", 1, 0, &TERM_FONT);
+
+	panel_dirty = false;
+
+}
+
+static void panel_activate(int idx) {
+
+	switch (idx) {
+	case PB_REPL:
+		connect_port("repl0", z_obj_none(), Z_CONN_TIMEOUT_LOCAL_TICKS, "repl0");
+		break;
+	case PB_POSIX:
+		connect_port("posix0", z_obj_none(), Z_CONN_TIMEOUT_LOCAL_TICKS, "posix0");
+		break;
+	case PB_OPEN:
+		bar_open();
+		break;
+	default:
+		break;
+	}
+
+}
+
+static bool panel_contains_px(int cx, int cy) {
+	return cx >= panel_px() && cx < panel_px() + panel_pw() &&
+		cy >= panel_py() && cy < panel_py() + panel_ph();
+}
+
+// Keys while disconnected and the bar is not up.
+static void panel_key(uint32_t keysym, uint8_t mods) {
+
+	// Hidden with Esc to read what was underneath: any key brings it
+	// back, and is spent doing so rather than acting on a panel the
+	// user could not see.
+	if (!panel_visible) { panel_show(NULL); return; }
+
+	int idx;
+
+	switch (keysym) {
+
+	case 0x09:					// Tab / Shift+Tab
+		z_widget_focus_next(&panel_set, (mods & Z_KBD_MOD_SHIFT) != 0);
+		panel_focus_user = true;
+		break;
+
+	case Z_KEY_LEFT:
+		z_widget_focus_next(&panel_set, true);
+		panel_focus_user = true;
+		break;
+
+	case Z_KEY_RIGHT:
+		z_widget_focus_next(&panel_set, false);
+		panel_focus_user = true;
+		break;
+
+	case 0x0d:					// Enter
+	case ' ':
+		idx = z_widget_key_activate(&panel_set);
+		if (idx >= 0) panel_activate(idx);
+		break;
+
+	case 0x1b:					// Esc
+		// While auto-connect is waiting, Esc stops the wait -- the
+		// panel says it is waiting, so that is what Esc is for. The
+		// next Esc hides the panel as usual.
+		if (auto_pending) auto_cancel("auto-connect cancelled");
+		else panel_hide();
+		break;
+
+	default:
+		// Anything printable starts the Open bar with it, so a target
+		// can simply be typed: `port posix0`, `telnet myhost`.
+		if (keysym > 0x20 && keysym < 0x7f) {
+			bar_open();
+			bar_insert(keysym);
+		}
+		break;
+
+	}
+
+}
+
+// ---------------------------------------------------------------
+// connections
+// ---------------------------------------------------------------
+
+// Set for the duration of connect_port()'s wait. Input handlers check
+// it: the wait services keys and the pointer so the window stays
+// responsive, but a click or an Enter that started a SECOND connect
+// from inside the first would recurse through this function.
+static bool connecting;
+static bool connect_cancel;
+
+// Leaves whatever this window is connected to and shows the panel.
+static void term_disconnect(const char *status) {
+
+	if (port.connected) {
+		z_port_close(&port);
+		port.connected = false;
+	}
+
+	bar_dismiss();
+	panel_show(status);
+
+}
+
+static void handle_redraw(uint32_t packed) {
+
+	z_win_apply_redraw(&win, packed);
+
+	// The window has been repainted underneath us, so the shadow no
+	// longer describes the glass, and neither overlay is on it.
+	shadow_invalidate();
+	drawn_valid = false;
+	bar_dirty = true;
+	panel_dirty = true;
+	z_widget_invalidate(&panel_set);
+	sbar.dirty = true;
+
+}
+
+/*
+ * Closes the current connection (if any) and connects to `name`, a
+ * pidreg name ("repl0", "posix0", "net0"). `arg` travels with the
+ * CONNECT (z_port_connect_arg()); `label` is what the status line
+ * calls the target.
+ *
+ * On success the panel and bar go away and the view returns to live.
+ * On failure the panel says why.
+ *
+ * -- why this is an inline copy of z_port_connect_arg_timeout() --
+ *
+ * That function's wait loop discards everything that is not
+ * CONNECTED/REFUSED, which is right for its other callers and wrong
+ * here. This window keeps receiving Z_WM_REDRAW while it waits, and wm
+ * waits for a Z_WM_REDRAW_DONE in return (repair_region()/repair_drag(),
+ * wm.c) -- discarding it left wm timing out and this window's cached
+ * position stale for the rest of its life, found on real hardware
+ * during a 45-second telnet connect. So this services redraws, clip
+ * updates, moves and keys while it waits, matching wm.c's own
+ * wait_for_redraw_done() convention.
+ *
+ * Z_PORT_DATA arriving meanwhile is ACKED and dropped: it belongs to
+ * the connection just closed, and an unacked DATA holds one of the
+ * sender's Z_PORT_MAX_PENDING_SENDS slots forever.
+ */
+static bool connect_port(const char *name, z_obj_t arg,
+	uint32_t timeout_ticks, const char *label) {
+
+	char status[VT_COLS + 1];
+	uint32_t target_pid;
+
+	if (connecting) return false;
+
+	// Any connection, however it was asked for, supersedes a pending
+	// auto-connect.
+	auto_pending = false;
+
+	if (port.connected) {
+		z_port_close(&port);
+		port.connected = false;
+	}
+
+	if (!z_pid_lookup(name, &target_pid)) {
+		printf("term: '%s' not found\n", name);
+		snprintf(status, sizeof(status), "%.40s is not running", name);
+		bar_dismiss();
+		panel_show(status);
+		return false;
+	}
 
 	port.peer_pid = target_pid;
 	port.conn_id = 0;
@@ -601,102 +1070,444 @@ static bool connect_port(const char *name, uint32_t fallback_pid, z_obj_t arg,
 
 	z_msg_new_send(target_pid, Z_PORT_CONNECT, 0, arg);
 
-	uint32_t start = z_uptime_ticks();
-	z_rv result = Z_FAIL;
-	bool refused = false;
+	connecting = true;
+	connect_cancel = false;
 
-	while ((z_uptime_ticks() - start) < timeout_ticks) {
+	uint32_t start = z_uptime_ticks();
+	bool shown = false;
+	bool ok = false;
+	status[0] = 0;
+
+	while (!connect_cancel && (z_uptime_ticks() - start) < timeout_ticks) {
+
+		// Only once it has been slow enough to notice -- see
+		// TERM_CONNECT_QUIET_TICKS.
+		if (!shown && (z_uptime_ticks() - start) >= TERM_CONNECT_QUIET_TICKS) {
+			char msg[VT_COLS + 1];
+			if (!bar_active) bar_open();
+			snprintf(msg, sizeof(msg), "connecting to %.45s ...  (Esc cancels)",
+				label);
+			bar_set_msg(msg);
+			frame();
+			shown = true;
+		}
 
 		z_msg_t msg;
-		if (z_msg_read(&msg) != Z_OK) continue;
+		if (z_msg_read(&msg) != Z_OK) {
+			z_proc_wait(1);
+			continue;
+		}
 
 		if (msg.subject == Z_PORT_CONNECTED && msg.tag == 0) {
 			port.conn_id = msg.obj.val.uint32;
 			port.connected = true;
-			result = Z_OK;
+			ok = true;
 			break;
 		}
 
 		if (msg.subject == Z_PORT_REFUSED && msg.tag == 0) {
 			if (msg.obj.type == Z_STR && msg.obj.val.str)
-				printf("zport: connect to pid %ld refused: %s\n",
-					(long)target_pid, msg.obj.val.str);
+				snprintf(status, sizeof(status), "%.30s refused: %.40s",
+					label, msg.obj.val.str);
 			else
-				printf("zport: connect to pid %ld refused (no reason given)\n",
-					(long)target_pid);
-			refused = true;
+				snprintf(status, sizeof(status), "%.55s refused the connection",
+					label);
 			break;
 		}
 
-		// The part of this window not covered by the windows in
-		// front of it -- see z_win_apply_clip() in zwin.c. The ack
-		// it sends is not optional: wm waits for it when a region
-		// narrows.
 		if (msg.subject == Z_WM_SET_CLIP) {
+			// Not optional: wm waits for the ack when a region
+			// narrows. See z_win_apply_clip() in zwin.c.
 			z_win_apply_clip(&win, &msg.obj);
-			continue;
-		}
-
-		if (msg.subject == Z_WM_REDRAW) {
-			z_win_apply_redraw(&win, msg.obj.val.uint32);
-			vt_mark_all_dirty(&vt);
-			/* The window has been repainted underneath us, so the
-			 * shadow no longer describes what is on the glass.
-			 * Without this, render() compares against a shadow that
-			 * still matches the model and draws nothing -- leaving
-			 * the terminal blank after a move or an occlusion, which
-			 * is far worse than the redundant redraw it replaced. */
-			shadow_invalidate();
-			draw_cursor_x = -1;
-			draw_cursor_y = -1;
-			render();
+		} else if (msg.subject == Z_WM_REDRAW) {
+			handle_redraw(msg.obj.val.uint32);
+			frame();
 			z_win_redraw_done(&win);
 		} else if (msg.subject == Z_WM_WINDOW_MOVED) {
 			z_win_parse_rect(&win, &msg.obj);
-		} else if (msg.subject == Z_WM_MOUSE) {
-			if (msg.obj.type == Z_UINT32)
-				handle_mouse_event(msg.obj.val.uint32);
 		} else if (msg.subject == Z_WM_KEY) {
 			handle_key_event(msg.obj.val.uint32);
+			if (connect_cancel) break;
+			frame();
+		} else if (msg.subject == Z_PORT_DATA) {
+			z_port_send_ack(&msg);
 		}
-		// anything else: same "not relevant to this wait" discard the
-		// generic zport.c version already documents.
+		// anything else: not relevant to this wait -- the same
+		// discard zport.c's own version documents.
 
 	}
 
-	if (result == Z_OK) {
-		printf("term: connected to port at pid %ld (conn %ld)\n",
+	connecting = false;
+
+	if (ok) {
+		printf("term: connected to %s (pid %ld, conn %ld)\n", name,
 			(long)port.peer_pid, (long)port.conn_id);
+		bar_dismiss();
+		panel_hide();
+		view_live();
 		return true;
 	}
 
-	if (!refused) {
-		printf("zport: connect to pid %ld timed out after %ld ticks -- "
-			"provider never replied\n", (long)target_pid, (long)timeout_ticks);
-	}
+	if (connect_cancel)
+		snprintf(status, sizeof(status), "cancelled connecting to %.50s", label);
+	else if (!status[0])
+		snprintf(status, sizeof(status), "no answer from %.50s", label);
 
-	printf("term: no port provider answered at pid %ld -- local echo only\n",
-		(long)target_pid);
+	printf("term: %s\n", status);
+
+	bar_dismiss();
+	panel_show(status);
 	return false;
 
 }
 
-// translates one keysym into 0+ raw bytes to send onward -- to the
-// port if connected, or fed straight back as local echo if not (see
-// this file's own header comment). the arrow/nav/F-key sequences are
-// the common xterm-ish convention (ESC[A, ESC[1~, ESC[15~, etc), not
-// strict original VT100 -- real VT100 only had PF1-PF4 (no F5-F12, no
-// nav cluster at all, those came later). this matches what most
-// things people actually connect to expect, which matters more here
-// than strict fidelity to 1978 hardware.
+// ---------------------------------------------------------------
+// auto-connect (apps.term.auto_connect)
+// ---------------------------------------------------------------
 //
-// backspace maps to a single raw DEL (0x7f) -- the byte a real
-// terminal actually sends. the nicer "move left, blank, move left"
-// local-VISUAL erase trick some terminals do is handled separately in
-// handle_key_event(), only in the no-port fallback path, since it's a
-// rendering convenience for THIS display, not something that belongs
-// in the byte stream itself -- a real remote decides what backspace
-// should look like from its own echo, same as any other byte.
+// The same text the Open bar takes -- "port repl0", "serial 9600",
+// "telnet host", "ssh me@host" -- read from /zeitlos.cfg when the
+// window opens. Empty, absent or "none" means the start panel, as
+// before. See docs/config.md.
+//
+// -- waiting for the provider --
+//
+// A window opened at boot can be on screen before the thing it wants
+// has registered: init loads repl and posix off the card, and wm
+// enables the dock as soon as init has STARTED them, not once they are
+// listening. Connecting straight away would fail with "repl0 is not
+// running" for a shell that is a second from being ready.
+//
+// So it waits, up to TERM_AUTO_WAIT_TICKS, for the provider's NAME to
+// appear -- the port's own name, serial0 for serial, net0 for telnet
+// and ssh -- then connects once. The panel says what it is waiting
+// for, and Esc stops it. It never retries after a connect has actually
+// been attempted: a refusal is an answer, and a window that keeps
+// hammering at a provider that said no is worse than one that shows
+// why.
+//
+// Only at startup. F12 and a closed connection still land on the
+// panel; auto-connecting again there would make F12 a way back into
+// the thing you were trying to leave.
+
+#define TERM_AUTO_WAIT_TICKS (Z_TICK_HZ * 15)
+
+static char auto_text[BAR_MAX];
+static char auto_wait_for[24];
+static uint32_t auto_deadline;
+static uint32_t auto_next_probe;
+
+static void auto_cancel(const char *status) {
+	if (!auto_pending) return;
+	auto_pending = false;
+	if (status) panel_show(status);
+}
+
+// Splits "word rest". Returns false if word is not a connection kind.
+static bool auto_parse(const char *text, z_conn_kind_t *kind, const char **rest) {
+
+	char word[12];
+	size_t wl = 0;
+
+	while (text[wl] && text[wl] != ' ' && wl < sizeof(word) - 1) {
+		word[wl] = text[wl];
+		wl++;
+	}
+	word[wl] = 0;
+
+	if (!z_conn_kind_from_word(word, kind)) return false;
+
+	*rest = text + wl;
+	while (**rest == ' ') (*rest)++;
+	return true;
+
+}
+
+// Reads the setting and, if there is one, starts waiting.
+static void auto_begin(void) {
+
+	char v[Z_CFG_VAL_MAX];
+	char status[VT_COLS + 1];
+	z_conn_kind_t kind;
+	const char *rest;
+
+	z_cfg_get("apps.term.auto_connect", v, sizeof(v));
+
+	if (!v[0] || !strcmp(v, "none")) return;
+
+	if (strlen(v) >= sizeof(auto_text) || !auto_parse(v, &kind, &rest)) {
+		snprintf(status, sizeof(status),
+			"zeitlos.cfg auto_connect: try port|serial|telnet|ssh");
+		printf("term: apps.term.auto_connect '%s' not understood\n", v);
+		panel_show(status);
+		return;
+	}
+
+	snprintf(auto_text, sizeof(auto_text), "%.71s", v);	// length checked above
+
+	switch (kind) {
+	case Z_CONN_PORT:   snprintf(auto_wait_for, sizeof(auto_wait_for), "%.23s", rest); break;
+	case Z_CONN_SERIAL: snprintf(auto_wait_for, sizeof(auto_wait_for), "serial0"); break;
+	default:            snprintf(auto_wait_for, sizeof(auto_wait_for), "net0"); break;
+	}
+
+	auto_pending = true;
+	auto_deadline = z_uptime_ticks() + TERM_AUTO_WAIT_TICKS;
+	auto_next_probe = 0;
+
+	snprintf(status, sizeof(status), "auto-connect: %.40s  (Esc cancels)",
+		auto_text);
+	panel_show(status);
+
+}
+
+// Called every frame while pending. Throttled to four probes a second.
+static void auto_poll(void) {
+
+	uint32_t now, pid;
+	char status[VT_COLS + 1];
+
+	if (!auto_pending || connecting) return;
+
+	now = z_uptime_ticks();
+	if (now < auto_next_probe) return;
+	auto_next_probe = now + Z_TICK_HZ / 4;
+
+	if (!z_pid_lookup(auto_wait_for, &pid)) {
+		if (now >= auto_deadline) {
+			auto_pending = false;
+			snprintf(status, sizeof(status),
+				"auto-connect: %.24s did not appear -- choose below", auto_wait_for);
+			panel_show(status);
+		}
+		return;
+	}
+
+	// Ready. One attempt, through exactly the Open bar's path.
+	auto_pending = false;
+
+	z_conn_kind_t kind;
+	const char *rest;
+	z_conn_target_t target;
+	char err[128];
+
+	auto_parse(auto_text, &kind, &rest);
+
+	if (!z_conn_prepare(kind, rest, &target, err, sizeof(err))) {
+		snprintf(status, sizeof(status), "auto-connect: %.60s", err);
+		panel_show(status);
+		return;
+	}
+
+	connect_port(target.provider, target.arg, target.timeout_ticks,
+		target.detail[0] ? target.detail : target.provider);
+
+}
+
+// ---------------------------------------------------------------
+// selection input, copy and paste
+// ---------------------------------------------------------------
+
+static void sel_clear(void) {
+	if (!sel_active && !sel_dragging) return;
+	sel_active = false;
+	sel_dragging = false;
+	render_all = true;
+}
+
+// One buffer for both directions. z_clip_set() copies into zwin.c's own
+// buffer before sending, so a copy and a paste never need this at the
+// same time -- and two 4KB statics were 4KB of RAM per term instance
+// for no reason.
+static char clip_io[Z_WM_CLIP_MAX];
+
+// Copies the selection to the system clipboard.
+//
+// Trailing blanks on each row are dropped -- a terminal grid is padded
+// to the full width, and nothing wants that tail pasted back. Rows
+// other than the last get a newline. The clipboard holds
+// Z_WM_CLIP_MAX - 1 bytes; a longer selection is cut off there.
+static void sel_copy(void) {
+
+	sel_prepare();
+	if (!sel_on) return;
+
+	int n = 0;
+	const int max = (int)sizeof(clip_io) - 1;
+
+	for (uint32_t id = sel_id0; id <= sel_id1 && n < max; id++) {
+
+		int from = (id == sel_id0) ? sel_col0 : 0;
+		int to = (id == sel_id1) ? sel_col1 : VT_COLS - 1;
+		char line[VT_COLS];
+		int last = from - 1;
+
+		for (int col = from; col <= to; col++) {
+			uint8_t b;
+			vt_id_cell(&vt, id, col, &b);
+			line[col] = VT_PACK_CH(b);
+			if (line[col] != ' ') last = col;
+		}
+
+		for (int col = from; col <= last && n < max; col++) {
+			char ch = line[col];
+			clip_io[n++] = (ch >= 0x20 && ch < 0x7f) ? ch : ' ';
+		}
+
+		if (id != sel_id1 && n < max) clip_io[n++] = '\n';
+
+	}
+
+	clip_io[n] = 0;
+	z_clip_set(clip_io, n);
+
+}
+
+// Pastes the clipboard.
+//
+// Connected: straight down the same path a keystroke takes, with no
+// assumption about line structure -- against `sh` each newline submits
+// a command, and whether that is right belongs to the far end.
+//
+// Not connected: the only thing that takes text is the Open bar, so the
+// first line goes there. Pasting a hostname is the case that matters.
+static void sel_paste(void) {
+
+	int n = z_clip_get(clip_io, sizeof(clip_io));
+	if (n <= 0) return;
+
+	if (port.connected) {
+		z_port_send(&port, clip_io, (uint32_t)n);
+		view_live();
+		return;
+	}
+
+	if (!bar_active) bar_open();
+	for (int i = 0; i < n && clip_io[i] != '\r' && clip_io[i] != '\n'; i++)
+		bar_insert((uint8_t)clip_io[i]);
+
+}
+
+// Content-relative pixel -> display cell, clamped to the grid.
+static void cell_at(int cx, int cy, int *row, int *col) {
+
+	int r = (cy < 0) ? 0 : cy / cell_h;
+	int c = (cx < 0) ? 0 : cx / cell_w;
+
+	if (r >= VT_ROWS) r = VT_ROWS - 1;
+	if (c >= VT_COLS) c = VT_COLS - 1;
+
+	*row = r;
+	*col = c;
+
+}
+
+static uint32_t id_at_row(int row) {
+	return vt_history_pushed(&vt) - (uint32_t)view_off + (uint32_t)row;
+}
+
+static void handle_mouse_event(uint32_t packed) {
+
+	int cx, cy;
+	bool inside = z_win_mouse_content_xy(&win, packed, &cx, &cy);
+	uint8_t buttons = (uint8_t)Z_WM_UNPACK_MOUSE_BUTTONS(packed);
+	bool down = (buttons & Z_MOUSE_BTN_LEFT) != 0;
+	bool right_edge = (buttons & Z_MOUSE_BTN_RIGHT) &&
+		!(last_buttons & Z_MOUSE_BTN_RIGHT);
+
+	last_buttons = buttons;
+
+	if (connecting) return;
+
+	// -- a selection drag owns the pointer until release --
+	//
+	// Checked before the inside test: wm keeps delivering samples
+	// outside the window during a drag, so a selection can run off
+	// an edge. Off the top or bottom it scrolls the view a line per
+	// sample, which is what makes selecting more than a screen
+	// possible with a mouse.
+	if (sel_dragging) {
+
+		if (!down) {
+			sel_dragging = false;
+			// A press that never moved selected nothing.
+			if (sel_active && sel_a_id == sel_c_id && sel_a_col == sel_c_col)
+				sel_clear();
+			return;
+		}
+
+		if (cy < 0) view_scroll_by(1);
+		else if (cy >= text_h) view_scroll_by(-1);
+
+		int row, col;
+		cell_at(cx, cy, &row, &col);
+		uint32_t id = id_at_row(row);
+
+		if (id == sel_c_id && col == sel_c_col && sel_active) return;
+
+		sel_c_id = id;
+		sel_c_col = col;
+		sel_active = true;
+		render_all = true;
+		return;
+
+	}
+
+	// -- the scrollbar --
+	//
+	// z_scrollbar_has_pointer() is true during its own drag too, so a
+	// thumb drag that wanders sideways keeps working.
+	if (sbar.dragging || (inside && z_scrollbar_has_pointer(&sbar, cx, cy))) {
+		if (z_scrollbar_mouse(&sbar, cx, cy, buttons))
+			view_set(vt_history_count(&vt) - sbar.value);
+		return;
+	}
+
+	// -- the panel's buttons --
+	//
+	// A press on a button owns the pointer until release, wherever the
+	// release lands -- z_widget_mouse() cancels a release outside.
+	if (panel_visible && (panel_set.pressed >= 0 ||
+		(inside && panel_contains_px(cx, cy)))) {
+		int idx = z_widget_mouse(&panel_set, cx, cy, buttons);
+		if (idx >= 0) panel_activate(idx);
+		return;
+	}
+
+	// Samples over the titlebar reach us too -- wm's hit test is the
+	// whole window rect.
+	if (!inside) return;
+
+	// Right button copies, acting on the press: there is no drag
+	// gesture on it, so waiting for the release adds nothing. After
+	// the titlebar guard, so a right-click on the titlebar does not.
+	if (right_edge) sel_copy();
+
+	if (down && cx < text_w && cy < text_h) {
+
+		int row, col;
+		cell_at(cx, cy, &row, &col);
+
+		sel_clear();
+		sel_a_id = sel_c_id = id_at_row(row);
+		sel_a_col = sel_c_col = col;
+		sel_dragging = true;
+
+	}
+
+}
+
+// ---------------------------------------------------------------
+// keys
+// ---------------------------------------------------------------
+
+// Translates one keysym into 0+ raw bytes for the port. The arrow/nav/
+// F-key sequences are the common xterm-ish convention (ESC[A, ESC[5~,
+// ESC[15~), not strict 1978 VT100, which had no F5-F12 and no nav
+// cluster -- matching what people actually connect to matters more.
+//
+// Backspace is a single DEL (0x7f), the byte a real terminal sends;
+// what it looks like on screen is the far end's echo to decide.
 static int key_to_bytes(uint32_t keysym, char *buf, int buflen) {
 
 	static const struct { uint32_t keysym; const char *seq; } table[] = {
@@ -720,18 +1531,11 @@ static int key_to_bytes(uint32_t keysym, char *buf, int buflen) {
 		{ Z_KEY_F8,       "\x1b[19~" },
 		{ Z_KEY_F9,       "\x1b[20~" },
 		{ Z_KEY_F10,      "\x1b[21~" },
+		// F11 and F12 are term's own (the Open bar, disconnect) and
+		// never reach here; they stay in the table so it remains a
+		// complete record of the ordinary mapping.
 		{ Z_KEY_F11,      "\x1b[23~" },
-		{ Z_KEY_F12,      "\x1b[24~" },	// unreachable in practice --
-										// handle_key_event() intercepts
-										// F12 itself before calling
-										// this function at all (see
-										// its own comment); kept here
-										// so the table stays a
-										// complete, honest record of
-										// the "ordinary" VT100/xterm
-										// mapping regardless of what
-										// this app currently does
-										// with that specific key.
+		{ Z_KEY_F12,      "\x1b[24~" },
 	};
 
 	for (uint32_t i = 0; i < sizeof(table) / sizeof(table[0]); i++) {
@@ -749,373 +1553,26 @@ static int key_to_bytes(uint32_t keysym, char *buf, int buflen) {
 
 }
 
-// handles one Z_WM_KEY event: translates it to bytes (key_to_bytes()
-// above) and either sends them out through the port, or -- no port
-// connected -- feeds them straight back into our own vt_screen_t as
-// local echo. only acts on key-down events; releases and auto-repeat
-// aren't handled.
-// Redraws every row the selection covers, or used to. Called after
-// any change to the selection, because vt_row_dirty() only knows
-// about cells the EMULATOR changed -- a selection is drawn on top of
-// unchanged content and is invisible to that tracking.
-static void redraw_rows(int r0, int r1) {
-
-	if (r0 > r1) { int t = r0; r0 = r1; r1 = t; }
-	if (r0 < 0) r0 = 0;
-	if (r1 >= VT_ROWS) r1 = VT_ROWS - 1;
-
-	for (int row = r0; row <= r1; row++)
-		for (int col = 0; col < VT_COLS; col++)
-			draw_cell(col, row, vt.cells[row][col].ch,
-				vt.cells[row][col].reverse);
-
-}
-
-static void sel_clear(void) {
-
-	if (!sel_active) return;
-
-	int r0, c0, r1, c1;
-	sel_bounds(&r0, &c0, &r1, &c1);
-
-	sel_active = false;
-	sel_dragging = false;
-
-	redraw_rows(r0, r1);
-
-}
-
-// Copies the selection to the system clipboard.
+// Shift + a navigation key moves through scrollback. Returns true if
+// consumed.
 //
-// Trailing blanks on each row are dropped: a terminal grid is padded
-// with spaces to the full width, so copying it verbatim gives every
-// line a tail of whitespace that nothing wants pasted back. Rows
-// other than the last get a newline, which is what makes a multi-row
-// copy paste as multiple lines.
-static void sel_copy(void) {
-
-	if (!sel_active) return;
-
-	int r0, c0, r1, c1;
-	sel_bounds(&r0, &c0, &r1, &c1);
-
-	static char out[Z_WM_CLIP_MAX];
-	int n = 0;
-
-	for (int row = r0; row <= r1 && n < (int)sizeof(out) - 1; row++) {
-
-		int from = (row == r0) ? c0 : 0;
-		int to = (row == r1) ? c1 : VT_COLS - 1;
-
-		// walk back over padding spaces
-		int last = from - 1;
-		for (int col = from; col <= to; col++)
-			if (vt.cells[row][col].ch != ' ') last = col;
-
-		for (int col = from; col <= last && n < (int)sizeof(out) - 1; col++) {
-			char ch = vt.cells[row][col].ch;
-			out[n++] = (ch >= 0x20 && ch < 0x7f) ? ch : ' ';
-		}
-
-		if (row != r1 && n < (int)sizeof(out) - 1) out[n++] = '\n';
-
-	}
-
-	out[n] = 0;
-
-	z_clip_set(out, n);
-
-}
-
-// Pastes the clipboard into the session.
-//
-// Straight down the same path a keystroke takes -- bytes out the
-// port, or into our own emulator when nothing is connected. It makes
-// no assumption about line structure, deliberately: against `sh` each
-// newline submits a command, which is correct; against a reader that
-// knows it is mid-form (repl, once zline grows continuation) the same
-// bytes accumulate instead. Neither behaviour belongs to term.
-static void sel_paste(void) {
-
-	static char clip[Z_WM_CLIP_MAX];
-
-	int n = z_clip_get(clip, sizeof(clip));
-	if (n <= 0) return;
-
-	if (port.connected) {
-		z_port_send(&port, clip, (uint32_t)n);
-		return;
-	}
-
-	vt_feed(&vt, (const uint8_t *)clip, (uint32_t)n);
-
-}
-
-// Content-relative pixel position -> cell, clamped to the grid.
-static void cell_at(int cx, int cy, int *row, int *col) {
-
-	int r = cy / TERM_FONT.h;
-	int c = cx / TERM_FONT.w;
-
-	if (r < 0) r = 0;
-	if (r >= VT_ROWS) r = VT_ROWS - 1;
-	if (c < 0) c = 0;
-	if (c >= VT_COLS) c = VT_COLS - 1;
-
-	*row = r;
-	*col = c;
-
-}
-
-static void handle_mouse_event(uint32_t packed) {
-
-	int cx, cy;
-	bool inside = z_win_mouse_content_xy(&win, packed, &cx, &cy);
-
-	uint8_t buttons = (uint8_t)Z_WM_UNPACK_MOUSE_BUTTONS(packed);
-	bool down = (buttons & Z_MOUSE_BTN_LEFT) != 0;
-
-	// Samples over our titlebar reach us too -- wm's hit test is the
-	// whole window rect (see the same guard in sw/apps/text). A drag
-	// already in progress is exempt, so a selection can run off the
-	// edge and keep extending.
-	if (!inside && !sel_dragging) return;
-
-	// Right button copies, as a shortcut for Ctrl+Shift+C. Acted on
-	// at PRESS: there is no drag gesture on this button, so waiting
-	// for the release adds nothing. Same behaviour as sw/apps/text.
-	//
-	// Edge-detected, because Z_WM_MOUSE is a level report rather than
-	// an event -- a held button arrives on every sample.
-	if ((buttons & Z_MOUSE_BTN_RIGHT) && !(last_buttons & Z_MOUSE_BTN_RIGHT))
-		sel_copy();
-
-	last_buttons = buttons;
-
-	int row, col;
-	cell_at(cx, cy, &row, &col);
-
-	if (down && !sel_dragging) {
-
-		// Press: start a new selection here. Clearing first redraws
-		// the old one away.
-		sel_clear();
-
-		sel_ar = sel_cr = row;
-		sel_ac = sel_cc = col;
-		sel_dragging = true;
-
-		return;
-
-	}
-
-	if (down && sel_dragging) {
-
-		if (row == sel_cr && col == sel_cc) return;
-
-		int old_r = sel_cr;
-
-		sel_cr = row;
-		sel_cc = col;
-		sel_active = true;
-
-		// Everything between the previous and current ends changed
-		// appearance; the anchor row too, since a selection can
-		// invert direction across it.
-		redraw_rows(old_r < sel_ar ? old_r : sel_ar,
-			sel_cr > sel_ar ? sel_cr : sel_ar);
-
-		return;
-
-	}
-
-	// Release: the selection stays. A press that never moved selected
-	// nothing, so drop it rather than leaving a one-cell selection
-	// the user did not ask for.
-	sel_dragging = false;
-
-	if (sel_active && sel_ar == sel_cr && sel_ac == sel_cc) sel_clear();
-
-}
-
-// -- the Open bar (F11) -----------------------------------------
-//
-// A one-line prompt across the bottom row of the window where you
-// type a connection target -- "telnet 10.0.0.5", "serial 9600",
-// "port portdemo0", "ssh me@host" -- and Enter connects. Escape
-// cancels.
-//
-// This is what makes `term` able to open a connection ON ITS OWN.
-// Until now every target came from repl telling term where to go
-// (Z_TERM_SET_PORT), which is fine when you are already at a repl
-// prompt and useless when the thing you want to reach IS the terminal
-// you are sitting in -- or when repl is not what this window is
-// connected to. The four kinds and all the work of resolving them
-// live in sw/common/zconnect.h, shared with the repl commands, so
-// there is one implementation of the ssh token dance rather than two.
-//
-// -- Why a line and not a dialog --
-//
-// Because this is a terminal. A widget panel would need its own
-// window (wm has no modal dialogs), which means a second window
-// appearing in front of the one you were typing in, and a focus
-// question to answer when it closes. A prompt bar is what a terminal
-// already is, it needs no new window, and it is unambiguously
-// keyboard-driven -- which matters, because F11 is most useful
-// exactly when the thing you were connected to has stopped answering.
-//
-// -- Why it draws directly instead of through the VT --
-//
-// Writing the prompt into the vt100 screen would destroy a row of
-// whatever the session had on it, and there is nothing to restore it
-// from -- the vt holds one screen, not a stack. So the bar is painted
-// over the bottom row with z_win_draw_text() and, on dismissal, that
-// row is marked dirty so the ordinary redraw path puts the session's
-// own content back. Nothing in the session ever knows it happened.
-
-#define OPEN_BAR_MAX 72
-
-static bool open_bar_active;
-static char open_bar_buf[OPEN_BAR_MAX];
-static int  open_bar_len;
-static char open_bar_msg[OPEN_BAR_MAX];
-
-static void open_bar_draw(void) {
-
-	char line[OPEN_BAR_MAX + 12];
-	int row = VT_ROWS - 1;
-	int i;
-
-	if (open_bar_msg[0])
-		snprintf(line, sizeof(line), "%s", open_bar_msg);
-	else
-		snprintf(line, sizeof(line), "open> %s_", open_bar_buf);
-
-	// Drawn cell by cell through draw_cell(), the same path the
-	// session uses, rather than with z_win_draw_text(). Two reasons:
-	// it lands on the character grid exactly (draw_cell() does the
-	// content-rect offset), and the row is fully overwritten to its
-	// last column, so whatever the session had underneath is covered
-	// rather than partly showing through past the end of the text.
-	//
-	// Reverse video, so the bar reads as chrome and not as something
-	// the far end printed.
-	{
-		// Length taken once, not inferred from line[i] being non-zero:
-		// the bytes past the terminator are whatever was on the stack,
-		// and testing them would put stack garbage on screen on the
-		// runs where it happens not to be zero.
-		int n = (int)strlen(line);
-		for (i = 0; i < VT_COLS; i++)
-			draw_cell(i, row, i < n ? line[i] : ' ', true);
-	}
-
-}
-
-static void open_bar_dismiss(void) {
-	open_bar_active = false;
-	open_bar_msg[0] = 0;
-	// Hand the row back to the session. vt_mark_all_dirty() rather
-	// than a per-row call because the row index the bar used is a
-	// screen coordinate, and there is no vt API for "this row is
-	// stale on screen but unchanged in the buffer" -- a full repaint
-	// is one frame and always correct.
-	vt_mark_all_dirty(&vt);
-}
-
-// Parse what was typed and go. Never called with an empty buffer.
-static void open_bar_submit(void) {
-
-	z_conn_kind_t kind;
-	z_conn_target_t target;
-	char word[12], err[128];
-	const char *rest;
-	size_t wl = 0;
-
-	while (open_bar_buf[wl] && open_bar_buf[wl] != ' '
-		&& wl < sizeof(word) - 1) {
-		word[wl] = open_bar_buf[wl];
-		wl++;
-	}
-	word[wl] = 0;
-
-	if (!z_conn_kind_from_word(word, &kind)) {
-		snprintf(open_bar_msg, sizeof(open_bar_msg),
-			"open: try port|serial|telnet|ssh   (Esc cancels)");
-		open_bar_draw();
-		return;
-	}
-
-	rest = open_bar_buf + wl;
-	while (*rest == ' ') rest++;
-
-	// z_conn_prepare() BLOCKS for telnet and ssh -- a DNS lookup or
-	// an ssh prepare can take seconds, during which this process
-	// reads no messages and this window does not repaint. So say what
-	// is happening BEFORE calling it, or the terminal simply freezes
-	// with no explanation. See zconnect.h.
-	snprintf(open_bar_msg, sizeof(open_bar_msg), "open: %s %s ...",
-		z_conn_kind_name(kind), rest);
-	open_bar_draw();
-
-	if (!z_conn_prepare(kind, rest, &target, err, sizeof(err))) {
-		snprintf(open_bar_msg, sizeof(open_bar_msg), "%s", err);
-		open_bar_draw();
-		// Left on screen rather than dismissed: an error you have to
-		// press a key to clear is an error you actually read.
-		return;
-	}
-
-	open_bar_dismiss();
-
-	// term connects DIRECTLY here, rather than sending itself a
-	// Z_TERM_SET_PORT. Same destination, one less hop, and no
-	// question about what happens if the message arrives while this
-	// function is still on the stack.
-	connect_port(target.provider, 0, target.arg, target.timeout_ticks);
-
-}
-
-// Returns true if the key was consumed by the bar.
-static bool open_bar_key(uint32_t keysym) {
-
-	if (!open_bar_active) return false;
-
-	// Any key clears a message and returns to editing, so an error
-	// does not have to be dismissed separately from the prompt.
-	if (open_bar_msg[0]) {
-		open_bar_msg[0] = 0;
-		if (keysym == 0x1b) { open_bar_dismiss(); return true; }
-		open_bar_draw();
-		return true;
-	}
+// Shifted, because the unshifted keys belong to the far end -- PgUp in
+// `read`-style pagers, arrows in every line editor -- and term sent
+// the same bytes for shifted and unshifted before, so nothing on the
+// far end loses a key it could tell apart. A page is one line short of
+// a screen so the line you were reading stays in view.
+static bool scroll_key(uint32_t keysym, uint8_t mods) {
+
+	if (!(mods & Z_KBD_MOD_SHIFT)) return false;
 
 	switch (keysym) {
-
-	case 0x1b:					// Esc
-		open_bar_dismiss();
-		return true;
-
-	case 0x0d:					// Enter
-		if (!open_bar_len) { open_bar_dismiss(); return true; }
-		open_bar_submit();
-		return true;
-
-	case 0x08:					// Backspace
-	case 0x7f:
-		if (open_bar_len) open_bar_buf[--open_bar_len] = 0;
-		open_bar_draw();
-		return true;
-
-	default:
-		if (keysym >= 0x20 && keysym < 0x7f
-			&& open_bar_len < OPEN_BAR_MAX - 1) {
-			open_bar_buf[open_bar_len++] = (char)keysym;
-			open_bar_buf[open_bar_len] = 0;
-		}
-		open_bar_draw();
-		return true;
-
+	case Z_KEY_PAGEUP:   view_scroll_by(VT_ROWS - 1);  return true;
+	case Z_KEY_PAGEDOWN: view_scroll_by(-(VT_ROWS - 1)); return true;
+	case Z_KEY_UP:       view_scroll_by(1);  return true;
+	case Z_KEY_DOWN:     view_scroll_by(-1); return true;
+	case Z_KEY_HOME:     view_set(vt_history_count(&vt)); return true;
+	case Z_KEY_END:      view_live(); return true;
+	default:             return false;
 	}
 
 }
@@ -1128,70 +1585,50 @@ static void handle_key_event(uint32_t packed) {
 
 	if (!pressed) return;
 
-	// Ctrl+SHIFT+C/V, not Ctrl+C/V.
-	//
-	// Ctrl+C in a terminal is ^C to the far end -- the single
-	// most-used key in a shell -- and rebinding it to copy would be
-	// indefensible. Every terminal emulator resolves this the same
-	// way and so does this one; sw/apps/text uses the plain Ctrl
-	// forms, and the difference is deliberate rather than an
-	// inconsistency. See docs/widgets.md.
-	//
-	// z_kbd_usage_to_keysym() folds Ctrl+letter to 0x01..0x1A
-	// regardless of Shift, so the shift bit is what distinguishes
-	// these from the control codes they would otherwise be.
-	if ((mods & Z_KBD_MOD_CTRL) && (mods & Z_KBD_MOD_SHIFT)) {
-
-		if (keysym == 0x03) { sel_copy(); return; }		// Ctrl+Shift+C
-		if (keysym == 0x16) { sel_paste(); return; }	// Ctrl+Shift+V
-
-	}
-
-	// Anything else typed drops the selection -- it is about to stop
-	// describing what is on screen anyway, since the far end will
-	// echo something back.
-	if (sel_active && keysym != Z_KEY_NONE) sel_clear();
-
-	// F12: a fixed, term-local escape hotkey back to "repl0",
-	// intercepted here BEFORE key_to_bytes()/the port -- regardless
-	// of what term is currently connected to (or not connected to at
-	// all). Exists because a real remote (e.g. a telnet server via
-	// `net`, docs/networking.md) has no equivalent of portdemo's/
-	// repl's own "quit"/"exit" commands to hand control back with --
-	// once term is relaying raw bytes to some arbitrary remote, there
-	// was otherwise no way out except the remote itself closing the
-	// connection. The classic telnet-client convention is Ctrl-],
-	// but Ctrl is only special-cased for letters in
-	// sw/common/zkbd.c's usage-to-keysym translation (Ctrl+A..Z ->
-	// 0x01..0x1A) -- extending that to punctuation would be a
-	// keyboard-layer change every app inherits, for a feature only
-	// this one app needs, so F12 (unused by anything term itself
-	// sends -- its own key_to_bytes() table entry for F12 is simply
-	// never reached now) stays entirely local to this file instead.
-	// No-op (falls through to the normal path below, so an F12 with
-	// no port connected still local-echoes nothing, same as any
-	// other unmapped key) if already talking to "repl0" -- harmless
-	// either way, connect_port() itself is safe to call redundantly.
-	// The Open bar owns every key while it is up, including F12 --
-	// otherwise Escape and F12 would both be "get me out", which is
-	// two answers to one question.
-	if (open_bar_key(keysym)) return;
-
-	// F11 opens it. Next to F12's escape-to-repl on the keyboard and
-	// in meaning: F12 goes back to where you started, F11 goes
-	// somewhere new. Neither is a VT100 key anything sends on
-	// purpose.
-	if (keysym == Z_KEY_F11) {
-		open_bar_active = true;
-		open_bar_buf[0] = 0;
-		open_bar_len = 0;
-		open_bar_msg[0] = 0;
-		open_bar_draw();
+	// Mid-connect, the only key that means anything is Esc.
+	if (connecting) {
+		if (keysym == 0x1b) connect_cancel = true;
 		return;
 	}
 
+	// Ctrl+SHIFT+C/V, not Ctrl+C/V: Ctrl+C is ^C to the far end, the
+	// most-used key in a shell. z_kbd_usage_to_keysym() folds
+	// Ctrl+letter to 0x01..0x1A regardless of Shift, so the shift bit
+	// is what tells these apart. See docs/terminal.md.
+	if ((mods & Z_KBD_MOD_CTRL) && (mods & Z_KBD_MOD_SHIFT)) {
+		if (keysym == 0x03) { sel_copy(); return; }
+		if (keysym == 0x16) { sel_paste(); return; }
+	}
+
+	// Before the bar and the selection: scrolling back to find
+	// something to type, or to extend a selection with the keyboard
+	// view, should disturb neither.
+	if (scroll_key(keysym, mods)) return;
+
+	if (keysym == Z_KEY_NONE) return;	// a bare modifier
+
+	// Anything else drops the selection -- the far end is about to
+	// echo something and it would stop describing what is on screen.
+	if (sel_active) sel_clear();
+
+	if (bar_key(keysym)) return;
+
+	// F11 goes somewhere new; F12 leaves. Neither is a key anything on
+	// the far end relies on, and both work whatever this window is
+	// connected to -- which is the point: a remote with no quit
+	// command of its own, or a child that has hung, still has a way
+	// out. (Ctrl-] is the telnet-client convention, but zkbd only
+	// folds Ctrl+letter into control codes; extending that to
+	// punctuation would be a keyboard-layer change for every app.)
+	if (keysym == Z_KEY_F11) { bar_open(); return; }
 	if (keysym == Z_KEY_F12) {
-		connect_port("repl0", Z_PID_REPL, z_obj_none(), Z_PORT_CONNECT_TIMEOUT_TICKS);
+		if (port.connected) term_disconnect("disconnected (F12)");
+		else panel_show(NULL);
+		return;
+	}
+
+	if (!port.connected) {
+		panel_key(keysym, mods);
 		return;
 	}
 
@@ -1199,96 +1636,106 @@ static void handle_key_event(uint32_t packed) {
 	int len = key_to_bytes(keysym, buf, sizeof(buf));
 	if (len <= 0) return;
 
-	if (port.connected) {
-		z_port_send(&port, buf, (uint32_t)len);
-		return;
-	}
+	z_port_send(&port, buf, (uint32_t)len);
 
-	// no port -- local echo fallback
-	if (len == 1 && buf[0] == 0x7f) {
-		// backspace, standalone mode only -- see key_to_bytes()'s
-		// comment on why this doesn't apply when actually connected.
-		// matches zeitlos.c's own readline() convention for the same
-		// "visually erase" trick (docs/app_runtime.md).
-		feed_and_echo("\x08 \x08");
-		return;
-	}
+	// Typing at the far end means you want to see its answer.
+	view_live();
 
-	vt_feed(&vt, (const uint8_t *)buf, (uint32_t)len);
+}
 
-	if (len == 1 && buf[0] == '\r') {
-		// local-echo-only convenience: a real port/remote would decide
-		// its own CR/LF handling (docs/ports.md) -- with nothing on
-		// the other end, also feed '\n' so Enter visibly moves to a
-		// new line while testing standalone.
-		vt_feed_byte(&vt, '\n');
+// ---------------------------------------------------------------
+// frame and main loop
+// ---------------------------------------------------------------
+
+static uint16_t sb_count = 0xFFFF;
+
+// Brings everything on the glass up to date: the text, the two
+// overlays on top of it, and the scrollbar. The one entry point for
+// "draw", so the main loop and connect_port()'s wait cannot disagree
+// about what drawing involves.
+static void frame(void) {
+
+	z_clip_t clip;
+
+	// Before render(): a successful auto-connect hides the panel, and
+	// the cells it covered must be repainted in THIS frame, not left
+	// showing the panel until the next one.
+	auto_poll();
+
+	render();
+
+	z_win_content_rect(&win, &clip);
+	bar_draw(&clip);
+
+	if (panel_visible) panel_probe(false);
+	panel_draw();
+
+	uint16_t count = vt_history_count(&vt);
+	if (count != sb_count) {
+		z_scrollbar_set_range(&sbar, (int32_t)count + VT_ROWS, VT_ROWS);
+		sb_count = count;
 	}
+	z_scrollbar_set_value(&sbar, (int32_t)count - view_off);
+	z_scrollbar_draw(&sbar, false);
+
+}
+
+static void term_setup(void) {
+
+	cell_w = TERM_FONT.w;
+	cell_h = TERM_FONT.h;
+	text_w = VT_COLS * cell_w;
+	text_h = VT_ROWS * cell_h;
+
+	// +4 for the 2px left/right content inset, and Z_WM_TITLEBAR_H + 4
+	// mirrors z_win_content_rect()'s own y formula (zwin.c) rather than
+	// a number that goes stale if the titlebar changes. The scrollbar
+	// strip is what makes it wider than 80 columns.
+	term_win_w = text_w + Z_SB_THICK + 4;
+	term_win_h = text_h + Z_WM_TITLEBAR_H + 4;
+
+}
+
+// Everything after the window exists. Separate from main() so the host
+// render test (tests/render.c) runs exactly this.
+static void term_start(void) {
+
+	vt_init(&vt);
+	vt_history_attach(&vt, hist_buf, TERM_HIST_LINES);
+
+	shadow_invalidate();
+
+	z_scrollbar_init(&sbar, &win, Z_SB_VERT);
+	z_scrollbar_set_geom(&sbar, text_w, 0, text_h);
+
+	panel_layout();
+	panel_show("choose a shell, or open a connection");
+
+	auto_begin();
 
 }
 
 int main(void) {
 
-	term_win_w = VT_COLS * TERM_FONT.w + 4;
-	// +4 for the same left/right 2px content inset; +Z_WM_TITLEBAR_H+4
-	// mirrors z_win_content_rect()'s own y0 formula (zwin.c) exactly,
-	// rather than a hardcoded number that would silently go stale
-	// again if Z_WM_TITLEBAR_H (zwm.h) ever changes -- see this file's
-	// own comment on term_win_w/term_win_h above for why this has to
-	// land on an exact multiple of the font's cell size.
-	term_win_h = VT_ROWS * TERM_FONT.h + Z_WM_TITLEBAR_H + 4;
+	term_setup();
 
-	// register this instance under a kernel-numbered name ("term0",
-	// "term1", ...) -- see sw/os/pidreg.h -- so other processes can
-	// find THIS particular term by name instead of relying on a fixed
-	// pid (which only ever worked for wm/net, started once each in a
-	// known boot order; doesn't work for something the user can start
-	// any number of times, like term). Falls back to the literal
-	// "term" as the window title if registration ever fails (e.g. the
-	// registry is full) -- not fatal, just loses the disambiguation.
-	char instance_name[24] = "term";
+	// Registers "term0", "term1", ... so other processes can find THIS
+	// window by name -- repl's `telnet` and posix's handoff reply to it.
 	if (!z_pid_register("term", instance_name, sizeof(instance_name)))
 		printf("term: pid registration failed, window title won't be unique\n");
 
-	// Z_WIN_FLAG_CLOSE_ICON | Z_WIN_FLAG_CLOSE_KILLS_OWNER (zwm.h):
-	// term owns exactly one window for its entire lifetime, so
-	// clicking its titlebar close icon destroying that window AND
-	// killing this process outright is exactly right -- see
-	// Z_WIN_FLAG_CLOSE_KILLS_OWNER's own comment for why that's NOT
-	// the default (an app that can own several windows off one pid,
-	// e.g. repl's Scheme `win-create`, needs the other behavior
-	// instead).
+	// term owns exactly one window for its lifetime, so the close icon
+	// destroying it AND killing this process is exactly right.
 	if (z_win_create_flags(&win, instance_name, term_win_w, term_win_h, -1, -1,
 		Z_WIN_FLAG_CLOSE_ICON | Z_WIN_FLAG_CLOSE_KILLS_OWNER) != Z_OK) {
 		printf("term: failed to create window\n");
 		return 1;
 	}
 
-	// no z_gfx_hw_font_load() call here anymore -- wm now loads
-	// z_font_5x8 into hardware glyph memory exactly once, at its own
-	// startup, and is the only process that ever does (see
-	// TERM_FONT_NAME's own comment above, and wm's Makefile). As long
-	// as this stays built against the default TERM_FONT_NAME
-	// (z_font_5x8), the glyph data wm already loaded is exactly what
-	// this needs -- nothing to push here.
-	vt_init(&vt);   // already marks every row dirty, so the first
-	                // render() below draws the full (blank) screen
+	// No z_gfx_hw_font_load(): wm loads z_font_5x8 into glyph memory
+	// once and is the only process that ever does -- see TERM_FONT_NAME.
 
-	// connect to a port provider if one's running (see this file's
-	// own header comment) -- must happen here, before the main
-	// message loop below, since z_port_connect() discards any
-	// unrelated message that arrives while it's waiting (same
-	// accepted limitation as z_win_create()/z_msg_wait()).
-	//
-	// looks up "repl0" (see sw/os/pidreg.h) instead of assuming the
-	// fixed Z_PID_REPL constant -- falls back to it if lookup fails
-	// (repl isn't running, hasn't registered yet, or is an old build
-	// that predates the registry). This is the only place a fixed-pid
-	// fallback makes sense -- "repl0" is the well-known default
-	// provider, same reasoning Z_PID_PORTDEMO existed for before it.
-	// A runtime switch to some OTHER, caller-specified provider
-	// (Z_TERM_SET_PORT, connect_port() above, this file's own header
-	// comment) has no such well-known fallback to guess -- see there.
-	connect_port("repl0", Z_PID_REPL, z_obj_none(), Z_PORT_CONNECT_TIMEOUT_TICKS);
+	term_start();
 
 	while (1) {
 
@@ -1296,127 +1743,87 @@ int main(void) {
 		bool got_redraw = false;
 
 		while (z_msg_read(&msg) == Z_OK) {
+
 			if (msg.subject == Z_WM_REDRAW) {
-				z_win_apply_redraw(&win, msg.obj.val.uint32);
-				shadow_invalidate();   /* see the other REDRAW case */
+				handle_redraw(msg.obj.val.uint32);
 				got_redraw = true;
+			} else if (msg.subject == Z_WM_SET_CLIP) {
+				z_win_apply_clip(&win, &msg.obj);
 			} else if (msg.subject == Z_WM_WINDOW_MOVED) {
 				z_win_parse_rect(&win, &msg.obj);
 			} else if (msg.subject == Z_WM_MOUSE) {
-			if (msg.obj.type == Z_UINT32)
-				handle_mouse_event(msg.obj.val.uint32);
-		} else if (msg.subject == Z_WM_KEY) {
+				if (msg.obj.type == Z_UINT32)
+					handle_mouse_event(msg.obj.val.uint32);
+			} else if (msg.subject == Z_WM_KEY) {
 				handle_key_event(msg.obj.val.uint32);
 			} else if (msg.subject == Z_PORT_DATA) {
-				if (port.connected && msg.tag == port.conn_id) {
+				if (port.connected && msg.tag == port.conn_id &&
+					msg.from == port.peer_pid) {
 					uint32_t len = z_blob_len(&msg.obj);
 					void *data = z_blob_data(&msg.obj);
 					if (data && len) vt_feed(&vt, (const uint8_t *)data, len);
 				}
-				// tells whoever sent this it's now safe to free its own
-				// z_obj_blob() allocation -- see z_port_send_ack()'s own
-				// comment (zport.h) for why this has to come AFTER
-				// vt_feed() actually finishes reading `data`, not right
-				// after z_msg_read() produced `msg`. Sent unconditionally,
-				// even when the guard above didn't match -- that's still
-				// a message this process will never look at again, and
-				// the sender's own pending-sends slot for it
-				// (Z_PORT_MAX_PENDING_SENDS, zport.h) needs an ack to
-				// ever be freed regardless.
+				// Tells the sender it may free its z_obj_blob(). AFTER
+				// vt_feed() has finished reading it, and sent even when
+				// the guard did not match -- the sender's pending-send
+				// slot needs the ack either way. See zport.h.
 				z_port_send_ack(&msg);
 			} else if (msg.subject == Z_PORT_DATA_ACK) {
 				z_port_handle_ack(&port, &msg);
 			} else if (msg.subject == Z_PORT_CLOSE) {
-				// The SENDER is checked as well as the tag, and the
-				// tag alone is not enough.
-				//
-				// conn_id is assigned by each provider from its own
-				// table -- repl, posix and portdemo all use slot+1 --
-				// so two different providers routinely both call a
-				// connection 1. When this window is handed from one
-				// provider to another (Z_TERM_SET_PORT), a CLOSE from
-				// the OLD one can arrive after the new connection is
-				// up, carrying a tag that matches it.
-				//
-				// That is not hypothetical: it dropped `vi` to local
-				// echo the moment posix handed the terminal over.
-				// posix no longer sends that close, and this makes the
-				// window immune to any provider that does.
+				// The SENDER is checked as well as the tag. Providers
+				// number connections from their own tables (repl, posix
+				// and portdemo all use slot+1), so a CLOSE from a
+				// provider this window has just LEFT can carry a tag
+				// that matches the new connection. That once dropped
+				// `vi` the moment posix handed the terminal over.
 				if (port.connected && msg.tag == port.conn_id &&
 					msg.from == port.peer_pid) {
 					port.connected = false;
-					printf("term: port closed by peer -- local echo only from here on\n");
+					printf("term: port closed by peer\n");
+					term_disconnect("connection closed by the other end");
 				}
 			} else if (msg.subject == Z_TERM_SET_PORT) {
-				// see zterm.h -- fire-and-forget, no reply sent either
-				// way; the result shows up in this printf() log (via
-				// connect_port()) and, if it worked, in what actually
-				// starts arriving over the new connection.
-				//
-				// two payload shapes (zterm.h): a bare Z_STR is just
-				// the provider name (original form); a Z_MAP carries
-				// an additional "arg", forwarded into
-				// connect_port()'s own z_port_connect_arg() call --
-				// e.g. repl's `telnet <ip>` command, which needs
-				// `net` to see the target IP as part of the CONNECT
-				// itself, not a separate message.
+				// Fire-and-forget (zterm.h). A bare Z_STR is a provider
+				// name; a Z_MAP carries "name" and an "arg" for the
+				// CONNECT -- repl's telnet/ssh and posix's handoff --
+				// and gets the network timeout, since telnet is the
+				// case that needs it.
 				if (msg.obj.type == Z_STR && msg.obj.val.str) {
-					connect_port(msg.obj.val.str, 0, z_obj_none(), Z_PORT_CONNECT_TIMEOUT_TICKS);
+					connect_port(msg.obj.val.str, z_obj_none(),
+						Z_CONN_TIMEOUT_LOCAL_TICKS, msg.obj.val.str);
 				} else if (msg.obj.type == Z_MAP) {
 					z_obj_t *name_obj = z_map_find(&msg.obj, "name");
 					if (!name_obj || name_obj->type != Z_STR || !name_obj->val.str) {
 						printf("term: SET_PORT map with no valid 'name', ignoring\n");
 					} else {
 						z_obj_t *arg_obj = z_map_find(&msg.obj, "arg");
-						// the Z_MAP form is currently telnet-only (see
-						// this block's own header comment) -- longer
-						// timeout, see TERM_TELNET_CONNECT_TIMEOUT_TICKS's
-						// own comment for why.
-						connect_port(name_obj->val.str, 0,
+						connect_port(name_obj->val.str,
 							arg_obj ? *arg_obj : z_obj_none(),
-							TERM_TELNET_CONNECT_TIMEOUT_TICKS);
+							TERM_TELNET_CONNECT_TIMEOUT_TICKS,
+							name_obj->val.str);
 					}
 				} else {
 					printf("term: SET_PORT with no name, ignoring\n");
 				}
 			}
+
 		}
 
-		if (got_redraw) {
-			// the framebuffer under/around this window may have
-			// changed entirely (a move, or another window that used
-			// to overlap us) -- simplest correct thing is a full
-			// repaint, same convention hello_win.c's draw_static()
-			// uses on its own Z_WM_REDRAW handling.
-			vt_mark_all_dirty(&vt);
-			shadow_invalidate();  // the glass no longer matches -- see render()
-			draw_cursor_x = -1;   // force the cursor overlay to redraw too
-			draw_cursor_y = -1;
-		}
-
-		render();
+		frame();
 
 		if (got_redraw) z_win_redraw_done(&win);
-	
-		/* Block until something arrives.
+
+		/* Block until something arrives, with a timeout.
 		 *
-		 * This loop used to spin: measured at ~1435 iterations per
-		 * second while completely idle, every one of them calling
-		 * render(), finding nothing dirty and returning. Cheap
-		 * individually, and ruinous collectively -- the scheduler
-		 * divides the CPU between RUNNABLE processes, so an idle
-		 * terminal was taking a full share out of whatever was in the
-		 * foreground.
-		 *
-		 * That is the same fault wm and repl had, and fixing those
-		 * took a full-screen app from a quarter of the machine to
-		 * half (docs/app_runtime.md). term is the third.
-		 *
-		 * A timeout rather than z_proc_wait(0): everything here is
-		 * message-driven today, but a terminal is exactly the kind of
-		 * thing that grows a cursor blink or an idle timeout later,
-		 * and waking 30 times a second costs nothing measurable. */
+		 * This loop used to spin at ~1435 iterations a second while
+		 * idle, taking a full scheduler share from whatever was in the
+		 * foreground (docs/app_runtime.md). The timeout rather than an
+		 * indefinite wait is what drives the panel's twice-a-second
+		 * check for repl0/posix0 appearing, and costs nothing
+		 * measurable at 30 wakeups a second. */
 		z_proc_wait(Z_TICK_HZ / 30);
+
 	}
 
 	return 0;

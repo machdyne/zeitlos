@@ -205,7 +205,7 @@ window:
 `repl` sends `term` a `Z_TERM_SET_PORT` naming `serial0` with the baud
 rate as the CONNECT argument — the same mechanism `telnet` uses to hand
 a window to `net`, with a baud rate where telnet puts a target IP.
-**F12 comes back.**
+**F12 disconnects**, back to term's start panel.
 
 `port serial0` connects with no argument and gets whatever rate the
 port is already at, which is what you want after F12.
@@ -222,8 +222,8 @@ saying so.
 `sw/apps/serial` exits at startup rather than staying resident to
 refuse every connection — a process taking a scheduler share to say no
 is worse than not being there. `term`'s name lookup then fails and the
-window stays in local echo, which is the same clean failure any absent
-port provider gives.
+window's start panel says `serial0 is not running`, which is the same
+clean failure any absent port provider gives.
 
 ## Why a whole process
 

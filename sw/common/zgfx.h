@@ -505,6 +505,16 @@ bool z_fb_hw_blit_mem_available(void);
 // still comes out several times faster than re-rendering.
 void z_fb_hw_scroll(int x, int y, int w, int h, int dy);
 
+// Would z_fb_hw_scroll() with this rect actually move pixels?
+//
+// z_fb_hw_scroll() returns void and silently does NOTHING when the
+// window's visible region cannot contain the copy (a partially
+// occluded window -- see copy_region_allows_rect() in zgfx.c). A
+// caller that keeps a model of what is on the glass has to know which
+// happened, or it shifts its model while the pixels stay put and shows
+// stale text with no way to notice. Ask first; repaint on false.
+bool z_fb_hw_scroll_allowed(int x, int y, int w, int h);
+
 /* Debug counters for the scroll path. Set to N to have the next N
  * scroll operations print their arguments, and the next N blits print
  * theirs, then stop.

@@ -43,7 +43,7 @@
 #     libz.sym) are copied as well, since they are not app binaries
 #     and would otherwise be missed -- see the block near the end.
 #
-#   - The core apps (wm, net, repl, term) are copied too, even though
+#   - The core apps (wm, net, term) are copied too, even though
 #     they are already in flash (sw/os/zar.h). Pulling a newer one
 #     over the network is exactly how you'd test a change to it
 #     without reflashing, and `run` prefers a file on the SD card

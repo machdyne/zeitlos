@@ -18,6 +18,8 @@
 #include "zgfx.h"
 #include "zfont.h"
 #include "zwidget.h"
+#include "zkbd.h"		// Z_KEY_*, for the list box
+#include "zsoc.h"		// Z_TICK_HZ, for its type-to-find timeout
 
 // -- pattern table --
 //
@@ -928,5 +930,337 @@ bool z_scrollbar_mouse(z_scrollbar_t *sb, int cx, int cy, uint8_t buttons) {
 	if (changed) z_scrollbar_draw(sb, false);
 
 	return changed;
+
+}
+
+// ---------------------------------------------------------------
+// list boxes -- see zwidget.h
+// ---------------------------------------------------------------
+//
+// Row height, double-click interval and scrollbar inset match
+// sw/common/zflist.c, so every list in the system behaves alike.
+
+#define LB_ROW_H          (z_font_5x8.h + 2)
+#define LB_DBLCLICK_TICKS 256
+#define LB_FIND_TICKS     Z_TICK_HZ
+
+static int lb_rows(const z_listbox_t *lb) {
+	int n = (lb->h - 2) / LB_ROW_H;
+	return n > 0 ? n : 0;
+}
+
+static void lb_scroll_to(z_listbox_t *lb, int row) {
+
+	int rows = lb_rows(lb);
+
+	if (rows > 0 && row >= 0) {
+		if (row < lb->top) lb->top = row;
+		if (row >= lb->top + rows) lb->top = row - rows + 1;
+	}
+	if (lb->top > lb->count - rows) lb->top = lb->count - rows;
+	if (lb->top < 0) lb->top = 0;
+
+	z_scrollbar_set_value(&lb->sb, lb->top);
+
+}
+
+void z_listbox_init(z_listbox_t *lb, const z_win_t *win) {
+
+	memset(lb, 0, sizeof(*lb));
+	lb->win = win;
+	lb->sel = -1;
+	lb->last_press_row = -1;
+	lb->dirty = true;
+	z_scrollbar_init(&lb->sb, win, Z_SB_VERT);
+
+}
+
+void z_listbox_set_geom(z_listbox_t *lb, int x, int y, int w, int h) {
+
+	lb->x = (int16_t)x;
+	lb->y = (int16_t)y;
+	lb->w = (int16_t)w;
+	lb->h = (int16_t)h;
+
+	// Inset one pixel inside the frame: z_scrollbar_draw() blanks its
+	// whole rect, and flush against the frame it would erase the
+	// frame's right edge -- the bug zflist.c's set_geom() records.
+	z_scrollbar_set_geom(&lb->sb, x + w - Z_SB_THICK - 1, y + 1, h - 2);
+	z_scrollbar_set_range(&lb->sb, lb->count, lb_rows(lb));
+	lb_scroll_to(lb, lb->sel);
+	lb->dirty = true;
+
+}
+
+void z_listbox_set_items(z_listbox_t *lb, int count, z_list_label_fn label,
+	void *user) {
+
+	lb->count = count > 0 ? count : 0;
+	lb->label = label;
+	lb->user = user;
+
+	if (lb->sel >= lb->count) lb->sel = -1;
+
+	z_scrollbar_set_range(&lb->sb, lb->count, lb_rows(lb));
+	lb_scroll_to(lb, lb->sel);
+	lb->dirty = true;
+
+}
+
+void z_listbox_select(z_listbox_t *lb, int index) {
+
+	if (index >= lb->count) index = lb->count - 1;
+	if (index < -1) index = -1;
+
+	lb->sel = index;
+	lb_scroll_to(lb, index);
+	lb->dirty = true;
+
+}
+
+int z_listbox_selected(const z_listbox_t *lb) {
+	return lb->sel;
+}
+
+void z_listbox_set_focus(z_listbox_t *lb, bool focused) {
+	if (lb->focused == focused) return;
+	lb->focused = focused;
+	lb->dirty = true;
+}
+
+void z_listbox_invalidate(z_listbox_t *lb) {
+	lb->dirty = true;
+	lb->ring_drawn = false;
+	lb->sb.dirty = true;
+}
+
+void z_listbox_draw(z_listbox_t *lb, bool force) {
+
+	if (!force && !lb->dirty) {
+		z_scrollbar_draw(&lb->sb, false);
+		return;
+	}
+
+	lb->dirty = false;
+
+	z_clip_t content;
+	z_win_content_rect(lb->win, &content);
+
+	int x0 = content.x0 + lb->x;
+	int y0 = content.y0 + lb->y;
+	int x1 = x0 + lb->w - 1;
+	int y1 = y0 + lb->h - 1;
+
+	if (x1 < content.x0 || x0 > content.x1 ||
+		y1 < content.y0 || y0 > content.y1) return;
+
+	// Rows clip to the list area MINUS the scrollbar: a long label
+	// running under the thumb reads as a rendering bug.
+	z_clip_t clip;
+	clip.x0 = x0 + 1;
+	clip.y0 = y0 + 1;
+	clip.x1 = x1 - Z_SB_THICK - 1;
+	clip.y1 = y1 - 1;
+
+	if (clip.x0 < content.x0) clip.x0 = content.x0;
+	if (clip.y0 < content.y0) clip.y0 = content.y0;
+	if (clip.x1 > content.x1) clip.x1 = content.x1;
+	if (clip.y1 > content.y1) clip.y1 = content.y1;
+
+	if (clip.x1 >= clip.x0 && clip.y1 >= clip.y0)
+		z_fb_hw_fill_rect(clip.x0, clip.y0,
+			clip.x1 - clip.x0 + 1, clip.y1 - clip.y0 + 1, 0);
+
+	z_win_hw_box(lb->win, x0, y0, x1, y1, 1);
+
+	// The focus ring: drawn in ink when focused, in background once
+	// when focus has left -- same reasoning as a widget's ring (see
+	// z_widget_draw()), and why a list needs 2px of space around it.
+	if (lb->focused || lb->ring_drawn) {
+		z_win_hw_box(lb->win, x0 - 1, y0 - 1, x1 + 1, y1 + 1, lb->focused ? 1 : 0);
+		lb->ring_drawn = lb->focused;
+	}
+
+	int rows = lb_rows(lb);
+
+	for (int r = 0; r < rows && lb->label; r++) {
+
+		int row = lb->top + r;
+		if (row >= lb->count) break;
+
+		int ry = y0 + 1 + r * LB_ROW_H;
+		bool selected = (row == lb->sel);
+
+		if (selected && clip.x1 >= clip.x0)
+			z_fb_hw_fill_rect(clip.x0, ry, clip.x1 - clip.x0 + 1,
+				ry + LB_ROW_H - 1 <= clip.y1 ? LB_ROW_H : (clip.y1 - ry + 1), 1);
+
+		const char *text = lb->label(lb->user, row);
+		if (text)
+			z_fb_draw_text2(clip.x0 + 2, ry + 1, text,
+				selected ? 0 : 1, selected ? 1 : 0, &z_font_5x8, &clip);
+
+	}
+
+	z_scrollbar_draw(&lb->sb, true);
+
+}
+
+bool z_listbox_has_pointer(const z_listbox_t *lb, int cx, int cy) {
+	if (lb->sb.dragging) return true;
+	return cx >= lb->x && cx < lb->x + lb->w &&
+		cy >= lb->y && cy < lb->y + lb->h;
+}
+
+int z_listbox_mouse(z_listbox_t *lb, int cx, int cy, uint8_t buttons) {
+
+	bool down = (buttons & Z_MOUSE_BTN_LEFT) != 0;
+	bool was_down = (lb->last_buttons & Z_MOUSE_BTN_LEFT) != 0;
+
+	// The scrollbar first, and for the whole of a drag it started.
+	if (z_scrollbar_has_pointer(&lb->sb, cx, cy)) {
+		lb->last_buttons = buttons;
+		if (z_scrollbar_mouse(&lb->sb, cx, cy, buttons)) {
+			lb->top = (int)lb->sb.value;
+			lb->dirty = true;
+			z_listbox_draw(lb, false);
+		}
+		return Z_LIST_NONE;
+	}
+
+	// Keep its edge detector fed so a release elsewhere ends a drag.
+	z_scrollbar_mouse(&lb->sb, cx, cy, buttons);
+	lb->last_buttons = buttons;
+
+	if (!(down && !was_down)) return Z_LIST_NONE;
+
+	if (cx < lb->x + 1 || cx >= lb->x + lb->w - Z_SB_THICK - 1) return Z_LIST_NONE;
+	if (cy < lb->y + 1 || cy >= lb->y + lb->h - 1) return Z_LIST_NONE;
+
+	int r = (cy - lb->y - 1) / LB_ROW_H;
+	int row = lb->top + r;
+	if (r >= lb_rows(lb) || row >= lb->count) return Z_LIST_NONE;
+
+	uint32_t now = z_uptime_ticks();
+	bool dbl = row == lb->last_press_row &&
+		(now - lb->last_press_tick) < LB_DBLCLICK_TICKS;
+
+	lb->last_press_row = dbl ? -1 : row;	// a third click starts over
+	lb->last_press_tick = now;
+
+	z_listbox_select(lb, row);
+	z_listbox_draw(lb, false);
+
+	return dbl ? Z_LIST_ACTIVATED : Z_LIST_SELECTED;
+
+}
+
+static char lb_lower(char c) {
+	return (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
+}
+
+static bool lb_prefix(const char *text, const char *prefix, int n) {
+	for (int i = 0; i < n; i++)
+		if (!text[i] || lb_lower(text[i]) != lb_lower(prefix[i])) return false;
+	return true;
+}
+
+// Type-to-find.
+//
+// A letter on its own jumps to the FIRST row starting with it -- B is
+// Bangkok, wherever the selection was. If the selection already starts
+// with that letter, it moves to the NEXT such row instead, wrapping, so
+// pressing B again walks Bangkok, Beijing, Berlin, Brisbane.
+//
+// Letters typed less than LB_FIND_TICKS apart build a prefix instead
+// ("mun" is Munich, past Mumbai), matched against the first row in list
+// order -- which, for a sorted list, is the one a person means.
+//
+// This used to search forward from the current selection for every
+// key. From a row that already started with the letter it found that
+// same row and did not move, and from anywhere else where it landed
+// depended on where you started -- neither is what a keyboard user
+// expects a letter to do.
+static int lb_find(z_listbox_t *lb, char c) {
+
+	uint32_t now = z_uptime_ticks();
+	bool fresh = lb->find_len == 0 || (now - lb->find_tick) > LB_FIND_TICKS;
+	bool same = lb->find_len == 1 && lb_lower(lb->find[0]) == lb_lower(c);
+
+	lb->find_tick = now;
+
+	if (fresh || same) {
+
+		lb->find[0] = c;
+		lb->find_len = 1;
+
+		bool on_it = false;
+		if (lb->sel >= 0) {
+			const char *cur = lb->label(lb->user, lb->sel);
+			on_it = cur && lb_prefix(cur, lb->find, 1);
+		}
+
+		int start = on_it ? lb->sel + 1 : 0;
+
+		for (int i = 0; i < lb->count; i++) {
+			int row = (start + i) % lb->count;
+			const char *t = lb->label(lb->user, row);
+			if (t && lb_prefix(t, lb->find, 1)) return row;
+		}
+
+		return -1;
+
+	}
+
+	if (lb->find_len < sizeof(lb->find)) lb->find[lb->find_len++] = c;
+
+	for (int row = 0; row < lb->count; row++) {
+		const char *t = lb->label(lb->user, row);
+		if (t && lb_prefix(t, lb->find, lb->find_len)) return row;
+	}
+
+	return -1;
+
+}
+
+int z_listbox_key(z_listbox_t *lb, uint32_t keysym) {
+
+	int rows = lb_rows(lb);
+	int to;
+
+	if (rows < 1) rows = 1;
+	if (lb->count <= 0) return Z_LIST_NONE;
+
+	switch (keysym) {
+	case Z_KEY_UP:       to = lb->sel < 0 ? 0 : lb->sel - 1; break;
+	case Z_KEY_DOWN:     to = lb->sel + 1; break;
+	case Z_KEY_PAGEUP:   to = lb->sel - rows; break;
+	case Z_KEY_PAGEDOWN: to = (lb->sel < 0 ? 0 : lb->sel) + rows; break;
+	case Z_KEY_HOME:     to = 0; break;
+	case Z_KEY_END:      to = lb->count - 1; break;
+
+	case 0x0d:
+		return lb->sel >= 0 ? Z_LIST_ACTIVATED : Z_LIST_NONE;
+
+	default:
+		if (!lb->label) return Z_LIST_NONE;
+		if ((keysym >= 'a' && keysym <= 'z') || (keysym >= 'A' && keysym <= 'Z') ||
+			(keysym >= '0' && keysym <= '9') || keysym == '+' || keysym == '-' ||
+			(keysym == ' ' && lb->find_len > 0)) {
+			to = lb_find(lb, (char)keysym);
+			if (to < 0) return Z_LIST_NONE;
+			break;
+		}
+		return Z_LIST_NONE;
+	}
+
+	if (to < 0) to = 0;
+	if (to >= lb->count) to = lb->count - 1;
+
+	if (to == lb->sel) return Z_LIST_NONE;
+
+	z_listbox_select(lb, to);
+	z_listbox_draw(lb, false);
+	return Z_LIST_SELECTED;
 
 }

@@ -32,9 +32,13 @@ override CFLAGS += --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) -DZ_GFX
 LDFLAGS = -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS)
 LDSCRIPT = ../../common/riscv-app.ld
 
-# About as small as an app in this tree gets: a window, a radio group,
-# and no filesystem, dialogs or document of any kind.
-OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o settings.o
+# A window, a radio group and three buttons -- plus what editing
+# /zeitlos.cfg takes: the whole-file API (zfsapp), the text-prompt
+# dialog and what it links (zdialog, zflist, zedit, ztype), the config
+# parser/editor (zcfg) and time-zone parsing, to check a zone before
+# saving it (zrtc). See docs/config.md.
+OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o \
+	zfsapp.o zdialog.o zflist.o zedit.o ztype.o zcfg.o zrtc.o settings.o
 
 settings: settings.elf settings.bin
 
@@ -55,6 +59,27 @@ zwin.o:
 
 zwidget.o:
 	$(CC) $(CFLAGS) -c ../../common/zwidget.c -o zwidget.o
+
+zfsapp.o:
+	$(CC) $(CFLAGS) -c ../../common/zfsapp.c -o zfsapp.o
+
+zdialog.o:
+	$(CC) $(CFLAGS) -c ../../common/zdialog.c -o zdialog.o
+
+zflist.o:
+	$(CC) $(CFLAGS) -c ../../common/zflist.c -o zflist.o
+
+zedit.o:
+	$(CC) $(CFLAGS) -c ../../common/zedit.c -o zedit.o
+
+ztype.o:
+	$(CC) $(CFLAGS) -c ../../common/ztype.c -o ztype.o
+
+zcfg.o:
+	$(CC) $(CFLAGS) -c ../../common/zcfg.c -o zcfg.o
+
+zrtc.o:
+	$(CC) $(CFLAGS) -c ../../common/zrtc.c -o zrtc.o
 
 settings.o:
 	$(CC) $(CFLAGS) -c settings.c -S -o settings.asm

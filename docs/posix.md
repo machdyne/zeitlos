@@ -10,8 +10,9 @@ computer.
 
 ## Getting there
 
-`posix` is a port provider, like `repl`. Start it and connect a
-terminal to it:
+`posix` is a port provider, like `repl`. With an sdcard present, `init`
+starts both at boot, and a new `term` window's **POSIX** button connects
+to it. By hand:
 
 ```
 > run wm
@@ -19,9 +20,13 @@ terminal to it:
 > run term
 ```
 
-Then in the `term` window press **F11** and type `port posix0`, or
-from a `repl` prompt type `port posix0`. Either reaches the same
-place. **F12** always returns you to `repl`.
+Then click **POSIX** on the `term` window's start panel, or type
+`port posix0` straight onto it, or from a `repl` prompt type
+`port posix0`. All three reach the same place. **F12** always
+disconnects, back to that panel.
+
+posix needs about 4.2MB of RAM (its 4MB tier plus its image), so it will
+not start on the 1MB and 2MB boards; `init` prints why.
 
 You get a `$` prompt.
 
@@ -1595,7 +1600,9 @@ pid.
 `posix` itself does not have this problem: it is always the provider
 and assigns every conn_id from one namespace.
 
-F12 remains term's unconditional escape to `repl0` if a child hangs,
+F12 remains term's unconditional escape if a child hangs -- it
+disconnects to term's start panel (it returned to `repl0` when this was
+written) --
 which is the same safety net a telnet session to a dead host has.
 
 **The return path is the hard half, and the first version did not

@@ -28,6 +28,7 @@
 #include "fs/fatfs/diskio.h"	// disk_status() -- instrumentation, see below
 #include "msg.h"
 #include "pidreg.h"
+#include "cfg.h"		// /zeitlos.cfg -- k_cfg_load() at boot, `cfg`
 #include "xmodem.h"
 
 // --
@@ -420,6 +421,17 @@ void sh(void) {
 		printf("init: sdcard ready\n");
 	else if (z_zar_present())
 		printf("init: no sdcard, using core apps in flash\n");
+
+	// /zeitlos.cfg, before init() and before the cancel window -- so
+	// every app init starts sees the settings from its first
+	// instruction, and a cancelled boot still has them for `run`. No
+	// card or no file loads nothing and everything uses its default.
+	// See docs/config.md.
+	{
+		uint32_t ignored;
+		if (card_ready) k_cfg_load(true, &ignored);
+		else printf("cfg: no sdcard -- using defaults\n");
+	}
 
 	if (boot_cancel_requested()) {
 		printf("init: cancelled -- run `init` to start the graphical "
@@ -1173,8 +1185,9 @@ void sh(void) {
 
 			if (arg == NULL || strcmp(arg, "erase-everything") != 0) {
 				printf("this will PERMANENTLY ERASE the entire sdcard.\n");
-				printf("core apps in flash (wm, net, repl, term) are not\n");
-				printf("affected and the system will still boot.\n");
+				printf("core apps in flash (wm, net, term) are not\n");
+				printf("affected and the system will still boot --\n");
+				printf("but repl and posix live on the card and go with it.\n");
 				printf("\n");
 				printf("to proceed, type exactly:\n");
 				printf("  format erase-everything\n");
@@ -1256,6 +1269,17 @@ void sh(void) {
 			}
 		}
 
+		// CONFIGURATION -- /zeitlos.cfg, docs/config.md.
+		//   cfg              list known keys (effective values) and
+		//                    anything else the file sets
+		//   cfg reload       re-read the file after editing it
+		//   cfg get <key>    one value
+		else if (!strncmp(buffer, "cfg", cmdlen)) {
+			char *sub = get_arg(buffer, 1);
+			char *key = sub ? get_arg(buffer, 2) : NULL;
+			k_cfg_shell(sub, key);
+		}
+
 		else if (!strncmp(buffer, "df", cmdlen)) {
 			// One FAT scan, not two -- see fs_df_kb() in fs.c.
 			uint32_t total = 0, freek = 0;
@@ -1270,6 +1294,45 @@ void sh(void) {
 		}
 
 	}
+
+}
+
+// Loads and starts one app that init() can live without. Nothing is
+// returned on purpose: every failure here is reported and survived, and
+// a caller that could branch on it is a caller that could stop early.
+//
+// The memory figure in the failure message is what k_proc_create() was
+// asked for. posix's tier is 4MB (Z_PROC_STACK_SIZE_HUGE, kernel.h), so
+// on a 1MB or 2MB board "unable to create" is the correct outcome and
+// the number says why without anyone having to look it up.
+static void init_start_optional(const char *name) {
+
+	printf("starting %s\n", name);
+
+	z_exec_info_t xi;
+	core_src_t src = core_exec_info(name, &xi);
+	uint32_t size = (src == CORE_SRC_NONE) ? 0 : xi.total;
+
+	if (!size) {
+		printf("init: %s not found (non-fatal -- it lives on the sdcard)\n",
+			name);
+		return;
+	}
+
+	uint32_t stack = z_proc_stack_size_for(name);
+	uint32_t pid = k_proc_create(size, stack);
+
+	if (!pid) {
+		printf("init: unable to create %s process -- needs %luKB "
+			"(non-fatal)\n", name,
+			(unsigned long)((size + stack + 1023) / 1024));
+		return;
+	}
+
+	printf("init: %s (%s)\n", name, core_src_name(src));
+	core_load_exec(k_proc_base(pid), name, &xi, src);
+	k_proc_start(pid);
+	printf("init: %s started as pid %ld\n", name, (long)pid);
 
 }
 
@@ -1308,7 +1371,7 @@ void init(void) {
 
 	// net: sw/apps/net -- ARP/ICMP/TFTP/TCP/telnet, see
 	// docs/networking.md. Loaded and started normally now, same as
-	// wm/repl above -- this used to only reserve net's pid slot (see
+	// wm above -- this used to only reserve net's pid slot (see
 	// git history around this comment) because net.c's own startup
 	// hung forever on any board without ethernet hardware physically
 	// present (e.g. Lakritz, which has only one PMOD slot and it's
@@ -1321,9 +1384,9 @@ void init(void) {
 	// here, same as any other app. The old reservation dance was also
 	// specifically about keeping portdemo's fallback-pid convention
 	// correct -- moot now anyway, since portdemo hasn't been started
-	// automatically at boot for a while (see the `repl` comment
-	// below); net's failure here (like repl's) is non-fatal to the
-	// rest of this script, unlike wm's.
+	// automatically at boot for a while; net's failure here (like
+	// repl's and posix's below) is non-fatal to the rest of this
+	// script, unlike wm's.
 
 	printf("starting net\n");
 	uint32_t pid_net = 0;
@@ -1345,42 +1408,25 @@ void init(void) {
 		}
 	}
 
-	// repl: Zeitlos's command interpreter -- see
-	// sw/apps/repl/repl.c. same reservation reasoning as wm/net
-	// above, for the fallback path -- term.c prefers looking up
-	// "repl0" by name now, but falls back to the fixed pid
-	// Z_PID_REPL (zrepl.h) if that lookup fails, so it's still worth
-	// landing here predictably. not fatal if this one specifically
-	// fails to start (unlike wm/net above) -- term falls back to
-	// local echo without it, see term.c's own header comment.
+	// repl and posix: the two shells a term window can connect to.
 	//
-	// this replaces starting portdemo here (see docs/ports.md and
-	// sw/apps/portdemo/portdemo.c) -- term no longer looks for
-	// portdemo by default (see term.c's own header comment on why),
-	// so starting it automatically at boot no longer serves the
-	// purpose this reservation dance exists for. portdemo itself is
-	// unchanged and still builds/runs fine manually (`run portdemo`)
-	// for testing the port protocol in isolation from repl.
-
-	printf("starting repl\n");
-	z_exec_info_t xi_repl;
-	core_src_t src_repl = core_exec_info("repl", &xi_repl);
-	uint32_t size_repl = (src_repl == CORE_SRC_NONE) ? 0 : xi_repl.total;
-	if (!size_repl) {
-		printf("init: repl binary not found (non-fatal -- term will "
-			"fall back to local echo)\n");
-		return;
-	}
-	uint32_t pid_repl = k_proc_create(size_repl, z_proc_stack_size_for("repl"));
-	if (!pid_repl) {
-		printf("init: unable to create repl process (non-fatal)\n");
-		return;
-	}
-	uint32_t base_repl = k_proc_base(pid_repl);
-	printf("init: repl (%s)\n", core_src_name(src_repl));
-	core_load_exec(base_repl, "repl", &xi_repl, src_repl);
-	k_proc_start(pid_repl);
-	printf("init: repl started as pid %ld\n", pid_repl);
+	// Neither is a core app any more. They live on the sdcard, not in
+	// the flash archive (docs/flash_apps.md), so on a card-less board
+	// both "not found" lines below are the expected outcome, not a
+	// fault -- the desktop comes up with wm, net and term, and term's
+	// start panel shows both shells as not running.
+	//
+	// Both are non-fatal, and neither returns early. This function
+	// used to `return` when repl was missing, which also skipped the
+	// k_proc_start(pid_net) at the bottom: net was loaded and then
+	// never ran. Harmless while repl was in flash and could not be
+	// missing; a board with no card and no network the moment it was
+	// not.
+	//
+	// repl before posix, and both after net is LOADED but before net
+	// STARTS -- see the note on net at the end.
+	init_start_optional("repl");
+	init_start_optional("posix");
 
 	// net is created and loaded above, in its usual slot, but does not
 	// start running until every other load is done.
@@ -1397,6 +1443,27 @@ void init(void) {
 	if (pid_net) {
 		k_proc_start(pid_net);
 		printf("init: net started as pid %ld\n", pid_net);
+	}
+
+	// Tells wm that boot has finished loading things.
+	//
+	// wm keeps its dock disabled (the Z cursor) until this name exists,
+	// so nothing is launched from the dock while this function is
+	// still streaming repl and posix off the card. It used to wait for
+	// repl0 and net0 to register instead, which was really a proxy for
+	// "term can connect to repl" -- and would never have cleared on a
+	// board without a card (no repl) or without net. See wm.c's
+	// init_finished() and docs/window_manager.md.
+	//
+	// Registered by pid 0, which never exits, so the name is never
+	// released.
+	{
+		char name[Z_PIDREG_NAME_MAX];
+		if (z_pid_register("init", name, sizeof(name)))
+			printf("init: done (registered %s)\n", name);
+		else
+			printf("init: done (registering init0 FAILED -- wm will wait for "
+				"its timeout before enabling the dock)\n");
 	}
 
 }
@@ -1719,7 +1786,8 @@ void sh_help(void) {
 	printf(" tget <ip-or-host> <remote-file> [local-file]  fetch a file via tftp (needs `run net`)\n");
 	printf(" tput <ip-or-host> <local-file> [remote-file]  send a file via tftp (needs `run net`)\n");
 	printf(" run <file>        create a new process\n");
-	printf(" init               start wm, net, and repl (runs automatically at boot)\n");
+	printf(" init               start wm, net, repl and posix (runs at boot)\n");
+	printf(" cfg [reload|get k] show or re-read /zeitlos.cfg (docs/config.md)\n");
 	printf(" kill <pid>        kill a process\n");
 	printf(" ps                display a process snapshot\n");
 	printf(" df                display filesystem capacity\n");
