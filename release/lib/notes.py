@@ -47,6 +47,25 @@ def manifest(version, commit, dirty, targets, sdcard, layout, ark_commit):
 # they are trying to get working, and telling them to find it among
 # the release assets assumes they have already downloaded the right
 # ones. A URL works from the phone in their other hand.
+def _at_offset(flash_cmd, offset, filename):
+    """A board's flash command, aimed at `offset` instead of 0.
+
+    Every board's flash_cmd writes the assembled image at offset 0, so
+    it carries a literal `-o 0`. Rewriting that one token is what turns
+    the whole-image command into a per-region one, and it keeps the
+    programmer, the cable and the flags the board actually needs --
+    which a hardcoded example in a document could not.
+
+    Falls back to leaving the command alone if the `-o 0` is not there,
+    so a board whose flash_cmd has some other shape prints something
+    harmless rather than something wrong.
+    """
+    if "-o 0 " not in flash_cmd:
+        return None
+    return flash_cmd.replace("-o 0 ", "-o 0x%06x " % offset, 1) \
+                    .format(file=filename)
+
+
 DFU_DOC_URL = ("https://github.com/machdyne/zeitlos/blob/main/"
                "docs/dfu_upgrade.md")
 
@@ -256,10 +275,12 @@ def asset_readme(version, commit, targets, sdcard, layout):
     out.append("THE REST OF THE FILES")
     out.append("-" * W)
     out.append("")
-    out.append("Only needed for partial reflashes during development --")
-    out.append("everything here is already inside the images above.")
-    out.append("Rewriting one piece over JTAG is much faster than")
-    out.append("rewriting the whole image.")
+    out.append("The same system as the .img above, in four pieces.")
+    out.append("Everything here is already inside that image.")
+    out.append("")
+    out.append("Flash them separately if the whole-image write gives")
+    out.append("you trouble, or when you have changed one piece and do")
+    out.append("not want to rewrite the other 1.5MB over JTAG.")
     out.append("")
     L = {r.key: r for r in layout["regions"]}
     out.append("  zeitlos-<board>-gateware.bit   bitstream, flash 0x%06x"
@@ -270,6 +291,35 @@ def asset_readme(version, commit, targets, sdcard, layout):
                % L["apps"].offset)
     out.append("  zeitlos-logo.bin               splash,    flash 0x%06x"
                % L["logo"].offset)
+    out.append("")
+    out.append("THE OFFSETS ARE NOT OPTIONAL. The BIOS reads the splash")
+    out.append("and the kernel from fixed addresses, and the OS reads the")
+    out.append("archive from one -- a piece written to the wrong offset")
+    out.append("gives a board that configures and then hangs.")
+    out.append("")
+
+    for t in targets:
+        fc = t.get("flash_cmd")
+        gw = (t.get("artifacts") or {}).get("gateware")
+        if not fc or not gw:
+            continue
+        lines = []
+        for key, fn in (("gateware", gw),
+                        ("logo", "zeitlos-logo.bin"),
+                        ("kernel", "zeitlos-kernel.bin"),
+                        ("apps", "zeitlos-apps.zar")):
+            c = _at_offset(fc, L[key].offset, fn)
+            if c:
+                lines.append("  $ " + c)
+        if not lines:
+            continue
+        out.append("  %s -- %s" % (t["target"], t["description"]))
+        out.append("")
+        out += lines
+        out.append("")
+
+    out.append("Only the gateware is board-specific, which is why it is")
+    out.append("the only one of the four with a board name.")
     out.append("")
     out.append("  MANIFEST.json   every RTL define, achieved Fmax and")
     out.append("                  utilisation for each build")

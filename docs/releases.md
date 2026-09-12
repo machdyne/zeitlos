@@ -475,6 +475,49 @@ flashing tool ever wants a literal 2MB.
 
 ---
 
+## Flashing the parts separately
+
+The `.img` is the four pieces already assembled, written at offset 0.
+Writing them one at a time is equivalent, and is the thing to reach for
+when the whole-image write misbehaves — it is a shorter transfer per
+step, it says which region failed rather than failing somewhere in a
+1.5MB stream, and each piece can be re-written on its own.
+
+Using Mozart as the example, with that board's own `flash_cmd` from
+`hw/boards/mozart_ml1.spec`:
+
+```
+$ openFPGALoader -v -c dirtyJtag -f -o 0x000000 zeitlos-mozart_ml1-gateware.bit
+$ openFPGALoader -v -c dirtyJtag -f -o 0x0f0000 zeitlos-logo.bin
+$ openFPGALoader -v -c dirtyJtag -f -o 0x100000 zeitlos-kernel.bin
+$ openFPGALoader -v -c dirtyJtag -f -o 0x140000 zeitlos-apps.zar
+```
+
+The offsets are the flash map above, and they are not a convention the
+release tool invented — `sw/bios/bios.c` reads the splash and the
+kernel from those addresses and `sw/os/zar.h` reads the archive from
+its one, so a piece written to the wrong offset produces a board that
+configures and then hangs with nothing on screen.
+
+**Only the gateware is board-specific.** `zeitlos-kernel.bin`,
+`zeitlos-apps.zar` and `zeitlos-logo.bin` are byte-identical across
+every target in a release, which is why they have no board name. The
+`net` app carries every NIC driver and selects one at startup from the
+SOC feature register, so there is nothing per-board left in them.
+
+`README.txt` carries this list with the commands filled in for each
+target it was built with, so somebody holding only the release assets
+does not need this document. `lib/notes.py` generates those from the
+same `flash_cmd` and the same `layout.py` regions, rather than from a
+copy — the offsets in a release cannot drift from the offsets the
+system reads.
+
+**Flashing one piece during development** is the other use. Rewriting
+`zeitlos-kernel.bin` alone is a 256KB transfer instead of 1.5MB, and
+`make flash_os` already does exactly this for a local build.
+
+---
+
 ## The sdcard image
 
 Built by `lib/mkfatimg.py`, which is `tools/mkfatimg.sh` with one
