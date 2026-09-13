@@ -3,7 +3,7 @@
 # The defines below are the BOARD_OBST block of rtl/boards.vh,
 # verbatim. They are duplicated here rather than read out of that file
 # because a target has to be able to REMOVE one -- see
-# targets/obst_uart_gpio.spec, which drops `SPI_ETH to free PMOD B --
+# targets/lakritz_gpio.spec, which drops `SPI_ETH to free PMOD A --
 # which an additive -D on the yosys command line cannot express.
 #
 # `zrelease check` diffs this list against rtl/boards.vh's own
@@ -89,12 +89,14 @@ defines =
     MEM_ROM
     MEM_GLYPH
     LED_RGB
+    MONTMUL
     GPU
     GPU_RASTER
     GPU_BLIT
     GPU_CURSOR
     GPU_VGA
     UART0
+    USB_CDC
     USB_HID
     SPI_SDCARD
     SPI_ETH

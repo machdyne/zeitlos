@@ -2,7 +2,7 @@
 #
 # The incremental release workflow:
 #
-#   build v0.0.2 --targets lakritz_uart lakritz_langkatze
+#   build v0.0.2 --targets lakritz_gpio lakritz_langkatze
 #   ship  v0.0.2
 #   ...later...
 #   build v0.0.2 --targets sergei_ml1
@@ -151,7 +151,7 @@ def main():
 
     try:
         print("== session 1: build two Lakritz targets ==")
-        r = run_build(["lakritz_uart", "lakritz_langkatze"])
+        r = run_build(["lakritz_gpio", "lakritz_langkatze"])
         if r.returncode != 0:
             print(r.stdout[-3000:], r.stderr[-2000:])
             failures.append("first build failed")
@@ -160,7 +160,7 @@ def main():
         m1 = manifest()
         names1 = sorted(t["target"] for t in m1["targets"])
         print("   manifest targets: %s" % ", ".join(names1))
-        if names1 != ["lakritz_langkatze", "lakritz_uart"]:
+        if names1 != ["lakritz_gpio", "lakritz_langkatze"]:
             failures.append("first build manifest wrong: %s" % names1)
 
         imgs1 = sorted(f for f in os.listdir(OUT) if f.endswith(".img"))
@@ -183,7 +183,7 @@ def main():
         m2 = manifest()
         names2 = sorted(t["target"] for t in m2["targets"])
         print("   manifest targets: %s" % ", ".join(names2))
-        if names2 != ["lakritz_langkatze", "lakritz_uart", "sergei_ml1"]:
+        if names2 != ["lakritz_gpio", "lakritz_langkatze", "sergei_ml1"]:
             failures.append("second build LOST earlier targets: %s" % names2)
 
         imgs2 = sorted(f for f in os.listdir(OUT) if f.endswith(".img"))
@@ -194,14 +194,14 @@ def main():
 
         with open(os.path.join(OUT, "README.txt")) as f:
             rt2 = f.read()
-        for name in ("lakritz_uart", "lakritz_langkatze", "sergei_ml1"):
+        for name in ("lakritz_gpio", "lakritz_langkatze", "sergei_ml1"):
             if "zeitlos-%s.img" % name not in rt2:
                 failures.append("README.txt does not mention %s" % name)
         print("   README.txt describes all three")
 
         with open(os.path.join(OUT, "NOTES.md")) as f:
             notes = f.read()
-        for name in ("lakritz_uart", "lakritz_langkatze", "sergei_ml1"):
+        for name in ("lakritz_gpio", "lakritz_langkatze", "sergei_ml1"):
             if name not in notes:
                 failures.append("NOTES.md does not mention %s" % name)
         print("   NOTES.md describes all three")
@@ -220,15 +220,15 @@ def main():
 
         print("\n== session 3: rebuild one target in place ==")
         before = os.path.getmtime(
-            os.path.join(OUT, "zeitlos-lakritz_uart.img"))
-        r = run_build(["lakritz_uart"])
+            os.path.join(OUT, "zeitlos-lakritz_gpio.img"))
+        r = run_build(["lakritz_gpio"])
         if r.returncode != 0:
             failures.append("rebuild failed")
         m3 = manifest()
         if sorted(t["target"] for t in m3["targets"]) != names2:
             failures.append("rebuilding one target changed the target list")
         after = os.path.getmtime(
-            os.path.join(OUT, "zeitlos-lakritz_uart.img"))
+            os.path.join(OUT, "zeitlos-lakritz_gpio.img"))
         print("   target list unchanged; image rewritten: %s"
               % (after != before))
 

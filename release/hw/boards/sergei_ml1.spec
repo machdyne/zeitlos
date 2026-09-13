@@ -29,7 +29,8 @@ core_apps = wm net term
 # output. A target that plugs something into this port takes over
 # every ball in it, so the generator drops that constraint
 # automatically -- but `AUDIO_SPDIF still has to be removed for the
-# PORT to go away too. See targets/sergei_gpio.spec.
+# PORT to go away too. See targets/sergei_ml1.spec, which does
+# exactly that.
 pmod.a =
 	1=A13  2=R12  3=T13  4=T14
 
@@ -44,6 +45,7 @@ defines =
     ICACHE
     ICACHE_KB=8
     ICACHE_LINE_WORDS=4
+    MONTMUL
     GPU
     GPU_RASTER
     GPU_BLIT

@@ -30,6 +30,7 @@ defines =
     ICACHE
     ICACHE_KB=8
     ICACHE_LINE_WORDS=4
+    MONTMUL
     GPU
     GPU_RASTER
     GPU_BLIT

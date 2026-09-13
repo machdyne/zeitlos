@@ -65,15 +65,15 @@ Scheme, this document. There is no letter form.
 
 **The port number says which port the gateware built, not which
 connector it landed on.** Ports are numbered densely from 0 in the
-order `rtl/sysctl.v` declares them, so on `obst_uart_gpio` the only
-GPIO port is physically on PMOD *B* and it is still port 0.
+order `rtl/sysctl.v` declares them, so a board whose only GPIO port is
+physically on PMOD *B* still calls it port 0.
 
 There was briefly a letter notation -- `"B3"` for port 1 pin 3 -- and
 it was removed for a reason worth recording, because it looks
 convenient: **letters already mean something else in this project.** A
 board spec (`release/hw/boards/*.spec`) says `pmod.a` and `pmod.b`, and
-those *are* the physical connectors. So on `obst_uart_gpio` the port
-the release system calls `b` was the port the API called `A` -- two
+those *are* the physical connectors. So a port the release system
+calls `b` would be the port the API called `A` -- two
 lettering systems in one project disagreeing about the same piece of
 plastic. It needed a warning paragraph in the header, another in the
 shell, and another here; three warnings about one notation is usually
@@ -276,13 +276,13 @@ carry.
 
 | target | GPIO | notes |
 |---|---|---|
-| `lakritz_gpio` | port 0 on PMOD A | no serial console -- `` -UART0 `` |
-| `obst_uart_gpio` | port 0 on PMOD B | console on PMOD A, no ethernet -- `` -SPI_ETH `` |
-| `sergei_gpio` | port 0, **4 pins**, on PMOD A | no optical audio -- `` -AUDIO_SPDIF `` |
+| `lakritz_gpio` | port 0 on PMOD A | no ethernet -- `` -SPI_ETH `` |
+| `obst_langkatze_gpio` | port 0 on PMOD A | none; ethernet keeps PMOD B |
+| `sergei_ml1_gpio` | port 0, **4 pins**, on PMOD A | no audio at all -- `` -AUDIO_SPDIF `` |
 
 ```
 ./release/zrelease build lakritz_gpio
-./release/zrelease build obst_uart_gpio
+./release/zrelease build obst_langkatze_gpio
 ```
 
 Neither is a plain `make BOARD=x` build, and that is not an oversight.
@@ -322,7 +322,7 @@ SDRAM, the PHY and the SD card on a populated board.
 **Software still sees an eight-bit port.** DIR and OUT bits 4–7 exist
 and drive nothing. IN bits 4–7 read **0**, where a real floating pin
 reads 1 because of the pull-up. Nothing reports the difference, so on
-`sergei_gpio` the `logic` app shows four channels sitting flat at zero
+`sergei_ml1_gpio` the `logic` app shows four channels sitting flat at zero
 and the shell will happily accept `gpio 0 6 out`.
 
 That asymmetry is a deliberate scope choice rather than an oversight. A
@@ -344,13 +344,13 @@ optical LED while it does.
 Measured, not assumed: with all four pins as inputs and nothing
 attached the port reads `14` (`0b1110`), and jumpering each pin to
 ground clears exactly its own bit — except P1, which was already there.
-So `sergei_gpio` gives **three usable pins plus one output-only pin**.
+So `sergei_ml1_gpio` gives **three usable pins plus one output-only pin**.
 Enough for I2C with a spare if SCL and SDA go on bits 1–3; not enough
 for SPI with a chip select. Open drain needs a pin that can read back,
 which bit 0 cannot do.
 
 **Pin 1 is also the optical S/PDIF output** on Sergei (ball A13), so
-`sergei_gpio` removes `` `AUDIO_SPDIF ``. That board has no other audio
+`sergei_ml1_gpio` removes `` `AUDIO_SPDIF ``. That board has no other audio
 output, so it is genuinely optical audio *or* four GPIO pins — and with
 `` `AUDIO `` and `` `AUDIO_MIXER `` still defined, `sw/apps/play` will
 go on thinking it is playing while the samples go nowhere. Worth
@@ -503,7 +503,8 @@ These are plain MMIO accesses at a fixed physical address, same as
 processes writing the same port will interleave and nothing detects
 it.
 
-That's the deal the SD card and the ethernet MAC already have, and it's
+That's the deal the SD card and the ethernet controller already have,
+and it's
 fine for the same reason: one process owns the hardware by convention.
 If that stops being enough, the answer is a server process that owns
 the pins and takes messages, not a lock in `zgpio.c`.
@@ -528,7 +529,7 @@ usage: gpio <port> <pin> [in|out|od|0|1]  e.g. gpio 0 3 out
 port looks like at rest.
 
 This is a slightly odd home for it, since `lakritz_gpio` has no console
-at all. It's here for `obst_uart_gpio` and for bring-up: the first
+at all. It's here for `obst_langkatze_gpio` and for bring-up: the first
 thing anyone does with a new board and a new PMOD is wiggle a pin and
 look at it with a meter, and that shouldn't need the window manager, an
 app loader and a working SD card to have come up first. From a running

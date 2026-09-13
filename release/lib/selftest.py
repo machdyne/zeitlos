@@ -133,7 +133,7 @@ def main():
         # --- 1. timing failure must stop the build --------------------
         print("== a target that missed timing is refused ==")
         build_mod.run = fake_run(FAKE_PNR_FAIL)
-        t = spec.load_target(ROOT, "lakritz_uart")
+        t = spec.load_target(ROOT, "lakritz_gpio")
         soft = build_mod.build_software(ROOT, t.core_app_list())
         try:
             build_mod.build_target(ROOT, t, version, out, soft)
@@ -182,9 +182,9 @@ def main():
         print("\n== building every target ==")
         build_mod.run = fake_run(FAKE_PNR)
         soft = build_mod.build_software(
-            ROOT, spec.load_target(ROOT, "lakritz_uart").core_app_list())
+            ROOT, spec.load_target(ROOT, "lakritz_gpio").core_app_list())
         results = []
-        for name in ("lakritz_uart", "mozart_ml1", "sergei_ml1"):
+        for name in ("lakritz_gpio", "mozart_ml1", "sergei_ml1"):
             t = spec.load_target(ROOT, name)
             results.append(build_mod.build_target(ROOT, t, version, out,
                                                   soft))

@@ -149,13 +149,13 @@ splash, kernel and core apps. Flash it and the board boots to a desktop
 — nothing to build.
 
 Pick the image matching your hardware, for example a Lakritz with a
-USB-UART PMOD:
+GPIO PMOD:
 
 ```
-$ curl -LO https://github.com/machdyne/zeitlos/releases/latest/download/zeitlos-lakritz_uart.img
-$ openFPGALoader -c dirtyJtag -f -o 0 zeitlos-lakritz_uart.img
+$ curl -LO https://github.com/machdyne/zeitlos/releases/latest/download/zeitlos-lakritz_gpio.img
+$ openFPGALoader -c dirtyJtag -f -o 0 zeitlos-lakritz_gpio.img
 or
-$ sudo dfu-util -a 0 -D zeitlos-lakritz_uart.img
+$ sudo dfu-util -a 0 -D zeitlos-lakritz_gpio-dfu.bin
 ```
 
 Adjust `-c` to match your programming cable. The release page and the

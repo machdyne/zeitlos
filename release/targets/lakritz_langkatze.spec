@@ -1,6 +1,6 @@
 # Lakritz with a Langkatze SPI ethernet PMOD in port A.
 #
-# Same board as lakritz_uart with a different PMOD in the same socket,
+# Same board as lakritz_gpio with a different PMOD in the same socket,
 # which is exactly why `-UART0` is here.
 #
 # boards/lakritz_v0.lpf puts UART0_TX on B12 and UART0_RX on B13 --
@@ -28,4 +28,11 @@ description = Lakritz + Langkatze SPI Ethernet PMOD
 base  = lakritz
 pmods = langkatze@a
 
-defines = -UART0
+# No -UART0 here either: `USB_CDC is on for Lakritz and the `undef at
+# the bottom of rtl/boards.vh drops `UART0. The console is the USB-C
+# socket on every Lakritz build now.
+#
+# No +SPI_ETH either -- the langkatze PMOD spec adds it, and the base
+# board already defines it because boards/lakritz_v0.lpf constrains the
+# ethernet pins on PMOD A. This target says where the PMOD is plugged
+# in; the define follows from that.

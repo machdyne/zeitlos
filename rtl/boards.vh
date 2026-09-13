@@ -330,6 +330,7 @@
 `define MEM_VRAM
 //`define MEM_QQSPI
 `define MEM_ROM
+`define MONTMUL
 `define MEM_GLYPH
 `define LED_RGB
 //`define LED_DEBUG
@@ -378,10 +379,21 @@
 // hold it. It gives up after `USB_CDC_STALL_CYCLES so an unattended
 // board still boots. See rtl/usb_cdc_uart.v's header.
 //
-// Uncommenting this does NOT free PMOD A on its own; it only stops
-// the console needing it. To put GPIO there as well, uncomment
-// `GPIO_PORT0 below and the PMOD A block in boards/obst_v0.lpf.
-//`define USB_CDC
+// ON by default. The console is the USB-C socket that already has a
+// cable in it, PMOD A is free for something else, and a board with no
+// PMODs at all still shows you a prompt -- which is what a new owner
+// has.
+//
+// `UART0 goes away with it: the `undef at the bottom of this file
+// hands the 0xf000_00xx window to the USB device instead of to
+// rtl/ext/uart16550. A second hardware UART is a custom build now,
+// not a shipped target.
+//
+// This does NOT constrain PMOD A to anything on its own; it only
+// stops the console needing it. For GPIO there, see `GPIO_PORT0
+// below and the PMOD A block in boards/obst_v0.lpf, or build the
+// obst_langkatze_gpio target, which does both.
+`define USB_CDC
 
 // GPIO (rtl/gpio.v, docs/gpio.md) is OFF in the plain board build and
 // deliberately so: Obst has two PMOD connectors and this block claims
@@ -397,7 +409,7 @@
 // exists precisely because a variant is not always a superset of its
 // base (see the ZSPEC note above):
 //
-//     ./release/zrelease build obst_uart_gpio
+//     ./release/zrelease build obst_langkatze_gpio
 //
 // That target keeps the console on PMOD A, puts GPIO port 0 on PMOD B
 // and drops `SPI_ETH, which a command-line -D cannot express.
@@ -431,13 +443,14 @@
 `define ICACHE
 // rtl/montmul.v -- Montgomery modular multiplier for TLS.
 //
-// Optional and off by default elsewhere; on here because Lakritz is
-// the board sw/apps/web is developed against, and certificate
-// verification was 36 of the 85 seconds a page load took.
+// ON FOR EVERY BOARD. Certificate verification was 36 of the 85
+// seconds a page load took in sw/apps/web, and that is not a
+// Lakritz-specific cost -- any board that talks TLS pays it.
 //
 // Costs a handful of DSP slices and ~50 words of distributed LUT RAM.
-// NO BRAM. Drop it if the design stops fitting -- software falls back
-// to its own field arithmetic and everything still works, slowly.
+// NO BRAM. Software falls back to its own field arithmetic if it is
+// absent, so dropping it on a board that stops fitting costs speed
+// rather than function.
 `define MONTMUL
 `define ICACHE_KB 4
 `define ICACHE_LINE_WORDS 4
@@ -513,6 +526,7 @@
 `define MEM_ROM
 `define MEM_GLYPH
 `define ICACHE
+`define MONTMUL
 `define ICACHE_KB 8
 `define ICACHE_LINE_WORDS 4
 `define GPU
@@ -540,6 +554,7 @@
 `define MEM_ROM
 `define MEM_GLYPH
 `define ICACHE
+`define MONTMUL
 `define ICACHE_KB 8
 `define ICACHE_LINE_WORDS 4
 `define GPU
@@ -596,6 +611,7 @@
 //`define MEM_QQSPI
 //`define MEM_QQSPI_SINGLE
 `define MEM_VRAM
+`define MONTMUL
 `define GPU
 `define GPU_RASTER
 `define GPU_BLIT
@@ -613,6 +629,7 @@
 `define MEM 64
 `define MEM_SDRAM
 `define MEM_VRAM
+`define MONTMUL
 `define GPU
 `define GPU_RASTER
 `define GPU_BLIT
@@ -633,6 +650,7 @@
 `define MEM_ROM
 `define MEM_GLYPH
 `define ICACHE
+`define MONTMUL
 `define ICACHE_KB 4
 `define ICACHE_LINE_WORDS 4
 `define GPU

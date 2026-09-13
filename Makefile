@@ -105,7 +105,7 @@ BOARD_UC = $(shell echo '$(BOARD)' | tr '[:lower:]' '[:upper:]')
 #   OUTDIR=output/releases/<board>
 #
 # and wipes that directory before each target, because two targets on
-# one board (lakritz_uart and lakritz_langkatze) would otherwise share
+# one board (lakritz_gpio and lakritz_langkatze) would otherwise share
 # a directory and a failed second build would leave the first one's
 # soc.bit sitting there looking valid. Without this override that wipe
 # would take your working bitstream with it.

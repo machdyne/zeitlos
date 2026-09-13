@@ -284,7 +284,7 @@ no reference trace, no cursors.
 (`docs/i2c.md`) covers scanning and register access from a prompt,
 which is where those belong until there is a reason to put them here.
 
-**A narrow port shows eight channels anyway.** On `sergei_gpio` only
+**A narrow port shows eight channels anyway.** On `sergei_ml1_gpio` only
 four pins exist, and channels 4–7 sit flat at zero rather than being
 marked absent, because the hardware carries no per-port pin count.
 `docs/gpio.md` explains why that register was not added.

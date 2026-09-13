@@ -325,8 +325,9 @@ def merged_lpf(root, target):
     along. Plugging in a Langkatze instead makes that assumption false,
     and the constraints that encoded it have to go with it.
 
-    Which is also why lakritz_uart regenerates byte-identical pins to
-    the plain board build: the usbuart spec puts UART0_TX back on pin 2
+    Which is also why a target that plugs a PMOD into the port its
+    base .lpf already used regenerates byte-identical pins: the spec puts
+    the same signal back on the same pin
     and UART0_RX back on pin 3 of the same port. check_lpf_equivalence()
     asserts exactly that.
     """
@@ -431,11 +432,15 @@ def check_lpf_equivalence(root, target):
     """Does the generated .lpf place every port where the board .lpf did?
 
     Only meaningful for a target whose PMODs restore what the board
-    assumed -- lakritz_uart, where the usbuart spec puts UART0_TX and
-    UART0_RX back on the same two balls the base .lpf had them on. If
-    that comes out different, the PMOD pin map and the board port map
-    disagree about something, and the resulting bitstream would drive
-    the console pins somewhere unexpected.
+    assumed -- lakritz_langkatze, where the langkatze spec puts the five
+    ethernet signals back on the same balls boards/lakritz_v0.lpf had
+    them on. If that comes out different, the PMOD pin map and the board
+    port map disagree about something, and the resulting bitstream would
+    drive those pins somewhere unexpected.
+
+    No target restores a UART any more: `USB_CDC is on for Lakritz and
+    Obst, so the console is the USB-C socket and the PMOD it used to
+    occupy is free for something else.
 
     Differences are EXPECTED for a target that changes the hardware --
     lakritz_langkatze genuinely removes UART0 and adds five ETH ports.
@@ -482,7 +487,11 @@ def check_port_coverage(root, target, spec_mod):
             text = f.read()
 
     constrained = {re.sub(r"\[.*", "", p) for p in effective_pins(text)}
-    declared = spec_mod.declared_ports(root, target.defines)
+    # effective_defines(), not target.defines: rtl/boards.vh drops
+    # `UART0 on a `USB_CDC board, so the UART ports are not built and
+    # must not be reported as unconstrained.
+    declared = spec_mod.declared_ports(
+        root, spec_mod.effective_defines(root, target.defines))
 
     problems = []
     for guard, name in declared:

@@ -1,7 +1,7 @@
 #
 # Zeitlos release tooling -- hardware specs.
 #
-# A "target" is a board plus whatever is plugged into it: lakritz_uart
+# A "target" is a board plus whatever is plugged into it: lakritz_gpio
 # and lakritz_langkatze are the same FPGA board with different PMODs,
 # and they need different gateware AND different software. That second
 # half is the part worth being careful about -- rtl/boards.vh decides
@@ -636,6 +636,61 @@ def derive_arch(root):
         raise SpecError("rtl/boards.vh defines `CPU_DIV without `CPU_MUL. "
                         "There is no RISC-V ISA string for that.")
     return "rv32i"
+
+
+def boards_vh_rules(root):
+    """The `ifdef A / `undef B rules at the tail of rtl/boards.vh.
+
+    Returns [(trigger, removed), ...].
+
+    READ, not restated. rtl/boards.vh has rules that fire AFTER the
+    per-board blocks and outside the ZSPEC guard, so they apply to a
+    spec-driven build exactly as they do to a `BOARD_x one. Today there
+    is one -- `USB_CDC displaces `UART0 -- and hardcoding that here
+    would be a second copy of a rule whose whole point is to live in
+    one place.
+
+    Anything that reasons about a target's define set has to apply
+    these, or it is reasoning about a set the preprocessor will never
+    produce. declared_ports() is the case that matters: without this it
+    believes UART0_TX and UART0_RX are built on a board whose console
+    is USB, and then reports them as unconstrained.
+    """
+    path = os.path.join(root, "rtl", "boards.vh")
+    with open(path) as f:
+        text = f.read()
+
+    # Only the tail: rules inside the per-board chain are that board's
+    # business and are already reflected in its spec.
+    i = text.find("`endif")
+    marker = re.search(r"`endif\s*//\s*ZSPEC", text)
+    if marker:
+        text = text[marker.end():]
+
+    rules = []
+    pend = None
+    for line in text.splitlines():
+        line = line.split("//")[0].strip()
+        m = re.match(r"`ifdef\s+(\w+)", line)
+        if m:
+            pend = m.group(1)
+            continue
+        m = re.match(r"`undef\s+(\w+)", line)
+        if m and pend:
+            rules.append((pend, m.group(1)))
+            continue
+        if line.startswith("`endif"):
+            pend = None
+    return rules
+
+
+def effective_defines(root, defines):
+    """`defines` after rtl/boards.vh's post-block rules have fired."""
+    out = set(defines)
+    for trigger, removed in boards_vh_rules(root):
+        if trigger in out:
+            out.discard(removed)
+    return out
 
 
 def declared_ports(root, defines):

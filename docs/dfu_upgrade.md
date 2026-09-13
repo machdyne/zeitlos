@@ -239,7 +239,7 @@ Found DFU: [16d0:116d] ... alt=0, name="User Image (1792KB)", ...
 ### 7. Flash Zeitlos
 
 ```
-$ dfu-util -a 0 -D zeitlos-lakritz_uart-dfu.bin
+$ dfu-util -a 0 -D zeitlos-lakritz_gpio-dfu.bin
 ```
 
 Then write the sdcard image and boot. See the release `README.txt` for
@@ -284,7 +284,7 @@ bootloader is present — and it will overwrite it, which is fine if you
 are flashing over JTAG anyway.
 
 ```
-$ openFPGALoader -c dirtyJtag -f -o 0 zeitlos-lakritz_uart.img
+$ openFPGALoader -c dirtyJtag -f -o 0 zeitlos-lakritz_gpio.img
 ```
 
 Any 3.3 V SPI programmer or an MMOD programmer works too; the MMOD is

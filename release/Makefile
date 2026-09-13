@@ -13,7 +13,7 @@
 #
 # Restrict a build to some targets:
 #
-#   make -C release build VERSION=v0.0.3 TARGETS="lakritz_uart mozart_ml1"
+#   make -C release build VERSION=v0.0.3 TARGETS="lakritz_gpio mozart_ml1"
 
 Z = ./zrelease
 

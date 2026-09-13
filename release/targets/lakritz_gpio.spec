@@ -7,7 +7,7 @@
 # Lakritz has exactly ONE PMOD port. boards/lakritz_v0.lpf puts
 # UART0_TX on B12 and UART0_RX on B13, which are PMOD_A2 and PMOD_A3 --
 # so the board has been assuming a USB-UART PMOD in that socket all
-# along (see hw/pmods/usbuart.spec, which just says it out loud). A
+# along. A
 # GPIO port needs all eight pins of the connector. There is no
 # arrangement in which both fit.
 #
@@ -38,11 +38,27 @@
 #
 # If you want both a console and GPIO on Lakritz, the answer is not
 # this target -- it is a second board, or Obst, which has two
-# connectors (see obst_uart_gpio).
+# connectors (see obst_langkatze_gpio).
 
-description = Lakritz + GPIO (no serial console)
+description = Lakritz + GPIO (no ethernet)
 
 base  = lakritz
 pmods = gpio
 
-defines = -UART0
+# -SPI_ETH because this target's GPIO occupies PMOD A, and PMOD A is
+# where boards/lakritz_v0.lpf puts the Langkatze ethernet pins
+# (ETH_SS on B11 through ETH_INT on A11).
+#
+# Occupying the port releases those constraints, so leaving `SPI_ETH
+# defined would instantiate a second spim_wb -- the same SPI master
+# the sdcard uses, at a faster default divider (rtl/sysctl.v, near
+# "wbs_spieth0_i") -- with five top-level ports and no balls to put
+# them on. The MAC is in the ENC28J60 on the PMOD; the gateware side
+# is just SPI. check_port_coverage() catches it, which is cheaper than
+# a nextpnr error at the end of a long build.
+#
+# -UART0 is NOT here any more: `USB_CDC is on for Lakritz and the
+# `undef at the bottom of rtl/boards.vh removes `UART0 for us. Saying
+# it twice was harmless but implied the console was this target's
+# choice rather than the board's.
+defines = -SPI_ETH

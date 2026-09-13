@@ -65,6 +65,7 @@ defines =
     ICACHE
     ICACHE_KB=4
     ICACHE_LINE_WORDS=4
+    MONTMUL
     GPU
     GPU_RASTER
     GPU_BLIT
@@ -73,6 +74,7 @@ defines =
     UART0
     USB_HID
     SPI_SDCARD
+    SPI_ETH
     AUDIO
     AUDIO_SD
     AUDIO_MIXER
