@@ -150,6 +150,7 @@ static const dock_app_t dock_candidates[] = {
 
 	{ "hex",			z_icon_hex_data   },
 	{ "chip8",		z_icon_chip8_data },
+	{ "chess",		z_icon_chess_data },
 	{ "space3d",	z_icon_space3d_data },
 	{ "gpu3d",		z_icon_gpu3d_data },
 	{ "gamedemo",	z_icon_gamedemo_data },

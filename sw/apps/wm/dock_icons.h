@@ -16,6 +16,7 @@
 
 extern const uint8_t z_icon_cal_data[32 * 4];
 extern const uint8_t z_icon_calc_data[32 * 4];
+extern const uint8_t z_icon_chess_data[32 * 4];
 extern const uint8_t z_icon_chip8_data[32 * 4];
 extern const uint8_t z_icon_clock_data[32 * 4];
 extern const uint8_t z_icon_draw_data[32 * 4];

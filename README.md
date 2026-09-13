@@ -94,6 +94,7 @@ On the sdcard, started at boot when a card is present. A `term` window can conne
 | [mmod](docs/mmod.md) | [MMOD](https://github.com/machdyne/mmod) reader/writer |
 | [logic](docs/logic_app.md) | Logic analyzer (under development) |
 | [chip8](docs/chip8_app.md) | CHIP-8 game emulator |
+| [chess](docs/chess_app.md) | Chess, with a [built-in engine](docs/chess_engine.md) |
 | [gamedemo](docs/gamedemo.md) | 2D side-scrolling platformer game |
 | space3d | First-person 3D space shooter game |
 | [gpu3d](docs/gpu3d_app.md) | Spinning 3D cube demo + STL viewer |

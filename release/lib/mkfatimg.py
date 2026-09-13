@@ -102,6 +102,7 @@ GAMES_DEMOS = [
     ("apps/gpu3d", "sw/apps/gpu3d/gpu3d.bin"),
     ("apps/gpudemo", "sw/apps/gpudemo/gpudemo.bin"),
     ("apps/chip8", "sw/apps/chip8/chip8.bin"),
+    ("apps/chess", "sw/apps/chess/chess.bin"),
 ]
 
 MISC = [

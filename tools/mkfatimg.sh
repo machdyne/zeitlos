@@ -85,6 +85,7 @@ cp sw/apps/logic/logic.bin "$MOUNT_DIR/apps/logic"
 cp sw/apps/serial/serial.bin "$MOUNT_DIR/apps/serial"
 cp sw/apps/gpudemo/gpudemo.bin "$MOUNT_DIR/apps/gpudemo"
 cp sw/apps/chip8/chip8.bin "$MOUNT_DIR/apps/chip8"
+cp sw/apps/chess/chess.bin "$MOUNT_DIR/apps/chess"
 cp sw/apps/hello_win/hello_win.bin "$MOUNT_DIR/apps/hellowin"
 cp sw/apps/audiotest/audiotest.bin "$MOUNT_DIR/apps/audiotst"
 
