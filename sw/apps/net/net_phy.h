@@ -60,6 +60,7 @@
 
 #include "enc28j60.h"
 #include "rmii_eth.h"
+#include "netcfg.h"
 #include "esp32link.h"
 
 typedef struct {
@@ -72,7 +73,7 @@ typedef struct {
 	// station: it needs credentials (NET.CFG, netcfg.h) and drives the
 	// association from net's main loop rather than blocking phy_init(),
 	// so that wm keeps being scheduled while it happens.
-	void (*poll_wifi)(const char *ssid, const char *psk);
+	void (*poll_wifi)(const netcfg_t *cfg);
 
 	// Bytes of RECEIVE buffering this hardware has, as TCP payload.
 	//
@@ -99,6 +100,13 @@ typedef struct {
 	// per-frame overhead differs and only the driver knows it.
 	uint16_t rx_capacity;
 
+	// Optional, NULL on the wired backends. How long net's main loop
+	// may sleep before this driver wants to run again, in kernel ticks
+	// (0 = right now). A wired MAC has no answer to give: its interrupt
+	// is the wakeup and the loop's 100 ms backstop is pure insurance.
+	// A polled link does, because how often it asks the far side is a
+	// policy rather than a constant -- see esp32link.c's poll_gap().
+	uint32_t (*idle_ticks)(void);
 } net_phy_t;
 
 // The active driver. NULL until net_phy_select() has run, which

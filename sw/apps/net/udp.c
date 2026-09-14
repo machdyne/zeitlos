@@ -12,6 +12,7 @@
 #include "udp.h"
 #include "ip.h"
 #include "../../common/zeitlos.h"
+#include <string.h>
 
 #define UDP_MAX_LISTENERS 4
 
@@ -70,7 +71,7 @@ bool udp_send(uint32_t dst_ip, uint16_t dst_port, uint16_t src_port,
 	pkt[5] = total_len & 0xFF;
 	pkt[6] = 0; pkt[7] = 0;	// checksum: not computed, see udp.h
 
-	for (uint16_t i = 0; i < len; i++) pkt[UDP_HDR_LEN + i] = data[i];
+	memcpy(pkt + UDP_HDR_LEN, data, len);
 
 	return ip_send(dst_ip, 17, pkt, total_len);	// protocol 17 = UDP
 

@@ -61,6 +61,8 @@
 #include "ntp.h"
 #include "udp.h"
 #include "dns.h"
+#include "esp32link.h"
+#include "net_phy.h"
 #include "../../common/zeitlos.h"
 #include "../../common/znet.h"
 #include "../../common/zrtc.h"
@@ -86,10 +88,10 @@
 // DNS_TIMEOUT_TICKS). Not wall-clock seconds, for the obvious reason
 // that the wall clock is the thing being set.
 
-// How long after ntp_init() the first attempt goes out. Long enough
-// for net's own startup printing to finish and for an ARP to the
-// gateway to resolve, short enough that a machine that just booted
-// knows the time before anyone has finished logging in.
+// How long after ntp_init() the first attempt goes out on a link that
+// is already up (wired). On WiFi ntp_poll() waits for LINK up instead
+// -- the ESP32 association takes ~10-15 s, so this delay is spent
+// waiting for the link and does not fire a doomed query beforehand.
 #define NTP_FIRST_DELAY_TICKS   (3u * Z_TICK_HZ)
 
 // Between successful syncs. Hourly rather than daily: the RTC is a
@@ -115,6 +117,13 @@
 #define NTP_TIMEOUT_TICKS       (2u * Z_TICK_HZ)
 #define NTP_MAX_RETRIES         3
 
+// Own timeout for NTP_RESOLVING. dns.c's retry budget is ~2 s and it
+// is supposed to always reply, but a lost self-message (mailbox full)
+// would otherwise leave this client silent forever -- ntp_poll() used
+// to treat RESOLVING as a no-op and trust that reply. 10 s is well
+// above dns.c's budget and well below NTP_RETRY_TICKS.
+#define NTP_RESOLVE_TIMEOUT_TICKS (10u * Z_TICK_HZ)
+
 // Seconds between 1900-01-01 and 1970-01-01 -- see this file's header
 // on why this appears twice below rather than once.
 #define NTP_UNIX_OFFSET 2208988800u
@@ -127,6 +136,11 @@ typedef enum {
 } ntp_state_t;
 
 static ntp_state_t state = NTP_DISABLED;
+
+// -1 unknown (just armed), 0 down, 1 up. Distinguishes "never seen
+// the link" (keep NTP_FIRST_DELAY_TICKS on wired) from "the link just
+// came back" (sync now, and re-resolve an unpinned server).
+static int link_was_up = -1;
 
 // Pinned by NET_STATIC_NTP, or filled in by a DNS resolution. Kept
 // after a successful lookup so subsequent hourly syncs skip DNS --
@@ -184,6 +198,26 @@ static void give_up(const char *why) {
 		(long)(NTP_RETRY_TICKS / Z_TICK_HZ));
 	udp_close(local_port);
 	schedule(NTP_RETRY_TICKS);
+}
+
+// WiFi: the ESP32 reports LINK via ZNIC_LINK (and HELLO-again clears
+// it). Wired backends have no poll_wifi; DHCP already ran before
+// ntp_init(), so the link is as ready as it will be.
+static int link_ready(void)
+{
+	if (!net_phy || !net_phy->poll_wifi)
+		return 1;
+	return esp32link_link_is_up();
+}
+
+static void abort_in_flight(void)
+{
+	if (state == NTP_QUERYING || state == NTP_RESOLVING)
+		udp_close(local_port);
+	if (!server_ip_pinned)
+		server_ip = 0;
+	state = NTP_IDLE;
+	next_attempt_ticks = z_uptime_ticks();
 }
 
 // Builds and sends one request to server_ip. Assumes local_port is
@@ -402,11 +436,11 @@ static void begin_attempt(void) {
 
 	// dns_resolve_start() handles every outcome itself, including the
 	// immediate failures (no nameserver, busy) -- it always sends
-	// exactly one reply to the pid/tag given, so there is nothing to
-	// check here and no path where this silently goes nowhere. See
-	// dns.h.
+	// exactly one reply to the pid/tag given. ntp_poll() still times
+	// out NTP_RESOLVING in case that reply is lost (mailbox full).
 	printf("net: ntp: resolving %s\n", NTP_SERVER);
 	state = NTP_RESOLVING;
+	last_tx_ticks = z_uptime_ticks();
 	dns_resolve_start(NTP_SERVER, z_getpid(), NTP_DNS_TAG);
 
 }
@@ -495,6 +529,30 @@ bool ntp_handle_dns_reply(const z_msg_t *msg) {
 
 void ntp_poll(void) {
 
+	if (state == NTP_DISABLED)
+		return;
+
+	int up = link_ready();
+	if (!up) {
+		if (link_was_up != 0) {
+			if (link_was_up == 1) {
+				printf("net: ntp: link down -- waiting to resync\n");
+				abort_in_flight();
+			} else {
+				printf("net: ntp: waiting for link\n");
+			}
+			link_was_up = 0;
+		}
+		return;
+	}
+	if (link_was_up != 1) {
+		if (link_was_up == 0) {
+			printf("net: ntp: link up -- syncing\n");
+			abort_in_flight();
+		}
+		link_was_up = 1;
+	}
+
 	switch (state) {
 
 		case NTP_DISABLED:
@@ -509,10 +567,9 @@ void ntp_poll(void) {
 			return;
 
 		case NTP_RESOLVING:
-			// dns.c owns the timeout here and always replies, so there
-			// is nothing to time out on this side. Left as an explicit
-			// case rather than folded into the default so that stays
-			// on the record.
+			if (z_uptime_ticks() - last_tx_ticks < NTP_RESOLVE_TIMEOUT_TICKS)
+				return;
+			give_up("name resolution timed out");
 			return;
 
 		case NTP_QUERYING:

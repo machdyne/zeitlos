@@ -7,7 +7,7 @@
  *
  * The two drivers already had identical signatures before this
  * existed, which is what makes the table below mechanical: there are
- * no shims and no adapters, only two structs of five pointers.
+ * no shims and no adapters, only structs of function pointers.
  */
 
 #include <stdbool.h>
@@ -29,6 +29,7 @@ static const net_phy_t phy_enc28j60 = {
 	// vector are counted, so eleven fit: 11 * 536 = 5896. Rounded
 	// down to a whole number of segments with one spare.
 	10 * 536,
+	0,
 };
 
 static const net_phy_t phy_esp32link = {
@@ -41,6 +42,7 @@ static const net_phy_t phy_esp32link = {
 	// 2048-byte FIFO (rtl/esp32_rxfifo.v). Three segments fit with
 	// their framing; two is the safe advertisement.
 	2 * 536,
+	esp32link_idle_ticks,
 };
 
 static const net_phy_t phy_rmii = {
@@ -54,6 +56,7 @@ static const net_phy_t phy_rmii = {
 	// (rtl/ethmac_rmii.v RX_SLOTS). Three segments, leaving a slot
 	// for the gap between a frame landing and net being scheduled.
 	3 * 536,
+	0,
 };
 
 const net_phy_t *net_phy = 0;

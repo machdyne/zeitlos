@@ -17,7 +17,7 @@ downloads via the gateway's TFTP server.
 
 | FPGA pin | ESP32 | Use |
 |----------|-------|-----|
-| L1 / N3 (`UART1_TX` / `UART1_RX`) | GPIO16 / GPIO17 (UART1) | ZNIC data, 1 Mbaud 8N1 |
+| L1 / N3 (`UART1_TX` / `UART1_RX`) | GPIO16 / GPIO17 (UART1) | ZNIC data, 3 Mbaud 8N1 |
 | F1 `wifi_en`, L2 `wifi_gpio0` | EN, GPIO0 | reset / boot strap, software controlled |
 | K3 / K4 | UART0 | flashing and the `ZTEST` CLI (only with a passthru bitstream) |
 | SD card lines | GPIO 2/4/12-15 | left as inputs by the firmware |
@@ -30,7 +30,7 @@ downloads via the gateway's TFTP server.
 - `0xf000_0200`: ESP32 control register, bit 0 = EN, bit 1 = GPIO0.
   Reset value `en=0, gpio0=1`: the module is held in reset until `net`
   starts, so it never fights the FPGA for the SD card bus.
-- `0xf000_0300`: `rtl/esp32_rxfifo.v`, a 2 KiB block-RAM receive FIFO
+- `0xf000_0300`: `rtl/esp32_rxfifo.v`, an 8 KiB block-RAM receive FIFO
   on the UART1 RX pin. `+0` = `{overrun, count[11:0]}`, `+4` pops a
   byte, a write to `+8` flushes. The 16550's 16-byte FIFO cannot hold a
   frame while another process owns the CPU (one time slice away from
@@ -51,15 +51,16 @@ UART is a byte stream, so frames are delimited:
 
 | type | direction | payload |
 |------|-----------|---------|
-| `0x03` RX_POLL | Z -> ESP32 | -- |
+| `0x03` RX_POLL | Z -> ESP32 | optional credit byte: how many frames the FPGA's FIFO can take |
 | `0x01` DATA | both | one 802.3 frame (<= 1518 bytes) |
 | `0x22` DATA_ACK | ESP32 -> Z | -- |
 | `0x02` NOP | ESP32 -> Z | nothing queued |
 | `0x10` HELLO | ESP32 -> Z | MAC[6], flags = `esp_reset_reason()`, fw version (2) |
 | `0x20` STA | Z -> ESP32 | `ssid_len, ssid[], psk_len, psk[]` |
 | `0x21` STA_ACK | ESP32 -> Z | status (0 = ok) |
-| `0x11` LINK | ESP32 -> Z | up, rssi, disconnect reason, scan found |
+| `0x11` LINK | ESP32 -> Z | up, rssi, disconnect reason, scan found, station IP (4 bytes, big-endian) |
 | `0x30` LOG | ESP32 -> Z | one ESP_LOG line (shown as `esp32: ...`) |
+| `0x31` BURST | ESP32 -> Z | `{n}`: exactly n framed messages follow back to back; sent when the poll carried credit >= 2 and n things were queued |
 
 Every ESP32 -> Zeitlos frame is a reply (fw version 2): `RX_POLL` is
 answered with the oldest queued control message (HELLO, LINK, LOG),
@@ -68,6 +69,18 @@ else a DATA frame, else NOP; `DATA` gets `DATA_ACK`; `STA` gets
 already in the FIFO before sending and matches replies in order, so a
 reply that arrives late (the ESP32's tcpip and wifi tasks can delay
 the link task by tens of ms) is simply the next thing read.
+
+Two things keep the wire busy instead of waiting on round trips.
+`RX_POLL` carries a credit -- how many frames the receive FIFO can
+take, worst-case MTU each -- and with credit to spare the ESP32
+answers with one `BURST` of everything it has queued rather than one
+frame per poll. In the other direction DATA is windowed, not
+stop-and-wait: up to four frames in flight, each still answered by a
+`DATA_ACK`, and a window that times out is written off as lost -- an
+ethernet link is allowed to drop frames, and TCP or TFTP retransmit.
+Note TFTP itself is lockstep either way (one 512-byte block per
+acknowledgement end to end), so its throughput barely notices any of
+this; the machinery is for streaming consumers.
 
 The driver adds one optional entry to `net_phy_t`, `poll_wifi()`:
 wired backends leave it NULL, and `net`'s main loop calls it when it

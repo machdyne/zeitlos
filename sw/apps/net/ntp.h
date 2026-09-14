@@ -66,8 +66,11 @@
 // Does not send anything itself -- the first sync is scheduled a
 // moment out, so it lands after net's own startup printing rather
 // than in the middle of it, and so an ARP for the gateway has had a
-// chance to resolve. Call once from net.c's main(), after the IP
-// configuration is settled.
+// chance to resolve. On a WiFi backend (poll_wifi) ntp_poll() further
+// waits for LINK up before the first DNS query: associating takes
+// longer than that first delay, and a resolve sent beforehand always
+// fails. Call once from net.c's main(), after the IP configuration is
+// settled.
 //
 // Returns false if there is nothing for this client to do -- built
 // with NTP_ENABLE=0, or a bitstream with no RTC to set. In that case
@@ -76,9 +79,12 @@
 bool ntp_init(uint32_t server_ip);
 
 // Call every main-loop iteration. Drives the whole state machine:
-// scheduling, DNS, request retransmission, timeout and the next
-// sync's deadline. Cheap no-op (one comparison) in the idle state,
-// which is where it spends essentially all of its time.
+// scheduling, waiting for LINK up, DNS (with its own resolve timeout),
+// request retransmission, timeout and the next sync's deadline. Cheap
+// no-op (one comparison) in the idle state, which is where it spends
+// essentially all of its time. A link that drops aborts an in-flight
+// attempt and a link that returns asks again, rather than waiting out
+// the hourly success interval.
 void ntp_poll(void);
 
 // Ask for a sync now rather than at the scheduled time. Ignored if one
