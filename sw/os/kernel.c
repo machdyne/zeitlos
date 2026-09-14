@@ -86,6 +86,8 @@ z_obj_t *k_proc_wait(z_obj_t *args);
 // z_msg_send already use, for the same collision.
 z_obj_t *k_video_get_mode(z_obj_t *args);
 z_obj_t *k_video_set_mode(z_obj_t *args);
+z_obj_t *k_hid_inject(z_obj_t *obj);
+z_obj_t *k_wm_wake(z_obj_t *args);
 
 // CFG_GET/_ENTRY/_RELOAD handlers -- see cfg.h.
 #include "cfg.h"
@@ -721,6 +723,195 @@ int main(void) {
 // - this is called by the BIOS interrupt handler which uses the interrupt stack
 // - it can also be called by apps to make system calls
 
+// task 0009: interrupt-entry census, measurement only. [0] counts every
+// entry on the interrupt path, [3..8] count each source line seen in
+// `irqs`, [2] counts entries carrying any line outside 3..8. Read out
+// (cumulative) at the end of k_proc_dump(), so two `ps` runs bracketing
+// a workload give the IRQ rate by source.
+uint32_t z_irq_census[9];
+
+// C1 (i): virtualise the GPU scissor per process. The registers are
+// global hardware with no privilege, so the kernel cannot intercept
+// writes -- it reads them on the way out and puts them back on the
+// way in. Drain before restoring a *different* clip: the rasterizer
+// samples clip live per pixel (FIFO entries do not carry it) and a
+// glyph blit samples the vertical scissor live per row. Fills latch
+// clip at start and are safe in flight. Spins are bounded; this runs
+// inside the IRQ handler so it must not printf.
+static void k_gpu_clip_save(z_proc *p)
+{
+	p->gpu_rast_clip[0] = gpu_clip_x0;
+	p->gpu_rast_clip[1] = gpu_clip_y0;
+	p->gpu_rast_clip[2] = gpu_clip_x1;
+	p->gpu_rast_clip[3] = gpu_clip_y1;
+	p->gpu_rast_clip[4] = gpu_clip_enable;
+	p->gpu_blit_clip[0] = gpu_blit_clip_x0;
+	p->gpu_blit_clip[1] = gpu_blit_clip_y0;
+	p->gpu_blit_clip[2] = gpu_blit_clip_x1;
+	p->gpu_blit_clip[3] = gpu_blit_clip_y1;
+	p->gpu_clip_valid = 1;
+}
+
+static void k_gpu_clip_restore(z_proc *p)
+{
+	uint32_t rx0, ry0, rx1, ry1, ren;
+	uint32_t bx0, by0, bx1, by1;
+	uint32_t n;
+
+	if (p->gpu_clip_valid) {
+		rx0 = p->gpu_rast_clip[0];
+		ry0 = p->gpu_rast_clip[1];
+		rx1 = p->gpu_rast_clip[2];
+		ry1 = p->gpu_rast_clip[3];
+		ren = p->gpu_rast_clip[4];
+		bx0 = p->gpu_blit_clip[0];
+		by0 = p->gpu_blit_clip[1];
+		bx1 = p->gpu_blit_clip[2];
+		by1 = p->gpu_blit_clip[3];
+	} else {
+		rx0 = 0; ry0 = 0; rx1 = 639; ry1 = 479; ren = 0;
+		bx0 = 0; by0 = 0; bx1 = 640; by1 = 480;
+	}
+
+	if (gpu_clip_x0 != rx0 || gpu_clip_y0 != ry0 ||
+	    gpu_clip_x1 != rx1 || gpu_clip_y1 != ry1 ||
+	    gpu_clip_enable != ren) {
+		n = 0;
+		while ((gpu_busy & 1) && n < 50000u)
+			n++;
+		gpu_clip_x0 = rx0;
+		gpu_clip_y0 = ry0;
+		gpu_clip_x1 = rx1;
+		gpu_clip_y1 = ry1;
+		gpu_clip_enable = ren;
+	}
+
+	if (gpu_blit_clip_x0 != bx0 || gpu_blit_clip_y0 != by0 ||
+	    gpu_blit_clip_x1 != bx1 || gpu_blit_clip_y1 != by1) {
+		if ((gpu_blit_status & 1) &&
+		    (gpu_blit_ctrl & GPU_BLIT_CTRL_GLYPH)) {
+			n = 0;
+			while ((gpu_blit_status & 1) && n < 10000u)
+				n++;
+		}
+		gpu_blit_clip_x0 = bx0;
+		gpu_blit_clip_y0 = by0;
+		gpu_blit_clip_x1 = bx1;
+		gpu_blit_clip_y1 = by1;
+	}
+}
+
+// Save the interrupted frame, pick the next RUNNABLE process, return
+// its frame. Same dance the KTIMER path has always done -- extracted
+// so a BLOCKED process can switch on any IRQ, not only on the tick.
+//
+// Does not advance z_kernel_ticks and does not sweep wake_tick: those
+// stay the KTIMER caller's job. A yield (UART THRE pulse after
+// k_proc_wait) must not look like time passing.
+static uint32_t *k_sched_switch(uint32_t *regs) {
+
+	int sched_scanned;
+
+	// don't switch if there's at most one process that could run.
+	// Deliberately runnable, not active: if wm/net/repl are all
+	// blocked on their mailboxes, the one process with work to do
+	// keeps the CPU instead of round-robining through three
+	// processes that would each immediately block again.
+	// Only skip the switch if the CURRENT process is itself still
+	// runnable. Otherwise we would decline to switch AWAY FROM a
+	// process that has just blocked itself, and go on running it --
+	// which is both wrong and, with exactly two processes, fatal.
+	//
+	// Concretely: with only the shell and net, net calls
+	// z_proc_wait(), marks itself BLOCKED, and the runnable count
+	// drops to 1 (the shell). The old test then returned `regs` --
+	// net's own context -- so net kept running while blocked and the
+	// shell was never scheduled again. The serial console simply
+	// stopped responding. It went unnoticed because wm and repl are
+	// normally running, which keeps the count above 2.
+	//
+	// This test predates Z_PROC_FLAG_BLOCKED, when "runnable" meant
+	// "active" and the current process was always counted.
+	if (Z_PROC_RUNNABLE(z_procs[z_pid]) &&
+		k_proc_runnable_count() < 2) return regs;
+
+	// save current process registers and GPU scissor
+	k_gpu_clip_save(&z_procs[z_pid]);
+	for (int i = 0; i < 32; i++) {
+		z_procs[z_pid].regs[i] = *(regs + i);
+	}
+
+	// Bounded scan. Before BLOCKED existed, this loop was
+	// guaranteed to terminate because the current process was
+	// itself active and would be reached again. That is no longer
+	// true -- every process can now be unschedulable at once -- and
+	// an unbounded scan here would spin forever INSIDE the
+	// interrupt handler, which is unrecoverable. The count is the
+	// safety net; the k_proc_runnable_count() check above means it
+	// should never actually be hit.
+	sched_scanned = 0;
+
+	// find next runnable process (round-robin scheduling)
+	next_process:
+	if (++sched_scanned > Z_PROCS_MAX) return regs;
+	z_pid++;
+	if (z_pid >= Z_PROCS_MAX) z_pid = 0;
+
+	if ((z_procs[z_pid].flags & Z_PROC_FLAG_DIE) == Z_PROC_FLAG_DIE) {
+		// NOTE: this whole branch runs inside the interrupt
+		// handler itself (this function's interrupt path, not the
+		// syscall path) -- picorv32's interrupt model here doesn't
+		// nest, so nothing on this path can safely call
+		// printf()/anything that waits on another interrupt to
+		// make progress. uart.c's own _write() documents exactly
+		// this hazard: `while (k_uart_tx_full()) /* wait */;` has
+		// no timeout, and the TX fifo is only ever drained by the
+		// UART TX interrupt -- which can never fire while we're
+		// already inside THIS interrupt handler. A printf() briefly
+		// lived right here (paired with one in k_proc_kill()
+		// below, which runs via the syscall path instead and is
+		// fine) -- it caused a genuine, total hang the moment it
+		// landed at a point where the TX fifo happened to already
+		// be full (far more likely right after a burst of unrelated
+		// output, e.g. telnet's own connect-sequence prints), with
+		// nothing able to recover it since even the scheduler
+		// itself never gets to run again. Removed; k_proc_kill()'s
+		// own print (this file) still shows every DIE request as it
+		// happens, which is what actually matters for the
+		// investigation this was added for -- exactly when the
+		// resulting free below actually runs is a fixed, short
+		// delay after that (at most one full round-robin cycle),
+		// not additional information worth this risk to observe
+		// directly.
+		k_mem_free((void *)z_procs[z_pid].base);
+		k_pidreg_release_all(z_pid);
+		// release any file handles this process left open.
+		// Same shape and same reason as the pidreg sweep
+		// above: without it a process killed by wm's close
+		// icon (Z_WIN_FLAG_CLOSE_KILLS_OWNER) keeps its
+		// handles forever, and Z_FS_MAX_OPEN is 8 -- so
+		// relaunching one app that holds a handle exhausts
+		// the table in a session and only a reboot recovers
+		// it. See k_fs_release_all() in fsapi.c, and the
+		// KNOWN LIMITATION note in sw/common/zfs.h that this
+		// closes.
+		k_fs_release_all(z_pid);
+		z_procs[z_pid].base = 0x00000000;
+		z_procs[z_pid].flags = 0x00000000;
+		goto next_process;
+	}
+
+	// skips both inactive and blocked slots -- see
+	// Z_PROC_RUNNABLE()/Z_PROC_FLAG_BLOCKED in kernel.h
+	if (!Z_PROC_RUNNABLE(z_procs[z_pid]))
+		goto next_process;
+
+	reg_mtu = z_procs[z_pid].base;
+	k_gpu_clip_restore(&z_procs[z_pid]);
+	return (uint32_t *)z_procs[z_pid].regs;
+
+}
+
 uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 
 	// gp must be correct -- the kernel's own -- for the ENTIRE
@@ -758,7 +949,6 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 		"r"((uint32_t)(uintptr_t)&__global_pointer$) : "memory");
 
 	uint32_t *ret;
-	int sched_scanned;
 
 	if (syscall_id != Z_SYSCALL_NONE) {
 
@@ -805,6 +995,12 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 
 	// not a system call; must be an interrupt
 
+	// task 0009 census: which line(s) brought us in, nothing else.
+	z_irq_census[0]++;
+	for (int b = 3; b <= 8; b++)
+		if (irqs & (1u << b)) z_irq_census[b]++;
+	if (irqs & ~0x1F8u) z_irq_census[2]++;
+
 	// only the KTIMER IRQ should advance the tick counter -- it was
 	// previously incremented for ANY interrupt (including UART RX/TX,
 	// which fires far more often, especially under heavy printf
@@ -814,16 +1010,12 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 	// sooner than intended.
 	if ((irqs & (1 << Z_IRQ_KTIMER)) != 0) {
 		++z_kernel_ticks;
-
-		// Charge this tick to whoever was running when it fired.
-		//
-		// z_pid is the interrupted process (the syscall path above
-		// has already returned by here, so this is genuinely an
-		// interrupt of running code, not of a kernel call made on
-		// someone's behalf). Sampled accounting: one increment per
-		// tick, no timers started or stopped, and the error is
-		// bounded by the tick period.
-		if (z_pid < Z_PROCS_MAX) ++z_procs[z_pid].cpu_ticks;
+		// cpu_ticks is charged after the wake sweep below, and
+		// only if that process is RUNNABLE. Billing whoever
+		// last waitirq'd made idle time look like work: the
+		// moment wm also slept, net inherited every idle tick
+		// and looked busy again. A wait(1) loop is still billed
+		// -- the sweep unblocks it first, then this charges it.
 	}
 
 	// handle interrupts
@@ -888,6 +1080,8 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 		// K_NO_PREEMPT_MAX_TICKS.
 		if (k_no_preempt &&
 			(z_kernel_ticks - k_no_preempt_start) < K_NO_PREEMPT_MAX_TICKS) {
+			if (z_pid < Z_PROCS_MAX && Z_PROC_RUNNABLE(z_procs[z_pid]))
+				++z_procs[z_pid].cpu_ticks;
 			ret = regs;
 			goto done;
 		}
@@ -910,111 +1104,20 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 				k_proc_unblock(i);
 		}
 
-		// don't switch if there's at most one process that could run.
-		// Deliberately runnable, not active: if wm/net/repl are all
-		// blocked on their mailboxes, the one process with work to do
-		// keeps the CPU instead of round-robining through three
-		// processes that would each immediately block again.
-		// Only skip the switch if the CURRENT process is itself still
-		// runnable. Otherwise we would decline to switch AWAY FROM a
-		// process that has just blocked itself, and go on running it --
-		// which is both wrong and, with exactly two processes, fatal.
-		//
-		// Concretely: with only the shell and net, net calls
-		// z_proc_wait(), marks itself BLOCKED, and the runnable count
-		// drops to 1 (the shell). The old test then returned `regs` --
-		// net's own context -- so net kept running while blocked and the
-		// shell was never scheduled again. The serial console simply
-		// stopped responding. It went unnoticed because wm and repl are
-		// normally running, which keeps the count above 2.
-		//
-		// This test predates Z_PROC_FLAG_BLOCKED, when "runnable" meant
-		// "active" and the current process was always counted.
-		if (Z_PROC_RUNNABLE(z_procs[z_pid]) &&
-			k_proc_runnable_count() < 2) { ret = regs; goto done; }
+		// Bill the process that is actually schedulable this
+		// tick, after the sweep. A blocked waiter is idle.
+		if (z_pid < Z_PROCS_MAX && Z_PROC_RUNNABLE(z_procs[z_pid]))
+			++z_procs[z_pid].cpu_ticks;
 
-		// save current process registers
-  		for (int i = 0; i < 32; i++) {
-			z_procs[z_pid].regs[i] = *(regs + i);
-		}
+		ret = k_sched_switch(regs);
+		goto done;
+	}
 
-		// Bounded scan. Before BLOCKED existed, this loop was
-		// guaranteed to terminate because the current process was
-		// itself active and would be reached again. That is no longer
-		// true -- every process can now be unschedulable at once -- and
-		// an unbounded scan here would spin forever INSIDE the timer
-		// interrupt handler, which is unrecoverable. The count is the
-		// safety net; the k_proc_runnable_count() check above means it
-		// should never actually be hit.
-		sched_scanned = 0;
-
-		// find next runnable process (round-robin scheduling)
-		next_process:
-		if (++sched_scanned > Z_PROCS_MAX) { ret = regs; goto done; }
-		z_pid++;
-		if (z_pid >= Z_PROCS_MAX) z_pid = 0;
-
-		if ((z_procs[z_pid].flags & Z_PROC_FLAG_DIE) == Z_PROC_FLAG_DIE) {
-			// NOTE: this whole branch runs inside the KTIMER
-			// interrupt handler itself (this function's interrupt
-			// path, not the syscall path) -- picorv32's interrupt
-			// model here doesn't nest, so nothing on this path can
-			// safely call printf()/anything that waits on another
-			// interrupt to make progress. uart.c's own _write()
-			// documents exactly this hazard: `while (k_uart_tx_full())
-			// /* wait */;` has no timeout, and the TX fifo is only
-			// ever drained by the UART TX interrupt -- which can
-			// never fire while we're already inside THIS interrupt
-			// handler. A printf() briefly lived right here (paired
-			// with one in k_proc_kill() below, which runs via the
-			// syscall path instead and is fine) -- it caused a
-			// genuine, total hang the moment it landed at a point
-			// where the TX fifo happened to already be full (far more
-			// likely right after a burst of unrelated output, e.g.
-			// telnet's own connect-sequence prints), with nothing
-			// able to recover it since even the scheduler itself
-			// never gets to run again. Removed; k_proc_kill()'s own
-			// print (this file) still shows every DIE request as it
-			// happens, which is what actually matters for the
-			// investigation this was added for -- exactly when the
-			// resulting free below actually runs is a fixed, short
-			// delay after that (at most one full round-robin cycle),
-			// not additional information worth this risk to observe
-			// directly.
-			// free the memory
-			k_mem_free((void *)z_procs[z_pid].base);
-			// release any names this process registered (see
-			// pidreg.h -- without this, a later, unrelated process
-			// reusing this same pid slot would inherit stale name
-			// registrations that were never its own)
-			k_pidreg_release_all(z_pid);
-			// release any file handles this process left open.
-			// Same shape and same reason as the pidreg sweep
-			// above: without it a process killed by wm's close
-			// icon (Z_WIN_FLAG_CLOSE_KILLS_OWNER) keeps its
-			// handles forever, and Z_FS_MAX_OPEN is 8 -- so
-			// relaunching one app that holds a handle exhausts
-			// the table in a session and only a reboot recovers
-			// it. See k_fs_release_all() in fsapi.c, and the
-			// KNOWN LIMITATION note in sw/common/zfs.h that this
-			// closes.
-			k_fs_release_all(z_pid);
-			// kill the process
-			z_procs[z_pid].base = 0x00000000;
-			z_procs[z_pid].flags = 0x00000000;
-			goto next_process;
-		}
-
-		// skips both inactive and blocked slots -- see
-		// Z_PROC_RUNNABLE()/Z_PROC_FLAG_BLOCKED in kernel.h
-		if (!Z_PROC_RUNNABLE(z_procs[z_pid]))
-			goto next_process;
-
-		// configure address translation
-		reg_mtu = z_procs[z_pid].base;
-
-		// return the registers
-		ret = (uint32_t *)z_procs[z_pid].regs;
+	// C6 (a): a process that has just blocked (k_proc_wait, UART
+	// wait) pokes UART THRE so this path runs with a real irq_vec
+	// frame. Switch now rather than burning the rest of the slice.
+	if (!Z_PROC_RUNNABLE(z_procs[z_pid]) && k_proc_runnable_count() >= 1) {
+		ret = k_sched_switch(regs);
 		goto done;
 	}
 
@@ -1045,6 +1148,19 @@ void k_proc_unblock(uint32_t pid) {
 	}
 }
 
+// Z_SYS_WM_WAKE. The visor's pointer is a plain MMIO write to
+// reg_vmouse with no interrupt behind it, so net calls this after the
+// write to get the reader looking. It is the same wake the HID ISR
+// does -- the subscriber registered through Z_SYS_HID_PTR_SUBSCRIBE
+// (sw/os/hid.c) -- and deliberately not a second registry: there is
+// one pointer as far as a reader is concerned, whichever wire it
+// came in on.
+z_obj_t *k_wm_wake(z_obj_t *args) {
+	(void)args;
+	k_hid_wake_subscriber();
+	return (&z_ok);
+}
+
 // -- k_proc_wait syscall --
 //
 // "Block me until a message arrives, or until `timeout` ticks have
@@ -1066,13 +1182,28 @@ void k_proc_unblock(uint32_t pid) {
 // Returns Z_OK if the caller is now blocked, Z_FAIL if a message was
 // already waiting and it should just carry on reading.
 //
-// Note this does not switch away immediately -- the caller keeps
-// whatever remains of its current timeslice and spins in the
-// z_msg_wait() loop until the next KTIMER tick, which then skips it.
-// So at most one partial timeslice is wasted per block, once, rather
-// than every timeslice forever. Yielding on the spot would need the
-// syscall path to do the full save/switch dance the KTIMER path does;
-// that's a worthwhile follow-up, not a correctness issue.
+// C6 (a): after marking BLOCKED we yield on the spot, via the
+// existing IRQ path rather than a new syscall frame. The syscall is a
+// jalr that does not save registers (docs/app_runtime.md), so the
+// kernel cannot switch from here. Two ways were considered:
+//
+//  1. Force an IRQ so irq_vec (which already saves all 32 GPRs)
+//     runs as soon as this syscall returns, then k_sched_switch
+//     sees us BLOCKED and picks someone else. Zero new context
+//     code. Chosen.
+//  2. A ~40-instruction save in the app stub and save/scan/restore
+//     from the syscall itself (~800-1200 cycles per wait). A second
+//     switch path to keep in sync with irq_vec.
+//
+// Path 1 is the picorv32 `timer` insn, which fires IRQ 0. That
+// needs ENABLE_IRQ_TIMER=1 in the bitstream (sysctl.v); with it
+// off the insn is illegal (IRQ 1, which retries the faulting PC).
+// A UART-THRE pulse was tried first so the bitstream could stay:
+// writing IER.THRE is a no-op when THRE is already enabled (the
+// printf path), and waitirq in that hole froze every RUNNABLE
+// until the next IRQ -- unm barely moved. timer(1) is independent
+// of the UART. If nobody else is RUNNABLE, waitirq sleeps the
+// core until any IRQ instead of spinning.
 z_obj_t *k_proc_wait(z_obj_t *args) {
 	uint32_t timeout = (args->type == Z_UINT32) ? args->val.uint32 : 0;
 
@@ -1149,7 +1280,32 @@ z_obj_t *k_proc_wait(z_obj_t *args) {
 
 	maskirq(old_mask);
 
+	k_proc_yield_blocked();
+
 	return (&z_ok);
+}
+
+void k_proc_yield_blocked(void) {
+
+	// Woken already (message, UART, timeout landed between the
+	// BLOCKED store and here) -- nothing to give up.
+	if (Z_PROC_RUNNABLE(z_procs[z_pid])) return;
+
+	if (k_proc_runnable_count() >= 1) {
+		// Someone else can run: pulse picorv32 IRQ 0 via
+		// timer(1). irq_vec then saves the real frame and
+		// k_sched_switch (the !RUNNABLE branch in
+		// z_kernel_entry) picks them. Independent of the UART
+		// -- a THRE pulse is a no-op when IER already has THRE,
+		// which is the common case during printf, and waitirq
+		// would freeze every RUNNABLE until the next IRQ.
+		timer(1);
+	} else {
+		// Nobody to switch to. Sleep the core until any IRQ
+		// (KTIMER, UART RX, ETH, HID) rather than spinning.
+		waitirq();
+	}
+
 }
 
 // Processes that could actually be given a timeslice right now, as
@@ -1222,6 +1378,7 @@ uint32_t k_proc_create(uint32_t size, uint32_t stack_size) {
 		uint32_t base = (int32_t)(uintptr_t)mem;
 		z_procs[p].base = base;
 		z_procs[p].size = mem_size;
+		z_procs[p].gpu_clip_valid = 0;
 		for (int i = 0; i < 32; i++) {
 			z_procs[p].regs[i] = 0x00000000;
 		}
@@ -1359,6 +1516,11 @@ z_rv k_proc_dump(void) {
 			(unsigned long)z_procs[i].cpu_ticks,
 			(unsigned long)z_procs[i].wake_tick, (unsigned long)z_kernel_ticks);
 	}
+	printf(" irq: total=%lu tmr=%lu uart=%lu hid0=%lu hid1=%lu aud=%lu eth=%lu oth=%lu\n",
+		(unsigned long)z_irq_census[0], (unsigned long)z_irq_census[3],
+		(unsigned long)z_irq_census[4], (unsigned long)z_irq_census[5],
+		(unsigned long)z_irq_census[6], (unsigned long)z_irq_census[7],
+		(unsigned long)z_irq_census[8], (unsigned long)z_irq_census[2]);
 	return Z_OK;
 }
 

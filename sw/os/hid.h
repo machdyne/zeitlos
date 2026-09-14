@@ -11,5 +11,8 @@ int32_t k_hid_read_key(void);
 
 z_obj_t *z_hid_read_key(z_obj_t *obj);
 z_obj_t *k_hid_ptr_subscribe(z_obj_t *obj);
+z_obj_t *k_hid_inject(z_obj_t *obj);
+
+void k_hid_wake_subscriber(void);
 
 #endif

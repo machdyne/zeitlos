@@ -8,6 +8,7 @@
 // z_rv, Z_OK and Z_FAIL are defined in ../common/zmsg.h (pulled in via
 // zeitlos.h above) since apps need them too, not just the kernel.
 
+#define Z_IRQ_TIMER			0	// picorv32 internal timer (C6 yield)
 #define Z_IRQ_KTIMER			3
 #define Z_IRQ_UART			4
 #define Z_IRQ_HID				5
@@ -82,6 +83,16 @@ typedef struct {
 
 	uint32_t		regs[32];
 
+	// C1 (i): hardware scissor, saved across a context switch.
+	// Raster gpu_clip_{x0,y0,x1,y1,enable} and blitter
+	// gpu_blit_clip_{x0,y0,x1,y1} -- all readable. gpu_clip_valid
+	// is 0 until the first save (a brand-new process has never
+	// written the GPU); restore then installs the hardware reset
+	// (raster clip off, blitter scissor = full screen).
+	uint32_t		gpu_rast_clip[5];
+	uint32_t		gpu_blit_clip[4];
+	uint8_t			gpu_clip_valid;
+
 } z_proc;
 
 // Z_PROC_FLAG_ACTIVE / _DIE / _BLOCKED are defined in
@@ -101,6 +112,17 @@ void k_proc_exit_record(uint32_t pid, int32_t status);
 z_obj_t *k_proc_status(z_obj_t *args);
 void k_proc_unblock(uint32_t pid);
 z_obj_t *k_proc_wait(z_obj_t *args);
+
+// Z_SYS_WM_WAKE: unblock whoever subscribed to pointer reports
+// (Z_SYS_HID_PTR_SUBSCRIBE, sw/os/hid.c). For input that reaches the
+// machine without an interrupt behind it -- today the visor's pointer,
+// which net writes straight into reg_vmouse.
+z_obj_t *k_wm_wake(z_obj_t *args);
+
+// After the caller has marked itself BLOCKED: if someone else can
+// run, poke the UART so the existing IRQ path saves a full frame and
+// switches; if not, sleep the core until any IRQ. See k_proc_wait().
+void k_proc_yield_blocked(void);
 
 // Eligible for a timeslice: active and not blocked.
 #define Z_PROC_RUNNABLE(p) \
@@ -169,7 +191,12 @@ z_obj_t *k_proc_wait(z_obj_t *args);
 //   per-message allocation that outlives a call -- so they're the two
 //   with the least reason to pay the doubled margin, and returning
 //   them to 8KB is what made room for a second `term` instance on a
-//   1MB board (see docs/boot.md's memory budget).
+//   1MB board (see docs/boot.md's memory budget). That premise was
+//   once false for wm: its Z_WM_SET_CLIP payload was z_obj_blob()'d
+//   per send and never freed (a borrowed payload, docs/messaging.md),
+//   and about ninety regions exhausted this allowance -- see wm.c's
+//   clip_payload(). term's z_port_send() blobs do outlive the call,
+//   but are bounded (Z_PORT_MAX_PENDING_SENDS) and freed on ack.
 //
 // - Z_PROC_STACK_SIZE_DEFAULT (16KB): anything not named below. Still
 //   the right default for an unknown app: the margin costs little when
@@ -177,36 +204,35 @@ z_obj_t *k_proc_wait(z_obj_t *args);
 //   has measured is exactly the one that shouldn't get the smallest
 //   tier.
 //
-// - Z_PROC_STACK_SIZE_MEDIUM (32KB): `net` AND `repl`.
+// - Z_PROC_STACK_SIZE_MEDIUM (32KB): `net`.
 //
-//   Both used to be LARGE, for the same reason: their z_port_send()
-//   call leaked a small z_obj_blob() allocation per message relayed,
-//   for the lifetime of the connection -- confirmed on real hardware
-//   as the cause of a heap-exhaustion crash during a long telnet
-//   session. **That leak is fixed** (see zport.h's Z_PORT_DATA_ACK and
-//   docs/messaging.md), and the question of whether either could come
-//   back down was left deliberately open, pending a real number.
+//   Both `net` and `repl` used to be LARGE, for the same reason: their
+//   z_port_send() call leaked a small z_obj_blob() allocation per
+//   message relayed, for the lifetime of the connection -- confirmed
+//   on real hardware as the cause of a heap-exhaustion crash during a
+//   long telnet session. **That leak is fixed** (see zport.h's
+//   Z_PORT_DATA_ACK and docs/messaging.md). `net` stayed on MEDIUM:
+//   its remaining allocations are the one-shot, intentionally-leaked
+//   RPC replies (DHCP/DNS/TFTP in net.c), bounded by request COUNT
+//   rather than session length.
 //
-//   Both now have one. `net` still holds the one-shot,
-//   intentionally-leaked RPC replies (DHCP/DNS/TFTP in net.c), bounded
-//   by request COUNT rather than session length. `repl` reports its own
-//   figure at every boot -- "heap grown 5960 bytes by end of stdlib
-//   load" -- so its baseline C-heap use is ~6KB, leaving ~26KB of
-//   headroom at this tier.
+// - Z_PROC_STACK_SIZE_LARGE (64KB): `repl` and `web`.
 //
-//   THE REMAINING RISK FOR `repl` IS STACK, NOT HEAP, and it's worth
-//   knowing what to watch: deep non-tail Scheme recursion nests
-//   ms_eval() frames on the C stack. MS_PROTECT_STACK_SIZE (192,
-//   sw/apps/repl/Makefile) bounds that depth, so the worst case is
-//   roughly 192 frames -- comfortably inside 32KB at any plausible
-//   frame size, but not by so much that it's beyond testing. Something
-//   deliberately recursive is the thing to try. The symptom of getting
-//   this wrong is the silent heap/stack exhaustion this tier system
-//   exists to prevent, not a clean error; `(free)`'s own "c-heap"
-//   figure (docs/scheme_api.md) is the number to watch, and putting
-//   repl back on LARGE is the fix.
+//   `repl` came back down to MEDIUM after the leak was fixed, on the
+//   figure it prints at boot -- "heap grown ~6-9KB by end of stdlib
+//   load" -- which left ~22KB of headroom. That is enough for Scheme
+//   and the port, and not enough for `te`: te_load() mallocs the whole
+//   file (TEST.TXT and RFC20.TXT are both ~18KB) and then the line
+//   list on top. Measured 0024: malloc(18505) failed with 22076 bytes
+//   between sbrk and sp -- newlib's sbrk request does not fit in the
+//   remainder even though the raw size looks like it should. (free)'s
+//   mem-free ~32MB is the kernel pool, not this process heap.
 //
-// - Z_PROC_STACK_SIZE_LARGE (64KB): `web`.
+//   The remaining stack risk is unchanged: deep non-tail Scheme
+//   recursion nests ms_eval() frames. MS_PROTECT_STACK_SIZE (192)
+//   bounds that depth. (free)'s "c-heap" is the number to watch.
+//
+//   `web` shares the tier for an unrelated reason.
 //
 //   The browser's draw path nests in a way nothing else here does:
 //   putting a screen together runs the HTML parser over a replayed
@@ -299,12 +325,6 @@ z_obj_t *k_proc_wait(z_obj_t *args);
 // tier change doesn't require finding and updating every call site
 // individually the way `net` joining `repl` here once did.
 static inline uint32_t z_proc_stack_size_for(const char *name) {
-	// web parses HTML, lays it out and holds a checkpoint index, and
-	// its per-screen block buffer alone is larger than the DEFAULT
-	// tier's whole allowance. LARGE rather than MEDIUM because the
-	// draw path nests -- page_fetch() runs the parser, which calls
-	// back into the layout engine -- and running out of stack here
-	// is not a clean failure.
 	// The compiler and the POSIX layer, which hosts it. Both are
 	// 8MB-and-up features that refuse to start below that; see
 	// Z_PROC_STACK_SIZE_HUGE above and docs/posix.md.
@@ -370,9 +390,19 @@ static inline uint32_t z_proc_stack_size_for(const char *name) {
 
 	if (!strcmp(name, "vi"))
 		return Z_PROC_STACK_SIZE_BIG;
-	if (!strcmp(name, "web"))
+	// web parses HTML, lays it out and holds a checkpoint index, and
+	// its per-screen block buffer alone is larger than the DEFAULT
+	// tier's whole allowance. LARGE rather than MEDIUM because the
+	// draw path nests -- page_fetch() runs the parser, which calls
+	// back into the layout engine -- and running out of stack here
+	// is not a clean failure.
+	//
+	// repl is LARGE for its own reason: it hosts `te`, whose loader
+	// mallocs the document, and MEDIUM does not leave the heap for
+	// that. See the tier notes above.
+	if (!strcmp(name, "web") || !strcmp(name, "repl"))
 		return Z_PROC_STACK_SIZE_LARGE;
-	if (!strcmp(name, "repl") || !strcmp(name, "net"))
+	if (!strcmp(name, "net"))
 		return Z_PROC_STACK_SIZE_MEDIUM;
 	if (!strcmp(name, "wm") || !strcmp(name, "term"))
 		return Z_PROC_STACK_SIZE_SMALL;

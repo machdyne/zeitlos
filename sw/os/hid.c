@@ -29,10 +29,13 @@
  * `report` pulse -- fired for keyboard, mouse, *and* gamepad reports
  * alike (see rtl/ext/usb_hid_host/src/usb_hid_host.v). Both ISRs below
  * only act on typ==1 (keyboard) for their own port; mouse reports
- * still just update reg_usbN_cursor directly in hardware (rtl/usb_hid.v)
- * and are polled by wm.c, which -- like this file -- decides which
- * port is currently "the mouse" by reading both ports' own typ field,
- * since there's no fixed port-to-device mapping (see zeitlos.h).
+ * still just update reg_usbN_cursor directly in hardware (rtl/usb_hid.v).
+ * hid_irq_common() below unblocks whoever subscribed through
+ * Z_SYS_HID_PTR_SUBSCRIBE, so that reader can read the register when
+ * it actually changes rather than polling it every tick. It -- like
+ * this file -- decides which port is currently "the mouse" by reading
+ * both ports' own typ field, since there's no fixed port-to-device
+ * mapping (see zeitlos.h).
  * rtl/sysctl.v's LATCHED_IRQ marks both these bits as edge-latched
  * specifically because `report` is only a single 12MHz-domain cycle
  * wide, so it wouldn't reliably still be visible by the time an ISR
@@ -73,6 +76,22 @@
  * caller simply replaces the first.
  */
 static uint32_t hid_ptr_pid;
+
+// Unblock the subscriber, if there is one. Safe from interrupt
+// context and from a syscall alike: k_proc_unblock() records a wakeup
+// that arrives before the target has blocked (Z_PROC_FLAG_WAKE), so
+// there is no window in which one can be lost.
+static inline void hid_wake_subscriber(void) {
+	if (hid_ptr_pid) k_proc_unblock(hid_ptr_pid);
+}
+
+// Same thing for input that does NOT come from the HID controller --
+// see k_hid_inject() below and k_wm_wake() in kernel.c. Both deliver
+// input the subscriber must notice, and neither raises an interrupt
+// of its own.
+void k_hid_wake_subscriber(void) {
+	hid_wake_subscriber();
+}
 
 #define HID_FIFO_SIZE 32
 
@@ -152,7 +171,7 @@ static void hid_irq_common(hid_port_t *st, uint32_t info, uint32_t keys) {
 	// below are ordinary registered state that stays valid between
 	// reports, not the pulse itself.
 
-	// A pointer (or gamepad) report. Wake whoever asked to be told.
+	// A report arrived. Wake whoever asked to be told.
 	//
 	// This is the whole reason wm can stop polling: the interrupt was
 	// always firing for mouse reports -- rtl/usb_hid.v's `report`
@@ -163,7 +182,15 @@ static void hid_irq_common(hid_port_t *st, uint32_t info, uint32_t keys) {
 	// Before the typ != 1 flush below, deliberately: an unplug is
 	// also a report, and a reader waiting on pointer activity should
 	// be woken for that too rather than waiting out its timeout.
-	if (typ != 1 && hid_ptr_pid) k_proc_unblock(hid_ptr_pid);
+	//
+	// Keyboard reports wake it as well, which is why this is not
+	// conditional on typ. The subscriber is the process that reads
+	// input for everyone, and it sleeps until input arrives rather
+	// than waking on every tick to look -- so a keystroke that only
+	// landed in the ring below, with nothing to wake the reader,
+	// would sit there until some unrelated event happened to arrive.
+	// A wake it did not need costs one pass around its loop.
+	hid_wake_subscriber();
 
 	if (typ != 1) {
 
@@ -298,5 +325,19 @@ int32_t k_hid_read_key(void) {
 
 z_obj_t *z_hid_read_key(z_obj_t *obj) {
 	obj->val.int32 = k_hid_read_key();
+	return (&z_ok);
+}
+
+// Injects a raw packed event (HID_EVENT() layout) into the shared
+// ring, under the same mask k_hid_read_key() uses so it cannot race
+// the port ISRs. For network-sourced keystrokes.
+z_obj_t *k_hid_inject(z_obj_t *obj) {
+	uint32_t old_mask = maskirq(0xFFFFFFFF);
+	hid_push((uint32_t)obj->val.int32);
+	maskirq(old_mask);
+	// Visor keystrokes have no HID IRQ of their own. Wake the HID
+	// subscriber so it drains the ring instead of waiting for the
+	// next USB report or timer.
+	k_hid_wake_subscriber();
 	return (&z_ok);
 }

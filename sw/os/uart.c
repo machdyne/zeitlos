@@ -27,9 +27,20 @@ volatile uint16_t __attribute__((section(".bss"))) tx_head = 0, tx_tail = 0;
 
 uint16_t leds = 0x00;
 
+// Pid blocked waiting for RX / TX-ring space, or ~0u if nobody.
+// Woken from z_uart_irq; set under the same mask as the empty/full
+// test so a byte that arrives between the test and BLOCKED is not
+// lost (same race k_proc_wait documents for the mailbox).
+static volatile uint32_t uart_rx_wait_pid = ~0u;
+static volatile uint32_t uart_tx_wait_pid = ~0u;
+
 void z_uart_init(void) {
 
-   reg_uart0_fcr = (uint8_t)0b00000111; // flush FIFOs
+	// FIFO enable + RX/TX flush. FCR[7:6]=00 is trigger level 1 byte
+	// (uart_regs.v: 00=1, 01=4, 10=8, 11=14). 0009R §4.6 read 0b111
+	// as trigger 14; those are the flush bits, not the trigger. Slack
+	// at 1 Mbaud is then 16 bytes, not 2 -- leave it at 1.
+	reg_uart0_fcr = (uint8_t)0b00000111;
 	reg_uart0_ier = (uint8_t)0b00000001; // enable RX interrupt
 
 	reg_leds = 0;
@@ -116,6 +127,11 @@ void z_uart_irq(void) {
 				tx_pump();
 				// nothing left to send: stop asking to be told about it
 				if (tx_head == tx_tail) reg_uart0_ier = 0x01;
+				if (uart_tx_wait_pid != ~0u &&
+					((tx_head + 1) % UART_FIFO_SIZE) != tx_tail) {
+					k_proc_unblock(uart_tx_wait_pid);
+					uart_tx_wait_pid = ~0u;
+				}
 				break;
 
 			case 0x02: // Received Data Available (RDA)
@@ -136,23 +152,24 @@ void z_uart_irq(void) {
 
 				// Wake the console reader.
 				//
-				// pid 0 (the kernel shell, sw/os/sh.c) is the only
-				// process that reads this port's FIFO as a console,
-				// and readline() now blocks rather than spinning on
-				// an empty FIFO -- so without this the prompt would
-				// never wake up and the serial console would be dead.
+				// readline() and _read() (sw/os/kruntime.c) block on
+				// an empty FIFO rather than spinning, so without this
+				// the prompt would never wake and the serial console
+				// would be dead.
 				//
-				// Hardcoded rather than a subscription like the HID
-				// pointer's: there is exactly one serial console and
-				// it belongs to the shell, whereas the pointer has a
-				// real choice of consumer.
-				//
-				// Safe on a pid 0 that is not currently blocked --
-				// k_proc_unblock() records the wakeup in
-				// Z_PROC_FLAG_WAKE rather than losing it, which is
-				// also what closes the race between deciding to wait
-				// and actually being marked BLOCKED.
-				k_proc_unblock(0);
+				// The waiter registers itself in k_uart_wait_rx()
+				// below rather than being hardcoded to pid 0, even
+				// though pid 0 (the kernel shell, sw/os/sh.c) is the
+				// only process that reads this port as a console
+				// today: the pid is written under the same mask as
+				// the empty test, which is what closes the window
+				// between deciding to wait and actually being marked
+				// BLOCKED, and it means an unrelated block of pid 0
+				// is not woken by every byte that arrives.
+				if (uart_rx_wait_pid != ~0u && rx_head != rx_tail) {
+					k_proc_unblock(uart_rx_wait_pid);
+					uart_rx_wait_pid = ~0u;
+				}
 
 				break;
 
@@ -195,10 +212,9 @@ bool k_uart_rx_empty(void) {
 	return v;
 }
 
-// Pumps before answering. sw/os/kruntime.c's _write() spins on this
-// with no timeout, so an answer of "full" that nothing can change is a
-// hang; pumping here means the question can always make progress on
-// its own.
+// Pumps before answering. Callers that used to spin on this now
+// block inside k_uart_putc() (kernel) or z_proc_wait(1) (apps), so a
+// "full" answer is no longer a hang -- the TX ISR shrinks the ring.
 bool k_uart_tx_full(void) {
 	uint32_t old_mask = maskirq(0xFFFFFFFF);
 	tx_pump();
@@ -230,51 +246,88 @@ int16_t k_uart_getc(void) {
 
 void k_uart_putc(char c) {
 
-	// mask ALL irqs (not just the uart one) so a scheduler swap can't
-	// interleave with another process also inside this function --
-	// tx_head/tx_tail are shared kernel state that every process's
-	// printf() ultimately writes through (apps via syscall, the
-	// kernel/sh.c directly), so two processes concurrently mid-way
-	// through this critical section corrupts the indices. this was a
-	// real bug: uart_irq_disable() only masks the UART IRQ (bit 4),
-	// not the KTIMER IRQ that drives scheduling, so a timer
-	// preemption could switch to another process still inside this
-	// same function. the corrupted indices could make
-	// uart_tx_fifo_full() return true permanently, and _write()'s
-	// `while (k_uart_tx_full()) /* wait */;` has no timeout -- so
-	// whichever process's next printf() hit that state would hang
-	// forever, while other processes kept running normally (matching
-	// the observed symptom: net going silent forever mid-transfer
-	// while sh.c's own unrelated code kept working).
-	uint32_t old_mask = maskirq(0xFFFFFFFF);
-	uint16_t next;
+	// The index update still masks ALL IRQs -- tx_head/tx_tail are
+	// shared kernel state, and masking only the UART IRQ (bit 4)
+	// used to let a KTIMER swap land another process in this same
+	// function, corrupting the ring so uart_tx_fifo_full() stayed
+	// true forever. What C6 (c) forbids is spinning under that
+	// mask: the old `while (next == tx_tail) tx_pump()` held every
+	// IRQ off for as long as the 16550 took to drain, which is how
+	// a 220-byte printf became 120-170 ms of wall (0009R §5.3).
+	// The masked section is now the enqueue only (~20 cycles);
+	// a full ring blocks the caller and lets the TX ISR drain it.
 
-	// Take whatever the UART will accept before deciding there is no
-	// room. Without this the ring can only shrink from the interrupt,
-	// which may not be reachable yet.
-	tx_pump();
+	for (;;) {
 
-	next = (tx_head + 1) % UART_FIFO_SIZE;
+		uint32_t old_mask = maskirq(0xFFFFFFFF);
+		uint16_t next;
 
-	// Genuinely full. Block until the UART has taken something, rather
-	// than dropping the character -- losing output silently is worse
-	// than being slow, and this cannot deadlock because tx_pump() only
-	// needs the LSR, never the interrupt.
-	while (next == tx_tail) tx_pump();
+		tx_pump();
+		next = (tx_head + 1) % UART_FIFO_SIZE;
 
-	uart_tx_fifo[tx_head] = c;
-	tx_head = next;
+		if (next != tx_tail) {
+			uart_tx_fifo[tx_head] = c;
+			tx_head = next;
+			tx_pump();
+			reg_uart0_ier = (tx_head != tx_tail) ? 0b00000011 : 0b00000001;
+			maskirq(old_mask);
+			return;
+		}
 
-	// and send it now if the UART is ready, rather than waiting to be
-	// told that it is
-	tx_pump();
+		// Full. Before the scheduler exists, IRQs do not reach
+		// z_uart_irq (reg_kernel is still 0), so waitirq would
+		// hang -- pump under the mask the way this used to, just
+		// for that window.
+		if (reg_kernel == 0 ||
+			!(z_procs[z_pid].flags & Z_PROC_FLAG_ACTIVE)) {
+			while (next == tx_tail) {
+				tx_pump();
+				next = (tx_head + 1) % UART_FIFO_SIZE;
+			}
+			uart_tx_fifo[tx_head] = c;
+			tx_head = next;
+			tx_pump();
+			reg_uart0_ier = (tx_head != tx_tail) ? 0b00000011 : 0b00000001;
+			maskirq(old_mask);
+			return;
+		}
 
-	// Ask for THRE only while something is actually queued. Leaving it
-	// enabled with an empty ring means a THRE interrupt on every
-	// character the UART finishes, for no reason.
-	reg_uart0_ier = (tx_head != tx_tail) ? 0b00000011 : 0b00000001;
+		uart_tx_wait_pid = z_pid;
+		z_procs[z_pid].wake_tick = 0;
+		z_procs[z_pid].flags |= Z_PROC_FLAG_BLOCKED;
+		// ring is non-empty, so THRE is already enabled -- the
+		// next byte the 16550 takes will unblock us.
+		maskirq(old_mask);
+		k_proc_yield_blocked();
 
-	maskirq(old_mask);
+	}
+
+}
+
+void k_uart_wait_rx(void) {
+
+	for (;;) {
+
+		uint32_t old_mask = maskirq(0xFFFFFFFF);
+
+		if (!uart_rx_fifo_empty()) {
+			maskirq(old_mask);
+			return;
+		}
+
+		if (reg_kernel == 0 ||
+			!(z_procs[z_pid].flags & Z_PROC_FLAG_ACTIVE)) {
+			maskirq(old_mask);
+			return;
+		}
+
+		uart_rx_wait_pid = z_pid;
+		z_procs[z_pid].wake_tick = 0;
+		z_procs[z_pid].flags |= Z_PROC_FLAG_BLOCKED;
+		maskirq(old_mask);
+		k_proc_yield_blocked();
+
+	}
 
 }
 
