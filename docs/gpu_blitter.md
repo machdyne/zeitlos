@@ -495,12 +495,38 @@ wrong source words and lands as a shifted or blank image. Fixing that
 means advancing the source *and* re-priming the shifter, which is not
 done today.
 
+**The same is true vertically, and it is worse.** The destination
+follows the scissor down (`line_start_addr <= final_y * SCREEN_STRIDE
++ ...`) but the source row does not: `mem_row_addr` starts at the
+address computed for `src_y` and only ever advances one
+`work_src_stride` per row actually DRAWN. A scissor that clips the top
+therefore copies from the wrong rows -- the image lands shifted down by
+exactly the number of rows the scissor cut. Horizontally the damage is
+a multiple of 32 pixels and can look like a mirrored fragment;
+vertically it is off by one row per row clipped and looks like the
+picture sliding.
+
 **What software must do:** before issuing a copy, clip the destination
-rectangle to the scissor yourself at word granularity -- round the
-left edge down to a 32-pixel boundary -- or split the copy at the
-boundary. `rtl/gpu/bench/tb_clip.v` asserts the current behaviour, so
-this section stops being true the moment someone fixes the priming
-path and that test starts failing.
+rectangle to the scissor yourself -- horizontally at word granularity
+(round the left edge down to a 32-pixel boundary), vertically at row
+granularity -- or split the copy at the boundary, moving `src_x`/`src_y`
+by the same amount. `rtl/gpu/bench/tb_clip.v` asserts the current
+behaviour, so this section stops being true the moment someone fixes the
+priming path and that test starts failing.
+
+Two callers, two ways of obeying. `z_fb_hw_scroll()` refuses rather
+than clipping: `copy_region_allows_rect()` allows the copy only when
+the destination lies inside a single visible rectangle, so a partially
+occluded window repaints instead of scrolling. See "Copies, the
+scissor, and fully visible windows" at the end of this file for why
+that test is about the destination rather than about whether a region
+exists at all. `hw_blit_mem_core()` -- the canvas path, used by draw, info and
+gamedemo -- intersects the destination rectangle with each visible
+rectangle and moves the source origin by the same offsets, one pass per
+rectangle. It did NOT until task 0023: it passed the same rectangle
+every pass and let the scissor cut, which was invisible while a raise
+repainted a whole window and became visible the moment a raise started
+repainting only the rectangle it had gained.
 
 This could not arise before the scissor existed: the left edge was
 never clamped up, only the right edge clamped down, and clamping the
@@ -2208,7 +2234,11 @@ Multiple rectangles are still refused. Their union may well contain the
 destination, but proving that needs coverage rather than containment,
 and an occluded window repainting instead is correct.
 
-**Still outstanding:** `hw_blit_mem_core()` has the same missing
-scissor programming as `z_fb_hw_blit_vram()` had. It affects `draw`,
-`gamedemo` and `view` rather than scrolling, so it was left alone here
-rather than changed without a way to test it.
+`hw_blit_mem_core()` had the same missing scissor programming and is
+also fixed, in the other of the two ways described above: it walks the
+visible region, programs the scissor per rectangle AND intersects the
+destination itself, moving `src_x`/`src_y` by the same offsets. A copy
+needs both, because the engine starts reading at the address it was
+given however the scissor moves the first written pixel -- see "What
+software must do" above, and the memory-blit section for the canvas
+corruption that found it.

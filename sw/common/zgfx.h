@@ -86,6 +86,51 @@ bool z_gfx_visible_clip(int i, const z_clip_t *clip, z_clip_t *out);
 bool z_gfx_blit_scissor(int i, const z_clip_t *clip);
 void z_gfx_blit_scissor_reset(void);
 
+// C1 paint session: walk the visible region once, program the blitter
+// scissor once per rectangle, and let primitives inside a rectangle
+// skip per-glyph scissor/reset. begin/end nest one-deep. next_rect
+// returns 1 while there is a (non-empty) rectangle to paint; 0 = done.
+// Unrestricted (count 0) yields a single unclipped pass.
+void z_gfx_paint_begin(void);
+int  z_gfx_paint_next_rect(const z_clip_t *clip);
+void z_gfx_paint_end(void);
+int  z_gfx_paint_active(void);
+int  z_gfx_paint_current(z_clip_t *out);
+
+// -- per-phase cycle counters (task 0009, measurement only) --
+//
+// Wall-clock cycles (rdcycle: ONE global counter, not saved across
+// context switches -- every figure includes whatever ran while this
+// process was preempted, same caveat as term.c's perf_cyc())
+// accumulated per phase of the glyph-blit path in z_fb_draw_char2()
+// and inside gpu_blit_acquire(), so a redraw can say WHERE its per-cell
+// cost lives rather than guessing. zgfx_perf_n[i] counts how many times
+// zgfx_perf[i] accumulated, so the reader can subtract the
+// instrumentation's own rdcycle reads (zgfx_perf[ZGFX_PERF_OVH] each).
+// Reads and adds only -- no behaviour change.
+enum {
+	ZGFX_PERF_FITS = 0,	// fits/resident checks per cell
+	ZGFX_PERF_ACQ_WAIT,	// gpu_blit_acquire()'s unmasked idle spin
+	ZGFX_PERF_ACQ_MASK,	// its masked final idle check
+	ZGFX_PERF_SCISSOR,	// z_gfx_blit_scissor()
+	ZGFX_PERF_REGS,		// register writes + trigger
+	ZGFX_PERF_UNMASK,	// maskirq(old_mask)
+	ZGFX_PERF_RESET,	// z_gfx_blit_scissor_reset()
+	ZGFX_PERF_CELLS,	// z_fb_draw_char2() HW-path calls (count)
+	ZGFX_PERF_PASSES,	// visible-region loop iterations (count)
+	ZGFX_PERF_SKIPS,	// passes skipped on an empty scissor (count)
+	ZGFX_PERF_ACQ_READS,	// gpu_blit_status reads (count)
+	ZGFX_PERF_ACQ_RETRY,	// acquire retries: lost the idle race (count)
+	ZGFX_PERF_UNM_MAX,	// worst single unmask window, cycles (count-free)
+	ZGFX_PERF_UNM_HI,	// unmask windows over 1 ms (count)
+	ZGFX_PERF_FITS_MAX,	// worst single fits/resident window, cycles
+	ZGFX_PERF_OVH,		// cost of one rdcycle read, measured at reset
+	ZGFX_PERF_COUNT
+};
+extern uint32_t zgfx_perf[ZGFX_PERF_COUNT];
+extern uint32_t zgfx_perf_n[ZGFX_PERF_COUNT];
+void zgfx_perf_reset(void);
+
 // clip may be NULL to clip to the screen only
 void z_fb_set_pixel(int x, int y, int color, const z_clip_t *clip);
 void z_fb_fill_rect(int x, int y, int w, int h, int color, const z_clip_t *clip);
@@ -596,10 +641,13 @@ void z_gfx_hw_icon_load(int icon_id, const uint8_t *bitmap);
 // (see sw/apps/wm/wm.c's draw_titlebar_content()), so that case is
 // never actually exercised, and a call that doesn't fully fit simply
 // draws nothing rather than carrying a second, untested rendering
-// path. Always declared/callable regardless of Z_GFX_HW_BLIT -- a
-// documented no-op without it (window icons are a hardware-only
-// feature, see zicon.h's own header comment), so callers don't need
-// their own #ifdef.
+// path. On-screen is not the same as VISIBLE, though: like
+// z_fb_draw_char2() the blit walks the visible region
+// (z_gfx_set_visible()), so the icons of a titlebar covered by another
+// window stay under it. Always declared/callable regardless of
+// Z_GFX_HW_BLIT -- a documented no-op without it (window icons are a
+// hardware-only feature, see zicon.h's own header comment), so callers
+// don't need their own #ifdef.
 void z_fb_draw_icon(int x, int y, int icon_id, int fg_color, int bg_color, const z_clip_t *clip);
 
 #endif

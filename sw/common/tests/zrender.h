@@ -109,6 +109,84 @@ void z_gfx_set_visible(const z_clip_t *r, int n) {
 void z_gfx_clear_visible(void) { zr_region_n = 0; }
 int z_gfx_visible_count(void) { return zr_region_n; }
 
+bool z_gfx_visible_clip(int i, const z_clip_t *clip, z_clip_t *out) {
+	z_clip_t e;
+	if (i < 0 || i >= zr_region_n) return false;
+	e = zr_region[i];
+	if (clip) {
+		if (e.x0 < clip->x0) e.x0 = clip->x0;
+		if (e.y0 < clip->y0) e.y0 = clip->y0;
+		if (e.x1 > clip->x1) e.x1 = clip->x1;
+		if (e.y1 > clip->y1) e.y1 = clip->y1;
+	}
+	if (e.x1 < e.x0 || e.y1 < e.y0) return false;
+	if (out) *out = e;
+	return true;
+}
+
+// -- the C1 paint session (zgfx.c's z_gfx_paint_*) --------------
+//
+// The same walk without the hardware: one pass per visible-region
+// rectangle intersected with the caller's clip, skipping the ones that
+// do not intersect, and a single unrestricted pass when there is no
+// region at all. A region of one EMPTY rectangle -- what a window that
+// has not been told a region gets, see zwin.c's win_use_clip() --
+// yields no passes, which is the point of it.
+static int zr_paint_open, zr_paint_ri, zr_paint_have;
+static z_clip_t zr_paint_eff;
+
+void z_gfx_paint_begin(void) {
+	zr_paint_open = 1;
+	zr_paint_ri = -1;
+	zr_paint_have = 0;
+}
+
+int z_gfx_paint_next_rect(const z_clip_t *clip) {
+
+	if (!zr_paint_open) return 0;
+
+	zr_paint_have = 0;
+
+	if (zr_region_n == 0) {
+		if (zr_paint_ri >= 0) return 0;
+		zr_paint_ri = 0;
+		if (clip) {
+			zr_paint_eff = *clip;
+		} else {
+			zr_paint_eff.x0 = 0;
+			zr_paint_eff.y0 = 0;
+			zr_paint_eff.x1 = Z_SCREEN_W - 1;
+			zr_paint_eff.y1 = Z_SCREEN_H - 1;
+		}
+		zr_paint_have = 1;
+		return 1;
+	}
+
+	for (;;) {
+		zr_paint_ri++;
+		if (zr_paint_ri >= zr_region_n) return 0;
+		if (z_gfx_visible_clip(zr_paint_ri, clip, &zr_paint_eff)) {
+			zr_paint_have = 1;
+			return 1;
+		}
+	}
+
+}
+
+int z_gfx_paint_current(z_clip_t *out) {
+	if (!zr_paint_have) return 0;
+	if (out) *out = zr_paint_eff;
+	return 1;
+}
+
+int z_gfx_paint_active(void) { return zr_paint_have; }
+
+void z_gfx_paint_end(void) {
+	zr_paint_open = 0;
+	zr_paint_ri = -1;
+	zr_paint_have = 0;
+}
+
 static bool zr_allows(int x, int y, const z_clip_t *c) {
 	if (x < 0 || y < 0 || x >= Z_SCREEN_W || y >= Z_SCREEN_H) return false;
 	if (c && (x < c->x0 || x > c->x1 || y < c->y0 || y > c->y1)) return false;
@@ -212,16 +290,46 @@ void z_fb_draw_char(int x, int y, char ch, int color, const z_font_t *f,
 			if (g[j] & (0x80 >> i)) z_fb_set_pixel(x + i, y + j, color, c);
 }
 
+// Inside a paint session the effective rectangle is the session's, as
+// on hardware where it is the scissor the caller programmed once for
+// this pass. Outside one, the visible region is walked per glyph the
+// way zgfx.c walks it. Either way a cell outside the region reaches
+// nothing, which is what makes a region test in this harness mean
+// something.
+static bool zr_glyph_clip(const z_clip_t *in, int i, z_clip_t *out) {
+	if (zr_paint_have) {
+		*out = zr_paint_eff;
+		if (in) {
+			if (out->x0 < in->x0) out->x0 = in->x0;
+			if (out->y0 < in->y0) out->y0 = in->y0;
+			if (out->x1 > in->x1) out->x1 = in->x1;
+			if (out->y1 > in->y1) out->y1 = in->y1;
+		}
+		return i == 0 && out->x1 >= out->x0 && out->y1 >= out->y0;
+	}
+	if (zr_region_n == 0) {
+		if (i != 0) return false;
+		if (in) *out = *in;
+		else { out->x0 = 0; out->y0 = 0;
+			out->x1 = Z_SCREEN_W - 1; out->y1 = Z_SCREEN_H - 1; }
+		return true;
+	}
+	return z_gfx_visible_clip(i, in, out);
+}
+
 void z_fb_draw_char2(int x, int y, char ch, int fg, int bg,
 	const z_font_t *f, const z_clip_t *c) {
 	const uint8_t *g;
+	z_clip_t e;
 	if (!f) return;
-	z_fb_fill_rect(x, y, f->w, f->h, bg, c);
-	if ((uint8_t)ch < f->first || (uint8_t)ch > f->last) return;
-	g = f->glyphs + ((uint8_t)ch - f->first) * f->h;
-	for (int j = 0; j < f->h; j++)
-		for (int i = 0; i < f->w; i++)
-			if (g[j] & (0x80 >> i)) z_fb_set_pixel(x + i, y + j, fg, c);
+	for (int ri = 0; zr_glyph_clip(c, ri, &e); ri++) {
+		z_fb_fill_rect(x, y, f->w, f->h, bg, &e);
+		if ((uint8_t)ch < f->first || (uint8_t)ch > f->last) continue;
+		g = f->glyphs + ((uint8_t)ch - f->first) * f->h;
+		for (int j = 0; j < f->h; j++)
+			for (int i = 0; i < f->w; i++)
+				if (g[j] & (0x80 >> i)) z_fb_set_pixel(x + i, y + j, fg, &e);
+	}
 }
 
 void z_fb_draw_text(int x, int y, const char *s, int color,
@@ -309,6 +417,16 @@ static bool z_render_open(z_win_t *win, int win_w, int win_h) {
 	win->y = 0;
 	win->w = win_w;
 	win->h = win_h;
+
+	// The region wm sends behind Z_WM_WINDOW_CREATED. Not optional: a
+	// windowed process is born invisible and draws nothing until its
+	// first SET_CLIP arrives (zwin.c's win_use_clip()), so a window
+	// left with clip_n == 0 renders an empty page here.
+	win->clip[0].x0 = win->x;
+	win->clip[0].y0 = win->y;
+	win->clip[0].x1 = win->x + win_w - 1;
+	win->clip[0].y1 = win->y + win_h - 1;
+	win->clip_n = 1;
 
 	return true;
 
