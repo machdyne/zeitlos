@@ -785,14 +785,21 @@ registers, the run/pause state, and eight instructions of live
 disassembly from PC. `F11` steps one instruction, `F12` runs and
 pauses.
 
-**A pane and not a second window.** A second window is the obvious
-shape and it does not work: `Z_WM_SET_CLIP` (`zwm.h`) carries no window
-id, so an app owning two windows cannot tell which one a visible-region
-update is for. Whichever arrived last would win and one window would
-draw over the other. `zdialog.c` gets away with it because its windows
-are modal and strictly one at a time; a debugger that is useful is
-neither. Growing the one window costs nothing extra -- the app already
-rebuilds its window when the scale changes.
+**A pane and not a second window.** A second window was the obvious
+shape and did not work: `Z_WM_SET_CLIP` (`zwm.h`) carried no window id,
+so an app owning two windows could not tell which one a visible-region
+update was for. Whichever arrived last won and one window drew over the
+other. `zdialog.c` got away with it because its windows are modal and
+strictly one at a time; a debugger that is useful is neither.
+
+That particular obstacle is gone -- every region now begins with a
+control rectangle naming its window (`Z_WM_CLIP_WINDOW`), which is what
+made dialogs work reliably in the first place. The pane stays anyway,
+for the reason a debugger and a dialog differ in the *other* direction:
+`Z_WM_KEY` still carries no window id, so a second non-modal window
+would take keystrokes the guest is supposed to receive, with nothing to
+route them by. And growing the one window costs nothing extra -- the
+app already rebuilds its window when the scale changes.
 
 **Forward disassembly only.** Nothing is shown above PC. CHIP-8
 instructions are not all the same length (XO-CHIP's long load is four

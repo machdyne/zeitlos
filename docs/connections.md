@@ -113,10 +113,14 @@ calling process is not reading messages.
 lookup from one window stalls every other window's output. That was
 already true before this moved.
 
-**In term**, one window — but term is also the process wm expects a
-`Z_WM_REDRAW_DONE` from. A long enough stall and wm reports "timed out
-waiting for pid N to ack a redraw", which is exactly the bug term's
-`connect_port()` grew a custom message pump to avoid.
+**In term**, one window — and while wm is not reading, neither is
+term: its window's region and any redraw request sit in the queue for
+the length of the wait. wm used to block on the redraw ack and report
+"timed out waiting for pid N to ack a redraw", which is exactly the bug
+term's `connect_port()` grew a custom message pump to avoid. wm does
+not wait any more, so the console goes quiet — but the terminal is
+still not repainting, and if a window moved in front of it meanwhile it
+is still drawing against a region that stopped being true.
 
 So the Open bar prints `open: telnet myhost ...` **before** calling,
 because the window will not repaint during it. A terminal that freezes
