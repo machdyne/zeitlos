@@ -2119,9 +2119,11 @@ static int region_compute(const z_clip_t *win,
 // the same reason: every other message is still serviced while
 // waiting, so an app that needs something from wm before it can ack
 // does not deadlock against it.
-// Set to 1 to log every region wm computes and sends. Off by default
-// -- it is one line per window per z-order change, which during a
-// drag is a lot.
+// Set to 1 to log every region wm computes and sends, and the timing
+// of a focus switch, a freeze and a release repair. Off by default --
+// it is one line per window per z-order change, which during a drag
+// is a lot, and the console is the same UART every other process
+// prints to.
 static int wm_clip_debug = 0;
 
 // Area of a region, used only to tell a narrowing from a widening.
@@ -3181,7 +3183,8 @@ static bool bring_to_front(int idx) {
 
 	if (defer_raise_content) {
 		pending_raise_redraw = idx;
-		printf("wm: raise deferred win %d (content REDRAW on release)\n", idx);
+		if (wm_clip_debug)
+			printf("wm: raise deferred win %d (content REDRAW on release)\n", idx);
 	} else {
 		send_clip(idx);
 	}
@@ -3672,15 +3675,16 @@ static void handle_message(z_msg_t *msg) {
 					if (thaw_pending[id]) {
 						thaw_pending[id] = false;
 						if (v & Z_WM_CLIP_DONE_DREW) {
-							// The safety net firing, and worth a line
-							// of its own: this is a whole window
-							// repainted for a drag that did not touch
-							// it. One per window per drag at worst, so
-							// it costs nothing when it is quiet -- and
-							// when it is not, it names who is drawing
-							// into a freeze (z_win_frozen(), zwin.h).
-							printf("wm: thaw win %d drew while frozen "
-								"-> full redraw\n", id);
+							// The one line here that is NOT tracing.
+							// It fires only when an app drew into a
+							// freeze (z_win_frozen(), zwin.h) and so
+							// has to be repainted whole for a drag
+							// that never touched it -- an anomaly
+							// worth naming the moment it happens, and
+							// silent in a drag where every app
+							// behaves. Deliberately short: the
+							// console is the shared UART.
+							printf("wm: win %d drew while frozen\n", id);
 							dbg_redraws++;
 							send_redraw(msg->from, id);
 						}
@@ -4702,10 +4706,11 @@ int main(void) {
 				// press, in which case the raised window's
 				// content REDRAW is pending_raise_redraw.
 				repair_focus_chrome(old_focused, hit);
-				printf("wm: switch win %d ms=%lu clips=%d redraws=%d\n",
-					hit,
-					(unsigned long)((z_uptime_ticks() - dbg_t0) * 1000u / Z_TICK_HZ),
-					dbg_n_clip, dbg_n_redraw);
+				if (wm_clip_debug)
+					printf("wm: switch win %d ms=%lu clips=%d redraws=%d\n",
+						hit,
+						(unsigned long)((z_uptime_ticks() - dbg_t0) * 1000u / Z_TICK_HZ),
+						dbg_n_clip, dbg_n_redraw);
 
 				// grip first: it sits inside the window's general
 				// body, so a plain content-click test would swallow
@@ -4865,9 +4870,11 @@ int main(void) {
 					windows[dragging].x = (uint32_t)nx;
 					windows[dragging].y = (uint32_t)ny;
 					xor_band_draw(dragging);
-					printf("wm: drag start win %d freeze=%d unacked=%d repaint=%d unacked_rd=%d ms=%lu\n",
-						dragging, nfz, unacked, nrd, unacked_rd,
-						(unsigned long)((dbg_cyc() - c0) / DBG_CYC_PER_MS));
+					if (wm_clip_debug)
+						printf("wm: drag start win %d freeze=%d unacked=%d "
+							"repaint=%d unacked_rd=%d ms=%lu\n",
+							dragging, nfz, unacked, nrd, unacked_rd,
+							(unsigned long)((dbg_cyc() - c0) / DBG_CYC_PER_MS));
 				} else {
 					xor_band_erase();
 					windows[dragging].x = (uint32_t)nx;
@@ -4959,9 +4966,10 @@ int main(void) {
 			dbg_n_redraw = 0;
 			dbg_n_clip = 0;
 			dbg_t0 = z_uptime_ticks();
-			printf("wm: drag release win %d final x=%ld y=%ld moved=%d\n",
-				dragging, (long)windows[dragging].x,
-				(long)windows[dragging].y, drag_moved ? 1 : 0);
+			if (wm_clip_debug)
+				printf("wm: drag release win %d final x=%ld y=%ld moved=%d\n",
+					dragging, (long)windows[dragging].x,
+					(long)windows[dragging].y, drag_moved ? 1 : 0);
 			// Only if it actually moved. A press and release on a
 			// titlebar with no motion in between is how a window is
 			// focused, and Z_WM_WINDOW_MOVED sets geom_changed in
@@ -4992,11 +5000,12 @@ int main(void) {
 			}
 			pending_raise_redraw = -1;
 			repair_drag(dragging);
-			printf("wm: drag win %d sweep=%dx%d ms=%lu clips=%d redraws=%d\n",
-				dragging,
-				drag_max_x - drag_min_x, drag_max_y - drag_min_y,
-				(unsigned long)((z_uptime_ticks() - dbg_t0) * 1000u / Z_TICK_HZ),
-				dbg_n_clip, dbg_n_redraw);
+			if (wm_clip_debug)
+				printf("wm: drag win %d sweep=%dx%d ms=%lu clips=%d redraws=%d\n",
+					dragging,
+					drag_max_x - drag_min_x, drag_max_y - drag_min_y,
+					(unsigned long)((z_uptime_ticks() - dbg_t0) * 1000u / Z_TICK_HZ),
+					dbg_n_clip, dbg_n_redraw);
 			dragging = -1;
 		}
 
