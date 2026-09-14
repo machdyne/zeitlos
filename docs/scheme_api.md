@@ -906,48 +906,41 @@ caller's behavior at all. `zwin.c`'s own inconsistency is unfixed and
 still there for any other direct caller -- worth fixing at that level
 too at some point, just not bundled into this change.
 
-**Known limitation, not fixed in this revision:** `repl`'s own main
-message loop doesn't read or respond to `Z_WM_REDRAW` at all -- a
-window created here doesn't participate in the normal occlusion/
-z-order redraw protocol (`docs/window_manager.md`). Content drawn via
-the hardware-accelerated calls writes straight into the real
-framebuffer and persists indefinitely as long as nothing else
-overdraws that screen region, so a window that's never occluded works
-fine forever with no redraw needed -- but if another window is moved
-on top of it and away again, `wm.c`'s own `wait_for_redraw_done()`
-will time out waiting for an ack this window never sends (bounded, not
-an indefinite stall -- cosmetic, not a correctness/safety issue), and
-the previously-covered area won't automatically repaint. Fixing this
-would mean `repl`'s message loop recognizing `Z_WM_REDRAW` and
-re-issuing whatever a window last drew, which means tracking draw
-history per window -- not attempted here; revisit if real usage shows
-it matters.
-
-**That limitation stopped being cosmetic, and this is the one thing to
-fix before using these calls.** Compositing by visible region
+**The region a window draws inside.** Compositing by visible region
 (`docs/window_manager.md`) made a window's region something it must be
 *told*: `z_win_create_flags()` installs the empty rectangle at creation
 and every drawing call loads the owning window's region before it
 draws, so a window whose owner never applies a `Z_WM_SET_CLIP` has an
-empty region for its whole life and **nothing it draws reaches the
-screen at all** -- not "goes stale after an occlusion", nothing, from
-the first line.
+empty region for its whole life and nothing it draws reaches the
+screen at all -- not "goes stale after an occlusion", nothing, from
+the first line. Every windowed app therefore handles `Z_WM_SET_CLIP`
+in its message loop; most of them with a single `z_win_apply_clip()`
+call on the single window they own.
 
-`repl` is currently the only windowed app in the tree whose message
-loop does not handle `Z_WM_SET_CLIP`; every other one calls
-`z_win_apply_clip()`. The path is `zapi_win_rect()` ->
-`z_win_content_rect()` -> `win_use_clip()` (`sw/common/zwin.c`), which
-installs `z_win_t.clip` -- the empty rectangle, because nothing has
-replaced it.
+`repl` needs the one extra step a multi-window process needs:
+`zapi_win_msg()` (`zapi.h`) offers the message to each entry of
+`zapi_windows[]` in turn, since `z_win_apply_clip()` returns false --
+without acking -- for a region that belongs to a different window
+(`Z_WM_CLIP_WINDOW`, `zwm.h`). `Z_WM_WINDOW_MOVED` is routed the same
+way and by the same table, except that the id has to be read out of
+the payload first: `z_win_parse_rect()` writes the id it finds into
+whatever window it is handed, so it has no "not mine" answer to give.
 
-The fix is three lines in `repl.c`'s message loop, and it is the same
-three every other app has, with the one extra step a multi-window
-process needs: offer the message to each entry in `zapi_windows[]` in
-turn, since `z_win_apply_clip()` returns false for a region that
-belongs to a different window (`Z_WM_CLIP_WINDOW`, `zwm.h`). That also
-gets the redraw half most of the way there: with the region applied,
-`Z_WM_REDRAW` can be acked, and the draw-history question above is the
-only part left genuinely open.
+**Known limitation, not fixed in this revision:** `repl`'s own main
+message loop still doesn't read or respond to `Z_WM_REDRAW` -- a
+window created here participates in the region half of the protocol
+but not the repaint half (`docs/window_manager.md`). Content drawn via
+the hardware-accelerated calls writes into the real framebuffer, inside
+the window's own region, and persists as long as nothing else overdraws
+it; a window that's never occluded works fine forever with no redraw
+needed. But if another window is moved on top of it and away again, the
+uncovered area is not repainted -- `wm` asks for a REDRAW and nothing
+answers. Cosmetic, not a correctness/safety issue, and it costs `wm`
+nothing to wait for: an unanswered redraw no longer holds anything up.
+Fixing it would mean `repl`'s message loop recognizing `Z_WM_REDRAW`
+and re-issuing whatever a window last drew, which means tracking draw
+history per window -- not attempted here; revisit if real usage shows
+it matters.
 
 Build note: `repl` didn't link against the window/graphics stack
 before this (`zgfx.o`/`zfont_data.o`/`zwin.o`) -- added to its

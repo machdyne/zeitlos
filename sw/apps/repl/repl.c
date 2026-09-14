@@ -1398,6 +1398,17 @@ int main(void) {
 				// for what actually happens with it.
 				if (msg.obj.type == Z_UINT32)
 					zapi_win_close((int)msg.obj.val.uint32);
+			} else if (msg.subject == Z_WM_SET_CLIP ||
+				msg.subject == Z_WM_WINDOW_MOVED) {
+				// The visible region of one of this repl's
+				// Scheme-created windows, and where that window now
+				// sits. Both have to be routed by window id rather
+				// than applied to "the" window, since repl can own
+				// several at once -- zapi_win_msg() (zapi.h) walks
+				// the table. Applying the region is not optional:
+				// a window is born invisible, so one that never
+				// applies its own region draws nothing at all.
+				zapi_win_msg(&msg);
 			}
 
 		}

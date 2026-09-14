@@ -189,21 +189,22 @@ static ms_val *zapi_delete_file(ms_val *args) {
 //
 // KNOWN LIMITATION, not fixed in this revision: repl's own main
 // message loop (repl.c) doesn't read or respond to Z_WM_REDRAW at
-// all -- a window created here doesn't participate in the normal
-// occlusion/z-order redraw protocol (docs/window_manager.md). Content
-// drawn via the hardware-accelerated calls below writes straight into
-// the real framebuffer and stays there indefinitely as long as
+// all. It does apply the window's visible region (zapi_win_msg()
+// below, called from that loop) -- without which a window created
+// here would draw nothing whatsoever, since a window is born
+// invisible -- so what it draws is confined to the pixels it owns and
+// never lands on a window above it. What is missing is the repaint:
+// content drawn via the hardware-accelerated calls below writes
+// straight into the real framebuffer and stays there as long as
 // nothing else overdraws that screen region, so a window that's never
-// occluded works fine forever with no redraw needed -- but if another
-// window is moved on top of it and then away again, wm.c's own
-// wait_for_redraw_done() (wm.c) will time out waiting for an ack
-// this window never sends, and the previously-covered area won't
-// automatically repaint. Bounded (wm.c's own timeout, not an
-// indefinite stall) and cosmetic, not a correctness/safety issue --
-// worth fixing (repl's own message loop would need to recognize
-// Z_WM_REDRAW and re-issue whatever this window last drew, which
-// means tracking draw history per window, not attempted here) if real
-// usage shows it matters.
+// occluded works fine forever with no redraw needed, but if another
+// window is moved on top of it and then away again, the uncovered
+// area is not repainted -- wm asks for a REDRAW and nothing answers.
+// Cosmetic, not a correctness/safety issue, and no longer costs wm
+// anything to wait for. Worth fixing (repl's own message loop would
+// need to recognize Z_WM_REDRAW and re-issue whatever this window
+// last drew, which means tracking draw history per window, not
+// attempted here) if real usage shows it matters.
 
 // small, fixed-size, bounded table -- same "small on purpose" spirit
 // as Z_REPL_MAX_CONNS (repl.c) itself. Maps a window's own wm-
@@ -371,6 +372,61 @@ void zapi_win_close(int id) {
 			zapi_windows[i].used = false;
 			return;
 		}
+	}
+
+}
+
+// Applies a compositor message that is addressed to one of this
+// process's Scheme-created windows. Returns true if one of them took
+// it, false if it belongs to something else and the caller should go
+// on looking.
+//
+// Every other windowed app handles Z_WM_SET_CLIP by calling
+// z_win_apply_clip() on the one window it owns. repl cannot: a single
+// repl process can have several windows open at once (that is what
+// zapi_windows[] is a table for), and a region carries the id of the
+// window it belongs to (Z_WM_CLIP_WINDOW, zwm.h), so
+// z_win_apply_clip() returns false -- without acking -- for a region
+// that is not this window's. Offering the message to every open slot
+// in turn is what routes it, and what makes sure wm gets exactly one
+// ack for it.
+//
+// Not applying the region at all is not the cosmetic omission it used
+// to be. A window is born invisible (z_win_create_flags() loads the
+// empty rectangle, zwin.c), so a window that never gets its region
+// applied draws nothing at all, forever -- (win-create ...) followed
+// by (win-line ...) put not one pixel on the glass.
+bool zapi_win_msg(z_msg_t *msg) {
+
+	if (!msg) return false;
+
+	switch (msg->subject) {
+
+	case Z_WM_SET_CLIP:
+		for (int i = 0; i < ZAPI_WIN_MAX; i++) {
+			if (!zapi_windows[i].used) continue;
+			if (z_win_apply_clip(&zapi_windows[i].win, &msg->obj))
+				return true;
+		}
+		return false;
+
+	case Z_WM_WINDOW_MOVED: {
+		// Unlike a region, this payload has no "not mine" answer to
+		// give: z_win_parse_rect() writes the id it finds straight
+		// into the window handed to it, so calling it on the wrong
+		// one would rename that window rather than be refused. The
+		// id is read out of the map first and the window looked up
+		// by it.
+		z_obj_t *id = z_map_find(&msg->obj, "id");
+		if (!id || id->type != Z_INT32) return false;
+		z_win_t *win = zapi_find_window(id->val.int32);
+		if (!win) return false;
+		return z_win_parse_rect(win, &msg->obj);
+	}
+
+	default:
+		return false;
+
 	}
 
 }
