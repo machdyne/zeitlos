@@ -21,6 +21,9 @@ This guide covers the whole stack, kernel up to app:
 - `Z_WM_KEY` -- the window manager's keyboard delivery protocol (see
   also `docs/window_manager.md`, which owns the wm's app protocol as
   a whole; this document only covers the keyboard-specific parts).
+- How the reader is woken, and what happens to input that arrives with
+  no interrupt behind it -- a keystroke or a pointer position handed
+  to the machine by another process rather than by a HID controller.
 
 Mouse input (`reg_usbN_cursor`, click hit-testing, dragging) is
 covered here only where it interacts with the dual-port story --
@@ -104,9 +107,11 @@ and `cpu_irq[6]` (`Z_IRQ_HID1`, port 1). Both are edge-latched
 (`rtl/sysctl.v`'s `LATCHED_IRQ` mask) specifically because `report` is
 only a single 12MHz-domain cycle wide -- latching catches the edge in
 hardware even though it's long gone by the time a slower-clocked ISR
-actually gets to run. `sw/os/hid.c`'s ISRs only act on `typ==1`
-(keyboard) for their own port; mouse reports are left to the hardware
-cursor tracker below and polled by `wm.c`.
+actually gets to run. `sw/os/hid.c`'s ISRs only *queue* events for
+`typ==1` (keyboard) on their own port; mouse reports are left to the
+hardware cursor tracker below. Either kind wakes the registered
+subscriber, so `wm` no longer polls for either -- see "Pointer
+wakeups" below.
 
 ### Hardware cursor sprite
 
@@ -377,9 +382,21 @@ already covers those bits, because `report` is a single 12MHz-domain
 cycle and would not otherwise survive to the ISR.
 
 So `hid_irq_common()` now calls `k_proc_unblock()` on a registered
-subscriber for any non-keyboard report, and `wm` registers itself
-through `Z_SYS_HID_PTR_SUBSCRIBE` (`z_hid_pointer_subscribe()`,
-`zeitlos.h`).
+subscriber, and `wm` registers itself through
+`Z_SYS_HID_PTR_SUBSCRIBE` (`z_hid_pointer_subscribe()`, `zeitlos.h`).
+
+**For any report, keyboard included** -- which the name does not
+suggest, and which the first version did not do. It woke only on
+non-keyboard reports, on the reasoning that a keystroke already has
+somewhere to go: the ISR pushes it into the ring and the reader picks
+it up next time round its loop. That holds while the reader wakes on a
+timer. It stops holding the moment the reader sleeps until something
+happens, which is the whole point of this mechanism -- a key that only
+landed in the ring, with nothing to wake anybody, sits there until some
+unrelated event arrives. A wake the subscriber did not need costs it
+one pass around its loop; a keystroke that appears when the user
+presses the *next* key is the kind of fault that gets blamed on the
+keyboard.
 
 **Nothing is delivered.** The cursor is level state in a register and
 coalescing is desirable — `zwm.h` already tells apps to act on the
@@ -388,21 +405,86 @@ and lets it read the current position. That keeps the existing model,
 and means there is no event queue to overflow under fast motion and no
 allocation in an ISR.
 
-### Why wm still passes a timeout
+### What wm passes as a timeout
 
-`z_proc_wait(16)`, not indefinite. `wm` has work driven by neither the
-pointer nor messages: the dock's launch deadlines, the pending
-launch-argument timeout, and `check_core_services()` at startup are
-all polled against `z_uptime_ticks()`. Blocking forever would stall
-every one of them until the user happened to move the mouse.
+Not a constant. `wm_idle_ticks()` (`wm.c`) answers with **the nearest
+deadline `wm` actually has**, and with **0 -- wait indefinitely** when
+it has none.
 
-Those deadlines are coarse — seconds, not frames — so 16 ticks (~22ms)
-is ample for them while being 16x fewer wakeups than before. The
-pointer's own responsiveness no longer depends on the timeout at all.
+The fixed 16 ticks (~22ms) it started with was reasoned from the work
+driven by neither the pointer nor messages: the dock's launch deadlines
+and `check_core_services()` at startup are polled against
+`z_uptime_ticks()`, and blocking forever would stall them until the
+user happened to move the mouse. That is right about *which* work needs
+a timeout, and wrong to pay for it continuously — those deadlines
+mostly do not exist. No dock icon is waiting to un-invert unless
+something was just launched, and `check_core_services()` stops polling
+once `init0` has registered.
 
-On a kernel predating the syscall the subscription returns false and
-`wm` keeps the old one-tick behaviour; the same binary has to run on
-both.
+So the timeout is computed rather than assumed, and an idle desktop
+with nothing pending wakes `wm` only for input or a message. The
+pending launch argument is deliberately not among the deadlines: it
+expires by being tested when an app asks for it, not on a clock.
+
+The rubber band of a drag does not need a tick either, even though it
+follows the pointer: a USB report raises `Z_IRQ_HID`/`_HID1`, and a
+pointer that arrives some other way has its own wake (below). Sleeping
+a tick at a time while a button is held would burn CPU with the pointer
+standing still.
+
+On a kernel predating the syscall the subscription returns false, the
+pointer really is poll-only, and `wm` keeps the old one-tick behaviour
+— the same binary has to run on both. That path costs 732 wakeups a
+second, which is what this whole mechanism exists to avoid, so it is a
+fallback rather than a mode anyone should be in.
+
+### Input with no interrupt behind it
+
+Everything above assumes input arrives as a HID report, which raises an
+interrupt, which wakes the subscriber. Input that reaches the machine
+some other way has neither, and there are two such paths now. Both are
+syscalls appended at the end of `syscalls.def`, for the reason that
+file's own header insists on.
+
+**`Z_SYS_HID_INJECT`** (`k_hid_inject()`, `sw/os/hid.c`) pushes a
+packed event -- the same `pressed`/`usage`/`modifiers` layout the ISRs
+build -- into the same shared ring, under the same interrupt mask
+`k_hid_read_key()` uses, so it cannot race the port ISRs. It reads back
+through `hid_read_key()` like any other keystroke: nothing downstream,
+`zkbd.h` translation included, knows the difference. It wakes the
+subscriber itself, since there is no interrupt to do it.
+
+**`Z_SYS_WM_WAKE`** (`k_wm_wake()`, `sw/os/kernel.c`) is the pointer
+half, and it delivers nothing at all -- it just unblocks the same
+subscriber. A software pointer is a register write (below) with no
+interrupt attached, so the writer pokes the reader afterwards.
+Deliberately not a second registry: there is one pointer as far as a
+reader is concerned, whichever wire it came in on.
+
+### A pointer with no hardware behind it
+
+**ULX3S-specific.** `reg_vmouse` (`0xf000_0400`, `rtl/sysctl.v`) is a
+software mouse: a plain register another process writes, laid out
+exactly like `reg_usbN_cursor`'s x/y/buttons fields plus a `present`
+bit at 24, so `wm` reads it with the code it already had and the
+hardware cursor sprite mux prefers it while `present` is set. On a
+board whose bitstream does not decode that address the register reads
+0, `present` is never set, and nothing changes.
+
+It exists because the ULX3S has no video output wired for a desktop
+and no keyboard or mouse plugged into it -- the screen and the pointer
+both arrive over the network, from a browser (`docs/esp32link.md`).
+`net` writes each pointer packet here and calls `z_wm_wake()`; keyboard
+packets go through `hid_inject()` instead, because a key is an event
+and a cursor is a position.
+
+**`present` is last-writer, not a latch**, and both sides clear it. The
+writer drops it on silence (about a second) or when the pointer leaves
+the browser window; `wm` drops it the moment the USB cursor moves
+(`vmouse_yield_to_usb()`), so the sprite mux and the click arithmetic
+cannot end up disagreeing about which pointer is real. Neither source
+can freeze the other out, which is the property that matters on a board
+where someone might plug a mouse in while a browser is connected.
 
 ## pid 0 no longer spins
 
