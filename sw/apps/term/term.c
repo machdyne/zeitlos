@@ -289,7 +289,7 @@ static uint16_t shadow[VT_ROWS][VT_COLS];
  * rdcycle is one GLOBAL counter, so this is wall time including every
  * other process that ran meanwhile. Wraps every ~89 s; one redraw is
  * bounded far below that. */
-static int term_perf_debug = 1;
+static int term_perf_debug = 0;
 static uint32_t redraw_cells;
 static int redraw_dmg;
 // Where a redraw's time goes: the clear, the pass that decides what to
