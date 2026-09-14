@@ -8,14 +8,15 @@
  * enabled and never lose a late one. TX still goes through the 16550.
  *
  * Wishbone (byte address, word access):
- *   +0  R  {19'b0, overrun, count[11:0]}   bytes waiting
+ *   +0  R  {0..., overrun, count[DEPTH_BITS:0]}   bytes waiting
  *   +4  R  {24'b0, data}                    pops one byte (0 if empty)
  *   +8  W  any value                        flush FIFO, clear overrun
  */
 
 module esp32_rxfifo #(
 	parameter CLK_PER_BIT = 48,	/* 48 MHz / 1 Mbaud */
-	parameter DEPTH_BITS = 11	/* 2048 bytes */
+	parameter DEPTH_BITS = 13	/* 8192 bytes -- room for a credit
+					   burst of ~5 MTU frames (znic v3) */
 ) (
 	input clk,
 	input rst,
@@ -26,7 +27,8 @@ module esp32_rxfifo #(
 	input wb_we_i,
 	input wb_stb_i,
 	input wb_cyc_i,
-	output reg wb_ack_o
+	output reg wb_ack_o,
+	output rx_ready			/* level: bytes waiting -- feeds an IRQ */
 );
 
 	/* ---- receiver: 8N1, sample mid-bit --------------------------- */
@@ -90,6 +92,7 @@ module esp32_rxfifo #(
 
 	wire full = (count == DEPTH);
 	wire empty = (count == 0);
+	assign rx_ready = !empty;
 	wire do_push = byte_valid && !full;
 
 	/* wishbone: two-cycle access so rd_data (registered BRAM read) is
@@ -136,7 +139,7 @@ module esp32_rxfifo #(
 				pending <= 1'b0;
 				wb_ack_o <= 1'b1;
 				if (sel_count)
-					wb_dat_o <= {19'b0, overrun, count[11:0]};
+					wb_dat_o <= {{(31-DEPTH_BITS){1'b0}}, overrun, count};
 				else if (sel_data)
 					wb_dat_o <= {24'b0, empty ? 8'h00 : rd_data};
 				else
