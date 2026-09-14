@@ -377,9 +377,12 @@ The loop interleaves a FIFO top-up either side of the one blocking
 call, because the FIFO holds 1024 frames — 23 ms at 44.1 kHz — and that
 is the whole margin. `PLAY_CHUNK` and `PLAY_FEED_MAX` are **latency
 budgets, not throughput knobs**: the same distinction `track.c`'s
-`FEED_BLOCKS` comment makes. `wm`'s `repair_region()` blocks on a
-redraw ack, so an app that disappears into a push loop for 40 ms
-freezes the desktop for 40 ms.
+`FEED_BLOCKS` comment makes. A push loop that runs for 40 ms is 40 ms
+in which this process reads no messages — which used to freeze the
+whole desktop, because `wm`'s `repair_region()` blocked on a redraw
+ack, and now costs `play` alone: its window's region and any redraw
+request sit unread for that long, so a window arriving in front of it
+is drawn over for a frame.
 
 **The ring holds file bytes, not decoded frames.** Buffering decoded
 audio is the obvious simplification and a real loss: an ADPCM file

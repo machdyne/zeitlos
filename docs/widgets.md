@@ -463,21 +463,23 @@ precisely because it does not have a callback to hand them to.
 
 ### Redraws while a dialog is open, and after it closes
 
-Two hazards here have already bitten once each, both showing up as
+Two hazards here have already bitten once each. Both used to show up as
 `wm: timed out waiting for pid N to ack a redraw` and a multi-second
-freeze:
+freeze; wm no longer waits, so both are now quiet and local, and both
+are still real:
 
 - **While the dialog is being created.** Any `repair_region()` that
   overlaps the not-yet-created window must pass `exclude_idx` for it.
   Its owner is still inside `z_win_create_cb()` and has no window id to
-  recognise a redraw request by, so it cannot ack. `wm.c`'s modal
-  focus-change repair needs this just as much as the create-time repair
-  does.
-- **After the dialog is destroyed.** wm repairs the vacated region and
-  blocks on the parent's ack, but the caller typically goes straight
-  from `z_dialog_save()` into writing a file — an SD round trip long
-  enough to blow the timeout. `dlg_run()` therefore services that
-  redraw itself, in a bounded pump, before returning.
+  recognise a redraw request by, so one sent to it is simply dropped.
+  `wm.c`'s modal focus-change repair needs this just as much as the
+  create-time repair does.
+- **After the dialog is destroyed.** wm clears the vacated region and
+  asks the parent to repaint it, but the caller typically goes straight
+  from `z_dialog_save()` into writing a file — an SD round trip of a
+  second or more, during which the parent's window is simply black
+  where the dialog was. `dlg_run()` therefore services that redraw
+  itself, in a bounded pump, before returning.
 
 Related, in wm rather than here: a click on an already-frontmost window
 used to claim a z-order change it hadn't made, because `bring_to_front()`
