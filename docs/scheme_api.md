@@ -923,6 +923,32 @@ re-issuing whatever a window last drew, which means tracking draw
 history per window -- not attempted here; revisit if real usage shows
 it matters.
 
+**That limitation stopped being cosmetic, and this is the one thing to
+fix before using these calls.** Compositing by visible region
+(`docs/window_manager.md`) made a window's region something it must be
+*told*: `z_win_create_flags()` installs the empty rectangle at creation
+and every drawing call loads the owning window's region before it
+draws, so a window whose owner never applies a `Z_WM_SET_CLIP` has an
+empty region for its whole life and **nothing it draws reaches the
+screen at all** -- not "goes stale after an occlusion", nothing, from
+the first line.
+
+`repl` is currently the only windowed app in the tree whose message
+loop does not handle `Z_WM_SET_CLIP`; every other one calls
+`z_win_apply_clip()`. The path is `zapi_win_rect()` ->
+`z_win_content_rect()` -> `win_use_clip()` (`sw/common/zwin.c`), which
+installs `z_win_t.clip` -- the empty rectangle, because nothing has
+replaced it.
+
+The fix is three lines in `repl.c`'s message loop, and it is the same
+three every other app has, with the one extra step a multi-window
+process needs: offer the message to each entry in `zapi_windows[]` in
+turn, since `z_win_apply_clip()` returns false for a region that
+belongs to a different window (`Z_WM_CLIP_WINDOW`, `zwm.h`). That also
+gets the redraw half most of the way there: with the region applied,
+`Z_WM_REDRAW` can be acked, and the draw-history question above is the
+only part left genuinely open.
+
 Build note: `repl` didn't link against the window/graphics stack
 before this (`zgfx.o`/`zfont_data.o`/`zwin.o`) -- added to its
 Makefile, same three objects/rules `sw/apps/hello_win`'s own Makefile
