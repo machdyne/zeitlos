@@ -276,8 +276,46 @@ static bool sel_contains(uint32_t id, int col) {
 
 static uint16_t shadow[VT_ROWS][VT_COLS];
 
+/* -- what a redraw cost --
+ *
+ * One console line per Z_WM_REDRAW served, when term_perf_debug is on
+ * (same style as wm.c's wm_clip_debug): cells painted, wall time, the
+ * rectangles of the visible region and what wm said was damaged. This
+ * is the number wm cannot see -- it measures the ack round trip and
+ * cannot say whether the time went into glyphs or into everything
+ * around them.
+ *
+ * Same clock and the same caveat as gpu3d.c's perf_cyc(): picorv32's
+ * rdcycle is one GLOBAL counter, so this is wall time including every
+ * other process that ran meanwhile. Wraps every ~89 s; one redraw is
+ * bounded far below that. */
+static int term_perf_debug = 1;
+static uint32_t redraw_cells;
+static int redraw_dmg;
+// Where a redraw's time goes: the clear, the pass that decides what to
+// paint, and the paint session itself. Three numbers, because "the
+// repaint is slow" has three quite different answers.
+static uint32_t redraw_clear_ms, redraw_decide_ms, redraw_paint_ms;
+static inline uint32_t perf_cyc(void) {
+#ifdef __riscv
+	uint32_t v;
+	__asm__ volatile ("rdcycle %0" : "=r"(v));
+	return v;
+#else
+	// tests/render.c compiles this file for the host, which has no
+	// rdcycle and no console to print the line to anyway.
+	return 0;
+#endif
+}
+#define PERF_CYC_PER_MS (Z_SYSCLK_HZ / 1000u)
+
 // Examine every cell on the next render, not just dirty rows.
 static bool render_all;
+
+// A full redraw clears the text area once and then paints only the
+// cells that are not that clear -- see render(). Set by handle_redraw()
+// when wm names no damage, consumed by the next render().
+static bool render_clear;
 
 // What the shadow was last brought up to date against. drawn_valid is
 // false after a wm redraw, when the pixels are unknown and nothing may
@@ -334,6 +372,32 @@ static void draw_glyph(const z_clip_t *clip, int col, int row, char ch,
 		inverted ? 0 : 1, inverted ? 1 : 0, &TERM_FONT, clip);
 
 	INS(ins_glyphs++);
+
+}
+
+// Inclusive cell range covering the screen-space rectangle `r` inside
+// the content rect `clip`. Returns false if it misses the grid.
+// Damage rectangles and the paint session's rectangles are both in
+// screen space; the grid is the only thing this file thinks in.
+static bool cell_range(const z_clip_t *clip, const z_clip_t *r,
+	int *c0, int *r0, int *c1, int *r1) {
+
+	int x0 = r->x0 - clip->x0, y0 = r->y0 - clip->y0;
+	int x1 = r->x1 - clip->x0, y1 = r->y1 - clip->y0;
+
+	if (x1 < 0 || y1 < 0) return false;
+	if (x0 < 0) x0 = 0;
+	if (y0 < 0) y0 = 0;
+
+	*c0 = x0 / cell_w;
+	*r0 = y0 / cell_h;
+	*c1 = x1 / cell_w;
+	*r1 = y1 / cell_h;
+
+	if (*c1 >= VT_COLS) *c1 = VT_COLS - 1;
+	if (*r1 >= VT_ROWS) *r1 = VT_ROWS - 1;
+
+	return *c0 <= *c1 && *r0 <= *r1;
 
 }
 
@@ -473,6 +537,60 @@ static void render(void) {
 	int doc0 = (int)count - view_off;
 	uint32_t top_id = pushed - (uint32_t)view_off;
 
+	/* -- deciding, then painting --
+	 *
+	 * The shadow compare can only fire once per cell, and the paint
+	 * session (C1, zwin.h) replays the cells once per rectangle of the
+	 * visible region: the two cannot be the same loop. So the pass
+	 * below decides -- it brings the shadow up to date and marks what
+	 * has to be painted -- and the session paints, reading back what
+	 * the shadow now says each marked cell must show.
+	 *
+	 * A marked cell outside every visible rectangle is not painted and
+	 * its shadow still says it was. That is the contract, not a bug:
+	 * the pixels belong to the window in front, and when this window
+	 * gets them back wm names them in a redraw's damage, which is what
+	 * handle_redraw() turns back into GLASS_UNKNOWN. */
+	/* -- a full repaint is a fill plus the ink, not two thousand blits --
+	 *
+	 * Every cell here is a glyph blit, blanks included, and on this
+	 * machine one costs about half a millisecond while the remote
+	 * desktop is streaming. Painting all 2000 of them took a second
+	 * per window: with three terminals on screen and one redraw each,
+	 * that is the curtain, three seconds of it.
+	 *
+	 * A blank cell is the background colour, and so is a filled
+	 * rectangle. So fill the grid once -- the fill walks the visible
+	 * region like every other primitive, so it reaches exactly the
+	 * pixels this window may touch -- and then say so: the shadow now
+	 * knows every cell is blank. The comparison below is unchanged
+	 * and draws the difference, which for a shell prompt is a hundred
+	 * glyphs rather than two thousand.
+	 *
+	 * Only when wm named no damage. A damage-limited redraw must not
+	 * clear what it was not given, and it is already cheap. */
+	uint32_t ph0 = perf_cyc();
+	if (render_clear) {
+		render_clear = false;
+		// z_win_clear(), NOT z_fb_fill_rect(): the latter is the
+		// software path, one z_fb_set_pixel() per pixel, and 400x200
+		// of those took four seconds -- worse than the two thousand
+		// blits it was meant to replace. z_win_clear() goes through
+		// z_win_fill_rect() to the blitter, walking the region. It
+		// clears the scrollbar strip too, which is why handle_redraw()
+		// marks the scrollbar dirty.
+		z_win_clear(&win);
+		for (int r = 0; r < VT_ROWS; r++)
+			for (int c = 0; c < VT_COLS; c++)
+				shadow[r][c] = (uint16_t)' ';
+	}
+
+	uint32_t ph1 = perf_cyc();
+
+	static uint8_t need[VT_ROWS][VT_COLS];
+	static uint8_t need_row[VT_ROWS];
+	int need_n = 0;
+
 	for (int row = 0; row < VT_ROWS; row++) {
 
 		// Live and not forced: only rows the emulator touched, plus
@@ -506,11 +624,61 @@ static void render(void) {
 			if (shadow[row][col] == want) continue;
 
 			shadow[row][col] = want;
-			draw_glyph(&clip, col, row, VT_PACK_CH(b), inv);
+			need[row][col] = 1;
+			need_row[row]++;
+			need_n++;
 
 		}
 
 	}
+
+	// Nothing to paint: no session, no walk. An idle terminal wakes
+	// thirty times a second, and opening a session to look at two
+	// thousand cells that are all up to date was 6% of the CPU each --
+	// three of them took the cube from 75 fps to 50.
+	uint32_t ph2 = perf_cyc();
+
+	if (need_n) {
+
+		z_win_paint_begin(&win);
+		while (z_win_paint_next_rect()) {
+
+			z_clip_t pr;
+			int c0, r0, c1, r1;
+
+			if (!z_win_paint_current(&pr) ||
+				!cell_range(&clip, &pr, &c0, &r0, &c1, &r1))
+				continue;
+
+			for (int row = r0; row <= r1; row++) {
+				if (!need_row[row]) continue;
+				for (int col = c0; col <= c1; col++) {
+					if (!need[row][col]) continue;
+					uint16_t w = shadow[row][col];
+					draw_glyph(&clip, col, row, (char)(w & 0xFFu),
+						(w & 0x100u) != 0);
+					redraw_cells++;
+				}
+			}
+
+		}
+		z_win_paint_end(&win);
+
+		// Cleared here, by row and only where something was marked, so
+		// the next pass starts on a clean array without a blanket
+		// memset of it -- which is the same 2KB an idle frame must not
+		// touch.
+		for (int row = 0; row < VT_ROWS; row++) {
+			if (!need_row[row]) continue;
+			memset(need[row], 0, sizeof need[row]);
+			need_row[row] = 0;
+		}
+
+	}
+
+	redraw_clear_ms  = (ph1 - ph0) / PERF_CYC_PER_MS;
+	redraw_decide_ms = (ph2 - ph1) / PERF_CYC_PER_MS;
+	redraw_paint_ms  = (perf_cyc() - ph2) / PERF_CYC_PER_MS;
 
 	drawn_valid = true;
 	drawn_view_off = view_off;
@@ -1003,10 +1171,49 @@ static void handle_redraw(uint32_t packed) {
 
 	z_win_apply_redraw(&win, packed);
 
-	// The window has been repainted underneath us, so the shadow no
-	// longer describes the glass, and neither overlay is on it.
-	shadow_invalidate();
+	/* What wm actually invalidated (z_win_damage_rects(), zwin.h): -1
+	 * everything, 0 nothing, n these rectangles.
+	 *
+	 * A terminal used to be asked to reprint two thousand cells to
+	 * show a change it had no part in -- that was the curtain. Now a
+	 * drop next door names the strip it uncovered, and only the cells
+	 * under that strip stop describing the glass. Everything outside
+	 * it was not touched by anyone, so its shadow still holds and the
+	 * comparison in render() draws nothing for it. */
+	z_clip_t dmg[Z_WM_MAX_CLIP];
+	int n = z_win_damage_rects(&win, dmg, Z_WM_MAX_CLIP);
+
+	redraw_dmg = n;
+	redraw_cells = 0;
+
+	// Nothing was invalidated: every pixel this window owns is still
+	// on the glass. The frame that follows is an ordinary dirty-cell
+	// render against the full region -- output that arrived in the
+	// same breath as the redraw must not be lost to an empty damage.
+	if (n == 0) return;
+
+	// No hardware scroll this frame: the shadow of the damaged cells
+	// no longer describes pixels, and shifting it for a blit over
+	// unknown content is exactly the stale-text failure shadow_shift()
+	// exists to avoid.
 	drawn_valid = false;
+
+	if (n < 0) {
+		shadow_invalidate();
+		render_clear = true;
+	} else {
+		z_clip_t clip;
+		z_win_content_rect(&win, &clip);
+		for (int i = 0; i < n; i++) {
+			int c0, r0, c1, r1;
+			if (!cell_range(&clip, &dmg[i], &c0, &r0, &c1, &r1)) continue;
+			shadow_invalidate_rect(r0, c0, r1, c1);
+		}
+	}
+
+	// The overlays keep their own dirty flags and are one row and one
+	// panel, so they are redrawn whole rather than intersected: the
+	// arithmetic would cost more than the glyphs.
 	bar_dirty = true;
 	panel_dirty = true;
 	z_widget_invalidate(&panel_set);
@@ -1657,6 +1864,28 @@ static void frame(void) {
 
 	z_clip_t clip;
 
+	/* -- frozen: draw nothing, remember nothing, promise nothing --
+	 *
+	 * wm freezes every window for the duration of a drag (zwm.h,
+	 * Z_WM_CLIP_FREEZE): the screen has to hold still under the XOR
+	 * rubber band, so nothing drawn here can reach the glass.
+	 * Returning is not an optimisation, it is the point.
+	 *
+	 * Everything below records what it drew -- the shadow, the
+	 * overlays' dirty flags, the emulator's dirty rows, which render()
+	 * clears as it goes. Run while frozen it would record cells as
+	 * shown that were never drawn, and the only way back from that is
+	 * a full repaint of the window, which is what wm's DREW ack asks
+	 * for (z_win_frozen()'s comment in zwin.h). Every terminal on
+	 * screen ran this 30 times a second during a drag and the release
+	 * repainted all of them at once: that was the curtain on release.
+	 *
+	 * Skipping leaves the work pending instead. The dirty flags stay
+	 * set, the shadow keeps describing the glass correctly, and the
+	 * first frame after the thaw draws exactly the cells that changed
+	 * during the drag -- a line of output rather than a screen. */
+	if (z_win_frozen(&win)) return;
+
 	// Before render(): a successful auto-connect hides the panel, and
 	// the cells it covered must be repainted in THIS frame, not left
 	// showing the panel until the next one.
@@ -1810,7 +2039,24 @@ int main(void) {
 
 		}
 
+		uint32_t t0 = perf_cyc();
 		frame();
+
+		/* BEFORE the ack, on purpose. Printed after it, this line and
+		 * wm's own went out at the same instant on the shared UART and
+		 * came back interleaved character by character. Sent here, wm
+		 * is still asleep waiting for the ack and cannot write. The
+		 * price is this line's own UART time inside the ack wm
+		 * measures: ~60 characters at 1 Mbaud is ~0.6 ms. */
+		if (got_redraw && term_perf_debug)
+			printf("term: redraw %lu cells in %lu ms "
+				"(clear %lu, decide %lu, paint %lu) rects=%d dmg=%d\n",
+				(unsigned long)redraw_cells,
+				(unsigned long)((perf_cyc() - t0) / PERF_CYC_PER_MS),
+				(unsigned long)redraw_clear_ms,
+				(unsigned long)redraw_decide_ms,
+				(unsigned long)redraw_paint_ms,
+				win.clip_n, redraw_dmg);
 
 		if (got_redraw) z_win_redraw_done(&win);
 

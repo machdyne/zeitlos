@@ -541,17 +541,21 @@ int main(int argc, char **argv) {
 	// -- 7. a partly covered window: no blit, still correct --
 	printf("7. occluded window\n");
 	{
-		z_clip_t c, r[2];
+		z_clip_t c, whole = win.clip[0];
 		z_win_content_rect(&win, &c);
-		r[0] = c; r[0].x1 = c.x0 + 100;
-		r[1] = c; r[1].x0 = c.x0 + 101;
-		z_gfx_set_visible(r, 2);
+		// On the WINDOW, not straight into zgfx: every draw goes
+		// through z_win_content_rect(), which loads win.clip as a
+		// side effect and would overwrite a region set any other way.
+		win.clip[0] = c; win.clip[0].x1 = c.x0 + 100;
+		win.clip[1] = c; win.clip[1].x0 = c.x0 + 101;
+		win.clip_n = 2;
 		output_lines(181, 200, 3, "occluded, scrolling");
 		key(Z_KEY_PAGEUP, Z_KBD_MOD_LSHIFT);
 		frame_check("occluded, Shift+PgUp");
 		key(Z_KEY_END, Z_KBD_MOD_LSHIFT);
 		frame_check("occluded, Shift+End");
-		z_gfx_clear_visible();
+		win.clip[0] = whole;
+		win.clip_n = 1;
 	}
 
 	// -- 8. a wm redraw with the bar up --

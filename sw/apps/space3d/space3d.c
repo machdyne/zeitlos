@@ -1609,6 +1609,12 @@ static bool drain_messages(void) {
 
 		if (msg.subject == Z_WM_REDRAW) {
 			z_win_apply_redraw(&win, msg.obj.val.uint32);
+			// Animated content cannot use C2 damage (zwin.h): the
+			// erase list is dropped below, so a frame confined to the
+			// newly exposed strip would leave the previous frame's
+			// lines standing everywhere else with nothing left to
+			// rub them out. Same opt-out gpu3d takes.
+			z_win_damage_ignore(&win);
 			update_geometry();
 			line_count[cur_buf ^ 1] = 0;
 			got_redraw = true;
@@ -1676,6 +1682,23 @@ int main(void) {
 			run_flash_frame();
 		} else {
 			update();
+			// A wm REDRAW means we just gained pixels (a window in
+			// front moved away or was closed). Clear the visible
+			// region first: this game only ever draws its wireframe
+			// incrementally and never clears what it gains, so a
+			// window dragged off it used to leave its image stuck in
+			// the newly exposed area until a line happened to cross
+			// it. fill_content() clips to our visible region (via the
+			// content rect loaded here), so it erases exactly the
+			// gained strip; render() then draws the frame over it.
+			// The display lists were already dropped on the redraw
+			// (line_count reset in drain_messages()), so there is no
+			// stale erase pass to replay through the cleared pixels.
+			if (redrew) {
+				z_clip_t rc;
+				z_win_content_rect(&win, &rc);
+				fill_content(0);
+			}
 			render();
 		}
 
