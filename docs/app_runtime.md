@@ -856,16 +856,16 @@ when there is none. On a kernel predating the syscall the subscription
 fails and the old one-tick behaviour is kept, so the same binary runs
 on both. See `docs/user_input.md`, "What wm passes as a timeout".
 
-### Still outstanding
+### Settled since
 
-**`net` polls the ENC28J60** — see below. That is now the last
-timer-driven poll of a device that has an interrupt available.
-
-**`net` polls the ENC28J60** on a 1-tick timer. Its own comment notes
-the controller's INT pin is already wired to `spim.v`'s STATUS bit 2,
-so waking on the interrupt would be strictly better than a timer — and
-the HID pointer change above is now a worked precedent for exactly
-that shape of fix.
+**`net` no longer polls the ENC28J60 on a 1-tick timer.** Its INT pin
+was already readable in `spim.v`'s STATUS bit 2 and simply was not
+connected to anything that could wake a blocked process; it is now
+merged with the RMII MAC's own interrupt into `Z_IRQ_ETH`, so `net`
+blocks on frame arrival and keeps a timeout only as a housekeeping
+backstop. The HID pointer change above was the worked precedent, and
+`docs/networking.md`, "Receive interrupt", has the details -- including
+why the interrupt had to be an edge rather than a level.
 
 ## pid 0 blocks now too
 

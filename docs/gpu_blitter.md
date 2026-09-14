@@ -523,8 +523,8 @@ that test is about the destination rather than about whether a region
 exists at all. `hw_blit_mem_core()` -- the canvas path, used by draw, info and
 gamedemo -- intersects the destination rectangle with each visible
 rectangle and moves the source origin by the same offsets, one pass per
-rectangle. It did NOT until task 0023: it passed the same rectangle
-every pass and let the scissor cut, which was invisible while a raise
+rectangle. It did NOT at first: it passed the same rectangle every
+pass and let the scissor cut, which was invisible while a raise
 repainted a whole window and became visible the moment a raise started
 repainting only the rectangle it had gained.
 

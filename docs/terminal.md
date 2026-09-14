@@ -285,6 +285,85 @@ rows the emulator marked dirty plus the rows the cursor left and entered
 overlay change, every cell is compared; the comparison is cheap and only
 differing cells cost a glyph.
 
+### What a redraw from wm actually invalidates
+
+A `Z_WM_REDRAW` used to invalidate the whole shadow, so a change term
+had no part in -- a window dropped next door, a neighbour raised --
+cost 2000 glyph blits. At roughly half a millisecond each while the
+remote desktop is streaming, that is a second per window; with three
+terminals on screen it is the three-second curtain.
+
+wm now says what it invalidated (`z_win_damage_rects()`, `zwin.h`), and
+`handle_redraw()` treats the three answers differently:
+
+| | |
+|---|---|
+| `-1` | everything: `shadow_invalidate()`, and the next frame clears first. |
+| `0` | nothing. **Return without invalidating anything** -- every pixel this window owns is still on the glass. The frame that follows is an ordinary dirty-cell render, which matters: output that arrived in the same breath as the redraw must not be lost to an empty damage. |
+| `n` | those rectangles: `cell_range()` turns each into a cell range and only those cells stop describing the glass. |
+
+Either way `drawn_valid` is cleared, so the frame that follows does not
+hardware-scroll: the shadow of the damaged cells no longer describes
+pixels, and shifting it for a blit over unknown content is exactly the
+stale-text failure the shift/blit agreement rule below exists to
+prevent.
+
+The overlays are the exception, and deliberately crude: the Open bar is
+one row and the panel one block, so both are marked dirty whole rather
+than intersected with the damage. The arithmetic would cost more than
+the glyphs.
+
+**A marked cell outside every visible rectangle is not painted, and its
+shadow still says it was.** That is the contract rather than a bug:
+those pixels belong to the window in front, and when this window gets
+them back, wm names them in a redraw's damage -- which is what turns
+them back into `GLASS_UNKNOWN`.
+
+### A full repaint is a fill plus the ink
+
+When the damage really is "everything", painting 2000 cells one blit at
+a time is still the wrong shape. A blank cell is the background colour
+and so is a filled rectangle, so `render()` fills the whole grid once --
+`z_win_clear()`, which walks the visible region like every other
+primitive -- and then records that every cell is blank. The comparison
+is unchanged and draws the difference, which for a shell prompt is a
+hundred glyphs rather than two thousand.
+
+It must be `z_win_clear()` and not `z_fb_fill_rect()`: the latter is
+the software path, one `z_fb_set_pixel()` per pixel, and 400x200 of
+those took four seconds -- worse than the two thousand blits it was
+meant to replace. The fill also clears the scrollbar strip, which is
+why the scrollbar is marked dirty alongside it.
+
+The fill happens **only** when wm named no damage. A damage-limited
+redraw must not clear what it was not given, and is already cheap.
+
+**An idle terminal opens no paint session at all.** Walking the region
+to look at two thousand cells that are all up to date cost 6% of the
+CPU per terminal at thirty frames a second -- three of them took the
+`gpu3d` cube from 75fps to 50. The comparison marks what needs painting
+first; if nothing does, there is no session and no walk.
+
+### Nothing is drawn while frozen
+
+`frame()` returns immediately when `z_win_frozen()` (`zwin.h`) is true.
+wm freezes every window for the duration of a drag so the screen holds
+still under its rubber band, and nothing drawn then reaches the glass.
+
+Returning is the point, not an optimisation. Everything below that test
+*records* what it drew -- the shadow, the overlays' dirty flags, the
+emulator's dirty rows, which `render()` clears as it goes. Run while
+frozen it would record cells as shown that were never drawn, and the
+only way back from that is a full repaint of the window, which is
+exactly what wm's `DREW` ack asks for. Every terminal on screen used to
+run this thirty times a second during a drag, and the release repainted
+all of them at once.
+
+Skipping leaves the work pending. The dirty flags stay set, the shadow
+goes on describing the glass correctly, and the first frame after the
+thaw draws exactly the cells that changed during the drag -- a line of
+output rather than a screen.
+
 ### The hardware scroll
 
 A scroll changes every cell of the model, but the pixels that survived
