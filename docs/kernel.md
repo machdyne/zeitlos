@@ -37,10 +37,40 @@ alone and the combination is what actually governs:
 ### The process table
 
 `z_proc` (`sw/os/kernel.h`): base, size, flags, wake tick, CPU ticks,
-and 32 saved registers. **148 bytes.** `z_procs[Z_PROCS_MAX]` lives in
-kernel `.bss` with an explicit `__attribute__((section(".bss")))` --
-see "The `gp` hazard" below for why that annotation is load-bearing
-rather than decorative.
+32 saved registers, and the GPU scissor. **188 bytes.**
+`z_procs[Z_PROCS_MAX]` lives in kernel `.bss` with an explicit
+`__attribute__((section(".bss")))` -- see "The `gp` hazard" below for
+why that annotation is load-bearing rather than decorative.
+
+### The scissor is part of the context
+
+The GPU's clip registers -- the rasterizer's
+`gpu_clip_{x0,y0,x1,y1,enable}` and the blitter's
+`gpu_blit_clip_{x0,y0,x1,y1}` -- are global hardware with no privilege
+attached, so an app writes them directly and the kernel cannot
+intercept that. They are also *per drawing*, and a context switch can
+land between a process setting its clip and using it.
+
+What the kernel can do is what it already does for registers: read them
+on the way out and put them back on the way in.
+`k_gpu_clip_save()`/`k_gpu_clip_restore()` do exactly that, from
+`k_sched_switch()`, and `gpu_clip_valid` is 0 until a process has been
+switched away from once -- a brand-new process has never written the
+GPU, so it is restored to the hardware reset (raster clip off, blitter
+scissor the full screen) rather than to another process's rectangle.
+
+**Restoring a different clip has to wait for the engines.** The
+rasterizer samples the clip live, per pixel, because FIFO entries do
+not carry it, and a glyph blit samples the vertical scissor live per
+row -- so changing either while such an operation is in flight changes
+the operation. Fills latch their clip at the start and are safe. Both
+spins are bounded, because this runs inside the interrupt handler,
+where an unbounded wait is unrecoverable and a `printf` is a hang (see
+`sw/os/uart.c`'s `_write()`).
+
+It costs 40 bytes per process slot, which at `Z_PROCS_MAX` of 32 is
+1,280 bytes of `.bss` -- and therefore 1,280 bytes of the 256KB flash
+image, for the reason "The 256KB image budget" below explains.
 
 ### Memory for a process
 
@@ -73,6 +103,41 @@ A process blocks by calling `z_proc_wait(ticks)`, and is woken either
 by the tick deadline or by a message arriving (`k_proc_unblock()`,
 called from `msg.c` on every delivery).
 
+**Blocking yields on the spot.** It used to not: the caller kept
+whatever remained of its timeslice and spun in its own loop until the
+next KTIMER tick noticed it was blocked. One partial timeslice per
+block is a small waste in isolation, and a large one for a process that
+blocks and wakes many times a second, which is what every well-behaved
+app in this system now does.
+
+The obstacle was the syscall boundary. A syscall is a plain `jalr` with
+no register save (see "The syscall boundary" below), so the kernel
+cannot switch away from inside one -- there is no saved frame to come
+back to. Writing one would mean a second context-switch path to keep in
+step with `irq_vec`, for about 800-1200 cycles per wait.
+
+So `k_proc_yield_blocked()` uses the path that already exists: after
+marking itself BLOCKED it fires picorv32's `timer` instruction with a
+count of 1, which raises IRQ 0 as soon as the syscall returns. `irq_vec`
+saves all 32 registers exactly as it does for any other interrupt, and
+`k_sched_switch()` -- extracted from the KTIMER path for this, so there
+is still only one switch implementation -- sees the caller is not
+runnable and picks somebody else. If nobody else is runnable it
+`waitirq()`s instead, sleeping the core until any interrupt rather than
+spinning.
+
+That needs `ENABLE_IRQ_TIMER=1` in the bitstream (`rtl/sysctl.v`);
+without it the instruction is illegal, which raises IRQ 1 and retries
+the faulting PC. A UART-THRE pulse was tried first, so that the
+bitstream would not have to change, and does not work: writing
+`IER.THRE` is a no-op when THRE is already enabled, which is the
+common case during `printf`, and the `waitirq` in that hole froze every
+runnable process until the next interrupt.
+
+`k_sched_switch()` deliberately does **not** advance `z_kernel_ticks`
+or sweep `wake_tick`; those stay the KTIMER caller's job. A yield must
+not look like time passing.
+
 **Blocking rather than spinning is worth more than it looks.**
 `docs/app_runtime.md` records a `view` JPEG decode going from 7.7s to
 3.1s once the other resident processes stopped busy-waiting. On a
@@ -80,9 +145,25 @@ single core with no idle state, one spinning process is a tax on every
 other one.
 
 `cpu_ticks` is the only CPU-time measurement in the system: the timer
-handler increments the counter of whichever process it interrupted.
-Sampled accounting, so work that starts and finishes between two ticks
-is invisible.
+handler increments the counter of a process once per tick. Sampled
+accounting, so work that starts and finishes between two ticks is
+invisible.
+
+**Which process, exactly, is not obvious.** It used to be "whoever was
+interrupted", which charges idle time as work: a process sitting in
+`waitirq` is the one the timer interrupts, so the moment `wm` also went
+to sleep, `net` inherited every idle tick in the system and `ps` showed
+it busy. The charge now happens *after* the wake sweep and only if the
+process is `Z_PROC_RUNNABLE()` -- a blocked waiter is idle and is
+billed nothing. A process looping on `z_proc_wait(1)` is still billed,
+correctly: the sweep unblocks it first.
+
+`z_irq_census[]` counts interrupt entries by source line, reported at
+the end of `k_proc_dump()`. It is measurement only, and the reason it
+is worth the nine counters is that `cpu_ticks` cannot distinguish a
+process doing work from a process being woken constantly by something
+that has nothing to say -- two `ps` runs bracketing a workload give the
+interrupt rate by source, which does.
 
 ## Memory
 
@@ -173,9 +254,9 @@ make -C sw/os kernel-size
 gives `text`/`data`/`bss` and the twelve largest symbols. **Use it
 rather than reasoning about struct sizes.** Two attempts to predict
 this from arithmetic gave two wrong answers: the struct sizes were
-right both times (`z_msg_envelope_t` is 24 bytes, a mailbox 780, a
-`z_proc` 148) and the totals were not, which means the model was
-missing something the model could not see.
+right both times (`z_msg_envelope_t` is 24 bytes, a mailbox 780, and a
+`z_proc` was 148 then and is 188 now) and the totals were not, which
+means the model was missing something the model could not see.
 
 The build also no longer runs `strip` on `kernel.elf` in place. It
 could never have affected the output -- `objcopy -O binary` emits
@@ -333,18 +414,20 @@ somewhere else.** Worth looking one layer out each time.
 
 ### `Z_PROCS_MAX` 16 -> 32 -- DONE (64 was tried and did not fit)
 
-Two arrays scale with it, 928 bytes a slot between them:
+Two arrays scale with it, 968 bytes a slot between them:
 
 | | per slot | x16 | x32 | x64 |
 |---|---|---|---|---|
-| `z_procs[]` | 148 B | 2.3 KB | 4.6 KB | 9.2 KB |
+| `z_procs[]` | 188 B | 2.9 KB | 5.9 KB | 11.8 KB |
 | `z_mailboxes[]` | 780 B | 12.2 KB | 24.4 KB | 48.8 KB |
-| | | 14.5 KB | **29 KB** | 58 KB |
+| | | 15.1 KB | **30.3 KB** | 60.5 KB |
 
 64 was the first attempt and it overran the image budget above by
-7,640 bytes. **32 costs 14.5KB more than 16** and leaves comfortable
-headroom -- and it is more than Phase 5 needs, which is one process per
-pipeline stage against about a dozen resident.
+7,640 bytes, when a slot was 148 bytes rather than 188 -- the saved
+GPU scissor has since added 40 to it, so the same attempt would now
+overrun by about 10,200. **32 costs 15.1KB more than 16** and leaves
+comfortable headroom -- and it is more than Phase 5 needs, which is one
+process per pipeline stage against about a dozen resident.
 
 The `.bss` figure is a RAM cost on every board and a FLASH cost on
 every board, which is the part that was missed the first time.

@@ -564,3 +564,49 @@ something the user can do repeatedly, its payload must not be
 allocated.** Use a packed scalar (`Z_WM_REDRAW`, `Z_WM_MOUSE` and
 `Z_WM_KEY` all do) or static storage. The leak is invisible until the
 process dies, and the crash lands nowhere near the cause.
+
+### It happened again, with a blob
+
+`Z_WM_SET_CLIP` (`docs/window_manager.md`) carries a window's visible
+region as a `Z_BLOB`, and it was built with `z_obj_blob()` — which
+`malloc()`s a header and a copy of the rectangles, and, because the
+payload is borrowed and `wm` does not wait to find out when it has been
+read, was never freed.
+
+Same 8KB allowance, same shape, and the failure mode was worse than a
+crash. After about ninety regions `malloc()` returned NULL,
+`z_obj_blob()` returned `Z_NONE`, and from then on every window `wm`
+created was told **nothing** — which the receiving side read as "no
+region", which `zgfx` reads as *unrestricted*. New windows painted
+straight over whatever was in front of them, and nothing anywhere
+reported an error. A leak that ends in a NULL check is a crash; a leak
+that ends in a permission is a compositor that quietly stops
+compositing.
+
+The fix is static storage again, but the *shape* of the storage is the
+part worth keeping: **one pair of slots per window**, not a ring shared
+by every send.
+
+A region is **state, not an event**. If two regions for the same window
+are queued before the app reads them, both readers see the newer one,
+and the newer one is the correct one — there is nothing to lose by
+overwriting. That is exactly untrue of the ring used for
+`Z_WM_WINDOW_MOVED`, where each message says something different and
+overwriting one loses it. Matching the storage to which of the two a
+message is saves the ring and removes a class of race rather than
+narrowing it.
+
+The pair exists for the one race a single slot would leave: an app
+preempted halfway through copying the rectangles, while `wm` sends
+again, could see a mix of old and new. With two slots that needs two
+sends inside one copy.
+
+The payload also begins with one or more **control rectangles** that
+are not part of the region: which window it is for, and whether the
+window is being frozen. They are marked by an `x0` of `Z_WM_CLIP_CTL`
+(`INT16_MIN`), which is not a screen coordinate, and they are
+degenerate, so a receiver that does not know a given command reads it
+as an empty rectangle — "occluded", the harmless reading, rather than
+"unrestricted". Extending a borrowed payload this way costs no
+allocation and stays backwards-readable, which is why the window id
+went here rather than into a second message.
