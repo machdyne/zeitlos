@@ -6,8 +6,10 @@
  */
 
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "zeitlos.h"
 #include "zfs.h"
@@ -43,7 +45,20 @@ char *fs_mallocfile(char *filename) {
 	if (sz <= 0) return NULL;
 
 	char *buf = malloc((size_t)sz + 1);
-	if (!buf) return NULL;
+	if (!buf) {
+		// 0024: te TEST.TXT / RFC20.TXT failed with "unable to load"
+		// while (free) reported 32 MB. That figure is the kernel
+		// pool; this malloc is the process heap, which ends at sp.
+		extern char _end;
+		register char *sp asm("sp");
+		char *brk = (char *)sbrk(0);
+		printf("fs_mallocfile: malloc(%d) failed '%s' sbrk=%lu sp=%lu room=%ld grown=%lu\n",
+			sz + 1, filename,
+			(unsigned long)(uintptr_t)brk, (unsigned long)(uintptr_t)sp,
+			(long)(sp - brk),
+			(unsigned long)((uint32_t)(uintptr_t)brk - (uint32_t)&_end));
+		return NULL;
+	}
 	buf[sz] = 0;
 
 	z_fs_read_args_t args;
@@ -56,6 +71,10 @@ char *fs_mallocfile(char *filename) {
 	z_obj_t *rv = (z_obj_t *)z_kernel_ptr(Z_SYS_FS_READ, (uint32_t *)&args, 0);
 
 	if (rv->val.uint32 != Z_OK || (int)args.len != sz) {
+		printf("fs_mallocfile: READ fail '%s' sz=%d rv=%lu len=%lu buf=%p\n",
+			filename, sz,
+			(unsigned long)(rv ? rv->val.uint32 : 0xfffffffful),
+			(unsigned long)args.len, (void *)buf);
 		free(buf);
 		return NULL;
 	}

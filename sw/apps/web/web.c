@@ -2017,6 +2017,10 @@ static void start_fetch(const url_t *u, bool push_history) {
 				z_port_send_ack(&stale);
 				break;
 
+			case Z_WM_SET_CLIP:
+				z_win_apply_clip(&win, &stale.obj);
+				break;
+
 			case Z_WM_REDRAW:
 				z_win_apply_redraw(&win, stale.obj.type == Z_UINT32
 					? stale.obj.val.uint32 : 0);
@@ -2029,6 +2033,10 @@ static void start_fetch(const url_t *u, bool push_history) {
 					sel_link = -1;
 					repaint();
 				}
+				break;
+
+			case Z_WM_WINDOW_MOVED:
+				z_win_parse_rect(&win, &stale.obj);
 				break;
 
 			default:
@@ -2792,7 +2800,6 @@ int main(void) {
 
 	snprintf(status, sizeof(status), "web -- type a URL and press Enter");
 	relayout();
-	repaint();
 
 	{
 		char arg[URL_MAX];
@@ -2802,6 +2809,11 @@ int main(void) {
 			url_focus = false;
 			url_editing = false;
 			go_to_text(arg);
+		} else {
+			// After C3 the paint that used to run here before
+			// take() reached nothing: take() is what applies the
+			// first SET_CLIP. Repaint once the region is in.
+			repaint();
 		}
 	}
 
@@ -2824,6 +2836,10 @@ int main(void) {
 				if (msg.obj.type == Z_UINT32) handle_mouse(msg.obj.val.uint32);
 				break;
 
+			case Z_WM_SET_CLIP:
+				z_win_apply_clip(&win, &msg.obj);
+				break;
+
 			case Z_WM_REDRAW:
 				z_win_apply_redraw(&win, msg.obj.type == Z_UINT32
 					? msg.obj.val.uint32 : 0);
@@ -2840,6 +2856,15 @@ int main(void) {
 					sel_link = -1;
 					repaint();
 				}
+				break;
+
+			case Z_WM_WINDOW_MOVED:
+
+				// No repaint of our own: relayout() rebuilds crect
+				// from the new position at the top of every repaint,
+				// and the REDRAW wm sends after a move asks for one
+				// anyway.
+				z_win_parse_rect(&win, &msg.obj);
 				break;
 
 			case Z_PORT_CONNECTED:

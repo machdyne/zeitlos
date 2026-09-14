@@ -78,11 +78,20 @@ TE_SUPPORT_DIR = te_support
 TE_DEFAULT_ROWS ?= 25
 TE_DEFAULT_COLS ?= 80
 
-# how large a file `te` will open -- see te_bridge.c's own comment on
-# why this is deliberately conservative relative to repl's 64KB heap,
-# and docs/editor.md for the arithmetic behind the default.
-# Overridable, e.g. `make TE_MAX_FILE_SIZE=4096`.
-TE_MAX_FILE_SIZE ?= 2048
+# how large a file `te` will open -- see te_bridge.c's own comment and
+# docs/editor.md for the arithmetic.
+#
+# 128 KiB, and the default has to BE this, not something a recipe
+# remembers to pass. It used to default to 2048, on the reasoning that
+# repl's heap is 64KB -- but the buffer does not come out of that heap
+# (te_bridge allocates it from the app's own arena) and every real file
+# on the card is bigger: RFC20.TXT is 18 KB. A `make -C sw/apps` with
+# no arguments therefore built a two-kilobyte editor that refuses to
+# open anything, and that build reached the board TWICE (0014, 0022),
+# each time looking like a broken editor rather than a build flag.
+# Overridable downwards for a memory-tight variant: `make
+# TE_MAX_FILE_SIZE=2048`.
+TE_MAX_FILE_SIZE ?= 131072
 
 TE_CFLAGS = -DEMBEDDED -DTE_HOST_IO \
 	-DTE_DEFAULT_ROWS=$(TE_DEFAULT_ROWS) -DTE_DEFAULT_COLS=$(TE_DEFAULT_COLS) \
@@ -190,8 +199,30 @@ ms.o: ms_stdlib.h
 te.o: $(TE_DIR)/te.c $(TE_SUPPORT_DIR)/fs.h $(TE_SUPPORT_DIR)/te_host_io.h
 	$(CC) $(CFLAGS) $(TE_CFLAGS) -c $(TE_DIR)/te.c -o te.o
 
-te_bridge.o: te_bridge.c te_bridge.h $(TE_SUPPORT_DIR)/te_host_io.h
-	$(CC) $(CFLAGS) -DTE_MAX_FILE_SIZE=$(TE_MAX_FILE_SIZE) -c te_bridge.c -o te_bridge.o
+# The value travels as a generated HEADER, not as a -D.
+#
+# A -D is not a file, so make cannot see it change: editing
+# TE_MAX_FILE_SIZE above and rebuilding left the OLD te_bridge.o in
+# place and shipped the old limit (0014R §5 lost a session to that, and
+# a 2 KB editor reached the board twice). A stamp file named after the
+# value is not enough either -- make compares mtimes with one-second
+# granularity, so a stamp written in the same second as the object it
+# should invalidate counts as "not newer" (measured: it silently kept
+# the old object).
+#
+# So: write the value into a header, rewrite it only when it actually
+# differs, and DELETE the object when it does. Deleting is what makes
+# this deterministic -- a missing object is rebuilt no matter what the
+# clock says.
+te_max_file_size.h: FORCE
+	@echo '#define TE_MAX_FILE_SIZE $(TE_MAX_FILE_SIZE)' > $@.new
+	@cmp -s $@.new $@ 2>/dev/null || { mv $@.new $@; rm -f te_bridge.o; }
+	@rm -f $@.new
+
+FORCE:
+
+te_bridge.o: te_bridge.c te_bridge.h $(TE_SUPPORT_DIR)/te_host_io.h te_max_file_size.h
+	$(CC) $(CFLAGS) -include te_max_file_size.h -c te_bridge.c -o te_bridge.o
 
 # needs MS_SIZE_CFLAGS as of this revision -- the `free` procedure
 # reports MS_HEAP_SIZE, so this translation unit has to see the same
@@ -245,9 +276,9 @@ test:
 	./zline_test
 
 clean:
-	rm -f zline_test repl.elf repl.bin repl.data repl.asm repl.dasm repl.map ms_stdlib.h *.o *.d
+	rm -f zline_test repl.elf repl.bin repl.data repl.asm repl.dasm repl.map ms_stdlib.h *.o *.d te_max_file_size.h
 
-.PHONY: repl clean test
+.PHONY: repl clean test FORCE
 
 # Header dependency tracking.
 #

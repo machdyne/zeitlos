@@ -921,11 +921,103 @@ static void conn_send_str(repl_conn_t *c, const char *s) {
 			(unsigned long)len, (long)c->port.peer_pid);
 }
 
+// -- dead peers --
+//
+// A slot is normally freed by the peer's own Z_PORT_CLOSE
+// (handle_close() below). A terminal closed from its titlebar never
+// sends one: wm kills the process outright (Z_WIN_FLAG_CLOSE_KILLS_
+// OWNER), so its slot stayed "connected" forever, and after three
+// such closes every new terminal was refused with "too many
+// connections" and came up in local-echo-only mode. Nothing in the
+// kernel tells a provider that a client died, but the process table
+// is readable: z_proc_list() (Z_SYS_PROC_LIST) reports every slot
+// with memory still assigned, with its flags, and allocates nothing.
+//
+// A connection's peer is gone when it is not in that list, or is
+// there only because it has been marked to die and not yet reaped
+// (Z_PROC_FLAG_DIE), or -- the case that actually happens -- when the
+// pid asking to connect right now IS the peer of an existing
+// connection: a process cannot connect twice, so the old one belongs
+// to a dead process whose pid slot was reused.
+//
+// Only consulted when every slot is taken, so the common path costs
+// nothing.
+
+// Drops a connection whose peer will never speak again: same
+// tear-down as handle_close(), plus the outstanding DATA blobs, which
+// z_port_send() keeps until the peer acks them (zport.h) and a dead
+// peer never will. They are released through the same code path a
+// real ack takes -- z_port_handle_ack() frees the oldest pending send
+// on each ack for this conn_id -- rather than by reaching into
+// z_port_t's own bookkeeping.
+static void conn_drop(repl_conn_t *c, const char *why) {
+	if (c->in_editor) {
+		te_bridge_abort();
+		c->in_editor = false;
+	}
+	if (c->in_pager) {
+		page_abort();
+		c->in_pager = false;
+	}
+	z_msg_t ack;
+	memset(&ack, 0, sizeof(ack));
+	ack.subject = Z_PORT_DATA_ACK;
+	ack.tag = c->port.conn_id;
+	while (c->port.pending_count > 0) z_port_handle_ack(&c->port, &ack);
+	printf("repl: connection %d dropped (pid %ld %s)\n",
+		(int)(c - conns), (long)c->port.peer_pid, why);
+	c->port.connected = false;
+}
+
+#define REPL_PROC_LIST_MAX 32	// Z_PROCS_MAX (kernel.h); `truncated`
+								// guards the day they stop agreeing
+
+// Frees every connection whose peer is dead (see above). Returns how
+// many were freed. `connecting_pid` is the pid of the CONNECT being
+// handled, whose own stale connection (pid reuse) counts as dead.
+static int reap_dead_conns(uint32_t connecting_pid) {
+
+	z_proc_info_t procs[REPL_PROC_LIST_MAX];
+	uint32_t truncated = 0;
+	uint32_t n = z_proc_list(procs, REPL_PROC_LIST_MAX, &truncated);
+	if (n == 0 || truncated) return 0;	// unusable snapshot: free nothing
+
+	int freed = 0;
+	for (int i = 0; i < Z_REPL_MAX_CONNS; i++) {
+		repl_conn_t *c = &conns[i];
+		if (!c->port.connected) continue;
+		if (c->port.peer_pid == connecting_pid) {
+			conn_drop(c, "reused by a new process");
+			freed++;
+			continue;
+		}
+		bool alive = false;
+		for (uint32_t k = 0; k < n; k++) {
+			if (procs[k].pid == c->port.peer_pid &&
+				!(procs[k].flags & Z_PROC_FLAG_DIE)) { alive = true; break; }
+		}
+		if (!alive) {
+			conn_drop(c, "gone");
+			freed++;
+		}
+	}
+	return freed;
+}
+
 static void handle_connect(const z_msg_t *msg) {
 
 	int slot = -1;
 	for (int i = 0; i < Z_REPL_MAX_CONNS; i++) {
 		if (!conns[i].port.connected) { slot = i; break; }
+	}
+
+	// Full: make room by dropping the connections of peers that no
+	// longer exist (see conn_drop()/reap_dead_conns() above), then
+	// look again.
+	if (slot < 0 && reap_dead_conns(msg->from) > 0) {
+		for (int i = 0; i < Z_REPL_MAX_CONNS; i++) {
+			if (!conns[i].port.connected) { slot = i; break; }
+		}
 	}
 
 	if (slot < 0) {
