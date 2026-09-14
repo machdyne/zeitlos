@@ -106,9 +106,10 @@
 // Each of these adds one more 8x8 icon to the titlebar, to the LEFT
 // of the close icon (which keeps the exact position it always had --
 // see wm.c's titlebar_icons()). Icons are laid out right-to-left in
-// the order close, save, new, open, font, so an app that asks for
-// new+save+close gets them reading "new save close" left to right,
-// which is the order they're normally written in.
+// the order close, save, open, new, font (titlebar_icon_table[] in
+// wm.c is the authority), so an app that asks for new+save+close gets
+// them reading "new save close" left to right, which is the order
+// they're normally written in.
 //
 // Clicking one does NOT do anything by itself -- wm has no idea what
 // "save" means for your app. It sends Z_WM_TITLEBAR_ICON (below) to
