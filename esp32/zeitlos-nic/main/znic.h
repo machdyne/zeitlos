@@ -18,6 +18,11 @@
 #define ZNIC_STA_ACK   0x21
 #define ZNIC_DATA_ACK  0x22
 #define ZNIC_LOG       0x30	/* ESP32 -> Z: one ESP_LOG line (text) */
+#define ZNIC_BURST     0x31	/* ESP32 -> Z: {n:u8}; exactly n framed
+				   messages follow back to back. Sent only
+				   when RX_POLL carried a credit >= 2. */
+#define ZNIC_INPUT     0x32	/* browser -> ESP32 -> Z: {usage,mods,pressed} */
+#define ZNIC_MOUSE     0x33	/* browser -> ESP32 -> Z: {x_lo,x_hi,y_lo,y_hi,buttons} */
 #define ZNIC_STA_OK    0
 
 typedef struct {

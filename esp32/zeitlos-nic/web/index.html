@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Zeitlos</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+ body{margin:0;background:#111;display:flex;flex-direction:column;
+      align-items:center;font:13px system-ui;color:#888}
+ canvas{margin-top:12px;image-rendering:pixelated;width:640px;max-width:98vw;
+        border:1px solid #333;background:#000}
+ #st{margin:8px}
+</style></head><body>
+<canvas id="c" width="640" height="480"></canvas><div id="st">conectando…</div>
+<script>
+const cv=document.getElementById('c'),cx=cv.getContext('2d'),st=document.getElementById('st');
+const img=cx.createImageData(640,16);
+let frames=0,bytes=0;
+// PackBits decode -> 1280 bytes (ver sw/apps/net/screen.c)
+function unpack(src){
+  const out=new Uint8Array(1280); let o=0,i=0;
+  while(i<src.length && o<1280){
+    const n=src[i++];
+    if(n<128){ for(let k=0;k<=n && o<1280;k++) out[o++]=src[i++]; }
+    else if(n>128){ const v=src[i++]; for(let k=0;k<257-n && o<1280;k++) out[o++]=v; }
+  }
+  return out;
+}
+function paint(idx,buf){
+  const d=img.data;let p=0;
+  for(let i=0;i<1280;i++){
+    const b=buf[i];
+    // LSB-first within each byte: bit 0 is the leftmost pixel
+    // (z_fb_set_pixel uses mask 1<<(x%32), little-endian VRAM words).
+    for(let bit=0;bit<8;bit++){
+      const v=(b>>bit)&1?255:0;
+      d[p]=d[p+1]=d[p+2]=v;d[p+3]=255;p+=4;
+    }
+  }
+  cx.putImageData(img,0,idx*16);
+}
+// -- teclado: event.code -> USB HID usage, modificadores en un byte --
+const HID={
+ KeyA:4,KeyB:5,KeyC:6,KeyD:7,KeyE:8,KeyF:9,KeyG:10,KeyH:11,KeyI:12,KeyJ:13,
+ KeyK:14,KeyL:15,KeyM:16,KeyN:17,KeyO:18,KeyP:19,KeyQ:20,KeyR:21,KeyS:22,
+ KeyT:23,KeyU:24,KeyV:25,KeyW:26,KeyX:27,KeyY:28,KeyZ:29,
+ Digit1:30,Digit2:31,Digit3:32,Digit4:33,Digit5:34,Digit6:35,Digit7:36,
+ Digit8:37,Digit9:38,Digit0:39,Enter:40,Escape:41,Backspace:42,Tab:43,
+ Space:44,Minus:45,Equal:46,BracketLeft:47,BracketRight:48,Backslash:49,
+ Semicolon:51,Quote:52,Backquote:53,Comma:54,Period:55,Slash:56,
+ ArrowRight:79,ArrowLeft:80,ArrowDown:81,ArrowUp:82,
+ F1:58,F2:59,F3:60,F4:61,F5:62,F6:63,F7:64,F8:65,F9:66,F10:67,F11:68,F12:69,
+ Home:74,PageUp:75,Delete:76,End:77,PageDown:78,Insert:73
+};
+function mods(e){return (e.ctrlKey?1:0)|(e.shiftKey?2:0)|(e.altKey?4:0)|(e.metaKey?8:0);}
+let sock=null;
+function key(e,pressed){
+ const u=HID[e.code]; if(u===undefined) return;
+ e.preventDefault();
+ if(sock&&sock.readyState===1) sock.send(new Uint8Array([u,mods(e),pressed?1:0]));
+}
+// -- ratón: coords del canvas escaladas a 640x480, botones 1/2/4 --
+let mbtn=0;
+function mouseSend(e){
+ const r=cv.getBoundingClientRect();
+ let x=Math.round((e.clientX-r.left)*640/r.width);
+ let y=Math.round((e.clientY-r.top)*480/r.height);
+ x=Math.max(0,Math.min(639,x)); y=Math.max(0,Math.min(479,y));
+ if(sock&&sock.readyState===1)
+   sock.send(new Uint8Array([x&255,x>>8,y&255,y>>8,mbtn]));
+}
+function mouseLeave(){
+ mbtn=0;
+ if(sock&&sock.readyState===1)
+   sock.send(new Uint8Array([0,0,0,0,0x80]));
+}
+cv.addEventListener('mousemove',mouseSend);
+cv.addEventListener('mousedown',e=>{e.preventDefault();mbtn|=(1<<e.button);mouseSend(e);});
+cv.addEventListener('mouseup',e=>{e.preventDefault();mbtn&=~(1<<e.button);mouseSend(e);});
+cv.addEventListener('mouseleave',mouseLeave);
+cv.addEventListener('contextmenu',e=>e.preventDefault());
+document.addEventListener('visibilitychange',()=>{if(document.hidden)mouseLeave();});
+addEventListener('keydown',e=>key(e,1));
+addEventListener('keyup',e=>key(e,0));
+function go(){
+  const ws=new WebSocket('ws://'+location.host+'/ws');sock=ws;
+  ws.binaryType='arraybuffer';
+  ws.onopen=()=>st.textContent='conectado';
+  ws.onclose=()=>{st.textContent='reconectando…';setTimeout(go,1500)};
+  ws.onmessage=e=>{
+    const a=new Uint8Array(e.data); bytes+=a.length;
+    let i=0;
+    while(i+3<=a.length){
+      const idx=a[i], len=a[i+1]|(a[i+2]<<8); i+=3;
+      if(i+len>a.length) break;
+      const raw=unpack(a.subarray(i,i+len)); i+=len;
+      if(raw&&raw.length===1280){paint(idx,raw);frames++;}
+    }
+  };
+  setInterval(()=>{st.textContent=`conectado — ${frames} franjas, ${(bytes/1024).toFixed(0)} KiB`;},1000);
+}
+go();
+</script></body></html>

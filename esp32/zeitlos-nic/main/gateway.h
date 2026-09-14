@@ -19,6 +19,7 @@ int  gateway_wifi_scan(const char *want_ssid, gateway_ap_t *out, int maxn);
 int  gateway_wifi_sta(const char *ssid, const char *psk, int *rssi);
 int  gateway_from_zeitlos(const uint8_t *frame, uint16_t len);
 int  gateway_pop_to_zeitlos(uint8_t *out, uint16_t *len);
+int  gateway_pending_to_zeitlos(void);
 void gateway_znic_mac(uint8_t out[6]);
 void gateway_stats(uint32_t *from_z, uint32_t *to_z, uint32_t *dropped);
 int  gateway_last_disc_reason(void);

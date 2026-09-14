@@ -1,3 +1,4 @@
 idf_component_register(
-	SRCS "main.c" "znic.c" "gateway.c" "selftest.c" "tftpd.c"
-	INCLUDE_DIRS ".")
+	SRCS "main.c" "znic.c" "gateway.c" "selftest.c" "tftpd.c" "screend.c"
+	INCLUDE_DIRS "."
+	EMBED_TXTFILES "../web/index.html")

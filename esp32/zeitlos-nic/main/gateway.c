@@ -83,6 +83,11 @@ void gateway_znic_mac(uint8_t out[6])
 	memcpy(out, znic_mac, 6);
 }
 
+int gateway_pending_to_zeitlos(void)
+{
+	return (rxq_head - rxq_tail + RXQ_DEPTH) % RXQ_DEPTH;
+}
+
 int gateway_pop_to_zeitlos(uint8_t *out, uint16_t *len)
 {
 	if (rxq_tail == rxq_head)
@@ -246,7 +251,8 @@ static void wifi_radio_on(void)
 {
 	if (wifi_started)
 		return;
-	esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+	esp_wifi_set_ps(WIFI_PS_NONE)  /* no modem sleep: min latency for the
+	                               remote desktop poll loop */;
 	esp_wifi_start();
 	/* unit is 0.25 dBm; 8 = 2 dBm (IDF minimum), 78 = 19.5 dBm (max).
 	 * 2026-08-27: 8 while the ESP32 reset loops were being chased
