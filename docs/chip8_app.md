@@ -613,10 +613,13 @@ output is 128*scale by 64*scale in *both* guest resolutions, so a ROM
 switching to hires does not move or resize it.
 
 Messages are drained in game mode too. The window still exists and wm
-still talks to it; ignoring the queue would leave wm waiting on redraw
-acks until its timeout fired, which presents as the whole desktop
-freezing for a second rather than as this app being busy. Redraws are
-acked without drawing.
+still talks to it. Ignoring the queue used to leave wm waiting on
+redraw acks until its timeout fired, which presented as the whole
+desktop freezing for a second rather than as this app being busy; wm
+no longer waits, and draining still matters -- the queue also carries
+`Z_WM_SET_CLIP`, and a window that stops applying its region goes on
+drawing against one that is no longer true. Redraws are acked without
+drawing.
 
 ### The exit key has to be released first
 
