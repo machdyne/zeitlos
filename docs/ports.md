@@ -267,6 +267,49 @@ provider can arrive after the new connection is up and match its tag.
 `msg.from`.** Three bugs in `docs/posix.md`'s phase 5 came from this,
 in three different programs.
 
+### Nobody tells a provider that a client died
+
+There is no process-death notification in this system, so a connection
+whose peer is gone stays `connected` in the provider's table forever.
+With a small table that is not a leak in the abstract -- it is a
+countdown.
+
+`repl` has `Z_REPL_MAX_CONNS` slots and terminals are the clients. A
+terminal closed from its titlebar never sends `Z_PORT_CLOSE`: wm kills
+the process outright (`Z_WIN_FLAG_CLOSE_KILLS_OWNER`,
+`docs/window_manager.md`), so the slot is never freed. After three such
+closes every new terminal was refused with "too many connections" and
+came up in local-echo-only mode -- which reads as repl being broken
+rather than as a bookkeeping leak three windows ago.
+
+**The process table is readable, and that is enough.**
+`z_proc_list()` (`Z_SYS_PROC_LIST`) reports every slot that still has
+memory assigned, with its flags, and allocates nothing. A peer is gone
+when it is not in that list, or is there only because it is marked to
+die and has not been reaped (`Z_PROC_FLAG_DIE`), or -- the case that
+actually happens -- when the pid asking to connect **is already the
+peer of an existing connection**: a process cannot connect twice, so
+the old connection belongs to a dead process whose pid slot has been
+reused.
+
+Three things about the shape are worth copying rather than
+rediscovering:
+
+- **Only when every slot is taken.** The common path costs nothing, and
+  a scan that never runs cannot be wrong at a bad moment.
+- **A snapshot that does not fit frees nothing.** If `z_proc_list()`
+  reports it truncated the list, a process could be absent because the
+  buffer ran out rather than because it died, and dropping a live
+  connection is worse than refusing a new one.
+- **Tear-down goes through the ack path.** `z_port_send()` holds each
+  DATA blob until the peer acks it (above), and a dead peer never will,
+  so the drop replays `z_port_handle_ack()` until the pending count is
+  zero rather than reaching into `z_port_t`'s own bookkeeping.
+
+This is a provider-side workaround for a missing kernel facility, not a
+fix. A real one is a death notification -- which would also serve `wm`,
+whose own window table has the identical hole.
+
 ### What `posix` does about it, and what it would take to close the gap
 
 `sw/apps/posix` hit this hard enough to need an answer, and the answer

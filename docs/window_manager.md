@@ -2287,9 +2287,15 @@ a convenient API, not a hard guarantee.
   of this writing, with no recurrence seen so far.
 - **No process-death cleanup.** If an app that owns a window is
   killed, `wm` has no way to find out and will leave its window (and
-  window-table slot) around forever. This needs either a kernel
-  notification mechanism or a way for `wm` to poll whether a pid is
-  still alive -- neither exists yet (see `docs/messaging.md`).
+  window-table slot) around forever. There is still no kernel
+  notification, but the second half of that sentence has stopped being
+  true: `z_proc_list()` (`Z_SYS_PROC_LIST`) reports every live process
+  slot with its flags and allocates nothing, so a provider CAN ask.
+  `sw/apps/repl` does exactly that to reclaim connections whose
+  terminal was closed from its titlebar -- see `docs/ports.md`,
+  "Nobody tells a provider that a client died", including the two
+  things that shape gets wrong if copied carelessly. The same scan
+  would work here.
 - **Titles are still not drawn** in the chrome itself (font support
   now exists via `zgfx`, but `wm.c` draws chrome purely via the line
   rasterizer and hasn't been updated to render the title text yet).

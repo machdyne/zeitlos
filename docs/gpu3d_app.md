@@ -23,6 +23,7 @@ faster.
 | `r` | reset rotation and scale |
 | `s` | toggle dithering shader (experimental) |
 | `e` | switch erase mode (interleaved / clear) |
+| `p` | toggle the per-second performance report (off by default) |
 | `o`, or the titlebar open icon | open an STL file |
 | `+` / `-` | scale in steps |
 | Alt | suppresses all of the above |
@@ -158,9 +159,10 @@ teapot took ~60 seconds to load. Every chunk costs a syscall plus a
 pump callback; at 512 bytes over ~1MB of reads that was ~2400 of each,
 against ~300 at 4KB. The per-byte SPI cost is unchanged — what goes
 away is the fixed cost paid per chunk. The ceiling on this is the pump
-interval, not memory: 4KB is roughly 4ms of SD time, two orders of
-magnitude clear of wm's `REDRAW_ACK_TIMEOUT`, so there is headroom to
-go further if the load report says I/O still dominates. The ceiling on what can be opened
+interval, not memory: 4KB is roughly 4ms of SD time, a fraction of the
+interval at which anything is waiting on this process to read its
+queue, so there is headroom to go further if the load report says I/O
+still dominates. The ceiling on what can be opened
 is the SD card, not RAM.
 
 **Decimation is vertex clustering, not "every Nth triangle."** The
@@ -246,11 +248,15 @@ one pass** over the file (two normally, occasionally three). On 400KB
 that is seconds, not milliseconds.
 
 That makes `stl_load()`'s `pump` callback mandatory, not politeness.
-wm blocks waiting for a redraw ack, and an app that stops acking
-freezes the **whole screen** until `REDRAW_ACK_TIMEOUT` fires (see
-`docs/window_manager.md`, "content z-order"). A multi-second load is
-far more than long enough to hit that. `load_pump()` drains the queue
-every 512-byte chunk.
+wm used to block waiting for a redraw ack, so an app that stopped
+acking froze the **whole screen** until `REDRAW_ACK_TIMEOUT` fired.
+That is no longer how wm waits (see `docs/window_manager.md`, "Content
+z-order"), and the pump is still mandatory -- what it costs has just
+moved onto gpu3d itself. A process that does not read its queue for
+several seconds does not apply the `Z_WM_SET_CLIP` messages waiting in
+it, so it goes on drawing against a region that has stopped being true:
+a window dropped in front of it mid-load is drawn straight over.
+`load_pump()` drains the queue every 512-byte chunk.
 
 `paint_full()` must not render the model while `loading` is set: the
 pump runs mid-build, so `nverts`/`nedges` and the arrays they index
@@ -281,7 +287,23 @@ with an STL directly.
 
 ## Performance instrumentation
 
-Once a second, gpu3d prints a frame breakdown to the serial console:
+**Off by default; `p` toggles it.** A three-line dump every second is
+itself measurable on this machine -- the console is a shared UART, and
+the print lands inside the frame loop -- so what used to be
+unconditional is now something you turn on for a measurement and off
+again.
+
+One thing stays live regardless: a **stall detector**. Any main-loop
+iteration over 100ms prints its wall time, how much of it was spent
+waiting on the GPU, the frame number and the tick. The split is the
+whole point, and it answers a question no single figure can: a long
+iteration whose gpu-wait is near zero means the CPU went elsewhere
+(another process, the scheduler), while a gpu-wait close to the wall
+time means the GPU or the VRAM bus was busy. The tick lets a log reader
+work out the exact period between stalls, which is how a regular one
+gets traced back to whatever else runs on that period.
+
+With the report on, gpu3d prints a frame breakdown once a second:
 
 ```
 gpu3d: 16.42 fps  frame 60.9ms  2924 kcyc  CPI 5.8
@@ -299,6 +321,14 @@ gpu3d:   read rate 157 KB/s
 ```
 
 These answer different questions and are worth reading differently.
+
+**A redraw is answered in full, deliberately.** gpu3d calls
+`z_win_damage_ignore()` (`zwin.h`) rather than painting only what wm
+says it gained: its content is a rendered frame, not a set of
+rectangles, and painting only a newly exposed strip would leave the
+*previous* frame standing in the rest of the window. Apps whose content
+is addressable by rectangle do the opposite; see
+`docs/window_manager.md`, "Damage".
 
 **The frame breakdown** splits time by phase because the phases have
 unrelated fixes: `xform` is arithmetic, `draw` is uncached MMIO,
