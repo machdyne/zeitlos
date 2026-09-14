@@ -540,7 +540,7 @@ static void render(void) {
 	/* -- deciding, then painting --
 	 *
 	 * The shadow compare can only fire once per cell, and the paint
-	 * session (C1, zwin.h) replays the cells once per rectangle of the
+	 * session (zwin.h) replays the cells once per rectangle of the
 	 * visible region: the two cannot be the same loop. So the pass
 	 * below decides -- it brings the shadow up to date and marks what
 	 * has to be painted -- and the session paints, reading back what

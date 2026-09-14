@@ -77,7 +77,7 @@ static void z_fb_hw_box_one(int x0, int y0, int x1, int y1, int color,
 static z_clip_t gfx_region[Z_GFX_MAX_CLIP];
 static int gfx_region_n;	// 0 = unrestricted
 
-// C1 session -- see z_gfx_paint_begin().
+// Paint session -- see z_gfx_paint_begin().
 static int gfx_paint_open;
 static int gfx_paint_active;
 static int gfx_paint_clip;
@@ -125,13 +125,13 @@ static bool z_gfx_rect_visible(int x0, int y0, int x1, int y1,
 	return false;
 }
 
-// -- per-phase cycle counters (task 0009) -- see zgfx.h for the contract.
+// -- per-phase cycle counters -- see zgfx.h for the contract.
 uint32_t zgfx_perf[ZGFX_PERF_COUNT];
 uint32_t zgfx_perf_n[ZGFX_PERF_COUNT];
 
 /* Compiled OUT by default.
  *
- * These counters answered task 0009's question -- where the per-glyph
+ * These counters answered one question -- where the per-glyph
  * cost goes -- and no app reads them any more: term's phase dump went
  * when term was rebuilt on upstream's renderer. What stayed was their
  * price, paid on every glyph in the hot path: eight rdcycle reads and
@@ -161,7 +161,7 @@ static inline uint32_t zgfx_cyc(void) {
 		zgfx_perf_n[i]++; \
 	} } while (0)
 
-// task 0009 probe: same accumulation plus the single-window max and a
+// Unmask probe: same accumulation plus the single-window max and a
 // count of windows over 1 ms (48000 cyc), so a redraw can say whether
 // the unmask total is many small windows or a few preemptions.
 #define ZGFX_ACC_UNM(t0) do { if (ZGFX_PERF) { \
@@ -750,7 +750,7 @@ static inline uint32_t gpu_blit_acquire(void) {
 
 	for (;;) {
 
-		// task 0009: time the spin and the masked final check
+		// Time the spin and the masked final check
 		// separately -- the spin is where another process's blit (or
 		// another process's timeslice mid-spin) shows up, the masked
 		// check is own work only.
@@ -1740,7 +1740,7 @@ static bool hw_blit_mem_one(const void *src, int src_stride,
 // the SAME src/dst/w/h for every rectangle and trusted the scissor.
 // It went unnoticed while a raise repainted the whole window, because
 // then the first rectangle starts at the canvas origin and the source
-// needs no adjustment; 0016 made a raise repaint only the rectangle it
+// needs no adjustment; a raise now repaints only the rectangle it
 // GAINED, and a gained rectangle generally starts somewhere else.
 //
 // So each pass gets the intersection of the destination rectangle with
@@ -2314,7 +2314,7 @@ void z_fb_draw_char2(int x, int y, char c, int fg_color, int bg_color,
 	// mattered for, and the leading suspect for the "horizontal
 	// garbage near freshly-typed text" report.
 	//
-	// C1 session: the caller already programmed the scissor for this
+	// Paint session: the caller already programmed the scissor for this
 	// rectangle. One acquire + params + trigger, no per-glyph scissor
 	// or reset. CLIP follows whether this pass is a region rect.
 	if (gfx_paint_active) {

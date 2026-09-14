@@ -569,7 +569,7 @@ static struct {
 
 #define PERF_CYC_PER_US   (Z_SYSCLK_HZ / 1000000u)
 
-/* Stall detector (task 0009, C6). frame_gpu_cyc is the part of the last
+/* Stall detector. frame_gpu_cyc is the part of the last
  * render_frame() spent inside the phases that wait on the GPU
  * (erase/text/draw -- the waits themselves live in zgfx.c, behind
  * z_win_fill_rect()/fps_draw()/draw_edge()/render_shaded()). The main
@@ -609,9 +609,9 @@ static void perf_phase(const char *name, uint32_t c, uint32_t total) {
 
 }
 
-/* Off by default (task 0010, C6 (d)): the 1 Hz three-line dump was
- * the cube's 1.000 s stall (0009R §5.3). The stall detector above
- * stays live. Toggle at runtime with 'p'. */
+/* Off by default: the 1 Hz three-line dump was itself the cube's
+ * 1.000 s stall. The stall detector above stays live. Toggle at
+ * runtime with 'p'. */
 static int gpu3d_perf_report = 0;
 
 static void perf_report(void) {
@@ -1347,7 +1347,7 @@ static int clip_fully_occluded(void)
 
 static void paint_full(void) {
 
-	// Animated content cannot use C2 damage: painting only the newly
+	// Animated content cannot repaint by damage alone: painting only the newly
 	// exposed strip leaves the last frame in the rest of the window.
 	z_win_damage_ignore(&win);
 	z_win_clear(&win);

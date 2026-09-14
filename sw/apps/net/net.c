@@ -1702,7 +1702,7 @@ int main(void) {
 		// times a second bought nothing and cost a full scheduler share
 		// -- with round-robin, a permanently runnable process takes
 		// that share out of whatever is painting, which is where the
-		// 80-120us per character cell of a terminal redraw went (0013R).
+		// 80-120us per character cell of a terminal redraw went.
 		//
 		// So the wait is now the nearest deadline anybody has: how long
 		// the driver may go without polling (esp32link.c's poll_gap()

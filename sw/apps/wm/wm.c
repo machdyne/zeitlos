@@ -288,14 +288,14 @@ static int dragging = -1;		// index into windows[], or -1
 static bool drag_moved = false;	// has the drag actually moved yet?
 static int drag_off_x = 0, drag_off_y = 0;
 // Titlebar press on a window that was behind: raise immediately but
-// do not REDRAW its content until the button comes up (0024). The
+// do not REDRAW its content until the button comes up. The
 // chrome is already painted; content is frozen during a drag anyway,
 // and a click with no motion paints on release.
 static bool defer_raise_content = false;
 static int pending_raise_redraw = -1;
 // XOR rubber-band pairing. The last draw's geometry is saved so the
 // matching erase cannot pick up a clamp, a focus change, or an
-// alt-move that never drew a band (0024). xor_band_idx < 0 = off.
+// alt-move that never drew a band. xor_band_idx < 0 = off.
 static int xor_band_idx = -1;
 static int xor_band_x, xor_band_y, xor_band_w, xor_band_h;
 static bool xor_band_focused;
@@ -585,7 +585,7 @@ static void draw_window_box(wm_window_t *w, bool is_focused, int color) {
 
 // XOR rubber band: draw and erase are the same pixels, always.
 //
-// A leftover speck (0023: (236,299), alternating white/black) is XOR
+// A leftover speck (seen at (236,299), alternating white/black) is XOR
 // drawn an odd number of times. Two ways that happened:
 //
 // 1. repair_drag() always XOR-ed at the window's CURRENT rect, and
@@ -1226,7 +1226,7 @@ static void draw_dock(void) {
 	// columns standing inside the dock, one pixel wide, top to bottom.
 	// Measured: 55 stray pixels, all at the departed window's own x
 	// edges, and precisely in the zones nothing clears -- the two rows
-	// draw_window_chrome_bg() does clear came back correct (0015R).
+	// draw_window_chrome_bg() does clear came back correct.
 	//
 	// So the dock clears its own interior first, the same rule the
 	// rest of the compositor already follows: every pixel has exactly
@@ -1307,11 +1307,11 @@ static void fill_rect(int x, int y, int w, int h, int color) {
 // bound, in real time, on how long repair_region() will block waiting
 // for one app to ack a redraw (see wait_for_redraw_done() below)
 // before giving up and moving on. A cap against a hung app, not a
-// budget. Provisional 8000 ms until C1 brings acks down to
-// milliseconds: in silence 0009 already measured acks of 2-3 s
-// against a 4 s cap, and a timeout desynchronises regions -- the
-// slow window keeps painting under its previous clip, so background
-// content appears inside the window in front (0009R §4.5).
+// budget. Provisional 8000 ms until acks come down to
+// milliseconds: in silence, acks of 2-3 s against a 4 s cap were
+// measured, and a timeout desynchronises regions -- the slow window
+// keeps painting under its previous clip, so background content
+// appears inside the window in front.
 #define REDRAW_ACK_TIMEOUT_MS   8000
 
 // blocks until `pid` sends Z_WM_REDRAW_DONE, or the timeout above is
@@ -2248,8 +2248,8 @@ static z_obj_t clip_payload(int idx, const z_wm_cliprect_t *rects, int n) {
 // A titlebar drag is a wireframe over a still image. The XOR band is
 // clean only if nothing under it changes between its draw and its
 // erase: three attempts at repainting the origin mid-gesture all left
-// trails (0010R §11), because with C2-lite the apps repaint while the
-// band is being drawn and erased. So at the first pixel of motion every
+// trails, because the apps repaint while the band is being drawn
+// and erased. So at the first pixel of motion every
 // window is frozen -- its clip goes empty WITHOUT the clear a
 // narrowing does, so the glass keeps what it shows, the dragged window
 // included: it stays where it was, a still ghost, and only the band
@@ -2325,7 +2325,7 @@ static bool wait_clip_ack_one(int idx, uint32_t timeout_ms) {
 	return true;
 }
 
-// -- variant B (0013): repaint the origin before the first band --
+// -- variant B: repaint the origin before the first band --
 //
 // 0 = variant A: the dragged window stays on the glass as a still
 // ghost until release. 1 = variant B: at the first pixel of motion
@@ -2589,7 +2589,7 @@ static bool send_clip_ex(int idx, bool do_redraw) {
 	// z_win_apply_clip() used to black it out from the app's side too,
 	// with the region escaped and a message-drain of latency behind
 	// wm's repair -- late, it landed on the winner's fresh paint
-	// (0027's fast focus-cycling symptom).
+	// (the fast focus-cycling symptom above).
 	{
 		int empty = (n == 1 && rect_empty(&reg[0]));
 		if (!empty && do_redraw && (first || widening)) {
@@ -4333,9 +4333,8 @@ static void repair_drag(int dragged_idx) {
 	// The whole swept box used to be repaired instead, on the theory
 	// that the band leaves specks where it clamps against a screen
 	// edge. What the sweep was actually put in for was dock damage
-	// (0013R §9d) and 0015 found that at its root -- the frame of a
-	// window PARKED on the dock, fixed in draw_dock() -- so the reason
-	// is gone. A drag across the desktop is not a reason to repaint
+	// and that was traced to its root -- the frame of a window PARKED
+	// on the dock, fixed in draw_dock() -- so the reason is gone. A drag across the desktop is not a reason to repaint
 	// the desktop. (A drag cannot leave a window partly off screen,
 	// see the clamp in the drag-update block, so the band never
 	// half-draws against an edge either.)
@@ -4696,7 +4695,7 @@ int main(void) {
 				// focus) must not wait on the raised window's
 				// content REDRAW: that paint is ~14 stripes of a
 				// terminal and the rubber band cannot start until
-				// it has gone down the same wire (0023R §B).
+				// it has gone down the same wire.
 				defer_raise_content = hit_titlebar(hit, cy) != 0;
 				bring_to_front(hit);
 				defer_raise_content = false;
@@ -4819,7 +4818,7 @@ int main(void) {
 				// travels over pixels that do not change. The three
 				// earlier attempts at repainting the origin during
 				// the gesture all left trails for exactly that reason
-				// (0010R §11). Everything is put right once, at
+				// Everything is put right once, at
 				// release (repair_drag()).
 				if (!drag_moved) {
 					uint32_t c0 = dbg_cyc();

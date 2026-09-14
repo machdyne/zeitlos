@@ -464,7 +464,8 @@ static inline uint32_t waitirq(void) {
 
 // PicoRV32 timer: load the internal countdown (IRQ 0 when it hits
 // zero). ENABLE_IRQ_TIMER must be 1 in the bitstream (sysctl.v).
-// timer(1) fires on the next cycle -- the yield pulse for C6 (a).
+// timer(1) fires on the next cycle -- the pulse a process uses to
+// yield the moment it blocks (k_proc_yield_blocked(), sw/os/kernel.c).
 static inline uint32_t timer(uint32_t cycles) {
 #if defined(__riscv)
 	uint32_t old;

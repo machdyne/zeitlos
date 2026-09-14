@@ -37,7 +37,7 @@ static volatile uint32_t uart_tx_wait_pid = ~0u;
 void z_uart_init(void) {
 
 	// FIFO enable + RX/TX flush. FCR[7:6]=00 is trigger level 1 byte
-	// (uart_regs.v: 00=1, 01=4, 10=8, 11=14). 0009R §4.6 read 0b111
+	// (uart_regs.v: 00=1, 01=4, 10=8, 11=14). 0b111 was once read here
 	// as trigger 14; those are the flush bits, not the trigger. Slack
 	// at 1 Mbaud is then 16 bytes, not 2 -- leave it at 1.
 	reg_uart0_fcr = (uint8_t)0b00000111;
@@ -250,10 +250,10 @@ void k_uart_putc(char c) {
 	// shared kernel state, and masking only the UART IRQ (bit 4)
 	// used to let a KTIMER swap land another process in this same
 	// function, corrupting the ring so uart_tx_fifo_full() stayed
-	// true forever. What C6 (c) forbids is spinning under that
+	// true forever. What must not happen is spinning under that
 	// mask: the old `while (next == tx_tail) tx_pump()` held every
 	// IRQ off for as long as the 16550 took to drain, which is how
-	// a 220-byte printf became 120-170 ms of wall (0009R §5.3).
+	// a 220-byte printf became 120-170 ms of wall.
 	// The masked section is now the enqueue only (~20 cycles);
 	// a full ring blocks the caller and lets the TX ISR drain it.
 

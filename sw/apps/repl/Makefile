@@ -87,8 +87,8 @@ TE_DEFAULT_COLS ?= 80
 # (te_bridge allocates it from the app's own arena) and every real file
 # on the card is bigger: RFC20.TXT is 18 KB. A `make -C sw/apps` with
 # no arguments therefore built a two-kilobyte editor that refuses to
-# open anything, and that build reached the board TWICE (0014, 0022),
-# each time looking like a broken editor rather than a build flag.
+# open anything, and that build reached the board TWICE, each time
+# looking like a broken editor rather than a build flag.
 # Overridable downwards for a memory-tight variant: `make
 # TE_MAX_FILE_SIZE=2048`.
 TE_MAX_FILE_SIZE ?= 131072
@@ -203,8 +203,8 @@ te.o: $(TE_DIR)/te.c $(TE_SUPPORT_DIR)/fs.h $(TE_SUPPORT_DIR)/te_host_io.h
 #
 # A -D is not a file, so make cannot see it change: editing
 # TE_MAX_FILE_SIZE above and rebuilding left the OLD te_bridge.o in
-# place and shipped the old limit (0014R §5 lost a session to that, and
-# a 2 KB editor reached the board twice). A stamp file named after the
+# place and shipped the old limit (that cost a session, and a 2 KB
+# editor reached the board twice). A stamp file named after the
 # value is not enough either -- make compares mtimes with one-second
 # granularity, so a stamp written in the same second as the object it
 # should invalidate counts as "not newer" (measured: it silently kept

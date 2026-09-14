@@ -86,7 +86,7 @@ bool z_gfx_visible_clip(int i, const z_clip_t *clip, z_clip_t *out);
 bool z_gfx_blit_scissor(int i, const z_clip_t *clip);
 void z_gfx_blit_scissor_reset(void);
 
-// C1 paint session: walk the visible region once, program the blitter
+// Paint session: walk the visible region once, program the blitter
 // scissor once per rectangle, and let primitives inside a rectangle
 // skip per-glyph scissor/reset. begin/end nest one-deep. next_rect
 // returns 1 while there is a (non-empty) rectangle to paint; 0 = done.
@@ -97,7 +97,7 @@ void z_gfx_paint_end(void);
 int  z_gfx_paint_active(void);
 int  z_gfx_paint_current(z_clip_t *out);
 
-// -- per-phase cycle counters (task 0009, measurement only) --
+// -- per-phase cycle counters (measurement only) --
 //
 // Wall-clock cycles (rdcycle: ONE global counter, not saved across
 // context switches -- every figure includes whatever ran while this

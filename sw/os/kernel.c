@@ -723,14 +723,14 @@ int main(void) {
 // - this is called by the BIOS interrupt handler which uses the interrupt stack
 // - it can also be called by apps to make system calls
 
-// task 0009: interrupt-entry census, measurement only. [0] counts every
+// Interrupt-entry census, measurement only. [0] counts every
 // entry on the interrupt path, [3..8] count each source line seen in
 // `irqs`, [2] counts entries carrying any line outside 3..8. Read out
 // (cumulative) at the end of k_proc_dump(), so two `ps` runs bracketing
 // a workload give the IRQ rate by source.
 uint32_t z_irq_census[9];
 
-// C1 (i): virtualise the GPU scissor per process. The registers are
+// Virtualise the GPU scissor per process. The registers are
 // global hardware with no privilege, so the kernel cannot intercept
 // writes -- it reads them on the way out and puts them back on the
 // way in. Drain before restoring a *different* clip: the rasterizer
@@ -995,7 +995,7 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 
 	// not a system call; must be an interrupt
 
-	// task 0009 census: which line(s) brought us in, nothing else.
+	// Census: which line(s) brought us in, nothing else.
 	z_irq_census[0]++;
 	for (int b = 3; b <= 8; b++)
 		if (irqs & (1u << b)) z_irq_census[b]++;
@@ -1113,7 +1113,7 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 		goto done;
 	}
 
-	// C6 (a): a process that has just blocked (k_proc_wait, UART
+	// A process that has just blocked (k_proc_wait, UART
 	// wait) pokes UART THRE so this path runs with a real irq_vec
 	// frame. Switch now rather than burning the rest of the slice.
 	if (!Z_PROC_RUNNABLE(z_procs[z_pid]) && k_proc_runnable_count() >= 1) {
@@ -1182,7 +1182,7 @@ z_obj_t *k_wm_wake(z_obj_t *args) {
 // Returns Z_OK if the caller is now blocked, Z_FAIL if a message was
 // already waiting and it should just carry on reading.
 //
-// C6 (a): after marking BLOCKED we yield on the spot, via the
+// After marking BLOCKED we yield on the spot, via the
 // existing IRQ path rather than a new syscall frame. The syscall is a
 // jalr that does not save registers (docs/app_runtime.md), so the
 // kernel cannot switch from here. Two ways were considered:

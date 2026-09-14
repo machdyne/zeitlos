@@ -71,7 +71,7 @@
  * roughly 180 times a second, ~1.3 MB/s of reads across the same
  * arbiter the GPU and the video scanout use -- and it ran whether or
  * not a browser was connected, because the only condition was having a
- * gateway. 0013R measured what that costs the foreground: 80-120 us
+ * gateway. What that costs the foreground was measured: 80-120 us
  * per character cell of a terminal redraw went to net.
  *
  * Two limits now:
@@ -300,7 +300,7 @@ void screen_poll(uint32_t gw_ip)
 		if (esp32link_pump_input())
 			saw_input = 1;
 		/* A drag with pending motion: finish THIS snapshot
-		 * (cutting it paints the band in two places -- 0018)
+		 * (cutting it paints the band in two places)
 		 * but skip the rest of a full-frame force-resend. Those
 		 * stripes were only dirty because we zeroed the hashes,
 		 * and holding the UART for 30 of them is the stall the

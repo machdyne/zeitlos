@@ -298,7 +298,7 @@ int z_win_content_h(const z_win_t *win);
 // (the wm isn't waiting on those).
 void z_win_redraw_done(z_win_t *win);
 
-// C1 paint session for one window: loads that window's region into
+// Paint session for one window: loads that window's region into
 // zgfx, then walks it one hardware-scissor rectangle at a time.
 // Between next_rect()==1 and the following next_rect()/end, glyph
 // blits skip per-cell scissor setup. Must be paired; not nested.
@@ -423,7 +423,8 @@ void z_launch_arg_set(const char *arg);
 // exists it is also safe: compositor messages (SET_CLIP, REDRAW,
 // MOVED, RESIZED) that arrive while this waits are applied to that
 // window instead of being discarded. The previous z_msg_wait() drop
-// is what left files/info/clock black after C3, because their first
+// is what left files/info/clock black once a window had to be told
+// its region before it could paint, because their first
 // paint ran with no region and the dropped SET_CLIP was never resent.
 bool z_launch_arg_take(char *out, int outlen);
 

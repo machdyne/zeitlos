@@ -8,7 +8,7 @@
 // z_rv, Z_OK and Z_FAIL are defined in ../common/zmsg.h (pulled in via
 // zeitlos.h above) since apps need them too, not just the kernel.
 
-#define Z_IRQ_TIMER			0	// picorv32 internal timer (C6 yield)
+#define Z_IRQ_TIMER			0	// picorv32 internal timer (yield pulse)
 #define Z_IRQ_KTIMER			3
 #define Z_IRQ_UART			4
 #define Z_IRQ_HID				5
@@ -83,7 +83,7 @@ typedef struct {
 
 	uint32_t		regs[32];
 
-	// C1 (i): hardware scissor, saved across a context switch.
+	// The hardware scissor, saved across a context switch.
 	// Raster gpu_clip_{x0,y0,x1,y1,enable} and blitter
 	// gpu_blit_clip_{x0,y0,x1,y1} -- all readable. gpu_clip_valid
 	// is 0 until the first save (a brand-new process has never
@@ -223,7 +223,7 @@ void k_proc_yield_blocked(void);
 //   load" -- which left ~22KB of headroom. That is enough for Scheme
 //   and the port, and not enough for `te`: te_load() mallocs the whole
 //   file (TEST.TXT and RFC20.TXT are both ~18KB) and then the line
-//   list on top. Measured 0024: malloc(18505) failed with 22076 bytes
+//   list on top. Measured: malloc(18505) failed with 22076 bytes
 //   between sbrk and sp -- newlib's sbrk request does not fit in the
 //   remainder even though the raw size looks like it should. (free)'s
 //   mem-free ~32MB is the kernel pool, not this process heap.

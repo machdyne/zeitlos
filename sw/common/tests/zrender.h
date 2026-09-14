@@ -124,7 +124,7 @@ bool z_gfx_visible_clip(int i, const z_clip_t *clip, z_clip_t *out) {
 	return true;
 }
 
-// -- the C1 paint session (zgfx.c's z_gfx_paint_*) --------------
+// -- the paint session (zgfx.c's z_gfx_paint_*) -----------------
 //
 // The same walk without the hardware: one pass per visible-region
 // rectangle intersected with the caller's clip, skipping the ones that

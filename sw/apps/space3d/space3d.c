@@ -1609,7 +1609,7 @@ static bool drain_messages(void) {
 
 		if (msg.subject == Z_WM_REDRAW) {
 			z_win_apply_redraw(&win, msg.obj.val.uint32);
-			// Animated content cannot use C2 damage (zwin.h): the
+			// Animated content cannot repaint by damage alone (zwin.h): the
 			// erase list is dropped below, so a frame confined to the
 			// newly exposed strip would leave the previous frame's
 			// lines standing everywhere else with nothing left to

@@ -2810,7 +2810,8 @@ int main(void) {
 			url_editing = false;
 			go_to_text(arg);
 		} else {
-			// After C3 the paint that used to run here before
+			// Now that a window paints only inside the region it has
+			// been given, the paint that used to run here before
 			// take() reached nothing: take() is what applies the
 			// first SET_CLIP. Repaint once the region is in.
 			repaint();

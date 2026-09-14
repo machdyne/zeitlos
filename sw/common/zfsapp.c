@@ -46,7 +46,7 @@ char *fs_mallocfile(char *filename) {
 
 	char *buf = malloc((size_t)sz + 1);
 	if (!buf) {
-		// 0024: te TEST.TXT / RFC20.TXT failed with "unable to load"
+		// Measured: te TEST.TXT / RFC20.TXT failed with "unable to load"
 		// while (free) reported 32 MB. That figure is the kernel
 		// pool; this malloc is the process heap, which ends at sp.
 		extern char _end;

@@ -310,7 +310,7 @@ static inline int rx_overrun(void)
  * a few hundred microseconds in which net held the CPU and did nothing
  * with it. On a round-robin scheduler that time comes straight out of
  * whatever is painting: measured at 80-120us per character cell of a
- * terminal redraw (0013R S0).
+ * terminal redraw.
  *
  * It does not have to. rtl/esp32_rxfifo.v raises rx_ready the instant
  * the first byte of the reply lands, rtl/sysctl.v edge-detects that
@@ -355,7 +355,7 @@ static int rx_getc_ticks(uint8_t *c, uint32_t ticks)
 /* 16550 TX FIFO is 16 bytes; THRE means the FIFO is empty, so fill it
  * in one go instead of waiting for empty after every byte. A drag
  * stripe is ~400-800 compressed bytes; this is the 968 cyc/byte half
- * of screen_poll (0018R). */
+ * of screen_poll. */
 #define UART1_TX_FIFO 16
 static void uart1_write(const uint8_t *p, unsigned n)
 {

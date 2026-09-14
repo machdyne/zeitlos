@@ -32,9 +32,10 @@ static bool wm_pid_resolved = false;
 // Last window this process created. z_launch_arg_take() used to
 // drain the mailbox with z_msg_wait(), which discards everything
 // that isn't Z_WM_ARG -- including the first SET_CLIP and REDRAW
-// wm sends right after WINDOW_CREATED. Before C3 that was invisible:
-// the app's own paint after take ran unrestricted. After C3 it
-// paints nothing, and because the region never arrives a later
+// wm sends right after WINDOW_CREATED. While an app drew wherever it
+// liked that was invisible: the app's own paint after take ran
+// unrestricted. Now that a window paints only inside the region it
+// has been given, it paints nothing, and because the region never arrives a later
 // raise of an already-front window does not resend it either, so
 // files/info/clock opened from the dock stay black. Applying those
 // messages to this window here is the layer's job, not each app's.
@@ -498,9 +499,9 @@ bool z_win_apply_clip(z_win_t *win, z_obj_t *obj) {
 		// the message. A busy app applies the narrowing LATE: the
 		// erase then lands after wm's repair, on pixels that already
 		// belong to the window that was raised, and blacks its fresh
-		// chrome. Rapid focus cycling makes that systematic (0027:
+		// chrome. Rapid focus cycling makes that systematic: measured,
 		// 100-150 ms clicks between three windows reliably killed
-		// the raised window's titlebar until it was raised again).
+		// the raised window's titlebar until it was raised again.
 		// clip_was is what is KNOWN GOOD on the glass, and a region
 		// change can only take away from it: the pixels we are
 		// giving up stop being ours, and the ones we are gaining
