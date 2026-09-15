@@ -93,7 +93,8 @@ void k_hid_wake_subscriber(void) {
 	hid_wake_subscriber();
 }
 
-#define HID_FIFO_SIZE 32
+// HID_FIFO_SIZE lives in hid.h now, so sh.c's `ic` can say how deep
+// the ring it is reporting on is.
 
 // packed raw event: bit0 = pressed(1)/released(0), bits 8:1 = HID
 // usage code, bits 16:9 = modifier byte at the time of the event.
@@ -126,13 +127,27 @@ void z_hid_init(void) {
 	hid_head = hid_tail = 0;
 }
 
+// The two halves of "did the ring lose anything?", for sh.c's `ic`
+// command. Both wrap freely; what matters is whether dropped moves
+// at all, and the gap between pushed and what the reader saw.
+static volatile uint32_t hid_pushed, hid_dropped;
+
 static void hid_push(uint32_t ev) {
 	uint8_t next = (hid_head + 1) % HID_FIFO_SIZE;
-	if (next == hid_tail) return; // FIFO full -- drop the event (same
-	                                // accepted tradeoff as uart.c's RX
-	                                // overflow handling)
+	if (next == hid_tail) {
+		hid_dropped++;
+		return; // FIFO full -- drop the event (same
+			// accepted tradeoff as uart.c's RX
+			// overflow handling), now counted.
+	}
 	hid_fifo[hid_head] = ev;
 	hid_head = next;
+	hid_pushed++;
+}
+
+void k_hid_stats(uint32_t *pushed, uint32_t *dropped) {
+	*pushed = hid_pushed;
+	*dropped = hid_dropped;
 }
 
 // 0x00 = "no key in this slot", 0x01 = "phantom state/rollover error"

@@ -27,6 +27,7 @@
 #include "fs/fatfs/ff.h"
 #include "fs/fatfs/diskio.h"	// disk_status() -- instrumentation, see below
 #include "msg.h"
+#include "hid.h"		// k_hid_stats(), HID_FIFO_SIZE -- the `ic` command
 #include "pidreg.h"
 #include "cfg.h"		// /zeitlos.cfg -- k_cfg_load() at boot, `cfg`
 #include "xmodem.h"
@@ -908,6 +909,30 @@ void sh(void) {
 		// DISPLAY KERNEL SNAPSHOT
 		else if (!strncmp(buffer, "ks", cmdlen)) {
 			k_kernel_dump();
+		}
+
+		// INPUT PATH COUNTERS -- where a keystroke or pointer packet
+		// dies between the wire and the app, when one does. The two
+		// kernel-side drop points print directly (the HID ring, and
+		// sends refused by a full app mailbox); net's half of the
+		// story (esp32link's crc errors, fifo overruns and the input
+		// events it actually dispatched) is asked for over a message
+		// and prints on this same console. All are running totals;
+		// what isolates a loss is which of them moves during a burst.
+		else if (!strncmp(buffer, "ic", cmdlen)) {
+			uint32_t hp, hd;
+			k_hid_stats(&hp, &hd);
+			printf("ic: hid ring: %lu pushed, %lu dropped (depth %d)\n",
+				(unsigned long)hp, (unsigned long)hd, HID_FIFO_SIZE);
+			printf("ic: mailboxes: %lu send(s) refused (full, depth %d)\n",
+				(unsigned long)k_msg_full_drops(), Z_MAILBOX_DEPTH);
+			uint32_t np = resolve_net_pid();
+			if (np) {
+				z_msg_new_send(np, Z_NET_DEBUG_DUMP, 0, z_obj_none());
+				printf("ic: net's counters follow (esp32link dump)\n");
+			} else {
+				printf("ic: net not running -- its counters unavailable\n");
+			}
 		}
 
 		// DISPLAY MEMORY POOL STATS (k_mem_alloc(), sw/os/mem.c) --
@@ -1796,6 +1821,7 @@ void sh_help(void) {
 	printf(" format            ERASE the entire sdcard\n");
 	printf(" pr                display the pid name registry\n");
 	printf(" ks                display a kernel snapshot\n");
+	printf(" ic                input path counters (hid ring, mailboxes, esp32link)\n");
 	printf(" cls               clear framebuffer\n");
 	printf(" ss                save a screenshot to ss.bin (see tools/ssconv.py)\n");
 	printf(" ls [path]         display list of files\n");

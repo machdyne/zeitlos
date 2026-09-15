@@ -988,7 +988,7 @@ void esp32link_debug_dump(void)
 	printf("esp32link: hello=%d(#%d) fw=%u rst=%u sta_ack=%d status=%u link=%d "
 		"rssi=%d phase=%d polls=%lu unanswered=%lu nops=%lu logs=%lu "
 		"data=%lu late=%lu crc_err=%lu dropped=%lu fifo=%lu ovr=%lu "
-		"bursts=%lu txout=%lu txlost=%lu ctl=0x%lx\n",
+		"bursts=%lu txout=%lu txlost=%lu input=%lu ctl=0x%lx\n",
 		hello_ok, hello_count, peer_fw, peer_rst, sta_acked, sta_status,
 		link_up, last_rssi, phase, (unsigned long)polls_sent,
 		(unsigned long)polls_unanswered, (unsigned long)nops_rx,
@@ -997,5 +997,5 @@ void esp32link_debug_dump(void)
 		(unsigned long)data_dropped, (unsigned long)rx_avail(),
 		(unsigned long)fifo_overruns, (unsigned long)bursts_rx,
 		(unsigned long)tx_outstanding, (unsigned long)tx_lost,
-		(unsigned long)reg_esp32_ctl);
+		(unsigned long)input_events, (unsigned long)reg_esp32_ctl);
 }

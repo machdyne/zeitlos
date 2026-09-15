@@ -5,7 +5,12 @@ void z_hid_init(void);
 void z_hid_irq0(void);
 void z_hid_irq1(void);
 
+#define HID_FIFO_SIZE 32
+
 int32_t k_hid_read_key(void);
+
+// ring totals, for sh.c's `ic` -- see hid.c's hid_push()
+void k_hid_stats(uint32_t *pushed, uint32_t *dropped);
 
 // --
 

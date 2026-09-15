@@ -347,6 +347,7 @@ typedef char net_subject_numbers_are_distinct[
 	 Z_SUBJ_DISTINCT2(Z_NET_SSH_PREPARE, Z_NET_DNS_RESOLVE) &&
 	 Z_SUBJ_DISTINCT2(Z_NET_SSH_PREPARE, Z_NET_DNS_RESOLVE_REPLY) &&
 	 Z_SUBJ_DISTINCT2(Z_NET_SSH_PREPARE, Z_NET_TFTP_PUT) &&
+	 Z_SUBJ_DISTINCT2(Z_NET_SSH_PREPARE, Z_NET_DEBUG_DUMP) &&
 	 Z_SUBJ_DISTINCT2(Z_NET_SSH_PREPARE, Z_STREAM_OPEN) &&
 	 Z_SUBJ_DISTINCT2(Z_NET_SSH_PREPARE_REPLY, Z_NET_NTP_SYNC) &&
 	 Z_SUBJ_DISTINCT2(Z_NET_SSH_PREPARE_REPLY, Z_NET_NTP_STATUS) &&
@@ -354,7 +355,12 @@ typedef char net_subject_numbers_are_distinct[
 	 Z_SUBJ_DISTINCT2(Z_NET_SSH_PREPARE_REPLY, Z_NET_TFTP_PUT_REPLY) &&
 	 Z_SUBJ_DISTINCT2(Z_NET_NTP_SYNC, Z_NET_DNS_RESOLVE) &&
 	 Z_SUBJ_DISTINCT2(Z_NET_NTP_STATUS, Z_NET_DNS_RESOLVE_REPLY) &&
-	 Z_SUBJ_DISTINCT2(Z_NET_TFTP_PUT, Z_NET_DNS_RESOLVE)) ? 1 : -1];
+	 Z_SUBJ_DISTINCT2(Z_NET_TFTP_PUT, Z_NET_DNS_RESOLVE) &&
+	 Z_SUBJ_DISTINCT2(Z_NET_DEBUG_DUMP, Z_NET_NTP_SYNC) &&
+	 Z_SUBJ_DISTINCT2(Z_NET_DEBUG_DUMP, Z_NET_NTP_STATUS) &&
+	 Z_SUBJ_DISTINCT2(Z_NET_DEBUG_DUMP, Z_NET_DNS_RESOLVE) &&
+	 Z_SUBJ_DISTINCT2(Z_NET_DEBUG_DUMP, Z_NET_TFTP_PUT) &&
+	 Z_SUBJ_DISTINCT2(Z_NET_DEBUG_DUMP, Z_STREAM_OPEN)) ? 1 : -1];
 
 static void print_ip(uint32_t ip) {
 	printf("%ld.%ld.%ld.%ld",
@@ -1573,6 +1579,9 @@ int main(void) {
 			else if (msg.subject == Z_NET_NTP_SYNC) handle_ntp_sync(&msg);
 #endif
 			else if (msg.subject == Z_NET_NTP_STATUS) handle_ntp_status(&msg);
+			// sh.c's `ic` command asks for the PHY's counters on the
+			// serial console; no reply, the dump is the answer.
+			else if (msg.subject == Z_NET_DEBUG_DUMP) phy_debug_dump();
 #if SSH_ENABLE
 			else if (msg.subject == Z_NET_SSH_PREPARE) handle_ssh_prepare(&msg);
 #endif
