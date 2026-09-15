@@ -126,6 +126,12 @@ z_obj_t *k_fs_list(z_obj_t *args);
 // mount, and the next write through it corrupts the card. Nothing
 // else in this system had a reason to ask, because nothing else
 // re-mounts.
+// Releases every handle owned by `pid`. Called from kernel.c's reap
+// path alongside k_pidreg_release_all() -- see the implementation for
+// why write handles are freed without being flushed, and for the
+// KNOWN LIMITATION in sw/common/zfs.h that this closes.
+void k_fs_release_all(uint32_t pid);
+
 int k_fs_open_count(void);
 
 // chunked file I/O -- see zfs.h's own comment for the full design

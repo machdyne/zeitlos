@@ -79,6 +79,7 @@ SUPPLEMENTAL = [
     ("apps/text", "sw/apps/text/text.bin"),
     ("apps/sheet", "sw/apps/sheet/sheet.bin"),
     ("apps/read", "sw/apps/read/read.bin"),
+    ("apps/ask", "sw/apps/ask/ask.bin"),
     ("apps/draw", "sw/apps/draw/draw.bin"),
     ("apps/info", "sw/apps/info/info.bin"),
     ("apps/calc", "sw/apps/calc/calc.bin"),
@@ -134,6 +135,29 @@ SELFHOST = [
 ]
 
 DIRS = ["apps", "audio", "docs", "ark", "user", "libz", "libz/include"]
+
+# -- ask packs --
+#
+# Shipped BY DEFAULT: a release carries `ask` and the data it needs,
+# because an app that boots to "no packs in /ask" looks broken rather
+# than incomplete.
+#
+# Each pack contributes /ark/<name> and /ask/<name>, copied from
+# tools/ask/out/<name>. Override or disable with the environment:
+#
+#     ZEITLOS_ASK_PACKS="zdocs arklite arkmed"    # add one
+#     ZEITLOS_ASK_PACKS=                          # ship none
+#
+# A release now DEPENDS on those packs being built, which is a real
+# coupling and is why the check happens in preflight rather than
+# halfway through copying. `zdocs` builds from this tree alone in
+# seconds; `arklite` needs the ark clone, which lib/fetch.py caches
+# after the first time.
+#
+# SIZES: zdocs 2.4MB, arklite ~22MB, arkmed hundreds. The image is
+# SIZE_MB and the preflight will say so before formatting anything.
+ASK_OUT = "tools/ask/out"
+ASK_PACKS_DEFAULT = ("zdocs", "arklite")
 
 # -- the zcc runtime, under libz/ --
 #
@@ -323,6 +347,42 @@ def check_against_script(root):
     return problems
 
 
+def ask_packs_requested():
+    """Which packs to ship.
+
+    $ZEITLOS_ASK_PACKS overrides the default; setting it EMPTY ships
+    none, which is distinct from not setting it at all.
+    """
+    raw = os.environ.get("ZEITLOS_ASK_PACKS")
+    if raw is None:
+        return list(ASK_PACKS_DEFAULT)
+    return [p for p in raw.replace(",", " ").split() if p]
+
+
+def ask_pack_files(root, name):
+    """Every file of pack `name`, as (card_path, source_path).
+
+    Raises if the pack is not built, rather than shipping a release
+    with an app and no data -- which boots to "no packs in /ask" and
+    looks like the app is broken.
+    """
+    base = os.path.join(root, ASK_OUT, name)
+    out = []
+    for sub in ("ark/" + name, "ask/" + name):
+        d = os.path.join(base, sub)
+        if not os.path.isdir(d):
+            raise FatError(
+                "ask pack '%s' was requested but %s does not exist.\n"
+                "  Build it first:  ./tools/ask/ask build "
+                "tools/ask/dist/%s.spec" % (name, d, name))
+        for dp, _dn, fn in os.walk(d):
+            for f in sorted(fn):
+                src = os.path.join(dp, f)
+                rel = os.path.relpath(src, base).replace(os.sep, "/")
+                out.append(("/" + rel, src))
+    return sorted(out)
+
+
 def build(root, out_path, ark_dir=None, verbose=True):
     """Build the SD card image. Returns a list of (name, size) shipped."""
     preflight()
@@ -385,6 +445,37 @@ def build(root, out_path, ark_dir=None, verbose=True):
     if not ark:
         raise FatError("%s: no .md files found" % ark_dir)
 
+    # -- ask packs: resolve and size them BEFORE formatting --
+    #
+    # Both failure modes here are ones this file already warns about
+    # for apps: a missing input found after the image is half written,
+    # and running out of room "halfway through a 64MB image, with
+    # mcopy's own silence for an error message".
+    pack_files = []
+    for packname in ask_packs_requested():
+        pack_files.append((packname, ask_pack_files(root, packname)))
+
+    pack_bytes = sum(os.path.getsize(src)
+                     for _n, fs in pack_files for _c, src in fs)
+    other_bytes = 0
+    for _n, rel in apps:
+        other_bytes += os.path.getsize(os.path.join(root, rel))
+    # Rough: the rest (docs, libz, headers, audio, ark scroll) is a few
+    # megabytes and the slack below covers it.
+    need = pack_bytes + other_bytes
+    room = SIZE_MB * 1024 * 1024
+    if need > room * 0.85:
+        raise FatError(
+            "the card image has no room for this.\n"
+            "  %.1f MB of apps and ask packs against a %d MB image.\n"
+            "  Raise SIZE_MB, or ship fewer packs:\n"
+            "      ZEITLOS_ASK_PACKS=zdocs ./release/zrelease ...\n"
+            "  Packs: %s"
+            % (need / 1e6, SIZE_MB,
+               ", ".join("%s %.1fMB"
+                         % (n, sum(os.path.getsize(s) for _c, s in fs) / 1e6)
+                         for n, fs in pack_files) or "(none)"))
+
     if os.path.exists(out_path):
         os.unlink(out_path)
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
@@ -405,6 +496,19 @@ def build(root, out_path, ark_dir=None, verbose=True):
         _run(["mcopy", "-i", out_path, src_abs, "::" + dest])
         shipped.append((dest.lstrip("/"), os.path.getsize(src_abs)))
 
+    made_dirs = set(DIRS)
+
+    def mkdir_p(path):
+        """mmd each missing level. DIRS covers the fixed tree; an ask
+        pack is deeper and its shape depends on the recipe."""
+        parts = path.strip("/").split("/")
+        for i in range(1, len(parts) + 1):
+            sub = "/".join(parts[:i])
+            if sub in made_dirs:
+                continue
+            _run(["mmd", "-i", out_path, "::/%s" % sub])
+            made_dirs.add(sub)
+
     for name, rel in apps:
         # 8.3 is not advice: FatFs here is FF_USE_LFN 0
         # (sw/os/fs/fatfs/ffconf.h), so a name longer than eight
@@ -424,6 +528,19 @@ def build(root, out_path, ark_dir=None, verbose=True):
         copy(os.path.join(root, "docs", d), "/docs/" + d)
     for a in ark:
         copy(os.path.join(ark_dir, a), "/ark/" + a)
+
+    # -- ask packs (resolved in preflight above) --
+    for packname, files in pack_files:
+        total = 0
+        for card, src in files:
+            # The tree is deeper than DIRS covers: /ask/<pack>/ and
+            # /ark/<pack>/<dataset>/ plus any split subdirectories.
+            mkdir_p(card.rsplit("/", 1)[0])
+            copy(src, card)
+            total += os.path.getsize(src)
+        if verbose:
+            print("  ask pack %-10s %5d files  %6.1f MB"
+                  % (packname, len(files), total / 1e6))
 
     # -- the zcc runtime --
     for name, rel in LIBZ_FILES + LIBZ_EXTRA + EXAMPLES:

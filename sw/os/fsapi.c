@@ -174,6 +174,61 @@ static int z_fs_alloc_handle(void) {
 	return -1;
 }
 
+/*
+ * Releases every handle owned by `pid`. Called from kernel.c's reap
+ * path, alongside k_pidreg_release_all().
+ *
+ * -- why this now exists --
+ *
+ * sw/common/zfs.h has carried this as a KNOWN LIMITATION since the
+ * handle table was written: "a handle isn't released if its owning
+ * process exits (crashes, or is killed) without closing it -- there's
+ * no process-exit hook wired up to sweep abandoned handles ... worth a
+ * real fix if it proves to matter in practice."
+ *
+ * It proved to matter. sw/apps/ask holds a handle open across slices
+ * of a query (aidx.c's fine.zfv), and every app with
+ * Z_WIN_FLAG_CLOSE_KILLS_OWNER dies by k_proc_kill() without running
+ * any cleanup at all. Eight relaunches of one app exhausted the table,
+ * and the symptom was an app reporting that file SEEKING was broken --
+ * because the failure surfaced at the first open after the table
+ * filled, several layers from the cause.
+ *
+ * -- why read handles are closed and write handles are not --
+ *
+ * THIS RUNS IN THE INTERRUPT PATH. kernel.c's own comment right above
+ * the call site is explicit that nothing here may wait on another
+ * interrupt to make progress.
+ *
+ * f_close() on a handle with no dirty state does no I/O: FatFs's
+ * f_sync() returns immediately unless FA_MODIFIED is set. So a read
+ * handle is closed properly and costs nothing.
+ *
+ * A WRITE handle with unflushed data would need a real disk write, and
+ * doing that from here is exactly the hazard that comment describes.
+ * Its slot is freed without the flush -- the data is lost either way,
+ * because the process that was writing it is already dead, and losing
+ * it is better than hanging the scheduler. The FIL is abandoned rather
+ * than closed, which leaves FatFs's volume state no worse than the
+ * crash already did.
+ */
+void k_fs_release_all(uint32_t pid) {
+
+	for (int i = 0; i < Z_FS_MAX_OPEN; i++) {
+
+		if (!z_fs_handles[i].used) continue;
+		if (z_fs_handles[i].owner_pid != pid) continue;
+
+		if (!(z_fs_handles[i].fil.flag & FA_WRITE))
+			f_close(&z_fs_handles[i].fil);
+
+		z_fs_handles[i].used = 0;
+		z_fs_handles[i].owner_pid = 0;
+
+	}
+
+}
+
 int k_fs_open_count(void) {
 
 	int n = 0;

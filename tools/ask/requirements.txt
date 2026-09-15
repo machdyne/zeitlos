@@ -1,0 +1,42 @@
+# Zeitlos ask -- host-side build dependencies.
+#
+#     python3 -m venv .venv && . .venv/bin/activate
+#     pip install -r tools/ask/requirements.txt
+#
+# WHAT IS AND IS NOT REQUIRED
+#
+# `ask sources`, `ask ingest` and the whole corpus path -- adapters,
+# chunking, the card tree, offset verification, index.md generation,
+# BM25 and the packed lexicon -- need NOTHING beyond the Python
+# standard library and git. That is deliberate: the parts that decide
+# whether a card is correct should not depend on a scientific Python
+# stack being installable on whatever machine you are at.
+#
+# numpy and scikit-learn are needed for the DENSE half: `ask build`
+# (vector packing), `ask eval` and `ask query`.
+
+numpy>=1.24
+scikit-learn>=1.1
+
+# Only for `images =` in a recipe. The Factbook's maps and flags are
+# transcoded on the host because sw/common/zimg.h compiles PNG OUT by
+# default (Z_IMG_HAVE_PNG is 0), so a card full of PNGs would give
+# "This format is not built in" on every one -- and fixing that on the
+# device to accommodate a host-side choice is the wrong direction.
+#
+# Drop the `images =` line and this is not needed; the text corpus
+# does not use it.
+Pillow>=9.0
+
+# -- training (not required to build a shippable pack) --
+#
+# The `bow` encoder ships today and needs no training, so torch is NOT
+# a build dependency and is deliberately not pinned here -- the right
+# build (CUDA version, ROCm, CPU-only) depends on the machine, and a
+# blanket `torch` line in a requirements file is how people end up
+# downloading two gigabytes of CPU wheels onto a box with a GPU.
+#
+# Install it yourself from https://pytorch.org for the `torch` encoder
+# backend. See docs/ask_app.md, "Status".
+#
+# torch>=2.0

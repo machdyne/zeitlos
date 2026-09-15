@@ -1,0 +1,1339 @@
+#!/usr/bin/env python3
+#
+# Zeitlos ask -- the host-side distribution builder.
+#
+#   ./tools/ask/ask sources                     list source adapters
+#   ./tools/ask/ask ingest  dist/minimal.spec   read sources, report
+#   ./tools/ask/ask build   dist/minimal.spec   full build into out/
+#   ./tools/ask/ask eval    dist/minimal.spec   recall against the gold set
+#   ./tools/ask/ask query   dist/minimal.spec "how do I purify water"
+#
+# -- why build and train and release are three separate things --
+#
+# A distribution is not part of a Zeitlos release and must not be tied
+# to one. Releases go out monthly; a corpus is rebuilt when the corpus
+# changes, and a model is retrained when there is a reason to, which
+# may be once a year. So this tool produces a self-contained directory
+# tree that is unzipped onto a card, carries its own version, and is
+# checked at load time against nothing but its own dataset id.
+#
+# release/ picks up a built distribution IF ONE IS PRESENT and ships
+# without it otherwise. See docs/ask_app.md, "Shipping".
+#
+# -- reproducibility --
+#
+# Same recipe plus same inputs produces the same bytes, so two builds
+# can be diffed and a distribution can be rebuilt from its manifest
+# years later. Everything that could introduce nondeterminism is
+# pinned: source order is sorted, card numbering is sequential in
+# sorted order, and no timestamp goes anywhere except the manifest's
+# own `built` field (which is excluded from the build hash).
+#
+
+import argparse
+import hashlib
+import json
+import os
+import shutil
+import sys
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+
+from lib import cardfs, embed, evalset, fetch, images, lexicon, pack, segment, source, spec  # noqa: E402
+from lib import sources as _sources  # noqa: E402,F401
+
+
+def _resolve(base, p):
+    return p if os.path.isabs(p) else os.path.normpath(os.path.join(base, p))
+
+
+def fetch_root(sp):
+    """Where a pack's downloaded corpus lands.
+
+    Under the cache, keyed by pack name, and deliberately NOT inside
+    the ark checkout: lib/fetch.py manages that clone and may
+    re-checkout a pinned ref, which would delete or conflict with
+    anything written there. It is also not inside out/, which is the
+    card tree byte for byte.
+    """
+    return os.path.join(fetch.cache_root(HERE), "dl",
+                        sp.get("pack", sp.get("name", sp.name)))
+
+
+def run_fetches(sp, repos, force=False):
+    """Execute every `fetch =` in a recipe. Returns a provenance list."""
+    root = fetch_root(sp)
+    got = []
+    for step in sp.fetches():
+        dest = os.path.join(root, step["dest"])
+        # "no" never unpacks, "yes" always does, "auto" (the default)
+        # decides by looking at what actually arrived.
+        #
+        # This used to be `step["unpack"] != "no"`, which made "auto"
+        # mean "always" -- so a 13.5MB plain text file went to
+        # tarfile.open() and came back with "not a gzip file / not a
+        # bzip2 file / not an lzma file / invalid header", which says
+        # nothing about the real problem.
+        mode = step["unpack"]
+        unpack = (mode != "no")
+
+        if step["lfs"]:
+            # An LFS object inside one of the recipe's repos.
+            reponame, _, rel = step["lfs"].partition("/")
+            if reponame not in repos:
+                raise SystemExit("fetch lfs=%s names no `repo = %s <url>`"
+                                 % (step["lfs"], reponame))
+            src = os.path.join(repos[reponame]["path"], rel)
+            if fetch.is_lfs_pointer(src):
+                fetch.lfs_pull(repos[reponame]["path"])
+            try:
+                fetch.check_lfs(src)
+            except fetch.FetchError as e:
+                raise SystemExit(str(e))
+            if unpack:
+                # Stamped by the source's size+mtime, so a re-run is
+                # free but a repo that moved to a new ref re-unpacks.
+                # Wikipedia is 137MB; doing it on every build would
+                # add minutes to a command people run repeatedly.
+                st = os.stat(src)
+                tag = "%d:%d" % (st.st_size, int(st.st_mtime))
+                stamp = os.path.join(dest, ".unpacked")
+                if not (os.path.exists(stamp)
+                        and open(stamp).read().strip() == tag):
+                    fetch.unpack(src, dest, step["strip"])
+                    os.makedirs(dest, exist_ok=True)
+                    open(stamp, "w").write(tag + "\n")
+                else:
+                    print("  already unpacked %s" % step["dest"])
+            else:
+                os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
+                shutil.copyfile(src, dest)
+            got.append({"dest": step["dest"], "from": "lfs:" + step["lfs"]})
+            continue
+
+        # A plain URL. Archives are downloaded beside the cache and
+        # expanded into dest; everything else lands at dest directly.
+        urls = [step["url"]]
+        if step["alt"]:
+            urls.append(step["alt"])
+
+        if unpack:
+            arc = os.path.join(root, "_archives",
+                               os.path.basename(urls[0].split("?")[0]))
+            stamp = dest + "/.unpacked"
+            used, fresh = None, False
+            last = None
+            for ui, u in enumerate(urls):
+                try:
+                    _p, fresh = fetch.download(u, arc, step["sha256"],
+                                               force=force)
+                    used = u
+                    break
+                except fetch.FetchError as e:
+                    last = e
+                    if ui + 1 < len(urls):
+                        print("  %s did not work, trying the alternate" % u)
+            if used is None:
+                raise SystemExit("fetch failed: %s" % last)
+
+            kind = fetch.sniff(arc)
+            if mode == "auto" and kind in ("plain", "html"):
+                if kind == "html":
+                    raise SystemExit(
+                        "fetch failed: %s returned an HTML page, not a "
+                        "file.\n  Often a 404 served with a 200. Check the "
+                        "URL." % used)
+                # Not an archive after all. Place it as a plain file
+                # rather than failing: `unpack=auto` is supposed to mean
+                # "work it out", and a recipe that names a .txt should
+                # not have to also say unpack=no.
+                target = dest
+                if not os.path.splitext(os.path.basename(dest))[1]:
+                    target = os.path.join(
+                        dest, os.path.basename(urls[0].split("?")[0]))
+                os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
+                shutil.copyfile(arc, target)
+                print("  %s is not an archive; placed at %s"
+                      % (os.path.basename(arc),
+                         os.path.relpath(target, root)))
+            elif fresh or not os.path.exists(stamp):
+                try:
+                    fetch.unpack(arc, dest, step["strip"])
+                except fetch.FetchError as e:
+                    raise SystemExit("fetch failed: %s" % e)
+                open(stamp, "w").write(used + "\n")
+            else:
+                print("  already unpacked %s" % step["dest"])
+            got.append({"dest": step["dest"], "from": used})
+        else:
+            used, last = None, None
+            for ui, u in enumerate(urls):
+                try:
+                    fetch.download(u, dest, step["sha256"], force=force)
+                    used = u
+                    break
+                except fetch.FetchError as e:
+                    last = e
+                    if ui + 1 < len(urls):
+                        print("  %s did not work, trying the alternate" % u)
+            if used is None:
+                raise SystemExit("fetch failed: %s" % last)
+            # A dead URL can answer 200 with an error page. Catching it
+            # here means the failure names the URL, instead of turning
+            # up later as an adapter that loaded zero documents.
+            if fetch.sniff(dest) == "html":
+                os.remove(dest)
+                raise SystemExit(
+                    "fetch failed: %s returned an HTML page, not a file.\n"
+                    "  Often a 404 served with a 200. Check the URL." % used)
+            got.append({"dest": step["dest"], "from": used})
+    return got
+
+
+def load_recipe(path, update=False):
+    sp = spec.Spec(path)
+    base = os.path.dirname(os.path.abspath(path))
+
+    # Repositories the recipe names get cloned on demand. No
+    # submodules: the corpora are large, they move on their own
+    # schedule, and most people building Zeitlos never build a
+    # distribution at all.
+    repos = sp.repos()
+    root = fetch.cache_root(HERE)
+    for name, r in repos.items():
+        r["path"], r["commit"] = fetch.ensure(
+            name, r["url"], r["ref"], root=root, update=update)
+
+    # `@dl/...` resolves inside this pack's downloaded tree, which is
+    # populated by `ask fetch` and is not a git checkout.
+    repos_and_dl = dict(repos)
+    repos_and_dl["dl"] = {"path": fetch_root(sp)}
+
+    docs = []
+    used = []
+    for adapter, loc, opts in sp.sources():
+        full = fetch.resolve(loc, repos_and_dl, base)
+        if not os.path.exists(full):
+            hint = ("  A `@name/...` location resolves inside the repo "
+                    "named by a `repo = name <url>` line; anything else "
+                    "resolves against the recipe file.")
+            # The common case by far, once a recipe reaches Ark Medium:
+            # the payloads are fetched by ark's own build, not by a
+            # clone. Say so instead of leaving somebody to work it out.
+            if loc.startswith("@dl/"):
+                hint = ("  This source comes from a `fetch =` line and has "
+                        "not been downloaded yet:\n\n"
+                        "      ./tools/ask/ask fetch %s\n\n"
+                        "  then build again." % path)
+            raise SystemExit(
+                "source `%s` points at %s, which does not exist.\n%s"
+                % (adapter, full, hint))
+        try:
+            got = source.load(adapter, full, opts)
+        except ValueError as e:
+            # An adapter's complaint is a recipe problem, not a bug.
+            raise SystemExit("source `%s` (%s):\n  %s" % (adapter, loc, e))
+        docs.extend(got)
+        used.append({"adapter": adapter, "path": loc, "opts": opts,
+                     "docs": len(got),
+                     "bytes": sum(len(d.text) for d in got)})
+    # Sorted by (source, key) everywhere, so the build is deterministic
+    # regardless of the order sources were listed or a directory walk
+    # happened to return.
+    docs.sort(key=lambda d: (d.source, d.key))
+    return sp, docs, used, repos
+
+
+def build_hash(sp, docs):
+    """Identity of this distribution's CONTENT.
+
+    Over the recipe and every document's normalised bytes -- not over
+    the output files, and not over the clock. Two builds of the same
+    corpus are the same distribution even if they happened a year
+    apart, and a single changed article makes a different one.
+    """
+    h = hashlib.sha256()
+    h.update(open(sp.path, "rb").read())
+    for d in docs:
+        h.update(d.source.encode()); h.update(b"\0")
+        h.update(d.key.encode()); h.update(b"\0")
+        h.update(d.text.encode("utf-8"))
+    return h.hexdigest()
+
+
+def chunk_and_index(docs, sp):
+    target = sp.getint("chunk_chars", segment.TARGET_CHARS)
+    chunks = segment.segment_all(docs, target=target)
+    texts = [c.embed_text(docs[c.doc].title) for c in chunks]
+    return chunks, texts
+
+
+def pairs_file(sp):
+    """Where `pairs = import` reads questions from.
+
+    Defaults to the path `ask genq` writes, so a recipe does not have
+    to carry an absolute path that is correct on exactly one machine.
+    An explicit `pairs_file =` still wins.
+    """
+    explicit = sp.get("pairs_file")
+    if explicit:
+        return explicit if os.path.isabs(explicit) else _resolve(HERE, explicit)
+    return os.path.join(fetch.cache_root(HERE), "questions",
+                        "%s.jsonl" % sp.get("pack", sp.get("name", sp.name)))
+
+
+def hint_unused_questions(sp):
+    """Say so when generated questions exist but are not being used.
+
+    Generating them takes hours; the recipe edit that puts them to work
+    is three lines, and the only sign it was missed is the word `bow`
+    in a header line nobody reads. This is exactly the failure that
+    makes someone conclude training does not help.
+    """
+    path = pairs_file(sp)
+    if not os.path.exists(path):
+        return
+    uses_import = "import" in sp.get("pairs", "")
+    trained = sp.get("encoder", "bow") == "trained"
+    if uses_import and trained:
+        return
+
+    n = 0
+    for line in open(path, encoding="utf-8"):
+        if '"q"' in line:
+            n += 1
+    print()
+    print("  *** %d generated questions exist and are NOT being used ***"
+          % n)
+    print("      %s" % path)
+    print()
+    if not trained:
+        print("      This recipe has `encoder = %s`; training applies to"
+              % sp.get("encoder", "bow"))
+        print("      `encoder = trained`.")
+    print("      Add to %s:" % sp.path)
+    print()
+    print("          encoder = trained")
+    print("          pairs   = ict,title,import")
+    print()
+    print("      (pairs_file defaults to the path above; set it only to")
+    print("       point somewhere else.)")
+    print()
+    print("      then:  ./tools/ask/ask train %s" % sp.path)
+
+
+def enc_cache_path(sp):
+    return os.path.join(fetch.cache_root(HERE), "enc",
+                        "%s.npz" % sp.get("pack", sp.get("name", sp.name)))
+
+
+def make_encoder(sp, texts, docs=None, chunks=None, lx=None):
+    name = sp.get("encoder", "bow")
+    dim = sp.getint("fine_dim", 128)
+    vocab = sp.getint("vocab", 4096)
+    if name not in embed.BACKENDS:
+        raise SystemExit("unknown encoder `%s` (have: %s)"
+                         % (name, ", ".join(sorted(embed.BACKENDS))))
+    enc = embed.BACKENDS[name](dim=dim, vocab=vocab)
+
+    if name == "trained":
+        # Trained weights are CACHED, not retrained on every command.
+        # A build, an eval and a query must all use the same encoder or
+        # they are measuring different systems, and retraining inside
+        # each would be both slow and non-deterministic across them.
+        cache = enc_cache_path(sp)
+        if os.path.exists(cache):
+            enc.load_cache(cache)
+            return enc
+        if docs is None:
+            # eval/query call this without the extras; fall back to the
+            # untrained init rather than silently measuring something
+            # other than what `ask build` writes.
+            raise SystemExit(
+                "no trained encoder yet.\n\n"
+                "      ./tools/ask/ask train <recipe>\n\n"
+                "  Training is a separate step on purpose: it is cached, "
+                "so a build, an\n  eval and a query all use the SAME "
+                "weights. Retraining inside each\n  would be slow and "
+                "would make them measure different systems.\n\n"
+                "  Set `encoder = bow` in the recipe for a build with no "
+                "training step.")
+        opts = {k[6:]: v for k, v in sp.values.items()
+                if k.startswith("train_")}
+        opts.update({"pairs": sp.get("pairs", "ict,title"),
+                     "pairs_file": pairs_file(sp)})
+        enc.fit_trained(docs, chunks, texts, lx, opts)
+    else:
+        enc.fit(texts)
+    return enc
+
+
+# -- commands ----------------------------------------------------------
+
+def cmd_sources(args):
+    print("source adapters:")
+    for name in sorted(source.REGISTRY):
+        print("  %s" % name)
+    print("\nencoders:")
+    for name in sorted(embed.BACKENDS):
+        cls = embed.BACKENDS[name]
+        print("  %-8s %s" % (name, "deployable" if cls.deployable
+                             else "host-only (evaluation baseline)"))
+    return 0
+
+
+def cmd_fetch(args):
+    sp = spec.Spec(args.recipe)
+    repos = sp.repos()
+    root = fetch.cache_root(HERE)
+    for name, r in repos.items():
+        r["path"], r["commit"] = fetch.ensure(name, r["url"], r["ref"],
+                                              root=root, update=args.update)
+    steps = sp.fetches()
+    if not steps:
+        print("%s has no `fetch =` lines -- nothing to download."
+              % sp.path)
+        return 0
+    print("fetching %d item%s for %s -> %s"
+          % (len(steps), "" if len(steps) == 1 else "s",
+             sp.get("name", sp.name), fetch_root(sp)))
+    try:
+        run_fetches(sp, repos, force=args.force)
+    except fetch.FetchError as e:
+        raise SystemExit("fetch failed: %s" % e)
+    total = 0
+    for dp, _dn, fn in os.walk(fetch_root(sp)):
+        if "_archives" in dp:
+            continue
+        for f in fn:
+            total += os.path.getsize(os.path.join(dp, f))
+    print("\n  corpus on disk: %.1f MB" % (total / 1e6))
+    print("  next: ./tools/ask/ask build %s" % args.recipe)
+    return 0
+
+
+def cmd_ingest(args):
+    sp, docs, used, repos = load_recipe(args.recipe, getattr(args, 'update', False))
+    total = sum(len(d.text) for d in docs)
+    print("recipe   %s" % sp.path)
+    print("name     %s %s" % (sp.get("name", sp.name),
+                              sp.get("version", "(no version)")))
+    for name, r in sorted(repos.items()):
+        pin = r["ref"] or "(unpinned)"
+        print("repo     %-8s %s  %s  %s"
+              % (name, pin, (r["commit"] or "?")[:12], r["url"]))
+    if any(not r["ref"] for r in repos.values()):
+        print("         ^ unpinned repos track the default branch, so this "
+              "recipe\n           builds a different distribution whenever "
+              "upstream moves.\n           Add ref=<commit> before shipping.")
+    print()
+    for u in used:
+        print("  %-9s %-40s %5d docs  %8.2f MB"
+              % (u["adapter"], u["path"], u["docs"], u["bytes"] / 1e6))
+    print()
+    print("  %-50s %5d docs  %8.2f MB" % ("TOTAL", len(docs), total / 1e6))
+    chunks, _texts = chunk_and_index(docs, sp)
+    print("  %-50s %5d chunks" % ("", len(chunks)))
+
+    # Project device residency here, where it costs a chunking pass
+    # rather than a full build. For arkmed that is the difference
+    # between finding out now and finding out after ~400MB of
+    # downloads, a build, and a card write.
+    coarse_dim = sp.getint("coarse_dim", 32)
+    vocab = sp.getint("vocab", 4096)
+    fine_dim = sp.getint("fine_dim", 128)
+    coarse = len(chunks) * coarse_dim
+    # vocab x dim int8, plus u16 idf, u32 offsets and the term pool;
+    # the pool averages ~9 bytes a term in every pack built so far.
+    enc = vocab * (fine_dim + 2 + 4 + 9)
+    print()
+    print("  projected resident: %.2f MB  (coarse %.2f + encoder %.2f)"
+          % ((coarse + enc) / 1e6, coarse / 1e6, enc / 1e6))
+    check_tier(coarse + enc, coarse_dim, len(chunks))
+    print("build hash %s" % build_hash(sp, docs)[:16])
+    return 0
+
+
+def _need_dense(what):
+    try:
+        import numpy  # noqa: F401
+        import sklearn  # noqa: F401
+    except ImportError as e:
+        raise SystemExit(
+            "%s needs numpy and scikit-learn (%s).\n"
+            "  pip install -r tools/ask/requirements.txt\n"
+            "  `ask sources` and `ask ingest` do not need them." % (what, e))
+
+
+# sw/os/kernel.h's tiers. An app's heap AND stack share one allocation,
+# so the usable heap is the tier minus whatever the stack reaches.
+KERNEL_TIERS = [
+    ("LARGE", 64 * 1024),
+    ("BIG", 1024 * 1024),
+    ("HUGE", 4 * 1024 * 1024),
+]
+# Rough stack headroom to leave inside the tier. `ask` recurses
+# nowhere and its deepest frame is the query state machine, but the
+# card and message paths underneath it are not free.
+TIER_HEADROOM = 96 * 1024
+
+
+def check_tier(resident, coarse_dim, nchunks):
+    """Warn at BUILD time if a pack will not fit a kernel tier.
+
+    The device discovers this as `out of memory -- needs HUGE tier`
+    after copying gigabytes onto a card, which is the expensive place
+    to find out.
+    """
+    need = resident + TIER_HEADROOM
+    fits = [n for n, sz in KERNEL_TIERS if need <= sz]
+    if fits:
+        print("  fits kernel tier:   %s (needs %.2f MB incl. stack "
+              "headroom)" % (fits[0], need / 1e6))
+        return
+
+    biggest = KERNEL_TIERS[-1]
+    print()
+    print("  *** THIS PACK DOES NOT FIT ANY KERNEL TIER ***")
+    print("      needs %.2f MB; the largest (%s) is %.2f MB."
+          % (need / 1e6, biggest[0], biggest[1] / 1e6))
+    print()
+    print("      Residency is coarse_dim bytes per chunk plus one")
+    print("      encoder: %d chunks x %d = %.2f MB."
+          % (nchunks, coarse_dim, nchunks * coarse_dim / 1e6))
+    print()
+    print("      It scales LINEARLY with the corpus, so no tier bounds")
+    print("      it -- a bigger tier buys a constant factor against a")
+    print("      term that grows. The levers, cheapest first:")
+    print("        * coarse_dim = 16 halves both the memory and the")
+    print("          scan. Measure recall first: `ask eval` reports")
+    print("          how deep the coarse shortlist has to be, and a")
+    print("          narrower vector needs a deeper one.")
+    print("        * split the corpus into two packs and install one.")
+    print("        * a clustered coarse index (centroids resident,")
+    print("          per-cluster vectors on the card). That is the")
+    print("          only option that stops this growing, and it is")
+    print("          not built -- see docs/ask_app.md.")
+    print()
+
+
+def cmd_genq(args):
+    """Generate training questions with a local LLM (ollama)."""
+    from lib import genq
+
+    sp, docs, _used, _repos = load_recipe(args.recipe)
+    chunks, _texts = chunk_and_index(docs, sp)
+    out = args.out or pairs_file(sp)
+
+    print("generating questions for %s -> %s"
+          % (sp.get("name", sp.name), out))
+    model = args.model or sp.get("genq_model", "llama3.2:latest")
+    print("  model %s at %s" % (model, args.host))
+    if args.compare:
+        models = [m.strip() for m in args.compare.split(",") if m.strip()]
+        try:
+            genq.compare(docs, chunks, models, args.host, n=args.n,
+                         limit=args.limit or 20)
+        except genq.GenError as e:
+            raise SystemExit("genq: %s" % e)
+        return 0
+    if args.probe:
+        try:
+            return genq.probe(docs, chunks, model, args.host, n=args.n)
+        except genq.GenError as e:
+            raise SystemExit("genq: %s" % e)
+    try:
+        n = genq.generate(docs, chunks, out, model, args.host,
+                          n=args.n, limit=args.limit,
+                          temperature=args.temperature)
+    except genq.GenError as e:
+        raise SystemExit("genq: %s" % e)
+
+    print("\n  %d questions written" % n)
+    print("  add to the recipe:")
+    print("      encoder = trained")
+    print("      pairs   = ict,title,import")
+    print("  then: ./tools/ask/ask train %s" % args.recipe)
+    return 0
+
+
+def _train_once(sp, docs, chunks, texts, lx, epochs, quiet=False):
+    import numpy as np
+    enc = embed.BACKENDS["trained"](dim=sp.getint("fine_dim", 128),
+                                    vocab=sp.getint("vocab", 4096))
+    opts = {k[6:]: v for k, v in sp.values.items() if k.startswith("train_")}
+    opts.update({"pairs": sp.get("pairs", "ict,title"),
+                 "pairs_file": pairs_file(sp)})
+    if epochs is not None:
+        opts["epochs"] = epochs
+    enc.fit_trained(docs, chunks, texts, lx, opts,
+                    log=(lambda *a: None) if quiet else print)
+    cache = enc_cache_path(sp)
+    os.makedirs(os.path.dirname(cache), exist_ok=True)
+    exp = enc.export()
+    np.savez(cache, dim=exp["dim"], vectors=exp["vectors"], idf=exp["idf"],
+             terms=np.array(exp["terms"], dtype=object), allow_pickle=True)
+    return cache
+
+
+def cmd_train(args):
+    """Train the encoder and cache it. `build` then picks it up."""
+    _need_dense("train")
+    import numpy as np
+
+    sp, docs, _used, _repos = load_recipe(args.recipe)
+    if sp.get("encoder", "bow") != "trained":
+        raise SystemExit(
+            "%s has `encoder = %s`. Training applies to `encoder = "
+            "trained`,\n  which is the same arithmetic the device already "
+            "runs with learned\n  weights instead of an SVD -- so no "
+            "device change and no format change."
+            % (sp.path, sp.get("encoder", "bow")))
+
+    chunks, texts = chunk_and_index(docs, sp)
+    print("corpus: %d documents, %d chunks" % (len(docs), len(chunks)))
+    lx = lexicon.build(texts)
+
+    if args.sweep:
+        # Train at several epoch counts and EVALUATE each.
+        #
+        # Epochs is the one hyperparameter that has repeatedly mattered
+        # here and it does not have a safe default: too few and nothing
+        # is learned, too many and the encoder overfits the training
+        # pairs and gold-set recall FALLS BELOW the untrained baseline.
+        # A run is under a minute, so measuring beats guessing.
+        gold = evalset.load(args.gold or _resolve(HERE, "eval/gold.txt"))
+        doc_sources = [d.source for d in docs]
+        counts = [int(x) for x in args.sweep.split(",") if x.strip()]
+
+        rel_cache = [evalset.relevant_set(g, chunks, texts, doc_sources)
+                     for g in gold]
+
+        def rows_for():
+            ranked = _rank_all(sp, docs, chunks, texts, [g.q for g in gold])
+            return [(g.q, len(rel_cache[i]),
+                     {m: evalset.first_hit(ranked[m][g.q], rel_cache[i])
+                      for m in ("dense", "hybrid")})
+                    for i, g in enumerate(gold)]
+
+        # The untrained encoder, measured the same way, as the thing
+        # every trained run has to beat. Without it a sweep only says
+        # which epoch count is best among epoch counts -- not whether
+        # training helped at all.
+        was = sp.values.get("encoder")
+        sp.values["encoder"] = "bow"
+        base_rows = rows_for()
+        sp.values["encoder"] = was
+        base_live = [r for r in base_rows if r[1] > 0]
+        def bat(rws, m, k):
+            return sum(1 for r in rws if r[1] > 0 and r[2].get(m)
+                       and r[2][m] <= k)
+        print("  %-8s %-22s %-22s" % ("(none)",
+              "%d/%d/%d of %d" % (bat(base_rows,"dense",1),
+                                  bat(base_rows,"dense",3),
+                                  bat(base_rows,"dense",10), len(base_live)),
+              "%d/%d/%d of %d" % (bat(base_rows,"hybrid",1),
+                                  bat(base_rows,"hybrid",3),
+                                  bat(base_rows,"hybrid",10),
+                                  len(base_live))))
+        print("\n  %-8s %-22s %-22s  %s"
+              % ("epochs", "dense @1/@3/@10", "hybrid @1/@3/@10",
+                 "hybrid@1 vs untrained"))
+        print("  " + "-" * 78)
+        best, best_n = None, None
+        for e in counts:
+            _train_once(sp, docs, chunks, texts, lx, e, quiet=True)
+            rows = rows_for()
+            live = [r for r in rows if r[1] > 0]
+            n = len(live)
+            def at(m, k):
+                return bat(rows, m, k)
+
+            # Paired against the untrained run on the SAME questions,
+            # which is far tighter than comparing two totals as if they
+            # were independent samples.
+            merged = [(rows[i][0], rows[i][1],
+                       {"t": rows[i][2]["hybrid"],
+                        "b": base_rows[i][2]["hybrid"]})
+                      for i in range(len(rows))]
+            d, lo, hi, pb = evalset.paired_bootstrap(merged, "t", "b", 1)
+            print("  %-8d %-22s %-22s  %+d [%+d,%+d] P=%.2f"
+                  % (e, "%d/%d/%d of %d" % (at("dense",1), at("dense",3),
+                                            at("dense",10), n),
+                     "%d/%d/%d of %d" % (at("hybrid",1), at("hybrid",3),
+                                         at("hybrid",10), n),
+                     d, lo, hi, pb))
+
+            # WHERE the gain landed, which the totals cannot show.
+            #
+            # A dense encoder is supposed to earn its place on
+            # `paraphrase` questions -- the ones whose words do not
+            # appear in the answer. A gain concentrated on `direct` or
+            # `keyword` is the encoder getting better at a job BM25
+            # already does better, which is not worth 0.9MB resident.
+            tags = [g.tag for g in gold]
+            parts = []
+            for tag in sorted(set(tags)):
+                sel = [(rows[i], base_rows[i])
+                       for i in range(len(rows))
+                       if tags[i] == tag and rows[i][1] > 0]
+                if not sel:
+                    continue
+                t1 = sum(1 for r, _b in sel
+                         if r[2]["hybrid"] and r[2]["hybrid"] <= 1)
+                b1 = sum(1 for _r, b in sel
+                         if b[2]["hybrid"] and b[2]["hybrid"] <= 1)
+                parts.append("%s %+d (%d->%d of %d)"
+                             % (tag, t1 - b1, b1, t1, len(sel)))
+            print("           hybrid@1 by style: %s" % "   ".join(parts))
+            score = (at("hybrid",1), at("hybrid",3))
+            if best is None or score > best:
+                best, best_n = score, e
+
+        # Is the winner actually better, or is it the maximum of a few
+        # noisy draws? At 53 questions one standard error is about
+        # three, which is wider than the whole spread this sweep
+        # usually produces.
+        import math
+        n_live = len(live)
+        p_hat = best[0] / float(max(n_live, 1))
+        se = math.sqrt(p_hat * (1 - p_hat) / max(n_live, 1)) * n_live
+        print()
+        print("  best hybrid @1/@3 at %d epochs: %d/%d of %d"
+              % (best_n, best[0], best[1], n_live))
+        print("      train_epochs = %d" % best_n)
+        print()
+        print("  *** one standard error on %d questions is +/- %.1f "
+              "questions. ***" % (n_live, se))
+        print("      If the spread across this sweep is smaller than "
+              "that, the")
+        print("      winner is the maximum of a few noisy draws, not a "
+              "setting.")
+        print("      Compare against `encoder = bow` before believing "
+              "any of it,")
+        print("      and grow eval/gold.txt if you want to resolve "
+              "differences")
+        print("      this size.")
+        print()
+        print("  retraining at %d so the cache matches." % best_n)
+        _train_once(sp, docs, chunks, texts, lx, best_n)
+        return 0
+
+    enc = embed.BACKENDS["trained"](dim=sp.getint("fine_dim", 128),
+                                    vocab=sp.getint("vocab", 4096))
+    opts = {k[6:]: v for k, v in sp.values.items() if k.startswith("train_")}
+    opts.update({"pairs": sp.get("pairs", "ict,title"),
+                 "pairs_file": pairs_file(sp)})
+    if args.epochs is not None:
+        opts["epochs"] = args.epochs
+    enc.fit_trained(docs, chunks, texts, lx, opts)
+
+    cache = enc_cache_path(sp)
+    os.makedirs(os.path.dirname(cache), exist_ok=True)
+    exp = enc.export()
+    np.savez(cache, dim=exp["dim"], vectors=exp["vectors"],
+             idf=exp["idf"], terms=np.array(exp["terms"], dtype=object),
+             allow_pickle=True)
+    print("\n  encoder cached: %s" % cache)
+    print("  next: ./tools/ask/ask eval %s   (the bar is 42/63 at rank 1)"
+          % args.recipe)
+    return 0
+
+
+def cmd_build(args):
+    _need_dense("build")
+    sp, docs, used, repos = load_recipe(args.recipe, getattr(args, 'update', False))
+    outdir = args.out or _resolve(HERE, "out/%s" % sp.get("name", sp.name))
+    bh = build_hash(sp, docs)
+    dsid = int(bh[:8], 16)
+
+    print("building %s %s -> %s"
+          % (sp.get("name", sp.name), sp.get("version", "?"), outdir))
+
+    chunks, texts = chunk_and_index(docs, sp)
+    print("  %d documents, %d chunks" % (len(docs), len(chunks)))
+
+    # Which datasets are model-written. Named in the recipe rather than
+    # inferred, because it is a fact about the upstream corpus that no
+    # amount of looking at the text can establish.
+    generated = set(x.strip() for x in sp.get("generated", "").split(",")
+                    if x.strip())
+    unknown = generated - set(d.source for d in docs)
+    if unknown:
+        raise SystemExit("`generated =` names datasets that this recipe "
+                         "does not build: %s" % ", ".join(sorted(unknown)))
+
+    naming = sp.get("naming", "numeric")
+    packname = sp.get("pack", sp.get("name", sp.name))
+    # Checked here rather than 200 lines later inside assign_paths: a
+    # pack name becomes a card directory, and card directories are 8.3
+    # (FF_USE_LFN 0). The failure is a recipe error, so it should read
+    # like one.
+    try:
+        cardfs._check_83(packname)
+    except cardfs.CardError:
+        raise SystemExit(
+            "pack name `%s` is %d characters; a card directory is 8.3 "
+            "(FatFs here is\n  FF_USE_LFN 0). Set a shorter `name`, or "
+            "`pack = <=8 chars` to keep the long name\n  for display."
+            % (packname, len(packname)))
+    paths, warned = cardfs.assign_paths(docs, packname, naming)
+    if warned:
+        print("  %d long names exceeded Z_WM_ARG_MAX and fell back to "
+              "numeric" % len(warned))
+    os.makedirs(outdir, exist_ok=True)
+    nbytes = cardfs.emit(docs, paths, outdir)
+    print("  card tree: %.2f MB" % (nbytes / 1e6))
+
+    problems = cardfs.verify(docs, paths, chunks, outdir)
+    if problems:
+        for p in problems[:10]:
+            print("  BAD OFFSET: %s" % p)
+        raise SystemExit("chunk offsets do not match the emitted tree -- "
+                         "refusing to write an index that would preview the "
+                         "wrong text (%d problems)" % len(problems))
+    print("  offsets verified: %d chunks resolve exactly" % len(chunks))
+
+    # -- images --
+    #
+    # Not part of the corpus: an image has no text, so no embedding and
+    # no chunk, and `ask` will never return one as a hit. They get an
+    # index of links instead, which `read` renders and which hands off
+    # to `view` by extension through ztype.h.
+    imgs = []
+    locations = dict(repos)
+    locations["dl"] = {"path": fetch_root(sp)}
+    recipe_dir = os.path.dirname(os.path.abspath(args.recipe))
+    for loc in sp.getlist("images"):
+        parts = loc.split()
+        iroot = fetch.resolve(parts[0], locations, recipe_dir)
+        if not os.path.isdir(iroot):
+            print("  images: %s does not exist, skipping" % iroot)
+            continue
+        srcs = images.find(iroot)
+        if not srcs:
+            print("  images: nothing under %s" % iroot)
+            continue
+        try:
+            got = images.emit(srcs, outdir, packname)
+        except images.MissingPillow as e:
+            raise SystemExit(str(e))
+        imgs.extend(got)
+        if images.skipped:
+            print("  images: %d unreadable, skipped:" % len(images.skipped))
+            for m in images.skipped[:5]:
+                print("      %s" % m)
+    if imgs:
+        nb = sum(i["bytes"] for i in imgs)
+        print("  %d images transcoded to %s, %.2f MB"
+              % (len(imgs), images.OUT_EXT.upper(), nb / 1e6))
+        for name, n in images.write_indexes(imgs, outdir, packname):
+            print("      %-12s %d entries" % (name, n))
+
+    if generated:
+        print("  model-written datasets: %s"
+              % ", ".join(sorted(generated)))
+
+    nidx = cardfs.write_indexes(
+        docs, paths, outdir, packname,
+        {"version": sp.get("version", "0"),
+         "description": sp.get("description", ""),
+         "built": time.strftime("%Y-%m-%d", time.gmtime()),
+         "generated": sorted(generated),
+         "repos": {k: {"url": v["url"], "ref": v["ref"],
+                       "commit": v["commit"]} for k, v in repos.items()},
+         "generated": sorted(generated),
+         "sources": used})
+    print("  generated %d index.md, so the corpus is browsable in `read` "
+          "without `ask`" % nidx)
+
+    # read.c indexes lazily and its frontier only moves forward, so a
+    # jump into byte N of a document costs streaming N bytes off the
+    # card. Warn about the ones that will feel slow.
+    big = cardfs.check_seek_cost(docs, paths,
+                                 sp.getint("seek_warn", 1 << 20))
+    if big:
+        print("  %d documents are large enough that jumping into them "
+              "will be slow:" % len(big))
+        for p_, t_, n_ in big[:5]:
+            print("      %-34s %6.2f MB  %s" % (p_, n_ / 1e6, t_[:28]))
+        print("      (use the adapter's split= option)")
+
+    enc = make_encoder(sp, texts, docs, chunks, lexicon.build(texts))
+    print("  encoder: %s, dim %d%s"
+          % (enc.name, enc.dim, "" if enc.deployable
+             else "  *** HOST-ONLY, this distribution cannot ship ***"))
+
+    vecs = enc.encode_docs(texts)
+    lx = lexicon.build(texts)
+    print("  lexicon: %d terms kept" % len(lx.terms))
+
+    # Read back from the encoder, not from the recipe: a small corpus
+    # may support fewer components than asked for, and an index whose
+    # header disagrees with its vectors is unreadable on the device.
+    fine_dim = enc.dim
+    coarse_dim = min(sp.getint("coarse_dim", 32), fine_dim)
+    if coarse_dim != sp.getint("coarse_dim", 32):
+        print("  note: coarse_dim clamped to %d" % coarse_dim)
+
+    # One PACK per build, in its own directory. `ask` enumerates the
+    # subdirectories of /ask at startup, so dropping in a new pack --
+    # Ark Medium, say -- needs no rebuild of anything already there.
+    askdir = os.path.join(outdir, cardfs.pack_dir(packname))
+    os.makedirs(askdir, exist_ok=True)
+
+    # REMOVE THE PREVIOUS BUILD'S INDEX FILES FIRST.
+    #
+    # A build writes what this recipe produces and says nothing about
+    # what it no longer produces. Rebuilding a `dense = no` pack over a
+    # `dense = yes` one therefore left coarse.zcv, fine.zfv and
+    # encoder.zmd sitting there from the old build -- with the OLD
+    # dataset id, because the recipe changed.
+    #
+    # The device notices: every file carries the dsid and `ask` refuses
+    # a set whose ids disagree, so the pack does not load at all and
+    # reports `pack files are from different builds`. That is the check
+    # working, and it is a confusing thing to hit when the only thing
+    # you did was change one line and rebuild.
+    #
+    # The same applies to the CARD -- see the note printed at the end
+    # of a build.
+    for stale in ("index.zak", "docs.zdt", "chunks.zct", "coarse.zcv",
+                  "fine.zfv", "lexicon.zlx", "post.zlp", "encoder.zmd"):
+        p_ = os.path.join(askdir, stale)
+        if os.path.exists(p_):
+            os.remove(p_)
+
+    def write(name, blob):
+        with open(os.path.join(askdir, name), "wb") as fh:
+            fh.write(blob)
+        return len(blob)
+
+    sizes = {}
+    sizes["docs.zdt"] = write("docs.zdt", pack.pack_docs(docs, paths, dsid))
+    sizes["chunks.zct"] = write("chunks.zct", pack.pack_chunks(chunks, dsid))
+
+    # `dense = no` ships a LEXICAL-ONLY pack: no vectors, no encoder.
+    #
+    # Measured on a 112-question gold set across three query styles,
+    # BM25 alone beats the fused result at rank 1 in every one of them
+    # -- 73/112 against 64/112, and 21/23 against 16/23 on bare
+    # keyword queries. With the untrained encoder the dense half is a
+    # net negative, so shipping it is paying memory for worse answers.
+    #
+    # What it saves is not marginal. coarse.zcv and encoder.zmd are the
+    # ONLY things `ask` holds resident (sw/apps/ask/aidx.h), so dropping
+    # them takes an arklite pack from ~0.90MB resident to essentially
+    # nothing -- the dictionary is binary-searched on the card and the
+    # postings are read per term. No HUGE kernel tier, no 4MB
+    # allocation, and it would fit a 1MB board.
+    dense_on = sp.get("dense", "yes") not in ("0", "no", "false")
+
+    flags = pack.FLAG_HAS_LEXICON
+    if dense_on:
+        sizes["coarse.zcv"] = write(
+            "coarse.zcv", pack.pack_vectors(vecs[:, :coarse_dim],
+                                            pack.MAGIC_COARSE, dsid))
+        sizes["fine.zfv"] = write(
+            "fine.zfv", pack.pack_vectors(vecs, pack.MAGIC_FINE, dsid))
+        flags |= pack.FLAG_HAS_FINE
+
+    lexblob, postblob = pack.pack_lexicon(lx, dsid)
+    sizes["lexicon.zlx"] = write("lexicon.zlx", lexblob)
+    sizes["post.zlp"] = write("post.zlp", postblob)
+
+    encblob = pack.pack_encoder(enc.export(), dsid) if dense_on else None
+    # Identity of the encoder weights. A pack records this so `ask` can
+    # load one copy per distinct encoder across all installed packs,
+    # and so a pack built against retrained weights is recognisable as
+    # such without re-reading them.
+    meta_encoder_id = (int(hashlib.sha256(encblob).hexdigest()[:8], 16)
+                       if encblob else 0)
+    if encblob:
+        sizes["encoder.zmd"] = write("encoder.zmd", encblob)
+        flags |= pack.FLAG_HAS_ENCODER
+
+    datasets, first = [], 0
+    for name in sorted(set(d.source for d in docs)):
+        n = sum(1 for d in docs if d.source == name)
+        datasets.append({"name": name, "first_doc": first, "ndocs": n,
+                         "flags": (pack.DS_GENERATED
+                                   if name in generated else 0)})
+        first += n
+
+    meta = {
+        "name": sp.get("name", sp.name),
+        "version": sp.get("version", "0"),
+        "built": time.strftime("%Y-%m-%d", time.gmtime()),
+        "encoder": enc.name,
+        "ndocs": len(docs), "nchunks": len(chunks),
+        "coarse_dim": coarse_dim, "fine_dim": fine_dim,
+        "nterms": len(lx.terms), "vocab": getattr(enc, "vocab_size", 0),
+        "encoder_id": meta_encoder_id,
+        "flags": flags,
+    }
+    sizes["index.zak"] = write("index.zak", pack.pack_index(meta, datasets, dsid))
+
+    # WHAT THE DEVICE ACTUALLY HOLDS.
+    #
+    # This used to add up index.zak, docs.zdt, chunks.zct, coarse.zcv,
+    # lexicon.zlx and encoder.zmd -- a figure left over from the first
+    # design, where everything was loaded. sw/apps/ask/aidx.c loads
+    # only the coarse vectors and the encoder; the chunk table, the
+    # document table, the lexicon, the postings and the fine vectors
+    # are read off the card when needed.
+    #
+    # The old number overstated `arklite` by 2.3x (2.10MB against the
+    # 0.90MB the device reports), and it is exactly the number somebody
+    # uses to pick a kernel memory tier. Keep the two names distinct.
+    resident = sizes.get("coarse.zcv", 0) + sizes.get("encoder.zmd", 0)
+    if not dense_on:
+        print("  dense half OFF -- lexical only, nothing held resident")
+    on_card = sum(sizes.values())
+
+    manifest = dict(meta, build_hash=bh, dsid="0x%08x" % dsid,
+                    naming=naming, pack=packname,
+                    repos={k: {"url": v["url"], "ref": v["ref"],
+                               "commit": v["commit"]}
+                           for k, v in repos.items()},
+                    sources=used, datasets=datasets,
+                    files={k: v for k, v in sorted(sizes.items())},
+                    resident_bytes=resident,
+                    card_bytes=nbytes + sum(sizes.values()))
+    # NOT inside outdir: outdir is the card tree, byte for byte, and
+    # "MANIFEST.json" is not an 8.3 name -- FatFs here (FF_USE_LFN 0)
+    # cannot write a four-character extension. Provenance that the
+    # MACHINE should carry goes into the pack's index.md instead; this
+    # file is for the host.
+    mpath = os.path.join(os.path.dirname(os.path.abspath(outdir)),
+                         "%s.manifest.json" % packname)
+    with open(mpath, "w") as fh:
+        json.dump(manifest, fh, indent=2, sort_keys=True)
+
+    print()
+    for k in sorted(sizes):
+        print("    %-14s %9.2f KB" % (k, sizes[k] / 1024.0))
+    print()
+    print("  resident on device: %.2f MB   (coarse.zcv + encoder.zmd)"
+          % (resident / 1e6))
+    print("  index on card:      %.2f MB" % (on_card / 1e6))
+    print("  total on card:      %.2f MB" % (manifest["card_bytes"] / 1e6))
+    print("  dataset id:         0x%08x" % dsid)
+    check_tier(resident, coarse_dim, len(chunks))
+
+    # Installing over an older pack on the card has the same hazard the
+    # build directory just had, and the card has no build step to clean
+    # it.
+    print()
+    print("  installing on a card that already has this pack:")
+    print("      rm -r /media/<card>/ask/%s /media/<card>/ark/%s"
+          % (packname, packname))
+    print("      cp -r %s/* /media/<card>/" % outdir)
+    print("  Copying over the top leaves files the new build does not")
+    print("  produce -- with the old dataset id -- and `ask` then")
+    print("  refuses the pack as `files are from different builds`.")
+    return 0
+
+
+def _rank_all(sp, docs, chunks, texts, queries):
+    """Rank with each method. Returns {method: {query: order}}."""
+    import numpy as np
+    enc = make_encoder(sp, texts)
+    V = enc.encode_docs(texts)
+    Vq = pack.quantise(V).astype(np.int32)
+    lx = lexicon.build(texts)
+    coarse_dim = min(sp.getint("coarse_dim", 32), enc.dim)
+
+    out = {"lexical": {}, "dense": {}, "coarse": {}, "hybrid": {}}
+    for q in queries:
+        lexranked = lexicon.score(lx, q)
+        lexorder = [c for c, _s in lexranked]
+        qv = pack.quantise(enc.encode_query(q)[None, :]).astype(np.int32)[0]
+        d = Vq @ qv
+        dorder = list(np.argsort(-d))
+        c = Vq[:, :coarse_dim] @ qv[:coarse_dim]
+        corder = list(np.argsort(-c))
+
+        # Reciprocal rank fusion: scale-free, one constant, and it does
+        # not require the two score distributions to be comparable --
+        # which they are not, one being BM25 and the other an int32 dot
+        # product.
+        #
+        # `fuse_dense` weights the dense side. It exists because a
+        # sweep on the full question set showed the dense half gaining
+        # +7 at rank 1 on its own while the fused result moved by ONE
+        # -- equal-weight RRF lets the stronger list dominate, and with
+        # BM25 at 91% on keyword queries the stronger list is almost
+        # always lexical. A weight is the cheapest way to find out
+        # whether the dense gain is recoverable at all.
+        #
+        # 1.0 is plain RRF. The DEVICE constant must match whatever
+        # wins: see AI_FUSE_DENSE_Q8 in sw/apps/ask/aidx.h.
+        K = 60.0
+        wd = float(sp.get("fuse_dense", "1.0"))
+        rr = {}
+        for pos, cid in enumerate(lexorder[:1000]):
+            rr[cid] = rr.get(cid, 0.0) + 1.0 / (K + pos)
+        for pos, cid in enumerate(dorder[:1000]):
+            rr[int(cid)] = rr.get(int(cid), 0.0) + wd / (K + pos)
+        horder = [c for c, _s in sorted(rr.items(), key=lambda kv: -kv[1])]
+
+        out["lexical"][q] = lexorder
+        out["dense"][q] = dorder
+        out["coarse"][q] = corder
+        out["hybrid"][q] = horder
+    return out
+
+
+def cmd_eval(args):
+    _need_dense("eval")
+    sp, docs, _used, _repos = load_recipe(args.recipe)
+    chunks, texts = chunk_and_index(docs, sp)
+    gold = evalset.load(args.gold or _resolve(HERE, "eval/gold.txt"))
+    doc_sources = [d.source for d in docs]
+
+    queries = [g.q for g in gold]
+
+    if getattr(args, "fuse_sweep", None):
+        # How much of the dense half's gain the fusion can actually
+        # deliver. Cheap: no retraining, only a re-rank.
+        rel_cache = [evalset.relevant_set(g, chunks, texts, doc_sources)
+                     for g in gold]
+        tags = [g.tag for g in gold]
+        print("  %-8s %-18s %s" % ("w_dense", "hybrid @1/@3/@10",
+                                   "hybrid@1 by style"))
+        print("  " + "-" * 74)
+        # w = 0 is lexical alone, and it belongs in the table rather
+        # than as something the reader has to remember from another
+        # run. If the trend is monotone toward zero, the answer is that
+        # the dense half should not be there at all -- and that is much
+        # easier to see with the endpoint printed.
+        ws = [x.strip() for x in args.fuse_sweep.split(",") if x.strip()]
+        if "0" not in ws:
+            ws = ["0"] + ws
+        for w in ws:
+            sp.values["fuse_dense"] = w
+            rk = _rank_all(sp, docs, chunks, texts, queries)
+            hits = [evalset.first_hit(rk["hybrid"][g.q], rel_cache[i])
+                    for i, g in enumerate(gold)]
+            live = [i for i in range(len(gold)) if rel_cache[i]]
+            def at(k):
+                return sum(1 for i in live if hits[i] and hits[i] <= k)
+            parts = []
+            for tag in sorted(set(tags)):
+                sel = [i for i in live if tags[i] == tag]
+                parts.append("%s %d/%d" % (tag,
+                             sum(1 for i in sel if hits[i] and hits[i] <= 1),
+                             len(sel)))
+            print("  %-8s %-18s %s%s"
+                  % (w, "%d/%d/%d of %d" % (at(1), at(3), at(10), len(live)),
+                     "   ".join(parts),
+                     "   <- lexical only" if float(w) == 0.0 else ""))
+        return 0
+
+    ranked = _rank_all(sp, docs, chunks, texts, queries)
+    methods = ["lexical", "dense", "coarse", "hybrid"]
+
+    rows = []
+    for g in gold:
+        rel = evalset.relevant_set(g, chunks, texts, doc_sources)
+        ranks = {m: evalset.first_hit(ranked[m][g.q], rel) for m in methods}
+        rows.append((g.q, len(rel), ranks))
+    print("corpus: %d docs, %d chunks, encoder %s"
+          % (len(docs), len(chunks), sp.get("encoder", "bow")))
+    hint_unused_questions(sp)
+    print()
+    if args.sort:
+        # Worst hybrid rank first: the interesting end of the table.
+        rows.sort(key=lambda r: -(r[2].get("hybrid") or 10 ** 6))
+    print(evalset.report(rows, methods))
+    print(evalset.report_by_tag(rows, [g.tag for g in gold], methods))
+    print()
+    print(evalset.shortlist_report(rows, "coarse"))
+    return 0
+
+
+def cmd_refcheck(args):
+    """Encode a query the way the DEVICE does, in integers, from the
+    quantised weights that are actually written to encoder.zmd.
+
+    This exists because `ask query -m dense` is NOT a reference for
+    sw/apps/ask/aidx.c and never was. It encodes from the float term
+    vectors held in memory during the build; the device reads the int8
+    ones the packer wrote, multiplies by a Q8.8 idf, and normalises
+    with an integer square root. Comparing the C against it showed
+    differences of one unit per component and a different top hit for
+    some queries -- which looked like a C bug and was a reference bug.
+
+    Everything below mirrors encode_query() in aidx.c step for step.
+    If the two disagree, one of them has drifted.
+    """
+    _need_dense("refcheck")
+    import numpy as np
+    sp, docs, _used, _repos = load_recipe(args.recipe)
+    chunks, texts = chunk_and_index(docs, sp)
+    enc = make_encoder(sp, texts)
+
+    exp = enc.export()
+    if not exp or exp["kind"] != "bow":
+        raise SystemExit("refcheck only knows the `bow` encoder")
+
+    # Exactly what pack_encoder() writes.
+    vec8 = pack.quantise(exp["vectors"]).astype(np.int32)
+    idf_q = np.clip(np.rint(np.asarray(exp["idf"]) * 256.0),
+                    0, 65535).astype(np.int64)
+    terms = exp["terms"]
+    index = {t: i for i, t in enumerate(terms)}
+    dim = vec8.shape[1]
+
+    acc = np.zeros(dim, dtype=np.int64)
+    hits = 0
+    for t in lexicon.tokenize(args.q)[:12]:        # AI_TERMS_MAX
+        k = index.get(t)
+        if k is None:
+            continue
+        acc += vec8[k].astype(np.int64) * idf_q[k]
+        hits += 1
+    if not hits:
+        print("no query term is in the vocabulary")
+        return 0
+
+    # aidx.c halves until the sum of squares fits its accumulator.
+    while int((acc * acc).sum()) > 0x3FFFFFFF:
+        acc >>= 1
+    sq = int((acc * acc).sum())
+    norm = int(np.floor(np.sqrt(sq)))              # isqrt32()
+    half = norm >> 1
+    qv = np.where(acc >= 0, (acc * 127 + half) // norm,
+                  -((-acc * 127 + half) // norm))
+    qv = np.clip(qv, -127, 127).astype(np.int32)
+
+    print("dim %d" % dim)
+    print("qvec:", " ".join(str(int(v)) for v in qv[:args.n]))
+
+    V = np.fromfile(os.path.join(
+        args.out or _resolve(HERE, "out/%s" % sp.get("name", sp.name)),
+        cardfs.pack_dir(sp.get("pack", sp.get("name", sp.name))),
+        "fine.zfv"), dtype=np.int8, offset=32).reshape(-1, dim).astype(np.int32)
+    C = np.fromfile(os.path.join(
+        args.out or _resolve(HERE, "out/%s" % sp.get("name", sp.name)),
+        cardfs.pack_dir(sp.get("pack", sp.get("name", sp.name))),
+        "coarse.zcv"), dtype=np.int8, offset=32)
+    cd = sp.getint("coarse_dim", 32)
+    C = C.reshape(-1, cd).astype(np.int32)
+
+    short = np.argsort(-(C @ qv[:cd]))[:512]       # AI_SHORTLIST
+    order = short[np.argsort(-(V[short] @ qv))]
+    print()
+    for r, cid in enumerate(order[:args.n_hits], 1):
+        c = chunks[int(cid)]
+        print("%d. [%-7s] %s%s" % (r, docs[c.doc].source,
+                                   docs[c.doc].title[:40],
+                                   (" > " + c.heading[:34]) if c.heading else ""))
+    return 0
+
+
+def cmd_query(args):
+    _need_dense("query")
+    sp, docs, _used, _repos = load_recipe(args.recipe)
+    chunks, texts = chunk_and_index(docs, sp)
+    ranked = _rank_all(sp, docs, chunks, texts, [args.q])
+    order = ranked[args.method][args.q]
+    for cid in order[:args.n]:
+        c = chunks[int(cid)]
+        d = docs[c.doc]
+        snip = " ".join(c.text.split())[:150]
+        print("  [%-7s] %s%s" % (d.source, d.title[:44],
+                                 (" > " + c.heading[:40]) if c.heading else ""))
+        print("            %s" % snip)
+    return 0
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="ask", description=__doc__)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("sources").set_defaults(fn=cmd_sources)
+
+    p = sub.add_parser("genq"); p.add_argument("recipe")
+    p.add_argument("-m", "--model",
+                   help="overrides `genq_model` in the recipe")
+    p.add_argument("--host", default=os.environ.get(
+        "OLLAMA_HOST", "http://127.0.0.1:11434"))
+    p.add_argument("-n", type=int, default=4,
+                   help="questions per passage")
+    p.add_argument("--limit", type=int, default=0,
+                   help="stop after N passages (try 50 first)")
+    p.add_argument("--temperature", type=float, default=0.8)
+    p.add_argument("-o", "--out")
+    p.add_argument("--probe", action="store_true",
+                   help="run ONE passage, show the raw reply and timing")
+    p.add_argument("--compare",
+                   help="comma-separated models to benchmark against each "
+                        "other on --limit passages")
+    p.set_defaults(fn=cmd_genq)
+
+    p = sub.add_parser("train"); p.add_argument("recipe")
+    p.add_argument("-e", "--epochs", type=int)
+    p.add_argument("--sweep",
+                   help="comma-separated epoch counts to train and "
+                        "evaluate, e.g. 1,2,4,8,16")
+    p.add_argument("-g", "--gold")
+    p.set_defaults(fn=cmd_train)
+
+    p = sub.add_parser("fetch"); p.add_argument("recipe")
+    p.add_argument("-u", "--update", action="store_true")
+    p.add_argument("-f", "--force", action="store_true",
+                   help="refetch even if the file is already present")
+    p.set_defaults(fn=cmd_fetch)
+
+    p = sub.add_parser("ingest"); p.add_argument("recipe")
+    p.add_argument("-u", "--update", action="store_true",
+                   help="git fetch cached repos before reading them")
+    p.set_defaults(fn=cmd_ingest)
+
+    p = sub.add_parser("build"); p.add_argument("recipe")
+    p.add_argument("-o", "--out")
+    p.add_argument("-u", "--update", action="store_true")
+    p.set_defaults(fn=cmd_build)
+
+    p = sub.add_parser("eval"); p.add_argument("recipe")
+    p.add_argument("-g", "--gold")
+    p.add_argument("--fuse-sweep",
+                   help="comma-separated dense fusion weights to try, "
+                        "e.g. 0.25,0.5,1,2")
+    p.add_argument("-s", "--sort", action="store_true",
+                   help="worst hybrid rank first")
+    p.set_defaults(fn=cmd_eval)
+
+    p = sub.add_parser("refcheck"); p.add_argument("recipe")
+    p.add_argument("q")
+    p.add_argument("-o", "--out")
+    p.add_argument("-n", type=int, default=40,
+                   help="vector components to print")
+    p.add_argument("--n-hits", type=int, default=5)
+    p.set_defaults(fn=cmd_refcheck)
+
+    p = sub.add_parser("query"); p.add_argument("recipe"); p.add_argument("q")
+    p.add_argument("-n", type=int, default=5)
+    p.add_argument("-m", "--method", default="hybrid",
+                   choices=["lexical", "dense", "coarse", "hybrid"])
+    p.set_defaults(fn=cmd_query)
+
+    args = ap.parse_args()
+    return args.fn(args)
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        # `ask genq` is a multi-hour command and interrupting it is the
+        # normal way to stop. A traceback suggests something broke;
+        # nothing did, and every question already generated is on disk
+        # because genq flushes each passage as it goes.
+        print("\ninterrupted -- work already done is saved; re-run to "
+              "resume.")
+        sys.exit(130)

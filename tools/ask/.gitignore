@@ -1,0 +1,8 @@
+# Upstream corpora, cloned on demand by lib/fetch.py. Not submodules:
+# they are large, they move on their own schedule, and most people
+# building Zeitlos never build a pack. Override with $ASK_CACHE.
+.cache/
+
+# Built packs. A pack is a release artefact with its own version and
+# cadence -- it does not belong in the tree that builds it.
+out/

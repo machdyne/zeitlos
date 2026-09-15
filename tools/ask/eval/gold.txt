@@ -1,0 +1,554 @@
+# The gold set.
+#
+# Hand-written, NOT generated. A model trained on synthetic questions
+# and evaluated on synthetic questions will flatter itself; these are
+# things somebody would actually type into a machine that is the only
+# thing left working.
+#
+# `hit` is a PROXY for relevance, not a label. A regex over the chunk
+# text, because labelling tens of thousands of chunks by hand is not
+# going to happen. Good enough to tell rank 1 from rank 22, not good
+# enough to tell rank 1 from rank 2 -- do not read these numbers to
+# three significant figures.
+#
+# `src` restricts which datasets can satisfy a question. Use it where a
+# question is ABOUT a dataset ("how do I flash a board" is a docs
+# question) and leave it off where any source answering correctly is a
+# correct answer.
+#
+# A question matching NOTHING is reported separately by `ask eval` and
+# excluded from the totals -- that is a broken question, or one about
+# content this pack does not carry, and counting it as a failure would
+# make every method look equally worse while hiding the real problem.
+#
+# Scaled up from twelve because at twelve the run-to-run variation from
+# a chunking change was the same size as the effect being measured,
+# which makes the harness unable to see the thing it was built to see.
+
+# -- water --------------------------------------------------------
+
+q   = how do I make water from a stream safe to drink
+hit = (boil|purif|iodine|water purification tablet).{0,200}(water|drink)|filter.{0,120}(muddy|putrid)
+
+q   = my water is muddy, how do I clear it
+hit = (filter|settle|alum|charcoal|sand).{0,200}(water|muddy|sediment|clear)
+
+q   = how do I find water in a dry place
+hit = (dig|seep|dew|condens|still|vegetation).{0,250}(water|moisture)
+
+# -- fire and warmth ----------------------------------------------
+
+q   = how do I build a fire without matches
+hit = (tinder|flint|friction|spark|magnifying).{0,300}(fire|flame|ignit)
+
+q   = what is the best tinder for starting a fire
+hit = (tinder).{0,300}(dry|bark|shaving|punk|birch|char)
+
+q   = how do I stay warm overnight with no sleeping bag
+hit = (shelter|insulat|leaves|debris|bough|fire).{0,250}(warm|cold|night|sleep)
+
+# -- food, foraging, preserving -----------------------------------
+
+q   = which wild plants can I safely eat
+hit = (edibility test|edible plant|poisonous plant|taste test)
+
+q   = how do I know if a plant is poisonous
+hit = (poison|toxic).{0,250}(plant|berr|leaf|root|test)
+
+q   = how should I store grain so it does not spoil
+hit = (grain|seed|food).{0,200}(stor|preserv|dry|granar)
+
+q   = how do I preserve meat without refrigeration
+hit = (salt|smok|dry|cure|jerk).{0,250}(meat|fish|beef|pork)
+
+q   = how do I keep eggs fresh for a long time
+hit = (egg).{0,250}(keep|preserv|fresh|lime|pack|salt)
+
+q   = how do I make bread without yeast
+hit = (bread|dough|biscuit|cake).{0,250}(soda|saleratus|sour|yeast|leaven)
+
+q   = how do I catch fish without a rod
+hit = (fish).{0,300}(trap|spear|net|line|hook|weir|snare)
+
+q   = how do I set a snare to catch small animals
+hit = (snare|trap|deadfall).{0,250}(rabbit|animal|game|set|noose)
+
+# -- first aid and medicine ---------------------------------------
+
+q   = someone is bleeding heavily from a leg wound
+hit = (tourniquet|pressure dressing|direct pressure).{0,300}(bleed|blood)
+
+q   = what do I do if someone is not breathing
+hit = (mouth-to-mouth|artificial respiration|rescue breath|airway|CPR)
+
+q   = how do I treat a snake bite
+hit = snakebite|snake bite|(snake).{0,200}(venom|bite)
+
+q   = how do I treat a burn
+hit = (burn|scald).{0,250}(cool|water|dressing|blister|degree)
+
+q   = how do I tell if a bone is broken and what do I do
+hit = (fracture|broken bone).{0,300}(splint|immobil|swell|deform)
+
+q   = someone is choking, what do I do
+hit = (chok|obstruct|airway|windpipe).{0,250}(back blow|abdominal|dislodge|breath|thrust)
+
+q   = what are the signs of shock and how do I treat it
+hit = (shock).{0,300}(pale|clammy|pulse|elevate|blanket|treat)
+
+q   = my tooth hurts and there is no dentist
+hit = (tooth|dental|gum).{0,200}(pain|ache|infect|abscess)
+
+q   = how do I treat frostbite
+hit = (frostbite|frozen).{0,250}(warm|rewarm|thaw|rub|tissue)
+
+q   = what do I do for heat exhaustion
+hit = (heat exhaustion|heat stroke|heatstroke|sunstroke).{0,250}(shade|cool|water|salt|rest)
+
+q   = how do I clean and dress an open wound
+hit = (wound).{0,300}(clean|wash|dress|bandage|antisept|sterile)
+
+q   = how do I know if a wound is infected
+hit = (infect).{0,300}(wound|red|swell|pus|fever|streak)
+
+q   = what plants can be used as medicine
+hit = (herb|decoction|infusion|poultice).{0,250}(remed|cure|medicin|heal)
+
+# -- shelter, navigation, signalling ------------------------------
+
+q   = how do I navigate without a compass
+hit = (north star|polaris|shadow.{0,40}stick|sun).{0,200}(direction|north|navigat)
+
+q   = how do I find direction using the stars
+hit = (star|polaris|southern cross|constellation).{0,250}(north|south|direction|navigat)
+
+q   = how do I build a shelter in the woods
+hit = (shelter|lean-to|hut).{0,250}(build|construct|frame|pole|bough)
+
+q   = how do I signal for rescue
+hit = (signal).{0,300}(fire|smoke|mirror|panel|rescue|aircraft)
+
+q   = how do I cross a river safely
+hit = (ford|cross|river|stream).{0,250}(current|depth|pole|rope|wade)
+
+# -- tools, building, materials -----------------------------------
+
+q   = how do I sharpen a dull knife
+hit = (sharpen|whet|hone|grind).{0,250}(edge|blade|knife|tool|stone)
+
+q   = what kind of joint should I use for a wooden frame
+hit = (mortise|tenon|dovetail|joint|lap).{0,250}(wood|frame|timber)
+
+q   = how do I make soap
+hit = (soap).{0,300}(lye|fat|tallow|ash|boil)
+
+q   = how do I make rope or cordage
+hit = (rope|cord|twine|twist).{0,250}(fiber|fibre|strand|braid|plait)
+
+q   = how do I make mortar or cement
+hit = (mortar|cement|lime|plaster).{0,250}(sand|mix|burn|slake)
+
+# -- electricity, physics, chemistry -------------------------------
+
+q   = how does a simple battery work
+hit = (battery|cell|voltaic).{0,300}(zinc|copper|acid|electrode|current)
+
+q   = how does an electric motor work
+hit = (motor|armature|commutator).{0,300}(magnet|current|rotat|coil)
+
+q   = how do I make an electromagnet
+hit = (electromagnet|coil).{0,250}(wire|iron|core|current|wind)
+
+q   = what is the relationship between voltage current and resistance
+hit = (ohm).{0,250}(volt|current|resist)|resistance.{0,200}current.{0,200}volt
+
+q   = why does time slow down when you move fast
+hit = (relativ|time dilation).{0,300}(clock|time|velocit|light)
+
+q   = what is an atom made of
+hit = (atom).{0,300}(proton|neutron|electron|nucleus)
+
+# -- agriculture and animals ---------------------------------------
+
+q   = how do I improve poor soil for growing crops
+hit = (soil).{0,300}(manure|compost|fertiliz|fertilis|lime|rotat|humus)
+
+q   = when should I plant and harvest wheat
+hit = (wheat).{0,300}(sow|plant|harvest|season|seed)
+
+q   = how do I keep chickens healthy
+hit = (fowl|chicken|hen|poultry).{0,300}(feed|house|disease|clean)
+
+q   = how does crop rotation work
+hit = (rotat).{0,300}(crop|soil|nitrogen|legume|field)
+
+q   = how do homing pigeons find their way home
+hit = (pigeon).{0,300}(home|homing|loft|fly|return|instinct)
+
+# -- Zeitlos -------------------------------------------------------
+
+q   = how do I flash gateware to a lakritz board
+src = docs
+hit = BOARD=lakritz|make .{0,40}flash
+
+q   = what address is the montgomery multiplier at
+src = docs
+hit = 0x7000_0600|montmul
+
+q   = how does the zeitlos memory translation unit work
+src = docs
+hit = (MTU|0x8000_0000).{0,300}(translat|virtual|mirror)
+
+q   = how do processes send messages to each other
+src = docs
+hit = (z_msg_send|mailbox|message).{0,300}(process|subject|payload|envelope)
+
+q   = what toolchain do I need to build zeitlos
+src = docs
+hit = (yosys|nextpnr|riscv).{0,300}(install|toolchain|build|version)
+
+q   = how does an app create a window
+src = docs
+hit = (z_win_create|window).{0,300}(app|create|flag|title)
+
+q   = how fast is the sd card
+src = docs
+hit = (KB/s|MB/s).{0,200}(read|write|card|sd)|sdcard.{0,200}(throughput|speed)
+
+q   = what is in the zar archive
+src = docs
+hit = (zar|archive).{0,300}(flash|core app|wm|net|term)
+
+q   = how does the instruction cache work
+src = docs
+hit = (icache|instruction cache).{0,300}(line|hit|miss|stride|fetch)
+
+q   = how do I write an app for zeitlos
+src = docs
+hit = (app).{0,300}(main|message loop|zwin|Makefile|z_proc)
+
+# -- general reference ---------------------------------------------
+
+q   = what is natural selection
+hit = (natural selection|survival of the fittest).{0,300}(species|variation|adapt|evolv)
+
+q   = what did the magna carta establish
+hit = (magna carta|charter).{0,400}(king|liberties|law|baron|right)
+
+q   = what is the best way to divide a large number by hand
+hit = (division|divisor|dividend).{0,250}(quotient|remainder|figure)
+
+q   = what does sun tzu say about knowing your enemy
+hit = (know).{0,120}(enemy).{0,300}(yourself|battle|victor)
+
+q   = what is a normal distribution
+hit = (normal distribution|gaussian|bell curve).{0,300}(mean|deviation|probabilit)
+
+# =====================================================================
+# PARAPHRASE QUESTIONS
+#
+# The half of the gold set that the first 63 were missing.
+#
+# 53 of those 63 shared a literal term between the question and the
+# pattern defining a correct answer -- which is precisely what BM25
+# ranks on, so the metric rewarded term matching by construction and
+# lexical retrieval looked unbeatable.
+#
+# Every question below describes a SITUATION in the words somebody
+# would reach for before knowing the technical term, and the `hit`
+# pattern deliberately avoids reusing those words. "my hands went white
+# and numb" must find the frostbite passage without either of them
+# sharing a word.
+#
+# This is the case dense retrieval exists for. If the trained encoder
+# is worth its LUTs it shows up here or nowhere.
+# =====================================================================
+
+q   = my hands went white and numb out in the cold
+tag = paraphrase
+hit = (frostbite|frozen).{0,300}(thaw|rewarm|tissue|circulation)
+
+q   = the cut keeps soaking through the cloth
+tag = paraphrase
+hit = (pressure dressing|tourniquet|direct pressure).{0,300}(bleed|blood|wound)
+
+q   = something struck my leg in the grass and it is swelling
+tag = paraphrase
+hit = (snakebite|snake bite|venom).{0,300}(swell|bite|antiven|constrict)
+
+q   = he collapsed after working in the sun all day
+tag = paraphrase
+hit = (heat exhaustion|heat stroke|heatstroke|sunstroke).{0,250}(shade|cool|salt|collaps)
+
+q   = my knife will not cut anything any more
+tag = paraphrase
+hit = (whet|hone|grind|strop).{0,250}(edge|blade|stone)
+
+q   = the stream might make us ill
+tag = paraphrase
+hit = (boil|iodine|purif|filter).{0,250}(water|dysenter|contaminat|organism)
+
+q   = it is getting dark and I am not where I meant to be
+tag = paraphrase
+hit = (shelter|lean-to|bivouac).{0,250}(night|build|construct|bough)
+
+q   = nothing here will light
+tag = paraphrase
+hit = (tinder|kindling|friction|flint).{0,300}(flame|ignit|ember|spark)
+
+q   = we have no way to tell which way we are going
+tag = paraphrase
+hit = (north star|polaris|shadow stick|sun).{0,250}(direction|bearing|north|navigat)
+
+q   = the meat will not keep in this heat
+tag = paraphrase
+hit = (salt|smok|cure|dry|brine).{0,300}(meat|beef|pork|fish|spoil)
+
+q   = the bread came out flat and heavy
+tag = paraphrase
+hit = (saleratus|soda|yeast|leaven|sour).{0,250}(dough|bread|rise|light)
+
+q   = the hens have stopped laying
+tag = paraphrase
+hit = (fowl|hen|poultry).{0,300}(lay|egg|feed|house|disease)
+
+q   = nothing grows well in this field any more
+tag = paraphrase
+hit = (manure|compost|rotat|legume|lime|humus).{0,300}(soil|crop|field|exhaust)
+
+q   = I need to join two pieces of wood so they will not pull apart
+tag = paraphrase
+hit = (mortise|tenon|dovetail|halved|scarf).{0,250}(joint|timber|wood)
+
+q   = how did people wash before you could buy anything
+tag = paraphrase
+hit = (lye|tallow|potash|ash).{0,300}(soap|boil|grease)
+
+q   = I want to make a lamp turn on from across the room
+tag = paraphrase
+hit = (circuit|switch|wire|current).{0,250}(lamp|bulb|batter|complete)
+
+q   = how can a piece of iron pick up nails
+tag = paraphrase
+hit = (magnet|coil|solenoid).{0,300}(iron|wind|current|attract)
+
+q   = does a clock on a fast ship run differently
+tag = paraphrase
+hit = (relativ|dilation|simultan).{0,400}(clock|time|observer|velocit)
+
+q   = why do the children of one pair of animals not all look alike
+tag = paraphrase
+hit = (variation|inherit|selection|descent).{0,350}(species|offspring|parent|struggle)
+
+q   = the bird was carried far away and still came back
+tag = paraphrase
+hit = (pigeon).{0,300}(home|loft|return|instinct|distance)
+
+q   = what did the barons force the king to agree to
+tag = paraphrase
+hit = (charter|liberties|barons).{0,400}(king|realm|granted|freemen)
+
+q   = is it better to win without fighting
+tag = paraphrase
+hit = (subdu|without fighting|victor).{0,300}(enemy|war|battle|supreme)
+
+q   = I have a big number to split up and no calculator
+tag = paraphrase
+hit = (divisor|dividend|quotient).{0,300}(remainder|figure|divide)
+
+q   = the wound has gone red and hot around the edges
+tag = paraphrase
+hit = (infect|inflamm).{0,300}(wound|red|swell|pus|fever)
+
+q   = he is making a noise but no air is moving
+tag = paraphrase
+hit = (obstruct|chok|airway|windpipe).{0,300}(dislodge|back blow|abdominal|breath)
+
+q   = the arm is bent where it should not bend
+tag = paraphrase
+hit = (fracture|broken bone).{0,300}(splint|immobil|deform|support)
+
+q   = what do I feed a family on almost nothing
+tag = paraphrase
+hit = (econom|frugal|cheap|waste).{0,350}(food|meat|family|dinner|provision)
+
+q   = the water we dug up tastes foul
+tag = paraphrase
+hit = (alum|charcoal|settle|filter|putrid).{0,300}(water|clear|muddy|taste)
+
+q   = can I eat this if I do not know what it is
+tag = paraphrase
+hit = (edibility test|taste test|poisonous plant).{0,300}(eat|plant|reaction)
+
+q   = the tooth is throbbing and I cannot see a doctor
+tag = paraphrase
+hit = (tooth|dental|gum|abscess).{0,300}(ache|pain|swell|relief|extract)
+
+q   = how do I get an aircraft to see us
+tag = paraphrase
+hit = (signal).{0,350}(mirror|smoke|panel|fire|aircraft|rescue)
+
+q   = the river is between us and where we need to be
+tag = paraphrase
+hit = (ford|cross|current).{0,300}(river|stream|depth|pole|wade)
+
+q   = I want to catch something to eat without a line
+tag = paraphrase
+hit = (trap|weir|spear|net|snare).{0,300}(fish|game|rabbit|catch)
+
+q   = these leaves are supposed to be good for something
+tag = paraphrase
+hit = (decoction|infusion|poultice|herb).{0,300}(remed|cure|heal|complaint)
+
+q   = what holds bricks together
+tag = paraphrase
+hit = (mortar|lime|cement|plaster).{0,300}(sand|mix|slake|brick)
+
+q   = I need to tie something and have only plants
+tag = paraphrase
+hit = (fiber|fibre|strand|bark|sinew).{0,300}(twist|braid|cord|rope|plait)
+
+# =====================================================================
+# KEYWORD QUERIES
+#
+# The third style, and probably the most common one in practice: no
+# question, no grammar, two or three words. `ask`'s input box is forty
+# columns on a 208-pixel window, which is not a box people write
+# sentences into.
+#
+# Worth testing SEPARATELY from both halves above, because the two
+# retrieval halves behave differently here for opposite reasons.
+#
+# BM25 should be at its best: nothing but content terms, no grammar to
+# dilute the idf weighting.
+#
+# The bow encoder should be at its WORST, and structurally so: a query
+# vector is the idf-weighted mean of its term vectors, and averaging
+# two or three is a far noisier estimate than averaging the ten or
+# twelve a written question supplies. There is no syntax for it to lose
+# because there was none, so any advantage it has over BM25 has to come
+# from the term vectors alone.
+#
+# Some are single-concept ("minimum memory"), some deliberately span
+# concepts the way a person narrows a search ("jesus bread fish").
+# =====================================================================
+
+q   = water purification tablets
+tag = keyword
+hit = (iodine|halazone|purification tablet).{0,250}(water|canteen|drink)
+
+q   = jesus bread fish
+tag = keyword
+hit = (loaves|fishes).{0,300}(multitude|thousand|baskets|blessed)
+
+q   = tourniquet limb
+tag = keyword
+hit = (tourniquet).{0,300}(limb|arm|leg|bleed)
+
+q   = edible plant test
+tag = keyword
+hit = (edibility test|taste test|edible plant)
+
+q   = snare rabbit
+tag = keyword
+hit = (snare|noose|deadfall).{0,250}(rabbit|game|animal|trail)
+
+q   = flint tinder spark
+tag = keyword
+hit = (flint|tinder|spark).{0,250}(fire|flame|steel|ignit)
+
+q   = polaris north
+tag = keyword
+hit = (north star|polaris).{0,250}(north|direction|navigat|latitude)
+
+q   = lye tallow soap
+tag = keyword
+hit = (lye|tallow|potash).{0,250}(soap|grease|boil)
+
+q   = mortise tenon
+tag = keyword
+hit = (mortise|tenon).{0,250}(joint|wood|timber|frame)
+
+q   = crop rotation nitrogen
+tag = keyword
+hit = (rotat|legume|clover).{0,300}(nitrogen|soil|crop|fertil)
+
+q   = homing pigeon loft
+tag = keyword
+hit = (pigeon).{0,300}(loft|home|fly|return)
+
+q   = voltaic cell zinc copper
+tag = keyword
+hit = (zinc|copper|voltaic).{0,300}(cell|batter|acid|electrode)
+
+q   = commutator armature
+tag = keyword
+hit = (commutator|armature).{0,300}(motor|current|magnet|rotat)
+
+q   = natural selection variation
+tag = keyword
+hit = (natural selection|variation).{0,300}(species|struggle|inherit|adapt)
+
+q   = magna carta barons
+tag = keyword
+hit = (charter|barons).{0,350}(king|liberties|realm|granted)
+
+q   = sun tzu deception
+tag = keyword
+hit = (deception|deceit|appear).{0,300}(war|enemy|able|attack)
+
+q   = frostbite rewarming
+tag = keyword
+hit = (frostbite|frozen).{0,250}(warm|thaw|tissue|rub)
+
+q   = artificial respiration
+tag = keyword
+hit = (mouth-to-mouth|artificial respiration|rescue breath).{0,250}(airway|breath|chest|victim)
+
+q   = splint fracture
+tag = keyword
+hit = (splint).{0,250}(fracture|bone|immobil|limb)
+
+q   = solar still
+tag = keyword
+hit = (still|condens|sheet|plastic).{0,250}(water|moisture|dig|hole)
+
+q   = smoking meat preservation
+tag = keyword
+hit = (smok|cure|salt).{0,300}(meat|preserv|keep|fish)
+
+q   = herbal poultice
+tag = keyword
+hit = (poultice|decoction|infusion).{0,250}(herb|apply|remed|heal)
+
+q   = whetstone edge
+tag = keyword
+hit = (whet|hone|stone|strop).{0,250}(edge|blade|sharp|knife)
+
+# -- Zeitlos docs. These only resolve in a pack containing zdocs; in an
+# -- Ark-only pack they are excluded with the rest.
+
+q   = minimum memory
+src = docs
+tag = keyword
+hit = (1MB|8MB|32MB|memory).{0,300}(board|minimum|requir|pool|fit)
+
+q   = line api
+src = docs
+tag = keyword
+hit = (z_win_hw_line|z_fb_hw_line|line).{0,250}(draw|raster|coordinat|clip)
+
+q   = mtu translation
+src = docs
+tag = keyword
+hit = (MTU|0x8000_0000).{0,300}(translat|virtual|mirror|window)
+
+q   = icache stride
+src = docs
+tag = keyword
+hit = (icache|instruction cache).{0,300}(line|stride|hit|miss)
+
+q   = zar flash
+src = docs
+tag = keyword
+hit = (zar|archive).{0,300}(flash|core app|offset)

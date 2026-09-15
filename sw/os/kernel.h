@@ -322,8 +322,52 @@ static inline uint32_t z_proc_stack_size_for(const char *name) {
 	// -- so a file costs roughly three times its own size. That
 	// arithmetic is right and the conclusion was not: it argues for
 	// more than LARGE's 64KB, not for 4MB. BIG exists for that gap.
+	// `ask` holds its coarse vector array and query encoder on the
+	// heap, one allocation per installed pack (sw/apps/ask/aidx.h).
+	// Measured with tools/ask: 0.90MB for the `arklite` pack alone,
+	// 1.54MB for `arklite` + `zdocs`, and AI_PACKS_MAX is 4.
+	//
+	// BIG was tried first and does not fit. `arklite` needs 1.00MB
+	// once stack headroom is counted against BIG's 1.048MB, which
+	// leaves nothing for a second pack -- and a second pack is the
+	// normal case, since `zdocs` is rebuilt every release while an
+	// Ark pack is rebuilt once in a while. HUGE is not generous
+	// here, it is the next size up.
+	//
+	// WHAT HUGE DOES NOT COVER, and this is worth knowing before
+	// assuming the tier bounds anything: residency is coarse_dim
+	// bytes per chunk, so it grows LINEARLY with the corpus. At the
+	// measured 461 chunks per MB of text and coarse_dim 32, 4MB
+	// covers about 237MB. A full Ark Medium is larger than that and
+	// fits NO tier -- the answer there is a narrower coarse vector
+	// or a clustered index, not a bigger number here. `ask ingest`
+	// projects this and says so before anything is downloaded; see
+	// docs/ask_app.md, "Residency, and the ceiling it runs into".
+	//
+	// Same 8MB-and-up consequence as the two below: on a 1MB board
+	// this cannot succeed and should not, since the smallest useful
+	// pack is 1.3MB on the card.
 	if (!strcmp(name, "zcc") || !strcmp(name, "posix"))
 		return Z_PROC_STACK_SIZE_HUGE;
+	// `ask` holds NOTHING resident with the pack it ships
+	// (`dense = no`, tools/ask): no vectors and no encoder, so the
+	// term dictionary is binary-searched on the card and postings are
+	// read per query term. What it needs is its own ~30KB of .bss
+	// plus a stack.
+	//
+	// It was HUGE while the dense half was on, where the coarse
+	// vector array and the encoder were 0.90MB for one pack and
+	// AI_PACKS_MAX is 4. That half was measured and dropped -- see
+	// docs/ask_app.md, "The decision, and how it came out" -- and the
+	// tier came down with it.
+	//
+	// A pack built with `dense = yes` still WORKS here, up to about a
+	// megabyte of vectors; past that malloc fails and the app reports
+	// `out of memory -- needs HUGE tier`, which is the accurate thing
+	// to do about it. Move it back up if you install one.
+	if (!strcmp(name, "ask"))
+		return Z_PROC_STACK_SIZE_BIG;
+
 	if (!strcmp(name, "vi"))
 		return Z_PROC_STACK_SIZE_BIG;
 	if (!strcmp(name, "web"))

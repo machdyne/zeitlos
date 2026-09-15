@@ -988,6 +988,17 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 			// reusing this same pid slot would inherit stale name
 			// registrations that were never its own)
 			k_pidreg_release_all(z_pid);
+			// release any file handles this process left open.
+			// Same shape and same reason as the pidreg sweep
+			// above: without it a process killed by wm's close
+			// icon (Z_WIN_FLAG_CLOSE_KILLS_OWNER) keeps its
+			// handles forever, and Z_FS_MAX_OPEN is 8 -- so
+			// relaunching one app that holds a handle exhausts
+			// the table in a session and only a reboot recovers
+			// it. See k_fs_release_all() in fsapi.c, and the
+			// KNOWN LIMITATION note in sw/common/zfs.h that this
+			// closes.
+			k_fs_release_all(z_pid);
 			// kill the process
 			z_procs[z_pid].base = 0x00000000;
 			z_procs[z_pid].flags = 0x00000000;

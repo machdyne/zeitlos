@@ -3010,7 +3010,73 @@ int main(void) {
 
 	{
 		char arg[Z_FLIST_PATH_MAX];
-		if (z_launch_arg_take(arg, sizeof(arg))) open_path(arg);
+		if (z_launch_arg_take(arg, sizeof(arg))) {
+
+			/* Split off a "#<decimal>" byte-offset fragment, if
+			 * there is one. `ask` (sw/apps/ask, docs/ask_app.md)
+			 * hands over a passage as
+			 *
+			 *     /ark/arklite/books/00000072.md#39006
+			 *
+			 * so the reader lands ON the matched text rather than
+			 * at the top of a 300KB manual.
+			 *
+			 * Only an ALL-DIGIT fragment is taken as an offset.
+			 * follow() already gives "#anchor" its heading meaning
+			 * for in-document links, and that is untouched -- a
+			 * heading whose anchor is entirely digits is not a
+			 * thing Markdown produces. */
+			uint32_t want_off = 0;
+			bool have_off = false;
+
+			for (int h = 0; arg[h]; h++) {
+
+				if (arg[h] != '#') continue;
+
+				int d = h + 1;
+				bool digits = (arg[d] != 0);
+				uint32_t v = 0;
+
+				for (; arg[d]; d++) {
+					if (arg[d] < '0' || arg[d] > '9') {
+						digits = false;
+						break;
+					}
+					v = v * 10u + (uint32_t)(arg[d] - '0');
+				}
+
+				if (digits) {
+					arg[h] = 0;
+					want_off = v;
+					have_off = true;
+				}
+
+				break;
+
+			}
+
+			if (open_path(arg) && have_off) {
+
+				/* line_at_offset() extends the sparse index as
+				 * far as the offset and returns the source line
+				 * containing it, with that point's parser state
+				 * already restored -- which is the whole reason
+				 * a jump into a document renders correctly
+				 * instead of resuming mid-block. The scrollbar
+				 * drag already uses it.
+				 *
+				 * COST: the index frontier only moves FORWARD,
+				 * so this streams from wherever it is to
+				 * want_off. At a realistic 300-600 KB/s that is
+				 * about a second for a 344KB document, which is
+				 * why tools/ask splits large works at build time
+				 * rather than leaving an 8MB Bible whole. */
+				top_line = line_at_offset(want_off);
+				top_sub = 0;
+
+			}
+
+		}
 	}
 
 	repaint();
