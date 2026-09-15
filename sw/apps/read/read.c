@@ -2721,26 +2721,83 @@ static void layout(void) {
 
 }
 
+// -- fused scroll impulses --
+//
+// A page costs most of a second on this machine, and a held key
+// repeats far faster than that. One repaint per repeat is then a
+// queue the reader is still emptying half a minute after the key was
+// released -- scrolling that appears to have a mind of its own.
+//
+// The impulses are requests to MOVE, not requests to PAINT, so:
+// accumulate the distance while a batch is pending and paint the
+// answer once. A batch is whatever the mailbox held when the loop
+// last looked, which under repetition is exactly the work that would
+// otherwise have queued. What arrives during one repaint is answered
+// by the next, and after the key is released there is at most one
+// repaint left -- the one the accumulated distance asks for.
+static int key_pend_lines;	// display lines, + down / - up
+static bool key_pend_pages;	// a page-sized key contributed
+
+static void scroll_flush(void) {
+
+	if (!key_pend_lines) { key_pend_pages = false; return; }
+
+	int n = key_pend_lines;
+	bool pages = key_pend_pages;
+	key_pend_lines = 0;
+	key_pend_pages = false;
+
+	if (n > 0) {
+		// Arrows alone stay on the blit path -- it is what they
+		// take one at a time, and one fused blit stands in for n.
+		// A page key anywhere in the batch takes the page path,
+		// which scroll_down() walks in a single forward pass.
+		if (!pages) scroll_forward(n);
+		else { scroll_down(n); repaint_body(); }
+	} else {
+		scroll_up(-n);
+		repaint_body();
+	}
+
+}
+
 static void handle_key(uint32_t keysym, uint8_t mods) {
 
 	int page = view_h / (BODY_FONT->h + 1);
 	if (page < 1) page = 1;
 
+	// Scroll impulses fuse (see above). Anything else is answered
+	// only after the pending scroll has painted -- the order the
+	// requests arrived in.
 	switch (keysym) {
 
-		case Z_KEY_DOWN:    scroll_forward(1); return;
-		case Z_KEY_UP:      scroll_up(1); repaint_body(); return;
+		case Z_KEY_DOWN:    key_pend_lines++; return;
+		case Z_KEY_UP:      key_pend_lines--; return;
 		// Space is page down, the convention every pager shares --
 		// it is the key a hand rests on while reading. Shift+Space
 		// goes back up, for the same reason.
 		case ' ':
-			if (mods & Z_KBD_MOD_SHIFT) scroll_up(page - 1);
-			else scroll_down(page - 1);
-			repaint_body();
+			if (mods & Z_KBD_MOD_SHIFT) key_pend_lines -= page - 1;
+			else key_pend_lines += page - 1;
+			key_pend_pages = true;
 			return;
 
-		case Z_KEY_PAGEDOWN: scroll_down(page - 1); repaint_body(); return;
-		case Z_KEY_PAGEUP:   scroll_up(page - 1); repaint_body(); return;
+		case Z_KEY_PAGEDOWN:
+			key_pend_lines += page - 1;
+			key_pend_pages = true;
+			return;
+		case Z_KEY_PAGEUP:
+			key_pend_lines -= page - 1;
+			key_pend_pages = true;
+			return;
+
+		default: break;
+
+	}
+
+	scroll_flush();
+
+	switch (keysym) {
 
 		case Z_KEY_HOME:
 			top_line = 0; top_sub = 0; sel_link = -1; repaint_body(); return;
@@ -2804,6 +2861,11 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 static uint8_t last_buttons;
 
 static void handle_mouse(uint32_t packed) {
+
+	// A pointer event refers to what is on the glass, so any scroll
+	// the keyboard already asked for paints first -- the order the
+	// requests arrived in.
+	scroll_flush();
 
 	int cx, cy;
 	bool inside = z_win_mouse_content_xy(&win, packed, &cx, &cy);
@@ -3131,7 +3193,7 @@ int main(void) {
 					if ((int)Z_WM_UNPACK_TBICON_ID(msg.obj.val.uint32) != win.id)
 						break;
 					if (Z_WM_UNPACK_TBICON_KIND(msg.obj.val.uint32) ==
-						Z_WM_TBICON_OPEN) do_open();
+						Z_WM_TBICON_OPEN) { scroll_flush(); do_open(); }
 
 					break;
 
@@ -3143,6 +3205,10 @@ int main(void) {
 			}
 
 		}
+
+		// One paint answers however many scroll impulses the drain
+		// just read -- see scroll_flush().
+		scroll_flush();
 
 		// Block until something arrives -- but no longer than the
 		// deferred body redraw's deadline, or a drag that ends by the
