@@ -61,6 +61,8 @@ UART is a byte stream, so frames are delimited:
 | `0x11` LINK | ESP32 -> Z | up, rssi, disconnect reason, scan found, station IP (4 bytes, big-endian) |
 | `0x30` LOG | ESP32 -> Z | one ESP_LOG line (shown as `esp32: ...`) |
 | `0x31` BURST | ESP32 -> Z | `{n}`: exactly n framed messages follow back to back; sent when the poll carried credit >= 2 and n things were queued |
+| `0x32` INPUT | ESP32 -> Z | `{usage, mods, pressed}`: one synthetic key event from a remote desktop viewer, injected into the HID ring |
+| `0x33` MOUSE | ESP32 -> Z | `{x_lo, x_hi, y_lo, y_hi, buttons}`: pointer position in framebuffer coordinates. `buttons[2:0]` = left/right/middle; bit 7 = the pointer left the viewer |
 
 Every ESP32 -> Zeitlos frame is a reply (fw version 2): `RX_POLL` is
 answered with the oldest queued control message (HELLO, LINK, LOG),
@@ -69,6 +71,14 @@ else a DATA frame, else NOP; `DATA` gets `DATA_ACK`; `STA` gets
 already in the FIFO before sending and matches replies in order, so a
 reply that arrives late (the ESP32's tcpip and wifi tasks can delay
 the link task by tens of ms) is simply the next thing read.
+
+`INPUT` and `MOUSE` are the two exceptions, and they are exceptions
+because they are *input*: a keystroke that waited for the next poll
+would be a keystroke with visible latency. They go out unsolicited, and
+they can, for the same reason the burst machinery can -- the 8 KiB
+receive FIFO holds them, and an arrival there raises the same
+`cpu_irq[8]` a wired MAC raises, which wakes `net` at once. See
+[remote_desktop.md](remote_desktop.md) for where they come from.
 
 Two things keep the wire busy instead of waiting on round trips.
 `RX_POLL` carries a credit -- how many frames the receive FIFO can
@@ -127,6 +137,15 @@ followed) and stream it as the TFTP file; the local name must be 8.3.
 The TFTP client waits ~20 s for the first block to cover the TLS
 handshake.
 
+## The remote desktop
+
+The firmware also serves the desktop itself. `net` streams the
+framebuffer to the gateway over UDP, `screend.c` relays it to browsers
+over a WebSocket, and the page sends keyboard and mouse back as the
+`INPUT` and `MOUSE` messages above -- so a ULX3S with no monitor and no
+USB HID attached is still usable, over the same link and the same
+firmware. See [remote_desktop.md](remote_desktop.md).
+
 ## Power
 
 The ESP32 radio at full power plus the FPGA plus SD card writes exceed
@@ -138,8 +157,19 @@ resets.
 
 ## Firmware
 
-`esp32/zeitlos-nic` (ESP-IDF 5.4). See its README for building,
-flashing (through a passthru bitstream) and the `ZTEST` self-test
-(`esp32/nic_selftest.py`), which exercises scan/association/DHCP/ping
-and the gateway (`inject gw|ping|dns`, `poll`, `sta2`) with the ESP32's
-console attached.
+`esp32/zeitlos-nic` (ESP-IDF 5.4), built with `idf.py build`.
+
+**Reflashing it is a procedure, not a command**, and the order is what
+matters: the ESP32's UART0 only reaches USB through a passthru
+bitstream, the sdcard has to come out because its DAT0 line is the
+chip's boot strap, that means two power cycles, and each of those wipes
+the FPGA's SRAM -- which holds the ESP32 in reset until the bitstream
+is loaded again. `esp32/flash.py` walks through it, checks what it is
+about to write, and checks the result; **its README is the reference**,
+including what to do when `esptool` says `Wrong boot mode detected`.
+
+`esp32/nic_selftest.py` is the other half: it drives the `ZTEST` CLI on
+the ESP32's own console under the same passthru bitstream, exercising
+scan, association, DHCP and ping (`test <ssid> <psk>`) plus the gateway
+(`inject gw|ping|dns`, `poll`, `sta2`) with no sdcard and no Zeitlos
+running at all.
