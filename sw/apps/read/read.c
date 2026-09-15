@@ -1726,6 +1726,17 @@ static void draw_body_from(int thr) {
 static bool body_dirty;
 static uint32_t body_deadline;
 
+// Set when the thumb has moved to a position the body has not been
+// repainted at yet. The BYTE offset lives in sbar.value the whole
+// drag; resolving it to a (line, parser state) is line_at_offset(),
+// a seek and a parse, and running that per pointer SAMPLE is what
+// made a dense drag answer the release seconds late -- each sample
+// cost more than the gap to the next, so the release sat in the
+// mailbox behind them. The thumb tracking the hand is the cheap
+// part; the expensive half runs once, at the repaint, against
+// wherever the thumb is by then.
+static bool body_seek;
+
 // Set while an Open is in progress, between the dialog closing and
 // the new document being rendered.
 //
@@ -1827,7 +1838,17 @@ static void update_scrollbar(void) {
 	// It is also a slightly better proportion indicator: a line of
 	// code and a wrapped paragraph occupy very different amounts of
 	// screen, and bytes track that more closely than line numbers do.
-	z_scrollbar_set_range(&sbar, fsize ? (int32_t)fsize : 1, span);
+	//
+	// During a thumb drag the range is FROZEN at what the drag
+	// started with. The page figure is a real screen's worth of
+	// bytes, and that changes as the drag passes headings and wrapped
+	// paragraphs -- so re-applying it mid-drag changed the thumb's
+	// SIZE under the hand, and the position mapping with it. The
+	// fresh figure is applied on release, by the repaint that
+	// answers the drag; the drag itself runs on one consistent
+	// scale.
+	if (!sbar.dragging)
+		z_scrollbar_set_range(&sbar, fsize ? (int32_t)fsize : 1, span);
 	z_scrollbar_set_value(&sbar, (int32_t)top_off);
 	z_scrollbar_draw(&sbar, true);
 
@@ -1835,6 +1856,34 @@ static void update_scrollbar(void) {
 	// The table now describes what is on the glass -- set once,
 	// after the layout completes, not per block inside the loop.
 	drawn_valid = true;
+
+}
+
+// Resolves the position a scrollbar drag left behind, once -- see
+// body_seek above. The selection goes with the position: it is
+// anchored to screen rows, which a new position redefines (see
+// scroll_down()).
+static void resolve_seek(void) {
+
+	if (!body_seek) return;
+	body_seek = false;
+
+	// The scrollbar is in bytes; find the block that starts at or
+	// before that offset. Extending the index to reach it is the one
+	// place a jump into unread territory pays for a scan -- and that
+	// scan builds the index, so the same jump is instant afterwards.
+	top_line = line_at_offset((uint32_t)sbar.value);
+	top_sub = 0;
+	sel_link = -1;
+	sel_clear();
+
+	// The step table and vlines[] describe the glass AT THE OLD
+	// position; the position just changed under them. scroll_forward()
+	// trusts drawn_valid to mean they agree with top_line -- without
+	// this, a scroll key answered mid-drag blits the new position's
+	// neighbours from the old page's table and lands back where the
+	// drag started.
+	drawn_valid = false;
 
 }
 
@@ -1848,6 +1897,8 @@ static void draw_body(void) {
 }
 
 static void repaint(void) {
+
+	resolve_seek();
 
 	z_win_clear(&win);
 
@@ -2097,6 +2148,8 @@ static void repaint_body(void) {
 #if READ_PROFILE
 	uint32_t t0 = rp_cyc();
 #endif
+
+	resolve_seek();
 
 	draw_body();
 	update_scrollbar();
@@ -2646,6 +2699,10 @@ static bool open_path(const char *p) {
 	top_off = 0;
 	sel_link = -1;
 
+	// A pending drag position names bytes of the PREVIOUS document;
+	// it must not follow the reader into this one.
+	body_seek = false;
+
 	// Remember the directory for the next Open dialog.
 	int last = 0;
 	for (int k = 0; path[k]; k++) if (path[k] == '/') last = k;
@@ -2741,6 +2798,10 @@ static bool key_pend_pages;	// a page-sized key contributed
 static void scroll_flush(void) {
 
 	if (!key_pend_lines) { key_pend_pages = false; return; }
+
+	// A scrollbar drag's position is a scroll request too, and an
+	// earlier one: the impulses below move FROM where it landed.
+	resolve_seek();
 
 	int n = key_pend_lines;
 	bool pages = key_pend_pages;
@@ -2884,18 +2945,15 @@ static void handle_mouse(uint32_t packed) {
 
 		if (z_scrollbar_mouse(&sbar, cx, cy, buttons)) {
 
-			// The scrollbar is in bytes; find the block that starts
-			// at or before that offset. Extending the index to reach
-			// it is the one place a jump into unread territory pays
-			// for a scan -- and that scan builds the index, so the
-			// same jump is instant afterwards.
-			top_line = line_at_offset((uint32_t)sbar.value);
-			top_sub = 0;
-			sel_link = -1;
-			sel_clear();		// see scroll_down()
-
 			// The thumb has already moved (z_scrollbar_mouse drew
-			// it). Defer the expensive half -- see defer_body().
+			// it). Where it points is resolved at the repaint, not
+			// here -- see body_seek. The expensive half of the
+			// gesture runs once, against wherever the thumb is by
+			// then, instead of once per sample against every
+			// position the hand passed through.
+			body_seek = true;
+			sel_link = -1;
+
 			defer_body();
 
 		}
