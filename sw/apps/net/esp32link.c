@@ -154,12 +154,12 @@ static int poll_productive;	/* last reply was not NOP: ask again at once */
 
 /* visor / USB mouse coexistence (reg_vmouse bit 24).
  * net used to OR present on every ZNIC_MOUSE and never clear it, so a
- * single visor (or mouse_ws) packet froze the USB pointer until the
- * FPGA was reset. Last writer wins: a visor packet takes the sprite,
- * visor silence of ~1 s (tab closed, pointer left the canvas, synthetic
- * mouse stopped) drops present so the USB mux in rtl/sysctl.v wins
- * without a wiggle. wm also clears present on a USB move. buttons bit 7
- * is an explicit leave from the visor page / mouse_ws release. */
+ * single visor packet froze the USB pointer until the FPGA was reset.
+ * Last writer wins: a visor packet takes the sprite, visor silence of
+ * ~1 s (tab closed, pointer left the canvas, synthetic mouse stopped)
+ * drops present so the USB mux in rtl/sysctl.v wins without a wiggle.
+ * wm also clears present on a USB move. buttons bit 7 is an explicit
+ * leave from the visor page. */
 #define VMOUSE_HOLD_TICKS  TICKS_PER_SEC
 static uint32_t vmouse_last_tick;
 static int vmouse_held;

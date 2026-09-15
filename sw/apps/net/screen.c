@@ -19,10 +19,10 @@
  * the screen does not hold still for it, so the thirty stripes were
  * thirty different moments. With a window being dragged, the browser
  * assembled a frame holding the elastic band in several places at once
- * -- the "trocitos de los bordes" seen over the remote desktop and
- * never locally, where the XOR band is drawn and undone in pairs.
+ * -- the leftover scraps of its edges seen over the remote desktop
+ * and never locally, where the XOR band is drawn and undone in pairs.
  * Measured before this change: 91% of the frames a drag produced held
- * the band at up to five different x positions (tools/frame_mosaic.py).
+ * the band at up to five different x positions.
  *
  * The cure is a snapshot. One tight pass copies the whole framebuffer
  * into this process's own memory AND hashes it on the way through, and
@@ -135,11 +135,11 @@ static uint32_t rdcycle(void)
  * 8 rows whatever the amount, and an even one is worse.
  *
  * What that cost, on screen: dragging a window over the remote desktop
- * left "trocitos de los bordes" behind -- the elastic band's two
- * VERTICAL edges, the only part of the picture made of full-height
- * lines, were the part net could not see change. Only the stripes
- * holding the band's horizontal top and bottom were ever resent, and
- * the leftovers survived until the five-second full resend wiped them.
+ * left scraps of the elastic band behind -- its two VERTICAL edges,
+ * the only part of the picture made of full-height lines, were the
+ * part net could not see change. Only the stripes holding the band's
+ * horizontal top and bottom were ever resent, and the leftovers
+ * survived until the five-second full resend wiped them.
  * Locally the same drag is spotless, which is what kept the blame on
  * compositing for so long: the wm was right, the change detector was
  * blind. Measured: a drag shipped 2-4 stripes a frame where 18 had
@@ -224,7 +224,7 @@ static int snapshot(int *dirty)
  * does not know about them -- PackBits stops the moment it has
  * produced its 1280 bytes -- so an ESP32 running the old firmware and
  * a browser running the old page both keep working, byte for byte,
- * with only the frame assembly missing. tools/grab_fb.py likewise.
+ * with only the frame assembly missing.
  *
  * A reader tells trailer from payload by arithmetic, not by the magic
  * alone: the trailer is there only if there are exactly four bytes
