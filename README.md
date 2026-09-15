@@ -43,6 +43,7 @@ For a diagram of all of it -- buses, arbiters, the address map, clocks, interrup
  - Image decoding and [vector rendering](docs/svg.md) shared by every app (`sw/common`)
  - IP/ARP/ICMP/UDP/DHCP/NTP/DNS/TFTP/TCP/telnet/ssh [networking](docs/networking.md)
  - TLS 1.3 with X.509 certificate verification -- see [tls](docs/tls.md) and [x509](docs/x509.md)
+ - [Remote desktop](docs/remote_desktop.md) in a browser, with keyboard and mouse back, on boards with the [ESP32 link](docs/esp32link.md)
 
 #### Memory Translation Unit
 
