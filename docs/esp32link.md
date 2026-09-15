@@ -31,7 +31,7 @@ downloads via the gateway's TFTP server.
   Reset value `en=0, gpio0=1`: the module is held in reset until `net`
   starts, so it never fights the FPGA for the SD card bus.
 - `0xf000_0300`: `rtl/esp32_rxfifo.v`, an 8 KiB block-RAM receive FIFO
-  on the UART1 RX pin. `+0` = `{overrun, count[11:0]}`, `+4` pops a
+  on the UART1 RX pin. `+0` = `{overrun, count[13:0]}`, `+4` pops a
   byte, a write to `+8` flushes. The 16550's 16-byte FIFO cannot hold a
   frame while another process owns the CPU (one time slice away from
   the CPU is ~400 bytes at 1 Mbaud), so the driver reads replies from
