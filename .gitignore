@@ -69,3 +69,6 @@ sw/apps/posix/posix.bin
 sw/apps/posix/posix.map
 sw/apps/posix/posix.dasm
 sw/apps/posix/tests/px_shell_test
+
+# python bytecode (esp32/flash.py imports nic_selftest)
+__pycache__/
