@@ -1967,6 +1967,21 @@ static void scroll_forward(int n) {
 		z_clip_t c;
 		z_win_content_rect(&win, &c);
 
+		// Ask BEFORE relying on the blit, the way term.c does.
+		// z_fb_hw_scroll() refuses silently when the destination is
+		// not inside a single visible rectangle -- the blitter
+		// cannot clip a copy, so a window covered where it is
+		// scrolling must repaint instead (zgfx.c,
+		// copy_region_allows_rect()). Without this check a
+		// half-covered reader shifted its layout cache and redrew
+		// only the strip for a blit that never happened, leaving
+		// the old rows standing above the new ones.
+		if (!z_fb_hw_scroll_allowed((int)c.x0 + MARGIN,
+			(int)c.y0 + MARGIN, view_w, view_h - MARGIN)) {
+			repaint_body();
+			return;
+		}
+
 		// The body band only, below the top margin: that margin is
 		// blank and must stay blank, and blitting from c.y0 would
 		// drag the first row of text up into it.
