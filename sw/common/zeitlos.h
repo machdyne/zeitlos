@@ -35,7 +35,7 @@ typedef uint32_t *(*z_kernel_ptr_t)(uint32_t, uint32_t *, uint32_t);
 
 // UART1 (16550) -- same register layout as UART0, offset 0x100 so
 // existing UART0 software is unchanged. ULX3S: ESP32 UART1 on
-// GPIO16/17 (rtl/sysctl.v, docs/esp32-net.md). Not present on boards
+// GPIO16/17 (rtl/sysctl.v, docs/esp32link.md). Not present on boards
 // without UART1; net's ESP32LINK PHY is the only caller.
 #define reg_uart1_data (*(volatile uint8_t*)0xf0000100)
 #define reg_uart1_dlbl (*(volatile uint8_t*)0xf0000100)

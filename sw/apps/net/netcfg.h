@@ -2,7 +2,7 @@
 #define NETCFG_H
 
 /*
- * Parse /NET.CFG on the FAT root (8.3, FF_USE_LFN=0). See docs/esp32-net.md.
+ * Parse /NET.CFG on the FAT root (8.3, FF_USE_LFN=0). See docs/esp32link.md.
  *
  * ssid/psk  -> ESP32 STA (ZNIC_STA)
  * dhcp/ip/mask/gw/dns -> net.c IP stack

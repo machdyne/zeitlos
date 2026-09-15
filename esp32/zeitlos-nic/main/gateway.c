@@ -1,7 +1,7 @@
 /*
  * Dual-netif gateway: znic (192.168.4.1/24, Ethernet over UART) + STA.
  * NAPT on the STA address so Zeitlos (typically 192.168.4.2) can reach
- * the AP's LAN / the internet. See docs/esp32-net.md.
+ * the AP's LAN / the internet. See docs/esp32link.md.
  *
  * Do not touch GPIO 2/4/12/13/14/15 (ULX3S microSD).
  */

@@ -1,5 +1,5 @@
 /*
- * Zeitlos -- NET.CFG parser. See netcfg.h and docs/esp32-net.md.
+ * Zeitlos -- NET.CFG parser. See netcfg.h and docs/esp32link.md.
  */
 
 #include <stdio.h>

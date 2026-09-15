@@ -2270,11 +2270,11 @@ module sysctl #()
 	wire [9:0] vmouse_x = vmouse_r[9:0];
 	wire [9:0] vmouse_y = vmouse_r[19:10];
 
-	// 2 KiB block-RAM receive FIFO on the same UART1 RX pin (see
+	// 8 KiB block-RAM receive FIFO on the same UART1 RX pin (see
 	// rtl/esp32_rxfifo.v): the 16550's 16 bytes are not enough for a
-	// polled, time-sliced reader at 1 Mbaud.
+	// polled, time-sliced reader at 3 Mbaud.
 	// ESP32 receive FIFO drives the same cpu_irq[8] the wired MACs use:
-	// a non-empty FIFO wakes net (docs/esp32link-architecture.md), so
+	// a non-empty FIFO wakes net (docs/remote_desktop.md), so
 	// net can idle instead of polling this link continuously.
 	wire esp32rx_ready;
 	assign eth_rx_ready = esp32rx_ready;

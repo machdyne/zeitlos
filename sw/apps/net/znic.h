@@ -3,7 +3,7 @@
 
 /*
  * ZNIC -- UART framing between Zeitlos (esp32link.c) and the ESP32
- * firmware (esp32/zeitlos-nic). See docs/esp32-net.md.
+ * firmware (esp32/zeitlos-nic). See docs/esp32link.md.
  *
  *   0x7E 0x5A | ver:u8 | type:u8 | n:u16le | payload[n] | crc16-ccitt
  *

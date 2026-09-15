@@ -102,7 +102,7 @@ static esp_err_t ws_handler(httpd_req_t *req)
 			 * it lands in the FPGA's receive FIFO, which raises the
 			 * cpu_irq[8] that wakes net at once -- input no longer
 			 * waits for net's next poll. See esp32_rxfifo.v's rx_ready
-			 * and docs/esp32link-architecture.md. */
+			 * and docs/remote_desktop.md. */
 			znic_send(want == 5 ? ZNIC_MOUSE : ZNIC_INPUT, ev, want);
 	}
 	return ESP_OK;

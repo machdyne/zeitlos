@@ -251,8 +251,8 @@ else ifeq ($(BOARD), sergei_ml1)
 	FLASH_OFFSET = -o
 else ifeq ($(BOARD), ulx3s)
 	FAMILY = ecp5
-	# Same 12/25/45/85K PCB and LPF. Default matches upstream (25k);
-	# this workspace's board is 85K: make BOARD=ulx3s DEVICE=85k
+	# Same 12/25/45/85K PCB and LPF; DEVICE picks the fitted chip.
+	# Default matches upstream (25k) -- pass DEVICE=85k on an 85F board.
 	DEVICE ?= 25k
 	PACKAGE = CABGA381
 	LPF = ulx3s.lpf

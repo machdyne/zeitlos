@@ -204,7 +204,7 @@ static void vmouse_release_if_stale(void)
  *
  * The clean version is a ZNIC control message from screend saying how
  * many clients it has. It needs the ESP32 reflashed (SD out, passthru
- * bitstream -- docs/esp32link-architecture.md), so it waits for the
+ * bitstream -- esp32/zeitlos-nic/README.md), so it waits for the
  * next time that has to happen anyway.
  */
 #define VIEWER_INPUT_HOLD  (30 * TICKS_PER_SEC)

@@ -2,8 +2,8 @@
  * Zeitlos -- deep receive FIFO for the ESP32 link (ULX3S UART1 RX).
  *
  * The 16550's 16-byte FIFO cannot hold a ZNIC frame while a
- * time-sliced process is away from the CPU (~4 ms = 400 bytes at
- * 1 Mbaud). This module listens on the same RX pin and buffers 2 KiB
+ * time-sliced process is away from the CPU (~4 ms = 1200 bytes at
+ * 3 Mbaud). This module listens on the same RX pin and buffers 8 KiB
  * in block RAM, so the driver can wait for replies with interrupts
  * enabled and never lose a late one. TX still goes through the 16550.
  *
@@ -14,7 +14,8 @@
  */
 
 module esp32_rxfifo #(
-	parameter CLK_PER_BIT = 48,	/* 48 MHz / 1 Mbaud */
+	parameter CLK_PER_BIT = 48,	/* 48 MHz / 1 Mbaud; sysctl.v
+					   instantiates 16 = 3 Mbaud */
 	parameter DEPTH_BITS = 13	/* 8192 bytes -- room for a credit
 					   burst of ~5 MTU frames (znic v3) */
 ) (
