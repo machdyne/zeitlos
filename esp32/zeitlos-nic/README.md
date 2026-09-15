@@ -89,9 +89,9 @@ here would keep flashing the old layout without saying so); that
 flash a stale copy of a page you just edited (`--build` rebuilds,
 `--force-stale` goes ahead anyway); that the page is really inside the
 image; and that nothing is holding the serial port, since the FT231X
-cannot do JTAG and UART at once. Afterwards it checks the far end:
-that the desktop answers, that the page it serves is the new one, and
-that the framebuffer is still streaming.
+cannot do JTAG and UART at once. Afterwards it checks the far end: that
+the desktop answers, that the page it serves carries the marker the
+image was checked for, and that the framebuffer is still streaming.
 
 Useful flags: `--build` rebuilds first; `--from <stage>` picks a run up
 where it stopped (`flash` with the card already out, `soc` with it back

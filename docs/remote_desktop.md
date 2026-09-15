@@ -316,10 +316,10 @@ nothing in between carries a colour to change.
 
 `esp32/flash.py --from verify --host <ip>` checks both ends without
 touching the board: that the desktop answers, that the page it serves
-is the one in this tree, and that stripes are actually arriving, by
-counting how many of the thirty turn up over the WebSocket. It is a
-useful thing to run on its own after a board moves network or a build
-lands, not only after flashing.
+carries the marker of a viewer that assembles whole frames, and that
+stripes are actually arriving, by counting how many of the thirty turn
+up over the WebSocket. It is worth running on its own after a board
+moves network, not only after flashing.
 
 Anything else wants a browser. The protocol above is small enough to
 speak from a script -- a WebSocket, binary frames, PackBits, and
