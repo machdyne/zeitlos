@@ -6,7 +6,9 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
 /* Colours, type and masthead copied from zeitlos.org / web/index.html.
-   No grey: ink on paper. The canvas is the 1 bpp framebuffer and is not themed. */
+   No grey: ink on paper. The 1 bpp stream has no phosphor, so the same
+   selector tints the canvas locally -- lit pixels are --ink, clear are
+   --paper -- the way HDMI's video_mode colours a set bit. */
 :root{
   --ink:#000000;
   --paper:#ffffff;
@@ -38,10 +40,18 @@ a{ color:inherit; }
   display:flex; align-items:center; gap:.6rem 1rem; flex-wrap:wrap;
   min-height:52px; padding:.6rem 1.25rem;
 }
-.brand{
-  flex:none; font-family:var(--sans); font-weight:700;
-  font-size:1.125rem; letter-spacing:.14em; text-transform:uppercase;
-  text-decoration:none; white-space:nowrap;
+/* text1.png as a mask so it takes --ink, same as zeitlos.org.
+   Inlined: this page cannot fetch a second file. */
+.wordmark{
+  display:block; flex:none; width:104px;
+  aspect-ratio:1929 / 366;
+  background-color:var(--ink);
+  --wm:url("data:image/png;base64,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");
+  -webkit-mask-image:var(--wm);
+          mask-image:var(--wm);
+  -webkit-mask-repeat:no-repeat; mask-repeat:no-repeat;
+  -webkit-mask-position:left center; mask-position:left center;
+  -webkit-mask-size:contain; mask-size:contain;
 }
 .tag{
   font-size:.8125rem; letter-spacing:-0.01em; opacity:.62;
@@ -78,7 +88,7 @@ a{ color:inherit; }
   .masthead__inner{ gap:.375rem; padding:.5rem .75rem; min-height:0; }
   .phos__btn{ padding:.4em .36em; letter-spacing:.03em; }
   .masthead__link{ padding:.42em .6em; letter-spacing:.06em; }
-  .brand{ font-size:1rem; letter-spacing:.1em; }
+  .wordmark{ width:80px; }
 }
 
 .stage{
@@ -87,7 +97,7 @@ a{ color:inherit; }
   background:var(--paper);
 }
 canvas{
-  display:block; background:#000; flex:none;
+  display:block; background:var(--paper); flex:none;
   /* no border: getBoundingClientRect() is the hit box for the mouse */
   outline:1px solid var(--ink);
   image-rendering:pixelated; image-rendering:crisp-edges;
@@ -101,7 +111,7 @@ canvas{
 <body>
 <header class="masthead">
   <div class="masthead__inner">
-    <a class="brand" href="https://zeitlos.org/" target="_blank" rel="noopener">Zeitlos</a>
+    <a class="wordmark" href="https://zeitlos.org/" target="_blank" rel="noopener" aria-label="Zeitlos"></a>
     <span class="tag">A whole computer, small enough to read</span>
     <div class="masthead__spacer"></div>
     <div id="st">connecting...</div>
@@ -121,21 +131,17 @@ canvas{
   <canvas id="c" width="640" height="480"></canvas>
 </div>
 <script>
-(function(){
-  var root=document.documentElement;
-  var btns=document.querySelectorAll('.phos__btn');
-  for(var i=0;i<btns.length;i++){
-    btns[i].addEventListener('click',function(e){
-      var mode=e.currentTarget.getAttribute('data-set');
-      root.setAttribute('data-phosphor',mode);
-      for(var j=0;j<btns.length;j++)
-        btns[j].setAttribute('aria-pressed',String(btns[j]===e.currentTarget));
-    });
-  }
-})();
-
 const cv=document.getElementById('c'),cx=cv.getContext('2d'),st=document.getElementById('st');
 const stage=document.getElementById('stage');
+const PAL={
+ paper:[[0,0,0],[255,255,255]],
+ white:[[255,255,255],[0,0,0]],
+ green:[[0x33,0xff,0x6a],[0x07,0x0a,0x07]],
+ amber:[[0xff,0xb0,0x00],[0x0a,0x08,0x06]]
+};
+let palInk=PAL.paper[0], palPaper=PAL.paper[1];
+const stripes=new Array(30);
+let maxFrame=-1,dirtyTop=480,dirtyBot=0,lastPaint=0;
 // Stripes land on an off-screen canvas and only whole frames reach the
 // visible one -- see "FRAMES, NOT STRIPES" below.
 const off=document.createElement('canvas');off.width=640;off.height=480;
@@ -174,18 +180,48 @@ function unpack(src){
   return out;
 }
 function paint(idx,buf){
+  stripes[idx]=buf;
   const d=img.data;let p=0;
+  const ir=palInk[0],ig=palInk[1],ib=palInk[2];
+  const pr=palPaper[0],pg=palPaper[1],pb=palPaper[2];
   for(let i=0;i<1280;i++){
     const b=buf[i];
     // LSB-first within each byte: bit 0 is the leftmost pixel
     // (z_fb_set_pixel uses mask 1<<(x%32), little-endian VRAM words).
+    // A set bit is the phosphor (ink); a clear bit is the paper.
+    // HDMI's video_mode does the same mapping in the scanout.
     for(let bit=0;bit<8;bit++){
-      const v=(b>>bit)&1?255:0;
-      d[p]=d[p+1]=d[p+2]=v;d[p+3]=255;p+=4;
+      if((b>>bit)&1){ d[p]=ir;d[p+1]=ig;d[p+2]=ib; }
+      else { d[p]=pr;d[p+1]=pg;d[p+2]=pb; }
+      d[p+3]=255;p+=4;
     }
   }
   ox.putImageData(img,0,idx*16);
 }
+function recolor(){
+  ox.fillStyle='rgb('+palPaper[0]+','+palPaper[1]+','+palPaper[2]+')';
+  ox.fillRect(0,0,640,480);
+  for(let i=0;i<30;i++) if(stripes[i]) paint(i,stripes[i]);
+  cx.drawImage(off,0,0);
+  dirtyTop=480; dirtyBot=0;
+}
+function setPhosphor(mode){
+  if(!PAL[mode]) mode='paper';
+  palInk=PAL[mode][0]; palPaper=PAL[mode][1];
+  document.documentElement.setAttribute('data-phosphor',mode);
+  const btns=document.querySelectorAll('.phos__btn');
+  for(let j=0;j<btns.length;j++)
+    btns[j].setAttribute('aria-pressed',String(btns[j].getAttribute('data-set')===mode));
+  recolor();
+}
+(function(){
+  const btns=document.querySelectorAll('.phos__btn');
+  for(let i=0;i<btns.length;i++){
+    btns[i].addEventListener('click',function(e){
+      setPhosphor(e.currentTarget.getAttribute('data-set'));
+    });
+  }
+})();
 // -- FRAMES, NOT STRIPES --
 //
 // net sends the stripes of one frame back to back and each carries a
@@ -215,7 +251,6 @@ function paint(idx,buf){
 //
 // A net without the trailer is still handled: no trailer means show the
 // stripe at once, which is exactly what this page used to do.
-let maxFrame=-1,dirtyTop=480,dirtyBot=0,lastPaint=0;
 function blit(){
   if(dirtyBot<=dirtyTop) return;
   cx.drawImage(off,0,dirtyTop,640,dirtyBot-dirtyTop,0,dirtyTop,640,dirtyBot-dirtyTop);
