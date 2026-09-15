@@ -1,19 +1,168 @@
 <!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Zeitlos</title>
+<html lang="en" data-phosphor="paper">
+<head>
+<meta charset="utf-8">
+<title>Zeitlos</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
- body{margin:0;background:#111;display:flex;flex-direction:column;
-      align-items:center;font:13px system-ui;color:#888}
- canvas{margin-top:12px;image-rendering:pixelated;width:640px;max-width:98vw;
-        border:1px solid #333;background:#000}
- #st{margin:8px}
-</style></head><body>
-<canvas id="c" width="640" height="480"></canvas><div id="st">conectando…</div>
+/* Colours, type and masthead copied from zeitlos.org / web/index.html.
+   No grey: ink on paper. The canvas is the 1 bpp framebuffer and is not themed. */
+:root{
+  --ink:#000000;
+  --paper:#ffffff;
+  --sans:"Helvetica Neue", Helvetica, Arial, system-ui, sans-serif;
+  --mono:ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
+}
+html[data-phosphor="white"]{ --ink:#ffffff; --paper:#000000; }
+html[data-phosphor="green"]{ --ink:#33ff6a; --paper:#070a07; }
+html[data-phosphor="amber"]{ --ink:#ffb000; --paper:#0a0806; }
+*,*::before,*::after{ box-sizing:border-box; }
+html,body{ height:100%; height:100dvh; margin:0; }
+html{ -webkit-text-size-adjust:100%; background:var(--paper); }
+body{
+  background:var(--paper); color:var(--ink);
+  font-family:var(--sans);
+  display:flex; flex-direction:column;
+  overflow:hidden; user-select:none; -webkit-user-select:none;
+  transition:background-color .18s linear, color .18s linear;
+}
+a{ color:inherit; }
+:focus-visible{ outline:2px solid var(--ink); outline-offset:3px; }
+
+.masthead{
+  flex:none; z-index:20;
+  background:var(--paper);
+  border-bottom:1px solid var(--ink);
+}
+.masthead__inner{
+  display:flex; align-items:center; gap:.6rem 1rem; flex-wrap:wrap;
+  min-height:52px; padding:.6rem 1.25rem;
+}
+.brand{
+  flex:none; font-family:var(--sans); font-weight:700;
+  font-size:1.125rem; letter-spacing:.14em; text-transform:uppercase;
+  text-decoration:none; white-space:nowrap;
+}
+.tag{
+  font-size:.8125rem; letter-spacing:-0.01em; opacity:.62;
+  white-space:nowrap; min-width:0; overflow:hidden; text-overflow:ellipsis;
+}
+.masthead__spacer{ flex:1 1 2rem; min-width:.5rem; }
+#st{
+  font-family:var(--mono); font-size:.6875rem; letter-spacing:.06em;
+  opacity:.62; white-space:nowrap; font-variant-numeric:tabular-nums;
+}
+.phos{ display:flex; align-items:center; gap:.5rem; }
+.phos__label{
+  font-family:var(--mono); font-size:.6875rem; letter-spacing:.14em;
+  text-transform:uppercase; opacity:.62;
+}
+.phos__set{ display:flex; border:1px solid var(--ink); }
+.phos__btn{
+  appearance:none; background:transparent; color:inherit; cursor:pointer;
+  font-family:var(--mono); font-size:.6875rem; letter-spacing:.1em;
+  text-transform:uppercase; padding:.4em .6em; border:0;
+  border-left:1px solid var(--ink);
+}
+.phos__btn:first-child{ border-left:0; }
+.phos__btn[aria-pressed="true"]{ background:var(--ink); color:var(--paper); }
+.masthead__link{
+  font-family:var(--mono); font-size:.75rem; letter-spacing:.1em;
+  text-transform:uppercase; text-decoration:none;
+  border:1px solid var(--ink); padding:.42em .85em; white-space:nowrap;
+}
+.masthead__link:hover{ background:var(--ink); color:var(--paper); }
+@media (max-width:900px){ .tag{ display:none; } }
+@media (max-width:600px){
+  .phos__label{ display:none; }
+  .masthead__inner{ gap:.375rem; padding:.5rem .75rem; min-height:0; }
+  .phos__btn{ padding:.4em .36em; letter-spacing:.03em; }
+  .masthead__link{ padding:.42em .6em; letter-spacing:.06em; }
+  .brand{ font-size:1rem; letter-spacing:.1em; }
+}
+
+.stage{
+  flex:1 1 auto; min-height:0; min-width:0;
+  display:flex; align-items:center; justify-content:center;
+  background:var(--paper);
+}
+canvas{
+  display:block; background:#000; flex:none;
+  /* no border: getBoundingClientRect() is the hit box for the mouse */
+  outline:1px solid var(--ink);
+  image-rendering:pixelated; image-rendering:crisp-edges;
+  touch-action:none;
+}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{ transition-duration:.01ms !important; }
+}
+</style>
+</head>
+<body>
+<header class="masthead">
+  <div class="masthead__inner">
+    <a class="brand" href="https://zeitlos.org/" target="_blank" rel="noopener">Zeitlos</a>
+    <span class="tag">A whole computer, small enough to read</span>
+    <div class="masthead__spacer"></div>
+    <div id="st">connecting...</div>
+    <div class="phos">
+      <span class="phos__label" aria-hidden="true">Phosphor</span>
+      <div class="phos__set" role="group" aria-label="Display colour">
+        <button type="button" class="phos__btn" data-set="paper" aria-pressed="true">Paper</button>
+        <button type="button" class="phos__btn" data-set="white" aria-pressed="false">White</button>
+        <button type="button" class="phos__btn" data-set="green" aria-pressed="false">Green</button>
+        <button type="button" class="phos__btn" data-set="amber" aria-pressed="false">Amber</button>
+      </div>
+    </div>
+    <a class="masthead__link" href="https://github.com/machdyne/zeitlos" target="_blank" rel="noopener">GitHub</a>
+  </div>
+</header>
+<div class="stage" id="stage">
+  <canvas id="c" width="640" height="480"></canvas>
+</div>
 <script>
+(function(){
+  var root=document.documentElement;
+  var btns=document.querySelectorAll('.phos__btn');
+  for(var i=0;i<btns.length;i++){
+    btns[i].addEventListener('click',function(e){
+      var mode=e.currentTarget.getAttribute('data-set');
+      root.setAttribute('data-phosphor',mode);
+      for(var j=0;j<btns.length;j++)
+        btns[j].setAttribute('aria-pressed',String(btns[j]===e.currentTarget));
+    });
+  }
+})();
+
 const cv=document.getElementById('c'),cx=cv.getContext('2d'),st=document.getElementById('st');
+const stage=document.getElementById('stage');
+// Stripes land on an off-screen canvas and only whole frames reach the
+// visible one -- see "FRAMES, NOT STRIPES" below.
+const off=document.createElement('canvas');off.width=640;off.height=480;
+const ox=off.getContext('2d');
 const img=cx.createImageData(640,16);
-let frames=0,bytes=0;
-// PackBits decode -> 1280 bytes (ver sw/apps/net/screen.c)
+let frames=0,bytes=0,used=0;
+let link='connecting...',rateS=0,rateK=0,lastF=0,lastB=0;
+
+function fit(){
+  const aw=stage.clientWidth, ah=stage.clientHeight;
+  if(aw<2||ah<2) return;
+  let s=Math.min(aw/640, ah/480);
+  const i=Math.round(s);
+  // Prefer a whole number of framebuffer pixels when it costs less than
+  // one CSS pixel of slack; otherwise take every remaining pixel at 4:3.
+  if(i>=1 && Math.abs(i-s)*480<1.5) s=i;
+  let w=Math.max(1,Math.floor(640*s));
+  let h=Math.max(1,Math.round(w*480/640));
+  if(h>ah){ h=Math.max(1,Math.floor(480*s)); w=Math.max(1,Math.round(h*640/480)); }
+  cv.style.width=w+'px';
+  cv.style.height=h+'px';
+}
+addEventListener('resize',fit);
+if(window.visualViewport) visualViewport.addEventListener('resize',fit);
+if(window.ResizeObserver) new ResizeObserver(fit).observe(stage);
+fit();
+
 function unpack(src){
   const out=new Uint8Array(1280); let o=0,i=0;
   while(i<src.length && o<1280){
@@ -21,6 +170,7 @@ function unpack(src){
     if(n<128){ for(let k=0;k<=n && o<1280;k++) out[o++]=src[i++]; }
     else if(n>128){ const v=src[i++]; for(let k=0;k<257-n && o<1280;k++) out[o++]=v; }
   }
+  used=i;
   return out;
 }
 function paint(idx,buf){
@@ -34,9 +184,67 @@ function paint(idx,buf){
       d[p]=d[p+1]=d[p+2]=v;d[p+3]=255;p+=4;
     }
   }
-  cx.putImageData(img,0,idx*16);
+  ox.putImageData(img,0,idx*16);
 }
-// -- teclado: event.code -> USB HID usage, modificadores en un byte --
+// -- FRAMES, NOT STRIPES --
+//
+// net sends the stripes of one frame back to back and each carries a
+// 4-byte trailer: 0x5A, the frame number, and a flag on the last one
+// (sw/apps/net/screen.c). Painting each stripe straight onto the visible
+// canvas showed a frame arriving in pieces -- during a window drag the
+// elastic band appeared in two places while the rest was still in
+// flight. So stripes go to an off-screen canvas and the visible one is
+// updated once per frame, in one drawImage of just the rows that moved.
+//
+// The rule for WHEN a frame is done has to survive the relay: the ESP32
+// keeps one shadow stripe per index and forwards whatever is pending in
+// index order, so a single websocket message can carry the tail of one
+// frame after the head of the next. Showing the picture whenever the
+// frame number moved on therefore cut frames in half -- measured, 8-20%
+// of the updates were still mid-frame. So the picture is shown only when
+// the LAST stripe of the NEWEST frame arrives. A stripe that turns up
+// late, tagged with an older frame, is still the freshest thing there is
+// for those rows (the shadow would have overwritten it otherwise), so it
+// is painted; it just does not close anything.
+//
+// blit() also runs on a timer: if the last stripe of a frame never
+// arrives -- lost UDP, or overwritten in the shadow by the next frame --
+// nothing would close it and the picture would sit a frame behind for
+// good. It fires on silence, not on a deadline, so it cannot cut a frame
+// that is still streaming in.
+//
+// A net without the trailer is still handled: no trailer means show the
+// stripe at once, which is exactly what this page used to do.
+let maxFrame=-1,dirtyTop=480,dirtyBot=0,lastPaint=0;
+function blit(){
+  if(dirtyBot<=dirtyTop) return;
+  cx.drawImage(off,0,dirtyTop,640,dirtyBot-dirtyTop,0,dirtyTop,640,dirtyBot-dirtyTop);
+  dirtyTop=480;dirtyBot=0;
+}
+function markDirty(idx){
+  if(idx*16<dirtyTop) dirtyTop=idx*16;
+  if(idx*16+16>dirtyBot) dirtyBot=idx*16+16;
+  lastPaint=performance.now();
+}
+function trailer(src){
+  if(src.length-used!==4 || src[used]!==0x5A) return null;
+  return {seq:src[used+1]|(src[used+2]<<8), last:(src[used+3]&1)!==0};
+}
+// 16-bit sequence numbers wrap; compare as a signed difference.
+function newer(a,b){ return ((((a-b)&0xffff)^0x8000)-0x8000)>0; }
+setInterval(()=>{ if(dirtyBot>dirtyTop && performance.now()-lastPaint>250) blit(); },50);
+
+function showStatus(){
+  if(link!=='connected'){ st.textContent=link; return; }
+  st.textContent=link+' · '+rateS+' stripes/s · '+rateK.toFixed(1)+' KiB/s';
+}
+setInterval(()=>{
+  rateS=frames-lastF; rateK=(bytes-lastB)/1024;
+  lastF=frames; lastB=bytes;
+  showStatus();
+},1000);
+
+// -- keyboard: event.code -> USB HID usage, modifiers in one byte --
 const HID={
  KeyA:4,KeyB:5,KeyC:6,KeyD:7,KeyE:8,KeyF:9,KeyG:10,KeyH:11,KeyI:12,KeyJ:13,
  KeyK:14,KeyL:15,KeyM:16,KeyN:17,KeyO:18,KeyP:19,KeyQ:20,KeyR:21,KeyS:22,
@@ -56,16 +264,30 @@ function key(e,pressed){
  e.preventDefault();
  if(sock&&sock.readyState===1) sock.send(new Uint8Array([u,mods(e),pressed?1:0]));
 }
-// -- ratón: coords del canvas escaladas a 640x480, botones 1/2/4 --
-let mbtn=0;
-function mouseSend(e){
- const r=cv.getBoundingClientRect();
- let x=Math.round((e.clientX-r.left)*640/r.width);
- let y=Math.round((e.clientY-r.top)*480/r.height);
- x=Math.max(0,Math.min(639,x)); y=Math.max(0,Math.min(479,y));
- if(sock&&sock.readyState===1)
-   sock.send(new Uint8Array([x&255,x>>8,y&255,y>>8,mbtn]));
+// -- mouse: canvas CSS box scaled to 640x480, buttons 1/2/4 --
+let mbtn=0,mx=0,my=0,mdirty=0,mlast=0;
+function toFB(clientX,clientY){
+  const r=cv.getBoundingClientRect();
+  if(r.width<1||r.height<1) return [0,0];
+  // floor, not round: a CSS point sits in the framebuffer pixel whose
+  // box contains it. round() sent the centre of pixel 0 to 1.
+  let x=Math.floor((clientX-r.left)*640/r.width);
+  let y=Math.floor((clientY-r.top)*480/r.height);
+  return [Math.max(0,Math.min(639,x)), Math.max(0,Math.min(479,y))];
 }
+function mouseFlush(){
+ if(!mdirty||!sock||sock.readyState!==1) return;
+ sock.send(new Uint8Array([mx&255,mx>>8,my&255,my>>8,mbtn]));
+ mdirty=0; mlast=performance.now();
+}
+function mouseSend(e){
+ const p=toFB(e.clientX,e.clientY);
+ mx=p[0]; my=p[1]; mdirty=1;
+ // Coalesce moves to ~30 Hz, always sending the latest position.
+ // Downs/ups go out at once so a click cannot hide behind the timer.
+ if(e.type!=='mousemove' || performance.now()-mlast>=33) mouseFlush();
+}
+setInterval(mouseFlush, 33);
 function mouseLeave(){
  mbtn=0;
  if(sock&&sock.readyState===1)
@@ -82,19 +304,26 @@ addEventListener('keyup',e=>key(e,0));
 function go(){
   const ws=new WebSocket('ws://'+location.host+'/ws');sock=ws;
   ws.binaryType='arraybuffer';
-  ws.onopen=()=>st.textContent='conectado';
-  ws.onclose=()=>{st.textContent='reconectando…';setTimeout(go,1500)};
+  ws.onopen=()=>{link='connected';showStatus();};
+  ws.onclose=()=>{link='reconnecting...';showStatus();setTimeout(go,1500)};
   ws.onmessage=e=>{
     const a=new Uint8Array(e.data); bytes+=a.length;
     let i=0;
     while(i+3<=a.length){
       const idx=a[i], len=a[i+1]|(a[i+2]<<8); i+=3;
       if(i+len>a.length) break;
-      const raw=unpack(a.subarray(i,i+len)); i+=len;
-      if(raw&&raw.length===1280){paint(idx,raw);frames++;}
+      const src=a.subarray(i,i+len);
+      const raw=unpack(src); i+=len;
+      if(!raw||raw.length!==1280||idx>=30) continue;
+      const tr=trailer(src);
+      paint(idx,raw); markDirty(idx); frames++;
+      if(!tr){ blit(); continue; }
+      if(maxFrame<0||newer(tr.seq,maxFrame)) maxFrame=tr.seq;
+      if(tr.last&&tr.seq===maxFrame) blit();
     }
   };
-  setInterval(()=>{st.textContent=`conectado — ${frames} franjas, ${(bytes/1024).toFixed(0)} KiB`;},1000);
 }
 go();
-</script></body></html>
+</script>
+</body>
+</html>
