@@ -72,6 +72,18 @@ int32_t hid_read_key(void) {
 	z_kernel_ptr(Z_SYS_HID_READ_KEY, (uint32_t *)&obj, 0);
 	return obj.val.int32;
 }
+void hid_inject(int32_t packed_event) {
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_obj_t obj = {0};
+	obj.type = Z_INT32;
+	obj.val.int32 = packed_event;
+	z_kernel_ptr(Z_SYS_HID_INJECT, (uint32_t *)&obj, 0);
+}
+
+void z_wm_wake(void) {
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_kernel_ptr(Z_SYS_WM_WAKE, NULL, 0);
+}
 
 // -- messaging --
 
@@ -81,10 +93,31 @@ z_rv z_msg_send(z_msg_t *msg) {
 	return rv->val.uint32;
 }
 
+// One-message put-back. z_win_apply_redraw() drains SET_CLIP that
+// arrived after a REDRAW while the app was busy (a 65 s decode, a
+// launch-arg wait) so the paint answers the newest region; anything
+// else it read has to go back or it is lost. Integer payloads copy
+// by value. A blob is only unread if it still lives in this struct's
+// own _blobs scratch -- SET_CLIP is applied, not unread.
+static z_msg_t msg_unread;
+static int msg_have_unread;
+
 z_rv z_msg_read(z_msg_t *msg) {
+	if (msg_have_unread) {
+		*msg = msg_unread;
+		msg_have_unread = 0;
+		return Z_OK;
+	}
 	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
 	z_obj_t *rv = (z_obj_t *)z_kernel_ptr(Z_SYS_MSG_READ, (uint32_t *)msg, 0);
 	return rv->val.uint32;
+}
+
+z_rv z_msg_unread(const z_msg_t *msg) {
+	if (!msg || msg_have_unread) return Z_FAIL;
+	msg_unread = *msg;
+	msg_have_unread = 1;
+	return Z_OK;
 }
 
 z_rv z_msg_new_send(uint32_t to, uint32_t subject, uint32_t tag, z_obj_t obj) {
@@ -439,7 +472,7 @@ ssize_t _read(int fd, void *ptr, size_t len)
    for (i = 0; i < len; i++) {
 
 		// wait for character
-		while (uart_rx_empty());
+		while (uart_rx_empty()) z_proc_wait(1);
 
 		// uart_getc(), which was MISSING.
 		//
@@ -456,8 +489,7 @@ ssize_t _read(int fd, void *ptr, size_t len)
 		if (p[i] == 0x0a) return i + 1;
 		if (p[i] == 0x0d) { p[i] = 0x0a; return i + 1; }
 		if (term_echo) {
-			// wait for free buffer space
-			while (uart_tx_full()) /* wait */;
+			while (uart_tx_full()) z_proc_wait(1);
 			uart_putc(p[i]);
 		}
    }
@@ -569,10 +601,10 @@ ssize_t _write(int fd, const void *ptr, size_t len)
 	const unsigned char *p = ptr;
 	for (int i = 0; i < len; i++) {
 		if (p[i] == 0x0a) {
-			while (uart_tx_full()) /* wait */;
+			while (uart_tx_full()) z_proc_wait(1);
 			uart_putc(0x0d);
 		}
-		while (uart_tx_full()) /* wait */;
+		while (uart_tx_full()) z_proc_wait(1);
 		uart_putc(p[i]);
 	}
 	return len;

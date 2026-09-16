@@ -14,6 +14,10 @@
  * (docs/scheme_api.md \S3) is in place.
  */
 
+#include <stdbool.h>
+
+#include "../../common/zmsg.h"	// z_msg_t -- see zapi_win_msg() below
+
 // registers every zapi_* procedure below into ms_global_env. Call
 // once, from main(), right after ms_init_lix() succeeds -- same
 // ordering ms_stdlib.l's own load already needs (a zapi_* builtin
@@ -30,5 +34,13 @@ void zapi_register(void);
 // zapi.c's own procedures only ever run from an ms_eval() call, never
 // from the message loop directly.
 void zapi_win_close(int id);
+
+// applies a compositor message (Z_WM_SET_CLIP, Z_WM_WINDOW_MOVED) to
+// whichever Scheme-created window it names, and returns true if one
+// of them took it. Called from repl.c's main loop, for the same
+// reason zapi_win_close() is: repl can own several windows off one
+// pid, so the routing has to happen where the table is -- see
+// zapi.c's own comment.
+bool zapi_win_msg(z_msg_t *msg);
 
 #endif

@@ -14,8 +14,6 @@
 #include <unistd.h>
 
 #include "../common/zeitlos.h"
-#include "../common/zsoc.h"	// Z_TICK_HZ
-#include "kernel.h"
 #include "uart.h"
 
 bool term_echo = true;
@@ -28,13 +26,12 @@ ssize_t _read(int file, void *ptr, size_t len)
    unsigned char *p = ptr;
 	ssize_t i;
    for (i = 0; i < len; i++) {
-		while (k_uart_rx_empty()) /* wait */;
+		while (k_uart_rx_empty()) k_uart_wait_rx();
 		p[i] = (char)k_uart_getc();
 		if (p[i] == 0x0a) return i + 1;
 		if (p[i] == 0x0d) { p[i] = 0x0a; return i + 1; }
 		if (term_echo) {
-			while (k_uart_tx_full()) /* wait */;
-			reg_uart0_data = p[i];
+			k_uart_putc(p[i]);
 		}
    }
    return len;
@@ -58,7 +55,6 @@ void readline(char *buf, int maxlen) {
 	while (1) {
 
 		c = getch();
-
 		if (c == EOF) {
 
 			// Nothing in the FIFO. This used to `continue`, i.e. spin
@@ -68,28 +64,14 @@ void readline(char *buf, int maxlen) {
 			// taking a full share out of whatever was in the
 			// foreground. wm at least yielded a tick.
 			//
-			// z_uart_irq() (sw/os/uart.c) calls k_proc_unblock(0) as
-			// soon as a byte lands, so this wakes on the very next
-			// keystroke rather than at the end of the timeout.
-			//
-			// The timeout is a backstop, not the mechanism. It covers
-			// a byte that arrived in the window between getch()
-			// finding the FIFO empty and this call marking us blocked
-			// -- k_proc_unblock() records that case in
-			// Z_PROC_FLAG_WAKE so it cannot actually be lost, but a
-			// bounded wait means a missed wakeup degrades to a small
-			// latency rather than a hung console.
-			// k_proc_wait() is the syscall handler and takes its
-			// timeout in a z_obj_t, so it is called the same way
-			// here as from the dispatch table -- the kernel is not
-			// going through reg_kernel to reach its own function.
-			{
-				z_obj_t w;
-				w.type = Z_UINT32;
-				w.val.uint32 = Z_TICK_HZ / 4;
-				k_proc_wait(&w);
-			}
-
+			// k_uart_wait_rx() (sw/os/uart.c) marks this process
+			// BLOCKED under the same mask as the empty test and lets
+			// the RX interrupt unblock it when a byte lands, so the
+			// prompt wakes on the very next keystroke and needs no
+			// timeout to fall back on: the window in which a byte
+			// could arrive between "FIFO is empty" and "I am blocked"
+			// does not exist. _read() above waits the same way.
+			k_uart_wait_rx();
 			continue;
 
 		}
@@ -139,10 +121,8 @@ ssize_t _write(int file, const void *ptr, size_t len)
 	const unsigned char *p = ptr;
 	for (int i = 0; i < len; i++) {
 		if (p[i] == 0x0a) {
-			while (k_uart_tx_full()) /* wait */;
 			k_uart_putc(0x0d);
 		}
-		while (k_uart_tx_full()) /* wait */;
 		k_uart_putc(p[i]);
 	}
 	return len;

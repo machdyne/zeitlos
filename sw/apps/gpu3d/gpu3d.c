@@ -557,15 +557,45 @@ static struct {
  * 48MHz). */
 #define PERF_MARK(v)          uint32_t v = perf_cyc()
 #define PERF_ACC(field, v)    perf.field += perf_cyc() - (v)
-#define PERF_FRAME_BEGIN()    uint32_t pf_c = perf_cyc(); uint32_t pf_i = perf_ins()
+#define PERF_FRAME_BEGIN()    uint32_t pf_c = perf_cyc(); uint32_t pf_i = perf_ins(); \
+	uint32_t pf_gpu0 = perf.c_erase + perf.c_text + perf.c_draw
 #define PERF_FRAME_END(n)     do { \
 		perf.i_frame += perf_ins() - pf_i; \
 		perf.c_frame += perf_cyc() - pf_c; \
 		perf.edges += (uint32_t)(n); \
 		perf.frames++; \
+		frame_gpu_cyc = (perf.c_erase + perf.c_text + perf.c_draw) - pf_gpu0; \
 	} while (0)
 
 #define PERF_CYC_PER_US   (Z_SYSCLK_HZ / 1000000u)
+
+/* Stall detector. frame_gpu_cyc is the part of the last
+ * render_frame() spent inside the phases that wait on the GPU
+ * (erase/text/draw -- the waits themselves live in zgfx.c, behind
+ * z_win_fill_rect()/fps_draw()/draw_edge()/render_shaded()). The main
+ * loop calls stall_check() once per iteration with the whole-iteration
+ * wall time: an iteration over 100 ms with gpu-wait ~ 0 means the CPU
+ * went elsewhere (another process, the scheduler); gpu-wait ~ wall
+ * means the GPU or the VRAM bus was busy. The tick (z_uptime_ticks(),
+ * ~732Hz) lets a log reader compute the exact period between stalls. */
+static uint32_t frame_gpu_cyc;
+static uint32_t stall_frame_no;
+
+#define GPU3D_STALL_CYC (100u * 1000u * PERF_CYC_PER_US)	/* 100 ms */
+
+static void stall_check(uint32_t wall, uint32_t gpu) {
+
+	stall_frame_no++;
+
+	if (wall <= GPU3D_STALL_CYC) return;
+
+	printf("gpu3d: stall %lu ms (gpu-wait %lu ms) frame %lu tick %lu\n",
+		(unsigned long)(wall / (1000u * PERF_CYC_PER_US)),
+		(unsigned long)(gpu / (1000u * PERF_CYC_PER_US)),
+		(unsigned long)stall_frame_no,
+		(unsigned long)z_uptime_ticks());
+
+}
 
 /* One phase of the breakdown: "name 12.3ms 45%  ". Milliseconds to
  * one decimal, computed from microseconds so there is no float
@@ -579,7 +609,14 @@ static void perf_phase(const char *name, uint32_t c, uint32_t total) {
 
 }
 
+/* Off by default: the 1 Hz three-line dump was itself the cube's
+ * 1.000 s stall. The stall detector above stays live. Toggle at
+ * runtime with 'p'. */
+static int gpu3d_perf_report = 0;
+
 static void perf_report(void) {
+
+	if (!gpu3d_perf_report) return;
 
 	uint32_t now = z_uptime_ticks();
 	uint32_t dt = now - perf.last_tick;
@@ -1300,11 +1337,23 @@ static void render_frame(void) {
  * arrays they index are in an inconsistent state at that moment. This
  * is exactly the hazard that makes it worth NOT unioning the loader's
  * hash tables with the projection arrays to save memory. */
+static int clip_fully_occluded(void)
+{
+	if (win.clip_n == 1 &&
+	    (win.clip[0].x1 < win.clip[0].x0 || win.clip[0].y1 < win.clip[0].y0))
+		return 1;
+	return 0;
+}
+
 static void paint_full(void) {
 
+	// Animated content cannot repaint by damage alone: painting only the newly
+	// exposed strip leaves the last frame in the rest of the window.
+	z_win_damage_ignore(&win);
 	z_win_clear(&win);
 
 	prev_valid = false;
+	span_prev_valid = false;
 
 	if (loading) {
 		z_win_draw_text(&win, 2, 2, "Loading...", 1, &z_font_5x8);
@@ -1618,6 +1667,28 @@ static void forward_msg(z_msg_t *msg, void *user) {
 		// optional: wm waits for it when a region narrows.
 		case Z_WM_SET_CLIP:
 			z_win_apply_clip(&win, &msg->obj);
+			// prev_* SURVIVES a region change, and that is the whole
+			// point of keeping it.
+			//
+			// It records where the last frame's edges were drawn, so
+			// the next frame can erase them one at a time. A region
+			// change does not move or clear a single pixel this
+			// window owns: it only says which of them it may still
+			// touch, and the erase is clipped by exactly that. What
+			// invalidates the record is wm CLEARING the window --
+			// paint_full() below, on a redraw -- or the window
+			// MOVING, and both already reset it.
+			//
+			// Forgetting it here left a stale wireframe on the glass
+			// after every drag. A drag freezes every window
+			// (Z_WM_CLIP_FREEZE) and thaws it with its region back;
+			// neither takes anything off the screen, and a window
+			// whose region came back unchanged gets no REDRAW, so
+			// nothing cleared it -- the next frame drew a second cube
+			// over the first, and a third after the next drag.
+			// Measured with two cubes: 1665 lit pixels where one
+			// cube is about 600, and the picture almost static
+			// because new edges kept landing on ink already there.
 			break;
 
 		case Z_WM_REDRAW:
@@ -1703,6 +1774,15 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 			z_win_fill_rect(&win, 0, 0, content_w, content_h, 0);
 			break;
 
+#if GPU3D_PERF
+		case 'p':
+		case 'P':
+			gpu3d_perf_report = !gpu3d_perf_report;
+			printf("gpu3d: perf_report %s\n",
+				gpu3d_perf_report ? "on" : "off");
+			break;
+#endif
+
 		case 'o':
 		case 'O':
 			do_open();
@@ -1779,6 +1859,18 @@ int main(void) {
 
 	for (;;) {
 
+#if GPU3D_PERF
+		/* Whole-iteration wall: from this point in the previous pass
+		 * to now -- message drain, render, fps, the sleep below, and
+		 * whatever other processes ran in between. frame_gpu_cyc is
+		 * the previous render_frame()'s GPU-wait share of that. */
+		static uint32_t iter_prev_t0;
+		uint32_t iter_t0 = perf_cyc();
+		if (iter_prev_t0)
+			stall_check(iter_t0 - iter_prev_t0, frame_gpu_cyc);
+		iter_prev_t0 = iter_t0;
+#endif
+
 		z_msg_t msg;
 
 		/* Drain the whole queue each pass rather than one message per
@@ -1840,10 +1932,12 @@ int main(void) {
 
 		}
 
-		advance_spin();
-		render_frame();
-		fps_tick_update();
-		perf_report();
+		if (!clip_fully_occluded()) {
+			advance_spin();
+			render_frame();
+			fps_tick_update();
+			perf_report();
+		}
 
 	
 		/* Yield. This loop used to spin, so the app was RUNNABLE

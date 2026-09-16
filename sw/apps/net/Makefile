@@ -180,6 +180,22 @@ ifneq ($(TCP_RX_WINDOW),)
 override CFLAGS += -DTCP_RX_WINDOW=$(TCP_RX_WINDOW)
 endif
 
+# -- loop profiling (netprof.h) --
+#
+# OFF. NET_PROFILE=1 links netprof.o and makes net print, every five
+# seconds, how many turns its main loop took and what share of the CPU
+# each phase of that loop cost. Diagnostic only: the counters are two
+# rdcycle reads per phase, but the report itself is a printf down a
+# 1 Mbaud console.
+NET_PROFILE ?= 0
+override CFLAGS += -DNET_PROFILE=$(NET_PROFILE)
+
+ifeq ($(NET_PROFILE), 1)
+PROF_OBJ = netprof.o
+else
+PROF_OBJ =
+endif
+
 # -- SSH (sw/apps/net/ssh/) --
 #
 # On by default. Set SSH_ENABLE=0 to build net without the SSH client
@@ -251,7 +267,7 @@ endif
 # zrtc.o rides with ntp.o rather than being listed separately: it is
 # the calendar arithmetic ntp.c uses to print the time it just set, and
 # nothing else in this app has any use for a date.
-OBJS = zeitlos.o zobj.o zstream.o zport.o zrng.o zfsapp.o netcfg.o $(PHY_OBJ) eth.o arp.o ip.o udp.o $(DHCP_OBJ) dns.o $(NTP_OBJ) tcp.o telnet.o $(SOCK_OBJ) $(SSH_OBJ) tftp.o net.o
+OBJS = zeitlos.o zobj.o zstream.o zport.o zrng.o zfsapp.o netcfg.o screen.o $(PHY_OBJ) eth.o arp.o ip.o udp.o $(DHCP_OBJ) dns.o $(NTP_OBJ) tcp.o telnet.o $(SOCK_OBJ) $(SSH_OBJ) tftp.o $(PROF_OBJ) net.o
 
 net: net.elf net.bin
 
@@ -282,7 +298,7 @@ net: net.elf net.bin
 FORCE:
 
 .net_config_selected: FORCE
-	@cur="$(NET_DHCP) $(NET_STATIC_IP) $(NET_STATIC_NETMASK) $(NET_STATIC_GATEWAY) $(NET_STATIC_DNS) $(NET_STATIC_NTP) $(NTP_SERVER) $(NTP_ENABLE) $(SSH_ENABLE) $(SSH_MAX_PACKET) $(NET_SOCK) $(TCP_RX_WINDOW) $(TCP_ADVERTISE_MSS) $(TCP_REASSEMBLY)"; \
+	@cur="$(NET_DHCP) $(NET_STATIC_IP) $(NET_STATIC_NETMASK) $(NET_STATIC_GATEWAY) $(NET_STATIC_DNS) $(NET_STATIC_NTP) $(NTP_SERVER) $(NTP_ENABLE) $(SSH_ENABLE) $(SSH_MAX_PACKET) $(NET_SOCK) $(TCP_RX_WINDOW) $(TCP_ADVERTISE_MSS) $(TCP_REASSEMBLY) $(NET_PROFILE)"; \
 	if [ ! -f $@ ] || [ "$$(cat $@ 2>/dev/null)" != "$$cur" ]; then \
 		echo "$$cur" > $@; \
 	fi
@@ -307,6 +323,9 @@ rmii_eth.o: rmii_eth.c rmii_eth.h
 
 esp32link.o: esp32link.c esp32link.h znic.h netcfg.h
 	$(CC) $(CFLAGS) -c esp32link.c -o esp32link.o
+
+screen.o: screen.c screen.h udp.h esp32link.h packbits.h netprof.h
+	$(CC) $(CFLAGS) -c screen.c -o screen.o
 
 netcfg.o: netcfg.c netcfg.h ../../common/zfsapp.h
 	$(CC) $(CFLAGS) -c netcfg.c -o netcfg.o
@@ -384,6 +403,9 @@ ssh.o: ssh/ssh.c ssh/ssh.h ssh/ssh_proto.h tcp.h ../../common/zrng.h
 telnet.o: telnet.c telnet.h tcp.h
 	$(CC) $(CFLAGS) -c telnet.c -o telnet.o
 
+netprof.o: netprof.c netprof.h
+	$(CC) $(CFLAGS) -c netprof.c -o netprof.o
+
 sock.o: sock.c sock.h tcp.h
 	$(CC) $(CFLAGS) -c sock.c -o sock.o
 
@@ -443,8 +465,10 @@ clean:
 
 # -- host tests --
 #
-# Only the parts of this app that can run off-target. tcp.c's
-# reassembly is the one with real logic and no hardware in it.
+# Only the parts of this app that can run off-target: tcp.c's
+# reassembly, which is the one with real logic and no hardware in it,
+# and the stripe encoder, whose output a browser running an older
+# viewer page still has to be able to decode.
 HOSTCC ?= cc
 
 .PHONY: test
@@ -452,4 +476,7 @@ test:
 	$(HOSTCC) --std=gnu99 -w -I. -I../../common -o /tmp/test_tcp_ooo \
 		tests/test_tcp_ooo.c
 	/tmp/test_tcp_ooo
+	$(HOSTCC) --std=gnu99 -w -I. -I../../common -o /tmp/test_packbits \
+		tests/test_packbits.c
+	/tmp/test_packbits
 

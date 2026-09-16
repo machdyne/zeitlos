@@ -251,8 +251,8 @@ else ifeq ($(BOARD), sergei_ml1)
 	FLASH_OFFSET = -o
 else ifeq ($(BOARD), ulx3s)
 	FAMILY = ecp5
-	# Same 12/25/45/85K PCB and LPF. Default matches upstream (25k);
-	# this workspace's board is 85K: make BOARD=ulx3s DEVICE=85k
+	# Same 12/25/45/85K PCB and LPF; DEVICE picks the fitted chip.
+	# Default matches upstream (25k) -- pass DEVICE=85k on an 85F board.
 	DEVICE ?= 25k
 	PACKAGE = CABGA381
 	LPF = ulx3s.lpf
@@ -323,6 +323,76 @@ endif
 SYNTH_LOG = $(OUTDIR)/synth.log
 PNR_LOG = $(OUTDIR)/pnr.log
 
+# ---------------------------------------------------------------------
+# Synthesis as a real file, and a bitstream that says where it came from.
+#
+# zeitlos_ecp5_pico / bios / soc used to be command targets with no
+# file prerequisites: naming one always ran its recipe, not naming it
+# never did. That made `make soc` the packing step by design -- it
+# consumed whatever soc.config sat in output/, and output/ is not in
+# git. Two things then go wrong:
+#
+#   1. A change to RTL, boards.vh, the pin constraint, DEVICE, or
+#      PNR_SEED is invisible to `make soc`. The common case is a
+#      branch switch: git checkout of an older boards.vh does not
+#      make that file newer, so make packs a netlist that no longer
+#      matches the tree.
+#   2. The resulting soc.bit carries no record of the commit, the
+#      BIOS, or the seed that produced it. Two bitstreams of the
+#      same name cannot be told apart.
+#
+# `make zeitlos` is still the full path (check, synth, bios, pack,
+# os, apps). `make soc` is still the fast path when nothing changed.
+# What is new is that packing without knowing is no longer possible.
+#
+# The stamp is the same pattern as sw/apps/net/Makefile's
+# .net_config_selected: FORCE so the recipe always runs, but the
+# file is only rewritten when BOARD/DEVICE/PACKAGE/EXTRA_DEFINES/
+# ABC9/PNR_SEED actually changed, so repeating the same command
+# does not look like a config change.
+#
+# The content hash is the other half. make compares mtimes; a hash
+# of the synthesis inputs (RTL, boards.vh, csrs.vh, the constraint
+# file, the stamp) does not. Written at the end of synthesis, and
+# recomputed by `soc` before packing -- a mismatch resynthesizes
+# even if every timestamp says not to.
+#
+# boards.vh and csrs.vh are `include'd from sysctl.v and are NOT
+# in RTL_PICO, which is why they are listed separately. openssl
+# rather than sha256sum/shasum so the same command works on macOS
+# and Linux.
+# ---------------------------------------------------------------------
+SOC_CONFIG_STAMP = $(OUTDIR)/.soc_config
+SOC_INPUTS_HASH  = $(OUTDIR)/soc.inputs.sha256
+
+# File-level dependencies are wired for ecp5, which is what this
+# Makefile can actually rebuild here. ice40 and gatemate keep their
+# original command targets: the ice40 .pcf files are not in this
+# tree, so listing them as prerequisites would make `make BOARD=keks`
+# fail before nextpnr ever ran, and gatemate already packs inside
+# zeitlos_gatemate_pico (`soc` is a no-op).
+ifeq ($(FAMILY), ecp5)
+SOC_CONSTRAINT = boards/$(LPF)
+SOC_SYNTH_INPUTS = $(RTL_PICO) rtl/boards.vh rtl/csrs.vh $(SOC_CONSTRAINT)
+endif
+
+FORCE:
+
+$(SOC_CONFIG_STAMP): FORCE
+	@mkdir -p $(OUTDIR)
+	@cur="BOARD=$(BOARD) DEVICE=$(DEVICE) PACKAGE=$(PACKAGE) EXTRA_DEFINES=$(EXTRA_DEFINES) ABC9=$(ABC9) PNR_SEED=$(PNR_SEED)"; \
+	if [ ! -f $@ ] || [ "$$(cat $@)" != "$$cur" ]; then \
+		echo "$$cur" > $@; \
+	fi
+
+# Default `bios` target also builds bios_seed.hex, which ecpbram/icebram
+# need. Recursing without a target is what the old `bios:` recipe did.
+sw/bios/bios.hex: FORCE
+	$(MAKE) -C sw/bios BOARD=$(BOARD_UC) FAMILY=$(FAMILY_UC) PREFIX=$(PREFIX)
+
+bios: sw/bios/bios.hex
+
+ifeq ($(FAMILY), ice40)
 zeitlos_ice40_pico:
 	mkdir -p $(OUTDIR)
 	yosys $(EXTRA_DEFINES) -DBOARD_$(BOARD_UC) -DICE40 -q -l $(SYNTH_LOG) -p \
@@ -331,8 +401,8 @@ zeitlos_ice40_pico:
 		--asc $(OUTDIR)/soc.txt --json $(OUTDIR)/soc.json \
 		-l $(PNR_LOG) \
 		--pcf-allow-unconstrained --opt-timing --ignore-loops
-
-zeitlos_ecp5_pico:
+else ifeq ($(FAMILY), ecp5)
+$(OUTDIR)/soc.config: $(SOC_SYNTH_INPUTS) $(SOC_CONFIG_STAMP)
 	mkdir -p $(OUTDIR)
 	yosys $(EXTRA_DEFINES) -DBOARD_$(BOARD_UC) -DECP5 -q -l $(SYNTH_LOG) -p \
 		"synth_ecp5 $(ABC9) -top sysctl -json $(OUTDIR)/soc.json" $(RTL_PICO)
@@ -343,8 +413,41 @@ zeitlos_ecp5_pico:
 		-l $(PNR_LOG) \
 		$(if $(PNR_SEED),--seed $(PNR_SEED),) \
 		--timing-allow-fail --ignore-loops
-	@$(MAKE) --no-print-directory timing
+	@{ cat $(SOC_CONFIG_STAMP); cat $(SOC_SYNTH_INPUTS); } | openssl dgst -sha256 | awk '{print $$NF}' > $(SOC_INPUTS_HASH)
+	@echo
+	@grep -E "Max frequency for clock" $(PNR_LOG) | grep -v "ro_clk" | sed 's/^Info: //' || true
+	@if grep "FAIL at" $(PNR_LOG) | grep -qv "ro_clk"; then \
+		echo; \
+		echo "*** TIMING NOT MET -- the bitstream will program and"; \
+		echo "*** misbehave intermittently. Critical path:"; \
+		echo; \
+		awk '/Critical path report for clock/{c++} c' $(PNR_LOG) \
+			| grep -E "Source|Sink|\.v:[0-9]" | head -30; \
+		echo; \
+		echo "*** full detail: make path BOARD=$(BOARD_LC)"; \
+		echo; \
+	fi
 
+zeitlos_ecp5_pico: $(OUTDIR)/soc.config
+
+# Content-hash gate. Separate from `soc` so the packing recipe does
+# not contain $(MAKE): GNU make -n still executes any recipe line
+# that invokes a sub-make, and packing from `make -n` would be a
+# nasty surprise. This target always runs (FORCE); if the recorded
+# hash does not match the tree, it rebuilds soc.config even when
+# every mtime says the netlist is current.
+$(OUTDIR)/.soc_inputs_ok: FORCE $(SOC_CONFIG_STAMP)
+	@cur=`{ cat $(SOC_CONFIG_STAMP); cat $(SOC_SYNTH_INPUTS); } | openssl dgst -sha256 | awk '{print $$NF}'`; \
+	reg=`cat $(SOC_INPUTS_HASH) 2>/dev/null`; \
+	if [ -z "$$reg" ] || [ "$$cur" != "$$reg" ]; then \
+		echo "soc: input hash $$cur does not match recorded $${reg:-<none>} -- resynthesizing"; \
+		$(MAKE) --no-print-directory -B BOARD=$(BOARD) DEVICE=$(DEVICE) PACKAGE=$(PACKAGE) \
+			EXTRA_DEFINES="$(EXTRA_DEFINES)" ABC9="$(ABC9)" PNR_SEED="$(PNR_SEED)" \
+			PREFIX="$(PREFIX)" OUTDIR="$(OUTDIR)" $(OUTDIR)/soc.config; \
+	fi
+else ifeq ($(FAMILY), gatemate)
+# Gatemate packs inside this target already (gmpack writes soc.bit);
+# `soc` below stays a no-op. Left as a command target, same as before.
 zeitlos_gatemate_pico:
 	mkdir -p $(OUTDIR)
 	$(SYNTH) $(EXTRA_DEFINES) -DBOARD_$(BOARD_UC) -DGATEMATE -q -l $(SYNTH_LOG) -p \
@@ -352,9 +455,7 @@ zeitlos_gatemate_pico:
 			-nomx8 -json $(OUTDIR)/soc.json"
 	$(PR) --device CCGM1A1 --json $(OUTDIR)/soc.json --vopt ccf=$(CCF) --vopt out=$(OUTDIR)/soc.txt --router router2 -l $(PNR_LOG)
 	$(PACK) $(OUTDIR)/soc.txt $(OUTDIR)/soc.bit
-
-bios:
-	cd sw/bios && make BOARD=$(BOARD_UC) FAMILY=$(FAMILY_UC) PREFIX=$(PREFIX)
+endif
 
 ifeq ($(FAMILY), ice40)
 soc:
@@ -365,13 +466,35 @@ else ifeq ($(FAMILY), gatemate)
 soc:
 	echo
 else ifeq ($(FAMILY), ecp5)
-soc:
+soc: check $(OUTDIR)/soc.config $(OUTDIR)/.soc_inputs_ok sw/bios/bios.hex
 	ecpbram -i $(OUTDIR)/soc.config \
 		-o $(OUTDIR)/soc_final.config \
 		-f sw/bios/bios_seed.hex \
 		-t sw/bios/bios.hex
 	ecppack -v --compress --freq 2.4 $(OUTDIR)/soc_final.config \
 		--bit $(OUTDIR)/soc.bit
+	@desc=`git describe --always --dirty 2>/dev/null || echo unknown`; \
+	inhash=`cat $(SOC_INPUTS_HASH)`; \
+	biosmd5=`openssl dgst -md5 sw/bios/bios.hex | awk '{print $$NF}'`; \
+	bitmd5=`openssl dgst -md5 $(OUTDIR)/soc.bit | awk '{print $$NF}'`; \
+	clk=`grep -E "Max frequency for clock" $(PNR_LOG) | grep -v ro_clk | grep clk48mhz | tail -1 | sed 's/^Info: //'`; \
+	if [ -z "$$clk" ]; then clk=`grep -E "Max frequency for clock" $(PNR_LOG) | grep -v ro_clk | tail -1 | sed 's/^Info: //'`; fi; \
+	printf '%s\n' \
+		"git: $$desc" \
+		"inputs: $$inhash" \
+		"bios.md5: $$biosmd5" \
+		"soc.bit.md5: $$bitmd5" \
+		"BOARD=$(BOARD) DEVICE=$(DEVICE) PNR_SEED=$(PNR_SEED)" \
+		"clk: $$clk" \
+		> $(OUTDIR)/soc.bit.prov; \
+	if echo "$$desc" | grep -q dirty; then \
+		echo; \
+		echo "*** DIRTY TREE -- $(OUTDIR)/soc.bit is not the bitstream of any commit."; \
+		echo "*** git describe: $$desc"; \
+		echo "*** Commit or stash before treating this file as a release artifact."; \
+		echo; \
+	fi; \
+	echo "soc: $$desc  md5=$$bitmd5"
 endif
 
 ifeq ($(FAMILY), ice40)
@@ -631,4 +754,4 @@ clean_bios:
 clean_apps:
 	cd sw/apps && make clean
 
-.PHONY: clean_bios bios apps tftp-dist timing path util test_blit test_uart hwmap
+.PHONY: clean_bios bios apps tftp-dist timing path util test_blit test_uart hwmap FORCE soc

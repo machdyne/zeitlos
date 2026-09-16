@@ -212,6 +212,21 @@ LIBZ_ENTRY(z_msg_obj_type)
 LIBZ_ENTRY(z_msg_obj_str)
 LIBZ_ENTRY(z_msg_obj_u32)
 
+/* ===================================================================
+ * ABI 6 -- one-message put-back.
+ *
+ * z_win_apply_redraw() (sw/common/zwin.c, compiled into this blob)
+ * drains the compositor messages queued ahead of a REDRAW and has to
+ * push back anything else it read, so the caller's next z_msg_read()
+ * still sees what it was waiting for. The helper lives in
+ * sw/common/zeitlos.c, which cannot go into this runtime -- it defines
+ * newlib's _read/_write/_sbrk -- so glue.c supplies it, next to
+ * z_msg_new_send() and z_msg_wait(), which are here for the same
+ * reason.
+ * ===================================================================
+ */
+LIBZ_ENTRY(z_msg_unread)
+
 /*
  * -- RETIRED entries --
  *

@@ -225,28 +225,43 @@ separate from the `k_pid_lookup()` syscall, which takes and returns
 registers itself like any other service and a hardwired pid would break
 the moment it were restarted.
 
-### The timeout: back to one tick
+### The timeout, and the one-tick experiment
 
-`net` waits **one tick**, the same as `wm`, and for the same reason:
-this loop polls things no message can announce — the MAC, ARP ageing,
-socket timers, TX retries, DNS and NTP state. A process that polls
-cannot block indefinitely, because nothing would wake it.
+`net` waits `Z_TICK_HZ / 10` — about 100ms — because `Z_IRQ_ETH` wakes
+the process when a frame arrives, leaving the timeout as a backstop for
+the work no message can announce: ARP ageing, socket timers, TX
+retries, DNS and NTP state. The interrupt is what makes this loop
+RESPONSIVE and the timeout is what makes it ROBUST.
 
-It ran at `Z_TICK_HZ / 10` for a while, on the reasoning that
-`Z_IRQ_ETH` now wakes the process when a frame arrives, leaving the
-timeout as a housekeeping backstop. The interrupt does work — it is
-correctly wired on both MACs and unmasked from boot
-(`sw/bios/boot_picorv32.S` writes a zero mask). But a backstop that
-far out means every case where the wake does not arrive costs 100ms
-instead of 1.4ms, and interactive traffic feels exactly as bad as that
-sounds. A rare miss at 1.4ms is invisible; a rare miss at 100ms is the
-whole user experience.
+**One tick was tried, and reverted.** The argument for it was that a
+backstop 100ms out means every case where the wake does not arrive
+costs 100ms instead of 1.4ms, and that interactive traffic would feel
+exactly as bad as that sounds. It does not: going back to
+`z_proc_wait(1)` made no measurable difference to interactive traffic,
+which says the missed wake it was insuring against is rare enough not
+to matter. So net's wait is not what makes telnet feel slow, and the
+cheaper idle is the better default. Ten wakes a second for housekeeping
+rather than 732 for nothing — and a process that wakes constantly takes
+a full scheduler share out of whatever is in the foreground, which was
+never what made a foreground app slow either (three *spinning*
+processes were), but is not free.
 
-So the interrupt is what makes this loop RESPONSIVE and the tick is
-what makes it ROBUST. Both is the right answer, and 732 cheap wakes a
-second is what this did before the interrupt existed. That was never
-what made a foreground app slow — three spinning processes were, and
-those are fixed by blocking rather than by waiting longer.
+**The ESP32 backend asks for its own deadline.** It used to be the
+exception that woke on every kernel tick, because input, screen
+acknowledgements and incoming frames all arrived only in answer to a
+poll this loop sent. That stopped being true of the part that mattered:
+a browser's keyboard and mouse events are pushed into the receive FIFO
+unsolicited, and an arrival there raises `Z_IRQ_ETH` exactly as a wired
+MAC does.
+
+So `net_phy_t` grew an `idle_ticks()` hook, and the wait is whichever
+deadline is nearest: how long the driver may go without polling
+(`esp32link.c`'s `poll_gap()` — every tick while a conversation is
+live, 100ms when the link is quiet, 50ms while the module may still be
+booting) and when the next screen scan is due (only while a browser is
+watching). Capped by the same 100ms backstop as the wired path, and the
+interrupt still cuts any of it short. A backend without the hook keeps
+`Z_TICK_HZ / 10` unchanged.
 
 A third backend exists for the ULX3S, which has neither an SPI
 Ethernet PMOD nor an RMII PHY: its onboard ESP32 acts as the network

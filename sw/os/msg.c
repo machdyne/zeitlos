@@ -39,6 +39,16 @@ typedef struct {
 
 volatile __attribute__((section(".bss"))) z_mailbox_t z_mailboxes[Z_PROCS_MAX];
 
+// Every z_mailbox_push() that found its mailbox full, system-wide.
+// The senders (wm forwarding a keystroke being the hot one) mostly
+// ignore the Z_FAIL, so a full mailbox used to be an invisible place
+// for input to die. sh.c's `ic` prints this.
+static volatile uint32_t msg_full_drops;
+
+uint32_t k_msg_full_drops(void) {
+	return msg_full_drops;
+}
+
 z_rv z_mailbox_is_empty(uint32_t pid) {
 	return (z_mailboxes[pid].count == 0) ? Z_OK : Z_FAIL;
 }
@@ -54,6 +64,7 @@ z_rv z_mailbox_push(uint32_t pid, z_msg_envelope_t *msg) {
 	uint32_t old_mask = maskirq(0xFFFFFFFF);
 
 	if (z_mailboxes[pid].count >= Z_MAILBOX_DEPTH) {
+		msg_full_drops++;
 		maskirq(old_mask);
 		return Z_FAIL;
 	}

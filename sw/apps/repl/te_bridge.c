@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "../../common/zport.h"
 #include "../../common/zline.h"		// Z_LINE_MAX -- sizes filename_buf below
@@ -22,6 +23,7 @@
 // rather than pulling in the whole file.
 extern int te_edit_start(char *filename);	// returns 0/1, see te.c
 extern int te_yield(void);					// returns 0/1, see te.c
+extern void te_edit_end(void);				// frees the document
 extern void te_status_bar(int enabled);	// see te.c's own comment
 
 // how large a file this build will open with `te` -- deliberately
@@ -167,6 +169,17 @@ bool te_bridge_start(z_port_t *port, const char *filename,
 	te_iobuf_len = 0;
 	te_pending_byte = -1;
 
+	{
+		extern char _end;
+		register char *sp asm("sp");
+		char *brk = (char *)sbrk(0);
+		printf("te: load '%s' sz=%d sbrk=%lu sp=%lu room=%ld grown=%lu\n",
+			filename, sz,
+			(unsigned long)(uintptr_t)brk, (unsigned long)(uintptr_t)sp,
+			(long)(sp - brk),
+			(unsigned long)((uint32_t)(uintptr_t)brk - (uint32_t)&_end));
+	}
+
 	// the coordinate counters (l/s/x/y) in te's own status line cost
 	// very little on their own (~13 bytes) -- NOT the reason typing
 	// felt sluggish over a port connection. That was te.c's own
@@ -203,6 +216,7 @@ bool te_bridge_feed(uint8_t byte) {
 	int alive = te_yield();
 
 	if (!alive) {
+		te_edit_end();
 		te_active = false;
 		te_port = NULL;
 	}
@@ -212,6 +226,8 @@ bool te_bridge_feed(uint8_t byte) {
 }
 
 void te_bridge_abort(void) {
+	if (te_active)
+		te_edit_end();
 	te_active = false;
 	te_port = NULL;
 	te_iobuf_len = 0;

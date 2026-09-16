@@ -12,7 +12,7 @@
 #define ZNIC_UART   UART_NUM_1
 #define ZNIC_TXD    17	/* ESP32 TX -> FPGA UART1_RX (N3) */
 #define ZNIC_RXD    16	/* ESP32 RX <- FPGA UART1_TX (L1) */
-#define ZNIC_BAUD   1000000
+#define ZNIC_BAUD   3000000
 #define ZNIC_BUF    4096
 #define ZNIC_LOG_MAX 180
 
@@ -75,6 +75,12 @@ void znic_init(void)
 		.source_clk = UART_SCLK_DEFAULT,
 	};
 	uart_driver_install(ZNIC_UART, ZNIC_BUF, ZNIC_BUF, 0, NULL, 0);
+	/* deliver small frames promptly: wake on a few bytes and on a
+	 * short line-idle rather than waiting for a 120-byte FIFO fill --
+	 * the ZNIC frames that carry a poll answer are ~10 bytes, and the
+	 * default thresholds added tens of ms of latency to every one. */
+	uart_set_rx_full_threshold(ZNIC_UART, 8);
+	uart_set_rx_timeout(ZNIC_UART, 3);
 	uart_param_config(ZNIC_UART, &cfg);
 	uart_set_pin(ZNIC_UART, ZNIC_TXD, ZNIC_RXD, UART_PIN_NO_CHANGE,
 		UART_PIN_NO_CHANGE);

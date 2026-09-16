@@ -87,14 +87,14 @@
 // -- message subjects --
 //
 // 310-312, continuing the ONE shared sequence that znet.h (302-305,
-// 308-309) and zntp.h (306-307) also draw from. Nothing enforces
+// 308-309, 313) and zntp.h (306-307) also draw from. Nothing enforces
 // this; the numbers are global by convention only, and reusing one
 // does not fail to compile and does not look wrong at runtime -- a
 // dispatch chain of `else if` just delivers the message to the first
 // handler that matches. See net.c's SUBJECT COLLISION CHECK, which
 // exists because exactly that happened once.
 //
-// The next subject added anywhere starts at 313.
+// The next subject added anywhere starts at 314.
 
 // requester -> web:
 //   Z_MAP {

@@ -149,13 +149,23 @@ both sides readable on both square colours: a white piece on a white
 square is defined by its ring, and a black piece on the grey dither is
 separated from it by its ring.
 
-## Not freezing the desktop
+## Not going deaf for four seconds
 
 The engine can think for seconds, and a process that stops servicing
-its message queue stalls the **window manager**, not just itself -- wm
-blocks waiting for a redraw acknowledgement until `REDRAW_ACK_TIMEOUT`
-(`docs/window_manager.md`). A four-second search with no message pump
-would freeze every window on screen for four seconds.
+its message queue used to stall the **window manager** along with
+itself: wm blocked waiting for a redraw acknowledgement until
+`REDRAW_ACK_TIMEOUT`, so a four-second search with no message pump
+froze every window on screen for four seconds.
+
+wm no longer waits (`docs/window_manager.md`, "Content z-order"), which
+does not make the pump optional -- it moves the whole cost onto
+`chess`. Its visible region arrives as a message like everything else,
+so four seconds without reading the queue is four seconds of drawing
+against a region that may have stopped being true: another window
+dropped in front of the board is drawn straight over, and the redraw
+asking for the board back is not serviced either. The failure went from
+loud and system-wide to quiet and local, which is harder to diagnose,
+not better.
 
 So `ce_search_go()` takes a poll callback, called every 256 nodes,
 which runs the message pump and can abort the search. Two consequences

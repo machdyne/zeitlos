@@ -133,8 +133,16 @@
 #define Z_NET_SSH_PREPARE        308
 #define Z_NET_SSH_PREPARE_REPLY  309
 
+// Asks net to print its link counters on the serial console -- the
+// esp32link debug dump (crc errors, fifo overruns, input events
+// dispatched), which used to be reachable only on an association
+// failure. Carries no payload and gets no reply; the dump IS the
+// answer. sh.c's `ic` sends this, so "where did the input go?" is a
+// console question instead of an instrumented build.
+#define Z_NET_DEBUG_DUMP         313
+
 // The next subject added anywhere in this shared sequence starts at
-// 310. sw/common/zweb.h has taken 310-312.
+// 314. sw/common/zweb.h has taken 310-312.
 
 // -- Z_PORT_CONNECT to net: three meanings, told apart by SHAPE --
 //

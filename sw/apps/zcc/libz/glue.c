@@ -13,10 +13,12 @@
  * real signatures. zcc resolves a call to them from the tree's own
  * headers, which is what an app that opens a window includes anyway.
  *
- * z_msg_new_send() and z_msg_wait() are here for a second reason: they
- * live in sw/common/zeitlos.c, which cannot go into this runtime at
- * all (it defines newlib's _read/_write/_sbrk and would drag a libc in
- * behind it). They are four lines each and zwin.c needs both.
+ * z_msg_new_send(), z_msg_wait() and z_msg_unread() are here for a
+ * second reason: they live in sw/common/zeitlos.c, which cannot go
+ * into this runtime at all (it defines newlib's _read/_write/_sbrk
+ * and would drag a libc in behind it). zwin.c needs all three:
+ * z_win_apply_redraw() unread()s a non-compositor message it had to
+ * drain past.
  */
 
 #include <stdint.h>
@@ -41,7 +43,30 @@ static z_rv syscall_rv(unsigned id, void *arg) {
 }
 
 z_rv z_msg_send(z_msg_t *msg) { return syscall_rv(ZS_MSG_SEND, msg); }
-z_rv z_msg_read(z_msg_t *msg) { return syscall_rv(ZS_MSG_READ, msg); }
+
+/* One-message put-back. z_win_apply_redraw() (compiled into this
+ * blob from sw/common/zwin.c) drains compositor messages ahead of a
+ * REDRAW and has to push back anything else it read. Same contract
+ * as zeitlos.c: one slot, a second unread without a read fails.
+ * Integer payloads copy by value; SET_CLIP is applied, not unread. */
+static z_msg_t msg_unread;
+static int msg_have_unread;
+
+z_rv z_msg_read(z_msg_t *msg) {
+	if (msg_have_unread) {
+		*msg = msg_unread;
+		msg_have_unread = 0;
+		return Z_OK;
+	}
+	return syscall_rv(ZS_MSG_READ, msg);
+}
+
+z_rv z_msg_unread(const z_msg_t *msg) {
+	if (!msg || msg_have_unread) return Z_FAIL;
+	msg_unread = *msg;
+	msg_have_unread = 1;
+	return Z_OK;
+}
 
 z_rv z_msg_new_send(uint32_t to, uint32_t subject, uint32_t tag, z_obj_t obj) {
     z_msg_t msg;

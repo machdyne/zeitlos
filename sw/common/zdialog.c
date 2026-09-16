@@ -136,6 +136,25 @@ static void dlg_dispatch(z_msg_t *msg) {
 
 		}
 
+		case Z_WM_SET_CLIP:
+
+			// z_win_apply_clip() answers "is this mine?" itself: the
+			// payload names its window (Z_WM_CLIP_WINDOW, zwm.h) and
+			// it refuses one addressed elsewhere without acking. So
+			// try this window and pass on what it declines -- the
+			// parent's region keeps arriving while the dialog is up,
+			// and wm waits for an ack on both.
+			//
+			// Not optional for the dialog's own: a window that has
+			// never been told a region draws nothing (win_use_clip(),
+			// zwin.c), so a dialog that drops it comes up as an empty
+			// frame with no buttons in it.
+			if (!z_win_apply_clip(&dlg.win, &msg->obj) &&
+				dlg.ctx && dlg.ctx->on_msg)
+				dlg.ctx->on_msg(msg, dlg.ctx->user);
+
+			break;
+
 		case Z_WM_WINDOW_MOVED: {
 
 			z_obj_t *id = z_map_find(&msg->obj, "id");

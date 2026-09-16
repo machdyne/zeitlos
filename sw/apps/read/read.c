@@ -353,17 +353,11 @@ static uint32_t peek_off;
 #ifndef READ_PROFILE
 #define READ_PROFILE 0
 #endif
+#ifndef READ_SCROLL_DEBUG
+#define READ_SCROLL_DEBUG 0
+#endif
 
-#if READ_PROFILE
-static inline uint32_t rp_cyc(void) {
-	uint32_t v; __asm__ volatile ("rdcycle %0" : "=r"(v)); return v;
-}
-static uint32_t rp_parse, rp_draw, rp_io, rp_total;
-static uint32_t rp_wrap, rp_fill, rp_seek;
-static uint32_t rp_rdline, rp_mdparse;
-static uint32_t rp_blocks, rp_rows, rp_refills;
-static int rp_pending;
-
+#if READ_PROFILE || READ_SCROLL_DEBUG
 /* -- why this formats by hand instead of using printf --
  *
  * read calls printf exactly twice, and neither call has a conversion
@@ -393,6 +387,17 @@ static void rp_u32(char *buf, int *n, uint32_t v) {
 static void rp_str(char *buf, int *n, const char *s) {
 	while (*s) buf[(*n)++] = *s++;
 }
+#endif
+
+#if READ_PROFILE
+static inline uint32_t rp_cyc(void) {
+	uint32_t v; __asm__ volatile ("rdcycle %0" : "=r"(v)); return v;
+}
+static uint32_t rp_parse, rp_draw, rp_io, rp_total;
+static uint32_t rp_wrap, rp_fill, rp_seek;
+static uint32_t rp_rdline, rp_mdparse;
+static uint32_t rp_blocks, rp_rows, rp_refills;
+static int rp_pending;
 
 /* Called from the event loop, never from the draw path: a deep call
  * chain plus a formatting buffer is how a 16KB stack gets exhausted. */
@@ -446,6 +451,102 @@ static void rp_report(void) {
 }
 #else
 #define rp_report() ((void)0)
+#endif
+
+/* Build with -DREAD_SCROLL_DEBUG=1 to print one console line per
+ * fused scroll batch and per scrollbar drag: impulses in, lines
+ * applied, blits taken and refused, seeks, repaints, and how far the
+ * thumb's page figure wandered while the drag held it frozen. Off by
+ * default; compiles out entirely.
+ *
+ * This exists because "the scroll does not follow the hand" has three
+ * quite different possible answers -- the paint is slow, the impulses
+ * queue, or the fast path silently isn't taken -- and each is fixed
+ * in a different place. Same clock caveat as everywhere: 732Hz ticks,
+ * so milliseconds, not cycles. */
+#if READ_SCROLL_DEBUG
+
+static uint32_t sd_keys;	// scroll impulses received
+static uint32_t sd_lines;	// display lines applied by flushes
+static uint32_t sd_flush;	// batches painted
+static uint32_t sd_blit;	// fast-path blits done
+static uint32_t sd_noblit;	// blits the visible region refused
+static uint32_t sd_seeks;	// line_at_offset() resolutions
+static uint32_t sd_repaints;	// repaint_body() calls
+
+// Per-drag: how many samples moved the thumb, and the range the page
+// figure WOULD have taken without the freeze (see update_scrollbar()).
+static uint32_t sd_samples;
+static uint32_t sd_span_min, sd_span_max;
+static uint32_t sd_defer_t;	// tick of the last defer_body()
+static int sd_drag_on;
+
+static void sd_report_flush(void) {
+
+	static char line[128];
+	int n = 0;
+
+	rp_str(line, &n, "read: flush #");
+	rp_u32(line, &n, sd_flush);
+	rp_str(line, &n, " keys ");
+	rp_u32(line, &n, sd_keys);
+	rp_str(line, &n, " lines ");
+	rp_u32(line, &n, sd_lines);
+	rp_str(line, &n, " blit ");
+	rp_u32(line, &n, sd_blit);
+	rp_str(line, &n, " noblit ");
+	rp_u32(line, &n, sd_noblit);
+	rp_str(line, &n, " seeks ");
+	rp_u32(line, &n, sd_seeks);
+	rp_str(line, &n, " rep ");
+	rp_u32(line, &n, sd_repaints);
+	line[n] = 0;
+
+	puts(line);
+
+}
+
+// Called with the drag's final repaint just done: samples in, seeks
+// and repaints spent, the span the page figure ranged over, and the
+// time from the last thumb move to the paint being on the glass. A
+// trough click reports too, with a 0..0 span -- it never arms the
+// range tracker, which is how you tell it from a drag.
+static void sd_report_drag(void) {
+
+	if (!sd_samples && !sd_drag_on) return;
+
+	static char line[160];
+	int n = 0;
+
+	uint32_t ms = (z_uptime_ticks() - sd_defer_t) * 1000u / Z_TICK_HZ;
+
+	rp_str(line, &n, "read: drag ");
+	rp_u32(line, &n, sd_samples);
+	rp_str(line, &n, " samples, span ");
+	rp_u32(line, &n, sd_span_min);
+	rp_str(line, &n, "..");
+	rp_u32(line, &n, sd_span_max);
+	rp_str(line, &n, " seeks ");
+	rp_u32(line, &n, sd_seeks);
+	rp_str(line, &n, " rep ");
+	rp_u32(line, &n, sd_repaints);
+	rp_str(line, &n, " still->painted ");
+	rp_u32(line, &n, ms);
+	rp_str(line, &n, "ms");
+	line[n] = 0;
+
+	puts(line);
+
+	sd_samples = 0;
+	sd_drag_on = 0;
+
+}
+
+#define SD(x) (x)
+#else
+#define SD(x) ((void)0)
+#define sd_report_flush() ((void)0)
+#define sd_report_drag() ((void)0)
 #endif
 
 static uint32_t rd_tell(void) {
@@ -1726,6 +1827,17 @@ static void draw_body_from(int thr) {
 static bool body_dirty;
 static uint32_t body_deadline;
 
+// Set when the thumb has moved to a position the body has not been
+// repainted at yet. The BYTE offset lives in sbar.value the whole
+// drag; resolving it to a (line, parser state) is line_at_offset(),
+// a seek and a parse, and running that per pointer SAMPLE is what
+// made a dense drag answer the release seconds late -- each sample
+// cost more than the gap to the next, so the release sat in the
+// mailbox behind them. The thumb tracking the hand is the cheap
+// part; the expensive half runs once, at the repaint, against
+// wherever the thumb is by then.
+static bool body_seek;
+
 // Set while an Open is in progress, between the dialog closing and
 // the new document being rendered.
 //
@@ -1827,7 +1939,26 @@ static void update_scrollbar(void) {
 	// It is also a slightly better proportion indicator: a line of
 	// code and a wrapped paragraph occupy very different amounts of
 	// screen, and bytes track that more closely than line numbers do.
-	z_scrollbar_set_range(&sbar, fsize ? (int32_t)fsize : 1, span);
+	//
+	// During a thumb drag the range is FROZEN at what the drag
+	// started with. The page figure is a real screen's worth of
+	// bytes, and that changes as the drag passes headings and wrapped
+	// paragraphs -- so re-applying it mid-drag changed the thumb's
+	// SIZE under the hand, and the position mapping with it. The
+	// fresh figure is applied on release, by the repaint that
+	// answers the drag; the drag itself runs on one consistent
+	// scale.
+	if (!sbar.dragging)
+		z_scrollbar_set_range(&sbar, fsize ? (int32_t)fsize : 1, span);
+#if READ_SCROLL_DEBUG
+	else if (!sd_drag_on) {
+		sd_drag_on = 1;
+		sd_span_min = sd_span_max = (uint32_t)span;
+	} else {
+		if ((uint32_t)span < sd_span_min) sd_span_min = (uint32_t)span;
+		if ((uint32_t)span > sd_span_max) sd_span_max = (uint32_t)span;
+	}
+#endif
 	z_scrollbar_set_value(&sbar, (int32_t)top_off);
 	z_scrollbar_draw(&sbar, true);
 
@@ -1835,6 +1966,36 @@ static void update_scrollbar(void) {
 	// The table now describes what is on the glass -- set once,
 	// after the layout completes, not per block inside the loop.
 	drawn_valid = true;
+
+}
+
+// Resolves the position a scrollbar drag left behind, once -- see
+// body_seek above. The selection goes with the position: it is
+// anchored to screen rows, which a new position redefines (see
+// scroll_down()).
+static void resolve_seek(void) {
+
+	if (!body_seek) return;
+	body_seek = false;
+
+	SD(sd_seeks++);
+
+	// The scrollbar is in bytes; find the block that starts at or
+	// before that offset. Extending the index to reach it is the one
+	// place a jump into unread territory pays for a scan -- and that
+	// scan builds the index, so the same jump is instant afterwards.
+	top_line = line_at_offset((uint32_t)sbar.value);
+	top_sub = 0;
+	sel_link = -1;
+	sel_clear();
+
+	// The step table and vlines[] describe the glass AT THE OLD
+	// position; the position just changed under them. scroll_forward()
+	// trusts drawn_valid to mean they agree with top_line -- without
+	// this, a scroll key answered mid-drag blits the new position's
+	// neighbours from the old page's table and lands back where the
+	// drag started.
+	drawn_valid = false;
 
 }
 
@@ -1848,6 +2009,8 @@ static void draw_body(void) {
 }
 
 static void repaint(void) {
+
+	resolve_seek();
 
 	z_win_clear(&win);
 
@@ -1967,11 +2130,28 @@ static void scroll_forward(int n) {
 		z_clip_t c;
 		z_win_content_rect(&win, &c);
 
+		// Ask BEFORE relying on the blit, the way term.c does.
+		// z_fb_hw_scroll() refuses silently when the destination is
+		// not inside a single visible rectangle -- the blitter
+		// cannot clip a copy, so a window covered where it is
+		// scrolling must repaint instead (zgfx.c,
+		// copy_region_allows_rect()). Without this check a
+		// half-covered reader shifted its layout cache and redrew
+		// only the strip for a blit that never happened, leaving
+		// the old rows standing above the new ones.
+		if (!z_fb_hw_scroll_allowed((int)c.x0 + MARGIN,
+			(int)c.y0 + MARGIN, view_w, view_h - MARGIN)) {
+			SD(sd_noblit++);
+			repaint_body();
+			return;
+		}
+
 		// The body band only, below the top margin: that margin is
 		// blank and must stay blank, and blitting from c.y0 would
 		// drag the first row of text up into it.
 		z_fb_hw_scroll((int)c.x0 + MARGIN, (int)c.y0 + MARGIN,
 			view_w, view_h - MARGIN, -shift);
+		SD(sd_blit++);
 	}
 
 	if (cache_valid && k < cache_ns) {
@@ -2083,10 +2263,14 @@ static void repaint_body(void) {
 	uint32_t t0 = rp_cyc();
 #endif
 
+	resolve_seek();
+
 	draw_body();
 	update_scrollbar();
 
 	body_dirty = false;
+
+	SD(sd_repaints++);
 
 #if READ_PROFILE
 	rp_total += rp_cyc() - t0;
@@ -2631,6 +2815,10 @@ static bool open_path(const char *p) {
 	top_off = 0;
 	sel_link = -1;
 
+	// A pending drag position names bytes of the PREVIOUS document;
+	// it must not follow the reader into this one.
+	body_seek = false;
+
 	// Remember the directory for the next Open dialog.
 	int last = 0;
 	for (int k = 0; path[k]; k++) if (path[k] == '/') last = k;
@@ -2706,26 +2894,95 @@ static void layout(void) {
 
 }
 
+// -- fused scroll impulses --
+//
+// A page costs most of a second on this machine, and a held key
+// repeats far faster than that. One repaint per repeat is then a
+// queue the reader is still emptying half a minute after the key was
+// released -- scrolling that appears to have a mind of its own.
+//
+// The impulses are requests to MOVE, not requests to PAINT, so:
+// accumulate the distance while a batch is pending and paint the
+// answer once. A batch is whatever the mailbox held when the loop
+// last looked, which under repetition is exactly the work that would
+// otherwise have queued. What arrives during one repaint is answered
+// by the next, and after the key is released there is at most one
+// repaint left -- the one the accumulated distance asks for.
+static int key_pend_lines;	// display lines, + down / - up
+static bool key_pend_pages;	// a page-sized key contributed
+
+static void scroll_flush(void) {
+
+	if (!key_pend_lines) { key_pend_pages = false; return; }
+
+	// A scrollbar drag's position is a scroll request too, and an
+	// earlier one: the impulses below move FROM where it landed.
+	resolve_seek();
+
+	int n = key_pend_lines;
+	bool pages = key_pend_pages;
+	key_pend_lines = 0;
+	key_pend_pages = false;
+
+	SD(sd_flush++);
+	SD(sd_lines += (uint32_t)(n < 0 ? -n : n));
+
+	if (n > 0) {
+		// Arrows alone stay on the blit path -- it is what they
+		// take one at a time, and one fused blit stands in for n.
+		// A page key anywhere in the batch takes the page path,
+		// which scroll_down() walks in a single forward pass.
+		if (!pages) scroll_forward(n);
+		else { scroll_down(n); repaint_body(); }
+	} else {
+		scroll_up(-n);
+		repaint_body();
+	}
+
+	sd_report_flush();
+
+}
+
 static void handle_key(uint32_t keysym, uint8_t mods) {
 
 	int page = view_h / (BODY_FONT->h + 1);
 	if (page < 1) page = 1;
 
+	// Scroll impulses fuse (see above). Anything else is answered
+	// only after the pending scroll has painted -- the order the
+	// requests arrived in.
 	switch (keysym) {
 
-		case Z_KEY_DOWN:    scroll_forward(1); return;
-		case Z_KEY_UP:      scroll_up(1); repaint_body(); return;
+		case Z_KEY_DOWN:    SD(sd_keys++); key_pend_lines++; return;
+		case Z_KEY_UP:      SD(sd_keys++); key_pend_lines--; return;
 		// Space is page down, the convention every pager shares --
 		// it is the key a hand rests on while reading. Shift+Space
 		// goes back up, for the same reason.
 		case ' ':
-			if (mods & Z_KBD_MOD_SHIFT) scroll_up(page - 1);
-			else scroll_down(page - 1);
-			repaint_body();
+			SD(sd_keys++);
+			if (mods & Z_KBD_MOD_SHIFT) key_pend_lines -= page - 1;
+			else key_pend_lines += page - 1;
+			key_pend_pages = true;
 			return;
 
-		case Z_KEY_PAGEDOWN: scroll_down(page - 1); repaint_body(); return;
-		case Z_KEY_PAGEUP:   scroll_up(page - 1); repaint_body(); return;
+		case Z_KEY_PAGEDOWN:
+			SD(sd_keys++);
+			key_pend_lines += page - 1;
+			key_pend_pages = true;
+			return;
+		case Z_KEY_PAGEUP:
+			SD(sd_keys++);
+			key_pend_lines -= page - 1;
+			key_pend_pages = true;
+			return;
+
+		default: break;
+
+	}
+
+	scroll_flush();
+
+	switch (keysym) {
 
 		case Z_KEY_HOME:
 			top_line = 0; top_sub = 0; sel_link = -1; repaint_body(); return;
@@ -2790,6 +3047,11 @@ static uint8_t last_buttons;
 
 static void handle_mouse(uint32_t packed) {
 
+	// A pointer event refers to what is on the glass, so any scroll
+	// the keyboard already asked for paints first -- the order the
+	// requests arrived in.
+	scroll_flush();
+
 	int cx, cy;
 	bool inside = z_win_mouse_content_xy(&win, packed, &cx, &cy);
 
@@ -2805,27 +3067,40 @@ static void handle_mouse(uint32_t packed) {
 		bool was_down = (last_buttons & Z_MOUSE_BTN_LEFT) != 0;
 		bool now_down = (buttons & Z_MOUSE_BTN_LEFT) != 0;
 
+#if READ_SCROLL_DEBUG
+		// A press starts a new measurement; the per-drag counters
+		// re-arm from here (see update_scrollbar() for the span).
+		if (!was_down && now_down) {
+			sd_samples = 0;
+			sd_drag_on = 0;
+			sd_span_min = sd_span_max = 0;
+		}
+#endif
+
 		if (z_scrollbar_mouse(&sbar, cx, cy, buttons)) {
 
-			// The scrollbar is in bytes; find the block that starts
-			// at or before that offset. Extending the index to reach
-			// it is the one place a jump into unread territory pays
-			// for a scan -- and that scan builds the index, so the
-			// same jump is instant afterwards.
-			top_line = line_at_offset((uint32_t)sbar.value);
-			top_sub = 0;
-			sel_link = -1;
-			sel_clear();		// see scroll_down()
-
 			// The thumb has already moved (z_scrollbar_mouse drew
-			// it). Defer the expensive half -- see defer_body().
+			// it). Where it points is resolved at the repaint, not
+			// here -- see body_seek. The expensive half of the
+			// gesture runs once, against wherever the thumb is by
+			// then, instead of once per sample against every
+			// position the hand passed through.
+			body_seek = true;
+			sel_link = -1;
+
+			SD(sd_samples++);
+			SD(sd_defer_t = z_uptime_ticks());
+
 			defer_body();
 
 		}
 
 		// Released: the reader has stopped, so show the page now
 		// rather than waiting out the settle time.
-		if (was_down && !now_down && body_dirty) repaint_body();
+		if (was_down && !now_down && body_dirty) {
+			repaint_body();
+			sd_report_drag();
+		}
 
 		last_buttons = buttons;
 		return;
@@ -3116,7 +3391,7 @@ int main(void) {
 					if ((int)Z_WM_UNPACK_TBICON_ID(msg.obj.val.uint32) != win.id)
 						break;
 					if (Z_WM_UNPACK_TBICON_KIND(msg.obj.val.uint32) ==
-						Z_WM_TBICON_OPEN) do_open();
+						Z_WM_TBICON_OPEN) { scroll_flush(); do_open(); }
 
 					break;
 
@@ -3129,6 +3404,10 @@ int main(void) {
 
 		}
 
+		// One paint answers however many scroll impulses the drain
+		// just read -- see scroll_flush().
+		scroll_flush();
+
 		// Block until something arrives -- but no longer than the
 		// deferred body redraw's deadline, or a drag that ends by the
 		// pointer simply stopping would never repaint.
@@ -3138,6 +3417,7 @@ int main(void) {
 
 			if ((int32_t)(now - body_deadline) >= 0) {
 				repaint_body();
+				sd_report_drag();
 				continue;
 			}
 

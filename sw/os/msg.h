@@ -11,6 +11,8 @@ z_rv z_mailbox_push(uint32_t pid, z_msg_envelope_t *msg);
 z_rv z_mailbox_pop(uint32_t pid, z_msg_envelope_t *msg);
 // see msg.c -- used by k_proc_wait() to test-and-block atomically
 bool z_mailbox_empty(uint32_t pid);
+// pushes that found a full mailbox, system-wide -- for sh.c's `ic`
+uint32_t k_msg_full_drops(void);
 
 // -- syscall handlers, registered in syscalls.def --
 //

@@ -681,7 +681,16 @@ int main(void) {
 
 		}
 
-		tick(false);
+		// Not while wm has us frozen for a drag (zwin.h,
+		// z_win_frozen()): draw_hands() erases the previous hands by
+		// redrawing them in the background colour and then records
+		// where the new ones went, so a pass that reaches no pixels
+		// leaves that record describing hands that are not on the
+		// glass -- and the old ones stuck there for good. Held over
+		// instead: the hands move on the first second that turns over
+		// after the drag ends, which is the same 125ms lateness this
+		// loop already tolerates.
+		if (!z_win_frozen(&win)) tick(false);
 
 		// Wake ~8 times a second rather than once.
 		//

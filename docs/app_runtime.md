@@ -451,6 +451,58 @@ system and mailbox model these operate on; this file only exists to
 point at that one so app code and this document don't drift apart
 the way a few other things in this project already have.
 
+## What a windowed app owes the compositor
+
+There is one framebuffer and no depth buffer, so what keeps one
+window's pixels out of another's is entirely a matter of where each app
+is permitted to draw. `wm` and the shared layer provide that guarantee
+-- `docs/window_manager.md` has the protocol in full -- but three
+things about it change how an app's own main loop has to be written,
+and all three are easy to get wrong in a way that looks like a
+rendering fault rather than a missing line.
+
+**1. Do not assume you can paint before your first region.** A window
+is born **invisible**: until `Z_WM_SET_CLIP` arrives, every `z_win_*`
+call draws nothing. This is the opposite of what it used to be, and it
+is deliberate -- an unrestricted first paint lands on top of every
+window already on screen. Nothing is lost by waiting, because `wm`
+sends a `Z_WM_REDRAW` immediately behind that first region.
+
+Two consequences for startup code. Handle `Z_WM_SET_CLIP` from the
+first turn of the message loop, not after some initialisation step.
+And if the app blocks on `z_msg_wait()` for anything at all between
+creating its window and entering that loop -- claiming a launch
+argument, reading the clipboard -- remember that `z_msg_wait()`
+**discards** everything that does not match, so a region dropped there
+is a window that never paints. `z_launch_arg_take()` and
+`z_win_create_cb()` exist for exactly this.
+
+**2. Read the damage, or at least know it is there.** A `Z_WM_REDRAW`
+may carry `Z_WM_REDRAW_DAMAGE`, meaning "only the pixels you just
+gained". `z_win_damage_rects()` hands them over; ignoring it is
+**correct**, because the shared layer clips the whole repaint to the
+same rectangles either way. It is only slower, and only for an app that
+could have painted less. An app that keeps its own model of the glass
+(a terminal's shadow) wants to know; an app that re-renders a whole
+frame regardless says so with `z_win_damage_ignore()`.
+
+Whichever it does, it must call `z_win_redraw_done()` when it has
+finished. That is what tells the shared layer what is now on the glass,
+and the next damage is measured from there.
+
+**3. Do not draw while frozen.** `z_win_frozen()` is true for the
+duration of a window drag, when `wm` needs the screen to hold still
+under an XOR rubber band. Drawing then is not merely wasted -- for an
+app that tracks what it has drawn, it is destructive: the model records
+pixels that never reached the glass, and disagrees with it from then
+on. There is a safety net (the app's ack reports that it tried, and
+`wm` answers with a full repaint), and the net costs a whole-window
+repaint per app per drag.
+
+The cure is a single test at the top of a periodic render: return
+without touching the glass *or* the model, leave the work pending, and
+do it on the first tick after the thaw.
+
 ## Checking a panel before it reaches a screen
 
 An app with a laid-out panel can be drawn on the build machine and
@@ -766,9 +818,9 @@ rather than being missed.
 | `calc`, `settings` | `z_proc_wait(0)` | purely message-driven |
 | `clock` | `Z_TICK_HZ / 8` | redraws on a timer |
 | `info` | sample interval | samples periodically |
-| `net` | 1 tick | polls the ENC28J60 |
+| `net` | `Z_TICK_HZ / 10`, or the nearest deadline | frames arrive by IRQ; the timeout is housekeeping |
 | `repl` | `Z_TICK_HZ / 20` | message-driven; see below |
-| `wm` | 16 ticks | pointer arrives by IRQ; timeout covers dock deadlines |
+| `wm` | the nearest deadline, else indefinite | every input path wakes it |
 | `sh` (pid 0) | `Z_TICK_HZ / 4` | console input arrives by IRQ |
 
 **`repl`** was a pure spin — it read an empty mailbox and went round
@@ -794,25 +846,26 @@ register and coalescing is desirable, so the ISR wakes the reader and
 lets it read the current position. See `docs/user_input.md`,
 "Pointer wakeups".
 
-It still passes a timeout rather than blocking indefinitely, because
-`wm` has work driven by neither the pointer nor messages — dock launch
-deadlines, the pending launch-argument timeout, and
-`check_core_services()` at startup are all polled against
-`z_uptime_ticks()`. Those are coarse, so 16 ticks (~22ms) serves them
-while being 16x fewer wakeups than before. On a kernel predating the
-syscall the subscription fails and the old one-tick behaviour is kept,
-so the same binary runs on both.
+It passed a fixed 16-tick timeout for a while, because `wm` has work
+driven by neither the pointer nor messages — dock launch deadlines and
+`check_core_services()` at startup are polled against
+`z_uptime_ticks()`. That is the right list and the wrong way to pay for
+it: those deadlines mostly do not exist, so `wm_idle_ticks()` answers
+with whichever of them is nearest and with **0 — block indefinitely**
+when there is none. On a kernel predating the syscall the subscription
+fails and the old one-tick behaviour is kept, so the same binary runs
+on both. See `docs/user_input.md`, "What wm passes as a timeout".
 
-### Still outstanding
+### Settled since
 
-**`net` polls the ENC28J60** — see below. That is now the last
-timer-driven poll of a device that has an interrupt available.
-
-**`net` polls the ENC28J60** on a 1-tick timer. Its own comment notes
-the controller's INT pin is already wired to `spim.v`'s STATUS bit 2,
-so waking on the interrupt would be strictly better than a timer — and
-the HID pointer change above is now a worked precedent for exactly
-that shape of fix.
+**`net` no longer polls the ENC28J60 on a 1-tick timer.** Its INT pin
+was already readable in `spim.v`'s STATUS bit 2 and simply was not
+connected to anything that could wake a blocked process; it is now
+merged with the RMII MAC's own interrupt into `Z_IRQ_ETH`, so `net`
+blocks on frame arrival and keeps a timeout only as a housekeeping
+backstop. The HID pointer change above was the worked precedent, and
+`docs/networking.md`, "Receive interrupt", has the details -- including
+why the interrupt had to be an edge rather than a level.
 
 ## pid 0 blocks now too
 

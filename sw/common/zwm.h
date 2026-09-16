@@ -106,9 +106,10 @@
 // Each of these adds one more 8x8 icon to the titlebar, to the LEFT
 // of the close icon (which keeps the exact position it always had --
 // see wm.c's titlebar_icons()). Icons are laid out right-to-left in
-// the order close, save, new, open, font, so an app that asks for
-// new+save+close gets them reading "new save close" left to right,
-// which is the order they're normally written in.
+// the order close, save, open, new, font (titlebar_icon_table[] in
+// wm.c is the authority), so an app that asks for new+save+close gets
+// them reading "new save close" left to right, which is the order
+// they're normally written in.
 //
 // Clicking one does NOT do anything by itself -- wm has no idea what
 // "save" means for your app. It sends Z_WM_TITLEBAR_ICON (below) to
@@ -209,6 +210,26 @@
 // them from Z_WM_WINDOW_CREATED already has them and they don't
 // change.
 #define Z_WM_REDRAW             104
+
+// A REDRAW that says WHAT was invalidated: only the pixels this
+// window's region just gained. z_win_damage_rects() (zwin.h) hands
+// them to the app, and the shared layer confines the whole repaint to
+// them, so an app that ignores the distinction and repaints itself
+// whole is still correct -- only slower.
+//
+// Without this bit a REDRAW means "everything you can see", which is
+// what every OTHER sender means and what wm has always meant: a repair
+// that blacked out a rectangle (repair_region()), a full-screen
+// repaint (Z_WM_REPAINT), a window that moved, a window that drew
+// while frozen. Those cannot be expressed as "what your region
+// gained" -- often the region did not change at all -- and answering
+// them with a narrow damage list would leave the cleared pixels black.
+//
+// It rides in the packed payload's spare high bits. Z_WM_PACK_XY uses
+// bits 0..27 (y, x, id), and Z_WM_UNPACK_* mask, so a receiver that
+// predates this bit ignores it and repaints in full, exactly as
+// before.
+#define Z_WM_REDRAW_DAMAGE      (1u << 28)
 
 // app -> wm: sent after an app finishes redrawing in response to
 // Z_WM_REDRAW, so the wm knows it can move on to the next (more
@@ -389,6 +410,52 @@
 typedef struct {
 	int16_t x0, y0, x1, y1;   // inclusive; x1 < x0 means empty
 } z_wm_cliprect_t;
+
+// -- control regions --
+//
+// A region whose single rectangle has x0 == Z_WM_CLIP_CTL is not a
+// region but a command about the window's clip; y0 says which.
+// INT16_MIN can never be a screen coordinate, and a receiver that
+// does not know the command reads the rectangle as empty (x1 < x0),
+// i.e. "occluded" -- the harmless reading.
+//
+// Z_WM_CLIP_FREEZE: stop drawing, keep the glass. The window's clip
+// becomes the empty rectangle WITHOUT the clear a narrowing region
+// does (z_win_apply_clip()): whatever the window shows stays on
+// screen. wm freezes every window when a titlebar drag begins, so
+// the XOR rubber band travels over pixels that nothing changes -- a
+// window painting under the band between its draw and its erase is
+// what leaves trails. The next real region thaws the window; there
+// is no thaw command, because a region is state and the newest one
+// is always the right one.
+//
+// The ack of the thawing region carries Z_WM_CLIP_DONE_DREW when the
+// app tried to draw while frozen (its own bookkeeping may say those
+// pixels are on the glass; they are not), so wm sends it a REDRAW
+// even though its region did not change.
+// Z_WM_CLIP_WINDOW: which window this region is for. ALWAYS the first
+// rectangle of a Z_WM_SET_CLIP payload, control or not, with the id in
+// y1; z_win_apply_clip() consumes it and never installs it.
+//
+// A process can own more than one window -- any app that opens a
+// dialog does, for as long as the dialog is up (sw/common/zdialog.c)
+// -- and messages arrive in one queue per PROCESS, not per window.
+// Without this the receiver cannot tell whose region it just got, and
+// applying the newest one to whichever z_win_t is at hand gets it
+// wrong exactly half the time. It showed as a dialog with no buttons:
+// the region meant for the dialog went to the parent, the dialog was
+// never told one, and a window that has not been told a region draws
+// nothing at all (win_use_clip(), zwin.c).
+//
+// x1 is Z_WM_CLIP_CTL as well, so the rectangle is degenerate and far
+// off screen for anything that does reach zgfx with it.
+#define Z_WM_CLIP_CTL            (-32768)
+#define Z_WM_CLIP_FREEZE         1
+#define Z_WM_CLIP_WINDOW         2
+
+// Z_WM_CLIP_DONE payload: window id in the low 16 bits, flags above.
+#define Z_WM_CLIP_DONE_ID(v)     ((v) & 0xffffu)
+#define Z_WM_CLIP_DONE_DREW      0x10000u
 
 // -- launch arguments --
 //

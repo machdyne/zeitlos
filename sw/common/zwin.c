@@ -29,6 +29,18 @@
 static uint32_t wm_pid_cache;
 static bool wm_pid_resolved = false;
 
+// Last window this process created. z_launch_arg_take() used to
+// drain the mailbox with z_msg_wait(), which discards everything
+// that isn't Z_WM_ARG -- including the first SET_CLIP and REDRAW
+// wm sends right after WINDOW_CREATED. While an app drew wherever it
+// liked that was invisible: the app's own paint after take ran
+// unrestricted. Now that a window paints only inside the region it
+// has been given, it paints nothing, and because the region never arrives a later
+// raise of an already-front window does not resend it either, so
+// files/info/clock opened from the dock stay black. Applying those
+// messages to this window here is the layer's job, not each app's.
+static z_win_t *zwin_live;
+
 // Returns 0 if wm isn't running.
 //
 // No fallback to the fixed Z_PID_WM constant: a miss means wm is not
@@ -68,6 +80,11 @@ static char create_title[64];
 static z_obj_t title_keys[Z_WIN_TITLE_SLOTS][2];
 static z_obj_t title_vals[Z_WIN_TITLE_SLOTS][2];
 static z_obj_table_t title_tbl[Z_WIN_TITLE_SLOTS];
+
+// The "draw nothing" region: one empty rectangle. Zero rectangles
+// would mean UNRESTRICTED to zgfx (see zgfx.c's essay) -- the exact
+// opposite, and the same trap Z_WM_SET_CLIP's own comment documents.
+static const z_clip_t zwin_clip_none = { 0, 0, -1, -1 };
 // 64, matching WM_TITLE_MAX in sw/apps/wm/wm.c and create_title
 // above.
 //
@@ -218,6 +235,19 @@ z_rv z_win_create_cb(z_win_t *win, const char *title, uint32_t w, uint32_t h,
 
 	uint32_t wmpid = resolve_wm_pid();
 	if (!wmpid) return Z_FAIL;	// no wm running -- fail, don't guess
+
+	// A windowed process is born invisible: until wm sends this window
+	// its region (and win_use_clip() loads it), nothing it draws may
+	// reach the glass. zgfx's start-up state is unrestricted, which is
+	// correct for drawers that own the whole screen -- wm's chrome, a
+	// game-mode framebuffer -- and wrong for a window whose first
+	// SET_CLIP is still in flight: that paint used to land on whatever
+	// was above it. Loading the empty rectangle here covers even draws
+	// that bypass every z_win_* call and go straight to z_fb_*.
+	z_gfx_set_visible(&zwin_clip_none, 1);
+	win->clip[0] = zwin_clip_none;
+	win->clip_n = 1;
+
 	z_msg_new_send(wmpid, Z_WM_CREATE_WINDOW, 0, args);
 
 	z_msg_t reply;
@@ -254,6 +284,7 @@ z_rv z_win_create_cb(z_win_t *win, const char *title, uint32_t w, uint32_t h,
 	if (!z_win_parse_rect(win, &reply.obj) || win->id < 0)
 		return Z_FAIL;
 
+	zwin_live = win;
 	return Z_OK;
 
 }
@@ -276,6 +307,7 @@ bool z_win_parse_rect(z_win_t *win, z_obj_t *obj) {
 	win->y = y->val.uint32;
 	win->w = w->val.uint32;
 	win->h = h->val.uint32;
+	win->geom_changed = 1;
 
 	return true;
 
@@ -304,8 +336,48 @@ bool z_win_parse_rect(z_win_t *win, z_obj_t *obj) {
 // of at most eight rectangles, and usually one -- and it is the only
 // thing that makes an app with a dialog open draw both windows
 // correctly.
+static int zwin_region_minus(const z_clip_t *a, int na,
+	const z_clip_t *b, int nb, z_clip_t *out, int max);
+static int zwin_region_and(const z_clip_t *a, int na,
+	const z_clip_t *b, int nb, z_clip_t *out, int max);
+
 static void win_use_clip(const z_win_t *win) {
-	if (!win || win->clip_n <= 0) z_gfx_clear_visible();
+	if (!win) {
+		z_gfx_clear_visible();
+		return;
+	}
+	// Frozen (Z_WM_CLIP_FREEZE): nothing reaches the glass, and the
+	// attempt is remembered for the thaw. clip is the empty rectangle
+	// while frozen, so the normal path below would also draw nothing;
+	// this branch exists for the flag. The cast: the caller's const is
+	// about the window's geometry, not about this bookkeeping.
+	if (win->frozen) {
+		((z_win_t *)win)->drew_frozen = 1;
+		z_gfx_set_visible(win->clip, win->clip_n);
+		return;
+	}
+	// A REDRAW that named its damage (Z_WM_REDRAW_DAMAGE, zwm.h):
+	// only those pixels. The rest of the window is already on the
+	// glass, and drawing it again would be the curtain.
+	//
+	// An empty damage list is honoured as EMPTY, not as "no
+	// restriction": one empty rectangle, so an app that repaints
+	// itself regardless reaches nothing. Passing zero rectangles to
+	// zgfx would mean unrestricted, which is the opposite -- the same
+	// trap Z_WM_SET_CLIP's own comment documents.
+	if (win->paint_set) {
+		if (win->paint_n > 0) z_gfx_set_visible(win->paint, win->paint_n);
+		else z_gfx_set_visible(&zwin_clip_none, 1);
+		return;
+	}
+	// Never told a region (clip_n == 0): draw NOTHING, not everything.
+	// Unrestricted is the right default for a drawer that owns the
+	// whole screen and never gets a region -- wm's chrome, a game-mode
+	// framebuffer -- but a window's first SET_CLIP can still be in
+	// flight while it paints, and unrestricted then means painting over
+	// every window above it. wm sends the region ahead of the first
+	// REDRAW, so nothing is lost by staying invisible until it arrives.
+	if (win->clip_n <= 0) z_gfx_set_visible(&zwin_clip_none, 1);
 	else z_gfx_set_visible(win->clip, win->clip_n);
 }
 
@@ -319,6 +391,25 @@ bool z_win_apply_clip(z_win_t *win, z_obj_t *obj) {
 	if (!r || (len % sizeof(z_wm_cliprect_t)) != 0) return false;
 
 	int n = (int)(len / sizeof(z_wm_cliprect_t));
+
+	/* Whose region is this? (Z_WM_CLIP_WINDOW, zwm.h)
+	 *
+	 * Messages arrive per PROCESS, and a process with a dialog owns
+	 * two windows. wm names the window in a leading control rectangle;
+	 * one that is not ours belongs to the other window and must be
+	 * left for whoever holds it -- returning false without acking, so
+	 * the caller forwards it rather than this window swallowing a
+	 * region wm is waiting on an ack for.
+	 *
+	 * A payload without the leading rectangle is taken as ours: that
+	 * is what every message looked like before this existed, and a
+	 * single-window app is the case that cannot be ambiguous. */
+	if (n > 0 && r[0].x0 == Z_WM_CLIP_CTL && r[0].y0 == Z_WM_CLIP_WINDOW) {
+		if (win && (int)r[0].y1 != win->id) return false;
+		r++;
+		n--;
+	}
+
 	if (n > Z_WM_MAX_CLIP) n = Z_WM_MAX_CLIP;
 
 	z_clip_t rects[Z_WM_MAX_CLIP];
@@ -327,6 +418,43 @@ bool z_win_apply_clip(z_win_t *win, z_obj_t *obj) {
 		rects[i].y0 = r[i].y0;
 		rects[i].x1 = r[i].x1;
 		rects[i].y1 = r[i].y1;
+	}
+
+	// A control region (zwm.h). FREEZE: stop drawing, keep the glass.
+	// The clip becomes the empty rectangle with NONE of the clearing a
+	// narrowing does below -- what is on screen stays, by design: it
+	// is the still image under wm's drag band. clip_was is held
+	// exactly as a narrowing holds it, so the thawing region's REDRAW
+	// paints newly visible pixels against the last PAINT, not against
+	// the frozen empty clip. Idempotent. Acked like any region.
+	if (n == 1 && r[0].x0 == Z_WM_CLIP_CTL) {
+		if (win && r[0].y0 == Z_WM_CLIP_FREEZE) {
+			// clip_was is deliberately NOT intersected with the
+			// empty freeze clip: nothing left the glass, the window
+			// is simply not allowed to draw. Intersecting would say
+			// every pixel is stale and make the thaw repaint the
+			// whole desktop.
+			if (!win->clip_was_held) {
+				win->clip_was_n = win->clip_n;
+				for (int i = 0; i < win->clip_n; i++)
+					win->clip_was[i] = win->clip[i];
+				win->clip_was_held = 1;
+			}
+			win->clip[0].x0 = 0;
+			win->clip[0].y0 = 0;
+			win->clip[0].x1 = -1;
+			win->clip[0].y1 = -1;
+			win->clip_n = 1;
+			win->paint_n = 0;
+			win->paint_set = 0;
+			win->frozen = 1;
+			win->drew_frozen = 0;
+		}
+		uint32_t wmpid_c = resolve_wm_pid();
+		if (wmpid_c)
+			z_msg_new_send(wmpid_c, Z_WM_CLIP_DONE, 0,
+				z_obj_uint32(win ? (uint32_t)win->id : 0));
+		return true;
 	}
 
 	// n == 0 would mean "unrestricted" to zgfx, which is the opposite
@@ -340,23 +468,328 @@ bool z_win_apply_clip(z_win_t *win, z_obj_t *obj) {
 	// win_use_clip()'s job -- applying it here would mean the last
 	// message received won, which is wrong the moment an app owns a
 	// dialog as well as its main window.
+	uint32_t ack_flags = 0;
 	if (win) {
-		for (int i = 0; i < n; i++) win->clip[i] = rects[i];
+		// A real region thaws a frozen window. Its clip is the empty
+		// rectangle, so nothing below is cleared: the pixels it shows
+		// now belong to whoever gained them, and THEY repaint. If it
+		// tried to draw while frozen, say so in the ack.
+		int thawed_dirty = 0;
+		if (win->frozen) {
+			win->frozen = 0;
+			if (win->drew_frozen) {
+				ack_flags |= Z_WM_CLIP_DONE_DREW;
+				thawed_dirty = 1;
+			}
+			win->drew_frozen = 0;
+		}
+		// The damage of the last redraw is over; anything drawn from
+		// here (whatever the app does next) is against the window's
+		// own region again.
+		win->paint_n = 0;
+		win->paint_set = 0;
+
+		// The pixels this window is giving up are NOT erased here.
+		// wm repairs the overlap itself on every path that narrows a
+		// region (wipe_raise_overlap(), repair_region(), the drag
+		// sweep), so the erase only duplicated that work -- and it
+		// did it with the region deliberately escaped
+		// (z_gfx_clear_visible() + raw z_fb_hw_fill_rect()) from the
+		// app's own message loop, whenever the app happened to drain
+		// the message. A busy app applies the narrowing LATE: the
+		// erase then lands after wm's repair, on pixels that already
+		// belong to the window that was raised, and blacks its fresh
+		// chrome. Rapid focus cycling makes that systematic: measured,
+		// 100-150 ms clicks between three windows reliably killed
+		// the raised window's titlebar until it was raised again.
+		// clip_was is what is KNOWN GOOD on the glass, and a region
+		// change can only take away from it: the pixels we are
+		// giving up stop being ours, and the ones we are gaining
+		// have never been painted. So intersect, do not snapshot.
+		//
+		// Snapshotting the old clip on the first change since the
+		// last paint was right only while EVERY region change came
+		// with a REDRAW, because the redraw's ack reset it. Now that
+		// a window which merely narrows is not asked to repaint
+		// (wm's send_clip_ex), that reset never comes: a window
+		// lowered and then raised again compared its new full region
+		// against the full region it had BEFORE being lowered, got
+		// an empty damage, and painted nothing at all -- the raised
+		// terminal came back blank. Intersecting gets it right by
+		// construction, and coalesced regions accumulate the damage
+		// the way the snapshot was meant to.
+		int i;
+		uint32_t area_was = 0, area_now = 0;
+		if (!win->clip_was_held) {
+			// Never told a region: nothing on the glass is ours yet.
+			win->clip_was_n = 0;
+			win->clip_was_held = 1;
+		} else {
+			z_clip_t keep[Z_WM_MAX_CLIP];
+			int nk = zwin_region_and(win->clip_was, win->clip_was_n,
+				rects, n, keep, Z_WM_MAX_CLIP);
+			if (nk < 0) nk = 0;   // too many pieces: repaint it all
+			for (i = 0; i < nk; i++) win->clip_was[i] = keep[i];
+			win->clip_was_n = nk;
+		}
+		for (i = 0; i < win->clip_was_n; i++) {
+			int w = win->clip_was[i].x1 - win->clip_was[i].x0 + 1;
+			int h = win->clip_was[i].y1 - win->clip_was[i].y0 + 1;
+			if (w > 0 && h > 0)
+				area_was += (uint32_t)w * (uint32_t)h;
+		}
+		for (i = 0; i < n; i++) {
+			win->clip[i] = rects[i];
+			int w = rects[i].x1 - rects[i].x0 + 1;
+			int h = rects[i].y1 - rects[i].y0 + 1;
+			if (w > 0 && h > 0)
+				area_now += (uint32_t)w * (uint32_t)h;
+		}
 		win->clip_n = n;
+		win->clip_widened = (area_now > area_was);
+
+		// A window that tried to draw while frozen believes pixels
+		// are on the glass that never got there. wm answers the DREW
+		// ack with a REDRAW; drop clip_was so that REDRAW is a full
+		// one. Without this the damage would work out empty -- the
+		// thawing region is the pre-freeze region -- and the window
+		// would repaint nothing at all.
+		if (thawed_dirty)
+			win->clip_was_n = 0;
 	}
 
 	uint32_t wmpid = resolve_wm_pid();
 	if (wmpid)
 		z_msg_new_send(wmpid, Z_WM_CLIP_DONE, 0,
-			z_obj_uint32(win ? (uint32_t)win->id : 0));
+			z_obj_uint32((win ? (uint32_t)win->id : 0) | ack_flags));
 
 	return true;
 
 }
 
+static bool zwin_rect_empty(const z_clip_t *r) {
+	return r->x1 < r->x0 || r->y1 < r->y0;
+}
+
+static bool zwin_rect_overlaps(const z_clip_t *a, const z_clip_t *b) {
+	return !(a->x1 < b->x0 || b->x1 < a->x0 ||
+		 a->y1 < b->y0 || b->y1 < a->y0);
+}
+
+static bool zwin_rect_subtract(const z_clip_t *r, const z_clip_t *cut,
+	z_clip_t *out, int *n, int max)
+{
+	if (!zwin_rect_overlaps(r, cut)) {
+		if (*n >= max) return false;
+		out[(*n)++] = *r;
+		return true;
+	}
+	if (cut->y0 > r->y0) {
+		if (*n >= max) return false;
+		out[(*n)++] = (z_clip_t){ r->x0, r->y0, r->x1, cut->y0 - 1 };
+	}
+	if (cut->y1 < r->y1) {
+		if (*n >= max) return false;
+		out[(*n)++] = (z_clip_t){ r->x0, cut->y1 + 1, r->x1, r->y1 };
+	}
+	{
+		int ty0 = cut->y0 > r->y0 ? cut->y0 : r->y0;
+		int ty1 = cut->y1 < r->y1 ? cut->y1 : r->y1;
+		if (cut->x0 > r->x0 && ty0 <= ty1) {
+			if (*n >= max) return false;
+			out[(*n)++] = (z_clip_t){ r->x0, ty0, cut->x0 - 1, ty1 };
+		}
+		if (cut->x1 < r->x1 && ty0 <= ty1) {
+			if (*n >= max) return false;
+			out[(*n)++] = (z_clip_t){ cut->x1 + 1, ty0, r->x1, ty1 };
+		}
+	}
+	return true;
+}
+
+// Pixels in both `a` and `b`. Returns -1 if the result needs more
+// than `max` rectangles; the caller treats that as "nothing", which
+// costs a repaint and never a hole.
+static int zwin_region_and(const z_clip_t *a, int na,
+	const z_clip_t *b, int nb, z_clip_t *out, int max)
+{
+	int i, j, n = 0;
+	for (i = 0; i < na; i++) {
+		if (zwin_rect_empty(&a[i])) continue;
+		for (j = 0; j < nb; j++) {
+			z_clip_t r;
+			if (zwin_rect_empty(&b[j])) continue;
+			r.x0 = a[i].x0 > b[j].x0 ? a[i].x0 : b[j].x0;
+			r.y0 = a[i].y0 > b[j].y0 ? a[i].y0 : b[j].y0;
+			r.x1 = a[i].x1 < b[j].x1 ? a[i].x1 : b[j].x1;
+			r.y1 = a[i].y1 < b[j].y1 ? a[i].y1 : b[j].y1;
+			if (zwin_rect_empty(&r)) continue;
+			if (n >= max) return -1;
+			out[n++] = r;
+		}
+	}
+	return n;
+}
+
+static int zwin_region_minus(const z_clip_t *a, int na,
+	const z_clip_t *b, int nb, z_clip_t *out, int max)
+{
+	z_clip_t cur[Z_WM_MAX_CLIP], nxt[Z_WM_MAX_CLIP];
+	int ncur = 0, i, j;
+
+	for (i = 0; i < na && ncur < Z_WM_MAX_CLIP; i++)
+		if (!zwin_rect_empty(&a[i]))
+			cur[ncur++] = a[i];
+
+	for (i = 0; i < nb; i++) {
+		int nnxt = 0;
+		if (zwin_rect_empty(&b[i])) continue;
+		for (j = 0; j < ncur; j++) {
+			if (!zwin_rect_subtract(&cur[j], &b[i], nxt, &nnxt,
+					Z_WM_MAX_CLIP))
+				return -1;
+		}
+		for (j = 0; j < nnxt; j++) cur[j] = nxt[j];
+		ncur = nnxt;
+		if (ncur == 0) break;
+	}
+
+	int n = 0;
+	for (i = 0; i < ncur; i++) {
+		if (zwin_rect_empty(&cur[i])) continue;
+		if (n >= max) return -1;
+		out[n++] = cur[i];
+	}
+	return n;
+}
+
 void z_win_apply_redraw(z_win_t *win, uint32_t packed) {
 	win->x = Z_WM_UNPACK_X(packed);
 	win->y = Z_WM_UNPACK_Y(packed);
+	win->paint_n = 0;
+	win->paint_set = 0;
+
+	// Drain compositor messages BEFORE computing damage, so the
+	// clip in force is the newest one. Draining after left paint[]
+	// describing the old (wider) region: view's PNG decode is the
+	// measured case -- create queued SET_CLIP(full)+REDRAW, files
+	// was raised during the decode, a narrowing SET_CLIP sat
+	// behind the REDRAW, and win_use_clip then loaded that stale
+	// full damage, so the blit landed on files. Anything that is
+	// not a compositor message is pushed back.
+	{
+		z_msg_t extra;
+		while (z_msg_read(&extra) == Z_OK) {
+			if (extra.subject == Z_WM_SET_CLIP) {
+				// Another window's region (a dialog's, or its
+				// parent's -- Z_WM_CLIP_WINDOW in zwm.h) is not
+				// ours to swallow: wm is waiting on an ack for it.
+				// Push it back, like anything else that is not
+				// addressed here.
+				if (z_win_apply_clip(win, &extra.obj)) continue;
+				z_msg_unread(&extra);
+				break;
+			}
+			if (extra.subject == Z_WM_WINDOW_MOVED) {
+				z_win_parse_rect(win, &extra.obj);
+				continue;
+			}
+			if (extra.subject == Z_WM_WINDOW_RESIZED) {
+				z_win_apply_resized(win, &extra.obj);
+				continue;
+			}
+			if (extra.subject == Z_WM_REDRAW &&
+			    extra.obj.type == Z_UINT32 &&
+			    z_win_redraw_id(extra.obj.val.uint32) == win->id) {
+				// A later full REDRAW upgrades this one:
+				// damage computed against the newest clip
+				// would otherwise throw the full request
+				// away (the previous drain skipped it).
+				if (!(extra.obj.val.uint32 & Z_WM_REDRAW_DAMAGE))
+					packed &= ~Z_WM_REDRAW_DAMAGE;
+				continue;
+			}
+			z_msg_unread(&extra);
+			break;
+		}
+	}
+
+	// No Z_WM_REDRAW_DAMAGE: wm means "everything you can see".
+	// It cleared pixels itself (repair_region(), Z_WM_REPAINT), or
+	// this window drew where nothing reached the glass. Neither is
+	// expressible as "what your region gained" -- the region often
+	// did not change at all -- so the honest answer is a full
+	// repaint, and it is what every sender before this flag meant.
+	if (!(packed & Z_WM_REDRAW_DAMAGE)) {
+		win->paint_full = 1;
+		return;
+	}
+
+	// A full redraw is already outstanding: it cannot be narrowed by
+	// one that arrived after it.
+	if (win->paint_full)
+		return;
+
+	// A move or a resize: clip_was is in the OLD screen coordinates,
+	// so subtracting it from the new clip skips the wrong pixels --
+	// the terminal goes illegible. The whole window is damaged.
+	if (win->geom_changed) {
+		win->geom_changed = 0;
+		win->paint_full = 1;
+		return;
+	}
+
+	// Never told a region, so there is no "before" to compare
+	// against. Repaint everything rather than guess.
+	if (!win->clip_was_held) {
+		win->paint_full = 1;
+		return;
+	}
+
+	{
+		int pn;
+		// Damage = newly visible pixels. Overflow (too many
+		// fragments) used to return a PARTIAL list -- the
+		// missing pieces stayed black, and whether that
+		// happened depended on how the windows overlapped
+		// ("a veces sale, a veces no"). Fall back to a full
+		// repaint of the current clip so the landing cannot
+		// punch holes.
+		pn = zwin_region_minus(win->clip, win->clip_n,
+			win->clip_was, win->clip_was_n, win->paint,
+			Z_WM_MAX_CLIP);
+		if (pn < 0) {
+			win->paint_full = 1;
+			return;
+		}
+		win->paint_n = pn;
+		win->paint_set = 1;
+	}
+}
+
+void z_win_damage_ignore(z_win_t *win) {
+	if (!win) return;
+	win->paint_n = 0;
+	win->paint_set = 0;
+	win->paint_full = 1;
+}
+
+// See zwin.h: "am I allowed to put anything on the glass right now?".
+// Deliberately reads the flag rather than testing the clip for
+// emptiness -- a fully occluded window has an empty clip too, and that
+// is a different situation (its pixels belong to someone else, and a
+// REDRAW will come when it gets them back).
+bool z_win_frozen(const z_win_t *win) {
+	return win && win->frozen;
+}
+
+int z_win_damage_rects(const z_win_t *win, z_clip_t *out, int max) {
+	int i, n;
+	if (!win || !win->paint_set) return -1;
+	n = win->paint_n;
+	if (n > max) n = max;
+	for (i = 0; i < n; i++) out[i] = win->paint[i];
+	return n;
 }
 
 bool z_win_apply_resized(z_win_t *win, z_obj_t *obj) {
@@ -392,10 +825,48 @@ int z_win_content_h(const z_win_t *win) {
 	return h > 0 ? h : 0;
 }
 
-void z_win_redraw_done(const z_win_t *win) {
+void z_win_redraw_done(z_win_t *win) {
+	if (win) {
+		int i;
+		win->paint_n = 0;
+		win->paint_set = 0;
+		win->paint_full = 0;
+		// The window has just painted everything that was asked of
+		// it, so its whole clip is now known good on the glass. Next
+		// time, the damage is measured from here.
+		for (i = 0; i < win->clip_n; i++)
+			win->clip_was[i] = win->clip[i];
+		win->clip_was_n = win->clip_n;
+		win->clip_was_held = 1;
+	}
 	uint32_t wmpid_r = resolve_wm_pid();
 	if (wmpid_r)
-		z_msg_new_send(wmpid_r, Z_WM_REDRAW_DONE, 0, z_obj_uint32((uint32_t)win->id));
+		z_msg_new_send(wmpid_r, Z_WM_REDRAW_DONE, 0,
+			z_obj_uint32(win ? (uint32_t)win->id : 0));
+}
+
+static z_clip_t paint_content;
+
+void z_win_paint_begin(const z_win_t *win)
+{
+	z_win_content_rect(win, &paint_content);
+	z_gfx_paint_begin();
+}
+
+int z_win_paint_next_rect(void)
+{
+	return z_gfx_paint_next_rect(&paint_content);
+}
+
+int z_win_paint_current(z_clip_t *out)
+{
+	return z_gfx_paint_current(out);
+}
+
+void z_win_paint_end(const z_win_t *win)
+{
+	(void)win;
+	z_gfx_paint_end();
 }
 
 void z_win_content_rect(const z_win_t *win, z_clip_t *out) {
@@ -597,6 +1068,38 @@ void z_launch_arg_set(const char *arg) {
 
 }
 
+// Apply a compositor message to `win` so a wait for something else
+// (the launch argument, a clipboard fetch) cannot throw away the
+// first region. Returns true if the message was consumed.
+static bool zwin_absorb(z_win_t *win, z_msg_t *msg) {
+
+	if (!win || !msg) return false;
+
+	switch (msg->subject) {
+
+	case Z_WM_SET_CLIP:
+		return z_win_apply_clip(win, &msg->obj);
+
+	case Z_WM_WINDOW_MOVED:
+		return z_win_parse_rect(win, &msg->obj);
+
+	case Z_WM_WINDOW_RESIZED:
+		return z_win_apply_resized(win, &msg->obj);
+
+	case Z_WM_REDRAW:
+		if (msg->obj.type != Z_UINT32) return false;
+		if (z_win_redraw_id(msg->obj.val.uint32) != win->id)
+			return false;
+		z_win_apply_redraw(win, msg->obj.val.uint32);
+		return true;
+
+	default:
+		return false;
+
+	}
+
+}
+
 bool z_launch_arg_take(char *out, int outlen) {
 
 	if (!out || outlen < 1) return false;
@@ -611,7 +1114,15 @@ bool z_launch_arg_take(char *out, int outlen) {
 	z_msg_new_send(wmpid, Z_WM_GET_ARG, 0, none);
 
 	z_msg_t reply;
-	if (z_msg_wait(&reply, Z_WM_ARG, 0) != Z_OK) return false;
+	for (;;) {
+		if (z_msg_read(&reply) != Z_OK) {
+			z_proc_wait(1);
+			continue;
+		}
+		if (reply.subject == Z_WM_ARG && reply.tag == 0)
+			break;
+		zwin_absorb(zwin_live, &reply);
+	}
 
 	if (reply.obj.type != Z_STR || !reply.obj.val.str) return false;
 
@@ -741,6 +1252,7 @@ void z_win_set_title(const z_win_t *win, const char *title) {
 // and drops it, same as it already does for any unrecognized id.
 void z_win_destroy(const z_win_t *win) {
 	if (win->id < 0) return;
+	if (zwin_live == win) zwin_live = NULL;
 	uint32_t wmpid_d = resolve_wm_pid();
 	if (wmpid_d)
 		z_msg_new_send(wmpid_d, Z_WM_DESTROY_WINDOW, 0, z_obj_uint32((uint32_t)win->id));

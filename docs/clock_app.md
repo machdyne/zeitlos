@@ -180,6 +180,17 @@ right.
 The cost is a wakeup that does three register reads and returns, eight
 times a second.
 
+**The tick is skipped entirely while the window is frozen**
+(`z_win_frozen()`, `zwin.h`): wm freezes every window for the duration
+of a drag, and nothing drawn then reaches the screen. Skipping it is
+not an optimisation. `draw_hands()` erases the previous hands by
+redrawing them in the background colour and then records where the new
+ones went, so a pass that reaches no pixels leaves that record
+describing hands that are not on the glass -- and the old ones stuck
+there for good. Held over instead: the hands move on the first second
+that turns over after the drag ends, which is the same ~125ms lateness
+this loop already tolerates.
+
 ## Window
 
 Fixed size, 132×162 — a 128×147 content area with a 116px dial.

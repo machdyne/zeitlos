@@ -34,22 +34,26 @@
  * once per rectangle.
  *
  * Empty (count 0) means UNRESTRICTED, not "invisible". That is the
- * state before wm has said anything, and it has to mean "draw
- * normally" or a process would be blank until its first region
- * message arrived. wm sends a genuinely empty region as a
- * fully-occluded window, which is represented as count 1 with an
- * empty rectangle.
+ * right default for the drawers that own the whole screen and never
+ * get a region: wm's own chrome, a game-mode framebuffer. Windowed
+ * processes are kept away from it by zwin, which loads a genuinely
+ * empty region (count 1, an empty rectangle) at window creation and
+ * whenever a window's region is not yet known -- an app's first
+ * paint cannot land on the windows above it while its first
+ * SET_CLIP is still in flight. wm uses the same count-1 encoding
+ * for a fully-occluded window.
  *
  * Process-global rather than per-window: the hardware has one
  * framebuffer and one scissor, and a process draws to one window at a
- * time. z_win_clip_begin()/end() (zwin.c) set it around a window's
- * drawing.
+ * time. Every z_win_* drawing call (and z_win_content_rect(), which
+ * raw z_fb_* painters call first) loads its window's region before
+ * drawing, so the region in force belongs to the window being drawn.
  */
 
 static void z_fb_hw_line_one(int x0, int y0, int x1, int y1, int color,
 	const z_clip_t *clip);
 static void hw_fill_rect_one(int x, int y, int w, int h, int color,
-	bool wait);
+	bool wait, int ri);
 
 // Raster op for the next hardware fill. Z_ROP_COPY for every caller
 // but z_fb_hw_fill_rect_rop(), which sets it, fills, and puts it back.
@@ -62,7 +66,7 @@ static void hw_fill_rect_one(int x, int y, int w, int h, int color,
 // gpu_blit_acquire()'s masked section.
 static int fill_rop = Z_ROP_COPY;
 static void hw_fill_shade_one(int x, int y, int w, int h, int level,
-	bool wait);
+	bool wait, int ri);
 static void hw_fill_pattern_one(int x, int y, int w, int h,
 	const uint8_t *pat);
 static void z_fb_hw_box_one(int x0, int y0, int x1, int y1, int color,
@@ -72,6 +76,14 @@ static void z_fb_hw_box_one(int x0, int y0, int x1, int y1, int color,
 
 static z_clip_t gfx_region[Z_GFX_MAX_CLIP];
 static int gfx_region_n;	// 0 = unrestricted
+
+// Paint session -- see z_gfx_paint_begin().
+static int gfx_paint_open;
+static int gfx_paint_active;
+static int gfx_paint_clip;
+static int gfx_paint_ri;
+static int gfx_paint_have;
+static z_clip_t gfx_paint_eff;
 
 void z_gfx_set_visible(const z_clip_t *rects, int n) {
 	if (n > Z_GFX_MAX_CLIP) n = Z_GFX_MAX_CLIP;
@@ -86,6 +98,91 @@ void z_gfx_clear_visible(void) {
 
 int z_gfx_visible_count(void) {
 	return gfx_region_n;
+}
+
+// True if the rectangle hits at least one visible-region rect (and
+// `clip`, if given). Cheap reject so a REDRAW whose region is the
+// newly exposed strip does not pay acquire+blit for every glyph in
+// the window.
+static bool z_gfx_rect_visible(int x0, int y0, int x1, int y1,
+	const z_clip_t *clip)
+{
+	if (clip) {
+		if (x0 < clip->x0) x0 = clip->x0;
+		if (y0 < clip->y0) y0 = clip->y0;
+		if (x1 > clip->x1) x1 = clip->x1;
+		if (y1 > clip->y1) y1 = clip->y1;
+	}
+	if (x1 < x0 || y1 < y0) return false;
+	if (gfx_region_n == 0) return true;
+	for (int i = 0; i < gfx_region_n; i++) {
+		const z_clip_t *r = &gfx_region[i];
+		if (r->x1 < r->x0) continue;
+		if (x1 < r->x0 || x0 > r->x1 || y1 < r->y0 || y0 > r->y1)
+			continue;
+		return true;
+	}
+	return false;
+}
+
+// -- per-phase cycle counters -- see zgfx.h for the contract.
+uint32_t zgfx_perf[ZGFX_PERF_COUNT];
+uint32_t zgfx_perf_n[ZGFX_PERF_COUNT];
+
+/* Compiled OUT by default.
+ *
+ * These counters answered one question -- where the per-glyph
+ * cost goes -- and no app reads them any more: term's phase dump went
+ * when term was rebuilt on upstream's renderer. What stayed was their
+ * price, paid on every glyph in the hot path: eight rdcycle reads and
+ * as many read-modify-writes to .bss per cell.
+ *
+ * Build with -DZGFX_PERF=1 to get them back. Everything below folds to
+ * nothing when it is 0: zgfx_cyc() returns a constant and the
+ * accumulators are dead stores the compiler removes. */
+#ifndef ZGFX_PERF
+#define ZGFX_PERF 0
+#endif
+
+static inline uint32_t zgfx_cyc(void) {
+#if ZGFX_PERF
+	uint32_t v; __asm__ volatile ("rdcycle %0" : "=r"(v)); return v;
+#else
+	return 0;
+#endif
+}
+
+// Two rdcycle reads per accumulation cancel each other's cost out of
+// the delta (the leading read's latency lands before the stored t0),
+// up to one read's worth of quantisation -- ZGFX_PERF_OVH carries that
+// unit so the reader can subtract what little remains.
+#define ZGFX_ACC(i, t0) do { if (ZGFX_PERF) { \
+		zgfx_perf[i] += zgfx_cyc() - (t0); \
+		zgfx_perf_n[i]++; \
+	} } while (0)
+
+// Unmask probe: same accumulation plus the single-window max and a
+// count of windows over 1 ms (48000 cyc), so a redraw can say whether
+// the unmask total is many small windows or a few preemptions.
+#define ZGFX_ACC_UNM(t0) do { if (ZGFX_PERF) { \
+		uint32_t d_ = zgfx_cyc() - (t0); \
+		zgfx_perf[ZGFX_PERF_UNMASK] += d_; \
+		zgfx_perf_n[ZGFX_PERF_UNMASK]++; \
+		if (d_ > zgfx_perf[ZGFX_PERF_UNM_MAX]) \
+			zgfx_perf[ZGFX_PERF_UNM_MAX] = d_; \
+		if (d_ > 48000u) zgfx_perf[ZGFX_PERF_UNM_HI]++; \
+	} } while (0)
+
+void zgfx_perf_reset(void) {
+
+	for (int i = 0; i < ZGFX_PERF_COUNT; i++) {
+		zgfx_perf[i] = 0;
+		zgfx_perf_n[i] = 0;
+	}
+
+	uint32_t a = zgfx_cyc();
+	zgfx_perf[ZGFX_PERF_OVH] = zgfx_cyc() - a;
+
 }
 
 // Effective clip for pass `i`: the caller's clip intersected with
@@ -149,6 +246,85 @@ void z_gfx_blit_scissor_reset(void) {
 	gpu_blit_clip_y0 = 0;
 	gpu_blit_clip_x1 = Z_SCREEN_W;
 	gpu_blit_clip_y1 = Z_SCREEN_H;
+}
+
+void z_gfx_paint_begin(void)
+{
+	gfx_paint_open = 1;
+	gfx_paint_active = 0;
+	gfx_paint_clip = 0;
+	gfx_paint_ri = -1;
+	gfx_paint_have = 0;
+}
+
+int z_gfx_paint_next_rect(const z_clip_t *clip)
+{
+	if (!gfx_paint_open)
+		return 0;
+	gfx_paint_active = 0;
+	gfx_paint_have = 0;
+	if (gfx_region_n == 0) {
+		if (gfx_paint_ri >= 0)
+			return 0;
+		gfx_paint_ri = 0;
+		gfx_paint_active = 1;
+		gfx_paint_clip = 0;
+		if (clip)
+			gfx_paint_eff = *clip;
+		else {
+			gfx_paint_eff.x0 = 0;
+			gfx_paint_eff.y0 = 0;
+			gfx_paint_eff.x1 = Z_SCREEN_W - 1;
+			gfx_paint_eff.y1 = Z_SCREEN_H - 1;
+		}
+		gfx_paint_have = 1;
+		return 1;
+	}
+	while (gpu_blit_status & 1)
+		;
+	for (;;) {
+		gfx_paint_ri++;
+		if (gfx_paint_ri >= gfx_region_n)
+			return 0;
+		uint32_t old_mask = maskirq(0xFFFFFFFFu);
+		int ok = z_gfx_blit_scissor(gfx_paint_ri, clip);
+		maskirq(old_mask);
+		if (ok) {
+			gfx_paint_active = 1;
+			gfx_paint_clip = 1;
+			z_gfx_visible_clip(gfx_paint_ri, clip, &gfx_paint_eff);
+			gfx_paint_have = 1;
+			return 1;
+		}
+	}
+}
+
+void z_gfx_paint_end(void)
+{
+	if (!gfx_paint_open)
+		return;
+	while (gpu_blit_status & 1)
+		;
+	if (gfx_region_n)
+		z_gfx_blit_scissor_reset();
+	gfx_paint_open = 0;
+	gfx_paint_active = 0;
+	gfx_paint_clip = 0;
+	gfx_paint_ri = -1;
+	gfx_paint_have = 0;
+}
+
+int z_gfx_paint_current(z_clip_t *out)
+{
+	if (!gfx_paint_active || !gfx_paint_have)
+		return 0;
+	if (out) *out = gfx_paint_eff;
+	return 1;
+}
+
+int z_gfx_paint_active(void)
+{
+	return gfx_paint_active;
 }
 
 // True if (x,y) is inside the visible region.
@@ -239,6 +415,38 @@ static inline void gpu_wait_fifo(void) {
 	}
 }
 
+// Rasterizer IDLE: FIFO empty AND the command it popped last fully
+// drawn. That is what gpu_busy (register 6) reports -- busy_signal =
+// !fifo_empty || draw_busy in rtl/gpu/gpu_raster.v. gpu_debug_fifo_count
+// alone is not enough: the FIFO pops in SETUP, so it reads 0 while the
+// last line is still being drawn. Bounded like gpu_wait_fifo() above,
+// for the same reason; false means it gave up.
+static inline bool gpu_wait_idle(void) {
+	uint32_t waited = 0;
+	while (gpu_busy & 1) {
+		if (++waited > 10000000) {
+			printf("zgfx: gpu idle wait timed out -- rasterizer may be stuck\n");
+			return false;
+		}
+	}
+	return true;
+}
+
+// True when the scissor the rasterizer holds RIGHT NOW is not `clip`.
+// Read back from the hardware (gpu_clip_* are readable) rather than
+// shadowed in software, because the registers are shared by every
+// process: whoever wrote them last was not necessarily us. Masked to
+// the registers' ten bits, so this compares exactly what the hardware
+// will clip against.
+static inline bool gpu_clip_differs(const z_clip_t *clip) {
+	if (!clip) return (gpu_clip_enable & 1) != 0;
+	return !(gpu_clip_enable & 1) ||
+		gpu_clip_x0 != ((uint32_t)clip->x0 & 0x3ff) ||
+		gpu_clip_y0 != ((uint32_t)clip->y0 & 0x3ff) ||
+		gpu_clip_x1 != ((uint32_t)clip->x1 & 0x3ff) ||
+		gpu_clip_y1 != ((uint32_t)clip->y1 & 0x3ff);
+}
+
 // Issued once per visible-region rectangle.
 //
 // The rasterizer has a hardware scissor (gpu_clip_*), so each pass
@@ -290,13 +498,62 @@ static void z_fb_hw_line_one(int x0, int y0, int x1, int y1, int color, const z_
 	if (y1 < 0) y1 = 0;
 	if (y1 >= Z_SCREEN_H) y1 = Z_SCREEN_H - 1;
 
+	// A pass whose line cannot touch `clip` queues nothing: no copy,
+	// so no scissor change and none of the drain below. z_fb_hw_line()
+	// hands each pass over a k-rectangle region that rectangle
+	// intersected with the caller's clip, so a titlebar separator that
+	// lies in rectangle 0 no longer queues a copy under rectangle 1
+	// and then waits for the rasterizer to go idle before the next
+	// line. The test is the line's bounding box, which is conservative
+	// (a diagonal can cross the box and miss the rectangle): that only
+	// costs a useless copy, never a pixel. Done after the clamp so the
+	// box is the line the hardware will actually draw, and before any
+	// gpu_clip_* read so it cannot trigger the drain. clip == NULL is
+	// unrestricted and takes no shortcut.
+	if (clip) {
+		int bx0 = x0 < x1 ? x0 : x1, bx1 = x0 < x1 ? x1 : x0;
+		int by0 = y0 < y1 ? y0 : y1, by1 = y0 < y1 ? y1 : y0;
+		if (bx1 < clip->x0 || bx0 > clip->x1 ||
+		    by1 < clip->y0 || by0 > clip->y1)
+			return;
+	}
+
 	// deliberately outside the masked section below -- this can
 	// legitimately take a while if the FIFO's backed up, and masking
 	// through that would stall the scheduler for every other process,
 	// not just this one.
 	gpu_wait_fifo();
 
-	uint32_t old_mask = maskirq(0xFFFFFFFF);
+	// The scissor is NOT part of the command. A FIFO entry is
+	// {colour, y1, x1, y0, x0} -- 42 bits, rtl/gpu/gpu_raster.v -- and
+	// pixel_in_clip compares against gpu_clip_* LIVE, per pixel, as
+	// each queued line is drawn. So rewriting the scissor while an
+	// earlier line is still in flight re-clips the REST of that line
+	// against the new rectangle. z_fb_hw_line()'s loop over a region
+	// of two or more rectangles did exactly that: the copy for rect 0
+	// started drawing, the CPU programmed rect 1 for the next copy
+	// about a hundred pixels later, and the remainder of copy 0 was
+	// discarded as outside rect 1. Visible as the titlebar separator
+	// stopping at ~107px in every window that was not the last one a
+	// repair drew (~107 is a TIME, not a width: how far the rasterizer
+	// gets in one trip round that loop). So whenever the scissor has
+	// to CHANGE, drain the rasterizer first. Same scissor as the line
+	// before (an app's own clip, line after line): no wait, the queue
+	// stays full. Re-checked with IRQs masked, like gpu_blit_acquire():
+	// another process can slip in between the spin-wait and the mask
+	// and queue lines under its own scissor.
+	uint32_t old_mask;
+
+	for (;;) {
+		bool idle = !gpu_clip_differs(clip) || gpu_wait_idle();
+		old_mask = maskirq(0xFFFFFFFF);
+		// gave up (stuck rasterizer): go on regardless, the same way
+		// gpu_wait_fifo() does, rather than hang the caller.
+		if (!idle || !gpu_clip_differs(clip) || !(gpu_busy & 1)) break;
+		// lost the race: something else queued work under its own
+		// scissor in the gap. unmask and try again.
+		maskirq(old_mask);
+	}
 
 	if (clip) {
 		gpu_clip_x0 = (uint32_t)clip->x0;
@@ -493,6 +750,12 @@ static inline uint32_t gpu_blit_acquire(void) {
 
 	for (;;) {
 
+		// Time the spin and the masked final check
+		// separately -- the spin is where another process's blit (or
+		// another process's timeslice mid-spin) shows up, the masked
+		// check is own work only.
+		uint32_t tw = zgfx_cyc();
+
 		uint32_t waited = 0;
 		while (gpu_blit_status & 1) {
 			if (++waited > 10000000) {
@@ -501,8 +764,23 @@ static inline uint32_t gpu_blit_acquire(void) {
 			}
 		}
 
+		ZGFX_ACC(ZGFX_PERF_ACQ_WAIT, tw);
+		if (ZGFX_PERF) zgfx_perf[ZGFX_PERF_ACQ_READS] += waited + 1;
+
+		uint32_t tm = zgfx_cyc();
 		uint32_t old_mask = maskirq(0xFFFFFFFF);
-		if (!(gpu_blit_status & 1)) return old_mask;
+		if (!(gpu_blit_status & 1)) {
+			// Accumulated while still masked: ~30-50 cycles added to a
+			// critical section that was ~15. rdcycle runs regardless of
+			// the IRQ mask, so the read itself is safe here.
+			ZGFX_ACC(ZGFX_PERF_ACQ_MASK, tm);
+			if (ZGFX_PERF) zgfx_perf[ZGFX_PERF_ACQ_READS]++;
+			return old_mask;
+		}
+
+		ZGFX_ACC(ZGFX_PERF_ACQ_MASK, tm);
+		if (ZGFX_PERF) zgfx_perf[ZGFX_PERF_ACQ_READS]++;
+		if (ZGFX_PERF) zgfx_perf[ZGFX_PERF_ACQ_RETRY]++;
 
 		// lost the race: something else started an operation in the
 		// gap between the spin-wait above and this check. unmask and
@@ -556,21 +834,19 @@ static void hw_fill_shade_core(int x, int y, int w, int h, int level,
 	int n = z_gfx_visible_count();
 
 	if (n == 0) {
-		hw_fill_shade_one(x, y, w, h, level, wait);
+		hw_fill_shade_one(x, y, w, h, level, wait, -1);
 		return;
 	}
 
-	for (int i = 0; i < n; i++) {
-		if (!z_gfx_blit_scissor(i, NULL)) continue;
-		hw_fill_shade_one(x, y, w, h, level, wait);
-	}
+	for (int i = 0; i < n; i++)
+		hw_fill_shade_one(x, y, w, h, level, wait, i);
 
 	z_gfx_blit_scissor_reset();
 
 }
 
 static void hw_fill_shade_one(int x, int y, int w, int h, int level,
-	bool wait) {
+	bool wait, int ri) {
 
 	if (level < 0) level = 0;
 	if (level > Z_SHADE_MAX) level = Z_SHADE_MAX;
@@ -589,6 +865,13 @@ static void hw_fill_shade_one(int x, int y, int w, int h, int level,
 
 	{
 		uint32_t old_mask = gpu_blit_acquire();
+
+		// scissor after the acquire, not before it -- see
+		// hw_fill_rect_one().
+		if (ri >= 0 && !z_gfx_blit_scissor(ri, NULL)) {
+			maskirq(old_mask);
+			return;
+		}
 
 		gpu_blit_dst_x = (uint32_t)x;
 		gpu_blit_dst_y = (uint32_t)y;
@@ -1033,21 +1316,21 @@ static void hw_fill_rect_core(int x, int y, int w, int h, int color,
 	int n = z_gfx_visible_count();
 
 	if (n == 0) {
-		hw_fill_rect_one(x, y, w, h, color, wait);
+		hw_fill_rect_one(x, y, w, h, color, wait, -1);
 		return;
 	}
 
-	for (int i = 0; i < n; i++) {
-		if (!z_gfx_blit_scissor(i, NULL)) continue;
-		hw_fill_rect_one(x, y, w, h, color, wait);
-	}
+	for (int i = 0; i < n; i++)
+		hw_fill_rect_one(x, y, w, h, color, wait, i);
 
 	z_gfx_blit_scissor_reset();
 
 }
 
+// `ri` is the visible-region rectangle this pass is for, -1 for none
+// (no region set: the scissor is left as it is).
 static void hw_fill_rect_one(int x, int y, int w, int h, int color,
-	bool wait) {
+	bool wait, int ri) {
 
 	// clamp to actual screen bounds -- unconditional, regardless of
 	// CTRL_CLIP, for the same reason z_fb_hw_line() clamps
@@ -1064,6 +1347,21 @@ static void hw_fill_rect_one(int x, int y, int w, int h, int color,
 	// comment for why the old "wait, then separately mask" sequence
 	// that used to be here was a genuine cross-process race.
 	uint32_t old_mask = gpu_blit_acquire();
+
+	// The scissor is written here, INSIDE the acquired section, and
+	// not in hw_fill_rect_core()'s loop before the acquire. The
+	// blitter's scissor is live hardware state: rtl/gpu/gpu_blit.v
+	// reads clip_y0/y1_reg per row in glyph mode (g_row_visible) and
+	// its ST_CLIP_CALC comment assumes the scissor never changes
+	// during a blit. Written before the acquire it landed while the
+	// previous blit -- another process's glyph, say -- could still be
+	// in flight, re-clipping the rest of it. Same order as
+	// z_fb_draw_char2(): acquire, scissor, skip an empty rectangle
+	// with the mask released.
+	if (ri >= 0 && !z_gfx_blit_scissor(ri, NULL)) {
+		maskirq(old_mask);
+		return;
+	}
 
 	gpu_blit_dst_x = (uint32_t)x;
 	gpu_blit_dst_y = (uint32_t)y;
@@ -1359,11 +1657,12 @@ bool z_fb_hw_blit_mem_async(const void *src, int src_stride,
 		dst_x, dst_y, w, h, rop, false);
 }
 
-static bool hw_blit_mem_core(const void *src, int src_stride,
+// One memory-source blit, scissored to visible-region rectangle `ri`
+// (or unrestricted when ri < 0). Same per-rect scissor discipline the
+// fill/span primitives use -- see hw_fill_rect_one().
+static bool hw_blit_mem_one(const void *src, int src_stride,
 	int src_x, int src_y, int dst_x, int dst_y, int w, int h, int rop,
-	bool wait) {
-
-	if (!z_fb_hw_blit_mem_available()) return false;
+	bool wait, int ri) {
 
 	// Clamp to the screen, moving the SOURCE origin in step -- clamping
 	// only the destination would slide the wrong part of the bitmap into
@@ -1377,6 +1676,14 @@ static bool hw_blit_mem_core(const void *src, int src_stride,
 	if (w <= 0 || h <= 0) return true;	// nothing to draw is not a failure
 
 	uint32_t old_mask = gpu_blit_acquire();
+
+	// scissor after the acquire, not before -- see hw_fill_rect_one().
+	// An empty/non-intersecting rect is skipped, not a failure: the
+	// same as a fully occluded window's one empty rectangle.
+	if (ri >= 0 && !z_gfx_blit_scissor(ri, NULL)) {
+		maskirq(old_mask);
+		return true;
+	}
 
 	gpu_blit_dst_x = (uint32_t)dst_x;
 	gpu_blit_dst_y = (uint32_t)dst_y;
@@ -1393,6 +1700,91 @@ static bool hw_blit_mem_core(const void *src, int src_stride,
 	if (wait) gpu_blit_wait_idle();
 
 	return true;
+
+}
+
+// A memory-source blit, clipped to the caller's visible region.
+//
+// This is the primitive every "canvas" draws through -- draw's
+// document (canvas_blit), info's wordmark, gamedemo's tiles. It used
+// to set GPU_BLIT_CTRL_CLIP but never PROGRAM the scissor from the
+// visible region: it inherited whatever rectangle the last blit left,
+// which after a fill is the whole screen. So a canvas blitted straight
+// over any window in front of it -- the "una app con canvas se pinta
+// siempre encima" bug. So it walks the visible region, one pass per
+// rectangle, exactly as the fill/span primitives do.
+//
+// THE SOURCE MOVES WITH THE DESTINATION. A fill has no source and can
+// let the scissor do all the cutting; a COPY cannot, and the hardware
+// says so in as many words:
+//
+//   rtl/gpu/gpu_blit.v, ST_CLIP:
+//       // NOT adjusted for a scissor that clips the left edge.
+//       // ... A scissor that pushes final_x into a LATER word does,
+//       // and this does not do it
+//       mem_row_addr <= work_src_addr;
+//
+// The engine starts reading at the address it was given no matter
+// where the scissor moved the first written pixel, horizontally (a
+// whole 32-pixel word at a time) or vertically (mem_row_addr only ever
+// steps forward one stride per row DRAWN, from row src_y). Feed it a
+// rectangle the scissor then cuts into and it copies the wrong part of
+// the bitmap: a canvas that comes back missing bands, offset, or
+// looking mirrored where the word masks fall.
+//
+// docs/gpu_blitter.md ("Copy and the scissor") states the rule --
+// software clips the destination itself before issuing a copy -- and
+// z_fb_hw_scroll() already obeys it by refusing to scroll whenever the
+// scissor could cut the copy (copy_region_allows_rect()). This walk
+// did not: it passed
+// the SAME src/dst/w/h for every rectangle and trusted the scissor.
+// It went unnoticed while a raise repainted the whole window, because
+// then the first rectangle starts at the canvas origin and the source
+// needs no adjustment; a raise now repaints only the rectangle it
+// GAINED, and a gained rectangle generally starts somewhere else.
+//
+// So each pass gets the intersection of the destination rectangle with
+// its visible rectangle, with src_x/src_y moved by exactly the same
+// offsets. The scissor is still programmed, as a belt: it now agrees
+// with the rectangle being drawn instead of contradicting it.
+static bool hw_blit_mem_core(const void *src, int src_stride,
+	int src_x, int src_y, int dst_x, int dst_y, int w, int h, int rop,
+	bool wait) {
+
+	if (!z_fb_hw_blit_mem_available()) return false;
+
+	int n = z_gfx_visible_count();
+
+	if (n == 0)
+		return hw_blit_mem_one(src, src_stride, src_x, src_y,
+			dst_x, dst_y, w, h, rop, wait, -1);
+
+	bool ok = true;
+	for (int i = 0; i < n; i++) {
+
+		z_clip_t r;
+		int x0, y0, x1, y1;
+
+		// Empty or out of range: nothing to draw here, not a failure
+		// (the same reading a fully occluded window's one empty
+		// rectangle gets everywhere else in this file).
+		if (!z_gfx_visible_clip(i, NULL, &r)) continue;
+
+		x0 = dst_x > r.x0 ? dst_x : r.x0;
+		y0 = dst_y > r.y0 ? dst_y : r.y0;
+		x1 = (dst_x + w - 1) < r.x1 ? (dst_x + w - 1) : r.x1;
+		y1 = (dst_y + h - 1) < r.y1 ? (dst_y + h - 1) : r.y1;
+		if (x1 < x0 || y1 < y0) continue;
+
+		ok = hw_blit_mem_one(src, src_stride,
+			src_x + (x0 - dst_x), src_y + (y0 - dst_y),
+			x0, y0, x1 - x0 + 1, y1 - y0 + 1, rop, wait, i) && ok;
+
+	}
+
+	z_gfx_blit_scissor_reset();
+
+	return ok;
 
 }
 
@@ -1869,6 +2261,7 @@ void z_fb_draw_char2(int x, int y, char c, int fg_color, int bg_color,
 	unsigned char uc = (unsigned char)c;
 	if (uc < font->first || uc > font->last) return;
 
+	uint32_t t_fits = zgfx_cyc();
 	bool fits =
 		x >= 0 && y >= 0 &&
 		x + font->w <= Z_SCREEN_W && y + font->h <= Z_SCREEN_H &&
@@ -1878,6 +2271,13 @@ void z_fb_draw_char2(int x, int y, char c, int fg_color, int bg_color,
 
 	uint32_t glyph_base;
 	bool resident = glyph_offset_of(font, &glyph_base);
+	if (ZGFX_PERF) {
+		uint32_t tf_ = zgfx_cyc() - t_fits;
+		zgfx_perf[ZGFX_PERF_FITS] += tf_;
+		zgfx_perf_n[ZGFX_PERF_FITS]++;
+		if (tf_ > zgfx_perf[ZGFX_PERF_FITS_MAX])
+			zgfx_perf[ZGFX_PERF_FITS_MAX] = tf_;
+	}
 
 	// Same two fallback conditions as z_fb_draw_char(): a glyph that
 	// needs clipping, or a font that isn't resident in glyph memory
@@ -1898,6 +2298,11 @@ void z_fb_draw_char2(int x, int y, char c, int fg_color, int bg_color,
 		return;
 	}
 
+	if (!z_gfx_rect_visible(x, y, x + font->w - 1, y + font->h - 1, clip)) {
+		if (ZGFX_PERF) zgfx_perf[ZGFX_PERF_SKIPS]++;
+		return;
+	}
+
 	// see z_fb_draw_char()'s own comment above (and gpu_blit_
 	// acquire()'s own, longer comment above z_fb_hw_fill_rect()) for
 	// why this needs the SAME atomic wait+mask gpu_blit_acquire()
@@ -1908,18 +2313,83 @@ void z_fb_draw_char2(int x, int y, char c, int fg_color, int bg_color,
 	// kind of frequent, multi-process-concurrent caller that gap
 	// mattered for, and the leading suspect for the "horizontal
 	// garbage near freshly-typed text" report.
-	uint32_t old_mask = gpu_blit_acquire();
+	//
+	// Paint session: the caller already programmed the scissor for this
+	// rectangle. One acquire + params + trigger, no per-glyph scissor
+	// or reset. CLIP follows whether this pass is a region rect.
+	if (gfx_paint_active) {
+		if (ZGFX_PERF) zgfx_perf[ZGFX_PERF_CELLS]++;
+		uint32_t old_mask = gpu_blit_acquire();
+		if (ZGFX_PERF) zgfx_perf[ZGFX_PERF_PASSES]++;
+		uint32_t tr = zgfx_cyc();
+		gpu_blit_dst_x = x;
+		gpu_blit_dst_y = y;
+		gpu_blit_glyph_addr = glyph_base + (uint32_t)(uc - font->first) * font->h;
+		gpu_blit_glyph_w = font->w;
+		gpu_blit_glyph_h = font->h;
+		gpu_blit_fg_color = fg_color ? 1 : 0;
+		gpu_blit_bg_color = bg_color ? 1 : 0;
+		gpu_blit_ctrl = GPU_BLIT_CTRL_START | GPU_BLIT_CTRL_GLYPH |
+			(gfx_paint_clip ? GPU_BLIT_CTRL_CLIP : 0);
+		ZGFX_ACC(ZGFX_PERF_REGS, tr);
+		uint32_t tu = zgfx_cyc();
+		maskirq(old_mask);
+		ZGFX_ACC_UNM(tu);
+		return;
+	}
 
-	gpu_blit_dst_x = x;
-	gpu_blit_dst_y = y;
-	gpu_blit_glyph_addr = glyph_base + (uint32_t)(uc - font->first) * font->h;
-	gpu_blit_glyph_w = font->w;
-	gpu_blit_glyph_h = font->h;
-	gpu_blit_fg_color = fg_color ? 1 : 0;
-	gpu_blit_bg_color = bg_color ? 1 : 0;
-	gpu_blit_ctrl = GPU_BLIT_CTRL_START | GPU_BLIT_CTRL_GLYPH;
+	// Walk the visible region like z_fb_draw_char(): term cells (fg+bg,
+	// including empty bg-0 cells) used to blit through the window in
+	// front because this path never programmed scissor/CLIP. rn==0 is
+	// still one unclipped blit (no restriction); a skipped scissor is
+	// an empty/non-intersecting rect.
+	int rn = z_gfx_visible_count();
 
-	maskirq(old_mask);
+	if (ZGFX_PERF) zgfx_perf[ZGFX_PERF_CELLS]++;
+
+	for (int ri = 0; ri < (rn ? rn : 1); ri++) {
+
+		uint32_t old_mask = gpu_blit_acquire();
+		if (ZGFX_PERF) zgfx_perf[ZGFX_PERF_PASSES]++;
+
+		if (rn) {
+			uint32_t ts = zgfx_cyc();
+			bool ok = z_gfx_blit_scissor(ri, clip);
+			ZGFX_ACC(ZGFX_PERF_SCISSOR, ts);
+			if (!ok) {
+				// skipped on an empty scissor -- same release as the
+				// normal path, accounted the same way
+				if (ZGFX_PERF) zgfx_perf[ZGFX_PERF_SKIPS]++;
+				uint32_t tu = zgfx_cyc();
+				maskirq(old_mask);
+				ZGFX_ACC_UNM(tu);
+				continue;
+			}
+		}
+
+		uint32_t tr = zgfx_cyc();
+		gpu_blit_dst_x = x;
+		gpu_blit_dst_y = y;
+		gpu_blit_glyph_addr = glyph_base + (uint32_t)(uc - font->first) * font->h;
+		gpu_blit_glyph_w = font->w;
+		gpu_blit_glyph_h = font->h;
+		gpu_blit_fg_color = fg_color ? 1 : 0;
+		gpu_blit_bg_color = bg_color ? 1 : 0;
+		gpu_blit_ctrl = GPU_BLIT_CTRL_START | GPU_BLIT_CTRL_GLYPH |
+			(rn ? GPU_BLIT_CTRL_CLIP : 0);
+		ZGFX_ACC(ZGFX_PERF_REGS, tr);
+
+		uint32_t tu = zgfx_cyc();
+		maskirq(old_mask);
+		ZGFX_ACC_UNM(tu);
+
+	}
+
+	if (rn) {
+		uint32_t trs = zgfx_cyc();
+		z_gfx_blit_scissor_reset();
+		ZGFX_ACC(ZGFX_PERF_RESET, trs);
+	}
 
 }
 
@@ -1987,23 +2457,51 @@ void z_fb_draw_icon(int x, int y, int icon_id, int fg_color, int bg_color, const
 	// unlike z_fb_draw_char()/z_fb_draw_char2(), there's no software
 	// fallback for a partially off-screen/clipped icon -- see this
 	// function's own declaration in zgfx.h for why that's fine here
-	// (window icons are only ever drawn by wm itself, entirely inside
-	// a titlebar rect it already knows is on-screen).
+	// (window icons are only ever drawn by wm itself, inside a
+	// titlebar rect it already knows is on-screen).
 	if (!fits) return;
 
-	uint32_t old_mask = gpu_blit_acquire();	// see its own comment,
-												// above z_fb_hw_fill_rect()
+	// Walk the visible region like z_fb_draw_char2(). This used to be
+	// ONE unclipped blit, on the reasoning that wm only draws icons
+	// inside a titlebar it knows is on-screen. On-screen is not
+	// visible: wm draws each window's chrome under that window's
+	// region, so a titlebar covered by the window in front is still
+	// asked to draw, and its background and title stopped at the
+	// region while its icons blitted straight through -- the close
+	// icon of a fully hidden titlebar showed up as a 6x6 square inside
+	// the window covering it. rn==0 is still one unclipped blit (no
+	// restriction); a skipped scissor is an empty/non-intersecting
+	// rect, which is also what a fully occluded window's one empty
+	// rectangle turns into.
+	int rn = z_gfx_visible_count();
 
-	gpu_blit_dst_x = x;
-	gpu_blit_dst_y = y;
-	gpu_blit_glyph_addr = (uint32_t)Z_ICON_MEM_OFFSET + (uint32_t)icon_id * Z_ICON_H;
-	gpu_blit_glyph_w = Z_ICON_W;
-	gpu_blit_glyph_h = Z_ICON_H;
-	gpu_blit_fg_color = fg_color ? 1 : 0;
-	gpu_blit_bg_color = bg_color ? 1 : 0;
-	gpu_blit_ctrl = GPU_BLIT_CTRL_START | GPU_BLIT_CTRL_GLYPH;
+	for (int ri = 0; ri < (rn ? rn : 1); ri++) {
 
-	maskirq(old_mask);
+		uint32_t old_mask = gpu_blit_acquire();	// see its own comment,
+													// above z_fb_hw_fill_rect()
+
+		if (rn) {
+			if (!z_gfx_blit_scissor(ri, clip)) {
+				maskirq(old_mask);
+				continue;
+			}
+		}
+
+		gpu_blit_dst_x = x;
+		gpu_blit_dst_y = y;
+		gpu_blit_glyph_addr = (uint32_t)Z_ICON_MEM_OFFSET + (uint32_t)icon_id * Z_ICON_H;
+		gpu_blit_glyph_w = Z_ICON_W;
+		gpu_blit_glyph_h = Z_ICON_H;
+		gpu_blit_fg_color = fg_color ? 1 : 0;
+		gpu_blit_bg_color = bg_color ? 1 : 0;
+		gpu_blit_ctrl = GPU_BLIT_CTRL_START | GPU_BLIT_CTRL_GLYPH |
+			(rn ? GPU_BLIT_CTRL_CLIP : 0);
+
+		maskirq(old_mask);
+
+	}
+
+	if (rn) z_gfx_blit_scissor_reset();
 
 }
 

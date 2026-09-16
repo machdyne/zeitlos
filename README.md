@@ -19,7 +19,7 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 | MTU | Virtual addressing through Memory Translation Unit |
 | Bus | 32-bit Wishbone |
 | Main Memory | SDRAM, PSRAM or SRAM (1MB minimum) |
-| Framebuffer | 640x480x1bpp (monochrome; white, green, or amber) |
+| Framebuffer | 640x480x1bpp (monochrome; white, amber, green or paper -- [socctl](docs/socctl.md)) |
 | Viewport | Optional 320x240 pixel-doubled [viewport](docs/game_mode.md) |
 | Video | VGA, DVI, DVI over HDMI, [composite](docs/composite.md) NTSC and PAL |
 | Audio | 8 channel 16-bit [hardware mixer](docs/audio.md) with stereo output |
@@ -43,6 +43,7 @@ For a diagram of all of it -- buses, arbiters, the address map, clocks, interrup
  - Image decoding and [vector rendering](docs/svg.md) shared by every app (`sw/common`)
  - IP/ARP/ICMP/UDP/DHCP/NTP/DNS/TFTP/TCP/telnet/ssh [networking](docs/networking.md)
  - TLS 1.3 with X.509 certificate verification -- see [tls](docs/tls.md) and [x509](docs/x509.md)
+ - [Remote desktop](docs/remote_desktop.md) in a browser, with keyboard and mouse back, on boards with the [ESP32 link](docs/esp32link.md)
 
 #### Memory Translation Unit
 

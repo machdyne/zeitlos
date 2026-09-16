@@ -1,7 +1,7 @@
 /*
  * Dual-netif gateway: znic (192.168.4.1/24, Ethernet over UART) + STA.
  * NAPT on the STA address so Zeitlos (typically 192.168.4.2) can reach
- * the AP's LAN / the internet. See docs/esp32-net.md.
+ * the AP's LAN / the internet. See docs/esp32link.md.
  *
  * Do not touch GPIO 2/4/12/13/14/15 (ULX3S microSD).
  */
@@ -81,6 +81,11 @@ void gateway_stats(uint32_t *from_z, uint32_t *to_z, uint32_t *dropped)
 void gateway_znic_mac(uint8_t out[6])
 {
 	memcpy(out, znic_mac, 6);
+}
+
+int gateway_pending_to_zeitlos(void)
+{
+	return (rxq_head - rxq_tail + RXQ_DEPTH) % RXQ_DEPTH;
 }
 
 int gateway_pop_to_zeitlos(uint8_t *out, uint16_t *len)
@@ -246,7 +251,8 @@ static void wifi_radio_on(void)
 {
 	if (wifi_started)
 		return;
-	esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+	esp_wifi_set_ps(WIFI_PS_NONE)  /* no modem sleep: min latency for the
+	                               remote desktop poll loop */;
 	esp_wifi_start();
 	/* unit is 0.25 dBm; 8 = 2 dBm (IDF minimum), 78 = 19.5 dBm (max).
 	 * 2026-08-27: 8 while the ESP32 reset loops were being chased

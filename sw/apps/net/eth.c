@@ -14,6 +14,7 @@
 #include "arp.h"
 #include "ip.h"
 #include "../../common/zeitlos.h"
+#include <string.h>
 
 uint8_t eth_our_mac[6];
 
@@ -34,7 +35,7 @@ bool eth_send(const uint8_t dst_mac[6], uint16_t ethertype,
 	txbuf[12] = (ethertype >> 8) & 0xFF;
 	txbuf[13] = ethertype & 0xFF;
 
-	for (uint16_t i = 0; i < len; i++) txbuf[ETH_HDR_LEN + i] = payload[i];
+	memcpy(txbuf + ETH_HDR_LEN, payload, len);
 
 	uint16_t framelen = ETH_HDR_LEN + len;
 

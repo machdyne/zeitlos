@@ -143,7 +143,7 @@ bool ip_send(uint32_t dst_ip, uint8_t protocol, const uint8_t *payload, uint16_t
 	pkt[10] = (csum >> 8) & 0xFF;
 	pkt[11] = csum & 0xFF;
 
-	for (uint16_t i = 0; i < len; i++) pkt[IP_HDR_LEN + i] = payload[i];
+	memcpy(pkt + IP_HDR_LEN, payload, len);
 
 	// limited broadcast (255.255.255.255) never goes through ARP --
 	// it's not a real host to resolve, and there may not even BE an

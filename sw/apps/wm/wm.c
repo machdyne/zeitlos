@@ -103,9 +103,19 @@ typedef struct {
 // dock_icons.h) -- generate it from a source PNG with
 // sw/data/icons/gen_dock_icon_data.py rather than writing it by
 // hand.
+//
+// `feature`/`feature2` are the Z_FEATURE_*/Z_FEATURE2_* bit of the
+// hardware the app cannot do anything without, or 0 when it runs
+// anywhere. An icon for hardware the bitstream does not have is a
+// button that starts an app only to have it exit a second later
+// (mmod without a GPIO module, the audio apps on a board built
+// without AUDIO), so dock_build() drops those the same way it drops
+// apps that are not installed.
 typedef struct {
 	const char	*name;
 	const uint8_t	*bitmap;	// 32x32 1bpp, MSB-first -- see dock_icons.h
+	uint32_t	feature;	// Z_FEATURE_* or 0
+	uint32_t	feature2;	// Z_FEATURE2_* or 0
 } dock_app_t;
 
 // Everything the dock COULD show. What it actually shows is decided at
@@ -117,7 +127,8 @@ typedef struct {
 // anything else only exists if somebody put it on an sdcard. Listing a
 // candidate here is therefore an offer, not a promise -- adding a new
 // app to the dock needs no conditional logic, just an entry and an
-// icon.
+// icon (plus its Z_FEATURE_*/Z_FEATURE2_* bit when the app needs
+// hardware not every bitstream has -- see dock_app_t).
 // THE LIST MAY NOW GROW FREELY. It used to be capped by geometry:
 // DOCK_SLOTS_MAX icons fit across the screen in one row, and an
 // eighteenth simply ran off the right edge and stopped being
@@ -139,9 +150,9 @@ static const dock_app_t dock_candidates[] = {
 	{ "sheet",		z_icon_sheet_data },
 	{ "draw",		z_icon_draw_data  },
 	{ "view",		z_icon_view_data  },
-	{ "track",		z_icon_track_data },
-	{ "midi",		z_icon_midi_data },
-	{ "play",		z_icon_play_data  },
+	{ "track",		z_icon_track_data, Z_FEATURE_AUDIO },
+	{ "midi",		z_icon_midi_data, Z_FEATURE_AUDIO },
+	{ "play",		z_icon_play_data, Z_FEATURE_AUDIO },
 	{ "calc",		z_icon_calc_data  },
 	{ "clock",		z_icon_clock_data },
 	{ "cal",			z_icon_cal_data   },
@@ -155,7 +166,7 @@ static const dock_app_t dock_candidates[] = {
 	{ "space3d",	z_icon_space3d_data },
 	{ "gpu3d",		z_icon_gpu3d_data },
 	{ "gamedemo",	z_icon_gamedemo_data },
-	{ "mmod",		z_icon_mmod_data },
+	{ "mmod",		z_icon_mmod_data, 0, Z_FEATURE2_GPIO },
 };
 #define DOCK_CANDIDATE_COUNT \
 	(int)(sizeof(dock_candidates) / sizeof(dock_candidates[0]))
@@ -268,10 +279,31 @@ static char clipboard[Z_WM_CLIP_MAX];
 
 static uint8_t zorder[WM_MAX_WINDOWS];	// back-to-front; zorder[count-1] is frontmost
 static uint8_t zorder_count = 0;
+// Windows that were in front of the one just raised (bring_to_front).
+// Their last frame sits in the overlap until the raised owner paints.
+static uint8_t raise_jumped[WM_MAX_WINDOWS];
+static int raise_jumped_n;
 static int focused = -1;		// index into windows[], or -1
 static int dragging = -1;		// index into windows[], or -1
 static bool drag_moved = false;	// has the drag actually moved yet?
 static int drag_off_x = 0, drag_off_y = 0;
+// Titlebar press on a window that was behind: raise immediately but
+// do not REDRAW its content until the button comes up. The
+// chrome is already painted; content is frozen during a drag anyway,
+// and a click with no motion paints on release.
+static bool defer_raise_content = false;
+static int pending_raise_redraw = -1;
+// XOR rubber-band pairing. The last draw's geometry is saved so the
+// matching erase cannot pick up a clamp, a focus change, or an
+// alt-move that never drew a band. xor_band_idx < 0 = off.
+static int xor_band_idx = -1;
+static int xor_band_x, xor_band_y, xor_band_w, xor_band_h;
+static bool xor_band_focused;
+// The dragged window's rect when the drag began. With the freeze
+// (send_clip_freeze()) the window stays on the glass there, as a still
+// ghost, until release; repair_drag() then fills the desktop holes in
+// it and repaints the chrome of whatever was behind.
+static int drag_ox, drag_oy, drag_ow, drag_oh;
 
 // -- resize state -- deliberately kept separate from the drag state
 // above rather than folded into one "gesture" struct: the two can
@@ -330,6 +362,7 @@ static void handle_message(z_msg_t *msg);
 // the file (bring_to_front() in "-- window table --", notify_moved()/
 // repair_drag() in "-- app protocol --").
 static bool bring_to_front(int idx);
+static void wipe_raise_overlap(int raised);
 static void notify_moved(int idx);
 static void repair_drag(int dragged_idx);
 // forward-declared for the same reason as the three above: Alt+Tab
@@ -341,9 +374,31 @@ static int blocked_by_modal(int idx);
 // lightweight redraw notification -- no heap allocation (see
 // Z_WM_REDRAW in zwm.h for why this matters). safe to call as often
 // as repair_region() below does.
+static int dbg_n_redraw;
+static int dbg_n_clip;
+static uint32_t dbg_t0;
+
 static void send_redraw(uint32_t to, int idx) {
 	uint32_t packed = Z_WM_PACK_XY(idx, windows[idx].x, windows[idx].y);
 	z_msg_new_send(to, Z_WM_REDRAW, 0, z_obj_uint32(packed));
+	dbg_n_redraw++;
+}
+
+// The same request, but naming what was invalidated: only the pixels
+// this window's region just gained (Z_WM_REDRAW_DAMAGE, zwm.h). The
+// app works the rectangles out from the region it was just sent --
+// there is nowhere in a packed payload to put a rectangle list, and
+// nowhere in wm's heap to allocate one at pointer rates.
+//
+// ONLY send_clip_ex() may use this. Every other caller has cleared
+// pixels itself, or is answering something a region cannot describe
+// (a move, a full-screen repaint, a window that drew while frozen),
+// and those all mean the plain "repaint everything" above.
+static void send_redraw_damage(uint32_t to, int idx) {
+	uint32_t packed = Z_WM_PACK_XY(idx, windows[idx].x, windows[idx].y);
+	z_msg_new_send(to, Z_WM_REDRAW, 0,
+		z_obj_uint32(packed | Z_WM_REDRAW_DAMAGE));
+	dbg_n_redraw++;
 }
 
 // -- gpu / screen --
@@ -360,6 +415,43 @@ static void clear_screen(void) {
 	z_fb_hw_fill_rect(0, 0, WM_SCREEN_W, WM_SCREEN_H, 0);
 }
 
+// -- the region wm's own chrome is confined to --
+//
+// Chrome (frame, titlebar, dock) used to be drawn with NO region at
+// all, so a REAR window's frame and titlebar were painted straight
+// across a window in FRONT of it. Nothing put them back, because a
+// partial repair -- a focus click repairing one titlebar strip --
+// redraws that whole frame unclipped without repairing the window on
+// top, so the stray bar stayed forever. On a single framebuffer with
+// no z-buffer the ONLY thing that keeps one window's pixels out of
+// another is the visible-region clip that already governs app content
+// (send_clip()/z_win_apply_clip()); this extends the same rule to the
+// chrome wm draws itself, so the visible regions of all windows plus
+// the desktop partition the screen and every pixel has exactly one
+// owner.
+//
+// Safe only because no chrome draw uses XOR any more -- see the focus
+// indicator in draw_titlebar_content(). A clipped XOR is not
+// idempotent and produced solid inverted blocks the first time this
+// was attempted.
+//
+// Only repair_region() opts in. Every other chrome caller (the
+// wireframe drag, clear_window_interior()) leaves chrome_region_n at
+// 0, which chrome_use_region() maps to the old unrestricted
+// behaviour -- the rubber-band outline is meant to cross everything.
+// Set immediately before a window's chrome and cleared immediately
+// after, inside one repair_region() iteration with no yield, so the
+// borrowed pointer is always live when z_gfx_set_visible() copies it.
+static const z_clip_t *chrome_region = NULL;
+static int chrome_region_n = 0;
+
+static void chrome_use_region(void) {
+	if (chrome_region_n > 0)
+		z_gfx_set_visible(chrome_region, chrome_region_n);
+	else
+		z_gfx_clear_visible();
+}
+
 static void draw_window_box(wm_window_t *w, bool is_focused, int color) {
 	// wm's chrome is not any window's content.
 	//
@@ -374,7 +466,7 @@ static void draw_window_box(wm_window_t *w, bool is_focused, int color) {
 	// Chrome belongs to wm and covers the whole screen, so it must be
 	// drawn with no region at all. Cleared here rather than at each
 	// individual draw so nothing new can forget it.
-	z_gfx_clear_visible();
+	chrome_use_region();
 
 
 	int x0 = w->x, y0 = w->y;
@@ -489,6 +581,64 @@ static void draw_window_box(wm_window_t *w, bool is_focused, int color) {
 		// titlebar, which wm owns and no app can reach.
 	}
 
+}
+
+// XOR rubber band: draw and erase are the same pixels, always.
+//
+// A leftover speck (seen at (236,299), alternating white/black) is XOR
+// drawn an odd number of times. Two ways that happened:
+//
+// 1. repair_drag() always XOR-ed at the window's CURRENT rect, and
+//    alt_move_focused() sets that rect then calls repair_drag()
+//    without ever having drawn a band -- so the "erase" was a first
+//    draw, and paint_window_chrome() then overwrote only the pixels
+//    in the window's visible region, leaving inset specks on whoever
+//    was in front.
+// 2. Draw and erase used live x/y, so a clamp that differed between
+//    the two (or a region left set by chrome) could drop a pixel.
+//
+// Saved geometry, and erase is a no-op if nothing is on. chrome
+// region is forced off: a clipped XOR is not its own inverse.
+static void xor_band_erase(void)
+{
+	wm_window_t *w;
+	uint32_t sx, sy, sw, sh;
+
+	if (xor_band_idx < 0) return;
+	if (xor_band_idx >= WM_MAX_WINDOWS || !windows[xor_band_idx].used) {
+		xor_band_idx = -1;
+		return;
+	}
+	w = &windows[xor_band_idx];
+	sx = w->x; sy = w->y; sw = w->w; sh = w->h;
+	w->x = (uint32_t)xor_band_x;
+	w->y = (uint32_t)xor_band_y;
+	w->w = (uint32_t)xor_band_w;
+	w->h = (uint32_t)xor_band_h;
+	chrome_region = NULL;
+	chrome_region_n = 0;
+	z_gfx_clear_visible();
+	draw_window_box(w, xor_band_focused, Z_RASTER_XOR);
+	z_gfx_clear_visible();
+	w->x = sx; w->y = sy; w->w = sw; w->h = sh;
+	xor_band_idx = -1;
+}
+
+static void xor_band_draw(int idx)
+{
+	if (xor_band_idx >= 0) xor_band_erase();
+	if (idx < 0 || idx >= WM_MAX_WINDOWS || !windows[idx].used) return;
+	chrome_region = NULL;
+	chrome_region_n = 0;
+	z_gfx_clear_visible();
+	draw_window_box(&windows[idx], idx == focused, Z_RASTER_XOR);
+	z_gfx_clear_visible();
+	xor_band_idx = idx;
+	xor_band_x = (int)windows[idx].x;
+	xor_band_y = (int)windows[idx].y;
+	xor_band_w = (int)windows[idx].w;
+	xor_band_h = (int)windows[idx].h;
+	xor_band_focused = (idx == focused);
 }
 
 // -- titlebar text + close icon --
@@ -659,7 +809,7 @@ static void draw_titlebar_content(wm_window_t *w) {
 	// Chrome belongs to wm and covers the whole screen, so it must be
 	// drawn with no region at all. Cleared here rather than at each
 	// individual draw so nothing new can forget it.
-	z_gfx_clear_visible();
+	chrome_use_region();
 
 
 	if (w->no_titlebar) return;	// nothing to draw -- see the dock
@@ -669,6 +819,51 @@ static void draw_titlebar_content(wm_window_t *w) {
 	titlebar_icon_slot_t icons[TITLEBAR_ICON_TABLE_COUNT];
 	int leftmost_x;
 	int n = titlebar_icons(w, icons, &leftmost_x);
+
+	// -- focus indicator: drawn FROM STATE, never by inverting --
+	//
+	// A focused titlebar reads as a filled bar with knocked-out text.
+	// That used to be produced by drawing the strip normally and then
+	// XOR-ing it once at the end. It cannot stay that way, because XOR
+	// is its own inverse PER PIXEL: the strip is only correct if exactly
+	// the same pixels are cleared, drawn and inverted in one pass under
+	// one region. The moment chrome is clipped to a window's visible
+	// region -- which is what stops a rear window's frame landing inside
+	// a front one -- that region differs between the clear, the glyphs
+	// and the invert, and pixels XOR'd but never cleared (or cleared but
+	// never inverted) survive as a solid inverted block that no later
+	// repair undoes. That is exactly what happened when chrome clipping
+	// was first tried: large white blocks.
+	//
+	// So the colours come from the focus state and every draw is an
+	// opaque COPY: idempotent, region-safe, correct however many times
+	// and under whatever clip it runs. Every classic single-buffer WM
+	// does it this way (the Mac WDEF repaints the title bar from the
+	// hilited flag, Windows' WM_NCACTIVATE picks active vs inactive
+	// colours, the RISC OS Wimp simply uses a different colour). XOR
+	// stays where it belongs: the drag rubber-band, applied and removed
+	// as a matched pair with nothing drawn in between.
+	int fg = 1, bg = 0;
+
+	if (focused >= 0 && focused < WM_MAX_WINDOWS &&
+		&windows[focused] == w) {
+		fg = 0;
+		bg = 1;
+	}
+
+	// The same rectangle the XOR fill used, so the bar looks identical:
+	// inside the frame, and one row short of the separator that
+	// draw_window_box() puts at the bottom of the titlebar (filling that
+	// row would make a focused window look like it had no separator).
+	// z_fb_hw_fill_rect() rather than fill_rect(), which is defined
+	// further down the file.
+	{
+		int tw = (int)w->w - 2;
+		int th = Z_WM_TITLEBAR_H - 1;
+
+		if (tw > 0 && th > 0)
+			z_fb_hw_fill_rect(x0 + 1, y0 + 1, tw, th, bg);
+	}
 
 	// clip title text to the titlebar strip, and stop it short of the
 	// leftmost icon (if any) instead of letting a long title run
@@ -684,57 +879,21 @@ static void draw_titlebar_content(wm_window_t *w) {
 	clip.y1 = y0 + Z_WM_TITLEBAR_H - 1;
 
 	if (w->title[0] && clip.x1 >= clip.x0)
-		z_fb_draw_text(x0 + Z_WM_TITLE_TEXT_MARGIN_X,
+		// draw_text2, not draw_text: the latter hardcodes the glyph
+		// BACKGROUND to 0 (see zgfx.h), so asking it for black text
+		// painted black-on-black and wiped the white bar back out
+		// underneath the title. This one takes fg AND bg.
+		z_fb_draw_text2(x0 + Z_WM_TITLE_TEXT_MARGIN_X,
 			titlebar_content_y(w, z_font_5x8.h),
-			w->title, 1, &z_font_5x8, &clip);
+			w->title, fg, bg, &z_font_5x8, &clip);
 
 	for (int i = 0; i < n; i++)
 		// clip=NULL: same as draw_window_box()'s own chrome draws --
 		// wm already computed this rect from the window's own bounds,
 		// so it's known on-screen and within the titlebar, nothing
 		// left to clip against.
-		z_fb_draw_icon(icons[i].x, icons[i].y, icons[i].icon, 1, 0, NULL);
+		z_fb_draw_icon(icons[i].x, icons[i].y, icons[i].icon, fg, bg, NULL);
 
-	// -- focus indicator --
-	//
-	// The focused window's titlebar is INVERTED: one XOR fill over
-	// the strip, after its text and icons are down, so title and
-	// background swap together and the result reads as a filled bar
-	// with knocked-out text.
-	//
-	// This replaced a 1px ring drawn just OUTSIDE the window's
-	// bounds. That ring landed on pixels belonging to whatever was
-	// underneath -- pixels inside THAT window's visible region -- so
-	// it was erased the moment the window below repainted. A clock
-	// ticking behind a focused window rubbed it away a hand-sweep at
-	// a time.
-	//
-	// An indicator outside a window, and a rule that a window may
-	// only draw inside its own region, cannot both hold. The region
-	// rule is what stops windows painting over each other, so the
-	// indicator moved inside the titlebar, which wm owns and no app
-	// can reach.
-	//
-	// XOR rather than drawing the text in reverse video: the icons
-	// are bitmaps and the title is hardware-blitted, so inverting
-	// once at the end costs a single fill and needs no second code
-	// path for either. It also cannot get out of step with what was
-	// drawn, because it operates on exactly those pixels.
-	//
-	// The strip stops one row short of the separator that
-	// draw_window_box() draws at the bottom of the titlebar --
-	// inverting that would make the focused window look like it had
-	// no separator at all.
-	if (focused >= 0 && focused < WM_MAX_WINDOWS &&
-		&windows[focused] == w) {
-
-		int tw = (int)w->w - 2;
-		int th = Z_WM_TITLEBAR_H - 1;
-
-		if (tw > 0 && th > 0)
-			z_fb_hw_fill_rect_rop(x0 + 1, y0 + 1, tw, th, 1, Z_ROP_XOR);
-
-	}
 
 }
 
@@ -885,7 +1044,13 @@ static bool check_core_services(void) {
 // Called once at startup. z_exec_exists() asks the kernel's own
 // resolver (filesystem first, flash core-app archive underneath), so
 // the answer is exactly what z_proc_run() would do -- a candidate is
-// kept if and only if clicking it would really launch something.
+// kept if and only if clicking it would really launch something. The
+// feature checks ask the bitstream the same question one level down:
+// z_soc_has_feature*() answer "not confirmed present" with false, so
+// a candidate whose hardware this bitstream does not report is dropped
+// too -- clicking it would launch an app that has nothing to drive
+// (mmod with no GPIO module, the audio apps with no AUDIO), and it
+// would exit a second later, looking broken rather than absent.
 //
 // Not re-run when an sdcard is inserted later. Doing that would mean
 // resizing and repainting the dock window underneath whatever the user
@@ -898,6 +1063,18 @@ static void dock_build(void) {
 	dock_page = 0;
 
 	for (int i = 0; i < DOCK_CANDIDATE_COUNT; i++) {
+		if (dock_candidates[i].feature &&
+		    !z_soc_has_feature(dock_candidates[i].feature)) {
+			printf("wm: dock: '%s' needs hardware this bitstream "
+				"does not have, skipping\n", dock_candidates[i].name);
+			continue;
+		}
+		if (dock_candidates[i].feature2 &&
+		    !z_soc_has_feature2(dock_candidates[i].feature2)) {
+			printf("wm: dock: '%s' needs hardware this bitstream "
+				"does not have, skipping\n", dock_candidates[i].name);
+			continue;
+		}
 		if (!z_exec_exists(dock_candidates[i].name)) {
 			printf("wm: dock: '%s' not installed, skipping\n",
 				dock_candidates[i].name);
@@ -1024,6 +1201,41 @@ static void draw_dock(void) {
 	wm_window_t *w = &windows[dock_idx];
 	int x0 = (int)w->x, y0 = (int)w->y;
 
+	// Same region every other chrome draw uses. draw_dock() only ever
+	// runs from paint_window_chrome(), which has already set it, but
+	// the fill below is the first thing here that would COVER pixels
+	// rather than just add ink to them, so it says so itself instead
+	// of inheriting whatever the last caller happened to leave.
+	chrome_use_region();
+
+	// The dock's background is wm's, and this is the only place that
+	// paints it.
+	//
+	// Everything else here only ADDS ink: z_fb_hw_box() draws the slot
+	// outlines and draw_icon_bitmap() sets the icon's 1-bits and
+	// leaves the 0-bits alone. So every pixel of the dock that is not
+	// part of an outline or an icon's own ink -- the gaps between
+	// slots, the padding around them, the dark inside of every icon --
+	// was whatever the last thing to paint there left behind, and a
+	// repaint could not take it back.
+	//
+	// A window dragged onto the dock is exactly that: while it sits
+	// there its frame and content legitimately own those pixels (it is
+	// in front), and when it leaves, the dock repaint that follows put
+	// the outlines and the icons back but left the window's two border
+	// columns standing inside the dock, one pixel wide, top to bottom.
+	// Measured: 55 stray pixels, all at the departed window's own x
+	// edges, and precisely in the zones nothing clears -- the two rows
+	// draw_window_chrome_bg() does clear came back correct.
+	//
+	// So the dock clears its own interior first, the same rule the
+	// rest of the compositor already follows: every pixel has exactly
+	// one owner and the owner repaints it whole. Clipped to the dock's
+	// visible region (chrome_use_region() above), so a window
+	// legitimately covering it is not overpainted; the border itself
+	// belongs to draw_window_box() and is left alone.
+	z_fb_hw_fill_rect(x0 + 1, y0 + 1, (int)w->w - 2, (int)w->h - 2, 0);
+
 	// see dock_selected's own comment -- the ring only shows while
 	// the dock itself is the keyboard-focused item, same as it would
 	// be redrawn away the instant focus moves elsewhere (repair_
@@ -1075,6 +1287,9 @@ static bool rects_overlap(int ax, int ay, int aw, int ah,
 	return !(ax + aw <= bx || bx + bw <= ax || ay + ah <= by || by + bh <= ay);
 }
 
+static void fill_rect(int x, int y, int w, int h, int color);
+static void fill_unowned(int x, int y, int w, int h);
+
 static void fill_rect(int x, int y, int w, int h, int color) {
 	// hardware blitter fill (zgfx.h) instead of a software VRAM loop
 	// now -- see docs/gpu_blitter.md and docs/app_runtime.md, "The
@@ -1089,19 +1304,70 @@ static void fill_rect(int x, int y, int w, int h, int color) {
 	z_fb_hw_fill_rect(x, y, w, h, color);
 }
 
-// bound on how long repair_region() will block waiting for one app to
-// ack a redraw (see wait_for_redraw_done() below) before giving up
-// and moving on. not a precise time unit -- see docs/window_manager.md.
-#define REDRAW_ACK_TIMEOUT   500
+// bound, in real time, on how long repair_region() will block waiting
+// for one app to ack a redraw (see wait_for_redraw_done() below)
+// before giving up and moving on. A cap against a hung app, not a
+// budget. Provisional 8000 ms until acks come down to
+// milliseconds: in silence, acks of 2-3 s against a 4 s cap were
+// measured, and a timeout desynchronises regions -- the slow window
+// keeps painting under its previous clip, so background content
+// appears inside the window in front.
+#define REDRAW_ACK_TIMEOUT_MS   8000
 
 // blocks until `pid` sends Z_WM_REDRAW_DONE, or the timeout above is
 // hit. keeps servicing every other message normally while waiting
 // (via handle_message()) rather than discarding them -- unlike
 // z_msg_wait(), which would drop any other app's requests that
 // arrived during the wait.
-static void wait_for_redraw_done(uint32_t pid) {
+//
+// SLEEPS until a message arrives or the deadline passes, rather than
+// spinning. This used to be a volatile countdown, which kept wm
+// RUNNABLE for the whole wait and -- for exactly the reason the idle
+// yield at the bottom of main() spells out -- took its share of the
+// CPU away from the very app it was waiting on.
+//
+// It then briefly slept ONE tick per poll, which measured exactly the
+// same as spinning, and the kernel says why: k_proc_wait() marks the
+// caller BLOCKED but does not switch away (it keeps the rest of its
+// timeslice), and the KTIMER swap is a round-robin over pids, so with
+// three or more RUNNABLE processes wm's turn comes back only after
+// its one-tick timeout has already expired -- it is RUNNABLE again
+// every time it is reached, and burns a full slice each time, just
+// like the countdown did. Sleeping for the whole remaining timeout is
+// what actually takes wm out of the rotation: the ack (or any other
+// message) unblocks it, and the deadline is enforced by the kernel's
+// own wake_tick. The idle loop at the bottom of main() now sleeps
+// until a HID IRQ, a visor poke, a message, or the next timer --
+// it no longer polls the pointer every tick.
+//
+// wm_clip_debug is defined further down (beside send_clip()); this is
+// a tentative definition so the debug lines below can test it.
+static int wm_clip_debug;
 
-	for (int waited = 0; waited < REDRAW_ACK_TIMEOUT; waited++) {
+// Timing of each wait below, printed when wm_clip_debug is on. Same
+// source and the same caveat as gpu3d.c's perf_cyc(): picorv32's
+// rdcycle is one GLOBAL counter, so what is measured is wall time,
+// including whatever other processes ran meanwhile -- which for "how
+// long did wm sit here" is the honest number. Wraps every ~89 s at
+// Z_SYSCLK_HZ; a single wait is bounded far below that.
+static inline uint32_t dbg_cyc(void) {
+	uint32_t v;
+	__asm__ volatile ("rdcycle %0" : "=r"(v));
+	return v;
+}
+#define DBG_CYC_PER_MS   (Z_SYSCLK_HZ / 1000u)
+
+// `idx` is the window the redraw was sent for; only the debug line
+// below uses it.
+static void wait_for_redraw_done(uint32_t pid, int idx)
+	__attribute__((unused));
+static void wait_for_redraw_done(uint32_t pid, int idx) {
+
+	uint32_t dbg_t0 = dbg_cyc();
+	uint32_t deadline = z_uptime_ticks() +
+		(uint32_t)REDRAW_ACK_TIMEOUT_MS * Z_TICK_HZ / 1000u;
+
+	for (;;) {
 
 		z_msg_t msg;
 		bool got_ack = false;
@@ -1113,12 +1379,22 @@ static void wait_for_redraw_done(uint32_t pid) {
 				handle_message(&msg);
 		}
 
-		if (got_ack) return;
+		if (got_ack) {
+			if (wm_clip_debug)
+				printf("wm: redraw win %d pid %ld acked in %lu ms\n", idx,
+					(long)pid, (unsigned long)((dbg_cyc() - dbg_t0) / DBG_CYC_PER_MS));
+			return;
+		}
 
-		for (volatile int i = 0; i < 2000; i++);
+		int32_t left = (int32_t)(deadline - z_uptime_ticks());
+		if (left <= 0) break;
+		z_proc_wait((uint32_t)left);
 
 	}
 
+	if (wm_clip_debug)
+		printf("wm: redraw win %d pid %ld TIMED OUT after %lu ms\n", idx,
+			(long)pid, (unsigned long)((dbg_cyc() - dbg_t0) / DBG_CYC_PER_MS));
 	printf("wm: timed out waiting for pid %ld to ack a redraw\n", (long)pid);
 
 }
@@ -1206,7 +1482,7 @@ static void draw_window_chrome_bg(wm_window_t *w) {
 	// Chrome belongs to wm and covers the whole screen, so it must be
 	// drawn with no region at all. Cleared here rather than at each
 	// individual draw so nothing new can forget it.
-	z_gfx_clear_visible();
+	chrome_use_region();
 
 
 	int x = (int)w->x, y = (int)w->y;
@@ -1244,6 +1520,66 @@ static void draw_window_chrome_bg(wm_window_t *w) {
 // N flashes, and this says what N is and who was asked.
 static int dbg_repairs;
 static int dbg_redraws;
+static uint32_t dbg_click_tick;	// z_uptime_ticks() at the press
+
+// A window's visible region -- its rectangle minus every window in
+// front of it in z-order -- as a rectangle list. The same computation
+// send_clip() sends apps as their content clip, factored out so
+// repair_region() can confine a window's CHROME to it too. Returns the
+// rect count (0 = fully occluded). Defined below, beside region_compute().
+static int window_visible_region(int idx, z_clip_t *out, int max);
+
+// Chrome of one window, clipped to the pixels it currently owns.
+// No content fill, no owner REDRAW -- focus and raise only change
+// how wm draws the frame, and send_clip_all() already asked anyone
+// who gained pixels to repaint.
+static void paint_window_chrome(int idx)
+{
+	wm_window_t *w = &windows[idx];
+	z_clip_t wreg[Z_WM_MAX_CLIP];
+	int wn = window_visible_region(idx, wreg, Z_WM_MAX_CLIP);
+
+	if (wn == 0) {
+		wreg[0].x0 = 0; wreg[0].y0 = 0;
+		wreg[0].x1 = -1; wreg[0].y1 = -1;
+		wn = 1;
+	}
+
+	chrome_region = wreg;
+	chrome_region_n = wn;
+	draw_window_chrome_bg(w);
+	draw_window_box(w, idx == focused, 1);
+	draw_titlebar_content(w);
+	if (idx == dock_idx) draw_dock();
+	chrome_region = NULL;
+	chrome_region_n = 0;
+}
+
+static void repair_focus_chrome(int old_idx, int new_idx)
+{
+	z_gfx_clear_visible();
+	if (old_idx >= 0 && old_idx < WM_MAX_WINDOWS && windows[old_idx].used)
+		paint_window_chrome(old_idx);
+	if (new_idx >= 0 && new_idx != old_idx &&
+	    new_idx < WM_MAX_WINDOWS && windows[new_idx].used)
+		paint_window_chrome(new_idx);
+	z_gfx_clear_visible();
+}
+
+static void repair_chrome_in_rect(int rx, int ry, int rw, int rh, int skip)
+{
+	z_gfx_clear_visible();
+	for (int i = 0; i < zorder_count; i++) {
+		int idx = zorder[i];
+		wm_window_t *w = &windows[idx];
+		if (idx == skip) continue;
+		if (!rects_overlap(rx, ry, rw, rh,
+			(int)w->x, (int)w->y, (int)w->w, (int)w->h))
+			continue;
+		paint_window_chrome(idx);
+	}
+	z_gfx_clear_visible();
+}
 
 static void repair_region(int rx, int ry, int rw, int rh, int exclude_idx) {
 
@@ -1309,20 +1645,34 @@ static void repair_region(int rx, int ry, int rw, int rh, int exclude_idx) {
 		if (!rects_overlap(rx, ry, rw, rh,
 			(int)w->x, (int)w->y, (int)w->w, (int)w->h))
 			continue;
-		draw_window_chrome_bg(w);
-		draw_window_box(w, idx == focused, 1);
-		draw_titlebar_content(w);
-		if (idx == dock_idx) draw_dock();
+		// Confine this window's chrome to the pixels it actually owns, so
+		// a rear window's frame/titlebar cannot be drawn across a window
+		// in front of it, and so the content blank in
+		// draw_window_chrome_bg() cannot reach past this window either. A
+		// fully occluded window (n == 0) gets ONE empty rectangle so
+		// nothing draws at all -- zero rects would mean "unrestricted",
+		// the opposite. Cleared straight after, so any chrome drawn
+		// outside a repair (the drag rubber-band) stays unclipped.
+		paint_window_chrome(idx);
 		if (w->owner_pid == my_pid) continue;
 		if (idx == exclude_idx) continue;
 
 		if (region_hidden && zex >= 0 && i < zex) continue;
 
+		// Fire-and-forget. Clipping makes a rear window unable to
+		// paint on a front one, so serial ack-ordering cannot
+		// protect anything it used to, and it froze the pointer
+		// for the sum of every overlapping app's full repaint
+		// (5-10 s of black flash on a focus click). send_clip()
+		// already dropped its own waits for the same reason.
 		dbg_redraws++;
 		send_redraw(w->owner_pid, idx);
-		wait_for_redraw_done(w->owner_pid);
 	}
 
+	// Leave zgfx unrestricted, as it was before per-window chrome
+	// clipping: nothing drawn after a repair should inherit the last
+	// window's region.
+	z_gfx_clear_visible();
 }
 
 // -- mouse --
@@ -1347,6 +1697,20 @@ static void repair_region(int rx, int ry, int rw, int rh, int exclude_idx) {
 // { report[31], 5'b0[30:26], typ[25:24], 16'b0[23:8], modifiers[7:0] }),
 // NOT bits[23:22] -- that range falls entirely inside the constant
 // 16'b0 padding and always reads 0 regardless of what's plugged in.
+// The ULX3S software mouse (reg_vmouse, set by net from a browser --
+// rtl/sysctl.v). Bit 24 = present; its x/y/button fields share the
+// reg_usbN_cursor layout, so it is just a third cursor source that
+// wins when a network pointer is active. On boards without it the
+// register reads 0 (undecoded bus), so present is never set.
+//
+// present is last-writer, not a latch: net sets it on every visor
+// packet (and clears it on silence / leave), and vmouse_yield_to_usb()
+// clears it the moment the USB cursor moves so the hardware sprite mux
+// and this click math stay in lockstep. Neither source can freeze the
+// other out.
+static inline bool vmouse_present(void) {
+	return (reg_vmouse & (1u << 24)) != 0;
+}
 static inline int mouse_port(void) {
 	uint8_t typ0 = (reg_usb0_info >> 24) & 0x3;
 	uint8_t typ1 = (reg_usb1_info >> 24) & 0x3;
@@ -1355,18 +1719,52 @@ static inline int mouse_port(void) {
 	return 0;
 }
 
+// USB cursor x/y plus the three button bits vmouse also carries.
+// The hardware register is assembled at read time (rtl/usb_hid.v);
+// unused high bits of mouse_btn can chatter on some devices, so they
+// are not part of "the pointer moved".
+static inline uint32_t usb_ptr_sig(uint32_t c) {
+	return (c & 0x3ff) | (c & (0x3ffu << 10)) | (c & (7u << 20));
+}
+
+static uint32_t last_usb_sig;
+static int usb_sig_seen;
+
+// Drop a stale network pointer as soon as USB moves or clicks. The
+// USB cursor tracker keeps updating while vmouse_present is set, so
+// a change here is a real HID report, not the sprite mux. First
+// sample only seeds the baseline -- otherwise boot would steal from
+// a visor that was already talking.
+static void vmouse_yield_to_usb(void) {
+	uint32_t usb = (mouse_port() == 0) ? reg_usb0_cursor : reg_usb1_cursor;
+	uint32_t sig = usb_ptr_sig(usb);
+	if (!usb_sig_seen) {
+		last_usb_sig = sig;
+		usb_sig_seen = 1;
+		return;
+	}
+	if (sig == last_usb_sig)
+		return;
+	last_usb_sig = sig;
+	if (vmouse_present())
+		reg_vmouse = 0;
+}
+
 static inline int get_cursor_x(void) {
-	uint32_t cursor = (mouse_port() == 0) ? reg_usb0_cursor : reg_usb1_cursor;
+	uint32_t cursor = vmouse_present() ? reg_vmouse :
+		(mouse_port() == 0) ? reg_usb0_cursor : reg_usb1_cursor;
 	return cursor & 0x3FF;
 }
 
 static inline int get_cursor_y(void) {
-	uint32_t cursor = (mouse_port() == 0) ? reg_usb0_cursor : reg_usb1_cursor;
+	uint32_t cursor = vmouse_present() ? reg_vmouse :
+		(mouse_port() == 0) ? reg_usb0_cursor : reg_usb1_cursor;
 	return (cursor >> 10) & 0x3FF;
 }
 
 static inline uint8_t get_mouse_btn(void) {
-	uint32_t cursor = (mouse_port() == 0) ? reg_usb0_cursor : reg_usb1_cursor;
+	uint32_t cursor = vmouse_present() ? reg_vmouse :
+		(mouse_port() == 0) ? reg_usb0_cursor : reg_usb1_cursor;
 	return (cursor >> 20) & 0x0F;
 }
 
@@ -1378,8 +1776,8 @@ static inline uint8_t get_mouse_btn(void) {
 // starts but never creates a window at all (crashes early, isn't a
 // GUI app, etc), so a single bad launch can't leave that icon
 // permanently stuck inverted and unrelaunchable. Not a precise time
-// unit -- same caveat REDRAW_ACK_TIMEOUT's own comment gives -- just
-// generously past how long even a slow-loading GUI app should ever
+// unit -- the same caveat REDRAW_ACK_TIMEOUT_MS's predecessor had --
+// just generously past how long even a slow-loading GUI app should ever
 // take to get as far as its first z_win_create() call.
 // Now a real time budget rather than a loop-iteration count.
 //
@@ -1391,6 +1789,39 @@ static inline uint8_t get_mouse_btn(void) {
 // measured against z_uptime_ticks() instead and no longer cares how
 // fast the loop happens to be spinning.
 #define DOCK_LAUNCH_TIMEOUT_TICKS   (Z_TICK_HZ * 3)
+
+// How long the idle loop may sleep. 0 = indefinitely (HID IRQ, a
+// visor poke, or a message will cut it short).
+//
+// Timers that currently exist:
+//   - dock_launching_deadline[] (icon invert timeout, 3 s)
+//   - WM_BUSY_STARTUP (poll the pid registry until net/repl register)
+//
+// The XOR drag band follows the pointer, but it does not need a tick
+// of its own: USB mouse reports raise Z_IRQ_HID/HID1 and unblock us,
+// and a visor packet pokes us via z_wm_wake() after writing
+// reg_vmouse. Sleeping one tick while a button is down would only
+// burn CPU with the pointer still.
+static uint32_t wm_idle_ticks(void) {
+	uint32_t now = z_uptime_ticks();
+	uint32_t soon = 0;
+	int i;
+
+	if (wm_busy_mask & WM_BUSY_STARTUP)
+		return 1;
+
+	for (i = 0; i < DOCK_APP_COUNT; i++) {
+		int32_t left;
+		if (!dock_launching[i]) continue;
+		left = (int32_t)(dock_launching_deadline[i] - now);
+		if (left <= 0)
+			return 1;
+		if (!soon || (uint32_t)left < soon)
+			soon = (uint32_t)left;
+	}
+
+	return soon;
+}
 
 // launches dock_apps[slot], same as a mouse click on that icon (see
 // dock_click() below, which now just maps a click to a slot and calls
@@ -1688,10 +2119,12 @@ static int region_compute(const z_clip_t *win,
 // the same reason: every other message is still serviced while
 // waiting, so an app that needs something from wm before it can ack
 // does not deadlock against it.
-// Set to 1 to log every region wm computes and sends. Off by default
-// -- it is one line per window per z-order change, which during a
-// drag is a lot.
-static int wm_clip_debug = 1;
+// Set to 1 to log every region wm computes and sends, and the timing
+// of a focus switch, a freeze and a release repair. Off by default --
+// it is one line per window per z-order change, which during a drag
+// is a lot, and the console is the same UART every other process
+// prints to.
+static int wm_clip_debug = 0;
 
 // Area of a region, used only to tell a narrowing from a widening.
 //
@@ -1708,11 +2141,237 @@ static uint32_t region_area(const z_clip_t *r, int n) {
 	return a;
 }
 
+// Pixels in `a` that are not in `b`. Overflow (too many fragments)
+// is treated as "something remains": the caller would rather send a
+// redundant REDRAW than leave a hole.
+static int region_minus(const z_clip_t *a, int na,
+	const z_clip_t *b, int nb, z_clip_t *out, int max)
+{
+	z_clip_t cur[WM_MAX_CLIP], nxt[WM_MAX_CLIP];
+	int ncur = 0, i, j;
+
+	for (i = 0; i < na && ncur < WM_MAX_CLIP; i++)
+		if (!rect_empty(&a[i]))
+			cur[ncur++] = a[i];
+
+	for (i = 0; i < nb; i++) {
+		int nnxt = 0;
+		if (rect_empty(&b[i])) continue;
+		for (j = 0; j < ncur; j++) {
+			if (!rect_subtract(&cur[j], &b[i], nxt, &nnxt,
+					WM_MAX_CLIP))
+				return 1;
+		}
+		for (j = 0; j < nnxt; j++) cur[j] = nxt[j];
+		ncur = nnxt;
+		if (ncur == 0) break;
+	}
+
+	int n = 0;
+	for (i = 0; i < ncur && n < max; i++)
+		if (!rect_empty(&cur[i])) out[n++] = cur[i];
+	return n;
+}
+
+// True if `now` contains any pixel that `was` did not. Sliding one
+// window across another often keeps the *area* of the one behind
+// the same while exchanging a strip on one side for a strip on the
+// other -- area_now > area_was misses that, and the vacated strip
+// stays whatever the drag fill left there (black).
+static bool region_gains(const z_clip_t *now, int nnow,
+	const z_clip_t *was, int nwas)
+{
+	z_clip_t tmp[WM_MAX_CLIP];
+	return region_minus(now, nnow, was, nwas, tmp, WM_MAX_CLIP) > 0;
+}
+
 // Last region sent to each window, so a send that would change
 // nothing sends nothing, and so narrow-vs-widen can be decided.
 static z_clip_t sent_region[WM_MAX_WINDOWS][WM_MAX_CLIP];
 static int sent_region_n[WM_MAX_WINDOWS];
 static bool sent_region_valid[WM_MAX_WINDOWS];
+
+// -- region payloads --
+//
+// The Z_WM_SET_CLIP payload used to be built with z_obj_blob(), which
+// malloc()s a header and a copy of the rectangles, and -- because a
+// payload is BORROWED until the recipient reads it (docs/messaging.md)
+// and wm does not wait for that -- was never freed. That is the same
+// leak send_win_rect() below already replaced with static storage,
+// and it bit the same way: wm's whole stack-and-heap allowance is 8KB
+// (Z_PROC_STACK_SIZE_SMALL), after about ninety regions malloc()
+// returned NULL, z_obj_blob() returned Z_NONE, and every window
+// created from then on was told nothing -- clip_n stayed 0, which
+// zgfx reads as "unrestricted", so new windows painted straight over
+// whatever was in front of them.
+//
+// Static storage, one pair of slots per WINDOW rather than a ring
+// shared by all sends: a region is STATE, not an event. If two
+// regions for the same window are queued before the app reads them,
+// both read the newer one, which is the correct one. The pair is
+// there for the one narrow race a single slot would leave: an app
+// preempted halfway through copying the rectangles while wm sends
+// again could see a mix of old and new; with two slots that needs
+// TWO sends inside that copy. (The receiver only copies -- see
+// z_win_apply_clip() -- and never frees a payload, so nothing here
+// is ever handed to free().)
+// +1 for the leading Z_WM_CLIP_WINDOW rectangle (zwm.h).
+static z_wm_cliprect_t clip_wire[WM_MAX_WINDOWS][2][WM_MAX_CLIP + 1];
+static z_blob_t clip_blob[WM_MAX_WINDOWS][2];
+static uint8_t clip_side[WM_MAX_WINDOWS];
+
+// Fills idx's next slot with `n` rectangles and returns the Z_BLOB
+// object to send. Allocates nothing.
+static z_obj_t clip_payload(int idx, const z_wm_cliprect_t *rects, int n) {
+	int side = clip_side[idx] ^ 1;
+	clip_side[idx] = (uint8_t)side;
+	// Which window this is for, first and always -- see
+	// Z_WM_CLIP_WINDOW in zwm.h. Here rather than at each call site so
+	// the freeze path cannot forget it: a process holding a dialog is
+	// sent regions for two windows and has no other way to tell them
+	// apart.
+	clip_wire[idx][side][0].x0 = Z_WM_CLIP_CTL;
+	clip_wire[idx][side][0].y0 = Z_WM_CLIP_WINDOW;
+	clip_wire[idx][side][0].x1 = Z_WM_CLIP_CTL;
+	clip_wire[idx][side][0].y1 = (int16_t)idx;
+	for (int i = 0; i < n; i++) clip_wire[idx][side][i + 1] = rects[i];
+	clip_blob[idx][side].len = (uint32_t)((n + 1) * sizeof(z_wm_cliprect_t));
+	clip_blob[idx][side].data = (uint8_t *)clip_wire[idx][side];
+	z_obj_t o;
+	o.type = Z_BLOB;
+	o.val.ptr = &clip_blob[idx][side];
+	return o;
+}
+
+// -- freeze (Z_WM_CLIP_FREEZE, zwm.h) --
+//
+// A titlebar drag is a wireframe over a still image. The XOR band is
+// clean only if nothing under it changes between its draw and its
+// erase: three attempts at repainting the origin mid-gesture all left
+// trails, because the apps repaint while the band is being drawn
+// and erased. So at the first pixel of motion every
+// window is frozen -- its clip goes empty WITHOUT the clear a
+// narrowing does, so the glass keeps what it shows, the dragged window
+// included: it stays where it was, a still ghost, and only the band
+// moves -- and wm waits, bounded, for the acks before drawing the
+// first band. Nothing is repainted until release.
+//
+// sent_region[] is deliberately NOT touched by a freeze. At release
+// every window gets its real region again (send_clip_ex() resends
+// even an unchanged one while frozen_sent is set), and the comparison
+// against the PRE-freeze region decides who is asked to repaint: the
+// ones behind the origin gained pixels, the dragged one moved, the
+// rest are only thawed. A thawed window that drew while frozen says
+// so in its ack (Z_WM_CLIP_DONE_DREW) and gets a REDRAW then.
+static bool frozen_sent[WM_MAX_WINDOWS];   // FREEZE sent, real region not resent yet
+static bool thaw_pending[WM_MAX_WINDOWS];  // thawed with no REDRAW: honour DREW in the ack
+static bool clip_acked[WM_MAX_WINDOWS];    // acks seen since the last freeze round
+#define FREEZE_ACK_TIMEOUT_MS   300
+
+static bool send_clip_freeze(int idx) {
+	z_wm_cliprect_t ctl = { Z_WM_CLIP_CTL, Z_WM_CLIP_FREEZE, 0, 0 };
+	if (idx < 0 || idx >= WM_MAX_WINDOWS || !windows[idx].used) return false;
+	if (windows[idx].owner_pid == my_pid) return false;   // wm draws its own
+	if (z_msg_new_send(windows[idx].owner_pid, Z_WM_SET_CLIP, 0,
+			clip_payload(idx, &ctl, 1)) != Z_OK)
+		return false;
+	frozen_sent[idx] = true;
+	thaw_pending[idx] = false;
+	clip_acked[idx] = false;
+	return true;
+}
+
+// Freezes every app window and waits, at most FREEZE_ACK_TIMEOUT_MS,
+// for the acks. Every other message is serviced meanwhile, like
+// wait_for_redraw_done(). Returns the number of windows that did not
+// ack in time (0 = the screen is guaranteed still).
+static int freeze_all(int *out_sent) {
+	int i, sent = 0, left;
+	uint32_t deadline;
+	for (i = 0; i < WM_MAX_WINDOWS; i++)
+		if (send_clip_freeze(i)) sent++;
+	if (out_sent) *out_sent = sent;
+	deadline = z_uptime_ticks() +
+		(uint32_t)FREEZE_ACK_TIMEOUT_MS * Z_TICK_HZ / 1000u;
+	for (;;) {
+		z_msg_t msg;
+		int pending = 0;
+		while (z_msg_read(&msg) == Z_OK)
+			handle_message(&msg);   // Z_WM_CLIP_DONE marks clip_acked[]
+		for (i = 0; i < WM_MAX_WINDOWS; i++)
+			if (frozen_sent[i] && windows[i].used && !clip_acked[i]) pending++;
+		if (pending == 0) return 0;
+		left = (int32_t)(deadline - z_uptime_ticks());
+		if (left <= 0) return pending;
+		z_proc_wait((uint32_t)left);
+	}
+}
+
+// Waits, at most timeout_ms, for window idx's SET_CLIP ack (the
+// one-window form of freeze_all()'s wait).
+static bool wait_clip_ack_one(int idx, uint32_t timeout_ms) {
+	uint32_t deadline = z_uptime_ticks() +
+		timeout_ms * Z_TICK_HZ / 1000u;
+	while (!clip_acked[idx]) {
+		z_msg_t msg;
+		int32_t left;
+		while (z_msg_read(&msg) == Z_OK)
+			handle_message(&msg);
+		if (clip_acked[idx]) break;
+		left = (int32_t)(deadline - z_uptime_ticks());
+		if (left <= 0) return false;
+		z_proc_wait((uint32_t)left);
+	}
+	return true;
+}
+
+// -- variant B: repaint the origin before the first band --
+//
+// 0 = variant A: the dragged window stays on the glass as a still
+// ghost until release. 1 = variant B: at the first pixel of motion
+// the dragged window is lifted (frozen, then blanked by wm), the
+// windows behind are given their regions as if it were gone and asked
+// to paint what they gained, wm waits -- bounded by
+// DRAG_ORIGIN_ACK_MS -- for those repaints, and only then freezes the
+// desktop and draws the band. The gesture shows what is behind from
+// the start; the band appears one repaint round later.
+#define DRAG_ORIGIN_REPAINT      0
+#define DRAG_ORIGIN_ACK_MS       400
+
+// While >= 0, this window is left out of every region computation --
+// it neither occludes (window_visible_region) nor owns desktop
+// (fill_unowned) -- as if it were not on screen. Variant B's lift.
+static int region_skip_idx = -1;
+
+// Waits, at most timeout_ms, for a Z_WM_REDRAW_DONE from every window
+// whose want[] is set; every other message is serviced. Returns how
+// many did not answer in time.
+static int wait_redraw_acks(bool *want, uint32_t timeout_ms) {
+	uint32_t deadline = z_uptime_ticks() +
+		timeout_ms * Z_TICK_HZ / 1000u;
+	for (;;) {
+		z_msg_t msg;
+		int i, pending = 0;
+		while (z_msg_read(&msg) == Z_OK) {
+			if (msg.subject == Z_WM_REDRAW_DONE) {
+				for (i = 0; i < WM_MAX_WINDOWS; i++)
+					if (want[i] && windows[i].used &&
+					    windows[i].owner_pid == msg.from)
+						want[i] = false;
+				continue;
+			}
+			handle_message(&msg);
+		}
+		for (i = 0; i < WM_MAX_WINDOWS; i++)
+			if (want[i]) pending++;
+		if (pending == 0) return 0;
+		{
+			int32_t left = (int32_t)(deadline - z_uptime_ticks());
+			if (left <= 0) return pending;
+			z_proc_wait((uint32_t)left);
+		}
+	}
+}
 
 // Computes idx's visible region and sends it, waiting for the ack
 // only when the region NARROWS.
@@ -1727,11 +2386,10 @@ static bool sent_region_valid[WM_MAX_WINDOWS];
 //
 // Waiting on every send instead would be correct too, and would cost
 // a round trip per window on every mouse-move during a drag.
-static void send_clip(int idx) {
+static int window_visible_region(int idx, z_clip_t *out, int max) {
 
-	if (idx < 0 || idx >= WM_MAX_WINDOWS) return;
-	if (!windows[idx].used) return;
-	if (windows[idx].owner_pid == my_pid) return;   // wm draws its own
+	if (idx < 0 || idx >= WM_MAX_WINDOWS || !windows[idx].used)
+		return 0;
 
 	z_clip_t win = { (int)windows[idx].x, (int)windows[idx].y,
 	                 (int)(windows[idx].x + windows[idx].w - 1),
@@ -1748,14 +2406,25 @@ static void send_clip(int idx) {
 		if (k == idx) { past = true; continue; }
 		if (!past) continue;
 		if (!windows[k].used) continue;
+		if (k == region_skip_idx) continue;
 		z_clip_t o = { (int)windows[k].x, (int)windows[k].y,
 		               (int)(windows[k].x + windows[k].w - 1),
 		               (int)(windows[k].y + windows[k].h - 1) };
 		occ[nocc++] = o;
 	}
 
+	return region_compute(&win, occ, nocc, out, max);
+}
+
+// Returns true if a REDRAW was sent (the visible region gained pixels).
+static bool send_clip_ex(int idx, bool do_redraw) {
+
+	if (idx < 0 || idx >= WM_MAX_WINDOWS) return false;
+	if (!windows[idx].used) return false;
+	if (windows[idx].owner_pid == my_pid) return false;   // wm draws its own
+
 	z_clip_t reg[WM_MAX_CLIP];
-	int n = region_compute(&win, occ, nocc, reg, WM_MAX_CLIP);
+	int n = window_visible_region(idx, reg, WM_MAX_CLIP);
 
 	// A fully occluded window is ONE EMPTY rectangle, never zero of
 	// them: zgfx reads an empty list as "unrestricted", which is the
@@ -1767,7 +2436,10 @@ static void send_clip(int idx) {
 	}
 
 	// Nothing changed -- do not spend a message, and above all do not
-	// spend an ack round trip.
+	// spend an ack round trip. Unless the window is frozen: then the
+	// unchanged region is resent to thaw it, and no REDRAW follows --
+	// its pixels never left the glass (see send_clip_freeze()).
+	bool thaw_same = false;
 	if (sent_region_valid[idx] && sent_region_n[idx] == n) {
 		bool same = true;
 		for (int i = 0; i < n; i++)
@@ -1775,7 +2447,10 @@ static void send_clip(int idx) {
 			    sent_region[idx][i].y0 != reg[i].y0 ||
 			    sent_region[idx][i].x1 != reg[i].x1 ||
 			    sent_region[idx][i].y1 != reg[i].y1) { same = false; break; }
-		if (same) return;
+		if (same) {
+			if (!frozen_sent[idx]) return false;
+			thaw_same = true;
+		}
 	}
 
 	uint32_t area_now = region_area(reg, n);
@@ -1798,8 +2473,15 @@ static void send_clip(int idx) {
 	// nothing to take away and nothing to protect.
 	bool narrowing = sent_region_valid[idx] && area_now < area_was;
 
-	// A WIDENING region needs a redraw, and used to get one by
-	// accident.
+	// A window's first region is also its first invitation to paint:
+	// it has been told nothing so far, so everything it can see is
+	// new. Captured before the send commits sent_region_valid below.
+	bool first = !sent_region_valid[idx];
+
+	// A region that GAINED pixels needs a redraw. Comparing total
+	// area misses the common drag: the window behind loses a strip
+	// on one side and gains one on the other, area stays put, and
+	// the gained strip is left black by the wake fill.
 	//
 	// When a window is raised, the area it just uncovered is stale --
 	// it holds whatever was on top of it. The app has to repaint it,
@@ -1811,9 +2493,10 @@ static void send_clip(int idx) {
 	// nothing had told it to redraw its face and buttons.
 	//
 	// Asking here is better than the repair that used to do it: only
-	// the window that actually gained area is asked, and only when it
-	// did.
-	bool widening = sent_region_valid[idx] && area_now > area_was;
+	// the window that actually gained pixels is asked, and only when
+	// it did.
+	bool widening = sent_region_valid[idx] &&
+		region_gains(reg, n, sent_region[idx], sent_region_n[idx]);
 
 	z_wm_cliprect_t wire[WM_MAX_CLIP];
 	for (int i = 0; i < n; i++) {
@@ -1822,10 +2505,6 @@ static void send_clip(int idx) {
 		wire[i].x1 = (int16_t)reg[i].x1;
 		wire[i].y1 = (int16_t)reg[i].y1;
 	}
-
-	for (int i = 0; i < n; i++) sent_region[idx][i] = reg[i];
-	sent_region_n[idx] = n;
-	sent_region_valid[idx] = true;
 
 	// Diagnostic. Says what each window was actually told, which is
 	// the one thing a screenshot cannot show -- an artifact could
@@ -1838,8 +2517,21 @@ static void send_clip(int idx) {
 			(int)reg[0].x1, (int)reg[0].y1,
 			narrowing ? " (narrowing, waiting)" : "");
 
-	z_msg_new_send(windows[idx].owner_pid, Z_WM_SET_CLIP, 0,
-		z_obj_blob(wire, (uint32_t)(n * sizeof(z_wm_cliprect_t))));
+	// Commit sent_region only after a successful send. Updating it
+	// first made a full mailbox look like the app already had the
+	// final clip, so repair_drag skipped SET_CLIP and the hole
+	// stayed black until the behind window was focused.
+	if (z_msg_new_send(windows[idx].owner_pid, Z_WM_SET_CLIP, 0,
+			clip_payload(idx, wire, n)) != Z_OK)
+		return false;
+	for (int i = 0; i < n; i++) sent_region[idx][i] = reg[i];
+	sent_region_n[idx] = n;
+	sent_region_valid[idx] = true;
+	dbg_n_clip++;
+	frozen_sent[idx] = false;
+	clip_acked[idx] = false;
+	thaw_pending[idx] = thaw_same;
+	if (thaw_same) return false;
 
 	// NO WAIT. Neither for the region ack nor for the widening
 	// redraw below.
@@ -1875,20 +2567,56 @@ static void send_clip(int idx) {
 	// After the region is applied, not before -- a redraw request
 	// answered against the old, narrower region would repaint only
 	// the part that was already correct.
-	if (widening) {
-		dbg_redraws++;
-		send_redraw(windows[idx].owner_pid, idx);
+	//
+	// ONLY a window that GAINED pixels, or one being told its region
+	// for the very first time. A window whose region merely SHRANK
+	// has nothing new to paint: every pixel it still owns is already
+	// on the glass, and the pixels it lost belong to whoever covered
+	// them and are that window's to paint. Sending it a REDRAW asked
+	// it to repaint itself entirely for no visible change -- with
+	// three terminals behind a click that was ~0.8 s of wall time in
+	// repaints nobody could see (the "curtain"), and the remote
+	// desktop re-encoded every stripe of it.
+	//
+	// This used to fire on any non-empty change, on the theory that a
+	// self-animating app (gpu3d) which learns of a narrowing only via
+	// SET_CLIP keeps its last frame in the still-visible part. It does
+	// -- and that part is correct, because it is exactly what was
+	// there before. What is NOT correct after a narrowing is the strip
+	// it lost, and that strip is wm's own work: the window that covered
+	// it repaints it (wipe_raise_overlap(), repair_region()), in the
+	// same gesture, before the narrowed app could mis-time it.
+	// z_win_apply_clip() used to black it out from the app's side too,
+	// with the region escaped and a message-drain of latency behind
+	// wm's repair -- late, it landed on the winner's fresh paint
+	// (the fast focus-cycling symptom above).
+	{
+		int empty = (n == 1 && rect_empty(&reg[0]));
+		if (!empty && do_redraw && (first || widening)) {
+			dbg_redraws++;
+			send_redraw_damage(windows[idx].owner_pid, idx);
+			return true;
+		}
 	}
+	return false;
 
+}
+
+static bool send_clip(int idx) {
+	return send_clip_ex(idx, true);
 }
 
 // Every window's region. Called wherever the z-order or any geometry
 // changes -- one call site rather than remembering which windows a
 // given change can affect, because moving one window can widen or
 // narrow any number of others.
-static void send_clip_all_except(int skip) {
+static void send_clip_all_except_ex(int skip, bool do_redraw) {
 	for (int i = 0; i < WM_MAX_WINDOWS; i++)
-		if (windows[i].used && i != skip) send_clip(i);
+		if (windows[i].used && i != skip) send_clip_ex(i, do_redraw);
+}
+
+static void send_clip_all_except(int skip) {
+	send_clip_all_except_ex(skip, true);
 }
 
 static void send_clip_all(void) {
@@ -1940,12 +2668,7 @@ static void alt_tab(void) {
 	// to be forced to the front unconditionally after every reorder;
 	// see create_dock()'s call site in main() for why that changed.
 	bring_to_front(focused);
-
-	if (old_focused >= 0)
-		repair_region(windows[old_focused].x, windows[old_focused].y,
-			windows[old_focused].w, windows[old_focused].h, -1);
-	repair_region(windows[focused].x, windows[focused].y,
-		windows[focused].w, windows[focused].h, -1);
+	repair_focus_chrome(old_focused, focused);
 
 }
 
@@ -1989,6 +2712,20 @@ static void alt_move_focused(uint32_t keysym) {
 	int old_x = (int)w->x, old_y = (int)w->y;
 	int ww = (int)w->w, wh = (int)w->h;
 
+	// Lift the window before moving it -- the same freeze a mouse
+	// drag applies, to this one window: its clip goes empty without
+	// a clear, so it does not black out origin-minus-destination
+	// underneath the windows behind while they repaint it. Bounded
+	// wait for the ack, like freeze_all().
+	if (send_clip_freeze(focused))
+		wait_clip_ack_one(focused, FREEZE_ACK_TIMEOUT_MS);
+
+	drag_moved = true;
+	drag_ox = old_x;
+	drag_oy = old_y;
+	drag_ow = ww;
+	drag_oh = wh;
+
 	w->x = (uint32_t)nx;
 	w->y = (uint32_t)ny;
 
@@ -1999,6 +2736,7 @@ static void alt_move_focused(uint32_t keysym) {
 
 	notify_moved(focused);
 	repair_drag(focused);
+	drag_moved = false;
 
 }
 
@@ -2357,22 +3095,99 @@ static int create_dock(void) {
 
 }
 
+// Cover the last frame of windows we just jumped over, then ask the
+// raised owner to paint. An owner can finish one more frame with the
+// old clip after send_clip; that stain sits on the raised window
+// until this wipe + REDRAW.
+static void wipe_raise_overlap(int raised)
+{
+	int i;
+	wm_window_t *a;
+
+	if (raised < 0 || !windows[raised].used) return;
+	a = &windows[raised];
+	z_gfx_clear_visible();
+	for (i = 0; i < raise_jumped_n; i++) {
+		int j = raise_jumped[i];
+		wm_window_t *b;
+		int x0, y0, x1, y1;
+		if (j < 0 || j >= WM_MAX_WINDOWS || !windows[j].used) continue;
+		b = &windows[j];
+		x0 = (int)a->x > (int)b->x ? (int)a->x : (int)b->x;
+		y0 = (int)a->y > (int)b->y ? (int)a->y : (int)b->y;
+		x1 = (int)(a->x + a->w) < (int)(b->x + b->w)
+			? (int)(a->x + a->w) : (int)(b->x + b->w);
+		y1 = (int)(a->y + a->h) < (int)(b->y + b->h)
+			? (int)(a->y + a->h) : (int)(b->y + b->h);
+		if (x1 > x0 && y1 > y0)
+			fill_rect(x0, y0, x1 - x0, y1 - y0, 0);
+	}
+	paint_window_chrome(raised);
+}
+
 // returns true if idx's z-order position actually changed
 static bool bring_to_front(int idx) {
 
 	int found = -1;
-	for (int i = 0; i < zorder_count; i++) {
+	int i;
+	raise_jumped_n = 0;
+	for (i = 0; i < zorder_count; i++) {
 		if (zorder[i] == idx) { found = i; break; }
 	}
 	if (found < 0) return false;
 	if (found == zorder_count - 1) return false;	// already frontmost
 
-	for (int i = found; i < zorder_count - 1; i++)
+	for (i = found + 1; i < zorder_count; i++)
+		raise_jumped[raise_jumped_n++] = (uint8_t)zorder[i];
+
+	for (i = found; i < zorder_count - 1; i++)
 		zorder[i] = zorder[i + 1];
 	zorder[zorder_count - 1] = idx;
 
-	// The z-order changed, so every window's region may have.
-	send_clip_all();
+	// The z-order changed, so every window's region may have -- but
+	// the ORDER of the three steps below is what makes a raise cost
+	// one repaint instead of two.
+	//
+	// Everyone else first. Their regions can only narrow (something
+	// came out in front of them), so none of them is asked to
+	// repaint; what they are told is to stop drawing into the pixels
+	// they just lost.
+	send_clip_all_except(idx);
+
+	// Then the wipe, and only then the raised window's own region.
+	//
+	// An owner we jumped over may still be finishing a frame against
+	// its old, wider clip -- a self-animating app (gpu3d) that has not
+	// drained its queue yet. One tick of grace, then black out the
+	// overlap so that last frame cannot stick.
+	//
+	// This used to happen AFTER the raised window had already been
+	// given its region and a REDRAW, which meant wm blacked out
+	// pixels the app was in the middle of painting and had to ask for
+	// them a second time: the raised terminal repainted twice, once
+	// for what it gained and once for everything, ~0.4 s of the click.
+	// Wiping first makes the single REDRAW below cover it -- the
+	// overlap wiped here is exactly the region the raise gains.
+	if (raise_jumped_n > 0) {
+		z_proc_wait(1);
+		if (defer_raise_content) {
+			// Keep the pixels the raise just uncovered. The
+			// chrome of the raised window still has to sit on
+			// top of them; the content REDRAW waits for release
+			// (pending_raise_redraw) or for repair_drag().
+			paint_window_chrome(idx);
+		} else {
+			wipe_raise_overlap(idx);
+		}
+	}
+
+	if (defer_raise_content) {
+		pending_raise_redraw = idx;
+		if (wm_clip_debug)
+			printf("wm: raise deferred win %d (content REDRAW on release)\n", idx);
+	} else {
+		send_clip(idx);
+	}
 	return true;
 
 }
@@ -2391,6 +3206,7 @@ static void destroy_window(uint32_t id) {
 	uint32_t owner = windows[id].owner_pid;
 
 	windows[id].used = false;
+	sent_region_valid[id] = false;	// slot reuse must not inherit send_clip's last-sent memory
 
 	int found = -1;
 	for (int i = 0; i < zorder_count; i++) {
@@ -2847,6 +3663,34 @@ static void handle_message(z_msg_t *msg) {
 		// nothing waits for them any more -- see send_clip(). Consumed
 		// here so they are not reported as unknown.
 		case Z_WM_CLIP_DONE:
+			// Counted for freeze_all()'s wait; and a window thawed
+			// without a REDRAW that says it drew while frozen gets
+			// one now -- what it drew never reached the glass.
+			if (msg->obj.type == Z_UINT32) {
+				uint32_t v = msg->obj.val.uint32;
+				int id = (int)Z_WM_CLIP_DONE_ID(v);
+				if (id >= 0 && id < WM_MAX_WINDOWS && windows[id].used &&
+				    windows[id].owner_pid == msg->from) {
+					clip_acked[id] = true;
+					if (thaw_pending[id]) {
+						thaw_pending[id] = false;
+						if (v & Z_WM_CLIP_DONE_DREW) {
+							// The one line here that is NOT tracing.
+							// It fires only when an app drew into a
+							// freeze (z_win_frozen(), zwin.h) and so
+							// has to be repainted whole for a drag
+							// that never touched it -- an anomaly
+							// worth naming the moment it happens, and
+							// silent in a drag where every app
+							// behaves. Deliberately short: the
+							// console is the shared UART.
+							printf("wm: win %d drew while frozen\n", id);
+							dbg_redraws++;
+							send_redraw(msg->from, id);
+						}
+					}
+				}
+			}
 			break;
 
 		case Z_WM_CREATE_WINDOW: {
@@ -2985,10 +3829,7 @@ static void handle_message(z_msg_t *msg) {
 					// single app launch.
 					if (old_focused >= 0 && old_focused != idx &&
 						windows[old_focused].used)
-						repair_region(windows[old_focused].x,
-							windows[old_focused].y,
-							windows[old_focused].w,
-							Z_WM_TITLEBAR_H, idx);
+						repair_focus_chrome(old_focused, idx);
 
 				}
 
@@ -3048,9 +3889,7 @@ static void handle_message(z_msg_t *msg) {
 				// below; see repair_region()'s own exclude_idx
 				// comment.
 				if (old_focused >= 0 && windows[old_focused].used)
-					repair_region(windows[old_focused].x,
-						windows[old_focused].y, windows[old_focused].w,
-						Z_WM_TITLEBAR_H, idx);
+					repair_focus_chrome(old_focused, idx);
 
 			}
 
@@ -3085,6 +3924,15 @@ static void handle_message(z_msg_t *msg) {
 			// Everything else already had its region above, before
 			// the repair.
 			if (idx >= 0) send_clip(idx);
+
+			// And its first REDRAW, right behind the region. A
+			// windowed process is born invisible now (zwin loads
+			// the empty rectangle at create and maps "no region
+			// yet" to "draw nothing"), so anything the app paints
+			// straight after z_win_create() returns reaches no
+			// glass: its content's first way up is this REDRAW,
+			// which it processes after the SET_CLIP above.
+			if (idx >= 0) send_redraw(windows[idx].owner_pid, idx);
 
 			break;
 
@@ -3233,8 +4081,9 @@ static void handle_message(z_msg_t *msg) {
 			// they overlap the strip and are drawn after it. Windows
 			// behind are covered by the titlebar and are skipped by
 			// repair_region()'s own occlusion check.
-			repair_region((int)windows[idx].x, (int)windows[idx].y,
-				(int)windows[idx].w, Z_WM_TITLEBAR_H, idx);
+			z_gfx_clear_visible();
+			paint_window_chrome(idx);
+			z_gfx_clear_visible();
 
 			break;
 
@@ -3406,73 +4255,167 @@ static void clear_window_interior(int idx) {
 
 }
 
+// Fill the parts of (x,y,w,h) that no window currently owns -- the
+// desktop holes a drag leaves. Filling the whole swept box (minus
+// only the dragged window's final rect) painted black over the
+// already-visible content of every window the bounding box crossed;
+// those windows did not "gain" those pixels, so they never got a
+// REDRAW, and the holes stayed.
+static void fill_unowned(int x, int y, int w, int h)
+{
+	z_clip_t box, occ[WM_MAX_WINDOWS], holes[WM_MAX_CLIP];
+	int nocc = 0, n, i;
+
+	if (w <= 0 || h <= 0) return;
+	box.x0 = x;
+	box.y0 = y;
+	box.x1 = x + w - 1;
+	box.y1 = y + h - 1;
+	for (i = 0; i < WM_MAX_WINDOWS; i++) {
+		wm_window_t *win;
+		if (!windows[i].used) continue;
+		if (i == region_skip_idx) continue;
+		win = &windows[i];
+		occ[nocc].x0 = (int)win->x;
+		occ[nocc].y0 = (int)win->y;
+		occ[nocc].x1 = (int)(win->x + win->w - 1);
+		occ[nocc].y1 = (int)(win->y + win->h - 1);
+		nocc++;
+	}
+	n = region_compute(&box, occ, nocc, holes, WM_MAX_CLIP);
+	for (i = 0; i < n; i++) {
+		int rw = holes[i].x1 - holes[i].x0 + 1;
+		int rh = holes[i].y1 - holes[i].y0 + 1;
+		if (rw > 0 && rh > 0)
+			fill_rect(holes[i].x0, holes[i].y0, rw, rh, 0);
+	}
+}
+
+// Puts the desktop right after a drag (mouse release, or an
+// Alt+Arrow step). The screen at this point is the still image the
+// freeze kept, plus the XOR band at the final position. So: band off;
+// every window gets its real region again -- the ones behind the
+// origin gained pixels and are asked to paint what they gained, the
+// dragged one moved and paints itself whole at the destination, the
+// rest are only thawed (send_clip_ex()); the desktop showing through
+// the origin is filled by wm; and the chrome of everything under the
+// origin, plus the dragged window's own frame at the destination, is
+// redrawn solid.
+//
+// Two rectangles are touched, the origin and the destination, and
+// nothing else -- not the path between them, not the dock unless one
+// of the two reaches it. Everything else on screen still holds the
+// paint it had before the gesture started, which was correct then and
+// is correct now: the freeze stopped anyone changing it, and the
+// band, being paired XOR, put back every pixel it borrowed.
 static void repair_drag(int dragged_idx) {
 
-	// BEFORE the repair below, not after.
-	//
-	// The repair asks the windows the drag uncovered to redraw
-	// themselves. If their regions are still the OLD, narrower ones
-	// at that moment, they redraw only the part they were previously
-	// allowed to touch -- and the strip the dragged window just
-	// vacated stays stale. That is the gap left behind when a window
-	// is pulled away from another.
-	//
-	// Doing it first also satisfies the narrowing rule: a window the
-	// drag moved OVER gets its smaller region, and acks it, before
-	// anything is drawn on top of it.
-	send_clip_all();
-
-
-	(void)dragged_idx;	// the swept box below already covers it
-
-	// One repair over everything the window swept through, INCLUDING
-	// its own final footprint.
-	//
-	// This used to repair four strips around the final rect and
-	// deliberately skip the rect itself, on the reasoning that the
-	// border there was already correct and re-clearing it would
-	// flash. That reasoning was incomplete in two ways, and both
-	// showed up as visible corruption after a small move:
-	//
-	//   - Titlebar CONTENT is not part of draw_window_box(). The
-	//     wireframe drag redraws the box at each step but never the
-	//     title text or icons, so those stay at the position the drag
-	//     started from. Move a window a few pixels and the old text
-	//     and icons are still sitting inside the new footprint, which
-	//     the strips by definition never touch. Alt+Arrow had it
-	//     worse: it doesn't erase the old frame at all, so the old
-	//     BORDER survived inside the new footprint too.
-	//
-	//   - Only the dragged window's own owner was asked to redraw.
-	//     Any OTHER window overlapping the final footprint was left
-	//     as it was.
-	//
-	// repair_region() already does all of this correctly -- clear,
-	// then redraw chrome and titlebar content for every overlapping
-	// window in z-order, asking each owner to repaint its content.
-	// The strips and the footprint together are exactly the swept
-	// bounding box, so this is one call where there were five, and it
-	// sends each affected app one redraw instead of up to four.
-	//
-	// The flash the strips were avoiding is no longer a concern:
-	// starting a drag now blanks the window's interior anyway (see
-	// clear_window_interior(), called from the click handler), so
-	// there is nothing left inside the footprint to preserve.
-	// A press that never became a drag has nothing to repair.
-	//
-	// Nothing was blanked and no region was changed -- both wait for
-	// the first motion event now -- so there is genuinely nothing to
-	// put back. Repairing anyway was a full content redraw of the
-	// window and everything overlapping it on every plain click: one
-	// of the two flashes.
-	//
-	// send_clip_all() above still runs and is a no-op when no region
-	// changed, so a focus-only click costs two titlebar strips and
-	// nothing else.
 	if (!drag_moved) return;
 
-	repair_region(drag_min_x, drag_min_y,
-		drag_max_x - drag_min_x, drag_max_y - drag_min_y, -1);
+	// Take the XOR rubber-band off before painting solid chrome.
+	// Uses the saved last-draw geometry; a no-op if alt-move never
+	// drew a band.
+	xor_band_erase();
+
+	// TWO rectangles, not the whole path: the ORIGIN the window left
+	// and the DESTINATION it landed on. Between them nothing changed
+	// and nothing is touched.
+	//
+	// The gesture only ever wrote two things to the glass: the ghost,
+	// which sat still at the origin the whole time, and the rubber
+	// band, which is XOR and erased itself at every step -- the last
+	// of those erases is the draw_window_box() above. Everything else
+	// held its last paint, because every window was frozen. So the
+	// only pixels that can be wrong now are the ones the ghost was
+	// covering (the origin, which belongs to whoever is behind it) and
+	// the ones the window has just claimed (the destination).
+	//
+	// The whole swept box used to be repaired instead, on the theory
+	// that the band leaves specks where it clamps against a screen
+	// edge. What the sweep was actually put in for was dock damage
+	// and that was traced to its root -- the frame of a window PARKED
+	// on the dock, fixed in draw_dock() -- so the reason is gone. A drag across the desktop is not a reason to repaint
+	// the desktop. (A drag cannot leave a window partly off screen,
+	// see the clamp in the drag-update block, so the band never
+	// half-draws against an edge either.)
+	int ox = drag_ox, oy = drag_oy, ow = drag_ow, oh = drag_oh;
+	bool got_redraw[WM_MAX_WINDOWS];
+	int i;
+
+	for (i = 0; i < WM_MAX_WINDOWS; i++)
+		got_redraw[i] = false;
+	for (i = 0; i < WM_MAX_WINDOWS; i++) {
+		if (!windows[i].used) continue;
+		if (send_clip(i))
+			got_redraw[i] = true;
+	}
+
+	fill_unowned(ox, oy, ow, oh);
+
+	// The dragged window is the one exception: its region may not have
+	// changed at all (dropped where it started, or onto pixels it
+	// already owned), but it moved, and its content is still drawn at
+	// the origin. Z_WM_WINDOW_MOVED already told it so -- this is the
+	// request to act on it.
+	if (dragged_idx >= 0 && windows[dragged_idx].used &&
+	    windows[dragged_idx].owner_pid != my_pid && !got_redraw[dragged_idx]) {
+		dbg_redraws++;
+		send_redraw(windows[dragged_idx].owner_pid, dragged_idx);
+	}
+
+	// Chrome inside the ORIGIN, for every window except the one that
+	// moved: what the ghost was covering, wm has to put back itself --
+	// send_clip() only ever asks apps for CONTENT, and a frame is not
+	// content. A window the band merely crossed is not in this list
+	// and does not need to be: the band restored every pixel it
+	// crossed as it left.
+	//
+	// The dragged window is excluded and handled below instead. Its
+	// frame at the origin is gone with the ghost, and the one place it
+	// needs a frame is the destination -- which is not inside the
+	// origin unless the drag was short enough to overlap it, in which
+	// case painting it here would draw it and then paint_window_chrome
+	// below would draw it again.
+	repair_chrome_in_rect(ox, oy, ow, oh, dragged_idx);
+
+	// The destination's frame. The rubber band WAS the frame there,
+	// and the erase at the top of this function took it off, so
+	// without this the window lands unframed. Painted after the origin
+	// repair and after fill_unowned(), because the window is frontmost
+	// (a titlebar press brings it to front) and must end up on top of
+	// both.
+	if (dragged_idx >= 0 && windows[dragged_idx].used) {
+		z_gfx_clear_visible();
+		paint_window_chrome(dragged_idx);
+		z_gfx_clear_visible();
+	}
+
+	// The dock is wm-owned (send_clip() skips it), so nothing else
+	// will repaint it -- but only if this drag actually disturbed it.
+	// It sits at the bottom of the screen and used to be repainted on
+	// EVERY release, which is a dockful of icons redrawn because a
+	// window moved somewhere else entirely. It is disturbed in exactly
+	// two ways: the ghost was sitting on it (origin), or the window
+	// has just landed on it (destination) -- and the second case is
+	// nearly free anyway, since paint_window_chrome() clips the dock
+	// to its visible region and the window on top of it leaves almost
+	// none.
+	if (dock_idx >= 0 && windows[dock_idx].used) {
+		wm_window_t *d = &windows[dock_idx];
+		bool touched = rects_overlap((int)d->x, (int)d->y,
+				(int)d->w, (int)d->h, ox, oy, ow, oh);
+		if (!touched && dragged_idx >= 0 && windows[dragged_idx].used) {
+			wm_window_t *w = &windows[dragged_idx];
+			touched = rects_overlap((int)d->x, (int)d->y,
+				(int)d->w, (int)d->h,
+				(int)w->x, (int)w->y, (int)w->w, (int)w->h);
+		}
+		if (touched) {
+			z_gfx_clear_visible();
+			paint_window_chrome(dock_idx);
+			z_gfx_clear_visible();
+		}
+	}
 
 }
 
@@ -3662,6 +4605,7 @@ int main(void) {
 		dispatch_keys();
 
 		// -- mouse --
+		vmouse_yield_to_usb();
 		int cx = get_cursor_x();
 		int cy = get_cursor_y();
 		uint8_t btn = get_mouse_btn();
@@ -3680,7 +4624,10 @@ int main(void) {
 			int mp = mouse_port();
 			// Reset here so the counts printed after this click
 			// describe exactly this click's work.
-			if (wm_clip_debug) { dbg_repairs = 0; dbg_redraws = 0; }
+			if (wm_clip_debug) {
+				dbg_repairs = 0; dbg_redraws = 0;
+				dbg_click_tick = z_uptime_ticks();
+			}
 
 			printf("wm: click port=%d raw=0x%08lx cx=%d cy=%d", mp,
 				(unsigned long)(mp == 0 ? reg_usb0_cursor : reg_usb1_cursor), cx, cy);
@@ -3713,34 +4660,10 @@ int main(void) {
 				// least SHOWS you what's blocking it rather than
 				// appearing to do nothing at all.
 				int m = blocked_by_modal(hit);
-
-				bool focus_changed = (focused != m);
 				int old_focused = focused;
-				if (focus_changed) focused = m;
-
-				// same real-reorder test as the ordinary click path
-				// below. The snapshot/compare is now belt and braces
-				// -- it existed because a following
-				// bring_to_front(dock_idx) could undo what
-				// bring_to_front(m) reported -- but it is still the
-				// honest test of "did z-order actually change", so it
-				// stays.
-				uint8_t zbefore[WM_MAX_WINDOWS];
-				uint8_t zcount_before = zorder_count;
-				memcpy(zbefore, zorder, zorder_count);
-
+				focused = m;
 				bring_to_front(m);
-
-				bool reordered = (zcount_before != zorder_count) ||
-					memcmp(zbefore, zorder, zorder_count) != 0;
-
-				if (focus_changed && old_focused >= 0)
-					repair_region(windows[old_focused].x, windows[old_focused].y,
-						windows[old_focused].w, windows[old_focused].h, -1);
-
-				if (focus_changed || reordered)
-					repair_region(windows[m].x, windows[m].y,
-						windows[m].w, windows[m].h, -1);
+				repair_focus_chrome(old_focused, m);
 
 			} else if (hit >= 0 && hit_titlebar_icon(hit, cx, cy) == 0) {
 
@@ -3762,73 +4685,31 @@ int main(void) {
 
 			} else if (hit >= 0) {
 
-				bool focus_changed = (focused != hit);
 				int old_focused = focused;
-				if (focus_changed) focused = hit;
-
-				// Whether the z-order ACTUALLY ended up different,
-				// rather than whether bring_to_front() moved
-				// something on the way.
-				//
-				// This used to be `bool reordered = bring_to_front(hit);`
-				// -- which is wrong as soon as the dock gets pushed
-				// back to the front immediately afterwards, because
-				// for the window sitting directly below the dock the
-				// two calls cancel out. That window is the common
-				// case, not a corner one: it's whatever the user is
-				// working in. So every click in an
-				// already-frontmost, already-focused window claimed a
-				// reorder and triggered a full repair_region() --
-				// which redraws every overlapping window AND BLOCKS
-				// on an ack from each. Harmless when apps had one
-				// window each; with a dialog open it means two full
-				// repaints and two ack round trips per click, which
-				// is exactly as slow as it sounds.
-				uint8_t zbefore[WM_MAX_WINDOWS];
-				uint8_t zcount_before = zorder_count;
-				memcpy(zbefore, zorder, zorder_count);
-
+				focused = hit;
+				dbg_n_redraw = 0;
+				dbg_n_clip = 0;
+				dbg_t0 = z_uptime_ticks();
+				pending_raise_redraw = -1;
+				// A titlebar press that will drag (or even just
+				// focus) must not wait on the raised window's
+				// content REDRAW: that paint is ~14 stripes of a
+				// terminal and the rubber band cannot start until
+				// it has gone down the same wire.
+				defer_raise_content = hit_titlebar(hit, cy) != 0;
 				bring_to_front(hit);
-
-				// keep the dock frontmost -- see its own comment
-				// where this same call appears in handle_message().
-
-				bool reordered = (zcount_before != zorder_count) ||
-					memcmp(zbefore, zorder, zorder_count) != 0;
-
-				// TITLEBAR STRIP, not the whole window.
-				//
-				// Losing focus now changes exactly one thing: the
-				// titlebar is no longer inverted. It used to change
-				// two, because the focus ring was drawn as an outward
-				// box around the window's whole perimeter, and
-				// repairing only the top strip would have left three
-				// sides of it on screen.
-				//
-				// With the ring gone (see draw_titlebar_content()),
-				// full-rect repairs here were two complete content
-				// redraws per focus click -- one for the window
-				// losing focus, one for the window gaining it. That
-				// is what made a window flash several times when it
-				// came forward.
-				//
-				// Same reasoning, same one-line fix, as the modal
-				// case in handle_message() already applies.
-				if (focus_changed && old_focused >= 0)
-					repair_region(windows[old_focused].x, windows[old_focused].y,
-						windows[old_focused].w, Z_WM_TITLEBAR_H, -1);
-
-				// The window coming forward needs a FULL repair only
-				// if it actually moved in the z-order -- then it may
-				// have been uncovered and has content to restore. If
-				// the click only changed focus, its titlebar is again
-				// the only thing that differs.
-				if (reordered)
-					repair_region(windows[hit].x, windows[hit].y,
-						windows[hit].w, windows[hit].h, -1);
-				else if (focus_changed)
-					repair_region(windows[hit].x, windows[hit].y,
-						windows[hit].w, Z_WM_TITLEBAR_H, -1);
+				defer_raise_content = false;
+				// Chrome only. bring_to_front() already sent every
+				// window its new clip and a REDRAW to anyone that
+				// gained pixels -- unless this is a titlebar
+				// press, in which case the raised window's
+				// content REDRAW is pending_raise_redraw.
+				repair_focus_chrome(old_focused, hit);
+				if (wm_clip_debug)
+					printf("wm: switch win %d ms=%lu clips=%d redraws=%d\n",
+						hit,
+						(unsigned long)((z_uptime_ticks() - dbg_t0) * 1000u / Z_TICK_HZ),
+						dbg_n_clip, dbg_n_redraw);
 
 				// grip first: it sits inside the window's general
 				// body, so a plain content-click test would swallow
@@ -3923,41 +4804,82 @@ int main(void) {
 				// crossed, gouging a trail through any window
 				// underneath that survived until repair_drag().
 				// FIRST MOVEMENT: this is where a press becomes a
-				// drag, and where the interior is blanked and the
-				// owner told to stop drawing.
+				// drag. A press-and-release touches nothing (that is
+				// how a window is focused); the first motion event
+				// freezes the desktop and starts the band.
 				//
-				// Both used to happen at the press. That made every
-				// titlebar click -- which is how a window is focused
-				// -- throw its content away, and the repair at
-				// release put it back with a full repaint: one of
-				// the flashes. Then the no-movement early-out in
-				// repair_drag() skipped that repaint, and a focused
-				// window came up blank with only its own animation
-				// running. Doing it here means a press-and-release
-				// touches nothing, and a real drag does exactly what
-				// it did before, one motion event later.
-				//
-				// The empty region tells the owner none of this
-				// window is visible for the duration -- what is on
-				// screen is the outline -- so a self-animating app
-				// like clock stops painting hands into the blanked
-				// footprint. repair_drag() recomputes it at release.
-				// One empty rectangle, not zero: zgfx reads an empty
-				// LIST as "unrestricted".
+				// Nothing is blanked and nothing is repainted. The
+				// dragged window stays on the glass where it was, a
+				// still ghost, and everything else keeps its last
+				// paint: every window is told to stop drawing
+				// (send_clip_freeze() -- an empty clip WITHOUT the
+				// clear a narrowing does) and wm waits for the acks
+				// before the first band, so the XOR band only ever
+				// travels over pixels that do not change. The three
+				// earlier attempts at repainting the origin during
+				// the gesture all left trails for exactly that reason
+				// Everything is put right once, at
+				// release (repair_drag()).
 				if (!drag_moved) {
-					drag_moved = true;
-					clear_window_interior(dragging);
-					z_wm_cliprect_t none = { 0, 0, -1, -1 };
-					z_msg_new_send(windows[dragging].owner_pid,
-						Z_WM_SET_CLIP, 0,
-						z_obj_blob(&none, sizeof(none)));
-					sent_region_valid[dragging] = false;
-				}
+					uint32_t c0 = dbg_cyc();
+					int nfz = 0, unacked;
 
-				draw_window_box(&windows[dragging], dragging == focused, Z_RASTER_XOR);
-				windows[dragging].x = nx;
-				windows[dragging].y = ny;
-				draw_window_box(&windows[dragging], dragging == focused, Z_RASTER_XOR);
+					drag_moved = true;
+					drag_ox = (int)windows[dragging].x;
+					drag_oy = (int)windows[dragging].y;
+					drag_ow = (int)windows[dragging].w;
+					drag_oh = (int)windows[dragging].h;
+
+					int nrd = 0, unacked_rd = 0;
+					if (DRAG_ORIGIN_REPAINT) {
+						// Variant B: lift the window, blank its
+						// origin, let the windows behind paint it,
+						// wait (bounded) for them -- then freeze.
+						bool want[WM_MAX_WINDOWS];
+						int i;
+						if (send_clip_freeze(dragging))
+							wait_clip_ack_one(dragging,
+								FREEZE_ACK_TIMEOUT_MS);
+						z_gfx_clear_visible();
+						draw_window_box(&windows[dragging],
+							dragging == focused, Z_RASTER_CLEAR);
+						fill_rect(drag_ox, drag_oy, drag_ow, drag_oh, 0);
+						// Its origin is blank now: whatever the
+						// release decides, it must be repainted.
+						sent_region_valid[dragging] = false;
+						region_skip_idx = dragging;
+						for (i = 0; i < WM_MAX_WINDOWS; i++)
+							want[i] = false;
+						for (i = 0; i < WM_MAX_WINDOWS; i++)
+							if (windows[i].used && i != dragging &&
+							    send_clip(i)) {
+								want[i] = true;
+								nrd++;
+							}
+						fill_unowned(drag_ox, drag_oy, drag_ow, drag_oh);
+						repair_chrome_in_rect(drag_ox, drag_oy,
+							drag_ow, drag_oh, dragging);
+						unacked_rd = wait_redraw_acks(want,
+							DRAG_ORIGIN_ACK_MS);
+						region_skip_idx = -1;
+					}
+
+					unacked = freeze_all(&nfz);
+
+					windows[dragging].x = (uint32_t)nx;
+					windows[dragging].y = (uint32_t)ny;
+					xor_band_draw(dragging);
+					if (wm_clip_debug)
+						printf("wm: drag start win %d freeze=%d unacked=%d "
+							"repaint=%d unacked_rd=%d ms=%lu\n",
+							dragging, nfz, unacked, nrd, unacked_rd,
+							(unsigned long)((dbg_cyc() - c0) / DBG_CYC_PER_MS));
+				} else {
+					xor_band_erase();
+					windows[dragging].x = (uint32_t)nx;
+					windows[dragging].y = (uint32_t)ny;
+					xor_band_draw(dragging);
+				}
 
 				if (nx < drag_min_x) drag_min_x = nx;
 				if (ny < drag_min_y) drag_min_y = ny;
@@ -4037,12 +4959,52 @@ int main(void) {
 		if (!btn_down && btn_was_down && dragging >= 0) {
 			if (wm_clip_debug)
 				printf("wm: repaint cost since click: %d repair(s), "
-					"%d app redraw(s)\n", dbg_repairs, dbg_redraws);
+					"%d app redraw(s), %lu ms total\n", dbg_repairs, dbg_redraws,
+					(unsigned long)((z_uptime_ticks() - dbg_click_tick) * 1000u / Z_TICK_HZ));
 
-			printf("wm: drag release win %d final x=%ld y=%ld\n",
-				dragging, (long)windows[dragging].x, (long)windows[dragging].y);
-			notify_moved(dragging);
+			dbg_n_redraw = 0;
+			dbg_n_clip = 0;
+			dbg_t0 = z_uptime_ticks();
+			if (wm_clip_debug)
+				printf("wm: drag release win %d final x=%ld y=%ld moved=%d\n",
+					dragging, (long)windows[dragging].x,
+					(long)windows[dragging].y, drag_moved ? 1 : 0);
+			// Only if it actually moved. A press and release on a
+			// titlebar with no motion in between is how a window is
+			// focused, and Z_WM_WINDOW_MOVED sets geom_changed in
+			// the owner (zwin.h) -- which means "your content is at
+			// the wrong coordinates, repaint all of it". So every
+			// focus click armed the NEXT redraw of that window to be
+			// a full one, and the damage this task exists to send
+			// was thrown away one click later. repair_drag() already
+			// returns immediately when nothing moved.
+			if (drag_moved)
+				notify_moved(dragging);
+			else if (pending_raise_redraw >= 0) {
+				int ridx = pending_raise_redraw;
+				send_clip(ridx);
+				// send_clip's REDRAW_DAMAGE is empty when a
+				// narrowing SET_CLIP is still in the app's
+				// mailbox and this widening overwrites the
+				// payload slot: both messages then apply the
+				// wide region, clip_was never records the
+				// hole, and the listing stays whatever the
+				// window underneath left on the glass
+				// (files over a just-created view/hex).
+				// A full REDRAW names the pixels the raise
+				// uncovered without depending on clip_was.
+				if (windows[ridx].used &&
+				    windows[ridx].owner_pid != my_pid)
+					send_redraw(windows[ridx].owner_pid, ridx);
+			}
+			pending_raise_redraw = -1;
 			repair_drag(dragging);
+			if (wm_clip_debug)
+				printf("wm: drag win %d sweep=%dx%d ms=%lu clips=%d redraws=%d\n",
+					dragging,
+					drag_max_x - drag_min_x, drag_max_y - drag_min_y,
+					(unsigned long)((z_uptime_ticks() - dbg_t0) * 1000u / Z_TICK_HZ),
+					dbg_n_clip, dbg_n_redraw);
 			dragging = -1;
 		}
 
@@ -4130,43 +5092,32 @@ int main(void) {
 			repair_region(windows[dock_idx].x, windows[dock_idx].y,
 				windows[dock_idx].w, windows[dock_idx].h, -1);
 
-		for (volatile int i = 0; i < 2000; i++); // light throttle
-
-		/* Yield the rest of this timeslice.
+		/* Sleep until input or the next timer.
 		 *
-		 * This used to wait exactly ONE tick, because the pointer was
-		 * polled from rtl/usb_hid.v's cursor register and nothing
-		 * would wake wm when the mouse moved. That is no longer true:
-		 * the HID interrupt fires on pointer reports and now wakes
-		 * this process (z_hid_pointer_subscribe() above), so a moving
-		 * mouse and an arriving message both cut the wait short.
+		 * USB mouse and keyboard reports raise Z_IRQ_HID/HID1, and
+		 * the HID interrupt unblocks whoever subscribed to pointer
+		 * reports -- this process, from z_hid_pointer_subscribe()
+		 * above. App messages already unblock via k_msg_send. Visor
+		 * keystrokes go through hid_inject and visor pointer packets
+		 * write reg_vmouse and then z_wm_wake(), both of which wake
+		 * the same subscriber.
 		 *
-		 * WHY THERE IS STILL A TIMEOUT AT ALL, rather than blocking
-		 * indefinitely: wm has work that is driven by neither. The
-		 * dock's launch deadlines (dock_launching_deadline[]), the
-		 * pending launch-argument timeout (pending_arg_tick) and
-		 * check_core_services() at startup are all polled against
-		 * z_uptime_ticks(), and blocking forever would stall every
-		 * one of them until the user happened to move the mouse.
-		 *
-		 * Those are all coarse -- seconds, not frames -- so the
-		 * timeout only has to be fine enough for them, not for the
-		 * pointer. 16 ticks is ~22ms (46Hz), which is 16x fewer
-		 * wakeups than before while leaving every deadline above
-		 * measured to well within its own tolerance.
+		 * So the wait is INDEFINITE whenever nothing is pending, and
+		 * wm_idle_ticks() answers with a deadline only when wm has
+		 * work of its own that neither input nor a message will
+		 * bring: the dock's launch deadlines and the poll for init0
+		 * that ends the busy cursor. The launch-argument timeout is
+		 * not among them --
+		 * it is tested when the app asks for the argument, not on a
+		 * clock. A message or a HID wakeup cuts any of this short.
 		 *
 		 * On a kernel with no HID_PTR_SUBSCRIBE the subscription
-		 * fails, the pointer really is poll-only, and the old
-		 * one-tick behaviour is kept -- the same binary has to run on
-		 * both.
-		 *
-		 * This matters well beyond wm's own responsiveness: the
-		 * scheduler divides the CPU between RUNNABLE processes, so a
-		 * spinning wm takes its share out of whatever is in the
-		 * foreground. A full-screen app measured a quarter of the
-		 * machine with three such spinners running alongside it, and
-		 * a quarter of the CPU means a quarter of the frame rate. */
-		z_proc_wait(ptr_wakeups ? 16 : 1);
+		 * fails, the pointer really is poll-only, and one tick is the
+		 * only safe wait -- the same binary has to run on both. That
+		 * costs 732 wakeups a second, which is what this whole
+		 * mechanism exists to avoid, so it is a fallback and not a
+		 * mode anybody should be in. */
+		z_proc_wait(ptr_wakeups ? wm_idle_ticks() : 1);
 
 	}
 

@@ -1,5 +1,5 @@
 /*
- * Zeitlos -- NET.CFG parser. See netcfg.h and docs/esp32-net.md.
+ * Zeitlos -- NET.CFG parser. See netcfg.h and docs/esp32link.md.
  */
 
 #include <stdio.h>
@@ -98,8 +98,17 @@ int netcfg_load(netcfg_t *out)
 					free(buf);
 					return -1;
 				}
-				strcpy(out->ssid, val);
-				out->has_wifi = (out->ssid[0] != 0);
+				if (val[0] && out->n_wifi < NETCFG_WIFI_MAX) {
+					strcpy(out->wifi[out->n_wifi].ssid, val);
+					out->n_wifi++;
+				} else if (val[0]) {
+					printf("netcfg: more than %d networks, "
+						"'%s' ignored\n", NETCFG_WIFI_MAX, val);
+				}
+				if (out->n_wifi == 1) {
+					strcpy(out->ssid, val);	/* entry 0 mirror */
+					out->has_wifi = 1;
+				}
 			} else if (!strcmp(p, "psk") || !strcmp(p, "pass") ||
 					!strcmp(p, "password")) {
 				if (strlen(val) > NETCFG_PSK_MAX) {
@@ -112,7 +121,10 @@ int netcfg_load(netcfg_t *out)
 					free(buf);
 					return -1;
 				}
-				strcpy(out->psk, val);
+				if (out->n_wifi)
+					strcpy(out->wifi[out->n_wifi - 1].psk, val);
+				if (out->n_wifi <= 1)
+					strcpy(out->psk, val);	/* entry 0 mirror */
 			} else if (!strcmp(p, "dhcp")) {
 				out->dhcp = (val[0] != '0');
 			} else if (!strcmp(p, "ip")) {

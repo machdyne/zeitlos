@@ -309,8 +309,8 @@ costs zero Scheme cells.
 |---|---|---|
 | SMALL | 8KB | `wm`, `term` |
 | DEFAULT | 16KB | anything unnamed |
-| MEDIUM | 32KB | `net`, `repl` |
-| LARGE | 64KB | `web` |
+| MEDIUM | 32KB | `net` |
+| LARGE | 64KB | `repl`, `web` |
 | BIG | 1MB | `vi` |
 | HUGE | 4MB | `posix`, `zcc` |
 
@@ -324,7 +324,7 @@ newlib, xpack gcc 15.2):
 | wm | 101,856 | 8K | 110,592 |
 | net | 282,408 | 32K | 315,392 |
 | term (each) | 150,792 | 8K | 159,744 |
-| repl (card only) | 333,668 | 32K | 368,640 |
+| repl (card only) | 333,668 | 64K | 401,408 |
 | posix (card only) | 190,776 | 4MB | 4,386,816 |
 
 **The table this replaces was stale.** It listed term at 92,992 and net
@@ -342,8 +342,8 @@ is present:
 |---|---|
 | no card: kernel, wm, net, term0, term1 | **962K** |
 | no card, no net (Obst's default spec): kernel, wm, term0..term3 | 966K |
-| card, no net: kernel, wm, repl, term0 | 856K |
-| card, net, repl | 1,012K -- no room for a term; build net smaller or skip it |
+| card, no net: kernel, wm, repl, term0 | 888K |
+| card, net, repl | 1,044K -- no room for a term; build net smaller or skip it |
 
 posix does not fit below roughly 5MB, and init says so.
 
@@ -360,13 +360,26 @@ per-message `zport` leak was fixed (`Z_PORT_DATA_ACK`). repl reports
 its own baseline at every boot -- `heap grown 5960 bytes by end of
 stdlib load` -- leaving ~26KB of headroom at 32KB.
 
-**The residual risk for repl is stack, not heap.** Deep non-tail Scheme
-recursion nests `ms_eval()` frames on the C stack, bounded by
-`MS_PROTECT_STACK_SIZE` (192). That should sit comfortably inside 32KB,
-but it's worth exercising with something deliberately recursive. The
+**`repl` is back on LARGE, and the one-word revert below is what was
+typed.** The figure was right and the workload changed: `repl` hosts
+`te`, whose loader `malloc()`s the whole document and then builds a
+line list on top of it. Two of the files people actually open with it
+are around 18KB, and at MEDIUM that allocation fails -- measured, a
+`malloc(18505)` refused with 22,076 bytes between `sbrk` and `sp`,
+because newlib's `sbrk` request does not fit in the remainder even
+though the raw size looks as though it should.
+
+Worth knowing while reading `(free)` for this: its `mem-free` figure of
+tens of megabytes is the **kernel pool**, not this process's heap. The
+number that says whether the next `malloc` will succeed is `c-heap`.
+
+**The residual risk for repl is stack, not heap**, and that is
+unchanged by the tier. Deep non-tail Scheme recursion nests `ms_eval()`
+frames on the C stack, bounded by `MS_PROTECT_STACK_SIZE` (192). That
+sat comfortably inside 32KB and sits more comfortably inside 64KB, but
+it's worth exercising with something deliberately recursive. The
 failure mode is silent exhaustion, not a clean error; `(free)`'s
-`c-heap` figure is the number to watch, and putting repl back on LARGE
-is a one-word revert.
+`c-heap` figure is the number to watch.
 
 `free` (shell) and `(free)` (Scheme) report the pool; `df` and `(df)`
 report the SD card. See `docs/scheme_api.md` for the Scheme forms,

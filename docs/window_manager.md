@@ -20,6 +20,14 @@ This was built against a phased plan, all three phases now done:
    `z_fb_hw_line()`), and "Known limitations" below for what's still
    open (the blitter has its own, different, not-yet-unified scoping).
 
+A fourth followed, and it is what the third phase's own closing note
+asked for: **compositing by visible region**. There is one framebuffer
+and no depth buffer, so the only thing keeping one window's pixels out
+of another's is where each is permitted to draw -- and making that a
+guarantee the window manager and the shared drawing layer give,
+rather than something each app is trusted to arrange, is what
+"Visible regions" and everything under it describe.
+
 See `docs/app_runtime.md` for the broader app-runtime picture this
 all sits within (`zeitlos.h/c`, the syscall trampoline, direct
 hardware register access, `zgfx.c`) -- this document stays focused on
@@ -116,25 +124,52 @@ over again.
 mouse-move update (tried first, alongside the old full-clear approach)
 queued up `Z_WM_REDRAW` messages faster than apps could drain them, so
 content visibly lagged behind the already-finished drag, "playing
-back" the movement in slow motion after the fact. So while a button is
-held, only the dragged window's own border is erased and redrawn at
-each step (`draw_window_box()` with color 0 then color 1) -- no
-`repair_region()` call, no other windows touched, no messages sent.
-`wm` tracks the full bounding box the window swept through during the
-drag (`drag_min_x`/`drag_min_y`/`drag_max_x`/`drag_max_y`), and repairs
-exactly that region once, on release -- covering the dragged window's
-final content redraw and anything else that may have been visually
-clobbered along the path, in one call.
+back" the movement in slow motion after the fact. So nothing is
+repaired while the button is held: only the dragged window's own
+outline moves, and everything else keeps the pixels it already has.
 
-The consequence: while a window is being dragged, its content (and
-anything visually underneath the path its border sweeps through) is
-frozen in place -- only the border outline moves live, and content
-snaps to the new position once you let go. This is a well-worn,
-intentionally simple "wireframe drag" pattern (plenty of early window
-managers worked this way), and it also means erasing the border at
-its old position can leave a visible gap if it happened to overlap
-another window's border mid-drag -- purely cosmetic and self-corrects
-at the release-time repair.
+**The outline is one XOR rectangle.** It used to be erase-then-redraw
+(`draw_window_box()` with color 0, then color 1), and the erase wrote
+black over every pixel the old outline crossed -- gouging a trail
+through whatever was underneath that survived until the release
+repair. XOR is its own inverse, so the call that takes the band off
+its old position restores exactly what it was covering.
+`xor_band_draw()`/`xor_band_erase()` (`wm.c`) keep the geometry of the
+last draw rather than recomputing it, because a clamp that differed
+between the draw and the erase would leave a pixel inverted for good;
+and they force the chrome region off, because a clipped XOR is not its
+own inverse either.
+
+**XOR only cancels if nothing underneath changes between the two
+halves of the pair.** A clock ticking or a terminal scrolling under
+the band breaks that, and three separate attempts at repainting the
+origin mid-gesture all left trails for exactly this reason. So the
+first pixel of motion **freezes every window** -- see "Freezing the
+desktop for a drag" below -- and `wm` waits, bounded, for the acks
+before drawing the first band. The dragged window is frozen too: it
+stays on the glass where it was, a still ghost, until release.
+
+The consequence: while a window is being dragged, nothing on screen
+changes except the band -- including the dragged window's own content,
+which sits at the origin rather than travelling with the outline. This
+is still the well-worn, intentionally simple "wireframe drag" pattern
+(plenty of early window managers worked this way); what is new is that
+the stillness it depends on is something `wm` now asks for and waits
+for, rather than something it hopes for.
+
+**The release repairs two rectangles, not the swept path.** `wm` used
+to track the whole bounding box the window passed through
+(`drag_min_x`/`drag_min_y`/`drag_max_x`/`drag_max_y`) and repair all of
+it; those four now survive only in a diagnostic line. The gesture put
+exactly two things on the glass -- the ghost, which sat still at the
+origin, and the band, which erased itself at every step -- so the only
+pixels that can be wrong are the ones the ghost was covering (the
+**origin**, which belongs to whoever is behind it) and the ones the
+window has just claimed (the **destination**). `repair_drag()` sends
+every window its new region, fills the parts of the origin that no
+window owns (`fill_unowned()`), repaints the chrome inside the origin,
+and paints the dragged window's frame at the destination. A drag
+across the desktop is not a reason to repaint the desktop.
 
 ## Input
 
@@ -150,12 +185,19 @@ a register, and coalescing is what apps want anyway (see `Z_WM_MOUSE`
 below, which tells an app to act on the LAST sample it finds rather
 than every one).
 
+On a board that has one, a **software mouse register** is a third
+source alongside the two ports, written by another process rather than
+by a HID controller -- it overrides `mouse_port()`'s pick while it is
+active. That is ULX3S-specific; see `docs/user_input.md`, "A pointer
+with no hardware behind it".
+
 What changed is when that loop runs. It used to wake every tick
 (~732Hz) purely so it would notice the pointer moving; the HID
 interrupt now wakes it on each report instead, so an idle desktop
-stops waking `wm` almost entirely. The register read is unchanged --
-only the polling schedule went away. See `docs/user_input.md`,
-"Pointer wakeups", and `docs/app_runtime.md`, "Who blocks, and how".
+stops waking `wm` almost entirely -- and the wait is indefinite unless
+`wm` has a deadline of its own. The register read is unchanged -- only
+the polling schedule went away. See `docs/user_input.md`, "Pointer
+wakeups", and `docs/app_runtime.md`, "Who blocks, and how".
 
 - **Click on a window** brings it to front and focuses it -- but only
   repaints if focus or z-order actually changed (clicking an
@@ -184,30 +226,35 @@ mouse does.
 
 ## Moving and resizing
 
-Both gestures work the same way now, and both blank the window's
-interior when they start (`clear_window_interior()` in `wm.c`).
+They no longer work the same way, and the difference is worth saying
+first: **a resize blanks the window's interior when it starts**
+(`clear_window_interior()` in `wm.c`), **a move does not**.
 
 Without that blanking the app's content stays painted where it was
-while the frame moves or changes shape around it, so the window
-visibly comes apart mid-gesture. Content is restored at the end: the
-release-time `repair_region()` asks the owner to repaint and waits for
-it. That also covers a titlebar click that never becomes a drag, since
-the repair runs on release either way.
+while the frame changes shape around it, so the window visibly comes
+apart mid-gesture. A move has no such problem to solve: the content is
+not left behind at a size that no longer fits, it is left behind whole
+at the origin, and that is exactly the still ghost the XOR band is
+drawn over (see "Redraw strategy" above). Blanking it would destroy
+the one thing the band relies on being able to put back.
 
-**Moving** redraws the frame at each step and repairs the whole swept
-bounding box on release — *including* the window's own final
-footprint. It used to repair four strips around that footprint and
-skip the footprint itself, on the reasoning that the border there was
+**Moving** draws the XOR band at each step and repairs the origin and
+the destination on release. It used to repair the whole swept bounding
+box, and before that four strips around the final footprint with the
+footprint itself skipped, on the reasoning that the border there was
 already correct. Two things made that wrong, and both showed as
 corruption after a *small* move: titlebar content is not part of
 `draw_window_box()`, so the old title text and icons survived inside
 the new footprint where the strips never reached; and only the dragged
 window's owner was asked to repaint, leaving any other window
 overlapping the footprint stale. A large move happened to look fine
-because the old text landed in a swept strip.
+because the old text landed in a swept strip. Both are covered by the
+release repair now, which repaints the moved window's chrome at the
+destination and asks whoever gained pixels at the origin to repaint --
+see `repair_drag()`.
 
 **Resizing** now moves the real frame rather than drawing a separate
-preview: erase the frame, adopt the candidate size, draw it again —
+preview: XOR the frame away, adopt the candidate size, XOR it back —
 the same three steps the move drag uses. `w`/`h` follow the candidate
 live, which is safe because pointer dispatch and hit testing are both
 suspended while `resizing` is set; the app is still told once, on
@@ -258,18 +305,29 @@ to `z_icon_id_t` (`zicon.h`), add the 8-byte bitmap, add a
 
 ## Moving a window
 
-A drag is a wireframe operation: only the border follows the cursor,
-and content is frozen until the button comes up. Two things follow
-from that which were originally wrong.
+A drag is a wireframe operation: only the band follows the cursor, and
+content is frozen until the button comes up. "Frozen" is now literal --
+every window is told to stop drawing for the duration (see "Freezing
+the desktop for a drag") -- and three things follow from that, each of
+which was wrong at some point.
 
-**The interior is blanked when the drag starts**, before any movement
-(`clear_window_interior()` in `wm.c`). Without it the window's insides
-stay drawn wherever they were, visibly detached from the frame that is
-now somewhere else — which reads as a rendering fault rather than as
-"content updates on release". This happens on the press that begins a
-drag, not on any titlebar click: a click that merely focuses or raises
-a window has no reason to discard its content and make the owner
-redraw.
+**The interior is no longer blanked when the drag starts.** It used to
+be, before any movement (`clear_window_interior()`, still used by the
+resize path), on the reasoning that the window's insides otherwise stay
+drawn wherever they were, visibly detached from the frame that is now
+somewhere else. That reasoning belongs to a drag in which the *content*
+was expected to be stale: it was drawn under a region that no longer
+described it, and nothing was stopping it being redrawn wrong. With the
+window frozen, its content at the origin is not stale, it is a correct
+picture of where the window still logically is -- a ghost, not debris --
+and it is what the XOR band needs underneath it in order to cancel.
+Blanking it would replace a still image with a black rectangle and
+still have to repaint everything at release.
+
+Neither form ever fired on a plain titlebar click: a click that merely
+focuses or raises a window has no reason to discard its content and
+make the owner redraw. That is why `drag_moved` exists, and why the
+freeze happens on the first pixel of motion rather than on the press.
 
 **The repair on release covers the window's own footprint**, not just
 the strips around it. `repair_drag()` used to repair four strips and
@@ -283,9 +341,24 @@ correct. That missed two things:
 - Alt+Arrow doesn't erase the old frame at all, so the old **border**
   survived inside the new footprint too.
 
-It is now a single `repair_region()` over the swept bounding box, which
-also means each affected app gets one redraw request instead of up to
-four.
+Both are covered by painting the moved window's whole chrome at the
+destination, which `repair_drag()` does last so it lands on top of the
+origin repair.
+
+**The origin is repaired, not the sweep.** A single `repair_region()`
+over the swept bounding box replaced the four strips, and the sweep in
+turn has been replaced by the origin rectangle -- with the desktop
+frozen, the band is the only thing that ever touched the pixels in
+between, and it took itself back off. `fill_unowned()` fills the parts
+of the origin no window owns, `repair_chrome_in_rect()` repaints the
+frames of the ones that do, and the apps behind are asked to repaint by
+their regions widening, not by a rectangle.
+
+**Alt+Arrow is the same path, one step long.** `alt_move_focused()`
+freezes just the window it is about to move (and waits for that one
+ack), moves it, and calls `repair_drag()`. The freeze is what stops the
+moved window blacking out the part of the origin the destination does
+not cover while the windows behind are still repainting it.
 
 ## Modal windows
 
@@ -330,10 +403,13 @@ defined outcome rather than an undefined one.
 
 `repair_region()` clears a rectangle, redraws the chrome of every
 window overlapping it, and asks each of those windows' owners to
-repaint their content — synchronously, waiting for an ack.
+repaint their content. It used to do that last part synchronously,
+waiting for an ack before moving on to the next window; it does not
+any more, and "Content z-order" below says why the wait stopped buying
+anything once regions existed.
 
-Two of those requests turned out to be pure waste, and both were
-visible as a flash when opening a dialog:
+Two of those requests turned out to be pure waste even so, and both
+were visible as a flash when opening a dialog:
 
 **A region the excluded window covers entirely.** A window being
 created or brought to the front is repaired using its *own* rect, so
@@ -347,8 +423,15 @@ skips the notify-and-wait for every window **behind** the excluded one
 **A focus change.** Losing focus alters exactly one thing about a
 window: how wm draws its titlebar. wm draws that itself, so repairing
 the full rect asked the owner for a complete content redraw it had no
-reason to do. The modal focus-steal now repairs only
-`Z_WM_TITLEBAR_H`.
+reason to do. Narrowing the repair to `Z_WM_TITLEBAR_H` was the first
+fix; a focus change now goes through `repair_focus_chrome()` instead,
+which calls `paint_window_chrome()` on the two windows involved and
+nothing else -- no rectangle is cleared, no owner is notified at all.
+`paint_window_chrome()` blanks only the chrome's own pixels
+(`draw_window_chrome_bg()`: the titlebar interior, the separator row
+and the one-pixel margins), so a frame can be repainted without
+touching a pixel of the content inside it. That is what makes it safe
+to repaint chrome without asking anyone to repaint content.
 
 **A window retitling itself.** `Z_WM_SET_TITLE` had already narrowed
 the *region* to the titlebar strip, but still passed `exclude_idx =
@@ -683,11 +766,11 @@ from the dock) has a keyboard equivalent, all handled directly in
   pixels in that direction, clamped to the screen the same way a mouse
   drag already is -- a no-op if the dock is what's focused (its
   position is fixed, see `create_dock()`). Implemented as an instant,
-  single-step version of a mouse drag: `alt_move_focused()` updates
-  the window's position directly, then hands the before/after
-  bounding box to `repair_drag()` -- the exact same sweep-region
-  repair a real drag-release already uses (see "Redraw strategy"
-  above) -- rather than re-deriving that logic.
+  single-step version of a mouse drag: `alt_move_focused()` freezes
+  just that window, updates its position directly, and calls
+  `repair_drag()` -- the exact same origin-and-destination repair a
+  real drag-release uses (see "Redraw strategy" above) -- rather than
+  re-deriving that logic.
 - **The dock is now focusable** (Alt+Tab reaches it like any other
   window) and, while it has focus, Left/Right/Up/Down move a selection
   cursor between icons (wrapping around) and Enter launches the
@@ -750,8 +833,8 @@ shapes. Summary:
 | wm → app | `Z_WM_KEY` | packed `Z_UINT32` (`Z_WM_PACK_KEY`) | key press/release, focused window only -- see `docs/user_input.md` |
 | app → wm | `Z_WM_SET_TITLE` | `Z_MAP{id, title}` | retitle an existing window -- repairs the titlebar strip only |
 | wm → app | `Z_WM_TITLEBAR_ICON` | packed `Z_UINT32` (`Z_WM_PACK_TBICON`) | a new/save/open/font titlebar icon was clicked |
-| wm → app | `Z_WM_SET_CLIP` | `Z_BLOB` of `z_wm_cliprect_t[]` | the part of this window not covered by the windows in front of it |
-| app → wm | `Z_WM_CLIP_DONE` | `Z_UINT32` (window id) | acknowledges a `Z_WM_SET_CLIP` |
+| wm → app | `Z_WM_SET_CLIP` | `Z_BLOB` of `z_wm_cliprect_t[]`, led by a control rectangle naming the window | the part of this window not covered by the windows in front of it, or a command about its clip |
+| app → wm | `Z_WM_CLIP_DONE` | `Z_UINT32` (window id, plus `Z_WM_CLIP_DONE_DREW`) | acknowledges a `Z_WM_SET_CLIP` |
 
 **Every windowed app must handle `Z_WM_SET_CLIP`.** Three lines:
 
@@ -761,12 +844,25 @@ case Z_WM_SET_CLIP:
     break;
 ```
 
-The ack `z_win_apply_clip()` sends is not optional -- `wm` waits for
-it when a region *narrows*, and an app that applies the region without
-acking stalls `wm` for the full timeout on every overlap. An app that
-handles the message not at all is simply unclipped, which is safe but
-means it can draw over the windows in front of it. See "Visible
-regions".
+An app that handles the message not at all draws **nothing**, which is
+the opposite of what it used to be: until a window has been told a
+region it is treated as invisible rather than as unclipped. See
+"Visible regions" for why that swapped round.
+
+The ack `z_win_apply_clip()` sends is still not optional, though the
+reason changed. `wm` no longer waits for it on a narrowing region; it
+waits for it at the start of a drag, when it needs to know the screen
+has actually gone still before drawing the first rubber band, and it
+reads `Z_WM_CLIP_DONE_DREW` out of it to find out which windows tried
+to paint while they were frozen. An app that applies regions without
+acking makes the first band of every drag wait out the freeze timeout
+and can leave its own window stale after one.
+
+`z_win_apply_clip()` returns **false** for a region belonging to some
+*other* window of the same process -- the control rectangle at the
+front of the payload says which window it is for. An app that owns a
+dialog as well as its main window must offer the message to each in
+turn rather than letting the first one swallow it.
 
 A client app's request/reply exchange looks like:
 
@@ -835,13 +931,76 @@ the pattern.
 An app should redraw in response to `Z_WM_REDRAW`/`Z_WM_WINDOW_MOVED`,
 and also whenever its own internal state changes independent of the
 wm (a clock ticking, data arriving, etc.) -- the wm has no way to know
-about the latter, so apps drive those redraws themselves. If an app
-does this on a timer (like `hello_win`'s counter), don't just check
+about the latter, so apps drive those redraws themselves. The one time
+it should not is while `z_win_frozen()` is true -- see "Freezing the
+desktop for a drag". If an app does this on a timer (like
+`hello_win`'s counter), don't just check
 messages once before and once after a long delay -- poll in small
 chunks throughout it (see `TICK_ITERATIONS`/`POLL_CHUNK` in
 `hello_win.c`), or a `Z_WM_REDRAW` arriving mid-wait sits unprocessed
 until the whole delay elapses, which is very noticeable if the delay
 is more than a fraction of a second.
+
+### Damage: what the redraw actually invalidated
+
+`Z_WM_PACK_XY` uses bits 0..27, so there were spare high bits, and one
+of them is now `Z_WM_REDRAW_DAMAGE`. With it set, the redraw means
+**only the pixels this window's region just gained** -- not "everything
+you can see".
+
+The distinction earns its bit on a raise. Clicking a partly covered
+window uncovers a strip of it; without damage, the only thing `wm` can
+say is "repaint", and the app repaints all of itself -- which on this
+machine is not free. With three terminals behind a click that was
+around 0.8 s of wall time spent putting pixels back exactly where they
+already were, visible as a black curtain sweeping the window, and every
+stripe of it re-encoded by the remote desktop on the way out.
+
+`z_win_damage_rects()` (`zwin.h`) hands an app the rectangles. It is
+worth reading its contract in full, because the three return values are
+genuinely different situations:
+
+| | |
+|---|---|
+| `-1` | everything the window can see. A cleared rectangle, a full-screen repaint, a move, a resize, or the first region the window was ever given. |
+| `0` | nothing. The region changed in a way that took pixels away and gave none back; every pixel the window still owns is already on the glass, and the app may return without painting. |
+| `>0` | that many rectangles, in screen coordinates. Repainting their intersection is enough. |
+
+**Ignoring it entirely is still correct.** The shared layer confines
+every `z_win_*` draw to the same rectangles for the duration of the
+redraw, so an app that repaints itself whole puts exactly the same
+pixels on the glass -- it just does the work of drawing the ones that
+were already right. Only an app that keeps its own model of what is on
+screen (`term`'s shadow) has to care, and only to save the work. An app
+whose content is not addressable by rectangle -- `gpu3d` re-renders a
+whole frame, and painting only the newly exposed strip would leave the
+previous frame standing in the rest of the window -- says so with
+`z_win_damage_ignore()` and repaints in full.
+
+Two rules keep a damage list from being wrong rather than merely
+narrow, and both were learned by getting them wrong:
+
+- **An empty damage list means empty, not unrestricted.** Zero
+  rectangles would be read by `zgfx` as "no clipping" -- the same trap
+  `Z_WM_SET_CLIP` documents -- so a redraw whose damage worked out
+  empty used to be answered with a full, unclipped repaint. That is
+  the curtain again, arriving by a different road. `z_win_t.paint_set`
+  is what distinguishes the two.
+- **A full redraw cannot be narrowed by a damage that arrives after
+  it.** Apps drain their whole queue before painting, and `wm` can
+  legitimately send both in one breath: destroying a window repairs the
+  rectangle it left (everything) and then widens the regions underneath
+  it (a damage). `z_win_t.paint_full` latches the wider of the two.
+
+The "what the window gained" arithmetic needs a "before", and that is
+`clip_was` (`zwin.h`): the region as of the last *paint*, not the last
+`Z_WM_SET_CLIP`. It is intersected with each new region rather than
+overwritten, which matters for two cases that overwriting got wrong --
+a drag that uncovers a hole in several steps (the damage has to be the
+union of everything newly visible, not just the last strip), and a
+window lowered and then raised again with no repaint in between (whose
+"before" must not still be the region it had before it was lowered, or
+the damage works out empty and the window comes back blank).
 
 ### Content z-order
 
@@ -854,23 +1013,46 @@ window behind another one could easily have its content redraw
 last-write-wins on the framebuffer), its content would show through on
 top of the window that's supposed to be in front of it.
 
-`Z_WM_REDRAW_DONE` (app -> wm, `zwm.h`) fixes this: `repair_region()`
-walks its overlapping windows strictly back-to-front, and after
-sending `Z_WM_REDRAW` to each one, blocks (`wait_for_redraw_done()` in
-`wm.c`) until that specific app acks with `Z_WM_REDRAW_DONE` before
-moving on to the next (more frontmost) window. `z_win_redraw_done()`
-in `zwin.c` is the app-side call -- `hello_win` sends it right after
-finishing the redraw that `Z_WM_REDRAW` triggered, not for redraws it
-initiates on its own (the wm isn't waiting on those).
+`Z_WM_REDRAW_DONE` (app -> wm, `zwm.h`) was the first answer:
+`repair_region()` walked its overlapping windows strictly back-to-front
+and, after sending `Z_WM_REDRAW` to each one, blocked
+(`wait_for_redraw_done()` in `wm.c`) until that specific app acked
+before moving on to the next, more frontmost window.
+
+**Visible regions replaced it, and the replacement is stronger.**
+Ordering by ack makes a late repaint land in the right *order*;
+clipping makes it land in the right *place*, whenever it lands. A rear
+window's drawing cannot reach the front window's pixels at all, because
+those pixels are not in its region -- so there is nothing left for the
+ordering to protect against, and `repair_region()` now sends its
+redraws fire-and-forget. `wait_for_redraw_done()` is still in `wm.c`,
+unreferenced, along with the reasoning above.
+
+Dropping the wait was not just tidiness. It froze the pointer for the
+sum of every overlapping app's full repaint, which on a focus click
+with several terminals behind it was seconds of black, and it did that
+while holding `wm` inside a message handler -- see "Known limitations"
+for the reentrancy that implies. Regions removed the only reason to pay
+for it.
+
+`z_win_redraw_done()` (`zwin.c`) is still the app-side call, and it
+matters more than it used to rather than less. `wm` is no longer
+waiting on the message, but the call itself is what tells the shared
+layer that everything asked of this window is now on the glass: it
+commits `clip_was`, which is the baseline the **next** redraw's damage
+is measured against (see "Damage" above). An app that repaints and
+never calls it computes its next damage against a stale picture of what
+it has painted. Call it after servicing a `Z_WM_REDRAW`, not for
+redraws the app initiates on its own.
 
 ### Visible regions
 
-The ack ordering above keeps *repairs* correct, but it only covers
-drawing an app does **because wm asked it to**. An app that redraws on
-its own -- a clock ticking, a terminal receiving output -- was clipped
-only to its own content rect, not to the part of that rect actually on
-screen. So a clock running behind a text editor drew its hands
-straight through the editor.
+The ack ordering above kept *repairs* correct, but it only ever
+covered drawing an app does **because wm asked it to**. An app that
+redraws on its own -- a clock ticking, a terminal receiving output --
+was clipped only to its own content rect, not to the part of that rect
+actually on screen. So a clock running behind a text editor drew its
+hands straight through the editor.
 
 Each window now has a **visible region**: its own rectangle minus every
 window in front of it. `wm` computes it (`region_compute()` in `wm.c`)
@@ -884,39 +1066,120 @@ it would permit exactly the drawing this prevents.
 `sw/apps/wm/tests/test_region.c` checks the computation pixel by pixel
 and asserts that a bounding box gets it wrong.
 
-**An empty list means unrestricted, not invisible.** That is the state
-before wm has said anything, and it has to mean "draw normally" or a
-process would be blank until its first region message. A fully
-occluded window is sent **one empty rectangle**, never zero of them.
+**An empty list is not "no clipping" -- and neither is having been
+told nothing.** Zero rectangles would be read by `zgfx` as
+unrestricted, so a fully occluded window is sent **one empty
+rectangle**, never zero of them.
 
-**Only narrowing waits.** A shrinking region means a window moved in
-front, and the app must stop drawing into those pixels *before* that
-window is drawn -- so wm sends and waits for `Z_WM_CLIP_DONE`. A
-widening region means a window was uncovered: drawing less than
-permitted for a moment is stale, not wrong, so that one is
-fire-and-forget. Waiting on both would cost a round trip per window on
-every mouse-move during a drag.
+The state *before* wm has said anything went the other way round, and
+the reversal is the single most consequential line in this protocol.
+It used to mean "draw normally", on the reasoning that a window would
+otherwise be blank until its first region message. It now means draw
+**nothing** (`win_use_clip()`, `zwin.c`): a window is born invisible.
+Unrestricted was the wrong default because a window's first region can
+still be in flight while it paints, and an unrestricted first paint
+lands on every window above it -- which is precisely what regions exist
+to stop, arriving in the one gap the protocol had left open.
 
-A window's **first** region is not a narrowing. It has never been told
-it owns anything, so there is nothing to take away -- and waiting for
-it deadlocks, because the app is still inside `z_win_create()` and its
-first repaint, neither of which reads the message queue.
+The blankness that argument was guarding against does not happen,
+because the two halves are delivered together: wm sends the region
+first and a `Z_WM_REDRAW` immediately behind it (`send_clip_ex()`), so
+a window that could not paint before its first region is asked to paint
+the moment it has one. Read those two paragraphs together or the first
+one reads like a bug.
 
-**A widening region needs a redraw.** The area a window just uncovered
-still holds whatever was on top of it, and the region message does not
-ask for a repaint. `send_clip()` sends one -- and waits for it, because
-`wait_for_redraw_done()` matches any ack from a pid rather than a
-particular request, so more than one outstanding redraw per app lets a
-stale ack satisfy the wrong wait.
+**Nothing waits any more.** A shrinking region means a window has moved
+in front, and the app must stop drawing into those pixels before that
+window is drawn -- so wm used to send and wait for `Z_WM_CLIP_DONE`,
+while a widening region, where drawing less than permitted for a moment
+is stale rather than wrong, was fire-and-forget.
 
-**Copies cannot be clipped.** `z_fb_hw_scroll()` and
-`z_fb_hw_blit_vram()` are refused while a region is set: the blitter's
-copy source aligns to the destination *word*, so a scissor that moves
-the first written word feeds the engine the wrong data, and rounding
-the region down to a word boundary would let the copy write up to 31
-pixels over the window in front. A partially occluded window repaints
-instead of scrolling. See `docs/gpu_blitter.md`, "Copy and the
-scissor".
+The premise was right and the wait was still wrong, for a reason that
+only showed once it was in. Every wait blocks wm inside a message
+handler (see "Content z-order"), and regions need sending on creation,
+on every raise and on every drag -- so where there had been one such
+point there were now several, and every app that happened to be busy
+starting up became a timeout. The launch that timed out was the one
+that appeared not to start.
+
+And the wait buys nothing now. What `repair_region()`'s ordering
+protected against was a rear window's late repaint landing on top of a
+front window's; clipping makes that impossible regardless of timing,
+because those pixels are not in the rear window's region at all. The
+worst case without the wait is an app drawing against a stale region
+for the few milliseconds until it reads its queue -- and the window
+that just covered it is repainted immediately afterwards anyway, so
+even that self-heals.
+
+A window's **first** region is still special, just not as a narrowing.
+It has never been told it owns anything, so there is nothing to take
+away. Waiting for it also deadlocked, because the app is still inside
+`z_win_create()` and its first repaint, neither of which reads the
+message queue.
+
+**Only a window that GAINED pixels gets a redraw.** The area a window
+just uncovered still holds whatever was on top of it, and the region
+message does not ask for a repaint, so `send_clip_ex()` sends one --
+with `Z_WM_REDRAW_DAMAGE` set, naming exactly the pixels that were
+gained.
+
+Comparing total area is not enough to find them: the common drag has
+the window behind losing a strip on one side and gaining one on the
+other, with the area unchanged, and the gained strip left black. So
+`region_gains()` subtracts the old region from the new one and asks
+whether anything is left.
+
+The other direction is the expensive one, and it is why this is
+"gained" rather than "changed". A window whose region merely **shrank**
+has nothing new to paint -- every pixel it still owns is already on the
+glass, and the pixels it lost belong to whoever covered them and are
+that window's to repaint. Asking it to repaint anyway was the curtain:
+three terminals behind one click, each redrawing itself entirely for no
+visible change. The one case that argued for telling it anyway -- a
+self-animating app like `gpu3d`, which learns of a narrowing only from
+`Z_WM_SET_CLIP` -- turns out not to need it either: what it keeps in
+the still-visible part is exactly what was there before.
+
+**Copies can be clipped now, within limits.** `z_fb_hw_scroll()` and
+`z_fb_hw_blit_vram()` used to be refused outright whenever a region
+was set at all, because the blitter's copy source aligns to the
+destination *word*, so a scissor that moves the first written word
+feeds the engine the wrong data. That is still true of the hardware --
+but the right question is about the *destination*, not about whether a
+region exists: `copy_region_allows_rect()` (`zgfx.c`) allows the copy
+when the destination lies inside a single visible rectangle, because a
+scissor that cannot cut cannot get anything wrong. A window that is
+merely focused, or covered nowhere near where it is scrolling, keeps
+its hardware scroll; a genuinely partially occluded one still repaints
+instead. Several rectangles are still refused, since proving the union
+contains the destination needs coverage rather than containment.
+
+The memory-to-VRAM path obeys differently. `z_fb_hw_blit_mem()` walks
+the visible region and intersects the destination with each rectangle,
+moving the source origin by the same offsets, one pass per rectangle --
+so the canvas apps keep their blit whatever is on top of them. See
+`docs/gpu_blitter.md`, "Copy and the scissor", which carries the full
+arithmetic.
+
+**The region says which window it is for.** A process owns more than
+one window as soon as it opens a dialog (`sw/common/zdialog.c`), and
+messages arrive in one queue per **process**, not per window. So every
+`Z_WM_SET_CLIP` payload begins with a control rectangle --
+`x0 == Z_WM_CLIP_CTL`, `y0 == Z_WM_CLIP_WINDOW`, the window id in `y1`
+-- which `z_win_apply_clip()` consumes and never installs.
+`Z_WM_CLIP_CTL` is `INT16_MIN`, which can never be a screen
+coordinate, and the rectangle is degenerate, so a receiver that does
+not understand it reads it as empty, which is the harmless reading.
+
+Without it the receiver cannot tell whose region it just got, and
+applying the newest one to whichever `z_win_t` is at hand is wrong
+exactly half the time. It showed as a dialog with no buttons: the
+region meant for the dialog went to the parent, the dialog was never
+told one, and a window that has not been told a region draws nothing at
+all.
+
+`clip_payload()` (`wm.c`) writes the control rectangle rather than
+each call site doing it, so the freeze path cannot forget it.
 
 `repair_region()` takes an `exclude_idx` parameter for one specific
 case: right after `create_window()`, the brand-new window's own chrome
@@ -924,41 +1187,106 @@ needs drawing (and repair_region() is what does it) before its owner
 gets its `Z_WM_WINDOW_CREATED` reply -- otherwise the owner's
 `z_win_create()` can return, and its first drawing calls can run,
 before the wm has drawn so much as a border for it. But that same new
-window's owner can't be sent `Z_WM_REDRAW`/waited on for an ack the
-normal way, since it's still blocked waiting for the very reply that
-hasn't been sent yet -- its `z_msg_wait()` would silently discard the
-`Z_WM_REDRAW` (it doesn't match what it's waiting for), and
-`wait_for_redraw_done()` would stall for the full timeout on every
-single window creation. `exclude_idx` skips just the notify+wait step
+window's owner can't be sent `Z_WM_REDRAW` the normal way, since it's
+still blocked waiting for the very reply that hasn't been sent yet --
+its `z_msg_wait()` would silently discard the `Z_WM_REDRAW` (it doesn't
+match what it's waiting for). `exclude_idx` skips just the notify step
 for that one window (chrome still gets drawn) while behaving normally
 for every other window `repair_region()` touches.
 
-This blocks `wm`'s whole main loop -- no mouse handling, no other
-apps' requests serviced by the normal poll -- until the *specific* app
-being waited on acks or a timeout (`REDRAW_ACK_TIMEOUT` in `wm.c`,
-not a precise time unit) elapses. `wait_for_redraw_done()` does still
-call `handle_message()` for anything that isn't the ack it's waiting
-for, so other apps' requests aren't silently dropped the way they
-would be with `z_msg_wait()` -- but they are *processed reentrantly*,
-from inside `repair_region()`, which has a real edge case: if handling
-one of those other requests itself calls `repair_region()` again (e.g.
-another app's `Z_WM_CREATE_WINDOW` arrives mid-wait), the outer
-`repair_region()`'s loop over `zorder`/`zorder_count` can end up
-iterating over a table the inner call just mutated. Not crash-unsafe
-(the tables are fixed-size, so there's no out-of-bounds access), but
-the outer loop could act on a stale index. Rare in practice, not fixed
-here -- see "Known limitations".
+### Where this came from
 
-A slow-to-redraw app therefore stalls the whole UI until its timeout
-expires, which is a real cost for a fairly small amount of protocol.
-The alternative -- computing each window's actually-visible region
-(its rect minus whatever's covering it) and having apps clip to just
-that -- would let redraws happen in any order safely, but needs real
-multi-rectangle clipping (a window's visible area can be an irregular
-shape once more than one window overlaps it), which felt like more
-complexity than this phase warranted. Revisit if the stall becomes a
-real problem, or once resizing/proper occlusion support is worth
-building anyway.
+The ack-ordered scheme above ended with a note about what it was not
+doing yet, and it is worth quoting, because this section is the answer
+to it:
+
+> A slow-to-redraw app therefore stalls the whole UI until its timeout
+> expires, which is a real cost for a fairly small amount of protocol.
+> The alternative -- computing each window's actually-visible region
+> (its rect minus whatever's covering it) and having apps clip to just
+> that -- would let redraws happen in any order safely, but needs real
+> multi-rectangle clipping (a window's visible area can be an irregular
+> shape once more than one window overlaps it), which felt like more
+> complexity than this phase warranted. Revisit if the stall becomes a
+> real problem, or once resizing/proper occlusion support is worth
+> building anyway.
+
+The stall did become a real problem -- with several terminals on screen
+a focus click cost seconds of frozen pointer -- and the multi-rectangle
+clipping it named is what `region_compute()`, `z_gfx_set_visible()` and
+`z_wm_cliprect_t[]` are. Redraws do now happen in any order safely, and
+the waits are gone for exactly the reason predicted: they were paying
+for an ordering guarantee that clipping provides for nothing.
+
+What the note could not predict is the second half of the bill. Once a
+window can only paint inside its region, three things that used to be
+somebody's implicit responsibility have to be said out loud: what a
+redraw actually invalidated ("Damage" above), whether a window is
+allowed to paint at all right now ("Freezing the desktop for a drag"
+below), and which of a process's windows a region is for. Each of those
+is a protocol addition rather than a refinement, and each was found by
+something on screen being wrong rather than by design.
+
+### Freezing the desktop for a drag
+
+A titlebar drag is a wireframe over a still image, and "still" has to
+be enforced rather than assumed -- the XOR band only cancels if nothing
+underneath it changes between the draw and the erase (see "Redraw
+strategy").
+
+`Z_WM_CLIP_FREEZE` is how wm asks. It is a control rectangle, like the
+window id above, and it means **stop drawing, keep the glass**: the
+window's clip becomes the empty rectangle *without* the repaint a
+narrowing region would provoke, so whatever it is showing stays exactly
+where it is. There is no thaw command -- the next real region thaws it,
+because a region is state and the newest one is always the right one.
+
+`freeze_all()` sends it to every window and waits, bounded by
+`FREEZE_ACK_TIMEOUT_MS` (300 ms), for the acks before the first band is
+drawn. That is the one wait left in this protocol, and it is the only
+place a wait still buys something: it is the difference between a clean
+band and a trail.
+
+**An app that does not cooperate is still correct.** Its draws reach
+nothing, because its clip is empty. The problem is narrower and
+sharper: an app that keeps its own model of what is on screen --
+`term`'s shadow of the cells, `clock`'s record of where it last drew
+its hands -- updates that model as it "paints", the paint goes nowhere,
+and from then on the model disagrees with the glass. `clock` erases its
+old hands by drawing them in the background colour, so a frozen tick
+loses the old hands permanently.
+
+So `z_win_apply_clip()` remembers that a draw was attempted while
+frozen and reports it in the ack for the *thawing* region, as
+`Z_WM_CLIP_DONE_DREW`. wm answers that with a `Z_WM_REDRAW` even though
+the window's region did not change, and the app-side bookkeeping drops
+`clip_was` so that redraw is a full one. The safety net works; it costs
+a whole-window repaint per affected app per drag, which with three
+terminals running render loops is the curtain users see on release.
+
+The cure is for an app whose render is periodic to test
+`z_win_frozen()` (`zwin.h`) at the top of it and return without
+touching either the glass or its own model. What it wanted to draw
+stays pending -- a dirty flag still set, a hand not yet moved -- and
+the first tick after the thaw draws exactly that, which is a handful of
+cells rather than a window. `term` and `clock` both do this; the DREW
+ack remains for everything that does not.
+
+**The dragged window is frozen too, and stays where it was.** Nothing
+is lifted off the glass during the gesture: its content sits at the
+origin as a ghost, and the windows behind it are not told they have
+gained anything until the button comes up, when `repair_drag()` repairs
+the origin and they do.
+
+The alternative is to resolve that at the *start* instead -- freeze the
+dragged window, blank its origin, give the windows behind their regions
+as though it were gone, wait (bounded) for them to paint, and only then
+freeze the desktop and draw the band. It is implemented, behind
+`DRAG_ORIGIN_REPAINT` in `wm.c`, and off by default: it shows what is
+behind from the first pixel of motion, at the cost of the band
+appearing one repaint round later. `region_skip_idx` is what leaves a
+window out of every region computation for that, as if it were not on
+screen.
 
 ## The dock
 
@@ -1039,6 +1367,16 @@ installed is skipped rather than becoming a button that does nothing.
 `draw` lives on the sdcard rather than in the flash core-app archive,
 so it appears only when a card carrying it is present.
 
+**Present is not the same as runnable**, and the dock checks both. A
+candidate may name a `Z_FEATURE_*`/`Z_FEATURE2_*` bit
+(`dock_app_t.feature`/`feature2`), and `dock_build()` drops it when
+`z_soc_has_feature()` says this bitstream does not have that hardware
+-- `track`, `midi` and `play` need `Z_FEATURE_AUDIO`, `mmod` needs
+`Z_FEATURE2_GPIO`. The alternative is a button that starts an app only
+for it to exit a second later, which looks like a broken app rather
+than a board built without a peripheral. The same board can be
+reflashed with a bitstream that has it, and the icon comes back.
+
 `name` is the bare filename `z_proc_run()` (see `docs/app_runtime.md`)
 expects -- no path, no extension, same as what you'd type after `run` at
 the kernel shell.
@@ -1073,17 +1411,40 @@ main loop:
   back-to-front and returns the first match) without needing a
   separate, earlier check ahead of the normal hit-test call.
 - **Content is drawn synchronously, in-process.** `draw_dock()` is
-  called directly from `repair_region()`'s per-window loop, right
-  next to `draw_window_box()` -- not via `Z_WM_REDRAW` +
-  `wait_for_redraw_done()` like every other window's content. That
-  messaging round trip exists to let `repair_region()`'s
-  back-to-front ordering guarantee hold (see "Content z-order" above)
-  when content is drawn by a *different* process that might not be
+  called directly from `paint_window_chrome()`, right next to
+  `draw_window_box()` -- not via a `Z_WM_REDRAW` to another process
+  like every other window's content. That messaging round trip exists
+  because content drawn by a *different* process might not be
   scheduled for a while; the dock's content is drawn by `wm` itself,
-  in the same call, so there's nothing to wait for and no ordering
+  in the same call, so there is nothing to wait for and no ordering
   gap to close. (Same reasoning already applied to the demo windows,
   which just never draw any content at all -- the dock is the first
-  wm-owned window with real content of its own.)
+  wm-owned window with real content of its own.) It is also why
+  `send_clip()` skips every window whose owner is `wm`: the dock is
+  clipped to its visible region directly, by the same
+  `window_visible_region()` the regions are computed from, rather than
+  being told one over the wire.
+- **It clears its own background.** Everything else `draw_dock()` does
+  only *adds* ink: `z_fb_hw_box()` draws the slot outlines, and
+  `draw_icon_bitmap()` sets an icon's 1-bits and leaves the 0-bits
+  alone. So every pixel of the dock that is neither an outline nor an
+  icon's own ink -- the gaps between slots, the padding, the dark
+  inside of every icon -- was whatever the last thing to paint there
+  left behind, and a repaint could not take it back.
+
+  A window dragged onto the dock is exactly that. While it sits there
+  its frame legitimately owns those pixels; when it leaves, the dock
+  repaint puts the outlines and the icons back and leaves the departed
+  window's two border columns standing inside the dock, one pixel wide,
+  top to bottom -- 55 stray pixels in one measured case, all at the
+  window's own x edges, and precisely in the zones nothing cleared (the
+  two rows `draw_window_chrome_bg()` does clear came back correct).
+
+  So the dock fills its interior first, clipped to its own visible
+  region so a window legitimately covering it is not overpainted. That
+  is the rule the rest of the compositor already follows: every pixel
+  has exactly one owner, and the owner repaints it whole. The border
+  itself belongs to `draw_window_box()` and is left alone.
 
 Icon content is real per-app pixel art: 32x32 1bpp bitmaps (the
 framebuffer itself is 1bpp, see `zgfx.h`), generated from source PNGs
@@ -1184,6 +1545,42 @@ to draw, and it's the mechanism referred to in "apps are trusted"
 below: nothing stops an app from calling `zgfx.h` directly with no
 clip, or writing to VRAM itself, but an app that only calls `z_win_*`
 physically cannot draw outside its own window.
+
+**Every one of those calls loads this window's own region into `zgfx`
+before it draws**, rather than trusting whatever region was in force
+from the last thing that drew. The region is stored per window
+(`z_win_t.clip`), not per process, and that distinction is not
+theoretical: an app owns more than one window the moment it opens a
+dialog, the two have different visible regions, and a
+process-global region meant whichever arrived last won. The symptom was
+a dialog whose button outlines and list-box frame sat outside its
+parent's region and were clipped away.
+
+`z_win_content_rect()` carries the same load, because it is the
+chokepoint an app goes through before drawing with raw `z_fb_*` calls.
+Putting it there rather than asking every app to remember is the whole
+reason the guarantee holds for apps that were written before regions
+existed.
+
+### What an app owes the compositor
+
+Four calls, all in `zwin.h`, and the first two are the ones that cost
+nothing to get right and are expensive to get wrong:
+
+| | |
+|---|---|
+| `z_win_apply_clip()` | on `Z_WM_SET_CLIP`. Returns false if the region belongs to another of this process's windows -- offer it to the next one rather than swallowing it. |
+| `z_win_redraw_done()` | after servicing a `Z_WM_REDRAW`. Commits what is now on the glass, which is what the next damage is measured against. |
+| `z_win_damage_rects()` | optional. What this redraw actually invalidated; ignoring it is correct, just slower. `z_win_damage_ignore()` gives the restriction back for a repaint that cannot be expressed as rectangles. |
+| `z_win_frozen()` | optional but strongly advised for any periodic render. True while a drag is in progress: draw nothing, change nothing, keep it pending. |
+
+`z_win_paint_begin()`/`z_win_paint_next_rect()`/`z_win_paint_end()`
+are for an app repainting a large area under a multi-rectangle region:
+they walk the region one hardware-scissor rectangle at a time, and
+between `next_rect()` returning 1 and the following call, glyph blits
+skip their per-cell scissor setup. `term` uses them for a full-screen
+repaint; nothing else needs to. They must be paired and must not be
+nested.
 
 See `docs/app_runtime.md` for the full app-runtime picture this all
 sits within (`zeitlos.h/c`, the syscall trampoline, process startup)
@@ -1586,16 +1983,22 @@ a convenient API, not a hard guarantee.
 
 ## Known limitations / future work
 
-- **A partially occluded window cannot scroll in hardware.**
-  `z_fb_hw_scroll()` and `z_fb_hw_blit_vram()` are refused while a
-  visible region is set, so `term` repaints instead of scrolling when
-  something overlaps it. The blitter's copy source aligns to the
-  destination *word*, so a scissor that moves the first written word
-  feeds it the wrong data -- and rounding the region down to a word
-  boundary would let the copy write up to 31 pixels over the window in
-  front, which is the bug regions exist to prevent. The real fix is in
-  `gpu_blit.v`'s shifter priming; see `docs/gpu_blitter.md`, "Copy and
-  the scissor".
+- **A partially occluded window still cannot scroll in hardware** --
+  though it no longer loses the scroll merely for having a region.
+  `z_fb_hw_scroll()` and `z_fb_hw_blit_vram()` were refused whenever a
+  visible region was set at all; `copy_region_allows_rect()` now allows
+  the copy when the destination lies inside a single visible rectangle,
+  so `term` keeps its hardware scroll while it is focused or covered
+  somewhere else, and repaints instead only when the region genuinely
+  cuts it. Several rectangles are still refused, because proving the
+  union contains the destination needs coverage rather than
+  containment. The underlying hardware limit is unchanged: the
+  blitter's copy source aligns to the destination *word*, so a scissor
+  that moves the first written word feeds it the wrong data, and
+  rounding the region down to a word boundary would let the copy write
+  up to 31 pixels over the window in front -- the bug regions exist to
+  prevent. The real fix is still in `gpu_blit.v`'s shifter priming; see
+  `docs/gpu_blitter.md`, "Copy and the scissor".
 
 - **A visible region is capped at 8 rectangles.** Past that the region
   *shrinks* rather than dropping rectangles: a region larger than the
@@ -1604,26 +2007,42 @@ a convenient API, not a hard guarantee.
   `sw/apps/wm/tests/test_region.c` asserts overflow produces zero
   unsafe pixels.
 
-- **`wait_for_redraw_done()` matches by pid, not by request.** Safe
-  only while `wm` keeps one redraw outstanding per app at a time,
-  which it does. Breaking that assumption lets a stale ack satisfy a
-  later wait -- `wm` then proceeds believing a repaint happened that
-  did not, having already cleared the region. If several outstanding
-  redraws are ever wanted, the fix is a request tag in `Z_WM_REDRAW`
-  and its `DONE`, not more careful sequencing.
+- **Acks are matched by pid, not by request.** `Z_WM_REDRAW_DONE`
+  carries a window id but nothing matches on it, so a process with two
+  windows answers for both with the same message. That was load-bearing
+  while `repair_region()` waited, and it is not any more: the only
+  waits left are the drag freeze (`freeze_all()`, which wants one ack
+  per window and does match `Z_WM_CLIP_DONE` by window) and the
+  disabled `DRAG_ORIGIN_REPAINT` path. If per-request matching is ever
+  wanted, the fix is a request tag in `Z_WM_REDRAW` and its `DONE`, not
+  more careful sequencing.
 
-- **`repair_region()` reentrancy during an ack wait.** Covered in
-  detail under "Content z-order" above: `wait_for_redraw_done()`
-  processes other apps' requests (including ones that call
-  `repair_region()` again) while blocked waiting for one app's ack,
-  so an outer `repair_region()` call's loop over `zorder` can end up
-  iterating a table an inner, nested call just changed. Not memory-
-  unsafe, but could act on a stale window index in that rare case.
-- **A slow or unresponsive app stalls the whole wm** while
-  `wait_for_redraw_done()` waits for its ack, up to
-  `REDRAW_ACK_TIMEOUT`. See "Content z-order" above for why this
-  tradeoff was made (it's what makes content z-order correct) and
-  what a fuller fix would need.
+- **Reentrancy while waiting for an ack.** `repair_region()` no longer
+  waits, so the case where an outer call's loop over `zorder` could be
+  iterated against a table an inner, nested call had just changed is
+  gone. The shape has not vanished, only moved and shrunk:
+  `freeze_all()` and `wait_clip_ack_one()` both service other messages
+  through `handle_message()` while they wait, so a `Z_WM_CREATE_WINDOW`
+  arriving in that 300 ms window is handled from inside the drag-start
+  path. Not memory-unsafe (the tables are fixed size), and it is one
+  bounded window at the start of a gesture rather than one per repaired
+  window.
+- **A slow or unresponsive app no longer stalls the whole wm.** It used
+  to, for up to `REDRAW_ACK_TIMEOUT` per repair. What is left is the
+  drag freeze: an app that does not ack costs the first rubber band up
+  to `FREEZE_ACK_TIMEOUT_MS` (300 ms), once per drag, and the drag then
+  proceeds with that window not guaranteed still -- which shows as a
+  trail behind the band rather than as a frozen pointer.
+- **A resize does not freeze the desktop.** The move path does
+  (`freeze_all()` at the first pixel of motion), the resize path does
+  not: it blanks the window's own interior and XOR-draws the frame at
+  the candidate size, which pairs correctly over its own blanked
+  rectangle but rests on the same assumption the move drag stopped
+  making -- that nothing else repaints under the band. In practice the
+  band stays close to a window that is not moving, so there is much
+  less of it over other windows' pixels; the honest description is that
+  this has not been made symmetric yet, not that it does not need to
+  be.
 - **A residual race between wm-triggered and app-driven redraws.** An
   app that redraws on its own schedule (not just in response to
   `Z_WM_REDRAW`/`Z_WM_WINDOW_MOVED`, like `hello_win`'s counter tick)
@@ -1644,6 +2063,12 @@ a convenient API, not a hard guarantee.
   protocol between wm and app. If you see duplicate/stale text after
   moving a window, or a delay before content catches up, this is why
   -- try a smaller `POLL_CHUNK` first.
+
+  Regions bound the damage this can do rather than removing it: the
+  stale copy lands inside the app's own visible region, so it can no
+  longer appear on top of the window in front. During a drag it cannot
+  land at all, because the window is frozen -- and the `DREW` ack is
+  exactly the report that an app tried.
 - **~~The focused-window bold border can still get drawn over~~ --
   fixed, superseded, given breathing room, and finally removed
   entirely.** The whole entry below is now history: there is no focus
@@ -1862,9 +2287,15 @@ a convenient API, not a hard guarantee.
   of this writing, with no recurrence seen so far.
 - **No process-death cleanup.** If an app that owns a window is
   killed, `wm` has no way to find out and will leave its window (and
-  window-table slot) around forever. This needs either a kernel
-  notification mechanism or a way for `wm` to poll whether a pid is
-  still alive -- neither exists yet (see `docs/messaging.md`).
+  window-table slot) around forever. There is still no kernel
+  notification, but the second half of that sentence has stopped being
+  true: `z_proc_list()` (`Z_SYS_PROC_LIST`) reports every live process
+  slot with its flags and allocates nothing, so a provider CAN ask.
+  `sw/apps/repl` does exactly that to reclaim connections whose
+  terminal was closed from its titlebar -- see `docs/ports.md`,
+  "Nobody tells a provider that a client died", including the two
+  things that shape gets wrong if copied carelessly. The same scan
+  would work here.
 - **Titles are still not drawn** in the chrome itself (font support
   now exists via `zgfx`, but `wm.c` draws chrome purely via the line
   rasterizer and hasn't been updated to render the title text yet).

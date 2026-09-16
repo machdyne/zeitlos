@@ -35,7 +35,7 @@ typedef uint32_t *(*z_kernel_ptr_t)(uint32_t, uint32_t *, uint32_t);
 
 // UART1 (16550) -- same register layout as UART0, offset 0x100 so
 // existing UART0 software is unchanged. ULX3S: ESP32 UART1 on
-// GPIO16/17 (rtl/sysctl.v, docs/esp32-net.md). Not present on boards
+// GPIO16/17 (rtl/sysctl.v, docs/esp32link.md). Not present on boards
 // without UART1; net's ESP32LINK PHY is the only caller.
 #define reg_uart1_data (*(volatile uint8_t*)0xf0000100)
 #define reg_uart1_dlbl (*(volatile uint8_t*)0xf0000100)
@@ -51,6 +51,13 @@ typedef uint32_t *(*z_kernel_ptr_t)(uint32_t, uint32_t *, uint32_t);
 // ESP32 enable/boot straps (ULX3S). Bit0 = wifi_en, bit1 = wifi_gpio0.
 // Reset value: en=0, gpio0=1 (held in reset until phy_init).
 #define reg_esp32_ctl (*(volatile uint32_t*)0xf0000200)
+// ULX3S software mouse (rtl/sysctl.v): net writes a browser's pointer
+// here as {present[24], buttons[22:20], y[19:10], x[9:0]} -- the same
+// x/y/button layout as reg_usbN_cursor, so wm reads it the same way.
+// present is last-writer, not sticky: net clears it on visor silence
+// (~1 s) or an explicit leave (buttons bit 7); wm clears it when the
+// USB cursor moves. Writing 0 drops the hardware sprite mux back to USB.
+#define reg_vmouse (*(volatile uint32_t*)0xf0000400)
 
 #define reg_led (*(volatile uint32_t*)0xe0000000)
 #define reg_leds (*(volatile uint32_t*)0xe0000004)
@@ -429,6 +436,52 @@ static inline uint32_t maskirq(uint32_t new_mask) {
 #endif
 }
 
+// PicoRV32 waitirq: stall the core until any unmasked IRQ is pending,
+// then return the pending mask. Used when every process is BLOCKED so
+// there is nobody to schedule -- sleeping the core is the only way
+// not to spin. Do NOT call this while another process is RUNNABLE:
+// it freezes the whole machine, not just the caller.
+//
+// Inside the same non-zcc arm as maskirq() above, and for the same
+// reason: it is a custom instruction, so it needs an inline
+// assembler. The host branch cannot stall anything and returns 0 --
+// the only caller is the kernel's own idle path, which does not exist
+// off-target.
+static inline uint32_t waitirq(void) {
+#if defined(__riscv)
+	uint32_t pending;
+	__asm__ volatile (
+		".insn r 0x0B, 0x4, 0x04, %0, zero, zero"
+		: "=r"(pending)
+		:
+		: "memory"
+	);
+	return pending;
+#else
+	return 0;
+#endif
+}
+
+// PicoRV32 timer: load the internal countdown (IRQ 0 when it hits
+// zero). ENABLE_IRQ_TIMER must be 1 in the bitstream (sysctl.v).
+// timer(1) fires on the next cycle -- the pulse a process uses to
+// yield the moment it blocks (k_proc_yield_blocked(), sw/os/kernel.c).
+static inline uint32_t timer(uint32_t cycles) {
+#if defined(__riscv)
+	uint32_t old;
+	__asm__ volatile (
+		".insn r 0x0B, 0x6, 0x05, %0, %1, zero"
+		: "=r"(old)
+		: "r"(cycles)
+		: "memory"
+	);
+	return old;
+#else
+	(void)cycles;
+	return 0;
+#endif
+}
+
 #endif  // __zcc__
 
 // --
@@ -444,6 +497,11 @@ void noecho(void);
 // input into per-app messages the same way it already does for the
 // mouse.
 int32_t hid_read_key(void);
+void hid_inject(int32_t packed_event);
+// Unblock wm0 if it is sleeping. net writes the visor pointer into
+// reg_vmouse (plain MMIO, no IRQ) and then calls this. USB HID and
+// hid_inject wake wm from the kernel without going through here.
+void z_wm_wake(void);
 
 // --
 
@@ -467,6 +525,12 @@ uint32_t z_exec_exists(const char *name);
 void z_proc_wait(uint32_t timeout_ticks);
 
 z_rv z_msg_wait(z_msg_t *msg, uint32_t subject, uint32_t tag);
+
+// Push `msg` so the next z_msg_read() returns it. One slot: a second
+// unread without a read in between fails. Used by zwin to put back a
+// non-compositor message it had to read while coalescing SET_CLIP
+// ahead of a REDRAW.
+z_rv z_msg_unread(const z_msg_t *msg);
 
 // ticks since boot, ~732Hz (the KTIMER IRQ rate -- see
 // rtl/sysctl.v's rtc_ctr). for elapsed-time measurement; not

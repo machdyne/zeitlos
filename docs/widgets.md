@@ -382,10 +382,19 @@ directory.
 This is the part that bites.
 
 While a dialog is up, wm carries on sending your app messages about its
-*other* window — `Z_WM_REDRAW` when something uncovers it, and so on.
-Those cannot be dropped. wm blocks waiting for a redraw ack (see
-`docs/window_manager.md`, "Content z-order"), and an app that stops
-acking freezes the whole screen until `REDRAW_ACK_TIMEOUT` fires.
+*other* window — `Z_WM_REDRAW` when something uncovers it,
+`Z_WM_SET_CLIP` when anything changes shape — and those cannot be
+dropped.
+
+It used to be wm that suffered: it blocked waiting for a redraw ack,
+and an app that stopped acking froze the whole screen until
+`REDRAW_ACK_TIMEOUT` fired. wm does not wait any more (see
+`docs/window_manager.md`, "Content z-order"), which moves the cost
+entirely onto the app that dropped the message, and makes it worse
+rather than better. A window that misses a `Z_WM_SET_CLIP` keeps
+drawing against a region that is no longer true, and a window that has
+never had one **draws nothing at all** — the parent goes blank behind
+the dialog and stays blank, with nothing on the console to say why.
 
 So `z_dialog_ctx_t` carries a callback, and everything not addressed to
 the dialog goes to it:
@@ -409,10 +418,19 @@ Routing works out like this:
 | message | routed by |
 | --- | --- |
 | `Z_WM_REDRAW` | window id — `z_win_redraw_id()` unpacks it |
+| `Z_WM_SET_CLIP` | the leading control rectangle — offer it to each window in turn; `z_win_apply_clip()` returns false for one that is not its own |
 | `Z_WM_WINDOW_MOVED` / `_RESIZED` | the `id` key in the map |
 | `Z_WM_CLOSE`, `Z_WM_TITLEBAR_ICON` | the id in the packed payload |
 | `Z_WM_MOUSE` | coordinates |
 | `Z_WM_KEY` | **always the dialog's** |
+
+`Z_WM_SET_CLIP` is the row that was added last and is the least
+forgiving. A process gets one queue, not one per window, so before the
+payload named its window the newest region was applied to whichever
+`z_win_t` was at hand — right about half the time. The symptom was a
+dialog with no buttons: its region went to the parent, the dialog was
+never told one, and a window that has not been told a region draws
+nothing.
 
 That last row is the whole reason dialogs are modal rather than merely
 on top. `Z_WM_KEY` carries no window id and no coordinates, so there is
@@ -425,34 +443,43 @@ construction: while a modal window is up, every key belongs to it.
 `z_win_create()` and friends block on `z_msg_wait()`, which **discards**
 every message that isn't the one it's waiting for. At startup that's
 harmless — nothing else is in flight. For an app creating a *second*
-window while running it is not: a `Z_WM_REDRAW` sitting in the queue at
-that moment gets silently dropped, and wm is left waiting for an ack
-that never comes.
+window while running it is not: whatever is in the queue at that moment
+goes on the floor.
 
 `z_win_create_cb()` (`zwin.h`) is the fix — same call, but non-matching
-messages go to a callback instead of the floor. `zdialog.c` uses it, and
-so should anything else that creates a window after startup. The symptom
-of getting this wrong is the screen freezing for a moment and
+messages go to a callback instead. `zdialog.c` uses it, and so should
+anything else that creates a window after startup.
+
+The symptom used to be the screen freezing for a moment and
 `wm: timed out waiting for pid N to ack a redraw` on the console, which
-looks nothing like "somebody opened a dialog".
+looked nothing like "somebody opened a dialog". wm no longer waits, so
+that line no longer appears — and the failure is quieter rather than
+gone. A dropped `Z_WM_SET_CLIP` leaves the parent window with a stale
+region, or with none at all, and a window with no region paints
+nothing. The same hazard applies to every other blocking call in
+`zwin.h` that waits on a reply: `z_clip_get()` says so in its own
+comment, and `z_launch_arg_take()` absorbs compositor messages
+precisely because it does not have a callback to hand them to.
 
 ### Redraws while a dialog is open, and after it closes
 
-Two hazards here have already bitten once each, both showing up as
+Two hazards here have already bitten once each. Both used to show up as
 `wm: timed out waiting for pid N to ack a redraw` and a multi-second
-freeze:
+freeze; wm no longer waits, so both are now quiet and local, and both
+are still real:
 
 - **While the dialog is being created.** Any `repair_region()` that
   overlaps the not-yet-created window must pass `exclude_idx` for it.
   Its owner is still inside `z_win_create_cb()` and has no window id to
-  recognise a redraw request by, so it cannot ack. `wm.c`'s modal
-  focus-change repair needs this just as much as the create-time repair
-  does.
-- **After the dialog is destroyed.** wm repairs the vacated region and
-  blocks on the parent's ack, but the caller typically goes straight
-  from `z_dialog_save()` into writing a file — an SD round trip long
-  enough to blow the timeout. `dlg_run()` therefore services that
-  redraw itself, in a bounded pump, before returning.
+  recognise a redraw request by, so one sent to it is simply dropped.
+  `wm.c`'s modal focus-change repair needs this just as much as the
+  create-time repair does.
+- **After the dialog is destroyed.** wm clears the vacated region and
+  asks the parent to repaint it, but the caller typically goes straight
+  from `z_dialog_save()` into writing a file — an SD round trip of a
+  second or more, during which the parent's window is simply black
+  where the dialog was. `dlg_run()` therefore services that redraw
+  itself, in a bounded pump, before returning.
 
 Related, in wm rather than here: a click on an already-frontmost window
 used to claim a z-order change it hadn't made, because `bring_to_front()`

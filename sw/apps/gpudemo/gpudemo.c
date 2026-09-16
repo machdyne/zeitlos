@@ -151,6 +151,10 @@ int main(void) {
 
 			if (msg.subject == Z_WM_REDRAW) {
 				z_win_apply_redraw(&win, msg.obj.val.uint32);
+				// Animated content cannot repaint by damage alone (zwin.h) --
+				// first_frame below redraws the whole pattern and
+				// the bouncing box has nothing left to erase with.
+				z_win_damage_ignore(&win);
 				update_win_geometry();
 				first_frame = true;
 				redraw_pending = true;

@@ -121,6 +121,8 @@
 #include "tcp.h"		// tcp_set_rx_window(), tcp_ack_now()
 #endif
 #include "netcfg.h"
+#include "screen.h"
+#include "netprof.h"
 #if SSH_ENABLE
 #include "ssh/ssh.h"
 #endif
@@ -345,6 +347,7 @@ typedef char net_subject_numbers_are_distinct[
 	 Z_SUBJ_DISTINCT2(Z_NET_SSH_PREPARE, Z_NET_DNS_RESOLVE) &&
 	 Z_SUBJ_DISTINCT2(Z_NET_SSH_PREPARE, Z_NET_DNS_RESOLVE_REPLY) &&
 	 Z_SUBJ_DISTINCT2(Z_NET_SSH_PREPARE, Z_NET_TFTP_PUT) &&
+	 Z_SUBJ_DISTINCT2(Z_NET_SSH_PREPARE, Z_NET_DEBUG_DUMP) &&
 	 Z_SUBJ_DISTINCT2(Z_NET_SSH_PREPARE, Z_STREAM_OPEN) &&
 	 Z_SUBJ_DISTINCT2(Z_NET_SSH_PREPARE_REPLY, Z_NET_NTP_SYNC) &&
 	 Z_SUBJ_DISTINCT2(Z_NET_SSH_PREPARE_REPLY, Z_NET_NTP_STATUS) &&
@@ -352,7 +355,12 @@ typedef char net_subject_numbers_are_distinct[
 	 Z_SUBJ_DISTINCT2(Z_NET_SSH_PREPARE_REPLY, Z_NET_TFTP_PUT_REPLY) &&
 	 Z_SUBJ_DISTINCT2(Z_NET_NTP_SYNC, Z_NET_DNS_RESOLVE) &&
 	 Z_SUBJ_DISTINCT2(Z_NET_NTP_STATUS, Z_NET_DNS_RESOLVE_REPLY) &&
-	 Z_SUBJ_DISTINCT2(Z_NET_TFTP_PUT, Z_NET_DNS_RESOLVE)) ? 1 : -1];
+	 Z_SUBJ_DISTINCT2(Z_NET_TFTP_PUT, Z_NET_DNS_RESOLVE) &&
+	 Z_SUBJ_DISTINCT2(Z_NET_DEBUG_DUMP, Z_NET_NTP_SYNC) &&
+	 Z_SUBJ_DISTINCT2(Z_NET_DEBUG_DUMP, Z_NET_NTP_STATUS) &&
+	 Z_SUBJ_DISTINCT2(Z_NET_DEBUG_DUMP, Z_NET_DNS_RESOLVE) &&
+	 Z_SUBJ_DISTINCT2(Z_NET_DEBUG_DUMP, Z_NET_TFTP_PUT) &&
+	 Z_SUBJ_DISTINCT2(Z_NET_DEBUG_DUMP, Z_STREAM_OPEN)) ? 1 : -1];
 
 static void print_ip(uint32_t ip) {
 	printf("%ld.%ld.%ld.%ld",
@@ -1415,8 +1423,8 @@ int main(void) {
 		return 1;
 	}
 	if (cfg.has_file)
-		printf("net: loaded NET.CFG%s ssid='%s'\n",
-			cfg.has_wifi ? " (wifi)" : "", cfg.ssid);
+		printf("net: loaded NET.CFG%s, %d network(s), first '%s'\n",
+			cfg.has_wifi ? " (wifi)" : "", cfg.n_wifi, cfg.ssid);
 
 	if (!phy_init(our_mac)) {
 		printf("net: phy_init (%s) failed -- see that driver's header comment "
@@ -1537,18 +1545,21 @@ int main(void) {
 
 	while (1) {
 
-		if (net_phy->poll_wifi && cfg.has_wifi)
-			net_phy->poll_wifi(cfg.ssid, cfg.psk);
+		NP_LOOP();
 
-		eth_poll();
+		if (net_phy->poll_wifi && cfg.has_wifi)
+			NP_PHASE(NP_WIFI, net_phy->poll_wifi(&cfg));
+
+		NP_PHASE(NP_ETH, eth_poll());
 
 		// flushes ip_send()'s pending packet (see ip.c's own comment)
 		// the moment eth_poll() just above has processed an ARP reply
 		// resolving whatever it was waiting on -- placed right after
 		// eth_poll() specifically to minimize that latency, rather
 		// than waiting for some later point in this same loop.
-		ip_poll();
+		NP_PHASE(NP_IP, ip_poll());
 
+		NP_T0(_np_msg);
 		z_msg_t msg;
 		while (z_msg_read(&msg) == Z_OK) {
 			if (msg.subject == Z_STREAM_OPEN) handle_stream_open(&msg);
@@ -1568,6 +1579,9 @@ int main(void) {
 			else if (msg.subject == Z_NET_NTP_SYNC) handle_ntp_sync(&msg);
 #endif
 			else if (msg.subject == Z_NET_NTP_STATUS) handle_ntp_status(&msg);
+			// sh.c's `ic` command asks for the PHY's counters on the
+			// serial console; no reply, the dump is the answer.
+			else if (msg.subject == Z_NET_DEBUG_DUMP) phy_debug_dump();
 #if SSH_ENABLE
 			else if (msg.subject == Z_NET_SSH_PREPARE) handle_ssh_prepare(&msg);
 #endif
@@ -1613,26 +1627,39 @@ int main(void) {
 			}
 		}
 
-		check_tftp_progress();
-		tcp_poll();
-		telnet_poll();
+		NP_ACC(NP_MSG, _np_msg);
+
+		NP_PHASE(NP_TFTP, check_tftp_progress());
+		NP_PHASE(NP_TCP, tcp_poll());
+		NP_PHASE(NP_TELNET, telnet_poll());
 #if NET_SOCK
+		NP_T0(_np_sock);
 		sock_poll();
 		// Drain anything the peer was too busy to take earlier.
 		if (sock_rx_len) sock_rx_flush();
 		// And announce a window that has reopened, from out here
 		// rather than from inside tcp.c's receive path.
 		if (sock_win_reopened) { sock_win_reopened = false; tcp_ack_now(); }
+		NP_ACC(NP_SOCK, _np_sock);
 #endif
 #if SSH_ENABLE
-		ssh_poll();
+		NP_PHASE(NP_SSH, ssh_poll());
 #endif
-		dns_poll();
+		NP_PHASE(NP_DNS, dns_poll());
 #if NTP_ENABLE
 		// Cheap: one comparison in the state this is in almost all of
 		// the time. See ntp.c's own ntp_poll().
-		ntp_poll();
+		NP_PHASE(NP_NTP, ntp_poll());
 #endif
+
+		/* Desktop streaming: only meaningful on the backend whose
+		 * gateway can serve it to a browser; free when nothing
+		 * changed on screen. */
+		if (net_phy->poll_wifi)
+			NP_PHASE(NP_SCREEN, screen_poll(use_gateway));
+
+		np_report();
+
 
 		// Yield the rest of the timeslice.
 		//
@@ -1673,7 +1700,40 @@ int main(void) {
 		// no difference to interactive traffic. So net's wait is not
 		// what makes telnet feel slow, and the cheaper idle is the
 		// better default.
-		z_proc_wait(Z_TICK_HZ / 10);
+		//
+		// The ESP32 link used to be the exception, waking on every
+		// kernel tick because "input, screen acks, incoming frames all
+		// only arrive in answer to a poll this loop sends". That is no
+		// longer true of the part that mattered: browser keyboard and
+		// mouse events are pushed unsolicited into the BRAM receive
+		// FIFO (esp32/zeitlos-nic screend.c), and an arrival there
+		// raises Z_IRQ_ETH exactly as a wired MAC does. Waking 732
+		// times a second bought nothing and cost a full scheduler share
+		// -- with round-robin, a permanently runnable process takes
+		// that share out of whatever is painting, which is where the
+		// 80-120us per character cell of a terminal redraw went.
+		//
+		// So the wait is now the nearest deadline anybody has: how long
+		// the driver may go without polling (esp32link.c's poll_gap()
+		// -- every tick while a conversation is live, 100 ms when the
+		// link is quiet) and when the next screen scan is due
+		// (screen.c, only while a browser is watching). Whichever comes
+		// first, capped by the same 100 ms backstop as the wired path.
+		// The interrupt still cuts any of it short.
+		if (net_phy->idle_ticks) {
+			uint32_t w = net_phy->idle_ticks();
+			uint32_t scan = screen_idle_ticks();
+			if (scan && (!w || scan < w))
+				w = scan;
+			if (!w)
+				w = 1;
+			if (w > Z_TICK_HZ / 10)
+				w = Z_TICK_HZ / 10;
+			NP_SLEPT();
+			z_proc_wait(w);
+		} else {
+			z_proc_wait(Z_TICK_HZ / 10);
+		}
 
 	}
 

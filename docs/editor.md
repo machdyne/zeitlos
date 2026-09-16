@@ -16,14 +16,26 @@ quit, the status-line format).
 
 ## Current limits
 
-- **Files are capped at 2048 bytes by default** (`TE_MAX_FILE_SIZE`
-  in `te_bridge.c`, overridable at build time, e.g. `make
-  TE_MAX_FILE_SIZE=4096`). This is sized conservatively against
-  `repl`'s 64KB process heap, which is shared with Scheme and all port
-  traffic -- `te`'s per-line document representation can cost
-  noticeably more memory than the raw file size. Check the `free`
-  command before and after opening a file to see actual headroom on
-  your board if you raise the ceiling.
+- **Files are capped at 128 KiB by default** (`TE_MAX_FILE_SIZE` in
+  `sw/apps/repl/Makefile`, overridable *downwards* for a memory-tight
+  build, e.g. `make TE_MAX_FILE_SIZE=2048`). It is a **refusal
+  threshold** checked against `fs_size()` before opening, not a
+  buffer: the document itself is `malloc()`ed by `te` from `repl`'s
+  process heap, one allocation for the file plus one per line.
+
+  It defaulted to 2048 for a long time, sized conservatively against a
+  heap shared with Scheme and all port traffic. That was the wrong
+  quantity to be conservative about. It bounds nothing the heap does
+  not already bound, and 2 KB is smaller than every real file on a
+  card -- `RFC20.TXT` is 18 KB -- so the default build was an editor
+  that refused to open anything, which reads as a broken editor rather
+  than as a build flag. The real ceiling is the heap, which is why
+  `repl` is on `Z_PROC_STACK_SIZE_LARGE` (64KB, `sw/os/kernel.h`): at
+  32KB an 18 KB file's `malloc` failed outright.
+
+  Check the `free` command before and after opening a file to see
+  actual headroom on your board. The number that matters is `c-heap`,
+  not `mem-free` -- the latter is the kernel pool, not this process.
 - **Only one editing session at a time, process-wide.** A second
   `te <filename>` from a different `term` connection while one is
   already active is refused with a clear message, rather than
@@ -137,8 +149,8 @@ further reduction in per-keystroke bytes. The filename and any notice
 
 `te` **edits** small files -- it loads the whole document into repl's
 heap and pays several times the file's raw size for its line-list
-representation, which is what `TE_MAX_FILE_SIZE` (2KB by default)
-exists to bound.
+representation. `TE_MAX_FILE_SIZE` refuses an over-large file before
+that starts; the heap is what actually bounds it.
 
 For **viewing** a file of any size there is now `page`
 (`sw/apps/repl/page.c`, and its own header comment for the full

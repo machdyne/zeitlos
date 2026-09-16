@@ -186,3 +186,14 @@ Z_MKSYSCALL(PROC_STATUS, k_proc_status)
 Z_MKSYSCALL(CFG_GET, k_cfg_get)
 Z_MKSYSCALL(CFG_ENTRY, k_cfg_entry)
 Z_MKSYSCALL(CFG_RELOAD, k_cfg_reload)
+
+// Push a synthetic key event into the shared HID ring (sw/os/hid.c)
+// so a network-sourced keystroke reads back through HID_READ_KEY
+// like any other. Appended last so no earlier enum value shifts.
+Z_MKSYSCALL(HID_INJECT, k_hid_inject)
+// Wake wm0. The visor pointer is a MMIO write to reg_vmouse (no IRQ);
+// net calls this after that write so wm can sleep until a packet
+// rather than polling the register every tick. HID IRQs and
+// HID_INJECT wake wm the same way without going through this syscall.
+// Appended last so no earlier enum value shifts.
+Z_MKSYSCALL(WM_WAKE, k_wm_wake)
