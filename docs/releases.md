@@ -689,6 +689,37 @@ Without it, **`build` always rebuilds what you ask for** — including
 every target, if you ask for none. That is the right default: the usual
 reason to name a target is that something it depends on changed.
 
+### Rebuilding only the sdcard
+
+Noticing a stale file on the card after shipping is normal, and redoing
+eight place-and-routes to fix it is not:
+
+```
+$ release/zrelease build v0.0.4 --resume --rebuild-sdcard
+--resume: skipping 8 already built (lakritz_gpio, ...)
+
+no targets left; rebuilding the sdcard image only.
+```
+
+The card is rebuilt, `NOTES.md`, `README.txt`, `MANIFEST.json` and
+`SHA256SUMS` are regenerated, and `ship` then replaces one asset.
+
+**The kernel and the ZAR are deliberately not recompiled** on a run with
+no targets. They are already in `dist/` from the run that made the
+images, and a fresh compile would publish a `zeitlos-kernel.bin` that is
+not the kernel inside any of them.
+
+`--rebuild-sdcard` matters on ordinary incremental runs too. `mkfs.fat`
+stamps a fresh volume serial every time, so rebuilding the card produces
+different bytes from identical inputs — a new 64MB asset and a new
+checksum for nothing. A build that finds `zeitlos.img.gz` already in
+`dist/<version>/` keeps it unless you ask:
+
+```
+=== SD card image ===
+    keeping zeitlos.img.gz (67108864 bytes) -- pass --rebuild-sdcard to replace it
+```
+
 Only the manifest is written per target. `NOTES.md` and `README.txt`
 are the whole-release view and are still generated once at the end,
 from the merged set — a checkpoint is a record, not a publication.

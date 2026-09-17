@@ -9,6 +9,16 @@
 
 #include "pk_ai.h"
 
+/* zg_rng_below(). The AI shuffles its rollout deck and rolls against
+ * its own noise and bluff percentages, so it needs the same unbiased
+ * source poker.c seeds with zg_rng_use_system() -- not a second one.
+ *
+ * pk_ai.h deliberately does not pull this in: it describes the AI's
+ * interface, and where the randomness comes from is this file's
+ * business. poker.c includes it for itself the same way.
+ */
+#include "../../common/games/zrand.h"
+
 #define PK_PERMILLE 1000
 
 /* How often the rollout loop stops to service the message queue.

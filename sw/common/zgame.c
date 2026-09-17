@@ -9,6 +9,17 @@
 
 #include "zgame.h"
 
+/* z_game_set_enabled(). Begin and end tell wm to suspend and resume
+ * window compositing, and that call lives in zeitlos.h with the rest
+ * of the kernel-facing API rather than in zgame.h, which describes the
+ * page-flipping runtime.
+ *
+ * zgame.h already brings in zsoc.h, which is where z_game_frame(),
+ * z_game_set_view() and z_game_wait_frame() come from -- those are GPU
+ * registers. This is the one call in here that is not.
+ */
+#include "zeitlos.h"
+
 bool z_game_begin(z_game_t *g, z_game_scroll_t orient, bool wrap) {
 
 	g->orient = orient;

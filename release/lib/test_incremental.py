@@ -82,8 +82,15 @@ def run_build(targets, extra=()):
     so that a new flag with no default cannot make this test silently
     stop exercising the real path.
     """
-    argv = ["build", VERSION, "--targets"] + list(targets) + \
-        ["--allow-dirty", "--no-sdcard"] + list(extra)
+    # An EMPTY target list means the CLI's own default, every target --
+    # which is how a caller exercises the no---targets path. Passing
+    # "--targets" with nothing after it is an argparse error, not that.
+    argv = ["build", VERSION]
+    if targets:
+        argv += ["--targets"] + list(targets)
+    argv += ["--allow-dirty"] + list(extra)
+    if "--rebuild-sdcard" not in extra:
+        argv.append("--no-sdcard")
     args = _mirror_parser().parse_args(argv)
 
     real = build_mod.run
@@ -294,6 +301,73 @@ def main():
                 "that finished before the failure")
         else:
             print("   README.txt describes it too")
+
+        print("\n== session 5: rebuild the sdcard and nothing else ==")
+        #
+        # Noticing a stale file on the card AFTER shipping is normal,
+        # and re-doing eight place-and-routes to fix it is not. --resume
+        # skips every target; --rebuild-sdcard is still real work, so
+        # the run has to carry on rather than declaring there is nothing
+        # to do.
+        #
+        # What must NOT happen is the shared kernel and ZAR assets being
+        # recompiled: they are already here from the run that made the
+        # images, and replacing them would publish a kernel that is not
+        # the one inside any of them.
+        import mkfatimg as _fat
+
+        def _fake_card(root, raw, ark_dir=None):
+            with open(raw, "wb") as f:
+                f.write(b"REBUILT-CARD" * 64)
+            return [("docs/ask.md", 10)]
+
+        real_fat, real_zr_fat = _fat.build, ZR.mkfatimg.build
+        _fat.build = ZR.mkfatimg.build = _fake_card
+        try:
+            gz = os.path.join(OUT, "zeitlos.img.gz")
+            with open(gz, "wb") as f:
+                f.write(b"STALE-CARD")
+            m = manifest()
+            m["sdcard"] = {"file": "zeitlos.img.gz", "bytes": 10,
+                           "files": ["docs/ask.md"]}
+            with open(os.path.join(OUT, "MANIFEST.json"), "w") as f:
+                json.dump(m, f, indent=2)
+
+            with open(os.path.join(OUT, "zeitlos-kernel.bin"), "rb") as f:
+                kernel_before = f.read()
+            before = sorted(t["target"] for t in manifest()["targets"])
+
+            # The three built above, so --resume finds nothing left.
+            r = run_build(before, extra=["--resume", "--rebuild-sdcard"])
+            if r.returncode != 0:
+                failures.append("--resume --rebuild-sdcard did not run")
+            if "nothing left to build" in r.stdout:
+                failures.append(
+                    "--resume --rebuild-sdcard bailed out instead of "
+                    "rebuilding the card")
+
+            with open(gz, "rb") as f:
+                if f.read() == b"STALE-CARD":
+                    failures.append("the sdcard image was not rebuilt")
+                else:
+                    print("   sdcard rebuilt")
+
+            with open(os.path.join(OUT, "zeitlos-kernel.bin"), "rb") as f:
+                if f.read() != kernel_before:
+                    failures.append(
+                        "a card-only run recompiled the kernel -- the "
+                        "published kernel would not match the images")
+                else:
+                    print("   kernel and ZAR assets untouched")
+
+            after = sorted(t["target"] for t in manifest()["targets"])
+            if after != before:
+                failures.append("a card-only run changed the target list: "
+                                "%s -> %s" % (before, after))
+            else:
+                print("   all %d targets still described" % len(after))
+        finally:
+            _fat.build, ZR.mkfatimg.build = real_fat, real_zr_fat
 
     finally:
         for p in created:

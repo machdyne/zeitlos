@@ -285,10 +285,17 @@ def cmd_build(args):
         if skipped:
             print("\n--resume: skipping %d already built (%s)"
                   % (len(skipped), ", ".join(skipped)))
-        if not targets:
+        if not targets and not args.rebuild_sdcard:
             print("\nnothing left to build in %s.\n"
                   % os.path.relpath(out, ROOT))
             return 0
+        if not targets:
+            # --rebuild-sdcard is still work. Falling through with an
+            # empty target list rebuilds the card and regenerates the
+            # notes, README, manifest and checksums from what is
+            # already here -- which is the whole point of asking for
+            # the card on its own.
+            print("\nno targets left; rebuilding the sdcard image only.")
 
     if prev_targets:
         print("\nalready in %s:" % os.path.relpath(out, ROOT))
@@ -363,8 +370,13 @@ def cmd_build(args):
     # NIC driver at runtime, so building this per target would compile
     # the same sources four times and give four chances for two targets
     # to differ without anybody meaning them to.
+    # Skipped when there is no target to build, which is the
+    # --resume --rebuild-sdcard case: the kernel and the ZAR are
+    # already in dist/ from the run that made them, and recompiling
+    # them here would replace those assets with bytes from a different
+    # commit while every image still carried the old ones.
     software = None
-    if not args.dry_run or True:
+    if targets:
         first = spec.load_target(ROOT, targets[0])
         software = build_mod.build_software(
             ROOT, first.core_app_list(), dry=args.dry_run, jobs=args.jobs)
@@ -426,12 +438,19 @@ def cmd_build(args):
     # The kernel and the logo are the same bytes for every target, so
     # they ship once rather than four times. They are already inside
     # each flash image; these are for partial reflashes.
-    shutil.copy2(software["kernel"],
-                 os.path.join(out, "zeitlos-kernel.bin"))
-    shutil.copy2(software["zar"],
-                 os.path.join(out, "zeitlos-apps.zar"))
-    shutil.copy2(os.path.join(ROOT, "sw/data/images/zeitlos_fb.bin"),
-                 os.path.join(out, "zeitlos-logo.bin"))
+    #
+    # Only when something was built. A card-only run
+    # (--resume --rebuild-sdcard) leaves these alone deliberately: they
+    # are already here from the run that made the images, and replacing
+    # them with a fresh compile would publish a kernel that is not the
+    # one inside any of them.
+    if software:
+        shutil.copy2(software["kernel"],
+                     os.path.join(out, "zeitlos-kernel.bin"))
+        shutil.copy2(software["zar"],
+                     os.path.join(out, "zeitlos-apps.zar"))
+        shutil.copy2(os.path.join(ROOT, "sw/data/images/zeitlos_fb.bin"),
+                     os.path.join(out, "zeitlos-logo.bin"))
 
     # -- SD card -------------------------------------------------------
     sdcard = None
