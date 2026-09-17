@@ -5,6 +5,7 @@
 #   zrelease list                  what can be built
 #   zrelease check                 specs vs rtl/boards.vh, flash layout
 #   zrelease layout                the flash map, as this tool reads it
+#   zrelease sdcard                build only the SD card image
 #   zrelease build <version>       build everything into dist/<version>/
 #   zrelease verify <version>      re-check what is in dist/<version>/
 #   zrelease ship  <version>       create or update the GitHub release
@@ -190,14 +191,9 @@ def cmd_check(args):
         else:
             print("  %-20s ok" % name)
 
-    print("\nSD card file list (mkfatimg.py vs tools/mkfatimg.sh) ...")
-    sd = mkfatimg.check_against_script(ROOT)
-    if sd:
-        problems.extend(sd)
-        print("  DRIFT")
-    else:
-        print("  ok -- both ship the same files, and neither ships a "
-              "core app")
+    # The mkfatimg.py / mkfatimg.sh comparison that used to live here is
+    # gone with the duplication it policed: tools/mkfatimg.sh calls
+    # `zrelease sdcard` now, so there is one list and nothing to drift.
 
     print("\ntools ...")
     for tool, why in (("yosys", "synthesis"), ("nextpnr-ecp5", "place+route"),
@@ -472,6 +468,39 @@ def _write_sums(out):
 
 # ---------------------------------------------------------------------
 
+def cmd_sdcard(args):
+    """Just the card. No version, no dist directory, no gateware.
+
+    `build` makes one too, but only as part of a release, which means a
+    version number and every target's place-and-route first. Wanting a
+    card off the current tree is a different and much more common job.
+    """
+
+    out = args.out
+    if not os.path.isabs(out):
+        out = os.path.join(ROOT, out)
+
+    d = os.path.dirname(out)
+    if d:
+        os.makedirs(d, exist_ok=True)
+
+    try:
+        shipped = mkfatimg.build(ROOT, out, ark_dir=args.ark)
+    except mkfatimg.FatError as e:
+        die("SD image: %s" % e)
+
+    print("\n%s -- %d files, %.1f MB"
+          % (out, len(shipped), os.path.getsize(out) / 1024.0 / 1024.0))
+
+    if args.gzip:
+        gz = out + ".gz"
+        with open(out, "rb") as f_in, gzip.open(gz, "wb", 9) as f_out:
+            shutil.copyfileobj(f_in, f_out)
+        print("%s -- %.1f MB" % (gz, os.path.getsize(gz) / 1024.0 / 1024.0))
+
+    return 0
+
+
 def cmd_verify(args):
     version = build_mod.normalise_version(args.version)
     out = distdir(version)
@@ -591,6 +620,17 @@ def main(argv):
                    help="leave rtl/zspec.vh etc. in place for inspection")
     b.add_argument("--dry-run", action="store_true")
     b.set_defaults(func=cmd_build)
+
+    # The SD card image on its own -- no gateware, no dist/<version>/,
+    # no version at all. This is what tools/mkfatimg.sh calls, and what
+    # anyone wanting a card without a two-hour place-and-route wants.
+    sd = sub.add_parser("sdcard", help="build only the SD card image")
+    sd.add_argument("--out", default="images/zeitlos.img",
+                    help="where to write it (default images/zeitlos.img)")
+    sd.add_argument("--gzip", action="store_true",
+                    help="also write <out>.gz")
+    sd.add_argument("--ark", help="ARK checkout (default sw/data/ark)")
+    sd.set_defaults(func=cmd_sdcard)
 
     v = sub.add_parser("verify", help="re-check a built release")
     v.add_argument("version")

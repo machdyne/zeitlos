@@ -454,6 +454,14 @@ static z_win_t win;
 // update_geometry(). Nothing here keeps its own copy of the content
 // rect formula; zwin.c owns it, for the reasons set out in that
 // function's own comment.
+// -- full screen (F2) --
+//
+// The window is already 320x240, which is exactly a game-mode page, so
+// full screen is not a different renderer -- it is the same one drawing
+// into a different rectangle. update_geometry() is the only place that
+// rectangle is established.
+static bool game_mode;
+
 static int32_t clip_x0, clip_y0, clip_x1, clip_y1;
 static int32_t view_cx, view_cy;
 
@@ -938,6 +946,26 @@ static void build_hud(void) {
 // erased, and every new line is drawn, whatever the indices happen to
 // line up as. Emitting in a stable order (HUD first, it is always the
 // same twelve lines) just makes the heuristic hit more often.
+// IN GAME MODE THE z_win_* LAYER IS WRONG TWICE OVER.
+//
+// It clips to where the window sits on the desktop -- which is exactly
+// why the screen outside the window stayed black in full screen, and
+// the top-left of it most visibly -- and for text it takes
+// window-relative coordinates, which in game mode are not the ones the
+// caller has.
+//
+// Everything handed to this is already inside clip_x0..clip_y1: see the
+// note at the top of the file about why this game does its own
+// Cohen-Sutherland rather than leaning on the library's clamp. So
+// drawing straight to the framebuffer loses nothing, and the clip the
+// z_win_* layer would have applied was a backstop either way.
+static void draw_line(int32_t x0, int32_t y0, int32_t x1, int32_t y1,
+	int color) {
+
+	if (game_mode) z_fb_hw_line(x0, y0, x1, y1, color, NULL);
+	else z_win_hw_line(&win, x0, y0, x1, y1, color);
+}
+
 static void blit_frame(void) {
 
 	int prev = cur_buf ^ 1;
@@ -953,12 +981,12 @@ static void blit_frame(void) {
 			    o->x1 == n->x1 && o->y1 == n->y1)
 				continue;          // unchanged: leave it lit
 		}
-		z_win_hw_line(&win, o->x0, o->y0, o->x1, o->y1, 0);
+		draw_line(o->x0, o->y0, o->x1, o->y1, 0);
 	}
 
 	for (i = 0; i < n_new; i++) {
 		line_t *l = &line_buf[cur_buf][i];
-		z_win_hw_line(&win, l->x0, l->y0, l->x1, l->y1, 1);
+		draw_line(l->x0, l->y0, l->x1, l->y1, 1);
 	}
 
 	line_count[prev] = 0;
@@ -978,7 +1006,12 @@ static void draw_hud_text(void) {
 	// This is the same bug that stranded the old game-over banner:
 	// text that stops being drawn is not text that gets erased.
 	snprintf(buf, sizeof(buf), "SCORE %03lu", (unsigned long)score);
-	z_win_draw_text(&win, 4, 2, buf, 1, &z_font_5x8);
+	// Window-relative in a window; absolute in game mode, where there
+	// is no window to be relative to.
+	if (game_mode)
+		z_fb_draw_text(clip_x0 + 4, clip_y0 + 2, buf, 1, &z_font_5x8, NULL);
+	else
+		z_win_draw_text(&win, 4, 2, buf, 1, &z_font_5x8);
 }
 
 // Fills or clears the whole content area through the blitter.
@@ -1543,9 +1576,29 @@ static void reset_game(void) {
 	key_left = key_right = key_up = key_down = false;
 }
 
+// Escape leaves game mode, but only once RELEASED first. Entering by
+// any route that leaves a key still held would otherwise see the key-up
+// for a key that was already down and leave immediately -- the same
+// guard sw/apps/chess and the casino games carry.
+static bool exit_armed;
+
 static void update_geometry(void) {
 
 	z_clip_t clip;
+
+	if (game_mode) {
+		// The whole page, at its origin. No window chrome, and no
+		// content rect to ask for -- in game mode there is no window
+		// in front of anything.
+		clip_x0 = 0;
+		clip_y0 = 0;
+		clip_x1 = Z_GAME_VIEW_W - 1;
+		clip_y1 = Z_GAME_VIEW_H - 1;
+
+		view_cx = (clip_x0 + clip_x1) / 2;
+		view_cy = (clip_y0 + clip_y1) / 2;
+		return;
+	}
 
 	z_win_content_rect(&win, &clip);
 
@@ -1558,10 +1611,70 @@ static void update_geometry(void) {
 	view_cy = (clip_y0 + clip_y1) / 2;
 }
 
+// Dropping the erase list is not optional on a mode change: it holds
+// lines in the OLD rectangle's coordinates, and replaying it would rub
+// out pixels somewhere else entirely. Same reason drain_messages()
+// drops it on a redraw.
+static void geometry_changed(void) {
+	update_geometry();
+	line_count[cur_buf ^ 1] = 0;
+}
+
+static void enter_game_mode(void) {
+
+	if (!z_game_available()) {
+		printf("space3d: no game mode -- rebuild the gateware with "
+			"`GAME in rtl/boards.vh\n");
+		return;
+	}
+
+	game_mode = true;
+	exit_armed = false;
+
+	// wm's clip region would otherwise confine drawing to wherever
+	// this window sits on the desktop behind.
+	z_gfx_clear_visible();
+	z_gfx_blit_scissor_reset();
+	z_fb_hw_fill_rect(0, 0, 640, 480, 0);
+
+	// The app-facing call, so wm is told to stop managing windows for
+	// as long as this lasts -- see sw/common/zeitlos.h. It is also
+	// what routes the keyboard here rather than to whatever has focus.
+	z_game_set_enabled(true, false);
+	z_game_set_view(0, 0);
+
+	geometry_changed();
+}
+
+static void leave_game_mode(void) {
+
+	// Releases the grab as well as the register, and wm repaints the
+	// desktop on the release -- so unlike the older apps there is no
+	// Z_WM_REPAINT to send by hand here.
+	z_game_set_enabled(false, false);
+
+	game_mode = false;
+	geometry_changed();
+}
+
 static void handle_key(uint32_t packed) {
 
 	uint32_t keysym = Z_WM_UNPACK_KEY_KEYSYM(packed);
 	bool pressed = Z_WM_UNPACK_KEY_PRESSED(packed) != 0;
+
+	if (game_mode && keysym == 0x1b) {
+		if (!pressed) exit_armed = true;
+		else if (exit_armed) leave_game_mode();
+		return;
+	}
+
+	if (keysym == Z_KEY_F2) {
+		if (pressed) {
+			if (game_mode) leave_game_mode();
+			else enter_game_mode();
+		}
+		return;
+	}
 
 	// Arrows are tracked as held state rather than acted on per event:
 	// Z_WM_KEY delivers real press and release edges (sw/os/hid.c
@@ -1694,7 +1807,11 @@ int main(void) {
 			// The display lists were already dropped on the redraw
 			// (line_count reset in drain_messages()), so there is no
 			// stale erase pass to replay through the cleared pixels.
-			if (redrew) {
+			// In game mode the window is not on screen, so there
+			// is nothing to repair -- and asking for the content
+			// rect would reload wm's clip and confine the next
+			// frame to wherever the window happens to sit.
+			if (redrew && !game_mode) {
 				z_clip_t rc;
 				z_win_content_rect(&win, &rc);
 				fill_content(0);

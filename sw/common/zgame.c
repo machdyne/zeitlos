@@ -19,6 +19,9 @@ bool z_game_begin(z_game_t *g, z_game_scroll_t orient, bool wrap) {
 
 	z_game_invalidate(g);
 
+	/* The APP-facing call, not the raw register write: z_game_begin()
+	 * is a full-screen takeover, so wm has to be told to stop managing
+	 * windows. See sw/common/zeitlos.h. */
 	if (!z_game_set_enabled(true, wrap)) return false;
 
 	/* Point the camera at page 0 -- the FRONT page, since back is 1.

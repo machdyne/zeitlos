@@ -141,15 +141,15 @@ void pk_ai_observe(pk_ai_t *a, const pk_game_t *g, int seat, int action)
 /* One card off an already-excluded deck, without shuffling the whole
  * thing first. A rollout needs a dozen cards out of forty-odd, so a
  * full Fisher-Yates per sample would be most of the cost. */
-static uint8_t take(pk_deck_t *d, int *pos)
+static uint8_t take(zdeck_t *d, int *pos)
 {
     int n = d->n - *pos;
     int j;
     uint8_t c;
 
-    if (n <= 0) return PK_CARD_NONE;
+    if (n <= 0) return Z_CARD_NONE;
 
-    j = *pos + (int)pk_rng_below((uint32_t)n);
+    j = *pos + (int)zg_rng_below((uint32_t)n);
     c = d->card[j];
     d->card[j] = d->card[*pos];
     d->card[*pos] = c;
@@ -182,10 +182,10 @@ int32_t pk_ai_equity_vs(const uint8_t *hero, int nhero,
     const uint8_t *opp, int nopp_cards,
     const uint8_t *board, int nboard, int nboard_final, int rollouts)
 {
-    uint8_t seen[PK_NCARDS];
+    uint8_t seen[Z_NCARDS];
     uint8_t hcards[PK_MAX_HOLE + PK_MAX_BOARD];
     uint8_t ocards[PK_MAX_HOLE + PK_MAX_BOARD];
-    pk_deck_t d;
+    zdeck_t d;
     int nseen = 0, i, r;
     int need = nboard_final - nboard;
     int64_t total = 0;
@@ -197,8 +197,8 @@ int32_t pk_ai_equity_vs(const uint8_t *hero, int nhero,
     for (i = 0; i < nopp_cards; i++) seen[nseen++] = opp[i];
     for (i = 0; i < nboard; i++) seen[nseen++] = board[i];
 
-    pk_deck_init_excluding(&d, seen, nseen);
-    if (pk_deck_remaining(&d) < need) return PK_PERMILLE / 2;
+    zdeck_init_excluding(&d, seen, nseen);
+    if (zdeck_remaining(&d) < need) return PK_PERMILLE / 2;
 
     for (r = 0; r < rollouts; r++) {
         int pos = 0, nh = 0, no = 0, k;
@@ -231,10 +231,10 @@ int32_t pk_ai_equity_game(pk_ai_t *a, const pk_game_t *g, int seat,
     int rollouts)
 {
     const pk_variant_t *v = g->v;
-    uint8_t seen[PK_NCARDS];
+    uint8_t seen[Z_NCARDS];
     uint8_t opp_known[PK_MAX_SEATS][PK_MAX_HOLE];
     int opp_nknown[PK_MAX_SEATS];
-    pk_deck_t d;
+    zdeck_t d;
     int nseen = 0, nopp = 0, i, s, r;
     int final_hole = 0, final_board = 0;
     int need_board, need_hero, need_total;
@@ -279,7 +279,7 @@ int32_t pk_ai_equity_game(pk_ai_t *a, const pk_game_t *g, int seat,
 
     if (nopp == 0) return PK_PERMILLE;
 
-    pk_deck_init_excluding(&d, seen, nseen);
+    zdeck_init_excluding(&d, seen, nseen);
 
     need_board = final_board - g->nboard;
     if (need_board < 0) need_board = 0;
@@ -294,11 +294,11 @@ int32_t pk_ai_equity_game(pk_ai_t *a, const pk_game_t *g, int seat,
      * furthest opponents until it fits -- an equity against five
      * opponents instead of seven is slightly optimistic and is far
      * better than no estimate at all. */
-    while (nopp > 1 && need_total > pk_deck_remaining(&d)) {
+    while (nopp > 1 && need_total > zdeck_remaining(&d)) {
         nopp--;
         need_total -= final_hole - opp_nknown[nopp];
     }
-    if (need_total > pk_deck_remaining(&d)) return PK_PERMILLE / 2;
+    if (need_total > zdeck_remaining(&d)) return PK_PERMILLE / 2;
 
     for (r = 0; r < rollouts; r++) {
         int pos = 0, k, nh = 0;
@@ -419,8 +419,8 @@ void pk_ai_decide(pk_ai_t *a, const pk_game_t *g, int seat,
     /* The random third of a beginner's decisions. Taken BEFORE the
      * rollouts, not after, so a weak level is also a fast one -- which
      * is most of what makes an easy game feel easy to sit at. */
-    if (L->noise && (int)pk_rng_below(100) < L->noise) {
-        int r = (int)pk_rng_below(100);
+    if (L->noise && (int)zg_rng_below(100) < L->noise) {
+        int r = (int)zg_rng_below(100);
         if (r < 55 || (!o.can_bet && !o.can_raise)) {
             *action = o.can_check ? PK_CHECK : PK_CALL;
         } else if (r < 85) {
@@ -467,7 +467,7 @@ void pk_ai_decide(pk_ai_t *a, const pk_game_t *g, int seat,
      * bet is a different and much harder judgement and is deliberately
      * not attempted at any level. */
     if (o.can_bet && eq < 400 && bluff > 0 &&
-        (int)pk_rng_below(100) < bluff) {
+        (int)zg_rng_below(100) < bluff) {
         *action = PK_BET;
         *to = size_bet(g, &o, 55);
         return;

@@ -16,6 +16,8 @@
 #include <unistd.h>
 
 #include "zeitlos.h"
+#include "zwm.h"		// Z_WM_GAME_GRAB / _RELEASE
+#include "zsoc.h"		// z_game_view_set_enabled()
 
 bool term_echo = true;
 bool term_escape = false;
@@ -294,6 +296,46 @@ bool z_pid_lookup(const char *name, uint32_t *pid) {
 	if (rv->val.uint32 != Z_OK || obj.type != Z_UINT32) return false;
 
 	*pid = obj.val.uint32;
+	return true;
+
+}
+
+/* Enter or leave game mode, as an APP.
+ *
+ * The register write is the easy half. The half that matters is telling
+ * wm, because wm's idea of game mode is a camera over a desktop it is
+ * still compositing, and an app's is taking the framebuffer that
+ * desktop lives in. Without the message wm carries on: a click changes
+ * focus, raises a window, and paints it into pixels the game is
+ * showing.
+ *
+ * Here rather than in zsoc.h so that header stays what it says it is --
+ * a register layer safe to include from kernel-compiled code, pulling
+ * in nothing but stdint and stdbool. And here rather than in a new
+ * object so that every app already links it: nothing in sw/apps needed
+ * a source change or a Makefile change to become correct.
+ *
+ * wm calls z_game_view_set_enabled() directly and is not affected.
+ */
+bool z_game_set_enabled(bool on, bool wrap) {
+
+	uint32_t wm_pid;
+
+	if (!z_game_view_set_enabled(on, wrap)) return false;
+
+	/* No wm -- a bare-metal or single-app boot. The register is set
+	 * and there is nobody to tell, which is not an error. */
+	if (!z_pid_lookup("wm0", &wm_pid)) return true;
+
+	/* Never from wm itself. wm reaches the register through the raw
+	 * accessor, so this cannot normally happen -- but wm linking this
+	 * object and grabbing the screen from itself would be a deadlock
+	 * that is very hard to see, and the guard is one comparison. */
+	if (wm_pid == z_getpid()) return true;
+
+	z_msg_new_send(wm_pid, on ? Z_WM_GAME_GRAB : Z_WM_GAME_RELEASE,
+		0, z_obj_uint32(0));
+
 	return true;
 
 }

@@ -379,21 +379,31 @@ uint32_t z_rng_u32(void) {
 
 uint32_t z_rng_below(uint32_t n) {
 
-	uint32_t limit;
-	uint32_t v;
+	uint32_t reject, bound, v;
 
-	if (n == 0) return 0;
+	if (n <= 1) return 0;
 
 	// Rejection sampling. `% n` on a full 32-bit draw is biased toward
 	// small values whenever n does not divide 2^32 -- usually a tiny
-	// bias, but it is free to avoid and it is exactly the kind of
-	// thing that is invisible until it matters. Discard the top
-	// partial interval instead.
-	limit = (uint32_t)(0x100000000ull - (0x100000000ull % (uint64_t)n));
+	// bias, but it is free to avoid and it is exactly the kind of thing
+	// that is invisible until it matters.
+	reject = z_rng_reject_count(n);
+
+	// NOTHING TO REJECT. n divides 2^32, so every word is usable and the
+	// modulo is already unbiased.
+	//
+	// This case must be handled separately rather than falling out of
+	// the arithmetic, and that is the whole history of this function:
+	// the accept bound is 2^32 - reject, which here is 2^32 exactly --
+	// not representable in a uint32_t, where it becomes 0 and turns the
+	// loop below into an infinite one. See zrng.h.
+	if (reject == 0) return z_rng_u32() % n;
+
+	bound = (uint32_t)(0u - reject);		// 2^32 - reject
 
 	do {
 		v = z_rng_u32();
-	} while (v >= limit);
+	} while (v >= bound);
 
 	return v % n;
 

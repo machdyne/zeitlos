@@ -52,46 +52,56 @@
 
 static z_clip_t shim_scissor = { 0, 0, Z_SCREEN_W - 1, Z_SCREEN_H - 1 };
 
-/*
- * zgfx.c's version, which is not linked here.
+/* -- what zrender.h supplies now, and what it still does not --
  *
- * zrender.h's z_gfx_visible_count() returns 0 with no wm running,
- * which means UNRESTRICTED (see zgfx.h) and not "invisible". zrender.h
- * keeps its region rectangles private, so if a test ever does install
- * one this falls back to the caller's own clip: a superset of the
- * right answer, never a subset. A test can therefore still fail by
- * drawing somewhere it should not, and cannot pass by doing so.
+ * zrender.h grew z_gfx_visible_clip() and the z_gfx_paint_* walkers
+ * when the compositor became damage-based, so the copy that used to be
+ * here has been deleted -- two definitions is a duplicate symbol at
+ * link time, not a fallback.
+ *
+ * It did NOT grow z_gfx_blit_scissor(). Its z_fb_hw_blit_mem() ignores
+ * any scissor and ORs rather than copies, so both of those are still
+ * needed below and both still matter: an ORing blit would draw a card
+ * face as a solid white rectangle and lose the rank, the pips and the
+ * border at once.
  */
-bool z_gfx_visible_clip(int i, const z_clip_t *clip, z_clip_t *out)
-{
-    z_clip_t r;
-    int n = z_gfx_visible_count();
-
-    if (n == 0) {
-        if (i != 0) return false;
-    } else if (i < 0 || i >= n) {
-        return false;
-    }
-
-    r.x0 = 0; r.y0 = 0;
-    r.x1 = Z_SCREEN_W - 1; r.y1 = Z_SCREEN_H - 1;
-
-    if (clip) {
-        if (clip->x0 > r.x0) r.x0 = clip->x0;
-        if (clip->y0 > r.y0) r.y0 = clip->y0;
-        if (clip->x1 < r.x1) r.x1 = clip->x1;
-        if (clip->y1 < r.y1) r.y1 = clip->y1;
-    }
-
-    if (r.x1 < r.x0 || r.y1 < r.y0) return false;
-
-    *out = r;
-    return true;
-}
 
 bool z_gfx_blit_scissor(int i, const z_clip_t *clip)
 {
     z_clip_t eff;
+
+    /* NO REGION MEANS UNRESTRICTED, and this has to say so itself
+     * rather than ask zrender.h.
+     *
+     * zgfx.c's z_gfx_visible_clip() treats gfx_region_n == 0 as the
+     * whole screen -- that is how an app draws before wm has sent a
+     * region, and how it draws in game mode, where z_gfx_clear_visible()
+     * is called deliberately. zrender.h's copy returns FALSE for that
+     * case instead, which does not match the hardware and contradicts
+     * its own paint walker two functions below ("a single unrestricted
+     * pass when there is no region at all").
+     *
+     * The consequence is not subtle: every blit in a host test is
+     * skipped, so cards simply do not appear, while the same code draws
+     * correctly on the device. That is a harness that lies in the
+     * expensive direction. Worked around here rather than by editing
+     * zrender.h, which is shared. */
+    if (z_gfx_visible_count() == 0) {
+        eff.x0 = 0;
+        eff.y0 = 0;
+        eff.x1 = Z_SCREEN_W - 1;
+        eff.y1 = Z_SCREEN_H - 1;
+        if (clip) {
+            if (clip->x0 > eff.x0) eff.x0 = clip->x0;
+            if (clip->y0 > eff.y0) eff.y0 = clip->y0;
+            if (clip->x1 < eff.x1) eff.x1 = clip->x1;
+            if (clip->y1 < eff.y1) eff.y1 = clip->y1;
+        }
+        if (eff.x1 < eff.x0 || eff.y1 < eff.y0) return false;
+        shim_scissor = eff;
+        return true;
+    }
+
     if (!z_gfx_visible_clip(i, clip, &eff)) return false;
     shim_scissor = eff;
     return true;

@@ -33,8 +33,8 @@ static pt_view_t view;
 
 static uint8_t C(const char *s)
 {
-    uint8_t c = pk_card_parse(s);
-    if (c == PK_CARD_NONE) { fprintf(stderr, "bad card %s\n", s); exit(1); }
+    uint8_t c = zcard_parse(s);
+    if (c == Z_CARD_NONE) { fprintf(stderr, "bad card %s\n", s); exit(1); }
     return c;
 }
 
@@ -98,7 +98,7 @@ int main(int argc, char **argv)
 
     if (!strcmp(what, "narrow")) { w = 220; h = 200; }
 
-    pk_rng_seed(20260915);
+    zg_rng_seed(20260915);
 
     if (!strcmp(what, "stud")) {
         pk_game_init(&game, &pk_variant_stud7, 6, 1000, 5, 10);

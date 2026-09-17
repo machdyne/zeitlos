@@ -60,7 +60,7 @@ static void names(int n)
 static void setup(const pk_variant_t *v, int nseats)
 {
     memset(&view, 0, sizeof view);
-    pk_rng_seed(7);
+    zg_rng_seed(7);
     pk_game_init(&game, v, nseats, 1000, 5, 10);
     pk_hand_begin(&game);
     view.g = &game;
@@ -154,9 +154,9 @@ static void test_geometry(void)
         "the opponent rows do not overlap");
     check(L.opp_row_y[1] + PT_SEAT_H <= L.pot_y, "opponents above the pot");
     check(L.pot_y + 8 <= L.board_y, "the pot line is above the board");
-    check(L.board_y + PK_ART_FULL_H <= L.hero_y,
+    check(L.board_y + Z_ART_FULL_H <= L.hero_y,
         "the board is above the hero's cards");
-    check(L.hero_y + PK_ART_FULL_H <= L.hero_info_y,
+    check(L.hero_y + Z_ART_FULL_H <= L.hero_info_y,
         "the hero's cards are above their chip count");
     check(L.hero_info_y + 8 <= L.btn[0].y, "the chip count is above the buttons");
     check(L.btn[0].y + PT_BTN_H <= L.msg_y, "the buttons are above the message");
@@ -181,17 +181,17 @@ static void test_geometry(void)
 
     /* Cards fit across the width. */
     check(L.board_x >= L.clip.x0, "the board starts inside");
-    check(L.board_x + L.board_slots * (PK_ART_FULL_W + 3) - 3 <= L.clip.x1 + 1,
+    check(L.board_x + L.board_slots * (Z_ART_FULL_W + 3) - 3 <= L.clip.x1 + 1,
         "the whole board fits across");
     check(L.hero_x >= L.clip.x0, "the hero's cards start inside");
-    check(L.hero_x + L.hero_slots * (PK_ART_FULL_W + 2) - 2 <= L.clip.x1 + 1,
+    check(L.hero_x + L.hero_slots * (Z_ART_FULL_W + 2) - 2 <= L.clip.x1 + 1,
         "the hero's cards fit across");
 
     /* Opponent cells tile the width without overlapping. */
     for (i = 0; i < L.opp_rows; i++) {
         int total = L.opp_row_n[i] * L.opp_cell_w[i];
         check(total <= L.w, "an opponent row fits across the width");
-        check(L.opp_cell_w[i] >= PK_ART_MINI_W, "a seat is at least a card wide");
+        check(L.opp_cell_w[i] >= Z_ART_MINI_W, "a seat is at least a card wide");
     }
 }
 
@@ -211,13 +211,13 @@ static void test_stud_fits(void)
     /* The whole reason the mini cards overlap. Seven cards at the fan
      * stride must fit inside one seat cell, or a full stud hand runs
      * into the next player. */
-    fan = 6 * PK_ART_MINI_STRIDE + PK_ART_MINI_W;
+    fan = 6 * Z_ART_MINI_STRIDE + Z_ART_MINI_W;
     check(fan <= L.opp_cell_w[0] - 4,
         "a seven-card fan fits inside a seat cell");
 
     /* And the hero's seven full-size cards fit across the table. */
     check(L.hero_x >= L.clip.x0, "seven full cards start inside");
-    check(L.hero_x + 7 * (PK_ART_FULL_W + 2) - 2 <= L.clip.x1 + 1,
+    check(L.hero_x + 7 * (Z_ART_FULL_W + 2) - 2 <= L.clip.x1 + 1,
         "seven full cards fit across");
 
     /* Eight-handed is the worst case the engine allows. */
@@ -308,8 +308,8 @@ static void test_hits(void)
         pt_hero_card_xy(&L, i, &x, &y);
         check_eq(pt_hero_card_at(&L, &view, x, y), i,
             "a hero card's corner hits it");
-        check_eq(pt_hero_card_at(&L, &view, x + PK_ART_FULL_W / 2,
-            y + PK_ART_FULL_H / 2), i, "and so does its middle");
+        check_eq(pt_hero_card_at(&L, &view, x + Z_ART_FULL_W / 2,
+            y + Z_ART_FULL_H / 2), i, "and so does its middle");
     }
 
     check_eq(pt_hero_card_at(&L, &view, L.hero_x, L.hero_y - 1), -1,
@@ -325,7 +325,7 @@ static void test_hits(void)
      * discarding the card next to the one that was clicked. */
     for (i = 1; i < game.seat[0].nhole; i++) {
         pt_hero_card_xy(&L, i, &x, &y);
-        check_eq(pt_hero_card_at(&L, &view, x - 1, y + PK_ART_FULL_H / 2), -1,
+        check_eq(pt_hero_card_at(&L, &view, x - 1, y + Z_ART_FULL_H / 2), -1,
             "the gap between two cards hits neither");
     }
 }
@@ -371,7 +371,7 @@ static void test_drawing(void)
     check(ink_in(L.ox, L.status_y, L.w, 8) > 0, "the status line has content");
     check(ink_in(L.ox, L.pot_y, L.w, 8) > 0, "the pot line has content");
     check(ink_in(L.hero_x, L.hero_y, L.w - (L.hero_x - L.ox),
-        PK_ART_FULL_H) > 0, "the hero's cards are drawn");
+        Z_ART_FULL_H) > 0, "the hero's cards are drawn");
     check(ink_in(L.ox, L.btn[0].y, L.w, PT_BTN_H) > 0, "the buttons are drawn");
     check(ink_in(L.ox, L.msg_y, L.w, 8) > 0, "the message line has content");
     check(ink_in(L.ox, L.cmd_y, L.w, 8) > 0, "the command line has content");
@@ -419,10 +419,10 @@ static void test_drawing(void)
         pt_draw_all(&L, &view);
 
         card = game.seat[0].hole[0];
-        tile = &pk_card_full[(int)card * PK_ART_FULL_H];
+        tile = &z_card_full[(int)card * Z_ART_FULL_H];
 
-        for (py = 0; py < PK_ART_FULL_H; py++)
-            for (px = 0; px < PK_ART_FULL_W; px++) {
+        for (py = 0; py < Z_ART_FULL_H; py++)
+            for (px = 0; px < Z_ART_FULL_W; px++) {
                 int want = (int)((tile[py] >> px) & 1u);
                 if (shim_get(L.hero_x + px, L.hero_y + py) != want) diff++;
             }
@@ -435,10 +435,10 @@ static void test_drawing(void)
          * comparison vacuous. */
         {
             int asym = 0;
-            for (py = 0; py < PK_ART_FULL_H; py++)
-                for (px = 0; px < PK_ART_FULL_W; px++)
+            for (py = 0; py < Z_ART_FULL_H; py++)
+                for (px = 0; px < Z_ART_FULL_W; px++)
                     if (((tile[py] >> px) & 1u) !=
-                        ((tile[py] >> (PK_ART_FULL_W - 1 - px)) & 1u)) asym++;
+                        ((tile[py] >> (Z_ART_FULL_W - 1 - px)) & 1u)) asym++;
             check(asym > 0, "the card art is not its own mirror image");
         }
     }
@@ -456,8 +456,8 @@ static void test_drawing(void)
      * works hard to keep them all inside. So this narrows the clip by
      * hand, which is exactly what an occluded window does. */
     {
-        static uint8_t whole[PK_ART_FULL_W * PK_ART_FULL_H];
-        static uint8_t part[PK_ART_FULL_W * PK_ART_FULL_H];
+        static uint8_t whole[Z_ART_FULL_W * Z_ART_FULL_H];
+        static uint8_t part[Z_ART_FULL_W * Z_ART_FULL_H];
         const int cut = 9;
         int px, py, n, diff = 0;
 
@@ -467,27 +467,27 @@ static void test_drawing(void)
         z_render_clear_all();
         pt_draw_all(&L, &view);
         n = 0;
-        for (py = 0; py < PK_ART_FULL_H; py++)
-            for (px = 0; px < PK_ART_FULL_W; px++)
+        for (py = 0; py < Z_ART_FULL_H; py++)
+            for (px = 0; px < Z_ART_FULL_W; px++)
                 whole[n++] = (uint8_t)shim_get(L.hero_x + px, L.hero_y + py);
 
         z_render_clear_all();
         L.clip.x0 = L.hero_x + cut;
         pt_draw_all(&L, &view);
         n = 0;
-        for (py = 0; py < PK_ART_FULL_H; py++)
-            for (px = 0; px < PK_ART_FULL_W; px++)
+        for (py = 0; py < Z_ART_FULL_H; py++)
+            for (px = 0; px < Z_ART_FULL_W; px++)
                 part[n++] = (uint8_t)shim_get(L.hero_x + px, L.hero_y + py);
 
         /* Only the columns that survived the cut are compared. The
          * ones before it should be blank and are checked separately. */
-        for (py = 0; py < PK_ART_FULL_H; py++) {
-            for (px = cut; px < PK_ART_FULL_W; px++) {
-                int k = py * PK_ART_FULL_W + px;
+        for (py = 0; py < Z_ART_FULL_H; py++) {
+            for (px = cut; px < Z_ART_FULL_W; px++) {
+                int k = py * Z_ART_FULL_W + px;
                 if (whole[k] != part[k]) diff++;
             }
             for (px = 0; px < cut; px++)
-                if (part[py * PK_ART_FULL_W + px]) diff++;
+                if (part[py * Z_ART_FULL_W + px]) diff++;
         }
 
         check_eq(diff, 0, "a clipped card shows the correct part of itself");

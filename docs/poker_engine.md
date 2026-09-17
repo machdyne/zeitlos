@@ -31,7 +31,7 @@ has to do for itself.
 
 The deuce is rank 0 rather than rank 2 so a rank fits in a nibble with
 room for the ace, which is what lets the whole evaluation pack into 24
-bits. The cost is that `PK_RANK()` does not return the number printed
+bits. The cost is that `Z_RANK()` does not return the number printed
 on the card, and everything that needs that number goes through
 `pk_rank_char()`.
 
@@ -40,7 +40,7 @@ from a seed. **No poker rule breaks a tie by suit.** Anything in this
 tree that appears to rank one suit above another is a bug, and
 `tests/eval_test.c` asserts the negative directly.
 
-`PK_CARD_NONE` is `0xff`, not `0`, because `0` is the two of clubs and
+`Z_CARD_NONE` is `0xff`, not `0`, because `0` is the two of clubs and
 a zeroed structure full of deuces is far harder to notice than one
 full of obvious nonsense.
 
@@ -147,7 +147,7 @@ a hand at every showdown must not pay that.
 
 ### The generator is injected
 
-Nothing in `pk_deck.c` calls into Zeitlos. The app installs a wrapper
+Nothing in `zdeck.c` calls into Zeitlos. The app installs a wrapper
 around `z_rng_below()` at startup; the host tests install a
 counter-based generator and get the same deal twice.
 
@@ -205,14 +205,14 @@ uniformity test catches this specific mutation.
 
 ### Exhaustion is a real case
 
-`pk_deck_deal()` returns `PK_CARD_NONE` rather than wrapping. Eight
+`zdeck_deal()` returns `Z_CARD_NONE` rather than wrapping. Eight
 players in seven-card stud need 56 cards plus burns, and the rules say
 the last card is dealt face up as a community card. The betting engine
 can only do that if the deck reports the condition.
 
 ### Stacking
 
-`pk_deck_stack()` forces the next *n* cards, by swapping them up from
+`zdeck_stack()` forces the next *n* cards, by swapping them up from
 wherever they sit. It is for tests and nothing else. There is no debug
 command that reaches it, because a stacked deck reachable from the
 command line is a cheat that will eventually be found.
@@ -306,7 +306,7 @@ turn the first voluntary action in every stud hand into a call.
 
 Third street's forced bet falls on the lowest exposed card, and a tie
 is broken by suit with clubs lowest. It is the only place in poker
-where one suit outranks another, and it is why `pk_cards.h` orders
+where one suit outranks another, and it is why `zcard.h` orders
 suits alphabetically: the comparison is on the card byte.
 
 From fourth street on, the best hand *showing* acts first, evaluated

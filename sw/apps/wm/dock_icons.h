@@ -15,8 +15,10 @@
  */
 
 extern const uint8_t z_icon_ask_data[32 * 4];
+extern const uint8_t z_icon_blackjack_data[32 * 4];
 extern const uint8_t z_icon_cal_data[32 * 4];
 extern const uint8_t z_icon_calc_data[32 * 4];
+extern const uint8_t z_icon_casino_data[32 * 4];
 extern const uint8_t z_icon_chess_data[32 * 4];
 extern const uint8_t z_icon_chip8_data[32 * 4];
 extern const uint8_t z_icon_clock_data[32 * 4];
@@ -26,13 +28,17 @@ extern const uint8_t z_icon_gamedemo_data[32 * 4];
 extern const uint8_t z_icon_gpu3d_data[32 * 4];
 extern const uint8_t z_icon_hex_data[32 * 4];
 extern const uint8_t z_icon_info_data[32 * 4];
+extern const uint8_t z_icon_kidgames_data[32 * 4];
 extern const uint8_t z_icon_midi_data[32 * 4];
 extern const uint8_t z_icon_mmod_data[32 * 4];
 extern const uint8_t z_icon_next_data[32 * 4];
 extern const uint8_t z_icon_play_data[32 * 4];
+extern const uint8_t z_icon_poker_data[32 * 4];
 extern const uint8_t z_icon_read_data[32 * 4];
+extern const uint8_t z_icon_roulette_data[32 * 4];
 extern const uint8_t z_icon_settings_data[32 * 4];
 extern const uint8_t z_icon_sheet_data[32 * 4];
+extern const uint8_t z_icon_slots_data[32 * 4];
 extern const uint8_t z_icon_space3d_data[32 * 4];
 extern const uint8_t z_icon_term_data[32 * 4];
 extern const uint8_t z_icon_text_data[32 * 4];

@@ -61,12 +61,12 @@
 #include "../../common/zgfx.h"
 #include "pk_game.h"
 #include "pk_ai.h"
-#include "cards.h"
+#include "../../common/games/zcardart.h"
 
 #define PT_LINE_H     10      /* an 8-pixel font line plus breathing room */
 #define PT_BTN_H      12
 #define PT_GAP        3
-#define PT_SEAT_H     (PT_LINE_H + PK_ART_MINI_H + PT_LINE_H)
+#define PT_SEAT_H     (PT_LINE_H + Z_ART_MINI_H + PT_LINE_H)
 
 /* Below this the table is not drawn at all and a note is drawn
  * instead. Chess shrinks by dropping its panel; there is nothing here
@@ -156,6 +156,16 @@ typedef struct {
     bool       reveal;
 
     int        hand_no;
+
+    /* The shared bank, and what was taken out of it to sit down.
+     *
+     * Poker is the only game here whose boundary is not a round: a
+     * stack rises and falls across many hands, so the bank is settled
+     * when the TABLE ends rather than when a hand does. Until then
+     * `bank` is what is left in /USER/casino.dat and `buyin` is what is
+     * on the table -- the two together are what the player is worth. */
+    int32_t    bank;
+    int32_t    buyin;
     char       tag[PK_MAX_SEATS][PT_TAG_LEN];   /* "calls 20", "folds" */
     char       name[PK_MAX_SEATS][8];
 

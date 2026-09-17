@@ -449,6 +449,31 @@ typedef struct {
 //
 // x1 is Z_WM_CLIP_CTL as well, so the rectangle is degenerate and far
 // off screen for anything that does reach zgfx with it.
+// -- an app taking the screen (sw/common/zeitlos.c) --
+//
+// wm's own game mode is a CAMERA: a 320x240 viewport over an unchanged
+// desktop, which is why windows keep working in it. An app's game mode
+// is a TAKEOVER: it draws over the framebuffer the desktop lives in.
+//
+// The two share one register, so wm cannot tell them apart by looking.
+// z_game_set_enabled() sends this instead, and wm suspends window
+// management for as long as it is held.
+//
+// Input keeps flowing. A game still needs keys and clicks, and every
+// one of them leaves game mode with Escape, so a grab that silenced the
+// keyboard would be a trap. wm routes both to the grab owner instead of
+// to whatever the cursor is over.
+//
+// wm's own hotkeys keep working too -- it is the only process that sees
+// every keystroke, and that has to stay true whoever owns the screen.
+#define Z_WM_GAME_GRAB           (-32760)
+#define Z_WM_GAME_RELEASE        (-32759)
+
+// Sent to the owner when wm takes the screen back -- Alt+Esc, or the
+// owner's window going away. An app that ignores it is no worse off
+// than before; one that handles it can put itself back in a window.
+#define Z_WM_GAME_REVOKED        (-32758)
+
 #define Z_WM_CLIP_CTL            (-32768)
 #define Z_WM_CLIP_FREEZE         1
 #define Z_WM_CLIP_WINDOW         2

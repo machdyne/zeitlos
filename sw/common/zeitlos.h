@@ -614,6 +614,24 @@ bool z_pid_register(const char *basename, char *out, uint32_t outlen);
 // different way.
 bool z_pid_lookup(const char *name, uint32_t *pid);
 
+// Enter or leave game mode, as an APP: takes the screen and tells wm.
+//
+// Same signature and same name as the register accessor this replaces,
+// so every existing caller gets the notification without being touched.
+// The raw write is z_game_view_set_enabled() in zsoc.h, which is what
+// wm itself calls -- for wm, game mode is a camera over a desktop that
+// is still being composited, and nothing needs telling.
+//
+// Returns false on a bitstream without game mode, writing nothing and
+// sending nothing.
+//
+// The message is fire-and-forget. The register only takes effect at the
+// next frame boundary -- up to 16.7ms -- so wm has longer to notice
+// than the hardware takes to switch, and an acknowledgement would cost
+// a round trip to close a window that is already smaller than the
+// latency it sits inside.
+bool z_game_set_enabled(bool on, bool wrap);
+
 // the calling process's own pid. Mainly useful for the same reason
 // wm.c needs it: to tell "is this thing mine?" apart from "is this
 // thing owned by whatever pid I happen to have been started as" --

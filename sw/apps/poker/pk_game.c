@@ -258,11 +258,11 @@ static void deal_street(pk_game_t *g)
     int i, k, start;
     int ndown = v->deal_down[s], nup = v->deal_up[s];
 
-    for (i = 0; i < v->burn[s]; i++) (void)pk_deck_deal(&g->deck);
+    for (i = 0; i < v->burn[s]; i++) (void)zdeck_deal(&g->deck);
 
     for (i = 0; i < v->deal_board[s]; i++) {
         if (g->nboard >= PK_MAX_BOARD) break;
-        g->board[g->nboard++] = pk_deck_deal(&g->deck);
+        g->board[g->nboard++] = zdeck_deal(&g->deck);
     }
 
     if (ndown == 0 && nup == 0) return;
@@ -273,9 +273,9 @@ static void deal_street(pk_game_t *g)
      * -- so it is implemented here rather than being avoided by
      * capping the table at seven seats. */
     if (ndown + nup == 1 &&
-        pk_deck_remaining(&g->deck) < pk_live_count(g)) {
+        zdeck_remaining(&g->deck) < pk_live_count(g)) {
         if (g->nboard < PK_MAX_BOARD)
-            g->board[g->nboard++] = pk_deck_deal(&g->deck);
+            g->board[g->nboard++] = zdeck_deal(&g->deck);
         return;
     }
 
@@ -293,7 +293,7 @@ static void deal_street(pk_game_t *g)
             if (g->seat[seat].nhole < PK_MAX_HOLE) {
                 pk_seat_t *sp = &g->seat[seat];
                 sp->up[sp->nhole] = (k >= ndown);
-                sp->hole[sp->nhole++] = pk_deck_deal(&g->deck);
+                sp->hole[sp->nhole++] = zdeck_deal(&g->deck);
             }
             if (seat == start) break;
         }
@@ -304,12 +304,12 @@ static void deal_street(pk_game_t *g)
 
 /* Stud third street: the lowest exposed card brings it in, and a tie
  * IS broken by suit with clubs lowest -- the only place in poker where
- * one suit outranks another. pk_cards.h's suit order is alphabetical
+ * one suit outranks another. zcard.h's suit order is alphabetical
  * for exactly this reason, so the comparison is on the card byte. */
 static int bring_in_seat(const pk_game_t *g)
 {
     int i, best = -1;
-    uint8_t low = PK_CARD_NONE;
+    uint8_t low = Z_CARD_NONE;
 
     for (i = 0; i < g->nseats; i++) {
         const pk_seat_t *s = &g->seat[i];
@@ -739,8 +739,8 @@ static void begin_common(pk_game_t *g)
 
 void pk_hand_begin(pk_game_t *g)
 {
-    pk_deck_init(&g->deck);
-    pk_deck_shuffle(&g->deck);
+    zdeck_init(&g->deck, 1);
+    zdeck_shuffle(&g->deck);
     begin_common(g);
 }
 
@@ -961,12 +961,12 @@ bool pk_draw(pk_game_t *g, const uint8_t *idx, int n)
     for (i = 0; i < nkeep; i++) s->hole[i] = keep[i];
 
     for (j = nkeep; j < s->nhole; j++) {
-        uint8_t c = pk_deck_deal(&g->deck);
+        uint8_t c = zdeck_deal(&g->deck);
         /* An exhausted deck cannot serve the draw. Standing pat is
          * the only correct answer -- reshuffling the discards is a
          * real casino rule and needs a discard pile this does not
          * keep, so the hand is short rather than wrong. */
-        if (c == PK_CARD_NONE) { s->nhole = (uint8_t)j; break; }
+        if (c == Z_CARD_NONE) { s->nhole = (uint8_t)j; break; }
         s->hole[j] = c;
         s->up[j] = false;
     }

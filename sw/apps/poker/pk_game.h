@@ -57,9 +57,9 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include "pk_cards.h"
+#include "../../common/games/zcard.h"
 #include "pk_eval.h"
-#include "pk_deck.h"
+#include "../../common/games/zdeck.h"
 
 #define PK_MAX_SEATS    8
 #define PK_MAX_STREETS  5
@@ -208,7 +208,7 @@ typedef struct {
     pk_seat_t seat[PK_MAX_SEATS];
     int      nseats;
 
-    pk_deck_t deck;
+    zdeck_t deck;
 
     int32_t  small_blind;
     int32_t  big_blind;
@@ -251,7 +251,7 @@ void pk_game_set_limit(pk_game_t *g, int limit);
  * than two seats can play).
  *
  * The deck is shuffled here. A test that wants a known board calls
- * pk_deck_stack() on g->deck AFTER this returns -- which works because
+ * zdeck_stack() on g->deck AFTER this returns -- which works because
  * the first street has already been dealt and the stack therefore
  * lands on the board rather than in somebody's hand. To control the
  * hole cards too, stack before calling and pass a pre-shuffled deck

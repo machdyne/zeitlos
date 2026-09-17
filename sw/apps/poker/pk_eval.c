@@ -49,7 +49,7 @@ static int straight_high(uint32_t mask)
 {
     int h;
 
-    for (h = PK_RANK_A; h >= PK_RANK_5 + 1; h--)
+    for (h = Z_RANK_A; h >= Z_RANK_5 + 1; h--)
         if (((mask >> (h - 4)) & 0x1fu) == 0x1fu) return h;
 
     /* The wheel: ace plus deuce through five. Tested last and
@@ -58,16 +58,16 @@ static int straight_high(uint32_t mask)
      * window can find it. Reported as five-high, which is what makes
      * it sort below every other straight without a special case in
      * the comparison. */
-    if ((mask & (1u << PK_RANK_A)) && ((mask & 0x0fu) == 0x0fu))
-        return PK_RANK_5;
+    if ((mask & (1u << Z_RANK_A)) && ((mask & 0x0fu) == 0x0fu))
+        return Z_RANK_5;
 
     return -1;
 }
 
 uint32_t pk_eval5(const uint8_t *cards)
 {
-    int rc[PK_NRANKS];
-    int sc[PK_NSUITS];
+    int rc[Z_NRANKS];
+    int sc[Z_NSUITS];
     uint32_t mask = 0;
     int i, r, cnt;
     int ord[5];
@@ -78,13 +78,13 @@ uint32_t pk_eval5(const uint8_t *cards)
     int cat;
     uint32_t v;
 
-    for (i = 0; i < PK_NRANKS; i++) rc[i] = 0;
-    for (i = 0; i < PK_NSUITS; i++) sc[i] = 0;
+    for (i = 0; i < Z_NRANKS; i++) rc[i] = 0;
+    for (i = 0; i < Z_NSUITS; i++) sc[i] = 0;
 
     for (i = 0; i < 5; i++) {
-        r = PK_RANK(cards[i]);
+        r = Z_RANK(cards[i]);
         rc[r]++;
-        sc[PK_SUIT(cards[i])]++;
+        sc[Z_SUIT(cards[i])]++;
         mask |= 1u << r;
     }
 
@@ -92,7 +92,7 @@ uint32_t pk_eval5(const uint8_t *cards)
      * descending. See pk_eval.h -- this one loop is what makes every
      * category share a single encoding path. */
     for (cnt = 4; cnt >= 1; cnt--) {
-        for (r = PK_RANK_A; r >= 0; r--) {
+        for (r = Z_RANK_A; r >= 0; r--) {
             if (rc[r] != cnt) continue;
             ord[nord++] = r;
             if (cnt > maxcount) maxcount = cnt;
@@ -137,7 +137,7 @@ uint32_t pk_eval5(const uint8_t *cards)
 
 uint32_t pk_eval_upcards(const uint8_t *cards, int n)
 {
-    int rc[PK_NRANKS];
+    int rc[Z_NRANKS];
     int i, r, cnt;
     int ord[5];
     int nord = 0, maxcount = 0;
@@ -146,15 +146,15 @@ uint32_t pk_eval_upcards(const uint8_t *cards, int n)
 
     if (n < 1 || n > 5) return PK_EVAL_NONE;
 
-    for (i = 0; i < PK_NRANKS; i++) rc[i] = 0;
-    for (i = 0; i < n; i++) rc[PK_RANK(cards[i])]++;
+    for (i = 0; i < Z_NRANKS; i++) rc[i] = 0;
+    for (i = 0; i < n; i++) rc[Z_RANK(cards[i])]++;
 
     /* The same multiplicity-then-rank order pk_eval5() uses. It is
      * reproduced rather than shared because the two differ in what
      * they do next, and a common helper taking three flags to serve
      * both would be harder to read than either. */
     for (cnt = 4; cnt >= 1; cnt--) {
-        for (r = PK_RANK_A; r >= 0; r--) {
+        for (r = Z_RANK_A; r >= 0; r--) {
             if (rc[r] != cnt) continue;
             ord[nord++] = r;
             if (cnt > maxcount) maxcount = cnt;
@@ -260,12 +260,12 @@ uint32_t pk_eval_constrained(const uint8_t *hole, int nhole,
  * pay that.
  */
 
-static const char *const pk_rank_one[PK_NRANKS] = {
+static const char *const pk_rank_one[Z_NRANKS] = {
     "deuce", "three", "four", "five", "six", "seven", "eight",
     "nine", "ten", "jack", "queen", "king", "ace"
 };
 
-static const char *const pk_rank_many[PK_NRANKS] = {
+static const char *const pk_rank_many[Z_NRANKS] = {
     "deuces", "threes", "fours", "fives", "sixes", "sevens", "eights",
     "nines", "tens", "jacks", "queens", "kings", "aces"
 };
@@ -280,12 +280,12 @@ static void app(char *buf, int len, int *pos, const char *s)
 
 static const char *one(int r)
 {
-    return (r >= 0 && r < PK_NRANKS) ? pk_rank_one[r] : "?";
+    return (r >= 0 && r < Z_NRANKS) ? pk_rank_one[r] : "?";
 }
 
 static const char *many(int r)
 {
-    return (r >= 0 && r < PK_NRANKS) ? pk_rank_many[r] : "?";
+    return (r >= 0 && r < Z_NRANKS) ? pk_rank_many[r] : "?";
 }
 
 void pk_eval_name(uint32_t value, char *buf, int len)
@@ -309,7 +309,7 @@ void pk_eval_name(uint32_t value, char *buf, int len)
         /* Named separately because everybody calls it that, and a
          * showdown reading "ace-high straight flush" would be correct
          * and would still feel like a bug. */
-        if (a == PK_RANK_A) { app(buf, len, &pos, "royal flush"); break; }
+        if (a == Z_RANK_A) { app(buf, len, &pos, "royal flush"); break; }
         app(buf, len, &pos, one(a));
         app(buf, len, &pos, "-high straight flush");
         break;

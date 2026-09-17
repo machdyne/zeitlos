@@ -61,7 +61,7 @@
  * worth 40 of the 2,598,960 five-card hands at straight-flush level
  * alone, and an evaluator that misses it is otherwise indistinguish-
  * able from a correct one. pk_eval5() reports its high card as
- * PK_RANK_5, which makes it the lowest straight by the ordinary
+ * Z_RANK_5, which makes it the lowest straight by the ordinary
  * comparison rather than by a special case anywhere else.
  *
  * There is no corresponding "round the corner" straight: Q-K-A-2-3 is
@@ -69,7 +69,7 @@
  */
 
 #include <stdint.h>
-#include "pk_cards.h"
+#include "../../common/games/zcard.h"
 
 #define PK_HIGH_CARD      0
 #define PK_PAIR           1
@@ -91,7 +91,7 @@
 
 #define PK_CATEGORY(v) ((int)((v) >> 20))
 
-/* Exactly five cards. No duplicate check -- pk_deck.c cannot produce
+/* Exactly five cards. No duplicate check -- zdeck.c cannot produce
  * one, and the tests that build hands by hand check their own input.
  * A duplicate here does not crash, it just returns a value for a hand
  * that cannot exist. */

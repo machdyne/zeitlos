@@ -406,13 +406,13 @@ pi_action_t input_key(pt_view_t *v, uint32_t keysym)
 
     if (keysym == 0x08 || keysym == 0x7f) {
         if (v->cmd_len > 0) v->cmd[--v->cmd_len] = '\0';
-        return PI_REDRAW;
+        return PI_STATUS;
     }
 
     if (keysym == 0x1b) {
         v->cmd_len = 0;
         v->cmd[0] = '\0';
-        return PI_REDRAW;
+        return PI_STATUS;
     }
 
     if (keysym == ' ' && v->cmd_len == 0) {
@@ -440,7 +440,7 @@ pi_action_t input_key(pt_view_t *v, uint32_t keysym)
     if (keysym >= 0x20 && keysym < 0x7f && v->cmd_len < PT_CMD_LEN - 1) {
         v->cmd[v->cmd_len++] = (char)keysym;
         v->cmd[v->cmd_len] = '\0';
-        return PI_REDRAW;
+        return PI_STATUS;
     }
 
     return PI_NONE;

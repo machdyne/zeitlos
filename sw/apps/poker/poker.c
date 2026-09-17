@@ -49,6 +49,8 @@
 #include "../../common/zsoc.h"
 #include "../../common/zkbd.h"
 #include "../../common/zrng.h"
+#include "../../common/games/zrand.h"
+#include "../../common/games/zbank.h"
 
 #include "table_ui.h"
 #include "input.h"
@@ -67,6 +69,7 @@ static pt_layout_t layout_rect;
 static pk_ai_t     ai[PK_MAX_SEATS];
 
 static bool running = true;
+static uint32_t bank_seen;
 static bool game_mode;
 static int  game_front;
 static bool exit_armed;
@@ -105,33 +108,23 @@ static uint32_t now_ms(void)
 
 /* -- randomness --------------------------------------------------------
  *
- * pk_deck.c takes its generator through a function pointer so the host
- * tests can make a deal reproducible. On hardware it gets the real
- * one.
+ * zdeck.c takes its generator through a function pointer so the host
+ * tests can make a deal reproducible. On hardware, zg_rng_use_system()
+ * installs the real one: a ChaCha20 stream seeded from rtl/trng.v where
+ * the board has one.
  *
- * z_rng_u32(), NOT z_rng_below(). The bounding is done in
- * pk_rng_below(), which is one place, tested, and correct.
+ * This app used to carry its own three-line wrapper around z_rng_u32()
+ * here, and its own copy of the rejection-sampling bound in pk_deck.c.
+ * Both moved to sw/common/games/zrand.c when roulette needed the same
+ * thing -- see docs/casino_bank.md on why two copies of that particular
+ * arithmetic produced two different bugs.
  *
- * That is not a style preference. z_rng_below() computes its accept
- * bound as 2^32 - (2^32 % n), which for any power-of-two n is 2^32 and
- * truncates to 0 in a uint32_t -- and `while (v >= 0)` on an unsigned
- * never ends. A 52-card Fisher-Yates asks for bounds of 52 down to 2,
- * so it hits 32 on the first deal. This app hung there, before it had
- * drawn anything, which presented as a blank window and wm timing out
- * waiting for a redraw acknowledgement. sw/apps/repl/zapi.c's
- * `(random n)` has the same exposure.
- *
- * NOT gated on z_rng_secure(). sw/common/zrng.h is explicit about
- * which question to ask: shuffling wants unpredictable-to-a-person,
- * and a board with no TRNG deals a perfectly good game of poker.
- * Refusing to play on such a board would be treating a card game like
- * a key exchange.
+ * NOT gated on z_rng_secure(). sw/common/zrng.h is explicit about which
+ * question to ask: shuffling wants unpredictable-to-a-person, and a
+ * board with no TRNG deals a perfectly good game of poker. Refusing to
+ * play on such a board would be treating a card game like a key
+ * exchange.
  */
-static uint32_t rng_wrap(void *ctx)
-{
-    (void)ctx;
-    return z_rng_u32();
-}
 
 /* -- names ------------------------------------------------------------- */
 
@@ -314,8 +307,14 @@ static bool ai_poll(void *user)
 
     /* Roughly every eight poll intervals. Often enough that the
      * indicator does not look frozen, rare enough that redrawing it is
-     * not where the time goes. */
-    if ((++poll_count & 7) == 0) repaint_message();
+     * not where the time goes.
+     *
+     * Skipped entirely while wm has this window's clip FROZEN for a
+     * drag: docs/window_manager.md asks a periodic render to draw
+     * nothing and change nothing until the thaw, and a draw attempted
+     * meanwhile only earns a redundant redraw when the region comes
+     * back. The opponent keeps thinking either way. */
+    if ((++poll_count & 7) == 0 && !z_win_frozen(&win)) repaint_message();
 
     return !cancel_think && running;
 }
@@ -384,12 +383,12 @@ static void ai_draw_turn(void)
      * recorded here rather than left to be discovered. */
     {
         const pk_seat_t *s = &game.seat[seat];
-        int rc[PK_NRANKS];
+        int rc[Z_NRANKS];
         int i;
-        for (i = 0; i < PK_NRANKS; i++) rc[i] = 0;
-        for (i = 0; i < s->nhole; i++) rc[PK_RANK(s->hole[i])]++;
+        for (i = 0; i < Z_NRANKS; i++) rc[i] = 0;
+        for (i = 0; i < s->nhole; i++) rc[Z_RANK(s->hole[i])]++;
         for (i = 0; i < s->nhole; i++)
-            if (rc[PK_RANK(s->hole[i])] < 2 && n < 3) idx[n++] = (uint8_t)i;
+            if (rc[Z_RANK(s->hole[i])] < 2 && n < 3) idx[n++] = (uint8_t)i;
     }
 
     pk_draw(&game, idx, n);
@@ -445,9 +444,60 @@ static void announce_result(void)
     set_str(view.message, PT_MSG_LEN, line);
 }
 
+/* -- the shared bank ------------------------------------------------------
+ *
+ * Poker is the only game here whose boundary is not a round. A stack
+ * rises and falls across many hands, so the bank is settled when the
+ * TABLE ends -- a buy-in and a cash-out, which is how a card room
+ * works and is also the only boundary that exists.
+ *
+ * NOTHING LEAVES /USER/casino.dat WHEN YOU SIT DOWN. The buy-in is
+ * recorded and the chips stay in the bank until the table is over, so a
+ * window closed mid-hand costs nothing -- the same arrangement
+ * sw/apps/craps uses for the same reason. What the player is worth is
+ * the bank plus whatever is in front of them, and the status line shows
+ * both.
+ */
+static void load_bank(void)
+{
+    zbank_t b;
+    int rv = zbank_load(&b);
+
+    view.bank = b.chips;
+
+    if (rv == ZBANK_CORRUPT) {
+        set_str(view.message, PT_MSG_LEN,
+            "bank file damaged -- `buyin` to start over");
+        puts("poker: /USER/casino.dat is damaged; not writing to it");
+    }
+}
+
+/* Cashes out. Whatever is in front of the hero goes back, less what was
+ * taken out to sit down -- so a table that broke even moves nothing. */
+static void leave_table(void)
+{
+    int32_t delta, chips;
+    int rv;
+
+    if (view.buyin <= 0) return;
+
+    delta = game.seat[view.hero].stack - view.buyin;
+    view.buyin = 0;
+
+    /* zbank_adjust() re-reads before it writes, so a win in another
+     * game meanwhile is not clobbered. */
+    rv = zbank_adjust("poker", delta, &chips);
+
+    if (rv == ZBANK_OK) view.bank = chips;
+    else view.bank += delta;
+}
+
 static void new_game(void)
 {
     int i;
+
+    /* Cash out the table being replaced before funding the next one. */
+    leave_table();
 
     if (view.pending_variant) { variant = view.pending_variant;
         view.pending_variant = 0; }
@@ -459,6 +509,20 @@ static void new_game(void)
 
     pk_game_init(&game, variant, seats, START_STACK, SMALL_BLIND, BIG_BLIND);
     pk_game_set_limit(&game, limit_mode);
+
+    /* THE OPPONENTS ARE THE HOUSE'S MONEY; the hero's is not.
+     *
+     * pk_game_init() seats everyone with the same stack, which is right
+     * for the other seats -- they are not drawing on /USER/casino.dat.
+     * The hero buys in for what the bank can cover, up to a full stack.
+     *
+     * A short buy-in is a real disadvantage at a table where everyone
+     * else has a full stack, which is exactly what being short of money
+     * in a card room is, so it is left as it falls rather than scaled
+     * away. */
+    view.buyin = view.bank < START_STACK ? view.bank : START_STACK;
+    if (view.buyin < 0) view.buyin = 0;
+    game.seat[view.hero].stack = view.buyin;
 
     for (i = 0; i < PK_MAX_SEATS; i++) {
         pk_ai_init(&ai[i], view.level);
@@ -480,7 +544,14 @@ static void new_hand(void)
         if (game.seat[i].stack > 0) alive++;
 
     if (game.seat[view.hero].stack <= 0) {
-        set_str(view.message, PT_MSG_LEN, "you are out -- type new");
+        /* Busted, so the table IS over -- settle now rather than
+         * waiting for `new`. Leaving it open would let somebody walk
+         * away from a loss by closing the window, which is exactly the
+         * hole the other games do not have. */
+        leave_table();
+        set_str(view.message, PT_MSG_LEN,
+            view.bank > 0 ? "you are out -- type new"
+                          : "out of chips -- borrow at the casino");
         return;
     }
 
@@ -563,6 +634,13 @@ static void do_action(pi_action_t a)
     case PI_ACTED:
         input_bet_step(&view, 0);
         repaint();
+        break;
+
+    case PI_STATUS:
+        /* Two rows of text. relayout() first because in a window that
+         * is what reloads the clip. */
+        relayout();
+        if (layout_rect.ok) pt_draw_status(&layout_rect, &view);
         break;
 
     case PI_REDRAW:
@@ -738,7 +816,10 @@ int main(void)
 {
     puts("poker: starting");
 
-    pk_rng_set(rng_wrap, 0);
+    zg_rng_use_system();
+
+    /* Before the first table is seated: new_game() buys in from this. */
+    load_bank();
     pk_ai_set_clock(now_ms);
     pk_ai_set_poll(ai_poll, 0);
 
@@ -787,10 +868,32 @@ int main(void)
          * only so a stuck message never wedges the app entirely; it is
          * not a polling interval, because nothing here changes on its
          * own. */
+
+
+        /* THE BANK CHANGES UNDER THIS WINDOW. sw/apps/casino can hand
+         * out a loan while a table is open, and another game can win
+         * while this one is idle -- /USER/casino.dat is shared. Once a
+         * second, and only when the figure has actually moved. */
+        {
+            uint32_t now = z_uptime_ticks();
+            if ((uint32_t)(now - bank_seen) >= Z_TICK_HZ) {
+                zbank_t b;
+                bank_seen = now;
+                if (zbank_load(&b) == ZBANK_OK && b.chips != view.bank) {
+                    view.bank = b.chips;
+                    repaint();
+                }
+            }
+        }
+
         z_proc_wait(Z_TICK_HZ);
     }
 
     if (game_mode) leave_game_mode();
+
+    /* Cash out on the way out, so closing the window banks the table
+     * rather than discarding it. */
+    leave_table();
 
     z_win_destroy(&win);
     puts("poker: bye");

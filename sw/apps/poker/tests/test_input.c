@@ -50,7 +50,7 @@ static void setup(const pk_variant_t *v, int nseats, int limit)
 {
     int i;
     memset(&view, 0, sizeof view);
-    pk_rng_seed(4242);
+    zg_rng_seed(4242);
     pk_game_init(&game, v, nseats, 1000, 5, 10);
     pk_game_set_limit(&game, limit);
     pk_hand_begin(&game);

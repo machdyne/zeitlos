@@ -180,6 +180,39 @@ uint32_t z_rng_u32(void);
 // genuinely uniform rather than `% n` with its bias toward small
 // values -- which matters more often than people expect and is free to
 // get right. Returns 0 for n == 0.
+// How many of the 2^32 possible words must be DISCARDED for the rest to
+// divide evenly by n -- that is, 2^32 mod n. Zero when n divides 2^32.
+//
+// Exposed, and inline, because two different callers need the same
+// answer and having two copies of it produced two different bugs. See
+// z_rng_below() below for what they were.
+//
+// Computed in 32 bits as ((2^32 - 1) mod n + 1) mod n. The obvious
+// 64-bit form is a __umoddi3 call on rv32i, on a path a card shuffle
+// hits fifty times a deal.
+static inline uint32_t z_rng_reject_count(uint32_t n) {
+	if (n <= 1) return 0;
+	return ((0xffffffffu % n) + 1u) % n;
+}
+
+// Uniform in [0, n). Returns 0 for n of 0 or 1.
+//
+// -- the bug this had, because it is worth not reintroducing --
+//
+// The accept bound was written as 2^32 - (2^32 % n). When n DIVIDES
+// 2^32 that expression is 2^32 exactly, which is not representable in
+// the uint32_t holding it and becomes 0 -- and `while (v >= 0)` on an
+// unsigned never ends. Every power of two hung, forever, with no output
+// and no clue.
+//
+// It was not theoretical. A 52-card Fisher-Yates walks n from 52 down
+// to 2 and hits 32, 16, 8, 4 and 2 on every shuffle: sw/apps/poker hung
+// on its first deal, before it had drawn anything, which presented as a
+// blank window and wm timing out waiting for a redraw acknowledgement.
+// sw/apps/repl's `(random 16)` had the same exposure.
+//
+// The case that arithmetic cannot express is the one that matters: when
+// there is nothing to reject, there must be no rejection loop at all.
 uint32_t z_rng_below(uint32_t n);
 
 // True if this generator was seeded from a present, healthy hardware

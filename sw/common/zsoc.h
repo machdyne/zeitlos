@@ -796,7 +796,22 @@ static inline bool z_game_wrap_enabled(void) {
 // entry. That is usually what a caller wants (toggle out to see the
 // whole desktop, toggle back to exactly where you were), and a caller
 // that wants otherwise can write the origin itself.
-static inline bool z_game_set_enabled(bool on, bool wrap) {
+// THE REGISTER WRITE, AND NOTHING ELSE.
+//
+// This is the one wm calls: for wm, game mode is a camera over an
+// unchanged desktop, so nothing else needs to know it moved.
+//
+// An APP entering game mode means something completely different -- it
+// takes the framebuffer and draws over the desktop -- and wm has to be
+// told, or it carries on compositing into pixels the app is showing.
+// That is z_game_set_enabled() in zeitlos.h, which calls this and then
+// sends wm a message.
+//
+// The notification cannot live here. This header is included by
+// kernel-compiled code (see the top of the file) and pulls in nothing
+// but stdint and stdbool; making a register accessor depend on the
+// message layer would invert that.
+static inline bool z_game_view_set_enabled(bool on, bool wrap) {
 	if (!z_game_available()) return false;
 	reg_socctl_game = (on ? Z_GAME_ENABLE : 0u) | (wrap ? Z_GAME_WRAP : 0u);
 	return true;

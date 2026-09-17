@@ -95,12 +95,22 @@ On the sdcard, started at boot when a card is present. A `term` window can conne
 | [track](docs/track_app.md) | MOD audio file player |
 | [mmod](docs/mmod.md) | [MMOD](https://github.com/machdyne/mmod) reader/writer |
 | [logic](docs/logic_app.md) | Logic analyzer (under development) |
-| [chip8](docs/chip8_app.md) | CHIP-8 game emulator |
+| [gpu3d](docs/gpu3d_app.md) | Spinning 3D cube demo + STL viewer |
+
+#### Games
+
+| App | Description |
+|-----|-------------|
 | [chess](docs/chess_app.md) | Chess, with a [built-in engine](docs/chess_engine.md) |
-| [poker](docs/poker_app.md) | Poker, with a [built-in engine](docs/poker_engine.md) |
+| [chip8](docs/chip8_app.md) | CHIP-8 game emulator |
 | [gamedemo](docs/gamedemo.md) | 2D side-scrolling platformer game |
 | space3d | First-person 3D space shooter game |
-| [gpu3d](docs/gpu3d_app.md) | Spinning 3D cube demo + STL viewer |
+| [casino](docs/casino.md) | The front desk: bankroll, loans, and it launches the five below |
+| [blackjack](docs/blackjack.md) | 6 decks, S17, 3:2, with a basic-strategy hint |
+| [craps](docs/craps.md) | The whole felt, including the free odds -- the only bet in a casino with no house edge |
+| [poker](docs/poker_app.md) | Hold'em, draw and stud against 1-7 opponents, with a [built-in engine](docs/poker_engine.md) |
+| [roulette](docs/roulette.md) | American and European wheels, with an animated spin |
+| [slots](docs/slots.md) | Three reels, five paylines, an exactly-computed 94.641% return |
 
 #### Other Apps
 
@@ -266,8 +276,16 @@ blank window rather than a terminal. Wait for the X. See
 2. Optionally, add an sdcard:
 
 An sdcard is only needed for storing files and for apps beyond the core
-four. See [Quick start](#quick-start-prebuilt-images) above for how to
-write the image.
+four. To build one from the tree you just compiled:
+
+```
+$ release/zrelease sdcard
+$ gzip -dc images/zeitlos.img.gz | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync
+```
+
+`tools/mkfatimg.sh` does the same thing and is kept for habit. To write
+a prebuilt image instead, see
+[Quick start](#quick-start-prebuilt-images) above.
 
 ### Core apps in flash
 

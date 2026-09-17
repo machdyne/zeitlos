@@ -161,12 +161,14 @@ static const dock_app_t dock_candidates[] = {
 
 	{ "ask",			z_icon_ask_data   },
 	{ "hex",			z_icon_hex_data   },
-	{ "chip8",		z_icon_chip8_data },
+	{ "mmod",		z_icon_mmod_data, 0, Z_FEATURE2_GPIO },
+	{ "casino",		z_icon_casino_data },
 	{ "chess",		z_icon_chess_data },
+	{ "kidgames",	z_icon_casino_data },
+	{ "chip8",		z_icon_chip8_data },
 	{ "space3d",	z_icon_space3d_data },
 	{ "gpu3d",		z_icon_gpu3d_data },
 	{ "gamedemo",	z_icon_gamedemo_data },
-	{ "mmod",		z_icon_mmod_data, 0, Z_FEATURE2_GPIO },
 };
 #define DOCK_CANDIDATE_COUNT \
 	(int)(sizeof(dock_candidates) / sizeof(dock_candidates[0]))
@@ -2771,12 +2773,55 @@ static void alt_move_focused(uint32_t keysym) {
 static int32_t view_x = 0;
 static int32_t view_y = 0;
 
+/* -- an app owning the screen --
+ *
+ * wm's game mode is a camera (see above). An APP's game mode is a
+ * takeover: it draws over the framebuffer the desktop lives in, and
+ * says so with Z_WM_GAME_GRAB. While one is held wm stops managing
+ * windows -- no focus changes, no raising, no dragging -- because every
+ * one of those paints into pixels the game is showing. That was the
+ * symptom: clicking made a window appear over the game.
+ *
+ * INPUT KEEPS FLOWING, to the owner rather than to whatever the cursor
+ * is over. A game needs keys and clicks, and all of them leave game
+ * mode with Escape, so a grab that silenced the keyboard would be a
+ * trap with no way out.
+ *
+ * wm's own hotkeys keep working too. It is the only process that sees
+ * every keystroke and that has to stay true whoever owns the screen. */
+static uint32_t game_grab_pid = 0;
+
+static int window_of_pid(uint32_t pid) {
+	for (int i = 0; i < WM_MAX_WINDOWS; i++)
+		if (windows[i].used && windows[i].owner_pid == pid) return i;
+	return -1;
+}
+
 static void view_apply(void) {
 	if (view_x < 0) view_x = 0;
 	if (view_y < 0) view_y = 0;
 	if (view_x > WM_VIEW_MAX_X) view_x = WM_VIEW_MAX_X;
 	if (view_y > WM_VIEW_MAX_Y) view_y = WM_VIEW_MAX_Y;
 	z_game_set_view((uint32_t)view_x, (uint32_t)view_y);
+}
+
+/* Hands the screen back and tells the owner. Called when Alt+Esc is
+ * pressed during a grab, and when the owner's window goes away.
+ *
+ * The repaint is the whole point: the app drew over the desktop, so
+ * there is nothing left of it to uncover. */
+static void game_revoke(void) {
+
+	uint32_t owner = game_grab_pid;
+
+	if (!owner) return;
+
+	game_grab_pid = 0;
+	z_game_view_set_enabled(false, false);
+
+	z_msg_new_send(owner, Z_WM_GAME_REVOKED, 0, z_obj_uint32(0));
+
+	repair_region(0, 0, WM_SCREEN_W, WM_SCREEN_H, -1);
 }
 
 // Alt+Esc -- toggle game mode, if this bitstream has it.
@@ -2796,6 +2841,12 @@ static void game_toggle(void) {
 
 	if (!z_game_available()) return;
 
+	/* Alt+Esc DURING A GRAB takes the screen back rather than moving a
+	 * camera -- the camera is meaningless when an app owns the
+	 * framebuffer, and this is the only way out if the app has stopped
+	 * listening. */
+	if (game_grab_pid) { game_revoke(); return; }
+
 	bool on = !z_game_enabled();
 
 	if (on) {
@@ -2807,10 +2858,10 @@ static void game_toggle(void) {
 		// needed to reach anything.
 		view_x = (WM_SCREEN_W - Z_GAME_VIEW_W) / 2;
 		view_y = (WM_SCREEN_H - Z_GAME_VIEW_H) / 2;
-		z_game_set_enabled(true, false);
+		z_game_view_set_enabled(true, false);
 		view_apply();
 	} else {
-		z_game_set_enabled(false, false);
+		z_game_view_set_enabled(false, false);
 	}
 
 }
@@ -2966,6 +3017,15 @@ static void dispatch_keys(void) {
 		if (windows[focused].owner_pid == my_pid) continue;
 
 		uint32_t packed = Z_WM_PACK_KEY(keysym, modifiers, pressed);
+		/* TO THE GRAB OWNER, not to whatever has focus. An app that
+		 * owns the screen is the only thing the user can see, so
+		 * focus is meaningless -- and every game here leaves game
+		 * mode with Escape, so this is also the way out. */
+		if (game_grab_pid) {
+			z_msg_new_send(game_grab_pid, Z_WM_KEY, 0, z_obj_uint32(packed));
+			continue;
+		}
+
 		z_msg_new_send(windows[focused].owner_pid, Z_WM_KEY, 0, z_obj_uint32(packed));
 
 	}
@@ -3193,6 +3253,19 @@ static bool bring_to_front(int idx) {
 }
 
 static void destroy_window(uint32_t id) {
+
+	/* An app that owned the screen and has gone -- crashed, closed,
+	 * killed -- must not leave wm suspended with a black desktop and
+	 * no way back. game_revoke() hands the screen over and repaints.
+	 *
+	 * This is the path that matters most in the whole feature: every
+	 * other failure is a cosmetic one, and this one is unrecoverable
+	 * without a reboot. */
+	/* `id` IS the slot index here, not an opaque handle -- the rest of
+	 * this function indexes windows[] with it directly. */
+	if (game_grab_pid && windows[id].used &&
+		windows[id].owner_pid == game_grab_pid) game_revoke();
+
 
 	if (id >= WM_MAX_WINDOWS || !windows[id].used) return;
 
@@ -4089,6 +4162,28 @@ static void handle_message(z_msg_t *msg) {
 
 		}
 
+		/* An app has taken the screen, or given it back. See
+		 * game_grab_pid's comment: window management stops, input
+		 * keeps flowing, wm's hotkeys keep working. */
+		case Z_WM_GAME_GRAB:
+			/* msg.from is stamped by the kernel on send and ignored
+			 * if a caller sets it (zmsg.h), so a grab cannot be
+			 * claimed on another process's behalf. */
+			game_grab_pid = msg->from;
+			break;
+
+		case Z_WM_GAME_RELEASE:
+			/* Only the holder may release, so a stale message from
+			 * an app that was revoked cannot hand away a grab
+			 * somebody else has since taken. */
+			if (msg->from == game_grab_pid) {
+				game_grab_pid = 0;
+				/* The app drew over the desktop, so there is
+				 * nothing left of it to uncover. */
+				repair_region(0, 0, WM_SCREEN_W, WM_SCREEN_H, -1);
+			}
+			break;
+
 		case Z_WM_DESTROY_WINDOW:
 
 			if (msg->obj.type == Z_UINT32)
@@ -4159,7 +4254,13 @@ static void dispatch_mouse(int cx, int cy, uint8_t btn) {
 
 	int target = mouse_capture;
 
-	if (target < 0) {
+	/* While an app owns the screen, the cursor is over a desktop
+	 * nobody can see -- so hit-testing it is meaningless and the
+	 * clicks belong to the owner wherever they land. */
+	if (game_grab_pid) {
+		target = window_of_pid(game_grab_pid);
+		if (target < 0) return;
+	} else if (target < 0) {
 		int hit = hit_test(cx, cy);
 		if (hit >= 0 && hit == focused) target = hit;
 	}
@@ -4612,7 +4713,14 @@ int main(void) {
 		bool btn_down = (btn & 1) != 0;
 		bool btn_was_down = (last_btn & 1) != 0;
 
-		if (btn_down && !btn_was_down) {
+		/* THE CLICK THAT MANAGES WINDOWS IS THE ONE THAT PAINTS
+		 * OVER THE GAME. Focus changes, raising, dragging and the
+		 * dock all repaint into the framebuffer the app is showing
+		 * -- this block is the bug the grab exists to stop.
+		 *
+		 * dispatch_mouse() below still runs, so the owner gets the
+		 * click; it is only wm's own handling of it that stops. */
+		if (btn_down && !btn_was_down && !game_grab_pid) {
 
 			int hit = hit_test(cx, cy);
 

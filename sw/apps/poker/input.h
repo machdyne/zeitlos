@@ -42,6 +42,11 @@
 
 typedef enum {
     PI_NONE = 0,     /* nothing happened */
+    /* Only the message and command lines changed. Typing returned
+     * PI_REDRAW at first, so every keystroke repainted the whole
+     * table -- cheaper here than at a roulette wheel, but the same
+     * mistake. */
+    PI_STATUS,
     PI_REDRAW,       /* state changed, repaint */
     PI_ACTED,        /* an action was taken; the hand may need to move on */
     PI_NEWHAND,      /* deal again */

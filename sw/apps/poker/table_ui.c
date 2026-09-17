@@ -170,7 +170,7 @@ static void blit_card(const pt_layout_t *L, const uint32_t *tile,
         z_clip_t c;
         c.x0 = dx; c.y0 = dy; c.x1 = dx + w - 1; c.y1 = dy + h - 1;
         if (!z_gfx_blit_scissor(i, &c)) continue;
-        z_fb_hw_blit_mem(tile + sy, PK_ART_STRIDE, sx, 0, dx, dy, w, h);
+        z_fb_hw_blit_mem(tile + sy, Z_ART_STRIDE, sx, 0, dx, dy, w, h);
     }
 
     z_gfx_blit_scissor_reset();
@@ -178,22 +178,22 @@ static void blit_card(const pt_layout_t *L, const uint32_t *tile,
 
 static void draw_full(const pt_layout_t *L, uint8_t card, int x, int y)
 {
-    const uint32_t *t = (card < PK_NCARDS)
-        ? &pk_card_full[(int)card * PK_ART_FULL_H] : pk_back_full;
-    blit_card(L, t, PK_ART_FULL_W, PK_ART_FULL_H, x, y);
+    const uint32_t *t = (card < Z_NCARDS)
+        ? &z_card_full[(int)card * Z_ART_FULL_H] : z_back_full;
+    blit_card(L, t, Z_ART_FULL_W, Z_ART_FULL_H, x, y);
 }
 
 static void draw_mini(const pt_layout_t *L, uint8_t card, int x, int y)
 {
-    const uint32_t *t = (card < PK_NCARDS)
-        ? &pk_card_mini[(int)card * PK_ART_MINI_H] : pk_back_mini;
-    blit_card(L, t, PK_ART_MINI_W, PK_ART_MINI_H, x, y);
+    const uint32_t *t = (card < Z_NCARDS)
+        ? &z_card_mini[(int)card * Z_ART_MINI_H] : z_back_mini;
+    blit_card(L, t, Z_ART_MINI_W, Z_ART_MINI_H, x, y);
 }
 
 /* -- layout ---------------------------------------------------------- */
 
-static int hero_stride(void) { return PK_ART_FULL_W + 2; }
-static int board_stride(void) { return PK_ART_FULL_W + 3; }
+static int hero_stride(void) { return Z_ART_FULL_W + 2; }
+static int board_stride(void) { return Z_ART_FULL_W + 3; }
 
 void pt_layout(pt_layout_t *L, const pt_view_t *v, int ox, int oy,
     int w, int h)
@@ -249,7 +249,7 @@ void pt_layout(pt_layout_t *L, const pt_view_t *v, int ox, int oy,
     L->msg_y = L->cmd_y - PT_LINE_H;
     L->btn[0].y = L->msg_y - PT_GAP - PT_BTN_H;
     L->hero_info_y = L->btn[0].y - PT_GAP - FH;
-    L->hero_y = L->hero_info_y - 2 - PK_ART_FULL_H;
+    L->hero_y = L->hero_info_y - 2 - Z_ART_FULL_H;
 
     L->status_y = oy;
 
@@ -279,7 +279,7 @@ void pt_layout(pt_layout_t *L, const pt_view_t *v, int ox, int oy,
      * sw/common/tests/zrender.h exists for.
      */
     {
-        int block = L->has_board ? (FH + 2 + PK_ART_FULL_H) : FH;
+        int block = L->has_board ? (FH + 2 + Z_ART_FULL_H) : FH;
         int top = opp_bottom + PT_GAP;
         int bot = L->hero_y - PT_GAP;
         int free = (bot - top) - block;
@@ -342,11 +342,11 @@ int pt_hero_card_at(const pt_layout_t *L, const pt_view_t *v, int x, int y)
 
     if (!v || !v->g) return -1;
     n = v->g->seat[v->hero].nhole;
-    if (y < L->hero_y || y >= L->hero_y + PK_ART_FULL_H) return -1;
+    if (y < L->hero_y || y >= L->hero_y + Z_ART_FULL_H) return -1;
 
     for (i = 0; i < n; i++) {
         int cx = L->hero_x + i * hero_stride();
-        if (x >= cx && x < cx + PK_ART_FULL_W) return i;
+        if (x >= cx && x < cx + Z_ART_FULL_W) return i;
     }
 
     return -1;
@@ -395,7 +395,7 @@ static void draw_seat(const pt_layout_t *L, const pt_view_t *v, int seat,
     cat_num(line, sizeof line, s->stack);
     text_right(L, x + cw - 4, y + 1, line, 1);
 
-    /* Cards. Overlapped at PK_ART_MINI_STRIDE, which keeps a
+    /* Cards. Overlapped at Z_ART_MINI_STRIDE, which keeps a
      * seven-card stud hand inside a six-handed seat -- see cards.h. */
     n = pk_seat_shown(v->g, seat, shown, v->reveal);
     cx = x + 2;
@@ -404,10 +404,10 @@ static void draw_seat(const pt_layout_t *L, const pt_view_t *v, int seat,
         text(L, x + 2, y + PT_LINE_H + 4, "-- folded --", 1);
     } else {
         int down = s->nhole - n;
-        for (i = 0; i < n; i++, cx += PK_ART_MINI_STRIDE)
+        for (i = 0; i < n; i++, cx += Z_ART_MINI_STRIDE)
             draw_mini(L, shown[i], cx, y + PT_LINE_H);
-        for (i = 0; i < down; i++, cx += PK_ART_MINI_STRIDE)
-            draw_mini(L, PK_CARD_NONE, cx, y + PT_LINE_H);
+        for (i = 0; i < down; i++, cx += Z_ART_MINI_STRIDE)
+            draw_mini(L, Z_CARD_NONE, cx, y + PT_LINE_H);
     }
 
     line[0] = '\0';
@@ -420,14 +420,14 @@ static void draw_seat(const pt_layout_t *L, const pt_view_t *v, int seat,
     } else {
         cat(line, sizeof line, v->tag[seat]);
     }
-    text(L, x + 2, y + PT_LINE_H + PK_ART_MINI_H + 1, line, 1);
+    text(L, x + 2, y + PT_LINE_H + Z_ART_MINI_H + 1, line, 1);
 
     if (s->won > 0) {
         char w[20];
         w[0] = '\0';
         cat(w, sizeof w, "+");
         cat_num(w, sizeof w, s->won);
-        text_right(L, x + cw - 4, y + PT_LINE_H + PK_ART_MINI_H + 1, w, 1);
+        text_right(L, x + cw - 4, y + PT_LINE_H + Z_ART_MINI_H + 1, w, 1);
     }
 }
 
@@ -478,7 +478,7 @@ static void draw_board(const pt_layout_t *L, const pt_view_t *v)
 
     if (!L->has_board) return;
 
-    fill(L, L->ox, L->board_y, L->w, PK_ART_FULL_H, 0);
+    fill(L, L->ox, L->board_y, L->w, Z_ART_FULL_H, 0);
 
     for (i = 0; i < L->board_slots; i++) {
         int x = L->board_x + i * board_stride();
@@ -489,7 +489,7 @@ static void draw_board(const pt_layout_t *L, const pt_view_t *v)
              * card that has not been dealt is a different thing from
              * one that has been dealt and hidden, and on this table
              * both appear at once in stud. */
-            frame(L, x, L->board_y, PK_ART_FULL_W, PK_ART_FULL_H, 1);
+            frame(L, x, L->board_y, Z_ART_FULL_W, Z_ART_FULL_H, 1);
         }
     }
 }
@@ -500,7 +500,7 @@ static void draw_hero(const pt_layout_t *L, const pt_view_t *v)
     char line[48];
     int i;
 
-    fill(L, L->ox, L->hero_y, L->w, PK_ART_FULL_H + 2 + FH, 0);
+    fill(L, L->ox, L->hero_y, L->w, Z_ART_FULL_H + 2 + FH, 0);
 
     for (i = 0; i < s->nhole; i++) {
         int x, y;
@@ -512,7 +512,7 @@ static void draw_hero(const pt_layout_t *L, const pt_view_t *v)
          * to throw away is being able to see the ones you are
          * keeping. */
         if (v->discard[i])
-            fill(L, x, y + PK_ART_FULL_H, PK_ART_FULL_W, 2, 1);
+            fill(L, x, y + Z_ART_FULL_H, Z_ART_FULL_W, 2, 1);
     }
 
     line[0] = '\0';
@@ -662,6 +662,15 @@ static void draw_titlebar(const pt_layout_t *L, const pt_view_t *v)
     cat_num(line, sizeof line, v->hand_no);
     cat(line, sizeof line, "  lvl ");
     cat_num(line, sizeof line, v->level);
+
+    /* What is left in the bank, when there is any -- the stack on the
+     * table is already drawn at the hero's seat, and showing both is
+     * what says "this is the same money as the other games". */
+    if (v->bank > 0) {
+        cat(line, sizeof line, "  bank ");
+        cat_num(line, sizeof line, v->bank);
+    }
+
     text_right(L, L->ox + L->w - 2, L->status_y, line, 1);
 }
 

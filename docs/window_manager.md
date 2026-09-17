@@ -2332,3 +2332,110 @@ a convenient API, not a hard guarantee.
   depending on where the cascade happens to be, with no clamping.
   Worked around so far by keeping `gpu3d`/`gpudemo`'s own window sizes
   modest rather than fixing placement itself.
+
+
+## An app taking the screen
+
+wm's game mode is a **camera**: a 320x240 viewport over an unchanged
+desktop, which is exactly why windows keep working in it. An app's game
+mode is a **takeover** -- it draws over the framebuffer the desktop
+lives in.
+
+They share one register, so wm cannot tell them apart by looking. It was
+never told, so it carried on: a click changed focus, raised a window,
+and painted it into pixels the game was showing. That was the bug.
+
+### How they are told apart now
+
+Two functions rather than a runtime test.
+
+- `z_game_view_set_enabled()` in `zsoc.h` -- the register write, and
+  nothing else. This is what **wm** calls.
+- `z_game_set_enabled()` in `zeitlos.h` -- same name and signature as
+  the accessor it replaces, so every existing caller became correct
+  without a source change or a Makefile change. It writes the register
+  and sends wm `Z_WM_GAME_GRAB`.
+
+The notification could not live in `zsoc.h`: that header is included by
+kernel-compiled code and pulls in nothing but `stdint` and `stdbool`, so
+making a register accessor depend on the message layer would invert it.
+It went in `zeitlos.c` because every app already links that object --
+which is what made "no changes to the games" achievable rather than
+aspirational.
+
+`msg->from` is stamped by the kernel and ignored if a caller sets it, so
+a grab cannot be claimed on another process's behalf.
+
+### What a grab suspends, and what it does not
+
+**Suspended:** the click that manages windows -- focus changes, raising,
+dragging, the dock. That block is the one that paints over the game.
+
+**Not suspended:** input. Keys and mouse both go to the grab owner
+instead of to whatever the cursor is over, because an app owning the
+screen is the only thing the user can see, so focus is meaningless. This
+is not optional -- every game in `sw/apps` leaves game mode with Escape,
+so a grab that silenced the keyboard would be a trap with no way out.
+
+**Not suspended:** wm's own hotkeys. It is the only process that sees
+every keystroke and that has to stay true whoever owns the screen.
+
+### Alt+Esc during a grab revokes it
+
+The camera is meaningless when an app owns the framebuffer, so Alt+Esc
+hands the screen back, repaints the desktop, and sends the owner
+`Z_WM_GAME_REVOKED`. An app that ignores that message is no worse off
+than before; one that handles it can put itself back in a window.
+
+It is also the only way out if the app has stopped listening.
+
+### The failure that matters
+
+**An app that owned the screen and has gone** -- crashed, closed, killed
+-- must not leave wm suspended with a black desktop and no way back.
+`destroy_window()` revokes the grab on that path. Every other failure
+here is cosmetic; this one is unrecoverable without a reboot.
+
+
+### An app that was already a window
+
+`sw/apps/space3d` is the cheapest possible case and worth recording as
+the pattern. Its window was already 320x240 -- exactly a game-mode page
+-- and it establishes its drawing rectangle in one function,
+`update_geometry()`. So full screen is not a different renderer; it is
+the same one drawing into a different rectangle, and F2 costs a branch
+there plus an enter/leave pair.
+
+Two things it does that are not obvious:
+
+**The erase list is dropped on a mode change.** It holds lines in the
+OLD rectangle's coordinates, and replaying it would rub out pixels
+somewhere else entirely. `drain_messages()` already drops it on a
+redraw for the same reason.
+
+**The redraw path does not ask for the content rect while full screen.**
+Doing so would reload wm's clip region and confine the next frame to
+wherever the window happens to sit on the desktop behind.
+
+**And the `z_win_*` draw calls are bypassed.** This is the one that
+actually bit: space3d draws through `z_win_hw_line()`, which clips to
+the window's visible region. In full screen the window is still sitting
+at its desktop position, so everything outside it -- most visibly the
+top-left of the screen -- was never drawn at all. The app already does
+its own Cohen-Sutherland clipping (that is the whole argument at the top
+of `space3d.c`), so in game mode it draws straight to the framebuffer
+and loses nothing; the clip the `z_win_*` layer would have applied was a
+backstop either way.
+
+`z_win_draw_text()` is worse, because it also takes **window-relative**
+coordinates -- which in game mode are relative to nothing. That one
+needs converting, not just bypassing.
+
+Anything else adopting full screen should audit its draw calls for the
+same thing. A `z_win_*` call is right in a window and wrong on a page,
+and the failure is silent: the drawing happens, just not where anyone
+can see it.
+
+It also does not send `Z_WM_REPAINT` when leaving, unlike the older
+apps: releasing the grab makes wm repaint by itself. Those calls are now
+redundant everywhere, and harmless.

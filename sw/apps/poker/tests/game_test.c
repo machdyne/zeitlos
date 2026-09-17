@@ -55,8 +55,8 @@ static void check_eq(long got, long want, const char *what)
 
 static uint8_t C(const char *s)
 {
-    uint8_t c = pk_card_parse(s);
-    if (c == PK_CARD_NONE) { printf("bad card \"%s\"\n", s); exit(1); }
+    uint8_t c = zcard_parse(s);
+    if (c == Z_CARD_NONE) { printf("bad card \"%s\"\n", s); exit(1); }
     return c;
 }
 
@@ -89,10 +89,10 @@ static void stack_holdem(pk_game_t *g, const char *const holes[][2],
     int nseats, const char *const board[5])
 {
     uint8_t order[52];
-    bool used[PK_NCARDS];
+    bool used[Z_NCARDS];
     int n = 0, k, i, next = 0;
 
-    for (i = 0; i < PK_NCARDS; i++) used[i] = false;
+    for (i = 0; i < Z_NCARDS; i++) used[i] = false;
 
     for (k = 0; k < 2; k++)
         for (i = 1; i <= nseats; i++) {
@@ -105,7 +105,7 @@ static void stack_holdem(pk_game_t *g, const char *const holes[][2],
 
     for (k = 0; k < 3; k++) {
         /* A burn card, which must be one nobody was dealt. */
-        while (next < PK_NCARDS && used[next]) next++;
+        while (next < Z_NCARDS && used[next]) next++;
         used[next] = true;
         order[n++] = (uint8_t)next;
 
@@ -116,8 +116,8 @@ static void stack_holdem(pk_game_t *g, const char *const holes[][2],
         }
     }
 
-    pk_deck_init(&g->deck);
-    if (!pk_deck_stack(&g->deck, order, n)) {
+    zdeck_init(&g->deck, 1);
+    if (!zdeck_stack(&g->deck, order, n)) {
         printf("FAIL: could not stack the deck\n");
         exit(1);
     }
@@ -434,14 +434,14 @@ static void test_stud_bring_in(void)
      * ranks. Both seats show a deuce; the club must bring it in. */
     pk_game_init(&g, &pk_variant_stud5, 3, 1000, 5, 10);
 
-    pk_deck_init(&g.deck);
+    zdeck_init(&g.deck, 1);
     {
         /* Deal order for stud5 street 0 is one down each then one up
          * each, clockwise from the button's left: seats 1, 2, 0. */
         uint8_t order[6];
         order[0] = C("Ah"); order[1] = C("Kh"); order[2] = C("Qh");
         order[3] = C("2d"); order[4] = C("2c"); order[5] = C("9s");
-        if (!pk_deck_stack(&g.deck, order, 6)) { printf("stack failed\n"); exit(1); }
+        if (!zdeck_stack(&g.deck, order, 6)) { printf("stack failed\n"); exit(1); }
     }
     pk_hand_begin_stacked(&g);
 
@@ -470,7 +470,7 @@ static void test_stud_high_board(void)
      * not the seat left of the button. */
     pk_game_init(&g, &pk_variant_stud5, 3, 1000, 5, 10);
 
-    pk_deck_init(&g.deck);
+    zdeck_init(&g.deck, 1);
     {
         uint8_t order[10];
         /* street 0: down to 1,2,0 then up to 1,2,0 */
@@ -479,7 +479,7 @@ static void test_stud_high_board(void)
         /* street 1: one up each, to 1,2,0 */
         order[6] = C("3s"); order[7] = C("Jc"); order[8] = C("2h");
         order[9] = C("2s");
-        if (!pk_deck_stack(&g.deck, order, 10)) { printf("stack failed\n"); exit(1); }
+        if (!zdeck_stack(&g.deck, order, 10)) { printf("stack failed\n"); exit(1); }
     }
     pk_hand_begin_stacked(&g);
 

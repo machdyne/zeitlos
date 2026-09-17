@@ -280,7 +280,7 @@ int main(void)
     }
     pt_init();
 
-    pk_rng_seed(0xBADC0FFE);
+    zg_rng_seed(0xBADC0FFE);
 
     for (vi = 0; vi < 4; vi++)
         for (li = 0; li < 3; li++)

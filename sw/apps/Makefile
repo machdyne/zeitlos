@@ -9,7 +9,7 @@
 # automated build dead, which is how it was found.
 #
 # APPS is now the single list. Adding an app means adding one word.
-APPS = \
+APPS = casino poker roulette blackjack slots craps \
 	gpudemo \
 	gpu3d \
 	wm \
@@ -46,6 +46,7 @@ APPS = \
 	gamedemo \
 	chip8 \
 	chess \
+	kidgames \
 	ask
 
 # zcc is in this list and builds its own runtime as a side effect:

@@ -56,8 +56,8 @@ static void check_range(int32_t got, int32_t lo, int32_t hi, const char *what)
 
 static uint8_t C(const char *s)
 {
-    uint8_t c = pk_card_parse(s);
-    if (c == PK_CARD_NONE) { printf("bad card \"%s\"\n", s); exit(1); }
+    uint8_t c = zcard_parse(s);
+    if (c == Z_CARD_NONE) { printf("bad card \"%s\"\n", s); exit(1); }
     return c;
 }
 
@@ -77,7 +77,7 @@ static void test_equity_known(void)
     static const char *const seven_two[] = { "7h", "2d" };
     int32_t eq;
 
-    pk_rng_seed(4242);
+    zg_rng_seed(4242);
 
     /* The headline number. A pair of aces against a pair of kings,
      * all five board cards to come, is a shade over 82%. It is not a
@@ -164,7 +164,7 @@ static void test_equity_monotone(void)
     uint8_t o[2];
     int32_t e1, e2, e3;
 
-    pk_rng_seed(99);
+    zg_rng_seed(99);
 
     cards(s1, 2, a); cards(s2, 2, b); cards(s3, 2, c); cards(opp, 2, o);
 
@@ -192,7 +192,7 @@ static void test_equity_in_game(void)
     int32_t eq;
 
     pk_ai_init(&ai, 6);
-    pk_rng_seed(7);
+    zg_rng_seed(7);
 
     /* More opponents is less equity for the same hand, which is the
      * relationship every decision above this depends on. */
@@ -301,7 +301,7 @@ static void play_out(const pk_variant_t *v, int nseats, int limit,
 
             if (g.phase == PK_PHASE_DRAW) {
                 uint8_t idx[2] = { 0, 1 };
-                pk_draw(&g, idx, (int)pk_rng_below(3));
+                pk_draw(&g, idx, (int)zg_rng_below(3));
                 continue;
             }
 
@@ -334,7 +334,7 @@ static void test_legality(void)
     int i, level;
     int illegal = 0, stuck = 0;
 
-    pk_rng_seed(31337);
+    zg_rng_seed(31337);
 
     /* Every level against every variant and every betting structure.
      *
@@ -368,7 +368,7 @@ static int32_t duel(int level_a, int level_b, int hands, uint32_t seed)
     int32_t net = 0;
     int h;
 
-    pk_rng_seed(seed);
+    zg_rng_seed(seed);
     pk_ai_init(&ai[0], level_a);
     pk_ai_init(&ai[1], level_b);
 
@@ -519,7 +519,7 @@ static void test_poll_rate(void)
         long rollouts = 0;
         int decisions = 0, i;
 
-        pk_rng_seed(1234 + level);
+        zg_rng_seed(1234 + level);
         pk_ai_init(&a, level);
         pk_game_init(&g, &pk_variant_holdem, 6, 1000, 5, 10);
         pk_hand_begin(&g);
