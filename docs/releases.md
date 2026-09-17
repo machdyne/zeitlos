@@ -37,7 +37,7 @@ helpfully rebuilding something nobody has looked at.
 
 ```
 release/dist/0.0.3/
-  zeitlos-lakritz_uart.img          gateware + logo + kernel + core apps
+  zeitlos-lakritz_gpio.img          gateware + logo + kernel + core apps
   zeitlos-lakritz_langkatze.img
   zeitlos-mozart_ml1.img
   zeitlos-sergei_ml1.img
@@ -55,7 +55,7 @@ release/dist/0.0.3/
 **Asset names carry the target but not the version.** That makes
 
 ```
-.../releases/latest/download/zeitlos-lakritz_uart.img
+.../releases/latest/download/zeitlos-lakritz_gpio.img
 ```
 
 a permanent URL that always resolves to the newest release, which is
@@ -106,7 +106,7 @@ effort preventing everywhere else; put anything worth writing down here.
 
 ## Targets
 
-A target is a board plus whatever is plugged into it. `lakritz_uart` and
+A target is a board plus whatever is plugged into it. `lakritz_gpio` and
 `lakritz_langkatze` are the same FPGA board with different PMODs, and
 they need different gateware *and* different software.
 
@@ -228,16 +228,16 @@ been encoding *"a USB-UART PMOD is in port A"* all along. Plugging a
 Langkatze in instead makes that assumption false, and the constraints
 carrying it have to go with it.
 
-Which is why `lakritz_uart` regenerates the board `.lpf` exactly:
-`usbuart.spec` puts `UART0_TX` back on pin 2 and `UART0_RX` back on pin
-3 of the same port. `zrelease check` asserts it, and prints the delta
-for every target:
+Which is why a PMOD that restores what the board assumed regenerates
+the same pins: `langkatze.spec` puts the five ethernet signals back on
+the balls `boards/lakritz_v0.lpf` already had them on. `zrelease check`
+asserts it, and prints the delta for every target:
 
 ```
-lakritz_langkatze    ok -- +5, -2 vs the board .lpf
+lakritz_gpio         ok -- +8, -5 vs the board .lpf
+                          gpio in port A
+lakritz_langkatze    ok -- identical vs the board .lpf
                           langkatze in port A
-lakritz_uart         ok -- identical vs the board .lpf
-                          usbuart in port A
 ```
 
 `lpf_drop = PORT_NAME ...` in a target spec releases a constraint that
@@ -363,7 +363,7 @@ Per target:
    board any more. The clean still matters: `sw/` has no per-board
    object directories, so it is how a release guarantees it is not
    linking something left from a developer's last build.
-2. **Wipe `output/releases/<board>`.** `lakritz_uart` and
+2. **Wipe `output/releases/<board>`.** `lakritz_gpio` and
    `lakritz_langkatze` share a directory, because the Makefile keys it
    off `BOARD` and not off the target. If the second build fails at
    place-and-route, the first one's `soc.bit` is still there looking
@@ -629,7 +629,7 @@ Building is **incremental** into `dist/<version>/`. Build two targets
 today, publish, add a third next week under the same version:
 
 ```
-$ release/zrelease build v0.0.2 --targets lakritz_uart lakritz_langkatze
+$ release/zrelease build v0.0.2 --targets lakritz_gpio lakritz_langkatze
 $ release/zrelease ship  v0.0.2
   ...later...
 $ release/zrelease build v0.0.2 --targets sergei_ml1
@@ -641,7 +641,7 @@ says what it found:
 
 ```
 already in release/dist/0.0.2:
-  lakritz_uart         keep
+  lakritz_gpio         keep
   lakritz_langkatze    keep
 ```
 
@@ -649,6 +649,42 @@ already in release/dist/0.0.2:
 **merged** set, so they describe all three targets rather than just the
 last command's. `SHA256SUMS` covers the whole directory. The second
 `ship` then adds one asset and leaves the rest alone.
+
+### A run that stops part way
+
+The same mechanism covers a build that does not finish — a later target
+missing timing is the ordinary way.
+
+`MANIFEST.json` is written **after each target**, not once at the end.
+So a target that completes is recorded the moment it does, and a run
+that stops leaves a manifest describing exactly what is in the
+directory. Come back, fix the target that failed, and build only that
+one:
+
+```
+$ release/zrelease build v0.0.4 --targets lakritz_gpio lakritz_langkatze mozart_ml1
+  ...lakritz_gpio builds, lakritz_langkatze misses timing, the run stops...
+
+$ release/zrelease build v0.0.4 --targets lakritz_langkatze mozart_ml1
+already in release/dist/0.0.4:
+  lakritz_gpio         keep
+```
+
+**Nothing that already built needs building again.** A place-and-route
+is the expensive part of a release and it is not thrown away by a
+failure somewhere after it.
+
+Only the manifest is written per target. `NOTES.md` and `README.txt`
+are the whole-release view and are still generated once at the end,
+from the merged set — a checkpoint is a record, not a publication.
+
+This used to be the one gap in the incremental path: the finished
+targets' images were in `dist/` and would ship, because `ship` uploads
+the directory rather than the manifest, but nothing *recorded* them. The
+next build merged into an empty manifest and described a three-target
+release as a one-target one. `lib/test_incremental.py`'s session 4
+builds three targets with the second one failing, and checks both that
+the first is recorded and that resuming does not lose it.
 
 Two things this has to be careful about:
 
@@ -692,7 +728,7 @@ Updating is the common case: a release goes out and one target needs a
 fix.
 
 ```
-$ release/zrelease build v0.0.2 --targets lakritz_uart
+$ release/zrelease build v0.0.2 --targets lakritz_gpio
 $ release/zrelease ship v0.0.2
 ```
 
@@ -701,8 +737,8 @@ name and leaving everything else alone. It prints its intent per asset
 before doing anything:
 
 ```
-  replace  zeitlos-lakritz_uart.img
-  add      zeitlos-lakritz_uart-gateware.bit
+  replace  zeitlos-lakritz_gpio.img
+  add      zeitlos-lakritz_gpio-gateware.bit
   keep     zeitlos.img.gz  (not built by this run)
 ```
 

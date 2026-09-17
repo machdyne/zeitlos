@@ -362,6 +362,34 @@ def cmd_build(args):
             jobs=args.jobs,
             full_image=args.full_image))
 
+        # -- record it NOW, not after the loop -------------------------
+        #
+        # A target that finishes has its images in dist/ whatever
+        # happens to the next one, and `ship` uploads what is in that
+        # directory rather than what the manifest lists -- so those
+        # files go out either way. What used to get lost was the RECORD
+        # of them.
+        #
+        # The manifest was written once, after every target. A run that
+        # stopped part way through -- a later target missing timing is
+        # the ordinary way -- never wrote one, so the finished targets
+        # existed on disk and nowhere else. Coming back to build the
+        # failed one then merged into an empty manifest, and the notes,
+        # README and MANIFEST.json described that one target while the
+        # others sat in the directory undescribed.
+        #
+        # Writing after each target makes the manifest always describe
+        # what is on disk. NOTES.md and README.txt are still generated
+        # once at the end from the merged set, because they are the
+        # whole-release view and there is no point rewriting them four
+        # times.
+        #
+        # Interrupting a run is now free: everything that finished is
+        # recorded, and the next `build` picks up from there.
+        if not args.dry_run:
+            _checkpoint(out, version, commit, dirty, prev_targets, results,
+                        lay, _ark_commit(args.ark) or previous.get("ark_commit"))
+
     if args.dry_run:
         print("\n--dry-run: nothing was built.\n")
         return 0
@@ -436,6 +464,32 @@ def cmd_build(args):
     print("\nbuilt into %s" % os.path.relpath(out, ROOT))
     print("Flash one and try it, then:  release/zrelease ship %s\n" % version)
     return 0
+
+
+def _checkpoint(out, version, commit, dirty, prev_targets, results,
+                lay, ark_commit):
+    """Write MANIFEST.json for everything finished so far.
+
+    Called after each target rather than once at the end, so the
+    manifest never describes less than what is in the directory. See
+    its call site for why that matters.
+
+    Deliberately NOT writing NOTES.md or README.txt: those describe the
+    release as a whole and are regenerated from the merged set once the
+    run is done. A checkpoint is a record, not a publication.
+
+    The sdcard image is left out of the checkpoint manifest for the
+    same reason -- it is built after the targets, so mid-run there is
+    nothing true to say about it. The final write puts it in.
+    """
+    merged = dict(prev_targets)
+    for r in results:
+        r["commit"] = commit
+        merged[r["target"]] = r
+    man = notes_mod.manifest(version, commit, bool(dirty),
+                             [merged[k] for k in sorted(merged)],
+                             None, lay, ark_commit)
+    notes_mod.write(os.path.join(out, "MANIFEST.json"), man)
 
 
 def _load_manifest(out):

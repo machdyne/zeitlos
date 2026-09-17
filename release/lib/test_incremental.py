@@ -232,6 +232,68 @@ def main():
         print("   target list unchanged; image rewritten: %s"
               % (after != before))
 
+        print("\n== session 4: a run that stops part way ==")
+        #
+        # The case this exists for: build three targets, have the
+        # second one miss timing. The first one's images are in dist/
+        # and `ship` uploads the directory, so they go out regardless --
+        # what must not happen is the MANIFEST forgetting them, because
+        # the next `build` merges into whatever the manifest says and
+        # would then describe a three-target release as a one-target
+        # one.
+        shutil.rmtree(OUT, ignore_errors=True)
+
+        real_bt = build_mod.build_target
+        order = []
+
+        def stops_on_the_second(root, t, *a, **k):
+            order.append(t.name)
+            if len(order) == 2:
+                raise build_mod.BuildError(
+                    "%s missed timing on clk_48 (simulated)" % t.name)
+            return real_bt(root, t, *a, **k)
+
+        build_mod.build_target = stops_on_the_second
+        ZR.build_mod.build_target = stops_on_the_second
+        try:
+            run_build(["lakritz_gpio", "lakritz_langkatze", "sergei_ml1"])
+            failures.append("the simulated timing failure did not stop the build")
+        except build_mod.BuildError:
+            pass
+        finally:
+            build_mod.build_target = real_bt
+            ZR.build_mod.build_target = real_bt
+
+        if not os.path.exists(os.path.join(OUT, "MANIFEST.json")):
+            failures.append(
+                "no MANIFEST.json after a part-way run -- the finished "
+                "target is on disk and nowhere else")
+        else:
+            m4 = sorted(t["target"] for t in manifest()["targets"])
+            print("   recorded before the failure: %s" % ", ".join(m4))
+            if m4 != ["lakritz_gpio"]:
+                failures.append(
+                    "part-way manifest should list exactly the finished "
+                    "target, got %s" % m4)
+
+        r = run_build(["lakritz_langkatze", "sergei_ml1"])
+        if r.returncode != 0:
+            failures.append("resuming after a part-way run failed")
+        m5 = sorted(t["target"] for t in manifest()["targets"])
+        print("   after resuming:              %s" % ", ".join(m5))
+        if m5 != ["lakritz_gpio", "lakritz_langkatze", "sergei_ml1"]:
+            failures.append("resume lost the target that finished before "
+                            "the failure: %s" % m5)
+
+        with open(os.path.join(OUT, "README.txt")) as f:
+            rt4 = f.read()
+        if "zeitlos-lakritz_gpio.img" not in rt4:
+            failures.append(
+                "README.txt after resuming does not mention the target "
+                "that finished before the failure")
+        else:
+            print("   README.txt describes it too")
+
     finally:
         for p in created:
             if os.path.isdir(p):
