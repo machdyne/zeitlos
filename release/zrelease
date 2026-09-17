@@ -435,7 +435,29 @@ def cmd_build(args):
 
     # -- SD card -------------------------------------------------------
     sdcard = None
-    if not args.no_sdcard:
+    gz_existing = os.path.join(out, "zeitlos.img.gz")
+
+    # -- reuse an sdcard image that is already here ---------------------
+    #
+    # mkfs.fat stamps a fresh volume serial every time, so rebuilding
+    # produces DIFFERENT BYTES from identical inputs. On a run that only
+    # touched one target that means a new 64MB asset, a new checksum,
+    # and `ship` re-uploading it for no reason.
+    #
+    # --rebuild-sdcard has existed as a flag for a while and was never
+    # read, so every incremental build was quietly re-stamping it. It is
+    # read now.
+    #
+    # Nothing on the card is board-specific, so an image built earlier
+    # under this version is still correct -- unless sw/ or docs/ changed,
+    # which is what the flag is for.
+    if (not args.no_sdcard and not args.rebuild_sdcard
+            and os.path.exists(gz_existing) and previous.get("sdcard")):
+        sdcard = previous["sdcard"]
+        print("\n=== SD card image ===")
+        print("    keeping %s (%d bytes) -- pass --rebuild-sdcard to "
+              "replace it" % (sdcard["file"], sdcard["bytes"]))
+    elif not args.no_sdcard:
         print("\n=== SD card image ===")
         # Kept as plain "zeitlos.img.gz". It is what v0.0.1 and v0.0.2
         # already shipped and what the project README's

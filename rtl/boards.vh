@@ -670,6 +670,24 @@
 `define SPI_SDCARD
 `define ESP32_LINK
 
+// Receive FIFO depth, as a power of two. 13 = 8192 bytes.
+//
+// rtl/esp32_rxfifo.v buffers the ESP32's UART in block RAM because a
+// 16550's 16-byte FIFO cannot hold a frame while a time-sliced
+// process is away from the CPU -- about 4ms, or 1200 bytes at
+// 3 Mbaud. 8K also leaves room for a credit burst of ~5 MTU frames.
+//
+// A DEFINE rather than a literal at the instantiation because the
+// 12F does not have the block RAM for it: at 13 this costs four
+// DP16KD out of 56, and the 12F build needs three of them back.
+// 11 (2048 bytes) still covers the time-slice case with margin and
+// gives up only the multi-frame burst headroom, which costs
+// throughput under sustained load rather than dropping bytes.
+//
+// Overridden per target -- see release/targets/ulx3s_12f.spec. The
+// 45F and 85F have the room and stay at 13.
+`define ESP32_RXFIFO_BITS 13
+
 `define AUDIO
 `define AUDIO_SPDIF
 `define AUDIO_MIXER

@@ -2278,7 +2278,11 @@ module sysctl #()
 	// net can idle instead of polling this link continuously.
 	wire esp32rx_ready;
 	assign eth_rx_ready = esp32rx_ready;
-	esp32_rxfifo #(.CLK_PER_BIT(16), .DEPTH_BITS(13)) wbs_esp32rx_i (
+	// DEPTH_BITS from rtl/boards.vh so a target can trade it against
+	// block RAM -- the 12F ULX3S needs three DP16KD back and this is
+	// the cheapest place to find them. See its definition there.
+	esp32_rxfifo #(.CLK_PER_BIT(16),
+		.DEPTH_BITS(`ESP32_RXFIFO_BITS)) wbs_esp32rx_i (
 		.rx_ready(esp32rx_ready),
 		.clk(wbm_clk),
 		.rst(wbm_rst),
