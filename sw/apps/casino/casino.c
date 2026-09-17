@@ -66,7 +66,7 @@ typedef struct {
 } cs_game_t;
 
 static const cs_game_t games[] = {
-    { "blackjack", "Blackjack", "6 decks, S17, 3:2 -- 0.4% with basic strategy" },
+    { "blkjack", "Blackjack", "6 decks, S17, 3:2 -- 0.4% with basic strategy" },
     { "poker",     "Poker",     "hold'em, draw, stud -- against 1 to 7 opponents" },
     { "roulette",  "Roulette",  "american wheel, 5.3% -- `wheel euro` for 2.7%" },
     { "slots",     "Slots",     "3 reels, 5 lines -- 5.4%, and a 1 in 819 jackpot" },

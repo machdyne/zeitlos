@@ -114,7 +114,7 @@ CASINO = [
     ("apps/casino", "sw/apps/casino/casino.bin"),
     ("apps/poker", "sw/apps/poker/poker.bin"),
     ("apps/roulette", "sw/apps/roulette/roulette.bin"),
-    ("apps/blackjack", "sw/apps/blackjack/blackjack.bin"),
+    ("apps/blkjack", "sw/apps/blackjack/blackjack.bin"),
     ("apps/slots", "sw/apps/slots/slots.bin"),
     ("apps/craps", "sw/apps/craps/craps.bin"),
 ]
