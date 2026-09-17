@@ -1,8 +1,8 @@
 # sw/apps/casino -- Zeitlos Casino
 
 The front desk. One window that shows what you are worth, lends you
-money when you are not worth anything, and starts the four games — so
-the dock needs **one** icon instead of four.
+money when you are not worth anything, and starts the five games — so
+the dock needs **one** icon instead of six.
 
     cd sw/apps/casino && make          # the target binary
     make render                        # draws it, for looking at
@@ -59,7 +59,7 @@ figure — chips minus debt — which is the number this window leads with.
 Chips alone flatter anyone who has borrowed, which is everyone who has
 been here a while, and it is the only number a loan actually changes.
 
-`buyin` in any of the four games is now exactly "borrow a starting
+`buyin` in any of the five games is now exactly "borrow a starting
 stack", so none of them needed changing.
 
 | command | |
@@ -95,7 +95,7 @@ that show it are redrawn when it moves.
 
 ## Installing
 
-**1.** Add `casino` to `APPS` in `sw/apps/Makefile`, alongside the four
+**1.** `casino` is in `APPS` in `sw/apps/Makefile`, alongside the five
 games.
 
 **2.** `sw/data/icons/icon-casino.png` is included. Run
@@ -104,12 +104,13 @@ this one in `dock_candidates[]` in `sw/apps/wm/wm.c`:
 
     { "casino",     z_icon_casino_data },
 
-The four game icons are still in the tree if you would rather have them
+The other game icons are still in the tree if you would rather have them
 on the dock as well, but the point of this app is that you do not need
 them.
 
-**3.** Add all six binaries to `release/lib/mkfatimg.py` — the games
-have to be on the card for the casino to launch them:
+**3.** `release/lib/mkfatimg.py` has a `CASINO` list with all six
+binaries — the games have to be on the card for the casino to launch
+them:
 
     ("apps/casino",    "sw/apps/casino/casino.bin"),
     ("apps/poker",     "sw/apps/poker/poker.bin"),

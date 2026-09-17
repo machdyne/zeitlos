@@ -8,7 +8,8 @@
  * because every one of them moves the house edge and the table prints
  * which game you are actually playing.
  *
- * Chips come from /USER/casino.dat, shared with poker and roulette. Cards,
+ * Chips come from /USER/casino.dat, shared with every game in the
+ * casino. Cards,
  * the shoe and the shuffle come from sw/common/games.
  *
  * -- nothing here has a frame rate --
@@ -17,7 +18,7 @@
  * until a key or a click arrives. There is no animation to pace and no
  * search to bound, so the whole file is a message pump and a redraw.
  *
- * What it does share with the other two is the rule that matters: an
+ * What it does share with the rest is the rule that matters: an
  * app that stops servicing its queue stalls the WINDOW MANAGER, not
  * just itself, because wm blocks waiting for a redraw acknowledgement.
  * Nothing in this file blocks, which is the easiest way to satisfy

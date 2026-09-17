@@ -1,6 +1,7 @@
 # The casino apps
 
-Three games that share a bankroll, a deck and a pile of drawing code.
+Five games and a front desk, sharing a bankroll, a deck, a pair of dice
+and a pile of drawing code.
 
 | | | |
 | --- | --- | --- |
@@ -12,11 +13,15 @@ Three games that share a bankroll, a deck and a pile of drawing code.
 | `sw/apps/craps` | `docs/craps.md` | the whole felt, and the only fair bet in a casino |
 | `sw/common/games` | `docs/casino_bank.md` | the bank, the cards, the shoe, the bounded draw |
 
-    cd sw/apps/poker     && make test    # 608 checks
-    cd sw/apps/roulette  && make test    # 533 checks
-    cd sw/apps/blackjack && make test    # 351 checks
-    cd sw/apps/slots     && make test    # 258 checks
-    cd sw/apps/craps     && make test    # 327 checks
+Each app's `make test` runs the shared library's 196 checks first, so
+the totals below include them:
+
+    cd sw/apps/casino    && make test    # 196
+    cd sw/apps/poker     && make test    # 608
+    cd sw/apps/roulette  && make test    # 567
+    cd sw/apps/blackjack && make test    # 378
+    cd sw/apps/slots     && make test    # 267
+    cd sw/apps/craps     && make test    # 327
 
 Every suite builds the **shipped** sources with the host compiler.
 There is no second copy of an evaluator, a payout table or a layout
@@ -49,17 +54,13 @@ question from whether a game kept its own arithmetic integer; failing
 on somebody else's float would make the check something people turn
 off. Worth knowing about independently.
 
-## Installing all three
+## Installing
 
-These are all done in the tree now; they are listed so the shape of the
+All of this is done in the tree; it is written out so the shape of the
 integration is visible.
 
 **1.** `casino poker roulette blackjack slots craps` are in `APPS` in
 `sw/apps/Makefile`.
-
-**2.** The three icons are in `sw/data/icons`. Then:
-
-    cd sw/data/icons && python3 gen_dock_icon_data.py
 
 **2.** `dock_candidates[]` in `sw/apps/wm/wm.c` carries **one** entry:
 
@@ -67,8 +68,12 @@ integration is visible.
 
 `sw/apps/casino` launches the other five by name through `z_proc_run()`,
 so they are on the card but not on the dock -- which is the point of
-having a front desk. Their icons are still in the tree if you would
-rather have them on the dock as well.
+having a front desk. The other icons are still in `sw/data/icons` if you
+would rather have them on the dock as well.
+
+The icon data is generated, so after changing that list:
+
+    cd sw/data/icons && python3 gen_dock_icon_data.py
 
 **3.** `release/lib/mkfatimg.py` has a `CASINO` list with all six
 binaries. The games have to be on the card even though nothing on the
@@ -80,24 +85,12 @@ dock points at them.
 `tools/mkfatimg.sh` used to build the image itself and carry a second
 copy of the file list, which `zrelease check` compared against
 `mkfatimg.py`'s. It is a wrapper now: one list, one implementation, and
-the drift check is gone with the drift it policed. (It had already
+the drift check is gone along with the drift it policed. (It had already
 drifted -- the shell list was missing gpudemo, chip8 and chess.)
 
-**3.** Add to the table in `release/lib/mkfatimg.py`:
+**4.** Rebuild `wm` and the six apps.
 
-    ("apps/casino",    "sw/apps/casino/casino.bin"),
-    ("apps/poker",     "sw/apps/poker/poker.bin"),
-    ("apps/roulette",  "sw/apps/roulette/roulette.bin"),
-    ("apps/blackjack", "sw/apps/blackjack/blackjack.bin"),
-    ("apps/slots",     "sw/apps/slots/slots.bin"),
-    ("apps/craps",     "sw/apps/craps/craps.bin"),
-
-**4.** Rebuild `wm` and the three apps.
-
-These are left as edits rather than shipped as modified files, so
-nothing you have changed gets overwritten.
-
-## What is shared, and why it took three games to know
+## What is shared, and why it took several games to know
 
 `sw/common/games` holds the bank, the card encoding, the card art, the
 shoe and an unbiased bounded draw. Every one of those arrived when a
@@ -198,20 +191,6 @@ It lives on the message row, so the light repaint has to carry it or
 typing would wipe it -- the same "drawn and then erased" mistake as
 before, arriving from the other direction.
 
-## Known gaps
-
-**`sw/apps/poker` does not use the shared bank.** It was written before
-`/USER/casino.dat` existed and keeps its own table stack, so a win there does
-not follow you to the other games and a loan taken at the front desk
-does not reach it. `sw/apps/casino` lists it alongside games that do
-share, which makes the inconsistency visible without explaining it.
-
-Wiring it up is a real task rather than a two-line change: poker's
-model is a seat at a table with a stack that rises and falls across
-hands, so it needs a buy-in and a cash-out rather than a per-round net.
-The natural boundary is the end of a hand, the same way craps settles
-when the felt clears.
-
 ## Two things in the tree that are not ours
 
 Found while merging onto the current `wm`, both reported rather than
@@ -240,7 +219,7 @@ nothing shared had to be edited.
 
 ## Changes outside the games
 
-Three files in `sw/common` changed, all of them invited:
+Files in `sw/common` and one in `sw/apps/wm`, all of them invited:
 
 - **`zrng.c`: `z_rng_below()` never returns for a power-of-two bound.**
   *(Still unfixed upstream as of `c600390`; this patch reapplies.)*
@@ -255,7 +234,32 @@ Three files in `sw/common` changed, all of them invited:
   than part of `zgfx.c` because it contains no MMIO, which is what lets
   it be tested on a build machine — `zgfx.c` is register writes from
   top to bottom.
-- **`zfsapp.c`** is now linked by two more apps, for `/USER/casino.dat`.
+- **`zrand.c`: the fallback generator grew a finaliser.** Bare
+  xorshift32's low bits are a short linear recurrence of their own, and
+  almost everything here asks for a small bound -- 6 for a die, 37 for a
+  wheel, 32 for a reel -- which reads exactly those bits. A craps
+  simulation reported a house edge of 0.35%, 1.06% or 0.55% from
+  identical code, decided only by how many draws had been taken
+  beforehand. A chi-square over 370,000 draws never noticed. It is only
+  the fallback -- hardware gets ChaCha20 -- but the fallback is what
+  every host test runs on.
+- **`zbank.h`/`.c`: loans, and a move to `/USER`.** The bank used to
+  hand out a fresh stack when it ran dry, which makes an
+  exactly-computed house edge meaningless. Running out means borrowing
+  now, and the debt sits in the net-worth figure. See
+  `docs/casino_bank.md`.
+- **`zdice.c`/`.h` are new**: six faces at two sizes, generated. In
+  `sw/common/games` from the start, which is a deliberate exception to
+  the rule below -- a die has no design question to settle.
+- **`zeitlos.c`: `z_game_set_enabled()` now tells wm.** An app entering
+  game mode takes the framebuffer the desktop lives in, and wm was never
+  told, so a click still changed focus and painted a window over the
+  game. wm's own game mode is a camera over an unchanged desktop, so the
+  register write stayed in `zsoc.h` under a new name and the notifying
+  wrapper went in `zeitlos.c` -- which every app already links, so no
+  game needed a source or Makefile change. See `docs/window_manager.md`.
+- **`zfsapp.c`** is now linked by every one of these apps, for
+  `/USER/casino.dat`.
 
 ## Flicker is about clearing, not about which blit
 
@@ -323,5 +327,5 @@ clearing that row on top of it.
 
 The general shape: an assertion can tell you *where* something is, and
 almost never *whether it can be seen*. `sw/common/tests/zrender.h`
-exists for the second question, and three games in, it has earned its
-keep five times.
+exists for the second question, and five games in, it has earned its
+keep many times over.

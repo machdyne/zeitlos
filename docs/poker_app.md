@@ -487,11 +487,33 @@ structure, under `-fsanitize=address,undefined`. 1,097 hands and about
 sanitizers make it slow, and it is the right thing to run after
 changing anything that writes into a buffer.
 
+## The bankroll
+
+Poker buys in from `/USER/casino.dat` and cashes out when the table
+ends, sharing one bankroll with the rest of the casino
+(`docs/casino.md`). **The boundary is the table, not the hand** -- a
+stack rises and falls across many hands, so there is no round to settle
+at the way there is in blackjack or slots.
+
+**Nothing leaves the bank when you sit down.** The buy-in is recorded
+and the chips stay in the file until the table is over, so a window
+closed mid-hand costs nothing. What you are worth is the bank plus
+whatever is in front of you; the status line shows both.
+
+Busting settles immediately rather than waiting for `new`, because
+otherwise closing the window would be a way to walk away from a loss.
+
+**The opponents are not drawing on it.** `pk_game_init()` seats everyone
+with a full stack, which is right for the other seats; the hero buys in
+for what the bank can cover. A short buy-in against full stacks is a
+real disadvantage -- which is what being short of money in a card room
+is, so it is left as it falls.
+
 ## What is not here
 
-- **No saved games or persistent bankroll.** Stacks reset with `new`.
-  A bankroll surviving a reboot wants `zcfg` (`docs/config.md`) and is
-  a small addition, deliberately left out until somebody wants it.
+- **No saved games.** A hand in progress is not resumable; only the
+  bankroll survives a restart, and it does so at table boundaries (see
+  below).
 - **No Omaha.** `pk_eval_constrained()` exists and is tested -- the
   evaluator half is done -- but no variant uses it. It also wants
   pot-limit betting as the default, which the engine already supports.

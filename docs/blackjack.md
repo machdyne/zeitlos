@@ -98,7 +98,7 @@ the first assertion to fail.
 
 ## The table
 
-Same origin-and-clip contract as the other two, so a window's content
+Same origin-and-clip contract as the rest, so a window's content
 rectangle and a game-mode page are one renderer with different
 arguments.
 
