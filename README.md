@@ -105,6 +105,7 @@ On the sdcard, started at boot when a card is present. A `term` window can conne
 | [chip8](docs/chip8_app.md) | CHIP-8 game emulator |
 | [gamedemo](docs/gamedemo.md) | 2D side-scrolling platformer game |
 | space3d | First-person 3D space shooter game |
+| [kidgames](docs/kidgames_app.md) | Educational games for kids |
 | [casino](docs/casino.md) | The front desk: bankroll, loans, and it launches the five below |
 | [blackjack](docs/blackjack.md) | 6 decks, S17, 3:2, with a basic-strategy hint |
 | [craps](docs/craps.md) | The whole felt, including the free odds -- the only bet in a casino with no house edge |
