@@ -204,6 +204,18 @@ could drive `ply` past `CE_MAX_PLY` and write off the end of
 engine playing weak moves in sharp positions, because what it was
 corrupting was its own killer table.
 
+## Randomness
+
+`ce_search.c` holds one xorshift32, used for the book pick, the
+random-move roll at the easy levels, and the choice inside the blunder
+margin. `ce_search_seed()` is the only way in, and it is the only
+place the engine touches anything outside itself.
+
+That is on purpose: nothing in `ce_*.c` may call into Zeitlos, or the
+host tests could not build the shipped sources, and a search test
+seeded from a ring oscillator would not be reproducible. The app seeds
+it from `z_rng_u32()` once per game -- see `docs/chess_app.md`.
+
 ## Performance
 
 On the build machine at `-O2` the search manages 3-5.6 million nodes a

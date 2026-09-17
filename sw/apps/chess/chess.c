@@ -7,13 +7,20 @@
  *
  * -- the one thing that shapes this whole file --
  *
- * The engine can think for seconds at a time, and this is a
- * cooperatively drawn desktop: an app that stops servicing its
- * message queue stalls the WINDOW MANAGER, not just itself. wm blocks
- * waiting for a redraw acknowledgement and eventually times out (see
- * docs/window_manager.md, "Content redraw protocol"), so a search
- * that disappeared for four seconds would freeze every other window
- * on screen for four seconds.
+ * The engine can think for seconds at a time, and an app that stops
+ * reading its message queue for that long is drawing against a
+ * VISIBLE REGION THAT MAY HAVE STOPPED BEING TRUE.
+ *
+ * This used to be a system-wide problem: wm blocked waiting for a
+ * redraw acknowledgement until REDRAW_ACK_TIMEOUT, so a four-second
+ * search froze every window on screen. wm does not wait any more
+ * (docs/window_manager.md, "Content z-order"), which does not make the
+ * pump optional -- it moves the whole cost here. Z_WM_SET_CLIP arrives
+ * as a message like everything else, so four seconds of not reading
+ * the queue is four seconds of painting over any window dropped in
+ * front of the board, and of not servicing the redraw that would put
+ * it back. The failure went from loud and system-wide to quiet and
+ * local, which is harder to diagnose, not better.
  *
  * So ce_search_go() is given a poll callback -- search_poll() below --
  * which runs the message pump every few hundred nodes. Two
@@ -47,6 +54,7 @@
 #include "../../common/zgfx.h"
 #include "../../common/zsoc.h"
 #include "../../common/zkbd.h"
+#include "../../common/zrng.h"
 
 #include "ce_core.h"
 #include "ce_eval.h"
@@ -74,6 +82,32 @@ static bool in_search;
 
 static void repaint(void);
 static void pump(bool allow_input);
+
+/*
+ * The engine's own generator is a plain xorshift32 living in
+ * ce_search.c, and it stays there: ce_*.c has no MMIO in it, which is
+ * what lets the host tests build the shipped sources and get the same
+ * answer twice. This is the seam where the real entropy gets in.
+ *
+ * z_rng_u32() is sw/common/zrng.c's ChaCha20 stream, seeded from
+ * rtl/trng.v where the board has one and from cycle-counter jitter
+ * where it does not. It never fails and never blocks, so there is
+ * nothing to handle.
+ *
+ * NOT gated on z_rng_secure(). zrng.h is explicit about which of its
+ * two questions to ask, and picking between two near-equal chess moves
+ * wants unpredictable-to-a-person, not unpredictable-to-an-adversary.
+ * Refusing to play on a board with no TRNG would be treating a board
+ * game like a key exchange -- the same call sw/apps/poker and
+ * sw/apps/slots make, for the same reason.
+ *
+ * Once per game, not once per move. Reseeding a generator every move
+ * from another generator is churn that buys nothing; seeding it well
+ * and letting the stream run is what it is for.
+ */
+static void seed_engine(void) {
+	ce_search_seed(z_rng_u32());
+}
 
 /* -- time ----------------------------------------------------------- */
 
@@ -270,10 +304,6 @@ static void engine_move(void) {
 
 	ce_level_limits(game.level, &lim);
 	ce_search_set_history(game.key, game.nply + 1);
-	/* Seeded per move rather than per game, so two games at the same
-	 * level do not follow the same script. */
-	ce_search_seed(z_uptime_ticks() ^ game.pos.key ^ 0x9E3779B9u);
-
 	ce_search_go(&search_pos, &lim, &info);
 
 	in_search = false;
@@ -390,6 +420,8 @@ static void do_action(ci_action_t a) {
 		break;
 
 	case CI_NEWGAME:
+		seed_engine();
+		/* fall through */
 	case CI_MOVED:
 		repaint();
 		/* The engine may now owe a reply, and in demo mode it owes
@@ -596,6 +628,7 @@ int main(void) {
 	ce_search_set_poll(search_poll, NULL);
 
 	ce_search_new_game();
+	seed_engine();
 
 	/* Built once, at startup, from coordinate notation -- cheap, and
 	 * the reason ce_book.c does not store SAN. */

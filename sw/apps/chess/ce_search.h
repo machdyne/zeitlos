@@ -6,12 +6,17 @@
  *
  * -- the constraint that shaped this --
  *
- * This runs inside a windowed app on a preemptively multitasked OS
- * where a process that does not service its message queue stalls the
- * WHOLE window manager, not just itself: wm blocks waiting for a
- * redraw acknowledgement and times out (docs/window_manager.md,
- * "Content redraw protocol"). A search that disappears for eight
- * seconds would freeze the desktop for eight seconds.
+ * This runs inside a windowed app, and an app that does not read its
+ * message queue for eight seconds spends those eight seconds drawing
+ * against a visible region that may already be wrong -- Z_WM_SET_CLIP
+ * arrives as a message like any other, so a window dropped in front of
+ * the board is painted straight over.
+ *
+ * It used to be worse than that: wm blocked waiting for a redraw
+ * acknowledgement until it timed out, so the whole desktop froze along
+ * with the app. wm no longer waits (docs/window_manager.md, "Content
+ * z-order"), which makes the same mistake quiet and local rather than
+ * loud and system-wide -- harder to diagnose, not better.
  *
  * So the search takes a POLL CALLBACK and calls it every few hundred
  * nodes. The app's callback pumps its message loop -- answering

@@ -97,6 +97,39 @@ lines, eight to ten plies each. It is worth nearly nothing in playing
 strength. It is there so that two games at the same level do not open
 identically, which matters much more for a game somebody plays for fun.
 
+## Randomness
+
+Four things are chosen at random: which book line to follow, whether a
+low level plays a random legal move at all, which move that is, and
+which of the near-equal moves inside the blunder margin gets played.
+All four come from one xorshift32 in `ce_search.c`.
+
+That generator is seeded **once per game** from `z_rng_u32()` --
+`sw/common/zrng.c`'s ChaCha20 stream, seeded in turn from `rtl/trng.v`
+where the board has one and from cycle-counter jitter where it does
+not (`docs/trng.md`). It is not gated on `z_rng_secure()`: `zrng.h` is
+explicit about which of its two questions to ask, and choosing between
+two near-equal chess moves wants unpredictable-to-a-person, not
+unpredictable-to-an-adversary. Refusing to play on a board with no
+TRNG would be treating a board game like a key exchange -- the same
+call `sw/apps/poker` and `sw/apps/slots` make.
+
+The engine keeps its own generator rather than calling `z_rng_u32()`
+at each of those four places, and that is deliberate. `ce_*.c` has no
+MMIO in it, which is what lets the host tests build the shipped
+sources and get the same answer twice; a test whose result depends on
+a ring oscillator is not a test. `chess.c` is the only file that
+touches the hardware, and `seed_engine()` is the one seam. It is the
+same split `zrng.h` describes for itself: the hardware is an entropy
+source, software generates the bytes.
+
+The modulo in `rnd() % n` is biased, and the bias is around one part
+in a hundred million for the forty-odd candidates this ever picks
+between. Nothing is done about it. `sw/common/games/zrand.c`'s
+rejection sampling exists because a 52-card shuffle asks for
+power-of-two bounds and `z_rng_below()` hung on them; neither the
+hang nor the bias applies here.
+
 ## The window, and full screen
 
 The default window is 320x240. The board is 24-pixel squares with rank

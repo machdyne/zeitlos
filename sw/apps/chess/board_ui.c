@@ -142,7 +142,6 @@ static void blit_tile(const cb_layout_t *L, const uint32_t *tile,
 	int dx, int dy) {
 
 	int sx = 0, sy = 0, w = CP_TILE_W, h = CP_TILE_H;
-	int i, passes;
 
 	/* Clamp the destination to the content rectangle, moving the
 	 * SOURCE origin in step. Clamping only the destination would
@@ -168,21 +167,29 @@ static void blit_tile(const cb_layout_t *L, const uint32_t *tile,
 		return;
 	}
 
-	/* The blitter's scissor is persistent hardware state and
-	 * z_fb_hw_blit_mem() sets CTRL_CLIP without programming it -- so
-	 * a blit issued without this inherits whatever rectangle the last
-	 * unrelated operation left behind. Program it per visible
-	 * rectangle, exactly as zgfx.c's own fill does, and reset it on
-	 * the way out. */
-	passes = z_gfx_visible_count();
-	if (passes < 1) passes = 1;
+	/* -- the paint session --
+	 *
+	 * z_fb_hw_blit_mem() sets the blitter's CLIP bit but does not
+	 * program the scissor, and the scissor is persistent hardware
+	 * state -- so a blit issued outside a session inherits whatever
+	 * rectangle the last unrelated operation left behind.
+	 *
+	 * The session walks the window's visible region, programs the
+	 * scissor once per rectangle, and resets it at the end. It also
+	 * gets the unrestricted case right, which is the part worth not
+	 * hand-rolling: a visible count of 0 means UNRESTRICTED and not
+	 * invisible (zgfx.h is explicit), and it yields a single
+	 * unclipped pass rather than no passes at all.
+	 *
+	 * This is z_gfx_paint_* rather than zwin.c's z_win_paint_*
+	 * because the same code draws a game-mode page, where there is no
+	 * window to take a content rectangle from. */
+	z_gfx_paint_begin();
 
-	for (i = 0; i < passes; i++) {
-		if (!z_gfx_blit_scissor(i, &L->clip)) continue;
+	while (z_gfx_paint_next_rect(&L->clip))
 		z_fb_hw_blit_mem(tile, CP_TILE_STRIDE, sx, sy, dx, dy, w, h);
-	}
 
-	z_gfx_blit_scissor_reset();
+	z_gfx_paint_end();
 
 }
 

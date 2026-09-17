@@ -37,7 +37,7 @@ LDSCRIPT = ../../common/riscv-app.ld
 # The engine (ce_*.o) has no I/O of any kind in it, which is what lets
 # the host tests below build the SHIPPED sources rather than a copy.
 # See ce_core.h's header.
-OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o \
+OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zrng.o \
 	ce_core.o ce_psq.o ce_eval.o ce_search.o ce_book.o \
 	pieces.o game.o board_ui.o input.o chess.o
 
@@ -57,6 +57,14 @@ zfont_data.o:
 
 zwin.o:
 	$(CC) $(CFLAGS) -c ../../common/zwin.c -o zwin.o
+
+# The system CSPRNG, seeded from rtl/trng.v where the board has one.
+# chess.c uses it for exactly one thing -- seeding the engine's own
+# generator once per game -- but that one thing is the difference
+# between a hand-rolled entropy recipe and the one the rest of the
+# tree already agreed on. See seed_engine() in chess.c.
+zrng.o:
+	$(CC) $(CFLAGS) -c ../../common/zrng.c -o zrng.o
 
 ce_core.o:
 	$(CC) $(CFLAGS) -c ce_core.c -o ce_core.o
