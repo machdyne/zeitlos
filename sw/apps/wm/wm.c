@@ -164,7 +164,7 @@ static const dock_app_t dock_candidates[] = {
 	{ "mmod",		z_icon_mmod_data, 0, Z_FEATURE2_GPIO },
 	{ "casino",		z_icon_casino_data },
 	{ "chess",		z_icon_chess_data },
-	{ "kidgames",	z_icon_casino_data },
+	{ "kidgames",	z_icon_kidgames_data },
 	{ "chip8",		z_icon_chip8_data },
 	{ "space3d",	z_icon_space3d_data },
 	{ "gpu3d",		z_icon_gpu3d_data },
