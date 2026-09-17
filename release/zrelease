@@ -268,10 +268,37 @@ def cmd_build(args):
     # describe one. Merge instead.
     previous = _load_manifest(out)
     prev_targets = {t["target"]: t for t in previous.get("targets", [])}
+    if args.resume and prev_targets:
+        # -- finish an interrupted release ----------------------------
+        #
+        # Building a target always rebuilds it, which is the right
+        # default: the usual reason to name one is that something it
+        # depends on changed. --resume is for the other case, where the
+        # release simply did not get all the way through -- a later
+        # target missed timing, or the machine was needed for something
+        # else.
+        #
+        # Dropped here rather than at the argument, so it works the same
+        # whether the run names targets or takes them all.
+        skipped = [t for t in targets if t in prev_targets]
+        targets = [t for t in targets if t not in prev_targets]
+        if skipped:
+            print("\n--resume: skipping %d already built (%s)"
+                  % (len(skipped), ", ".join(skipped)))
+        if not targets:
+            print("\nnothing left to build in %s.\n"
+                  % os.path.relpath(out, ROOT))
+            return 0
+
     if prev_targets:
         print("\nalready in %s:" % os.path.relpath(out, ROOT))
         for name in sorted(prev_targets):
-            mark = "will rebuild" if name in (args.targets or []) else "keep"
+            # `targets`, not `args.targets`. Omitting --targets means
+            # EVERY target, and this line used to ask whether the name
+            # was in the raw argument -- which is None then, so a run
+            # that was about to rebuild all five printed "keep" beside
+            # all five.
+            mark = "will rebuild" if name in targets else "keep"
             print("  %-20s %s" % (name, mark))
 
     print("\nzeitlos %s" % version)
@@ -656,6 +683,10 @@ def main(argv):
     b.add_argument("--rebuild-sdcard", action="store_true",
                    help="rebuild the sdcard image even if one is already "
                         "in dist/<version>/")
+    b.add_argument("--resume", action="store_true",
+                   help="skip targets already in dist/<version>/, so an "
+                        "interrupted release finishes without redoing the "
+                        "place-and-route for the ones that worked")
     b.add_argument("--allow-mixed-commits", action="store_true",
                    help="add targets to a release built from a different "
                         "commit")

@@ -119,6 +119,7 @@ def _mirror_parser():
     b.add_argument("--ark")
     b.add_argument("--no-sdcard", action="store_true")
     b.add_argument("--rebuild-sdcard", action="store_true")
+    b.add_argument("--resume", action="store_true")
     b.add_argument("--allow-mixed-commits", action="store_true")
     b.add_argument("--full-image", action="store_true")
     b.add_argument("--bump", action="store_true")

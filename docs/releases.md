@@ -674,6 +674,21 @@ already in release/dist/0.0.4:
 is the expensive part of a release and it is not thrown away by a
 failure somewhere after it.
 
+Naming the remaining targets is one way. `--resume` is the other, and
+does not need you to work out which they were:
+
+```
+$ release/zrelease build v0.0.4 --resume
+--resume: skipping 5 already built (lakritz_gpio, lakritz_langkatze, ...)
+```
+
+It skips anything already in `dist/<version>/` and builds the rest,
+whether or not the run names targets.
+
+Without it, **`build` always rebuilds what you ask for** — including
+every target, if you ask for none. That is the right default: the usual
+reason to name a target is that something it depends on changed.
+
 Only the manifest is written per target. `NOTES.md` and `README.txt`
 are the whole-release view and are still generated once at the end,
 from the merged set — a checkpoint is a record, not a publication.
