@@ -20,3 +20,6 @@ description = ULX3S ECP5-12F
 base = ulx3s
 
 make_vars = DEVICE=12k
+
+# disable ICACHE to free BRAM
+defines = -ICACHE
