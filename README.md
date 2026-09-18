@@ -6,6 +6,8 @@ The core applications allow Zeitlos to be used as an extensible multi-window net
 
 ![Zeitlos Screenshot #0](https://github.com/machdyne/zeitlos/blob/a248944a4e42393ce93cabf0eae6cbc2d1255f9b/ss0.png)
 
+![Zeitlos Hardware Map](https://github.com/machdyne/zeitlos/blob/main/hwmap.png){height=480}
+
 Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 
 ## Features
