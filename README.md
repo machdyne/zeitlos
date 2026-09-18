@@ -6,8 +6,6 @@ The core applications allow Zeitlos to be used as an extensible multi-window net
 
 ![Zeitlos Screenshot #0](https://github.com/machdyne/zeitlos/blob/a248944a4e42393ce93cabf0eae6cbc2d1255f9b/ss0.png)
 
-![Zeitlos Hardware Map](https://github.com/machdyne/zeitlos/blob/main/hwmap.png){width=640}
-
 Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 
 ## Features
@@ -33,7 +31,9 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 | HID | USB keyboard + optional USB mouse/[gamepad](docs/gamepad.md) |
 | I/O | Optional [GPIO](docs/gpio.md) on PMOD ports with bit-banged [I2C](docs/i2c.md) and [SPI](docs/spi.md), hardware SPI, 16550 UART, optional second [UART](docs/uart1.md) |
 
-For a diagram of all of it -- buses, arbiters, the address map, clocks, interrupts, and which define enables each optional block -- run `make hwmap` (see [docs/hwmap.md](docs/hwmap.md)).
+![Zeitlos Hardware Map](https://github.com/machdyne/zeitlos/blob/main/hwmap.png)
+
+Build the hardware map from RTL with run `make hwmap` (see [docs/hwmap.md](docs/hwmap.md)).
 
 ### OS
 
