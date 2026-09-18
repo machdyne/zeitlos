@@ -87,13 +87,13 @@ LOCATE COMP "sdram_dm[1]" SITE "E15";
 IOBUF PORT "sdram_dm[1]" IO_TYPE=LVTTL33;
 
 LOCATE COMP "usb_host_dp[0]" SITE "A3";
-IOBUF PORT "usb_host_dp[0]" IO_TYPE=LVCMOS33;
+IOBUF PORT "usb_host_dp[0]" IO_TYPE=LVCMOS33 PULLMODE=NONE;
 LOCATE COMP "usb_host_dp[1]" SITE "B1";
-IOBUF PORT "usb_host_dp[1]" IO_TYPE=LVCMOS33;
+IOBUF PORT "usb_host_dp[1]" IO_TYPE=LVCMOS33 PULLMODE=NONE;
 LOCATE COMP "usb_host_dm[0]" SITE "A4";
-IOBUF PORT "usb_host_dm[0]" IO_TYPE=LVCMOS33;
+IOBUF PORT "usb_host_dm[0]" IO_TYPE=LVCMOS33 PULLMODE=NONE;
 LOCATE COMP "usb_host_dm[1]" SITE "B2";
-IOBUF PORT "usb_host_dm[1]" IO_TYPE=LVCMOS33;
+IOBUF PORT "usb_host_dm[1]" IO_TYPE=LVCMOS33 PULLMODE=NONE;
 
 # USB DEVICE (upstream-facing port) -- the USB-C socket.
 #

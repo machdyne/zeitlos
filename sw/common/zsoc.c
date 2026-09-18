@@ -112,6 +112,13 @@ const z_feature_info_t z_soc_features2[] = {
 
 	{ Z_FEATURE2_GPIO,      "gpio",    Z_FEAT_GROUP_IO      },
 	{ Z_FEATURE2_UART1,     "uart1",   Z_FEAT_GROUP_IO      },
+	// Z_FEAT_GROUP_IO rather than _INPUT, which is where usb-hid
+	// sits in the table above: this file's own rule is that no group
+	// may appear in both tables, or k_soc_report() prints its heading
+	// twice. Both bits are set on a `USB_HOST board -- usb-hid says
+	// the reg_usbN_* registers are there, usb-host says there is a
+	// controller you can drive yourself.
+	{ Z_FEATURE2_USB_HOST,  "usb-host", Z_FEAT_GROUP_IO     },
 
 };
 

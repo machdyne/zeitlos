@@ -315,6 +315,26 @@
 // cycles per field multiply and the other ~60,000.
 #define Z_FEATURE2_MONTMUL    (1u << 3)
 
+// rtl/usb/usb_host.v -- a general USB host controller at 0xc000_0xxx,
+// capable of hubs, mass storage and CDC, replacing the low-speed
+// HID-only rtl/ext/usb_hid_host. See docs/usb_host.md.
+//
+// KEEP IN SYNC with rtl/csrs.vh's CSR_FEATURES2 bit 4.
+//
+// DISTINCT FROM Z_FEATURE_USB_HID (CSR_FEATURES bit 13), which stays
+// set on a board with this block: that bit answers "is there a HID
+// port here", and the answer is still yes -- the reg_usbN_* registers
+// are present and unchanged. This one answers the narrower question
+// "can I do a USB transfer of my own", which is what a mass storage or
+// CDC driver actually needs to know.
+//
+// Also read the block's own CONFIG register before using it, the same
+// rule as Z_FEATURE2_MONTMUL above: this bit says the controller
+// exists, that register says how many root ports and auto-poll slots
+// it was built with. A driver assuming four slots on a board built
+// with two would silently program a slot that is not there.
+#define Z_FEATURE2_USB_HOST   (1u << 4)
+
 // Register map, word offsets from the base. See rtl/montmul.v.
 #define Z_MONTMUL_BASE        0x70000600u
 #define Z_MONTMUL_MAGIC       0x5A4D4F4Eu   // "ZMON"

@@ -15,6 +15,7 @@
 #include "../common/zstream.h"
 #include "../common/zdns.h"
 #include "kernel.h"
+#include "usb/usbh.h"
 #include "mem.h"
 #include "uart.h"
 #include "zar.h"
@@ -935,6 +936,92 @@ void sh(void) {
 			}
 		}
 
+		// LIST USB DEVICES (rtl/usb/, docs/usb_host.md)
+		//
+		// Named after the tool everyone already knows. Worth more
+		// than the one line z_usbh_init() prints at boot, because
+		// the interesting state is what changes AFTER boot -- a
+		// device plugged in later, a port that enumerated and then
+		// dropped, a poll slot whose last status stopped being OK.
+		else if (!strncmp(buffer, "lsusb", cmdlen)) {
+			z_usbh_dump();
+		}
+
+		// RELEASE THE USB PORTS AND READ THE LINES -- isolates
+		// "the controller is driving" from "the board is holding
+		// a line high", which lsusb alone cannot tell apart.
+		else if (!strncmp(buffer, "usbidle", cmdlen)) {
+			z_usbh_probe_idle();
+		}
+
+		// PACKET BUFFER ROUND-TRIP + THE SETUP BYTES WE WOULD SEND
+		else if (!strncmp(buffer, "usbbuf", cmdlen)) {
+			z_usbh_buftest();
+		}
+
+		// BUILT-IN LOGIC ANALYSER (rtl/probe.v, docs/probe.md)
+		//
+		// `probe` arms it and dumps the capture as hex. What it
+		// watches is fixed at build time in rtl/sysctl.v -- by
+		// default USB host port 0's D+/D-, triggered on our own
+		// transmitter, so word 0 is the start of a packet we sent.
+		//
+		// Absent unless the bitstream was built with `PROBE, which
+		// the magic-free CTRL read detects: a build without it
+		// decodes this window to csrs and reads back something that
+		// is not a plausible word count.
+		else if (!strncmp(buffer, "probe", cmdlen)) {
+			volatile uint32_t *pc = (volatile uint32_t *)0x7f000000;
+			volatile uint32_t *pa = (volatile uint32_t *)0x7f000004;
+			volatile uint32_t *pd = (volatile uint32_t *)0x7f000008;
+			uint32_t st = *pc;
+			uint32_t words = st >> 16;
+			int i, guard;
+
+			if (words == 0 || words > 4096) {
+				printf("probe: not built in "
+					"(rebuild gateware with -DPROBE)\n");
+			} else {
+				// Arm FIRST, then make traffic happen. The
+				// driver gives up after four attempts and goes
+				// quiet, so at the shell prompt there is nothing
+				// transmitting -- arm-and-wait caught nothing at
+				// all, which was the probe working correctly and
+				// the experiment being wrong.
+				*pc = 1;
+				z_usbh_rescan();
+
+				// Enumeration cannot start until the 100 ms
+				// attach debounce has run, so wait in kernel
+				// ticks (~732 Hz) rather than a spin loop the
+				// compiler is entitled to delete.
+				{
+					uint32_t t0 = z_kernel_ticks;
+					while ((z_kernel_ticks - t0) < 2200) {
+						st = *pc;
+						if (st & 4) break;
+					}
+				}
+				st = *pc;
+				if (!(st & 4)) {
+					printf("probe: no trigger (ctrl=%08lx)\n",
+						(unsigned long)st);
+				} else {
+					printf("probe: %lu words, 16 samples each, "
+						"D+ in the upper bit of each pair\n",
+						(unsigned long)words);
+					for (i = 0; i < (int)words; i++) {
+						*pa = i;
+						(void)*pd;
+						if ((i & 7) == 0) printf("%04x:", i);
+						printf(" %08lx", (unsigned long)*pd);
+						if ((i & 7) == 7) printf("\n");
+					}
+					printf("\n");
+				}
+			}
+		}
+
 		// DISPLAY MEMORY POOL STATS (k_mem_alloc(), sw/os/mem.c) --
 		// added to debug a real-hardware "runs out of memory, no
 		// error shown" report -- run this after each `run <app>` to
@@ -1805,6 +1892,11 @@ void sh_help(void) {
 
 	printf("commands:\n");
 	printf(" hd <addr>         hex dump memory\n");
+	printf(" probe             dump logic analyser capture "
+		"(needs -DPROBE)\n");
+	printf(" lsusb             usb devices and port state\n");
+	printf(" usbidle           release usb ports, read raw lines\n");
+	printf(" usbbuf            usb packet buffer round-trip test\n");
 	printf(" xa <addr>         receive to addr via xfer\n");
 	printf(" xf <file>         receive to file via xfer\n");
 	printf(" xmf <file>        receive to file via xmodem\n");

@@ -50,6 +50,19 @@
 // interrupt regardless of which ethernet the board has.
 #define Z_IRQ_ETH				8
 
+// USB host controller -- rtl/usb/usb_host.v. See docs/usb_host.md.
+//
+// LEVEL-SENSITIVE, and non-latched in rtl/sysctl.v's LATCHED_IRQ mask
+// for that reason -- the same treatment Z_IRQ_UART and Z_IRQ_AUDIO
+// get. It stays asserted for as long as (IRQSTAT & IRQEN) is non-zero,
+// so the handler MUST clear IRQSTAT before returning or it is
+// re-entered immediately. z_usbh_poll() does that first thing.
+//
+// Unlike Z_IRQ_ETH this can safely be a level rather than a pulse,
+// because the handler CAN lower the source: clearing IRQSTAT is a
+// register write, not something that needs a userspace process to run.
+#define Z_IRQ_USB				9
+
 typedef struct {
 
 	uint32_t		base;

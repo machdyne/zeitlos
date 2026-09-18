@@ -40,6 +40,12 @@ RTL_PICO = \
 	rtl/gpu/tmds_encoder.v \
 	rtl/uart.v \
 	rtl/usb_hid.v \
+	rtl/usb/usb_sie.v \
+	rtl/usb/usb_port.v \
+	rtl/usb/usb_xact.v \
+	rtl/usb/usb_hid_compat.v \
+	rtl/usb/usb_host.v \
+	rtl/probe.v \
 	rtl/ext/usb_hid_host/src/usb_hid_host.v \
 	rtl/ext/usb_hid_host/src/usb_hid_host_rom.v \
 	rtl/usb_cdc_uart.v \
@@ -702,6 +708,70 @@ test_uart:
 	@mkdir -p output
 	iverilog -g2005 -o output/tb_uart rtl/tb/tb_uart.v rtl/uart.v
 	@vvp output/tb_uart
+
+# USB host controller: SIE, port front end, transaction engine and the
+# Wishbone top, against a behavioural device model. Covers full speed,
+# low speed wired directly (inverted polarity) and low speed behind a
+# hub (normal polarity at the low-speed bit rate, every host packet
+# preceded by a PRE) -- see docs/usb_host.md.
+#
+# The last two differing is the point of running both. A host that
+# treats "low speed" as a single thing passes the direct case and fails
+# the hub case, and the failure presents as a dead hub rather than as a
+# polarity bug.
+#
+#   make test_usb                 run the suite
+#   make test_usb TRACE=1         plus a packet-by-packet trace
+TRACE ?= 0
+test_usb:
+	@mkdir -p output
+	iverilog -g2005 $(if $(filter-out 0,$(TRACE)),-DUSB_TRACE,) \
+		-o output/tb_usb_host rtl/tb/tb_usb_host.v \
+		rtl/tb/tb_usb_device.v rtl/usb/usb_host.v rtl/usb/usb_sie.v \
+		rtl/usb/usb_port.v rtl/usb/usb_xact.v rtl/usb/usb_hid_compat.v
+	@vvp output/tb_usb_host
+
+# CO-SIMULATION: the real sw/os/usb driver against the real rtl/usb
+# gateware, joined by a VPI bridge (rtl/tb/cosim/usbh_vpi.c).
+#
+# This is the only test that exercises the two halves TOGETHER. The
+# driver runs in a thread; its register accessors post a bus request
+# and block, and the Verilog side runs a real Wishbone cycle against
+# the DUT for each one. Simulation time is frozen while the driver
+# computes, which is right -- that is code the CPU would have run
+# between bus cycles, and the CPU is not modelled here.
+#
+# The driver is compiled with -DZ_USBH_COSIM and is otherwise the same
+# source the kernel links.
+#
+#   make test_usb_cosim
+#   make test_usb_cosim TRACE=1    plus every bus cycle
+test_usb_cosim:
+	@mkdir -p output
+	cd output && iverilog-vpi --name=usbh_cosim -DZ_USBH_COSIM \
+		-I../sw/os/usb ../rtl/tb/cosim/usbh_vpi.c \
+		../sw/os/usb/usbh.c ../sw/os/usb/usbh_hid.c
+	iverilog -g2005 $(if $(filter-out 0,$(TRACE)),-DCOSIM_TRACE,) \
+		-o output/tb_usb_cosim rtl/tb/tb_usb_cosim.v \
+		rtl/tb/tb_usb_device.v rtl/usb/usb_host.v rtl/usb/usb_sie.v \
+		rtl/usb/usb_port.v rtl/usb/usb_xact.v rtl/usb/usb_hid_compat.v
+	@cd output && vvp -M. -musbh_cosim tb_usb_cosim
+
+# Utilisation of the USB host controller on its own, which is how the
+# numbers in docs/usb_host.md were produced. CHECK THE DP16KD COUNT: if
+# it is not 1, the packet buffer has fallen out of block RAM and into
+# LUTs, which costs about 56000 of them and is reported by nothing. yosys only; nextpnr is not
+# needed to count LUT4 and DP16KD, and pre-pack LUT4 is what
+# docs/audio.md's table reports anyway.
+#
+#   make usb_area                 two-port build
+#   make usb_area USB_PORTS=1     one-port build
+USB_PORTS ?= 2
+usb_area:
+	@yosys -p "read_verilog rtl/usb/*.v; \
+		chparam -set PORTS $(USB_PORTS) usb_host; \
+		synth_ecp5 -abc9 -top usb_host; stat" 2>&1 \
+		| sed -n '/=== usb_host ===/,$$p'
 
 CAND ?= rtl/gpu/gpu_blit.v
 test_blit:

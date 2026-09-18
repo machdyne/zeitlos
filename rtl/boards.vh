@@ -1,3 +1,18 @@
+// Built-in logic analyser -- rtl/probe.v, docs/probe.md.
+//
+// Define `PROBE on a board (or pass -DPROBE) to include it. These size
+// its capture buffer: 512 words is 8192 samples of two wires, one
+// DP16KD, and 170 us at 48 MHz -- longer than a whole low-speed USB
+// transaction. PROBE_AW must be log2(PROBE_WORDS).
+//
+// It is a bring-up instrument and off by default everywhere.
+`ifdef PROBE
+`ifndef PROBE_WORDS
+`define PROBE_WORDS 512
+`define PROBE_AW 9
+`endif
+`endif
+
 `ifndef ZEITLOS_BOARDS_VH
 `define ZEITLOS_BOARDS_VH
 
@@ -535,7 +550,12 @@
 `define GPU_CURSOR
 `define GPU_DDMI
 `define UART0
-`define USB_HID
+// USB host controller (rtl/usb/, docs/usb_host.md) instead of the
+// low-speed HID-only rtl/ext/usb_hid_host. Both cores remain
+// supported and USB_HID is still the default on every other board --
+// see rtl/sysctl.v, where USB_HOST `undef's USB_HID because the two
+// are two cores for the same two pins.
+`define USB_HOST
 `define SPI_SDCARD
 `define ETH_RMII
 // See the note on ETH_RX_SLOTS under BOARD_SERGEI_ML1.
@@ -543,6 +563,16 @@
 `define AUDIO
 `define AUDIO_PT8211
 `define AUDIO_MIXER
+
+// Built-in logic analyser (rtl/probe.v). Watching USB host port 0's
+// D+/D- by default -- see the probe instantiation in rtl/sysctl.v for
+// what it is wired to and what triggers it.
+//
+// One DP16KD and ~100 LUT4. This is a 45F, so both are affordable;
+// take it back out once USB bring-up is done.
+//`define PROBE
+//`define PROBE_WORDS 512
+//`define PROBE_AW 9
 
 `elsif BOARD_SERGEI_ML1
 

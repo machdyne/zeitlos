@@ -7,14 +7,14 @@ FREQUENCY PORT "CLK_48" 48.0 MHz;
 
 # USB HOST
 LOCATE COMP "usb_host_dp[0]" SITE "B1";
-IOBUF PORT "usb_host_dp[0]" IO_TYPE=LVCMOS33;
+IOBUF PORT "usb_host_dp[0]" IO_TYPE=LVCMOS33 PULLMODE=NONE;
 LOCATE COMP "usb_host_dm[0]" SITE "B2";
-IOBUF PORT "usb_host_dm[0]" IO_TYPE=LVCMOS33;
+IOBUF PORT "usb_host_dm[0]" IO_TYPE=LVCMOS33 PULLMODE=NONE;
 
 LOCATE COMP "usb_host_dp[1]" SITE "C1";
-IOBUF PORT "usb_host_dp[1]" IO_TYPE=LVCMOS33;
+IOBUF PORT "usb_host_dp[1]" IO_TYPE=LVCMOS33 PULLMODE=NONE;
 LOCATE COMP "usb_host_dm[1]" SITE "C2";
-IOBUF PORT "usb_host_dm[1]" IO_TYPE=LVCMOS33;
+IOBUF PORT "usb_host_dm[1]" IO_TYPE=LVCMOS33 PULLMODE=NONE;
 
 # USB DEVICE (upstream-facing port) -- the USB-C socket.
 #

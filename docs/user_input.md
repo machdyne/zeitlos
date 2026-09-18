@@ -12,6 +12,18 @@ no fixed port-to-device mapping: either port can be a keyboard, a
 mouse, a gamepad, or nothing at all, and software decides which is
 which at runtime, every time it needs to know.
 
+> **The host core underneath this is being replaced.**
+> `rtl/ext/usb_hid_host` is a low-speed (1.5 Mbps) HID-only core, and
+> USB 2.0 does not define bulk transfers at low speed at all -- so it
+> can never reach a USB stick. [usb_host.md](usb_host.md) is the design
+> for a full-speed Zeitlos-native replacement supporting HID, hubs,
+> mass storage and CDC. **Nothing in that document is built yet**, and
+> everything in *this* document describes what ships today and stays
+> accurate: the replacement keeps the `reg_usbN_*` registers and the
+> interrupt behaviour below bit-for-bit, specifically so that this
+> guide, `sw/os/hid.c`, `sw/apps/wm/wm.c` and `sw/apps/gpu3d/gpu3d.c`
+> need no changes.
+
 This guide covers the whole stack, kernel up to app:
 
 - The two USB HID host ports themselves, their register layout, and
@@ -64,6 +76,13 @@ under the keyboard's own power-on state regardless of anything
 software does here. Adding that would mean extending
 `usb_hid_host.v` with an OUT-transfer capability it doesn't currently
 have at all -- not attempted.
+
+Both limitations are gone in the replacement core designed in
+[usb_host.md](usb_host.md): hubs are a software class driver over
+transfer types that core has anyway (phase 4 there), and a general host
+does OUT transfers, so `Set_Report` -- and therefore Num Lock and Caps
+Lock -- becomes ordinary work rather than an extension the hardware
+can't express (phase 6). Neither is built yet.
 
 ### Register addresses
 

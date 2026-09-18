@@ -71,7 +71,28 @@ localparam CSR_FEATURES =
 `elsif USB_CDC
 	(32'h1 << 12) |
 `endif
+// A USB HID port, meaning the reg_usbN_* registers exist and there is
+// somewhere for a keyboard or mouse to plug in.
+//
+// SET FOR `USB_HOST TOO, and that is the point rather than a
+// convenience -- the same shape as CSR_FEATURES bit 12 being set for
+// `USB_CDC. The question this bit answers is "is there a HID port
+// here", not "which core is behind it", and rtl/usb/usb_host.v carries
+// the same registers on the same addresses. Software that checks this
+// is deciding whether to look for a keyboard, and the answer is still
+// yes.
+//
+// rtl/sysctl.v `undef's USB_HID when USB_HOST is defined -- they are
+// two cores for the same two pins -- and it does so BEFORE this file
+// is included, so testing USB_HID alone here reports no HID port on
+// exactly the boards that have the better one. sw/apps/info would show
+// USBHID absent while a mouse was moving the cursor.
+//
+// Z_FEATURE2_USB_HOST is the bit for the narrower question "can I do a
+// USB transfer of my own".
 `ifdef USB_HID
+	(32'h1 << 13) |
+`elsif USB_HOST
 	(32'h1 << 13) |
 `endif
 `ifdef SPI_SDCARD
@@ -267,6 +288,19 @@ localparam CSR_FEATURES2 =
 // silently truncate a P-384 modulus.
 `ifdef MONTMUL
 	(32'h1 << 3) |
+`endif
+// rtl/usb/usb_host.v -- the USB host controller. See docs/usb_host.md.
+//
+// Set when the block is BUILT. NOT a replacement for CSR_FEATURES bit
+// 13 (`USB_HID), which stays set on these boards because the
+// reg_usbN_* compatibility registers are still there and still work:
+// that bit means "there is a HID port", this one means "there is a
+// controller you can drive yourself".
+//
+// Read usb_host.v's own CONFIG register for the port and poll-slot
+// counts before using them -- same rule as MONTMUL above.
+`ifdef USB_HOST
+	(32'h1 << 4) |
 `endif
 // A second 16550 (rtl/ext/uart16550) at 0xf000_0100, available to
 // software as a general-purpose serial port. UART0 is the console and

@@ -92,13 +92,13 @@ IOBUF PORT "ETH_RST_N" IO_TYPE=LVCMOS33;
 
 # USB host. Note these are NOT the ML1 balls -- see header.
 LOCATE COMP "usb_host_dp[0]" SITE "A5";
-IOBUF PORT "usb_host_dp[0]" IO_TYPE=LVCMOS33;
+IOBUF PORT "usb_host_dp[0]" IO_TYPE=LVCMOS33 PULLMODE=NONE;
 LOCATE COMP "usb_host_dm[0]" SITE "A6";
-IOBUF PORT "usb_host_dm[0]" IO_TYPE=LVCMOS33;
+IOBUF PORT "usb_host_dm[0]" IO_TYPE=LVCMOS33 PULLMODE=NONE;
 LOCATE COMP "usb_host_dp[1]" SITE "A3";
-IOBUF PORT "usb_host_dp[1]" IO_TYPE=LVCMOS33;
+IOBUF PORT "usb_host_dp[1]" IO_TYPE=LVCMOS33 PULLMODE=NONE;
 LOCATE COMP "usb_host_dm[1]" SITE "A4";
-IOBUF PORT "usb_host_dm[1]" IO_TYPE=LVCMOS33;
+IOBUF PORT "usb_host_dm[1]" IO_TYPE=LVCMOS33 PULLMODE=NONE;
 
 # DDMI (DVI over HDMI). Only the P pin of each pair is constrained;
 # the complement is inferred. N balls for reference: CK C10,

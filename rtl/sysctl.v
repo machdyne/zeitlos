@@ -7,6 +7,28 @@
  */
 
 `include "boards.vh"
+
+// `USB_HOST and `USB_HID are mutually exclusive -- they are two cores
+// for the same two pins, and the new one carries the old one's
+// register map inside it. Defining USB_HOST WINS, so a board can be
+// built against the new core without editing rtl/boards.vh for every
+// board at once:
+//
+//     make BOARD=lakritz EXTRA_DEFINES=-DUSB_HOST ...
+//
+// BOTH CORES STAY SUPPORTED. `USB_HID is not a migration step to be
+// removed later: rtl/usb_hid.v and rtl/ext/usb_hid_host remain in
+// RTL_PICO and remain the default for every board in rtl/boards.vh.
+// A board opts in to the new core by defining USB_HOST -- on the
+// command line, or in its own rtl/boards.vh entry -- and can opt back
+// out by not doing so.
+//
+// That matters beyond taste. The new core is larger (see
+// docs/usb_host.md), and on a part where it does not fit, the old one
+// working is better than the new one not building.
+`ifdef USB_HOST
+`undef USB_HID
+`endif
 `include "csrs.vh"
 
 localparam SYSCLK = 48_000_000;
@@ -377,7 +399,10 @@ module sysctl #()
 `endif
 `endif
 
-`ifdef USB_HID
+`ifdef USB_HOST
+	inout [1:0] usb_host_dp,
+	inout [1:0] usb_host_dm,
+`elsif USB_HID
 	inout [1:0] usb_host_dp,
 	inout [1:0] usb_host_dm,
 `endif
@@ -591,6 +616,15 @@ module sysctl #()
 	// and the machine stops making forward progress." Bit 8 is latched
 	// in LATCHED_IRQ, so a level there re-fires forever.
 	//
+	// BIT 9 (Z_IRQ_USB, rtl/usb/usb_host.v) is cleared for the same
+	// reason bits 4 and 7 are. It is a level derived from
+	// (IRQSTAT & IRQEN), and z_usbh_poll() lowers it by clearing
+	// IRQSTAT -- so it has the property ethernet lacks: the handler
+	// can turn the source off without needing a userspace process to
+	// run. Both cores' masks are kept identical; there are two
+	// instantiations below, one per CPU, and changing only one gives a
+	// machine whose interrupt behaviour depends on `CPU_ZEITLOS32.
+	//
 	// The UART and the audio FIFO escape this by being non-latched
 	// AND by having handlers that can clear the source -- draining the
 	// FIFO lowers the level. Ethernet has neither property: only
@@ -635,6 +669,18 @@ module sysctl #()
 		cpu_irq[5] = wbs_usb0_int;
 `ifdef USB_HID
 		cpu_irq[6] = wbs_usb1_int;
+`endif
+`ifdef USB_HOST
+		cpu_irq[6] = wbs_usb1_int;
+		// The host controller's own interrupt: transaction complete,
+		// port change, auto-poll error. A LEVEL derived from
+		// (IRQSTAT & IRQEN), and bit 9 is cleared in LATCHED_IRQ
+		// below for that reason. See docs/usb_host.md.
+		//
+		// Bits 5 and 6 above are UNCHANGED in meaning: they are still
+		// one HID compatibility block each, still one pulse per
+		// report, and sw/os/hid.c does not know anything has moved.
+		cpu_irq[9] = wbs_usbh_int;
 `endif
 		// rtl/audio.v's FIFO watermark. LEVEL-SENSITIVE, and therefore
 		// non-latched in LATCHED_IRQ below -- bit 7 is cleared there
@@ -822,8 +868,14 @@ module sysctl #()
 `ifdef SPI_SDCARD
 	wire cs_spisdcard = ((wbm_adr & 32'hf000_0000) == 32'hb000_0000);
 `endif
+`ifdef USB_HOST
+`define USB_ANY
+`endif
 `ifdef USB_HID
-	// Pointer sensitivity (usb_hid_wb's SENS_SHIFT): boards whose
+`define USB_ANY
+`endif
+`ifdef USB_ANY
+	// Pointer sensitivity (SENS_SHIFT): boards whose
 	// mouse counts and screen pixels are of the same order leave this
 	// alone and get the historical 1:1 pointer.
 `ifdef USB_HID_SENS_SHIFT
@@ -858,6 +910,30 @@ module sysctl #()
 	// each poll both instances' own `typ` field and decide dynamically.
 	wire cs_usb0 = ((wbm_adr & 32'hf000_0020) == 32'hc000_0000);
 	wire cs_usb1 = ((wbm_adr & 32'hf000_0020) == 32'hc000_0020);
+`endif
+`ifdef USB_HOST
+	// ONE decode for the whole 0xc nibble, and deliberately so.
+	//
+	// The two decodes above split the nibble between two slaves on
+	// bit 5, and their masks cover nothing else -- so between them
+	// they already claim all 256MB. That is harmless with exactly two
+	// slaves in there and immediately wrong with a third, which is
+	// why docs/usb_host.md's phase 0 design called for narrowing them
+	// before adding the host controller's own windows.
+	//
+	// It turned out not to be needed. rtl/usb/usb_host.v is a SINGLE
+	// slave that owns the entire nibble and sub-decodes internally --
+	// compat registers, control, the auto-poll table, the packet
+	// buffer -- and, importantly, acks anything else in there and
+	// reads zero. So the narrowing problem is dissolved rather than
+	// solved: there is nothing to collide with.
+	//
+	// The catch-all inside that module is not optional. An unacked
+	// address hangs picorv32_wb forever, so a stale pointer into this
+	// nibble has to land on a zero read rather than a dead machine --
+	// the same lesson this file records having learned on the icache
+	// window.
+	wire cs_usbh = ((wbm_adr & 32'hf000_0000) == 32'hc000_0000);
 `endif
 `ifdef GPU_RASTER
 	wire cs_gpu = ((wbm_adr & 32'hf000_0000) == 32'ha000_0000);
@@ -945,6 +1021,18 @@ module sysctl #()
 	// than as a separate expression per combination. With two optional
 	// tenants that would be four cases to keep in agreement, and the
 	// one that mattered would be the one nobody tested.
+	// rtl/probe.v -- the built-in logic analyser (docs/probe.md).
+	//
+	// A tenant of nibble 7 like the rest, but decoded on bits [27:24]
+	// rather than [10:8]: it wants a whole 16MB sub-window rather than
+	// a 256-byte one, and 0x7f is the top of the nibble, furthest from
+	// the 256-byte tenants below. csrs_wb is the fall-through for
+	// everything in nibble 7, so this has to be excluded there too --
+	// the same treatment cs_montmul gets.
+`ifdef PROBE
+	wire cs_probe = ((wbm_adr & 32'hff00_0000) == 32'h7f00_0000);
+	wire wbm_cyc_probe = cs_probe && wbm_cyc;
+`endif
 	wire cs_socctl = ((wbm_adr & 32'hf000_0700) == 32'h7000_0200);
 	wire wbm_cyc_socctl = cs_socctl && wbm_cyc;
 `ifdef ICACHE
@@ -999,6 +1087,9 @@ module sysctl #()
 `endif
 `ifdef MONTMUL
 		&& !cs_montmul
+`endif
+`ifdef PROBE
+		&& !cs_probe
 `endif
 		;
 	// Unconditional, like cs_uart0 below and unlike the `ifdef-guarded
@@ -1081,6 +1172,15 @@ module sysctl #()
 `ifdef USB_HID
 		({32{cs_usb0}} & wbs_usb0_dat_o) |
 		({32{cs_usb1}} & wbs_usb1_dat_o) |
+`endif
+`ifdef USB_HOST
+		({32{cs_usbh}} & wbs_usbh_dat_o) |
+`endif
+`ifdef PROBE
+		({32{cs_probe}} & wbs_probe_dat_o) |
+`endif
+`ifdef PROBE
+		({32{cs_probe}} & wbs_probe_dat_o) |
 `endif
 `ifdef GPU_RASTER
 		({32{cs_gpu}} & wbs_gpu_dat_o) |
@@ -1211,6 +1311,15 @@ module sysctl #()
 		(cs_usb0 & wbs_usb0_ack_o) |
 		(cs_usb1 & wbs_usb1_ack_o) |
 `endif
+`ifdef USB_HOST
+		(cs_usbh & wbs_usbh_ack_o) |
+`endif
+`ifdef PROBE
+		(cs_probe & wbs_probe_ack_o) |
+`endif
+`ifdef PROBE
+		(cs_probe & wbs_probe_ack_o) |
+`endif
 `ifdef GPU_RASTER
 		(cs_gpu & wbs_gpu_ack_o) |
 `endif
@@ -1296,7 +1405,7 @@ module sysctl #()
 `else
 		.ENABLE_DIV(0),
 `endif
-		.LATCHED_IRQ(32'b1111_1111_1111_1111_1111_1111_0110_1111)
+		.LATCHED_IRQ(32'b1111_1111_1111_1111_1111_1101_0110_1111)
 	)
 	wbm_cpu0_i
 	(
@@ -1352,7 +1461,7 @@ module sysctl #()
       // already has THRE, and waitirq would freeze the core).
       .ENABLE_IRQ_TIMER(1),
       .ENABLE_IRQ_QREGS(1),
-		.LATCHED_IRQ(32'b1111_1111_1111_1111_1111_1111_0110_1111)
+		.LATCHED_IRQ(32'b1111_1111_1111_1111_1111_1101_0110_1111)
 	)
 	wbm_cpu0_i
 	(
@@ -2809,6 +2918,119 @@ module sysctl #()
 	);
 `endif
 
+	// -- USB host controller (rtl/usb/, docs/usb_host.md) --
+	//
+	// Replaces the two usb_hid_wb instances above, and is mutually
+	// exclusive with them: `USB_HID and `USB_HOST must not both be
+	// defined. The thing it replaces is a LOW-SPEED HID-only core,
+	// and USB 2.0 does not define bulk transfers at low speed at all,
+	// so there is no path from it to a USB stick at any level of
+	// cleverness. That is the reason for the rewrite; licensing was
+	// never it.
+	//
+	// It presents the same reg_usbN_* registers on the same
+	// addresses, with the same two interrupts, so sw/os/hid.c,
+	// sw/apps/wm/wm.c, sw/apps/gpu3d/gpu3d.c and docs/user_input.md
+	// are all unchanged.
+	//
+	// clk12mhz is NOT wired here and is not an oversight: this core
+	// runs entirely on wbm_clk. 48 MHz is exactly 4x the full-speed
+	// bit rate, so it is both the oversampling clock and the bus
+	// clock, and the core has no clock-domain crossing anywhere --
+	// unlike usb_hid.v, which is largely synchronisers for exactly
+	// that reason.
+`ifdef USB_HOST
+	wire wbs_usb0_int;
+	wire wbs_usb1_int;
+	wire wbs_usbh_int;
+	wire wbs_usbh_tx_active;
+	wire [31:0] wbs_usbh_dat_o;
+	wire wbs_usbh_ack_o;
+	wire wbm_cyc_usbh = cs_usbh && wbm_cyc;
+
+	wire [1:0] wbs_usb0_typ, wbs_usb1_typ;
+	wire [9:0] wbs_usb0_curs_x, wbs_usb0_curs_y;
+	wire [9:0] wbs_usb1_curs_x, wbs_usb1_curs_y;
+
+	usb_host #(
+		.PORTS(2),
+		.T_MS(SYSCLK / 1000),
+		.T_FRAME(SYSCLK / 1000),
+		// Reset/recovery left at usb_host.v's 10/10 defaults.
+		//
+		// Raising them to 30/20 was tried on real hardware and made
+		// things WORSE: with 10 ms, port 1's device answered the
+		// SETUP and NAKed the data stage; with 30 ms neither port
+		// answered anything. That is the opposite of the "device
+		// needs longer to get ready" theory, so the theory is wrong
+		// and the number goes back.
+		.SENS_SHIFT(USB_HID_SENS)
+	) wbs_usbh_i
+	(
+		.wb_clk_i(wbm_clk),
+		.wb_rst_i(wbm_rst),
+		.wb_adr_i(wbm_adr_sel_word[10:0]),
+		.wb_dat_i(wbm_dat_o),
+		.wb_dat_o(wbs_usbh_dat_o),
+		.wb_we_i(wbm_we),
+		.wb_sel_i(wbm_sel),
+		.wb_stb_i(wbm_stb),
+		.wb_ack_o(wbs_usbh_ack_o),
+		.wb_cyc_i(wbm_cyc_usbh),
+		.usb_dp(usb_host_dp),
+		.usb_dm(usb_host_dm),
+		.curs_x0(wbs_usb0_curs_x),
+		.curs_y0(wbs_usb0_curs_y),
+		.curs_x1(wbs_usb1_curs_x),
+		.curs_y1(wbs_usb1_curs_y),
+		.typ0(wbs_usb0_typ),
+		.typ1(wbs_usb1_typ),
+		.tx_active_o(wbs_usbh_tx_active),
+		.hid0_int_o(wbs_usb0_int),
+		.hid1_int_o(wbs_usb1_int),
+		.int_o(wbs_usbh_int)
+	);
+`endif
+
+	// Built-in logic analyser. What it watches is chosen HERE, at
+	// build time: two wires of capture is cheap, a mux over every
+	// candidate signal is not.
+	//
+	// Default is USB host port 0's D+/D-, triggered on our own
+	// transmitter going active -- so word zero of a capture is the
+	// start of a packet we sent, and the device's reply (or its
+	// absence) follows in the same buffer.
+`ifdef PROBE
+	wire [31:0] wbs_probe_dat_o;
+	wire wbs_probe_ack_o;
+
+`ifdef USB_HOST
+	wire [1:0] probe_sig = {usb_host_dp[0], usb_host_dm[0]};
+	wire probe_trig = wbs_usbh_tx_active;
+`else
+	wire [1:0] probe_sig = 2'b00;
+	wire probe_trig = 1'b1;
+`endif
+
+	probe #(
+		.WORDS(`PROBE_WORDS),
+		.AW(`PROBE_AW)
+	) wbs_probe_i
+	(
+		.clk(wbm_clk),
+		.rst(wbm_rst),
+		.sig(probe_sig),
+		.trig(probe_trig),
+		.wb_adr_i(wbm_adr_sel_word[1:0]),
+		.wb_dat_i(wbm_dat_o),
+		.wb_dat_o(wbs_probe_dat_o),
+		.wb_we_i(wbm_we),
+		.wb_stb_i(wbm_stb),
+		.wb_cyc_i(wbm_cyc_probe),
+		.wb_ack_o(wbs_probe_ack_o)
+	);
+`endif
+
 	// GPU: Video Generator
 `ifdef GPU
 	wire [9:0] gpu_x;
@@ -2949,7 +3171,13 @@ module sysctl #()
 	// on a report while typ==2 -- see rtl/usb_hid.v), so if neither
 	// port is a mouse this just holds whatever port 0 last had
 	// (0,0 after reset), same as the single-port behavior before this.
+`ifdef USB_HOST
+`define USB_CURSOR_SRC
+`endif
 `ifdef USB_HID
+`define USB_CURSOR_SRC
+`endif
+`ifdef USB_CURSOR_SRC
 `ifdef ESP32_LINK
 	assign gpu_curs_x = vmouse_present ? vmouse_x :
 		(wbs_usb0_typ == 2'd2) ? wbs_usb0_curs_x :

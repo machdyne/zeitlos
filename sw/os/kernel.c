@@ -14,6 +14,7 @@
 #include <string.h>
 
 #include "kernel.h"
+#include "usb/usbh.h"
 #include "zeitlos.h"
 #include "mem.h"
 #include "uart.h"
@@ -616,6 +617,15 @@ int main(void) {
 
 	// init usb hid keyboard event queue
 	z_hid_init();
+
+	// USB host controller (docs/usb_host.md). Checks
+	// Z_FEATURE2_USB_HOST itself and does nothing on a board built
+	// without it, so this is unconditional here.
+	//
+	// AFTER z_hid_init(), not before: enumeration writes typ into the
+	// compat blocks and z_hid_init() clears them, so the other order
+	// would wipe a device that had already been found.
+	z_usbh_init();
 	printf(" - hid initialized.\n");
 
 	// init memory management -- pool size comes from the SOC
@@ -1010,6 +1020,7 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 	// sooner than intended.
 	if ((irqs & (1 << Z_IRQ_KTIMER)) != 0) {
 		++z_kernel_ticks;
+		z_usbh_poll();
 		// cpu_ticks is charged after the wake sweep below, and
 		// only if that process is RUNNABLE. Billing whoever
 		// last waitirq'd made idle time look like work: the
@@ -1029,6 +1040,18 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 
 	if ((irqs & (1 << Z_IRQ_HID1)) != 0) {
 		z_hid_irq1();
+	}
+
+	// USB host. A LEVEL, not a pulse -- z_usbh_poll() clears IRQSTAT
+	// itself, which is what lowers it. Non-latched in rtl/sysctl.v's
+	// LATCHED_IRQ for the same reason Z_IRQ_UART is: a latched level
+	// re-fires the instant the handler returns.
+	//
+	// Also advanced from the ktimer below, because a device sitting in
+	// a timed state -- waiting out the 2 ms after SET_ADDRESS, say --
+	// has no interrupt coming to move it along.
+	if ((irqs & (1 << Z_IRQ_USB)) != 0) {
+		z_usbh_poll();
 	}
 
 	// Ethernet receive -- unblock whoever is waiting on packets.

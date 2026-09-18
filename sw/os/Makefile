@@ -50,7 +50,7 @@ CFLAGS = $(PIC_FLAGS) --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) -I..
 LDFLAGS = $(PIC_FLAGS) -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS)
 LDSCRIPT = ../common/riscv-os.ld
 
-OBJS = kernel.o kruntime.o mem.o zar.o \
+OBJS = kernel.o kruntime.o mem.o zar.o usb/usbh.o usb/usbh_hid.o \
 	fs/fs.o fs/ramdisk.o fs/sdbench.o fs/fatfs/sdmm.o fs/fatfs/diskio_mux.o fs/fatfs/ff.o \
 	uart.o hid.o sh.o xfer.o xmodem.o ui.o msg.o pidreg.o fsapi.o procapi.o zobj.o zstream.o zdns.o zsoc.o zgpio.o logo.o \
 	cfg.o zcfg.o
@@ -66,7 +66,7 @@ OBJS = kernel.o kruntime.o mem.o zar.o \
 # zstream/TFTP work -- see docs/networking.md.
 KSRCS = kernel.c kruntime.c mem.c \
 	fs/fs.c fs/ramdisk.c fs/sdbench.c fs/fatfs/sdmm.c fs/fatfs/diskio_mux.c fs/fatfs/ff.c \
-	uart.c hid.c sh.c xfer.c xmodem.c ui.c msg.c pidreg.c fsapi.c procapi.c logo.c cfg.c \
+	usb/usbh.c usb/usbh_hid.c uart.c hid.c sh.c xfer.c xmodem.c ui.c msg.c pidreg.c fsapi.c procapi.c logo.c cfg.c \
 	../common/zobj.c ../common/zstream.c ../common/zdns.c ../common/zsoc.c ../common/zcfg.c
 
 kernel: kernel.elf kernel.bin
@@ -81,6 +81,12 @@ kernel.o: $(KSRCS)
 
 fs/fatfs/diskio_mux.o: fs/fatfs/diskio_mux.c fs/ramdisk.h
 	$(CC) $(CFLAGS) -c fs/fatfs/diskio_mux.c -o fs/fatfs/diskio_mux.o
+
+usb/usbh.o: usb/usbh.c usb/usbh.h usb/usbh_hw.h
+	$(CC) $(CFLAGS) -c usb/usbh.c -o usb/usbh.o
+
+usb/usbh_hid.o: usb/usbh_hid.c usb/usbh.h usb/usbh_hw.h
+	$(CC) $(CFLAGS) -c usb/usbh_hid.c -o usb/usbh_hid.o
 
 fs/ramdisk.o: fs/ramdisk.c fs/ramdisk.h
 	$(CC) $(CFLAGS) -c fs/ramdisk.c -o fs/ramdisk.o
@@ -195,7 +201,18 @@ kernel-size: kernel.elf
 		awk '{printf "  %8s  %-4s %s\n", $$2, $$3, $$4}'
 
 clean:
-	rm -f kernel.elf kernel.bin kernel.asm kernel.dasm kernel.map sh.asm *.o *.d fs/*.o fs/*.d fs/fatfs/*.o fs/fatfs/*.d
+# EVERY subdirectory that holds objects must be listed here. usb/ was
+# missing, and the failure mode is nasty: `make clean` appears to work,
+# the kernel relinks, and stale usb/*.o from an older tree survive into
+# the image. Nothing warns, and the symptom is a kernel that behaves
+# like the source you are looking at in some places and like whatever
+# was there before in others.
+#
+# It bites hardest with an unpacked archive, because unzip preserves
+# the archive's timestamps -- so a NEWER source file can land with an
+# OLDER mtime than the object built from its predecessor, and make
+# correctly decides there is nothing to do.
+	rm -f kernel.elf kernel.bin kernel.asm kernel.dasm kernel.map sh.asm *.o *.d fs/*.o fs/*.d fs/fatfs/*.o fs/fatfs/*.d usb/*.o usb/*.d
 
 .PHONY: kernel-size kernel clean
 

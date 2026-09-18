@@ -163,10 +163,10 @@ IOBUF PORT "usb_fpga_pu_dn" IO_TYPE=LVCMOS33 DRIVE=4;
 # Both lines need an external 15k pulldown to GND -- the onboard
 # usb_fpga_pu_* resistors above are US2's and do nothing here.
 LOCATE COMP "usb_host_dp[1]" SITE "B13";
-IOBUF PORT "usb_host_dp[1]" IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "usb_host_dp[1]" IO_TYPE=LVCMOS33 DRIVE=4 PULLMODE=NONE;
 
 LOCATE COMP "usb_host_dm[1]" SITE "C13";
-IOBUF PORT "usb_host_dm[1]" IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "usb_host_dm[1]" IO_TYPE=LVCMOS33 DRIVE=4 PULLMODE=NONE;
 
 # ----------------------------------------------------------------------
 # GPDI / HDMI
