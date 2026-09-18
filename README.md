@@ -33,7 +33,7 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 
 ![Zeitlos Hardware Map](https://github.com/machdyne/zeitlos/blob/main/hwmap.png)
 
-Build the hardware map from RTL with run `make hwmap` (see [docs/hwmap.md](docs/hwmap.md)).
+Build the hardware map from RTL with `make hwmap` (see [docs/hwmap.md](docs/hwmap.md)).
 
 ### OS
 
