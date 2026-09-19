@@ -201,6 +201,40 @@ IOBUF PORT "SD_DAT2" IO_TYPE=LVCMOS33 PULLMODE=NONE;
 #LOCATE COMP "GPIO0[7]" SITE "A14";				# PMODA10
 #IOBUF PORT "GPIO0[7]" IO_TYPE=LVCMOS33 PULLMODE=UP;
 
+# PMOD A (KATZE RMII ETHERNET)
+#
+# Commented out: the ball-for-ball alternative to the Langkatze block
+# below, for a Katze (LAN8720A RMII PHY) in the same socket. A hand
+# build needs the Langkatze block commented out, this one uncommented,
+# and the changes listed in rtl/boards.vh's BOARD_LAKRITZ block (near
+# its commented `ETH_RMII) -- the MAC needs block RAM this 25F only has
+# once the icache and audio FIFO give some up; see
+# release/targets/lakritz_katze.spec.
+#
+# The supported path is `./release/zrelease build lakritz_katze`, which
+# generates these same lines from release/hw/pmods/katze.spec. See
+# docs/katze.md.
+#
+# PULLMODE=UP on the three PHY mode straps only. ETH_REFCLK is an
+# INPUT: the 50MHz oscillator is on the PMOD.
+#LOCATE COMP "ETH_TXD[0]" SITE "B11";			# PMODA1
+#IOBUF PORT "ETH_TXD[0]" IO_TYPE=LVCMOS33;
+#LOCATE COMP "ETH_TXD[1]" SITE "B12";			# PMODA2
+#IOBUF PORT "ETH_TXD[1]" IO_TYPE=LVCMOS33;
+#LOCATE COMP "ETH_TX_EN" SITE "B13";			# PMODA3
+#IOBUF PORT "ETH_TX_EN" IO_TYPE=LVCMOS33;
+#LOCATE COMP "ETH_CRS_DV" SITE "B14";			# PMODA4
+#IOBUF PORT "ETH_CRS_DV" IO_TYPE=LVCMOS33 PULLMODE=UP;
+#LOCATE COMP "ETH_RXD[0]" SITE "A11";			# PMODA7
+#IOBUF PORT "ETH_RXD[0]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+#LOCATE COMP "ETH_RXD[1]" SITE "A12";			# PMODA8
+#IOBUF PORT "ETH_RXD[1]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+#LOCATE COMP "ETH_RST_N" SITE "A13";			# PMODA9
+#IOBUF PORT "ETH_RST_N" IO_TYPE=LVCMOS33;
+#LOCATE COMP "ETH_REFCLK" SITE "A14";			# PMODA10
+#IOBUF PORT "ETH_REFCLK" IO_TYPE=LVCMOS33;
+#FREQUENCY PORT "ETH_REFCLK" 50 MHZ;
+
 # PMOD B (SPI ETHERNET)
 LOCATE COMP "ETH_SS" SITE "B11";           # PMODA1
 IOBUF PORT "ETH_SS" IO_TYPE=LVCMOS33;

@@ -750,12 +750,30 @@ test_usb_cosim:
 	@mkdir -p output
 	cd output && iverilog-vpi --name=usbh_cosim -DZ_USBH_COSIM \
 		-I../sw/os/usb ../rtl/tb/cosim/usbh_vpi.c \
-		../sw/os/usb/usbh.c ../sw/os/usb/usbh_hid.c
+		../sw/os/usb/usbh.c ../sw/os/usb/usbh_hid.c \
+		../sw/os/usb/usbh_msc.c
 	iverilog -g2005 $(if $(filter-out 0,$(TRACE)),-DCOSIM_TRACE,) \
 		-o output/tb_usb_cosim rtl/tb/tb_usb_cosim.v \
 		rtl/tb/tb_usb_device.v rtl/usb/usb_host.v rtl/usb/usb_sie.v \
 		rtl/usb/usb_port.v rtl/usb/usb_xact.v rtl/usb/usb_hid_compat.v
 	@cd output && vvp -M. -musbh_cosim tb_usb_cosim
+
+# MASS STORAGE co-simulation: the real driver including usbh_msc.c,
+# the real gateware, and a bulk-only SCSI device model, with a
+# low-speed mouse polling on the other port as on hardware. Every
+# sector read is compared byte for byte. See rtl/tb/tb_usb_msc_cosim.v.
+#
+#   make test_usb_msc
+test_usb_msc:
+	@mkdir -p output
+	cd output && iverilog-vpi --name=usbh_cosim -DZ_USBH_COSIM \
+		-I../sw/os/usb ../rtl/tb/cosim/usbh_vpi.c \
+		../sw/os/usb/usbh.c ../sw/os/usb/usbh_hid.c \
+		../sw/os/usb/usbh_msc.c
+	iverilog -g2005 -o output/tb_usb_msc_cosim rtl/tb/tb_usb_msc_cosim.v \
+		rtl/tb/tb_usb_device.v rtl/usb/usb_host.v rtl/usb/usb_sie.v \
+		rtl/usb/usb_port.v rtl/usb/usb_xact.v rtl/usb/usb_hid_compat.v
+	@cd output && vvp -M. -musbh_cosim tb_usb_msc_cosim
 
 # Utilisation of the USB host controller on its own, which is how the
 # numbers in docs/usb_host.md were produced. CHECK THE DP16KD COUNT: if
@@ -795,7 +813,8 @@ test_usb_margin:
 	@mkdir -p output
 	@cd output && iverilog-vpi --name=usbh_cosim -DZ_USBH_COSIM \
 		-I../sw/os/usb ../rtl/tb/cosim/usbh_vpi.c \
-		../sw/os/usb/usbh.c ../sw/os/usb/usbh_hid.c >/dev/null
+		../sw/os/usb/usbh.c ../sw/os/usb/usbh_hid.c \
+		../sw/os/usb/usbh_msc.c >/dev/null
 	@for c in "10000 0" "-10000 0" "0 20000" "0 -20000"; do \
 		set -- $$c; \
 		iverilog -g2005 -DDEV_SKEW=20 -DDEV_PPM_FS=$$1 \

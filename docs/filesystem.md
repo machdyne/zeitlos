@@ -15,6 +15,30 @@ affected.
 If you are adding a syscall that reads or writes files, the one thing
 you must do is listed under "Adding a filesystem syscall" below.
 
+### Volumes
+
+The card is not the only FatFs volume any more.
+`sw/os/fs/fatfs/diskio_mux.c` dispatches by physical drive:
+
+| drive | path | backend |
+|---|---|---|
+| 0 | `/` | SD card, `sw/os/fs/fatfs/sdmm.c` |
+| 1 | `/ram` | ramdisk, `sw/os/ramdisk.c` |
+| 2 | `/usb` | USB mass storage, `sw/os/usb/usbh_msc.c` |
+
+`/ram` and `/usb` are prefixes `fs.c` rewrites into volume ids, not
+directories on the card. `/usb` is mounted explicitly with the shell's
+`usbmount` and released with `usbunmount`: mounting blocks while the
+unit reports ready, and USB enumeration runs from an interrupt, so it
+cannot mount on plug.
+
+Everything in this document applies to all three: FatFs is one
+non-reentrant instance whichever volume a call touches, and the USB
+backend blocks on bus transfers just as `sdmm.c` blocks on SPI. Two
+caveats specific to `/usb` are in `docs/usb_host.md`: it is verified
+in simulation but not yet on hardware, and pulling the stick does not
+unmount it.
+
 ## The problem
 
 Two independent pieces of state are shared by every filesystem caller:
@@ -393,6 +417,8 @@ Two signals worth recognising in a boot log:
 - `sw/os/kernel.c` -- the counter, the classifier, and the scheduler check
 - `sw/os/fsapi.h` -- why syscall handlers may dereference caller pointers directly, and why a syscall is an ordinary function call
 - `sw/os/fs/fatfs/sdmm.c` -- the hardware SPI backend and its timeouts
+- `sw/os/fs/fatfs/diskio_mux.c` -- drive dispatch for card, ramdisk and USB
+- `docs/usb_host.md` -- the USB mass storage backend behind `/usb`
 - `sw/common/zfs.h` -- the chunked I/O API and why the handle table exists
 - `docs/boot.md` -- boot sequence and where the card is brought up
 - `docs/flash_apps.md` -- the flash archive that core apps resolve

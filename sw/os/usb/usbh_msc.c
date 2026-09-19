@@ -80,6 +80,10 @@
 // and this is reached only from FatFs, which already runs with the
 // scheduler off, so waiting here costs nothing extra.
 #define MSC_SOFT_NAKS        2000
+// Consecutive transmission errors (bad CRC, no response) tolerated on
+// a bulk IN before the transfer fails. USB 2.0 8.5.2 has the host
+// retry a transaction up to three times; progress resets the count.
+#define MSC_STRIKES          3
 
 // Packet buffer regions. The per-port control scratch lives at 0x400
 // and 0x600 (see usbh_hw.h), and the auto-poll slots at 0x380, so the
@@ -89,6 +93,10 @@
 #define MSC_OFF_CSW         0x240u          // 13
 
 static z_usbh_msc_t msc;
+
+// Bytes the most recent command's data stage actually moved. msc.last_len
+// cannot serve: the CSW read that follows overwrites it.
+static uint16_t msc_data_got;
 
 // Chatty while the first sector read is being brought up. Every step
 // of a failing command says which one it was, because "mount failed"
@@ -127,6 +135,7 @@ static int bulk_xfer(int in, uint32_t off, uint16_t len)
     uint32_t guard;
     uint16_t done = 0;
     int naks = 0;
+    int strikes = 0;
     uint8_t st;
 
     msc.last_len = 0;
@@ -169,13 +178,53 @@ static int bulk_xfer(int in, uint32_t off, uint16_t len)
         else msc.tgl_out = (uint8_t)Z_USBH_XS_TOGGLE(s);
 
         if (st == Z_USBH_ST_NAK) {
-            // Nothing moved, nothing advanced: re-issue unchanged.
+            // The NAK ended the sequence, but not necessarily before
+            // anything moved: auto-continue may have landed several
+            // packets first, and act_len and the toggle say how far it
+            // got. Resume from there. This used to re-issue unchanged
+            // -- "nothing moved" -- which re-requested the whole
+            // length from offset 0 while the device carried on from
+            // where it was; it ran out of data early and answered the
+            // extra IN with its CSW, so a sector that paused mid-read
+            // came back as (the rest) + 13 bytes and the real CSW read
+            // then failed. tb_usb_msc_cosim's "OVER hardware budget"
+            // case.
+            if (Z_USBH_XS_LEN(s)) {
+                done += (uint16_t)Z_USBH_XS_LEN(s);
+                msc.last_len = done;
+                naks = 0;           // progress, so not a stuck device
+            }
             if (++naks > MSC_SOFT_NAKS) {
                 msc.last_len = done;
                 return Z_USBH_MSC_ERR;
             }
             for (guard = 0; guard < 2000u; guard++) { }
             continue;
+        }
+
+        // A transmission error on an IN is retried, not failed. The
+        // engine stops on the bad packet WITHOUT advancing: act_len
+        // counts only the packets before it, and the toggle it
+        // reports is still the one the device will resend with,
+        // because the host sent no ACK. So this resumes exactly like
+        // a NAK.
+        //
+        // Failing instead was far worse than losing one sector: the
+        // device was still mid-data-phase, so the CSW read that
+        // follows took sector bytes as a status wrapper and the
+        // stream stayed out of step for every later command.
+        // tb_usb_msc_cosim's bit-error cases.
+        //
+        // OUT is not retried here. A lost handshake there is resolved
+        // by the device ignoring a repeated toggle, and nothing yet
+        // exercises that path.
+        if (in && (st == Z_USBH_ST_CRCERR || st == Z_USBH_ST_TIMEOUT)) {
+            if (Z_USBH_XS_LEN(s)) {
+                done += (uint16_t)Z_USBH_XS_LEN(s);
+                msc.last_len = done;
+                strikes = 0;
+            }
+            if (++strikes <= MSC_STRIKES) continue;
         }
 
         if (st != Z_USBH_ST_OK && st != Z_USBH_ST_SHORT) {
@@ -186,6 +235,7 @@ static int bulk_xfer(int in, uint32_t off, uint16_t len)
 
         done += (uint16_t)Z_USBH_XS_LEN(s);
         msc.last_len = done;
+        strikes = 0;
 
         // Short means the device had less to give, which ends the
         // transfer and is not an error.
@@ -232,6 +282,9 @@ static int scsi_cmd(const uint8_t *cmd, int cmd_len, int dir,
 {
     uint32_t base = Z_USBH_BUF + MSC_OFF_CBW;
     int i, r;
+    int data_r = Z_USBH_MSC_OK;
+
+    msc_data_got = 0;
 
     // -- CBW --
     put32le(MSC_OFF_CBW + 0, CBW_SIG);
@@ -254,16 +307,22 @@ static int scsi_cmd(const uint8_t *cmd, int cmd_len, int dir,
     // -- data --
     if (data_len) {
         r = bulk_xfer(dir == CBW_IN, data_off, (uint16_t)data_len);
+        msc_data_got = msc.last_len;
+        data_r = r;
         if (msc_verbose && (r != Z_USBH_MSC_OK || msc.last_len != data_len))
             printf("usb msc: cmd %02x: data %s %lu of %lu (r=%d, "
                    "status %d)\n", cmd[0], dir == CBW_IN ? "in" : "out",
                    (unsigned long)msc.last_len,
                    (unsigned long)data_len, r, msc.last_status);
-        // A STALL on the data stage is recoverable: the device still
-        // owes a CSW, and the spec says to clear the endpoint and read
-        // it. Endpoint recovery is not implemented yet, so this is
-        // reported rather than repaired.
-        if (r == Z_USBH_MSC_ERR) return r;
+        // Whatever happened, the device still owes a CSW, and it is
+        // read below regardless. Bulk-only transport is a strict
+        // three-phase sequence: returning here used to leave that CSW
+        // in the pipe, and every later command then read the previous
+        // one's status -- one transaction out of step for good.
+        //
+        // A STALL needs CLEAR_FEATURE(HALT) on the endpoint before the
+        // CSW can be read, which is not implemented yet; the CSW read
+        // then fails too and says so, rather than being skipped.
     }
 
     // -- CSW --
@@ -293,6 +352,9 @@ static int scsi_cmd(const uint8_t *cmd, int cmd_len, int dir,
                "residue %lu\n", cmd[0],
                z_usbh_rb(Z_USBH_BUF + MSC_OFF_CSW + 12),
                (unsigned long)get32le(MSC_OFF_CSW + 8));
+
+    // A failed data stage is the result even with a clean CSW.
+    if (data_r != Z_USBH_MSC_OK) return data_r;
 
     // bCSWStatus: 0 passed, 1 failed, 2 phase error.
     return z_usbh_rb(Z_USBH_BUF + MSC_OFF_CSW + 12) == 0 ?
@@ -460,6 +522,17 @@ int z_usbh_msc_read(uint32_t lba, uint8_t *dst, uint32_t count)
         if (scsi_cmd(cmd, 10, CBW_IN, MSC_OFF_DATA, 512) !=
             Z_USBH_MSC_OK)
             return Z_USBH_MSC_ERR;
+
+        // A sector is 512 bytes or it is a failure. Fewer leaves the
+        // tail of the landing area holding the previous command's
+        // bytes, and handing that to FatFs as file content is worse
+        // than an error it can report.
+        if (msc_data_got != 512) {
+            if (msc_verbose)
+                printf("usb msc: lba %lu: short sector, %u bytes\n",
+                       (unsigned long)(lba + n), msc_data_got);
+            return Z_USBH_MSC_ERR;
+        }
 
         for (i = 0; i < 512; i++)
             dst[n * 512 + i] = z_usbh_rb(Z_USBH_BUF + MSC_OFF_DATA + i);

@@ -181,7 +181,11 @@ typedef struct {
     // -- this device's control transfer engine --
     uint8_t ctrl_state;
     uint8_t ctrl_err_stage;
-    uint8_t ctrl_soft_naks;
+    // uint16_t, not uint8_t: CTRL_SOFT_NAKS is 1000. As a byte this
+    // wrapped at 256, every comparison against the limit was constant,
+    // and a device NAKing a control stage was retried forever instead
+    // of failed after ~160 ms. gcc -Wtype-limits reports it.
+    uint16_t ctrl_soft_naks;
     uint8_t ctrl_tgl;
     uint8_t ctrl_pend;
     uint8_t ctrl_dir_in;

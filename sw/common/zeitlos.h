@@ -327,8 +327,9 @@ typedef uint32_t *(*z_kernel_ptr_t)(uint32_t, uint32_t *, uint32_t);
 // kept for compatibility with anything still poking the old register
 #define reg_eth (*(volatile uint32_t*)0x50000000)
 
-// RMII Ethernet MAC (rtl/ethmac_rmii.v), mozart_ml1 only. Alternative
-// to reg_eth (SPI ENC28J60) for boards with an RMII PHY instead. See
+// RMII Ethernet MAC (rtl/ethmac_rmii.v): mozart_ml1, sergei_ml1, and
+// Lakritz with a Katze PMOD. Alternative to reg_eth (SPI ENC28J60) for
+// boards with an RMII PHY instead. See
 // rtl/ethmac_rmii.v's header comment for the full register map and
 // the reasoning behind it (CDC, the single-buffer-not-double-buffer
 // choice, etc.) -- this is just the C-side view of the same thing.
@@ -346,7 +347,7 @@ typedef uint32_t *(*z_kernel_ptr_t)(uint32_t, uint32_t *, uint32_t);
 // -- hardware appends it), then reg_ethmac_txlen = len, then
 // reg_ethmac_txctrl = 1 (any value) to start sending. Poll
 // REG_ETHMAC_TX_BUSY and don't touch TX_BUF/TX_LEN/TX_CTRL again
-// until it clears.
+// until it clears. TX_BUF is write-only: reads return zero.
 #define reg_ethmac_status (*(volatile uint32_t*)0x60000000)
 #define reg_ethmac_rxlen  (*(volatile uint32_t*)0x60000004)
 #define reg_ethmac_rxctrl (*(volatile uint32_t*)0x60000008)
@@ -365,6 +366,10 @@ typedef uint32_t *(*z_kernel_ptr_t)(uint32_t, uint32_t *, uint32_t);
 #define REG_ETHMAC_RX_DROP_MASK   0xf
 #define REG_ETHMAC_RX_ERR_SHIFT   8  // 4-bit saturating count, bad CRC / too short
 #define REG_ETHMAC_RX_ERR_MASK    0xf
+// log2 of the receive FIFO's frame slots (`ETH_RX_SLOTS). Zero on a
+// bitstream from before the field existed, all of which had 4.
+#define REG_ETHMAC_RX_SLOTS_LOG2_SHIFT 12
+#define REG_ETHMAC_RX_SLOTS_LOG2_MASK  0xf
 #define gpu_clip_x0     (*(volatile uint32_t*)0xa000002c)  // Left bound
 #define gpu_clip_y0     (*(volatile uint32_t*)0xa0000030)  // Top bound  
 #define gpu_clip_x1     (*(volatile uint32_t*)0xa0000034)  // Right bound

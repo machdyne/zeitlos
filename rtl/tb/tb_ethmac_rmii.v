@@ -26,7 +26,12 @@
  */
 module tb_ethmac_rmii;
 
-	localparam RX_SLOTS = 4;      // must match the DUT default
+	// Follows the DUT: build with -DETH_RX_SLOTS=n to test another size.
+`ifdef ETH_RX_SLOTS
+	localparam RX_SLOTS = `ETH_RX_SLOTS;
+`else
+	localparam RX_SLOTS = 4;
+`endif
 
 	reg wb_clk = 0, wb_rst = 1;
 	reg refclk = 0;

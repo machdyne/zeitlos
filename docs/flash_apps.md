@@ -140,10 +140,10 @@ rejected. They are a *namespace* solution to what is actually a
 
 If explicit selection is ever genuinely needed, a `flash:term` prefix
 handled inside `fs_exec_info_any()` is a much smaller change than
-teaching the whole filesystem API about drives. That would become more
-attractive if Zeitlos ever grows a second real storage device (USB mass
-storage, a network mount), which is when drives start earning their
-keep.
+teaching the whole filesystem API about drives. That becomes more
+attractive now that Zeitlos has a second real storage device -- USB
+mass storage at `/usb` (see `docs/usb_host.md`), with a network mount
+a possible third -- which is when drives start earning their keep.
 
 ### Shadowing
 

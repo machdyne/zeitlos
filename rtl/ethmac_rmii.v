@@ -2,11 +2,13 @@
  * Zeitlos SOC
  * Copyright (c) 2025 Lone Dynamics Corporation. All rights reserved.
  *
- * RMII Ethernet MAC (LAN8720A PHY). mozart_ml1 only -- an optional
- * alternative to the SPI ENC28J60 path (rtl/spim.v) for boards that have
- * an RMII PHY but no SPI Ethernet MAC.
+ * RMII Ethernet MAC (LAN8720A PHY). Built on mozart_ml1 and sergei_ml1
+ * for their on-board PHYs, and on Lakritz for the Katze PMOD
+ * (release/targets/lakritz_katze.spec, docs/katze.md) -- an alternative
+ * to the SPI ENC28J60 path (rtl/spim.v) for boards that have an RMII
+ * PHY but no SPI Ethernet MAC.
  *
- * No MDIO/MDC on this board -- see boards/mozart_ml1.lpf's PULLMODE=UP
+ * No MDIO/MDC on any of them -- see boards/mozart_ml1.lpf's PULLMODE=UP
  * on rx_data/crs_dv. Those pull-ups set the LAN8720A's strap-configured
  * mode at the moment eth_rst_n is released (PHY address / auto-negotiation
  * mode), which is the only configuration this MAC will ever be able to
@@ -54,6 +56,44 @@
  * paper). A minimum 12-byte (48 eth_refclk cycle) inter-frame gap
  * follows before the engine reports itself idle again.
  *
+ * BLOCK RAM: rxbuf and txbuf are written so yosys maps them onto
+ * DP16KD block RAM, and on a board that cannot spare it either one can
+ * be moved to distributed LUT RAM with a define instead.
+ *
+ * Until the Katze PMOD brought this MAC to an ECP5-25F, NEITHER was in
+ * block RAM. Both were read into wb_dat_o through a mux, and txbuf was
+ * also read combinationally by the TX engine; an EBR has a registered
+ * read port and nothing else, so yosys built the whole 80Kbit from
+ * LUT RAM -- 1541 TRELLIS_DPR16X4 plus a 512:1 read mux per bit, for
+ * the MAC alone. The 45F boards absorbed it without anyone noticing.
+ * Now: rxbuf's CPU read is registered and unconditional, txbuf's TX
+ * read is a registered prefetch one byte-time early (see tx_word_q),
+ * and the CPU's txbuf port is write-only (see below). Measured,
+ * synth_ecp5 on this module alone:
+ *
+ *   before                    0 DP16KD   1541 DPR16X4
+ *   ETH_RX_SLOTS=4 (ML1)      5 DP16KD      3 DPR16X4
+ *   ETH_RX_SLOTS=2            3 DP16KD      3 DPR16X4   (lakritz_katze)
+ *   2 + ETH_RXBUF_LUTRAM      1 DP16KD    515 DPR16X4
+ *
+ * Why TX_BUF stopped reading back: a RAM with a read/write port plus a
+ * second read port is mapped by yosys as true dual-port DP16KD, which
+ * it builds at HALF density -- a 2048x9 RAM of that shape takes 2 EBR,
+ * one with a write-only port takes 1. The same effect is why VRAM
+ * (rtl/mem/vram.v) costs 40 EBR rather than 20. Nothing read TX_BUF.
+ *
+ * `ETH_RXBUF_LUTRAM / `ETH_TXBUF_LUTRAM put the corresponding buffer in
+ * distributed RAM via a ram_style attribute, trading LUTs for EBR. The
+ * logic is identical either way; only the mapping changes. The trade is
+ * steep: two RX slots in LUT RAM took a whole Lakritz build from 19191
+ * to 24766 TRELLIS_COMB (of 24288, so it did not place). No target
+ * uses these today; they are for a board with LUTs to spare and no
+ * block RAM.
+ *
+ * rtl/tb/tb_ethmac_rmii.v (RX) and rtl/tb/tb_ethmac_rmii_tx.v (TX and
+ * loopback) pass at 2, 4 and 8 slots and with both LUT RAM options.
+ * The TX testbench also passes against the pre-block-RAM RTL.
+ *
  * CLOCK DOMAINS: wb_clk_i (the system bus, ~48MHz) and eth_refclk
  * (RMII's shared 50MHz reference clock) are independent. The RX
  * engine below runs entirely in the eth_refclk domain (eth_crs_dv/
@@ -77,6 +117,10 @@
  *                  drain), saturating 4-bit counter
  *     bits[11:8] = rx_err_count -- frames dropped for bad CRC or
  *                  under minimum length, saturating 4-bit counter
+ *     bits[15:12] = log2(`ETH_RX_SLOTS) -- how many frames the RX
+ *                  FIFO holds, so software can size its TCP window.
+ *                  Reads 0 on a bitstream that predates it (all of
+ *                  which had 4 slots)
  *   0x04 RX_LEN (read-only): byte length of the frame currently in
  *     the RX buffer, NOT including the 4-byte FCS (same convention
  *     as sw/apps/net/enc28j60.c's enc28j60_recv()) -- 0 if rx_ready
@@ -94,18 +138,19 @@
  *     valid only while rx_ready is set and only up to RX_LEN bytes
  *     (RX_LEN+4 bytes are actually present -- the trailing FCS is
  *     still there, just not counted in RX_LEN)
- *   0xA00-0x11FC TX_BUF: the frame to send, one word every 4 bytes.
- *     Write TX_LEN bytes here (do NOT write an FCS -- hardware
- *     generates and appends it)
+ *   0xA00-0x11FC TX_BUF (write-only): the frame to send, one word
+ *     every 4 bytes. Write TX_LEN bytes here (do NOT write an FCS --
+ *     hardware generates and appends it). Reads return zero -- see
+ *     BLOCK RAM above for why
  */
 
-module ethmac_rmii_wb #()
+module ethmac_rmii_wb
 (
 	input wb_clk_i,
 	input wb_rst_i,
 	input [31:0] wb_adr_i,
 	input [31:0] wb_dat_i,
-	output reg [31:0] wb_dat_o,
+	output [31:0] wb_dat_o,
 	input wb_we_i,
 	input [3:0] wb_sel_i,
 	input wb_stb_i,
@@ -180,8 +225,10 @@ module ethmac_rmii_wb #()
 	// ENC28J60's 8KB ring, which is the configuration where this
 	// symptom does not occur.
 	//
-	// Cost is 2KB of block RAM per slot. RMII only builds on ECP5-45
-	// boards (sergei_ml1, mozart_ml1), where that is not scarce.
+	// Cost is 2KB of RAM per slot: one EBR, or 256 TRELLIS_DPR16X4
+	// with `ETH_RXBUF_LUTRAM. Four on the ML1 boards (ECP5-45F, block
+	// RAM to spare); two on lakritz_katze, whose 25F is out of it --
+	// see BLOCK RAM in the header.
 `ifdef ETH_RX_SLOTS
 	localparam RX_SLOTS = `ETH_RX_SLOTS;
 `else
@@ -191,6 +238,13 @@ module ethmac_rmii_wb #()
 	                   (RX_SLOTS <= 4)  ? 2 :
 	                   (RX_SLOTS <= 8)  ? 3 :
 	                   (RX_SLOTS <= 16) ? 4 : 5;
+
+	// Reported in STATUS[15:12], so the driver can size the TCP window
+	// it advertises from the hardware it is actually running on --
+	// see sw/apps/net/rmii_eth.c. RX_PW is log2(RX_SLOTS) for the
+	// power-of-two sizes this FIFO supports. Zero reads as "a
+	// bitstream from before this field existed", which had 4.
+	localparam [3:0] RX_SLOTS_LOG2 = RX_PW;
 
 	// Ethernet FCS residual: running the bit-serial CRC32 update below
 	// (init 0xFFFFFFFF, reflected poly 0xEDB88320, no final invert)
@@ -260,11 +314,14 @@ module ethmac_rmii_wb #()
 		end
 	endfunction
 
-	// RX packet buffer -- one frame at a time. word-addressed for the
-	// CPU read side (below), byte-lane-written from the RX engine
-	// (this section). only ever written from this always block
-	// (single driver), only ever read (never written) from the CPU
-	// side's always block further down.
+	// RX packet buffer -- RX_SLOTS frames. word-addressed for the CPU
+	// read side (below), byte-lane-written from the RX engine. only
+	// ever written from the rx_buf_we block below (single driver),
+	// only ever read (never written) from the CPU side's read port
+	// further down.
+`ifdef ETH_RXBUF_LUTRAM
+	(* ram_style = "distributed" *)
+`endif
 	reg [31:0] rxbuf [0:(RXBUF_WORDS*RX_SLOTS)-1];
 
 	// Per-slot frame length, written in this domain on the same edge
@@ -339,6 +396,31 @@ module ethmac_rmii_wb #()
 
 	// Which slot the RX engine is filling right now.
 	wire [RX_PW-1:0] rx_wr_slot = rx_wr_ptr[RX_PW-1:0];
+
+	// -- the RX buffer's write port --
+	//
+	// In its own always block, with an explicit write enable and one
+	// address, rather than as four byte-lane assignments buried in the
+	// engine's if/case tree. Same condition, same edge, same data --
+	// rx_buf_we is precisely the path through the engine below that
+	// used to write -- but in this shape yosys maps rxbuf onto DP16KD
+	// block RAM with byte enables. See "BLOCK RAM" in the header.
+	//
+	// {slot, word}: every slot is RXBUF_WORDS long, so the slot index
+	// is simply the high address bits and no multiply is inferred.
+	wire rx_buf_we = eth_crs_dv && sfd_found && (dibit_cnt == 2'b11) && !rx_full;
+	wire [RX_PW+8:0] rx_buf_waddr = {rx_wr_slot, byte_cnt[10:2]};
+
+	always @(posedge eth_refclk) begin
+		if (rx_buf_we) begin
+			case (byte_cnt[1:0])
+				2'b00: rxbuf[rx_buf_waddr][7:0]   <= new_byte;
+				2'b01: rxbuf[rx_buf_waddr][15:8]  <= new_byte;
+				2'b10: rxbuf[rx_buf_waddr][23:16] <= new_byte;
+				2'b11: rxbuf[rx_buf_waddr][31:24] <= new_byte;
+			endcase
+		end
+	end
 
 	wire [31:0] crc_after_bit0 = crc32_update(rx_crc, eth_rxd[0]);
 	wire [31:0] crc_after_bit1 = crc32_update(crc_after_bit0, eth_rxd[1]);
@@ -417,16 +499,10 @@ module ethmac_rmii_wb #()
 
 			if (dibit_cnt == 2'b11) begin
 				dibit_cnt <= 0;
+				// The byte itself goes into rxbuf from the block
+				// below, on this same edge -- rx_buf_we is exactly
+				// this branch's condition.
 				if (!rx_full) begin
-					// {slot, word} -- every slot is RXBUF_WORDS long,
-					// so the slot index is simply the high address
-					// bits and no multiply is inferred.
-					case (byte_cnt[1:0])
-						2'b00: rxbuf[{rx_wr_slot, byte_cnt[10:2]}][7:0]   <= new_byte;
-						2'b01: rxbuf[{rx_wr_slot, byte_cnt[10:2]}][15:8]  <= new_byte;
-						2'b10: rxbuf[{rx_wr_slot, byte_cnt[10:2]}][23:16] <= new_byte;
-						2'b11: rxbuf[{rx_wr_slot, byte_cnt[10:2]}][31:24] <= new_byte;
-					endcase
 					if (byte_cnt != 11'd2047) byte_cnt <= byte_cnt + 1'b1;
 				end
 			end else begin
@@ -442,7 +518,11 @@ module ethmac_rmii_wb #()
 
 	// TX packet buffer -- one frame at a time, mirror image of rxbuf:
 	// only ever WRITTEN from the wb_clk_i side (CPU), only ever READ
-	// from this section (eth_refclk side, TX engine). single writer.
+	// from this section (eth_refclk side, TX engine, via tx_word_q).
+	// single writer, single reader -- a simple dual-port RAM.
+`ifdef ETH_TXBUF_LUTRAM
+	(* ram_style = "distributed" *)
+`endif
 	reg [31:0] txbuf [0:TXBUF_WORDS-1];
 
 	localparam TX_IDLE     = 3'd0;
@@ -468,18 +548,43 @@ module ethmac_rmii_wb #()
 
 	// lookahead for the byte AFTER the one currently being sent --
 	// needed because we have to load tx_shift with the next byte on
-	// the same edge we advance tx_byte_idx (can't wait a cycle to
-	// read txbuf[new tx_byte_idx], that value isn't there yet this
-	// same edge). same idea as new_byte on the RX side, just for a
-	// read instead of a write.
+	// the same edge we advance tx_byte_idx. same idea as new_byte on
+	// the RX side, just for a read instead of a write.
+	//
+	// -- a registered read, one byte-time early --
+	//
+	// This used to read txbuf COMBINATIONALLY, at the moment it was
+	// needed. That is what kept txbuf out of block RAM: an ECP5 EBR
+	// has a registered read port and nothing else, so an asynchronous
+	// read can only be built from distributed LUT RAM plus a 512:1 mux
+	// per bit. See "BLOCK RAM" in the header.
+	//
+	// The byte is not needed until the LAST of its predecessor's four
+	// dibit cycles, and tx_byte_idx does not move during those four --
+	// so the word can be fetched on every cycle and is guaranteed to
+	// have been fetched from the right address at least three cycles
+	// before it is used. tx_word_q is that fetch.
+	//
+	// Outside TX_DATA the address is word 0: the preamble runs for 32
+	// cycles, so by the time TX_PREAMBLE's last edge loads the first
+	// data byte, tx_word_q has been holding txbuf[0] for 31 of them.
+	// The first byte of TX_DATA reads word 0 too (next byte index 1
+	// is still in word 0), so the handover has no gap.
 	wire [10:0] tx_next_byte_idx = tx_byte_idx + 11'd1;
+	wire [8:0] tx_rd_word = (tx_state == TX_DATA) ? tx_next_byte_idx[10:2] : 9'd0;
+	reg [31:0] tx_word_q;
+
+	always @(posedge eth_refclk) begin
+		tx_word_q <= txbuf[tx_rd_word];
+	end
+
 	reg [7:0] tx_next_data_byte;
 	always @(*) begin
 		case (tx_next_byte_idx[1:0])
-			2'b00: tx_next_data_byte = txbuf[tx_next_byte_idx[10:2]][7:0];
-			2'b01: tx_next_data_byte = txbuf[tx_next_byte_idx[10:2]][15:8];
-			2'b10: tx_next_data_byte = txbuf[tx_next_byte_idx[10:2]][23:16];
-			2'b11: tx_next_data_byte = txbuf[tx_next_byte_idx[10:2]][31:24];
+			2'b00: tx_next_data_byte = tx_word_q[7:0];
+			2'b01: tx_next_data_byte = tx_word_q[15:8];
+			2'b10: tx_next_data_byte = tx_word_q[23:16];
+			default: tx_next_data_byte = tx_word_q[31:24];
 		endcase
 	end
 
@@ -532,7 +637,8 @@ module ethmac_rmii_wb #()
 						tx_state <= TX_DATA;
 						tx_byte_idx <= 0;
 						tx_crc <= 32'hFFFFFFFF;
-						tx_shift <= txbuf[0][7:0];
+						// txbuf[0], prefetched -- see tx_word_q
+						tx_shift <= tx_word_q[7:0];
 					end else begin
 						tx_preamble_idx <= tx_preamble_idx + 1'b1;
 						tx_shift <= (tx_preamble_idx == 4'd6) ? 8'hD5 : 8'h55;
@@ -680,6 +786,64 @@ module ethmac_rmii_wb #()
 		rx_len_sync <= rx_len_slot[rx_rd_slot];
 	end
 
+	// -- read data: one RAM port and a register file --
+	//
+	// rxbuf's read port is registered and UNCONDITIONAL -- it reads
+	// whatever wb_adr_i points at on every edge. That is the shape an
+	// EBR port has, so it is what lets yosys put rxbuf in block RAM
+	// rather than distributed LUT RAM.
+	//
+	// The old code wrote every source into wb_dat_o from inside one
+	// if/else chain. Functionally the same, but a read whose output
+	// passes through a mux before reaching a flop is not a registered
+	// read, so the buffer could not be a DP16KD.
+	//
+	// Timing on the bus is unchanged. The request is sampled on the
+	// same edge as before; the RAM output and rd_rxbuf update on that
+	// edge; wb_ack_o rises on it; and wb_dat_o is a mux of those
+	// registers, valid for the whole ack cycle. That the RAM outputs
+	// update again on the NEXT edge does not matter, because the
+	// master has sampled by then -- the same thing any registered
+	// wishbone slave relies on.
+	reg [31:0] rxbuf_q;
+	reg [31:0] reg_rdata = 0;
+	reg rd_rxbuf = 0;
+
+	assign wb_dat_o = rd_rxbuf ? rxbuf_q : reg_rdata;
+
+	wire in_rxbuf = (wb_adr_i >= RXBUF_BASE) && (wb_adr_i < (RXBUF_BASE + RXBUF_WORDS));
+	wire in_txbuf = (wb_adr_i >= TXBUF_BASE) && (wb_adr_i < (TXBUF_BASE + TXBUF_WORDS));
+	wire wb_req = wb_cyc_i && wb_stb_i && !wb_ack_o;
+
+	// Word index into txbuf for the CPU's port. Narrowed after the
+	// subtraction, for the same reason as rx_word_off above.
+	wire [31:0] tx_win_off = wb_adr_i - TXBUF_BASE;
+	wire [8:0] tx_wb_word = tx_win_off[8:0];
+	wire txbuf_we = !wb_rst_i && wb_req && wb_we_i && in_txbuf;
+
+	always @(posedge wb_clk_i) begin
+		rxbuf_q <= rxbuf[{rx_rd_slot, rx_word_off}];
+	end
+
+	// The CPU's txbuf port: WRITE-ONLY.
+	//
+	// TX_BUF used to read back. Nothing in sw/apps/net ever did so
+	// (rmii_eth.c writes whole words and never looks at them again),
+	// and the read-back is not free: a RAM with a read/write port on
+	// one side and a read port on the other is the shape yosys maps
+	// to true-dual-port DP16KD, which it builds at HALF density --
+	// 2 EBR for this 16Kbit buffer instead of 1. Measured, not
+	// assumed; see "BLOCK RAM" in the header. Write-only on this side
+	// makes it a simple dual-port RAM, and TX_BUF reads return zero.
+	always @(posedge wb_clk_i) begin
+		if (txbuf_we) begin
+			if (wb_sel_i[0]) txbuf[tx_wb_word][7:0]   <= wb_dat_i[7:0];
+			if (wb_sel_i[1]) txbuf[tx_wb_word][15:8]  <= wb_dat_i[15:8];
+			if (wb_sel_i[2]) txbuf[tx_wb_word][23:16] <= wb_dat_i[23:16];
+			if (wb_sel_i[3]) txbuf[tx_wb_word][31:24] <= wb_dat_i[31:24];
+		end
+	end
+
 	always @(posedge wb_clk_i) begin
 
 		wb_ack_o <= 1'b0;
@@ -689,7 +853,7 @@ module ethmac_rmii_wb #()
 			rx_rd_gray <= 0;
 			tx_start_toggle <= 1'b0;
 			tx_len_reg <= 0;
-		end else if (wb_cyc_i && wb_stb_i && !wb_ack_o) begin
+		end else if (wb_req) begin
 
 			if (wb_we_i) begin
 				if (wb_adr_i == REG_RXCTRL) begin
@@ -705,24 +869,19 @@ module ethmac_rmii_wb #()
 					tx_len_reg <= wb_dat_i[10:0];
 				end else if (wb_adr_i == REG_TXCTRL) begin
 					tx_start_toggle <= ~tx_start_toggle;
-				end else if (wb_adr_i >= TXBUF_BASE && wb_adr_i < (TXBUF_BASE + TXBUF_WORDS)) begin
-					if (wb_sel_i[0]) txbuf[wb_adr_i - TXBUF_BASE][7:0]   <= wb_dat_i[7:0];
-					if (wb_sel_i[1]) txbuf[wb_adr_i - TXBUF_BASE][15:8]  <= wb_dat_i[15:8];
-					if (wb_sel_i[2]) txbuf[wb_adr_i - TXBUF_BASE][23:16] <= wb_dat_i[23:16];
-					if (wb_sel_i[3]) txbuf[wb_adr_i - TXBUF_BASE][31:24] <= wb_dat_i[31:24];
 				end
+				// TX_BUF writes: the txbuf port block above.
 			end else begin
+				rd_rxbuf <= in_rxbuf;
+
+				// TX_BUF, and anything unmapped, reads zero.
 				if (wb_adr_i == REG_STATUS)
-					wb_dat_o <= { 20'b0, rx_err_count, rx_drop_count,
+					reg_rdata <= { 16'b0, RX_SLOTS_LOG2, rx_err_count, rx_drop_count,
 						tx_busy_sync, rx_ready_sync, refclk_hb_sync, crs_dv_sync };
 				else if (wb_adr_i == REG_RXLEN)
-					wb_dat_o <= { 21'b0, rx_len_sync };
-				else if (wb_adr_i >= RXBUF_BASE && wb_adr_i < (RXBUF_BASE + RXBUF_WORDS))
-					wb_dat_o <= rxbuf[{rx_rd_slot, rx_word_off}];
-				else if (wb_adr_i >= TXBUF_BASE && wb_adr_i < (TXBUF_BASE + TXBUF_WORDS))
-					wb_dat_o <= txbuf[wb_adr_i - TXBUF_BASE];
+					reg_rdata <= { 21'b0, rx_len_sync };
 				else
-					wb_dat_o <= 32'h0;
+					reg_rdata <= 32'h0;
 			end
 
 			wb_ack_o <= 1'b1;

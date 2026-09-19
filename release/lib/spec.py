@@ -156,12 +156,51 @@ def _apply_defines(defines, ops, where):
 class Pmod:
     """A PMOD plugged into a named port on the board."""
 
-    def __init__(self, name, port, pins, io_type, description):
+    def __init__(self, name, port, pins, io_type, description,
+                 pin_io_types=None, frequencies=None):
         self.name = name
         self.port = port              # which board port, e.g. "a"
         self.pins = pins              # {pin number: port name}
-        self.io_type = io_type
+        self.io_type = io_type        # default for every pin
         self.description = description
+        # {pin: io_type} overriding io_type for that pin only
+        self.pin_io_types = pin_io_types or {}
+        # {pin: "50 MHZ"} -- a clock INTO the FPGA on that pin
+        self.frequencies = frequencies or {}
+
+    def io_type_for(self, pin):
+        return self.pin_io_types.get(pin, self.io_type)
+
+
+# "50 MHZ", "25.175 MHz", "32768 HZ". nextpnr-ecp5's .lpf parser takes
+# the unit case-insensitively; normalised to upper case on the way out
+# so generated files read the same as the hand-written ones.
+_FREQ = re.compile(r"^(\d+(?:\.\d+)?)\s*(MHZ|KHZ|HZ)$", re.I)
+
+
+def _per_pin(pdata, prefix, pins, where):
+    """Parse `<prefix>.<pin> = value` keys into {pin: value}.
+
+    Only for pins the PMOD actually names. A setting on a pin that has
+    no signal would be silently dropped by the generator, which is how
+    a PULLMODE meant for a strap ends up on nothing and a PHY comes up
+    in the wrong mode -- so it is an error here instead.
+    """
+    out = {}
+    for key in pdata:
+        if not key.startswith(prefix + "."):
+            continue
+        pin_s = key[len(prefix) + 1:]
+        try:
+            pin = int(pin_s)
+        except ValueError:
+            raise SpecError("%s: '%s': %r is not a pin number"
+                            % (where, key, pin_s))
+        if pin not in pins:
+            raise SpecError("%s: '%s' configures pin %d, which this PMOD's "
+                            "'pins' does not name" % (where, key, pin))
+        out[pin] = _one(pdata, key, where=where)
+    return out
 
 
 class Target:
@@ -311,6 +350,22 @@ def load_target(root, name):
         io_type = _one(pdata, "io_type", default="LVCMOS33", where=ppath)
         desc = _one(pdata, "description", default=pmod, where=ppath)
 
+        # Per-pin overrides. `io_type.4 = LVCMOS33 PULLMODE=UP` gives
+        # pin 4 alone a pull-up; `frequency.10 = 50 MHZ` declares a
+        # clock arriving on pin 10. Katze is the PMOD that needed both:
+        # its PHY's mode straps want pull-ups on three pins and not on
+        # the others, and its 50MHz reference clock comes IN on pin 10,
+        # which nextpnr has to be told about to time that domain at all.
+        pin_io = _per_pin(pdata, "io_type", pins, ppath)
+        freqs = _per_pin(pdata, "frequency", pins, ppath)
+        for pin, f in list(freqs.items()):
+            m = _FREQ.match(f.strip())
+            if not m:
+                raise SpecError("%s: 'frequency.%d = %s' -- expected a "
+                                "number and MHZ, KHZ or HZ, e.g. '50 MHZ'"
+                                % (ppath, pin, f))
+            freqs[pin] = "%s %s" % (m.group(1), m.group(2).upper())
+
         if pins:
             if port is None:
                 if len(t.pmod_ports) == 1:
@@ -340,7 +395,8 @@ def load_target(root, name):
                     % (tpath, pmod, ", ".join(str(u) for u in unmapped),
                        port, t.board))
 
-            t.pmods.append(Pmod(pmod, port, pins, io_type, desc))
+            t.pmods.append(Pmod(pmod, port, pins, io_type, desc,
+                                pin_io_types=pin_io, frequencies=freqs))
         elif port is not None:
             raise SpecError("%s: '%s' declares no pins, so '@%s' means "
                             "nothing" % (tpath, pmod, port))

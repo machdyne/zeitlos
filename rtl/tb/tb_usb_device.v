@@ -48,7 +48,12 @@ module tb_usb_device #(
     parameter integer SKEW_NS = 0,
     // Device clock error in parts per million, signed. The spec allows
     // +-2500 at full speed and +-15000 at low speed.
-    parameter integer CLK_PPM = 0
+    parameter integer CLK_PPM = 0,
+    // 1: a bulk-only SCSI mass storage device instead of a boot mouse.
+    // Endpoint 1 is bulk IN, endpoint 2 bulk OUT, both 64 bytes, and
+    // the medium is DISK_SECTORS sectors held in this model. Default
+    // 0, so every existing test sees the model it always saw.
+    parameter integer MSC = 0
 ) (
     inout wire dp,
     inout wire dm,
@@ -193,6 +198,48 @@ module tb_usb_device #(
     reg hid_have;
     reg ep1_toggle;
     integer ep1_reports;
+
+    // -- mass storage (MSC = 1) --
+    //
+    // Bulk-only transport is three phases per command: a 31-byte CBW
+    // OUT, an optional data phase, a 13-byte CSW IN. The model follows
+    // it strictly, so a host that reads one phase too many or too few
+    // gets a NAK or the wrong bytes, not silent success.
+    localparam integer DISK_SECTORS = 16;
+    reg [7:0] disk [0:DISK_SECTORS * 512 - 1];
+    reg [7:0] sbuf [0:63];          // small replies: sense, capacity
+    reg [7:0] csw [0:12];
+    integer cfg_total;
+    integer msc_state;              // 0 idle, 1 data in, 2 CSW, 3 data out
+    integer msc_base;               // data-in source: disk offset, or -1
+    integer msc_dlen, msc_dptr;
+    integer msc_pkts;               // packets sent this data phase
+    reg msc_in_tgl, msc_out_tgl;
+    // Test hooks. msc_naks_mid NAKs are inserted after the FIRST data
+    // packet of every data-in phase -- a device fetching the next flash
+    // page, which is what real sticks do and what a single up-front
+    // NAK does not exercise. Set it above the host's hardware NAK
+    // budget and the host has to resume a transfer part-way through.
+    integer msc_naks_mid;
+    integer msc_nak_left;
+    integer msc_cmds, msc_csws;
+    integer msc_proto_err;          // anything out of sequence
+    integer msc_dup_out;            // OUT with the wrong toggle
+    integer msc_n, msc_lba, msc_want, msc_avail;    // msc_cbw scratch
+    // Bit-error hook. While nonzero, every data-in packet goes out with
+    // its CRC16 inverted and this counts down -- a transmission error
+    // the host must detect, refuse to ACK, and retry. The packet is
+    // resent with the SAME toggle and payload, as a real device does
+    // when it sees no ACK.
+    integer msc_crc_bad;
+    integer msc_crc_at;             // ...starting at this packet index
+    integer msc_crc_sent;           // corrupted packets actually sent
+    // tx_packet's CRC corruption for the packet it is about to send.
+    reg tx_crc_flip;
+    // A packet received where an ACK was expected. It is the host's
+    // next token (it saw an error and did not ACK), so the main loop
+    // must dispatch it rather than read a new one.
+    reg pkt_held;
 
     integer i, j, k;
     reg prev_lvl, cur_lvl, dbit;
@@ -472,6 +519,7 @@ module tb_usb_device #(
             emit_byte({~pid, pid});
             if (pid == PID_DATA0 || pid == PID_DATA1) begin
                 c = crc16f(n);
+                if (tx_crc_flip) c = ~c;
                 for (q = 0; q < n; q = q + 1) emit_byte(txb[q]);
                 emit_byte(c[7:0]);
                 emit_byte(c[15:8]);
@@ -545,7 +593,125 @@ module tb_usb_device #(
         cfgd[29] = 8'h81; cfgd[30] = 8'h03;
         cfgd[31] = 8'h04; cfgd[32] = 8'h00;
         cfgd[33] = 8'h0a;
+        cfg_total = 34;
+
+        msc_state = 0;
+        msc_base = -1;
+        msc_dlen = 0;
+        msc_dptr = 0;
+        msc_pkts = 0;
+        msc_in_tgl = 1'b0;
+        msc_out_tgl = 1'b0;
+        msc_naks_mid = 0;
+        msc_nak_left = 0;
+        msc_crc_bad = 0;
+        msc_crc_at = 0;
+        msc_crc_sent = 0;
+        tx_crc_flip = 1'b0;
+        pkt_held = 1'b0;
+        msc_cmds = 0;
+        msc_csws = 0;
+        msc_proto_err = 0;
+        msc_dup_out = 0;
+
+        if (MSC) begin
+            // config: 32 bytes, 1 interface, 2 bulk endpoints
+            cfg_total = 32;
+            cfgd[0]  = 8'h09; cfgd[1]  = 8'h02;
+            cfgd[2]  = 8'h20; cfgd[3]  = 8'h00;
+            cfgd[4]  = 8'h01; cfgd[5]  = 8'h01;
+            cfgd[6]  = 8'h00; cfgd[7]  = 8'h80;
+            cfgd[8]  = 8'h32;
+            // interface 0: class 8 mass storage, 6 SCSI, 0x50 BOT
+            cfgd[9]  = 8'h09; cfgd[10] = 8'h04;
+            cfgd[11] = 8'h00; cfgd[12] = 8'h00;
+            cfgd[13] = 8'h02; cfgd[14] = 8'h08;
+            cfgd[15] = 8'h06; cfgd[16] = 8'h50;
+            cfgd[17] = 8'h00;
+            // endpoint 0x81 bulk IN, 64
+            cfgd[18] = 8'h07; cfgd[19] = 8'h05;
+            cfgd[20] = 8'h81; cfgd[21] = 8'h02;
+            cfgd[22] = 8'h40; cfgd[23] = 8'h00;
+            cfgd[24] = 8'h00;
+            // endpoint 0x02 bulk OUT, 64
+            cfgd[25] = 8'h07; cfgd[26] = 8'h05;
+            cfgd[27] = 8'h02; cfgd[28] = 8'h02;
+            cfgd[29] = 8'h40; cfgd[30] = 8'h00;
+            cfgd[31] = 8'h00;
+
+            // The medium. Sector 0 starts like a FAT boot sector and
+            // ends in the 55 AA signature, so a truncated read shows
+            // the same leading bytes the hardware did. Every other
+            // byte is a function of its position, mirrored in
+            // rtl/tb/cosim/usbh_vpi.c, so the driver's copy can be
+            // compared byte for byte.
+            for (i = 0; i < DISK_SECTORS * 512; i = i + 1)
+                disk[i] = (i * 7 + (i >> 9) * 13) & 8'hff;
+            disk[0] = 8'heb; disk[1] = 8'h3c;
+            disk[2] = 8'h90; disk[3] = 8'h6d;
+            disk[510] = 8'h55; disk[511] = 8'haa;
+        end
     end
+
+    // -- a CBW has arrived: decide the data phase and queue the CSW --
+    task msc_cbw;
+        begin
+            msc_n = rxn - 3;
+            if (msc_n != 31 || rxb[1] != 8'h55 || rxb[2] != 8'h53 ||
+                rxb[3] != 8'h42 || rxb[4] != 8'h43 || msc_state != 0) begin
+                $display("[msc] ERROR: bad CBW (n=%0d, state %0d)",
+                         msc_n, msc_state);
+                msc_proto_err = msc_proto_err + 1;
+            end else begin
+                msc_cmds = msc_cmds + 1;
+                msc_want = {rxb[12], rxb[11], rxb[10], rxb[9]};
+                msc_lba = {rxb[18], rxb[19], rxb[20], rxb[21]};
+                // CSW: signature, tag echoed, residue 0, passed
+                csw[0] = 8'h55; csw[1] = 8'h53;
+                csw[2] = 8'h42; csw[3] = 8'h53;
+                csw[4] = rxb[5]; csw[5] = rxb[6];
+                csw[6] = rxb[7]; csw[7] = rxb[8];
+                csw[8] = 0; csw[9] = 0; csw[10] = 0; csw[11] = 0;
+                csw[12] = 0;
+                for (i = 0; i < 64; i = i + 1) sbuf[i] = 8'h00;
+                msc_base = -1;
+                msc_avail = 0;
+                case (rxb[16])
+                8'h03: begin                    // REQUEST SENSE
+                    sbuf[0] = 8'h70; sbuf[7] = 8'h0a;
+                    msc_avail = 18;
+                end
+                8'h12: begin                    // INQUIRY
+                    sbuf[1] = 8'h80; sbuf[4] = 8'h1f;
+                    msc_avail = 36;
+                end
+                8'h25: begin                    // READ CAPACITY(10)
+                    sbuf[3] = DISK_SECTORS - 1;
+                    sbuf[6] = 8'h02;            // 512
+                    msc_avail = 8;
+                end
+                8'h28: begin                    // READ(10), one sector
+                    if (msc_lba < DISK_SECTORS) begin
+                        msc_base = msc_lba * 512;
+                        msc_avail = 512;
+                    end else csw[12] = 1;
+                end
+                8'h2a: begin                    // WRITE(10), one sector
+                    if (msc_lba < DISK_SECTORS) msc_base = msc_lba * 512;
+                    else csw[12] = 1;
+                end
+                default: msc_avail = 0;             // TEST UNIT READY etc.
+                endcase
+                msc_dlen = (msc_want < msc_avail) ? msc_want : msc_avail;
+                if (rxb[16] == 8'h2a) msc_dlen = msc_want;
+                msc_dptr = 0;
+                msc_pkts = 0;
+                if (msc_want == 0) msc_state = 2;
+                else if (rxb[13][7]) msc_state = 1;
+                else msc_state = 3;
+            end
+        end
+    endtask
 
     always begin
 
@@ -555,7 +721,8 @@ module tb_usb_device #(
         // its neighbour's traffic as a stream of protocol errors.
         wait (attach === 1'b1);
 
-        rx_packet;
+        if (pkt_held) pkt_held = 1'b0;
+        else rx_packet;
 
         if (rxpid == PID_SOF) begin
 
@@ -564,6 +731,56 @@ module tb_usb_device #(
         end else if (rx_crc_ok && (rxb[1][6:0] == dev_addr) &&
                      (rxb[1][7] == 1'b1) && (rxb[2][2:0] == 3'd0)) begin
 
+            // Endpoint 1, mass storage: bulk IN, data phase then CSW.
+            if (MSC && rxpid == PID_IN) begin
+                turnaround;
+                if (msc_state == 1 && msc_nak_left > 0) begin
+                    msc_nak_left = msc_nak_left - 1;
+                    tx_packet(PID_NAK, 0);
+                end else if (msc_state == 1) begin
+                    k = msc_dlen - msc_dptr;
+                    if (k > 64) k = 64;
+                    for (i = 0; i < k; i = i + 1)
+                        txb[i] = (msc_base >= 0) ?
+                            disk[msc_base + msc_dptr + i] :
+                            sbuf[msc_dptr + i];
+                    tx_crc_flip = (msc_crc_bad > 0) &&
+                                  (msc_pkts >= msc_crc_at);
+                    if (tx_crc_flip) begin
+                        msc_crc_bad = msc_crc_bad - 1;
+                        msc_crc_sent = msc_crc_sent + 1;
+                    end
+                    tx_packet(msc_in_tgl ? PID_DATA1 : PID_DATA0, k);
+                    tx_crc_flip = 1'b0;
+                    rx_packet;
+                    // No ACK: the host rejected the packet. Nothing
+                    // advances, and what arrived instead is its next
+                    // token.
+                    if (rxpid != PID_ACK) pkt_held = 1'b1;
+                    if (rxpid == PID_ACK) begin
+                        msc_in_tgl = ~msc_in_tgl;
+                        msc_dptr = msc_dptr + k;
+                        msc_pkts = msc_pkts + 1;
+                        if (msc_pkts == 1) msc_nak_left = msc_naks_mid;
+                        // A full final packet ends the phase too: BOT
+                        // sends no zero-length packet when the host
+                        // asked for exactly this much.
+                        if (msc_dptr >= msc_dlen) msc_state = 2;
+                    end
+                end else if (msc_state == 2) begin
+                    for (i = 0; i < 13; i = i + 1) txb[i] = csw[i];
+                    tx_packet(msc_in_tgl ? PID_DATA1 : PID_DATA0, 13);
+                    rx_packet;
+                    if (rxpid == PID_ACK) begin
+                        msc_in_tgl = ~msc_in_tgl;
+                        msc_csws = msc_csws + 1;
+                        msc_state = 0;
+                    end
+                end else begin
+                    // Idle, or waiting for OUT data: nothing to send.
+                    tx_packet(PID_NAK, 0);
+                end
+            end else
             // Endpoint 1: the boot-protocol interrupt IN.
             if (rxpid == PID_IN) begin
                 turnaround;
@@ -580,6 +797,33 @@ module tb_usb_device #(
                         ep1_toggle = ~ep1_toggle;
                         hid_have = 1'b0;
                         ep1_reports = ep1_reports + 1;
+                    end
+                end
+            end
+
+        end else if (MSC && rx_crc_ok && rxpid == PID_OUT &&
+                     (rxb[1][6:0] == dev_addr) &&
+                     (rxb[1][7] == 1'b0) && (rxb[2][2:0] == 3'd1)) begin
+
+            // Endpoint 2, mass storage: bulk OUT, a CBW or write data.
+            rx_packet;
+            if (rx_crc_ok) begin
+                turnaround;
+                tx_packet(PID_ACK, 0);
+                if ((rxpid == PID_DATA1) != msc_out_tgl) begin
+                    // A retransmission of a packet already taken. ACK
+                    // it and drop it, as the spec says.
+                    msc_dup_out = msc_dup_out + 1;
+                end else begin
+                    msc_out_tgl = ~msc_out_tgl;
+                    if (msc_state == 3) begin
+                        for (i = 0; i < rxn - 3; i = i + 1)
+                            if (msc_base >= 0 && msc_dptr + i < msc_dlen)
+                                disk[msc_base + msc_dptr + i] = rxb[1 + i];
+                        msc_dptr = msc_dptr + rxn - 3;
+                        if (msc_dptr >= msc_dlen) msc_state = 2;
+                    end else begin
+                        msc_cbw;
                     end
                 end
             end
@@ -602,7 +846,7 @@ module tb_usb_device #(
                         in_len = {setup[7], setup[6]};
                         // wValue's high byte is the descriptor TYPE.
                         if (setup[3] == 8'h02) begin
-                            if (in_len > 34) in_len = 34;
+                            if (in_len > cfg_total) in_len = cfg_total;
                             for (i = 0; i < in_len; i = i + 1)
                                 src[i] = cfgd[i];
                         end else begin

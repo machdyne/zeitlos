@@ -69,6 +69,76 @@ volatile uint32_t z_kernel_ticks;
 void z_usbh_init(void);
 void z_usbh_poll(void);
 
+/* -- mass storage requests --
+ *
+ * The driver thread normally runs one z_usbh_poll() per step. When the
+ * harness arms a request with $usbh_msc_arm, the NEXT step runs that
+ * instead: the same blocking call diskio_mux makes from FatFs, start
+ * to finish, with every register access it makes serviced as a real
+ * bus cycle. $usbh_msc_result then reports what it returned and how
+ * the sector compared with the device model's medium. */
+int z_usbh_msc_start(void);
+int z_usbh_msc_read(uint32_t lba, uint8_t *dst, uint32_t count);
+int z_usbh_msc_write(uint32_t lba, const uint8_t *src, uint32_t count);
+
+#define MSC_OP_START 0
+#define MSC_OP_READ  1
+#define MSC_OP_WRITE 2      /* write a distinct pattern, then read back */
+
+static int msc_pending, msc_op, msc_lba;
+static int msc_rc, msc_bad, msc_first_bad;
+static uint8_t msc_written[16];
+
+/* rtl/tb/tb_usb_device.v's medium, byte for byte. */
+static uint8_t msc_pattern(int lba, int i)
+{
+    int g = lba * 512 + i;
+    if (msc_written[lba & 15]) return (uint8_t)(i * 5 + lba + 0x5a);
+    if (lba == 0) {
+        if (i == 0) return 0xeb;
+        if (i == 1) return 0x3c;
+        if (i == 2) return 0x90;
+        if (i == 3) return 0x6d;
+        if (i == 510) return 0x55;
+        if (i == 511) return 0xaa;
+    }
+    return (uint8_t)((g * 7 + (g >> 9) * 13) & 0xff);
+}
+
+static void msc_run(void)
+{
+    static uint8_t buf[512];
+    int i;
+
+    msc_bad = 0;
+    msc_first_bad = -1;
+
+    if (msc_op == MSC_OP_START) {
+        msc_rc = z_usbh_msc_start();
+        return;
+    }
+
+    if (msc_op == MSC_OP_WRITE) {
+        for (i = 0; i < 512; i++)
+            buf[i] = (uint8_t)(i * 5 + msc_lba + 0x5a);
+        msc_rc = z_usbh_msc_write((uint32_t)msc_lba, buf, 1);
+        if (msc_rc != 0) return;
+        msc_written[msc_lba & 15] = 1;
+    }
+
+    /* Poison first: a driver that returns success without filling
+     * the buffer must not pass by leaving the previous sector there. */
+    memset(buf, 0xa5, sizeof(buf));
+    msc_rc = z_usbh_msc_read((uint32_t)msc_lba, buf, 1);
+    if (msc_rc != 0) return;
+    for (i = 0; i < 512; i++) {
+        if (buf[i] != msc_pattern(msc_lba, i)) {
+            if (msc_first_bad < 0) msc_first_bad = i;
+            msc_bad++;
+        }
+    }
+}
+
 /* -- the driver side of the handshake -- */
 
 static void bus_xfer(void)
@@ -135,7 +205,12 @@ static void *driver_main(void *arg)
         state = ST_COMPUTING;
         pthread_mutex_unlock(&mtx);
 
-        z_usbh_poll();
+        if (msc_pending) {
+            msc_run();
+            msc_pending = 0;
+        } else {
+            z_usbh_poll();
+        }
     }
 
     return NULL;
@@ -259,6 +334,38 @@ static PLI_INT32 usbh_tick_calltf(PLI_BYTE8 *ud)
     return 0;
 }
 
+/* $usbh_msc_arm(op, lba) -- the next driver step runs this request. */
+static PLI_INT32 usbh_msc_arm_calltf(PLI_BYTE8 *ud)
+{
+    vpiHandle sys, argv;
+    (void)ud;
+
+    sys = vpi_handle(vpiSysTfCall, NULL);
+    argv = vpi_iterate(vpiArgument, sys);
+    msc_op = get_int(vpi_scan(argv));
+    msc_lba = get_int(vpi_scan(argv));
+    vpi_free_object(argv);
+    msc_pending = 1;
+    return 0;
+}
+
+/* $usbh_msc_result(rc, bad, first_bad) -- what the last request did.
+ * rc is the driver's return code; bad counts sector bytes that differ
+ * from the model's medium, first_bad is the offset of the first. */
+static PLI_INT32 usbh_msc_result_calltf(PLI_BYTE8 *ud)
+{
+    vpiHandle sys, argv;
+    (void)ud;
+
+    sys = vpi_handle(vpiSysTfCall, NULL);
+    argv = vpi_iterate(vpiArgument, sys);
+    put_int(vpi_scan(argv), msc_rc);
+    put_int(vpi_scan(argv), msc_bad);
+    put_int(vpi_scan(argv), msc_first_bad);
+    vpi_free_object(argv);
+    return 0;
+}
+
 static PLI_INT32 compiletf_any(PLI_BYTE8 *ud) { (void)ud; return 0; }
 
 void usbh_register(void)
@@ -283,6 +390,20 @@ void usbh_register(void)
     t.type = vpiSysTask;
     t.tfname = "$usbh_tick";
     t.calltf = usbh_tick_calltf;
+    t.compiletf = compiletf_any;
+    vpi_register_systf(&t);
+
+    memset(&t, 0, sizeof(t));
+    t.type = vpiSysTask;
+    t.tfname = "$usbh_msc_arm";
+    t.calltf = usbh_msc_arm_calltf;
+    t.compiletf = compiletf_any;
+    vpi_register_systf(&t);
+
+    memset(&t, 0, sizeof(t));
+    t.type = vpiSysTask;
+    t.tfname = "$usbh_msc_result";
+    t.calltf = usbh_msc_result_calltf;
     t.compiletf = compiletf_any;
     vpi_register_systf(&t);
 }

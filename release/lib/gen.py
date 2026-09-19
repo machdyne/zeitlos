@@ -297,7 +297,13 @@ def _drop_constraints(text, claimed_balls, extra_ports):
             if m:
                 hit = m.group(1)
             else:
-                m2 = re.match(r'^\s*IOBUF\s+PORT\s+"([^"]+)"', line, re.I)
+                # IOBUF and FREQUENCY both name the port the same way.
+                # A FREQUENCY left behind on a released port is harmless
+                # to nextpnr but is exactly the sort of line that makes
+                # a generated file look like it constrains something it
+                # does not.
+                m2 = re.match(r'^\s*(?:IOBUF|FREQUENCY)\s+PORT\s+"([^"]+)"',
+                              line, re.I)
                 if m2:
                     hit = m2.group(1)
         why = reason_for(hit) if hit else None
@@ -365,7 +371,10 @@ def merged_lpf(root, target):
             lines.append('LOCATE COMP "%s" SITE "%s";\t# pin %d'
                          % (port_name, ball, pin))
             lines.append('IOBUF PORT "%s" IO_TYPE=%s;'
-                         % (port_name, pm.io_type))
+                         % (port_name, pm.io_type_for(pin)))
+            if pin in pm.frequencies:
+                lines.append('FREQUENCY PORT "%s" %s;'
+                             % (port_name, pm.frequencies[pin]))
         unused = sorted(set(balls) - set(pm.pins))
         if unused:
             lines.append("#")

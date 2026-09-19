@@ -59,6 +59,12 @@ void rmii_eth_debug_dump(void);
 // than maxlen are truncated (same contract as enc28j60_recv(): the
 // rest is still consumed/released from the hardware buffer, just not
 // copied out, and the truncated length is what's returned).
+// Frame slots in the MAC's receive FIFO, read from STATUS[15:12].
+// 4 on the ML1 boards, 2 on Lakritz + Katze (see
+// release/targets/lakritz_katze.spec). A bitstream that predates the
+// field reads 0 there and had 4, so 0 is reported as 4.
+unsigned rmii_eth_rx_slots(void);
+
 uint16_t rmii_eth_recv(uint8_t *buf, uint16_t maxlen);
 
 // blocks until the frame is transmitted or a timeout is hit. returns

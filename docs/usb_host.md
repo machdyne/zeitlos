@@ -910,9 +910,17 @@ stick is formatted.
 
 ### Removal while mounted
 
-A stick pulled mid-write is not a theoretical concern. The disk layer
-returns `RES_NOTRDY` once the device is gone and the kernel unmounts
-volume 2. FatFs will have lost whatever was buffered — that is
+**As built, this is not implemented.** The paragraph below is the
+design. Today nothing unbinds the MSC driver when its device
+disconnects, nothing unmounts `/usb`, and `disk_read`/`disk_write`
+return `RES_ERROR`, not `RES_NOTRDY`: after a pull, `/usb` stays
+mounted and every access fails after the transfer timeouts, until
+`usbunmount`. See "Also outstanding" under
+[Mass storage status](#mass-storage-status).
+
+The design: a stick pulled mid-write is not a theoretical concern. The
+disk layer returns `RES_NOTRDY` once the device is gone and the kernel
+unmounts volume 2. FatFs will have lost whatever was buffered — that is
 unavoidable without a VBUS switch and an orderly shutdown, and it is
 the same exposure the SD card already has. Document it; do not pretend
 to solve it.
@@ -1788,9 +1796,14 @@ block device needs, `diskio_mux.c` serves FatFs drive 2, and `/usb`
 mounts from the shell with `usbmount`. On hardware, `ls /usb` lists a
 real FAT filesystem.
 
-### The open bug
+### The truncation bug (resolved in simulation)
 
-Larger reads are **truncated**. A 512-byte `READ(10)` returns 13
+**Status:** fixed and passing `make test_usb_msc`; not yet confirmed
+on hardware. The cause is in
+[What the truncation actually was](#what-the-truncation-actually-was----measured)
+below. This section is the original report, kept as written.
+
+Larger reads were **truncated**. A 512-byte `READ(10)` returns 13
 bytes, and dumping those bytes shows `EB 3C 90 6D` -- the jump
 instruction and the start of the OEM name in a FAT boot sector. That
 is real sector data, so:
@@ -1827,7 +1840,123 @@ the short length. `ST_SHORT` means the hardware genuinely saw a short
 packet; `ST_OK` with 13 bytes means the COUNT is wrong rather than the
 transfer.
 
-### Known-good but reverted
+### Two result-register faults, found in simulation
+
+Both are in `usb_host.v`, both make `XACT_S` report a result that is
+not the one software asked for, and both are fixed. Neither shows up
+as receive errors, because the transfer itself is fine.
+
+- **One stale cycle per transaction.** `usb_xact.v` drops `busy` and
+  pulses `done` on the same edge; the result registers latch on
+  `done`, one edge later. `xact_pending` did not include `done`, so for
+  that one cycle it read zero while `res_status`/`res_len` still held
+  the previous transaction's values. A polling driver lands on it at
+  a rate set by its loop timing and reads a plausible, wrong result --
+  for a bulk data stage, the CBW's `ST_OK` and its length -- with the
+  real data sitting correctly in the buffer. `xact_pending` now
+  includes `x_done`.
+- **Auto-poll completions overwrote software's result.** The latch
+  excluded SOFs but not poll slots. Any HID poll finishing after
+  software's transaction replaced its status and length with the
+  poll's (usually `ST_NAK`, length 0), and raised `xact_done` for a
+  transaction software never started. With a keyboard and mouse
+  attached this happens every frame. Poll results already go to
+  `poll_b` and the compat block; they no longer reach `XACT_S`.
+
+`tb_usb_host.v` now has a monitor that checks, every cycle, that a
+clear pending bit comes with software's own result -- it counted
+exactly one violation per software transaction before the first fix
+-- and case 10, a four-packet exact-multiple auto-continue IN (the
+shape of a sector read, ending on `remaining == 0` with `ST_OK` rather
+than on a short packet) run with a poll slot live. Case 10 also
+clears suspect 2 below: `act_len` accumulates correctly across
+auto-continue packets.
+
+Suspect 1 below does not exist as described: the start-bit write sets
+`sw_req` on the `W_DEC` edge, before the write is acknowledged, so a
+read cannot follow it and see pending clear. The real window was at
+the other end of the transaction.
+
+### What the truncation actually was -- measured
+
+`make test_usb_msc` (the real driver including `usbh_msc.c`, the real
+gateware, a bulk-only SCSI model, and a live low-speed mouse poll on
+the other port) was run with each fix alone and with neither:
+
+| RTL result fixes | driver NAK-resume fix | result | short counts |
+|---|---|---|---|
+| no  | no  | 5 checks fail | 13, 44, 461 |
+| no  | yes | 5 checks fail | 13, 141, 44 |
+| yes | no  | 1 check fails (NAK over budget) | 461 |
+| yes | yes | pass | -- |
+
+The bench reproduces the exact hardware readings, 13 and 141, and
+only the RTL fixes remove them. The driver's NAK handling was a
+separate real bug: a sector that paused mid-read was re-requested from
+offset 0 and came back as the remaining 448 bytes plus the 13-byte
+CSW, 461. Both are needed.
+
+The `last_status` discriminator answers **`ST_SHORT`**: the hardware
+really did see a short packet, because the transport HAD desynced --
+a CSW landed where data belonged, and the device model reports
+out-of-sequence and duplicate OUT packets. "No desync" in the earlier
+reading was wrong. The `EB 3C 90` bytes that made it look like a
+truncated sector were most likely the previous read of sector 0 still
+sitting in the landing area; rejecting short sectors (below) stops
+that from being mistaken for data again.
+
+### Transmission errors on bulk IN
+
+A single bad CRC on a data-in packet used to fail the command, and
+that was worse than it sounds: the device was still mid-data-phase, so
+the CSW read that followed took sector bytes as a status wrapper
+(`ST_BABBLE`) and every later command was one step out -- the same
+class of failure as the truncation above, from one flipped bit.
+
+`bulk_xfer()` now retries a bulk IN that ends in `ST_CRCERR` or
+`ST_TIMEOUT`, up to three consecutive times (USB 2.0 8.5.2), resuming
+from `act_len` exactly as after a NAK. That is valid because the engine
+stops on the bad packet without advancing: no ACK was sent, so the
+device resends the same packet with the same toggle, and the toggle
+XACT_S reports is that one.
+
+`test_usb_msc` covers it with a CRC-corruption hook in the device
+model (`msc_crc_bad`, `msc_crc_at`): one bad packet after three good
+ones in a sector, and two in a row on a first packet. Without the
+retry both fail and the next read desyncs; with it all pass. The model
+also now treats a non-ACK after its data as the host's next token,
+which it previously swallowed.
+
+Not covered yet:
+
+- OUT is not retried. A lost handshake there is resolved by the
+  device ignoring a repeated toggle; nothing exercises it.
+- More than three strikes still fails the command and leaves the
+  device mid-phase. That needs bulk-only Reset Recovery (class reset,
+  then CLEAR_FEATURE(HALT) on both endpoints), which is the same
+  missing piece as STALL recovery.
+- `usb_xact.v` does not check the DATA0/DATA1 toggle of a received IN
+  packet. If the host's ACK is lost, the device resends the previous
+  packet and the host accepts it as new data. The spec has the host
+  discard a packet with the wrong toggle (and still ACK it).
+
+### Fmax after these changes
+
+`make usb_fmax` could not be run on the reference toolchain. With
+YoWASP nextpnr (which needs `--ignore-loops` for the TRNG ring
+oscillators), `CLK_48` was 51.86 / 51.37 MHz before and 50.55 / 49.70
+MHz after, on seeds 1 and 2. In every run the critical path is the
+same and is not in the USB block: arbiter address through `montmul`
+into the Ethernet MAC's LUT-RAM buffer read mux (`wbs_ethmac0_i`
+`rxbuf`/`txbuf`) to its `wb_dat_o`, over 80% routing. The USB changes
+move placement, not that path. It is the SoC's real margin limit and
+the thing to fix if margin gets tight; confirm the numbers with
+`make usb_fmax` on the reference tools.
+
+### Known-good but reverted -- now reapplied
+
+Both changes below are back in `usbh_msc.c`, and `test_usb_msc` passes
+with them. The history is kept because the lesson is.
 
 Three changes were made after the working directory listing and rolled
 back together, because they moved the failure earlier -- from "opening
@@ -1847,6 +1976,19 @@ wrong. Two are worth reapplying once the truncation is understood:
 
 ### Also outstanding
 
+- None of the fixes in the change log below has run on hardware yet.
+  First check: a 512-byte READ(10) returns 512 bytes, then `usb_fmax`.
+- `usb_xact.v` does not check the DATA0/DATA1 toggle of a received IN
+  packet, so a lost host ACK turns a device resend into duplicated
+  data. See [Transmission errors on bulk IN](#transmission-errors-on-bulk-in).
+- No unbind on disconnect. `usbh.c` never tells `usbh_msc.c` its
+  device went away, so `msc.ready` stays set, `/usb` stays mounted, and
+  accesses fail slowly instead of reporting "not ready". A different
+  device later enumerating at the same address would receive MSC
+  traffic. Needs an unbind call from the detach path, `RES_NOTRDY`
+  from `diskio_mux.c`, and `fs_usb_unmount()`.
+- No bulk-only Reset Recovery. Needed after a STALL and after more
+  than three consecutive transmission errors.
 - One sector per SCSI command, because the packet buffer holds one.
   FatFs often asks for several, so a directory scan is slower than it
   needs to be. Fixing it needs a larger landing area, not a protocol
@@ -1854,8 +1996,75 @@ wrong. Two are worth reapplying once the truncation is understood:
 - No endpoint recovery after a STALL. The spec wants
   `CLEAR_FEATURE(HALT)` on the stalled endpoint followed by a CSW
   read; this reports the stall and does not repair it.
-- Writes are implemented and have never been exercised.
+- Writes pass `test_usb_msc` (WRITE(10), then read back and compare)
+  but have never run on hardware.
 - `msc_verbose` defaults on. Turn it off once reads are reliable.
+
+## Change log since the phase 5 handover
+
+Each round lists what changed, where, and how it was verified. All of
+it is simulation-verified only until the hardware check at the end.
+
+**Round 1 -- result registers** (`rtl/usb/usb_host.v`,
+`rtl/tb/tb_usb_host.v`)
+
+- `xact_pending` now includes `x_done`; it read clear for one cycle
+  while `res_*` still held the previous transaction's result.
+- Auto-poll completions no longer overwrite `res_*` or raise
+  `xact_done`.
+- `test_usb` case 10 and the per-cycle result monitor. The monitor
+  counted one violation per software transaction before the fix.
+- Found while checking the handover's three suspects: the
+  pending-assert race does not exist as described, and `act_len`
+  accumulation is correct.
+
+**Round 2 -- the truncation, measured** (`sw/os/usb/usbh_msc.c`,
+`sw/os/usb/usbh.c`, `Makefile`, `rtl/tb/tb_usb_msc_cosim.v`,
+`rtl/tb/tb_usb_device.v`, `rtl/tb/cosim/usbh_vpi.c`)
+
+- A parallel session added `make test_usb_msc`, NAK resume in
+  `bulk_xfer()`, and reapplied "always read the CSW" and "reject short
+  sectors". Committed here as found.
+- A two-by-two run of RTL fix against driver fix showed the hardware's
+  13 and 141 byte results come from the round 1 faults; the NAK-resume
+  bug is separate (461 bytes). Both are needed. Table in
+  [What the truncation actually was](#what-the-truncation-actually-was----measured).
+- `usbh.c`: `ctrl_soft_naks` widened to `uint16_t`; as a byte it never
+  reached `CTRL_SOFT_NAKS` (1000), so a NAKing control stage retried
+  forever.
+
+**Round 3 -- transmission errors** (`sw/os/usb/usbh_msc.c`,
+`rtl/tb/tb_usb_device.v`, `rtl/tb/tb_usb_msc_cosim.v`)
+
+- `bulk_xfer()` retries a bulk IN after `ST_CRCERR`/`ST_TIMEOUT`, three
+  strikes, resuming from `act_len`. One bad CRC previously desynced the
+  stream for good.
+- Device model: CRC corruption hook, and a non-ACK after data is held
+  as the host's next token rather than swallowed.
+- Fmax measured with a second toolchain; critical path is in the
+  Ethernet MAC, not USB. See
+  [Fmax after these changes](#fmax-after-these-changes).
+
+**Round 4 -- packaging and docs**
+
+- Changed files shipped as a zip that unpacks from the project root.
+- This log; Testing section brought up to date; the truncation section
+  marked resolved-in-simulation; "Also outstanding" updated.
+- Corrected [Removal while mounted](#removal-while-mounted), which
+  described unmount-on-unplug as existing; it does not. Added to
+  "Also outstanding".
+- `docs/filesystem.md` now lists the three volumes and where `/usb`
+  comes from; `docs/flash_apps.md` no longer calls USB storage
+  hypothetical.
+
+**Verification at the end of round 4:** `test_usb` (77), `test_usb_cosim`
+(19), `test_usb_msc` (23, also at 20 ns skew with +-2500 ppm FS and
++15000 ppm LS), all four `test_usb_margin` corners -- all pass.
+
+**On hardware, in order:** `make usb_fmax BOARD=mozart_ml1` (must clear
+48 MHz with margin); `usbmount`, then read a file from `/usb`; with
+`msc_verbose` on, no `data in N of 512` or `short sector` lines; then a
+write and read-back. After that, turn `msc_verbose` off.
 
 ## Co-simulation
 
@@ -1923,10 +2132,21 @@ The first two are gateware defects that would have reached a board.
 
 Four targets, and each exists because something got through the others:
 
-    make test_usb           # 26 gateware checks against a device model
-    make test_usb_cosim     # 14 checks, real driver against real RTL
+    make test_usb           # 77 gateware checks against a device model
+    make test_usb_cosim     # 19 checks, real driver against real RTL
+    make test_usb_msc       # 23 checks, real driver incl. usbh_msc.c,
+                            #   bulk-only SCSI model, mouse poll live
     make test_usb_margin    # receive tolerance to device clock error
     make usb_fmax BOARD=x   # whole-SoC Fmax, place-and-route
+
+`test_usb` also runs a monitor on every cycle: whenever XACT_S's
+pending bit is clear, its status and length must be software's own
+last result. It exists because two faults broke exactly that and
+neither produced a receive error.
+
+`usb_fmax` fails outright on newer nextpnr ("combinational loops"):
+the TRNG ring oscillators are loops by design. Add `--ignore-loops`
+there, not a design change.
 
 `test_usb_margin` and `usb_fmax` were added late, after two defects
 that neither of the first two could see: the SoC running below its own
@@ -1967,6 +2187,16 @@ are in the phase 1 suite:
 - [x] Short packet terminating an `auto_cont` bulk IN.
 - [x] STALL reported as STALL rather than as a timeout.
 - [x] SOF generated, and a transaction still completing around it.
+- [x] Exact-multiple `auto_cont` IN ending on OK rather than SHORT,
+      with an auto-poll slot live (`test_usb` case 10).
+- [x] XACT_S never shows a stale or foreign result with pending clear
+      (`test_usb` monitor).
+- [x] Bulk IN paused by NAKs beyond the hardware budget, resumed
+      part-way (`test_usb_msc`).
+- [x] Bad CRC mid-sector and on consecutive packets, retried without
+      desync (`test_usb_msc`).
+- [ ] Lost host ACK on bulk IN (needs the IN toggle check first).
+- [ ] STALL on a bulk endpoint, recovered by Reset Recovery.
 - [ ] Device disconnect in the middle of every transaction phase.
       (phase 3)
 - [ ] Two devices requesting address 0 in the same frame. (phase 4)

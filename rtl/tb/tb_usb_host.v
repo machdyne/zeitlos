@@ -18,6 +18,13 @@
  *   7  LOW SPEED BEHIND A HUB: normal polarity, 32 clocks per bit,
  *      every host packet preceded by a PRE sent at the full-speed rate
  *   8  SOF generation, and a transaction still completing around it
+ *   9  auto-poll driving the cursor with no CPU involvement
+ *  10  an exact-multiple auto-continue IN (ends on OK, not SHORT),
+ *      with a poll slot live, and XACT_S still holding software's
+ *      result frames later
+ *
+ * Throughout, a monitor checks that whenever XACT_S's pending bit is
+ * clear, its status and length are software's own last result.
  *
  * Cases 6 and 7 differing is the entire point of running both. A host
  * that treats "low speed" as one thing passes 6 and fails 7, and the
@@ -139,6 +146,41 @@ module tb_usb_host;
     tb_usb_device #(.MODE(2), .MPS0(8)) dev_pre (
         .dp(dp[1]), .dm(dm[1]), .attach(att_pre)
     );
+
+    // ---------------------------------------------------------------
+    // result integrity monitor
+    // ---------------------------------------------------------------
+    //
+    // Software's contract with XACT_S is: once the pending bit reads
+    // zero, the status and length fields are the result of the
+    // transaction software itself started. This checks that contract
+    // on every cycle, sampled at the falling edge because that is
+    // what the register decode sees at the next rising one.
+    //
+    // A software transaction is a completion that is neither a SOF
+    // nor an auto-poll slot; those two have their own destinations.
+    reg sh_valid;
+    reg [3:0] sh_status;
+    reg [10:0] sh_len;
+    integer stale_cycles;
+    initial begin
+        sh_valid = 1'b0;
+        sh_status = 4'd0;
+        sh_len = 11'd0;
+        stale_cycles = 0;
+    end
+    always @(negedge clk) begin
+        if (!rst) begin
+            if (dut.x_done && !dut.sched_is_sof && !dut.sched_is_poll) begin
+                sh_valid = 1'b1;
+                sh_status = dut.x_status;
+                sh_len = dut.x_act_len;
+            end
+            if (sh_valid && !dut.xact_pending &&
+                (dut.res_status !== sh_status || dut.res_len !== sh_len))
+                stale_cycles = stale_cycles + 1;
+        end
+    end
 
     // ---------------------------------------------------------------
     // Wishbone
@@ -551,6 +593,49 @@ module tb_usb_host;
             #400000;
         end
         check("cursor saturates at 0", curs_x0, 0);
+
+        // -----------------------------------------------------------
+        $display("");
+        $display("== 10: exact-multiple auto-continue, auto-poll live ==");
+
+        // The shape of a mass-storage sector read: a request that is
+        // an exact multiple of the packet size, so the sequence ends
+        // on remaining == 0 with ST_OK rather than on a short packet.
+        // 32 bytes of the configuration descriptor at 8 per packet is
+        // four full packets. Nothing else in this bench runs more
+        // than three, and none of them end this way.
+        //
+        // The mouse slot from case 9 is still enabled and NAKing
+        // every frame, as on hardware with a keyboard and mouse
+        // attached while the stick is read.
+        check("monitor: stale before 10", stale_cycles, 0);
+
+        put_setup(8'h80, 8'h06, 8'h00, 8'h02,
+                  8'h00, 8'h00, 8'h20, 8'h00);
+        xact(0, 2'd0, 7'd0, 4'd0, 1'b0, 1'b0, 1'b0, 1'b0, 1'b0,
+             8, O_SETUP, 8, 3);
+        check("cfg setup status", r[14:11], ST_OK);
+        xact(0, 2'd1, 7'd0, 4'd0, 1'b0, 1'b0, 1'b0, 1'b1, 1'b1,
+             8, O_DATA, 32, 3);
+        check("cfg in status", r[14:11], ST_OK);
+        check("cfg in length", r[10:0], 32);
+        wb_read(bufw(O_DATA));
+        check("cfg[0..3]", r, {dev_fs.cfgd[3], dev_fs.cfgd[2],
+                               dev_fs.cfgd[1], dev_fs.cfgd[0]});
+        wb_read(bufw(O_DATA + 28));
+        check("cfg[28..31]", r, {dev_fs.cfgd[31], dev_fs.cfgd[30],
+                                 dev_fs.cfgd[29], dev_fs.cfgd[28]});
+        xact(0, 2'd2, 7'd0, 4'd0, 1'b0, 1'b0, 1'b0, 1'b1, 1'b0,
+             8, O_DATA, 0, 3);
+        check("cfg status stage", r[14:11], ST_OK);
+
+        // Several frames later, with polls completing in between,
+        // XACT_S must still say what software's last request did.
+        #3000000;
+        wb_read(A_XACT_S);
+        check("result survives polls: status", r[14:11], ST_OK);
+        check("result survives polls: pending", r[16], 0);
+        check("monitor: stale cycles", stale_cycles, 0);
 
         // -----------------------------------------------------------
         $display("");

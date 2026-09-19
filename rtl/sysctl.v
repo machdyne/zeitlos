@@ -92,11 +92,12 @@ localparam SYSCLK = 48_000_000;
 // stretch and must refill a whole round's worth during its own slice.
 // 128 frames is 5.8ms at 22kHz, which leaves no margin at all.
 //
-// The width is what makes 1024 the right number rather than 512: a
-// DP16KD is 18 bits wide, so a 32-bit FIFO needs two of them whatever
-// the depth. 512 frames and 1024 frames cost exactly the same two
-// blocks; 1024 uses them fully. Below 1024 you are paying for BRAM
-// you are not using.
+// 1024 fills the two block RAMs a 32-bit FIFO of this size takes.
+// NOTE, measured (synth_ecp5 on rtl/audio.v): 512 frames takes ONE,
+// not two. This FIFO has one write and one read port, which yosys maps
+// to the 36-bit-wide PDPW16KD mode, so the "a DP16KD is 18 bits wide"
+// reasoning that used to be here does not apply. lakritz_katze uses
+// that block for the ethernet MAC (release/targets/lakritz_katze.spec).
 `ifdef AUDIO
 `ifndef AUDIO_FIFO_LOG2
 `define AUDIO_FIFO_LOG2 10
@@ -2488,7 +2489,8 @@ module sysctl #()
 	assign eth_rx_ready = eth_int_s1;
 `endif
 
-	// WISHBONE SLAVE: RMII ETHERNET MAC (tested with LAN8720A)
+	// WISHBONE SLAVE: RMII ETHERNET MAC (tested with LAN8720A: on-board on
+	// mozart_ml1/sergei_ml1, and on the Katze PMOD -- lakritz_katze)
 `ifdef ETH_RMII
 	wire wbm_cyc_ethmac = cs_ethmac && wbm_cyc;
 
@@ -2499,7 +2501,7 @@ module sysctl #()
    wire eth_refclk = ETH_REFCLK;
 `endif
 
-	ethmac_rmii_wb #() wbs_ethmac0_i
+	ethmac_rmii_wb wbs_ethmac0_i
 	(
 		.wb_clk_i(wbm_clk),
 		.wb_rst_i(wbm_rst),

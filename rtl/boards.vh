@@ -521,6 +521,20 @@
 // only reason this is a sane thing to ship at all.
 //`define GPIO_PORT0
 
+// Katze RMII ethernet PMOD instead of Langkatze: off in the plain
+// board build, which assumes a Langkatze in port A. The switch is
+// `SPI_ETH out, these two in, `ICACHE_KB above changed to 2 and
+// `AUDIO_FIFO_LOG2 9 added, plus the commented Katze block in
+// boards/lakritz_v0.lpf:
+//
+//     ./release/zrelease build lakritz_katze
+//
+// does all of it from one spec. The icache and audio FIFO give up one
+// block RAM each, because this 25F has one left and the MAC needs
+// three -- see release/targets/lakritz_katze.spec and docs/katze.md.
+//`define ETH_RMII
+//`define ETH_RX_SLOTS 2
+
 // UART1 is not offered on Lakritz at all, and that is a board fact
 // rather than an omission: it has ONE PMOD connector and the console
 // is on it. A second serial port would mean no first one, which is a
@@ -598,8 +612,10 @@
 `define ETH_RMII
 `define ETH_RMII_DRIVE_REFCLK
 // Frames the RMII receive FIFO holds, one full-size frame per slot.
-// Power of two, 2 or more. 2KB of block RAM each -- cheap on ECP5-45,
-// which is the only place RMII is built. See rtl/ethmac_rmii.v.
+// Power of two, 2 or more. 2KB of block RAM each -- cheap on ECP5-45.
+// Lakritz + Katze (a 25F) builds 2, because the block RAM is nearly
+// gone; see release/targets/lakritz_katze.spec and rtl/ethmac_rmii.v's
+// BLOCK RAM note.
 `define ETH_RX_SLOTS 4
 `define AUDIO
 `define AUDIO_SPDIF

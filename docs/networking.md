@@ -27,7 +27,7 @@ binary serves every board:
 | driver | hardware | receive buffering |
 |---|---|---|
 | `enc28j60.c` | SPI ethernet chip (Lakritz) | 6656-byte ring, on the chip |
-| `rmii_eth.c` | `rtl/ethmac_rmii.v` | 4 frame slots |
+| `rmii_eth.c` | `rtl/ethmac_rmii.v` (Mozart, Sergei, [Katze](katze.md)) | 4 frame slots; 2 on Lakritz + Katze |
 | `esp32link.c` | `rtl/esp32_rxfifo.v` | 2048-byte FIFO |
 
 **The third column is not trivia.** It bounds TCP throughput directly,
@@ -145,10 +145,25 @@ software has taken rather than only that it took one.
 Sizing: TCP advertises a 2048-byte receive window
 (`sw/apps/net/tcp.c`), so a peer will not have more than that in
 flight -- two full-MTU frames, or many small ones. Four slots covers
-the window with room to spare. Cost is 2KB of block RAM per slot, and
-RMII only builds on ECP5-45 boards where that is not scarce; RX goes
-from 1 EBR to 4. Configurable per board in `rtl/boards.vh`
-(`ETH_RX_SLOTS`, power of two, 2 or more).
+the window with room to spare. Cost is 2KB of RAM per slot — one
+block RAM each, now that the buffer is in block RAM (see below).
+Configurable per board or target (`ETH_RX_SLOTS`, power of two, 2 or
+more).
+
+**The slot count is no longer the same on every RMII board.** Lakritz +
+Katze builds two, because its 25F is out of block RAM
+([katze.md](katze.md)). So the MAC reports log2 of its slot count in
+STATUS[15:12], and `net_phy_select()` sets the RMII driver's
+`rx_capacity` from it: (slots − 1) × 536 bytes. That is three segments
+on four slots, as before, and one on two. A bitstream that predates the
+field reads zero there and had four slots, so zero is taken as four.
+
+**Both buffers are in block RAM now, and weren't before.** Until Katze
+brought this MAC to a 25F, `rxbuf` and `txbuf` were built from LUT RAM,
+1541 cells of it. They were read in shapes an EBR cannot provide:
+through a mux, and combinationally from the TX engine. See the BLOCK
+RAM note in `rtl/ethmac_rmii.v`. `TX_BUF` is write-only as a result,
+and reads return zero; nothing read it.
 
 TX is deliberately left single-slot. It is software-paced rather than
 wire-paced, so it has no equivalent failure mode, and there is no
@@ -166,6 +181,12 @@ as an error rather than a drop and consumes no slot. Against the old
 single-slot RTL it fails immediately -- 3 of 4 burst frames dropped --
 so it is proven sensitive rather than merely green. Passes at 2, 4, 8
 and 16 slots.
+
+**`rtl/tb/tb_ethmac_rmii_tx.v`** covers the transmit side, which had no
+test until the TX buffer moved to block RAM. It checks preamble, SFD,
+data at every byte-lane alignment, and the FCS against an independent
+CRC32, and it loops TX back into RX. Its frame checks pass against the
+old MAC too, and fail if the new prefetch is off by one.
 
 ### Two wiring bugs found afterwards
 

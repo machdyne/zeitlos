@@ -36,6 +36,7 @@ bool rmii_eth_init(const uint8_t mac[6]) {
 	(void)mac;  // unused -- see rmii_eth.h's header comment
 
 	uint32_t status = reg_ethmac_status;
+	printf("net: rmii eth: %u rx slots\n", rmii_eth_rx_slots());
 	printf("net: rmii eth: status=0x%03lx crs_dv=%d (a single read here can't confirm "
 		"ETH_REFCLK is toggling -- its heartbeat period is ~168ms, see STATUS bit1 in "
 		"rtl/ethmac_rmii.v if you need to check that separately)\n",
@@ -43,6 +44,12 @@ bool rmii_eth_init(const uint8_t mac[6]) {
 		(status & REG_ETHMAC_CRS_DV) ? 1 : 0);
 
 	return true;
+}
+
+unsigned rmii_eth_rx_slots(void) {
+	unsigned l2 = (reg_ethmac_status >> REG_ETHMAC_RX_SLOTS_LOG2_SHIFT)
+		& REG_ETHMAC_RX_SLOTS_LOG2_MASK;
+	return l2 ? (1u << l2) : 4u;
 }
 
 void rmii_eth_debug_dump(void) {

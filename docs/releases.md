@@ -38,6 +38,7 @@ helpfully rebuilding something nobody has looked at.
 ```
 release/dist/0.0.3/
   zeitlos-lakritz_gpio.img          gateware + logo + kernel + core apps
+  zeitlos-lakritz_katze.img
   zeitlos-lakritz_langkatze.img
   zeitlos-mozart_ml1.img
   zeitlos-sergei_ml1.img
@@ -209,6 +210,36 @@ port, and a board with several ports can take several PMODs. `@port` is
 optional only when the board has exactly one. Pins 5, 6, 11 and 12 are
 ground and power and are rejected if named.
 
+#### Per-pin settings
+
+`io_type` applies to every pin. Two keys override it for one pin:
+
+```
+# hw/pmods/katze.spec
+io_type = LVCMOS33
+io_type.4 = LVCMOS33 PULLMODE=UP      # pin 4 only
+frequency.10 = 50 MHZ                 # a clock comes IN on pin 10
+```
+
+`io_type.<pin>` replaces the IOBUF attributes for that pin.
+`frequency.<pin>` adds a `FREQUENCY PORT` line, which is what makes
+nextpnr time a clock domain entering on that pin. Without it the domain
+is unconstrained, and the release's timing gate cannot see it fail.
+
+Katze needed both, and is described in [katze.md](katze.md):
+
+- **Pull-ups on three pins only.** The LAN8720A's mode straps want them;
+  the outputs and the reference clock do not.
+- **A 50MHz reference clock arriving on pin 10.**
+
+Either key naming a pin the PMOD's `pins` does not use is an error. A
+setting on a pin with no signal would otherwise be silently dropped, and
+a strap pull-up that lands on nothing is a PHY in the wrong mode. A
+frequency must be a number and `MHZ`, `KHZ` or `HZ`.
+
+A `FREQUENCY PORT` line in the base `.lpf` is released along with the
+port's `LOCATE` and `IOBUF` when a PMOD takes its ball.
+
 The generator emits constraints for the named pins only, so leaving a
 pin out is what guarantees nothing on the FPGA side is ever placed on
 it. That is load-bearing rather than tidy: Langkatze's pin 10 is a
@@ -236,6 +267,8 @@ asserts it, and prints the delta for every target:
 ```
 lakritz_gpio         ok -- +8, -5 vs the board .lpf
                           gpio in port A
+lakritz_katze        ok -- +8, -5 vs the board .lpf
+                          katze in port A
 lakritz_langkatze    ok -- identical vs the board .lpf
                           langkatze in port A
 ```
@@ -316,6 +349,26 @@ $ iverilog -g2005 -o /tmp/tb rtl/tb/tb_uart_null.v rtl/uart_null.v && vvp /tmp/t
 A Lakritz with a Langkatze therefore has HDMI, USB keyboard and mouse,
 microSD and networking — a complete machine, just not one you can talk
 to over a UART.
+
+### A target that has to make room
+
+`lakritz_katze` is the first target that changes a *base* define's
+value to fit, rather than adding or removing a feature:
+
+```
+defines =
+	-SPI_ETH
+	ETH_RX_SLOTS=2
+	ICACHE_KB=2
+	AUDIO_FIFO_LOG2=9
+```
+
+The MAC Katze needs costs three block RAMs, and Lakritz has one left.
+`NAME=VALUE` on a define the board already sets replaces its value, so
+`ICACHE_KB=2` halves the icache for this target alone, and the plain
+Lakritz build keeps its 4KB. Each trade is measured, and the reasoning
+lives in the target spec's comment, where the next person to touch it
+will look. [katze.md](katze.md) has the numbers.
 
 ## How the gateware gets its defines
 

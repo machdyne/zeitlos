@@ -327,9 +327,22 @@ module usb_host #(
     // PREVIOUS transaction's status as if it were this one's, and
     // fires the next request on top of one already running.
     //
-    // The three terms are contiguous by construction, so a request is
-    // outstanding from the write to the last cycle of the engine.
-    wire xact_pending = x_busy || sw_req || sched_start;
+    // The terms are contiguous by construction, so a request is
+    // outstanding from the write until its result is readable.
+    //
+    // -- and the same window exists at the other end --
+    //
+    // usb_xact.v drops busy and pulses done on the same edge, and the
+    // result registers below latch on done -- one edge LATER. With
+    // only the first three terms, that one cycle read as "not pending"
+    // while res_status and res_len still held the PREVIOUS
+    // transaction's values. A driver polling XACT_S hits it on some
+    // fraction of transactions, set by where its loop happens to fall,
+    // and gets a plausible-looking stale result: for a bulk data stage
+    // that is the CBW's ST_OK and its length. The data is in the
+    // buffer and correct; only the count is wrong. x_done covers that
+    // cycle. tb_usb_host's result monitor checks every cycle.
+    wire xact_pending = x_busy || x_done || sw_req || sched_start;
     wire ctl_frame_en = ctrl[1];
 
     // -- CTRL fields --
@@ -943,7 +956,17 @@ module usb_host #(
             // A completed SOF is not a result software asked for and
             // must not overwrite the status of the transaction it is
             // waiting on.
-            if (x_done && !sched_is_sof) begin
+            //
+            // Neither is a completed auto-poll slot. Its result already
+            // has a home -- poll_b and the compat block, above -- and
+            // letting it through here as well meant that any poll
+            // finishing after software's transaction replaced
+            // software's status and length with the poll's: usually a
+            // NAK with length 0 from an idle keyboard or mouse. With
+            // HID slots live that is every frame, so the window is
+            // wide open during mass-storage traffic. tb_usb_host case
+            // 10 covers it.
+            if (x_done && !sched_is_sof && !sched_is_poll) begin
                 res_status <= x_status;
                 res_len <= x_act_len;
                 res_tgl <= x_res_toggle;
