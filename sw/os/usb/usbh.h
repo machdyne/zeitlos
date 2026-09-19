@@ -38,6 +38,7 @@
 // device with no driver.
 #define Z_USBH_CLASS_NONE   0
 #define Z_USBH_CLASS_HID    1
+#define Z_USBH_CLASS_MSC    2
 
 // Set up the controller: enable ports, start the frame timer, unmask
 // interrupts. Safe to call when Z_FEATURE2_USB_HOST is clear -- it

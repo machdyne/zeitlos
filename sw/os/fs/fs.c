@@ -7,6 +7,7 @@
 #include "fatfs/ff.h"
 #include "fs.h"
 #include "../../common/zexec.h"
+#include "../usb/usbh_msc.h"
 #include "../../common/zsoc.h"
 #include "../zar.h"
 #include "../kernel.h"		// k_fs_enter()/k_fs_leave() -- see
@@ -34,13 +35,14 @@ static bool ram_mounted;
 // is the obvious next one, and app-facing syntax should not have to
 // change again for it.
 //
-// The wart, stated plainly: /ram is now a RESERVED NAME at the root. A
-// directory called /ram on the card becomes unreachable.
+// The wart, stated plainly: /ram and /usb are RESERVED NAMES at the
+// root. A directory of either name on the card becomes unreachable.
 static const struct {
 	const char	*prefix;
 	const char	*vol;
 } fs_mounts[] = {
 	{ "/ram", "1:" },
+	{ "/usb", "2:" },
 };
 
 // Case-insensitive, because paths here are not.
@@ -136,6 +138,80 @@ bool fs_ramdisk_create(uint32_t bytes) {
 
 	return true;
 
+}
+
+// -- USB mass storage, FatFs drive 2, reachable as /usb --
+//
+// Mounted on demand rather than at boot: the drive appears when
+// somebody plugs it in, and f_mount() has to run in process context
+// because disk_initialize() waits for the unit to report ready.
+//
+// f_mount(..., 1) forces the mount immediately rather than deferring
+// it to the first access, so a failure is reported here instead of
+// surfacing later as a confusing error on an unrelated call.
+static FATFS usbvol2;
+static bool usb_mounted = false;
+
+bool fs_usb_mount(void) {
+
+	FRESULT res;
+
+	if (usb_mounted) return true;
+	if (!z_usbh_msc_present()) {
+		printf("fs: no usb storage device\n");
+		return false;
+	}
+
+	res = f_mount(&usbvol2, "2:", 1);
+	if (res != FR_OK) {
+		printf("fs: usb: mount failed (%d)\n", (int)res);
+		return false;
+	}
+
+	usb_mounted = true;
+	printf(" - usb storage: %lu KB at /usb\n",
+		(unsigned long)(z_usbh_msc_sectors() / 2));
+
+	return true;
+
+}
+
+void fs_usb_unmount(void) {
+	if (!usb_mounted) return;
+	f_mount(NULL, "2:", 0);
+	usb_mounted = false;
+}
+
+bool fs_usb_mounted(void) {
+	return usb_mounted;
+}
+
+// The synthetic roots, for anything that lists "/".
+//
+// /ram and /usb are not directories on the card -- they are prefixes
+// this file rewrites into volume ids. So a plain f_readdir("/")
+// returns the SD card's root and nothing else, and the file browser
+// showed no sign that the other volumes existed. Callers that list the
+// root ask for these and emit them alongside.
+//
+// Only mounted volumes are reported: an unplugged /usb should not
+// appear as an empty directory you can descend into.
+int fs_mount_count(void) {
+	return (int)(sizeof(fs_mounts) / sizeof(fs_mounts[0]));
+}
+
+const char *fs_mount_name(int i) {
+	if (i < 0 || i >= fs_mount_count()) return NULL;
+	// Skip the leading '/': callers want the bare name to append to
+	// whatever prefix they are building.
+	return fs_mounts[i].prefix + 1;
+}
+
+int fs_mount_live(int i) {
+	if (i < 0 || i >= fs_mount_count()) return 0;
+	if (!strcmp(fs_mounts[i].vol, "1:")) return ram_mounted ? 1 : 0;
+	if (!strcmp(fs_mounts[i].vol, "2:")) return fs_usb_mounted();
+	return 1;
 }
 
 void fs_ramdisk_destroy(void) {
@@ -586,6 +662,17 @@ void fs_list_dir(char *path) {
 	// never came up.
 	if (res != FR_OK)
 		printf("(filesystem unavailable: error %d)\n", (int)res);
+
+	// The synthetic roots, same reasoning as fsapi.c's listing: /ram
+	// and /usb are prefixes this file rewrites, not directories on the
+	// card, so f_readdir never reports them.
+	if (res == FR_OK && path[0] == '0' && path[1] == ':' &&
+	    (path[2] == 0 || (path[2] == '/' && path[3] == 0))) {
+		int mi;
+		for (mi = 0; mi < fs_mount_count(); mi++)
+			if (fs_mount_live(mi))
+				printf("%s\n", fs_mount_name(mi));
+	}
 
 	if (res == FR_OK) {
 		for (;;) {

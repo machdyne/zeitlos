@@ -773,6 +773,68 @@ usb_area:
 		synth_ecp5 -abc9 -top usb_host; stat" 2>&1 \
 		| sed -n '/=== usb_host ===/,$$p'
 
+# Receive margin: how far a device's clock can be off before the host
+# stops decoding it.
+#
+# USB allows +-2500 ppm at full speed and +-15000 ppm at low speed, and
+# cheap devices sit near the edge. This runs the co-simulation harness
+# against device models whose TRANSMIT clock is deliberately wrong, in
+# both directions and at both speeds.
+#
+# It exists because the receiver was failing the full-speed spec limit
+# and nothing could see it: tb_usb_device.v ran at exactly the nominal
+# rate, so a receiver biased toward one side of the bit measured
+# perfect. With CLK_PPM it showed +10000 ppm tolerance one way and
+# -2500 the other -- all the margin on one side, failing at the spec
+# limit on the other. See usb_sie.v's `mid`.
+#
+# A device model's own receiver is fixed-rate with no resync, far less
+# tolerant than the host's DPLL, so CLK_PPM skews only its transmit
+# path. Skewing both measures the testbench, not the design.
+test_usb_margin:
+	@mkdir -p output
+	@cd output && iverilog-vpi --name=usbh_cosim -DZ_USBH_COSIM \
+		-I../sw/os/usb ../rtl/tb/cosim/usbh_vpi.c \
+		../sw/os/usb/usbh.c ../sw/os/usb/usbh_hid.c >/dev/null
+	@for c in "10000 0" "-10000 0" "0 20000" "0 -20000"; do \
+		set -- $$c; \
+		iverilog -g2005 -DDEV_SKEW=20 -DDEV_PPM_FS=$$1 \
+			-DDEV_PPM_LS=$$2 -o output/tb_usb_margin \
+			rtl/tb/tb_usb_cosim.v rtl/tb/tb_usb_device.v \
+			rtl/usb/*.v; \
+		n=`cd output && vvp -M. -musbh_cosim tb_usb_margin 2>&1 \
+			| grep -c '^  FAIL'`; \
+		if [ "$$n" = "0" ]; then r="ok"; else r="FAIL ($$n)"; fi; \
+		echo "  fs $$1 ppm, ls $$2 ppm: $$r"; \
+	done
+
+# Whole-SoC Fmax for a board, which is the number that actually decides
+# whether a build is reliable.
+#
+# `usb_area` above reports LUT4 and DP16KD, and those were the only
+# figures tracked while this controller was developed. Fmax was not,
+# and it drifted from 52.5 MHz with `USB_HID to 45.3 MHz with
+# `USB_HOST -- below the 48 MHz the design runs at -- without anything
+# noticing. The symptom on hardware was intermittent receive CRC
+# errors that moved between builds, which cost several days of
+# chasing the USB receive path for a fault that was not there.
+#
+# Margin matters as much as passing: placement varies run to run, so a
+# design that just scrapes 48 MHz will fail on some rebuilds and not
+# others.
+#
+#   make usb_fmax BOARD=mozart_ml1
+usb_fmax:
+	@mkdir -p output
+	@yosys $(EXTRA_DEFINES) -DBOARD_$(BOARD_UC) -DECP5 -q \
+		-p "synth_ecp5 $(ABC9) -top sysctl -json output/fmax.json" \
+		$(RTL_PICO)
+	@nextpnr-ecp5 --$(DEVICE) --package $(PACKAGE) \
+		--lpf boards/$(LPF) --json output/fmax.json \
+		--textcfg /dev/null --lpf-allow-unconstrained 2>&1 \
+		| grep -E "Max frequency|FAIL|Info: Device utilisation" \
+		| head -20
+
 CAND ?= rtl/gpu/gpu_blit.v
 test_blit:
 	@mkdir -p output

@@ -20,6 +20,20 @@
 
 `timescale 1ns/1ps
 
+// Line-transition skew for the device models, in nanoseconds.
+// Override with -DDEV_SKEW=20 to reproduce real silicon.
+`ifndef DEV_SKEW
+`define DEV_SKEW 0
+`endif
+// Separate, because the spec limits differ by a factor of six:
+// +-2500 ppm at full speed, +-15000 ppm at low speed.
+`ifndef DEV_PPM_FS
+`define DEV_PPM_FS 0
+`endif
+`ifndef DEV_PPM_LS
+`define DEV_PPM_LS 0
+`endif
+
 module tb_usb_cosim;
 
     reg clk;
@@ -88,7 +102,14 @@ module tb_usb_cosim;
         .int_o(usb_int)
     );
 
-    tb_usb_device #(.MODE(0), .MPS0(8)) dev (
+    // SKEW_NS reproduces the one-sample SE1 real devices emit at every
+    // transition -- see tb_usb_device.v. Without it this harness
+    // cannot see the receive failure that stopped every full-speed
+    // device on hardware, which is how three separate attempts at
+    // fixing the receiver were evaluated against a test that could not
+    // fail.
+    tb_usb_device #(.MODE(0), .MPS0(8), .SKEW_NS(`DEV_SKEW),
+                   .CLK_PPM(`DEV_PPM_FS)) dev (
         .dp(dp[0]), .dm(dm[0]), .attach(att_fs)
     );
 
@@ -96,7 +117,8 @@ module tb_usb_cosim;
     // the two speeds across the two ports at once is the case where a
     // shared SIE has to reconfigure itself per transaction -- and
     // where a bug would look like one port working and the other not.
-    tb_usb_device #(.MODE(1), .MPS0(8)) dev1 (
+    tb_usb_device #(.MODE(1), .MPS0(8), .SKEW_NS(`DEV_SKEW),
+                   .CLK_PPM(`DEV_PPM_LS)) dev1 (
         .dp(dp[1]), .dm(dm[1]), .attach(att_ls)
     );
 

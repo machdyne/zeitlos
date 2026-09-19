@@ -16,6 +16,7 @@
 
 #include "usbh.h"
 #include "usbh_hw.h"
+#include "usbh_msc.h"
 #ifdef Z_USBH_COSIM
 // rtl/tb/cosim builds this file for the host, where the kernel's
 // headers neither exist nor mean anything. The two things it borrows
@@ -41,14 +42,24 @@ int z_soc_has_feature2(uint32_t bit);
 
 #define DIR_IN              0x80
 
-// NAK retries per control transaction. The field is four bits, so 15
-// is the maximum, and the maximum is the right value: a device is
-// entitled to NAK for as long as it likes while it gets ready, a NAK
-// costs only the transaction that was going to happen anyway, and the
-// behavioural device model in rtl/tb answers far more promptly than
-// anything real. Three was a number chosen when nothing real had ever
-// been on the other end.
-#define Z_USBH_NAK_BUDGET   15
+// Hardware NAK retries per transaction: a few, not the maximum.
+//
+// The engine retries a NAKed transaction back to back with only the
+// inter-packet gap between attempts -- about 19 us at full speed. A
+// probe capture of a hub showed us doing exactly that, IN / NAK / IN /
+// NAK, and then the hub stopping mid-sequence: the failure was
+// reported as "TIMEOUT (no response) (9 naks)", meaning it answered
+// nine times and then went quiet.
+//
+// Real hosts do not hammer an endpoint like that; they retry a NAKed
+// control transfer in a LATER FRAME. So the hardware gets a small
+// budget for a device that is momentarily busy, and anything longer is
+// paced by the driver at one kernel tick per attempt -- see
+// CTRL_SOFT_NAKS.
+//
+// This was 15, the field maximum, chosen when the only thing on the
+// other end was a device model that never NAKed at all.
+#define Z_USBH_NAK_BUDGET   3
 
 // HID class requests, addressed to an interface.
 #define HID_OUT_IFACE       0x21
@@ -134,6 +145,15 @@ typedef struct {
     uint8_t att_ctrl[4];
     uint8_t att_status[4];
     uint8_t att_naks[4];
+    // What the failing transaction actually reported, beyond its
+    // status. A capture has now proved the wire is correct through a
+    // NAK/NAK/NAK/DATA1/ACK sequence, so what is left is the
+    // SOFTWARE retry path -- and these are the two values it depends
+    // on: how much the transaction moved before it stopped, and which
+    // toggle it left behind.
+    uint8_t att_alen[4];
+    uint8_t att_tgl[4];
+    uint8_t att_want[4];
     uint8_t att_n;
     // What we learned about the device before it went wrong. A STALL
     // on SET_CONFIGURATION is what a device says when it dislikes the
@@ -150,13 +170,48 @@ typedef struct {
     // has already cost more than storing 32 bytes.
     uint8_t cfg_raw[64];
     uint8_t cfg_rawn;
+    // The address allocated in E_DESC8, held until SET_ADDRESS's
+    // status stage lands. This used to borrow cfg_len, which is the
+    // configuration descriptor's length -- harmless when enumeration
+    // succeeds first time, and wrong on every retry, because the
+    // stashed address survived into the descriptor walk as a bogus
+    // length. lsusb showed it as "cfg desc (64 of 3 bytes)".
+    uint8_t pend_addr;
+
+    // -- this device's control transfer engine --
+    uint8_t ctrl_state;
+    uint8_t ctrl_err_stage;
+    uint8_t ctrl_soft_naks;
+    uint8_t ctrl_tgl;
+    uint8_t ctrl_pend;
+    uint8_t ctrl_dir_in;
+    uint16_t ctrl_xferred;
+    uint16_t ctrl_len;
+    uint32_t ctrl_delay_until;
     uint32_t deadline;      // kernel ticks, 0 for none
 } z_usbh_dev_t;
 
 static z_usbh_dev_t devs[Z_USBH_MAX_PORTS];
 
-static uint8_t ctrl_state;
-static uint8_t ctrl_err_stage;
+// The control transfer engine's state now lives in z_usbh_dev_t, one
+// instance per device, reached through `ce` inside ctrl_step().
+//
+// It used to be a single shared set of globals, and both root ports
+// drove it at once: each judged results belonging to the other's
+// transfer, with the wrong direction and the wrong length. On hardware
+// that produced a STALL on the data stage and babble on the status
+// stage, and every device worked perfectly when it was the only one
+// plugged in.
+//
+// A stopgap serialised ALL enumeration so only one
+// device is ever mid-transfer. That is fine for two root ports, where
+// the cost is a few hundred milliseconds once per plug event, and
+// wrong for hubs, where several devices arrive behind one port and
+// enumerating them strictly one at a time gets slow.
+//
+// With the state per-device, the only thing that still has to be
+// serialised is ADDRESS ZERO: a freshly reset device answers on 0, so
+// two of them mid-enumeration would both reply to the same token.
 // Software-paced NAK retry. The hardware retries a NAKed transaction
 // back-to-back with only the inter-packet gap between attempts, so
 // its whole budget burns in under a millisecond -- and a slow device
@@ -169,14 +224,23 @@ static uint8_t ctrl_err_stage;
 // So on NAK the stage is re-issued from here, two kernel ticks
 // (~2.7 ms) apart, up to CTRL_SOFT_NAKS times -- a ~160 ms window,
 // against the sub-millisecond one the hardware budget alone gives.
-static uint8_t ctrl_soft_naks;
 // How much of the data stage the device has already handed over across
 // all the re-issues so far. A NAK retry must RESUME, not restart.
-static uint16_t ctrl_xferred;
-static uint8_t ctrl_tgl;
-static uint8_t ctrl_pend;
-static uint32_t ctrl_delay_until;
-#define CTRL_SOFT_NAKS 60
+// ~1.4 s of patience, not ~85 ms.
+//
+// A NAK is not a failure. It means "not yet", and USB lets a device
+// say it for as long as it is busy: a hub bringing up its downstream
+// ports, a card reader looking for a card, a stick finishing an
+// internal write. A probe capture of a hub that would not enumerate
+// showed a clean IN / NAK / IN / NAK sequence with perfect CRCs all
+// the way to the point where we gave up -- the device was talking the
+// whole time, and we stopped listening.
+//
+// Costs nothing when devices are prompt: a NAK only consumes the
+// transaction that was going to happen anyway, and the retry is paced
+// at one kernel tick, so this is ~1000 transactions spread over a
+// second rather than a burst.
+#define CTRL_SOFT_NAKS 1000
 
 // One kernel tick (~1.4 ms), not two.
 //
@@ -186,9 +250,6 @@ static uint32_t ctrl_delay_until;
 // introduced myself with the original pacing, so it is worth removing
 // rather than reasoning about.
 #define CTRL_NAK_TICKS 1
-static uint8_t ctrl_dev;
-static uint8_t ctrl_dir_in;
-static uint16_t ctrl_len;
 static uint8_t addr_bitmap;     // addresses 1..7
 static uint8_t usbh_present;
 static uint8_t usbh_any_ready;
@@ -242,10 +303,10 @@ static void xact_start(uint8_t pid, uint8_t addr, uint8_t endp,
                              Z_USBH_XB_NAK(nak) | Z_USBH_XB_START);
 }
 
-static void put_setup(uint8_t bmType, uint8_t bReq, uint16_t wVal,
+static void put_setup(int d, uint8_t bmType, uint8_t bReq, uint16_t wVal,
                       uint16_t wIdx, uint16_t wLen)
 {
-    uint32_t p = Z_USBH_BUF + Z_USBH_OFF_PSETUP(ctrl_dev);
+    uint32_t p = Z_USBH_BUF + Z_USBH_OFF_PSETUP(d);
     z_usbh_wb(p + 0, bmType);
     z_usbh_wb(p + 1, bReq);
     z_usbh_wb(p + 2, (uint8_t)wVal);
@@ -263,49 +324,52 @@ static void put_setup(uint8_t bmType, uint8_t bReq, uint16_t wVal,
 static void ctrl_begin(int d, uint8_t bmType, uint8_t bReq,
                        uint16_t wVal, uint16_t wIdx, uint16_t wLen)
 {
-    put_setup(bmType, bReq, wVal, wIdx, wLen);
-    ctrl_err_stage = CE_NONE;
-    ctrl_soft_naks = 0;
-    ctrl_xferred = 0;
-    ctrl_delay_until = usbh_ticks();
-    ctrl_dev = (uint8_t)d;
-    ctrl_dir_in = (bmType & DIR_IN) ? 1 : 0;
-    ctrl_len = wLen;
-    ctrl_state = CS_SETUP;
+    z_usbh_dev_t *ce = &devs[d];
+
+    put_setup(d, bmType, bReq, wVal, wIdx, wLen);
+    ce->ctrl_err_stage = CE_NONE;
+    ce->ctrl_soft_naks = 0;
+    ce->ctrl_xferred = 0;
+    ce->ctrl_pend = 0;
+    ce->ctrl_delay_until = usbh_ticks();
+    ce->ctrl_dir_in = (bmType & DIR_IN) ? 1 : 0;
+    ce->ctrl_len = wLen;
+    ce->ctrl_state = CS_SETUP;
 }
 
 // One step. Returns the new state so callers can test CS_DONE /
 // CS_ERROR without reaching into the variable.
-static int ctrl_step(void)
+static int ctrl_step(int d)
 {
-    z_usbh_dev_t *dv = &devs[ctrl_dev];
+    z_usbh_dev_t *dv = &devs[d];
+    z_usbh_dev_t *ce = dv;
     uint32_t s;
     uint8_t st;
 
-    if (ctrl_state == CS_DONE || ctrl_state == CS_ERROR)
-        return ctrl_state;
+    if (ce->ctrl_state == CS_DONE || ce->ctrl_state == CS_ERROR)
+        return ce->ctrl_state;
 
-    if (xact_pending()) return ctrl_state;
-    if ((int32_t)(usbh_ticks() - ctrl_delay_until) < 0)
-        return ctrl_state;
+    if (xact_pending()) return ce->ctrl_state;
+    if ((int32_t)(usbh_ticks() - ce->ctrl_delay_until) < 0)
+        return ce->ctrl_state;
 
     s = z_usbh_rd(Z_USBH_XACT_S);
     st = (uint8_t)Z_USBH_XS_STATUS(s);
 
-    switch (ctrl_state) {
+    switch (ce->ctrl_state) {
 
     case CS_SETUP:
         // The SETUP token and its 8 data bytes always go out as DATA0.
         xact_start(Z_USBH_PID_SETUP, dv->addr, 0, dv->xa_flags,
                    dv->port, 0, 0, dv->mps0,
-                   Z_USBH_OFF_PSETUP(ctrl_dev), 8, Z_USBH_NAK_BUDGET);
-        ctrl_state = ctrl_len ? CS_DATA : CS_STATUS;
+                   Z_USBH_OFF_PSETUP(d), 8, Z_USBH_NAK_BUDGET);
+        ce->ctrl_state = ce->ctrl_len ? CS_DATA : CS_STATUS;
         break;
 
     case CS_DATA:
         if (st != Z_USBH_ST_OK) {
-            ctrl_err_stage = CE_SETUP;
-            ctrl_state = CS_ERROR;
+            ce->ctrl_err_stage = CE_SETUP;
+            ce->ctrl_state = CS_ERROR;
             break;
         }
         // -- one packet per transaction, paced here --
@@ -323,10 +387,10 @@ static int ctrl_step(void)
         // read is a handful of packets, so the cost of a round trip
         // through the driver per packet is irrelevant -- and the mouse
         // only worked before because it never NAKed mid-descriptor.
-        ctrl_xferred = 0;
-        ctrl_tgl = 1;
-        ctrl_pend = 0;
-        ctrl_state = CS_DATA_RUN;
+        ce->ctrl_xferred = 0;
+        ce->ctrl_tgl = 1;
+        ce->ctrl_pend = 0;
+        ce->ctrl_state = CS_DATA_RUN;
         /* fall through */
 
     case CS_DATA_RUN:
@@ -334,50 +398,55 @@ static int ctrl_step(void)
         // from "nothing issued yet". Deriving that from ctrl_xferred
         // does not work: a first packet returning zero bytes looks
         // identical to not having started.
-        if (ctrl_pend) {
+        if (ce->ctrl_pend) {
             uint16_t got = (uint16_t)Z_USBH_XS_LEN(s);
-            ctrl_pend = 0;
+            ce->ctrl_pend = 0;
             if (st == Z_USBH_ST_NAK) {
-                if (ctrl_soft_naks >= CTRL_SOFT_NAKS) {
-                    ctrl_err_stage = CE_DATA;
-                    ctrl_state = CS_ERROR;
+                if (ce->ctrl_soft_naks >= CTRL_SOFT_NAKS) {
+                    // Exhausted, not silent. dev_fail() reads the
+                    // transaction status, which is ST_NAK here, so the
+                    // report says so -- it used to come out as
+                    // "TIMEOUT (no response)", which reads as silence
+                    // and is the opposite of what happened.
+                    ce->ctrl_err_stage = CE_DATA;
+                    ce->ctrl_state = CS_ERROR;
                     break;
                 }
                 // A NAK moves nothing: same offset, same toggle.
-                ctrl_soft_naks++;
-                ctrl_delay_until = usbh_ticks() + CTRL_NAK_TICKS;
+                ce->ctrl_soft_naks++;
+                ce->ctrl_delay_until = usbh_ticks() + CTRL_NAK_TICKS;
             } else if (st != Z_USBH_ST_OK && st != Z_USBH_ST_SHORT) {
-                ctrl_err_stage = CE_DATA;
-                ctrl_state = CS_ERROR;
+                ce->ctrl_err_stage = CE_DATA;
+                ce->ctrl_state = CS_ERROR;
                 break;
             } else {
-                ctrl_xferred += got;
-                ctrl_tgl ^= 1;
+                ce->ctrl_xferred += got;
+                ce->ctrl_tgl ^= 1;
                 // A short packet ends the stage: the device has no
                 // more to give, which is success, not truncation.
-                if (got < dv->mps0 || ctrl_xferred >= ctrl_len) {
-                    ctrl_state = CS_STATUS;
+                if (got < dv->mps0 || ce->ctrl_xferred >= ce->ctrl_len) {
+                    ce->ctrl_state = CS_STATUS;
                     break;
                 }
             }
         }
         {
-            uint16_t want = ctrl_len - ctrl_xferred;
+            uint16_t want = ce->ctrl_len - ce->ctrl_xferred;
             if (want > dv->mps0) want = dv->mps0;
-            xact_start(ctrl_dir_in ? Z_USBH_PID_IN : Z_USBH_PID_OUT,
-                       dv->addr, 0, dv->xa_flags, dv->port, ctrl_tgl, 0,
-                       dv->mps0, Z_USBH_OFF_PCTRL(ctrl_dev) + ctrl_xferred, want,
+            xact_start(ce->ctrl_dir_in ? Z_USBH_PID_IN : Z_USBH_PID_OUT,
+                       dv->addr, 0, dv->xa_flags, dv->port, ce->ctrl_tgl, 0,
+                       dv->mps0, Z_USBH_OFF_PCTRL(d) + ce->ctrl_xferred, want,
                        Z_USBH_NAK_BUDGET);
-            ctrl_pend = 1;
+            ce->ctrl_pend = 1;
         }
-        ctrl_state = CS_DATA_RUN;
+        ce->ctrl_state = CS_DATA_RUN;
         break;
 
     case CS_STATUS:
         // ST_SHORT is a success: the device had less to give than we
         // asked for, which is normal and not an error.
-        if (st == Z_USBH_ST_NAK && ctrl_len &&
-            ctrl_soft_naks < CTRL_SOFT_NAKS) {
+        if (st == Z_USBH_ST_NAK && ce->ctrl_len &&
+            ce->ctrl_soft_naks < CTRL_SOFT_NAKS) {
             // RESUME the data stage, do not restart it.
             //
             // Auto-continue may already have moved several packets
@@ -391,33 +460,33 @@ static int ctrl_step(void)
             // act_len is what this transaction moved; the toggle it
             // left behind is in the same register, and a NAK does not
             // advance it.
-            ctrl_xferred += (uint16_t)Z_USBH_XS_LEN(s);
-            if (ctrl_xferred >= ctrl_len) {
-                ctrl_state = CS_STATUS;
+            ce->ctrl_xferred += (uint16_t)Z_USBH_XS_LEN(s);
+            if (ce->ctrl_xferred >= ce->ctrl_len) {
+                ce->ctrl_state = CS_STATUS;
                 break;
             }
-            ctrl_soft_naks++;
-            ctrl_delay_until = usbh_ticks() + CTRL_NAK_TICKS;
-            xact_start(ctrl_dir_in ? Z_USBH_PID_IN : Z_USBH_PID_OUT,
+            ce->ctrl_soft_naks++;
+            ce->ctrl_delay_until = usbh_ticks() + CTRL_NAK_TICKS;
+            xact_start(ce->ctrl_dir_in ? Z_USBH_PID_IN : Z_USBH_PID_OUT,
                        dv->addr, 0, dv->xa_flags, dv->port,
                        Z_USBH_XS_TOGGLE(s), 1, dv->mps0,
-                       Z_USBH_OFF_PCTRL(ctrl_dev) + ctrl_xferred,
-                       ctrl_len - ctrl_xferred, Z_USBH_NAK_BUDGET);
+                       Z_USBH_OFF_PCTRL(d) + ce->ctrl_xferred,
+                       ce->ctrl_len - ce->ctrl_xferred, Z_USBH_NAK_BUDGET);
             break;
         }
         if (st != Z_USBH_ST_OK && st != Z_USBH_ST_SHORT) {
             // With no data stage this is still the SETUP's result.
-            ctrl_err_stage = ctrl_len ? CE_DATA : CE_SETUP;
-            ctrl_state = CS_ERROR;
+            ce->ctrl_err_stage = ce->ctrl_len ? CE_DATA : CE_SETUP;
+            ce->ctrl_state = CS_ERROR;
             break;
         }
         // The status stage is a zero-length packet in the OPPOSITE
         // direction to the data, always DATA1.
-        xact_start(ctrl_dir_in ? Z_USBH_PID_OUT : Z_USBH_PID_IN,
+        xact_start(ce->ctrl_dir_in ? Z_USBH_PID_OUT : Z_USBH_PID_IN,
                    dv->addr, 0, dv->xa_flags, dv->port, 1, 0,
-                   dv->mps0, Z_USBH_OFF_PCTRL(ctrl_dev), 0,
+                   dv->mps0, Z_USBH_OFF_PCTRL(d), 0,
                    Z_USBH_NAK_BUDGET);
-        ctrl_state = CS_FINAL;
+        ce->ctrl_state = CS_FINAL;
         break;
 
     case CS_FINAL:
@@ -435,24 +504,24 @@ static int ctrl_step(void)
         // enumeration restarted and handed out a fresh address each
         // time -- which co-simulation caught as a device sitting at
         // address 4.
-        if (st == Z_USBH_ST_NAK && ctrl_soft_naks < CTRL_SOFT_NAKS) {
+        if (st == Z_USBH_ST_NAK && ce->ctrl_soft_naks < CTRL_SOFT_NAKS) {
             // Same for the status stage: a device that has not
             // finished acting on the request NAKs here, and
             // SET_ADDRESS is allowed 50 ms to complete.
-            ctrl_soft_naks++;
-            ctrl_delay_until = usbh_ticks() + CTRL_NAK_TICKS;
-            xact_start(ctrl_dir_in ? Z_USBH_PID_OUT : Z_USBH_PID_IN,
+            ce->ctrl_soft_naks++;
+            ce->ctrl_delay_until = usbh_ticks() + CTRL_NAK_TICKS;
+            xact_start(ce->ctrl_dir_in ? Z_USBH_PID_OUT : Z_USBH_PID_IN,
                        dv->addr, 0, dv->xa_flags, dv->port, 1, 0,
-                       dv->mps0, Z_USBH_OFF_PCTRL(ctrl_dev), 0,
+                       dv->mps0, Z_USBH_OFF_PCTRL(d), 0,
                        Z_USBH_NAK_BUDGET);
             break;
         }
         if (st != Z_USBH_ST_OK && st != Z_USBH_ST_SHORT) {
-            ctrl_err_stage = CE_STATUS;
-            ctrl_state = CS_ERROR;
+            ce->ctrl_err_stage = CE_STATUS;
+            ce->ctrl_state = CS_ERROR;
             break;
         }
-        ctrl_state = CS_DONE;
+        ce->ctrl_state = CS_DONE;
         break;
 
     case CS_DONE:
@@ -460,17 +529,17 @@ static int ctrl_step(void)
         break;
     }
 
-    return ctrl_state;
+    return ce->ctrl_state;
 }
 
 // True once the final transaction the engine launched has landed. The
 // engine sets CS_DONE when it STARTS the status stage, so a caller
 // must also see the bus go idle before believing the transfer is over.
-static int ctrl_finished(void)
+static int ctrl_finished(int d)
 {
     // CS_DONE is now only reached after the status stage's result has
     // been read, so it already implies the bus is idle.
-    return ctrl_state == CS_DONE;
+    return devs[d].ctrl_state == CS_DONE;
 }
 
 // ---------------------------------------------------------------
@@ -499,12 +568,12 @@ static void addr_free(int a)
     if (a >= 1 && a <= 7) addr_bitmap &= ~(1u << a);
 }
 
-// Is any port part-way through enumeration?
+// Does any port currently hold address zero?
 //
 // This started as "does someone hold address 0", which only had to
 // cover up to E_DESC18. It now covers the WHOLE sequence, because the
-// control transfer engine above -- ctrl_state, ctrl_dev, ctrl_dir_in,
-// ctrl_len, ctrl_xferred, ctrl_tgl -- is a single shared instance.
+// control transfer engine above -- ctrl_state, ctrl_dev, ce->ctrl_dir_in,
+// ctrl_len, ce->ctrl_xferred, ce->ctrl_tgl -- is a single shared instance.
 //
 // Two ports enumerating at once drive that one engine from two places:
 // each judges results belonging to the other's transfer, with the
@@ -519,11 +588,14 @@ static void addr_free(int a)
 //
 // The cost here is bounded: enumeration is a few hundred milliseconds
 // and only happens on a plug event.
-static int enum_busy(void)
+static int addr0_busy(void)
 {
     int i;
     for (i = 0; i < Z_USBH_MAX_PORTS; i++) {
-        if (devs[i].state > E_DEBOUNCE && devs[i].state < E_RUNNING)
+        // From the reset that puts a device on address 0 until
+        // SET_ADDRESS's status stage has moved it off it. E_DESC18 is
+        // the first state that talks to the new address.
+        if (devs[i].state > E_DEBOUNCE && devs[i].state < E_DESC18)
             return 1;
     }
     return 0;
@@ -544,10 +616,13 @@ static void dev_fail(z_usbh_dev_t *dv)
     // ctrl_step() sets the next stage when it LAUNCHES a transaction
     // and only checks the result on the following call. So the value
     // here names the stage whose result was just read.
-    dv->fail_ctrl = ctrl_err_stage;
+    dv->fail_ctrl = dv->ctrl_err_stage;
     if (dv->att_n < 4) {
+        dv->att_alen[dv->att_n] = (uint8_t)Z_USBH_XS_LEN(st);
+        dv->att_tgl[dv->att_n] = (uint8_t)Z_USBH_XS_TOGGLE(st);
+        dv->att_want[dv->att_n] = (uint8_t)dv->ctrl_tgl;
         dv->att_state[dv->att_n] = dv->state;
-        dv->att_ctrl[dv->att_n] = ctrl_err_stage;
+        dv->att_ctrl[dv->att_n] = dv->ctrl_err_stage;
         dv->att_status[dv->att_n] = dv->fail_status;
         dv->att_naks[dv->att_n] = dv->fail_naks;
         dv->att_n++;
@@ -609,7 +684,7 @@ static void port_step(int i)
     case E_DEBOUNCE:
         // The hardware has already debounced the attach. This state
         // exists to serialise address 0 between ports.
-        if (!enum_busy()) dv->state = E_RESET;
+        if (!addr0_busy()) dv->state = E_RESET;
         break;
 
     case E_RESET:
@@ -640,8 +715,8 @@ static void port_step(int i)
         break;
 
     case E_DESC8:
-        if (ctrl_step() == CS_ERROR) { dev_fail(dv); break; }
-        if (!ctrl_finished()) break;
+        if (ctrl_step(i) == CS_ERROR) { dev_fail(dv); break; }
+        if (!ctrl_finished(i)) break;
         dv->mps0 = z_usbh_rb(d + 7);
         dv->d_class = z_usbh_rb(d + 4);
         if (dv->mps0 < 8 || dv->mps0 > 64) dv->mps0 = 8;
@@ -649,16 +724,16 @@ static void port_step(int i)
         if (!a) { dev_fail(dv); break; }
         dv->addr = 0;
         ctrl_begin(i, 0, REQ_SET_ADDRESS, (uint16_t)a, 0, 0);
-        dv->cfg_len = (uint8_t)a;   // stash until the status stage lands
+        dv->pend_addr = (uint8_t)a;
         dv->state = E_SET_ADDR;
         break;
 
     case E_SET_ADDR:
-        if (ctrl_step() == CS_ERROR) { dev_fail(dv); break; }
-        if (!ctrl_finished()) break;
+        if (ctrl_step(i) == CS_ERROR) { dev_fail(dv); break; }
+        if (!ctrl_finished(i)) break;
         // A device only adopts its new address once the status stage
         // has completed, so this assignment cannot happen earlier.
-        dv->addr = dv->cfg_len;
+        dv->addr = dv->pend_addr;
         dv->deadline = usbh_ticks() + 4;
         dv->state = E_ADDR_SETTLE;
         break;
@@ -673,8 +748,8 @@ static void port_step(int i)
         break;
 
     case E_DESC18:
-        if (ctrl_step() == CS_ERROR) { dev_fail(dv); break; }
-        if (!ctrl_finished()) break;
+        if (ctrl_step(i) == CS_ERROR) { dev_fail(dv); break; }
+        if (!ctrl_finished(i)) break;
         // Full device descriptor is in the buffer now.
         dv->d_vid_lo = z_usbh_rb(d + 8);
         dv->d_vid_hi = z_usbh_rb(d + 9);
@@ -688,8 +763,8 @@ static void port_step(int i)
         break;
 
     case E_CONFIG9:
-        if (ctrl_step() == CS_ERROR) { dev_fail(dv); break; }
-        if (!ctrl_finished()) break;
+        if (ctrl_step(i) == CS_ERROR) { dev_fail(dv); break; }
+        if (!ctrl_finished(i)) break;
         // wTotalLength. Clamped to the scratch region rather than
         // trusted: a descriptor longer than the buffer is a device
         // bug, and reading it would walk into the sector area.
@@ -701,8 +776,8 @@ static void port_step(int i)
         break;
 
     case E_CONFIG_ALL:
-        if (ctrl_step() == CS_ERROR) { dev_fail(dv); break; }
-        if (!ctrl_finished()) break;
+        if (ctrl_step(i) == CS_ERROR) { dev_fail(dv); break; }
+        if (!ctrl_finished(i)) break;
         dv->cfg_val = z_usbh_rb(d + 5);
         dv->cfg_nif = z_usbh_rb(d + 4);
         dv->cfg_attr = z_usbh_rb(d + 7);
@@ -718,8 +793,8 @@ static void port_step(int i)
         break;
 
     case E_SET_CONFIG:
-        if (ctrl_step() == CS_ERROR) { dev_fail(dv); break; }
-        if (!ctrl_finished()) break;
+        if (ctrl_step(i) == CS_ERROR) { dev_fail(dv); break; }
+        if (!ctrl_finished(i)) break;
         dv->iface = (int8_t)z_usbh_hid_probe(dv->cfg_raw, dv->cfg_rawn);
         if (dv->iface < 0) { dv->state = E_BIND; break; }
         // Boot protocol, explicitly. A device whose interface declares
@@ -737,7 +812,7 @@ static void port_step(int i)
         // A STALL here is not fatal -- plenty of mice refuse
         // SET_PROTOCOL and are in boot protocol anyway. Carry on and
         // let the report layout speak for itself.
-        if (ctrl_step() == CS_ERROR || ctrl_finished()) {
+        if (ctrl_step(i) == CS_ERROR || ctrl_finished(i)) {
             ctrl_begin(i, HID_OUT_IFACE, REQ_SET_IDLE, 0,
                        (uint16_t)dv->iface, 0);
             dv->state = E_SET_IDLE;
@@ -750,7 +825,7 @@ static void port_step(int i)
         // auto-poll slot delivers duplicate reports to the compat
         // block, which sw/os/hid.c would see as repeated keypresses.
         // Also optional, also STALLed by some devices.
-        if (ctrl_step() == CS_ERROR || ctrl_finished())
+        if (ctrl_step(i) == CS_ERROR || ctrl_finished(i))
             dv->state = E_BIND;
         break;
 
@@ -769,6 +844,20 @@ static void port_step(int i)
         dv->blk = (int8_t)z_usbh_hid_bind(i, dv->addr, dv->xa_flags,
                                           dv->port, dv->cfg_raw,
                                           dv->cfg_rawn);
+        if (dv->blk < 0 &&
+            z_usbh_msc_bind(dv->addr, dv->xa_flags, dv->port,
+                            dv->mps0, dv->cfg_raw, dv->cfg_rawn)) {
+            // Claimed, but NOT started.
+            //
+            // z_usbh_msc_start() waits for the unit to report ready,
+            // which a card reader with no card can refuse for
+            // hundreds of milliseconds. This runs from the IRQ 9
+            // handler and the ktimer, so it must not block -- the
+            // geometry read happens in disk_initialize() instead,
+            // which FatFs calls from f_mount() in process context.
+            dv->cls = Z_USBH_CLASS_MSC;
+        }
+
         if (dv->blk >= 0) {
             dv->cls = Z_USBH_CLASS_HID;
             // An auto-poll slot counts FRAMES, so the frame timer has
@@ -824,7 +913,6 @@ void z_usbh_init(void)
     usbh_present = 0;
     usbh_any_ready = 0;
     addr_bitmap = 0;
-    ctrl_state = CS_IDLE;
 
     // -- the CONFIG magic is the probe, the feature bit is advisory --
     //
@@ -1009,6 +1097,7 @@ void z_usbh_dump(void)
                    typ_name(devs[i].blk == 0 ?
                             (int)((z_usbh_rd(Z_USBH_HID0_INFO) >> 24) & 3) :
                             (int)((z_usbh_rd(Z_USBH_HID1_INFO) >> 24) & 3)));
+        if (devs[i].cls == Z_USBH_CLASS_MSC) printf(" class=msc");
         if (devs[i].retries) printf(" retries=%d", devs[i].retries);
         printf("\n");
 
@@ -1024,6 +1113,10 @@ void z_usbh_dump(void)
                        status_name(devs[i].att_status[a]),
                        devs[i].att_naks[a],
                        devs[i].att_naks[a] == 1 ? "" : "s");
+            for (a = 0; a < devs[i].att_n; a++)
+                printf("usb:     %d: act_len=%d toggle got=%d want=%d\n",
+                       a + 1, devs[i].att_alen[a], devs[i].att_tgl[a],
+                       devs[i].att_want[a]);
         }
 
         if (devs[i].got_desc)
@@ -1222,7 +1315,7 @@ void z_usbh_buftest(void)
     // And the real thing: build the SETUP we would send and read it
     // straight back out of the buffer. This is the exact byte
     // sequence that goes on the wire after the token.
-    put_setup(DIR_IN, REQ_GET_DESCRIPTOR, (DESC_DEVICE << 8), 0, 8);
+    put_setup(0, DIR_IN, REQ_GET_DESCRIPTOR, (DESC_DEVICE << 8), 0, 8);
     printf("usb: setup packet reads back:");
     for (i = 0; i < 8; i++) printf(" %02x", z_usbh_rb(base + i));
     printf("\n");

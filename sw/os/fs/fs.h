@@ -89,4 +89,23 @@ int fs_open_read(FIL *f, char *path);
 int32_t fs_read_chunk(FIL *f, void *buf, uint32_t maxlen);
 int fs_close_read(FIL *f);
 
+// USB mass storage at /usb (FatFs drive 2). Mounted on demand, not at
+// boot: the drive appears when somebody plugs it in, and the mount
+// blocks while the unit reports ready, so it must run in process
+// context. sh.c's `usbmount` is the usual caller.
+bool fs_usb_mount(void);
+void fs_usb_unmount(void);
+bool fs_usb_mounted(void);
+
+// The synthetic roots -- /ram, /usb -- for anything that lists "/".
+//
+// They are path prefixes, not directories on the card, so f_readdir on
+// the root never mentions them. A caller listing "/" should emit these
+// alongside whatever FatFs returns. fs_mount_live() reports whether
+// the volume is actually mounted; an unplugged /usb should not appear
+// as an empty directory you can descend into.
+int fs_mount_count(void);
+const char *fs_mount_name(int i);
+int fs_mount_live(int i);
+
 #endif

@@ -41,7 +41,14 @@
 module tb_usb_device #(
     parameter MODE = 0,
     parameter [6:0] START_ADDR = 7'd0,
-    parameter integer MPS0 = 8
+    parameter integer MPS0 = 8,
+    // Nanoseconds a line takes to fall after the other has risen. 20
+    // is about one host sample at 48 MHz, which is what hardware
+    // shows. 0 disables it, so existing tests are unchanged.
+    parameter integer SKEW_NS = 0,
+    // Device clock error in parts per million, signed. The spec allows
+    // +-2500 at full speed and +-15000 at low speed.
+    parameter integer CLK_PPM = 0
 ) (
     inout wire dp,
     inout wire dm,
@@ -53,7 +60,28 @@ module tb_usb_device #(
 
     localparam real FS_NS = 83.3333;
     localparam real LS_NS = 666.6667;
-    localparam real BIT_NS = (MODE == 0) ? FS_NS : LS_NS;
+    // -- the device's clock is not the host's --
+    //
+    // USB 2.0 specifies +-0.25% at full speed and +-1.5% at low speed,
+    // and cheap devices sit near the edge of that. The host's receiver
+    // has to tolerate it: it aligns on SYNC and then samples on its
+    // own 48 MHz grid, so any difference accumulates across the packet.
+    //
+    // This model ran at exactly the nominal rate, so the harness
+    // measured a receiver against a transmitter that could never drift
+    // -- and the receive margin was therefore never tested at all.
+    // Sweep CLK_PPM to find where reception actually breaks.
+    localparam real BIT_NOM = (MODE == 0) ? FS_NS : LS_NS;
+    // TRANSMIT at the offset rate; RECEIVE at nominal.
+    //
+    // Deliberately asymmetric. The point of CLK_PPM is to measure the
+    // HOST's tolerance to a device whose clock is off, and this model
+    // samples incoming bits at a fixed rate with no resynchronisation
+    // at all -- far less tolerant than the host's DPLL. Skewing both
+    // directions measures the model, not the thing under test, and
+    // reports a host limit that is really a testbench limit.
+    localparam real BIT_NS = BIT_NOM * (1.0 + CLK_PPM / 1000000.0);
+    localparam real BIT_RX = BIT_NOM;
 
     localparam [3:0] PID_OUT   = 4'b0001;
     localparam [3:0] PID_IN    = 4'b1001;
@@ -73,7 +101,33 @@ module tb_usb_device #(
     reg drv_se0;
 
     wire [1:0] out_c = drv_se0 ? 2'b00 : (drv_j ? 2'b10 : 2'b01);
-    wire [1:0] out_p = INVERT ? {out_c[0], out_c[1]} : out_c;
+    wire [1:0] out_p_i = INVERT ? {out_c[0], out_c[1]} : out_c;
+
+    // -- transition skew, which real devices have and this did not --
+    //
+    // D+ and D- do not change on the same edge on real silicon. The
+    // host samples at 48 MHz, so a pair taking even 20 ns to settle
+    // appears as ONE SAMPLE of an illegal bus state in the middle of
+    // every J<->K transition.
+    //
+    // Captured on hardware inside a device's data packet:
+    //
+    //     KKKK X JJJJJJJ X KKK X JJJJJJJ X KKKK
+    //
+    // where X is SE1, and the run lengths are 7 and 3 instead of the
+    // multiples of 4 a clean full-speed packet gives.
+    //
+    // This model drove both lines from one expression, so it could
+    // never produce that, and co-simulation was blind to the entire
+    // class of receive failure that stopped every full-speed device on
+    // hardware. Three attempts at fixing the receiver were evaluated
+    // against a test that could not reproduce the fault; two of them
+    // regressed real hardware and had to be reverted.
+    //
+    // Asymmetric delay: a line rises immediately and falls SKEW_NS
+    // late, so the overlap is both-high -- the SE1 hardware shows.
+    wire [1:0] out_p;
+    assign #(0, SKEW_NS) out_p = out_p_i;
 
     // Gated on attach as well as drv_en. The testbench hangs several
     // models off one port and enables one at a time, and a detached
@@ -293,7 +347,7 @@ module tb_usb_device #(
 `ifdef USB_TRACE
             $display("[dev %0t] sync K detected", $time);
 `endif
-            #(BIT_NS / 2.0);
+            #(BIT_RX / 2.0);
 
             prev_lvl = 1'b1;
             sync_done = 1'b0;
@@ -325,7 +379,7 @@ module tb_usb_device #(
                             end
                         end
                     end
-                    #(BIT_NS);
+                    #(BIT_RX);
                 end
             end
 

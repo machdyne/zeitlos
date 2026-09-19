@@ -1,14 +1,27 @@
 # Zeitlos USB Host Controller
 
-**STATUS: phases 0 through 3 complete. WORKING ON HARDWARE** --
-a low-speed keyboard and mouse enumerate together on mozart_ml1 and
-both deliver reports through the auto-poll slots.
+**STATUS: phases 0 through 4 working on hardware, phase 5 partial.**
 
-The controller is instantiated in `rtl/sysctl.v`, synthesises as part
-of the whole SoC, and the kernel builds with the stack linked in. The
-driver and the gateware are exercised against each other in
-simulation -- `make test_usb_cosim` enumerates a device end to end and
-moves the hardware cursor. Nothing has run on a board.
+Measured on mozart_ml1 (ECP5 45F):
+
+| | |
+|---|---|
+| Low-speed keyboard and mouse, both ports at once | enumerate, bind, auto-poll slots live |
+| Full-speed CDC | enumerates |
+| Full-speed mass storage -- stick and card reader | enumerates, `class=msc` |
+| USB hub (05e3:0608) | enumerates |
+| `usbmount` then `ls /usb` | lists a real FAT filesystem over USB |
+| Receive errors | **zero** at both speeds |
+| Whole-SoC Fmax | 55.07 MHz against a 48 MHz clock |
+
+Phase 4's hub *class driver* is not written -- a hub enumerates like
+any other device, but nothing behind it is reachable yet.
+
+Phase 5 reads directory listings correctly and then truncates larger
+reads; see [Mass storage status](#mass-storage-status).
+
+The controller is instantiated in `rtl/sysctl.v`, and
+`make test_usb_cosim` runs the real driver against the real gateware.
 
 The bit level, the port front end, the transaction engine, the
 Wishbone top, the HID compatibility blocks and the auto-poll engine
@@ -22,13 +35,17 @@ links into the kernel and fits. What has NOT happened is
 `rtl/sysctl.v` instantiating the controller, and nothing has run on
 hardware or against the RTL.
 
-This is the Phase 0 deliverable of the project to replace
-`rtl/ext/usb_hid_host` with a Zeitlos-native, dual-port, full-speed USB
-host controller supporting HID, hubs, mass storage and CDC. It is the
-document to argue with before any RTL exists, because everything after
-Phase 1 is expensive to change and the register map in particular is a
-contract with `sw/os/hid.c`, `sw/apps/wm/wm.c` and every future class
-driver at once.
+This replaces `rtl/ext/usb_hid_host` with a Zeitlos-native, dual-port,
+full-speed USB host controller supporting HID, hubs, mass storage and
+CDC.
+
+It began as the Phase 0 design document -- the thing to argue with
+before any RTL existed -- and the register map is still a contract
+with `sw/os/hid.c`, `sw/apps/wm/wm.c` and every class driver at once.
+The design sections below are unchanged from that; the results and
+bring-up sections were written afterwards, against hardware, and
+several of them record where the design's assumptions turned out to be
+wrong.
 
 Read [user_input.md](user_input.md) first for what the *current*
 `usb_hid_host`-based ports do and how software consumes them. This
@@ -48,6 +65,7 @@ document says what replaces it and why.
 - [Interrupts](#interrupts)
 - [Software stack](#software-stack)
 - [Mass storage and the filesystem](#mass-storage-and-the-filesystem)
+- [Mass storage status](#mass-storage-status)
 - [CDC](#cdc)
 - [Resource budget](#resource-budget)
 - [Board and electrical notes](#board-and-electrical-notes)
@@ -1051,10 +1069,10 @@ is how it will actually be used.
 |---|---|---|
 | **0** | This document | **Done.** Register map and hw/sw line agreed |
 | **1** | `usb_sie.v`, `usb_port.v`, `usb_xact.v`, `usb_host.v`, device model TB. FS, **with LS and PRE rate switching designed in** | **Done.** Control transfer completes in simulation; LS-direct and LS-via-PRE both exercised; utilisation measured -- see [Phase 1 results](#phase-1-results) |
-| **2** | Software enumeration, HID driver, `usb_hid_compat.v`, **auto-poll and the hardware cursor datapath** | **Gateware done**, software outstanding. Cursor has zero CPU in its path, verified. `wm.c`, `gpu3d.c`, `bios.c` untouched |
-| **3** | Second root port, hotplug, simultaneous mixed LS/FS | **Done in simulation.** Hot-swap either port in any order; mixed speeds concurrent; compat blocks and addresses returned on unplug. See [Phase 3 results](#phase-3-results) |
-| **4** | Hub class driver, multi-device addressing, port-change endpoint, `tb_usb_hub.v`, **PRE validated against real hardware** | Mouse + keyboard on one hub, LS and FS mixed |
-| **5** | Bulk, MSC, SCSI, FatFs drive 2 at `/usb`, `auto_cont` | Mouse + keyboard + stick simultaneously through a hub; copy and checksum both directions |
+| **2** | Software enumeration, HID driver, `usb_hid_compat.v`, **auto-poll and the hardware cursor datapath** | **Done on hardware.** Keyboard and mouse both bind and deliver reports; cursor has zero CPU in its path. `wm.c`, `gpu3d.c`, `bios.c` untouched |
+| **3** | Second root port, hotplug, simultaneous mixed LS/FS | **Done on hardware.** Both ports populated at once, mixed speeds, hot-swap in any order. See [Phase 3 results](#phase-3-results) |
+| **4** | Hub class driver, multi-device addressing, port-change endpoint, `tb_usb_hub.v`, **PRE validated against real hardware** | **Partial.** A hub enumerates on hardware and concurrent enumeration is unblocked (control state is per-device, only address zero serialised). No class driver, so nothing behind the hub is reachable |
+| **5** | Bulk, MSC, SCSI, FatFs drive 2 at `/usb`, `auto_cont` | **Partial.** Bulk transport, CBW/CSW and SCSI work; `/usb` mounts and lists a real filesystem. Larger reads truncate -- see [Mass storage status](#mass-storage-status) |
 | **6** | CDC-ACM, scroll wheel, keyboard LEDs via `Set_Report` | |
 | **7** | Hardening, error recovery, benchmarks against SD. Optionally USB Ethernet, optionally bus-mastering DMA | |
 
@@ -1643,11 +1661,12 @@ Three separate bugs, all invisible with a single device plugged in:
   results with the wrong direction and length, producing a STALL on
   the data stage and babble on the status stage.
 
-Enumeration is currently **serialised** by `enum_busy()` as the small
-fix. The proper fix is moving the control state into `z_usbh_dev_t` so
-transfers can overlap; that matters for hubs, where several devices
-behind one enumerating strictly one at a time gets slow. See
-[Phase 4](#phases).
+Enumeration was serialised as a stopgap, and the control state now
+lives **per device** in `z_usbh_dev_t`. Only address zero is
+serialised, which is the part the protocol actually requires: a freshly
+reset device answers on 0, so two of them mid-enumeration would both
+reply to the same token. Everything after `SET_ADDRESS` overlaps
+freely, which is what hubs need.
 
 ### Parsing must use a saved copy
 
@@ -1680,6 +1699,163 @@ cannot wedge, but they burn bus time and will matter for mass storage.
 Two attempts to blank the receiver across the handover both regressed
 the board and were reverted; it is worth another pass now that there
 is a working baseline to measure against.
+
+## Timing, and receive margin
+
+Two defects found after the device classes were working, both of which
+had been silently distorting every earlier measurement.
+
+### The SoC stopped meeting timing
+
+| Build | Fmax | |
+|---|---|---|
+| `USB_HID` | 52.5 MHz | pass |
+| `USB_HOST`, as first written | 45.30 MHz | **FAIL at 48** |
+| `USB_HOST`, now | **55.07 MHz** | pass |
+
+The failing path was 17.8 ns of routing against 4.2 ns of logic --
+congestion, not depth. `wb_adr_i` was decoded combinationally in
+sixteen places across six always blocks, so the top-level `wbm_adr`
+net, which the arbiter's mux drives and every slave already loads,
+gained that many more sinks.
+
+The inputs are now latched once on entry and every decode works from
+the copies, presenting eleven flop inputs instead. It costs one wait
+state per register access, which nothing notices.
+
+**This was running below 48 MHz for weeks.** The symptom was
+intermittent receive CRC errors that moved between builds, and several
+days went into chasing the receive path for a fault that was not
+there. LUT4 and BRAM were tracked throughout development; Fmax never
+was. `make usb_fmax BOARD=<board>` now exists.
+
+Registering the inputs also introduced a bug worth recording: moving
+`wb_ack_o` a cycle later made `wb_sel_cyc && !wb_ack_o` true for TWO
+cycles, so every poll-table write, compat-block write, `XACT_B` start
+and `IRQSTAT` clear fired twice. Co-simulation caught it immediately.
+There is now a single `wb_wr_stb` that all of them key off.
+
+### The receiver failed the full-speed spec limit
+
+`phase` is reset when an edge is **detected**, which is one cycle after
+it appears -- `ls_changed` compares the synchronised line against its
+registered copy. Sampling at `DIV/2` therefore landed `DIV/2 + 1`
+clocks after the real edge: 75% of the way into a four-clock
+full-speed bit rather than the middle.
+
+Invisible against a transmitter running at exactly nominal, which is
+all `tb_usb_device.v` could produce. Given a `CLK_PPM` parameter, the
+bias showed immediately:
+
+| | before | after |
+|---|---|---|
+| full speed, slow device | +10000 ppm ok | +20000 ppm ok |
+| full speed, **fast** device | **fails at -2500 ppm** | -20000 ppm ok |
+| spec requires | ±2500 ppm | |
+
+All the margin was on one side and it failed *at* the limit on the
+other. `mid` is now `(DIV >> 1) - 1`. Low speed measures ±20000 ppm
+against a ±15000 requirement.
+
+`make test_usb_margin` runs this and should stay part of any change to
+the receive path.
+
+### A measurement that nearly became a wrong conclusion
+
+The first tolerance run reported 5000-7000 ppm at low speed against a
+15000 requirement -- a 3x spec shortfall. It was wrong. `CLK_PPM`
+skewed the model's **own** receive sampler as well, and that sampler is
+fixed-rate with no resynchronisation, far less tolerant than the host's
+DPLL. The harness was measuring itself.
+
+Skewing only the model's transmit path changed the answer from "3x
+short of spec" to "2x better than spec". Worth remembering whenever a
+testbench reports a limit: check which side of it is under test.
+
+### What skew did not explain
+
+`SKEW_NS` reproduces the one-sample SE1 real devices emit at every
+transition. The receiver tolerates it up to 60 ns -- 72% of a
+full-speed bit -- because `ls_stable` holds the last legal state
+regardless of duration. So transition skew alone does **not** account
+for the residual hardware error rate, and the theory carried for
+several rounds was wrong.
+
+## Mass storage status
+
+`usbh_msc.c` implements bulk-only transport and the SCSI commands a
+block device needs, `diskio_mux.c` serves FatFs drive 2, and `/usb`
+mounts from the shell with `usbmount`. On hardware, `ls /usb` lists a
+real FAT filesystem.
+
+### The open bug
+
+Larger reads are **truncated**. A 512-byte `READ(10)` returns 13
+bytes, and dumping those bytes shows `EB 3C 90 6D` -- the jump
+instruction and the start of the OEM name in a FAT boot sector. That
+is real sector data, so:
+
+- the device is sending the sector
+- there is no stale CSW and no transport desynchronisation
+- only the first few bytes are captured, and because 13 is less than
+  the 64-byte maximum packet size the hardware treats it as a short
+  packet and ends the auto-continue
+
+Earlier readings of 141 and 31 bytes are the same fault. They were
+attributed to three different causes at the time -- 141 as "128 bytes
+plus a swallowed 13-byte CSW", 13 as "a CSW where data belongs" --
+by fitting each number to whatever theory was current rather than
+checking it. Recorded because the pattern matters more than the
+arithmetic.
+
+Where to look, most likely first:
+
+1. **The `pending`-assert wait in `bulk_xfer()`.** Writing `XACT_B`
+   with START does not assert `pending` in the same cycle -- the block
+   registers its Wishbone inputs, so the write lands a cycle later.
+   A guard for this was added and then reverted with the rest; it
+   bounded its spin and fell through regardless, so a missed assert
+   reads a stale status, and a stale `act_len` looks exactly like a
+   short count.
+2. **`act_len` accumulation across auto-continue packets** in
+   `usb_xact.v`. Nothing has exercised an eight-packet transfer:
+   control transfers are paced one packet at a time in software.
+3. **Genuine packet loss** -- least likely, `bad` is zero everywhere.
+
+The cheap discriminator is one line: print `msc.last_status` alongside
+the short length. `ST_SHORT` means the hardware genuinely saw a short
+packet; `ST_OK` with 13 bytes means the COUNT is wrong rather than the
+transfer.
+
+### Known-good but reverted
+
+Three changes were made after the working directory listing and rolled
+back together, because they moved the failure earlier -- from "opening
+a file" to "mounting at all" -- on a diagnosis that turned out to be
+wrong. Two are worth reapplying once the truncation is understood:
+
+- **Always drain the CSW.** `scsi_cmd()` currently returns from a
+  failed data stage without reading the status wrapper. Bulk-only
+  transport is a strict three-phase sequence and the device still owes
+  a CSW; leaving it in the pipe puts the stream one transaction out of
+  step permanently, and every later command reads the previous one's
+  status. This is a genuine latent bug.
+- **Reject short sector reads.** A device that promises 512 bytes and
+  delivers fewer leaves the rest of the buffer holding whatever the
+  previous command left there. Handing that to FatFs as file content
+  is worse than failing.
+
+### Also outstanding
+
+- One sector per SCSI command, because the packet buffer holds one.
+  FatFs often asks for several, so a directory scan is slower than it
+  needs to be. Fixing it needs a larger landing area, not a protocol
+  change.
+- No endpoint recovery after a STALL. The spec wants
+  `CLEAR_FEATURE(HALT)` on the stalled endpoint followed by a CSW
+  read; this reports the stall and does not repair it.
+- Writes are implemented and have never been exercised.
+- `msc_verbose` defaults on. Turn it off once reads are reliable.
 
 ## Co-simulation
 
@@ -1745,9 +1921,30 @@ The first two are gateware defects that would have reached a board.
 
 ## Testing
 
-Hardware this fiddly is not debugged on a board. Simulation carries the
-weight, following the pattern `rtl/gpu/bench` and `rtl/tb` already
-establish.
+Four targets, and each exists because something got through the others:
+
+    make test_usb           # 26 gateware checks against a device model
+    make test_usb_cosim     # 14 checks, real driver against real RTL
+    make test_usb_margin    # receive tolerance to device clock error
+    make usb_fmax BOARD=x   # whole-SoC Fmax, place-and-route
+
+`test_usb_margin` and `usb_fmax` were added late, after two defects
+that neither of the first two could see: the SoC running below its own
+clock for weeks, and a receiver that failed the full-speed clock
+tolerance spec in one direction. Area was tracked throughout
+development; timing was not. Both are in
+[Timing, and receive margin](#timing-and-receive-margin).
+
+Hardware this fiddly is not debugged on a board -- but the limit of
+that is worth stating plainly, because this project found it. Every
+bug in [Hardware bring-up](#hardware-bring-up) needed something the
+device model did not do: a real pull-up holding the idle line, a
+device that suspends, one that NAKs mid-descriptor, a second
+interface, two devices enumerating at the same instant, a transmitter
+whose clock is off, and a bus handover with real skew. Simulation
+carries the weight it can, following the pattern `rtl/gpu/bench` and
+`rtl/tb` already establish, and the model has since grown `SKEW_NS`
+and `CLK_PPM` for exactly this reason.
 
 **`tb_usb_device.v`** — a behavioural device: responds to SETUP, returns
 a configurable descriptor set, NAKs on demand, STALLs on demand, can be

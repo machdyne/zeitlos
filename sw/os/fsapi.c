@@ -411,6 +411,34 @@ z_obj_t *k_fs_list(z_obj_t *args) {
 	uint32_t written = 0;
 	uint32_t count = 0;
 
+	// -- the synthetic roots come first --
+	//
+	// /ram and /usb are path prefixes rewritten by fs_path_resolve(),
+	// not directories on the card, so f_readdir() never mentions them
+	// and the file browser showed no sign the volumes existed. Emit
+	// them here when the caller is listing "/".
+	//
+	// Only mounted ones: an unplugged /usb appearing as an empty
+	// directory you can descend into is worse than it not being there.
+	if (dir_path[0] == '/' && dir_path[1] == 0) {
+		int mi;
+		for (mi = 0; mi < fs_mount_count() && count < max_entries; mi++) {
+			const char *mn = fs_mount_name(mi);
+			size_t mlen;
+			if (!mn || !fs_mount_live(mi)) continue;
+			mlen = strlen(mn);
+			if (prefix_len + mlen + 1 > a->out_cap - written) {
+				a->truncated = 1;
+				break;
+			}
+			if (a->types) a->types[count] = Z_FS_TYPE_DIR;
+			memcpy(a->out + written, prefix, prefix_len);
+			memcpy(a->out + written + prefix_len, mn, mlen + 1);
+			written += (uint32_t)(prefix_len + mlen + 1);
+			count++;
+		}
+	}
+
 	FILINFO fno;
 	while (count < max_entries) {
 

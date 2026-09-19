@@ -936,6 +936,19 @@ void sh(void) {
 			}
 		}
 
+		// MOUNT / UNMOUNT USB MASS STORAGE AT /usb
+		//
+		// Explicit rather than automatic on plug. Mounting blocks
+		// while the unit reports ready -- a card reader with no card
+		// can refuse for a long time -- and the enumeration path runs
+		// from an interrupt, so it cannot do this itself.
+		else if (!strncmp(buffer, "usbmount", cmdlen)) {
+			fs_usb_mount();
+		}
+		else if (!strncmp(buffer, "usbunmount", cmdlen)) {
+			fs_usb_unmount();
+		}
+
 		// LIST USB DEVICES (rtl/usb/, docs/usb_host.md)
 		//
 		// Named after the tool everyone already knows. Worth more
@@ -1894,6 +1907,8 @@ void sh_help(void) {
 	printf(" hd <addr>         hex dump memory\n");
 	printf(" probe             dump logic analyser capture "
 		"(needs -DPROBE)\n");
+	printf(" usbmount          mount usb storage at /usb\n");
+	printf(" usbunmount        unmount /usb\n");
 	printf(" lsusb             usb devices and port state\n");
 	printf(" usbidle           release usb ports, read raw lines\n");
 	printf(" usbbuf            usb packet buffer round-trip test\n");

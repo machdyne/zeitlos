@@ -87,6 +87,9 @@ module usb_host #(
     // implicitly declares the name as a fresh undriven wire and only
     // warns, so the probe armed and never fired.
     output wire tx_active_o,
+    // Which port that transmission is going to, so a probe watching
+    // one port's pins can ignore traffic aimed at the other.
+    output wire tx_port_o,
 
     output wire int_o
 );
@@ -118,6 +121,7 @@ module usb_host #(
     localparam W_BWAIT = 3'd2;
     localparam W_BCAP  = 3'd3;
     localparam W_ACK   = 3'd4;
+    localparam W_DEC   = 3'd5;
 
     localparam PID_SOF = 4'b0101;
 
@@ -145,6 +149,11 @@ module usb_host #(
     reg sw_req;
     reg sched_start;
     reg sched_is_sof;
+    // Latched at schedule time: is the transaction now going out an
+    // IN token? rtl/probe.v triggers on this so a capture lands on the
+    // transaction whose REPLY we want to see, rather than on the
+    // SETUP, whose reply is a 16-bit ACK that already decodes fine.
+    reg tx_is_in;
     reg [1:0] sched_pid;
     reg [6:0] sched_addr;
     reg [3:0] sched_endp;
@@ -279,8 +288,7 @@ module usb_host #(
 
     // A write of 1 to an IRQSTAT change bit acknowledges the port that
     // raised it. irqstat bit 1 is port 0, bit 2 is port 1.
-    wire irq_w1c = wb_cyc_i && wb_stb_i && wb_we_i && !wb_ack_o &&
-                   (wb_adr_i[10:9] != 2'b10) && (wb_adr_i == A_IRQSTAT);
+    wire irq_w1c = wb_wr_stb && (adr_q == A_IRQSTAT);
 
     wire sie_dp_o, sie_dm_o, sie_oe;
     wire [10:0] sie_tx_idx;
@@ -341,15 +349,57 @@ module usb_host #(
     wire [10:0] xb_len = xact_b[21:11];
     wire [3:0] xb_nak = xact_b[25:22];
 
+    // -- the bus inputs are REGISTERED before anything decodes them --
+    //
+    // wb_adr_i used to be decoded combinationally in sixteen places
+    // across six always blocks, so the top-level wbm_adr net -- which
+    // the arbiter's address mux drives, and which every slave on the
+    // bus already loads -- picked up that many more sinks when this
+    // block was added.
+    //
+    // That cost real frequency: the whole SoC went from 52.5 MHz with
+    // `USB_HID to 45.3 MHz with `USB_HOST, below the 48 MHz it runs
+    // at. The failing path was 17.8 ns of routing against 4.2 ns of
+    // logic -- congestion, not depth -- so the fix is to stop being a
+    // big distributed load, not to shorten a chain.
+    //
+    // Latching once here presents eleven flop inputs instead, and the
+    // decode below works from the copy.
+    //
+    // It costs one wait state on a register access. Nothing notices:
+    // the driver polls, and a buffer access already takes six cycles
+    // for its four-byte walk.
+    //
+    // wb_is_buf stays on the LIVE address because W_IDLE has to
+    // choose a path in the cycle the strobe arrives, before the latch
+    // has happened.
     wire wb_is_buf = (wb_adr_i[10:9] == 2'b10);
-    wire wb_is_poll = (wb_adr_i[10:3] == 8'h10);
+
+    reg [10:0] adr_q;
+    reg [31:0] dat_q;
+    reg [3:0] sel_q;
+    reg we_q;
+
+    wire wb_is_poll = (adr_q[10:3] == 8'h10);
     // The HID compat window: block 0 at words 0x00-0x04, block 1 at
     // 0x08-0x0c. rtl/sysctl.v's existing decode splits the two on
     // address bit 5, which is word-address bit 3.
-    wire wb_is_hid = (wb_adr_i[10:4] == 7'd0);
-    wire [2:0] hid_reg = wb_adr_i[2:0];
-    wire hid_blk = wb_adr_i[3];
+    wire wb_is_hid = (adr_q[10:4] == 7'd0);
+    wire [2:0] hid_reg = adr_q[2:0];
+    wire hid_blk = adr_q[3];
     wire wb_sel_cyc = wb_cyc_i && wb_stb_i;
+
+    // THE cycle on which a register write takes effect.
+    //
+    // Everything that acts on a write -- the poll table, the compat
+    // blocks, the XACT_B start bit, the IRQSTAT write-1-to-clear --
+    // must key off this and nothing else. They used to test
+    // "wb_sel_cyc && !wb_ack_o", which was exactly one cycle while
+    // the decode was combinational. Registering the address made the
+    // ack land a cycle later, so that condition became true TWICE and
+    // every one of those writes happened twice. Co-simulation caught
+    // it instantly as devices enumerating at address 4 and 5.
+    wire wb_wr_stb = (ws == W_DEC) && we_q;
 
     assign int_o = |(irqstat & irqen[5:0]);
 
@@ -616,6 +666,21 @@ module usb_host #(
     // longer than the 3 ms a low-speed device waits before suspending.
     wire [PORTS-1:0] p_ka_ok = p_enabled | p_resetting;
 
+    // Same rule for full speed, where the keepalive's job is done by
+    // an actual SOF packet.
+    //
+    // The SOF branches below were gated on p_enabled, which is not set
+    // until reset recovery ENDS -- so a full-speed device got 10 ms of
+    // idle bus immediately after its reset, suspended, and ignored the
+    // first SETUP. Identical mechanism to the low-speed keepalive bug,
+    // and identical symptom: no response at all while the lines read a
+    // perfectly healthy J.
+    //
+    // Excludes the reset phase itself, where the port drives SE0 and a
+    // SOF would just be stamped out.
+    wire [PORTS-1:0] p_sof_ok =
+        p_enabled | (p_resetting & ~p_drive_se0);
+
     assign p_ka = sof_pending & p_lowspeed & p_ka_ok &
                   {PORTS{~x_busy}};
 
@@ -635,7 +700,7 @@ module usb_host #(
 
     generate
         for (gi = 0; gi < PORTS; gi = gi + 1) begin : chack
-            assign p_change_ack[gi] = irq_w1c && wb_dat_i[1 + gi];
+            assign p_change_ack[gi] = irq_w1c && dat_q[1 + gi];
         end
     endgenerate
 
@@ -656,6 +721,7 @@ module usb_host #(
             poll_pending <= 4'd0;
             sched_is_poll <= 1'b0;
             sched_is_sof <= 1'b0;
+            tx_is_in <= 1'b0;
             cap_idx <= 4'd0;
             // The result registers MUST come out of reset defined.
             // Software reads XACT_S before its first transaction --
@@ -702,7 +768,7 @@ module usb_host #(
 
             if (!x_busy && !sched_start) begin
 
-                if (sof_pending[0] && !p_lowspeed[0] && p_enabled[0]) begin
+                if (sof_pending[0] && !p_lowspeed[0] && p_sof_ok[0]) begin
 
                     sof_pending[0] <= 1'b0;
                     sched_is_sof <= 1'b1;
@@ -719,7 +785,7 @@ module usb_host #(
                     sched_start <= 1'b1;
 
                 end else if ((PORTS > 1) && sof_pending[PORTS-1] &&
-                             !p_lowspeed[PORTS-1] && p_enabled[PORTS-1]) begin
+                             !p_lowspeed[PORTS-1] && p_sof_ok[PORTS-1]) begin
 
                     sof_pending[PORTS-1] <= 1'b0;
                     sched_is_sof <= 1'b1;
@@ -741,6 +807,7 @@ module usb_host #(
                     sched_is_sof <= 1'b0;
                     sched_is_poll <= 1'b0;
                     sched_pid <= xa_pid;
+                    tx_is_in <= (xa_pid == 2'd1);
                     sched_addr <= xa_addr;
                     sched_endp <= xa_endp;
                     sched_ls <= xa_ls;
@@ -858,18 +925,17 @@ module usb_host #(
                 end
             end
 
-            if (wb_sel_cyc && wb_we_i && !wb_ack_o && wb_is_poll) begin
-                if (wb_adr_i[0]) poll_b[wb_adr_i[2:1]] <= wb_dat_i;
-                else poll_a[wb_adr_i[2:1]] <= wb_dat_i;
+            if (wb_wr_stb && wb_is_poll) begin
+                if (adr_q[0]) poll_b[adr_q[2:1]] <= dat_q;
+                else poll_a[adr_q[2:1]] <= dat_q;
             end
 
-            if (wb_sel_cyc && wb_we_i && !wb_ack_o && wb_is_hid &&
-                (hid_reg == 3'd0)) begin
+            if (wb_wr_stb && wb_is_hid && (hid_reg == 3'd0)) begin
                 // The kernel assigns the device type; nothing infers
                 // it any more. Writing the info register is how, and
                 // it is the only bit of that register that is
                 // writable -- see docs/usb_host.md.
-                typ_wval <= wb_dat_i[25:24];
+                typ_wval <= dat_q[25:24];
                 typ0_we <= !hid_blk;
                 typ1_we <= hid_blk;
             end
@@ -898,13 +964,11 @@ module usb_host #(
             // transaction software asked for ran exactly twice, and
             // the second one overwrote the first one's result just as
             // the driver went to read it.
-            if (wb_sel_cyc && wb_we_i && !wb_ack_o && !wb_is_buf &&
-                (wb_adr_i == A_XACT_B) && wb_dat_i[31])
+            if (wb_wr_stb && (adr_q == A_XACT_B) && dat_q[31])
                 sw_req <= 1'b1;
 
-            if (wb_sel_cyc && wb_we_i && !wb_ack_o && !wb_is_buf &&
-                (wb_adr_i == A_IRQSTAT))
-                irqstat <= irqstat & ~wb_dat_i[5:0];
+            if (wb_wr_stb && (adr_q == A_IRQSTAT))
+                irqstat <= irqstat & ~dat_q[5:0];
 
         end
 
@@ -955,6 +1019,12 @@ module usb_host #(
             W_IDLE: begin
                 if (wb_sel_cyc && !wb_ack_o) begin
 
+                    // Latch everything the decode needs, once.
+                    adr_q <= wb_adr_i;
+                    dat_q <= wb_dat_i;
+                    sel_q <= wb_sel_i;
+                    we_q <= wb_we_i;
+
                     if (wb_is_buf) begin
 
                         bcnt <= 2'd0;
@@ -963,12 +1033,25 @@ module usb_host #(
 
                     end else begin
 
-                        if (wb_we_i) begin
-                            case (wb_adr_i)
-                            A_CTRL:  ctrl <= wb_dat_i;
-                            A_IRQEN: irqen <= wb_dat_i;
-                            A_XACT_A: xact_a <= wb_dat_i;
-                            A_XACT_B: xact_b <= wb_dat_i;
+                        ws <= W_DEC;
+
+                    end
+
+                end
+            end
+
+            // Register access, one cycle after the strobe, working
+            // entirely from the latched copies.
+            W_DEC: begin
+                begin
+                    begin
+
+                        if (we_q) begin
+                            case (adr_q)
+                            A_CTRL:  ctrl <= dat_q;
+                            A_IRQEN: irqen <= dat_q;
+                            A_XACT_A: xact_a <= dat_q;
+                            A_XACT_B: xact_b <= dat_q;
                             default: ;
                             endcase
                         end
@@ -983,10 +1066,10 @@ module usb_host #(
                             default: wb_dat_o <= 32'd0;
                             endcase
                         end else if (wb_is_poll) begin
-                            wb_dat_o <= wb_adr_i[0] ? poll_b[wb_adr_i[2:1]]
-                                                    : poll_a[wb_adr_i[2:1]];
+                            wb_dat_o <= adr_q[0] ? poll_b[adr_q[2:1]]
+                                                 : poll_a[adr_q[2:1]];
                         end else
-                        case (wb_adr_i)
+                        case (adr_q)
                         A_CTRL: wb_dat_o <= ctrl;
                         // Bit 5 of each byte is overcurrent, wired to
                         // zero: these ports are D+/D-, 22R and a 15k
@@ -1029,6 +1112,7 @@ module usb_host #(
                         endcase
 
                         wb_ack_o <= 1'b1;
+                        ws <= W_IDLE;
 
                     end
 
@@ -1038,11 +1122,11 @@ module usb_host #(
             // -- the four-byte buffer walk --
 
             W_BADR: begin
-                wb_badr <= {wb_adr_i[8:0], bcnt};
-                if (wb_we_i) begin
-                    if (wb_sel_i[bcnt]) begin
+                wb_badr <= {adr_q[8:0], bcnt};
+                if (we_q) begin
+                    if (sel_q[bcnt]) begin
                         wb_bwe <= 1'b1;
-                        wb_bwdat <= wb_dat_i[{bcnt, 3'b000} +: 8];
+                        wb_bwdat <= dat_q[{bcnt, 3'b000} +: 8];
                     end
                     ws <= W_BCAP;
                 end else begin
@@ -1053,7 +1137,7 @@ module usb_host #(
             W_BWAIT: ws <= W_BCAP;
 
             W_BCAP: begin
-                if (!wb_we_i)
+                if (!we_q)
                     wb_bacc[{bcnt, 3'b000} +: 8] <= wb_brdat;
                 bcnt <= bcnt + 2'd1;
                 if (bcnt == 2'd3) ws <= W_ACK;
@@ -1074,6 +1158,21 @@ module usb_host #(
 
     end
 
-    assign tx_active_o = sie_tx_active;
+    // Deliberately NOT a plain sie_tx_active.
+    //
+    // Narrowed again to IN transactions only. Excluding SOFs was not
+    // enough: a capture triggered on the SETUP shows the token, our
+    // DATA0 and the device's ACK -- all of which decode perfectly --
+    // and stops before the IN whose reply is the packet that actually
+    // fails its CRC.
+    //
+    // At full speed a SOF goes out every frame, so "the transmitter
+    // became active" is almost always a SOF -- and rtl/probe.v, armed
+    // and triggering on the first edge it sees, captured one every
+    // time: 34 bit times of token followed by the rest of the window
+    // full of idle J. Excluding SOFs makes the trigger land on a real
+    // transaction, which is the only thing worth a capture.
+    assign tx_active_o = sie_tx_active & ~sched_is_sof & tx_is_in;
+    assign tx_port_o = x_port_sel;
 
 endmodule

@@ -2944,6 +2944,7 @@ module sysctl #()
 	wire wbs_usb1_int;
 	wire wbs_usbh_int;
 	wire wbs_usbh_tx_active;
+	wire wbs_usbh_tx_port;
 	wire [31:0] wbs_usbh_dat_o;
 	wire wbs_usbh_ack_o;
 	wire wbm_cyc_usbh = cs_usbh && wbm_cyc;
@@ -2986,6 +2987,7 @@ module sysctl #()
 		.typ0(wbs_usb0_typ),
 		.typ1(wbs_usb1_typ),
 		.tx_active_o(wbs_usbh_tx_active),
+		.tx_port_o(wbs_usbh_tx_port),
 		.hid0_int_o(wbs_usb0_int),
 		.hid1_int_o(wbs_usb1_int),
 		.int_o(wbs_usbh_int)
@@ -3006,7 +3008,12 @@ module sysctl #()
 
 `ifdef USB_HOST
 	wire [1:0] probe_sig = {usb_host_dp[0], usb_host_dm[0]};
-	wire probe_trig = wbs_usbh_tx_active;
+	// Qualified by PORT. probe_sig watches port 0's pins, and with a
+	// device on port 1 polling every frame the unqualified trigger
+	// fired on port 1 traffic -- capturing port 0 while it happened
+	// to be mid-reset, which is 10 ms of SE0 and filled the whole
+	// window with zeros.
+	wire probe_trig = wbs_usbh_tx_active && !wbs_usbh_tx_port;
 `else
 	wire [1:0] probe_sig = 2'b00;
 	wire probe_trig = 1'b1;

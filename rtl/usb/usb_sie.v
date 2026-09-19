@@ -201,14 +201,44 @@ module usb_sie #(
 
     wire rx_is_j = (ls_c == 2'b10);
     wire rx_is_k = (ls_c == 2'b01);
-    wire ls_changed = (ls_c != ls_prev);
+    // -- SE1 is a transient, not an edge --
+    //
+    // D+ and D- do not switch on the same clock edge on real silicon.
+    // At 48 MHz that shows up as a ONE-SAMPLE SE1 (both lines high)
+    // in the middle of a device's J<->K transitions -- an illegal bus
+    // state that exists only because we sample faster than the pair
+    // settles.
+    //
+    // Left alone it retimes us twice per transition: once into SE1 and
+    // once out of it, a clock apart. At low speed that is 3% of a bit
+    // and invisible. At FULL speed it is 25% of a bit, and over a
+    // 96-bit data packet the sampling point walks off centre and the
+    // CRC fails -- while 16-bit handshakes, with far fewer
+    // transitions, keep working. That is exactly the signature seen on
+    // hardware: every NAK good, every long data packet bad.
+    //
+    // A probe capture of a failing packet showed it directly:
+    //
+    //   KKKK X JJJJJJJ X KKK X JJJJJJJ X KKKK
+    //
+    // Runs of 7 and 3 where every clean packet has multiples of 4.
+    //
+    // So: hold the last LEGAL line state through an SE1 sample, and
+    // resync the DPLL only when the settled state actually changes.
+    // This deliberately does NOT gate reception -- two earlier
+    // attempts at this problem blanked the receiver and stopped it
+    // seeing real packets. Nothing here can prevent a packet being
+    // received; it only changes what counts as an edge.
+    wire ls_is_se1 = (ls_c == 2'b11);
+    wire [1:0] ls_stable = ls_is_se1 ? ls_prev : ls_c;
+    wire ls_changed = (ls_stable != ls_prev);
 
     always @(posedge clk) begin
         dp_s0 <= dp_i;
         dp_s1 <= dp_s0;
         dm_s0 <= dm_i;
         dm_s1 <= dm_s0;
-        ls_prev <= ls_c;
+        ls_prev <= ls_stable;
     end
 
     // ---------------------------------------------------------------
@@ -227,7 +257,25 @@ module usb_sie #(
     // full speed.
 
     wire [5:0] per = rate_ls ? (LS_DIV - 6'd1) : (FS_DIV - 6'd1);
-    wire [5:0] mid = rate_ls ? (LS_DIV >> 1) : (FS_DIV >> 1);
+    // -- the sample point is one clock EARLIER than half a bit --
+    //
+    // phase is reset when an edge is DETECTED, which is one clock
+    // after it appears at ls_c: ls_changed compares the synchronised
+    // line against its registered copy, so the reset lands a cycle
+    // late. Sampling at phase == DIV/2 is therefore DIV/2 + 1 clocks
+    // after the real edge -- 75% of the way into a 4-clock full-speed
+    // bit rather than the middle of it.
+    //
+    // That bias is invisible against a transmitter running at exactly
+    // nominal, which is all the testbench could produce until it grew
+    // a CLK_PPM parameter. Measured with one: the receiver tolerated
+    // a device +10000 ppm slow but failed at -2500 ppm fast, which is
+    // the full-speed spec limit. The margin was entirely on one side.
+    //
+    // Subtracting one puts the sample back in the centre and makes the
+    // tolerance symmetric.
+    wire [5:0] mid = rate_ls ? ((LS_DIV >> 1) - 6'd1)
+                             : ((FS_DIV >> 1) - 6'd1);
 
     wire tx_tick = tx_active && (phase == per);
     wire rx_tick = !tx_active && (phase == mid);
