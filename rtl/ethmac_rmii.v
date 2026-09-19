@@ -72,23 +72,26 @@
  * synth_ecp5 on this module alone:
  *
  *   before                    0 DP16KD   1541 DPR16X4
- *   ETH_RX_SLOTS=4 (ML1)      5 DP16KD      3 DPR16X4
- *   ETH_RX_SLOTS=2            3 DP16KD      3 DPR16X4   (lakritz_katze)
+ *   ETH_RX_SLOTS=4            5 DP16KD      3 DPR16X4   (every board)
+ *   ETH_RX_SLOTS=2            3 DP16KD      3 DPR16X4
  *   2 + ETH_RXBUF_LUTRAM      1 DP16KD    515 DPR16X4
  *
  * Why TX_BUF stopped reading back: a RAM with a read/write port plus a
  * second read port is mapped by yosys as true dual-port DP16KD, which
- * it builds at HALF density -- a 2048x9 RAM of that shape takes 2 EBR,
- * one with a write-only port takes 1. The same effect is why VRAM
- * (rtl/mem/vram.v) costs 40 EBR rather than 20. Nothing read TX_BUF.
+ * it builds as TWO copies -- a 2048x9 RAM of that shape takes 2 EBR,
+ * one with a write-only port takes 1. The copies exist to preserve
+ * old-data semantics for a read colliding with a write on the other
+ * port; rtl/mem/vram.v's no_rw_check note explains the mechanism,
+ * which cost VRAM 20 blocks. Here the simpler cure applied: nothing
+ * read TX_BUF, so its CPU port lost its read.
  *
  * `ETH_RXBUF_LUTRAM / `ETH_TXBUF_LUTRAM put the corresponding buffer in
  * distributed RAM via a ram_style attribute, trading LUTs for EBR. The
  * logic is identical either way; only the mapping changes. The trade is
  * steep: two RX slots in LUT RAM took a whole Lakritz build from 19191
  * to 24766 TRELLIS_COMB (of 24288, so it did not place). No target
- * uses these today; they are for a board with LUTs to spare and no
- * block RAM.
+ * uses these; they are for a board with LUTs to spare and no block
+ * RAM.
  *
  * rtl/tb/tb_ethmac_rmii.v (RX) and rtl/tb/tb_ethmac_rmii_tx.v (TX and
  * loopback) pass at 2, 4 and 8 slots and with both LUT RAM options.
@@ -226,9 +229,8 @@ module ethmac_rmii_wb
 	// symptom does not occur.
 	//
 	// Cost is 2KB of RAM per slot: one EBR, or 256 TRELLIS_DPR16X4
-	// with `ETH_RXBUF_LUTRAM. Four on the ML1 boards (ECP5-45F, block
-	// RAM to spare); two on lakritz_katze, whose 25F is out of it --
-	// see BLOCK RAM in the header.
+	// with `ETH_RXBUF_LUTRAM. Four on every board that builds this MAC
+	// -- see BLOCK RAM in the header.
 `ifdef ETH_RX_SLOTS
 	localparam RX_SLOTS = `ETH_RX_SLOTS;
 `else

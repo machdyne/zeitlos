@@ -97,11 +97,11 @@ the sequencer datapath and the wide muxes, not per-channel storage, and
 same 16-deep LUT-RAM primitives an 8-deep one does. The dial works; it
 is not worth turning.
 
-**Lakritz is the tight board at 55 of 56 DP16KD.** `ICACHE_KB 4` costs
-three blocks and the 1024-frame FIFO costs two. If that one spare is
-too close, the options in order are: drop `ICACHE_KB` to 2, or lower
-`AUDIO_FIFO_LOG2` and switch the `ram_style` attribute in `audio.v`
-back to `"distributed"`.
+**Lakritz was the tight board at 55 of 56 DP16KD.** It is not any more:
+VRAM was being built as two copies of itself, 40 blocks instead of 20,
+and a `no_rw_check` attribute in `rtl/mem/vram.v` fixed it. A plain
+Lakritz build now uses 35 of 56. The counts in the tables here were
+measured before that. See [katze.md](katze.md) for the investigation.
 
 ### Why the FIFO is 1024 frames of block RAM
 
@@ -122,10 +122,15 @@ busy-poll rather than blocking**, so they are always runnable:
 already shorter than a three-way round trip. 1024 frames is 46 ms and
 23 ms — slack rather than a coin toss.
 
-**1024 rather than 512 because a DP16KD is 18 bits wide**, so a 32-bit
-FIFO costs two blocks at any depth. 512 and 1024 frames cost exactly
-the same two blocks; anything under 1024 is paying for block RAM it
-isn't using.
+**1024 rather than 512**, because 1024 fills the two blocks a 32-bit
+FIFO of that depth takes.
+
+The reasoning that used to be here was that a DP16KD is 18 bits wide,
+so any depth costs two. It does not hold for this FIFO. It has one
+write port and one read port, which yosys maps to the 36-bit
+`PDPW16KD` mode, and **512 frames measures one block** (`synth_ecp5`
+on `rtl/audio.v`). That is worth knowing if a board is ever one block
+short.
 
 | | Obst | Lakritz | Mozart |
 |---|---|---|---|

@@ -65,11 +65,11 @@ static net_phy_t phy_rmii = {
 // being scheduled -- so four slots advertise three segments, as they
 // always did, and two advertise one.
 //
-// Read from the hardware because it is no longer the same on every
-// RMII board: Lakritz + Katze builds two slots to fit the 25F's block
-// RAM (release/targets/lakritz_katze.spec). Advertising three segments
-// into two slots is the failure this field exists to prevent -- see
-// rx_capacity in net_phy.h.
+// Read from the hardware rather than assumed, because `ETH_RX_SLOTS is
+// a per-build choice (rtl/boards.vh): every board builds four today,
+// but a build with two that still advertised three segments would hit
+// exactly the failure this field exists to prevent -- see rx_capacity
+// in net_phy.h.
 static uint16_t rmii_rx_capacity(void)
 {
 	unsigned slots = rmii_eth_rx_slots();

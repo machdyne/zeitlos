@@ -350,26 +350,6 @@ A Lakritz with a Langkatze therefore has HDMI, USB keyboard and mouse,
 microSD and networking — a complete machine, just not one you can talk
 to over a UART.
 
-### A target that has to make room
-
-`lakritz_katze` is the first target that changes a *base* define's
-value to fit, rather than adding or removing a feature:
-
-```
-defines =
-	-SPI_ETH
-	ETH_RX_SLOTS=2
-	ICACHE_KB=2
-	AUDIO_FIFO_LOG2=9
-```
-
-The MAC Katze needs costs three block RAMs, and Lakritz has one left.
-`NAME=VALUE` on a define the board already sets replaces its value, so
-`ICACHE_KB=2` halves the icache for this target alone, and the plain
-Lakritz build keeps its 4KB. Each trade is measured, and the reasoning
-lives in the target spec's comment, where the next person to touch it
-will look. [katze.md](katze.md) has the numbers.
-
 ## How the gateware gets its defines
 
 `rtl/boards.vh` gained one guard around its per-board `` `ifdef `` chain:

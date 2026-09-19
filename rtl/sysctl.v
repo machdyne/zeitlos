@@ -96,8 +96,8 @@ localparam SYSCLK = 48_000_000;
 // NOTE, measured (synth_ecp5 on rtl/audio.v): 512 frames takes ONE,
 // not two. This FIFO has one write and one read port, which yosys maps
 // to the 36-bit-wide PDPW16KD mode, so the "a DP16KD is 18 bits wide"
-// reasoning that used to be here does not apply. lakritz_katze uses
-// that block for the ethernet MAC (release/targets/lakritz_katze.spec).
+// reasoning that used to be here does not apply -- worth knowing if a
+// board is ever one block short.
 `ifdef AUDIO
 `ifndef AUDIO_FIFO_LOG2
 `define AUDIO_FIFO_LOG2 10

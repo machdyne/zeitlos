@@ -93,7 +93,7 @@ typedef struct {
 	// is chosen at runtime, and the three differ by 3x:
 	//
 	//   ENC28J60   6656 byte ring, ~600 bytes per 536-byte segment
-	//   RMII       2 or 4 frame slots, read from the MAC (rtl/ethmac_rmii.v)
+	//   RMII       `ETH_RX_SLOTS frame slots, read from the MAC (rtl/ethmac_rmii.v)
 	//   esp32link  2048 byte FIFO (rtl/esp32_rxfifo.v)
 	//
 	// Each driver reports PAYLOAD capacity, not raw buffer: the

@@ -72,9 +72,11 @@ is the same assumption the ML1 boards make.
 
 ## Fitting it into a 25F
 
-The plain Lakritz build uses **55 of the 25F's 56 block RAMs**. VRAM
-alone takes 40 of them. So the question for this target was never pins
-or logic. It was where to find block RAM for the MAC's buffers.
+The MAC needs 5 block RAMs: four receive slots and the transmit
+buffer, the same as on the ML1 boards. The plain Lakritz build used
+**55 of the 25F's 56**. So this target was first a block RAM problem,
+and solving it turned up two things that were wasting block RAM across
+the tree.
 
 ### The MAC was not using block RAM at all
 
@@ -97,8 +99,8 @@ Three changes fixed it, each with the logic unchanged:
   timing is unchanged.
 
 `TX_BUF` also became write-only. A RAM with a read/write port plus a
-second read port is mapped by yosys as true dual-port DP16KD, **at half
-density**: a 2048×9 RAM of that shape takes 2 blocks, and one with a
+second read port gets built as **two copies** (see "VRAM" below for
+why): a 2048×9 RAM of that shape takes 2 blocks, and one with a
 write-only port takes 1. Nothing ever read `TX_BUF` back.
 
 Measured with `synth_ecp5` on the MAC alone:
@@ -106,96 +108,108 @@ Measured with `synth_ecp5` on the MAC alone:
 | | DP16KD | DPR16X4 |
 |---|---|---|
 | before | 0 | 1541 |
-| 4 RX slots (ML1 boards) | 5 | 3 |
-| 2 RX slots (`lakritz_katze`) | 3 | 3 |
+| 4 RX slots (every board) | 5 | 3 |
+| 2 RX slots | 3 | 3 |
 | 2 RX slots, `ETH_RXBUF_LUTRAM` | 1 | 515 |
 
 The ML1 boards get this for free: about 1500 LUT-RAM cells back.
 
-### Where the other two blocks come from
+### VRAM was two copies of itself
 
-Three blocks for the MAC against one free means two have to be found.
-They come from the two places that give them up most cheaply, both
-measured the same way:
+VRAM is 640×480 at 1bpp: 300Kbit, which is about 20 blocks. It took
+**40**. yosys's `memory_libmap` debug output shows why:
+`replicates (for ports): 2`. It was building two complete copies.
 
-| | before | after | block RAM |
-|---|---|---|---|
-| `ICACHE_KB` | 4 | 2 | 3 → 2 |
-| `AUDIO_FIFO_LOG2` | 10 (1024 frames) | 9 (512 frames) | 2 → 1 |
+The cause is read-during-write semantics, not size.
 
-- **The icache** halves. Fetches from SDRAM miss more often, and
-  nothing else changes. `docs/icache.md` describes how to measure hit
-  rates on real workloads.
-- **The audio FIFO** holds 11.6ms at 44.1kHz. `rtl/sysctl.v`'s note
-  found 128 frames too short for a player that loses the CPU for two or
-  three 1.365ms ticks; 512 is still about three times that. Software
-  reads the depth from the hardware (`z_audio_depth()`), so nothing is
-  rebuilt.
+- **What the Verilog says.** VRAM has a CPU port that reads and writes,
+  and a graphics port that reads. A graphics read on the same edge as
+  a CPU write to the same word returns the *old* data.
+- **What the block RAM guarantees.** A DP16KD guarantees old data only
+  for a read on the *same* physical port as the write
+  (`READBEFOREWRITE`). yosys's ECP5 library says nothing about a read
+  on the other port.
+- **What yosys does about it.** To keep the Verilog's meaning, it puts
+  every read on the write's port. Two readers on one port means two
+  copies.
 
-That note also claimed 512 and 1024 frames cost the same two blocks.
-For this FIFO they do not: one write port and one read port map to the
-36-bit `PDPW16KD` mode. The note is corrected.
+`(* no_rw_check *)` on the array tells yosys the collision result is
+don't-care. The CPU's read and write then share one port, the graphics
+port gets the other, and there is one copy. `rtl/mem/vram.v` carries
+the full note.
 
-**Rejected: the receive buffer in LUT RAM.** `` `ETH_RXBUF_LUTRAM ``
-needs only one block RAM and no trades. On the full Lakritz build it
-took `TRELLIS_COMB` from 19191 to 24766 of 24288, so it did not place.
-The option stays in the MAC for a board with LUTs to spare.
+What that gives up is one edge case: a graphics read on the same edge
+as a CPU write to the same word returns unknown data. The ECP5 memory
+guide (FPGA-TN-02204, WRITEMODE) says the *read* data may be unknown;
+stored data is at risk only when two ports *write* the same address,
+and VRAM has one writer. The only graphics-port reader is `gpu_video`'s
+scanline refill, so the worst case is one 32-pixel word on one line
+wrong for one frame. Before, it was stale for one frame. CPU-side reads
+are unchanged.
+
+Measured on the plain Lakritz build (default seed):
+
+| | before | `no_rw_check` |
+|---|---|---|
+| DP16KD | 55 / 56 | **35 / 56** |
+| TRELLIS_COMB | 19191 | 19503 |
+| TRELLIS_FF | 9079 | 8957 |
+| `CLK_48` Fmax | 44.0 MHz | 44.7 MHz |
+
+The critical path is in the blitter in both builds. Every ECP5 board
+that builds `` `MEM_VRAM `` gets the same 20 blocks back.
+
+The same memory survey found only one other duplicated RAM in the SoC:
+the PicoRV32 register file. That one is genuine, because the CPU reads
+two registers and writes one every cycle.
 
 ### The result
 
-Full builds, `yowasp-yosys` `synth_ecp5 -abc9` and `nextpnr-ecp5` with
-the default seed. The first column is the plain Lakritz build (Langkatze,
-`` `SPI_ETH ``); the second is `lakritz_katze`, generated by the release
-tool's own `zspec.vh` and `.lpf`.
+Full builds with `yowasp-yosys` (`synth_ecp5 -abc9`) and
+`nextpnr-ecp5`, default seed. `lakritz_katze` uses the release tool's
+own generated `zspec.vh` and `.lpf`.
 
-| | `lakritz` | `lakritz_katze` |
-|---|---|---|
-| DP16KD | 55 / 56 | **56 / 56** |
-| TRELLIS_COMB | 19191 (79%) | 19335 (79%) |
-| TRELLIS_FF | 9079 | 9187 |
-| TRELLIS_RAMW | 103 | 106 |
-| `CLK_48` (48MHz) | 44.0 MHz **FAIL** | 52.9 MHz PASS |
-| `ETH_REFCLK` (50MHz) | — | 88.1 MHz PASS |
+| | `lakritz`, before the VRAM fix | `lakritz`, after | `lakritz_katze` |
+|---|---|---|---|
+| DP16KD | 55 / 56 | 35 / 56 | **40 / 56** |
+| TRELLIS_COMB | 19191 (79%) | 19503 (80%) | 19390 (79%) |
+| TRELLIS_FF | 9079 | 8957 | 9078 |
 
-The whole MAC costs 144 logic cells over the SPI master it replaces.
+Four receive slots, a 4KB icache and a 1024-frame audio FIFO: the same
+as every other RMII board, with 16 blocks to spare.
 
-**Read the timing row with care.** The plain build missing 48MHz is
-not caused by anything here. It is the untouched tree at the default
-seed, and a release build of `lakritz_gpio` or `lakritz_langkatze`
-would stop on it without `--allow-timing-fail` or a better seed.
-`lakritz_katze` passing is one placement, not a margin. This design
-sits close to 48MHz on the 25F and the seed decides which side of it a
-build lands. Pin a known-good seed per board, as `ulx3s` does in the
-top-level Makefile, before relying on either result.
+**Timing:** the plain Lakritz build misses 48MHz at the default seed
+both before and after the VRAM fix (44.0 and 44.7 MHz), with the
+critical path in the blitter each time. That is pre-existing. Pin a
+known-good seed per board, as `ulx3s` does in the top-level Makefile.
+An earlier `lakritz_katze` configuration met 48MHz (52.9 MHz) with the
+RMII domain at 88.1 MHz against 50, but that was one placement, not a
+margin.
 
-The RMII domain has plenty of room, at 88MHz against 50.
+### History: the version that did not have the VRAM fix
 
-### Two receive slots, and what software does about it
+Before VRAM was fixed, the board had one block RAM to spare and this
+target had to make room for the MAC. It built two receive slots
+instead of four, halved the icache (`ICACHE_KB=2`) and halved the audio
+FIFO (`AUDIO_FIFO_LOG2=9`). That fitted exactly: 56 of 56. None of it
+is needed now.
 
-The ML1 boards buffer four received frames; this target buffers two.
-A burst arriving faster than `net` drains it drops sooner, and
-`rx_drop_count` (STATUS[7:4]) counts it.
+Two things from that version stay:
 
-Software is told rather than left to guess. The MAC reports its slot
-count in STATUS[15:12], and `net_phy_select()` sizes the TCP receive
-window from it: (slots − 1) × 536 bytes. That is three segments on a
-four-slot MAC, as before, and one here. Advertising more than the MAC
-can hold is what turns a slow link into one that drops segments; see
-"The window is bounded by the NIC's receive buffer" in
-`docs/networking.md`. A bitstream built before the field existed reads
-zero there, and all of those had four slots, so zero means four.
+- **The MAC reports its slot count** in STATUS[15:12], and `net` sizes
+  the TCP window from it: (slots − 1) × 536 bytes. Every board builds
+  four today, so that is three segments everywhere. But `ETH_RX_SLOTS`
+  is a per-build define, and a build with fewer slots now advertises
+  less instead of promising the peer more than the MAC can hold.
+- **The audio FIFO measurement.** 512 frames takes one block, not two
+  as `rtl/sysctl.v` used to say, because a FIFO with one write and one
+  read port maps to the 36-bit `PDPW16KD` mode. The note there is
+  corrected.
 
-### The real fix
-
-**A denser VRAM.** It is a 9600×32 RAM with a CPU read/write port and a
-video read port, which is exactly the shape yosys maps at half density.
-So it takes 40 blocks where about 20 would hold it.
-
-Fixing it means either instantiating DP16KD directly in the true
-dual-port 2048×9 mode, or giving the CPU and the scanout a shared read
-port. Either touches the video path of every ECP5 board, so it is left
-as its own change. It would give this target four slots and its full
-icache and audio FIFO back, and every other ECP5 board 20 blocks.
+**Rejected at the time: the receive buffer in LUT RAM.**
+`` `ETH_RXBUF_LUTRAM `` took a full Lakritz build from 19191 to 24766
+`TRELLIS_COMB` of 24288, so it did not place. The option stays in the
+MAC for a board with logic to spare and no block RAM.
 
 ---
 
@@ -206,8 +220,8 @@ $ iverilog -g2005 -o /tmp/rx rtl/tb/tb_ethmac_rmii.v    rtl/ethmac_rmii.v && vvp
 $ iverilog -g2005 -o /tmp/tx rtl/tb/tb_ethmac_rmii_tx.v rtl/ethmac_rmii.v && vvp /tmp/tx
 ```
 
-Add `-DETH_RX_SLOTS=2` to test this target's size. Both pass at 2, 4
-and 8 slots, and with `-DETH_RXBUF_LUTRAM -DETH_TXBUF_LUTRAM`.
+Both follow `-DETH_RX_SLOTS=n`, and both pass at 2, 4 and 8 slots and
+with `-DETH_RXBUF_LUTRAM -DETH_TXBUF_LUTRAM`.
 
 `tb_ethmac_rmii_tx.v` is new. The TX path had no test, and a
 one-cycle-early prefetch is the kind of change that goes wrong by

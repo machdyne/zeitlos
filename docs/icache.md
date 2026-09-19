@@ -273,6 +273,11 @@ The 25F has **56** EBR blocks, so 8KB leaves exactly one spare. 4KB is
 the safer default; compare hit counters on real workloads before
 spending the extra two blocks.
 
+> **Measured before VRAM lost 20 blocks.** The counts above include a
+> VRAM that yosys built as two copies of itself (40 blocks, now 20;
+> see the `no_rw_check` note in `rtl/mem/vram.v`). A plain Lakritz
+> build now uses 35 of 56, so the 8KB cache is no longer a squeeze.
+
 ### A note on the valid bits
 
 They are stored as the top bit of each tag word, not in a separate flop

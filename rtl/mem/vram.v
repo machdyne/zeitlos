@@ -29,6 +29,38 @@ module vram_wb #()
     // rtl/gpu/gpu_video.v no longer has any conditional branch on it
     // either, so keeping one here too would just be a latent
     // VRAM-size mismatch waiting to happen if it were ever redefined.
+    //
+    // -- no_rw_check: 40 block RAMs down to 20 on ECP5 --
+    //
+    // 300Kbit needs about 20 DP16KD. Without this attribute yosys
+    // builds TWO full copies, 40 blocks -- 40 of Lakritz's 56. The
+    // cause is read-during-write semantics, not size. As written, a
+    // graphics-port read on the same edge as a CPU write to the same
+    // word returns the OLD data. A DP16KD only guarantees that for a
+    // read on the SAME physical port as the write (READBEFOREWRITE),
+    // so yosys keeps every read on the write's port -- and two readers
+    // on one port means two copies (memory_libmap's debug output:
+    // "replicates (for ports): 2").
+    //
+    // no_rw_check tells yosys that collision result is don't-care.
+    // The CPU's read and write then share one port and the graphics
+    // port gets the other: one copy. Measured on a full Lakritz build:
+    // 55 -> 35 DP16KD, Fmax unchanged (the critical path is in the
+    // blitter either way).
+    //
+    // What it gives up: on that exact collision the hardware returns
+    // unknown data on the graphics port (ECP5 memory guide,
+    // FPGA-TN-02204, WRITEMODE: "the read data may be unknown").
+    // Stored data is never at risk -- that needs two WRITERS, and this
+    // RAM has one. The only graphics-port reader is gpu_video's
+    // scanline refill, so the worst case is one 32-pixel word of one
+    // line wrong for one frame, where before it was stale for one
+    // frame. CPU-side reads are unaffected: they share the write's
+    // port, in READBEFOREWRITE, exactly as before.
+    //
+    // Simulation ignores the attribute; an older yosys without it
+    // ignores it too and simply uses 40 blocks again.
+    (* no_rw_check *)
     reg [31:0] vram [0:9599];
 
     wire wb_active = wb_cyc_i && wb_stb_i;
