@@ -352,6 +352,39 @@ module tb_usb_msc_cosim;
 
         // -----------------------------------------------------------
         $display("");
+        $display("== multi-sector: 4 sectors in one READ(10)/WRITE(10) ==");
+        // The driver issues one command per run, its data phase chunked
+        // through the 512-byte landing area (usbh_msc.c). Reads at the
+        // start, the middle and the last four sectors of the 16-sector
+        // disk; writes read back in one call; then a run crossing the
+        // end, which the device refuses, and a read after it to show the
+        // stream is still in step.
+        msc_op(7, 0);
+        check("read 0-3 rc", rc, 0);
+        check("read 0-3 bad bytes", bad, 0);
+        msc_op(7, 5);
+        check("read 5-8 rc", rc, 0);
+        check("read 5-8 bad bytes", bad, 0);
+        msc_op(7, 12);
+        check("read 12-15 rc", rc, 0);
+        check("read 12-15 bad bytes", bad, 0);
+        msc_op(8, 8);
+        check("write+read 8-11 rc", rc, 0);
+        check("write+read 8-11 bad bytes", bad, 0);
+        msc_op(8, 12);
+        check("write+read 12-15 rc", rc, 0);
+        check("write+read 12-15 bad bytes", bad, 0);
+        msc_op(7, 14);
+        check("read 14-17 refused", (rc != 0) ? 1 : 0, 1);
+        msc_op(1, 9);
+        check("single read after it rc", rc, 0);
+        check("single read after it bad bytes", bad, 0);
+        msc_op(7, 8);
+        check("read 8-11 again rc", rc, 0);
+        check("read 8-11 again bad bytes", bad, 0);
+
+        // -----------------------------------------------------------
+        $display("");
         $display("== NAK after first packet, within hardware budget ==");
         dev.msc_naks_mid = 2;
         msc_op(1, 3);

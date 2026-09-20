@@ -4,8 +4,9 @@
 low-speed devices behind a hub, reliable since round 27 (cause of the
 earlier intermittent failures not identified -- Known issues, item 5). Since round 19 a low-speed
 keyboard, a low-speed mouse, a mass storage stick and a CDC-ACM device
-all work behind one hub (05e3:0608) at the same time. CDC reaches the
-shell's `usbcdc`; apps reach it through `serial` from round 20. The road
+all work behind one hub (05e3:0608) at the same time. Apps reach CDC
+through `serial`. The bring-up tools (`usbcap`, `usbtune`, `usbbench`
+and others) are in [debug builds](#debug-build) only. The road
 there, and what is still open, is in
 [Hardware: working behind the hub](#hardware-working-behind-the-hub) and
 [Known issues](#known-issues).**
@@ -82,6 +83,7 @@ document says what replaces it and why.
 - [Mass storage status](#mass-storage-status)
 - [CDC](#cdc)
 - [Resource budget](#resource-budget)
+- [Debug build](#debug-build)
 - [Board and electrical notes](#board-and-electrical-notes)
 - [Phase plan](#phase-plan)
 - [Phase 1 results](#phase-1-results)
@@ -367,7 +369,8 @@ Reaching a low-speed device through a hub requires a PREamble packet:
 the data of an OUT or SETUP, and the host's handshake after IN data.
 The host sends SYNC and the PRE PID at full speed, holds the bus idle
 (J) for the hub setup interval -- 4 full-speed bit times, the spec
-minimum, adjustable with `usbtune` -- then transmits the packet at the
+minimum, adjustable with `usbtune` in a [debug build](#debug-build) --
+then transmits the packet at the
 low-speed rate. The device's replies come back at the low-speed rate
 with no PRE. The hub enables its low-speed ports for each PRE'd packet
 and disables them again at its EOP.
@@ -692,7 +695,8 @@ lines.
 
 **`0xc000_0128` TUNE** (RW, bring-up)
 
-Low-speed timings, adjustable at run time with the shell's `usbtune`.
+Low-speed timings, adjustable at run time with the shell's `usbtune`
+([debug builds](#debug-build)).
 Resets to `0x041414af`, the values the design always used, so it changes
 nothing until written.
 
@@ -910,6 +914,43 @@ on a USB disk.
 
 ### Throughput
 
+**Measuring it: `usbbench [file]`** ([debug builds](#debug-build);
+round 40, `sw/os/fs/sdbench.c`,
+next to `sdbench` and in the same format, so the two compare line for
+line). Layer 1 reads through `disk_read()` on drive 2 one sector per
+call; layer 2 several per call; with a `/usb` filename, layer 3 is an
+`f_read()` of that file. Each layer reports the SCSI commands it issued
+(`z_usbh_msc_cmds`, counted in `scsi_cmd()`). While the driver issues
+one READ(10) per sector, layers 1 and 2 measure the same and issue the
+same number of commands; a multi-sector driver shows up as fewer
+commands and a faster layer 2. Up to 256 KB from sector 0, or the whole
+device if smaller. Read-only. Kill `wm`, `net` and `repl` first, as for
+`sdbench`.
+
+**Baseline (round 40, hardware):** 187 KB/s raw, one sector per call
+or four -- 512 commands either way -- and 178 KB/s through FatFs: ~2.7
+ms a sector, of which the data is ~0.4 ms (eight 64-byte packets) and
+the rest per-command overhead (CBW, CSW, the device's own handling).
+
+**Multi-sector transfers: tried in round 41, reverted in round 43.**
+The driver issued one READ(10)/WRITE(10) per run of up to 32 sectors,
+running the data phase 512 bytes at a time through the landing area.
+On hardware it did what it should -- layer 2 went from 512 commands to
+128 -- but only from 191 to 206 KB/s. The two layers split the time:
+3.25 ms a one-sector command, 9.68 ms a four-sector one, so about 1.1 ms
+of per-command overhead and **2.1 ms per sector of data**, five times
+the ~0.4 ms eight packets take on the wire. The data phase, not command
+overhead, is the limit with that device (16c0:05e1), and batching could
+not pass ~240 KB/s. An ~8% gain was not worth the complexity in the
+storage write path, so the driver is back to one sector per command.
+`usbbench` stays, and reports the bulk requests and NAKs of each layer
+(round 42): NAKs in the thousands mean the device is slow to supply
+data; few mean the time is the host's -- the question to answer before
+trying again. The MSC device model keeps honouring the CDB transfer
+length, and `test_usb_msc` keeps its 4-sector read and write checks,
+which now test that a 4-sector *call* is correct through single-sector
+commands.
+
 Full speed is 12 Mbps raw. With 64-byte bulk packets and one CPU
 interrupt per packet, a 48 MHz PicoRV32 manages perhaps **150–300 KB/s**.
 
@@ -1090,8 +1131,8 @@ this side, `serial` now polls again on the next tick while data is
 flowing, instead of every ~16 ms, so any device's burst drains several
 times faster.
 
-For trying a device out without a term window, the shell's `usbcdc` is
-a terminal on it: keys go to the device, its output comes back, Ctrl-]
+For trying a device out without a term window, the shell's `usbcdc`
+([debug builds](#debug-build)) is a terminal on it: keys go to the device, its output comes back, Ctrl-]
 leaves. Do not use it while `serial` has a USB client: the shell does not
 hold the scheduler, and the two would share the device.
 
@@ -1183,6 +1224,42 @@ of which are defines from day one rather than retrofits:
 
 A one-port, HID-only build should land **smaller than today**, and with
 hub support that board loses no user-visible capability.
+
+## Debug build
+
+The bring-up and debugging tools are compiled out of a normal kernel to
+save space -- the kernel image, `.bss` included, has to fit its 256 KB
+(`docs/kernel.md`) -- and back in with
+
+```
+cd sw/os && make clean && make USBH_DEBUG=1
+```
+
+(`make clean` because the objects do not track the flag). One switch,
+`USBH_DEBUG` (`sw/os/Makefile`, `sw/os/usb/usbh.h`), covers:
+
+| In debug builds only | What for |
+|---|---|
+| `usbcap`, `usbcapok`, `usbcapd` | wire capture of a failing / good transaction (also needs `PROBE`); [Capturing a failing transaction on hardware](#capturing-a-failing-transaction-on-hardware) |
+| `usbtune` | low-speed timing sweep, the TUNE register |
+| `usbnak N` | hardware NAK budget behind a hub (fixed at 0 otherwise) |
+| `usbidle`, `usbbuf` | phase-1 tests: release the ports and read the lines; packet-buffer round trip |
+| `usbcdc` | shell terminal on a CDC-ACM device -- apps use `serial` |
+| `usbbench` | storage throughput, `sdbench`'s layers for `/usb` ([Throughput](#throughput)) |
+| `lsusb` detail | per-attempt history of a failed device, configuration descriptor dump, poll slot and mouse report diagnostics, wire counters, line states |
+| storage driver messages | `msc_verbose`: every failed command's stage and status |
+
+A normal `lsusb` keeps what is needed to see what is plugged in and
+whether it is healthy: every device and hub port, state, address, type,
+keyboard LEDs, class, retries and hub recoveries, VID:PID and
+configuration, a failed device's reason, the hub's status and its
+`ports disabled by the hub N, recovered M` counters, and the ports.
+
+Measured with the project's toolchain (xPack `riscv-none-elf-gcc`
+15.2.0-1), round 44: **242,272 bytes** (19,872 free) normally,
+**252,132** (10,012 free) with `USBH_DEBUG=1` -- about 10 KB for the
+tools. Co-simulation always builds with them (`Z_USBH_COSIM` implies
+`USBH_DEBUG`): its benches use the capture and dump paths.
 
 ## Board and electrical notes
 
@@ -2229,8 +2306,9 @@ neither was. The next step is a capture.
 
 ### Capturing a failing transaction on hardware
 
-`usbcap` (shell) makes the driver arm the built-in logic probe
-(`rtl/probe.v`, needs `PROBE`) before every transaction on root port 0,
+`usbcap` (shell; a [debug build](#debug-build) with `PROBE`) makes the
+driver arm the built-in logic probe (`rtl/probe.v`) before every
+transaction on root port 0,
 and freeze it on the first one that ends in a timeout, CRC error or
 babble. The capture -- port 0's D+/D- at 48 MHz, 170 us -- then starts
 with the failing transaction. `usbcapd` prints it. While capturing,
@@ -2433,7 +2511,8 @@ existing launch path, a NAKed data stage resumed by `CS_STATUS` through
 `CS_DATA_RUN` a packet at a time, a NAKed status stage by `CS_FINAL`.
 And a low-speed device behind a hub gets a hardware NAK budget of 0,
 so every NAK comes back to software and is retried a tick (~1.4 ms,
-the next frame) later. `usbnak N` sets that budget at run time.
+the next frame) later. In a [debug build](#debug-build), `usbnak N` sets
+that budget at run time; otherwise it is fixed at 0.
 
 ### Three more captures, and what they corrected
 
@@ -2902,8 +2981,8 @@ so far is here.
    the pin inputs' synchronisers and constraints before looking at
    protocol again. The recovery counters stay in as the monitor: `lsusb`
    `ports disabled by the hub N, recovered M` and `recovered=n`, and the
-   `failure with port enabled` line. `usbtune` stays for sweeping
-   low-speed timings. **Round 29 acted on the build-dependence
+   `failure with port enabled` line. `usbtune` stays, in
+   [debug builds](#debug-build), for sweeping low-speed timings. **Round 29 acted on the build-dependence
    proactively:** D+ and D- are now registered in the pads' own I/O
    cells (ODDRX1F out, IDDRX1F in), so the pin-to-flop paths are fixed
    by the silicon and matched between the two lines in every build --
@@ -3029,14 +3108,13 @@ the round log.)
 - On hardware, still to exercise: unplug and replug with `/usb`
   mounted (including mid-copy), and a card reader with no card (it
   STALLs).
+- One sector per SCSI command. Batching was tried (round 41) and
+  reverted: see [Throughput](#throughput) for why, and what to measure
+  first.
 - A device NAKing a control transfer for over ~200 ms during disk
   traffic fails the storage command ("bus busy"). See
   [The transaction engine has one owner](#the-transaction-engine-has-one-owner).
 - OUT transfers are not retried on a lost handshake.
-- One sector per SCSI command, because the packet buffer holds one.
-  FatFs often asks for several, so a directory scan is slower than it
-  needs to be. Fixing it needs a larger landing area, not a protocol
-  change.
 - One drive at a time: `usbh_msc.c` holds a single device's state.
 
 ## Change log since the phase 5 handover
@@ -3108,6 +3186,70 @@ it is simulation-verified only until the hardware check at the end.
 - The round-4 files were confirmed present and unchanged in
   `403513e`. The reworked MAC passes `tb_ethmac_rmii.v` and
   `tb_ethmac_rmii_tx.v`.
+
+**Round 44 -- debug tools behind `USBH_DEBUG`; kernel space** (on `18f8a99`)
+
+- Reported: kernel.bin 252,844 bytes, 9,300 free of 262,144.
+- `USBH_DEBUG` (off by default; `make USBH_DEBUG=1`; always on in
+  co-simulation): `usbcap`/`usbcapok`/`usbcapd`, `usbtune`, `usbnak`,
+  `usbidle`, `usbbuf`, `usbcdc`, `usbbench` and their code, `lsusb`'s
+  detail, the per-attempt fields in the device table, the storage
+  driver's verbose messages (`msc_verbose` a constant 0, so the
+  compiler drops them) and the `usbbench` counters. See
+  [Debug build](#debug-build).
+- Not debug: the report-descriptor parser reads the packet buffer
+  directly (`z_usbh_hid_rdesc_parse(addr, ...)`), dropping a 400-byte
+  static copy; re-checked against the four test descriptors.
+- Measured with xPack `riscv-none-elf-gcc` 15.2.0-1: 242,272 bytes
+  (19,872 free) by default, 252,132 with `USBH_DEBUG=1`. Both build; the
+  co-simulation module builds and links.
+- `sw/os/Makefile`, `sw/os/sh.c`, `sw/os/fs/sdbench.c`, `sw/os/usb/usbh.c`,
+  `usbh.h`, `usbh_int.h`, `usbh_hid.c`, `usbh_msc.c`. Docs: the tools marked
+  as debug-build throughout, `docs/user_input.md`.
+
+**Round 43 -- multi-sector transfers reverted** (on `18f8a99`)
+
+- Hardware (reported): ~8% faster at best, and a failed run -- reset
+  recovery failed, then the hub dropped the stick's port (Known issues,
+  item 2), in layer 1, a one-sector-per-command path. Reverted
+  regardless: not worth the complexity in the write path.
+- `sw/os/usb/usbh_msc.c`: as on `main`, one sector per command, plus
+  only the `usbbench` counters (`z_usbh_msc_cmds`, `_naks`, `_xacts`).
+  Kept: `usbbench` (round 40), the counters and their report (round
+  42), the device model's transfer-length support and the 4-sector
+  checks (round 41). See [Throughput](#throughput).
+
+**Round 42 -- where the data-phase time goes** (on `18f8a99`)
+
+- Hardware (reported): round 41 cut layer 2 to 128 commands but only
+  to 206 KB/s: ~1.1 ms per command, ~2.1 ms per sector of data -- the
+  data phase, not command overhead, is the limit.
+- `sw/os/usb/usbh_msc.c/.h`: `z_usbh_msc_naks`, `z_usbh_msc_xacts`,
+  counted in `bulk_xfer()`. `sw/os/fs/sdbench.c`: `usbbench` prints bulk
+  requests and NAKs per layer. See [Throughput](#throughput). Kernel only.
+
+**Round 41 -- multi-sector transfers** (on `18f8a99`)
+
+- Hardware baseline (round 40, `usbbench`): 187 KB/s, ~2.7 ms a sector,
+  ~80% per-command overhead.
+- `sw/os/usb/usbh_msc.c`: one READ(10)/WRITE(10) per run of up to 32
+  sectors; the data phase chunked through the 512-byte landing area to
+  or from host memory. See [Throughput](#throughput).
+- `rtl/tb/tb_usb_device.v`: the MSC model honours the transfer length
+  (it served one sector per command whatever was asked).
+  `rtl/tb/cosim/usbh_vpi.c`, `rtl/tb/tb_usb_msc_cosim.v`: 4-sector
+  read and write-then-read operations and checks. `test_usb_msc`: 75
+  checks pass, SOFs on time, no contention.
+- "Also outstanding": the one-sector-per-command item removed.
+
+**Round 40 -- `usbbench`** (on `b80c4f2`)
+
+- `sw/os/fs/sdbench.c`, `sdbench.h`: `sh_usbbench()` -- `sdbench`'s layers
+  1-3 for drive 2 (`/usb`), sharing its buffer, timing and report
+  format (kernel .bss is flash image; no second buffer). Layer 3 is the
+  existing `sdb_layer3()`, now told which statistic to print.
+  `sw/os/usb/usbh_msc.c/.h`: `z_usbh_msc_cmds`. `sw/os/sh.c`: `usbbench`.
+  See [Throughput](#throughput). Kernel only.
 
 **Round 39 -- phase 6 done; docs checked** (on `b80c4f2`)
 

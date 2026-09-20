@@ -207,7 +207,9 @@ Any other layout (report IDs, 12- or 16-bit axes, ...) or an unreadable
 descriptor, and the mouse is put in boot protocol as before: movement
 and buttons work, the wheel does not. `lsusb` shows, per mouse, the
 protocol chosen and why, the layout the descriptor gave, the register
-(wheel counter in the top byte) and the raw bytes of the last report.
+(wheel counter in the top byte) and the raw bytes of the last report --
+in a debug build (`make USBH_DEBUG=1`, `docs/usb_host.md`, "Debug
+build"); a normal kernel's `lsusb` leaves that detail out.
 
 Apps do not read it: `wm` does (`dispatch_wheel()`), and sends the
 notches to the window that owns the pointer as **`Z_WM_WHEEL`**

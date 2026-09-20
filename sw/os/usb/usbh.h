@@ -31,6 +31,19 @@
 
 #include <stdint.h>
 
+// -- USBH_DEBUG --
+//
+// Bring-up and debugging tools, off in normal builds for kernel space
+// (`make USBH_DEBUG=1` in sw/os to build them in): usbcap / usbcapok /
+// usbcapd, usbtune, usbnak, usbidle, usbbuf, usbcdc, usbbench, lsusb's
+// detail (attempt history, descriptor dump, poll and mouse diagnostics,
+// wire counters, line states) and the storage driver's verbose messages.
+// Co-simulation always has them: its benches use the dump and capture
+// paths. docs/usb_host.md, "Debug build".
+#if defined(Z_USBH_COSIM) && !defined(USBH_DEBUG)
+#define USBH_DEBUG 1
+#endif
+
 #define Z_USBH_MAX_PORTS    2
 
 // Devices at once, root ports and hubs included. USB addresses are

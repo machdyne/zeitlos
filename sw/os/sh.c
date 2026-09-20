@@ -951,6 +951,7 @@ void sh(void) {
 			fs_usb_unmount();
 		}
 
+#ifdef USBH_DEBUG	// bring-up tools, docs/usb_host.md "Debug build"
 		// WIRE CAPTURE OF A FAILING USB TRANSACTION (usbh.h,
 		// tools/usbcap.py). `usbcap` arms the logic probe before
 		// every transaction on port 0 and freezes it on the first
@@ -1027,6 +1028,8 @@ void sh(void) {
 			z_usbh_set_ls_hub_nak(buffer[6] ? atoi(&buffer[7]) : 0);
 		}
 
+#endif
+
 		// LIST USB DEVICES (rtl/usb/, docs/usb_host.md)
 		//
 		// Named after the tool everyone already knows. Worth more
@@ -1038,6 +1041,7 @@ void sh(void) {
 			z_usbh_dump();
 		}
 
+#ifdef USBH_DEBUG	// bring-up tools, docs/usb_host.md "Debug build"
 		// RELEASE THE USB PORTS AND READ THE LINES -- isolates
 		// "the controller is driving" from "the board is holding
 		// a line high", which lsusb alone cannot tell apart.
@@ -1049,6 +1053,8 @@ void sh(void) {
 		else if (!strncmp(buffer, "usbbuf", cmdlen)) {
 			z_usbh_buftest();
 		}
+
+#endif
 
 		// BUILT-IN LOGIC ANALYSER (rtl/probe.v, docs/probe.md)
 		//
@@ -1154,6 +1160,15 @@ void sh(void) {
 			arg = get_arg(buffer, 1);
 			sh_sdbench(arg);
 		}
+
+#ifdef USBH_DEBUG	// bring-up tools, docs/usb_host.md "Debug build"
+		// The same for USB mass storage (fs/sdbench.c, sh_usbbench()).
+		else if (!strncmp(buffer, "usbbench", cmdlen)) {
+			arg = get_arg(buffer, 1);
+			sh_usbbench(arg);
+		}
+
+#endif
 
 		else if (!strncmp(buffer, "cache", cmdlen)) {
 			arg = get_arg(buffer, 1);
@@ -1987,16 +2002,32 @@ void sh_help(void) {
 		"(needs -DPROBE)\n");
 	printf(" usbmount          mount usb storage at /usb\n");
 	printf(" usbunmount        unmount /usb\n");
+#ifdef USBH_DEBUG
 	printf(" usbcapok          capture a good low-speed IN + our ACK\n");
+#endif
+#ifdef USBH_DEBUG
 	printf(" usbcap            capture the next failing usb transaction "
 		"(needs -DPROBE)\n");
+#endif
+#ifdef USBH_DEBUG
 	printf(" usbcapd           print that capture for tools/usbcap.py\n");
+#endif
+#ifdef USBH_DEBUG
 	printf(" usbnak N          hw NAK retries, hubs and behind them (0)\n");
+#endif
+#ifdef USBH_DEBUG
 	printf(" usbtune [T R G P] low-speed timeout/turn/gap us, PRE gap bits\n");
+#endif
+#ifdef USBH_DEBUG
 	printf(" usbcdc            terminal on a usb cdc-acm device (^] exits)\n");
+#endif
 	printf(" lsusb             usb devices and port state\n");
+#ifdef USBH_DEBUG
 	printf(" usbidle           release usb ports, read raw lines\n");
+#endif
+#ifdef USBH_DEBUG
 	printf(" usbbuf            usb packet buffer round-trip test\n");
+#endif
 	printf(" xa <addr>         receive to addr via xfer\n");
 	printf(" xf <file>         receive to file via xfer\n");
 	printf(" xmf <file>        receive to file via xmodem\n");
@@ -2025,5 +2056,8 @@ void sh_help(void) {
 	printf(" gpio [port] [pin] [in|out|od|0|1]  read/drive gpio pins (e.g. gpio 0 3 out)\n");
 	printf(" bench             cpu/memory micro-benchmarks\n");
 	printf(" sdbench [file]    layered sdcard throughput benchmark (docs/sdcard.md)\n");
+#ifdef USBH_DEBUG
+	printf(" usbbench [file]   the same for usb storage (docs/usb_host.md)\n");
+#endif
 
 }

@@ -47,6 +47,15 @@ PIC_FLAGS = -fPIC
 endif
 
 CFLAGS = $(PIC_FLAGS) --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) -I../common $(GC_CFLAGS) $(ARCH_DEFS) $(LIBC_FLAGS)
+
+# USB host bring-up and debugging tools -- usbcap, usbtune, usbnak,
+# usbidle, usbbuf, usbcdc, usbbench, lsusb's detail, the storage driver's
+# verbose messages -- off by default to save kernel space:
+#   make clean && make USBH_DEBUG=1
+# See sw/os/usb/usbh.h and docs/usb_host.md, "Debug build".
+ifeq ($(USBH_DEBUG),1)
+CFLAGS += -DUSBH_DEBUG
+endif
 LDFLAGS = $(PIC_FLAGS) -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS)
 LDSCRIPT = ../common/riscv-os.ld
 

@@ -153,7 +153,11 @@ int z_usbh_hid_mouse_rdesc_len(const uint8_t *cfg, int cfg_len, int iface)
 // layout is the simple one described above, with a wheel; 0 otherwise
 // (lay says what was found either way). Push/pop and long items end
 // the walk -- nothing simple uses them.
-int z_usbh_hid_rdesc_parse(const uint8_t *rd, int n, z_usbh_mlay_t *lay)
+// Reads the descriptor where it landed, in the packet buffer at byte
+// address `addr` -- no copy, and no 400-byte static buffer in the
+// kernel image (which is flash; docs/kernel.md).
+#define RD(k)   z_usbh_rb(addr + (uint32_t)(k))
+int z_usbh_hid_rdesc_parse(uint32_t addr, int n, z_usbh_mlay_t *lay)
 {
     uint32_t page = 0, rsize = 0, rcount = 0;
     uint32_t usages[16];
@@ -166,13 +170,13 @@ int z_usbh_hid_rdesc_parse(const uint8_t *rd, int n, z_usbh_mlay_t *lay)
     lay->has_id = 0;
 
     while (i < n) {
-        uint8_t p = rd[i];
+        uint8_t p = RD(i);
         int sz = p & 3, type = (p >> 2) & 3, tag = p >> 4, k;
         uint32_t v = 0;
         if (p == 0xfe) break;               // long item
         if (sz == 3) sz = 4;
         if (i + 1 + sz > n) break;
-        for (k = 0; k < sz; k++) v |= (uint32_t)rd[i + 1 + k] << (8 * k);
+        for (k = 0; k < sz; k++) v |= (uint32_t)RD(i + 1 + k) << (8 * k);
         i += 1 + sz;
 
         if (type == 1) {                    // global

@@ -48,6 +48,10 @@
 #include "sdbench.h"
 #include "fatfs/ff.h"
 #include "fatfs/diskio.h"
+#include "../usb/usbh.h"	// USBH_DEBUG
+#ifdef USBH_DEBUG
+#include "../usb/usbh_msc.h"	// usbbench: z_usbh_msc_sectors(), _cmds
+#endif
 
 /* One call's worth of sectors for the multi-block layer, and the read
  * buffer for the FatFs layer.
@@ -303,7 +307,11 @@ static void sdb_layer12(void) {
  * `sdbench /ram/whatever` measures the same code path with the card
  * taken out of it, which puts a floor under how fast layer 3 could
  * ever be. */
-static void sdb_layer3(const char *path) {
+#ifdef USBH_DEBUG
+static void sdb_usb_stat_report(void);
+#endif
+
+static void sdb_layer3(const char *path, int usb) {
 
 	char rp[64];
 	FIL f;
@@ -353,6 +361,12 @@ static void sdb_layer3(const char *path) {
 	}
 
 	sdb_report("f_read", total, cyc);
+#ifdef USBH_DEBUG
+	if (usb) sdb_usb_stat_report();
+	else
+#else
+	(void)usb;
+#endif
 	sdb_stat_report();
 
 }
@@ -381,9 +395,121 @@ void sh_sdbench(const char *path) {
 
 	if (path && *path) {
 		printf("\n");
-		sdb_layer3(path);
+		sdb_layer3(path, 0);
 	} else {
 		printf("\npass a filename for layer 3 (FatFs), e.g. sdbench wm\n");
 	}
 
 }
+
+#ifdef USBH_DEBUG
+/* -- usbbench: the same layers for USB mass storage --
+ *
+ * `usbbench [file]`. /usb is FatFs drive 2 through the same disk_read()
+ * dispatcher (fatfs/diskio_mux.c), so layers 1 and 2 are the path FatFs
+ * itself takes; layer 3 is sdb_layer3() on a /usb path. There is no
+ * layer 0 -- a USB transaction has no equivalent of reading the bus
+ * with the device deselected.
+ *
+ * Layer 2 asks disk_read() for SDB_SECTORS at a time. The storage
+ * driver issues one READ(10) per sector (usbh_msc.c), so the two layers
+ * issue the same commands and measure about the same; a multi-sector
+ * driver would show fewer commands in layer 2. One was tried and
+ * reverted -- docs/usb_host.md, "Throughput". Same buffer,
+ * same figures and same caveats as sdbench -- kill wm/net/repl first.
+ */
+static uint32_t usb_cmds0, usb_naks0, usb_xacts0;
+
+static void sdb_usb_stat_reset(void) {
+	usb_cmds0 = z_usbh_msc_cmds;
+	usb_naks0 = z_usbh_msc_naks;
+	usb_xacts0 = z_usbh_msc_xacts;
+}
+
+// NAKs are the device saying "not ready": many of them per transaction
+// mean the device, not the host, sets the pace.
+static void sdb_usb_stat_report(void) {
+	printf("   scsi commands %lu  bulk requests %lu  naks %lu\n",
+		(unsigned long)(z_usbh_msc_cmds - usb_cmds0),
+		(unsigned long)(z_usbh_msc_xacts - usb_xacts0),
+		(unsigned long)(z_usbh_msc_naks - usb_naks0));
+}
+
+static void sdb_usb_layer12(void) {
+	uint32_t t0, cyc, i;
+	uint32_t total = SDB_TOTAL;
+	uint32_t n_single, n_multi;
+
+	// A small stick bounds the run: 256 KB or the whole device.
+	if (z_usbh_msc_sectors() && z_usbh_msc_sectors() * 512u < total)
+		total = z_usbh_msc_sectors() * 512u;
+	total -= total % SDB_BUFSZ;
+	if (total < SDB_BUFSZ) {
+		printf("device is too small to time\n");
+		return;
+	}
+	n_single = total / 512u;
+	n_multi  = total / SDB_BUFSZ;
+
+	printf("layer 1: disk_read(), 1 sector per call\n");
+	sdb_usb_stat_reset();
+	t0 = sdb_cycles();
+	for (i = 0; i < n_single; i++) {
+		k_fs_enter();
+		if (disk_read(2, sdb_buf, i, 1) != RES_OK) {
+			k_fs_leave();
+			printf("   read failed at sector %lu\n", (unsigned long)i);
+			return;
+		}
+		k_fs_leave();
+	}
+	cyc = sdb_cycles() - t0;
+	sdb_report("one sector per call", n_single * 512u, cyc);
+	sdb_usb_stat_report();
+
+	printf("layer 2: disk_read(), %u sectors per call\n", SDB_SECTORS);
+	sdb_usb_stat_reset();
+	t0 = sdb_cycles();
+	for (i = 0; i < n_multi; i++) {
+		k_fs_enter();
+		if (disk_read(2, sdb_buf, i * SDB_SECTORS, SDB_SECTORS) != RES_OK) {
+			k_fs_leave();
+			printf("   read failed at sector %lu\n",
+				(unsigned long)(i * SDB_SECTORS));
+			return;
+		}
+		k_fs_leave();
+	}
+	cyc = sdb_cycles() - t0;
+	sdb_report("multi-sector calls", n_multi * SDB_BUFSZ, cyc);
+	sdb_usb_stat_report();
+}
+
+void sh_usbbench(const char *path) {
+	printf("usbbench -- see docs/usb_host.md\n");
+	printf("kill wm/net/repl first or every figure is inflated (see ps)\n");
+	printf("sysclk %lu Hz\n\n", (unsigned long)Z_SYSCLK_HZ);
+
+	if (disk_status(2) & STA_NOINIT) {
+		// Not started yet: the same bring-up usbmount's first access
+		// does -- TEST UNIT READY, READ CAPACITY.
+		printf("usb storage not started, bringing it up ...\n");
+		if (disk_initialize(2) & STA_NOINIT) {
+			printf("disk_initialize failed -- no usb storage device?\n");
+			return;
+		}
+	}
+	printf("%lu sectors of 512 bytes\n\n",
+		(unsigned long)z_usbh_msc_sectors());
+
+	sdb_usb_layer12();
+	if (path && *path) {
+		printf("\n");
+		sdb_usb_stat_reset();
+		sdb_layer3(path, 1);
+	} else {
+		printf("\npass a /usb filename for layer 3 (FatFs), "
+			"e.g. usbbench /usb/test.bin\n");
+	}
+}
+#endif  // USBH_DEBUG

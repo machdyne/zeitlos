@@ -80,4 +80,12 @@ void sd_bench_set_div(uint8_t div);
  */
 void sh_sdbench(const char *path);
 
+/*
+ * `usbbench [file]`. The same layers for USB mass storage, drive 2:
+ * disk_read() one sector per call, then several per call, and with a
+ * /usb filename an f_read() of it. Reports SCSI commands issued per
+ * layer. See docs/usb_host.md.
+ */
+void sh_usbbench(const char *path);
+
 #endif

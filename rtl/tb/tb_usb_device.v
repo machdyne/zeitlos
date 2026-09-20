@@ -271,6 +271,7 @@ module tb_usb_device #(
     integer msc_proto_err;          // anything out of sequence
     integer msc_dup_out;            // OUT with the wrong toggle
     integer msc_n, msc_lba, msc_want, msc_avail;    // msc_cbw scratch
+    integer msc_blocks;     // READ(10)/WRITE(10) transfer length, CDB 7-8
     // Bit-error hook. While nonzero, every data-in packet goes out with
     // its CRC16 inverted and this counts down -- a transmission error
     // the host must detect, refuse to ACK, and retry. The packet is
@@ -996,14 +997,24 @@ module tb_usb_device #(
                     sbuf[6] = 8'h02;            // 512
                     msc_avail = 8;
                 end
-                8'h28: begin                    // READ(10), one sector
-                    if (msc_lba < DISK_SECTORS) begin
+                // READ(10)/WRITE(10): the transfer length is CDB bytes
+                // 7-8 (rxb[23], rxb[24]). This model used to serve one
+                // sector per command whatever was asked, which a real
+                // drive does not; the driver now asks for runs
+                // (usbh_msc.c, MSC_MAX_SECTORS).
+                8'h28: begin                    // READ(10)
+                    msc_blocks = {rxb[23], rxb[24]};
+                    if (msc_blocks > 0 &&
+                        msc_lba + msc_blocks <= DISK_SECTORS) begin
                         msc_base = msc_lba * 512;
-                        msc_avail = 512;
+                        msc_avail = msc_blocks * 512;
                     end else csw[12] = 1;
                 end
-                8'h2a: begin                    // WRITE(10), one sector
-                    if (msc_lba < DISK_SECTORS) msc_base = msc_lba * 512;
+                8'h2a: begin                    // WRITE(10)
+                    msc_blocks = {rxb[23], rxb[24]};
+                    if (msc_blocks > 0 &&
+                        msc_lba + msc_blocks <= DISK_SECTORS)
+                        msc_base = msc_lba * 512;
                     else csw[12] = 1;
                 end
                 default: msc_avail = 0;             // TEST UNIT READY etc.

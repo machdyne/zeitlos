@@ -117,7 +117,13 @@ static uint16_t msc_data_got;
 // data stage that stalled from a CSW that never arrived.
 // Off now that reads and writes are confirmed on hardware; failures
 // still return errors, and Reset Recovery always prints.
+#ifdef USBH_DEBUG
 static int msc_verbose = 0;
+#else
+// A constant, so every `if (msc_verbose) printf(...)` and its string is
+// compiled out of a normal kernel.
+#define msc_verbose 0
+#endif
 
 // ---------------------------------------------------------------
 // one bulk transaction, run to completion
@@ -144,6 +150,13 @@ static int msc_verbose = 0;
  * the two streams past each other. act_len says how far it got and the
  * toggle it left behind comes back in the same register.
  */
+#ifdef USBH_DEBUG
+// usbbench (fs/sdbench.c): SCSI commands issued, bulk requests made
+// and the NAKs the device gave in them, since boot.
+uint32_t z_usbh_msc_cmds;
+uint32_t z_usbh_msc_naks, z_usbh_msc_xacts;
+#endif
+
 static int bulk_xfer(int in, uint32_t off, uint16_t len)
 {
     uint32_t s;
@@ -185,6 +198,12 @@ static int bulk_xfer(int in, uint32_t off, uint16_t len)
         }
         if (s & Z_USBH_XS_PENDING) return Z_USBH_MSC_ERR;
 
+        // Every NAK the device gave this request, the hardware's own
+        // retries included -- a device slow to supply data shows up here.
+#ifdef USBH_DEBUG
+        z_usbh_msc_naks += Z_USBH_XS_NAKS(s);
+        z_usbh_msc_xacts++;
+#endif
         st = (uint8_t)Z_USBH_XS_STATUS(s);
         msc.last_status = st;
 
@@ -548,6 +567,9 @@ static int scsi_cmd_body(const uint8_t *cmd, int cmd_len, int dir,
 static int scsi_cmd(const uint8_t *cmd, int cmd_len, int dir,
                     uint32_t data_off, uint32_t data_len)
 {
+#ifdef USBH_DEBUG
+    z_usbh_msc_cmds++;
+#endif
     int r;
 
     if (!alive()) return Z_USBH_MSC_ERR;

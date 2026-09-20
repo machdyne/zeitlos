@@ -68,6 +68,14 @@ int z_usbh_msc_present(void);
 // Started: TEST UNIT READY passed and READ CAPACITY succeeded, so
 // reads and writes are safe. disk_status() reports this.
 int z_usbh_msc_ready(void);
+
+// SCSI commands issued since boot (usbbench, fs/sdbench.c).
+extern uint32_t z_usbh_msc_cmds;
+// Bulk requests to the transaction engine (each up to 512 bytes, eight
+// packets, with auto-continue), and the NAKs the device gave in them
+// (hardware retries included), since boot -- usbbench's view of whether
+// the device or the host sets the pace.
+extern uint32_t z_usbh_msc_naks, z_usbh_msc_xacts;
 uint32_t z_usbh_msc_sectors(void);
 
 int z_usbh_msc_read(uint32_t lba, uint8_t *dst, uint32_t count);

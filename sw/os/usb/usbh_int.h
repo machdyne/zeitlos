@@ -122,6 +122,7 @@ typedef struct {
     // itself the finding: the attempts are not alike. A device that
     // answers once and then goes quiet has changed state, and that
     // points somewhere completely different from random failure.
+#ifdef USBH_DEBUG      // lsusb's per-attempt history, debug builds only
     uint8_t att_state[4];
     uint8_t att_ctrl[4];
     uint8_t att_status[4];
@@ -136,6 +137,7 @@ typedef struct {
     uint8_t att_tgl[4];
     uint8_t att_want[4];
     uint8_t att_n;
+#endif
     // What we learned about the device before it went wrong. A STALL
     // on SET_CONFIGURATION is what a device says when it dislikes the
     // request, so the value we sent is the first thing to check --

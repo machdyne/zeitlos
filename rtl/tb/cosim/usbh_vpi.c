@@ -88,6 +88,8 @@ int z_usbh_msc_write(uint32_t lba, const uint8_t *src, uint32_t count);
 #define MSC_OP_DUMP  4      /* run z_usbh_dump(), lsusb, into the log */
 #define MSC_OP_CAP   5      /* z_usbh_cap_start(); rc = its result */
 #define MSC_OP_CAPD  6      /* z_usbh_cap_dump() into the log */
+#define MSC_OP_READN  7     /* read 4 sectors in ONE call, check them all */
+#define MSC_OP_WRITEN 8     /* write 4 in one call, read them back in one */
 
 void z_usbh_dump(void);
 int z_usbh_cap_start(int mode);
@@ -181,6 +183,33 @@ static void msc_run(void)
 
     if (msc_op == MSC_OP_START) {
         msc_rc = z_usbh_msc_start();
+        return;
+    }
+
+    /* Multi-sector: one z_usbh_msc_read()/_write() of 4 sectors, which
+     * the driver issues as ONE READ(10)/WRITE(10) with its data phase
+     * chunked through the 512-byte landing area (usbh_msc.c,
+     * msc_xfer_dst). Every byte of every sector is checked. */
+    if (msc_op == MSC_OP_READN || msc_op == MSC_OP_WRITEN) {
+        static uint8_t bufn[4 * 512];
+        int s;
+        if (msc_op == MSC_OP_WRITEN) {
+            for (s = 0; s < 4; s++)
+                for (i = 0; i < 512; i++)
+                    bufn[s * 512 + i] = (uint8_t)(i * 5 + msc_lba + s + 0x5a);
+            msc_rc = z_usbh_msc_write((uint32_t)msc_lba, bufn, 4);
+            if (msc_rc != 0) return;
+            for (s = 0; s < 4; s++) msc_written[(msc_lba + s) & 15] = 1;
+        }
+        memset(bufn, 0xa5, sizeof(bufn));
+        msc_rc = z_usbh_msc_read((uint32_t)msc_lba, bufn, 4);
+        if (msc_rc != 0) return;
+        for (s = 0; s < 4; s++)
+            for (i = 0; i < 512; i++)
+                if (bufn[s * 512 + i] != msc_pattern(msc_lba + s, i)) {
+                    if (msc_first_bad < 0) msc_first_bad = s * 512 + i;
+                    msc_bad++;
+                }
         return;
     }
 

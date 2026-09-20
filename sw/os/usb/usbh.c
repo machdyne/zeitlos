@@ -86,7 +86,11 @@ int z_soc_has_feature2(uint32_t bit);
 // port reset, which is exactly when a device behind it is enumerating,
 // and the hardware re-sent each NAKed request every ~5 us, four times
 // (seen in captures). `usbnak 3` restores the old behaviour to compare.
+#ifdef USBH_DEBUG
 static uint8_t hub_nak_budget = 0;
+#else
+#define hub_nak_budget 0    // `usbnak` sets it in USBH_DEBUG builds
+#endif
 
 static uint8_t nak_budget(const z_usbh_dev_t *dv)
 {
@@ -95,6 +99,7 @@ static uint8_t nak_budget(const z_usbh_dev_t *dv)
     return Z_USBH_NAK_BUDGET;
 }
 
+#ifdef USBH_DEBUG
 void z_usbh_set_ls_hub_nak(int n)
 {
     if (n < 0) n = 0;
@@ -103,6 +108,7 @@ void z_usbh_set_ls_hub_nak(int n)
     printf("usb: hardware NAK retries for hubs and devices behind them: "
            "%d\n", n);
 }
+#endif
 
 // HID class requests, addressed to an interface.
 #define HID_OUT_IFACE       0x21
@@ -195,6 +201,7 @@ static volatile uint8_t bus_reserved;
 // co-simulation failed on it at once.
 static int8_t xact_owner = -1;
 
+#ifdef USBH_DEBUG
 // -- wire capture; see z_usbh_cap_start() in usbh.h --
 //
 // The probe's registers, through cap_rd()/cap_wr(). On hardware, plain
@@ -229,6 +236,7 @@ static uint8_t cap_pid, cap_last_pid;   // PID of the failing transaction
 // bad -- the layout z_usbh_dump() prints.
 static uint32_t cap_d0_before, cap_d0_last, cap_d0_after;
 static uint32_t cap_d1_before, cap_d1_last, cap_d1_after;
+#endif  // USBH_DEBUG
 static int8_t ctrl_cur = -1;    // the device inside ctrl_step()
 static uint8_t usbh_present;
 static uint8_t usbh_any_ready;
@@ -240,7 +248,7 @@ int z_usbh_hid_bind(int slot, uint8_t addr, uint8_t xa_flags,
                     int wheel);
 int z_usbh_hid_probe(const uint8_t *cfg, int cfg_len);
 int z_usbh_hid_mouse_rdesc_len(const uint8_t *cfg, int cfg_len, int iface);
-int z_usbh_hid_rdesc_parse(const uint8_t *rd, int n, z_usbh_mlay_t *lay);
+int z_usbh_hid_rdesc_parse(uint32_t addr, int n, z_usbh_mlay_t *lay);
 void z_usbh_hid_release(int blk);
 
 // ---------------------------------------------------------------
@@ -280,6 +288,7 @@ static void xact_start(uint8_t pid, uint8_t addr, uint8_t endp,
     if (toggle) a |= Z_USBH_XA_TOGGLE;
     if (autocont) a |= Z_USBH_XA_AUTOCONT;
 
+#ifdef USBH_DEBUG
     if (cap_on && !cap_frozen && port == 0) {
         cap_last_pid = pid;
         cap_d0_last = z_usbh_rd(Z_USBH_DEBUG0);
@@ -304,6 +313,7 @@ static void xact_start(uint8_t pid, uint8_t addr, uint8_t endp,
         cap_wr(0, 1);
 #endif
     }
+#endif
 
     z_usbh_wr(Z_USBH_XACT_A, a);
     z_usbh_wr(Z_USBH_XACT_B, Z_USBH_XB_OFF(off) | Z_USBH_XB_LEN(len) |
@@ -402,6 +412,7 @@ int usbh_ctrl_step(int d)
 
     s = z_usbh_rd(Z_USBH_XACT_S);
     st = (uint8_t)Z_USBH_XS_STATUS(s);
+#ifdef USBH_DEBUG
     if (cap_on && !cap_frozen && xact_owner == d && dv->port == 0 &&
         (cap_mode == 0 ?
             (st == Z_USBH_ST_TIMEOUT || st == Z_USBH_ST_CRCERR ||
@@ -424,6 +435,7 @@ int usbh_ctrl_step(int d)
                "run usbcapd\n", cap_mode ? "successful low-speed" :
                "failing");
     }
+#endif
     // Whatever was ours in XACT_S is read now and judged below. If the
     // stage below launches another transaction, xact_start() makes this
     // device the owner again.
@@ -738,6 +750,7 @@ void usbh_dev_fail(z_usbh_dev_t *dv)
     // and only checks the result on the following call. So the value
     // here names the stage whose result was just read.
     dv->fail_ctrl = dv->ctrl_err_stage;
+#ifdef USBH_DEBUG
     if (dv->att_n < 4) {
         dv->att_alen[dv->att_n] = (uint8_t)Z_USBH_XS_LEN(st);
         dv->att_tgl[dv->att_n] = (uint8_t)Z_USBH_XS_TOGGLE(st);
@@ -748,6 +761,7 @@ void usbh_dev_fail(z_usbh_dev_t *dv)
         dv->att_naks[dv->att_n] = dv->fail_naks;
         dv->att_n++;
     }
+#endif
     // A failing device gives its scratch back so another can
     // enumerate; it takes a fresh one if it is retried. A hub that
     // fails takes everything behind it down too.
@@ -1227,15 +1241,13 @@ static void dev_step(int i, uint32_t ps)
             // hardware parses as it parses a boot report, wheel in byte
             // 3 -- otherwise boot (0), as for every mouse before. Set
             // explicitly either way, through E_SET_PROTO as before.
-            static uint8_t rd[400];
             uint16_t proto = 0;
             if (a == CS_ERROR) {
                 dv->mouse_rd = MRD_BOOT_FAIL;
             } else {
-                int n = dv->ctrl_len > 400 ? 400 : dv->ctrl_len, k;
+                int n = dv->ctrl_len > 400 ? 400 : dv->ctrl_len;
                 const z_usbh_mlay_t *l = &dv->mlay;
-                for (k = 0; k < n; k++) rd[k] = z_usbh_rb(d + (uint32_t)k);
-                if (z_usbh_hid_rdesc_parse(rd, n, &dv->mlay)) {
+                if (z_usbh_hid_rdesc_parse(d, n, &dv->mlay)) {
                     dv->mouse_rd = MRD_REPORT;
                     proto = 1;
                 } else if (!l->has_id && l->btn_bit == 0 &&
@@ -1583,7 +1595,9 @@ static const char *typ_name(int t)
 // hub. pre is the line prefix; each hub level indents two more.
 static void dump_dev(int i, const char *pre)
 {
+#ifdef USBH_DEBUG
     uint32_t pa, pb;
+#endif
     int j;
     static char sub[3][32];
 
@@ -1605,6 +1619,7 @@ static void dump_dev(int i, const char *pre)
         printf(" recovered=%d", devs[i].recoveries);   // port disabled by hub
     printf("\n");
 
+#ifdef USBH_DEBUG
     {
         int a;
         for (a = 0; a < devs[i].att_n; a++)
@@ -1622,6 +1637,7 @@ static void dump_dev(int i, const char *pre)
                a + 1, devs[i].att_alen[a], devs[i].att_tgl[a],
                devs[i].att_want[a]);
     }
+#endif
 
     if (devs[i].got_desc)
         printf("%sdevice %04x:%04x class %d, %d config(s)\n", pre,
@@ -1635,6 +1651,7 @@ static void dump_dev(int i, const char *pre)
                "attributes %02x\n", pre,
            devs[i].cfg_val, devs[i].cfg_nif, devs[i].cfg_attr);
 
+#ifdef USBH_DEBUG
     if (devs[i].got_cfg && devs[i].blk < 0) {
         int k;
         printf("%scfg desc (%d of %d bytes):", pre,
@@ -1645,6 +1662,7 @@ static void dump_dev(int i, const char *pre)
         }
         printf("\n");
     }
+#endif
 
     if (devs[i].state == E_FAILED)
         printf("%sfailed in %s, %s: %s (%d nak%s)\n", pre,
@@ -1664,6 +1682,7 @@ static void dump_dev(int i, const char *pre)
                devs[i].h_hubdis, devs[i].h_recov);
     }
 
+#ifdef USBH_DEBUG
     if (devs[i].slot >= 0) {
         pa = z_usbh_rd(Z_USBH_POLL_A(devs[i].slot));
         pb = z_usbh_rd(Z_USBH_POLL_B(devs[i].slot));
@@ -1708,6 +1727,8 @@ static void dump_dev(int i, const char *pre)
         }
     }
 
+#endif
+
     for (j = Z_USBH_MAX_PORTS; j < Z_USBH_MAX_DEVS; j++) {
         if (devs[j].parent != i) continue;
         printf("%shub port %d:\n", pre, devs[j].hport);
@@ -1745,6 +1766,7 @@ void z_usbh_dump(void)
            (int)Z_USBH_CFG_SLOTS(cfg),
            (unsigned long)Z_USBH_PS_FRAME(ps));
 
+#ifdef USBH_DEBUG
     {
         uint32_t d0 = z_usbh_rd(Z_USBH_DEBUG0);
         uint32_t d1 = z_usbh_rd(Z_USBH_DEBUG1);
@@ -1759,6 +1781,7 @@ void z_usbh_dump(void)
         printf("usb: wire: %lu frame(s) with port 0 busy at end of frame\n",
                (unsigned long)(d1 >> 16));
     }
+#endif
 
     for (i = 0; i < Z_USBH_MAX_PORTS; i++) {
         uint32_t p = Z_USBH_PS(ps, i);
@@ -1775,6 +1798,7 @@ void z_usbh_dump(void)
 
         dump_dev(i, "usb:   ");
 
+#ifdef USBH_DEBUG
         // Raw line state, straight off the pins. The speed the port
         // reports is derived from which line the device pulls up, and
         // if that derivation is wrong everything downstream fails in
@@ -1785,6 +1809,7 @@ void z_usbh_dump(void)
                ((p >> 6) & 3) == 2 ? "J, full-speed idle" :
                ((p >> 6) & 3) == 1 ? "K, low-speed idle" :
                ((p >> 6) & 3) == 0 ? "SE0" : "SE1 (bad)");
+#endif
 
     }
 }
@@ -1806,6 +1831,7 @@ void z_usbh_dump(void)
  * Restores the previous CTRL afterwards, so it is safe to run with
  * devices plugged in; they will be re-enumerated.
  */
+#ifdef USBH_DEBUG
 void z_usbh_probe_idle(void)
 {
     uint32_t save, ps;
@@ -1885,6 +1911,7 @@ void z_usbh_probe_idle(void)
     for (i = 0; i < Z_USBH_MAX_PORTS; i++) usbh_teardown(i);
     printf("usb: ports re-enabled\n");
 }
+#endif
 
 /*
  * Does the packet buffer actually hold what we put in it?
@@ -1897,6 +1924,7 @@ void z_usbh_probe_idle(void)
  * eight bytes of garbage" has never been ruled out on hardware, and
  * it would present exactly as a device that ignores us.
  */
+#ifdef USBH_DEBUG
 void z_usbh_buftest(void)
 {
     // A fixed area, not a device's scratch: scratch is allocated now,
@@ -1940,6 +1968,7 @@ void z_usbh_buftest(void)
     printf("\n");
     printf("usb: expected:              80 06 00 01 00 00 08 00\n");
 }
+#endif
 
 /*
  * Start enumeration over on every port.
@@ -2025,6 +2054,7 @@ void z_usbh_bus_release(void)
     bus_reserved = 0;
 }
 
+#ifdef USBH_DEBUG
 int z_usbh_cap_start(int mode)
 {
     (void)mode;
@@ -2091,6 +2121,7 @@ void z_usbh_cap_dump(void)
 #endif
     cap_on = 0;
 }
+#endif  // USBH_DEBUG
 
 int z_usbh_ready(void)
 {
@@ -2109,6 +2140,7 @@ int z_usbh_status(uint8_t *typ, int max)
     return n;
 }
 
+#ifdef USBH_DEBUG
 // -- low-speed timing knobs (bring-up) --
 //
 // Every part of a low-speed transaction through a hub matches the two
@@ -2140,3 +2172,4 @@ int z_usbh_tune_set(int tmo_us, int turn_us, int gap_us, int pre_bits)
     z_usbh_tune_show();
     return 1;
 }
+#endif  // USBH_DEBUG
