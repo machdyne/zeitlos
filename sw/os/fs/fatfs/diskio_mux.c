@@ -47,7 +47,16 @@ DRESULT sd_disk_ioctl(BYTE drv, BYTE ctrl, void *buff);
 DSTATUS disk_status(BYTE pdrv) {
 	if (pdrv == 0) return sd_disk_status(0);
 	if (pdrv == 1) return (DSTATUS)rd_disk_status();
-	if (pdrv == 2) return z_usbh_msc_ready() ? 0 : STA_NOINIT;
+	// After an unplug the driver reports neither present nor ready,
+	// and FatFs, seeing STA_NOINIT, re-mounts on the next access --
+	// which fails with FR_NOT_READY if nothing is plugged in, and reads
+	// the new medium from scratch if something is. A dirty sector
+	// buffer from the old drive is discarded rather than written to the
+	// new one.
+	if (pdrv == 2) {
+		if (!z_usbh_msc_present()) return STA_NOINIT | STA_NODISK;
+		return z_usbh_msc_ready() ? 0 : STA_NOINIT;
+	}
 	return STA_NOINIT;
 }
 
@@ -65,18 +74,22 @@ DSTATUS disk_initialize(BYTE pdrv) {
 DRESULT disk_read(BYTE pdrv, BYTE *buff, LBA_t sector, UINT count) {
 	if (pdrv == 0) return sd_disk_read(0, buff, sector, count);
 	if (pdrv == 1) return (DRESULT)rd_disk_read(buff, (uint32_t)sector, count);
-	if (pdrv == 2)
+	if (pdrv == 2) {
+		if (!z_usbh_msc_ready()) return RES_NOTRDY;
 		return z_usbh_msc_read((uint32_t)sector, buff, count) ==
 		       Z_USBH_MSC_OK ? RES_OK : RES_ERROR;
+	}
 	return RES_PARERR;
 }
 
 DRESULT disk_write(BYTE pdrv, const BYTE *buff, LBA_t sector, UINT count) {
 	if (pdrv == 0) return sd_disk_write(0, buff, sector, count);
 	if (pdrv == 1) return (DRESULT)rd_disk_write(buff, (uint32_t)sector, count);
-	if (pdrv == 2)
+	if (pdrv == 2) {
+		if (!z_usbh_msc_ready()) return RES_NOTRDY;
 		return z_usbh_msc_write((uint32_t)sector, buff, count) ==
 		       Z_USBH_MSC_OK ? RES_OK : RES_ERROR;
+	}
 	return RES_PARERR;
 }
 

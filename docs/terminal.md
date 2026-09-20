@@ -53,7 +53,8 @@ instead of waiting on the panel. It takes the same text as the Open bar.
 
 A window opened at boot can be up before the shell has registered, so
 term **waits up to 15 seconds for the provider's name** (`repl0`;
-`serial0` for serial; `net0` for telnet/ssh), with the panel's status
+`serial0` for serial and usbserial; `net0` for
+telnet/ssh), with the panel's status
 line saying what it is waiting for, and connects once. **Esc** stops the
 wait. A refusal, an unparseable value, or a provider that never appears
 lands on the panel with the reason. It only happens when a window opens

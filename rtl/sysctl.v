@@ -2947,6 +2947,7 @@ module sysctl #()
 	wire wbs_usbh_int;
 	wire wbs_usbh_tx_active;
 	wire wbs_usbh_tx_port;
+	wire [1:0] wbs_usbh_line0;	// port 0's D+/D-, sampled at the pads
 	wire [31:0] wbs_usbh_dat_o;
 	wire wbs_usbh_ack_o;
 	wire wbm_cyc_usbh = cs_usbh && wbm_cyc;
@@ -2990,6 +2991,7 @@ module sysctl #()
 		.typ1(wbs_usb1_typ),
 		.tx_active_o(wbs_usbh_tx_active),
 		.tx_port_o(wbs_usbh_tx_port),
+		.line0_o(wbs_usbh_line0),
 		.hid0_int_o(wbs_usb0_int),
 		.hid1_int_o(wbs_usb1_int),
 		.int_o(wbs_usbh_int)
@@ -3009,7 +3011,10 @@ module sysctl #()
 	wire wbs_probe_ack_o;
 
 `ifdef USB_HOST
-	wire [1:0] probe_sig = {usb_host_dp[0], usb_host_dm[0]};
+	// From usb_host's pad-registered samples, not the pins: the pins'
+	// input goes to an IDDRX1F in the I/O cell, which must be its only
+	// load (usb_host.v, "Pin registers IN THE I/O CELLS").
+	wire [1:0] probe_sig = wbs_usbh_line0;
 	// Qualified by PORT. probe_sig watches port 0's pins, and with a
 	// device on port 1 polling every frame the unqualified trigger
 	// fired on port 1 traffic -- capturing port 0 while it happened

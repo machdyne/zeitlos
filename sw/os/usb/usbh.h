@@ -33,12 +33,19 @@
 
 #define Z_USBH_MAX_PORTS    2
 
+// Devices at once, root ports and hubs included. USB addresses are
+// 1..7 from a bitmap and one more device can sit on address 0 while it
+// enumerates. See docs/usb_host.md, "Topology model".
+#define Z_USBH_MAX_DEVS     8
+
 // Device classes this stack recognises. Anything else enumerates and
 // is left alone -- an unrecognised device is not an error, it is a
 // device with no driver.
 #define Z_USBH_CLASS_NONE   0
 #define Z_USBH_CLASS_HID    1
 #define Z_USBH_CLASS_MSC    2
+#define Z_USBH_CLASS_HUB    3
+#define Z_USBH_CLASS_CDC    4
 
 // Set up the controller: enable ports, start the frame timer, unmask
 // interrupts. Safe to call when Z_FEATURE2_USB_HOST is clear -- it
@@ -72,6 +79,56 @@ void z_usbh_buftest(void);
 // driver stops after four failed attempts, so without this there is no
 // traffic for the probe to trigger on.
 void z_usbh_rescan(void);
+
+// -- the transaction engine has one owner at a time --
+//
+// There is ONE engine and two kinds of user: the enumeration state
+// machine, which runs from the ISR, and the mass storage driver, which
+// runs in process context and blocks. The ISR can preempt the MSC
+// driver between any two register accesses, so without an owner it
+// could launch a control transaction between bulk transactions --
+// taking the bulk result as its own -- or even between the two
+// register writes that start one, sending the bulk transfer to the
+// wrong device.
+//
+// z_usbh_bus_reserve() stops the enumeration side STARTING any new
+// control transfer and waits until none is on the bus; the caller then
+// owns the engine until z_usbh_bus_release(). A control transfer
+// already under way is allowed to finish, because stopping one halfway
+// leaves its device mid-request. Enumeration simply pauses while the
+// bus is held; nothing it does is time-critical at that point.
+//
+// Process context only. Returns 0 if a control transfer did not finish
+// within the bound, in which case the bus is NOT held.
+int z_usbh_bus_reserve(void);
+void z_usbh_bus_release(void);
+
+// -- wire capture of a failing transaction (rtl/probe.v) --
+//
+// z_usbh_cap_start() makes the driver arm the built-in logic probe
+// before every transaction on root port 0 and freeze it on the first
+// that ends in a timeout, CRC error or babble, so the capture begins
+// with the failing transaction. While it runs, the hardware's NAK
+// retries are off -- each attempt is one transaction, and one capture
+// -- because a retried transaction outlasts the 170 us window.
+// z_usbh_cap_dump() prints it for tools/usbcap.py. Needs a bitstream
+// built with `PROBE; returns 0 without one. The shell's `usbcap` and
+// `usbcapd`.
+// Hardware NAK retries for control transfers to a hub and to every
+// device behind one, 0-15; 0 (the default) retries every NAK from
+// software a tick later. The shell's `usbnak N`.
+void z_usbh_set_ls_hub_nak(int n);
+
+// mode 0: freeze on the first failing transaction; 1: on the first
+// successful IN with data from a low-speed device behind a hub.
+int z_usbh_cap_start(int mode);
+
+// Low-speed timings (bring-up; usbh_hw.h, Z_USBH_TUNE). show prints
+// them; set takes microseconds for the first three and full-speed bit
+// times for the last. The shell's `usbtune`.
+void z_usbh_tune_show(void);
+int z_usbh_tune_set(int tmo_us, int turn_us, int gap_us, int pre_bits);
+void z_usbh_cap_dump(void);
 
 // Diagnostics for sh.c: how many devices are attached and what they
 // are. Returns the count; fills typ[] with Z_USBH_TYP_* values.

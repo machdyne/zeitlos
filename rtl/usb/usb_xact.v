@@ -97,6 +97,16 @@ module usb_xact (
     input wire [10:0] req_off,
     input wire [10:0] req_len,
     input wire [3:0] req_nak_retry,
+    // Too little of the frame left for a full- / low-speed transaction;
+    // see the end-of-frame guard in usb_host.v.
+    input wire late_fs,
+    input wire late_ls,
+    // Frames are running: a PRE'd request ends rather than re-issue.
+    input wire pre_gate,
+    // Low-speed timings in clocks, from usb_host.v's A_TUNE.
+    input wire [15:0] ls_tmo,
+    input wire [11:0] ls_turn,
+    input wire [11:0] ls_gap,
 
     // -- result --
     output reg busy,
@@ -205,7 +215,7 @@ module usb_xact (
     // margin here is generous because a hub adds propagation delay in
     // both directions and a preamble puts the reply at the low-speed
     // rate regardless of the hub's own speed.
-    wire [15:0] tmo_limit = r_ls ? 16'd1400 : 16'd200;
+    wire [15:0] tmo_limit = r_ls ? ls_tmo : 16'd200;
 
     // Guard for a reception that STARTS and never finishes.
     //
@@ -229,10 +239,66 @@ module usb_xact (
     // Five bit times. Four would do -- the device stops driving 2.5
     // bit times into its own EOP -- but the host has no deadline to
     // meet here and a collision is far more expensive than a clock.
-    wire [11:0] turn_limit = r_ls ? 12'd160 : 12'd20;
+    wire [11:0] turn_limit = r_ls ? ls_turn : 12'd20;
+
+    // -- the gap BEFORE a token is set by what came before it too --
+    //
+    // X_GAP used turn_limit, the speed of the transaction ABOUT to
+    // start. After a low-speed transaction that is not enough: the
+    // device drives a full low-speed bit of J after its EOP (667 ns),
+    // and behind a hub the hub is still repeating it upstream. A
+    // full-speed token -- a SOF, or a request to the hub -- given only
+    // five full-speed bits (417 ns) started on top of it.
+    //
+    // Before hubs this could not happen: a low-speed device had a root
+    // port, and its wire, to itself. Behind a hub low- and full-speed
+    // traffic share one segment. On hardware (hub 05e3:0608) hub
+    // requests failed with CRC errors and timeouts, a low-speed
+    // keyboard never enumerated, and the mouse stopped working once
+    // the keyboard added traffic -- a SOF lost in the collision is a
+    // keep-alive the hub never sends its low-speed ports. The hub
+    // co-simulation showed the host and a device driving the wire at
+    // once, a SOF straight after a low-speed ACK.
+    //
+    // So remember the last transaction's speed and port: after a
+    // low-speed one, the next token on that port waits five LOW-speed
+    // bits, whatever its own speed.
+    reg last_ls;
+    reg last_port;
+    // The token about to go out is a re-issue inside this request -- a
+    // retry or the next auto-continue packet -- rather than its first.
+    // Only a re-issue is checked against the end of the frame here; the
+    // first token was checked by the scheduler before it started.
+    reg reissue;
+    wire [11:0] gap_limit =
+        (r_ls || (last_ls && last_port == r_port)) ? ls_gap : 12'd20;
 
     wire [10:0] chunk =
         (remaining > {4'd0, r_mps}) ? {4'd0, r_mps} : remaining;
+
+    // -- data toggle check on IN, USB 2.0 8.6.4 --
+    //
+    // A device resends its last data packet when it misses the host's
+    // ACK -- same payload, same DATA0/DATA1. The host has already taken
+    // that packet, so the toggle is the only thing that tells the
+    // resend from new data: it matches the toggle the host has moved
+    // PAST, not the one it now expects. Such a packet is ACKed, so the
+    // device moves on, and thrown away.
+    //
+    // This engine did not look, and took the resend as the next packet:
+    // 64 bytes duplicated in the buffer, and the device one packet
+    // behind the host for the rest of the transfer.
+    //
+    // in_dup_now is used while the packet arrives, to keep its bytes
+    // out of the buffer; the SIE latches the PID before the first
+    // payload byte. eval_dup is the same test on the handshake PID
+    // kept in hs_pid, used once the packet has been ACKed.
+    wire in_dup_now = (r_pid == 2'd1) &&
+        (sie_rx_pid == PID_DATA0 || sie_rx_pid == PID_DATA1) &&
+        ((sie_rx_pid == PID_DATA1) != r_toggle);
+    wire eval_dup = (r_pid == 2'd1) &&
+        (hs_pid == PID_DATA0 || hs_pid == PID_DATA1) &&
+        ((hs_pid == PID_DATA1) != r_toggle);
 
     always @(posedge clk) begin
 
@@ -246,6 +312,9 @@ module usb_xact (
             busy <= 1'b0;
             status <= ST_OK;
             act_len <= 11'd0;
+            last_ls <= 1'b0;
+            last_port <= 1'b0;
+            reissue <= 1'b0;
             nak_count <= 8'd0;
             sie_rx_en <= 1'b0;
             tok_phase <= 1'b0;
@@ -284,6 +353,7 @@ module usb_xact (
                     r_off <= req_off;
                     r_len <= req_len;
                     r_nak <= req_nak_retry;
+                    reissue <= 1'b0;
                     nak_left <= req_nak_retry;
                     ptr <= req_off;
                     remaining <= req_len;
@@ -315,9 +385,33 @@ module usb_xact (
             // Counting only while the line is not SE0 means this also
             // waits out the tail of that EOP rather than just counting
             // through it.
+            //
+            // EVERY token goes through here, re-issues included: a
+            // retry after a NAK, after a discarded resend, and the next
+            // packet of an auto-continue. Those used to jump straight
+            // to X_TOK, and a retry after a NAK follows the DEVICE's
+            // EOP by a few clocks -- exactly the collision described
+            // above. Behind a hub it was fatal: a low-speed keyboard
+            // that NAKed during enumeration had every retried PRE
+            // mangled, the hub dropped it, and the retry timed out.
+            // test_usb_hub reproduces it with the mouse NAKing.
             X_GAP: begin
                 if (sie_se0) tmo <= 12'd0;
-                else if (tmo >= turn_limit) xs <= X_TOK;
+                else if (tmo >= gap_limit) begin
+                    // Not enough of the frame left for another packet:
+                    // stop here, as though NAKed, with what has been
+                    // done kept in act_len. See usb_host.v.
+                    // A PRE'd request (low speed behind a hub) never
+                    // re-issues inside a frame either: one PRE'd
+                    // transaction per frame, see usb_host.v, pre_done.
+                    if (reissue && ((r_pre && pre_gate) ||
+                                    (r_ls ? late_ls : late_fs))) begin
+                        status <= ST_NAK;
+                        xs <= X_DONE;
+                    end else begin
+                        xs <= X_TOK;
+                    end
+                end
                 else tmo <= tmo + 12'd1;
             end
 
@@ -438,7 +532,8 @@ module usb_xact (
                     status <= ST_TIMEOUT;
                     xs <= X_DONE;
                 end else tmo <= tmo + 16'd1;
-                if (sie_rx_byte_valid) begin
+                // A resent packet's bytes go nowhere -- see in_dup_now.
+                if (sie_rx_byte_valid && !in_dup_now) begin
                     // Babble: the device sent more than it was told it
                     // could. Take the packet no further -- writing
                     // past the caller's buffer would corrupt whatever
@@ -515,7 +610,9 @@ module usb_xact (
                     nak_count <= nak_count + 8'd1;
                     if (nak_left != 4'd0) begin
                         nak_left <= nak_left - 4'd1;
-                        xs <= X_TOK;
+                        tmo <= 16'd0;
+                        reissue <= 1'b1;
+                        xs <= X_GAP;
                     end else begin
                         status <= ST_NAK;
                         xs <= X_DONE;
@@ -526,7 +623,9 @@ module usb_xact (
                     nak_count <= nak_count + 8'd1;
                     if (nak_left != 4'd0) begin
                         nak_left <= nak_left - 4'd1;
-                        xs <= X_TOK;
+                        tmo <= 16'd0;
+                        reissue <= 1'b1;
+                        xs <= X_GAP;
                     end else begin
                         status <= ST_NAK;
                         xs <= X_DONE;
@@ -536,6 +635,27 @@ module usb_xact (
 
                     status <= ST_STALL;
                     xs <= X_DONE;
+
+                end else if (eval_dup) begin
+
+                    // A resend of the packet before, already ACKed and
+                    // discarded. Nothing advances. Ask again, charged to
+                    // the NAK budget: a device that never moves on must
+                    // not hold the engine forever, and software treats
+                    // the NAK that ends it exactly as it treats a busy
+                    // device -- it resumes from act_len.
+                    nak_count <= nak_count + 8'd1;
+                    if (nak_left != 4'd0) begin
+                        nak_left <= nak_left - 4'd1;
+                        rx_count <= 11'd0;
+                        rx_bad <= 1'b0;
+                        tmo <= 16'd0;
+                        reissue <= 1'b1;
+                        xs <= X_GAP;
+                    end else begin
+                        status <= ST_NAK;
+                        xs <= X_DONE;
+                    end
 
                 end else if (r_pid != 2'd1 && hs_pid != PID_ACK) begin
 
@@ -567,7 +687,9 @@ module usb_xact (
                     end else begin
                         rx_count <= 11'd0;
                         rx_bad <= 1'b0;
-                        xs <= X_TOK;
+                        tmo <= 16'd0;
+                        reissue <= 1'b1;
+                        xs <= X_GAP;
                     end
 
                 end
@@ -576,6 +698,8 @@ module usb_xact (
 
             X_DONE: begin
                 res_toggle <= r_toggle;
+                last_ls <= r_ls;
+                last_port <= r_port;
                 busy <= 1'b0;
                 done <= 1'b1;
                 sie_rx_en <= 1'b0;

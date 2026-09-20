@@ -25,7 +25,8 @@
 #include "logo.h"
 #include "fs/fs.h"
 #include "fsapi.h"
-#include "procapi.h"	// k_proc_list(), referenced by the syscall
+#include "procapi.h"
+#include "usbcdcapi.h"	// k_usbcdc_*, referenced by the syscall table	// k_proc_list(), referenced by the syscall
 						// table built from syscalls.def below
 #include "../common/zsoc.h"
 
@@ -184,6 +185,12 @@ static int k_syscall_touches_fs(uint32_t id) {
 		case Z_SYS_FS_TRUNCATE:
 		case Z_SYS_EXEC_EXISTS:
 		case Z_SYS_CFG_RELOAD:
+		// Not files: these share the one USB transaction engine with
+		// mass storage, which is used from inside FatFs. Holding the
+		// scheduler for them, as for FatFs, keeps a process switched
+		// out mid-transaction from letting another start on top of it.
+		case Z_SYS_USBCDC_READ:
+		case Z_SYS_USBCDC_WRITE:
 			return 1;
 		default:
 			return 0;

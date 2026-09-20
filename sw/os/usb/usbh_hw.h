@@ -106,6 +106,12 @@ static inline void z_usbh_wb(uint32_t a, uint8_t v)
 // not transmitting at all both look like a timeout from software.
 #define Z_USBH_DEBUG0       0xc0000120u
 #define Z_USBH_DEBUG1       0xc0000124u
+// Low-speed timings, adjustable at run time (usb_host.v, A_TUNE):
+// [7:0] response timeout, [15:8] turnaround, [23:16] gap after a
+// low-speed packet -- each in 1/6 us -- and [27:24] full-speed bit
+// times of J after a PRE. Reset value 0x041414af: 29 us, 3.3 us,
+// 3.3 us, 4 bits -- the values the design always had.
+#define Z_USBH_TUNE         0xc0000128u
 
 
 #define Z_USBH_CTRL_SRST        (1u << 0)

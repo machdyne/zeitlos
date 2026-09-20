@@ -197,3 +197,9 @@ Z_MKSYSCALL(HID_INJECT, k_hid_inject)
 // HID_INJECT wake wm the same way without going through this syscall.
 // Appended last so no earlier enum value shifts.
 Z_MKSYSCALL(WM_WAKE, k_wm_wake)
+
+// USB CDC-ACM for apps (sw/common/zusbcdc.h, sw/os/usbcdcapi.c).
+// Appended last so no earlier enum value shifts.
+Z_MKSYSCALL(USBCDC_PRESENT, k_usbcdc_present)
+Z_MKSYSCALL(USBCDC_READ, k_usbcdc_read)
+Z_MKSYSCALL(USBCDC_WRITE, k_usbcdc_write)

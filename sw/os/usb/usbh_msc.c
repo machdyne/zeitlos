@@ -91,8 +91,21 @@
 #define MSC_OFF_DATA        0x000u          // 512, one sector
 #define MSC_OFF_CBW         0x200u          // 31
 #define MSC_OFF_CSW         0x240u          // 13
+#define MSC_OFF_SETUP       0x260u          // 8, the driver's own requests
 
 static z_usbh_msc_t msc;
+
+// Bumped by every bind and every unbind, and deliberately OUTSIDE msc
+// so bind's memset does not reset it. A public entry point records it
+// on the way in; if it has moved, the drive this operation started on
+// is gone, even if a new one has since been bound in its place.
+static volatile uint32_t msc_gen;
+static uint32_t op_gen;
+
+static int alive(void)
+{
+    return !msc.gone && op_gen == msc_gen;
+}
 
 // Bytes the most recent command's data stage actually moved. msc.last_len
 // cannot serve: the CSW read that follows overwrites it.
@@ -102,7 +115,9 @@ static uint16_t msc_data_got;
 // of a failing command says which one it was, because "mount failed"
 // on its own does not distinguish a CBW the device rejected from a
 // data stage that stalled from a CSW that never arrived.
-static int msc_verbose = 1;
+// Off now that reads and writes are confirmed on hardware; failures
+// still return errors, and Reset Recovery always prints.
+static int msc_verbose = 0;
 
 // ---------------------------------------------------------------
 // one bulk transaction, run to completion
@@ -141,6 +156,8 @@ static int bulk_xfer(int in, uint32_t off, uint16_t len)
     msc.last_len = 0;
 
     for (;;) {
+
+        if (!alive()) return Z_USBH_MSC_ERR;
 
         z_usbh_wr(Z_USBH_XACT_A,
                   Z_USBH_XA_ADDR(msc.addr) |
@@ -271,18 +288,156 @@ static uint32_t get32be(uint32_t off)
            (uint32_t)z_usbh_rb(Z_USBH_BUF + off + 3);
 }
 
+// ---------------------------------------------------------------
+// the driver's own control requests, and Reset Recovery
+// ---------------------------------------------------------------
+
+/*
+ * One transaction on the engine, run to completion. Returns 0 and
+ * leaves *sp untouched if the engine never finishes, which only a
+ * hardware fault would cause. The caller holds the bus.
+ */
+static int xact_run(uint8_t pid, uint8_t ep, int tgl, uint32_t off,
+                    uint16_t len, uint32_t *sp)
+{
+    uint32_t s = 0;
+    uint32_t guard;
+
+    z_usbh_wr(Z_USBH_XACT_A,
+              Z_USBH_XA_ADDR(msc.addr) | Z_USBH_XA_ENDP(ep) |
+              Z_USBH_XA_PID(pid) | Z_USBH_XA_PORT(msc.port) |
+              Z_USBH_XA_MPS(msc.mps0) |
+              ((uint32_t)msc.xa_flags << 13) |
+              (tgl ? Z_USBH_XA_TOGGLE : 0));
+    z_usbh_wr(Z_USBH_XACT_B,
+              Z_USBH_XB_OFF(off) | Z_USBH_XB_LEN(len) |
+              Z_USBH_XB_NAK(MSC_NAK_BUDGET) | Z_USBH_XB_START);
+    for (guard = 0; guard < 2000000u; guard++) {
+        s = z_usbh_rd(Z_USBH_XACT_S);
+        if (!(s & Z_USBH_XS_PENDING)) break;
+    }
+    if (s & Z_USBH_XS_PENDING) return 0;
+    *sp = s;
+    return 1;
+}
+
+/*
+ * A control request with no data stage, on endpoint 0: SETUP, then a
+ * zero-length IN for status. Only two are ever sent -- CLEAR_FEATURE
+ * and the class reset -- and neither carries data.
+ */
+static int ctrl_nodata(uint8_t bm, uint8_t req, uint16_t val,
+                       uint16_t idx)
+{
+    uint32_t base = Z_USBH_BUF + MSC_OFF_SETUP;
+    uint32_t s, guard;
+    uint8_t st;
+    int naks = 0;
+
+    z_usbh_wb(base + 0, bm);
+    z_usbh_wb(base + 1, req);
+    z_usbh_wb(base + 2, (uint8_t)val);
+    z_usbh_wb(base + 3, (uint8_t)(val >> 8));
+    z_usbh_wb(base + 4, (uint8_t)idx);
+    z_usbh_wb(base + 5, (uint8_t)(idx >> 8));
+    z_usbh_wb(base + 6, 0);
+    z_usbh_wb(base + 7, 0);
+
+    if (!alive()) return Z_USBH_MSC_ERR;
+    if (!xact_run(Z_USBH_PID_SETUP, 0, 0, MSC_OFF_SETUP, 8, &s))
+        return Z_USBH_MSC_ERR;
+    if (Z_USBH_XS_STATUS(s) != Z_USBH_ST_OK) return Z_USBH_MSC_ERR;
+
+    // Status stage, always DATA1. A device may NAK it while it carries
+    // the request out -- a reset can take a while.
+    for (;;) {
+        if (!alive()) return Z_USBH_MSC_ERR;
+        if (!xact_run(Z_USBH_PID_IN, 0, 1, MSC_OFF_SETUP, 0, &s))
+            return Z_USBH_MSC_ERR;
+        st = (uint8_t)Z_USBH_XS_STATUS(s);
+        if (st != Z_USBH_ST_NAK || ++naks > MSC_SOFT_NAKS) break;
+        for (guard = 0; guard < 2000u; guard++) { }
+    }
+    if (st == Z_USBH_ST_OK || st == Z_USBH_ST_SHORT) return Z_USBH_MSC_OK;
+    return st == Z_USBH_ST_STALL ? Z_USBH_MSC_STALL : Z_USBH_MSC_ERR;
+}
+
+/*
+ * CLEAR_FEATURE(ENDPOINT_HALT). ep carries the direction bit, 0x80 for
+ * IN. Clearing a halt resets that endpoint's data toggle to DATA0 on
+ * the device, so ours follows -- whether or not the endpoint was
+ * actually halted, which is why this is also safe as a precaution.
+ */
+static int clear_halt(uint8_t ep)
+{
+    int r = ctrl_nodata(0x02, 0x01, 0x0000, ep);
+    if (r == Z_USBH_MSC_OK) {
+        if (ep & 0x80) msc.tgl_in = 0;
+        else msc.tgl_out = 0;
+    }
+    return r;
+}
+
+/*
+ * Bulk-Only Mass Storage Reset Recovery, BOT 5.3.4: the class reset,
+ * then clear the halt on both bulk endpoints.
+ *
+ * This is the only way back into step once the three-phase sequence
+ * has broken -- a CSW that is missing, malformed or reports a phase
+ * error, a transfer that failed part-way through a data phase. Before
+ * it existed, any of those left every later command reading the
+ * previous one's leftovers.
+ */
+static int reset_recovery(void)
+{
+    int r1, r2, r3;
+
+    msc.resets++;
+    r1 = ctrl_nodata(0x21, 0xff, 0x0000, msc.iface);
+    r2 = clear_halt((uint8_t)(0x80 | msc.ep_in));
+    r3 = clear_halt(msc.ep_out);
+
+    // Printed whatever msc_verbose says: this is rare, and when it
+    // happens it is the first thing anyone chasing a fault wants.
+    printf("usb msc: reset recovery %s (%d %d %d)\n",
+           (r1 | r2 | r3) == Z_USBH_MSC_OK ? "ok" : "FAILED", r1, r2, r3);
+
+    return (r1 | r2 | r3) == Z_USBH_MSC_OK ? Z_USBH_MSC_OK
+                                            : Z_USBH_MSC_ERR;
+}
+
+// Repair the transport if the device is still here to repair. A pulled
+// drive usually fails its transfer before the ISR's detach path has run
+// and marked it gone, so the port is asked directly: recovering a
+// device that is not there fails anyway, and says "FAILED" in the log
+// for what was only an unplug.
+static void recover(void)
+{
+    uint32_t ps = Z_USBH_PS(z_usbh_rd(Z_USBH_PORTSTAT), msc.port);
+
+    if (!(ps & Z_USBH_PS_CONNECTED)) return;
+    if (alive()) reset_recovery();
+}
+
 /*
  * Run one SCSI command: CBW out, optional data, CSW in.
  *
  * cmd[] is the SCSI command block, cmd_len its length (6, 10 or 12).
  * dir is CBW_IN for a read, 0 for a write or no data.
+ *
+ * Holds the transaction engine for the whole command; see usbh.h.
+ *
+ * Returns OK, FAIL (the device reported the command failed; the
+ * transport is in step) or ERR (it was not, or the device is gone --
+ * recovery has already been attempted).
  */
-static int scsi_cmd(const uint8_t *cmd, int cmd_len, int dir,
-                    uint32_t data_off, uint32_t data_len)
+static int scsi_cmd_body(const uint8_t *cmd, int cmd_len, int dir,
+                         uint32_t data_off, uint32_t data_len)
 {
     uint32_t base = Z_USBH_BUF + MSC_OFF_CBW;
     int i, r;
     int data_r = Z_USBH_MSC_OK;
+    uint8_t status;
 
     msc_data_got = 0;
 
@@ -298,10 +453,13 @@ static int scsi_cmd(const uint8_t *cmd, int cmd_len, int dir,
 
     r = bulk_xfer(0, MSC_OFF_CBW, CBW_LEN);
     if (r != Z_USBH_MSC_OK) {
+        // A device that stalls or drops a CBW has not accepted the
+        // command; BOT 6.6.1 has the host reset rather than guess.
         if (msc_verbose)
             printf("usb msc: cmd %02x: CBW failed (%d, status %d)\n",
                    cmd[0], r, msc.last_status);
-        return r;
+        recover();
+        return Z_USBH_MSC_ERR;
     }
 
     // -- data --
@@ -314,56 +472,117 @@ static int scsi_cmd(const uint8_t *cmd, int cmd_len, int dir,
                    "status %d)\n", cmd[0], dir == CBW_IN ? "in" : "out",
                    (unsigned long)msc.last_len,
                    (unsigned long)data_len, r, msc.last_status);
-        // Whatever happened, the device still owes a CSW, and it is
-        // read below regardless. Bulk-only transport is a strict
-        // three-phase sequence: returning here used to leave that CSW
-        // in the pipe, and every later command then read the previous
-        // one's status -- one transaction out of step for good.
-        //
-        // A STALL needs CLEAR_FEATURE(HALT) on the endpoint before the
-        // CSW can be read, which is not implemented yet; the CSW read
-        // then fails too and says so, rather than being skipped.
+
+        if (r == Z_USBH_MSC_STALL) {
+            // BOT 6.7.2: the device ended the data phase early by
+            // halting the pipe -- a read past the end of the medium, a
+            // card reader with no card. That is the command failing,
+            // not the transport: clear the halt, and the CSW that
+            // follows says why.
+            if (clear_halt(dir == CBW_IN ? (uint8_t)(0x80 | msc.ep_in)
+                                         : msc.ep_out) != Z_USBH_MSC_OK) {
+                recover();
+                return Z_USBH_MSC_ERR;
+            }
+        } else if (r != Z_USBH_MSC_OK) {
+            // Failed part-way through the data phase. The device is
+            // still in it, so a CSW read now would take data as status
+            // -- which is how one bad packet used to put every later
+            // command out of step. Reset instead.
+            recover();
+            return Z_USBH_MSC_ERR;
+        }
     }
 
     // -- CSW --
     r = bulk_xfer(1, MSC_OFF_CSW, CSW_LEN);
-    if (r != Z_USBH_MSC_OK) {
+    if (r == Z_USBH_MSC_STALL) {
+        // BOT 6.7.2 again: a halted IN pipe at the CSW is cleared and
+        // the CSW read once more.
+        if (clear_halt((uint8_t)(0x80 | msc.ep_in)) == Z_USBH_MSC_OK)
+            r = bulk_xfer(1, MSC_OFF_CSW, CSW_LEN);
+    }
+    if (r != Z_USBH_MSC_OK || msc.last_len != CSW_LEN) {
         if (msc_verbose)
-            printf("usb msc: cmd %02x: CSW failed (%d, status %d)\n",
-                   cmd[0], r, msc.last_status);
-        return r;
+            printf("usb msc: cmd %02x: CSW failed (%d, status %d, "
+                   "%u bytes)\n", cmd[0], r, msc.last_status,
+                   msc.last_len);
+        recover();
+        return Z_USBH_MSC_ERR;
     }
 
-    if (get32le(MSC_OFF_CSW + 0) != CSW_SIG) {
+    // BOT 6.3: a CSW is valid only if it is 13 bytes, carries the
+    // signature, and echoes this command's tag. Anything else means the
+    // two ends disagree about where they are.
+    if (get32le(MSC_OFF_CSW + 0) != CSW_SIG ||
+        get32le(MSC_OFF_CSW + 4) != msc.tag) {
         if (msc_verbose)
-            printf("usb msc: cmd %02x: bad CSW signature %08lx\n",
-                   cmd[0], (unsigned long)get32le(MSC_OFF_CSW + 0));
-        return Z_USBH_MSC_ERR;
-    }
-    if (get32le(MSC_OFF_CSW + 4) != msc.tag) {
-        if (msc_verbose)
-            printf("usb msc: cmd %02x: tag %lu, expected %lu\n",
-                   cmd[0], (unsigned long)get32le(MSC_OFF_CSW + 4),
+            printf("usb msc: cmd %02x: invalid CSW (sig %08lx, tag %lu, "
+                   "expected %lu)\n", cmd[0],
+                   (unsigned long)get32le(MSC_OFF_CSW + 0),
+                   (unsigned long)get32le(MSC_OFF_CSW + 4),
                    (unsigned long)msc.tag);
+        recover();
         return Z_USBH_MSC_ERR;
     }
-    if (msc_verbose && z_usbh_rb(Z_USBH_BUF + MSC_OFF_CSW + 12))
+
+    status = z_usbh_rb(Z_USBH_BUF + MSC_OFF_CSW + 12);
+    if (msc_verbose && status)
         printf("usb msc: cmd %02x: device reports status %d, "
-               "residue %lu\n", cmd[0],
-               z_usbh_rb(Z_USBH_BUF + MSC_OFF_CSW + 12),
+               "residue %lu\n", cmd[0], status,
                (unsigned long)get32le(MSC_OFF_CSW + 8));
 
-    // A failed data stage is the result even with a clean CSW.
-    if (data_r != Z_USBH_MSC_OK) return data_r;
+    // bCSWStatus: 0 passed, 1 failed, 2 phase error. A phase error is
+    // the device saying it lost track; BOT 6.7 requires a reset.
+    if (status == 2) {
+        recover();
+        return Z_USBH_MSC_ERR;
+    }
+    if (status != 0) return Z_USBH_MSC_FAIL;
 
-    // bCSWStatus: 0 passed, 1 failed, 2 phase error.
-    return z_usbh_rb(Z_USBH_BUF + MSC_OFF_CSW + 12) == 0 ?
-           Z_USBH_MSC_OK : Z_USBH_MSC_FAIL;
+    // Passed, but a stalled data phase still did not deliver.
+    if (data_r != Z_USBH_MSC_OK) return Z_USBH_MSC_FAIL;
+    return Z_USBH_MSC_OK;
+}
+
+static int scsi_cmd(const uint8_t *cmd, int cmd_len, int dir,
+                    uint32_t data_off, uint32_t data_len)
+{
+    int r;
+
+    if (!alive()) return Z_USBH_MSC_ERR;
+    if (!z_usbh_bus_reserve()) {
+        printf("usb msc: bus busy, cmd %02x not sent\n", cmd[0]);
+        return Z_USBH_MSC_ERR;
+    }
+    // Checked again now the bus is ours: enumeration cannot bind a new
+    // device while it is held, so this answer stays true for the whole
+    // command.
+    if (!alive()) {
+        z_usbh_bus_release();
+        return Z_USBH_MSC_ERR;
+    }
+    r = scsi_cmd_body(cmd, cmd_len, dir, data_off, data_len);
+    z_usbh_bus_release();
+    return r;
 }
 
 // ---------------------------------------------------------------
 // public
 // ---------------------------------------------------------------
+
+void z_usbh_msc_unbind(void)
+{
+    // ISR context, from usbh.c's detach path. Mark, do not clear: a
+    // command may be running in process context right now, and it is
+    // the one that notices and stops -- see alive().
+    if (!msc.ready && !msc.started) return;
+    msc.gone = 1;
+    msc.ready = 0;
+    msc.started = 0;
+    msc_gen++;
+    printf("usb msc: device removed\n");
+}
 
 int z_usbh_msc_present(void)
 {
@@ -394,7 +613,7 @@ int z_usbh_msc_bind(uint8_t addr, uint8_t xa_flags, uint8_t port,
     int i = 0;
     int match = 0;
 
-    (void)mps0;
+    uint8_t iface = 0;
 
     if (msc.ready) return 0;          // one drive for now
 
@@ -410,6 +629,7 @@ int z_usbh_msc_bind(uint8_t addr, uint8_t xa_flags, uint8_t port,
             match = (cfg[i + 5] == MSC_CLASS &&
                      cfg[i + 6] == MSC_SUBCLASS_SCSI &&
                      cfg[i + 7] == MSC_PROTO_BOT);
+            if (match) iface = cfg[i + 2];
         }
 
         if (type == 0x05 && match && (i + 6) < cfg_len) {
@@ -432,6 +652,9 @@ int z_usbh_msc_bind(uint8_t addr, uint8_t xa_flags, uint8_t port,
     msc.addr = addr;
     msc.xa_flags = xa_flags;
     msc.port = port;
+    msc.iface = iface;
+    msc.mps0 = mps0 ? mps0 : 8;
+    msc_gen++;
     msc.ready = 1;
 
     printf("usb msc: addr %d ep in %d out %d, mps %d\n",
@@ -450,11 +673,13 @@ int z_usbh_msc_start(void)
     int tries;
 
     if (!msc.ready) return Z_USBH_MSC_ERR;
+    op_gen = msc_gen;
 
     // TEST UNIT READY, repeatedly. A card reader with no card, or a
     // drive still spinning up, answers "not ready" for a while and
     // that is not an error -- it is the normal startup handshake.
     for (tries = 0; tries < 20; tries++) {
+        if (!alive()) return Z_USBH_MSC_ERR;
         memset(cmd, 0, sizeof(cmd));
         cmd[0] = SCSI_TEST_UNIT_READY;
         if (scsi_cmd(cmd, 6, 0, 0, 0) == Z_USBH_MSC_OK) break;
@@ -506,6 +731,7 @@ int z_usbh_msc_read(uint32_t lba, uint8_t *dst, uint32_t count)
     int i;
 
     if (!msc.started) return Z_USBH_MSC_ERR;
+    op_gen = msc_gen;
 
     // One sector per command. The packet buffer holds one, and
     // multi-sector reads would need somewhere bigger to land --
@@ -548,6 +774,7 @@ int z_usbh_msc_write(uint32_t lba, const uint8_t *src, uint32_t count)
     int i;
 
     if (!msc.started) return Z_USBH_MSC_ERR;
+    op_gen = msc_gen;
 
     for (n = 0; n < count; n++) {
         for (i = 0; i < 512; i++)

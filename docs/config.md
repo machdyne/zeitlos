@@ -42,7 +42,8 @@ Absent, empty or `none`: the start panel, as without a config file.
 before `repl0` has registered -- init loads the shells off the card, and
 the dock enables once init has *started* them, not once they are
 listening. So term waits up to 15 seconds for the name to appear (the
-port's own name; `serial0` for serial; `net0` for telnet and ssh), with
+port's own name; `serial0` for serial and usbserial;
+`net0` for telnet and ssh), with
 the panel saying so, then connects **once**. Esc stops the wait. A
 refusal or timeout lands on the panel with the reason; it never retries.
 

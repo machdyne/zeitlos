@@ -2,13 +2,14 @@
 
 Where a `term` window can be pointed, and how it gets there.
 
-Four kinds of target, one shape: a provider to look up in the pid
+Five kinds of target, one shape: a provider to look up in the pid
 registry, and a scalar argument that travels with the CONNECT.
 
 | kind | provider | argument |
 |---|---|---|
 | `port <name>` | the name itself | none |
 | `serial [baud]` | `serial0` | baud rate, or 0 for "as-is" |
+| `usbserial` | `serial0` | `Z_CONN_USBSERIAL_ARG` -- the USB CDC device, not UART1 |
 | `telnet <host>` | `net0` | resolved IPv4 address |
 | `ssh [user@]host` | `net0` | a token issued by `net` |
 
@@ -176,4 +177,5 @@ until asked.
 - `sw/common/zconnect.h` — the interface and the per-caller blocking cost
 - `docs/ports.md` — the port mechanism underneath all of this
 - `docs/uart1.md` — the `serial` kind
+- `docs/usb_host.md`, "CDC" — the `usbserial` kind
 - `docs/networking.md` — `net`, telnet and ssh

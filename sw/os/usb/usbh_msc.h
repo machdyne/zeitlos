@@ -33,8 +33,15 @@ typedef struct {
     // rather than being reset per transfer.
     uint8_t tgl_in;
     uint8_t tgl_out;
+    uint8_t iface;      // bInterfaceNumber, for the class reset
+    uint8_t mps0;       // endpoint 0, for the driver's own requests
     uint8_t ready;      // claimed, endpoints known
     uint8_t started;    // geometry known, safe to read and write
+    // Set from the ISR when the device disconnects. Cleared only by the
+    // next bind. Every loop in usbh_msc.c checks it, so a command
+    // against a pulled drive fails at its next step.
+    volatile uint8_t gone;
+    uint16_t resets;    // Reset Recoveries performed, for diagnostics
     uint16_t last_len;
     uint8_t last_status;
     uint32_t tag;
@@ -46,6 +53,10 @@ typedef struct {
 // driver took it.
 int z_usbh_msc_bind(uint8_t addr, uint8_t xa_flags, uint8_t port,
                     uint8_t mps0, const uint8_t *cfg, int cfg_len);
+
+// The device went away. Called from the enumeration state machine
+// (ISR context) when its port disconnects. Does not touch the bus.
+void z_usbh_msc_unbind(void);
 
 // Wait for the unit to report ready and read its geometry. Call once
 // after bind, NOT inside a filesystem lock.

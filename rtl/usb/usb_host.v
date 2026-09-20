@@ -43,6 +43,24 @@ module usb_host #(
     // every two microseconds would leave the engine permanently busy
     // emitting SOF and starve every transaction under test.
     parameter T_FRAME = 32'd48000,
+    // End-of-frame guard, in clocks: nothing may START unless it can
+    // finish before the next frame tick. A hub times each 1 ms frame
+    // from our SOFs and, near the end of one (EOF1/EOF2), stops
+    // repeating traffic and treats anything still running as babble.
+    // FS: a 64-byte packet with its handshake and timeout, ~60 us
+    // worst case; 75 us allowed. LS through a hub: PRE, token, an 8-byte
+    // packet, the handshake and the 29 us response timeout, ~185 us;
+    // 210 us allowed. The slack matters: USB 2.0 11.2 has a hub stop
+    // repeating new packets at EOF1, ~32 FS bit times (2.7 us) before
+    // the next SOF, and disable a port still transmitting upstream at
+    // EOF2 (~10 bit times) as babbling. Everything must be over before
+    // EOF1, not merely before the frame tick.
+    parameter GUARD_FS = 32'd3600,
+    parameter GUARD_LS = 32'd10080,
+    // Bring-up: the last EOF_ZONE clocks of each frame, in which port 0's
+    // line should be idle -- a hub's EOF1 is ~32 FS bit times (2.7 us)
+    // before the SOF and EOF2 ~10. 192 clocks is 4 us.
+    parameter EOF_ZONE = 32'd192,
     parameter DEBOUNCE_MS = 32'd100,
     parameter RESET_MS = 32'd10,
     parameter RECOVERY_MS = 32'd10,
@@ -90,6 +108,12 @@ module usb_host #(
     // Which port that transmission is going to, so a probe watching
     // one port's pins can ignore traffic aimed at the other.
     output wire tx_port_o,
+    // Port 0's D+ and D- as sampled in the pads' I/O cells ({dp, dm}),
+    // for rtl/probe.v. The probe cannot read the pins itself: an
+    // IDDRX1F's input must connect ONLY to the pin (nextpnr enforces
+    // it), so a second load on the pad net fails the pack. This is also
+    // exactly what the receiver sees, a clock after the pins.
+    output wire [1:0] line0_o,
 
     output wire int_o
 );
@@ -112,6 +136,18 @@ module usb_host #(
     // and which nothing else in this register map can answer.
     localparam A_DEBUG0   = 11'h048;
     localparam A_DEBUG1   = 11'h049;
+    // Bring-up: low-speed timings, adjustable at run time (usbtune in
+    // the shell). Reset to the values the design always used, so the
+    // register changes nothing until written. Fields, in 8-clock units
+    // (1/6 us) unless noted:
+    //   [7:0]   low-speed response timeout      (175 = 29 us)
+    //   [15:8]  low-speed turnaround in a transaction   (20 = 3.3 us)
+    //   [23:16] gap after a low-speed packet    (20 = 3.3 us)
+    //   [27:24] J after a PRE, full-speed bit times  (4, the minimum)
+    // For comparing against reference hosts on hardware without a
+    // rebuild per value; see docs/usb_host.md, Known issues, item 5.
+    localparam A_TUNE     = 11'h04a;
+    localparam [31:0] TUNE_RESET = 32'h041414af;
 
     // Auto-poll table: 0xc000_0200 is word 0x080, two words per slot.
     localparam A_POLL     = 11'h080;
@@ -128,6 +164,7 @@ module usb_host #(
     integer i;
 
     reg [31:0] ctrl;
+    reg [31:0] tune;
     reg [31:0] irqen;
     reg [5:0] irqstat;
 
@@ -160,6 +197,21 @@ module usb_host #(
     reg sched_ls;
     reg sched_inv;
     reg sched_pre;
+    // -- one PRE'd transaction per frame --
+    //
+    // Set when a transaction to a low-speed device behind a hub (one
+    // that needs a PRE) is scheduled; cleared at the frame tick. While
+    // set, no other PRE'd transaction starts. This is the discipline of
+    // Pico-PIO-USB, TinyUSB's software full-speed host, which runs at
+    // most one transaction per endpoint per frame, and of ESP-IDF and
+    // TinyUSB's DWC2 fix ("can't handle two transactions with preamble
+    // in one frame"). On hardware, low-speed devices behind a hub failed
+    // exactly where this host put several PRE'd transactions into one
+    // frame -- multi-packet data stages -- with the hub disabling the
+    // port half the time, while single-packet reads and HID polls (one
+    // transaction every 10 frames) worked. usb_xact.v ends a PRE'd
+    // request rather than re-issue inside it; software resumes it.
+    reg pre_done;
     reg sched_port;
     reg sched_toggle;
     reg sched_autocont;
@@ -244,6 +296,11 @@ module usb_host #(
     wire [PORTS-1:0] pin_oe;
     wire [PORTS-1:0] pin_dp;
     wire [PORTS-1:0] pin_dm;
+    // Registered in the pads' I/O cells -- see "Pin registers IN THE I/O
+    // CELLS" below.
+    wire [PORTS-1:0] q_dp, q_dm;        // to the pads
+    wire [PORTS-1:0] in_dp, in_dm;      // sampled at the pads
+    reg [PORTS-1:0] oe_q;
 
     // Raw line state for PORTSTAT bits [7:6] of each port byte,
     // synchronised because it crosses from a pad into the bus read
@@ -280,9 +337,9 @@ module usb_host #(
     end
 
     always @(posedge wb_clk_i) begin
-        dp_s0 <= usb_dp;
+        dp_s0 <= in_dp;
         dp_s1 <= dp_s0;
-        dm_s0 <= usb_dm;
+        dm_s0 <= in_dm;
         dm_s1 <= dm_s0;
     end
 
@@ -344,6 +401,59 @@ module usb_host #(
     // cycle. tb_usb_host's result monitor checks every cycle.
     wire xact_pending = x_busy || x_done || sw_req || sched_start;
     wire ctl_frame_en = ctrl[1];
+
+    // -- end of frame --
+    //
+    // The scheduler used to start whatever was queued the moment the
+    // engine went idle, and queued the SOF behind it. An auto-continue
+    // request at low speed through a hub is ~150 us a packet; a 59-byte
+    // configuration descriptor, eight packets, held the engine for over
+    // a millisecond and the SOF went out hundreds of microseconds late.
+    // A root port does not care. A hub does: it enforces the frame, cut
+    // our traffic at its EOF points, and every transfer that crossed a
+    // frame boundary failed -- a low-speed keyboard behind a hub never
+    // enumerated, the mouse mostly did (a shorter descriptor), requests
+    // to the hub itself failed at random. Measured in co-simulation:
+    // SOFs up to 207 us late.
+    //
+    // late_fs / late_ls: too little of this frame is left to start a
+    // full- / low-speed transaction. The scheduler checks them before
+    // starting anything, and usb_xact.v before every re-issue inside a
+    // request, which it ends with ST_NAK instead -- progress kept in
+    // act_len, which every driver already resumes from. The engine is
+    // then idle at every frame tick and the SOF goes out on time.
+    wire [19:0] frame_left = T_FRAME[19:0] - frame_div;
+    wire late_fs = ctl_frame_en && (frame_left < GUARD_FS[19:0]);
+    wire late_ls = ctl_frame_en && (frame_left < GUARD_LS[19:0]);
+
+    // -- bring-up: anything on port 0 at the end of the frame? --
+    //
+    // A hub disabled the ports of low-speed devices behind it with
+    // C_PORT_ENABLE set: a port error, which USB 2.0 11.8.1 defines as
+    // a device still active at the hub's EOF2 point. The guard above is
+    // meant to make that impossible. This counts the frames in which
+    // port 0's line was NOT idle during the last EOF_ZONE clocks before
+    // the frame tick -- the hub's view, as closely as the host can see
+    // it -- so whether our traffic, or a device answering it, reaches
+    // the end of a frame is a number rather than an argument. Read in
+    // DEBUG1[31:16]; lsusb prints it.
+    reg [15:0] dbg_eof;
+    reg eof_hit;
+    wire eof_zone = ctl_frame_en && (frame_left < EOF_ZONE[19:0]);
+    wire p0_idle = p_lowspeed[0] ? (!dp_s1[0] &&  dm_s1[0])
+                                 : ( dp_s1[0] && !dm_s1[0]);
+
+    always @(posedge wb_clk_i) begin
+        if (wb_rst_i) begin
+            dbg_eof <= 16'd0;
+            eof_hit <= 1'b0;
+        end else if (!eof_zone) begin
+            eof_hit <= 1'b0;
+        end else if (p_enabled[0] && !p0_idle && !eof_hit) begin
+            dbg_eof <= dbg_eof + 16'd1;
+            eof_hit <= 1'b1;
+        end
+    end
 
     // -- CTRL fields --
     // -- XACT_A fields, per docs/usb_host.md --
@@ -439,9 +549,65 @@ module usb_host #(
     // ports
     // ---------------------------------------------------------------
 
+    // ---------------------------------------------------------------
+    // Pin registers IN THE I/O CELLS
+    // ---------------------------------------------------------------
+    //
+    // D+ and D- used to reach their pads from flops the placer put
+    // anywhere, each with its own route. A few ns between the two routes
+    // puts a brief SE0 or SE1 on the wire at every transition we drive,
+    // and the mirror image on every transition we sample. A device on a
+    // root port ignores that. A hub's repeater decides in real time
+    // whether it is seeing an end of packet, and a crossover SE0 can end
+    // our PRE'd low-speed packet early -- the device then says nothing,
+    // or the hub disables the port for a port error. Invisible to Fmax,
+    // which covers flop-to-flop paths only, and different in every
+    // build: round 26 failed and round 27 did not with identical logic
+    // (docs/usb_host.md, "Known issues", item 5).
+    //
+    // So both lines are registered in the pad's own I/O cell, in and
+    // out: ODDRX1F with both halves the same value is a single-rate
+    // output register, IDDRX1F's rising-edge sample a single-rate input
+    // register. The pad-to-flop paths are then fixed by the silicon and
+    // matched between D+ and D-, in every build. ODDRX1F is already
+    // used this way by rtl/gpu/gpu_video.v with this toolchain.
+    //
+    // ODDRX1F adds a clock to the data, so the output enable gets one
+    // fabric register to stay aligned with it. Enable skew between the
+    // two pins is harmless -- the line is idle J at every enable edge --
+    // it is the data transitions that must match.
+    //
+    // Simulation (iverilog does not define SYNTHESIS; yosys does) uses
+    // plain registers with the same one-clock latency.
+    always @(posedge wb_clk_i) oe_q <= pin_oe;
+`ifndef SYNTHESIS
+    reg [PORTS-1:0] q_dp_r, q_dm_r, in_dp_r, in_dm_r;
+    always @(posedge wb_clk_i) begin
+        q_dp_r <= pin_dp;
+        q_dm_r <= pin_dm;
+        in_dp_r <= usb_dp;
+        in_dm_r <= usb_dm;
+    end
+    assign q_dp = q_dp_r;
+    assign q_dm = q_dm_r;
+    assign in_dp = in_dp_r;
+    assign in_dm = in_dm_r;
+`endif
+
     genvar gi;
     generate
         for (gi = 0; gi < PORTS; gi = gi + 1) begin : ports
+
+`ifdef SYNTHESIS
+            ODDRX1F odp (.D0(pin_dp[gi]), .D1(pin_dp[gi]), .SCLK(wb_clk_i),
+                         .RST(1'b0), .Q(q_dp[gi]));
+            ODDRX1F odm (.D0(pin_dm[gi]), .D1(pin_dm[gi]), .SCLK(wb_clk_i),
+                         .RST(1'b0), .Q(q_dm[gi]));
+            IDDRX1F idp (.D(usb_dp[gi]), .SCLK(wb_clk_i), .RST(1'b0),
+                         .Q0(in_dp[gi]), .Q1());
+            IDDRX1F idm (.D(usb_dm[gi]), .SCLK(wb_clk_i), .RST(1'b0),
+                         .Q0(in_dm[gi]), .Q1());
+`endif
 
             usb_port #(
                 .T_MS(T_MS),
@@ -451,8 +617,8 @@ module usb_host #(
             ) port_i (
                 .clk(wb_clk_i),
                 .rst(wb_rst_i),
-                .dp_i(usb_dp[gi]),
-                .dm_i(usb_dm[gi]),
+                .dp_i(in_dp[gi]),
+                .dm_i(in_dm[gi]),
                 .drive_se0(p_drive_se0[gi]),
                 .ctl_enable(ctrl[8 + gi*8]),
                 .ctl_reset(ctrl[9 + gi*8]),
@@ -504,15 +670,16 @@ module usb_host #(
             //   yosys -p "read_verilog rtl/usb/*.v; hierarchy -top \
             //     usb_host; proc; opt_clean; select -assert-count \
             //     4 t:\$tribuf"
-            assign usb_dp[gi] = pin_oe[gi] ? pin_dp[gi] : 1'bz;
-            assign usb_dm[gi] = pin_oe[gi] ? pin_dm[gi] : 1'bz;
+            assign usb_dp[gi] = oe_q[gi] ? q_dp[gi] : 1'bz;
+            assign usb_dm[gi] = oe_q[gi] ? q_dm[gi] : 1'bz;
 
         end
     endgenerate
 
     // The SIE sees whichever port the transaction engine selected.
-    wire sie_dp_i = usb_dp[x_port_sel];
-    wire sie_dm_i = usb_dm[x_port_sel];
+    assign line0_o = {in_dp[0], in_dm[0]};
+    wire sie_dp_i = in_dp[x_port_sel];
+    wire sie_dm_i = in_dm[x_port_sel];
 
     // ---------------------------------------------------------------
     // SIE and transaction engine
@@ -532,6 +699,7 @@ module usb_host #(
         .cfg_ls(x_cfg_ls),
         .cfg_inv(x_cfg_inv),
         .cfg_pre(x_cfg_pre),
+        .cfg_pregap(tune[27:24]),
         .tx_go(x_tx_go),
         .tx_pid(x_tx_pid),
         .tx_len(x_tx_len),
@@ -596,6 +764,14 @@ module usb_host #(
         .req_off(sched_off),
         .req_len(sched_len),
         .req_nak_retry(sched_nak),
+        .late_fs(late_fs),
+        .late_ls(late_ls),
+        // One PRE'd transaction per frame applies only while frames run;
+        // with frames off (bring-up, tests) there is no frame to share.
+        .pre_gate(ctl_frame_en),
+        .ls_tmo({5'd0, tune[7:0], 3'd0}),
+        .ls_turn({1'b0, tune[15:8], 3'd0}),
+        .ls_gap({1'b0, tune[23:16], 3'd0}),
         .busy(x_busy),
         .done(x_done),
         .status(x_status),
@@ -694,8 +870,49 @@ module usb_host #(
     wire [PORTS-1:0] p_sof_ok =
         p_enabled | (p_resetting & ~p_drive_se0);
 
+    // -- ...and for the LINE to be quiet, not just the engine --
+    //
+    // ~x_busy alone is not enough. The engine drops busy the moment it
+    // sees the device's EOP begin, and a low-speed device goes on
+    // driving for about a bit and a half after that -- the rest of the
+    // SE0, then a full bit of J. A keepalive, which is an EOP of our
+    // own, driven into that tail is two drivers on one wire. The
+    // co-simulation's contention monitor found it on a directly
+    // attached low-speed mouse, during enumeration; the same collision
+    // from the transaction engine's side is gap_limit in usb_xact.v.
+    //
+    // So a port's keepalive also waits until the engine has been idle
+    // and that port's line out of SE0 for 160 clocks -- five low-speed
+    // bit times, the same gap a token waits.
+    reg [8*PORTS-1:0] ka_quiet;
+    integer kq;
+    wire [PORTS-1:0] p_quiet;
+
+    generate
+        for (gi = 0; gi < PORTS; gi = gi + 1) begin : kaq
+            assign p_quiet[gi] = (ka_quiet[gi*8 +: 8] >= 8'd160);
+        end
+    endgenerate
+
+    always @(posedge wb_clk_i) begin
+        for (kq = 0; kq < PORTS; kq = kq + 1) begin
+            if (wb_rst_i || x_busy || (!dp_s1[kq] && !dm_s1[kq]))
+                ka_quiet[kq*8 +: 8] <= 8'd0;
+            else if (ka_quiet[kq*8 +: 8] != 8'd255)
+                ka_quiet[kq*8 +: 8] <= ka_quiet[kq*8 +: 8] + 8'd1;
+        end
+    end
+
     assign p_ka = sof_pending & p_lowspeed & p_ka_ok &
-                  {PORTS{~x_busy}};
+                  {PORTS{~x_busy}} & p_quiet;
+
+    // And the scheduler must let that window happen. Without this it
+    // starts the next transaction the moment the engine goes idle, and
+    // under continuous traffic -- storage on the other port -- the
+    // quiet window never comes, the keepalive starves, and a low-speed
+    // device suspends after 3 ms. Not while the port is driving reset
+    // SE0: that lasts 10 ms and no keepalive is sent during it anyway.
+    wire ka_hold = |(sof_pending & p_lowspeed & p_ka_ok & ~p_drive_se0);
 
     wire frame_tick = ctl_frame_en && (frame_div >= (T_FRAME - 32'd1));
 
@@ -730,6 +947,7 @@ module usb_host #(
             frame <= 11'd0;
             frame_div <= 20'd0;
             sof_pending <= {PORTS{1'b0}};
+            pre_done <= 1'b0;
             sw_req <= 1'b0;
             poll_pending <= 4'd0;
             sched_is_poll <= 1'b0;
@@ -762,6 +980,7 @@ module usb_host #(
                     frame_div <= 20'd0;
                     frame <= frame + 11'd1;
                     sof_pending <= p_ka_ok;
+                    pre_done <= 1'b0;
                 end else begin
                     frame_div <= frame_div + 20'd1;
                 end
@@ -814,9 +1033,16 @@ module usb_host #(
                     sched_autocont <= 1'b0;
                     sched_start <= 1'b1;
 
-                end else if (sw_req) begin
+                end else if (ka_hold) begin
+
+                    // A low-speed keepalive is due and waiting for its
+                    // quiet window; start nothing until it has gone.
+
+                end else if (sw_req && !(xa_ls ? late_ls : late_fs) &&
+                             !(xa_pre && pre_done && ctl_frame_en)) begin
 
                     sw_req <= 1'b0;
+                    if (xa_pre) pre_done <= 1'b1;
                     sched_is_sof <= 1'b0;
                     sched_is_poll <= 1'b0;
                     sched_pid <= xa_pid;
@@ -835,7 +1061,10 @@ module usb_host #(
                     sched_nak <= xb_nak;
                     sched_start <= 1'b1;
 
-                end else if (ctrl[2] && (poll_pending != 4'd0)) begin
+                end else if (ctrl[2] && (poll_pending != 4'd0) && !late_ls &&
+                             !(pre_done && ctl_frame_en &&
+                               poll_a[poll_next][13])) begin
+                    if (poll_a[poll_next][13]) pre_done <= 1'b1;
 
                     // An auto-poll slot is due. Software set this up
                     // once, at enumeration, and is not involved again
@@ -1010,6 +1239,7 @@ module usb_host #(
 
             ws <= W_IDLE;
             ctrl <= 32'd0;
+            tune <= TUNE_RESET;
             irqen <= 32'd0;
 
         end else begin
@@ -1072,6 +1302,7 @@ module usb_host #(
                         if (we_q) begin
                             case (adr_q)
                             A_CTRL:  ctrl <= dat_q;
+                            A_TUNE:  tune <= dat_q;
                             A_IRQEN: irqen <= dat_q;
                             A_XACT_A: xact_a <= dat_q;
                             A_XACT_B: xact_b <= dat_q;
@@ -1094,6 +1325,7 @@ module usb_host #(
                         end else
                         case (adr_q)
                         A_CTRL: wb_dat_o <= ctrl;
+                        A_TUNE: wb_dat_o <= tune;
                         // Bit 5 of each byte is overcurrent, wired to
                         // zero: these ports are D+/D-, 22R and a 15k
                         // pull-down and nothing else, so there is no
@@ -1120,7 +1352,7 @@ module usb_host #(
                             res_status, res_len };
                         A_DEBUG0: wb_dat_o <= {dbg_rx, dbg_tx};
                         A_DEBUG1: wb_dat_o <= {
-                            16'd0, dbg_rx_bad, dbg_rx_ok };
+                            dbg_eof, dbg_rx_bad, dbg_rx_ok };
                         A_CONFIG: wb_dat_o <= {
                             MAGIC, 4'd2, POLL_SLOTS[3:0],
                             PORTS[3:0], 8'd2 };

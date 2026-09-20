@@ -53,12 +53,36 @@ module tb_usb_device #(
     // Endpoint 1 is bulk IN, endpoint 2 bulk OUT, both 64 bytes, and
     // the medium is DISK_SECTORS sectors held in this model. Default
     // 0, so every existing test sees the model it always saw.
-    parameter integer MSC = 0
+    parameter integer MSC = 0,
+    // 1: a four-port full-speed HUB. Class requests, a status change
+    // endpoint on endpoint 1, and per-port power/connect/enable/reset
+    // state. Devices behind it are separate instances of this model on
+    // the SAME wires, gated by hub_en and reset by hub_rst -- a
+    // full-speed hub is a repeater, so that is electrically what they
+    // see. Replaces the tb_usb_hub.v phase 0 planned.
+    parameter integer HUB = 0,
+    // How long the hub takes to reset a port. Real hubs take 10-20 ms;
+    // shorter here only to keep simulation time down.
+    parameter integer HUB_RST_NS = 20000,
+    // HUB=1: ports whose device is low speed, bit per port. The hub
+    // reports it in wPortStatus; nothing else about the port differs.
+    parameter [3:0] PORT_LS = 4'b0000
 ) (
     inout wire dp,
     inout wire dm,
-    input wire attach
+    input wire attach,
+    // HUB=1: port p enabled (feed a child's attach), and in reset.
+    output wire [3:0] hub_en,
+    output wire [3:0] hub_rst,
+    // HUB=1: a device is plugged into port p.
+    input wire [3:0] hub_conn,
+    // Behind a hub: the hub is resetting this device's port. The reset
+    // never appears on the upstream wires, so it arrives here instead.
+    input wire ext_reset
 );
+
+    assign hub_en = hp_ena & hp_con;
+    assign hub_rst = hp_rsting;
 
     localparam integer INVERT = (MODE == 1) ? 1 : 0;
     localparam integer PRE = (MODE == 2) ? 1 : 0;
@@ -179,6 +203,22 @@ module tb_usb_device #(
     // asked for, so the config request came back as 18 bytes of the
     // wrong structure and nothing ever bound.
     reg [7:0] cfgd [0:33];
+
+    // -- HUB=1 --
+    reg [7:0] hubd [0:8];           // hub descriptor
+    reg [3:0] hp_pwr, hp_con, hp_ena, hp_rsting;
+    reg [3:0] hp_c_con, hp_c_ena, hp_c_rst;
+    reg [3:0] hp_seen;              // hub_conn as last sampled
+    time hp_rst_until [0:3];
+    integer hub_resets;             // SET_FEATURE(PORT_RESET) seen
+    integer hub_powers;             // SET_FEATURE(PORT_POWER) seen
+    integer hub_reports;            // change bitmaps delivered
+    integer hp, hq;                 // loop variables for the hub's own
+                                    // processes, never the main loop's
+    reg [7:0] hub_bits;
+    reg pre_ok;                     // rx_preamble: a PRE was found
+    reg ls_skip;                    // rx_packet: a low-speed packet, not ours
+    reg tok_mine;                   // the last token was addressed to us
     // What the current control read is serving from.
     reg [7:0] src [0:63];
 
@@ -187,6 +227,11 @@ module tb_usb_device #(
     reg bus_reset;
     integer nak_budget;
     reg stall_next;
+    // Hook: STALL the status stage of every SET_ADDRESS, so the address
+    // is never taken and the device stays on address 0 -- a device
+    // that fails enumeration while still answering there, as a real
+    // keyboard behind a real hub did.
+    reg stall_set_addr;
     integer sof_count;
     integer setup_count;
 
@@ -236,6 +281,23 @@ module tb_usb_device #(
     integer msc_crc_sent;           // corrupted packets actually sent
     // tx_packet's CRC corruption for the packet it is about to send.
     reg tx_crc_flip;
+    // Endpoint halts, BOT 6.7.2. While set, that bulk endpoint answers
+    // STALL; CLEAR_FEATURE(ENDPOINT_HALT) clears it and resets the
+    // endpoint's toggle to DATA0.
+    reg msc_halt_in, msc_halt_out;
+    // Hook: a data-in phase with NOTHING to send (READ past the end of
+    // the medium) halts the IN pipe instead of sending a zero-length
+    // packet. Both are legal; many real devices do this one.
+    reg msc_stall_short;
+    // Hook: the next N CSWs go out with a corrupted signature.
+    integer msc_bad_csw;
+    // Hook: the next N host ACKs to data-in packets are "lost" -- the
+    // model behaves as though it never saw them and resends the same
+    // packet with the same toggle, which is what a real device does.
+    integer msc_ack_lost;
+    integer msc_resets;             // Bulk-Only Mass Storage Resets seen
+    integer msc_clears;             // CLEAR_FEATURE(ENDPOINT_HALT) seen
+    integer msc_aborted;            // commands a reset ended before their CSW
     // A packet received where an ACK was expected. It is the host's
     // next token (it saw an error and did not ACK), so the main loop
     // must dispatch it rather than read a new one.
@@ -269,10 +331,35 @@ module tb_usb_device #(
             #(BIT_NS);
             if (in_se0) begin
                 se0_bits = se0_bits + 1;
-                if (se0_bits > 8) begin
+                // SE0 for 2.5 us is a reset (USB 2.0 7.1.7.5, TDETRST).
+                // This counted 8 of the model's OWN bit times, 667 ns at
+                // full speed -- shorter than the ~1.33 us SE0 ending a
+                // low-speed packet, so on a hub segment every full-speed
+                // model reset itself after each packet to a PRE device.
+                if (se0_bits * BIT_NS > 2500.0) begin
                     bus_reset = 1'b1;
                     dev_addr = 7'd0;
                     pending_addr = 7'd0;
+                    // A bus reset returns every endpoint to its
+                    // initial state: toggles to DATA0, halts cleared,
+                    // bulk-only transport waiting for a CBW. This model
+                    // used to reset only its address.
+                    ep1_toggle = 1'b0;
+                    if (msc_state != 0) msc_aborted = msc_aborted + 1;
+                    msc_state = 0;
+                    msc_in_tgl = 1'b0;
+                    msc_out_tgl = 1'b0;
+                    msc_halt_in = 1'b0;
+                    msc_halt_out = 1'b0;
+                    msc_nak_left = 0;
+                    // A reset hub comes back with every port unpowered
+                    // and nothing enabled (USB 2.0 11.10); so does one
+                    // that was unplugged and plugged back in.
+                    if (HUB) begin
+                        hp_pwr = 4'd0; hp_con = 4'd0; hp_ena = 4'd0;
+                        hp_rsting = 4'd0; hp_seen = 4'd0;
+                        hp_c_con = 4'd0; hp_c_ena = 4'd0; hp_c_rst = 4'd0;
+                    end
                 end
             end else begin
                 se0_bits = 0;
@@ -347,6 +434,14 @@ module tb_usb_device #(
             // instead. So this decodes exactly eight PID bits and
             // stops, rather than looking for a packet end that is
             // never coming.
+            // Behind a hub, a low-speed port is sent only what follows a
+            // PRE; full-speed traffic to other devices on the hub is
+            // never repeated to it. This model sits on the upstream
+            // wires and hears all of it, so it skips any packet that
+            // does not start with PRE rather than decoding it as its
+            // own.
+            pre_ok = 1'b0;
+            while (!pre_ok) begin
             @(posedge in_k);
             #(FS_NS / 2.0);
             prev_lvl = 1'b1;
@@ -373,9 +468,21 @@ module tb_usb_device #(
                 end
                 #(FS_NS);
             end
-            if (shift[3:0] !== PID_PRE)
-                $display("[dev] ERROR: expected PRE, got PID %b",
-                         shift[3:0]);
+            // The WHOLE byte, check field included, as a hub checks it.
+            // This compared only the low nibble, so a PRE sent with a
+            // wrong check field passed here and would be ignored by
+            // any real hub -- which is exactly what usb_sie.v did.
+            if (shift === {~PID_PRE, PID_PRE}) begin
+                pre_ok = 1'b1;
+            end else begin
+                if (shift[3:0] === PID_PRE)
+                    $display("[%m] ERROR: PRE with bad PID check field %02x -- a hub ignores it",
+                             shift);
+                // Not ours: wait for this packet's end and look again.
+                wait (in_se0);
+                wait (!in_se0);
+            end
+            end
         end
     endtask
 
@@ -392,11 +499,33 @@ module tb_usb_device #(
             // holds J, so this is the same wait either way.
             @(posedge in_k);
 `ifdef USB_TRACE
-            $display("[dev %0t] sync K detected", $time);
+            $display("[%m %0t] sync K detected", $time);
 `endif
             #(BIT_RX / 2.0);
 
+            // A full-speed model on a hub segment also hears the
+            // replies of low-speed devices behind the hub: they go
+            // upstream at low speed with no PRE. A real full-speed
+            // device on another hub port never would -- a hub repeats
+            // that traffic upstream only -- so skip it. At full-speed
+            // rate a low-speed SYNC's first K lasts eight bit times, a
+            // full-speed one's just one: sample once more, and if it is
+            // still K, wait out the packet.
+            ls_skip = 1'b0;
             prev_lvl = 1'b1;
+            if (MODE == 0) begin
+                #(BIT_RX);
+                if (in_k) ls_skip = 1'b1;
+                // Otherwise decoding carries on from here, one bit in:
+                // the bit already passed was the SYNC's opening K.
+                prev_lvl = 1'b0;
+            end
+            if (ls_skip) begin
+                wait (in_se0);
+                wait (!in_se0);
+                eop = 1'b1;
+            end
+
             sync_done = 1'b0;
             ones = 0;
             bitpos = 0;
@@ -432,7 +561,7 @@ module tb_usb_device #(
 
             rxpid = rxb[0][3:0];
 `ifdef USB_TRACE
-            $display("[dev %0t] rx pid=%b n=%0d b0=%02x", $time,
+            $display("[%m %0t] rx pid=%b n=%0d b0=%02x", $time,
                      rxb[0][3:0], rxn, rxb[0]);
 `endif
             // Releasing a bus reset is a line transition that can look
@@ -440,9 +569,11 @@ module tb_usb_device #(
             // transient is expected and stays quiet. Anything
             // well-formed clears the flag, so a genuine error after
             // the first good packet is still reported.
-            if (rxb[0][7:4] !== ~rxb[0][3:0]) begin
+            if (ls_skip) begin
+                // nothing decoded, nothing to report
+            end else if (rxb[0][7:4] !== ~rxb[0][3:0]) begin
                 if (!bus_reset)
-                    $display("[dev] ERROR: bad PID check field %02x",
+                    $display("[%m] ERROR: bad PID check field %02x",
                              rxb[0]);
             end else begin
                 bus_reset = 1'b0;
@@ -456,8 +587,24 @@ module tb_usb_device #(
             else
                 rx_crc_ok = 1'b1;
 
-            if (!rx_crc_ok && !bus_reset) begin
-                $display("[dev] ERROR: CRC failed on PID %b, %0d bytes",
+            // A skipped packet is PID 0000 (reserved) with a failed CRC,
+            // so nothing downstream acts on it.
+            if (ls_skip) begin
+                rxpid = 4'b0000;
+                rx_crc_ok = 1'b0;
+            end
+
+            // Whether the data that follows is ours to judge. On a hub
+            // segment every model hears every device's data; a model
+            // whose receiver is off-rate from ANOTHER model's
+            // transmitter fails the CRC on data that was never for it.
+            // Only data after a token to this device is reported.
+            if (rxpid == PID_IN || rxpid == PID_OUT || rxpid == PID_SETUP)
+                tok_mine = rx_crc_ok && (rxb[1][6:0] == dev_addr);
+
+            if (!rx_crc_ok && !bus_reset && !ls_skip &&
+                (!(rxpid == PID_DATA0 || rxpid == PID_DATA1) || tok_mine)) begin
+                $display("[%m] ERROR: CRC failed on PID %b, %0d bytes",
                          rxpid, rxn);
                 for (j = 0; j < rxn; j = j + 1)
                     $write(" %02x", rxb[j]);
@@ -499,9 +646,15 @@ module tb_usb_device #(
     // times after detection therefore collides with the host's own
     // driver and puts x on the bus. Four is clear of it and still well
     // inside the 7.5 bit times a device is allowed to take.
+    // Hook: extra delay before answering, in ns. A real keyboard behind
+    // a real hub answered 2.9 us after the host's EOP -- legal, but
+    // later than this model's 4 bit times.
+    real extra_turn_ns;
+    initial extra_turn_ns = 0.0;
+
     task turnaround;
         begin
-            #(4.0 * BIT_NS);
+            #(4.0 * BIT_NS + extra_turn_ns);
         end
     endtask
 
@@ -526,8 +679,16 @@ module tb_usb_device #(
             end
             drv_se0 = 1'b1;
             #(2.0 * BIT_NS);
-            drv_se0 = 1'b0;
+            // J BEFORE releasing SE0. The other order drove K for zero
+            // time whenever the last data bit left the line in K -- a
+            // glitch the host's clocked receiver never sees, but one
+            // that `@(posedge in_k)` in any OTHER model on the same
+            // wires takes as a packet start. Behind a hub several models
+            // share the wires, and the hub model then began a bogus
+            // packet, sampled idle bus, and swallowed the host's next
+            // token.
             drv_j = 1'b1;
+            drv_se0 = 1'b0;
             #(BIT_NS);
             drv_en = 1'b0;
         end
@@ -548,6 +709,7 @@ module tb_usb_device #(
         in_len = 0;
         nak_budget = 0;
         stall_next = 1'b0;
+        stall_set_addr = 1'b0;
         sof_count = 0;
         setup_count = 0;
         hid_have = 1'b0;
@@ -605,6 +767,14 @@ module tb_usb_device #(
         msc_naks_mid = 0;
         msc_nak_left = 0;
         msc_crc_bad = 0;
+        msc_halt_in = 1'b0;
+        msc_halt_out = 1'b0;
+        msc_stall_short = 1'b0;
+        msc_bad_csw = 0;
+        msc_ack_lost = 0;
+        msc_resets = 0;
+        msc_clears = 0;
+        msc_aborted = 0;
         msc_crc_at = 0;
         msc_crc_sent = 0;
         tx_crc_flip = 1'b0;
@@ -613,6 +783,39 @@ module tb_usb_device #(
         msc_csws = 0;
         msc_proto_err = 0;
         msc_dup_out = 0;
+
+        hp_pwr = 4'd0; hp_con = 4'd0; hp_ena = 4'd0; hp_rsting = 4'd0;
+        hp_c_con = 4'd0; hp_c_ena = 4'd0; hp_c_rst = 4'd0;
+        hp_seen = 4'd0;
+        hub_resets = 0;
+        hub_powers = 0;
+        hub_reports = 0;
+        tok_mine = 1'b0;
+        if (HUB) begin
+            desc[4] = 8'h09;                // bDeviceClass: hub
+            // config 25 bytes: one interface of class 9, one interrupt
+            // IN endpoint, 1 byte, every frame.
+            cfg_total = 25;
+            cfgd[0]  = 8'h09; cfgd[1]  = 8'h02;
+            cfgd[2]  = 8'h19; cfgd[3]  = 8'h00;
+            cfgd[4]  = 8'h01; cfgd[5]  = 8'h01;
+            cfgd[6]  = 8'h00; cfgd[7]  = 8'he0;
+            cfgd[8]  = 8'h32;
+            cfgd[9]  = 8'h09; cfgd[10] = 8'h04;
+            cfgd[11] = 8'h00; cfgd[12] = 8'h00;
+            cfgd[13] = 8'h01; cfgd[14] = 8'h09;
+            cfgd[15] = 8'h00; cfgd[16] = 8'h00;
+            cfgd[17] = 8'h00;
+            cfgd[18] = 8'h07; cfgd[19] = 8'h05;
+            cfgd[20] = 8'h81; cfgd[21] = 8'h03;
+            cfgd[22] = 8'h01; cfgd[23] = 8'h00;
+            cfgd[24] = 8'h01;
+            // hub descriptor: 4 ports, per-port power switching,
+            // bPwrOn2PwrGood 10 (20 ms), nothing non-removable
+            hubd[0] = 8'h09; hubd[1] = 8'h29; hubd[2] = 8'h04;
+            hubd[3] = 8'h01; hubd[4] = 8'h00; hubd[5] = 8'h0a;
+            hubd[6] = 8'h00; hubd[7] = 8'h00; hubd[8] = 8'hff;
+        end
 
         if (MSC) begin
             // config: 32 bytes, 1 interface, 2 bulk endpoints
@@ -651,6 +854,109 @@ module tb_usb_device #(
             disk[2] = 8'h90; disk[3] = 8'h6d;
             disk[510] = 8'h55; disk[511] = 8'haa;
         end
+    end
+
+    // -- HUB=1: a class request, decoded from setup[] --
+    //
+    // Sets in_len/src[] for the IN data stage the generic code then
+    // runs; 0 for the no-data requests, whose status stage is an IN.
+    task hub_request;
+        begin
+            hq = setup[4] - 1;              // port index, wIndex 1-based
+            in_len = 0;
+            if (setup[1] == 8'h06 && setup[3] == 8'h29) begin
+                in_len = {setup[7], setup[6]};
+                if (in_len > 9) in_len = 9;
+                for (i = 0; i < 9; i = i + 1) src[i] = hubd[i];
+            end else if (setup[1] == 8'h00) begin
+                // GET_STATUS: the hub's is all zero; a port's is
+                // wPortStatus then wPortChange.
+                for (i = 0; i < 4; i = i + 1) src[i] = 8'h00;
+                if ((setup[0] & 8'h1f) == 8'h03 && hq >= 0 && hq < 4) begin
+                    src[0] = {3'b000, hp_rsting[hq], 2'b00,
+                              hp_ena[hq], hp_con[hq]};
+                    // bit 8 power, bit 9 low speed (PORT_LS)
+                    src[1] = {6'd0, (PORT_LS[hq] ? 1'b1 : 1'b0), hp_pwr[hq]};
+                    src[2] = {3'b000, hp_c_rst[hq], 2'b00,
+                              hp_c_ena[hq], hp_c_con[hq]};
+                    src[3] = 8'h00;
+                end
+                in_len = {setup[7], setup[6]};
+                if (in_len > 4) in_len = 4;
+            end else if (setup[1] == 8'h03 && (setup[0] & 8'h1f) == 8'h03 &&
+                         hq >= 0 && hq < 4) begin
+                // SET_FEATURE on a port
+                if (setup[2] == 8'd8) begin
+                    hub_powers = hub_powers + 1;
+                    if (!hp_pwr[hq]) begin
+                        hp_pwr[hq] = 1'b1;
+                        if (hub_conn[hq] === 1'b1) begin
+                            hp_con[hq] = 1'b1;
+                            hp_c_con[hq] = 1'b1;
+                        end
+                        hp_seen[hq] = (hub_conn[hq] === 1'b1);
+                    end
+                end else if (setup[2] == 8'd4 && hp_con[hq]) begin
+                    hub_resets = hub_resets + 1;
+                    $display("[hub %0t] reset port %0d (ena %b rsting %b)",
+                             $time, hq + 1, hp_ena[hq], hp_rsting[hq]);
+                    hp_ena[hq] = 1'b0;
+                    hp_rsting[hq] = 1'b1;
+                    hp_rst_until[hq] = $time + HUB_RST_NS;
+                end
+            end else if (setup[1] == 8'h01 && (setup[0] & 8'h1f) == 8'h03 &&
+                         hq >= 0 && hq < 4) begin
+                // CLEAR_FEATURE on a port
+                case (setup[2])
+                8'd1:  hp_ena[hq] = 1'b0;
+                8'd8:  begin hp_pwr[hq] = 1'b0; hp_con[hq] = 1'b0;
+                             hp_ena[hq] = 1'b0; end
+                8'd16: hp_c_con[hq] = 1'b0;
+                8'd17: hp_c_ena[hq] = 1'b0;
+                8'd20: hp_c_rst[hq] = 1'b0;
+                default: ;
+                endcase
+            end
+        end
+    endtask
+
+    // -- HUB=1: plugs, unplugs and reset completion, per port --
+    initial begin
+        #1;
+        if (HUB) forever begin
+            #500;
+            for (hp = 0; hp < 4; hp = hp + 1) begin
+                if (hp_pwr[hp] && (hub_conn[hp] === 1'b1) != hp_seen[hp]) begin
+                    hp_seen[hp] = (hub_conn[hp] === 1'b1);
+                    hp_con[hp] = hp_seen[hp];
+                    hp_c_con[hp] = 1'b1;
+                    if (!hp_seen[hp]) begin
+                        hp_ena[hp] = 1'b0;
+                        hp_rsting[hp] = 1'b0;
+                    end
+                end
+                if (hp_rsting[hp] && $time >= hp_rst_until[hp]) begin
+                    hp_rsting[hp] = 1'b0;
+                    hp_ena[hp] = hp_con[hp];
+                    hp_c_rst[hp] = 1'b1;
+                end
+            end
+        end
+    end
+
+    // -- behind a hub: its port reset is this device's bus reset --
+    always @(posedge ext_reset) begin
+        dev_addr = 7'd0;
+        pending_addr = 7'd0;
+        ep1_toggle = 1'b0;
+        if (msc_state != 0) msc_aborted = msc_aborted + 1;
+        msc_state = 0;
+        msc_in_tgl = 1'b0;
+        msc_out_tgl = 1'b0;
+        msc_halt_in = 1'b0;
+        msc_halt_out = 1'b0;
+        msc_nak_left = 0;
+        pkt_held = 1'b0;
     end
 
     // -- a CBW has arrived: decide the data phase and queue the CSW --
@@ -709,6 +1015,17 @@ module tb_usb_device #(
                 if (msc_want == 0) msc_state = 2;
                 else if (rxb[13][7]) msc_state = 1;
                 else msc_state = 3;
+                // dCSWDataResidue: what the host asked for and did not
+                // get. Only ever nonzero here for a data-in phase.
+                if (rxb[13][7] && msc_want > msc_dlen) begin
+                    csw[8]  = (msc_want - msc_dlen) & 8'hff;
+                    csw[9]  = ((msc_want - msc_dlen) >> 8) & 8'hff;
+                end
+                if (msc_stall_short && rxb[13][7] && msc_want > 0 &&
+                    msc_dlen == 0) begin
+                    msc_halt_in = 1'b1;
+                    msc_state = 2;
+                end
             end
         end
     endtask
@@ -734,7 +1051,9 @@ module tb_usb_device #(
             // Endpoint 1, mass storage: bulk IN, data phase then CSW.
             if (MSC && rxpid == PID_IN) begin
                 turnaround;
-                if (msc_state == 1 && msc_nak_left > 0) begin
+                if (msc_halt_in) begin
+                    tx_packet(PID_STALL, 0);
+                end else if (msc_state == 1 && msc_nak_left > 0) begin
                     msc_nak_left = msc_nak_left - 1;
                     tx_packet(PID_NAK, 0);
                 end else if (msc_state == 1) begin
@@ -757,6 +1076,13 @@ module tb_usb_device #(
                     // advances, and what arrived instead is its next
                     // token.
                     if (rxpid != PID_ACK) pkt_held = 1'b1;
+                    // A lost ACK: the host took the packet, the device
+                    // thinks it did not, and will send it again with
+                    // the same toggle.
+                    if (rxpid == PID_ACK && msc_ack_lost > 0) begin
+                        msc_ack_lost = msc_ack_lost - 1;
+                        rxpid = PID_NAK;
+                    end
                     if (rxpid == PID_ACK) begin
                         msc_in_tgl = ~msc_in_tgl;
                         msc_dptr = msc_dptr + k;
@@ -769,9 +1095,11 @@ module tb_usb_device #(
                     end
                 end else if (msc_state == 2) begin
                     for (i = 0; i < 13; i = i + 1) txb[i] = csw[i];
+                    if (msc_bad_csw > 0) txb[0] = csw[0] ^ 8'hff;
                     tx_packet(msc_in_tgl ? PID_DATA1 : PID_DATA0, 13);
                     rx_packet;
                     if (rxpid == PID_ACK) begin
+                        if (msc_bad_csw > 0) msc_bad_csw = msc_bad_csw - 1;
                         msc_in_tgl = ~msc_in_tgl;
                         msc_csws = msc_csws + 1;
                         msc_state = 0;
@@ -779,6 +1107,24 @@ module tb_usb_device #(
                 end else begin
                     // Idle, or waiting for OUT data: nothing to send.
                     tx_packet(PID_NAK, 0);
+                end
+            end else
+            // Endpoint 1 of a hub: the status change bitmap, bit n for
+            // port n with any change pending. NAK while there is none;
+            // a real hub keeps reporting until the changes are cleared.
+            if (HUB && rxpid == PID_IN) begin
+                turnaround;
+                hub_bits = {3'b000, (hp_c_con | hp_c_ena | hp_c_rst), 1'b0};
+                if (hub_bits == 8'h00) begin
+                    tx_packet(PID_NAK, 0);
+                end else begin
+                    txb[0] = hub_bits;
+                    tx_packet(ep1_toggle ? PID_DATA1 : PID_DATA0, 1);
+                    rx_packet;
+                    if (rxpid == PID_ACK) begin
+                        ep1_toggle = ~ep1_toggle;
+                        hub_reports = hub_reports + 1;
+                    end else pkt_held = 1'b1;
                 end
             end else
             // Endpoint 1: the boot-protocol interrupt IN.
@@ -807,7 +1153,10 @@ module tb_usb_device #(
 
             // Endpoint 2, mass storage: bulk OUT, a CBW or write data.
             rx_packet;
-            if (rx_crc_ok) begin
+            if (rx_crc_ok && msc_halt_out) begin
+                turnaround;
+                tx_packet(PID_STALL, 0);
+            end else if (rx_crc_ok) begin
                 turnaround;
                 tx_packet(PID_ACK, 0);
                 if ((rxpid == PID_DATA1) != msc_out_tgl) begin
@@ -842,7 +1191,9 @@ module tb_usb_device #(
                     in_toggle = 1'b1;
                     in_ptr = 0;
                     // bRequest 6 is GET_DESCRIPTOR, 5 is SET_ADDRESS.
-                    if (setup[1] == 8'h06) begin
+                    if (HUB && (setup[0] & 8'h60) == 8'h20) begin
+                        hub_request;
+                    end else if (setup[1] == 8'h06) begin
                         in_len = {setup[7], setup[6]};
                         // wValue's high byte is the descriptor TYPE.
                         if (setup[3] == 8'h02) begin
@@ -857,6 +1208,29 @@ module tb_usb_device #(
                     end else if (setup[1] == 8'h05) begin
                         pending_addr = setup[2][6:0];
                         in_len = 0;
+                    end else if (setup[0] == 8'h02 && setup[1] == 8'h01) begin
+                        // CLEAR_FEATURE(ENDPOINT_HALT): clear the halt
+                        // and reset the endpoint's toggle to DATA0.
+                        msc_clears = msc_clears + 1;
+                        if (setup[4] == 8'h81) begin
+                            msc_halt_in = 1'b0;
+                            msc_in_tgl = 1'b0;
+                        end
+                        if (setup[4] == 8'h02) begin
+                            msc_halt_out = 1'b0;
+                            msc_out_tgl = 1'b0;
+                        end
+                        in_len = 0;
+                    end else if (MSC && setup[0] == 8'h21 &&
+                                 setup[1] == 8'hff) begin
+                        // Bulk-Only Mass Storage Reset, BOT 3.1: back
+                        // to waiting for a CBW. Toggles and halts are
+                        // NOT touched; the host clears those next.
+                        msc_resets = msc_resets + 1;
+                        if (msc_state != 0) msc_aborted = msc_aborted + 1;
+                        msc_state = 0;
+                        msc_nak_left = 0;
+                        in_len = 0;
                     end else begin
                         in_len = 0;
                     end
@@ -870,6 +1244,8 @@ module tb_usb_device #(
                 if (nak_budget > 0) begin
                     nak_budget = nak_budget - 1;
                     tx_packet(PID_NAK, 0);
+                end else if (stall_set_addr && setup[1] == 8'h05) begin
+                    tx_packet(PID_STALL, 0);
                 end else if (stall_next) begin
                     stall_next = 1'b0;
                     tx_packet(PID_STALL, 0);

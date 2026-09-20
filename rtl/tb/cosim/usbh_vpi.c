@@ -84,6 +84,50 @@ int z_usbh_msc_write(uint32_t lba, const uint8_t *src, uint32_t count);
 #define MSC_OP_START 0
 #define MSC_OP_READ  1
 #define MSC_OP_WRITE 2      /* write a distinct pattern, then read back */
+#define MSC_OP_STATE 3      /* rc = present | ready << 1, no bus traffic */
+#define MSC_OP_DUMP  4      /* run z_usbh_dump(), lsusb, into the log */
+#define MSC_OP_CAP   5      /* z_usbh_cap_start(); rc = its result */
+#define MSC_OP_CAPD  6      /* z_usbh_cap_dump() into the log */
+
+void z_usbh_dump(void);
+int z_usbh_cap_start(int mode);
+void z_usbh_cap_dump(void);
+
+int z_usbh_msc_present(void);
+int z_usbh_msc_ready(void);
+
+/*
+ * -- interrupts, emulated --
+ *
+ * On hardware z_usbh_poll() runs from IRQ 9 and the ktimer, and both
+ * can land in the MIDDLE of an MSC operation: FatFs runs with the
+ * scheduler off, not with interrupts off. A harness that only polls
+ * between operations cannot see anything that goes wrong when the two
+ * interleave -- which is where the shared transaction engine can be
+ * fought over.
+ *
+ * $usbh_irq(every, tick_every) makes every Nth bus access made during
+ * an MSC operation run z_usbh_poll() before returning, exactly as an
+ * ISR would preempt the driver between two accesses, and every Mth of
+ * those also advance the kernel tick, as the ktimer does. Nothing
+ * nests: an access made by the emulated ISR does not itself trigger
+ * one. $usbh_irq(0, 0) turns it off.
+ */
+static int irq_every, irq_tick_every;
+static unsigned irq_ctr, irq_isrs;
+static int in_isr, msc_active;
+
+static void maybe_irq(void)
+{
+    if (!irq_every || !msc_active || in_isr) return;
+    if (++irq_ctr % (unsigned)irq_every) return;
+    in_isr = 1;
+    irq_isrs++;
+    if (irq_tick_every && (irq_isrs % (unsigned)irq_tick_every) == 0)
+        z_kernel_ticks++;
+    z_usbh_poll();
+    in_isr = 0;
+}
 
 static int msc_pending, msc_op, msc_lba;
 static int msc_rc, msc_bad, msc_first_bad;
@@ -112,6 +156,28 @@ static void msc_run(void)
 
     msc_bad = 0;
     msc_first_bad = -1;
+
+    if (msc_op == MSC_OP_CAP) {
+        msc_rc = z_usbh_cap_start(0);
+        return;
+    }
+    if (msc_op == MSC_OP_CAPD) {
+        z_usbh_cap_dump();
+        msc_rc = 0;
+        return;
+    }
+
+    if (msc_op == MSC_OP_DUMP) {
+        z_usbh_dump();
+        msc_rc = 0;
+        return;
+    }
+
+    if (msc_op == MSC_OP_STATE) {
+        msc_rc = (z_usbh_msc_present() ? 1 : 0) |
+                 (z_usbh_msc_ready() ? 2 : 0);
+        return;
+    }
 
     if (msc_op == MSC_OP_START) {
         msc_rc = z_usbh_msc_start();
@@ -151,30 +217,40 @@ static void bus_xfer(void)
     pthread_mutex_unlock(&mtx);
 }
 
+/* Each accessor takes its result BEFORE maybe_irq(): the emulated ISR
+ * makes bus cycles of its own, which reuse req_rdat. */
 uint32_t z_usbh_rd(uint32_t a)
 {
+    uint32_t v;
     req_adr = a; req_we = 0; req_bw = 0;
     bus_xfer();
-    return req_rdat;
+    v = req_rdat;
+    maybe_irq();
+    return v;
 }
 
 void z_usbh_wr(uint32_t a, uint32_t v)
 {
     req_adr = a; req_we = 1; req_bw = 0; req_wdat = v;
     bus_xfer();
+    maybe_irq();
 }
 
 uint8_t z_usbh_rb(uint32_t a)
 {
+    uint8_t v;
     req_adr = a; req_we = 0; req_bw = 1;
     bus_xfer();
-    return (uint8_t)req_rdat;
+    v = (uint8_t)req_rdat;
+    maybe_irq();
+    return v;
 }
 
 void z_usbh_wb(uint32_t a, uint8_t v)
 {
     req_adr = a; req_we = 1; req_bw = 1; req_wdat = v;
     bus_xfer();
+    maybe_irq();
 }
 
 /* Stub for sw/common/zsoc.h's feature check. The bitstream under test
@@ -206,7 +282,9 @@ static void *driver_main(void *arg)
         pthread_mutex_unlock(&mtx);
 
         if (msc_pending) {
+            msc_active = 1;
             msc_run();
+            msc_active = 0;
             msc_pending = 0;
         } else {
             z_usbh_poll();
@@ -366,6 +444,22 @@ static PLI_INT32 usbh_msc_result_calltf(PLI_BYTE8 *ud)
     return 0;
 }
 
+/* $usbh_irq(every, tick_every) -- emulate interrupts during MSC
+ * operations; see maybe_irq(). (0, 0) disables. */
+static PLI_INT32 usbh_irq_calltf(PLI_BYTE8 *ud)
+{
+    vpiHandle sys, argv;
+    (void)ud;
+
+    sys = vpi_handle(vpiSysTfCall, NULL);
+    argv = vpi_iterate(vpiArgument, sys);
+    irq_every = get_int(vpi_scan(argv));
+    irq_tick_every = get_int(vpi_scan(argv));
+    vpi_free_object(argv);
+    irq_ctr = 0;
+    return 0;
+}
+
 static PLI_INT32 compiletf_any(PLI_BYTE8 *ud) { (void)ud; return 0; }
 
 void usbh_register(void)
@@ -390,6 +484,13 @@ void usbh_register(void)
     t.type = vpiSysTask;
     t.tfname = "$usbh_tick";
     t.calltf = usbh_tick_calltf;
+    t.compiletf = compiletf_any;
+    vpi_register_systf(&t);
+
+    memset(&t, 0, sizeof(t));
+    t.type = vpiSysTask;
+    t.tfname = "$usbh_irq";
+    t.calltf = usbh_irq_calltf;
     t.compiletf = compiletf_any;
     vpi_register_systf(&t);
 

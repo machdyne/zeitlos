@@ -16,6 +16,8 @@
 #include "../common/zdns.h"
 #include "kernel.h"
 #include "usb/usbh.h"
+#include "usb/usbh_cdc.h"
+#include "uart.h"
 #include "mem.h"
 #include "uart.h"
 #include "zar.h"
@@ -947,6 +949,82 @@ void sh(void) {
 		}
 		else if (!strncmp(buffer, "usbunmount", cmdlen)) {
 			fs_usb_unmount();
+		}
+
+		// WIRE CAPTURE OF A FAILING USB TRANSACTION (usbh.h,
+		// tools/usbcap.py). `usbcap` arms the logic probe before
+		// every transaction on port 0 and freezes it on the first
+		// that fails; `usbcapd` prints it for the decoder.
+		else if (!strncmp(buffer, "usbcap", cmdlen)) {
+			z_usbh_cap_start(0);
+		}
+		// Same probe, but freezes on the first SUCCESSFUL IN with data
+		// from a low-speed device behind a hub, so the window holds the
+		// device's packet and our PRE + ACK after it.
+		else if (!strncmp(buffer, "usbcapok", cmdlen)) {
+			z_usbh_cap_start(1);
+		}
+		else if (!strncmp(buffer, "usbcapd", cmdlen)) {
+			z_usbh_cap_dump();
+		}
+
+		// A TERMINAL ON A USB CDC-ACM DEVICE (usb/usbh_cdc.h). Keys
+		// go to the device, its output comes here; Ctrl-] leaves.
+		// For trying a device out -- apps reach it through the serial
+		// port layer once that exists (docs/usb_host.md, "CDC").
+		else if (!strncmp(buffer, "usbcdc", cmdlen)) {
+			uint8_t rx[64];
+			int n, k;
+			if (!z_usbh_cdc_present()) {
+				printf("usbcdc: no CDC-ACM device\n");
+			} else {
+				printf("usbcdc: connected; Ctrl-] to leave\n");
+				for (;;) {
+					if (!k_uart_rx_empty()) {
+						int16_t c = k_uart_getc();
+						uint8_t b;
+						if (c == 0x1d) break;
+						b = (uint8_t)c;
+						if (z_usbh_cdc_write(&b, 1) < 0) {
+							printf("\nusbcdc: write failed\n");
+							break;
+						}
+					}
+					n = z_usbh_cdc_read(rx, sizeof(rx));
+					if (n < 0) {
+						printf("\nusbcdc: device gone\n");
+						break;
+					}
+					for (k = 0; k < n; k++) k_uart_putc((char)rx[k]);
+				}
+				printf("\nusbcdc: closed\n");
+			}
+		}
+
+		// Low-speed timings (usb/usbh.h). `usbtune` shows them;
+		// `usbtune T R G P` sets timeout, turnaround and gap in us and
+		// the J after a PRE in full-speed bit times.
+		else if (!strncmp(buffer, "usbtune", 7) &&
+			 (buffer[7] == ' ' || buffer[7] == 0)) {
+			int v[4] = { 0, 0, 0, 0 }, n = 0;
+			char *p = &buffer[7];
+			while (*p && n < 4) {
+				while (*p == ' ') p++;
+				if (!*p) break;
+				v[n++] = atoi(p);
+				while (*p && *p != ' ') p++;
+			}
+			if (n == 0) z_usbh_tune_show();
+			else if (n == 4) z_usbh_tune_set(v[0], v[1], v[2], v[3]);
+			else printf("usage: usbtune [timeout_us turn_us gap_us "
+				"pre_bits]\n");
+		}
+
+		// Hardware NAK retries for low-speed devices behind a hub
+		// (usbh.h). Takes effect on the next transfer.
+		else if (!strncmp(buffer, "usbnak", 6) &&
+			 (buffer[6] == ' ' || buffer[6] == 0)) {
+			z_usbh_set_ls_hub_nak(buffer[6] ? atoi(&buffer[7]) : 0);
 		}
 
 		// LIST USB DEVICES (rtl/usb/, docs/usb_host.md)
@@ -1909,6 +1987,13 @@ void sh_help(void) {
 		"(needs -DPROBE)\n");
 	printf(" usbmount          mount usb storage at /usb\n");
 	printf(" usbunmount        unmount /usb\n");
+	printf(" usbcapok          capture a good low-speed IN + our ACK\n");
+	printf(" usbcap            capture the next failing usb transaction "
+		"(needs -DPROBE)\n");
+	printf(" usbcapd           print that capture for tools/usbcap.py\n");
+	printf(" usbnak N          hw NAK retries, hubs and behind them (0)\n");
+	printf(" usbtune [T R G P] low-speed timeout/turn/gap us, PRE gap bits\n");
+	printf(" usbcdc            terminal on a usb cdc-acm device (^] exits)\n");
 	printf(" lsusb             usb devices and port state\n");
 	printf(" usbidle           release usb ports, read raw lines\n");
 	printf(" usbbuf            usb packet buffer round-trip test\n");

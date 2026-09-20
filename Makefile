@@ -751,7 +751,7 @@ test_usb_cosim:
 	cd output && iverilog-vpi --name=usbh_cosim -DZ_USBH_COSIM \
 		-I../sw/os/usb ../rtl/tb/cosim/usbh_vpi.c \
 		../sw/os/usb/usbh.c ../sw/os/usb/usbh_hid.c \
-		../sw/os/usb/usbh_msc.c
+		../sw/os/usb/usbh_msc.c ../sw/os/usb/usbh_hub.c ../sw/os/usb/usbh_cdc.c
 	iverilog -g2005 $(if $(filter-out 0,$(TRACE)),-DCOSIM_TRACE,) \
 		-o output/tb_usb_cosim rtl/tb/tb_usb_cosim.v \
 		rtl/tb/tb_usb_device.v rtl/usb/usb_host.v rtl/usb/usb_sie.v \
@@ -769,11 +769,29 @@ test_usb_msc:
 	cd output && iverilog-vpi --name=usbh_cosim -DZ_USBH_COSIM \
 		-I../sw/os/usb ../rtl/tb/cosim/usbh_vpi.c \
 		../sw/os/usb/usbh.c ../sw/os/usb/usbh_hid.c \
-		../sw/os/usb/usbh_msc.c
+		../sw/os/usb/usbh_msc.c ../sw/os/usb/usbh_hub.c ../sw/os/usb/usbh_cdc.c
 	iverilog -g2005 -o output/tb_usb_msc_cosim rtl/tb/tb_usb_msc_cosim.v \
 		rtl/tb/tb_usb_device.v rtl/usb/usb_host.v rtl/usb/usb_sie.v \
 		rtl/usb/usb_port.v rtl/usb/usb_xact.v rtl/usb/usb_hid_compat.v
 	@cd output && vvp -M. -musbh_cosim tb_usb_msc_cosim
+
+# HUB co-simulation: the real driver including the hub class driver
+# (usbh_hub.c) and mass storage, the real gateware, a four-port hub
+# model with a full-speed stick and a low-speed (PRE) mouse behind it.
+# Plugs, unplugs, storage through the hub, the hub itself unplugged.
+# See rtl/tb/tb_usb_hub_cosim.v.
+#
+#   make test_usb_hub
+test_usb_hub:
+	@mkdir -p output
+	cd output && iverilog-vpi --name=usbh_cosim -DZ_USBH_COSIM \
+		-I../sw/os/usb ../rtl/tb/cosim/usbh_vpi.c \
+		../sw/os/usb/usbh.c ../sw/os/usb/usbh_hid.c \
+		../sw/os/usb/usbh_msc.c ../sw/os/usb/usbh_hub.c ../sw/os/usb/usbh_cdc.c
+	iverilog -g2005 -o output/tb_usb_hub_cosim rtl/tb/tb_usb_hub_cosim.v \
+		rtl/tb/tb_usb_device.v rtl/usb/usb_host.v rtl/usb/usb_sie.v \
+		rtl/usb/usb_port.v rtl/usb/usb_xact.v rtl/usb/usb_hid_compat.v
+	@cd output && vvp -M. -musbh_cosim tb_usb_hub_cosim
 
 # Utilisation of the USB host controller on its own, which is how the
 # numbers in docs/usb_host.md were produced. CHECK THE DP16KD COUNT: if
@@ -814,7 +832,7 @@ test_usb_margin:
 	@cd output && iverilog-vpi --name=usbh_cosim -DZ_USBH_COSIM \
 		-I../sw/os/usb ../rtl/tb/cosim/usbh_vpi.c \
 		../sw/os/usb/usbh.c ../sw/os/usb/usbh_hid.c \
-		../sw/os/usb/usbh_msc.c >/dev/null
+		../sw/os/usb/usbh_msc.c ../sw/os/usb/usbh_hub.c ../sw/os/usb/usbh_cdc.c >/dev/null
 	@for c in "10000 0" "-10000 0" "0 20000" "0 -20000"; do \
 		set -- $$c; \
 		iverilog -g2005 -DDEV_SKEW=20 -DDEV_PPM_FS=$$1 \
@@ -853,6 +871,53 @@ usb_fmax:
 		--textcfg /dev/null --lpf-allow-unconstrained 2>&1 \
 		| grep -E "Max frequency|FAIL|Info: Device utilisation" \
 		| head -20
+
+# Fmax over several placement seeds. ONE seed is not a measurement.
+#
+# The same RTL was measured at 51.86, 51.37 and 48.10 MHz on seeds 1-3
+# -- a 4 MHz spread from placement alone -- so a single usb_fmax run
+# cannot tell a two-LUT change from noise, and a lucky run recorded as
+# "the" figure (55.07 in docs/usb_host.md) overstates the margin. Judge
+# a change by the MINIMUM across seeds: that is what an unlucky
+# rebuild ships. Compare two versions by running this on each.
+#
+# Synthesises once, then places and routes each seed. Prints each
+# seed's CLK_48 Fmax and critical-path source, then min/median/max.
+# Slow: a full place-and-route per seed.
+#
+#   make usb_fmax_sweep BOARD=mozart_ml1
+#   make usb_fmax_sweep BOARD=mozart_ml1 SEEDS="1 2 3 4 5 6"
+#   make usb_fmax_sweep BOARD=mozart_ml1 NEXTPNR_FLAGS=--ignore-loops
+#
+# NEXTPNR_FLAGS: newer nextpnr refuses the design outright over
+# "combinational loops" -- the TRNG ring oscillators, which are loops
+# by design. --ignore-loops is the right answer there.
+SEEDS ?= 1 2 3 4 5
+NEXTPNR_FLAGS ?=
+usb_fmax_sweep:
+	@mkdir -p output
+	@yosys $(EXTRA_DEFINES) -DBOARD_$(BOARD_UC) -DECP5 -q \
+		-p "synth_ecp5 $(ABC9) -top sysctl -json output/fmax.json" \
+		$(RTL_PICO)
+	@rm -f output/fmax_sweep.txt
+	@for s in $(SEEDS); do \
+		nextpnr-ecp5 --$(DEVICE) --package $(PACKAGE) \
+			--lpf boards/$(LPF) --json output/fmax.json \
+			--textcfg /dev/null --lpf-allow-unconstrained \
+			$(NEXTPNR_FLAGS) --seed $$s > output/fmax_seed$$s.log 2>&1; \
+		f=`grep "Max frequency.*CLK_48" output/fmax_seed$$s.log \
+			| tail -n 1 | sed 's/.*: *\([0-9.]*\) MHz.*/\1/'`; \
+		src=`sed -n "/Critical path report for clock .*CLK_48.*posedge -> posedge/,/ns routing/p" \
+			output/fmax_seed$$s.log | grep -m1 "Source" \
+			| sed 's/.*Source *//'`; \
+		echo "  seed $$s: $${f:-FAILED} MHz  from $$src"; \
+		if [ -n "$$f" ]; then echo $$f >> output/fmax_sweep.txt; fi; \
+	done
+	@sort -n output/fmax_sweep.txt | awk '{v[NR]=$$1} END { \
+		if (NR == 0) { print "  no seed completed"; exit 1 } \
+		m = (NR % 2) ? v[(NR+1)/2] : (v[NR/2] + v[NR/2+1]) / 2; \
+		printf "  CLK_48 over %d seeds: min %.2f  median %.2f  max %.2f MHz%s\n", \
+			NR, v[1], m, v[NR], (v[1] < 48) ? "  ** MIN FAILS 48 **" : "" }'
 
 CAND ?= rtl/gpu/gpu_blit.v
 test_blit:

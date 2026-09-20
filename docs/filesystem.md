@@ -30,14 +30,25 @@ The card is not the only FatFs volume any more.
 directories on the card. `/usb` is mounted explicitly with the shell's
 `usbmount` and released with `usbunmount`: mounting blocks while the
 unit reports ready, and USB enumeration runs from an interrupt, so it
-cannot mount on plug.
+cannot mount on plug. If the mount fails, `usbmount` waits up to about
+1.5 s for the drive to be present again and tries once more -- behind a
+hub the first attempt occasionally met a drive the hub had just dropped
+and was re-enumerating (docs/usb_host.md, "Known issues").
 
 Everything in this document applies to all three: FatFs is one
 non-reentrant instance whichever volume a call touches, and the USB
-backend blocks on bus transfers just as `sdmm.c` blocks on SPI. Two
-caveats specific to `/usb` are in `docs/usb_host.md`: it is verified
-in simulation but not yet on hardware, and pulling the stick does not
-unmount it.
+backend blocks on bus transfers just as `sdmm.c` blocks on SPI. `/usb` is specific in one way: the
+drive can leave. Pulling it makes the disk layer report "not ready"
+and `/usb` drop out of listings; plugging one back in, FatFs re-reads
+the medium on next access, and handles opened on the old drive fail
+rather than touch the new one. Details in `docs/usb_host.md`, "Removal
+while mounted".
+
+One more interaction with this document's subject: a USB storage
+command holds the USB transaction engine from start to finish, so
+while FatFs is on `/usb`, enumeration of a newly plugged device pauses
+until the command is done. See "The transaction engine has one owner"
+in `docs/usb_host.md`.
 
 ## The problem
 

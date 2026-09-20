@@ -50,7 +50,7 @@ CFLAGS = $(PIC_FLAGS) --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) -I..
 LDFLAGS = $(PIC_FLAGS) -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS)
 LDSCRIPT = ../common/riscv-os.ld
 
-OBJS = kernel.o kruntime.o mem.o zar.o usb/usbh.o usb/usbh_hid.o usb/usbh_msc.o \
+OBJS = kernel.o kruntime.o mem.o zar.o usb/usbh.o usb/usbh_hid.o usb/usbh_msc.o usb/usbh_hub.o usb/usbh_cdc.o usbcdcapi.o \
 	fs/fs.o fs/ramdisk.o fs/sdbench.o fs/fatfs/sdmm.o fs/fatfs/diskio_mux.o fs/fatfs/ff.o \
 	uart.o hid.o sh.o xfer.o xmodem.o ui.o msg.o pidreg.o fsapi.o procapi.o zobj.o zstream.o zdns.o zsoc.o zgpio.o logo.o \
 	cfg.o zcfg.o
@@ -66,7 +66,7 @@ OBJS = kernel.o kruntime.o mem.o zar.o usb/usbh.o usb/usbh_hid.o usb/usbh_msc.o 
 # zstream/TFTP work -- see docs/networking.md.
 KSRCS = kernel.c kruntime.c mem.c \
 	fs/fs.c fs/ramdisk.c fs/sdbench.c fs/fatfs/sdmm.c fs/fatfs/diskio_mux.c fs/fatfs/ff.c \
-	usb/usbh.c usb/usbh_hid.c usb/usbh_msc.c uart.c hid.c sh.c xfer.c xmodem.c ui.c msg.c pidreg.c fsapi.c procapi.c logo.c cfg.c \
+	usb/usbh.c usb/usbh_hid.c usb/usbh_msc.c usb/usbh_hub.c usb/usbh_cdc.c usbcdcapi.c uart.c hid.c sh.c xfer.c xmodem.c ui.c msg.c pidreg.c fsapi.c procapi.c logo.c cfg.c \
 	../common/zobj.c ../common/zstream.c ../common/zdns.c ../common/zsoc.c ../common/zcfg.c
 
 kernel: kernel.elf kernel.bin
@@ -82,7 +82,7 @@ kernel.o: $(KSRCS)
 fs/fatfs/diskio_mux.o: fs/fatfs/diskio_mux.c fs/ramdisk.h
 	$(CC) $(CFLAGS) -c fs/fatfs/diskio_mux.c -o fs/fatfs/diskio_mux.o
 
-usb/usbh.o: usb/usbh.c usb/usbh.h usb/usbh_hw.h
+usb/usbh.o: usb/usbh.c usb/usbh.h usb/usbh_hw.h usb/usbh_int.h usb/usbh_msc.h usb/usbh_cdc.h
 	$(CC) $(CFLAGS) -c usb/usbh.c -o usb/usbh.o
 
 usb/usbh_hid.o: usb/usbh_hid.c usb/usbh.h usb/usbh_hw.h
@@ -90,6 +90,12 @@ usb/usbh_hid.o: usb/usbh_hid.c usb/usbh.h usb/usbh_hw.h
 
 usb/usbh_msc.o: usb/usbh_msc.c usb/usbh_msc.h usb/usbh.h usb/usbh_hw.h
 	$(CC) $(CFLAGS) -c usb/usbh_msc.c -o usb/usbh_msc.o
+
+usb/usbh_hub.o: usb/usbh_hub.c usb/usbh_int.h usb/usbh.h usb/usbh_hw.h
+	$(CC) $(CFLAGS) -c usb/usbh_hub.c -o usb/usbh_hub.o
+
+usb/usbh_cdc.o: usb/usbh_cdc.c usb/usbh_cdc.h usb/usbh.h usb/usbh_hw.h
+	$(CC) $(CFLAGS) -c usb/usbh_cdc.c -o usb/usbh_cdc.o
 
 fs/ramdisk.o: fs/ramdisk.c fs/ramdisk.h
 	$(CC) $(CFLAGS) -c fs/ramdisk.c -o fs/ramdisk.o

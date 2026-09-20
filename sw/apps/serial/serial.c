@@ -1,6 +1,23 @@
 /*
  * serial -- UART1 as a port, so `term` can talk to it.
  *
+ * -- and a USB CDC-ACM device, in the same process --
+ *
+ * One app, one port (`serial0`), two backends, each with its own
+ * connection: UART1, and a USB CDC-ACM device through the kernel's
+ * driver (sw/common/zusbcdc.h). A CONNECT picks the backend by its
+ * argument: Z_CONN_USBSERIAL_ARG (sw/common/zconnect.h) means the USB
+ * device -- what term's `usbserial` sends -- and anything else is
+ * UART1's baud rate, or 0/none for "as it is", so `serial [baud]` and
+ * `port serial0` are unchanged. The two can be connected at once, from
+ * different windows: they are different wires. For the USB device there
+ * is no baud rate to set -- the host sets 115200 8N1 at enumeration --
+ * and no overrun or framing status: USB delivers whole packets or
+ * nothing, and a device with more to send NAKs until it is read.
+ *
+ * This used to be two binaries, `serial` and `usbserial`, built from
+ * this file with and without -DSERIAL_USB.
+ *
  * This is the process that OWNS UART1 (sw/common/zuart.h). Everything
  * else reaches the serial port by connecting to this one as a port
  * provider (sw/common/zport.h, docs/ports.md), exactly the way
@@ -35,7 +52,8 @@
  * point: there is one wire. Two term windows on one serial port would
  * interleave their keystrokes into one byte stream and split the
  * replies between them at random. A second CONNECT is refused with a
- * message saying so.
+ * message saying so. The rule is per wire: UART1 and the USB device
+ * each take one client, and both can be connected at once.
  *
  * -- Flow control is not built on any current target --
  *
@@ -72,23 +90,123 @@
 #include "../../common/zsoc.h"		// Z_TICK_HZ
 #include "../../common/zport.h"
 #include "../../common/zuart.h"
+#include "../../common/zusbcdc.h"
+#include "../../common/zconnect.h"	// Z_CONN_USBSERIAL_ARG
 
-// Default when a connection carries no baud rate. 115200 rather than
-// the 1000000 the console uses: this port is for talking to somebody
-// else's hardware, and 115200 is what somebody else's hardware is
-// almost always set to.
 #define DEFAULT_BAUD 115200
 
-// One RX poll's worth. Sized to the UART's FIFO -- there is never
-// more than 16 bytes to collect, so a bigger buffer would only make
-// the code look like it was doing something it is not.
+// One UART1 read per poll: the FIFO is 16 bytes (see this file's header).
 #define RX_CHUNK 16
 
-static z_port_t conn;
+// Connection ids, the tag on every DATA, DATA_ACK and CLOSE.
+#define CONN_UART 1
+#define CONN_USB  2
+
+static z_port_t conn_uart, conn_usb;
+static bool have_uart;
 static uint32_t cur_baud;
 
-static void say(const char *s) {
-	if (conn.connected) z_port_send(&conn, s, (uint32_t)strlen(s));
+static void say(z_port_t *c, const char *s) {
+	if (c->connected) z_port_send(c, s, (uint32_t)strlen(s));
+}
+
+static void connect_usb(const z_msg_t *msg) {
+	if (conn_usb.connected) {
+		z_port_refuse(msg, "serial: the USB CDC device is already "
+			"connected to another client -- there is only one wire");
+		return;
+	}
+	if (!z_usbcdc_present()) {
+		z_port_refuse(msg, "serial: no USB CDC-ACM device is plugged in");
+		return;
+	}
+	z_port_accept(&conn_usb, msg, CONN_USB);
+	say(&conn_usb, "serial: connected to the USB CDC device. "
+		"F12 disconnects.\r\n");
+	printf("serial: USB client connected (pid %ld)\n", (long)msg->from);
+}
+
+static void connect_uart(const z_msg_t *msg, char *buf, size_t buflen) {
+	uint32_t baud;
+
+	if (!have_uart) {
+		z_port_refuse(msg, "serial: this bitstream has no UART1 -- see "
+			"docs/uart1.md; `usbserial` reaches a USB CDC device");
+		return;
+	}
+	if (conn_uart.connected) {
+		z_port_refuse(msg, "serial: UART1 is already connected to another "
+			"client -- there is only one wire");
+		return;
+	}
+
+	// The CONNECT argument is the baud rate, as a scalar, arriving with
+	// the connect itself. Absent or 0 is not an error: `port serial0`
+	// gets whatever rate the port is already at, which is what you want
+	// when reconnecting.
+	if (msg->obj.type == Z_UINT32 && msg->obj.val.uint32)
+		baud = msg->obj.val.uint32;
+	else
+		baud = cur_baud;
+
+	z_port_accept(&conn_uart, msg, CONN_UART);
+
+	// Reopened unconditionally: a previous client may have left the
+	// FIFOs in some state, and reopening is cheap and idempotent.
+	// Refusing the RATE, not the connection, if it cannot be reached --
+	// see z_uart1_baud_error().
+	if (z_uart1_open(baud)) {
+		cur_baud = baud;
+	} else {
+		snprintf(buf, buflen, "serial: %ld baud is not reachable on this "
+			"clock -- staying at %ld\r\n", (long)baud, (long)cur_baud);
+		say(&conn_uart, buf);
+	}
+	snprintf(buf, buflen, "serial: UART1 at %ld baud, 8N1, no flow control. "
+		"F12 disconnects.\r\n", (long)cur_baud);
+	say(&conn_uart, buf);
+	printf("serial: UART1 client connected (pid %ld) at %ld baud\n",
+		(long)msg->from, (long)cur_baud);
+	z_uart1_flush_rx();
+}
+
+// Whatever the USB device has, a few packets a pass: one read is one
+// USB packet, and the device NAKs until the next is ready. A failed read
+// is not a gone device -- one transaction can time out and the next
+// work; only a device the kernel no longer has bound ends the session.
+static void poll_usb(void) {
+	uint8_t rx[64];
+	int k;
+	for (k = 0; k < 8; k++) {
+		int32_t n = z_usbcdc_read(rx, sizeof(rx));
+		if (n < 0) {
+			if (z_usbcdc_present()) break;
+			say(&conn_usb, "\r\n[serial: the USB device went away]\r\n");
+			printf("serial: USB device gone, client dropped\n");
+			conn_usb.connected = false;
+			break;
+		}
+		if (n == 0) break;
+		z_port_send(&conn_usb, rx, (uint32_t)n);
+	}
+}
+
+// Only while connected: with nobody listening there is nowhere for the
+// bytes to go. Overruns and framing errors are REPORTED on the
+// connection, not swallowed -- see this file's header.
+static void poll_uart(void) {
+	uint8_t rx[RX_CHUNK];
+	uint32_t n = z_uart1_read(rx, sizeof(rx));
+	uint32_t st;
+
+	if (n) z_port_send(&conn_uart, rx, n);
+	st = z_uart1_status();
+	if (st & Z_UART1_OVERRUN)
+		say(&conn_uart, "\r\n[serial: receive overrun -- bytes lost. "
+			"Try a lower baud rate.]\r\n");
+	if (st & Z_UART1_FRAMING)
+		say(&conn_uart, "\r\n[serial: framing error -- baud rate probably "
+			"wrong.]\r\n");
 }
 
 int main(void) {
@@ -103,25 +221,21 @@ int main(void) {
 		printf("serial: starting as pid %ld (name registration failed).\n",
 			(long)z_getpid());
 
-	// Refuse to pretend. A board without UART1 has nothing for this
-	// app to own, and staying resident to refuse every connection
-	// would be a process taking a scheduler share to say no. Exiting
-	// means `term`'s name lookup fails and it stays in local echo,
-	// which is the same clean failure any other absent port provider
-	// gives.
-	if (!z_uart1_present()) {
-		printf("serial: this bitstream has no general-purpose UART1.\n");
-		printf("serial: try `zrelease build obst_uart_uart1` "
-			"-- see docs/uart1.md\n");
-		return 1;
+	// Stays resident without UART1: the USB side may still be used, and
+	// a CDC device can be plugged in at any time.
+	have_uart = z_uart1_present();
+	cur_baud = DEFAULT_BAUD;
+	if (have_uart) {
+		if (!z_uart1_open(cur_baud))
+			printf("serial: could not open UART1 at %ld baud\n",
+				(long)cur_baud);
+	} else {
+		printf("serial: no UART1 in this bitstream -- USB CDC only "
+			"(see docs/uart1.md)\n");
 	}
 
-	cur_baud = DEFAULT_BAUD;
-
-	if (!z_uart1_open(cur_baud))
-		printf("serial: could not open UART1 at %ld baud\n", (long)cur_baud);
-
-	conn.connected = false;
+	conn_uart.connected = false;
+	conn_usb.connected = false;
 
 	while (1) {
 
@@ -131,148 +245,59 @@ int main(void) {
 
 			if (msg.subject == Z_PORT_CONNECT) {
 
-				uint32_t baud = DEFAULT_BAUD;
-
-				if (conn.connected) {
-					z_port_refuse(&msg,
-						"serial: UART1 is already connected to another "
-						"client -- there is only one wire");
-					continue;
-				}
-
-				// The CONNECT argument is the baud rate, as a scalar,
-				// arriving with the connect itself rather than in a
-				// second message that could race it. Same shape as
-				// telnet's target IP (sw/apps/net/net.c).
-				//
-				// Absent is not an error: `port serial0` connects
-				// with no argument at all and gets whatever rate the
-				// port is already at, which is the useful behaviour
-				// for reconnecting.
-				if (msg.obj.type == Z_UINT32 && msg.obj.val.uint32)
-					baud = msg.obj.val.uint32;
+				if (msg.obj.type == Z_UINT32 &&
+				    msg.obj.val.uint32 == Z_CONN_USBSERIAL_ARG)
+					connect_usb(&msg);
 				else
-					baud = cur_baud;
-
-				z_port_accept(&conn, &msg, 1);
-
-				// Reopened unconditionally rather than only when the
-				// rate changed: a previous client may have left the
-				// FIFOs in some state, and reopening is cheap and
-				// idempotent.
-				{
-					if (z_uart1_open(baud)) {
-						cur_baud = baud;
-					} else {
-						// Refusing the RATE, not the connection: the
-						// port still works at whatever it was at, and
-						// saying which is more useful than dropping
-						// the session. See z_uart1_baud_error() for
-						// why a rate can be impossible rather than
-						// merely awkward -- 921600 at 48MHz lands on
-						// 1 Mbaud, 8.5% off.
-						snprintf(msg_buf, sizeof(msg_buf),
-							"serial: %ld baud is not reachable on this "
-							"clock -- staying at %ld\r\n",
-							(long)baud, (long)cur_baud);
-						say(msg_buf);
-					}
-				}
-
-				snprintf(msg_buf, sizeof(msg_buf),
-					"serial: UART1 at %ld baud, 8N1, no flow control. "
-					"F12 disconnects.\r\n",
-					(long)cur_baud);
-				say(msg_buf);
-
-				printf("serial: client connected (pid %ld) at %ld baud\n",
-					(long)msg.from, (long)cur_baud);
-
-				z_uart1_flush_rx();
+					connect_uart(&msg, msg_buf, sizeof(msg_buf));
 
 			} else if (msg.subject == Z_PORT_DATA) {
 
-				if (conn.connected && msg.tag == conn.conn_id) {
+				uint32_t len = z_blob_len(&msg.obj);
+				uint8_t *data = z_blob_data(&msg.obj);
 
-					uint32_t len = z_blob_len(&msg.obj);
-					uint8_t *data = z_blob_data(&msg.obj);
-
-					// z_uart1_write() BLOCKS, and here that is the
-					// right call rather than the careless one: this
-					// is at most a few keystrokes or a paste, the
-					// transmitter always drains (nothing throttles
-					// TX -- there is no CTS), and a partial write
-					// would mean silently dropping the tail of what
-					// somebody typed.
-					//
-					// The bound is real: worst case is this buffer's
-					// length at the current baud rate. A 1KB paste at
-					// 9600 baud would hold this process for a second,
-					// during which term looks frozen. Worth knowing;
-					// not worth a partial-write state machine until
-					// somebody pastes a kilobyte into a 9600 baud
-					// modem.
+				if (conn_uart.connected && msg.tag == conn_uart.conn_id) {
 					if (data && len) z_uart1_write(data, len);
-
+				} else if (conn_usb.connected &&
+				           msg.tag == conn_usb.conn_id) {
+					if (data && len && z_usbcdc_write(data, len) < 0)
+						say(&conn_usb, "\r\n[serial: USB write failed -- "
+							"device gone?]\r\n");
 				}
 
+				// Every DATA is acked, whoever it was for: the sender's
+				// z_port_send() frees its buffer on the ack.
 				z_port_send_ack(&msg);
 
 			} else if (msg.subject == Z_PORT_DATA_ACK) {
 
-				z_port_handle_ack(&conn, &msg);
+				// Each ignores acks not tagged with its own id.
+				z_port_handle_ack(&conn_uart, &msg);
+				z_port_handle_ack(&conn_usb, &msg);
 
 			} else if (msg.subject == Z_PORT_CLOSE) {
 
-				if (conn.connected && msg.tag == conn.conn_id) {
-					conn.connected = false;
-					printf("serial: client disconnected\n");
+				if (conn_uart.connected && msg.tag == conn_uart.conn_id) {
+					conn_uart.connected = false;
+					printf("serial: UART1 client disconnected\n");
+				} else if (conn_usb.connected &&
+				           msg.tag == conn_usb.conn_id) {
+					conn_usb.connected = false;
+					printf("serial: USB client disconnected\n");
 				}
 
 			}
 
 		}
 
-		// Pump the wire into the connection.
-		//
-		// Only while connected: with nobody listening there is
-		// nowhere for the bytes to go, and draining them into a void
-		// would make reconnecting show the middle of whatever the far
-		// end had been saying. The FIFO overruns instead, which is
-		// the honest outcome -- nothing was reading.
-		if (conn.connected) {
-
-			uint8_t rx[RX_CHUNK];
-			uint32_t n = z_uart1_read(rx, sizeof(rx));
-			uint32_t st;
-
-			if (n) z_port_send(&conn, rx, n);
-
-			// Overruns are REPORTED, not swallowed. A byte lost in
-			// the middle of a terminal session is invisible until it
-			// matters; a line saying so is how the user learns to
-			// pick a slower rate. See this file's header.
-			st = z_uart1_status();
-			if (st & Z_UART1_OVERRUN) {
-				say("\r\n[serial: receive overrun -- bytes lost. "
-					"Try a lower baud rate.]\r\n");
-			}
-			if (st & Z_UART1_FRAMING) {
-				say("\r\n[serial: framing error -- baud rate probably "
-					"wrong.]\r\n");
-			}
-
-		}
+		if (conn_uart.connected) poll_uart();
+		if (conn_usb.connected) poll_usb();
 
 		// Yield. Z_TICK_HZ/60 rather than /30 because at 115200 one
-		// scheduler slice is already 15.7 bytes against a 16-byte
-		// FIFO -- see this file's header. Even this is not a
-		// guarantee, because a poll interval is a floor and not a
-		// ceiling when something else is busy.
+		// scheduler slice is already 15.7 bytes against UART1's 16-byte
+		// FIFO -- see this file's header.
 		z_proc_wait(Z_TICK_HZ / 60);
-
 	}
 
 	return 0;
-
 }

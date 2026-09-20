@@ -283,7 +283,7 @@ static bool form_complete(const char *s, void *user) {
 // so far.
 static const char HELP_TEXT[] =
 	"builtins: help ping echo te <f> page <f> scheme <e> quit\r\n"
-	"connect:  port <n> serial [baud] telnet <h> ssh <h>  (F11 in term)\r\n"
+	"connect:  port <n> serial [baud] usbserial telnet <h> ssh <h>  (F11)\r\n"
 	"scheme:   ls ps free uptime run kill load mkdir delay-ms ...\r\n"
 	"F12 leaves any port; bare word = call, so `ps` is (ps)";
 

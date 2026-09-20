@@ -1,6 +1,14 @@
 # Zeitlos USB Host Controller
 
-**STATUS: phases 0 through 4 working on hardware, phase 5 partial.**
+**STATUS: phases 0-5 working on hardware; hub support, including
+low-speed devices behind a hub, reliable since round 27 (cause of the
+earlier intermittent failures not identified -- Known issues, item 5). Since round 19 a low-speed
+keyboard, a low-speed mouse, a mass storage stick and a CDC-ACM device
+all work behind one hub (05e3:0608) at the same time. CDC reaches the
+shell's `usbcdc`; apps reach it through `serial` from round 20. The road
+there, and what is still open, is in
+[Hardware: working behind the hub](#hardware-working-behind-the-hub) and
+[Known issues](#known-issues).**
 
 Measured on mozart_ml1 (ECP5 45F):
 
@@ -9,16 +17,22 @@ Measured on mozart_ml1 (ECP5 45F):
 | Low-speed keyboard and mouse, both ports at once | enumerate, bind, auto-poll slots live |
 | Full-speed CDC | enumerates |
 | Full-speed mass storage -- stick and card reader | enumerates, `class=msc` |
-| USB hub (05e3:0608) | enumerates |
+| USB hub (05e3:0608) | keyboard, mouse, stick and CDC device behind it at once (round 19) |
 | `usbmount` then `ls /usb` | lists a real FAT filesystem over USB |
+| FatFs file reads over `/usb` | a text file and an 11 KB PNG, intact |
+| FatFs WRITE then read-back over `/usb` | intact |
 | Receive errors | **zero** at both speeds |
-| Whole-SoC Fmax | 55.07 MHz against a 48 MHz clock |
+| Whole-SoC Fmax | 56.50 MHz against a 48 MHz clock (after the Ethernet MAC BRAM fix; see [Fmax after these changes](#fmax-after-these-changes)) |
 
-Phase 4's hub *class driver* is not written -- a hub enumerates like
-any other device, but nothing behind it is reachable yet.
+Phase 4's hub class driver (`usbh_hub.c`) passes `make test_usb_hub`,
+and on hardware a stick and a low-speed mouse work behind a real hub --
+which also confirms the round-7 PRE fix. A low-speed keyboard behind
+the hub failed; the cause and fix are in
+[Hardware: retries behind a hub](#hardware-retries-behind-a-hub).
 
-Phase 5 reads directory listings correctly and then truncates larger
-reads; see [Mass storage status](#mass-storage-status).
+Phase 5's open items are in [Also outstanding](#also-outstanding);
+unplug handling, STALL / Reset Recovery and the IN toggle check are
+done in simulation and not yet exercised on hardware.
 
 The controller is instantiated in `rtl/sysctl.v`, and
 `make test_usb_cosim` runs the real driver against the real gateware.
@@ -202,7 +216,8 @@ rtl/usb/usb_xact.v         one transaction
 rtl/usb/usb_host.v         top: registers, buffer, scheduler, auto-poll
 rtl/usb/usb_hid_compat.v   backwards-compatible reg_usbN_* block
 rtl/tb/tb_usb_device.v     behavioural FS/LS device model
-rtl/tb/tb_usb_hub.v        behavioural hub model
+rtl/tb/tb_usb_hub.v        behavioural hub model -- became HUB=1 mode of
+                           tb_usb_device.v; see "Hub class driver"
 rtl/tb/tb_usb_host.v       the testbench itself
 ```
 
@@ -342,16 +357,30 @@ topology*, not from the port's own detected speed.
 Reaching a low-speed device through a hub requires a PREamble packet:
 
 ```
-  ┌─────────────────── full speed, 4 clk/bit ──────────────────┐
-  SYNC | PRE PID |  (hub setup: 4 FS bit times, bus idle)
-                    ┌──────── low speed, 32 clk/bit ───────────┐
-                    SYNC | TOKEN ... | DATA ... | handshake
+  full speed          low speed (32 clk/bit)
+  SYNC | PRE PID | J x4 | SYNC | TOKEN ... | EOP        host
+                                     device reply (no PRE) | EOP
+  SYNC | PRE PID | J x4 | SYNC | handshake or DATA | EOP  host
 ```
 
+**Every low-speed packet the host sends gets its own PRE**: the token,
+the data of an OUT or SETUP, and the host's handshake after IN data.
 The host sends SYNC and the PRE PID at full speed, holds the bus idle
-for the hub setup interval, then transmits the low-speed packet at the
-low-speed rate and receives the response at the low-speed rate. The bus
-returns to full speed at the end of the transaction.
+(J) for the hub setup interval -- 4 full-speed bit times, the spec
+minimum, adjustable with `usbtune` -- then transmits the packet at the
+low-speed rate. The device's replies come back at the low-speed rate
+with no PRE. The hub enables its low-speed ports for each PRE'd packet
+and disables them again at its EOP.
+
+**At most one PRE'd transaction per frame** (round 26): the scheduler
+starts no second one until the next frame tick, and a PRE'd request
+never re-issues within a frame -- the next auto-continue packet or a
+retry ends the request with its progress, and software resumes it in a
+later frame. This is how Pico-PIO-USB, TinyUSB's software full-speed
+host, schedules low-speed devices behind a hub (one transaction per
+endpoint per frame), and the limit ESP-IDF and TinyUSB's DWC2 fix hit.
+It did not by itself end the hub failures of rounds 20-27 (see Known
+issues, item 5), but it is the reference hosts' discipline and stays.
 
 This means **the SIE must change bit rate mid-transaction.** That is
 about 100 LUT4 on top of the divisor we already need — but it is not
@@ -362,6 +391,10 @@ counter and the DPLL reset all at once.
 > **PRE is designed into Phase 1 even though it cannot be tested against
 > real hardware until Phase 4.** The behavioural hub model in
 > `tb_usb_hub.v` exists to cover it in the meantime.
+>
+> It turned out the model that covered it was not enough: PRE went out
+> with a wrong PID check field from phase 1 until the hub bench found it
+> in phase 4. See [Two core bugs the hub found](#two-core-bugs-the-hub-found).
 
 ## Ports, hubs and topology
 
@@ -417,6 +450,8 @@ RAM:
 | Root ports | 1 or 2 | `USB_HOST_PORTS` |
 | Devices | 8 | including hubs |
 | Hub depth | 3 | spec allows 5; 3 covers anything real |
+| Hubs | 2 | one 32-byte scratch area each; see [Hub class driver](#hub-class-driver) |
+| Ports per hub | 7 | one byte of change bitmap |
 | Endpoints tracked | 16 | across all devices |
 | Auto-poll slots | 4 | hardware table |
 
@@ -642,6 +677,32 @@ Same pattern as `rtl/gpio.v`'s CONFIG: the CSR feature bit says the
 block exists, this register says what shape it is. A driver built for 4
 poll slots must not assume 4 on a board that built 2.
 
+**`0xc000_0120` DEBUG0, `0xc000_0124` DEBUG1** (RO, bring-up counters)
+
+Not part of the programming model; `lsusb` prints them as the `wire:`
+lines.
+
+| Register | Bits | Meaning |
+|---|---|---|
+| DEBUG0 | 15:0 | packets this host transmitted |
+| DEBUG0 | 31:16 | receptions started |
+| DEBUG1 | 7:0 | receptions ending with a good CRC and PID |
+| DEBUG1 | 15:8 | receptions that did not |
+| DEBUG1 | 31:16 | frames in which port 0's line was not idle in the last `EOF_ZONE` (4 us) before the frame tick -- a hub's EOF points (round 23) |
+
+**`0xc000_0128` TUNE** (RW, bring-up)
+
+Low-speed timings, adjustable at run time with the shell's `usbtune`.
+Resets to `0x041414af`, the values the design always used, so it changes
+nothing until written.
+
+| Bits | Meaning | Reset |
+|---|---|---|
+| 7:0 | low-speed response timeout, in 8-clock units (1/6 us) | 175 = 29 us |
+| 15:8 | low-speed turnaround inside a transaction, 8-clock units | 20 = 3.3 us |
+| 23:16 | gap after a low-speed packet, 8-clock units | 20 = 3.3 us |
+| 27:24 | J after a PRE (hub setup), full-speed bit times | 4, the spec minimum |
+
 ### Feature bits
 
 - `CSR_FEATURES` bit 13 (`Z_FEATURE_USB_HID`) **stays set**, because
@@ -807,14 +868,21 @@ pulse-shaped, one per report, exactly as today.
 
 ```
 sw/os/usb/usbh.c        core: port FSM, control transfers, enumeration,
-sw/os/usb/usbh.h              address allocation, driver binding
+sw/os/usb/usbh.h              address allocation, driver binding,
+                              transaction-engine ownership
 sw/os/usb/usbh_hw.h     register definitions (mirrors this document)
 sw/os/usb/usbh_hid.c    boot keyboard, boot mouse, gamepad
-sw/os/usb/usbh_hub.c    hub class driver
-sw/os/usb/usbh_msc.c    BOT + SCSI                       (Phase 5)
-sw/os/usb/usbh_cdc.c    CDC-ACM                          (Phase 6)
-sw/os/fs/usbdisk.c      FatFs block device glue          (Phase 5)
+sw/os/usb/usbh_msc.c    BOT + SCSI, STALL / Reset Recovery    (Phase 5)
+sw/os/usb/usbh_hub.c    hub class driver                      (Phase 4)
+sw/os/usb/usbh_cdc.c    CDC-ACM                               (Phase 6)
+sw/os/usb/usbh_int.h    internal: device table, control engine,
+                              shared by usbh.c and usbh_hub.c
+sw/os/fs/fatfs/diskio_mux.c  FatFs drive dispatch, drive 2 = USB (Phase 5)
+
 ```
+
+The block device glue was planned as `sw/os/fs/usbdisk.c`; it became
+drive 2 in `diskio_mux.c` instead, next to the SD card and ramdisk.
 
 ### Enumeration must not block
 
@@ -910,22 +978,86 @@ stick is formatted.
 
 ### Removal while mounted
 
-**As built, this is not implemented.** The paragraph below is the
-design. Today nothing unbinds the MSC driver when its device
-disconnects, nothing unmounts `/usb`, and `disk_read`/`disk_write`
-return `RES_ERROR`, not `RES_NOTRDY`: after a pull, `/usb` stays
-mounted and every access fails after the transfer timeouts, until
-`usbunmount`. See "Also outstanding" under
-[Mass storage status](#mass-storage-status).
+A stick pulled mid-write is not a theoretical concern. What happens:
 
-The design: a stick pulled mid-write is not a theoretical concern. The
-disk layer returns `RES_NOTRDY` once the device is gone and the kernel
-unmounts volume 2. FatFs will have lost whatever was buffered — that is
-unavoidable without a VBUS switch and an orderly shutdown, and it is
-the same exposure the SD card already has. Document it; do not pretend
-to solve it.
+- The port reports the disconnect; `usbh.c`'s detach path
+  (`dev_reset_state()`) calls `z_usbh_msc_unbind()`, from the ISR. It
+  touches no bus and clears nothing a running command is using: it
+  marks the drive gone and bumps a generation counter.
+- A command in flight notices at its next step and fails -- in
+  simulation about 11 us after the detach, not after transfer
+  timeouts. No Reset Recovery is attempted on a port with nothing
+  connected.
+- `diskio_mux.c` then reports `STA_NOINIT | STA_NODISK` and returns
+  `RES_NOTRDY`, so FatFs reports "not ready", and `/usb` disappears
+  from directory listings.
+- Plugging a drive back in rebinds it. The mount itself is kept, and
+  FatFs re-reads the medium from scratch on the first access; a dirty
+  sector buffer from the old drive is dropped, never written to the new
+  one. Handles opened on the old drive fail rather than touch the new
+  one. `usbunmount` still clears the mount explicitly.
+
+The generation counter is what makes a replug safe: an operation
+records it on entry, and if it has moved the drive it started on is
+gone -- even if another is already bound in its place.
+
+FatFs will have lost whatever was buffered. That is unavoidable without
+a VBUS switch and an orderly shutdown, and it is the same exposure the
+SD card already has.
 
 ## CDC
+
+**Status (round 17): works on hardware** -- a composite device
+(16c0:05e1) binds and `usbcdc` talks to it. Apps cannot reach it yet;
+see below.
+`sw/os/usb/usbh_cdc.c`. At enumeration, a configuration with an ACM
+communications interface (class 2, subclass 2) and a data interface
+(class 0x0a) with bulk IN and OUT gets `SET_LINE_CODING` (115200 8N1)
+and `SET_CONTROL_LINE_STATE` (DTR and RTS set -- many devices, the
+Pico's stdio among them, send nothing without DTR), then binds; either
+request may be STALLed without stopping the bind. The data path is bulk
+IN and OUT, one packet per transaction, in process context holding the
+transaction engine per transaction, with receive and transmit areas at
+0x280 and 0x2c0 in the packet buffer. The notification endpoint is not
+polled. One device at a time. On a composite device (class 239, an
+Interface Association Descriptor) only the CDC function is bound; its
+other interfaces are left alone.
+
+**First hardware try (round 16): not recognized.** `lsusb` showed
+`cfg desc (64 of 98 bytes)`: the driver kept only the first 64 bytes of
+each configuration descriptor, and every class probe reads that copy.
+The device's CDC data interface had its bulk endpoints at byte 64
+onward, so the probe saw an ACM interface with no endpoints and
+declined it. Round 17 keeps the whole descriptor, up to the 200 bytes
+fetched. Checked offline on the device's own descriptor bytes: the full
+descriptor binds (IN 3, OUT 3, 64 bytes); the first 64 alone do not.
+This affected every probe, not only CDC -- any device with a long
+configuration, which in practice means most composite devices.
+
+**For apps (round 29):** `sw/apps/serial` owns both UART1 and the USB
+device, on one port, `serial0`, with a connection each -- both can be
+in use at once, from different windows. A CONNECT whose argument is
+`Z_CONN_USBSERIAL_ARG` (`sw/common/zconnect.h`) gets the USB device;
+anything else is UART1's baud rate, so `serial [baud]` and `port
+serial0` are unchanged. From a term window, `usbserial` (or
+`apps.term.auto_connect: usbserial`). `serial` stays resident on a
+bitstream without UART1, serving the USB side. (Rounds 20-28 built this
+as a second binary, `usbserial`, registered `usbserial0`.) It
+reaches the kernel driver through three syscalls, `Z_SYS_USBCDC_PRESENT`
+/ `_READ` / `_WRITE` (`sw/common/zusbcdc.h`, `sw/os/usbcdcapi.c`). Read
+and write run with the scheduler held, as FatFs calls do: they share
+the one USB transaction engine with mass storage, and a process
+switched out while holding it would let another's transfer start on
+top of it. With no device plugged in, a USB connect is refused; a device
+unplugged mid-session drops the connection with a message saying so,
+and a single failed read does not.
+
+For trying a device out without a term window, the shell's `usbcdc` is
+a terminal on it: keys go to the device, its output comes back, Ctrl-]
+leaves. Do not use it while `serial` has a USB client: the shell does not
+hold the scheduler, and the two would share the device.
+
+The design as first planned:
 
 CDC-ACM is a notification interrupt-IN endpoint plus bulk IN/OUT, with
 `SET_LINE_CODING` and `SET_CONTROL_LINE_STATE` as control requests.
@@ -1040,6 +1172,33 @@ only so the field is allocated if a future board gains the hardware.
 > hardware change that would most improve this feature. The design works
 > without one and must continue to.
 
+### Pin registers in the I/O cells
+
+Since round 29, D+ and D- are registered in each pad's own I/O cell in
+both directions: `ODDRX1F` driving out, with both halves the same value,
+and `IDDRX1F` sampling in, using its rising-edge sample. The routed
+result puts each pin's cell in `MODE = IDDRX1_ODDRX1` -- both
+registers together in the pad -- and places D+ and D- in the two halves
+of one I/O block (port 0 at X51/Y0, port 1 at X44/Y0 on mozart_ml1).
+
+Before that, the flops driving and first sampling the two lines were
+ordinary fabric flops the placer could put anywhere, each with its own
+route to its pad: nanoseconds of skew between D+ and D-, different in
+every build, showing up as a brief SE0 or SE1 at each transition. Fmax
+does not see it -- it covers flop-to-flop paths only. The change makes
+the FPGA's contribution to D+/D- skew fixed silicon, matched, and the
+same in every build; what remains is picosecond-scale, plus the board
+and cable. It was made because hub failures came and went between
+builds with identical logic (Known issues, item 5); skew was a plausible
+cause there, never a measured one.
+
+Consequences: the output enable carries one fabric register to stay
+aligned with the data's one-clock latency, and **nothing else may read
+the USB host pins** -- an `IDDRX1F` must be its pin's only load, which
+is why the logic probe takes `usb_host.v`'s `line0_o` (see
+`docs/probe.md`). Simulation uses plain registers with the same latency
+(`ifndef SYNTHESIS`).
+
 ### Bus-powered hubs
 
 Related, and worth telling users directly. A bus-powered hub budgets
@@ -1079,9 +1238,9 @@ is how it will actually be used.
 | **1** | `usb_sie.v`, `usb_port.v`, `usb_xact.v`, `usb_host.v`, device model TB. FS, **with LS and PRE rate switching designed in** | **Done.** Control transfer completes in simulation; LS-direct and LS-via-PRE both exercised; utilisation measured -- see [Phase 1 results](#phase-1-results) |
 | **2** | Software enumeration, HID driver, `usb_hid_compat.v`, **auto-poll and the hardware cursor datapath** | **Done on hardware.** Keyboard and mouse both bind and deliver reports; cursor has zero CPU in its path. `wm.c`, `gpu3d.c`, `bios.c` untouched |
 | **3** | Second root port, hotplug, simultaneous mixed LS/FS | **Done on hardware.** Both ports populated at once, mixed speeds, hot-swap in any order. See [Phase 3 results](#phase-3-results) |
-| **4** | Hub class driver, multi-device addressing, port-change endpoint, `tb_usb_hub.v`, **PRE validated against real hardware** | **Partial.** A hub enumerates on hardware and concurrent enumeration is unblocked (control state is per-device, only address zero serialised). No class driver, so nothing behind the hub is reachable |
-| **5** | Bulk, MSC, SCSI, FatFs drive 2 at `/usb`, `auto_cont` | **Partial.** Bulk transport, CBW/CSW and SCSI work; `/usb` mounts and lists a real filesystem. Larger reads truncate -- see [Mass storage status](#mass-storage-status) |
-| **6** | CDC-ACM, scroll wheel, keyboard LEDs via `Set_Report` | |
+| **4** | Hub class driver, multi-device addressing, port-change endpoint, `tb_usb_hub.v`, **PRE validated against real hardware** | **Done on hardware.** Keyboard, mouse, stick and CDC device behind one hub at once. See [Hub class driver](#hub-class-driver) and [Hardware: working behind the hub](#hardware-working-behind-the-hub) |
+| **5** | Bulk, MSC, SCSI, FatFs drive 2 at `/usb`, `auto_cont` | **Reads and writes done on hardware.** Unplug handling, STALL / Reset Recovery and the IN toggle check pass simulation; hardware checks and one-sector-per-command remain -- see [Also outstanding](#also-outstanding) |
+| **6** | CDC-ACM, scroll wheel, keyboard LEDs via `Set_Report` | **CDC-ACM done on hardware**; apps via `serial` from round 20. Scroll wheel and LEDs not started |
 | **7** | Hardening, error recovery, benchmarks against SD. Optionally USB Ethernet, optionally bus-mastering DMA | |
 
 Each phase updates this document and `docs/user_input.md`.
@@ -1131,6 +1290,13 @@ and tested nothing further.
 A real hub model -- one that enumerates as a hub, has downstream ports
 and a port-change endpoint -- is needed by the hub *driver*, and it
 belongs with it in phase 4.
+
+**With hindsight (phase 4):** the wrapper would have tested something
+further. MODE 2 checked only the low nibble of the PRE PID, and the SIE
+was sending PRE with a wrong check field. What exposed it was the hub
+bench putting a *full-speed* listener on the same wires as the PRE
+traffic -- the view a real hub has. The hub model did end up as a mode
+of `tb_usb_device.v` (HUB=1) rather than its own file.
 
 ### The trap that nearly ended the project
 
@@ -1789,6 +1955,499 @@ regardless of duration. So transition skew alone does **not** account
 for the residual hardware error rate, and the theory carried for
 several rounds was wrong.
 
+Two later notes. The one-sample SE1s in the hardware captures were
+sampled by the logic probe through fabric routing, so some of them may
+have been the probe's own skew rather than the line's; since round 30
+the probe records the pad-registered samples instead. And since round
+29 the host's own D+/D- paths are in the I/O cells, so our side
+contributes no build-dependent skew -- see
+[Pin registers in the I/O cells](#pin-registers-in-the-io-cells).
+
+## Hub class driver
+
+`sw/os/usb/usbh_hub.c`. A state machine per hub, kept in the hub's own
+device record and stepped from `z_usbh_poll()` like everything else, so
+it never waits. Every request goes through the hub's control engine,
+so the rule that mass storage owns the transaction engine for a whole
+SCSI command covers hub traffic too.
+
+**Bring-up.** GET_DESCRIPTOR(HUB) for the port count and
+`bPwrOn2PwrGood`; SET_PORT_FEATURE(PORT_POWER) on each port; wait for
+power to settle; then an auto-poll slot in RAW mode on the status
+change endpoint, and one read of every port.
+
+**Changes.** The slot's `changed` bit means the change bitmap has
+landed. For each changed port: GET_PORT_STATUS, CLEAR_PORT_FEATURE for
+each change bit, then act. A connect creates a child record that
+debounces 100 ms on its own; a disconnect, or a connect change on a port
+that already has a device, tears the child's whole subtree down. A hub
+keeps reporting a change until it is cleared, so a report lost while
+rewriting `POLL_B` comes round again on the next poll.
+
+**Reset.** When a debounced child is waiting, address 0 is free and a
+scratch area is available: SET_PORT_FEATURE(PORT_RESET), poll
+GET_PORT_STATUS until C_PORT_RESET, clear it, and hand the child over
+with the speed the hub reports -- `LOWSPEED|USE_PRE` for low speed,
+**not** the inverted polarity of a direct attach. After 10 ms recovery
+the child enumerates from E_DESC8 exactly as a root-port device does.
+Every path out of the reset sequence that does not hand the child over
+returns it to waiting; an abandoned reset used to hold address 0 for
+ever and stop the whole tree.
+
+**What had to change in `usbh.c`** -- it assumed device index = root
+port throughout:
+
+| Was | Now |
+|---|---|
+| `devs[2]`, one per root port | `devs[8]`: root ports at 0-1, the rest handed out to devices behind hubs, with parent and hub port |
+| auto-poll slot = device index | slots allocated from the 4 in hardware |
+| control scratch per port at 0x400/0x600 -- a third device would index past the 2 KB buffer | two 512-byte areas for devices enumerating, given back at bind; two 32-byte areas kept by hubs |
+| teardown of one device | teardown of a subtree, deepest first, releasing slot, scratch, compat block, MSC binding and address |
+| `lsusb` per root port | a tree under each root port |
+
+The device record, control engine and states moved to `usbh_int.h`,
+shared by `usbh.c` and `usbh_hub.c` only.
+
+**Limits:** 8 devices including hubs (7 addresses); 2 hubs, from the
+scratch pool; 7 ports per hub (one change byte); hubs served to depth 3.
+A hub's own over-current and local-power changes are acknowledged and
+not acted on.
+
+### Hardware: retries behind a hub
+
+First run on hardware, hub 05e3:0608: the stick and a low-speed mouse
+behind it worked -- the first real confirmation of PRE. A low-speed
+keyboard (04d9:1203) behind it did not. `lsusb` showed it pass
+GET_DESCRIPTOR(8) and SET_ADDRESS, then fail three times on the DATA
+stage of an IN at its new address with `TIMEOUT (no response)`, NAKs
+recorded just before each.
+
+**Cause.** Inside `usb_xact.v`, a NAKed transaction was re-issued by
+jumping straight to `X_TOK`, skipping `X_GAP` -- the state whose own
+comment describes the failure: a token sent the moment the previous
+transaction ends collides with the device still driving its EOP, and
+the device "decodes a mangled token, answers nothing". Only a
+transaction's FIRST token went through `X_GAP`; retries after a NAK,
+after a discarded resend, and the next auto-continue packet did not.
+At low speed the device's EOP tail is eight times longer, and behind a
+hub the retried PRE lands in it: the hub drops the PRE, the keyboard
+never sees the IN, and the retry times out. The mouse happened not to
+NAK during enumeration; a directly attached keyboard evidently
+tolerates the early retry, which is why the same keyboard worked on a
+root port.
+
+**Measured before it was fixed.** With the mouse model behind the hub
+set to NAK its first descriptor INs, co-simulation failed exactly as
+the hardware did -- `get-desc8, DATA stage: TIMEOUT (no response)
+(1 nak)`, twice. `test_usb` case 7 with two NAKs failed the same way;
+case 6, low speed direct, passed, matching the hardware.
+
+**Fix.** Every token now goes through `X_GAP`: wait for the line to
+leave SE0, then 5 bit times at the transaction's speed. That costs 20
+clocks per re-issue at full speed and 160 at low speed. The NAK cases
+stay in `test_usb` (6 and 7) and `test_usb_hub`.
+
+**That was not the whole story** -- see the next section. The retry
+fix is real and stays, but the keyboard still failed after it, and the
+"not explained yet" hub CRC error above turned out to be the main
+fault.
+
+### Hardware: full-speed traffic straight after low-speed
+
+After the retry fix the keyboard still failed behind the hub, and the
+retest showed what the first `lsusb` had only hinted at: requests to
+the **hub itself** -- ordinary full-speed transfers -- failing with
+SETUP-stage CRC errors and status-stage timeouts. The stick kept
+working with the keyboard plugged in; the mouse stopped working once
+the keyboard was there. The common factor was full-speed traffic
+following low-speed traffic on the same wire, which before hubs never
+happened: a low-speed device had a root port to itself.
+
+`X_GAP` waited five bit times of the speed of the transaction *about to
+start*. After a low-speed transaction the device drives a full
+low-speed bit of J after its EOP (667 ns), and behind a hub the hub is
+still repeating it upstream; a full-speed token after only five
+full-speed bits (417 ns) started on top of it. Hub requests landing
+there failed exactly as seen. A SOF landing there is a SOF the hub
+never receives -- and SOFs are what a hub turns into keep-alives for
+its low-speed ports, so the mouse starved once the keyboard's
+enumeration traffic made the collisions frequent.
+
+**Measured before it was fixed.** A monitor for `x` on the wire in the
+hub co-simulation -- the host and a device driving at once -- found
+two collisions in the enumeration section alone; the trace showed a
+SOF starting 1.46 us after a low-speed ACK was received. Every bench had
+passed throughout: the device models tolerate a collision, a real hub
+does not.
+
+**Fix** (`usb_xact.v`, `gap_limit`): the engine remembers the previous
+transaction's speed and port, and after a low-speed transaction the
+next token on that port waits five low-speed bits whatever its own
+speed. The monitor found no collisions afterwards, and is now a
+permanent check in `test_usb_hub` (the hub segment) and `test_usb_msc`
+(both ports).
+
+The fix costs about 3 us after each low-speed transaction on a shared
+port -- once per mouse or keyboard poll.
+
+**A second collision the monitor found.** Put into the storage bench
+as well, the same monitor caught two collisions on port 1 -- a
+*directly attached* low-speed mouse, no hub -- during enumeration, with
+no transaction transmitted in between. The source was outside the
+transaction engine: `usb_port.v`'s once-a-frame low-speed keepalive, an
+EOP of the host's own. It was gated only on the engine being idle, and
+the engine goes idle the moment it sees the device's EOP begin, while
+the device drives for about a low-speed bit and a half more. Now
+(`usb_host.v`, `ka_quiet`) a port's keepalive waits until the engine
+has been idle and the line out of SE0 for five low-speed bit times, and
+the scheduler starts nothing while a keepalive is waiting -- otherwise
+continuous traffic on the other port would never leave that window,
+and the keepalive would starve. It does not hold the scheduler while a
+port is driving its 10 ms reset. This one predates hubs; it may account
+for some of the earlier low-speed trouble on root ports.
+
+### Hardware: a failed device poisons address 0
+
+After round 9 the keyboard still failed behind the hub, a second hub
+(Realtek 0bda:5411) behaved the same -- so the fault is on this side --
+and three more things were reported: requests to the **hub itself**
+failing on every port and every stage, the mouse failing whenever the
+keyboard was plugged in, and things getting worse over repeated
+plugging until the mouse and stick stopped enumerating too. Root ports
+stayed fine throughout.
+
+The second hub's `lsusb` had the decisive line: the mouse failed every
+attempt at `get-desc8, SETUP stage: CRC/bitstuff error`. A corrupted ACK
+to a SETUP on address 0 is two devices answering. The keyboard's last
+attempt had died at `set-address, STATUS stage`, so it never took its
+new address -- it was still on address 0, on a hub port still enabled.
+`usbh_addr0_busy()` only counted devices mid-enumeration, so the mouse
+was let onto address 0 beside it. On a root port a failed device has a
+wire to itself; behind a hub every device shares one segment.
+
+**Reproduced first.** A device model that STALLs the status stage of
+SET_ADDRESS (`stall_set_addr`) fails enumeration while staying on
+address 0. Behind the hub model it made the mouse fail every attempt,
+and the contention monitor counted 39 collisions -- two devices
+answering the same SETUPs.
+
+**Fixed** (`usbh.c`, `usbh_hub.c`, `usbh_int.h`):
+
+- `on_addr0`: a device behind a hub counts as on address 0 from its port
+  reset until SET_ADDRESS succeeds -- including after a failure in
+  between -- and while any other device is, nothing new may use address
+  0.
+- When a device behind a hub fails for good, the hub driver disables its
+  port (CLEAR_PORT_FEATURE(PORT_ENABLE)), so it hears and answers
+  nothing. `port_act()` does not mistake that disabled port for a fault
+  to recover.
+- One reserved address per device, kept across retries and freed only
+  at teardown. A retry used to free it first, but a device whose port
+  reset then failed still held it, and the next device was given the
+  same address -- two devices on one address, which also explains the
+  decline over repeated plugging.
+
+After the fix: the failed device's port is disabled, the mouse
+enumerates past it and works, zero collisions. `test_usb_hub` keeps the
+case.
+
+**Not explained yet**, and deliberately not theorised about further:
+why the keyboard fails in the first place (it ACKs its SETUPs and never
+answers the IN that follows -- clean timeouts), and the failures of
+requests to the hub itself. Rounds 8 and 9 each fixed a real,
+reproduced fault that was offered as the likely cause of this, and
+neither was. The next step is a capture.
+
+### Capturing a failing transaction on hardware
+
+`usbcap` (shell) makes the driver arm the built-in logic probe
+(`rtl/probe.v`, needs `PROBE`) before every transaction on root port 0,
+and freeze it on the first one that ends in a timeout, CRC error or
+babble. The capture -- port 0's D+/D- at 48 MHz, 170 us -- then starts
+with the failing transaction. `usbcapd` prints it. While capturing,
+the hardware's NAK retries are off, so each attempt is one transaction
+and fits in one capture; software paces the retries as usual. If the
+failure goes away in capture mode, that is itself a finding: it points
+at the hardware retry path.
+
+Decode it off the board:
+
+    tools/usbcap.py capture.txt
+
+One line per packet: start time, gap since the previous packet, speed,
+PID (with its check field), token address and endpoint with CRC5, data
+bytes with CRC16, EOP length -- and anything the wire should never
+show: SE1 (two drivers), glitches, bit-stuff violations, packets cut
+off by the end of the capture. Console messages landing inside the dump
+do not shift the data; words are placed by their printed index.
+
+The decoder was checked against a capture made the same way in
+simulation, where the SIE's own trace says what was sent: it recovered
+PRE, the low-speed SETUP to address 0, the DATA0 carrying
+`80 06 00 01 00 00 08 00` with a valid CRC16, the ACK, and an IN answered
+by NAK, with gaps and EOP lengths.
+
+### The first capture: the hub goes deaf
+
+With the keyboard plugged into the hub, `usbcap` froze on a request to
+the **hub itself** (address 1), the DATA stage IN of a control
+transfer, TIMEOUT. `tools/usbcap.py` on it:
+
+    0.021 us  FS  IN addr 1 ep 0  EOP 2.0 bits   <-- the failing transaction
+    ...then 165 us of idle J
+
+The host's side is clean: valid SYNC, PID, CRC5, a 2-bit EOP, no
+collision, no SE1. And the hub never answers -- not late, not garbled,
+not a NAK: silence, for forty times the host's timeout. So the hub is
+intermittently deaf to its own address in the middle of a control
+request whose SETUP it had just ACKed, and only with low-speed devices
+behind it.
+
+That rules out host-side timing and collisions for this failure. It
+points at the hub's own state; one candidate is the hub still in its
+low-speed (PRE) repeater mode from traffic before, not listening
+upstream at full speed. The capture cannot show that, because it began
+at the failing token. So capture now keeps a window recording across
+transactions -- the driver re-arms the probe only when the previous
+window is over -- and a frozen capture holds the failing transaction
+with whatever preceded it in the same 170 us, usually its own SETUP
+and any PRE traffic just before. The decoder marks the failing packet.
+
+### The cause: transfers ran across frame boundaries
+
+Stepping back from individual captures to everything seen on hardware:
+
+| Observation | |
+|---|---|
+| Everything works on root ports | keyboard, mouse, stick |
+| Behind two different hubs | the keyboard always fails, the mouse mostly works, the stick works, requests to the hub itself fail at random |
+| The keyboard fails in `get-cfg` / `get-desc` DATA stages | `get-desc8` -- a single packet -- always succeeds |
+| The keyboard's configuration descriptor | 59 bytes (`09 02 3b` in the first capture) |
+
+**A hub enforces USB frame timing; a root port does not.** A hub times
+each 1 ms frame from the host's SOFs and, near the end of one (EOF1,
+EOF2), stops repeating traffic and treats anything still running as
+babble. The host must send an SOF every millisecond on time, and must
+not start a transaction that cannot finish before the next.
+
+This host did neither. The SOF was only *queued* at the frame tick and
+went out whenever the engine next went idle, and an auto-continue
+request ran packet after packet through the boundary. At low speed
+through a hub a packet takes ~150 us, so:
+
+- the keyboard's 59-byte configuration descriptor, eight packets, holds
+  the engine ~1.2 ms -- it crosses a frame every time, and fails every
+  time; its 18-byte device descriptor often; its single-packet
+  `get-desc8` never;
+- the mouse's 34-byte descriptor, five packets, ~0.75 ms, often fits --
+  so the mouse mostly worked, and failed once the keyboard's traffic
+  made crossings frequent;
+- the stick is full speed with short packets, and its bulk retries hide
+  the occasional crossing;
+- requests to the hub itself fail when they meet the hub's confused
+  frame timing;
+- a root port has no frame enforcement, so everything worked there.
+
+**Measured before the fix:** in `test_usb_hub`, enumerating the mouse
+and reading from the stick, SOFs went out up to **207 us** after their
+frame tick. A hub expects them within a bit time or two.
+
+**Fix** (`rtl/usb/usb_host.v`, `rtl/usb/usb_xact.v`): an end-of-frame
+guard. The scheduler starts nothing that cannot finish before the next
+frame tick -- 75 us of frame left for full speed, 210 us for low speed
+-- and the engine checks the same before every re-issue inside a
+request (a NAK retry, a discarded resend, the next auto-continue
+packet), ending the request with `ST_NAK` and its progress kept in
+`act_len`. Every driver already resumes from there after a NAK. The
+engine is then idle at every frame tick and the SOF goes out on time:
+**0 us late** after the fix, in the same scenario.
+
+`test_usb_hub` and `test_usb_msc` now check on every frame that no SOF
+starts more than 2 us after its frame tick.
+
+**What the spec requires** (USB 2.0 11.2, "Hub Frame Timer"): a hub
+locks its frame timer after two consecutive clean SOFs and free-runs
+through at most two missing ones -- so a *late* SOF is worse than a
+missing one, because the hub has already predicted where the frame
+ends. Near that end it enforces two points: after EOF1 (~32 FS bit
+times before the next SOF) it starts repeating no new packet, and a
+port still transmitting upstream at EOF2 (~10 bit times) is babbling
+and is disabled. So everything must be over before EOF1; the guards
+leave 15 us (FS) and 25 us (LS) beyond the worst-case transaction.
+Transaction translators and split transactions do not apply: behind a
+full-speed host a USB 2.0 hub runs as a full-speed repeater.
+
+This explains the whole pattern; it has not yet been confirmed on
+hardware. The capture tool (below) has a known fault -- a window can
+start at a transaction other than the one that later fails -- and is
+parked: it is not needed to test this.
+
+### Hardware: working behind the hub
+
+After round 14, on hub 05e3:0608: **keyboard (04d9:1203), mouse
+(045e:0737) and stick (16c0:05e1) all work behind the hub at the same
+time**, for the first time. The keyboard's enumeration no longer shows
+any NAK-then-timeout failures.
+
+What remains is a different class: occasional **plain timeouts**,
+transactions nobody answered -- a SETUP to the hub not ACKed, a
+descriptor read right after a reset -- all with zero NAKs, and all
+recovered by retries (the keyboard bound on its fourth attempt). The
+wire is clean: 10432 receptions, 4 bad. One was user-visible: the first
+`usbmount` failed with every request to the stick, Reset Recovery
+included, timing out, followed by `usb msc: device removed` -- the hub
+reporting that port changed, most likely disabled. After it was
+re-enumerated the second mount worked. A hub may disable a port it
+judges to be babbling (USB 2.0 11.8.x); there is no evidence here of
+why it did, and it is recorded rather than guessed at.
+
+### The last fault: a stale result on resumed transfers
+
+Round 19, confirmed on hardware: keyboard, mouse, stick and CDC device
+behind one hub at once. For anyone reading the history, the faults that
+stood between "a hub enumerates" and that, in the order they were
+found, each confirmed by a hardware change in behaviour:
+
+| Round | Fault | Where |
+|---|---|---|
+| 7 | PRE sent with a wrong PID check field; no LS device behind any hub could work | `usb_sie.v` |
+| 7 | devices consumed each other's transaction results | `usbh.c`, owner |
+| 9 | full-speed tokens and keep-alives started on a low-speed EOP tail | `usb_xact.v`, `usb_host.v` |
+| 10 | a failed device left on address 0 poisoned every later enumeration | `usbh.c`, `usbh_hub.c` |
+| 13 | transfers ran across frame boundaries; SOFs up to 207 us late | `usb_host.v`, `usb_xact.v` |
+| 14 | NAK retries went out microseconds apart, in hardware and software | `usbh.c` |
+| 19 | a resumed transfer judged a result it no longer owned | `usbh.c` |
+
+Round 19's is the one that finally made keyboards work: see
+[Known issues](#known-issues), item 4. It was introduced, in effect, by
+round 13, which made split-and-resumed transfers common. The resume
+path had always judged the status stage one call late; it only mattered
+once transfers were routinely resumed.
+
+Theories along the way that were wrong, recorded so they are not
+revisited: a hub going deaf (round 11, a tooling artifact), a late
+low-speed turnaround (round 12, falsified in simulation), an
+out-of-spec keyboard clock (round 18 -- the Holtek is +1.75%, but a
+second keyboard failed identically).
+
+### After the frame fix: NAK retries went out microseconds apart
+
+On hardware after round 13: the mouse and the stick work behind the hub
+even with the keyboard plugged in, and Fmax is 58.34 MHz. The keyboard
+still fails, now even on the single-packet `get-desc8` -- so the frame
+fix was real but not the keyboard's cause.
+
+The keyboard's failures, across every log, share one signature: a NAK
+on a data or status stage, then no response to the retry. It is a slow
+microcontroller that NAKs while preparing a descriptor; the mouse
+answers at once and never NAKs.
+
+Our host retried a NAK far faster than any real one:
+
+- the hardware NAK budget retried ~3 us after the NAK;
+- and `ctrl_step()`'s "paced" software retry was not paced at all. In
+  `CS_DATA_RUN`, `CS_STATUS` and `CS_FINAL` it set `ctrl_delay_until`
+  and then relaunched **in the same call** -- the delay only postponed
+  judging the next result. The comment promising retries ~2.7 ms apart
+  was never true.
+
+UHCI, OHCI and a high-speed hub's TT all revisit a NAKed control
+endpoint on a later list pass, typically the next frame. Cheap
+low-speed firmware has likely never seen a retry within microseconds
+of its own NAK, and behind a hub every retry is also PRE-prefixed and
+repeated. The mechanism inside the keyboard is not proven; the host's
+behaviour was plainly wrong either way.
+
+**Fixed** (`usbh.c`): on a NAK, judge it, set the delay and return; the
+next call after the delay relaunches -- `CS_DATA_RUN` through its
+existing launch path, a NAKed data stage resumed by `CS_STATUS` through
+`CS_DATA_RUN` a packet at a time, a NAKed status stage by `CS_FINAL`.
+And a low-speed device behind a hub gets a hardware NAK budget of 0,
+so every NAK comes back to software and is retried a tick (~1.4 ms,
+the next frame) later. `usbnak N` sets that budget at run time.
+
+### Three more captures, and what they corrected
+
+Round 11's reading above -- "the hub goes deaf" -- was wrong. Three
+captures (keyboard alone, mouse alone, stick alone, all behind the hub)
+showed:
+
+- **Hub requests fail with only a full-speed stick behind the hub**, so
+  they are not about low speed at all.
+- In the mouse and stick captures the hub *answers* -- it NAKs data and
+  status-stage INs while busy, which is correct. The transaction that
+  actually timed out was a **SETUP** to the hub that got no ACK, and it
+  is in neither capture. Two tooling faults hid it: the capture header
+  gave the engine *state* (`stage 3`, `CS_STATUS`, which judges the
+  previous stage, the SETUP) rather than the failing transaction, and
+  keeping a window recording across transactions meant a transaction
+  launched near the end of a window transmitted after it closed. Both
+  are fixed: the header now names the failing PID, the decoder marks
+  that packet, and the probe is armed at every transaction again.
+- **The keyboard does answer.** Its IN got a correctly formed DATA1
+  starting `09 02 3b` -- the configuration descriptor -- 2.9 us after
+  the host's EOP, legal and in time. The host missed it, called it a
+  timeout, and later transmitted over the rest of it. The single-sample
+  SE1s on its edges are the two lines crossing a few ns apart as the hub
+  repeats slow low-speed edges; the decoder now says so instead of
+  reporting "two drivers".
+- **Falsified:** answering 2.9 us after the EOP is not the cause. The
+  mouse model given that turnaround (`extra_turn_ns`) enumerates behind
+  the hub model without trouble.
+
+So two open questions, each needing one more capture with the fixed
+tooling: why the hub does not ACK some SETUPs, and why the host's
+receiver misses the keyboard's reply. The capture header now also
+reports the controller's own receive counters across the failing
+transaction -- whether the receiver started on the reply at all, and
+whether it then rejected it.
+
+### Two core bugs the hub found
+
+Neither is specific to hubs; the hub bench is what made each routine.
+
+**Devices consumed each other's transaction results** (`usbh.c`). Each
+device's `ctrl_step()` waited for "not pending" and then read `XACT_S`
+as its own. `z_usbh_poll()` steps devices in index order, so after
+device 1 launched, device 0 ran first on the next poll and took device
+1's result -- in the bench, a hub's 4-byte GET_PORT_STATUS reply judged
+as a child's SETUP. Two devices enumerating on the two root ports at
+once could hit it; the retry logic mostly hid it. Now the device that
+launched a transaction owns its result until it reads it, and no other
+device may read or launch meanwhile.
+
+**PRE was sent with a wrong PID check field** (`rtl/usb/usb_sie.v`).
+On the tick emitting the PRE PID's last bit, `TB_PREPID` also set
+`tx_j <= 1` to start the idle gap, and that later assignment overrode
+the bit's transition. The byte went out as 0xBC, not 0x3C. A hub checks
+the PID check field and ignores a PRE that fails it, so **every
+low-speed device behind a real hub would have been unreachable**. The
+PRE-mode device model compared only the low nibble and passed it from
+phase 1 on. Now the model checks the whole byte, as a hub does, and
+`test_usb` case 7 fails against the old SIE; the fix is the removal of
+that one assignment.
+
+### The hub model, and what it corrected in the device model
+
+HUB=1 in `tb_usb_device.v`: class requests, the status change endpoint
+(NAK until a change), per-port state, a monitor turning `hub_conn` into
+connect changes and completing resets after `HUB_RST_NS`, and a bus
+reset that unpowers every port. Devices behind it are instances on the
+same wires. Putting several models on one wire exposed four model
+faults, all fixed:
+
+- **A zero-time K at the end of every packet.** The EOP released SE0
+  before setting J; the host's clocked receiver never saw it, but an
+  event-driven receiver in another model took it as a packet start and
+  swallowed the host's next token.
+- **Bus reset after 667 ns of SE0**, 8 of the model's own bit times,
+  shorter than the SE0 ending a low-speed packet. Now 2.5 us (TDETRST).
+- **The PRE-mode device decoded full-speed traffic** meant for others.
+  Now it skips anything not starting with PRE -- and checks the whole
+  PRE byte.
+- **Full-speed models decoded low-speed replies** coming upstream.
+  Now a full-speed model recognises a low-speed SYNC and skips it.
+
 ## Mass storage status
 
 `usbh_msc.c` implements bulk-only transport and the SCSI commands a
@@ -1798,8 +2457,8 @@ real FAT filesystem.
 
 ### The truncation bug (resolved in simulation)
 
-**Status:** fixed and passing `make test_usb_msc`; not yet confirmed
-on hardware. The cause is in
+**Status:** fixed. Passes `make test_usb_msc`, and on hardware FatFs
+reads a text file and an 11 KB PNG through `/usb`. The cause is in
 [What the truncation actually was](#what-the-truncation-actually-was----measured)
 below. This section is the original report, kept as written.
 
@@ -1927,20 +2586,16 @@ retry both fail and the next read desyncs; with it all pass. The model
 also now treats a non-ACK after its data as the host's next token,
 which it previously swallowed.
 
-Not covered yet:
-
-- OUT is not retried. A lost handshake there is resolved by the
-  device ignoring a repeated toggle; nothing exercises it.
-- More than three strikes still fails the command and leaves the
-  device mid-phase. That needs bulk-only Reset Recovery (class reset,
-  then CLEAR_FEATURE(HALT) on both endpoints), which is the same
-  missing piece as STALL recovery.
-- `usb_xact.v` does not check the DATA0/DATA1 toggle of a received IN
-  packet. If the host's ACK is lost, the device resends the previous
-  packet and the host accepts it as new data. The spec has the host
-  discard a packet with the wrong toggle (and still ACK it).
+Since then (round 6): more than three strikes fails the command and
+runs Reset Recovery, and `usb_xact.v` checks the IN data toggle -- see
+[STALL and Reset Recovery](#stall-and-reset-recovery) and
+[The IN data toggle check](#the-in-data-toggle-check). OUT is still
+not retried: a lost handshake there is resolved by the device ignoring
+a repeated toggle, and nothing exercises it yet.
 
 ### Fmax after these changes
+
+**Superseded -- read the update at the end of this section.**
 
 `make usb_fmax` could not be run on the reference toolchain. With
 YoWASP nextpnr (which needs `--ignore-loops` for the TRNG ring
@@ -1952,6 +2607,135 @@ into the Ethernet MAC's LUT-RAM buffer read mux (`wbs_ethmac0_i`
 move placement, not that path. It is the SoC's real margin limit and
 the thing to fix if margin gets tight; confirm the numbers with
 `make usb_fmax` on the reference tools.
+
+**Update.** On the reference toolchain the build with these changes
+measured 48.89 MHz against the 55.07 recorded here earlier, which
+looked like a USB regression. It was not established as one:
+
+- Only `rtl/usb/usb_host.v` among the changed files is synthesised,
+  and its change is two gate inputs. Standalone, `usb_host` went from
+  2152 to 2156 LUT4 and 144 to 150 PFUMX, one L6MUX21 fewer, same
+  flops, same DP16KD.
+- On the second toolchain the unchanged RTL measured 51.86, 51.37 and
+  48.10 MHz on seeds 1-3, and the changed RTL 50.55, 49.70 and 51.57.
+  The ranges overlap entirely. Placement alone moved the same design
+  by almost 4 MHz, so 55.07 was one favourable run, not the design's
+  margin.
+- Every captured critical path ran into the Ethernet MAC's buffer
+  read mux, because its buffers had been inferred as LUT RAM. That is
+  fixed upstream (`rtl/ethmac_rmii.v`, now BRAM), along with a VRAM
+  attribute change that freed about 20 BRAM blocks. After that the
+  reference toolchain measures **56.50 MHz** with all the USB changes
+  in.
+
+Two things carried forward. A single-seed Fmax cannot judge a small
+change: use `make usb_fmax_sweep` (below, in Testing) and compare
+minimums. And an explanation of where the critical path lies is not a
+measurement of whether a change cost timing -- that was argued here
+before it was measured, the pattern this document warns against.
+
+### The transaction engine has one owner
+
+There is one transaction engine and two kinds of user. Enumeration
+runs from the ISR -- IRQ 9 on every completion, and the ktimer. Mass
+storage runs in process context and blocks, inside FatFs, which holds
+off the scheduler but **not interrupts**. So the ISR can preempt a
+storage command between any two register accesses, and the only guard
+enumeration had was "is a transaction in flight right now". Between two
+bulk transactions the engine is idle for a moment, and `XACT_DONE`
+raises the interrupt at exactly that moment. Two failures followed:
+
+- The ISR started a control transaction in the gap, and the storage
+  side then read that transaction's result as its own -- or the other
+  way round, and the other device's enumeration consumed a bulk
+  result.
+- An ISR landing between `bulk_xfer()`'s write of `XACT_A` and its
+  write of `XACT_B` overwrote `XACT_A`, so the bulk transfer went out
+  with the other device's address and PID.
+
+Today it needs a device enumerating during disk traffic. Phase 4 puts
+hub control traffic on the bus continuously, which would make it
+routine.
+
+**The rule** (`usbh.h`): `z_usbh_bus_reserve()` sets a flag that stops
+the enumeration side *starting* a control transfer -- the single launch
+point is `CS_SETUP` in `ctrl_step()` -- then waits until no transfer
+already started is still on the bus, and the caller owns the engine
+until `z_usbh_bus_release()`. `scsi_cmd()` holds it from CBW to CSW.
+No interrupt masking is needed: the flag is set before the wait, and
+the ISR runs to completion between any two of the waiter's reads.
+Enumeration just pauses while a command runs.
+
+The wait is bounded in kernel ticks, about 200 ms. The first version
+counted loop passes, and a pass that short-circuits past the bus read
+costs nothing -- in co-simulation it gave up in zero simulated time.
+The consequence of the bound: if a device being enumerated NAKs a
+control transfer for longer than that during disk traffic, the storage
+command fails ("bus busy") rather than waiting. The failure message
+lists each port's enumeration and control state.
+
+**How it was found and tested.** The co-simulation ran each storage
+operation to completion inside one step and polled only between
+steps, so it could not interleave the two by construction.
+`$usbh_irq(every, tick_every)` in `usbh_vpi.c` now runs `z_usbh_poll()`
+from inside the register accessors during storage operations -- every
+Nth access, as an ISR preempts between two accesses -- and advances
+the tick every Mth. With the mouse replugged during 60 reads, the old
+driver failed a read and the mouse never bound; with the rule, all 60
+reads are exact and the mouse binds.
+
+### STALL and Reset Recovery
+
+`scsi_cmd()` follows BOT 6.6-6.7:
+
+| What happened | What the host does | Result |
+|---|---|---|
+| Data phase STALLed | CLEAR_FEATURE(HALT) on that endpoint, read the CSW | FAIL, transport in step |
+| CSW read STALLed | clear the IN halt, read the CSW once more | as the CSW says |
+| CBW not accepted | Reset Recovery | ERR |
+| Data phase failed part-way (more than three strikes, babble, timeout) | Reset Recovery -- the device is still mid-phase, so a CSW read would take data as status | ERR |
+| CSW missing, short, bad signature or wrong tag | Reset Recovery | ERR |
+| bCSWStatus 2, phase error | Reset Recovery | ERR |
+| bCSWStatus 1 | nothing | FAIL |
+
+Reset Recovery (BOT 5.3.4) is the class reset (`bmRequestType` 0x21,
+`bRequest` 0xFF, to the interface) then CLEAR_FEATURE(ENDPOINT_HALT) on
+both bulk endpoints. Clearing a halt resets that endpoint's toggle to
+DATA0 on the device, and the host's copy follows. These are the only
+control requests the storage driver sends itself, over the engine it
+already holds, from a SETUP area at buffer offset 0x260. Every recovery
+prints a line whatever `msc_verbose` says. A port with nothing
+connected is not recovered.
+
+`test_usb_msc` covers a READ past the end of the medium with the
+device STALLing (one halt cleared, no reset, next read exact), a CSW
+with a bad signature (one class reset, two halts cleared), and four bad
+CRCs in a row (reset, next read exact).
+
+### The IN data toggle check
+
+A device that misses the host's ACK resends its last data packet with
+the same DATA0/DATA1. The host already has it, and only the toggle
+tells the resend from new data. `usb_xact.v` did not look: it took the
+resend as the next packet, duplicating 64 bytes and leaving the device
+a packet behind for the rest of the transfer.
+
+Now a data packet whose PID matches the toggle the host has moved past
+is ACKed -- so the device moves on -- and discarded: the SIE latches
+the PID before the first payload byte, so its bytes never reach the
+buffer or the babble count. The engine then asks again, charged to the
+NAK budget, so a device that never moves on ends in `ST_NAK` and
+software resumes it as it would a busy device. Two wires and one
+branch; no new registers.
+
+`test_usb_msc`'s lost-ACK case has the model ignore two ACKs; the read
+is exact with no recovery needed. `test_usb` covers control transfers,
+auto-continue, both speeds, PRE and auto-poll with the check in place.
+
+**Hardware risk:** keyboards and mice now have their toggles checked
+too. A device that does not alternate DATA0/DATA1 properly would lose
+every second report. Check both on hardware. Fmax has not been
+measured with this change; it is small, but it is in the engine.
 
 ### Known-good but reverted -- now reapplied
 
@@ -1974,31 +2758,219 @@ wrong. Two are worth reapplying once the truncation is understood:
   previous command left there. Handing that to FatFs as file content
   is worse than failing.
 
+### Known issues
+
+Seen on hardware, not understood, and parked because each is rare and
+recovered from. Pick one up if it becomes a real problem; the evidence
+so far is here.
+
+1. **Occasional unanswered transactions behind a hub -- probably the
+   same cause as item 4, now fixed; watch `failed requests`.** Many of
+   these were hub requests resumed after a NAK and then judging another
+   device's result (round 19); that no longer happens. Whether all of
+   them were is not proven. If `lsusb` shows `failed requests` climbing
+   on a quiet bus, this is the item to reopen. The original notes:
+   **Occasional unanswered transactions behind a hub.** A SETUP to the
+   hub not ACKed, a descriptor read right after a port reset timing
+   out -- zero NAKs, clean wire (10432 receptions, 4 bad), all
+   recovered by retries. Hub 05e3:0608 and 0bda:5411 alike. The keyboard
+   (04d9:1203) typically needs one or more enumeration retries. Since
+   round 16 these no longer print a line each: `lsusb` shows
+   `failed requests N` on the hub, and a line appears only when a hub is
+   given up. No theory yet. Already ruled out: collisions and host
+   timing on the wire (the contention monitor, and captures showing the
+   host's packets clean), frame overruns (fixed, round 13), NAK retry
+   pacing (fixed, round 14).
+2. **The hub occasionally drops a device's port.** Seen once on the
+   stick during the first `usbmount`: every request to it timed out,
+   Reset Recovery included, then `usb msc: device removed` -- the hub
+   reporting the port changed, most likely disabled -- and after
+   re-enumeration it worked. A hub may disable a port it judges to be
+   babbling (USB 2.0 11.8); nothing shows why it did here.
+   `usbmount` now waits for the drive to come back and retries once.
+3. **`usbcap` can capture the wrong transaction.** A window sometimes
+   starts at a transaction launched before the one that fails, so the
+   failing one lands late or outside it. Reproduced in co-simulation
+   with the real `rtl/probe.v` (`Z_USBH_COSIM_PROBE`): arm writes arrive
+   ~15 us before the transaction they were meant for reaches the wire.
+   Not fixed; every capture's header now names the failing PID so a
+   mismatch is at least visible. `tools/usbcap.py` itself is sound.
+4. **FIXED (round 19, confirmed on hardware). Keyboards unreliable
+   behind a hub, even alone.** Both a Holtek (04d9:1203) and a Cherry
+   (046a:c099) keyboard failed `get-cfg` with "TIMEOUT (0 naks)", and
+   requests to the hub itself failed only while a keyboard was present.
+   The mouse did not. Round 18 blamed the Holtek's clock -- measured at
+   +1.75%, outside the +-1.5% low-speed limit -- but the Cherry failed
+   identically, so that was at most a contributor, not the cause.
+
+   The cause found in round 19 is a stale read in the control engine.
+   Both keyboards have two interfaces, so a 59-byte configuration
+   descriptor -- eight low-speed packets, which the end-of-frame guard
+   (round 13) splits across frames almost every time; the mouse's 34
+   bytes usually fit. A split transfer resumes through `CS_DATA_RUN`,
+   and on its last packet that handed over to `CS_STATUS`, which judged
+   `XACT_S` on the NEXT call -- after this device had released the
+   engine, so another device's result could be sitting there. The
+   keyboard's `get-cfg` then inherited a hub request's timeout, and a
+   hub request resumed after a NAK inherited the keyboard's. `CS_STATUS`
+   also re-entered itself when all the data was already in, re-reading
+   its own NAK and counting the length again. Now the status stage is
+   launched at the point the data stage is known complete
+   (`ctrl_send_status()`), so no state judges a result it does not own.
+5. **Devices behind a hub intermittently stop answering (rounds 20-27) --
+   not seen since round 27; cause not identified.** With the round-27
+   build, keyboard and mouse enumerated first time on every plug across
+   multiple reboots, at the default timings and at a 12 us low-speed
+   timeout alike. But round 27's defaults reproduce round 26's constants
+   exactly (A_TUNE reset 0x041414af = 1400 / 160 / 160 clocks and 4
+   bits), and round 26 failed. The one difference is a new place and
+   route. So either the fault is build-dependent -- a marginal timing
+   path in the gateware, on or near the USB pins, that one layout hits
+   and another does not -- or it is intermittent and in a good phase, as
+   it seemed to be once before (after round 19). **If it returns:** first
+   note whether it came with a new bitstream. If so, compare the
+   builds' timing reports around `rtl/usb/` and the USB I/O, and check
+   the pin inputs' synchronisers and constraints before looking at
+   protocol again. The recovery counters stay in as the monitor: `lsusb`
+   `ports disabled by the hub N, recovered M` and `recovered=n`, and the
+   `failure with port enabled` line. `usbtune` stays for sweeping
+   low-speed timings. **Round 29 acted on the build-dependence
+   proactively:** D+ and D- are now registered in the pads' own I/O
+   cells (ODDRX1F out, IDDRX1F in), so the pin-to-flop paths are fixed
+   by the silicon and matched between the two lines in every build --
+   see "Pin registers IN THE I/O CELLS" in `usb_host.v`. A failure
+   after that would not be routing skew on the USB pins. Round 27 notes: Round 26's one-PRE'd-transaction-per-frame rule did **not**
+   fix it (hardware: failures continue, now mostly with the port still
+   enabled); it stays, as the reference hosts' discipline. A closer
+   reading of Pico-PIO-USB and TinyUSB's RP2040 driver found every part
+   of a low-speed transaction through a hub matching this host in kind:
+   PRE framing and polarity, handshakes, enumeration delays (TinyUSB:
+   20 ms reset wait, 10 ms recovery), NAK pacing (RP2040: 300 us). Four
+   timings differ in size only -- the J after a PRE (4 FS bits, the spec
+   minimum), the low-speed response timeout (29 us; Pico 12), the
+   turnaround inside a transaction and the gap after a low-speed packet
+   (3.3 us each). Round 27 makes them adjustable at run time (`usbtune`,
+   register A_TUNE, reset to the old values) so they can be swept on
+   hardware without a rebuild per value. Round 26 notes: Round 25's recovery re-enumerated the keyboard
+   four times and it failed every time, so it could not be the answer.
+   Reading Pico-PIO-USB -- TinyUSB's software full-speed host, the design
+   closest to this one -- showed a scheduling rule this host broke: its
+   frame loop sends the SOF and then **at most one transaction per
+   endpoint per frame**. A low-speed device behind a hub gets one PRE'd
+   transaction (token, data, PRE'd handshake) a frame; a control
+   transfer's SETUP, each data packet and the status stage go in
+   separate frames; a NAK waits for the next. This host ran several
+   PRE'd transactions back to back in one frame -- every multi-packet
+   data stage auto-continued -- and that is exactly where devices
+   failed: `get-desc` and `get-cfg` data stages (first packet never
+   arriving, the hub disabling the port half the time), while
+   single-packet `get-desc8` and HID polls (one transaction every 10
+   frames) worked. ESP-IDF and TinyUSB's DWC2 fix hit the same limit
+   ("can't handle two transactions with preamble in one frame") and
+   space low-speed transactions one per frame. **Round 26:** the
+   scheduler starts at most one PRE'd transaction per frame
+   (`pre_done` in `usb_host.v`), and a PRE'd request never re-issues
+   within a frame -- it ends with its progress, as the end-of-frame
+   guard does, and software resumes it next frame. Only while frames
+   run. The round-25 recovery and its counters stay, as the check.
+   Round 25: Round 24-25 findings: our PRE + ACK
+   after low-speed data is clean on the wire (`usbcapok`), closing the
+   LKML lead; the mouse measures -0.16% against our clock, so there is
+   no gross clock error; there is no pattern across cold, warm, SRAM or
+   flash boots; and a device can complete a clean transfer and have its
+   port disabled by the hub moments later. **Round 25 recovers it the
+   way Linux does:** when a port is found disabled by the hub
+   (C_PORT_ENABLE), the attempt is refunded and the device reset and
+   re-enumerated, up to 16 times per device, with a line `hub H port P
+   disabled by hub (port error), re-enabling (n)`. **This hides the
+   symptom, not the cause.** To see whether it continues: `lsusb` shows
+   `ports disabled by the hub N, recovered M` per hub and `recovered=n`
+   per device; failures with the port still enabled -- the other half,
+   not recovered -- print `hub H port P failure with port enabled`.
+   Earlier findings: Round 22 update, first: the NAK-retry theory below was
+   **falsified** -- with hardware NAK retries off for hubs by default,
+   keyboard and mouse still failed. A capture of a failure on that build
+   then showed the host's side clean -- a correct PRE, the hub setup gap,
+   a low-speed IN to the keyboard's address with a valid CRC5, a 2-bit
+   low-speed EOP -- and **no answer at all**, the receiver never
+   starting (`rx started +0`). A device must answer an IN on endpoint 0,
+   so the keyboard never received the token. The CDC device (full
+   speed) also stopped answering mid-session. The two reasons a hub
+   stops delivering to a connected port are that it has **disabled** the
+   port (babble or loss of activity at end of frame) or the port is
+   **suspended** (a low-speed device with no keep-alives for 3 ms).
+   **Round 22's answer, from the hub itself:** in about half the failures
+   the hub had DISABLED the port -- `status 0301 change 0002`: connected,
+   low speed, not enabled, with C_PORT_ENABLE set, which USB 2.0
+   11.24.2.7.2.2 sets only when the hub disables a port for a port
+   error; 11.8.1 defines those as babble or loss of activity, a device
+   still active at the hub's EOF2 point. Both keyboard and mouse. In the
+   other half the port was still enabled. Round 23 adds a gateware
+   counter of frames in which port 0's line is not idle in the last 4 us
+   before our frame tick (lsusb: `frame(s) with port 0 busy at end of
+   frame`), to settle whether anything on our side reaches the end of a
+   frame.
+   **Round 23's counter read 0** through a session of repeated
+   hub-disabled ports: port 0 is idle in the last 4 us of every frame, so
+   our frame timing is ruled out -- nothing of ours, and nothing
+   answering us, reaches the hub's end of frame. Other implementations
+   agree the guard is sound: OHCI's LSThreshold (Linux programs 0x628,
+   ~131 us) is the same rule, ours is 210 us. Linux sees this symptom too
+   ("port N disabled by hub (EMI?), re-enabling", `hub.c`, whose comment
+   says it happens with mice) and recovers by re-running connect change;
+   it sees it rarely, we on half of low-speed plugs. An LKML report with
+   our topology -- full-speed host, low-speed mouse behind a hub, the hub
+   resetting it -- traced it to the host sending bytes after its
+   low-speed ACK. Failures here tend to follow a successful low-speed
+   data packet, i.e. our PRE + ACK, which had never been captured. Round
+   24 adds `usbcapok`: the probe freezes on the first successful IN with
+   data from a low-speed device behind a hub, capturing the device's
+   packet and our handshake after it.
+   Round 22 had the hub driver read and log a port's status whenever a
+   device behind it fails (`hub N port P after a failure: ... enabled
+   E suspended S`), which answers which it is. The original note:
+   **Low-speed devices behind a hub fail intermittently again (round
+   20-21) -- being tested.** After round 19 both the keyboard and the
+   mouse still failed some enumerations behind the hub (timeouts, bad
+   receives, `device failed, port disabled`); the USB code was unchanged
+   from round 19, so round 19's clean run was likely a good run. Then,
+   on hardware, **both became completely reliable while `usbcap` was
+   running** (11 keyboard and 5 mouse plugs, all first time). Capture
+   mode's only protocol effect is NAK budget 0 on every transaction on
+   port 0; low-speed devices behind the hub already had it, so the
+   difference is the **hub's own control endpoint**. A hub NAKs requests
+   while busy with a port reset -- exactly when a device behind it
+   enumerates -- and the hardware re-sent each one every ~5 us, four
+   times (seen in captures). Round 21 makes budget 0 the default for
+   hubs and everything behind them; `usbnak 3` restores the old
+   behaviour on the same build, to compare. Also reported and not
+   explained: plugging full-speed devices first sometimes made the
+   low-speed ones reliable too.
+6. **Low-speed devices through a hub have no hardware NAK retries**
+   (round 14, `usbnak`), so each NAK costs a frame. Fine for HID and
+   enumeration; noted in case a low-speed device ever needs throughput.
+
 ### Also outstanding
 
-- None of the fixes in the change log below has run on hardware yet.
-  First check: a 512-byte READ(10) returns 512 bytes, then `usb_fmax`.
-- `usb_xact.v` does not check the DATA0/DATA1 toggle of a received IN
-  packet, so a lost host ACK turns a device resend into duplicated
-  data. See [Transmission errors on bulk IN](#transmission-errors-on-bulk-in).
-- No unbind on disconnect. `usbh.c` never tells `usbh_msc.c` its
-  device went away, so `msc.ready` stays set, `/usb` stays mounted, and
-  accesses fail slowly instead of reporting "not ready". A different
-  device later enumerating at the same address would receive MSC
-  traffic. Needs an unbind call from the detach path, `RES_NOTRDY`
-  from `diskio_mux.c`, and `fs_usb_unmount()`.
-- No bulk-only Reset Recovery. Needed after a STALL and after more
-  than three consecutive transmission errors.
+- The keyboard behind a hub: unexplained. Capture it with `usbcap` /
+  `usbcapd` and decode with `tools/usbcap.py`; see
+  [Capturing a failing transaction on hardware](#capturing-a-failing-transaction-on-hardware).
+  Same for a failing request to the hub itself.
+- `make usb_fmax` with the `usb_sie.v` PRE fix and the `usb_xact.v`
+  toggle check.
+- On hardware, still to exercise: unplug and replug with `/usb`
+  mounted (including mid-copy), a card reader with no card (it STALLs),
+  and keyboard and mouse with the IN toggle check in place.
+- `make usb_fmax` with the `usb_xact.v` toggle check.
+- A device NAKing a control transfer for over ~200 ms during disk
+  traffic fails the storage command ("bus busy"). See
+  [The transaction engine has one owner](#the-transaction-engine-has-one-owner).
+- OUT transfers are not retried on a lost handshake.
 - One sector per SCSI command, because the packet buffer holds one.
   FatFs often asks for several, so a directory scan is slower than it
   needs to be. Fixing it needs a larger landing area, not a protocol
   change.
-- No endpoint recovery after a STALL. The spec wants
-  `CLEAR_FEATURE(HALT)` on the stalled endpoint followed by a CSW
-  read; this reports the stall and does not repair it.
-- Writes pass `test_usb_msc` (WRITE(10), then read back and compare)
-  but have never run on hardware.
-- `msc_verbose` defaults on. Turn it off once reads are reliable.
+- One drive at a time: `usbh_msc.c` holds a single device's state.
 
 ## Change log since the phase 5 handover
 
@@ -2056,6 +3028,463 @@ it is simulation-verified only until the hardware check at the end.
 - `docs/filesystem.md` now lists the three volumes and where `/usb`
   comes from; `docs/flash_apps.md` no longer calls USB storage
   hypothetical.
+
+**Round 5 -- re-evaluation on `403513e`**
+
+- Hardware: FatFs reads a text file and an 11 KB PNG through `/usb`.
+  Phase 5 reads are done; the phase table and status notes say so.
+- Fmax: the apparent 48.89 MHz regression is written up in
+  [Fmax after these changes](#fmax-after-these-changes). With the
+  upstream Ethernet MAC BRAM fix, 56.50 MHz.
+- `Makefile`: `usb_fmax_sweep`, which synthesises once and places
+  several seeds.
+- The round-4 files were confirmed present and unchanged in
+  `403513e`. The reworked MAC passes `tb_ethmac_rmii.v` and
+  `tb_ethmac_rmii_tx.v`.
+
+**Round 31 -- docs brought up to date** (on `403513e`)
+
+- Register map: DEBUG0/DEBUG1 (with the end-of-frame counter) and TUNE,
+  previously only in the change log. [PRE](#pre): corrected -- every
+  host low-speed packet gets its own PRE -- plus the one-per-frame rule
+  and `usbtune`. [Pin registers in the I/O cells](#pin-registers-in-the-io-cells):
+  new, under board notes. "What skew did not explain": the capture
+  caveat. `docs/probe.md`: the USB example was the wiring that no longer
+  packs; now `line0_o`, with why. `docs/filesystem.md`: `usbmount`'s
+  retry. Docs only.
+
+**Round 29 -- USB pins in the I/O cells; one `serial` app** (on `403513e`)
+
+- `rtl/usb/usb_host.v`: D+ and D- registered in the pads' I/O cells --
+  ODDRX1F (both halves the same, a single-rate output register) and
+  IDDRX1F (the rising-edge sample) -- so the pin paths are fixed and
+  matched between D+ and D- in every build, rather than wherever the
+  placer puts the flops. The output enable gets one fabric register to
+  stay aligned with the data. Plain registers in simulation
+  (`ifndef SYNTHESIS`). `test_usb` passes (77). Why:
+  [Known issues](#known-issues), item 5.
+- **Round 30 fix:** the first hardware build failed to pack --
+  "IDDRX1F D input must be connected only to a top level input" --
+  because the logic probe (`sysctl.v`, `PROBE`) read port 0's D+ pin
+  directly, a second load on the pad net. `usb_host.v` now exports its
+  pad-registered samples of port 0 as `line0_o`, and the probe records
+  those: exactly what the receiver sees, a clock after the pins.
+  Verified with the real toolchain (YoWASP yosys 0.69 and nextpnr-ecp5)
+  on a minimal top with mozart_ml1's USB pin sites (A9, A10, C8, B8;
+  45k, CABGA256): the old wiring reproduces the error exactly; the new
+  one packs, places and routes (72 MHz), each USB pin's I/O cell in
+  `MODE = IDDRX1_ODDRX1` -- input and output register together in the
+  pad. **Correction:** rounds 27 and 29 reported yosys checks (4
+  tristates, 4 ODDRX1F/IDDRX1F, no multiple drivers) that never ran --
+  yosys was not installed in the environment and the error was
+  filtered out. The round-30 checks above did run.
+- `sw/apps/serial/serial.c`: one app for UART1 and the USB CDC device,
+  on `serial0`, a connection each; stays resident without UART1.
+  `zconnect.c/.h`: `usbserial` connects to `serial0` with
+  `Z_CONN_USBSERIAL_ARG`. `term.c`: auto-connect waits for `serial0`.
+  The second binary is gone: the serial Makefile is back to upstream,
+  `mkfatimg.py` no longer lists `apps/usbserial`. Docs: connections,
+  config, terminal, ports, [CDC](#cdc).
+
+**Round 28 -- item 5 closed as not reproduced** (on `403513e`)
+
+- Hardware (reported): with the round-27 build, keyboard and mouse
+  behind the hub enumerate first time on every plug across multiple
+  reboots, at default and at 12 us timeouts. Round 27's defaults are
+  identical to round 26's constants; only the place and route changed.
+  [Known issues](#known-issues), item 5, records what to check if it
+  returns. Docs only.
+
+**Round 27 -- low-speed timings adjustable at run time** (on `403513e`)
+
+- Hardware (reported): round 26 did not fix item 5.
+- Compared Pico-PIO-USB and TinyUSB's RP2040 HCD in detail: no
+  difference in kind; four timings differ in size.
+  [Known issues](#known-issues), item 5.
+- `rtl/usb/usb_host.v`: A_TUNE (0x04a) -- low-speed response timeout,
+  turnaround, gap after a low-speed packet, J after a PRE; reset value
+  0x041414af reproduces the old constants. `usb_xact.v`, `usb_sie.v`
+  take them as inputs. `usbh.c`/`usbh.h`/`usbh_hw.h`/`sh.c`: `usbtune`.
+- Checked by compiling only (iverilog, yosys `check -assert`), by
+  request -- hardware is the test.
+
+**Round 26 -- one PRE'd transaction per frame** (on `403513e`)
+
+- Hardware (reported): with round 25's recovery the keyboard was
+  re-enumerated four times and failed every time.
+- Read Pico-PIO-USB (`pio_usb_host.c`, `pio_usb.c`): one transaction per
+  endpoint per frame; a PRE'd transfer never shares a frame. This host
+  put several PRE'd transactions in one frame on every multi-packet
+  data stage -- the failing case. [Known issues](#known-issues), item 5.
+- `rtl/usb/usb_host.v`: `pre_done` -- at most one PRE'd transaction
+  scheduled per frame (software requests and polls). `usb_xact.v`:
+  `pre_gate` -- a PRE'd request ends instead of re-issuing. Both only
+  while frames run, so `test_usb` case 7 (frames off) is unchanged.
+- `test_usb` passes (77). `test_usb_hub` passes (40 checks, 0 model
+  errors): the low-speed mouse behind the hub enumerates with every
+  multi-packet read split one PRE'd transaction per frame, including
+  re-enumerating during 40 stick reads; SOFs within 62 ns; no bus
+  contention. Needs a gateware rebuild.
+
+**Round 25 -- Linux-style recovery, with the counts kept** (on `403513e`)
+
+- Hardware (reported): no pattern across cold/warm/SRAM/flash boots; a
+  successful low-speed read followed by repeated hub-disabled ports.
+  `usbcapok`: our PRE + ACK is clean. Mouse -0.16% vs our clock.
+- `usbh_hub.c`, `usbh_int.h`, `usbh.c`: a port found disabled by the hub
+  (C_PORT_ENABLE) refunds the failed attempt, takes back a port already
+  given up on, and lets the retry path re-enumerate -- up to 16 times
+  per device. Counted per hub (`ports disabled by the hub N, recovered
+  M`) and per device (`recovered=n`) in lsusb. Failures with the port
+  still enabled are logged, not recovered. [Known issues](#known-issues),
+  item 5.
+- Kernel only; host-compiler checks only.
+
+**Round 24 -- capturing our own ACK** (on `403513e`)
+
+- Hardware (reported): the end-of-frame counter stays 0 while the hub
+  keeps disabling low-speed ports -- our frame timing is ruled out.
+- Research: OHCI's LSThreshold, Linux's "disabled by hub (EMI?)"
+  recovery, an LKML report of a full-speed host sending bytes after its
+  low-speed ACK. [Known issues](#known-issues), item 5.
+- `usbh.c`, `usbh.h`, `sh.c`: `usbcapok`, a capture that freezes on a
+  successful low-speed IN with data. `usbh_vpi.c` follows the new
+  `z_usbh_cap_start(mode)`. Kernel only.
+
+**Round 23 -- measuring the end of the frame** (on `403513e`)
+
+- Hardware (reported): the hub disables the low-speed devices' ports
+  itself (C_PORT_ENABLE) in about half the failures -- a port error,
+  meaning activity at its end of frame. [Known issues](#known-issues),
+  item 5.
+- `rtl/usb/usb_host.v`: `dbg_eof`, frames with port 0 not idle in the
+  last `EOF_ZONE` (4 us) before the frame tick, in DEBUG1[31:16].
+  `usbh.c`: lsusb prints it. `test_usb` passes.
+
+**Round 22 -- asking the hub** (on `403513e`)
+
+- Hardware (reported): round 21's NAK change did not help -- theory
+  falsified. A capture of a failure: clean PRE and IN, no answer, the
+  receiver never started. CDC dropped mid-session again.
+- `usbh.c`, `usbh_hub.c`, `usbh_int.h`: when a device behind a hub
+  fails, the hub driver reads the port's status and logs connected /
+  enabled / suspended and the change bits. [Known issues](#known-issues),
+  item 5.
+- `sw/apps/serial/serial.c` (usbserial): a failed read no longer ends
+  the session unless the device is really gone.
+- Hardware NAK budget 0 for hubs (round 21) is kept: it did not fix
+  this, but it is how real hosts behave.
+
+**Round 21 -- NAK retries off for hubs** (on `403513e`)
+
+- Hardware (reported): keyboard and mouse behind the hub fail
+  intermittently with the round-20 build (USB code identical to round
+  19); both became completely reliable while `usbcap` was running.
+- `usbh.c`: hardware NAK budget 0 for control transfers to a hub and to
+  everything behind one (was: low-speed behind a hub only); `usbnak N`
+  sets it. [Known issues](#known-issues), item 5. An experiment with a
+  default, not a confirmed fix.
+- Kernel only; host-compiler checks only.
+
+**Round 20 -- the hub milestone recorded; CDC for apps** (on `403513e`)
+
+- Hardware (reported): round 19 fixed the keyboards; keyboard, mouse,
+  stick and CDC device all work behind the hub together.
+- Docs: status, phase table, [The last fault](#the-last-fault-a-stale-result-on-resumed-transfers)
+  with the list of faults found, Known issues updated.
+- CDC for apps: `sw/apps/serial` builds a second binary, `usbserial`
+  (`-DSERIAL_USB`), registered `usbserial0`. Syscalls
+  `USBCDC_PRESENT/READ/WRITE` (`syscalls.def`, appended),
+  `sw/os/usbcdcapi.c/.h`, `sw/common/zusbcdc.h`; read/write hold the
+  scheduler (`kernel.c`). `term`/`repl`: a `usbserial` connection kind
+  (`zconnect.c/.h`, `term.c`, `repl.c`). The FAT image carries
+  `apps/usbserial`. docs/connections.md, config.md, terminal.md,
+  ports.md updated. See [CDC](#cdc).
+- Kernel and apps; no gateware change. Host-compiler syntax checks only
+  -- no RISC-V toolchain here, and no simulation (none covers apps).
+
+**Round 19 -- a stale read on resumed control transfers** (on `403513e`)
+
+- Hardware (reported): a second keyboard (Cherry 046a:c099) fails
+  behind the hub like the first; both work on a root port and with the
+  old `usb_hid` core. The out-of-spec clock was not the cause.
+- `usbh.c`: `ctrl_send_status()`; `CS_DATA_RUN` and `CS_STATUS` launch
+  the status stage directly instead of leaving `CS_STATUS` to judge a
+  result the device no longer owns. [Known issues](#known-issues),
+  item 4.
+- Kernel only. One targeted co-simulation (a NAKing low-speed mouse
+  behind the hub, which goes through the changed path): passes.
+
+**Round 18 -- CDC works; the keyboard measured out of spec** (on `403513e`)
+
+- Hardware (reported): CDC-ACM works. The Holtek keyboard is unreliable
+  behind the hub even alone.
+- Measured from an existing capture: the keyboard transmits at +1.75%,
+  outside the +-1.5% low-speed limit. [Known issues](#known-issues),
+  item 4. No code change.
+
+**Round 17 -- full configuration descriptors** (on `403513e`)
+
+- Hardware (reported): the CDC device (16c0:05e1, composite, 98-byte
+  configuration) was not recognized; everything else behind the hub
+  worked, with `failed requests 0` on the hub.
+- `usbh_int.h`, `usbh.c`: `cfg_raw` holds the whole configuration
+  descriptor (up to 200 bytes), not the first 64. See [CDC](#cdc).
+- Kernel only. The CDC probe checked offline, host-compiled, against
+  the device's descriptor.
+
+**Round 16 -- tidy-up; CDC-ACM** (on `403513e`)
+
+- `usbh_hub.c`: a failed hub request is counted, not printed; `lsusb`
+  shows `failed requests N`, and a line appears only when a hub is
+  given up.
+- `sw/os/fs/fs.c`: `usbmount` retries once, after waiting up to ~1.5 s
+  for a dropped drive to be back.
+- [Known issues](#known-issues): the unresolved problems in one place,
+  with their evidence.
+- `sw/os/usb/usbh_cdc.c`, `usbh_cdc.h` (new), `usbh.c`, `usbh.h`,
+  `usbh_int.h`: CDC-ACM -- see [CDC](#cdc). `sw/os/sh.c`: `usbcdc`.
+  Build files updated.
+- Kernel only. No simulation: compiled with the host compiler in the
+  co-simulation and kernel configurations.
+
+**Round 15 -- working behind the hub** (on `403513e`)
+
+- Hardware (reported): keyboard, mouse and stick all work behind the hub
+  together. Residual intermittent timeouts, all recovered; the first
+  `usbmount` failed once when the hub dropped the stick's port. See
+  [Hardware: working behind the hub](#hardware-working-behind-the-hub).
+- Docs only.
+
+**Round 14 -- NAK retries paced** (on `403513e`)
+
+- Hardware (reported): after round 13 the mouse and stick work behind
+  the hub with the keyboard present; Fmax 58.34 MHz. The keyboard
+  still fails, NAK then no response.
+- `usbh.c`: NAK retries in `CS_DATA_RUN`, `CS_STATUS` and `CS_FINAL`
+  wait out `CTRL_NAK_TICKS` before relaunching; hardware NAK budget 0
+  for low-speed devices behind a hub. `usbh.h`, `sh.c`: `usbnak N`.
+- Kernel only; no gateware change. One targeted co-simulation (a mouse
+  behind the hub NAKing its first descriptor INs): enumerates first
+  time through the new paths. Nothing else run, by decision.
+
+**Round 13 -- frames** (on `403513e`)
+
+- Stepped back from capture-by-capture debugging to the whole hardware
+  record; one theory fits all of it. See
+  [The cause: transfers ran across frame boundaries](#the-cause-transfers-ran-across-frame-boundaries).
+- `rtl/usb/usb_host.v`: end-of-frame guard on the scheduler
+  (`GUARD_FS`, `GUARD_LS`, `late_fs`, `late_ls`).
+- `rtl/usb/usb_xact.v`: the same guard before every re-issue inside a
+  request, ending it with `ST_NAK` (`reissue`).
+- `rtl/tb/tb_usb_hub_cosim.v`, `rtl/tb/tb_usb_msc_cosim.v`: SOF-on-time
+  check on every frame. Measured 207 us late before the fix, 0 after.
+- `sw/os/usb/usbh.c`: probe access through `cap_rd`/`cap_wr`, so the
+  capture code can run against the real probe in co-simulation, which
+  is how its remaining fault was found. `rtl/tb/cosim/usbh_vpi.c`:
+  operations to start and dump a capture.
+
+**Verification at the end of round 13:** `test_usb` (77), `test_usb_hub`
+and `test_usb_msc` (126 commands) pass; in both, every SOF started
+within 62 ns of its frame tick, against 207 us before; no bus
+contention. Not run this round, by decision: `test_usb_cosim`, the
+margin sweep, `make usb_fmax` -- hardware is the faster test now.
+
+**Round 12 -- three captures, tooling corrected** (on `403513e`)
+
+- Hardware: three captures; see
+  [Three more captures, and what they corrected](#three-more-captures-and-what-they-corrected).
+  Round 11's "hub goes deaf" reading was wrong.
+- `usbh.c`: the probe is armed at every transaction again; the capture
+  header names the failing PID and gives the receive counters across
+  it.
+- `tools/usbcap.py`: marks the failing packet by PID; a one-sample SE1
+  is reported as edge crossover, not two drivers.
+- `rtl/tb/tb_usb_device.v`: `extra_turn_ns`, used to rule out a late
+  reply as the keyboard's cause.
+
+**Round 11 -- the first hardware capture** (on `403513e`)
+
+- Hardware: `usbcap` froze on a data-stage IN to the hub, which never
+  answered a clean token. See
+  [The first capture: the hub goes deaf](#the-first-capture-the-hub-goes-deaf).
+- `usbh.c`: capture windows keep recording across transactions, so a
+  capture holds what came before the failure; `usbcapd` waits for a
+  window still recording.
+- `tools/usbcap.py`: marks the failing transaction.
+
+**Round 10 -- a failed device poisons address 0; wire capture** (on `403513e`)
+
+- Hardware (reported): a second hub behaves the same; requests to the
+  hub fail on every port; the mouse fails whenever the keyboard is
+  plugged in; repeated plugging makes it worse; root ports fine.
+- `usbh.c`, `usbh_hub.c`, `usbh_int.h`: `on_addr0`, disabling the port
+  of a device that failed for good, and one reserved address per device
+  held until teardown. See
+  [Hardware: a failed device poisons address 0](#hardware-a-failed-device-poisons-address-0).
+  Reproduced first (`stall_set_addr` in the device model, 39 collisions);
+  zero after.
+- `usbh.c`, `usbh.h`, `sw/os/sh.c`: `usbcap` / `usbcapd`, capturing the
+  first failing transaction on port 0 with the built-in probe.
+- `tools/usbcap.py` (new): decodes it; checked against a simulated
+  capture.
+- `rtl/tb/tb_usb_device.v`: `stall_set_addr`. `rtl/tb/tb_usb_hub_cosim.v`:
+  a device that fails on address 0 behind the hub, then the mouse.
+- Still open: why the keyboard fails, and the hub-request failures.
+
+**Verification at the end of round 10:** `test_usb` (77), `test_usb_cosim`,
+`test_usb_msc` (126 commands, no bus contention), `test_usb_hub` (with
+the failed-device case; no bus contention, zero model errors) and all
+four `test_usb_margin` corners -- all pass. `tools/usbcap.py` decodes a
+simulated capture correctly. The driver files compile clean in the
+co-simulation and kernel configurations with the host compiler; `make
+-C sw/os` and `make usb_fmax` have not been run here.
+
+**On hardware for round 10:** mouse and stick behind the hub with the
+keyboard also plugged in -- they should work even while the keyboard
+fails; then `usbcap`, plug the keyboard into the hub, and after
+"capture frozen" paste `usbcapd`'s output (or report that it works in
+capture mode).
+
+**Round 9 -- full-speed traffic colliding with low-speed** (on `403513e`)
+
+- Hardware (reported): the keyboard still failed after round 8; hub
+  requests failed with CRC errors and timeouts; the mouse failed
+  whenever the keyboard was plugged in; the stick was unaffected.
+- `rtl/usb/usb_xact.v`: `gap_limit` -- after a low-speed transaction,
+  the next token on that port waits five low-speed bits. See
+  [Hardware: full-speed traffic straight after low-speed](#hardware-full-speed-traffic-straight-after-low-speed).
+  Found with a new wire-contention monitor before the fix; zero
+  collisions after it.
+- `rtl/usb/usb_host.v`: the low-speed keepalive waits for a quiet
+  line, and the scheduler yields to it. Found by the same monitor in
+  the storage bench, on a directly attached low-speed mouse.
+- `rtl/tb/tb_usb_hub_cosim.v`, `rtl/tb/tb_usb_msc_cosim.v`: the
+  contention monitor, with a check that it saw nothing.
+- Round 8's retry-gap fix was reported as likely fixing the keyboard.
+  It was a real bug, reproduced and fixed, but not the cause of that
+  failure; the collisions above were.
+
+**Verification at the end of round 9:** `test_usb` (77), `test_usb_cosim`,
+`test_usb_msc` (126 commands, no bus contention), `test_usb_hub` (35,
+no bus contention, zero model errors) and all four `test_usb_margin`
+corners -- all pass. `make usb_fmax` has not been run on the RTL
+changes of rounds 6-9 (`usb_xact.v`, `usb_sie.v`, `usb_host.v`).
+
+**On hardware for round 9:** the keyboard alone behind the hub; then
+keyboard, mouse and stick behind it together; keyboard and mouse on
+root ports, where the keepalive fix also applies; `make usb_fmax`.
+`lsusb` wire counters showing receive errors now point at a collision
+the monitor does not cover.
+
+**Round 8 -- a low-speed keyboard behind a real hub** (on `403513e`)
+
+- Hardware (reported): behind hub 05e3:0608 a stick and a low-speed
+  mouse work; a low-speed keyboard failed with NAK-then-timeout.
+- `rtl/usb/usb_xact.v`: every token re-issue goes through `X_GAP`. See
+  [Hardware: retries behind a hub](#hardware-retries-behind-a-hub).
+  Reproduced in co-simulation first; `test_usb` cases 6 and 7 fail
+  without the fix (7) or pass (6) exactly as the hardware did.
+- `rtl/tb/tb_usb_host.v`: two NAKs on the descriptor IN in cases 6 and
+  7. `rtl/tb/tb_usb_hub_cosim.v`: the mouse NAKs its first three
+  descriptor INs during the initial enumeration.
+
+**Verification at the end of round 8:** `test_usb` (77), `test_usb_cosim`,
+`test_usb_msc` (126 commands), `test_usb_hub` (35, with the mouse
+NAKing, zero model errors) and all four `test_usb_margin` corners --
+all pass. `make usb_fmax` still has not been run on the round 6-8 RTL
+changes.
+
+**On hardware for round 8:** the same low-speed keyboard behind the
+hub; then keyboard, mouse and stick behind it together; then
+`make usb_fmax`.
+
+**Round 7 -- phase 4, the hub** (on `403513e`)
+
+- `sw/os/usb/usbh_hub.c` (new), `usbh_int.h` (new), `usbh.c`, `usbh.h`:
+  the hub class driver and the refactor behind it. See
+  [Hub class driver](#hub-class-driver).
+- `usbh.c`: transaction-result ownership between devices, and
+  `buftest` no longer writes into the storage sector buffer. See
+  [Two core bugs the hub found](#two-core-bugs-the-hub-found).
+- `rtl/usb/usb_sie.v`: PRE sent with a correct PID check field.
+- `rtl/tb/tb_usb_device.v`: HUB=1 mode, `ext_reset`, and the four model
+  fixes in [The hub model](#the-hub-model-and-what-it-corrected-in-the-device-model);
+  trace lines now name the instance.
+- `rtl/tb/tb_usb_hub_cosim.v` (new) and `make test_usb_hub`.
+- `rtl/tb/cosim/usbh_vpi.c`: an operation that runs `lsusb` into the
+  simulation log.
+- `sw/os/Makefile` and the co-simulation targets build `usbh_hub.c`.
+- The model reports a CRC failure on a DATA packet only when the token
+  before it was addressed to that model. At +-2500 ppm the hub model
+  failed the CRC on every one of the stick's 64-byte packets -- its
+  simple receiver against another model's off-rate transmitter, on data
+  that was never for it -- about 200 lines per run, burying anything
+  real.
+
+**Verification at the end of round 7:** `test_usb` (77), `test_usb_cosim`,
+`test_usb_msc` (126 commands), `test_usb_hub` (35), all four
+`test_usb_margin` corners, and `test_usb_hub` at 20 ns skew with
++-2500 ppm FS and +-15000 ppm LS -- all pass. The driver files compile
+clean with the host compiler in both co-simulation and kernel
+configurations (`-Wall -Wextra`); `make -C sw/os` has not been run with
+a RISC-V toolchain.
+
+**On hardware for round 7, in order:** `make usb_fmax` (`usb_sie.v` and
+`usb_xact.v` changed); a hub alone, `lsusb` showing it and its ports;
+keyboard and mouse behind the hub -- a low-speed device there is the
+first real test of PRE; a stick behind the hub, `usbmount`, read and
+write; unplug each device, then the hub, and replug.
+
+**Round 6 -- unplug, bus ownership, recovery, toggle check** (on
+`403513e`)
+
+- Hardware (reported): WRITE then read-back over `/usb` works. Phase 5
+  reads and writes are done on hardware; `msc_verbose` is now off.
+- **Bus ownership** (`usbh.c`, `usbh.h`, `usbh_msc.c`): a race between
+  the ISR's enumeration and a running storage command, over the one
+  transaction engine. Reproduced by adding interrupt emulation to the
+  co-simulation (`$usbh_irq`, `usbh_vpi.c`), fixed with
+  `z_usbh_bus_reserve()`/`release()`. See
+  [The transaction engine has one owner](#the-transaction-engine-has-one-owner).
+  The first version of the wait counted iterations and gave up in zero
+  simulated time; now it is bounded in ticks.
+- **Unplug** (`usbh.c`, `usbh_msc.c/.h`, `diskio_mux.c`, `fs.c`):
+  unbind from the detach path, generation counter, `RES_NOTRDY` /
+  `STA_NODISK`, `/usb` hidden while unplugged, no recovery attempted on
+  a disconnected port. See [Removal while mounted](#removal-while-mounted).
+- **STALL and Reset Recovery** (`usbh_msc.c`). See
+  [STALL and Reset Recovery](#stall-and-reset-recovery).
+- **IN data toggle check** (`rtl/usb/usb_xact.v`). See
+  [The IN data toggle check](#the-in-data-toggle-check), including the
+  hardware risk for keyboards and mice.
+- Device model (`tb_usb_device.v`): a bus reset now resets endpoint
+  state (toggles, halts, bulk-only state), as a real device does -- it
+  reset only the address, which the new toggle check would have exposed
+  on the mouse. New hooks: `msc_stall_short`, `msc_bad_csw`,
+  `msc_ack_lost`, and counters for resets, halt clears and aborted
+  commands. The protocol check now allows for commands a reset
+  legitimately ended before their CSW.
+- `test_usb_msc`: 58 checks, from 23. New cases: enumeration during
+  reads with interrupts emulated; READ past the end with a STALL;
+  invalid CSW; four bad CRCs; lost ACK; unplug idle and mid-read, with
+  replug.
+- Docs: this log; the header summary (Phase 5 had still said reads
+  truncate), the software stack list (planned files marked as such),
+  Removal while mounted, three new sections, Also outstanding, Testing;
+  `docs/filesystem.md` Volumes.
+
+**Verification at the end of round 6:** `test_usb` (77), `test_usb_cosim`
+(19), `test_usb_msc` (58, also at 20 ns skew with +-2500 ppm FS and
++-15000 ppm LS), all four `test_usb_margin` corners -- all pass. The
+kernel-side files (`diskio_mux.c`, `fs.c`) were syntax-checked with a
+host compiler only; no RISC-V toolchain was available, so `make -C
+sw/os` has not been run on these changes.
+
+**On hardware for round 6, in order:** keyboard and mouse still work
+(toggle check); `usbmount`, copy a file, pull the stick mid-copy -- the
+shell must stay responsive and `/usb` report not ready; replug and read
+the file back; a card reader with no card; `make usb_fmax`.
 
 **Verification at the end of round 4:** `test_usb` (77), `test_usb_cosim`
 (19), `test_usb_msc` (23, also at 20 ns skew with +-2500 ppm FS and
@@ -2134,10 +3563,22 @@ Four targets, and each exists because something got through the others:
 
     make test_usb           # 77 gateware checks against a device model
     make test_usb_cosim     # 19 checks, real driver against real RTL
-    make test_usb_msc       # 23 checks, real driver incl. usbh_msc.c,
-                            #   bulk-only SCSI model, mouse poll live
+    make test_usb_hub       # 35 checks, real driver incl. usbh_hub.c,
+                            #   hub model, FS stick and LS mouse behind it
+    make test_usb_msc       # 58 checks, real driver incl. usbh_msc.c,
+                            #   bulk-only SCSI model, mouse poll live,
+                            #   interrupts emulated where it matters
     make test_usb_margin    # receive tolerance to device clock error
-    make usb_fmax BOARD=x   # whole-SoC Fmax, place-and-route
+    make usb_fmax BOARD=x   # whole-SoC Fmax, place-and-route, ONE seed
+    make usb_fmax_sweep BOARD=x [SEEDS="1 2 3 4 5"]
+                            # Fmax min/median/max over several seeds,
+                            #   with each seed's critical-path source
+
+`$usbh_irq(every, tick_every)` in `rtl/tb/cosim/usbh_vpi.c` makes the
+co-simulation interrupt the driver the way hardware does -- see
+[The transaction engine has one owner](#the-transaction-engine-has-one-owner).
+Without it, nothing the ISR does in the middle of a storage command
+can be seen, which is how the ownership race went unnoticed.
 
 `test_usb` also runs a monitor on every cycle: whenever XACT_S's
 pending bit is clear, its status and length must be software's own
@@ -2171,11 +3612,11 @@ a configurable descriptor set, NAKs on demand, STALLs on demand, can be
 switched between FS and LS, can inject CRC errors and can go away
 mid-transaction.
 
-**`tb_usb_hub.v`** — deferred to Phase 4 with the hub driver. What PRE
-needs testing against is a device presenting normal polarity at the
-low-speed bit rate, and that is a *mode* of the device model rather
-than a separate component; see
-[the scope correction](#a-scope-correction).
+**Hub model** — `tb_usb_device.v` with HUB=1: a four-port hub with class
+requests, a status change endpoint and per-port power, connect, enable
+and reset. Devices behind it are further instances on the same wires,
+gated by `hub_en` and reset through `ext_reset`. See
+[Hub class driver](#hub-class-driver).
 
 Cases that must exist because they are the ones that bite. Ticked ones
 are in the phase 1 suite:
@@ -2195,11 +3636,26 @@ are in the phase 1 suite:
       part-way (`test_usb_msc`).
 - [x] Bad CRC mid-sector and on consecutive packets, retried without
       desync (`test_usb_msc`).
-- [ ] Lost host ACK on bulk IN (needs the IN toggle check first).
-- [ ] STALL on a bulk endpoint, recovered by Reset Recovery.
+- [x] Lost host ACK on bulk IN: the resend is ACKed and discarded
+      (`test_usb_msc`).
+- [x] Bulk data phase STALLed: halt cleared, CSW read, no reset
+      (`test_usb_msc`).
+- [x] Invalid CSW, and four bad CRCs in a row: Reset Recovery, next
+      command exact (`test_usb_msc`).
+- [x] A device enumerating during storage commands, with the ISR
+      preempting the driver between register accesses
+      (`test_usb_msc`, `$usbh_irq`).
+- [x] Unplug with no command running, and mid-read; replug, start,
+      read (`test_usb_msc`).
 - [ ] Device disconnect in the middle of every transaction phase.
       (phase 3)
-- [ ] Two devices requesting address 0 in the same frame. (phase 4)
+- [x] Two devices wanting address 0 at once: both plugged into a hub
+      before it is attached (`test_usb_hub`).
+- [x] A low-speed device behind a hub through PRE, its auto-poll slot
+      included, checked by a full-speed listener too (`test_usb_hub`).
+- [x] Hub, and each device behind it, unplugged and replugged;
+      storage reads while a device behind the hub re-enumerates
+      (`test_usb_hub`).
 - [ ] A transaction that would cross a frame boundary. (phase 3)
 
 Plus `tools/hwmap/hwmap --check` after the `sysctl.v` changes — the

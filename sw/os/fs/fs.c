@@ -164,8 +164,22 @@ bool fs_usb_mount(void) {
 
 	res = f_mount(&usbvol2, "2:", 1);
 	if (res != FR_OK) {
-		printf("fs: usb: mount failed (%d)\n", (int)res);
-		return false;
+		// Behind a hub the first mount occasionally fails because the
+		// hub dropped the stick's port and it is being re-enumerated
+		// (docs/usb_host.md, "Known issues"); the second attempt then
+		// works. So wait -- bounded, since this holds the shell -- for
+		// the drive to be back, and try once more.
+		uint32_t t0 = z_kernel_ticks;
+		printf("fs: usb: mount failed (%d), retrying\n", (int)res);
+		while ((uint32_t)(z_kernel_ticks - t0) < 1100u &&
+		       !((uint32_t)(z_kernel_ticks - t0) > 300u &&
+		         z_usbh_msc_present())) { }
+		if (z_usbh_msc_present())
+			res = f_mount(&usbvol2, "2:", 1);
+		if (res != FR_OK) {
+			printf("fs: usb: mount failed (%d)\n", (int)res);
+			return false;
+		}
 	}
 
 	usb_mounted = true;
@@ -182,8 +196,13 @@ void fs_usb_unmount(void) {
 	usb_mounted = false;
 }
 
+// Mounted AND a drive is plugged in. After an unplug /usb disappears
+// from listings rather than showing as an empty directory; plugging a
+// drive back in brings it back, and FatFs re-reads the medium on first
+// access (see disk_status() in diskio_mux.c). usbunmount still clears
+// the mount itself.
 bool fs_usb_mounted(void) {
-	return usb_mounted;
+	return usb_mounted && z_usbh_msc_present();
 }
 
 // The synthetic roots, for anything that lists "/".

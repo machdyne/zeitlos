@@ -22,12 +22,14 @@
 #include "zterm.h"		// Z_TERM_SET_PORT
 #include "zport.h"
 
-static const char *kind_words[] = { "port", "serial", "telnet", "ssh" };
+static const char *kind_words[] = { "port", "serial", "telnet", "ssh",
+	"usbserial" };
+#define N_KINDS ((int)(sizeof(kind_words) / sizeof(kind_words[0])))
 
 bool z_conn_kind_from_word(const char *word, z_conn_kind_t *out) {
 	int i;
 	if (!word || !out) return false;
-	for (i = 0; i < 4; i++) {
+	for (i = 0; i < N_KINDS; i++) {
 		if (!strcmp(word, kind_words[i])) {
 			*out = (z_conn_kind_t)i;
 			return true;
@@ -37,12 +39,12 @@ bool z_conn_kind_from_word(const char *word, z_conn_kind_t *out) {
 }
 
 const char *z_conn_kind_name(z_conn_kind_t kind) {
-	if ((int)kind < 0 || (int)kind > 3) return "?";
+	if ((int)kind < 0 || (int)kind >= N_KINDS) return "?";
 	return kind_words[kind];
 }
 
 bool z_conn_kind_needs_text(z_conn_kind_t kind) {
-	return kind != Z_CONN_SERIAL;
+	return kind != Z_CONN_SERIAL && kind != Z_CONN_USBSERIAL;
 }
 
 static void set_ip_detail(z_conn_target_t *t, const char *typed, uint32_t ip) {
@@ -85,6 +87,24 @@ static bool prep_port(const char *text, z_conn_target_t *t,
 }
 
 // -- serial ----------------------------------------------------
+
+// A USB CDC-ACM device, through sw/apps/serial: the same provider as
+// `serial`, told by the CONNECT argument to use the USB device rather
+// than UART1. Takes no text: a USB device has no baud rate to set.
+static bool prep_usbserial(const char *text, z_conn_target_t *t,
+	char *err, size_t errlen) {
+	while (text && *text == ' ') text++;
+	if (text && *text) {
+		snprintf(err, errlen, "usage: usbserial  (no baud rate: a USB "
+			"device has none to set)");
+		return false;
+	}
+	strcpy(t->provider, "serial0");
+	t->arg = z_obj_uint32(Z_CONN_USBSERIAL_ARG);
+	t->timeout_ticks = Z_CONN_TIMEOUT_LOCAL_TICKS;
+	snprintf(t->detail, sizeof(t->detail), "USB CDC device");
+	return true;
+}
 
 static bool prep_serial(const char *text, z_conn_target_t *t,
 	char *err, size_t errlen) {
@@ -319,6 +339,7 @@ bool z_conn_prepare(z_conn_kind_t kind, const char *text,
 	case Z_CONN_SERIAL: return prep_serial(text, out, err, errlen);
 	case Z_CONN_TELNET: return prep_telnet(text, out, err, errlen);
 	case Z_CONN_SSH:    return prep_ssh(text, out, err, errlen);
+	case Z_CONN_USBSERIAL: return prep_usbserial(text, out, err, errlen);
 	default:
 		snprintf(err, errlen, "unknown connection kind");
 		return false;

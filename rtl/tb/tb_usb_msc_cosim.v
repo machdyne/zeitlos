@@ -79,7 +79,8 @@ module tb_usb_msc_cosim;
     integer i;
     integer cx;
     integer rc, bad, first_bad, fails, n;
-    integer tmp;
+    integer tmp, tmp2;
+    time t0;
     integer wa, lane, k;            // bus_cycle / run_for scratch
 
     assign (highz1, weak0) dp[0] = 1'b0;
@@ -137,6 +138,55 @@ module tb_usb_msc_cosim;
         .dp(dp[1]), .dm(dm[1]), .attach(att_ls)
     );
 
+
+    // -- bus contention: the host and a device driving at once --
+    //
+    // Shows as x on the wire. Every bench passed with it present:
+    // the models tolerate it, a real hub does not. After a low-speed
+    // transaction a full-speed SOF started while the device was still
+    // driving its EOP; see gap_limit in rtl/usb/usb_xact.v.
+    integer xcount;
+    initial xcount = 0;
+    always @(dp[0] or dm[0])
+        if (dp[0] === 1'bx || dm[0] === 1'bx) begin
+            xcount = xcount + 1;
+            if (xcount <= 4)
+                $display("[wire %0t] CONTENTION on port 0", $time);
+        end
+    always @(dp[1] or dm[1])
+        if (dp[1] === 1'bx || dm[1] === 1'bx) begin
+            xcount = xcount + 1;
+            if (xcount <= 4)
+                $display("[wire %0t] CONTENTION on port 1", $time);
+        end
+
+
+    // -- SOF on time --
+    //
+    // A hub times each 1 ms frame from our SOFs and cuts traffic still
+    // running at its end, so the SOF must start at the frame tick, not
+    // whenever the engine next goes idle. Before the end-of-frame guard
+    // (usb_host.v) it went out up to 207 us late here, and on hardware
+    // every transfer crossing a frame boundary behind a hub failed.
+    integer sof_late_ns, sof_late_max, sof_late_n;
+    time sof_tick_t;
+    reg sof_tick_seen, sof_busy_q;
+    initial begin
+        sof_late_max = 0; sof_late_n = 0; sof_tick_seen = 0; sof_busy_q = 0;
+    end
+    always @(posedge clk) begin
+        sof_busy_q <= dut.x_busy;
+        if (dut.frame_tick) begin
+            sof_tick_t = $time;
+            sof_tick_seen = 1;
+        end
+        if (sof_tick_seen && dut.x_busy && !sof_busy_q && dut.sched_is_sof) begin
+            sof_late_ns = $time - sof_tick_t;
+            if (sof_late_ns > sof_late_max) sof_late_max = sof_late_ns;
+            if (sof_late_ns > 2000) sof_late_n = sof_late_n + 1;
+            sof_tick_seen = 0;
+        end
+    end
     // ---------------------------------------------------------------
     // one Wishbone cycle on the driver's behalf
     // ---------------------------------------------------------------
@@ -353,6 +403,145 @@ module tb_usb_msc_cosim;
 
         // -----------------------------------------------------------
         $display("");
+        $display("== a device enumerating DURING reads, interrupts emulated ==");
+        // On hardware z_usbh_poll() runs from the ISR in the middle of a
+        // bulk transfer. The mouse is unplugged and replugged, and its
+        // entire enumeration -- a dozen control transfers on the same
+        // transaction engine -- has to interleave with sector reads
+        // without either side taking the other's transaction or result.
+        att_ls = 1'b0;
+        run_for(3000);
+        $usbh_irq(37, 16);
+        att_ls = 1'b1;
+        fails = 0;
+        for (n = 0; n < 60; n = n + 1) begin
+            msc_op(1, n % 5);
+            if (rc != 0 || bad != 0) begin
+                fails = fails + 1;
+                $display("  read %0d (lba %0d): rc %0d, %0d bad bytes from %0d",
+                         n, n % 5, rc, bad, first_bad);
+            end
+            run_for(2);
+        end
+        $usbh_irq(0, 0);
+        check("reads failed of 60", fails, 0);
+        run_for(12000);
+        check("mouse re-bound", (typ0 == 2 || typ1 == 2) ? 1 : 0, 1);
+        msc_op(1, 2);
+        check("read after", rc, 0);
+        check("read after bad bytes", bad, 0);
+
+        // -----------------------------------------------------------
+        $display("");
+        $display("== READ past the end: device STALLs the data phase ==");
+        // BOT 6.7.2: clear the halt, read the CSW, report the command
+        // failed. The transport stays in step, so no reset is needed.
+        dev.msc_stall_short = 1'b1;
+        tmp = dev.msc_resets;
+        tmp2 = dev.msc_clears;
+        msc_op(1, 20);                  // 16 sectors on the medium
+        check("read rc (fails)", rc, 3);
+        check("halts cleared", dev.msc_clears - tmp2, 1);
+        check("no reset needed", dev.msc_resets - tmp, 0);
+        check("IN pipe no longer halted", dev.msc_halt_in, 0);
+        dev.msc_stall_short = 1'b0;
+        msc_op(1, 1);
+        check("next read rc", rc, 0);
+        check("next read bad bytes", bad, 0);
+
+        // -----------------------------------------------------------
+        $display("");
+        $display("== invalid CSW: Reset Recovery ==");
+        dev.msc_bad_csw = 1;
+        tmp = dev.msc_resets;
+        tmp2 = dev.msc_clears;
+        msc_op(1, 2);
+        check("read rc (fails)", rc, 3);
+        check("class resets", dev.msc_resets - tmp, 1);
+        check("halts cleared", dev.msc_clears - tmp2, 2);
+        msc_op(1, 3);
+        check("next read rc", rc, 0);
+        check("next read bad bytes", bad, 0);
+
+        // -----------------------------------------------------------
+        $display("");
+        $display("== four bad CRCs in a row: over the limit, Reset Recovery ==");
+        // Three strikes are retried; the fourth fails the command. The
+        // device is left mid-data-phase, which only a reset repairs.
+        dev.msc_crc_at = 0;
+        dev.msc_crc_bad = 4;
+        tmp = dev.msc_resets;
+        msc_op(1, 4);
+        check("read rc (fails)", rc, 3);
+        check("class resets", dev.msc_resets - tmp, 1);
+        dev.msc_crc_bad = 0;
+        msc_op(1, 5);
+        check("next read rc", rc, 0);
+        check("next read bad bytes", bad, 0);
+
+        // -----------------------------------------------------------
+        $display("");
+        $display("== lost ACK: device resends a packet the host already has ==");
+        // The host must recognise the repeated DATA0/DATA1, ACK it and
+        // throw it away. Taking it as new data duplicates 64 bytes and
+        // leaves the device one packet behind the host.
+        dev.msc_ack_lost = 2;
+        msc_op(1, 6);
+        check("read rc", rc, 0);
+        check("read bad bytes", bad, 0);
+        check("ACKs lost", dev.msc_ack_lost, 0);
+        msc_op(1, 0);
+        check("next read rc", rc, 0);
+        check("next read bad bytes", bad, 0);
+
+        // -----------------------------------------------------------
+        $display("");
+        $display("== unplug, then replug ==");
+        att_fs = 1'b0;
+        run_for(3000);
+        msc_op(3, 0);
+        check("unbound: present|ready", rc, 0);
+        msc_op(1, 1);
+        check("read with no drive fails", rc, 3);
+        att_fs = 1'b1;
+        run_for(12000);
+        msc_op(3, 0);
+        check("rebound: present, not started", rc, 1);
+        msc_op(0, 0);
+        check("start", rc, 0);
+        msc_op(1, 1);
+        check("read rc", rc, 0);
+        check("read bad bytes", bad, 0);
+
+        // -----------------------------------------------------------
+        $display("");
+        $display("== unplug DURING a read, interrupts emulated ==");
+        // The detach path runs from the ISR while the read is in
+        // flight. The read must fail promptly -- no timeouts sat out,
+        // no hang -- and nothing may reach whatever enumerates next.
+        $usbh_irq(37, 16);
+        t0 = $time;
+        fork
+            begin #300000; att_fs = 1'b0; end
+            msc_op(1, 2);
+        join
+        $usbh_irq(0, 0);
+        check("read rc (fails)", rc, 3);
+        $display("  (read returned %0d us after it started)",
+                 ($time - t0) / 1000);
+        run_for(3000);
+        msc_op(3, 0);
+        check("unbound", rc, 0);
+        att_fs = 1'b1;
+        run_for(12000);
+        msc_op(0, 0);
+        check("start after replug", rc, 0);
+        msc_op(1, 2);
+        check("read rc", rc, 0);
+        check("read bad bytes", bad, 0);
+
+        // -----------------------------------------------------------
+        $display("");
         $display("== write, read back ==");
         msc_op(2, 7);
         check("write+read rc", rc, 0);
@@ -361,7 +550,14 @@ module tb_usb_msc_cosim;
         // -----------------------------------------------------------
         $display("");
         $display("== protocol, from the device's side ==");
-        check("CBWs answered by CSWs", dev.msc_cmds - dev.msc_csws, 0);
+        // A command ended by a reset -- recovery, or a replug's bus
+        // reset -- legitimately never gets its CSW.
+        check("CBWs answered by CSWs",
+              dev.msc_cmds - dev.msc_csws - dev.msc_aborted, 0);
+        check("msc: SOFs late >2us", sof_late_n, 0);
+        $display("  (latest SOF: %0d ns after its frame tick)", sof_late_max);
+        check("msc: bus contention", xcount, 0);
+        $display("  (%0d aborted by resets)", dev.msc_aborted);
         check("out-of-sequence", dev.msc_proto_err, 0);
         check("duplicate OUT", dev.msc_dup_out, 0);
         $display("  (%0d commands)", dev.msc_cmds);

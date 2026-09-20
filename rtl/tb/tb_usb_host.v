@@ -467,6 +467,11 @@ module tb_usb_host;
         check("p1 low speed", r[10], 1);
         port_reset(1, 1'b0);
         wait_enabled(1);
+        // Two NAKs on the descriptor IN, retried inside the engine.
+        // At low speed a retry that does not wait out the device's EOP
+        // collides with it -- and behind a hub the mangled PRE is
+        // dropped and the retry times out. See X_GAP in usb_xact.v.
+        dev_ls.nak_budget = 2;
         enumerate(1, 1'b1, 1'b1, 1'b0);
         check_descriptor();
         att_ls = 1'b0;
@@ -490,6 +495,11 @@ module tb_usb_host;
         check("p1 sees full speed", r[10], 0);
         port_reset(1, 1'b0);
         wait_enabled(1);
+        // Two NAKs on the descriptor IN, retried inside the engine.
+        // At low speed a retry that does not wait out the device's EOP
+        // collides with it -- and behind a hub the mangled PRE is
+        // dropped and the retry times out. See X_GAP in usb_xact.v.
+        dev_pre.nak_budget = 2;
         enumerate(1, 1'b1, 1'b0, 1'b1);
         check_descriptor();
 

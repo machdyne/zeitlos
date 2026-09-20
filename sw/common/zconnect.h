@@ -80,8 +80,18 @@ typedef enum {
 	// A telnet host, via `net`. Text is an IP or a hostname.
 	Z_CONN_TELNET,
 	// An ssh host, via `net`. Text is [user@]host.
-	Z_CONN_SSH
+	Z_CONN_SSH,
+	// A USB CDC-ACM device, through sw/apps/serial -- the same provider
+	// as Z_CONN_SERIAL, `serial0`, with Z_CONN_USBSERIAL_ARG as the
+	// CONNECT argument instead of a baud rate. No text: there is no
+	// baud rate to set on a USB device.
+	Z_CONN_USBSERIAL
 } z_conn_kind_t;
+
+// The CONNECT argument that asks sw/apps/serial for its USB CDC device
+// rather than UART1. Chosen as a value no baud rate can be: prep_serial()
+// accepts 50..3000000.
+#define Z_CONN_USBSERIAL_ARG 0xffffffffu
 
 // How long to wait for CONNECTED/REFUSED once the CONNECT goes out.
 //
@@ -119,7 +129,8 @@ typedef struct {
 
 } z_conn_target_t;
 
-// "port", "serial", "telnet", "ssh" -> kind. false if it is not one.
+// "port", "serial", "telnet", "ssh", "usbserial" -> kind. false if it
+// is not one.
 bool z_conn_kind_from_word(const char *word, z_conn_kind_t *out);
 
 // The word, for building usage messages and dialog labels.

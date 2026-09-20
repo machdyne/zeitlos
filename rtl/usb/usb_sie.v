@@ -96,6 +96,9 @@ module usb_sie #(
     input wire cfg_ls,
     input wire cfg_inv,
     input wire cfg_pre,
+    // Full-speed bit times of J between a PRE and the low-speed packet
+    // (hub setup); 4 is the spec minimum. From usb_host.v's A_TUNE.
+    input wire [3:0] cfg_pregap,
 
     // -- transmit --
     // tx_len is payload BYTES after the PID. tx_crc_mode: 0 none
@@ -431,9 +434,20 @@ module usb_sie #(
                     tx_sh <= {1'b0, tx_sh[7:1]};
                     tx_bitc <= tx_bitc + 3'd1;
                     if (tx_bitc == 3'd7) begin
-                        // No EOP after a preamble. Hold idle J while
-                        // the hub reconfigures its downstream ports.
-                        tx_j <= 1'b1;
+                        // No EOP after a preamble. TB_GAP holds idle J
+                        // while the hub reconfigures its downstream
+                        // ports -- starting on the NEXT tick.
+                        //
+                        // This used to set tx_j <= 1 here as well. That
+                        // is the tick the emitter above toggles tx_j for
+                        // the PID's last bit, and this later assignment
+                        // won: the last bit, a 0, never went out, and
+                        // the preamble left as 0xBC instead of 0x3C. A
+                        // hub checks the PID check field and ignores a
+                        // PRE that fails it, so every low-speed device
+                        // behind a real hub would have been
+                        // unreachable. The device model compared only
+                        // the low nibble and passed it.
                         tx_gapc <= 4'd0;
                         tbs <= TB_GAP;
                     end
@@ -442,7 +456,7 @@ module usb_sie #(
                 TB_GAP: begin
                     tx_j <= 1'b1;
                     tx_gapc <= tx_gapc + 4'd1;
-                    if (tx_gapc == 4'd3) begin
+                    if (tx_gapc + 4'd1 >= cfg_pregap) begin
                         rate_ls <= cfg_ls;
                         tx_ones <= 3'd0;
                         tx_bitc <= 3'd0;

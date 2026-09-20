@@ -1444,7 +1444,7 @@ static void auto_begin(void) {
 
 	if (strlen(v) >= sizeof(auto_text) || !auto_parse(v, &kind, &rest)) {
 		snprintf(status, sizeof(status),
-			"zeitlos.cfg auto_connect: try port|serial|telnet|ssh");
+			"zeitlos.cfg auto_connect: try port|serial|usbserial|telnet|ssh");
 		printf("term: apps.term.auto_connect '%s' not understood\n", v);
 		panel_show(status);
 		return;
@@ -1455,6 +1455,7 @@ static void auto_begin(void) {
 	switch (kind) {
 	case Z_CONN_PORT:   snprintf(auto_wait_for, sizeof(auto_wait_for), "%.23s", rest); break;
 	case Z_CONN_SERIAL: snprintf(auto_wait_for, sizeof(auto_wait_for), "serial0"); break;
+	case Z_CONN_USBSERIAL: snprintf(auto_wait_for, sizeof(auto_wait_for), "serial0"); break;
 	default:            snprintf(auto_wait_for, sizeof(auto_wait_for), "net0"); break;
 	}
 

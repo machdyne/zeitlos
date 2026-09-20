@@ -55,6 +55,13 @@ bits**. Each sample is `{sig[1], sig[0]}`. For USB that is
 `{D+, D-}`, so `01` is D- high, `10` is D+ high, `00` is SE0 and `11`
 is the illegal SE1.
 
+For USB the samples are the controller's own, taken in the pads' I/O
+cells (`usb_host.v`'s `line0_o`), one clock after the pins -- exactly
+what the receiver sees, with D+ and D- captured through matched paths.
+Captures before that change sampled the pins through fabric routing,
+so a one-sample SE1 at an edge in them may be partly the probe's own
+skew rather than the line's.
+
 Depth of 512 words is 8192 samples. At 48 MHz with `DIV = 0` that is
 170 us -- longer than a whole low-speed USB control transaction, which
 is about 125 us. At low speed one bit is 32 samples, so bit centres
@@ -66,11 +73,18 @@ Nothing in `probe.v` is USB-specific. It takes two wires and a
 trigger; `rtl/sysctl.v` decides what they are:
 
 ```verilog
-wire [1:0] probe_sig = {usb_host_dp[0], usb_host_dm[0]};
-wire probe_trig = wbs_usbh_tx_active;
+wire [1:0] probe_sig = wbs_usbh_line0;   // port 0 {D+, D-}, from usb_host
+wire probe_trig = wbs_usbh_tx_active && !wbs_usbh_tx_port;
 ```
 
-Change those two lines to look at something else. Candidates that
+Change those two lines to look at something else.
+
+**Not the USB host pins directly.** They go to input registers in the
+pads' I/O cells (IDDRX1F), and nextpnr requires such a register to be
+the pin's only load: `probe_sig = {usb_host_dp[0], usb_host_dm[0]}`,
+which this file used to show, now fails to pack ("IDDRX1F ... D input
+must be connected only to a top level input"). Use `line0_o`, as
+above. The same applies to any pin read through I/O-cell logic. Candidates that
 would have been useful already:
 
 - **SPI / SD card** -- `probe_sig = {sck, mosi}` triggered on chip

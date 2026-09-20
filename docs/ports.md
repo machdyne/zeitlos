@@ -70,6 +70,12 @@ providers:
 
 - A hardware UART port -- **done**, `sw/apps/serial`, over UART1
   (`docs/uart1.md`).
+- A USB CDC-ACM port -- **done**, in the same `sw/apps/serial` and on
+  the same port, `serial0`: a CONNECT whose argument is
+  `Z_CONN_USBSERIAL_ARG` (`sw/common/zconnect.h`) gets the USB device,
+  anything else UART1. Each has its own connection, so both can be in
+  use at once. Over the kernel's CDC driver through `Z_SYS_USBCDC_*`
+  (`sw/common/zusbcdc.h`, `docs/usb_host.md`, "CDC").
 
   NOT a wrapper over the `Z_SYS_UART_*` syscalls, which is what this
   bullet originally said. Those are UART0, and UART0 is the console:
