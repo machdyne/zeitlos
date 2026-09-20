@@ -77,12 +77,13 @@ software does here. Adding that would mean extending
 `usb_hid_host.v` with an OUT-transfer capability it doesn't currently
 have at all -- not attempted.
 
-Both limitations are gone in the replacement core designed in
-[usb_host.md](usb_host.md): hubs are a software class driver over
-transfer types that core has anyway (phase 4 there), and a general host
-does OUT transfers, so `Set_Report` -- and therefore Num Lock and Caps
-Lock -- becomes ordinary work rather than an extension the hardware
-can't express (phase 6). Neither is built yet.
+Both limitations are gone with the replacement core,
+[usb_host.md](usb_host.md) (`rtl/usb/`), which is what bitstreams
+built with `USB_HOST` use: hubs are a software class driver (phase 4
+there, working on hardware), and the lock LEDs are an ordinary
+`SET_REPORT` -- see "Lock keys and keyboard LEDs" below. Everything in
+this paragraph and the one above describes the older
+`rtl/ext/usb_hid_host` core only.
 
 ### Register addresses
 
@@ -172,10 +173,30 @@ ordinary keys, rather than inventing a separate event type for them.
 Events are packed into a single `uint32_t`:
 
 ```
-bit 0     pressed (1) / released (0)
-bits 8:1  USB HID usage code
-bits 16:9 modifier byte at the time of the event
+bit 0      pressed (1) / released (0)
+bits 8:1   USB HID usage code
+bits 16:9  modifier byte at the time of the event
+bits 19:17 lock state after the event: Num, Caps, Scroll (Z_KBD_LOCK_*)
 ```
+
+### Lock keys and keyboard LEDs
+
+The kernel keeps Num Lock, Caps Lock and Scroll Lock (`hid.c`,
+`hid_locks`): each press of the key toggles its bit, the state is
+shared by both keyboard blocks, and every event carries it
+(`Z_KBD_EV_LOCKS()`, `zkbd.h`). It also goes to every attached
+keyboard's LEDs through the USB host driver (`z_usbh_kbd_leds()`), as a
+HID `SET_REPORT` output report -- same byte, same bit order. A keyboard
+that has just been recognised rolls its LEDs Num -> Caps -> Scroll three
+times (about 0.7 s), then shows the real state; `lsusb` shows it as
+`leds=N--` and so on.
+
+Caps Lock is applied by `wm` when translating: for the letters a-z
+only, Shift is inverted. Num Lock starts **on**, which matches the
+keypad's behaviour today -- `zkbd` maps keypad keys to digits
+regardless -- so Num Lock off does not (yet) make them navigation
+keys. Scroll Lock is state and an LED only. The lock keys themselves
+translate to no keysym, so apps never see them as input.
 
 Apps drain the queue via `hid_read_key()` (`Z_SYS_HID_READ_KEY`
 syscall) -- non-blocking, returns the packed event above or `-1` if
@@ -319,12 +340,12 @@ one-line fix.
 
 ## Known limitations / future work
 
-- **No hub/multi-device support per port.** Exactly one device per
-  physical port; a USB hub plugged into either port isn't expected to
-  work.
-- **No keyboard LED control.** See "The two USB HID ports" above --
-  would need real USB HID output-report support added to
-  `usb_hid_host.v`, not attempted.
+- **Older core only (`rtl/ext/usb_hid_host`): no hubs, no keyboard
+  LEDs.** Both work with the current USB host (`rtl/usb/`,
+  docs/usb_host.md).
+- **Num Lock off does not change the keypad.** Keypad keys give
+  digits either way; the lock state and LED are right, the navigation
+  mapping is not written.
 - **No keyboard-driven focus switching.** Auto-focus (above) gets a
   single app a window without a mouse, but there's no keyboard
   equivalent of clicking a different window (an Alt+Tab-style switch)

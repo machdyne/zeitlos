@@ -2952,6 +2952,17 @@ static void dispatch_keys(void) {
 		uint8_t modifiers = (ev >> 9) & 0xFF;
 		bool    pressed   = (ev & 1) != 0;
 
+		// Caps Lock (state kept by the kernel, zkbd.h): letters only,
+		// Shift inverted -- Shift+letter with Caps Lock on gives lower
+		// case, as on every desktop. Usages 0x04-0x1d are a-z.
+		if ((Z_KBD_EV_LOCKS(ev) & Z_KBD_LOCK_CAPS) &&
+		    usage >= 0x04 && usage <= 0x1d) {
+			if (modifiers & Z_KBD_MOD_SHIFT)
+				modifiers &= (uint8_t)~Z_KBD_MOD_SHIFT;
+			else
+				modifiers |= Z_KBD_MOD_LSHIFT;
+		}
+
 		uint32_t keysym = z_kbd_usage_to_keysym(usage, modifiers);
 		if (keysym == Z_KEY_NONE) continue;   // bare modifier change, or
 		                                       // an unmapped usage code

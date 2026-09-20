@@ -57,6 +57,7 @@
 #include "../common/zkbd.h"
 #include "kernel.h"
 #include "hid.h"
+#include "usb/usbh.h"		// z_usbh_kbd_leds()
 
 /*
  * The process to wake when a POINTER report arrives, or 0 for nobody.
@@ -97,14 +98,34 @@ void k_hid_wake_subscriber(void) {
 // the ring it is reporting on is.
 
 // packed raw event: bit0 = pressed(1)/released(0), bits 8:1 = HID
-// usage code, bits 16:9 = modifier byte at the time of the event.
+// usage code, bits 16:9 = modifier byte at the time of the event,
+// bits 19:17 = lock state (Z_KBD_LOCK_*, zkbd.h) after the event.
 // always < 0x80000000 as an int32_t (top 15 bits always zero), so it
 // can never collide with k_hid_read_key()'s -1 "empty" sentinel. which
 // port produced the event is deliberately not encoded -- see the file
 // header comment, apps only ever want "a key event", not "a key event
 // from port N".
 #define HID_EVENT(usage, mods, pressed) \
-	((((uint32_t)(mods) & 0xFF) << 9) | (((uint32_t)(usage) & 0xFF) << 1) | ((pressed) ? 1u : 0u))
+	((((uint32_t)hid_locks & 0x07) << 17) | \
+	 (((uint32_t)(mods) & 0xFF) << 9) | (((uint32_t)(usage) & 0xFF) << 1) | ((pressed) ? 1u : 0u))
+
+// -- lock state --
+//
+// Num/Caps/Scroll Lock, toggled here on each press of the key, shared by
+// both keyboard blocks as on any desktop. Carried in every event
+// (above), and sent to every attached keyboard's LEDs through the USB
+// host driver (usb/usbh.c, z_usbh_kbd_leds()). Num Lock starts on --
+// see zkbd.h.
+static volatile uint8_t hid_locks = Z_KBD_LOCK_NUM;
+
+static void hid_lock_key(uint8_t usage) {
+	uint8_t bit = usage == Z_HID_USAGE_NUMLOCK    ? Z_KBD_LOCK_NUM :
+	              usage == Z_HID_USAGE_CAPSLOCK   ? Z_KBD_LOCK_CAPS :
+	              usage == Z_HID_USAGE_SCROLLLOCK ? Z_KBD_LOCK_SCROLL : 0;
+	if (!bit) return;
+	hid_locks ^= bit;
+	z_usbh_kbd_leds(hid_locks);
+}
 
 static volatile uint32_t __attribute__((section(".bss"))) hid_fifo[HID_FIFO_SIZE];
 static volatile uint8_t __attribute__((section(".bss"))) hid_head = 0, hid_tail = 0;
@@ -281,8 +302,10 @@ static void hid_irq_common(hid_port_t *st, uint32_t info, uint32_t keys) {
 	for (int i = 0; i < 4; i++) {
 		uint8_t u = cur_keys[i];
 		if (!hid_usage_valid(u)) continue;
-		if (!key_in_set(st->keys, u))
+		if (!key_in_set(st->keys, u)) {
+			hid_lock_key(u);	// before the push: the event carries the new state
 			hid_push(HID_EVENT(u, modifiers, true));
+		}
 	}
 
 	st->modifiers = modifiers;

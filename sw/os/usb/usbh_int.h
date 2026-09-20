@@ -191,6 +191,10 @@ typedef struct {
     // Times the hub disabled this device's port itself and it was reset
     // and re-enumerated without that counting as a failed attempt.
     uint8_t recoveries;
+    // Keyboard LEDs (usbh.c, kbd_led_step()): the recognition cycle's
+    // progress, the byte in flight and the one last confirmed.
+    uint8_t led_anim, led_busy, led_cur, led_sent, led_valid, led_tries;
+    uint32_t led_deadline;
 
     // -- hub class driver, usbh_hub.c; meaningful only for a hub --
     uint8_t h_state;

@@ -835,6 +835,14 @@ void usbh_teardown(int i)
 // 0x380-0x3bf is the auto-poll landing area and 0x000-0x26f belongs to
 // mass storage; see usbh_hw.h and usbh_msc.c.
 
+// Keyboard LEDs: 16 bytes per HID block (the SETUP and the one-byte
+// report), used only while an LED transfer is in flight -- a running
+// device has given its enumeration scratch back. 0x300-0x37f is free:
+// CDC ends at 0x2ff (usbh_cdc.c), auto-poll starts at 0x380. Not part
+// of the pool below; usbh_scr_free() ignores these addresses.
+#define SCR_LED0    0x300u
+#define SCR_LED1    0x310u
+
 #define SCR_BIG0    0x400u
 #define SCR_BIG1    0x600u
 #define SCR_HUB0    0x3c0u
@@ -859,6 +867,87 @@ uint16_t usbh_scr_take_big(void)
 uint16_t usbh_scr_take_hub(void)
 {
     return scr_take(SCR_HUB0, 4, SCR_HUB1, 8);
+}
+
+// ---------------------------------------------------------------
+// keyboard LEDs
+// ---------------------------------------------------------------
+//
+// SET_REPORT (output, report id 0) with one byte -- bit 0 Num Lock,
+// bit 1 Caps Lock, bit 2 Scroll Lock -- to the keyboard's interface.
+// The state is sw/os/hid.c's; this only puts it on the keyboard, from
+// the enumeration state machine, so it takes turns on the bus with
+// everything else like any control transfer. A keyboard that has just
+// bound first rolls Num -> Caps -> Scroll three times, so you can see
+// it was recognised, then settles to the real state.
+
+#define LED_ANIM_STEPS  9       // three rolls of three
+#define LED_ANIM_TICKS  58      // ~80 ms a step at 732 Hz
+#define LED_RETRY_TICKS 37      // ~50 ms after a failed transfer
+#define REQ_SET_REPORT  0x09
+
+static volatile uint8_t kbd_led_want = 0x01;    // Num Lock on, as hid.c
+
+void z_usbh_kbd_leds(uint8_t leds)
+{
+    kbd_led_want = (uint8_t)(leds & 0x07);
+}
+
+static int is_keyboard(const z_usbh_dev_t *dv)
+{
+    uint32_t info;
+    if (dv->blk < 0 || dv->iface < 0) return 0;
+    info = z_usbh_rd(dv->blk ? Z_USBH_HID1_INFO : Z_USBH_HID0_INFO);
+    return ((info >> 24) & 3) == Z_USBH_TYP_KBD;
+}
+
+static void kbd_led_step(int i)
+{
+    static const uint8_t roll[3] = { 0x01, 0x02, 0x04 };
+    z_usbh_dev_t *dv = &devs[i];
+    uint8_t want;
+    int r;
+
+    if (dv->led_busy) {
+        r = usbh_ctrl_step(i);
+        if (r == CS_ERROR) {
+            // Some keyboards STALL it, some drop a transfer now and
+            // then. Three tries per value, then leave it until the
+            // state changes again.
+            dv->led_busy = 0;
+            dv->scr = 0;
+            if (++dv->led_tries >= 3) {
+                dv->led_sent = dv->led_cur;
+                dv->led_valid = 1;
+                dv->led_tries = 0;
+            }
+            dv->led_deadline = usbh_ticks() + LED_RETRY_TICKS;
+        } else if (usbh_ctrl_finished(i)) {
+            dv->led_busy = 0;
+            dv->scr = 0;
+            dv->led_sent = dv->led_cur;
+            dv->led_valid = 1;
+            dv->led_tries = 0;
+        }
+        return;
+    }
+    if ((int32_t)(usbh_ticks() - dv->led_deadline) < 0) return;
+
+    if (dv->led_anim < LED_ANIM_STEPS) {
+        want = roll[dv->led_anim % 3];
+        dv->led_anim++;
+        dv->led_deadline = usbh_ticks() + LED_ANIM_TICKS;
+    } else {
+        want = kbd_led_want;
+    }
+    if (dv->led_valid && want == dv->led_sent) return;
+
+    dv->led_cur = want;
+    dv->scr = dv->blk ? SCR_LED1 : SCR_LED0;
+    z_usbh_wb(Z_USBH_BUF + dv->scr + 8u, want);
+    usbh_ctrl_begin(i, HID_OUT_IFACE, REQ_SET_REPORT, 0x0200,
+                    (uint16_t)dv->iface, 1);
+    dv->led_busy = 1;
 }
 
 void usbh_scr_free(uint16_t off)
@@ -1275,6 +1364,7 @@ static void dev_step(int i, uint32_t ps)
 
     case E_RUNNING:
         if (dv->cls == Z_USBH_CLASS_HUB) usbh_hub_step(i);
+        else if (is_keyboard(dv)) kbd_led_step(i);
         break;
 
     default:
@@ -1454,6 +1544,10 @@ static void dump_dev(int i, const char *pre)
            typ_name(devs[i].blk == 0 ?
                 (int)((z_usbh_rd(Z_USBH_HID0_INFO) >> 24) & 3) :
                 (int)((z_usbh_rd(Z_USBH_HID1_INFO) >> 24) & 3)));
+    if (is_keyboard(&devs[i]) && devs[i].led_valid)
+        printf(" leds=%c%c%c", (devs[i].led_sent & 1) ? 'N' : '-',
+               (devs[i].led_sent & 2) ? 'C' : '-',
+               (devs[i].led_sent & 4) ? 'S' : '-');
     if (devs[i].cls == Z_USBH_CLASS_MSC) printf(" class=msc");
     if (devs[i].cls == Z_USBH_CLASS_CDC) printf(" class=cdc");
     if (devs[i].retries) printf(" retries=%d", devs[i].retries);

@@ -103,6 +103,47 @@
 #define CONN_USB  2
 
 static z_port_t conn_uart, conn_usb;
+
+// -- flow control: never read what cannot be forwarded --
+//
+// z_port_send() REFUSES a send once Z_PORT_MAX_PENDING_SENDS (8) are
+// awaiting the client's ack, or when the client's mailbox is full --
+// it returns Z_FAIL and sends nothing. This app used to ignore that.
+// For the USB device it meant bytes already taken off the device --
+// our host had ACKed the packet, so the device let it go -- were
+// dropped on the floor: a full-screen redraw from a Blaustahl (~2 KB,
+// 30-odd packets) filled the 8 pending sends in the first pass and the
+// rest of the screen never arrived.
+//
+// So: read only while the port has room, and if a send fails anyway,
+// hold the bytes and retry them before reading more. USB has its own
+// backpressure -- a device we do not read NAKs and keeps its data -- so
+// nothing is lost, the device just waits. UART1 has a 16-byte FIFO and
+// no flow control, so there waiting can still overrun; that is then
+// REPORTED, as before, instead of being lost silently.
+static uint8_t held_usb[64], held_uart[16];
+static uint32_t held_usb_n, held_uart_n;
+
+static bool port_has_room(const z_port_t *c) {
+	return c->pending_count < Z_PORT_MAX_PENDING_SENDS;
+}
+
+// Send what is held, if anything. false: still held, read nothing more.
+static bool flush_held(z_port_t *c, uint8_t *held, uint32_t *n) {
+	if (*n == 0) return true;
+	if (!port_has_room(c) || z_port_send(c, held, *n) != Z_OK) return false;
+	*n = 0;
+	return true;
+}
+
+// Forward bytes just read; if the port refuses them, keep them.
+static void forward(z_port_t *c, const uint8_t *data, uint32_t n,
+		uint8_t *held, uint32_t *held_n) {
+	if (z_port_send(c, data, n) != Z_OK) {
+		memcpy(held, data, n);
+		*held_n = n;
+	}
+}
 static bool have_uart;
 static uint32_t cur_baud;
 
@@ -121,6 +162,7 @@ static void connect_usb(const z_msg_t *msg) {
 		return;
 	}
 	z_port_accept(&conn_usb, msg, CONN_USB);
+	held_usb_n = 0;
 	say(&conn_usb, "serial: connected to the USB CDC device. "
 		"F12 disconnects.\r\n");
 	printf("serial: USB client connected (pid %ld)\n", (long)msg->from);
@@ -150,6 +192,7 @@ static void connect_uart(const z_msg_t *msg, char *buf, size_t buflen) {
 		baud = cur_baud;
 
 	z_port_accept(&conn_uart, msg, CONN_UART);
+	held_uart_n = 0;
 
 	// Reopened unconditionally: a previous client may have left the
 	// FIFOs in some state, and reopening is cheap and idempotent.
@@ -174,11 +217,15 @@ static void connect_uart(const z_msg_t *msg, char *buf, size_t buflen) {
 // USB packet, and the device NAKs until the next is ready. A failed read
 // is not a gone device -- one transaction can time out and the next
 // work; only a device the kernel no longer has bound ends the session.
-static void poll_usb(void) {
+static bool poll_usb(void) {
 	uint8_t rx[64];
 	int k;
+	bool moved = false;
+	if (!flush_held(&conn_usb, held_usb, &held_usb_n)) return false;
 	for (k = 0; k < 8; k++) {
-		int32_t n = z_usbcdc_read(rx, sizeof(rx));
+		int32_t n;
+		if (!port_has_room(&conn_usb)) break;	// the device waits
+		n = z_usbcdc_read(rx, sizeof(rx));
 		if (n < 0) {
 			if (z_usbcdc_present()) break;
 			say(&conn_usb, "\r\n[serial: the USB device went away]\r\n");
@@ -187,19 +234,27 @@ static void poll_usb(void) {
 			break;
 		}
 		if (n == 0) break;
-		z_port_send(&conn_usb, rx, (uint32_t)n);
+		moved = true;
+		forward(&conn_usb, rx, (uint32_t)n, held_usb, &held_usb_n);
+		if (held_usb_n) break;
 	}
+	return moved;
 }
 
 // Only while connected: with nobody listening there is nowhere for the
 // bytes to go. Overruns and framing errors are REPORTED on the
 // connection, not swallowed -- see this file's header.
-static void poll_uart(void) {
+static bool poll_uart(void) {
 	uint8_t rx[RX_CHUNK];
-	uint32_t n = z_uart1_read(rx, sizeof(rx));
+	uint32_t n = 0;
 	uint32_t st;
 
-	if (n) z_port_send(&conn_uart, rx, n);
+	// Waiting on the client leaves bytes in the FIFO; if they overrun it,
+	// the status check below says so.
+	if (flush_held(&conn_uart, held_uart, &held_uart_n) &&
+	    port_has_room(&conn_uart))
+		n = z_uart1_read(rx, sizeof(rx));
+	if (n) forward(&conn_uart, rx, n, held_uart, &held_uart_n);
 	st = z_uart1_status();
 	if (st & Z_UART1_OVERRUN)
 		say(&conn_uart, "\r\n[serial: receive overrun -- bytes lost. "
@@ -207,6 +262,7 @@ static void poll_uart(void) {
 	if (st & Z_UART1_FRAMING)
 		say(&conn_uart, "\r\n[serial: framing error -- baud rate probably "
 			"wrong.]\r\n");
+	return n != 0;
 }
 
 int main(void) {
@@ -290,13 +346,18 @@ int main(void) {
 
 		}
 
-		if (conn_uart.connected) poll_uart();
-		if (conn_usb.connected) poll_usb();
+		bool busy = false;
+		if (conn_uart.connected && poll_uart()) busy = true;
+		if (conn_usb.connected && poll_usb()) busy = true;
 
 		// Yield. Z_TICK_HZ/60 rather than /30 because at 115200 one
 		// scheduler slice is already 15.7 bytes against UART1's 16-byte
-		// FIFO -- see this file's header.
-		z_proc_wait(Z_TICK_HZ / 60);
+		// FIFO -- see this file's header. While data is flowing, come
+		// back on the next tick instead: a USB device streaming a screen
+		// (a Blaustahl redraw is ~2 KB) otherwise waits ~16 ms per 8
+		// packets, and a device that drops what overflows its FIFO
+		// rather than waiting loses more the slower it is read.
+		z_proc_wait(busy ? 1 : Z_TICK_HZ / 60);
 	}
 
 	return 0;

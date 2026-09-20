@@ -123,6 +123,13 @@ void z_usbh_set_ls_hub_nak(int n);
 // successful IN with data from a low-speed device behind a hub.
 int z_usbh_cap_start(int mode);
 
+// Keyboard LEDs, for every attached keyboard: bit 0 Num Lock, bit 1 Caps
+// Lock, bit 2 Scroll Lock -- the HID LED output report. Sent with
+// SET_REPORT from the enumeration state machine; safe from any context.
+// A keyboard that has just bound shows a rolling Num-Caps-Scroll cycle
+// first, then this. sw/os/hid.c owns the state.
+void z_usbh_kbd_leds(uint8_t leds);
+
 // Low-speed timings (bring-up; usbh_hw.h, Z_USBH_TUNE). show prints
 // them; set takes microseconds for the first three and full-speed bit
 // times for the last. The shell's `usbtune`.

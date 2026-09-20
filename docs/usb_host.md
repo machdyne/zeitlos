@@ -719,19 +719,26 @@ nothing until written.
 port, SIE on the other, so a transaction can run while software reads
 the previous result.
 
-Suggested layout. **Software owns this**; the hardware only ever sees
-the `buf_off` values it is given, so this is convention, not contract:
+The layout in use (round 34). **Software owns this**; the hardware only
+ever sees the `buf_off` values it is given, so this is convention, not
+contract. The authoritative list is the defines named in the last
+column -- this table was the phase-0 plan until round 34 and had
+drifted from the code.
 
-| Offset | Size | Use |
-|---|---|---|
-| `0x000` | 512 | MSC data sector |
-| `0x200` | 8 | SETUP packet |
-| `0x208` | 64 | Control transfer data stage |
-| `0x248` | 31 | CBW (command block wrapper) |
-| `0x268` | 13 | CSW (command status wrapper) |
-| `0x280` | 256 | Descriptor scratch |
-| `0x380` | 4 x 16 | Auto-poll slot buffers |
-| `0x3c0` | 1088 | Free |
+| Offset | Size | Use | Defined in |
+|---|---|---|---|
+| `0x000` | 512 | MSC data sector | `usbh_msc.c`, `MSC_OFF_DATA` |
+| `0x200` | 31 | MSC CBW (command block wrapper) | `MSC_OFF_CBW` |
+| `0x240` | 13 | MSC CSW (command status wrapper) | `MSC_OFF_CSW` |
+| `0x260` | 8 | MSC's own SETUP packets | `MSC_OFF_SETUP` |
+| `0x270` | 16 | Free | |
+| `0x280` | 64 | CDC receive | `usbh_cdc.c`, `CDC_OFF_RX` |
+| `0x2c0` | 64 | CDC transmit | `CDC_OFF_TX` |
+| `0x300` | 16 x 2 | Keyboard LED `SET_REPORT`, one per HID block, only while in flight | `usbh.c`, `SCR_LED0/1` |
+| `0x320` | 96 | Free | |
+| `0x380` | 4 x 16 | Auto-poll slot buffers | `usbh_hw.h`, `Z_USBH_OFF_POLL` |
+| `0x3c0` | 32 x 2 | Hub port requests, one per hub | `usbh.c`, `SCR_HUB0/1` |
+| `0x400` | 512 x 2 | Enumeration scratch (SETUP + configuration descriptor), taken while a device enumerates | `usbh.c`, `SCR_BIG0/1` |
 
 512 bytes for the sector is the important number: `ffconf.h` has
 `FF_MIN_SS` = `FF_MAX_SS` = 512, so one FatFs sector is one buffer
@@ -1052,6 +1059,37 @@ top of it. With no device plugged in, a USB connect is refused; a device
 unplugged mid-session drops the connection with a message saying so,
 and a single failed read does not.
 
+**Flow control (round 32).** `serial` reads the next USB packet only
+while its port to `term` has room -- fewer than
+`Z_PORT_MAX_PENDING_SENDS` (8) sends awaiting ack -- and if a send is
+refused anyway (a full mailbox) it holds the bytes and retries them
+before reading more. Before, it read regardless and ignored
+`z_port_send()`'s refusal, so bytes already taken off the device were
+lost: a Blaustahl's full-screen editor redraw (~2 KB, 80x24 with a dot
+in every empty cell) arrived with holes. USB's own backpressure makes
+waiting free -- a device that is not read NAKs and keeps its data.
+`term`'s VT100 emulator (`sw/common/zvt100.c`) was checked against
+everything that firmware sends -- `ESC[;H` with an empty first
+parameter, `ESC[r;cH`, `ESC[J`, `ESC[K`, `ESC[0m`, `ESC[7m`, cursor
+moves, and deferred wrap at column 80 -- and handles all of it.
+
+**Devices that drop on a full FIFO (round 33).** The Blaustahl editor
+still drew with holes after round 32: its firmware writes the editor
+grid with `cdc_putchar()`, which **drops the character when its 64-byte
+CDC transmit FIFO is full** -- by design, for keystroke echo; its own
+comment says bulk output needs `cdc_putchar_reliable()`. The escape
+sequences go through Pico stdio, which waits, so every row started in
+the right place and then ran out of dots. A PC's host controller polls
+a bulk IN endpoint many times a frame, so the FIFO never fills there;
+no host that reads from a polling process can promise that. The fix is
+in the firmware -- `blaustahl-reliable-bulk-output.patch`: the editor's
+text and hex grids, the viewer and the CLI's line redraw use
+`cdc_putchar_reliable()`, and `blaustahl.h` declares it (xmodem.c was
+calling it through an implicit declaration, an error from GCC 14). On
+this side, `serial` now polls again on the next tick while data is
+flowing, instead of every ~16 ms, so any device's burst drains several
+times faster.
+
 For trying a device out without a term window, the shell's `usbcdc` is
 a terminal on it: keys go to the device, its output comes back, Ctrl-]
 leaves. Do not use it while `serial` has a USB client: the shell does not
@@ -1240,7 +1278,7 @@ is how it will actually be used.
 | **3** | Second root port, hotplug, simultaneous mixed LS/FS | **Done on hardware.** Both ports populated at once, mixed speeds, hot-swap in any order. See [Phase 3 results](#phase-3-results) |
 | **4** | Hub class driver, multi-device addressing, port-change endpoint, `tb_usb_hub.v`, **PRE validated against real hardware** | **Done on hardware.** Keyboard, mouse, stick and CDC device behind one hub at once. See [Hub class driver](#hub-class-driver) and [Hardware: working behind the hub](#hardware-working-behind-the-hub) |
 | **5** | Bulk, MSC, SCSI, FatFs drive 2 at `/usb`, `auto_cont` | **Reads and writes done on hardware.** Unplug handling, STALL / Reset Recovery and the IN toggle check pass simulation; hardware checks and one-sector-per-command remain -- see [Also outstanding](#also-outstanding) |
-| **6** | CDC-ACM, scroll wheel, keyboard LEDs via `Set_Report` | **CDC-ACM done on hardware**; apps via `serial` from round 20. Scroll wheel and LEDs not started |
+| **6** | CDC-ACM, scroll wheel, keyboard LEDs via `Set_Report` | **CDC-ACM done on hardware**; apps via `serial`. **Keyboard LEDs written (round 34)**, awaiting hardware. Scroll wheel next |
 | **7** | Hardening, error recovery, benchmarks against SD. Optionally USB Ethernet, optionally bus-mastering DMA | |
 
 Each phase updates this document and `docs/user_input.md`.
@@ -2952,16 +2990,14 @@ so far is here.
 
 ### Also outstanding
 
-- The keyboard behind a hub: unexplained. Capture it with `usbcap` /
-  `usbcapd` and decode with `tools/usbcap.py`; see
-  [Capturing a failing transaction on hardware](#capturing-a-failing-transaction-on-hardware).
-  Same for a failing request to the hub itself.
-- `make usb_fmax` with the `usb_sie.v` PRE fix and the `usb_xact.v`
-  toggle check.
+(Pruned in round 34: the keyboard behind a hub, `make usb_fmax` after
+the PRE fix and the toggle check, and keyboard and mouse with the
+toggle check are all done on hardware -- see Known issues, item 4, and
+the round log.)
+
 - On hardware, still to exercise: unplug and replug with `/usb`
-  mounted (including mid-copy), a card reader with no card (it STALLs),
-  and keyboard and mouse with the IN toggle check in place.
-- `make usb_fmax` with the `usb_xact.v` toggle check.
+  mounted (including mid-copy), and a card reader with no card (it
+  STALLs).
 - A device NAKing a control transfer for over ~200 ms during disk
   traffic fails the storage command ("bus busy"). See
   [The transaction engine has one owner](#the-transaction-engine-has-one-owner).
@@ -3041,6 +3077,46 @@ it is simulation-verified only until the hardware check at the end.
 - The round-4 files were confirmed present and unchanged in
   `403513e`. The reworked MAC passes `tb_ethmac_rmii.v` and
   `tb_ethmac_rmii_tx.v`.
+
+**Round 34 -- lock keys and keyboard LEDs** (on `403513e`)
+
+- `sw/os/hid.c`: Num/Caps/Scroll Lock state (`hid_locks`, Num Lock on
+  at start), toggled on each press, carried in every key event at bits
+  19:17, sent to the keyboards. `sw/common/zkbd.h`: lock usages,
+  `Z_KBD_LOCK_*`, `Z_KBD_EV_LOCKS()`.
+- `sw/os/usb/usbh.c`, `usbh.h`, `usbh_int.h`: `z_usbh_kbd_leds()`;
+  `kbd_led_step()` in `E_RUNNING` sends `SET_REPORT` (output, one byte)
+  to each keyboard, retrying three times per value; a newly bound
+  keyboard first rolls Num -> Caps -> Scroll three times. 16-byte areas
+  at 0x300/0x310 of the packet buffer, one per HID block, used only
+  while a transfer is in flight. `lsusb` shows `leds=`.
+- `sw/apps/wm/wm.c`: Caps Lock inverts Shift for a-z.
+- Docs: `docs/user_input.md` (event format, "Lock keys and keyboard
+  LEDs", limitations brought up to date for the new core); phase
+  table; "Also outstanding" pruned of items done on hardware.
+- Kernel and apps; compile-checked only.
+
+**Round 33 -- the Blaustahl drops, and faster CDC polling** (on `403513e`)
+
+- Hardware (reported): round 32 did not fix the editor. Cause, in the
+  Blaustahl firmware: the editor grid uses `cdc_putchar()`, which drops
+  on a full 64-byte FIFO. Patch for that repo:
+  `blaustahl-reliable-bulk-output.patch` (4 call sites to
+  `cdc_putchar_reliable()`, plus its missing declaration).
+- `sw/apps/serial/serial.c`: poll on the next tick while data moves.
+  See [CDC](#cdc). Apps only.
+
+**Round 32 -- no more lost CDC data in `serial`** (on `403513e`)
+
+- Hardware (reported): a Blaustahl's editor over `usbserial` drew with
+  holes. Its firmware's VT100 use checked against `zvt100.c`: all
+  supported, including deferred wrap. Cause: `serial` ignored
+  `z_port_send()` refusing a send (8 pending, or a full mailbox) and
+  dropped data it had already read from the device.
+- `sw/apps/serial/serial.c`: read only while the port has room; hold
+  and retry refused bytes. Also for UART1, where waiting can overrun
+  the FIFO -- reported as before rather than lost silently. See
+  [CDC](#cdc). Apps only.
 
 **Round 31 -- docs brought up to date** (on `403513e`)
 

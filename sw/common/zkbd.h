@@ -57,6 +57,30 @@
 #define Z_HID_USAGE_RALT    0xE6
 #define Z_HID_USAGE_RGUI    0xE7
 
+// -- lock keys --
+//
+// Usage codes of the three lock keys, and the lock STATE the kernel
+// keeps from them (sw/os/hid.c): toggled on each press, shown on the
+// keyboard's LEDs, and carried in every key event at bits 19:17 --
+// Z_KBD_EV_LOCKS() below. The bit order is the HID keyboard LED output
+// report's, so the kernel sends the same byte to the keyboard.
+//
+// Caps Lock is applied by wm when translating: letters only, Shift
+// inverted. Num Lock starts ON, matching the keypad's behaviour today
+// -- zkbd maps keypad keys to digits regardless -- so its LED is right;
+// Num Lock off does not (yet) turn the keypad into navigation keys.
+// Scroll Lock is state and an LED, nothing more.
+#define Z_HID_USAGE_CAPSLOCK    0x39
+#define Z_HID_USAGE_SCROLLLOCK  0x47
+#define Z_HID_USAGE_NUMLOCK     0x53
+
+#define Z_KBD_LOCK_NUM      0x01
+#define Z_KBD_LOCK_CAPS     0x02
+#define Z_KBD_LOCK_SCROLL   0x04
+
+// The lock state carried in a raw key event (bits 19:17).
+#define Z_KBD_EV_LOCKS(ev)  (((uint32_t)(ev) >> 17) & 0x07)
+
 // -- keysyms --
 //
 // 0x00-0x7f: ordinary ASCII, already shift/ctrl-resolved by
