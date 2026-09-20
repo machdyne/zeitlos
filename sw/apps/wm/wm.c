@@ -4259,6 +4259,49 @@ static void notify_resized(int idx) {
 // gesture: the pointer belongs to wm for the duration, and forwarding
 // those samples would have apps reacting to a gesture aimed at their
 // chrome.
+// -- scroll wheel --
+//
+// The mouse register's top byte is a hardware accumulator of the wheel
+// (docs/user_input.md); the notches since the last read go, as one
+// Z_WM_WHEEL, to the window that owns the pointer -- chosen exactly as
+// dispatch_mouse() chooses, and repeated here rather than shared so
+// that function stays as it is. Never coalesced: every notch counts.
+static uint8_t wheel_last[2];
+static bool wheel_seen[2];
+
+static void dispatch_wheel(int cx, int cy) {
+	int port = mouse_port();
+	uint8_t acc = (uint8_t)(((port == 0) ? reg_usb0_mouse : reg_usb1_mouse) >> 24);
+	int8_t notches;
+	int target;
+
+	if (!wheel_seen[port]) {
+		// First look at this port: take the count as the baseline,
+		// don't replay whatever accumulated before wm was watching.
+		wheel_last[port] = acc;
+		wheel_seen[port] = true;
+		return;
+	}
+	notches = (int8_t)(uint8_t)(acc - wheel_last[port]);
+	wheel_last[port] = acc;
+	if (notches == 0) return;
+	if (dragging >= 0 || resizing >= 0) return;
+
+	target = mouse_capture;
+	if (game_grab_pid) {
+		target = window_of_pid(game_grab_pid);
+		if (target < 0) return;
+	} else if (target < 0) {
+		int hit = hit_test(cx, cy);
+		if (hit >= 0 && hit == focused) target = hit;
+	}
+	if (target < 0 || !windows[target].used) return;
+	if (windows[target].owner_pid == my_pid) return;
+
+	z_msg_new_send(windows[target].owner_pid, Z_WM_WHEEL, 0,
+		z_obj_uint32((uint32_t)(int32_t)notches));
+}
+
 static void dispatch_mouse(int cx, int cy, uint8_t btn) {
 
 	if (dragging >= 0 || resizing >= 0) return;
@@ -5173,6 +5216,7 @@ int main(void) {
 		// so the app still receives the button-up that ends its own
 		// gesture.
 		dispatch_mouse(cx, cy, btn);
+		dispatch_wheel(cx, cy);
 
 		// Super held -- drag the game mode viewport along with the
 		// pointer. A level test on a held modifier, so it belongs here

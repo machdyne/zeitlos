@@ -80,6 +80,15 @@ module usb_hid_compat #(
     input wire [7:0] in_b5,
     input wire [7:0] in_b6,
     input wire [7:0] in_b7,
+    // Payload bytes the report actually had (0-8). A 3-byte boot mouse
+    // report has no wheel byte, and in_b3 then holds a stale one.
+    input wire [3:0] in_len,
+    // Byte 3 is a wheel the driver confirmed from the report descriptor
+    // (report protocol). Only then is it counted: the boot mouse report
+    // is three bytes by the HID spec, and a fourth one in boot protocol
+    // is undefined -- often a wheel, sometimes vendor data, sometimes
+    // nothing (a Microsoft 045e:0737 sends no wheel there at all).
+    input wire in_wheel,
 
     // -- device type, written by the kernel --
     input wire typ_we,
@@ -112,6 +121,18 @@ module usb_hid_compat #(
     reg [7:0] mouse_btn;
     reg signed [7:0] mouse_dx;
     reg signed [7:0] mouse_dy;
+    // -- scroll wheel --
+    //
+    // A free-running signed accumulator of the wheel, which software
+    // reads and subtracts, rather than a per-report delta: a wheel is
+    // discrete notches, and an accumulator never loses one to a report
+    // software did not read in time. Taken from byte 3 of the report,
+    // and only when the driver has confirmed from the mouse's report
+    // descriptor that byte 3 IS the wheel -- report protocol, simple
+    // layout (in_wheel). Not in boot protocol: the HID spec defines the
+    // boot mouse report as three bytes. Positive is away from the user
+    // (scroll up), the HID convention.
+    reg signed [7:0] wheel_acc;
     reg [9:0] game_state;
 
     reg mouse_move;
@@ -139,7 +160,7 @@ module usb_hid_compat #(
     // works and that docs/user_input.md already documents as a trap.
     assign reg_info = { report, 5'b00000, typ_r, 16'b0, key_modifiers };
     assign reg_keys = { key1, key2, key3, key4 };
-    assign reg_mouse = { 8'h00, mouse_btn, mouse_dy, mouse_dx };
+    assign reg_mouse = { wheel_acc, mouse_btn, mouse_dy, mouse_dx };
     assign reg_cursor = { 4'd0, mouse_btn, curs_y, curs_x };
     assign reg_pad = { 20'd0, typ_r, game_state };
 
@@ -205,6 +226,7 @@ module usb_hid_compat #(
             mouse_btn <= 8'd0;
             mouse_dx <= 8'sd0;
             mouse_dy <= 8'sd0;
+            wheel_acc <= 8'sd0;
             game_state <= 10'd0;
             curs_x <= 10'd320;
             curs_y <= 10'd240;
@@ -229,15 +251,14 @@ module usb_hid_compat #(
                 report <= 1'b1;
 
                 if (in_mode == MODE_BOOT_MOUSE) begin
-                    // Boot mouse report: buttons, dx, dy, wheel.
-                    // Byte 3 is the scroll wheel and is ignored until
-                    // phase 6 -- plenty of mice report a usable one
-                    // here and plenty do not, so using it properly
-                    // means report protocol and a descriptor parse,
-                    // which is software.
+                    // Boot mouse report: buttons, dx, dy, wheel. The
+                    // wheel is byte 3 by convention (see wheel_acc);
+                    // a mouse without one sends three bytes.
                     mouse_btn <= in_b0;
                     mouse_dx <= in_b1;
                     mouse_dy <= in_b2;
+                    if (in_wheel && in_len >= 4'd4)
+                        wheel_acc <= wheel_acc + in_b3;
                     mouse_move <= 1'b1;
                 end
 

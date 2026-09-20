@@ -211,6 +211,10 @@ wakeups", and `docs/app_runtime.md`, "Who blocks, and how".
   "Resizing" below.
 - **Pointer events reach apps** via `Z_WM_MOUSE`, with capture -- see
   "Pointer delivery" below.
+- **The scroll wheel reaches apps** via `Z_WM_WHEEL`, a signed count of
+  notches sent to the same window `Z_WM_MOUSE` would go to, and never
+  coalesced -- every notch counts (`docs/user_input.md`, "Scroll
+  wheel").
 
 Keyboard input is interrupt-driven, not polled -- see
 `docs/user_input.md` for the full stack (kernel capture, keysym
@@ -831,6 +835,8 @@ shapes. Summary:
 | app → wm | `Z_WM_DESTROY_WINDOW` | `Z_UINT32` (window id) | close a window |
 | wm → app | `Z_WM_WINDOW_MOVED` | `Z_MAP{id, x, y, w, h}` | sent after a drag completes |
 | wm → app | `Z_WM_KEY` | packed `Z_UINT32` (`Z_WM_PACK_KEY`) | key press/release, focused window only -- see `docs/user_input.md` |
+| wm → app | `Z_WM_MOUSE` | packed `Z_UINT32` (`Z_WM_PACK_MOUSE`) | pointer position and buttons, to the window that owns the pointer; coalesced -- act on the last one queued |
+| wm → app | `Z_WM_WHEEL` | `Z_UINT32`, signed notches (`Z_WM_WHEEL_NOTCHES`) | scroll wheel, positive = up; same target as `Z_WM_MOUSE`; not coalesced -- act on every one |
 | app → wm | `Z_WM_SET_TITLE` | `Z_MAP{id, title}` | retitle an existing window -- repairs the titlebar strip only |
 | wm → app | `Z_WM_TITLEBAR_ICON` | packed `Z_UINT32` (`Z_WM_PACK_TBICON`) | a new/save/open/font titlebar icon was clicked |
 | wm → app | `Z_WM_SET_CLIP` | `Z_BLOB` of `z_wm_cliprect_t[]`, led by a control rectangle naming the window | the part of this window not covered by the windows in front of it, or a command about its clip |

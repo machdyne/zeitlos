@@ -1278,12 +1278,43 @@ is how it will actually be used.
 | **3** | Second root port, hotplug, simultaneous mixed LS/FS | **Done on hardware.** Both ports populated at once, mixed speeds, hot-swap in any order. See [Phase 3 results](#phase-3-results) |
 | **4** | Hub class driver, multi-device addressing, port-change endpoint, `tb_usb_hub.v`, **PRE validated against real hardware** | **Done on hardware.** Keyboard, mouse, stick and CDC device behind one hub at once. See [Hub class driver](#hub-class-driver) and [Hardware: working behind the hub](#hardware-working-behind-the-hub) |
 | **5** | Bulk, MSC, SCSI, FatFs drive 2 at `/usb`, `auto_cont` | **Reads and writes done on hardware.** Unplug handling, STALL / Reset Recovery and the IN toggle check pass simulation; hardware checks and one-sector-per-command remain -- see [Also outstanding](#also-outstanding) |
-| **6** | CDC-ACM, scroll wheel, keyboard LEDs via `Set_Report` | **CDC-ACM done on hardware**; apps via `serial`. **Keyboard LEDs written (round 34)**, awaiting hardware. Scroll wheel next |
+| **6** | CDC-ACM, scroll wheel, keyboard LEDs via `Set_Report` | **Done on hardware.** CDC-ACM with apps via `serial`; keyboard LEDs and lock keys; scroll wheel through report protocol for mice whose descriptor has the simple layout with a wheel (rounds 35-38) |
 | **7** | Hardening, error recovery, benchmarks against SD. Optionally USB Ethernet, optionally bus-mastering DMA | |
 
 Each phase updates this document and `docs/user_input.md`.
 
 ### Scroll wheel — a note for Phase 6
+
+**Round 38, final shape -- confirmed on hardware:** byte 3 is counted
+only when the driver has confirmed from the report descriptor that it
+is the wheel (poll mode bit 2, `in_wheel`). The HID spec defines the
+boot mouse report as three bytes; a fourth in boot protocol is a common
+convention, not a rule, so rounds 35-37 counting it for any 4-byte
+report could have made a mouse with vendor data there scroll by itself.
+With `USB_HID` (the older core) the register's top byte is a constant
+0, so `wm` sends no wheel events and the mouse works as before.
+
+**Round 37 update:** a descriptor parse after all, but a small one. A
+Microsoft 045e:0737 sends no wheel in boot protocol -- its counter never
+moved on hardware -- though its 4-byte endpoint is the size of the
+simple report-protocol layout. So mice now have their report descriptor
+read and parsed (`z_usbh_hid_rdesc_parse()`), and a mouse whose input
+report is exactly buttons / X / Y / wheel, 8-bit, no report IDs, is set
+to report protocol -- the same bytes the hardware already parses, plus
+the wheel. Everything else stays in boot protocol. See
+`docs/user_input.md`, "Scroll wheel".
+
+**Round 35 outcome:** no descriptor parse. Linux's boot-protocol mouse
+driver (`drivers/hid/usbhid/usbmouse.c`) reads `REL_WHEEL` from
+`data[3]` unconditionally and TinyUSB's `hid_mouse_report_t` is
+`buttons, x, y, wheel, pan`: in boot protocol the wheel is byte 3 by
+convention, and a mouse without one sends three bytes. So
+`usb_hid_compat.v` accumulates byte 3 into `reg_mouse[31:24]` when the
+report had a fourth byte -- `in_len`, the payload count `usb_host.v`
+already keeps while snooping the report -- and the accumulator design
+below was the one chosen. See `docs/user_input.md`, "Scroll wheel". A
+report-protocol parser remains the route for a mouse that only reports
+its wheel there, if one turns up. The original note:
 
 `reg_usbN_mouse` is `{ 8'h00, mouse_btn, mouse_dy, mouse_dx }` today.
 **Bits `[31:24]` are hardwired zero**, so a wheel field lands there with
@@ -3077,6 +3108,75 @@ it is simulation-verified only until the hardware check at the end.
 - The round-4 files were confirmed present and unchanged in
   `403513e`. The reworked MAC passes `tb_ethmac_rmii.v` and
   `tb_ethmac_rmii_tx.v`.
+
+**Round 39 -- phase 6 done; docs checked** (on `b80c4f2`)
+
+- Hardware (reported): the scroll wheel works on the Microsoft
+  045e:0737 in report protocol. Phase 6 done.
+- Checked `USB_HID` builds against rounds 34-38: the older core's mouse
+  register has a constant-zero top byte, so no wheel events; the
+  kernel USB driver is inert without its controller (`usbh_present`);
+  lock state and Caps Lock are shared code and work; LEDs cannot.
+- Docs: phase table; the wheel note's final shape; `zwm.h`'s
+  `Z_WM_WHEEL` comment (still said "boot report's fourth byte");
+  `docs/window_manager.md` -- `Z_WM_WHEEL` and the missing `Z_WM_MOUSE`
+  in the app-protocol table, and a bullet; `docs/user_input.md` -- the
+  older core's behaviour for lock keys and LEDs. Docs and comments only.
+
+**Round 38 -- the wheel only where the descriptor says so** (on `b80c4f2`)
+
+- Point raised: the HID boot mouse report is three bytes by the spec;
+  a fourth in boot protocol is a common convention, not a rule. Round
+  35 counted byte 3 of any 4-byte report, boot protocol included.
+- `rtl/usb/usb_host.v`, `usb_hid_compat.v`: poll mode bit 2 (`in_wheel`)
+  -- byte 3 is counted only when set. `sw/os/usb/usbh_hid.c`, `usbh.c`:
+  `z_usbh_hid_bind(..., wheel)` sets it only for a mouse put in report
+  protocol after its descriptor showed the simple layout with a wheel
+  (`MRD_REPORT`), before the slot is enabled. `test_usb` passes.
+- Docs: `docs/user_input.md`, "Scroll wheel".
+
+**Round 37 -- report protocol for wheel mice** (on `b80c4f2`)
+
+- Hardware (reported): the wheel counter never moved for a Microsoft
+  045e:0737 in boot protocol, with a 4-byte endpoint.
+- `sw/os/usb/usbh_hid.c`: `z_usbh_hid_mouse_rdesc_len()` (from the HID
+  descriptor) and `z_usbh_hid_rdesc_parse()` (short items; usage
+  pages, sizes, counts, IDs, usage min/max; bit positions of buttons,
+  X, Y, wheel). Unit-tested offline: a common wheel mouse is accepted;
+  the HID spec's boot mouse (no wheel), the same wheel mouse with a
+  report ID, and a 16-button 12-bit-axis layout are refused.
+- `usbh.c`, `usbh_int.h`: `E_HID_RDESC` reads a mouse's report
+  descriptor between SET_CONFIGURATION and SET_PROTOCOL, and chooses
+  SET_PROTOCOL(1) for the simple layout with a wheel, (0) otherwise.
+  `lsusb`: protocol and why, layout, register, last report on its own
+  line (it was cut at 80 columns).
+- Kernel only.
+
+**Round 36 -- Num Lock off by default; wheel diagnostics** (on `403513e`)
+
+- Hardware (reported): Num Lock on by default disabled the right-hand
+  letter keys of a compact keyboard -- its firmware maps them to an
+  embedded keypad while the host reports Num Lock. Now all locks start
+  off (`hid.c`, `usbh.c`, `zkbd.h`, `docs/user_input.md`).
+- Hardware (reported): the wheel did not scroll `term`. `lsusb` now
+  prints, for a mouse, its register (wheel counter in the top byte),
+  the poll length and the raw bytes of its last report, to tell a mouse
+  that sends no byte 3 in boot protocol from an event that does not
+  arrive. Kernel only.
+
+**Round 35 -- scroll wheel** (on `403513e`)
+
+- Research: Linux `usbmouse.c` (`REL_WHEEL` from `data[3]`), TinyUSB
+  `hid_mouse_report_t` (byte 3 wheel, byte 4 pan). Boot-report byte 3
+  is the wheel by convention; no descriptor parse needed.
+- `rtl/usb/usb_hid_compat.v`: `wheel_acc`, a signed 8-bit accumulator
+  of byte 3, only for reports of four bytes or more (`in_len`), in
+  `reg_mouse[31:24]` (hardwired zero until now). `usb_host.v` passes
+  `cap_idx` as `in_len`. `test_usb` passes.
+- `sw/common/zwm.h`: `Z_WM_WHEEL` (121), signed notches, not
+  coalesced. `sw/apps/wm/wm.c`: `dispatch_wheel()`, same target rules
+  as `dispatch_mouse()`. `sw/apps/term/term.c`: three lines a notch.
+- Docs: `docs/user_input.md` (register, "Scroll wheel"), phase table.
 
 **Round 34 -- lock keys and keyboard LEDs** (on `403513e`)
 

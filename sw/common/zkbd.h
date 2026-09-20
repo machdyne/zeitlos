@@ -66,10 +66,13 @@
 // report's, so the kernel sends the same byte to the keyboard.
 //
 // Caps Lock is applied by wm when translating: letters only, Shift
-// inverted. Num Lock starts ON, matching the keypad's behaviour today
-// -- zkbd maps keypad keys to digits regardless -- so its LED is right;
-// Num Lock off does not (yet) turn the keypad into navigation keys.
-// Scroll Lock is state and an LED, nothing more.
+// inverted. All three start OFF. Num Lock especially: on a compact
+// keyboard the keyboard's OWN firmware turns a block of letter keys
+// (7-8-9/U-I-O/J-K-L/M...) into an embedded keypad while the host says
+// Num Lock is on, so on by default took those keys away. A full-size
+// keypad still types digits with Num Lock off -- zkbd maps keypad keys
+// to digits regardless; Num Lock does not (yet) switch them to
+// navigation keys. Scroll Lock is state and an LED, nothing more.
 #define Z_HID_USAGE_CAPSLOCK    0x39
 #define Z_HID_USAGE_SCROLLLOCK  0x47
 #define Z_HID_USAGE_NUMLOCK     0x53

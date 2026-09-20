@@ -50,7 +50,7 @@ Each `usb_hid_wb` instance exposes four registers, word-addressed
 |---|---|---|
 | 0x00 | info | `{ report[31], 5'b0[30:26], typ[25:24], 16'b0[23:8], modifiers[7:0] }` |
 | 0x04 | keys | `{ key1[31:24], key2[23:16], key3[15:8], key4[7:0] }` |
-| 0x08 | mouse | `{ 8'b0[31:24], mouse_btn[23:16], mouse_dy[15:8], mouse_dx[7:0] }` |
+| 0x08 | mouse | `{ wheel_acc[31:24], mouse_btn[23:16], mouse_dy[15:8], mouse_dx[7:0] }` -- `wheel_acc` with the current core only; 0 with `usb_hid_host` |
 | 0x0c | cursor | see below -- narrower than it looks |
 
 `typ` is `0`=none, `1`=keyboard, `2`=mouse, `3`=gamepad (matching
@@ -179,6 +179,41 @@ bits 16:9  modifier byte at the time of the event
 bits 19:17 lock state after the event: Num, Caps, Scroll (Z_KBD_LOCK_*)
 ```
 
+### Scroll wheel
+
+With the current USB core (`rtl/usb/`), the mouse register's top byte is
+`wheel_acc`: a free-running signed 8-bit **accumulator** of the wheel,
+not a per-report delta. Read it, subtract the last value you read, and
+the difference is the notches since -- none lost to a report you did
+not read in time. Positive is away from the user.
+
+It counts byte 3 of the report **only for a mouse in report protocol
+whose report descriptor puts the wheel there** (below). The HID spec
+defines the boot mouse report as three bytes -- buttons, X, Y -- and
+anything after them in boot protocol is undefined: many mice put a
+wheel there, some send vendor data, some (a Microsoft 045e:0737) send
+nothing. Counting it anyway (rounds 35-37) could have made such a mouse
+scroll by itself. The driver marks a confirmed wheel with bit 2 of the
+poll slot's mode (`usb_hid_compat.v`, `in_wheel`).
+**Boot or report protocol.** Some mice send the wheel only in report
+protocol -- a Microsoft 045e:0737 does: in boot protocol its fourth byte
+never moved (round 36). So for each mouse the driver reads its HID
+report descriptor during enumeration (`usbh_hid.c`,
+`z_usbh_hid_rdesc_parse()`) and, if the input report is the simple
+layout -- no report IDs, buttons from bit 0, then X, Y and a wheel as
+8-bit values in bytes 1, 2 and 3 -- sets report protocol: the hardware
+parses those bytes exactly as it parses a boot report, wheel included.
+Any other layout (report IDs, 12- or 16-bit axes, ...) or an unreadable
+descriptor, and the mouse is put in boot protocol as before: movement
+and buttons work, the wheel does not. `lsusb` shows, per mouse, the
+protocol chosen and why, the layout the descriptor gave, the register
+(wheel counter in the top byte) and the raw bytes of the last report.
+
+Apps do not read it: `wm` does (`dispatch_wheel()`), and sends the
+notches to the window that owns the pointer as **`Z_WM_WHEEL`**
+(`zwm.h`) -- a signed count, never coalesced, unlike `Z_WM_MOUSE`.
+`term` scrolls its history three lines a notch.
+
 ### Lock keys and keyboard LEDs
 
 The kernel keeps Num Lock, Caps Lock and Scroll Lock (`hid.c`,
@@ -191,11 +226,20 @@ that has just been recognised rolls its LEDs Num -> Caps -> Scroll three
 times (about 0.7 s), then shows the real state; `lsusb` shows it as
 `leds=N--` and so on.
 
+**With the older `usb_hid_host` core** (`USB_HID` builds) the lock
+state and Caps Lock work the same -- they are `hid.c` and `wm`, shared
+by both cores -- but the LEDs stay dark: that core cannot send a report
+to the keyboard. The USB host driver finds no controller at start-up and
+does nothing (`usbh_present`).
+
 Caps Lock is applied by `wm` when translating: for the letters a-z
-only, Shift is inverted. Num Lock starts **on**, which matches the
-keypad's behaviour today -- `zkbd` maps keypad keys to digits
-regardless -- so Num Lock off does not (yet) make them navigation
-keys. Scroll Lock is state and an LED only. The lock keys themselves
+only, Shift is inverted. All three locks start **off** (round 36). Num
+Lock in particular: on a compact keyboard the keyboard's own firmware
+turns a block of letter keys into an embedded keypad while the host
+says Num Lock is on, so starting it on (round 34) took those keys away.
+A full-size keypad still types digits with Num Lock off -- `zkbd` maps
+keypad keys to digits regardless -- and Num Lock does not (yet) make
+them navigation keys. Scroll Lock is state and an LED only. The lock keys themselves
 translate to no keysym, so apps never see them as input.
 
 Apps drain the queue via `hid_read_key()` (`Z_SYS_HID_READ_KEY`
@@ -343,9 +387,10 @@ one-line fix.
 - **Older core only (`rtl/ext/usb_hid_host`): no hubs, no keyboard
   LEDs.** Both work with the current USB host (`rtl/usb/`,
   docs/usb_host.md).
-- **Num Lock off does not change the keypad.** Keypad keys give
+- **Num Lock does not change a full-size keypad.** Keypad keys give
   digits either way; the lock state and LED are right, the navigation
-  mapping is not written.
+  mapping is not written. (A compact keyboard's embedded keypad is the
+  keyboard's own doing, and does follow Num Lock.)
 - **No keyboard-driven focus switching.** Auto-focus (above) gets a
   single app a window without a mouse, but there's no keyboard
   equivalent of clicking a different window (an Alt+Tab-style switch)

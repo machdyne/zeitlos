@@ -236,8 +236,11 @@ static uint8_t usbh_any_ready;
 // Forward declaration; the HID driver lives in usbh_hid.c and is the
 // only consumer of a completed enumeration so far.
 int z_usbh_hid_bind(int slot, uint8_t addr, uint8_t xa_flags,
-                    uint8_t port, const uint8_t *cfg, int cfg_len);
+                    uint8_t port, const uint8_t *cfg, int cfg_len,
+                    int wheel);
 int z_usbh_hid_probe(const uint8_t *cfg, int cfg_len);
+int z_usbh_hid_mouse_rdesc_len(const uint8_t *cfg, int cfg_len, int iface);
+int z_usbh_hid_rdesc_parse(const uint8_t *rd, int n, z_usbh_mlay_t *lay);
 void z_usbh_hid_release(int blk);
 
 // ---------------------------------------------------------------
@@ -886,7 +889,7 @@ uint16_t usbh_scr_take_hub(void)
 #define LED_RETRY_TICKS 37      // ~50 ms after a failed transfer
 #define REQ_SET_REPORT  0x09
 
-static volatile uint8_t kbd_led_want = 0x01;    // Num Lock on, as hid.c
+static volatile uint8_t kbd_led_want = 0x00;    // all off, as hid.c
 
 void z_usbh_kbd_leds(uint8_t leds)
 {
@@ -1193,6 +1196,17 @@ static void dev_step(int i, uint32_t ps)
             dv->state = E_BIND;
             break;
         }
+        // A mouse: read its report descriptor first, to see whether
+        // report protocol gives the simple layout WITH a wheel -- some
+        // mice send the wheel only there (usbh_hid.c).
+        a = z_usbh_hid_mouse_rdesc_len(dv->cfg_raw, dv->cfg_rawn, dv->iface);
+        if (a > 0) {
+            if (a > 400) a = 400;           // scratch is 512, less SETUP
+            usbh_ctrl_begin(i, DIR_IN | 0x01, REQ_GET_DESCRIPTOR, 0x2200,
+                            (uint16_t)dv->iface, (uint16_t)a);
+            dv->state = E_HID_RDESC;
+            break;
+        }
         // Boot protocol, explicitly. A device whose interface declares
         // subclass 1 usually defaults to it, and "usually" is the
         // problem: a keyboard that comes up in report protocol sends a
@@ -1202,6 +1216,40 @@ static void dev_step(int i, uint32_t ps)
         usbh_ctrl_begin(i, HID_OUT_IFACE, REQ_SET_PROTOCOL, 0,
                    (uint16_t)dv->iface, 0);
         dv->state = E_SET_PROTO;
+        break;
+
+    case E_HID_RDESC:
+        a = usbh_ctrl_step(i);
+        if (a != CS_ERROR && !usbh_ctrl_finished(i)) break;
+        {
+            // The protocol for this mouse: report (1) if its input
+            // report is the simple layout with a wheel -- which the
+            // hardware parses as it parses a boot report, wheel in byte
+            // 3 -- otherwise boot (0), as for every mouse before. Set
+            // explicitly either way, through E_SET_PROTO as before.
+            static uint8_t rd[400];
+            uint16_t proto = 0;
+            if (a == CS_ERROR) {
+                dv->mouse_rd = MRD_BOOT_FAIL;
+            } else {
+                int n = dv->ctrl_len > 400 ? 400 : dv->ctrl_len, k;
+                const z_usbh_mlay_t *l = &dv->mlay;
+                for (k = 0; k < n; k++) rd[k] = z_usbh_rb(d + (uint32_t)k);
+                if (z_usbh_hid_rdesc_parse(rd, n, &dv->mlay)) {
+                    dv->mouse_rd = MRD_REPORT;
+                    proto = 1;
+                } else if (!l->has_id && l->btn_bit == 0 &&
+                           l->x_bit == 8 && l->x_sz == 8 &&
+                           l->y_bit == 16 && l->y_sz == 8 && l->w_bit < 0) {
+                    dv->mouse_rd = MRD_BOOT_NOWHL;
+                } else {
+                    dv->mouse_rd = MRD_BOOT_LAYOUT;
+                }
+            }
+            usbh_ctrl_begin(i, HID_OUT_IFACE, REQ_SET_PROTOCOL, proto,
+                            (uint16_t)dv->iface, 0);
+            dv->state = E_SET_PROTO;
+        }
         break;
 
     case E_SET_PROTO:
@@ -1281,7 +1329,8 @@ static void dev_step(int i, uint32_t ps)
         dv->blk = dv->slot < 0 ? -1 :
                   (int8_t)z_usbh_hid_bind(dv->slot, dv->addr,
                                           dv->xa_flags, dv->port,
-                                          dv->cfg_raw, dv->cfg_rawn);
+                                          dv->cfg_raw, dv->cfg_rawn,
+                                          dv->mouse_rd == MRD_REPORT);
         if (dv->blk < 0 && dv->slot >= 0) {
             usbh_slot_free(dv->slot);
             dv->slot = -1;
@@ -1500,6 +1549,7 @@ static const char *state_name(int st)
     case E_HUB_RECOVER: return "hub-recover";
     case E_CDC_LINE:    return "cdc-line-coding";
     case E_CDC_DTR:     return "cdc-dtr";
+    case E_HID_RDESC:   return "hid-report-desc";
     default:            return "?";
     }
 }
@@ -1623,6 +1673,39 @@ static void dump_dev(int i, const char *pre)
                (unsigned long)((pa >> 22) & 0xff),
                (unsigned long)((pb >> 11) & 7),
                (unsigned long)Z_USBH_PB_STATUS(pb));
+        if (devs[i].blk >= 0 &&
+            ((z_usbh_rd(devs[i].blk ? Z_USBH_HID1_INFO : Z_USBH_HID0_INFO)
+              >> 24) & 3) == Z_USBH_TYP_MOUSE) {
+            // The wheel is the register's top byte, an accumulator of
+            // byte 3 of the report (docs/user_input.md, "Scroll wheel").
+            // If it never moves while the wheel turns, look at the last
+            // report: a mouse that sends only three bytes in boot
+            // protocol has no byte 3 to give.
+            uint32_t mr = z_usbh_rd(devs[i].blk ? Z_USBH_HID1_MOUSE
+                                                : Z_USBH_HID0_MOUSE);
+            uint32_t off = pb & 0x7ffu;
+            int k;
+            static const char *const why[] = {
+                "not decided", "report (simple layout with a wheel)",
+                "boot (report layout not the simple one)",
+                "boot (simple layout, no wheel)",
+                "boot (report descriptor unreadable)" };
+            const z_usbh_mlay_t *l = &devs[i].mlay;
+            printf("%smouse protocol: %s\n", pre,
+                   why[devs[i].mouse_rd < 5 ? devs[i].mouse_rd : 0]);
+            if (devs[i].mouse_rd != MRD_NONE && devs[i].mouse_rd != MRD_BOOT_FAIL)
+                printf("%s  report layout: buttons %d at bit %d, x %d@%d, "
+                       "y %d@%d, wheel %d@%d%s\n", pre, l->btn_n, l->btn_bit,
+                       l->x_sz, l->x_bit, l->y_sz, l->y_bit, l->w_sz, l->w_bit,
+                       l->has_id ? ", report IDs" : "");
+            printf("%smouse register %08lx, wheel counter %d, polls %lu "
+                   "bytes\n", pre, (unsigned long)mr,
+                   (int)(int8_t)(mr >> 24), (unsigned long)((pa >> 15) & 0x7f));
+            printf("%s  last report:", pre);
+            for (k = 0; k < 8; k++)
+                printf(" %02x", z_usbh_rb(Z_USBH_BUF + off + (uint32_t)k));
+            printf("\n");
+        }
     }
 
     for (j = Z_USBH_MAX_PORTS; j < Z_USBH_MAX_DEVS; j++) {

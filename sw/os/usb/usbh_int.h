@@ -72,6 +72,24 @@
 // CDC-ACM class requests between SET_CONFIGURATION and binding.
 #define E_CDC_LINE      20  // SET_LINE_CODING
 #define E_CDC_DTR       21  // SET_CONTROL_LINE_STATE
+#define E_HID_RDESC     22  // a mouse's report descriptor, to pick its protocol
+
+// -- a mouse's input report, as its report descriptor lays it out --
+//
+// Bit positions from the start of the report, -1 if absent. Filled by
+// z_usbh_hid_rdesc_parse() (usbh_hid.c).
+typedef struct {
+    int16_t btn_bit, x_bit, y_bit, w_bit;
+    uint8_t btn_n, x_sz, y_sz, w_sz;
+    uint8_t has_id;         // the device uses report IDs
+} z_usbh_mlay_t;
+
+// mouse_rd: which protocol a mouse was left in, and why.
+#define MRD_NONE        0   // not a mouse, or not decided
+#define MRD_REPORT      1   // report protocol: simple layout with a wheel
+#define MRD_BOOT_LAYOUT 2   // boot: the report layout is not the simple one
+#define MRD_BOOT_NOWHL  3   // boot: simple layout, but no wheel
+#define MRD_BOOT_FAIL   4   // boot: the descriptor could not be read
 
 typedef struct {
     uint8_t state;
@@ -195,6 +213,11 @@ typedef struct {
     // progress, the byte in flight and the one last confirmed.
     uint8_t led_anim, led_busy, led_cur, led_sent, led_valid, led_tries;
     uint32_t led_deadline;
+    // Mice: what the report descriptor said (usbh_hid.c,
+    // z_usbh_hid_rdesc_parse()) and the protocol chosen from it --
+    // MRD_* below. lsusb shows both.
+    uint8_t mouse_rd;
+    z_usbh_mlay_t mlay;
 
     // -- hub class driver, usbh_hub.c; meaningful only for a hub --
     uint8_t h_state;

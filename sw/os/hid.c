@@ -114,9 +114,11 @@ void k_hid_wake_subscriber(void) {
 // Num/Caps/Scroll Lock, toggled here on each press of the key, shared by
 // both keyboard blocks as on any desktop. Carried in every event
 // (above), and sent to every attached keyboard's LEDs through the USB
-// host driver (usb/usbh.c, z_usbh_kbd_leds()). Num Lock starts on --
-// see zkbd.h.
-static volatile uint8_t hid_locks = Z_KBD_LOCK_NUM;
+// host driver (usb/usbh.c, z_usbh_kbd_leds()). All start OFF -- Num
+// Lock included: on a compact keyboard the keyboard's own firmware
+// turns a block of letter keys into an embedded keypad while the host
+// says Num Lock is on. See zkbd.h.
+static volatile uint8_t hid_locks = 0;
 
 static void hid_lock_key(uint8_t usage) {
 	uint8_t bit = usage == Z_HID_USAGE_NUMLOCK    ? Z_KBD_LOCK_NUM :

@@ -1984,6 +1984,11 @@ int main(void) {
 			} else if (msg.subject == Z_WM_MOUSE) {
 				if (msg.obj.type == Z_UINT32)
 					handle_mouse_event(msg.obj.val.uint32);
+			} else if (msg.subject == Z_WM_WHEEL) {
+				// Three lines a notch through the history, up = back,
+				// as desktop terminals do.
+				if (msg.obj.type == Z_UINT32)
+					view_scroll_by(3 * Z_WM_WHEEL_NOTCHES(msg.obj.val.uint32));
 			} else if (msg.subject == Z_WM_KEY) {
 				handle_key_event(msg.obj.val.uint32);
 			} else if (msg.subject == Z_PORT_DATA) {

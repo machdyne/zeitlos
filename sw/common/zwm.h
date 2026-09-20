@@ -328,6 +328,22 @@
 // near-identical notifications.
 #define Z_WM_TITLEBAR_ICON       110
 
+// wm -> app: the mouse's scroll wheel turned. obj is a Z_UINT32 holding
+// a SIGNED count of notches, as an int32_t -- Z_WM_WHEEL_NOTCHES()
+// below. Positive is away from the user (scroll up / back), negative
+// toward (down / forward), the HID convention.
+//
+// Sent to the window that owns the pointer, by the same rules as
+// Z_WM_MOUSE. NOT coalesced, unlike Z_WM_MOUSE: notches are deltas and
+// every one counts, so an app should act on each message, not just the
+// last. The wheel is read from the mouse register's top byte, a
+// hardware accumulator that counts only for a mouse whose report
+// descriptor confirmed a wheel -- report protocol, simple layout
+// (docs/user_input.md, "Scroll wheel"). A mouse without one, or in boot
+// protocol, or on the older usb_hid_host core, sends none of these.
+#define Z_WM_WHEEL               121
+#define Z_WM_WHEEL_NOTCHES(u)    ((int32_t)(uint32_t)(u))
+
 // which icon a Z_WM_TITLEBAR_ICON refers to. Deliberately starts at 1
 // so that 0 is never a valid kind -- see wm.c's hit_titlebar_icon(),
 // which returns 0 for "no icon here" and would otherwise have to

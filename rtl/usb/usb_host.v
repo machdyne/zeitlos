@@ -267,6 +267,11 @@ module usb_host #(
     reg [3:0] cap_idx;
 
     reg [1:0] hid_in_mode;
+    // Poll mode bit 2: byte 3 of this mouse's report is a wheel the
+    // driver has confirmed from the report descriptor (report
+    // protocol). In boot protocol the report is three bytes by spec and
+    // anything after them is undefined, so the wheel is not counted.
+    reg hid_in_wheel;
     reg hid0_valid;
     reg hid1_valid;
 
@@ -796,6 +801,8 @@ module usb_host #(
         .clk(wb_clk_i), .rst(wb_rst_i),
         .in_valid(hid0_valid), .in_mode(hid_in_mode),
         .in_b0(cap0), .in_b1(cap1), .in_b2(cap2), .in_b3(cap3),
+        .in_len(cap_idx),
+        .in_wheel(hid_in_wheel),
         .in_b4(cap4), .in_b5(cap5), .in_b6(cap6), .in_b7(cap7),
         .typ_we(typ0_we), .typ_i(typ_wval),
         .reg_info(hid0_info), .reg_keys(hid0_keys),
@@ -809,6 +816,8 @@ module usb_host #(
         .clk(wb_clk_i), .rst(wb_rst_i),
         .in_valid(hid1_valid), .in_mode(hid_in_mode),
         .in_b0(cap0), .in_b1(cap1), .in_b2(cap2), .in_b3(cap3),
+        .in_len(cap_idx),
+        .in_wheel(hid_in_wheel),
         .in_b4(cap4), .in_b5(cap5), .in_b6(cap6), .in_b7(cap7),
         .typ_we(typ1_we), .typ_i(typ_wval),
         .reg_info(hid1_info), .reg_keys(hid1_keys),
@@ -1142,6 +1151,7 @@ module usb_host #(
                         irqstat[3] <= 1'b1;
                     end else if (poll_mode != 3'd0) begin
                         hid_in_mode <= poll_mode[1:0];
+                        hid_in_wheel <= poll_mode[2];
                         if (poll_b[poll_slot][15:14] == 2'd0)
                             hid0_valid <= 1'b1;
                         else
