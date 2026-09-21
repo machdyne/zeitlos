@@ -170,6 +170,23 @@
  */
 #define Z_AUDIO_CH_FMT16 (1u << 18)
 
+/*
+ * The speech channel.
+ *
+ * While the tts service is running (the pid name "tts0" is registered
+ * -- sw/common/ztts.h), it streams speech on this mixer channel. An
+ * app that programs or clears every channel must leave this one alone
+ * while speech is on, so that someone who cannot see the screen can
+ * still hear it with music playing. With speech off, every channel is
+ * the app's, exactly as before. Check once, when claiming the mixer:
+ *
+ *     uint32_t pid;
+ *     bool speech = z_pid_lookup(Z_TTS_SERVICE, &pid);
+ *
+ * See docs/tts.md, "Audio", and docs/audio.md, "Arbitration".
+ */
+#define Z_AUDIO_CH_SPEECH 7
+
 /* Fractional bits in CH_STEP and in the mixer's phase accumulator.
  * MUST match FRAC_BITS in rtl/audio_mixer.v -- there is no shared
  * source, and a mismatch is a pitch error, not a failure. */

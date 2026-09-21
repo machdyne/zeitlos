@@ -442,6 +442,7 @@ void synth_init(synth_t *sy, uint32_t out_hz, int bits) {
     sy->out_hz = out_hz ? out_hz : 44100;
     sy->bits = (bits == 16) ? 16 : 8;
     sy->master = 48;
+    sy->nvoices = SYNTH_VOICES;
     synth_reset(sy);
 }
 
@@ -502,10 +503,10 @@ static synth_voice_t *alloc_voice(synth_t *sy) {
     int i, best = -1;
     int32_t best_level = 0;
 
-    for (i = 0; i < SYNTH_VOICES; i++)
+    for (i = 0; i < sy->nvoices; i++)
         if (sy->voice[i].stage == ENV_OFF) return &sy->voice[i];
 
-    for (i = 0; i < SYNTH_VOICES; i++) {
+    for (i = 0; i < sy->nvoices; i++) {
         if (sy->voice[i].stage != ENV_RELEASE) continue;
         if (best < 0 || sy->voice[i].level < best_level) {
             best = i;
@@ -514,7 +515,7 @@ static synth_voice_t *alloc_voice(synth_t *sy) {
     }
     if (best >= 0) return &sy->voice[best];
 
-    for (i = 0; i < SYNTH_VOICES; i++) {
+    for (i = 0; i < sy->nvoices; i++) {
         if (best < 0 || sy->voice[i].level < best_level
             || (sy->voice[i].level == best_level
                 && sy->voice[i].age < sy->voice[best].age)) {

@@ -214,6 +214,11 @@ a global registry. Convention so far:
   "this is a create-window request"). Each subsystem defines its own
   constants (see `Z_WM_*` in `sw/common/zwm.h` for the window
   manager's).
+- A subject that might reach the wrong process should be chosen so
+  that no other process has a case for it. The speech protocol
+  (`sw/common/ztts.h`) uses `0x5454xxxx` for exactly this reason: its
+  clients cache the service's pid, and a cached pid can briefly name a
+  newer process after the service exits. See `docs/tts.md`, "Cost".
 - `tag` is available for matching a reply to a specific outstanding
   request when a process might have more than one in flight. The
   ping/pong and window-manager demos don't need it yet (each process
@@ -561,7 +566,10 @@ Two changes, and both matter:
 
 The rule to take from this: **if a message is sent in response to
 something the user can do repeatedly, its payload must not be
-allocated.** Use a packed scalar (`Z_WM_REDRAW`, `Z_WM_MOUSE` and
+allocated.** (`sw/common/zspeak.c` is a third instance: every
+`z_speak()` string goes through a four-slot static ring, because a
+focus change is the most repeatable thing there is -- see
+`docs/tts.md`.) Use a packed scalar (`Z_WM_REDRAW`, `Z_WM_MOUSE` and
 `Z_WM_KEY` all do) or static storage. The leak is invisible until the
 process dies, and the crash lands nowhere near the cause.
 

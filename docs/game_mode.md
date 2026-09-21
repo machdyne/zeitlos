@@ -168,8 +168,13 @@ would move the window and the viewport would never move at all.
 
 Pointer following is behind Super because a full-screen game may well
 use the mouse, and a viewport that chased the pointer unprompted would
-fight it constantly. Super is the one modifier nothing else in the
-window manager binds.
+fight it constantly. Super was the one modifier nothing else in the
+window manager bound, and it is now the accessibility modifier in
+general: Super with a letter drives speech ([tts.md](tts.md) --
+Super+S/A/C/W/R). The two do not overlap. The magnifier is a level test
+on the held modifier in the pointer path; the speech keys are key
+events in `dispatch_keys()`, and pressing one while panning does both
+harmlessly.
 
 Entering game mode centres the viewport rather than starting at the
 origin: the dock is bottom-left and windows cascade from the top-left,

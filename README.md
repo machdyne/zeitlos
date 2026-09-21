@@ -44,6 +44,7 @@ Build the hardware map from RTL with `make hwmap` (see [docs/hwmap.md](docs/hwma
  - FAT filesystem, on MicroSD and on an optional [RAM disk](docs/ramdisk.md)
  - [Core apps in flash](docs/flash_apps.md) -- boots to a desktop with no sdcard
  - Object-based interprocess [messaging](docs/messaging.md), streaming and [ports](docs/ports.md)
+ - [Speech](docs/tts.md) for blind and headless use
  - Image decoding and [vector rendering](docs/svg.md) shared by every app (`sw/common`)
  - IP/ARP/ICMP/UDP/DHCP/NTP/DNS/TFTP/TCP/telnet/ssh [networking](docs/networking.md)
  - TLS 1.3 with X.509 certificate verification -- see [tls](docs/tls.md) and [x509](docs/x509.md)
@@ -65,7 +66,7 @@ With the MTU, there is no need for position independent code or complicated addr
 |-----|-------------|
 | kernel | Kernel + kernel shell (serial console) |
 | [wm](docs/window_manager.md) | Window manager + dock |
-| [net](docs/networking.md) | Networking server |
+| [net](docs/networking.md) | Networking service |
 | [term](docs/terminal.md) | Terminal emulator (VT100; start panel, scrollback; connects to shells and services) |
 
 #### Shells
@@ -74,7 +75,7 @@ On the sdcard, started at boot when a card is present. A `term` window can conne
 
 | App | Description |
 |-----|-------------|
-| [repl](docs/scheme_api.md) | App server + [Lisp interpreter (subset of R4RS Scheme)](https://github.com/machdyne/ms) |
+| [repl](docs/scheme_api.md) | App service + [Lisp interpreter (subset of R4RS Scheme)](https://github.com/machdyne/ms) |
 | [posix](docs/posix.md) | POSIX compatibility layer |
 
 #### Windowed Apps
@@ -121,7 +122,8 @@ On the sdcard, started at boot when a card is present. A `term` window can conne
 
 | App | Description |
 |-----|-------------|
-| [serial](docs/uart1.md) | Serial port server |
+| [serial](docs/uart1.md) | Serial port service |
+| [tts](docs/tts.md) | Text-to-speech service (Super+S to turn speech on) |
 | [zcc](docs/zcc.md) | C compiler |
 | vi | Port of the [nextvi](https://github.com/kyx0r/nextvi) terminal text editor |
 

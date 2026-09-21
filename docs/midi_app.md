@@ -698,3 +698,10 @@ measuring if polyphony proves to be the binding limit.
 this app would need to change except where events come from.
 
 **An audio server.** Three apps now want the mixer exclusively.
+
+## Speech
+
+While the speech service is running, mixer channel 7 belongs to it
+(`Z_AUDIO_CH_SPEECH`, `sw/common/zaudio.h`), and this app leaves it
+alone -- decided once, when the app claims the mixer. See
+[tts.md](tts.md), "Audio".

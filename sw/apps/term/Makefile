@@ -51,7 +51,7 @@ endif
 SCROLLBACK ?= 200
 override CFLAGS += -DTERM_HIST_LINES=$(SCROLLBACK)
 
-OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zkbd.o zvt100.o \
+OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o zkbd.o zvt100.o \
 	zport.o zdns.o zconnect.o zcfg.o term.o
 
 term: term.elf term.bin
@@ -73,6 +73,9 @@ zwin.o:
 
 # The start panel's buttons and the scrollback scrollbar. Section GC
 # drops the widget kinds term never uses (sliders, swatches).
+zspeak.o:
+	$(CC) $(CFLAGS) -c ../../common/zspeak.c -o zspeak.o
+
 zwidget.o:
 	$(CC) $(CFLAGS) -c ../../common/zwidget.c -o zwidget.o
 

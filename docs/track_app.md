@@ -226,3 +226,10 @@ and it plays the wrong memory.
 
 `docs/audio.md` for the hardware: the mixer, the FIFO, the output
 stages, and why an S/PDIF board runs at 46875 Hz.
+
+## Speech
+
+While the speech service is running, mixer channel 7 belongs to it
+(`Z_AUDIO_CH_SPEECH`, `sw/common/zaudio.h`), and this app leaves it
+alone -- decided once, when the app claims the mixer. See
+[tts.md](tts.md), "Audio".

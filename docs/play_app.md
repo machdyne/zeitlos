@@ -833,3 +833,10 @@ machine that means it will not play in real time — say so in
 Then a group in `play_test.c`, with a synthesised fixture whose correct
 output can be stated in one sentence. If it cannot be stated in one
 sentence, resolve that before writing the decoder.
+
+## Speech
+
+While the speech service is running, mixer channel 7 belongs to it
+(`Z_AUDIO_CH_SPEECH`, `sw/common/zaudio.h`), and this app leaves it
+alone -- decided once, when the app claims the mixer. See
+[tts.md](tts.md), "Audio".

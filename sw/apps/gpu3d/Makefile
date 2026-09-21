@@ -46,7 +46,7 @@ LDSCRIPT = ../../common/riscv-app.ld
 # zfsapp.o is what stl.c reads files through, and is also needed by
 # zflist.o (the file browser inside the dialog). zfont_data.o arrived
 # with the FPS readout -- this app drew no text at all before.
-OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o \
+OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o \
 	zfsapp.o zflist.o zdialog.o zedit.o stl.o gpu3d.o
 
 gpu3d: gpu3d.elf gpu3d.bin
@@ -65,6 +65,9 @@ zfont_data.o:
 
 zwin.o:
 	$(CC) $(CFLAGS) -c ../../common/zwin.c -o zwin.o
+
+zspeak.o:
+	$(CC) $(CFLAGS) -c ../../common/zspeak.c -o zspeak.o
 
 zwidget.o:
 	$(CC) $(CFLAGS) -c ../../common/zwidget.c -o zwidget.o

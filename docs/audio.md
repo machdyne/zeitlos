@@ -1426,7 +1426,9 @@ Software side, in `sw/apps/track/Makefile`:
   startup, stopping the others dead. That is deliberate in each of
   them (a player that left `MIXEN` where it found it would produce
   silence with no indication why) but it is a workaround for a missing
-  service, not a design.
+  service, not a design. One exception now exists: while the speech
+  service runs, all three leave channel 7 (`Z_AUDIO_CH_SPEECH`) to it,
+  and `midi` plays seven voices -- see [tts.md](tts.md), "Audio".
 - **Editing.** `track` is a player. Pattern editing is real UI work and
   wants its own pass.
 - **`CTRL` bit 5**, reserved for enabling the digital output

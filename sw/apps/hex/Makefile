@@ -37,7 +37,7 @@ LDSCRIPT = ../../common/riscv-app.ld
 
 # zfsapp.o is needed by zflist.o (the file browser inside the dialogs)
 # as well as by hex.c itself.
-OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o \
+OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o \
 	zfsapp.o zflist.o zdialog.o zedit.o hex.o
 
 hex: hex.elf hex.bin
@@ -56,6 +56,9 @@ zfont_data.o:
 
 zwin.o:
 	$(CC) $(CFLAGS) -c ../../common/zwin.c -o zwin.o
+
+zspeak.o:
+	$(CC) $(CFLAGS) -c ../../common/zspeak.c -o zspeak.o
 
 zwidget.o:
 	$(CC) $(CFLAGS) -c ../../common/zwidget.c -o zwidget.o

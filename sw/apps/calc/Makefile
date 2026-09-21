@@ -36,7 +36,7 @@ LDSCRIPT = ../../common/riscv-app.ld
 # test suite below can build it for the host -- see calc_test.c.
 # zfix.o is the arithmetic itself, shared with sw/apps/sheet
 # (sw/common/zfix.c).
-OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o \
+OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o \
 	zfix.o calc_core.o calc.o
 
 calc: calc.elf calc.bin
@@ -55,6 +55,9 @@ zfont_data.o:
 
 zwin.o:
 	$(CC) $(CFLAGS) -c ../../common/zwin.c -o zwin.o
+
+zspeak.o:
+	$(CC) $(CFLAGS) -c ../../common/zspeak.c -o zspeak.o
 
 zwidget.o:
 	$(CC) $(CFLAGS) -c ../../common/zwidget.c -o zwidget.o

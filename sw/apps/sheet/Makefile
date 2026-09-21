@@ -41,7 +41,7 @@ LDSCRIPT = ../../common/riscv-app.ld
 # host. zfix.o is the fixed-point arithmetic, shared with sw/apps/calc.
 # ztype.o is only for z_ftype_ext(), which is how a .CSV is told from a
 # .ZSS on the way in and out.
-OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o \
+OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o \
 	zfsapp.o zflist.o zdialog.o zedit.o zfix.o ztype.o sheet_core.o sheet.o
 
 sheet: sheet.elf sheet.bin
@@ -60,6 +60,9 @@ zfont_data.o:
 
 zwin.o:
 	$(CC) $(CFLAGS) -c ../../common/zwin.c -o zwin.o
+
+zspeak.o:
+	$(CC) $(CFLAGS) -c ../../common/zspeak.c -o zspeak.o
 
 zwidget.o:
 	$(CC) $(CFLAGS) -c ../../common/zwidget.c -o zwidget.o

@@ -16,7 +16,7 @@ override CFLAGS += --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) $(ARCH_
 LDFLAGS = -march=$(ARCH) -mabi=$(ABI) $(LIBC_FLAGS)
 LDSCRIPT = ../../common/riscv-app.ld
 
-OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o \
+OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o \
 	zsoc.o zgpio.o zspi.o zmmod.o zfsapp.o zflist.o zdialog.o zedit.o mmod.o
 
 mmod: mmod.elf mmod.bin
@@ -38,6 +38,9 @@ zfont_data.o:
 
 zwin.o:
 	$(CC) $(CFLAGS) -c ../../common/zwin.c -o zwin.o
+
+zspeak.o:
+	$(CC) $(CFLAGS) -c ../../common/zspeak.c -o zspeak.o
 
 zwidget.o:
 	$(CC) $(CFLAGS) -c ../../common/zwidget.c -o zwidget.o

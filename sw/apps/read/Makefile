@@ -53,7 +53,7 @@ LDSCRIPT = ../../common/riscv-app.ld
 
 # md.o is the Markdown parser, deliberately free of I/O so the test
 # suite below can build it for the host -- see md_test.c.
-OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o \
+OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o \
 	zfsapp.o zflist.o zdialog.o zedit.o ztype.o md.o read.o
 
 read: read.elf read.bin
@@ -72,6 +72,9 @@ zfont_data.o:
 
 zwin.o:
 	$(CC) $(CFLAGS) -c ../../common/zwin.c -o zwin.o
+
+zspeak.o:
+	$(CC) $(CFLAGS) -c ../../common/zspeak.c -o zspeak.o
 
 zwidget.o:
 	$(CC) $(CFLAGS) -c ../../common/zwidget.c -o zwidget.o

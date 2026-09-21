@@ -41,7 +41,7 @@ LDSCRIPT = ../../common/riscv-app.ld
 # as well as by text.c itself, and zdialog.o/zflist.o are what make
 # this the first app to link either.
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o \
-	zfsapp.o zflist.o zdialog.o zedit.o text.o
+	zfsapp.o zflist.o zdialog.o zedit.o zspeak.o zsayall.o text.o
 
 text: text.elf text.bin
 
@@ -62,6 +62,13 @@ zwin.o:
 
 zwidget.o:
 	$(CC) $(CFLAGS) -c ../../common/zwidget.c -o zwidget.o
+
+# Super+A reads the document aloud -- docs/tts.md
+zspeak.o:
+	$(CC) $(CFLAGS) -c ../../common/zspeak.c -o zspeak.o
+
+zsayall.o:
+	$(CC) $(CFLAGS) -c ../../common/zsayall.c -o zsayall.o
 
 zfsapp.o:
 	$(CC) $(CFLAGS) -c ../../common/zfsapp.c -o zfsapp.o

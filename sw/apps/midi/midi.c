@@ -52,6 +52,7 @@
 #include "../../common/zeitlos.h"
 #include "../../common/zsoc.h"
 #include "../../common/zaudio.h"
+#include "../../common/ztts.h"
 #include "../../common/zfsapp.h"
 #include "../../common/zkbd.h"
 #include "../../common/zwm.h"
@@ -283,10 +284,18 @@ static const struct { const char *key; const char *what; } help_keys[] = {
  * a channel left running by a killed process is still fetching from
  * memory the kernel has since handed to somebody else.
  */
+/* The mixer channel speech is using, or -1: while the tts service
+ * runs, voice 7 -- which is channel 7 -- is never allocated and never
+ * written (zaudio.h, Z_AUDIO_CH_SPEECH). Decided once, here. */
+static int speech_ch = -1;
+
 static void audio_claim(void) {
     int c;
+    uint32_t tts_pid;
     mix_avail = z_audio_mixer_present();
-    for (c = 0; c < 8; c++) Z_AUDIO_CH_CTRL(c) = 0;
+    speech_ch = z_pid_lookup(Z_TTS_SERVICE, &tts_pid) ? Z_AUDIO_CH_SPEECH : -1;
+    for (c = 0; c < 8; c++)
+        if (c != speech_ch) Z_AUDIO_CH_CTRL(c) = 0;
     z_audio_mixer_enable(mix_avail);
 }
 
@@ -311,6 +320,7 @@ static uint32_t last_ctrl[SYNTH_VOICES];
 static uint32_t last_step[SYNTH_VOICES];
 
 static void ch_ctrl_write(int c, uint32_t v) {
+    if (c == speech_ch) return;
     if (last_ctrl[c] == v) return;
     last_ctrl[c] = v;
     Z_AUDIO_CH_CTRL(c) = v;
@@ -319,7 +329,7 @@ static void ch_ctrl_write(int c, uint32_t v) {
 static void voices_silence(void) {
     int c;
     for (c = 0; c < SYNTH_VOICES; c++) {
-        Z_AUDIO_CH_CTRL(c) = 0;
+        if (c != speech_ch) Z_AUDIO_CH_CTRL(c) = 0;
         last_ctrl[c] = 0;
         last_step[c] = 0;
     }
@@ -1586,6 +1596,11 @@ int main(void) {
     bank_bits = z_audio_mixer_fmt16() ? 16 : 8;
     synth_build_bank(wavebank, bank_bits);
     synth_init(&sy, out_hz, bank_bits);
+    if (speech_ch >= 0) {
+        sy.nvoices = SYNTH_VOICES - 1;
+        printf("midi: speech is on -- leaving mixer channel %d to it, %d voices\n",
+            speech_ch, SYNTH_VOICES - 1);
+    }
     synth_set_master(&sy, (uint8_t)volume);
 
     arg[0] = 0;

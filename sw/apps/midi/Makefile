@@ -47,7 +47,7 @@ LDSCRIPT = ../../common/riscv-app.ld
 
 # zfsapp.o is needed by zflist.o (the file browser inside the open
 # dialog) as well as by midi.c's own file loading.
-OBJS = zeitlos.o zobj.o zsoc.o zgfx.o zfont_data.o zwin.o zwidget.o \
+OBJS = zeitlos.o zobj.o zsoc.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o \
 	zfsapp.o zflist.o zdialog.o zedit.o zkbd.o \
 	smf.o synth.o midi_icons.o midi.o
 
@@ -65,6 +65,9 @@ zfont_data.o:
 	$(CC) $(CFLAGS) -c ../../common/zfont_data.c -o zfont_data.o
 zwin.o:
 	$(CC) $(CFLAGS) -c ../../common/zwin.c -o zwin.o
+zspeak.o:
+	$(CC) $(CFLAGS) -c ../../common/zspeak.c -o zspeak.o
+
 zwidget.o:
 	$(CC) $(CFLAGS) -c ../../common/zwidget.c -o zwidget.o
 zfsapp.o:

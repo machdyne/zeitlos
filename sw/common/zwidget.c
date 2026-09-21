@@ -18,6 +18,7 @@
 #include "zgfx.h"
 #include "zfont.h"
 #include "zwidget.h"
+#include "zspeak.h"
 #include "zkbd.h"		// Z_KEY_*, for the list box
 #include "zsoc.h"		// Z_TICK_HZ, for its type-to-find timeout
 
@@ -399,7 +400,64 @@ void z_widget_focus_set(z_widget_set_t *set, int idx) {
 
 	set->focused = idx;
 
-	if (idx >= 0) set->items[idx].dirty = true;
+	if (idx >= 0) {
+		set->items[idx].dirty = true;
+		z_widget_announce(&set->items[idx]);
+	}
+
+}
+
+// -- speech --
+//
+// Says what the keyboard focus just landed on: its name, what it is,
+// and anything about its state a sighted user would see at a glance.
+// Every app using this toolkit gets it, which is the point -- an
+// announcement that each app had to add would be an announcement most
+// apps never had.
+//
+// Costs about fourteen instructions when speech is off (zspeak.h), so
+// there is nothing to switch off and nothing to configure.
+void z_widget_announce(const z_widget_t *w) {
+
+	if (!w || !z_speak_available()) return;
+
+	char line[Z_SPEAK_SLOT_MAX];
+	uint32_t n = 0;
+
+	// Name first: it is what the user is looking for, and an
+	// interrupted announcement should still have said it.
+	if (w->label) {
+		while (w->label[n] && n < sizeof(line) - 24) {
+			line[n] = w->label[n];
+			n++;
+		}
+	}
+	line[n] = 0;
+
+	static const char *const role[] = {
+		", button", ", check box", ", colour", ", slider",
+	};
+	const char *r = (w->type <= Z_WIDGET_SLIDER) ? role[w->type] : "";
+
+	// State, for the widgets that have one. A slider says its value,
+	// because "volume, slider" without a number says nothing useful.
+	char tail[40];
+	tail[0] = 0;
+	if (w->type == Z_WIDGET_TOGGLE)
+		z_speak_cat(tail, sizeof(tail), w->on ? ", checked" : ", not checked");
+	else if (w->type == Z_WIDGET_SLIDER) {
+		z_speak_cat(tail, sizeof(tail), ", ");
+		z_speak_num(tail, sizeof(tail), w->value);
+	}
+	if (!w->enabled)
+		z_speak_cat(tail, sizeof(tail), ", dimmed");
+
+	z_speak_cat(line, sizeof(line), r);
+	z_speak_cat(line, sizeof(line), tail);
+
+	// Focus moves fast -- holding Tab should speak where you land, not
+	// everything you passed.
+	z_speak(line, Z_TTS_F_INTERRUPT);
 
 }
 
@@ -1012,9 +1070,33 @@ void z_listbox_select(z_listbox_t *lb, int index) {
 	if (index >= lb->count) index = lb->count - 1;
 	if (index < -1) index = -1;
 
+	bool moved = (lb->sel != index);
+
 	lb->sel = index;
 	lb_scroll_to(lb, index);
 	lb->dirty = true;
+
+	// Says the row, and where it is in the list -- "readme.txt, 3 of
+	// 12". The position is the part a sighted user gets from the
+	// scrollbar and nobody else gets at all.
+	//
+	// Only when the list has keyboard focus: a list that scrolls
+	// because something else changed is not the user moving through
+	// it, and would talk over whatever they were listening to.
+	if (moved && index >= 0 && lb->focused && lb->label &&
+	    z_speak_available()) {
+
+		const char *row = lb->label(lb->user, index);
+		char line[Z_SPEAK_SLOT_MAX];
+		line[0] = 0;
+		z_speak_cat(line, sizeof(line), row ? row : "");
+		z_speak_cat(line, sizeof(line), ", ");
+		z_speak_num(line, sizeof(line), index + 1);
+		z_speak_cat(line, sizeof(line), " of ");
+		z_speak_num(line, sizeof(line), lb->count);
+		z_speak(line, Z_TTS_F_INTERRUPT);
+
+	}
 
 }
 

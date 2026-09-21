@@ -10,6 +10,9 @@
 
 # Build products (BIOS, kernel, apps)
 *.o
+# Dependency files from -MD (the kernel's USB drivers leave them
+# beside their sources)
+*.d
 *.elf
 *.map
 *.asm

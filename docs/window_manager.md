@@ -823,6 +823,31 @@ from the dock) has a keyboard equivalent, all handled directly in
   all (crashes early, isn't a GUI app, etc) -- otherwise a single bad
   launch would permanently strand that icon.
 
+### Speech keys
+
+The same section of `dispatch_keys()` owns the speech keys, for the
+same reason: they are about the desktop, not about any one app.
+
+| key | action |
+|---|---|
+| Super+S | speech on / off -- starts `sw/apps/tts`, or sends it `Z_TTS_QUIT` |
+| Super+A | read the focused window -- `Z_WM_READ` to its owner if it has `Z_WIN_FLAG_READABLE`, otherwise the title and "No readable text" |
+| Super+C | speak the clipboard (sent straight from wm's own buffer, no copy) |
+| Super+W | the window or dock icon under the pointer; the focused window when no mouse is attached |
+| Super+R | repeat the last utterance |
+| Ctrl, tapped alone | stop speaking |
+
+`speech_hotkey()` is tested before every other global hotkey, and only
+matches with Super held and neither Ctrl nor Alt, so it cannot shadow
+any of them. `speech_ctrl_tap()` sees every event first, before the
+keysym translation, because a bare Ctrl has no keysym. With speech off
+every one of these except Super+S is a `z_speak*()` call that returns
+in a few instructions, but they are consumed regardless. Full
+description: [tts.md](tts.md).
+
+`z_proc_run("tts")` blocks wm while the service loads, the same as a
+dock launch; it is small and loads quickly.
+
 ## App protocol
 
 See `sw/common/zwm.h` for the exact subject constants and payload
@@ -841,6 +866,7 @@ shapes. Summary:
 | wm → app | `Z_WM_TITLEBAR_ICON` | packed `Z_UINT32` (`Z_WM_PACK_TBICON`) | a new/save/open/font titlebar icon was clicked |
 | wm → app | `Z_WM_SET_CLIP` | `Z_BLOB` of `z_wm_cliprect_t[]`, led by a control rectangle naming the window | the part of this window not covered by the windows in front of it, or a command about its clip |
 | app → wm | `Z_WM_CLIP_DONE` | `Z_UINT32` (window id, plus `Z_WM_CLIP_DONE_DREW`) | acknowledges a `Z_WM_SET_CLIP` |
+| wm → app | `Z_WM_READ` | `Z_UINT32` (window id) | Super+A on a window created with `Z_WIN_FLAG_READABLE`: start reading it aloud, or stop -- see [tts.md](tts.md), "Reading a window" |
 
 **Every windowed app must handle `Z_WM_SET_CLIP`.** Three lines:
 

@@ -36,6 +36,7 @@
 #include "../../common/zgfx.h"
 #include "../../common/zkbd.h"
 #include "../../common/zicon.h"
+#include "../../common/zspeak.h"	// speech -- docs/tts.md
 #include "dock_icons.h"
 #include "win_icons.h"
 
@@ -252,6 +253,10 @@ static wm_window_t windows[WM_MAX_WINDOWS];
 // compared directly against Z_PID_WM, which only ever worked because
 // that assumption happened to hold in practice.
 static uint32_t my_pid;
+
+// defined with the rest of the speech code, below
+static void speak_focus(int idx);
+static void speak_dock_selection(void);
 
 // -- pending launch argument -- see Z_WM_SET_ARG in zwm.h --
 //
@@ -1956,9 +1961,11 @@ static bool dock_handle_key(uint32_t keysym, bool pressed) {
 				else dock_selected--;
 			}
 
-			if (dock_selected != old_selected)
+			if (dock_selected != old_selected) {
 				repair_region(windows[dock_idx].x, windows[dock_idx].y,
 					windows[dock_idx].w, windows[dock_idx].h, -1);
+				speak_dock_selection();
+			}
 
 		} else if (dock_selected == DOCK_SEL_NEXT) {
 			dock_set_page(dock_page + 1);
@@ -2671,6 +2678,7 @@ static void alt_tab(void) {
 	// see create_dock()'s call site in main() for why that changed.
 	bring_to_front(focused);
 	repair_focus_chrome(old_focused, focused);
+	speak_focus(focused);
 
 }
 
@@ -2925,6 +2933,296 @@ static void game_follow_pointer(int mx, int my) {
 
 }
 
+// -- speech: the Super keys -- docs/tts.md --
+//
+// wm is where these live for the same reason Alt+Tab does: they are
+// about the desktop rather than about any one app, and wm is the only
+// process that sees every keystroke before an app does.
+//
+//   Super+S   speech on / off (starts sw/apps/tts, or tells it to quit)
+//   Super+A   read the focused window (Z_WM_READ, zwm.h)
+//   Super+C   speak the clipboard
+//   Super+W   what is under the pointer (the focused window, with no mouse)
+//   Super+R   repeat the last thing said
+//   Ctrl      tapped on its own: stop speaking
+//
+// Super rather than Alt or Ctrl+Alt: nothing else in the system uses
+// Super with a key, and game mode already uses it (held, with the
+// mouse) for the magnifier -- the one other accessibility feature --
+// so the modifier means "the system's own assistive functions".
+//
+// With speech off, every one of these but Super+S is a z_speak*()
+// call that returns in a few instructions (zspeak.h). They are still
+// consumed rather than forwarded, so the keys behave the same whether
+// or not speech happens to be on.
+
+// Armed by a Ctrl press with no other modifier held, disarmed by any
+// other press in between, fired by the Ctrl release -- so Ctrl+C in a
+// terminal never stops speech, and a lone tap always does. This is the
+// convention every mainstream screen reader uses.
+static bool speech_ctrl_armed;
+
+// defined further down, with the rest of the pointer hit testing
+static int hit_test(int cx, int cy);
+
+
+// The dock's filenames are what z_proc_run() needs, not what a person
+// wants to hear. Only the ones that do not already read as a word are
+// listed; anything missing is spoken as its filename.
+static const char *dock_spoken_name(const char *name) {
+	static const char *const map[][2] = {
+		{ "term",     "Terminal" },
+		{ "text",     "Text editor" },
+		{ "read",     "Reader" },
+		{ "web",      "Web browser" },
+		{ "sheet",    "Spreadsheet" },
+		{ "view",     "Image viewer" },
+		{ "track",    "MOD player" },
+		{ "midi",     "MIDI player" },
+		{ "play",     "Audio player" },
+		{ "calc",     "Calculator" },
+		{ "cal",      "Calendar" },
+		{ "info",     "System info" },
+		{ "hex",      "Hex editor" },
+		{ "kidgames", "Kid games" },
+		{ "chip8",    "Chip 8" },
+		{ "space3d",  "Space 3D" },
+		{ "gpu3d",    "GPU 3D" },
+		{ "gamedemo", "Game demo" },
+	};
+	for (unsigned i = 0; i < sizeof(map) / sizeof(map[0]); i++)
+		if (strcmp(map[i][0], name) == 0) return map[i][1];
+	return name;
+}
+
+// Bounded append; the buffer is always left NUL-terminated. Not
+// snprintf(): wm does not otherwise link it, and this is all that is
+// needed.
+static void speech_cat(char *buf, uint32_t size, const char *s) {
+	uint32_t n = strlen(buf);
+	while (*s && n + 1 < size) buf[n++] = *s++;
+	buf[n] = 0;
+}
+
+static const char *window_spoken_title(int idx) {
+	if (idx == dock_idx) return "Dock";
+	return windows[idx].title[0] ? windows[idx].title : "Untitled window";
+}
+
+static bool mouse_attached(void) {
+	uint8_t typ0 = (reg_usb0_info >> 24) & 0x3;
+	uint8_t typ1 = (reg_usb1_info >> 24) & 0x3;
+	return typ0 == 2 || typ1 == 2 || vmouse_present();
+}
+
+// Says which window now has focus. Every path that moves focus calls
+// this -- a click, Alt+Tab, a window opening -- because focus is the
+// one thing a person who cannot see the screen has no other way to
+// know. Interrupting: holding Alt+Tab should say where you land, not
+// everything you pass.
+static void speak_focus(int idx) {
+
+	if (idx < 0 || !z_speak_available()) return;
+
+	char buf[Z_SPEAK_SLOT_MAX];
+	buf[0] = 0;
+
+	if (idx == dock_idx) {
+		z_speak_cat(buf, sizeof(buf), "Dock");
+		int app = (dock_selected >= 0) ? dock_app_at(dock_selected) : -1;
+		if (dock_selected == DOCK_SEL_NEXT) {
+			z_speak_cat(buf, sizeof(buf), ", next page");
+		} else if (app >= 0) {
+			z_speak_cat(buf, sizeof(buf), ", ");
+			z_speak_cat(buf, sizeof(buf), dock_spoken_name(dock_apps[app]->name));
+		}
+	} else {
+		z_speak_cat(buf, sizeof(buf), window_spoken_title(idx));
+	}
+
+	z_speak(buf, Z_TTS_F_INTERRUPT);
+
+}
+
+// The dock icon the selection just moved to. Said on its own rather
+// than through speak_focus(), so arrowing along the dock does not
+// repeat the word "dock" at every step.
+static void speak_dock_selection(void) {
+
+	if (!z_speak_available()) return;
+
+	if (dock_selected == DOCK_SEL_NEXT) {
+		z_speak_static("Next page", Z_TTS_F_INTERRUPT);
+		return;
+	}
+
+	int app = (dock_selected >= 0) ? dock_app_at(dock_selected) : -1;
+	if (app >= 0)
+		z_speak_static(dock_spoken_name(dock_apps[app]->name), Z_TTS_F_INTERRUPT);
+
+}
+
+static void speech_toggle(void) {
+
+	uint32_t pid;
+
+	// Ask the kernel, not the cache: the answer decides whether to
+	// start a process.
+	z_speak_forget();
+
+	if (z_speak_service_pid(&pid)) {
+		printf("wm: speech off\n");
+		z_msg_new_send(pid, Z_TTS_QUIT, 0, z_obj_none());
+	} else {
+		// Blocks wm while tts loads, as a dock launch does. tts says
+		// "Speech on" itself once it is up; if it is not installed
+		// there is nothing that CAN say so, which is why the log line
+		// is the only report.
+		printf("wm: speech on -- starting tts\n");
+		if (!z_proc_run("tts"))
+			printf("wm: speech: could not start tts (is it installed?)\n");
+	}
+
+	z_speak_forget();
+
+}
+
+static void speech_clipboard(void) {
+	// The clipboard is wm's own static buffer, so it is sent without a
+	// copy -- it is up to Z_WM_CLIP_MAX bytes, far more than zspeak's
+	// ring slots hold. tts copies it on read. A Z_WM_CLIP_SET landing
+	// between this send and that read would be heard instead, which
+	// is the newer clipboard and so not wrong.
+	if (clipboard[0]) z_speak_static(clipboard, Z_TTS_F_INTERRUPT);
+	else z_speak_static("Clipboard empty", Z_TTS_F_INTERRUPT);
+}
+
+static void speech_where(void) {
+
+	char buf[Z_SPEAK_SLOT_MAX];
+	buf[0] = 0;
+
+	int idx;
+
+	if (mouse_attached()) {
+
+		int cx = get_cursor_x();
+		int cy = get_cursor_y();
+		idx = hit_test(cx, cy);
+
+		if (idx < 0) {
+			z_speak_static("Desktop", Z_TTS_F_INTERRUPT);
+			return;
+		}
+
+		if (idx == dock_idx) {
+			// Same geometry as a click would use -- see dock_click().
+			int local_y = cy - (int)windows[dock_idx].y - DOCK_PADDING;
+			int slot = (local_y >= 0 && local_y < DOCK_ICON_SIZE) ?
+				dock_slot_at_x(cx - (int)windows[dock_idx].x) : -1;
+			speech_cat(buf, sizeof(buf), "Dock");
+			if (slot >= 0 && dock_slot_is_next(slot)) {
+				speech_cat(buf, sizeof(buf), ", next page");
+			} else if (slot >= 0 && dock_app_at(slot) >= 0) {
+				speech_cat(buf, sizeof(buf), ", ");
+				speech_cat(buf, sizeof(buf),
+					dock_spoken_name(dock_apps[dock_app_at(slot)]->name));
+			}
+			z_speak(buf, Z_TTS_F_INTERRUPT);
+			return;
+		}
+
+	} else {
+
+		idx = focused;
+		if (idx < 0) {
+			z_speak_static("No window focused", Z_TTS_F_INTERRUPT);
+			return;
+		}
+
+	}
+
+	speech_cat(buf, sizeof(buf), window_spoken_title(idx));
+	if (idx != dock_idx) speech_cat(buf, sizeof(buf), " window");
+	if (idx == focused && mouse_attached()) speech_cat(buf, sizeof(buf), ", focused");
+	z_speak(buf, Z_TTS_F_INTERRUPT);
+
+}
+
+static void speech_read(void) {
+
+	if (focused < 0) {
+		z_speak_static("No window focused", Z_TTS_F_INTERRUPT);
+		return;
+	}
+
+	if (focused == dock_idx) {
+		z_speak_static("Dock. Use the arrow keys to choose an app, "
+			"and Enter to start it.", Z_TTS_F_INTERRUPT);
+		return;
+	}
+
+	wm_window_t *w = &windows[focused];
+
+	if ((w->flags & Z_WIN_FLAG_READABLE) && w->owner_pid != my_pid) {
+		// Only an app that asked for this gets it -- see Z_WM_READ.
+		// Nothing is said here: the app's own speech starts at once,
+		// and a title first would only delay it.
+		z_msg_new_send(w->owner_pid, Z_WM_READ, 0, z_obj_uint32((uint32_t)focused));
+		return;
+	}
+
+	char buf[Z_SPEAK_SLOT_MAX];
+	buf[0] = 0;
+	speech_cat(buf, sizeof(buf), window_spoken_title(focused));
+	speech_cat(buf, sizeof(buf), ". No readable text.");
+	z_speak(buf, Z_TTS_F_INTERRUPT);
+
+}
+
+// The Super keys. True if `keysym` was one (and so consumed, press and
+// release alike -- see dispatch_keys()).
+static bool speech_hotkey(uint32_t keysym, uint8_t modifiers, bool pressed) {
+
+	if (!(modifiers & Z_KBD_MOD_GUI)) return false;
+	if (modifiers & (Z_KBD_MOD_CTRL | Z_KBD_MOD_ALT)) return false;
+
+	// Shift and Caps Lock only change the case.
+	uint32_t k = (keysym >= 'A' && keysym <= 'Z') ? keysym + 32 : keysym;
+
+	switch (k) {
+	case 's': if (pressed) speech_toggle();    return true;
+	case 'a': if (pressed) speech_read();      return true;
+	case 'c': if (pressed) speech_clipboard(); return true;
+	case 'w': if (pressed) speech_where();     return true;
+	case 'r': if (pressed) z_speak_repeat();   return true;
+	}
+
+	return false;
+
+}
+
+// Every key event passes through here, before anything else looks at
+// it, for the Ctrl tap. Needs the RAW usage: a bare modifier has no
+// keysym (zkbd.h).
+static void speech_ctrl_tap(uint8_t usage, uint8_t modifiers, bool pressed) {
+
+	bool is_ctrl = (usage == 0xE0 || usage == 0xE4);	// LCtrl, RCtrl
+
+	if (is_ctrl) {
+		if (pressed)
+			// The modifier byte already includes this Ctrl.
+			speech_ctrl_armed = (modifiers & ~Z_KBD_MOD_CTRL) == 0;
+		else if (speech_ctrl_armed) {
+			speech_ctrl_armed = false;
+			z_speak_stop();
+		}
+	} else if (pressed) {
+		speech_ctrl_armed = false;
+	}
+
+}
+
 // -- keyboard --
 //
 // unlike the mouse above, keyboard capture is interrupt-driven, not
@@ -2936,8 +3234,9 @@ static void game_follow_pointer(int mx, int my) {
 // got scheduled).
 //
 // Global hotkeys (Alt+Tab, Alt+Arrow -- see alt_tab()/
-// alt_move_focused() above) and dock navigation (dock_handle_key()
-// above, while the dock has focus) are handled here, directly by wm,
+// alt_move_focused() above; the speech keys, Super+S/A/C/W/R and a
+// lone Ctrl tap -- see speech_hotkey() above) and dock navigation
+// (dock_handle_key() above, while the dock has focus) are handled here, directly by wm,
 // and consumed -- never forwarded to any app. Everything else goes to
 // the *focused* window's owner only, translating the raw USB HID
 // usage code to a keysym (zkbd.h) first. Demo windows (owned by wm
@@ -2951,6 +3250,10 @@ static void dispatch_keys(void) {
 		uint8_t usage     = (ev >> 1) & 0xFF;
 		uint8_t modifiers = (ev >> 9) & 0xFF;
 		bool    pressed   = (ev & 1) != 0;
+
+		// Before anything else, including the keysym translation
+		// below: a bare Ctrl has no keysym and would be skipped.
+		speech_ctrl_tap(usage, modifiers, pressed);
 
 		// Caps Lock (state kept by the kernel, zkbd.h): letters only,
 		// Shift inverted -- Shift+letter with Caps Lock on gives lower
@@ -2966,6 +3269,9 @@ static void dispatch_keys(void) {
 		uint32_t keysym = z_kbd_usage_to_keysym(usage, modifiers);
 		if (keysym == Z_KEY_NONE) continue;   // bare modifier change, or
 		                                       // an unmapped usage code
+
+		// Super+S/A/C/W/R -- speech. See speech_hotkey().
+		if (speech_hotkey(keysym, modifiers, pressed)) continue;
 
 		// -- global hotkeys -- act on press only; the matching
 		// release is silently dropped (nothing to do with it, and it
@@ -3911,7 +4217,9 @@ static void handle_message(z_msg_t *msg) {
 					// a redraw request, so including it would block
 					// wm for the full REDRAW_ACK_TIMEOUT on every
 					// single app launch.
-					if (old_focused >= 0 && old_focused != idx &&
+					speak_focus(idx);
+
+				if (old_focused >= 0 && old_focused != idx &&
 						windows[old_focused].used)
 						repair_focus_chrome(old_focused, idx);
 
@@ -4826,6 +5134,7 @@ int main(void) {
 				focused = m;
 				bring_to_front(m);
 				repair_focus_chrome(old_focused, m);
+				speak_focus(m);
 
 			} else if (hit >= 0 && hit_titlebar_icon(hit, cx, cy) == 0) {
 
@@ -4848,7 +5157,9 @@ int main(void) {
 			} else if (hit >= 0) {
 
 				int old_focused = focused;
+				bool changed = (focused != hit);
 				focused = hit;
+				if (changed) speak_focus(hit);
 				dbg_n_redraw = 0;
 				dbg_n_clip = 0;
 				dbg_t0 = z_uptime_ticks();

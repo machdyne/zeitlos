@@ -120,7 +120,7 @@ else
 TLS_OBJ =
 endif
 
-OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o \
+OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o \
 	zfsapp.o zflist.o zedit.o zinflate.o zimg.o zsvg.o \
 	zport.o zstream.o zdns.o \
 	url.o uni.o http.o html.o layout.o page.o toolbar.o $(TLS_OBJ) web.o
@@ -163,6 +163,9 @@ zfont_data.o:
 
 zwin.o:
 	$(CC_TARGET) $(CFLAGS) -c ../../common/zwin.c -o zwin.o
+
+zspeak.o:
+	$(CC_TARGET) $(CFLAGS) -c ../../common/zspeak.c -o zspeak.o
 
 zwidget.o:
 	$(CC_TARGET) $(CFLAGS) -c ../../common/zwidget.c -o zwidget.o

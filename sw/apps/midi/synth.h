@@ -190,6 +190,8 @@ typedef struct {
     uint8_t   master;       /* 0..64, the user's volume control */
 
     uint32_t  stolen;       /* voices taken from a sounding note */
+    uint8_t   nvoices;      /* voices the allocator may use, <= SYNTH_VOICES:
+                               one fewer while speech has a mixer channel */
 
 } synth_t;
 

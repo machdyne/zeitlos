@@ -85,6 +85,8 @@
 #include "../../common/zflist.h"
 #include "../../common/zdialog.h"
 #include "../../common/zfsapp.h"
+#include "../../common/zspeak.h"	// Super+A -- docs/tts.md
+#include "../../common/zsayall.h"
 
 // -- the document --
 
@@ -1491,6 +1493,135 @@ static void move_line(int delta) {
 
 // -- input --
 
+// -- echo: saying what the cursor is on, and what was just typed --
+//
+// Editing without the screen needs three things said: the line you
+// arrive on, the character you step over, and the word you finish.
+// Anything more (every character as it is typed) is noise at typing
+// speed, and anything less leaves you guessing.
+//
+// All of it interrupts, because an echo that queues is an echo that
+// arrives after you have moved on. And all of it costs a handful of
+// instructions with speech off (zspeak.h), so there is no setting.
+
+static void echo_line(void) {
+
+	if (!z_speak_available()) return;
+
+	int l = line_at(cursor);
+	int n = line_draw_len(l);
+
+	// A blank line still says so: silence there is indistinguishable
+	// from the key not having worked.
+	if (n <= 0) {
+		z_speak_static("blank", Z_TTS_F_INTERRUPT);
+		return;
+	}
+
+	z_speak_n(&buf[line_off[l]], (uint32_t)n, Z_TTS_F_INTERRUPT);
+
+}
+
+static void echo_char(int at) {
+
+	if (!z_speak_available()) return;
+
+	if (at < 0 || at >= len) {
+		z_speak_static("end", Z_TTS_F_INTERRUPT);
+		return;
+	}
+
+	char c = buf[at];
+	if (c == '\n') {
+		z_speak_static("new line", Z_TTS_F_INTERRUPT);
+		return;
+	}
+
+	// One character on its own: text2ph.c names it, punctuation
+	// included ("semicolon"), which is exactly what a caret stepping
+	// over it should say.
+	char one[2] = { c, 0 };
+	z_speak(one, Z_TTS_F_INTERRUPT);
+
+}
+
+// The word just finished, said when the key that ended it was a space
+// or punctuation. Looks back from the caret over the word that was
+// being typed.
+static void echo_word(void) {
+
+	if (!z_speak_available()) return;
+
+	int end = cursor - 1;			// the separator just inserted
+	while (end > 0 && (buf[end - 1] == ' ' || buf[end - 1] == '\n')) end--;
+	int start = end;
+	while (start > 0 && buf[start - 1] != ' ' && buf[start - 1] != '\n') start--;
+
+	if (end > start)
+		z_speak_n(&buf[start], (uint32_t)(end - start), Z_TTS_F_INTERRUPT);
+
+}
+
+// -- reading aloud (Super+A) -- docs/tts.md, "Reading a window" --
+//
+// One unit per DISPLAY line: that is what the view scrolls by, so the
+// caret can follow the voice a line at a time, and a display line is
+// always short enough for one zspeak slot. A line that wrapped rather
+// than ended is sent with Z_TTS_F_CONTINUES, so a paragraph is still
+// spoken as one paragraph. Blank lines are sent too (as nothing), so
+// the pause between paragraphs is heard.
+
+static int read_get(void *user, int n, const char **text, uint32_t *flags) {
+
+	(void)user;
+
+	if (n < 0 || n >= nlines) return -1;
+
+	int a = (int)line_off[n];
+	int e = line_end(n);
+
+	*text = &buf[a];
+	*flags = (n + 1 < nlines && e > a && buf[e - 1] != '\n') ?
+		Z_TTS_F_CONTINUES : 0;
+
+	return line_draw_len(n);
+
+}
+
+// The caret follows the voice to the start of each line as it is
+// spoken. That is what makes "stop, move, read again" work: when the
+// user stops listening the caret is on the line they last heard, and
+// the next Super+A starts from wherever they have moved it since.
+static void read_at(void *user, int n) {
+	(void)user;
+	if (n >= 0 && n < nlines) move_cursor((int)line_off[n]);
+}
+
+static z_sayall_t reader = { read_get, read_at, NULL };
+
+static void read_toggle(void) {
+
+	if (z_sayall_active(&reader)) {
+		z_sayall_stop(&reader);
+		return;
+	}
+
+	if (len == 0) {
+		z_speak_static("Empty document", Z_TTS_F_INTERRUPT);
+		return;
+	}
+
+	// From the caret's line -- except with the caret at the very end,
+	// where there is nothing left to read. That is also exactly where
+	// it is after typing something, and "read me what I wrote" is the
+	// commonest reason to ask, so read the whole document instead.
+	int from = (cursor >= len) ? 0 : line_at(cursor);
+
+	if (!z_sayall_start(&reader, from))
+		z_speak_static("End of document", Z_TTS_F_INTERRUPT);
+
+}
+
 static void handle_key(uint32_t keysym, uint8_t mods) {
 
 	mods_now = mods;
@@ -1524,27 +1655,34 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 
 	switch (keysym) {
 
-		case Z_KEY_LEFT:	move_cursor_ex(cursor - 1, ext); return;
-		case Z_KEY_RIGHT:	move_cursor_ex(cursor + 1, ext); return;
-		case Z_KEY_UP:		move_line_ex(-1, ext); return;
-		case Z_KEY_DOWN:	move_line_ex(1, ext); return;
+		// Stepping over a character says that character; moving
+		// between lines says the whole line.
+		case Z_KEY_LEFT:	move_cursor_ex(cursor - 1, ext); echo_char(cursor); return;
+		case Z_KEY_RIGHT:	move_cursor_ex(cursor + 1, ext); echo_char(cursor - 1); return;
+		case Z_KEY_UP:		move_line_ex(-1, ext); echo_line(); return;
+		case Z_KEY_DOWN:	move_line_ex(1, ext); echo_line(); return;
 
-		case Z_KEY_PAGEUP:	move_line_ex(-(rows - 1), ext); return;
-		case Z_KEY_PAGEDOWN:	move_line_ex(rows - 1, ext); return;
+		case Z_KEY_PAGEUP:	move_line_ex(-(rows - 1), ext); echo_line(); return;
+		case Z_KEY_PAGEDOWN:	move_line_ex(rows - 1, ext); echo_line(); return;
 
 		case Z_KEY_HOME:
 			move_cursor_ex((int)line_off[line_at(cursor)], ext);
+			echo_line();
 			return;
 
 		case Z_KEY_END: {
 			int l = line_at(cursor);
 			move_cursor_ex((int)line_off[l] + line_col_max(l), ext);
+			echo_line();
 			return;
 		}
 
-		case Z_KEY_DELETE:	delete_forward(); return;
+		case Z_KEY_DELETE:	echo_char(cursor); delete_forward(); return;
 
 		case 0x7f:			// Backspace -- DEL, see zkbd.c
+			// Said BEFORE the delete: afterwards it is gone, and
+			// "what did I just remove" is the question.
+			echo_char(cursor - 1);
 			delete_back();
 			return;
 
@@ -1552,6 +1690,7 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 			// Stored as '\n'. One line ending in the buffer, decided
 			// here, so nothing downstream has to cope with two.
 			insert_char('\n');
+			echo_word();
 			return;
 
 		case '\t':
@@ -1563,7 +1702,14 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 
 		default:
 
-			if (keysym >= 0x20 && keysym <= 0x7e) insert_char((char)keysym);
+			if (keysym >= 0x20 && keysym <= 0x7e) {
+				insert_char((char)keysym);
+				// A word is finished by the thing that ends it.
+				if (keysym == ' ' || keysym == '.' || keysym == ',' ||
+				    keysym == '?' || keysym == '!' || keysym == ';' ||
+				    keysym == ':')
+					echo_word();
+			}
 			return;
 
 	}
@@ -1712,6 +1858,14 @@ static void forward_msg(z_msg_t *msg, void *user) {
 
 			break;
 
+		// A read's progress -- see read_get(). Routed here rather than
+		// only in main()'s loop so a reply arriving while a dialog is
+		// up is not lost.
+		case Z_TTS_MARK_DONE:
+		case Z_TTS_MARK_CANCELLED:
+			z_sayall_msg(&reader, msg);
+			break;
+
 		case Z_WM_WINDOW_MOVED:
 
 			// No layout() -- moving doesn't change our size, and
@@ -1793,7 +1947,8 @@ int main(void) {
 		Z_WIN_FLAG_CLOSE_ICON | Z_WIN_FLAG_RESIZABLE |
 		Z_WIN_FLAG_MIN_IS_CREATE |
 		Z_WIN_FLAG_NEW_ICON | Z_WIN_FLAG_OPEN_ICON |
-		Z_WIN_FLAG_SAVE_ICON | Z_WIN_FLAG_FONT_ICON) != Z_OK) {
+		Z_WIN_FLAG_SAVE_ICON | Z_WIN_FLAG_FONT_ICON |
+		Z_WIN_FLAG_READABLE) != Z_OK) {
 		printf("text: failed to create window -- is wm running?\n");
 		return 1;
 	}
@@ -1834,6 +1989,11 @@ int main(void) {
 					if (msg.obj.type != Z_UINT32) break;
 					if (!Z_WM_UNPACK_KEY_PRESSED(msg.obj.val.uint32)) break;
 
+					// Any key ends a read, before it does anything
+					// else -- the caret is then on the line last
+					// heard, and the key acts from there.
+					z_sayall_stop(&reader);
+
 					handle_key(Z_WM_UNPACK_KEY_KEYSYM(msg.obj.val.uint32),
 						(uint8_t)Z_WM_UNPACK_KEY_MODIFIERS(msg.obj.val.uint32));
 
@@ -1841,8 +2001,14 @@ int main(void) {
 
 				case Z_WM_MOUSE:
 
-					if (msg.obj.type == Z_UINT32)
-						handle_mouse(msg.obj.val.uint32);
+					if (msg.obj.type != Z_UINT32) break;
+
+					// A click moves the caret, which a running read
+					// would immediately move back.
+					if (Z_WM_UNPACK_MOUSE_BUTTONS(msg.obj.val.uint32) & 1)
+						z_sayall_stop(&reader);
+
+					handle_mouse(msg.obj.val.uint32);
 
 					break;
 
@@ -1865,6 +2031,15 @@ int main(void) {
 
 				}
 
+				// Super+A -- see read_toggle().
+				case Z_WM_READ:
+
+					if (msg.obj.type == Z_UINT32 &&
+						(int32_t)msg.obj.val.uint32 == win.id)
+						read_toggle();
+
+					break;
+
 				case Z_WM_CLOSE:
 
 					if (msg.obj.type == Z_UINT32 &&
@@ -1883,6 +2058,9 @@ int main(void) {
 		}
 
 		for (volatile int i = 0; i < 200; i++);	// light throttle
+
+		// A read whose replies have stopped coming gives up.
+		z_sayall_poll(&reader);
 
 	
 #if TEXT_INSTRUMENT

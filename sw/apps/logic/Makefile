@@ -34,7 +34,7 @@ LDSCRIPT = ../../common/riscv-app.ld
 
 # About as small as an app in this tree gets: a window, a radio group,
 # and no filesystem, dialogs or document of any kind.
-OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o \
+OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o \
 	zsoc.o zgpio.o logic.o
 
 logic: logic.elf logic.bin
@@ -53,6 +53,9 @@ zfont_data.o:
 
 zwin.o:
 	$(CC) $(CFLAGS) -c ../../common/zwin.c -o zwin.o
+
+zspeak.o:
+	$(CC) $(CFLAGS) -c ../../common/zspeak.c -o zspeak.o
 
 zwidget.o:
 	$(CC) $(CFLAGS) -c ../../common/zwidget.c -o zwidget.o

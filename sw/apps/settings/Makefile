@@ -37,7 +37,7 @@ LDSCRIPT = ../../common/riscv-app.ld
 # dialog and what it links (zdialog, zflist, zedit, ztype), the config
 # parser/editor (zcfg) and time-zone parsing, to check a zone before
 # saving it (zrtc). See docs/config.md.
-OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o \
+OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o \
 	zfsapp.o zdialog.o zflist.o zedit.o ztype.o zcfg.o zrtc.o settings.o
 
 settings: settings.elf settings.bin
@@ -56,6 +56,9 @@ zfont_data.o:
 
 zwin.o:
 	$(CC) $(CFLAGS) -c ../../common/zwin.c -o zwin.o
+
+zspeak.o:
+	$(CC) $(CFLAGS) -c ../../common/zspeak.c -o zspeak.o
 
 zwidget.o:
 	$(CC) $(CFLAGS) -c ../../common/zwidget.c -o zwidget.o

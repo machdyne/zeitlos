@@ -34,7 +34,7 @@ LDSCRIPT = ../../common/riscv-app.ld
 
 # zfsapp.o/zflist.o/zdialog.o are the file dialogs (new/open/save) --
 # zflist.o needs zfsapp.o, and draw.c needs both plus zdialog.o.
-OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o \
+OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o \
 	zfsapp.o zflist.o zdialog.o zedit.o draw_icons.o draw.o
 
 draw: draw.elf draw.bin
@@ -53,6 +53,9 @@ zfont_data.o:
 
 zwin.o:
 	$(CC) $(CFLAGS) -c ../../common/zwin.c -o zwin.o
+
+zspeak.o:
+	$(CC) $(CFLAGS) -c ../../common/zspeak.c -o zspeak.o
 
 zwidget.o:
 	$(CC) $(CFLAGS) -c ../../common/zwidget.c -o zwidget.o

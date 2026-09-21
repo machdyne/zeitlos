@@ -44,7 +44,7 @@ LDSCRIPT = ../../common/riscv-app.ld
 # kept free of any I/O so the test suite below can build it for the
 # host -- see tests/cal_test.c. It has no date arithmetic of its own;
 # that is zrtc.o, which is the same code the kernel and clock use.
-OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zrtc.o \
+OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o zrtc.o \
 	zcfg.o cal_core.o cal.o
 
 cal: cal.elf cal.bin
@@ -67,6 +67,9 @@ zfont_data.o:
 
 zwin.o:
 	$(CC) $(CFLAGS) -c ../../common/zwin.c -o zwin.o
+
+zspeak.o:
+	$(CC) $(CFLAGS) -c ../../common/zspeak.c -o zspeak.o
 
 zwidget.o:
 	$(CC) $(CFLAGS) -c ../../common/zwidget.c -o zwidget.o

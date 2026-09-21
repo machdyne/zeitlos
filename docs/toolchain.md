@@ -311,3 +311,37 @@ make BOARD=lakritz CABLE=dirtyJtag flash
 
 Successful output ends with a `.bit` in `output/lakritz/`. Check
 `output/lakritz/report.txt` for the timing summary while you are there.
+
+---
+
+## 7. Building gateware without a host
+
+Everything above describes the host toolchain. `docs/zfpga.md` is the
+other direction: a synthesiser, a place-and-route tool and a bitstream
+packer that run **on Zeitlos**, targeting the FPGA Zeitlos is running on
+-- the gateware equivalent of what `zcc` did for C. All three are
+subcommands of one tool, `zfpga`, in `sw/apps/zfpga/`, run from `posix`.
+
+**The packer exists.** `zfpga pack` is the `ecppack` step of the flow in
+section 1, and produces byte-identical bitstreams:
+
+```
+ecppack --compress --freq 2.4 soc_final.config --bit soc.bit
+zfpga pack soc_final.config -c -f 2.4 -o soc.bit        # same bytes
+```
+
+It runs on the host (`make -f Makefile.host` in `sw/apps/zfpga`) and as
+a Zeitlos app, reading its chip database from `/fpga` on the card.
+`sw/apps/zfpga/tests/run.sh` checks it against whatever `ecppack` is
+installed -- so this section's version table matters there too: the
+reference is the `ecppack` you have, and a Trellis database that differs
+from the vendored one (`sw/apps/zfpga/ext/prjtrellis-db/`) will show up
+as a mismatch that is not zfpga's.
+
+Synthesis and place-and-route are later phases; until then `yosys` and
+`nextpnr` from section 1 produce the `.config`.
+
+Loading what it builds is covered in `docs/zboot.md`: how
+`--bootaddr` decides where the next configuration is read from, how the
+DFU bootloader hands off to Zeitlos, and the two routes to booting
+gateware the machine built itself.

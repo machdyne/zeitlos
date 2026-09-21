@@ -34,7 +34,7 @@ LDSCRIPT = ../../common/riscv-app.ld
 
 # zflist.o is the browsing widget this app is mostly made of, zdialog.o
 # the confirm/prompt dialogs, ztype.o the extension-to-app table.
-OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o \
+OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o \
 	zfsapp.o zflist.o zdialog.o zedit.o ztype.o files.o
 
 files: files.elf files.bin
@@ -53,6 +53,9 @@ zfont_data.o:
 
 zwin.o:
 	$(CC) $(CFLAGS) -c ../../common/zwin.c -o zwin.o
+
+zspeak.o:
+	$(CC) $(CFLAGS) -c ../../common/zspeak.c -o zspeak.o
 
 zwidget.o:
 	$(CC) $(CFLAGS) -c ../../common/zwidget.c -o zwidget.o

@@ -85,6 +85,7 @@
 #include "../../common/zeitlos.h"
 #include "../../common/zsoc.h"
 #include "../../common/zaudio.h"
+#include "../../common/ztts.h"
 #include "../../common/zfsapp.h"
 #include "../../common/zkbd.h"
 #include "../../common/zwm.h"
@@ -379,6 +380,17 @@ static uint32_t dirty;
  * audio device
  * ------------------------------------------------------------------ */
 
+/* Every mixer channel off -- except the speech channel while speech
+ * is on (zaudio.h, Z_AUDIO_CH_SPEECH). play only ever uses channels 0
+ * and 1, so this costs it nothing. */
+static void mixer_clear_all(void) {
+    uint32_t pid;
+    bool speech = z_pid_lookup(Z_TTS_SERVICE, &pid);
+    int c;
+    for (c = 0; c < 8; c++)
+        if (!(speech && c == Z_AUDIO_CH_SPEECH)) Z_AUDIO_CH_CTRL(c) = 0;
+}
+
 static void audio_enable(bool on) {
     uint32_t c = reg_audio_ctrl & 0xFFu;
     if (on) c |= Z_AUDIO_CTRL_EN;
@@ -404,7 +416,7 @@ static void audio_claim(void) {
     int c;
     mix_avail = z_audio_mixer_present();
     if (mix_avail)
-        for (c = 0; c < 8; c++) Z_AUDIO_CH_CTRL(c) = 0;
+        mixer_clear_all();
     z_audio_mixer_enable(false);
 }
 
@@ -1197,7 +1209,7 @@ static void mixer_fill(void) {
 
 static void mixer_stop(void) {
     int c;
-    for (c = 0; c < 8; c++) Z_AUDIO_CH_CTRL(c) = 0;
+    mixer_clear_all();
     z_audio_mixer_enable(false);
 }
 
@@ -1233,7 +1245,7 @@ static void mixer_start(void) {
      * ring have not been played yet. */
     mix_base_src = adec_frame_at_offset(&dec, read_pos);
 
-    for (c = 0; c < 8; c++) Z_AUDIO_CH_CTRL(c) = 0;
+    mixer_clear_all();
     z_audio_mixer_enable(false);
 
     mixer_config_conv();

@@ -245,3 +245,39 @@ a drag legitimately leaves the window and must keep extending.
 
 No undo, no search. Each wants a real design
 rather than a corner of this file, and none is needed to write a note.
+
+## Speech
+
+### Echo while editing
+
+With speech on, the editor says what you are doing, which is what
+makes writing without the screen possible:
+
+| action | says |
+|---|---|
+| Left / Right | the character stepped over ("semicolon", "new line") |
+| Up / Down / PageUp / PageDown / Home / End | the whole line, or "blank" |
+| finishing a word (space or punctuation) | the word just typed |
+| Backspace / Delete | the character removed, said before it goes |
+
+Characters are not echoed as they are typed -- at typing speed that is
+noise -- but a word is, when the thing that ends it arrives. Everything
+interrupts, because an echo that queues arrives after you have moved
+on. A blank line says "blank" rather than nothing, since silence is
+indistinguishable from the key not working.
+
+### Reading aloud
+
+**Super+A** reads the document aloud, a display line at a time, with
+the caret following the voice ([tts.md](tts.md)). Super+A again, any
+key, a click or a Ctrl tap stops it, and the caret stays on the line
+you last heard -- so moving somewhere and pressing Super+A reads from
+there. With the caret at the very end of the document (where it is
+after typing), it reads from the top. An empty document says so.
+
+The window is created with `Z_WIN_FLAG_READABLE`, and the pacing is
+`sw/common/zsayall.c`: `read_get()` hands it a line (flagged
+`Z_TTS_F_CONTINUES` when the line wrapped mid-paragraph rather than
+ended), `read_at()` moves the caret, and every key and click calls
+`z_sayall_stop()` before doing anything else.
+

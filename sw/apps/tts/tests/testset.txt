@@ -1,0 +1,76 @@
+# The listening set: name|phonemes|word the recogniser should hear.
+# Phonemes are ARPAbet (docs/tts.md). One word per line for the
+# closed-vocabulary check; the sentences at the end are for people.
+#
+# -- digits --
+zero|Z IY1 R OW0|zero
+one|W AH1 N|one
+two|T UW1|two
+three|TH R IY1|three
+four|F AO1 R|four
+five|F AY1 V|five
+six|S IH1 K S|six
+seven|S EH1 V AX0 N|seven
+eight|EY1 T|eight
+nine|N AY1 N|nine
+ten|T EH1 N|ten
+# -- interface words --
+open|OW1 P AX0 N|open
+save|S EY1 V|save
+close|K L OW1 Z|close
+cancel|K AE1 N S AX0 L|cancel
+file|F AY1 L|file
+edit|EH1 D IX0 T|edit
+help|HH EH1 L P|help
+yes|Y EH1 S|yes
+no|N OW1|no
+okay|OW2 K EY1|okay
+delete|D IX0 L IY1 T|delete
+copy|K AA1 P IY0|copy
+paste|P EY1 S T|paste
+button|B AH1 T AX0 N|button
+window|W IH1 N D OW0|window
+menu|M EH1 N Y UW0|menu
+next|N EH1 K S T|next
+back|B AE1 K|back
+stop|S T AA1 P|stop
+start|S T AA1 R T|start
+quit|K W IH1 T|quit
+hello|HH AX0 L OW1|hello
+speech|S P IY1 CH|speech
+text|T EH1 K S T|text
+read|R IY1 D|read
+print|P R IH1 N T|print
+find|F AY1 N D|find
+music|M Y UW1 Z IX0 K|music
+desktop|D EH1 S K T AA2 P|desktop
+terminal|T ER1 M IX0 N AX0 L|terminal
+settings|S EH1 T IX0 NG Z|settings
+dog|D AO1 G|dog
+cat|K AE1 T|cat
+good|G UH1 D|good
+# -- sentences, for listening --
+s_fox|DH AX0 K W IH1 K B R AW1 N F AA1 K S , JH AH1 M P S OW1 V ER0 DH AX0 L EY1 Z IY0 D AO1 G .|
+s_speech_on|S P IY1 CH AA1 N .|
+s_save|S EY1 V , B AH1 T AX0 N .|
+s_question|IH1 Z IH0 T R EY1 N IX0 NG ?|
+# -- plain text, through the phase 2 front end (unknown words are spelled) --
+t_speech_on|Speech on.|
+t_clipboard|Clipboard empty.|
+t_dock|Dock, calculator.|
+t_read|Untitled window. No readable text.|
+t_hello|Hello world. Is this text readable?|
+# -- plain text through the phase 3 front end: rules, numbers, symbols --
+t_welcome|Welcome to Zeitlos. Press Super S to turn speech on or off.|
+t_editor|The text editor has four buttons: new, open, save, and close.|
+t_numbers|The file is 4,096 bytes, and 12.5% of the disk is free.|
+t_email|Send it to user@example.com before 3:30.|
+t_story|Once upon a time, there was a small computer that could talk. It read books to anyone who asked.|
+t_weather|Tomorrow will be cloudy, with a high of 18 degrees and a light wind from the west.|
+t_code|fileName equals mp3 plus USB, then call mkdir.|
+t_question|Do you want to save the changes before closing?|
+# -- book text: the words a lexicon has and hand rules do not --
+t_book1|The physician examined the manuscript, unconvinced by its provenance, and recommended a thorough analysis.|
+t_book2|Beneath the colonnade, the philosopher paused, weighing the consequences of a hurried judgement.|
+t_book3|Machinery, chemistry and architecture were the pillars of that century's peculiar optimism.|
+t_book4|She acknowledged the lieutenant, whose colonel had demanded an immediate reconnaissance of the island.|

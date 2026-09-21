@@ -65,6 +65,7 @@
 #include "../../common/zeitlos.h"
 #include "../../common/zsoc.h"
 #include "../../common/zaudio.h"
+#include "../../common/ztts.h"
 #include "../../common/zfsapp.h"
 #include "../../common/zkbd.h"
 #include "../../common/zwm.h"
@@ -1168,8 +1169,14 @@ static int play(int index) {
 
 	if (hw_mix) {
 		int c;
+		uint32_t tts_pid;
+		// Leave the speech channel alone while speech is on
+		// (zaudio.h, Z_AUDIO_CH_SPEECH). Only an 8-channel module
+		// would use it, and then the two collide.
+		bool speech = z_pid_lookup(Z_TTS_SERVICE, &tts_pid);
 		for (c = 0; c < MOD_MAX_CHANNELS; c++)
-			Z_AUDIO_CH_CTRL(c) = 0;
+			if (!(speech && c == Z_AUDIO_CH_SPEECH))
+				Z_AUDIO_CH_CTRL(c) = 0;
 		z_audio_mixer_enable(true);
 		hw_next_256 = z_uptime_ticks() << 8;
 		/* a sane starting interval, so the catch-up clamp above has

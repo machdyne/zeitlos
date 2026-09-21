@@ -43,6 +43,8 @@ APPS = casino poker roulette blackjack slots craps \
 	play \
 	track \
 	midi \
+	tts \
+	ttstest \
 	gamedemo \
 	chip8 \
 	chess \

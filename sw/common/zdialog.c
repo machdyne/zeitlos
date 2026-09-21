@@ -15,6 +15,7 @@
 #include "zeitlos.h"
 #include "zobj.h"
 #include "zwm.h"
+#include "zspeak.h"
 #include "zwin.h"
 #include "zgfx.h"
 #include "zfont.h"
@@ -1039,12 +1040,33 @@ static bool file_dialog(const z_dialog_ctx_t *ctx, dlg_kind_t kind,
 
 }
 
+// A dialog is the one moment the screen demands an answer, so it is
+// the one moment speech must not be left to the user to go looking
+// for: the title and the question are said as it opens. The buttons
+// announce themselves as focus reaches them (zwidget.c).
+static void speak_dialog(const char *title, const char *msg) {
+
+	if (!z_speak_available()) return;
+
+	char line[Z_SPEAK_SLOT_MAX];
+	line[0] = 0;
+	if (title) {
+		z_speak_cat(line, sizeof(line), title);
+		z_speak_cat(line, sizeof(line), ". ");
+	}
+	if (msg) z_speak_cat(line, sizeof(line), msg);
+	z_speak(line, Z_TTS_F_INTERRUPT);
+
+}
+
 bool z_dialog_open(const z_dialog_ctx_t *ctx, const char *start_dir,
 	char *out, int outlen) {
 
 	if (!out || outlen < 2) return false;
 
 	out[0] = 0;
+
+	speak_dialog("Open", "Choose a file.");
 
 	return file_dialog(ctx, DLG_KIND_OPEN, "Open", start_dir, NULL,
 		labels_open, out, outlen);
@@ -1057,6 +1079,8 @@ bool z_dialog_save(const z_dialog_ctx_t *ctx, const char *start_dir,
 	if (!out || outlen < 2) return false;
 
 	out[0] = 0;
+
+	speak_dialog("Save as", "Type a name.");
 
 	return file_dialog(ctx, DLG_KIND_SAVE, "Save As", start_dir, suggested,
 		labels_save, out, outlen);
@@ -1127,6 +1151,8 @@ bool z_dialog_prompt(const z_dialog_ctx_t *ctx, const char *title,
 
 int z_dialog_confirm(const z_dialog_ctx_t *ctx, const char *title,
 	const char *msg, int buttons) {
+
+	speak_dialog(title, msg);
 
 	const char *starts[Z_DIALOG_MSG_LINES];
 	int lens[Z_DIALOG_MSG_LINES];

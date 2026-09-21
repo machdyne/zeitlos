@@ -243,6 +243,11 @@ int z_widget_focus_next(z_widget_set_t *set, bool backward);
 // Sets focus directly, or clears it with -1.
 void z_widget_focus_set(z_widget_set_t *set, int idx);
 
+// Says a widget aloud: its label, what it is, and its state -- see
+// docs/tts.md. Called for you whenever keyboard focus moves, so an
+// app needs this only to announce something focus did not move to.
+void z_widget_announce(const z_widget_t *w);
+
 // Activates the focused widget, exactly as a click on it would --
 // toggles a toggle, selects a radio member, reports a button.
 // Returns the activated index, or -1 if nothing has focus.

@@ -127,7 +127,7 @@ LDSCRIPT = ../../common/riscv-app.ld
 # zfsapp.o, and view.c needs both plus zdialog.o for the open dialog.
 # zimg.o is the decoders themselves (sw/common/zimg.c), shared with
 # any other app that wants to read images.
-OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o \
+OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o \
 	zfsapp.o zflist.o zdialog.o zedit.o zimg.o zinflate.o zsvg.o \
 	zprof.o view.o
 
@@ -147,6 +147,9 @@ zfont_data.o:
 
 zwin.o:
 	$(CC) $(CFLAGS) -c ../../common/zwin.c -o zwin.o
+
+zspeak.o:
+	$(CC) $(CFLAGS) -c ../../common/zspeak.c -o zspeak.o
 
 zwidget.o:
 	$(CC) $(CFLAGS) -c ../../common/zwidget.c -o zwidget.o

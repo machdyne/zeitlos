@@ -1646,6 +1646,27 @@ void init(void) {
 	init_start_optional("repl");
 	init_start_optional("posix");
 
+	// Speech, when the machine has been set up for someone who cannot
+	// see it (system.tts.enabled, docs/config.md). Started here
+	// rather than left to Super+S because a blind user should not
+	// have to find a key on an unfamiliar machine to be told anything
+	// at all -- and started LAST of the optional apps, so the desktop
+	// is already up and there is something to announce.
+	//
+	// Off by default: the service costs memory and a mixer channel,
+	// and a machine nobody has configured should behave as it always
+	// has.
+	{
+		// k_cfg_find(), not z_cfg_get_bool(): the app-side helpers
+		// are a syscall, and this is the kernel. cfg.c's own
+		// accessor returns the file's value or NULL, so the default
+		// (off) is the NULL case.
+		const char *v = k_cfg_find("system.tts.enabled");
+		if (v && (v[0] == 'y' || v[0] == 'Y' || v[0] == '1' ||
+		          v[0] == 't' || v[0] == 'T' || v[0] == 'o' || v[0] == 'O'))
+			init_start_optional("tts");
+	}
+
 	// net is created and loaded above, in its usual slot, but does not
 	// start running until every other load is done.
 	//

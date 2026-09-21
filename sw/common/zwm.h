@@ -164,6 +164,12 @@
 // outcome rather than an undefined one.
 #define Z_WIN_FLAG_MODAL              (1u << 8)
 
+// this window can read its own content aloud: its owner handles
+// Z_WM_READ (below). Without it, Super+A on this window speaks the
+// title and "no readable text", so the key is never silent. See
+// docs/tts.md.
+#define Z_WIN_FLAG_READABLE           (1u << 9)
+
 // clamp this window's minimum size to whatever size it was CREATED
 // at, instead of the global Z_WM_MIN_WIDTH/HEIGHT floor below.
 // Meaningless without Z_WIN_FLAG_RESIZABLE also set.
@@ -343,6 +349,22 @@
 // protocol, or on the older usb_hid_host core, sends none of these.
 #define Z_WM_WHEEL               121
 #define Z_WM_WHEEL_NOTCHES(u)    ((int32_t)(uint32_t)(u))
+
+// wm -> app: the user pressed Super+A ("read this window") while one of
+// the app's windows had focus. obj is a Z_UINT32 window id. Only sent
+// to a window created with Z_WIN_FLAG_READABLE.
+//
+// It is a TOGGLE, and the app keeps the state: if it is not reading,
+// it starts reading from where the user is (the cursor, or the top of
+// what is visible); if it is, it stops. wm cannot know which, because
+// reading ends on its own when the text runs out.
+//
+// The app does the reading itself, through sw/common/zspeak.h, pacing
+// itself on Z_TTS_MARK_DONE and following along on screen as it goes.
+// Any navigation key should stop a read and leave the position where
+// speech stopped, so Super+A afterwards resumes from there. See
+// docs/tts.md, "Reading a window".
+#define Z_WM_READ                122
 
 // which icon a Z_WM_TITLEBAR_ICON refers to. Deliberately starts at 1
 // so that 0 is never a valid kind -- see wm.c's hit_titlebar_icon(),
