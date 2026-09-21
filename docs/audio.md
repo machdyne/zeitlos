@@ -59,7 +59,9 @@ which one is present — `CONFIG`'s format bits exist so a diagnostic can
 Synthesis-level counts (yosys 0.33, `synth_ecp5`) with everything
 enabled — `AUDIO`, `AUDIO_MIXER`, and whichever output the board has.
 BRAM, DSP and PLL counts are exact; LUT4 is pre-packing, so check
-`make timing` / `make util` for the real post-`nextpnr` figures.
+`make timing` / `make util` for the real post-`nextpnr` figures. The
+whole-SoC version of those figures, per board, is in
+[boards.md](boards.md).
 
 | | Obst | Lakritz | Mozart | Sergei | ULX3S |
 |---|---|---|---|---|---|
