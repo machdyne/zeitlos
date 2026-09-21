@@ -1,0 +1,35 @@
+# tests/fixtures/cmp_c.zl: examples/cmp.v, synth_ecp5 -nowidelut -nodsp -nobram -nolutram (carry chains on), via tools/ys2zl.py
+device LFE5U-25F
+package CABGA256
+
+input a[0] A10 net=n2 io_type=LVCMOS33
+input a[1] A11 net=n3 io_type=LVCMOS33
+input a[2] A12 net=n4 io_type=LVCMOS33
+input a[3] A13 net=n5 io_type=LVCMOS33
+input a[4] A14 net=n6 io_type=LVCMOS33
+input a[5] A15 net=n7 io_type=LVCMOS33
+input a[6] A2 net=n8 io_type=LVCMOS33
+input a[7] A3 net=n9 io_type=LVCMOS33
+input b[0] A4 net=n10 io_type=LVCMOS33
+input b[1] A5 net=n11 io_type=LVCMOS33
+input b[2] A6 net=n12 io_type=LVCMOS33
+input b[3] A7 net=n13 io_type=LVCMOS33
+input b[4] A8 net=n14 io_type=LVCMOS33
+input b[5] A9 net=n15 io_type=LVCMOS33
+input b[6] B1 net=n16 io_type=LVCMOS33
+input b[7] B10 net=n17 io_type=LVCMOS33
+output ge2 B12 net=n19 io_type=LVCMOS33
+output lt B11 net=n18 io_type=LVCMOS33
+
+lut ge2_LUT4_Z init=0x8F00 a=n20 b=n21 c=n22 d=n2 z=n19
+lut lt_LUT4_Z init=0x3F00 a=0 b=n20 c=n21 d=n22 z=n18
+lut lt_LUT4_Z_B_LUT4_Z init=0xF000 a=0 b=0 c=n23 d=n24 z=n20
+lut lt_LUT4_Z_B_LUT4_Z_1 init=0xF000 a=0 b=0 c=n25 d=n26 z=n21
+lut lt_LUT4_Z_B_LUT4_Z_1_C_LUT4_Z init=0x9009 a=n4 b=n12 c=n8 d=n16 z=n26
+lut lt_LUT4_Z_B_LUT4_Z_1_C_LUT4_Z_1 init=0x9009 a=n2 b=n10 c=n5 d=n13 z=n25
+lut lt_LUT4_Z_B_LUT4_Z_C_LUT4_Z init=0x9009 a=n3 b=n11 c=n6 d=n14 z=n24
+lut lt_LUT4_Z_B_LUT4_Z_C_LUT4_Z_1 init=0x9009 a=n7 b=n15 c=n9 d=n17 z=n23
+ccu2 lt_LUT4_Z_D_CCU2C_COUT init0=0x96AA init1=0x96AA inject0=NO inject1=NO a0=n16 b0=n8 c0=1 d0=1 a1=n17 b1=n9 c1=1 d1=1 cin=n27 cout=n22 s0=n28 s1=n29
+ccu2 lt_LUT4_Z_D_CCU2C_COUT_S0_CCU2C_S0 init0=0x96AA init1=0x96AA inject0=NO inject1=NO a0=n14 b0=n6 c0=1 d0=1 a1=n15 b1=n7 c1=1 d1=1 cin=n30 cout=n27 s0=n31 s1=n32
+ccu2 lt_LUT4_Z_D_CCU2C_COUT_S0_CCU2C_S0_1 init0=0x96AA init1=0x96AA inject0=NO inject1=NO a0=n12 b0=n4 c0=1 d0=1 a1=n13 b1=n5 c1=1 d1=1 cin=n33 cout=n30 s0=n34 s1=n35
+ccu2 lt_LUT4_Z_D_CCU2C_COUT_S0_CCU2C_S0_2 init0=0x96AA init1=0x96AA inject0=NO inject1=NO a0=n10 b0=n2 c0=1 d0=1 a1=n11 b1=n3 c1=1 d1=1 cin=1 cout=n33 s0=n36 s1=n37

@@ -1,0 +1,9 @@
+# tests/fixtures/on_route.zn: examples/on.v's nets by terminal, from nextpnr via tools/np2zn.py --route
+device LFE5U-25F
+package CABGA256
+speed 6
+
+comb R2C4 SLICED 0 mode=LOGIC init=0xFFFF pins=-
+io R0C4.A dir=OUTPUT type=LVCMOS33 datamux_oddr=PADDO datamux_mddr=PADDO
+
+net n2047 R2C4/F6_SLICE R0C4/PADDOA_PIO

@@ -1,0 +1,4 @@
+# expect: LUT site already used on line 3
+device LFE5U-25F
+comb R2C4 SLICEA 0
+comb R2C4 SLICEA 0

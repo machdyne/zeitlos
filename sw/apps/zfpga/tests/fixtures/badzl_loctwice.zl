@@ -1,0 +1,8 @@
+# expect: more than two cells have loc=R2C4.A
+device LFE5U-25F
+package CABGA256
+input x A7 net=x
+output y A2 net=y3
+lut l1 func=~a a=x z=y1 loc=R2C4.A
+lut l2 func=~a a=y1 z=y2 loc=R2C4.A
+lut l3 func=~a a=y2 z=y3 loc=R2C4.A

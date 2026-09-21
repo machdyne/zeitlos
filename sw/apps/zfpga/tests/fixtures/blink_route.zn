@@ -1,0 +1,125 @@
+# tests/fixtures/blink_route.zn: examples/blink.v's nets by terminal, from nextpnr via tools/np2zn.py --route
+device LFE5U-25F
+package CABGA256
+speed 6
+
+comb R3C2 SLICEB 1 mode=LOGIC init=0x0000 pins=-
+comb R29C12 SLICEA 0 mode=LOGIC init=0xFFFF pins=-
+comb R2C2 SLICEA 0 mode=CCU2 init=0x000C pins=B inject=NO
+comb R2C2 SLICEA 1 mode=CCU2 init=0xFFFF pins=- inject=YES
+comb R2C5 SLICEB 0 mode=CCU2 init=0x0000 pins=- inject=NO
+comb R2C5 SLICEB 1 mode=CCU2 init=0x000E pins=- inject=NO
+io R0C29.A dir=INPUT type=LVCMOS33 datamux_oddr=PADDO datamux_mddr=PADDO
+io R0C4.A dir=OUTPUT type=LVCMOS33 datamux_oddr=PADDO datamux_mddr=PADDO
+comb R2C5 SLICEA 0 mode=CCU2 init=0xCCC0 pins=B inject=NO
+comb R2C5 SLICEA 1 mode=CCU2 init=0xCCC0 pins=B inject=NO
+comb R2C2 SLICEB 0 mode=CCU2 init=0x666C pins=A inject=NO
+comb R2C2 SLICEB 1 mode=CCU2 init=0xCCC0 pins=B inject=NO
+comb R2C3 SLICEB 0 mode=CCU2 init=0xCCC0 pins=B inject=NO
+comb R2C3 SLICEB 1 mode=CCU2 init=0xCCC0 pins=B inject=NO
+comb R2C3 SLICEC 0 mode=CCU2 init=0xAAA0 pins=A inject=NO
+comb R2C3 SLICEC 1 mode=CCU2 init=0xAAA0 pins=A inject=NO
+comb R2C3 SLICEA 0 mode=CCU2 init=0xCCC0 pins=B inject=NO
+comb R2C3 SLICEA 1 mode=CCU2 init=0xCCC0 pins=B inject=NO
+comb R2C2 SLICED 0 mode=CCU2 init=0xAAA0 pins=A inject=NO
+comb R2C2 SLICED 1 mode=CCU2 init=0xAAA0 pins=A inject=NO
+comb R2C2 SLICEC 0 mode=CCU2 init=0xAAA0 pins=A inject=NO
+comb R2C2 SLICEC 1 mode=CCU2 init=0xAAA0 pins=A inject=NO
+comb R2C4 SLICED 0 mode=CCU2 init=0xAAA0 pins=A inject=NO
+comb R2C4 SLICED 1 mode=CCU2 init=0xAAA0 pins=A inject=NO
+comb R2C4 SLICEC 0 mode=CCU2 init=0xAAA0 pins=A inject=NO
+comb R2C4 SLICEC 1 mode=CCU2 init=0xAAA0 pins=A inject=NO
+comb R2C4 SLICEB 0 mode=CCU2 init=0xCCC0 pins=B inject=NO
+comb R2C4 SLICEB 1 mode=CCU2 init=0xCCC0 pins=B inject=NO
+comb R2C4 SLICEA 0 mode=CCU2 init=0xCCC0 pins=B inject=NO
+comb R2C4 SLICEA 1 mode=CCU2 init=0xCCC0 pins=B inject=NO
+comb R2C3 SLICED 0 mode=CCU2 init=0xAAA0 pins=A inject=NO
+comb R2C3 SLICED 1 mode=CCU2 init=0xAAA0 pins=A inject=NO
+ff R2C5 SLICEA 1 clk=?@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C5 SLICEA 0 clk=?@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C4 SLICED 1 clk=?@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C3 SLICED 0 clk=?@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C3 SLICEC 1 clk=?@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C3 SLICEC 0 clk=?@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C3 SLICEB 1 clk=?@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C3 SLICEB 0 clk=?@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C3 SLICEA 1 clk=?@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C3 SLICEA 0 clk=?@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C2 SLICED 1 clk=?@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C2 SLICED 0 clk=?@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C2 SLICEC 1 clk=?@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C4 SLICED 0 clk=?@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C2 SLICEC 0 clk=?@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C2 SLICEB 1 clk=?@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C2 SLICEB 0 clk=?@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C4 SLICEC 1 clk=?@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C4 SLICEC 0 clk=?@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C4 SLICEB 1 clk=?@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C4 SLICEB 0 clk=?@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C4 SLICEA 1 clk=?@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C4 SLICEA 0 clk=?@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C3 SLICED 1 clk=?@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+
+net n2036 R2C5/Q0_SLICE R2C5/B0
+net n2043 R2C4/FCO_SLICE R2C5/FCI_SLICE
+net n2049 R2C5/F0_SLICE R2C5/DI0_SLICE
+net n2050 R2C5/F1_SLICE R2C5/DI1_SLICE
+net n2058 R2C2/Q2_SLICE R2C2/A2
+net n2060 R2C2/Q3_SLICE R2C2/B3
+net n2068 R2C2/FCOB_SLICE R2C2/FCIC_SLICE
+net n2073 R2C2/F2_SLICE R2C2/DI2_SLICE
+net n2074 R2C2/F3_SLICE R2C2/DI3_SLICE
+net n2080 R2C3/Q2_SLICE R2C3/B2
+net n2081 R2C3/Q3_SLICE R2C3/B3
+net n2087 R2C3/FCOA_SLICE R2C3/FCIB_SLICE
+net n2089 R2C3/FCOB_SLICE R2C3/FCIC_SLICE
+net n2094 R2C3/F2_SLICE R2C3/DI2_SLICE
+net n2095 R2C3/F3_SLICE R2C3/DI3_SLICE
+net n2101 R2C3/Q4_SLICE R2C3/A4
+net n2102 R2C3/Q5_SLICE R2C3/A5
+net n2108 R2C3/FCOC_SLICE R2C3/FCID_SLICE
+net n2113 R2C3/F4_SLICE R2C3/DI4_SLICE
+net n2114 R2C3/F5_SLICE R2C3/DI5_SLICE
+net n2120 R2C3/Q0_SLICE R2C3/B0
+net n2121 R2C3/Q1_SLICE R2C3/B1
+net n2127 R2C2/FCO_SLICE R2C3/FCI_SLICE
+net n2132 R2C3/F0_SLICE R2C3/DI0_SLICE
+net n2133 R2C3/F1_SLICE R2C3/DI1_SLICE
+net n2139 R2C2/Q6_SLICE R2C2/A6
+net n2140 R2C2/Q7_SLICE R2C2/A7
+net n2146 R2C2/FCOC_SLICE R2C2/FCID_SLICE
+net n2151 R2C2/F6_SLICE R2C2/DI6_SLICE
+net n2152 R2C2/F7_SLICE R2C2/DI7_SLICE
+net n2158 R2C2/Q4_SLICE R2C2/A4
+net n2159 R2C2/Q5_SLICE R2C2/A5
+net n2168 R2C2/F4_SLICE R2C2/DI4_SLICE
+net n2169 R2C2/F5_SLICE R2C2/DI5_SLICE
+net n2175 R2C4/Q6_SLICE R2C4/A6
+net n2176 R2C4/Q7_SLICE R2C4/A7
+net n2182 R2C4/FCOC_SLICE R2C4/FCID_SLICE
+net n2187 R2C4/F6_SLICE R2C4/DI6_SLICE
+net n2188 R2C4/F7_SLICE R2C4/DI7_SLICE
+net n2194 R2C4/Q4_SLICE R2C4/A4
+net n2195 R2C4/Q5_SLICE R2C4/A5
+net n2201 R2C4/FCOB_SLICE R2C4/FCIC_SLICE
+net n2206 R2C4/F4_SLICE R2C4/DI4_SLICE
+net n2207 R2C4/F5_SLICE R2C4/DI5_SLICE
+net n2213 R2C4/Q2_SLICE R2C4/B2
+net n2214 R2C4/Q3_SLICE R2C4/B3
+net n2220 R2C4/FCOA_SLICE R2C4/FCIB_SLICE
+net n2225 R2C4/F2_SLICE R2C4/DI2_SLICE
+net n2226 R2C4/F3_SLICE R2C4/DI3_SLICE
+net n2232 R2C4/Q0_SLICE R2C4/B0
+net n2233 R2C4/Q1_SLICE R2C4/B1
+net n2239 R2C3/FCO_SLICE R2C4/FCI_SLICE
+net n2244 R2C4/F0_SLICE R2C4/DI0_SLICE
+net n2245 R2C4/F1_SLICE R2C4/DI1_SLICE
+net n2251 R2C3/Q6_SLICE R2C3/A6
+net n2252 R2C3/Q7_SLICE R2C3/A7
+net n2261 R2C3/F6_SLICE R2C3/DI6_SLICE
+net n2262 R2C3/F7_SLICE R2C3/DI7_SLICE
+net n2347 R2C5/Q1_SLICE R0C4/PADDOA_PIO R2C5/B1
+net n2353 R3C2/F3_SLICE R2C2/B0
+net n2357 R2C2/FCOA_SLICE R2C2/FCIB_SLICE
+net n2359 R2C5/FCOA_SLICE R2C5/FCIB_SLICE
+net n2403 R0C29/JPADDIA_PIO R2C2/CLK1_SLICE R2C2/CLK2_SLICE R2C2/CLK3_SLICE R2C3/CLK0_SLICE R2C3/CLK1_SLICE R2C3/CLK2_SLICE R2C3/CLK3_SLICE R2C4/CLK0_SLICE R2C4/CLK1_SLICE R2C4/CLK2_SLICE R2C4/CLK3_SLICE R2C5/CLK0_SLICE

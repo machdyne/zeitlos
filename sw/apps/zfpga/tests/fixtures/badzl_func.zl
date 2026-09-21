@@ -1,0 +1,5 @@
+# expect: func=a+b: unexpected
+device LFE5U-25F
+package CABGA256
+input x A7 net=x
+lut l func=a+b a=x b=x z=y

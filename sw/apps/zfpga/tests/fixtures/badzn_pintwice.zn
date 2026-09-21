@@ -1,0 +1,5 @@
+# expect: already used on line 4
+device LFE5U-25F
+package CABGA256
+io A2 dir=OUTPUT
+io A2 dir=INPUT

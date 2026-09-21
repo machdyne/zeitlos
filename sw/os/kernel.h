@@ -380,7 +380,7 @@ static inline uint32_t z_proc_stack_size_for(const char *name) {
 	// Same 8MB-and-up consequence as the two below: on a 1MB board
 	// this cannot succeed and should not, since the smallest useful
 	// pack is 1.3MB on the card.
-    // `zfpga` holds its chip database resident (1.3MB for a 25F, the
+    // `zfpga` holds its chip database resident (1.5MB for a 25F, the
     // whole file, because lookups are random-access) plus the
     // configuration memory it builds (560KB for a 25F, 1.9MB for an
     // 85F). BIG's 1MB cannot hold the database alone. See

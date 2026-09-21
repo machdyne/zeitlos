@@ -105,6 +105,7 @@ SUPPLEMENTAL = [
     ("apps/mmod", "sw/apps/mmod/mmod.bin"),
     ("apps/logic", "sw/apps/logic/logic.bin"),
     ("apps/serial", "sw/apps/serial/serial.bin"),
+    ("apps/tts", "sw/apps/tts/tts.bin"),
 ]
 
 # The casino. One dock icon (apps/casino) launches the rest, so the
@@ -153,11 +154,13 @@ SHELLS = [
 # without libz/ below -- see LIBZ_FILES.
 SELFHOST = [
     ("apps/zcc", "sw/apps/zcc/zcc.bin"),
+    ("apps/zfpga", "sw/apps/zfpga/zfpga.bin"),
     ("apps/vi", "sw/apps/vi/vi.bin"),
     ("apps/ttytest", "sw/apps/ttytest/ttytest.bin"),
 ]
 
-DIRS = ["apps", "audio", "docs", "ark", "user", "libz", "libz/include"]
+DIRS = ["apps", "audio", "docs", "ark", "user", "libz", "libz/include",
+        "fpga", "fpga/boards", "fpga/examples"]
 
 # -- ask packs --
 #
@@ -214,6 +217,33 @@ LIBZ_HEADER_DIRS = [
 # header in everything but name and extension.
 LIBZ_EXTRA = [
     ("libz/include/syscalls.def", "sw/common/syscalls.def"),
+]
+
+# -- the zfpga chip databases, under fpga/ --
+#
+# zfpga looks in /fpga by default, the way zcc looks in /libz, so the
+# layout is fixed and nothing needs to be typed. One .zdb per die:
+# lfe5u-25f.zdb also serves the 12F (identical tilegrid, docs/zfpga.md
+# sec. 2.2). 45F and 85F databases will join this list when their
+# vendored data does (sw/apps/zfpga/ext/prjtrellis-db/README.zeitlos.md).
+# Without one, zfpga refuses at the .device line and names the file it
+# looked for.
+FPGA_FILES = [
+    # 8.3: FatFs here has no long names. `lfe5u-25f.zdb` was nine
+    # characters; mcopy wrote it with a VFAT long-name entry, Linux read
+    # it back fine, and the board saw only a mangled alias
+    # (docs/zfpga.md sec. 22).
+    ("fpga/lfe5u25f.zdb", "sw/apps/zfpga/db/lfe5u25f.zdb"),
+    # board profiles and their pins: `zfpga build design.v -b lakritz`
+    ("fpga/boards/lakritz.brd", "sw/apps/zfpga/db/boards/lakritz.brd"),
+    ("fpga/boards/lakritz.lpf", "sw/apps/zfpga/db/boards/lakritz.lpf"),
+    # something to build: docs/zfpga-test.md walks through these
+    ("fpga/examples/blink.v", "sw/apps/zfpga/db/examples/blink.v"),
+    ("fpga/examples/blinkf.v", "sw/apps/zfpga/db/examples/blinkf.v"),
+    ("fpga/examples/empty.zn", "sw/apps/zfpga/db/examples/empty.zn"),
+    ("fpga/examples/on.zn", "sw/apps/zfpga/db/examples/on.zn"),
+    ("fpga/examples/blink.zn", "sw/apps/zfpga/db/examples/blink.zn"),
+    ("fpga/examples/hand.zl", "sw/apps/zfpga/db/examples/hand.zl"),
 ]
 
 # Something to compile.
@@ -334,7 +364,7 @@ def build(root, out_path, ark_dir=None, verbose=True):
     # them compiles only freestanding programs -- so their absence is
     # an error here rather than a quiet omission.
     missing += [p for _, p in LIBZ_FILES + LIBZ_EXTRA + CONFIG_FILES
-                + EXAMPLES
+                + EXAMPLES + FPGA_FILES
                 if not os.path.exists(os.path.join(root, p))]
 
     if missing:
@@ -433,6 +463,19 @@ def build(root, out_path, ark_dir=None, verbose=True):
             _run(["mmd", "-i", out_path, "::/%s" % sub])
             made_dirs.add(sub)
 
+    def fits_83(dest):
+        """Every component of a card path, 8.3. FatFs here is FF_USE_LFN
+        0 (sw/os/fs/fatfs/ffconf.h), so a name that does not fit cannot
+        be opened on the card: mcopy stores it under a long-name entry,
+        Linux shows it as written, and FatFs sees only a mangled short
+        alias."""
+        for part in dest.strip("/").split("/"):
+            stem, _, ext = part.partition(".")
+            if not stem or len(stem) > 8 or len(ext) > 3 or "." in ext:
+                raise FatError(
+                    "'%s' does not fit an 8.3 name and cannot go on the card "
+                    "(FatFs here is FF_USE_LFN 0)" % dest)
+
     for name, rel in apps:
         # 8.3 is not advice: FatFs here is FF_USE_LFN 0
         # (sw/os/fs/fatfs/ffconf.h), so a name longer than eight
@@ -468,10 +511,17 @@ def build(root, out_path, ark_dir=None, verbose=True):
 
     # -- the zcc runtime --
     for name, rel in LIBZ_FILES + LIBZ_EXTRA + EXAMPLES:
+        fits_83(name)
+        copy(os.path.join(root, rel), "/" + name)
+
+    # -- the zfpga databases --
+    for name, rel in FPGA_FILES:
+        fits_83(name)
         copy(os.path.join(root, rel), "/" + name)
 
     # -- the configuration template --
     for name, rel in CONFIG_FILES:
+        fits_83(name)
         copy(os.path.join(root, rel), "/" + name)
 
     # Headers by directory rather than by name: the set is "whatever

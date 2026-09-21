@@ -1,0 +1,3 @@
+# expect: unknown statement 'lut'
+device LFE5U-25F
+lut R2C4 SLICEA 0

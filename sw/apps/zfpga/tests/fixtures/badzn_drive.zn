@@ -1,0 +1,4 @@
+# expect: drive= is only supported on LVCMOS33
+device LFE5U-25F
+package CABGA256
+io A10 dir=OUTPUT type=LVCMOS25 drive=8

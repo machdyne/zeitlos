@@ -1,0 +1,35 @@
+# Rung 2 of docs/zfpga.md sec. 5.3: the Lakritz LED, permanently on.
+# Written by hand, and byte-identical to nextpnr's placement of
+# `assign LED_B = 1'b1;` (tests/run.sh checks it).
+#
+# LED polarity on the board is not confirmed; if the LED stays dark,
+# the fix is init=0x0000.
+#
+#   zfpga pnr on.zn && zfpga pack on.config -c
+
+device LFE5U-25F
+package CABGA256
+
+# A LUT with no inputs is a constant: every one of its 16 INIT bits is
+# 1, so its output is 1 whatever the (unused) inputs are. pins=- says no
+# input pin is routed, which is what makes zfpga pnr tie all four off.
+# Tile R2C4 is two rows below the LED's pin, so the route is short.
+comb R2C4 SLICED 0 init=0xFFFF pins=-
+
+# The LED: pin A2, the top edge, bank 0. An output with no tristate
+# net, so zfpga pnr also writes the PIO's tristate tie (CIB_R1C4
+# CIB.JB0MUX 0) and sets bank 0 to 3.3V.
+io A2 dir=OUTPUT type=LVCMOS33
+
+# The route, LUT to pad, in Trellis's tile-relative names:
+#
+#   the LUT's output onto the tile's F6 wire (slice D, LUT 0 is F6)
+arc R2C4:PLC2 F6 F6_SLICE
+#   F6 drives a span-2 wire heading north, which this tile calls
+#   N1_V02N0401 and the tile above calls V02N0401
+arc R2C4:PLC2 N1_V02N0401 F6
+#   in CIB_R1C4, beside the pad, that wire drops onto a local wire...
+arc CIB_R1C4:CIB H00R0000 V02N0401
+#   ...and the local wire drives JA0, which is fixed-connected to the
+#   PIO's data input
+arc CIB_R1C4:CIB JA0 H00R0000

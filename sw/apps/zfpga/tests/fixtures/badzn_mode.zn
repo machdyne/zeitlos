@@ -1,0 +1,3 @@
+# expect: LUT mode DPRAM is not supported yet
+device LFE5U-25F
+comb R2C4 SLICEA 0 mode=DPRAM

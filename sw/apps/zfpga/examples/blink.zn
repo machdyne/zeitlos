@@ -1,0 +1,165 @@
+# Rung 3 of docs/zfpga.md sec. 5.3: the blinky (examples/blink.v), as
+# nextpnr placed and routed it, converted by tools/np2zn.py. Too big
+# to route by hand without Phase 4; byte-identical to nextpnr.
+#
+#   zfpga pnr blink.zn && zfpga pack blink.config -c
+device LFE5U-25F
+package CABGA256
+speed 6
+
+comb R3C2 SLICEB 1 mode=LOGIC init=0x0000 pins=-
+comb R29C12 SLICEA 0 mode=LOGIC init=0xFFFF pins=-
+dcc R0C31 TDCC0
+comb R2C2 SLICEA 0 mode=CCU2 init=0x000C pins=B inject=NO
+comb R2C2 SLICEA 1 mode=CCU2 init=0xFFFF pins=- inject=YES
+comb R2C5 SLICEB 0 mode=CCU2 init=0x0000 pins=- inject=NO
+comb R2C5 SLICEB 1 mode=CCU2 init=0x000E pins=- inject=NO
+io R0C29.A dir=INPUT type=LVCMOS33 datamux_oddr=PADDO datamux_mddr=PADDO
+io R0C4.A dir=OUTPUT type=LVCMOS33 datamux_oddr=PADDO datamux_mddr=PADDO
+comb R2C5 SLICEA 0 mode=CCU2 init=0xCCC0 pins=B inject=NO
+comb R2C5 SLICEA 1 mode=CCU2 init=0xCCC0 pins=B inject=NO
+comb R2C2 SLICEB 0 mode=CCU2 init=0x666C pins=A inject=NO
+comb R2C2 SLICEB 1 mode=CCU2 init=0xCCC0 pins=B inject=NO
+comb R2C3 SLICEB 0 mode=CCU2 init=0xCCC0 pins=B inject=NO
+comb R2C3 SLICEB 1 mode=CCU2 init=0xCCC0 pins=B inject=NO
+comb R2C3 SLICEC 0 mode=CCU2 init=0xAAA0 pins=A inject=NO
+comb R2C3 SLICEC 1 mode=CCU2 init=0xAAA0 pins=A inject=NO
+comb R2C3 SLICEA 0 mode=CCU2 init=0xCCC0 pins=B inject=NO
+comb R2C3 SLICEA 1 mode=CCU2 init=0xCCC0 pins=B inject=NO
+comb R2C2 SLICED 0 mode=CCU2 init=0xAAA0 pins=A inject=NO
+comb R2C2 SLICED 1 mode=CCU2 init=0xAAA0 pins=A inject=NO
+comb R2C2 SLICEC 0 mode=CCU2 init=0xAAA0 pins=A inject=NO
+comb R2C2 SLICEC 1 mode=CCU2 init=0xAAA0 pins=A inject=NO
+comb R2C4 SLICED 0 mode=CCU2 init=0xAAA0 pins=A inject=NO
+comb R2C4 SLICED 1 mode=CCU2 init=0xAAA0 pins=A inject=NO
+comb R2C4 SLICEC 0 mode=CCU2 init=0xAAA0 pins=A inject=NO
+comb R2C4 SLICEC 1 mode=CCU2 init=0xAAA0 pins=A inject=NO
+comb R2C4 SLICEB 0 mode=CCU2 init=0xCCC0 pins=B inject=NO
+comb R2C4 SLICEB 1 mode=CCU2 init=0xCCC0 pins=B inject=NO
+comb R2C4 SLICEA 0 mode=CCU2 init=0xCCC0 pins=B inject=NO
+comb R2C4 SLICEA 1 mode=CCU2 init=0xCCC0 pins=B inject=NO
+comb R2C3 SLICED 0 mode=CCU2 init=0xAAA0 pins=A inject=NO
+comb R2C3 SLICED 1 mode=CCU2 init=0xAAA0 pins=A inject=NO
+ff R2C5 SLICEA 1 clk=CLK0@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C5 SLICEA 0 clk=CLK0@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C4 SLICED 1 clk=CLK0@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C3 SLICED 0 clk=CLK0@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C3 SLICEC 1 clk=CLK0@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C3 SLICEC 0 clk=CLK0@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C3 SLICEB 1 clk=CLK0@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C3 SLICEB 0 clk=CLK0@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C3 SLICEA 1 clk=CLK0@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C3 SLICEA 0 clk=CLK0@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C2 SLICED 1 clk=CLK0@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C2 SLICED 0 clk=CLK0@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C2 SLICEC 1 clk=CLK0@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C4 SLICED 0 clk=CLK0@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C2 SLICEC 0 clk=CLK0@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C2 SLICEB 1 clk=CLK0@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C2 SLICEB 0 clk=CLK0@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C4 SLICEC 1 clk=CLK0@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C4 SLICEC 0 clk=CLK0@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C4 SLICEB 1 clk=CLK0@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C4 SLICEB 0 clk=CLK0@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C4 SLICEA 1 clk=CLK0@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C4 SLICEA 0 clk=CLK0@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff R2C3 SLICED 1 clk=CLK0@n2403 lsr=- gsr=DISABLED sd=1 regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+
+arc CIB_R1C29:CIB E1_H02E0001 JQ0
+arc CIB_R1C31:CIB E3_H06E0003 W1_H02E0001
+arc CIB_R1C37:CIB E1_H02E0001 W3_H06E0003
+arc CIB_R1C39:CIB JD7 W1_H02E0001
+arc CIB_R1C4:CIB JA0 H02W0701
+arc CIB_R1C5:CIB W1_H02W0701 V01N0101
+arc MIB_R0C31:TMID_0 G_TDCC0CLKI G_JTRQPCLKCIB1
+arc MIB_R13C31:CMUX_UL_0 G_DCS0CLK0 G_VPFN0000
+arc MIB_R13C31:CMUX_UL_0 G_ULPCLK0 G_VPFS0000
+arc MIB_R13C32:CMUX_UR_0 G_DCS0CLK1 G_VPFN0000
+arc MIB_R13C32:CMUX_UR_0 G_URPCLK0 G_VPFS0000
+arc MIB_R13C3:DSP_SPINE_UL1 G_VPTX0000 G_HPRX0000
+arc MIB_R37C31:CMUX_LL_0 G_DCS1CLK0 G_VPFN0000
+arc MIB_R37C31:CMUX_LL_0 G_LLPCLK0 G_VPFS0000
+arc MIB_R37C32:CMUX_LR_0 G_DCS1CLK1 G_VPFN0000
+arc MIB_R37C32:CMUX_LR_0 G_LRPCLK0 G_VPFS0000
+arc R2C2:PLC2 A2 V00T0000
+arc R2C2:PLC2 A4 V00B0000
+arc R2C2:PLC2 A5 Q5
+arc R2C2:PLC2 A6 H00R0000
+arc R2C2:PLC2 A7 Q7
+arc R2C2:PLC2 B0 V02N0301
+arc R2C2:PLC2 B3 Q3
+arc R2C2:PLC2 CLK0 G_HPBX0000
+arc R2C2:PLC2 F2 F2_SLICE
+arc R2C2:PLC2 F3 F3_SLICE
+arc R2C2:PLC2 F4 F4_SLICE
+arc R2C2:PLC2 F5 F5_SLICE
+arc R2C2:PLC2 F6 F6_SLICE
+arc R2C2:PLC2 F7 F7_SLICE
+arc R2C2:PLC2 H00R0000 Q6
+arc R2C2:PLC2 MUXCLK1 CLK0
+arc R2C2:PLC2 MUXCLK2 CLK0
+arc R2C2:PLC2 MUXCLK3 CLK0
+arc R2C2:PLC2 V00B0000 Q4
+arc R2C2:PLC2 V00T0000 Q2
+arc R2C3:PLC2 A4 V00B0000
+arc R2C3:PLC2 A5 Q5
+arc R2C3:PLC2 A6 H00R0000
+arc R2C3:PLC2 A7 Q7
+arc R2C3:PLC2 B0 V00T0000
+arc R2C3:PLC2 B1 Q1
+arc R2C3:PLC2 B2 H01W0100
+arc R2C3:PLC2 B3 Q3
+arc R2C3:PLC2 CLK0 G_HPBX0000
+arc R2C3:PLC2 F0 F0_SLICE
+arc R2C3:PLC2 F1 F1_SLICE
+arc R2C3:PLC2 F2 F2_SLICE
+arc R2C3:PLC2 F3 F3_SLICE
+arc R2C3:PLC2 F4 F4_SLICE
+arc R2C3:PLC2 F5 F5_SLICE
+arc R2C3:PLC2 F6 F6_SLICE
+arc R2C3:PLC2 F7 F7_SLICE
+arc R2C3:PLC2 H00R0000 Q6
+arc R2C3:PLC2 H01W0100 Q2
+arc R2C3:PLC2 MUXCLK0 CLK0
+arc R2C3:PLC2 MUXCLK1 CLK0
+arc R2C3:PLC2 MUXCLK2 CLK0
+arc R2C3:PLC2 MUXCLK3 CLK0
+arc R2C3:PLC2 V00B0000 Q4
+arc R2C3:PLC2 V00T0000 Q0
+arc R2C4:PLC2 A4 V00B0000
+arc R2C4:PLC2 A5 Q5
+arc R2C4:PLC2 A6 H00R0000
+arc R2C4:PLC2 A7 Q7
+arc R2C4:PLC2 B0 V00T0000
+arc R2C4:PLC2 B1 Q1
+arc R2C4:PLC2 B2 H01W0100
+arc R2C4:PLC2 B3 Q3
+arc R2C4:PLC2 CLK0 G_HPBX0000
+arc R2C4:PLC2 F0 F0_SLICE
+arc R2C4:PLC2 F1 F1_SLICE
+arc R2C4:PLC2 F2 F2_SLICE
+arc R2C4:PLC2 F3 F3_SLICE
+arc R2C4:PLC2 F4 F4_SLICE
+arc R2C4:PLC2 F5 F5_SLICE
+arc R2C4:PLC2 F6 F6_SLICE
+arc R2C4:PLC2 F7 F7_SLICE
+arc R2C4:PLC2 H00R0000 Q6
+arc R2C4:PLC2 H01W0100 Q2
+arc R2C4:PLC2 MUXCLK0 CLK0
+arc R2C4:PLC2 MUXCLK1 CLK0
+arc R2C4:PLC2 MUXCLK2 CLK0
+arc R2C4:PLC2 MUXCLK3 CLK0
+arc R2C4:PLC2 V00B0000 Q4
+arc R2C4:PLC2 V00T0000 Q0
+arc R2C5:PLC2 B0 V00T0000
+arc R2C5:PLC2 B1 Q1
+arc R2C5:PLC2 CLK0 G_HPBX0000
+arc R2C5:PLC2 F0 F0_SLICE
+arc R2C5:PLC2 F1 F1_SLICE
+arc R2C5:PLC2 MUXCLK0 CLK0
+arc R2C5:PLC2 N1_V01N0101 Q1
+arc R2C5:PLC2 V00T0000 Q0
+arc R3C2:PLC2 F3 F3_SLICE
+arc R3C2:PLC2 N1_V02N0301 F3
+arc TAP_R2C4:TAP_DRIVE L_HPBX0000 G_VPTX0000
+arc TAP_R2C4:TAP_DRIVE R_HPBX0000 G_VPTX0000

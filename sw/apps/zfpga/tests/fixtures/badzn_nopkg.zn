@@ -1,0 +1,3 @@
+# expect: needs a 'package' line
+device LFE5U-25F
+io A2 dir=OUTPUT

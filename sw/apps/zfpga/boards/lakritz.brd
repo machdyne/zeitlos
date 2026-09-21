@@ -1,0 +1,11 @@
+# Machdyne Lakritz: ECP5 LFE5U-25F in CABGA256.
+#
+#   zfpga build /fpga/examples/blink.v -b lakritz
+#
+# The pins are the tree's own boards/lakritz_v0.lpf, installed beside
+# this file as lakritz.lpf. `pack -c`: compressed, which is what Zeitlos's
+# own build uses (its --freq 2.4 is the power-on default, the same bytes).
+device  LFE5U-25F
+package CABGA256
+lpf     lakritz.lpf
+pack    -c

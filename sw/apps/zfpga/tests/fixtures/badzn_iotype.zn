@@ -1,0 +1,4 @@
+# expect: IO type LVDS is not supported yet
+device LFE5U-25F
+package CABGA256
+io A2 dir=OUTPUT type=LVDS

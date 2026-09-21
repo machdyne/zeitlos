@@ -1,0 +1,2 @@
+# expect: 'device' must come first
+comb R2C4 SLICEA 0

@@ -1,0 +1,9 @@
+# build products; see Makefile and Makefile.host
+build/
+db/
+tests/out/
+zfpga
+zfpga.elf
+zfpga.bin
+zfpga.map
+zfpga.dasm

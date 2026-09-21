@@ -1,0 +1,4 @@
+# expect: CLK0 in R2C4:PLC2 carries two nets
+device LFE5U-25F
+ff R2C4 SLICEA 0 clk=CLK0@a
+ff R2C4 SLICEB 0 clk=CLK0@b

@@ -1,0 +1,3 @@
+# expect: loc=R2C4.E: want
+device LFE5U-25F
+lut l func=~a a=x z=y loc=R2C4.E

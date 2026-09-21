@@ -1,0 +1,4 @@
+# expect: package CABGA256 has no pin Z99
+device LFE5U-25F
+package CABGA256
+io Z99 dir=OUTPUT

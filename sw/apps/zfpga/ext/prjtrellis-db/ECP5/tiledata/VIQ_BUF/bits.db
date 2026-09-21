@@ -1,0 +1,10 @@
+# Routing Mux Bits
+
+# Non-Routing Configuration
+.config_enum GSR.SYNCMODE ASYNC
+ASYNC -
+NONE -
+SYNC F2B0
+
+
+# Fixed Connections

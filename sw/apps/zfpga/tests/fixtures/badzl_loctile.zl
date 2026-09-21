@@ -1,0 +1,6 @@
+# expect: loc=R0C4 is not a logic (PLC2) tile
+device LFE5U-25F
+package CABGA256
+input x A7 net=x
+output y A2 net=y
+lut l func=~a a=x z=y loc=R0C4

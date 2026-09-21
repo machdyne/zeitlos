@@ -1,0 +1,43 @@
+# tests/fixtures/blink_c.zl: examples/blink.v, synth_ecp5 -nowidelut -nodsp -nobram -nolutram (carry chains on), via tools/ys2zl.py
+device LFE5U-25F
+package CABGA256
+
+input CLK_48 A7 net=n2 io_type=LVCMOS33
+output LED_B A2 net=n3 io_type=LVCMOS33
+
+ccu2 LED_B_CCU2C_B1 init0=0x96AA init1=0x96AA inject0=NO inject1=NO a0=0 b0=n4 c0=0 d0=1 a1=0 b1=n3 c1=0 d1=1 cin=n5 cout=n6 s0=n7 s1=n8
+ccu2 LED_B_CCU2C_B1_S0_CCU2C_S0 init0=0x96AA init1=0x96AA inject0=NO inject1=NO a0=1 b0=n9 c0=0 d0=1 a1=0 b1=n10 c1=0 d1=1 cin=0 cout=n11 s0=n12 s1=n13
+ccu2 LED_B_CCU2C_B1_S0_CCU2C_S0_1 init0=0x96AA init1=0x96AA inject0=NO inject1=NO a0=0 b0=n14 c0=0 d0=1 a1=0 b1=n15 c1=0 d1=1 cin=n16 cout=n17 s0=n18 s1=n19
+ccu2 LED_B_CCU2C_B1_S0_CCU2C_S0_10 init0=0x96AA init1=0x96AA inject0=NO inject1=NO a0=0 b0=n20 c0=0 d0=1 a1=0 b1=n21 c1=0 d1=1 cin=n17 cout=n22 s0=n23 s1=n24
+ccu2 LED_B_CCU2C_B1_S0_CCU2C_S0_2 init0=0x96AA init1=0x96AA inject0=NO inject1=NO a0=0 b0=n25 c0=0 d0=1 a1=0 b1=n26 c1=0 d1=1 cin=n27 cout=n16 s0=n28 s1=n29
+ccu2 LED_B_CCU2C_B1_S0_CCU2C_S0_3 init0=0x96AA init1=0x96AA inject0=NO inject1=NO a0=0 b0=n30 c0=0 d0=1 a1=0 b1=n31 c1=0 d1=1 cin=n32 cout=n27 s0=n33 s1=n34
+ccu2 LED_B_CCU2C_B1_S0_CCU2C_S0_4 init0=0x96AA init1=0x96AA inject0=NO inject1=NO a0=0 b0=n35 c0=0 d0=1 a1=0 b1=n36 c1=0 d1=1 cin=n11 cout=n32 s0=n37 s1=n38
+ccu2 LED_B_CCU2C_B1_S0_CCU2C_S0_5 init0=0x96AA init1=0x96AA inject0=NO inject1=NO a0=0 b0=n39 c0=0 d0=1 a1=0 b1=n40 c1=0 d1=1 cin=n41 cout=n5 s0=n42 s1=n43
+ccu2 LED_B_CCU2C_B1_S0_CCU2C_S0_6 init0=0x96AA init1=0x96AA inject0=NO inject1=NO a0=0 b0=n44 c0=0 d0=1 a1=0 b1=n45 c1=0 d1=1 cin=n46 cout=n41 s0=n47 s1=n48
+ccu2 LED_B_CCU2C_B1_S0_CCU2C_S0_7 init0=0x96AA init1=0x96AA inject0=NO inject1=NO a0=0 b0=n49 c0=0 d0=1 a1=0 b1=n50 c1=0 d1=1 cin=n51 cout=n46 s0=n52 s1=n53
+ccu2 LED_B_CCU2C_B1_S0_CCU2C_S0_8 init0=0x96AA init1=0x96AA inject0=NO inject1=NO a0=0 b0=n54 c0=0 d0=1 a1=0 b1=n55 c1=0 d1=1 cin=n56 cout=n51 s0=n57 s1=n58
+ccu2 LED_B_CCU2C_B1_S0_CCU2C_S0_9 init0=0x96AA init1=0x96AA inject0=NO inject1=NO a0=0 b0=n59 c0=0 d0=1 a1=0 b1=n60 c1=0 d1=1 cin=n22 cout=n56 s0=n61 s1=n62
+ff LED_B_TRELLIS_FF_Q d=n8 q=n3 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff ctr_TRELLIS_FF_Q d=n7 q=n4 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff ctr_TRELLIS_FF_Q_1 d=n43 q=n40 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff ctr_TRELLIS_FF_Q_10 d=n61 q=n59 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff ctr_TRELLIS_FF_Q_11 d=n24 q=n21 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff ctr_TRELLIS_FF_Q_12 d=n23 q=n20 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff ctr_TRELLIS_FF_Q_13 d=n19 q=n15 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff ctr_TRELLIS_FF_Q_14 d=n18 q=n14 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff ctr_TRELLIS_FF_Q_15 d=n29 q=n26 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff ctr_TRELLIS_FF_Q_16 d=n28 q=n25 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff ctr_TRELLIS_FF_Q_17 d=n34 q=n31 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff ctr_TRELLIS_FF_Q_18 d=n33 q=n30 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff ctr_TRELLIS_FF_Q_19 d=n38 q=n36 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff ctr_TRELLIS_FF_Q_2 d=n42 q=n39 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff ctr_TRELLIS_FF_Q_20 d=n37 q=n35 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff ctr_TRELLIS_FF_Q_21 d=n13 q=n10 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff ctr_TRELLIS_FF_Q_22 d=n12 q=n9 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff ctr_TRELLIS_FF_Q_3 d=n48 q=n45 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff ctr_TRELLIS_FF_Q_4 d=n47 q=n44 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff ctr_TRELLIS_FF_Q_5 d=n53 q=n50 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff ctr_TRELLIS_FF_Q_6 d=n52 q=n49 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff ctr_TRELLIS_FF_Q_7 d=n58 q=n55 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff ctr_TRELLIS_FF_Q_8 d=n57 q=n54 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff ctr_TRELLIS_FF_Q_9 d=n62 q=n60 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR

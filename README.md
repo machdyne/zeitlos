@@ -125,6 +125,7 @@ On the sdcard, started at boot when a card is present. A `term` window can conne
 | [serial](docs/uart1.md) | Serial port service |
 | [tts](docs/tts.md) | Text-to-speech service (Super+S to turn speech on) |
 | [zcc](docs/zcc.md) | C compiler |
+| [zfpga](docs/zfpga.md) | FPGA toolchain (synthesis, place-and-route, bitstream packing) |
 | vi | Port of the [nextvi](https://github.com/kyx0r/nextvi) terminal text editor |
 
 ### Boards
@@ -356,3 +357,5 @@ The contents of this repo are released under the [Lone Dynamics Open License](LI
 - sw/os/fs/fatfs uses a BSD compatible license.
 - sw/data/ark uses Creative Commons Attribution-ShareAlike 4.0 International License (CC BY-SA) and the GNU Free Documentation License (GFDL).
 - sw/ext/nextvi uses an ISC license.
+- sw/apps/zfpga/ext/prjtrellis-db (the Project Trellis ECP5 database) uses the CC0 1.0 license.
+- sw/apps/zfpga/ext/nextpnr-base (baseline data extracted from nextpnr) uses the ISC license.

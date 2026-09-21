@@ -36,15 +36,16 @@ APPS = casino poker roulette blackjack slots craps \
 	repl \
 	posix \
 	zcc \
+	zfpga \
 	ttytest \
+	tts \
+	ttstest \
 	vi \
 	space3d \
 	audiotest \
 	play \
 	track \
 	midi \
-	tts \
-	ttstest \
 	gamedemo \
 	chip8 \
 	chess \

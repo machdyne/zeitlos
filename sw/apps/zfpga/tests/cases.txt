@@ -1,0 +1,38 @@
+# zfpga differential cases.
+#
+#   name | fixture | zfpga pack options | ecppack options | database
+#
+# database: "vendored" is db/ built from ext/prjtrellis-db; "host" is
+# built from an installed Trellis database ($TRELLIS_DB, default
+# /usr/share/trellis/database) for the dies not vendored yet (45F, 85F).
+#
+# Fixtures, all nextpnr-ecp5 0.6 --textcfg output unless noted:
+#   blink     24-bit counter on a Lakritz, CLK_48 -> LED_B
+#   dfu       machdyne/tinydfu-bootloader boards/lakritz, the real
+#             bootloader: USRMCLK, BB, EBR (.bram_init), a .tile_group
+#   blink45   the same blinky on a 45F / CABGA256 (mozart, sergei)
+#   blink85   the same blinky on an 85F / CABGA381 (ULX3S 85F)
+#   edge      hand-assembled: .comment before .device, .sysconfig
+#             MCCLK_FREQ 62 and COMPRESS_CONFIG ON, two entries on one
+#             line, a trailing comment, _NONE_, unknown:, a written
+#             .bram_init, a .tile_group
+
+blink          | blink   |                  |                                | vendored
+blink_c        | blink   | -c               | --compress                     | vendored
+blink_zeitlos  | blink   | -c -f 2.4        | --compress --freq 2.4          | vendored
+blink_freq     | blink   | -c -f 38.8       | --compress --freq 38.8         | vendored
+blink_boot     | blink   | -c -a 0x190000   | --compress --bootaddr 0x190000 | vendored
+blink_boot0    | blink   | -a 0             | --bootaddr 0                   | vendored
+blink_qspi     | blink   | -m qspi          | --spimode qspi                 | vendored
+blink_user     | blink   | -u 0xdeadbeef    | --usercode 3735928559          | vendored
+blink_idcode   | blink   | -i 0x21111043    | --idcode 0x21111043            | vendored
+blink_bg       | blink   | --background     | --background                   | vendored
+dfu            | dfu     |                  |                                | vendored
+dfu_c          | dfu     | -c               | --compress                     | vendored
+dfu_boot       | dfu     | -c -a 0x040000   | --compress --bootaddr 0x040000 | vendored
+edge           | edge    |                  |                                | vendored
+edge_boot      | edge    | -a 0x010000      | --bootaddr 0x010000            | vendored
+blink45        | blink45 |                  |                                | host
+blink45_c      | blink45 | -c -a 0x100000   | --compress --bootaddr 0x100000 | host
+blink85        | blink85 |                  |                                | host
+blink85_c      | blink85 | -c -a 0x100000   | --compress --bootaddr 0x100000 | host

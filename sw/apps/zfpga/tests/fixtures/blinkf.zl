@@ -1,0 +1,15 @@
+# tests/fixtures/blinkf.zl: examples/blinkf.v, synth_ecp5 -noccu2 -nowidelut -nodsp -nobram -nolutram, via tools/ys2zl.py
+device LFE5U-25F
+package CABGA256
+
+input CLK_48 A7 net=n2 io_type=LVCMOS33
+output LED_B A2 net=n3 io_type=LVCMOS33
+
+lut LED_B_LUT4_D init=0x7F80 a=n4 b=n5 c=n6 d=n3 z=n7
+lut LED_B_LUT4_D_Z_LUT4_Z init=0x0FF0 a=0 b=0 c=n4 d=n5 z=n8
+lut LED_B_LUT4_D_Z_LUT4_Z_1 init=0x3FC0 a=0 b=n4 c=n5 d=n6 z=n9
+ff LED_B_TRELLIS_FF_Q d=n7 q=n3 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff ctr_TRELLIS_FF_Q d=n9 q=n6 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff ctr_TRELLIS_FF_Q_1 d=n8 q=n5 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff ctr_TRELLIS_FF_Q_2 d=n10 q=n4 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+lut ctr_TRELLIS_FF_Q_2_DI_LUT4_Z init=0x00FF a=0 b=0 c=0 d=n4 z=n10

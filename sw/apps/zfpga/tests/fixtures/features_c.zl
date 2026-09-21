@@ -1,0 +1,112 @@
+# tests/fixtures/features_c.zl: yosys synth_ecp5 -nowidelut -nodsp -nobram -nolutram of examples/features.v, via tools/ys2zl.py -- the reference zfpga synth is checked against
+device LFE5U-25F
+package CABGA256
+
+input a[0] A13 net=n5 io_type=LVCMOS33
+input a[1] A14 net=n6 io_type=LVCMOS33
+input a[2] A15 net=n7 io_type=LVCMOS33
+input a[3] A2 net=n8 io_type=LVCMOS33
+input b[0] A3 net=n9 io_type=LVCMOS33
+input b[1] A4 net=n10 io_type=LVCMOS33
+input b[2] A5 net=n11 io_type=LVCMOS33
+input b[3] A6 net=n12 io_type=LVCMOS33
+output bit_sel C14 net=n37 io_type=LVCMOS33
+input ci A9 net=n15 io_type=LVCMOS33
+input clk A10 net=n2 io_type=LVCMOS33
+output cnt_o[0] C3 net=n40 io_type=LVCMOS33
+output cnt_o[1] C4 net=n41 io_type=LVCMOS33
+output cnt_o[2] C5 net=n42 io_type=LVCMOS33
+output cnt_o[3] C6 net=n43 io_type=LVCMOS33
+input en A12 net=n4 io_type=LVCMOS33
+output eqz B5 net=n27 io_type=LVCMOS33
+output ge B4 net=n26 io_type=LVCMOS33
+output lt B3 net=n25 io_type=LVCMOS33
+output mx[0] B6 net=n28 io_type=LVCMOS33
+output mx[1] B7 net=n29 io_type=LVCMOS33
+output mx[2] B8 net=n30 io_type=LVCMOS33
+output mx[3] B9 net=n31 io_type=LVCMOS33
+output par C13 net=n36 io_type=LVCMOS33
+output q[0] B1 net=n16 io_type=LVCMOS33
+output q[1] B10 net=n17 io_type=LVCMOS33
+output q[2] B11 net=n18 io_type=LVCMOS33
+output q[3] B12 net=n19 io_type=LVCMOS33
+input rst_n A11 net=n3 io_type=LVCMOS33
+input sel[0] A7 net=n13 io_type=LVCMOS33
+input sel[1] A8 net=n14 io_type=LVCMOS33
+output sh[0] C1 net=n32 io_type=LVCMOS33
+output sh[1] C10 net=n33 io_type=LVCMOS33
+output sh[2] C11 net=n34 io_type=LVCMOS33
+output sh[3] C12 net=n35 io_type=LVCMOS33
+output st[0] C15 net=n38 io_type=LVCMOS33
+output st[1] C16 net=0 io_type=LVCMOS33
+output st[2] C2 net=n39 io_type=LVCMOS33
+output sum[0] B13 net=n20 io_type=LVCMOS33
+output sum[1] B14 net=n21 io_type=LVCMOS33
+output sum[2] B15 net=n22 io_type=LVCMOS33
+output sum[3] B16 net=n23 io_type=LVCMOS33
+output sum[4] B2 net=n24 io_type=LVCMOS33
+
+lut bit_sel_LUT4_Z init=0xFC0A a=n5 b=n7 c=n13 d=n44 z=n37
+lut bit_sel_LUT4_Z_D_LUT4_Z init=0xCFA0 a=n6 b=n8 c=n13 d=n14 z=n44
+ff cnt_TRELLIS_FF_Q d=n45 q=n43 clk=n2 lsr=0 gsr=DISABLED regset=SET cemux=1 clkmux=CLK lsrmux=LSR
+ff cnt_TRELLIS_FF_Q_1 d=n46 q=n42 clk=n2 lsr=n47 gsr=DISABLED regset=RESET srmode=LSR_OVER_CE cemux=1 clkmux=CLK lsrmux=LSR
+ff cnt_TRELLIS_FF_Q_2 d=n48 q=n41 clk=n2 lsr=n47 gsr=DISABLED regset=RESET srmode=LSR_OVER_CE cemux=1 clkmux=CLK lsrmux=LSR
+lut cnt_TRELLIS_FF_Q_2_DI_LUT4_Z init=0x3FC0 a=0 b=n40 c=n41 d=n42 z=n46
+lut cnt_TRELLIS_FF_Q_2_DI_LUT4_Z_1 init=0x0FF0 a=0 b=0 c=n40 d=n41 z=n48
+lut cnt_TRELLIS_FF_Q_2_LSR_LUT4_Z init=0x8000 a=n8 b=n7 c=n5 d=n6 z=n47
+ff cnt_TRELLIS_FF_Q_3 d=n49 q=n40 clk=n2 lsr=0 gsr=DISABLED regset=SET cemux=1 clkmux=CLK lsrmux=LSR
+lut cnt_TRELLIS_FF_Q_3_DI_LUT4_Z init=0x000F a=0 b=0 c=n47 d=n40 z=n49
+lut cnt_TRELLIS_FF_Q_DI_LUT4_Z init=0x000F a=0 b=0 c=n47 d=n50 z=n45
+lut cnt_TRELLIS_FF_Q_DI_LUT4_Z_D_LUT4_Z init=0x807F a=n42 b=n40 c=n41 d=n43 z=n50
+lut eqz_LUT4_Z init=0x0300 a=0 b=n5 c=n6 d=n51 z=n27
+lut eqz_LUT4_Z_D_LUT4_Z init=0x0003 a=0 b=n8 c=n7 d=n4 z=n51
+lut ge_LUT4_Z init=0x00FF a=0 b=0 c=0 d=n25 z=n26
+lut lt_LUT4_Z init=0xAE0F a=n52 b=n9 c=n53 d=n54 z=n25
+lut lt_LUT4_Z_A_LUT4_Z init=0x2B22 a=n10 b=n6 c=n5 d=n9 z=n52
+lut lt_LUT4_Z_A_LUT4_Z_1 init=0x8EAF a=n8 b=n7 c=n12 d=n11 z=n53
+lut lt_LUT4_Z_A_LUT4_Z_2 init=0x9009 a=n8 b=n12 c=n11 d=n7 z=n54
+lut mx_LUT4_Z init=0xF0CC a=0 b=n14 c=n55 d=n4 z=n31
+lut mx_LUT4_Z_1 init=0xCCF0 a=0 b=n56 c=n13 d=n4 z=n30
+lut mx_LUT4_Z_1_B_LUT4_Z init=0x2EE8 a=n57 b=n13 c=n7 d=n14 z=n56
+lut mx_LUT4_Z_1_B_LUT4_Z_A_LUT4_Z init=0xF0CC a=0 b=n11 c=n9 d=n14 z=n57
+lut mx_LUT4_Z_2 init=0xF0CC a=0 b=n14 c=n58 d=n4 z=n29
+lut mx_LUT4_Z_2_C_LUT4_Z init=0x2EE8 a=n59 b=n13 c=n14 d=n6 z=n58
+lut mx_LUT4_Z_2_C_LUT4_Z_A_LUT4_Z init=0xF0CC a=0 b=n10 c=n8 d=n14 z=n59
+lut mx_LUT4_Z_3 init=0x77F0 a=n60 b=n61 c=n13 d=n4 z=n28
+lut mx_LUT4_Z_3_A_LUT4_Z init=0xC5FF a=n7 b=n5 c=n13 d=n14 z=n60
+lut mx_LUT4_Z_3_A_LUT4_Z_1 init=0xFF17 a=n13 b=n9 c=n5 d=n14 z=n61
+lut mx_LUT4_Z_C_LUT4_Z init=0x2EE8 a=n62 b=n13 c=n8 d=n14 z=n55
+lut mx_LUT4_Z_C_LUT4_Z_A_LUT4_Z init=0xF0CC a=0 b=n12 c=n10 d=n14 z=n62
+lut par_LUT4_Z init=0x0FF0 a=0 b=0 c=n63 d=n64 z=n36
+lut par_LUT4_Z_C_LUT4_Z init=0x9669 a=n8 b=n7 c=n5 d=n6 z=n64
+lut par_LUT4_Z_C_LUT4_Z_1 init=0x9669 a=n9 b=n10 c=n11 d=n12 z=n63
+ff q_TRELLIS_FF_Q d=n65 q=n19 clk=n2 ce=n4 lsr=n66 gsr=DISABLED regset=SET srmode=ASYNC cemux=CE clkmux=CLK lsrmux=LSR
+ff q_TRELLIS_FF_Q_1 d=n67 q=n18 clk=n2 ce=n4 lsr=n68 gsr=DISABLED regset=RESET srmode=ASYNC cemux=CE clkmux=CLK lsrmux=LSR
+ff q_TRELLIS_FF_Q_2 d=n69 q=n17 clk=n2 ce=n4 lsr=n70 gsr=DISABLED regset=SET srmode=ASYNC cemux=CE clkmux=CLK lsrmux=LSR
+ff q_TRELLIS_FF_Q_3 d=n71 q=n16 clk=n2 ce=n4 lsr=n72 gsr=DISABLED regset=RESET srmode=ASYNC cemux=CE clkmux=CLK lsrmux=LSR
+lut q_TRELLIS_FF_Q_DI_LUT4_Z init=0xC33C a=0 b=n73 c=n12 d=n19 z=n65
+lut q_TRELLIS_FF_Q_DI_LUT4_Z_1 init=0xC33C a=0 b=n74 c=n11 d=n18 z=n67
+lut q_TRELLIS_FF_Q_DI_LUT4_Z_1_B_LUT4_Z init=0x2B22 a=n10 b=n17 c=n16 d=n9 z=n74
+lut q_TRELLIS_FF_Q_DI_LUT4_Z_2 init=0x4BB4 a=n16 b=n9 c=n10 d=n17 z=n69
+lut q_TRELLIS_FF_Q_DI_LUT4_Z_3 init=0x0FF0 a=0 b=0 c=n9 d=n16 z=n71
+lut q_TRELLIS_FF_Q_DI_LUT4_Z_B_LUT4_Z init=0xCF0C a=0 b=n74 c=n18 d=n11 z=n73
+lut rst_n_LUT4_D init=0x00FF a=0 b=0 c=0 d=n3 z=n66
+lut rst_n_LUT4_D_1 init=0x00FF a=0 b=0 c=0 d=n3 z=n68
+lut rst_n_LUT4_D_2 init=0x00FF a=0 b=0 c=0 d=n3 z=n70
+lut rst_n_LUT4_D_3 init=0x00FF a=0 b=0 c=0 d=n3 z=n72
+lut sh_LUT4_Z init=0xFC0A a=n9 b=n11 c=n13 d=n75 z=n32
+lut sh_LUT4_Z_1 init=0x2FD0 a=n13 b=n11 c=n76 d=n5 z=n33
+lut sh_LUT4_Z_1_C_LUT4_Z init=0x0AFC a=n12 b=n10 c=n13 d=n14 z=n76
+lut sh_LUT4_Z_2 init=0xEF10 a=n13 b=n14 c=n12 d=n7 z=n35
+lut sh_LUT4_Z_3 init=0x0FF0 a=0 b=0 c=n77 d=n6 z=n34
+lut sh_LUT4_Z_3_C_LUT4_Z init=0x0C0A a=n11 b=n12 c=n14 d=n13 z=n77
+lut sh_LUT4_Z_D_LUT4_Z init=0xCFA0 a=n10 b=n12 c=n13 d=n14 z=n75
+ff st_TRELLIS_FF_Q d=n79 q=n39 clk=n2 ce=n78 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+ff st_TRELLIS_FF_Q_1 d=n80 q=n38 clk=n2 ce=n78 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut st_TRELLIS_FF_Q_CE_LUT4_Z init=0xFCFA a=n4 b=n81 c=n39 d=n38 z=n78
+lut st_TRELLIS_FF_Q_CE_LUT4_Z_B_LUT4_Z init=0x1000 a=n42 b=n43 c=n40 d=n41 z=n81
+lut st_TRELLIS_FF_Q_DI_LUT4_Z init=0x0F00 a=0 b=0 c=n39 d=n38 z=n79
+lut st_TRELLIS_FF_Q_DI_LUT4_Z_1 init=0x000F a=0 b=0 c=n38 d=n39 z=n80
+ccu2 sum_CCU2C_S0 init0=0x96AA init1=0x96AA inject0=NO inject1=NO a0=0 b0=0 c0=0 d0=1 a1=0 b1=0 c1=0 d1=1 cin=n82 cout=n83 s0=n24 s1=n84
+ccu2 sum_CCU2C_S0_1 init0=0x96AA init1=0x96AA inject0=NO inject1=NO a0=n11 b0=n7 c0=0 d0=1 a1=n12 b1=n8 c1=0 d1=1 cin=n85 cout=n82 s0=n22 s1=n23
+ccu2 sum_CCU2C_S0_2 init0=0x96AA init1=0x96AA inject0=NO inject1=NO a0=n9 b0=n5 c0=0 d0=1 a1=n10 b1=n6 c1=0 d1=1 cin=n15 cout=n85 s0=n20 s1=n21

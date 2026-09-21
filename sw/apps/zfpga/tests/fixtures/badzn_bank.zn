@@ -1,0 +1,5 @@
+# expect: incompatible IO voltages 3V3 and 2V5 on bank 1
+device LFE5U-25F
+package CABGA256
+io A10 dir=OUTPUT type=LVCMOS33
+io A11 dir=OUTPUT type=LVCMOS25

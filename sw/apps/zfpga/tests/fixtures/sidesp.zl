@@ -1,0 +1,26 @@
+# tests/fixtures/sidesp.zl: examples/sidesp.v, synth_ecp5 -noccu2 -nowidelut -nodsp -nobram -nolutram, via tools/ys2zl.py
+device LFE5U-25F
+package CABGA256
+
+input a C14 net=n5 io_type=LVCMOS33
+input b M9 net=n6 io_type=LVCMOS33
+input clk B1 net=n2 io_type=LVCMOS33
+input en C1 net=n4 hysteresis=OFF io_type=LVCMOS33 pullmode=UP
+output od B16 net=n12 io_type=LVCMOS33 opendrain=ON
+output q[0] A10 net=n7 io_type=LVCMOS25
+output q[1] A11 net=n8 io_type=LVCMOS25
+output q[2] A12 net=n9 io_type=LVCMOS25
+output q[3] A13 net=n10 io_type=LVCMOS25
+input rst B2 net=n3 io_type=LVCMOS33 pullmode=DOWN
+output y B15 net=n11 drive=16 io_type=LVCMOS33 slewrate=FAST
+
+ff c_TRELLIS_FF_Q d=n13 q=n10 clk=n2 ce=n4 lsr=n3 gsr=DISABLED regset=RESET srmode=ASYNC cemux=CE clkmux=CLK lsrmux=LSR
+ff c_TRELLIS_FF_Q_1 d=n14 q=n9 clk=n2 ce=n4 lsr=n3 gsr=DISABLED regset=RESET srmode=ASYNC cemux=CE clkmux=CLK lsrmux=LSR
+ff c_TRELLIS_FF_Q_2 d=n15 q=n8 clk=n2 ce=n4 lsr=n3 gsr=DISABLED regset=RESET srmode=ASYNC cemux=CE clkmux=CLK lsrmux=LSR
+ff c_TRELLIS_FF_Q_3 d=n16 q=n7 clk=n2 ce=n4 lsr=n3 gsr=DISABLED regset=RESET srmode=ASYNC cemux=CE clkmux=CLK lsrmux=LSR
+lut c_TRELLIS_FF_Q_3_DI_LUT4_Z init=0x00FF a=0 b=0 c=0 d=n7 z=n16
+lut c_TRELLIS_FF_Q_DI_LUT4_Z init=0x7F80 a=n7 b=n8 c=n9 d=n10 z=n13
+lut c_TRELLIS_FF_Q_DI_LUT4_Z_1 init=0x3FC0 a=0 b=n7 c=n8 d=n9 z=n14
+lut c_TRELLIS_FF_Q_DI_LUT4_Z_2 init=0x0FF0 a=0 b=0 c=n7 d=n8 z=n15
+lut od_LUT4_Z init=0x0FFF a=0 b=0 c=n5 d=n6 z=n12
+lut y_LUT4_Z init=0x0FF0 a=0 b=0 c=n5 d=n6 z=n11

@@ -1,0 +1,150 @@
+# tests/fixtures/densen_c.zl: yosys synth_ecp5 -nowidelut -nodsp -nobram -nolutram of examples/densen.v, via tools/ys2zl.py -- the reference zfpga synth is checked against
+device LFE5U-25F
+package CABGA256
+
+input a[0] F12 net=n3 io_type=LVCMOS33
+input a[1] E1 net=n4 io_type=LVCMOS33
+input a[2] D7 net=n5 io_type=LVCMOS33
+input a[3] D1 net=n6 io_type=LVCMOS33
+input a[4] G13 net=n7 io_type=LVCMOS33
+input a[5] C8 net=n8 io_type=LVCMOS33
+input a[6] M8 net=n9 io_type=LVCMOS33
+input a[7] D8 net=n10 io_type=LVCMOS33
+input b[0] F4 net=n11 io_type=LVCMOS33
+input b[1] F2 net=n12 io_type=LVCMOS33
+input b[2] E8 net=n13 io_type=LVCMOS33
+input b[3] E7 net=n14 io_type=LVCMOS33
+input b[4] F15 net=n15 io_type=LVCMOS33
+input b[5] G12 net=n16 io_type=LVCMOS33
+input b[6] M9 net=n17 io_type=LVCMOS33
+input b[7] A7 net=n18 io_type=LVCMOS33
+input clk A8 net=n2 io_type=LVCMOS33
+output y[0] B8 net=n19 io_type=LVCMOS33
+output y[1] E16 net=n20 io_type=LVCMOS33
+output y[2] B7 net=n21 io_type=LVCMOS33
+output y[3] C7 net=n22 io_type=LVCMOS33
+output y[4] F13 net=n23 io_type=LVCMOS33
+output y[5] E2 net=n24 io_type=LVCMOS33
+output y[6] G5 net=n25 io_type=LVCMOS33
+output y[7] D16 net=n26 io_type=LVCMOS33
+output z G14 net=n27 io_type=LVCMOS33
+
+ccu2 a_CCU2C_B0 init0=0x96AA init1=0x96AA inject0=NO inject1=NO a0=n28 b0=n3 c0=0 d0=1 a1=n29 b1=n4 c1=0 d1=1 cin=n30 cout=n31 s0=n32 s1=n33
+ccu2 a_CCU2C_B0_1 init0=0x96AA init1=0x96AA inject0=NO inject1=NO a0=n34 b0=n9 c0=0 d0=1 a1=n35 b1=n10 c1=0 d1=1 cin=n36 cout=n37 s0=n38 s1=n39
+ccu2 a_CCU2C_B0_2 init0=0x96AA init1=0x96AA inject0=NO inject1=NO a0=n40 b0=n7 c0=0 d0=1 a1=n41 b1=n8 c1=0 d1=1 cin=n42 cout=n36 s0=n43 s1=n44
+ccu2 a_CCU2C_B0_3 init0=0x96AA init1=0x96AA inject0=NO inject1=NO a0=n45 b0=n5 c0=0 d0=1 a1=n46 b1=n6 c1=0 d1=1 cin=n31 cout=n42 s0=n47 s1=n48
+ff acc_TRELLIS_FF_Q d=n39 q=n35 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff acc_TRELLIS_FF_Q_1 d=n38 q=n34 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff acc_TRELLIS_FF_Q_10 d=n49 q=n50 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff acc_TRELLIS_FF_Q_11 d=n51 q=n52 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff acc_TRELLIS_FF_Q_12 d=n53 q=n54 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff acc_TRELLIS_FF_Q_13 d=n55 q=n56 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff acc_TRELLIS_FF_Q_14 d=n57 q=n58 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff acc_TRELLIS_FF_Q_15 d=n59 q=n60 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff acc_TRELLIS_FF_Q_2 d=n44 q=n41 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff acc_TRELLIS_FF_Q_3 d=n43 q=n40 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff acc_TRELLIS_FF_Q_4 d=n48 q=n46 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff acc_TRELLIS_FF_Q_5 d=n47 q=n45 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff acc_TRELLIS_FF_Q_6 d=n33 q=n29 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff acc_TRELLIS_FF_Q_7 d=n32 q=n28 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff acc_TRELLIS_FF_Q_8 d=n61 q=n62 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff acc_TRELLIS_FF_Q_9 d=n63 q=n64 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ccu2 b_CCU2C_B0 init0=0x96AA init1=0x96AA inject0=NO inject1=NO a0=n64 b0=n17 c0=0 d0=1 a1=n62 b1=n18 c1=0 d1=1 cin=n65 cout=n30 s0=n63 s1=n61
+ccu2 b_CCU2C_B0_1 init0=0x96AA init1=0x96AA inject0=NO inject1=NO a0=n52 b0=n15 c0=0 d0=1 a1=n50 b1=n16 c1=0 d1=1 cin=n66 cout=n65 s0=n51 s1=n49
+ccu2 b_CCU2C_B0_2 init0=0x96AA init1=0x96AA inject0=NO inject1=NO a0=n56 b0=n13 c0=0 d0=1 a1=n54 b1=n14 c1=0 d1=1 cin=n67 cout=n66 s0=n55 s1=n53
+ccu2 b_CCU2C_B0_3 init0=0x96AA init1=0x96AA inject0=NO inject1=NO a0=n60 b0=n11 c0=0 d0=1 a1=n58 b1=n12 c1=0 d1=1 cin=0 cout=n67 s0=n59 s1=n57
+ff sr_TRELLIS_FF_Q d=n68 q=n69 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_1 d=n70 q=n68 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_10 d=n71 q=n72 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_11 d=n73 q=n71 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_12 d=n74 q=n73 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_13 d=n75 q=n74 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_14 d=n76 q=n75 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_15 d=n77 q=n76 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_16 d=n78 q=n77 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_17 d=n79 q=n78 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_18 d=n80 q=n79 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_19 d=n81 q=n80 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_2 d=n82 q=n70 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_20 d=n83 q=n81 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_21 d=n84 q=n83 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_22 d=n85 q=n84 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_23 d=n86 q=n85 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_24 d=n87 q=n86 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_25 d=n88 q=n87 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_26 d=n89 q=n88 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_27 d=n90 q=n89 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_28 d=n91 q=n90 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_29 d=n92 q=n91 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_3 d=n93 q=n82 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_30 d=n94 q=n92 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_31 d=n95 q=n94 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_32 d=n96 q=n95 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_33 d=n97 q=n96 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_34 d=n98 q=n97 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_35 d=n99 q=n98 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_36 d=n100 q=n99 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_37 d=n101 q=n100 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_38 d=n102 q=n101 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_39 d=n103 q=n102 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_4 d=n104 q=n93 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_40 d=n105 q=n103 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_41 d=n106 q=n105 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_42 d=n107 q=n106 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_43 d=n108 q=n107 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_44 d=n109 q=n108 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_45 d=n110 q=n109 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_46 d=n111 q=n110 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_47 d=n112 q=n111 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_48 d=n113 q=n112 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_49 d=n114 q=n113 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_5 d=n115 q=n104 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_50 d=n116 q=n114 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_51 d=n117 q=n116 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_52 d=n118 q=n117 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_53 d=n119 q=n118 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_54 d=n120 q=n119 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_55 d=n121 q=n120 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_56 d=n122 q=n121 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_57 d=n123 q=n122 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_58 d=n124 q=n123 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_59 d=n125 q=n124 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_6 d=n126 q=n115 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_60 d=n127 q=n125 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_61 d=n128 q=n127 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_62 d=n129 q=n128 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_63 d=n130 q=n129 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+lut sr_TRELLIS_FF_Q_63_DI_LUT4_Z init=0xF00F a=0 b=0 c=n131 d=n93 z=n130
+lut sr_TRELLIS_FF_Q_63_DI_LUT4_Z_C_LUT4_Z init=0x9669 a=n82 b=n68 c=n69 d=n3 z=n131
+ff sr_TRELLIS_FF_Q_7 d=n132 q=n126 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_8 d=n133 q=n132 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_9 d=n72 q=n133 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+lut y_LUT4_Z init=0x0FF0 a=0 b=0 c=n121 d=n35 z=n26
+lut y_LUT4_Z_1 init=0x0FF0 a=0 b=0 c=n122 d=n34 z=n25
+lut y_LUT4_Z_2 init=0x0FF0 a=0 b=0 c=n123 d=n41 z=n24
+lut y_LUT4_Z_3 init=0x0FF0 a=0 b=0 c=n124 d=n40 z=n23
+lut y_LUT4_Z_4 init=0x0FF0 a=0 b=0 c=n125 d=n46 z=n22
+lut y_LUT4_Z_5 init=0x0FF0 a=0 b=0 c=n127 d=n45 z=n21
+lut y_LUT4_Z_6 init=0x0FF0 a=0 b=0 c=n128 d=n29 z=n20
+lut y_LUT4_Z_7 init=0x0FF0 a=0 b=0 c=n129 d=n28 z=n19
+lut z_LUT4_Z init=0x6996 a=n134 b=n135 c=n136 d=n137 z=n27
+lut z_LUT4_Z_A_LUT4_Z init=0x9669 a=n138 b=n139 c=n140 d=n141 z=n137
+lut z_LUT4_Z_A_LUT4_Z_1 init=0x9669 a=n142 b=n143 c=n144 d=n145 z=n136
+lut z_LUT4_Z_A_LUT4_Z_1_A_LUT4_Z init=0x9669 a=n80 b=n79 c=n78 d=n77 z=n145
+lut z_LUT4_Z_A_LUT4_Z_1_A_LUT4_Z_1 init=0x9669 a=n85 b=n84 c=n83 d=n81 z=n144
+lut z_LUT4_Z_A_LUT4_Z_1_A_LUT4_Z_2 init=0x9669 a=n89 b=n88 c=n87 d=n86 z=n143
+lut z_LUT4_Z_A_LUT4_Z_1_A_LUT4_Z_3 init=0x9669 a=n94 b=n92 c=n91 d=n90 z=n142
+lut z_LUT4_Z_A_LUT4_Z_2 init=0x9669 a=n146 b=n147 c=n148 d=n149 z=n135
+lut z_LUT4_Z_A_LUT4_Z_2_A_LUT4_Z init=0x9669 a=n98 b=n97 c=n96 d=n95 z=n149
+lut z_LUT4_Z_A_LUT4_Z_2_A_LUT4_Z_1 init=0x9669 a=n102 b=n101 c=n100 d=n99 z=n148
+lut z_LUT4_Z_A_LUT4_Z_2_A_LUT4_Z_2 init=0x9669 a=n107 b=n106 c=n105 d=n103 z=n147
+lut z_LUT4_Z_A_LUT4_Z_2_A_LUT4_Z_3 init=0x9669 a=n111 b=n110 c=n109 d=n108 z=n146
+lut z_LUT4_Z_A_LUT4_Z_3 init=0x9669 a=n150 b=n151 c=n152 d=n153 z=n134
+lut z_LUT4_Z_A_LUT4_Z_3_A_LUT4_Z init=0x9669 a=n116 b=n114 c=n113 d=n112 z=n153
+lut z_LUT4_Z_A_LUT4_Z_3_A_LUT4_Z_1 init=0x9669 a=n120 b=n119 c=n118 d=n117 z=n152
+lut z_LUT4_Z_A_LUT4_Z_3_A_LUT4_Z_2 init=0x9669 a=n124 b=n123 c=n122 d=n121 z=n151
+lut z_LUT4_Z_A_LUT4_Z_3_A_LUT4_Z_3 init=0x9669 a=n129 b=n128 c=n127 d=n125 z=n150
+lut z_LUT4_Z_A_LUT4_Z_A_LUT4_Z init=0x9669 a=n82 b=n70 c=n68 d=n69 z=n141
+lut z_LUT4_Z_A_LUT4_Z_A_LUT4_Z_1 init=0x9669 a=n126 b=n115 c=n104 d=n93 z=n140
+lut z_LUT4_Z_A_LUT4_Z_A_LUT4_Z_2 init=0x9669 a=n71 b=n72 c=n133 d=n132 z=n139
+lut z_LUT4_Z_A_LUT4_Z_A_LUT4_Z_3 init=0x9669 a=n76 b=n75 c=n74 d=n73 z=n138

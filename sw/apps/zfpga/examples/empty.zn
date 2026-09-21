@@ -1,0 +1,10 @@
+# Rung 1 of docs/zfpga.md sec. 5.3: a bitstream that loads and does
+# nothing. No cells at all -- just nextpnr's baseline, which zfpga pnr
+# always applies. On a board: DONE goes high, nothing else happens.
+# That tests the packer, the IDCODE and the CRCs end to end, and only
+# those.
+#
+#   zfpga pnr empty.zn && zfpga pack empty.config -c
+
+device LFE5U-25F
+package CABGA256

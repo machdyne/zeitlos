@@ -1,0 +1,52 @@
+# tests/fixtures/sides_route.zn: examples/sides.v's nets by terminal, from nextpnr via tools/np2zn.py --route
+device LFE5U-25F
+package CABGA256
+speed 6
+
+comb R40C70 SLICEA 1 mode=LOGIC init=0x0000 pins=-
+io R2C72.C dir=INPUT type=LVCMOS33 datamux_oddr=PADDO datamux_mddr=PADDO
+io R50C18.A dir=INPUT type=LVCMOS33 datamux_oddr=PADDO datamux_mddr=PADDO
+ff R3C42 SLICEA 1 clk=?@n2128 lsr=?@n2115 gsr=DISABLED sd=1 regset=RESET cemux=CE clkmux=CLK srmode=ASYNC lsrmux=LSR
+ff R3C40 SLICEA 0 clk=?@n2128 lsr=?@n2115 gsr=DISABLED sd=1 regset=RESET cemux=CE clkmux=CLK srmode=ASYNC lsrmux=LSR
+ff R3C41 SLICEA 0 clk=?@n2128 lsr=?@n2115 gsr=DISABLED sd=1 regset=RESET cemux=CE clkmux=CLK srmode=ASYNC lsrmux=LSR
+ff R3C42 SLICEA 0 clk=?@n2128 lsr=?@n2115 gsr=DISABLED sd=1 regset=RESET cemux=CE clkmux=CLK srmode=ASYNC lsrmux=LSR
+comb R3C42 SLICEA 0 mode=LOGIC init=0x00FF pins=D
+comb R3C42 SLICEA 1 mode=LOGIC init=0x78F0 pins=ABCD
+comb R3C40 SLICEA 0 mode=LOGIC init=0x3CCC pins=BCD
+comb R3C41 SLICEA 0 mode=LOGIC init=0x0FF0 pins=CD
+io R2C0.A dir=INPUT type=LVCMOS33 datamux_oddr=PADDO datamux_mddr=PADDO
+io R5C0.A dir=INPUT type=LVCMOS33 hysteresis=OFF pullmode=UP datamux_oddr=PADDO datamux_mddr=PADDO
+io R50C9.B dir=BIDIR type=LVCMOS33 pullmode=UP datamux_oddr=PADDO datamux_mddr=PADDO tristate
+comb R48C9 SLICED 0 mode=LOGIC init=0x0F0F pins=C
+io R2C72.A dir=OUTPUT type=LVCMOS33 opendrain=ON datamux_oddr=PADDO datamux_mddr=PADDO
+comb R3C70 SLICEA 0 mode=LOGIC init=0x0FFF pins=CD
+io R50C15.B dir=INPUT type=LVCMOS33 datamux_oddr=PADDO datamux_mddr=PADDO
+io R0C42.B dir=OUTPUT type=LVCMOS25 datamux_oddr=PADDO datamux_mddr=PADDO
+io R0C53.A dir=OUTPUT type=LVCMOS25 datamux_oddr=PADDO datamux_mddr=PADDO
+io R0C53.B dir=OUTPUT type=LVCMOS25 datamux_oddr=PADDO datamux_mddr=PADDO
+io R0C65.A dir=OUTPUT type=LVCMOS25 datamux_oddr=PADDO datamux_mddr=PADDO
+io R2C0.B dir=INPUT type=LVCMOS33 pullmode=DOWN datamux_oddr=PADDO datamux_mddr=PADDO
+io R2C72.B dir=OUTPUT type=LVCMOS33 slewrate=FAST drive=16 datamux_oddr=PADDO datamux_mddr=PADDO
+comb R2C70 SLICED 1 mode=LOGIC init=0x0FF0 pins=CD
+io R0C65.B dir=OUTPUT type=LVCMOS25 datamux_oddr=PADDO datamux_mddr=PADDO
+comb R35C61 SLICEA 0 mode=LOGIC init=0xFFF0 pins=CD
+
+net n2042 R3C42/F1_SLICE R3C42/DI1_SLICE
+net n2044 R3C42/Q1_SLICE R0C65/PADDOA_PIO R3C42/C1
+net n2048 R3C40/F0_SLICE R3C40/DI0_SLICE
+net n2050 R3C40/Q0_SLICE R0C53/PADDOB_PIO R3C40/B0 R3C42/D1
+net n2053 R3C41/F0_SLICE R3C41/DI0_SLICE
+net n2055 R3C41/Q0_SLICE R0C53/PADDOA_PIO R3C40/C0 R3C41/D0 R3C42/A1
+net n2059 R3C42/F0_SLICE R3C42/DI0_SLICE
+net n2061 R3C42/Q0_SLICE R0C42/PADDOB_PIO R3C40/D0 R3C41/C0 R3C42/B1 R3C42/D0 R50C9/PADDOB_PIO
+net n2106 R50C9/JPADDIB_PIO R35C61/C0
+net n2108 R48C9/F6_SLICE R50C9/PADDTB_PIO
+net n2111 R35C61/F0_SLICE R0C65/PADDOB_PIO
+net n2113 R2C70/F7_SLICE R2C72/PADDOB_PIO
+net n2115 R2C0/JPADDIB_PIO R3C40/LSR0_SLICE R3C41/LSR0_SLICE R3C42/LSR0_SLICE
+net n2122 R50C15/JPADDIB_PIO R48C9/C6
+net n2124 R3C70/F0_SLICE R2C72/PADDOA_PIO
+net n2126 R5C0/JPADDIA_PIO R3C40/CE0_SLICE R3C41/CE0_SLICE R3C42/CE0_SLICE
+net n2128 R2C0/JPADDIA_PIO R3C40/CLK0_SLICE R3C41/CLK0_SLICE R3C42/CLK0_SLICE
+net n2130 R50C18/JPADDIA_PIO R2C70/D7 R3C70/D0 R35C61/D0
+net n2132 R2C72/JPADDIC_PIO R2C70/C7 R3C70/C0

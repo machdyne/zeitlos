@@ -317,29 +317,47 @@ Successful output ends with a `.bit` in `output/lakritz/`. Check
 ## 7. Building gateware without a host
 
 Everything above describes the host toolchain. `docs/zfpga.md` is the
-other direction: a synthesiser, a place-and-route tool and a bitstream
+other direction: a synthesiser, a placer, a router and a bitstream
 packer that run **on Zeitlos**, targeting the FPGA Zeitlos is running on
--- the gateware equivalent of what `zcc` did for C. All three are
+-- the gateware equivalent of what `zcc` did for C. They are
 subcommands of one tool, `zfpga`, in `sw/apps/zfpga/`, run from `posix`.
+**Experimental, and working on hardware**: a Verilog blinky built on a
+Lakritz by
 
-**The packer exists.** `zfpga pack` is the `ecppack` step of the flow in
-section 1, and produces byte-identical bitstreams:
+```
+zfpga build /fpga/examples/blink.v -b lakritz
+```
+
+blinks the LED (`docs/zfpga.md` section 23).
+
+Each stage has a host counterpart it is checked against by
+`sw/apps/zfpga/tests/run.sh`:
+
+| zfpga | checked against |
+|---|---|
+| `synth` | yosys `synth_ecp5`, by simulation of both netlists |
+| `place`, `pnr` | nextpnr, byte-identical where the placement is given; otherwise an independent legality check and simulation of the extracted circuit |
+| `pack` | `ecppack`, byte-identical |
+| `unpack` | `ecpunpack`, text-identical |
+
+`zfpga pack` can stand in for `ecppack` in the host flow of section 1:
 
 ```
 ecppack --compress --freq 2.4 soc_final.config --bit soc.bit
 zfpga pack soc_final.config -c -f 2.4 -o soc.bit        # same bytes
 ```
 
-It runs on the host (`make -f Makefile.host` in `sw/apps/zfpga`) and as
-a Zeitlos app, reading its chip database from `/fpga` on the card.
-`sw/apps/zfpga/tests/run.sh` checks it against whatever `ecppack` is
-installed -- so this section's version table matters there too: the
-reference is the `ecppack` you have, and a Trellis database that differs
-from the vendored one (`sw/apps/zfpga/ext/prjtrellis-db/`) will show up
-as a mismatch that is not zfpga's.
+It builds for the host with `make -f Makefile.host` in `sw/apps/zfpga`,
+and as a Zeitlos app reading its chip database and board profiles from
+`/fpga` on the card (`docs/zfpga-formats.md`). The byte-identity tests
+run against whatever `ecppack` is installed -- so this section's version
+table matters there too: a Trellis database that differs from the
+vendored one (`sw/apps/zfpga/ext/prjtrellis-db/`) will show up as a
+mismatch that is not zfpga's.
 
-Synthesis and place-and-route are later phases; until then `yosys` and
-`nextpnr` from section 1 produce the `.config`.
+The SOC itself is still built by `yosys` and `nextpnr`: zfpga's
+synthesiser reads one module at a time, and module instances are its
+next step.
 
 Loading what it builds is covered in `docs/zboot.md`: how
 `--bootaddr` decides where the next configuration is read from, how the

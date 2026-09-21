@@ -1,0 +1,27 @@
+# Routing Mux Bits
+
+# Non-Routing Configuration
+.config_enum DTR.MODE NONE
+DTR F2B0
+NONE !F2B0
+
+
+# Fixed Connections
+.fixed_conn N1_JF0 N1_JDTROUT0_DTR
+
+.fixed_conn N1_JF1 N1_JDTROUT1_DTR
+
+.fixed_conn N1_JF2 N1_JDTROUT2_DTR
+
+.fixed_conn N1_JF3 N1_JDTROUT3_DTR
+
+.fixed_conn N1_JF4 N1_JDTROUT4_DTR
+
+.fixed_conn N1_JF5 N1_JDTROUT5_DTR
+
+.fixed_conn N1_JF6 N1_JDTROUT6_DTR
+
+.fixed_conn N1_JF7 N1_JDTROUT7_DTR
+
+.fixed_conn N1_JSTARTPULSE_DTR N1_JA0
+

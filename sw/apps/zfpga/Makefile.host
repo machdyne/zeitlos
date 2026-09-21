@@ -1,0 +1,44 @@
+# zfpga -- host build.
+#
+#   make -f Makefile.host          ./zfpga and db/lfe5u25f.zdb
+#   ./tests/run.sh                 the differential suite
+#
+# Same sources as the device build (Makefile); only the port file
+# differs. -Werror on zfpga's own sources, for the reason docs/zcc.md
+# gives: a warning nobody reads becomes somebody else's error.
+
+CC ?= cc
+CFLAGS = -std=gnu99 -O2 -g -Wall -Wextra -Wno-unused-parameter -Werror \
+	-DZFPGA_HOSTED=1
+
+SRCS = main.c util.c db.c chip.c cfg.c pack.c pnr.c route.c place.c unpack.c synth_parse.c synth_elab.c synth_map.c build.c port_host.c
+HDRS = zfpga.h zfpga_port.h synth.h
+
+DB_SRC = ext/prjtrellis-db
+DB_COMMIT = 015e0330630d7c238c0e4f2cdd9c8157eb78c54a
+
+all: zfpga db/lfe5u25f.zdb card
+
+zfpga: $(SRCS) $(HDRS)
+	$(CC) $(CFLAGS) -o $@ $(SRCS)
+
+# db/ is the card's /fpga exactly: the database, the board profiles with
+# their pins, and the examples (docs/zfpga-formats.md sec. 7).
+CARD_EXAMPLES = examples/blink.v examples/blinkf.v examples/empty.zn examples/on.zn \
+	examples/blink.zn examples/hand.zl
+
+card: db/lfe5u25f.zdb boards/lakritz.brd ../../../boards/lakritz_v0.lpf $(CARD_EXAMPLES)
+	mkdir -p db/boards db/examples
+	cp boards/lakritz.brd db/boards/lakritz.brd
+	cp ../../../boards/lakritz_v0.lpf db/boards/lakritz.lpf
+	cp $(CARD_EXAMPLES) db/examples/
+
+db/lfe5u25f.zdb: tools/mkzdb.py ext/nextpnr-base/lfe5u-25f.config
+	mkdir -p db
+	python3 tools/mkzdb.py --db $(DB_SRC) --device LFE5U-25F --also LFE5U-12F \
+		--source $(DB_COMMIT) --base ext/nextpnr-base/lfe5u-25f.config -o $@
+
+clean:
+	rm -rf zfpga db tests/out
+
+.PHONY: all clean card

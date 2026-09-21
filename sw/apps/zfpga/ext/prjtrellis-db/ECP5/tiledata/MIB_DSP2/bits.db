@@ -1,0 +1,2113 @@
+# Routing Mux Bits
+.mux E1_JQ0
+JSROA6 F46B0
+
+.mux E1_JQ1
+JSROA7 F46B0
+
+.mux E1_JQ2
+JSROA8 F46B0
+
+.mux E1_JQ3
+JSROA9 F46B0
+
+.mux E1_JQ4
+JSROA10 F46B0
+
+.mux E1_JQ5
+JSROA11 F46B0
+
+.mux E1_JQ6
+JSROA12 F46B0
+
+.mux E1_JQ7
+JSROA13 F46B0
+
+.mux E2_JQ0
+JSROA14 F46B0
+
+.mux E2_JQ1
+JSROA15 F46B0
+
+.mux E2_JQ2
+JSROA16 F46B0
+
+.mux E2_JQ3
+JSROA17 F46B0
+
+.mux E2_JSRIA0_MULT18
+JSROA0 F46B0
+
+.mux E2_JSRIA0_MULT9
+JSROA0 F46B0
+
+.mux E2_JSRIA0_PRADD18
+JSROA0 F46B0
+
+.mux E2_JSRIA0_PRADD9
+JSROA0 F46B0
+
+.mux E2_JSRIA10_MULT18
+JSROA10 F46B0
+
+.mux E2_JSRIA10_PRADD18
+JSROA10 F46B0
+
+.mux E2_JSRIA11_MULT18
+JSROA11 F46B0
+
+.mux E2_JSRIA11_PRADD18
+JSROA11 F46B0
+
+.mux E2_JSRIA12_MULT18
+JSROA12 F46B0
+
+.mux E2_JSRIA12_PRADD18
+JSROA12 F46B0
+
+.mux E2_JSRIA13_MULT18
+JSROA13 F46B0
+
+.mux E2_JSRIA13_PRADD18
+JSROA13 F46B0
+
+.mux E2_JSRIA14_MULT18
+JSROA14 F46B0
+
+.mux E2_JSRIA14_PRADD18
+JSROA14 F46B0
+
+.mux E2_JSRIA15_MULT18
+JSROA15 F46B0
+
+.mux E2_JSRIA15_PRADD18
+JSROA15 F46B0
+
+.mux E2_JSRIA16_MULT18
+JSROA16 F46B0
+
+.mux E2_JSRIA16_PRADD18
+JSROA16 F46B0
+
+.mux E2_JSRIA17_MULT18
+JSROA17 F46B0
+
+.mux E2_JSRIA17_PRADD18
+JSROA17 F46B0
+
+.mux E2_JSRIA1_MULT18
+JSROA1 F46B0
+
+.mux E2_JSRIA1_MULT9
+JSROA1 F46B0
+
+.mux E2_JSRIA1_PRADD18
+JSROA1 F46B0
+
+.mux E2_JSRIA1_PRADD9
+JSROA1 F46B0
+
+.mux E2_JSRIA2_MULT18
+JSROA2 F46B0
+
+.mux E2_JSRIA2_MULT9
+JSROA2 F46B0
+
+.mux E2_JSRIA2_PRADD18
+JSROA2 F46B0
+
+.mux E2_JSRIA2_PRADD9
+JSROA2 F46B0
+
+.mux E2_JSRIA3_MULT18
+JSROA3 F46B0
+
+.mux E2_JSRIA3_MULT9
+JSROA3 F46B0
+
+.mux E2_JSRIA3_PRADD18
+JSROA3 F46B0
+
+.mux E2_JSRIA3_PRADD9
+JSROA3 F46B0
+
+.mux E2_JSRIA4_MULT18
+JSROA4 F46B0
+
+.mux E2_JSRIA4_MULT9
+JSROA4 F46B0
+
+.mux E2_JSRIA4_PRADD18
+JSROA4 F46B0
+
+.mux E2_JSRIA4_PRADD9
+JSROA4 F46B0
+
+.mux E2_JSRIA5_MULT18
+JSROA5 F46B0
+
+.mux E2_JSRIA5_MULT9
+JSROA5 F46B0
+
+.mux E2_JSRIA5_PRADD18
+JSROA5 F46B0
+
+.mux E2_JSRIA5_PRADD9
+JSROA5 F46B0
+
+.mux E2_JSRIA6_MULT18
+JSROA6 F46B0
+
+.mux E2_JSRIA6_MULT9
+JSROA6 F46B0
+
+.mux E2_JSRIA6_PRADD18
+JSROA6 F46B0
+
+.mux E2_JSRIA6_PRADD9
+JSROA6 F46B0
+
+.mux E2_JSRIA7_MULT18
+JSROA7 F46B0
+
+.mux E2_JSRIA7_MULT9
+JSROA7 F46B0
+
+.mux E2_JSRIA7_PRADD18
+JSROA7 F46B0
+
+.mux E2_JSRIA7_PRADD9
+JSROA7 F46B0
+
+.mux E2_JSRIA8_MULT18
+JSROA8 F46B0
+
+.mux E2_JSRIA8_MULT9
+JSROA8 F46B0
+
+.mux E2_JSRIA8_PRADD18
+JSROA8 F46B0
+
+.mux E2_JSRIA8_PRADD9
+JSROA8 F46B0
+
+.mux E2_JSRIA9_MULT18
+JSROA9 F46B0
+
+.mux E2_JSRIA9_PRADD18
+JSROA9 F46B0
+
+.mux JQ2
+JSROA0 F46B0
+
+.mux JQ3
+JSROA1 F46B0
+
+.mux JQ4
+JSROA2 F46B0
+
+.mux JQ5
+JSROA3 F46B0
+
+.mux JQ6
+JSROA4 F46B0
+
+.mux JQ7
+JSROA5 F46B0
+
+.mux JSROA0
+JMSROA0 F46B0
+JPSROA0 F29B0 F46B0
+
+.mux JSROA1
+JMSROA1 F46B0
+JPSROA1 F29B0 F46B0
+
+.mux JSROA10
+JMSROA10 F46B0
+JPSROA10 F29B0 F46B0
+
+.mux JSROA11
+JMSROA11 F46B0
+JPSROA11 F29B0 F46B0
+
+.mux JSROA12
+JMSROA12 F46B0
+JPSROA12 F29B0 F46B0
+
+.mux JSROA13
+JMSROA13 F46B0
+JPSROA13 F29B0 F46B0
+
+.mux JSROA14
+JMSROA14 F46B0
+JPSROA14 F29B0 F46B0
+
+.mux JSROA15
+JMSROA15 F46B0
+JPSROA15 F29B0 F46B0
+
+.mux JSROA16
+JMSROA16 F46B0
+JPSROA16 F29B0 F46B0
+
+.mux JSROA17
+JMSROA17 F46B0
+JPSROA17 F29B0 F46B0
+
+.mux JSROA2
+JMSROA2 F46B0
+JPSROA2 F29B0 F46B0
+
+.mux JSROA3
+JMSROA3 F46B0
+JPSROA3 F29B0 F46B0
+
+.mux JSROA4
+JMSROA4 F46B0
+JPSROA4 F29B0 F46B0
+
+.mux JSROA5
+JMSROA5 F46B0
+JPSROA5 F29B0 F46B0
+
+.mux JSROA6
+JMSROA6 F46B0
+JPSROA6 F29B0 F46B0
+
+.mux JSROA7
+JMSROA7 F46B0
+JPSROA7 F29B0 F46B0
+
+.mux JSROA8
+JMSROA8 F46B0
+JPSROA8 F29B0 F46B0
+
+.mux JSROA9
+JMSROA9 F46B0
+JPSROA9 F29B0 F46B0
+
+
+# Non-Routing Configuration
+.config_enum ALU54_3.CLK0_DIV ENABLED
+DISABLED F65B0
+ENABLED -
+
+.config_enum ALU54_3.CLK1_DIV ENABLED
+DISABLED F66B0
+ENABLED -
+
+.config_enum ALU54_3.CLK2_DIV ENABLED
+DISABLED F67B0
+ENABLED -
+
+.config_enum ALU54_3.CLK3_DIV ENABLED
+DISABLED F68B0
+ENABLED -
+
+.config_enum ALU54_3.GSR ENABLED
+DISABLED F60B0
+ENABLED -
+
+.config_enum ALU54_3.MODE NONE
+ALU54B F4B0 F7B0 F14B0 F17B0 F24B0 F27B0 F28B0 F32B0 F37B0 F41B0 F42B0 F51B0 F57B0
+NONE -
+
+.config_enum ALU54_3.REG_INPUTC0_CLK CLK3
+CLK0 -
+CLK1 -
+CLK2 -
+CLK3 -
+NONE F58B0
+
+.config_enum ALU54_3.REG_INPUTC1_CLK CLK3
+CLK0 -
+CLK1 -
+CLK2 -
+CLK3 -
+NONE F59B0
+
+.config_enum ALU54_3.REG_OPCODEIN_0_CLK CLK3
+CLK0 -
+CLK1 -
+CLK2 -
+CLK3 -
+NONE F56B0
+
+.config_enum ALU54_3.REG_OPCODEOP1_0_CLK CLK3
+CLK0 -
+CLK1 -
+CLK2 -
+CLK3 -
+NONE F21B0
+
+.config_enum MULT18_0.CLK0MUX CLK0
+CLK0 -
+INV F61B0
+
+.config_enum MULT18_0.CLK0_DIV ENABLED
+DISABLED F65B0
+ENABLED -
+
+.config_enum MULT18_0.CLK1MUX CLK1
+CLK1 -
+INV F62B0
+
+.config_enum MULT18_0.CLK1_DIV ENABLED
+DISABLED F66B0
+ENABLED -
+
+.config_enum MULT18_0.CLK2MUX CLK2
+CLK2 -
+INV F63B0
+
+.config_enum MULT18_0.CLK2_DIV ENABLED
+DISABLED F67B0
+ENABLED -
+
+.config_enum MULT18_0.CLK3MUX CLK3
+CLK3 -
+INV F64B0
+
+.config_enum MULT18_0.CLK3_DIV ENABLED
+DISABLED F68B0
+ENABLED -
+
+.config_enum MULT18_0.GSR ENABLED
+DISABLED F60B0
+ENABLED -
+
+.config_enum MULT18_0.MODE MULT18X18D
+MULT18X18D -
+NONE -
+
+.config_enum MULT18_0.REG_INPUTA_CLK CLK3
+CLK0 -
+CLK1 -
+CLK2 -
+CLK3 -
+NONE F55B0
+
+.config_enum MULT18_0.REG_INPUTB_CLK CLK3
+CLK0 -
+CLK1 -
+CLK2 -
+CLK3 -
+NONE F34B0
+
+.config_enum MULT18_0.REG_INPUTC_CLK CLK3
+CLK0 -
+CLK1 -
+CLK2 -
+CLK3 -
+NONE F58B0
+
+.config_enum MULT18_1.CLK0MUX CLK0
+CLK0 -
+INV F61B0
+
+.config_enum MULT18_1.CLK0_DIV ENABLED
+DISABLED F65B0
+ENABLED -
+
+.config_enum MULT18_1.CLK1MUX CLK1
+CLK1 -
+INV F62B0
+
+.config_enum MULT18_1.CLK1_DIV ENABLED
+DISABLED F66B0
+ENABLED -
+
+.config_enum MULT18_1.CLK2MUX CLK2
+CLK2 -
+INV F63B0
+
+.config_enum MULT18_1.CLK2_DIV ENABLED
+DISABLED F67B0
+ENABLED -
+
+.config_enum MULT18_1.CLK3MUX CLK3
+CLK3 -
+INV F64B0
+
+.config_enum MULT18_1.CLK3_DIV ENABLED
+DISABLED F68B0
+ENABLED -
+
+.config_enum MULT18_1.GSR ENABLED
+DISABLED F60B0
+ENABLED -
+
+.config_enum MULT18_1.MODE NONE
+MULT18X18D F26B0
+NONE -
+
+.config_enum MULT18_1.REG_INPUTA_CLK CLK3
+CLK0 -
+CLK1 -
+CLK2 -
+CLK3 -
+NONE F27B0 F28B0 F35B0
+
+.config_enum MULT18_1.REG_INPUTB_CLK CLK3
+CLK0 -
+CLK1 -
+CLK2 -
+CLK3 -
+NONE F20B0
+
+.config_enum MULT18_1.REG_INPUTC_CLK CLK3
+CLK0 -
+CLK1 -
+CLK2 -
+CLK3 -
+NONE F59B0
+
+
+# Fixed Connections
+.fixed_conn E1_JC0_ALU54 JDSPC0
+
+.fixed_conn E1_JC10_ALU54 JDSPC10
+
+.fixed_conn E1_JC11_ALU54 JDSPC11
+
+.fixed_conn E1_JC12_ALU54 JDSPC12
+
+.fixed_conn E1_JC13_ALU54 JDSPC13
+
+.fixed_conn E1_JC14_ALU54 JDSPC14
+
+.fixed_conn E1_JC15_ALU54 JDSPC15
+
+.fixed_conn E1_JC16_ALU54 JDSPC16
+
+.fixed_conn E1_JC17_ALU54 JDSPC17
+
+.fixed_conn E1_JC18_ALU54 JDSPC18
+
+.fixed_conn E1_JC19_ALU54 JDSPC19
+
+.fixed_conn E1_JC1_ALU54 JDSPC1
+
+.fixed_conn E1_JC20_ALU54 JDSPC20
+
+.fixed_conn E1_JC21_ALU54 JDSPC21
+
+.fixed_conn E1_JC22_ALU54 JDSPC22
+
+.fixed_conn E1_JC23_ALU54 JDSPC23
+
+.fixed_conn E1_JC24_ALU54 JDSPC24
+
+.fixed_conn E1_JC25_ALU54 JDSPC25
+
+.fixed_conn E1_JC26_ALU54 JDSPC26
+
+.fixed_conn E1_JC2_ALU54 JDSPC2
+
+.fixed_conn E1_JC3_ALU54 JDSPC3
+
+.fixed_conn E1_JC4_ALU54 JDSPC4
+
+.fixed_conn E1_JC5_ALU54 JDSPC5
+
+.fixed_conn E1_JC6_ALU54 JDSPC6
+
+.fixed_conn E1_JC7_ALU54 JDSPC7
+
+.fixed_conn E1_JC8_ALU54 JDSPC8
+
+.fixed_conn E1_JC9_ALU54 JDSPC9
+
+.fixed_conn E1_JCFB0_ALU54 JCFB0
+
+.fixed_conn E1_JCFB10_ALU54 JCFB10
+
+.fixed_conn E1_JCFB11_ALU54 JCFB11
+
+.fixed_conn E1_JCFB12_ALU54 JCFB12
+
+.fixed_conn E1_JCFB13_ALU54 JCFB13
+
+.fixed_conn E1_JCFB14_ALU54 JCFB14
+
+.fixed_conn E1_JCFB15_ALU54 JCFB15
+
+.fixed_conn E1_JCFB16_ALU54 JCFB16
+
+.fixed_conn E1_JCFB17_ALU54 JCFB17
+
+.fixed_conn E1_JCFB18_ALU54 JCFB18
+
+.fixed_conn E1_JCFB19_ALU54 JCFB19
+
+.fixed_conn E1_JCFB1_ALU54 JCFB1
+
+.fixed_conn E1_JCFB20_ALU54 JCFB20
+
+.fixed_conn E1_JCFB21_ALU54 JCFB21
+
+.fixed_conn E1_JCFB22_ALU54 JCFB22
+
+.fixed_conn E1_JCFB23_ALU54 JCFB23
+
+.fixed_conn E1_JCFB24_ALU54 JCFB24
+
+.fixed_conn E1_JCFB25_ALU54 JCFB25
+
+.fixed_conn E1_JCFB26_ALU54 JCFB26
+
+.fixed_conn E1_JCFB27_ALU54 JCFB27
+
+.fixed_conn E1_JCFB28_ALU54 JCFB28
+
+.fixed_conn E1_JCFB29_ALU54 JCFB29
+
+.fixed_conn E1_JCFB2_ALU54 JCFB2
+
+.fixed_conn E1_JCFB30_ALU54 JCFB30
+
+.fixed_conn E1_JCFB31_ALU54 JCFB31
+
+.fixed_conn E1_JCFB32_ALU54 JCFB32
+
+.fixed_conn E1_JCFB33_ALU54 JCFB33
+
+.fixed_conn E1_JCFB34_ALU54 JCFB34
+
+.fixed_conn E1_JCFB35_ALU54 JCFB35
+
+.fixed_conn E1_JCFB36_ALU54 JCFB36
+
+.fixed_conn E1_JCFB37_ALU54 JCFB37
+
+.fixed_conn E1_JCFB38_ALU54 JCFB38
+
+.fixed_conn E1_JCFB39_ALU54 JCFB39
+
+.fixed_conn E1_JCFB3_ALU54 JCFB3
+
+.fixed_conn E1_JCFB40_ALU54 JCFB40
+
+.fixed_conn E1_JCFB41_ALU54 JCFB41
+
+.fixed_conn E1_JCFB42_ALU54 JCFB42
+
+.fixed_conn E1_JCFB43_ALU54 JCFB43
+
+.fixed_conn E1_JCFB44_ALU54 JCFB44
+
+.fixed_conn E1_JCFB45_ALU54 JCFB45
+
+.fixed_conn E1_JCFB46_ALU54 JCFB46
+
+.fixed_conn E1_JCFB47_ALU54 JCFB47
+
+.fixed_conn E1_JCFB48_ALU54 JCFB48
+
+.fixed_conn E1_JCFB49_ALU54 JCFB49
+
+.fixed_conn E1_JCFB4_ALU54 JCFB4
+
+.fixed_conn E1_JCFB50_ALU54 JCFB50
+
+.fixed_conn E1_JCFB51_ALU54 JCFB51
+
+.fixed_conn E1_JCFB52_ALU54 JCFB52
+
+.fixed_conn E1_JCFB53_ALU54 JCFB53
+
+.fixed_conn E1_JCFB5_ALU54 JCFB5
+
+.fixed_conn E1_JCFB6_ALU54 JCFB6
+
+.fixed_conn E1_JCFB7_ALU54 JCFB7
+
+.fixed_conn E1_JCFB8_ALU54 JCFB8
+
+.fixed_conn E1_JCFB9_ALU54 JCFB9
+
+.fixed_conn E1_JF0 JP33
+
+.fixed_conn E1_JF1 JP34
+
+.fixed_conn E1_JF2 JP35
+
+.fixed_conn E1_JF3 JP36
+
+.fixed_conn E1_JF4 JP37
+
+.fixed_conn E1_JF5 JP38
+
+.fixed_conn E1_JF6 JP39
+
+.fixed_conn E1_JF7 JP40
+
+.fixed_conn E2_JF0 JP41
+
+.fixed_conn E2_JF1 JP42
+
+.fixed_conn E2_JF2 JP43
+
+.fixed_conn E2_JF3 JP44
+
+.fixed_conn E4_JCIN0_ALU24 JR0_ALU24
+
+.fixed_conn E4_JCIN10_ALU24 JR10_ALU24
+
+.fixed_conn E4_JCIN11_ALU24 JR11_ALU24
+
+.fixed_conn E4_JCIN12_ALU24 JR12_ALU24
+
+.fixed_conn E4_JCIN13_ALU24 JR13_ALU24
+
+.fixed_conn E4_JCIN14_ALU24 JR14_ALU24
+
+.fixed_conn E4_JCIN15_ALU24 JR15_ALU24
+
+.fixed_conn E4_JCIN16_ALU24 JR16_ALU24
+
+.fixed_conn E4_JCIN17_ALU24 JR17_ALU24
+
+.fixed_conn E4_JCIN18_ALU24 JR18_ALU24
+
+.fixed_conn E4_JCIN19_ALU24 JR19_ALU24
+
+.fixed_conn E4_JCIN1_ALU24 JR1_ALU24
+
+.fixed_conn E4_JCIN20_ALU24 JR20_ALU24
+
+.fixed_conn E4_JCIN21_ALU24 JR21_ALU24
+
+.fixed_conn E4_JCIN22_ALU24 JR22_ALU24
+
+.fixed_conn E4_JCIN23_ALU24 JR23_ALU24
+
+.fixed_conn E4_JCIN2_ALU24 JR2_ALU24
+
+.fixed_conn E4_JCIN3_ALU24 JR3_ALU24
+
+.fixed_conn E4_JCIN4_ALU24 JR4_ALU24
+
+.fixed_conn E4_JCIN5_ALU24 JR5_ALU24
+
+.fixed_conn E4_JCIN6_ALU24 JR6_ALU24
+
+.fixed_conn E4_JCIN7_ALU24 JR7_ALU24
+
+.fixed_conn E4_JCIN8_ALU24 JR8_ALU24
+
+.fixed_conn E4_JCIN9_ALU24 JR9_ALU24
+
+.fixed_conn JCE0_ALU24 W1_JCE0
+
+.fixed_conn JCE1_ALU24 W1_JCE1
+
+.fixed_conn JCE2_ALU24 JCE0
+
+.fixed_conn JCE3_ALU24 JCE1
+
+.fixed_conn JCFB0 JNEXTR0
+
+.fixed_conn JCFB0_ALU24 JCFB0
+
+.fixed_conn JCFB1 JNEXTR1
+
+.fixed_conn JCFB10 JNEXTR10
+
+.fixed_conn JCFB10_ALU24 JCFB10
+
+.fixed_conn JCFB11 JNEXTR11
+
+.fixed_conn JCFB11_ALU24 JCFB11
+
+.fixed_conn JCFB12 JNEXTR12
+
+.fixed_conn JCFB12_ALU24 JCFB12
+
+.fixed_conn JCFB13 JNEXTR13
+
+.fixed_conn JCFB13_ALU24 JCFB13
+
+.fixed_conn JCFB14 JNEXTR14
+
+.fixed_conn JCFB14_ALU24 JCFB14
+
+.fixed_conn JCFB15 JNEXTR15
+
+.fixed_conn JCFB15_ALU24 JCFB15
+
+.fixed_conn JCFB16 JNEXTR16
+
+.fixed_conn JCFB16_ALU24 JCFB16
+
+.fixed_conn JCFB17 JNEXTR17
+
+.fixed_conn JCFB17_ALU24 JCFB17
+
+.fixed_conn JCFB18 JNEXTR18
+
+.fixed_conn JCFB18_ALU24 JCFB18
+
+.fixed_conn JCFB19 JNEXTR19
+
+.fixed_conn JCFB19_ALU24 JCFB19
+
+.fixed_conn JCFB1_ALU24 JCFB1
+
+.fixed_conn JCFB2 JNEXTR2
+
+.fixed_conn JCFB20 JNEXTR20
+
+.fixed_conn JCFB20_ALU24 JCFB20
+
+.fixed_conn JCFB21 JNEXTR21
+
+.fixed_conn JCFB21_ALU24 JCFB21
+
+.fixed_conn JCFB22 JNEXTR22
+
+.fixed_conn JCFB22_ALU24 JCFB22
+
+.fixed_conn JCFB23 JNEXTR23
+
+.fixed_conn JCFB23_ALU24 JCFB23
+
+.fixed_conn JCFB24 JNEXTR24
+
+.fixed_conn JCFB25 JNEXTR25
+
+.fixed_conn JCFB26 JNEXTR26
+
+.fixed_conn JCFB27 JNEXTR27
+
+.fixed_conn JCFB28 JNEXTR28
+
+.fixed_conn JCFB29 JNEXTR29
+
+.fixed_conn JCFB2_ALU24 JCFB2
+
+.fixed_conn JCFB3 JNEXTR3
+
+.fixed_conn JCFB30 JNEXTR30
+
+.fixed_conn JCFB31 JNEXTR31
+
+.fixed_conn JCFB32 JNEXTR32
+
+.fixed_conn JCFB33 JNEXTR33
+
+.fixed_conn JCFB34 JNEXTR34
+
+.fixed_conn JCFB35 JNEXTR35
+
+.fixed_conn JCFB36 JNEXTR36
+
+.fixed_conn JCFB37 JNEXTR37
+
+.fixed_conn JCFB38 JNEXTR38
+
+.fixed_conn JCFB39 JNEXTR39
+
+.fixed_conn JCFB3_ALU24 JCFB3
+
+.fixed_conn JCFB4 JNEXTR4
+
+.fixed_conn JCFB40 JNEXTR40
+
+.fixed_conn JCFB41 JNEXTR41
+
+.fixed_conn JCFB42 JNEXTR42
+
+.fixed_conn JCFB43 JNEXTR43
+
+.fixed_conn JCFB44 JNEXTR44
+
+.fixed_conn JCFB45 JNEXTR45
+
+.fixed_conn JCFB46 JNEXTR46
+
+.fixed_conn JCFB47 JNEXTR47
+
+.fixed_conn JCFB48 JNEXTR48
+
+.fixed_conn JCFB49 JNEXTR49
+
+.fixed_conn JCFB4_ALU24 JCFB4
+
+.fixed_conn JCFB5 JNEXTR5
+
+.fixed_conn JCFB50 JNEXTR50
+
+.fixed_conn JCFB51 JNEXTR51
+
+.fixed_conn JCFB52 JNEXTR52
+
+.fixed_conn JCFB53 JNEXTR53
+
+.fixed_conn JCFB5_ALU24 JCFB5
+
+.fixed_conn JCFB6 JNEXTR6
+
+.fixed_conn JCFB6_ALU24 JCFB6
+
+.fixed_conn JCFB7 JNEXTR7
+
+.fixed_conn JCFB7_ALU24 JCFB7
+
+.fixed_conn JCFB8 JNEXTR8
+
+.fixed_conn JCFB8_ALU24 JCFB8
+
+.fixed_conn JCFB9 JNEXTR9
+
+.fixed_conn JCFB9_ALU24 JCFB9
+
+.fixed_conn JCIN0_ALU24 W5_JR0_ALU24
+
+.fixed_conn JCIN10_ALU24 W5_JR10_ALU24
+
+.fixed_conn JCIN11_ALU24 W5_JR11_ALU24
+
+.fixed_conn JCIN12_ALU24 W5_JR12_ALU24
+
+.fixed_conn JCIN13_ALU24 W5_JR13_ALU24
+
+.fixed_conn JCIN14_ALU24 W5_JR14_ALU24
+
+.fixed_conn JCIN15_ALU24 W5_JR15_ALU24
+
+.fixed_conn JCIN16_ALU24 W5_JR16_ALU24
+
+.fixed_conn JCIN17_ALU24 W5_JR17_ALU24
+
+.fixed_conn JCIN18_ALU24 W5_JR18_ALU24
+
+.fixed_conn JCIN19_ALU24 W5_JR19_ALU24
+
+.fixed_conn JCIN1_ALU24 W5_JR1_ALU24
+
+.fixed_conn JCIN20_ALU24 W5_JR20_ALU24
+
+.fixed_conn JCIN21_ALU24 W5_JR21_ALU24
+
+.fixed_conn JCIN22_ALU24 W5_JR22_ALU24
+
+.fixed_conn JCIN23_ALU24 W5_JR23_ALU24
+
+.fixed_conn JCIN2_ALU24 W5_JR2_ALU24
+
+.fixed_conn JCIN3_ALU24 W5_JR3_ALU24
+
+.fixed_conn JCIN4_ALU24 W5_JR4_ALU24
+
+.fixed_conn JCIN5_ALU24 W5_JR5_ALU24
+
+.fixed_conn JCIN6_ALU24 W5_JR6_ALU24
+
+.fixed_conn JCIN7_ALU24 W5_JR7_ALU24
+
+.fixed_conn JCIN8_ALU24 W5_JR8_ALU24
+
+.fixed_conn JCIN9_ALU24 W5_JR9_ALU24
+
+.fixed_conn JCLK0_ALU24 W1_JCLK0
+
+.fixed_conn JCLK1_ALU24 W1_JCLK1
+
+.fixed_conn JCLK2_ALU24 JCLK0
+
+.fixed_conn JCLK3_ALU24 JCLK1
+
+.fixed_conn JCO0 E1_JCO0_ALU54
+
+.fixed_conn JCO0 JCO0_ALU24
+
+.fixed_conn JCO1 E1_JCO1_ALU54
+
+.fixed_conn JCO1 JCO1_ALU24
+
+.fixed_conn JCO10 E1_JCO10_ALU54
+
+.fixed_conn JCO10 JCO10_ALU24
+
+.fixed_conn JCO11 E1_JCO11_ALU54
+
+.fixed_conn JCO11 JCO11_ALU24
+
+.fixed_conn JCO12 E1_JCO12_ALU54
+
+.fixed_conn JCO12 JCO12_ALU24
+
+.fixed_conn JCO13 E1_JCO13_ALU54
+
+.fixed_conn JCO13 JCO13_ALU24
+
+.fixed_conn JCO14 E1_JCO14_ALU54
+
+.fixed_conn JCO14 JCO14_ALU24
+
+.fixed_conn JCO15 E1_JCO15_ALU54
+
+.fixed_conn JCO15 JCO15_ALU24
+
+.fixed_conn JCO16 E1_JCO16_ALU54
+
+.fixed_conn JCO16 JCO16_ALU24
+
+.fixed_conn JCO17 E1_JCO17_ALU54
+
+.fixed_conn JCO17 JCO17_ALU24
+
+.fixed_conn JCO18 E1_JCO18_ALU54
+
+.fixed_conn JCO18 JCO18_ALU24
+
+.fixed_conn JCO19 E1_JCO19_ALU54
+
+.fixed_conn JCO19 JCO19_ALU24
+
+.fixed_conn JCO2 E1_JCO2_ALU54
+
+.fixed_conn JCO2 JCO2_ALU24
+
+.fixed_conn JCO20 E1_JCO20_ALU54
+
+.fixed_conn JCO20 JCO20_ALU24
+
+.fixed_conn JCO21 E1_JCO21_ALU54
+
+.fixed_conn JCO21 JCO21_ALU24
+
+.fixed_conn JCO22 E1_JCO22_ALU54
+
+.fixed_conn JCO22 JCO22_ALU24
+
+.fixed_conn JCO23 E1_JCO23_ALU54
+
+.fixed_conn JCO23 JCO23_ALU24
+
+.fixed_conn JCO24 E1_JCO24_ALU54
+
+.fixed_conn JCO25 E1_JCO25_ALU54
+
+.fixed_conn JCO26 E1_JCO26_ALU54
+
+.fixed_conn JCO27 E1_JCO27_ALU54
+
+.fixed_conn JCO28 E1_JCO28_ALU54
+
+.fixed_conn JCO29 E1_JCO29_ALU54
+
+.fixed_conn JCO3 E1_JCO3_ALU54
+
+.fixed_conn JCO3 JCO3_ALU24
+
+.fixed_conn JCO30 E1_JCO30_ALU54
+
+.fixed_conn JCO31 E1_JCO31_ALU54
+
+.fixed_conn JCO32 E1_JCO32_ALU54
+
+.fixed_conn JCO33 E1_JCO33_ALU54
+
+.fixed_conn JCO34 E1_JCO34_ALU54
+
+.fixed_conn JCO35 E1_JCO35_ALU54
+
+.fixed_conn JCO36 E1_JCO36_ALU54
+
+.fixed_conn JCO37 E1_JCO37_ALU54
+
+.fixed_conn JCO38 E1_JCO38_ALU54
+
+.fixed_conn JCO39 E1_JCO39_ALU54
+
+.fixed_conn JCO4 E1_JCO4_ALU54
+
+.fixed_conn JCO4 JCO4_ALU24
+
+.fixed_conn JCO40 E1_JCO40_ALU54
+
+.fixed_conn JCO41 E1_JCO41_ALU54
+
+.fixed_conn JCO42 E1_JCO42_ALU54
+
+.fixed_conn JCO43 E1_JCO43_ALU54
+
+.fixed_conn JCO44 E1_JCO44_ALU54
+
+.fixed_conn JCO45 E1_JCO45_ALU54
+
+.fixed_conn JCO46 E1_JCO46_ALU54
+
+.fixed_conn JCO47 E1_JCO47_ALU54
+
+.fixed_conn JCO48 E1_JCO48_ALU54
+
+.fixed_conn JCO49 E1_JCO49_ALU54
+
+.fixed_conn JCO5 E1_JCO5_ALU54
+
+.fixed_conn JCO5 JCO5_ALU24
+
+.fixed_conn JCO50 E1_JCO50_ALU54
+
+.fixed_conn JCO51 E1_JCO51_ALU54
+
+.fixed_conn JCO52 E1_JCO52_ALU54
+
+.fixed_conn JCO53 E1_JCO53_ALU54
+
+.fixed_conn JCO6 E1_JCO6_ALU54
+
+.fixed_conn JCO6 JCO6_ALU24
+
+.fixed_conn JCO7 E1_JCO7_ALU54
+
+.fixed_conn JCO7 JCO7_ALU24
+
+.fixed_conn JCO8 E1_JCO8_ALU54
+
+.fixed_conn JCO8 JCO8_ALU24
+
+.fixed_conn JCO9 E1_JCO9_ALU54
+
+.fixed_conn JCO9 JCO9_ALU24
+
+.fixed_conn JDSPC0 JMUIC0
+
+.fixed_conn JDSPC1 JMUIC1
+
+.fixed_conn JDSPC10 JMUIC10
+
+.fixed_conn JDSPC11 JMUIC11
+
+.fixed_conn JDSPC12 JMUIC12
+
+.fixed_conn JDSPC13 JMUIC13
+
+.fixed_conn JDSPC14 JMUIC14
+
+.fixed_conn JDSPC15 JMUIC15
+
+.fixed_conn JDSPC16 JMUIC16
+
+.fixed_conn JDSPC17 JMUIC17
+
+.fixed_conn JDSPC18 JMUIC18
+
+.fixed_conn JDSPC19 JMUIC19
+
+.fixed_conn JDSPC2 JMUIC2
+
+.fixed_conn JDSPC20 JMUIC20
+
+.fixed_conn JDSPC21 JMUIC21
+
+.fixed_conn JDSPC22 JMUIC22
+
+.fixed_conn JDSPC23 JMUIC23
+
+.fixed_conn JDSPC24 JMUIC24
+
+.fixed_conn JDSPC25 JMUIC25
+
+.fixed_conn JDSPC26 JMUIC26
+
+.fixed_conn JDSPC3 JMUIC3
+
+.fixed_conn JDSPC4 JMUIC4
+
+.fixed_conn JDSPC5 JMUIC5
+
+.fixed_conn JDSPC6 JMUIC6
+
+.fixed_conn JDSPC7 JMUIC7
+
+.fixed_conn JDSPC8 JMUIC8
+
+.fixed_conn JDSPC9 JMUIC9
+
+.fixed_conn JF0 JP16
+
+.fixed_conn JF1 JP17
+
+.fixed_conn JF2 JP27
+
+.fixed_conn JF3 JP28
+
+.fixed_conn JF4 JP29
+
+.fixed_conn JF5 JP30
+
+.fixed_conn JF6 JP31
+
+.fixed_conn JF7 JP32
+
+.fixed_conn JMA0_ALU24 W2_JP0_MULT9
+
+.fixed_conn JMA10_ALU24 W2_JP10_MULT9
+
+.fixed_conn JMA11_ALU24 W2_JP11_MULT9
+
+.fixed_conn JMA12_ALU24 W2_JP12_MULT9
+
+.fixed_conn JMA13_ALU24 W2_JP13_MULT9
+
+.fixed_conn JMA14_ALU24 W2_JP14_MULT9
+
+.fixed_conn JMA15_ALU24 W2_JP15_MULT9
+
+.fixed_conn JMA16_ALU24 W2_JP16_MULT9
+
+.fixed_conn JMA17_ALU24 W2_JP17_MULT9
+
+.fixed_conn JMA1_ALU24 W2_JP1_MULT9
+
+.fixed_conn JMA2_ALU24 W2_JP2_MULT9
+
+.fixed_conn JMA3_ALU24 W2_JP3_MULT9
+
+.fixed_conn JMA4_ALU24 W2_JP4_MULT9
+
+.fixed_conn JMA5_ALU24 W2_JP5_MULT9
+
+.fixed_conn JMA6_ALU24 W2_JP6_MULT9
+
+.fixed_conn JMA7_ALU24 W2_JP7_MULT9
+
+.fixed_conn JMA8_ALU24 W2_JP8_MULT9
+
+.fixed_conn JMA9_ALU24 W2_JP9_MULT9
+
+.fixed_conn JMB0_ALU24 W1_JP0_MULT9
+
+.fixed_conn JMB10_ALU24 W1_JP10_MULT9
+
+.fixed_conn JMB11_ALU24 W1_JP11_MULT9
+
+.fixed_conn JMB12_ALU24 W1_JP12_MULT9
+
+.fixed_conn JMB13_ALU24 W1_JP13_MULT9
+
+.fixed_conn JMB14_ALU24 W1_JP14_MULT9
+
+.fixed_conn JMB15_ALU24 W1_JP15_MULT9
+
+.fixed_conn JMB16_ALU24 W1_JP16_MULT9
+
+.fixed_conn JMB17_ALU24 W1_JP17_MULT9
+
+.fixed_conn JMB1_ALU24 W1_JP1_MULT9
+
+.fixed_conn JMB2_ALU24 W1_JP2_MULT9
+
+.fixed_conn JMB3_ALU24 W1_JP3_MULT9
+
+.fixed_conn JMB4_ALU24 W1_JP4_MULT9
+
+.fixed_conn JMB5_ALU24 W1_JP5_MULT9
+
+.fixed_conn JMB6_ALU24 W1_JP6_MULT9
+
+.fixed_conn JMB7_ALU24 W1_JP7_MULT9
+
+.fixed_conn JMB8_ALU24 W1_JP8_MULT9
+
+.fixed_conn JMB9_ALU24 W1_JP9_MULT9
+
+.fixed_conn JMSROA0 W1_JSROA0_MULT18
+
+.fixed_conn JMSROA0 W1_JSROA0_MULT9
+
+.fixed_conn JMSROA1 W1_JSROA1_MULT18
+
+.fixed_conn JMSROA1 W1_JSROA1_MULT9
+
+.fixed_conn JMSROA10 W1_JSROA10_MULT18
+
+.fixed_conn JMSROA11 W1_JSROA11_MULT18
+
+.fixed_conn JMSROA12 W1_JSROA12_MULT18
+
+.fixed_conn JMSROA13 W1_JSROA13_MULT18
+
+.fixed_conn JMSROA14 W1_JSROA14_MULT18
+
+.fixed_conn JMSROA15 W1_JSROA15_MULT18
+
+.fixed_conn JMSROA16 W1_JSROA16_MULT18
+
+.fixed_conn JMSROA17 W1_JSROA17_MULT18
+
+.fixed_conn JMSROA2 W1_JSROA2_MULT18
+
+.fixed_conn JMSROA2 W1_JSROA2_MULT9
+
+.fixed_conn JMSROA3 W1_JSROA3_MULT18
+
+.fixed_conn JMSROA3 W1_JSROA3_MULT9
+
+.fixed_conn JMSROA4 W1_JSROA4_MULT18
+
+.fixed_conn JMSROA4 W1_JSROA4_MULT9
+
+.fixed_conn JMSROA5 W1_JSROA5_MULT18
+
+.fixed_conn JMSROA5 W1_JSROA5_MULT9
+
+.fixed_conn JMSROA6 W1_JSROA6_MULT18
+
+.fixed_conn JMSROA6 W1_JSROA6_MULT9
+
+.fixed_conn JMSROA7 W1_JSROA7_MULT18
+
+.fixed_conn JMSROA7 W1_JSROA7_MULT9
+
+.fixed_conn JMSROA8 W1_JSROA8_MULT18
+
+.fixed_conn JMSROA8 W1_JSROA8_MULT9
+
+.fixed_conn JMSROA9 W1_JSROA9_MULT18
+
+.fixed_conn JMUIC0 W2_JC4
+
+.fixed_conn JMUIC1 W2_JA5
+
+.fixed_conn JMUIC10 W1_JC6
+
+.fixed_conn JMUIC11 W1_JA7
+
+.fixed_conn JMUIC12 W1_JC0
+
+.fixed_conn JMUIC13 W1_JA1
+
+.fixed_conn JMUIC14 W1_JC2
+
+.fixed_conn JMUIC15 W1_JA3
+
+.fixed_conn JMUIC16 JC4
+
+.fixed_conn JMUIC17 JA5
+
+.fixed_conn JMUIC18 JC6
+
+.fixed_conn JMUIC19 JA7
+
+.fixed_conn JMUIC2 W2_JC6
+
+.fixed_conn JMUIC20 JC0
+
+.fixed_conn JMUIC21 JA1
+
+.fixed_conn JMUIC22 JC2
+
+.fixed_conn JMUIC23 JA3
+
+.fixed_conn JMUIC24 E1_JC4
+
+.fixed_conn JMUIC25 E1_JA5
+
+.fixed_conn JMUIC26 E1_JC6
+
+.fixed_conn JMUIC3 W2_JA7
+
+.fixed_conn JMUIC4 W2_JC0
+
+.fixed_conn JMUIC5 W2_JA1
+
+.fixed_conn JMUIC6 W2_JC2
+
+.fixed_conn JMUIC7 W2_JA3
+
+.fixed_conn JMUIC8 W1_JC4
+
+.fixed_conn JMUIC9 W1_JA5
+
+.fixed_conn JNEXTR0 E4_JR0_ALU24
+
+.fixed_conn JNEXTR0 E5_JR0_ALU54
+
+.fixed_conn JNEXTR1 E4_JR1_ALU24
+
+.fixed_conn JNEXTR1 E5_JR1_ALU54
+
+.fixed_conn JNEXTR10 E4_JR10_ALU24
+
+.fixed_conn JNEXTR10 E5_JR10_ALU54
+
+.fixed_conn JNEXTR11 E4_JR11_ALU24
+
+.fixed_conn JNEXTR11 E5_JR11_ALU54
+
+.fixed_conn JNEXTR12 E4_JR12_ALU24
+
+.fixed_conn JNEXTR12 E5_JR12_ALU54
+
+.fixed_conn JNEXTR13 E4_JR13_ALU24
+
+.fixed_conn JNEXTR13 E5_JR13_ALU54
+
+.fixed_conn JNEXTR14 E4_JR14_ALU24
+
+.fixed_conn JNEXTR14 E5_JR14_ALU54
+
+.fixed_conn JNEXTR15 E4_JR15_ALU24
+
+.fixed_conn JNEXTR15 E5_JR15_ALU54
+
+.fixed_conn JNEXTR16 E4_JR16_ALU24
+
+.fixed_conn JNEXTR16 E5_JR16_ALU54
+
+.fixed_conn JNEXTR17 E4_JR17_ALU24
+
+.fixed_conn JNEXTR17 E5_JR17_ALU54
+
+.fixed_conn JNEXTR18 E4_JR18_ALU24
+
+.fixed_conn JNEXTR18 E5_JR18_ALU54
+
+.fixed_conn JNEXTR19 E4_JR19_ALU24
+
+.fixed_conn JNEXTR19 E5_JR19_ALU54
+
+.fixed_conn JNEXTR2 E4_JR2_ALU24
+
+.fixed_conn JNEXTR2 E5_JR2_ALU54
+
+.fixed_conn JNEXTR20 E4_JR20_ALU24
+
+.fixed_conn JNEXTR20 E5_JR20_ALU54
+
+.fixed_conn JNEXTR21 E4_JR21_ALU24
+
+.fixed_conn JNEXTR21 E5_JR21_ALU54
+
+.fixed_conn JNEXTR22 E4_JR22_ALU24
+
+.fixed_conn JNEXTR22 E5_JR22_ALU54
+
+.fixed_conn JNEXTR23 E4_JR23_ALU24
+
+.fixed_conn JNEXTR23 E5_JR23_ALU54
+
+.fixed_conn JNEXTR24 E5_JR24_ALU54
+
+.fixed_conn JNEXTR25 E5_JR25_ALU54
+
+.fixed_conn JNEXTR26 E5_JR26_ALU54
+
+.fixed_conn JNEXTR27 E5_JR27_ALU54
+
+.fixed_conn JNEXTR28 E5_JR28_ALU54
+
+.fixed_conn JNEXTR29 E5_JR29_ALU54
+
+.fixed_conn JNEXTR3 E4_JR3_ALU24
+
+.fixed_conn JNEXTR3 E5_JR3_ALU54
+
+.fixed_conn JNEXTR30 E5_JR30_ALU54
+
+.fixed_conn JNEXTR31 E5_JR31_ALU54
+
+.fixed_conn JNEXTR32 E5_JR32_ALU54
+
+.fixed_conn JNEXTR33 E5_JR33_ALU54
+
+.fixed_conn JNEXTR34 E5_JR34_ALU54
+
+.fixed_conn JNEXTR35 E5_JR35_ALU54
+
+.fixed_conn JNEXTR36 E5_JR36_ALU54
+
+.fixed_conn JNEXTR37 E5_JR37_ALU54
+
+.fixed_conn JNEXTR38 E5_JR38_ALU54
+
+.fixed_conn JNEXTR39 E5_JR39_ALU54
+
+.fixed_conn JNEXTR4 E4_JR4_ALU24
+
+.fixed_conn JNEXTR4 E5_JR4_ALU54
+
+.fixed_conn JNEXTR40 E5_JR40_ALU54
+
+.fixed_conn JNEXTR41 E5_JR41_ALU54
+
+.fixed_conn JNEXTR42 E5_JR42_ALU54
+
+.fixed_conn JNEXTR43 E5_JR43_ALU54
+
+.fixed_conn JNEXTR44 E5_JR44_ALU54
+
+.fixed_conn JNEXTR45 E5_JR45_ALU54
+
+.fixed_conn JNEXTR46 E5_JR46_ALU54
+
+.fixed_conn JNEXTR47 E5_JR47_ALU54
+
+.fixed_conn JNEXTR48 E5_JR48_ALU54
+
+.fixed_conn JNEXTR49 E5_JR49_ALU54
+
+.fixed_conn JNEXTR5 E4_JR5_ALU24
+
+.fixed_conn JNEXTR5 E5_JR5_ALU54
+
+.fixed_conn JNEXTR50 E5_JR50_ALU54
+
+.fixed_conn JNEXTR51 E5_JR51_ALU54
+
+.fixed_conn JNEXTR52 E5_JR52_ALU54
+
+.fixed_conn JNEXTR53 E5_JR53_ALU54
+
+.fixed_conn JNEXTR6 E4_JR6_ALU24
+
+.fixed_conn JNEXTR6 E5_JR6_ALU54
+
+.fixed_conn JNEXTR7 E4_JR7_ALU24
+
+.fixed_conn JNEXTR7 E5_JR7_ALU54
+
+.fixed_conn JNEXTR8 E4_JR8_ALU24
+
+.fixed_conn JNEXTR8 E5_JR8_ALU54
+
+.fixed_conn JNEXTR9 E4_JR9_ALU24
+
+.fixed_conn JNEXTR9 E5_JR9_ALU54
+
+.fixed_conn JOP5_ALU24 JCE2
+
+.fixed_conn JOP7_ALU24 E1_JCE0
+
+.fixed_conn JP0 JR0
+
+.fixed_conn JP1 JR1
+
+.fixed_conn JP10 JR10
+
+.fixed_conn JP11 JR11
+
+.fixed_conn JP12 JR12
+
+.fixed_conn JP13 JR13
+
+.fixed_conn JP14 JR14
+
+.fixed_conn JP15 JR15
+
+.fixed_conn JP16 JR16
+
+.fixed_conn JP17 JR17
+
+.fixed_conn JP18 JR18
+
+.fixed_conn JP19 JR19
+
+.fixed_conn JP2 JR2
+
+.fixed_conn JP20 JR20
+
+.fixed_conn JP21 JR21
+
+.fixed_conn JP22 JR22
+
+.fixed_conn JP23 JR23
+
+.fixed_conn JP24 JR24
+
+.fixed_conn JP25 JR25
+
+.fixed_conn JP26 JR26
+
+.fixed_conn JP27 JR27
+
+.fixed_conn JP28 JR28
+
+.fixed_conn JP29 JR29
+
+.fixed_conn JP3 JR3
+
+.fixed_conn JP30 JR30
+
+.fixed_conn JP31 JR31
+
+.fixed_conn JP32 JR32
+
+.fixed_conn JP33 JR33
+
+.fixed_conn JP34 JR34
+
+.fixed_conn JP35 JR35
+
+.fixed_conn JP36 JR36
+
+.fixed_conn JP37 JR37
+
+.fixed_conn JP38 JR38
+
+.fixed_conn JP39 JR39
+
+.fixed_conn JP4 JR4
+
+.fixed_conn JP40 JR40
+
+.fixed_conn JP41 JR41
+
+.fixed_conn JP42 JR42
+
+.fixed_conn JP43 JR43
+
+.fixed_conn JP44 JR44
+
+.fixed_conn JP45 JR45
+
+.fixed_conn JP46 JR46
+
+.fixed_conn JP47 JR47
+
+.fixed_conn JP48 JR48
+
+.fixed_conn JP49 JR49
+
+.fixed_conn JP5 JR5
+
+.fixed_conn JP50 JR50
+
+.fixed_conn JP51 JR51
+
+.fixed_conn JP52 JR52
+
+.fixed_conn JP53 JR53
+
+.fixed_conn JP6 JR6
+
+.fixed_conn JP7 JR7
+
+.fixed_conn JP8 JR8
+
+.fixed_conn JP9 JR9
+
+.fixed_conn JPSROA0 W1_JSROA0_PRADD18
+
+.fixed_conn JPSROA0 W1_JSROA0_PRADD9
+
+.fixed_conn JPSROA1 W1_JSROA1_PRADD18
+
+.fixed_conn JPSROA1 W1_JSROA1_PRADD9
+
+.fixed_conn JPSROA10 W1_JSROA10_PRADD18
+
+.fixed_conn JPSROA11 W1_JSROA11_PRADD18
+
+.fixed_conn JPSROA12 W1_JSROA12_PRADD18
+
+.fixed_conn JPSROA13 W1_JSROA13_PRADD18
+
+.fixed_conn JPSROA14 W1_JSROA14_PRADD18
+
+.fixed_conn JPSROA15 W1_JSROA15_PRADD18
+
+.fixed_conn JPSROA16 W1_JSROA16_PRADD18
+
+.fixed_conn JPSROA17 W1_JSROA17_PRADD18
+
+.fixed_conn JPSROA2 W1_JSROA2_PRADD18
+
+.fixed_conn JPSROA2 W1_JSROA2_PRADD9
+
+.fixed_conn JPSROA3 W1_JSROA3_PRADD18
+
+.fixed_conn JPSROA3 W1_JSROA3_PRADD9
+
+.fixed_conn JPSROA4 W1_JSROA4_PRADD18
+
+.fixed_conn JPSROA4 W1_JSROA4_PRADD9
+
+.fixed_conn JPSROA5 W1_JSROA5_PRADD18
+
+.fixed_conn JPSROA5 W1_JSROA5_PRADD9
+
+.fixed_conn JPSROA6 W1_JSROA6_PRADD18
+
+.fixed_conn JPSROA6 W1_JSROA6_PRADD9
+
+.fixed_conn JPSROA7 W1_JSROA7_PRADD18
+
+.fixed_conn JPSROA7 W1_JSROA7_PRADD9
+
+.fixed_conn JPSROA8 W1_JSROA8_PRADD18
+
+.fixed_conn JPSROA8 W1_JSROA8_PRADD9
+
+.fixed_conn JPSROA9 W1_JSROA9_PRADD18
+
+.fixed_conn JQ0 JP52
+
+.fixed_conn JQ1 JP53
+
+.fixed_conn JR0 E1_JR0_ALU54
+
+.fixed_conn JR0 JR0_ALU24
+
+.fixed_conn JR1 E1_JR1_ALU54
+
+.fixed_conn JR1 JR1_ALU24
+
+.fixed_conn JR10 E1_JR10_ALU54
+
+.fixed_conn JR10 JR10_ALU24
+
+.fixed_conn JR11 E1_JR11_ALU54
+
+.fixed_conn JR11 JR11_ALU24
+
+.fixed_conn JR12 E1_JR12_ALU54
+
+.fixed_conn JR12 JR12_ALU24
+
+.fixed_conn JR13 E1_JR13_ALU54
+
+.fixed_conn JR13 JR13_ALU24
+
+.fixed_conn JR14 E1_JR14_ALU54
+
+.fixed_conn JR14 JR14_ALU24
+
+.fixed_conn JR15 E1_JR15_ALU54
+
+.fixed_conn JR15 JR15_ALU24
+
+.fixed_conn JR16 E1_JR16_ALU54
+
+.fixed_conn JR16 JR16_ALU24
+
+.fixed_conn JR17 E1_JR17_ALU54
+
+.fixed_conn JR17 JR17_ALU24
+
+.fixed_conn JR18 E1_JR18_ALU54
+
+.fixed_conn JR18 JR18_ALU24
+
+.fixed_conn JR19 E1_JR19_ALU54
+
+.fixed_conn JR19 JR19_ALU24
+
+.fixed_conn JR2 E1_JR2_ALU54
+
+.fixed_conn JR2 JR2_ALU24
+
+.fixed_conn JR20 E1_JR20_ALU54
+
+.fixed_conn JR20 JR20_ALU24
+
+.fixed_conn JR21 E1_JR21_ALU54
+
+.fixed_conn JR21 JR21_ALU24
+
+.fixed_conn JR22 E1_JR22_ALU54
+
+.fixed_conn JR22 JR22_ALU24
+
+.fixed_conn JR23 E1_JR23_ALU54
+
+.fixed_conn JR23 JR23_ALU24
+
+.fixed_conn JR24 E1_JR24_ALU54
+
+.fixed_conn JR25 E1_JR25_ALU54
+
+.fixed_conn JR26 E1_JR26_ALU54
+
+.fixed_conn JR27 E1_JR27_ALU54
+
+.fixed_conn JR28 E1_JR28_ALU54
+
+.fixed_conn JR29 E1_JR29_ALU54
+
+.fixed_conn JR3 E1_JR3_ALU54
+
+.fixed_conn JR3 JR3_ALU24
+
+.fixed_conn JR30 E1_JR30_ALU54
+
+.fixed_conn JR31 E1_JR31_ALU54
+
+.fixed_conn JR32 E1_JR32_ALU54
+
+.fixed_conn JR33 E1_JR33_ALU54
+
+.fixed_conn JR34 E1_JR34_ALU54
+
+.fixed_conn JR35 E1_JR35_ALU54
+
+.fixed_conn JR36 E1_JR36_ALU54
+
+.fixed_conn JR37 E1_JR37_ALU54
+
+.fixed_conn JR38 E1_JR38_ALU54
+
+.fixed_conn JR39 E1_JR39_ALU54
+
+.fixed_conn JR4 E1_JR4_ALU54
+
+.fixed_conn JR4 JR4_ALU24
+
+.fixed_conn JR40 E1_JR40_ALU54
+
+.fixed_conn JR41 E1_JR41_ALU54
+
+.fixed_conn JR42 E1_JR42_ALU54
+
+.fixed_conn JR43 E1_JR43_ALU54
+
+.fixed_conn JR44 E1_JR44_ALU54
+
+.fixed_conn JR45 E1_JR45_ALU54
+
+.fixed_conn JR46 E1_JR46_ALU54
+
+.fixed_conn JR47 E1_JR47_ALU54
+
+.fixed_conn JR48 E1_JR48_ALU54
+
+.fixed_conn JR49 E1_JR49_ALU54
+
+.fixed_conn JR5 E1_JR5_ALU54
+
+.fixed_conn JR5 JR5_ALU24
+
+.fixed_conn JR50 E1_JR50_ALU54
+
+.fixed_conn JR51 E1_JR51_ALU54
+
+.fixed_conn JR52 E1_JR52_ALU54
+
+.fixed_conn JR53 E1_JR53_ALU54
+
+.fixed_conn JR6 E1_JR6_ALU54
+
+.fixed_conn JR6 JR6_ALU24
+
+.fixed_conn JR7 E1_JR7_ALU54
+
+.fixed_conn JR7 JR7_ALU24
+
+.fixed_conn JR8 E1_JR8_ALU54
+
+.fixed_conn JR8 JR8_ALU24
+
+.fixed_conn JR9 E1_JR9_ALU54
+
+.fixed_conn JR9 JR9_ALU24
+
+.fixed_conn JROC27 W1_JROC0_MULT18
+
+.fixed_conn JROC27 W1_JROC0_MULT9
+
+.fixed_conn JROC28 W1_JROC1_MULT18
+
+.fixed_conn JROC28 W1_JROC1_MULT9
+
+.fixed_conn JROC29 W1_JROC2_MULT18
+
+.fixed_conn JROC29 W1_JROC2_MULT9
+
+.fixed_conn JROC30 W1_JROC3_MULT18
+
+.fixed_conn JROC30 W1_JROC3_MULT9
+
+.fixed_conn JROC31 W1_JROC4_MULT18
+
+.fixed_conn JROC31 W1_JROC4_MULT9
+
+.fixed_conn JROC32 W1_JROC5_MULT18
+
+.fixed_conn JROC32 W1_JROC5_MULT9
+
+.fixed_conn JROC33 W1_JROC6_MULT18
+
+.fixed_conn JROC33 W1_JROC6_MULT9
+
+.fixed_conn JROC34 W1_JROC7_MULT18
+
+.fixed_conn JROC34 W1_JROC7_MULT9
+
+.fixed_conn JROC35 W1_JROC8_MULT18
+
+.fixed_conn JROC35 W1_JROC8_MULT9
+
+.fixed_conn JROC36 W1_JROC9_MULT18
+
+.fixed_conn JROC37 W1_JROC10_MULT18
+
+.fixed_conn JROC38 W1_JROC11_MULT18
+
+.fixed_conn JROC39 W1_JROC12_MULT18
+
+.fixed_conn JROC40 W1_JROC13_MULT18
+
+.fixed_conn JROC41 W1_JROC14_MULT18
+
+.fixed_conn JROC42 W1_JROC15_MULT18
+
+.fixed_conn JROC43 W1_JROC16_MULT18
+
+.fixed_conn JROC44 W1_JROC17_MULT18
+
+.fixed_conn JROC45 W1_JA0
+
+.fixed_conn JROC46 W1_JC3
+
+.fixed_conn JROC47 W1_JA2
+
+.fixed_conn JROC48 JC5
+
+.fixed_conn JROC49 JA4
+
+.fixed_conn JROC50 JC7
+
+.fixed_conn JROC51 JA6
+
+.fixed_conn JROC52 JC1
+
+.fixed_conn JROC53 JA0
+
+.fixed_conn JRST0_ALU24 E1_JLSR0
+
+.fixed_conn JRST1_ALU24 E1_JLSR1
+
+.fixed_conn JRST2_ALU24 E3_JLSR0
+
+.fixed_conn JRST3_ALU24 E3_JLSR1
+
+.fixed_conn JSIGNEDIA_ALU24 W2_JSIGNEDP_MULT9
+
+.fixed_conn JSIGNEDIB_ALU24 W1_JSIGNEDP_MULT9
+
+.fixed_conn W1_JF0 JP8
+
+.fixed_conn W1_JF1 JP9
+
+.fixed_conn W1_JF2 JP10
+
+.fixed_conn W1_JF3 JP11
+
+.fixed_conn W1_JF4 JP12
+
+.fixed_conn W1_JF5 JP13
+
+.fixed_conn W1_JF6 JP14
+
+.fixed_conn W1_JF7 JP15
+
+.fixed_conn W1_JQ0 JP26
+
+.fixed_conn W1_JQ1 JP45
+
+.fixed_conn W1_JQ2 JP46
+
+.fixed_conn W1_JQ3 JP47
+
+.fixed_conn W1_JQ4 JP48
+
+.fixed_conn W1_JQ5 JP49
+
+.fixed_conn W1_JQ6 JP50
+
+.fixed_conn W1_JQ7 JP51
+
+.fixed_conn W2_JC0_MULT18 JDSPC0
+
+.fixed_conn W2_JC0_MULT9 JDSPC0
+
+.fixed_conn W2_JC0_PRADD18 JDSPC0
+
+.fixed_conn W2_JC0_PRADD9 JDSPC0
+
+.fixed_conn W2_JC10_MULT18 JDSPC10
+
+.fixed_conn W2_JC10_PRADD18 JDSPC10
+
+.fixed_conn W2_JC11_MULT18 JDSPC11
+
+.fixed_conn W2_JC11_PRADD18 JDSPC11
+
+.fixed_conn W2_JC12_MULT18 JDSPC12
+
+.fixed_conn W2_JC12_PRADD18 JDSPC12
+
+.fixed_conn W2_JC13_MULT18 JDSPC13
+
+.fixed_conn W2_JC13_PRADD18 JDSPC13
+
+.fixed_conn W2_JC14_MULT18 JDSPC14
+
+.fixed_conn W2_JC14_PRADD18 JDSPC14
+
+.fixed_conn W2_JC15_MULT18 JDSPC15
+
+.fixed_conn W2_JC15_PRADD18 JDSPC15
+
+.fixed_conn W2_JC16_MULT18 JDSPC16
+
+.fixed_conn W2_JC16_PRADD18 JDSPC16
+
+.fixed_conn W2_JC17_MULT18 JDSPC17
+
+.fixed_conn W2_JC17_PRADD18 JDSPC17
+
+.fixed_conn W2_JC1_MULT18 JDSPC1
+
+.fixed_conn W2_JC1_MULT9 JDSPC1
+
+.fixed_conn W2_JC1_PRADD18 JDSPC1
+
+.fixed_conn W2_JC1_PRADD9 JDSPC1
+
+.fixed_conn W2_JC2_MULT18 JDSPC2
+
+.fixed_conn W2_JC2_MULT9 JDSPC2
+
+.fixed_conn W2_JC2_PRADD18 JDSPC2
+
+.fixed_conn W2_JC2_PRADD9 JDSPC2
+
+.fixed_conn W2_JC3_MULT18 JDSPC3
+
+.fixed_conn W2_JC3_MULT9 JDSPC3
+
+.fixed_conn W2_JC3_PRADD18 JDSPC3
+
+.fixed_conn W2_JC3_PRADD9 JDSPC3
+
+.fixed_conn W2_JC4_MULT18 JDSPC4
+
+.fixed_conn W2_JC4_MULT9 JDSPC4
+
+.fixed_conn W2_JC4_PRADD18 JDSPC4
+
+.fixed_conn W2_JC4_PRADD9 JDSPC4
+
+.fixed_conn W2_JC5_MULT18 JDSPC5
+
+.fixed_conn W2_JC5_MULT9 JDSPC5
+
+.fixed_conn W2_JC5_PRADD18 JDSPC5
+
+.fixed_conn W2_JC5_PRADD9 JDSPC5
+
+.fixed_conn W2_JC6_MULT18 JDSPC6
+
+.fixed_conn W2_JC6_MULT9 JDSPC6
+
+.fixed_conn W2_JC6_PRADD18 JDSPC6
+
+.fixed_conn W2_JC6_PRADD9 JDSPC6
+
+.fixed_conn W2_JC7_MULT18 JDSPC7
+
+.fixed_conn W2_JC7_MULT9 JDSPC7
+
+.fixed_conn W2_JC7_PRADD18 JDSPC7
+
+.fixed_conn W2_JC7_PRADD9 JDSPC7
+
+.fixed_conn W2_JC8_MULT18 JDSPC8
+
+.fixed_conn W2_JC8_MULT9 JDSPC8
+
+.fixed_conn W2_JC8_PRADD18 JDSPC8
+
+.fixed_conn W2_JC8_PRADD9 JDSPC8
+
+.fixed_conn W2_JC9_MULT18 JDSPC9
+
+.fixed_conn W2_JC9_PRADD18 JDSPC9
+
+.fixed_conn W2_JF0 JP0
+
+.fixed_conn W2_JF1 JP1
+
+.fixed_conn W2_JF2 JP2
+
+.fixed_conn W2_JF3 JP3
+
+.fixed_conn W2_JF4 JP4
+
+.fixed_conn W2_JF5 JP5
+
+.fixed_conn W2_JF6 JP6
+
+.fixed_conn W2_JF7 JP7
+
+.fixed_conn W2_JQ0 JP18
+
+.fixed_conn W2_JQ1 JP19
+
+.fixed_conn W2_JQ2 JP20
+
+.fixed_conn W2_JQ3 JP21
+
+.fixed_conn W2_JQ4 JP22
+
+.fixed_conn W2_JQ5 JP23
+
+.fixed_conn W2_JQ6 JP24
+
+.fixed_conn W2_JQ7 JP25
+
+.fixed_conn W5_JNEXTR0 JR0_ALU24
+
+.fixed_conn W5_JNEXTR1 JR1_ALU24
+
+.fixed_conn W5_JNEXTR10 JR10_ALU24
+
+.fixed_conn W5_JNEXTR11 JR11_ALU24
+
+.fixed_conn W5_JNEXTR12 JR12_ALU24
+
+.fixed_conn W5_JNEXTR13 JR13_ALU24
+
+.fixed_conn W5_JNEXTR14 JR14_ALU24
+
+.fixed_conn W5_JNEXTR15 JR15_ALU24
+
+.fixed_conn W5_JNEXTR16 JR16_ALU24
+
+.fixed_conn W5_JNEXTR17 JR17_ALU24
+
+.fixed_conn W5_JNEXTR18 JR18_ALU24
+
+.fixed_conn W5_JNEXTR19 JR19_ALU24
+
+.fixed_conn W5_JNEXTR2 JR2_ALU24
+
+.fixed_conn W5_JNEXTR20 JR20_ALU24
+
+.fixed_conn W5_JNEXTR21 JR21_ALU24
+
+.fixed_conn W5_JNEXTR22 JR22_ALU24
+
+.fixed_conn W5_JNEXTR23 JR23_ALU24
+
+.fixed_conn W5_JNEXTR3 JR3_ALU24
+
+.fixed_conn W5_JNEXTR4 JR4_ALU24
+
+.fixed_conn W5_JNEXTR5 JR5_ALU24
+
+.fixed_conn W5_JNEXTR6 JR6_ALU24
+
+.fixed_conn W5_JNEXTR7 JR7_ALU24
+
+.fixed_conn W5_JNEXTR8 JR8_ALU24
+
+.fixed_conn W5_JNEXTR9 JR9_ALU24
+

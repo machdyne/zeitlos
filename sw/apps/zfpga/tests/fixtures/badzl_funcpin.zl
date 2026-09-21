@@ -1,0 +1,3 @@
+# expect: func uses c but c= is not connected
+device LFE5U-25F
+lut l func=a^c a=x z=y

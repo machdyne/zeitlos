@@ -1,0 +1,3 @@
+# expect: give init= or func=, not both
+device LFE5U-25F
+lut l init=0x5555 func=~a a=x z=y

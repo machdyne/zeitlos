@@ -1,0 +1,36 @@
+# tests/fixtures/adder_c.zl: examples/adder.v, synth_ecp5 -nowidelut -nodsp -nobram -nolutram (carry chains on), via tools/ys2zl.py
+device LFE5U-25F
+package CABGA256
+
+input a[0] A10 net=n2 io_type=LVCMOS33
+input a[1] A11 net=n3 io_type=LVCMOS33
+input a[2] A12 net=n4 io_type=LVCMOS33
+input a[3] A13 net=n5 io_type=LVCMOS33
+input a[4] A14 net=n6 io_type=LVCMOS33
+input a[5] A15 net=n7 io_type=LVCMOS33
+input a[6] A2 net=n8 io_type=LVCMOS33
+input a[7] A3 net=n9 io_type=LVCMOS33
+input b[0] A4 net=n10 io_type=LVCMOS33
+input b[1] A5 net=n11 io_type=LVCMOS33
+input b[2] A6 net=n12 io_type=LVCMOS33
+input b[3] A7 net=n13 io_type=LVCMOS33
+input b[4] A8 net=n14 io_type=LVCMOS33
+input b[5] A9 net=n15 io_type=LVCMOS33
+input b[6] B1 net=n16 io_type=LVCMOS33
+input b[7] B10 net=n17 io_type=LVCMOS33
+input ci B11 net=n18 io_type=LVCMOS33
+output co B5 net=n27 io_type=LVCMOS33
+output s[0] B12 net=n19 io_type=LVCMOS33
+output s[1] B13 net=n20 io_type=LVCMOS33
+output s[2] B14 net=n21 io_type=LVCMOS33
+output s[3] B15 net=n22 io_type=LVCMOS33
+output s[4] B16 net=n23 io_type=LVCMOS33
+output s[5] B2 net=n24 io_type=LVCMOS33
+output s[6] B3 net=n25 io_type=LVCMOS33
+output s[7] B4 net=n26 io_type=LVCMOS33
+
+ccu2 co_CCU2C_S0 init0=0x96AA init1=0x96AA inject0=NO inject1=NO a0=0 b0=0 c0=0 d0=1 a1=0 b1=0 c1=0 d1=1 cin=n28 cout=n29 s0=n27 s1=n30
+ccu2 s_CCU2C_S0 init0=0x96AA init1=0x96AA inject0=NO inject1=NO a0=n16 b0=n8 c0=0 d0=1 a1=n17 b1=n9 c1=0 d1=1 cin=n31 cout=n28 s0=n25 s1=n26
+ccu2 s_CCU2C_S0_1 init0=0x96AA init1=0x96AA inject0=NO inject1=NO a0=n14 b0=n6 c0=0 d0=1 a1=n15 b1=n7 c1=0 d1=1 cin=n32 cout=n31 s0=n23 s1=n24
+ccu2 s_CCU2C_S0_2 init0=0x96AA init1=0x96AA inject0=NO inject1=NO a0=n12 b0=n4 c0=0 d0=1 a1=n13 b1=n5 c1=0 d1=1 cin=n33 cout=n32 s0=n21 s1=n22
+ccu2 s_CCU2C_S0_3 init0=0x96AA init1=0x96AA inject0=NO inject1=NO a0=n10 b0=n2 c0=0 d0=1 a1=n11 b1=n3 c1=0 d1=1 cin=n18 cout=n33 s0=n19 s1=n20

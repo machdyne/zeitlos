@@ -1,0 +1,26 @@
+# A 4-bit counter on the Lakritz LED, written by hand: the kind of .zl
+# docs/zfpga-formats.md describes. Nets are just names; LUTs are
+# expressions; two flip-flops are placed by hand and the rest by zfpga.
+#
+#   zfpga place hand.zl && zfpga pnr hand.zn && zfpga pack hand.config -c
+#
+# At 48MHz the LED changes every 8 cycles, far too fast to see; widen
+# the counter (or use a carry chain) to watch it blink.
+
+device LFE5U-25F
+package CABGA256
+
+input  clk A7 net=clk
+output led A2 net=q3
+
+# next state: bit n toggles when every lower bit is 1
+lut inc0 func=~a          a=q0                     z=d0
+lut inc1 func=a^b         a=q1 b=q0                z=d1
+lut inc2 func=a^(b&c)     a=q2 b=q1 c=q0           z=d2
+lut inc3 func=a^(b&c&d)   a=q3 b=q2 c=q1 d=q0      z=d3
+
+# the state; r0 and r1 go exactly here, r2 and r3 wherever is best
+ff r0 d=d0 q=q0 clk=clk loc=R2C4.A0
+ff r1 d=d1 q=q1 clk=clk loc=R2C4.A1
+ff r2 d=d2 q=q2 clk=clk
+ff r3 d=d3 q=q3 clk=clk
