@@ -421,18 +421,7 @@ $(OUTDIR)/soc.config: $(SOC_SYNTH_INPUTS) $(SOC_CONFIG_STAMP)
 		--timing-allow-fail --ignore-loops
 	@{ cat $(SOC_CONFIG_STAMP); cat $(SOC_SYNTH_INPUTS); } | openssl dgst -sha256 | awk '{print $$NF}' > $(SOC_INPUTS_HASH)
 	@echo
-	@grep -E "Max frequency for clock" $(PNR_LOG) | grep -v "ro_clk" | sed 's/^Info: //' || true
-	@if grep "FAIL at" $(PNR_LOG) | grep -qv "ro_clk"; then \
-		echo; \
-		echo "*** TIMING NOT MET -- the bitstream will program and"; \
-		echo "*** misbehave intermittently. Critical path:"; \
-		echo; \
-		awk '/Critical path report for clock/{c++} c' $(PNR_LOG) \
-			| grep -E "Source|Sink|\.v:[0-9]" | head -30; \
-		echo; \
-		echo "*** full detail: make path BOARD=$(BOARD_LC)"; \
-		echo; \
-	fi
+	@tools/pnr_timing.sh $(PNR_LOG) $(BOARD_LC)
 
 zeitlos_ecp5_pico: $(OUTDIR)/soc.config
 
@@ -667,6 +656,13 @@ tftp-dist:
 # which is a far more confusing thing to debug than one that refuses to
 # build.
 #
+# nextpnr logs every clock twice. The first pass is an estimate made
+# right after placement; the second is the routed result. On a design
+# that closes, the estimate can still say FAIL. The result is the last
+# line of each clock, which is what tools/pnr_timing.sh prints. A FAIL
+# that survives to that line is real, and the path under the warning
+# is that clock's routed path -- not the first clock in the file.
+#
 #   make timing BOARD=obst        after a build
 #   make path BOARD=obst          full critical path for every clock
 # ro_clk[*] are the TRNG's ring oscillators, each clocking one
@@ -675,18 +671,7 @@ tftp-dist:
 timing:
 	@test -f $(PNR_LOG) || { echo "no $(PNR_LOG) -- build first"; exit 1; }
 	@echo
-	@grep -E "Max frequency for clock" $(PNR_LOG) | grep -v "ro_clk" | sed 's/^Info: //' || true
-	@if grep "FAIL at" $(PNR_LOG) | grep -qv "ro_clk"; then \
-		echo; \
-		echo "*** TIMING NOT MET -- the bitstream will program and"; \
-		echo "*** misbehave intermittently. Critical path:"; \
-		echo; \
-		awk '/Critical path report for clock/{c++} c' $(PNR_LOG) \
-			| grep -E "Source|Sink|\.v:[0-9]" | head -30; \
-		echo; \
-		echo "*** full detail: make path BOARD=$(BOARD_LC)"; \
-		echo; \
-	fi
+	@tools/pnr_timing.sh $(PNR_LOG) $(BOARD_LC)
 
 # Differential test of the blitter: reference vs a candidate, same
 # stimulus, framebuffers compared word for word. A clip-path change
@@ -948,9 +933,13 @@ path:
 # whether the placer has room to do a good job -- above about 75%
 # TRELLIS_COMB on this device it starts to struggle, and timing gets
 # seed-sensitive.
+#
+# The packed counts are one block in the log (nextpnr prints them
+# once, after packing, before placement). TRELLIS_COMB is the last
+# line of that block; a fixed head -20 stopped short of it.
 util:
 	@test -f $(PNR_LOG) || { echo "no $(PNR_LOG) -- build first"; exit 1; }
-	@awk '/Device utilisation/{f=1} f && /Info:/' $(PNR_LOG) | head -20
+	@awk '/Device utilisation/{blk=""; cap=1} cap{blk=blk $$0 "\n"} cap && NF==0{cap=0; last=blk} END{if (cap) last=blk; printf "%s", last}' $(PNR_LOG)
 
 clean: clean_os clean_bios clean_apps
 
