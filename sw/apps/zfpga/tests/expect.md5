@@ -25,3 +25,5 @@ e3148abd774390685c5c2a9b0a0b816f  blink45_c.bit
 9da5c9d40f9efe08b2b803c1f9b5a4de  unpack_blink_bg.config
 626ecc010f6f3715880bc69321bf6593  unpack_dfu_boot.config
 ab2710f9792fe08a272f32e69598ae16  unpack_edge.config
+ec783e99360deaa7247cecd390895385  bram.bit
+4738a1cf06c2ec1e1672621bd273ab7c  seed_z.hex

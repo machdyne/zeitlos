@@ -7,3 +7,14 @@ zfpga.elf
 zfpga.bin
 zfpga.map
 zfpga.dasm
+
+# The tree's .gitignore ignores *.config and *.json, which elsewhere are
+# build products. Here they are source -- the vendored Trellis database
+# (ext/prjtrellis-db/*.json), the nextpnr baseline
+# (ext/nextpnr-base/lfe5u-25f.config) and test fixtures -- and without
+# them zfpga cannot be built. The first commit lost all sixteen.
+!*.config
+!*.json
+# and *.hex: tests/fixtures/bram's seed files (tests/run.sh checks that
+# nothing here is lost this way)
+!*.hex

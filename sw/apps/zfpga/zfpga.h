@@ -28,6 +28,7 @@
 void *zf_alloc(size_t n);               /* zeroed, 4-byte aligned; never NULL */
 void *zf_alloc_raw(size_t n);           /* not zeroed; for buffers filled whole */
 char *zf_strdup(const char *s);
+int zf_memcmp(const void *a, const void *b, size_t n);
 
 /* 8.3 names (the card's FatFs has no long names): whether a path fits,
  * and the tail of an error message saying so where it matters. */
@@ -40,6 +41,7 @@ typedef struct { void *blocks; uint8_t *p; size_t left; } zf_mark_t;
 zf_mark_t zf_mark(void);
 void zf_release(zf_mark_t m);
 size_t zf_mem_peak(void);
+void zdb_forget_if(const void *block);     /* db.c: zf_release() tells it what it frees */
 
 /* A tiny formatter: %s %d %u %x %X %c %%, with an optional width, '0'
  * flag on the integer conversions and '-' (left-justify) on %s. Not printf: newlib's costs about
@@ -353,6 +355,8 @@ int cmd_place(int argc, char **argv, const char *dbdir_default);
 int cmd_unpack(int argc, char **argv, const char *dbdir_default);
 int cmd_synth(int argc, char **argv);
 int cmd_build(int argc, char **argv, const char *dbdir_default);
+int cmd_bram(int argc, char **argv, const char *dbdir_default);
+extern char unpack_pack_opts[160];      /* unpack.c: the last unpack's pack options */
 
 /* ---------------------------------------------------------------------
  * route.c -- the relative-name resolver and the router (Phase 4)

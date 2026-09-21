@@ -37,6 +37,8 @@ static void usage(void) {
         "       zfpga place IN.zl [-o OUT.zn] [-e EFFORT] [-s SEED] [-D DBDIR]\n"
         "       zfpga pnr IN.zn [-o OUT.cfg] [-D DBDIR]\n"
         "       zfpga unpack IN.bit [-o OUT.cfg] [-D DBDIR]\n"
+        "       zfpga bram IN.{cfg,bit} -f FROM.hex -t TO.hex -o OUT [-D DBDIR]\n"
+        "       zfpga bram -g OUT.hex -w WIDTH -d DEPTH [-s SEED]\n"
         "       zfpga info DEVICE [R<row>C<col>] [-D DBDIR]\n"
         "       zfpga version\n");
     zio_exit(2);
@@ -228,7 +230,7 @@ int main(int argc, char **argv) {
      * line gives the default 16KB, and every one of them would fail at
      * its first allocation; say so plainly, before anything else. */
     if (zf_streq(argv[1], "build") || zf_streq(argv[1], "place") || zf_streq(argv[1], "pnr") ||
-            zf_streq(argv[1], "pack") || zf_streq(argv[1], "unpack")) {
+            zf_streq(argv[1], "pack") || zf_streq(argv[1], "unpack") || zf_streq(argv[1], "bram")) {
         void *probe = zio_block(3328u * 1024u);
         if (!probe)
             zf_fatal("this process has less than 3.3MB of memory; zfpga needs the 4MB tier. "
@@ -243,6 +245,7 @@ int main(int argc, char **argv) {
     else if (zf_streq(argv[1], "unpack")) rc = cmd_unpack(argc - 1, argv + 1, DEFAULT_DB);
     else if (zf_streq(argv[1], "synth")) rc = cmd_synth(argc - 1, argv + 1);
     else if (zf_streq(argv[1], "build")) rc = cmd_build(argc - 1, argv + 1, DEFAULT_DB);
+    else if (zf_streq(argv[1], "bram")) rc = cmd_bram(argc - 1, argv + 1, DEFAULT_DB);
     else if (zf_streq(argv[1], "version")) { zf_print("zfpga %s\n", ZFPGA_VERSION); rc = 0; }
     else { zf_note("unknown command '%s'", argv[1]); usage(); }
 

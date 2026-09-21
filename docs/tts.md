@@ -232,10 +232,10 @@ file is reloaded:
 
 | key | default | range | |
 |---|---|---|---|
-| `system.tts.voice` | `male` | `male`, `female` | sets pitch and tract size together |
+| `system.tts.voice` | `female` | `female`, `male` | sets pitch and tract size together; female by default, to match the recorded voice a speech pack brings |
 | `system.tts.rate` | 180 | 80-450 wpm | |
-| `system.tts.pitch` | 110 (200 female) | 50-300 Hz | overrides the voice |
-| `system.tts.formants` | 100 (117 female) | 85-120 % | vocal tract size; overrides the voice |
+| `system.tts.pitch` | 200 (110 male) | 50-300 Hz | overrides the voice |
+| `system.tts.formants` | 117 (100 male) | 85-120 % | vocal tract size; overrides the voice |
 | `system.tts.expression` | 100 | 0-200 % | how much the pitch moves; 0 is a monotone |
 | `system.tts.volume` | 200 | 0-255 | |
 

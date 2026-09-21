@@ -481,21 +481,27 @@ void synth_map_write(const module_t *m, graph_t *g, const char *path,
 /* -- the command ------------------------------------------------------------------ */
 
 int cmd_synth(int argc, char **argv) {
-    const char *in = NULL, *outp = NULL, *lpf = NULL, *device = "LFE5U-25F", *package = "CABGA256";
+    const char *outp = NULL, *lpf = NULL, *device = "LFE5U-25F", *package = "CABGA256", *top = NULL;
+    const char *ins[32];
+    int n_in = 0, i;
+    lib_t *lib = zf_alloc(sizeof(*lib));
     module_t *m = zf_alloc(sizeof(*m));
     graph_t *g = zf_alloc(sizeof(*g));
-    int i;
     for (i = 1; i < argc; i++) {
         if (zf_streq(argv[i], "-o") && i + 1 < argc) outp = argv[++i];
         else if (zf_streq(argv[i], "-l") && i + 1 < argc) lpf = argv[++i];
         else if (zf_streq(argv[i], "-d") && i + 1 < argc) device = argv[++i];
         else if (zf_streq(argv[i], "-p") && i + 1 < argc) package = argv[++i];
+        else if (zf_streq(argv[i], "-t") && i + 1 < argc) top = argv[++i];
         else if (argv[i][0] == '-') zf_fatal("synth: unknown option %s", argv[i]);
-        else if (!in) in = argv[i];
-        else zf_fatal("synth: more than one input (modules in one file only, for now)");
+        else if (n_in == 32) zf_fatal("synth: more than 32 input files");
+        else ins[n_in++] = argv[i];
     }
-    if (!in) zf_fatal("usage: zfpga synth IN.v [-l PINS.lpf] [-o OUT.zl] [-d DEVICE] [-p PACKAGE]");
+    if (!n_in)
+        zf_fatal("usage: zfpga synth IN.v [MORE.v ...] [-t TOP] [-l PINS.lpf] [-o OUT.zl] [-d DEVICE] [-p PACKAGE]");
     if (!outp) {
+        /* named after the first file */
+        const char *in = ins[0];
         size_t n = zf_strlen(in), dot = n, j;
         char *o;
         for (j = n; j > 0; j--) { if (in[j - 1] == '/') break; if (in[j - 1] == '.') { dot = j - 1; break; } }
@@ -504,7 +510,9 @@ int cmd_synth(int argc, char **argv) {
         zf_memcpy(o + dot, ".zl", 4);
         outp = o;
     }
-    synth_parse(in, m);
+    for (i = 0; i < n_in; i++) synth_parse(ins[i], lib);
+    synth_flatten(lib, top, m);
+    if (m->n_inst) zf_note("top %s: %d instance%s flattened", m->name, m->n_inst, m->n_inst == 1 ? "" : "s");
     synth_elab(m, g);
     synth_map_write(m, g, outp, device, package, lpf);
     return 0;

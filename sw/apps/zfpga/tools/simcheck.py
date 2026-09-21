@@ -58,6 +58,7 @@ class Circuit:
     def __init__(self):
         self.luts, self.ffs, self.inputs, self.outputs = [], [], {}, {}
         self.ccu2s = []     # dict(ins=[8], cin, cout, s0, s1, init0, init1, inj0, inj1)
+        self.rams = []      # TRELLIS_DPR16X4, reference only: dict(di, wad, wre, clk, rad, do, wremux, mem)
 
 
 def ccu2_half(init, inj, ins, cin, val):
@@ -72,7 +73,7 @@ def ccu2_half(init, inj, ins, cin, val):
 
 
 def simulate(ck, rng_inputs, cycles):
-    clks = {f["clk"] for f in ck.ffs}
+    clks = {f["clk"] for f in ck.ffs} | {r["clk"] for r in ck.rams}
     if len(clks) > 1:
         die("more than one clock: %s" % clks)
     clk = next(iter(clks)) if clks else None
@@ -97,6 +98,11 @@ def simulate(ck, rng_inputs, cycles):
                 v = (init >> idx) & 1
                 if val.get(out) != v:
                     val[out] = v; changed = True
+            for r in ck.rams:                                 # async read
+                word = r["mem"][sum(val.get(x, 0) << i for i, x in enumerate(r["rad"]))]
+                for i, x in enumerate(r["do"]):
+                    if x is not None and val.get(x) != (word >> i) & 1:
+                        val[x] = (word >> i) & 1; changed = True
             for cc in ck.ccu2s:
                 s0, c0 = ccu2_half(cc["init0"], cc["inj0"], cc["ins"][:4], val.get(cc["cin"], 0), val)
                 s1, c1 = ccu2_half(cc["init1"], cc["inj1"], cc["ins"][4:], c0, val)
@@ -114,6 +120,12 @@ def simulate(ck, rng_inputs, cycles):
             en = 1 if f["cemux"] == "1" else val.get(f["ce"], 0) ^ (f["cemux"] == "INV")
             rst = f["lsr"] is not None and val.get(f["lsr"], 0) == (0 if f["lsrmux"] == "INV" else 1)
             nxt[f["q"]] = rv if rst else (val.get(f["d"], 0) if en else val[f["q"]])
+        for r in ck.rams:                                     # synchronous write
+            we = val.get(r["wre"], 0) if r["wremux"] == "WRE" else \
+                (1 - val.get(r["wre"], 0)) if r["wremux"] == "INV" else int(r["wremux"] == "1")
+            if we:
+                a = sum(val.get(x, 0) << i for i, x in enumerate(r["wad"]))
+                r["mem"][a] = sum(val.get(x, 0) << i for i, x in enumerate(r["di"]))
         val.update(nxt)
     return trace, clk
 
@@ -211,6 +223,15 @@ for c in top["cells"].values():
                             cemux="1" if ce in (None, "C1") else pa.get("CEMUX", "CE"),
                             lsrmux=pa.get("LSRMUX", "LSR"), regset=pa.get("REGSET", "RESET"),
                             srmode=pa.get("SRMODE", "LSR_OVER_CE")))
+    elif c["type"] == "TRELLIS_DPR16X4":
+        if pa.get("WCKMUX", "WCK") != "WCK":
+            die("TRELLIS_DPR16X4 with an inverted clock is not modelled")
+        iv = int((pa.get("INITVAL", "0") or "0").replace("x", "0").replace("z", "0"), 2)
+        ref.rams.append(dict(di=[bn(b) for b in cn["DI"]], wad=[bn(b) for b in cn["WAD"]],
+                             wre=bn(cn["WRE"][0]), clk=bn(cn["WCK"][0]),
+                             rad=[bn(b) for b in cn["RAD"]], do=[bn(b) for b in cn["DO"]],
+                             wremux=pa.get("WREMUX", "WRE"),
+                             mem=[(iv >> (4 * i)) & 15 for i in range(16)]))
     elif c["type"] == "CCU2C":
         ref.ccu2s.append(dict(ins=[g(k) or "C0" for k in ("A0", "B0", "C0", "D0", "A1", "B1", "C1", "D1")],
                               cin=g("CIN") or "C0", cout=g("COUT"), s0=g("S0"), s1=g("S1"),
@@ -375,7 +396,15 @@ t_ref, ck_ref = simulate(ref, stim, a.cycles)
 t_ext, ck_ext = simulate(ext, stim, a.cycles)
 # the clock port drives no logic in either model; it must be the same pin
 outs = sorted(ref.outputs)
+# A register with no initial value starts undefined in Verilog, and two
+# correct implementations may power up differently (yosys builds a
+# synchronous reset from the flip-flop's set, which sets its power-on
+# value too). With a reset held in cycle 0, compare from cycle 1: after
+# the first clock edge has applied it.
+start = 1 if any(re.search(r"rst|reset", p, re.I) for p in ref.inputs) else 0
 for cyc, (x, y) in enumerate(zip(t_ref, t_ext)):
+    if cyc < start:
+        continue
     if x != y:
         bad = [outs[i] for i in range(len(outs)) if x[i] != y[i]]
         die("cycle %d: outputs %s differ (reference %s, extracted %s)" % (

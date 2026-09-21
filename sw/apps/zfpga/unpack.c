@@ -363,6 +363,10 @@ static void tile_out(zf_writer_t *w, uint32_t ti) {
 
 /* -- the command ---------------------------------------------------------- */
 
+/* The options `zfpga pack` needs to rebuild the last bitstream unpacked,
+ * e.g. " -c -a 0x040000"; zfpga bram repacks with them. */
+char unpack_pack_opts[160];
+
 #define MAX_META 16
 #define MAX_EBR 256
 
@@ -633,6 +637,8 @@ int cmd_unpack(int argc, char **argv, const char *dbdir_default) {
         for (j = 0; j < sizeof(sm) / sizeof(sm[0]); j++)
             if (spi == sm[j].code) n += zf_fmt(cmd + n, (int)sizeof(cmd) - n, " -m %s", sm[j].name);
         zf_note("to rebuild this bitstream exactly: %s", cmd);
+        /* the options alone, for zfpga bram's repack */
+        zf_fmt(unpack_pack_opts, sizeof(unpack_pack_opts), "%s", cmd + zf_strlen("zfpga pack ") + zf_strlen(out));
     }
     return 0;
 }

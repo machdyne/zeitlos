@@ -87,3 +87,7 @@ uint32_t zio_ms(void) {
 int zio_fat83(void) {
     return 0;
 }
+
+int zio_remove(const char *path) {
+    return remove(path);
+}

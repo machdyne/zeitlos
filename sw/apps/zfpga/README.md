@@ -11,11 +11,12 @@ zfpga build /fpga/examples/blink.v -b lakritz
 | | |
 |---|---|
 | `zfpga build IN -b BOARD` | every stage below, from a `.v`, `.zl`, `.zn` or `.cfg`, with a board profile |
-| `zfpga synth IN.v -l PINS.lpf` | Verilog (a 2001 subset, one module) to a logical netlist `.zl` |
+| `zfpga synth IN.v [MORE.v ...] -l PINS.lpf` | Verilog-2001 -- modules and instances, the preprocessor, `for`, memories, signed, functions -- to a logical netlist `.zl` |
 | `zfpga place IN.zl` | pack and place to a physical netlist `.zn` (`loc=` pins cells; `-l` writes the placement back) |
 | `zfpga pnr IN.zn` | route, to a Trellis configuration `.cfg` |
 | `zfpga pack IN.cfg` | to a bitstream, byte-identical to `ecppack`'s |
 | `zfpga unpack IN.bit` | back to a `.cfg`, text-identical to `ecpunpack`'s |
+| `zfpga bram IN.{cfg,bit} -f SEED.hex -t NEW.hex -o OUT` | new block RAM contents in a finished design, as `ecpbram` does |
 | `zfpga info DEVICE [RrCc]` | the database, or what is at a location |
 
 ## Documentation
@@ -41,6 +42,7 @@ make                       # zfpga.bin for Zeitlos
 ```
 tests/run.sh               # host: against ecppack, nextpnr's results, yosys's netlists
 tests/run_dev.sh           # the device build under sim/, against the host build
+tests/rtlcheck.sh          # optional, needs yosys: zfpga synth against yosys on rtl/
 ```
 
 `run.sh` compares against the Project Trellis tools if they are
@@ -60,7 +62,8 @@ fixtures from nextpnr and yosys (`np2zn.py`, `ys2zl.py`), plus
 | `cfg.c`, `pack.c`, `unpack.c` | `.cfg` <-> bitstream |
 | `pnr.c`, `route.c` | physical netlist to `.cfg`; the router |
 | `place.c` | packing and placement |
-| `synth_parse.c`, `synth_elab.c`, `synth_map.c` | the Verilog front end, the gate graph, LUT mapping |
+| `synth_parse.c`, `synth_flat.c`, `synth_elab.c`, `synth_map.c` | the Verilog front end and preprocessor; flattening instances; the gate graph; LUT mapping |
+| `bram.c` | `zfpga bram` |
 | `build.c` | `zfpga build` and board profiles |
 | `ext/` | vendored Trellis database (CC0) and nextpnr baseline data (ISC) |
 | `examples/`, `boards/` | shipped to the card's `/fpga` |

@@ -244,6 +244,11 @@ FPGA_FILES = [
     ("fpga/examples/on.zn", "sw/apps/zfpga/db/examples/on.zn"),
     ("fpga/examples/blink.zn", "sw/apps/zfpga/db/examples/blink.zn"),
     ("fpga/examples/hand.zl", "sw/apps/zfpga/db/examples/hand.zl"),
+    # two modules, a parameter and an `include, blinking at half blink's
+    # rate: zfpga synth's hierarchy, checked on the board (docs/zfpga.md
+    # sec. 24)
+    ("fpga/examples/blinkh.v", "sw/apps/zfpga/db/examples/blinkh.v"),
+    ("fpga/examples/blinkh.vh", "sw/apps/zfpga/db/examples/blinkh.vh"),
 ]
 
 # Something to compile.

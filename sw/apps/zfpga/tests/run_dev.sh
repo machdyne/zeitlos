@@ -106,6 +106,33 @@ else
     echo "FAIL build longnames.zn: not refused"; cat "$OUT/long.out"; fail=$((fail + 1))
 fi
 
+# synth on the device, of a hierarchy with an `include: the host's .zl
+cp examples/hier.v examples/hierdefs.vh examples/hier.lpf "$CARD/"
+echo "synth /hier.v -l /hier.lpf -o /hier.zl" > "$CARD/zfpga.args"
+"$TREE/sim/zsim-headless" -r "$CARD" -m 33554432 -n 0 zfpga.bin > "$OUT/hier.out" 2> "$OUT/hier.err"
+./zfpga synth examples/hier.v -l examples/hier.lpf -o "$OUT/hier.host.zl" > /dev/null 2>&1
+insns=$(sed -n 's/.*: \([0-9]*\) instructions/\1/p' "$OUT/hier.err")
+if [ -f "$CARD/hier.zl" ] &&
+   [ "$(tail -n +2 "$CARD/hier.zl" | md5sum)" = "$(tail -n +2 "$OUT/hier.host.zl" | md5sum)" ]; then
+    echo "ok   synth hier (5 instances, an \`include)  $insns instructions"; pass=$((pass + 1))
+else
+    echo "FAIL synth hier: device and host differ"; cat "$OUT/hier.out"; fail=$((fail + 1))
+fi
+
+# bram on the device, on a compressed multiboot .bit: the host's result
+./zfpga pack tests/fixtures/bram/rom.config -D db -c -a 0x040000 -o "$CARD/rom.bit" > /dev/null 2>&1
+cp tests/fixtures/bram/seed.hex tests/fixtures/bram/new.hex "$CARD/"
+echo "bram /rom.bit -f /seed.hex -t /new.hex -o /romnew.bit -D /fpga" > "$CARD/zfpga.args"
+"$TREE/sim/zsim-headless" -r "$CARD" -m 33554432 -n 0 zfpga.bin > "$OUT/bram.out" 2> "$OUT/bram.err"
+./zfpga bram "$CARD/rom.bit" -f tests/fixtures/bram/seed.hex -t tests/fixtures/bram/new.hex \
+    -o "$OUT/romnew.host.bit" -D db > /dev/null 2>&1
+insns=$(sed -n 's/.*: \([0-9]*\) instructions/\1/p' "$OUT/bram.err")
+if cmp -s "$CARD/romnew.bit" "$OUT/romnew.host.bit"; then
+    echo "ok   bram .bit  $insns instructions"; pass=$((pass + 1))
+else
+    echo "FAIL bram .bit: device and host differ"; cat "$OUT/bram.out"; fail=$((fail + 1))
+fi
+
 # synth on the device: the same .zl as the host, from the Verilog
 cp examples/features.v examples/features.lpf "$CARD/"
 echo "synth /features.v -l /features.lpf -o /features.zl" > "$CARD/zfpga.args"

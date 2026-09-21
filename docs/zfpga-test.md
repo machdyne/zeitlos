@@ -162,7 +162,11 @@ else is needed.
 | `on.bit` | the LED is lit -- **or dark**, if the Lakritz LED is active-low; either way steady | IO configuration, one LUT, four hand-written arcs, the tristate tie, the bank voltage |
 | `empty.bit` | nothing visible happens | the packer, IDCODE, CRCs: that the device configures at all |
 
-If `blink.bit` blinks, stop: the test passed. If not, try `on.bit`, then
+If `blink.bit` blinks, the test passed. One more, for the synthesiser's
+hierarchy (`docs/zfpga.md` §24): `zfpga build /fpga/examples/blinkh.v -b
+lakritz` builds a blinky from two modules, a parameter and an
+`` `include``d header; written to the MMOD and booted, its LED should
+blink at **half** `blink.bit`'s rate, 0.35 s on and 0.35 s off. If not, try `on.bit`, then
 `empty.bit` -- each strips a layer away, and which one is the first to
 work is the most useful thing to know. `empty.bit` shows nothing by
 design: it matters only if `on.bit` fails too, as a sign of whether

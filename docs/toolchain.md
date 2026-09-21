@@ -339,6 +339,7 @@ Each stage has a host counterpart it is checked against by
 | `place`, `pnr` | nextpnr, byte-identical where the placement is given; otherwise an independent legality check and simulation of the extracted circuit |
 | `pack` | `ecppack`, byte-identical |
 | `unpack` | `ecpunpack`, text-identical |
+| `bram` | `ecpbram`: the same bitstream once packed; `-g -s` the same seed file |
 
 `zfpga pack` can stand in for `ecppack` in the host flow of section 1:
 
@@ -355,9 +356,12 @@ table matters there too: a Trellis database that differs from the
 vendored one (`sw/apps/zfpga/ext/prjtrellis-db/`) will show up as a
 mismatch that is not zfpga's.
 
-The SOC itself is still built by `yosys` and `nextpnr`: zfpga's
-synthesiser reads one module at a time, and module instances are its
-next step.
+`zfpga bram` does `ecpbram`'s job in the `soc` target the same way --
+checked on a test ROM against ecpbram; not yet on `soc.config` itself,
+whose nextpnr run needs more memory than the build machine had. The SOC itself is still built by `yosys` and `nextpnr`: zfpga's
+synthesiser reads this tree's RTL -- 15 of its modules come out
+equivalent to yosys's synthesis (`docs/zfpga.md` §24.6) -- but not yet
+the block RAM, tristate IO and `generate` the rest need.
 
 Loading what it builds is covered in `docs/zboot.md`: how
 `--bootaddr` decides where the next configuration is read from, how the

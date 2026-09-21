@@ -33,7 +33,7 @@ APP_CFLAGS = $(CFLAGS) -Werror -Wno-unused-parameter
 # would overwrite them (sw/apps/zcc/Makefile has the story).
 B = build
 COMMON = zeitlos zobj zport zfsapp zwin zgfx zfont_data
-APP = main util db chip cfg pack pnr route place unpack synth_parse synth_elab synth_map build port_dev
+APP = main util db chip cfg pack pnr route place unpack synth_parse synth_flat synth_elab synth_map bram build port_dev
 OBJS = $(addprefix $(B)/,$(addsuffix .o,$(COMMON) $(APP)))
 
 DB_SRC = ext/prjtrellis-db
@@ -67,7 +67,7 @@ zfpga.bin: zfpga.elf
 # db/ is the card's /fpga exactly: the database, the board profiles with
 # their pins, and the examples (docs/zfpga-formats.md sec. 7).
 CARD_EXAMPLES = examples/blink.v examples/blinkf.v examples/empty.zn examples/on.zn \
-	examples/blink.zn examples/hand.zl
+	examples/blink.zn examples/hand.zl examples/blinkh.v examples/blinkh.vh
 
 card: db/lfe5u25f.zdb boards/lakritz.brd ../../../boards/lakritz_v0.lpf $(CARD_EXAMPLES)
 	mkdir -p db/boards db/examples

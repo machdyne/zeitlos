@@ -294,7 +294,7 @@ done
 # tools/ys2zl.py): first the .zl, then -- through zfpga place, pnr and
 # pack -- the final configuration.
 
-for name in blinkf blink features sidesp adder cmp densen; do
+for name in blinkf blink features sidesp adder cmp densen hier loops mem signed func partsel blocking; do
     ref=tests/fixtures/${name}_c.zl
     log="$OUT/synth_$name.log"
     lpf=examples/$name.lpf
@@ -363,6 +363,14 @@ if ./zfpga build "$OUT/build/on.zn" -b lakritz -D db > "$OUT/build.log" 2>&1 &&
 else
     echo "FAIL build on.zn:"; cat "$OUT/build.log"; fail=$((fail + 1))
 fi
+cp db/examples/blinkh.v db/examples/blinkh.vh "$OUT/build/"
+if ./zfpga build "$OUT/build/blinkh.v" -b lakritz -D db > "$OUT/buildh.log" 2>&1 &&
+   grep -q "1 instance flattened" "$OUT/buildh.log" && grep -q "25 flip-flops" "$OUT/buildh.log"; then
+    echo "ok   build blinkh.v -b lakritz: an instance, a parameter, an \`include: 25 flip-flops"
+    pass=$((pass + 1))
+else
+    echo "FAIL build blinkh.v:"; sed 's/^/     /' "$OUT/buildh.log"; fail=$((fail + 1))
+fi
 for f in blink.v hand.zl; do
     ref=tests/fixtures/blink_c.zl
     [ $f = hand.zl ] && ref=examples/hand.zl
@@ -376,6 +384,82 @@ for f in blink.v hand.zl; do
         echo "FAIL build $f:"; sed 's/^/     /' "$OUT/build.log"; fail=$((fail + 1))
     fi
 done
+
+# -- zfpga bram: block RAM contents, as ecpbram replaces them --------
+#
+# tests/fixtures/bram: a ROM initialised from a random seed, placed and
+# routed by nextpnr (rom.v, rom.config); the seed, and new contents.
+# The .cfg route must pack to what ecpbram's output packs to (ecpbram
+# re-serialises the file and duplicates a tile in each .tile_group, so
+# the text is compared through the bitstream); the .bit route, from a
+# compressed multiboot bitstream, must give what the .cfg route gives,
+# packed with the same options; -g -s must write ecpbram's file.
+
+BR=tests/fixtures/bram
+if ./zfpga bram $BR/rom.config -f $BR/seed.hex -t $BR/new.hex -o "$OUT/bram.cfg" > "$OUT/bram.log" 2>&1 &&
+   ./zfpga pack "$OUT/bram.cfg" -D db -o "$OUT/bram.bit" >> "$OUT/bram.log" 2>&1; then
+    if [ $LIVE = 1 ]; then
+        ecpbram -i $BR/rom.config -o "$OUT/bram.ref.config" -f $BR/seed.hex -t $BR/new.hex &&
+        ecppack "$OUT/bram.ref.config" "$OUT/bram.ref.bit" && cmp -s "$OUT/bram.bit" "$OUT/bram.ref.bit" && same=1 || same=0
+        [ $RECORD = 1 ] && (cd "$OUT" && md5sum bram.bit) >> tests/expect.md5
+    else
+        want=$(grep " bram.bit\$" tests/expect.md5 | cut -d' ' -f1)
+        [ -n "$want" ] && [ "$want" = "$( (cd "$OUT" && md5sum bram.bit) | cut -d' ' -f1)" ] && same=1 || same=0
+    fi
+    if [ $same = 1 ]; then
+        echo "ok   bram .cfg: $(grep -o '[0-9]* block RAMs, [0-9]* slices replaced' "$OUT/bram.log"); packs as ecpbram's does"
+        pass=$((pass + 1))
+    else
+        echo "FAIL bram .cfg: not the bitstream ecpbram's output packs to"; fail=$((fail + 1))
+    fi
+else
+    echo "FAIL bram .cfg:"; sed 's/^/     /' "$OUT/bram.log"; fail=$((fail + 1))
+fi
+if ./zfpga pack $BR/rom.config -D db -c -a 0x040000 -o "$OUT/bram_in.bit" > /dev/null 2>&1 &&
+   ./zfpga bram "$OUT/bram_in.bit" -f $BR/seed.hex -t $BR/new.hex -o "$OUT/bram_out.bit" -D db > "$OUT/bram2.log" 2>&1 &&
+   ./zfpga pack "$OUT/bram.cfg" -D db -c -a 0x040000 -o "$OUT/bram_want.bit" > /dev/null 2>&1 &&
+   cmp -s "$OUT/bram_out.bit" "$OUT/bram_want.bit" && [ ! -e "$OUT/bram_out.b1" ] && [ ! -e "$OUT/bram_out.b2" ]; then
+    echo "ok   bram .bit (compressed, multiboot at 0x040000): the same bitstream, options kept"; pass=$((pass + 1))
+else
+    echo "FAIL bram .bit:"; sed 's/^/     /' "$OUT/bram2.log"; fail=$((fail + 1))
+fi
+./zfpga bram -g "$OUT/seed_z.hex" -w 32 -d 1024 -s 1234 > /dev/null 2>&1
+if [ $LIVE = 1 ]; then
+    ecpbram -g "$OUT/seed_e.hex" -w 32 -d 1024 -s 1234 && cmp -s "$OUT/seed_z.hex" "$OUT/seed_e.hex" && same=1 || same=0
+    [ $RECORD = 1 ] && (cd "$OUT" && md5sum seed_z.hex) >> tests/expect.md5
+else
+    want=$(grep " seed_z.hex\$" tests/expect.md5 | cut -d' ' -f1)
+    [ -n "$want" ] && [ "$want" = "$( (cd "$OUT" && md5sum seed_z.hex) | cut -d' ' -f1)" ] && same=1 || same=0
+fi
+if [ $same = 1 ]; then echo "ok   bram -g -s 1234: ecpbram's seed file, byte for byte"; pass=$((pass + 1))
+else echo "FAIL bram -g -s 1234"; fail=$((fail + 1)); fi
+head -512 $BR/seed.hex > "$OUT/half.hex"; cat "$OUT/half.hex" "$OUT/half.hex" > "$OUT/twice.hex"
+if ./zfpga bram $BR/rom.config -f "$OUT/twice.hex" -t $BR/new.hex -o "$OUT/x.cfg" > "$OUT/bram3.log" 2>&1; then
+    echo "FAIL bram: a repeating seed accepted"; fail=$((fail + 1))
+elif grep -q "the seed must be random" "$OUT/bram3.log"; then
+    echo "ok   bram: a repeating seed refused"; pass=$((pass + 1))
+else
+    echo "FAIL bram repeating seed:"; cat "$OUT/bram3.log"; fail=$((fail + 1))
+fi
+
+# -- Every source file is one git would keep --------------------------
+#
+# The tree's .gitignore ignores *.config and *.json; here those are the
+# vendored database, the nextpnr baseline and test fixtures, and the
+# first commit of zfpga lost all sixteen (sw/apps/zfpga/.gitignore now
+# re-includes them). In a git checkout, any file here git would ignore,
+# other than build products, fails.
+
+if git rev-parse --is-inside-work-tree > /dev/null 2>&1; then
+    lost=$(find . -type f ! -path './build/*' ! -path './db/*' ! -path './tests/out/*' \
+        ! -name zfpga ! -name 'zfpga.*' ! -path '*/__pycache__/*' | sed 's|^\./||' |
+        git check-ignore --stdin 2>/dev/null)
+    if [ -z "$lost" ]; then
+        echo "ok   every source file here is one git keeps"; pass=$((pass + 1))
+    else
+        echo "FAIL git would not commit these source files:"; echo "$lost" | sed 's/^/     /'; fail=$((fail + 1))
+    fi
+fi
 
 # -- Manual placement: loc= and the -l round trip (docs/zfpga-formats.md)
 #

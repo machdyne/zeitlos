@@ -16,6 +16,19 @@ static const struct { const char *device, *file; } aliases[] = {
  * lfe5u25f.zdb. 8.3, because the card's FatFs has no long names --
  * lfe5u-25f.zdb, nine characters, could not be found there at all
  * (docs/zfpga.md sec. 22). */
+/* One database per process: `zfpga build` runs four stages, three of
+ * which want it, and it is 1.5MB. */
+static zdb_t cached;
+static char cached_path[256];
+
+/* Called by zf_release() for every block it frees. If that block held
+ * the cached database, the cache is forgotten: `zfpga bram` on a .bit
+ * released the memory of an unpack that had loaded the database, and the
+ * pack after it read the freed copy (sec. 25). */
+void zdb_forget_if(const void *block) {
+    if (cached.base && (const void *)cached.base == block) cached.base = NULL;
+}
+
 const char *zdb_file_for(const char *device) {
     static char buf[64];
     unsigned i, n = 0;
@@ -53,8 +66,6 @@ void zdb_load(zdb_t *db, const char *dir, const char *device) {
     /* One database per process: `zfpga build` runs four stages, three
      * of which want it, and it is 1.5MB. The cache is loaded before
      * build's first mark, so releasing a stage never frees it. */
-    static zdb_t cached;
-    static char cached_path[256];
 
     zf_fmt(path, sizeof(path), "%s/%s.zdb", dir, zdb_file_for(device));
     if (cached.base && zf_streq(cached_path, path)) {

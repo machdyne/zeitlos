@@ -19,6 +19,7 @@ design.v  --synth-->  design.zl  --place-->  design.zn  --pnr-->  design.cfg  --
 | `.zn` | physical netlist: cells at sites, nets by pin wire, or explicit routing | route by hand; experiment below the placer | yes |
 | `.config` | Trellis tile settings: arcs, words, enums | change single configuration bits | yes |
 | `.bit` | the bitstream | -- unpack it to a `.config`, edit that, pack again (section 6) | no |
+| `.hex` | block RAM contents, one word per line | `zfpga bram` puts them into a design (section 9) | yes |
 | `.zdb` | the chip database | -- (regenerate with `tools/mkzdb.py`) | no |
 
 The `.v` is ordinary Verilog in the subset of `docs/zfpga.md` §19.1,
@@ -328,3 +329,69 @@ refuses, before doing any work, an input whose outputs would not fit.
 **Paths to `zfpga` are absolute.** posix hands a program its arguments
 as typed, not resolved against its working directory, so `blink.v`
 means `/blink.v`.
+
+---
+
+## 8. `.v` -- the Verilog `zfpga synth` reads
+
+Verilog-2001, as this tree's RTL is written: 15 of its modules
+synthesise to the same logic yosys makes of them (`docs/zfpga.md`
+§24.6). Several files and modules at once:
+
+```
+zfpga synth top.v uart.v fifo.v [-t top] -l /fpga/boards/lakritz.lpf
+```
+
+`-t` names the top module; without it, the one module nothing
+instantiates. Names in the `.zl` keep the instance path:
+`u_uart.rx_state[1]`.
+
+### 8.1 Supported
+
+| | |
+|---|---|
+| modules | several per file, several files; ANSI or old-style ports; a trailing comma in a port list |
+| instances | `name #(.P(4)) u (.a(x), .b())` or positional, parameters and ports; an empty port is unconnected, an unconnected input is tied to 0 (and said so) |
+| preprocessor | `` `define NAME text``, `` `ifdef``, `` `ifndef``, `` `elsif``, `` `else``, `` `endif``, `` `include "file"`` (relative to the including file), `` `undef``; `` `timescale`` and `` `default_nettype`` ignored |
+| parameters | `parameter`, `localparam`, typed (`integer`, `[7:0]`, `signed`), overridden per instance; `$clog2` |
+| declarations | `wire`, `reg` with initial values, `signed`, `integer` (for loop variables), memories `reg [7:0] m [0:15]` up to 4,096 bits |
+| always | `@(posedge clk)`, `@(posedge clk or posedge rst)` (or `negedge rst`, tested as `if (!rst)`), `@(*)`; `=` and `<=` in clocked blocks, `=` in `@(*)` |
+| statements | `if`/`else`, `case` (first match wins), `for` with constant bounds, `begin`/`end`; `$display` and other system tasks are ignored |
+| functions | `function [7:0] f; input ...; ... endfunction` or with an ANSI argument list; locals, loops |
+| operators | all but `/`, `%` and `**` on non-constants: arithmetic including `*`, bitwise, reductions, logical, comparisons (signed when both sides are), shifts `<< >> <<< >>>`, `?:`, concatenation and replication |
+| selects | `a[i]`, `a[h:l]`, `a[s +: n]`, `a[s -: n]` -- `i` and `s` may be variables, for reads and writes; memory words `m[i]`; bits of parameters, checked against their range |
+
+A bit nothing drives reads as 0, with a note. Out-of-range bits of a
+variable select read as 0 (Verilog makes them undefined).
+
+### 8.2 Refused, with file and line
+
+Block RAM inference (a memory over 4,096 bits), `generate` and
+`genvar`, tristate (`1'bz`, `inout`), `x` in literals, `/` and `%` on
+non-constants, `**`, `casex`/`casez`, tasks, `initial` blocks
+(`$readmemh`), macros with arguments, recursion, latches (a variable
+not assigned on every path of an `always @(*)`), combinational loops,
+two drivers on one bit, a `for` longer than 65,536 passes.
+
+---
+
+## 9. `zfpga bram` -- block RAM contents
+
+```
+zfpga bram soc.cfg -f seed.hex -t bios.hex -o soc2.cfg
+zfpga bram soc.bit -f seed.hex -t bios.hex -o soc2.bit
+zfpga bram -g seed.hex -w 32 -d 1024 [-s 42]
+```
+
+`ecpbram`'s job. A design whose RAM was initialised from a **random
+seed** file (`-g` makes one; with `-s`, the same file ecpbram makes)
+gets new contents after place-and-route: the seed is found in the
+configuration, bit slice by bit slice, and replaced by the same slices
+of the new file. On a `.bit`, the options it was packed with are kept,
+so it boots from the same flash address.
+
+The `.hex` files are what ecpbram reads: one word per line, hex digits,
+`_` ignored, `x`/`z` read as 0, `@address` lines allowed if contiguous;
+both files the same depth, a multiple of 512 words (a shorter new file
+is padded with zeros). `-o` is always required: the input is never
+overwritten.

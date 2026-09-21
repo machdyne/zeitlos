@@ -218,3 +218,7 @@ void zio_free(void *p) {
 int zio_fat83(void) {
     return 1;
 }
+
+int zio_remove(const char *path) {
+    return fs_unlink((char *)path);
+}

@@ -46,6 +46,7 @@ void zf_release(zf_mark_t m) {
         blk_t *b = blocks;
         blocks = b->next;
         mem_now -= b->size + sizeof(blk_t);
+        zdb_forget_if(b + 1);           /* a released database leaves the cache too */
         zio_free(b);
     }
     arena_p = m.p;
@@ -429,4 +430,11 @@ int zf_is_83(const char *path) {
 const char *zf_83_hint(const char *path) {
     if (!zio_fat83() || zf_is_83(path)) return "";
     return " -- not an 8.3 name, and the card's filesystem has no long names";
+}
+
+int zf_memcmp(const void *a, const void *b, size_t n) {
+    const uint8_t *p = a, *q = b;
+    size_t i;
+    for (i = 0; i < n; i++) if (p[i] != q[i]) return p[i] < q[i] ? -1 : 1;
+    return 0;
 }

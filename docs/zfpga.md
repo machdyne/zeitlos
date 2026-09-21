@@ -9,11 +9,16 @@ routes and packs a Verilog blinky on the machine itself, and the
 bitstream it writes, booted from an MMOD, blinks the LED (section 23).
 No host computer is involved from Verilog to bitstream.
 
-What exists: `zfpga synth` (a Verilog-2001 subset, one module), `place`
+What exists: `zfpga synth` (Verilog-2001: modules and instances,
+parameters, the preprocessor, `for`, memories, signed arithmetic,
+functions -- 15 of this tree's own RTL modules come out equivalent to
+yosys's synthesis, §24), `place`
 (LUTs, flip-flops, carry chains, IO; hand placement with `loc=`), `pnr`
 (negotiated-congestion routing over general fabric), `pack` (bitstreams
 byte-identical to `ecppack`'s), `unpack` (text identical to
-`ecpunpack`'s), and `build`, which runs them all from a board profile.
+`ecpunpack`'s), `bram` (`ecpbram`'s job: new block RAM contents in a
+finished design, §25), and `build`, which runs them all from a board
+profile.
 Every stage is checked on the host against ecppack, nextpnr or yosys,
 and on the device build under `sim/` (`sw/apps/zfpga/tests/`). The
 formats are in `docs/zfpga-formats.md`; the on-board test is
@@ -948,7 +953,7 @@ IO sites from the `.lpf`; logic packed into slices and placed into
 adjacent tiles near the IO that needs them. Greedy, bounding-box,
 unambitious.
 
-### Phase 6 — `zfpga synth` — DONE, on hardware (§19, §23): the Verilog subset of §4.2, less instances
+### Phase 6 — `zfpga synth` — DONE, on hardware (§19, §23); instances, loops, memories, signed, functions (§24)
 
 Verilog subset -> netlist. Lexer, parser, elaboration, mapping to
 LUT4 + FF + carry. Refusal for everything in §4.2's second list.
@@ -2039,6 +2044,10 @@ own `boards/lakritz_v0.lpf` is read as it stands, its `BLOCK` and
 
 ### 19.1 The subset
 
+**[superseded by §24]** -- instances, `for`, functions, `signed`,
+`integer`, `*` and the preprocessor are now supported; §24.1 has the
+current subset and `docs/zfpga-formats.md` section 8 the reference.
+
 One module; ANSI or old-style ports; `wire` and `reg` vectors;
 `parameter` and `localparam`; `assign`; `always @(posedge clk)`, with
 `or posedge/negedge rst` for an asynchronous reset; `always @(*)`; `if`,
@@ -2367,16 +2376,15 @@ the three differences §21.3 lists.
 
 In the order section 19.6 and the round after it arrived at:
 
-1. **Module instances and `for` loops** in `zfpga synth`, so it can read
-   ordinary multi-module Verilog -- this tree's own RTL included.
-2. **`zfpga bram`**: patch block-RAM contents in a finished bitstream,
-   ecpbram's job, and the "update its own BIOS" application.
+1. ~~**Module instances and `for` loops**~~ -- done, and more, §24.
+2. ~~**`zfpga bram`**~~ -- done, §25.
 3. **Global clock routing**, before designs grow past a few dozen
    tiles; and some **timing analysis**, of which there is none.
 4. **Phase 7, `zboot`**: reboot, a writable flash slot, launching
    gateware without swapping modules -- a Zeitlos gateware change,
    tested on a board.
-5. **Block RAM inference**, `*`, tristate IO, wide muxes.
+5. **Block RAM inference** -- now the first thing between zfpga and
+   this tree's RTL (§24.6) -- tristate IO, `generate`, `/` and `%`.
 6. **Speed**: the router and placer on larger designs (§14.4, §15.6);
    the SD load of the database, once measured.
 7. **The 45F and 85F databases on the card.**
@@ -2384,6 +2392,210 @@ In the order section 19.6 and the round after it arrived at:
    shipped to the card cannot be opened there (§22).
 9. **`sim/`**: an option to trap misaligned access, and the uptime
    borrow fix (§21.3).
+
+## 24. `zfpga synth`, second version: real Verilog
+
+Section 19's synthesiser read one module. This one reads the Verilog
+this tree is written in, and was measured against it (§24.6).
+
+```
+zfpga synth top.v uart.v fifo.v -t top -l pins.lpf
+```
+
+### 24.1 What was added
+
+| | |
+|---|---|
+| **The preprocessor** | `` `define`` (object-like), `` `ifdef``/`` `ifndef``/`` `elsif``/`` `else``/`` `endif``, `` `include``, `` `undef`` |
+| **Hierarchy** | any number of modules and files; `-t TOP`, or the one module nothing instantiates; instances with parameters overridden by name or position, ports connected by name, position, or left empty |
+| **Parameters** | typed (`parameter integer`, `[7:0]`), `localparam`, `$clog2`, part-selects of parameters -- bounds-checked against the declared range |
+| **Declarations** | `signed`, `integer`, memories (`reg [7:0] m [0:15]`) |
+| **Statements** | `for` loops (constant bounds, `integer` variables), functions, blocking `=` in clocked blocks, `$display` and friends ignored |
+| **Expressions** | signed arithmetic and comparison, `>>>`, `$signed`/`$unsigned`, `*`, indexed part-selects `[s +: n]`/`[s -: n]` with constant or variable `s`, variable-index bit writes |
+
+### 24.2 How: definitions, then flattening
+
+The first version evaluated widths as it parsed. With instances that
+cannot work -- a child's `reg [W-1:0]` is as wide as *each instance's*
+`W` -- so the front end is now three stages:
+
+- `synth_parse.c` reads files into module **definitions**, declarations
+  unevaluated. The **preprocessor lives in the lexer** as a stack of
+  sources: `` `include`` pushes a file, a macro use pushes its text, and
+  every token keeps its own file and line, so an error in an included
+  file points into that file.
+- `synth_flat.c` **flattens** from the top down: each instance's
+  parameters (its overrides, or its defaults, in its own scope), then
+  its widths and memory depths, then its statements cloned with every
+  name prefixed by the instance path -- `u_fifo.count` -- and its ports
+  as assigns between parent and child. The result is the flat module
+  §19's elaborator already consumed.
+- `synth_elab.c` gained the rest:
+  - **Signedness** follows Verilog's rule -- an expression is signed
+    only if every operand is -- and is carried into operand extension.
+    Signed comparison flips both top bits and compares unsigned; `>>>`
+    fills with the sign.
+  - **Memories** are flip-flops, up to 4,096 bits. A variable-index
+    read is a mux tree across the words. A variable-index write updates
+    every word through a mux on `index == k`, which in a clocked block
+    the enable extraction of §19.2 turns into a clock enable per word:
+    a register file.
+  - **`for` loops** unroll under loop-variable bindings visible to
+    `const_eval`, so `a[i]` in a loop is a constant select; the scan
+    for a block's targets unrolls too, since `m[i] <= 0` names a
+    different word each pass.
+  - **Functions** run as a small `always @(*)` with their inputs bound.
+  - **Blocking assignment in a clocked block**: each target carries a
+    flag, "written with `=` on this path"; a read sees the new value
+    when it is set and the old one when not, and branches merge the
+    flags with OR. A temporary is then a flip-flop nothing reads, which
+    the dead-logic sweep removes.
+  - **`*`** is shift-and-add on carry chains.
+
+### 24.3 Checked
+
+Every construct has a design in `examples/` checked against yosys's
+synthesis of the same source, through the whole chain -- `.zl` and final
+bitstream both -- by `tests/run.sh`:
+
+| | |
+|---|---|
+| `hier.v` | three levels, a parameterised counter at two widths, named and positional overrides and ports, an empty port, `$clog2`, a typed `localparam` selected by parameter, `` `include``/`` `define``/`` `ifdef`` |
+| `loops.v` | `for` in combinational and clocked blocks, nested, a reset loop over a memory |
+| `mem.v` | an 8x8 register file, two read ports, a FIFO |
+| `signed.v` | sign extension, signed and unsigned comparison of the same bits, `>>>` by a variable, signed and unsigned `*` |
+| `func.v` | a CRC-16 step function with a loop, called in two places |
+| `partsel.v` | `+:` and `-:`, constant and variable, read and written |
+| `blocking.v` | temporaries with `=` mixed with `<=` state |
+
+And nineteen refusals, each by file and line -- among them an
+undeclared loop variable, an undefined module, `/`, `<=` in
+`always @(*)`, `genvar`, a memory past the flip-flop limit, recursion,
+a macro with arguments, a runaway loop, two candidate tops, a parameter
+select out of range, tristate, and `x`.
+
+### 24.4 Bugs, and what found them
+
+- **An empty slot in a positional port list**, `(a, , c)`, did not
+  parse (`hier.v`).
+- **A select past a parameter's declared width** was answered, not
+  refused; Verilog leaves those bits undefined, and yosys and zfpga
+  picked differently (`hier.v`, as first written -- the test was wrong
+  and so was the tool).
+- **A mux tree on a 32-bit index** -- an `integer`, or any wide
+  expression -- overflowed `base + (1 << level)` and crashed
+  (`rtl/audio_spdif.v`, through `tests/rtlcheck.sh`). Only the low bits
+  that can address the vector now build the tree; any higher bit set
+  gives 0.
+- **A variable `-:` select reaching below bit 0** was computed as a
+  shift by `s - (n - 1)`, which wraps, zeroing even the bits in range.
+  Padding the vector below bit 0 and shifting by `s` itself needs no
+  subtraction (`partsel.v`).
+- **simcheck compared state before a reset.** A register with no
+  initial value powers up undefined; yosys builds a synchronous reset
+  from a flip-flop's set and so powers it up at 1. With a reset input,
+  comparison now starts after the first edge (`func.v`).
+- `%ld` in one message, which the formatter does not support.
+
+### 24.5 Undriven bits
+
+Legal Verilog leaves a stub's unused output undriven (`rtl/dma.v`).
+Such a bit -- nothing drives it anywhere -- now reads as 0, with one
+note per signal; yosys gives `x`. A bit driven on some paths only is
+still refused, as a latch.
+
+### 24.6 This tree's RTL
+
+`tests/rtlcheck.sh` (host, needs yosys) takes each file in `rtl/`, finds
+the files of the modules it instantiates anywhere under `rtl/`, and
+compares zfpga's synthesis with yosys's by simulation -- extended for
+the purpose to model yosys's LUT RAM cells, which `ram_style =
+"distributed"` makes it use regardless of `-nolutram`:
+
+| | |
+|---|---|
+| **equivalent (15)** | arbiter_main, arbiter_vram, audio_mixer (9,575 LUTs, 2,084 flip-flops), audio_out, audio_spdif, csrs, dma, gpio (1,656 LUTs), **montmul** (7,937 LUTs, 2,560 flip-flops, 67 carry chains), mtu, rtc, socctl, spim, uart (1,615 LUTs), uart_null |
+| refused: block RAM (5) | audio, cache, esp32_rxfifo, ethmac_rmii, probe |
+| refused: tristate (3) | spiflashro, usb_hid, usb_cdc_uart |
+| refused: `generate` (1) | trng -- its ring oscillators, deliberately |
+| not checkable (1) | sysctl: its BIOS RAM is `$readmemh`ed |
+
+**No module zfpga accepts disagrees with yosys.** Block RAM inference
+is what stands between zfpga and most of the rest.
+
+### 24.7 On the device
+
+Synthesis stays cheap: the three-level `hier.v`, with its `` `include``,
+in 1.6M instructions, and the device's `.zl` is the host's
+(`tests/run_dev.sh`).
+
+## 25. `zfpga bram`
+
+```
+zfpga bram soc.cfg -f bios_seed.hex -t bios.hex -o soc_final.cfg
+zfpga bram soc.bit -f bios_seed.hex -t bios.hex -o soc_new.bit
+zfpga bram -g seed.hex -w 32 -d 1024 [-s 42]
+```
+
+This tree's build puts the BIOS into the SOC after place-and-route: the
+SOC's RTL initialises its BIOS RAM from a random seed file, and
+`ecpbram` then finds the seed in the configuration and replaces it with
+the BIOS, so the BIOS changes without re-running nextpnr (`Makefile`,
+target `soc`). `zfpga bram` does that job -- and, given a `.bit`, does
+it on the machine: Zeitlos rebuilding its own bitstream with a new BIOS.
+
+### 25.1 What ecpbram actually does
+
+Read from its source (Project Trellis 1.4, `ecpbram.cpp`), it matches
+**bit slices, not words**. Each bit column of the seed file, 512 words
+at a time, is a 512-bit pattern; every block RAM in the design is read
+as 512-bit slices in each of its six width configurations (1, 2, 4, 9,
+18, 36 bits); a slice equal to a seed pattern is replaced by the same
+slice of the new file. That is why the seed must be random -- its
+slices must be unique, and recognisable however synthesis laid the
+memory out -- and `zfpga bram` refuses a seed with a repeated slice.
+
+### 25.2 What it does not copy
+
+ecpbram re-serialises the whole configuration, and libtrellis writes
+each `.tile_group` with its last tile twice. Harmless -- packing applies
+that tile twice -- and not copied: `zfpga bram` rewrites only the
+`.bram_init` data and keeps every other line as it was. So the test is
+the bitstream: zfpga's output and ecpbram's pack to **the same bits**.
+
+### 25.3 A .bit
+
+Unpacked, patched, packed again with the options it was packed with
+(§18) -- compression, clock, multiboot address, usercode -- so it boots
+from the same address as before. A compressed bitstream with multiboot
+at 0x040000 comes out the same as ecpbram followed by ecppack with
+those options.
+
+**A bug in two parts that each worked**: `bram` releases the unpack's
+memory before packing, and the database the unpack had loaded was in
+it -- while the one-per-process database cache of §20.1 still pointed
+there, so the pack read freed memory. `build` never met it, loading the
+database before its first mark. Now `zf_release()` tells the cache
+what it frees, and a released database leaves the cache.
+
+### 25.4 Checked
+
+| | |
+|---|---|
+| `.cfg` | a ROM from a random seed, placed and routed by nextpnr: packs to the bitstream ecpbram's output packs to |
+| `.bit` | compressed, multiboot at 0x040000: the same bitstream |
+| `-g -s 1234` | ecpbram's seed file, byte for byte (its xorshift64* and its seed mixing) |
+| a repeating seed | refused |
+| on the device | a `.bit` in 181M instructions (~15 s), the host's result |
+
+### 25.5 And git
+
+Adding the seed fixtures, `tests/run.sh`'s new check -- that no source
+file here is one git would ignore -- failed: the tree's `.gitignore`
+also ignores `*.hex`. It is the check written after the first commit of
+zfpga lost sixteen files to `*.config` and `*.json`, and it caught the
+third pattern before any commit did. `sw/apps/zfpga/.gitignore`
+re-includes all three.
 
 ---
 

@@ -1,0 +1,319 @@
+# tests/fixtures/loops_c.zl: yosys synth_ecp5 -nowidelut -nodsp -nobram -nolutram of examples/loops.v, via tools/ys2zl.py -- the reference zfpga synth is checked against
+device LFE5U-25F
+package CABGA256
+
+input clk A10 net=n2 io_type=LVCMOS33
+input d[0] A12 net=n4 io_type=LVCMOS33
+input d[1] A13 net=n5 io_type=LVCMOS33
+input d[2] A14 net=n6 io_type=LVCMOS33
+input d[3] A15 net=n7 io_type=LVCMOS33
+input d[4] A2 net=n8 io_type=LVCMOS33
+input d[5] A3 net=n9 io_type=LVCMOS33
+input d[6] A4 net=n10 io_type=LVCMOS33
+input d[7] A5 net=n11 io_type=LVCMOS33
+output ones[0] B1 net=n16 io_type=LVCMOS33
+output ones[1] B10 net=n17 io_type=LVCMOS33
+output ones[2] B11 net=n18 io_type=LVCMOS33
+output ones[3] B12 net=n19 io_type=LVCMOS33
+output rd[0] C13 net=n28 io_type=LVCMOS33
+output rd[1] C14 net=n29 io_type=LVCMOS33
+output rd[2] C15 net=n30 io_type=LVCMOS33
+output rd[3] C16 net=n31 io_type=LVCMOS33
+output rd[4] C2 net=n32 io_type=LVCMOS33
+output rd[5] C3 net=n33 io_type=LVCMOS33
+output rd[6] C4 net=n34 io_type=LVCMOS33
+output rd[7] C5 net=n35 io_type=LVCMOS33
+output rev[0] B13 net=n11 io_type=LVCMOS33
+output rev[1] B14 net=n10 io_type=LVCMOS33
+output rev[2] B15 net=n9 io_type=LVCMOS33
+output rev[3] B16 net=n8 io_type=LVCMOS33
+output rev[4] B2 net=n7 io_type=LVCMOS33
+output rev[5] B3 net=n6 io_type=LVCMOS33
+output rev[6] B4 net=n5 io_type=LVCMOS33
+output rev[7] B5 net=n4 io_type=LVCMOS33
+input rst A11 net=n3 io_type=LVCMOS33
+input sel[0] A6 net=n12 io_type=LVCMOS33
+input sel[1] A7 net=n13 io_type=LVCMOS33
+input sel[2] A8 net=n14 io_type=LVCMOS33
+output sr[0] B6 net=n20 io_type=LVCMOS33
+output sr[1] B7 net=n21 io_type=LVCMOS33
+output sr[2] B8 net=n22 io_type=LVCMOS33
+output sr[3] B9 net=n23 io_type=LVCMOS33
+output sr[4] C1 net=n24 io_type=LVCMOS33
+output sr[5] C10 net=n25 io_type=LVCMOS33
+output sr[6] C11 net=n26 io_type=LVCMOS33
+output sr[7] C12 net=n27 io_type=LVCMOS33
+output tri_sum[0] C6 net=n36 io_type=LVCMOS33
+output tri_sum[1] C7 net=n37 io_type=LVCMOS33
+output tri_sum[2] C8 net=n38 io_type=LVCMOS33
+output tri_sum[3] C9 net=n39 io_type=LVCMOS33
+output tri_sum[4] D1 net=n40 io_type=LVCMOS33
+output tri_sum[5] D10 net=n41 io_type=LVCMOS33
+input we A9 net=n15 io_type=LVCMOS33
+
+lut ones_LUT4_Z init=0x0F00 a=0 b=0 c=n42 d=n43 z=n19
+lut ones_LUT4_Z_1 init=0x0FF0 a=0 b=0 c=n44 d=n6 z=n16
+lut ones_LUT4_Z_1_C_LUT4_Z init=0xE817 a=n45 b=n9 c=n10 d=n46 z=n47
+lut ones_LUT4_Z_1_C_LUT4_Z_1 init=0x7117 a=n8 b=n11 c=n9 d=n48 z=n49
+lut ones_LUT4_Z_1_C_LUT4_Z_2 init=0x6996 a=n48 b=n8 c=n9 d=n11 z=n44
+lut ones_LUT4_Z_1_C_LUT4_Z_2_A_LUT4_Z init=0x6996 a=n4 b=n5 c=n7 d=n10 z=n48
+lut ones_LUT4_Z_1_C_LUT4_Z_A_LUT4_Z init=0x033F a=0 b=n4 c=n5 d=n7 z=n46
+lut ones_LUT4_Z_1_C_LUT4_Z_A_LUT4_Z_1 init=0xC33C a=0 b=n4 c=n5 d=n7 z=n45
+lut ones_LUT4_Z_2 init=0xF00F a=0 b=0 c=n43 d=n42 z=n18
+lut ones_LUT4_Z_3 init=0x7887 a=n44 b=n6 c=n49 d=n47 z=n17
+lut ones_LUT4_Z_C_LUT4_Z init=0x2BBB a=n49 b=n47 c=n44 d=n6 z=n42
+lut ones_LUT4_Z_C_LUT4_Z_1 init=0x000F a=0 b=0 c=n46 d=n47 z=n43
+lut rd_LUT4_Z init=0x0FF0 a=0 b=0 c=n50 d=n51 z=n35
+lut rd_LUT4_Z_1 init=0x0FF0 a=0 b=0 c=n52 d=n53 z=n34
+lut rd_LUT4_Z_1_C_LUT4_Z init=0x0001 a=n54 b=n55 c=n56 d=n57 z=n53
+lut rd_LUT4_Z_1_C_LUT4_Z_1 init=0x0001 a=n58 b=n59 c=n60 d=n61 z=n52
+lut rd_LUT4_Z_1_C_LUT4_Z_1_A_LUT4_Z init=0xCA00 a=n62 b=n63 c=n12 d=n64 z=n61
+lut rd_LUT4_Z_1_C_LUT4_Z_1_A_LUT4_Z_1 init=0xCA00 a=n65 b=n66 c=n12 d=n67 z=n60
+lut rd_LUT4_Z_1_C_LUT4_Z_1_A_LUT4_Z_2 init=0xCA00 a=n68 b=n69 c=n12 d=n70 z=n59
+lut rd_LUT4_Z_1_C_LUT4_Z_1_A_LUT4_Z_3 init=0xCA00 a=n71 b=n72 c=n12 d=n73 z=n58
+lut rd_LUT4_Z_1_C_LUT4_Z_A_LUT4_Z init=0xCA00 a=n69 b=n68 c=n12 d=n64 z=n57
+lut rd_LUT4_Z_1_C_LUT4_Z_A_LUT4_Z_1 init=0xCA00 a=n72 b=n71 c=n12 d=n67 z=n56
+lut rd_LUT4_Z_1_C_LUT4_Z_A_LUT4_Z_2 init=0xCA00 a=n63 b=n62 c=n12 d=n70 z=n55
+lut rd_LUT4_Z_1_C_LUT4_Z_A_LUT4_Z_3 init=0xCA00 a=n66 b=n65 c=n12 d=n73 z=n54
+lut rd_LUT4_Z_2 init=0x0FF0 a=0 b=0 c=n74 d=n75 z=n33
+lut rd_LUT4_Z_2_C_LUT4_Z init=0x0001 a=n76 b=n77 c=n78 d=n79 z=n75
+lut rd_LUT4_Z_2_C_LUT4_Z_1 init=0x0001 a=n80 b=n81 c=n82 d=n83 z=n74
+lut rd_LUT4_Z_2_C_LUT4_Z_1_A_LUT4_Z init=0xCA00 a=n84 b=n85 c=n12 d=n64 z=n83
+lut rd_LUT4_Z_2_C_LUT4_Z_1_A_LUT4_Z_1 init=0xCA00 a=n86 b=n87 c=n12 d=n67 z=n82
+lut rd_LUT4_Z_2_C_LUT4_Z_1_A_LUT4_Z_2 init=0xCA00 a=n88 b=n89 c=n12 d=n70 z=n81
+lut rd_LUT4_Z_2_C_LUT4_Z_1_A_LUT4_Z_3 init=0xCA00 a=n90 b=n91 c=n12 d=n73 z=n80
+lut rd_LUT4_Z_2_C_LUT4_Z_A_LUT4_Z init=0xCA00 a=n89 b=n88 c=n12 d=n64 z=n79
+lut rd_LUT4_Z_2_C_LUT4_Z_A_LUT4_Z_1 init=0xCA00 a=n91 b=n90 c=n12 d=n67 z=n78
+lut rd_LUT4_Z_2_C_LUT4_Z_A_LUT4_Z_2 init=0xCA00 a=n85 b=n84 c=n12 d=n70 z=n77
+lut rd_LUT4_Z_2_C_LUT4_Z_A_LUT4_Z_3 init=0xCA00 a=n87 b=n86 c=n12 d=n73 z=n76
+lut rd_LUT4_Z_3 init=0x0FF0 a=0 b=0 c=n92 d=n93 z=n32
+lut rd_LUT4_Z_3_C_LUT4_Z init=0x0001 a=n94 b=n95 c=n96 d=n97 z=n93
+lut rd_LUT4_Z_3_C_LUT4_Z_1 init=0x0001 a=n98 b=n99 c=n100 d=n101 z=n92
+lut rd_LUT4_Z_3_C_LUT4_Z_1_A_LUT4_Z init=0xCA00 a=n102 b=n103 c=n12 d=n64 z=n101
+lut rd_LUT4_Z_3_C_LUT4_Z_1_A_LUT4_Z_1 init=0xCA00 a=n104 b=n105 c=n12 d=n67 z=n100
+lut rd_LUT4_Z_3_C_LUT4_Z_1_A_LUT4_Z_2 init=0xCA00 a=n106 b=n107 c=n12 d=n70 z=n99
+lut rd_LUT4_Z_3_C_LUT4_Z_1_A_LUT4_Z_3 init=0xCA00 a=n108 b=n109 c=n12 d=n73 z=n98
+lut rd_LUT4_Z_3_C_LUT4_Z_A_LUT4_Z init=0xCA00 a=n107 b=n106 c=n12 d=n64 z=n97
+lut rd_LUT4_Z_3_C_LUT4_Z_A_LUT4_Z_1 init=0xCA00 a=n109 b=n108 c=n12 d=n67 z=n96
+lut rd_LUT4_Z_3_C_LUT4_Z_A_LUT4_Z_2 init=0xCA00 a=n103 b=n102 c=n12 d=n70 z=n95
+lut rd_LUT4_Z_3_C_LUT4_Z_A_LUT4_Z_3 init=0xCA00 a=n105 b=n104 c=n12 d=n73 z=n94
+lut rd_LUT4_Z_4 init=0x0FF0 a=0 b=0 c=n110 d=n111 z=n31
+lut rd_LUT4_Z_4_C_LUT4_Z init=0x0001 a=n112 b=n113 c=n114 d=n115 z=n111
+lut rd_LUT4_Z_4_C_LUT4_Z_1 init=0x0001 a=n116 b=n117 c=n118 d=n119 z=n110
+lut rd_LUT4_Z_4_C_LUT4_Z_1_A_LUT4_Z init=0xCA00 a=n120 b=n121 c=n12 d=n64 z=n119
+lut rd_LUT4_Z_4_C_LUT4_Z_1_A_LUT4_Z_1 init=0xCA00 a=n122 b=n123 c=n12 d=n67 z=n118
+lut rd_LUT4_Z_4_C_LUT4_Z_1_A_LUT4_Z_2 init=0xCA00 a=n124 b=n125 c=n12 d=n70 z=n117
+lut rd_LUT4_Z_4_C_LUT4_Z_1_A_LUT4_Z_3 init=0xCA00 a=n126 b=n127 c=n12 d=n73 z=n116
+lut rd_LUT4_Z_4_C_LUT4_Z_A_LUT4_Z init=0xCA00 a=n125 b=n124 c=n12 d=n64 z=n115
+lut rd_LUT4_Z_4_C_LUT4_Z_A_LUT4_Z_1 init=0xCA00 a=n127 b=n126 c=n12 d=n67 z=n114
+lut rd_LUT4_Z_4_C_LUT4_Z_A_LUT4_Z_2 init=0xCA00 a=n121 b=n120 c=n12 d=n70 z=n113
+lut rd_LUT4_Z_4_C_LUT4_Z_A_LUT4_Z_3 init=0xCA00 a=n123 b=n122 c=n12 d=n73 z=n112
+lut rd_LUT4_Z_5 init=0x0FF0 a=0 b=0 c=n128 d=n129 z=n30
+lut rd_LUT4_Z_5_C_LUT4_Z init=0x0001 a=n130 b=n131 c=n132 d=n133 z=n129
+lut rd_LUT4_Z_5_C_LUT4_Z_1 init=0x0001 a=n134 b=n135 c=n136 d=n137 z=n128
+lut rd_LUT4_Z_5_C_LUT4_Z_1_A_LUT4_Z init=0xCA00 a=n138 b=n139 c=n12 d=n64 z=n137
+lut rd_LUT4_Z_5_C_LUT4_Z_1_A_LUT4_Z_1 init=0xCA00 a=n140 b=n141 c=n12 d=n67 z=n136
+lut rd_LUT4_Z_5_C_LUT4_Z_1_A_LUT4_Z_2 init=0xCA00 a=n142 b=n143 c=n12 d=n70 z=n135
+lut rd_LUT4_Z_5_C_LUT4_Z_1_A_LUT4_Z_3 init=0xCA00 a=n144 b=n145 c=n12 d=n73 z=n134
+lut rd_LUT4_Z_5_C_LUT4_Z_A_LUT4_Z init=0xCA00 a=n143 b=n142 c=n12 d=n64 z=n133
+lut rd_LUT4_Z_5_C_LUT4_Z_A_LUT4_Z_1 init=0xCA00 a=n145 b=n144 c=n12 d=n67 z=n132
+lut rd_LUT4_Z_5_C_LUT4_Z_A_LUT4_Z_2 init=0xCA00 a=n139 b=n138 c=n12 d=n70 z=n131
+lut rd_LUT4_Z_5_C_LUT4_Z_A_LUT4_Z_3 init=0xCA00 a=n141 b=n140 c=n12 d=n73 z=n130
+lut rd_LUT4_Z_6 init=0x0FF0 a=0 b=0 c=n146 d=n147 z=n29
+lut rd_LUT4_Z_6_C_LUT4_Z init=0x0001 a=n148 b=n149 c=n150 d=n151 z=n147
+lut rd_LUT4_Z_6_C_LUT4_Z_1 init=0x0001 a=n152 b=n153 c=n154 d=n155 z=n146
+lut rd_LUT4_Z_6_C_LUT4_Z_1_A_LUT4_Z init=0xCA00 a=n156 b=n157 c=n12 d=n64 z=n155
+lut rd_LUT4_Z_6_C_LUT4_Z_1_A_LUT4_Z_1 init=0xCA00 a=n158 b=n159 c=n12 d=n67 z=n154
+lut rd_LUT4_Z_6_C_LUT4_Z_1_A_LUT4_Z_2 init=0xCA00 a=n160 b=n161 c=n12 d=n70 z=n153
+lut rd_LUT4_Z_6_C_LUT4_Z_1_A_LUT4_Z_3 init=0xCA00 a=n162 b=n163 c=n12 d=n73 z=n152
+lut rd_LUT4_Z_6_C_LUT4_Z_A_LUT4_Z init=0xCA00 a=n161 b=n160 c=n12 d=n64 z=n151
+lut rd_LUT4_Z_6_C_LUT4_Z_A_LUT4_Z_1 init=0xCA00 a=n163 b=n162 c=n12 d=n67 z=n150
+lut rd_LUT4_Z_6_C_LUT4_Z_A_LUT4_Z_2 init=0xCA00 a=n157 b=n156 c=n12 d=n70 z=n149
+lut rd_LUT4_Z_6_C_LUT4_Z_A_LUT4_Z_3 init=0xCA00 a=n159 b=n158 c=n12 d=n73 z=n148
+lut rd_LUT4_Z_7 init=0x0FF0 a=0 b=0 c=n164 d=n165 z=n28
+lut rd_LUT4_Z_7_C_LUT4_Z init=0x0001 a=n166 b=n167 c=n168 d=n169 z=n165
+lut rd_LUT4_Z_7_C_LUT4_Z_1 init=0x0001 a=n170 b=n171 c=n172 d=n173 z=n164
+lut rd_LUT4_Z_7_C_LUT4_Z_1_A_LUT4_Z init=0xCA00 a=n174 b=n175 c=n12 d=n64 z=n173
+lut rd_LUT4_Z_7_C_LUT4_Z_1_A_LUT4_Z_1 init=0xAC00 a=n176 b=n177 c=n12 d=n67 z=n172
+lut rd_LUT4_Z_7_C_LUT4_Z_1_A_LUT4_Z_2 init=0xCA00 a=n178 b=n179 c=n12 d=n70 z=n171
+lut rd_LUT4_Z_7_C_LUT4_Z_1_A_LUT4_Z_3 init=0xCA00 a=n180 b=n181 c=n12 d=n73 z=n170
+lut rd_LUT4_Z_7_C_LUT4_Z_A_LUT4_Z init=0xCA00 a=n179 b=n178 c=n12 d=n64 z=n169
+lut rd_LUT4_Z_7_C_LUT4_Z_A_LUT4_Z_1 init=0xCA00 a=n181 b=n180 c=n12 d=n67 z=n168
+lut rd_LUT4_Z_7_C_LUT4_Z_A_LUT4_Z_2 init=0xCA00 a=n175 b=n174 c=n12 d=n70 z=n167
+lut rd_LUT4_Z_7_C_LUT4_Z_A_LUT4_Z_3 init=0xCA00 a=n176 b=n177 c=n12 d=n73 z=n166
+lut rd_LUT4_Z_C_LUT4_Z init=0x0001 a=n182 b=n183 c=n184 d=n185 z=n51
+lut rd_LUT4_Z_C_LUT4_Z_1 init=0x0001 a=n186 b=n187 c=n188 d=n189 z=n50
+lut rd_LUT4_Z_C_LUT4_Z_1_A_LUT4_Z init=0xCA00 a=n190 b=n191 c=n12 d=n64 z=n189
+lut rd_LUT4_Z_C_LUT4_Z_1_A_LUT4_Z_1 init=0xCA00 a=n192 b=n193 c=n12 d=n67 z=n188
+lut rd_LUT4_Z_C_LUT4_Z_1_A_LUT4_Z_2 init=0xCA00 a=n194 b=n195 c=n12 d=n70 z=n187
+lut rd_LUT4_Z_C_LUT4_Z_1_A_LUT4_Z_3 init=0xCA00 a=n196 b=n197 c=n12 d=n73 z=n186
+lut rd_LUT4_Z_C_LUT4_Z_A_LUT4_Z init=0xCA00 a=n195 b=n194 c=n12 d=n64 z=n185
+lut rd_LUT4_Z_C_LUT4_Z_A_LUT4_Z_1 init=0xCA00 a=n197 b=n196 c=n12 d=n67 z=n184
+lut rd_LUT4_Z_C_LUT4_Z_A_LUT4_Z_2 init=0xCA00 a=n191 b=n190 c=n12 d=n70 z=n183
+lut rd_LUT4_Z_C_LUT4_Z_A_LUT4_Z_3 init=0xCA00 a=n193 b=n192 c=n12 d=n73 z=n182
+ff regs[0]_TRELLIS_FF_Q d=n199 q=n196 clk=n2 ce=n198 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+ff regs[0]_TRELLIS_FF_Q_1 d=n200 q=n71 clk=n2 ce=n198 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[0]_TRELLIS_FF_Q_1_DI_LUT4_Z init=0xF000 a=0 b=0 c=n201 d=n10 z=n200
+ff regs[0]_TRELLIS_FF_Q_2 d=n202 q=n90 clk=n2 ce=n198 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[0]_TRELLIS_FF_Q_2_DI_LUT4_Z init=0xF000 a=0 b=0 c=n201 d=n9 z=n202
+ff regs[0]_TRELLIS_FF_Q_3 d=n203 q=n108 clk=n2 ce=n198 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[0]_TRELLIS_FF_Q_3_DI_LUT4_Z init=0xF000 a=0 b=0 c=n201 d=n8 z=n203
+ff regs[0]_TRELLIS_FF_Q_4 d=n204 q=n126 clk=n2 ce=n198 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[0]_TRELLIS_FF_Q_4_DI_LUT4_Z init=0xF000 a=0 b=0 c=n201 d=n7 z=n204
+ff regs[0]_TRELLIS_FF_Q_5 d=n205 q=n144 clk=n2 ce=n198 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[0]_TRELLIS_FF_Q_5_DI_LUT4_Z init=0xF000 a=0 b=0 c=n201 d=n6 z=n205
+ff regs[0]_TRELLIS_FF_Q_6 d=n206 q=n162 clk=n2 ce=n198 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[0]_TRELLIS_FF_Q_6_DI_LUT4_Z init=0xF000 a=0 b=0 c=n201 d=n5 z=n206
+ff regs[0]_TRELLIS_FF_Q_7 d=n207 q=n180 clk=n2 ce=n198 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[0]_TRELLIS_FF_Q_7_DI_LUT4_Z init=0xF000 a=0 b=0 c=n201 d=n4 z=n207
+lut regs[0]_TRELLIS_FF_Q_CE_LUT4_Z init=0xFFF0 a=0 b=0 c=n201 d=n3 z=n198
+lut regs[0]_TRELLIS_FF_Q_DI_LUT4_Z init=0xF000 a=0 b=0 c=n201 d=n11 z=n199
+ff regs[1]_TRELLIS_FF_Q d=n209 q=n197 clk=n2 ce=n208 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+ff regs[1]_TRELLIS_FF_Q_1 d=n210 q=n72 clk=n2 ce=n208 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[1]_TRELLIS_FF_Q_1_DI_LUT4_Z init=0xF000 a=0 b=0 c=n211 d=n10 z=n210
+ff regs[1]_TRELLIS_FF_Q_2 d=n212 q=n91 clk=n2 ce=n208 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[1]_TRELLIS_FF_Q_2_DI_LUT4_Z init=0xF000 a=0 b=0 c=n211 d=n9 z=n212
+ff regs[1]_TRELLIS_FF_Q_3 d=n213 q=n109 clk=n2 ce=n208 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[1]_TRELLIS_FF_Q_3_DI_LUT4_Z init=0xF000 a=0 b=0 c=n211 d=n8 z=n213
+ff regs[1]_TRELLIS_FF_Q_4 d=n214 q=n127 clk=n2 ce=n208 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[1]_TRELLIS_FF_Q_4_DI_LUT4_Z init=0xF000 a=0 b=0 c=n211 d=n7 z=n214
+ff regs[1]_TRELLIS_FF_Q_5 d=n215 q=n145 clk=n2 ce=n208 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[1]_TRELLIS_FF_Q_5_DI_LUT4_Z init=0xF000 a=0 b=0 c=n211 d=n6 z=n215
+ff regs[1]_TRELLIS_FF_Q_6 d=n216 q=n163 clk=n2 ce=n208 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[1]_TRELLIS_FF_Q_6_DI_LUT4_Z init=0xF0FF a=0 b=0 c=n5 d=n211 z=n216
+ff regs[1]_TRELLIS_FF_Q_7 d=n217 q=n181 clk=n2 ce=n208 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[1]_TRELLIS_FF_Q_7_DI_LUT4_Z init=0xF0FF a=0 b=0 c=n4 d=n211 z=n217
+lut regs[1]_TRELLIS_FF_Q_CE_LUT4_Z init=0xFFF0 a=0 b=0 c=n211 d=n3 z=n208
+lut regs[1]_TRELLIS_FF_Q_DI_LUT4_Z init=0xF000 a=0 b=0 c=n211 d=n11 z=n209
+ff regs[2]_TRELLIS_FF_Q d=n219 q=n178 clk=n2 ce=n218 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+ff regs[2]_TRELLIS_FF_Q_1 d=n220 q=n194 clk=n2 ce=n218 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[2]_TRELLIS_FF_Q_1_DI_LUT4_Z init=0xF000 a=0 b=0 c=n221 d=n11 z=n220
+ff regs[2]_TRELLIS_FF_Q_2 d=n222 q=n68 clk=n2 ce=n218 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[2]_TRELLIS_FF_Q_2_DI_LUT4_Z init=0xF000 a=0 b=0 c=n221 d=n10 z=n222
+ff regs[2]_TRELLIS_FF_Q_3 d=n223 q=n88 clk=n2 ce=n218 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[2]_TRELLIS_FF_Q_3_DI_LUT4_Z init=0xF000 a=0 b=0 c=n221 d=n9 z=n223
+ff regs[2]_TRELLIS_FF_Q_4 d=n224 q=n106 clk=n2 ce=n218 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[2]_TRELLIS_FF_Q_4_DI_LUT4_Z init=0xF000 a=0 b=0 c=n221 d=n8 z=n224
+ff regs[2]_TRELLIS_FF_Q_5 d=n225 q=n124 clk=n2 ce=n218 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[2]_TRELLIS_FF_Q_5_DI_LUT4_Z init=0xF000 a=0 b=0 c=n221 d=n7 z=n225
+ff regs[2]_TRELLIS_FF_Q_6 d=n226 q=n142 clk=n2 ce=n218 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[2]_TRELLIS_FF_Q_6_DI_LUT4_Z init=0xF0FF a=0 b=0 c=n6 d=n221 z=n226
+ff regs[2]_TRELLIS_FF_Q_7 d=n227 q=n160 clk=n2 ce=n218 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[2]_TRELLIS_FF_Q_7_DI_LUT4_Z init=0xF0FF a=0 b=0 c=n5 d=n221 z=n227
+lut regs[2]_TRELLIS_FF_Q_CE_LUT4_Z init=0xFFF0 a=0 b=0 c=n221 d=n3 z=n218
+lut regs[2]_TRELLIS_FF_Q_DI_LUT4_Z init=0xF000 a=0 b=0 c=n221 d=n4 z=n219
+ff regs[3]_TRELLIS_FF_Q d=n229 q=n195 clk=n2 ce=n228 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+ff regs[3]_TRELLIS_FF_Q_1 d=n230 q=n69 clk=n2 ce=n228 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[3]_TRELLIS_FF_Q_1_DI_LUT4_Z init=0xF000 a=0 b=0 c=n231 d=n10 z=n230
+ff regs[3]_TRELLIS_FF_Q_2 d=n232 q=n89 clk=n2 ce=n228 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[3]_TRELLIS_FF_Q_2_DI_LUT4_Z init=0xF000 a=0 b=0 c=n231 d=n9 z=n232
+ff regs[3]_TRELLIS_FF_Q_3 d=n233 q=n107 clk=n2 ce=n228 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[3]_TRELLIS_FF_Q_3_DI_LUT4_Z init=0xF000 a=0 b=0 c=n231 d=n8 z=n233
+ff regs[3]_TRELLIS_FF_Q_4 d=n234 q=n125 clk=n2 ce=n228 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[3]_TRELLIS_FF_Q_4_DI_LUT4_Z init=0xF0FF a=0 b=0 c=n7 d=n231 z=n234
+ff regs[3]_TRELLIS_FF_Q_5 d=n235 q=n143 clk=n2 ce=n228 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[3]_TRELLIS_FF_Q_5_DI_LUT4_Z init=0xF000 a=0 b=0 c=n231 d=n6 z=n235
+ff regs[3]_TRELLIS_FF_Q_6 d=n236 q=n161 clk=n2 ce=n228 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[3]_TRELLIS_FF_Q_6_DI_LUT4_Z init=0xF000 a=0 b=0 c=n231 d=n5 z=n236
+ff regs[3]_TRELLIS_FF_Q_7 d=n237 q=n179 clk=n2 ce=n228 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[3]_TRELLIS_FF_Q_7_DI_LUT4_Z init=0xF0FF a=0 b=0 c=n4 d=n231 z=n237
+lut regs[3]_TRELLIS_FF_Q_CE_LUT4_Z init=0xFFF0 a=0 b=0 c=n231 d=n3 z=n228
+lut regs[3]_TRELLIS_FF_Q_DI_LUT4_Z init=0xF000 a=0 b=0 c=n231 d=n11 z=n229
+ff regs[4]_TRELLIS_FF_Q d=n239 q=n190 clk=n2 ce=n238 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+ff regs[4]_TRELLIS_FF_Q_1 d=n240 q=n62 clk=n2 ce=n238 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[4]_TRELLIS_FF_Q_1_DI_LUT4_Z init=0xF000 a=0 b=0 c=n241 d=n10 z=n240
+ff regs[4]_TRELLIS_FF_Q_2 d=n242 q=n84 clk=n2 ce=n238 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[4]_TRELLIS_FF_Q_2_DI_LUT4_Z init=0xF000 a=0 b=0 c=n241 d=n9 z=n242
+ff regs[4]_TRELLIS_FF_Q_3 d=n243 q=n102 clk=n2 ce=n238 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[4]_TRELLIS_FF_Q_3_DI_LUT4_Z init=0xF000 a=0 b=0 c=n241 d=n8 z=n243
+ff regs[4]_TRELLIS_FF_Q_4 d=n244 q=n120 clk=n2 ce=n238 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[4]_TRELLIS_FF_Q_4_DI_LUT4_Z init=0xF0FF a=0 b=0 c=n7 d=n241 z=n244
+ff regs[4]_TRELLIS_FF_Q_5 d=n245 q=n138 clk=n2 ce=n238 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[4]_TRELLIS_FF_Q_5_DI_LUT4_Z init=0xF0FF a=0 b=0 c=n6 d=n241 z=n245
+ff regs[4]_TRELLIS_FF_Q_6 d=n246 q=n156 clk=n2 ce=n238 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[4]_TRELLIS_FF_Q_6_DI_LUT4_Z init=0xF000 a=0 b=0 c=n241 d=n5 z=n246
+ff regs[4]_TRELLIS_FF_Q_7 d=n247 q=n174 clk=n2 ce=n238 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[4]_TRELLIS_FF_Q_7_DI_LUT4_Z init=0xF000 a=0 b=0 c=n241 d=n4 z=n247
+lut regs[4]_TRELLIS_FF_Q_CE_LUT4_Z init=0xFFF0 a=0 b=0 c=n241 d=n3 z=n238
+lut regs[4]_TRELLIS_FF_Q_DI_LUT4_Z init=0xF000 a=0 b=0 c=n241 d=n11 z=n239
+ff regs[5]_TRELLIS_FF_Q d=n249 q=n191 clk=n2 ce=n248 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+ff regs[5]_TRELLIS_FF_Q_1 d=n250 q=n63 clk=n2 ce=n248 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[5]_TRELLIS_FF_Q_1_DI_LUT4_Z init=0xF000 a=0 b=0 c=n251 d=n10 z=n250
+ff regs[5]_TRELLIS_FF_Q_2 d=n252 q=n85 clk=n2 ce=n248 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[5]_TRELLIS_FF_Q_2_DI_LUT4_Z init=0xF000 a=0 b=0 c=n251 d=n9 z=n252
+ff regs[5]_TRELLIS_FF_Q_3 d=n253 q=n103 clk=n2 ce=n248 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[5]_TRELLIS_FF_Q_3_DI_LUT4_Z init=0xF000 a=0 b=0 c=n251 d=n8 z=n253
+ff regs[5]_TRELLIS_FF_Q_4 d=n254 q=n121 clk=n2 ce=n248 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[5]_TRELLIS_FF_Q_4_DI_LUT4_Z init=0xF0FF a=0 b=0 c=n7 d=n251 z=n254
+ff regs[5]_TRELLIS_FF_Q_5 d=n255 q=n139 clk=n2 ce=n248 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[5]_TRELLIS_FF_Q_5_DI_LUT4_Z init=0xF0FF a=0 b=0 c=n6 d=n251 z=n255
+ff regs[5]_TRELLIS_FF_Q_6 d=n256 q=n157 clk=n2 ce=n248 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[5]_TRELLIS_FF_Q_6_DI_LUT4_Z init=0xF0FF a=0 b=0 c=n5 d=n251 z=n256
+ff regs[5]_TRELLIS_FF_Q_7 d=n257 q=n175 clk=n2 ce=n248 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[5]_TRELLIS_FF_Q_7_DI_LUT4_Z init=0xF0FF a=0 b=0 c=n4 d=n251 z=n257
+lut regs[5]_TRELLIS_FF_Q_CE_LUT4_Z init=0xFFF0 a=0 b=0 c=n251 d=n3 z=n248
+lut regs[5]_TRELLIS_FF_Q_DI_LUT4_Z init=0xF000 a=0 b=0 c=n251 d=n11 z=n249
+ff regs[6]_TRELLIS_FF_Q d=n259 q=n192 clk=n2 ce=n258 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+ff regs[6]_TRELLIS_FF_Q_1 d=n260 q=n65 clk=n2 ce=n258 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[6]_TRELLIS_FF_Q_1_DI_LUT4_Z init=0xF000 a=0 b=0 c=n261 d=n10 z=n260
+ff regs[6]_TRELLIS_FF_Q_2 d=n262 q=n86 clk=n2 ce=n258 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[6]_TRELLIS_FF_Q_2_DI_LUT4_Z init=0xF000 a=0 b=0 c=n261 d=n9 z=n262
+ff regs[6]_TRELLIS_FF_Q_3 d=n263 q=n104 clk=n2 ce=n258 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[6]_TRELLIS_FF_Q_3_DI_LUT4_Z init=0xF0FF a=0 b=0 c=n8 d=n261 z=n263
+ff regs[6]_TRELLIS_FF_Q_4 d=n264 q=n122 clk=n2 ce=n258 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[6]_TRELLIS_FF_Q_4_DI_LUT4_Z init=0xF000 a=0 b=0 c=n261 d=n7 z=n264
+ff regs[6]_TRELLIS_FF_Q_5 d=n265 q=n140 clk=n2 ce=n258 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[6]_TRELLIS_FF_Q_5_DI_LUT4_Z init=0xF000 a=0 b=0 c=n261 d=n6 z=n265
+ff regs[6]_TRELLIS_FF_Q_6 d=n266 q=n158 clk=n2 ce=n258 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[6]_TRELLIS_FF_Q_6_DI_LUT4_Z init=0xF0FF a=0 b=0 c=n5 d=n261 z=n266
+ff regs[6]_TRELLIS_FF_Q_7 d=n267 q=n177 clk=n2 ce=n258 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[6]_TRELLIS_FF_Q_7_DI_LUT4_Z init=0xF000 a=0 b=0 c=n261 d=n4 z=n267
+lut regs[6]_TRELLIS_FF_Q_CE_LUT4_Z init=0xFFF0 a=0 b=0 c=n261 d=n3 z=n258
+lut regs[6]_TRELLIS_FF_Q_DI_LUT4_Z init=0xF000 a=0 b=0 c=n261 d=n11 z=n259
+ff regs[7]_TRELLIS_FF_Q d=n269 q=n193 clk=n2 ce=n268 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+ff regs[7]_TRELLIS_FF_Q_1 d=n270 q=n66 clk=n2 ce=n268 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[7]_TRELLIS_FF_Q_1_DI_LUT4_Z init=0xF000 a=0 b=0 c=n271 d=n10 z=n270
+ff regs[7]_TRELLIS_FF_Q_2 d=n272 q=n87 clk=n2 ce=n268 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[7]_TRELLIS_FF_Q_2_DI_LUT4_Z init=0xF000 a=0 b=0 c=n271 d=n9 z=n272
+ff regs[7]_TRELLIS_FF_Q_3 d=n273 q=n105 clk=n2 ce=n268 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[7]_TRELLIS_FF_Q_3_DI_LUT4_Z init=0xF0FF a=0 b=0 c=n8 d=n271 z=n273
+ff regs[7]_TRELLIS_FF_Q_4 d=n274 q=n123 clk=n2 ce=n268 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[7]_TRELLIS_FF_Q_4_DI_LUT4_Z init=0xF000 a=0 b=0 c=n271 d=n7 z=n274
+ff regs[7]_TRELLIS_FF_Q_5 d=n275 q=n141 clk=n2 ce=n268 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[7]_TRELLIS_FF_Q_5_DI_LUT4_Z init=0xF0FF a=0 b=0 c=n6 d=n271 z=n275
+ff regs[7]_TRELLIS_FF_Q_6 d=n276 q=n159 clk=n2 ce=n268 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[7]_TRELLIS_FF_Q_6_DI_LUT4_Z init=0xF000 a=0 b=0 c=n271 d=n5 z=n276
+ff regs[7]_TRELLIS_FF_Q_7 d=n277 q=n176 clk=n2 ce=n268 lsr=0 gsr=DISABLED regset=RESET cemux=CE clkmux=CLK lsrmux=LSR
+lut regs[7]_TRELLIS_FF_Q_7_DI_LUT4_Z init=0xF0FF a=0 b=0 c=n4 d=n271 z=n277
+lut regs[7]_TRELLIS_FF_Q_CE_LUT4_Z init=0xFFF0 a=0 b=0 c=n271 d=n3 z=n268
+lut regs[7]_TRELLIS_FF_Q_DI_LUT4_Z init=0xF000 a=0 b=0 c=n271 d=n11 z=n269
+ff sr_TRELLIS_FF_Q d=n26 q=n27 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_1 d=n25 q=n26 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_2 d=n24 q=n25 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_3 d=n23 q=n24 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_4 d=n22 q=n23 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_5 d=n21 q=n22 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_6 d=n20 q=n21 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+ff sr_TRELLIS_FF_Q_7 d=n278 q=n20 clk=n2 lsr=0 gsr=DISABLED regset=RESET cemux=1 clkmux=CLK lsrmux=LSR
+lut sr_TRELLIS_FF_Q_7_DI_LUT4_Z init=0x0FF0 a=0 b=0 c=n4 d=n27 z=n278
+ccu2 tri_sum_CCU2C_S0 init0=0x96AA init1=0x96AA inject0=NO inject1=NO a0=0 b0=0 c0=0 d0=1 a1=0 b1=0 c1=0 d1=1 cin=n279 cout=n280 s0=n40 s1=n41
+ccu2 tri_sum_CCU2C_S0_1 init0=0x96AA init1=0x96AA inject0=NO inject1=NO a0=n281 b0=n282 c0=0 d0=1 a1=0 b1=n283 c1=0 d1=1 cin=n284 cout=n279 s0=n38 s1=n39
+ccu2 tri_sum_CCU2C_S0_2 init0=0x96AA init1=0x96AA inject0=NO inject1=NO a0=n285 b0=0 c0=0 d0=1 a1=n286 b1=n287 c1=0 d1=1 cin=0 cout=n284 s0=n36 s1=n37
+lut tri_sum_CCU2C_S0_2_A0_LUT4_Z init=0x0FF0 a=0 b=0 c=n5 d=n6 z=n286
+lut tri_sum_CCU2C_S0_2_A0_LUT4_Z_1 init=0x0FF0 a=0 b=0 c=n4 d=n6 z=n285
+lut tri_sum_CCU2C_S0_2_A0_LUT4_Z_2 init=0xC33C a=0 b=n4 c=n5 d=n6 z=n281
+lut tri_sum_CCU2C_S0_2_B1_LUT4_Z init=0xF000 a=0 b=0 c=n5 d=n6 z=n282
+lut tri_sum_CCU2C_S0_2_B1_LUT4_Z_1 init=0xF000 a=0 b=0 c=n4 d=n6 z=n287
+lut tri_sum_CCU2C_S0_2_B1_LUT4_Z_2 init=0xFCC0 a=0 b=n4 c=n5 d=n6 z=n283
+lut we_LUT4_D init=0x4000 a=n3 b=n70 c=n12 d=n15 z=n231
+lut we_LUT4_D_1 init=0x1000 a=n3 b=n12 c=n70 d=n15 z=n221
+lut we_LUT4_D_2 init=0x1000 a=n3 b=n12 c=n73 d=n15 z=n201
+lut we_LUT4_D_2_C_LUT4_Z init=0x000F a=0 b=0 c=n14 d=n13 z=n73
+lut we_LUT4_D_3 init=0x4000 a=n3 b=n67 c=n12 d=n15 z=n271
+lut we_LUT4_D_4 init=0x1000 a=n3 b=n12 c=n67 d=n15 z=n261
+lut we_LUT4_D_4_C_LUT4_Z init=0xF000 a=0 b=0 c=n14 d=n13 z=n67
+lut we_LUT4_D_5 init=0x4000 a=n3 b=n64 c=n12 d=n15 z=n251
+lut we_LUT4_D_6 init=0x1000 a=n3 b=n12 c=n64 d=n15 z=n241
+lut we_LUT4_D_6_C_LUT4_Z init=0x0F00 a=0 b=0 c=n13 d=n14 z=n64
+lut we_LUT4_D_7 init=0x4000 a=n3 b=n73 c=n12 d=n15 z=n211
+lut we_LUT4_D_B_LUT4_Z init=0x0F00 a=0 b=0 c=n14 d=n13 z=n70

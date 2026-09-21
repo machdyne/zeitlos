@@ -11,7 +11,7 @@ CC ?= cc
 CFLAGS = -std=gnu99 -O2 -g -Wall -Wextra -Wno-unused-parameter -Werror \
 	-DZFPGA_HOSTED=1
 
-SRCS = main.c util.c db.c chip.c cfg.c pack.c pnr.c route.c place.c unpack.c synth_parse.c synth_elab.c synth_map.c build.c port_host.c
+SRCS = main.c util.c db.c chip.c cfg.c pack.c pnr.c route.c place.c unpack.c synth_parse.c synth_flat.c synth_elab.c synth_map.c bram.c build.c port_host.c
 HDRS = zfpga.h zfpga_port.h synth.h
 
 DB_SRC = ext/prjtrellis-db
@@ -25,7 +25,7 @@ zfpga: $(SRCS) $(HDRS)
 # db/ is the card's /fpga exactly: the database, the board profiles with
 # their pins, and the examples (docs/zfpga-formats.md sec. 7).
 CARD_EXAMPLES = examples/blink.v examples/blinkf.v examples/empty.zn examples/on.zn \
-	examples/blink.zn examples/hand.zl
+	examples/blink.zn examples/hand.zl examples/blinkh.v examples/blinkh.vh
 
 card: db/lfe5u25f.zdb boards/lakritz.brd ../../../boards/lakritz_v0.lpf $(CARD_EXAMPLES)
 	mkdir -p db/boards db/examples

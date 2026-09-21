@@ -51,6 +51,9 @@ void zio_out_close(void);
  * here too, so that a failure is never invisible. */
 void zio_console(const char *s);
 
+/* Deletes a file; 0 on success. */
+int zio_remove(const char *path);
+
 /* 1 where file names are 8.3 only: the device, whose FatFs is built
  * without long names (FF_USE_LFN 0). 0 on the host. */
 int zio_fat83(void);
