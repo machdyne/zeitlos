@@ -375,7 +375,7 @@ subject properly. The corrections, because they change the plan:
   and no loop at all.
 - **`rtl/sysctl.v` already instantiates `USRMCLK`** and already drives
   the configuration flash's chip select, MOSI and MISO through
-  `rtl/spiflashro.v`, which serves the memory-mapped ROM window. The
+  `rtl/spiflashro.v` (now `rtl/spiflash.v`, which also writes -- `docs/spiflash.md`), which serves the memory-mapped ROM window. The
   pins, the primitive and an SPI master are present and working. What is
   missing is that the controller only issues reads.
 - **`ecppack --bootaddr` is the whole addressing mechanism**, and the
@@ -654,7 +654,7 @@ should remove all of it.
 | `sw/os/kernel.h` | `"zfpga"` added to the `HUGE` name check | Phase 2 |
 | `sw/apps/Makefile` | one word in `APPS` | Phase 2 |
 | `release/lib/mkfatimg.py` | `/fpga/*.zdb`, board profiles, examples | Phase 2 |
-| `rtl/sysctl.v`, `rtl/spiflashro.v`, `boards/*.lpf`, `Makefile` | PROGRAMN, flash write, `--bootaddr` | Phase 7 |
+| `rtl/sysctl.v`, `rtl/spiflash.v` (was `spiflashro.v`), `boards/*.lpf`, `Makefile` | PROGRAMN, flash write, `--bootaddr` | Phase 7 |
 | `docs/` | `zfpga.md`, `zboot.md` | every phase |
 
 The Phase 7 rows are gateware and cannot live in an app directory. They
@@ -961,17 +961,24 @@ LUT4 + FF + carry. Refusal for everything in §4.2's second list.
 **Done when:** `blink.v` typed into `vi` on the machine becomes a
 working bitstream, with no host involved except the programming cable.
 
-### Phase 7 — closing the loop in place
+### Phase 7 — closing the loop in place — step 1 BUILT (`reboot`); the design agreed
 
-`docs/zboot.md` §5 has the design. Three pieces, in this order, because
-each is testable alone:
+**[updated]** `docs/zboot.md` §5 now has the agreed design, which
+replaces the fixed gateware slot below: a **jumploader** at `0x1D0000`
+on every board -- a small bitstream Zeitlos jumps through, which
+reboots (the default, pointing at 0) or boots user gateware placed
+wherever there is room. Step 1, PROGRAMN and `reboot`, is built
+(`docs/zboot.md` §6) for Lakritz, Obst and Mozart ML1, awaiting a
+hardware test. The plan as first written:
+
+Three pieces, in this order, because each is testable alone:
 
 1. **PROGRAMN brought out** (site `M8` on a Lakritz, open-drain, the
    same `BB` instantiation the bootloader uses). This alone gives
    Zeitlos a `reboot`, useful on its own, and it exercises the half that
    can leave a board not coming back -- while the flash is still
    untouched.
-2. **Write and erase in `rtl/spiflashro.v`** or a sibling block. The
+2. **Write and erase** -- **done** as `rtl/spiflash.v`, replacing `rtl/spiflashro.v` (`docs/spiflash.md`). The
    pins, `USRMCLK` and the SPI master are already there;
    `usb_spiflash_bridge.v` in the bootloader does the same commands over
    the same pins, but under Apache 2.0 (§9.3) -- a reference, not
@@ -1114,7 +1121,7 @@ An earlier revision of `docs/zboot.md` said `tinydfu-bootloader`'s
 not: **tinydfu-bootloader is Apache 2.0.** Zeitlos already carries
 Apache 2.0 code (`rtl/ext/usb_hid_host`), so vendoring it would be
 permissible with its licence retained. The recommendation is not to: the
-flash write path is a small extension of `rtl/spiflashro.v`, a block that
+flash write path is a small extension of `rtl/spiflashro.v` (since done: `rtl/spiflash.v`), a block that
 is already this tree's own, and the command sequences it needs come from
 the flash part's datasheet regardless of who else has implemented them.
 
@@ -1225,11 +1232,6 @@ on any ECP5 die** (25F, 45F, 85F all checked). So configuring tiles in
 file order and in libtrellis's name order must give the same bits, and
 one record's worth of memory is all the reader holds. A configuration
 of any size streams.
-
-All of it is **space-indented**, per the README's rule for LLM-written
-code: identifiable until audited, then converted to tabs. That includes
-the lines added to `sw/os/kernel.h`, which sit in a tab-indented
-function and say why they look different.
 
 The cost of streaming is four refusals where libtrellis would do
 something else: a tile configured twice, a `.tile` after a
@@ -2380,7 +2382,8 @@ In the order section 19.6 and the round after it arrived at:
 2. ~~**`zfpga bram`**~~ -- done, §25.
 3. **Global clock routing**, before designs grow past a few dozen
    tiles; and some **timing analysis**, of which there is none.
-4. **Phase 7, `zboot`**: reboot, a writable flash slot, launching
+4. **Phase 7, `zboot`** -- the design agreed (a jumploader at
+   `0x1D0000`, `docs/zboot.md` §5) and step 1, `reboot`, built (§6) --: reboot, a writable flash slot, launching
    gateware without swapping modules -- a Zeitlos gateware change,
    tested on a board.
 5. **Block RAM inference** -- now the first thing between zfpga and
@@ -2516,7 +2519,7 @@ the purpose to model yosys's LUT RAM cells, which `ram_style =
 |---|---|
 | **equivalent (15)** | arbiter_main, arbiter_vram, audio_mixer (9,575 LUTs, 2,084 flip-flops), audio_out, audio_spdif, csrs, dma, gpio (1,656 LUTs), **montmul** (7,937 LUTs, 2,560 flip-flops, 67 carry chains), mtu, rtc, socctl, spim, uart (1,615 LUTs), uart_null |
 | refused: block RAM (5) | audio, cache, esp32_rxfifo, ethmac_rmii, probe |
-| refused: tristate (3) | spiflashro, usb_hid, usb_cdc_uart |
+| refused: tristate (3) | spiflashro (since replaced by `spiflash.v`, which tri-states the same way), usb_hid, usb_cdc_uart |
 | refused: `generate` (1) | trng -- its ring oscillators, deliberately |
 | not checkable (1) | sysctl: its BIOS RAM is `$readmemh`ed |
 

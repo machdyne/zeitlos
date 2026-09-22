@@ -365,3 +365,10 @@ LOCATE COMP "SRAM1_LB" SITE "L15";
 IOBUF PORT "SRAM1_LB" IO_TYPE=LVCMOS33;
 LOCATE COMP "SRAM1_UB" SITE "M16";
 IOBUF PORT "SRAM1_UB" IO_TYPE=LVCMOS33;
+
+# PROGRAMN, routed back to a user pin: rtl/sysctl.v pulls it low (open
+# drain) to reconfigure the FPGA -- `reboot`, docs/zboot.md. M8 is
+# wired to PROGRAMN on this board; the DFU bootloader drives the same
+# site (tinydfu-bootloader, boards/*/ resetn).
+LOCATE COMP "PROGRAMN" SITE "M8";
+IOBUF PORT "PROGRAMN" IO_TYPE=LVCMOS33;

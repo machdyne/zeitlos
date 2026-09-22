@@ -339,6 +339,10 @@
 `ifdef BOARD_OBST
 
 `define FPGA_ECP5
+// PROGRAMN is wired to user pin M8 (boards/*.lpf): rtl/socctl.v's
+// RECONFIG, `reboot`, docs/zboot.md. Confirmed for Lakritz, Obst and
+// Mozart ML1; boards whose site is not confirmed do not define it.
+`define PROGRAMN_PIN
 `define OSC48
 `define MEM 1				// note that some Obst boards have 2MB SRAM
 `define MEM_SRAM
@@ -449,6 +453,10 @@
 `elsif BOARD_LAKRITZ
 
 `define FPGA_ECP5
+// PROGRAMN is wired to user pin M8 (boards/*.lpf): rtl/socctl.v's
+// RECONFIG, `reboot`, docs/zboot.md. Confirmed for Lakritz, Obst and
+// Mozart ML1; boards whose site is not confirmed do not define it.
+`define PROGRAMN_PIN
 `define OSC48
 `define MEM 32
 `define MEM_SDRAM
@@ -545,6 +553,10 @@
 `elsif BOARD_MOZART_ML1
 
 `define FPGA_ECP5
+// PROGRAMN is wired to user pin M8 (boards/*.lpf): rtl/socctl.v's
+// RECONFIG, `reboot`, docs/zboot.md. Confirmed for Lakritz, Obst and
+// Mozart ML1; boards whose site is not confirmed do not define it.
+`define PROGRAMN_PIN
 `define OSC48
 `define MEM 32
 `define MEM_SDRAM

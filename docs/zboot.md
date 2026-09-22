@@ -4,9 +4,11 @@ How an ECP5 decides which bitstream to load, how the DFU bootloader on
 these boards uses that, and what it would take for Zeitlos to load
 gateware it built itself.
 
-**Status: reference plus proposal.** Sections 1-4 describe what exists
-and is shipping today. Sections 5 onward propose changes and have not
-been built.
+**Status: reference, an agreed design, and its first two steps built.**
+Sections 1-4 describe what ships today. Section 5 is the agreed design --
+a *jumploader* at `0x1D0000`. Step 1, `reboot`, is section 6; step 2,
+the writable flash controller, is `docs/spiflash.md`. Both are built and
+awaiting a hardware test.
 
 ---
 
@@ -26,9 +28,11 @@ to reboot the FPGA into something else, **PROGRAMN is the only
 mechanism**, and it requires the pin to be routed back to the FPGA's own
 IO so that logic inside can pull it low.
 
-On every board in this tree, it is. That is not incidental: it is how
-the DFU bootloader hands off, and it means the hard prerequisite for
-everything below is already satisfied on shipping hardware.
+On Lakritz, Obst and Mozart ML1 it is -- `M8`, confirmed -- and that is
+not incidental: it is how the DFU bootloader hands off, so the hard
+prerequisite for everything below is satisfied on shipping hardware.
+The other boards in this tree (Mozart ML2, Sergei, ULX3S) are
+unconfirmed, and build without it (section 6).
 
 ---
 
@@ -125,130 +129,213 @@ pin -- see section 6.
 
 ## 4. The current flash layout
 
-Lakritz and Obst, from `boardinfo.vh` and `docs/dfu_upgrade.md`, on the
-2 MB MMOD both ship with:
+The whole map on the 2 MB MMOD Lakritz ships with, from
+`release/lib/layout.py` (which reads it from the BIOS, `logo.h`,
+`zar.h` and the Makefile and cross-checks them):
 
-| Range | Size | Contents |
+| Offset | Room | Contents |
 |---|---|---|
-| `0x000000` - `0x03FFFF` | 256 KB | DFU bootloader (uses ~123 KB) |
-| `0x040000` - `0x1FFFFF` | 1792 KB | Zeitlos: gateware, kernel, splash, core apps |
-| — | 0 KB | `DATAPART`, which is empty on a 2 MB part |
+| `0x000000` | 256 KB | DFU bootloader (uses ~123 KB), on boards that ship one |
+| `0x040000` | 704 KB | Zeitlos gateware (960 KB from `0x000000` without DFU) |
+| `0x0F0000` | 64 KB | boot logo |
+| `0x100000` | 256 KB | kernel |
+| `0x140000` | to `0x200000` | core apps (the ZAR) |
 
-The Zeitlos image is 1303 KB of that 1792 KB. Rounded up to the next
-64 KB boundary the free tail starts at `0x190000` and runs to the end of
-the device: **448 KB, already 64 KB aligned, already addressable by
-BOOTADDR.**
+The logo, kernel and ZAR offsets are **absolute** and the same with or
+without a bootloader: the BIOS and `zar.h` read them from fixed addresses
+in the memory-mapped flash window, and one kernel binary runs on every
+ECP5 board. Only the gateware's start moves.
+
+The Zeitlos image is 1303 KB of the 1792 KB user partition, so today
+`0x190000` onward -- 448 KB -- is unused.
 
 ### What Zeitlos already has
 
-This is the part that changes the cost of everything below.
-
-`rtl/sysctl.v` already instantiates the primitive that the bootloader
-needs:
+`rtl/sysctl.v` instantiates the primitive a flash writer needs,
 
 ```verilog
 USRMCLK usrmclk0 (.USRMCLKI(CSPI_SCK), .USRMCLKTS(1'b0));
 ```
 
-and already drives `CSPI_SS_FLASH` (site `N8`, the same site as the
-bootloader's `flash_csel`), `CSPI_MOSI` and `CSPI_MISO` through
-`rtl/spiflashro.v`. That block is what serves the memory-mapped ROM
-window at `0x1000_0000` -- the one `sw/apps/mmod`'s **SRC ROM** setting
-reads for backups (`docs/mmod.md`).
-
-So **the pins, the primitive and an SPI master are all present and
-working.** What is missing is narrow: `spiflashro.v` issues read
-commands only, and PROGRAMN is not brought out.
+and drives `CSPI_SS_FLASH` (site `N8`, the bootloader's `flash_csel`),
+`CSPI_MOSI` and `CSPI_MISO`. Until step 2 that was `rtl/spiflashro.v`,
+which only read; it is now `rtl/spiflash.v`, which also erases and
+programs, never below `0x040000` (`docs/spiflash.md`).
 
 ---
 
-## 5. Proposed: a third slot, and a safe cycle
+## 5. The jumploader: the agreed design
 
-The goal is a gateware slot Zeitlos can write and boot into, from which a
-power cycle returns to Zeitlos.
+A **jumploader** is a tiny bitstream whose only job is to jump: it waits
+a moment, pulls PROGRAMN, and the FPGA loads whatever address the
+jumploader was packed with. Zeitlos is packed with the jumploader's
+address, so when Zeitlos pulls PROGRAMN, the jumploader runs, and the
+jumploader decides where the machine goes next. Changing the
+destination means writing a different jumploader -- **Zeitlos's own
+image is never rewritten to boot something else.**
+
+### Why not just patch Zeitlos's boot address
+
+It was measured (`zfpga pack -a`, three addresses, compared byte by
+byte). In an **uncompressed** bitstream BOOTADDR's eight bits sit at a
+fixed place -- one byte in each of four frames, each followed by its own
+CRC, 12 bytes within 1 KB. In a **compressed** one, which is how Zeitlos
+is packed, the frames are variable-length: changing the address changes
+3,514 bytes and the file's length. Patching in place would mean shipping
+Zeitlos uncompressed (~450 KB more), or packing it with a zfpga option
+ecppack does not have -- and, either way, rewriting a sector of the
+running system's own image.
 
 ### The layout
 
-| Range | Contents | BOOTADDR it carries |
+Everything that exists today stays where it is. The jumploader takes the
+top of a 2 MB flash, **at `0x1D0000` on every board**:
+
+| Offset | Contents | Room | Change |
+|---|---|---|---|
+| `0x000000` | DFU bootloader (optional) | 256 KB | write-protected, see section 7 |
+| `0x040000` | Zeitlos gateware | 704 KB | unchanged; packed with boot address `0x1D0000` |
+| `0x0F0000` | boot logo | 64 KB | unchanged |
+| `0x100000` | kernel | 256 KB | unchanged |
+| `0x140000` | core apps (ZAR) | 576 KB, to `0x1D0000` | limit only (was to `0x200000`) |
+| *(run time)* | user gateware | see below | new |
+| **`0x1D0000`** | **jumploader** | **192 KB** | **new** |
+
+**Why one address for every board.** A jumploader is an almost-empty
+bitstream, and its size is set by the die, not the design -- every frame
+costs at least a CRC and a few bits. Compressed, as measured by this
+tree's own tests:
+
+| Die | Jumploader | In the 192 KB from `0x1D0000` |
 |---|---|---|
-| `0x000000` | DFU bootloader | `USERPART_START` |
-| `USERPART_START` | Zeitlos | `GWPART_START` |
-| `GWPART_START` | user gateware | — (default 0) |
+| 12F / 25F (Lakritz, 2 MB) | ~99 KB | fits, 93 KB spare |
+| 45F (Mozart ML1, 2 MB) | ~162 KB | fits, 30 KB spare |
+| 85F (4 MB or more) | ~280 KB | runs past `0x200000` -- no 85F board has only 2 MB |
 
-One change to how Zeitlos is packed:
+One address means no per-board constant, no register to report it, and
+the code that writes jumploaders can be part of the one kernel and one
+set of apps every ECP5 board runs. A smaller jumploader (per-frame CRCs
+dropped; or a truncated bitstream, untested) would only leave the region
+with more slack. Nothing would move.
 
-```
-ecppack --compress --freq 2.4 --bootaddr $(GWPART_START) ...
-```
+**User gateware has no fixed slot.** It lives wherever there is room, and
+`zfpga boot` chooses at run time:
+
+- on a 2 MB module, between the ZAR's actual end (rounded up to 64 KB)
+  and `0x1D0000` -- about 296 KB today, shrinking as the apps grow; the
+  apps take room from user gateware, never the reverse;
+- on 4 MB and larger, above the jumploader's end, where it never meets
+  the apps at all.
+
+A blinky is ~99 KB on a 25F and ~162 KB on a 45F, so every standard
+board has room for at least one design.
 
 ### The cycle
 
 ```
-power on            -> 0x000000   bootloader
-  PROGRAMN (auto)   -> Zeitlos    (bootloader's BOOTADDR)
-  PROGRAMN (by zboot) -> gateware (Zeitlos's BOOTADDR)
-  PROGRAMN or power -> 0x000000   bootloader, then Zeitlos
+power on               -> 0x000000   DFU bootloader (or Zeitlos, without one)
+  PROGRAMN (bootloader) -> Zeitlos
+  PROGRAMN (Zeitlos)    -> 0x1D0000   jumploader
+  PROGRAMN (jumploader) -> its target:
+                             0x000000  the default jumploader: a reboot
+                             anywhere  a zfpga-made jumploader: user gateware
+  PROGRAMN or power     -> 0x000000   and back to Zeitlos
 ```
 
-**The generated gateware needs nothing at all.** Its BOOTADDR defaults
-to 0 and its multiboot flag is clear, so the next reconfiguration --
-whether from a reset button, from logic inside the design, or from a
-power cycle -- reads address 0, gets the bootloader, and is back in
-Zeitlos five seconds later.
+**The default jumploader points at 0**, so `reboot` is: make sure the
+default is in place, pull PROGRAMN. The release image carries it, built
+on the host by `zfpga` -- `reboot` never needs the 1.5 MB chip database
+on the card.
 
-That is the property worth designing around: **the failure mode of a bad
-generated bitstream is a power cycle.** A design that hangs, that fails
-its CRC, that never raises DONE, or that was simply wrong -- all of them
-recover the same way, with no cable and no host. Nothing a user builds
-can strand the machine, because nothing a user builds is at address 0.
+**Anything user gateware does ends at a power cycle.** A generated
+bitstream carries boot address 0 unless it is packed otherwise, so a
+reset, a hang, a failed CRC or a design that never raises DONE all come
+back the same way, with no cable and no host.
 
-### Where the slot goes
+### Chains: gateware that jumps on
 
-On a stock 2 MB Lakritz MMOD, `GWPART_START = 0x190000` uses the 448 KB
-tail of the user partition and needs no repartitioning. That is enough
-for a small design -- an almost-empty 25F compresses to roughly 80 KB,
-since a zero byte costs one bit -- and tight for a large one.
+Every bitstream carries its own next address, so gateware can jump to
+more gateware: jumploader -> gateware #1 (packed with `-a B`, and pulling
+PROGRAMN itself) -> gateware #2 at `B`. It is `ecpmulti`'s mechanism, and
+the bootloader-to-Zeitlos hop is the same thing. Two consequences: a
+design packed with an address sends its own resets there rather than to
+0 (a power cycle still returns to 0), and addresses must be 64 KB
+aligned and below 16 MB. `zfpga pack -a` already writes them.
 
-The better answer is a **larger MMOD**, which is the whole point of the
-socket. `boardinfo.vh` already computes `DATAPART` as whatever is left
-over, and on a 4 MB or larger module that becomes a real partition with a
-name `dfu-util` can see. BOOTADDR reaches 16 MB, which is also the
-largest capacity `docs/mmod.md`'s decoder recognises, so the ceiling is
-the same from both directions.
+Every image `zfpga boot` writes gets **256 bytes of `0xFF` in front**, as
+`ecpmulti` does, for Lattice's documented reason: SPI flash can return
+garbage at the start of a read.
+
+### Self-upgrade and restore
+
+The same writer can rewrite Zeitlos's own regions while it runs from
+RAM: an upgrade, or a restore from a backup on the card. With the
+bootloader write-protected, a power cut in the middle is recoverable
+over DFU from a host. **Without a bootloader** there is no such net --
+Zeitlos is at address 0, and a half-written image needs JTAG or an MMOD
+swap -- so self-upgrade should be offered only on boards that ship DFU.
+Any rewrite of the ZAR should also restore the default jumploader, so a
+stale one never points into what is now app data (and if one did, the
+result is a failed configuration and a power cycle, not a brick).
 
 ### What has to be built
 
-| | |
-|---|---|
-| **A writable flash controller** | Extend `rtl/spiflashro.v`, or a sibling block, with `WREN`, page program, sector erase and status polling. `usb_spiflash_bridge.v` in the bootloader does exactly this over the same pins -- but it is **Apache 2.0**, not this tree's licence (an earlier revision of this document said otherwise). Use it as a reference for the sequences, which come from the flash datasheet anyway, and write the extension in-house; see `docs/zfpga.md` §9.3. |
-| **A PROGRAMN output** | One pin, site `M8` on a Lakritz, currently unconstrained. Open-drain, the same `BB` instantiation the bootloader uses. Held tri-state except when booting. |
-| **A driver and an interlock** | `sw/common/zmmod.c` is the model and possibly the code: the command sequences are identical. The interlock is section 7. On the software side this is `zfpga boot` (write and verify the slot) and `zfpga reboot` (assert PROGRAMN), deliberately two commands -- see `docs/zfpga.md` §4.4. |
-| **`--bootaddr` in the Makefile** | Per board, matching the layout. Same keep-in-sync hazard the bootloader documents. |
+| Step | | Status |
+|---|---|---|
+| 1 | **PROGRAMN and `reboot`.** With Zeitlos's boot address still 0, PROGRAMN alone reboots. It proves the pin while the flash is untouched. | **built**, section 6; needs a hardware test |
+| 2 | **A writable flash controller**: `WREN`, page program, 4 KB sector erase, status polling, and the write lock of section 7 -- `rtl/spiflash.v`, replacing `spiflashro.v`, and `Z_SYS_FLASH` in the kernel. Written in-house; the bootloader's `usb_spiflash_bridge.v` is Apache 2.0. | **built**, `docs/spiflash.md`; simulated against a W25Q16 model; needs a hardware test (`flashtest`) |
+| 3 | **The layout**: `layout.py` learns the jumploader region and caps the ZAR at `0x1D0000`; Zeitlos is packed `--bootaddr 0x1D0000`; release images carry the default jumploader; `zfpga boot` writes gateware and jumploaders. | |
+| 4 | **Self-upgrade and restore**, on step 2's writer. | |
 
 ---
 
-## 6. Reboot, and a launcher, are worth having on their own
+## 6. Reboot (built)
 
-Bringing PROGRAMN out, with nothing else, gives Zeitlos a reboot: assert
-it, land at address 0, come back through the bootloader. No flash
-writing, no new partition, no change to how anything is packed.
+Bringing PROGRAMN out gives Zeitlos a reboot with no flash writing at
+all, and it is the first step because it exercises the risky half in
+isolation: a misrouted pin is a board that does not come back, and it is
+better found while the flash is untouched.
 
-That is useful independently of any of this -- it is a `reboot` command,
-and it is also the thing that makes the DFU bootloader reachable without
-a power cycle, which matters on a board in a case.
+**The pin.** `M8` on Lakritz, Obst and Mozart ML1, wired to PROGRAMN on
+each, as the DFU bootloader drives it. `rtl/boards.vh` defines
+`PROGRAMN_PIN` for exactly those three; `rtl/sysctl.v` then has an
+`inout PROGRAMN` port, driven open-drain through a `BB` -- a hard 0 when
+asked, tri-state otherwise, tri-state from power-on. Boards whose site
+has not been confirmed (Mozart ML2, Sergei, ULX3S) do not define it and
+build exactly as before.
 
-Add the flash write and the gateware slot, still with no packer and no
-synthesis, and the result is a **gateware launcher**: prebuilt
-bitstreams on the card -- the LiteX image Lakritz ships for Kakao Linux,
-a test image, anything self-contained -- written to the slot and booted
-from Zeitlos, with a power cycle to come back. That is arguably the most
-immediately useful outcome of everything in this document and
-`docs/zfpga.md` §1.1, and it needs none of the toolchain.
+**The register.** `rtl/socctl.v` word 6, `RECONFIG`, at `0x7000_0218`.
+Writing the key `0x5A52_4254` ("ZRBT") as one whole-word store pulls
+PROGRAMN; any other value, or a partial store, does nothing, so a stray
+write cannot reset the machine. It reads back `{ 0x5A52, 15'b0, avail }`,
+and on a board without the pin the request is forced off in hardware.
+`rtl/csrs.v`'s FEATURES2 bit 5 (`Z_FEATURE2_RECONFIG`) says whether this
+bitstream can do it (`docs/socctl.md`, `docs/csrs.md`).
 
-Reboot alone is a sensible first step because **it exercises the risky
-half in isolation.** If PROGRAMN is misrouted or the buffer is wrong, that is a
-board that does not come back, and finding out while the flash is
-untouched is considerably better than finding out during a write.
+**The syscall.** `Z_SYS_REBOOT`, appended to `syscalls.def`. The kernel
+(`k_reboot`) checks the feature bit and the register's signature, flushes
+every open write handle of every process (`k_fs_sync_all` -- safe here,
+in a syscall, unlike the interrupt-path cleanup of a killed process),
+writes the key, and -- if the FPGA is somehow still running half a second
+later -- says so and fails, rather than pretending. Apps call
+`z_reboot()`. **Kernel and apps must be rebuilt and flashed together**
+after this change, as after any change to `syscalls.def`.
+
+**The commands.** `reboot` in the kernel's serial shell and in `posix`.
+On a board without the pin, both say so and do nothing.
+
+### Testing it on a board
+
+1. Build and flash the new release (kernel, apps and gateware together).
+2. From `posix`, or the serial shell: `reboot`.
+3. Expect `reboot: N open files synced; reconfiguring` on the serial
+   console, the machine going dark, the DFU bootloader's five seconds,
+   and Zeitlos again. On a board flashed without a bootloader, Zeitlos
+   comes straight back.
+
+If instead it prints `PROGRAMN was asserted but the FPGA did not
+reconfigure`, the pin is not wired as `boards.vh` says -- please report
+which board.
 
 ---
 
@@ -256,37 +343,52 @@ untouched is considerably better than finding out during a write.
 
 ### The system is running out of the flash it would be writing
 
-Core applications (`wm`, `term`, `net`) live in flash and are read
-through the memory-mapped window (`docs/flash_apps.md`). NOR flash
-cannot be read while a program or erase is in progress on the device.
-
-So a write to the gateware slot must guarantee that **nothing touches
-the ROM window for its duration** -- no app launch from flash, no
-`mmod` ROM source, nothing. The kernel and running apps are in SDRAM and
-are fine; it is the flash-resident apps that are the hazard, and the
-window between "erase started" and "status says ready" is hundreds of
-milliseconds per sector.
+Core applications (`wm`, `term`, `net`) are read through the
+memory-mapped window (`docs/flash_apps.md`), and NOR flash cannot be read
+while a program or erase is in progress. So a write must guarantee that
+**nothing touches the ROM window for its duration** -- no app launch from
+flash, no `mmod` ROM source. The kernel and running apps are in SDRAM and
+are fine; the window between "erase started" and "status says ready" is
+hundreds of milliseconds per sector.
 
 `docs/filesystem.md`'s `k_no_preempt` deferral is capped at 64 ticks
 (~87 ms), so a sector erase cannot simply be held inside one. The shape
 that works is `sw/apps/mmod`'s: a chunked state machine, one sector per
 pass of the event loop, with a flag the flash-app loader honours.
 
-### Never write the boot partition
+### Never write the bootloader
 
-`docs/mmod.md`'s rule, and for the same reason it gives about chip
-select: there is no read-only failure mode. Overwriting the bootloader
-means the board does not enumerate, does not boot, and needs JTAG to
-recover. The write path should refuse any address below
-`USERPART_START` outright, as an interlock rather than a warning -- and
-arguably refuse anything outside `GWPART` entirely.
+`docs/mmod.md`'s rule: there is no read-only failure mode. Overwriting
+the bootloader means the board does not enumerate, does not boot, and
+needs JTAG.
+
+**Zeitlos's flash controller makes it impossible** (`docs/spiflash.md`):
+it knows only four command sequences, has no raw SPI path, and refuses
+any erase or program below `0x040000` before a pin moves. No software on
+Zeitlos -- no bug, no key, no stray pointer -- can get past that. It is
+the protection, and the flash chip's settings are not part of it.
+
+What it cannot cover is a *different bitstream*: user gateware booted
+through the jumploader has the flash pins to itself. The 2 MB MMODs
+carry W25Q16s, whose block-protect bits could guard the bottom 256 KB
+(TB = 1, BP = `011`, the bottom eighth), but they are **deliberately not
+used**:
+
+- they can be cleared again by software unless the chip's `/WP` pin is
+  held low, which a module socket does not do -- so they stop accidents,
+  not a design that means to write;
+- they would stop the DFU bootloader updating *itself*, which
+  `docs/dfu_upgrade.md` supports, unless the bootloader learned to clear
+  them first;
+- and user gateware only writes flash if someone wrote a flash writer
+  into it.
 
 ### The alignment is load-bearing twice
 
-BOOTADDR only carries `addr[23:16]`, so the slot start must be 64 KB
-aligned; and the number appears in the Makefile (as `--bootaddr`) and in
-the partition map (as where the writer puts bytes). The bootloader's
-`boardinfo.vh` already documents what happens when those disagree.
+BOOTADDR carries only `addr[23:16]`, so every target is 64 KB aligned;
+and the jumploader's address appears both where Zeitlos is packed
+(`--bootaddr`) and where the writer puts bytes. `layout.py` should check
+the two agree, as it checks the other four copies of the map.
 
 ---
 

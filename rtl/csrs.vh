@@ -340,4 +340,19 @@ localparam CSR_FEATURES2 =
 `ifdef USB_CDC
 	(32'h1 << 2) |
 `endif
+// rtl/socctl.v's RECONFIG can pull this board's PROGRAMN: the kernel's
+// reboot is real. Clear means the pin is not wired to anything this
+// design drives (or its site is not verified), and `reboot` says so
+// rather than writing a key nothing listens to. docs/zboot.md.
+`ifdef PROGRAMN_PIN
+	(32'h1 << 5) |
+`endif
+// The flash is writable: rtl/spiflash.v's registers at 0x1F00_0000 --
+// erase a 4 KB sector, program a page, never below 0x040000. It comes
+// with the memory-mapped flash (`MEM_ROM), which it replaced. Without
+// this bit, 0x1F00_0000 on an older bitstream is just flash offset 0,
+// aliased. docs/spiflash.md.
+`ifdef MEM_ROM
+	(32'h1 << 6) |
+`endif
 	32'h0;

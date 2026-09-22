@@ -9,7 +9,7 @@
 IVERILOG ?= iverilog
 VVP      ?= vvp
 
-.PHONY: all cycles clean
+.PHONY: all cycles spiflash clean
 
 all:
 	$(IVERILOG) -g2012 -o /tmp/tb_montmul tb_montmul.v ../montmul.v
@@ -19,5 +19,11 @@ cycles:
 	$(IVERILOG) -g2012 -o /tmp/tb_montmul_cycles tb_montmul_cycles.v ../montmul.v
 	$(VVP) /tmp/tb_montmul_cycles
 
+# rtl/spiflash.v against a behavioural W25Q16 (w25q16_model.v):
+# reads, erase, program, and every refusal. docs/spiflash.md.
+spiflash:
+	$(IVERILOG) -g2012 -o /tmp/tb_spiflash tb_spiflash.v w25q16_model.v ../spiflash.v
+	$(VVP) /tmp/tb_spiflash
+
 clean:
-	rm -f /tmp/tb_montmul /tmp/tb_montmul_cycles
+	rm -f /tmp/tb_montmul /tmp/tb_montmul_cycles /tmp/tb_spiflash

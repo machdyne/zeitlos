@@ -340,6 +340,12 @@ bool z_game_set_enabled(bool on, bool wrap) {
 
 }
 
+bool z_reboot(void) {
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_obj_t *rv = (z_obj_t *)z_kernel_ptr(Z_SYS_REBOOT, 0, 0);
+	return rv && rv->val.uint32 == Z_OK;
+}
+
 uint32_t z_getpid(void) {
 	z_obj_t obj = {0};
 	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);

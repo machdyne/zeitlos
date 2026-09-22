@@ -17,7 +17,7 @@ RTL_PICO = \
 	rtl/mem/qqspi.v \
 	rtl/mem/vram.v \
 	rtl/mem/glyph.v \
-	rtl/spiflashro.v \
+	rtl/spiflash.v \
 	rtl/uart_null.v \
 	rtl/ethmac_rmii.v \
 	rtl/gpio.v \

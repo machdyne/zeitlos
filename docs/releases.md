@@ -526,6 +526,13 @@ $ openFPGALoader -v -c dirtyJtag -f -o 0x100000 zeitlos-kernel.bin
 $ openFPGALoader -v -c dirtyJtag -f -o 0x140000 zeitlos-apps.zar
 ```
 
+**Planned** (`docs/zboot.md` section 5, not yet in `layout.py`): a
+*jumploader* at `0x1D0000` on every board -- a small bitstream Zeitlos
+jumps through to reboot or to boot other gateware. When it lands, the
+ZAR's room ends at `0x1D0000` (576 KB), Zeitlos is packed with boot
+address `0x1D0000`, and release images carry a default jumploader
+there. Nothing above changes offset.
+
 The offsets are the flash map above, and they are not a convention the
 release tool invented — `sw/bios/bios.c` reads the splash and the
 kernel from those addresses and `sw/os/zar.h` reads the archive from

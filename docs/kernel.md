@@ -237,7 +237,7 @@ So:
 
 | | |
 |---|---|
-| flash layout | kernel at `0x100000`, 256KB, core-app archive (`Z_ZAR_FLASH_OFFSET`) immediately after at `0x140000` |
+| flash layout | kernel at `0x100000`, 256KB, core-app archive (`Z_ZAR_FLASH_OFFSET`) immediately after at `0x140000`; the ZAR's room will end at `0x1D0000`, where the jumploader goes (`docs/zboot.md` section 5) |
 | the limit | `_end` must be under 256KB |
 | what spends it | text, data, **and every static array in the kernel** |
 | failure mode | the BIOS truncates; the kernel boots and then misbehaves |
@@ -513,3 +513,21 @@ Beyond the subsystem documents listed at the top:
 - `docs/icache.md` -- why instruction fetch dominates CPI here
 - `docs/sdcard.md` -- the SD path, and the bus behaviour a stalling
   peripheral has against the arbiter
+
+## Reboot
+
+`Z_SYS_REBOOT` (`k_reboot`, `z_reboot()` for apps; `reboot` in the
+serial shell and in `posix`) syncs every open write handle of every
+process, then reconfigures the FPGA through `rtl/socctl.v`'s RECONFIG
+register and the PROGRAMN pin. On a board whose gateware cannot pull
+PROGRAMN it fails and changes nothing. `docs/zboot.md` section 6.
+
+## Writing the flash
+
+`Z_SYS_FLASH` (`sw/os/flashapi.c`; apps use `sw/common/zflash.h`)
+erases and programs the configuration flash through `rtl/spiflash.v`:
+one process at a time holds a write session, released when it exits,
+and no core app is launched from flash while one is open. Nothing below
+`0x040000` can be written, which the controller enforces in hardware.
+The serial shell has `flash` (ID, size, lock, status) and `flashtest`
+(the on-board test). `docs/spiflash.md`.

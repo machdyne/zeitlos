@@ -5,6 +5,7 @@
  * Core apps in flash -- see zar.h for the design and the layout.
  */
 
+#include "flashapi.h"
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
@@ -103,6 +104,10 @@ int z_zar_exec_info(const char *name, z_exec_info_t *info) {
 
 	if (!info) return 1;
 
+	// Not while the flash is being written: the archive may be half
+	// rewritten. flashapi.c, docs/spiflash.md.
+	if (k_flash_session_active()) return 1;
+
 	int idx = zar_find(name);
 	if (idx < 0) return 1;
 
@@ -131,6 +136,7 @@ int z_zar_load_exec(uint32_t dst, const char *name,
 	const z_exec_info_t *info) {
 
 	if (!info) return 1;
+	if (k_flash_session_active()) return 1;     // see z_zar_exec_info()
 
 	int idx = zar_find(name);
 	if (idx < 0) return 1;

@@ -427,6 +427,16 @@ static void bi_touch(px_shell_t *sh, int argc, char **argv) {
     }
 }
 
+/* Reconfigure the FPGA: the kernel syncs every open file first
+ * (k_reboot, docs/zboot.md). Returns only if it could not. */
+static void bi_reboot(px_shell_t *sh, int argc, char **argv) {
+    (void)argc; (void)argv;
+    px_puts(sh, "rebooting...\n");
+    if (!z_reboot())
+        px_puts(sh, "reboot: this board's gateware cannot reconfigure the FPGA "
+                    "(no PROGRAMN pin; see docs/zboot.md)\n");
+}
+
 static void bi_clear(px_shell_t *sh, int argc, char **argv) {
     (void)argc; (void)argv;
     /* The terminal is a VT100 (docs/terminal.md): erase display, home
@@ -939,6 +949,7 @@ static const builtin_t builtins[] = {
     { "mv",    bi_mv,    "rename a file" },
     { "touch", bi_touch, "create a file if it does not exist" },
     { "clear", bi_clear, "clear the screen" },
+    { "reboot", bi_reboot, "reconfigure the FPGA, after syncing open files" },
     { "mkdir", bi_mkdir, "make directories" },
     { "wc",    bi_wc,    "count lines, words and characters" },
     { "head",  bi_head,  "first lines of a file  (head -5 f)" },

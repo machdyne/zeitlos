@@ -142,6 +142,24 @@
  *             `GPU this reads back all zeroes forever, which is
  *             correct: there is no scanout, so there are no frames.
  *
+ *   6  RECONFIG  write the key 32'h5A52_4254 ("ZRBT"), as a whole word,
+ *             to reconfigure the FPGA: the PROGRAMN pin is pulled low,
+ *             and the device reloads from the boot address in THIS
+ *             bitstream -- today 0, so it is a reboot (docs/zboot.md).
+ *             Any other value, or a partial-word write, is ignored: a
+ *             stray store must not be able to reset the machine. Once
+ *             written it stays asserted; the reconfiguration ends this
+ *             design anyway, and there is nothing to come back to.
+ *
+ *             Reads back as { 16'h5A52, 15'b0, avail }. `avail` is
+ *             RECONFIG_AVAIL, from rtl/boards.vh's `PROGRAMN_PIN via
+ *             rtl/sysctl.v: 1 only on a board whose PROGRAMN net is
+ *             wired to a pin this design drives. When it is clear the
+ *             request is FORCED low, the same way GAME's enable is.
+ *             The kernel checks rtl/csrs.v's FEATURES2 bit 5 first
+ *             (Z_FEATURE2_RECONFIG), so on a board without it `reboot`
+ *             says so instead of doing nothing.
+ *
  * Reset state is BUSY (cursor = Z), not idle.
  *
  * That is deliberate and is the honest default: from power-on until
@@ -168,6 +186,10 @@ module socctl_wb #(
     // both of those defines are visible; socctl gets a number, the
     // same arrangement VIDEO_MODE_RESET already uses.
     //
+    // 1 if this board's PROGRAMN is wired to a pin the design drives
+    // (rtl/boards.vh's `PROGRAMN_PIN). Set by rtl/sysctl.v, like
+    // GAME_AVAIL; see the RECONFIG register above.
+    parameter RECONFIG_AVAIL = 0,
     // Defaults to 0 -- a socctl instantiated without being told
     // anything reports no game mode, which is the safe answer.
     parameter GAME_AVAIL = 1'b0
@@ -238,7 +260,12 @@ module socctl_wb #(
     // `GPU, which is the honest answer -- no scanout, no frames --
     // rather than a stuck counter software might wait on forever.
     input  wire [15:0] frame_ctr,
-    input  wire        in_vblank
+    input  wire        in_vblank,
+    // -- reconfiguration -> rtl/sysctl.v's PROGRAMN pin --
+    //
+    // 1: pull PROGRAMN low. Never 1 on a board without the pin (see
+    // RECONFIG_AVAIL), and never 1 out of reset.
+    output wire        reconfig
 );
 
     localparam MAGIC = 32'h5A43_5452;   // "ZCTR"
@@ -251,6 +278,10 @@ module socctl_wb #(
     // top half of the GAME register -- "ZG". Same purpose as
     // VIDEO_SIG directly above; see this file's header comment.
     localparam GAME_SIG = 16'h5A47;
+    // RECONFIG: the key a write must carry, and the readback signature
+    // ("ZR"). A 32-bit key rather than a bit: see the header.
+    localparam [31:0] RECONFIG_KEY = 32'h5A52_4254;
+    localparam RECONFIG_SIG = 16'h5A52;
 
     reg [31:0] ctrl;
     reg [1:0] video;
@@ -260,8 +291,10 @@ module socctl_wb #(
     reg [9:0] vx;
     reg [9:0] vy;
     reg vload;
+    reg recfg;
 
     assign cursor_busy = ctrl[0];
+    assign reconfig = recfg && (RECONFIG_AVAIL != 0);
     assign video_mode = video;
 
     // FORCED low, not merely ignored, on a bitstream without game
@@ -311,6 +344,7 @@ module socctl_wb #(
             vx <= 10'd0;
             vy <= 10'd0;
             vload <= 1'b0;
+            recfg <= 1'b0;
 
             wb_ack_o <= 1'b0;
             wb_dat_o <= 32'h0000_0000;
@@ -381,6 +415,9 @@ module socctl_wb #(
                         if (wb_sel_i[2] || wb_sel_i[3]) vy <= vy_wr;
                         vload <= ~vload;
                     end
+                    // The whole key, in one whole-word store, or nothing.
+                    if (wb_adr_i == 32'd6 && wb_sel_i == 4'b1111 && wb_dat_i == RECONFIG_KEY)
+                        recfg <= 1'b1;
 
                 end else begin
 
@@ -397,6 +434,7 @@ module socctl_wb #(
                                              (GAME_AVAIL != 0), wrap, game_en };
                         32'd4: wb_dat_o <= { 6'b0, vy, 6'b0, vx };
                         32'd5: wb_dat_o <= { 15'b0, in_vblank, frame_ctr };
+                        32'd6: wb_dat_o <= { RECONFIG_SIG, 15'b0, (RECONFIG_AVAIL != 0) };
                         default: wb_dat_o <= 32'h0000_0000;
                     endcase
 

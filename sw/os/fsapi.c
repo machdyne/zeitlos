@@ -242,6 +242,32 @@ void k_fs_release_all(uint32_t pid) {
 
 }
 
+/*
+ * Flush every open WRITE handle, of every process, to the card: the
+ * first half of a reboot (k_reboot() in kernel.c). Unlike
+ * k_fs_release_all() above this runs in a syscall, where disk I/O is
+ * what syscalls do, so the flush is safe here. Handles stay open --
+ * the machine is about to reconfigure, and if it does not (the error
+ * path), their owners carry on with nothing lost.
+ */
+int k_fs_sync_all(void) {
+
+	int n = 0;
+
+	for (int i = 0; i < Z_FS_MAX_OPEN; i++) {
+
+		if (!z_fs_handles[i].used) continue;
+		if (!(z_fs_handles[i].fil.flag & FA_WRITE)) continue;
+
+		f_sync(&z_fs_handles[i].fil);
+		n++;
+
+	}
+
+	return n;
+
+}
+
 int k_fs_open_count(void) {
 
 	int n = 0;

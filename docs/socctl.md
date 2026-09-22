@@ -41,6 +41,7 @@ Word-addressed, matching every other simple slave in this codebase.
 | `0x7000_0200` | CTRL | bit 0: cursor shape. 0 = normal (X), 1 = busy (Z). **Resets to 1.** Bits 31:1 reserved, write 0. |
 | `0x7000_0204` | MAGIC | fixed `0x5A43_5452` (`"ZCTR"`) |
 | `0x7000_0208` | VIDEO | bits 1:0: virtual phosphor mode. Reads back as `{0x5643, 14'b0, mode}`. Reset value comes from the board's `GPU_*` defines. |
+| `0x7000_0218` | RECONFIG | write the key `0x5A52_4254` (`"ZRBT"`), as one whole-word store, to pull PROGRAMN and reconfigure the FPGA -- reboot. Any other value or a partial store is ignored. Reads back as `{0x5A52, 15'b0, avail}`; `avail` is set only on boards defining `PROGRAMN_PIN`, and the request is forced off in hardware elsewhere. Software uses `z_reboot()`, which syncs open files first -- see `docs/zboot.md` section 6. |
 
 MAGIC exists for the same reason `csrs.v` has one: reading an address
 nothing decodes does **not** fault on this bus, so a known constant is

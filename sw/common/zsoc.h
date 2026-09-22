@@ -335,6 +335,47 @@
 // with two would silently program a slot that is not there.
 #define Z_FEATURE2_USB_HOST   (1u << 4)
 
+// rtl/socctl.v's RECONFIG register can pull this board's PROGRAMN, so
+// the FPGA can be reconfigured -- rebooted -- from software. KEEP IN
+// SYNC with rtl/csrs.vh's FEATURES2 bit 5 (`PROGRAMN_PIN). z_reboot()
+// (zeitlos.h) checks it; docs/zboot.md.
+#define Z_FEATURE2_RECONFIG   (1u << 5)
+
+// The flash is writable: rtl/spiflash.v's registers at 0x1F00_0000.
+// KEEP IN SYNC with rtl/csrs.vh's FEATURES2 bit 6 (`MEM_ROM). Without
+// it, 0x1F00_0000 on an older bitstream is flash offset 0, aliased --
+// so check this before touching the registers. docs/spiflash.md.
+#define Z_FEATURE2_FLASHW     (1u << 6)
+
+// -- the flash controller's registers (rtl/spiflash.v) --
+//
+// The kernel owns these: apps go through Z_SYS_FLASH (zflash.h), which
+// adds the one-writer session and keeps flash apps from launching
+// while their archive may be half-written.
+#define Z_SPIFLASH_BASE       0x1F000000u
+#define Z_SPIFLASH_MAGIC      0x00u      // 0x5A464C53, "ZFLS"
+#define Z_SPIFLASH_STATUS     0x04u
+#define Z_SPIFLASH_ID         0x08u      // JEDEC ID; valid once not busy
+#define Z_SPIFLASH_LOCK       0x0Cu      // end of the locked region
+#define Z_SPIFLASH_ADDR       0x10u
+#define Z_SPIFLASH_ARM        0x14u
+#define Z_SPIFLASH_CMD        0x18u
+#define Z_SPIFLASH_LEN        0x1Cu
+#define Z_SPIFLASH_BUF        0x100u     // 256 bytes, write-only
+#define Z_SPIFLASH_MAGIC_VAL  0x5A464C53u
+#define Z_SPIFLASH_ARM_KEY    0x5A465752u  // "ZFWR"
+#define Z_SPIFLASH_CMD_ERASE  1u         // the 4 KB sector containing ADDR
+#define Z_SPIFLASH_CMD_PROG   2u         // LEN bytes from the buffer at ADDR
+#define Z_SPIFLASH_CMD_ID     3u
+// STATUS bits
+#define Z_SPIFLASH_BUSY       (1u << 0)
+#define Z_SPIFLASH_DONE       (1u << 1)
+#define Z_SPIFLASH_E_LOCKED   (1u << 2)  // refused: in the locked region
+#define Z_SPIFLASH_E_UNARMED  (1u << 3)  // refused: not armed
+#define Z_SPIFLASH_E_LEN      (1u << 4)  // refused: crosses a page, or LEN
+#define Z_SPIFLASH_E_BUSY     (1u << 5)  // refused: an operation was running
+#define Z_SPIFLASH_ERRORS     (0xFu << 2)
+
 // Register map, word offsets from the base. See rtl/montmul.v.
 #define Z_MONTMUL_BASE        0x70000600u
 #define Z_MONTMUL_MAGIC       0x5A4D4F4Eu   // "ZMON"
@@ -551,6 +592,12 @@ static inline bool z_soc_feature_confirmed_absent(uint32_t feature) {
 #define reg_socctl_magic (*(volatile uint32_t*)0x70000204)
 #define reg_socctl_video (*(volatile uint32_t*)0x70000208)
 #define reg_socctl_game  (*(volatile uint32_t*)0x7000020c)
+// RECONFIG (word 6): the whole-word key reconfigures the FPGA; reads
+// back { 0x5A52, 15'b0, avail }. The kernel's reboot writes it, after
+// syncing open files -- apps call z_reboot(), never this directly.
+#define reg_socctl_reconfig (*(volatile uint32_t*)0x70000218)
+#define Z_SOCCTL_RECONFIG_KEY 0x5A524254u      /* "ZRBT" */
+#define Z_SOCCTL_RECONFIG_SIG 0x5A52u
 #define reg_socctl_view  (*(volatile uint32_t*)0x70000210)
 #define reg_socctl_frame (*(volatile uint32_t*)0x70000214)
 

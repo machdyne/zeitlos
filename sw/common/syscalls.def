@@ -203,3 +203,16 @@ Z_MKSYSCALL(WM_WAKE, k_wm_wake)
 Z_MKSYSCALL(USBCDC_PRESENT, k_usbcdc_present)
 Z_MKSYSCALL(USBCDC_READ, k_usbcdc_read)
 Z_MKSYSCALL(USBCDC_WRITE, k_usbcdc_write)
+
+// Reconfigure the FPGA -- reboot -- after syncing every open file:
+// rtl/socctl.v's RECONFIG register, k_reboot() in sw/os/kernel.c,
+// docs/zboot.md. Fails, and changes nothing, on a board whose gateware
+// cannot pull PROGRAMN (FEATURES2 bit 5 clear). Appended last so no
+// earlier enum value shifts.
+Z_MKSYSCALL(REBOOT, k_reboot)
+
+// Erase and program the flash, through the kernel: one session at a
+// time, never below 0x040000 (enforced in rtl/spiflash.v). An op field
+// rather than six syscalls; see sw/common/zflash.h, sw/os/flashapi.c,
+// docs/spiflash.md. Appended last so no earlier enum value shifts.
+Z_MKSYSCALL(FLASH, k_flash)

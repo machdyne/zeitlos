@@ -15,6 +15,7 @@
 #include "../common/zstream.h"
 #include "../common/zdns.h"
 #include "kernel.h"
+#include "flashapi.h"
 #include "usb/usbh.h"
 #include "usb/usbh_cdc.h"
 #include "uart.h"
@@ -86,6 +87,8 @@ static int parse_uint(const char *s, int base, uint32_t *out) {
 }
 
 void sh_help(void);
+static void sh_flash_info(void);
+static void sh_flashtest(void);
 static void sh_bench(void);
 void hex_dump(uint32_t addr);
 uint32_t xfer_recv(uint32_t addr_ptr);
@@ -467,6 +470,26 @@ void sh(void) {
 
 		// HELP
 		if (!strncmp(buffer, "help", cmdlen)) sh_help();
+
+		// FLASH: rtl/spiflash.v's identity and state, docs/spiflash.md
+		// (strncmp against cmdlen, like every command here: cmdlen is
+		// 255 when there are no arguments, so a length test never
+		// matches a bare command)
+		else if (!strncmp(buffer, "flash", cmdlen)) {
+			sh_flash_info();
+		}
+
+		// FLASHTEST: the on-board test of writing the flash
+		else if (!strncmp(buffer, "flashtest", cmdlen)) {
+			sh_flashtest();
+		}
+
+		// REBOOT: rtl/socctl.v's RECONFIG, docs/zboot.md
+		else if (!strncmp(buffer, "reboot", cmdlen)) {
+			k_reboot(NULL);
+			printf("reboot: this board's gateware cannot reconfigure the FPGA "
+				"(no PROGRAMN pin; see docs/zboot.md)\n");
+		}
 
 		// HEX DUMP
 		else if (!strncmp(buffer, "hd", cmdlen)) {
@@ -2019,6 +2042,9 @@ void sh_help(void) {
 
 	printf("commands:\n");
 	printf(" hd <addr>         hex dump memory\n");
+	printf(" reboot            reconfigure the FPGA, after syncing files\n");
+	printf(" flash             the flash: ID, size, lock, status\n");
+	printf(" flashtest         test erase/program on sector 0x1FF000\n");
 	printf(" probe             dump logic analyser capture "
 		"(needs -DPROBE)\n");
 	printf(" usbmount          mount usb storage at /usb\n");
@@ -2081,4 +2107,117 @@ void sh_help(void) {
 	printf(" usbbench [file]   the same for usb storage (docs/usb_host.md)\n");
 #endif
 
+}
+
+// -- the flash: `flash` and `flashtest` (docs/spiflash.md) ---------------
+
+static void sh_flash_info(void) {
+	if (!k_flash_present()) {
+		printf("flash: not writable on this bitstream (FEATURES2 bit 6 clear)\n");
+		return;
+	}
+	uint32_t st, n = 0;
+	while (((st = k_flash_hw_status()) & Z_SPIFLASH_BUSY) && n < 3000000u) n++;
+	uint32_t id = *(volatile uint32_t *)(Z_SPIFLASH_BASE + Z_SPIFLASH_ID);
+	uint32_t cap = id & 0xFF;
+	printf("flash: JEDEC %02lx %02lx %02lx", (unsigned long)((id >> 16) & 0xFF),
+		(unsigned long)((id >> 8) & 0xFF), (unsigned long)cap);
+	if (cap >= 16 && cap <= 28) printf(", %lu KB", (unsigned long)((1ul << cap) / 1024));
+	printf("\n       locked below 0x%06lx; status %08lx%s\n",
+		(unsigned long)*(volatile uint32_t *)(Z_SPIFLASH_BASE + Z_SPIFLASH_LOCK),
+		(unsigned long)st, k_flash_session_active() ? "; a write session is open" : "");
+}
+
+#define FT_SECTOR 0x1FF000u      /* the last 4 KB of the first 2 MB: free on every board */
+#define FT_SIG    "ZFLASHTEST"
+
+static volatile const uint8_t *ft_win(uint32_t off) {
+	return (volatile const uint8_t *)(0x10000000u + off);
+}
+
+static uint8_t ft_byte(uint32_t i) {
+	return (uint8_t)(i * 37u + 11u);
+}
+
+// Bounded: a 4 KB erase is 400 ms at worst, and a controller that never
+// clears busy is what this test exists to report, not to hang on.
+static int ft_wait(uint32_t *ticks) {
+	uint32_t t0 = z_kernel_ticks, st, n = 0;
+	while (((st = k_flash_hw_status()) & Z_SPIFLASH_BUSY) && n < 3000000u) n++;
+	if (ticks) *ticks = z_kernel_ticks - t0;
+	if (st & Z_SPIFLASH_BUSY) {
+		printf("  (the controller still reports busy: status %08lx)\n", (unsigned long)st);
+		return -2;
+	}
+	return (st & Z_SPIFLASH_DONE) ? 0 : -1;
+}
+
+static void sh_flashtest(void) {
+	int fails = 0;
+	uint32_t i, st, ticks;
+	static uint8_t page[256];
+	#define FT(ok, what) do { if (ok) printf("  ok   %s\n", what); \
+		else { printf("  FAIL %s\n", what); fails++; } } while (0)
+
+	if (!k_flash_present()) {
+		printf("flashtest: the flash is not writable on this bitstream\n");
+		return;
+	}
+	ft_wait(NULL);
+
+	// Only a blank sector, or one this test wrote, is erased.
+	bool blank = true, ours = true;
+	for (i = 0; i < 4096; i++) if (ft_win(FT_SECTOR)[i] != 0xFF) { blank = false; break; }
+	for (i = 0; i < sizeof(FT_SIG) - 1; i++) if (ft_win(FT_SECTOR)[i] != (uint8_t)FT_SIG[i]) ours = false;
+	if (!blank && !ours) {
+		printf("flashtest: sector 0x%06lx holds data this test did not write; "
+			"not touching it\n", (unsigned long)FT_SECTOR);
+		return;
+	}
+	if (!k_flash_begin(K_FLASH_KERNEL)) {
+		printf("flashtest: another program has a flash write session open\n");
+		return;
+	}
+	printf("flashtest: sector 0x%06lx (%s)\n", (unsigned long)FT_SECTOR,
+		blank ? "blank" : "from an earlier run");
+
+	// 1. refusals, from the controller itself: nothing reaches the flash
+	*(volatile uint32_t *)(Z_SPIFLASH_BASE + Z_SPIFLASH_ADDR) = FT_SECTOR;
+	*(volatile uint32_t *)(Z_SPIFLASH_BASE + Z_SPIFLASH_ARM) = 0;        // disarm
+	*(volatile uint32_t *)(Z_SPIFLASH_BASE + Z_SPIFLASH_CMD) = Z_SPIFLASH_CMD_ERASE;
+	st = k_flash_hw_status();
+	FT((st & Z_SPIFLASH_E_UNARMED) && !(st & Z_SPIFLASH_BUSY), "an unarmed erase is refused");
+	FT(k_flash_hw_erase(0x000000) == Z_SPIFLASH_E_LOCKED, "erasing sector 0 (the bootloader) is refused");
+	FT(k_flash_hw_erase(0x03F000) == Z_SPIFLASH_E_LOCKED, "erasing 0x03F000 (the lock's last sector) is refused");
+	for (i = 0; i < 16; i++) page[i] = 0;
+	FT(k_flash_hw_program(0x03FF00, page, 16) == Z_SPIFLASH_E_LOCKED, "programming 0x03FF00 is refused");
+
+	// 2. erase
+	FT(k_flash_hw_erase(FT_SECTOR) == 0, "erase started");
+	FT(ft_wait(&ticks) == 0, "erase done");
+	printf("       (%lu ms)\n", (unsigned long)(ticks * 1000u / 732u));
+	blank = true;
+	for (i = 0; i < 4096; i++) if (ft_win(FT_SECTOR)[i] != 0xFF) { blank = false; break; }
+	FT(blank, "the sector reads blank");
+
+	// 3. a whole page, signed, then an odd, unaligned run
+	for (i = 0; i < 256; i++) page[i] = ft_byte(i);
+	for (i = 0; i < sizeof(FT_SIG) - 1; i++) page[i] = (uint8_t)FT_SIG[i];
+	FT(k_flash_hw_program(FT_SECTOR, page, 256) == 0, "program 256 bytes started");
+	FT(ft_wait(NULL) == 0, "program done");
+	bool same = true;
+	for (i = 0; i < 256; i++) if (ft_win(FT_SECTOR)[i] != page[i]) { same = false; break; }
+	FT(same, "256 bytes read back through the window");
+
+	for (i = 0; i < 13; i++) page[i] = ft_byte(1000 + i);
+	FT(k_flash_hw_program(FT_SECTOR + 0x105, page, 13) == 0, "program 13 bytes at +0x105 started");
+	FT(ft_wait(NULL) == 0, "program done");
+	same = true;
+	for (i = 0; i < 13; i++) if (ft_win(FT_SECTOR + 0x105)[i] != page[i]) same = false;
+	if (ft_win(FT_SECTOR + 0x104)[0] != 0xFF || ft_win(FT_SECTOR + 0x112)[0] != 0xFF) same = false;
+	FT(same, "13 bytes read back, and their neighbours untouched");
+
+	k_flash_end(K_FLASH_KERNEL);
+	printf("flashtest: %s\n", fails ? "FAILED -- please report the lines above" : "passed");
+	#undef FT
 }

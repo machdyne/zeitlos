@@ -124,6 +124,8 @@ Same idea as `FEATURES`, one word along. Assigned in `rtl/csrs.vh`'s
 |---|---|---|
 | 0 | `GPIO` | `rtl/gpio.v` with at least one port that has pins -- see `docs/gpio.md` |
 | 1 | `UART1` | a second 16550 that is available to software -- see `docs/uart1.md` |
+| 6 | `FLASHW` | the flash is writable: `rtl/spiflash.v`'s registers at `0x1F00_0000` (with `MEM_ROM`). Without it, `0x1F00_0000` is flash offset 0, aliased -- see `docs/spiflash.md` |
+| 5 | `RECONFIG` | `rtl/socctl.v`'s RECONFIG can pull this board's PROGRAMN, so `reboot` works (`PROGRAMN_PIN` in `rtl/boards.vh`: Lakritz, Obst, Mozart ML1) -- see `docs/zboot.md` section 6 |
 
 Only sixteen bits are carried, because the top half is a signature.
 When these fill, `FEATURES3` goes at word 4 with the same shape; words

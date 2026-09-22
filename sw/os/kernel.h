@@ -380,15 +380,14 @@ static inline uint32_t z_proc_stack_size_for(const char *name) {
 	// Same 8MB-and-up consequence as the two below: on a 1MB board
 	// this cannot succeed and should not, since the smallest useful
 	// pack is 1.3MB on the card.
-    // `zfpga` holds its chip database resident (1.5MB for a 25F, the
-    // whole file, because lookups are random-access) plus the
-    // configuration memory it builds (560KB for a 25F, 1.9MB for an
-    // 85F). BIG's 1MB cannot hold the database alone. See
-    // docs/zfpga.md sec. 11.5. (Space-indented: LLM-written, per the
-    // README, until audited.)
-    if (!strcmp(name, "zcc") || !strcmp(name, "posix") ||
-            !strcmp(name, "zfpga"))
-        return Z_PROC_STACK_SIZE_HUGE;
+	// `zfpga` holds its chip database resident (1.5MB for a 25F, the
+	// whole file, because lookups are random-access) plus the
+	// configuration memory it builds (560KB for a 25F, 1.9MB for an
+	// 85F). BIG's 1MB cannot hold the database alone. See
+	// docs/zfpga.md sec. 11.5.
+	if (!strcmp(name, "zcc") || !strcmp(name, "posix") ||
+			!strcmp(name, "zfpga"))
+		return Z_PROC_STACK_SIZE_HUGE;
 	// `ask` holds NOTHING resident with the pack it ships
 	// (`dense = no`, tools/ask): no vectors and no encoder, so the
 	// term dictionary is binary-searched on the card and postings are
@@ -499,5 +498,10 @@ static inline uint32_t maskirq(uint32_t new_mask) {
 // --
 
 z_obj_t *z_exit(z_obj_t *obj);
+
+// Z_SYS_REBOOT's handler, also called by the kernel shell: sync every
+// open file, then reconfigure the FPGA. Returns only on failure.
+// sw/os/kernel.c, docs/zboot.md.
+z_obj_t *k_reboot(z_obj_t *args);
 
 #endif

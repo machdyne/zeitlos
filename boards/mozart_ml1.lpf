@@ -176,3 +176,9 @@ IOBUF PORT "DDMI_D1_P" DRIVE=4;
 LOCATE COMP "DDMI_D2_P" SITE "B10";
 IOBUF PORT "DDMI_D2_P" IO_TYPE=LVCMOS33D;
 IOBUF PORT "DDMI_D2_P" DRIVE=4;
+
+# PROGRAMN, routed back to a user pin: rtl/sysctl.v pulls it low (open
+# drain) to reconfigure the FPGA -- `reboot`, docs/zboot.md. M8 is
+# wired to PROGRAMN on this module.
+LOCATE COMP "PROGRAMN" SITE "M8";
+IOBUF PORT "PROGRAMN" IO_TYPE=LVCMOS33;

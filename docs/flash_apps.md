@@ -43,7 +43,12 @@ part of `make flash`.
 0x100F0000   boot splash
 0x10100000   kernel, 256KB
 0x10140000   core apps  <-- this
+0x1F000000   the flash controller's registers (docs/spiflash.md)
 ```
+
+While any program holds a flash **write** session (`docs/spiflash.md`),
+core apps are not launched: `zar.c` refuses, because the archive may be
+half-rewritten. Apps already running are in SDRAM and are unaffected.
 
 The archive format is deliberately minimal:
 

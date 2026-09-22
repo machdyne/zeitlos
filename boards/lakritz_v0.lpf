@@ -290,3 +290,10 @@ IOBUF PORT "AUDIO_R" IO_TYPE=LVCMOS33;
 #IOBUF PORT "COMP_DAC[2]" IO_TYPE=LVCMOS33;
 #LOCATE COMP "COMP_DAC[3]" SITE "N4";
 #IOBUF PORT "COMP_DAC[3]" IO_TYPE=LVCMOS33;
+
+# PROGRAMN, routed back to a user pin: rtl/sysctl.v pulls it low (open
+# drain) to reconfigure the FPGA -- `reboot`, docs/zboot.md. M8 is
+# wired to PROGRAMN on this board; the DFU bootloader drives the same
+# site (tinydfu-bootloader, boards/*/ resetn).
+LOCATE COMP "PROGRAMN" SITE "M8";
+IOBUF PORT "PROGRAMN" IO_TYPE=LVCMOS33;

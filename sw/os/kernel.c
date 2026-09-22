@@ -26,6 +26,7 @@
 #include "fs/fs.h"
 #include "fsapi.h"
 #include "procapi.h"
+#include "flashapi.h"	// k_flash, referenced by the syscall table
 #include "usbcdcapi.h"	// k_usbcdc_*, referenced by the syscall table	// k_proc_list(), referenced by the syscall
 						// table built from syscalls.def below
 #include "../common/zsoc.h"
@@ -55,6 +56,7 @@
 z_obj_t *z_uptime(z_obj_t *args);	// defined below; forward-declared
 									// since syscalls.def (included next)
 									// needs it visible for the table
+z_obj_t *k_reboot(z_obj_t *args);	// Z_SYS_REBOOT: see its definition
 z_obj_t *k_getpid(z_obj_t *args);	// same reasoning -- named k_getpid,
 									// not z_getpid, since zeitlos.h
 									// (pulled in above) already
@@ -227,6 +229,34 @@ z_obj_t *z_uptime(z_obj_t *args) {
 	args->type = Z_UINT32;
 	args->val.uint32 = z_kernel_ticks;
 	return (&z_ok);
+}
+
+// Z_SYS_REBOOT: reconfigure the FPGA. docs/zboot.md.
+//
+// Syncs every open write handle first (k_fs_sync_all), then writes
+// rtl/socctl.v's RECONFIG key, which pulls PROGRAMN low. The FPGA
+// reloads from the boot address in the running bitstream -- 0 today,
+// so this is a reboot through the DFU bootloader, or straight back
+// into Zeitlos on a board without one.
+//
+// Fails, having changed nothing, where the gateware cannot pull
+// PROGRAMN (FEATURES2 bit 5, `PROGRAMN_PIN in rtl/boards.vh). If it
+// is still running well after the write, the pin is not wired the way
+// the build said: that is reported rather than pretended away.
+z_obj_t *k_reboot(z_obj_t *args) {
+	(void)args;
+	if (!z_soc_has_feature2(Z_FEATURE2_RECONFIG) ||
+			((reg_socctl_reconfig >> 16) & 0xffffu) != Z_SOCCTL_RECONFIG_SIG)
+		return &z_fail;
+	int n = k_fs_sync_all();
+	printf("reboot: %d open file%s synced; reconfiguring\n", n, n == 1 ? "" : "s");
+	// let the console line leave before the FPGA does
+	for (volatile uint32_t d = 0; d < 200000; d++) ;
+	reg_socctl_reconfig = Z_SOCCTL_RECONFIG_KEY;
+	// PROGRAMN reconfigures within microseconds; this is ~0.5 s
+	for (volatile uint32_t d = 0; d < 5000000; d++) ;
+	printf("reboot: PROGRAMN was asserted but the FPGA did not reconfigure\n");
+	return &z_fail;
 }
 
 // returns the CALLING process's own pid. z_pid correctly identifies
@@ -913,6 +943,8 @@ static uint32_t *k_sched_switch(uint32_t *regs) {
 		// KNOWN LIMITATION note in sw/common/zfs.h that this
 		// closes.
 		k_fs_release_all(z_pid);
+		// and its flash session, if it held one (flashapi.c)
+		k_flash_release_pid(z_pid);
 		z_procs[z_pid].base = 0x00000000;
 		z_procs[z_pid].flags = 0x00000000;
 		goto next_process;

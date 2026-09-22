@@ -408,6 +408,13 @@ module sysctl #()
 	inout [1:0] usb_host_dm,
 `endif
 
+`ifdef PROGRAMN_PIN
+   // The FPGA's own PROGRAMN, routed back to a user pin: pulled low
+   // (open drain) to reconfigure. rtl/socctl.v's RECONFIG register,
+   // docs/zboot.md.
+   inout PROGRAMN,
+`endif
+
 `ifdef MEM_ROM
    output CSPI_SS_FLASH,
    input CSPI_MISO,
@@ -2038,7 +2045,10 @@ module sysctl #()
 	USRMCLK usrmclk0 (.USRMCLKI(CSPI_SCK), .USRMCLKTS(1'b0));
 `endif
 
-	spiflashro_wb #() wbs_rom0_i
+	// The flash: read through the window at 0x1000_0000, erased and
+	// programmed through the registers at 0x1F00_0000, never below
+	// 0x040000 (the DFU bootloader). rtl/spiflash.v, docs/spiflash.md.
+	spiflash_wb #() wbs_rom0_i
 	(
 		.wb_clk_i(wbm_clk),
 		.wb_rst_i(wbm_rst),
@@ -2609,9 +2619,26 @@ module sysctl #()
 	assign gpu_in_vblank = 1'b0;
 `endif
 
+	// -- reconfiguration: PROGRAMN (docs/zboot.md) --
+	//
+	// Open drain, exactly as the DFU bootloader drives the same net
+	// (tinydfu_lakritz.v): a hard 0 when asked, tri-state otherwise, so
+	// nothing here can hold the pin high against the board's pull-up or
+	// a button. From power-on until software writes the key, the buffer
+	// is tri-stated.
+	wire socctl_reconfig;
+`ifdef PROGRAMN_PIN
+	BB programn_bb (.I(1'b0), .T(~socctl_reconfig), .O(), .B(PROGRAMN));
+`endif
+
 	socctl_wb #(
 		.VIDEO_MODE_RESET(VIDEO_MODE_DEFAULT),
-		.GAME_AVAIL(GAME_AVAILABLE)
+		.GAME_AVAIL(GAME_AVAILABLE),
+`ifdef PROGRAMN_PIN
+		.RECONFIG_AVAIL(1)
+`else
+		.RECONFIG_AVAIL(0)
+`endif
 	) socctl_i (
 		.wb_clk_i(wbm_clk),
 		.wb_rst_i(wbm_rst),
@@ -2640,6 +2667,7 @@ module sysctl #()
 		.wb_ack_o(wbs_socctl_ack_o),
 		.wb_cyc_i(wbm_cyc_socctl),
 		.cursor_busy(socctl_cursor_busy),
+		.reconfig(socctl_reconfig),
 		.video_mode(socctl_video_mode),
 		.view_load(socctl_view_load),
 		.game_en(socctl_game_en),

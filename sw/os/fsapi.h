@@ -133,6 +133,7 @@ z_obj_t *k_fs_list(z_obj_t *args);
 void k_fs_release_all(uint32_t pid);
 
 int k_fs_open_count(void);
+int k_fs_sync_all(void);    // flush every open write handle; reboot's first half
 
 // chunked file I/O -- see zfs.h's own comment for the full design
 // writeup (why a kernel-side handle table, ownership-by-pid, the

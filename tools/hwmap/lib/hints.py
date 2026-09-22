@@ -47,7 +47,7 @@ MODULES = {
     "sdram_wb":        dict(name="SDRAM", cat="mem"),
     "qqspi_wb":        dict(name="PSRAM", cat="mem"),
     "vram_wb":         dict(name="VRAM", cat="mem"),
-    "spiflashro_wb":   dict(name="SPI flash", cat="mem", doc="flash_apps"),
+    "spiflash_wb":     dict(name="SPI flash", cat="mem", doc="spiflash"),
     "glyph_mem":       dict(name="Glyph RAM", cat="mem", doc="gpu_blitter",
                             params={"ADDR_WIDTH": "2^{} bytes"}),
     "gpio_wb":         dict(name="GPIO + LEDs", short="GPIO", cat="io",

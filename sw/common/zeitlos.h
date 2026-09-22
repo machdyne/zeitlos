@@ -643,6 +643,13 @@ bool z_game_set_enabled(bool on, bool wrap);
 // see z_getpid()'s comment in sw/os/kernel.c.
 uint32_t z_getpid(void);
 
+// Reconfigure the FPGA -- reboot -- after the kernel has synced every
+// open file. Does not return on success. Returns false, having changed
+// nothing, if this board's gateware cannot do it (no PROGRAMN pin, see
+// Z_FEATURE2_RECONFIG in zsoc.h), or if the reconfiguration did not
+// happen. docs/zboot.md.
+bool z_reboot(void);
+
 // launches a new process from a named file on the FAT filesystem
 // (e.g. z_proc_run("term")) -- see zeitlos.c for the full writeup.
 // Returns the new pid, or 0 on failure.

@@ -8,10 +8,6 @@
  * the RISC-V unprivileged specification. See docs/zcc.md for the
  * design, the supported subset, and what is deliberately absent.
  *
- * Indented with SPACES, per README.md: LLM-assisted code in this tree
- * is space-indented so it is visible as such until it has been audited
- * and converted.
- *
  * -- The shape, in one paragraph --
  *
  * One pass. The parser walks the token stream and emits RV32IM machine

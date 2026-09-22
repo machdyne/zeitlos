@@ -384,3 +384,12 @@ failure mode is silent exhaustion, not a clean error; `(free)`'s
 `free` (shell) and `(free)` (Scheme) report the pool; `df` and `(df)`
 report the SD card. See `docs/scheme_api.md` for the Scheme forms,
 which return data rather than printed text.
+
+## Reboot
+
+`reboot` (`docs/zboot.md` section 6) pulls PROGRAMN, and the FPGA
+reconfigures exactly as at power-on: from address 0 -- the DFU
+bootloader and its five seconds, then Zeitlos -- or straight into
+Zeitlos on a board flashed without a bootloader. Everything in this
+document then runs again from the top. The kernel syncs open files
+first.

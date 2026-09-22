@@ -49,7 +49,7 @@ $ zcc hello.c -o hello && run hello
 | files | `ls` `cat` `cp` `mv` `rm` `touch` `mkdir` `rmdir` |
 | text | `wc` `head` `tail` `grep` `sort` `uniq` |
 | places | `cd` `pwd` |
-| other | `echo` `clear` `df` `run` `help` `exit` |
+| other | `echo` `clear` `df` `run` `help` `exit` `reboot` |
 
 `grep` matches a **fixed string**, not a regular expression. `vi` has
 regular expressions (`:g`, `:s`) if you need them.
@@ -1067,15 +1067,6 @@ Two bugs on the first run, both silent:
 Neither would have been caught by a golden-file suite written at the
 same time as the compiler, because the golden file would have recorded
 the wrong answer and called it correct.
-
-### A note on indentation
-
-`sw/apps/zcc` is space-indented, per `README.md`: LLM-assisted code in
-this tree is space-indented so that it is visible as such until it has
-been audited and converted. **The Phase 0 changes were tab-indented to
-match their surroundings, which was the wrong call** -- they should be
-spaces too by that rule, and converting them is one `expand` away if
-you want the consistency now.
 
 ---
 
