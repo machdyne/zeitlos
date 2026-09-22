@@ -135,11 +135,16 @@ void k_cfg_defer(void) {
 	cfg_pending = true;
 }
 
-void k_cfg_card_check(void) {
+void k_cfg_retry(void) {
 	uint32_t ignored;
-	if (!cfg_pending || !card_up()) return;
-	cfg_pending = false;            // before the load: it opens files too
-	printf("cfg: the sdcard came up after boot -- reading %s\n", Z_CFG_PATH);
+	if (!cfg_pending) return;
+	cfg_pending = false;            // this is the only retry, whatever happens
+	if (!card_up()) {
+		printf("cfg: no sdcard after init -- keeping the defaults "
+			"(`cfg reload` reads %s)\n", Z_CFG_PATH);
+		return;
+	}
+	printf("cfg: the sdcard came up during init -- reading %s\n", Z_CFG_PATH);
 	k_cfg_load(true, &ignored);
 }
 

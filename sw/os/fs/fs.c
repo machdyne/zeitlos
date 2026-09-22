@@ -10,7 +10,6 @@
 #include "../usb/usbh_msc.h"
 #include "../../common/zsoc.h"
 #include "../zar.h"
-#include "../cfg.h"		// k_cfg_card_check()
 #include "../kernel.h"		// k_fs_enter()/k_fs_leave() -- see
 								// docs/filesystem.md
 
@@ -970,14 +969,7 @@ int fs_exec_info_any(char *path, z_exec_info_t *info) {
 
 
 	char resolved[FS_RESOLVED_MAX];
-	int none = (fs_exec_resolve(path, resolved, info) == FS_EXEC_NONE);
-
-	// Every launch looks on the card first, which is what brings up a
-	// card that missed boot -- so this is where its config gets read
-	// (cfg.c, issue #7).
-	k_cfg_card_check();
-
-	return none ? 1 : 0;
+	return (fs_exec_resolve(path, resolved, info) == FS_EXEC_NONE) ? 1 : 0;
 
 }
 

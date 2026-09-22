@@ -439,10 +439,10 @@ void sh(void) {
 		if (card_ready) k_cfg_load(true, &ignored);
 		else {
 			// Not final: a freshly powered card can fail this first
-			// access and come up moments later, when the first app is
-			// loaded from it. k_cfg_card_check() reads the config then
-			// (issue #7); a board with no card never waits for one.
-			printf("cfg: no sdcard yet -- using defaults until it comes up\n");
+			// access and come up moments later, when init() loads the
+			// shells from it -- and init() retries then (k_cfg_retry(),
+			// issue #7). A board with no card never waits for one.
+			printf("cfg: no sdcard yet -- init will try again\n");
 			k_cfg_defer();
 		}
 	}
@@ -1689,6 +1689,13 @@ void init(void) {
 	// STARTS -- see the note on net at the end.
 	init_start_optional("repl");
 	init_start_optional("posix");
+
+	// The config, if boot found no card (issue #7). A freshly powered
+	// card can fail its first access and come up moments later -- here,
+	// loading the shells is what brings it up -- so this is the one
+	// retry, before anything below reads a setting (tts). If the card is
+	// still not up, boot gives up on it: defaults until `cfg reload`.
+	k_cfg_retry();
 
 	// Speech, when the machine has been set up for someone who cannot
 	// see it (system.tts.enabled, docs/config.md). Started here

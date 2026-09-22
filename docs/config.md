@@ -5,15 +5,18 @@ The kernel reads it at boot, **before any app starts**, and keeps the
 settings in memory; apps ask the kernel. No card or no file means every
 setting has its default.
 
-**A card that comes up late** still gets its config read. With the core
-apps in flash, boot tries the card once rather than waiting, so that a
-board with no card starts at once -- and the first access to a freshly
-powered card can fail (issue #7). Boot then marks the config as pending
-(`cfg: no sdcard yet -- using defaults until it comes up`), and the
-first app launch or file open after the card comes up reads it, exactly
-as `cfg reload` would (`cfg: the sdcard came up after boot -- reading
-/zeitlos.cfg`). Apps already running see the new generation; the video
-mode is applied at once. `sw/os/cfg.c`, `k_cfg_card_check()`.
+**A card that comes up late** still gets its config read, once. With
+the core apps in flash, boot tries the card once rather than waiting, so
+that a board with no card starts at once -- and the first access to a
+freshly powered card can fail (issue #7). Boot then says `cfg: no sdcard
+yet -- init will try again`, and the init script, after loading the
+shells from the card (which is what brings a late card up), tries once
+more: `cfg: the sdcard came up during init -- reading /zeitlos.cfg`,
+exactly as `cfg reload` would, and before anything that reads a setting
+(the speech service, `system.tts.enabled`). If the card is still not up,
+boot gives up for this boot and says so; `cfg reload` reads it by hand.
+Apps already running see the new generation; the video mode is applied
+at once. `sw/os/cfg.c`, `k_cfg_retry()`, called from `init()` only.
 
 ```
 # /zeitlos.cfg

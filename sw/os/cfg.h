@@ -28,12 +28,12 @@ int k_cfg_load(bool verbose, uint32_t *ignored);
 // The card was not up when boot read the config (issue #7): the first
 // access to a freshly powered card can fail, and with the core apps in
 // flash boot does not wait for it. k_cfg_defer() -- boot, then -- marks
-// the config as still to be read, and k_cfg_card_check(), called after
-// every app launch and file open, reads it once the card has come up.
-// Cheap when there is nothing to do: a flag, and the driver's status
-// byte, which is no disk access.
+// the config as still to be read. k_cfg_retry(), called ONCE by init()
+// after it has loaded the shells from the card, reads it if the card
+// has come up by then, and otherwise gives up for this boot. Only init
+// retries: nothing in the filesystem watches for a late card.
 void k_cfg_defer(void);
-void k_cfg_card_check(void);
+void k_cfg_retry(void);
 
 // The store's current value for `key`, or NULL if the file does not set
 // it. The pointer is into the store and is invalidated by the next
