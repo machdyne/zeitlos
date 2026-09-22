@@ -82,6 +82,7 @@ core_apps = wm term
 
 defines =
     FPGA_ECP5
+    PROGRAMN_PIN
     OSC48
     MEM=1
     MEM_SRAM

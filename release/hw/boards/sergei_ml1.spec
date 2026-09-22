@@ -36,6 +36,7 @@ pmod.a =
 
 defines =
     FPGA_ECP5
+    PROGRAMN_PIN
     OSC48
     MEM=32
     MEM_SDRAM

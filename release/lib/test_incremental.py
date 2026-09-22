@@ -2,11 +2,11 @@
 #
 # The incremental release workflow:
 #
-#   build v0.0.2 --targets lakritz_gpio lakritz_langkatze
-#   ship  v0.0.2
+#   build vX --targets lakritz_gpio lakritz_langkatze
+#   ship  vX
 #   ...later...
-#   build v0.0.2 --targets sergei_ml1
-#   ship  v0.0.2
+#   build vX --targets sergei_ml1
+#   ship  vX
 #
 # The second build must ADD to dist/<version>/ rather than replace it,
 # and the notes, README.txt and manifest must describe all three
@@ -47,12 +47,16 @@ import contextlib                   # noqa: E402
 import selftest                     # noqa: E402  (reuses its fake toolchain)
 import build as build_mod           # noqa: E402
 
-VERSION = "0.0.2"          # must match sw/common/zversion.h
+# A version of the test's own, which no real release will ever use --
+# like selftest.py's "0.0.2-selftest". It used to be "0.0.2", which had
+# to equal sw/common/zversion.h and so broke, with a version-mismatch
+# error, the day the header moved on. The header's own version would not
+# do either: the test writes into release/dist/<version>/, and refuses to
+# run if that exists -- so it would stop working after every real build.
+# run_build() makes zrelease's version check see this one instead; the
+# header is not touched.
+VERSION = "0.0.0-inctest"
 OUT = os.path.join(ROOT, "release/dist", VERSION)
-
-# This test writes into the REAL dist directory for 0.0.2, so it
-# refuses to run if one already exists rather than trampling a release
-# you have built for real.
 
 
 def _load_zrelease():
@@ -94,9 +98,13 @@ def run_build(targets, extra=()):
     args = _mirror_parser().parse_args(argv)
 
     real = build_mod.run
+    real_version = build_mod.read_version
     # selftest.fake_run lets the real mkzar.py through, via this hook.
     build_mod._real_run = real
     build_mod.run = selftest.fake_run(selftest.FAKE_PNR)
+    # zrelease compares the requested version with the header's; the
+    # header says the tree's real version, this test builds its own
+    build_mod.read_version = lambda root: VERSION
     buf = io.StringIO()
     try:
         with contextlib.redirect_stdout(buf):
@@ -105,6 +113,7 @@ def run_build(targets, extra=()):
         code = e.code or 1
     finally:
         build_mod.run = real
+        build_mod.read_version = real_version
     return Result(code, buf.getvalue())
 
 
