@@ -141,6 +141,9 @@ The following boards are fully supported:
  - [Radiona ULX3S](https://radiona.org/ulx3s/) (85F tested, see [docs/ulx3s.md](docs/ulx3s.md))
  - (more soon)
 
+Packed utilisation and routed clocks for every board that builds:
+[docs/boards.md](docs/boards.md).
+
 The following boards are currently partially supported or untested:
 
  - [Machdyne Kölsch](https://github.com/machdyne/kolsch)
