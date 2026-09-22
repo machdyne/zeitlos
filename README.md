@@ -267,7 +267,8 @@ $ make BOARD=lakritz CABLE=dirtyJtag flash
 ```
 
 The above command builds the SOC, BIOS, OS and apps, then writes the
-gateware, kernel, boot splash and core apps to flash.
+gateware, kernel, boot splash and core apps to flash -- and, on some boards, the
+[jumploader](docs/zboot.md).
 
 The BIOS will automatically boot the kernel if no keys are pressed, and
 the kernel starts `wm`, `net` and `repl` automatically -- you'll land

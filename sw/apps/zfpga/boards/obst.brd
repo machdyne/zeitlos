@@ -1,0 +1,11 @@
+# Machdyne Obst: ECP5 LFE5U-12F in CABGA256 -- the 25F's die, so the
+# 25F database (lfe5u25f.zdb, built --also LFE5U-12F) covers it.
+#
+#   zfpga jump 0 -b obst
+#
+# The pins are the tree's own boards/obst_v0.lpf, installed beside this
+# file as obst.lpf. `pack -c`: compressed, as Zeitlos's own build.
+device  LFE5U-12F
+package CABGA256
+lpf     obst.lpf
+pack    -c

@@ -340,6 +340,13 @@ bool z_game_set_enabled(bool on, bool wrap) {
 
 }
 
+int z_jump(uint32_t target) {
+	z_jump_args_t a = { target, 0 };
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_kernel_ptr(Z_SYS_JUMP, (uint32_t *)&a, 0);
+	return a.result;
+}
+
 bool z_reboot(void) {
 	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
 	z_obj_t *rv = (z_obj_t *)z_kernel_ptr(Z_SYS_REBOOT, 0, 0);

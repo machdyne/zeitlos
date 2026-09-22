@@ -88,6 +88,14 @@ def fake_run(pnr_text):
             os.makedirs(out, exist_ok=True)
             with open(os.path.join(out, "soc.bit"), "wb") as f:
                 f.write(os.urandom(412 * 1024))
+        # `make jumploader` makes one only on a board whose Makefile block
+        # sets JUMP -- asked of the real Makefile, as build.py asks it --
+        # unless the test is checking that a missing one is refused
+        board_arg = next((c.split("=", 1)[1] for c in cmd if c.startswith("BOARD=")), "")
+        if "jumploader" in cmd and not NO_JUMPLOADER and build_mod.board_jumps(ROOT, board_arg.lower()):
+            os.makedirs(out, exist_ok=True)
+            with open(os.path.join(out, "jump.bit"), "wb") as f:
+                f.write(os.urandom(162 * 1024))
             with open(os.path.join(out, "pnr.log"), "w") as f:
                 f.write(pnr_text)
         if "os" in cmd:
@@ -102,6 +110,10 @@ def fake_run(pnr_text):
                     f.write(b"ZEXE" + os.urandom(60 * 1024))
         return ""
     return _run
+
+
+# set by the test of a jumploader board whose `make jumploader` made nothing
+NO_JUMPLOADER = False
 
 
 def cleanup(created):
@@ -189,6 +201,22 @@ def main():
             results.append(build_mod.build_target(ROOT, t, version, out,
                                                   soft))
 
+        # --- 2b. a jumploader board with no jumploader is refused -----
+        print("\n== a jumploader board without its jumploader is refused ==")
+        global NO_JUMPLOADER
+        NO_JUMPLOADER = True
+        try:
+            build_mod.build_target(ROOT, spec.load_target(ROOT, "mozart_ml1"),
+                                   version, os.path.join(out, "nojump"), soft)
+            failures.append("an image was built for mozart_ml1 without its jumploader")
+        except build_mod.BuildError as e:
+            if "jumploader" not in str(e):
+                failures.append("refused, but not for the jumploader: %s" % e)
+            else:
+                print("   refused: %s" % str(e).split(". ")[0])
+        finally:
+            NO_JUMPLOADER = False
+
         # --- 3. the images really do contain what they claim ----------
         print("\n== image contents ==")
         L = {r.key: r for r in lay["regions"]}
@@ -210,6 +238,22 @@ def main():
                 ("trimmed, not padded to 2MB",
                  len(img) < lay["flash_size"]),
             ]
+            # the jumploader: in the image at its offset, and shipped on
+            # its own, byte for byte the same
+            jl = res["artifacts"].get("jumploader")
+            if jl:
+                with open(os.path.join(out, jl), "rb") as f:
+                    jd = f.read()
+                checks.append(("jumploader at 0x%06x, and shipped as %s" % (L["jump"].offset, jl),
+                               img[L["jump"].offset:L["jump"].offset + len(jd)] == jd))
+                dfu = res["artifacts"].get("dfu_image")
+                if dfu:
+                    with open(os.path.join(out, dfu), "rb") as f:
+                        dd = f.read()
+                    o = L["jump"].offset - res["dfu_base"]
+                    checks.append(("jumploader in the DFU image too", dd[o:o + len(jd)] == jd))
+            elif build_mod.board_jumps(ROOT, res["board"].lower()):
+                checks.append(("a jumploader board ships a jumploader", False))
             bad = [n for n, ok in checks if not ok]
             print("   %-42s %s" % (res["artifacts"]["flash_image"],
                                    "ok" if not bad else "FAILED: %s" % bad))
@@ -247,7 +291,8 @@ def main():
                                     lay)
         notes_mod.write(os.path.join(out, "README.txt"), rt)
         for must in ("zeitlos-mozart_ml1.img", "RMII", "FLASH LAYOUT",
-                     "zeitlos.img.gz"):
+                     "zeitlos.img.gz", "zeitlos-mozart_ml1-jump.bit",
+                     "jumploader"):
             if must not in rt:
                 failures.append("README.txt is missing %r" % must)
         print("   README.txt describes every asset")

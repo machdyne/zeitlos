@@ -1,0 +1,11 @@
+# Machdyne Sergei ML1: ECP5 LFE5U-45F in CABGA256.
+#
+#   zfpga build /fpga/examples/blink.v -b sergei1    (or -b sergei_ml1)
+#
+# sergei1.brd, not sergei_ml1.brd: the card's file names are 8.3. The pins are
+# the tree's own boards/sergei_ml1.lpf, installed beside this file as sergei1.lpf.
+# `pack -c`: compressed, as Zeitlos's own build.
+device  LFE5U-45F
+package CABGA256
+lpf     sergei1.lpf
+pack    -c

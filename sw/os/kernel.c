@@ -57,6 +57,7 @@ z_obj_t *z_uptime(z_obj_t *args);	// defined below; forward-declared
 									// since syscalls.def (included next)
 									// needs it visible for the table
 z_obj_t *k_reboot(z_obj_t *args);	// Z_SYS_REBOOT: see its definition
+z_obj_t *k_jump(z_obj_t *args);		// Z_SYS_JUMP
 z_obj_t *k_getpid(z_obj_t *args);	// same reasoning -- named k_getpid,
 									// not z_getpid, since zeitlos.h
 									// (pulled in above) already
@@ -231,31 +232,64 @@ z_obj_t *z_uptime(z_obj_t *args) {
 	return (&z_ok);
 }
 
-// Z_SYS_REBOOT: reconfigure the FPGA. docs/zboot.md.
+// Reconfigure the FPGA -- to `target` through the jumploader, or plain
+// reboot (target 0). docs/zboot.md secs. 5 and 6. Returns only if it
+// could not, having said why:
 //
-// Syncs every open write handle first (k_fs_sync_all), then writes
-// rtl/socctl.v's RECONFIG key, which pulls PROGRAMN low. The FPGA
-// reloads from the boot address in the running bitstream -- 0 today,
-// so this is a reboot through the DFU bootloader, or straight back
-// into Zeitlos on a board without one.
+//   -1  this gateware cannot pull PROGRAMN (FEATURES2 bit 5)
+//   -2  it jumps through the jumploader (FEATURES2 bit 7), and there is
+//       no valid one at Z_JUMP_FLASH_OFFSET -- PROGRAMN would reload
+//       into nothing, and only a power cycle would bring it back
+//   -3  the jumploader could not be re-pointed
+//   -4  a target other than 0, and this gateware does not jump through
+//       a jumploader (built without the Makefile's JUMP)
+//   -5  PROGRAMN was pulled and the FPGA did not reconfigure
 //
-// Fails, having changed nothing, where the gateware cannot pull
-// PROGRAMN (FEATURES2 bit 5, `PROGRAMN_PIN in rtl/boards.vh). If it
-// is still running well after the write, the pin is not wired the way
-// the build said: that is reported rather than pretended away.
-z_obj_t *k_reboot(z_obj_t *args) {
-	(void)args;
+// Open files are synced only once nothing else can fail.
+int k_boot_to(uint32_t target) {
 	if (!z_soc_has_feature2(Z_FEATURE2_RECONFIG) ||
-			((reg_socctl_reconfig >> 16) & 0xffffu) != Z_SOCCTL_RECONFIG_SIG)
-		return &z_fail;
+			((reg_socctl_reconfig >> 16) & 0xffffu) != Z_SOCCTL_RECONFIG_SIG) {
+		printf("reboot: this board's gateware cannot reconfigure the FPGA "
+			"(no PROGRAMN pin; see docs/zboot.md)\n");
+		return -1;
+	}
+	if (z_soc_has_feature2(Z_FEATURE2_JUMP)) {
+		if (k_jump_read(NULL)) {
+			printf("reboot: this gateware reloads through a jumploader at 0x%06lx, "
+				"and there is none: power-cycle instead (`make flash_jump` writes one)\n",
+				(unsigned long)Z_JUMP_FLASH_OFFSET);
+			return -2;
+		}
+		if (k_jump_point(target)) return -3;
+	} else if (target) {
+		printf("jump: this gateware does not reload through a jumploader "
+			"(built without JUMP; docs/zboot.md sec. 5)\n");
+		return -4;
+	}
 	int n = k_fs_sync_all();
-	printf("reboot: %d open file%s synced; reconfiguring\n", n, n == 1 ? "" : "s");
+	if (target) printf("jump: %d open file%s synced; to 0x%06lx\n", n, n == 1 ? "" : "s", (unsigned long)target);
+	else printf("reboot: %d open file%s synced; reconfiguring\n", n, n == 1 ? "" : "s");
 	// let the console line leave before the FPGA does
 	for (volatile uint32_t d = 0; d < 200000; d++) ;
 	reg_socctl_reconfig = Z_SOCCTL_RECONFIG_KEY;
 	// PROGRAMN reconfigures within microseconds; this is ~0.5 s
 	for (volatile uint32_t d = 0; d < 5000000; d++) ;
 	printf("reboot: PROGRAMN was asserted but the FPGA did not reconfigure\n");
+	return -5;
+}
+
+// Z_SYS_REBOOT: k_boot_to(0).
+z_obj_t *k_reboot(z_obj_t *args) {
+	(void)args;
+	k_boot_to(0);
+	return &z_fail;
+}
+
+// Z_SYS_JUMP: k_boot_to(the target in args).
+z_obj_t *k_jump(z_obj_t *args) {
+	z_jump_args_t *a = (z_jump_args_t *)args;
+	if (!a) return &z_fail;
+	a->result = k_boot_to(a->target);
 	return &z_fail;
 }
 

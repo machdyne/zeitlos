@@ -20,7 +20,8 @@ refresh is `diff -r` against a newer upstream checkout.
 | `COPYING` | upstream licence |
 | `devices.json` | upstream, whole |
 | `ECP5/LFE5U-25F/` | `tilegrid.json`, `iodb.json`, `globals.json` |
-| `ECP5/tiledata/<type>/bits.db` | the 134 tile types that occur in a 25F, and no others |
+| `ECP5/LFE5U-45F/` | the same three: Mozart ML1 and Sergei ML1 (`docs/zboot.md` sec. 5) |
+| `ECP5/tiledata/<type>/bits.db` | the 157 tile types that occur in a 25F or a 45F, and no others |
 
 ## What is not, and why
 
@@ -28,10 +29,10 @@ refresh is `diff -r` against a newer upstream checkout.
 |---|---|
 | MachXO, MachXO2, MachXO3, MachXO3D | not a target |
 | `LFE5U-12F` | byte-identical tilegrid to 25F; `mkzdb.py` emits one `.zdb` serving both |
-| `LFE5U-45F`, `LFE5U-85F` | to be added when a phase needs them on the device (`docs/zfpga.md` §9.1). Host tests use an installed database instead |
+| `LFE5U-85F` | to be added when a board needs it (`docs/zfpga.md` §9.1). Host tests use an installed database instead |
 | `LFE5UM*`, `LFE5UM5G*` | SERDES variants; no board in this tree uses one |
 | `ECP5/timing/` | there is no timing analysis |
-| `tiledata/` for types not in a 25F | not reachable from a vendored device |
+| `tiledata/` for types in neither a 25F nor a 45F | not reachable from a vendored device |
 
 ## Refreshing
 

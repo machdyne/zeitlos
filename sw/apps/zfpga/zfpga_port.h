@@ -51,6 +51,27 @@ void zio_out_close(void);
  * here too, so that a failure is never invisible. */
 void zio_console(const char *s);
 
+/* -- the machine's configuration flash: zfpga flash / run (boot.c) --
+ *
+ * On the machine, through the kernel (Z_SYS_FLASH, z_jump). On the host
+ * zfpga these say they only work on the machine; the test binary
+ * zfpga-simflash (port_simflash.c) works on a flash image file instead.
+ * Offsets are flash offsets. */
+typedef struct { uint32_t id, size, lock_end; } zio_flash_info_t;
+/* Begin a write session: 0, or -1 no writable flash (not the machine,
+ * or an old bitstream), -2 another program is writing it. */
+int zio_flash_begin(zio_flash_info_t *info);
+void zio_flash_end(void);
+uint8_t zio_flash_read(uint32_t off);           /* through the window */
+/* Erase the 4 KB sector at off / program n bytes within one page, and
+ * wait for the flash: 0, or the controller's refusal bits. */
+uint32_t zio_flash_erase(uint32_t off);
+uint32_t zio_flash_program(uint32_t off, const uint8_t *p, uint32_t n);
+/* Boot from addr through the jumploader. On the machine it returns only
+ * if it could not, with the kernel's reason (< 0); the simulation
+ * returns 0. */
+int zio_jump(uint32_t addr);
+
 /* Deletes a file; 0 on success. */
 int zio_remove(const char *path);
 

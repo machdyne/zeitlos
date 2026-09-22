@@ -1,0 +1,340 @@
+# Routing Mux Bits
+
+# Non-Routing Configuration
+.config EBR0.CSDECODE_A 111
+!F48B0
+!F43B0
+!F36B0
+
+.config EBR0.CSDECODE_B 111
+!F74B0
+!F66B0
+!F61B0
+
+.config_enum EBR0.ADA0MUX ADA0
+ADA0 !F62B0
+INV F62B0
+
+.config_enum EBR0.ADA2MUX ADA2
+ADA2 !F85B0
+INV F85B0
+
+.config_enum EBR0.ADA3MUX ADA3
+ADA3 !F57B0
+INV F57B0
+
+.config_enum EBR0.ADB0MUX ADB0
+ADB0 !F55B0
+INV F55B0
+
+.config_enum EBR0.ADB1MUX ADB1
+ADB1 !F59B0
+INV F59B0
+
+.config_enum EBR0.CEAMUX CEA
+CEA !F15B0
+INV F15B0
+
+.config_enum EBR0.CEBMUX CEB
+CEB !F96B0
+INV F96B0
+
+.config_enum EBR0.CLKAMUX CLKA
+CLKA !F21B0
+INV F21B0
+
+.config_enum EBR0.CLKBMUX CLKB
+CLKB !F104B0
+INV F104B0
+
+.config_enum EBR0.DP16KD.DATA_WIDTH_A 18
+1 F40B0 F47B0 F51B0 F78B0
+18 !F40B0 !F47B0 !F51B0 !F78B0
+2 F40B0 !F47B0 F51B0 F78B0
+4 F40B0 !F47B0 F51B0 !F78B0
+9 !F40B0 !F47B0 F51B0 !F78B0
+
+.config_enum EBR0.DP16KD.DATA_WIDTH_B 18
+1 F23B0 F31B0 F32B0
+18 !F23B0 !F31B0 !F32B0
+2 !F23B0 F31B0 F32B0
+4 !F23B0 !F31B0 F32B0
+9 !F23B0 !F31B0 !F32B0
+
+.config_enum EBR0.DP16KD.WRITEMODE_A NORMAL
+NORMAL !F7B0 !F101B0
+READBEFOREWRITE !F7B0 F101B0
+WRITETHROUGH F7B0 !F101B0
+
+.config_enum EBR0.DP16KD.WRITEMODE_B NORMAL
+NORMAL !F14B0 !F34B0
+READBEFOREWRITE !F14B0 F34B0
+WRITETHROUGH F14B0 !F34B0
+
+.config_enum EBR0.MODE NONE
+DP16KD !F5B0 !F8B0 !F10B0 !F17B0 F73B0 !F95B0
+NONE !F5B0 !F8B0 !F10B0 !F17B0 !F73B0 !F95B0
+PDPW16KD F5B0 F8B0 F10B0 F17B0 F73B0 F95B0
+
+.config_enum EBR0.OCEAMUX OCEA
+INV F0B0
+OCEA !F0B0
+
+.config_enum EBR0.OCEBMUX OCEB
+INV F82B0
+OCEB !F82B0
+
+.config_enum EBR0.PDPW16KD.DATA_WIDTH_R 18
+1 !F2B0 F23B0 F31B0 F32B0
+18 !F2B0 !F23B0 !F31B0 !F32B0
+2 !F2B0 !F23B0 F31B0 F32B0
+36 F2B0 !F23B0 !F31B0 !F32B0
+4 !F2B0 !F23B0 !F31B0 F32B0
+9 !F2B0 !F23B0 !F31B0 !F32B0
+
+.config_enum EBR0.RESETMODE SYNC
+ASYNC F105B0
+SYNC !F105B0
+
+.config_enum EBR0.WEAMUX WEA
+INV F8B0
+WEA !F8B0
+
+.config_enum EBR0.WEBMUX WEB
+INV F89B0
+WEB !F89B0
+
+
+# Fixed Connections
+.fixed_conn E1_JF0 JDOA8_EBR
+
+.fixed_conn E1_JF1 JDOA9_EBR
+
+.fixed_conn E1_JF2 JDOA10_EBR
+
+.fixed_conn E1_JF3 JDOA11_EBR
+
+.fixed_conn E1_JF4 JDOA12_EBR
+
+.fixed_conn E1_JF5 JDOA13_EBR
+
+.fixed_conn E1_JF6 JDOA14_EBR
+
+.fixed_conn E1_JF7 JDOA15_EBR
+
+.fixed_conn E1_JQ0 JDOB8_EBR
+
+.fixed_conn E1_JQ1 JDOB9_EBR
+
+.fixed_conn E1_JQ2 JDOB10_EBR
+
+.fixed_conn E1_JQ3 JDOB11_EBR
+
+.fixed_conn E1_JQ4 JDOB12_EBR
+
+.fixed_conn E1_JQ5 JDOB13_EBR
+
+.fixed_conn E1_JQ6 JDOB14_EBR
+
+.fixed_conn E1_JQ7 JDOB15_EBR
+
+.fixed_conn E2_JF0 JDOA16_EBR
+
+.fixed_conn E2_JF1 JDOA17_EBR
+
+.fixed_conn E2_JQ0 JDOB16_EBR
+
+.fixed_conn E2_JQ1 JDOB17_EBR
+
+.fixed_conn JADA0_EBR JC4
+
+.fixed_conn JADA10_EBR E1_JC6
+
+.fixed_conn JADA11_EBR E1_JA7
+
+.fixed_conn JADA12_EBR E1_JC0
+
+.fixed_conn JADA13_EBR E1_JA1
+
+.fixed_conn JADA1_EBR JA5
+
+.fixed_conn JADA2_EBR JC6
+
+.fixed_conn JADA3_EBR JA7
+
+.fixed_conn JADA4_EBR JC0
+
+.fixed_conn JADA5_EBR JA1
+
+.fixed_conn JADA6_EBR JC2
+
+.fixed_conn JADA7_EBR JA3
+
+.fixed_conn JADA8_EBR E1_JC4
+
+.fixed_conn JADA9_EBR E1_JA5
+
+.fixed_conn JADB0_EBR JC5
+
+.fixed_conn JADB10_EBR E1_JC5
+
+.fixed_conn JADB11_EBR E1_JA4
+
+.fixed_conn JADB12_EBR E1_JC7
+
+.fixed_conn JADB13_EBR E1_JA6
+
+.fixed_conn JADB1_EBR JA4
+
+.fixed_conn JADB2_EBR JC7
+
+.fixed_conn JADB3_EBR JA6
+
+.fixed_conn JADB4_EBR JC1
+
+.fixed_conn JADB5_EBR JA0
+
+.fixed_conn JADB6_EBR JC3
+
+.fixed_conn JADB7_EBR JA2
+
+.fixed_conn JADB8_EBR E1_JC1
+
+.fixed_conn JADB9_EBR E1_JA0
+
+.fixed_conn JCEA_EBR JCE1
+
+.fixed_conn JCEB_EBR E1_JCE1
+
+.fixed_conn JCLKA_EBR JCLK0
+
+.fixed_conn JCLKB_EBR E1_JCLK0
+
+.fixed_conn JCSA0_EBR JCE2
+
+.fixed_conn JCSA1_EBR JCE3
+
+.fixed_conn JCSA2_EBR E1_JCE3
+
+.fixed_conn JCSB0_EBR E1_JCE2
+
+.fixed_conn JCSB1_EBR E2_JCE2
+
+.fixed_conn JCSB2_EBR E2_JCE3
+
+.fixed_conn JDIA0_EBR JD0
+
+.fixed_conn JDIA10_EBR E1_JD2
+
+.fixed_conn JDIA11_EBR E1_JB3
+
+.fixed_conn JDIA12_EBR E1_JD4
+
+.fixed_conn JDIA13_EBR E1_JB5
+
+.fixed_conn JDIA14_EBR E1_JD6
+
+.fixed_conn JDIA15_EBR E1_JB7
+
+.fixed_conn JDIA16_EBR E2_JD0
+
+.fixed_conn JDIA17_EBR E2_JB1
+
+.fixed_conn JDIA1_EBR JB1
+
+.fixed_conn JDIA2_EBR JD2
+
+.fixed_conn JDIA3_EBR JB3
+
+.fixed_conn JDIA4_EBR JD4
+
+.fixed_conn JDIA5_EBR JB5
+
+.fixed_conn JDIA6_EBR JD6
+
+.fixed_conn JDIA7_EBR JB7
+
+.fixed_conn JDIA8_EBR E1_JD0
+
+.fixed_conn JDIA9_EBR E1_JB1
+
+.fixed_conn JDIB0_EBR JD1
+
+.fixed_conn JDIB10_EBR E1_JD3
+
+.fixed_conn JDIB11_EBR E1_JB2
+
+.fixed_conn JDIB12_EBR E1_JD5
+
+.fixed_conn JDIB13_EBR E1_JB4
+
+.fixed_conn JDIB14_EBR E1_JD7
+
+.fixed_conn JDIB15_EBR E1_JB6
+
+.fixed_conn JDIB16_EBR E2_JD1
+
+.fixed_conn JDIB17_EBR E2_JB0
+
+.fixed_conn JDIB1_EBR JB0
+
+.fixed_conn JDIB2_EBR JD3
+
+.fixed_conn JDIB3_EBR JB2
+
+.fixed_conn JDIB4_EBR JD5
+
+.fixed_conn JDIB5_EBR JB4
+
+.fixed_conn JDIB6_EBR JD7
+
+.fixed_conn JDIB7_EBR JB6
+
+.fixed_conn JDIB8_EBR E1_JD1
+
+.fixed_conn JDIB9_EBR E1_JB0
+
+.fixed_conn JF0 JDOA0_EBR
+
+.fixed_conn JF1 JDOA1_EBR
+
+.fixed_conn JF2 JDOA2_EBR
+
+.fixed_conn JF3 JDOA3_EBR
+
+.fixed_conn JF4 JDOA4_EBR
+
+.fixed_conn JF5 JDOA5_EBR
+
+.fixed_conn JF6 JDOA6_EBR
+
+.fixed_conn JF7 JDOA7_EBR
+
+.fixed_conn JOCEA_EBR JCE0
+
+.fixed_conn JOCEB_EBR E1_JCE0
+
+.fixed_conn JQ0 JDOB0_EBR
+
+.fixed_conn JQ1 JDOB1_EBR
+
+.fixed_conn JQ2 JDOB2_EBR
+
+.fixed_conn JQ3 JDOB3_EBR
+
+.fixed_conn JQ4 JDOB4_EBR
+
+.fixed_conn JQ5 JDOB5_EBR
+
+.fixed_conn JQ6 JDOB6_EBR
+
+.fixed_conn JQ7 JDOB7_EBR
+
+.fixed_conn JRSTA_EBR JLSR0
+
+.fixed_conn JRSTB_EBR E1_JLSR0
+
+.fixed_conn JWEA_EBR JLSR1
+
+.fixed_conn JWEB_EBR E1_JLSR1
+

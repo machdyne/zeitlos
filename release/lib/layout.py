@@ -69,6 +69,8 @@ _SAFE_EXPR = re.compile(r"^[0-9a-fA-FxX\s()+\-*/<>|&]+$")
 
 def _eval_c_expr(expr, known):
     expr = expr.strip()
+    # Integer suffixes (0x1D0000u, 64UL) are C, not arithmetic: drop them.
+    expr = re.sub(r"\b(0[xX][0-9a-fA-F]+|[0-9]+)[uUlL]+\b", r"\1", expr)
     # Substitute already-resolved macro names, longest first so that
     # e.g. MEM_ROM_SIZE is not clobbered by MEM_ROM.
     for name in sorted(known, key=len, reverse=True):
@@ -131,6 +133,8 @@ def load(root):
     bios_c = os.path.join(root, "sw/bios/bios.c")
     logo_h = os.path.join(root, "sw/os/logo.h")
     zar_h = os.path.join(root, "sw/os/zar.h")
+    zsoc_h = os.path.join(root, "sw/common/zsoc.h")
+    boot_c = os.path.join(root, "sw/apps/zfpga/boot.c")
     makefile = os.path.join(root, "Makefile")
 
     bios = _scan_defines(bios_c, {
@@ -151,8 +155,21 @@ def load(root):
         "Z_ZAR_ROM_BASE", "Z_ZAR_FLASH_OFFSET", "Z_ZAR_MAX_ENTRIES",
     }, {})
     mk = _scan_makefile(makefile, {
-        "LOGO_FLASH_OFFSET_HEX", "LOGO_FLASH_OFFSET_DEC",
+        "LOGO_FLASH_OFFSET_HEX", "LOGO_FLASH_OFFSET_DEC", "JUMP_ADDR",
     })
+    # The jumploader region: docs/zboot.md sec. 5. The kernel's constant
+    # and the Makefile's --bootaddr must name the same address.
+    jumpc = _scan_defines(zsoc_h, {
+        "Z_JUMP_FLASH_OFFSET", "Z_JUMP_REGION_SIZE",
+    }, {})
+    for name in ("Z_JUMP_FLASH_OFFSET", "Z_JUMP_REGION_SIZE"):
+        if name not in jumpc:
+            raise LayoutError("%s: could not resolve %s" % (zsoc_h, name))
+    # zfpga flash / run carry their own copy, being an app built for the
+    # host too (sw/apps/zfpga/boot.c)
+    zboot = _scan_defines(boot_c, {
+        "ZFPGA_ZAR_OFFSET", "ZFPGA_JUMP_OFFSET", "ZFPGA_JUMP_END",
+    }, {}) if os.path.exists(boot_c) else None
 
     rom_base = bios["MEM_ROM"]
     flash_size = bios["MEM_ROM_SIZE"]
@@ -162,6 +179,8 @@ def load(root):
     os_off = bios["ROM_OS_ADDR"] - rom_base
     os_size = bios["ROM_OS_SIZE"]
     zar_off = zar["Z_ZAR_FLASH_OFFSET"]
+    jump_off = jumpc["Z_JUMP_FLASH_OFFSET"]
+    jump_size = jumpc["Z_JUMP_REGION_SIZE"]
 
     # --- the cross-checks, i.e. the KEEP IN SYNC comments, enforced ---
 
@@ -186,6 +205,15 @@ def load(root):
           logo.get("Z_BOOT_LOGO_ROM_BASE", -1), "sw/os/logo.h")
     agree("flash window base", rom_base, "sw/bios/bios.c MEM_ROM",
           zar.get("Z_ZAR_ROM_BASE", -1), "sw/os/zar.h")
+    agree("jumploader offset", jump_off, "sw/common/zsoc.h Z_JUMP_FLASH_OFFSET",
+          int(mk.get("JUMP_ADDR", "-1"), 16), "Makefile JUMP_ADDR")
+    if zboot is not None:
+        agree("core apps offset", zar_off, "sw/os/zar.h Z_ZAR_FLASH_OFFSET",
+              zboot.get("ZFPGA_ZAR_OFFSET", -1), "sw/apps/zfpga/boot.c")
+        agree("jumploader offset", jump_off, "sw/common/zsoc.h Z_JUMP_FLASH_OFFSET",
+              zboot.get("ZFPGA_JUMP_OFFSET", -1), "sw/apps/zfpga/boot.c")
+        agree("jumploader region end", jump_off + jump_size, "sw/common/zsoc.h",
+              zboot.get("ZFPGA_JUMP_END", -1), "sw/apps/zfpga/boot.c ZFPGA_JUMP_END")
 
     # The ZAR sits immediately above the kernel's region. This is stated
     # as prose in zar.h ("1MB + 256KB") and as two independent numbers;
@@ -198,6 +226,18 @@ def load(root):
     if logo_off + logo_size > os_off:
         problems.append("logo (0x%x + %d) overlaps the kernel at 0x%x"
                         % (logo_off, logo_size, os_off))
+    # The jumploader takes the top of the map, on every board: the ZAR
+    # grows up to it, and nothing sits above it in the first 2 MB.
+    if jump_off + jump_size != flash_size:
+        problems.append("the jumploader region (0x%x + 0x%x) does not end "
+                        "at the end of the map (0x%x)"
+                        % (jump_off, jump_size, flash_size))
+    if jump_off & 0xFFFF:
+        problems.append("the jumploader offset 0x%x is not 64 KB aligned "
+                        "(a boot address is addr[23:16])" % jump_off)
+    if zar_off >= jump_off:
+        problems.append("core apps offset 0x%x is not below the jumploader "
+                        "(0x%x)" % (zar_off, jump_off))
     if zar_off >= flash_size:
         problems.append("core apps offset 0x%x is past the end of flash "
                         "(0x%x)" % (zar_off, flash_size))
@@ -213,8 +253,10 @@ def load(root):
                "sw/os/logo.h Z_BOOT_LOGO_FLASH_OFFSET"),
         Region("kernel", "kernel", os_off, os_size,
                "sw/bios/bios.c ROM_OS_ADDR"),
-        Region("apps", "core apps (ZAR)", zar_off, flash_size - zar_off,
+        Region("apps", "core apps (ZAR)", zar_off, jump_off - zar_off,
                "sw/os/zar.h Z_ZAR_FLASH_OFFSET"),
+        Region("jump", "jumploader", jump_off, jump_size,
+               "sw/common/zsoc.h Z_JUMP_FLASH_OFFSET"),
     ]
 
     return {

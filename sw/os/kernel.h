@@ -503,5 +503,8 @@ z_obj_t *z_exit(z_obj_t *obj);
 // open file, then reconfigure the FPGA. Returns only on failure.
 // sw/os/kernel.c, docs/zboot.md.
 z_obj_t *k_reboot(z_obj_t *args);
+// Reboot (0) or jump (a flash address) through the jumploader; returns
+// only on failure, negative, having printed why. kernel.c.
+int k_boot_to(uint32_t target);
 
 #endif

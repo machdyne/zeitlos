@@ -1,0 +1,11 @@
+# Machdyne Mozart ML1: ECP5 LFE5U-45F in CABGA256.
+#
+#   zfpga build /fpga/examples/blink.v -b mozart1    (or -b mozart_ml1)
+#
+# mozart1.brd, not mozart_ml1.brd: the card's file names are 8.3. The pins are
+# the tree's own boards/mozart_ml1.lpf, installed beside this file as mozart1.lpf.
+# `pack -c`: compressed, as Zeitlos's own build.
+device  LFE5U-45F
+package CABGA256
+lpf     mozart1.lpf
+pack    -c

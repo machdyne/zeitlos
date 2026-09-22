@@ -1,0 +1,25 @@
+# Routing Mux Bits
+
+# Non-Routing Configuration
+.config_enum BANK.DIFF_REF OFF
+OFF !F4B0
+ON F4B0
+
+.config_enum BANK.LVDSO OFF
+OFF !F3B0
+ON F3B0
+
+.config_enum BANK.VCCIO NONE
+1V2 !F1B1 !F2B1 !F3B1 !F6B0
+1V5 !F1B1 !F2B1 !F3B1 !F6B0
+1V8 !F1B1 !F2B1 F3B1 F6B0
+2V5 !F1B1 F2B1 !F3B1 !F6B0
+3V3 F1B1 !F2B1 !F3B1 !F6B0
+NONE !F1B1 !F2B1 !F3B1 !F6B0
+
+.config_enum BANK.VREF OFF
+OFF !F7B0
+ON F7B0
+
+
+# Fixed Connections

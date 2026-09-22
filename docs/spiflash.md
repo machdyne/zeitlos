@@ -111,8 +111,9 @@ flash        JEDEC ID, size, the lock, the status
 flashtest    erase and program sector 0x1FF000, and read it back
 ```
 
-`flashtest` uses the last 4 KB of the first 2 MB, which is past the end
-of the Zeitlos image today and past even a 45F jumploader later. It
+`flashtest` uses the last 4 KB of the first 2 MB: inside the jumploader
+region, but past its end -- a 25F jumploader ends at `0x1E8530`, a 45F
+one would end at `0x1F7958`. It
 refuses to erase that sector unless it is blank or holds its own
 pattern from an earlier run. It checks, in order:
 

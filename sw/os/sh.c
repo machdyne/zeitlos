@@ -437,7 +437,14 @@ void sh(void) {
 	{
 		uint32_t ignored;
 		if (card_ready) k_cfg_load(true, &ignored);
-		else printf("cfg: no sdcard -- using defaults\n");
+		else {
+			// Not final: a freshly powered card can fail this first
+			// access and come up moments later, when the first app is
+			// loaded from it. k_cfg_card_check() reads the config then
+			// (issue #7); a board with no card never waits for one.
+			printf("cfg: no sdcard yet -- using defaults until it comes up\n");
+			k_cfg_defer();
+		}
 	}
 
 	if (boot_cancel_requested()) {
@@ -486,9 +493,23 @@ void sh(void) {
 
 		// REBOOT: rtl/socctl.v's RECONFIG, docs/zboot.md
 		else if (!strncmp(buffer, "reboot", cmdlen)) {
-			k_reboot(NULL);
-			printf("reboot: this board's gateware cannot reconfigure the FPGA "
-				"(no PROGRAMN pin; see docs/zboot.md)\n");
+			k_boot_to(0);           // returns only on failure, having said why
+		}
+
+		// JUMP: the jumploader, docs/zboot.md sec. 5
+		else if (!strncmp(buffer, "jump", cmdlen)) {
+			if (cmdend && cmdend[1]) {
+				k_boot_to((uint32_t)strtoul(cmdend + 1, NULL, 16));
+			} else {
+				uint32_t t;
+				printf("jump: this gateware %s through the jumploader\n",
+					z_soc_has_feature2(Z_FEATURE2_JUMP) ? "reloads" : "does not reload");
+				if (k_jump_read(&t) == 0)
+					printf("jump: the jumploader at 0x%06lx points at 0x%06lx%s\n",
+						(unsigned long)Z_JUMP_FLASH_OFFSET, (unsigned long)t, t ? "" : " (a reboot)");
+				else
+					printf("jump: no jumploader at 0x%06lx\n", (unsigned long)Z_JUMP_FLASH_OFFSET);
+			}
 		}
 
 		// HEX DUMP
@@ -2043,6 +2064,7 @@ void sh_help(void) {
 	printf("commands:\n");
 	printf(" hd <addr>         hex dump memory\n");
 	printf(" reboot            reconfigure the FPGA, after syncing files\n");
+	printf(" jump [addr]       the jumploader; with a hex address, boot from it\n");
 	printf(" flash             the flash: ID, size, lock, status\n");
 	printf(" flashtest         test erase/program on sector 0x1FF000\n");
 	printf(" probe             dump logic analyser capture "

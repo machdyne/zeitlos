@@ -2600,6 +2600,48 @@ zfpga lost sixteen files to `*.config` and `*.json`, and it caught the
 third pattern before any commit did. `sw/apps/zfpga/.gitignore`
 re-includes all three.
 
+
+## 26. `zfpga jump`
+
+The jumploader of `docs/zboot.md` section 5 is a zfpga product: `zfpga
+jump TARGET -b BOARD` builds the one-line design and packs it with the
+new `pack -J`, which keeps the frames holding the boot address at a
+fixed length so the machine can change the address in place
+(`docs/zfpga-formats.md` section 10). Checked against ecpunpack, which
+verifies every CRC; the host and the machine produce the same bytes (26
+device tests); and `tests/kjump.c` runs the kernel's re-pointing code
+against a simulated flash. `-J` also made `pack_write` two passes -- a
+counting pass finds the offsets the header describes -- which briefly
+opened the output before the options were checked; tests/run.sh's
+partial-output test caught it.
+
+
+## 27. The 45F, and `zfpga flash` / `run`
+
+**The 45F** (Mozart ML1, Sergei ML1): its Trellis data is vendored --
+three device files and the 23 tile types a 25F lacks, 5.3 MB -- and
+`lfe5u45f.zdb` (1.67 MB) is built and goes on the card. Its nextpnr
+baseline was measured, not transcribed (`ext/nextpnr-base/`). Checked:
+`zfpga pack` of a nextpnr 45F design is byte-identical to ecppack's
+(uncompressed, compressed, with a boot address), `zfpga unpack` to
+ecpunpack's; zfpga's own place and route on the 45F gives designs
+equivalent to yosys's by simulation (`loops.v`, `signed.v`); a
+jumploader is 162,793 bytes; and on the machine a 45F blinky builds to
+the host's bitstream, byte for byte, in 172M instructions (about 14 s)
+and 3,647 KB of zfpga's 4 MB tier (tests/run_dev.sh; the host's figure
+is larger, its pointers being 64-bit). Board profiles are
+`mozart1.brd` and `sergei1.brd` -- 8.3 names -- and `-b mozart_ml1` /
+`-b sergei_ml1` find them.
+
+**`zfpga flash` and `zfpga run`** install a bitstream in the machine's
+flash, after the core apps or at `-a ADDR`, and boot it through the
+jumploader (`docs/zfpga-formats.md` section 11). The flash is reached
+through the port layer: the kernel's `Z_SYS_FLASH` on the machine, a
+flash image file in the test binary `zfpga-simflash`, which is how
+`tests/run.sh` runs the real commands end to end. The tests were
+checked against two mutations -- placement ignoring the core apps, and
+no device-ID check -- which they catch.
+
 ---
 
 ## See also

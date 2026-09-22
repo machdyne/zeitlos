@@ -429,12 +429,34 @@ static void bi_touch(px_shell_t *sh, int argc, char **argv) {
 
 /* Reconfigure the FPGA: the kernel syncs every open file first
  * (k_reboot, docs/zboot.md). Returns only if it could not. */
+static void boot_failed(px_shell_t *sh, const char *what, int rc) {
+    const char *why =
+        rc == -1 ? "this board's gateware cannot reconfigure the FPGA (no PROGRAMN pin)" :
+        rc == -2 ? "no jumploader at 0x1D0000 -- power-cycle instead" :
+        rc == -3 ? "the jumploader could not be re-pointed" :
+        rc == -4 ? "this gateware does not reload through a jumploader" :
+        "the FPGA did not reconfigure";
+    px_puts(sh, what);
+    px_puts(sh, ": ");
+    px_puts(sh, why);
+    px_puts(sh, " (docs/zboot.md)\n");
+}
+
 static void bi_reboot(px_shell_t *sh, int argc, char **argv) {
     (void)argc; (void)argv;
     px_puts(sh, "rebooting...\n");
-    if (!z_reboot())
-        px_puts(sh, "reboot: this board's gateware cannot reconfigure the FPGA "
-                    "(no PROGRAMN pin; see docs/zboot.md)\n");
+    boot_failed(sh, "reboot", z_jump(0));
+}
+
+/* Boot the gateware at a flash address, through the jumploader. */
+static void bi_jump(px_shell_t *sh, int argc, char **argv) {
+    char *end;
+    unsigned long a;
+    if (argc != 2) { px_puts(sh, "usage: jump ADDR (hex, 64 KB aligned)\n"); return; }
+    a = strtoul(argv[1], &end, 16);
+    if (*end || (a & 0xFFFF) || a > 0xFF0000) { px_puts(sh, "jump: ADDR is a hex flash address, 64 KB aligned\n"); return; }
+    px_puts(sh, "jumping...\n");
+    boot_failed(sh, "jump", z_jump((uint32_t)a));
 }
 
 static void bi_clear(px_shell_t *sh, int argc, char **argv) {
@@ -950,6 +972,7 @@ static const builtin_t builtins[] = {
     { "touch", bi_touch, "create a file if it does not exist" },
     { "clear", bi_clear, "clear the screen" },
     { "reboot", bi_reboot, "reconfigure the FPGA, after syncing open files" },
+    { "jump", bi_jump, "boot the gateware at a flash address (hex)" },
     { "mkdir", bi_mkdir, "make directories" },
     { "wc",    bi_wc,    "count lines, words and characters" },
     { "head",  bi_head,  "first lines of a file  (head -5 f)" },

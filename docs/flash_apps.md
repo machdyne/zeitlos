@@ -42,7 +42,8 @@ part of `make flash`.
 0x10000000   MEM_ROM base
 0x100F0000   boot splash
 0x10100000   kernel, 256KB
-0x10140000   core apps  <-- this
+0x10140000   core apps  <-- this, up to 576 KB
+0x101D0000   the jumploader (docs/zboot.md sec. 5)
 0x1F000000   the flash controller's registers (docs/spiflash.md)
 ```
 

@@ -294,6 +294,7 @@ struct zf_bram {
 };
 
 void chip_init(zf_chip_t *c, zdb_t *db);
+uint32_t chip_cram_index(const zf_chip_t *c, uint32_t frame, uint32_t bit, uint8_t *mask);
 void chip_set_bit(zf_chip_t *c, uint32_t frame, uint32_t bit, int v);
 int chip_get_bit(const zf_chip_t *c, uint32_t frame, uint32_t bit);
 
@@ -339,6 +340,7 @@ typedef struct {
     uint32_t idcode;
     int have_bootaddr;
     uint32_t bootaddr;
+    int jump;               /* -J: a jumploader, its boot address patchable in place */
 } zf_packopts_t;
 
 void pack_apply_options(zf_chip_t *c, zf_packopts_t *o);
@@ -355,6 +357,9 @@ int cmd_place(int argc, char **argv, const char *dbdir_default);
 int cmd_unpack(int argc, char **argv, const char *dbdir_default);
 int cmd_synth(int argc, char **argv);
 int cmd_build(int argc, char **argv, const char *dbdir_default);
+int cmd_jump(int argc, char **argv, const char *dbdir_default);
+int cmd_flash(int argc, char **argv);     /* boot.c */
+int cmd_run(int argc, char **argv);
 int cmd_bram(int argc, char **argv, const char *dbdir_default);
 extern char unpack_pack_opts[160];      /* unpack.c: the last unpack's pack options */
 

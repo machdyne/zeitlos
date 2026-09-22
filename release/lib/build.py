@@ -280,6 +280,20 @@ def timing_summary(t):
 # The build
 # ---------------------------------------------------------------------
 
+def board_jumps(root, board):
+    """True if the Makefile packs this board's gateware to reload through
+    the jumploader at the top of the flash: JUMP = 1 in its block.
+
+    Asked of the Makefile rather than known here, because the Makefile is
+    what decides it -- the same variable adds --bootaddr to ecppack and
+    -DJUMPLOADER to yosys (docs/zboot.md sec. 5). A second list here
+    would be a second thing to keep in step.
+    """
+    out = subprocess.run(["make", "-s", "-p", "-n", "BOARD=" + board, "nosuchtarget"],
+                         cwd=root, capture_output=True, text=True).stdout
+    return any(line.strip() == "JUMP = 1" for line in out.splitlines())
+
+
 def build_software(root, core_apps, dry=False, jobs=None):
     """Kernel, apps and the core app archive. ONCE for the whole release.
 
@@ -420,7 +434,10 @@ def build_target(root, target, version, outdir, software, dry=False,
 
         # -- 3. gateware ----------------------------------------------
         print("  [3/4] gateware (yosys + nextpnr -- this is the slow one)")
-        run(mk + common + ["zeitlos_pico", "bios", "soc"], root, dry=dry)
+        # `jumploader` only on boards whose Makefile block sets JUMP
+        # (docs/zboot.md sec. 5); elsewhere it prints a line and makes
+        # nothing, and the image has no jumploader.
+        run(mk + common + ["zeitlos_pico", "bios", "soc", "jumploader"], root, dry=dry)
 
         pnr_log = os.path.join(boutput, "pnr.log")
         timing = check_timing(pnr_log, strict_io_timing=strict_io_timing)
@@ -473,6 +490,27 @@ def build_target(root, target, version, outdir, software, dry=False,
             "kernel": software["kernel"],
             "apps": software["zar"],
         }
+        # The jumploader (docs/zboot.md sec. 5). On a board whose Makefile
+        # block sets JUMP, the gateware reloads from the jumploader when
+        # it pulls PROGRAMN -- so an image without one would boot, and
+        # then refuse to reboot, forever. Refuse the image instead.
+        jump_bit = os.path.join(boutput, "jump.bit")
+        jumps = board_jumps(root, board_lc)
+        if jumps and not os.path.exists(jump_bit):
+            raise BuildError(
+                "%s: the Makefile packs %s's gateware to reload through the "
+                "jumploader at 0x%06x, but `make jumploader` produced no %s. "
+                "An image without it would boot and then never reboot."
+                % (target.name, board_lc,
+                   next(r.offset for r in lay["regions"] if r.key == "jump"),
+                   jump_bit))
+        if not jumps and os.path.exists(jump_bit):
+            raise BuildError(
+                "%s: %s exists, but %s's gateware does not reload through a "
+                "jumploader (JUMP is not set in its Makefile block)."
+                % (target.name, jump_bit, board_lc))
+        if jumps:
+            parts["jump"] = jump_bit
         img, rows = mkflashimg.build(lay, parts, full=full_image)
 
         # -- Asset names carry the TARGET but not the VERSION -----------
@@ -512,6 +550,15 @@ def build_target(root, target, version, outdir, software, dry=False,
         dst = os.path.join(outdir, stem + "-gateware.bit")
         shutil.copy2(parts["gateware"], dst)
         result["artifacts"]["gateware"] = os.path.basename(dst)
+
+        # The jumploader ships on its own too: it is built for the die,
+        # so it is per target like the gateware, and flashing the
+        # gateware alone onto a board that has never had one needs it.
+        if "jump" in parts:
+            dst = os.path.join(outdir, stem + "-jump.bit")
+            shutil.copy2(parts["jump"], dst)
+            result["artifacts"]["jumploader"] = os.path.basename(dst)
+            result["jump_addr"] = next(r.offset for r in lay["regions"] if r.key == "jump")
 
         # -- DFU variant ------------------------------------------------
         #

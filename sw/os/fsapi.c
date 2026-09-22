@@ -11,6 +11,7 @@
 
 #include "kernel.h"
 #include "fsapi.h"
+#include "cfg.h"		// k_cfg_card_check()
 #include "fs/fs.h"
 
 // Does a launchable executable by this name exist, from ANY source?
@@ -298,6 +299,7 @@ z_obj_t *k_fs_open_write(z_obj_t *args) {
 	z_fs_handles[slot].used = true;
 	z_fs_handles[slot].owner_pid = z_pid;
 	a->handle = slot;
+	k_cfg_card_check();	// a card that missed boot: its config (cfg.c, issue #7)
 
 	return (&z_ok);
 
@@ -329,6 +331,7 @@ z_obj_t *k_fs_open_read(z_obj_t *args) {
 	z_fs_handles[slot].used = true;
 	z_fs_handles[slot].owner_pid = z_pid;
 	a->handle = slot;
+	k_cfg_card_check();	// a card that missed boot: its config (cfg.c, issue #7)
 
 	return (&z_ok);
 
@@ -631,6 +634,7 @@ z_obj_t *k_fs_open_rw(z_obj_t *args) {
 	z_fs_handles[slot].used = true;
 	z_fs_handles[slot].owner_pid = z_pid;
 	a->handle = slot;
+	k_cfg_card_check();	// a card that missed boot: its config (cfg.c, issue #7)
 
 	return (&z_ok);
 

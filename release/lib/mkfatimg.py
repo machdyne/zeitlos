@@ -245,9 +245,17 @@ FPGA_FILES = [
     # it back fine, and the board saw only a mangled alias
     # (docs/zfpga.md sec. 22).
     ("fpga/lfe5u25f.zdb", "sw/apps/zfpga/db/lfe5u25f.zdb"),
+    # the 45F: Mozart ML1 and Sergei ML1
+    ("fpga/lfe5u45f.zdb", "sw/apps/zfpga/db/lfe5u45f.zdb"),
     # board profiles and their pins: `zfpga build design.v -b lakritz`
     ("fpga/boards/lakritz.brd", "sw/apps/zfpga/db/boards/lakritz.brd"),
     ("fpga/boards/lakritz.lpf", "sw/apps/zfpga/db/boards/lakritz.lpf"),
+    ("fpga/boards/obst.brd", "sw/apps/zfpga/db/boards/obst.brd"),
+    ("fpga/boards/obst.lpf", "sw/apps/zfpga/db/boards/obst.lpf"),
+    ("fpga/boards/mozart1.brd", "sw/apps/zfpga/db/boards/mozart1.brd"),
+    ("fpga/boards/mozart1.lpf", "sw/apps/zfpga/db/boards/mozart1.lpf"),
+    ("fpga/boards/sergei1.brd", "sw/apps/zfpga/db/boards/sergei1.brd"),
+    ("fpga/boards/sergei1.lpf", "sw/apps/zfpga/db/boards/sergei1.lpf"),
     # something to build: docs/zfpga-test.md walks through these
     ("fpga/examples/blink.v", "sw/apps/zfpga/db/examples/blink.v"),
     ("fpga/examples/blinkf.v", "sw/apps/zfpga/db/examples/blinkf.v"),

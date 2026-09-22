@@ -11,7 +11,7 @@ CC ?= cc
 CFLAGS = -std=gnu99 -O2 -g -Wall -Wextra -Wno-unused-parameter -Werror \
 	-DZFPGA_HOSTED=1
 
-SRCS = main.c util.c db.c chip.c cfg.c pack.c pnr.c route.c place.c unpack.c synth_parse.c synth_flat.c synth_elab.c synth_map.c bram.c build.c port_host.c
+SRCS = main.c util.c db.c chip.c cfg.c pack.c pnr.c route.c place.c unpack.c synth_parse.c synth_flat.c synth_elab.c synth_map.c bram.c build.c boot.c port_host.c
 HDRS = zfpga.h zfpga_port.h synth.h
 
 DB_SRC = ext/prjtrellis-db
@@ -27,10 +27,16 @@ zfpga: $(SRCS) $(HDRS)
 CARD_EXAMPLES = examples/blink.v examples/blinkf.v examples/empty.zn examples/on.zn \
 	examples/blink.zn examples/hand.zl examples/blinkh.v examples/blinkh.vh
 
-card: db/lfe5u25f.zdb boards/lakritz.brd ../../../boards/lakritz_v0.lpf $(CARD_EXAMPLES)
+card: db/lfe5u25f.zdb db/lfe5u45f.zdb boards/lakritz.brd ../../../boards/lakritz_v0.lpf boards/obst.brd ../../../boards/obst_v0.lpf boards/mozart1.brd ../../../boards/mozart_ml1.lpf boards/sergei1.brd ../../../boards/sergei_ml1.lpf $(CARD_EXAMPLES)
 	mkdir -p db/boards db/examples
 	cp boards/lakritz.brd db/boards/lakritz.brd
 	cp ../../../boards/lakritz_v0.lpf db/boards/lakritz.lpf
+	cp boards/obst.brd db/boards/obst.brd
+	cp ../../../boards/obst_v0.lpf db/boards/obst.lpf
+	cp boards/mozart1.brd db/boards/mozart1.brd
+	cp ../../../boards/mozart_ml1.lpf db/boards/mozart1.lpf
+	cp boards/sergei1.brd db/boards/sergei1.brd
+	cp ../../../boards/sergei_ml1.lpf db/boards/sergei1.lpf
 	cp $(CARD_EXAMPLES) db/examples/
 
 db/lfe5u25f.zdb: tools/mkzdb.py ext/nextpnr-base/lfe5u-25f.config
@@ -38,7 +44,18 @@ db/lfe5u25f.zdb: tools/mkzdb.py ext/nextpnr-base/lfe5u-25f.config
 	python3 tools/mkzdb.py --db $(DB_SRC) --device LFE5U-25F --also LFE5U-12F \
 		--source $(DB_COMMIT) --base ext/nextpnr-base/lfe5u-25f.config -o $@
 
+# The 45F: Mozart ML1 and Sergei ML1 (docs/zboot.md sec. 5)
+db/lfe5u45f.zdb: tools/mkzdb.py ext/nextpnr-base/lfe5u-45f.config
+	mkdir -p db
+	python3 tools/mkzdb.py --db $(DB_SRC) --device LFE5U-45F \
+		--source $(DB_COMMIT) --base ext/nextpnr-base/lfe5u-45f.config -o $@
+
+# zfpga flash / run against a flash image file (port_simflash.c), for
+# tests/run.sh: the real commands, end to end, with no machine.
+zfpga-simflash: $(SRCS) port_simflash.c $(HDRS)
+	$(CC) $(CFLAGS) -DZFPGA_SIMFLASH -o $@ $(SRCS) port_simflash.c
+
 clean:
-	rm -rf zfpga db tests/out
+	rm -rf zfpga zfpga-simflash db tests/out
 
 .PHONY: all clean card

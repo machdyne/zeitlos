@@ -237,7 +237,7 @@ So:
 
 | | |
 |---|---|
-| flash layout | kernel at `0x100000`, 256KB, core-app archive (`Z_ZAR_FLASH_OFFSET`) immediately after at `0x140000`; the ZAR's room will end at `0x1D0000`, where the jumploader goes (`docs/zboot.md` section 5) |
+| flash layout | kernel at `0x100000`, 256KB, core-app archive (`Z_ZAR_FLASH_OFFSET`) immediately after at `0x140000`; the ZAR's room ends at `0x1D0000`, where the jumploader is (`docs/zboot.md` section 5) |
 | the limit | `_end` must be under 256KB |
 | what spends it | text, data, **and every static array in the kernel** |
 | failure mode | the BIOS truncates; the kernel boots and then misbehaves |
@@ -521,6 +521,12 @@ serial shell and in `posix`) syncs every open write handle of every
 process, then reconfigures the FPGA through `rtl/socctl.v`'s RECONFIG
 register and the PROGRAMN pin. On a board whose gateware cannot pull
 PROGRAMN it fails and changes nothing. `docs/zboot.md` section 6.
+
+`Z_SYS_JUMP` (`k_jump`, `z_jump()`; `jump` in the serial shell and in
+`posix`) does the same from any flash address, through the jumploader
+at `0x1D0000`, which `sw/os/jumpapi.c` re-points in place; `reboot` is
+a jump to 0. `k_boot_to()` in `kernel.c` is both, and lists why either
+refuses. `docs/zboot.md` section 5.
 
 ## Writing the flash
 

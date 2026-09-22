@@ -5,6 +5,16 @@ The kernel reads it at boot, **before any app starts**, and keeps the
 settings in memory; apps ask the kernel. No card or no file means every
 setting has its default.
 
+**A card that comes up late** still gets its config read. With the core
+apps in flash, boot tries the card once rather than waiting, so that a
+board with no card starts at once -- and the first access to a freshly
+powered card can fail (issue #7). Boot then marks the config as pending
+(`cfg: no sdcard yet -- using defaults until it comes up`), and the
+first app launch or file open after the card comes up reads it, exactly
+as `cfg reload` would (`cfg: the sdcard came up after boot -- reading
+/zeitlos.cfg`). Apps already running see the new generation; the video
+mode is applied at once. `sw/os/cfg.c`, `k_cfg_card_check()`.
+
 ```
 # /zeitlos.cfg
 apps.term.auto_connect: port repl0

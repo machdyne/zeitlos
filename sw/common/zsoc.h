@@ -347,6 +347,17 @@
 // so check this before touching the registers. docs/spiflash.md.
 #define Z_FEATURE2_FLASHW     (1u << 6)
 
+// This gateware reloads from the jumploader at Z_JUMP_FLASH_OFFSET when
+// it pulls PROGRAMN (the Makefile's JUMP; rtl/csrs.vh FEATURES2 bit 7):
+// reboot and jump go through the jumploader. docs/zboot.md sec. 5.
+#define Z_FEATURE2_JUMP       (1u << 7)
+
+// The jumploader region: the same on every board, the top 192 KB of the
+// first 2 MB. KEEP IN SYNC with the Makefile's JUMP_ADDR
+// (release/lib/layout.py checks). docs/zboot.md sec. 5.
+#define Z_JUMP_FLASH_OFFSET   0x1D0000u
+#define Z_JUMP_REGION_SIZE    0x30000u
+
 // -- the flash controller's registers (rtl/spiflash.v) --
 //
 // The kernel owns these: apps go through Z_SYS_FLASH (zflash.h), which

@@ -33,7 +33,7 @@ APP_CFLAGS = $(CFLAGS) -Werror -Wno-unused-parameter
 # would overwrite them (sw/apps/zcc/Makefile has the story).
 B = build
 COMMON = zeitlos zobj zport zfsapp zwin zgfx zfont_data
-APP = main util db chip cfg pack pnr route place unpack synth_parse synth_flat synth_elab synth_map bram build port_dev
+APP = main util db chip cfg pack pnr route place unpack synth_parse synth_flat synth_elab synth_map bram build boot port_dev
 OBJS = $(addprefix $(B)/,$(addsuffix .o,$(COMMON) $(APP)))
 
 DB_SRC = ext/prjtrellis-db
@@ -69,16 +69,28 @@ zfpga.bin: zfpga.elf
 CARD_EXAMPLES = examples/blink.v examples/blinkf.v examples/empty.zn examples/on.zn \
 	examples/blink.zn examples/hand.zl examples/blinkh.v examples/blinkh.vh
 
-card: db/lfe5u25f.zdb boards/lakritz.brd ../../../boards/lakritz_v0.lpf $(CARD_EXAMPLES)
+card: db/lfe5u25f.zdb db/lfe5u45f.zdb boards/lakritz.brd ../../../boards/lakritz_v0.lpf boards/obst.brd ../../../boards/obst_v0.lpf boards/mozart1.brd ../../../boards/mozart_ml1.lpf boards/sergei1.brd ../../../boards/sergei_ml1.lpf $(CARD_EXAMPLES)
 	mkdir -p db/boards db/examples
 	cp boards/lakritz.brd db/boards/lakritz.brd
 	cp ../../../boards/lakritz_v0.lpf db/boards/lakritz.lpf
+	cp boards/obst.brd db/boards/obst.brd
+	cp ../../../boards/obst_v0.lpf db/boards/obst.lpf
+	cp boards/mozart1.brd db/boards/mozart1.brd
+	cp ../../../boards/mozart_ml1.lpf db/boards/mozart1.lpf
+	cp boards/sergei1.brd db/boards/sergei1.brd
+	cp ../../../boards/sergei_ml1.lpf db/boards/sergei1.lpf
 	cp $(CARD_EXAMPLES) db/examples/
 
 db/lfe5u25f.zdb: tools/mkzdb.py ext/nextpnr-base/lfe5u-25f.config
 	mkdir -p db
 	python3 tools/mkzdb.py --db $(DB_SRC) --device LFE5U-25F --also LFE5U-12F \
 		--source $(DB_COMMIT) --base ext/nextpnr-base/lfe5u-25f.config -o $@
+
+# The 45F: Mozart ML1 and Sergei ML1 (docs/zboot.md sec. 5)
+db/lfe5u45f.zdb: tools/mkzdb.py ext/nextpnr-base/lfe5u-45f.config
+	mkdir -p db
+	python3 tools/mkzdb.py --db $(DB_SRC) --device LFE5U-45F \
+		--source $(DB_COMMIT) --base ext/nextpnr-base/lfe5u-45f.config -o $@
 
 clean:
 	rm -rf $(B) zfpga.elf zfpga.bin zfpga.map zfpga.dasm db tests/out

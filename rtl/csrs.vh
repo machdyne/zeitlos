@@ -355,4 +355,11 @@ localparam CSR_FEATURES2 =
 `ifdef MEM_ROM
 	(32'h1 << 6) |
 `endif
+// This gateware reloads from the jumploader at 0x1D0000 when it pulls
+// PROGRAMN (the Makefile's JUMP, which also packs it --bootaddr
+// 0x1D0000): the kernel's reboot and jump go through the jumploader,
+// and refuse if none is there. docs/zboot.md sec. 5.
+`ifdef JUMPLOADER
+	(32'h1 << 7) |
+`endif
 	32'h0;

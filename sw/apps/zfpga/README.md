@@ -17,6 +17,9 @@ zfpga build /fpga/examples/blink.v -b lakritz
 | `zfpga pack IN.cfg` | to a bitstream, byte-identical to `ecppack`'s |
 | `zfpga unpack IN.bit` | back to a `.cfg`, text-identical to `ecpunpack`'s |
 | `zfpga bram IN.{cfg,bit} -f SEED.hex -t NEW.hex -o OUT` | new block RAM contents in a finished design, as `ecpbram` does |
+| `zfpga jump TARGET -b BOARD` | a jumploader: reloads from TARGET, which the machine can change in place (`docs/zboot.md` sec. 5) |
+| `zfpga flash FILE.bit [-a ADDR]` | install gateware in the machine's flash, after the core apps (on the machine) |
+| `zfpga run FILE.bit [-a ADDR]` | ... and boot it through the jumploader |
 | `zfpga info DEVICE [RrCc]` | the database, or what is at a location |
 
 ## Documentation

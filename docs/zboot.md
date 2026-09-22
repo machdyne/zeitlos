@@ -4,11 +4,12 @@ How an ECP5 decides which bitstream to load, how the DFU bootloader on
 these boards uses that, and what it would take for Zeitlos to load
 gateware it built itself.
 
-**Status: reference, an agreed design, and its first two steps built.**
-Sections 1-4 describe what ships today. Section 5 is the agreed design --
-a *jumploader* at `0x1D0000`. Step 1, `reboot`, is section 6; step 2,
-the writable flash controller, is `docs/spiflash.md`. Both are built and
-awaiting a hardware test.
+**Status: reference, and the design largely built.** Sections 1-4
+describe the machinery. Section 5 is the design -- a *jumploader* at
+`0x1D0000` -- and ends with the jumploader as built (step 3). Step 1,
+`reboot`, is section 6; step 2, the writable flash controller, is
+`docs/spiflash.md`, tested on a Lakritz. `zfpga flash` and `zfpga run`
+install user gateware and boot it. Still to come: self-upgrade.
 
 ---
 
@@ -282,10 +283,109 @@ result is a failed configuration and a power cycle, not a brick).
 
 | Step | | Status |
 |---|---|---|
-| 1 | **PROGRAMN and `reboot`.** With Zeitlos's boot address still 0, PROGRAMN alone reboots. It proves the pin while the flash is untouched. | **built**, section 6; needs a hardware test |
-| 2 | **A writable flash controller**: `WREN`, page program, 4 KB sector erase, status polling, and the write lock of section 7 -- `rtl/spiflash.v`, replacing `spiflashro.v`, and `Z_SYS_FLASH` in the kernel. Written in-house; the bootloader's `usb_spiflash_bridge.v` is Apache 2.0. | **built**, `docs/spiflash.md`; simulated against a W25Q16 model; needs a hardware test (`flashtest`) |
-| 3 | **The layout**: `layout.py` learns the jumploader region and caps the ZAR at `0x1D0000`; Zeitlos is packed `--bootaddr 0x1D0000`; release images carry the default jumploader; `zfpga boot` writes gateware and jumploaders. | |
+| 1 | **PROGRAMN and `reboot`.** With Zeitlos's boot address still 0, PROGRAMN alone reboots. It proves the pin while the flash is untouched. | **built**, section 6 |
+| 2 | **A writable flash controller**: `WREN`, page program, 4 KB sector erase, status polling, and the write lock of section 7 -- `rtl/spiflash.v`, replacing `spiflashro.v`, and `Z_SYS_FLASH` in the kernel. Written in-house; the bootloader's `usb_spiflash_bridge.v` is Apache 2.0. | **built**, `docs/spiflash.md`; **`flashtest` passes on a Lakritz** |
+| 3 | **The layout and the jumploader**: `layout.py` learns the jumploader region and caps the ZAR at `0x1D0000`; Zeitlos is packed `--bootaddr 0x1D0000`; release images carry the default jumploader; `reboot` and `jump` re-point it in place; `zfpga boot` writes user gateware. | **built** -- "The jumploader, as built", below, and `zfpga flash` / `run`; needs a hardware test |
 | 4 | **Self-upgrade and restore**, on step 2's writer. | |
+
+### The jumploader, as built
+
+**The patchable format.** In a compressed bitstream a frame's length
+depends on its bytes, so a different boot address would move everything
+after it (section 5, "Why not just patch"). `zfpga pack -J` changes two
+things: the frames holding BOOTADDR's eight bits are encoded with the
+literal code only -- ten bits a byte, whatever the byte -- and are left
+out of the dictionary's histogram. Each compressed frame is byte-aligned
+and carries its own CRC, and the CRC restarts after each one, so
+changing an address bit touches only its frame and that frame's CRC.
+The header then gains a comment line the FPGA skips:
+
+```
+ZJUMP1 b=0169b9.80,01694b.80,... c=01669b.0166fa,016709.016768,...
+```
+
+-- for each address bit, the stream byte and mask where it sits (as
+itself, in the literal code); for each patched frame, the first byte its
+CRC covers and where the CRC is. Offsets count from the preamble, so the
+header's own length does not matter. On a 25F the eight bits are in
+eight frames, and a jumploader is 99,631 bytes -- 871 more than
+ecppack's shortest encoding, well inside the 192 KB region.
+`docs/zfpga-formats.md` section 10.
+
+**Making one.** `zfpga jump TARGET -b BOARD`: the design is one line of
+Verilog -- `assign PROGRAMN = 1'b0` -- built like any other against the
+board's pin constraints, which name PROGRAMN (section 6), and packed
+`-c -a TARGET -J`. On the machine it takes about 5 s.
+
+**Re-pointing one.** `sw/common/zjump.c` reads the ZJUMP1 line, reads
+the current target from the eight bits, and sets a new one: flips the
+bits, recomputes the CRCs. The kernel (`sw/os/jumpapi.c`) gives it the
+flash: the one or two 4 KB sectors the change touches are loaded into
+RAM, patched there, erased and programmed back (blank pages skipped),
+and the jumploader is read again to check. No chip database, no stored
+copy.
+
+**Reboot and jump.** On a board built with the Makefile's `JUMP`
+(Lakritz and Obst; FEATURES2 bit 7), Zeitlos reloads from `0x1D0000`
+when it pulls PROGRAMN. So `reboot` points the jumploader at 0 and then
+pulls it; `jump ADDR` (serial shell, `posix`; `z_jump()` for apps)
+points it at ADDR. Each refuses, having changed nothing and said why,
+if the gateware cannot pull PROGRAMN, if it reloads through a
+jumploader and none is there -- PROGRAMN would then reload into
+nothing -- or if the re-pointing fails; `jump` also refuses on gateware
+built without `JUMP`, which can only reboot. `jump` with no address
+shows where the jumploader points.
+
+**The build.** `make jumploader` makes `output/BOARD/jump.bit` with the
+host zfpga; `make flash_jump` writes it at `0x1D0000`, and `make flash`
+includes it. Releases carry it in the `.img` and the DFU image and ship
+it on its own as `zeitlos-<target>-jump.bit`; the release build refuses
+an image for a jumploader board without one (`docs/releases.md`,
+"Flashing the parts separately"). And
+`release/lib/layout.py` now has the region, checks that `zsoc.h` and the
+Makefile agree on its address, and ends the ZAR at `0x1D0000`.
+
+**Boards.** Lakritz, Obst (a 12F: the 25F's die, and its database),
+Mozart ML1 and Sergei ML1 (45F; the 45F database is vendored for them).
+A 45F jumploader is 162,793 bytes, and ends at `0x1F7BE9`, inside the
+region. Sergei ML1's PROGRAMN pin, `M8`, is inferred rather than
+confirmed: it carries the same ML1 module as Mozart ML1 -- 68 of Mozart
+ML1's 72 pin assignments, clock, flash and SDRAM among them, are the
+same on Sergei -- and Mozart ML1's `M8` is confirmed.
+
+**Checked.**
+
+- Patched in place, a jumploader is byte-identical to one packed for the
+  new target: all 16 pairs of four targets.
+- `ecpunpack` reads every jumploader -- it checks every CRC, and fails
+  on a stale one -- and finds the same configuration ecppack writes,
+  boot address included.
+- The kernel's own code, on the host against a simulated W25Q16 that
+  keeps NOR rules and the lock (`tests/kjump.c`, 22 checks): re-pointing
+  gives zfpga's jumploader byte for byte, changes nothing else, and back
+  again restores the whole flash -- once within one sector, once
+  shifted across a sector boundary.
+- The machine's own zfpga makes the host's jumploader, byte for byte.
+
+**Testing it on a board.** Flash the new build (gateware, kernel, apps,
+and `make flash_jump`). Then, from the serial shell:
+
+1. `jump` -- expect "this gateware reloads through the jumploader" and
+   "points at 0x000000 (a reboot)".
+2. `reboot` -- the machine goes through the jumploader, the DFU
+   bootloader, and back to Zeitlos.
+3. To boot other gateware, from `posix`: `zfpga build
+   /fpga/examples/blink.v -b mozart_ml1` (or `-b lakritz`), then `zfpga
+   run blink.bit`. It is written after the core apps, the jumploader is
+   pointed at it, and the LED blinks; power-cycle to return. `zfpga run`
+   again rewrites nothing. `zfpga flash` writes without booting; `-a
+   ADDR` chooses the address, anywhere after the jumploader on a flash
+   larger than 2 MB.
+
+**A hazard.** A power cut between erasing a jumploader sector and
+programming it back leaves the jumploader broken. The machine still
+comes back -- power-on is address 0 -- but `reboot` and `jump` then
+refuse until `make flash_jump` (or a release image) rewrites it.
 
 ---
 
@@ -322,7 +422,9 @@ later -- says so and fails, rather than pretending. Apps call
 after this change, as after any change to `syscalls.def`.
 
 **The commands.** `reboot` in the kernel's serial shell and in `posix`.
-On a board without the pin, both say so and do nothing.
+On a board without the pin, both say so and do nothing. On a board
+built with `JUMP` (section 5, "The jumploader, as built"), `reboot`
+goes through the jumploader, pointing it at 0 first.
 
 ### Testing it on a board
 

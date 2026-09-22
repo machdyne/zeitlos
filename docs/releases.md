@@ -38,11 +38,13 @@ helpfully rebuilding something nobody has looked at.
 ```
 release/dist/0.0.3/
   zeitlos-lakritz_gpio.img          gateware + logo + kernel + core apps
+                                    + jumploader
   zeitlos-lakritz_katze.img
   zeitlos-lakritz_langkatze.img
   zeitlos-mozart_ml1.img
   zeitlos-sergei_ml1.img
-  zeitlos-<target>-gateware.bit     the only per-board piece
+  zeitlos-<target>-gateware.bit     per board
+  zeitlos-<target>-jump.bit         the jumploader, per board (boards with one)
   zeitlos-kernel.bin                identical for every target
   zeitlos-apps.zar                  identical for every target
   zeitlos-logo.bin                  identical for every target
@@ -510,7 +512,7 @@ flashing tool ever wants a literal 2MB.
 
 ## Flashing the parts separately
 
-The `.img` is the four pieces already assembled, written at offset 0.
+The `.img` is the pieces already assembled, written at offset 0.
 Writing them one at a time is equivalent, and is the thing to reach for
 when the whole-image write misbehaves — it is a shorter transfer per
 step, it says which region failed rather than failing somewhere in a
@@ -524,14 +526,23 @@ $ openFPGALoader -v -c dirtyJtag -f -o 0x000000 zeitlos-mozart_ml1-gateware.bit
 $ openFPGALoader -v -c dirtyJtag -f -o 0x0f0000 zeitlos-logo.bin
 $ openFPGALoader -v -c dirtyJtag -f -o 0x100000 zeitlos-kernel.bin
 $ openFPGALoader -v -c dirtyJtag -f -o 0x140000 zeitlos-apps.zar
+$ openFPGALoader -v -c dirtyJtag -f -o 0x1d0000 zeitlos-mozart_ml1-jump.bit
 ```
 
-**Planned** (`docs/zboot.md` section 5, not yet in `layout.py`): a
-*jumploader* at `0x1D0000` on every board -- a small bitstream Zeitlos
-jumps through to reboot or to boot other gateware. When it lands, the
-ZAR's room ends at `0x1D0000` (576 KB), Zeitlos is packed with boot
-address `0x1D0000`, and release images carry a default jumploader
-there. Nothing above changes offset.
+**The jumploader** (`docs/zboot.md` section 5) is a small bitstream at
+`0x1D0000`, which Zeitlos jumps through to reboot or to boot other
+gateware. The ZAR's room ends there (576 KB). On boards built with the
+Makefile's `JUMP` -- Lakritz, Obst, Mozart ML1, Sergei ML1 -- the
+gateware is packed to reload from `0x1D0000`, so **the jumploader is
+part of the system**: the `.img` and the DFU image carry it, it ships
+on its own as `zeitlos-<target>-jump.bit`, and `make flash` writes it
+(`make flash_jump` alone). Flashing the gateware by itself onto a board
+that has never had a jumploader leaves `reboot` refusing -- it says so
+-- until the jumploader is flashed too. A power cycle always works.
+
+The release build refuses to assemble an image for a jumploader board
+without its jumploader, and asks the Makefile which boards those are
+(`board_jumps()` in `lib/build.py`) rather than keeping its own list.
 
 The offsets are the flash map above, and they are not a convention the
 release tool invented — `sw/bios/bios.c` reads the splash and the
@@ -539,7 +550,8 @@ kernel from those addresses and `sw/os/zar.h` reads the archive from
 its one, so a piece written to the wrong offset produces a board that
 configures and then hangs with nothing on screen.
 
-**Only the gateware is board-specific.** `zeitlos-kernel.bin`,
+**Only the gateware and the jumploader are board-specific** -- the
+jumploader because it is built for the board's die. `zeitlos-kernel.bin`,
 `zeitlos-apps.zar` and `zeitlos-logo.bin` are byte-identical across
 every target in a release, which is why they have no board name. The
 `net` app carries every NIC driver and selects one at startup from the
@@ -825,6 +837,7 @@ before doing anything:
 ```
   replace  zeitlos-lakritz_gpio.img
   add      zeitlos-lakritz_gpio-gateware.bit
+  add      zeitlos-lakritz_gpio-jump.bit
   keep     zeitlos.img.gz  (not built by this run)
 ```
 

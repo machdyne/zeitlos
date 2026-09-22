@@ -600,6 +600,11 @@
 `elsif BOARD_SERGEI_ML1
 
 `define FPGA_ECP5
+// PROGRAMN is wired to user pin M8 (boards/*.lpf): rtl/socctl.v's
+// RECONFIG, `reboot`, docs/zboot.md. Sergei ML1 carries the same ML1
+// module as Mozart ML1 -- clock, flash and SDRAM pins are identical --
+// so M8 is taken from Mozart ML1's confirmed wiring.
+`define PROGRAMN_PIN
 `define OSC48
 `define MEM 32
 `define MEM_SDRAM

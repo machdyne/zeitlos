@@ -442,6 +442,120 @@ else
     echo "FAIL bram repeating seed:"; cat "$OUT/bram3.log"; fail=$((fail + 1))
 fi
 
+# -- zfpga jump: jumploaders (docs/zboot.md sec. 5) -------------------
+#
+# One for each board with PROGRAMN, to 0 and to 0x190000; the same
+# length for every target (the point of -J); with the Trellis tools,
+# ecpunpack checks every CRC and reads back the boot address. Then the
+# kernel's own code (sw/os/jumpapi.c, sw/common/zjump.c) against a
+# simulated flash: re-pointing one gives the other, byte for byte --
+# once as built, once shifted across a sector boundary.
+
+jump_ok=1
+for b in lakritz obst; do
+    for t in 0x000000 0x190000; do
+        if ! ./zfpga jump $t -b $b -D db -o "$OUT/j_${b}_$t.bit" > "$OUT/jump.log" 2>&1; then
+            echo "FAIL jump $t -b $b:"; sed 's/^/     /' "$OUT/jump.log"; jump_ok=0; fail=$((fail + 1))
+        fi
+    done
+done
+if [ $jump_ok = 1 ]; then
+    n0=$(wc -c < "$OUT/j_lakritz_0x000000.bit"); n1=$(wc -c < "$OUT/j_lakritz_0x190000.bit")
+    if [ "$n0" = "$n1" ] && [ ! -e "$OUT/j_lakritz_0x000000.v" ]; then
+        echo "ok   jump -b lakritz, -b obst: $n0 bytes, the same for every target"; pass=$((pass + 1))
+    else
+        echo "FAIL jump: $n0 and $n1 bytes, or its source was left behind"; fail=$((fail + 1))
+    fi
+    if [ $LIVE = 1 ]; then
+        good=1
+        for b in lakritz obst; do
+            for t in 0x000000 0x190000; do
+                if ! ecpunpack "$OUT/j_${b}_$t.bit" "$OUT/j.txt" > /dev/null 2>&1; then good=0
+                elif [ $t = 0x190000 ] && ! grep -q "BOOTADDR 00011001" "$OUT/j.txt"; then good=0; fi
+            done
+        done
+        if [ $good = 1 ]; then echo "ok   ecpunpack reads all four: every CRC, and the boot address"; pass=$((pass + 1))
+        else echo "FAIL ecpunpack rejects a jumploader"; fail=$((fail + 1)); fi
+    fi
+    if cc -O1 -Wall -I../../os -I../../common -o "$OUT/kjump" tests/kjump.c ../../os/jumpapi.c ../../common/zjump.c \
+            > "$OUT/kjump.log" 2>&1 &&
+       "$OUT/kjump" "$OUT/j_lakritz_0x000000.bit" "$OUT/j_lakritz_0x190000.bit" >> "$OUT/kjump.log" 2>&1; then
+        echo "ok   the kernel's jumploader code: $(grep -c '^ok' "$OUT/kjump.log") checks, one sector and two"; pass=$((pass + 1))
+    else
+        echo "FAIL the kernel's jumploader code:"; grep -v '^ok\|^jump:\|^--' "$OUT/kjump.log" | sed 's/^/     /'; fail=$((fail + 1))
+    fi
+fi
+
+# -- zfpga flash / run (docs/zboot.md sec. 5) --------------------------
+#
+# The real commands against flash image files (zfpga-simflash: the
+# hardware's rules -- erase to FF, program clears bits, nothing below
+# 0x040000). A Lakritz image: core apps ending at 0x186000, the
+# jumploader at 0x1D0000.
+
+F="$OUT/fl"; mkdir -p "$F"
+SF=./zfpga-simflash
+same() { cmp -s "$1" "$2"; }
+at() { dd if="$1" bs=1 skip=$(($2)) count=$3 2>/dev/null; }        # image, offset, length
+flash_ok=1
+fl_fail() { echo "FAIL flash/run: $1"; flash_ok=0; }
+# built from a copy: zfpga build writes its intermediates beside its input
+cp examples/blink.v "$F/blink.v"
+if make -s -f Makefile.host zfpga-simflash > "$F/mk.log" 2>&1 &&
+   ./zfpga build "$F/blink.v" -b lakritz -D db -o "$F/blink.bit" > /dev/null 2>&1 &&
+   ./zfpga build "$F/blink.v" -b mozart_ml1 -D db -o "$F/b45.bit" > /dev/null 2>&1 &&
+   ./zfpga jump 0 -b lakritz -D db -o "$F/jl.bit" > /dev/null 2>&1; then
+    n=$(wc -c < "$F/blink.bit")
+    python3 tests/mkflash.py "$F/img" 0x200000 0x186000 "$F/jl.bit"
+    cp "$F/img" "$F/img0"
+    ZFPGA_SIMFLASH="$F/img" $SF flash "$F/blink.bit" > "$F/o1" 2>&1 &&
+        grep -q "at 0x190000" "$F/o1" && grep -q "verified" "$F/o1" &&
+        [ "$(at "$F/img" 0x190000 $n | md5sum)" = "$(md5sum < "$F/blink.bit")" ] ||
+        fl_fail "the default place, after the core apps: $(cat "$F/o1")"
+    cmp -l "$F/img0" "$F/img" | awk -v lo=$((0x190000)) -v hi=$((0x190000 + n)) \
+        '$1 - 1 < lo || $1 - 1 >= hi { bad = 1 } END { exit bad }' ||
+        fl_fail "bytes outside the image changed"
+    cp "$F/img" "$F/img1"
+    ZFPGA_SIMFLASH="$F/img" $SF run "$F/blink.bit" > "$F/o2" 2>&1 &&
+        grep -q "already at 0x190000" "$F/o2" && same "$F/img" "$F/img1" &&
+        [ "$(cat "$F/img.jump")" = "0x190000" ] ||
+        fl_fail "run, again: no write, and a jump to 0x190000: $(cat "$F/o2")"
+    ZFPGA_SIMFLASH="$F/img" $SF flash "$F/b45.bit" > "$F/o3" 2>&1 &&
+        fl_fail "a 45F bitstream accepted on a 25F"
+    grep -q "this FPGA is" "$F/o3" && same "$F/img" "$F/img1" || fl_fail "... refused for the wrong reason: $(cat "$F/o3")"
+    for bad in "-a 0x191000:not 64 KB aligned" "-a 0x140000:is not free" "-a 0x200000:nothing after the jumploader" \
+               "-a 0x000000:is not free"; do
+        ZFPGA_SIMFLASH="$F/img" $SF flash "$F/blink.bit" ${bad%%:*} > "$F/o4" 2>&1 && fl_fail "${bad%%:*} accepted"
+        grep -q "${bad#*:}" "$F/o4" && same "$F/img" "$F/img1" || fl_fail "${bad%%:*}: $(cat "$F/o4")"
+    done
+    ZFPGA_SIMFLASH="$F/img" $SF flash tests/run.sh > "$F/o5" 2>&1 && fl_fail "a text file accepted"
+    grep -q "not an ECP5 bitstream" "$F/o5" || fl_fail "a text file: $(cat "$F/o5")"
+    python3 tests/mkflash.py "$F/full" 0x200000 0x1C8000 "$F/jl.bit"
+    ZFPGA_SIMFLASH="$F/full" $SF flash "$F/blink.bit" > "$F/o6" 2>&1 && fl_fail "too big below the jumploader, accepted"
+    grep -q "do not fit" "$F/o6" || fl_fail "too big: $(cat "$F/o6")"
+    python3 tests/mkflash.py "$F/big" 0x400000 0x1C8000 "$F/jl.bit"
+    ZFPGA_SIMFLASH="$F/big" $SF flash "$F/blink.bit" > "$F/o7" 2>&1; grep -q "\-a 0x200000 puts it after" "$F/o7" ||
+        fl_fail "a 4 MB flash: no hint to go after the jumploader: $(cat "$F/o7")"
+    ZFPGA_SIMFLASH="$F/big" $SF run "$F/blink.bit" -a 0x200000 > "$F/o8" 2>&1 &&
+        [ "$(at "$F/big" 0x200000 $n | md5sum)" = "$(md5sum < "$F/blink.bit")" ] &&
+        [ "$(cat "$F/big.jump")" = "0x200000" ] || fl_fail "-a 0x200000 on 4 MB: $(cat "$F/o8")"
+    python3 tests/mkflash.py "$F/nojl" 0x200000 0x186000
+    ZFPGA_SIMFLASH="$F/nojl" $SF run "$F/blink.bit" > "$F/o9" 2>&1 && fl_fail "run with no jumploader, accepted"
+    grep -q "no jumploader" "$F/o9" || fl_fail "run with no jumploader: $(cat "$F/o9")"
+    ./zfpga build "$F/blink.v" -b lakritz -D db -o "$F/own.bit" -- -a 0x190000 > /dev/null 2>&1
+    ZFPGA_SIMFLASH="$F/img" $SF flash "$F/own.bit" -a 0x1A0000 > "$F/o10" 2>&1
+    grep -q "its own boot address" "$F/o10" || fl_fail "no warning for a bitstream with its own boot address: $(cat "$F/o10")"
+    ./zfpga flash "$F/blink.bit" > "$F/o11" 2>&1 && fl_fail "the host zfpga wrote a flash"
+    grep -q "works on the machine" "$F/o11" || fl_fail "the host zfpga: $(cat "$F/o11")"
+    if [ $flash_ok = 1 ]; then
+        echo "ok   flash / run: placed after the core apps, verified, no rewrite of the same image, a jump;"
+        echo "     refused: wrong die, not free, unaligned, too big, not a bitstream, no jumploader; -a after it on 4 MB"
+        pass=$((pass + 1))
+    else fail=$((fail + 1)); fi
+else
+    echo "FAIL flash/run: could not build the test inputs"; cat "$F/mk.log"; fail=$((fail + 1))
+fi
+
 # -- Every source file is one git would keep --------------------------
 #
 # The tree's .gitignore ignores *.config and *.json; here those are the
@@ -458,6 +572,15 @@ if git rev-parse --is-inside-work-tree > /dev/null 2>&1; then
         echo "ok   every source file here is one git keeps"; pass=$((pass + 1))
     else
         echo "FAIL git would not commit these source files:"; echo "$lost" | sed 's/^/     /'; fail=$((fail + 1))
+    fi
+    # zfpga build writes intermediates beside its input: a test that
+    # builds a tracked example in place overwrites it (one did, and
+    # replaced the hand-written examples/blink.zn)
+    touched=$( (git diff --name-only -- examples; git ls-files --others --exclude-standard -- examples) 2>/dev/null)
+    if [ -z "$touched" ]; then
+        echo "ok   the tests left examples/ as git has it"; pass=$((pass + 1))
+    else
+        echo "FAIL the tests changed examples/:"; echo "$touched" | sed 's/^/     /'; fail=$((fail + 1))
     fi
 fi
 

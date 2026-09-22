@@ -103,6 +103,7 @@ endif
 BOARD_LC = $(shell echo '$(BOARD)' | tr '[:upper:]' '[:lower:]')
 BOARD_UC = $(shell echo '$(BOARD)' | tr '[:lower:]' '[:upper:]')
 
+
 # Where the bitstream and everything alongside it lands.
 #
 # Overridable so that a build which is NOT your development build can
@@ -231,6 +232,7 @@ else ifeq ($(BOARD), obst)
 	PROG = openFPGALoader -c $(CABLE)
 	FLASH = openFPGALoader -v -c $(CABLE) -f
 	FLASH_OFFSET = -o
+	JUMP = 1
 else ifeq ($(BOARD), lakritz)
 	FAMILY = ecp5
 	DEVICE = 25k
@@ -239,6 +241,7 @@ else ifeq ($(BOARD), lakritz)
 	PROG = openFPGALoader -c $(CABLE)
 	FLASH = openFPGALoader -v -c $(CABLE) -f
 	FLASH_OFFSET = -o
+	JUMP = 1
 else ifeq ($(BOARD), mozart_ml1)
 	FAMILY = ecp5
 	DEVICE = 45k
@@ -247,6 +250,7 @@ else ifeq ($(BOARD), mozart_ml1)
 	PROG = openFPGALoader -c dirtyJtag
 	FLASH = openFPGALoader -v -c dirtyJtag -f
 	FLASH_OFFSET = -o
+	JUMP = 1
 else ifeq ($(BOARD), sergei_ml1)
 	FAMILY = ecp5
 	DEVICE = 45k
@@ -255,6 +259,7 @@ else ifeq ($(BOARD), sergei_ml1)
 	PROG = openFPGALoader -c dirtyJtag
 	FLASH = openFPGALoader -v -c dirtyJtag -f
 	FLASH_OFFSET = -o
+	JUMP = 1
 else ifeq ($(BOARD), ulx3s)
 	FAMILY = ecp5
 	# Same 12/25/45/85K PCB and LPF; DEVICE picks the fitted chip.
@@ -386,7 +391,7 @@ FORCE:
 
 $(SOC_CONFIG_STAMP): FORCE
 	@mkdir -p $(OUTDIR)
-	@cur="BOARD=$(BOARD) DEVICE=$(DEVICE) PACKAGE=$(PACKAGE) EXTRA_DEFINES=$(EXTRA_DEFINES) ABC9=$(ABC9) PNR_SEED=$(PNR_SEED)"; \
+	@cur="BOARD=$(BOARD) DEVICE=$(DEVICE) PACKAGE=$(PACKAGE) EXTRA_DEFINES=$(EXTRA_DEFINES) JUMP=$(JUMP) ABC9=$(ABC9) PNR_SEED=$(PNR_SEED)"; \
 	if [ ! -f $@ ] || [ "$$(cat $@)" != "$$cur" ]; then \
 		echo "$$cur" > $@; \
 	fi
@@ -410,7 +415,7 @@ zeitlos_ice40_pico:
 else ifeq ($(FAMILY), ecp5)
 $(OUTDIR)/soc.config: $(SOC_SYNTH_INPUTS) $(SOC_CONFIG_STAMP)
 	mkdir -p $(OUTDIR)
-	yosys $(EXTRA_DEFINES) -DBOARD_$(BOARD_UC) -DECP5 -q -l $(SYNTH_LOG) -p \
+	yosys $(EXTRA_DEFINES) $(JUMP_DEFINES) -DBOARD_$(BOARD_UC) -DECP5 -q -l $(SYNTH_LOG) -p \
 		"synth_ecp5 $(ABC9) -top sysctl -json $(OUTDIR)/soc.json" $(RTL_PICO)
 	nextpnr-ecp5 --$(DEVICE) --package $(PACKAGE) --lpf boards/$(LPF) \
 		--json $(OUTDIR)/soc.json \
@@ -421,18 +426,7 @@ $(OUTDIR)/soc.config: $(SOC_SYNTH_INPUTS) $(SOC_CONFIG_STAMP)
 		--timing-allow-fail --ignore-loops
 	@{ cat $(SOC_CONFIG_STAMP); cat $(SOC_SYNTH_INPUTS); } | openssl dgst -sha256 | awk '{print $$NF}' > $(SOC_INPUTS_HASH)
 	@echo
-	@grep -E "Max frequency for clock" $(PNR_LOG) | grep -v "ro_clk" | sed 's/^Info: //' || true
-	@if grep "FAIL at" $(PNR_LOG) | grep -qv "ro_clk"; then \
-		echo; \
-		echo "*** TIMING NOT MET -- the bitstream will program and"; \
-		echo "*** misbehave intermittently. Critical path:"; \
-		echo; \
-		awk '/Critical path report for clock/{c++} c' $(PNR_LOG) \
-			| grep -E "Source|Sink|\.v:[0-9]" | head -30; \
-		echo; \
-		echo "*** full detail: make path BOARD=$(BOARD_LC)"; \
-		echo; \
-	fi
+	@tools/pnr_timing.sh $(PNR_LOG) $(BOARD_LC)
 
 zeitlos_ecp5_pico: $(OUTDIR)/soc.config
 
@@ -477,7 +471,7 @@ soc: check $(OUTDIR)/soc.config $(OUTDIR)/.soc_inputs_ok sw/bios/bios.hex
 		-o $(OUTDIR)/soc_final.config \
 		-f sw/bios/bios_seed.hex \
 		-t sw/bios/bios.hex
-	ecppack -v --compress --freq 2.4 $(OUTDIR)/soc_final.config \
+	ecppack -v --compress --freq 2.4 $(BOOTADDR_FLAG) $(OUTDIR)/soc_final.config \
 		--bit $(OUTDIR)/soc.bit
 	@desc=`git describe --always --dirty 2>/dev/null || echo unknown`; \
 	inhash=`cat $(SOC_INPUTS_HASH)`; \
@@ -632,7 +626,46 @@ dev-flash: dev flash_os flash_apps
 # opt-in target would defeat that -- a new user would flash the board,
 # get a bare shell, and have no reason to suspect there was a second
 # command to run. See sw/os/zar.h.
+# Boards that reboot, and boot other gateware, through a jumploader
+# (docs/zboot.md sec. 5; JUMP = 1 in their blocks above): Zeitlos is
+# packed to reload from JUMP_ADDR when it pulls PROGRAMN, and the
+# jumploader there -- made by the host zfpga, `make jumploader` --
+# decides where the machine goes next. The same switch tells the
+# gateware (-DJUMPLOADER -> FEATURES2 bit 7), so the kernel never pulls
+# PROGRAMN into an empty jumploader region. Needs `PROGRAMN_PIN` in
+# rtl/boards.vh, which synthesis checks. KEEP JUMP_ADDR IN SYNC with
+# Z_JUMP_FLASH_OFFSET in sw/common/zsoc.h (release/lib/layout.py checks).
+JUMP_ADDR = 0x1D0000
+ifeq ($(JUMP), 1)
+	JUMP_DEFINES = -DJUMPLOADER
+	BOOTADDR_FLAG = --bootaddr $(JUMP_ADDR)
+endif
+
+# The jumploader: a bitstream that pulls PROGRAMN and reloads from its
+# own boot address -- 0, the default, is a reboot. Built by the host
+# zfpga (sw/apps/zfpga, docs/zfpga.md) for the board's die; the kernel
+# re-points it in place (`jump`, docs/zboot.md sec. 5). Written at
+# JUMP_ADDR, in its own region at the top of the first 2 MB.
+ifeq ($(JUMP), 1)
+$(OUTDIR)/jump.bit: sw/apps/zfpga/build.c sw/apps/zfpga/pack.c boards/$(LPF)
+	mkdir -p $(OUTDIR)
+	$(MAKE) -C sw/apps/zfpga -f Makefile.host all card
+	sw/apps/zfpga/zfpga jump 0 -b $(BOARD) -D sw/apps/zfpga/db -o $(OUTDIR)/jump.bit
+
+jumploader: $(OUTDIR)/jump.bit
+
+flash_jump: check $(OUTDIR)/jump.bit
+	$(FLASH) $(FLASH_OFFSET) $(shell printf '%d' $(JUMP_ADDR)) $(OUTDIR)/jump.bit
+else
+jumploader flash_jump:
+	@echo "$(BOARD) has no jumploader (JUMP is not set: docs/zboot.md sec. 5)"
+endif
+
+ifeq ($(JUMP), 1)
+flash: zeitlos flash_soc flash_os flash_logo flash_apps flash_jump
+else
 flash: zeitlos flash_soc flash_os flash_logo flash_apps
+endif
 
 os:
 	cd sw/os && make PREFIX=$(PREFIX)
@@ -667,6 +700,13 @@ tftp-dist:
 # which is a far more confusing thing to debug than one that refuses to
 # build.
 #
+# nextpnr logs every clock twice. The first pass is an estimate made
+# right after placement; the second is the routed result. On a design
+# that closes, the estimate can still say FAIL. The result is the last
+# line of each clock, which is what tools/pnr_timing.sh prints. A FAIL
+# that survives to that line is real, and the path under the warning
+# is that clock's routed path -- not the first clock in the file.
+#
 #   make timing BOARD=obst        after a build
 #   make path BOARD=obst          full critical path for every clock
 # ro_clk[*] are the TRNG's ring oscillators, each clocking one
@@ -675,18 +715,7 @@ tftp-dist:
 timing:
 	@test -f $(PNR_LOG) || { echo "no $(PNR_LOG) -- build first"; exit 1; }
 	@echo
-	@grep -E "Max frequency for clock" $(PNR_LOG) | grep -v "ro_clk" | sed 's/^Info: //' || true
-	@if grep "FAIL at" $(PNR_LOG) | grep -qv "ro_clk"; then \
-		echo; \
-		echo "*** TIMING NOT MET -- the bitstream will program and"; \
-		echo "*** misbehave intermittently. Critical path:"; \
-		echo; \
-		awk '/Critical path report for clock/{c++} c' $(PNR_LOG) \
-			| grep -E "Source|Sink|\.v:[0-9]" | head -30; \
-		echo; \
-		echo "*** full detail: make path BOARD=$(BOARD_LC)"; \
-		echo; \
-	fi
+	@tools/pnr_timing.sh $(PNR_LOG) $(BOARD_LC)
 
 # Differential test of the blitter: reference vs a candidate, same
 # stimulus, framebuffers compared word for word. A clip-path change
@@ -948,9 +977,13 @@ path:
 # whether the placer has room to do a good job -- above about 75%
 # TRELLIS_COMB on this device it starts to struggle, and timing gets
 # seed-sensitive.
+#
+# The packed counts are one block in the log (nextpnr prints them
+# once, after packing, before placement). TRELLIS_COMB is the last
+# line of that block; a fixed head -20 stopped short of it.
 util:
 	@test -f $(PNR_LOG) || { echo "no $(PNR_LOG) -- build first"; exit 1; }
-	@awk '/Device utilisation/{f=1} f && /Info:/' $(PNR_LOG) | head -20
+	@awk '/Device utilisation/{blk=""; cap=1} cap{blk=blk $$0 "\n"} cap && NF==0{cap=0; last=blk} END{if (cap) last=blk; printf "%s", last}' $(PNR_LOG)
 
 clean: clean_os clean_bios clean_apps
 

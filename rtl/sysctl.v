@@ -2627,6 +2627,13 @@ module sysctl #()
 	// a button. From power-on until software writes the key, the buffer
 	// is tri-stated.
 	wire socctl_reconfig;
+`ifdef JUMPLOADER
+`ifndef PROGRAMN_PIN
+	// The Makefile packed this board to jump through a jumploader, but
+	// rtl/boards.vh gives it no PROGRAMN: nothing could ever pull it.
+	JUMPLOADER_needs_PROGRAMN_PIN_in_rtl_boards_vh stop_here();
+`endif
+`endif
 `ifdef PROGRAMN_PIN
 	BB programn_bb (.I(1'b0), .T(~socctl_reconfig), .O(), .B(PROGRAMN));
 `endif

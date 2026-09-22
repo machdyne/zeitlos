@@ -395,3 +395,75 @@ The `.hex` files are what ecpbram reads: one word per line, hex digits,
 both files the same depth, a multiple of 512 words (a shorter new file
 is padded with zeros). `-o` is always required: the input is never
 overwritten.
+
+---
+
+## 10. `zfpga jump` -- jumploaders, and `pack -J`
+
+```
+zfpga jump 0x000000 -b lakritz -o jump.bit
+zfpga pack design.cfg -c -a 0x190000 -J -o design.bit
+```
+
+A **jumploader** is a bitstream whose design pulls PROGRAMN low as soon
+as it wakes, so the FPGA reloads from the jumploader's boot address.
+`zfpga jump` builds one for a board: the one-line Verilog is written
+beside the output, built (`zfpga build ... -- -a TARGET -J`) against the
+board's pin constraints, which must name `PROGRAMN`, and removed.
+`docs/zboot.md` section 5 has why.
+
+`pack -J` makes the boot address **patchable in place**: the frames
+holding its eight bits use the literal code only, and are left out of
+the dictionary, so a different address changes nothing but those bits
+and their frames' CRCs. It needs `-c` and `-a`. The header gains a line:
+
+```
+ZJUMP1 b=OOOOOO.MM,OOOOOO.MM,... c=FFFFFF.AAAAAA,...
+```
+
+| field | |
+|---|---|
+| `b=` | eight pairs, address bit 0 (flash address bit 16) first: the stream byte (hex) and the mask of the bit within it |
+| `c=` | one pair per patched frame: the first byte its CRC covers, and the byte where the CRC is (two bytes, MSB first) |
+
+Offsets count from the preamble's first `FF`. The CRC is CRC-16/BUYPASS
+(polynomial `0x8005`, no reflection, initial 0) over `[first, at)`.
+`sw/common/zjump.c` reads and patches it; `build` also takes `--`, after
+which options go to `pack`.
+
+---
+
+## 11. `zfpga flash` and `zfpga run` -- installing gateware
+
+```
+zfpga flash blink.bit [-a ADDR]     write it into the machine's flash
+zfpga run   blink.bit [-a ADDR]     ... and boot it
+```
+
+On the machine only (the host zfpga says so). **Where:** by default,
+the first 64 KB boundary after the core apps -- the ZAR's header says
+where its last entry ends -- and the whole bitstream must end before
+the jumploader at `0x1D0000`. `-a ADDR` puts it elsewhere: 64 KB
+aligned (a boot address is `addr[23:16]`), and either in that same
+space or, on a flash larger than 2 MB, anywhere after `0x200000` -- as
+many designs as fit, one address each.
+
+**Refused, with nothing written:** a file that is not an ECP5
+bitstream; one whose device ID is not this FPGA's (the jumploader's,
+which was built for this die); one that does not fit; an address that
+is not free or not aligned; `run` with no jumploader to boot through.
+A bitstream packed with its own boot address is written, with a
+warning: its resets go there, not back to Zeitlos.
+
+**Writing:** in a flash write session (`docs/spiflash.md`), a 4 KB
+sector at a time, then read back and compared. If the flash already
+holds exactly these bytes there, nothing is written.
+
+**`run`** then asks the kernel to jump (`z_jump`, `docs/zboot.md`
+sec. 5): the jumploader is pointed at the address, open files synced,
+PROGRAMN pulled. A power cycle always returns to Zeitlos.
+
+`tests/run.sh` runs both commands, end to end, against flash image
+files (`zfpga-simflash`, with the hardware's erase, program and lock
+rules), and `release/lib/layout.py` checks `boot.c`'s copy of the flash
+map against the kernel's.

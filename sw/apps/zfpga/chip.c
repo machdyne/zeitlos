@@ -57,6 +57,12 @@ static inline uint32_t cram_index(const zf_chip_t *c, uint32_t frame, uint32_t b
     return frame * c->bytes_per_frame + (c->bytes_per_frame - 1 - (ofs >> 3));
 }
 
+/* The byte and mask of a configuration bit, for code outside this file
+ * that has to find one (pack.c's -J). */
+uint32_t chip_cram_index(const zf_chip_t *c, uint32_t frame, uint32_t bit, uint8_t *mask) {
+    return cram_index(c, frame, bit, mask);
+}
+
 void chip_set_bit(zf_chip_t *c, uint32_t frame, uint32_t bit, int v) {
     uint8_t m;
     uint32_t i;

@@ -216,3 +216,8 @@ Z_MKSYSCALL(REBOOT, k_reboot)
 // rather than six syscalls; see sw/common/zflash.h, sw/os/flashapi.c,
 // docs/spiflash.md. Appended last so no earlier enum value shifts.
 Z_MKSYSCALL(FLASH, k_flash)
+
+// Reconfigure the FPGA from a flash address, through the jumploader at
+// 0x1D0000: re-point it, sync open files, pull PROGRAMN. z_jump(),
+// k_jump() in sw/os/kernel.c, docs/zboot.md sec. 5. Appended last.
+Z_MKSYSCALL(JUMP, k_jump)

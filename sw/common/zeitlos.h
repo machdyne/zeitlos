@@ -650,6 +650,18 @@ uint32_t z_getpid(void);
 // happen. docs/zboot.md.
 bool z_reboot(void);
 
+// Reconfigure the FPGA from `target`, a flash address (64 KB aligned),
+// through the jumploader at 0x1D0000 -- which the kernel re-points --
+// after syncing open files. Does not return on success; otherwise the
+// reason, negative (k_boot_to() in sw/os/kernel.c: -1 no PROGRAMN, -2
+// no jumploader, -3 could not re-point it, -4 this gateware does not
+// jump). docs/zboot.md sec. 5.
+typedef struct {
+	uint32_t target;
+	int32_t result;
+} z_jump_args_t;
+int z_jump(uint32_t target);
+
 // launches a new process from a named file on the FAT filesystem
 // (e.g. z_proc_run("term")) -- see zeitlos.c for the full writeup.
 // Returns the new pid, or 0 on failure.

@@ -49,7 +49,7 @@ $ zcc hello.c -o hello && run hello
 | files | `ls` `cat` `cp` `mv` `rm` `touch` `mkdir` `rmdir` |
 | text | `wc` `head` `tail` `grep` `sort` `uniq` |
 | places | `cd` `pwd` |
-| other | `echo` `clear` `df` `run` `help` `exit` `reboot` |
+| other | `echo` `clear` `df` `run` `help` `exit` `reboot` `jump` |
 
 `grep` matches a **fixed string**, not a regular expression. `vi` has
 regular expressions (`:g`, `:s`) if you need them.

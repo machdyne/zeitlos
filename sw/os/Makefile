@@ -61,7 +61,7 @@ LDSCRIPT = ../common/riscv-os.ld
 
 OBJS = kernel.o kruntime.o mem.o zar.o usb/usbh.o usb/usbh_hid.o usb/usbh_msc.o usb/usbh_hub.o usb/usbh_cdc.o usbcdcapi.o \
 	fs/fs.o fs/ramdisk.o fs/sdbench.o fs/fatfs/sdmm.o fs/fatfs/diskio_mux.o fs/fatfs/ff.o \
-	uart.o hid.o sh.o xfer.o xmodem.o ui.o msg.o pidreg.o fsapi.o flashapi.o procapi.o zobj.o zstream.o zdns.o zsoc.o zgpio.o logo.o \
+	uart.o hid.o sh.o xfer.o xmodem.o ui.o msg.o pidreg.o fsapi.o flashapi.o jumpapi.o zjump.o procapi.o zobj.o zstream.o zdns.o zsoc.o zgpio.o logo.o \
 	cfg.o zcfg.o
 
 # kernel.o's recipe below builds every object in one go (they're not
@@ -75,8 +75,8 @@ OBJS = kernel.o kruntime.o mem.o zar.o usb/usbh.o usb/usbh_hid.o usb/usbh_msc.o 
 # zstream/TFTP work -- see docs/networking.md.
 KSRCS = kernel.c kruntime.c mem.c \
 	fs/fs.c fs/ramdisk.c fs/sdbench.c fs/fatfs/sdmm.c fs/fatfs/diskio_mux.c fs/fatfs/ff.c \
-	usb/usbh.c usb/usbh_hid.c usb/usbh_msc.c usb/usbh_hub.c usb/usbh_cdc.c usbcdcapi.c uart.c hid.c sh.c xfer.c xmodem.c ui.c msg.c pidreg.c fsapi.c flashapi.c procapi.c logo.c cfg.c \
-	../common/zobj.c ../common/zstream.c ../common/zdns.c ../common/zsoc.c ../common/zcfg.c
+	usb/usbh.c usb/usbh_hid.c usb/usbh_msc.c usb/usbh_hub.c usb/usbh_cdc.c usbcdcapi.c uart.c hid.c sh.c xfer.c xmodem.c ui.c msg.c pidreg.c fsapi.c flashapi.c jumpapi.c procapi.c logo.c cfg.c \
+	../common/zobj.c ../common/zstream.c ../common/zdns.c ../common/zsoc.c ../common/zcfg.c ../common/zjump.c
 
 kernel: kernel.elf kernel.bin
 
@@ -120,6 +120,7 @@ fs/ramdisk.o: fs/ramdisk.c fs/ramdisk.h
 	$(CC) $(CFLAGS) -c pidreg.c -o pidreg.o
 	$(CC) $(CFLAGS) -c fsapi.c -o fsapi.o
 	$(CC) $(CFLAGS) -c flashapi.c -o flashapi.o
+	$(CC) $(CFLAGS) -c jumpapi.c -o jumpapi.o
 	$(CC) $(CFLAGS) -c procapi.c -o procapi.o
 	$(CC) $(CFLAGS) -c ../common/zobj.c -o zobj.o
 	$(CC) $(CFLAGS) -c cfg.c -o cfg.o
@@ -130,6 +131,7 @@ fs/ramdisk.o: fs/ramdisk.c fs/ramdisk.h
 	$(CC) $(CFLAGS) -c ../common/zdns.c -o zdns.o
 	$(CC) $(CFLAGS) -c kernel.c -S -o kernel.asm
 	$(CC) $(CFLAGS) -c ../common/zsoc.c -o zsoc.o
+	$(CC) $(CFLAGS) -c ../common/zjump.c -o zjump.o
 	$(CC) $(CFLAGS) -c ../common/zgpio.c -o zgpio.o
 	$(CC) $(CFLAGS) -c sh.c -S -o sh.asm
 

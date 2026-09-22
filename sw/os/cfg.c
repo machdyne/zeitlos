@@ -14,6 +14,7 @@
 #include "kernel.h"
 #include "cfg.h"
 #include "fs/fs.h"
+#include "fs/fatfs/diskio.h"	// disk_status(): is the card up yet
 
 // -- the store --
 //
@@ -122,6 +123,26 @@ static void apply(bool verbose) {
 
 // -- loading --
 
+// -- a config the card was not up for (issue #7) --
+
+static bool cfg_pending;
+
+static bool card_up(void) {
+	return !(disk_status(0) & STA_NOINIT);
+}
+
+void k_cfg_defer(void) {
+	cfg_pending = true;
+}
+
+void k_cfg_card_check(void) {
+	uint32_t ignored;
+	if (!cfg_pending || !card_up()) return;
+	cfg_pending = false;            // before the load: it opens files too
+	printf("cfg: the sdcard came up after boot -- reading %s\n", Z_CFG_PATH);
+	k_cfg_load(true, &ignored);
+}
+
 int k_cfg_load(bool verbose, uint32_t *ignored) {
 
 	static char line[Z_CFG_LINE_MAX];
@@ -138,6 +159,10 @@ int k_cfg_load(bool verbose, uint32_t *ignored) {
 	// K_NO_PREEMPT_MAX_TICKS (kernel.c), and a config file is far
 	// smaller than that cap is generous.
 	k_fs_enter();
+
+	// any load with the card up settles a deferred one -- `cfg reload`
+	// included
+	if (card_up()) cfg_pending = false;
 
 	k_cfg_used = 0;
 	k_cfg_n = 0;

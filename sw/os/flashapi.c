@@ -132,3 +132,8 @@ z_obj_t *k_flash(z_obj_t *args) {
 		return &z_fail;
 	}
 }
+
+// One byte of the flash, through the memory-mapped window.
+uint8_t k_flash_window(uint32_t off) {
+	return *(volatile const uint8_t *)(0x10000000u + off);
+}

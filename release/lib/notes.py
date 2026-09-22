@@ -168,14 +168,14 @@ def notes(version, commit, targets, sdcard, layout, prev_version=None):
     out.append("")
     out.append("| Offset | Size | Contents |")
     out.append("| --- | --- | --- |")
-    for key in ("gateware", "logo", "kernel", "apps"):
-        r = L[key]
+    for r in layout["regions"]:
         out.append("| `0x%06x` | %d KB | %s |"
                    % (r.offset, r.limit // 1024, r.name))
     out.append("")
-    out.append("Images are trimmed to the end of the core app archive "
-               "rather than padded to the full %d KB, so the tail of flash "
-               "is left erased instead of being written."
+    out.append("Images are trimmed to the end of their last piece -- the "
+               "jumploader, on boards that have one, otherwise the core app "
+               "archive -- rather than padded to the full %d KB, so the "
+               "rest of flash is left erased instead of being written."
                % (layout["flash_size"] // 1024))
     out.append("")
 
@@ -275,7 +275,7 @@ def asset_readme(version, commit, targets, sdcard, layout):
     out.append("THE REST OF THE FILES")
     out.append("-" * W)
     out.append("")
-    out.append("The same system as the .img above, in four pieces.")
+    out.append("The same system as the .img above, in pieces.")
     out.append("Everything here is already inside that image.")
     out.append("")
     out.append("Flash them separately if the whole-image write gives")
@@ -291,6 +291,10 @@ def asset_readme(version, commit, targets, sdcard, layout):
                % L["apps"].offset)
     out.append("  zeitlos-logo.bin               splash,    flash 0x%06x"
                % L["logo"].offset)
+    if "jump" in L:
+        out.append("  zeitlos-<board>-jump.bit       jumploader, flash 0x%06x"
+                   % L["jump"].offset)
+        out.append("                                 (boards that have one)")
     out.append("")
     out.append("THE OFFSETS ARE NOT OPTIONAL. The BIOS reads the splash")
     out.append("and the kernel from fixed addresses, and the OS reads the")
@@ -304,10 +308,14 @@ def asset_readme(version, commit, targets, sdcard, layout):
         if not fc or not gw:
             continue
         lines = []
-        for key, fn in (("gateware", gw),
-                        ("logo", "zeitlos-logo.bin"),
-                        ("kernel", "zeitlos-kernel.bin"),
-                        ("apps", "zeitlos-apps.zar")):
+        pieces = [("gateware", gw),
+                  ("logo", "zeitlos-logo.bin"),
+                  ("kernel", "zeitlos-kernel.bin"),
+                  ("apps", "zeitlos-apps.zar")]
+        jl = (t.get("artifacts") or {}).get("jumploader")
+        if jl and "jump" in L:
+            pieces.append(("jump", jl))
+        for key, fn in pieces:
             c = _at_offset(fc, L[key].offset, fn)
             if c:
                 lines.append("  $ " + c)
@@ -318,14 +326,22 @@ def asset_readme(version, commit, targets, sdcard, layout):
         out += lines
         out.append("")
 
-    out.append("Only the gateware is board-specific, which is why it is")
-    out.append("the only one of the four with a board name.")
+    out.append("The gateware and the jumploader are board-specific, which")
+    out.append("is why they are the ones with a board name.")
+    out.append("")
+    out.append("THE JUMPLOADER. On a board that has one, the gateware")
+    out.append("reloads from 0x%06x whenever the system reboots or boots"
+               % (L["jump"].offset if "jump" in L else 0))
+    out.append("other gateware. Flashing the gateware alone onto a board")
+    out.append("that has never had a jumploader leaves `reboot` refusing")
+    out.append("until it is flashed too -- the .img includes it.")
     out.append("")
     out.append("  MANIFEST.json   every RTL define, achieved Fmax and")
     out.append("                  utilisation for each build")
     out.append("  SHA256SUMS      checksums for everything above")
     out.append("")
-    out.append("Only the gateware differs between boards. The kernel,")
+    out.append("Only the gateware and the jumploader differ between")
+    out.append("boards. The kernel,")
     out.append("the core apps and the splash are identical everywhere --")
     out.append("the `net` app carries both NIC drivers and picks one at")
     out.append("startup from the SOC feature register.")
@@ -335,16 +351,16 @@ def asset_readme(version, commit, targets, sdcard, layout):
     out.append("FLASH LAYOUT")
     out.append("-" * W)
     out.append("")
-    for key in ("gateware", "logo", "kernel", "apps"):
-        r = L[key]
+    for r in layout["regions"]:
         out.append("  0x%06x  %6d KB  %s"
                    % (r.offset, r.limit // 1024, r.name))
     out.append("  0x%06x            end of flash" % layout["flash_size"])
     out.append("")
-    out.append("Images stop at the end of the core app archive rather than")
-    out.append("padding to the full %d KB, so the tail of flash is left"
+    out.append("Images stop at the end of their last piece -- the")
+    out.append("jumploader where a board has one, otherwise the core app")
+    out.append("archive -- rather than padding to the full %d KB, so the"
                % (layout["flash_size"] // 1024))
-    out.append("erased instead of being written.")
+    out.append("rest of flash is left erased instead of being written.")
     out.append("")
 
     out.append("-" * W)

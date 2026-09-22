@@ -39,6 +39,9 @@ static void usage(void) {
         "       zfpga unpack IN.bit [-o OUT.cfg] [-D DBDIR]\n"
         "       zfpga bram IN.{cfg,bit} -f FROM.hex -t TO.hex -o OUT [-D DBDIR]\n"
         "       zfpga bram -g OUT.hex -w WIDTH -d DEPTH [-s SEED]\n"
+        "       zfpga jump TARGET [-b BOARD] [-o OUT.bit] [-D DBDIR]\n"
+        "       zfpga flash FILE.bit [-a ADDR]     (on the machine)\n"
+        "       zfpga run FILE.bit [-a ADDR]       (flash, then boot it)\n"
         "       zfpga info DEVICE [R<row>C<col>] [-D DBDIR]\n"
         "       zfpga version\n");
     zio_exit(2);
@@ -94,6 +97,7 @@ int cmd_pack(int argc, char **argv) {
         if (zf_streq(a, "-o")) out = need(argc, argv, &i);
         else if (zf_streq(a, "-c")) o.compress = 1;
         else if (zf_streq(a, "-a")) { o.have_bootaddr = 1; o.bootaddr = need_uint(argc, argv, &i); }
+        else if (zf_streq(a, "-J")) o.jump = 1;
         else if (zf_streq(a, "-f")) o.freq = need(argc, argv, &i);
         else if (zf_streq(a, "-m")) o.spimode = need(argc, argv, &i);
         else if (zf_streq(a, "-u")) { o.have_usercode = 1; o.usercode = need_uint(argc, argv, &i); }
@@ -230,7 +234,7 @@ int main(int argc, char **argv) {
      * line gives the default 16KB, and every one of them would fail at
      * its first allocation; say so plainly, before anything else. */
     if (zf_streq(argv[1], "build") || zf_streq(argv[1], "place") || zf_streq(argv[1], "pnr") ||
-            zf_streq(argv[1], "pack") || zf_streq(argv[1], "unpack") || zf_streq(argv[1], "bram")) {
+            zf_streq(argv[1], "pack") || zf_streq(argv[1], "unpack") || zf_streq(argv[1], "bram") || zf_streq(argv[1], "jump")) {
         void *probe = zio_block(3328u * 1024u);
         if (!probe)
             zf_fatal("this process has less than 3.3MB of memory; zfpga needs the 4MB tier. "
@@ -246,6 +250,9 @@ int main(int argc, char **argv) {
     else if (zf_streq(argv[1], "synth")) rc = cmd_synth(argc - 1, argv + 1);
     else if (zf_streq(argv[1], "build")) rc = cmd_build(argc - 1, argv + 1, DEFAULT_DB);
     else if (zf_streq(argv[1], "bram")) rc = cmd_bram(argc - 1, argv + 1, DEFAULT_DB);
+    else if (zf_streq(argv[1], "jump")) rc = cmd_jump(argc - 1, argv + 1, DEFAULT_DB);
+    else if (zf_streq(argv[1], "flash")) rc = cmd_flash(argc - 1, argv + 1);
+    else if (zf_streq(argv[1], "run")) rc = cmd_run(argc - 1, argv + 1);
     else if (zf_streq(argv[1], "version")) { zf_print("zfpga %s\n", ZFPGA_VERSION); rc = 0; }
     else { zf_note("unknown command '%s'", argv[1]); usage(); }
 

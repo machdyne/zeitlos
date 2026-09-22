@@ -80,10 +80,16 @@ static void crc_init_table(void) {
 typedef struct {
     zf_writer_t w;
     uint16_t crc;
+    /* A dry pass writes nothing and only counts: a jumploader's header
+     * describes offsets within the stream that follows it (see -J). */
+    int dry;
+    uint32_t pos;           /* bytes since the preamble's first FF */
+    uint32_t crc_start;     /* where the running CRC last restarted */
 } bs_t;
 
 static void wb(bs_t *s, uint8_t b) {
-    zf_writer_byte(&s->w, b);
+    if (!s->dry) zf_writer_byte(&s->w, b);
+    s->pos++;
     s->crc = (uint16_t)((s->crc << 8) ^ crc_tab[((s->crc >> 8) ^ b) & 0xff]);
 }
 
@@ -95,11 +101,15 @@ static void wbytes(bs_t *s, const uint8_t *p, uint32_t n) {
     for (i = 0; i < n; i++)
         crc = (uint16_t)((crc << 8) ^ crc_tab[((crc >> 8) ^ p[i]) & 0xff]);
     s->crc = crc;
-    zf_writer_bytes(&s->w, p, n);
+    if (!s->dry) zf_writer_bytes(&s->w, p, n);
+    s->pos += n;
 }
 
 static void dummy(bs_t *s, int n) {
-    while (n--) zf_writer_byte(&s->w, 0xFF);
+    while (n--) {
+        if (!s->dry) zf_writer_byte(&s->w, 0xFF);
+        s->pos++;
+    }
 }
 
 static void zeros(bs_t *s, int n) {
@@ -118,6 +128,50 @@ static void crc_out(bs_t *s) {
     wb(s, (uint8_t)(c >> 8));
     wb(s, (uint8_t)c);
     s->crc = 0;
+    s->crc_start = s->pos;
+}
+
+/* -- jumploaders (-J) --------------------------------------------------
+ * A jumploader's boot address can be changed IN FLASH, by the machine,
+ * without re-packing: docs/zboot.md sec. 5. In a compressed bitstream a
+ * frame's length depends on its bytes, so changing the address would
+ * move everything after it. With -J, the frames holding BOOTADDR's
+ * eight bits are encoded with the literal code only -- 10 bits a byte,
+ * whatever the byte -- and are left out of the dictionary's histogram,
+ * so neither their length nor the dictionary depends on the address.
+ * Each frame is byte-aligned and carries its own CRC, so changing one
+ * changes nothing outside it but its CRC.
+ *
+ * The header then says where the eight bits are and which CRCs cover
+ * them (pack_write), as offsets from the preamble's first FF -- so the
+ * header's own length does not matter:
+ *
+ *   ZJUMP1 b=OOOOOO.MM,... (bit 0 first) c=FFFFFF.AAAAAA,...
+ *
+ * b: the stream byte and mask of each address bit, in the literal code
+ * where the bit sits as itself; c: for each patched frame, the first
+ * byte its CRC covers and the byte where the CRC (2 bytes, MSB first)
+ * is. CRC-16/BUYPASS, as below. sw/common/zjump.c reads it. */
+
+#define JUMP_BITS 8
+#define JUMP_MAX_FRAMES 8
+
+static struct {
+    int on;
+    uint32_t frame[JUMP_BITS], byte[JUMP_BITS];     /* where each address bit is in CRAM */
+    uint8_t mask[JUMP_BITS];
+    uint32_t pframe[JUMP_MAX_FRAMES];               /* the frames holding them */
+    int n_pframe;
+    uint32_t b_off[JUMP_BITS];                      /* ...and in the stream */
+    uint8_t b_mask[JUMP_BITS];
+    uint32_t c_from[JUMP_MAX_FRAMES], c_at[JUMP_MAX_FRAMES];
+    int n_c, n_b;
+} J;
+
+static int jump_frame(uint32_t f) {
+    int k;
+    for (k = 0; k < J.n_pframe; k++) if (J.pframe[k] == f) return 1;
+    return 0;
 }
 
 /* -- options -----------------------------------------------------------
@@ -161,6 +215,9 @@ void pack_apply_options(zf_chip_t *c, zf_packopts_t *o) {
      * ecppack writes each bit to the VALUE and ignores the database's
      * inversion flag; so does this, because the point is to agree. See
      * docs/zboot.md sec. 2 for what the address does. */
+    J.on = 0;
+    if (o->jump && !o->have_bootaddr) zf_fatal("-J needs a boot address (-a)");
+    if (o->jump && !o->compress) zf_fatal("-J is for compressed bitstreams (-c)");
     if (o->have_bootaddr) {
         const zdb_tile_t *t = only_tile_of_type(c, "EFB1_PICB1");
         const zdb_type_t *ty = &c->db->type[t->type];
@@ -170,12 +227,29 @@ void pack_apply_options(zf_chip_t *c, zf_packopts_t *o) {
             zf_fatal("boot address 0x%x is not 64K aligned", o->bootaddr);
         if (!w) zf_fatal("database has no BOOTADDR");
         v = (o->bootaddr & 0x00ff0000u) >> 16;
+        J.on = o->jump;
+        J.n_pframe = 0;
+        if (o->jump && w->n_grp != JUMP_BITS)
+            zf_fatal("-J: BOOTADDR has %u bits in this database, not %d", w->n_grp, JUMP_BITS);
         for (j = 0; j < w->n_grp; j++) {
             const zdb_grp_t *g = &c->db->grp[w->grp0 + j];
+            if (o->jump && g->n_bit != 1)
+                zf_fatal("-J: BOOTADDR bit %u is %u configuration bits, not 1", j, g->n_bit);
             for (i = 0; i < g->n_bit; i++) {
                 uint16_t b = c->db->bit[g->bit0 + i];
-                chip_set_bit(c, t->start_frame + ZDB_BIT_FRAME(b),
-                    t->start_bit + ZDB_BIT_BIT(b), (v >> j) & 1);
+                uint32_t fr = t->start_frame + ZDB_BIT_FRAME(b), bt = t->start_bit + ZDB_BIT_BIT(b);
+                chip_set_bit(c, fr, bt, (v >> j) & 1);
+                if (o->jump) {
+                    uint8_t m;
+                    uint32_t idx = chip_cram_index(c, fr, bt, &m);
+                    J.frame[j] = idx / c->bytes_per_frame;
+                    J.byte[j] = idx % c->bytes_per_frame;
+                    J.mask[j] = m;
+                    if (!jump_frame(J.frame[j])) {
+                        if (J.n_pframe == JUMP_MAX_FRAMES) zf_fatal("-J: BOOTADDR spans too many frames");
+                        J.pframe[J.n_pframe++] = J.frame[j];
+                    }
+                }
             }
         }
         o->multiboot = 1;
@@ -232,7 +306,11 @@ static void write_compressed(bs_t *s, zf_chip_t *c) {
     bits_t bw;
 
     for (i = 0; i < 256; i++) hist[i] = 0;
-    for (i = 0; i < c->frames * B; i++) hist[c->cram[i]]++;
+    for (f = 0; f < c->frames; f++) {
+        const uint8_t *fr = c->cram + f * B;
+        if (J.on && jump_frame(f)) continue;    /* the dictionary must not depend on the address */
+        for (i = 0; i < B; i++) hist[fr[i]]++;
+    }
 
     for (k = 0; k < 8; k++) {
         int best = -1;
@@ -258,10 +336,37 @@ static void write_compressed(bs_t *s, zf_chip_t *c) {
     wb(s, (uint8_t)c->frames);
 
     bw.s = s; bw.buf = 0; bw.n = 0;
+    J.n_b = J.n_c = 0;
     for (f = 0; f < c->frames; f++) {
-        const uint8_t *fr = c->cram + (c->frames - 1 - f) * B;
+        uint32_t fn = c->frames - 1 - f;
+        const uint8_t *fr = c->cram + fn * B;
         if (B % 8)
             for (i = 0; i < 8 - B % 8; i++) bit_put(&bw, 0);
+        if (J.on && jump_frame(fn)) {
+            /* every byte literal, recording where each address bit lands */
+            uint32_t from = s->crc_start;
+            for (i = 0; i < B; i++) {
+                int bit;
+                bits_put(&bw, 3, 2);
+                for (bit = 7; bit >= 0; bit--) {
+                    int j;
+                    for (j = 0; j < JUMP_BITS; j++)
+                        if (J.frame[j] == fn && J.byte[j] == i && J.mask[j] == (uint8_t)(1u << bit)) {
+                            J.b_off[j] = s->pos;
+                            J.b_mask[j] = (uint8_t)(0x80u >> bw.n);
+                            J.n_b++;
+                        }
+                    bit_put(&bw, (fr[i] >> bit) & 1);
+                }
+            }
+            bits_flush(&bw);
+            J.c_from[J.n_c] = from;
+            J.c_at[J.n_c] = s->pos;
+            J.n_c++;
+            crc_out(s);
+            for (k = 0; k < ECP5_DUMMY_AFTER_FRAME; k++) wb(s, 0xFF);
+            continue;
+        }
         for (i = 0; i < B; i++) {
             uint8_t b = fr[i];
             int oh;
@@ -282,8 +387,43 @@ static void write_compressed(bs_t *s, zf_chip_t *c) {
 
 /* -- the whole bitstream ---------------------------------------------- */
 
+static void pack_emit(bs_t *s, zf_chip_t *c, const zf_packopts_t *o, const char *extra_meta,
+    const char *out_path);
+
 void pack_write(zf_chip_t *c, const zf_packopts_t *o, const char *out_path) {
     bs_t *s = zf_alloc(sizeof(*s));
+    char *desc = NULL;
+    if (J.on) {
+        /* the dry pass finds the offsets the header will describe */
+        uint32_t n, k;
+        int j;
+        zf_memset(s, 0, sizeof(*s));
+        s->dry = 1;
+        pack_emit(s, c, o, NULL, NULL);
+        if (J.n_b != JUMP_BITS) zf_fatal("-J: found %d of the address bits in the stream", J.n_b);
+        desc = zf_alloc(16 + 10 * JUMP_BITS + 16 * (uint32_t)J.n_c);
+        n = (uint32_t)zf_fmt(desc, 32, "ZJUMP1 b=");
+        for (j = 0; j < JUMP_BITS; j++)
+            n += (uint32_t)zf_fmt(desc + n, 16, "%s%06x.%02x", j ? "," : "", J.b_off[j], J.b_mask[j]);
+        n += (uint32_t)zf_fmt(desc + n, 8, " c=");
+        for (k = 0; k < (uint32_t)J.n_c; k++)
+            n += (uint32_t)zf_fmt(desc + n, 20, "%s%06x.%06x", k ? "," : "", J.c_from[k], J.c_at[k]);
+    }
+    zf_memset(s, 0, sizeof(*s));
+    pack_emit(s, c, o, desc, out_path);
+    zf_writer_close(&s->w);
+}
+
+static void hbyte(bs_t *s, uint8_t b) {
+    if (!s->dry) zf_writer_byte(&s->w, b);
+}
+
+static void hbytes(bs_t *s, const char *p) {
+    if (!s->dry) zf_writer_bytes(&s->w, (const uint8_t *)p, (uint32_t)zf_strlen(p));
+}
+
+static void pack_emit(bs_t *s, zf_chip_t *c, const zf_packopts_t *o, const char *extra_meta,
+    const char *out_path) {
     uint32_t ctrl0 = c->ctrl0, f, B = c->bytes_per_frame;
     int i;
     struct zf_bram *br;
@@ -312,18 +452,25 @@ void pack_write(zf_chip_t *c, const zf_packopts_t *o, const char *out_path) {
     else if (o->multiboot == 0) ctrl0 &= ~MULTIBOOT_FLAG;
     if (o->background) ctrl0 |= BACKGROUND_FLAG;
 
-    zf_writer_open(&s->w, out_path);
+    /* Opened only now, once every option has been checked: a bad one
+     * must not leave a partial output behind (tests/run.sh). */
+    if (!s->dry) zf_writer_open(&s->w, out_path);
 
     /* Metadata header. Not part of the bitstream proper; the FPGA skips
-     * it, vendor tools read it. */
-    zf_writer_byte(&s->w, 0xFF);
-    zf_writer_byte(&s->w, 0x00);
+     * it, vendor tools read it. A jumploader adds its ZJUMP1 line. */
+    hbyte(s, 0xFF);
+    hbyte(s, 0x00);
     for (i = 0; i < c->n_meta; i++) {
-        zf_writer_bytes(&s->w, (const uint8_t *)c->meta[i], (uint32_t)zf_strlen(c->meta[i]));
-        zf_writer_byte(&s->w, 0x00);
+        hbytes(s, c->meta[i]);
+        hbyte(s, 0x00);
     }
-    zf_writer_byte(&s->w, 0xFF);
+    if (extra_meta) {
+        hbytes(s, extra_meta);
+        hbyte(s, 0x00);
+    }
+    hbyte(s, 0xFF);
 
+    s->pos = 0;             /* offsets count from the preamble */
     wb(s, 0xFF); wb(s, 0xFF); wb(s, 0xBD); wb(s, 0xB3);
     dummy(s, ECP5_DUMMY_AFTER_PREAMBLE);
 
@@ -336,6 +483,7 @@ void pack_write(zf_chip_t *c, const zf_packopts_t *o, const char *out_path) {
     wb(s, CMD_LSC_RESET_CRC);
     zeros(s, 3);
     s->crc = 0;
+    s->crc_start = s->pos;
 
     wb(s, CMD_VERIFY_ID);
     zeros(s, 3);
@@ -386,6 +534,4 @@ void pack_write(zf_chip_t *c, const zf_packopts_t *o, const char *out_path) {
     wb(s, CMD_ISC_PROGRAM_DONE);
     zeros(s, 3);
     dummy(s, 4);
-
-    zf_writer_close(&s->w);
 }

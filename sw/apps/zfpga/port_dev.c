@@ -23,6 +23,15 @@
 #include "zport.h"
 #include "zobj.h"
 #include "../posix/posix.h"     /* PX_STDOUT_TAG */
+/* zflash.h's inline wrappers call the kernel through reg_kernel, a fixed
+ * MMIO address GCC's bounds analysis reads as an array at address 0 --
+ * the false positive the apps build shows on every kernel call. GCC
+ * places it where the header's code is written, so under -Werror it is
+ * silenced around this include alone; the rest of this file keeps it. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Warray-bounds"
+#include "zflash.h"                 /* Z_SYS_FLASH */
+#pragma GCC diagnostic pop
 #include "zfpga_port.h"
 
 struct zio_file {
@@ -221,4 +230,44 @@ int zio_fat83(void) {
 
 int zio_remove(const char *path) {
     return fs_unlink((char *)path);
+}
+
+/* -- the configuration flash, through the kernel (docs/spiflash.md) -- */
+
+static uint32_t flash_wait(void) {
+    uint32_t st;
+    while ((st = z_flash_status()) & Z_SPIFLASH_BUSY) ;
+    return st;
+}
+
+int zio_flash_begin(zio_flash_info_t *info) {
+    if (!z_flash_info(&info->id, &info->size, &info->lock_end)) return -1;
+    if (!z_flash_begin()) return -2;
+    return 0;
+}
+
+void zio_flash_end(void) {
+    z_flash_end();
+}
+
+uint8_t zio_flash_read(uint32_t off) {
+    return *(volatile const uint8_t *)(0x10000000u + off);
+}
+
+uint32_t zio_flash_erase(uint32_t off) {
+    uint32_t r = z_flash_erase(off);
+    if (r) return r;
+    flash_wait();
+    return 0;
+}
+
+uint32_t zio_flash_program(uint32_t off, const uint8_t *p, uint32_t n) {
+    uint32_t r = z_flash_program(off, p, n);
+    if (r) return r;
+    flash_wait();
+    return 0;
+}
+
+int zio_jump(uint32_t addr) {
+    return z_jump(addr);
 }

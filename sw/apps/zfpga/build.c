@@ -44,9 +44,23 @@ static char *path2(const char *dir, const char *a, const char *b) {
     return zf_strdup(buf);
 }
 
+/* The tree's board names that are longer than the card's 8.3 file names
+ * allow: the Makefile says `-b mozart_ml1`, the card holds mozart1.brd. */
+static const struct { const char *name, *file; } board_aliases[] = {
+    { "mozart_ml1", "mozart1" },
+    { "sergei_ml1", "sergei1" },
+};
+
+static const char *board_file(const char *name) {
+    unsigned i;
+    for (i = 0; i < sizeof(board_aliases) / sizeof(board_aliases[0]); i++)
+        if (zf_streq(name, board_aliases[i].name)) return board_aliases[i].file;
+    return name;
+}
+
 static void read_board(const char *dbdir, const char *name, board_t *b) {
     zf_reader_t *r = zf_alloc(sizeof(*r));
-    const char *path = path2(dbdir, "boards/", zf_strdup(name));
+    const char *path = path2(dbdir, "boards/", zf_strdup(board_file(name)));
     char *line, *tok[20], *p;
     zio_file_t *f;
     zf_memset(b, 0, sizeof(*b));
@@ -106,6 +120,8 @@ static char *swap_ext(const char *in, const char *ext) {
 }
 
 int cmd_build(int argc, char **argv, const char *dbdir_default) {
+    char **extra = 0;
+    int n_extra = 0;
     const char *in = NULL, *out = NULL, *dbdir = dbdir_default, *bname = NULL;
     board_t *b = zf_alloc(sizeof(*b));
     char *zl, *zn, *cfg, *bit;
@@ -123,7 +139,8 @@ int cmd_build(int argc, char **argv, const char *dbdir_default) {
         t0 = t_; } while (0)
 
     for (i = 1; i < argc; i++) {
-        if (zf_streq(argv[i], "-b") && i + 1 < argc) bname = argv[++i];
+        if (zf_streq(argv[i], "--")) { extra = argv + i + 1; n_extra = argc - i - 1; break; }
+        else if (zf_streq(argv[i], "-b") && i + 1 < argc) bname = argv[++i];
         else if (zf_streq(argv[i], "-o") && i + 1 < argc) out = argv[++i];
         else if (zf_streq(argv[i], "-D") && i + 1 < argc) dbdir = argv[++i];
         else if (argv[i][0] == '-') zf_fatal("build: unknown option %s", argv[i]);
@@ -198,9 +215,72 @@ int cmd_build(int argc, char **argv, const char *dbdir_default) {
     n = 0;
     av[n++] = "pack"; av[n++] = cfg; av[n++] = "-o"; av[n++] = bit; av[n++] = "-D"; av[n++] = (char *)dbdir;
     for (i = 0; i < b->n_pack; i++) av[n++] = b->pack[i];
+    for (i = 0; i < n_extra && n < (int)(sizeof(av) / sizeof(av[0])); i++) av[n++] = extra[i];     /* after `--` */
     cmd_pack(n, av);
     STAGE_DONE("pack");
     zf_note("wrote %s in %u.%u s (peak memory %u KB)", bit, (zio_ms() - start) / 1000u,
         (zio_ms() - start) / 100u % 10u, (unsigned)(zf_mem_peak() / 1024));
     return 0;
+}
+
+/* -- zfpga jump: a jumploader --------------------------------------------
+ *
+ *   zfpga jump TARGET -b BOARD [-o OUT.bit] [-D DBDIR]
+ *
+ * A jumploader is the smallest useful design there is: it pulls the
+ * board's PROGRAMN pin low the moment it wakes, and the FPGA reloads
+ * from TARGET. Zeitlos jumps to the one at 0x1D0000 to reboot, or to
+ * boot other gateware, and the kernel changes where it points in place
+ * (sw/common/zjump.c) -- which is what -J makes possible. The board's
+ * pin constraints must name PROGRAMN. docs/zboot.md sec. 5.
+ */
+static const char JUMP_V[] =
+    "// A jumploader (zfpga jump): pull PROGRAMN low as soon as the\n"
+    "// design wakes; the FPGA then reloads from this bitstream's boot\n"
+    "// address. docs/zboot.md sec. 5.\n"
+    "module top(output PROGRAMN);\n"
+    "    assign PROGRAMN = 1'b0;\n"
+    "endmodule\n";
+
+int cmd_jump(int argc, char **argv, const char *dbdir_default) {
+    const char *target = NULL, *bname = NULL, *out = "jump.bit", *dbdir = dbdir_default;
+    char *src, *av[16];
+    zf_writer_t *w;
+    uint32_t t;
+    int i, n = 0, rc;
+
+    for (i = 1; i < argc; i++) {
+        if (zf_streq(argv[i], "-b") && i + 1 < argc) bname = argv[++i];
+        else if (zf_streq(argv[i], "-o") && i + 1 < argc) out = argv[++i];
+        else if (zf_streq(argv[i], "-D") && i + 1 < argc) dbdir = argv[++i];
+        else if (argv[i][0] == '-') zf_fatal("jump: unknown option %s", argv[i]);
+        else if (!target) target = argv[i];
+        else zf_fatal("jump: more than one target");
+    }
+    if (!target) zf_fatal("usage: zfpga jump TARGET [-b BOARD] [-o OUT.bit] [-D DBDIR]");
+    if (!zf_parse_uint(target, &t) || (t & 0xFFFF) || t > 0xFF0000)
+        zf_fatal("jump: target %s: a flash address, 64 KB aligned, below 16 MB", target);
+
+    /* the source, beside the output: jump.bit -> jump.v */
+    src = zf_alloc(zf_strlen(out) + 4);
+    zf_memcpy(src, out, zf_strlen(out) + 1);
+    {
+        size_t k = zf_strlen(src);
+        while (k > 0 && src[k - 1] != '.' && src[k - 1] != '/') k--;
+        if (k > 0 && src[k - 1] == '.') src[k - 1] = 0;
+        zf_memcpy(src + zf_strlen(src), ".v", 3);
+    }
+    w = zf_alloc(sizeof(*w));
+    zf_writer_open(w, src);
+    zf_writer_bytes(w, (const uint8_t *)JUMP_V, (uint32_t)zf_strlen(JUMP_V));
+    zf_writer_close(w);
+
+    av[n++] = "build"; av[n++] = src; av[n++] = "-o"; av[n++] = (char *)out;
+    if (bname) { av[n++] = "-b"; av[n++] = (char *)bname; }
+    av[n++] = "-D"; av[n++] = (char *)dbdir;
+    av[n++] = "--"; av[n++] = "-a"; av[n++] = (char *)target; av[n++] = "-J";
+    rc = cmd_build(n, av, dbdir_default);
+    zio_remove(src);
+    if (!rc) zf_note("jumploader to 0x%06x: %s", t, out);
+    return rc;
 }

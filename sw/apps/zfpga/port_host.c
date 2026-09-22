@@ -91,3 +91,20 @@ int zio_fat83(void) {
 int zio_remove(const char *path) {
     return remove(path);
 }
+
+#ifndef ZFPGA_SIMFLASH
+/* zfpga flash and run write the machine's own flash: not here. The test
+ * binary zfpga-simflash replaces these with port_simflash.c. */
+int zio_flash_begin(zio_flash_info_t *info) {
+    (void)info;
+    return -1;
+}
+void zio_flash_end(void) {}
+uint8_t zio_flash_read(uint32_t off) { (void)off; return 0xFF; }
+uint32_t zio_flash_erase(uint32_t off) { (void)off; return 0xFFFFFFFFu; }
+uint32_t zio_flash_program(uint32_t off, const uint8_t *p, uint32_t n) {
+    (void)off; (void)p; (void)n;
+    return 0xFFFFFFFFu;
+}
+int zio_jump(uint32_t addr) { (void)addr; return -1; }
+#endif
