@@ -620,6 +620,22 @@ scrolling would leave it highlighting whatever moved into those rows —
 text nobody selected. Keeping it would need source-anchored positions,
 which is a document model this app deliberately doesn't have.
 
+## Reading aloud
+
+With speech on ([tts.md](tts.md)), **Super+A** reads the document from
+the top of the screen, a block at a time -- a paragraph, a heading, a
+list item -- as `read_block()` parses it, so what is said is the text
+as shown and never the Markdown around it; a numbered item keeps its
+number, a bullet is not read. The page follows the voice: each block is
+scrolled to the top of the screen as it is spoken. Any key or click
+stops it, leaving the page where the voice was, and Super+A again reads
+on from there; the wheel scrolls without stopping it.
+
+**Super+C** says the highlighted text, once, leaving the clipboard as it
+was ("Nothing selected" if there is none); **Super+V** says the
+clipboard. The selected text is gathered by the same code as a copy
+(`sel_text()`), so the two always agree.
+
 ## Testing
 
 Two host suites, both run with the cross-compiler bypassed:

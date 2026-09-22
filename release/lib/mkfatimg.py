@@ -160,7 +160,18 @@ SELFHOST = [
 ]
 
 DIRS = ["apps", "audio", "docs", "ark", "user", "libz", "libz/include",
-        "fpga", "fpga/boards", "fpga/examples"]
+        "fpga", "fpga/boards", "fpga/examples", "speech"]
+
+# The speech pack: the pronunciation lexicon and the recorded voice
+# sw/apps/tts reads (docs/tts.md). NOT built from this tree and NOT
+# committed to it -- tools/speech builds it from public-domain sources,
+# and it is published with the release -- which is why it is looked for
+# rather than required. Without it, speech still works: the built-in
+# dictionary and letter-to-sound rules, and the formant voice.
+#
+# SPEECH_PACK in the environment ships a pack built elsewhere.
+SPEECH_PACK = "tools/speech/build/en/speech.zspk"
+SPEECH_DEST = "/speech/en.spk"      # tts's PACK_PATH; 8.3, so not "speech.zspk"
 
 # -- ask packs --
 #
@@ -389,6 +400,13 @@ def build(root, out_path, ark_dir=None, verbose=True):
         print("    note: no %s files in %s, card will have none"
               % (AUDIO_EXT, AUDIO_DIR))
 
+    speech = os.environ.get("SPEECH_PACK") or os.path.join(root, SPEECH_PACK)
+    if not os.path.exists(speech):
+        print("    note: no speech pack at %s, card will have none"
+              % os.path.relpath(speech, root))
+        print("          (speech will use its built-in dictionary, rules and formant voice)")
+        speech = None
+
     docs = sorted(f for f in os.listdir(os.path.join(root, "docs"))
                   if f.endswith(".md"))
     if not docs:
@@ -419,6 +437,9 @@ def build(root, out_path, ark_dir=None, verbose=True):
     other_bytes = 0
     for _n, rel in apps:
         other_bytes += os.path.getsize(os.path.join(root, rel))
+    # The speech pack is several megabytes -- too much for the slack below.
+    if speech:
+        other_bytes += os.path.getsize(speech)
     # Rough: the rest (docs, libz, headers, audio, ark scroll) is a few
     # megabytes and the slack below covers it.
     need = pack_bytes + other_bytes
@@ -496,6 +517,8 @@ def build(root, out_path, ark_dir=None, verbose=True):
         copy(os.path.join(root, rel), "/" + name)
     for a in audio:
         copy(os.path.join(audio_src, a), "/audio/" + a)
+    if speech:
+        copy(speech, SPEECH_DEST)
     for d in docs:
         copy(os.path.join(root, "docs", d), "/docs/" + d)
     for a in ark:

@@ -10,22 +10,26 @@ instructions.
     sw/common/zspeak.h/.c   what apps call
     sw/apps/tts             the service
     sw/apps/tts/tts_queue.c its queue, host-testable
-    sw/apps/tts/synth.c     the formant synthesiser
-    sw/apps/tts/phon.c      phonemes -> synthesiser frames
+    sw/apps/tts/dsyn.c      the recorded voice: diphones joined by TD-PSOLA
+    sw/apps/tts/synth.c     the formant voice: a Klatt synthesiser
+    sw/apps/tts/phon.c      phonemes -> timing, pitch and synthesiser frames
     sw/apps/tts/text2ph.c   text -> phonemes: words, numbers, symbols
     sw/apps/tts/lts.c       letter-to-sound rules
+    sw/apps/tts/pack.c      the speech pack on the card: lexicon, trained rules, diphones
     sw/apps/tts/tts_audio.c the voice on a mixer channel
     sw/common/zsayall.h/.c  reading a document aloud, for any app
     sw/apps/ttstest         on-target cost measurement and protocol checks
     sw/apps/wm              the Super keys (speech_hotkey(), wm.c)
 
-**Status: phase 4 of 9, and the plan grew** -- learning the rules from
-public-domain data is now most of what is left, and it lives in
-a separate data pipeline, not yet published.
+    tools/speech            builds the speech pack and measures the voice: docs/tts_data.md
 
-**Phase 3 status:** The protocol, the keys, reading a window
-(`text` so far), the voice and the text front end are built.
-everything since was built so it can be re-judged by ear.
+**Status:** the protocol, the Super keys, automatic announcements,
+reading a window (`text`, `read`, `term`), the text front end and two
+voices are built and run on hardware. The default voice is **recorded**
+-- a real person's, from the speech pack -- with the formant
+synthesiser as the fallback when there is no pack, and on Super+E.
+The speech pack and the tools that make and measure it are described
+in [tts_data.md](tts_data.md).
 
 See [Phases](#phases).
 
@@ -44,9 +48,10 @@ See [Phases](#phases).
   exists; this gives it feedback.
 
 All three depend on one thing: **the speech has to be understood.**
-Robotic is fine; unclear is not. That is the gate for phase 2, and
-the reason phase 2 starts with a listening test on the build machine
-rather than with code on the board.
+Robotic is fine; unclear is not. That was the gate for the first voice,
+and it is why every change to the voice is now measured -- by a machine
+listener on frozen material, and by ear ([tts_data.md](tts_data.md)) --
+before it reaches the board.
 
 ---
 
@@ -59,10 +64,12 @@ Handled by `wm`, never forwarded to apps.
 | key | action |
 |---|---|
 | **Super+S** | speech on / off |
-| **Super+A** | read the focused window |
-| **Super+C** | speak the clipboard |
+| **Super+A** | read the focused window, from the caret |
+| **Super+C** | speak the highlighted text -- "copy to audio"; the clipboard is untouched |
+| **Super+V** | speak the clipboard -- "paste to audio" |
 | **Super+W** | what is under the pointer -- the window, or the dock icon; with no mouse attached, the focused window |
 | **Super+R** | repeat the last thing said |
+| **Super+E** | switch between the recorded voice and the synthesised one, for the rest of the session; it says which it has switched to, in that voice |
 | **Ctrl**, tapped alone | stop speaking |
 
 Super+S starts `tts` if it is not running (it says "Speech on") and
@@ -89,6 +96,21 @@ because a bare modifier has no keysym.
 [Reading a window](#reading-a-window). On a window whose app does not
 support reading it says the title and "No readable text", so the key
 is never silent. On the dock it explains how to use the dock.
+
+**Super+C** speaks only the highlighted text, once, and leaves the
+clipboard alone: "copy to audio". It is the same request as Super+A
+with a different "what" (`Z_WM_READ_SELECTION`), so it works in the
+apps that support Super+A -- `text`, `read` and `term` -- and elsewhere says the
+window cannot read its selection aloud. With nothing highlighted it
+says "Nothing selected". **Super+V** speaks wm's clipboard: "paste to
+audio". (Super+C used to be the clipboard; it moved to V so that C and
+V mean what they mean everywhere else.)
+
+In a window that cannot be read aloud, Super+A and Super+C say its
+title and that it cannot -- rather than nothing -- and `wm` logs which
+window it was and why (`wm: Super+A: ...`); `text` logs where it starts
+reading. If Super+A seems to do nothing, those lines say which side
+stopped.
 
 **Super+W** hit-tests the pointer exactly as a click would. Over a dock
 icon it gives the app's name as a person would say it ("Calculator",
@@ -218,12 +240,55 @@ Two causes, both fixed:
 - The ring holds 1.5s instead of 370ms, rendered in 200ms slices so a
   stop or interrupt is still answered at once.
 
+Those figures are the **formant voice**. The **recorded voice** does a
+few multiply-adds per sample instead of a resonator cascade; its cost is
+the card. Each chunk of text (a sentence, or up to a comma) reads its
+words from the lexicon -- two reads a word, from a resident sample of the
+index -- and its diphones, once, front to back, into a 64KB arena. The
+ORDER is what matters: FatFs without fast seek walks a file's cluster
+chain from its start on every backward seek, which on the bit-banged
+SPI card driver was about 380ms at the far end of the 7.5MB pack. The
+first on-board run of a long passage rendered at 482% of real time and
+repeated itself (see Audio). Reads now go front to back (backward
+seeks for that passage: 228 -> 29), and the kernel gives every file
+opened for reading a cluster map (FatFs fast seek), so a seek is a
+table lookup. The `[... % of one CPU]` line now counts the per-chunk
+work too. Its figure for the recorded voice on the board is the next
+thing to measure.
+
 **Measuring:** `make prof` compiles `synth.c` for rv32im and counts
 instructions and memory accesses per sample in an emulator
 (`pip install unicorn`). At about 16 cycles per instruction on the
 board, that model reproduced the first hardware measurement, so it is
 worth running before a change goes to a board. `ttstest` and the
 service's own `[... % of one CPU]` lines are the real measurement.
+
+## The recorded voice
+
+With a speech pack carrying a DIPHONE section, `tts` speaks with a real
+person's voice by default: LJSpeech's reader, cut into diphones -- from
+the middle of one sound to the middle of the next -- and joined by
+TD-PSOLA (`dsyn.c`). The phoneme layer still decides the phones, their
+timing and the pitch; only the sound itself changes. Without such a
+pack, or with `system.tts.voice` set to `male` or `female`, the formant
+synthesiser speaks, as before -- male by default, because the female
+formant voice measured 10-15 points less intelligible.
+
+Measured by machine ([tts_data.md](tts_data.md)): as intelligible as
+the formant voice in sentences, clearly more so in single words (47.6%
+against 38.8%, by Whisper), and a human voice, which those numbers do
+not measure. **Super+E** switches between the two for the rest of the
+session, and says which it has switched to, in that voice.
+
+On the card it is about 1.8MB of 8-bit mu-law, part of the speech pack.
+In memory, the small tables -- which unit for each pair of sounds,
+where each unit is -- are resident (~25KB), and each chunk's units are
+read once, front to back, into a 64KB arena (Performance, above). The
+service is about 520KB with the engine, the arena and the lexicon's
+resident index sample. Per sample it is a few multiply-adds and one
+32-bit division. A pause is never stretched out of a unit, and units
+are blended over 12ms either side of each join; [tts_data.md](tts_data.md)
+has why.
 
 ## Voice settings
 
@@ -232,10 +297,10 @@ file is reloaded:
 
 | key | default | range | |
 |---|---|---|---|
-| `system.tts.voice` | `female` | `female`, `male` | sets pitch and tract size together; female by default, to match the recorded voice a speech pack brings |
+| `system.tts.voice` | `recorded` | `recorded`, `male`, `female` | `recorded`: a real voice from the speech pack's diphones, falling back to `male` without one. `male`/`female`: the synthesised voice, pitch and tract size together |
 | `system.tts.rate` | 180 | 80-450 wpm | |
-| `system.tts.pitch` | 200 (110 male) | 50-300 Hz | overrides the voice |
-| `system.tts.formants` | 117 (100 male) | 85-120 % | vocal tract size; overrides the voice |
+| `system.tts.pitch` | 110 (200 recorded, female) | 50-300 Hz | overrides the voice |
+| `system.tts.formants` | 100 (117 female) | 85-120 % | vocal tract size of the synthesised voice; overrides the voice |
 | `system.tts.expression` | 100 | 0-200 % | how much the pitch moves; 0 is a monotone |
 | `system.tts.volume` | 200 | 0-255 | |
 
@@ -346,9 +411,16 @@ when the user presses Super+A on it. The app reads its own content:
 "unit *n*" -- see its header for the five lines of wiring. **`text`
 uses it** (one unit per display line, the caret following the voice,
 Super+A at the end of the document reading it from the top, since
-"read me what I wrote" is the commonest reason to ask). `term` and
-`read` follow in phase 5; until then Super+A on them says the title
-and "No readable text".
+"read me what I wrote" is the commonest reason to ask). So do **`read`**
+-- a block at a time from the top of the screen: a paragraph, heading
+or list item as it is shown, never the Markdown, with the page
+scrolling so the block being spoken is at the top -- and **`term`** --
+the screen as shown (the live screen or the scrollback page being
+looked at), top to bottom, a row at a time, blank rows skipped and a
+wrapped line said without a pause at the wrap. In all three, Super+C
+says the highlighted text and any key or click stops a reading.
+Anywhere else, Super+A and Super+C say the window's title and that it
+cannot be read aloud.
 
 A unit that runs on into the next -- a line that wrapped in the
 middle of a sentence -- carries `Z_TTS_F_CONTINUES`, so the voice does
@@ -370,7 +442,7 @@ not pause and fall in pitch as if a sentence had ended.
 | app → tts | `Z_TTS_SET` | `Z_UINT32`, `Z_TTS_SET_PACK(param, value)` | voice setting |
 | tts → app | `Z_TTS_MARK_DONE` | `Z_UINT32` mark; tag = mark | a marked utterance was spoken |
 | tts → app | `Z_TTS_MARK_CANCELLED` | `Z_UINT32` mark; tag = mark | ...or will not be |
-| wm → app | `Z_WM_READ` | `Z_UINT32` window id | Super+A on a `Z_WIN_FLAG_READABLE` window |
+| wm → app | `Z_WM_READ` | `Z_UINT32`: `Z_WM_READ_PACK(window id, what)` | Super+A (`Z_WM_READ_ALL`) or Super+C (`Z_WM_READ_SELECTION`) on a `Z_WIN_FLAG_READABLE` window |
 
 **Subjects are `0x5454xxxx`** ("TT"), nowhere near any other subject in
 the tree. That is deliberate: a cached pid can briefly outlive the
@@ -457,16 +529,16 @@ a second after someone has just turned speech off. A kernel-exported
 speech-off path to a single load; not done, because nothing has shown
 it to be needed.
 
-**What speaking costs the service** is the synthesiser's business,
-phase 2 -- estimated at 12-20% of the CPU while actually speaking, and
-nothing while silent, since `tts` blocks on its mailbox
-(`z_proc_wait(0)`).
+**What speaking costs the service** is in Performance, above: the
+formant voice measured 35-51% of the 48MHz CPU while actually speaking,
+the recorded voice's figure is being measured, and both cost nothing
+while silent, since `tts` blocks on its mailbox (`z_proc_wait(0)`).
 
 ---
 
 ## Audio
 
-`tts_audio.c`. The service renders into an 8KB ring in its own memory
+`tts_audio.c`. The service renders into a 1.5s ring in its own memory
 and plays it through mixer channel 7 with `MIXPOS` readback, exactly as
 `play` streams ([audio.md](audio.md), [play_app.md](play_app.md)). The
 mixer's `STEP` resamples 11025Hz to the output rate in gateware, so the
@@ -475,7 +547,14 @@ supports them, 8-bit otherwise.
 
 - About 190ms of speech is rendered before the channel starts; after
   that the service wakes every 40ms and renders ahead of the read
-  position.
+  position, up to 200ms at a time, so a stop is answered at once.
+- **It never replays.** The mixer loops over the ring, so a writer that
+  fell behind used to let the listener hear the last 1.5s again --
+  whole phrases, on a slow card. Now the ring is cleared behind the
+  reader, a writer that has fallen behind skips ahead to it (heard as a
+  gap, and logged: `tts: fell behind by N ms in all`), and which lap
+  the reader is on comes from the time since the start, so a stall
+  longer than the ring cannot lose count.
 - A looping ring would replay its last lap forever, so once the speech
   is all rendered, silence is written ahead of the reader until it
   passes the end, and then the channel is switched off.
@@ -492,7 +571,9 @@ Every utterance logs what it cost:
     tts: [1450 ms of speech, 210 ms to render: 14% of one CPU]
 
 **That line is the number to check on hardware.** Under 100% the voice
-keeps up on an otherwise idle machine; the phase 2 estimate is 12-20%.
+keeps up on an otherwise idle machine. It includes the per-chunk work
+-- the lexicon and, for the recorded voice, reading its units -- which
+it once left out.
 
 **Channels are not reserved.** An audio app that starts while speech is
 off gets all eight, exactly as before. While `tts0` is registered,
@@ -522,7 +603,12 @@ exclusive and will fight software-mixed apps such as `audiotest`.
 
 ## The voice
 
-A rule-based formant synthesiser: no recorded voice data at all.
+The **formant voice**: a rule-based synthesiser, no recorded voice data
+at all. It is what speaks without a speech pack, and on Super+E; the
+default, recorded voice is "The recorded voice", above. The front end
+below -- text, letters to sounds, prosody -- serves both: the recorded
+voice takes its phones, timing and pitch from `phon.c` and changes only
+the sound.
 
 - **Synthesis** (`synth.c`, built): a cascade/parallel resonator
   network, implemented from the published description in Klatt's
@@ -662,7 +748,11 @@ rather than into ever more specific rules.
 
 `PACK` renders with a speech pack's lexicon and trained rules, which
 is what the device does; without it the built-in dictionary and rules
-are used. The same text both ways is how to hear what the pack is
+are used. `ZTTS_VOICE=recorded` with a pack that has diphones renders
+the recorded voice through `dsyn.c`, exactly as the device speaks, and
+`ZTTS_READS=1` reports the pack reads and backward seeks it took. The
+recorded voice is measured with `tools/speech` ([tts_data.md](tts_data.md)),
+by Whisper on frozen material, not by the 45-word check below. The same text both ways is how to hear what the pack is
 worth -- "chemistry" stops starting with a "ch" sound, "colonel"
 becomes "kernel". The voice itself is identical either way: a pack
 changes which phonemes are spoken, never how they sound.
@@ -699,9 +789,22 @@ approach changes here, before phase 3 builds on it.
 
 The references are published papers and general phonetics knowledge.
 No existing speech synthesiser's source -- eSpeak, rsynth, Festival,
-Flite, SAM, `klatt.c` or any other -- is consulted, and no voice data
-is used. Anything added later that departs from this must be recorded
-here, with its source and licence.
+Flite, SAM, `klatt.c`, MBROLA or any other -- is consulted. Anything
+added later that departs from this must be recorded here, with its
+source and licence. Recorded so far:
+
+- **Voice data: LJSpeech** (Keith Ito, 2017), public domain: 13,100
+  clips of one reader of public-domain books, from LibriVox. The
+  recorded voice's diphones are cut from it by `tools/speech`; nothing
+  else of it is used. The method is from the literature: diphone
+  concatenation, and TD-PSOLA from Moulines and Charpentier (1990).
+- **Pronunciations: Moby Pronunciator** (Grady Ward), public domain:
+  the pack's lexicon and the data the letter-to-sound rules are learned
+  from. Its provenance, with hashes, is in `tools/speech/dist/en.spec`.
+- **An evaluator: Whisper** (OpenAI, MIT licence), run on the build
+  machine to score intelligibility. Like pocketsphinx below, it judges
+  the voice and contributes nothing to it; nothing from it is in the
+  pack or the service.
 
 The outside programs and data involved are **evaluators only**:
 pocketsphinx (BSD-licensed) scores the audio in `tests/asr_eval.py`,
@@ -720,15 +823,16 @@ not reduced; a prefix test that fired on "belts"), not word by word.
 |---|---|---|
 | 1 | protocol, client library, service with transcript backend, Super keys, `ttstest` | **done** |
 | 1.5 | `zsayall`, Super+A in `text`, `Z_TTS_F_CONTINUES` | **done** |
-| 2 | formant synthesiser, phoneme input, host WAV harness and recogniser check, mixer streaming | **built; listening test and first on-board run pending** |
+| 2 | formant synthesiser, phoneme input, host WAV harness and recogniser check, mixer streaming | **done; on hardware, 35-51% of the CPU after optimisation** |
 | 2b | speech-channel convention in `track`/`play`/`midi` | **done** |
 | 3 | text front end: words, numbers, symbols, acronyms; letter-to-sound rules and stress; exception dictionary; `system.tts.*` settings | **done** |
 | 4 | the ZSPK speech pack, its reader here, and the release plumbing (the pipeline that builds packs is separate) | **done** |
 | 5 | the rest of pronunciation: word frequencies for a resident core | **lexicon, trained rules and homographs done** |
 | 6 | automatic announcements and boot (was phase 4) | **done** except a Settings panel (the `system.tts.*` keys work from the config file today) |
-| 7 | prosody: phrases, phrase-final lengthening, graded pauses and function-word de-stressing by rule; the rules' numbers fitted to LJSpeech  | **done; fitted values pending a run on the corpus** |
-| 8 | acoustics: vowel formants measured from the corpus; then transitions | **vowels done** |
-| 9 | reading: Super+A in `term` and `read`, typed-key echo, optional earcons (was phase 5) | **editor echo and Super+A in `text` done** |
+| 7 | prosody: phrases, phrase-final lengthening, graded pauses and function-word de-stressing by rule; the rules' numbers fitted to LJSpeech  | **done; the fitted values measured no intelligibility gain and are optional** ([tts_data.md](tts_data.md)) |
+| 8 | acoustics: vowel formants and consonant loci measured from the corpus | **done; likewise measured no gain, optional** |
+| 9 | reading: Super+A in `term` and `read`, typed-key echo, optional earcons (was phase 5) | **editor echo; Super+A and Super+C in `text`, `read` and `term` done**; earcons not started |
+| 10 | the recorded voice: diphones from LJSpeech, TD-PSOLA, measured against the formant voice, ported to the device; Super+E; the card-read fixes | **done**; next: several candidates per diphone chosen at run time by how well they join |
 
 Superseded numbering, kept so older notes still read:
 | 4 | automatic announcements: focus, Alt+Tab, window open, dock selection, widget/list/dialog focus; Settings section; start at boot -- now phase 6 | |
@@ -762,6 +866,13 @@ Superseded numbering, kept so older notes still read:
   a restart, survives a lost reply, gives up on a timeout, never uses
   mark 0.
 
+- **`tests/pack_test.c`** -- the real `pack.c`, on packs built byte by
+  byte the way `tools/speech` builds them: words found and not found
+  (inflected forms included, lookups going through the resident index
+  sample), lexicons of several block sizes; packs refused -- missing, a
+  future version, a phoneme `tts` does not have, junk -- and nothing
+  found afterwards; fitted prosody values clamped to believable limits.
+
 - **`tests/text2ph_test.c`** -- the real `text2ph.c` and `lts.c`: exact
   phonemes for numbers and symbol names; the decisions elsewhere
   (acronym spelled, capitalised word not, camelCase split, brackets
@@ -773,8 +884,10 @@ arena allocation; the missing cache drop on a failed send; ignoring a
 cancel mid-read) to make
 sure they fail when they should.
 
-The voice: `make wav` and `tests/asr_eval.py`, above. The rules:
-`make lts_eval`, above.
+The formant voice: `make wav` and `tests/asr_eval.py`, above. The
+recorded voice: `make wav` with `ZTTS_VOICE=recorded` and a pack, and
+`tools/speech` ([tts_data.md](tts_data.md)), which also scores the C
+engine against its Python prototype. The rules: `make lts_eval`, above.
 
 On the board, `ttstest` (above), and the render-cost line every
 utterance logs.

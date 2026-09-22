@@ -37,12 +37,16 @@
 #include "tts_queue.h"
 #include "tts_audio.h"
 #include "pack.h"
+#include "dsyn.h"
 
 // -- voice settings (Z_TTS_SET) --
 
 static uint32_t rate_wpm = 180;
 static uint32_t pitch_hz = 110;
 static uint32_t formant_pct = 100;
+static bool voice_recorded = true;	// the recorded voice, when the pack has one
+static bool voice_female;		// the formant voice's, when it speaks
+static bool pitch_set, formants_set;	// given explicitly in the config
 static uint32_t expression_pct = 100;
 static uint32_t volume = 200;
 
@@ -64,16 +68,27 @@ static void load_cfg(void) {
 	cfg_gen = g;
 	rate_wpm = clamp((uint32_t)z_cfg_get_int("system.tts.rate", 180), 80, 450);
 
-	// The voice: "male" (the default) or "female". A female voice is a
-	// higher pitch AND a shorter vocal tract -- formants about 17%
-	// higher -- because pitch alone only makes a squeaky male voice.
-	// Either can still be set on its own, and an explicit
-	// system.tts.pitch or system.tts.formants wins over the voice.
+	// The voice: "recorded" (the default), "male" or "female".
+	//
+	// Recorded is a real person's voice, from the speech pack's
+	// diphones (dsyn.c): measured as intelligible as the formant voice
+	// in sentences and more so in single words (docs/tts_data.md).
+	// Without a pack that has one, the formant voice speaks instead --
+	// male, because the female formant voice measured 10-15 points less
+	// intelligible.
+	//
+	// A female formant voice is a higher pitch AND a shorter vocal tract
+	// -- formants about 17% higher -- because pitch alone only makes a
+	// squeaky male voice. An explicit system.tts.pitch or
+	// system.tts.formants wins over the voice.
 	char v[16];
-	bool female = z_cfg_get("system.tts.voice", v, sizeof(v)) &&
-		(v[0] == 'f' || v[0] == 'F');
-	pitch_hz = clamp((uint32_t)z_cfg_get_int("system.tts.pitch", female ? 200 : 110), 50, 300);
-	formant_pct = clamp((uint32_t)z_cfg_get_int("system.tts.formants", female ? 117 : 100), 85, 120);
+	bool have = z_cfg_get("system.tts.voice", v, sizeof(v));
+	voice_female = have && (v[0] == 'f' || v[0] == 'F');
+	voice_recorded = !have || v[0] == 'r' || v[0] == 'R';
+	pitch_set = z_cfg_get("system.tts.pitch", v, sizeof(v));
+	formants_set = z_cfg_get("system.tts.formants", v, sizeof(v));
+	pitch_hz = clamp((uint32_t)z_cfg_get_int("system.tts.pitch", 110), 50, 300);
+	formant_pct = clamp((uint32_t)z_cfg_get_int("system.tts.formants", 100), 85, 120);
 	expression_pct = clamp((uint32_t)z_cfg_get_int("system.tts.expression", 100), 0, 200);
 	volume   = clamp((uint32_t)z_cfg_get_int("system.tts.volume", 200), 0, 255);
 	backend_volume();
@@ -125,8 +140,15 @@ static void backend_start(const char *text, uint32_t len, uint32_t flags) {
 	transcript(text, len, flags);
 	backend_on = true;
 	if (audio_ok) {
-		phon_opts_t o = { rate_wpm, pitch_hz, (flags & Z_TTS_F_CONTINUES) != 0,
-			formant_pct, expression_pct + 1 };
+		// Which voice speaks is settled here, per utterance: the pack can
+		// come and go with the card.
+		bool rec = voice_recorded && dsyn_ready();
+		bool high = rec || voice_female;	// the recorded voice is a woman's
+		uint32_t pitch = pitch_set ? pitch_hz : (high ? 200u : 110u);
+		uint32_t fmt = formants_set ? formant_pct : (voice_female ? 117u : 100u);
+		ta_use_recorded(rec);
+		phon_opts_t o = { rate_wpm, pitch, (flags & Z_TTS_F_CONTINUES) != 0,
+			fmt, expression_pct + 1 };
 		ta_start(text, len, (flags & Z_TTS_F_SPELL) != 0, &o);
 	} else {
 		backend_end = z_uptime_ticks() + duration_ticks(len, flags);
@@ -197,7 +219,25 @@ static void handle(z_msg_t *m) {
 			uint32_t v = Z_TTS_SET_VALUE(m->obj.val.uint32);
 			switch (Z_TTS_SET_PARAM(m->obj.val.uint32)) {
 			case Z_TTS_PARAM_RATE:   rate_wpm = clamp(v, 80, 450); break;
-			case Z_TTS_PARAM_PITCH:  pitch_hz = clamp(v, 50, 300); break;
+			// Explicit, like the config key: otherwise the voice's own
+			// default pitch would win and this would be ignored.
+			case Z_TTS_PARAM_PITCH:  pitch_hz = clamp(v, 50, 300); pitch_set = true; break;
+			case Z_TTS_PARAM_VOICE: {
+				// Super+E: the recorded voice and the formant one, back and
+				// forth, for the rest of the session. The service says
+				// which it now is, in that voice -- or that there is no
+				// recorded voice to switch to.
+				const char *said;
+				if (v == Z_TTS_VOICE_NEXT)
+					v = voice_recorded && dsyn_ready() ? Z_TTS_VOICE_MALE : Z_TTS_VOICE_RECORDED;
+				voice_recorded = (v == Z_TTS_VOICE_RECORDED);
+				voice_female = (v == Z_TTS_VOICE_FEMALE);
+				if (voice_recorded && !dsyn_ready()) said = "No recorded voice. Synthesised voice";
+				else if (voice_recorded) said = "Recorded voice";
+				else said = "Synthesised voice";
+				ttsq_say(0, said, Z_TTS_F_INTERRUPT, 0);
+				break;
+			}
 			case Z_TTS_PARAM_VOLUME:
 				volume = clamp(v, 0, 255);
 				if (audio_ok) ta_set_volume(volume);

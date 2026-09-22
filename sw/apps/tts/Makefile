@@ -18,7 +18,7 @@ override CFLAGS += --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) $(ARCH_
 LDFLAGS = -march=$(ARCH) -mabi=$(ABI) $(LIBC_FLAGS) $(GC_LDFLAGS)
 LDSCRIPT = ../../common/riscv-app.ld
 
-OBJS = zeitlos.o zobj.o zsoc.o zcfg.o zfsapp.o tts_queue.o text2ph.o pack.o lts.o phon.o synth.o tts_audio.o tts.o
+OBJS = zeitlos.o zobj.o zsoc.o zcfg.o zfsapp.o tts_queue.o text2ph.o pack.o dsyn.o lts.o phon.o synth.o tts_audio.o tts.o
 
 tts: tts.elf tts.bin
 
@@ -55,6 +55,10 @@ zfsapp.o:
 
 pack.o:
 	$(CC) $(CFLAGS) -c pack.c -o pack.o
+
+# The recorded voice's inner loop runs per output sample: -O2, like synth.o.
+dsyn.o: dsyn.c
+	$(CC) $(CFLAGS) -O2 -c dsyn.c -o dsyn.o
 
 lts.o:
 	$(CC) $(CFLAGS) -c lts.c -o lts.o
@@ -106,9 +110,9 @@ test:
 	/tmp/zspeak_test
 	$(HOSTCC) $(HOSTFLAGS) -o /tmp/zsayall_test tests/zsayall_test.c
 	/tmp/zsayall_test
-	$(HOSTCC) $(HOSTFLAGS) -o /tmp/text2ph_test tests/text2ph_test.c text2ph.c lts.c pack.c phon.c synth.c -DPACK_HOST
+	$(HOSTCC) $(HOSTFLAGS) -o /tmp/text2ph_test tests/text2ph_test.c text2ph.c lts.c pack.c phon.c synth.c dsyn.c -DPACK_HOST
 	/tmp/text2ph_test
-	$(HOSTCC) $(HOSTFLAGS) -DPACK_HOST -o /tmp/pack_test tests/pack_test.c pack.c lts.c phon.c synth.c
+	$(HOSTCC) $(HOSTFLAGS) -DPACK_HOST -o /tmp/pack_test tests/pack_test.c pack.c lts.c phon.c synth.c dsyn.c
 	/tmp/pack_test
 
 clean:
@@ -136,7 +140,7 @@ OUT ?= /tmp/tts_wav
 
 wav:
 	mkdir -p $(OUT)
-	$(HOSTCC) $(HOSTFLAGS) -DSYNTH_STATS -DPACK_HOST -o /tmp/tts_wav_bin tests/tts_wav.c phon.c synth.c text2ph.c lts.c pack.c
+	$(HOSTCC) $(HOSTFLAGS) -DSYNTH_STATS -DPACK_HOST -o /tmp/tts_wav_bin tests/tts_wav.c phon.c synth.c text2ph.c lts.c pack.c dsyn.c
 	/tmp/tts_wav_bin tests/testset.txt $(OUT) $(WPM) $(PACK)
 
 synth_tables.h: gen_tables.py

@@ -38,6 +38,7 @@
 #include "synth.h"
 #include "text2ph.h"
 #include "tts_audio.h"
+#include "dsyn.h"
 
 // 32KB: 16384 16-bit samples, ~1.5s ahead. It was 8KB (~370ms), and
 // launching a program -- `term` streaming off the card -- kept the CPU
@@ -72,6 +73,9 @@ static bool gen_done;
 static uint32_t wr;				// bytes written since the trigger
 static uint32_t end_abs;		// where the speech ends, once gen_done
 static uint32_t laps, lastpos;
+static uint32_t start_ticks;		// when the channel was triggered
+static uint32_t cleared;		// ring bytes behind the reader, zeroed up to here
+static uint32_t behind_ms;		// how far the writer fell behind, all told
 static uint32_t stuck_since;
 static uint32_t stuck_pos;
 
@@ -162,7 +166,13 @@ uint32_t ta_wait_ticks(void) {
 static uint32_t read_abs(void) {
 	if (mode == TA_FIFO) return rd;
 	uint32_t pos = z_audio_ch_pos_bytes(TA_CHANNEL) % TA_RING;
-	if (pos < lastpos) laps++;
+	// Which lap of the ring the reader is on, from the time since the
+	// trigger rather than by counting wraps: counting needs a look at
+	// least once a lap, and a stall longer than the ring (1.5s) lost the
+	// count -- after which the writer wrote where nobody would hear it.
+	uint64_t expect = (uint64_t)(z_uptime_ticks() - start_ticks) * SYNTH_FS * bps / Z_TICK_HZ;
+	uint32_t l = expect > pos ? (uint32_t)((expect - pos + TA_RING / 2) / TA_RING) : 0;
+	laps = l;
 	lastpos = pos;
 	return laps * TA_RING + pos;
 }
@@ -180,6 +190,14 @@ static void put(const int16_t *s, int n) {
 	}
 }
 
+// The recorded voice (dsyn.c) instead of the formant synthesiser, for
+// the utterances that follow. tts.c decides, per utterance.
+static bool recorded;
+
+void ta_use_recorded(bool on) {
+	recorded = on;
+}
+
 // Next chunk of text into the phoneme generator. False when the text
 // is finished.
 static bool next_chunk(void) {
@@ -188,7 +206,11 @@ static bool next_chunk(void) {
 		phon_opts_t o = opts;
 		// Every chunk but the last runs on into the next.
 		if (more) o.continues = true;
-		if (phon_begin(phbuf, &o)) return true;
+		if (!phon_begin(phbuf, &o)) continue;
+		// The recorded voice takes the chunk's phones, timing and pitch
+		// from the phoneme layer, all at once, and makes the sound.
+		if (recorded && !dsyn_begin()) continue;
+		return true;
 	}
 	return false;
 }
@@ -198,8 +220,29 @@ static void render_to(uint32_t limit) {
 	static int16_t buf[SYNTH_FRAME];
 	synth_frame_t fr;
 	while (!gen_done && wr + SYNTH_FRAME * bps <= limit) {
+		if (recorded) {
+			uint32_t c0 = z_cycles();
+			int got = dsyn_render(buf, SYNTH_FRAME);
+			cpu_cycles += z_cycles() - c0;
+			if (got == 0) {
+				// The next chunk's words, lexicon lookups and units, all
+				// read from the card: counted, because it is where the
+				// time goes, and it used to be left out.
+				c0 = z_cycles();
+				bool more = next_chunk();
+				cpu_cycles += z_cycles() - c0;
+				if (!more) { gen_done = true; end_abs = wr; break; }
+				continue;
+			}
+			put(buf, (uint32_t)got);
+			if (mode == TA_FIFO) fifo_feed();
+			continue;
+		}
 		if (!phon_next(&fr)) {
-			if (!next_chunk()) { gen_done = true; end_abs = wr; break; }
+			uint32_t c0 = z_cycles();
+			bool more = next_chunk();
+			cpu_cycles += z_cycles() - c0;
+			if (!more) { gen_done = true; end_abs = wr; break; }
 			continue;
 		}
 		uint32_t c0 = z_cycles();
@@ -225,6 +268,8 @@ static void report(void) {
 		(unsigned long)audio_ms, (unsigned long)cpu_ms,
 		(unsigned long)(audio_ms ? cpu_ms * 100u / audio_ms : 0),
 		underruns ? ", FIFO RAN DRY" : "");
+	if (behind_ms)
+		printf("tts: fell behind by %lu ms in all -- heard as gaps\n", (unsigned long)behind_ms);
 }
 
 void ta_stop(void) {
@@ -250,12 +295,16 @@ void ta_start(const char *text, uint32_t len, bool spell, const phon_opts_t *o) 
 	synth_init();
 	synth_set_volume(200);
 	cpu_cycles = 0;
+	behind_ms = 0;
+	uint32_t c0 = z_cycles();
 	gen_done = !next_chunk();
+	cpu_cycles += z_cycles() - c0;
 	if (gen_done) return;		// nothing audible: done at once
 
 	wr = 0;
 	laps = 0;
 	lastpos = 0;
+	cleared = 0;
 	end_abs = 0;
 	render_to(TA_PREFILL);
 
@@ -277,6 +326,7 @@ void ta_start(const char *text, uint32_t len, bool spell, const phon_opts_t *o) 
 	Z_AUDIO_CH_LOOPLEN(TA_CHANNEL) = TA_RING;
 	Z_AUDIO_CH_STEP(TA_CHANNEL) = z_audio_step(SYNTH_FS * bps, out_hz);
 	Z_AUDIO_CH_CTRL(TA_CHANNEL) = z_audio_ch_ctrl_fmt(gain, gain, true, true, 0, fmt16);
+	start_ticks = z_uptime_ticks();
 
 	// The DAC listens to the mixer and is running. Other channels are
 	// not touched.
@@ -322,6 +372,25 @@ void ta_pump(void) {
 	// Up to the ring's limit, but at most a slice per call: rendering
 	// the whole 1.5s at once would leave messages -- a stop, an
 	// interrupt -- waiting half a second for their answer.
+	// Behind the reader, the ring is cleared: if the writer ever falls
+	// behind, the mixer -- which loops over the ring -- then plays
+	// silence, not the last 1.5s over again. (A long passage in the
+	// recorded voice, rendering too slowly, repeated whole phrases.)
+	if (mode != TA_FIFO && ra > cleared) {
+		uint32_t n = ra - cleared;
+		if (n > TA_RING) { cleared = ra - TA_RING; n = TA_RING; }
+		while (n--) ring[cleared++ % TA_RING] = 0;
+	}
+
+	// And if it has fallen behind, it skips ahead to where the reader is,
+	// so what it writes next is heard; the log says by how much.
+	if (mode != TA_FIFO && !gen_done && wr < ra + 64) {
+		uint32_t skip = ra + 256 - wr;
+		behind_ms += skip * 1000u / (SYNTH_FS * bps);
+		wr = ra + 256;
+		wr -= wr % bps;
+	}
+
 	uint32_t limit = ra + TA_RING - TA_GUARD;
 	if (limit > wr + TA_SLICE) limit = wr + TA_SLICE;
 	render_to(limit);

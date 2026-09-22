@@ -64,6 +64,8 @@
 #include "../../common/zterm.h"
 #include "../../common/zconnect.h"	// the Open bar -- see bar_*() below
 #include "../../common/zcfg.h"		// apps.term.auto_connect
+#include "../../common/zspeak.h"	// Super+A, Super+C -- docs/tts.md
+#include "../../common/zsayall.h"
 
 // which font to render with -- override at build time with
 // `make term FONT=z_font_6x12`. Defaults to z_font_5x8, adopted after
@@ -1535,10 +1537,13 @@ static char clip_io[Z_WM_CLIP_MAX];
 // to the full width, and nothing wants that tail pasted back. Rows
 // other than the last get a newline. The clipboard holds
 // Z_WM_CLIP_MAX - 1 bytes; a longer selection is cut off there.
-static void sel_copy(void) {
+// The selection as text into clip_io: for the clipboard (sel_copy) and
+// for Super+C (say_selection). Returns its length; 0 with nothing
+// selected.
+static int sel_gather(void) {
 
 	sel_prepare();
-	if (!sel_on) return;
+	if (!sel_on) return 0;
 
 	int n = 0;
 	const int max = (int)sizeof(clip_io) - 1;
@@ -1567,8 +1572,78 @@ static void sel_copy(void) {
 	}
 
 	clip_io[n] = 0;
-	z_clip_set(clip_io, n);
+	return n;
 
+}
+
+static void sel_copy(void) {
+	int n = sel_gather();
+	if (n) z_clip_set(clip_io, n);
+}
+
+// -- reading aloud (Super+A, Super+C) -- docs/tts.md, "Reading a window" --
+//
+// Super+A reads the screen as it is shown -- the live screen, or the
+// scrollback page being looked at -- top to bottom, a row at a time,
+// blank rows skipped. The rows are fixed when reading starts, by their
+// line ids, so output arriving meanwhile does not move what is being
+// read. A row that runs to the right edge is a line the terminal
+// wrapped, and is said as continuing into the next, without a pause.
+// Typing, or a click, stops it. Super+C says the highlighted text.
+static uint32_t say_top;		// line id of the screen's top row when reading began
+static int say_row;			// the next row to consider
+
+static int say_get(void *user, int n, const char **text, uint32_t *flags) {
+
+	(void)user; (void)n;
+	static char out[VT_COLS + 1];
+
+	while (say_row < VT_ROWS) {
+		uint32_t id = say_top + (uint32_t)say_row++;
+		int last = -1;
+		for (int col = 0; col < VT_COLS; col++) {
+			uint8_t b;
+			vt_id_cell(&vt, id, col, &b);
+			char ch = VT_PACK_CH(b);
+			out[col] = (ch >= 0x20 && ch < 0x7f) ? ch : ' ';
+			if (out[col] != ' ') last = col;
+		}
+		if (last < 0) continue;			// a blank row: nothing to say
+		out[last + 1] = 0;
+		*text = out;
+		*flags = (last == VT_COLS - 1 && say_row < VT_ROWS) ? Z_TTS_F_CONTINUES : 0;
+		return last + 1;
+	}
+	return -1;
+
+}
+
+static z_sayall_t reader = { say_get, NULL, NULL };
+
+static void say_toggle(void) {
+	if (z_sayall_active(&reader)) {
+		printf("term: Super+A: reading stopped\n");
+		z_sayall_stop(&reader);
+		return;
+	}
+	say_top = vt_history_pushed(&vt) - (uint32_t)view_off;
+	say_row = 0;
+	printf("term: Super+A: reading the screen%s\n", view_off ? " (scrollback)" : "");
+	if (!z_sayall_start(&reader, 0)) {
+		printf("term: Super+A: nothing to read, or speech is off\n");
+		z_speak_static("Blank screen", Z_TTS_F_INTERRUPT);
+	}
+}
+
+static void say_selection(void) {
+	z_sayall_stop(&reader);
+	int n = sel_gather();
+	if (!n) {
+		z_speak_static("Nothing selected", Z_TTS_F_INTERRUPT);
+		return;
+	}
+	printf("term: Super+C: reading the selection, %d characters\n", n);
+	z_speak_n(clip_io, (uint32_t)n, Z_TTS_F_INTERRUPT);
 }
 
 // Pastes the clipboard.
@@ -1957,7 +2032,8 @@ int main(void) {
 	// term owns exactly one window for its lifetime, so the close icon
 	// destroying it AND killing this process is exactly right.
 	if (z_win_create_flags(&win, instance_name, term_win_w, term_win_h, -1, -1,
-		Z_WIN_FLAG_CLOSE_ICON | Z_WIN_FLAG_CLOSE_KILLS_OWNER) != Z_OK) {
+		Z_WIN_FLAG_CLOSE_ICON | Z_WIN_FLAG_CLOSE_KILLS_OWNER |
+		Z_WIN_FLAG_READABLE) != Z_OK) {
 		printf("term: failed to create window\n");
 		return 1;
 	}
@@ -1972,6 +2048,9 @@ int main(void) {
 		z_msg_t msg;
 		bool got_redraw = false;
 
+		// A reader whose progress reports stopped coming gives up.
+		z_sayall_poll(&reader);
+
 		while (z_msg_read(&msg) == Z_OK) {
 
 			if (msg.subject == Z_WM_REDRAW) {
@@ -1982,15 +2061,33 @@ int main(void) {
 			} else if (msg.subject == Z_WM_WINDOW_MOVED) {
 				z_win_parse_rect(&win, &msg.obj);
 			} else if (msg.subject == Z_WM_MOUSE) {
-				if (msg.obj.type == Z_UINT32)
+				if (msg.obj.type == Z_UINT32) {
+					// A click stops a reading; the wheel scrolls under it.
+					if (Z_WM_UNPACK_MOUSE_BUTTONS(msg.obj.val.uint32) & 1)
+						z_sayall_stop(&reader);
 					handle_mouse_event(msg.obj.val.uint32);
+				}
 			} else if (msg.subject == Z_WM_WHEEL) {
 				// Three lines a notch through the history, up = back,
 				// as desktop terminals do.
 				if (msg.obj.type == Z_UINT32)
 					view_scroll_by(3 * Z_WM_WHEEL_NOTCHES(msg.obj.val.uint32));
 			} else if (msg.subject == Z_WM_KEY) {
+				// A key press stops a reading, before it is typed.
+				if (msg.obj.type == Z_UINT32 && Z_WM_UNPACK_KEY_PRESSED(msg.obj.val.uint32))
+					z_sayall_stop(&reader);
 				handle_key_event(msg.obj.val.uint32);
+			} else if (msg.subject == Z_WM_READ) {
+				// Super+A and Super+C -- see say_toggle(), say_selection().
+				if (msg.obj.type == Z_UINT32 &&
+					Z_WM_READ_WIN(msg.obj.val.uint32) == win.id) {
+					if (Z_WM_READ_WHAT(msg.obj.val.uint32) == Z_WM_READ_SELECTION)
+						say_selection();
+					else
+						say_toggle();
+				}
+			} else if (z_sayall_msg(&reader, &msg)) {
+				// speech's progress report, pacing Super+A
 			} else if (msg.subject == Z_PORT_DATA) {
 				if (port.connected && msg.tag == port.conn_id &&
 					msg.from == port.peer_pid) {

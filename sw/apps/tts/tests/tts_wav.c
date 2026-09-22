@@ -25,6 +25,7 @@
 #include "../phon.h"
 #include "../text2ph.h"
 #include "../pack.h"
+#include "../dsyn.h"
 
 static void put16(FILE *f, uint16_t v) { fputc(v & 0xff, f); fputc(v >> 8, f); }
 static void put32(FILE *f, uint32_t v) { put16(f, v & 0xffff); put16(f, v >> 16); }
@@ -35,6 +36,10 @@ static int16_t pcm[SYNTH_FS * 60];
 // same text2ph.c chunking the service uses.
 // Phone boundaries, collected while rendering (ZTTS_MARKS).
 static FILE *marks_out;
+// With the marks, the pitch contour: "ms f0" per frame, 0 for unvoiced.
+// What a renderer other than the formant one -- the diphone prototype in
+// tools/speech -- needs from the front end besides the phone timing.
+static FILE *f0_out;
 static int mark_tok = -2, mark_chunk = -1, chunk_no;
 static char mark_name[8];
 static uint32_t mark_start;
@@ -44,6 +49,8 @@ static void mark_close(uint32_t end) {
 	fprintf(marks_out, "%s %u %u\n", mark_name,
 		(unsigned)(mark_start * 1000u / SYNTH_FS), (unsigned)(end * 1000u / SYNTH_FS));
 }
+
+static bool use_recorded;
 
 static uint32_t render(const char *in, bool text, uint32_t rate) {
 	static char ph[2048];
@@ -60,15 +67,36 @@ static uint32_t render(const char *in, bool text, uint32_t rate) {
 		// ZTTS_VOICE=female, ZTTS_PITCH, ZTTS_FORMANTS, ZTTS_EXPRESSION:
 		// the system.tts.* settings, for rendering comparisons.
 		const char *ev = getenv("ZTTS_VOICE");
-		bool female = ev && (ev[0] == 'f' || ev[0] == 'F');
+		bool recorded = ev && (ev[0] == 'r' || ev[0] == 'R');
+		use_recorded = recorded && dsyn_ready();
+		// The recorded voice follows the female pitch contour: the units
+		// are a woman's voice.
+		bool female = ev && (ev[0] == 'f' || ev[0] == 'F' || recorded);
 		uint32_t pitch = getenv("ZTTS_PITCH") ? (uint32_t)atoi(getenv("ZTTS_PITCH")) : (female ? 200 : 110);
 		uint32_t fmt = getenv("ZTTS_FORMANTS") ? (uint32_t)atoi(getenv("ZTTS_FORMANTS")) : (female ? 117 : 100);
 		uint32_t expr = getenv("ZTTS_EXPRESSION") ? (uint32_t)atoi(getenv("ZTTS_EXPRESSION")) : 100;
 		phon_opts_t o = { rate, pitch, more, fmt, expr + 1 };
 		phon_begin(ph, &o);
+
+		// The recorded voice: ZTTS_VOICE=recorded and a pack with a
+		// DIPHONE section. The phoneme layer still decides phones,
+		// timing and pitch; dsyn.c makes the sound.
+		if (use_recorded) {
+			if (dsyn_begin()) {
+				int got;
+				while (n + SYNTH_FRAME <= sizeof(pcm) / 2 &&
+				       (got = dsyn_render(&pcm[n], SYNTH_FRAME)) > 0)
+					n += (uint32_t)got;
+			}
+			chunk_no++;
+			continue;
+		}
 		synth_frame_t fr;
 		while (phon_next(&fr) && n + SYNTH_FRAME <= sizeof(pcm) / 2) {
 			synth_render(&fr, &pcm[n], SYNTH_FRAME);
+			if (f0_out)
+				fprintf(f0_out, "%u %.1f\n", (unsigned)(n * 1000u / SYNTH_FS),
+					fr.av ? fr.f0 / 16.0 : 0.0);
 			if (marks_out) {
 				const char *nm;
 				int tok = phon_current(&nm);
@@ -128,6 +156,19 @@ int main(int argc, char **argv) {
 
 	// ZTTS_OPEN, ZTTS_TILT: the voice source's quality, over whatever
 	// a pack set -- for listening, and for tools/speech's source fit.
+	// ZTTS_EXP: experiments to switch on, comma-separated names
+	// (phon.h, PHON_EXP_*). Never on the device.
+	if (getenv("ZTTS_EXP")) {
+		char list[256];
+		snprintf(list, sizeof(list), "%s", getenv("ZTTS_EXP"));
+		uint32_t bits = 0;
+		for (char *t = strtok(list, ","); t; t = strtok(0, ",")) {
+			uint32_t b = phon_experiment(t);
+			if (!b) { fprintf(stderr, "tts_wav: no experiment %s\n", t); return 2; }
+			bits |= b;
+		}
+		phon_set_experiments(bits);
+	}
 	if (getenv("ZTTS_OPEN")) phon_prosody_set(PHON_PRO_OPEN, atoi(getenv("ZTTS_OPEN")));
 	if (getenv("ZTTS_TILT")) phon_prosody_set(PHON_PRO_TILT, atoi(getenv("ZTTS_TILT")));
 
@@ -151,6 +192,8 @@ int main(int argc, char **argv) {
 		if (marks) {
 			snprintf(path, sizeof(path), "%s/%s.phones", argv[2], line);
 			marks_out = fopen(path, "w");
+			snprintf(path, sizeof(path), "%s/%s.f0", argv[2], line);
+			f0_out = fopen(path, "w");
 			mark_tok = -2;
 			mark_chunk = -1;
 			chunk_no = 0;
@@ -159,6 +202,8 @@ int main(int argc, char **argv) {
 		if (marks_out) {
 			mark_close(n);
 			fclose(marks_out);
+			if (f0_out) fclose(f0_out);
+			f0_out = 0;
 			marks_out = 0;
 		}
 		snprintf(path, sizeof(path), "%s/%s.wav", argv[2], line);
@@ -167,6 +212,12 @@ int main(int argc, char **argv) {
 		count++;
 	}
 	fclose(in);
+	if (getenv("ZTTS_READS")) {
+		extern uint32_t pack_reads, pack_back_seeks;
+		printf("tts_wav: %lu pack reads, %lu of them backward seeks (%.1f a second of speech)\n",
+			(unsigned long)pack_reads, (unsigned long)pack_back_seeks,
+			secs > 0 ? pack_back_seeks / secs : 0.0);
+	}
 
 	printf("tts_wav: %d files, %.1f s of speech at %u wpm\n", count, secs, rate);
 	printf("tts_wav: peak inside a resonator %ld (limit 2147483647), peak output %ld, %lu samples clipped\n",

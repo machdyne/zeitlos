@@ -1,0 +1,1112 @@
+#!/usr/bin/env python3
+#
+# Zeitlos
+# Copyright (c) 2026 Lone Dynamics Corporation. All rights reserved.
+#
+# tools/speech -- builds the data sw/apps/tts reads: the pronunciation
+# lexicon, the letter-to-sound rules, the prosody models and the voice
+# data. Zeitlos ships the BUILT pack; this is what produces it, and
+# nothing in sw/ depends on this tool being run.
+#
+#     ./tools/speech/speech sources             what goes into a voice
+#     ./tools/speech/speech fetch dist/en.spec  download them
+#     ./tools/speech/speech fetch dist/en.spec --mirror
+#     ./tools/speech/speech fetch dist/en.spec --only moby
+#
+# Everything is public domain by policy: the fetcher refuses a source
+# with no licence line, and refuses individual files the spec excludes
+# (dist/en.spec's cmudict note). See docs/tts_data.md.
+#
+# Same shape as tools/ask/ask, deliberately -- one CLI, lib/ modules,
+# recipes in dist/, a gitignored .cache/ for downloads.
+
+import argparse
+import os
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+
+from lib import fetch as fetchlib
+from lib import acoustics, align, asr, corpus, evalset, lexicon, lts_train, moby, pack, prosody, score, source, tune
+from lib.spec import Spec, SpecError
+
+# The phoneme set, in the order sw/apps/tts/phon.c declares it. The
+# names go in the pack (PHONES) so the ids in it mean something on the
+# other side; a pack naming a phoneme the reader lacks is refused
+# there rather than mispronounced.
+PHONES = ("IY IH EH AE AA AO UH UW AH ER AX IX EY OW AY AW OY "
+          "W Y R L M N NG S Z SH ZH F V TH DH HH P B T D K G CH JH").split()
+
+
+def load(path):
+    if not os.path.isabs(path):
+        cand = os.path.join(HERE, path)
+        if os.path.exists(cand):
+            path = cand
+    if not os.path.exists(path):
+        sys.exit("speech: no such spec: %s" % path)
+    try:
+        return Spec(path)
+    except SpecError as e:
+        sys.exit("speech: %s" % e)
+
+
+def cmd_sources(args):
+    spec = load(args.spec)
+    print("%s: %s" % (spec.settings.get("name", "?"),
+                      spec.settings.get("description", "")))
+    for s in spec.sources:
+        print("\n%s (%s)" % (s.name, s.kind))
+        print("  licence: %s" % s.licence)
+        print("  url:     %s" % (s.url or "(%d Project Gutenberg texts)" % len(s.ids)))
+        if s.mirror_kind:
+            print("  (the mirror is a %s)" % s.mirror_kind)
+        if s.mirror:
+            print("  mirror:  %s" % s.mirror)
+        for member, saved in s.takes:
+            print("  take:    %s -> %s" % (member, saved))
+        for bad in s.refuses:
+            print("  REFUSE:  %s" % bad)
+        if s.note:
+            print("  note:    %s" % s.note)
+
+
+def cmd_fetch(args):
+
+    spec = load(args.spec)
+    root = fetchlib.cache_root(HERE)
+    os.makedirs(root, exist_ok=True)
+    problems = 0
+
+    for s in spec.sources:
+
+        if args.only and s.name not in args.only:
+            continue
+
+        print("\n== %s -- %s" % (s.name, s.licence))
+        out = os.path.join(root, s.name)
+        os.makedirs(out, exist_ok=True)
+
+        try:
+            if s.kind == "books":
+                # Project Gutenberg plain text, one file per ebook id.
+                for i in s.ids:
+                    url = "https://www.gutenberg.org/files/%d/%d-0.txt" % (i, i)
+                    fetchlib.download(url, os.path.join(out, "%d.txt" % i))
+                continue
+
+            url, kind = s.url, s.kind
+            parts = []
+            if args.mirror and (s.mirror or s.mirror_parts):
+                kind = s.mirror_kind or s.kind
+                parts = s.mirror_parts
+                url = s.mirror or (parts[0] if parts else None)
+                print("  using the mirror%s" % (" (%d pieces)" % len(parts) if parts else ""))
+            name = url.rstrip("/").split("/")[-1] or (s.name + ".dat")
+            name = name.replace(".part01", "")
+            target = os.path.join(root, s.name + "-" + name)
+            if parts:
+                archive = fetchlib.download_parts(parts, target)
+            else:
+                archive = fetchlib.download(url, target)
+
+            if s.kind == "file":
+                continue
+
+            got = fetchlib.extract(archive, kind, out, s.takes, s.refuses,
+                                   limit=args.limit)
+            print("  extracted %d file(s)" % len(got))
+            if not got:
+                # The archive downloaded but holds none of the members
+                # the spec names -- a repackaged source, not a broken
+                # one. Say which, because the fix is a `take` line.
+                print("  nothing matched: this copy is laid out differently.")
+                print("  Add take lines for it, or use --mirror.")
+                problems += 1
+                continue
+            if not fetchlib.verify(out, s):
+                problems += 1
+
+        except fetchlib.FetchError as e:
+            print("  FAILED: %s" % e)
+            if s.mirror and not args.mirror:
+                print("  the mirror is one option: rerun with --mirror")
+            problems += 1
+
+    print("\nspeech: cache is %s" % root)
+    if problems:
+        sys.exit("speech: %d source(s) failed" % problems)
+
+
+def cmd_build(args):
+
+    spec = load(args.spec)
+    root = fetchlib.cache_root(HERE)
+    name = spec.settings.get("name", "en")
+    out_dir = args.out or os.path.join(HERE, "build", name)
+    os.makedirs(out_dir, exist_ok=True)
+
+    mpron = os.path.join(root, "moby", "mpron.txt")
+    if not os.path.exists(mpron):
+        sys.exit("speech: no %s -- run: speech fetch %s" % (mpron, args.spec))
+
+    print("== lexicon")
+    stats = moby.Stats()
+    base = dict(moby.read(mpron, stats))
+    stats.report()
+
+    full = lexicon.expand(base)
+    print("  %d base words, %d with inflections" % (len(base), len(full)))
+
+    ids = {n: i for i, n in enumerate(PHONES)}
+    entries = sorted(full.items())
+    index, data, count = lexicon.encode(entries, ids)
+    print("  index %.0fKB, data %.2fMB" % (len(index) / 1024.0, len(data) / 1e6))
+
+    # -- letter-to-sound rules, for the words the lexicon does not have --
+    #
+    # Trained on what aligns (see lib/align.py), pruned to a node
+    # budget because this one IS resident on the device: it is
+    # consulted per letter, which is no place for a seek.
+    print("\n== letter-to-sound rules")
+    nodes_per_tree = int(spec.settings.get("lts_nodes", "1200"))
+    aligned = list(align.aligned(base.items()))
+    print("  %d of %d words aligned" % (len(aligned), len(base)))
+    trees = lts_train.train(aligned, budget=nodes_per_tree)
+    lts_blob = lts_train.serialise(trees, ids)
+    print("  %d nodes, %.0fKB" % (sum(lts_train.size(t) for t in trees.values()),
+                                  len(lts_blob) / 1024.0))
+
+    # The fitted stages -- prosody, formants, voice source -- only on
+    # request: session 0 measured none of them making the voice more
+    # intelligible (docs/tts_data.md, "Session 0"), so the default pack is the
+    # lexicon and the letter rules, which did.
+    # The recorded voice, when `speech diphones` has built an inventory.
+    # A tts that predates it ignores the section and keeps its formant
+    # voice, like any pack section it does not know.
+    dip_blob = b""
+    inv_dir = os.path.join(HERE, "build", "diphone")
+    if os.path.exists(os.path.join(inv_dir, "units.json")) and not args.no_diphones:
+        from lib import diphone as diphonelib
+        dip_blob = diphonelib.serialise(inv_dir, PHONES)
+        print("== diphones: %.2f MB from %s" % (len(dip_blob) / 1e6, inv_dir))
+
+    fmt_path = os.path.join(HERE, "build", "align", "formants.bin")
+    if not args.fitted:
+        fmt_path = os.path.join(HERE, "build", "align", "-none-")
+    elif os.path.exists(fmt_path):
+        print("== formants: from %s" % fmt_path)
+
+    # Prosody fitted to a real speaker, when `speech prosody` has run.
+    pros_path = os.path.join(HERE, "build", "align", "prosody.bin" if args.fitted else "-none-")
+    # The source fit, merged into the prosody fields when both exist.
+    src_json = os.path.join(HERE, "build", "align", "source.json" if args.fitted else "-none-")
+    pj = os.path.join(HERE, "build", "align", "prosody.json")
+    if os.path.exists(src_json):
+        import json
+        base = json.load(open(pj)) if os.path.exists(pj) else {"fields": dict(prosody.DEFAULTS), "durs": {}}
+        base["fields"].update(json.load(open(src_json)))
+        pros_path = os.path.join(HERE, "build", "align", "prosody_source.bin")
+        with open(pros_path, "wb") as f:
+            f.write(prosody.serialise(base["fields"], base["durs"]))
+        print("== source: open %(open)d%%, tilt %(tilt)ddB" % json.load(open(src_json)))
+    if os.path.exists(pros_path):
+        print("\n== prosody: from %s" % pros_path)
+    elif args.fitted:
+        print("\n== prosody: none fitted, the device keeps its defaults")
+    else:
+        print("\n== the default pack: lexicon and letter rules (--fitted adds the fitted stages)")
+
+    manifest = ["zeitlos speech pack", "voice: " + name,
+                "built by: tools/speech", "",
+                "lexicon: %d entries (%d from the source, the rest inflected)"
+                % (count, len(base)),
+                "letter-to-sound: %d nodes over 26 trees, %d nodes per tree budget"
+                % (sum(lts_train.size(t) for t in trees.values()), nodes_per_tree),
+                "", "sources:"]
+    for s_ in spec.sources:
+        manifest.append("  %s: %s" % (s_.name, s_.licence))
+        if s_.url:
+            manifest.append("    %s" % s_.url)
+        for fname, digest in sorted(s_.sums.items()):
+            manifest.append("    %s sha256 %s" % (fname, digest))
+        for bad in s_.refuses:
+            manifest.append("    EXCLUDED %s" % bad)
+
+    path = os.path.join(out_dir, "speech.zspk")
+    size = pack.write(path, [
+        ("MANIFEST", ("\n".join(manifest) + "\n").encode("utf-8")),
+        ("PHONES", (" ".join(PHONES) + "\n").encode("ascii")),
+        ("LTS", lts_blob),
+    ] + ([("PROSODY", open(pros_path, "rb").read())] if os.path.exists(pros_path) else []) + (
+        [("FORMANTS", open(fmt_path, "rb").read())] if os.path.exists(fmt_path) else []) + [
+        ("LEXIDX", index),
+        ("LEXDAT", data),
+    ] + ([("DIPHONE", dip_blob)] if dip_blob else []))
+
+    print("\n%s: %.2fMB" % (path, size / 1e6))
+    print("speech: this pack is a RELEASE artifact -- not committed; see docs/tts_data.md")
+
+
+def cmd_show(args):
+
+    sections = pack.read(args.file)
+    total = sum(len(v) for v in sections.values())
+    print("%s: %d sections, %.2fMB" % (args.file, len(sections), total / 1e6))
+    for k, v in sections.items():
+        print("  %-8s %9d bytes" % (k, len(v)))
+    if "MANIFEST" in sections:
+        print()
+        print(sections["MANIFEST"].decode("utf-8", "replace").rstrip())
+
+
+def cmd_mirror(args):
+    """
+    Prepares a source for publishing somewhere we control.
+
+    Downloads it from the original, checks it, optionally cuts it down
+    to a workable subset, splits it into publishable pieces and writes
+    the provenance beside them. What it does NOT do is publish: that
+    needs credentials, and it prints the command instead.
+
+    See docs/tts_data.md, "Open item: mirror the sources", for why this exists.
+    """
+
+    spec = load(args.spec)
+    src = spec.source(args.source)
+    if not src:
+        sys.exit("speech: no source %r in %s" % (args.source, args.spec))
+    if not src.url:
+        sys.exit("speech: source %r has no url to mirror" % args.source)
+
+    root = fetchlib.cache_root(HERE)
+    out = args.out or os.path.join(HERE, "mirror", src.name)
+    os.makedirs(out, exist_ok=True)
+
+    print("== %s -- %s" % (src.name, src.licence))
+    name = src.url.rstrip("/").split("/")[-1]
+    archive = fetchlib.download(src.url, os.path.join(root, src.name + "-" + name))
+
+    digest = fetchlib.sha256(archive)
+    print("  original sha256 %s" % digest)
+
+    publish = archive
+    if args.clips:
+        publish = os.path.join(out, name.replace(".tar", "-%d.tar" % args.clips))
+        if os.path.exists(publish):
+            print("  have %s" % os.path.basename(publish))
+        else:
+            print("  cutting to %d clips" % args.clips)
+            fetchlib.subset_tar(archive, src.kind, publish, args.clips)
+
+    piece = int(args.piece_mb * 1024 * 1024)
+    # Nothing to split is the normal case for a subset, and it is not
+    # a lesser outcome: one file is one asset and one mirror_part line.
+    if piece < 1024:
+        sys.exit("speech: --piece-mb must be at least 0.001")
+    if os.path.getsize(publish) > piece:
+        print("  splitting into %dMB pieces" % args.piece_mb)
+        made = fetchlib.split_file(publish, out, piece)
+    else:
+        import shutil
+        dest = os.path.join(out, os.path.basename(publish))
+        if os.path.abspath(dest) != os.path.abspath(publish):
+            shutil.copyfile(publish, dest)
+        made = [dest]
+        print("  one piece: %s" % os.path.basename(dest))
+
+    prov = os.path.join(out, "PROVENANCE.md")
+    with open(prov, "w") as f:
+        f.write("# %s\n\n" % src.name)
+        f.write("Licence: %s\n\n" % src.licence)
+        f.write("Original: %s\n" % src.url)
+        f.write("Original sha256: %s\n\n" % digest)
+        if args.clips:
+            f.write("This mirror holds the first %d clips and every non-clip file\n"
+                    "(transcript, readme) -- enough for the acoustic work, which\n"
+                    "needs a few hours rather than all of it.\n\n" % args.clips)
+            f.write("Subset sha256: %s\n\n" % fetchlib.sha256(publish))
+        f.write("Pieces, to be joined in order:\n\n")
+        for m in made:
+            f.write("  %s  sha256 %s\n" % (os.path.basename(m), fetchlib.sha256(m)))
+        f.write("\nFetched by tools/speech; see docs/tts_data.md.\n")
+
+    print("\n  %s" % out)
+    print("  %d file(s) to publish, plus PROVENANCE.md" % len(made))
+    print("\nTo publish, and then point the spec at it:")
+    # The actual file names, not a glob: an unsplit source has no
+    # .part suffix at all, and a glob that matches nothing publishes a
+    # release with no data in it.
+    print("  gh release create %s-mirror \\" % src.name)
+    for m in made:
+        print("      %s \\" % m)
+    print("      %s \\" % prov)
+    print("      --repo %s --notes-file %s" % (args.repo, prov))
+    print("  then add to dist/%s.spec, under `source %s`:" %
+          (spec.settings.get("name", "en"), src.name))
+    for m in made:
+        print("      mirror_part https://github.com/%s/releases/download/%s-mirror/%s"
+              % (args.repo, src.name, os.path.basename(m)))
+
+
+def cmd_align(args):
+    """
+    Places every phone of a speech corpus in time. See lib/corpus.py
+    and docs/tts_data.md, "Alignment".
+    """
+
+    import time
+
+    root = fetchlib.cache_root(HERE)
+    cdir = args.corpus or os.path.join(root, "ljspeech")
+    if not os.path.exists(os.path.join(cdir, "metadata.csv")):
+        sys.exit("speech: no corpus at %s\n"
+                 "  extract one with: speech fetch --only ljspeech --limit 2000"
+                 % cdir)
+
+    repo = os.path.abspath(os.path.join(HERE, "..", ".."))
+    out = os.path.join(HERE, "build", "align")
+    os.makedirs(out, exist_ok=True)
+
+    clips = corpus.read_metadata(cdir, args.limit)
+    print("== %d clips from %s" % (len(clips), cdir))
+    if not clips:
+        sys.exit("speech: nothing to align")
+
+    pack_path = os.path.join(HERE, "build", "en", "speech.zspk")
+    if not os.path.exists(pack_path):
+        print("  note: no pack at %s -- the reference will use the built-in rules," % pack_path)
+        print("        which mispronounce more words; run `speech build` first for better alignment")
+        pack_path = ""
+
+    t0 = time.time()
+    renderer = corpus.build_renderer(repo, os.path.join(out, "tts_wav"))
+    print("  rendering references")
+    corpus.render_references(renderer, clips, os.path.join(out, "ref"), pack_path)
+    print("  %.0fs" % (time.time() - t0))
+
+    t0 = time.time()
+    print("  aligning")
+    results, failed = corpus.align_all(clips, os.path.join(out, "ref"),
+                                       os.path.join(out, "rec"), args.jobs)
+    print("  %.0fs" % (time.time() - t0))
+
+    labels = corpus.write_labels(results, os.path.join(out, "labels"))
+
+    # What to send back: enough to judge the alignment without the audio.
+    import numpy as np
+    ratios, phone_ms = [], {}
+    for cid, phones in results.items():
+        speech = [(n, a, b) for n, a, b in phones if not n.startswith("_")]
+        if not speech:
+            continue
+        for n, a, b in speech:
+            phone_ms.setdefault(n, []).append(b - a)
+    counts = sorted(((len(v), k) for k, v in phone_ms.items()), reverse=True)
+
+    lines = []
+    lines.append("aligned %d of %d clips (%d failed)" % (len(results), len(clips), len(failed)))
+    reasons = {}
+    for why in failed.values():
+        reasons[why] = reasons.get(why, 0) + 1
+    for why, n in sorted(reasons.items(), key=lambda kv: -kv[1]):
+        lines.append("  failed: %s x%d" % (why, n))
+    lines.append("phone durations in the recordings (ms): median / 10th-90th percentile / count")
+    for n, k in counts:
+        v = np.array(phone_ms[k])
+        lines.append("  %-3s %4.0f  %4.0f-%-4.0f %6d" % (k, np.median(v), np.percentile(v, 10),
+                                                  np.percentile(v, 90), n))
+    summary = os.path.join(out, "summary.txt")
+    with open(summary, "w") as f:
+        f.write("\n".join(lines) + "\n")
+
+    print()
+    print("\n".join(lines[:4]))
+    print("\n  %s  <- paste this back" % summary)
+    print("  %s/  <- Audacity labels for %d clips: open the wav, then" % (os.path.dirname(labels[0]) if labels else out, len(labels)))
+    print("     File > Import > Labels, to see the boundaries against the audio")
+
+
+def aligner_read(path):
+    from lib import aligner
+    return aligner.read_phones(path)
+
+
+def pack_path_for(here):
+    """
+    The pack every CALIBRATION render uses: the built one with anything
+    fitted stripped out -- lexicon and letter rules only.
+
+    Calibration means "our voice at its defaults". The built pack, after
+    a previous `speech build`, carries the previous run's fitted prosody
+    and formants, and rendering with it made each run calibrate against
+    the last one's output -- which is how a declination of 14 became 37
+    between two runs on the same data.
+    """
+    p = os.path.join(here, "build", "en", "speech.zspk")
+    if not os.path.exists(p):
+        return ""
+    bare = os.path.join(here, "build", "align", "bare.zspk")
+    os.makedirs(os.path.dirname(bare), exist_ok=True)
+    secs = pack.read(p)
+    keep = ["MANIFEST", "PHONES", "LTS", "LEXIDX", "LEXDAT"]
+    pack.write(bare, [(k, secs[k]) for k in keep if k in secs])
+    return bare
+
+
+def cmd_prosody(args):
+    """
+    Fits phon.c's timing and pitch parameters to an aligned corpus.
+    Run `speech align` first; then `speech build` puts the result in
+    the pack. See lib/prosody.py and docs/tts_data.md, "Prosody".
+    """
+
+    root = fetchlib.cache_root(HERE)
+    cdir = args.corpus or os.path.join(root, "ljspeech")
+    out = os.path.join(HERE, "build", "align")
+    rec = os.path.join(out, "rec")
+    if not os.path.isdir(rec):
+        sys.exit("speech: no alignments in %s -- run `speech align` first" % rec)
+
+    repo = os.path.abspath(os.path.join(HERE, "..", ".."))
+    clips = corpus.read_metadata(cdir, args.limit)
+
+    # Alignments made before the marks carried stress ("AA1") and
+    # pause kinds ("_c", "_s") cannot be fitted: every parameter that
+    # depends on them would silently keep its default. Check a sample
+    # and refuse, rather than produce a table that looks fitted.
+    import glob
+    sample = sorted(glob.glob(os.path.join(rec, "*.phones")))[:50]
+    names = set()
+    for path in sample:
+        names.update(p[0] for p in aligner_read(path))
+    if not any(n[-1:].isdigit() for n in names) or not (names & {"_c", "_s", "_p"}):
+        sys.exit("speech: the alignments in %s predate stress and pause marks --\n"
+                 "  run `speech align` again, then `speech prosody`" % rec)
+
+    print("== measuring %d clips" % len(clips))
+    m = prosody.measure_corpus(clips, rec)
+    print("  %d clips with alignments" % m.clips)
+
+    # The same measurement on our own voice, which rendered the same
+    # sentences with known settings during `speech align`: how the
+    # measurement reads each parameter, to calibrate by.
+    # ...rendered at the SPEAKER's rate. A pitch event lasts a fixed
+    # number of frames, so the same setting reads differently at a
+    # different speed; calibrating at 180wpm against a slower reader
+    # over-reads every lift and fall. The rate comes from the
+    # alignments: how long the speaker took against the reference.
+    import numpy as np
+    ratios = []
+    for cid, _, _ in clips:
+        rp = os.path.join(rec, cid + ".phones")
+        fp = os.path.join(out, "ref", "t_%s.phones" % cid)
+        if os.path.exists(rp) and os.path.exists(fp):
+            a = [p for p in aligner_read(rp) if not p[0].startswith("_")]
+            b = [p for p in aligner_read(fp) if not p[0].startswith("_")]
+            if a and b:
+                ratios.append((a[-1][2] - a[0][1]) / max(1.0, b[-1][2] - b[0][1]))
+    ratio = float(np.median(ratios)) if ratios else 1.0
+    wpm = max(80, min(450, int(round(180 / ratio))))
+    print("  the speaker is %.2fx our 180wpm: calibrating at %dwpm" % (1 / ratio, wpm))
+    cal_dir = os.path.join(out, "calib")
+    # Always the current renderer: a binary left by an earlier `align`
+    # may write an older mark format, or voice things differently.
+    renderer = corpus.build_renderer(repo, os.path.join(out, "tts_wav"))
+    corpus.render_references(renderer, clips, cal_dir,
+                             pack_path_for(HERE), wpm=wpm)
+    calib = prosody.measure_corpus(clips, cal_dir, prefix="t_")
+
+    table = prosody.table_durations(repo)
+    fields, durs, notes, measured = m.fit(table, calib, rate_ratio=ratio)
+
+    lines = ["prosody fitted to %d clips" % m.clips, ""]
+    lines.append("%-12s %7s %7s" % ("parameter", "default", "fitted"))
+    for k in prosody.FIELDS:
+        if k in ("open", "tilt"):
+            continue                        # `speech source` fits these
+        # Say which values were measured. A default kept for lack of
+        # data must not look like a measurement that agreed with it.
+        if k not in measured:
+            lines.append("%-12s %7d       -  not measured, default kept" % (k, prosody.DEFAULTS[k]))
+            continue
+        mark = "" if fields[k] == prosody.DEFAULTS[k] else "  *"
+        lines.append("%-12s %7d %7d%s" % (k, prosody.DEFAULTS[k], fields[k], mark))
+    lines.append("")
+    lines.append("durations, ms (the device's table -> fitted):")
+    row = []
+    for ph in sorted(table):
+        if ph in durs:
+            row.append("%s %d->%d" % (ph, table[ph], durs[ph]))
+    for i in range(0, len(row), 6):
+        lines.append("  " + "   ".join(row[i:i + 6]))
+    lines.append("")
+    lines.extend("note: " + n for n in notes)
+
+    with open(os.path.join(out, "prosody.txt"), "w") as f:
+        f.write("\n".join(lines) + "\n")
+    import json
+    json.dump({"fields": fields, "durs": durs}, open(os.path.join(out, "prosody.json"), "w"))
+    with open(os.path.join(out, "prosody.bin"), "wb") as f:
+        f.write(prosody.serialise(fields, durs))
+
+    print("\n".join(lines))
+    print("\n  %s  <- paste this back" % os.path.join(out, "prosody.txt"))
+    print("  `speech build` will now put these in the pack")
+
+
+def cmd_acoustics(args):
+    """
+    Measures each vowel's formants in the aligned corpus and fits them
+    to this voice. Run `speech align` and `speech prosody` first (the
+    calibration renders are shared); then `speech build`. See
+    lib/acoustics.py and docs/tts_data.md, "Acoustics".
+    """
+
+    root = fetchlib.cache_root(HERE)
+    cdir = args.corpus or os.path.join(root, "ljspeech")
+    out = os.path.join(HERE, "build", "align")
+    rec, cal = os.path.join(out, "rec"), os.path.join(out, "calib")
+    if not os.path.isdir(rec) or not os.path.isdir(cal):
+        sys.exit("speech: run `speech align` and `speech prosody` first")
+
+    repo = os.path.abspath(os.path.join(HERE, "..", ".."))
+    clips = corpus.read_metadata(cdir, args.limit)
+    print("== measuring formants in %d clips" % len(clips))
+    sp = acoustics.measure(clips, rec)
+    table = acoustics.table_formants(repo)
+
+    # Two passes. LPC's error depends on pitch -- a high voice's sparse
+    # harmonics pull F1 toward them -- so our own voice has to be
+    # measured at the speaker's pitch, and at her tract size, for the
+    # errors to cancel. The first pass estimates the tract size against
+    # the calibration `prosody` already rendered; the second renders
+    # our voice again, matched, and fits against that.
+    print("  first pass: tract size")
+    us0 = acoustics.measure(clips, cal, prefix="t_")
+    _, tract0, _ = acoustics.fit(sp, us0, table)
+    import numpy as np
+    from lib import audio
+    f0 = []
+    for cid, _, wav in clips[:300]:
+        p_ = audio.pitch(audio.read_wav(wav))
+        f0.extend(p_[p_ > 0].tolist())
+    hz = float(np.median(f0)) if f0 else 110.0
+    fpct = max(85, min(120, int(round(tract0 * 100))))
+    print("  the speaker: about %.0fHz, formants %d%% of ours; rendering our voice to match"
+          % (hz, fpct))
+    pitch = max(50, min(300, hz))
+    renderer = corpus.build_renderer(repo, os.path.join(out, "tts_wav"))
+    base_pack = pack_path_for(HERE)
+    order = ["MANIFEST", "PHONES", "LTS", "PROSODY", "FORMANTS", "LEXIDX", "LEXDAT"]
+
+    def pack_with(path, formants_blob):
+        secs = pack.read(base_pack) if base_pack else {}
+        if not secs:
+            return ""
+        secs["FORMANTS"] = formants_blob
+        pack.write(path, [(k, secs[k]) for k in order if k in secs])
+        return path
+
+    # Vowels, against our voice at her pitch and tract with the table's
+    # own vowels (no FORMANTS: a pack already fitted must not be
+    # calibrated against itself).
+    cal2 = os.path.join(out, "calib_voice")
+    corpus.render_references(renderer, clips, cal2,
+                             pack_with(os.path.join(out, "plain.zspk"), acoustics.serialise({})),
+                             wpm=180, pitch=pitch, formants=fpct)
+    print("  second pass: vowels")
+    us = acoustics.measure(clips, cal2, prefix="t_")
+    fitted, tract, notes = acoustics.fit(sp, us, table, tract_done=fpct / 100.0)
+
+    # Consonant loci by analysis-by-synthesis, and with the speaker's
+    # fitted vowels in place on our side too: a locus equation depends
+    # on which vowels follow the consonant, and comparing against the
+    # table's vowels mixed her accent into the consonants.
+    print("  consonant loci: our voice with her vowels, then with its loci moved")
+    ltab = acoustics.table_loci(repo)
+    vblob = acoustics.serialise(fitted)
+    cal2b = os.path.join(out, "calib_vowels")
+    corpus.render_references(renderer, clips, cal2b,
+                             pack_with(os.path.join(out, "vowels.zspk"), vblob),
+                             wpm=180, pitch=pitch, formants=fpct)
+    cal3 = os.path.join(out, "calib_loci")
+    corpus.render_references(renderer, clips, cal3,
+                             pack_with(os.path.join(out, "loci_shift.zspk"),
+                                       acoustics.shifted_loci(ltab, vowels=fitted)),
+                             wpm=180, pitch=pitch, formants=fpct)
+    import json
+    json.dump({"pitch": pitch, "formants": fpct,
+               "pack": os.path.join(out, "vowels.zspk")},
+              open(os.path.join(out, "voice_match.json"), "w"))
+    lus = acoustics.measure(clips, cal2b, prefix="t_").loci
+    lsh = acoustics.measure(clips, cal3, prefix="t_").loci
+    loci, lnotes = acoustics.fit_loci(sp.loci, lus, lsh, ltab, tract / (fpct / 100.0))
+    fitted.update(loci)
+    notes += lnotes
+
+    lines = ["formants fitted to %d clips" % sp.clips, "",
+             "%-3s  %-20s %-20s" % ("", "table F1 F2 F3", "fitted")]
+    for ph in acoustics.MEASURE:
+        if ph not in fitted:
+            continue
+        t, f = table[ph], fitted[ph]
+        for part in ((0, 1) if ph in acoustics.DIPHTHONGS else (0,)):
+            tv = t[3 * part:3 * part + 3]
+            fv = [f[k] or t[k] for k in range(3 * part, 3 * part + 3)]
+            lines.append("%-3s%s %4d %4d %4d   ->   %4d %4d %4d" % (
+                ph, "'" if part else " ", tv[0], tv[1], tv[2], fv[0], fv[1], fv[2]))
+    if loci:
+        lines.append("")
+        lines.append("consonant loci  table F2 F3  ->  fitted")
+        for c in acoustics.LOCI:
+            if c in loci:
+                t, f = ltab[c], loci[c]
+                lines.append("%-3s            %4d %4d   ->   %4d %4d" % (
+                    c, t[1], t[2], f[1] or t[1], f[2] or t[2]))
+    lines.append("")
+    lines.extend("note: " + n for n in notes)
+
+    with open(os.path.join(out, "formants.txt"), "w") as f:
+        f.write("\n".join(lines) + "\n")
+    with open(os.path.join(out, "formants.bin"), "wb") as f:
+        f.write(acoustics.serialise(fitted))
+
+    print("\n".join(lines))
+    print("\n  %s  <- paste this back" % os.path.join(out, "formants.txt"))
+    print("  `speech build` will now put these in the pack")
+
+
+def cmd_source(args):
+    """
+    Fits the voice source's quality -- open quotient and spectral tilt --
+    to the speaker. Run after `speech acoustics`, whose matched voice it
+    reuses; then `speech build`. See lib/source.py.
+    """
+
+    import json
+
+    root = fetchlib.cache_root(HERE)
+    cdir = args.corpus or os.path.join(root, "ljspeech")
+    out = os.path.join(HERE, "build", "align")
+    rec = os.path.join(out, "rec")
+    match = os.path.join(out, "voice_match.json")
+    if not os.path.exists(match):
+        sys.exit("speech: run `speech acoustics` first (it measures the speaker's voice)")
+    m = json.load(open(match))
+
+    repo = os.path.abspath(os.path.join(HERE, "..", ".."))
+    clips = corpus.read_metadata(cdir, args.limit or 600)
+    print("== the voice source, from %d clips" % len(clips))
+    sp, n = source.measure(clips, rec)
+    if sp is None:
+        sys.exit("speech: no vowels measured")
+    print("  the speaker: H1-H2 %.1fdB, H1-A3 %.1fdB (%d vowels)" % (sp[0], sp[1], n))
+
+    renderer = corpus.build_renderer(repo, os.path.join(out, "tts_wav"))
+    grid = []
+    for oq, tilt in source.GRID:
+        d = os.path.join(out, "source_%d_%d" % (oq, tilt))
+        os.environ["ZTTS_OPEN"], os.environ["ZTTS_TILT"] = str(oq), str(tilt)
+        try:
+            corpus.render_references(renderer, clips, d, m["pack"], wpm=180,
+                                     pitch=m["pitch"], formants=m["formants"])
+        finally:
+            os.environ.pop("ZTTS_OPEN", None)
+            os.environ.pop("ZTTS_TILT", None)
+        v, _ = source.measure(clips, d, prefix="t_")
+        grid.append(((oq, tilt), v))
+        print("  our voice at open %d%%, tilt %ddB: H1-H2 %.1f, H1-A3 %.1f" % (oq, tilt, v[0], v[1]))
+
+    res = source.fit(sp, grid)
+    if res is None:
+        sys.exit("speech: the grid did not determine a fit")
+    (oq, tilt), notes = res
+    lines = ["voice source fitted to %d vowels" % n, "",
+             "open quotient  50%% -> %d%%" % oq,
+             "spectral tilt   0dB -> %ddB at 3kHz" % tilt, ""]
+    lines += ["note: " + x for x in notes]
+    with open(os.path.join(out, "source.txt"), "w") as f:
+        f.write("\n".join(lines) + "\n")
+    json.dump({"open": oq, "tilt": tilt}, open(os.path.join(out, "source.json"), "w"))
+    print("\n".join(lines))
+    print("  %s  <- paste this back" % os.path.join(out, "source.txt"))
+
+
+def _eval_setup(args):
+    """The recogniser, the frozen material, the lexicon, the renderer, the ledger."""
+    from lib import ledger as ledgerlib
+    root = fetchlib.cache_root(HERE)
+    repo = os.path.abspath(os.path.join(HERE, "..", ".."))
+    cdir = args.corpus or os.path.join(root, "ljspeech")
+    mpath = os.path.join(HERE, "build", "eval", "material-%s.json" % evalset.VERSION)
+    fresh = not os.path.exists(mpath)
+    material, lex = evalset.load_or_build(
+        mpath, os.path.join(root, "moby", "mpron.txt"), os.path.join(root, "moby", "mpos.txt"),
+        cdir if os.path.exists(cdir) else None)
+    print("== test material %s (%s)%s" % (material["version"], material["hash"],
+                                          ", built now and frozen" if fresh else ""))
+    print("  %d + %d unpredictable sentences, %d + %d words (dev + held-out test), "
+          "%d ordinary sentences" % (len(material["dev"]["sus"]), len(material["test"]["sus"]),
+                                      len(material["dev"]["words"]), len(material["test"]["words"]),
+                                      len(material["ordinary"])))
+    print("  e.g. %r" % material["dev"]["sus"][0])
+    print("== recogniser")
+    rec = asr.recogniser(args.asr, args.model, args.device)
+    print("  " + rec.label)
+    out = os.path.join(HERE, "build", "score")
+    renderer = corpus.build_renderer(repo, os.path.join(out, "tts_wav"))
+    led = ledgerlib.Ledger(os.path.join(HERE, "build", "results.jsonl"))
+    return material, lex, rec, renderer, out, repo, led
+
+
+def cmd_compare(args):
+    """
+    Scores several versions of the voice on the same frozen material, paired,
+    with 95% intervals on every difference. `--ablation` builds session 0's
+    variants: the shipped voice with no pack, then each fitted stage added in
+    turn. See lib/compare.py.
+    """
+    from lib import compare as cmp, ledger as ledgerlib
+    material, lex, rec, renderer, out, repo, led = _eval_setup(args)
+    code = ledgerlib.code_hash(repo)
+    variants, notes = [], []
+    against = "previous"
+    built = os.path.join(HERE, "build", "en", "speech.zspk")
+    if args.ablation:
+        v, notes = cmp.ablation_variants(built, os.path.join(HERE, "build", "align"),
+                                         os.path.join(HERE, "build", "compare"))
+        variants += [(n, p, {}, w) for n, p, w in v]
+    if getattr(args, "diphone", False):
+        inv = os.path.join(HERE, "build", "diphone")
+        if not os.path.exists(os.path.join(inv, "units.json")):
+            sys.exit("speech: no diphone inventory -- run `speech diphones` first")
+        root = fetchlib.cache_root(HERE)
+        variants += cmp.diphone_variants(built, inv, os.path.join(HERE, "build", "compare"),
+                                         os.path.join(HERE, "build", "align", "rec"),
+                                         args.corpus or os.path.join(root, "ljspeech"))
+        against = "first"
+    if args.session1:
+        if not os.path.exists(built):
+            sys.exit("speech: no pack at %s -- run `speech build` first" % built)
+        variants += cmp.session1_variants(built, os.path.join(HERE, "build", "compare"))
+        against = "first"
+    for spec in args.packs or []:
+        name, _, path = spec.partition("=")
+        variants.append((name, path if path != "none" else "", {}, ""))
+    if not variants:
+        sys.exit("speech: nothing to compare -- --ablation, or --pack NAME=PATH ...")
+    for n in notes:
+        print("  note: " + n)
+
+    items = score.items_of(material, "all")
+    print("== scoring %d variants, %d items each" % (len(variants), len(items)))
+    results = []
+    for name, path, env, what in variants:
+        per = cmp.measure(name, path, env, items, "all", material, rec, lex, renderer,
+                          led, code, os.path.join(out, "compare"))
+        results.append((name, per, what))
+    anchor = cmp.measure_recordings(material, rec, lex, led)
+
+    lines = ["compared on material %s (%s), %s, code %s" % (
+        material["version"], material["hash"], rec.label, code), ""]
+    lines += cmp.table(results, anchor, against)
+    lines += [""] + cmp.target_table(results, lex)
+    conf = score.confusions(results[-1][1], lex)
+    if conf:
+        lines += ["", "sounds most often heard as another, in %s:" % results[-1][0],
+                  "  " + ", ".join("%s->%s x%d" % (a, b, n) for (a, b), n in conf[:14])]
+    lines += ["", "what each variant adds:"]
+    lines += ["  %-26s %s" % (n, w) for n, _, w in results if w]
+    report = os.path.join(HERE, "build", "compare",
+                          "diphone.txt" if getattr(args, "diphone", False) else
+                          "session1b.txt" if args.session1 else "compare.txt")
+    os.makedirs(os.path.dirname(report), exist_ok=True)
+    with open(report, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    print()
+    print("\n".join(lines))
+    print("\n  %s  <- paste this back" % report)
+
+
+def cmd_score(args):
+    """Scores one pack. For comparing several, see `speech compare`."""
+    args.ablation = False
+    args.session1 = False
+    args.diphone = False
+    pk = args.pack or os.path.join(HERE, "build", "en", "speech.zspk")
+    args.packs = ["%s=%s" % (os.path.basename(pk), pk)]
+    cmd_compare(args)
+
+
+def cmd_tune(args):
+    """
+    Tunes the voice against the recogniser, unattended and resumable:
+    coordinate search on the dev material, verdict on the held-out test
+    material. See lib/tune.py.
+    """
+    from lib import ledger as ledgerlib
+    pk = args.pack or os.path.join(HERE, "build", "en", "speech.zspk")
+    if not os.path.exists(pk):
+        sys.exit("speech: no pack at %s -- run `speech build` first" % pk)
+    material, lex, rec, renderer, out, repo, led = _eval_setup(args)
+    tdir = os.path.join(HERE, "build", "tune")
+    print("== tuning, at most %d evaluations (log: %s)" % (args.budget, os.path.join(tdir, "log.jsonl")))
+    res = tune.run(renderer, pk, material, rec, lex, prosody.table_durations(repo),
+                   tdir, budget=args.budget, tag=(ledgerlib.code_hash(repo),
+                   ledgerlib.file_hash(pk), material["hash"], rec.label))
+    lines = ["tuned against %s, %d evaluations (%d resumed from the log)" % (
+        rec.label, res["evals"], res["resumed"]), ""]
+    from lib import compare as cmp
+    lines += cmp.table([("before", res["test_start"], ""), ("after", res["test_best"], "")], None)
+    lines.append("")
+    lines.append("changed:")
+    for k in sorted(res["best"]):
+        if res["best"][k] != res["start"][k]:
+            lines.append("  %-11s %4d -> %4d" % (k, res["start"][k], res["best"][k]))
+    d = score.paired_ci(res["test_start"], res["test_best"], "sus")
+    w = score.paired_ci(res["test_start"], res["test_best"], "word")
+    # Both metrics are words correctly identified: up is better.
+    better = (d and d[1] > 0) or (w and w[1] > 0)
+    worse = (d and d[2] < 0) or (w and w[2] < 0)
+    lines.append("")
+    if better and not worse:
+        lines.append("VERDICT: better on the held-out material, beyond noise.")
+        lines.append("tuned pack: %s" % res["pack"])
+    else:
+        lines.append("VERDICT: no difference beyond noise on the held-out material -- keep")
+        lines.append("the pack you have. (The search only keeps what helps on dev; if it")
+        lines.append("does not carry over, it fitted the dev sentences, not the voice.)")
+    with open(os.path.join(tdir, "tune.txt"), "w") as f:
+        f.write("\n".join(lines) + "\n")
+    print("\n".join(lines))
+    print("\n  %s  <- paste this back" % os.path.join(tdir, "tune.txt"))
+
+
+def cmd_diphones(args):
+    """
+    Builds the diphone prototype's inventory from the aligned corpus: the
+    best recorded example of every diphone. See lib/diphone.py.
+    """
+    from lib import diphone
+    root = fetchlib.cache_root(HERE)
+    cdir = args.corpus or os.path.join(root, "ljspeech")
+    rec = os.path.join(HERE, "build", "align", "rec")
+    if not os.path.isdir(rec):
+        sys.exit("speech: no alignments -- run `speech align` first")
+    clips = corpus.read_metadata(cdir, args.limit)
+    out = os.path.join(HERE, "build", "diphone")
+    # Keep the previous inventory, so its scores stay comparable.
+    if os.path.exists(os.path.join(out, "units.pcm")):
+        import shutil
+        shutil.rmtree(out + ".prev", ignore_errors=True)
+        shutil.move(out, out + ".prev")
+        print("  the previous inventory is kept as %s.prev" % out)
+    print("== diphones from %d aligned clips" % len(clips))
+    s = diphone.build_inventory(clips, rec, out)
+    print("  %d diphones over %d phones, %.1f s of audio (%.1f MB at 8 bits)"
+          % (s["units"], s["phones"], s["seconds"], s["samples"] / 1e6))
+    print("  speaker pitch %.0f Hz" % s["speaker_hz"])
+    print("  %s" % out)
+
+
+def _listen_echo(args):
+    """
+    A few ordinary sentences, each rendered several ways, to hear where an
+    echo comes from: the recording itself, units with the recording's own
+    timing and pitch (copy synthesis), units keeping their own pitch, and
+    the device's C engine. build/listen/echo/<clip>-N-<how>.wav
+    """
+    import json, shutil
+    from lib import audio, compare as cmp, ledger as ledgerlib
+    root = fetchlib.cache_root(HERE)
+    repo = os.path.abspath(os.path.join(HERE, "..", ".."))
+    cdir = args.corpus or os.path.join(root, "ljspeech")
+    rec = os.path.join(HERE, "build", "align", "rec")
+    inv = os.path.join(HERE, "build", "diphone")
+    mpath = os.path.join(HERE, "build", "eval", "material-%s.json" % evalset.VERSION)
+    if not os.path.exists(mpath):
+        sys.exit("speech: no frozen material yet -- run `speech compare` once first")
+    ords = [o for o in json.load(open(mpath))["ordinary"]
+            if os.path.exists(os.path.join(rec, o["id"] + ".phones"))][:4]
+    if not ords:
+        sys.exit("speech: none of the ordinary sentences has an alignment")
+    out = os.path.join(HERE, "build", "listen", "echo")
+    shutil.rmtree(out, ignore_errors=True)
+    os.makedirs(out)
+    built = os.path.join(HERE, "build", "en", "speech.zspk")
+    variants = {n: (p, e) for n, p, e, _ in cmp.diphone_variants(
+        built, inv, os.path.join(HERE, "build", "compare"), rec, cdir)}
+    base_pack, _ = variants["formant, male (shipped)"]
+    dev_pack, dev_env = variants["diphone, C engine (device)"]
+    py = {"DIPHONE": inv, "ZTTS_VOICE": "female"}
+    ways = [("2-copy", base_pack, dict(py, DIPHONE_MODE="copy", DIPHONE_ALIGN=rec, DIPHONE_CORPUS=cdir)),
+            ("3-ownpitch", base_pack, dict(py, DIPHONE_MODE="own-pitch")),
+            ("4-device", dev_pack, dev_env)]
+    renderer = corpus.build_renderer(repo, os.path.join(HERE, "build", "score", "tts_wav"))
+    items = [("ord", o["text"], o["id"]) for o in ords]
+    for o in ords:
+        x = audio.read_wav(os.path.join(cdir, "wavs", o["id"] + ".wav"))
+        audio.write_wav(os.path.join(out, "%s-1-original.wav" % o["id"]), x)
+    for how, pk, env in ways:
+        d = os.path.join(out, "_" + how)
+        wavs = score.render(renderer, items, d, pk, env)
+        for w, o in zip(wavs, ords):
+            os.replace(w, os.path.join(out, "%s-%s.wav" % (o["id"], how)))
+        shutil.rmtree(d, ignore_errors=True)
+    print("  %d sentences, 4 ways each, in %s" % (len(ords), out))
+    print("  1-original   the recording itself")
+    print("  2-copy       units, with the recording's own timing and pitch")
+    print("  3-ownpitch   units, our timing, each keeping its recorded pitch")
+    print("  4-device     the C engine, as the board speaks")
+    print("  where the echo first appears says where it comes from")
+
+
+def cmd_listen(args):
+    if getattr(args, "echo", False):
+        return _listen_echo(args)
+    """
+    The listening set (sw/apps/tts/tests/testset.txt) in the formant voice
+    and in the diphone voice, side by side, for ears rather than a
+    recogniser: build/listen/formant and build/listen/diphone.
+    """
+    from lib import compare as cmp
+    repo = os.path.abspath(os.path.join(HERE, "..", ".."))
+    built = os.path.join(HERE, "build", "en", "speech.zspk")
+    inv = os.path.join(HERE, "build", "diphone")
+    if not os.path.exists(os.path.join(inv, "units.json")):
+        sys.exit("speech: no diphone inventory -- run `speech diphones` first")
+    names, items = [], []
+    for line in open(os.path.join(repo, "sw", "apps", "tts", "tests", "testset.txt")):
+        parts = line.rstrip("\n").split("|")
+        if len(parts) >= 2 and parts[0].startswith("t_"):
+            names.append(parts[0][2:])
+            items.append(("ord", parts[1], None))
+    renderer = corpus.build_renderer(repo, os.path.join(HERE, "build", "score", "tts_wav"))
+    variants = cmp.diphone_variants(built, inv, os.path.join(HERE, "build", "compare"))
+    wanted = {"formant, male (shipped)": "formant", "diphone, C engine (device)": "diphone"}
+    for name, pack_path, env, _ in variants:
+        if name not in wanted:
+            continue
+        d = os.path.join(HERE, "build", "listen", wanted[name])
+        import shutil
+        shutil.rmtree(d, ignore_errors=True)
+        wavs = score.render(renderer, items, d, pack_path, env)
+        for w, n in zip(wavs, names):
+            os.replace(w, os.path.join(d, n + ".wav"))
+        for f in os.listdir(d):
+            if not f.endswith(".wav"):
+                os.remove(os.path.join(d, f))
+        print("  %-8s %d sentences in %s" % (wanted[name], len(wavs), d))
+
+
+def main():
+
+    ap = argparse.ArgumentParser(prog="speech", description=__doc__)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    p = sub.add_parser("sources", help="list a spec's inputs and licences")
+    p.add_argument("spec", nargs="?", default="dist/en.spec")
+    p.set_defaults(func=cmd_sources)
+
+    p = sub.add_parser("fetch", help="download the inputs")
+    p.add_argument("spec", nargs="?", default="dist/en.spec")
+    p.add_argument("--mirror", action="store_true", help="use each source's mirror")
+    p.add_argument("--only", action="append", help="fetch just this source (repeatable)")
+    p.add_argument("--limit", type=int, default=0,
+                   help="for corpora: extract at most this many clips")
+    p.set_defaults(func=cmd_fetch)
+
+    p = sub.add_parser("build", help="build a pack from what was fetched")
+    p.add_argument("spec", nargs="?", default="dist/en.spec")
+    p.add_argument("--out", help="output directory (default build/<name>)")
+    p.add_argument("--fitted", action="store_true",
+                   help="include the fitted prosody, formants and voice source")
+    p.add_argument("--no-diphones", action="store_true",
+                   help="leave out the recorded voice even if an inventory exists")
+    p.set_defaults(func=cmd_build)
+
+    p = sub.add_parser("mirror", help="prepare a source for publishing")
+    p.add_argument("source", help="which source (e.g. ljspeech)")
+    p.add_argument("spec", nargs="?", default="dist/en.spec")
+    p.add_argument("--clips", type=int, default=0,
+                   help="cut down to this many clips first (0 = all)")
+    p.add_argument("--piece-mb", type=float, default=1800,
+                   help="piece size in MB; GitHub caps an asset at 2GB")
+    p.add_argument("--repo", default="machdyne/speech-data",
+                   help="where it will be published, for the printed commands")
+    p.add_argument("--out", help="output directory (default mirror/<source>)")
+    p.set_defaults(func=cmd_mirror)
+
+    p = sub.add_parser("align", help="place every phone of a speech corpus in time")
+    p.add_argument("--corpus", help="directory with metadata.csv and wavs/ "
+                   "(default: the fetched ljspeech)")
+    p.add_argument("--limit", type=int, default=0, help="at most this many clips")
+    p.add_argument("--jobs", type=int, default=0, help="processes (default: cores - 1)")
+    p.set_defaults(func=cmd_align)
+
+    p = sub.add_parser("prosody", help="fit timing and pitch to an aligned corpus")
+    p.add_argument("--corpus", help="as for align")
+    p.add_argument("--limit", type=int, default=0)
+    p.set_defaults(func=cmd_prosody)
+
+    p = sub.add_parser("acoustics", help="fit vowel formants to an aligned corpus")
+    p.add_argument("--corpus", help="as for align")
+    p.add_argument("--limit", type=int, default=0)
+    p.add_argument("--calib", type=int, default=0, help=argparse.SUPPRESS)
+    p.set_defaults(func=cmd_acoustics)
+
+    p = sub.add_parser("source", help="fit the voice source to the speaker")
+    p.add_argument("--corpus", help="as for align")
+    p.add_argument("--limit", type=int, default=0)
+    p.set_defaults(func=cmd_source)
+
+    for name, fn, help_ in (("score", cmd_score, "score one pack's intelligibility by machine"),
+                            ("compare", cmd_compare, "score several versions, paired, with intervals"),
+                            ("tune", cmd_tune, "tune the voice against a recogniser, unattended")):
+        p = sub.add_parser(name, help=help_)
+        p.add_argument("--asr", default="whisper", help="whisper (GPU) or sphinx (CPU)")
+        p.add_argument("--model", default=None, help="whisper model (default medium.en)")
+        p.add_argument("--device", default=None, help="cuda (default) or cpu")
+        p.add_argument("--corpus", help="for word frequencies and ordinary sentences "
+                       "(default: the fetched ljspeech)")
+        if name == "compare":
+            p.add_argument("--ablation", action="store_true",
+                           help="the shipped voice, then each fitted stage in turn")
+            p.add_argument("--session1", action="store_true",
+                           help="the default pack, then each synthesiser experiment")
+            p.add_argument("--session1b", dest="session1", action="store_true",
+                           help="the same: session 1b's experiments")
+            p.add_argument("--diphone", action="store_true",
+                           help="the diphone prototype against the formant voices")
+            p.add_argument("--pack", dest="packs", action="append",
+                           help="NAME=PATH, repeatable; PATH none for no pack")
+        else:
+            p.add_argument("--pack", help="default: build/en/speech.zspk")
+        if name == "tune":
+            p.add_argument("--budget", type=int, default=150, help="evaluations")
+        p.set_defaults(func=fn)
+
+    p = sub.add_parser("diphones", help="build the recorded voice's inventory")
+    p.add_argument("--corpus", help="as for align")
+    p.add_argument("--limit", type=int, default=0)
+    p.set_defaults(func=cmd_diphones)
+
+    p = sub.add_parser("listen", help="the listening set in both voices, side by side")
+    p.add_argument("--echo", action="store_true",
+                   help="a few sentences four ways, to hear where an echo comes from")
+    p.add_argument("--corpus", help="as for align")
+    p.set_defaults(func=cmd_listen)
+
+    p = sub.add_parser("show", help="what is in a pack")
+    p.add_argument("file")
+    p.set_defaults(func=cmd_show)
+
+
+    args = ap.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

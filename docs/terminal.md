@@ -254,6 +254,23 @@ each newline submits a command, which is correct. Against a reader that
 knows it is mid-form, the same bytes accumulate instead. Neither
 behaviour belongs to `term`, so it does not have one.
 
+## Reading aloud
+
+With speech on ([tts.md](tts.md)), **Super+A** reads the screen as it
+is shown -- the live screen, or the scrollback page being looked at --
+top to bottom, a row at a time, skipping blank rows. The rows are fixed
+by their line ids when reading starts (see "Addressing lines" above),
+so output arriving meanwhile does not shift what is being read. A row
+that runs to the right edge is a line the terminal wrapped, and is said
+as running on into the next row, without a pause at the wrap. A key
+press stops it before the key is typed; so does a click. Super+A again
+while it is reading stops it too.
+
+**Super+C** says the highlighted text, once, leaving the clipboard as it
+was ("Nothing selected" if there is none); **Super+V** says the
+clipboard. The selection is gathered by the same code as a copy
+(`sel_gather()`), trailing blanks and all handled the same way.
+
 ## Rendering
 
 ### The glass model

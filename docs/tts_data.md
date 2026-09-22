@@ -1,127 +1,146 @@
 # Speech data: `tools/speech`
 
-The voice in `sw/apps/tts` is rules and tables. The rules that ship
-today were written by hand and go only so far -- 41% of ordinary words
-pronounced exactly right ([tts.md](tts.md)), which is not enough for
-reading books. `tools/speech` is where better ones come from: it turns
-public-domain sources into a small data pack that `tts` loads.
+The data pipeline behind `sw/apps/tts` ([tts.md](tts.md)). It turns
+public-domain sources into the **speech pack** `tts` loads from the card
+-- a pronunciation lexicon, trained letter-to-sound rules, and a
+**recorded voice** -- and it is where the voice is **measured**. Paths
+below are relative to `tools/speech` unless they say otherwise.
+
+**Zeitlos does not depend on this tool.** A release ships the built
+pack; without one, `tts` still speaks, with its built-in dictionary and
+rules and its formant voice. A board with no sdcard still speaks.
 
     tools/speech/
       speech               the CLI
+      dist/en.spec         the English voice: sources, licences, hashes
       lib/spec.py          recipe parsing
       lib/fetch.py         resumable downloads, extraction, checksums
-      dist/en.spec         the English voice: sources, licences, hashes
+      lib/moby.py          the Moby pronunciations, and their inflections
+      lib/lexicon.py       the lexicon sections
+      lib/lts_train.py     letter-to-sound trees, learned from the lexicon
+      lib/pack.py          the ZSPK container
+      lib/align.py         alignment of a speech corpus (lib/aligner.py, lib/audio.py)
+      lib/diphone.py       THE RECORDED VOICE: inventory, synthesis, pack section
+      lib/evalset.py       the frozen test material
+      lib/asr.py           the machine listener (Whisper; pocketsphinx for plumbing)
+      lib/score.py         rendering and scoring
+      lib/ledger.py        every score, keyed on everything it depends on
+      lib/compare.py       side-by-side comparisons with intervals
+      lib/prosody.py, acoustics.py, source.py, tune.py   fitting the formant voice (optional)
       .cache/              downloads (gitignored)
+      build/               everything built (gitignored)
 
 Same shape as [`tools/ask`](ask_app.md), and for the same reasons: one
-command, recipes that are readable on their own, a cache that is never
-committed.
-
-**Zeitlos does not depend on this tool.** It ships the built pack, and
-`tts` falls back to its built-in rules when no pack is present -- a
-board with no sdcard still speaks.
-
----
+command, recipes readable on their own, a cache that is never committed.
 
 ## Status
 
-Phase 4 of [tts.md](tts.md)'s plan, partly done.
-
 | | |
 |---|---|
-| **done** | the tool, the recipe format, `sources` and `fetch`, provenance and checksums |
-| **done** | the ZSPK pack format, `speech build`, the reader in `sw/apps/tts` and its tests, the card and release plumbing |
+| **done** | the tool, recipes, `sources`/`fetch`, provenance and checksums |
+| **done** | the ZSPK pack, `speech build`, its reader in `sw/apps/tts`, the card and release plumbing |
 | **done** | the lexicon: 391,159 pronunciations from Moby, inflections included |
-| **done** | letter-to-sound rules LEARNED from the lexicon, and their evaluator in `sw/apps/tts/pack.c` |
-| **done** | alignment of a speech corpus (`speech align`) |
-| **done** | prosody fitted to the alignments, calibrated against our own voice, shipped as a `PROSODY` pack section and read by the device |
-| **done** | acoustics: vowel formants measured from the corpus, calibrated at the speaker's pitch and tract, shipped as a `FORMANTS` pack section |
-| **done** | consonant loci by analysis-by-synthesis (voiced stops; nasals measured only) |
-| **done** | the voice source: open quotient and spectral tilt, fitted by analysis-by-synthesis |
-| next | listening: whether the fitted values, together, make the voice better |
+| **done** | letter-to-sound rules learned from the lexicon |
+| **done** | alignment of LJSpeech (13,099 of 13,100 clips) |
+| **done** | machine intelligibility scoring: frozen material, Whisper, a ledger, paired intervals |
+| **done** | the recorded voice: diphones from LJSpeech, TD-PSOLA, measured, and ported to the device (`sw/apps/tts/dsyn.c`) -- the default voice |
+| optional | fitting the formant voice to the speaker (prosody, formants, loci, source): measured, no intelligibility gain, kept out of the default pack |
+| next | closing the gap to the recordings: several candidates per diphone, chosen at run time by how well they join; a better aligner |
+
+Where it stands, by machine listener (Whisper medium.en, material v3,
+words correctly identified):
+
+| | sentences | isolated words | ordinary sentences |
+|---|---|---|---|
+| no pack (built-in rules, formant voice) | -- | -- | 83% (v2) |
+| formant voice, with the lexicon | 75.3% | 38.8% | 88.1% |
+| **recorded voice** (prototype, before the pause and join fixes) | 73.7% | **47.6%** | 86.6% |
+| LJSpeech's own recordings | | | 94.2% |
 
 ---
 
 ## Using it
 
 ```
+./tools/speech/speech fetch dist/en.spec          # the sources (resumes; checks hashes)
+./tools/speech/speech fetch --only ljspeech --limit 400   # a part of one
+./tools/speech/speech sources                     # what goes in, under what terms
+./tools/speech/speech align                       # phones placed in the LJSpeech clips
+./tools/speech/speech diphones                    # the recorded voice's inventory
 ./tools/speech/speech build                       # -> build/en/speech.zspk
 ./tools/speech/speech show build/en/speech.zspk   # what is in one
-./tools/speech/speech sources                     # what goes in, and under what terms
-./tools/speech/speech fetch dist/en.spec          # from the original sources
-./tools/speech/speech fetch dist/en.spec --mirror # from each source's mirror
-./tools/speech/speech fetch --only moby           # just one
-./tools/speech/speech fetch --only ljspeech --limit 400   # only 400 clips
+./tools/speech/speech listen                      # the listening set, formant and recorded, side by side
+./tools/speech/speech listen --echo               # a few sentences four ways, to hear where a fault comes from
+./tools/speech/speech compare --diphone           # scored: formant, recorded (prototype and device engine)
+./tools/speech/speech compare --ablation          # scored: each pack stage added in turn
 ```
 
-Downloads go to `tools/speech/.cache` (override with `SPEECH_CACHE`)
-and **resume**: an interrupted 2.6GB transfer continues with a range
-request instead of starting again. Extraction takes only the members
-the spec names, and every extracted file is checked against the
-`sha256` line in the spec. A file with no hash yet is not an error --
-its hash is printed so it can be pasted into the spec, which is how a
-new source gets pinned.
+`speech build` takes `--fitted` to add the fitted formant-voice sections,
+and `--no-diphones` to leave the recorded voice out. `speech mirror`
+makes and checks a mirror of a source (below).
+
+Downloads go to `.cache` (override with `SPEECH_CACHE`) and **resume**:
+an interrupted 2.6GB transfer continues with a range request. Extraction
+takes only the members the spec names, and every extracted file is
+checked against the spec's `sha256`; a file with no hash yet prints one,
+which is how a new source gets pinned.
 
 ---
 
 ## The pack
 
-`speech build` writes `build/<voice>/speech.zspk`. **It is not
-committed and never will be**: it is built from public-domain sources
-by whoever cuts a release, and published with that release beside the
-bitstreams. This repository holds the tools that make it, nothing more.
-`build/` is gitignored for exactly that reason.
-
-Today's pack, from Moby alone:
+`speech build` writes `build/<voice>/speech.zspk`. **It is not committed
+and never will be**: it is built from public-domain sources by whoever
+cuts a release, and published with that release beside the bitstreams.
 
 | section | size | |
 |---|---|---|
 | `MANIFEST` | 800 B | what it was built from, with licences and hashes |
 | `PHONES` | 107 B | the phoneme names, in the order the ids use |
-| `LTS` | 91 KB | trained letter-to-sound trees |
-| `PROSODY` | 70 B | timing and pitch fitted to a speaker, when `speech prosody` has run |
-| `FORMANTS` | 300 B | vowel formants fitted to a speaker, when `speech acoustics` has run |
+| `LTS` | 91 KB | trained letter-to-sound trees (resident on the device) |
 | `LEXIDX` | 191 KB | the lexicon's block index |
 | `LEXDAT` | 5.5 MB | 391,159 pronunciations |
+| `DIPHONE` | 1.8 MB | the recorded voice: 1,404 diphones, 8-bit mu-law, with pitch marks |
+| `PROSODY`, `FORMANTS` | < 1 KB | the fitted formant voice; only with `--fitted` |
 
-**Nothing is resident.** `sw/apps/tts/pack.c` binary-searches the index
-by SEEKING -- sixteen bytes a probe, about twenty probes -- and then
-reads one block of a few hundred bytes. A word costs roughly a
-kilobyte of reads, against a service that speaks a few words a second.
-The alternative, holding a 191 KB index in memory, would not fit the
-service's allowance and would buy very little.
-
-Its shape, all little-endian:
+About 7.5 MB in all. Its shape, little-endian:
 
 - **Header:** `ZSPK`, version, section count, file size, CRC32, then a
-  16-byte record per section (8-byte name, offset, length). Sections
-  are found by name, so an older `tts` reads a newer pack and ignores
-  what it does not know.
+  16-byte record per section (8-byte name, offset, length). Sections are
+  found by name, so an older `tts` reads a newer pack and ignores what it
+  does not know -- a `tts` without the recorded voice ignores `DIPHONE`.
 - **`LEXIDX`:** fixed 16-byte records -- a block's data offset, then
-  twelve characters of its first word. Fixed so it can be searched by
-  seeking; truncation is safe because the search only has to land in
-  the right block, which is then scanned.
-- **`LEXDAT`:** blocks of 32 entries, front-coded against each other.
-  The first entry of a block shares nothing, so a block is readable on
-  its own. Each entry is a shared-prefix length, the rest of the word,
-  and one byte per phoneme: stress in the top two bits, phoneme id in
-  the low six.
-- **`PHONES`** is what makes those ids mean anything. `tts` maps the
-  names onto its own table when it opens the pack and **refuses a pack
-  naming a phoneme it does not have**, rather than speaking something
-  else.
+  twelve characters of its first word.
+- **`LEXDAT`:** blocks of 32 entries, front-coded against each other; a
+  block is readable on its own. Each entry is a shared-prefix length,
+  the rest of the word, and one byte per phoneme (stress in the top two
+  bits, id in the low six).
+- **`PHONES`** makes those ids mean anything: `tts` maps the names onto
+  its own table and **refuses a pack naming a phoneme it does not have**.
+- **`DIPHONE`:** described in `lib/diphone.py` ("the pack section"): a
+  phone-pair table, a record per unit (where its samples and marks are,
+  and a flag for a pause half that holds no pause), the pitch marks,
+  then the samples.
+
+**What the device keeps in memory, and what it reads.** The lexicon keeps
+every 32nd index key resident (~6KB), so a word costs two reads -- the
+run of index records, then the block. The recorded voice keeps its pair
+table and unit records (~25KB) and reads each chunk's units once, front
+to back, into a 64KB arena. Read ORDER matters on the card: the kernel's
+FatFs, without fast seek, walked the file's cluster chain from its start
+on every backward seek (see "Long passages repeated themselves", below);
+the kernel now builds a cluster map for every file opened for reading.
 
 ### On the card, and in a release
 
 The card gets it at `/speech/en.spk` (8.3 names, so not `speech.zspk`).
-`release/lib/mkfatimg.py` copies it **if it is there**, and prints a
-note if it is not; a tree that has never run `tools/speech` still
-builds a usable card. `SPEECH_PACK` points the release at a pack built
-elsewhere.
+`release/lib/mkfatimg.py` copies it **if it is there** and counts it in
+the image's space check; if not, it prints a note and builds a card
+without one. `SPEECH_PACK=<path>` ships a pack built elsewhere.
 
-`tts` opens it at startup, and everything it cannot answer falls
-through to the built-in dictionary and rules. With no card at all,
-nothing changes.
+By hand: `mkdir /speech` on the card and copy the pack there as
+`en.spk`. `tts` logs `lexicon from /speech/en.spk` and `recorded voice
+from /speech/en.spk` when it finds them.
 
 ### Lookup order
 
@@ -130,6 +149,8 @@ nothing changes.
 2. the pack's lexicon, when there is one;
 3. the pack's trained letter-to-sound rules;
 4. the built-in rules in `lts.c`.
+
+---
 
 ## Letter-to-sound rules, learned
 
@@ -227,6 +248,402 @@ dictionary. Same for the recogniser in `asr_eval.py`.
 
 ---
 
+---
+
+## The recorded voice
+
+A **diphone** runs from the middle of one sound to the middle of the
+next. Cut real speech there, and every join falls in the steadiest part
+of a sound, while every transition -- bursts, aspiration, nasal
+releases, the glides between vowels -- stays as a person said it: the
+parts the formant rules never managed (see "How the voice got here").
+
+**The inventory** (`speech diphones`, `lib/diphone.py`) takes, for each of
+the ~1,400 diphones in the aligned LJSpeech corpus, the best of twelve
+candidates. Best means: typical durations, a stressed vowel where there
+is one, pitch near the speaker's middle, ends whose spectra are close to
+that phone's typical spectrum (so units meet each other smoothly, and a
+unit cut where the alignment was wrong is rejected), no sounding half
+far quieter than that phone usually is, no flapped T or D ("ladder"),
+and no "pause" half that holds speech. Each half is levelled to its
+phone's typical loudness. Pitch marks -- one per glottal pulse, found
+on a low-passed copy, each within 20% of a period of the last -- are
+found here, once.
+
+**Synthesis** keeps the front end for everything but the sound: phones,
+timing and pitch come from `phon.c` exactly as for the formant voice.
+TD-PSOLA (Moulines and Charpentier, 1990) joins the units: ONE lattice
+of output pitch marks for the utterance; for each, the unit covering
+that moment, mapped half onto half-phone, gives its nearest grain -- two
+source periods under a Hann window. Near a join, both units' grains are
+blended over 12ms either side. A pause half is never stretched and
+plays at most 40ms beside the join; one flagged as holding no pause
+plays none.
+
+**On the device** it is `sw/apps/tts/dsyn.c`, the same method in
+integers, and the default voice whenever the pack has diphones
+(`system.tts.voice = recorded`; Super+E switches to the formant voice
+and back). The C engine and the prototype agree to within a recording's
+distance from its own rebuild; `speech compare --diphone` scores both.
+
+---
+## Measuring
+
+A voice is judged by a machine listener -- Whisper medium.en, on a GPU --
+on frozen test material, every comparison paired and given an interval.
+It is not a person, and a change that only a recogniser likes is
+possible; `speech listen` exists so that every result is also heard.
+
+### Rules
+
+- **One frozen yardstick.** The test material is generated once and
+  saved (`build/eval/material-v3.json`, with a version and a hash); a
+  change to the generator is a new version, and scores across versions
+  are not compared. One recogniser, one set of settings.
+- **Paired, with an interval.** Every comparison is on the same items,
+  and every difference comes with a 95% interval from resampling the
+  items (`score.paired_ci`). Paired, because some sentences are simply
+  harder, and that cancels. A difference counts only when its interval
+  excludes zero -- the reports say "better", "WORSE", or "no real
+  difference".
+- **Anchors.** The real recordings of the ordinary sentences, recognised
+  the same way, are what a human voice scores; the shipped voice with no
+  pack is where we started.
+- **Everything in the ledger.** `build/results.jsonl` gets every score as
+  it is made, with the synthesiser's source hash, the pack's hash, the
+  material, the recogniser, and -- for the recorded voice -- the
+  inventory's and the Python engine's hashes. Nothing identical is measured twice, and
+  a cancelled run loses only the item in progress. `speech tune` resumes
+  from its own log in the same way.
+
+### Three metrics
+
+All three are **words correctly identified** -- higher is better -- which
+is immune to a recogniser inventing words (see "The instrument, fixed"):
+
+- **sentences**: semantically unpredictable sentences ("Suspect the hat
+  and the medical night."), where every word has to be heard;
+- **isolated words**: minimal-pair words, each in the carrier phrase
+  "Would you write ___ now.", only that word scored;
+- **ordinary sentences**: sentences from the corpus -- closest to real
+  use, and the one with a human anchor: the same sentences' recordings.
+
+Every report also tabulates the targeted confusions (T heard as D, K as
+T, N as L...) per 100 of the sound said, counted in scored words only.
+
+### The instrument, fixed
+
+The first two sessions' sentence metric was word error rate, and the
+recogniser sometimes LOOPS on unclear audio -- "wiggly-wiggly-wiggly..."
+for 113 invented words on a six-word sentence. One sentence could be a
+fifth of a variant's errors, and which ones looped flipped at random
+between variants: intervals of +/-10-15 points, too wide to see any
+single rule. So, from material v3:
+
+- **Every metric is words correctly identified**, immune to invented
+  words -- the long-standing measure for synthetic speech. Re-scoring
+  sessions 0 and 1 this way shrank the sentence intervals to +/-1-2.
+- **Isolated words are spoken in a carrier phrase**, "Would you write
+  ___ now.", and only the word is scored: alone, a short clip made the
+  recogniser spell ("S I E D"), write digits, or answer with a stock
+  phrase ("please", "see you"). 300 words per set instead of 80.
+- **Every report tabulates the targeted confusions**, per 100 of the
+  sound said, for every variant -- the aggregate can hide a rule that
+  fixes its target and breaks something else, which is exactly what
+  session 1 did.
+- Reproducibility checked: the same audio from two builds scored
+  identically, to the transcript.
+
+---
+
+## How the voice got here
+
+The record of each measured step, in order: what was tried, what the
+numbers said, and what was decided. The first sessions worked on the
+formant voice; after they showed nothing gained, the recorded voice
+replaced it.
+
+### Session 0: what it found
+
+Whisper medium.en on material v2 (27922d8f5291), RE-SCORED as words
+correctly identified (below, "The instrument") from the ledger's
+transcripts; the shipped voice with no pack, then each stage in turn:
+
+| | sentence words ok | isolated words ok | ordinary words ok |
+|---|---|---|---|
+| shipped, no pack | 68.0% | 26.2% | 83.4% |
+| + lexicon | **76.3%** (+8.3 [+5.6, +11.2]) | 28.7% | **88.2%** (+4.8 [+2.8, +6.8]) |
+| + trained letter rules | 75.6% | 28.7% | 88.1% |
+| + prosody, vowels, loci, source | 73.3-74.6% | 26.9-29.4% | 87.2-87.6% -- no real difference |
+| real recordings | | | **94.2%** |
+
+- **The lexicon is the one real improvement.** Nothing fitted to the
+  speaker made the voice measurably more intelligible, so the default
+  pack is the lexicon and the letter rules; `speech build --fitted` adds
+  the rest, which may still help naturalness, untested.
+- **The gap is consonants**: voiceless stops heard as voiced (T->D,
+  P->B, K->D), velars as alveolars (K->T), nasals as liquids (N->L,
+  M->L). Vowel confusions are minor.
+
+### Session 1: what it found
+
+Five rules from the phonetics of English, each behind a switch
+(`phon.h`, `PHON_EXP_*`; set only by the rendering harness, from
+`ZTTS_EXP`; off by default and byte-identical to the shipped voice when
+off). Re-scored the same way:
+
+| | sentence words ok | targeted confusions (count) |
+|---|---|---|
+| default | 75.6% | T->D 24, P->B 7, K->T 12, M->L 8, N->L 7 |
+| + all five | **72.5%** (-3.2 [-5.5, -0.9]) | T->D **12**, P->B **1**, K->T 9, M->L 5, N->L 4 |
+
+**The experiments fixed what they aimed at, and broke something else.**
+With all five, voicing confusions halved, yet sentences got worse; new
+confusions appeared (AE->HH, K->HH, K->P, N->T). Reading the code:
+
+- `vot` took its extra aspiration OUT of the vowel, shortening the voiced
+  part until it was heard as "h" (AE->HH, K->HH). Now the time is added.
+- `velar` put K's locus near a back vowel's own F2 -- where P's is -- and K
+  was heard as P. Now well above it.
+- `f1-cutback` changed nothing measurable; removed.
+- `vowel-voicing` (T->D 24->18) and `nasal` (M->L 8->4) did their jobs
+  with no significant loss.
+
+Session 1b tests those four, alone and together:
+`./tools/speech/speech compare --session1b`.
+
+### Session 1b: what it found
+
+With the instrument fixed (below), none of the four rules helped:
+vowel-voicing made isolated words worse (-4.1 [-7.0, -1.4]), all four
+together likewise (-4.7), and the rest showed no real difference. Three
+sessions, nine rules, no gain: the formant voice cannot be tuned toward
+DECtalk one rule at a time -- DECtalk is a decade of expert rule-writing,
+and each rule here interacted with the others.
+
+### The change of approach: diphones
+
+A DIPHONE runs from the middle of one sound to the middle of the next.
+A voice built from them keeps every transition, burst, aspiration and
+nasal release as a person actually said it -- exactly what the rules
+kept failing to make -- and joins them in the steady middles of sounds.
+It was the approach that matched and then passed formant synthesis in
+the 1990s, and it fits the device better than the formant voice:
+roughly 1-2MB of units on the card, and a few multiply-adds per sample
+(TD-PSOLA) against a five-resonator cascade.
+
+    ./tools/speech/speech diphones             # the inventory, from the aligned corpus
+    ./tools/speech/speech compare --diphone    # the prototype against the formant voices
+
+`lib/diphone.py` is the prototype, in Python, to decide whether the
+device gets a C version. The inventory keeps the best recorded example
+of each diphone (typical durations, stressed vowels, pitch near the
+speaker's middle) with its pitch marks. Synthesis keeps our front end
+for everything but the sound -- phones, timing and pitch come from
+`tts_wav`'s `.phones` and `.f0` -- and joins the units by TD-PSOLA
+(Moulines and Charpentier, 1990): two-period grains under a Hann
+window, laid down at the target pitch through a time warp that maps
+each half-unit onto its half-phone. A diphone the corpus lacks is made
+from the first half of one unit and the second half of another, rather
+than left silent.
+
+The voice is LJSpeech's reader, a woman's, following the front end's
+FEMALE pitch contour (dragging it to the male contour lowered it nearly
+an octave). The formant voice stays as the fallback when there is no
+pack, and now defaults to female too, so a missing pack does not also
+change who is speaking. (Reversed after the next run: the female
+formant voice measured 10-15 points less intelligible, so the fallback
+stays male.)
+
+What would count as success: isolated words from ~39% to 70% or more,
+and ordinary sentences closing most of the gap from 88% to the
+recordings' 94%. If the prototype cannot clearly beat the formant
+voice, it stops here.
+
+### The first diphone prototype: what it found
+
+Material v3, Whisper medium.en; 1,404 diphones from the whole corpus:
+
+| | sentence words ok | isolated words ok | ordinary words ok |
+|---|---|---|---|
+| formant, male (shipped) | 75.3% | 38.8% | 88.1% |
+| formant, female | 60.4% (-14.9) | 28.3% (-10.5) | 77.8% (-10.3) |
+| diphone prototype | 45.4% (-29.9) | 39.4% (no difference) | 58.3% (-29.7) |
+
+- **The female formant voice is much less intelligible**, so the formant
+  default stays male; consistency with the recorded voice is not worth
+  10-15 points to someone who depends on it. Fixing the female formant
+  voice is its own piece of work.
+- **The recorded units carry the consonant cues the rules never did**:
+  K->D, G->D and M->L fell to zero, N->L to 0.2 per hundred.
+- **But connected speech collapsed**, with new confusions: D->L x24 (the
+  signature of FLAPPING -- units cut from "ladder"-like contexts), D->T,
+  UH->IH, UW->IY.
+
+The next run separates the suspects: `speech compare --diphone` scores
+a rebuilt inventory (each half-phone levelled to its phone's typical
+loudness; flapped T and D avoided in selection), the same keeping each
+unit's recorded pitch (what pitch-shifting costs), and COPY SYNTHESIS of
+the ordinary sentences -- each rebuilt from units with its own
+recording's timing and pitch, taking our front end out entirely. Near
+the recordings' 94%, and the units and joins are sound and the problem
+is the front end's prosody for this voice; low, and it is the units or
+the joins.
+
+### The second diphone run: what it found
+
+| | sentence words ok | isolated | ordinary |
+|---|---|---|---|
+| formant, male (shipped) | 75.3% | 38.8% | 88.1% |
+| diphone, levels + no flaps | 43.1% | 42.9% | 60.8% |
+| ...keeping its own pitch | 42.9% | 40.8% | 61.2% |
+| ...copy synthesis | | | **56.7%** |
+
+**Copy synthesis was as bad as everything else**: rebuilt with each
+recording's own timing and pitch, the ordinary sentences still scored
+57%. So neither our front end nor pitch-shifting is the problem -- the
+units, or the joins between them, are. Listening, the first prototype
+had many short gaps.
+
+What was tested next, here, on the synthetic corpus:
+
+- **The engine is sound.** Rebuilding a recording from its OWN units
+  with its own pulse spacing comes back as close as a copy with 1%
+  noise added (mel-cepstral distance, the harmonic-blind measure; raw
+  log-spectral distance compares individual harmonics and misleads
+  when pitch differs by a few percent). A steady vowel: 2.0dB log-
+  spectral distance, below a barely-audible noise copy's 3.0dB.
+- Two engine faults were found and fixed on the way, though neither was
+  the main damage: the pitch lattice restarted at every unit, breaking
+  the voice's rhythm at every join; and pitch marks were sought over
+  3/4-1 3/4 periods, so 16% of consecutive spacings jumped by more
+  than 15% (now 3%, searching +/-20% on a low-passed copy).
+- **So selection**: units had been chosen by timing and pitch alone,
+  never checked for their SOUND. Now each unit's ends -- where it is
+  joined -- must be close to that phone's typical spectrum (measured
+  over hundreds of candidates): a unit cut where the alignment was
+  wrong is far from typical and rejected, and units whose ends are all
+  near typical meet each other smoothly. And a unit whose vowel or
+  sonorant half is far quieter than that phone usually is -- a cut
+  that wandered into a pause, which plays as a GAP -- is rejected
+  outright (stops exempt: their closures are silent). Twelve
+  candidates per diphone instead of six, to choose among.
+
+### The third diphone run: the turnaround
+
+With the engine fixes (one pitch lattice; steady pitch marks) and the new
+unit selection (typical spectra at the joins; no near-silent halves):
+
+| | sentence words ok | isolated | ordinary |
+|---|---|---|---|
+| formant, male (shipped) | 75.3% | 38.8% | 88.1% |
+| diphone, second run | 43.1% | 42.9% | 60.8% |
+| **diphone, now** | **73.7%** | **47.6%** (+8.7 [+4.1, +14.0], better) | **86.6%** |
+| ...copy synthesis | | | 85.4% |
+| real recordings | | | 94.2% |
+
+- **Level with the shipped voice on sentences, clearly better on isolated
+  words** -- the first approach in any session to beat it on anything --
+  and it is a human voice, which none of these numbers measure.
+- **Copy synthesis now matches the front-end version** (85.4 against
+  86.6): our timing and pitch are no longer what holds it back. The
+  remaining gap to the recordings is in the units and the joins.
+- The two inventories in that run were byte-identical (the inventory was
+  evidently built twice), so it cannot say whether the engine fixes or
+  the selection made the jump.
+
+Two measurement faults it exposed, both fixed:
+
+- The ledger keyed on the C code and the inventory but not on the Python
+  synthesis engine, so an engine change without a rebuilt inventory
+  could have been served a stale score. The engine's hash is now part of
+  every diphone variant's key.
+- Confusions were counted over every word of a carrier-phrase item, not
+  just the scored one: ~500 copies of "Would YOU write ___ now" put "you"
+  heard as "me", "be", "thee" at the top of the table (UW->IY x81, Y->M
+  x48). Only scored words count now. (Moby already drops the American
+  yod -- "new" is N UW -- so that was not it.)
+
+`speech listen` renders the listening sentences in both voices into
+`build/listen/formant` and `build/listen/diphone`.
+
+### The device port
+
+`sw/apps/tts/dsyn.c` is `lib/diphone.py`'s synthesis in integer C, and
+`speech build` puts the inventory in the pack as a DIPHONE section
+(format: `lib/diphone.py`, "the pack section"): resident tables of
+~25KB, and 8-bit mu-law samples streamed from the card per unit.
+`system.tts.voice` defaults to `recorded`, falling back to the male
+formant voice when the pack has no diphones.
+
+- mu-law keeps a quiet (-30dB) signal 37dB clean; the section is 1.77MB.
+- C against the prototype, same inventory and sentences: identical
+  lengths, correlation 0.70; not bit-exact, because the prototype reads
+  phone boundaries in whole milliseconds and C in samples, so the two
+  sometimes pick a neighbouring pitch mark. What counts is the
+  recogniser's verdict, so `speech compare --diphone` scores the C
+  engine as its own variant beside the prototype, from a pack built
+  from the current inventory.
+- No per-sample divisions but one 32-bit one, and no 64-bit arithmetic
+  in the compiled rv32im code at all (checked in the object file).
+
+### Echo and bumps: measured on real speech
+
+With a sample of the real inventory and four LJSpeech recordings to work
+on directly (`lib/diphone.py`):
+
+- **The engine is clean on real speech**: a recording rebuilt from its own
+  units comes back at a distance of 22-30 (another sentence: ~300); its
+  pitch marks are 8-10% jumpy, with almost no octave errors; and there is
+  no doubled pulse between the voice's real ones (the LPC residual's
+  correlation between pulses is lower in the renderings than in the
+  recordings). So the echo was not the engine.
+- **It was the pauses.** Copy synthesis's pauses came out 10dB louder than
+  the recordings'. 55 of the 74 pause units' "pause" halves held part of a
+  word -- the alignment puts a pause at every comma, and the reader often
+  did not pause there -- and the engine stretched them over every gap: a
+  fragment of another word echoing in the silences. Now a unit whose pause
+  half is no pause (louder than -20dB against its speech half) plays none
+  of it -- flagged per unit in the pack for the device -- a real pause half
+  plays at most 40ms next to the join, never stretched, and selection
+  rejects such units outright. Pauses: -4dB -> -33dB (recordings: -14,
+  with breath and room).
+- **The bumps are the joins**: a hard switch from one recording to another
+  made the spectral step at joins 1.4x the recording's own at the same
+  moments. Grains of both units are now blended across 12ms either side
+  (1.3-1.4x; no added echo). The rest is the units themselves differing:
+  one candidate per diphone. Choosing among several at run time, by how
+  well they join, is the known next step.
+- C and Python agree to within a recording's distance from its own
+  rebuild (22-29).
+
+### Long passages repeated themselves: the card
+
+On the board, an 18-second passage in the recorded voice repeated whole
+phrases and took minutes: rendering ran at 482% of real time, the ring
+ran dry, and the mixer -- which loops over the ring -- replayed the last
+1.5s. The cause was the ORDER of reads from the pack. The kernel's FatFs
+has fast seek off, so every backward seek walks the file's cluster chain
+from its start -- about 380ms at the far end of a 7.5MB file on the
+bit-banged SPI card driver -- and the engine read each unit's pitch marks
+and then its samples, megabytes apart: a backward seek per unit.
+
+- `dsyn.c` reads a chunk's units in two front-to-back passes (all marks,
+  then all samples) into a 64KB arena; the pack's unit records and the
+  lexicon's sampled index load in blocks. Backward seeks for the passage:
+  228 -> 29, reads 1,924 -> 498 (the host build counts both,
+  `ZTTS_READS=1`), audio byte-identical.
+- The lexicon keeps every 32nd index key resident (~6KB): two reads a
+  word instead of about twenty.
+- The kernel (`sw/os/fsapi.c`, `ffconf.h`): FatFs fast seek, a cluster map
+  per read handle, so a seek is a table lookup -- for every app.
+- The audio backend never replays: the ring is cleared behind the reader,
+  a writer that falls behind skips ahead (heard as a gap, and logged), and
+  the reader's lap comes from elapsed time, so a stall cannot lose count.
+  The reported CPU now includes the per-chunk work that was hidden.
+
+---
+
 ## Alignment
 
 Before anything can be learned about how a person times and pitches
@@ -267,7 +684,17 @@ audio before anything is fitted to it.
 
 Everything is numpy, and the alignment runs in parallel across cores.
 
-## Prosody
+## Fitting the formant voice (optional)
+
+These stages fit the formant voice to LJSpeech's reader: timing and
+pitch, vowel formants, consonant loci, the voice source. Each recovers
+known values on synthetic speech -- but measured together (session 0)
+none made the voice more intelligible, so they are left out of the
+default pack; `speech build --fitted` puts them back. They may still
+make the formant voice sound more natural, which was never measured.
+They share the alignment above.
+
+### Prosody
 
     ./tools/speech/speech prosody        # after align
     ./tools/speech/speech build          # puts it in the pack
@@ -352,7 +779,7 @@ Getting to the table above found five bugs, all fixed:
 value, the fitted durations, and a note for anything that could not be
 measured or came out of range (the default is kept).
 
-## Acoustics
+### Acoustics
 
     ./tools/speech/speech acoustics      # after align and prosody
     ./tools/speech/speech build          # adds a FORMANTS section
@@ -396,7 +823,7 @@ vowels moved), a 17% shorter tract and a 200Hz pitch.
 Most values within 5%. Calibrating at our own 110Hz instead left F1
 10-20% out on several vowels, which is why the second pass exists.
 
-### Consonant loci
+#### Consonant loci
 
 A consonant has no steady formants; what it has is a LOCUS, the
 frequency its transitions into a vowel point at -- and `phon.c`'s
@@ -447,7 +874,7 @@ Fitted vowels change the cascade's gain, so a pack can make the voice
 louder: a test accent clipped nine samples at the female settings,
 which is why a smaller tract gets 2dB more margin (`phon.c`).
 
-## The voice source
+### The voice source
 
     ./tools/speech/speech source         # after acoustics
     ./tools/speech/speech build          # merged into PROSODY
@@ -498,7 +925,7 @@ The fitted source applies to both voices. LJSpeech's reader is a woman,
 and a breathier source may suit the male voice less; `ZTTS_OPEN` and
 `ZTTS_TILT` override it in `make wav` for comparison.
 
-## Tuning by machine
+### Tuning by machine
 
 Listening to every change does not scale, and nobody's ears are a
 stable instrument over weeks. So intelligibility is measured by a
@@ -554,7 +981,7 @@ Whisper `medium.en` needs about 2GB of GPU memory; an evaluation of the
 default material (240 sentences and 160 words across both sets) takes
 well under a minute, so a budget of 150 is an evening.
 
-## Calibration uses a bare pack
+### Calibration uses a bare pack
 
 Every calibration render -- `prosody`, `acoustics` and `source` alike --
 means "our voice at its defaults", so it renders from the built pack

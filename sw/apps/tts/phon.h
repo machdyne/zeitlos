@@ -93,4 +93,24 @@ bool phon_prosody_dur(const char *name, uint32_t ms);
 // table's are refused one by one.
 bool phon_prosody_formants(const char *name, const uint16_t f[6]);
 
+// -- experiments --
+//
+// Candidate changes to the phonetic rules, each off by default and
+// measured before any is adopted (tools/speech: `speech compare
+// --session1`). Only the rendering harness turns them on, from
+// ZTTS_EXP; the device never does. An experiment that proves itself
+// becomes the rule, and its bit goes.
+enum {
+	PHON_EXP_VOWEL_VOICING	= 1u << 0,	// shorter vowel before a voiceless coda
+	// 1u << 1 was f1-cutback: measured to change nothing, removed.
+	PHON_EXP_VOT		= 1u << 2,	// longer aspiration after P, T, K
+	PHON_EXP_VELAR		= 1u << 3,	// K and G's locus follows the vowel
+	PHON_EXP_NASAL		= 1u << 4,	// abrupt nasal releases
+};
+
+void phon_set_experiments(uint32_t bits);
+
+// An experiment's bit from its name ("vowel-voicing", ...), 0 if none.
+uint32_t phon_experiment(const char *name);
+
 #endif

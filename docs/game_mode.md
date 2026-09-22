@@ -171,7 +171,7 @@ use the mouse, and a viewport that chased the pointer unprompted would
 fight it constantly. Super was the one modifier nothing else in the
 window manager bound, and it is now the accessibility modifier in
 general: Super with a letter drives speech ([tts.md](tts.md) --
-Super+S/A/C/W/R). The two do not overlap. The magnifier is a level test
+Super+S/A/C/V/W/R/E). The two do not overlap. The magnifier is a level test
 on the held modifier in the pointer path; the speech keys are key
 events in `dispatch_keys()`, and pressing one while panning does both
 harmlessly.

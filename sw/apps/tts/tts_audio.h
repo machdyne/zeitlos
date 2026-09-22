@@ -38,4 +38,8 @@ void ta_set_volume(uint32_t v);
 
 uint32_t ta_wait_ticks(void);
 
+// Speak the following utterances with the recorded voice (dsyn.c)
+// rather than the formant synthesiser.
+void ta_use_recorded(bool on);
+
 #endif

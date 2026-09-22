@@ -350,7 +350,8 @@
 #define Z_WM_WHEEL               121
 #define Z_WM_WHEEL_NOTCHES(u)    ((int32_t)(uint32_t)(u))
 
-// wm -> app: the user pressed Super+A ("read this window") while one of
+// wm -> app: the user pressed Super+A ("read this window") -- or Super+C,
+// "read the highlighted text" (Z_WM_READ_SELECTION, below) -- while one of
 // the app's windows had focus. obj is a Z_UINT32 window id. Only sent
 // to a window created with Z_WIN_FLAG_READABLE.
 //
@@ -365,6 +366,17 @@
 // speech stopped, so Super+A afterwards resumes from there. See
 // docs/tts.md, "Reading a window".
 #define Z_WM_READ                122
+
+// Z_WM_READ's payload: the window id in the low 16 bits, and WHAT to
+// read in bits 16-23 -- everything from the caret (Super+A), or only
+// the highlighted text (Super+C, "copy to audio"). An app that predates
+// the second compares the whole value against its window id, so a
+// selection request simply does not match and is ignored.
+#define Z_WM_READ_ALL            0
+#define Z_WM_READ_SELECTION      1
+#define Z_WM_READ_PACK(win, what) (((uint32_t)(what) << 16) | ((uint32_t)(win) & 0xffffu))
+#define Z_WM_READ_WIN(v)         ((int32_t)((v) & 0xffffu))
+#define Z_WM_READ_WHAT(v)        (((uint32_t)(v) >> 16) & 0xffu)
 
 // which icon a Z_WM_TITLEBAR_ICON refers to. Deliberately starts at 1
 // so that 0 is never a valid kind -- see wm.c's hit_titlebar_icon(),

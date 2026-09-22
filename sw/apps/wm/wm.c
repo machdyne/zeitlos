@@ -2941,9 +2941,11 @@ static void game_follow_pointer(int mx, int my) {
 //
 //   Super+S   speech on / off (starts sw/apps/tts, or tells it to quit)
 //   Super+A   read the focused window (Z_WM_READ, zwm.h)
-//   Super+C   speak the clipboard
+//   Super+C   speak the highlighted text (Z_WM_READ_SELECTION): "copy to audio"
+//   Super+V   speak the clipboard: "paste to audio"
 //   Super+W   what is under the pointer (the focused window, with no mouse)
 //   Super+R   repeat the last thing said
+//   Super+E   switch between the recorded and the synthesised voice
 //   Ctrl      tapped on its own: stop speaking
 //
 // Super rather than Alt or Ctrl+Alt: nothing else in the system uses
@@ -3149,7 +3151,7 @@ static void speech_where(void) {
 
 }
 
-static void speech_read(void) {
+static void speech_read(uint32_t what) {
 
 	if (focused < 0) {
 		z_speak_static("No window focused", Z_TTS_F_INTERRUPT);
@@ -3168,14 +3170,23 @@ static void speech_read(void) {
 		// Only an app that asked for this gets it -- see Z_WM_READ.
 		// Nothing is said here: the app's own speech starts at once,
 		// and a title first would only delay it.
-		z_msg_new_send(w->owner_pid, Z_WM_READ, 0, z_obj_uint32((uint32_t)focused));
+		printf("wm: Super+%c: asking '%s' (pid %lu) to read %s\n",
+			what == Z_WM_READ_SELECTION ? 'C' : 'A', w->title,
+			(unsigned long)w->owner_pid,
+			what == Z_WM_READ_SELECTION ? "its selection" : "from the caret");
+		z_msg_new_send(w->owner_pid, Z_WM_READ, 0,
+			z_obj_uint32(Z_WM_READ_PACK(focused, what)));
 		return;
 	}
+	printf("wm: Super+%c: '%s' cannot be read aloud (not Z_WIN_FLAG_READABLE)\n",
+		what == Z_WM_READ_SELECTION ? 'C' : 'A', w->title);
 
 	char buf[Z_SPEAK_SLOT_MAX];
 	buf[0] = 0;
 	speech_cat(buf, sizeof(buf), window_spoken_title(focused));
-	speech_cat(buf, sizeof(buf), ". No readable text.");
+	speech_cat(buf, sizeof(buf), what == Z_WM_READ_SELECTION
+		? ". This window cannot read its selection aloud."
+		: ". This window cannot be read aloud.");
 	z_speak(buf, Z_TTS_F_INTERRUPT);
 
 }
@@ -3192,10 +3203,16 @@ static bool speech_hotkey(uint32_t keysym, uint8_t modifiers, bool pressed) {
 
 	switch (k) {
 	case 's': if (pressed) speech_toggle();    return true;
-	case 'a': if (pressed) speech_read();      return true;
-	case 'c': if (pressed) speech_clipboard(); return true;
+	case 'a': if (pressed) speech_read(Z_WM_READ_ALL);       return true;
+	// "Copy to audio" and "paste to audio": the highlighted text, and
+	// the clipboard.
+	case 'c': if (pressed) speech_read(Z_WM_READ_SELECTION); return true;
+	case 'v': if (pressed) speech_clipboard();               return true;
 	case 'w': if (pressed) speech_where();     return true;
 	case 'r': if (pressed) z_speak_repeat();   return true;
+	// The recorded voice and the synthesised one, back and forth; the
+	// service says which it has switched to.
+	case 'e': if (pressed) z_speak_set(Z_TTS_PARAM_VOICE, Z_TTS_VOICE_NEXT); return true;
 	}
 
 	return false;
@@ -3234,7 +3251,7 @@ static void speech_ctrl_tap(uint8_t usage, uint8_t modifiers, bool pressed) {
 // got scheduled).
 //
 // Global hotkeys (Alt+Tab, Alt+Arrow -- see alt_tab()/
-// alt_move_focused() above; the speech keys, Super+S/A/C/W/R and a
+// alt_move_focused() above; the speech keys, Super+S/A/C/V/W/R/E and a
 // lone Ctrl tap -- see speech_hotkey() above) and dock navigation
 // (dock_handle_key() above, while the dock has focus) are handled here, directly by wm,
 // and consumed -- never forwarded to any app. Everything else goes to
@@ -3270,7 +3287,7 @@ static void dispatch_keys(void) {
 		if (keysym == Z_KEY_NONE) continue;   // bare modifier change, or
 		                                       // an unmapped usage code
 
-		// Super+S/A/C/W/R -- speech. See speech_hotkey().
+		// Super+S/A/C/V/W/R/E -- speech. See speech_hotkey().
 		if (speech_hotkey(keysym, modifiers, pressed)) continue;
 
 		// -- global hotkeys -- act on press only; the matching

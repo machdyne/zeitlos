@@ -322,7 +322,7 @@ given `wm` never frees the message objects it sends (see
 Not every key reaches the focused app. `wm` consumes its own global
 keys before forwarding anything: Alt+Tab, Alt+Arrow, Alt+[ and Alt+],
 Alt+Esc and Ctrl+Alt+Arrow ([window_manager.md](window_manager.md),
-[game_mode.md](game_mode.md)), and the speech keys -- Super+S, A, C, W
+[game_mode.md](game_mode.md)), and the speech keys -- Super+S, A, C, V, W, R, E
 and R ([tts.md](tts.md)). The speech keys only match with Super held
 and neither Ctrl nor Alt; any other Super+key still reaches the app as
 before (as the plain letter -- `z_kbd_usage_to_keysym()` ignores the

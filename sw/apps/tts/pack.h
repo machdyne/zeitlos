@@ -60,6 +60,10 @@ int pack_prosody_fields(void);
 // How many phonemes' formants the open pack supplied.
 int pack_formant_phones(void);
 
+// Reads `len` bytes at `off` in the open pack: for the recorded voice
+// (dsyn.c), which streams its units through the pack's handle.
+bool pack_read_at(uint32_t off, void *buf, uint32_t len);
+
 // The trained model's ceiling, in bytes of .bss.
 //
 // THIS COSTS MEMORY WHETHER OR NOT A PACK EXISTS, because it is a

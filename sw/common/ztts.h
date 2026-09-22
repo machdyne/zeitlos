@@ -108,6 +108,16 @@
 #define Z_TTS_PARAM_RATE		1	// words per minute, 80..450
 #define Z_TTS_PARAM_PITCH		2	// base pitch in Hz, 50..300
 #define Z_TTS_PARAM_VOLUME		3	// 0..255
+#define Z_TTS_PARAM_VOICE		4	// Z_TTS_VOICE_*, for the rest of the session
+
+// Voices, for Z_TTS_PARAM_VOICE. RECORDED needs a speech pack with
+// diphones; without one the formant voice speaks, as it always would.
+// NEXT switches between the recorded voice and the formant one (wm's
+// Super+E), and the service says which it now is, in that voice.
+#define Z_TTS_VOICE_RECORDED		0
+#define Z_TTS_VOICE_MALE		1
+#define Z_TTS_VOICE_FEMALE		2
+#define Z_TTS_VOICE_NEXT		0xff
 
 #define Z_TTS_SET_PACK(param, value) \
 	(((uint32_t)(param) << 24) | ((uint32_t)(value) & 0xffffffu))

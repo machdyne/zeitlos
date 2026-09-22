@@ -21,6 +21,7 @@
 #include "pack.h"
 #include "lts.h"
 #include "phon.h"
+#include "dsyn.h"
 
 #ifdef PACK_HOST
 // Host tests read with stdio; the target uses the app filesystem API.
@@ -28,7 +29,18 @@
 static FILE *fh;
 static int io_open(const char *p) { fh = fopen(p, "rb"); return fh ? 1 : -1; }
 static void io_close(void) { if (fh) fclose(fh); fh = 0; }
+static bool fh_is_closed(void) { return fh == 0; }
+// Every read, counted: on the card each is a seek and a transfer, and
+// how many there are per second of speech is what decides whether the
+// recorded voice keeps up (tests/tts_wav.c reports it, ZTTS_READS=1).
+uint32_t pack_reads, pack_back_seeks;
+static uint32_t last_end;
 static bool io_read(uint32_t off, void *buf, uint32_t len) {
+	pack_reads++;
+	// A BACKWARD seek is what costs on the card: without FatFs's fast
+	// seek, it walks the file's cluster chain from the start.
+	if (off < last_end) pack_back_seeks++;
+	last_end = off + len;
 	if (!fh || fseek(fh, (long)off, SEEK_SET) != 0) return false;
 	return fread(buf, 1, len, fh) == len;
 }
@@ -37,6 +49,7 @@ static bool io_read(uint32_t off, void *buf, uint32_t len) {
 static int fh = -1;
 static int io_open(const char *p) { fh = fs_open_read(p); return fh; }
 static void io_close(void) { if (fh >= 0) fs_close_handle(fh); fh = -1; }
+static bool fh_is_closed(void) { return fh < 0; }
 static bool io_read(uint32_t off, void *buf, uint32_t len) {
 	if (fh < 0) return false;
 	if (!fs_seek(fh, off)) return false;
@@ -294,6 +307,13 @@ static void formants_load(uint32_t off, uint32_t len) {
 	}
 }
 
+// For the recorded voice (dsyn.c), which streams its units from the
+// card through the same handle as the lexicon.
+bool pack_read_at(uint32_t off, void *buf, uint32_t len) {
+	if (!ready && fh_is_closed()) return false;
+	return len == 0 || io_read(off, buf, len);
+}
+
 int pack_formant_phones(void) {
 	return formant_phones;
 }
@@ -301,6 +321,8 @@ int pack_formant_phones(void) {
 int pack_prosody_fields(void) {
 	return prosody_fields;
 }
+
+static void sparse_load(void);
 
 bool pack_open(const char *path) {
 
@@ -381,12 +403,20 @@ bool pack_open(const char *path) {
 	if (section(table, (int)nsect, "FORMANTS", &fm_off, &fm_len))
 		formants_load(fm_off, fm_len);
 
+	// The recorded voice, when the pack carries one. Optional like the
+	// rest: without it the formant voice speaks.
+	uint32_t dp_off, dp_len;
+	dsyn_close();
+	if (section(table, (int)nsect, "DIPHONE", &dp_off, &dp_len) && dsyn_open(dp_off, dp_len))
+		printf("tts: recorded voice from %s\n", path);
+
 	// The trained letter rules are optional inside an optional pack.
 	uint32_t lt_off, lt_len;
 	if (section(table, (int)nsect, "LTS", &lt_off, &lt_len))
 		lts_load(lt_off, lt_len);
 
 	nblocks = idx_len / IDX_REC;
+	sparse_load();
 	nwords = 0;
 	ready = nblocks > 0;
 	if (!ready) pack_close();
@@ -395,6 +425,7 @@ bool pack_open(const char *path) {
 }
 
 void pack_close(void) {
+	dsyn_close();
 	io_close();
 	// Closing the pack takes its voice with it.
 	if (prosody_fields) phon_prosody_reset();
@@ -424,14 +455,76 @@ static bool index_at(uint32_t i, uint32_t *off, char *key) {
 	return true;
 }
 
+static bool block_lookup(const char *word, uint32_t start, uint32_t end, char *out, uint32_t size);
+
+// A resident sample of the index: every SPARSE-th record's first word.
+// A binary search over it finds the run of SPARSE records the word falls
+// in, which is then read in one go -- two reads per word (that run, then
+// the block) instead of a probe per step of a search over the whole index
+// on the card, about twenty. Reads were most of the cost of speaking.
+#define SPARSE		32
+#define MAX_SPARSE	1024			// 32K blocks: a lexicon several times today's
+static char sparse_key[MAX_SPARSE][IDX_KEY + 1];
+static uint32_t nsparse;
+
+static void sparse_load(void) {
+	// The index in 4KB runs, front to back, keeping every SPARSE-th
+	// record's key: a few dozen forward reads, not a read per record.
+	static uint8_t run[4096];
+	const uint32_t per = sizeof(run) / IDX_REC;
+	nsparse = 0;
+	if ((nblocks + SPARSE - 1) / SPARSE > MAX_SPARSE) return;	// too big: search the card
+	for (uint32_t b = 0; b < nblocks; b += per) {
+		uint32_t n = nblocks - b < per ? nblocks - b : per;
+		if (!io_read(idx_off + b * IDX_REC, run, n * IDX_REC)) { nsparse = 0; return; }
+		for (uint32_t i = 0; i < n; i++) {
+			if ((b + i) % SPARSE) continue;
+			memcpy(sparse_key[nsparse], run + i * IDX_REC + 4, IDX_KEY);
+			sparse_key[nsparse][IDX_KEY] = 0;
+			nsparse++;
+		}
+	}
+}
+
 bool pack_lookup(const char *word, char *out, uint32_t size) {
 
 	if (!ready || !word || !*word || !size) return false;
 
-	// Binary search for the last block whose first word is <= this one.
+	// The last block whose first word is <= this one: in the resident
+	// sample first, then among the SPARSE records it points at, read at
+	// once.
 	uint32_t lo = 0, hi = nblocks - 1, found = 0;
 	char key[IDX_KEY + 1];
 	uint32_t off;
+
+	if (nsparse) {
+		uint32_t a = 0, b = nsparse - 1, s = 0;
+		while (a <= b) {
+			uint32_t mid = (a + b) / 2;
+			if (strncmp(sparse_key[mid], word, IDX_KEY) <= 0) { s = mid; a = mid + 1; }
+			else { if (mid == 0) break; b = mid - 1; }
+		}
+		uint32_t first = s * SPARSE;
+		uint32_t n = nblocks - first < SPARSE + 1 ? nblocks - first : SPARSE + 1;
+		static uint8_t run[(SPARSE + 1) * IDX_REC];
+		if (!io_read(idx_off + first * IDX_REC, run, n * IDX_REC)) return false;
+		found = first;
+		for (uint32_t i = 0; i < n; i++) {
+			memcpy(key, run + i * IDX_REC + 4, IDX_KEY);
+			key[IDX_KEY] = 0;
+			if (strncmp(key, word, IDX_KEY) <= 0) found = first + i;
+			else break;
+		}
+		uint32_t start = rd32(run + (found - first) * IDX_REC);
+		uint32_t end = (found + 1 < nblocks && found + 1 - first < n)
+			? rd32(run + (found + 1 - first) * IDX_REC)
+			: (found + 1 < nblocks ? 0 : dat_len);
+		if (found + 1 < nblocks && found + 1 - first >= n) {
+			char next[IDX_KEY + 1];
+			if (!index_at(found + 1, &end, next)) return false;
+		}
+		return block_lookup(word, start, end, out, size);
+	}
 
 	while (lo <= hi) {
 		uint32_t mid = (lo + hi) / 2;
@@ -453,6 +546,12 @@ bool pack_lookup(const char *word, char *out, uint32_t size) {
 	} else {
 		end = dat_len;
 	}
+	return block_lookup(word, start, end, out, size);
+}
+
+// Scans one lexicon block for the word.
+static bool block_lookup(const char *word, uint32_t start, uint32_t end, char *out, uint32_t size) {
+
 
 	uint32_t len = end - start;
 	if (len > MAX_BLOCK) len = MAX_BLOCK;

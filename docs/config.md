@@ -19,8 +19,8 @@ system.video.mode: amber
 | `apps.term.auto_connect` | *(none)* | `term` | what a new term window connects to by itself |
 | `system.rtc.timezone` | `UTC` | `clock`, `cal` | local time shown; the RTC itself stays UTC |
 | `system.tts.enabled` | `no` | kernel | speech: start `tts` at boot, for a machine set up for someone who cannot see it |
-| `system.tts.voice` | `female` | `tts` | speech: `female` or `male`. A female voice is a higher pitch (200Hz) AND a shorter vocal tract (formants 17% higher): pitch alone only makes a squeaky male voice. `pitch` and `formants` below override it |
-| `system.tts.pitch` | `110` | `tts` | speech: base pitch in Hz, 50-300 (200 when `voice` is `female`) |
+| `system.tts.voice` | `recorded` | `tts` | speech: `recorded`, `male` or `female`. `recorded` is a real person's voice, built from the speech pack's diphones; without a pack that has them, the male synthesised voice speaks. `male` and `female` choose the synthesised voice; a female one is a higher pitch (200Hz) AND a shorter vocal tract (formants 17% higher), because pitch alone only makes a squeaky male voice |
+| `system.tts.pitch` | `110` | `tts` | speech: base pitch in Hz, 50-300 (200 for the recorded and female voices) |
 | `system.tts.formants` | `100` | `tts` | speech: vocal tract size, % of the default, 85-120 (the range measured not to clip at any pitch). Higher is a smaller, younger-sounding voice; `female` is 117 |
 | `system.tts.expression` | `100` | `tts` | speech: how much the pitch moves, % -- 0 is a monotone, 200 twice as lively. Many people turn this down at high speed |
 | `system.tts.rate` | `180` | `tts` | speech: words per minute, 80-450 |

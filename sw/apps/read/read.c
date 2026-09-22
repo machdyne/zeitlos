@@ -55,6 +55,8 @@
 #include "../../common/zeitlos.h"
 #include "../../common/zsoc.h"	// Z_TICK_HZ, for the scroll settle time
 #include "../../common/zwm.h"
+#include "../../common/zspeak.h"
+#include "../../common/zsayall.h"	// Super+A -- docs/tts.md
 #include "../../common/zwin.h"
 #include "../../common/zgfx.h"
 #include "../../common/zfont.h"
@@ -1466,17 +1468,17 @@ static void sel_clear(void) {
 // newlines, the same convention sw/apps/term uses -- the clipboard
 // should hold what the reader could see, not the padding that put it
 // there.
-static void sel_copy(void) {
-
-	if (!sel_active()) return;
+// The selected text into `out`, trailing spaces of each row trimmed and
+// rows joined with newlines: for the clipboard (sel_copy) and for
+// Super+C (say_selection). Returns its length.
+static int sel_text(char *out, int cap) {
 
 	int r0, c0, r1, c1;
 	sel_bounds(&r0, &c0, &r1, &c1);
 
-	static char out[Z_WM_CLIP_MAX];
 	int n = 0;
 
-	for (int r = r0; r <= r1 && r < nvlines && n < (int)sizeof(out) - 1; r++) {
+	for (int r = r0; r <= r1 && r < nvlines && n < cap - 1; r++) {
 
 		if (r < 0) continue;
 
@@ -1492,15 +1494,24 @@ static void sel_copy(void) {
 		for (int k = from; k < to; k++)
 			if (v->text[k] != ' ') last = k;
 
-		for (int k = from; k <= last && n < (int)sizeof(out) - 1; k++)
+		for (int k = from; k <= last && n < cap - 1; k++)
 			out[n++] = v->text[k];
 
-		if (r != r1 && n < (int)sizeof(out) - 1) out[n++] = '\n';
+		if (r != r1 && n < cap - 1) out[n++] = '\n';
 
 	}
 
 	out[n] = 0;
+	return n;
 
+}
+
+static void sel_copy(void) {
+
+	if (!sel_active()) return;
+
+	static char out[Z_WM_CLIP_MAX];
+	int n = sel_text(out, sizeof(out));
 	z_clip_set(out, n);
 
 }
@@ -2603,6 +2614,90 @@ static void push_history(void) {
 
 }
 
+// -- reading aloud (Super+A, Super+C) -- docs/tts.md, "Reading a window" --
+//
+// Super+A reads from the top of the screen, a block at a time -- a
+// paragraph, a heading, a list item, as read_block() parses them, so
+// what is said is the text as shown, never the Markdown -- and the
+// page follows the voice: each block becomes the top of the screen as
+// it is spoken. Any key or click stops it, leaving the page where the
+// voice was, and Super+A again reads on from there. Super+C says the
+// highlighted text.
+static uint32_t say_next;		// the source line after the last block handed out
+static uint32_t say_line[16];		// unit n's source line, for the last 16 n
+
+static int say_get(void *user, int n, const char **text, uint32_t *flags) {
+
+	(void)user;
+	static md_line_t ml;
+	static char out[MD_LINE_MAX + 16];
+
+	for (;;) {
+		if (eof_seen && say_next >= eof_line) return -1;
+		md_state_t st;
+		uint32_t at = say_next;
+		seek_line(at, &st);
+		uint32_t used = read_block(&st, &ml);
+		if (!used) return -1;
+		say_next += used;
+		// Nothing to say for a blank line or a rule; skip to the next
+		// block rather than hand over an empty unit.
+		if (ml.kind == MD_BLANK || ml.kind == MD_RULE || !ml.text[0]) continue;
+
+		int k = 0;
+		// A numbered list item is read with its number; a bullet is not.
+		if (ml.kind == MD_LIST && ml.marker[0] >= '0' && ml.marker[0] <= '9') {
+			for (int i = 0; ml.marker[i] && k < 8; i++) out[k++] = ml.marker[i];
+			out[k++] = ' ';
+		}
+		for (int i = 0; ml.text[i] && k < (int)sizeof(out) - 1; i++) out[k++] = ml.text[i];
+		out[k] = 0;
+
+		say_line[n & 15] = at;
+		*text = out;
+		*flags = 0;		// every block ends a sentence: a pause after
+		return k;
+	}
+
+}
+
+// The page follows the voice: the block being spoken is the top line.
+static void say_at(void *user, int n) {
+	(void)user;
+	top_line = say_line[n & 15];
+	top_sub = 0;
+	sel_link = -1;
+	repaint();
+}
+
+static z_sayall_t reader = { say_get, say_at, NULL };
+
+static void say_toggle(void) {
+	if (z_sayall_active(&reader)) {
+		printf("read: Super+A: reading stopped\n");
+		z_sayall_stop(&reader);
+		return;
+	}
+	say_next = top_line;
+	printf("read: Super+A: reading from line %lu\n", (unsigned long)top_line + 1);
+	if (!z_sayall_start(&reader, 0)) {
+		printf("read: Super+A: could not start (is speech on?)\n");
+		z_speak_static("End of document", Z_TTS_F_INTERRUPT);
+	}
+}
+
+static void say_selection(void) {
+	z_sayall_stop(&reader);
+	if (!sel_active()) {
+		z_speak_static("Nothing selected", Z_TTS_F_INTERRUPT);
+		return;
+	}
+	static char out[Z_WM_CLIP_MAX];
+	int n = sel_text(out, sizeof(out));
+	printf("read: Super+C: reading the selection, %d characters\n", n);
+	z_speak_n(out, (uint32_t)n, Z_TTS_F_INTERRUPT);
+}
+
 static void go_back(void) {
 
 	if (!hist_n) return;
@@ -3199,6 +3294,9 @@ static void forward_msg(z_msg_t *msg, void *user) {
 
 	(void)user;
 
+	// Speech's progress reports, pacing Super+A.
+	if (z_sayall_msg(&reader, msg)) return;
+
 	switch (msg->subject) {
 
 		// The part of this window not covered by the windows in front
@@ -3270,7 +3368,7 @@ int main(void) {
 	if (z_win_create_flags(&win, "read", WIN_W, WIN_H, -1, -1,
 		Z_WIN_FLAG_CLOSE_ICON | Z_WIN_FLAG_CLOSE_KILLS_OWNER |
 		Z_WIN_FLAG_RESIZABLE | Z_WIN_FLAG_MIN_IS_CREATE |
-		Z_WIN_FLAG_OPEN_ICON) != Z_OK) {
+		Z_WIN_FLAG_OPEN_ICON | Z_WIN_FLAG_READABLE) != Z_OK) {
 		printf("read: failed to create window -- is wm running?\n");
 		return 1;
 	}
@@ -3373,6 +3471,10 @@ int main(void) {
 					if (msg.obj.type != Z_UINT32) break;
 					if (!Z_WM_UNPACK_KEY_PRESSED(msg.obj.val.uint32)) break;
 
+					// Any key ends a read, before it does anything else --
+					// the page is then where the voice was.
+					z_sayall_stop(&reader);
+
 					handle_key(Z_WM_UNPACK_KEY_KEYSYM(msg.obj.val.uint32),
 						(uint8_t)Z_WM_UNPACK_KEY_MODIFIERS(msg.obj.val.uint32));
 
@@ -3380,8 +3482,24 @@ int main(void) {
 
 				case Z_WM_MOUSE:
 
-					if (msg.obj.type == Z_UINT32)
-						handle_mouse(msg.obj.val.uint32);
+					if (msg.obj.type != Z_UINT32) break;
+					// So does a click; the wheel scrolls under the voice.
+					if (Z_WM_UNPACK_MOUSE_BUTTONS(msg.obj.val.uint32) & 1)
+						z_sayall_stop(&reader);
+					handle_mouse(msg.obj.val.uint32);
+
+					break;
+
+				// Super+A and Super+C -- see say_toggle(), say_selection().
+				case Z_WM_READ:
+
+					if (msg.obj.type == Z_UINT32 &&
+						Z_WM_READ_WIN(msg.obj.val.uint32) == win.id) {
+						if (Z_WM_READ_WHAT(msg.obj.val.uint32) == Z_WM_READ_SELECTION)
+							say_selection();
+						else
+							say_toggle();
+					}
 
 					break;
 
@@ -3407,6 +3525,9 @@ int main(void) {
 		// One paint answers however many scroll impulses the drain
 		// just read -- see scroll_flush().
 		scroll_flush();
+
+		// A reader whose progress reports stopped coming gives up.
+		z_sayall_poll(&reader);
 
 		// Block until something arrives -- but no longer than the
 		// deferred body redraw's deadline, or a drag that ends by the

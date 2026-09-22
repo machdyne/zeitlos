@@ -162,10 +162,23 @@ z_obj_t *k_fs_unlink(z_obj_t *args) {
 
 // see zfs.h's own comment for the full design writeup on why chunked
 // I/O needs a kernel-side handle table at all.
+// A read handle's cluster map (FatFs "fast seek"): without one, every
+// backward f_lseek() walks the file's cluster chain from its first
+// cluster, one FAT entry at a time -- and on the bit-banged SPI card
+// driver each FAT sector that walk touches is a slow read. Seeking
+// around a large file (the 7.5MB speech pack, a long book in `read`)
+// cost on the order of 100ms a seek. With the map, a seek is a table
+// lookup. A file written in one piece -- as a card image lays them
+// down -- is one fragment, two words of map; 32 words covers 15
+// fragments, and a file more broken up than that simply seeks the old
+// way.
+#define FS_CLMT		32
+
 static struct {
 	bool		used;
 	uint32_t	owner_pid;
 	FIL		fil;
+	DWORD		clmt[FS_CLMT];
 } z_fs_handles[Z_FS_MAX_OPEN];
 
 static int z_fs_alloc_handle(void) {
@@ -279,6 +292,13 @@ z_obj_t *k_fs_open_read(z_obj_t *args) {
 		fs_path_resolve(a->name, rp_, sizeof(rp_)),
 		FA_READ | FA_OPEN_EXISTING);
 	if (res != FR_OK) return (&z_fail);
+
+	// Read handles only: FatFs does not allow a write that extends a file
+	// while a map is in use.
+	z_fs_handles[slot].fil.cltbl = z_fs_handles[slot].clmt;
+	z_fs_handles[slot].clmt[0] = FS_CLMT;
+	if (f_lseek(&z_fs_handles[slot].fil, CREATE_LINKMAP) != FR_OK)
+		z_fs_handles[slot].fil.cltbl = 0;	// too fragmented: seek the old way
 
 	z_fs_handles[slot].used = true;
 	z_fs_handles[slot].owner_pid = z_pid;

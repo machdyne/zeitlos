@@ -211,6 +211,33 @@ static int nsegs;
 static uint16_t bnd_f1[MAX_SEGS + 1], bnd_f2[MAX_SEGS + 1], bnd_f3[MAX_SEGS + 1];
 
 static int cur_seg;
+
+// Experiments: see phon.h. Off unless the rendering harness sets them.
+static uint32_t exp_bits;
+#define EXP(b)	(exp_bits & (b))
+
+void phon_set_experiments(uint32_t bits) {
+	exp_bits = bits;
+}
+
+uint32_t phon_experiment(const char *name) {
+	static const struct { const char *n; uint32_t b; } tab[] = {
+		{ "vowel-voicing", PHON_EXP_VOWEL_VOICING },
+		{ "vot", PHON_EXP_VOT },
+		{ "velar", PHON_EXP_VELAR },
+		{ "nasal", PHON_EXP_NASAL },
+	};
+	for (unsigned i = 0; i < sizeof(tab) / sizeof(tab[0]); i++)
+		if (strcmp(tab[i].n, name) == 0) return tab[i].b;
+	return 0;
+}
+
+static bool is_front(const ph_t *v) {
+	static const char *const front[] = { "IY", "IH", "EY", "EH", "AE", "Y" };
+	for (unsigned i = 0; i < sizeof(front) / sizeof(front[0]); i++)
+		if (v->nm[0] == front[i][0] && v->nm[1] == front[i][1]) return true;
+	return false;
+}
 static uint32_t phrase_frames[256];		// frames in each phrase
 static uint16_t seg_into_phrase[MAX_SEGS];		// frames of its phrase before each segment
 static uint32_t formant_pct = 100, expression_pct = 100;
@@ -457,6 +484,18 @@ static void expand(void) {
 			uint32_t ms = ph_dur(p);
 			if (tk->stress == 0) ms = ms * (uint32_t)pro[PHON_PRO_UNSTRESSED] / 100;
 			else if (tk->stress == 2) ms = ms * 80 / 100;
+
+			// EXPERIMENT vowel-voicing: English marks a final
+			// consonant's voicing mostly on the VOWEL before it --
+			// "hat" is short, "had" long. The obstruent is a coda when
+			// no vowel follows it.
+			if (EXP(PHON_EXP_VOWEL_VOICING) && next && next->p &&
+			    (next->p->kind == K_STOP || next->p->kind == K_FRIC ||
+			     next->p->kind == K_AFFR)) {
+				const tok_t *n2 = (i + 2 < ntoks) ? &toks[i + 2] : 0;
+				if (!n2 || !n2->p || n2->p->kind != K_VOWEL)
+					ms = ms * (next->p->voiced ? 115u : 70u) / 100u;
+			}
 			// The last vowel before a pause is drawn out, as people do
 			// at the end of a phrase -- and more at the end of a
 			// sentence than at a comma. This is most of what makes a
@@ -517,6 +556,14 @@ static void expand(void) {
 			s->t.av = p->av;
 			s->ta = (p->kind == K_SEMI) ? 4 : 2;
 			s->tf = (p->kind == K_SEMI) ? 12 : 6;
+			// EXPERIMENT nasal: a nasal's release into a vowel is
+			// abrupt -- the velum opens, and the sound changes at once
+			// -- where L and W glide. Transitions as slow as a glide's
+			// made N heard as L.
+			if (EXP(PHON_EXP_NASAL) && p->kind == K_NASAL) {
+				s->tf = 2;
+				s->k = 70;
+			}
 			set_formants(s, ph_f(p, 0), ph_f(p, 1), ph_f(p, 2), p->b1, p->b2, p->b3);
 			break;
 
@@ -562,6 +609,22 @@ static void expand(void) {
 			s->tf = 6;
 			set_formants(s, ph_f(p, 0), ph_f(p, 1), ph_f(p, 2), p->b1, p->b2, p->b3);
 
+			// EXPERIMENT velar: a velar's place moves with the vowel --
+			// forward before "key", back before "coo" -- so its locus
+			// and burst do too. One fixed locus made K before a back
+			// vowel sound like T.
+			if (EXP(PHON_EXP_VELAR) && p->k >= 60 && next && next->p &&
+			    next->p->kind == K_VOWEL) {
+				uint16_t vf2 = ph_f(next->p, 1);
+				if (is_front(next->p))
+					set_formants(s, ph_f(p, 0), 2300, 3000, p->b1, p->b2, p->b3);
+				else
+					// Well above the vowel's own F2: near it is where
+					// P's locus is, and session 1 heard K as P (x7).
+					set_formants(s, ph_f(p, 0), (uint16_t)(vf2 + 450 < 1500 ? 1500 : vf2 + 450),
+						2400, p->b1, p->b2, p->b3);
+			}
+
 			if (p->kind == K_AFFR) {
 				seg_t *f = new_seg();
 				if (!f) return;
@@ -587,6 +650,13 @@ static void expand(void) {
 
 			if (!p->voiced) {
 				uint8_t asp = (p->f2 < 1000) ? 9 : (p->k >= 60) ? 12 : 10;	// P, T, K
+				// EXPERIMENT vot: English aspiration runs 55-80ms;
+				// these were 45-60. (The vowel is lengthened by the
+				// same extra frames where the VOT is applied, so the
+				// voiced part of it is not shortened: taking the extra
+				// time out of the vowel made it heard as "h" -- AE->HH,
+				// K->HH in session 1.)
+				if (EXP(PHON_EXP_VOT)) asp = (uint8_t)(asp * 3 / 2);
 				if (is_vocalic(next)) {
 					// Aspiration becomes the start of the next vowel,
 					// during its formant transition -- set on the
@@ -614,8 +684,13 @@ static void expand(void) {
 
 		// Voice onset time for this vowel, left by a voiceless stop.
 		if (prev && prev->asp && first < nsegs &&
-		    (p->kind == K_VOWEL || p->kind == K_SEMI))
+		    (p->kind == K_VOWEL || p->kind == K_SEMI)) {
 			segs[first].vot = prev->asp;
+			// EXPERIMENT vot: the extra third of aspiration is added
+			// to the segment, so the voiced part keeps its length.
+			if (EXP(PHON_EXP_VOT))
+				segs[first].nf = (uint16_t)(segs[first].nf + prev->asp / 3);
+		}
 
 	}
 

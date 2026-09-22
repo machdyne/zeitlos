@@ -1602,6 +1602,7 @@ static z_sayall_t reader = { read_get, read_at, NULL };
 static void read_toggle(void) {
 
 	if (z_sayall_active(&reader)) {
+		printf("text: Super+A: reading stopped\n");
 		z_sayall_stop(&reader);
 		return;
 	}
@@ -1617,9 +1618,25 @@ static void read_toggle(void) {
 	// commonest reason to ask, so read the whole document instead.
 	int from = (cursor >= len) ? 0 : line_at(cursor);
 
-	if (!z_sayall_start(&reader, from))
+	printf("text: Super+A: reading from line %d of %d\n", from + 1, nlines);
+	if (!z_sayall_start(&reader, from)) {
+		printf("text: Super+A: could not start (is speech on?)\n");
 		z_speak_static("End of document", Z_TTS_F_INTERRUPT);
+	}
 
+}
+
+// Super+C, "copy to audio": the highlighted text, said once, without
+// touching the clipboard.
+static void read_selection(void) {
+	z_sayall_stop(&reader);
+	if (!has_sel()) {
+		z_speak_static("Nothing selected", Z_TTS_F_INTERRUPT);
+		return;
+	}
+	int a = sel_start(), b = sel_end();
+	printf("text: Super+C: reading the selection, %d characters\n", b - a);
+	z_speak_n(&buf[a], (uint32_t)(b - a), Z_TTS_F_INTERRUPT);
 }
 
 static void handle_key(uint32_t keysym, uint8_t mods) {
@@ -2035,8 +2052,12 @@ int main(void) {
 				case Z_WM_READ:
 
 					if (msg.obj.type == Z_UINT32 &&
-						(int32_t)msg.obj.val.uint32 == win.id)
-						read_toggle();
+						Z_WM_READ_WIN(msg.obj.val.uint32) == win.id) {
+						if (Z_WM_READ_WHAT(msg.obj.val.uint32) == Z_WM_READ_SELECTION)
+							read_selection();
+						else
+							read_toggle();
+					}
 
 					break;
 

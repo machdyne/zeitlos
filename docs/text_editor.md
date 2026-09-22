@@ -275,6 +275,10 @@ you last heard -- so moving somewhere and pressing Super+A reads from
 there. With the caret at the very end of the document (where it is
 after typing), it reads from the top. An empty document says so.
 
+**Super+C** says the highlighted text, once -- "copy to audio" -- and
+leaves the clipboard as it was; with nothing highlighted it says
+"Nothing selected". **Super+V** says what is on the clipboard.
+
 The window is created with `Z_WIN_FLAG_READABLE`, and the pacing is
 `sw/common/zsayall.c`: `read_get()` hands it a line (flagged
 `Z_TTS_F_CONTINUES` when the line wrapped mid-paragraph rather than
