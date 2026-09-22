@@ -504,11 +504,12 @@ void sh(void) {
 				uint32_t t;
 				printf("jump: this gateware %s through the jumploader\n",
 					z_soc_has_feature2(Z_FEATURE2_JUMP) ? "reloads" : "does not reload");
-				if (k_jump_read(&t) == 0)
+				int jr = k_jump_read(&t);
+				if (jr == 0)
 					printf("jump: the jumploader at 0x%06lx points at 0x%06lx%s\n",
 						(unsigned long)Z_JUMP_FLASH_OFFSET, (unsigned long)t, t ? "" : " (a reboot)");
 				else
-					printf("jump: no jumploader at 0x%06lx\n", (unsigned long)Z_JUMP_FLASH_OFFSET);
+					k_jump_explain("jump", jr);
 			}
 		}
 

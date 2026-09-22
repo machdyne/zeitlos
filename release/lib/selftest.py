@@ -291,7 +291,7 @@ def main():
                                     lay)
         notes_mod.write(os.path.join(out, "README.txt"), rt)
         for must in ("zeitlos-mozart_ml1.img", "RMII", "FLASH LAYOUT",
-                     "zeitlos.img.gz", "zeitlos-mozart_ml1-jump.bit",
+                     "zeitlos.img.gz", "zeitlos-mozart_ml1-jump.bin",
                      "jumploader"):
             if must not in rt:
                 failures.append("README.txt is missing %r" % must)

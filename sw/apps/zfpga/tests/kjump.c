@@ -140,6 +140,25 @@ int main(int argc, char **argv) {
         uint8_t *s0 = longer(j0, n0, extra, &m0), *s1 = longer(j1, n1, extra, &m1);
         run(s0, m0, s1, m1, "shifted to straddle a sector boundary");
     }
+    /* What openFPGALoader writes for a .bit: from its _endHeader, the byte
+     * four before the preamble's B3 (latticeBitParser.cpp), so the header
+     * -- and the ZJUMP1 line in it -- is gone. The kernel must say so, and
+     * write nothing. */
+    {
+        long b3 = 0;
+        while (b3 + 3 < n0 && !(j0[b3] == 0xFF && j0[b3 + 1] == 0xFF && j0[b3 + 2] == 0xBD && j0[b3 + 3] == 0xB3)) b3++;
+        b3 += 3;                                    /* the B3 */
+        printf("-- a .bit as openFPGALoader writes it: the header stripped\n");
+        n_erase = n_prog = 0;
+        memset(flash, 0xFF, sizeof(flash));
+        memcpy(flash + 0x1D0000, j0 + (b3 - 4), (size_t)(n0 - (b3 - 4)));
+        check(k_jump_read(NULL) == -2, "read: a jumploader whose header was stripped (-2), not 'none'");
+        check(k_jump_point(0x190000) == -1 && n_erase == 0 && n_prog == 0,
+            "re-pointing it is refused, and nothing is written");
+        memset(flash + 0x1D0000, 0xFF, 0x30000);
+        check(k_jump_read(NULL) == -1, "an erased region is still 'none' (-1)");
+    }
+
     printf("%d checks, %d failed\n", checks, fails);
     return fails != 0;
 }

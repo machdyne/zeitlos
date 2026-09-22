@@ -23,11 +23,14 @@ void k_flash_release_pid(uint32_t pid);          // process exit (interrupt path
 z_obj_t *k_flash(z_obj_t *args);                 // Z_SYS_FLASH
 
 // The jumploader at Z_JUMP_FLASH_OFFSET (docs/zboot.md sec. 5):
-// k_jump_read: 0 and its target if one is there, -1 if not;
+// k_jump_read: 0 and its target if one is there, -1 if not, -2 if there
+// is a jumploader whose header was stripped (a .bit through openFPGALoader);
+// k_jump_explain: say which, as `who`;
 // k_jump_point: re-point it, rewriting the one or two sectors that
 // hold its address bits and their CRCs. 0 on success (or if it already
 // pointed there); negative, and a message, if not.
 int k_jump_read(uint32_t *target);
+void k_jump_explain(const char *who, int rc);
 int k_jump_point(uint32_t target);
 
 #endif

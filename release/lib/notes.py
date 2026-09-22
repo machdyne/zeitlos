@@ -292,9 +292,11 @@ def asset_readme(version, commit, targets, sdcard, layout):
     out.append("  zeitlos-logo.bin               splash,    flash 0x%06x"
                % L["logo"].offset)
     if "jump" in L:
-        out.append("  zeitlos-<board>-jump.bit       jumploader, flash 0x%06x"
+        out.append("  zeitlos-<board>-jump.bin       jumploader, flash 0x%06x"
                    % L["jump"].offset)
-        out.append("                                 (boards that have one)")
+        out.append("                                 (boards that have one; a .bin,")
+        out.append("                                 not a .bit, so it is written")
+        out.append("                                 whole, header included)")
     out.append("")
     out.append("THE OFFSETS ARE NOT OPTIONAL. The BIOS reads the splash")
     out.append("and the kernel from fixed addresses, and the OS reads the")

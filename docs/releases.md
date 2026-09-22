@@ -44,7 +44,7 @@ release/dist/0.0.3/
   zeitlos-mozart_ml1.img
   zeitlos-sergei_ml1.img
   zeitlos-<target>-gateware.bit     per board
-  zeitlos-<target>-jump.bit         the jumploader, per board (boards with one)
+  zeitlos-<target>-jump.bin         the jumploader, per board (boards with one)
   zeitlos-kernel.bin                identical for every target
   zeitlos-apps.zar                  identical for every target
   zeitlos-logo.bin                  identical for every target
@@ -526,7 +526,7 @@ $ openFPGALoader -v -c dirtyJtag -f -o 0x000000 zeitlos-mozart_ml1-gateware.bit
 $ openFPGALoader -v -c dirtyJtag -f -o 0x0f0000 zeitlos-logo.bin
 $ openFPGALoader -v -c dirtyJtag -f -o 0x100000 zeitlos-kernel.bin
 $ openFPGALoader -v -c dirtyJtag -f -o 0x140000 zeitlos-apps.zar
-$ openFPGALoader -v -c dirtyJtag -f -o 0x1d0000 zeitlos-mozart_ml1-jump.bit
+$ openFPGALoader -v -c dirtyJtag -f -o 0x1d0000 zeitlos-mozart_ml1-jump.bin
 ```
 
 **The jumploader** (`docs/zboot.md` section 5) is a small bitstream at
@@ -535,8 +535,13 @@ gateware. The ZAR's room ends there (576 KB). On boards built with the
 Makefile's `JUMP` -- Lakritz, Obst, Mozart ML1, Sergei ML1 -- the
 gateware is packed to reload from `0x1D0000`, so **the jumploader is
 part of the system**: the `.img` and the DFU image carry it, it ships
-on its own as `zeitlos-<target>-jump.bit`, and `make flash` writes it
-(`make flash_jump` alone). Flashing the gateware by itself onto a board
+on its own as `zeitlos-<target>-jump.bin`, and `make flash` writes it
+(`make flash_jump` alone). **It is a `.bin`, not a `.bit`, on
+purpose:** openFPGALoader writes only what follows a `.bit`'s header,
+and the header carries the `ZJUMP1` line the kernel needs to re-point
+the jumploader -- a jumploader written as a `.bit` still works, but
+`reboot` and `jump` refuse it, saying the header was stripped. The
+bytes are the same either way. Flashing the gateware by itself onto a board
 that has never had a jumploader leaves `reboot` refusing -- it says so
 -- until the jumploader is flashed too. A power cycle always works.
 
@@ -837,7 +842,7 @@ before doing anything:
 ```
   replace  zeitlos-lakritz_gpio.img
   add      zeitlos-lakritz_gpio-gateware.bit
-  add      zeitlos-lakritz_gpio-jump.bit
+  add      zeitlos-lakritz_gpio-jump.bin
   keep     zeitlos.img.gz  (not built by this run)
 ```
 

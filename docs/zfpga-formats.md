@@ -402,6 +402,7 @@ overwritten.
 
 ```
 zfpga jump 0x000000 -b lakritz -o jump.bit
+cp jump.bit jump.bin      # to flash it: see below
 zfpga pack design.cfg -c -a 0x190000 -J -o design.bit
 ```
 
@@ -430,6 +431,11 @@ Offsets count from the preamble's first `FF`. The CRC is CRC-16/BUYPASS
 (polynomial `0x8005`, no reflection, initial 0) over `[first, at)`.
 `sw/common/zjump.c` reads and patches it; `build` also takes `--`, after
 which options go to `pack`.
+
+**Flash a jumploader whole.** The `ZJUMP1` line is in the header, and a
+programmer that parses bitstreams may not write the header: openFPGALoader
+writes a `.bit` from its preamble on. Give it the same bytes as a `.bin`,
+which it writes verbatim (`make flash_jump` does).
 
 ---
 

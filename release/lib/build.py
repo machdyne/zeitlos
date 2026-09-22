@@ -554,8 +554,11 @@ def build_target(root, target, version, outdir, software, dry=False,
         # The jumploader ships on its own too: it is built for the die,
         # so it is per target like the gateware, and flashing the
         # gateware alone onto a board that has never had one needs it.
+        # As a .bin, not a .bit: openFPGALoader writes only what follows
+        # a .bit's header, and the header carries the ZJUMP1 line the
+        # kernel re-points the jumploader by. The bytes are the .bit's.
         if "jump" in parts:
-            dst = os.path.join(outdir, stem + "-jump.bit")
+            dst = os.path.join(outdir, stem + "-jump.bin")
             shutil.copy2(parts["jump"], dst)
             result["artifacts"]["jumploader"] = os.path.basename(dst)
             result["jump_addr"] = next(r.offset for r in lay["regions"] if r.key == "jump")

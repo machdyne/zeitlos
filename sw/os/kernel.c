@@ -254,9 +254,11 @@ int k_boot_to(uint32_t target) {
 		return -1;
 	}
 	if (z_soc_has_feature2(Z_FEATURE2_JUMP)) {
-		if (k_jump_read(NULL)) {
-			printf("reboot: this gateware reloads through a jumploader at 0x%06lx, "
-				"and there is none: power-cycle instead (`make flash_jump` writes one)\n",
+		int jr = k_jump_read(NULL);
+		if (jr) {
+			k_jump_explain("reboot", jr);
+			printf("reboot: this gateware reloads from 0x%06lx, so rebooting "
+				"now would stop the FPGA: power-cycle instead\n",
 				(unsigned long)Z_JUMP_FLASH_OFFSET);
 			return -2;
 		}

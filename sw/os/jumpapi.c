@@ -65,9 +65,34 @@ static int jparse(zjump_t *j) {
 	return zjump_parse(jrd, 0, 4096, j);
 }
 
+/* A bitstream at the region's start with its header stripped: the
+ * preamble within the first bytes, but not the FF 00 header, so no
+ * ZJUMP1 line. openFPGALoader does exactly this to a .bit it writes to
+ * flash -- it writes only what follows the header -- which is why the
+ * jumploader is flashed as a .bin (`make flash_jump`). */
+static int stripped(void) {
+	uint32_t o;
+	njsec = 0;
+	for (o = 0; o < 64; o++)
+		if (jrd(0, o) == 0xFF && jrd(0, o + 1) == 0xFF && jrd(0, o + 2) == 0xBD && jrd(0, o + 3) == 0xB3)
+			return 1;
+	return 0;
+}
+
+void k_jump_explain(const char *who, int rc) {
+	if (rc == -2)
+		printf("%s: 0x%06lx holds a jumploader whose header was stripped -- "
+			"a .bit written by openFPGALoader loses it, and with it the ZJUMP1 "
+			"line this needs. Write the raw jump.bin instead: `make flash_jump`\n",
+			who, (unsigned long)Z_JUMP_FLASH_OFFSET);
+	else
+		printf("%s: no jumploader at 0x%06lx (`make flash_jump` writes one)\n",
+			who, (unsigned long)Z_JUMP_FLASH_OFFSET);
+}
+
 int k_jump_read(uint32_t *target) {
 	zjump_t j;
-	if (jparse(&j)) return -1;
+	if (jparse(&j)) return stripped() ? -2 : -1;
 	if (target) *target = zjump_target(&j, jrd, 0);
 	return 0;
 }
@@ -82,7 +107,7 @@ int k_jump_point(uint32_t target) {
 		return -1;
 	}
 	if (jparse(&j)) {
-		printf("jump: there is no jumploader at 0x%06lx\n", (unsigned long)Z_JUMP_FLASH_OFFSET);
+		k_jump_explain("jump", stripped() ? -2 : -1);
 		return -1;
 	}
 	if (zjump_target(&j, jrd, 0) == target) return 0;

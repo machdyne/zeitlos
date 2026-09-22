@@ -652,10 +652,17 @@ $(OUTDIR)/jump.bit: sw/apps/zfpga/build.c sw/apps/zfpga/pack.c boards/$(LPF)
 	$(MAKE) -C sw/apps/zfpga -f Makefile.host all card
 	sw/apps/zfpga/zfpga jump 0 -b $(BOARD) -D sw/apps/zfpga/db -o $(OUTDIR)/jump.bit
 
-jumploader: $(OUTDIR)/jump.bit
+# What flash_jump writes: the same bytes, as a .bin. openFPGALoader
+# parses a .bit and writes only what follows its header -- and the
+# header carries the ZJUMP1 line the kernel re-points the jumploader by
+# (docs/zboot.md sec. 5). Any other extension is written verbatim.
+$(OUTDIR)/jump.bin: $(OUTDIR)/jump.bit
+	cp $< $@
 
-flash_jump: check $(OUTDIR)/jump.bit
-	$(FLASH) $(FLASH_OFFSET) $(shell printf '%d' $(JUMP_ADDR)) $(OUTDIR)/jump.bit
+jumploader: $(OUTDIR)/jump.bit $(OUTDIR)/jump.bin
+
+flash_jump: check $(OUTDIR)/jump.bin
+	$(FLASH) $(FLASH_OFFSET) $(shell printf '%d' $(JUMP_ADDR)) $(OUTDIR)/jump.bin
 else
 jumploader flash_jump:
 	@echo "$(BOARD) has no jumploader (JUMP is not set: docs/zboot.md sec. 5)"

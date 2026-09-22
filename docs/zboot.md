@@ -337,9 +337,15 @@ built without `JUMP`, which can only reboot. `jump` with no address
 shows where the jumploader points.
 
 **The build.** `make jumploader` makes `output/BOARD/jump.bit` with the
-host zfpga; `make flash_jump` writes it at `0x1D0000`, and `make flash`
-includes it. Releases carry it in the `.img` and the DFU image and ship
-it on its own as `zeitlos-<target>-jump.bit`; the release build refuses
+host zfpga, and `jump.bin`, the same bytes; `make flash_jump` writes the
+`.bin` at `0x1D0000`, and `make flash` includes it. **A `.bin`, because
+openFPGALoader writes only what follows a `.bit`'s header** -- its
+LatticeBitParser starts the data at the preamble -- and the header is
+where the `ZJUMP1` line lives. A jumploader flashed as a `.bit` still
+works as a jumploader, but the kernel cannot read or re-point it, and
+says so: `0x1d0000 holds a jumploader whose header was stripped`.
+Releases carry it in the `.img` and the DFU image (both written whole)
+and ship it on its own as `zeitlos-<target>-jump.bin`; the release build refuses
 an image for a jumploader board without one (`docs/releases.md`,
 "Flashing the parts separately"). And
 `release/lib/layout.py` now has the region, checks that `zsoc.h` and the
