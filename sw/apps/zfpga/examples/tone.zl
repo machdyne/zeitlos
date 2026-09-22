@@ -1,0 +1,634 @@
+# synthesised by zfpga synth from sw/apps/zfpga/examples/tone.v
+device LFE5U-45F
+package CABGA256
+
+input CLK_48 A7 net=CLK_48 pullmode=NONE io_type=LVCMOS33
+output AUD_BCK T13 net=slot[0] io_type=LVCMOS33
+output AUD_WS T14 net=slot[5] io_type=LVCMOS33
+output AUD_DIN R12 net=sr[15] io_type=LVCMOS33
+
+lut _l100 init=0x0001 a=div[0] b=div[1] c=div[2] d=div[3] z=_n100
+lut _l102 init=0x4444 a=div[4] b=_n100 z=_n102
+lut _l121 init=0x8000 a=slot[0] b=slot[1] c=slot[2] d=slot[3] z=_n121
+lut _l123 init=0x8888 a=slot[4] b=_n121 z=_n123
+lut _l125 init=0xE4CC a=slot[4] b=sr[0] c=sample[1] d=_n121 z=_n125
+lut _l126 init=0xE4CC a=slot[4] b=sr[1] c=sample[2] d=_n121 z=_n126
+lut _l127 init=0xE4CC a=slot[4] b=sr[2] c=sample[3] d=_n121 z=_n127
+lut _l128 init=0xE4CC a=slot[4] b=sr[3] c=sample[4] d=_n121 z=_n128
+lut _l129 init=0xE4CC a=slot[4] b=sr[4] c=sample[5] d=_n121 z=_n129
+lut _l130 init=0xE4CC a=slot[4] b=sr[5] c=sample[6] d=_n121 z=_n130
+lut _l131 init=0xE4CC a=slot[4] b=sr[6] c=sample[7] d=_n121 z=_n131
+lut _l132 init=0xE4CC a=slot[4] b=sr[7] c=sample[8] d=_n121 z=_n132
+lut _l133 init=0xE4CC a=slot[4] b=sr[8] c=sample[9] d=_n121 z=_n133
+lut _l134 init=0xE4CC a=slot[4] b=sr[9] c=sample[10] d=_n121 z=_n134
+lut _l135 init=0xE4CC a=slot[4] b=sr[10] c=sample[11] d=_n121 z=_n135
+lut _l136 init=0xE4CC a=slot[4] b=sr[11] c=sample[12] d=_n121 z=_n136
+lut _l137 init=0xE4CC a=slot[4] b=sr[12] c=sample[13] d=_n121 z=_n137
+lut _l138 init=0xE4CC a=slot[4] b=sr[13] c=sample[14] d=_n121 z=_n138
+lut _l139 init=0xE4CC a=slot[4] b=sr[14] c=sample[15] d=_n121 z=_n139
+lut _l140 init=0xE444 a=slot[0] b=sr[0] c=sample[0] d=_n123 z=_n140
+lut _l141 init=0xE4E4 a=slot[0] b=sr[1] c=_n125 z=_n141
+lut _l142 init=0xE4E4 a=slot[0] b=sr[2] c=_n126 z=_n142
+lut _l143 init=0xE4E4 a=slot[0] b=sr[3] c=_n127 z=_n143
+lut _l144 init=0xE4E4 a=slot[0] b=sr[4] c=_n128 z=_n144
+lut _l145 init=0xE4E4 a=slot[0] b=sr[5] c=_n129 z=_n145
+lut _l146 init=0xE4E4 a=slot[0] b=sr[6] c=_n130 z=_n146
+lut _l147 init=0xE4E4 a=slot[0] b=sr[7] c=_n131 z=_n147
+lut _l148 init=0xE4E4 a=slot[0] b=sr[8] c=_n132 z=_n148
+lut _l149 init=0xE4E4 a=slot[0] b=sr[9] c=_n133 z=_n149
+lut _l150 init=0xE4E4 a=slot[0] b=sr[10] c=_n134 z=_n150
+lut _l151 init=0xE4E4 a=slot[0] b=sr[11] c=_n135 z=_n151
+lut _l152 init=0xE4E4 a=slot[0] b=sr[12] c=_n136 z=_n152
+lut _l153 init=0xE4E4 a=slot[0] b=sr[13] c=_n137 z=_n153
+lut _l154 init=0xE4E4 a=slot[0] b=sr[14] c=_n138 z=_n154
+lut _l155 init=0xE4E4 a=slot[0] b=sr[15] c=_n139 z=_n155
+lut _l158 init=0x4000 a=slot[0] b=slot[1] c=slot[2] d=slot[3] z=_n158
+lut _l161 init=0x8080 a=slot[4] b=slot[5] c=_n158 z=_n161
+lut _l171 init=0x6666 a=acc[27] b=acc[30] z=_n171
+lut _l172 init=0x6666 a=acc[28] b=acc[30] z=_n172
+lut _l173 init=0x6666 a=acc[29] b=acc[30] z=_n173
+lut _l178 init=0x8001 a=acc[24] b=acc[25] c=acc[26] d=acc[30] z=_n178
+lut _l184 init=0x0100 a=_n171 b=_n172 c=_n173 d=_n178 z=_n184
+lut _l186 init=0x4002 a=acc[24] b=acc[25] c=acc[26] d=acc[30] z=_n186
+lut _l189 init=0x0100 a=_n171 b=_n172 c=_n173 d=_n186 z=_n189
+lut _l191 init=0x2004 a=acc[24] b=acc[25] c=acc[26] d=acc[30] z=_n191
+lut _l194 init=0x0100 a=_n171 b=_n172 c=_n173 d=_n191 z=_n194
+lut _l196 init=0x1008 a=acc[24] b=acc[25] c=acc[26] d=acc[30] z=_n196
+lut _l199 init=0x0100 a=_n171 b=_n172 c=_n173 d=_n196 z=_n199
+lut _l200 init=0x0810 a=acc[24] b=acc[25] c=acc[26] d=acc[30] z=_n200
+lut _l203 init=0x0100 a=_n171 b=_n172 c=_n173 d=_n200 z=_n203
+lut _l204 init=0x0420 a=acc[24] b=acc[25] c=acc[26] d=acc[30] z=_n204
+lut _l207 init=0x0100 a=_n171 b=_n172 c=_n173 d=_n204 z=_n207
+lut _l208 init=0x0240 a=acc[24] b=acc[25] c=acc[26] d=acc[30] z=_n208
+lut _l211 init=0x0100 a=_n171 b=_n172 c=_n173 d=_n208 z=_n211
+lut _l212 init=0x0180 a=acc[24] b=acc[25] c=acc[26] d=acc[30] z=_n212
+lut _l215 init=0x0100 a=_n171 b=_n172 c=_n173 d=_n212 z=_n215
+lut _l218 init=0x0200 a=_n171 b=_n172 c=_n173 d=_n178 z=_n218
+lut _l221 init=0x0200 a=_n171 b=_n172 c=_n173 d=_n186 z=_n221
+lut _l224 init=0x0200 a=_n171 b=_n172 c=_n173 d=_n191 z=_n224
+lut _l227 init=0x0200 a=_n171 b=_n172 c=_n173 d=_n196 z=_n227
+lut _l230 init=0x0200 a=_n171 b=_n172 c=_n173 d=_n200 z=_n230
+lut _l233 init=0x0200 a=_n171 b=_n172 c=_n173 d=_n204 z=_n233
+lut _l236 init=0x0200 a=_n171 b=_n172 c=_n173 d=_n208 z=_n236
+lut _l239 init=0x0200 a=_n171 b=_n172 c=_n173 d=_n212 z=_n239
+lut _l241 init=0x0400 a=_n171 b=_n172 c=_n173 d=_n178 z=_n241
+lut _l243 init=0x0400 a=_n171 b=_n172 c=_n173 d=_n186 z=_n243
+lut _l245 init=0x0400 a=_n171 b=_n172 c=_n173 d=_n191 z=_n245
+lut _l247 init=0x0400 a=_n171 b=_n172 c=_n173 d=_n196 z=_n247
+lut _l249 init=0x0400 a=_n171 b=_n172 c=_n173 d=_n200 z=_n249
+lut _l251 init=0x0400 a=_n171 b=_n172 c=_n173 d=_n204 z=_n251
+lut _l253 init=0x0400 a=_n171 b=_n172 c=_n173 d=_n208 z=_n253
+lut _l255 init=0x0400 a=_n171 b=_n172 c=_n173 d=_n212 z=_n255
+lut _l257 init=0x0800 a=_n171 b=_n172 c=_n173 d=_n178 z=_n257
+lut _l259 init=0x0800 a=_n171 b=_n172 c=_n173 d=_n186 z=_n259
+lut _l261 init=0x0800 a=_n171 b=_n172 c=_n173 d=_n191 z=_n261
+lut _l263 init=0x0800 a=_n171 b=_n172 c=_n173 d=_n196 z=_n263
+lut _l265 init=0x0800 a=_n171 b=_n172 c=_n173 d=_n200 z=_n265
+lut _l267 init=0x0800 a=_n171 b=_n172 c=_n173 d=_n204 z=_n267
+lut _l269 init=0x0800 a=_n171 b=_n172 c=_n173 d=_n208 z=_n269
+lut _l271 init=0x0800 a=_n171 b=_n172 c=_n173 d=_n212 z=_n271
+lut _l272 init=0x1000 a=_n171 b=_n172 c=_n173 d=_n178 z=_n272
+lut _l273 init=0x1000 a=_n171 b=_n172 c=_n173 d=_n186 z=_n273
+lut _l274 init=0x1000 a=_n171 b=_n172 c=_n173 d=_n191 z=_n274
+lut _l275 init=0x1000 a=_n171 b=_n172 c=_n173 d=_n196 z=_n275
+lut _l276 init=0x1000 a=_n171 b=_n172 c=_n173 d=_n200 z=_n276
+lut _l277 init=0x1000 a=_n171 b=_n172 c=_n173 d=_n204 z=_n277
+lut _l278 init=0x1000 a=_n171 b=_n172 c=_n173 d=_n208 z=_n278
+lut _l279 init=0x1000 a=_n171 b=_n172 c=_n173 d=_n212 z=_n279
+lut _l280 init=0x2000 a=_n171 b=_n172 c=_n173 d=_n178 z=_n280
+lut _l281 init=0x2000 a=_n171 b=_n172 c=_n173 d=_n186 z=_n281
+lut _l282 init=0x2000 a=_n171 b=_n172 c=_n173 d=_n191 z=_n282
+lut _l283 init=0x2000 a=_n171 b=_n172 c=_n173 d=_n196 z=_n283
+lut _l284 init=0x2000 a=_n171 b=_n172 c=_n173 d=_n200 z=_n284
+lut _l285 init=0x2000 a=_n171 b=_n172 c=_n173 d=_n204 z=_n285
+lut _l286 init=0x2000 a=_n171 b=_n172 c=_n173 d=_n208 z=_n286
+lut _l287 init=0x2000 a=_n171 b=_n172 c=_n173 d=_n212 z=_n287
+lut _l288 init=0x4000 a=_n171 b=_n172 c=_n173 d=_n178 z=_n288
+lut _l289 init=0x4000 a=_n171 b=_n172 c=_n173 d=_n186 z=_n289
+lut _l290 init=0x4000 a=_n171 b=_n172 c=_n173 d=_n191 z=_n290
+lut _l291 init=0x4000 a=_n171 b=_n172 c=_n173 d=_n196 z=_n291
+lut _l292 init=0x4000 a=_n171 b=_n172 c=_n173 d=_n200 z=_n292
+lut _l293 init=0x4000 a=_n171 b=_n172 c=_n173 d=_n204 z=_n293
+lut _l294 init=0x4000 a=_n171 b=_n172 c=_n173 d=_n208 z=_n294
+lut _l295 init=0x4000 a=_n171 b=_n172 c=_n173 d=_n212 z=_n295
+lut _l296 init=0x8000 a=_n171 b=_n172 c=_n173 d=_n178 z=_n296
+lut _l297 init=0x8000 a=_n171 b=_n172 c=_n173 d=_n186 z=_n297
+lut _l298 init=0x8000 a=_n171 b=_n172 c=_n173 d=_n191 z=_n298
+lut _l299 init=0x8000 a=_n171 b=_n172 c=_n173 d=_n196 z=_n299
+lut _l300 init=0x8000 a=_n171 b=_n172 c=_n173 d=_n200 z=_n300
+lut _l301 init=0x8000 a=_n171 b=_n172 c=_n173 d=_n204 z=_n301
+lut _l302 init=0x8000 a=_n171 b=_n172 c=_n173 d=_n208 z=_n302
+lut _l309 init=0x7FFF a=_n171 b=_n172 c=_n173 d=_n200 z=_n309
+lut _l314 init=0xEEEF a=_n299 b=_n300 c=_n301 d=_n302 z=_n314
+lut _l318 init=0xFEAA a=_n299 b=_n301 c=_n302 d=_n309 z=_n318
+lut _l319 init=0xEFAA a=_n299 b=_n301 c=_n302 d=_n309 z=_n319
+lut _l322 init=0x7FFF a=_n171 b=_n172 c=_n173 d=_n191 z=_n322
+lut _l324 init=0x1000 a=_n299 b=_n301 c=_n309 d=_n322 z=_n324
+lut _l328 init=0xFE00 a=_n299 b=_n300 c=_n301 d=_n322 z=_n328
+lut _l329 init=0x5400 a=_n299 b=_n300 c=_n301 d=_n322 z=_n329
+lut _l333 init=0x5400 a=_n297 b=_n299 c=_n309 d=_n322 z=_n333
+lut _l338 init=0xBAAA a=_n296 b=_n297 c=_n314 d=_n322 z=_n338
+lut _l339 init=0xFEFE a=_n296 b=_n297 c=_n324 z=_n339
+lut _l342 init=0xFEEE a=_n296 b=_n297 c=_n318 d=_n322 z=_n342
+lut _l343 init=0xFFFE a=_n296 b=_n297 c=_n298 d=_n319 z=_n343
+lut _l349 init=0xFFFE a=_n295 b=_n296 c=_n297 d=_n324 z=_n349
+lut _l354 init=0x0100 a=_n295 b=_n296 c=_n297 d=_n328 z=_n354
+lut _l355 init=0xBBBA a=_n295 b=_n296 c=_n297 d=_n329 z=_n355
+lut _l359 init=0xBFFF a=_n171 b=_n172 c=_n173 d=_n208 z=_n359
+lut _l362 init=0x1000 a=_n295 b=_n296 c=_n333 d=_n359 z=_n362
+lut _l368 init=0xFFFE a=_n294 b=_n295 c=_n296 d=_n297 z=_n368
+lut _l369 init=0x0100 a=_n295 b=_n296 c=_n297 d=_n359 z=_n369
+lut _l370 init=0xFEAA a=_n293 b=_n295 c=_n338 d=_n359 z=_n370
+lut _l371 init=0xBFFF a=_n171 b=_n172 c=_n173 d=_n204 z=_n371
+lut _l374 init=0xBAAA a=_n293 b=_n295 c=_n342 d=_n359 z=_n374
+lut _l375 init=0xE000 a=_n295 b=_n343 c=_n359 d=_n371 z=_n375
+lut _l378 init=0xBAAA a=_n293 b=_n295 c=_n339 d=_n359 z=_n378
+lut _l381 init=0xBFFF a=_n171 b=_n172 c=_n173 d=_n200 z=_n381
+lut _l383 init=0xFEAA a=_n292 b=_n294 c=_n349 d=_n371 z=_n383
+lut _l387 init=0xEA00 a=_n293 b=_n354 c=_n359 d=_n381 z=_n387
+lut _l388 init=0xEAAA a=_n292 b=_n355 c=_n359 d=_n371 z=_n388
+lut _l395 init=0xFEEE a=_n291 b=_n292 c=_n362 d=_n371 z=_n395
+lut _l401 init=0xEAAA a=_n291 b=_n368 c=_n371 d=_n381 z=_n401
+lut _l402 init=0xEAAA a=_n291 b=_n369 c=_n371 d=_n381 z=_n402
+lut _l404 init=0x1000 a=_n290 b=_n291 c=_n370 d=_n381 z=_n404
+lut _l407 init=0xFEEE a=_n290 b=_n291 c=_n374 d=_n381 z=_n407
+lut _l408 init=0x5444 a=_n290 b=_n291 c=_n375 d=_n381 z=_n408
+lut _l411 init=0x5444 a=_n290 b=_n291 c=_n378 d=_n381 z=_n411
+lut _l418 init=0x0100 a=_n289 b=_n290 c=_n291 d=_n383 z=_n418
+lut _l422 init=0xEFEE a=_n289 b=_n290 c=_n291 d=_n387 z=_n422
+lut _l423 init=0xFFFE a=_n289 b=_n290 c=_n291 d=_n388 z=_n423
+lut _l429 init=0xBFFF a=_n171 b=_n172 c=_n173 d=_n178 z=_n429
+lut _l432 init=0xBA00 a=_n289 b=_n290 c=_n395 d=_n429 z=_n432
+lut _l438 init=0x5400 a=_n289 b=_n290 c=_n401 d=_n429 z=_n438
+lut _l439 init=0xFFFE a=_n288 b=_n289 c=_n290 d=_n402 z=_n439
+lut _l440 init=0xFFFE a=_n288 b=_n289 c=_n290 d=_n291 z=_n440
+lut _l441 init=0x0100 a=_n289 b=_n290 c=_n291 d=_n429 z=_n441
+lut _l442 init=0xBAAA a=_n287 b=_n289 c=_n404 d=_n429 z=_n442
+lut _l446 init=0xFFFE a=_n287 b=_n288 c=_n289 d=_n407 z=_n446
+lut _l447 init=0xBAAA a=_n287 b=_n289 c=_n408 d=_n429 z=_n447
+lut _l450 init=0xFEAA a=_n287 b=_n289 c=_n411 d=_n429 z=_n450
+lut _l455 init=0xDFFF a=_n171 b=_n172 c=_n173 d=_n208 z=_n455
+lut _l457 init=0xFEEE a=_n286 b=_n287 c=_n418 d=_n429 z=_n457
+lut _l461 init=0x5400 a=_n287 b=_n288 c=_n422 d=_n455 z=_n461
+lut _l462 init=0xFFFE a=_n286 b=_n287 c=_n288 d=_n423 z=_n462
+lut _l468 init=0xDFFF a=_n171 b=_n172 c=_n173 d=_n204 z=_n468
+lut _l471 init=0xBA00 a=_n286 b=_n287 c=_n432 d=_n468 z=_n471
+lut _l477 init=0xFE00 a=_n286 b=_n287 c=_n438 d=_n468 z=_n477
+lut _l478 init=0x4000 a=_n287 b=_n439 c=_n455 d=_n468 z=_n478
+lut _l479 init=0xFFFE a=_n285 b=_n286 c=_n287 d=_n440 z=_n479
+lut _l480 init=0x4000 a=_n287 b=_n441 c=_n455 d=_n468 z=_n480
+lut _l481 init=0xEAAA a=_n284 b=_n442 c=_n455 d=_n468 z=_n481
+lut _l483 init=0xDFFF a=_n171 b=_n172 c=_n173 d=_n200 z=_n483
+lut _l485 init=0xEA00 a=_n285 b=_n446 c=_n455 d=_n483 z=_n485
+lut _l486 init=0x8000 a=_n447 b=_n455 c=_n468 d=_n483 z=_n486
+lut _l489 init=0xEA00 a=_n285 b=_n450 c=_n455 d=_n483 z=_n489
+lut _l496 init=0x5444 a=_n283 b=_n284 c=_n457 d=_n468 z=_n496
+lut _l500 init=0x5400 a=_n283 b=_n285 c=_n461 d=_n483 z=_n500
+lut _l501 init=0xEAAA a=_n283 b=_n462 c=_n468 d=_n483 z=_n501
+lut _l507 init=0xDFFF a=_n171 b=_n172 c=_n173 d=_n191 z=_n507
+lut _l510 init=0xEA00 a=_n283 b=_n471 c=_n483 d=_n507 z=_n510
+lut _l516 init=0xEA00 a=_n283 b=_n477 c=_n483 d=_n507 z=_n516
+lut _l517 init=0xFEEE a=_n282 b=_n283 c=_n478 d=_n483 z=_n517
+lut _l518 init=0x5400 a=_n283 b=_n284 c=_n479 d=_n507 z=_n518
+lut _l519 init=0x4000 a=_n283 b=_n480 c=_n483 d=_n507 z=_n519
+lut _l520 init=0xDFFF a=_n171 b=_n172 c=_n173 d=_n186 z=_n520
+lut _l521 init=0xE000 a=_n283 b=_n481 c=_n507 d=_n520 z=_n521
+lut _l524 init=0x4000 a=_n283 b=_n485 c=_n507 d=_n520 z=_n524
+lut _l525 init=0xE000 a=_n283 b=_n486 c=_n507 d=_n520 z=_n525
+lut _l528 init=0xEFEE a=_n281 b=_n282 c=_n283 d=_n489 z=_n528
+lut _l534 init=0xDFFF a=_n171 b=_n172 c=_n173 d=_n178 z=_n534
+lut _l535 init=0xEA00 a=_n281 b=_n496 c=_n507 d=_n534 z=_n535
+lut _l539 init=0xFE00 a=_n281 b=_n282 c=_n500 d=_n534 z=_n539
+lut _l540 init=0xEA00 a=_n281 b=_n501 c=_n507 d=_n534 z=_n540
+lut _l547 init=0xEFFF a=_n171 b=_n172 c=_n173 d=_n212 z=_n547
+lut _l549 init=0xEA00 a=_n280 b=_n510 c=_n520 d=_n547 z=_n549
+lut _l555 init=0xFE00 a=_n280 b=_n281 c=_n516 d=_n547 z=_n555
+lut _l556 init=0x8000 a=_n517 b=_n520 c=_n534 d=_n547 z=_n556
+lut _l557 init=0x8000 a=_n518 b=_n520 c=_n534 d=_n547 z=_n557
+lut _l558 init=0x8000 a=_n519 b=_n520 c=_n534 d=_n547 z=_n558
+lut _l559 init=0xFFFE a=_n278 b=_n279 c=_n280 d=_n521 z=_n559
+lut _l563 init=0xFEAA a=_n278 b=_n280 c=_n524 d=_n547 z=_n563
+lut _l564 init=0xFFFE a=_n278 b=_n279 c=_n280 d=_n525 z=_n564
+lut _l567 init=0x4000 a=_n278 b=_n528 c=_n534 d=_n547 z=_n567
+lut _l574 init=0xBAAA a=_n277 b=_n278 c=_n535 d=_n547 z=_n574
+lut _l578 init=0xFEEE a=_n277 b=_n278 c=_n539 d=_n547 z=_n578
+lut _l579 init=0x5554 a=_n277 b=_n278 c=_n279 d=_n540 z=_n579
+lut _l588 init=0xBBBA a=_n276 b=_n277 c=_n278 d=_n549 z=_n588
+lut _l595 init=0xBBBA a=_n276 b=_n277 c=_n278 d=_n555 z=_n595
+lut _l596 init=0x5554 a=_n276 b=_n277 c=_n278 d=_n556 z=_n596
+lut _l597 init=0xFFFE a=_n276 b=_n277 c=_n278 d=_n557 z=_n597
+lut _l598 init=0xFFFE a=_n276 b=_n277 c=_n278 d=_n558 z=_n598
+lut _l601 init=0x4544 a=_n275 b=_n276 c=_n277 d=_n559 z=_n601
+lut _l604 init=0x4544 a=_n275 b=_n276 c=_n277 d=_n563 z=_n604
+lut _l605 init=0xEFEE a=_n275 b=_n276 c=_n277 d=_n564 z=_n605
+lut _l608 init=0xFFFE a=_n275 b=_n276 c=_n277 d=_n567 z=_n608
+lut _l613 init=0x0001 a=_n275 b=_n276 c=_n277 d=_n278 z=_n613
+lut _l616 init=0x5554 a=_n274 b=_n275 c=_n276 d=_n574 z=_n616
+lut _l620 init=0xBBBA a=_n274 b=_n275 c=_n276 d=_n578 z=_n620
+lut _l621 init=0xEFEE a=_n274 b=_n275 c=_n276 d=_n579 z=_n621
+lut _l631 init=0xFFFE a=_n273 b=_n274 c=_n275 d=_n588 z=_n631
+lut _l637 init=0x4544 a=_n273 b=_n274 c=_n275 d=_n595 z=_n637
+lut _l638 init=0xEFEE a=_n273 b=_n274 c=_n275 d=_n596 z=_n638
+lut _l639 init=0x1110 a=_n273 b=_n274 c=_n275 d=_n597 z=_n639
+lut _l640 init=0xFFFE a=_n273 b=_n274 c=_n275 d=_n598 z=_n640
+lut _l643 init=0x1110 a=_n272 b=_n273 c=_n274 d=_n601 z=_n643
+lut _l646 init=0x4544 a=_n272 b=_n273 c=_n274 d=_n604 z=_n646
+lut _l647 init=0xABAA a=_n272 b=_n273 c=_n274 d=_n605 z=_n647
+lut _l650 init=0xFFFE a=_n272 b=_n273 c=_n274 d=_n608 z=_n650
+lut _l655 init=0x0100 a=_n272 b=_n273 c=_n274 d=_n613 z=_n655
+lut _l658 init=0x1110 a=_n271 b=_n272 c=_n273 d=_n616 z=_n658
+lut _l662 init=0xFFFE a=_n271 b=_n272 c=_n273 d=_n620 z=_n662
+lut _l663 init=0xFFFE a=_n271 b=_n272 c=_n273 d=_n621 z=_n663
+lut _l673 init=0x4544 a=_n269 b=_n271 c=_n272 d=_n631 z=_n673
+lut _l679 init=0xBBBA a=_n269 b=_n271 c=_n272 d=_n637 z=_n679
+lut _l680 init=0xABAA a=_n269 b=_n271 c=_n272 d=_n638 z=_n680
+lut _l681 init=0xABAA a=_n269 b=_n271 c=_n272 d=_n639 z=_n681
+lut _l682 init=0x5554 a=_n269 b=_n271 c=_n272 d=_n640 z=_n682
+lut _l684 init=0xF7FF a=_n171 b=_n172 c=_n173 d=_n204 z=_n684
+lut _l685 init=0xBA00 a=_n269 b=_n271 c=_n643 d=_n684 z=_n685
+lut _l688 init=0x5400 a=_n269 b=_n271 c=_n646 d=_n684 z=_n688
+lut _l689 init=0xABAA a=_n267 b=_n269 c=_n271 d=_n647 z=_n689
+lut _l692 init=0xFFFE a=_n267 b=_n269 c=_n271 d=_n650 z=_n692
+lut _l697 init=0x1000 a=_n269 b=_n271 c=_n655 d=_n684 z=_n697
+lut _l700 init=0x1000 a=_n265 b=_n269 c=_n658 d=_n684 z=_n700
+lut _l704 init=0xFEAA a=_n265 b=_n269 c=_n662 d=_n684 z=_n704
+lut _l705 init=0x5554 a=_n265 b=_n267 c=_n269 d=_n663 z=_n705
+lut _l715 init=0xBAAA a=_n263 b=_n265 c=_n673 d=_n684 z=_n715
+lut _l721 init=0x5444 a=_n263 b=_n265 c=_n679 d=_n684 z=_n721
+lut _l722 init=0x1110 a=_n263 b=_n265 c=_n267 d=_n680 z=_n722
+lut _l723 init=0xFFFE a=_n263 b=_n265 c=_n267 d=_n681 z=_n723
+lut _l724 init=0x1000 a=_n263 b=_n265 c=_n682 d=_n684 z=_n724
+lut _l726 init=0xFFFE a=_n261 b=_n263 c=_n265 d=_n685 z=_n726
+lut _l730 init=0xFFFE a=_n261 b=_n263 c=_n265 d=_n688 z=_n730
+lut _l731 init=0xFFFE a=_n261 b=_n263 c=_n265 d=_n689 z=_n731
+lut _l734 init=0x5554 a=_n261 b=_n263 c=_n265 d=_n692 z=_n734
+lut _l739 init=0x0100 a=_n261 b=_n263 c=_n265 d=_n697 z=_n739
+lut _l741 init=0xEFEE a=_n259 b=_n261 c=_n263 d=_n700 z=_n741
+lut _l742 init=0xF7FF a=_n171 b=_n172 c=_n173 d=_n186 z=_n742
+lut _l746 init=0xBA00 a=_n261 b=_n263 c=_n704 d=_n742 z=_n746
+lut _l747 init=0xEFEE a=_n259 b=_n261 c=_n263 d=_n705 z=_n747
+lut _l754 init=0xF7FF a=_n171 b=_n172 c=_n173 d=_n178 z=_n754
+lut _l757 init=0xBAAA a=_n257 b=_n261 c=_n715 d=_n742 z=_n757
+lut _l763 init=0xFEAA a=_n257 b=_n261 c=_n721 d=_n742 z=_n763
+lut _l764 init=0xFE00 a=_n259 b=_n261 c=_n722 d=_n754 z=_n764
+lut _l765 init=0x4000 a=_n261 b=_n723 c=_n742 d=_n754 z=_n765
+lut _l766 init=0x4000 a=_n261 b=_n724 c=_n742 d=_n754 z=_n766
+lut _l769 init=0x5400 a=_n255 b=_n259 c=_n726 d=_n754 z=_n769
+lut _l772 init=0x4000 a=_n255 b=_n730 c=_n742 d=_n754 z=_n772
+lut _l773 init=0xFEAA a=_n255 b=_n259 c=_n731 d=_n754 z=_n773
+lut _l776 init=0xEAAA a=_n255 b=_n734 c=_n742 d=_n754 z=_n776
+lut _l781 init=0xEAAA a=_n255 b=_n739 c=_n742 d=_n754 z=_n781
+lut _l784 init=0x1110 a=_n253 b=_n255 c=_n257 d=_n741 z=_n784
+lut _l788 init=0xFFFE a=_n253 b=_n255 c=_n257 d=_n746 z=_n788
+lut _l789 init=0x5444 a=_n253 b=_n255 c=_n747 d=_n754 z=_n789
+lut _l800 init=0x5554 a=_n251 b=_n253 c=_n255 d=_n757 z=_n800
+lut _l806 init=0xBBBA a=_n251 b=_n253 c=_n255 d=_n763 z=_n806
+lut _l807 init=0x5554 a=_n251 b=_n253 c=_n255 d=_n764 z=_n807
+lut _l808 init=0xFFFE a=_n251 b=_n253 c=_n255 d=_n765 z=_n808
+lut _l809 init=0xFFFE a=_n251 b=_n253 c=_n255 d=_n766 z=_n809
+lut _l812 init=0xFFFE a=_n249 b=_n251 c=_n253 d=_n769 z=_n812
+lut _l813 init=0xFBFF a=_n171 b=_n172 c=_n173 d=_n200 z=_n813
+lut _l816 init=0x5400 a=_n251 b=_n253 c=_n772 d=_n813 z=_n816
+lut _l817 init=0x5400 a=_n251 b=_n253 c=_n773 d=_n813 z=_n817
+lut _l820 init=0xFE00 a=_n251 b=_n253 c=_n776 d=_n813 z=_n820
+lut _l825 init=0xFFFE a=_n249 b=_n251 c=_n253 d=_n781 z=_n825
+lut _l826 init=0x0100 a=_n251 b=_n253 c=_n255 d=_n813 z=_n826
+lut _l829 init=0x1000 a=_n247 b=_n251 c=_n784 d=_n813 z=_n829
+lut _l833 init=0xBAAA a=_n247 b=_n251 c=_n788 d=_n813 z=_n833
+lut _l834 init=0xEFEE a=_n247 b=_n249 c=_n251 d=_n789 z=_n834
+lut _l845 init=0x5444 a=_n245 b=_n247 c=_n800 d=_n813 z=_n845
+lut _l851 init=0xBAAA a=_n245 b=_n247 c=_n806 d=_n813 z=_n851
+lut _l852 init=0x5444 a=_n245 b=_n247 c=_n807 d=_n813 z=_n852
+lut _l853 init=0x1110 a=_n245 b=_n247 c=_n249 d=_n808 z=_n853
+lut _l854 init=0xFFFE a=_n245 b=_n247 c=_n249 d=_n809 z=_n854
+lut _l858 init=0x4544 a=_n243 b=_n245 c=_n247 d=_n812 z=_n858
+lut _l861 init=0x1110 a=_n243 b=_n245 c=_n247 d=_n816 z=_n861
+lut _l862 init=0x5554 a=_n243 b=_n245 c=_n247 d=_n817 z=_n862
+lut _l865 init=0x5554 a=_n243 b=_n245 c=_n247 d=_n820 z=_n865
+lut _l870 init=0xFFFE a=_n243 b=_n245 c=_n247 d=_n825 z=_n870
+lut _l871 init=0x0100 a=_n243 b=_n245 c=_n247 d=_n826 z=_n871
+lut _l874 init=0xFFFE a=_n241 b=_n243 c=_n245 d=_n829 z=_n874
+lut _l878 init=0x5554 a=_n241 b=_n243 c=_n245 d=_n833 z=_n878
+lut _l879 init=0x4544 a=_n241 b=_n243 c=_n245 d=_n834 z=_n879
+lut _l890 init=0x5554 a=_n239 b=_n241 c=_n243 d=_n845 z=_n890
+lut _l896 init=0xEFEE a=_n239 b=_n241 c=_n243 d=_n851 z=_n896
+lut _l897 init=0x4544 a=_n239 b=_n241 c=_n243 d=_n852 z=_n897
+lut _l898 init=0xEFEE a=_n239 b=_n241 c=_n243 d=_n853 z=_n898
+lut _l899 init=0x1110 a=_n239 b=_n241 c=_n243 d=_n854 z=_n899
+lut _l903 init=0x0100 a=_n236 b=_n239 c=_n241 d=_n858 z=_n903
+lut _l906 init=0xABAA a=_n236 b=_n239 c=_n241 d=_n861 z=_n906
+lut _l907 init=0x1110 a=_n236 b=_n239 c=_n241 d=_n862 z=_n907
+lut _l910 init=0x4544 a=_n236 b=_n239 c=_n241 d=_n865 z=_n910
+lut _l915 init=0xFFFE a=_n236 b=_n239 c=_n241 d=_n870 z=_n915
+lut _l916 init=0x0100 a=_n236 b=_n239 c=_n241 d=_n871 z=_n916
+lut _l917 init=0xFDFF a=_n171 b=_n172 c=_n173 d=_n204 z=_n917
+lut _l919 init=0xFE00 a=_n236 b=_n239 c=_n874 d=_n917 z=_n919
+lut _l923 init=0xBA00 a=_n236 b=_n239 c=_n878 d=_n917 z=_n923
+lut _l924 init=0xFE00 a=_n236 b=_n239 c=_n879 d=_n917 z=_n924
+lut _l935 init=0x1000 a=_n230 b=_n236 c=_n890 d=_n917 z=_n935
+lut _l941 init=0xEFEE a=_n230 b=_n233 c=_n236 d=_n896 z=_n941
+lut _l942 init=0x4544 a=_n230 b=_n233 c=_n236 d=_n897 z=_n942
+lut _l943 init=0x5400 a=_n230 b=_n236 c=_n898 d=_n917 z=_n943
+lut _l944 init=0x1000 a=_n230 b=_n236 c=_n899 d=_n917 z=_n944
+lut _l947 init=0xFDFF a=_n171 b=_n172 c=_n173 d=_n196 z=_n947
+lut _l948 init=0x4000 a=_n230 b=_n903 c=_n917 d=_n947 z=_n948
+lut _l951 init=0x4000 a=_n230 b=_n906 c=_n917 d=_n947 z=_n951
+lut _l952 init=0xFFFE a=_n227 b=_n230 c=_n233 d=_n907 z=_n952
+lut _l955 init=0xEA00 a=_n230 b=_n910 c=_n917 d=_n947 z=_n955
+lut _l960 init=0xFFFE a=_n227 b=_n230 c=_n233 d=_n915 z=_n960
+lut _l961 init=0x4000 a=_n230 b=_n916 c=_n917 d=_n947 z=_n961
+lut _l963 init=0xFFFE a=_n224 b=_n227 c=_n230 d=_n919 z=_n963
+lut _l968 init=0xFEAA a=_n224 b=_n230 c=_n923 d=_n947 z=_n968
+lut _l969 init=0xEFEE a=_n224 b=_n227 c=_n230 d=_n924 z=_n969
+lut _l980 init=0x5444 a=_n221 b=_n224 c=_n935 d=_n947 z=_n980
+lut _l986 init=0xBAAA a=_n221 b=_n224 c=_n941 d=_n947 z=_n986
+lut _l987 init=0x5444 a=_n221 b=_n224 c=_n942 d=_n947 z=_n987
+lut _l988 init=0xFEEE a=_n221 b=_n224 c=_n943 d=_n947 z=_n988
+lut _l989 init=0xFEEE a=_n221 b=_n224 c=_n944 d=_n947 z=_n989
+lut _l992 init=0xBBBA a=_n218 b=_n221 c=_n224 d=_n948 z=_n992
+lut _l994 init=0xFDFF a=_n171 b=_n172 c=_n173 d=_n178 z=_n994
+lut _l996 init=0xFE00 a=_n221 b=_n224 c=_n951 d=_n994 z=_n996
+lut _l997 init=0x1000 a=_n221 b=_n224 c=_n952 d=_n994 z=_n997
+lut _l1000 init=0xFE00 a=_n221 b=_n224 c=_n955 d=_n994 z=_n1000
+lut _l1005 init=0x1000 a=_n221 b=_n224 c=_n960 d=_n994 z=_n1005
+lut _l1006 init=0x1000 a=_n221 b=_n224 c=_n961 d=_n994 z=_n1006
+lut _l1009 init=0xFFFE a=_n215 b=_n218 c=_n221 d=_n963 z=_n1009
+lut _l1013 init=0xEFEE a=_n215 b=_n218 c=_n221 d=_n968 z=_n1013
+lut _l1014 init=0x1000 a=_n215 b=_n221 c=_n969 d=_n994 z=_n1014
+lut _l1024 init=0xBAAA a=_n211 b=_n215 c=_n980 d=_n994 z=_n1024
+lut _l1031 init=0xBAAA a=_n211 b=_n215 c=_n986 d=_n994 z=_n1031
+lut _l1032 init=0x5444 a=_n211 b=_n215 c=_n987 d=_n994 z=_n1032
+lut _l1033 init=0x1110 a=_n211 b=_n215 c=_n218 d=_n988 z=_n1033
+lut _l1034 init=0xFFFE a=_n211 b=_n215 c=_n218 d=_n989 z=_n1034
+lut _l1037 init=0xEFEE a=_n207 b=_n211 c=_n215 d=_n992 z=_n1037
+lut _l1041 init=0x5554 a=_n207 b=_n211 c=_n215 d=_n996 z=_n1041
+lut _l1042 init=0x1110 a=_n207 b=_n211 c=_n215 d=_n997 z=_n1042
+lut _l1045 init=0xBBBA a=_n207 b=_n211 c=_n215 d=_n1000 z=_n1045
+lut _l1050 init=0x0100 a=_n207 b=_n211 c=_n215 d=_n1005 z=_n1050
+lut _l1051 init=0x0100 a=_n207 b=_n211 c=_n215 d=_n1006 z=_n1051
+lut _l1054 init=0x5554 a=_n203 b=_n207 c=_n211 d=_n1009 z=_n1054
+lut _l1058 init=0xEFEE a=_n203 b=_n207 c=_n211 d=_n1013 z=_n1058
+lut _l1059 init=0xFFFE a=_n203 b=_n207 c=_n211 d=_n1014 z=_n1059
+lut _l1069 init=0xEFEE a=_n199 b=_n203 c=_n207 d=_n1024 z=_n1069
+lut _l1070 init=0xFEFF a=_n171 b=_n172 c=_n173 d=_n196 z=_n1070
+lut _l1076 init=0xBBBA a=_n199 b=_n203 c=_n207 d=_n1031 z=_n1076
+lut _l1077 init=0xFE00 a=_n203 b=_n207 c=_n1032 d=_n1070 z=_n1077
+lut _l1078 init=0xFFFE a=_n199 b=_n203 c=_n207 d=_n1033 z=_n1078
+lut _l1079 init=0x1000 a=_n203 b=_n207 c=_n1034 d=_n1070 z=_n1079
+lut _l1082 init=0xFEFF a=_n171 b=_n172 c=_n173 d=_n191 z=_n1082
+lut _l1083 init=0xFE00 a=_n199 b=_n203 c=_n1037 d=_n1082 z=_n1083
+lut _l1086 init=0xBAAA a=_n194 b=_n203 c=_n1041 d=_n1070 z=_n1086
+lut _l1087 init=0xFEAA a=_n194 b=_n203 c=_n1042 d=_n1070 z=_n1087
+lut _l1090 init=0xBAAA a=_n194 b=_n203 c=_n1045 d=_n1070 z=_n1090
+lut _l1095 init=0x4000 a=_n203 b=_n1050 c=_n1070 d=_n1082 z=_n1095
+lut _l1096 init=0x4000 a=_n203 b=_n1051 c=_n1070 d=_n1082 z=_n1096
+lut _l1097 init=0xFEFF a=_n171 b=_n172 c=_n173 d=_n186 z=_n1097
+lut _l1099 init=0xE000 a=_n199 b=_n1054 c=_n1082 d=_n1097 z=_n1099
+lut _l1103 init=0xEAAA a=_n189 b=_n1058 c=_n1070 d=_n1082 z=_n1103
+lut _l1104 init=0x8000 a=_n1059 b=_n1070 c=_n1082 d=_n1097 z=_n1104
+lut _l1112 init=0xFEFF a=_n171 b=_n172 c=_n173 d=_n178 z=_n1112
+lut _l1113 init=0x8080 a=_n1083 b=_n1097 c=_n1112 z=_n1113
+lut _l1114 init=0x8888 a=_n1099 b=_n1112 z=_n1114
+lut _l1115 init=0x8000 a=_n1069 b=_n1082 c=_n1097 d=_n1112 z=_n1115
+lut _l1116 init=0xFEFE a=_n184 b=_n189 c=_n1086 z=_n1116
+lut _l1117 init=0xEAEA a=_n184 b=_n1087 c=_n1097 z=_n1117
+lut _l1118 init=0xEEEE a=_n184 b=_n1103 z=_n1118
+lut _l1119 init=0x8888 a=_n1104 b=_n1112 z=_n1119
+lut _l1120 init=0xEAEA a=_n184 b=_n1090 c=_n1097 z=_n1120
+lut _l1121 init=0xE000 a=_n194 b=_n1076 c=_n1097 d=_n1112 z=_n1121
+lut _l1122 init=0xFE00 a=_n189 b=_n194 c=_n1077 d=_n1112 z=_n1122
+lut _l1123 init=0x8000 a=_n1078 b=_n1082 c=_n1097 d=_n1112 z=_n1123
+lut _l1124 init=0x8000 a=_n1079 b=_n1082 c=_n1097 d=_n1112 z=_n1124
+lut _l1125 init=0x8080 a=_n1095 b=_n1097 c=_n1112 z=_n1125
+lut _l1126 init=0x8080 a=_n1096 b=_n1097 c=_n1112 z=_n1126
+lut _l1143 init=0xE4E4 a=acc[31] b=_n1113 c=_n1127 z=_n1143
+lut _l1144 init=0xEA40 a=acc[31] b=_n1099 c=_n1112 d=_n1128 z=_n1144
+lut _l1145 init=0xE4E4 a=acc[31] b=_n1115 c=_n1129 z=_n1145
+lut _l1146 init=0xE4E4 a=acc[31] b=_n1116 c=_n1130 z=_n1146
+lut _l1147 init=0xE4E4 a=acc[31] b=_n1117 c=_n1131 z=_n1147
+lut _l1148 init=0xFE54 a=acc[31] b=_n184 c=_n1103 d=_n1132 z=_n1148
+lut _l1149 init=0xEA40 a=acc[31] b=_n1104 c=_n1112 d=_n1133 z=_n1149
+lut _l1150 init=0xE4E4 a=acc[31] b=_n1120 c=_n1134 z=_n1150
+lut _l1151 init=0xE4E4 a=acc[31] b=_n1121 c=_n1135 z=_n1151
+lut _l1152 init=0xE4E4 a=acc[31] b=_n1122 c=_n1136 z=_n1152
+lut _l1153 init=0xE4E4 a=acc[31] b=_n1123 c=_n1137 z=_n1153
+lut _l1154 init=0xE4E4 a=acc[31] b=_n1124 c=_n1138 z=_n1154
+lut _l1155 init=0xE4E4 a=acc[31] b=_n1125 c=_n1139 z=_n1155
+lut _l1156 init=0xE4E4 a=acc[31] b=_n1126 c=_n1140 z=_n1156
+lut _l1161 init=0x1111 a=note[0] b=note[1] z=_n1161
+lut _l1170 init=0xEEEE a=note[0] b=note[1] z=_n1170
+lut _l1171 init=0xCCCC a=note[0] b=note[1] z=_n1171
+lut _l1172 init=0x6666 a=note[0] b=note[1] z=_n1172
+lut _l1173 init=0x7777 a=note[0] b=note[1] z=_n1173
+lut _l1174 init=0x8888 a=note[0] b=note[1] z=_n1174
+lut _l1175 init=0x4444 a=note[0] b=note[1] z=_n1175
+lut _l1176 init=0x2222 a=note[0] b=note[1] z=_n1176
+lut _l1177 init=0xBBBB a=note[0] b=note[1] z=_n1177
+lut _l1178 init=0xAAAA a=note[0] b=note[1] z=_n1178
+lut _l1179 init=0x3333 a=note[0] b=note[1] z=_n1179
+lut _l1180 init=0x9999 a=note[0] b=note[1] z=_n1180
+lut _l1181 init=0x5555 a=note[0] b=note[1] z=_n1181
+lut _l1220 init=0x0080 a=count[0] b=count[1] c=count[2] d=count[3] z=_n1220
+lut _l1226 init=0x8000 a=count[4] b=count[5] c=count[6] d=_n1220 z=_n1226
+lut _l1232 init=0x1000 a=count[7] b=count[8] c=count[9] d=_n1226 z=_n1232
+lut _l1238 init=0x0100 a=count[10] b=count[11] c=count[12] d=_n1232 z=_n1238
+lut _l1240 init=0x8888 a=count[13] b=_n1238 z=_n1240
+lut _l1257 init=0x7777 a=count[13] b=_n1238 z=_n1257
+lut _l1274 init=0xE2E2 a=sample[0] b=_n161 c=_n1143 z=_n1274
+lut _l1275 init=0xE2E2 a=sample[1] b=_n161 c=_n1144 z=_n1275
+lut _l1276 init=0xE2E2 a=sample[2] b=_n161 c=_n1145 z=_n1276
+lut _l1277 init=0xE2E2 a=sample[3] b=_n161 c=_n1146 z=_n1277
+lut _l1278 init=0xE2E2 a=sample[4] b=_n161 c=_n1147 z=_n1278
+lut _l1279 init=0xE2E2 a=sample[5] b=_n161 c=_n1148 z=_n1279
+lut _l1280 init=0xE2E2 a=sample[6] b=_n161 c=_n1149 z=_n1280
+lut _l1281 init=0xE2E2 a=sample[7] b=_n161 c=_n1150 z=_n1281
+lut _l1282 init=0xE2E2 a=sample[8] b=_n161 c=_n1151 z=_n1282
+lut _l1283 init=0xE2E2 a=sample[9] b=_n161 c=_n1152 z=_n1283
+lut _l1284 init=0xE2E2 a=sample[10] b=_n161 c=_n1153 z=_n1284
+lut _l1285 init=0xE2E2 a=sample[11] b=_n161 c=_n1154 z=_n1285
+lut _l1286 init=0xE2E2 a=sample[12] b=_n161 c=_n1155 z=_n1286
+lut _l1287 init=0xE2E2 a=sample[13] b=_n161 c=_n1156 z=_n1287
+lut _l1288 init=0xCA0A a=sample[14] b=acc[31] c=_n161 d=_n1141 z=_n1288
+lut _l1289 init=0xCA0A a=sample[15] b=acc[31] c=_n161 d=_n1142 z=_n1289
+lut _l1290 init=0xE2E2 a=acc[0] b=_n161 c=_n1182 z=_n1290
+lut _l1291 init=0xE2E2 a=acc[1] b=_n161 c=_n1183 z=_n1291
+lut _l1292 init=0xE2E2 a=acc[2] b=_n161 c=_n1184 z=_n1292
+lut _l1293 init=0xE2E2 a=acc[3] b=_n161 c=_n1185 z=_n1293
+lut _l1294 init=0xE2E2 a=acc[4] b=_n161 c=_n1186 z=_n1294
+lut _l1295 init=0xE2E2 a=acc[5] b=_n161 c=_n1187 z=_n1295
+lut _l1296 init=0xE2E2 a=acc[6] b=_n161 c=_n1188 z=_n1296
+lut _l1297 init=0xE2E2 a=acc[7] b=_n161 c=_n1189 z=_n1297
+lut _l1298 init=0xE2E2 a=acc[8] b=_n161 c=_n1190 z=_n1298
+lut _l1299 init=0xE2E2 a=acc[9] b=_n161 c=_n1191 z=_n1299
+lut _l1300 init=0xE2E2 a=acc[10] b=_n161 c=_n1192 z=_n1300
+lut _l1301 init=0xE2E2 a=acc[11] b=_n161 c=_n1193 z=_n1301
+lut _l1302 init=0xE2E2 a=acc[12] b=_n161 c=_n1194 z=_n1302
+lut _l1303 init=0xE2E2 a=acc[13] b=_n161 c=_n1195 z=_n1303
+lut _l1304 init=0xE2E2 a=acc[14] b=_n161 c=_n1196 z=_n1304
+lut _l1305 init=0xE2E2 a=acc[15] b=_n161 c=_n1197 z=_n1305
+lut _l1306 init=0xE2E2 a=acc[16] b=_n161 c=_n1198 z=_n1306
+lut _l1307 init=0xE2E2 a=acc[17] b=_n161 c=_n1199 z=_n1307
+lut _l1308 init=0xE2E2 a=acc[18] b=_n161 c=_n1200 z=_n1308
+lut _l1309 init=0xE2E2 a=acc[19] b=_n161 c=_n1201 z=_n1309
+lut _l1310 init=0xE2E2 a=acc[20] b=_n161 c=_n1202 z=_n1310
+lut _l1311 init=0xE2E2 a=acc[21] b=_n161 c=_n1203 z=_n1311
+lut _l1312 init=0xE2E2 a=acc[22] b=_n161 c=_n1204 z=_n1312
+lut _l1313 init=0xE2E2 a=acc[23] b=_n161 c=_n1205 z=_n1313
+lut _l1314 init=0xE2E2 a=acc[24] b=_n161 c=_n1206 z=_n1314
+lut _l1315 init=0xE2E2 a=acc[25] b=_n161 c=_n1207 z=_n1315
+lut _l1316 init=0xE2E2 a=acc[26] b=_n161 c=_n1208 z=_n1316
+lut _l1317 init=0xE2E2 a=acc[27] b=_n161 c=_n1209 z=_n1317
+lut _l1318 init=0xE2E2 a=acc[28] b=_n161 c=_n1210 z=_n1318
+lut _l1319 init=0xE2E2 a=acc[29] b=_n161 c=_n1211 z=_n1319
+lut _l1320 init=0xE2E2 a=acc[30] b=_n161 c=_n1212 z=_n1320
+lut _l1321 init=0xE2E2 a=acc[31] b=_n161 c=_n1213 z=_n1321
+lut _l1322 init=0xE222 a=count[0] b=_n161 c=_n1243 d=_n1257 z=_n1322
+lut _l1323 init=0xE222 a=count[1] b=_n161 c=_n1244 d=_n1257 z=_n1323
+lut _l1324 init=0xE222 a=count[2] b=_n161 c=_n1245 d=_n1257 z=_n1324
+lut _l1325 init=0xE222 a=count[3] b=_n161 c=_n1246 d=_n1257 z=_n1325
+lut _l1326 init=0xE222 a=count[4] b=_n161 c=_n1247 d=_n1257 z=_n1326
+lut _l1327 init=0xE222 a=count[5] b=_n161 c=_n1248 d=_n1257 z=_n1327
+lut _l1328 init=0xE222 a=count[6] b=_n161 c=_n1249 d=_n1257 z=_n1328
+lut _l1329 init=0xE222 a=count[7] b=_n161 c=_n1250 d=_n1257 z=_n1329
+lut _l1330 init=0xE222 a=count[8] b=_n161 c=_n1251 d=_n1257 z=_n1330
+lut _l1331 init=0xE222 a=count[9] b=_n161 c=_n1252 d=_n1257 z=_n1331
+lut _l1332 init=0xE222 a=count[10] b=_n161 c=_n1253 d=_n1257 z=_n1332
+lut _l1333 init=0xE222 a=count[11] b=_n161 c=_n1254 d=_n1257 z=_n1333
+lut _l1334 init=0xE222 a=count[12] b=_n161 c=_n1255 d=_n1257 z=_n1334
+lut _l1335 init=0x6E22 a=count[13] b=_n161 c=_n1238 d=_n1256 z=_n1335
+lut _l1336 init=0xEA2A a=note[0] b=_n161 c=_n1240 d=_n1241 z=_n1336
+lut _l1337 init=0xEA2A a=note[1] b=_n161 c=_n1240 d=_n1242 z=_n1337
+lut _l1338 init=0xB0B0 a=div[4] b=_n100 c=_n104 z=_n1338
+lut _l1339 init=0xB0B0 a=div[4] b=_n100 c=_n105 z=_n1339
+lut _l1340 init=0xB0B0 a=div[4] b=_n100 c=_n106 z=_n1340
+lut _l1341 init=0xB0B0 a=div[4] b=_n100 c=_n107 z=_n1341
+lut _l1342 init=0xF4F4 a=div[4] b=_n100 c=_n108 z=_n1342
+ccu2 _ch0_0 init0=0x090A inject0=NO a0=div[0] b0=1 c0=0 d0=1 s0=_n104 init1=0x090A inject1=NO a1=div[1] b1=0 c1=0 d1=1 s1=_n105 cin=1 cout=_ch0_c0
+ccu2 _ch0_1 init0=0x090A inject0=NO a0=div[2] b0=0 c0=0 d0=1 s0=_n106 init1=0x090A inject1=NO a1=div[3] b1=0 c1=0 d1=1 s1=_n107 cin=_ch0_c0 cout=_ch0_c1
+ccu2 _ch0_2 init0=0x090A inject0=NO a0=div[4] b0=0 c0=0 d0=1 s0=_n108 init1=0x0100 inject1=NO a1=0 b1=0 c1=0 d1=1 s1=- cin=_ch0_c1 cout=-
+ccu2 _ch1_0 init0=0x060A inject0=NO a0=slot[0] b0=1 c0=0 d0=1 s0=_n109 init1=0x060A inject1=NO a1=slot[1] b1=0 c1=0 d1=1 s1=_n110 cin=0 cout=_ch1_c0
+ccu2 _ch1_1 init0=0x060A inject0=NO a0=slot[2] b0=0 c0=0 d0=1 s0=_n111 init1=0x060A inject1=NO a1=slot[3] b1=0 c1=0 d1=1 s1=_n112 cin=_ch1_c0 cout=_ch1_c1
+ccu2 _ch1_2 init0=0x060A inject0=NO a0=slot[4] b0=0 c0=0 d0=1 s0=_n113 init1=0x060A inject1=NO a1=slot[5] b1=0 c1=0 d1=1 s1=_n114 cin=_ch1_c1 cout=-
+ccu2 _ch2_0 init0=0x090A inject0=NO a0=0 b0=_n1113 c0=0 d0=1 s0=_n1127 init1=0x090A inject1=NO a1=0 b1=_n1114 c1=0 d1=1 s1=_n1128 cin=1 cout=_ch2_c0
+ccu2 _ch2_1 init0=0x090A inject0=NO a0=0 b0=_n1115 c0=0 d0=1 s0=_n1129 init1=0x090A inject1=NO a1=0 b1=_n1116 c1=0 d1=1 s1=_n1130 cin=_ch2_c0 cout=_ch2_c1
+ccu2 _ch2_2 init0=0x090A inject0=NO a0=0 b0=_n1117 c0=0 d0=1 s0=_n1131 init1=0x090A inject1=NO a1=0 b1=_n1118 c1=0 d1=1 s1=_n1132 cin=_ch2_c1 cout=_ch2_c2
+ccu2 _ch2_3 init0=0x090A inject0=NO a0=0 b0=_n1119 c0=0 d0=1 s0=_n1133 init1=0x090A inject1=NO a1=0 b1=_n1120 c1=0 d1=1 s1=_n1134 cin=_ch2_c2 cout=_ch2_c3
+ccu2 _ch2_4 init0=0x090A inject0=NO a0=0 b0=_n1121 c0=0 d0=1 s0=_n1135 init1=0x090A inject1=NO a1=0 b1=_n1122 c1=0 d1=1 s1=_n1136 cin=_ch2_c3 cout=_ch2_c4
+ccu2 _ch2_5 init0=0x090A inject0=NO a0=0 b0=_n1123 c0=0 d0=1 s0=_n1137 init1=0x090A inject1=NO a1=0 b1=_n1124 c1=0 d1=1 s1=_n1138 cin=_ch2_c4 cout=_ch2_c5
+ccu2 _ch2_6 init0=0x090A inject0=NO a0=0 b0=_n1125 c0=0 d0=1 s0=_n1139 init1=0x090A inject1=NO a1=0 b1=_n1126 c1=0 d1=1 s1=_n1140 cin=_ch2_c5 cout=_ch2_c6
+ccu2 _ch2_7 init0=0x090A inject0=NO a0=0 b0=0 c0=0 d0=1 s0=_n1141 init1=0x090A inject1=NO a1=0 b1=0 c1=0 d1=1 s1=_n1142 cin=_ch2_c6 cout=-
+ccu2 _ch3_0 init0=0x060A inject0=NO a0=acc[0] b0=_n1171 c0=0 d0=1 s0=_n1182 init1=0x060A inject1=NO a1=acc[1] b1=_n1172 c1=0 d1=1 s1=_n1183 cin=0 cout=_ch3_c0
+ccu2 _ch3_1 init0=0x060A inject0=NO a0=acc[2] b0=_n1173 c0=0 d0=1 s0=_n1184 init1=0x060A inject1=NO a1=acc[3] b1=_n1174 c1=0 d1=1 s1=_n1185 cin=_ch3_c0 cout=_ch3_c1
+ccu2 _ch3_2 init0=0x060A inject0=NO a0=acc[4] b0=_n1175 c0=0 d0=1 s0=_n1186 init1=0x060A inject1=NO a1=acc[5] b1=_n1176 c1=0 d1=1 s1=_n1187 cin=_ch3_c1 cout=_ch3_c2
+ccu2 _ch3_3 init0=0x060A inject0=NO a0=acc[6] b0=_n1173 c0=0 d0=1 s0=_n1188 init1=0x060A inject1=NO a1=acc[7] b1=1 c1=0 d1=1 s1=_n1189 cin=_ch3_c2 cout=_ch3_c3
+ccu2 _ch3_4 init0=0x060A inject0=NO a0=acc[8] b0=_n1170 c0=0 d0=1 s0=_n1190 init1=0x060A inject1=NO a1=acc[9] b1=_n1172 c1=0 d1=1 s1=_n1191 cin=_ch3_c3 cout=_ch3_c4
+ccu2 _ch3_5 init0=0x060A inject0=NO a0=acc[10] b0=_n1173 c0=0 d0=1 s0=_n1192 init1=0x060A inject1=NO a1=acc[11] b1=1 c1=0 d1=1 s1=_n1193 cin=_ch3_c4 cout=_ch3_c5
+ccu2 _ch3_6 init0=0x060A inject0=NO a0=acc[12] b0=_n1177 c0=0 d0=1 s0=_n1194 init1=0x060A inject1=NO a1=acc[13] b1=_n1178 c1=0 d1=1 s1=_n1195 cin=_ch3_c5 cout=_ch3_c6
+ccu2 _ch3_7 init0=0x060A inject0=NO a0=acc[14] b0=_n1172 c0=0 d0=1 s0=_n1196 init1=0x060A inject1=NO a1=acc[15] b1=_n1161 c1=0 d1=1 s1=_n1197 cin=_ch3_c6 cout=_ch3_c7
+ccu2 _ch3_8 init0=0x060A inject0=NO a0=acc[16] b0=1 c0=0 d0=1 s0=_n1198 init1=0x060A inject1=NO a1=acc[17] b1=_n1170 c1=0 d1=1 s1=_n1199 cin=_ch3_c7 cout=_ch3_c8
+ccu2 _ch3_9 init0=0x060A inject0=NO a0=acc[18] b0=_n1179 c0=0 d0=1 s0=_n1200 init1=0x060A inject1=NO a1=acc[19] b1=_n1180 c1=0 d1=1 s1=_n1201 cin=_ch3_c8 cout=_ch3_c9
+ccu2 _ch3_10 init0=0x060A inject0=NO a0=acc[20] b0=_n1170 c0=0 d0=1 s0=_n1202 init1=0x060A inject1=NO a1=acc[21] b1=_n1176 c1=0 d1=1 s1=_n1203 cin=_ch3_c9 cout=_ch3_c10
+ccu2 _ch3_11 init0=0x060A inject0=NO a0=acc[22] b0=_n1175 c0=0 d0=1 s0=_n1204 init1=0x060A inject1=NO a1=acc[23] b1=_n1181 c1=0 d1=1 s1=_n1205 cin=_ch3_c10 cout=_ch3_c11
+ccu2 _ch3_12 init0=0x060A inject0=NO a0=acc[24] b0=_n1170 c0=0 d0=1 s0=_n1206 init1=0x060A inject1=NO a1=acc[25] b1=_n1173 c1=0 d1=1 s1=_n1207 cin=_ch3_c11 cout=_ch3_c12
+ccu2 _ch3_13 init0=0x060A inject0=NO a0=acc[26] b0=_n1174 c0=0 d0=1 s0=_n1208 init1=0x060A inject1=NO a1=acc[27] b1=0 c1=0 d1=1 s1=_n1209 cin=_ch3_c12 cout=_ch3_c13
+ccu2 _ch3_14 init0=0x060A inject0=NO a0=acc[28] b0=0 c0=0 d0=1 s0=_n1210 init1=0x060A inject1=NO a1=acc[29] b1=0 c1=0 d1=1 s1=_n1211 cin=_ch3_c13 cout=_ch3_c14
+ccu2 _ch3_15 init0=0x060A inject0=NO a0=acc[30] b0=0 c0=0 d0=1 s0=_n1212 init1=0x060A inject1=NO a1=acc[31] b1=0 c1=0 d1=1 s1=_n1213 cin=_ch3_c14 cout=-
+ccu2 _ch4_0 init0=0x060A inject0=NO a0=note[0] b0=1 c0=0 d0=1 s0=_n1241 init1=0x060A inject1=NO a1=note[1] b1=0 c1=0 d1=1 s1=_n1242 cin=0 cout=-
+ccu2 _ch5_0 init0=0x060A inject0=NO a0=count[0] b0=1 c0=0 d0=1 s0=_n1243 init1=0x060A inject1=NO a1=count[1] b1=0 c1=0 d1=1 s1=_n1244 cin=0 cout=_ch5_c0
+ccu2 _ch5_1 init0=0x060A inject0=NO a0=count[2] b0=0 c0=0 d0=1 s0=_n1245 init1=0x060A inject1=NO a1=count[3] b1=0 c1=0 d1=1 s1=_n1246 cin=_ch5_c0 cout=_ch5_c1
+ccu2 _ch5_2 init0=0x060A inject0=NO a0=count[4] b0=0 c0=0 d0=1 s0=_n1247 init1=0x060A inject1=NO a1=count[5] b1=0 c1=0 d1=1 s1=_n1248 cin=_ch5_c1 cout=_ch5_c2
+ccu2 _ch5_3 init0=0x060A inject0=NO a0=count[6] b0=0 c0=0 d0=1 s0=_n1249 init1=0x060A inject1=NO a1=count[7] b1=0 c1=0 d1=1 s1=_n1250 cin=_ch5_c2 cout=_ch5_c3
+ccu2 _ch5_4 init0=0x060A inject0=NO a0=count[8] b0=0 c0=0 d0=1 s0=_n1251 init1=0x060A inject1=NO a1=count[9] b1=0 c1=0 d1=1 s1=_n1252 cin=_ch5_c3 cout=_ch5_c4
+ccu2 _ch5_5 init0=0x060A inject0=NO a0=count[10] b0=0 c0=0 d0=1 s0=_n1253 init1=0x060A inject1=NO a1=count[11] b1=0 c1=0 d1=1 s1=_n1254 cin=_ch5_c4 cout=_ch5_c5
+ccu2 _ch5_6 init0=0x060A inject0=NO a0=count[12] b0=0 c0=0 d0=1 s0=_n1255 init1=0x060A inject1=NO a1=count[13] b1=0 c1=0 d1=1 s1=_n1256 cin=_ch5_c5 cout=-
+ff div[0] d=_n1338 q=div[0] clk=CLK_48 regset=RESET
+ff div[1] d=_n1339 q=div[1] clk=CLK_48 regset=RESET
+ff div[2] d=_n1340 q=div[2] clk=CLK_48 regset=RESET
+ff div[3] d=_n1341 q=div[3] clk=CLK_48 regset=RESET
+ff div[4] d=_n1342 q=div[4] clk=CLK_48 regset=RESET
+ff slot[0] d=_n109 q=slot[0] clk=CLK_48 ce=_n102 regset=RESET
+ff slot[1] d=_n110 q=slot[1] clk=CLK_48 ce=_n102 regset=RESET
+ff slot[2] d=_n111 q=slot[2] clk=CLK_48 ce=_n102 regset=RESET
+ff slot[3] d=_n112 q=slot[3] clk=CLK_48 ce=_n102 regset=RESET
+ff slot[4] d=_n113 q=slot[4] clk=CLK_48 ce=_n102 regset=RESET
+ff slot[5] d=_n114 q=slot[5] clk=CLK_48 ce=_n102 regset=RESET
+ff sr[0] d=_n140 q=sr[0] clk=CLK_48 ce=_n102 regset=RESET
+ff sr[1] d=_n141 q=sr[1] clk=CLK_48 ce=_n102 regset=RESET
+ff sr[2] d=_n142 q=sr[2] clk=CLK_48 ce=_n102 regset=RESET
+ff sr[3] d=_n143 q=sr[3] clk=CLK_48 ce=_n102 regset=RESET
+ff sr[4] d=_n144 q=sr[4] clk=CLK_48 ce=_n102 regset=RESET
+ff sr[5] d=_n145 q=sr[5] clk=CLK_48 ce=_n102 regset=RESET
+ff sr[6] d=_n146 q=sr[6] clk=CLK_48 ce=_n102 regset=RESET
+ff sr[7] d=_n147 q=sr[7] clk=CLK_48 ce=_n102 regset=RESET
+ff sr[8] d=_n148 q=sr[8] clk=CLK_48 ce=_n102 regset=RESET
+ff sr[9] d=_n149 q=sr[9] clk=CLK_48 ce=_n102 regset=RESET
+ff sr[10] d=_n150 q=sr[10] clk=CLK_48 ce=_n102 regset=RESET
+ff sr[11] d=_n151 q=sr[11] clk=CLK_48 ce=_n102 regset=RESET
+ff sr[12] d=_n152 q=sr[12] clk=CLK_48 ce=_n102 regset=RESET
+ff sr[13] d=_n153 q=sr[13] clk=CLK_48 ce=_n102 regset=RESET
+ff sr[14] d=_n154 q=sr[14] clk=CLK_48 ce=_n102 regset=RESET
+ff sr[15] d=_n155 q=sr[15] clk=CLK_48 ce=_n102 regset=RESET
+ff sample[0] d=_n1274 q=sample[0] clk=CLK_48 ce=_n102 regset=RESET
+ff sample[1] d=_n1275 q=sample[1] clk=CLK_48 ce=_n102 regset=RESET
+ff sample[2] d=_n1276 q=sample[2] clk=CLK_48 ce=_n102 regset=RESET
+ff sample[3] d=_n1277 q=sample[3] clk=CLK_48 ce=_n102 regset=RESET
+ff sample[4] d=_n1278 q=sample[4] clk=CLK_48 ce=_n102 regset=RESET
+ff sample[5] d=_n1279 q=sample[5] clk=CLK_48 ce=_n102 regset=RESET
+ff sample[6] d=_n1280 q=sample[6] clk=CLK_48 ce=_n102 regset=RESET
+ff sample[7] d=_n1281 q=sample[7] clk=CLK_48 ce=_n102 regset=RESET
+ff sample[8] d=_n1282 q=sample[8] clk=CLK_48 ce=_n102 regset=RESET
+ff sample[9] d=_n1283 q=sample[9] clk=CLK_48 ce=_n102 regset=RESET
+ff sample[10] d=_n1284 q=sample[10] clk=CLK_48 ce=_n102 regset=RESET
+ff sample[11] d=_n1285 q=sample[11] clk=CLK_48 ce=_n102 regset=RESET
+ff sample[12] d=_n1286 q=sample[12] clk=CLK_48 ce=_n102 regset=RESET
+ff sample[13] d=_n1287 q=sample[13] clk=CLK_48 ce=_n102 regset=RESET
+ff sample[14] d=_n1288 q=sample[14] clk=CLK_48 ce=_n102 regset=RESET
+ff sample[15] d=_n1289 q=sample[15] clk=CLK_48 ce=_n102 regset=RESET
+ff acc[0] d=_n1290 q=acc[0] clk=CLK_48 ce=_n102 regset=RESET
+ff acc[1] d=_n1291 q=acc[1] clk=CLK_48 ce=_n102 regset=RESET
+ff acc[2] d=_n1292 q=acc[2] clk=CLK_48 ce=_n102 regset=RESET
+ff acc[3] d=_n1293 q=acc[3] clk=CLK_48 ce=_n102 regset=RESET
+ff acc[4] d=_n1294 q=acc[4] clk=CLK_48 ce=_n102 regset=RESET
+ff acc[5] d=_n1295 q=acc[5] clk=CLK_48 ce=_n102 regset=RESET
+ff acc[6] d=_n1296 q=acc[6] clk=CLK_48 ce=_n102 regset=RESET
+ff acc[7] d=_n1297 q=acc[7] clk=CLK_48 ce=_n102 regset=RESET
+ff acc[8] d=_n1298 q=acc[8] clk=CLK_48 ce=_n102 regset=RESET
+ff acc[9] d=_n1299 q=acc[9] clk=CLK_48 ce=_n102 regset=RESET
+ff acc[10] d=_n1300 q=acc[10] clk=CLK_48 ce=_n102 regset=RESET
+ff acc[11] d=_n1301 q=acc[11] clk=CLK_48 ce=_n102 regset=RESET
+ff acc[12] d=_n1302 q=acc[12] clk=CLK_48 ce=_n102 regset=RESET
+ff acc[13] d=_n1303 q=acc[13] clk=CLK_48 ce=_n102 regset=RESET
+ff acc[14] d=_n1304 q=acc[14] clk=CLK_48 ce=_n102 regset=RESET
+ff acc[15] d=_n1305 q=acc[15] clk=CLK_48 ce=_n102 regset=RESET
+ff acc[16] d=_n1306 q=acc[16] clk=CLK_48 ce=_n102 regset=RESET
+ff acc[17] d=_n1307 q=acc[17] clk=CLK_48 ce=_n102 regset=RESET
+ff acc[18] d=_n1308 q=acc[18] clk=CLK_48 ce=_n102 regset=RESET
+ff acc[19] d=_n1309 q=acc[19] clk=CLK_48 ce=_n102 regset=RESET
+ff acc[20] d=_n1310 q=acc[20] clk=CLK_48 ce=_n102 regset=RESET
+ff acc[21] d=_n1311 q=acc[21] clk=CLK_48 ce=_n102 regset=RESET
+ff acc[22] d=_n1312 q=acc[22] clk=CLK_48 ce=_n102 regset=RESET
+ff acc[23] d=_n1313 q=acc[23] clk=CLK_48 ce=_n102 regset=RESET
+ff acc[24] d=_n1314 q=acc[24] clk=CLK_48 ce=_n102 regset=RESET
+ff acc[25] d=_n1315 q=acc[25] clk=CLK_48 ce=_n102 regset=RESET
+ff acc[26] d=_n1316 q=acc[26] clk=CLK_48 ce=_n102 regset=RESET
+ff acc[27] d=_n1317 q=acc[27] clk=CLK_48 ce=_n102 regset=RESET
+ff acc[28] d=_n1318 q=acc[28] clk=CLK_48 ce=_n102 regset=RESET
+ff acc[29] d=_n1319 q=acc[29] clk=CLK_48 ce=_n102 regset=RESET
+ff acc[30] d=_n1320 q=acc[30] clk=CLK_48 ce=_n102 regset=RESET
+ff acc[31] d=_n1321 q=acc[31] clk=CLK_48 ce=_n102 regset=RESET
+ff count[0] d=_n1322 q=count[0] clk=CLK_48 ce=_n102 regset=RESET
+ff count[1] d=_n1323 q=count[1] clk=CLK_48 ce=_n102 regset=RESET
+ff count[2] d=_n1324 q=count[2] clk=CLK_48 ce=_n102 regset=RESET
+ff count[3] d=_n1325 q=count[3] clk=CLK_48 ce=_n102 regset=RESET
+ff count[4] d=_n1326 q=count[4] clk=CLK_48 ce=_n102 regset=RESET
+ff count[5] d=_n1327 q=count[5] clk=CLK_48 ce=_n102 regset=RESET
+ff count[6] d=_n1328 q=count[6] clk=CLK_48 ce=_n102 regset=RESET
+ff count[7] d=_n1329 q=count[7] clk=CLK_48 ce=_n102 regset=RESET
+ff count[8] d=_n1330 q=count[8] clk=CLK_48 ce=_n102 regset=RESET
+ff count[9] d=_n1331 q=count[9] clk=CLK_48 ce=_n102 regset=RESET
+ff count[10] d=_n1332 q=count[10] clk=CLK_48 ce=_n102 regset=RESET
+ff count[11] d=_n1333 q=count[11] clk=CLK_48 ce=_n102 regset=RESET
+ff count[12] d=_n1334 q=count[12] clk=CLK_48 ce=_n102 regset=RESET
+ff count[13] d=_n1335 q=count[13] clk=CLK_48 ce=_n102 regset=RESET
+ff note[0] d=_n1336 q=note[0] clk=CLK_48 ce=_n102 regset=RESET
+ff note[1] d=_n1337 q=note[1] clk=CLK_48 ce=_n102 regset=RESET

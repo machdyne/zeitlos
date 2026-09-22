@@ -1,9 +1,13 @@
 $ pwd
 /
 $ ls
+bad.gz
+copy.gz
+cut.gz
 docs/
 failprog
 long.txt
+notes.gz
 notes.txt
 numbers.txt
 src/
@@ -107,12 +111,16 @@ $ cp missing.txt out.txt
 cp: missing.txt: cannot open
 [status 1]
 $ ls
+bad.gz
 brandnew.txt
+copy.gz
+cut.gz
 docs/
 failprog
 keep.txt
 long.txt
 moved.txt
+notes.gz
 notes.txt
 numbers.txt
 out.txt
@@ -122,10 +130,14 @@ zcc
 $ rm moved.txt brandnew.txt keep.txt
 $ mkdir newdir
 $ ls
+bad.gz
+copy.gz
+cut.gz
 docs/
 failprog
 long.txt
 newdir/
+notes.gz
 notes.txt
 numbers.txt
 out.txt
@@ -134,10 +146,14 @@ words.txt
 zcc
 $ rm out.txt
 $ ls
+bad.gz
+copy.gz
+cut.gz
 docs/
 failprog
 long.txt
 newdir/
+notes.gz
 notes.txt
 numbers.txt
 src/
@@ -152,12 +168,16 @@ posix -- see docs/posix.md
   pwd      print the working directory
   ls       list a directory
   cat      print files
+  zcat     print .gz files, decompressed
+  gunzip   FILE.gz to FILE (-k keep it, -f overwrite)
   echo     print arguments
   rm       delete files
   cp       copy a file
   mv       rename a file
   touch    create a file if it does not exist
   clear    clear the screen
+  reboot   reconfigure the FPGA, after syncing open files
+  jump     boot the gateware at a flash address (hex)
   mkdir    make directories
   wc       count lines, words and characters
   head     first lines of a file  (head -5 f)

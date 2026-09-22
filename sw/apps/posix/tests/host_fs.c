@@ -195,3 +195,9 @@ uint32_t z_proc_run(const char *name) {
 
 int host_child_status(void) { return next_exit_status; }
 
+/* `reboot` and `jump` (sh.c): there is no FPGA here to reconfigure --
+ * the kernel's answer for a board without PROGRAMN (docs/zboot.md). */
+int z_jump(uint32_t target) {
+    (void)target;
+    return -1;
+}

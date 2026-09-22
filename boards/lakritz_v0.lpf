@@ -296,4 +296,9 @@ IOBUF PORT "AUDIO_R" IO_TYPE=LVCMOS33;
 # wired to PROGRAMN on this board; the DFU bootloader drives the same
 # site (tinydfu-bootloader, boards/*/ resetn).
 LOCATE COMP "PROGRAMN" SITE "M8";
-IOBUF PORT "PROGRAMN" IO_TYPE=LVCMOS33;
+# Open drain: the pad only ever pulls low, and "1" leaves it released,
+# so no design built for this board -- Zeitlos, a jumploader, user
+# gateware returning to Zeitlos -- can ever drive PROGRAMN high against
+# a reset button pulling it low. (Zeitlos's own driver, a BB with its T
+# input, and a jumploader, which only drives 0, work as before.)
+IOBUF PORT "PROGRAMN" IO_TYPE=LVCMOS33 OPENDRAIN=ON;

@@ -226,4 +226,9 @@ IOBUF PORT "DDMI_D2_P" DRIVE=4;
 # drain) to reconfigure the FPGA -- `reboot`, `jump`, docs/zboot.md.
 # M8 on the ML1 module, as on Mozart ML1.
 LOCATE COMP "PROGRAMN" SITE "M8";
-IOBUF PORT "PROGRAMN" IO_TYPE=LVCMOS33;
+# Open drain: the pad only ever pulls low, and "1" leaves it released,
+# so no design built for this board -- Zeitlos, a jumploader, user
+# gateware returning to Zeitlos -- can ever drive PROGRAMN high against
+# a reset button pulling it low. (Zeitlos's own driver, a BB with its T
+# input, and a jumploader, which only drives 0, work as before.)
+IOBUF PORT "PROGRAMN" IO_TYPE=LVCMOS33 OPENDRAIN=ON;

@@ -51,6 +51,11 @@
 
 #define Z_INFLATE_WINDOW 32768
 
+// The longest file name or comment a gzip header may carry here, with
+// its NUL: a longer one is refused as malformed rather than skipped
+// forever.
+#define Z_INFLATE_GZ_TEXT_MAX 1024
+
 typedef enum {
 	Z_INFLATE_RAW = 0,		// bare DEFLATE (RFC 1951) -- PNG uses zlib
 	Z_INFLATE_ZLIB,			// 2-byte header, Adler-32 trailer
@@ -92,10 +97,26 @@ typedef struct {
 	uint32_t	len;			// stored-block bytes left, or copy length
 	uint32_t	dist;
 
-	// Header/trailer bytes still to consume.
+	// Header/trailer bytes still to consume. After Z_INFLATE_DONE,
+	// hdr[0..7] holds gzip's trailer -- CRC-32 and length, little-
+	// endian -- and hdr[0..3] zlib's Adler-32: kept for a caller that
+	// checks them (zgz.c does), never checked here.
 	int			hdr_need;
 	int			hdr_got;
 	uint8_t		hdr[16];
+
+	// gzip's optional header fields -- extra data, file name,
+	// comment, header CRC -- are refused unless the caller sets this
+	// after z_inflate_init(). HTTP servers never send them, so the web
+	// client leaves it clear and keeps that code off its untrusted
+	// path; a .gz file written by `gzip file` always has a name, so
+	// file readers (sw/common/zgz.c) set it. Each field is skipped,
+	// bounded: extra data by its own length, the name and comment by
+	// Z_INFLATE_GZ_TEXT_MAX. The header CRC is skipped, not checked --
+	// the trailer's CRC-32 covers what matters, the data.
+	bool		gzip_fields;
+	uint8_t		gz_step;		// which field is being skipped
+	uint32_t	gz_n;			// bytes of it left, or read so far
 
 	// -- dynamic Huffman tables --
 	//

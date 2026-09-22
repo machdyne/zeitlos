@@ -169,6 +169,7 @@ def load(root):
     # host too (sw/apps/zfpga/boot.c)
     zboot = _scan_defines(boot_c, {
         "ZFPGA_ZAR_OFFSET", "ZFPGA_JUMP_OFFSET", "ZFPGA_JUMP_END",
+        "ZFPGA_GW_DFU", "ZFPGA_LOGO_OFFSET",
     }, {}) if os.path.exists(boot_c) else None
 
     rom_base = bios["MEM_ROM"]
@@ -214,6 +215,22 @@ def load(root):
               zboot.get("ZFPGA_JUMP_OFFSET", -1), "sw/apps/zfpga/boot.c")
         agree("jumploader region end", jump_off + jump_size, "sw/common/zsoc.h",
               zboot.get("ZFPGA_JUMP_END", -1), "sw/apps/zfpga/boot.c ZFPGA_JUMP_END")
+        # zfpga flash puts user gateware in the gateware region's tail,
+        # up to the logo, and looks for Zeitlos's gateware at 0 or at
+        # ZFPGA_GW_DFU -- which every DFU board's dfu_base must equal
+        agree("logo flash offset", logo_off, "sw/os/logo.h",
+              zboot.get("ZFPGA_LOGO_OFFSET", -1), "sw/apps/zfpga/boot.c ZFPGA_LOGO_OFFSET")
+        spec_dir = os.path.join(root, "release/hw/boards")
+        if os.path.isdir(spec_dir):
+            for fn in sorted(os.listdir(spec_dir)):
+                if not fn.endswith(".spec"):
+                    continue
+                for line in open(os.path.join(spec_dir, fn)):
+                    m = re.match(r"\s*dfu_base\s*=\s*(0x[0-9a-fA-F]+|[0-9]+)\s*$", line)
+                    if m:
+                        agree("DFU gateware start", int(m.group(1), 0),
+                              "release/hw/boards/" + fn + " dfu_base",
+                              zboot.get("ZFPGA_GW_DFU", -1), "sw/apps/zfpga/boot.c ZFPGA_GW_DFU")
 
     # The ZAR sits immediately above the kernel's region. This is stated
     # as prose in zar.h ("1MB + 256KB") and as two independent numbers;

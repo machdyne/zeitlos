@@ -5,11 +5,18 @@
  *   zfpga flash blink.bit [-a ADDR]
  *   zfpga run   blink.bit [-a ADDR]
  *
- * `flash` writes the bitstream at ADDR, or by default at the first
- * 64 KB boundary after the core apps (the ZAR), where it must end
- * before the jumploader at 0x1D0000. On a flash larger than 2 MB, -a
- * can put it anywhere after the jumploader too -- as many designs as
- * there is room for. `run` is `flash`, then a jump: the kernel points
+ * `flash` writes the bitstream at ADDR, or by default in the first of
+ * these it fits, each starting at a 64 KB boundary (a boot address is
+ * addr[23:16]):
+ *
+ *   - after the core apps (the ZAR), up to the jumploader at 0x1D0000;
+ *   - after Zeitlos's own gateware, up to the boot logo at 0x0F0000 --
+ *     on a Mozart ML1 flashed over JTAG, 598 KB of gateware leaves
+ *     0x0A0000-0x0F0000, 320 KB;
+ *   - on a flash larger than 2 MB, after the jumploader -- as many
+ *     designs as there is room for.
+ *
+ * -a ADDR puts it anywhere inside one of them. `run` is `flash`, then a jump: the kernel points
  * the jumploader at ADDR, syncs files and pulls PROGRAMN. A power
  * cycle always comes back to Zeitlos.
  *
@@ -33,6 +40,11 @@
 #define ZFPGA_ZAR_OFFSET   0x140000u
 #define ZFPGA_JUMP_OFFSET  0x1D0000u
 #define ZFPGA_JUMP_END     0x200000u
+/* ... and the gateware region: Zeitlos's own bitstream starts at
+ * USERPART_START on a board with the DFU bootloader, at 0 without, and
+ * must end before the boot logo (sw/bios, logo.h). */
+#define ZFPGA_GW_DFU       0x040000u
+#define ZFPGA_LOGO_OFFSET  0x0F0000u
 
 #define SECTOR 4096u
 #define PAGE 256u
@@ -107,6 +119,61 @@ static uint32_t align_up(uint32_t v) {
     return (v + ALIGN - 1) & ~(ALIGN - 1);
 }
 
+static int sector_erased(uint32_t s) {
+    uint32_t i;
+    for (i = 0; i < SECTOR; i++) if (zio_flash_read(s + i) != 0xFF) return 0;
+    return 1;
+}
+
+/* Where Zeitlos's own gateware ends, or 0 if there is none to be found.
+ * It starts at 0x040000 if a bitstream begins there (a board with the
+ * DFU bootloader, whose own bitstream is at 0), else at 0. It ends at
+ * the first wholly erased 4 KB sector -- a compressed bitstream never
+ * has one -- or at a 64 KB boundary where another bitstream begins,
+ * which is a user design flashed straight after it. The space from
+ * there to the logo is free for user gateware: rebuilding Zeitlos's
+ * gateware larger may overwrite what was put there, which is harmless. */
+static uint32_t gateware_end(void) {
+    uint32_t start, s;
+    bitinfo_t bi;
+    if (bit_info(rd_flash, (void *)(uintptr_t)ZFPGA_GW_DFU, 4096, &bi) == 0) start = ZFPGA_GW_DFU;
+    else if (bit_info(rd_flash, (void *)(uintptr_t)0, 4096, &bi) == 0) start = 0;
+    else return 0;
+    for (s = start + SECTOR; s < ZFPGA_LOGO_OFFSET; s += SECTOR) {
+        if (!(s & (ALIGN - 1)) && bit_info(rd_flash, (void *)(uintptr_t)s, 4096, &bi) == 0) return s;
+        if (sector_erased(s)) return s;
+    }
+    return ZFPGA_LOGO_OFFSET;
+}
+
+/* The places user gateware may go, in the order the default tries them. */
+typedef struct { uint32_t lo, hi; const char *what; } space_t;
+
+static int free_spaces(const zio_flash_info_t *fi, space_t *sp) {
+    int n = 0;
+    uint32_t g = gateware_end();
+    sp[n].lo = align_up(zar_end()); sp[n].hi = ZFPGA_JUMP_OFFSET;
+    sp[n++].what = "after the core apps";
+    if (g) {
+        /* never below the lock, whatever the layout looked like */
+        sp[n].lo = align_up(g) > fi->lock_end ? align_up(g) : fi->lock_end;
+        sp[n].hi = ZFPGA_LOGO_OFFSET;
+        sp[n++].what = "after Zeitlos's gateware";
+    }
+    if (fi->size > ZFPGA_JUMP_END) {
+        sp[n].lo = ZFPGA_JUMP_END; sp[n].hi = fi->size;
+        sp[n++].what = "after the jumploader";
+    }
+    return n;
+}
+
+static void list_spaces(const space_t *sp, int n) {
+    int k;
+    for (k = 0; k < n; k++)
+        zf_note("  0x%06x-0x%06x  %4u KB  %s", sp[k].lo, sp[k].hi,
+            sp[k].hi > sp[k].lo ? (sp[k].hi - sp[k].lo) / 1024 : 0, sp[k].what);
+}
+
 /* 0 if the image is already there, byte for byte */
 static int differs(uint32_t addr, const uint8_t *d, uint32_t n) {
     uint32_t i;
@@ -134,8 +201,9 @@ static void write_image(uint32_t addr, const uint8_t *d, uint32_t n) {
 /* flash, and optionally run */
 static int flash_cmd(int argc, char **argv, int run) {
     const char *in = NULL, *what = run ? "run" : "flash";
-    uint32_t addr = 0, len, lo;
-    int have_addr = 0, i, rc;
+    uint32_t addr = 0, len;
+    int have_addr = 0, i, rc, n_sp, k;
+    space_t sp[3];
     uint8_t *img;
     bitinfo_t bi, jl;
     zio_flash_info_t fi;
@@ -177,32 +245,25 @@ static int flash_cmd(int argc, char **argv, int run) {
         zf_note("warning: %s was packed with its own boot address: its resets go there, "
             "not back to Zeitlos (a power cycle always does)", in);
 
-    /* where */
-    lo = align_up(zar_end());
-    if (!have_addr) {
-        addr = lo;
-        if (addr + len > ZFPGA_JUMP_OFFSET) {
-            zio_flash_end();
-            if (fi.size > ZFPGA_JUMP_END)
-                zf_fatal("%s: %u bytes do not fit between the core apps (0x%06x) and the jumploader "
-                    "(0x%06x); this flash is %u KB: -a 0x%06x puts it after the jumploader",
-                    what, len, lo, ZFPGA_JUMP_OFFSET, fi.size / 1024, ZFPGA_JUMP_END);
-            zf_fatal("%s: %u bytes do not fit between the core apps (0x%06x) and the jumploader (0x%06x)",
-                what, len, lo, ZFPGA_JUMP_OFFSET);
-        }
-    } else {
-        int below = addr >= lo && addr + len <= ZFPGA_JUMP_OFFSET;
-        int above = addr >= ZFPGA_JUMP_END && fi.size && addr + len <= fi.size;
-        if (addr & (ALIGN - 1)) {
-            zio_flash_end();
-            zf_fatal("%s: 0x%06x is not 64 KB aligned (a boot address is addr[23:16])", what, addr);
-        }
-        if (!below && !above) {
-            zio_flash_end();
-            zf_fatal("%s: 0x%06x-0x%06x is not free: user gateware goes from 0x%06x to 0x%06x%s", what,
-                addr, addr + len, lo, ZFPGA_JUMP_OFFSET,
-                fi.size > ZFPGA_JUMP_END ? ", or after 0x200000" : " (this flash has nothing after the jumploader)");
-        }
+    /* where: the first space it fits in, or where -a says if that is
+     * inside one */
+    n_sp = free_spaces(&fi, sp);
+    if (have_addr && (addr & (ALIGN - 1))) {
+        zio_flash_end();
+        zf_fatal("%s: 0x%06x is not 64 KB aligned (a boot address is addr[23:16])", what, addr);
+    }
+    for (k = 0; k < n_sp; k++) {
+        if (!have_addr && sp[k].lo + len <= sp[k].hi) { addr = sp[k].lo; break; }
+        if (have_addr && addr >= sp[k].lo && addr + len <= sp[k].hi) break;
+    }
+    if (k == n_sp) {
+        zio_flash_end();
+        if (have_addr)
+            zf_note("%s: 0x%06x-0x%06x is not free; user gateware can go in", what, addr, addr + len);
+        else
+            zf_note("%s: %u bytes do not fit in any free space:", what, len);
+        list_spaces(sp, n_sp);
+        zf_fatal("%s: nothing written", what);
     }
 
     if (!differs(addr, img, len)) {

@@ -17,6 +17,7 @@
 // is a state, which is why there are so many of them.
 enum {
 	S_HDR = 0,			// wrapper header
+	S_GZ_FIELDS,		// gzip's optional header fields (gzip_fields)
 	S_BLOCK,			// block header bits
 	S_STORED_LEN,
 	S_STORED,
@@ -220,11 +221,19 @@ int z_inflate(z_inflate_t *z, const uint8_t *in, uint32_t *inlen,
 			if (z->wrap == Z_INFLATE_GZIP) {
 				if (z->hdr[0] != 0x1f || z->hdr[1] != 0x8b || z->hdr[2] != 8)
 					{ rv = Z_INFLATE_E_WRAP; goto fail; }
-				// FLG bits: any of FEXTRA/FNAME/FCOMMENT/FHCRC means
-				// more header to skip. Refused rather than skipped:
-				// HTTP servers do not set them, and a skipper is more
-				// code paths on untrusted input for no real case.
-				if (z->hdr[3] & 0x1e) { rv = Z_INFLATE_E_WRAP; goto fail; }
+				// FLG: bits 5-7 are reserved and must be clear. Any of
+				// FEXTRA/FNAME/FCOMMENT/FHCRC (bits 1-4) means more
+				// header, skipped only if the caller asked for it
+				// (gzip_fields, zinflate.h): HTTP servers do not send
+				// them, and the web client keeps that path closed.
+				if (z->hdr[3] & 0xe0) { rv = Z_INFLATE_E_WRAP; goto fail; }
+				if (z->hdr[3] & 0x1e) {
+					if (!z->gzip_fields) { rv = Z_INFLATE_E_WRAP; goto fail; }
+					z->gz_step = 0;
+					z->gz_n = 0;
+					z->state = S_GZ_FIELDS;
+					break;
+				}
 			} else {
 				// zlib: CM must be 8, and CMF/FLG must be a multiple
 				// of 31. FDICT is refused -- PNG never sets it.
@@ -236,6 +245,56 @@ int z_inflate(z_inflate_t *z, const uint8_t *in, uint32_t *inlen,
 			z->hdr_need = 0;		// reused by the trailer below
 			z->state = S_BLOCK;
 			break;
+
+		// RFC 1952's optional fields, in order, each resumable at any
+		// byte: FEXTRA (2-byte little-endian length, then that many
+		// bytes), FNAME and FCOMMENT (NUL-terminated, at most
+		// Z_INFLATE_GZ_TEXT_MAX), FHCRC (2 bytes).
+		case S_GZ_FIELDS: {
+			uint8_t flg = z->hdr[3];
+			for (;;) {
+				if (z->gz_step == 0) {                  // FEXTRA's length
+					if (!(flg & 0x04)) { z->gz_step = 2; continue; }
+					while (z->gz_n < 2) {
+						if (ip >= *inlen) goto out_of_input;
+						z->hdr[10 + z->gz_n] = in[ip++];
+						z->gz_n++;
+					}
+					z->gz_n = (uint32_t)z->hdr[10] | (uint32_t)z->hdr[11] << 8;
+					z->gz_step = 1;
+				} else if (z->gz_step == 1) {           // FEXTRA's data
+					uint32_t k = *inlen - ip;
+					if (k > z->gz_n) k = z->gz_n;
+					ip += k;
+					z->gz_n -= k;
+					if (z->gz_n) goto out_of_input;
+					z->gz_step = 2;
+				} else if (z->gz_step == 2 || z->gz_step == 3) {   // FNAME, FCOMMENT
+					uint8_t bit = (z->gz_step == 2) ? 0x08 : 0x10;
+					if (!(flg & bit)) { z->gz_step++; z->gz_n = 0; continue; }
+					for (;;) {
+						if (ip >= *inlen) goto out_of_input;
+						if (in[ip++] == 0) break;
+						if (++z->gz_n >= Z_INFLATE_GZ_TEXT_MAX) { rv = Z_INFLATE_E_WRAP; goto fail; }
+					}
+					z->gz_step++;
+					z->gz_n = 0;
+				} else if (z->gz_step == 4) {           // FHCRC
+					if (!(flg & 0x02)) { z->gz_step = 5; continue; }
+					while (z->gz_n < 2) {
+						if (ip >= *inlen) goto out_of_input;
+						ip++;
+						z->gz_n++;
+					}
+					z->gz_step = 5;
+				} else {
+					break;
+				}
+			}
+			z->hdr_need = 0;		// reused by the trailer, as below
+			z->state = S_BLOCK;
+			break;
+		}
 
 		case S_BLOCK:
 			NEEDBITS(3);
@@ -524,14 +583,20 @@ int z_inflate(z_inflate_t *z, const uint8_t *in, uint32_t *inlen,
 				z->bitcnt -= (z->bitcnt & 7);
 
 				if (!z->hdr_need) { z->state = S_DONE; rv = Z_INFLATE_DONE; goto done; }
+				z->hdr_got = 0;		// the trailer is kept, in hdr[], below
 			}
 
+			// Kept, not checked: hdr[0..7] is gzip's CRC-32 and length
+			// (hdr[0..3] zlib's Adler-32) once DONE, for a caller that
+			// does want to check -- sw/common/zgz.c does.
 			while (z->bitcnt >= 8 && z->hdr_need > 0) {
+				z->hdr[z->hdr_got++] = (uint8_t)GETBITS(8);
 				DROPBITS(8); z->hdr_need--;
 			}
 			while (z->hdr_need > 0) {
 				if (ip >= *inlen) goto out_of_input;
-				ip++; z->hdr_need--;
+				z->hdr[z->hdr_got++] = in[ip++];
+				z->hdr_need--;
 			}
 
 			z->state = S_DONE;

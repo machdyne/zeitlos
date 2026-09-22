@@ -41,13 +41,19 @@ LDFLAGS = -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS)
 LDSCRIPT = ../../common/riscv-app.ld
 
 OBJS = zeitlos.o zobj.o zport.o zline.o zfsapp.o zwin.o zgfx.o zfont_data.o \
-	zconnect.o \
+	zconnect.o zinflate.o zgz.o \
 	vfs.o sh.o main.o
 
 posix: posix.elf posix.bin
 
 zeitlos.o:
 	$(CC) $(CFLAGS) -c ../../common/zeitlos.c -o zeitlos.o
+
+# zcat, gunzip: sw/common/zgz.c over zinflate.c
+zinflate.o: ../../common/zinflate.c ../../common/zinflate.h
+	$(CC) $(CFLAGS) -c ../../common/zinflate.c -o zinflate.o
+zgz.o: ../../common/zgz.c ../../common/zgz.h ../../common/zinflate.h
+	$(CC) $(CFLAGS) -c ../../common/zgz.c -o zgz.o
 zobj.o:
 	$(CC) $(CFLAGS) -c ../../common/zobj.c -o zobj.o
 zport.o:

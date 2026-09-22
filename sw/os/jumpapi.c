@@ -8,9 +8,9 @@
  */
 #include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
 
 #include "flashapi.h"
+#include "mem.h"			// k_mem_alloc(): see JSECT below
 #include "../common/zsoc.h"
 #include "../common/zjump.h"
 
@@ -30,12 +30,21 @@
 
 
 #define JSECT 4096u
-// Allocated only while re-pointing: .bss is part of kernel.bin, and 8 KB
-// there took the kernel within 2 KB of its 256 KB region. malloc is
-// already linked (newlib), so this costs no code.
-static uint8_t (*jbuf)[JSECT];
-static uint32_t jsec[2];
-static int njsec;
+// The two sector buffers come from the kernel's memory pool, and only
+// while re-pointing: in .bss they would be 8 KB of kernel.bin, which is
+// within a few KB of its 256 KB region. NOT malloc(): the kernel's
+// _sbrk() grows up from _end towards the stack pointer -- from the
+// serial shell that is the kernel's own stack, with no room, and from a
+// syscall it is the APP's stack, so malloc() "succeeds" by growing into
+// the memory the kernel stack grows down into.
+//
+// __attribute__((section(".bss"))): these are reached from syscalls,
+// which run with the calling app's gp -- a small global the linker
+// relaxed to gp-relative would resolve through the wrong gp. See
+// mem.c's comment on its metadata pool.
+static uint8_t (* __attribute__((section(".bss"))) jbuf)[JSECT];
+static uint32_t __attribute__((section(".bss"))) jsec[2];
+static int __attribute__((section(".bss"))) njsec;
 
 static uint8_t jrd(void *ctx, uint32_t off) {
 	uint32_t a = Z_JUMP_FLASH_OFFSET + off;
@@ -122,13 +131,13 @@ int k_jump_point(uint32_t target) {
 		printf("jump: the jumploader's address spans more than two sectors\n");
 		return -1;
 	}
-	if (!(jbuf = malloc(2 * JSECT))) {
+	if (!(jbuf = k_mem_alloc(2 * JSECT))) {
 		printf("jump: no memory for the sectors to rewrite\n");
 		return -1;
 	}
 	if (!k_flash_begin(K_FLASH_KERNEL)) {
 		printf("jump: another program is writing the flash\n");
-		free(jbuf);
+		k_mem_free(jbuf);
 		jbuf = 0;
 		return -1;
 	}
@@ -155,7 +164,7 @@ int k_jump_point(uint32_t target) {
 	}
 	k_flash_end(K_FLASH_KERNEL);
 	njsec = 0;              // reads come from the flash again
-	free(jbuf);
+	k_mem_free(jbuf);
 	jbuf = 0;
 
 	// and read it back from the flash

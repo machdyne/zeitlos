@@ -24,7 +24,7 @@ takes seconds.
 ## Why flash is a good place for this
 
 Flash is memory-mapped on this SOC, which is what makes the whole thing
-cheap: loading an app from it is a `memcpy`, with no filesystem and no
+cheap: loading an app from it is a copy, with no filesystem and no
 SPI driver involved. It is also **faster than the sdcard**, which is
 bit-banged SPI (`sw/os/fs/fatfs/sdmm.c`).
 
@@ -35,6 +35,14 @@ main memory at all.
 
 Writing flash is slow, but that happens once per build, unattended, as
 part of `make flash`.
+
+**The copy reads a 32-bit word at a time** (`sw/os/zarcopy.h`). The
+flash controller serves every read as one SPI transaction of 32 bits,
+whatever width was asked for, so the byte-by-byte copy it replaced made
+four transactions where one would do -- 235,000 of them for `net`.
+Only an unaligned first or last few bytes are read singly.
+`sw/os/tests/test_zarcopy.c` checks it against `memcpy` for every
+alignment of source and destination.
 
 ## Layout
 

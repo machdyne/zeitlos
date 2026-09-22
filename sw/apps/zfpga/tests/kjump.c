@@ -44,6 +44,11 @@ uint32_t k_flash_hw_program(uint32_t addr, const uint8_t *buf, uint32_t len) {
 #include "../../../common/zjump.h"
 static uint8_t rd_mem(void *ctx, uint32_t off) { return ((const uint8_t *)ctx)[off]; }
 
+/* the kernel's memory pool (sw/os/mem.c), which jumpapi.c borrows its
+ * sector buffers from */
+void *k_mem_alloc(uint32_t n) { return malloc(n); }
+void k_mem_free(void *p) { free(p); }
+
 int k_jump_read(uint32_t *target);
 int k_jump_point(uint32_t target);
 

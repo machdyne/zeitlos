@@ -125,7 +125,7 @@ static void apply(bool verbose) {
 
 // -- a config the card was not up for (issue #7) --
 
-static bool cfg_pending;
+static bool __attribute__((section(".bss"))) cfg_pending;   // see flashapi.c's session
 
 static bool card_up(void) {
 	return !(disk_status(0) & STA_NOINIT);

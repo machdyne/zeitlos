@@ -31,6 +31,9 @@
 #include "zinflate.h"
 
 static int fails, checks;
+
+// run() sets gzip_fields from this: the web client's default is off
+static int use_fields;
 static void ck(int c, const char *w) {
 	checks++; if (!c) { fails++; printf("FAIL: %s\n", w); } }
 
@@ -47,6 +50,7 @@ static int run(const uint8_t *in, uint32_t n, z_inflate_wrap_t wrap,
 	int rv = Z_INFLATE_OK;
 
 	z_inflate_init(&z, window, wrap, limit);
+	z.gzip_fields = use_fields;
 
 	for (;;) {
 		uint32_t il = n - ip, ol = sizeof(obuf) - op;
@@ -179,6 +183,43 @@ int main(int argc, char **argv) {
 		ck(rv == Z_INFLATE_E_LIMIT, "the output limit stops a bomb");
 		ck(got <= 1024 + 1, "and stops it AT the limit");
 	}
+
+	// -- gzip's optional header fields --
+	snprintf(b, sizeof(b), "%s/fields.raw", dir);
+	snprintf(a, sizeof(a), "%s/fname.gz", dir);
+	{
+		uint32_t n = slurp(a, inbuf, sizeof(inbuf)), got;
+		use_fields = 0;
+		ck(run(inbuf, n, Z_INFLATE_GZIP, 0, 0, &got, 0) == Z_INFLATE_E_WRAP,
+			"a file name is refused unless asked for (the web client's default)");
+	}
+	use_fields = 1;
+	case_file(a, b, Z_INFLATE_GZIP, "gzip with a file name (as `gzip file` writes)");
+	snprintf(a, sizeof(a), "%s/fields.gz", dir);
+	case_file(a, b, Z_INFLATE_GZIP, "gzip with extra, name, comment and header CRC");
+	{
+		uint32_t n = slurp(a, inbuf, sizeof(inbuf)), got;
+		static uint8_t bad[1 << 20];
+		int rv;
+
+		memcpy(bad, inbuf, n);
+		bad[3] |= 0x20;
+		ck(run(bad, n, Z_INFLATE_GZIP, 0, 0, &got, 0) == Z_INFLATE_E_WRAP,
+			"a reserved flag bit is refused");
+
+		// a file name with no end: 10 header bytes, FNAME, then 2000
+		// non-NUL bytes
+		memcpy(bad, inbuf, 10);
+		bad[3] = 0x08;
+		memset(bad + 10, 'x', 2000);
+		rv = run(bad, 2010, Z_INFLATE_GZIP, 7, 7, &got, 0);
+		ck(rv == Z_INFLATE_E_WRAP, "a file name longer than Z_INFLATE_GZ_TEXT_MAX is refused");
+
+		// cut off inside the extra field: not done, and no output
+		rv = run(inbuf, 16, Z_INFLATE_GZIP, 3, 3, &got, 0);
+		ck(rv != Z_INFLATE_DONE && got == 0, "a header cut off in its extra field is not done");
+	}
+	use_fields = 0;
 
 	printf("%s: %d checks, %d failures\n", fails?"FAIL":"ok", checks, fails);
 	return fails ? 1 : 0;

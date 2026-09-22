@@ -46,7 +46,7 @@ $ zcc hello.c -o hello && run hello
 
 | | |
 |---|---|
-| files | `ls` `cat` `cp` `mv` `rm` `touch` `mkdir` `rmdir` |
+| files | `ls` `cat` `cp` `mv` `rm` `touch` `mkdir` `rmdir` `zcat` `gunzip` |
 | text | `wc` `head` `tail` `grep` `sort` `uniq` |
 | places | `cd` `pwd` |
 | other | `echo` `clear` `df` `run` `help` `exit` `reboot` `jump` |
@@ -57,10 +57,30 @@ regular expressions (`:g`, `:s`) if you need them.
 Anything that is not a builtin is run as a program, so `zcc hello.c`
 and `run zcc hello.c` are the same thing.
 
+### gzip: `zcat` and `gunzip`
+
+```
+$ zcat notes.gz            <- print it, decompressed
+$ zcat notes.gz | grep x
+$ gunzip notes.gz          <- writes notes, removes notes.gz
+$ gunzip -k -f notes.gz    <- keep the .gz; overwrite notes
+```
+
+Both read real gzip files, name and all, through `sw/common/zgz.c`
+(over the decoder the web browser uses, `sw/common/zinflate.c`), and
+check the trailer -- the CRC-32 of the data and its length -- so a
+corrupt or truncated file is reported, with a failing status. `zcat`
+streams, so the error comes after whatever it had already printed, as
+real `zcat`'s does. `gunzip` behaves as gzip's: it only takes a name
+ending in `.gz`, will not overwrite without `-f`, removes the `.gz`
+only once the whole file is out and checked (`-k` keeps it), and
+removes a half-written output if anything fails. Decompressing runs at
+roughly 80 KB/s on the machine, the CRC included. There is no `gzip` to compress yet.
+
 ### What streams and what does not
 
-`cat`, `cp`, `wc`, `grep`, `head`, `tail` and `uniq` read a file in
-chunks and have **no size limit**. `sort` has to hold every line and
+`cat`, `cp`, `wc`, `grep`, `head`, `tail`, `uniq`, `zcat` and `gunzip`
+read a file in chunks and have **no size limit**. `sort` has to hold every line and
 refuses above 512 lines or 16KB rather than dropping the rest.
 
 **A pipe holds its intermediate in memory, capped at 16KB**, and says

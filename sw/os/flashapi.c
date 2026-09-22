@@ -26,8 +26,10 @@
 
 #define REG(o) (*(volatile uint32_t *)(Z_SPIFLASH_BASE + (o)))
 
-static bool session;
-static uint32_t session_owner;
+// Reached from Z_SYS_FLASH, which runs with the calling app's gp: kept
+// out of gp-relative reach, as kernel.c's globals are (see mem.c).
+static bool __attribute__((section(".bss"))) session;
+static uint32_t __attribute__((section(".bss"))) session_owner;
 
 bool k_flash_present(void) {
 	if (!z_soc_has_feature2(Z_FEATURE2_FLASHW)) return false;

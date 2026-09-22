@@ -33,3 +33,20 @@ w('rep.raw', rep); w('rep.gz', gzip.compress(rep, 9))
 big = bytes((i*7 ^ (i >> 5)) & 0xff for i in range(300000))
 w('big.raw', big); w('big.gz', gzip.compress(big, 6))
 print("corpus in", out)
+
+# gzip's optional header fields (zinflate.h, gzip_fields): what `gzip
+# file` writes -- a file name -- and a header with all four, built by
+# hand to RFC 1952, its header CRC correct although zinflate skips it.
+import struct
+fn = b'the quick brown fox jumps over the lazy dog, again. ' * 300
+w('fields.raw', fn)
+with gzip.GzipFile(filename='notes.txt', mode='wb', fileobj=open(os.path.join(out, 'fname.gz'), 'wb'), mtime=0) as g:
+    g.write(fn)
+co = zlib.compressobj(9, zlib.DEFLATED, -15)
+body = co.compress(fn) + co.flush()
+extra = b'Zt' + struct.pack('<H', 4) + b'ZEIT'
+hdr = bytes([0x1f, 0x8b, 8, 0x04 | 0x08 | 0x10 | 0x02]) + struct.pack('<I', 0) + bytes([2, 3])
+hdr += struct.pack('<H', len(extra)) + extra + b'notes.txt\0' + b'a comment, as gzip -c might carry\0'
+hdr += struct.pack('<H', zlib.crc32(hdr) & 0xffff)
+w('fields.gz', hdr + body + struct.pack('<II', zlib.crc32(fn), len(fn)))
+

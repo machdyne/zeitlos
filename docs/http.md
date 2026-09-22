@@ -235,6 +235,13 @@ docs/tls_resumption.md.
 `sw/common/zinflate.c` -- DEFLATE (RFC 1951) with zlib and gzip
 wrappers.
 
+gzip's optional header fields -- file name, comment, extra data,
+header CRC -- are refused here, as HTTP servers never send them; a
+caller that reads `.gz` files sets `gzip_fields` to accept them
+(`sw/common/zgz.c`, `zcat` and `gunzip` in `docs/posix.md`). The
+trailer is kept after the stream ends, for such a caller to check;
+this decoder still does not check it.
+
 It is here for `Content-Encoding: gzip`, and it is the single change
 that most affects how long a page takes: en.wikipedia.org's front page
 is 258KB uncompressed and about a fifth of that gzipped, against a

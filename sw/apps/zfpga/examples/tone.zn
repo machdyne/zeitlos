@@ -1,0 +1,1372 @@
+# placed by zfpga place from sw/apps/zfpga/examples/tone.zl
+device LFE5U-45F
+package CABGA256
+
+io R0C38.A dir=INPUT pullmode=NONE type=LVCMOS33
+io R65C90.B dir=OUTPUT type=LVCMOS33
+io R62C90.D dir=OUTPUT type=LVCMOS33
+io R65C90.A dir=OUTPUT type=LVCMOS33
+comb R21C43 SLICEA 0 mode=CCU2 init=0x0008 pins=- inject=NO
+comb R21C43 SLICEA 1 mode=CCU2 init=0xFFFF pins=- inject=YES
+comb R21C43 SLICEB 0 mode=CCU2 init=0x99AA pins=A inject=NO
+comb R21C43 SLICEB 1 mode=CCU2 init=0x55AA pins=A inject=NO
+comb R21C43 SLICEC 0 mode=CCU2 init=0x55AA pins=A inject=NO
+comb R21C43 SLICEC 1 mode=CCU2 init=0x55AA pins=A inject=NO
+comb R21C43 SLICED 0 mode=CCU2 init=0x55AA pins=A inject=NO
+comb R21C43 SLICED 1 mode=CCU2 init=0xFF00 pins=- inject=NO
+comb R31C48 SLICEA 0 mode=CCU2 init=0x0000 pins=- inject=NO
+comb R31C48 SLICEA 1 mode=CCU2 init=0xFFFF pins=- inject=YES
+comb R31C48 SLICEB 0 mode=CCU2 init=0x66AA pins=A inject=NO
+ff R31C48 SLICEB 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R31C48 SLICEB 1 mode=CCU2 init=0xAAAA pins=A inject=NO
+ff R31C48 SLICEB 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R31C48 SLICEC 0 mode=CCU2 init=0xAAAA pins=A inject=NO
+ff R31C48 SLICEC 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R31C48 SLICEC 1 mode=CCU2 init=0xAAAA pins=A inject=NO
+ff R31C48 SLICEC 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R31C48 SLICED 0 mode=CCU2 init=0xAAAA pins=A inject=NO
+ff R31C48 SLICED 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R31C48 SLICED 1 mode=CCU2 init=0xAAAA pins=A inject=NO
+ff R31C48 SLICED 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R35C49 SLICEA 0 mode=CCU2 init=0x0008 pins=- inject=NO
+comb R35C49 SLICEA 1 mode=CCU2 init=0xFFFF pins=- inject=YES
+comb R35C49 SLICEB 0 mode=CCU2 init=0x3300 pins=B inject=NO
+comb R35C49 SLICEB 1 mode=CCU2 init=0x3300 pins=B inject=NO
+comb R35C49 SLICEC 0 mode=CCU2 init=0x3300 pins=B inject=NO
+comb R35C49 SLICEC 1 mode=CCU2 init=0x3300 pins=B inject=NO
+comb R35C49 SLICED 0 mode=CCU2 init=0x3300 pins=B inject=NO
+comb R35C49 SLICED 1 mode=CCU2 init=0x3300 pins=B inject=NO
+comb R35C50 SLICEA 0 mode=CCU2 init=0x3300 pins=B inject=NO
+comb R35C50 SLICEA 1 mode=CCU2 init=0x3300 pins=B inject=NO
+comb R35C50 SLICEB 0 mode=CCU2 init=0x3300 pins=B inject=NO
+comb R35C50 SLICEB 1 mode=CCU2 init=0x3300 pins=B inject=NO
+comb R35C50 SLICEC 0 mode=CCU2 init=0x3300 pins=B inject=NO
+comb R35C50 SLICEC 1 mode=CCU2 init=0x3300 pins=B inject=NO
+comb R35C50 SLICED 0 mode=CCU2 init=0x3300 pins=B inject=NO
+comb R35C50 SLICED 1 mode=CCU2 init=0x3300 pins=B inject=NO
+comb R35C51 SLICEA 0 mode=CCU2 init=0xFF00 pins=- inject=NO
+comb R35C51 SLICEA 1 mode=CCU2 init=0xFF00 pins=- inject=NO
+comb R7C41 SLICEA 0 mode=CCU2 init=0x0000 pins=- inject=NO
+comb R7C41 SLICEA 1 mode=CCU2 init=0xFFFF pins=- inject=YES
+comb R7C41 SLICEB 0 mode=CCU2 init=0x66AA pins=AB inject=NO
+comb R7C41 SLICEB 1 mode=CCU2 init=0x66AA pins=AB inject=NO
+comb R7C41 SLICEC 0 mode=CCU2 init=0x66AA pins=AB inject=NO
+comb R7C41 SLICEC 1 mode=CCU2 init=0x66AA pins=AB inject=NO
+comb R7C41 SLICED 0 mode=CCU2 init=0x66AA pins=AB inject=NO
+comb R7C41 SLICED 1 mode=CCU2 init=0x66AA pins=AB inject=NO
+comb R7C42 SLICEA 0 mode=CCU2 init=0x66AA pins=AB inject=NO
+comb R7C42 SLICEA 1 mode=CCU2 init=0x66AA pins=A inject=NO
+comb R7C42 SLICEB 0 mode=CCU2 init=0x66AA pins=AB inject=NO
+comb R7C42 SLICEB 1 mode=CCU2 init=0x66AA pins=AB inject=NO
+comb R7C42 SLICEC 0 mode=CCU2 init=0x66AA pins=AB inject=NO
+comb R7C42 SLICEC 1 mode=CCU2 init=0x66AA pins=A inject=NO
+comb R7C42 SLICED 0 mode=CCU2 init=0x66AA pins=AB inject=NO
+comb R7C42 SLICED 1 mode=CCU2 init=0x66AA pins=AB inject=NO
+comb R7C43 SLICEA 0 mode=CCU2 init=0x66AA pins=AB inject=NO
+comb R7C43 SLICEA 1 mode=CCU2 init=0x66AA pins=AB inject=NO
+comb R7C43 SLICEB 0 mode=CCU2 init=0x66AA pins=A inject=NO
+comb R7C43 SLICEB 1 mode=CCU2 init=0x66AA pins=AB inject=NO
+comb R7C43 SLICEC 0 mode=CCU2 init=0x66AA pins=AB inject=NO
+comb R7C43 SLICEC 1 mode=CCU2 init=0x66AA pins=AB inject=NO
+comb R7C43 SLICED 0 mode=CCU2 init=0x66AA pins=AB inject=NO
+comb R7C43 SLICED 1 mode=CCU2 init=0x66AA pins=AB inject=NO
+comb R7C44 SLICEA 0 mode=CCU2 init=0x66AA pins=AB inject=NO
+comb R7C44 SLICEA 1 mode=CCU2 init=0x66AA pins=AB inject=NO
+comb R7C44 SLICEB 0 mode=CCU2 init=0x66AA pins=AB inject=NO
+comb R7C44 SLICEB 1 mode=CCU2 init=0x66AA pins=AB inject=NO
+comb R7C44 SLICEC 0 mode=CCU2 init=0x66AA pins=AB inject=NO
+comb R7C44 SLICEC 1 mode=CCU2 init=0xAAAA pins=A inject=NO
+comb R7C44 SLICED 0 mode=CCU2 init=0xAAAA pins=A inject=NO
+comb R7C44 SLICED 1 mode=CCU2 init=0xAAAA pins=A inject=NO
+comb R7C45 SLICEA 0 mode=CCU2 init=0xAAAA pins=A inject=NO
+comb R7C45 SLICEA 1 mode=CCU2 init=0xAAAA pins=A inject=NO
+comb R17C42 SLICEA 0 mode=CCU2 init=0x0000 pins=- inject=NO
+comb R17C42 SLICEA 1 mode=CCU2 init=0xFFFF pins=- inject=YES
+comb R17C42 SLICEB 0 mode=CCU2 init=0x66AA pins=A inject=NO
+comb R17C42 SLICEB 1 mode=CCU2 init=0xAAAA pins=A inject=NO
+comb R16C35 SLICEA 0 mode=CCU2 init=0x0000 pins=- inject=NO
+comb R16C35 SLICEA 1 mode=CCU2 init=0xFFFF pins=- inject=YES
+comb R16C35 SLICEB 0 mode=CCU2 init=0x66AA pins=A inject=NO
+comb R16C35 SLICEB 1 mode=CCU2 init=0xAAAA pins=A inject=NO
+comb R16C35 SLICEC 0 mode=CCU2 init=0xAAAA pins=A inject=NO
+comb R16C35 SLICEC 1 mode=CCU2 init=0xAAAA pins=A inject=NO
+comb R16C35 SLICED 0 mode=CCU2 init=0xAAAA pins=A inject=NO
+comb R16C35 SLICED 1 mode=CCU2 init=0xAAAA pins=A inject=NO
+comb R16C36 SLICEA 0 mode=CCU2 init=0xAAAA pins=A inject=NO
+comb R16C36 SLICEA 1 mode=CCU2 init=0xAAAA pins=A inject=NO
+comb R16C36 SLICEB 0 mode=CCU2 init=0xAAAA pins=A inject=NO
+comb R16C36 SLICEB 1 mode=CCU2 init=0xAAAA pins=A inject=NO
+comb R16C36 SLICEC 0 mode=CCU2 init=0xAAAA pins=A inject=NO
+comb R16C36 SLICEC 1 mode=CCU2 init=0xAAAA pins=A inject=NO
+comb R16C36 SLICED 0 mode=CCU2 init=0xAAAA pins=A inject=NO
+comb R16C36 SLICED 1 mode=CCU2 init=0xAAAA pins=A inject=NO
+comb R21C44 SLICEA 0 init=0xB0B0 pins=ABC
+ff R21C44 SLICEA 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=1 clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R21C44 SLICEA 1 init=0xB0B0 pins=ABC
+ff R21C44 SLICEA 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=1 clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R21C42 SLICEC 0 init=0xB0B0 pins=ABC
+ff R21C42 SLICEC 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=1 clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R21C42 SLICEC 1 init=0xB0B0 pins=ABC
+ff R21C42 SLICEC 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=1 clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R21C42 SLICEB 0 init=0xF4F4 pins=ABC
+ff R21C42 SLICEB 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=1 clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R36C51 SLICED 0 init=0xE444 pins=ABCD
+ff R36C51 SLICED 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R36C51 SLICED 1 init=0xE4E4 pins=ABC
+ff R36C51 SLICED 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R36C48 SLICEA 0 init=0xE4E4 pins=ABC
+ff R36C48 SLICEA 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R36C48 SLICEA 1 init=0xE4E4 pins=ABC
+ff R36C48 SLICEA 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R33C49 SLICEA 0 init=0xE4E4 pins=ABC
+ff R33C49 SLICEA 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R33C49 SLICEA 1 init=0xE4E4 pins=ABC
+ff R33C49 SLICEA 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R35C47 SLICEC 0 init=0xE4E4 pins=ABC
+ff R35C47 SLICEC 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R35C47 SLICEC 1 init=0xE4E4 pins=ABC
+ff R35C47 SLICEC 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R35C48 SLICEB 0 init=0xE4E4 pins=ABC
+ff R35C48 SLICEB 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R35C48 SLICEB 1 init=0xE4E4 pins=ABC
+ff R35C48 SLICEB 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R35C53 SLICEC 0 init=0xE4E4 pins=ABC
+ff R35C53 SLICEC 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R35C53 SLICEC 1 init=0xE4E4 pins=ABC
+ff R35C53 SLICEC 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R35C52 SLICEC 0 init=0xE4E4 pins=ABC
+ff R35C52 SLICEC 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R35C52 SLICEC 1 init=0xE4E4 pins=ABC
+ff R35C52 SLICEC 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R36C52 SLICEC 0 init=0xE4E4 pins=ABC
+ff R36C52 SLICEC 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R36C52 SLICEC 1 init=0xE4E4 pins=ABC
+ff R36C52 SLICEC 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R36C51 SLICEC 0 init=0xE2E2 pins=ABC
+ff R36C51 SLICEC 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R36C51 SLICEC 1 init=0xE2E2 pins=ABC
+ff R36C51 SLICEC 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R36C48 SLICEB 0 init=0xE2E2 pins=ABC
+ff R36C48 SLICEB 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R36C48 SLICEB 1 init=0xE2E2 pins=ABC
+ff R36C48 SLICEB 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R33C49 SLICEC 0 init=0xE2E2 pins=ABC
+ff R33C49 SLICEC 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R33C49 SLICEC 1 init=0xE2E2 pins=ABC
+ff R33C49 SLICEC 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R35C47 SLICEA 0 init=0xE2E2 pins=ABC
+ff R35C47 SLICEA 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R35C47 SLICEA 1 init=0xE2E2 pins=ABC
+ff R35C47 SLICEA 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R35C48 SLICED 0 init=0xE2E2 pins=ABC
+ff R35C48 SLICED 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R35C48 SLICED 1 init=0xE2E2 pins=ABC
+ff R35C48 SLICED 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R35C53 SLICEA 0 init=0xE2E2 pins=ABC
+ff R35C53 SLICEA 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R35C53 SLICEA 1 init=0xE2E2 pins=ABC
+ff R35C53 SLICEA 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R35C52 SLICEB 0 init=0xE2E2 pins=ABC
+ff R35C52 SLICEB 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R35C52 SLICEB 1 init=0xE2E2 pins=ABC
+ff R35C52 SLICEB 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R36C52 SLICEA 0 init=0xCA0A pins=ABCD
+ff R36C52 SLICEA 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R36C52 SLICEA 1 init=0xCA0A pins=ABCD
+ff R36C52 SLICEA 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R6C41 SLICEB 0 init=0xE2E2 pins=ABC
+ff R6C41 SLICEB 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R6C41 SLICEB 1 init=0xE2E2 pins=ABC
+ff R6C41 SLICEB 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R6C41 SLICEA 0 init=0xE2E2 pins=ABC
+ff R6C41 SLICEA 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R6C41 SLICEA 1 init=0xE2E2 pins=ABC
+ff R6C41 SLICEA 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R8C41 SLICEC 0 init=0xE2E2 pins=ABC
+ff R8C41 SLICEC 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R8C41 SLICEC 1 init=0xE2E2 pins=ABC
+ff R8C41 SLICEC 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R8C42 SLICED 0 init=0xE2E2 pins=ABC
+ff R8C42 SLICED 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R8C42 SLICED 1 init=0xE2E2 pins=ABC
+ff R8C42 SLICED 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R6C42 SLICED 0 init=0xE2E2 pins=ABC
+ff R6C42 SLICED 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R6C42 SLICED 1 init=0xE2E2 pins=ABC
+ff R6C42 SLICED 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R8C42 SLICEB 0 init=0xE2E2 pins=ABC
+ff R8C42 SLICEB 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R8C42 SLICEB 1 init=0xE2E2 pins=ABC
+ff R8C42 SLICEB 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R8C42 SLICEC 0 init=0xE2E2 pins=ABC
+ff R8C42 SLICEC 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R8C42 SLICEC 1 init=0xE2E2 pins=ABC
+ff R8C42 SLICEC 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R6C43 SLICEB 0 init=0xE2E2 pins=ABC
+ff R6C43 SLICEB 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R6C43 SLICEB 1 init=0xE2E2 pins=ABC
+ff R6C43 SLICEB 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R6C43 SLICEC 0 init=0xE2E2 pins=ABC
+ff R6C43 SLICEC 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R6C43 SLICEC 1 init=0xE2E2 pins=ABC
+ff R6C43 SLICEC 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R8C43 SLICEB 0 init=0xE2E2 pins=ABC
+ff R8C43 SLICEB 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R8C43 SLICEB 1 init=0xE2E2 pins=ABC
+ff R8C43 SLICEB 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R8C43 SLICEC 0 init=0xE2E2 pins=ABC
+ff R8C43 SLICEC 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R8C43 SLICEC 1 init=0xE2E2 pins=ABC
+ff R8C43 SLICEC 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R6C44 SLICED 0 init=0xE2E2 pins=ABC
+ff R6C44 SLICED 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R6C44 SLICED 1 init=0xE2E2 pins=ABC
+ff R6C44 SLICED 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R8C44 SLICED 0 init=0xE2E2 pins=ABC
+ff R8C44 SLICED 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R8C44 SLICED 1 init=0xE2E2 pins=ABC
+ff R8C44 SLICED 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R6C44 SLICEA 0 init=0xE2E2 pins=ABC
+ff R6C44 SLICEA 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R6C44 SLICEA 1 init=0xE2E2 pins=ABC
+ff R6C44 SLICEA 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R8C44 SLICEA 0 init=0xE2E2 pins=ABC
+ff R8C44 SLICEA 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R8C44 SLICEA 1 init=0xE2E2 pins=ABC
+ff R8C44 SLICEA 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R7C46 SLICED 0 init=0xE2E2 pins=ABC
+ff R7C46 SLICED 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R7C46 SLICED 1 init=0xE2E2 pins=ABC
+ff R7C46 SLICED 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R15C35 SLICEB 0 init=0xE222 pins=ABCD
+ff R15C35 SLICEB 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R15C35 SLICEB 1 init=0xE222 pins=ABCD
+ff R15C35 SLICEB 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R15C35 SLICED 0 init=0xE222 pins=ABCD
+ff R15C35 SLICED 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R15C35 SLICED 1 init=0xE222 pins=ABCD
+ff R15C35 SLICED 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R15C35 SLICEC 0 init=0xE222 pins=ABCD
+ff R15C35 SLICEC 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R15C35 SLICEC 1 init=0xE222 pins=ABCD
+ff R15C35 SLICEC 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R15C36 SLICED 0 init=0xE222 pins=ABCD
+ff R15C36 SLICED 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R15C36 SLICED 1 init=0xE222 pins=ABCD
+ff R15C36 SLICED 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R15C36 SLICEC 0 init=0xE222 pins=ABCD
+ff R15C36 SLICEC 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R15C36 SLICEC 1 init=0xE222 pins=ABCD
+ff R15C36 SLICEC 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R15C36 SLICEB 0 init=0xE222 pins=ABCD
+ff R15C36 SLICEB 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R15C36 SLICEB 1 init=0xE222 pins=ABCD
+ff R15C36 SLICEB 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R16C37 SLICEA 0 init=0xE222 pins=ABCD
+ff R16C37 SLICEA 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R16C37 SLICEA 1 init=0x6E22 pins=ABCD
+ff R16C37 SLICEA 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R16C42 SLICEC 0 init=0xEA2A pins=ABCD
+ff R16C42 SLICEC 0 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R16C42 SLICEC 1 init=0xEA2A pins=ABCD
+ff R16C42 SLICEC 1 clk=?@CLK_48 lsr=- sd=1 gsr=ENABLED regset=RESET lsrmode=LSR cemux=CE clkmux=CLK srmode=LSR_OVER_CE lsrmux=LSR
+comb R21C42 SLICEB 1 init=0x0001 pins=ABCD
+comb R31C47 SLICEB 0 init=0x4444 pins=AB
+comb R31C47 SLICEB 1 init=0x8000 pins=ABCD
+comb R36C51 SLICEA 0 init=0x8888 pins=AB
+comb R36C51 SLICEA 1 init=0xE4CC pins=ABCD
+comb R36C48 SLICED 0 init=0xE4CC pins=ABCD
+comb R36C48 SLICED 1 init=0xE4CC pins=ABCD
+comb R33C49 SLICED 0 init=0xE4CC pins=ABCD
+comb R33C49 SLICED 1 init=0xE4CC pins=ABCD
+comb R35C47 SLICED 0 init=0xE4CC pins=ABCD
+comb R35C47 SLICED 1 init=0xE4CC pins=ABCD
+comb R35C48 SLICEA 0 init=0xE4CC pins=ABCD
+comb R35C48 SLICEA 1 init=0xE4CC pins=ABCD
+comb R35C53 SLICEB 0 init=0xE4CC pins=ABCD
+comb R35C53 SLICEB 1 init=0xE4CC pins=ABCD
+comb R35C52 SLICED 0 init=0xE4CC pins=ABCD
+comb R35C52 SLICED 1 init=0xE4CC pins=ABCD
+comb R36C52 SLICEB 0 init=0xE4CC pins=ABCD
+comb R36C52 SLICEB 1 init=0xE4CC pins=ABCD
+comb R31C47 SLICEC 0 init=0x4000 pins=ABCD
+comb R31C47 SLICEC 1 init=0x8080 pins=ABC
+comb R25C45 SLICEC 0 init=0x6666 pins=AB
+comb R25C45 SLICEC 1 init=0x6666 pins=AB
+comb R37C45 SLICED 0 init=0x6666 pins=AB
+comb R37C45 SLICED 1 init=0x8001 pins=ABCD
+comb R37C49 SLICEC 0 init=0x0100 pins=ABCD
+comb R37C49 SLICEC 1 init=0x4002 pins=ABCD
+comb R37C49 SLICEA 0 init=0x0100 pins=ABCD
+comb R37C49 SLICEA 1 init=0x2004 pins=ABCD
+comb R38C48 SLICEC 0 init=0x0100 pins=ABCD
+comb R38C48 SLICEC 1 init=0x1008 pins=ABCD
+comb R38C49 SLICED 0 init=0x0100 pins=ABCD
+comb R38C49 SLICED 1 init=0x0810 pins=ABCD
+comb R38C49 SLICEC 0 init=0x0100 pins=ABCD
+comb R38C49 SLICEC 1 init=0x0420 pins=ABCD
+comb R38C48 SLICEB 0 init=0x0100 pins=ABCD
+comb R38C48 SLICEB 1 init=0x0240 pins=ABCD
+comb R38C48 SLICEA 0 init=0x0100 pins=ABCD
+comb R38C48 SLICEA 1 init=0x0180 pins=ABCD
+comb R40C51 SLICEB 0 init=0x0100 pins=ABCD
+comb R40C51 SLICEB 1 init=0x0200 pins=ABCD
+comb R39C50 SLICED 0 init=0x0200 pins=ABCD
+comb R39C50 SLICED 1 init=0x0200 pins=ABCD
+comb R39C48 SLICEB 0 init=0x0200 pins=ABCD
+comb R39C48 SLICEB 1 init=0x0200 pins=ABCD
+comb R39C48 SLICED 0 init=0x0200 pins=ABCD
+comb R39C48 SLICED 1 init=0x0200 pins=ABCD
+comb R39C47 SLICEB 0 init=0x0200 pins=ABCD
+comb R39C47 SLICEB 1 init=0x0400 pins=ABCD
+comb R41C49 SLICEC 0 init=0x0400 pins=ABCD
+comb R41C49 SLICEC 1 init=0x0400 pins=ABCD
+comb R41C48 SLICED 0 init=0x0400 pins=ABCD
+comb R41C48 SLICED 1 init=0x0400 pins=ABCD
+comb R41C47 SLICEA 0 init=0x0400 pins=ABCD
+comb R41C47 SLICEA 1 init=0x0400 pins=ABCD
+comb R42C47 SLICEC 0 init=0x0400 pins=ABCD
+comb R42C47 SLICEC 1 init=0x0800 pins=ABCD
+comb R42C48 SLICEC 0 init=0x0800 pins=ABCD
+comb R42C48 SLICEC 1 init=0x0800 pins=ABCD
+comb R42C48 SLICEA 0 init=0x0800 pins=ABCD
+comb R42C48 SLICEA 1 init=0x0800 pins=ABCD
+comb R43C47 SLICED 0 init=0x0800 pins=ABCD
+comb R43C47 SLICED 1 init=0x0800 pins=ABCD
+comb R44C47 SLICED 0 init=0x0800 pins=ABCD
+comb R44C47 SLICED 1 init=0x1000 pins=ABCD
+comb R42C48 SLICEB 0 init=0x1000 pins=ABCD
+comb R42C48 SLICEB 1 init=0x1000 pins=ABCD
+comb R44C49 SLICED 0 init=0x1000 pins=ABCD
+comb R44C49 SLICED 1 init=0x1000 pins=ABCD
+comb R44C49 SLICEA 0 init=0x1000 pins=ABCD
+comb R44C49 SLICEA 1 init=0x1000 pins=ABCD
+comb R44C50 SLICEA 0 init=0x1000 pins=ABCD
+comb R44C50 SLICEA 1 init=0x2000 pins=ABCD
+comb R42C49 SLICEB 0 init=0x2000 pins=ABCD
+comb R42C49 SLICEB 1 init=0x2000 pins=ABCD
+comb R42C50 SLICEA 0 init=0x2000 pins=ABCD
+comb R42C50 SLICEA 1 init=0x2000 pins=ABCD
+comb R44C51 SLICEC 0 init=0x2000 pins=ABCD
+comb R44C51 SLICEC 1 init=0x2000 pins=ABCD
+comb R41C51 SLICED 0 init=0x2000 pins=ABCD
+comb R41C51 SLICED 1 init=0x4000 pins=ABCD
+comb R41C52 SLICEB 0 init=0x4000 pins=ABCD
+comb R41C52 SLICEB 1 init=0x4000 pins=ABCD
+comb R41C52 SLICEA 0 init=0x4000 pins=ABCD
+comb R41C52 SLICEA 1 init=0x4000 pins=ABCD
+comb R42C53 SLICEB 0 init=0x4000 pins=ABCD
+comb R42C53 SLICEB 1 init=0x4000 pins=ABCD
+comb R44C51 SLICEB 0 init=0x4000 pins=ABCD
+comb R44C51 SLICEB 1 init=0x8000 pins=ABCD
+comb R43C53 SLICEA 0 init=0x8000 pins=ABCD
+comb R43C53 SLICEA 1 init=0x8000 pins=ABCD
+comb R44C52 SLICEA 0 init=0x8000 pins=ABCD
+comb R44C52 SLICEA 1 init=0x8000 pins=ABCD
+comb R44C53 SLICEC 0 init=0x8000 pins=ABCD
+comb R44C53 SLICEC 1 init=0x8000 pins=ABCD
+comb R44C53 SLICED 0 init=0x7FFF pins=ABCD
+comb R44C53 SLICED 1 init=0xEEEF pins=ABCD
+comb R44C54 SLICEC 0 init=0xFEAA pins=ABCD
+comb R44C54 SLICEC 1 init=0xEFAA pins=ABCD
+comb R44C53 SLICEB 0 init=0x7FFF pins=ABCD
+comb R44C53 SLICEB 1 init=0x1000 pins=ABCD
+comb R44C52 SLICEC 0 init=0xFE00 pins=ABCD
+comb R44C52 SLICEC 1 init=0x5400 pins=ABCD
+comb R44C53 SLICEA 0 init=0x5400 pins=ABCD
+comb R44C53 SLICEA 1 init=0xBAAA pins=ABCD
+comb R43C53 SLICED 0 init=0xFEFE pins=ABC
+comb R43C53 SLICED 1 init=0xFEEE pins=ABCD
+comb R43C53 SLICEC 0 init=0xFFFE pins=ABCD
+comb R43C53 SLICEC 1 init=0xFFFE pins=ABCD
+comb R44C52 SLICED 0 init=0x0100 pins=ABCD
+comb R44C52 SLICED 1 init=0xBBBA pins=ABCD
+comb R44C52 SLICEB 0 init=0xBFFF pins=ABCD
+comb R44C52 SLICEB 1 init=0x1000 pins=ABCD
+comb R43C53 SLICEB 0 init=0xFFFE pins=ABCD
+comb R43C53 SLICEB 1 init=0x0100 pins=ABCD
+comb R42C53 SLICEA 0 init=0xFEAA pins=ABCD
+comb R42C53 SLICEA 1 init=0xBFFF pins=ABCD
+comb R42C53 SLICEC 0 init=0xBAAA pins=ABCD
+comb R42C53 SLICEC 1 init=0xE000 pins=ABCD
+comb R42C52 SLICEC 0 init=0xBAAA pins=ABCD
+comb R42C52 SLICEC 1 init=0xBFFF pins=ABCD
+comb R42C52 SLICEB 0 init=0xFEAA pins=ABCD
+comb R42C52 SLICEB 1 init=0xEA00 pins=ABCD
+comb R43C52 SLICEC 0 init=0xEAAA pins=ABCD
+comb R43C52 SLICEC 1 init=0xFEEE pins=ABCD
+comb R43C52 SLICED 0 init=0xEAAA pins=ABCD
+comb R43C52 SLICED 1 init=0xEAAA pins=ABCD
+comb R42C52 SLICEA 0 init=0x1000 pins=ABCD
+comb R42C52 SLICEA 1 init=0xFEEE pins=ABCD
+comb R42C52 SLICED 0 init=0x5444 pins=ABCD
+comb R42C52 SLICED 1 init=0x5444 pins=ABCD
+comb R42C51 SLICED 0 init=0x0100 pins=ABCD
+comb R42C51 SLICED 1 init=0xEFEE pins=ABCD
+comb R43C52 SLICEA 0 init=0xFFFE pins=ABCD
+comb R43C52 SLICEA 1 init=0xBFFF pins=ABCD
+comb R43C52 SLICEB 0 init=0xBA00 pins=ABCD
+comb R43C52 SLICEB 1 init=0x5400 pins=ABCD
+comb R43C51 SLICEB 0 init=0xFFFE pins=ABCD
+comb R43C51 SLICEB 1 init=0xFFFE pins=ABCD
+comb R42C51 SLICEA 0 init=0x0100 pins=ABCD
+comb R42C51 SLICEA 1 init=0xBAAA pins=ABCD
+comb R41C51 SLICEC 0 init=0xFFFE pins=ABCD
+comb R41C51 SLICEC 1 init=0xBAAA pins=ABCD
+comb R41C51 SLICEB 0 init=0xFEAA pins=ABCD
+comb R41C51 SLICEB 1 init=0xDFFF pins=ABCD
+comb R42C51 SLICEB 0 init=0xFEEE pins=ABCD
+comb R42C51 SLICEB 1 init=0x5400 pins=ABCD
+comb R43C51 SLICED 0 init=0xFFFE pins=ABCD
+comb R43C51 SLICED 1 init=0xDFFF pins=ABCD
+comb R43C51 SLICEA 0 init=0xBA00 pins=ABCD
+comb R43C51 SLICEA 1 init=0xFE00 pins=ABCD
+comb R43C51 SLICEC 0 init=0x4000 pins=ABCD
+comb R43C51 SLICEC 1 init=0xFFFE pins=ABCD
+comb R42C51 SLICEC 0 init=0x4000 pins=ABCD
+comb R42C51 SLICEC 1 init=0xEAAA pins=ABCD
+comb R41C50 SLICED 0 init=0xDFFF pins=ABCD
+comb R41C50 SLICED 1 init=0xEA00 pins=ABCD
+comb R41C50 SLICEA 0 init=0x8000 pins=ABCD
+comb R41C50 SLICEA 1 init=0xEA00 pins=ABCD
+comb R42C50 SLICEC 0 init=0x5444 pins=ABCD
+comb R42C50 SLICEC 1 init=0x5400 pins=ABCD
+comb R43C50 SLICEB 0 init=0xEAAA pins=ABCD
+comb R43C50 SLICEB 1 init=0xDFFF pins=ABCD
+comb R43C50 SLICEC 0 init=0xEA00 pins=ABCD
+comb R43C50 SLICEC 1 init=0xEA00 pins=ABCD
+comb R43C50 SLICED 0 init=0xFEEE pins=ABCD
+comb R43C50 SLICED 1 init=0x5400 pins=ABCD
+comb R42C50 SLICEB 0 init=0x4000 pins=ABCD
+comb R42C50 SLICEB 1 init=0xDFFF pins=ABCD
+comb R42C50 SLICED 0 init=0xE000 pins=ABCD
+comb R42C50 SLICED 1 init=0x4000 pins=ABCD
+comb R42C49 SLICED 0 init=0xE000 pins=ABCD
+comb R42C49 SLICED 1 init=0xEFEE pins=ABCD
+comb R42C49 SLICEA 0 init=0xDFFF pins=ABCD
+comb R42C49 SLICEA 1 init=0xEA00 pins=ABCD
+comb R43C49 SLICEC 0 init=0xFE00 pins=ABCD
+comb R43C49 SLICEC 1 init=0xEA00 pins=ABCD
+comb R43C50 SLICEA 0 init=0xEFFF pins=ABCD
+comb R43C50 SLICEA 1 init=0xEA00 pins=ABCD
+comb R43C49 SLICEA 0 init=0xFE00 pins=ABCD
+comb R43C49 SLICEA 1 init=0x8000 pins=ABCD
+comb R44C50 SLICEC 0 init=0x8000 pins=ABCD
+comb R44C50 SLICEC 1 init=0x8000 pins=ABCD
+comb R44C50 SLICEB 0 init=0xFFFE pins=ABCD
+comb R44C50 SLICEB 1 init=0xFEAA pins=ABCD
+comb R44C49 SLICEC 0 init=0xFFFE pins=ABCD
+comb R44C49 SLICEC 1 init=0x4000 pins=ABCD
+comb R43C49 SLICED 0 init=0xBAAA pins=ABCD
+comb R43C49 SLICED 1 init=0xFEEE pins=ABCD
+comb R43C49 SLICEB 0 init=0x5554 pins=ABCD
+comb R43C49 SLICEB 1 init=0xBBBA pins=ABCD
+comb R43C48 SLICEB 0 init=0xBBBA pins=ABCD
+comb R43C48 SLICEB 1 init=0x5554 pins=ABCD
+comb R44C48 SLICEA 0 init=0xFFFE pins=ABCD
+comb R44C48 SLICEA 1 init=0xFFFE pins=ABCD
+comb R44C48 SLICEB 0 init=0x4544 pins=ABCD
+comb R44C48 SLICEB 1 init=0x4544 pins=ABCD
+comb R44C49 SLICEB 0 init=0xEFEE pins=ABCD
+comb R44C49 SLICEB 1 init=0xFFFE pins=ABCD
+comb R44C48 SLICED 0 init=0x0001 pins=ABCD
+comb R44C48 SLICED 1 init=0x5554 pins=ABCD
+comb R43C48 SLICED 0 init=0xBBBA pins=ABCD
+comb R43C48 SLICED 1 init=0xEFEE pins=ABCD
+comb R43C48 SLICEA 0 init=0xFFFE pins=ABCD
+comb R43C48 SLICEA 1 init=0x4544 pins=ABCD
+comb R43C48 SLICEC 0 init=0xEFEE pins=ABCD
+comb R43C48 SLICEC 1 init=0x1110 pins=ABCD
+comb R44C48 SLICEC 0 init=0xFFFE pins=ABCD
+comb R44C48 SLICEC 1 init=0x1110 pins=ABCD
+comb R44C47 SLICEC 0 init=0x4544 pins=ABCD
+comb R44C47 SLICEC 1 init=0xABAA pins=ABCD
+comb R44C47 SLICEB 0 init=0xFFFE pins=ABCD
+comb R44C47 SLICEB 1 init=0x0100 pins=ABCD
+comb R43C47 SLICEA 0 init=0x1110 pins=ABCD
+comb R43C47 SLICEA 1 init=0xFFFE pins=ABCD
+comb R43C47 SLICEC 0 init=0xFFFE pins=ABCD
+comb R43C47 SLICEC 1 init=0x4544 pins=ABCD
+comb R43C46 SLICEA 0 init=0xBBBA pins=ABCD
+comb R43C46 SLICEA 1 init=0xABAA pins=ABCD
+comb R43C46 SLICEC 0 init=0xABAA pins=ABCD
+comb R43C46 SLICEC 1 init=0x5554 pins=ABCD
+comb R44C46 SLICEC 0 init=0xF7FF pins=ABCD
+comb R44C46 SLICEC 1 init=0xBA00 pins=ABCD
+comb R44C46 SLICEA 0 init=0x5400 pins=ABCD
+comb R44C46 SLICEA 1 init=0xABAA pins=ABCD
+comb R44C47 SLICEA 0 init=0xFFFE pins=ABCD
+comb R44C47 SLICEA 1 init=0x1000 pins=ABCD
+comb R43C47 SLICEB 0 init=0x1000 pins=ABCD
+comb R43C47 SLICEB 1 init=0xFEAA pins=ABCD
+comb R43C46 SLICEB 0 init=0x5554 pins=ABCD
+comb R43C46 SLICEB 1 init=0xBAAA pins=ABCD
+comb R43C45 SLICEA 0 init=0x5444 pins=ABCD
+comb R43C45 SLICEA 1 init=0x1110 pins=ABCD
+comb R43C46 SLICED 0 init=0xFFFE pins=ABCD
+comb R43C46 SLICED 1 init=0x1000 pins=ABCD
+comb R42C46 SLICEB 0 init=0xFFFE pins=ABCD
+comb R42C46 SLICEB 1 init=0xFFFE pins=ABCD
+comb R42C46 SLICEC 0 init=0xFFFE pins=ABCD
+comb R42C46 SLICEC 1 init=0x5554 pins=ABCD
+comb R42C47 SLICED 0 init=0x0100 pins=ABCD
+comb R42C47 SLICED 1 init=0xEFEE pins=ABCD
+comb R42C47 SLICEA 0 init=0xF7FF pins=ABCD
+comb R42C47 SLICEA 1 init=0xBA00 pins=ABCD
+comb R42C45 SLICEB 0 init=0xEFEE pins=ABCD
+comb R42C45 SLICEB 1 init=0xF7FF pins=ABCD
+comb R42C45 SLICEC 0 init=0xBAAA pins=ABCD
+comb R42C45 SLICEC 1 init=0xFEAA pins=ABCD
+comb R42C45 SLICEA 0 init=0xFE00 pins=ABCD
+comb R42C45 SLICEA 1 init=0x4000 pins=ABCD
+comb R42C46 SLICED 0 init=0x4000 pins=ABCD
+comb R42C46 SLICED 1 init=0x5400 pins=ABCD
+comb R42C46 SLICEA 0 init=0x4000 pins=ABCD
+comb R42C46 SLICEA 1 init=0xFEAA pins=ABCD
+comb R41C46 SLICEC 0 init=0xEAAA pins=ABCD
+comb R41C46 SLICEC 1 init=0xEAAA pins=ABCD
+comb R42C47 SLICEB 0 init=0x1110 pins=ABCD
+comb R42C47 SLICEB 1 init=0xFFFE pins=ABCD
+comb R41C45 SLICEA 0 init=0x5444 pins=ABCD
+comb R41C45 SLICEA 1 init=0x5554 pins=ABCD
+comb R41C45 SLICEB 0 init=0xBBBA pins=ABCD
+comb R41C45 SLICEB 1 init=0x5554 pins=ABCD
+comb R41C46 SLICED 0 init=0xFFFE pins=ABCD
+comb R41C46 SLICED 1 init=0xFFFE pins=ABCD
+comb R41C47 SLICED 0 init=0xFFFE pins=ABCD
+comb R41C47 SLICED 1 init=0xFBFF pins=ABCD
+comb R41C46 SLICEB 0 init=0x5400 pins=ABCD
+comb R41C46 SLICEB 1 init=0x5400 pins=ABCD
+comb R41C46 SLICEA 0 init=0xFE00 pins=ABCD
+comb R41C46 SLICEA 1 init=0xFFFE pins=ABCD
+comb R41C47 SLICEB 0 init=0x0100 pins=ABCD
+comb R41C47 SLICEB 1 init=0x1000 pins=ABCD
+comb R41C47 SLICEC 0 init=0xBAAA pins=ABCD
+comb R41C47 SLICEC 1 init=0xEFEE pins=ABCD
+comb R40C46 SLICEB 0 init=0x5444 pins=ABCD
+comb R40C46 SLICEB 1 init=0xBAAA pins=ABCD
+comb R40C46 SLICEC 0 init=0x5444 pins=ABCD
+comb R40C46 SLICEC 1 init=0x1110 pins=ABCD
+comb R40C47 SLICEB 0 init=0xFFFE pins=ABCD
+comb R40C47 SLICEB 1 init=0x4544 pins=ABCD
+comb R40C46 SLICEA 0 init=0x1110 pins=ABCD
+comb R40C46 SLICEA 1 init=0x5554 pins=ABCD
+comb R40C46 SLICED 0 init=0x5554 pins=ABCD
+comb R40C46 SLICED 1 init=0xFFFE pins=ABCD
+comb R41C48 SLICEC 0 init=0x0100 pins=ABCD
+comb R41C48 SLICEC 1 init=0xFFFE pins=ABCD
+comb R41C48 SLICEB 0 init=0x5554 pins=ABCD
+comb R41C48 SLICEB 1 init=0x4544 pins=ABCD
+comb R40C47 SLICEA 0 init=0x5554 pins=ABCD
+comb R40C47 SLICEA 1 init=0xEFEE pins=ABCD
+comb R40C47 SLICED 0 init=0x4544 pins=ABCD
+comb R40C47 SLICED 1 init=0xEFEE pins=ABCD
+comb R40C47 SLICEC 0 init=0x1110 pins=ABCD
+comb R40C47 SLICEC 1 init=0x0100 pins=ABCD
+comb R39C47 SLICEA 0 init=0xABAA pins=ABCD
+comb R39C47 SLICEA 1 init=0x1110 pins=ABCD
+comb R39C47 SLICEC 0 init=0x4544 pins=ABCD
+comb R39C47 SLICEC 1 init=0xFFFE pins=ABCD
+comb R40C48 SLICEA 0 init=0x0100 pins=ABCD
+comb R40C48 SLICEA 1 init=0xFDFF pins=ABCD
+comb R40C48 SLICED 0 init=0xFE00 pins=ABCD
+comb R40C48 SLICED 1 init=0xBA00 pins=ABCD
+comb R40C48 SLICEC 0 init=0xFE00 pins=ABCD
+comb R40C48 SLICEC 1 init=0x1000 pins=ABCD
+comb R40C48 SLICEB 0 init=0xEFEE pins=ABCD
+comb R40C48 SLICEB 1 init=0x4544 pins=ABCD
+comb R40C49 SLICEC 0 init=0x5400 pins=ABCD
+comb R40C49 SLICEC 1 init=0x1000 pins=ABCD
+comb R40C49 SLICEA 0 init=0xFDFF pins=ABCD
+comb R40C49 SLICEA 1 init=0x4000 pins=ABCD
+comb R39C48 SLICEA 0 init=0x4000 pins=ABCD
+comb R39C48 SLICEA 1 init=0xFFFE pins=ABCD
+comb R39C48 SLICEC 0 init=0xEA00 pins=ABCD
+comb R39C48 SLICEC 1 init=0xFFFE pins=ABCD
+comb R40C49 SLICEB 0 init=0x4000 pins=ABCD
+comb R40C49 SLICEB 1 init=0xFFFE pins=ABCD
+comb R40C49 SLICED 0 init=0xFEAA pins=ABCD
+comb R40C49 SLICED 1 init=0xEFEE pins=ABCD
+comb R39C49 SLICEB 0 init=0x5444 pins=ABCD
+comb R39C49 SLICEB 1 init=0xBAAA pins=ABCD
+comb R40C50 SLICEB 0 init=0x5444 pins=ABCD
+comb R40C50 SLICEB 1 init=0xFEEE pins=ABCD
+comb R40C50 SLICEC 0 init=0xFEEE pins=ABCD
+comb R40C50 SLICEC 1 init=0xBBBA pins=ABCD
+comb R39C50 SLICEA 0 init=0xFDFF pins=ABCD
+comb R39C50 SLICEA 1 init=0xFE00 pins=ABCD
+comb R39C49 SLICED 0 init=0x1000 pins=ABCD
+comb R39C49 SLICED 1 init=0xFE00 pins=ABCD
+comb R39C49 SLICEC 0 init=0x1000 pins=ABCD
+comb R39C49 SLICEC 1 init=0x1000 pins=ABCD
+comb R40C50 SLICEA 0 init=0xFFFE pins=ABCD
+comb R40C50 SLICEA 1 init=0xEFEE pins=ABCD
+comb R39C49 SLICEA 0 init=0x1000 pins=ABCD
+comb R39C49 SLICEA 1 init=0xBAAA pins=ABCD
+comb R39C50 SLICEC 0 init=0xBAAA pins=ABCD
+comb R39C50 SLICEC 1 init=0x5444 pins=ABCD
+comb R40C50 SLICED 0 init=0x1110 pins=ABCD
+comb R40C50 SLICED 1 init=0xFFFE pins=ABCD
+comb R39C50 SLICEB 0 init=0xEFEE pins=ABCD
+comb R39C50 SLICEB 1 init=0x5554 pins=ABCD
+comb R38C49 SLICEB 0 init=0x1110 pins=ABCD
+comb R38C49 SLICEB 1 init=0xBBBA pins=ABCD
+comb R39C51 SLICEA 0 init=0x0100 pins=ABCD
+comb R39C51 SLICEA 1 init=0x0100 pins=ABCD
+comb R38C50 SLICEB 0 init=0x5554 pins=ABCD
+comb R38C50 SLICEB 1 init=0xEFEE pins=ABCD
+comb R38C49 SLICEA 0 init=0xFFFE pins=ABCD
+comb R38C49 SLICEA 1 init=0xEFEE pins=ABCD
+comb R38C50 SLICEA 0 init=0xFEFF pins=ABCD
+comb R38C50 SLICEA 1 init=0xBBBA pins=ABCD
+comb R38C50 SLICED 0 init=0xFE00 pins=ABCD
+comb R38C50 SLICED 1 init=0xFFFE pins=ABCD
+comb R38C51 SLICEB 0 init=0x1000 pins=ABCD
+comb R38C51 SLICEB 1 init=0xFEFF pins=ABCD
+comb R38C50 SLICEC 0 init=0xFE00 pins=ABCD
+comb R38C50 SLICEC 1 init=0xBAAA pins=ABCD
+comb R37C49 SLICEB 0 init=0xFEAA pins=ABCD
+comb R37C49 SLICEB 1 init=0xBAAA pins=ABCD
+comb R38C51 SLICEC 0 init=0x4000 pins=ABCD
+comb R38C51 SLICEC 1 init=0x4000 pins=ABCD
+comb R37C50 SLICEA 0 init=0xFEFF pins=ABCD
+comb R37C50 SLICEA 1 init=0xE000 pins=ABCD
+comb R37C50 SLICED 0 init=0xEAAA pins=ABCD
+comb R37C50 SLICED 1 init=0x8000 pins=ABCD
+comb R37C51 SLICEB 0 init=0xFEFF pins=ABCD
+comb R37C51 SLICEB 1 init=0x8080 pins=ABC
+comb R36C49 SLICEA 0 init=0x8888 pins=AB
+comb R36C49 SLICEA 1 init=0x8000 pins=ABCD
+comb R37C49 SLICED 0 init=0xFEFE pins=ABC
+comb R37C49 SLICED 1 init=0xEAEA pins=ABC
+comb R36C50 SLICEC 0 init=0xEEEE pins=AB
+comb R36C50 SLICEC 1 init=0x8888 pins=AB
+comb R37C50 SLICEB 0 init=0xEAEA pins=ABC
+comb R37C50 SLICEB 1 init=0xE000 pins=ABCD
+comb R37C50 SLICEC 0 init=0xFE00 pins=ABCD
+comb R37C50 SLICEC 1 init=0x8000 pins=ABCD
+comb R37C51 SLICEC 0 init=0x8000 pins=ABCD
+comb R37C51 SLICEC 1 init=0x8080 pins=ABC
+comb R36C51 SLICEB 0 init=0x8080 pins=ABC
+comb R36C51 SLICEB 1 init=0xE4E4 pins=ABC
+comb R36C49 SLICEB 0 init=0xEA40 pins=ABCD
+comb R36C49 SLICEB 1 init=0xE4E4 pins=ABC
+comb R36C49 SLICEC 0 init=0xE4E4 pins=ABC
+comb R36C49 SLICEC 1 init=0xE4E4 pins=ABC
+comb R36C49 SLICED 0 init=0xFE54 pins=ABCD
+comb R36C49 SLICED 1 init=0xEA40 pins=ABCD
+comb R36C50 SLICEB 0 init=0xE4E4 pins=ABC
+comb R36C50 SLICEB 1 init=0xE4E4 pins=ABC
+comb R36C50 SLICEA 0 init=0xE4E4 pins=ABC
+comb R36C50 SLICEA 1 init=0xE4E4 pins=ABC
+comb R35C52 SLICEA 0 init=0xE4E4 pins=ABC
+comb R35C52 SLICEA 1 init=0xE4E4 pins=ABC
+comb R17C46 SLICEA 0 init=0xE4E4 pins=ABC
+comb R17C46 SLICEA 1 init=0x1111 pins=AB
+comb R6C42 SLICEB 0 init=0xEEEE pins=AB
+comb R6C42 SLICEB 1 init=0xCCCC pins=AB
+comb R8C42 SLICEA 0 init=0x6666 pins=AB
+comb R8C42 SLICEA 1 init=0x7777 pins=AB
+comb R8C44 SLICEC 0 init=0x8888 pins=AB
+comb R8C44 SLICEC 1 init=0x4444 pins=AB
+comb R6C42 SLICEC 0 init=0x2222 pins=AB
+comb R6C42 SLICEC 1 init=0xBBBB pins=AB
+comb R8C43 SLICED 0 init=0xAAAA pins=AB
+comb R8C43 SLICED 1 init=0x3333 pins=AB
+comb R6C43 SLICEA 0 init=0x9999 pins=AB
+comb R6C43 SLICEA 1 init=0x5555 pins=AB
+comb R15C35 SLICEA 0 init=0x0080 pins=ABCD
+comb R15C35 SLICEA 1 init=0x8000 pins=ABCD
+comb R15C36 SLICEA 0 init=0x1000 pins=ABCD
+comb R15C36 SLICEA 1 init=0x0100 pins=ABCD
+comb R16C37 SLICED 0 init=0x8888 pins=AB
+comb R16C37 SLICED 1 init=0x7777 pins=AB
+
+net CLK_48 R0C38/JPADDIA_PIO R21C44/CLK0_SLICE R21C42/CLK2_SLICE R21C42/CLK1_SLICE R31C48/CLK1_SLICE R31C48/CLK2_SLICE R31C48/CLK3_SLICE R36C51/CLK3_SLICE R36C48/CLK0_SLICE R33C49/CLK0_SLICE R35C47/CLK2_SLICE R35C48/CLK1_SLICE R35C53/CLK2_SLICE R35C52/CLK2_SLICE R36C52/CLK2_SLICE R36C51/CLK2_SLICE R36C48/CLK1_SLICE
+sinks CLK_48 R33C49/CLK2_SLICE R35C47/CLK0_SLICE R35C48/CLK3_SLICE R35C53/CLK0_SLICE R35C52/CLK1_SLICE R36C52/CLK0_SLICE R6C41/CLK1_SLICE R6C41/CLK0_SLICE R8C41/CLK2_SLICE R8C42/CLK3_SLICE R6C42/CLK3_SLICE R8C42/CLK1_SLICE R8C42/CLK2_SLICE R6C43/CLK1_SLICE R6C43/CLK2_SLICE R8C43/CLK1_SLICE
+sinks CLK_48 R8C43/CLK2_SLICE R6C44/CLK3_SLICE R8C44/CLK3_SLICE R6C44/CLK0_SLICE R8C44/CLK0_SLICE R7C46/CLK3_SLICE R15C35/CLK1_SLICE R15C35/CLK3_SLICE R15C35/CLK2_SLICE R15C36/CLK3_SLICE R15C36/CLK2_SLICE R15C36/CLK1_SLICE R16C37/CLK0_SLICE R16C42/CLK2_SLICE
+net slot[0] R31C48/Q2_SLICE R31C47/A3 R36C51/A6 R36C51/A7 R36C48/A0 R36C48/A1 R33C49/A0 R33C49/A1 R35C47/A4 R35C47/A5 R35C48/A2 R35C48/A3 R35C53/A4 R35C53/A5 R35C52/A4 R35C52/A5 R36C52/A4
+sinks slot[0] R36C52/A5 R31C47/A4 R31C48/A2 R65C90/PADDOB_PIO
+net slot[5] R31C48/Q7_SLICE R31C47/B5 R31C48/A7 R62C90/PADDOD_PIO
+net sr[15] R36C52/Q5_SLICE R36C52/B5 R65C90/PADDOA_PIO
+net div[0] R21C44/Q0_SLICE R21C42/A3 R21C43/A2
+net div[1] R21C44/Q1_SLICE R21C42/B3 R21C43/A3
+net div[2] R21C42/Q4_SLICE R21C42/C3 R21C43/A4
+net div[3] R21C42/Q5_SLICE R21C42/D3 R21C43/A5
+net _n100 R21C42/F3_SLICE R31C47/B2 R21C44/B0 R21C44/B1 R21C42/B4 R21C42/B5 R21C42/B2
+net div[4] R21C42/Q2_SLICE R31C47/A2 R21C44/A0 R21C44/A1 R21C42/A4 R21C42/A5 R21C42/A2 R21C43/A6
+net _n102 R31C47/F2_SLICE R31C48/CE1_SLICE R31C48/CE2_SLICE R31C48/CE3_SLICE R36C51/CE3_SLICE R36C48/CE0_SLICE R33C49/CE0_SLICE R35C47/CE2_SLICE R35C48/CE1_SLICE R35C53/CE2_SLICE R35C52/CE2_SLICE R36C52/CE2_SLICE R36C51/CE2_SLICE R36C48/CE1_SLICE R33C49/CE2_SLICE R35C47/CE0_SLICE R35C48/CE3_SLICE
+sinks _n102 R35C53/CE0_SLICE R35C52/CE1_SLICE R36C52/CE0_SLICE R6C41/CE1_SLICE R6C41/CE0_SLICE R8C41/CE2_SLICE R8C42/CE3_SLICE R6C42/CE3_SLICE R8C42/CE1_SLICE R8C42/CE2_SLICE R6C43/CE1_SLICE R6C43/CE2_SLICE R8C43/CE1_SLICE R8C43/CE2_SLICE R6C44/CE3_SLICE R8C44/CE3_SLICE
+sinks _n102 R6C44/CE0_SLICE R8C44/CE0_SLICE R7C46/CE3_SLICE R15C35/CE1_SLICE R15C35/CE3_SLICE R15C35/CE2_SLICE R15C36/CE3_SLICE R15C36/CE2_SLICE R15C36/CE1_SLICE R16C37/CE0_SLICE R16C42/CE2_SLICE
+net slot[1] R31C48/Q3_SLICE R31C47/B3 R31C47/B4 R31C48/A3
+net slot[2] R31C48/Q4_SLICE R31C47/C3 R31C47/C4 R31C48/A4
+net slot[3] R31C48/Q5_SLICE R31C47/D3 R31C47/D4 R31C48/A5
+net _n121 R31C47/F3_SLICE R36C51/B0 R36C51/D1 R36C48/D6 R36C48/D7 R33C49/D6 R33C49/D7 R35C47/D6 R35C47/D7 R35C48/D0 R35C48/D1 R35C53/D2 R35C53/D3 R35C52/D6 R35C52/D7 R36C52/D2 R36C52/D3
+net slot[4] R31C48/Q6_SLICE R36C51/A0 R36C51/A1 R36C48/A6 R36C48/A7 R33C49/A6 R33C49/A7 R35C47/A6 R35C47/A7 R35C48/A0 R35C48/A1 R35C53/A2 R35C53/A3 R35C52/A6 R35C52/A7 R36C52/A2 R36C52/A3
+sinks slot[4] R31C47/A5 R31C48/A6
+net _n123 R36C51/F0_SLICE R36C51/D6
+net sr[0] R36C51/Q6_SLICE R36C51/B1 R36C51/B6
+net sample[1] R36C51/Q5_SLICE R36C51/C1 R36C51/A5
+net _n125 R36C51/F1_SLICE R36C51/C7
+net sr[1] R36C51/Q7_SLICE R36C48/B6 R36C51/B7
+net sample[2] R36C48/Q2_SLICE R36C48/C6 R36C48/A2
+net _n126 R36C48/F6_SLICE R36C48/C0
+net sr[2] R36C48/Q0_SLICE R36C48/B7 R36C48/B0
+net sample[3] R36C48/Q3_SLICE R36C48/C7 R36C48/A3
+net _n127 R36C48/F7_SLICE R36C48/C1
+net sr[3] R36C48/Q1_SLICE R33C49/B6 R36C48/B1
+net sample[4] R33C49/Q4_SLICE R33C49/C6 R33C49/A4
+net _n128 R33C49/F6_SLICE R33C49/C0
+net sr[4] R33C49/Q0_SLICE R33C49/B7 R33C49/B0
+net sample[5] R33C49/Q5_SLICE R33C49/C7 R33C49/A5
+net _n129 R33C49/F7_SLICE R33C49/C1
+net sr[5] R33C49/Q1_SLICE R35C47/B6 R33C49/B1
+net sample[6] R35C47/Q0_SLICE R35C47/C6 R35C47/A0
+net _n130 R35C47/F6_SLICE R35C47/C4
+net sr[6] R35C47/Q4_SLICE R35C47/B7 R35C47/B4
+net sample[7] R35C47/Q1_SLICE R35C47/C7 R35C47/A1
+net _n131 R35C47/F7_SLICE R35C47/C5
+net sr[7] R35C47/Q5_SLICE R35C48/B0 R35C47/B5
+net sample[8] R35C48/Q6_SLICE R35C48/C0 R35C48/A6
+net _n132 R35C48/F0_SLICE R35C48/C2
+net sr[8] R35C48/Q2_SLICE R35C48/B1 R35C48/B2
+net sample[9] R35C48/Q7_SLICE R35C48/C1 R35C48/A7
+net _n133 R35C48/F1_SLICE R35C48/C3
+net sr[9] R35C48/Q3_SLICE R35C53/B2 R35C48/B3
+net sample[10] R35C53/Q0_SLICE R35C53/C2 R35C53/A0
+net _n134 R35C53/F2_SLICE R35C53/C4
+net sr[10] R35C53/Q4_SLICE R35C53/B3 R35C53/B4
+net sample[11] R35C53/Q1_SLICE R35C53/C3 R35C53/A1
+net _n135 R35C53/F3_SLICE R35C53/C5
+net sr[11] R35C53/Q5_SLICE R35C52/B6 R35C53/B5
+net sample[12] R35C52/Q2_SLICE R35C52/C6 R35C52/A2
+net _n136 R35C52/F6_SLICE R35C52/C4
+net sr[12] R35C52/Q4_SLICE R35C52/B7 R35C52/B4
+net sample[13] R35C52/Q3_SLICE R35C52/C7 R35C52/A3
+net _n137 R35C52/F7_SLICE R35C52/C5
+net sr[13] R35C52/Q5_SLICE R36C52/B2 R35C52/B5
+net sample[14] R36C52/Q0_SLICE R36C52/C2 R36C52/A0
+net _n138 R36C52/F2_SLICE R36C52/C4
+net sr[14] R36C52/Q4_SLICE R36C52/B3 R36C52/B4
+net sample[15] R36C52/Q1_SLICE R36C52/C3 R36C52/A1
+net _n139 R36C52/F3_SLICE R36C52/C5
+net sample[0] R36C51/Q4_SLICE R36C51/C6 R36C51/A4
+net _n140 R36C51/F6_SLICE R36C51/DI6_SLICE
+net _n141 R36C51/F7_SLICE R36C51/DI7_SLICE
+net _n142 R36C48/F0_SLICE R36C48/DI0_SLICE
+net _n143 R36C48/F1_SLICE R36C48/DI1_SLICE
+net _n144 R33C49/F0_SLICE R33C49/DI0_SLICE
+net _n145 R33C49/F1_SLICE R33C49/DI1_SLICE
+net _n146 R35C47/F4_SLICE R35C47/DI4_SLICE
+net _n147 R35C47/F5_SLICE R35C47/DI5_SLICE
+net _n148 R35C48/F2_SLICE R35C48/DI2_SLICE
+net _n149 R35C48/F3_SLICE R35C48/DI3_SLICE
+net _n150 R35C53/F4_SLICE R35C53/DI4_SLICE
+net _n151 R35C53/F5_SLICE R35C53/DI5_SLICE
+net _n152 R35C52/F4_SLICE R35C52/DI4_SLICE
+net _n153 R35C52/F5_SLICE R35C52/DI5_SLICE
+net _n154 R36C52/F4_SLICE R36C52/DI4_SLICE
+net _n155 R36C52/F5_SLICE R36C52/DI5_SLICE
+net _n158 R31C47/F4_SLICE R31C47/C5
+net _n161 R31C47/F5_SLICE R36C51/B4 R36C51/B5 R36C48/B2 R36C48/B3 R33C49/B4 R33C49/B5 R35C47/B0 R35C47/B1 R35C48/B6 R35C48/B7 R35C53/B0 R35C53/B1 R35C52/B2 R35C52/B3 R36C52/C0 R36C52/C1
+sinks _n161 R6C41/B2 R6C41/B3 R6C41/B0 R6C41/B1 R8C41/B4 R8C41/B5 R8C42/B6 R8C42/B7 R6C42/B6 R6C42/B7 R8C42/B2 R8C42/B3 R8C42/B4 R8C42/B5 R6C43/B2 R6C43/B3
+sinks _n161 R6C43/B4 R6C43/B5 R8C43/B2 R8C43/B3 R8C43/B4 R8C43/B5 R6C44/B6 R6C44/B7 R8C44/B6 R8C44/B7 R6C44/B0 R6C44/B1 R8C44/B0 R8C44/B1 R7C46/B6 R7C46/B7
+sinks _n161 R15C35/B2 R15C35/B3 R15C35/B6 R15C35/B7 R15C35/B4 R15C35/B5 R15C36/B6 R15C36/B7 R15C36/B4 R15C36/B5 R15C36/B2 R15C36/B3 R16C37/B0 R16C37/B1 R16C42/B4 R16C42/B5
+net acc[27] R6C44/Q1_SLICE R25C45/A4 R6C44/A1 R7C44/A5
+net acc[30] R7C46/Q6_SLICE R25C45/B4 R25C45/B5 R37C45/B6 R37C45/D7 R37C49/D5 R37C49/D1 R38C48/D5 R38C49/D7 R38C49/D5 R38C48/D3 R38C48/D1 R7C46/A6 R7C45/A0
+net _n171 R25C45/F4_SLICE R37C49/A4 R37C49/A0 R38C48/A4 R38C49/A6 R38C49/A4 R38C48/A2 R38C48/A0 R40C51/A2 R40C51/A3 R39C50/A6 R39C50/A7 R39C48/A2 R39C48/A3 R39C48/A6 R39C48/A7 R39C47/A2
+sinks _n171 R39C47/A3 R41C49/A4 R41C49/A5 R41C48/A6 R41C48/A7 R41C47/A0 R41C47/A1 R42C47/A4 R42C47/A5 R42C48/A4 R42C48/A5 R42C48/A0 R42C48/A1 R43C47/A6 R43C47/A7 R44C47/A6
+sinks _n171 R44C47/A7 R42C48/A2 R42C48/A3 R44C49/A6 R44C49/A7 R44C49/A0 R44C49/A1 R44C50/A0 R44C50/A1 R42C49/A2 R42C49/A3 R42C50/A0 R42C50/A1 R44C51/A4 R44C51/A5 R41C51/A6
+sinks _n171 R41C51/A7 R41C52/A2 R41C52/A3 R41C52/A0 R41C52/A1 R42C53/A2 R42C53/A3 R44C51/A2 R44C51/A3 R43C53/A0 R43C53/A1 R44C52/A0 R44C52/A1 R44C53/A4 R44C53/A5 R44C53/A6
+sinks _n171 R44C53/A2 R44C52/A2 R42C53/A1 R42C52/A5 R43C52/A1 R41C51/A3 R43C51/A7 R41C50/A6 R43C50/A3 R42C50/A3 R42C49/A0 R43C50/A0 R44C46/A4 R42C47/A0 R42C45/A3 R41C47/A7
+sinks _n171 R40C48/A1 R40C49/A0 R39C50/A0 R38C50/A0 R38C51/A3 R37C50/A0 R37C51/A2
+net acc[28] R8C44/Q0_SLICE R25C45/A5 R8C44/A0 R7C44/A6
+net _n172 R25C45/F5_SLICE R37C49/B4 R37C49/B0 R38C48/B4 R38C49/B6 R38C49/B4 R38C48/B2 R38C48/B0 R40C51/B2 R40C51/B3 R39C50/B6 R39C50/B7 R39C48/B2 R39C48/B3 R39C48/B6 R39C48/B7 R39C47/B2
+sinks _n172 R39C47/B3 R41C49/B4 R41C49/B5 R41C48/B6 R41C48/B7 R41C47/B0 R41C47/B1 R42C47/B4 R42C47/B5 R42C48/B4 R42C48/B5 R42C48/B0 R42C48/B1 R43C47/B6 R43C47/B7 R44C47/B6
+sinks _n172 R44C47/B7 R42C48/B2 R42C48/B3 R44C49/B6 R44C49/B7 R44C49/B0 R44C49/B1 R44C50/B0 R44C50/B1 R42C49/B2 R42C49/B3 R42C50/B0 R42C50/B1 R44C51/B4 R44C51/B5 R41C51/B6
+sinks _n172 R41C51/B7 R41C52/B2 R41C52/B3 R41C52/B0 R41C52/B1 R42C53/B2 R42C53/B3 R44C51/B2 R44C51/B3 R43C53/B0 R43C53/B1 R44C52/B0 R44C52/B1 R44C53/B4 R44C53/B5 R44C53/B6
+sinks _n172 R44C53/B2 R44C52/B2 R42C53/B1 R42C52/B5 R43C52/B1 R41C51/B3 R43C51/B7 R41C50/B6 R43C50/B3 R42C50/B3 R42C49/B0 R43C50/B0 R44C46/B4 R42C47/B0 R42C45/B3 R41C47/B7
+sinks _n172 R40C48/B1 R40C49/B0 R39C50/B0 R38C50/B0 R38C51/B3 R37C50/B0 R37C51/B2
+net acc[29] R8C44/Q1_SLICE R37C45/A6 R8C44/A1 R7C44/A7
+net _n173 R37C45/F6_SLICE R37C49/C4 R37C49/C0 R38C48/C4 R38C49/C6 R38C49/C4 R38C48/C2 R38C48/C0 R40C51/C2 R40C51/C3 R39C50/C6 R39C50/C7 R39C48/C2 R39C48/C3 R39C48/C6 R39C48/C7 R39C47/C2
+sinks _n173 R39C47/C3 R41C49/C4 R41C49/C5 R41C48/C6 R41C48/C7 R41C47/C0 R41C47/C1 R42C47/C4 R42C47/C5 R42C48/C4 R42C48/C5 R42C48/C0 R42C48/C1 R43C47/C6 R43C47/C7 R44C47/C6
+sinks _n173 R44C47/C7 R42C48/C2 R42C48/C3 R44C49/C6 R44C49/C7 R44C49/C0 R44C49/C1 R44C50/C0 R44C50/C1 R42C49/C2 R42C49/C3 R42C50/C0 R42C50/C1 R44C51/C4 R44C51/C5 R41C51/C6
+sinks _n173 R41C51/C7 R41C52/C2 R41C52/C3 R41C52/C0 R41C52/C1 R42C53/C2 R42C53/C3 R44C51/C2 R44C51/C3 R43C53/C0 R43C53/C1 R44C52/C0 R44C52/C1 R44C53/C4 R44C53/C5 R44C53/C6
+sinks _n173 R44C53/C2 R44C52/C2 R42C53/C1 R42C52/C5 R43C52/C1 R41C51/C3 R43C51/C7 R41C50/C6 R43C50/C3 R42C50/C3 R42C49/C0 R43C50/C0 R44C46/C4 R42C47/C0 R42C45/C3 R41C47/C7
+sinks _n173 R40C48/C1 R40C49/C0 R39C50/C0 R38C50/C0 R38C51/C3 R37C50/C0 R37C51/C2
+net acc[24] R8C44/Q6_SLICE R37C45/A7 R37C49/A5 R37C49/A1 R38C48/A5 R38C49/A7 R38C49/A5 R38C48/A3 R38C48/A1 R8C44/A6 R7C44/A2
+net acc[25] R8C44/Q7_SLICE R37C45/B7 R37C49/B5 R37C49/B1 R38C48/B5 R38C49/B7 R38C49/B5 R38C48/B3 R38C48/B1 R8C44/A7 R7C44/A3
+net acc[26] R6C44/Q0_SLICE R37C45/C7 R37C49/C5 R37C49/C1 R38C48/C5 R38C49/C7 R38C49/C5 R38C48/C3 R38C48/C1 R6C44/A0 R7C44/A4
+net _n178 R37C45/F7_SLICE R37C49/D4 R40C51/D3 R39C47/D3 R42C47/D5 R44C47/D7 R44C50/D1 R41C51/D7 R44C51/D3 R43C52/D1 R42C49/D0 R42C45/D3 R39C50/D0 R37C51/D2
+net _n184 R37C49/F4_SLICE R37C49/A6 R37C49/A7 R36C50/A4 R37C50/A2 R36C49/B6
+net _n186 R37C49/F5_SLICE R37C49/D0 R39C50/D6 R41C49/D4 R42C48/D4 R42C48/D2 R42C49/D2 R41C52/D2 R43C53/D0 R42C50/D3 R42C47/D0 R37C50/D0
+net _n189 R37C49/F0_SLICE R37C50/A6 R37C49/B6 R37C50/A4
+net _n191 R37C49/F1_SLICE R38C48/D4 R39C50/D7 R41C49/D5 R42C48/D5 R42C48/D3 R42C49/D3 R41C52/D3 R43C53/D1 R44C53/D2 R43C50/D3 R38C51/D3
+net _n194 R38C48/F4_SLICE R38C50/A5 R37C49/A2 R37C49/A3 R37C50/A3 R37C50/B4
+net _n196 R38C48/F5_SLICE R38C49/D6 R39C48/D2 R41C48/D6 R42C48/D0 R44C49/D6 R42C50/D0 R41C52/D0 R44C52/D0 R40C49/D0 R38C50/D0
+net _n199 R38C49/F6_SLICE R38C49/A1 R38C50/A1 R38C50/A7 R38C50/A4 R37C50/A1
+net _n200 R38C49/F7_SLICE R38C49/D4 R39C48/D3 R41C48/D7 R42C48/D1 R44C49/D7 R42C50/D1 R41C52/D1 R44C52/D1 R44C53/D6 R42C52/D5 R41C50/D6 R41C47/D7
+net _n203 R38C49/F4_SLICE R38C50/A2 R38C50/A3 R38C49/A0 R38C49/B1 R38C50/B1 R38C50/A6 R38C50/B7 R38C51/A2 R38C50/B4 R38C50/B5 R37C49/B2 R37C49/B3 R38C51/A4 R38C51/A5
+net _n204 R38C49/F5_SLICE R38C48/D2 R39C48/D6 R41C47/D0 R43C47/D6 R44C49/D0 R44C51/D4 R42C53/D2 R44C53/D4 R42C53/D1 R43C51/D7 R44C46/D4 R40C48/D1
+net _n207 R38C48/F2_SLICE R39C50/A2 R39C50/A3 R38C49/A2 R38C49/A3 R39C51/A0 R39C51/A1 R38C50/B2 R38C50/B3 R38C49/B0 R38C49/C1 R38C50/C1 R38C50/B6 R38C50/C7 R38C51/B2
+net _n208 R38C48/F3_SLICE R38C48/D0 R39C48/D7 R41C47/D1 R43C47/D7 R44C49/D1 R44C51/D5 R42C53/D3 R44C53/D5 R44C52/D2 R41C51/D3
+net _n211 R38C48/F0_SLICE R39C49/A1 R39C50/A4 R39C50/A5 R40C50/A6 R40C50/A7 R39C50/B2 R39C50/B3 R38C49/B2 R38C49/B3 R39C51/B0 R39C51/B1 R38C50/C2 R38C50/C3 R38C49/C0
+net _n212 R38C48/F1_SLICE R40C51/D2 R39C47/D2 R42C47/D4 R44C47/D6 R44C50/D0 R41C51/D6 R44C51/D2 R43C50/D0
+net _n215 R40C51/F2_SLICE R40C50/A0 R40C50/A1 R39C49/A0 R39C49/B1 R39C50/B4 R39C50/B5 R40C50/B6 R40C50/B7 R39C50/C2 R39C50/C3 R38C49/C2 R38C49/C3 R39C51/C0 R39C51/C1
+net _n218 R40C51/F3_SLICE R40C50/A5 R40C50/B0 R40C50/B1 R40C50/C6 R40C50/C7
+net _n221 R39C50/F6_SLICE R39C49/A2 R39C49/A3 R40C50/A2 R40C50/A3 R40C50/A4 R40C50/B5 R39C50/A1 R39C49/A6 R39C49/A7 R39C49/A4 R39C49/A5 R40C50/C0 R40C50/C1 R39C49/B0
+net _n224 R39C50/F7_SLICE R40C49/A3 R40C49/A6 R40C49/A7 R39C49/B2 R39C49/B3 R40C50/B2 R40C50/B3 R40C50/B4 R40C50/C5 R39C50/B1 R39C49/B6 R39C49/B7 R39C49/B4 R39C49/B5
+net _n227 R39C48/F2_SLICE R39C48/A1 R39C48/A5 R40C49/B3 R40C49/B7
+net _n230 R39C48/F3_SLICE R40C48/A5 R40C48/A2 R40C48/A3 R40C49/A4 R40C49/A5 R40C49/A1 R39C48/A0 R39C48/B1 R39C48/A4 R39C48/B5 R40C49/A2 R40C49/C3 R40C49/B6 R40C49/C7
+net _n233 R39C48/F6_SLICE R40C48/B2 R40C48/B3 R39C48/C1 R39C48/C5
+net _n236 R39C48/F7_SLICE R40C47/A5 R39C47/A0 R39C47/A1 R39C47/A4 R39C47/A5 R40C48/A0 R40C48/A6 R40C48/A7 R40C48/A4 R40C48/B5 R40C48/C2 R40C48/C3 R40C49/B4 R40C49/B5
+net _n239 R39C47/F2_SLICE R40C47/A0 R40C47/A1 R40C47/A6 R40C47/A7 R40C47/A4 R40C47/B5 R39C47/B0 R39C47/B1 R39C47/B4 R39C47/B5 R40C48/B0 R40C48/B6 R40C48/B7 R40C48/B4
+net _n241 R39C47/F3_SLICE R41C48/A5 R41C48/A2 R41C48/A3 R40C47/B0 R40C47/B1 R40C47/B6 R40C47/B7 R40C47/B4 R40C47/C5 R39C47/C0 R39C47/C1 R39C47/C4 R39C47/C5 R40C48/C0
+net _n243 R41C49/F4_SLICE R40C47/A3 R40C46/A0 R40C46/A1 R40C46/A6 R40C46/A7 R41C48/A4 R41C48/B5 R41C48/B2 R41C48/B3 R40C47/C0 R40C47/C1 R40C47/C6 R40C47/C7 R40C47/C4
+net _n245 R41C49/F5_SLICE R40C46/A2 R40C46/A3 R40C46/A4 R40C46/A5 R40C47/A2 R40C47/B3 R40C46/B0 R40C46/B1 R40C46/B6 R40C46/B7 R41C48/B4 R41C48/C5 R41C48/C2 R41C48/C3
+net _n247 R41C48/F6_SLICE R41C47/A3 R41C47/A4 R41C47/A5 R40C46/B2 R40C46/B3 R40C46/B4 R40C46/B5 R40C47/B2 R40C47/C3 R40C46/C0 R40C46/C1 R40C46/C6 R40C46/C7 R41C48/C4
+net _n249 R41C48/F7_SLICE R41C47/A6 R41C46/A1 R41C47/B5 R40C46/C5 R40C47/C2
+net _n251 R41C47/F0_SLICE R41C45/A1 R41C45/A2 R41C45/A3 R41C46/A6 R41C46/A7 R41C47/B6 R41C46/A2 R41C46/A3 R41C46/A0 R41C46/B1 R41C47/A2 R41C47/B3 R41C47/B4 R41C47/C5
+net _n253 R41C47/F1_SLICE R42C47/A2 R42C47/A3 R41C45/A0 R41C45/B1 R41C45/B2 R41C45/B3 R41C46/B6 R41C46/B7 R41C47/C6 R41C46/B2 R41C46/B3 R41C46/B0 R41C46/C1 R41C47/B2
+net _n255 R42C47/F4_SLICE R42C46/A7 R42C46/A0 R42C46/A1 R41C46/A4 R41C46/A5 R42C47/B2 R42C47/B3 R41C45/B0 R41C45/C1 R41C45/C2 R41C45/C3 R41C46/C6 R41C46/C7 R41C47/C2
+net _n257 R42C47/F5_SLICE R42C45/A4 R42C45/A5 R42C47/C2 R42C47/C3
+net _n259 R42C48/F4_SLICE R42C47/A7 R42C45/A2 R42C45/A0 R42C46/B7 R42C46/B1
+net _n261 R42C48/F5_SLICE R42C46/A2 R42C46/A3 R42C46/A4 R42C46/A5 R42C47/A6 R42C47/B7 R42C47/A1 R42C45/B2 R42C45/B4 R42C45/B5 R42C45/B0 R42C45/A1 R42C46/A6
+net _n263 R42C48/F0_SLICE R43C46/A3 R43C45/A0 R43C45/A1 R43C46/A6 R43C46/A7 R42C46/B2 R42C46/B3 R42C46/B4 R42C46/B5 R42C47/B6 R42C47/C7 R42C47/B1 R42C45/C2
+net _n265 R42C48/F1_SLICE R43C47/A2 R43C47/A3 R43C46/A2 R43C46/B3 R43C45/B0 R43C45/B1 R43C46/B6 R43C46/B7 R42C46/C2 R42C46/C3 R42C46/C4 R42C46/C5 R42C47/C6
+net _n267 R43C47/F6_SLICE R44C46/A1 R44C47/A0 R43C46/B2 R43C45/C1 R43C46/C6
+net _n269 R43C47/F7_SLICE R43C47/A5 R43C46/A0 R43C46/A1 R43C46/A4 R43C46/A5 R44C46/A5 R44C46/A0 R44C46/B1 R44C47/B0 R44C47/A1 R43C47/B2 R43C47/B3 R43C46/C2
+net _n271 R44C47/F6_SLICE R43C47/A0 R43C47/A1 R43C47/A4 R43C47/B5 R43C46/B0 R43C46/B1 R43C46/B4 R43C46/B5 R44C46/B5 R44C46/B0 R44C46/C1 R44C47/C0 R44C47/B1
+net _n272 R44C47/F7_SLICE R44C48/A5 R44C47/A4 R44C47/A5 R44C47/A2 R44C47/A3 R43C47/B0 R43C47/B1 R43C47/B4 R43C47/C5 R43C46/C0 R43C46/C1 R43C46/C4 R43C46/C5
+net _n273 R42C48/F2_SLICE R43C48/A0 R43C48/A1 R43C48/A4 R43C48/A5 R44C48/A4 R44C48/B5 R44C47/B4 R44C47/B5 R44C47/B2 R44C47/B3 R43C47/C0 R43C47/C1 R43C47/C4
+net _n274 R42C48/F3_SLICE R44C48/A7 R43C48/A6 R43C48/A7 R43C48/B0 R43C48/B1 R43C48/B4 R43C48/B5 R44C48/B4 R44C48/C5 R44C47/C4 R44C47/C5 R44C47/C2 R44C47/C3
+net _n275 R44C49/F6_SLICE R44C48/A2 R44C48/A3 R44C49/A2 R44C49/A3 R44C48/A6 R44C48/B7 R43C48/B6 R43C48/B7 R43C48/C0 R43C48/C1 R43C48/C4 R43C48/C5 R44C48/C4
+net _n276 R44C49/F7_SLICE R43C49/A3 R43C48/A2 R43C48/A3 R44C48/A0 R44C48/A1 R44C48/B2 R44C48/B3 R44C49/B2 R44C49/B3 R44C48/B6 R44C48/C7 R43C48/C6 R43C48/C7
+net _n277 R44C49/F0_SLICE R43C49/A6 R43C49/A7 R43C49/A2 R43C49/B3 R43C48/B2 R43C48/B3 R44C48/B0 R44C48/B1 R44C48/C2 R44C48/C3 R44C49/C2 R44C49/C3 R44C48/C6
+net _n278 R44C49/F1_SLICE R44C50/A2 R44C50/A3 R44C49/A4 R44C49/A5 R43C49/B6 R43C49/B7 R43C49/B2 R43C49/C3 R43C48/C2 R43C48/C3 R44C48/C0 R44C48/C1 R44C48/D6
+net _n279 R44C50/F0_SLICE R44C50/B2 R44C49/B4 R43C49/C2
+net _n280 R44C50/F1_SLICE R43C50/A1 R43C49/A0 R44C50/C2 R44C50/B3 R44C49/C4
+net _n281 R42C49/F2_SLICE R42C49/A7 R42C49/A1 R43C49/A4 R43C49/A5 R43C49/B0
+net _n282 R42C49/F3_SLICE R43C50/A6 R42C49/B7 R43C49/B4
+net _n283 R42C50/F0_SLICE R42C50/A4 R42C50/A5 R43C50/A2 R43C50/A4 R43C50/A5 R43C50/B6 R43C50/A7 R42C50/A2 R42C50/A6 R42C50/A7 R42C49/A6 R42C49/C7
+net _n284 R42C50/F1_SLICE R42C51/A5 R42C50/B4 R43C50/B7
+net _n285 R44C51/F4_SLICE R43C51/A5 R41C50/A7 R41C50/A1 R42C50/B5
+net _n286 R44C51/F5_SLICE R42C51/A2 R43C51/A6 R43C51/A0 R43C51/A1 R43C51/B5
+net _n287 R41C51/F6_SLICE R42C51/A1 R41C51/A4 R41C51/A5 R41C51/A2 R42C51/B2 R42C51/A3 R43C51/B6 R43C51/B0 R43C51/B1 R43C51/A4 R43C51/C5 R42C51/A4
+net _n288 R41C51/F7_SLICE R43C51/A2 R43C51/A3 R41C51/B4 R42C51/B3 R43C51/C6
+net _n289 R41C52/F2_SLICE R42C51/A6 R42C51/A7 R43C52/A0 R43C52/A2 R43C52/A3 R43C51/B2 R43C51/B3 R42C51/A0 R42C51/B1 R41C51/C4 R41C51/B5 R41C51/B2
+net _n290 R41C52/F3_SLICE R42C52/A0 R42C52/A1 R42C52/A6 R42C52/A7 R42C51/B6 R42C51/B7 R43C52/B0 R43C52/B2 R43C52/B3 R43C51/C2 R43C51/C3 R42C51/B0
+net _n291 R41C52/F0_SLICE R43C52/A5 R43C52/A6 R43C52/A7 R42C52/B0 R42C52/B1 R42C52/B6 R42C52/B7 R42C51/C6 R42C51/C7 R43C52/C0 R43C51/D3 R42C51/C0
+net _n292 R41C52/F1_SLICE R42C52/A2 R43C52/A4 R43C52/B5
+net _n293 R42C53/F2_SLICE R42C53/A0 R42C53/A4 R42C52/A4 R42C52/A3
+net _n294 R42C53/F3_SLICE R43C53/A2 R42C52/B2
+net _n295 R44C51/F2_SLICE R43C53/A5 R44C52/A6 R44C52/A7 R44C52/A3 R43C53/B2 R43C53/A3 R42C53/B0 R42C53/B4 R42C53/A5 R42C52/B4
+net _n296 R44C51/F3_SLICE R44C53/A1 R43C53/A6 R43C53/A7 R43C53/A4 R43C53/B5 R44C52/B6 R44C52/B7 R44C52/B3 R43C53/C2 R43C53/B3
+net _n297 R43C53/F0_SLICE R44C53/A0 R44C53/B1 R43C53/B6 R43C53/B7 R43C53/B4 R43C53/C5 R44C52/C6 R44C52/C7 R43C53/D2 R43C53/C3
+net _n298 R43C53/F1_SLICE R43C53/C4
+net _n299 R44C52/F0_SLICE R44C53/A7 R44C54/A4 R44C54/A5 R44C53/A3 R44C52/A4 R44C52/A5 R44C53/B0
+net _n300 R44C52/F1_SLICE R44C53/B7 R44C52/B4 R44C52/B5
+net _n301 R44C53/F4_SLICE R44C53/C7 R44C54/B4 R44C54/B5 R44C53/B3 R44C52/C4 R44C52/C5
+net _n302 R44C53/F5_SLICE R44C53/D7 R44C54/C4 R44C54/C5
+net _n309 R44C53/F6_SLICE R44C54/D4 R44C54/D5 R44C53/C3 R44C53/C0
+net _n314 R44C53/F7_SLICE R44C53/C1
+net _n318 R44C54/F4_SLICE R43C53/C7
+net _n319 R44C54/F5_SLICE R43C53/D4
+net _n322 R44C53/F2_SLICE R44C53/D3 R44C52/D4 R44C52/D5 R44C53/D0 R44C53/D1 R43C53/D7
+net _n324 R44C53/F3_SLICE R43C53/C6 R43C53/D5
+net _n328 R44C52/F4_SLICE R44C52/D6
+net _n329 R44C52/F5_SLICE R44C52/D7
+net _n333 R44C53/F0_SLICE R44C52/C3
+net _n338 R44C53/F1_SLICE R42C53/C0
+net _n339 R43C53/F6_SLICE R42C52/C4
+net _n342 R43C53/F7_SLICE R42C53/C4
+net _n343 R43C53/F4_SLICE R42C53/B5
+net _n349 R43C53/F5_SLICE R42C52/C2
+net _n354 R44C52/F6_SLICE R42C52/B3
+net _n355 R44C52/F7_SLICE R43C52/B4
+net _n359 R44C52/F2_SLICE R44C52/D3 R43C53/D3 R42C53/D0 R42C53/D4 R42C53/C5 R42C52/D4 R42C52/C3 R43C52/C4
+net _n362 R44C52/F3_SLICE R43C52/C5
+net _n368 R43C53/F2_SLICE R43C52/B6
+net _n369 R43C53/F3_SLICE R43C52/B7
+net _n370 R42C53/F0_SLICE R42C52/C0
+net _n371 R42C53/F1_SLICE R42C53/D5 R42C52/D2 R43C52/D4 R43C52/D5 R43C52/C6 R43C52/C7
+net _n374 R42C53/F4_SLICE R42C52/C1
+net _n375 R42C53/F5_SLICE R42C52/C6
+net _n378 R42C52/F4_SLICE R42C52/C7
+net _n381 R42C52/F5_SLICE R42C52/D3 R43C52/D6 R43C52/D7 R42C52/D0 R42C52/D1 R42C52/D6 R42C52/D7
+net _n383 R42C52/F2_SLICE R42C51/D6
+net _n387 R42C52/F3_SLICE R42C51/D7
+net _n388 R43C52/F4_SLICE R43C52/D0
+net _n395 R43C52/F5_SLICE R43C52/C2
+net _n401 R43C52/F6_SLICE R43C52/C3
+net _n402 R43C52/F7_SLICE R43C51/D2
+net _n404 R42C52/F0_SLICE R42C51/C1
+net _n407 R42C52/F1_SLICE R41C51/D4
+net _n408 R42C52/F6_SLICE R41C51/C5
+net _n411 R42C52/F7_SLICE R41C51/C2
+net _n418 R42C51/F6_SLICE R42C51/C2
+net _n422 R42C51/F7_SLICE R42C51/C3
+net _n423 R43C52/F0_SLICE R43C51/D6
+net _n429 R43C52/F1_SLICE R43C52/D2 R43C52/D3 R42C51/D0 R42C51/D1 R41C51/D5 R41C51/D2 R42C51/D2
+net _n432 R43C52/F2_SLICE R43C51/C0
+net _n438 R43C52/F3_SLICE R43C51/C1
+net _n439 R43C51/F2_SLICE R43C51/B4
+net _n440 R43C51/F3_SLICE R43C51/D5
+net _n441 R42C51/F0_SLICE R42C51/B4
+net _n442 R42C51/F1_SLICE R42C51/B5
+net _n446 R41C51/F4_SLICE R41C50/B7
+net _n447 R41C51/F5_SLICE R41C50/A0
+net _n450 R41C51/F2_SLICE R41C50/B1
+net _n455 R41C51/F3_SLICE R42C51/D3 R43C51/C4 R42C51/C4 R42C51/C5 R41C50/C7 R41C50/B0 R41C50/C1
+net _n457 R42C51/F2_SLICE R42C50/C4
+net _n461 R42C51/F3_SLICE R42C50/C5
+net _n462 R43C51/F6_SLICE R43C50/B2
+net _n468 R43C51/F7_SLICE R43C51/D0 R43C51/D1 R43C51/D4 R42C51/D4 R42C51/D5 R41C50/C0 R42C50/D4 R43C50/C2
+net _n471 R43C51/F0_SLICE R43C50/B4
+net _n477 R43C51/F1_SLICE R43C50/B5
+net _n478 R43C51/F4_SLICE R43C50/C6
+net _n479 R43C51/F5_SLICE R43C50/C7
+net _n480 R42C51/F4_SLICE R42C50/B2
+net _n481 R42C51/F5_SLICE R42C50/B6
+net _n483 R41C50/F6_SLICE R41C50/D7 R41C50/D0 R41C50/D1 R42C50/D5 R43C50/D2 R43C50/C4 R43C50/C5 R43C50/D6 R42C50/C2
+net _n485 R41C50/F7_SLICE R42C50/B7
+net _n486 R41C50/F0_SLICE R42C49/B6
+net _n489 R41C50/F1_SLICE R42C49/D7
+net _n496 R42C50/F4_SLICE R42C49/B1
+net _n500 R42C50/F5_SLICE R43C49/C4
+net _n501 R43C50/F2_SLICE R43C49/B5
+net _n507 R43C50/F3_SLICE R43C50/D4 R43C50/D5 R43C50/D7 R42C50/D2 R42C50/C6 R42C50/C7 R42C49/C6 R42C49/C1 R43C49/C5
+net _n510 R43C50/F4_SLICE R43C50/B1
+net _n516 R43C50/F5_SLICE R43C49/C0
+net _n517 R43C50/F6_SLICE R43C49/A1
+net _n518 R43C50/F7_SLICE R44C50/A4
+net _n519 R42C50/F2_SLICE R44C50/A5
+net _n520 R42C50/F3_SLICE R42C50/D6 R42C50/D7 R42C49/D6 R43C50/C1 R43C49/B1 R44C50/B4 R44C50/B5
+net _n521 R42C50/F6_SLICE R44C50/D2
+net _n524 R42C50/F7_SLICE R44C50/C3
+net _n525 R42C49/F6_SLICE R44C49/D4
+net _n528 R42C49/F7_SLICE R44C49/B5
+net _n534 R42C49/F0_SLICE R42C49/D1 R43C49/D4 R43C49/D5 R43C49/C1 R44C50/C4 R44C50/C5 R44C49/C5
+net _n535 R42C49/F1_SLICE R43C49/C6
+net _n539 R43C49/F4_SLICE R43C49/C7
+net _n540 R43C49/F5_SLICE R43C49/D2
+net _n547 R43C50/F0_SLICE R43C50/D1 R43C49/D0 R43C49/D1 R44C50/D4 R44C50/D5 R44C50/D3 R44C49/D5 R43C49/D6 R43C49/D7
+net _n549 R43C50/F1_SLICE R43C49/D3
+net _n555 R43C49/F0_SLICE R43C48/D2
+net _n556 R43C49/F1_SLICE R43C48/D3
+net _n557 R44C50/F4_SLICE R44C48/D0
+net _n558 R44C50/F5_SLICE R44C48/D1
+net _n559 R44C50/F2_SLICE R44C48/D2
+net _n563 R44C50/F3_SLICE R44C48/D3
+net _n564 R44C49/F4_SLICE R44C49/D2
+net _n567 R44C49/F5_SLICE R44C49/D3
+net _n574 R43C49/F6_SLICE R44C48/D7
+net _n578 R43C49/F7_SLICE R43C48/D6
+net _n579 R43C49/F2_SLICE R43C48/D7
+net _n588 R43C49/F3_SLICE R43C48/D0
+net _n595 R43C48/F2_SLICE R43C48/D1
+net _n596 R43C48/F3_SLICE R43C48/D4
+net _n597 R44C48/F0_SLICE R43C48/D5
+net _n598 R44C48/F1_SLICE R44C48/D4
+net _n601 R44C48/F2_SLICE R44C48/D5
+net _n604 R44C48/F3_SLICE R44C47/D4
+net _n605 R44C49/F2_SLICE R44C47/D5
+net _n608 R44C49/F3_SLICE R44C47/D2
+net _n613 R44C48/F6_SLICE R44C47/D3
+net _n616 R44C48/F7_SLICE R43C47/D0
+net _n620 R43C48/F6_SLICE R43C47/D1
+net _n621 R43C48/F7_SLICE R43C47/D4
+net _n631 R43C48/F0_SLICE R43C47/D5
+net _n637 R43C48/F1_SLICE R43C46/D0
+net _n638 R43C48/F4_SLICE R43C46/D1
+net _n639 R43C48/F5_SLICE R43C46/D4
+net _n640 R44C48/F4_SLICE R43C46/D5
+net _n643 R44C48/F5_SLICE R44C46/C5
+net _n646 R44C47/F4_SLICE R44C46/C0
+net _n647 R44C47/F5_SLICE R44C46/D1
+net _n650 R44C47/F2_SLICE R44C47/D0
+net _n655 R44C47/F3_SLICE R44C47/C1
+net _n658 R43C47/F0_SLICE R43C47/C2
+net _n662 R43C47/F1_SLICE R43C47/C3
+net _n663 R43C47/F4_SLICE R43C46/D2
+net _n673 R43C47/F5_SLICE R43C46/C3
+net _n679 R43C46/F0_SLICE R43C45/C0
+net _n680 R43C46/F1_SLICE R43C45/D1
+net _n681 R43C46/F4_SLICE R43C46/D6
+net _n682 R43C46/F5_SLICE R43C46/C7
+net _n684 R44C46/F4_SLICE R44C46/D5 R44C46/D0 R44C47/D1 R43C47/D2 R43C47/D3 R43C46/D3 R43C45/D0 R43C46/D7
+net _n685 R44C46/F5_SLICE R42C46/D2
+net _n688 R44C46/F0_SLICE R42C46/D3
+net _n689 R44C46/F1_SLICE R42C46/D4
+net _n692 R44C47/F0_SLICE R42C46/D5
+net _n697 R44C47/F1_SLICE R42C47/D6
+net _n700 R43C47/F2_SLICE R42C47/D7
+net _n704 R43C47/F3_SLICE R42C47/C1
+net _n705 R43C46/F2_SLICE R42C45/D2
+net _n715 R43C46/F3_SLICE R42C45/C4
+net _n721 R43C45/F0_SLICE R42C45/C5
+net _n722 R43C45/F1_SLICE R42C45/C0
+net _n723 R43C46/F6_SLICE R42C45/B1
+net _n724 R43C46/F7_SLICE R42C46/B6
+net _n726 R42C46/F2_SLICE R42C46/C7
+net _n730 R42C46/F3_SLICE R42C46/B0
+net _n731 R42C46/F4_SLICE R42C46/C1
+net _n734 R42C46/F5_SLICE R41C46/B4
+net _n739 R42C47/F6_SLICE R41C46/B5
+net _n741 R42C47/F7_SLICE R42C47/D2
+net _n742 R42C47/F0_SLICE R42C47/D1 R42C45/D4 R42C45/D5 R42C45/C1 R42C46/C6 R42C46/C0 R41C46/C4 R41C46/C5
+net _n746 R42C47/F1_SLICE R42C47/D3
+net _n747 R42C45/F2_SLICE R41C45/C0
+net _n754 R42C45/F3_SLICE R42C45/D0 R42C45/D1 R42C46/D6 R42C46/D7 R42C46/D0 R42C46/D1 R41C46/D4 R41C46/D5 R41C45/D0
+net _n757 R42C45/F4_SLICE R41C45/D1
+net _n763 R42C45/F5_SLICE R41C45/D2
+net _n764 R42C45/F0_SLICE R41C45/D3
+net _n765 R42C45/F1_SLICE R41C46/D6
+net _n766 R42C46/F6_SLICE R41C46/D7
+net _n769 R42C46/F7_SLICE R41C47/D6
+net _n772 R42C46/F0_SLICE R41C46/C2
+net _n773 R42C46/F1_SLICE R41C46/C3
+net _n776 R41C46/F4_SLICE R41C46/C0
+net _n781 R41C46/F5_SLICE R41C46/D1
+net _n784 R42C47/F2_SLICE R41C47/C3
+net _n788 R42C47/F3_SLICE R41C47/C4
+net _n789 R41C45/F0_SLICE R41C47/D5
+net _n800 R41C45/F1_SLICE R40C46/C2
+net _n806 R41C45/F2_SLICE R40C46/C3
+net _n807 R41C45/F3_SLICE R40C46/C4
+net _n808 R41C46/F6_SLICE R40C46/D5
+net _n809 R41C46/F7_SLICE R40C47/D2
+net _n812 R41C47/F6_SLICE R40C47/D3
+net _n813 R41C47/F7_SLICE R41C46/D2 R41C46/D3 R41C46/D0 R41C47/D2 R41C47/D3 R41C47/D4 R40C46/D2 R40C46/D3 R40C46/D4
+net _n816 R41C46/F2_SLICE R40C46/D0
+net _n817 R41C46/F3_SLICE R40C46/D1
+net _n820 R41C46/F0_SLICE R40C46/D6
+net _n825 R41C46/F1_SLICE R40C46/D7
+net _n826 R41C47/F2_SLICE R41C48/D4
+net _n829 R41C47/F3_SLICE R41C48/D5
+net _n833 R41C47/F4_SLICE R41C48/D2
+net _n834 R41C47/F5_SLICE R41C48/D3
+net _n845 R40C46/F2_SLICE R40C47/D0
+net _n851 R40C46/F3_SLICE R40C47/D1
+net _n852 R40C46/F4_SLICE R40C47/D6
+net _n853 R40C46/F5_SLICE R40C47/D7
+net _n854 R40C47/F2_SLICE R40C47/D4
+net _n858 R40C47/F3_SLICE R40C47/D5
+net _n861 R40C46/F0_SLICE R39C47/D0
+net _n862 R40C46/F1_SLICE R39C47/D1
+net _n865 R40C46/F6_SLICE R39C47/D4
+net _n870 R40C46/F7_SLICE R39C47/D5
+net _n871 R41C48/F4_SLICE R40C48/D0
+net _n874 R41C48/F5_SLICE R40C48/C6
+net _n878 R41C48/F2_SLICE R40C48/C7
+net _n879 R41C48/F3_SLICE R40C48/C4
+net _n890 R40C47/F0_SLICE R40C48/C5
+net _n896 R40C47/F1_SLICE R40C48/D2
+net _n897 R40C47/F6_SLICE R40C48/D3
+net _n898 R40C47/F7_SLICE R40C49/C4
+net _n899 R40C47/F4_SLICE R40C49/C5
+net _n903 R40C47/F5_SLICE R40C49/B1
+net _n906 R39C47/F0_SLICE R39C48/B0
+net _n907 R39C47/F1_SLICE R39C48/D1
+net _n910 R39C47/F4_SLICE R39C48/B4
+net _n915 R39C47/F5_SLICE R39C48/D5
+net _n916 R40C48/F0_SLICE R40C49/B2
+net _n917 R40C48/F1_SLICE R40C48/D6 R40C48/D7 R40C48/D4 R40C48/D5 R40C49/D4 R40C49/D5 R40C49/C1 R39C48/C0 R39C48/C4 R40C49/C2
+net _n919 R40C48/F6_SLICE R40C49/D3
+net _n923 R40C48/F7_SLICE R40C49/C6
+net _n924 R40C48/F4_SLICE R40C49/D7
+net _n935 R40C48/F5_SLICE R39C49/C2
+net _n941 R40C48/F2_SLICE R39C49/C3
+net _n942 R40C48/F3_SLICE R40C50/C2
+net _n943 R40C49/F4_SLICE R40C50/C3
+net _n944 R40C49/F5_SLICE R40C50/C4
+net _n947 R40C49/F0_SLICE R40C49/D1 R39C48/D0 R39C48/D4 R40C49/D2 R40C49/D6 R39C49/D2 R39C49/D3 R40C50/D2 R40C50/D3 R40C50/D4
+net _n948 R40C49/F1_SLICE R40C50/D5
+net _n951 R39C48/F0_SLICE R39C50/C1
+net _n952 R39C48/F1_SLICE R39C49/C6
+net _n955 R39C48/F4_SLICE R39C49/C7
+net _n960 R39C48/F5_SLICE R39C49/C4
+net _n961 R40C49/F2_SLICE R39C49/C5
+net _n963 R40C49/F3_SLICE R40C50/D0
+net _n968 R40C49/F6_SLICE R40C50/D1
+net _n969 R40C49/F7_SLICE R39C49/C0
+net _n980 R39C49/F2_SLICE R39C49/C1
+net _n986 R39C49/F3_SLICE R39C50/C4
+net _n987 R40C50/F2_SLICE R39C50/C5
+net _n988 R40C50/F3_SLICE R40C50/D6
+net _n989 R40C50/F4_SLICE R40C50/D7
+net _n992 R40C50/F5_SLICE R39C50/D2
+net _n994 R39C50/F0_SLICE R39C50/D1 R39C49/D6 R39C49/D7 R39C49/D4 R39C49/D5 R39C49/D0 R39C49/D1 R39C50/D4 R39C50/D5
+net _n996 R39C50/F1_SLICE R39C50/D3
+net _n997 R39C49/F6_SLICE R38C49/D2
+net _n1000 R39C49/F7_SLICE R38C49/D3
+net _n1005 R39C49/F4_SLICE R39C51/D0
+net _n1006 R39C49/F5_SLICE R39C51/D1
+net _n1009 R40C50/F0_SLICE R38C50/D2
+net _n1013 R40C50/F1_SLICE R38C50/D3
+net _n1014 R39C49/F0_SLICE R38C49/D0
+net _n1024 R39C49/F1_SLICE R38C49/D1
+net _n1031 R39C50/F4_SLICE R38C50/D1
+net _n1032 R39C50/F5_SLICE R38C50/C6
+net _n1033 R40C50/F6_SLICE R38C50/D7
+net _n1034 R40C50/F7_SLICE R38C51/C2
+net _n1037 R39C50/F2_SLICE R38C50/C4
+net _n1041 R39C50/F3_SLICE R38C50/C5
+net _n1042 R38C49/F2_SLICE R37C49/C2
+net _n1045 R38C49/F3_SLICE R37C49/C3
+net _n1050 R39C51/F0_SLICE R38C51/B4
+net _n1051 R39C51/F1_SLICE R38C51/B5
+net _n1054 R38C50/F2_SLICE R37C50/B1
+net _n1058 R38C50/F3_SLICE R37C50/B6
+net _n1059 R38C49/F0_SLICE R37C50/A7
+net _n1069 R38C49/F1_SLICE R36C49/A1
+net _n1070 R38C50/F0_SLICE R38C50/D6 R38C51/D2 R38C50/D5 R37C49/D2 R37C49/D3 R38C51/C4 R38C51/C5 R37C50/C6 R37C50/B7
+net _n1076 R38C50/F1_SLICE R37C50/B3
+net _n1077 R38C50/F6_SLICE R37C50/C4
+net _n1078 R38C50/F7_SLICE R37C50/A5
+net _n1079 R38C51/F2_SLICE R37C51/A4
+net _n1082 R38C51/F3_SLICE R38C50/D4 R38C51/D4 R38C51/D5 R37C50/C1 R37C50/D6 R37C50/C7 R36C49/B1 R37C50/B5 R37C51/B4
+net _n1083 R38C50/F4_SLICE R37C51/A3
+net _n1086 R38C50/F5_SLICE R37C49/C6
+net _n1087 R37C49/F2_SLICE R37C49/B7
+net _n1090 R37C49/F3_SLICE R37C50/B2
+net _n1095 R38C51/F4_SLICE R37C51/A5
+net _n1096 R38C51/F5_SLICE R36C51/A2
+net _n1097 R37C50/F0_SLICE R37C50/D1 R37C50/D7 R37C51/B3 R36C49/C1 R37C49/C7 R37C50/C2 R37C50/C3 R37C50/C5 R37C51/C4 R37C51/B5 R36C51/B2
+net _n1099 R37C50/F1_SLICE R36C49/A0 R36C49/B2
+net _n1103 R37C50/F6_SLICE R36C50/B4 R36C49/C6
+net _n1104 R37C50/F7_SLICE R36C50/A5 R36C49/B7
+net _n1112 R37C51/F2_SLICE R37C51/C3 R36C49/B0 R36C49/D1 R36C50/B5 R37C50/D3 R37C50/D4 R37C50/D5 R37C51/D4 R37C51/C5 R36C51/C2 R36C49/C2 R36C49/C7
+net _n1113 R37C51/F3_SLICE R36C51/B3 R35C49/B2
+net _n1114 R36C49/F0_SLICE R35C49/B3
+net _n1115 R36C49/F1_SLICE R36C49/B3 R35C49/B4
+net _n1116 R37C49/F6_SLICE R36C49/B4 R35C49/B5
+net _n1117 R37C49/F7_SLICE R36C49/B5 R35C49/B6
+net _n1118 R36C50/F4_SLICE R35C49/B7
+net _n1119 R36C50/F5_SLICE R35C50/B0
+net _n1120 R37C50/F2_SLICE R36C50/B2 R35C50/B1
+net _n1121 R37C50/F3_SLICE R36C50/B3 R35C50/B2
+net _n1122 R37C50/F4_SLICE R36C50/B0 R35C50/B3
+net _n1123 R37C50/F5_SLICE R36C50/B1 R35C50/B4
+net _n1124 R37C51/F4_SLICE R35C52/B0 R35C50/B5
+net _n1125 R37C51/F5_SLICE R35C52/B1 R35C50/B6
+net _n1126 R36C51/F2_SLICE R17C46/B0 R35C50/B7
+net acc[31] R7C46/Q7_SLICE R36C51/A3 R36C49/A2 R36C49/A3 R36C49/A4 R36C49/A5 R36C49/A6 R36C49/A7 R36C50/A2 R36C50/A3 R36C50/A0 R36C50/A1 R35C52/A0 R35C52/A1 R17C46/A0 R36C52/B0 R36C52/B1
+sinks acc[31] R7C46/A7 R7C45/A1
+net _n1127 R35C49/F2_SLICE R36C51/C3
+net _n1143 R36C51/F3_SLICE R36C51/C4
+net _n1128 R35C49/F3_SLICE R36C49/D2
+net _n1144 R36C49/F2_SLICE R36C51/C5
+net _n1129 R35C49/F4_SLICE R36C49/C3
+net _n1145 R36C49/F3_SLICE R36C48/C2
+net _n1130 R35C49/F5_SLICE R36C49/C4
+net _n1146 R36C49/F4_SLICE R36C48/C3
+net _n1131 R35C49/F6_SLICE R36C49/C5
+net _n1147 R36C49/F5_SLICE R33C49/C4
+net _n1132 R35C49/F7_SLICE R36C49/D6
+net _n1148 R36C49/F6_SLICE R33C49/C5
+net _n1133 R35C50/F0_SLICE R36C49/D7
+net _n1149 R36C49/F7_SLICE R35C47/C0
+net _n1134 R35C50/F1_SLICE R36C50/C2
+net _n1150 R36C50/F2_SLICE R35C47/C1
+net _n1135 R35C50/F2_SLICE R36C50/C3
+net _n1151 R36C50/F3_SLICE R35C48/C6
+net _n1136 R35C50/F3_SLICE R36C50/C0
+net _n1152 R36C50/F0_SLICE R35C48/C7
+net _n1137 R35C50/F4_SLICE R36C50/C1
+net _n1153 R36C50/F1_SLICE R35C53/C0
+net _n1138 R35C50/F5_SLICE R35C52/C0
+net _n1154 R35C52/F0_SLICE R35C53/C1
+net _n1139 R35C50/F6_SLICE R35C52/C1
+net _n1155 R35C52/F1_SLICE R35C52/C2
+net _n1140 R35C50/F7_SLICE R17C46/C0
+net _n1156 R17C46/F0_SLICE R35C52/C3
+net note[0] R16C42/Q4_SLICE R17C46/A1 R6C42/A2 R6C42/A3 R8C42/A0 R8C42/A1 R8C44/A4 R8C44/A5 R6C42/A4 R6C42/A5 R8C43/A6 R8C43/A7 R6C43/A0 R6C43/A1 R16C42/A4 R17C42/A2
+net note[1] R16C42/Q5_SLICE R17C46/B1 R6C42/B2 R6C42/B3 R8C42/B0 R8C42/B1 R8C44/B4 R8C44/B5 R6C42/B4 R6C42/B5 R8C43/B6 R8C43/B7 R6C43/B0 R6C43/B1 R16C42/A5 R17C42/A3
+net _n1161 R17C46/F1_SLICE R7C43/B1
+net _n1170 R6C42/F2_SLICE R7C42/B2 R7C43/B3 R7C43/B6 R7C44/B2
+net _n1171 R6C42/F3_SLICE R7C41/B2
+net _n1172 R8C42/F0_SLICE R7C41/B3 R7C42/B3 R7C43/B0
+net _n1173 R8C42/F1_SLICE R7C41/B4 R7C42/B0 R7C42/B4 R7C44/B3
+net _n1174 R8C44/F4_SLICE R7C41/B5 R7C44/B4
+net _n1175 R8C44/F5_SLICE R7C41/B6 R7C44/B0
+net _n1176 R6C42/F4_SLICE R7C41/B7 R7C43/B7
+net _n1177 R6C42/F5_SLICE R7C42/B6
+net _n1178 R8C43/F6_SLICE R7C42/B7
+net _n1179 R8C43/F7_SLICE R7C43/B4
+net _n1180 R6C43/F0_SLICE R7C43/B5
+net _n1181 R6C43/F1_SLICE R7C44/B1
+net count[0] R15C35/Q2_SLICE R15C35/A0 R15C35/A2 R16C35/A2
+net count[1] R15C35/Q3_SLICE R15C35/B0 R15C35/A3 R16C35/A3
+net count[2] R15C35/Q6_SLICE R15C35/C0 R15C35/A6 R16C35/A4
+net count[3] R15C35/Q7_SLICE R15C35/D0 R15C35/A7 R16C35/A5
+net _n1220 R15C35/F0_SLICE R15C35/D1
+net count[4] R15C35/Q4_SLICE R15C35/A1 R15C35/A4 R16C35/A6
+net count[5] R15C35/Q5_SLICE R15C35/B1 R15C35/A5 R16C35/A7
+net count[6] R15C36/Q6_SLICE R15C35/C1 R15C36/A6 R16C36/A0
+net _n1226 R15C35/F1_SLICE R15C36/D0
+net count[7] R15C36/Q7_SLICE R15C36/A0 R15C36/A7 R16C36/A1
+net count[8] R15C36/Q4_SLICE R15C36/B0 R15C36/A4 R16C36/A2
+net count[9] R15C36/Q5_SLICE R15C36/C0 R15C36/A5 R16C36/A3
+net _n1232 R15C36/F0_SLICE R15C36/D1
+net count[10] R15C36/Q2_SLICE R15C36/A1 R15C36/A2 R16C36/A4
+net count[11] R15C36/Q3_SLICE R15C36/B1 R15C36/A3 R16C36/A5
+net count[12] R16C37/Q0_SLICE R15C36/C1 R16C37/A0 R16C36/A6
+net _n1238 R15C36/F1_SLICE R16C37/B6 R16C37/B7 R16C37/C1
+net count[13] R16C37/Q1_SLICE R16C37/A6 R16C37/A7 R16C37/A1 R16C36/A7
+net _n1240 R16C37/F6_SLICE R16C42/C4 R16C42/C5
+net _n1257 R16C37/F7_SLICE R15C35/D2 R15C35/D3 R15C35/D6 R15C35/D7 R15C35/D4 R15C35/D5 R15C36/D6 R15C36/D7 R15C36/D4 R15C36/D5 R15C36/D2 R15C36/D3 R16C37/D0
+net _n1274 R36C51/F4_SLICE R36C51/DI4_SLICE
+net _n1275 R36C51/F5_SLICE R36C51/DI5_SLICE
+net _n1276 R36C48/F2_SLICE R36C48/DI2_SLICE
+net _n1277 R36C48/F3_SLICE R36C48/DI3_SLICE
+net _n1278 R33C49/F4_SLICE R33C49/DI4_SLICE
+net _n1279 R33C49/F5_SLICE R33C49/DI5_SLICE
+net _n1280 R35C47/F0_SLICE R35C47/DI0_SLICE
+net _n1281 R35C47/F1_SLICE R35C47/DI1_SLICE
+net _n1282 R35C48/F6_SLICE R35C48/DI6_SLICE
+net _n1283 R35C48/F7_SLICE R35C48/DI7_SLICE
+net _n1284 R35C53/F0_SLICE R35C53/DI0_SLICE
+net _n1285 R35C53/F1_SLICE R35C53/DI1_SLICE
+net _n1286 R35C52/F2_SLICE R35C52/DI2_SLICE
+net _n1287 R35C52/F3_SLICE R35C52/DI3_SLICE
+net _n1141 R35C51/F0_SLICE R36C52/D0
+net _n1288 R36C52/F0_SLICE R36C52/DI0_SLICE
+net _n1142 R35C51/F1_SLICE R36C52/D1
+net _n1289 R36C52/F1_SLICE R36C52/DI1_SLICE
+net acc[0] R6C41/Q2_SLICE R6C41/A2 R7C41/A2
+net _n1182 R7C41/F2_SLICE R6C41/C2
+net _n1290 R6C41/F2_SLICE R6C41/DI2_SLICE
+net acc[1] R6C41/Q3_SLICE R6C41/A3 R7C41/A3
+net _n1183 R7C41/F3_SLICE R6C41/C3
+net _n1291 R6C41/F3_SLICE R6C41/DI3_SLICE
+net acc[2] R6C41/Q0_SLICE R6C41/A0 R7C41/A4
+net _n1184 R7C41/F4_SLICE R6C41/C0
+net _n1292 R6C41/F0_SLICE R6C41/DI0_SLICE
+net acc[3] R6C41/Q1_SLICE R6C41/A1 R7C41/A5
+net _n1185 R7C41/F5_SLICE R6C41/C1
+net _n1293 R6C41/F1_SLICE R6C41/DI1_SLICE
+net acc[4] R8C41/Q4_SLICE R8C41/A4 R7C41/A6
+net _n1186 R7C41/F6_SLICE R8C41/C4
+net _n1294 R8C41/F4_SLICE R8C41/DI4_SLICE
+net acc[5] R8C41/Q5_SLICE R8C41/A5 R7C41/A7
+net _n1187 R7C41/F7_SLICE R8C41/C5
+net _n1295 R8C41/F5_SLICE R8C41/DI5_SLICE
+net acc[6] R8C42/Q6_SLICE R8C42/A6 R7C42/A0
+net _n1188 R7C42/F0_SLICE R8C42/C6
+net _n1296 R8C42/F6_SLICE R8C42/DI6_SLICE
+net acc[7] R8C42/Q7_SLICE R8C42/A7 R7C42/A1
+net _n1189 R7C42/F1_SLICE R8C42/C7
+net _n1297 R8C42/F7_SLICE R8C42/DI7_SLICE
+net acc[8] R6C42/Q6_SLICE R6C42/A6 R7C42/A2
+net _n1190 R7C42/F2_SLICE R6C42/C6
+net _n1298 R6C42/F6_SLICE R6C42/DI6_SLICE
+net acc[9] R6C42/Q7_SLICE R6C42/A7 R7C42/A3
+net _n1191 R7C42/F3_SLICE R6C42/C7
+net _n1299 R6C42/F7_SLICE R6C42/DI7_SLICE
+net acc[10] R8C42/Q2_SLICE R8C42/A2 R7C42/A4
+net _n1192 R7C42/F4_SLICE R8C42/C2
+net _n1300 R8C42/F2_SLICE R8C42/DI2_SLICE
+net acc[11] R8C42/Q3_SLICE R8C42/A3 R7C42/A5
+net _n1193 R7C42/F5_SLICE R8C42/C3
+net _n1301 R8C42/F3_SLICE R8C42/DI3_SLICE
+net acc[12] R8C42/Q4_SLICE R8C42/A4 R7C42/A6
+net _n1194 R7C42/F6_SLICE R8C42/C4
+net _n1302 R8C42/F4_SLICE R8C42/DI4_SLICE
+net acc[13] R8C42/Q5_SLICE R8C42/A5 R7C42/A7
+net _n1195 R7C42/F7_SLICE R8C42/C5
+net _n1303 R8C42/F5_SLICE R8C42/DI5_SLICE
+net acc[14] R6C43/Q2_SLICE R6C43/A2 R7C43/A0
+net _n1196 R7C43/F0_SLICE R6C43/C2
+net _n1304 R6C43/F2_SLICE R6C43/DI2_SLICE
+net acc[15] R6C43/Q3_SLICE R6C43/A3 R7C43/A1
+net _n1197 R7C43/F1_SLICE R6C43/C3
+net _n1305 R6C43/F3_SLICE R6C43/DI3_SLICE
+net acc[16] R6C43/Q4_SLICE R6C43/A4 R7C43/A2
+net _n1198 R7C43/F2_SLICE R6C43/C4
+net _n1306 R6C43/F4_SLICE R6C43/DI4_SLICE
+net acc[17] R6C43/Q5_SLICE R6C43/A5 R7C43/A3
+net _n1199 R7C43/F3_SLICE R6C43/C5
+net _n1307 R6C43/F5_SLICE R6C43/DI5_SLICE
+net acc[18] R8C43/Q2_SLICE R8C43/A2 R7C43/A4
+net _n1200 R7C43/F4_SLICE R8C43/C2
+net _n1308 R8C43/F2_SLICE R8C43/DI2_SLICE
+net acc[19] R8C43/Q3_SLICE R8C43/A3 R7C43/A5
+net _n1201 R7C43/F5_SLICE R8C43/C3
+net _n1309 R8C43/F3_SLICE R8C43/DI3_SLICE
+net acc[20] R8C43/Q4_SLICE R8C43/A4 R7C43/A6
+net _n1202 R7C43/F6_SLICE R8C43/C4
+net _n1310 R8C43/F4_SLICE R8C43/DI4_SLICE
+net acc[21] R8C43/Q5_SLICE R8C43/A5 R7C43/A7
+net _n1203 R7C43/F7_SLICE R8C43/C5
+net _n1311 R8C43/F5_SLICE R8C43/DI5_SLICE
+net acc[22] R6C44/Q6_SLICE R6C44/A6 R7C44/A0
+net _n1204 R7C44/F0_SLICE R6C44/C6
+net _n1312 R6C44/F6_SLICE R6C44/DI6_SLICE
+net acc[23] R6C44/Q7_SLICE R6C44/A7 R7C44/A1
+net _n1205 R7C44/F1_SLICE R6C44/C7
+net _n1313 R6C44/F7_SLICE R6C44/DI7_SLICE
+net _n1206 R7C44/F2_SLICE R8C44/C6
+net _n1314 R8C44/F6_SLICE R8C44/DI6_SLICE
+net _n1207 R7C44/F3_SLICE R8C44/C7
+net _n1315 R8C44/F7_SLICE R8C44/DI7_SLICE
+net _n1208 R7C44/F4_SLICE R6C44/C0
+net _n1316 R6C44/F0_SLICE R6C44/DI0_SLICE
+net _n1209 R7C44/F5_SLICE R6C44/C1
+net _n1317 R6C44/F1_SLICE R6C44/DI1_SLICE
+net _n1210 R7C44/F6_SLICE R8C44/C0
+net _n1318 R8C44/F0_SLICE R8C44/DI0_SLICE
+net _n1211 R7C44/F7_SLICE R8C44/C1
+net _n1319 R8C44/F1_SLICE R8C44/DI1_SLICE
+net _n1212 R7C45/F0_SLICE R7C46/C6
+net _n1320 R7C46/F6_SLICE R7C46/DI6_SLICE
+net _n1213 R7C45/F1_SLICE R7C46/C7
+net _n1321 R7C46/F7_SLICE R7C46/DI7_SLICE
+net _n1243 R16C35/F2_SLICE R15C35/C2
+net _n1322 R15C35/F2_SLICE R15C35/DI2_SLICE
+net _n1244 R16C35/F3_SLICE R15C35/C3
+net _n1323 R15C35/F3_SLICE R15C35/DI3_SLICE
+net _n1245 R16C35/F4_SLICE R15C35/C6
+net _n1324 R15C35/F6_SLICE R15C35/DI6_SLICE
+net _n1246 R16C35/F5_SLICE R15C35/C7
+net _n1325 R15C35/F7_SLICE R15C35/DI7_SLICE
+net _n1247 R16C35/F6_SLICE R15C35/C4
+net _n1326 R15C35/F4_SLICE R15C35/DI4_SLICE
+net _n1248 R16C35/F7_SLICE R15C35/C5
+net _n1327 R15C35/F5_SLICE R15C35/DI5_SLICE
+net _n1249 R16C36/F0_SLICE R15C36/C6
+net _n1328 R15C36/F6_SLICE R15C36/DI6_SLICE
+net _n1250 R16C36/F1_SLICE R15C36/C7
+net _n1329 R15C36/F7_SLICE R15C36/DI7_SLICE
+net _n1251 R16C36/F2_SLICE R15C36/C4
+net _n1330 R15C36/F4_SLICE R15C36/DI4_SLICE
+net _n1252 R16C36/F3_SLICE R15C36/C5
+net _n1331 R15C36/F5_SLICE R15C36/DI5_SLICE
+net _n1253 R16C36/F4_SLICE R15C36/C2
+net _n1332 R15C36/F2_SLICE R15C36/DI2_SLICE
+net _n1254 R16C36/F5_SLICE R15C36/C3
+net _n1333 R15C36/F3_SLICE R15C36/DI3_SLICE
+net _n1255 R16C36/F6_SLICE R16C37/C0
+net _n1334 R16C37/F0_SLICE R16C37/DI0_SLICE
+net _n1256 R16C36/F7_SLICE R16C37/D1
+net _n1335 R16C37/F1_SLICE R16C37/DI1_SLICE
+net _n1241 R17C42/F2_SLICE R16C42/D4
+net _n1336 R16C42/F4_SLICE R16C42/DI4_SLICE
+net _n1242 R17C42/F3_SLICE R16C42/D5
+net _n1337 R16C42/F5_SLICE R16C42/DI5_SLICE
+net _n104 R21C43/F2_SLICE R21C44/C0
+net _n1338 R21C44/F0_SLICE R21C44/DI0_SLICE
+net _n105 R21C43/F3_SLICE R21C44/C1
+net _n1339 R21C44/F1_SLICE R21C44/DI1_SLICE
+net _n106 R21C43/F4_SLICE R21C42/C4
+net _n1340 R21C42/F4_SLICE R21C42/DI4_SLICE
+net _n107 R21C43/F5_SLICE R21C42/C5
+net _n1341 R21C42/F5_SLICE R21C42/DI5_SLICE
+net _n108 R21C43/F6_SLICE R21C42/C2
+net _n1342 R21C42/F2_SLICE R21C42/DI2_SLICE
+net _n109 R31C48/F2_SLICE R31C48/DI2_SLICE
+net _n110 R31C48/F3_SLICE R31C48/DI3_SLICE
+net _n111 R31C48/F4_SLICE R31C48/DI4_SLICE
+net _n112 R31C48/F5_SLICE R31C48/DI5_SLICE
+net _n113 R31C48/F6_SLICE R31C48/DI6_SLICE
+net _n114 R31C48/F7_SLICE R31C48/DI7_SLICE

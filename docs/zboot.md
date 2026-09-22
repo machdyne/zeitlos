@@ -220,16 +220,24 @@ dropped; or a truncated bitstream, untested) would only leave the region
 with more slack. Nothing would move.
 
 **User gateware has no fixed slot.** It lives wherever there is room, and
-`zfpga boot` chooses at run time:
+`zfpga flash` / `run` choose at run time (`docs/zfpga-formats.md`
+section 11), the first of:
 
-- on a 2 MB module, between the ZAR's actual end (rounded up to 64 KB)
-  and `0x1D0000` -- about 296 KB today, shrinking as the apps grow; the
-  apps take room from user gateware, never the reverse;
-- on 4 MB and larger, above the jumploader's end, where it never meets
-  the apps at all.
+- between the ZAR's actual end (rounded up to 64 KB) and `0x1D0000`,
+  shrinking as the apps grow -- the apps take room from user gateware,
+  never the reverse;
+- the tail of the gateware region, between the end of Zeitlos's own
+  bitstream and the logo at `0x0F0000`;
+- on 4 MB and larger, above `0x200000`, where it never meets the apps.
 
-A blinky is ~99 KB on a 25F and ~162 KB on a 45F, so every standard
-board has room for at least one design.
+A blinky is ~99 KB on a 25F and ~162 KB on a 45F -- never much less,
+since every configuration frame costs bytes. On a Mozart ML1 (2 MB, a
+45F) the core apps end near `0x1B0000`, leaving 128 KB, too little;
+its 598 KB of gateware, flashed over JTAG, leaves 320 KB in the
+gateware tail, which is where designs go there. With the DFU
+bootloader the gateware starts at `0x040000` and that tail shrinks to
+64 KB -- such a board needs larger flash, or smaller core apps, for 45F
+designs.
 
 ### The cycle
 
@@ -263,9 +271,48 @@ design packed with an address sends its own resets there rather than to
 0 (a power cycle still returns to 0), and addresses must be 64 KB
 aligned and below 16 MB. `zfpga pack -a` already writes them.
 
-Every image `zfpga boot` writes gets **256 bytes of `0xFF` in front**, as
-`ecpmulti` does, for Lattice's documented reason: SPI flash can return
-garbage at the start of a read.
+`ecpmulti` puts **256 bytes of `0xFF`** in front of each image, for
+Lattice's reason that SPI flash can return garbage at the start of a
+read. `zfpga flash` does not: it writes the bitstream as it is, from
+the 64 KB boundary, and a bitstream's own header already begins with
+`FF`. That was the case tested on a Mozart ML1 (section 6), which
+booted; if a board ever misreads an image's first bytes, the padding
+is the first thing to add.
+
+### Gateware that returns to Zeitlos
+
+A design can come back by itself, with the same mechanism the
+jumploader uses: pull PROGRAMN low, and the FPGA reloads from the
+running bitstream's boot address. A bitstream packed without `-a` --
+`zfpga build`'s default -- has none, so it reloads from flash address
+0: the DFU bootloader and then Zeitlos, or Zeitlos itself on a board
+flashed without one. `examples/tone.v` does it after three seconds:
+
+```verilog
+module top(input CLK_48, ..., output PROGRAMN);
+	parameter RETURN_CYCLES = 144000000;   // 3 s at 48 MHz; 0 never returns
+	reg [31:0] life = 0;
+	reg prog_n = 1;                        // 1 is "released"
+	assign PROGRAMN = prog_n;
+	always @(posedge CLK_48)
+		if (RETURN_CYCLES != 0) begin
+			if (life == RETURN_CYCLES - 1) prog_n <= 0;
+			else life <= life + 1;
+		end
+```
+
+**PROGRAMN is open drain on every board that has it**
+(`OPENDRAIN=ON` in `boards/*.lpf`): the pad only ever pulls low, and a
+`1` leaves it released. So a design can drive it as a plain output
+without ever driving it HIGH against a reset button pulling it low -- the
+constraint makes that impossible rather than leaving it to each design.
+Zeitlos's own driver (a `BB` whose enable does the same) and the
+jumploader (which only drives `0`) are unchanged by it; nextpnr and
+`zfpga` set the same `PIOB.OPENDRAIN ON` for it.
+
+Back in Zeitlos, the jumploader still points at the design, so `jump`
+with no address says so, and `zfpga run` of the same design needs no
+write. `reboot` points it back at 0 first, as always.
 
 ### Self-upgrade and restore
 
@@ -285,7 +332,7 @@ result is a failed configuration and a power cycle, not a brick).
 |---|---|---|
 | 1 | **PROGRAMN and `reboot`.** With Zeitlos's boot address still 0, PROGRAMN alone reboots. It proves the pin while the flash is untouched. | **built**, section 6 |
 | 2 | **A writable flash controller**: `WREN`, page program, 4 KB sector erase, status polling, and the write lock of section 7 -- `rtl/spiflash.v`, replacing `spiflashro.v`, and `Z_SYS_FLASH` in the kernel. Written in-house; the bootloader's `usb_spiflash_bridge.v` is Apache 2.0. | **built**, `docs/spiflash.md`; **`flashtest` passes on a Lakritz** |
-| 3 | **The layout and the jumploader**: `layout.py` learns the jumploader region and caps the ZAR at `0x1D0000`; Zeitlos is packed `--bootaddr 0x1D0000`; release images carry the default jumploader; `reboot` and `jump` re-point it in place; `zfpga boot` writes user gateware. | **built** -- "The jumploader, as built", below, and `zfpga flash` / `run`; needs a hardware test |
+| 3 | **The layout and the jumploader**: `layout.py` learns the jumploader region and caps the ZAR at `0x1D0000`; Zeitlos is packed `--bootaddr 0x1D0000`; release images carry the default jumploader; `reboot` and `jump` re-point it in place; `zfpga flash` / `run` write user gateware. | **built**, and **tested on a Mozart ML1** -- "The jumploader, as built", below |
 | 4 | **Self-upgrade and restore**, on step 2's writer. | |
 
 ### The jumploader, as built
@@ -380,13 +427,33 @@ and `make flash_jump`). Then, from the serial shell:
    "points at 0x000000 (a reboot)".
 2. `reboot` -- the machine goes through the jumploader, the DFU
    bootloader, and back to Zeitlos.
-3. To boot other gateware, from `posix`: `zfpga build
-   /fpga/examples/blink.v -b mozart_ml1` (or `-b lakritz`), then `zfpga
-   run blink.bit`. It is written after the core apps, the jumploader is
-   pointed at it, and the LED blinks; power-cycle to return. `zfpga run`
-   again rewrites nothing. `zfpga flash` writes without booting; `-a
-   ADDR` chooses the address, anywhere after the jumploader on a flash
-   larger than 2 MB.
+3. To boot other gateware, from `posix`: `zfpga run design.bit`. It is
+   written into free flash (`docs/zfpga-formats.md` section 11), the
+   jumploader is pointed at it, and it runs; power-cycle to return.
+   `zfpga run` again rewrites nothing. `zfpga flash` writes without
+   booting; `-a ADDR` chooses the address.
+
+**Tested on a Mozart ML1** (2 MB, JTAG-flashed): `examples/tone.v`, a
+sine arpeggio through the board's PT8211 DAC, written at `0x0A0000` --
+the tail of the gateware region, the only space there with room for a
+45F design -- and `jump a0000` from `posix`: the tones played, and the
+board's reset button brought Zeitlos back.
+
+**Where user gateware fits on 2 MB.** Not after the core apps once they
+have grown: on that ML1 they end near `0x1B0000`, leaving 128 KB, and
+a 45F bitstream is never under about 160 KB (each of its frames costs
+bytes however little it holds). Hence the gateware region's tail,
+which `zfpga flash` uses when the first space is too small.
+
+**The sector buffers.** Re-pointing needs two 4 KB buffers for the
+sectors it rewrites. They come from the kernel's memory pool
+(`k_mem_alloc()`) for the duration, not from `malloc()`: the kernel's
+`_sbrk()` grows from `_end` towards the stack pointer, which from the
+serial shell is the kernel's own stack, just above its image -- no room
+-- and from a syscall is the app's, so `malloc()` would "succeed" by
+growing into the memory the kernel stack grows down into. (The first
+version used `malloc()`; the serial shell's `jump` failed with "no
+memory", and `posix`'s worked by that accident.)
 
 **A hazard.** A power cut between erasing a jumploader sector and
 programming it back leaves the jumploader broken. The machine still

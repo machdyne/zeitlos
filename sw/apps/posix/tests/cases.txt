@@ -127,6 +127,46 @@ $ wc t2.txt
 2 6 30 t2.txt
 $ rm t2.txt
 
+# -- zcat, gunzip (sw/common/zgz.c) --
+$ zcat notes.gz
+hello from a file
+second line
+# zcat streams: the data comes out as it is decoded, and a CRC or a
+# truncation can only be found at the end -- so the error follows the
+# data, as real zcat's does, and the status says it failed. (gunzip
+# removes what it wrote; see below.)
+$ zcat bad.gz
+hello from a file
+second line
+zcat: bad.gz: CRC or length mismatch: the file is corrupt
+? 1
+$ zcat cut.gz
+hello from a file
+second line
+zcat: cut.gz: truncated
+? 1
+$ gunzip notes.txt
+gunzip: notes.txt: not a .gz name (zcat reads any)
+? 1
+$ gunzip -k copy.gz
+$ cat copy
+hello from a file
+second line
+$ gunzip copy.gz
+gunzip: /copy exists (-f to overwrite)
+? 1
+$ gunzip -f copy.gz
+$ zcat copy.gz
+zcat: copy.gz: cannot open
+? 1
+$ gunzip bad.gz
+gunzip: bad.gz: CRC or length mismatch: the file is corrupt
+? 1
+$ cat bad
+cat: bad: cannot open
+? 1
+$ rm copy
+
 # touch must not truncate an existing file
 $ echo keepme > t3.txt
 $ touch t3.txt

@@ -447,12 +447,27 @@ zfpga run   blink.bit [-a ADDR]     ... and boot it
 ```
 
 On the machine only (the host zfpga says so). **Where:** by default,
-the first 64 KB boundary after the core apps -- the ZAR's header says
-where its last entry ends -- and the whole bitstream must end before
-the jumploader at `0x1D0000`. `-a ADDR` puts it elsewhere: 64 KB
-aligned (a boot address is `addr[23:16]`), and either in that same
-space or, on a flash larger than 2 MB, anywhere after `0x200000` -- as
-many designs as fit, one address each.
+the first of three free spaces the bitstream fits in, each starting at
+a 64 KB boundary (a boot address is `addr[23:16]`):
+
+| space | from | to |
+|---|---|---|
+| after the core apps | the ZAR's end (its header says) | the jumploader, `0x1D0000` |
+| after Zeitlos's gateware | its end | the boot logo, `0x0F0000` |
+| after the jumploader | `0x200000` | the end of a flash larger than 2 MB |
+
+Zeitlos's gateware is found at `0x040000` if a bitstream starts there
+(a board with the DFU bootloader), else at 0, and ends at the first
+wholly erased 4 KB sector, or at a 64 KB boundary where another
+bitstream begins -- a design flashed straight after it. That space is
+the one a 2 MB board with a 45F has room in: a Mozart ML1 flashed over
+JTAG, 598 KB of gateware, leaves `0x0A0000`-`0x0F0000`, 320 KB, where a
+45F design (at least ~160 KB) fits and the space after the core apps
+does not. Rebuilding Zeitlos's gateware larger may overwrite a design
+stored there, which is harmless; the space never starts below the lock.
+
+`-a ADDR` puts it anywhere inside one of the three. If nothing fits,
+or ADDR is not free, the command lists the spaces and their sizes.
 
 **Refused, with nothing written:** a file that is not an ECP5
 bitstream; one whose device ID is not this FPGA's (the jumploader's,

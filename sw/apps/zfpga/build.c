@@ -135,7 +135,8 @@ int cmd_build(int argc, char **argv, const char *dbdir_default) {
  * shows where it is -- the first on-board run printed nothing for a
  * minute, and there was no telling what it was doing. */
 #define STAGE_DONE(what) do { uint32_t t_ = zio_ms();                     \
-        zf_note("  %s: %u.%u s", what, (t_ - t0) / 1000u, (t_ - t0) / 100u % 10u); \
+        zf_note("  %s: %u.%u s, peak %u KB so far", what, (t_ - t0) / 1000u, \
+            (t_ - t0) / 100u % 10u, (unsigned)(zf_mem_peak() / 1024));      \
         t0 = t_; } while (0)
 
     for (i = 1; i < argc; i++) {

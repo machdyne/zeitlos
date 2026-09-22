@@ -46,6 +46,23 @@ printf 'not really a compiler\n' > "$work/zcc"
 # Exits 1, so the failure arms of && and || are reachable -- see
 # host_fs.c's z_proc_run().
 printf 'exits nonzero\n' > "$work/failprog"
+# zcat, gunzip: notes.gz as real gzip writes it (with the file's name,
+# which zinflate refuses unless asked -- zgz asks); bad.gz with its
+# trailer's CRC flipped; cut.gz missing its last bytes.
+gzip -c "$work/notes.txt" > "$work/notes.gz"
+cp "$work/notes.gz" "$work/copy.gz"
+python3 -c "
+import sys
+d = bytearray(open(sys.argv[1], 'rb').read())
+d[-8] ^= 1
+open(sys.argv[2], 'wb').write(d)
+open(sys.argv[3], 'wb').write(d[:-5])
+" "$work/notes.gz" "$work/bad.gz" "$work/cut.gz"
+python3 -c "
+import sys
+d = open(sys.argv[1], 'rb').read()
+open(sys.argv[2], 'wb').write(d[:-5])
+" "$work/notes.gz" "$work/cut.gz"
 
 # The output goes OUTSIDE the tree the shell can see. With it inside,
 # `ls` listed the transcript being written, so the golden file

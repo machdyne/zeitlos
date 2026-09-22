@@ -12,6 +12,7 @@
 
 #include "zar.h"
 #include "../common/zsoc.h"
+#include "zarcopy.h"		// zar_copy(): a word per flash read
 
 // Everything here reads the memory-mapped flash window directly.
 // volatile because this is hardware, not RAM: nothing should cache a
@@ -147,11 +148,11 @@ int z_zar_load_exec(uint32_t dst, const char *name,
 	volatile const uint8_t *src = zar_base() + off + info->data_off;
 	uint8_t *out = (uint8_t *)dst;
 
-	// Plain byte copy out of the flash window. No chunking or
-	// buffering, unlike fs_load_exec() -- there is no filesystem in
-	// the way, this is just memory.
-	for (uint32_t i = 0; i < info->data_size; i++)
-		out[i] = src[i];
+	// Straight out of the flash window -- no chunking or buffering,
+	// unlike fs_load_exec(), since there is no filesystem in the way --
+	// a 32-bit word per read: every read is a whole SPI transaction,
+	// so byte loads cost four times as much (zarcopy.h).
+	zar_copy(out, src, info->data_size);
 
 	// Nothing else zeroes .bss on this OS -- same as fs_load_exec().
 	if (info->bss_size)

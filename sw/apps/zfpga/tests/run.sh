@@ -59,6 +59,9 @@ for f in tests/fixtures/*.config.gz; do
 done
 
 pass=0; fail=0; skip=0
+
+# examples/ as the suite found it: checked at the end
+EXAMPLES_AT_START=$(cd examples && find . -type f | sort | xargs md5sum)
 [ $RECORD = 1 ] && : > tests/expect.md5
 
 trim() { echo "$1" | sed 's/^ *//; s/ *$//'; }
@@ -523,7 +526,7 @@ if make -s -f Makefile.host zfpga-simflash > "$F/mk.log" 2>&1 &&
     ZFPGA_SIMFLASH="$F/img" $SF flash "$F/b45.bit" > "$F/o3" 2>&1 &&
         fl_fail "a 45F bitstream accepted on a 25F"
     grep -q "this FPGA is" "$F/o3" && same "$F/img" "$F/img1" || fl_fail "... refused for the wrong reason: $(cat "$F/o3")"
-    for bad in "-a 0x191000:not 64 KB aligned" "-a 0x140000:is not free" "-a 0x200000:nothing after the jumploader" \
+    for bad in "-a 0x191000:not 64 KB aligned" "-a 0x140000:is not free" "-a 0x200000:is not free" \
                "-a 0x000000:is not free"; do
         ZFPGA_SIMFLASH="$F/img" $SF flash "$F/blink.bit" ${bad%%:*} > "$F/o4" 2>&1 && fl_fail "${bad%%:*} accepted"
         grep -q "${bad#*:}" "$F/o4" && same "$F/img" "$F/img1" || fl_fail "${bad%%:*}: $(cat "$F/o4")"
@@ -531,14 +534,59 @@ if make -s -f Makefile.host zfpga-simflash > "$F/mk.log" 2>&1 &&
     ZFPGA_SIMFLASH="$F/img" $SF flash tests/run.sh > "$F/o5" 2>&1 && fl_fail "a text file accepted"
     grep -q "not an ECP5 bitstream" "$F/o5" || fl_fail "a text file: $(cat "$F/o5")"
     python3 tests/mkflash.py "$F/full" 0x200000 0x1C8000 "$F/jl.bit"
-    ZFPGA_SIMFLASH="$F/full" $SF flash "$F/blink.bit" > "$F/o6" 2>&1 && fl_fail "too big below the jumploader, accepted"
-    grep -q "do not fit" "$F/o6" || fl_fail "too big: $(cat "$F/o6")"
+    ZFPGA_SIMFLASH="$F/full" $SF flash "$F/blink.bit" > "$F/o6" 2>&1 && fl_fail "no room anywhere, accepted"
+    grep -q "do not fit in any free space" "$F/o6" || fl_fail "no room: $(cat "$F/o6")"
     python3 tests/mkflash.py "$F/big" 0x400000 0x1C8000 "$F/jl.bit"
-    ZFPGA_SIMFLASH="$F/big" $SF flash "$F/blink.bit" > "$F/o7" 2>&1; grep -q "\-a 0x200000 puts it after" "$F/o7" ||
-        fl_fail "a 4 MB flash: no hint to go after the jumploader: $(cat "$F/o7")"
-    ZFPGA_SIMFLASH="$F/big" $SF run "$F/blink.bit" -a 0x200000 > "$F/o8" 2>&1 &&
+    ZFPGA_SIMFLASH="$F/big" $SF run "$F/blink.bit" > "$F/o8" 2>&1 &&
+        grep -q "at 0x200000" "$F/o8" &&
         [ "$(at "$F/big" 0x200000 $n | md5sum)" = "$(md5sum < "$F/blink.bit")" ] &&
-        [ "$(cat "$F/big.jump")" = "0x200000" ] || fl_fail "-a 0x200000 on 4 MB: $(cat "$F/o8")"
+        [ "$(cat "$F/big.jump")" = "0x200000" ] || fl_fail "4 MB, no room lower down: after the jumploader: $(cat "$F/o8")"
+
+    # -- the gateware tail: after Zeitlos's own gateware, before the logo
+    # A stand-in for Zeitlos's gateware: an uncompressed 25F bitstream,
+    # 582 KB, about what a real SOC is (a Mozart ML1's is 598 KB).
+    # (its own build: blink.cfg beside blink.v is whichever board built last)
+    cp examples/blink.v "$F/gws.v"
+    ./zfpga build "$F/gws.v" -b lakritz -D db -o "$F/gws.bit" > /dev/null 2>&1
+    ./zfpga pack "$F/gws.cfg" -D db -o "$F/gw.bit" > /dev/null 2>&1
+    gwn=$(wc -c < "$F/gw.bit")
+    # JTAG-flashed: the gateware at 0, the core apps leaving no room
+    python3 tests/mkflash.py "$F/jtag" 0x200000 0x1C8000 "$F/jl.bit" "$F/gw.bit@0"
+    cp "$F/jtag" "$F/jtag0"
+    tail=$(( (gwn + 0xFFFF) / 0x10000 * 0x10000 ))
+    ZFPGA_SIMFLASH="$F/jtag" $SF flash "$F/blink.bit" > "$F/o12" 2>&1 &&
+        grep -q "at $(printf '0x%06x' $tail)" "$F/o12" &&
+        [ "$(at "$F/jtag" $tail $n | md5sum)" = "$(md5sum < "$F/blink.bit")" ] &&
+        [ "$(at "$F/jtag" 0 $gwn | md5sum)" = "$(md5sum < "$F/gw.bit")" ] ||
+        fl_fail "JTAG: into the gateware tail at $(printf '0x%06x' $tail), the gateware untouched: $(cat "$F/o12")"
+    ZFPGA_SIMFLASH="$F/jtag" $SF run "$F/blink.bit" > "$F/o13" 2>&1 &&
+        grep -q "already at" "$F/o13" && [ "$(cat "$F/jtag.jump")" = "$(printf '0x%06x' $tail)" ] ||
+        fl_fail "JTAG: run again: nothing written, a jump there: $(cat "$F/o13")"
+    ZFPGA_SIMFLASH="$F/jtag" $SF flash "$F/blink.bit" -a 0x080000 > "$F/o14" 2>&1 &&
+        fl_fail "an address overlapping Zeitlos's gateware, accepted"
+    grep -q "is not free" "$F/o14" && [ "$(at "$F/jtag" 0 $gwn | md5sum)" = "$(md5sum < "$F/gw.bit")" ] ||
+        fl_fail "overlapping the gateware: $(cat "$F/o14")"
+    # a user design straight after the gateware, no erased sector between:
+    # the gateware must end at the boundary where the design begins
+    python3 - "$F/gw.bit" "$F/gwpad.bin" << 'PY'
+import os, sys
+d = open(sys.argv[1], "rb").read()
+d += os.urandom(0x9FF00 - len(d))          # ends in the last sector before 0xA0000
+open(sys.argv[2], "wb").write(d)
+PY
+    python3 tests/mkflash.py "$F/adj" 0x200000 0x1C8000 "$F/jl.bit" "$F/gwpad.bin@0" "$F/blink.bit@0xA0000"
+    ZFPGA_SIMFLASH="$F/adj" $SF flash "$F/blink.bit" -a 0xA0000 > "$F/o15" 2>&1 &&
+        grep -q "already at 0x0a0000" "$F/o15" ||
+        fl_fail "a design straight after the gateware: not taken for the gateware: $(cat "$F/o15")"
+    # DFU: a bootloader at 0, the gateware at 0x040000
+    python3 tests/mkflash.py "$F/dfu" 0x200000 0x1C8000 "$F/jl.bit" "$F/jl.bit@0" "$F/gw.bit@0x40000"
+    dtail=$(( (0x40000 + gwn + 0xFFFF) / 0x10000 * 0x10000 ))
+    ZFPGA_SIMFLASH="$F/dfu" $SF flash "$F/blink.bit" > "$F/o16" 2>&1 &&
+        grep -q "at $(printf '0x%06x' $dtail)" "$F/o16" ||
+        fl_fail "DFU: the gateware found at 0x040000, its tail at $(printf '0x%06x' $dtail): $(cat "$F/o16")"
+    # nothing fits anywhere: every space listed
+    grep -q "after the core apps" "$F/o6" || fl_fail "no room: the spaces are not listed: $(cat "$F/o6")"
+    # refused and warned, whatever the layout
     python3 tests/mkflash.py "$F/nojl" 0x200000 0x186000
     ZFPGA_SIMFLASH="$F/nojl" $SF run "$F/blink.bit" > "$F/o9" 2>&1 && fl_fail "run with no jumploader, accepted"
     grep -q "no jumploader" "$F/o9" || fl_fail "run with no jumploader: $(cat "$F/o9")"
@@ -548,8 +596,9 @@ if make -s -f Makefile.host zfpga-simflash > "$F/mk.log" 2>&1 &&
     ./zfpga flash "$F/blink.bit" > "$F/o11" 2>&1 && fl_fail "the host zfpga wrote a flash"
     grep -q "works on the machine" "$F/o11" || fl_fail "the host zfpga: $(cat "$F/o11")"
     if [ $flash_ok = 1 ]; then
-        echo "ok   flash / run: placed after the core apps, verified, no rewrite of the same image, a jump;"
-        echo "     refused: wrong die, not free, unaligned, too big, not a bitstream, no jumploader; -a after it on 4 MB"
+        echo "ok   flash / run: after the core apps, in the gateware tail (JTAG and DFU), after the jumploader"
+        echo "     on 4 MB; verified; no rewrite; a jump; the gateware untouched, a design right after it"
+        echo "     told apart; refused: wrong die, not free, unaligned, no room, not a bitstream, no jumploader"
         pass=$((pass + 1))
     else fail=$((fail + 1)); fi
 else
@@ -573,15 +622,22 @@ if git rev-parse --is-inside-work-tree > /dev/null 2>&1; then
     else
         echo "FAIL git would not commit these source files:"; echo "$lost" | sed 's/^/     /'; fail=$((fail + 1))
     fi
-    # zfpga build writes intermediates beside its input: a test that
-    # builds a tracked example in place overwrites it (one did, and
-    # replaced the hand-written examples/blink.zn)
-    touched=$( (git diff --name-only -- examples; git ls-files --others --exclude-standard -- examples) 2>/dev/null)
-    if [ -z "$touched" ]; then
-        echo "ok   the tests left examples/ as git has it"; pass=$((pass + 1))
-    else
-        echo "FAIL the tests changed examples/:"; echo "$touched" | sed 's/^/     /'; fail=$((fail + 1))
-    fi
+fi
+
+# zfpga build writes intermediates beside its input, so a test that
+# builds an example in place overwrites it (one did, and replaced the
+# hand-written examples/blink.zn). examples/ must end as the suite
+# found it -- compared with a snapshot taken at the start, not with git,
+# so a new example not yet committed is not taken for damage.
+examples_now=$(cd examples && find . -type f | sort | xargs md5sum)
+if [ "$examples_now" = "$EXAMPLES_AT_START" ]; then
+    echo "ok   the tests left examples/ as they found it"; pass=$((pass + 1))
+else
+    echo "FAIL the tests changed examples/:"
+    echo "$EXAMPLES_AT_START" > "$OUT/examples.before"
+    echo "$examples_now" > "$OUT/examples.after"
+    diff "$OUT/examples.before" "$OUT/examples.after" | grep "^[<>]" | sed 's/^/     /'
+    fail=$((fail + 1))
 fi
 
 # -- Manual placement: loc= and the -l round trip (docs/zfpga-formats.md)

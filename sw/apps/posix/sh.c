@@ -30,6 +30,7 @@
 #include "zfsapp.h"
 #include "zwin.h"           /* z_launch_arg_set() */
 #include "posix.h"
+#include "zgz.h"            /* zcat, gunzip */
 
 void *px_current_conn;
 
@@ -274,6 +275,135 @@ static void bi_cat(px_shell_t *sh, int argc, char **argv) {
             sink(sh, chunk, n);
         }
         fs_close_handle(h);
+    }
+}
+
+/* -- gzip: zcat and gunzip (sw/common/zgz.c, docs/posix.md) --------
+ *
+ * The 32 KB window zinflate needs is here, static: posix has the
+ * memory, and apps that never decompress anything do not pay for it.
+ * zgz checks the trailer -- the CRC-32 and length -- so a corrupt file
+ * is reported, never quietly decoded to something else. */
+static uint8_t gz_window[Z_INFLATE_WINDOW];
+static z_gz_t gz_file;
+static char gz_buf[1024];
+
+static void bi_zcat(px_shell_t *sh, int argc, char **argv) {
+
+    if (argc < 2) {
+        px_puts(sh, "usage: zcat <file.gz> ...\n");
+        sh->status = 1;
+        return;
+    }
+
+    for (int i = 1; i < argc; i++) {
+        char abs[PX_PATH_MAX];
+        int32_t r;
+        if (!px_resolve(argv[i], abs, sizeof(abs))) {
+            px_printf(sh, "zcat: %s: bad path\n", argv[i]);
+            sh->status = 1;
+            continue;
+        }
+        if (z_gz_open(&gz_file, abs, gz_window) != 0) {
+            px_printf(sh, "zcat: %s: cannot open\n", argv[i]);
+            sh->status = 1;
+            continue;
+        }
+        while ((r = z_gz_read(&gz_file, gz_buf, sizeof(gz_buf))) > 0) sink(sh, gz_buf, (int)r);
+        if (r < 0) {
+            px_printf(sh, "zcat: %s: %s\n", argv[i], z_gz_strerror(r));
+            sh->status = 1;
+        }
+        z_gz_close(&gz_file);
+    }
+}
+
+/*
+ * gunzip [-k] [-f] FILE.gz ... writes FILE, as gzip does: only a name
+ * ending .gz, no overwriting without -f, the .gz removed only once the
+ * whole file is out and its CRC checked (kept with -k), and a partial
+ * output removed if anything fails.
+ */
+static void bi_gunzip(px_shell_t *sh, int argc, char **argv) {
+
+    int keep = 0, force = 0, files = 0;
+
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "-k")) { keep = 1; continue; }
+        if (!strcmp(argv[i], "-f")) { force = 1; continue; }
+        if (argv[i][0] == '-') {
+            px_printf(sh, "gunzip: unknown option %s\n", argv[i]);
+            sh->status = 1;
+            return;
+        }
+    }
+
+    for (int i = 1; i < argc; i++) {
+        char abs[PX_PATH_MAX], out[PX_PATH_MAX];
+        size_t n;
+        int h, ok = 1;
+        int32_t r;
+
+        if (argv[i][0] == '-') continue;
+        files++;
+        if (!px_resolve(argv[i], abs, sizeof(abs))) {
+            px_printf(sh, "gunzip: %s: bad path\n", argv[i]);
+            sh->status = 1;
+            continue;
+        }
+        n = strlen(abs);
+        if (n < 4 || abs[n - 3] != '.' || (abs[n - 2] | 0x20) != 'g' || (abs[n - 1] | 0x20) != 'z' ||
+                abs[n - 4] == '/') {
+            px_printf(sh, "gunzip: %s: not a .gz name (zcat reads any)\n", argv[i]);
+            sh->status = 1;
+            continue;
+        }
+        memcpy(out, abs, n - 3);
+        out[n - 3] = 0;
+
+        if (!force && (h = fs_open_read(out)) >= 0) {
+            fs_close_handle(h);
+            px_printf(sh, "gunzip: %s exists (-f to overwrite)\n", out);
+            sh->status = 1;
+            continue;
+        }
+        if (z_gz_open(&gz_file, abs, gz_window) != 0) {
+            px_printf(sh, "gunzip: %s: cannot open\n", argv[i]);
+            sh->status = 1;
+            continue;
+        }
+        if ((h = fs_open_write(out)) < 0) {
+            z_gz_close(&gz_file);
+            px_printf(sh, "gunzip: %s: cannot create\n", out);
+            sh->status = 1;
+            continue;
+        }
+        while ((r = z_gz_read(&gz_file, gz_buf, sizeof(gz_buf))) > 0)
+            if (fs_write_chunk(h, gz_buf, (int)r) != (int)r) {
+                px_printf(sh, "gunzip: %s: write failed (card full?)\n", out);
+                ok = 0;
+                break;
+            }
+        if (ok && r < 0) {
+            px_printf(sh, "gunzip: %s: %s\n", argv[i], z_gz_strerror(r));
+            ok = 0;
+        }
+        z_gz_close(&gz_file);
+        fs_close_handle(h);
+        if (!ok) {
+            fs_unlink(out);                 /* nothing half-written left behind */
+            sh->status = 1;
+            continue;
+        }
+        if (!keep && fs_unlink(abs) != 0) {
+            px_printf(sh, "gunzip: %s: decompressed, but not removed\n", argv[i]);
+            sh->status = 1;
+        }
+    }
+
+    if (!files) {
+        px_puts(sh, "usage: gunzip [-k] [-f] <file.gz> ...\n");
+        sh->status = 1;
     }
 }
 
@@ -965,6 +1095,8 @@ static const builtin_t builtins[] = {
     { "pwd",   bi_pwd,   "print the working directory" },
     { "ls",    bi_ls,    "list a directory" },
     { "cat",   bi_cat,   "print files" },
+    { "zcat",  bi_zcat,  "print .gz files, decompressed" },
+    { "gunzip", bi_gunzip, "FILE.gz to FILE (-k keep it, -f overwrite)" },
     { "echo",  bi_echo,  "print arguments" },
     { "rm",    bi_rm,    "delete files" },
     { "cp",    bi_cp,    "copy a file" },
