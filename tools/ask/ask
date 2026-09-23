@@ -988,7 +988,17 @@ def cmd_build(args):
     # The old number overstated `arklite` by 2.3x (2.10MB against the
     # 0.90MB the device reports), and it is exactly the number somebody
     # uses to pick a kernel memory tier. Keep the two names distinct.
-    resident = sizes.get("coarse.zcv", 0) + sizes.get("encoder.zmd", 0)
+    # What sw/apps/ask/aidx.c allocates for this pack: the coarse array
+    # and the encoder when the dense half is on, and ALWAYS two bytes a
+    # chunk of token counts for BM25's length normalisation (p->lens).
+    # This used to count only the first two, so a lexical pack reported
+    # 0.00 MB -- for arkmed, 400KB short of the truth. If that
+    # allocation ever failed the device would fall back to BM25 with no
+    # length term, silently, so the number that picks the tier has to
+    # include it.
+    lens_bytes = 2 * len(chunks) if sizes.get("lexicon.zlx") else 0
+    resident = (sizes.get("coarse.zcv", 0) + sizes.get("encoder.zmd", 0)
+                + lens_bytes)
     if not dense_on:
         print("  dense half OFF -- lexical only, nothing held resident")
     on_card = sum(sizes.values())
@@ -1016,8 +1026,9 @@ def cmd_build(args):
     for k in sorted(sizes):
         print("    %-14s %9.2f KB" % (k, sizes[k] / 1024.0))
     print()
-    print("  resident on device: %.2f MB   (coarse.zcv + encoder.zmd)"
-          % (resident / 1e6))
+    print("  resident on device: %.2f MB   (vectors %.2f + BM25 lengths %.2f)"
+          % (resident / 1e6, (resident - lens_bytes) / 1e6,
+             lens_bytes / 1e6))
     print("  index on card:      %.2f MB" % (on_card / 1e6))
     print("  total on card:      %.2f MB" % (manifest["card_bytes"] / 1e6))
     print("  dataset id:         0x%08x" % dsid)

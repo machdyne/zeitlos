@@ -29,23 +29,33 @@
 # a real exit code, and a git-lfs pointer check that says what to do
 # rather than failing inside `tar` with "File format not recognized".
 #
-# SIZE. This is hundreds of megabytes of text. The card holds all of
-# it; only the index is resident, so the number to watch in the build
-# output is "resident on device", not "total on card".
+# SIZE. This is hundreds of megabytes of text, and it ships as
+# release/'s zeitlos-arkmedium.img.gz (docs/releases.md). The card
+# holds all of it; the number to watch in the build output is
+# "resident on device", not "total on card".
 #
-# The coarse index is coarse_dim bytes per chunk. At 32 dimensions,
-# 250,000 chunks is 8MB resident -- comfortable on a 32MB board, and
-# also the point where the coarse scan stops being free in software
-# (~8M MACs, about four seconds) and starts being the reason to build
-# rtl/zml.v. If resident climbs past what a board can spare, drop
-# coarse_dim to 16 before dropping content: halving it halves both the
-# memory and the scan, and the fine re-rank at 128 dimensions is what
-# actually decides the top of the list.
+# LEXICAL ONLY. `dense = no`, as arklite and zdocs: BM25 alone
+# measured better than every fused configuration (docs/ask_app.md,
+# "The decision, and how it came out"), and a lexical pack holds
+# NOTHING resident beyond two bytes a chunk of lengths -- which is the
+# only reason a corpus this size fits the machine at all. With the
+# dense half on, the coarse array alone would be ~8MB resident at
+# 250,000 chunks and the build would run an SVD over all of them.
+#
+# The device side was made fit for this size in the same change:
+# sw/apps/ask/aidx.c now streams every postings list in full and
+# accumulates in bounded memory, rarest terms first. Before that it
+# read only the first 4KB of each list -- invisible on arklite, whose
+# lists fit, and at this size it would have scored only the start of
+# the corpus for every common word. `sw/apps/ask/test/lexcheck.py
+# --tile 20` is the check.
 
 include = common
 
 version     = 1
 name        = arkmed
+encoder     = bow
+dense       = no
 description = Ark Medium -- Wikipedia, Gutenberg, Factbook, MedlinePlus, Lite
 
 # -- downloads --
@@ -83,6 +93,16 @@ description = Ark Medium -- Wikipedia, Gutenberg, Factbook, MedlinePlus, Lite
 # renames it on the way in.
 
 fetch = gutenberg/cdrom https://www.gutenberg.org/files/11220/PG2003-08_files.zip
+
+# The CD's title list is NOT in the zip. It is ark's own
+# data/pgcdrom.lst, which scripts/build.sh copies in beside the texts
+# (`cp $DATA/pgcdrom.lst $ARK/gutenberg/cdrom`) after moving pg/* up a
+# level -- so its entries, `etext02/11001108.txt 1001 Nights`, are
+# relative to the directory the zip unpacked into. `lfs=` names any
+# file in a recipe repo, pointer or not, and `unpack=no` copies it to
+# <dest> as a file. Without this line the `listed` source below fails
+# with "pgcdrom.lst not found", which is how it was found.
+fetch = gutenberg/cdrom/pgcdrom.lst lfs=ark/data/pgcdrom.lst unpack=no
 
 fetch = gutenberg/cia/35830.txt https://www.gutenberg.org/ebooks/35830.txt.utf-8 alt=https://www.gutenberg.org/cache/epub/35830/pg35830.txt unpack=no
 
@@ -123,9 +143,30 @@ source = scroll @ark/data/scroll-r0.gz
 # `relpath<space>title` list beside a directory of texts, which is the
 # shape all of these share.
 source = listed  @dl/medline   lst=medline.lst  prefix=medline
+# The Wikipedia selection is HTML. `listed` converts it to markdown at
+# build time (lib/html2md.py, on by default when a file sniffs as
+# HTML; `html=no` turns it off). The card must carry readable text,
+# not markup: a chunk is a byte range of the emitted file, so the
+# index would otherwise hold `div`, `class` and `href` as search terms
+# and a preview would quote tags. `read` renders the result.
 source = listed  @dl/wikipedia lst=articles.lst prefix=wiki  split=262144
-source = listed  @dl/gutenberg/cdrom lst=pgcdrom.lst prefix=pg split=262144
-source = onefile @dl/gutenberg/cia/35830.txt prefix=factbk split=131072 title="CIA World Factbook 2010"
+#
+# `gutenberg=yes` strips the Project Gutenberg licence from the CD's
+# etexts and from the Factbook. `books` does this by default; `listed`
+# and `onefile` do not, because most of what they read is not
+# Gutenberg's. Without it every one of the CD's books carries its
+# small print into the index -- the defect docs/ask_app.md, "The
+# corpus mattered more than the model", found to be worth more than
+# any model change. The first arkmed build shipped without it.
+source = listed  @dl/gutenberg/cdrom lst=pgcdrom.lst prefix=pg split=262144 gutenberg=yes
+# The Factbook's sections are country lines, "@Afghanistan  (South
+# Asia)", not chapters -- so `head=` names them and the dataset index
+# becomes a list of countries. Without it the book was cut by size
+# alone, which also let one country's entry straddle two documents and
+# a preview stop mid-entry. The capture group is the label, so the `@`
+# does not reach the reader. split= still bounds the handful of long
+# entries (the United States, China).
+source = onefile @dl/gutenberg/cia/35830.txt prefix=factbk split=131072 gutenberg=yes head=^@(.+)$ title="CIA World Factbook 2010"
 
 # -- images --
 #

@@ -20,9 +20,54 @@
 #
 
 import json
+import textwrap
+
+
+# -- card images --
+#
+# A release ships one card per corpus size (mkfatimg.VARIANTS). These
+# accept either shape -- a list of card records, or the single record
+# releases made before variants -- so an older MANIFEST.json merged
+# into a newer build still describes itself.
+
+PACK_DESC = {
+    "zdocs": "the Zeitlos documentation",
+    "arklite": "Ark Lite (the Codex, selected books, the Scroll)",
+    "arkmed": "Ark Medium (Wikipedia's 10K vital articles, the Gutenberg "
+              "CD-ROM, MedlinePlus, the CIA Factbook, and all of Ark Lite)",
+}
+
+
+def cards(sdcard):
+    if not sdcard:
+        return []
+    if isinstance(sdcard, dict):
+        return [sdcard]
+    return list(sdcard)
+
+
+def card_size(c):
+    """Image size in MB and the smallest card it fits, in words."""
+    b = c.get("image_bytes", 64 * 1024 * 1024)
+    mb = b // (1024 * 1024)
+    if c.get("needs_8gb"):
+        fits = "needs an 8 GB card"
+    elif b > 1024 * 1024 * 1024:
+        fits = "fits a 4 GB card"
+    else:
+        fits = "fits any card"
+    return mb, fits
+
+
+def card_contents(c):
+    packs = c.get("packs") or ["zdocs", "arklite"]
+    return "; ".join(PACK_DESC.get(p, p) for p in packs)
 
 
 def manifest(version, commit, dirty, targets, sdcard, layout, ark_commit):
+    cs = cards(sdcard)
+    base = next((c for c in cs if c.get("file") == "zeitlos.img.gz"),
+                cs[0] if cs else None)
     return {
         "version": version,
         "commit": commit,
@@ -34,7 +79,9 @@ def manifest(version, commit, dirty, targets, sdcard, layout, ark_commit):
             for r in layout["regions"]
         ],
         "flash_size": layout["flash_size"],
-        "sdcard": sdcard,
+        "sdcards": cs,
+        # The single-card key older tooling reads: the base image.
+        "sdcard": base,
         "targets": targets,
     }
 
@@ -134,17 +181,25 @@ def notes(version, commit, targets, sdcard, layout, prev_version=None):
                "[Read this first](%s)." % DFU_DOC_URL)
     out.append("")
 
-    if sdcard:
+    cs = cards(sdcard)
+    if cs:
         out.append("## SD card")
         out.append("")
-        out.append("`%s` is a 64MB FAT32 image with the non-core apps, a "
-                   "few tracker modules, the documentation and the ARK "
-                   "scroll. It is the same for every target."
-                   % sdcard["file"])
+        out.append("Optional, and the same for every target. Each image has "
+                   "the non-core apps, the documentation and the ARK scroll; "
+                   "they differ only in how much reference material `ask` "
+                   "can search.")
+        out.append("")
+        out.append("| image | size | `ask` can search |")
+        out.append("|---|---|---|")
+        for c in cs:
+            mb, fits = card_size(c)
+            out.append("| `%s` | %d MB, %s | %s |"
+                       % (c["file"], mb, fits, card_contents(c)))
         out.append("")
         out.append("```")
         out.append("gzip -dc %s | sudo dd of=/dev/sdX bs=4M "
-                   "status=progress conv=fsync" % sdcard["file"])
+                   "status=progress conv=fsync" % cs[0]["file"])
         out.append("```")
         out.append("")
         out.append("Applications live in `apps/` on the card, alongside "
@@ -259,14 +314,18 @@ def asset_readme(version, commit, targets, sdcard, layout):
             out.append("      $ %s" % t["flash_cmd"].format(file=img))
         out.append("")
 
-    if sdcard:
-        out.append("  %s" % sdcard["file"])
-        out.append("      Optional sdcard image (64MB, FAT32). The same for")
-        out.append("      every board. Holds the additional apps (apps/),")
-        out.append("      tracker modules (audio/), the documentation")
-        out.append("      (docs/) and the ARK scroll (ark/).")
+    for c in cards(sdcard):
+        mb, fits = card_size(c)
+        out.append("  %s" % c["file"])
+        out.append("      Optional sdcard image (%d MB, FAT32, %s). The same"
+                   % (mb, fits))
+        out.append("      for every board: the additional apps (apps/),")
+        out.append("      the documentation (docs/), the ARK scroll (ark/),")
+        for line in textwrap.wrap("and for `ask`: %s." % card_contents(c),
+                                  W - 6):
+            out.append("      " + line)
         out.append("")
-        out.append("      $ gzip -dc %s \\" % sdcard["file"])
+        out.append("      $ gzip -dc %s \\" % c["file"])
         out.append("          | sudo dd of=/dev/sdX bs=4M status=progress "
                    "conv=fsync")
         out.append("")

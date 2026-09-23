@@ -135,6 +135,7 @@ def _mirror_parser():
     b.add_argument("--ark")
     b.add_argument("--no-sdcard", action="store_true")
     b.add_argument("--rebuild-sdcard", action="store_true")
+    b.add_argument("--sdcards", default=None)
     b.add_argument("--resume", action="store_true")
     b.add_argument("--allow-mixed-commits", action="store_true")
     b.add_argument("--full-image", action="store_true")
@@ -325,7 +326,7 @@ def main():
         # the one inside any of them.
         import mkfatimg as _fat
 
-        def _fake_card(root, raw, ark_dir=None):
+        def _fake_card(root, raw, ark_dir=None, **kw):
             with open(raw, "wb") as f:
                 f.write(b"REBUILT-CARD" * 64)
             return [("docs/ask.md", 10)]

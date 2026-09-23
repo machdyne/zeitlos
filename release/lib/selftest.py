@@ -280,8 +280,16 @@ def main():
 
         # --- 5. notes and manifest -----------------------------------
         print("\n== notes and manifest ==")
-        sdcard = {"file": "zeitlos.img.gz",
-                  "bytes": 1204423, "files": ["files", "text", "read"]}
+        sdcard = [
+            {"file": "zeitlos.img.gz", "variant": "base",
+             "packs": ["zdocs"], "bytes": 1204423,
+             "image_bytes": 64 * 1024 * 1024, "needs_8gb": False,
+             "files": ["files", "text", "read", "ark/zdocs/"]},
+            {"file": "zeitlos-arkmedium.img.gz", "variant": "arkmedium",
+             "packs": ["zdocs", "arkmed"], "bytes": 612000000,
+             "image_bytes": 1728 * 1024 * 1024, "needs_8gb": False,
+             "files": ["files", "ark/zdocs/", "ark/arkmed/"]},
+        ]
         man = notes_mod.manifest(version, "deadbeef" * 5, False, results,
                                  sdcard, lay, "abc123")
         notes_mod.write(os.path.join(out, "MANIFEST.json"), man)
@@ -291,7 +299,9 @@ def main():
                                     lay)
         notes_mod.write(os.path.join(out, "README.txt"), rt)
         for must in ("zeitlos-mozart_ml1.img", "RMII", "FLASH LAYOUT",
-                     "zeitlos.img.gz", "zeitlos-mozart_ml1-jump.bin",
+                     "zeitlos.img.gz", "zeitlos-arkmedium.img.gz",
+                     "fits a 4 GB card", "Ark Medium",
+                     "zeitlos-mozart_ml1-jump.bin",
                      "jumploader"):
             if must not in rt:
                 failures.append("README.txt is missing %r" % must)

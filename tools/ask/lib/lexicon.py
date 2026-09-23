@@ -37,6 +37,7 @@
 #
 
 import math
+from array import array
 import re
 import struct
 
@@ -105,6 +106,12 @@ def build(chunk_texts):
     `water procurement` even if the paragraph under it never repeats
     the phrase.
     """
+    # Postings are kept as two compact arrays per term -- chunk ids and
+    # term frequencies -- rather than a list of (cid, tf) tuples. A
+    # tuple costs ~64 bytes of Python heap and an array entry five, and
+    # at arkmed scale (tens of millions of postings) that is the
+    # difference between a build that needs several GB and one that
+    # needs a few hundred MB. The packed output is byte-identical.
     n = len(chunk_texts)
     post = {}
     lengths = []
@@ -115,17 +122,21 @@ def build(chunk_texts):
         for t in toks:
             seen[t] = seen.get(t, 0) + 1
         for t, tf in seen.items():
-            post.setdefault(t, []).append((cid, min(tf, 255)))
+            pl = post.get(t)
+            if pl is None:
+                pl = post[t] = (array("I"), bytearray())
+            pl[0].append(cid)
+            pl[1].append(min(tf, 255))
 
     lx = Lexicon()
     lx.nchunks = n
     lx.avg_len = (sum(lengths) / float(n)) if n else 0.0
 
     df_max = int(n * DF_MAX_RATIO)
-    kept = [t for t, pl in post.items() if DF_MIN <= len(pl) <= df_max]
+    kept = [t for t, pl in post.items() if DF_MIN <= len(pl[0]) <= df_max]
     kept.sort()
     lx.terms = kept
-    lx.df = [len(post[t]) for t in kept]
+    lx.df = [len(post[t][0]) for t in kept]
     lx.postings = [post[t] for t in kept]
     lx.lengths = lengths
     return lx
@@ -145,7 +156,7 @@ def score(lx, query, limit=None):
         if i >= len(lx.terms) or lx.terms[i] != t:
             continue
         idf = lx.idf(i)
-        for cid, tf in lx.postings[i]:
+        for cid, tf in zip(*lx.postings[i]):
             dl = lx.lengths[cid]
             denom = tf + K1 * (1 - B + B * dl / (lx.avg_len or 1.0))
             scores[cid] = scores.get(cid, 0.0) + idf * (tf * (K1 + 1)) / denom
@@ -190,7 +201,7 @@ def pack(lx):
         poff = len(postings)
         prev = 0
         buf = bytearray()
-        for cid, tf in lx.postings[i]:
+        for cid, tf in zip(*lx.postings[i]):
             _varint(cid - prev, buf)
             buf.append(tf)
             prev = cid

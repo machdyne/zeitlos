@@ -452,50 +452,12 @@ def cmd_build(args):
         shutil.copy2(os.path.join(ROOT, "sw/data/images/zeitlos_fb.bin"),
                      os.path.join(out, "zeitlos-logo.bin"))
 
-    # -- SD card -------------------------------------------------------
-    sdcard = None
-    gz_existing = os.path.join(out, "zeitlos.img.gz")
-
-    # -- reuse an sdcard image that is already here ---------------------
+    # -- SD cards ------------------------------------------------------
     #
-    # mkfs.fat stamps a fresh volume serial every time, so rebuilding
-    # produces DIFFERENT BYTES from identical inputs. On a run that only
-    # touched one target that means a new 64MB asset, a new checksum,
-    # and `ship` re-uploading it for no reason.
-    #
-    # --rebuild-sdcard has existed as a flag for a while and was never
-    # read, so every incremental build was quietly re-stamping it. It is
-    # read now.
-    #
-    # Nothing on the card is board-specific, so an image built earlier
-    # under this version is still correct -- unless sw/ or docs/ changed,
-    # which is what the flag is for.
-    if (not args.no_sdcard and not args.rebuild_sdcard
-            and os.path.exists(gz_existing) and previous.get("sdcard")):
-        sdcard = previous["sdcard"]
-        print("\n=== SD card image ===")
-        print("    keeping %s (%d bytes) -- pass --rebuild-sdcard to "
-              "replace it" % (sdcard["file"], sdcard["bytes"]))
-    elif not args.no_sdcard:
-        print("\n=== SD card image ===")
-        # Kept as plain "zeitlos.img.gz". It is what v0.0.1 and v0.0.2
-        # already shipped and what the project README's
-        # releases/latest/download/ URL points at; renaming it would
-        # break that link for no gain.
-        raw = os.path.join(out, "zeitlos.img")
-        try:
-            shipped = mkfatimg.build(ROOT, raw, ark_dir=args.ark)
-        except mkfatimg.FatError as e:
-            die("SD image: %s" % e)
-        gz = raw + ".gz"
-        with open(raw, "rb") as f_in, gzip.open(gz, "wb", 9) as f_out:
-            shutil.copyfileobj(f_in, f_out)
-        os.unlink(raw)
-        print("    %d files, %.1f MB compressed"
-              % (len(shipped), os.path.getsize(gz) / 1048576.0))
-        sdcard = {"file": os.path.basename(gz),
-                  "bytes": os.path.getsize(gz),
-                  "files": [n for n, _ in shipped]}
+    # One image per variant (mkfatimg.VARIANTS): the same card with a
+    # different amount of `ask` corpus on it. Each is kept or rebuilt
+    # on its own.
+    sdcards = _build_sdcards(args, out, previous)
 
     ark_commit = _ark_commit(args.ark) or previous.get("ark_commit")
 
@@ -512,14 +474,14 @@ def cmd_build(args):
     all_targets = [merged[k] for k in sorted(merged)]
 
     man = notes_mod.manifest(version, commit, bool(dirty), all_targets,
-                             sdcard, lay, ark_commit)
+                             sdcards, lay, ark_commit)
     notes_mod.write(os.path.join(out, "MANIFEST.json"), man)
     notes_mod.write(os.path.join(out, "NOTES.md"),
-                    notes_mod.notes(version, commit, all_targets, sdcard,
+                    notes_mod.notes(version, commit, all_targets, sdcards,
                                     lay))
     notes_mod.write(os.path.join(out, "README.txt"),
                     notes_mod.asset_readme(version, commit, all_targets,
-                                           sdcard, lay))
+                                           sdcards, lay))
 
     _write_sums(out)
 
@@ -590,6 +552,97 @@ def _write_sums(out):
 
 # ---------------------------------------------------------------------
 
+# GitHub refuses release assets over 2 GiB. Found at build time, not
+# half way through `ship`.
+ASSET_MAX_BYTES = 2 * 1024 * 1024 * 1024
+
+
+def _previous_sdcards(previous):
+    """This version's earlier card records, from either manifest shape:
+    `sdcards` (a list, one per variant) or the older single `sdcard`."""
+    if previous.get("sdcards"):
+        return {c["file"]: c for c in previous["sdcards"]}
+    if previous.get("sdcard"):
+        c = previous["sdcard"]
+        return {c["file"]: c}
+    return {}
+
+
+def _gzip(raw):
+    gz = raw + ".gz"
+    with open(raw, "rb") as f_in, gzip.open(gz, "wb", 9) as f_out:
+        shutil.copyfileobj(f_in, f_out, 4 * 1024 * 1024)
+    os.unlink(raw)
+    return gz
+
+
+def _build_sdcards(args, out, previous):
+    """Build (or keep) every requested card variant. Returns the list
+    of card records for the manifest."""
+    if args.no_sdcard:
+        return []
+    spec = getattr(args, "sdcards", None) or \
+        ",".join(v[0] for v in mkfatimg.VARIANTS)
+    wanted = [k.strip() for k in spec.split(",") if k.strip()]
+    for k in wanted:
+        try:
+            mkfatimg.variant(k)
+        except mkfatimg.FatError as e:
+            die(str(e))
+    prev = _previous_sdcards(previous)
+    cards = []
+    print("\n=== SD card images ===")
+    for key, stem, packs in mkfatimg.VARIANTS:
+        if key not in wanted:
+            continue
+        gzname = stem + ".img.gz"
+        gz_existing = os.path.join(out, gzname)
+
+        # -- reuse an image that is already here --
+        #
+        # mkfs.fat stamps a fresh volume serial every time, so
+        # rebuilding produces DIFFERENT BYTES from identical inputs. On
+        # a run that only touched one target that would mean new
+        # assets, new checksums, and `ship` re-uploading gigabytes for
+        # no reason. Nothing on a card is board-specific, so an image
+        # built earlier under this version is still correct -- unless
+        # sw/ or docs/ changed, which is what --rebuild-sdcard is for.
+        if (not args.rebuild_sdcard and os.path.exists(gz_existing)
+                and gzname in prev):
+            c = prev[gzname]
+            print("    keeping %s (%d bytes) -- pass --rebuild-sdcard to "
+                  "replace it" % (gzname, c["bytes"]))
+            cards.append(c)
+            continue
+
+        print("  %s  (%s)" % (gzname, " + ".join(packs)))
+        raw = os.path.join(out, stem + ".img")
+        try:
+            shipped = mkfatimg.build(ROOT, raw, ark_dir=args.ark,
+                                     packs=packs)
+        except mkfatimg.FatError as e:
+            die("SD image %s: %s\n  To release without it: --sdcards %s"
+                % (gzname, e, ",".join(k for k in wanted if k != key)
+                   or "<none>"))
+        image_bytes = os.path.getsize(raw)
+        gz = _gzip(raw)
+        gz_bytes = os.path.getsize(gz)
+        if gz_bytes > ASSET_MAX_BYTES:
+            die("%s is %.2f GB compressed; GitHub refuses release assets "
+                "over 2 GiB. Ship fewer packs on it, or split the corpus."
+                % (gzname, gz_bytes / 1e9))
+        print("    %d entries, %.0f MB image, %.1f MB compressed"
+              % (len(shipped), image_bytes / 1048576.0, gz_bytes / 1048576.0))
+        cards.append({"file": gzname,
+                      "variant": key,
+                      "packs": list(packs),
+                      "bytes": gz_bytes,
+                      "image_bytes": image_bytes,
+                      "needs_8gb": image_bytes > mkfatimg.CARD_4GB_BYTES,
+                      "files": [n for n, _ in shipped]})
+    return cards
+
+
 def cmd_sdcard(args):
     """Just the card. No version, no dist directory, no gateware.
 
@@ -606,12 +659,18 @@ def cmd_sdcard(args):
     if d:
         os.makedirs(d, exist_ok=True)
 
+    packs = None
+    if args.variant:
+        try:
+            packs = mkfatimg.variant(args.variant)[2]
+        except mkfatimg.FatError as e:
+            die(str(e))
     try:
-        shipped = mkfatimg.build(ROOT, out, ark_dir=args.ark)
+        shipped = mkfatimg.build(ROOT, out, ark_dir=args.ark, packs=packs)
     except mkfatimg.FatError as e:
         die("SD image: %s" % e)
 
-    print("\n%s -- %d files, %.1f MB"
+    print("\n%s -- %d entries, %.1f MB"
           % (out, len(shipped), os.path.getsize(out) / 1024.0 / 1024.0))
 
     if args.gzip:
@@ -721,6 +780,11 @@ def main(argv):
     b.add_argument("--jobs", "-j", type=int)
     b.add_argument("--ark", help="ARK checkout (default sw/data/ark)")
     b.add_argument("--no-sdcard", action="store_true")
+    b.add_argument("--sdcards",
+                   default=",".join(v[0] for v in mkfatimg.VARIANTS),
+                   help="card variants to build (default: all of %s). "
+                        "arkmedium needs the arkmed pack built first."
+                        % ", ".join(v[0] for v in mkfatimg.VARIANTS))
     b.add_argument("--rebuild-sdcard", action="store_true",
                    help="rebuild the sdcard image even if one is already "
                         "in dist/<version>/")
@@ -756,6 +820,10 @@ def main(argv):
     sd.add_argument("--gzip", action="store_true",
                     help="also write <out>.gz")
     sd.add_argument("--ark", help="ARK checkout (default sw/data/ark)")
+    sd.add_argument("--variant",
+                    choices=[v[0] for v in mkfatimg.VARIANTS],
+                    help="one of a release's card variants (default: "
+                         "zdocs + arklite, or $ZEITLOS_ASK_PACKS)")
     sd.set_defaults(func=cmd_sdcard)
 
     v = sub.add_parser("verify", help="re-check a built release")

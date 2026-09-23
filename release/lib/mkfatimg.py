@@ -65,8 +65,84 @@ import os
 import shutil
 import subprocess
 
-SIZE_MB = 64
 LABEL = "ZEITLOS"
+
+# -- image variants --
+#
+# A release ships one card image per corpus size. Everything but the
+# `ask` packs is identical across them.
+#
+#   zeitlos.img.gz            zdocs only. Keeps the name v0.0.1 and
+#                             v0.0.2 shipped, which the project README's
+#                             releases/latest/download/ URL points at.
+#   zeitlos-arklite.img.gz    + Ark Lite (Codex, selected books, Scroll)
+#   zeitlos-arkmedium.img.gz  + Ark Medium (Wikipedia 10K vital, the
+#                             Gutenberg CD, MedlinePlus, the Factbook,
+#                             and Lite). arkmed CONTAINS Lite, so this
+#                             image carries arkmed and not arklite.
+#
+# (key, file stem, packs), in the order they are built and listed.
+VARIANTS = [
+    ("base",      "zeitlos",           ("zdocs",)),
+    ("arklite",   "zeitlos-arklite",   ("zdocs", "arklite")),
+    ("arkmedium", "zeitlos-arkmedium", ("zdocs", "arkmed")),
+]
+
+
+def variant(key):
+    for v in VARIANTS:
+        if v[0] == key:
+            return v
+    raise FatError("no card variant `%s` (have: %s)"
+                   % (key, ", ".join(v[0] for v in VARIANTS)))
+
+
+# -- sizing --
+#
+# An image is sized to what it holds, never below MIN_SIZE_MB (what
+# every release before variants shipped, so the small images are the
+# size they always were). Above that: the content, rounded up to whole
+# clusters per file, plus HEADROOM for the filesystem's own structures
+# and FREE_MB left over for the user -- `user/`, zcc output, text
+# files. Rounded to SIZE_STEP_MB so sizes are not arbitrary.
+#
+# Free space costs nothing to download (zeros compress to nothing) but
+# it does set the smallest card the image fits, which is why it is not
+# more generous. Somebody with a larger card can grow the partition.
+MIN_SIZE_MB = 64
+FREE_MB = 16
+HEADROOM = 1.05
+SIZE_STEP_MB = 64
+
+# A "4 GB" card holds about 3.7-3.9e9 bytes, and cards vary. Above this
+# an image needs an 8 GB card, and the release notes say so.
+CARD_4GB_BYTES = 3600000000
+
+# -- cluster size --
+#
+# Small images keep 512-byte clusters (`-s 1`), as they always had:
+# nothing on them is big, and slack stays negligible.
+#
+# Large ones get 8KB. Two costs of tiny clusters grow with the card:
+#
+#   - The FAT itself. 1.5GB at 512 bytes is 3M clusters, a 12MB FAT
+#     written twice; at 8KB it is 750KB.
+#   - Opening a file. sw/os/fsapi.c builds FatFs's fast-seek map on
+#     every open, which walks the file's whole cluster chain. `ask`
+#     opens its postings and dictionary on every query, and at arkmed
+#     scale post.zlp is tens of megabytes: ~100K FAT entries to walk at
+#     512 bytes, ~6K at 8KB.
+#
+# The price is slack: on average half a cluster per file, ~4KB, which
+# for arkmed's tens of thousands of files is on the order of 100MB of a
+# 1.5GB card. That is what `ask`'s query speed is bought with.
+LARGE_IMAGE_BYTES = 1024 * 1024 * 1024
+SECTORS_SMALL = 1
+SECTORS_LARGE = 16
+
+
+def sectors_per_cluster(image_bytes):
+    return SECTORS_LARGE if image_bytes > LARGE_IMAGE_BYTES else SECTORS_SMALL
 
 # Mirrors tools/mkfatimg.sh. Grouped the same way and in the same
 # order, so the two can be read side by side.
@@ -192,8 +268,11 @@ SPEECH_DEST = "/speech/en.spk"      # tts's PACK_PATH; 8.3, so not "speech.zspk"
 # after the first time.
 #
 # SIZES: zdocs 2.4MB, arklite ~22MB, arkmed hundreds. The image is
-# SIZE_MB and the preflight will say so before formatting anything.
+# sized to fit them (plan_size), before anything is formatted.
 ASK_OUT = "tools/ask/out"
+# What `zrelease sdcard` (and so tools/mkfatimg.sh) puts on a card when
+# nothing says otherwise: the development card, unchanged from before
+# variants. A release builds VARIANTS instead.
 ASK_PACKS_DEFAULT = ("zdocs", "arklite")
 
 # -- the zcc runtime, under libz/ --
@@ -361,8 +440,44 @@ def ask_pack_files(root, name):
     return sorted(out)
 
 
-def build(root, out_path, ark_dir=None, verbose=True):
-    """Build the SD card image. Returns a list of (name, size) shipped."""
+def _check_83_path(dest):
+    """Every component of a card path, 8.3 -- see fits_83 in build()."""
+    for part in dest.strip("/").split("/"):
+        stem, _, ext = part.partition(".")
+        if not stem or len(stem) > 8 or len(ext) > 3 or "." in ext:
+            raise FatError(
+                "'%s' does not fit an 8.3 name and cannot go on the card "
+                "(FatFs here is FF_USE_LFN 0)" % dest)
+
+
+def plan_size(sizes):
+    """(image bytes, sectors per cluster) for files of these sizes."""
+    def need(spc):
+        c = spc * 512
+        return sum((n + c - 1) // c * c for n in sizes) + 4096 * c
+
+    size = MIN_SIZE_MB * 1024 * 1024
+    for _ in range(3):      # the cluster size depends on the size
+        spc = sectors_per_cluster(size)
+        want = int(need(spc) * HEADROOM) + FREE_MB * 1024 * 1024
+        step = SIZE_STEP_MB * 1024 * 1024
+        want = (want + step - 1) // step * step
+        if want <= size:
+            break
+        size = want
+    return size, sectors_per_cluster(size)
+
+
+def build(root, out_path, ark_dir=None, verbose=True, packs=None):
+    """Build the SD card image. Returns a list of (name, size) shipped.
+
+    `packs` names the ask packs to ship; None means
+    ask_packs_requested() (the environment, or ASK_PACKS_DEFAULT). A
+    pack ships as a directory and is listed as one entry,
+    "ark/<pack>/", rather than as its tens of thousands of files --
+    MANIFEST.json would otherwise carry every Wikipedia article's
+    number.
+    """
     preflight()
 
     ark_dir = ark_dir or os.path.join(root, "sw/data/ark")
@@ -437,42 +552,48 @@ def build(root, out_path, ark_dir=None, verbose=True):
     # and running out of room "halfway through a 64MB image, with
     # mcopy's own silence for an error message".
     pack_files = []
-    for packname in ask_packs_requested():
+    for packname in (ask_packs_requested() if packs is None else packs):
         pack_files.append((packname, ask_pack_files(root, packname)))
 
-    pack_bytes = sum(os.path.getsize(src)
-                     for _n, fs in pack_files for _c, src in fs)
-    other_bytes = 0
-    for _n, rel in apps:
-        other_bytes += os.path.getsize(os.path.join(root, rel))
-    # The speech pack is several megabytes -- too much for the slack below.
+    # Every pack name must be 8.3, checked BEFORE formatting: mcopy
+    # would store a long name that FatFs here cannot open, and finding
+    # that out after the image is half written is the failure this
+    # function is arranged to avoid.
+    for _packname, files in pack_files:
+        for card, _src in files:
+            _check_83_path(card)
+
+    # Everything that goes on the card, for sizing.
+    sizes = [os.path.getsize(src) for _n, fs in pack_files for _c, src in fs]
+    nfiles_pack = len(sizes)
+    for _n, rel in apps + LIBZ_FILES + LIBZ_EXTRA + EXAMPLES + FPGA_FILES \
+            + CONFIG_FILES:
+        sizes.append(os.path.getsize(os.path.join(root, rel)))
+    for a in audio:
+        sizes.append(os.path.getsize(os.path.join(audio_src, a)))
     if speech:
-        other_bytes += os.path.getsize(speech)
-    # Rough: the rest (docs, libz, headers, audio, ark scroll) is a few
-    # megabytes and the slack below covers it.
-    need = pack_bytes + other_bytes
-    room = SIZE_MB * 1024 * 1024
-    if need > room * 0.85:
-        raise FatError(
-            "the card image has no room for this.\n"
-            "  %.1f MB of apps and ask packs against a %d MB image.\n"
-            "  Raise SIZE_MB, or ship fewer packs:\n"
-            "      ZEITLOS_ASK_PACKS=zdocs ./release/zrelease ...\n"
-            "  Packs: %s"
-            % (need / 1e6, SIZE_MB,
-               ", ".join("%s %.1fMB"
-                         % (n, sum(os.path.getsize(s) for _c, s in fs) / 1e6)
-                         for n, fs in pack_files) or "(none)"))
+        sizes.append(os.path.getsize(speech))
+    for d in docs:
+        sizes.append(os.path.getsize(os.path.join(root, "docs", d)))
+    for a in ark:
+        sizes.append(os.path.getsize(os.path.join(ark_dir, a)))
+    size_bytes, spc = plan_size(sizes)
+    if verbose:
+        print("    %d files (%d in ask packs), %.1f MB of content -> "
+              "%d MB image, %d-byte clusters"
+              % (len(sizes), nfiles_pack, sum(sizes) / 1e6,
+                 size_bytes // (1024 * 1024), spc * 512))
+        if size_bytes > CARD_4GB_BYTES:
+            print("    NOTE: %.2f GB -- this image needs an 8 GB card"
+                  % (size_bytes / 1e9))
 
     if os.path.exists(out_path):
         os.unlink(out_path)
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
-
     with open(out_path, "wb") as f:
-        f.truncate(SIZE_MB * 1024 * 1024)
+        f.truncate(size_bytes)
 
-    # Same arguments as tools/mkfatimg.sh, deliberately.
-    _run(["mkfs.fat", "-F", "32", "-S", "512", "-s", "1",
+    _run(["mkfs.fat", "-F", "32", "-S", "512", "-s", str(spc),
           "-n", LABEL, out_path])
 
     for d in DIRS:
@@ -533,19 +654,24 @@ def build(root, out_path, ark_dir=None, verbose=True):
         copy(os.path.join(ark_dir, a), "/ark/" + a)
 
     # -- ask packs (resolved in preflight above) --
+    # Packs go in as whole directory trees, one `mcopy -s` per tree.
+    # Copying file by file is a subprocess per file, each re-reading the
+    # FAT: fine for arklite's thousand files, hours for arkmed's tens of
+    # thousands. Every name is checked for 8.3 first, because mcopy
+    # would happily store a long name that FatFs here cannot open.
     for packname, files in pack_files:
-        total = 0
-        for card, src in files:
-            # The tree is deeper than DIRS covers: /ask/<pack>/ and
-            # /ark/<pack>/<dataset>/ plus any split subdirectories.
-            mkdir_p(card.rsplit("/", 1)[0])
-            copy(src, card)
-            total += os.path.getsize(src)
+        base = os.path.join(root, ASK_OUT, packname)
+        total = sum(os.path.getsize(src) for _c, src in files)
+        for top in ("ark", "ask"):
+            mkdir_p("/" + top)
+            _run(["mcopy", "-s", "-i", out_path,
+                  os.path.join(base, top, packname), "::/%s/" % top])
+            made_dirs.add("%s/%s" % (top, packname))
+        shipped.append(("ark/%s/" % packname, total))
         if verbose:
-            print("  ask pack %-10s %5d files  %6.1f MB"
+            print("  ask pack %-10s %6d files  %7.1f MB"
                   % (packname, len(files), total / 1e6))
 
-    # -- the zcc runtime --
     for name, rel in LIBZ_FILES + LIBZ_EXTRA + EXAMPLES:
         fits_83(name)
         copy(os.path.join(root, rel), "/" + name)

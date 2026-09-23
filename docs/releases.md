@@ -3,7 +3,7 @@
 How a Zeitlos release is built and published.
 
 A release is one flashable image per hardware configuration, plus a
-shared sdcard image. Someone with a supported board runs one command and
+shared sdcard images. Someone with a supported board runs one command and
 has a working system; they build nothing.
 
 Everything lives in `release/`. The rest of the tree is untouched except
@@ -48,7 +48,9 @@ release/dist/0.0.3/
   zeitlos-kernel.bin                identical for every target
   zeitlos-apps.zar                  identical for every target
   zeitlos-logo.bin                  identical for every target
-  zeitlos.img.gz                    sdcard image, identical for every target
+  zeitlos.img.gz                    sdcard image: apps, docs, zdocs
+  zeitlos-arklite.img.gz            ...plus Ark Lite for `ask`
+  zeitlos-arkmedium.img.gz          ...plus Ark Medium (~1.5GB and up)
   README.txt                        what each file is, offline
   MANIFEST.json                     defines, Fmax, utilisation, commit
   SHA256SUMS
@@ -68,7 +70,8 @@ version is the release tag, and it is in `MANIFEST.json`, in
 a filename is the one place it is least useful and most costly.
 
 `zeitlos.img.gz` keeps its old name for the same reason: `v0.0.1` and
-`v0.0.2` shipped it and the README already links to it.
+`v0.0.2` shipped it and the README already links to it. It is now the
+smallest of three card images; see "The sdcard images".
 
 `README.txt` is where the full list of boards and configurations lives.
 The project README carries one example and a pointer, so adding a target
@@ -89,7 +92,7 @@ release/
   lib/spec.py           spec parsing, composition, derived SW config
   lib/gen.py            generated files and their cleanup
   lib/mkflashimg.py     image assembly and region validation
-  lib/mkfatimg.py       sdcard image, via mtools
+  lib/mkfatimg.py       sdcard images, via mtools
   lib/build.py          drives the top-level Makefile
   lib/ship.py           gh release create/upload
   lib/notes.py          NOTES.md, README.txt, MANIFEST.json
@@ -415,7 +418,7 @@ Per target:
    `-DFPGA_x`, spliced into the bitstream's BRAM by `ecpbram`).
 6. **Image assembly** and region validation.
 
-Then once per release: the sdcard image, `README.txt`, `NOTES.md`,
+Then once per release: the sdcard images, `README.txt`, `NOTES.md`,
 `MANIFEST.json`, `SHA256SUMS`.
 
 ---
@@ -575,7 +578,72 @@ system reads.
 
 ---
 
-## The sdcard image
+## The sdcard images
+
+A release ships **one card image per corpus size**. They are identical
+except for the `ask` packs on them (`lib/mkfatimg.py`, `VARIANTS`):
+
+| image | `ask` packs | size |
+|---|---|---|
+| `zeitlos.img.gz` | `zdocs` | 64 MB |
+| `zeitlos-arklite.img.gz` | `zdocs` + `arklite` | 64 MB |
+| `zeitlos-arkmedium.img.gz` | `zdocs` + `arkmed` | ~1.5 GB today, up to ~4 GB |
+
+`arkmed` contains Ark Lite, so the medium image carries `arkmed` and not
+`arklite` beside it. The packs are built by `tools/ask` beforehand; a
+missing one stops the build with the command that makes it.
+
+```
+$ release/zrelease build v0.0.4                          # all three
+$ release/zrelease build v0.0.4 --sdcards base,arklite   # without arkmed
+$ release/zrelease sdcard --variant arkmedium            # just one, no release
+```
+
+`zrelease sdcard` with no `--variant` still makes the development card
+it always made (`zdocs` + `arklite`, or `$ZEITLOS_ASK_PACKS`), because
+`tools/mkfatimg.sh` calls it.
+
+### Sizing, clusters, and what grows with the card
+
+**An image is sized to what it holds**, never below the 64 MB every
+release before variants shipped: the content rounded up to whole
+clusters per file, plus 5% for the filesystem's own structures, plus
+16 MB free for the user, in 64 MB steps. Free space costs nothing to
+download -- zeros compress to nothing -- but it sets the smallest card
+the image fits. Above 3.6 GB an image needs an 8 GB card, and the build
+and the release notes both say so.
+
+**Images over 1 GiB use 8KB clusters**; smaller ones keep 512 bytes.
+Two costs of small clusters grow with the card. The FAT itself: 1.5 GB
+at 512 bytes is 3M clusters and a 12 MB FAT, written twice. And every
+file open: `sw/os/fsapi.c` builds FatFs's fast-seek map on open, which
+walks the file's whole cluster chain, and `ask` opens its postings file
+on every query -- at `arkmed` scale ~100K chain entries at 512 bytes,
+~6K at 8KB. The price is slack, half a cluster per file on average:
+around 100 MB of a 1.5 GB card. That is what query speed costs.
+
+**A pack is copied as a tree, one `mcopy -s` each.** The per-file copy
+used for everything else is a subprocess per file that re-reads the
+FAT; fine for arklite's thousand files, hours for arkmed's tens of
+thousands. Every pack path is checked for 8.3 BEFORE anything is
+formatted, since `mcopy` would happily store a long name that FatFs
+here (`FF_USE_LFN 0`) cannot open.
+
+**A pack is ONE manifest entry**, `ark/<pack>/`, not a line per file.
+`MANIFEST.json` would otherwise list every Wikipedia article's number.
+
+**GitHub refuses release assets over 2 GiB.** A card that compresses
+past that stops the build, rather than failing half way through `ship`.
+Text compresses well; this is a limit for the ~4 GB future, not today.
+
+`lib/test_mkfatimg.py` builds every variant whose packs are present
+with the real tools -- `mkfs.fat`, `mcopy`, `fsck.fat` -- and reads the
+result back with mtools: every pack file present, contents identical,
+8.3 refused before formatting, and the 8KB-cluster path. The other two
+suites stub the card out, so this is the only one that formats
+anything.
+
+### How a card is built
 
 Built by `lib/mkfatimg.py`, which is `tools/mkfatimg.sh` with one
 change: `mount` + `cp` becomes `mmd` + `mcopy`. Same `mkfs.fat`
@@ -746,7 +814,7 @@ Without it, **`build` always rebuilds what you ask for** — including
 every target, if you ask for none. That is the right default: the usual
 reason to name a target is that something it depends on changed.
 
-### Rebuilding only the sdcard
+### Rebuilding only the sdcards
 
 Noticing a stale file on the card after shipping is normal, and redoing
 eight place-and-routes to fix it is not:
@@ -758,8 +826,11 @@ $ release/zrelease build v0.0.4 --resume --rebuild-sdcard
 no targets left; rebuilding the sdcard image only.
 ```
 
-The card is rebuilt, `NOTES.md`, `README.txt`, `MANIFEST.json` and
-`SHA256SUMS` are regenerated, and `ship` then replaces one asset.
+Every requested card is rebuilt, `NOTES.md`, `README.txt`,
+`MANIFEST.json` and `SHA256SUMS` are regenerated, and `ship` then
+replaces those assets. Add `--sdcards` to rebuild only some of them --
+a documentation fix does not need the 1.5 GB medium image re-uploaded
+unless `zdocs` is on it, which it is.
 
 **The kernel and the ZAR are deliberately not recompiled** on a run with
 no targets. They are already in `dist/` from the run that made the
@@ -767,9 +838,10 @@ images, and a fresh compile would publish a `zeitlos-kernel.bin` that is
 not the kernel inside any of them.
 
 `--rebuild-sdcard` matters on ordinary incremental runs too. `mkfs.fat`
-stamps a fresh volume serial every time, so rebuilding the card produces
-different bytes from identical inputs — a new 64MB asset and a new
-checksum for nothing. A build that finds `zeitlos.img.gz` already in
+stamps a fresh volume serial every time, so rebuilding a card produces
+different bytes from identical inputs — new assets, up to gigabytes of
+them, and new checksums for nothing. Each image is kept or rebuilt on
+its own. A build that finds `zeitlos.img.gz` already in
 `dist/<version>/` keeps it unless you ask:
 
 ```

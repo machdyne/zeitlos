@@ -331,6 +331,25 @@ def _md_escape(s):
     return s.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
 
 
+def _group_parts(entries):
+    """[(base title, [(doc, path), ...])] -- split parts grouped under
+    the document they came from, in title order."""
+    groups = {}
+    order = []
+    for d, p in entries:
+        key = d.key.split("#", 1)[0]
+        base = d.title.split(" -- ", 1)[0]
+        if key not in groups:
+            groups[key] = (base, [])
+            order.append(key)
+        groups[key][1].append((d, p))
+    out = [(groups[k][0], groups[k][1]) for k in order]
+    for _base, parts in out:
+        parts.sort(key=lambda dp: dp[0].key)
+    out.sort(key=lambda g: g[0].lower())
+    return out
+
+
 def write_indexes(docs, paths, outdir, pack, meta=None):
     """Write index.md into the pack root and each dataset directory.
 
@@ -356,11 +375,24 @@ def write_indexes(docs, paths, outdir, pack, meta=None):
                        "not by people.** Treat it")
             out.append("as a starting point rather than as a source.")
         out.append("")
-        for d, p in entries:
-            # Relative to this index, which may be one level above a
-            # split subdirectory (000/, 001/).
-            rel = p[len(dsdir) + 1:]
-            out.append("- [%s](%s)" % (_md_escape(d.title), rel))
+        # One bullet per SOURCE document, with its split parts nested
+        # under it. `split=` turns a book into a document per chapter
+        # -- which is right for retrieval and for `read`'s lazy index,
+        # and made an index of 2,700 lines where 300 books were meant:
+        # the reader saw every chapter of every book flat in one list.
+        # Parts share a key of the form "<rel>#<n>" (see the adapters).
+        for base, parts in _group_parts(entries):
+            first_rel = parts[0][1][len(dsdir) + 1:]
+            if len(parts) == 1:
+                out.append("- [%s](%s)"
+                           % (_md_escape(parts[0][0].title), first_rel))
+                continue
+            out.append("- [%s](%s) -- %d parts"
+                       % (_md_escape(base), first_rel, len(parts)))
+            for d, p in parts:
+                label = d.title[len(base):].lstrip(" -") or "beginning"
+                out.append("    - [%s](%s)"
+                           % (_md_escape(label), p[len(dsdir) + 1:]))
         out.append("")
         full = os.path.join(outdir, dsdir, INDEX_NAME)
         os.makedirs(os.path.dirname(full), exist_ok=True)
@@ -386,6 +418,21 @@ def write_indexes(docs, paths, outdir, pack, meta=None):
         out.append("- [%s](%s/%s) -- %d document%s%s"
                    % (name, name, INDEX_NAME, n, "" if n == 1 else "s",
                       "  *(model-written)*" if name in gen else ""))
+    # The image indexes (images.py writes them into the pack root).
+    # Without this nothing links to them: they are named maps.md and
+    # flags.md rather than index.md, so the only way to reach them was
+    # to know they existed.
+    imgs = [(n, t) for n, t in (("maps.md", "Maps"), ("flags.md", "Flags"),
+                                ("images.md", "Other images"))
+            if os.path.exists(os.path.join(outdir, root, n))]
+    if imgs:
+        out += ["", "## Images", ""]
+        for n, t in imgs:
+            out.append("- [%s](%s)" % (t, n))
+        out.append("")
+        out.append("Images are not searchable -- an image has no text, so "
+                   "`ask` never returns one. These pages are how they are "
+                   "reached.")
     out += ["",
             "Searchable with the `ask` app, which matches on meaning "
             "rather than",

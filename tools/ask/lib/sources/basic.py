@@ -14,11 +14,13 @@
 #
 
 import glob
+import html
 import gzip
 import os
 import re
 import tarfile
 
+from .. import html2md
 from ..source import Document, adapter
 
 
@@ -155,12 +157,35 @@ def load_medline(path, opts):
 # Splitting prefers chapter headings and falls back to paragraph
 # boundaries, so a split never lands mid-sentence.
 
+# A chapter heading: the keyword, then a NUMBER -- roman, arabic, or a
+# single letter for "Appendix B". The number used to be
+# `[A-Za-z0-9IVXLC]+`, which is just "any word" (IVXLC adds nothing to
+# A-Za-z), so "ACT New Zealand [Rodney HIDE]; Green Party..." in the
+# CIA Factbook matched as a chapter heading. It was the only match in
+# 13.5MB, so the whole book became one piece named after that line and
+# the size pass cut it into "... (2)", "... (3)". Any line beginning
+# Part, Book, Section, Scene or Act followed by a word did this.
 _CHAPTER = re.compile(
     r"^\s*((?:CHAPTER|Chapter|BOOK|Book|PART|Part|APPENDIX|Appendix|LETTER|"
-    r"ACT|SCENE|PSALM|Section|SECTION)\s+[A-Za-z0-9IVXLC]+\.?)\s*(.{0,70})$")
+    r"ACT|SCENE|PSALM|Section|SECTION)\s+"
+    r"(?:[IVXLCDM]+|[0-9]+|[A-Z])\.?)(?![A-Za-z0-9])\s*(.{0,70})$")
 
 
-def _split_points(text, target):
+def _heads_re(opts):
+    """The heading pattern for a source. `head=<regex>` overrides the
+    chapter default -- a corpus whose sections are country names or
+    `@Afghanistan` lines can say so rather than being cut by size."""
+    pat = opts.get("head")
+    if not pat:
+        return _CHAPTER
+    try:
+        return re.compile(pat, re.M)
+    except re.error as e:
+        raise ValueError("head=%s is not a regular expression: %s"
+                         % (pat, e))
+
+
+def _split_points(text, target, heads_re=None):
     """Byte-safe split points, preferring chapter headings.
 
     Two passes. The first finds chapter headings; the second subdivides
@@ -177,20 +202,32 @@ def _split_points(text, target):
     offs, blanks = [], []
     off = 0
     heads = []
+    rx = heads_re or _CHAPTER
     for ln in lines:
         offs.append(off)
-        if _CHAPTER.match(ln):
-            heads.append((off, ln.strip()))
+        m = rx.match(ln)
+        if m:
+            # A pattern with a capture group labels the section with
+            # it: `head=^@(.+)$` over the Factbook's "@Afghanistan
+            # (South Asia)" gives "Afghanistan (South Asia)".
+            lbl = (m.group(1) if m.groups() else ln).strip()
+            heads.append((off, " ".join(lbl.split())))
         elif not ln.strip():
             blanks.append(off)
         off += len(ln) + 1
 
     pts = []
     last = -1
+    # Merging runs of headings guards against front matter and tables
+    # of contents, which produce dozens in a row. A recipe that gave
+    # its own `head=` pattern has said what a section is, and its
+    # sections may legitimately be small -- the Factbook's countries
+    # run from a couple of KB to a couple of hundred -- so merging
+    # them by size would put twenty countries in one document named
+    # after the first.
+    gap = 512 if heads_re else target // 2
     for pos, title in heads:
-        # Merge runs of headings that are too close together -- front
-        # matter and tables of contents produce dozens in a row.
-        if last < 0 or pos - last >= target // 2:
+        if last < 0 or pos - last >= gap:
             pts.append((pos, title))
             last = pos
     if not pts or pts[0][0] != 0:
@@ -253,7 +290,7 @@ def load_books(path, opts):
             docs.append(Document(base, title, text, src))
             continue
 
-        pts = _split_points(text, split)
+        pts = _split_points(text, split, _heads_re(opts))
         for i, (start, head) in enumerate(pts):
             end = pts[i + 1][0] if i + 1 < len(pts) else len(text)
             body = text[start:end]
@@ -414,6 +451,10 @@ def load_listed(path, opts):
         if len(parts) != 2:
             continue
         rel, title = parts
+        # Ark's lists are HTML-escaped: pgcdrom.lst has `Happy Prince
+        # &amp; Other Tales` and `Number &quot;e&quot;`. The title is
+        # what the device shows on every result line, so decode it.
+        title = html.unescape(title)
         if dedupe and title in seen_titles:
             continue
         f = os.path.join(root, rel)
@@ -427,10 +468,19 @@ def load_listed(path, opts):
         text = _read(f)
         if opts.get("gutenberg", "0") not in ("0", "no", "false"):
             text = strip_gutenberg(text)
+        # HTML sources (the 2008 Wikipedia selection) become markdown
+        # here, because what is emitted is what is INDEXED and what a
+        # preview quotes. `html=no` turns it off; `html=yes` forces it
+        # on a file the sniff misses. See lib/html2md.py.
+        mode = opts.get("html", "auto")
+        if mode not in ("0", "no", "false"):
+            if mode in ("1", "yes", "true") or html2md.looks_like_html(text):
+                text = html2md.convert(text, title,
+                                       sections=opts.get("sections"))
         if not split or len(text) <= split:
             docs.append(Document(rel, title, text, src))
             continue
-        pts = _split_points(text, split)
+        pts = _split_points(text, split, _heads_re(opts))
         for i, (start, head) in enumerate(pts):
             end = pts[i + 1][0] if i + 1 < len(pts) else len(text)
             body = text[start:end]
@@ -464,10 +514,16 @@ def load_onefile(path, opts):
     split = int(opts.get("split", "0"), 0)
     title = opts.get("title", os.path.splitext(os.path.basename(path))[0])
     text = _read(path)
+    # Off by default, as for `listed`; `gutenberg=yes` for a single
+    # Project Gutenberg ebook such as the Factbook, whose licence would
+    # otherwise be indexed as text -- the "Alice in Wonderland answers
+    # `how do I delete a file`" failure in docs/ask_app.md.
+    if opts.get("gutenberg", "0") not in ("0", "no", "false"):
+        text = strip_gutenberg(text)
     if not split or len(text) <= split:
         return [Document(os.path.basename(path), title, text, src)]
     docs = []
-    pts = _split_points(text, split)
+    pts = _split_points(text, split, _heads_re(opts))
     for i, (start, head) in enumerate(pts):
         end = pts[i + 1][0] if i + 1 < len(pts) else len(text)
         body = text[start:end]

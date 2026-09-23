@@ -188,6 +188,14 @@ enough that a Zeitlos release could reasonably ship it by default.
 `arkmed` is the largest set we intend to support. Ark sizes Medium for
 a 4GB partition or a DVD, which is an ordinary microSD card.
 
+**Each tier ships as its own card image** (`docs/releases.md`, "The
+sdcard images"): `zeitlos.img.gz` with `zdocs` alone,
+`zeitlos-arklite.img.gz`, and `zeitlos-arkmedium.img.gz` with `zdocs`
+and `arkmed` -- about 1.5 GB today and expected to grow toward 4 GB.
+All three packs are lexical-only (`dense = no`), which is what makes
+the medium one possible at all: nothing is resident but two bytes a
+chunk of lengths.
+
 ### Fetching `arkmed`
 
 ```
@@ -218,6 +226,13 @@ Both fail non-fatally and the build looks like it worked, which is how
 they survived. They are upstream's to fix; the recipe here does the
 same downloads declaratively so a pack build does not depend on the
 script being correct on the day someone runs it.
+
+One piece of Ark Medium is not a download at all. The Gutenberg CD's
+title list, `pgcdrom.lst`, lives in the Ark repo's `data/`, and
+`build.sh` copies it in beside the unpacked texts. The recipe does the
+same with a `fetch = ... lfs=ark/data/pgcdrom.lst unpack=no` line; the
+first real `arkmed` build found it missing, because the list is not in
+the zip and nothing had said so.
 
 What `ask fetch` adds: resumable transfers into a `.part` file that is
 only moved into place once complete, optional `sha256=` pinning, a real
@@ -392,6 +407,108 @@ else on the card refers to it.
 Measured across a co-installed `arklite` + `arkmed` card: 1,948 paths,
 no collisions, longest path 32 characters — 43 of `Z_WM_ARG_MAX`'s 96
 bytes once a ten-digit `#offset` fragment is appended.
+
+### HTML sources become markdown at build time
+
+The 2008 Wikipedia selection in `arkmed` ships as HTML, and the first
+build of that pack indexed it as HTML. That is the worse half of the
+problem: a chunk is a byte range of the file on the card, so `div`,
+`class`, `href` and every colour in a style attribute became **search
+terms**, and a preview would have quoted tags at the reader.
+
+`lib/html2md.py` converts it (stdlib `html.parser`, no dependency).
+Headings, paragraphs, lists and table cells survive; script, style and
+anything whose class or id marks it as navigation, edit links,
+category boxes or the print footer are dropped -- a MediaWiki page is
+mostly furniture by volume. Malformed markup falls back to tag
+stripping rather than losing the document.
+
+**Two things survive tag-level rules and are dropped by HEADING.**
+The first `arkmed` conversion left every article carrying sections
+called Views, Interaction, Search and Languages: MediaWiki's sidebar
+portlets, which in this dump are ordinary divs with headings, and
+which say "Read / Edit / View history". The second is the link-only
+tail -- References, See also, External links -- which, once links are
+gone, is a list of bare titles a reader cannot follow and that `ask`
+indexes as though the article were about every work it cites. Both
+are removed with everything under them, down to the next heading of
+the same or a higher level. A level-1 heading is never dropped,
+because Wikipedia has an article called Search. `sections=keep` turns
+the pruning off.
+
+It runs for any `listed` source whose files sniff as HTML, which wants
+a doctype or several tags: a plain-text book that mentions `<p>` in
+prose is left alone. `html=no` turns it off, `html=yes` forces it.
+`tools/ask/tests/test_html2md.py` checks what matters -- that no tag,
+attribute or URL survives into the text, that the prose and its
+entities do, and that a large page loses nothing.
+
+**The alternative was to ship the HTML and open it in `web`**, which
+keeps the original bytes. It does not fix the index, which is the half
+that decides whether anything is findable at all, so it is not an
+alternative to this. As a separate feature it is still worth having:
+`web` already renders from a byte source and takes a launch argument,
+so local files would mostly be plumbing plus an open control, and
+`ztype.c` has no `HTM` entry to route them with yet.
+
+### A heading is a heading, not any line starting with "Act"
+
+`split=` prefers to cut at chapter headings, and the pattern it used
+read the number as `[A-Za-z0-9IVXLC]+` -- which is simply "any word",
+since `IVXLC` adds nothing to `A-Za-z`. So in the CIA Factbook
+
+```
+ACT New Zealand [Rodney HIDE]; Green Party [Russel NORMAN]
+```
+
+was a chapter heading. It was the ONLY match in 13.5 MB, so the whole
+book became one piece named after that line, and the size pass then
+cut it into `... (2)`, `... (3)`, `... (17)`: a dataset index of a
+hundred near-identical entries about New Zealand's parliament. Any
+line beginning Part, Book, Section, Scene or Act followed by a word
+did the same, which cost `arklite` three wrong splits too.
+
+The number must now be roman, arabic or a single letter, and not run
+into a word. Where a corpus's sections are not chapters at all, a
+source gives its own pattern. The Factbook's are country lines:
+
+```
+@Afghanistan  (South Asia)          ->  head=^@(.+)$
+```
+
+A capture group becomes the label, so the marker never reaches the
+reader, and a `head=` pattern also turns OFF the rule that merges
+headings closer together than half of `split=`. That rule exists for
+tables of contents, and the Factbook's countries run from a couple of
+KB to a couple of hundred: merging by size would have put twenty
+countries in one document named after the first. Splitting on country
+boundaries also stops a preview ending mid-entry, which cutting by
+size alone allowed.
+Text with no headings is still bounded by size and labelled `part 2`,
+`part 3`, which is honest; being named after a line of prose is not.
+`tools/ask/tests/test_split.py` covers both halves: that real headings
+are found, and that prose is not mistaken for one.
+
+### Index pages group split parts
+
+`split=` turns a book into a document per chapter, which is right for
+retrieval and for `read`'s lazy index -- and made a dataset index that
+listed every chapter of every book flat, thousands of lines where
+hundreds of books were meant. A dataset index now shows one bullet per
+source document, with its parts nested under it:
+
+```
+- [Aesop's Fables](00000060.md)
+- [Agriculture for Beginners](00000024.md) -- 4 parts
+    - [beginning](00000024.md)
+    - [CHAPTER I. THE SOIL](00000025.md)
+```
+
+The pack's root index also links `maps.md`, `flags.md` and
+`images.md` when a pack has them. They are named for their contents
+rather than being `index.md` in an image directory, which meant
+nothing linked to them and the only way to reach them was to know they
+existed.
 
 ### Everything is `.md`, including plain text
 
@@ -1093,6 +1210,16 @@ defect.
 Worth remembering before reaching for the model again: this was a
 bigger win than training, and it was an hour of reading the corpus.
 
+**It came back with `arkmed`.** Only the `books` adapter strips
+licences by default. The Gutenberg CD and the Factbook come in through
+`listed` and `onefile`, which read mostly non-Gutenberg text and so do
+not -- and the first `arkmed` build indexed the small print of every
+book on the CD. The recipe now says `gutenberg=yes` on both lines
+(`onefile` learned the option for it). The same build also showed
+Ark's list files are HTML-escaped (`Happy Prince &amp; Other Tales`),
+so `listed` decodes titles now: a title is what every result line
+shows.
+
 ## Training the encoder
 
 The device computes exactly one thing (`aidx.c`, `encode_query`):
@@ -1274,10 +1401,11 @@ is now *defined* as the slice the device will read.
 | `requirements.txt` | **done** |
 | `sw/apps/ask` — window, incremental scan, pack loading | **done**, not yet run on hardware |
 | `aidx.c` index engine, host-tested against a real pack | **done**, rankings match the Python reference exactly |
-| Device lexical (BM25) half | **not done** — see below |
+| Device lexical (BM25) half | **done**; conforms to exact BM25 on 125/127 gold questions (`lexcheck`, below) |
+| `arkmed` at scale | device engine checked at 20× `arklite` (~200K chunks); the real corpus not yet built -- its downloads are not reachable from where this was written |
 | `read` `#offset` support | patch written, `sw/apps/ask/read-offset.patch.md` |
 | Trained encoder (`torch` backend) | after the app, against the 42/63 and 62/63 bars |
-| `rtl/zml.v` coarse-scan accelerator | after a corpus large enough to need it |
+| `rtl/zml.v` coarse-scan accelerator | **no workload** while packs are lexical-only: there is no coarse scan to accelerate |
 | `release/` integration | after the app |
 
 ## The device build, and one honest gap
@@ -1334,7 +1462,81 @@ The earlier claim that the two matched was three queries where the
 difference happened not to change the order. That was luck, not
 validation.
 
+### The device's BM25 was not the BM25 we measured. `lexcheck` is.
+
+`refcheck` covers the dense path. Nothing checked the lexical one --
+the half that ships -- and it turned out not to compute what `ask eval`
+measures. `sw/apps/ask/test/lexcheck.py` compares `aidx.c` (through
+`hosttest`, the engine that ships) against exact floating-point BM25
+over **the same packed files**: the same dictionary, postings and
+per-chunk lengths, with no truncation and no memory limit. Whatever
+differs is the device's engineering, not a different formula.
+
+On the `arklite` pack as shipped:
+
+| | rank-1 identical | gold-relevant at rank 1 |
+|---|---|---|
+| exact BM25 over the pack | -- | 77 |
+| device, before | 117 / 127 | 72 |
+| device, after | **125 / 127** | **76** |
+
+Two limits, one biting now and one waiting:
+
+- **The accumulator held 1,024 chunks and dropped the rest** once full.
+  54 of the 127 gold questions overflowed it, and which chunks
+  survived depended on where they sat in the corpus, not on relevance.
+  That is five questions at rank 1 that `ask eval` counted and the
+  hardware did not deliver.
+- **Each term's postings were read in one 4 KB block** and the rest of
+  the list ignored. On `arklite` no list is that long, so it cost
+  nothing. At `arkmed` scale most common terms' lists are, and since
+  postings run in chunk order, everything late in the corpus --
+  Wikipedia, MedlinePlus -- would have been invisible to every query
+  containing a common word.
+
+The engine now builds a **plan** per pack (every query term looked up
+with the dictionary opened once, sorted rarest first), **streams each
+list in full**, one 4 KB block per `ai_query_step()` so the window stays
+live and ESC stays immediate, and accumulates by **admit, then
+continue**: new chunks are admitted while the pack's share of a
+4,096-slot map lasts, and after that later -- commoner -- terms only add
+to chunks already present. A chunk matching none of the informative
+terms cannot outrank one that matches them on a common word alone, so
+what is refused is what would have ranked low anyway. The two
+remaining rank-1 differences are fixed-point near-ties, 1.8% and 0.1%
+apart.
+
+`--tile 20` checks the scale that matters by building a 20-times copy
+of the pack at the binary level -- 197,440 chunks, 46 MB of postings,
+realistic term statistics. There the new engine agrees at rank 1 on
+123 of 127 and finds the gold passage first for 76 (exact: 77); the
+old one agreed on 97. At that scale a typical query reads ~34 KB of
+postings (90th percentile 92 KB) and decodes 16–45K records: roughly
+0.2–0.3 s on the device, in steps.
+
+```
+$ cd sw/apps/ask/test && make
+$ python3 lexcheck.py ../../../../tools/ask/out/arklite
+$ python3 lexcheck.py ../../../../tools/ask/out/arklite --tile 20
+```
+
+Tiling understates what the old engine lost -- every chunk has copies
+early in the corpus, where the 4 KB window reached -- so it is a check
+on the new engine, not a measurement of the old one's damage.
+
+The **host build** was made fit for the same scale at the same time:
+`lib/lexicon.py` holds postings as two compact arrays per term rather
+than a list of `(chunk, tf)` tuples, ~5 bytes a posting instead of ~64.
+The packed output is byte-identical, and `ask eval` reads 73/88/100 as
+before.
+
 ### Residency, and the ceiling it runs into
+
+**All of this is about the DENSE half.** A lexical-only pack
+(`dense = no`, which every shipped pack now is) has no coarse array:
+its resident cost is two bytes a chunk of lengths, about 0.4 MB for a
+full `arkmed`, and the ceiling below does not apply. It is kept
+because it is what turning the dense half back on would cost.
 
 What the device holds is **the coarse vector array plus one encoder,
 per pack**. Nothing else.

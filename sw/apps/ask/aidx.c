@@ -1028,6 +1028,7 @@ static uint32_t read_varint(const uint8_t *p, uint32_t *i, uint32_t len)
     return v;
 }
 
+/* Adds `sc` to `chunk`'s score, admitting it if there is budget. */
 static void lexmap_add(ai_query_t *q, int pack, uint32_t chunk, int32_t sc)
 {
     uint32_t h = (chunk * 2654435761u) >> (32 - AI_LEXMAP_BITS);
@@ -1035,10 +1036,14 @@ static void lexmap_add(ai_query_t *q, int pack, uint32_t chunk, int32_t sc)
     for (i = 0; i < AI_LEXMAP_SIZE; i++) {
         uint32_t k = (h + i) & (AI_LEXMAP_SIZE - 1);
         if (!q->lexmap[k].used) {
+            /* Not present. Admit only while this pack has budget --
+             * see AI_LEXMAP_ADMIT for why refusing here is safe. */
+            if (q->lex_admitted >= q->lex_budget) return;
             q->lexmap[k].used = 1;
             q->lexmap[k].chunk = chunk;
             q->lexmap[k].pack = (int8_t)pack;
             q->lexmap[k].score = sc;
+            q->lex_admitted++;
             return;
         }
         if (q->lexmap[k].chunk == chunk && q->lexmap[k].pack == pack) {
@@ -1046,7 +1051,6 @@ static void lexmap_add(ai_query_t *q, int pack, uint32_t chunk, int32_t sc)
             return;
         }
     }
-    /* full -- drop it, see AI_LEXMAP_SIZE */
 }
 
 /* Binary-searches the dictionary for `term`. Returns true and fills
@@ -1080,79 +1084,142 @@ static bool lex_find(const ai_pack_t *p, ai_file_t *f, uint32_t poolbase,
     return false;
 }
 
-/* Scores one query term's postings into the accumulator. */
-static void lex_term_score(ai_query_t *q, int pi, const char *term)
+/* Builds q->lplan for pack `pi`: every query term in its dictionary,
+ * rarest first. Opens lexicon.zlx once for all of them -- the first
+ * version opened it once PER TERM, and on a large card every open
+ * builds a fast-seek map by walking the file's cluster chain. */
+static void lex_plan(ai_query_t *q, int pi)
 {
     const ai_pack_t *p = &g_packs[pi];
+    char toks[AI_TERMS_MAX][32];
+    int ntok = tokenize(q->text, toks, AI_TERMS_MAX);
     ai_file_t f;
     uint8_t hdr[AI_HDR_SIZE];
-    uint32_t nterms, poolbase, post_off = 0, post_len = 0, df = 0;
+    uint32_t nterms, poolbase;
     char path[64];
+    int t, k;
 
-    if (!p->nterms) return;
+    q->nplan = 0;
+    q->plan_i = 0;
+    q->plan_done = 0;
+    q->plan_cid = 0;
+    q->lex_admitted = 0;
+    /* Each pack gets an equal share of the admit limit, so a first
+     * pack full of common matches cannot crowd a second pack's rare
+     * ones out of the accumulator. */
+    q->lex_budget = AI_LEXMAP_ADMIT / (uint32_t)(g_npacks ? g_npacks : 1);
 
+    if (!p->nterms || !ntok) return;
     path_join(path, sizeof(path), p->dir, "lexicon.zlx");
     if (ai_open(&f, path) != 0) return;
-    if (ai_read(&f, hdr, AI_HDR_SIZE) != AI_HDR_SIZE) { ai_close(&f); return; }
-    if (!hdr_ok(hdr, AI_MAGIC_LEXICON, p->dsid, &nterms, NULL, NULL, NULL)) {
-        ai_close(&f); return;
+    if (ai_read(&f, hdr, AI_HDR_SIZE) != AI_HDR_SIZE
+        || !hdr_ok(hdr, AI_MAGIC_LEXICON, p->dsid, &nterms, NULL, NULL, NULL)) {
+        ai_close(&f);
+        return;
     }
     poolbase = AI_HDR_SIZE + nterms * 16u;
-    if (!lex_find(p, &f, poolbase, term, &post_off, &post_len, &df)) {
-        ai_close(&f); return;
-    }
-    ai_close(&f);
-
-    if (!post_len || !df) return;
-
-    {
-        static uint8_t buf[4096];
-        uint32_t want = post_len > sizeof(buf) ? (uint32_t)sizeof(buf)
-                                               : post_len;
-        int32_t idf = bm25_idf_q8(p->nchunks, df);
-        uint32_t i = 0, cid = 0;
-        int got;
-
-        path_join(path, sizeof(path), p->dir, "post.zlp");
-        if (ai_open(&f, path) != 0) return;
-        if (ai_seek(&f, AI_HDR_SIZE + post_off) != 0) { ai_close(&f); return; }
-        got = ai_read(&f, buf, (int)want);
-        ai_close(&f);
-        if (got <= 0) return;
-
-        while (i < (uint32_t)got) {
-            uint32_t d = read_varint(buf, &i, (uint32_t)got);
-            uint32_t tf;
-            if (i >= (uint32_t)got) break;
-            tf = buf[i++];
-            cid += d;
-            if (!tf) continue;
-            /* idf * tf*(k1+1) / (tf + k1*(1 - b + b*dl/avgdl)), Q8.
-             *
-             * The denominator's length term is what stops a long chunk
-             * winning on sheer repetition. With b = 0 it vanishes and
-             * the I2C document beats the survival manual on "start". */
-            {
-                int32_t k1 = AI_BM25_K1_Q8;
-                int32_t tfq = (int32_t)tf << 8;
-                int32_t norm = 1 << 8;          /* 1.0 when no lengths */
-                int32_t num, den, sat;
-
-                if (p->lens && cid < p->nchunks && p->avg_len) {
-                    int32_t ratio = (int32_t)(((uint32_t)p->lens[cid] << 8)
-                                              / p->avg_len);
-                    if (ratio > (8 << 8)) ratio = 8 << 8;
-                    norm = (1 << 8) - AI_BM25_B_Q8
-                         + (int32_t)(((int64_t)AI_BM25_B_Q8 * ratio) >> 8);
-                    if (norm < 16) norm = 16;
-                }
-                num = tfq * ((k1 + (1 << 8)) >> 4);
-                den = (tfq + (int32_t)(((int64_t)k1 * norm) >> 8)) >> 4;
-                sat = den ? (num / den) : 0;
-                lexmap_add(q, pi, cid, (int32_t)(((int64_t)idf * sat) >> 8));
-            }
+    for (t = 0; t < ntok; t++) {
+        uint32_t off = 0, len = 0, df = 0;
+        if (!lex_find(p, &f, poolbase, toks[t], &off, &len, &df)) continue;
+        if (!len || !df) continue;
+        /* A term repeated in the query is kept twice, as
+         * tools/ask/lib/lexicon.py's score() counts it twice. */
+        k = q->nplan++;
+        q->lplan[k].off = off;
+        q->lplan[k].len = len;
+        q->lplan[k].df = df;
+        q->lplan[k].idf = bm25_idf_q8(p->nchunks, df);
+        /* insertion sort, ascending df: rarest first */
+        while (k > 0 && q->lplan[k - 1].df > q->lplan[k].df) {
+            ai_lplan_t tmp = q->lplan[k - 1];
+            q->lplan[k - 1] = q->lplan[k];
+            q->lplan[k] = tmp;
+            k--;
         }
     }
+    ai_close(&f);
+}
+
+/* Scores one block of the current plan term's postings. Returns true
+ * when the pack's plan is exhausted. */
+static bool lex_block(ai_query_t *q, int pi)
+{
+    const ai_pack_t *p = &g_packs[pi];
+    static uint8_t buf[AI_POST_BLOCK];
+    uint32_t len, want, i = 0;
+    int32_t idf;
+    bool last;
+    char path[64];
+    int got;
+
+    if (q->plan_i >= q->nplan) return true;
+
+    if (q->lf_pack != pi) {
+        if (q->lf_pack >= 0) { ai_close(&q->lf); q->lf_pack = -1; }
+        path_join(path, sizeof(path), p->dir, "post.zlp");
+        if (ai_open(&q->lf, path) != 0) { q->plan_i = q->nplan; return true; }
+        q->lf_pack = pi;
+    }
+
+    len = q->lplan[q->plan_i].len;
+    idf = q->lplan[q->plan_i].idf;
+    want = len - q->plan_done;
+    if (want > AI_POST_BLOCK) want = AI_POST_BLOCK;
+    last = (q->plan_done + want == len);
+
+    got = -1;
+    if (ai_seek(&q->lf, AI_HDR_SIZE + q->lplan[q->plan_i].off + q->plan_done) == 0)
+        got = ai_read(&q->lf, buf, (int)want);
+    if (got != (int)want) {
+        /* A short read is a damaged card. Abandon this term rather
+         * than score half of it and pretend. */
+        got = 0;
+        last = true;
+    }
+
+    /* A record is a varint (at most 5 bytes) and a tf byte. Parse only
+     * whole records, unless this block reaches the end of the list; the
+     * unparsed tail is re-read at the start of the next block. */
+    while (i < (uint32_t)got) {
+        uint32_t start = i, d, tf;
+        if (!last && i + 6 > (uint32_t)got) break;
+        d = read_varint(buf, &i, (uint32_t)got);
+        if (i >= (uint32_t)got) { i = start; break; }
+        tf = buf[i++];
+        q->plan_cid += d;
+        if (!tf) continue;
+        {
+            uint32_t cid = q->plan_cid;
+            int32_t k1 = AI_BM25_K1_Q8;
+            int32_t tfq = (int32_t)tf << 8;
+            int32_t norm = 1 << 8;          /* 1.0 when no lengths */
+            int32_t num, den, sat;
+
+            /* idf * tf*(k1+1) / (tf + k1*(1 - b + b*dl/avgdl)), Q8.
+             * The length term is what stops a long chunk winning on
+             * sheer repetition. */
+            if (p->lens && cid < p->nchunks && p->avg_len) {
+                int32_t ratio = (int32_t)(((uint32_t)p->lens[cid] << 8)
+                                          / p->avg_len);
+                if (ratio > (8 << 8)) ratio = 8 << 8;
+                norm = (1 << 8) - AI_BM25_B_Q8
+                     + (int32_t)(((int64_t)AI_BM25_B_Q8 * ratio) >> 8);
+                if (norm < 16) norm = 16;
+            }
+            num = tfq * ((k1 + (1 << 8)) >> 4);
+            den = (tfq + (int32_t)(((int64_t)k1 * norm) >> 8)) >> 4;
+            sat = den ? (num / den) : 0;
+            lexmap_add(q, pi, cid, (int32_t)(((int64_t)idf * sat) >> 8));
+        }
+    }
+
+    q->plan_done += i;
+    if (last || q->plan_done >= len) {
+        q->plan_i++;
+        q->plan_done = 0;
+        q->plan_cid = 0;
+    }
+    return q->plan_i >= q->nplan;
 }
 
 /* ------------------------------------------------------------------ *
@@ -1167,12 +1234,16 @@ bool ai_query_begin(ai_query_t *q, const char *text, int want)
      * while the first was mid-re-rank leaked one file handle every
      * time, and Z_FS_MAX_OPEN is 8. */
     if (q->fz_pack >= 0) { ai_close(&q->fz); q->fz_pack = -1; }
+    if (q->lf_pack >= 0) { ai_close(&q->lf); q->lf_pack = -1; }
     memset(q, 0, sizeof(*q));
     if (!g_npacks) return false;
     q->want = (want > 0 && want <= AI_HITS_MAX) ? want : 8;
     q->phase = AI_Q_ENCODE;
     q->fz_pack = -1;
     q->fz.handle = -1;
+    q->lf_pack = -1;
+    q->lf.handle = -1;
+    q->nplan = -1;
     /* Only packs with a coarse array contribute scan work. A
      * lexical-only pack (`dense = no`) has none, so total stays 0 and
      * the app shows an indeterminate status instead of a bar stuck at
@@ -1189,6 +1260,7 @@ bool ai_query_begin(ai_query_t *q, const char *text, int want)
 void ai_query_cancel(ai_query_t *q)
 {
     q->phase = AI_Q_CANCELLED;
+    if (q->lf_pack >= 0) { ai_close(&q->lf); q->lf_pack = -1; }
     /* Release the fine index handle. Z_FS_MAX_OPEN is small and
      * shared by every process (see sw/apps/read/read.c's own note on
      * running out of handles), so a cancelled query that kept one
@@ -1217,6 +1289,7 @@ bool ai_query_step(ai_query_t *q)
         q->phase = any ? AI_Q_SCAN : AI_Q_LEXICAL;
         q->lex_pack = 0;
         q->lex_term = 0;
+        q->nplan = -1;
         q->pack_i = 0;
         q->scan_i = 0;
         return false;
@@ -1296,18 +1369,20 @@ bool ai_query_step(ai_query_t *q)
     }
 
     case AI_Q_LEXICAL: {
-        /* One query term per step. A term is ~15 binary-search probes
-         * plus one postings read, which is card I/O, so it gets its
-         * own slice like everything else that touches the card. */
-        char toks[AI_TERMS_MAX][32];
-        int ntok = tokenize(q->text, toks, AI_TERMS_MAX);
-
-        if (q->lex_pack < g_npacks && q->lex_term < ntok) {
-            lex_term_score(q, q->lex_pack, toks[q->lex_term]);
-            q->lex_term++;
-            if (q->lex_term >= ntok) { q->lex_term = 0; q->lex_pack++; }
+        /* One pack's plan per step, then one postings block per step:
+         * everything here is card I/O, so each piece gets its own
+         * slice and ESC stays immediate. */
+        if (q->lex_pack < g_npacks) {
+            if (q->nplan < 0) {
+                lex_plan(q, q->lex_pack);
+                return false;
+            }
+            if (!lex_block(q, q->lex_pack)) return false;
+            q->lex_pack++;
+            q->nplan = -1;
             return false;
         }
+        if (q->lf_pack >= 0) { ai_close(&q->lf); q->lf_pack = -1; }
 
         /* Collect the accumulator's best AI_FUSE_DEPTH. */
         {
@@ -1379,6 +1454,7 @@ bool ai_query_step(ai_query_t *q)
         q->phase = AI_Q_LEXICAL;
         q->lex_pack = 0;
         q->lex_term = 0;
+        q->nplan = -1;
         return false;
     }
 

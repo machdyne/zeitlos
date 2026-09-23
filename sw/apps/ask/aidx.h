@@ -103,13 +103,41 @@
  * `ask eval <recipe> --fuse-sweep 0.25,0.5,1,2`. */
 #define AI_FUSE_DENSE_Q8    256
 
-/* Postings accumulator. Open addressing, power of two, and bounded:
- * a common term can have thousands of postings and the device has no
- * room to score them all. Overflow drops candidates rather than
- * growing, which costs recall on exactly the terms that carry least
- * information. */
-#define AI_LEXMAP_BITS      10
+/* Postings accumulator. Open addressing, power of two, and bounded.
+ *
+ * -- ADMIT, THEN CONTINUE --
+ *
+ * A query's terms are processed RAREST FIRST (lowest df, highest idf),
+ * and a chunk is admitted to the accumulator only while the pack's
+ * share of AI_LEXMAP_ADMIT is not used up. After that, later terms --
+ * the common ones -- only ADD to chunks already present. This is the
+ * standard way to run term-at-a-time BM25 in bounded memory (Moffat
+ * and Zobel's "continue" strategy): a chunk that matches none of the
+ * informative terms cannot outrank one that does on the strength of a
+ * common word alone, so what is refused admission is what would have
+ * ranked low anyway.
+ *
+ * It replaced a map of 1024 slots that took chunks in corpus order
+ * and dropped whatever arrived once it was full. On `arklite` that
+ * overflowed for 54 of the 127 gold questions and changed the rank-1
+ * passage on 10 of them, measured against exact BM25 over the same
+ * packed files (sw/apps/ask/test/lexcheck.py). Which chunks survived
+ * depended on where they sat in the corpus, not on relevance -- and
+ * at `arkmed` scale everything late in the corpus (Wikipedia,
+ * MedlinePlus) would have been the part dropped.
+ *
+ * ADMIT stays below SIZE so a probe always finds an empty slot and
+ * the map can never fill. 4096 slots is 48KB of the query state. */
+#define AI_LEXMAP_BITS      12
 #define AI_LEXMAP_SIZE      (1 << AI_LEXMAP_BITS)
+#define AI_LEXMAP_ADMIT     (AI_LEXMAP_SIZE * 3 / 4)
+
+/* Postings are streamed in blocks of this size, one block per
+ * ai_query_step(). The first version read ONE block and ignored the
+ * rest of the list: harmless on `arklite`, whose longest list fits, and
+ * at `arkmed` scale it would have silently scored only the chunks at
+ * the start of the corpus for every common term. */
+#define AI_POST_BLOCK       4096
 
 /* BM25 k1 and b, in Q8. */
 #define AI_BM25_K1_Q8       307     /* 1.2  */
@@ -261,6 +289,15 @@ typedef struct {
     int8_t   pack;
 } ai_cand_t;
 
+/* One query term's entry in a pack's lexical plan. Named, like
+ * ai_cand_t, so the sort can swap two without a GCC typeof(). */
+typedef struct {
+    uint32_t off;           /* postings offset in post.zlp */
+    uint32_t len;           /* postings bytes */
+    uint32_t df;
+    int32_t  idf;           /* Q8 */
+} ai_lplan_t;
+
 /* -- query state --
  *
  * A query is a state machine so the caller can return to its message
@@ -311,7 +348,19 @@ typedef struct {
     ai_cand_t   lex[AI_FUSE_DEPTH];
     int         nlex;
     int         lex_pack;       /* pack whose terms are being walked */
-    int         lex_term;       /* which query term */
+    int         lex_term;       /* unused since the plan; kept for ABI */
+
+    /* The pack's query plan: every query term found in its dictionary,
+     * rarest first. Built once per pack, then walked block by block. */
+    ai_lplan_t  lplan[AI_TERMS_MAX];
+    int         nplan;          /* -1 until built for lex_pack */
+    int         plan_i;         /* term being streamed */
+    uint32_t    plan_done;      /* bytes of it consumed */
+    uint32_t    plan_cid;       /* running chunk id (delta decoding) */
+    uint32_t    lex_admitted;   /* chunks admitted for lex_pack */
+    uint32_t    lex_budget;     /* ...and its share of the admit limit */
+    ai_file_t   lf;             /* post.zlp, held open for one pack */
+    int         lf_pack;        /* which pack lf belongs to, -1 if none */
 
     /* shortlist, kept as a min-heap on score so the worst is cheap to
      * evict -- an array scan per candidate would be O(n*k) over the
