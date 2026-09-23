@@ -26,7 +26,7 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 | Storage | MicroSD |
 | Network | Ethernet (SPI/USB), Ethernet MAC (for RMII PHY) or [ESP32](docs/esp32link.md) |
 | Entropy | Ring-oscillator [TRNG](docs/trng.md) |
-| Crypto | Optional [Montgomery multiplier](docs/montmul.md) for TLS (~1000 LUTs, no BRAM) |
+| Crypto | Optional [Montgomery multiplier](docs/montmul.md) for TLS |
 | USB Host | [Dual-port USB host controller](docs/usb_host.md) (HID, MSC, CDC-ACM, [CDC-ECM](docs/usb_ethernet.md), hubs) |
 | USB Device | [USB CDC](docs/usb_cdc.md) serial console |
 | HID | USB keyboard + optional USB mouse/[gamepad](docs/gamepad.md) |
