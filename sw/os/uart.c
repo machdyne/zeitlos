@@ -472,9 +472,12 @@ static inline uint8_t k_rev8(uint8_t b) {
 	return b;
 }
 
-// The panic screen: the last lines of the console log, drawn straight
-// into VRAM, so a panic can be read on a machine with no serial cable.
-// Nothing else will ever draw again, so it takes the whole screen.
+// The panic screen: the last K_PANIC_ROWS rows of the console log, the
+// report at the bottom of them, drawn straight into VRAM at the top of
+// the screen, so a panic can be read on a machine with no serial cable.
+// Twenty rows, not the sixty that fit in 480 lines: a full screen of
+// text did not all fit on a real display, and it is the end that
+// matters. The rest of the screen is cleared.
 //
 // Deliberately primitive, because the system is broken: CPU stores
 // only, no blitter, no wm, no font loaded into the GPU. Each glyph of
@@ -485,7 +488,7 @@ static inline uint8_t k_rev8(uint8_t b) {
 // the text is not shown through a 320x240 viewport.
 #define K_PANIC_VRAM ((volatile uint8_t *)0x20000000)
 #define K_PANIC_COLS 80
-#define K_PANIC_ROWS 60
+#define K_PANIC_ROWS 20
 
 void k_klog_panic_screen(void) {
 	const z_font_t *f = &z_font_5x8;
@@ -494,18 +497,30 @@ void k_klog_panic_screen(void) {
 
 	for (uint32_t i = 0; i < (640u * 480u) / 8u; i++) K_PANIC_VRAM[i] = 0;
 
-	// Back up from the end to the start of the last K_PANIC_ROWS lines
-	// still held. Long lines wrap below, so a very long one can push the
-	// oldest lines off the bottom: it is the end that matters.
+	// Back up from the end to where the last K_PANIC_ROWS screen rows
+	// begin, counting a long line as the rows it wraps to -- so a wrapped
+	// line cannot push the report itself off the bottom.
 	uint32_t end = k_klog_pos;
 	uint32_t held = (end < K_KLOG_SIZE) ? end : K_KLOG_SIZE;
-	uint32_t start = end - held;
-	int lines = 0;
-	for (uint32_t p = end; p != start; p--) {
-		if (k_klog[(p - 1) & (K_KLOG_SIZE - 1)] == '\n' && ++lines > K_PANIC_ROWS - 1) {
-			start = p;
-			break;
+	uint32_t oldest = end - held;
+	uint32_t q = end;
+	if (q != oldest && k_klog[(q - 1) & (K_KLOG_SIZE - 1)] == '\n') q--;
+	uint32_t start = q, len = 0;
+	int rows = 0;
+	for (;;) {
+		bool at_line = (q == oldest) ||
+			k_klog[(q - 1) & (K_KLOG_SIZE - 1)] == '\n';
+		if (at_line) {
+			int r = len ? (int)((len + K_PANIC_COLS - 1) / K_PANIC_COLS) : 1;
+			if (rows + r > K_PANIC_ROWS) break;
+			rows += r;
+			start = q;
+			len = 0;
+			if (q == oldest) break;
+		} else if (k_klog[(q - 1) & (K_KLOG_SIZE - 1)] != '\r') {
+			len++;
 		}
+		q--;
 	}
 
 	int row = 0, col = 0;

@@ -152,6 +152,23 @@ static inline void *z_translate(uint32_t pid, void *vptr) {
 //
 // returns Z_FAIL (and resets obj to Z_NONE) if the scratch budget
 // isn't big enough for the payload.
+// A pointer in the SENDER's object that the kernel is about to read
+// words through: a blob header, a list/map table, its item arrays. It
+// must be word-aligned and inside the sender's own window. A misaligned
+// word read is an exception, and here it would be one in kernel code,
+// inside the receiver's syscall -- a corrupted object in one app
+// panicking the whole system. Such an element reaches the receiver as
+// Z_NONE instead. Strings and blob data are read a byte at a time by
+// whoever uses them, and are not checked. See docs/mpu.md.
+static bool z_sender_ok(uint32_t pid, const void *vptr, uint32_t len) {
+	if (pid == 0) return true;		// the kernel's own messages
+	uint32_t a = (uint32_t)(uintptr_t)vptr;
+	uint32_t size = z_procs[pid].size;
+	if ((a & 3u) || (a & 0xf0000000u) != 0x80000000u) return false;
+	uint32_t off = a - 0x80000000u;
+	return off <= size && len <= size - off;
+}
+
 static z_rv z_resolve_obj(uint32_t from_pid, z_obj_t *obj,
 	z_obj_table_t *tables, uint32_t *tcount,
 	z_obj_t *items, uint32_t *icount,
@@ -171,6 +188,12 @@ static z_rv z_resolve_obj(uint32_t from_pid, z_obj_t *obj,
 			return Z_OK;
 
 		case Z_BLOB: {
+
+			if (obj->val.ptr &&
+				!z_sender_ok(from_pid, obj->val.ptr, sizeof(z_blob_t))) {
+				obj->type = Z_NONE;
+				return Z_OK;
+			}
 
 			z_blob_t *src =
 				(z_blob_t *)z_translate(from_pid, obj->val.ptr);
@@ -197,6 +220,12 @@ static z_rv z_resolve_obj(uint32_t from_pid, z_obj_t *obj,
 		case Z_LIST:
 		case Z_MAP: {
 
+			if (obj->val.ptr &&
+				!z_sender_ok(from_pid, obj->val.ptr, sizeof(z_obj_table_t))) {
+				obj->type = Z_NONE;
+				return Z_OK;
+			}
+
 			z_obj_table_t *src =
 				(z_obj_table_t *)z_translate(from_pid, obj->val.ptr);
 
@@ -212,6 +241,13 @@ static z_rv z_resolve_obj(uint32_t from_pid, z_obj_t *obj,
 			if (*tcount >= Z_MSG_MAX_TABLES || *icount + need > Z_MSG_MAX_ITEMS) {
 				obj->type = Z_NONE;
 				return Z_FAIL;
+			}
+
+			// len is bounded by the check above, so these cannot overflow
+			if ((len && !z_sender_ok(from_pid, src->a, len * (uint32_t)sizeof(z_obj_t))) ||
+				(is_map && len && !z_sender_ok(from_pid, src->b, len * (uint32_t)sizeof(z_obj_t)))) {
+				obj->type = Z_NONE;
+				return Z_OK;
 			}
 
 			z_obj_table_t *dst = &tables[(*tcount)++];

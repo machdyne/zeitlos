@@ -75,6 +75,9 @@
 // Always true when not inside a syscall from an app. Handlers call it on
 // every buffer they write through, and fail the call if it is false.
 bool k_user_ok(const void *ptr, uint32_t len);
+// ...and word-aligned, for buffers the kernel accesses a word at a time
+// (structures, the syscall arguments themselves).
+bool k_user_ok_words(const void *ptr, uint32_t len);
 
 typedef struct {
 

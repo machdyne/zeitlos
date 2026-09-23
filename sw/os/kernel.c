@@ -1272,6 +1272,27 @@ bool k_user_ok(const void *ptr, uint32_t len) {
 	return false;
 }
 
+// k_user_ok(), and word-aligned: for anything the kernel reads or writes
+// a word at a time (the arguments themselves, arrays of structures). A
+// misaligned word access is an exception, and in kernel code an
+// exception is a panic -- so an app's misaligned pointer used to be able
+// to take the whole system down. It is refused and logged instead.
+bool k_user_ok_words(const void *ptr, uint32_t len) {
+	if (((uint32_t)(uintptr_t)ptr & 3u) &&
+		z_pid < Z_PROCS_MAX && z_procs[z_pid].base >= (uint32_t)(uintptr_t)&_end) {
+		if (k_user_bad_logged < 16) {
+			const char *n = k_pidreg_name_for(z_pid);
+			printf("syscall: %s%spid %lu passed a misaligned pointer %08lx; call refused\n",
+				n ? n : "", n ? " " : "", (unsigned long)z_pid,
+				(unsigned long)(uintptr_t)ptr);
+			if (++k_user_bad_logged == 16)
+				printf("syscall: further bad-pointer reports suppressed\n");
+		}
+		return false;
+	}
+	return k_user_ok(ptr, len);
+}
+
 // `mpu` shell command support (sh.c)
 bool k_mpu_active(void) { return k_mpu; }
 void k_mpu_reset_log(void) { k_mpu_logged = 0; }
@@ -1351,7 +1372,7 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 			// memory, and handlers check any buffer they write
 			// through with k_user_ok(). Only apps are checked: the
 			// kernel's own process (pid 0) runs from the kernel image.
-			if (regs && !k_user_ok(regs, 4)) {
+			if (regs && !k_user_ok_words(regs, 4)) {
 				ret = (uint32_t *)&z_fail;
 			} else {
 				if (fslock) k_fs_enter();

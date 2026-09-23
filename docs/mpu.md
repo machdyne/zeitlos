@@ -205,10 +205,14 @@ before anything else in the interrupt path:
   with interrupts masked. Nothing can be trusted once the kernel itself
   has faulted. The report is flushed to the serial console by polling
   (the UART's interrupt will never come), and then **drawn on the
-  screen**: the last 60 lines of the console log
-  ([console.md](console.md)), the report at the bottom, in plain CPU
-  stores to VRAM with the 5x8 font -- no blitter, no `wm`, game mode
-  switched off. That costs the kernel about 1.3 KB.
+  screen**: the last 20 rows of the console log
+  ([console.md](console.md)) at the top of an otherwise cleared screen,
+  the report at the bottom of them, in plain CPU stores to VRAM with the
+  5x8 font -- no blitter, no `wm`, game mode switched off. A long line
+  counts as the rows it wraps to, so it cannot push the report out of
+  view. (It was the last 60 lines at first, filling all 480 lines of the
+  framebuffer; on a real display they did not all fit.) That costs the
+  kernel about 1.3 KB.
 
   ```
   *** KERNEL PANIC: misaligned memory access
@@ -282,6 +286,43 @@ int main(void) { unsigned int x = *(volatile unsigned int *)0x80001001; return (
 ```
 
 Expect `crashed: misaligned memory access`.
+
+**Syscall with a misaligned argument pointer.** Calls the syscall entry
+directly (the address at `0x0000000c`, as the runtime does), asking
+`UPTIME` (9) to write its result one byte into the program's own buffer:
+
+```c
+int main(void) {
+	unsigned int buf[4];
+	unsigned int (*k)(unsigned int, unsigned int *, unsigned int);
+	k = (unsigned int (*)(unsigned int, unsigned int *, unsigned int))
+		*(volatile unsigned int *)0x0000000c;
+	k(9, (unsigned int *)((char *)buf + 1), 0);
+	return 0;
+}
+```
+
+Expect `syscall: pid N passed a misaligned pointer ...; call refused`,
+and the program carries on. Before
+[syscall pointer checks](#syscall-pointer-checks) this halted the
+machine with a kernel panic.
+
+**Syscall writing into kernel memory.** The same, with the argument
+pointer aimed at kernel code:
+
+```c
+int main(void) {
+	unsigned int (*k)(unsigned int, unsigned int *, unsigned int);
+	k = (unsigned int (*)(unsigned int, unsigned int *, unsigned int))
+		*(volatile unsigned int *)0x0000000c;
+	k(9, (unsigned int *)0x40000100, 0);
+	return 0;
+}
+```
+
+Expect `syscall: pid N passed a bad pointer 40000100 (4 bytes); call
+refused`. This one is safe with the MPU off too: it is the kernel's own
+check, not the MPU's.
 
 ### Only while enforcing (the default)
 
@@ -366,6 +407,27 @@ first 16 are logged:
 ```
 syscall: view pid 7 passed a bad pointer 00001000 (4096 bytes); call refused
 ```
+
+**Alignment.** Where the kernel accesses an app's memory a word at a
+time -- the argument pointer itself, the process list's array of
+structures, USB networking's info structure -- the pointer must also be
+word-aligned (`k_user_ok_words()`). A misaligned word access is an
+exception, and in kernel code an exception is a panic: a program that
+passed a syscall a pointer one byte off its own buffer used to halt the
+whole machine. It is now refused like any other bad pointer:
+
+```
+syscall: pid 6 passed a misaligned pointer 80004fd9; call refused
+```
+
+**Messaging.** Receiving a message has the kernel read the *sender's*
+objects: blob headers, list and map tables, their item arrays. Those
+pointers are checked the same way before they are followed -- word-
+aligned and inside the sender's own window (`z_sender_ok()` in
+`sw/os/msg.c`) -- and an element that fails reaches the receiver as
+`Z_NONE`. Otherwise a corrupted object in one app could panic the kernel
+inside another app's syscall. Strings and blob data are read a byte at
+a time by whoever uses them, and are not checked.
 
 Everything is in the kernel. Apps and the runtime in `sw/common` are
 unchanged: every current caller already passes its own locals or
