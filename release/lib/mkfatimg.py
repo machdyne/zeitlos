@@ -207,6 +207,7 @@ GAMES_DEMOS = [
 ]
 
 MISC = [
+    ("web/roots.der", "sw/apps/web/roots.der"),
     ("apps/portdemo", "sw/apps/portdemo/portdemo.bin"),
     ("apps/hellowin", "sw/apps/hello_win/hello_win.bin"),
     ("apps/audiotst", "sw/apps/audiotest/audiotest.bin"),
@@ -236,7 +237,7 @@ SELFHOST = [
 ]
 
 DIRS = ["apps", "audio", "docs", "ark", "user", "libz", "libz/include",
-        "fpga", "fpga/boards", "fpga/examples", "speech"]
+        "fpga", "fpga/boards", "fpga/examples", "speech", "web"]
 
 # The speech pack: the pronunciation lexicon and the recorded voice
 # sw/apps/tts reads (docs/tts.md). NOT built from this tree and NOT
