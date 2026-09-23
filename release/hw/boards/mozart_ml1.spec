@@ -31,6 +31,11 @@ defines =
     ICACHE
     ICACHE_KB=8
     ICACHE_LINE_WORDS=4
+    DCACHE
+    DCACHE_KB=4
+    DCACHE_LINE_WORDS=4
+    DCACHE_WBUF=2
+    SDRAM_BURST
     MONTMUL
     GPU
     GPU_RASTER
@@ -38,7 +43,7 @@ defines =
     GPU_CURSOR
     GPU_DDMI
     UART0
-    USB_HID
+    USB_HOST
     SPI_SDCARD
     ETH_RMII
     ETH_RX_SLOTS=4

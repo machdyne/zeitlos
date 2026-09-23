@@ -119,6 +119,8 @@ const z_feature_info_t z_soc_features2[] = {
 	// the reg_usbN_* registers are there, usb-host says there is a
 	// controller you can drive yourself.
 	{ Z_FEATURE2_USB_HOST,  "usb-host", Z_FEAT_GROUP_IO     },
+	{ Z_FEATURE2_ICACHE,    "icache",  Z_FEAT_GROUP_CACHE   },
+	{ Z_FEATURE2_DCACHE,    "dcache",  Z_FEAT_GROUP_CACHE   },
 
 };
 
@@ -150,6 +152,7 @@ const char *const z_soc_feature_groups[] = {
 	"audio  ",
 	"led    ",
 	"io     ",
+	"cache  ",
 };
 
 // Compile-time assertion that the table above and the enum in zsoc.h

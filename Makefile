@@ -9,6 +9,7 @@ RTL_PICO = \
 	rtl/cpu/zeitlos32/zeitlos32_muldiv.v \
 	rtl/mtu.v \
 	rtl/cache.v \
+	rtl/cache_id.v \
 	rtl/arbiter_vram.v \
 	rtl/arbiter_main.v \
 	rtl/mem/bram.v \

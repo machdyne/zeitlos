@@ -362,4 +362,19 @@ localparam CSR_FEATURES2 =
 `ifdef JUMPLOADER
 	(32'h1 << 7) |
 `endif
+// Instruction cache: rtl/cache.v, or the I side of rtl/cache_id.v.
+// `DCACHE implies `ICACHE, but that implication is made in sysctl.v
+// AFTER this file is included, so test both here rather than rely on
+// every board defining ICACHE alongside DCACHE.
+`ifdef ICACHE
+	(32'h1 << 8) |
+`elsif DCACHE
+	(32'h1 << 8) |
+`endif
+// Data cache: rtl/cache_id.v (docs/dcache.md). The cache's own D_INFO
+// register (0x7000_011C) has the geometry and is what software must
+// check before touching D_CTRL; this bit is for the inventory.
+`ifdef DCACHE
+	(32'h1 << 9) |
+`endif
 	32'h0;

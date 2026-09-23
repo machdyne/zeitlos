@@ -121,9 +121,9 @@ module tb_soc;
         .m_adr_o(m_adr), .m_dat_o(m_dat_o), .m_dat_i(m_dat_i),
         .m_we_o(m_we), .m_sel_o(m_sel), .m_stb_o(m_stb),
         .m_cyc_o(m_cyc), .m_ack_i(m_ack),
-        .cfg_adr_i(32'b0), .cfg_dat_i(32'b0), .cfg_dat_o(cfg_dat_o),
-        .cfg_we_i(1'b0), .cfg_stb_i(1'b0), .cfg_cyc_i(1'b0),
-        .cfg_ack_o(cfg_ack)
+        // registers are answered upstream now (rtl/cache.v c_cfg_hit);
+        // the old cfg_* slave port no longer exists
+        .c_cfg_hit()
     );
 `else
     // no cache module at all -- exactly what a board built without

@@ -542,6 +542,8 @@ Beyond the subsystem documents listed at the top:
 
 - `docs/csrs.md` -- how the kernel learns the machine's real memory size
 - `docs/icache.md` -- why instruction fetch dominates CPI here
+- `docs/dcache.md` -- the data cache the kernel enables at boot, and
+  why no kernel code needs to flush or invalidate it
 - `docs/sdcard.md` -- the SD path, and the bus behaviour a stalling
   peripheral has against the arbiter
 

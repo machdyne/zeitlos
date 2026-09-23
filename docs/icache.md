@@ -1,5 +1,11 @@
 # Zeitlos Instruction Cache
 
+> A board can instead build the unified instruction + data cache,
+> `rtl/cache_id.v` (`DCACHE`), which contains this cache's behaviour
+> plus a data side, a write buffer and store snooping. See
+> [dcache.md](dcache.md). Everything below describes `rtl/cache.v`
+> (`wb_icache`), which is what an `ICACHE`-only board builds.
+
 ## Why this exists
 
 The CPU has no cache of its own, so every instruction fetch goes out
@@ -76,6 +82,12 @@ code does loads and stores, and those are still uncached.
 **SDRAM and PSRAM boards: yes.** Lakritz, Kölsch, Mozart, ULX3S,
 Lebkuchen. The slower the backend, the bigger the win.
 
+> Every board that enables `ICACHE` in `rtl/boards.vh` today (Lakritz,
+> Mozart ML1, Sergei ML1, ULX3S) also enables `DCACHE`, and so builds
+> `rtl/cache_id.v` rather than this module. `rtl/cache.v` remains the
+> build for any board or release target that defines `ICACHE` without
+> `DCACHE`. See [dcache.md](dcache.md).
+
 **SRAM boards (Obst): no, and it is not enabled there.** `rtl/mem/sram.v`
 answers in about one cycle on average — its ack generator free-runs and
 never even looks at `wb_cyc_i`/`wb_stb_i`, so a request landing on the
@@ -150,16 +162,23 @@ blitter status read would break them.
 ## Coherency: you must flush after loading code
 
 The only way a stale line can arise is code being *written as data* and
-then executed. In this codebase that happens in exactly two places, and
-both already call the flush:
+then executed. In this codebase that happens in three places, and
+all three already call the flush:
 
-1. `fs_load_exec()` in `sw/os/fs/fs.c` — the only app loader, five call
-   sites (`sw/os/kernel.c`, `sw/os/sh.c`).
-2. `load_zeitlos()` in `sw/bios/bios.c` — memcpy's the kernel from
+1. `fs_load_exec()` in `sw/os/fs/fs.c` — the app loader for files on a
+   filesystem, five call sites (`sw/os/kernel.c`, `sw/os/sh.c`).
+2. `z_zar_load_exec()` in `sw/os/zar.c` — loads core apps straight out
+   of the flash archive ([flash_apps.md](flash_apps.md)).
+3. `load_zeitlos()` in `sw/bios/bios.c` — memcpy's the kernel from
    memory-mapped flash before jumping to it.
 
-**If you add a third path that writes executable code, it must call
+**If you add another path that writes executable code, it must call
 `z_icache_flush()` before jumping to it.**
+
+The planned unified I+D cache ([dcache.md](dcache.md)) snoops CPU
+stores against the I-side tags, which would make these flushes
+unnecessary for correctness. Until that exists and is enabled, they
+are required.
 
 The failure this prevents is worth stating plainly, because it is
 intermittent and allocation-order dependent rather than reproducible:
@@ -207,6 +226,10 @@ to tell "no cache in this bitstream" from "cache present, reporting
 these numbers". Always check `z_icache_present()` first.
 
 C-side helpers live in `sw/common/zsoc.h`.
+
+`FEATURES2` bit 8 (`Z_FEATURE2_ICACHE`, [csrs.md](csrs.md)) reports the
+cache in the kernel's boot inventory. It is for display only: before
+touching these registers, `z_icache_present()` is still the check.
 
 ## Shell command
 
@@ -303,6 +326,13 @@ $ iverilog -g2005 -o tb_cs \
       rtl/tb/tb_cache_sdram.v rtl/cache.v \
       rtl/mem/sdram_kianv.v rtl/tb/sdram_model.v && ./tb_cs
 
+$ make -C rtl/tb/cache_soc PREFIX=riscv64-unknown-elf-   # real CPU, real
+$ iverilog -g2005 -DCACHE=1 -o tb_soc rtl/tb/tb_cache_soc.v \  # controller
+      rtl/cache_id.v rtl/cache.v rtl/mem/sdram_kianv.v \
+      rtl/tb/sdram_model.v rtl/cpu/picorv32/picorv32.v \
+      rtl/cpu/zeitlos32/zeitlos32.v rtl/cpu/zeitlos32/zeitlos32_muldiv.v
+$ vvp tb_soc +prog=rtl/tb/cache_soc/prog.hex
+
 $ cd rtl/tb                       # cycle-accurate IPC, real picorv32
 $ python3 gen_prog.py
 $ iverilog -g2005 -o tb_soc tb_soc.v ../cache.v ../cpu/picorv32/picorv32.v
@@ -345,16 +375,22 @@ real `sdram_kianv.v` and a protocol-checking `rtl/tb/sdram_model.v`
 at this level). It reproduced the hardware failure on its first run,
 returning zeros for all 96 fetches.
 
-The model is **incomplete**: read data currently lands one beat
-misaligned and it reports a spurious ACT-on-open-bank around refresh,
-so it is not yet a clean pass/fail. Finish it before trusting it as a
-gate — but prefer it to `tb_cache.v` for anything touching the memory
-protocol.
+The model has since been rewritten (see [dcache.md](dcache.md#the-sdram-model))
+and `tb_cache_sdram.v` is now a clean pass/fail: 96 checks, zero cache
+errors, zero protocol errors against the unchanged controller. Prefer
+it to `tb_cache.v` for anything touching the memory protocol.
 
 ## Bus signalling: `sel` decides direction, not `we`
 
-**`rtl/mem/sdram_kianv.v` decides read-vs-write from `wb_sel_i` and
-never reads `wb_we_i`** — the signal appears exactly once, in the port
+> **Fixed since.** `rtl/mem/sdram_kianv.v` now takes direction from
+> `wb_we_i` (`wire is_write = wb_we_i;`) after the audio mixer hit the
+> same trap. The history below is kept because it explains why the
+> cache's fills still drive `sel = 0000` and how the failure presented;
+> both conventions are now safe. `sdram.v` and `qqspi.v` also take
+> direction from `wb_we_i`; any new controller must too.
+
+**`rtl/mem/sdram_kianv.v` decided read-vs-write from `wb_sel_i` and
+never read `wb_we_i`** — the signal appeared exactly once, in the port
 list. `sel == 4'b0000` means read; a nonzero `sel` names the byte lanes
 to *write*. That is picorv32's native `wstrb` convention carried
 straight onto the wishbone port, and it is not what a Wishbone master
@@ -451,4 +487,6 @@ a refinement of the miss path, not an alternative to caching.
 Open-row tracking is already present in `sdram_kianv.v` (`KEEP_OPEN`)
 and is part of why the measured result beat the estimate. A data cache
 (write-through, never write-back, for DMA coherency reasons) is worth
-revisiting after burst, and matters far more on PSRAM boards.
+revisiting, and matters far more on PSRAM boards. See
+[dcache.md](dcache.md) for the proposal, which argues it should come
+*before* burst: data traffic is now nearly all of the remaining stall.

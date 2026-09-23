@@ -29,7 +29,7 @@ than a new precedent:
 | Window | Block | Purpose |
 |---|---|---|
 | `0x7000_00xx` | `rtl/csrs.v` | read-only: what this bitstream has |
-| `0x7000_01xx` | `rtl/cache.v` | instruction cache control/stats |
+| `0x7000_01xx` | `rtl/cache.v` or `rtl/cache_id.v` | cache control/stats: instruction cache, plus the data cache on `DCACHE` builds (`docs/icache.md`, `docs/dcache.md`) |
 | `0x7000_02xx` | `rtl/socctl.v` | writable global config |
 
 ## Registers

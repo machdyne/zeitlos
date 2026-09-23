@@ -77,7 +77,7 @@ module tb_cache_sdram;
         .sdram_dq(sdram_dq)
     );
 
-    sdram_model #(.CAS_LATENCY(2)) mem (
+    sdram_model mem (   // CAS latency comes from the MRS the controller issues
         .clk(sdram_clk), .cke(sdram_cke), .csn(sdram_csn),
         .rasn(sdram_rasn), .casn(sdram_casn), .wen(sdram_wen),
         .dqm(sdram_dqm), .ba(sdram_ba), .addr(sdram_addr), .dq(sdram_dq)

@@ -2065,6 +2065,12 @@ figure is its normal operating point, not a stall signature. A dcache
 is still worth having, but it is an absolute-speed improvement for
 both boards rather than the explanation for anything observed here.
 
+> **Later:** that dcache now exists (`docs/dcache.md`) and measured
+> exactly as this predicted on mozart_ml1: `bench`'s load and store
+> rows improved 1.14-1.42x, while the boot MIPS figure moved only from
+> 6.66 to 6.88, because most of picorv32's ~7 cycles per instruction
+> are the core itself.
+
 What the two boards actually showed:
 
 - **`read` is slow on BOTH.** Equal IPC, equal slowness: the cost is

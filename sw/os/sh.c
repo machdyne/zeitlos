@@ -343,6 +343,94 @@ static bool boot_cancel_requested(void) {
 
 }
 
+
+// "cache" shell command (docs/icache.md, docs/dcache.md).
+//
+//   cache              geometry, hit rates, traffic counters
+//   cache on|off       instruction cache
+//   cache flush        flush instruction (and data) cache
+//   cache don|doff     data cache (loads)
+//   cache wbon|wboff   posted writes (write buffer)
+//   cache clear        zero the traffic counters
+static void sh_cache_rate(const char *name, uint32_t hits, uint32_t misses) {
+	uint32_t total = hits + misses;
+	uint32_t h = hits;
+	uint32_t t = total;
+	uint32_t permille;
+
+	// scale both down together before multiplying by 1000, rather
+	// than reaching for 64-bit math: h*1000 overflows a uint32_t past
+	// ~4.29M hits, which is a perfectly reachable count between two
+	// flushes.
+	while (t > 4000000u) { t >>= 4; h >>= 4; }
+	permille = t ? (h * 1000u) / t : 0;
+
+	printf("  %s hits:   %ld\n", name, (long)hits);
+	printf("  %s misses: %ld\n", name, (long)misses);
+	if (total)
+		printf("  %s rate:   %ld.%ld%%\n", name,
+			(long)(permille / 10), (long)(permille % 10));
+	else
+		printf("  %s rate:   (none yet)\n", name);
+}
+
+static void sh_cache(const char *arg) {
+	bool d = z_dcache_present();
+
+	if (!z_icache_present()) {
+		printf("no cache in this bitstream\n");
+		return;
+	}
+	if (arg != NULL && !strcmp(arg, "on")) {
+		z_icache_enable(true);
+		printf("instruction cache enabled\n");
+	} else if (arg != NULL && !strcmp(arg, "off")) {
+		z_icache_enable(false);
+		printf("instruction cache disabled\n");
+	} else if (arg != NULL && !strcmp(arg, "flush")) {
+		z_icache_flush();
+		z_dcache_flush();
+		printf("cache flushed\n");
+	} else if (arg != NULL && (!strcmp(arg, "don") || !strcmp(arg, "doff") ||
+			!strcmp(arg, "wbon") || !strcmp(arg, "wboff") ||
+			!strcmp(arg, "clear"))) {
+		if (!d) {
+			printf("no data cache in this bitstream\n");
+		} else if (!strcmp(arg, "clear")) {
+			z_cache_stats_clear();
+			printf("cache counters cleared\n");
+		} else {
+			bool en = z_dcache_enabled();
+			bool wb = z_dcache_posted();
+			if (!strcmp(arg, "don")) en = true;
+			if (!strcmp(arg, "doff")) en = false;
+			if (!strcmp(arg, "wbon")) wb = true;
+			if (!strcmp(arg, "wboff")) wb = false;
+			z_dcache_set(en, wb);
+			printf("data cache %s, posted writes %s\n",
+				en ? "enabled" : "disabled", wb ? "on" : "off");
+		}
+	} else {
+		printf("icache: %ldKB, %ld-word lines%s\n",
+			(long)z_icache_kb(), (long)z_icache_line_words(),
+			(reg_icache_ctrl & Z_ICACHE_CTRL_ENABLE) ? "" : " (DISABLED)");
+		sh_cache_rate("I", reg_icache_hits, reg_icache_misses);
+		if (!d) return;
+		printf("dcache: %ldKB, %ld-word lines, %ld-entry write buffer%s%s%s\n",
+			(long)z_dcache_kb(), (long)z_dcache_line_words(),
+			(long)z_dcache_wbuf_depth(),
+			z_cache_burst() ? ", burst fills" : "",
+			z_dcache_enabled() ? "" : " (DISABLED)",
+			z_dcache_posted() ? "" : " (writes not posted)");
+		sh_cache_rate("D", reg_dcache_hits, reg_dcache_misses);
+		printf("  loads:    %ld\n", (long)reg_cache_loads);
+		printf("  stores:   %ld\n", (long)reg_cache_stores);
+		printf("  stall:    %ld cycles\n", (long)reg_cache_stall);
+		printf("  wb full:  %ld cycles\n", (long)reg_cache_wbfull);
+		printf("  i-snoops: %ld\n", (long)reg_cache_isnoops);
+	}
+}
+
 void sh(void) {
 
    char buffer[256];
@@ -1217,49 +1305,7 @@ void sh(void) {
 
 		else if (!strncmp(buffer, "cache", cmdlen)) {
 			arg = get_arg(buffer, 1);
-
-			if (!z_icache_present()) {
-				printf("no instruction cache in this bitstream\n");
-			}
-			else if (arg != NULL && !strcmp(arg, "on")) {
-				z_icache_enable(true);
-				printf("instruction cache enabled\n");
-			}
-			else if (arg != NULL && !strcmp(arg, "off")) {
-				z_icache_enable(false);
-				printf("instruction cache disabled\n");
-			}
-			else if (arg != NULL && !strcmp(arg, "flush")) {
-				z_icache_flush();
-				printf("instruction cache flushed\n");
-			}
-			else {
-				uint32_t hits = reg_icache_hits;
-				uint32_t misses = reg_icache_misses;
-				uint32_t total = hits + misses;
-				uint32_t h = hits;
-				uint32_t t = total;
-				uint32_t permille;
-
-				// scale both down together before multiplying by
-				// 1000, rather than reaching for 64-bit math: h*1000
-				// overflows a uint32_t past ~4.29M hits, which is a
-				// perfectly reachable count between two flushes.
-				while (t > 4000000u) { t >>= 4; h >>= 4; }
-				permille = t ? (h * 1000u) / t : 0;
-
-				printf("icache: %ldKB, %ld-word lines%s\n",
-					z_icache_kb(), z_icache_line_words(),
-					(reg_icache_ctrl & Z_ICACHE_CTRL_ENABLE) ?
-						"" : " (DISABLED)");
-				printf("  hits:   %ld\n", hits);
-				printf("  misses: %ld\n", misses);
-				if (total)
-					printf("  rate:   %ld.%ld%%\n",
-						permille / 10, permille % 10);
-				else
-					printf("  rate:   (no fetches yet)\n");
-			}
+			sh_cache(arg);
 		}
 
 		// GPIO (rtl/gpio.v, docs/gpio.md)
@@ -2128,7 +2174,7 @@ void sh_help(void) {
 	printf(" mkdir [path]      make a directory\n");
 	printf(" touch [path]      create empty file\n");
 	printf(" rm [path]         remove a file\n");
-	printf(" cache [on|off|flush]  instruction cache stats/control\n");
+	printf(" cache [on|off|flush|don|doff|wbon|wboff|clear]  cache stats/control\n");
 	printf(" color [white|amber|green|paper]  display phosphor mode\n");
 	printf(" gpio [port] [pin] [in|out|od|0|1]  read/drive gpio pins (e.g. gpio 0 3 out)\n");
 	printf(" bench             cpu/memory micro-benchmarks\n");

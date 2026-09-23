@@ -50,6 +50,49 @@ localparam SYSCLK = 48_000_000;
 `endif
 `endif
 
+// Data cache (docs/dcache.md). `DCACHE builds rtl/cache_id.v's unified
+// wb_cache (instruction AND data) in place of rtl/cache.v's wb_icache,
+// so it requires `ICACHE; without `DCACHE nothing below changes.
+//
+//   DCACHE_KB          data array size (default 4)
+//   DCACHE_LINE_WORDS  words per data line (default 4)
+//   DCACHE_WBUF        posted-write buffer entries: 0, 1, 2 or 4
+//                      (default 2)
+//   SDRAM_BURST        rtl/mem/sdram_kianv.v serves 4-word BL8 read
+//                      bursts, and the cache fills lines with them.
+//                      MEM_SDRAM boards only; lines must be a multiple
+//                      of 4 words to use it.
+//
+// The data cache comes out of reset DISABLED; the kernel turns it on
+// (sw/os/kernel.c). A kernel that does not is exactly as fast, and
+// exactly as correct, as one on a bitstream without `DCACHE.
+`ifdef DCACHE
+`ifndef ICACHE
+`define ICACHE
+`ifndef ICACHE_KB
+`define ICACHE_KB 8
+`endif
+`ifndef ICACHE_LINE_WORDS
+`define ICACHE_LINE_WORDS 4
+`endif
+`endif
+`ifndef DCACHE_KB
+`define DCACHE_KB 4
+`endif
+`ifndef DCACHE_LINE_WORDS
+`define DCACHE_LINE_WORDS 4
+`endif
+`ifndef DCACHE_WBUF
+`define DCACHE_WBUF 2
+`endif
+`endif
+
+`ifdef SDRAM_BURST
+`ifndef MEM_SDRAM
+`undef SDRAM_BURST
+`endif
+`endif
+
 // USB CDC-ACM console defaults, if a board enabled `USB_CDC without
 // pinning them (rtl/boards.vh). See rtl/usb_cdc_uart.v's parameter
 // block for what each one costs.
@@ -768,6 +811,16 @@ module sysctl #()
 	wire wbc_stb;
 	wire wbc_ack;
 	wire wbc_cyc;
+	// Wishbone B4 cycle type, from the cache's line fills (3'b010
+	// incrementing burst, 3'b111 last beat). 3'b000 (classic) whenever
+	// the cache isn't bursting or isn't wb_cache at all. wbm_cti is
+	// the arbiter-side copy: the other masters never burst.
+	wire [2:0] wbc_cti;
+	wire [2:0] wbm_cti;
+	// A master other than the CPU completing a write to main memory.
+	// wb_cache invalidates what it holds for that address. Nothing
+	// drives such a write today; see rtl/cache_id.v.
+	wire cache_snoop_stb;
 
 	// The blitter's source-read port. Tied off below when the blitter
 	// isn't in this bitstream.
@@ -1544,6 +1597,59 @@ module sysctl #()
 
 	wire cache_cfg_hit;
 
+`ifdef DCACHE
+
+`ifdef SDRAM_BURST
+	localparam CACHE_BURST = 1;
+`else
+	localparam CACHE_BURST = 0;
+`endif
+
+	// Unified instruction + data cache (rtl/cache_id.v). Same CPU-side
+	// and bus-side wiring as wb_icache below, plus a burst cycle type
+	// and a snoop input. The I_* registers at 0x7000_0100 are
+	// identical, so the BIOS and kernel work against either.
+	wb_cache #(
+		.I_KB(`ICACHE_KB),
+		.I_LINE_WORDS(`ICACHE_LINE_WORDS),
+		.D_KB(`DCACHE_KB),
+		.D_LINE_WORDS(`DCACHE_LINE_WORDS),
+		.FAST_HIT(`ICACHE_FAST_HIT),
+		.WBUF_DEPTH(`DCACHE_WBUF),
+		.BURST(CACHE_BURST),
+		.SNOOP(1),
+		.CFG_BASE(32'h7000_0100)
+	) icache_i (
+		.wb_clk_i(wbm_clk),
+		.wb_rst_i(wbm_rst),
+		.c_adr_i(wbm_cpu_padr),
+		.c_dat_i(wbm_cpu_dat_o),
+		.c_dat_o(wbm_cpu_dat_i),
+		.c_we_i(wbm_cpu_we),
+		.c_sel_i(wbm_cpu_sel),
+		.c_stb_i(wbm_cpu_stb),
+		.c_cyc_i(wbm_cpu_cyc),
+		.c_instr_i(wbm_cpu_instr),
+		.c_ack_o(wbm_cpu_ack),
+		.m_adr_o(wbc_adr),
+		.m_dat_o(wbc_dat_o),
+		.m_dat_i(wbc_dat_i),
+		.m_we_o(wbc_we),
+		.m_sel_o(wbc_sel),
+		.m_stb_o(wbc_stb),
+		.m_cyc_o(wbc_cyc),
+		.m_cti_o(wbc_cti),
+		.m_bte_o(),
+		.m_ack_i(wbc_ack),
+		.snoop_stb_i(cache_snoop_stb),
+		.snoop_adr_i(wbm_adr),
+		.c_cfg_hit(cache_cfg_hit)
+	);
+
+`else
+
+	assign wbc_cti = 3'b000;
+
 	wb_icache #(
 		.CACHE_KB(`ICACHE_KB),
 		.LINE_WORDS(`ICACHE_LINE_WORDS),
@@ -1582,7 +1688,11 @@ module sysctl #()
 		.c_cfg_hit(cache_cfg_hit)
 	);
 
+`endif // DCACHE
+
 `else
+
+	assign wbc_cti = 3'b000;
 
 	// wbm_cpu_padr, not wbm_cpu_adr: the MTU's translated output, which
 	// is what this bus has always carried -- the MTU simply used to
@@ -1680,6 +1790,18 @@ module sysctl #()
 		.master(marb_master)
 	);
 
+	// Only the CPU side (the cache) ever bursts; the arbiter holds a
+	// grant for a whole CYC, so this is constant across any burst.
+	assign wbm_cti = (marb_master == 2'd0) ? wbc_cti : 3'b000;
+
+	// Another master's completed write to main memory. Both are read
+	// only today (gpu_blit.v s_we_o, audio_mixer.v m_we_o are tied 0),
+	// so this is constant 0 in practice -- it exists so that a future
+	// writing master (rtl/dma.v) is coherent with wb_cache without
+	// anyone having to remember.
+	assign cache_snoop_stb = (marb_master != 2'd0) && wbm_cyc && wbm_stb &&
+		wbm_we && wbm_ack && ((wbm_adr & 32'hf000_0000) == 32'h4000_0000);
+
 `else
 
 	// No blitter in this bitstream, so no second master -- wire the
@@ -1697,6 +1819,8 @@ module sysctl #()
 	assign wbm_blitsrc_dat_i = 32'h0;
 	assign wbm_blitsrc_ack = 1'b0;
 	assign marb_master = 2'b00;
+	assign wbm_cti = wbc_cti;
+	assign cache_snoop_stb = 1'b0;
 
 `endif
 
@@ -1961,7 +2085,12 @@ module sysctl #()
 	wire wbm_cyc_sdram = cs_sdram && wbm_cyc;
 
 	sdram_wb #(
-		.SDRAM_CLK_FREQ(SYSCLK / 1_000_000)
+		.SDRAM_CLK_FREQ(SYSCLK / 1_000_000),
+`ifdef SDRAM_BURST
+		.BURST(1)
+`else
+		.BURST(0)
+`endif
 	) sdram_i (
       .wb_clk_i(wbm_clk),
       .wb_rst_i(wbm_rst),
@@ -1973,6 +2102,7 @@ module sysctl #()
       .wb_stb_i(wbm_stb),
       .wb_ack_o(wbs_sdram_ack_o),
       .wb_cyc_i(wbm_cyc_sdram),
+      .wb_cti_i(wbm_cti),
 		.sdram_clk(sdram_clock),
 		.sdram_cke(sdram_cke),
 		.sdram_csn(sdram_cs_n),

@@ -692,6 +692,21 @@ int main(void) {
 	// to print to.
 	k_soc_report();
 
+	// Data cache (docs/dcache.md). The hardware comes out of reset with
+	// it OFF so the BIOS -- including its memory test, which would
+	// otherwise test the cache instead of the RAM -- runs exactly as on
+	// a bitstream without it. Turn it on here, as early as possible.
+	// Nothing else in the OS needs to know it exists: it is coherent
+	// with every store the CPU makes, and no other master writes main
+	// memory. Does nothing on a bitstream without `DCACHE.
+	if (z_icache_present())
+		printf(" - icache: %ldKB, %ld-word lines\n",
+			(long)z_icache_kb(), (long)z_icache_line_words());
+	if (z_dcache_set(true, true))
+		printf(" - dcache: %ldKB, %ld-word lines, %ld-entry write buffer%s\n",
+			(long)z_dcache_kb(), (long)z_dcache_line_words(),
+			(long)z_dcache_wbuf_depth(), z_cache_burst() ? ", burst fills" : "");
+
 	// init usb hid keyboard event queue
 	z_hid_init();
 
@@ -1640,12 +1655,18 @@ void kprint(const char *s) {
 }
 
 void kprint_hex_digit(uint8_t val) {
+    // Wait for the transmitter like kprint() does. This used to write
+    // unconditionally and then spin 500 iterations of a volatile loop,
+    // which only paced the UART by accident of CPU speed: the counter
+    // lives on the stack, so with the data cache (docs/dcache.md) each
+    // iteration got 2-3x faster, and kprint_hex32() calls this eight
+    // times in a row.
+    while ((reg_uart0_lsr & 0x20) == 0);
     if (val < 10) {
         reg_uart0_data = '0' + val;
     } else {
         reg_uart0_data = 'A' + (val - 10);
     }
-    for (volatile uint32_t i = 0; i < 500; i++);
 }
 
 void kprint_hex32(uint32_t val) {

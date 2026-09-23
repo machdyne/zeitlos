@@ -73,7 +73,12 @@ module sdram_wb #(
     // - If you use the generic "~clk" trick, set READ_NEGEDGE=1 (default).
     // - If you use a PLL 180° capture clock outside, set READ_NEGEDGE=0.
     parameter integer READ_NEGEDGE     = 1,  // 1 = sample on negedge clk (fallback)
-    parameter integer READ_EXTRA_CYC   = 0   // extra NOPs before first read sample
+    parameter integer READ_EXTRA_CYC   = 0,  // extra NOPs before first read sample
+
+    // 1: serve Wishbone B4 incrementing read bursts (see "Burst reads"
+    // below). 0: wb_cti_i is ignored and this controller behaves
+    // exactly as it always has.
+    parameter integer BURST            = 0
 )(
     input wb_clk_i,
     input wb_rst_i,
@@ -91,6 +96,10 @@ module sdram_wb #(
     // drops CYC mid-transaction.
     output wire wb_ack_o,
     input wb_cyc_i,
+    // Wishbone B4 cycle type. Only 3'b010 (incrementing burst) on a
+    // read at a 16-byte aligned address means anything here, and only
+    // with BURST=1. Tie to 3'b000 if the master never bursts.
+    input [2:0] wb_cti_i,
 
     output wire        sdram_clk,
     output wire        sdram_cke,
@@ -247,8 +256,10 @@ module sdram_wb #(
   localparam WRITE_L      = 14;
   localparam WRITE_H      = 15;
   localparam WAIT_STATE   = 16;  // <- kept for TB hierarchical checks
+  localparam BR_CMD       = 17;  // burst: first READ
+  localparam BR_RUN       = 18;  // burst: chained READs + capture
 
-  localparam STATE_W = 5; // enough for 0..16
+  localparam STATE_W = 5; // enough for 0..18
   reg [STATE_W-1:0] state, state_nxt;
   reg [STATE_W-1:0] ret_state, ret_state_nxt;
 
@@ -288,6 +299,49 @@ module sdram_wb #(
   // correct reading of the signal rather than a special case.
   wire is_write = wb_we_i;
   assign wb_ack_o = wb_cyc_i && ready;
+
+  // -------------------------------------------------
+  // Burst reads (BURST=1)
+  // -------------------------------------------------
+  //
+  // A master asks for four words with CTI=010 on a read at a 16-byte
+  // aligned address and holds STB, advancing its address after each
+  // ack; rtl/cache_id.v's line fills do exactly this. The controller
+  // latches the base, then issues FOUR BL2 READs two cycles apart in
+  // the open row. With BL=2 each READ's burst ends exactly as the next
+  // one's begins, so the part streams eight halfwords back to back:
+  //
+  //   k:     0    1    2    3    4    5    6    7    8    9   10
+  //   cmd:  RD0   -   RD1   -   RD2   -   RD3   -
+  //   data:                 w0l  w0h  w1l  w1h  w2l  w2h  w3l  w3h
+  //   ack:                           w0        w1        w2       w3
+  //
+  // (CL=2, READ_EXTRA_CYC=0; captures start at k = 1+CL+EXTRA.) Each
+  // word is captured with exactly the same command-to-sample distance
+  // as a single read's READ_L/READ_H, so the read capture path that
+  // was brought up on these boards is reused unchanged.
+  //
+  // Why chained BL2 READs rather than BL8 in the mode register (the
+  // approach in the upstream KianV controller): the mode register, the
+  // single-read path and the write path all stay exactly as they are,
+  // so BURST=1 adds a path without altering any existing one, and a
+  // board with BURST=0 is bit-for-bit the controller it was. Issuing a
+  // READ every other cycle to an open row is ordinary SDR SDRAM
+  // operation (consecutive READ bursts, same bank/row).
+  //
+  // Four words per burst, always. A master must not start a burst it
+  // will not take four beats of; wb_cache only bursts lines that are
+  // a multiple of four words, and an 8-word line is simply two bursts.
+  localparam integer BR_LAT = 1 + CAS_LATENCY + READ_EXTRA_CYC;
+
+  wire burst_req = (BURST != 0) && (wb_cti_i == 3'b010) && !is_write &&
+                   (wb_adr_i[3:0] == 4'h0);
+
+  reg        br_pend, br_pend_nxt;     // current request is a burst
+  reg [4:0]  br_k, br_k_nxt;           // cycles since the first READ
+  reg [1:0]  br_bank, br_bank_nxt;
+  reg [6:0]  br_colhi, br_colhi_nxt;   // wb_adr_i[10:4] of the base
+  wire [4:0] br_j = br_k - BR_LAT[4:0];
 
   // -------------------------------------------------
   // Refresh scheduler
@@ -348,6 +402,11 @@ module sdram_wb #(
       open_row1 <= 13'h0000;
       open_row2 <= 13'h0000;
       open_row3 <= 13'h0000;
+
+      br_pend  <= 1'b0;
+      br_k     <= 5'd0;
+      br_bank  <= 2'b00;
+      br_colhi <= 7'd0;
     end else begin
       state        <= state_nxt;
       ret_state    <= ret_state_nxt;
@@ -371,6 +430,11 @@ module sdram_wb #(
       open_row1 <= open_row1_nxt;
       open_row2 <= open_row2_nxt;
       open_row3 <= open_row3_nxt;
+
+      br_pend  <= br_pend_nxt;
+      br_k     <= br_k_nxt;
+      br_bank  <= br_bank_nxt;
+      br_colhi <= br_colhi_nxt;
     end
   end
 
@@ -398,6 +462,11 @@ module sdram_wb #(
     open_row1_nxt = open_row1;
     open_row2_nxt = open_row2;
     open_row3_nxt = open_row3;
+
+    br_pend_nxt  = br_pend;
+    br_k_nxt     = br_k;
+    br_bank_nxt  = br_bank;
+    br_colhi_nxt = br_colhi;
 
     // refresh scheduler tick
     ref_timer_nxt  = (ref_timer != 0) ? (ref_timer - 1'b1) : TREFI_CYC;
@@ -479,11 +548,14 @@ module sdram_wb #(
 
         end else if (valid && !ready) begin
           ba_nxt = cur_bank_w;
+          br_pend_nxt = burst_req;
 
           if (KEEP_OPEN != 0) begin
             if (same_row_hit) begin
               // hit: go emit READ/WRITE now
-              if (!is_write) begin
+              if (burst_req) begin
+                state_nxt = BR_CMD;
+              end else if (!is_write) begin
                 state_nxt = READ_CMD;
               end else begin
                 state_nxt = WRITE_L;
@@ -521,7 +593,7 @@ module sdram_wb #(
         ba_nxt       = cur_bank_w;
         saddr_nxt    = cur_row_w;
         wait_cnt_nxt = TRCD_CYC;
-        ret_state_nxt= (!is_write) ? READ_CMD : WRITE_L;
+        ret_state_nxt= br_pend ? BR_CMD : ((!is_write) ? READ_CMD : WRITE_L);
 
         // record open row (for KEEP_OPEN)
         if (KEEP_OPEN != 0) begin
@@ -562,6 +634,56 @@ module sdram_wb #(
         update_ready_nxt = 1'b1;
         ret_state_nxt    = IDLE;
         state_nxt        = WAIT_STATE;
+      end
+
+      // --- burst READ path (BURST=1, see header) ---
+      //
+      // BR_CMD issues the first READ from the master's address, which
+      // is still the base (nothing has been acked yet) and latches
+      // bank/column, because the master advances its address as soon
+      // as the first word is acked.
+      BR_CMD: begin
+        command_nxt   = CMD_READ;
+        dqm_nxt       = 2'b00;
+        ba_nxt        = cur_bank_w;
+        br_bank_nxt   = cur_bank_w;
+        br_colhi_nxt  = wb_adr_i[10:4];
+        saddr_nxt     = {3'b000, wb_adr_i[10:4], 2'd0, 1'b0};
+        br_k_nxt      = 5'd1;
+        state_nxt     = BR_RUN;
+      end
+
+      BR_RUN: begin
+        dqm_nxt  = 2'b00;
+        ba_nxt   = br_bank;
+        br_k_nxt = br_k + 5'd1;
+
+        // READs 1..3 at k = 2, 4, 6. With closed-page policy only the
+        // last one auto-precharges.
+        if (!br_k[0] && (br_k <= 5'd6)) begin
+          command_nxt = CMD_READ;
+          saddr_nxt   = {2'b00,
+                         (KEEP_OPEN == 0 && br_k == 5'd6) ? 1'b1 : 1'b0,
+                         br_colhi, br_k[2:1], 1'b0};
+        end
+
+        // captures: low half then high half of each word
+        if (br_k >= BR_LAT[4:0]) begin
+          if (!br_j[0]) begin
+            dout_nxt[15:0] = dq_rd;
+          end else begin
+            dout_nxt[31:16] = dq_rd;
+            ready_nxt = 1'b1;               // ack this word
+            if (br_j == 5'd7) begin
+              br_pend_nxt   = 1'b0;
+              if (KEEP_OPEN == 0) wait_cnt_nxt = TRP_CYC;
+              else                wait_cnt_nxt = 1;
+              update_ready_nxt = 1'b0;      // already acked
+              ret_state_nxt = IDLE;
+              state_nxt     = WAIT_STATE;
+            end
+          end
+        end
       end
 
       // --- WRITE path ---

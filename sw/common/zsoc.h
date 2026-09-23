@@ -352,6 +352,15 @@
 // reboot and jump go through the jumploader. docs/zboot.md sec. 5.
 #define Z_FEATURE2_JUMP       (1u << 7)
 
+// Instruction cache present (`ICACHE: rtl/cache.v, or the I side of
+// rtl/cache_id.v) and data cache present (`DCACHE: rtl/cache_id.v).
+// For the inventory only. Geometry, and whether writing the cache's
+// control registers is safe, come from the caches' own INFO registers:
+// z_icache_present() / z_dcache_present(). rtl/csrs.vh FEATURES2 bits
+// 8 and 9.
+#define Z_FEATURE2_ICACHE     (1u << 8)
+#define Z_FEATURE2_DCACHE     (1u << 9)
+
 // The jumploader region: the same on every board, the top 192 KB of the
 // first 2 MB. KEEP IN SYNC with the Makefile's JUMP_ADDR
 // (release/lib/layout.py checks). docs/zboot.md sec. 5.
@@ -452,6 +461,10 @@ typedef enum {
 	// and adding its name to z_soc_feature_groups[] in the same
 	// position -- see the warning below, which applies identically.
 	Z_FEAT_GROUP_IO,
+	// icache/dcache (FEATURES2 bits 8-9). Its own group rather than
+	// "memory", which is a FEATURES group: a group may appear in only
+	// one of the two tables, or its heading prints twice.
+	Z_FEAT_GROUP_CACHE,
 	// Adding a group here REQUIRES adding its display name to
 	// z_soc_feature_groups[] in zsoc.c, at the same position. That
 	// table is indexed by this enum and nothing links the two but
@@ -1009,8 +1022,11 @@ static inline uint32_t z_icache_line_words(void) {
 // Invalidate every cache line.
 //
 // MUST be called after writing code into main memory and BEFORE
-// jumping to it. Only two places in this codebase do that:
-// fs_load_exec() (sw/os/fs/fs.c) and load_zeitlos() (sw/bios/bios.c).
+// jumping to it, on bitstreams with wb_icache (rtl/cache.v). Three
+// places in this codebase do that: fs_load_exec() (sw/os/fs/fs.c),
+// z_zar_load_exec() (sw/os/zar.c) and load_zeitlos() (sw/bios/bios.c).
+// With `DCACHE (rtl/cache_id.v) the instruction side snoops stores and
+// this is not needed, but stays harmless.
 //
 // The failure this prevents is worth stating plainly, because it is
 // intermittent and allocation-order dependent rather than
@@ -1041,6 +1057,102 @@ static inline void z_icache_flush(void) {
 // to main memory, exactly as a bitstream built without `ICACHE would.
 static inline void z_icache_enable(bool on) {
 	reg_icache_ctrl = on ? Z_ICACHE_CTRL_ENABLE : 0;
+}
+
+// -- data cache (rtl/cache_id.v, docs/dcache.md) --
+//
+// Present only on bitstreams built with `DCACHE, where rtl/cache_id.v's
+// unified wb_cache replaces wb_icache. The I-cache registers above are
+// unchanged there; these follow them in the same 0x7000_01xx window.
+//
+// The data cache is coherent by construction: write-through, updated
+// on every CPU store, and the instruction side snoops those stores.
+// Nothing in the OS needs to flush or invalidate for correctness; the
+// z_icache_flush() calls stay because they are required on I-cache-only
+// bitstreams, and are harmless here.
+//
+// WRITES TO D_CTRL MUST BE GUARDED by z_dcache_present(). wb_icache
+// decodes only address bits [3:2], so on an I-cache-only bitstream
+// 0x70000110 IS I_CTRL: writing 0 there would silently turn the
+// instruction cache off. Every helper below checks first; do not write
+// reg_dcache_ctrl directly.
+#define reg_dcache_ctrl    (*(volatile uint32_t*)0x70000110)
+#define reg_dcache_hits    (*(volatile uint32_t*)0x70000114)
+#define reg_dcache_misses  (*(volatile uint32_t*)0x70000118)
+#define reg_dcache_info    (*(volatile uint32_t*)0x7000011c)
+#define reg_cache_loads    (*(volatile uint32_t*)0x70000120)
+#define reg_cache_stores   (*(volatile uint32_t*)0x70000124)
+#define reg_cache_stall    (*(volatile uint32_t*)0x70000128)
+#define reg_cache_feat     (*(volatile uint32_t*)0x7000012c)
+#define reg_cache_wbfull   (*(volatile uint32_t*)0x70000130)
+#define reg_cache_isnoops  (*(volatile uint32_t*)0x70000134)
+
+#define Z_DCACHE_CTRL_ENABLE  (1u << 0)
+#define Z_DCACHE_CTRL_FLUSH   (1u << 1)
+#define Z_DCACHE_CTRL_WBUF    (1u << 2)   // posted writes
+
+// top half of reg_dcache_info -- KEEP IN SYNC with rtl/cache_id.v.
+// Deliberately different from Z_ICACHE_MAGIC: on a wb_icache bitstream
+// 0x7000011c aliases I_INFO and reads 0x1CAC.
+#define Z_DCACHE_MAGIC 0x1DCAu
+
+static inline bool z_dcache_present(void) {
+	return ((reg_dcache_info >> 16) & 0xffffu) == Z_DCACHE_MAGIC;
+}
+
+static inline uint32_t z_dcache_kb(void) {
+	return reg_dcache_info & 0xffu;
+}
+
+static inline uint32_t z_dcache_line_words(void) {
+	return (reg_dcache_info >> 8) & 0xffu;
+}
+
+// write-buffer depth built into the bitstream (0 = none)
+static inline uint32_t z_dcache_wbuf_depth(void) {
+	return reg_cache_feat & 0xffu;
+}
+
+// line fills use SDRAM bursts (`SDRAM_BURST)
+static inline bool z_cache_burst(void) {
+	return (reg_cache_feat >> 9) & 1u;
+}
+
+// Enable/disable caching of data loads, and posted (buffered) stores.
+// The two are independent, which is what makes bisecting a problem on
+// hardware a matter of two shell commands. Enabling D (0 -> 1) also
+// flushes it in hardware and zeroes its hit/miss counters. Returns
+// false, and writes nothing, if there is no data cache.
+static inline bool z_dcache_set(bool enable, bool posted) {
+	if (!z_dcache_present()) return false;
+	reg_dcache_ctrl = (enable ? Z_DCACHE_CTRL_ENABLE : 0) |
+		(posted ? Z_DCACHE_CTRL_WBUF : 0);
+	return true;
+}
+
+static inline bool z_dcache_enabled(void) {
+	return z_dcache_present() && (reg_dcache_ctrl & Z_DCACHE_CTRL_ENABLE);
+}
+
+static inline bool z_dcache_posted(void) {
+	return z_dcache_present() && (reg_dcache_ctrl & Z_DCACHE_CTRL_WBUF);
+}
+
+// Never needed for correctness (see above). Zeroes the D counters.
+static inline void z_dcache_flush(void) {
+	if (!z_dcache_present()) return;
+	reg_dcache_ctrl = (reg_dcache_ctrl & (Z_DCACHE_CTRL_ENABLE |
+		Z_DCACHE_CTRL_WBUF)) | Z_DCACHE_CTRL_FLUSH;
+}
+
+// Zero LOADS, STORES, STALL, WBFULL and I_SNOOPS (write clears each).
+static inline void z_cache_stats_clear(void) {
+	if (!z_dcache_present()) return;
+	reg_cache_loads = 0;
+	reg_cache_stores = 0;
+	reg_cache_stall = 0;
+	reg_cache_wbfull = 0;
+	reg_cache_isnoops = 0;
 }
 
 // -- rv32im gateware/software agreement check --

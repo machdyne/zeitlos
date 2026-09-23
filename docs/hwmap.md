@@ -156,7 +156,8 @@ prefix `p` with `p` + `cyc_i` and `p` + `ack_o` is a **target**; with
 **Arbiters and bridges** are recognised by interface shape, not name: an
 instance with an initiator interface and two or more target interfaces
 whose addresses do not come from the decoded bus is an arbiter; with
-exactly one it is a bridge (the icache).
+exactly one it is a bridge (the cache: `wb_icache`, or `wb_cache` on a
+`DCACHE` build -- the same `icache_i` slot).
 
 **Address stages.** An instance whose non-Wishbone output feeds an address
 (the MTU's `addr_out`) is followed back through its input ports whose names

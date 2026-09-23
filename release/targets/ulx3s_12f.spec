@@ -25,7 +25,15 @@ make_vars = DEVICE=12k
 #
 # THE ONLY THING THAT DIFFERS FROM THE OTHER THREE ULX3S TARGETS.
 #
-# 56 DP16KD on this die, and the design wants 59 with the defaults.
+# UPDATE (with `DCACHE, oss-cad-suite 2026-09-23): this target now
+# measures 39 of 56 DP16KD, 85% of logic cells, 58.2 MHz -- so about 42
+# blocks with the FIFO at its default. The "59" below predates VRAM
+# shrinking from 40 blocks to 20 (docs/icache.md), and this reduction
+# is no longer what makes the design fit. It is left in place until
+# someone decides the throughput trade below is no longer worth it.
+#
+# Original note: 56 DP16KD on this die, and the design wants 59 with
+# the defaults.
 # The ESP32 receive FIFO is the cheapest three to find: at
 # ESP32_RXFIFO_BITS=13 it is 8192 bytes and four blocks, and a 32-bit
 # FIFO takes two blocks at any depth down to 1024 entries, so 11
@@ -44,4 +52,8 @@ make_vars = DEVICE=12k
 # blocks turns out not to be enough, `ICACHE_KB=2` is the next lever
 # and keeps the cache -- see the cost table in rtl/audio.v's header,
 # which measured exactly this trade on Lakritz.
+#
+# If this die ever runs short again: `-DCACHE` (or DCACHE_WBUF=0, ~540
+# LUT4) comes back before any of that -- the data cache is the newest
+# and least load-bearing of the three. docs/dcache.md.
 defines = ESP32_RXFIFO_BITS=11

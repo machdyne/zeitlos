@@ -392,14 +392,20 @@ two is gateware spent on symmetry.
   written separately from `arbiter_vram.v` rather than generalised
   because "generalising it would put a working, shipped path at risk to
   save a file". The same caution applies to widening it.
-- **Instruction cache coherency, which would be NEW.** The blitter only
-  ever READS main memory. An engine that writes it can leave stale
-  lines in the instruction cache -- and the most important thing the SD
-  path writes is executables (`fs_load_exec()`). Load an app over a
-  cached region, jump to it, and the CPU runs the previous occupant,
-  intermittently, depending on what was loaded before. Check whether
-  `docs/icache.md`'s cache has a flush control at all before starting;
-  if it does not, that is part of the work.
+- **Cache coherency: handled in hardware on `DCACHE` builds.** The
+  blitter only ever READS main memory; an engine that writes it could
+  leave stale lines in the caches -- and the most important thing the
+  SD path writes is executables (`fs_load_exec()`). On a `DCACHE` build
+  (`rtl/cache_id.v`, every cache board as of this writing) this is
+  already covered: `rtl/sysctl.v` feeds any non-CPU master's completed
+  write to main memory into the cache's snoop input, which invalidates
+  the matching instruction and data lines, provided the engine goes
+  through `wb_arbiter_main` like every other master. `docs/dcache.md`
+  ("Snoop input") has the details, including that a second write
+  arriving before the first is serviced degrades to a full flush. An
+  `ICACHE`-only build (`rtl/cache.v`) has no snoop, but it does have
+  a flush: `z_icache_flush()` after the transfer, before jumping to the
+  code, as `fs_load_exec()` already does.
 
 ## `sdbench`
 

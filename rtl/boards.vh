@@ -477,6 +477,17 @@
 `define MONTMUL
 `define ICACHE_KB 4
 `define ICACHE_LINE_WORDS 4
+// Data cache (docs/dcache.md), WITHOUT the write buffer: this 25F is
+// the tightest board, and DCACHE_WBUF 0 gives back ~540 LUT4 for about
+// 7% of the D-cache's gain. With the write buffer it measured 88% full
+// and 49.9-54.6 MHz over three seeds -- passing, but only 4% over on
+// the worst seed. See docs/dcache.md "Boards and releases" for the numbers
+// with this setting.
+`define DCACHE
+`define DCACHE_KB 4
+`define DCACHE_LINE_WORDS 4
+`define DCACHE_WBUF 0
+`define SDRAM_BURST
 `define GPU
 `define GPU_RASTER
 `define GPU_BLIT
@@ -567,6 +578,17 @@
 `define MONTMUL
 `define ICACHE_KB 8
 `define ICACHE_LINE_WORDS 4
+// Data cache: rtl/cache_id.v's unified wb_cache replaces wb_icache
+// (docs/dcache.md). Comment out DCACHE to get the I-cache-only build
+// back exactly; comment out ICACHE as well for no cache at all.
+// SDRAM_BURST makes line fills 4-word SDRAM bursts (rtl/mem/
+// sdram_kianv.v BURST=1); independent of the rest, and the first
+// thing to drop if bring-up misbehaves.
+`define DCACHE
+`define DCACHE_KB 4
+`define DCACHE_LINE_WORDS 4
+`define DCACHE_WBUF 2
+`define SDRAM_BURST
 `define GPU
 `define GPU_RASTER
 `define GPU_BLIT
@@ -615,6 +637,14 @@
 `define MONTMUL
 `define ICACHE_KB 8
 `define ICACHE_LINE_WORDS 4
+// Data cache (docs/dcache.md). Same part and SDRAM as mozart_ml1,
+// where it was brought up. Measured: 44% -> 48% of logic cells,
+// 42 -> 45 of 108 DP16KD, 53.3 -> 54.5 MHz (one seed).
+`define DCACHE
+`define DCACHE_KB 4
+`define DCACHE_LINE_WORDS 4
+`define DCACHE_WBUF 2
+`define SDRAM_BURST
 `define GPU
 `define GPU_RASTER
 `define GPU_BLIT
@@ -710,6 +740,14 @@
 `define MONTMUL
 `define ICACHE_KB 4
 `define ICACHE_LINE_WORDS 4
+// Data cache (docs/dcache.md). Measured on the 25F die (which the 12F
+// also is): 79% -> 86% of logic cells, 39 -> 42 of 56 DP16KD, 55.7,
+// 57.5, 58.1 MHz over three seeds.
+`define DCACHE
+`define DCACHE_KB 4
+`define DCACHE_LINE_WORDS 4
+`define DCACHE_WBUF 2
+`define SDRAM_BURST
 `define GPU
 `define GPU_RASTER
 `define GPU_BLIT
