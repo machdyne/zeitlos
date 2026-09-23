@@ -83,6 +83,23 @@
 // not just after a code change. See docs/trng.md.
 `define TRNG
 
+// Memory protection unit: rtl/mpu.v, docs/mpu.md. A stray store or jump
+// in an app ends that app with a crash report instead of corrupting
+// the kernel, another app, or hardware state (flash, the SD card, the
+// FPGA reconfigure key).
+//
+// Universal for the same reason `RTC and `TRNG are: no pins, no external
+// part, no block RAM, and no board-specific behaviour. It also works
+// with any cache arrangement, including none (Obst), and with either
+// CPU. It costs no cycles (it checks in parallel with the cache lookup
+// and never delays a permitted access); it costs roughly 450-700 logic
+// cells, which matters only on the 25F boards -- see docs/mpu.md for
+// the timing measured with it. The kernel programs it at boot and
+// enforces by default (`mpu report` in the shell logs instead); a
+// kernel that does not know about it leaves it disabled, which passes
+// everything through unchanged.
+`define MPU
+
 // Game mode: a 320x240 viewport over the same 640x480 framebuffer,
 // pixel-doubled on scanout so the display timing never changes. See
 // rtl/gpu/gpu_video.v's header for the full design and

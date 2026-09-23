@@ -377,4 +377,10 @@ localparam CSR_FEATURES2 =
 `ifdef DCACHE
 	(32'h1 << 9) |
 `endif
+// Memory protection unit: rtl/mpu.v (docs/mpu.md). Inventory only; its
+// own INFO register (0x9000_0124) is what software must check before
+// writing any MPU register.
+`ifdef MPU
+	(32'h1 << 10) |
+`endif
 	32'h0;

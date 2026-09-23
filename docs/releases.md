@@ -372,7 +372,7 @@ Nothing else defines `ZSPEC`, so `make BOARD=lakritz flash` behaves
 exactly as it always has.
 
 The **universal** section of `boards.vh` — `` `RTC ``, `` `TRNG ``,
-`` `GAME ``, `` `CPU_MUL ``, `` `DEBUG ``, `` `ARBITER `` — stays
+`` `MPU ``, `` `GAME ``, `` `CPU_MUL ``, `` `DEBUG ``, `` `ARBITER `` — stays
 outside the guard and specs cannot touch it. Each of those has a reason
 in that file for being universal, and none of those reasons is something
 a per-target choice would change.

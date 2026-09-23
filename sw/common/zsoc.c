@@ -121,6 +121,7 @@ const z_feature_info_t z_soc_features2[] = {
 	{ Z_FEATURE2_USB_HOST,  "usb-host", Z_FEAT_GROUP_IO     },
 	{ Z_FEATURE2_ICACHE,    "icache",  Z_FEAT_GROUP_CACHE   },
 	{ Z_FEATURE2_DCACHE,    "dcache",  Z_FEAT_GROUP_CACHE   },
+	{ Z_FEATURE2_MPU,       "mpu",     Z_FEAT_GROUP_PROTECT },
 
 };
 
@@ -153,6 +154,7 @@ const char *const z_soc_feature_groups[] = {
 	"led    ",
 	"io     ",
 	"cache  ",
+	"protect",
 };
 
 // Compile-time assertion that the table above and the enum in zsoc.h

@@ -62,6 +62,13 @@
 // because the handler CAN lower the source: clearing IRQSTAT is a
 // register write, not something that needs a userspace process to run.
 #define Z_IRQ_USB				9
+// Memory protection fault (rtl/mpu.v, docs/mpu.md): a level, held until
+// the kernel clears the MPU's FAULT_INFO.
+#define Z_IRQ_MPU				10
+// picorv32/zeitlos32 internal: illegal instruction (also ebreak and
+// ecall), and misaligned access. Unmasked by the BIOS at boot.
+#define Z_IRQ_ILLEGAL			1
+#define Z_IRQ_MISALIGN			2
 
 typedef struct {
 

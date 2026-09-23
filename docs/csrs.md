@@ -127,6 +127,7 @@ Same idea as `FEATURES`, one word along. Assigned in `rtl/csrs.vh`'s
 | 6 | `FLASHW` | the flash is writable: `rtl/spiflash.v`'s registers at `0x1F00_0000` (with `MEM_ROM`). Without it, `0x1F00_0000` is flash offset 0, aliased -- see `docs/spiflash.md` |
 | 7 | `JUMP` | this gateware reloads from the jumploader at `0x1D0000` when it pulls PROGRAMN (the Makefile's `JUMP`, which also packs it `--bootaddr 0x1D0000`): `reboot` and `jump` go through the jumploader, and refuse if none is there -- see `docs/zboot.md` section 5 |
 | 8 | `ICACHE` | an instruction cache is built: `rtl/cache.v`, or the I side of `rtl/cache_id.v` -- see `docs/icache.md`. Inventory only: use `z_icache_present()` (its INFO register) before touching its registers |
+| 10 | `MPU` | the memory protection unit `rtl/mpu.v` is built -- see `docs/mpu.md`. Inventory only: use `z_mpu_present()` before writing its registers, which alias the MTU base on a bitstream without it |
 | 9 | `DCACHE` | the unified instruction + data cache `rtl/cache_id.v` is built -- see `docs/dcache.md`. Inventory only: use `z_dcache_present()` before writing `D_CTRL`, which aliases `I_CTRL` on an I-cache-only bitstream |
 | 5 | `RECONFIG` | `rtl/socctl.v`'s RECONFIG can pull this board's PROGRAMN, so `reboot` works (`PROGRAMN_PIN` in `rtl/boards.vh`: Lakritz, Obst, Mozart ML1) -- see `docs/zboot.md` section 6 |
 

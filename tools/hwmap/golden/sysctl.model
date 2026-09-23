@@ -1,5 +1,5 @@
 {
- "input_sha256": "819b52bc351fc75cca28bbd609a930f150ab47026651d56f6c143ed65e7e969d",
+ "input_sha256": "f906d455a85d8b3b956a850b133f603a2db768dfceafacc36714dad6df5fce78",
  "model": {
   "alternatives": [
    {
@@ -165,7 +165,7 @@
     "interfaces": {
      "wbm_": "initiator"
     },
-    "line": 1445,
+    "line": 1464,
     "module": "zeitlos32_wb",
     "primitive": false,
     "roles": [
@@ -187,7 +187,7 @@
     "interfaces": {
      "wbm_": "initiator"
     },
-    "line": 1492,
+    "line": 1511,
     "module": "picorv32_wb",
     "primitive": false,
     "roles": [
@@ -203,7 +203,7 @@
     "interfaces": {
      "cfg_": "target"
     },
-    "line": 1563,
+    "line": 1582,
     "module": "wb_mtu",
     "primitive": false,
     "roles": [
@@ -211,6 +211,23 @@
      "tenant"
     ],
     "when": "always"
+   },
+   {
+    "alt_group": null,
+    "children": [],
+    "id": "mpu_i",
+    "instance": "mpu_i",
+    "interfaces": {
+     "c_": "target",
+     "d_": "initiator"
+    },
+    "line": 1611,
+    "module": "wb_mpu",
+    "primitive": false,
+    "roles": [
+     "bridge"
+    ],
+    "when": "MPU"
    },
    {
     "alt_group": "alt3",
@@ -221,7 +238,7 @@
      "c_": "target",
      "m_": "initiator"
     },
-    "line": 1612,
+    "line": 1673,
     "module": "wb_cache",
     "primitive": false,
     "roles": [
@@ -238,7 +255,7 @@
      "c_": "target",
      "m_": "initiator"
     },
-    "line": 1653,
+    "line": 1714,
     "module": "wb_icache",
     "primitive": false,
     "roles": [
@@ -257,7 +274,7 @@
      "m2_": "target",
      "s_": "initiator"
     },
-    "line": 1732,
+    "line": 1793,
     "module": "wb_arbiter_main",
     "primitive": false,
     "roles": [
@@ -274,7 +291,7 @@
      "m_": "initiator",
      "wb_": "target"
     },
-    "line": 1840,
+    "line": 1901,
     "module": "gpu_raster_wb",
     "primitive": false,
     "roles": [
@@ -291,7 +308,7 @@
     "interfaces": {
      "wb_": "target"
     },
-    "line": 1880,
+    "line": 1941,
     "module": "glyph_mem",
     "primitive": false,
     "roles": [
@@ -309,7 +326,7 @@
      "s_": "initiator",
      "wb_": "target"
     },
-    "line": 1920,
+    "line": 1981,
     "module": "gpu_blit_wb",
     "primitive": false,
     "roles": [
@@ -329,7 +346,7 @@
      "m2_": "target",
      "s_": "initiator"
     },
-    "line": 1973,
+    "line": 2035,
     "module": "wb_arbiter_vram",
     "primitive": false,
     "roles": [
@@ -346,7 +363,7 @@
     "interfaces": {
      "wb_": "target"
     },
-    "line": 2042,
+    "line": 2104,
     "module": "bram_wb",
     "primitive": false,
     "roles": [
@@ -362,7 +379,7 @@
     "interfaces": {
      "wb_": "target"
     },
-    "line": 2060,
+    "line": 2122,
     "module": "sram_wb",
     "primitive": false,
     "roles": [
@@ -378,7 +395,7 @@
     "interfaces": {
      "wb_": "target"
     },
-    "line": 2087,
+    "line": 2149,
     "module": "sdram_wb",
     "primitive": false,
     "roles": [
@@ -394,7 +411,7 @@
     "interfaces": {
      "wb_": "target"
     },
-    "line": 2124,
+    "line": 2186,
     "module": "vram_wb",
     "primitive": false,
     "roles": [
@@ -417,7 +434,7 @@
     "interfaces": {
      "wb_": "target"
     },
-    "line": 2145,
+    "line": 2207,
     "module": "qqspi_wb",
     "primitive": false,
     "roles": [
@@ -431,7 +448,7 @@
     "id": "usrmclk0",
     "instance": "usrmclk0",
     "interfaces": {},
-    "line": 2175,
+    "line": 2237,
     "module": "USRMCLK",
     "primitive": true,
     "roles": [],
@@ -445,7 +462,7 @@
     "interfaces": {
      "wb_": "target"
     },
-    "line": 2181,
+    "line": 2243,
     "module": "spiflash_wb",
     "primitive": false,
     "roles": [
@@ -461,7 +478,7 @@
     "interfaces": {
      "wb_": "target"
     },
-    "line": 2212,
+    "line": 2274,
     "module": "gpio_wb",
     "primitive": false,
     "roles": [
@@ -483,7 +500,7 @@
     "interfaces": {
      "wb_": "target"
     },
-    "line": 2351,
+    "line": 2413,
     "module": "usb_cdc_uart",
     "primitive": false,
     "roles": [
@@ -499,7 +516,7 @@
     "interfaces": {
      "wb_": "target"
     },
-    "line": 2383,
+    "line": 2445,
     "module": "uart_wb",
     "primitive": false,
     "roles": [
@@ -515,7 +532,7 @@
     "interfaces": {
      "wb_": "target"
     },
-    "line": 2422,
+    "line": 2484,
     "module": "uart_null",
     "primitive": false,
     "roles": [
@@ -531,7 +548,7 @@
     "interfaces": {
      "wb_": "target"
     },
-    "line": 2444,
+    "line": 2506,
     "module": "uart_wb",
     "primitive": false,
     "roles": [
@@ -547,7 +564,7 @@
     "interfaces": {
      "wb_": "target"
     },
-    "line": 2534,
+    "line": 2596,
     "module": "esp32_rxfifo",
     "primitive": false,
     "roles": [
@@ -563,7 +580,7 @@
     "interfaces": {
      "wb_": "target"
     },
-    "line": 2559,
+    "line": 2621,
     "module": "spim_wb",
     "primitive": false,
     "roles": [
@@ -579,7 +596,7 @@
     "interfaces": {
      "wb_": "target"
     },
-    "line": 2590,
+    "line": 2652,
     "module": "spim_wb",
     "primitive": false,
     "roles": [
@@ -595,7 +612,7 @@
     "interfaces": {
      "wb_": "target"
     },
-    "line": 2644,
+    "line": 2706,
     "module": "ethmac_rmii_wb",
     "primitive": false,
     "roles": [
@@ -609,7 +626,7 @@
     "id": "stop_here",
     "instance": "stop_here",
     "interfaces": {},
-    "line": 2764,
+    "line": 2826,
     "module": "JUMPLOADER_needs_PROGRAMN_PIN_in_rtl_boards_vh",
     "primitive": true,
     "roles": [],
@@ -621,7 +638,7 @@
     "id": "programn_bb",
     "instance": "programn_bb",
     "interfaces": {},
-    "line": 2768,
+    "line": 2830,
     "module": "BB",
     "primitive": true,
     "roles": [],
@@ -635,7 +652,7 @@
     "interfaces": {
      "wb_": "target"
     },
-    "line": 2771,
+    "line": 2833,
     "module": "socctl_wb",
     "primitive": false,
     "roles": [
@@ -651,7 +668,7 @@
     "interfaces": {
      "wb_": "target"
     },
-    "line": 2818,
+    "line": 2880,
     "module": "csrs_wb",
     "primitive": false,
     "roles": [
@@ -667,7 +684,7 @@
     "interfaces": {
      "wb_": "target"
     },
-    "line": 2864,
+    "line": 2926,
     "module": "rtc_wb",
     "primitive": false,
     "roles": [
@@ -683,7 +700,7 @@
     "interfaces": {
      "wb_": "target"
     },
-    "line": 2887,
+    "line": 2949,
     "module": "trng_wb",
     "primitive": false,
     "roles": [
@@ -699,7 +716,7 @@
     "interfaces": {
      "wb_": "target"
     },
-    "line": 2921,
+    "line": 2983,
     "module": "montmul",
     "primitive": false,
     "roles": [
@@ -732,7 +749,7 @@
      "mx_": "initiator",
      "wb_": "target"
     },
-    "line": 2963,
+    "line": 3025,
     "module": "audio_wb",
     "primitive": false,
     "roles": [
@@ -755,7 +772,7 @@
     "interfaces": {
      "wb_": "target"
     },
-    "line": 3032,
+    "line": 3094,
     "module": "usb_hid_wb",
     "primitive": false,
     "roles": [
@@ -777,7 +794,7 @@
     "interfaces": {
      "wb_": "target"
     },
-    "line": 3066,
+    "line": 3128,
     "module": "usb_hid_wb",
     "primitive": false,
     "roles": [
@@ -814,7 +831,7 @@
     "interfaces": {
      "wb_": "target"
     },
-    "line": 3124,
+    "line": 3186,
     "module": "usb_host",
     "primitive": false,
     "roles": [
@@ -830,7 +847,7 @@
     "interfaces": {
      "wb_": "target"
     },
-    "line": 3194,
+    "line": 3256,
     "module": "probe",
     "primitive": false,
     "roles": [
@@ -850,7 +867,7 @@
     "id": "gpu_video_i",
     "instance": "gpu_video_i",
     "interfaces": {},
-    "line": 3269,
+    "line": 3331,
     "module": "gpu_video",
     "primitive": false,
     "roles": [],
@@ -862,7 +879,7 @@
     "id": "gpu_cursor_i",
     "instance": "gpu_cursor_i",
     "interfaces": {},
-    "line": 3375,
+    "line": 3437,
     "module": "gpu_cursor",
     "primitive": false,
     "roles": [],
@@ -979,6 +996,7 @@
      "icache_i:wb_icache",
      "marb0_i",
      "montmul_i",
+     "mpu_i",
      "mtu_i",
      "pll0_i:pll0",
      "pll1_i:pll1",
@@ -1120,13 +1138,13 @@
     "mux": [
      {
       "kind": "dat",
-      "line": 1272,
+      "line": 1281,
       "signal": "wbs_audio_dat_o",
       "when": "AUDIO"
      },
      {
       "kind": "ack",
-      "line": 1410,
+      "line": 1419,
       "signal": "wbs_audio_ack_o",
       "when": "AUDIO"
      }
@@ -1143,7 +1161,7 @@
      {
       "base": "0x70000500",
       "excludes": [],
-      "line": 1124,
+      "line": 1133,
       "mask": "0xF0000700",
       "when": "AUDIO"
      }
@@ -1153,13 +1171,13 @@
     "mux": [
      {
       "kind": "dat",
-      "line": 1201,
+      "line": 1210,
       "signal": "wbs_bram_dat_o",
       "when": "always"
      },
      {
       "kind": "ack",
-      "line": 1339,
+      "line": 1348,
       "signal": "wbs_bram_ack_o",
       "when": "always"
      }
@@ -1176,7 +1194,7 @@
      {
       "base": "0x00000000",
       "excludes": [],
-      "line": 911,
+      "line": 920,
       "mask": "0xFFFFE000",
       "when": "always"
      }
@@ -1186,13 +1204,13 @@
     "mux": [
      {
       "kind": "dat",
-      "line": 1274,
+      "line": 1283,
       "signal": "wbs_csrs_dat_o",
       "when": "always"
      },
      {
       "kind": "ack",
-      "line": 1412,
+      "line": 1421,
       "signal": "wbs_csrs_ack_o",
       "when": "always"
      }
@@ -1234,7 +1252,7 @@
         "when": "PROBE"
        }
       ],
-      "line": 1136,
+      "line": 1145,
       "mask": "0xF0000000",
       "when": "always"
      }
@@ -1244,13 +1262,13 @@
     "mux": [
      {
       "kind": "dat",
-      "line": 1226,
+      "line": 1235,
       "signal": "wbs_esp32ctl_dat_o",
       "when": "ESP32_LINK"
      },
      {
       "kind": "ack",
-      "line": 1364,
+      "line": 1373,
       "signal": "wbs_esp32ctl_ack_o",
       "when": "ESP32_LINK"
      }
@@ -1267,7 +1285,7 @@
      {
       "base": "0xF0000200",
       "excludes": [],
-      "line": 1184,
+      "line": 1193,
       "mask": "0xF0000700",
       "when": "ESP32_LINK"
      }
@@ -1277,13 +1295,13 @@
     "mux": [
      {
       "kind": "dat",
-      "line": 1227,
+      "line": 1236,
       "signal": "wbs_esp32rx_dat_o",
       "when": "ESP32_LINK"
      },
      {
       "kind": "ack",
-      "line": 1365,
+      "line": 1374,
       "signal": "wbs_esp32rx_ack_o",
       "when": "ESP32_LINK"
      }
@@ -1300,7 +1318,7 @@
      {
       "base": "0xF0000300",
       "excludes": [],
-      "line": 1185,
+      "line": 1194,
       "mask": "0xF0000700",
       "when": "ESP32_LINK"
      }
@@ -1310,13 +1328,13 @@
     "mux": [
      {
       "kind": "dat",
-      "line": 1259,
+      "line": 1268,
       "signal": "wbs_ethmac_dat_o",
       "when": "ETH_RMII"
      },
      {
       "kind": "ack",
-      "line": 1397,
+      "line": 1406,
       "signal": "wbs_ethmac_ack_o",
       "when": "ETH_RMII"
      }
@@ -1333,7 +1351,7 @@
      {
       "base": "0x60000000",
       "excludes": [],
-      "line": 1012,
+      "line": 1021,
       "mask": "0xF0000000",
       "when": "ETH_RMII"
      }
@@ -1343,13 +1361,13 @@
     "mux": [
      {
       "kind": "dat",
-      "line": 1253,
+      "line": 1262,
       "signal": "wbs_glyph_dat_o",
       "when": "MEM_GLYPH"
      },
      {
       "kind": "ack",
-      "line": 1391,
+      "line": 1400,
       "signal": "wbs_glyph_ack_o",
       "when": "MEM_GLYPH"
      }
@@ -1366,7 +1384,7 @@
      {
       "base": "0x30000000",
       "excludes": [],
-      "line": 1006,
+      "line": 1015,
       "mask": "0xF0000000",
       "when": "MEM_GLYPH"
      }
@@ -1376,13 +1394,13 @@
     "mux": [
      {
       "kind": "dat",
-      "line": 1220,
+      "line": 1229,
       "signal": "wbs_gpio_dat_o",
       "when": "always"
      },
      {
       "kind": "ack",
-      "line": 1358,
+      "line": 1367,
       "signal": "wbs_gpio_ack_o",
       "when": "always"
      }
@@ -1399,7 +1417,7 @@
      {
       "base": "0xE0000000",
       "excludes": [],
-      "line": 1162,
+      "line": 1171,
       "mask": "0xF0000000",
       "when": "always"
      }
@@ -1409,13 +1427,13 @@
     "mux": [
      {
       "kind": "dat",
-      "line": 1247,
+      "line": 1256,
       "signal": "wbs_gpu_dat_o",
       "when": "GPU_RASTER"
      },
      {
       "kind": "ack",
-      "line": 1385,
+      "line": 1394,
       "signal": "wbs_gpu_ack_o",
       "when": "GPU_RASTER"
      }
@@ -1432,7 +1450,7 @@
      {
       "base": "0xA0000000",
       "excludes": [],
-      "line": 1000,
+      "line": 1009,
       "mask": "0xF0000000",
       "when": "GPU_RASTER"
      }
@@ -1442,13 +1460,13 @@
     "mux": [
      {
       "kind": "dat",
-      "line": 1250,
+      "line": 1259,
       "signal": "wbs_gpu_blit_dat_o",
       "when": "GPU_BLIT"
      },
      {
       "kind": "ack",
-      "line": 1388,
+      "line": 1397,
       "signal": "wbs_gpu_blit_ack_o",
       "when": "GPU_BLIT"
      }
@@ -1465,7 +1483,7 @@
      {
       "base": "0xD0000000",
       "excludes": [],
-      "line": 1003,
+      "line": 1012,
       "mask": "0xF0000000",
       "when": "GPU_BLIT"
      }
@@ -1475,13 +1493,13 @@
     "mux": [
      {
       "kind": "dat",
-      "line": 1268,
+      "line": 1277,
       "signal": "wbs_montmul_dat_o",
       "when": "MONTMUL & TRNG"
      },
      {
       "kind": "ack",
-      "line": 1406,
+      "line": 1415,
       "signal": "wbs_montmul_ack_o",
       "when": "MONTMUL & TRNG"
      }
@@ -1498,7 +1516,7 @@
      {
       "base": "0x70000600",
       "excludes": [],
-      "line": 1133,
+      "line": 1142,
       "mask": "0xF0000700",
       "when": "MONTMUL"
      }
@@ -1508,13 +1526,13 @@
     "mux": [
      {
       "kind": "dat",
-      "line": 1202,
+      "line": 1211,
       "signal": "wbs_mtu_dat_o",
       "when": "always"
      },
      {
       "kind": "ack",
-      "line": 1340,
+      "line": 1349,
       "signal": "wbs_mtu_ack_o",
       "when": "always"
      }
@@ -1531,7 +1549,7 @@
      {
       "base": "0x90000000",
       "excludes": [],
-      "line": 912,
+      "line": 921,
       "mask": "0xF0000000",
       "when": "always"
      }
@@ -1541,25 +1559,25 @@
     "mux": [
      {
       "kind": "dat",
-      "line": 1241,
+      "line": 1250,
       "signal": "wbs_probe_dat_o",
       "when": "PROBE"
      },
      {
       "kind": "dat",
-      "line": 1244,
+      "line": 1253,
       "signal": "wbs_probe_dat_o",
       "when": "PROBE"
      },
      {
       "kind": "ack",
-      "line": 1379,
+      "line": 1388,
       "signal": "wbs_probe_ack_o",
       "when": "PROBE"
      },
      {
       "kind": "ack",
-      "line": 1382,
+      "line": 1391,
       "signal": "wbs_probe_ack_o",
       "when": "PROBE"
      }
@@ -1582,7 +1600,7 @@
      {
       "base": "0x7F000000",
       "excludes": [],
-      "line": 1094,
+      "line": 1103,
       "mask": "0xFF000000",
       "when": "PROBE"
      }
@@ -1592,13 +1610,13 @@
     "mux": [
      {
       "kind": "dat",
-      "line": 1208,
+      "line": 1217,
       "signal": "wbs_qqspi_dat_o",
       "when": "MEM_QQSPI & !MEM_SDRAM & !MEM_SRAM"
      },
      {
       "kind": "ack",
-      "line": 1346,
+      "line": 1355,
       "signal": "wbs_qqspi_ack_o",
       "when": "MEM_QQSPI & !MEM_SDRAM & !MEM_SRAM"
      }
@@ -1615,7 +1633,7 @@
      {
       "base": "0x40000000",
       "excludes": [],
-      "line": 919,
+      "line": 928,
       "mask": "0xF0000000",
       "when": "MEM_QQSPI & !MEM_SDRAM & !MEM_SRAM"
      }
@@ -1625,13 +1643,13 @@
     "mux": [
      {
       "kind": "dat",
-      "line": 1218,
+      "line": 1227,
       "signal": "wbs_rom_dat_o",
       "when": "MEM_ROM"
      },
      {
       "kind": "ack",
-      "line": 1356,
+      "line": 1365,
       "signal": "wbs_rom_ack_o",
       "when": "MEM_ROM"
      }
@@ -1648,7 +1666,7 @@
      {
       "base": "0x10000000",
       "excludes": [],
-      "line": 925,
+      "line": 934,
       "mask": "0xF0000000",
       "when": "MEM_ROM"
      }
@@ -1658,13 +1676,13 @@
     "mux": [
      {
       "kind": "dat",
-      "line": 1263,
+      "line": 1272,
       "signal": "wbs_rtc_dat_o",
       "when": "RTC"
      },
      {
       "kind": "ack",
-      "line": 1401,
+      "line": 1410,
       "signal": "wbs_rtc_ack_o",
       "when": "RTC"
      }
@@ -1681,7 +1699,7 @@
      {
       "base": "0x70000300",
       "excludes": [],
-      "line": 1111,
+      "line": 1120,
       "mask": "0xF0000700",
       "when": "RTC"
      }
@@ -1691,13 +1709,13 @@
     "mux": [
      {
       "kind": "dat",
-      "line": 1206,
+      "line": 1215,
       "signal": "wbs_sdram_dat_o",
       "when": "MEM_SDRAM & !MEM_SRAM"
      },
      {
       "kind": "ack",
-      "line": 1344,
+      "line": 1353,
       "signal": "wbs_sdram_ack_o",
       "when": "MEM_SDRAM & !MEM_SRAM"
      }
@@ -1714,7 +1732,7 @@
      {
       "base": "0x40000000",
       "excludes": [],
-      "line": 917,
+      "line": 926,
       "mask": "0xF0000000",
       "when": "MEM_SDRAM & !MEM_SRAM"
      }
@@ -1724,13 +1742,13 @@
     "mux": [
      {
       "kind": "dat",
-      "line": 1261,
+      "line": 1270,
       "signal": "wbs_socctl_dat_o",
       "when": "always"
      },
      {
       "kind": "ack",
-      "line": 1399,
+      "line": 1408,
       "signal": "wbs_socctl_ack_o",
       "when": "always"
      }
@@ -1747,7 +1765,7 @@
      {
       "base": "0x70000200",
       "excludes": [],
-      "line": 1097,
+      "line": 1106,
       "mask": "0xF0000700",
       "when": "always"
      }
@@ -1757,13 +1775,13 @@
     "mux": [
      {
       "kind": "dat",
-      "line": 1256,
+      "line": 1265,
       "signal": "wbs_spieth_dat_o",
       "when": "SPI_ETH"
      },
      {
       "kind": "ack",
-      "line": 1394,
+      "line": 1403,
       "signal": "wbs_spieth_ack_o",
       "when": "SPI_ETH"
      }
@@ -1780,7 +1798,7 @@
      {
       "base": "0x50000000",
       "excludes": [],
-      "line": 1009,
+      "line": 1018,
       "mask": "0xF0000000",
       "when": "SPI_ETH"
      }
@@ -1790,13 +1808,13 @@
     "mux": [
      {
       "kind": "dat",
-      "line": 1231,
+      "line": 1240,
       "signal": "wbs_spisdcard_dat_o",
       "when": "SPI_SDCARD"
      },
      {
       "kind": "ack",
-      "line": 1369,
+      "line": 1378,
       "signal": "wbs_spisdcard_ack_o",
       "when": "SPI_SDCARD"
      }
@@ -1813,7 +1831,7 @@
      {
       "base": "0xB0000000",
       "excludes": [],
-      "line": 930,
+      "line": 939,
       "mask": "0xF0000000",
       "when": "SPI_SDCARD"
      }
@@ -1823,13 +1841,13 @@
     "mux": [
      {
       "kind": "dat",
-      "line": 1204,
+      "line": 1213,
       "signal": "wbs_sram_dat_o",
       "when": "MEM_SRAM"
      },
      {
       "kind": "ack",
-      "line": 1342,
+      "line": 1351,
       "signal": "wbs_sram_ack_o",
       "when": "MEM_SRAM"
      }
@@ -1846,7 +1864,7 @@
      {
       "base": "0x40000000",
       "excludes": [],
-      "line": 915,
+      "line": 924,
       "mask": "0xF0000000",
       "when": "MEM_SRAM"
      }
@@ -1856,13 +1874,13 @@
     "mux": [
      {
       "kind": "dat",
-      "line": 1266,
+      "line": 1275,
       "signal": "wbs_trng_dat_o",
       "when": "TRNG"
      },
      {
       "kind": "ack",
-      "line": 1404,
+      "line": 1413,
       "signal": "wbs_trng_ack_o",
       "when": "TRNG"
      }
@@ -1879,7 +1897,7 @@
      {
       "base": "0x70000400",
       "excludes": [],
-      "line": 1115,
+      "line": 1124,
       "mask": "0xF0000700",
       "when": "TRNG"
      }
@@ -1889,13 +1907,13 @@
     "mux": [
      {
       "kind": "dat",
-      "line": 1221,
+      "line": 1230,
       "signal": "wbs_uart0_dat_o",
       "when": "always"
      },
      {
       "kind": "ack",
-      "line": 1359,
+      "line": 1368,
       "signal": "wbs_uart0_ack_o",
       "when": "always"
      }
@@ -1924,14 +1942,14 @@
      {
       "base": "0xF0000000",
       "excludes": [],
-      "line": 1178,
+      "line": 1187,
       "mask": "0xF0000700",
       "when": "UART1"
      },
      {
       "base": "0xF0000000",
       "excludes": [],
-      "line": 1181,
+      "line": 1190,
       "mask": "0xF0000000",
       "when": "!UART1"
      }
@@ -1941,13 +1959,13 @@
     "mux": [
      {
       "kind": "dat",
-      "line": 1223,
+      "line": 1232,
       "signal": "wbs_uart1_dat_o",
       "when": "UART1"
      },
      {
       "kind": "ack",
-      "line": 1361,
+      "line": 1370,
       "signal": "wbs_uart1_ack_o",
       "when": "UART1"
      }
@@ -1964,7 +1982,7 @@
      {
       "base": "0xF0000100",
       "excludes": [],
-      "line": 1179,
+      "line": 1188,
       "mask": "0xF0000700",
       "when": "UART1"
      }
@@ -1974,13 +1992,13 @@
     "mux": [
      {
       "kind": "dat",
-      "line": 1234,
+      "line": 1243,
       "signal": "wbs_usb0_dat_o",
       "when": "USB_HID"
      },
      {
       "kind": "ack",
-      "line": 1372,
+      "line": 1381,
       "signal": "wbs_usb0_ack_o",
       "when": "USB_HID"
      }
@@ -1997,7 +2015,7 @@
      {
       "base": "0xC0000000",
       "excludes": [],
-      "line": 972,
+      "line": 981,
       "mask": "0xF0000020",
       "when": "USB_ANY"
      }
@@ -2007,13 +2025,13 @@
     "mux": [
      {
       "kind": "dat",
-      "line": 1235,
+      "line": 1244,
       "signal": "wbs_usb1_dat_o",
       "when": "USB_HID"
      },
      {
       "kind": "ack",
-      "line": 1373,
+      "line": 1382,
       "signal": "wbs_usb1_ack_o",
       "when": "USB_HID"
      }
@@ -2030,7 +2048,7 @@
      {
       "base": "0xC0000020",
       "excludes": [],
-      "line": 973,
+      "line": 982,
       "mask": "0xF0000020",
       "when": "USB_ANY"
      }
@@ -2040,13 +2058,13 @@
     "mux": [
      {
       "kind": "dat",
-      "line": 1238,
+      "line": 1247,
       "signal": "wbs_usbh_dat_o",
       "when": "USB_HOST"
      },
      {
       "kind": "ack",
-      "line": 1376,
+      "line": 1385,
       "signal": "wbs_usbh_ack_o",
       "when": "USB_HOST"
      }
@@ -2063,7 +2081,7 @@
      {
       "base": "0xC0000000",
       "excludes": [],
-      "line": 997,
+      "line": 1006,
       "mask": "0xF0000000",
       "when": "USB_HOST"
      }
@@ -2073,13 +2091,13 @@
     "mux": [
      {
       "kind": "dat",
-      "line": 1228,
+      "line": 1237,
       "signal": "wbs_vmouse_dat_o",
       "when": "ESP32_LINK"
      },
      {
       "kind": "ack",
-      "line": 1366,
+      "line": 1375,
       "signal": "wbs_vmouse_ack_o",
       "when": "ESP32_LINK"
      }
@@ -2096,7 +2114,7 @@
      {
       "base": "0xF0000400",
       "excludes": [],
-      "line": 1189,
+      "line": 1198,
       "mask": "0xF0000700",
       "when": "ESP32_LINK"
      }
@@ -2106,25 +2124,25 @@
     "mux": [
      {
       "kind": "dat",
-      "line": 1212,
+      "line": 1221,
       "signal": "wbm_cpu_arb0_dat_i",
       "when": "GPU_RASTER & MEM_VRAM"
      },
      {
       "kind": "dat",
-      "line": 1214,
+      "line": 1223,
       "signal": "wbs_vram_dat_o",
       "when": "MEM_VRAM & !GPU_RASTER"
      },
      {
       "kind": "ack",
-      "line": 1350,
+      "line": 1359,
       "signal": "wbm_cpu_arb0_ack",
       "when": "GPU_RASTER & MEM_VRAM"
      },
      {
       "kind": "ack",
-      "line": 1352,
+      "line": 1361,
       "signal": "wbs_vram_ack_o",
       "when": "MEM_VRAM & !GPU_RASTER"
      }
@@ -2147,7 +2165,7 @@
      {
       "base": "0x20000000",
       "excludes": [],
-      "line": 922,
+      "line": 931,
       "mask": "0xF0000000",
       "when": "MEM_VRAM"
      }
@@ -2304,7 +2322,10 @@
    "DCACHE": {
     "with": [
      "block wb_cache",
-     "localparam CACHE_BURST"
+     "localparam CACHE_BURST",
+     "localparam CSR_FEATURES2",
+     "CSR_FEATURES2 bit 8",
+     "CSR_FEATURES2 bit 9"
     ],
     "without": [
      "block Instruction cache"
@@ -2746,6 +2767,14 @@
     ],
     "without": []
    },
+   "MPU": {
+    "with": [
+     "block wb_mpu",
+     "localparam CSR_FEATURES2",
+     "CSR_FEATURES2 bit 10"
+    ],
+    "without": []
+   },
    "OSC100": {
     "with": [
      "pins CLK_100"
@@ -3037,6 +3066,7 @@
    "rtl/mtu.v",
    "rtl/cache.v",
    "rtl/cache_id.v",
+   "rtl/mpu.v",
    "rtl/arbiter_vram.v",
    "rtl/arbiter_main.v",
    "rtl/mem/bram.v",
@@ -3092,28 +3122,28 @@
      {
       "file": "rtl/sysctl.v",
       "kind": "no-ack",
-      "line": 1133,
+      "line": 1142,
       "msg": "cs_montmul decodes 0x7000_0600 but no slave acks it (bus hang)",
       "severity": "E"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "no-ack",
-      "line": 1133,
+      "line": 1142,
       "msg": "cs_montmul decodes 0x7000_0600 but has no data mux term",
       "severity": "E"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "undeclared",
-      "line": 2932,
+      "line": 2994,
       "msg": "wbs_montmul_dat_o is used here but declared only when TRNG",
       "severity": "E"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "undeclared",
-      "line": 2936,
+      "line": 2998,
       "msg": "wbs_montmul_ack_o is used here but declared only when MONTMUL & TRNG",
       "severity": "E"
      }
@@ -3126,28 +3156,28 @@
      {
       "file": "rtl/sysctl.v",
       "kind": "no-ack",
-      "line": 972,
+      "line": 981,
       "msg": "cs_usb0 decodes 0xC000_0000 but no slave acks it (bus hang)",
       "severity": "E"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "no-ack",
-      "line": 972,
+      "line": 981,
       "msg": "cs_usb0 decodes 0xC000_0000 but has no data mux term",
       "severity": "E"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "no-ack",
-      "line": 973,
+      "line": 982,
       "msg": "cs_usb1 decodes 0xC000_0020 but no slave acks it (bus hang)",
       "severity": "E"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "no-ack",
-      "line": 973,
+      "line": 982,
       "msg": "cs_usb1 decodes 0xC000_0020 but has no data mux term",
       "severity": "E"
      }
@@ -3160,21 +3190,21 @@
      {
       "file": "rtl/sysctl.v",
       "kind": "no-ack",
-      "line": 922,
+      "line": 931,
       "msg": "cs_vram decodes 0x2000_0000 but no slave acks it (bus hang)",
       "severity": "E"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "undeclared",
-      "line": 1212,
+      "line": 1221,
       "msg": "wbm_cpu_arb0_dat_i is used here but declared only when ARBITER",
       "severity": "E"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "undeclared",
-      "line": 1350,
+      "line": 1359,
       "msg": "wbm_cpu_arb0_ack is used here but declared only when ARBITER",
       "severity": "E"
      }
@@ -3187,7 +3217,7 @@
      {
       "file": "rtl/sysctl.v",
       "kind": "overlap",
-      "line": 1097,
+      "line": 1106,
       "msg": "cs_probe (0x7F00_0000) and cs_socctl (0x7000_0200) decode the same addresses",
       "severity": "E"
      }
@@ -3200,7 +3230,7 @@
      {
       "file": "rtl/sysctl.v",
       "kind": "overlap",
-      "line": 1094,
+      "line": 1103,
       "msg": "cs_audio (0x7000_0500) and cs_probe (0x7F00_0000) decode the same addresses",
       "severity": "E"
      }
@@ -3213,28 +3243,28 @@
      {
       "file": "rtl/sysctl.v",
       "kind": "overlap",
-      "line": 1181,
+      "line": 1190,
       "msg": "cs_esp32ctl (0xF000_0200) and cs_uart0 (0xF000_0000) decode the same addresses",
       "severity": "E"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "overlap",
-      "line": 1181,
+      "line": 1190,
       "msg": "cs_esp32rx (0xF000_0300) and cs_uart0 (0xF000_0000) decode the same addresses",
       "severity": "E"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "overlap",
-      "line": 1189,
+      "line": 1198,
       "msg": "cs_uart0 (0xF000_0000) and cs_vmouse (0xF000_0400) decode the same addresses",
       "severity": "E"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "undeclared",
-      "line": 2539,
+      "line": 2601,
       "msg": "UART1_RX is used here but declared only when UART1",
       "severity": "E"
      }
@@ -3247,7 +3277,7 @@
      {
       "file": "rtl/sysctl.v",
       "kind": "overlap",
-      "line": 1094,
+      "line": 1103,
       "msg": "cs_montmul (0x7000_0600) and cs_probe (0x7F00_0000) decode the same addresses",
       "severity": "E"
      }
@@ -3260,7 +3290,7 @@
      {
       "file": "rtl/sysctl.v",
       "kind": "overlap",
-      "line": 1111,
+      "line": 1120,
       "msg": "cs_probe (0x7F00_0000) and cs_rtc (0x7000_0300) decode the same addresses",
       "severity": "E"
      }
@@ -3273,7 +3303,7 @@
      {
       "file": "rtl/sysctl.v",
       "kind": "overlap",
-      "line": 1115,
+      "line": 1124,
       "msg": "cs_probe (0x7F00_0000) and cs_trng (0x7000_0400) decode the same addresses",
       "severity": "E"
      }
@@ -3286,14 +3316,14 @@
      {
       "file": "rtl/sysctl.v",
       "kind": "overlap",
-      "line": 997,
+      "line": 1006,
       "msg": "cs_usb0 (0xC000_0000) and cs_usbh (0xC000_0000) decode the same addresses",
       "severity": "E"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "overlap",
-      "line": 997,
+      "line": 1006,
       "msg": "cs_usb1 (0xC000_0020) and cs_usbh (0xC000_0000) decode the same addresses",
       "severity": "E"
      }
@@ -3306,8 +3336,8 @@
      {
       "file": "rtl/sysctl.v",
       "kind": "drivers",
-      "line": 2530,
-      "msg": "eth_rx_ready has two drivers: assign (line 2530) and wbs_ethmac0_i.eth_int_o (line 2662)",
+      "line": 2592,
+      "msg": "eth_rx_ready has two drivers: assign (line 2592) and wbs_ethmac0_i.eth_int_o (line 2724)",
       "severity": "E"
      }
     ],
@@ -3319,8 +3349,8 @@
      {
       "file": "rtl/sysctl.v",
       "kind": "drivers",
-      "line": 2530,
-      "msg": "eth_rx_ready has two drivers: assign (line 2530) and assign (line 2629)",
+      "line": 2592,
+      "msg": "eth_rx_ready has two drivers: assign (line 2592) and assign (line 2691)",
       "severity": "E"
      }
     ],
@@ -3332,8 +3362,8 @@
      {
       "file": "rtl/sysctl.v",
       "kind": "drivers",
-      "line": 2629,
-      "msg": "eth_rx_ready has two drivers: assign (line 2629) and wbs_ethmac0_i.eth_int_o (line 2662)",
+      "line": 2691,
+      "msg": "eth_rx_ready has two drivers: assign (line 2691) and wbs_ethmac0_i.eth_int_o (line 2724)",
       "severity": "E"
      }
     ],
@@ -3345,85 +3375,85 @@
      {
       "file": "rtl/sysctl.v",
       "kind": "drivers",
-      "line": 3044,
-      "msg": "wbs_usb0_int has two drivers: wbs_usb0_i.int_o (line 3044) and wbs_usbh_i.hid0_int_o (line 3160)",
+      "line": 3106,
+      "msg": "wbs_usb0_int has two drivers: wbs_usb0_i.int_o (line 3106) and wbs_usbh_i.hid0_int_o (line 3222)",
       "severity": "E"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "drivers",
-      "line": 3046,
-      "msg": "usb_host_dm has two drivers: wbs_usb0_i.usb_dm (line 3046) and wbs_usbh_i.usb_dm (line 3150)",
+      "line": 3108,
+      "msg": "usb_host_dm has two drivers: wbs_usb0_i.usb_dm (line 3108) and wbs_usbh_i.usb_dm (line 3212)",
       "severity": "E"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "drivers",
-      "line": 3047,
-      "msg": "usb_host_dp has two drivers: wbs_usb0_i.usb_dp (line 3047) and wbs_usbh_i.usb_dp (line 3149)",
+      "line": 3109,
+      "msg": "usb_host_dp has two drivers: wbs_usb0_i.usb_dp (line 3109) and wbs_usbh_i.usb_dp (line 3211)",
       "severity": "E"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "drivers",
-      "line": 3048,
-      "msg": "wbs_usb0_curs_x has two drivers: wbs_usb0_i.curs_x (line 3048) and wbs_usbh_i.curs_x0 (line 3151)",
+      "line": 3110,
+      "msg": "wbs_usb0_curs_x has two drivers: wbs_usb0_i.curs_x (line 3110) and wbs_usbh_i.curs_x0 (line 3213)",
       "severity": "E"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "drivers",
-      "line": 3049,
-      "msg": "wbs_usb0_curs_y has two drivers: wbs_usb0_i.curs_y (line 3049) and wbs_usbh_i.curs_y0 (line 3152)",
+      "line": 3111,
+      "msg": "wbs_usb0_curs_y has two drivers: wbs_usb0_i.curs_y (line 3111) and wbs_usbh_i.curs_y0 (line 3214)",
       "severity": "E"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "drivers",
-      "line": 3050,
-      "msg": "wbs_usb0_typ has two drivers: wbs_usb0_i.typ (line 3050) and wbs_usbh_i.typ0 (line 3155)",
+      "line": 3112,
+      "msg": "wbs_usb0_typ has two drivers: wbs_usb0_i.typ (line 3112) and wbs_usbh_i.typ0 (line 3217)",
       "severity": "E"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "drivers",
-      "line": 3078,
-      "msg": "wbs_usb1_int has two drivers: wbs_usb1_i.int_o (line 3078) and wbs_usbh_i.hid1_int_o (line 3161)",
+      "line": 3140,
+      "msg": "wbs_usb1_int has two drivers: wbs_usb1_i.int_o (line 3140) and wbs_usbh_i.hid1_int_o (line 3223)",
       "severity": "E"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "drivers",
-      "line": 3080,
-      "msg": "usb_host_dm has two drivers: wbs_usb1_i.usb_dm (line 3080) and wbs_usbh_i.usb_dm (line 3150)",
+      "line": 3142,
+      "msg": "usb_host_dm has two drivers: wbs_usb1_i.usb_dm (line 3142) and wbs_usbh_i.usb_dm (line 3212)",
       "severity": "E"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "drivers",
-      "line": 3081,
-      "msg": "usb_host_dp has two drivers: wbs_usb1_i.usb_dp (line 3081) and wbs_usbh_i.usb_dp (line 3149)",
+      "line": 3143,
+      "msg": "usb_host_dp has two drivers: wbs_usb1_i.usb_dp (line 3143) and wbs_usbh_i.usb_dp (line 3211)",
       "severity": "E"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "drivers",
-      "line": 3082,
-      "msg": "wbs_usb1_curs_x has two drivers: wbs_usb1_i.curs_x (line 3082) and wbs_usbh_i.curs_x1 (line 3153)",
+      "line": 3144,
+      "msg": "wbs_usb1_curs_x has two drivers: wbs_usb1_i.curs_x (line 3144) and wbs_usbh_i.curs_x1 (line 3215)",
       "severity": "E"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "drivers",
-      "line": 3083,
-      "msg": "wbs_usb1_curs_y has two drivers: wbs_usb1_i.curs_y (line 3083) and wbs_usbh_i.curs_y1 (line 3154)",
+      "line": 3145,
+      "msg": "wbs_usb1_curs_y has two drivers: wbs_usb1_i.curs_y (line 3145) and wbs_usbh_i.curs_y1 (line 3216)",
       "severity": "E"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "drivers",
-      "line": 3084,
-      "msg": "wbs_usb1_typ has two drivers: wbs_usb1_i.typ (line 3084) and wbs_usbh_i.typ1 (line 3156)",
+      "line": 3146,
+      "msg": "wbs_usb1_typ has two drivers: wbs_usb1_i.typ (line 3146) and wbs_usbh_i.typ1 (line 3218)",
       "severity": "E"
      }
     ],
@@ -3442,21 +3472,21 @@
      {
       "file": "rtl/sysctl.v",
       "kind": "no-clock",
-      "line": 3045,
+      "line": 3107,
       "msg": "clock clk12mhz has no source (read by wbs_usb0_i.usb_clk)",
       "severity": "W"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "no-clock",
-      "line": 3281,
+      "line": 3343,
       "msg": "clock clk25_2mhz has no source (read by gpu_video_i.pclk)",
       "severity": "W"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "no-clock",
-      "line": 3282,
+      "line": 3344,
       "msg": "clock clk126mhz has no source (read by gpu_video_i.bclk)",
       "severity": "W"
      }
@@ -3469,7 +3499,7 @@
      {
       "file": "rtl/sysctl.v",
       "kind": "undeclared",
-      "line": 720,
+      "line": 729,
       "msg": "wbs_usb0_int is used here but declared only when USB_HID | USB_HOST",
       "severity": "E"
      }
@@ -3482,28 +3512,28 @@
      {
       "file": "rtl/sysctl.v",
       "kind": "undeclared",
-      "line": 1971,
+      "line": 2033,
       "msg": "cs_vram is used here but declared only when MEM_VRAM",
       "severity": "E"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "unconnected",
-      "line": 1973,
+      "line": 2035,
       "msg": "VRAM arbiter (varb0_i) initiator s_* is connected to no bus",
       "severity": "W"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "undriven",
-      "line": 2014,
+      "line": 2076,
       "msg": "varb0_i.s_dat_i reads wbs_vram_dat_o, which nothing drives",
       "severity": "W"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "undriven",
-      "line": 2020,
+      "line": 2082,
       "msg": "varb0_i.s_ack_i reads wbs_vram_ack_o, which nothing drives",
       "severity": "W"
      }
@@ -3516,14 +3546,14 @@
      {
       "file": "rtl/sysctl.v",
       "kind": "undeclared",
-      "line": 3309,
+      "line": 3371,
       "msg": "gb_adr is used here but declared only when MEM_VRAM",
       "severity": "E"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "undeclared",
-      "line": 3310,
+      "line": 3372,
       "msg": "gb_dat is used here but declared only when MEM_VRAM",
       "severity": "E"
      }
@@ -3536,14 +3566,14 @@
      {
       "file": "rtl/sysctl.v",
       "kind": "undeclared",
-      "line": 3379,
+      "line": 3441,
       "msg": "gpu_x is used here but declared only when GPU",
       "severity": "E"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "undeclared",
-      "line": 3380,
+      "line": 3442,
       "msg": "gpu_y is used here but declared only when GPU",
       "severity": "E"
      }
@@ -3556,21 +3586,21 @@
      {
       "file": "rtl/sysctl.v",
       "kind": "undeclared",
-      "line": 1234,
+      "line": 1243,
       "msg": "cs_usb0 is used here but declared only when USB_ANY",
       "severity": "E"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "undeclared",
-      "line": 1235,
+      "line": 1244,
       "msg": "cs_usb1 is used here but declared only when USB_ANY",
       "severity": "E"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "undeclared",
-      "line": 3032,
+      "line": 3094,
       "msg": "USB_HID_SENS is used here but declared only when USB_ANY",
       "severity": "E"
      }
@@ -3583,7 +3613,7 @@
      {
       "file": "rtl/sysctl.v",
       "kind": "undeclared",
-      "line": 3136,
+      "line": 3198,
       "msg": "USB_HID_SENS is used here but declared only when USB_ANY",
       "severity": "E"
      }
@@ -3609,42 +3639,42 @@
      {
       "file": "rtl/sysctl.v",
       "kind": "undeclared",
-      "line": 3362,
+      "line": 3424,
       "msg": "wbs_usb0_typ is used here but declared only when USB_HID | USB_HOST",
       "severity": "E"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "undeclared",
-      "line": 3362,
+      "line": 3424,
       "msg": "wbs_usb0_curs_x is used here but declared only when USB_HID | USB_HOST",
       "severity": "E"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "undeclared",
-      "line": 3363,
+      "line": 3425,
       "msg": "wbs_usb1_typ is used here but declared only when USB_HID | USB_HOST",
       "severity": "E"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "undeclared",
-      "line": 3363,
+      "line": 3425,
       "msg": "wbs_usb1_curs_x is used here but declared only when USB_HID | USB_HOST",
       "severity": "E"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "undeclared",
-      "line": 3365,
+      "line": 3427,
       "msg": "wbs_usb0_curs_y is used here but declared only when USB_HID | USB_HOST",
       "severity": "E"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "undeclared",
-      "line": 3366,
+      "line": 3428,
       "msg": "wbs_usb1_curs_y is used here but declared only when USB_HID | USB_HOST",
       "severity": "E"
      }
@@ -3657,42 +3687,42 @@
      {
       "file": "rtl/sysctl.v",
       "kind": "undeclared",
-      "line": 3368,
+      "line": 3430,
       "msg": "wbs_usb0_typ is used here but declared only when USB_HID | USB_HOST",
       "severity": "E"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "undeclared",
-      "line": 3368,
+      "line": 3430,
       "msg": "wbs_usb0_curs_x is used here but declared only when USB_HID | USB_HOST",
       "severity": "E"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "undeclared",
-      "line": 3369,
+      "line": 3431,
       "msg": "wbs_usb1_typ is used here but declared only when USB_HID | USB_HOST",
       "severity": "E"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "undeclared",
-      "line": 3369,
+      "line": 3431,
       "msg": "wbs_usb1_curs_x is used here but declared only when USB_HID | USB_HOST",
       "severity": "E"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "undeclared",
-      "line": 3370,
+      "line": 3432,
       "msg": "wbs_usb0_curs_y is used here but declared only when USB_HID | USB_HOST",
       "severity": "E"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "undeclared",
-      "line": 3371,
+      "line": 3433,
       "msg": "wbs_usb1_curs_y is used here but declared only when USB_HID | USB_HOST",
       "severity": "E"
      }
@@ -3705,21 +3735,34 @@
      {
       "file": "rtl/sysctl.v",
       "kind": "unconnected",
-      "line": 2963,
+      "line": 1611,
+      "msg": "wb_mpu (mpu_i) initiator d_* is connected to no bus",
+      "severity": "W"
+     }
+    ],
+    "severity": "W",
+    "when": "MPU"
+   },
+   {
+    "items": [
+     {
+      "file": "rtl/sysctl.v",
+      "kind": "unconnected",
+      "line": 3025,
       "msg": "Audio (audio_i) initiator mx_* is connected to no bus",
       "severity": "W"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "undriven",
-      "line": 3011,
+      "line": 3073,
       "msg": "audio_i.mx_dat_i reads wbm_audio_dat_i, which nothing drives",
       "severity": "W"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "undriven",
-      "line": 3016,
+      "line": 3078,
       "msg": "audio_i.mx_ack_i reads wbm_audio_ack, which nothing drives",
       "severity": "W"
      }
@@ -3732,21 +3775,21 @@
      {
       "file": "rtl/sysctl.v",
       "kind": "unconnected",
-      "line": 1920,
+      "line": 1981,
       "msg": "Blitter (wbm_blit0_i) initiator m_* is connected to no bus",
       "severity": "W"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "undriven",
-      "line": 1937,
+      "line": 1998,
       "msg": "wbm_blit0_i.m_dat_i reads wbm_gpu_blit_dat_i, which nothing drives",
       "severity": "W"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "undriven",
-      "line": 1943,
+      "line": 2004,
       "msg": "wbm_blit0_i.m_ack_i reads wbm_gpu_blit_ack, which nothing drives",
       "severity": "W"
      }
@@ -3759,21 +3802,21 @@
      {
       "file": "rtl/sysctl.v",
       "kind": "unconnected",
-      "line": 1840,
+      "line": 1901,
       "msg": "Line rasterizer (wbm_gpu0_i) initiator m_* is connected to no bus",
       "severity": "W"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "undriven",
-      "line": 1857,
+      "line": 1918,
       "msg": "wbm_gpu0_i.m_dat_i reads wbm_gpu_dat_i, which nothing drives",
       "severity": "W"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "undriven",
-      "line": 1863,
+      "line": 1924,
       "msg": "wbm_gpu0_i.m_ack_i reads wbm_gpu_ack, which nothing drives",
       "severity": "W"
      }
@@ -3786,14 +3829,14 @@
      {
       "file": "rtl/sysctl.v",
       "kind": "undriven",
-      "line": 3381,
+      "line": 3443,
       "msg": "gpu_cursor_i.curs_x reads gpu_curs_x, which nothing drives",
       "severity": "W"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "undriven",
-      "line": 3382,
+      "line": 3444,
       "msg": "gpu_cursor_i.curs_y reads gpu_curs_y, which nothing drives",
       "severity": "W"
      }
@@ -3806,7 +3849,7 @@
      {
       "file": "rtl/sysctl.v",
       "kind": "undriven",
-      "line": 1893,
+      "line": 1954,
       "msg": "glyph0_i.blit_addr reads wbm_blit_glyph_addr, which nothing drives",
       "severity": "W"
      }
@@ -3819,7 +3862,7 @@
      {
       "file": "rtl/sysctl.v",
       "kind": "undriven",
-      "line": 2136,
+      "line": 2198,
       "msg": "wbs_vram_i.gb_adr_i reads gb_adr, which nothing drives",
       "severity": "W"
      }
@@ -3832,21 +3875,21 @@
      {
       "file": "rtl/sysctl.v",
       "kind": "no-clock",
-      "line": 3045,
+      "line": 3107,
       "msg": "clock clk12mhz has no source (read by wbs_usb0_i.usb_clk)",
       "severity": "W"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "no-clock",
-      "line": 3281,
+      "line": 3343,
       "msg": "clock clk25_2mhz has no source (read by gpu_video_i.pclk)",
       "severity": "W"
      },
      {
       "file": "rtl/sysctl.v",
       "kind": "no-clock",
-      "line": 3282,
+      "line": 3344,
       "msg": "clock clk126mhz has no source (read by gpu_video_i.bclk)",
       "severity": "W"
      }
@@ -3859,7 +3902,7 @@
      {
       "file": "rtl/sysctl.v",
       "kind": "exclusive",
-      "line": 2143,
+      "line": 2205,
       "msg": "MEM_QQSPI and MEM_SDRAM cannot both be defined (cs_qqspi is declared in an `elsif chain but used outside it)",
       "severity": "N"
      }
@@ -3872,7 +3915,7 @@
      {
       "file": "rtl/sysctl.v",
       "kind": "exclusive",
-      "line": 2143,
+      "line": 2205,
       "msg": "MEM_QQSPI and MEM_SRAM cannot both be defined (cs_qqspi is declared in an `elsif chain but used outside it)",
       "severity": "N"
      }
@@ -3885,7 +3928,7 @@
      {
       "file": "rtl/sysctl.v",
       "kind": "exclusive",
-      "line": 2085,
+      "line": 2147,
       "msg": "MEM_SDRAM and MEM_SRAM cannot both be defined (cs_sdram is declared in an `elsif chain but used outside it)",
       "severity": "N"
      }
@@ -3896,6 +3939,13 @@
   ],
   "format": "zeitlos-hwmap-model/1",
   "ghost_windows": [
+   {
+    "base": "0x90000100",
+    "block": "mpu_i",
+    "decode": "cs_mtu",
+    "param": "CFG_BASE",
+    "when": "MPU"
+   },
    {
     "base": "0x70000100",
     "block": "icache_i:wb_cache",
@@ -3913,7 +3963,7 @@
   ],
   "irqs": [
    {
-    "line": 718,
+    "line": 723,
     "n": 3,
     "signal": "irq_timer",
     "sources": [
@@ -3928,7 +3978,7 @@
     "when": "always"
    },
    {
-    "line": 719,
+    "line": 728,
     "n": 4,
     "signal": "wbs_uart0_int",
     "sources": [
@@ -3957,7 +4007,7 @@
     "when": "always"
    },
    {
-    "line": 720,
+    "line": 729,
     "n": 5,
     "signal": "wbs_usb0_int",
     "sources": [
@@ -3979,7 +4029,7 @@
     "when": "always"
    },
    {
-    "line": 722,
+    "line": 731,
     "n": 6,
     "signal": "wbs_usb1_int",
     "sources": [
@@ -4001,7 +4051,7 @@
     "when": "USB_HID"
    },
    {
-    "line": 725,
+    "line": 734,
     "n": 6,
     "signal": "wbs_usb1_int",
     "sources": [
@@ -4023,7 +4073,7 @@
     "when": "USB_HOST"
    },
    {
-    "line": 742,
+    "line": 751,
     "n": 7,
     "signal": "wbs_audio_int",
     "sources": [
@@ -4038,7 +4088,7 @@
     "when": "AUDIO"
    },
    {
-    "line": 760,
+    "line": 769,
     "n": 8,
     "signal": "eth_rx_int",
     "sources": [
@@ -4074,7 +4124,7 @@
     "when": "always"
    },
    {
-    "line": 734,
+    "line": 743,
     "n": 9,
     "signal": "wbs_usbh_int",
     "sources": [
@@ -4087,6 +4137,28 @@
      }
     ],
     "when": "USB_HOST"
+   },
+   {
+    "line": 727,
+    "n": 10,
+    "signal": "mpu_irq",
+    "sources": [
+     {
+      "block": null,
+      "logic": "mpu_irq",
+      "pin": null,
+      "port": null,
+      "when": "!MPU"
+     },
+     {
+      "block": "mpu_i",
+      "logic": null,
+      "pin": null,
+      "port": "irq_o",
+      "when": "MPU"
+     }
+    ],
+    "when": "always"
    }
   ],
   "links": [
@@ -4131,6 +4203,14 @@
     ],
     "src": "gpu_video_i",
     "when": "GPU & MEM_VRAM"
+   },
+   {
+    "dst": "mpu_i",
+    "signals": [
+     "base_o>mtu_base_i"
+    ],
+    "src": "mtu_i",
+    "when": "MPU"
    },
    {
     "dst": "wbm_cpu0_i:zeitlos32_wb",

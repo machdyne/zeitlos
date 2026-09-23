@@ -710,12 +710,21 @@ module sysctl #()
 `endif
 
 
+	// Memory protection fault (rtl/mpu.v, docs/mpu.md). Declared here,
+	// ahead of the block below that reads it; driven by mpu_i, or 0
+	// without `MPU.
+	wire mpu_irq;
+
 	always @* begin
 		cpu_irq = 0;
 		// cpu_irq[0] = irq_cpu_timer;
 		// cpu_irq[1] = irq_ebreak;
 		// cpu_irq[2] = irq_bus_error;
 		cpu_irq[3] = irq_timer;
+		// Z_IRQ_MPU in sw/os/kernel.h. Latched in both cores
+		// (LATCHED_IRQ bit 10), and a level here until the kernel
+		// clears the MPU's FAULT_INFO.
+		cpu_irq[10] = mpu_irq;
 		cpu_irq[4] = wbs_uart0_int;
 		cpu_irq[5] = wbs_usb0_int;
 `ifdef USB_HID
@@ -1428,6 +1437,16 @@ module sysctl #()
 	wire wbm_cpu_ack;
 	wire wbm_cpu_cyc;
 
+	// The CPU's request after the MPU (rtl/mpu.v): stb/cyc gated, and
+	// the ack/read data coming back up to it. The MPU only ever
+	// withholds a request or answers it itself; address, data, we and
+	// sel go downstream untouched, from wbm_cpu_* / wbm_cpu_padr.
+	// Without `MPU these are plain copies.
+	wire wbm_cpu_stb_p;
+	wire wbm_cpu_cyc_p;
+	wire wbm_cpu_ack_p;
+	wire [31:0] wbm_cpu_dat_i_p;
+
 	localparam BRAM_WORDS = 2048;
 
 `ifdef CPU_ZEITLOS32
@@ -1578,6 +1597,48 @@ module sysctl #()
 		.cfg_ack_o(wbs_mtu_ack_o)
     );
 
+	// MEMORY PROTECTION (rtl/mpu.v, docs/mpu.md)
+	//
+	// On the CPU's own path, after the MTU and BEFORE the cache: a
+	// store the write buffer has accepted, or a load served from a
+	// cache line, is past the point where it could be stopped. Checks
+	// the CPU's UNTRANSLATED address (wbm_cpu_adr) plus the MTU base,
+	// so it runs in parallel with the MTU's adder rather than after it.
+	// Its registers (0x9000_01xx) are answered inside it, never on the
+	// bus. Out of reset it is disabled and passes everything; the
+	// kernel enables it.
+`ifdef MPU
+	wb_mpu #(
+		.XLATE_ON_BUS(MTU_ON_BUS),
+		.CFG_BASE(32'h9000_0100)
+	) mpu_i (
+		.wb_clk_i(wbm_clk),
+		.wb_rst_i(wbm_rst),
+		.c_adr_i(wbm_cpu_adr),
+		.c_dat_i(wbm_cpu_dat_o),
+		.c_we_i(wbm_cpu_we),
+		.c_sel_i(wbm_cpu_sel),
+		.c_stb_i(wbm_cpu_stb),
+		.c_cyc_i(wbm_cpu_cyc),
+		.c_instr_i(wbm_cpu_instr),
+		.c_dat_o(wbm_cpu_dat_i),
+		.c_ack_o(wbm_cpu_ack),
+		.d_stb_o(wbm_cpu_stb_p),
+		.d_cyc_o(wbm_cpu_cyc_p),
+		.d_dat_i(wbm_cpu_dat_i_p),
+		.d_ack_i(wbm_cpu_ack_p),
+		.mtu_base_i(mtu_base),
+		.irq_o(mpu_irq)
+	);
+`else
+	assign wbm_cpu_stb_p = wbm_cpu_stb;
+	assign wbm_cpu_cyc_p = wbm_cpu_cyc;
+	assign wbm_cpu_ack = wbm_cpu_ack_p;
+	assign wbm_cpu_dat_i = wbm_cpu_dat_i_p;
+	assign mpu_irq = 1'b0;
+`endif
+
+
 	// CPU controls the main bus (will share with DMA controller)
 	//
 	// With ICACHE the instruction cache sits in this path: the CPU
@@ -1624,13 +1685,13 @@ module sysctl #()
 		.wb_rst_i(wbm_rst),
 		.c_adr_i(wbm_cpu_padr),
 		.c_dat_i(wbm_cpu_dat_o),
-		.c_dat_o(wbm_cpu_dat_i),
+		.c_dat_o(wbm_cpu_dat_i_p),
 		.c_we_i(wbm_cpu_we),
 		.c_sel_i(wbm_cpu_sel),
-		.c_stb_i(wbm_cpu_stb),
-		.c_cyc_i(wbm_cpu_cyc),
+		.c_stb_i(wbm_cpu_stb_p),
+		.c_cyc_i(wbm_cpu_cyc_p),
 		.c_instr_i(wbm_cpu_instr),
-		.c_ack_o(wbm_cpu_ack),
+		.c_ack_o(wbm_cpu_ack_p),
 		.m_adr_o(wbc_adr),
 		.m_dat_o(wbc_dat_o),
 		.m_dat_i(wbc_dat_i),
@@ -1662,13 +1723,13 @@ module sysctl #()
 		// upstream: the CPU, at its translated physical address
 		.c_adr_i(wbm_cpu_padr),
 		.c_dat_i(wbm_cpu_dat_o),
-		.c_dat_o(wbm_cpu_dat_i),
+		.c_dat_o(wbm_cpu_dat_i_p),
 		.c_we_i(wbm_cpu_we),
 		.c_sel_i(wbm_cpu_sel),
-		.c_stb_i(wbm_cpu_stb),
-		.c_cyc_i(wbm_cpu_cyc),
+		.c_stb_i(wbm_cpu_stb_p),
+		.c_cyc_i(wbm_cpu_cyc_p),
 		.c_instr_i(wbm_cpu_instr),
-		.c_ack_o(wbm_cpu_ack),
+		.c_ack_o(wbm_cpu_ack_p),
 
 		// downstream: the main wishbone bus, via wb_arbiter_main below
 		.m_adr_o(wbc_adr),
@@ -1699,12 +1760,12 @@ module sysctl #()
 	// drive wbm_adr directly instead of going through a named wire.
 	assign wbc_adr = wbm_cpu_padr;
 	assign wbc_dat_o = wbm_cpu_dat_o;
-	assign wbm_cpu_dat_i = wbc_dat_i;
+	assign wbm_cpu_dat_i_p = wbc_dat_i;
 	assign wbc_sel = wbm_cpu_sel;
 	assign wbc_we = wbm_cpu_we;
-	assign wbc_stb = wbm_cpu_stb;
-	assign wbm_cpu_ack = wbc_ack;
-	assign wbc_cyc = wbm_cpu_cyc;
+	assign wbc_stb = wbm_cpu_stb_p;
+	assign wbm_cpu_ack_p = wbc_ack;
+	assign wbc_cyc = wbm_cpu_cyc_p;
 
 `endif
 
@@ -1968,7 +2029,8 @@ module sysctl #()
 	wire [31:0] wbm_cpu_arb0_dat_i;
 	wire wbm_cpu_arb0_ack;
 
-	wire wbm_cpu_arb0_cyc = cs_vram && wbm_cpu_cyc;
+	// _p: after the MPU, so a blocked access never reaches VRAM either
+	wire wbm_cpu_arb0_cyc = cs_vram && wbm_cpu_cyc_p;
 
    wb_arbiter_vram #() varb0_i
    (
@@ -1981,7 +2043,7 @@ module sysctl #()
       .m0_dat_o(wbm_cpu_arb0_dat_i), 
       .m0_we_i(wbm_cpu_we),
       .m0_sel_i(wbm_cpu_sel),
-      .m0_stb_i(wbm_cpu_stb),
+      .m0_stb_i(wbm_cpu_stb_p),
       .m0_cyc_i(wbm_cpu_arb0_cyc),
       .m0_ack_o(wbm_cpu_arb0_ack),
 
@@ -2028,8 +2090,8 @@ module sysctl #()
 	assign wbm_vram_dat_i = wbm_cpu_dat_i;
 	assign wbm_vram_sel = wbm_cpu_sel;
 	assign wbm_vram_we = wbm_cpu_we;
-	assign wbm_vram_stb = wbm_cpu_stb;
-	assign wbm_vram_cyc = wbm_cpu_cyc;
+	assign wbm_vram_stb = wbm_cpu_stb_p;
+	assign wbm_vram_cyc = wbm_cpu_cyc_p;
 
 	assign varb_master = 0;
 

@@ -124,6 +124,11 @@ valid for as long as the receiver might read it.** If the sender
 frees or overwrites the underlying data, or exits, the receiver ends
 up reading garbage -- there's no MMU to fault on that.
 
+(With the memory protection unit, [mpu.md](mpu.md), a receiver's
+store into a borrowed payload is blocked and reported rather than
+silently corrupting the sender. Reads, and therefore stale reads, are
+not affected.)
+
 The rule this implies:
 
 > **Non-scalar payloads (`Z_STR`/`Z_LIST`/`Z_MAP`) are borrowed, and

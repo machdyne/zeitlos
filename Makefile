@@ -10,6 +10,7 @@ RTL_PICO = \
 	rtl/mtu.v \
 	rtl/cache.v \
 	rtl/cache_id.v \
+	rtl/mpu.v \
 	rtl/arbiter_vram.v \
 	rtl/arbiter_main.v \
 	rtl/mem/bram.v \

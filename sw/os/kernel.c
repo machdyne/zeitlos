@@ -220,6 +220,9 @@ volatile uint32_t __attribute__((section(".bss"))) z_kernel_ticks = 0;
 
 void sh(void);
 uint32_t *z_kernel_entry(uint32_t cmd, uint32_t *args, uint32_t val);
+// memory protection (docs/mpu.md); defined with k_fault() below
+static bool k_mpu;
+static void k_mpu_init(void);
 uint32_t k_proc_active_count(void);
 
 void kprint(const char *s);
@@ -699,6 +702,8 @@ int main(void) {
 	// Nothing else in the OS needs to know it exists: it is coherent
 	// with every store the CPU makes, and no other master writes main
 	// memory. Does nothing on a bitstream without `DCACHE.
+	k_mpu_init();
+
 	if (z_icache_present())
 		printf(" - icache: %ldKB, %ld-word lines\n",
 			(long)z_icache_kb(), (long)z_icache_line_words());
@@ -1011,10 +1016,225 @@ static uint32_t *k_sched_switch(uint32_t *regs) {
 		goto next_process;
 
 	reg_mtu = z_procs[z_pid].base;
+	// the MPU's idea of "this app's own memory" follows the MTU's
+	if (k_mpu) reg_mpu_size = z_procs[z_pid].size;
 	k_gpu_clip_restore(&z_procs[z_pid]);
 	return (uint32_t *)z_procs[z_pid].regs;
 
 }
+
+// -- crashes and memory protection (docs/mpu.md) ------------------
+//
+// A crash used to hang the machine: picorv32 raises IRQ 1 for an
+// illegal instruction (and ebreak/ecall) and IRQ 2 for a misaligned
+// access, the BIOS unmasks both, and nothing here handled them -- so
+// the handler returned and the CPU re-executed the faulting
+// instruction forever. Now an app that crashes is ended with a report
+// and the rest of the system carries on; a crash in kernel code stops
+// the machine with a panic report instead of a silent hang.
+//
+// The MPU (rtl/mpu.v) adds a third source, IRQ 10: an app storing
+// outside its own memory, jumping outside its own code, or touching a
+// kernel-only register. In report-only mode those are logged and the
+// app continues; enforcing, they end it like any other crash.
+
+extern char _etext[];           // end of kernel text (riscv-os.ld)
+
+// k_mpu (declared at the top): MPU present and programmed
+static uint32_t k_mpu_logged;   // report-only lines printed so far
+#define K_MPU_LOG_MAX 16
+
+// Exit status recorded for a process ended by a crash, so a shell
+// waiting on it (posix) sees it fail rather than succeed.
+#define K_EXIT_CRASHED (-128)
+
+static const char *const k_mpu_kinds[] = { "fetch", "load", "store", "?" };
+static const char *const k_mpu_reasons[] = {
+	"?",
+	"outside its own memory",
+	"a kernel-only address",
+	"an address space it may not use",
+	"a jump into the middle of the kernel",
+};
+
+// Where an address points, for humans.
+static void k_fault_where(uint32_t a) {
+	if ((a & 0xf0000000u) == 0x80000000u) {
+		if (z_pid < Z_PROCS_MAX && (a & 0x0fffffffu) >= z_procs[z_pid].size)
+			printf("past the end of its own memory");
+		else
+			printf("its own memory");
+		return;
+	}
+	if (a < 0x2000u) { printf("BIOS RAM"); return; }
+	if ((a & 0xf0000000u) == 0x40000000u) {
+		// Kernel first: process 0 (init0) runs from the kernel image,
+		// so its block covers kernel code and data, and a lookup by
+		// block would call kernel code "pid 0's memory".
+		if (a < (uint32_t)(uintptr_t)_etext) { printf("kernel code"); return; }
+		for (uint32_t p = 0; p < Z_PROCS_MAX; p++) {
+			if (z_procs[p].base == 0x40000000u) continue;
+			if (z_procs[p].base && a >= z_procs[p].base &&
+				a < z_procs[p].base + z_procs[p].size) {
+				const char *n = k_pidreg_name_for(p);
+				if (p == z_pid) printf("its own memory");
+				else printf("pid %lu's memory%s%s%s", (unsigned long)p,
+					n ? " (" : "", n ? n : "", n ? ")" : "");
+				return;
+			}
+		}
+		printf("kernel memory");
+		return;
+	}
+	switch (a >> 28) {
+		case 0x1: printf("flash"); return;
+		case 0x2: printf("VRAM"); return;
+		case 0x7: printf("system registers"); return;
+		case 0x9: printf("MTU/MPU registers"); return;
+		case 0xb: printf("the SD card"); return;
+		default:  printf("peripheral registers"); return;
+	}
+}
+
+static void k_fault_regs(uint32_t *regs) {
+	printf("    ra %08lx  sp %08lx  gp %08lx  a0 %08lx  a1 %08lx\n",
+		(unsigned long)regs[1], (unsigned long)regs[2],
+		(unsigned long)regs[3], (unsigned long)regs[10],
+		(unsigned long)regs[11]);
+}
+
+// The faulting instruction's address, from the PC the CPU saved.
+//
+// Both cores RETIRE an illegal instruction (and ebreak/ecall) or a
+// misaligned load/store before raising IRQ 1/2 at the next boundary
+// (picorv32.v's next_irq_pending[irq_ebreak] with cpu_state_fetch;
+// zeitlos32.v's irq_pending_n[1]/[2] with retire = 1), so the saved PC
+// is the address AFTER the faulting instruction. Returning to it would
+// silently skip the instruction, which is what happened before this
+// handler existed. The exception is a misaligned jump, where the saved
+// PC is the bad target itself -- recognisable by not being aligned.
+static uint32_t k_fault_pc(uint32_t pc) {
+	return (pc & 3u) ? pc : pc - 4;
+}
+
+// Describe an IRQ 1/2 cause. The instruction is read through the
+// current MTU mapping, which is still the faulting process's.
+static void k_fault_cause(uint32_t irqs, uint32_t pc) {
+	if ((irqs & (1u << Z_IRQ_MISALIGN)) && (pc & 3u)) {
+		printf("jump to a misaligned address");
+		return;
+	}
+	if (irqs & (1u << Z_IRQ_MISALIGN)) { printf("misaligned memory access"); return; }
+	uint32_t insn = *(volatile uint32_t *)(uintptr_t)k_fault_pc(pc);
+	if (insn == 0x00100073u) printf("breakpoint (ebreak)");
+	else if (insn == 0x00000073u) printf("ecall (not used by this OS)");
+	else if ((insn & 0x7f) == 0x33 && ((insn >> 25) & 0x7f) == 0x01)
+		printf("multiply/divide instruction %08lx: this bitstream has no M extension",
+			(unsigned long)insn);
+	else printf("illegal instruction %08lx", (unsigned long)insn);
+}
+
+static void k_panic(uint32_t *regs, uint32_t irqs, uint32_t pc) {
+	printf("\n*** KERNEL PANIC: ");
+	k_fault_cause(irqs, pc);
+	printf("\n    pc %08lx", (unsigned long)k_fault_pc(pc));
+	if (z_pid < Z_PROCS_MAX && z_procs[z_pid].base) {
+		const char *n = k_pidreg_name_for(z_pid);
+		printf(", during a system call from pid %lu%s%s%s",
+			(unsigned long)z_pid, n ? " (" : "", n ? n : "", n ? ")" : "");
+	}
+	printf("\n");
+	k_fault_regs(regs);
+	printf("    system halted\n");
+	maskirq(0xffffffffu);
+	for (;;) ;
+}
+
+// Called from the interrupt path for IRQ 1, 2 and 10. Returns true if
+// the current process has been ended and the caller must switch away
+// from it; false to carry on (report-only log, nothing to do).
+static bool k_fault(uint32_t *regs, uint32_t irqs) {
+	uint32_t pc = regs[0];
+	uint32_t info = 0, faddr = 0, fpc = 0, fcount = 0;
+	bool mpu = false;
+
+	if (k_mpu && (reg_mpu_fault_info & Z_MPU_FAULT_VALID)) {
+		mpu = true;
+		info = reg_mpu_fault_info;
+		faddr = reg_mpu_fault_addr;
+		fpc = reg_mpu_fault_pc;
+		fcount = reg_mpu_count;
+		reg_mpu_fault_info = 0;   // clears it, and drops IRQ 10
+		reg_mpu_count = 0;
+	}
+	bool enforce = k_mpu && (reg_mpu_ctrl & Z_MPU_CTRL_ENFORCE);
+	bool cpu_trap = (irqs & ((1u << Z_IRQ_ILLEGAL) | (1u << Z_IRQ_MISALIGN))) != 0;
+	// "view (pid 7)", or just "pid 6" for a process that never
+	// registered a name (e.g. a program built with zcc)
+	const char *name = (z_pid < Z_PROCS_MAX) ? k_pidreg_name_for(z_pid) : NULL;
+	char who[40];
+	if (name) snprintf(who, sizeof(who), "%s (pid %lu)", name, (unsigned long)z_pid);
+	else snprintf(who, sizeof(who), "pid %lu", (unsigned long)z_pid);
+
+	// -- report only: log, and let it run
+	if (mpu && !enforce && !cpu_trap) {
+		if (k_mpu_logged < K_MPU_LOG_MAX) {
+			printf("mpu: %s would fault: %s %08lx (",
+				who, k_mpu_kinds[Z_MPU_FAULT_KIND(info)], (unsigned long)faddr);
+			k_fault_where(faddr);
+			printf(") at pc %08lx", (unsigned long)fpc);
+			if (fcount > 1) printf(" (+%lu more)", (unsigned long)(fcount - 1));
+			printf("\n");
+			if (++k_mpu_logged == K_MPU_LOG_MAX)
+				printf("mpu: further reports suppressed (`mpu` for the count)\n");
+		}
+		return false;
+	}
+	if (!mpu && !cpu_trap) return false;
+
+	// -- a crash. In kernel code, nothing can be trusted: panic. An
+	//    MPU fault is by construction from app code.
+	bool app = mpu || ((pc & 0xf0000000u) == 0x80000000u);
+	if (!app || z_pid >= Z_PROCS_MAX || !z_procs[z_pid].base)
+		k_panic(regs, irqs, pc);
+
+	printf("\n*** %s crashed: ", who);
+	if (mpu) {
+		printf("%s %s\n", k_mpu_kinds[Z_MPU_FAULT_KIND(info)],
+			k_mpu_reasons[Z_MPU_FAULT_REASON(info) < 5 ? Z_MPU_FAULT_REASON(info) : 0]);
+		printf("    address %08lx (", (unsigned long)faddr);
+		k_fault_where(faddr);
+		printf(")  at pc %08lx\n", (unsigned long)fpc);
+	} else {
+		k_fault_cause(irqs, pc);
+		printf("\n    pc %08lx\n", (unsigned long)k_fault_pc(pc));
+	}
+	k_fault_regs(regs);
+	printf("    ended; the rest of the system is unaffected\n");
+
+	k_proc_exit_record(z_pid, K_EXIT_CRASHED);
+	z_procs[z_pid].flags |= Z_PROC_FLAG_DIE;
+	return true;
+}
+
+// Program the MPU at boot, enforcing: a violation ends the app with a
+// crash report. `mpu report` in the shell switches to logging only.
+static void k_mpu_init(void) {
+	if (!z_mpu_present()) return;
+	reg_mpu_ktext = (uint32_t)(uintptr_t)_etext;
+	reg_mpu_gate = (uint32_t)(uintptr_t)z_kernel_entry;
+	reg_mpu_mask = Z_MPU_MASK_DEFAULT;
+	reg_mpu_size = 0;
+	reg_mpu_fault_info = 0;
+	reg_mpu_count = 0;
+	reg_mpu_ctrl = Z_MPU_CTRL_ENABLE | Z_MPU_CTRL_ENFORCE | Z_MPU_CTRL_IRQ;
+	k_mpu = true;
+	printf(" - mpu: enforcing (`mpu report` to only log)\n");
+}
+
+// `mpu` shell command support (sh.c)
+bool k_mpu_active(void) { return k_mpu; }
+void k_mpu_reset_log(void) { k_mpu_logged = 0; }
 
 uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 
@@ -1098,6 +1318,12 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 	}
 
 	// not a system call; must be an interrupt
+
+	// Crashes and protection faults first: an app that faulted must not
+	// be resumed at the faulting instruction. See k_fault() above.
+	bool k_ended = false;
+	if (irqs & ((1u << Z_IRQ_ILLEGAL) | (1u << Z_IRQ_MISALIGN) | (1u << Z_IRQ_MPU)))
+		k_ended = k_fault(regs, irqs);
 
 	// Census: which line(s) brought us in, nothing else.
 	z_irq_census[0]++;
@@ -1233,7 +1459,7 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 	// A process that has just blocked (k_proc_wait, UART
 	// wait) pokes UART THRE so this path runs with a real irq_vec
 	// frame. Switch now rather than burning the rest of the slice.
-	if (!Z_PROC_RUNNABLE(z_procs[z_pid]) && k_proc_runnable_count() >= 1) {
+	if (k_ended || (!Z_PROC_RUNNABLE(z_procs[z_pid]) && k_proc_runnable_count() >= 1)) {
 		ret = k_sched_switch(regs);
 		goto done;
 	}

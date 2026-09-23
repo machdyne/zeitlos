@@ -374,6 +374,51 @@ static void sh_cache_rate(const char *name, uint32_t hits, uint32_t misses) {
 		printf("  %s rate:   (none yet)\n", name);
 }
 
+// "mpu" shell command (docs/mpu.md).
+//
+//   mpu                  status, violation count, last fault
+//   mpu report|enforce   log violations only / end the app
+//   mpu off              no checking at all
+//   mpu clear            clear the fault registers and the log limit
+bool k_mpu_active(void);
+void k_mpu_reset_log(void);
+
+static void sh_mpu(const char *arg) {
+	if (!z_mpu_present() || !k_mpu_active()) {
+		printf("no memory protection unit in this bitstream\n");
+		return;
+	}
+	uint32_t ctrl = reg_mpu_ctrl;
+	if (arg != NULL && !strcmp(arg, "enforce")) {
+		reg_mpu_ctrl = Z_MPU_CTRL_ENABLE | Z_MPU_CTRL_ENFORCE | Z_MPU_CTRL_IRQ;
+		printf("mpu: enforcing (violations end the app)\n");
+	} else if (arg != NULL && !strcmp(arg, "report")) {
+		reg_mpu_ctrl = Z_MPU_CTRL_ENABLE | Z_MPU_CTRL_IRQ;
+		printf("mpu: report-only (violations are logged)\n");
+	} else if (arg != NULL && !strcmp(arg, "off")) {
+		reg_mpu_ctrl = 0;
+		printf("mpu: off\n");
+	} else if (arg != NULL && !strcmp(arg, "clear")) {
+		reg_mpu_fault_info = 0;
+		reg_mpu_count = 0;
+		k_mpu_reset_log();
+		printf("mpu: cleared\n");
+	} else {
+		uint32_t info = reg_mpu_fault_info;
+		printf("mpu: %s\n", !(ctrl & Z_MPU_CTRL_ENABLE) ? "off" :
+			(ctrl & Z_MPU_CTRL_ENFORCE) ? "enforcing" : "report-only");
+		printf("  kernel text ends %08lx, gate %08lx, mask %04lx\n",
+			(unsigned long)reg_mpu_ktext, (unsigned long)reg_mpu_gate,
+			(unsigned long)reg_mpu_mask);
+		printf("  violations pending: %ld\n", (long)reg_mpu_count);
+		if (info & Z_MPU_FAULT_VALID)
+			printf("  first: kind %ld reason %ld, address %08lx, pc %08lx\n",
+				(long)Z_MPU_FAULT_KIND(info), (long)Z_MPU_FAULT_REASON(info),
+				(unsigned long)reg_mpu_fault_addr,
+				(unsigned long)reg_mpu_fault_pc);
+	}
+}
+
 static void sh_cache(const char *arg) {
 	bool d = z_dcache_present();
 
@@ -1308,6 +1353,11 @@ void sh(void) {
 			sh_cache(arg);
 		}
 
+		else if (!strncmp(buffer, "mpu", cmdlen)) {
+			arg = get_arg(buffer, 1);
+			sh_mpu(arg);
+		}
+
 		// GPIO (rtl/gpio.v, docs/gpio.md)
 		//
 		//   gpio                            report every port
@@ -2175,6 +2225,7 @@ void sh_help(void) {
 	printf(" touch [path]      create empty file\n");
 	printf(" rm [path]         remove a file\n");
 	printf(" cache [on|off|flush|don|doff|wbon|wboff|clear]  cache stats/control\n");
+	printf(" mpu [report|enforce|off|clear]  memory protection\n");
 	printf(" color [white|amber|green|paper]  display phosphor mode\n");
 	printf(" gpio [port] [pin] [in|out|od|0|1]  read/drive gpio pins (e.g. gpio 0 3 out)\n");
 	printf(" bench             cpu/memory micro-benchmarks\n");

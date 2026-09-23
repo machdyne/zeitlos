@@ -361,6 +361,10 @@
 #define Z_FEATURE2_ICACHE     (1u << 8)
 #define Z_FEATURE2_DCACHE     (1u << 9)
 
+// Memory protection unit present (`MPU: rtl/mpu.v, docs/mpu.md).
+// Inventory only: use z_mpu_present() before touching its registers.
+#define Z_FEATURE2_MPU        (1u << 10)
+
 // The jumploader region: the same on every board, the top 192 KB of the
 // first 2 MB. KEEP IN SYNC with the Makefile's JUMP_ADDR
 // (release/lib/layout.py checks). docs/zboot.md sec. 5.
@@ -465,6 +469,9 @@ typedef enum {
 	// "memory", which is a FEATURES group: a group may appear in only
 	// one of the two tables, or its heading prints twice.
 	Z_FEAT_GROUP_CACHE,
+	// mpu (FEATURES2 bit 10). Its own group for the same reason as
+	// the caches'.
+	Z_FEAT_GROUP_PROTECT,
 	// Adding a group here REQUIRES adding its display name to
 	// z_soc_feature_groups[] in zsoc.c, at the same position. That
 	// table is indexed by this enum and nothing links the two but
@@ -1057,6 +1064,51 @@ static inline void z_icache_flush(void) {
 // to main memory, exactly as a bitstream built without `ICACHE would.
 static inline void z_icache_enable(bool on) {
 	reg_icache_ctrl = on ? Z_ICACHE_CTRL_ENABLE : 0;
+}
+
+// -- memory protection unit (rtl/mpu.v, docs/mpu.md) --
+//
+// Registers at 0x9000_01xx, answered inside the MPU on the CPU's path.
+// Kernel-only for writes (the MPU itself enforces that once enabled).
+//
+// CHECK z_mpu_present() BEFORE WRITING ANY OF THESE. On a bitstream
+// without `MPU the MTU answers the whole 0x9 nibble, so a write here
+// lands in the MTU base register and remaps the running process.
+#define reg_mpu_ctrl        (*(volatile uint32_t*)0x90000100)
+#define reg_mpu_ktext       (*(volatile uint32_t*)0x90000104)
+#define reg_mpu_gate        (*(volatile uint32_t*)0x90000108)
+#define reg_mpu_size        (*(volatile uint32_t*)0x9000010c)
+#define reg_mpu_mask        (*(volatile uint32_t*)0x90000110)
+#define reg_mpu_fault_addr  (*(volatile uint32_t*)0x90000114)
+#define reg_mpu_fault_pc    (*(volatile uint32_t*)0x90000118)
+#define reg_mpu_fault_info  (*(volatile uint32_t*)0x9000011c)
+#define reg_mpu_count       (*(volatile uint32_t*)0x90000120)
+#define reg_mpu_info        (*(volatile uint32_t*)0x90000124)
+
+#define Z_MPU_CTRL_ENABLE   (1u << 0)
+#define Z_MPU_CTRL_ENFORCE  (1u << 1)   // block; otherwise report only
+#define Z_MPU_CTRL_IRQ      (1u << 2)
+
+// top half of reg_mpu_info -- KEEP IN SYNC with rtl/mpu.v. Top nibble 3
+// so it can never be mistaken for an MTU base (main memory, 0x4...).
+#define Z_MPU_MAGIC         0x3A50u
+
+// reg_mpu_fault_info fields
+#define Z_MPU_FAULT_VALID   (1u << 31)
+#define Z_MPU_FAULT_REASON(i) (((i) >> 24) & 0xfu)
+#define Z_MPU_FAULT_KIND(i)   (((i) >> 16) & 0x3u)   // 0 fetch 1 load 2 store
+
+#define Z_MPU_REASON_OUTSIDE     1   // outside the app's own memory
+#define Z_MPU_REASON_KERNEL_ONLY 2   // a kernel-only address
+#define Z_MPU_REASON_MASKED      3   // address space not in the mask
+#define Z_MPU_REASON_GATE        4   // jumped into kernel code
+
+// Default address-space mask for apps: everything except the SD card
+// (nibble 0xB), which only the kernel's filesystem may drive.
+#define Z_MPU_MASK_DEFAULT  0xF7FFu
+
+static inline bool z_mpu_present(void) {
+	return ((reg_mpu_info >> 16) & 0xffffu) == Z_MPU_MAGIC;
 }
 
 // -- data cache (rtl/cache_id.v, docs/dcache.md) --

@@ -20,6 +20,11 @@
  *   WBUF=n         wb_cache write buffer depth       (default 2)
  *   IKB, DKB       array sizes (default 8, 4)
  *   SNOOP=0|1      wb_cache SNOOP parameter          (default 1)
+ *   MPU            put rtl/mpu.v between the CPU and the cache. prog.c
+ *                  then runs its whole workload under an enforcing MPU
+ *                  and finishes with a small app, at 0x4000_8000, that
+ *                  must have its stray store blocked (add rtl/mpu.v
+ *                  to the file list)
  *   ARB            put the real rtl/arbiter_main.v between the cache
  *                  and memory, with sysctl.v's exact CTI and snoop
  *                  gating, plus two more masters: a blitter-like reader
@@ -131,6 +136,35 @@ module tb_cache_soc;
     );
 `endif
 
+    // -- MPU (optional) -----------------------------------------------
+    //
+    // Between the CPU and the cache, as in rtl/sysctl.v. No MTU in this
+    // testbench, so addresses are physical (XLATE_ON_BUS=0, the
+    // zeitlos32 arrangement) and the "current app" is fixed at
+    // 0x4000_8000.
+    wire cpu_stb_c;
+    wire cpu_cyc_c;
+    wire cpu_ack_c;
+    wire [31:0] cpu_dat_i_c;
+    wire mpu_irq;
+`ifdef MPU
+    wb_mpu #(.XLATE_ON_BUS(0)) mpu (
+        .wb_clk_i(clk), .wb_rst_i(rst),
+        .c_adr_i(cpu_adr), .c_dat_i(cpu_dat_o), .c_we_i(cpu_we),
+        .c_sel_i(cpu_sel), .c_stb_i(cpu_stb), .c_cyc_i(cpu_cyc),
+        .c_instr_i(cpu_instr), .c_dat_o(cpu_dat_i), .c_ack_o(cpu_ack),
+        .d_stb_o(cpu_stb_c), .d_cyc_o(cpu_cyc_c),
+        .d_dat_i(cpu_dat_i_c), .d_ack_i(cpu_ack_c),
+        .mtu_base_i(32'h4000_8000), .irq_o(mpu_irq)
+    );
+`else
+    assign cpu_stb_c = cpu_stb;
+    assign cpu_cyc_c = cpu_cyc;
+    assign cpu_ack = cpu_ack_c;
+    assign cpu_dat_i = cpu_dat_i_c;
+    assign mpu_irq = 1'b0;
+`endif
+
     // -- cache ------------------------------------------------------
 
     // With a cache, its own register window is answered upstream. On
@@ -146,9 +180,9 @@ module tb_cache_soc;
                 .FAST_HIT(1), .WBUF_DEPTH(`WBUF), .BURST(`BURST), .SNOOP(`SNOOP)
             ) cache (
                 .wb_clk_i(clk), .wb_rst_i(rst),
-                .c_adr_i(cpu_adr), .c_dat_i(cpu_dat_o), .c_dat_o(cpu_dat_i),
-                .c_we_i(cpu_we), .c_sel_i(cpu_sel), .c_stb_i(cpu_stb),
-                .c_cyc_i(cpu_cyc), .c_instr_i(cpu_instr), .c_ack_o(cpu_ack),
+                .c_adr_i(cpu_adr), .c_dat_i(cpu_dat_o), .c_dat_o(cpu_dat_i_c),
+                .c_we_i(cpu_we), .c_sel_i(cpu_sel), .c_stb_i(cpu_stb_c),
+                .c_cyc_i(cpu_cyc_c), .c_instr_i(cpu_instr), .c_ack_o(cpu_ack_c),
                 .m_adr_o(b_adr), .m_dat_o(b_dat_o), .m_dat_i(b_dat_i),
                 .m_we_o(b_we), .m_sel_o(b_sel), .m_stb_o(b_stb),
                 .m_cyc_o(b_cyc), .m_cti_o(b_cti), .m_bte_o(), .m_ack_i(b_ack),
@@ -160,9 +194,9 @@ module tb_cache_soc;
                 .CACHE_KB(`IKB), .LINE_WORDS(4), .FAST_HIT(1)
             ) cache (
                 .wb_clk_i(clk), .wb_rst_i(rst),
-                .c_adr_i(cpu_adr), .c_dat_i(cpu_dat_o), .c_dat_o(cpu_dat_i),
-                .c_we_i(cpu_we), .c_sel_i(cpu_sel), .c_stb_i(cpu_stb),
-                .c_cyc_i(cpu_cyc), .c_instr_i(cpu_instr), .c_ack_o(cpu_ack),
+                .c_adr_i(cpu_adr), .c_dat_i(cpu_dat_o), .c_dat_o(cpu_dat_i_c),
+                .c_we_i(cpu_we), .c_sel_i(cpu_sel), .c_stb_i(cpu_stb_c),
+                .c_cyc_i(cpu_cyc_c), .c_instr_i(cpu_instr), .c_ack_o(cpu_ack_c),
                 .m_adr_o(b_adr), .m_dat_o(b_dat_o), .m_dat_i(b_dat_i),
                 .m_we_o(b_we), .m_sel_o(b_sel), .m_stb_o(b_stb),
                 .m_cyc_o(b_cyc), .m_ack_i(b_ack),
@@ -172,12 +206,12 @@ module tb_cache_soc;
         end else begin : g_none
             assign b_adr = cpu_adr;
             assign b_dat_o = cpu_dat_o;
-            assign cpu_dat_i = b_dat_i;
+            assign cpu_dat_i_c = b_dat_i;
             assign b_we = cpu_we;
             assign b_sel = cpu_sel;
-            assign b_stb = cpu_stb;
-            assign b_cyc = cpu_cyc;
-            assign cpu_ack = b_ack;
+            assign b_stb = cpu_stb_c;
+            assign b_cyc = cpu_cyc_c;
+            assign cpu_ack_c = b_ack;
             assign b_cti = 3'b000;
         end
     endgenerate

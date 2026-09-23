@@ -18,6 +18,7 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 | GPU | [Line rasterizer](docs/gpu_raster.md) and [blitter](docs/gpu_blitter.md) |
 | MTU | Virtual addressing through Memory Translation Unit |
 | Cache | Optional [instruction cache](docs/icache.md), or unified instruction + [data cache](docs/dcache.md) with write buffer and SDRAM burst fills |
+| MPU | [Memory protection unit](docs/mpu.md) and crash reporting |
 | Bus | 32-bit Wishbone |
 | Main Memory | SDRAM, PSRAM or SRAM (1MB minimum) |
 | Framebuffer | 640x480x1bpp (monochrome; white, amber, green or paper -- [socctl](docs/socctl.md)) |

@@ -25,6 +25,19 @@
 #define WRITER  (*(volatile uint32_t *)0xf0000010)
 #define MAILBOX (*(volatile uint32_t *)0x4000f000)
 
+#define MPU_CTRL  (*(volatile uint32_t *)0x90000100)
+#define MPU_KTEXT (*(volatile uint32_t *)0x90000104)
+#define MPU_GATE  (*(volatile uint32_t *)0x90000108)
+#define MPU_SIZE  (*(volatile uint32_t *)0x9000010c)
+#define MPU_MASK  (*(volatile uint32_t *)0x90000110)
+#define MPU_FADDR (*(volatile uint32_t *)0x90000114)
+#define MPU_FINFO (*(volatile uint32_t *)0x9000011c)
+#define MPU_COUNT (*(volatile uint32_t *)0x90000120)
+#define MPU_INFO  (*(volatile uint32_t *)0x90000124)
+#define APPBASE   0x40008000u      /* tb_cache_soc.v's MTU base */
+#define DONE      (*(volatile uint32_t *)0xf0000004)
+extern char app_code[], app_code_end[], _bss_end[];
+
 static void putc_(char c) { UART = (uint8_t)c; }
 static void puts_(const char *s) { while (*s) putc_(*s++); }
 static void puthex(uint32_t v) {
@@ -89,9 +102,45 @@ static uint32_t reg_loop(uint32_t n) {
 	return a + b + c;
 }
 
+static volatile uint32_t mpu_kernword;
+static uint32_t g_sum;
+
+/* The gate: where the app goes when it is done. Privileged again
+ * (fetched from kernel code at the GATE address). Checks what the app
+ * managed to do and finishes the test; never returns. */
+__attribute__((noreturn, noinline)) void mpu_kernel_continue(void) {
+	uint32_t own = *(volatile uint32_t *)(APPBASE + 0x800);
+	uint32_t info = MPU_FINFO, count = MPU_COUNT, faddr = MPU_FADDR;
+	int ok = 1;
+	if (own != 0x1111) { puts_("MPU: app's own store lost\n"); ok = 0; }
+	if (mpu_kernword != 0) { puts_("MPU: app wrote kernel memory\n"); ok = 0; }
+	if (!(info >> 31) || ((info >> 24) & 15) != 1 || ((info >> 16) & 3) != 2 ||
+	    faddr != (uint32_t)&mpu_kernword || count != 1) {
+		puts_("MPU: fault registers wrong "); puthex(info); putc_(' ');
+		puthex(faddr); putc_(' '); puthex(count); putc_('\n'); ok = 0;
+	}
+	if (ok) puts_("mpu: app store blocked and reported, own store kept\n");
+	else FAIL = 7;
+	DONE = g_sum;
+	for (;;) ;
+}
+
 int main(void) {
 	uint32_t sum = 0, r;
 	int dcache = ((D_INFO >> 16) == 0x1DCA);
+	int mpu = ((MPU_INFO >> 16) == 0x3A50);
+
+	/* tb_cache_soc.v -DMPU: run everything below under an enforcing
+	 * MPU. This program is the "kernel": its code, data and bss count
+	 * as kernel code (exec_buf in bss is executed), so KTEXT covers up
+	 * to the end of bss. The app block is APPBASE, 4KB. */
+	if (mpu) {
+		MPU_KTEXT = (uint32_t)_bss_end;
+		MPU_GATE = (uint32_t)mpu_kernel_continue;
+		MPU_SIZE = 0x1000;
+		MPU_MASK = 0xF7FF;
+		MPU_CTRL = 0x3;              /* enable + enforce, no irq */
+	}
 
 	puts_("cache_soc: ");
 	if (dcache) {
@@ -161,6 +210,21 @@ int main(void) {
 
 	MARK = 7;
 	puts_("sum "); puthex(sum); putc_('\n');
+
+	/* 8. the MPU test app: copy it into its block and jump in */
+	if (mpu) {
+		volatile uint32_t *d = (volatile uint32_t *)APPBASE;
+		const volatile uint32_t *src = (const volatile uint32_t *)app_code;
+		for (int i = 0; i < (app_code_end - app_code) / 4; i++) d[i] = src[i];
+		if (!dcache) I_CTRL = 3;
+		g_sum = sum;
+		register uint32_t a0 __asm__("a0") = APPBASE + 0x800;
+		register uint32_t a1 __asm__("a1") = (uint32_t)&mpu_kernword;
+		register uint32_t a2 __asm__("a2") = (uint32_t)mpu_kernel_continue;
+		register uint32_t a3 __asm__("a3") = 0x1111;
+		__asm__ volatile ("jr %4" :: "r"(a0), "r"(a1), "r"(a2), "r"(a3), "r"(APPBASE) : "memory");
+		for (;;) ;
+	}
 
 	/* 7. another master writing memory the CPU has cached. MAILBOX is
 	 *    read through the data cache; it can only be seen to change if
