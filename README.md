@@ -125,6 +125,7 @@ On the sdcard, started at boot when a card is present. A `term` window can conne
 | App | Description |
 |-----|-------------|
 | [serial](docs/uart1.md) | Serial port service |
+| [console](docs/console.md) | Console service |
 | [tts](docs/tts.md) | Text-to-speech service (Super+S to turn speech on) |
 | [zcc](docs/zcc.md) | C compiler |
 | [zfpga](docs/zfpga.md) | FPGA toolchain (synthesis, place-and-route, bitstream packing) |
