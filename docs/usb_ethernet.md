@@ -8,8 +8,7 @@ A USB ethernet adapter as a `net` backend, alongside the three MACs in
 **Status:** works in co-simulation against the real gateware
 (`make test_usb_ecm`), including enumeration, every frame length that
 matters in both directions, faults mid-frame, link notifications, and
-unplug and replug. **Not yet run on hardware.** See
-[What to check first on hardware](#what-to-check-first-on-hardware).
+unplug and replug. Tested on hardware.
 
 ## Contents
 
