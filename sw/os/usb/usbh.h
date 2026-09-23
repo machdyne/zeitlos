@@ -59,6 +59,7 @@
 #define Z_USBH_CLASS_MSC    2
 #define Z_USBH_CLASS_HUB    3
 #define Z_USBH_CLASS_CDC    4
+#define Z_USBH_CLASS_ECM    5   // USB ethernet, usbh_ecm.c
 
 // Set up the controller: enable ports, start the frame timer, unmask
 // interrupts. Safe to call when Z_FEATURE2_USB_HOST is clear -- it

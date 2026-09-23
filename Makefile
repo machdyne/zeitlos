@@ -787,7 +787,8 @@ test_usb_cosim:
 	cd output && iverilog-vpi --name=usbh_cosim -DZ_USBH_COSIM \
 		-I../sw/os/usb ../rtl/tb/cosim/usbh_vpi.c \
 		../sw/os/usb/usbh.c ../sw/os/usb/usbh_hid.c \
-		../sw/os/usb/usbh_msc.c ../sw/os/usb/usbh_hub.c ../sw/os/usb/usbh_cdc.c
+		../sw/os/usb/usbh_msc.c ../sw/os/usb/usbh_hub.c ../sw/os/usb/usbh_cdc.c \
+		../sw/os/usb/usbh_ecm.c
 	iverilog -g2005 $(if $(filter-out 0,$(TRACE)),-DCOSIM_TRACE,) \
 		-o output/tb_usb_cosim rtl/tb/tb_usb_cosim.v \
 		rtl/tb/tb_usb_device.v rtl/usb/usb_host.v rtl/usb/usb_sie.v \
@@ -805,11 +806,32 @@ test_usb_msc:
 	cd output && iverilog-vpi --name=usbh_cosim -DZ_USBH_COSIM \
 		-I../sw/os/usb ../rtl/tb/cosim/usbh_vpi.c \
 		../sw/os/usb/usbh.c ../sw/os/usb/usbh_hid.c \
-		../sw/os/usb/usbh_msc.c ../sw/os/usb/usbh_hub.c ../sw/os/usb/usbh_cdc.c
+		../sw/os/usb/usbh_msc.c ../sw/os/usb/usbh_hub.c ../sw/os/usb/usbh_cdc.c \
+		../sw/os/usb/usbh_ecm.c
 	iverilog -g2005 -o output/tb_usb_msc_cosim rtl/tb/tb_usb_msc_cosim.v \
 		rtl/tb/tb_usb_device.v rtl/usb/usb_host.v rtl/usb/usb_sie.v \
 		rtl/usb/usb_port.v rtl/usb/usb_xact.v rtl/usb/usb_hid_compat.v
 	@cd output && vvp -M. -musbh_cosim tb_usb_msc_cosim
+
+# USB ETHERNET co-simulation: the real driver including usbh_ecm.c,
+# the real gateware, and a CDC-ECM adapter model shaped like the
+# RTL8152 (vendor configuration first, ECM second), with a low-speed
+# mouse polling on the other port. Frames of every length that matters
+# both ways, faults mid-frame, link notifications, unplug and replug.
+# See rtl/tb/tb_usb_ecm_cosim.v and docs/usb_ethernet.md.
+#
+#   make test_usb_ecm
+test_usb_ecm:
+	@mkdir -p output
+	cd output && iverilog-vpi --name=usbh_cosim -DZ_USBH_COSIM \
+		-I../sw/os/usb ../rtl/tb/cosim/usbh_vpi.c \
+		../sw/os/usb/usbh.c ../sw/os/usb/usbh_hid.c \
+		../sw/os/usb/usbh_msc.c ../sw/os/usb/usbh_hub.c ../sw/os/usb/usbh_cdc.c \
+		../sw/os/usb/usbh_ecm.c
+	iverilog -g2005 -o output/tb_usb_ecm_cosim rtl/tb/tb_usb_ecm_cosim.v \
+		rtl/tb/tb_usb_device.v rtl/usb/usb_host.v rtl/usb/usb_sie.v \
+		rtl/usb/usb_port.v rtl/usb/usb_xact.v rtl/usb/usb_hid_compat.v
+	@cd output && vvp -M. -musbh_cosim tb_usb_ecm_cosim
 
 # HUB co-simulation: the real driver including the hub class driver
 # (usbh_hub.c) and mass storage, the real gateware, a four-port hub
@@ -823,7 +845,8 @@ test_usb_hub:
 	cd output && iverilog-vpi --name=usbh_cosim -DZ_USBH_COSIM \
 		-I../sw/os/usb ../rtl/tb/cosim/usbh_vpi.c \
 		../sw/os/usb/usbh.c ../sw/os/usb/usbh_hid.c \
-		../sw/os/usb/usbh_msc.c ../sw/os/usb/usbh_hub.c ../sw/os/usb/usbh_cdc.c
+		../sw/os/usb/usbh_msc.c ../sw/os/usb/usbh_hub.c ../sw/os/usb/usbh_cdc.c \
+		../sw/os/usb/usbh_ecm.c
 	iverilog -g2005 -o output/tb_usb_hub_cosim rtl/tb/tb_usb_hub_cosim.v \
 		rtl/tb/tb_usb_device.v rtl/usb/usb_host.v rtl/usb/usb_sie.v \
 		rtl/usb/usb_port.v rtl/usb/usb_xact.v rtl/usb/usb_hid_compat.v
@@ -868,7 +891,7 @@ test_usb_margin:
 	@cd output && iverilog-vpi --name=usbh_cosim -DZ_USBH_COSIM \
 		-I../sw/os/usb ../rtl/tb/cosim/usbh_vpi.c \
 		../sw/os/usb/usbh.c ../sw/os/usb/usbh_hid.c \
-		../sw/os/usb/usbh_msc.c ../sw/os/usb/usbh_hub.c ../sw/os/usb/usbh_cdc.c >/dev/null
+		../sw/os/usb/usbh_msc.c ../sw/os/usb/usbh_hub.c ../sw/os/usb/usbh_cdc.c ../sw/os/usb/usbh_ecm.c >/dev/null
 	@for c in "10000 0" "-10000 0" "0 20000" "0 -20000"; do \
 		set -- $$c; \
 		iverilog -g2005 -DDEV_SKEW=20 -DDEV_PPM_FS=$$1 \

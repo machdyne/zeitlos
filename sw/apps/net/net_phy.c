@@ -77,10 +77,33 @@ static uint16_t rmii_rx_capacity(void)
 	return (uint16_t)(segs * 536);
 }
 
+// A USB adapter. No MAC of its own in the bitstream: the hardware is
+// whatever is plugged into the USB host controller, so this backend
+// can be chosen on any board that has one. See usb_ecm.h.
+static const net_phy_t phy_usb_ecm = {
+	"usb-ecm",
+	usb_ecm_init,
+	usb_ecm_recv,
+	usb_ecm_send,
+	usb_ecm_debug_dump,
+	0,
+	// The adapter's own buffer, which nothing reports; see usb_ecm.c.
+	4 * 536,
+	usb_ecm_idle_ticks,
+	usb_ecm_mac,
+};
+
 const net_phy_t *net_phy = 0;
 
-const net_phy_t *net_phy_select(void)
+const net_phy_t *net_phy_select(int mode)
 {
+	// NET.CFG asked for USB explicitly: a board with a MAC it should
+	// ignore, or one whose MAC is unusable.
+	if (mode == NET_PHY_USB) {
+		net_phy = usb_ecm_supported() ? &phy_usb_ecm : 0;
+		return net_phy;
+	}
+
 	// Positive detection first. rtl/csrs.vh mirrors rtl/boards.vh's
 	// own `ifdefs bit for bit, so these two bits are exactly "was
 	// this SOC built with that MAC".
@@ -101,8 +124,13 @@ const net_phy_t *net_phy_select(void)
 		net_phy = &phy_enc28j60;
 	else
 		// CSRs present and both bits clear: real, positive evidence
-		// there is no NIC here.
-		net_phy = 0;
+		// there is no MAC here. Which is not the same as no NIC any
+		// more -- a USB ethernet adapter is one, and on a board with a
+		// USB host controller it is the only one there was ever going
+		// to be. phy=builtin in NET.CFG keeps the old behaviour of
+		// exiting instead.
+		net_phy = (mode != NET_PHY_BUILTIN && usb_ecm_supported()) ?
+			&phy_usb_ecm : 0;
 
 	return net_phy;
 }

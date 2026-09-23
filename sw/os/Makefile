@@ -56,10 +56,25 @@ CFLAGS = $(PIC_FLAGS) --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) -I..
 ifeq ($(USBH_DEBUG),1)
 CFLAGS += -DUSBH_DEBUG
 endif
-LDFLAGS = $(PIC_FLAGS) -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS)
+# Page size for the linker's segment layout: 16 bytes, not 4 KB.
+#
+# riscv-os.ld's DATA_SEGMENT_ALIGN moves the data segment to a page
+# boundary, or to the same offset in the NEXT page, whichever the linker
+# decides is cheaper -- so depending on where .rodata happens to end,
+# between 0 and 4096 bytes of zeros sit between .rodata and .data in
+# kernel.bin. That is meaningful for an ELF loaded by an MMU; this image
+# is copied flat to 0x40000000 by the BIOS with no MMU, so the gap is
+# pure waste, and it counts against the 256KB ceiling. Measured when the
+# USB ethernet driver went in: a 4 KB jump in kernel.bin from a 5 KB
+# code change, the whole of it this gap (text ended at 0x4002f2c0, data
+# started at 0x400302c0). Every section keeps its own alignment; only
+# the page-sized rounding between segments goes.
+SEG_PAGE_LDFLAGS = -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16
+
+LDFLAGS = $(PIC_FLAGS) -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS) $(SEG_PAGE_LDFLAGS)
 LDSCRIPT = ../common/riscv-os.ld
 
-OBJS = kernel.o kruntime.o mem.o zar.o usb/usbh.o usb/usbh_hid.o usb/usbh_msc.o usb/usbh_hub.o usb/usbh_cdc.o usbcdcapi.o \
+OBJS = kernel.o kruntime.o mem.o zar.o usb/usbh.o usb/usbh_hid.o usb/usbh_msc.o usb/usbh_hub.o usb/usbh_cdc.o usb/usbh_ecm.o usbcdcapi.o usbnetapi.o \
 	fs/fs.o fs/ramdisk.o fs/sdbench.o fs/fatfs/sdmm.o fs/fatfs/diskio_mux.o fs/fatfs/ff.o \
 	uart.o hid.o sh.o xfer.o xmodem.o ui.o msg.o pidreg.o fsapi.o flashapi.o jumpapi.o zjump.o procapi.o zobj.o zstream.o zdns.o zsoc.o zgpio.o logo.o \
 	cfg.o zcfg.o
@@ -75,7 +90,7 @@ OBJS = kernel.o kruntime.o mem.o zar.o usb/usbh.o usb/usbh_hid.o usb/usbh_msc.o 
 # zstream/TFTP work -- see docs/networking.md.
 KSRCS = kernel.c kruntime.c mem.c \
 	fs/fs.c fs/ramdisk.c fs/sdbench.c fs/fatfs/sdmm.c fs/fatfs/diskio_mux.c fs/fatfs/ff.c \
-	usb/usbh.c usb/usbh_hid.c usb/usbh_msc.c usb/usbh_hub.c usb/usbh_cdc.c usbcdcapi.c uart.c hid.c sh.c xfer.c xmodem.c ui.c msg.c pidreg.c fsapi.c flashapi.c jumpapi.c procapi.c logo.c cfg.c \
+	usb/usbh.c usb/usbh_hid.c usb/usbh_msc.c usb/usbh_hub.c usb/usbh_cdc.c usb/usbh_ecm.c usbcdcapi.c usbnetapi.c uart.c hid.c sh.c xfer.c xmodem.c ui.c msg.c pidreg.c fsapi.c flashapi.c jumpapi.c procapi.c logo.c cfg.c \
 	../common/zobj.c ../common/zstream.c ../common/zdns.c ../common/zsoc.c ../common/zcfg.c ../common/zjump.c
 
 kernel: kernel.elf kernel.bin

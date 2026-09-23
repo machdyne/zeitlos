@@ -91,6 +91,40 @@ int z_usbh_msc_write(uint32_t lba, const uint8_t *src, uint32_t count);
 #define MSC_OP_READN  7     /* read 4 sectors in ONE call, check them all */
 #define MSC_OP_WRITEN 8     /* write 4 in one call, read them back in one */
 
+/* -- USB ethernet (usbh_ecm.c), tb_usb_ecm_cosim.v --
+ *
+ * ECM_INFO   rc = present | mac_ok << 1 | link << 2 | promisc << 4;
+ *            bad = MAC bytes differing from 00:e0:4c:36:02:6b;
+ *            first_bad = the driver's generation counter
+ * ECM_RECV   one z_usbh_ecm_recv() into a 1518-byte buffer: rc = its
+ *            return; bad = bytes differing from the model's pattern
+ *            (seed = byte 0); first_bad = the seed
+ * ECM_SEND   arg = len | seed << 16: one z_usbh_ecm_send() of a frame
+ *            in the model's pattern; rc = its return
+ * ECM_OPEN   arg 0: z_usbh_ecm_want() the adapter's own MAC; 1: another
+ * ECM_STATS  rc = rx_drop, bad = rx_err, first_bad = tx_err
+ * ECM_RECVS  as ECM_RECV into a 100-byte buffer (a frame that does not
+ *            fit must be dropped, not truncated, and nothing written
+ *            past the buffer) */
+#define ECM_OP_INFO   9
+#define ECM_OP_RECV   10
+#define ECM_OP_SEND   11
+#define ECM_OP_OPEN   12
+#define ECM_OP_STATS  13
+#define ECM_OP_RECVS  14
+
+#include "usbh_ecm.h"
+
+/* tb_usb_device.v's ecm_pat, byte for byte. */
+static uint8_t ecm_pat(uint8_t seed, int pos)
+{
+    if (pos == 0) return seed;
+    return (uint8_t)((seed * 29 + pos * 7 + (pos >> 8) * 3) & 0xff);
+}
+
+static int msc_arg;
+static void ecm_run(int op);
+
 void z_usbh_dump(void);
 int z_usbh_cap_start(int mode);
 void z_usbh_cap_dump(void);
@@ -158,6 +192,11 @@ static void msc_run(void)
 
     msc_bad = 0;
     msc_first_bad = -1;
+
+    if (msc_op >= ECM_OP_INFO) {
+        ecm_run(msc_op);
+        return;
+    }
 
     if (msc_op == MSC_OP_CAP) {
         msc_rc = z_usbh_cap_start(0);
@@ -231,6 +270,52 @@ static void msc_run(void)
             if (msc_first_bad < 0) msc_first_bad = i;
             msc_bad++;
         }
+    }
+}
+
+static void ecm_run(int op)
+{
+    static const uint8_t want_mac[6] = { 0x00, 0xe0, 0x4c, 0x36, 0x02, 0x6b };
+    static const uint8_t other_mac[6] = { 0x02, 0x00, 0x00, 0x00, 0x00, 0x01 };
+    static uint8_t buf[1600];
+    z_usbnet_info_t in;
+    int i, len;
+
+    switch (op) {
+    case ECM_OP_INFO:
+        z_usbh_ecm_info(&in);
+        msc_rc = in.present | in.mac_ok << 1 | in.link << 2 | in.promisc << 4;
+        for (i = 0; i < 6; i++) if (in.mac[i] != want_mac[i]) msc_bad++;
+        msc_first_bad = (int)in.gen;
+        break;
+    case ECM_OP_RECV:
+    case ECM_OP_RECVS:
+        memset(buf, 0xa5, sizeof(buf));
+        len = op == ECM_OP_RECVS ? 100 : 1518;
+        msc_rc = z_usbh_ecm_recv(buf, len);
+        msc_first_bad = buf[0];
+        for (i = 1; i < msc_rc; i++)
+            if (buf[i] != ecm_pat(buf[0], i)) msc_bad++;
+        /* Nothing past the caller's buffer. A dropped frame may leave
+         * bytes inside it; the return value says there is no frame. */
+        for (i = len; i < (int)sizeof(buf); i++)
+            if (buf[i] != 0xa5) msc_bad++;
+        break;
+    case ECM_OP_SEND:
+        len = msc_arg & 0xffff;
+        for (i = 0; i < len; i++) buf[i] = ecm_pat((uint8_t)(msc_arg >> 16), i);
+        msc_rc = z_usbh_ecm_send(buf, len);
+        break;
+    case ECM_OP_OPEN:
+        z_usbh_ecm_want(msc_arg ? other_mac : want_mac);
+        msc_rc = 0;
+        break;
+    case ECM_OP_STATS:
+        z_usbh_ecm_info(&in);
+        msc_rc = (int)in.rx_drop;
+        msc_bad = (int)in.rx_err;
+        msc_first_bad = (int)in.tx_err;
+        break;
     }
 }
 
@@ -451,6 +536,7 @@ static PLI_INT32 usbh_msc_arm_calltf(PLI_BYTE8 *ud)
     argv = vpi_iterate(vpiArgument, sys);
     msc_op = get_int(vpi_scan(argv));
     msc_lba = get_int(vpi_scan(argv));
+    msc_arg = msc_lba;
     vpi_free_object(argv);
     msc_pending = 1;
     return 0;

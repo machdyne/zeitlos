@@ -221,3 +221,9 @@ Z_MKSYSCALL(FLASH, k_flash)
 // 0x1D0000: re-point it, sync open files, pull PROGRAMN. z_jump(),
 // k_jump() in sw/os/kernel.c, docs/zboot.md sec. 5. Appended last.
 Z_MKSYSCALL(JUMP, k_jump)
+
+// USB ethernet (CDC-ECM) for the net app: frames in and out, adapter
+// info, net's own address. An op field rather than four syscalls; see
+// sw/common/zusbnet.h, sw/os/usbnetapi.c, docs/usb_ethernet.md.
+// Appended last so no earlier enum value shifts.
+Z_MKSYSCALL(USBNET, k_usbnet)

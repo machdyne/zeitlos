@@ -6,6 +6,7 @@
  *
  * ssid/psk  -> ESP32 STA (ZNIC_STA)
  * dhcp/ip/mask/gw/dns -> net.c IP stack
+ * phy=auto|usb|builtin -> which NIC (docs/usb_ethernet.md)
  */
 
 #include <stdint.h>
@@ -27,6 +28,10 @@ typedef struct {
 	int has_file;
 	int has_wifi;
 	int dhcp;           /* -1 unset, 0/1 from file */
+	/* phy= : which NIC to use. 0 auto (a MAC in the bitstream if there
+	 * is one, else a USB CDC-ECM adapter), 1 usb, 2 builtin. See
+	 * net_phy.h's NET_PHY_* and docs/usb_ethernet.md. */
+	int phy;
 	uint32_t ip;        /* 0 = unset */
 	uint32_t mask;
 	uint32_t gw;

@@ -82,6 +82,7 @@ document says what replaces it and why.
 - [Mass storage and the filesystem](#mass-storage-and-the-filesystem)
 - [Mass storage status](#mass-storage-status)
 - [CDC](#cdc)
+- [USB ethernet](#usb-ethernet)
 - [Resource budget](#resource-budget)
 - [Debug build](#debug-build)
 - [Board and electrical notes](#board-and-electrical-notes)
@@ -731,11 +732,11 @@ drifted from the code.
 
 | Offset | Size | Use | Defined in |
 |---|---|---|---|
-| `0x000` | 512 | MSC data sector | `usbh_msc.c`, `MSC_OFF_DATA` |
+| `0x000` | 512 | MSC data sector, **and** USB ethernet's frame chunks | `usbh_msc.c`, `MSC_OFF_DATA`; `usbh_ecm.c`, `ECM_OFF` |
 | `0x200` | 31 | MSC CBW (command block wrapper) | `MSC_OFF_CBW` |
 | `0x240` | 13 | MSC CSW (command status wrapper) | `MSC_OFF_CSW` |
 | `0x260` | 8 | MSC's own SETUP packets | `MSC_OFF_SETUP` |
-| `0x270` | 16 | Free | |
+| `0x270` | 16 | USB ethernet notifications | `usbh_ecm.c`, `ECM_OFF_INT` |
 | `0x280` | 64 | CDC receive | `usbh_cdc.c`, `CDC_OFF_RX` |
 | `0x2c0` | 64 | CDC transmit | `CDC_OFF_TX` |
 | `0x300` | 16 x 2 | Keyboard LED `SET_REPORT`, one per HID block, only while in flight | `usbh.c`, `SCR_LED0/1` |
@@ -743,6 +744,13 @@ drifted from the code.
 | `0x380` | 4 x 16 | Auto-poll slot buffers | `usbh_hw.h`, `Z_USBH_OFF_POLL` |
 | `0x3c0` | 32 x 2 | Hub port requests, one per hub | `usbh.c`, `SCR_HUB0/1` |
 | `0x400` | 512 x 2 | Enumeration scratch (SETUP + configuration descriptor), taken while a device enumerates | `usbh.c`, `SCR_BIG0/1` |
+
+Two users share 0x000, which is safe for a reason worth stating: mass
+storage touches it only from inside FatFs and USB ethernet only inside
+`Z_SYS_USBNET`, and both run with the scheduler held
+(`k_syscall_touches_fs()`), so neither can be switched out with the
+other's data half-copied. Nothing in the ISR touches it. See
+[usb_ethernet.md](usb_ethernet.md).
 
 512 bytes for the sector is the important number: `ffconf.h` has
 `FF_MIN_SS` = `FF_MAX_SS` = 512, so one FatFs sector is one buffer
@@ -886,6 +894,8 @@ sw/os/usb/usbh_hid.c    boot keyboard, boot mouse, gamepad
 sw/os/usb/usbh_msc.c    BOT + SCSI, STALL / Reset Recovery    (Phase 5)
 sw/os/usb/usbh_hub.c    hub class driver                      (Phase 4)
 sw/os/usb/usbh_cdc.c    CDC-ACM                               (Phase 6)
+sw/os/usb/usbh_ecm.c    CDC-ECM, USB ethernet                 (Phase 7)
+sw/os/usbnetapi.c       Z_SYS_USBNET, the syscall net uses    (Phase 7)
 sw/os/usb/usbh_int.h    internal: device table, control engine,
                               shared by usbh.c and usbh_hub.c
 sw/os/fs/fatfs/diskio_mux.c  FatFs drive dispatch, drive 2 = USB (Phase 5)
@@ -1155,6 +1165,26 @@ vendor-specific protocols, not CDC.** Each needs its own small driver
 (mostly vendor control requests to set a baud divisor, then bulk).
 "USB serial adapter" is not one thing, and the cheap ones in everybody's
 drawer are usually CH340 or FTDI.
+
+## USB ethernet
+
+**Status: co-simulated, not yet on hardware.** `sw/os/usb/usbh_ecm.c`
+binds a CDC-ECM adapter -- one raw Ethernet frame per bulk transfer --
+and `sw/apps/net` sends and receives through `Z_SYS_USBNET`. Frames move
+in 512-byte `auto_cont` chunks through the storage sector area; the data
+path runs in process context holding the transaction engine for a whole
+frame, as a SCSI command does.
+
+One change here affects every device, not just adapters: **enumeration
+now chooses the configuration** rather than always taking index 0. If
+the first interface of the configuration read is vendor-specific and
+the device offers another, the next one is read instead. That is what
+makes a Realtek RTL8152 -- vendor protocol in configuration 1, CDC-ECM
+in configuration 2 -- bind at all.
+
+Full detail, including the MAC address policy, the polling cost and
+what to check first on hardware, is in
+[usb_ethernet.md](usb_ethernet.md).
 
 ## Resource budget
 
@@ -3877,7 +3907,7 @@ The first two are gateware defects that would have reached a board.
 
 ## Testing
 
-Four targets, and each exists because something got through the others:
+Five targets, and each exists because something got through the others:
 
     make test_usb           # 77 gateware checks against a device model
     make test_usb_cosim     # 19 checks, real driver against real RTL
@@ -3886,6 +3916,10 @@ Four targets, and each exists because something got through the others:
     make test_usb_msc       # 58 checks, real driver incl. usbh_msc.c,
                             #   bulk-only SCSI model, mouse poll live,
                             #   interrupts emulated where it matters
+    make test_usb_ecm       # 62 checks, real driver incl. usbh_ecm.c,
+                            #   CDC-ECM adapter model shaped like an
+                            #   RTL8152, every frame length that matters
+                            #   both ways, LS mouse polling throughout
     make test_usb_margin    # receive tolerance to device clock error
     make usb_fmax BOARD=x   # whole-SoC Fmax, place-and-route, ONE seed
     make usb_fmax_sweep BOARD=x [SEEDS="1 2 3 4 5"]

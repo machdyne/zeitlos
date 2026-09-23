@@ -125,6 +125,20 @@ int netcfg_load(netcfg_t *out)
 					strcpy(out->wifi[out->n_wifi - 1].psk, val);
 				if (out->n_wifi <= 1)
 					strcpy(out->psk, val);	/* entry 0 mirror */
+			} else if (!strcmp(p, "phy")) {
+				/* auto (default), usb, builtin. An unknown
+				 * value is a typo, and silently falling back
+				 * to auto on a board where that means "no
+				 * network at all" is not helpful. */
+				if (!strcmp(val, "usb")) out->phy = 1;
+				else if (!strcmp(val, "builtin")) out->phy = 2;
+				else if (!strcmp(val, "auto")) out->phy = 0;
+				else {
+					printf("netcfg: phy must be auto, usb "
+						"or builtin\n");
+					free(buf);
+					return -1;
+				}
 			} else if (!strcmp(p, "dhcp")) {
 				out->dhcp = (val[0] != '0');
 			} else if (!strcmp(p, "ip")) {

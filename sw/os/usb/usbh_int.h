@@ -73,6 +73,10 @@
 #define E_CDC_LINE      20  // SET_LINE_CODING
 #define E_CDC_DTR       21  // SET_CONTROL_LINE_STATE
 #define E_HID_RDESC     22  // a mouse's report descriptor, to pick its protocol
+// CDC-ECM (usbh_ecm.c) between SET_CONFIGURATION and binding.
+#define E_ECM_MAC       23  // GET_DESCRIPTOR(STRING iMACAddress)
+#define E_ECM_ALT       24  // SET_INTERFACE: the data interface's bulk alt
+#define E_ECM_FILT      25  // SET_ETHERNET_PACKET_FILTER
 
 // -- a mouse's input report, as its report descriptor lays it out --
 //
@@ -145,6 +149,11 @@ typedef struct {
     uint8_t d_vid_lo, d_vid_hi, d_pid_lo, d_pid_hi;
     uint8_t d_class, d_nconf;
     uint8_t cfg_val, cfg_nif, cfg_attr;
+    // Which configuration, by index, is being read or was chosen. Not
+    // always the first: a device whose first configuration is
+    // vendor-specific and that offers another -- the RTL8152/8153's
+    // second is CDC-ECM -- is given the next one (usbh.c, E_CONFIG_ALL).
+    uint8_t cfg_idx;
     uint8_t got_desc, got_cfg;
     // The first 32 bytes of the configuration descriptor, kept so
     // lsusb can show why the HID walk did or did not claim a device.

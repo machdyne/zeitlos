@@ -19,7 +19,7 @@ itself.
 | **Throughput** | why bulk transfer is slow, and what actually bounds it |
 | **Diagnostics** | the counters, and what each one rules out |
 
-## Three MACs, chosen at runtime
+## Three MACs and an adapter, chosen at runtime
 
 `net_phy.c` picks a driver from the SOC feature CSR at startup, so one
 binary serves every board:
@@ -29,6 +29,15 @@ binary serves every board:
 | `enc28j60.c` | SPI ethernet chip (Lakritz) | 6656-byte ring, on the chip |
 | `rmii_eth.c` | `rtl/ethmac_rmii.v` (Mozart, Sergei, [Katze](katze.md)) | 4 frame slots |
 | `esp32link.c` | `rtl/esp32_rxfifo.v` | 2048-byte FIFO |
+| `usb_ecm.c` | a USB ethernet adapter (CDC-ECM), on any board with the USB host controller | the adapter's own, which nothing reports |
+
+A MAC in the bitstream wins; the USB adapter is what a board with none
+gets, and `NET.CFG`'s `phy = auto | usb | builtin` overrides that
+either way. The USB backend differs from the three MACs in three ways
+worth knowing before reading the rest of this document — its hardware
+can arrive and leave while `net` runs, it has a MAC address of its own
+that `net` adopts, and it has no receive interrupt, so it polls
+adaptively instead. See [usb_ethernet.md](usb_ethernet.md).
 
 **The third column is not trivia.** It bounds TCP throughput directly,
 and a number derived from one of these is wrong on the other two —

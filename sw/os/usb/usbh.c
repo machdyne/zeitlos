@@ -19,6 +19,7 @@
 #include "usbh_msc.h"
 #include "usbh_int.h"
 #include "usbh_cdc.h"
+#include "usbh_ecm.h"
 #ifdef Z_USBH_COSIM
 // rtl/tb/cosim builds this file for the host, where the kernel's
 // headers neither exist nor mean anything. The two things it borrows
@@ -36,9 +37,11 @@ int z_soc_has_feature2(uint32_t bit);
 #define REQ_GET_DESCRIPTOR  0x06
 #define REQ_SET_ADDRESS     0x05
 #define REQ_SET_CONFIG      0x09
+#define REQ_SET_INTERFACE   0x0b
 
 #define DESC_DEVICE         0x01
 #define DESC_CONFIG         0x02
+#define DESC_STRING         0x03
 #define DESC_INTERFACE      0x04
 #define DESC_ENDPOINT       0x05
 
@@ -818,6 +821,9 @@ void usbh_teardown(int i)
     // commands.
     if (devs[i].cls == Z_USBH_CLASS_MSC) z_usbh_msc_unbind();
     if (devs[i].cls == Z_USBH_CLASS_CDC) z_usbh_cdc_unbind();
+    // Always, not by class: an adapter part-way through enumeration has
+    // claimed the ECM function without being bound yet.
+    z_usbh_ecm_forget(i);
     addr_free(devs[i].pend_addr);
     if (devs[i].addr != devs[i].pend_addr) addr_free(devs[i].addr);
     memset(&devs[i], 0, sizeof(z_usbh_dev_t));
@@ -1153,6 +1159,7 @@ static void dev_step(int i, uint32_t ps)
         dv->d_pid_hi = z_usbh_rb(d + 11);
         dv->d_nconf = z_usbh_rb(d + 17);
         dv->got_desc = 1;
+        dv->cfg_idx = 0;
         usbh_ctrl_begin(i, DIR_IN, REQ_GET_DESCRIPTOR,
                    (DESC_CONFIG << 8), 0, 9);
         dv->state = E_CONFIG9;
@@ -1167,7 +1174,7 @@ static void dev_step(int i, uint32_t ps)
         dv->cfg_len = z_usbh_rb(d + 2);
         if (z_usbh_rb(d + 3) || dv->cfg_len > 200) dv->cfg_len = 200;
         usbh_ctrl_begin(i, DIR_IN, REQ_GET_DESCRIPTOR,
-                   (DESC_CONFIG << 8), 0, dv->cfg_len);
+                   (DESC_CONFIG << 8) | dv->cfg_idx, 0, dv->cfg_len);
         dv->state = E_CONFIG_ALL;
         break;
 
@@ -1184,6 +1191,26 @@ static void dev_step(int i, uint32_t ps)
                            (uint8_t)sizeof(dv->cfg_raw) : (uint8_t)dv->cfg_len;
             for (k = 0; k < dv->cfg_rawn; k++)
                 dv->cfg_raw[k] = z_usbh_rb(d + k);
+            // Which configuration. The first, unless its first
+            // interface is vendor-specific (class 0xff) and the device
+            // offers another: then the next. The same rule as Linux's
+            // generic chooser, and the reason a Realtek RTL8152/8153
+            // adapter -- configuration 1 Realtek's own protocol,
+            // configuration 2 CDC-ECM -- gets a driver here at all.
+            // docs/usb_ethernet.md, "Choosing the configuration".
+            for (k = 9; k + 5 < dv->cfg_rawn && dv->cfg_raw[k] >= 2;
+                 k += dv->cfg_raw[k])
+                if (dv->cfg_raw[k + 1] == DESC_INTERFACE) break;
+            if (k + 5 < dv->cfg_rawn &&
+                dv->cfg_raw[k + 1] == DESC_INTERFACE &&
+                dv->cfg_raw[k + 5] == 0xff &&
+                dv->cfg_idx + 1 < dv->d_nconf) {
+                dv->cfg_idx++;
+                usbh_ctrl_begin(i, DIR_IN, REQ_GET_DESCRIPTOR,
+                                (DESC_CONFIG << 8) | dv->cfg_idx, 0, 9);
+                dv->state = E_CONFIG9;
+                break;
+            }
         }
         usbh_ctrl_begin(i, 0, REQ_SET_CONFIG, dv->cfg_val, 0, 0);
         dv->state = E_SET_CONFIG;
@@ -1205,6 +1232,23 @@ static void dev_step(int i, uint32_t ps)
                 dv->iface = (int8_t)a;
                 usbh_ctrl_begin(i, HID_OUT_IFACE, 0x20, 0, (uint16_t)a, 7);
                 dv->state = E_CDC_LINE;
+                break;
+            }
+            // CDC-ECM: the MAC string, the data interface's bulk
+            // alternate setting, the packet filter; then bind.
+            a = z_usbh_ecm_probe(i, dv->cfg_raw, dv->cfg_rawn);
+            if (a >= 0) {
+                uint8_t imac, di, alt;
+                z_usbh_ecm_ids(&imac, &di, &alt);
+                dv->iface = (int8_t)a;
+                if (imac) {
+                    usbh_ctrl_begin(i, DIR_IN, REQ_GET_DESCRIPTOR,
+                                    (DESC_STRING << 8) | imac, 0x0409, 26);
+                    dv->state = E_ECM_MAC;
+                } else {
+                    usbh_ctrl_begin(i, 0x01, REQ_SET_INTERFACE, alt, di, 0);
+                    dv->state = E_ECM_ALT;
+                }
                 break;
             }
             dv->state = E_BIND;
@@ -1303,6 +1347,44 @@ static void dev_step(int i, uint32_t ps)
             if (z_usbh_cdc_bind(dv->addr, dv->xa_flags, dv->port,
                                 dv->cfg_raw, dv->cfg_rawn))
                 dv->cls = Z_USBH_CLASS_CDC;
+            usbh_any_ready = 1;
+            dv->state = E_RUNNING;
+        }
+        break;
+
+    // -- CDC-ECM --
+    case E_ECM_MAC:
+        // A failure is not fatal: the adapter then runs promiscuous
+        // under net's own address.
+        a = usbh_ctrl_step(i);
+        if (a != CS_ERROR && !usbh_ctrl_finished(i)) break;
+        if (a != CS_ERROR) z_usbh_ecm_mac(d);
+        {
+            uint8_t imac, di, alt;
+            z_usbh_ecm_ids(&imac, &di, &alt);
+            usbh_ctrl_begin(i, 0x01, REQ_SET_INTERFACE, alt, di, 0);
+            dv->state = E_ECM_ALT;
+        }
+        break;
+
+    case E_ECM_ALT:
+        // Fatal: alternate setting 0 has no endpoints, so without this
+        // there is no data path at all.
+        if (usbh_ctrl_step(i) == CS_ERROR) { usbh_dev_fail(dv); break; }
+        if (!usbh_ctrl_finished(i)) break;
+        usbh_ctrl_begin(i, HID_OUT_IFACE, 0x43, z_usbh_ecm_filter(),
+                        (uint16_t)dv->iface, 0);
+        dv->state = E_ECM_FILT;
+        break;
+
+    case E_ECM_FILT:
+        // Optional ("should" in ECM 1.2, 6.2.4); a STALL does not stop
+        // the bind.
+        if (usbh_ctrl_step(i) == CS_ERROR || usbh_ctrl_finished(i)) {
+            usbh_scr_free(dv->scr);
+            dv->scr = 0;
+            z_usbh_ecm_bind(i, dv->addr, dv->xa_flags, dv->port);
+            dv->cls = Z_USBH_CLASS_ECM;
             usbh_any_ready = 1;
             dv->state = E_RUNNING;
         }
@@ -1562,6 +1644,9 @@ static const char *state_name(int st)
     case E_CDC_LINE:    return "cdc-line-coding";
     case E_CDC_DTR:     return "cdc-dtr";
     case E_HID_RDESC:   return "hid-report-desc";
+    case E_ECM_MAC:     return "ecm-mac";
+    case E_ECM_ALT:     return "ecm-set-interface";
+    case E_ECM_FILT:    return "ecm-filter";
     default:            return "?";
     }
 }
@@ -1614,6 +1699,7 @@ static void dump_dev(int i, const char *pre)
                (devs[i].led_sent & 4) ? 'S' : '-');
     if (devs[i].cls == Z_USBH_CLASS_MSC) printf(" class=msc");
     if (devs[i].cls == Z_USBH_CLASS_CDC) printf(" class=cdc");
+    if (devs[i].cls == Z_USBH_CLASS_ECM) printf(" class=ecm");
     if (devs[i].retries) printf(" retries=%d", devs[i].retries);
     if (devs[i].recoveries)
         printf(" recovered=%d", devs[i].recoveries);   // port disabled by hub
@@ -1650,6 +1736,7 @@ static void dump_dev(int i, const char *pre)
         printf("%sconfig value %d, %d interface(s), "
                "attributes %02x\n", pre,
            devs[i].cfg_val, devs[i].cfg_nif, devs[i].cfg_attr);
+    if (devs[i].cls == Z_USBH_CLASS_ECM) z_usbh_ecm_dump(pre);
 
 #ifdef USBH_DEBUG
     if (devs[i].got_cfg && devs[i].blk < 0) {

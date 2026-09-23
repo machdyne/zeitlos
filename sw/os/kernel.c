@@ -27,6 +27,7 @@
 #include "fsapi.h"
 #include "procapi.h"
 #include "flashapi.h"	// k_flash, referenced by the syscall table
+#include "usbnetapi.h"	// k_usbnet, referenced by the syscall table
 #include "usbcdcapi.h"	// k_usbcdc_*, referenced by the syscall table	// k_proc_list(), referenced by the syscall
 						// table built from syscalls.def below
 #include "../common/zsoc.h"
@@ -194,6 +195,9 @@ static int k_syscall_touches_fs(uint32_t id) {
 		// out mid-transaction from letting another start on top of it.
 		case Z_SYS_USBCDC_READ:
 		case Z_SYS_USBCDC_WRITE:
+		// USB ethernet: RECV and SEND hold the engine for a frame and
+		// use MSC's sector area of the packet buffer (usbh_ecm.c).
+		case Z_SYS_USBNET:
 			return 1;
 		default:
 			return 0;

@@ -62,6 +62,7 @@
 #include "rmii_eth.h"
 #include "netcfg.h"
 #include "esp32link.h"
+#include "usb_ecm.h"
 
 typedef struct {
 	const char *name;
@@ -107,7 +108,22 @@ typedef struct {
 	// A polled link does, because how often it asks the far side is a
 	// policy rather than a constant -- see esp32link.c's poll_gap().
 	uint32_t (*idle_ticks)(void);
+
+	// Optional, NULL on everything with a MAC of its own to program.
+	// A USB ethernet adapter HAS an address, burned in and reported in
+	// its descriptors, and its receive filter can only be set to that
+	// one -- so net adopts it rather than imposing the
+	// locally-administered address net.c would otherwise use. Called
+	// straight after init(); false leaves net's own address in place.
+	// See usb_ecm.h and docs/usb_ethernet.md.
+	bool (*get_mac)(uint8_t mac[6]);
 } net_phy_t;
+
+// What NET.CFG's phy= key selects. Default auto: a MAC built into the
+// bitstream if there is one, a USB adapter otherwise.
+#define NET_PHY_AUTO     0
+#define NET_PHY_USB      1      // a USB adapter even on a board with a MAC
+#define NET_PHY_BUILTIN  2      // never USB; exit if there is no MAC
 
 // The active driver. NULL until net_phy_select() has run, which
 // net.c's main() does before anything touches the hardware.
@@ -116,7 +132,7 @@ extern const net_phy_t *net_phy;
 // Picks a driver from the feature CSR. Returns NULL when this
 // bitstream positively reports no ethernet hardware; net.c exits
 // cleanly on that rather than probing registers that are not there.
-const net_phy_t *net_phy_select(void);
+const net_phy_t *net_phy_select(int mode);
 
 // Call-site spellings kept from the #define era, so eth.c and the rest
 // of net.c did not have to change when this became a runtime choice.

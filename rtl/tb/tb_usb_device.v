@@ -66,7 +66,16 @@ module tb_usb_device #(
     parameter integer HUB_RST_NS = 20000,
     // HUB=1: ports whose device is low speed, bit per port. The hub
     // reports it in wPortStatus; nothing else about the port differs.
-    parameter [3:0] PORT_LS = 4'b0000
+    parameter [3:0] PORT_LS = 4'b0000,
+    // 1: a CDC-ECM USB ethernet adapter shaped like the RTL8152: two
+    // configurations, the first vendor-specific (class 0xff) and the
+    // second CDC-ECM -- communications interface 0 with an interrupt
+    // IN on endpoint 3, data interface 1 whose alternate setting 1
+    // carries bulk IN 1 and bulk OUT 2, 64 bytes each. The MAC string
+    // is index 3. Frames the testbench queues with ecm_push go out on
+    // bulk IN; frames the host sends are checked against the same
+    // pattern (ecm_pat) and counted. Default 0.
+    parameter integer ECM = 0
 ) (
     inout wire dp,
     inout wire dm,
@@ -202,7 +211,8 @@ module tb_usb_device #(
     // GET_DESCRIPTOR with the device descriptor regardless of what was
     // asked for, so the config request came back as 18 bytes of the
     // wrong structure and nothing ever bound.
-    reg [7:0] cfgd [0:33];
+    // 128 since ECM: its configuration descriptor is 80 bytes.
+    reg [7:0] cfgd [0:127];
 
     // -- HUB=1 --
     reg [7:0] hubd [0:8];           // hub descriptor
@@ -220,7 +230,7 @@ module tb_usb_device #(
     reg ls_skip;                    // rx_packet: a low-speed packet, not ours
     reg tok_mine;                   // the last token was addressed to us
     // What the current control read is serving from.
-    reg [7:0] src [0:63];
+    reg [7:0] src [0:127];
 
     // test hooks
     integer se0_bits;
@@ -299,6 +309,70 @@ module tb_usb_device #(
     integer msc_resets;             // Bulk-Only Mass Storage Resets seen
     integer msc_clears;             // CLEAR_FEATURE(ENDPOINT_HALT) seen
     integer msc_aborted;            // commands a reset ended before their CSW
+    // -- CDC-ECM (ECM = 1) --
+    reg [7:0] cfge [0:127];         // configuration index 1: ECM
+    integer cfge_total;
+    reg [7:0] ecm_cfg;              // SET_CONFIGURATION value
+    reg [7:0] ecm_alt;              // data interface alternate setting
+    reg [7:0] ecm_filter;           // SET_ETHERNET_PACKET_FILTER wValue
+    integer ecm_filters;            // ...requests seen
+    reg ecm_in_tgl, ecm_out_tgl, ecm_int_tgl;
+    // Frames queued for bulk IN: length and seed, a ring of 16.
+    integer ecm_qlen [0:15];
+    reg [7:0] ecm_qseed [0:15];
+    integer ecm_qh, ecm_qt;
+    integer ecm_ptr;                // bytes of the head frame sent
+    integer ecm_sent;               // frames fully sent (ACKed)
+    integer ecm_pkts;               // packets of the head frame sent
+    integer ecm_naks_mid, ecm_nak_left;   // NAKs after the first packet
+    integer ecm_crc_bad, ecm_crc_at;       // corrupt packets, from index
+    // Frames received on bulk OUT.
+    reg [7:0] ecm_rb [0:2047];
+    integer ecm_rn;
+    integer ecm_rx_frames, ecm_rx_bad, ecm_rx_last, ecm_rx_zlp_only;
+    integer ecm_out_naks;           // NAK the next N OUT packets
+    integer ecm_dup_out;
+    integer ecm_bad_ep;             // data endpoint used before SET_INTERFACE
+    // Notification: 0 none, 1 connected, 2 disconnected; sent once.
+    integer ecm_notify;
+    integer ecm_notes;              // notifications delivered
+    integer ecm_q;                  // scratch for the ECM paths
+
+    // Test pattern for a frame: byte 0 is the seed, the rest a function
+    // of seed and position. rtl/tb/cosim/usbh_vpi.c has the same.
+    function [7:0] ecm_pat;
+        input [7:0] seed;
+        input integer pos;
+        begin
+            if (pos == 0) ecm_pat = seed;
+            else ecm_pat = (seed * 29 + pos * 7 + (pos >> 8) * 3) & 8'hff;
+        end
+    endfunction
+
+    task ecm_push;
+        input integer len;
+        input [7:0] seed;
+        begin
+            ecm_qlen[ecm_qt] = len;
+            ecm_qseed[ecm_qt] = seed;
+            ecm_qt = (ecm_qt + 1) % 16;
+        end
+    endtask
+
+    task ecm_reset;
+        begin
+            ecm_cfg = 8'd0;
+            ecm_alt = 8'd0;
+            ecm_in_tgl = 1'b0;
+            ecm_out_tgl = 1'b0;
+            ecm_int_tgl = 1'b0;
+            ecm_ptr = 0;
+            ecm_pkts = 0;
+            ecm_rn = 0;
+            ecm_nak_left = 0;
+        end
+    endtask
+
     // A packet received where an ACK was expected. It is the host's
     // next token (it saw an error and did not ACK), so the main loop
     // must dispatch it rather than read a new one.
@@ -353,6 +427,7 @@ module tb_usb_device #(
                     msc_halt_in = 1'b0;
                     msc_halt_out = 1'b0;
                     msc_nak_left = 0;
+                    if (ECM) ecm_reset;
                     // A reset hub comes back with every port unpowered
                     // and nothing enabled (USB 2.0 11.10); so does one
                     // that was unplugged and plugged back in.
@@ -818,6 +893,76 @@ module tb_usb_device #(
             hubd[6] = 8'h00; hubd[7] = 8'h00; hubd[8] = 8'hff;
         end
 
+        ecm_filters = 0; ecm_filter = 8'd0;
+        ecm_qh = 0; ecm_qt = 0; ecm_sent = 0;
+        ecm_naks_mid = 0; ecm_crc_bad = 0; ecm_crc_at = 0;
+        ecm_rx_frames = 0; ecm_rx_bad = 0; ecm_rx_last = 0;
+        ecm_rx_zlp_only = 0; ecm_out_naks = 0; ecm_dup_out = 0;
+        ecm_bad_ep = 0; ecm_notify = 0; ecm_notes = 0;
+        ecm_reset;
+        if (ECM) begin
+            desc[7] = 8'h40;                // 64, as the RTL8152
+            desc[8] = 8'hda; desc[9] = 8'h0b;   // 0bda:8152
+            desc[10] = 8'h52; desc[11] = 8'h81;
+            desc[17] = 8'h02;               // two configurations
+            // index 0 (value 1): vendor-specific, three endpoints -- what
+            // Realtek's own driver uses. 39 bytes.
+            cfg_total = 39;
+            cfgd[0]  = 8'h09; cfgd[1]  = 8'h02; cfgd[2]  = 8'h27;
+            cfgd[3]  = 8'h00; cfgd[4]  = 8'h01; cfgd[5]  = 8'h01;
+            cfgd[6]  = 8'h00; cfgd[7]  = 8'ha0; cfgd[8]  = 8'h32;
+            cfgd[9]  = 8'h09; cfgd[10] = 8'h04; cfgd[11] = 8'h00;
+            cfgd[12] = 8'h00; cfgd[13] = 8'h03; cfgd[14] = 8'hff;
+            cfgd[15] = 8'hff; cfgd[16] = 8'h00; cfgd[17] = 8'h00;
+            cfgd[18] = 8'h07; cfgd[19] = 8'h05; cfgd[20] = 8'h81;
+            cfgd[21] = 8'h02; cfgd[22] = 8'h40; cfgd[23] = 8'h00;
+            cfgd[24] = 8'h00;
+            cfgd[25] = 8'h07; cfgd[26] = 8'h05; cfgd[27] = 8'h02;
+            cfgd[28] = 8'h02; cfgd[29] = 8'h40; cfgd[30] = 8'h00;
+            cfgd[31] = 8'h00;
+            cfgd[32] = 8'h07; cfgd[33] = 8'h05; cfgd[34] = 8'h83;
+            cfgd[35] = 8'h03; cfgd[36] = 8'h02; cfgd[37] = 8'h00;
+            cfgd[38] = 8'h08;
+            // index 1 (value 2): CDC-ECM. 80 bytes.
+            cfge_total = 80;
+            cfge[0]  = 8'h09; cfge[1]  = 8'h02; cfge[2]  = 8'h50;
+            cfge[3]  = 8'h00; cfge[4]  = 8'h02; cfge[5]  = 8'h02;
+            cfge[6]  = 8'h00; cfge[7]  = 8'ha0; cfge[8]  = 8'h32;
+            // interface 0: communications, ECM
+            cfge[9]  = 8'h09; cfge[10] = 8'h04; cfge[11] = 8'h00;
+            cfge[12] = 8'h00; cfge[13] = 8'h01; cfge[14] = 8'h02;
+            cfge[15] = 8'h06; cfge[16] = 8'h00; cfge[17] = 8'h00;
+            // header, union (0 -> 1), Ethernet networking
+            cfge[18] = 8'h05; cfge[19] = 8'h24; cfge[20] = 8'h00;
+            cfge[21] = 8'h10; cfge[22] = 8'h01;
+            cfge[23] = 8'h05; cfge[24] = 8'h24; cfge[25] = 8'h06;
+            cfge[26] = 8'h00; cfge[27] = 8'h01;
+            cfge[28] = 8'h0d; cfge[29] = 8'h24; cfge[30] = 8'h0f;
+            cfge[31] = 8'h03;               // iMACAddress
+            cfge[32] = 8'h00; cfge[33] = 8'h00; cfge[34] = 8'h00;
+            cfge[35] = 8'h00;
+            cfge[36] = 8'hea; cfge[37] = 8'h05;  // wMaxSegmentSize 1514
+            cfge[38] = 8'h00; cfge[39] = 8'h00; cfge[40] = 8'h00;
+            // endpoint 0x83 interrupt IN, 16 bytes, 8 ms
+            cfge[41] = 8'h07; cfge[42] = 8'h05; cfge[43] = 8'h83;
+            cfge[44] = 8'h03; cfge[45] = 8'h10; cfge[46] = 8'h00;
+            cfge[47] = 8'h08;
+            // interface 1 alt 0: data, no endpoints
+            cfge[48] = 8'h09; cfge[49] = 8'h04; cfge[50] = 8'h01;
+            cfge[51] = 8'h00; cfge[52] = 8'h00; cfge[53] = 8'h0a;
+            cfge[54] = 8'h00; cfge[55] = 8'h00; cfge[56] = 8'h00;
+            // interface 1 alt 1: data, bulk IN 1 and OUT 2
+            cfge[57] = 8'h09; cfge[58] = 8'h04; cfge[59] = 8'h01;
+            cfge[60] = 8'h01; cfge[61] = 8'h02; cfge[62] = 8'h0a;
+            cfge[63] = 8'h00; cfge[64] = 8'h00; cfge[65] = 8'h00;
+            cfge[66] = 8'h07; cfge[67] = 8'h05; cfge[68] = 8'h81;
+            cfge[69] = 8'h02; cfge[70] = 8'h40; cfge[71] = 8'h00;
+            cfge[72] = 8'h00;
+            cfge[73] = 8'h07; cfge[74] = 8'h05; cfge[75] = 8'h02;
+            cfge[76] = 8'h02; cfge[77] = 8'h40; cfge[78] = 8'h00;
+            cfge[79] = 8'h00;
+        end
+
         if (MSC) begin
             // config: 32 bytes, 1 interface, 2 bulk endpoints
             cfg_total = 32;
@@ -958,6 +1103,7 @@ module tb_usb_device #(
         msc_halt_out = 1'b0;
         msc_nak_left = 0;
         pkt_held = 1'b0;
+        if (ECM) ecm_reset;
     end
 
     // -- a CBW has arrived: decide the data phase and queue the CSW --
@@ -1059,6 +1205,47 @@ module tb_usb_device #(
         end else if (rx_crc_ok && (rxb[1][6:0] == dev_addr) &&
                      (rxb[1][7] == 1'b1) && (rxb[2][2:0] == 3'd0)) begin
 
+            // Endpoint 1, ECM: bulk IN, the head of the frame queue in
+            // 64-byte packets, a zero-length packet after a frame that
+            // is an exact multiple of 64.
+            if (ECM && rxpid == PID_IN) begin
+                turnaround;
+                if (ecm_cfg != 8'd2 || ecm_alt != 8'd1) begin
+                    ecm_bad_ep = ecm_bad_ep + 1;
+                    tx_packet(PID_STALL, 0);
+                end else if (ecm_qh == ecm_qt) begin
+                    tx_packet(PID_NAK, 0);
+                end else if (ecm_pkts > 0 && ecm_nak_left > 0) begin
+                    ecm_nak_left = ecm_nak_left - 1;
+                    tx_packet(PID_NAK, 0);
+                end else begin
+                    k = ecm_qlen[ecm_qh] - ecm_ptr;
+                    if (k > 64) k = 64;
+                    for (i = 0; i < k; i = i + 1)
+                        txb[i] = ecm_pat(ecm_qseed[ecm_qh], ecm_ptr + i);
+                    tx_crc_flip = (ecm_crc_bad > 0) && (ecm_pkts >= ecm_crc_at);
+                    if (tx_crc_flip) ecm_crc_bad = ecm_crc_bad - 1;
+                    tx_packet(ecm_in_tgl ? PID_DATA1 : PID_DATA0, k);
+                    tx_crc_flip = 1'b0;
+                    rx_packet;
+                    if (rxpid != PID_ACK) pkt_held = 1'b1;
+                    if (rxpid == PID_ACK) begin
+                        ecm_in_tgl = ~ecm_in_tgl;
+                        ecm_pkts = ecm_pkts + 1;
+                        if (ecm_pkts == 1) ecm_nak_left = ecm_naks_mid;
+                        ecm_ptr = ecm_ptr + k;
+                        // Done after a short packet -- including the
+                        // zero-length one that follows an exact multiple.
+                        if (k < 64) begin
+                            ecm_qh = (ecm_qh + 1) % 16;
+                            ecm_ptr = 0;
+                            ecm_pkts = 0;
+                            ecm_nak_left = 0;
+                            ecm_sent = ecm_sent + 1;
+                        end
+                    end
+                end
+            end else
             // Endpoint 1, mass storage: bulk IN, data phase then CSW.
             if (MSC && rxpid == PID_IN) begin
                 turnaround;
@@ -1158,6 +1345,67 @@ module tb_usb_device #(
                 end
             end
 
+        end else if (ECM && rx_crc_ok && rxpid == PID_IN &&
+                     (rxb[1][6:0] == dev_addr) &&
+                     (rxb[1][7] == 1'b1) && (rxb[2][2:0] == 3'd1)) begin
+
+            // Endpoint 3, ECM: notifications. NETWORK_CONNECTION, 8 bytes.
+            turnaround;
+            if (ecm_notify == 0) begin
+                tx_packet(PID_NAK, 0);
+            end else begin
+                txb[0] = 8'ha1; txb[1] = 8'h00;
+                txb[2] = (ecm_notify == 1) ? 8'h01 : 8'h00; txb[3] = 8'h00;
+                txb[4] = 8'h00; txb[5] = 8'h00; txb[6] = 8'h00; txb[7] = 8'h00;
+                tx_packet(ecm_int_tgl ? PID_DATA1 : PID_DATA0, 8);
+                rx_packet;
+                if (rxpid == PID_ACK) begin
+                    ecm_int_tgl = ~ecm_int_tgl;
+                    ecm_notify = 0;
+                    ecm_notes = ecm_notes + 1;
+                end else pkt_held = 1'b1;
+            end
+
+        end else if (ECM && rx_crc_ok && rxpid == PID_OUT &&
+                     (rxb[1][6:0] == dev_addr) &&
+                     (rxb[1][7] == 1'b0) && (rxb[2][2:0] == 3'd1)) begin
+
+            // Endpoint 2, ECM: bulk OUT. A packet shorter than 64 ends
+            // the frame; the frame is checked against ecm_pat.
+            rx_packet;
+            if (rx_crc_ok) begin
+                turnaround;
+                if (ecm_cfg != 8'd2 || ecm_alt != 8'd1) begin
+                    ecm_bad_ep = ecm_bad_ep + 1;
+                    tx_packet(PID_STALL, 0);
+                end else if (ecm_out_naks > 0) begin
+                    ecm_out_naks = ecm_out_naks - 1;
+                    tx_packet(PID_NAK, 0);
+                end else begin
+                    tx_packet(PID_ACK, 0);
+                    if ((rxpid == PID_DATA1) != ecm_out_tgl) begin
+                        ecm_dup_out = ecm_dup_out + 1;
+                    end else begin
+                        ecm_out_tgl = ~ecm_out_tgl;
+                        for (i = 0; i < rxn - 3; i = i + 1)
+                            if (ecm_rn + i < 2048) ecm_rb[ecm_rn + i] = rxb[1 + i];
+                        ecm_rn = ecm_rn + rxn - 3;
+                        if (rxn - 3 < 64) begin
+                            if (ecm_rn == 0) begin
+                                ecm_rx_zlp_only = ecm_rx_zlp_only + 1;
+                            end else begin
+                                ecm_rx_frames = ecm_rx_frames + 1;
+                                ecm_rx_last = ecm_rn;
+                                for (ecm_q = 1; ecm_q < ecm_rn && ecm_q < 2048; ecm_q = ecm_q + 1)
+                                    if (ecm_rb[ecm_q] !== ecm_pat(ecm_rb[0], ecm_q))
+                                        ecm_rx_bad = ecm_rx_bad + 1;
+                            end
+                            ecm_rn = 0;
+                        end
+                    end
+                end
+            end
+
         end else if (MSC && rx_crc_ok && rxpid == PID_OUT &&
                      (rxb[1][6:0] == dev_addr) &&
                      (rxb[1][7] == 1'b0) && (rxb[2][2:0] == 3'd1)) begin
@@ -1207,10 +1455,31 @@ module tb_usb_device #(
                     end else if (setup[1] == 8'h06) begin
                         in_len = {setup[7], setup[6]};
                         // wValue's high byte is the descriptor TYPE.
-                        if (setup[3] == 8'h02) begin
+                        if (ECM && setup[3] == 8'h02 && setup[2] == 8'h01) begin
+                            if (in_len > cfge_total) in_len = cfge_total;
+                            for (i = 0; i < in_len; i = i + 1)
+                                src[i] = cfge[i];
+                        end else if (setup[3] == 8'h02) begin
                             if (in_len > cfg_total) in_len = cfg_total;
                             for (i = 0; i < in_len; i = i + 1)
                                 src[i] = cfgd[i];
+                        end else if (ECM && setup[3] == 8'h03) begin
+                            // string 3: the MAC, "00E04C36026B" in
+                            // UTF-16LE; anything else: language 0409
+                            src[0] = 8'd26; src[1] = 8'h03;
+                            for (i = 0; i < 12; i = i + 1) begin
+                                src[2 + i * 2] = "0";
+                                src[3 + i * 2] = 8'h00;
+                            end
+                            src[4] = "0"; src[6] = "E"; src[8] = "0";
+                            src[10] = "4"; src[12] = "C"; src[14] = "3";
+                            src[16] = "6"; src[18] = "0"; src[20] = "2";
+                            src[22] = "6"; src[24] = "B";
+                            if (setup[2] != 8'h03) begin
+                                src[0] = 8'd4;
+                                src[2] = 8'h09; src[3] = 8'h04;
+                            end
+                            if (in_len > src[0]) in_len = src[0];
                         end else begin
                             if (in_len > 18) in_len = 18;
                             for (i = 0; i < in_len; i = i + 1)
@@ -1231,6 +1500,24 @@ module tb_usb_device #(
                             msc_halt_out = 1'b0;
                             msc_out_tgl = 1'b0;
                         end
+                        in_len = 0;
+                    end else if (ECM && setup[0] == 8'h00 &&
+                                 setup[1] == 8'h09) begin
+                        ecm_cfg = setup[2];
+                        ecm_alt = 8'd0;
+                        in_len = 0;
+                    end else if (ECM && setup[0] == 8'h01 &&
+                                 setup[1] == 8'h0b) begin
+                        // SET_INTERFACE resets the interface's endpoints
+                        // to DATA0 (USB 2.0 9.1.1.5)
+                        if (setup[4] == 8'h01) ecm_alt = setup[2];
+                        ecm_in_tgl = 1'b0;
+                        ecm_out_tgl = 1'b0;
+                        in_len = 0;
+                    end else if (ECM && setup[0] == 8'h21 &&
+                                 setup[1] == 8'h43) begin
+                        ecm_filter = setup[2];
+                        ecm_filters = ecm_filters + 1;
                         in_len = 0;
                     end else if (MSC && setup[0] == 8'h21 &&
                                  setup[1] == 8'hff) begin

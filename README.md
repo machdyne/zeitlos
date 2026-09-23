@@ -24,10 +24,10 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 | Video | VGA, DVI, DVI over HDMI, [composite](docs/composite.md) NTSC and PAL |
 | Audio | 8 channel 16-bit [hardware mixer](docs/audio.md) with stereo output |
 | Storage | MicroSD |
-| Network | Ethernet (SPI), Ethernet MAC (for RMII PHY) or [ESP32](docs/esp32link.md) |
+| Network | Ethernet (SPI/USB), Ethernet MAC (for RMII PHY) or [ESP32](docs/esp32link.md) |
 | Entropy | Ring-oscillator [TRNG](docs/trng.md) |
 | Crypto | Optional [Montgomery multiplier](docs/montmul.md) for TLS (~1000 LUTs, no BRAM) |
-| USB Host | [Dual-port USB host controller](docs/usb_host.md) (HID, MSC, CDC, hubs) |
+| USB Host | [Dual-port USB host controller](docs/usb_host.md) (HID, MSC, CDC, ECM [ethernet](docs/usb_ethernet.md), hubs) |
 | USB Device | [USB CDC](docs/usb_cdc.md) serial console |
 | HID | USB keyboard + optional USB mouse/[gamepad](docs/gamepad.md) |
 | I/O | Optional [GPIO](docs/gpio.md) on PMOD ports with bit-banged [I2C](docs/i2c.md) and [SPI](docs/spi.md), hardware SPI, 16550 UART, optional second [UART](docs/uart1.md) |

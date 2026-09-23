@@ -50,7 +50,7 @@ LDSCRIPT = ../../common/riscv-app.ld
 # once instead of per target, and net can ship on the sdcard image
 # again (a card copy shadows the flash copy, so a single card image
 # used to be unable to carry it).
-PHY_OBJ = enc28j60.o rmii_eth.o esp32link.o net_phy.o
+PHY_OBJ = enc28j60.o rmii_eth.o esp32link.o usb_ecm.o net_phy.o
 
 # DHCP (dhcp.c) on by default; set NET_DHCP=0 to disable it entirely
 # and always use the static NET_STATIC_* config below -- e.g. for a
@@ -333,7 +333,10 @@ netcfg.o: netcfg.c netcfg.h ../../common/zfsapp.h
 zfsapp.o: ../../common/zfsapp.c ../../common/zfsapp.h
 	$(CC) $(CFLAGS) -c ../../common/zfsapp.c -o zfsapp.o
 
-net_phy.o: net_phy.c net_phy.h enc28j60.h rmii_eth.h esp32link.h ../../common/zsoc.h
+usb_ecm.o: usb_ecm.c usb_ecm.h ../../common/zusbnet.h ../../common/zsoc.h
+	$(CC) $(CFLAGS) -c usb_ecm.c -o usb_ecm.o
+
+net_phy.o: net_phy.c net_phy.h enc28j60.h rmii_eth.h esp32link.h usb_ecm.h ../../common/zsoc.h
 	$(CC) $(CFLAGS) -c net_phy.c -o net_phy.o
 
 eth.o: eth.c eth.h net_phy.h

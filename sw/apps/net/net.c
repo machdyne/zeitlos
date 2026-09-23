@@ -130,7 +130,11 @@
 // no factory MAC on this chip -- locally-administered address (the
 // 0x02 first-octet bit pattern marks it as such, avoiding any clash
 // with real vendor-assigned addresses)
-static const uint8_t our_mac[6] = { 0x02, 0x00, 0x00, 0x00, 0x00, 0x01 };
+// Not const since USB ethernet: an adapter has an address of its own,
+// and its receive filter only ever passes frames for THAT one, so net
+// adopts it (net_phy_t's get_mac, sw/apps/net/usb_ecm.c). Every other
+// backend leaves this as it is.
+static uint8_t our_mac[6] = { 0x02, 0x00, 0x00, 0x00, 0x00, 0x01 };
 
 // NET_DHCP and NET_STATIC_IP/NETMASK/GATEWAY/DNS are set by
 // sw/apps/net/Makefile (NET_DHCP ?= 1, NET_STATIC_* default to
@@ -1380,10 +1384,23 @@ int main(void) {
 	// CSR-capable bitstream reporting neither MAC returns NULL, which
 	// is what makes it safe for sw/os/sh.c's `init` to start net on
 	// every board rather than reserving its pid and giving up.
-	if (!net_phy_select()) {
+	// NET.CFG first, because its phy= key is part of choosing the
+	// driver: a board with a MAC can be told to use a USB adapter
+	// instead, and one without can be told not to wait for one.
+	netcfg_t cfg;
+	if (netcfg_load(&cfg) != 0) {
+		printf("net: NET.CFG parse error\n");
+		return 1;
+	}
+	if (cfg.has_file)
+		printf("net: loaded NET.CFG%s, %d network(s), first '%s'\n",
+			cfg.has_wifi ? " (wifi)" : "", cfg.n_wifi, cfg.ssid);
+
+	if (!net_phy_select(cfg.phy)) {
 		printf("net: this SOC build has no ethernet hardware "
-			"(rtl/boards.vh's SPI_ETH or ETH_RMII) -- nothing to do "
-			"here, exiting cleanly.\n");
+			"(rtl/boards.vh's SPI_ETH or ETH_RMII, or a USB "
+			"ethernet adapter on a build with USB host) -- nothing "
+			"to do here, exiting cleanly.\n");
 		return 1;
 	}
 
@@ -1417,15 +1434,6 @@ int main(void) {
 
 	printf("net: initializing %s...\n", NET_PHY_NAME);
 
-	netcfg_t cfg;
-	if (netcfg_load(&cfg) != 0) {
-		printf("net: NET.CFG parse error\n");
-		return 1;
-	}
-	if (cfg.has_file)
-		printf("net: loaded NET.CFG%s, %d network(s), first '%s'\n",
-			cfg.has_wifi ? " (wifi)" : "", cfg.n_wifi, cfg.ssid);
-
 	if (!phy_init(our_mac)) {
 		printf("net: phy_init (%s) failed -- see that driver's header comment "
 			"for what to check first.\n", NET_PHY_NAME);
@@ -1437,6 +1445,11 @@ int main(void) {
 	// association takes seconds). Wired backends have no poll_wifi.
 	if (net_phy->poll_wifi && cfg.has_wifi)
 		printf("net: wifi STA '%s' deferred to main loop\n", cfg.ssid);
+
+	// A NIC with an address of its own: use it, rather than the
+	// locally-administered one above. USB ethernet only; see
+	// net_phy.h's get_mac.
+	if (net_phy->get_mac) net_phy->get_mac(our_mac);
 
 	phy_debug_dump();
 	printf("net: mac %02x:%02x:%02x:%02x:%02x:%02x\n",

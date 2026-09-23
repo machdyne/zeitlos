@@ -276,6 +276,10 @@ Measured with `make -C sw/os kernel-size`, which is why it exists:
  200164    2668   50964  253796
 ```
 
+(Those are the figures from the round that found this. After the
+`sscanf`, printf and padding fixes below, and with the USB ethernet
+driver added, `kernel.bin` is 210,292 bytes with 51,852 free.)
+
 `.bss` is 51KB and `z_mailboxes` is 24,960 of it -- exactly the
 32 x 780 the arithmetic predicted. **`.bss` was never the problem.
 `.text` was**, and about 80KB of that 200KB is newlib's formatting
@@ -310,20 +314,47 @@ Replaced with `parse_uint()`, twenty lines. **Rebuild and re-run
 `kernel-size` to see what it actually returned** rather than trusting
 the estimate; the estimates in this document have a poor record.
 
-#### Not yet done: integer-only printf
+#### Fixed: integer-only printf
 
-`_vfprintf_r` and `_svfprintf_r` are the float-capable formatters,
-27KB between them. Nothing in `sw/os` formats a float -- there is no
-`%f`, `%g` or `%e` anywhere in it -- so the integer-only variants
-(`iprintf`, `sniprintf`, which resolve to the `_vfiprintf_r` already
-linked) would do the same job.
+`_vfprintf_r` and `_svfprintf_r` are the float-capable formatters, and
+a formatter that can print a double drags in `_dtoa_r`, the
+multi-precision helpers and libgcc's soft double arithmetic behind it.
+Nothing in `sw/os` formats a float: there is no `%f`, `%g`, `%e` or
+`%a` in any format string it links, and the one `%g` in
+`../common/zobj.c` (`z_obj_print`) is in a function section GC already
+drops from this kernel.
 
-That is a `#define` in one kernel header rather than 250 edited call
-sites. It is not done yet because it should be measured after the
-`sscanf` change rather than alongside it, and because it needs checking
-against both toolchains this tree supports -- `sw/common/arch.mk`
-selects picolibc when present and newlib otherwise, and the two do not
-name the integer variants identically.
+`sw/os/kruntime.c` now defines `printf`, `snprintf` and `vsnprintf`
+itself, forwarding to `viprintf` / `vsniprintf` -- the integer-only
+engine, which was already linked because `assert` uses it. The libc
+members holding the full versions are then never pulled in. **Measured:
+kernel.bin 256,224 -> 210,260 bytes, 45,964 saved.**
+
+Defining the three functions rather than `#define`-ing the names keeps
+gcc's `-Wformat` checking working at every call site. It is guarded
+`#ifndef __PICOLIBC__`, because picolibc (`sw/common/arch.mk`, when the
+newlib prefix is absent) does not name the integer variants the same
+way.
+
+**The trap this leaves:** a `%f` added to kernel code later compiles,
+`-Wformat` accepts it, and it prints nothing useful. Print fixed point
+instead, as `fs/sdbench.c` does ("cycles per byte, x100, so one decimal
+prints without floating point").
+
+#### Fixed: a page of linker padding
+
+`../common/riscv-os.ld`'s `DATA_SEGMENT_ALIGN` puts the data segment on
+a fresh page, or at the same offset in the next page, whichever the
+linker thinks is cheaper -- so depending on where `.rodata` happens to
+end, up to 4096 bytes of zeros sit between text and data **in the
+image**. That is right for an ELF a loader maps with an MMU, and pure
+waste for a flat image the BIOS copies to `0x40000000` with no MMU.
+
+It was found the hard way: a 5KB code change made `kernel.bin` grow by
+9KB, and the extra 4KB was this gap crossing a boundary. `sw/os/Makefile`
+now links with `-z max-page-size=16 -z common-page-size=16`
+(`SEG_PAGE_LDFLAGS`). Every section keeps its own alignment; only the
+page-sized rounding between segments goes.
 
 ### If more room is ever needed
 
