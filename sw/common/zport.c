@@ -14,6 +14,17 @@
 #include "zmsg.h"
 #include "zport.h"
 
+// Diagnostics. A program that must not pull in stdio at all builds with
+// -DZPORT_NO_PRINTF and these compile to nothing: sw/apps/console is
+// resident on every machine, and these few messages alone -- all for
+// conditions it could do nothing about -- linked the whole of printf
+// into it. Everything else gets them exactly as before.
+#ifdef ZPORT_NO_PRINTF
+#define ZPORT_LOG(...) do { } while (0)
+#else
+#define ZPORT_LOG(...) printf(__VA_ARGS__)
+#endif
+
 // Z_PORT_CONNECT_TIMEOUT_TICKS is declared in zport.h (public) -- see
 // that file's own comment for why: this is the right default for "is
 // the provider process even up", the wrong one for a provider whose
@@ -76,10 +87,10 @@ z_rv z_port_connect_arg_timeout(z_port_t *port, uint32_t provider_pid,
 			// reset_to_closed() ordering fix) look identical to a
 			// genuine timeout from the console alone.
 			if (msg.obj.type == Z_STR && msg.obj.val.str)
-				printf("zport: connect to pid %ld refused: %s\n",
+				ZPORT_LOG("zport: connect to pid %ld refused: %s\n",
 					(long)provider_pid, msg.obj.val.str);
 			else
-				printf("zport: connect to pid %ld refused (no reason given)\n",
+				ZPORT_LOG("zport: connect to pid %ld refused (no reason given)\n",
 					(long)provider_pid);
 			return Z_FAIL;
 		}
@@ -89,7 +100,7 @@ z_rv z_port_connect_arg_timeout(z_port_t *port, uint32_t provider_pid,
 
 	}
 
-	printf("zport: connect to pid %ld timed out after %ld ticks -- "
+	ZPORT_LOG("zport: connect to pid %ld timed out after %ld ticks -- "
 		"provider never replied\n",
 		(long)provider_pid, (long)timeout_ticks);
 	return Z_FAIL;	// timed out -- provider likely isn't running
@@ -121,7 +132,7 @@ z_rv z_port_send(z_port_t *port, const void *data, uint32_t len) {
 	// on real hardware, where even a 2-byte allocation failed.
 	if (obj.type != Z_BLOB) {
 		if (len > 0)
-			printf("zport: z_obj_blob() failed to allocate %lu bytes -- "
+			ZPORT_LOG("zport: z_obj_blob() failed to allocate %lu bytes -- "
 				"heap likely exhausted\n", (unsigned long)len);
 		return Z_FAIL;
 	}
@@ -199,7 +210,7 @@ void z_port_send_ack(const z_msg_t *data_msg) {
 	// backpressure (Z_PORT_MAX_PENDING_SENDS) is the correct backstop
 	// from here, same as it already is for a peer that's stopped
 	// acking entirely -- nothing more productive to do on this side.
-	printf("zport: failed to deliver ack to pid %ld after retrying for "
+	ZPORT_LOG("zport: failed to deliver ack to pid %ld after retrying for "
 		"%ld ticks -- its mailbox may be stuck\n",
 		(long)data_msg->from, (long)Z_PORT_ACK_RETRY_TICKS);
 

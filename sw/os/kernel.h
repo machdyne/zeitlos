@@ -70,6 +70,12 @@
 #define Z_IRQ_ILLEGAL			1
 #define Z_IRQ_MISALIGN			2
 
+// Syscall pointer checks (docs/mpu.md): true if the app inside the
+// current syscall may have the kernel write `len` bytes at `ptr`.
+// Always true when not inside a syscall from an app. Handlers call it on
+// every buffer they write through, and fail the call if it is false.
+bool k_user_ok(const void *ptr, uint32_t len);
+
 typedef struct {
 
 	uint32_t		base;

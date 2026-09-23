@@ -16,9 +16,9 @@
  * terminal quietly echoing its own keys, and a board WITH a card has
  * two equally good shells to choose between.
  *
- * So term now opens on a START PANEL: REPL, POSIX and OPEN (F11)
- * buttons, each shell's button live only once that shell has
- * registered. One click, or Tab/Enter, decides. Typing anything else
+ * So term now opens on a START PANEL: REPL, POSIX, CONSOLE and OPEN
+ * (F11) buttons, each connection's button live only once its provider
+ * has registered. One click, or Tab/Enter, decides. Typing anything else
  * starts the Open bar with it, so `telnet host` can simply be typed.
  * F12 disconnects and returns here from any connection, and so does a
  * connection the far end closes. There is no local echo any more:
@@ -142,6 +142,26 @@ static bool auto_pending;
 // vt_history_count(). Document line (count - view_off + row) is shown
 // at display row `row` -- see zvt100.h on document indices.
 static int view_off;
+
+// -- the viewport: a window shorter than 25 rows --
+//
+// The emulator's screen is always VT_ROWS x VT_COLS (a compile-time size
+// shared with repl and ssh, and what the far end is told), so a window
+// resized shorter does not make the TERMINAL smaller: it shows vis_rows
+// of its rows, `vskip` rows down, and keeps the cursor in view.
+// Everything below thinks in the screen's own rows ("logical" rows,
+// 0..VT_ROWS-1); only the pixel placement, which rows are drawn, and
+// the mouse subtract vskip. The document line at the top of the window
+// is count - view_off + vskip, and that one number is what the
+// scrollbar and every scroll key move. See docs/terminal.md,
+// "Resizing".
+#define VIS_ROWS_MIN 3
+static int vis_rows = VT_ROWS;
+static int vskip;
+// Live and following the cursor. Cleared by scrolling to where the
+// cursor is not in view, set again by view_live() or scrolling back to it.
+static bool vfollow = true;
+static void panel_reposition(void);
 
 // -- forward declarations --
 static void frame(void);
@@ -370,7 +390,7 @@ static void shadow_shift(int up) {
 static void draw_glyph(const z_clip_t *clip, int col, int row, char ch,
 	bool inverted) {
 
-	z_fb_draw_char2(clip->x0 + col * cell_w, clip->y0 + row * cell_h, ch,
+	z_fb_draw_char2(clip->x0 + col * cell_w, clip->y0 + (row - vskip) * cell_h, ch,
 		inverted ? 0 : 1, inverted ? 1 : 0, &TERM_FONT, clip);
 
 	INS(ins_glyphs++);
@@ -392,12 +412,12 @@ static bool cell_range(const z_clip_t *clip, const z_clip_t *r,
 	if (y0 < 0) y0 = 0;
 
 	*c0 = x0 / cell_w;
-	*r0 = y0 / cell_h;
+	*r0 = y0 / cell_h + vskip;
 	*c1 = x1 / cell_w;
-	*r1 = y1 / cell_h;
+	*r1 = y1 / cell_h + vskip;
 
 	if (*c1 >= VT_COLS) *c1 = VT_COLS - 1;
-	if (*r1 >= VT_ROWS) *r1 = VT_ROWS - 1;
+	if (*r1 >= vskip + vis_rows) *r1 = vskip + vis_rows - 1;
 
 	return *c0 <= *c1 && *r0 <= *r1;
 
@@ -428,6 +448,36 @@ static bool overlay_owns(int row, int col) {
 
 	return false;
 
+}
+
+// -- the viewport --
+
+static int drawn_vskip;
+
+static int vskip_max(void) { return VT_ROWS - vis_rows; }
+
+// Which logical row is at the window's top. Overlays win: the Open bar
+// lives on the screen's bottom row and the start panel from PANEL_R0
+// down, so either pulls the view to show it. Otherwise, while live and
+// following, the view moves just enough to keep the cursor in it: a
+// shell's prompt stays on the bottom row, and `clear` brings the view
+// back to the top. With a full-height window vskip_max() is 0 and all
+// of this is a no-op.
+static void vskip_update(void) {
+	int v = vskip;
+	if (panel_visible) {
+		v = PANEL_R0;
+	} else if (bar_active) {
+		v = vskip_max();
+	} else if (view_off == 0 && vfollow) {
+		int cy = vt.cursor_y;
+		if (cy >= VT_ROWS) cy = VT_ROWS - 1;
+		if (cy < v) v = cy;
+		if (cy >= v + vis_rows) v = cy - vis_rows + 1;
+	}
+	if (v > vskip_max()) v = vskip_max();
+	if (v < 0) v = 0;
+	vskip = v;
 }
 
 // ---------------------------------------------------------------
@@ -473,6 +523,16 @@ static void render(void) {
 	bool all = render_all || !drawn_valid;
 	render_all = false;
 
+	// The window now shows different logical rows: every pixel means
+	// something else, so no blit and nothing in the shadow can be kept.
+	vskip_update();
+	bool vmoved = (vskip != drawn_vskip);
+	if (vmoved) {
+		all = true;
+		shadow_invalidate();
+		if (panel_visible) panel_reposition();
+	}
+
 	if (sel_prepare()) all = true;
 
 	// The cursor is drawn only while connected: disconnected, there is
@@ -509,7 +569,7 @@ static void render(void) {
 	 * silently for a partly covered window. Shifting the shadow for a
 	 * blit that did not happen is precisely the stale-text failure the
 	 * shift exists to avoid. */
-	if (drawn_valid && !bar_active && !panel_visible) {
+	if (drawn_valid && !bar_active && !panel_visible && !vmoved) {
 
 		int shift = 0;
 
@@ -518,7 +578,7 @@ static void render(void) {
 		else if (n == 0 && p == 0 && count == drawn_count)
 			shift = drawn_view_off - view_off;
 
-		if (shift != 0 && shift > -VT_ROWS && shift < VT_ROWS &&
+		if (shift != 0 && shift > -vis_rows && shift < vis_rows &&
 			z_fb_hw_scroll_allowed(clip.x0, clip.y0, text_w, text_h)) {
 
 			z_fb_hw_scroll(clip.x0, clip.y0, text_w, text_h,
@@ -593,7 +653,7 @@ static void render(void) {
 	static uint8_t need_row[VT_ROWS];
 	int need_n = 0;
 
-	for (int row = 0; row < VT_ROWS; row++) {
+	for (int row = vskip; row < vskip + vis_rows; row++) {
 
 		// Live and not forced: only rows the emulator touched, plus
 		// the rows the cursor is leaving and arriving on.
@@ -687,6 +747,16 @@ static void render(void) {
 	drawn_count = count;
 	drawn_pushed = pushed;
 	drawn_cursor_row = cur_row;
+	drawn_vskip = vskip;
+
+	// Rows outside the window are not on the glass. Keeping their
+	// shadow unknown is what makes a later blit or viewport move that
+	// brings them into view repaint them, rather than trust whatever
+	// the shadow last said about pixels that were never drawn.
+	for (int r = 0; r < VT_ROWS; r++) {
+		if (r >= vskip && r < vskip + vis_rows) continue;
+		for (int c = 0; c < VT_COLS; c++) shadow[r][c] = GLASS_UNKNOWN;
+	}
 
 	ins_report();
 
@@ -694,15 +764,59 @@ static void render(void) {
 
 // -- view --
 
-static void view_set(int off) {
-	int max = vt_history_count(&vt);
-	if (off < 0) off = 0;
-	if (off > max) off = max;
-	view_off = off;
+// The document line at the window's top: 0 is the oldest history line,
+// vt_history_count() the screen's first row.
+static int view_first_now(void) {
+	return (int)vt_history_count(&vt) - view_off + vskip;
 }
 
-static void view_scroll_by(int lines) { view_set(view_off + lines); }
-static void view_live(void) { view_set(0); }
+// Shows document line `first` at the top. Within the screen that is a
+// viewport position (vskip); above it, a scrollback offset (view_off).
+static void view_first(int first) {
+	int count = vt_history_count(&vt);
+	int max = count + vskip_max();
+	if (first > max) first = max;
+	if (first < 0) first = 0;
+	if (first >= count) {
+		view_off = 0;
+		vskip = first - count;
+	} else {
+		view_off = count - first;
+		vskip = 0;
+	}
+	vfollow = view_off == 0 && vt.cursor_y >= vskip &&
+		vt.cursor_y < vskip + vis_rows;
+}
+
+static void view_scroll_by(int lines) { view_first(view_first_now() - lines); }
+static void view_live(void) { view_off = 0; vfollow = true; }
+
+// Z_WM_WINDOW_RESIZED (the window is resizable; see main()). Only the
+// height changes anything: it decides how many of the screen's rows are
+// shown. Taller than 25 rows just leaves blank below; narrower than 80
+// columns clips the right-hand side, scrollbar included -- the screen
+// is still 80 wide. The redraw wm sends next repaints at the new size.
+static void term_rows_from_win(void) {
+	z_clip_t c;
+	z_win_content_rect(&win, &c);
+	int rows = (int)(c.y1 - c.y0 + 1) / cell_h;
+	if (rows > VT_ROWS) rows = VT_ROWS;
+	if (rows < VIS_ROWS_MIN) rows = VIS_ROWS_MIN;
+	if (rows == vis_rows) return;
+	vis_rows = rows;
+	text_h = vis_rows * cell_h;
+	z_scrollbar_set_geom(&sbar, text_w, 0, text_h);
+	view_live();
+	vskip_update();
+	if (panel_visible) panel_reposition();
+	drawn_valid = false;
+	render_all = true;
+}
+
+static void term_resized(z_obj_t *obj) {
+	z_win_apply_resized(&win, obj);
+	term_rows_from_win();
+}
 
 // ---------------------------------------------------------------
 // the Open bar (F11)
@@ -887,8 +1001,8 @@ static bool bar_key(uint32_t keysym) {
 // ---------------------------------------------------------------
 //
 // Shown whenever this window is not connected to anything: at startup,
-// after F12, and when the far end closes the connection. Three
-// buttons -- REPL, POSIX, OPEN -- plus what each is and a status line
+// after F12, and when the far end closes the connection. Four
+// buttons -- REPL, POSIX, CONSOLE, OPEN -- plus what each is and a status line
 // saying why you are here.
 //
 // A block of cells rather than a separate window, for the same reason
@@ -904,7 +1018,10 @@ static bool bar_key(uint32_t keysym) {
 // says that far better than a click that fails. On a card-less board
 // they stay disabled, which is the truth -- see docs/flash_apps.md.
 
-enum { PB_REPL = 0, PB_POSIX, PB_OPEN, PB_COUNT };
+// CONSOLE is the kernel console (sw/apps/console, docs/console.md): the
+// boot log and the kernel shell's prompt, without a serial cable. It is
+// a core app, so unlike the two shells it is there with no card.
+enum { PB_REPL = 0, PB_POSIX, PB_CONSOLE, PB_OPEN, PB_COUNT };
 
 static z_widget_t panel_items[PB_COUNT];
 static z_widget_set_t panel_set;
@@ -917,7 +1034,7 @@ static char panel_status[VT_COLS + 1];
 // repl0 has registered, and focus left on OPEN because that was the
 // only live button would make Enter do the less likely thing.
 static bool panel_focus_user;
-static bool repl_up, posix_up;
+static bool repl_up, posix_up, console_up;
 static uint32_t panel_probe_at;
 
 // Pixel geometry, content-relative. The block is PANEL_C0..C1 x
@@ -926,21 +1043,24 @@ static uint32_t panel_probe_at;
 #define PANEL_TEXT_X   10
 #define PANEL_TITLE_Y   6
 #define PANEL_BTN_Y    22
-#define PANEL_BTN_W    72
+// Four 60px buttons with 8px gaps are 264px of the panel's 280 (56
+// cells of 5px); four description lines, the status and two hints end
+// at y=118, inside its 120 (15 rows of 8px).
+#define PANEL_BTN_W    60
 #define PANEL_BTN_H    16
-#define PANEL_BTN_GAP  16
+#define PANEL_BTN_GAP   8
 #define PANEL_DESC_Y   48
-#define PANEL_STATUS_Y 82
-#define PANEL_HINT_Y   96
+#define PANEL_STATUS_Y 90
+#define PANEL_HINT_Y  100
 
 static int panel_px(void) { return PANEL_C0 * cell_w; }
-static int panel_py(void) { return PANEL_R0 * cell_h; }
+static int panel_py(void) { return (PANEL_R0 - vskip) * cell_h; }
 static int panel_pw(void) { return (PANEL_C1 - PANEL_C0 + 1) * cell_w; }
 static int panel_ph(void) { return (PANEL_R1 - PANEL_R0 + 1) * cell_h; }
 
 static void panel_layout(void) {
 
-	static const char *labels[PB_COUNT] = { "REPL", "POSIX", "OPEN F11" };
+	static const char *labels[PB_COUNT] = { "REPL", "POSIX", "CONSOLE", "OPEN F11" };
 
 	int total = PB_COUNT * PANEL_BTN_W + (PB_COUNT - 1) * PANEL_BTN_GAP;
 	int x = panel_px() + (panel_pw() - total) / 2;
@@ -972,21 +1092,24 @@ static void panel_probe(bool force) {
 
 	bool r = z_pid_lookup("repl0", &pid);
 	bool p = z_pid_lookup("posix0", &pid);
+	bool c = z_pid_lookup("console0", &pid);
 
-	if (r == repl_up && p == posix_up && !force) return;
+	if (r == repl_up && p == posix_up && c == console_up && !force) return;
 
 	repl_up = r;
 	posix_up = p;
+	console_up = c;
 
 	panel_items[PB_REPL].enabled = r;
 	panel_items[PB_POSIX].enabled = p;
+	panel_items[PB_CONSOLE].enabled = c;
 
 	// A focused button that just became disabled would leave Enter
 	// doing nothing, and until the user has chosen, the first ready
 	// shell is the better default than OPEN.
 	int f = panel_set.focused;
 	if (!panel_focus_user) {
-		int want = r ? PB_REPL : (p ? PB_POSIX : PB_OPEN);
+		int want = r ? PB_REPL : (p ? PB_POSIX : (c ? PB_CONSOLE : PB_OPEN));
 		if (want != f) z_widget_focus_set(&panel_set, want);
 	} else if (f < 0 || !panel_items[f].enabled) {
 		z_widget_focus_next(&panel_set, false);
@@ -994,6 +1117,15 @@ static void panel_probe(bool force) {
 
 	panel_dirty = true;
 
+}
+
+// The viewport moved: the buttons move with the panel. Only their y --
+// focus, enablement and everything else about them stays.
+static void panel_reposition(void) {
+	for (int i = 0; i < PB_COUNT; i++)
+		panel_items[i].y = (int16_t)(panel_py() + PANEL_BTN_Y);
+	z_widget_invalidate(&panel_set);
+	panel_dirty = true;
 }
 
 static void panel_show(const char *status) {
@@ -1043,17 +1175,21 @@ static void panel_draw(void) {
 
 	z_widget_draw_all(&panel_set, true);
 
-	snprintf(line, sizeof(line), "%-6s %-31s %11s", "REPL",
+	snprintf(line, sizeof(line), "%-7s %-31s %11s", "REPL",
 		"Scheme and system commands", repl_up ? "ready" : "not running");
 	z_win_draw_text2(&win, x + PANEL_TEXT_X, y + PANEL_DESC_Y, line, 1, 0, &TERM_FONT);
 
-	snprintf(line, sizeof(line), "%-6s %-31s %11s", "POSIX",
+	snprintf(line, sizeof(line), "%-7s %-31s %11s", "POSIX",
 		"Unix-style shell, zcc and vi", posix_up ? "ready" : "not running");
 	z_win_draw_text2(&win, x + PANEL_TEXT_X, y + PANEL_DESC_Y + 10, line, 1, 0, &TERM_FONT);
 
-	snprintf(line, sizeof(line), "%-6s %s", "OPEN",
-		"port, serial, telnet or ssh");
+	snprintf(line, sizeof(line), "%-7s %-31s %11s", "CONSOLE",
+		"Boot log and kernel shell", console_up ? "ready" : "not running");
 	z_win_draw_text2(&win, x + PANEL_TEXT_X, y + PANEL_DESC_Y + 20, line, 1, 0, &TERM_FONT);
+
+	snprintf(line, sizeof(line), "%-7s %s", "OPEN",
+		"port, serial, telnet or ssh");
+	z_win_draw_text2(&win, x + PANEL_TEXT_X, y + PANEL_DESC_Y + 30, line, 1, 0, &TERM_FONT);
 
 	if (panel_status[0])
 		z_win_draw_text2(&win, x + PANEL_TEXT_X, y + PANEL_STATUS_Y,
@@ -1076,6 +1212,9 @@ static void panel_activate(int idx) {
 		break;
 	case PB_POSIX:
 		connect_port("posix0", z_obj_none(), Z_CONN_TIMEOUT_LOCAL_TICKS, "posix0");
+		break;
+	case PB_CONSOLE:
+		connect_port("console0", z_obj_none(), Z_CONN_TIMEOUT_LOCAL_TICKS, "console0");
 		break;
 	case PB_OPEN:
 		bar_open();
@@ -1334,6 +1473,8 @@ static bool connect_port(const char *name, z_obj_t arg,
 			z_win_redraw_done(&win);
 		} else if (msg.subject == Z_WM_WINDOW_MOVED) {
 			z_win_parse_rect(&win, &msg.obj);
+		} else if (msg.subject == Z_WM_WINDOW_RESIZED) {
+			term_resized(&msg.obj);
 		} else if (msg.subject == Z_WM_KEY) {
 			handle_key_event(msg.obj.val.uint32);
 			if (connect_cancel) break;
@@ -1598,7 +1739,7 @@ static int say_get(void *user, int n, const char **text, uint32_t *flags) {
 	(void)user; (void)n;
 	static char out[VT_COLS + 1];
 
-	while (say_row < VT_ROWS) {
+	while (say_row < vskip + vis_rows) {
 		uint32_t id = say_top + (uint32_t)say_row++;
 		int last = -1;
 		for (int col = 0; col < VT_COLS; col++) {
@@ -1611,7 +1752,7 @@ static int say_get(void *user, int n, const char **text, uint32_t *flags) {
 		if (last < 0) continue;			// a blank row: nothing to say
 		out[last + 1] = 0;
 		*text = out;
-		*flags = (last == VT_COLS - 1 && say_row < VT_ROWS) ? Z_TTS_F_CONTINUES : 0;
+		*flags = (last == VT_COLS - 1 && say_row < vskip + vis_rows) ? Z_TTS_F_CONTINUES : 0;
 		return last + 1;
 	}
 	return -1;
@@ -1627,7 +1768,7 @@ static void say_toggle(void) {
 		return;
 	}
 	say_top = vt_history_pushed(&vt) - (uint32_t)view_off;
-	say_row = 0;
+	say_row = vskip;
 	printf("term: Super+A: reading the screen%s\n", view_off ? " (scrollback)" : "");
 	if (!z_sayall_start(&reader, 0)) {
 		printf("term: Super+A: nothing to read, or speech is off\n");
@@ -1674,10 +1815,10 @@ static void sel_paste(void) {
 // Content-relative pixel -> display cell, clamped to the grid.
 static void cell_at(int cx, int cy, int *row, int *col) {
 
-	int r = (cy < 0) ? 0 : cy / cell_h;
+	int r = ((cy < 0) ? 0 : cy / cell_h) + vskip;
 	int c = (cx < 0) ? 0 : cx / cell_w;
 
-	if (r >= VT_ROWS) r = VT_ROWS - 1;
+	if (r >= vskip + vis_rows) r = vskip + vis_rows - 1;
 	if (c >= VT_COLS) c = VT_COLS - 1;
 
 	*row = r;
@@ -1742,7 +1883,7 @@ static void handle_mouse_event(uint32_t packed) {
 	// thumb drag that wanders sideways keeps working.
 	if (sbar.dragging || (inside && z_scrollbar_has_pointer(&sbar, cx, cy))) {
 		if (z_scrollbar_mouse(&sbar, cx, cy, buttons))
-			view_set(vt_history_count(&vt) - sbar.value);
+			view_first(sbar.value);
 		return;
 	}
 
@@ -1849,11 +1990,11 @@ static bool scroll_key(uint32_t keysym, uint8_t mods) {
 	if (!(mods & Z_KBD_MOD_SHIFT)) return false;
 
 	switch (keysym) {
-	case Z_KEY_PAGEUP:   view_scroll_by(VT_ROWS - 1);  return true;
-	case Z_KEY_PAGEDOWN: view_scroll_by(-(VT_ROWS - 1)); return true;
+	case Z_KEY_PAGEUP:   view_scroll_by(vis_rows - 1);  return true;
+	case Z_KEY_PAGEDOWN: view_scroll_by(-(vis_rows - 1)); return true;
 	case Z_KEY_UP:       view_scroll_by(1);  return true;
 	case Z_KEY_DOWN:     view_scroll_by(-1); return true;
-	case Z_KEY_HOME:     view_set(vt_history_count(&vt)); return true;
+	case Z_KEY_HOME:     view_first(0); return true;
 	case Z_KEY_END:      view_live(); return true;
 	default:             return false;
 	}
@@ -1931,6 +2072,7 @@ static void handle_key_event(uint32_t packed) {
 // ---------------------------------------------------------------
 
 static uint16_t sb_count = 0xFFFF;
+static int sb_vis;
 
 // Brings everything on the glass up to date: the text, the two
 // overlays on top of it, and the scrollbar. The one entry point for
@@ -1976,11 +2118,12 @@ static void frame(void) {
 	panel_draw();
 
 	uint16_t count = vt_history_count(&vt);
-	if (count != sb_count) {
-		z_scrollbar_set_range(&sbar, (int32_t)count + VT_ROWS, VT_ROWS);
+	if (count != sb_count || vis_rows != sb_vis) {
+		z_scrollbar_set_range(&sbar, (int32_t)count + VT_ROWS, vis_rows);
 		sb_count = count;
+		sb_vis = vis_rows;
 	}
-	z_scrollbar_set_value(&sbar, (int32_t)count - view_off);
+	z_scrollbar_set_value(&sbar, (int32_t)count - view_off + vskip);
 	z_scrollbar_draw(&sbar, false);
 
 }
@@ -2033,7 +2176,7 @@ int main(void) {
 	// destroying it AND killing this process is exactly right.
 	if (z_win_create_flags(&win, instance_name, term_win_w, term_win_h, -1, -1,
 		Z_WIN_FLAG_CLOSE_ICON | Z_WIN_FLAG_CLOSE_KILLS_OWNER |
-		Z_WIN_FLAG_READABLE) != Z_OK) {
+		Z_WIN_FLAG_READABLE | Z_WIN_FLAG_RESIZABLE) != Z_OK) {
 		printf("term: failed to create window\n");
 		return 1;
 	}
@@ -2060,6 +2203,8 @@ int main(void) {
 				z_win_apply_clip(&win, &msg.obj);
 			} else if (msg.subject == Z_WM_WINDOW_MOVED) {
 				z_win_parse_rect(&win, &msg.obj);
+			} else if (msg.subject == Z_WM_WINDOW_RESIZED) {
+				term_resized(&msg.obj);
 			} else if (msg.subject == Z_WM_MOUSE) {
 				if (msg.obj.type == Z_UINT32) {
 					// A click stops a reading; the wheel scrolls under it.

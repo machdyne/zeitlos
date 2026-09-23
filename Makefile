@@ -532,7 +532,8 @@ $(OUTDIR)/apps.zar: apps
 	python3 tools/mkzar.py $(OUTDIR)/apps.zar \
 		wm=sw/apps/wm/wm.bin \
 		net=sw/apps/net/net.bin \
-		term=sw/apps/term/term.bin
+		term=sw/apps/term/term.bin \
+		console=sw/apps/console/console.bin
 
 ifeq ($(FAMILY), ice40)
 flash_apps: $(OUTDIR)/apps.zar

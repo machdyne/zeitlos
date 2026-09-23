@@ -26,11 +26,14 @@ z_obj_t *k_usbnet(z_obj_t *args) {
 	switch (a->op) {
 	case Z_USBNET_INFO:
 		if (!a->buf || a->len < sizeof(z_usbnet_info_t)) break;
+		// k_user_ok(): see docs/mpu.md
+		if (!k_user_ok(a->buf, sizeof(z_usbnet_info_t))) break;
 		z_usbh_ecm_info((z_usbnet_info_t *)a->buf);
 		a->n = 0;
 		break;
 	case Z_USBNET_RECV:
 		if (!a->buf) break;
+		if (!k_user_ok(a->buf, a->len)) break;
 		a->n = z_usbh_ecm_recv(a->buf, (int)a->len);
 		break;
 	case Z_USBNET_SEND:

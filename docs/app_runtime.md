@@ -375,6 +375,8 @@ z_kernel_ptr(Z_SYS_UPTIME, (uint32_t *)&obj, 0);
 | `Z_SYS_PID_LOOKUP` | `k_pid_lookup` | `z_pid_lookup()` |
 | `Z_SYS_GETPID` | `k_getpid` | `z_getpid()` |
 | `Z_SYS_PROC_RUN` | `k_proc_run` | `z_proc_run()` |
+| `Z_SYS_KLOG_READ` | `k_klog_read` | `z_klog_read()` (`zconsole.h`, `docs/console.md`) |
+| `Z_SYS_CONSOLE_INPUT` | `k_console_input` | `z_console_input()` (`zconsole.h`) |
 
 Adding a new syscall means adding a `Z_MKSYSCALL(...)` line to
 `syscalls.def`, a handler in the kernel, and (usually) a thin

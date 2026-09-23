@@ -15,10 +15,11 @@ A new `term` window is **not connected to anything**. It shows a panel:
 ```
 +------------------------------------------------------+
 |                term0 -- not connected                 |
-|   [  REPL  ]      [  POSIX  ]      [ OPEN F11 ]       |
-|  REPL   Scheme and system commands            ready   |
-|  POSIX  Unix-style shell, zcc and vi    not running   |
-|  OPEN   port, serial, telnet or ssh                   |
+|  [ REPL ]  [ POSIX ]  [ CONSOLE ]  [ OPEN F11 ]       |
+|  REPL    Scheme and system commands            ready  |
+|  POSIX   Unix-style shell, zcc and vi    not running  |
+|  CONSOLE Boot log and kernel shell             ready  |
+|  OPEN    port, serial, telnet or ssh                  |
 |  choose a shell, or open a connection                 |
 |  Tab chooses, Enter connects, or type a target        |
 |  F12 disconnects  Esc hides  Shift+PgUp scrolls       |
@@ -27,23 +28,29 @@ A new `term` window is **not connected to anything**. It shows a panel:
 
 | on the panel | does |
 | --- | --- |
-| click a button, or Tab / arrows then Enter | connect to `repl0` / `posix0`, or open the bar |
+| click a button, or Tab / arrows then Enter | connect to `repl0` / `posix0` / `console0`, or open the bar |
 | type a printable character | open the Open bar with it -- `port posix0`, `telnet host` just work |
 | Esc | hide the panel to read the old session underneath; any key brings it back |
 | Ctrl+Shift+V | paste the clipboard's first line into the Open bar |
 
-**The shell buttons are live only while their shell is registered**
-(`repl0`, `posix0` in the pid registry), rechecked twice a second while
+**CONSOLE is the kernel console**: everything the kernel has printed
+since boot (its last 4 KB), then live output, and a prompt shared with
+the serial console. It works on a machine with no card and no serial
+cable. See `docs/console.md`.
+
+**The connection buttons are live only while their provider is registered**
+(`repl0`, `posix0`, `console0` in the pid registry), rechecked twice a second while
 the panel is up. A disabled button is an empty frame -- the toolkit's
 disabled look (`sw/common/zwidget.c`). At boot the panel is often on
 screen before init has finished loading the shells off the sdcard, and
 the buttons coming alive one by one says that better than a click that
-fails. On a board with no sdcard both stay disabled, which is the truth:
-the shells live on the card (`docs/flash_apps.md`). OPEN is always live.
+fails. On a board with no sdcard both shells stay disabled, which is the
+truth: they live on the card (`docs/flash_apps.md`). CONSOLE is a core
+app in flash, so it is there either way. OPEN is always live.
 
-Until you move focus yourself, it follows the first ready shell -- REPL,
-else POSIX, else OPEN -- so Enter does the likely thing the moment the
-window appears.
+Until you move focus yourself, it follows the first ready one -- REPL,
+else POSIX, else CONSOLE, else OPEN -- so Enter does the likely thing
+the moment the window appears.
 
 ### Connecting by itself: `apps.term.auto_connect`
 
@@ -203,6 +210,37 @@ it.
   push shifts every document index by one, but a line's absolute id
   never changes: screen row r is id `pushed + r`, and it is still that
   id after it scrolls into history.
+
+## Resizing
+
+Drag the lower-right corner to make the window **shorter**, down to 3
+rows. It keeps its full height by default.
+
+The terminal itself stays 80x25: that size is compiled into the shared
+emulator (`sw/common/zvt100.h`, also used by `repl` and `ssh`), and it
+is what programs at the far end are told. A shorter window is a
+**viewport** onto those 25 rows:
+
+- **It follows the cursor.** Output keeps the prompt on the bottom row;
+  `clear` brings the view back to the top; a full-screen program's
+  cursor pulls the view to wherever it is.
+- **Scrolling is one continuous document.** Shift+PgUp, the wheel and
+  the scrollbar first move up through the hidden rows of the screen,
+  then into scrollback. A page is the window's height, one line short.
+  Scrolling to where the cursor is not in view stops the following;
+  Shift+End (or typing) brings it back.
+- **The panel and the Open bar pull the view to themselves**: the panel
+  to its top (its title and buttons), the bar to the bottom row.
+- **Taller than 25 rows** just leaves blank space below. **Narrower than
+  80 columns** clips the right-hand side, scrollbar included.
+
+In `term.c`, everything still works in the screen's own rows; only the
+pixel placement, which rows are drawn, the mouse and the scrollbar
+account for the hidden rows at the top (`vskip`) and how many are shown
+(`vis_rows`). Rows outside the window keep their shadow "unknown", so a
+blit or a viewport move that brings one into view repaints it. At full
+height all of this reduces to what it was before: the render test's
+results are identical, line for line.
 
 ## Selection and clipboard
 
@@ -436,7 +474,8 @@ sudo sysctl -w vm.mmap_min_addr=0
 cc -std=gnu99 -Wall -no-pie -I sw/common -o /tmp/term_render \
    sw/apps/term/tests/render.c sw/common/zwin.c sw/common/zwidget.c \
    sw/common/zfont_data.c sw/common/zobj.c sw/common/zeitlos.c \
-   sw/common/zvt100.c sw/common/zport.c sw/common/zcfg.c
+   sw/common/zvt100.c sw/common/zport.c sw/common/zcfg.c \
+   sw/common/zsayall.c sw/common/zspeak.c
 /tmp/term_render /tmp/term        # exit 0 pass, 1 fail, 77 skipped
 ```
 
@@ -463,6 +502,21 @@ The scenarios:
 - auto-connect: to a registered provider, waiting for one to register,
   timing out, Esc cancelling, a bad value, and F12 not re-triggering it
   (the scripted kernel answers `CFG_GET`)
+- a short window: the panel in it, connecting from it, output one and
+  five lines per frame, `clear`, Shift+PgUp into history, output while
+  scrolled back, Shift+End, the Open bar, and back to full height
+
+**Known failures.** As of the console and resizing work, 149 of the
+276 checks fail, all of them in scenarios 2-10 and all present before
+that work (same list, line for line, with and without it). The first is
+right after clicking REPL: the shadow is correct but about 60 pixels at
+the panel's left edge (row 17, column 12) stay set, and that follows
+every later frame. Either the panel's box is not fully erased when it
+hides, or the harness disagrees with the real drawing path; it has not
+been investigated. Separately, scenario 8's redraw moves the window to
+0,0 and back without moving its visible region, which clips everything
+after it at y=214; the short-window scenario sets the region properly
+(`redraw_at()` in the test) and passes in full.
 
 It also writes PBM renders (`/tmp/term-*.pbm`) to look at.
 

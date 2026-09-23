@@ -97,6 +97,10 @@ providers:
   written before either piece existed; what actually got built is a
   real TCP client, since telnet genuinely needs TCP, not a UDP-based
   workaround.)
+- The kernel console -- **done**, `sw/apps/console` as `console0`: the
+  kernel's console log replayed on connect, then live, and keystrokes
+  to the kernel shell. A core app, so it exists with no card. See
+  `docs/console.md`.
 - A demo virtual port (loopback/echo, canned banner) -- no real
   hardware needed, meant purely as a test harness for `term` and the
   port client API itself, built *before* any real provider.

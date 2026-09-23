@@ -1784,6 +1784,11 @@ void init(void) {
 	//
 	// repl before posix, and both after net is LOADED but before net
 	// STARTS -- see the note on net at the end.
+	// The kernel console as a port (sw/apps/console, docs/console.md):
+	// what term's CONSOLE button connects to. A core app, in flash, so
+	// a machine with no card and no serial cable can still see this
+	// boot log.
+	init_start_optional("console");
 	init_start_optional("repl");
 	init_start_optional("posix");
 

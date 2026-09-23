@@ -161,7 +161,7 @@ The following boards are currently partially supported or untested:
 
 ## Usage
 
-**An sdcard is optional.** The core apps (`wm`, `net`, `term`) are
+**An sdcard is optional.** The core apps (`wm`, `net`, `term`, `console`) are
 programmed into flash alongside the kernel, so a freshly flashed board
 boots straight to the graphical desktop with nothing else attached. The
 shells, `repl` and `posix`, come from the card -- without one, `term`

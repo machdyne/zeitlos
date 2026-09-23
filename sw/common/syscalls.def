@@ -227,3 +227,10 @@ Z_MKSYSCALL(JUMP, k_jump)
 // sw/common/zusbnet.h, sw/os/usbnetapi.c, docs/usb_ethernet.md.
 // Appended last so no earlier enum value shifts.
 Z_MKSYSCALL(USBNET, k_usbnet)
+
+// The kernel console's output log and its input, for sw/apps/console
+// (the "console0" port term connects to): sw/common/zconsole.h,
+// sw/os/uart.c, docs/console.md. Appended last so no earlier enum
+// value shifts.
+Z_MKSYSCALL(KLOG_READ, k_klog_read)
+Z_MKSYSCALL(CONSOLE_INPUT, k_console_input)

@@ -28,7 +28,7 @@
 #
 # WHAT GOES ON THE CARD, and what does not:
 #
-#   - The core apps (wm, net, term) are DELIBERATELY ABSENT.
+#   - The core apps (wm, net, term, console) are DELIBERATELY ABSENT.
 #     They live in flash, in the ZAR, and sw/os/zar.h's rule is that a
 #     copy on the card wins over the flash copy -- so shipping them
 #     here would shadow the flash build.
@@ -153,7 +153,7 @@ def sectors_per_cluster(image_bytes):
 # the move still boots.
 # Everything in sw/apps that is not a CORE app.
 #
-# Core apps (wm, net, term -- release/hw/boards/*.spec) live in flash
+# Core apps (wm, net, term, console -- release/hw/boards/*.spec) live in flash
 # and must NOT be duplicated here: a card copy would shadow the
 # per-target `net` build with the wrong PHY driver, which is the bug
 # check_against_script() was written after.

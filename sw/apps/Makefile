@@ -32,6 +32,7 @@ APPS = casino poker roulette blackjack slots craps \
 	logic \
 	mmod \
 	portdemo \
+	console \
 	serial \
 	repl \
 	posix \

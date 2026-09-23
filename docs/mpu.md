@@ -155,10 +155,10 @@ window.
 - **Reads.** Any app can read anything. Borrowed messaging needs it.
 - **Borrowed-message lifetime bugs.** A receiver reading a payload
   after the sender freed it still reads garbage.
-- **The kernel writing on an app's behalf.** An app passing a bad buffer
-  pointer to a syscall, e.g. an uninitialized pointer to a file read:
-  the kernel is privileged and writes there. Checking app pointers at
-  the syscall boundary is the software fix (not done yet).
+- **The kernel writing on an app's behalf** -- by the MPU, that is. The
+  kernel is privileged, so a bad buffer an app hands to a syscall is not
+  the MPU's to stop. [Syscall pointer checks](#syscall-pointer-checks)
+  cover it in software.
 - **Corruption inside an app's own memory**: one heap object into
   another, the stack into the heap.
 - **Kernel bugs**, and misprogrammed bus masters.
@@ -203,7 +203,12 @@ before anything else in the interrupt path:
 - **Kernel code crashed**, including inside a syscall: a panic report
   naming the syscall's caller if there was one, then the machine halts
   with interrupts masked. Nothing can be trusted once the kernel itself
-  has faulted.
+  has faulted. The report is flushed to the serial console by polling
+  (the UART's interrupt will never come), and then **drawn on the
+  screen**: the last 60 lines of the console log
+  ([console.md](console.md)), the report at the bottom, in plain CPU
+  stores to VRAM with the 5x8 font -- no blitter, no `wm`, game mode
+  switched off. That costs the kernel about 1.3 KB.
 
   ```
   *** KERNEL PANIC: misaligned memory access
@@ -226,9 +231,9 @@ Causes decoded: MPU faults (fetch/load/store, and why), `ebreak`,
 `ecall`, `mul`/`div` on a bitstream without the M extension, other
 illegal instructions, misaligned accesses.
 
-**Not yet:** a dialog in the window manager. The report goes to the
-kernel console. Showing it on screen needs a message from the kernel to
-`wm`, which is a small follow-up.
+Reports go to the kernel console, deliberately rather than to a dialog.
+Without a serial cable they are still visible: CONSOLE in `term` shows
+the console, history included ([console.md](console.md)).
 
 A process that never registered a name (a program built with zcc, for
 instance) is shown as `pid 6` alone.
@@ -337,6 +342,56 @@ Expect `crashed: load an address space it may not use`.
 - None of these should cause a `*** KERNEL PANIC`. All of them fault in
   app code. A panic from one of them is a bug worth reporting.
 
+## Syscall pointer checks
+
+The MPU cannot stop the kernel writing on an app's behalf: an app that
+hands a syscall an uninitialized buffer pointer gets the kernel to write
+there, into another app or the kernel itself. So the kernel checks.
+
+- **At dispatch, every syscall:** the argument pointer (many handlers
+  write their results back into it) must be in the calling app's own
+  memory, or NULL.
+- **In every handler that writes through a pointer in its arguments:**
+  file reads, reading a chunk of an open file, directory listings (the
+  entries and the optional type array), config lookups (key and value),
+  the process list, USB serial reads, USB networking's info and receive,
+  and the console log read. Each checks pointer and length.
+
+"In the app's own memory" means inside its block, through its window
+(`0x8xxx_xxxx`) or at its physical address: `k_user_ok()` in
+`sw/os/kernel.c`. A refused call fails like any other error (the app
+sees `Z_FAIL`, and the handler's usual "nothing done" outputs), and the
+first 16 are logged:
+
+```
+syscall: view pid 7 passed a bad pointer 00001000 (4096 bytes); call refused
+```
+
+Everything is in the kernel. Apps and the runtime in `sw/common` are
+unchanged: every current caller already passes its own locals or
+buffers.
+
+The caller is the running process (`z_pid`), not something recorded at
+syscall entry, because syscalls other than the FatFs ones can be
+preempted, and `z_pid` is what a switch saves and restores. The
+kernel's own process (pid 0) runs from the kernel image, below `_end`;
+apps are all above it, so the kernel calling a handler directly is never
+refused.
+
+Reads are not checked: any app may read anything (borrowed messaging
+depends on it), and the kernel reading on its behalf is no different.
+
+## Printing from interrupt context
+
+While fixing the panic path a latent hang turned up. `k_uart_putc()`
+used to block the current process when the UART's transmit buffer was
+full, and wait for the UART interrupt to wake it. Inside the interrupt
+handler that interrupt cannot be taken, so any `printf` from interrupt
+context that found the buffer full (a crash report, the scheduler's own
+messages when it cleans up a process) could hang the machine. The
+interrupt path now sets `k_uart_polled`, and a full buffer drains by
+polling instead, as it already did before the scheduler starts.
+
 ## Registers
 
 At `0x9000_0100`, answered inside the MPU. Writes are privileged-only
@@ -439,10 +494,6 @@ hardware, with the [test programs](#test-programs).
 
 ## Later
 
-- **Syscall pointer checks**: validate an app-supplied pointer and
-  length against the caller's block in syscalls that write through
-  them.
-- **A crash dialog in the window manager.**
 - **Protecting an app's own code**: needs the code size, which the
   executable header (`sw/common/zexec.h`) does not carry today. A
   version 2 header, written by `tools/mkexec.py` and zcc.

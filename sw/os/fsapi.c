@@ -74,6 +74,11 @@ z_obj_t *k_fs_read(z_obj_t *args) {
 		if (a) a->len = 0;
 		return (&z_fail);
 	}
+	// k_user_ok(): the kernel must not write where the app has no memory (docs/mpu.md)
+	if (!k_user_ok(a->buf, a->maxlen)) {
+		a->len = 0;
+		return (&z_fail);
+	}
 
 	a->len = 0;
 
@@ -347,6 +352,9 @@ z_obj_t *k_fs_read_chunk(z_obj_t *args) {
 
 	if (!a || a->handle < 0 || a->handle >= Z_FS_MAX_OPEN || !a->buf || a->maxlen == 0)
 		return (&z_fail);
+	// k_user_ok(): the kernel must not write where the app has no memory (docs/mpu.md)
+	if (!k_user_ok(a->buf, a->maxlen))
+		return (&z_fail);
 
 	if (!z_fs_handles[a->handle].used || z_fs_handles[a->handle].owner_pid != z_pid)
 		return (&z_fail);
@@ -414,6 +422,12 @@ z_obj_t *k_fs_list(z_obj_t *args) {
 
 	if (!a || !a->out || a->out_cap == 0) {
 		if (a) { a->count = 0; a->truncated = 0; }
+		return (&z_fail);
+	}
+	// k_user_ok(): the kernel must not write where the app has no memory (docs/mpu.md)
+	if (!k_user_ok(a->out, a->out_cap) ||
+		(a->types && !k_user_ok(a->types, a->max_entries))) {
+		a->count = 0; a->truncated = 0;
 		return (&z_fail);
 	}
 

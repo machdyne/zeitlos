@@ -28,6 +28,8 @@ z_obj_t *k_usbcdc_present(z_obj_t *args) {
 z_obj_t *k_usbcdc_read(z_obj_t *args) {
 	z_usbcdc_args_t *a = (z_usbcdc_args_t *)args;
 	if (!a || !a->buf) return &z_fail;
+	// k_user_ok(): the kernel must not write where the app has no memory (docs/mpu.md)
+	if (!k_user_ok(a->buf, a->len)) return &z_fail;
 	a->n = z_usbh_cdc_read(a->buf, (int)a->len);
 	return a->n >= 0 ? &z_ok : &z_fail;
 }

@@ -7,7 +7,8 @@
  *   cc -std=gnu99 -Wall -no-pie -I sw/common -o /tmp/term_render \
  *      sw/apps/term/tests/render.c sw/common/zwin.c sw/common/zwidget.c \
  *      sw/common/zfont_data.c sw/common/zobj.c sw/common/zeitlos.c \
- *      sw/common/zvt100.c sw/common/zport.c sw/common/zcfg.c
+ *      sw/common/zvt100.c sw/common/zport.c sw/common/zcfg.c \
+ *      sw/common/zsayall.c sw/common/zspeak.c
  *   /tmp/term_render /tmp/term          # writes /tmp/term-*.pbm
  *
  * Exit 0 all checks passed, 1 a check failed, 77 skipped (the host
@@ -268,7 +269,11 @@ static void check_glass(const char *where) {
 	int bad_shadow = 0, bad_pixels = 0;
 	int first_r = -1, first_c = -1;
 
-	for (int row = 0; row < VT_ROWS; row++) {
+	// Only the rows in the window, at their on-screen positions (a
+	// window shorter than 25 rows shows vis_rows of them, vskip down;
+	// at full height this is every row, as it always was).
+	for (int d = 0; d < vis_rows; d++) {
+		int row = vskip + d;
 		for (int col = 0; col < VT_COLS; col++) {
 
 			if (covered(row, col)) continue;
@@ -300,7 +305,7 @@ static void check_glass(const char *where) {
 					int bit = g ? ((g[j] & (0x80 >> i)) != 0) : 0;
 					int px = inv ? !bit : bit;
 					if (z_render_get(clip.x0 + col * cell_w + i,
-						clip.y0 + row * cell_h + j) != px) {
+						clip.y0 + d * cell_h + j) != px) {
 						cell_bad = true;
 						break;
 					}
@@ -370,6 +375,23 @@ static const char *display_row(int row) {
 	}
 	row_text_buf[last + 1] = 0;
 	return row_text_buf;
+}
+
+// A full wm redraw at the window's real position, with its visible
+// region set to the whole window. handle_redraw() is handed x/y 0 (the
+// packed word carries no position here), so the window is put back
+// afterwards -- and its region with it: a region left where it was
+// before a move clips the drawing to the wrong place, which is what the
+// "redraw with the bar up" scenario above does to the rest of the run.
+static void redraw_at(int x, int y) {
+	z_render_clear();
+	handle_redraw(Z_WM_PACK_MOUSE(0, 0, 0, 0));
+	win.x = x; win.y = y;
+	win.clip[0].x0 = x;
+	win.clip[0].y0 = y;
+	win.clip[0].x1 = x + win.w - 1;
+	win.clip[0].y1 = y + win.h - 1;
+	win.clip_n = 1;
 }
 
 static void write_pbm(const char *prefix, const char *name) {
@@ -688,6 +710,73 @@ int main(int argc, char **argv) {
 	expect(!auto_pending, "none means the panel");
 
 	frame_check("final");
+
+	// -- 11. a short window: the resize grip --
+	//
+	// The screen stays 25 rows; the window shows vis_rows of them and
+	// keeps the cursor in view. check_glass() checks exactly the rows in
+	// the window at their on-screen positions, so every frame here is
+	// checked like the full-size ones above.
+	printf("11. a short window\n");
+	{
+		int full_h = win.h;
+		int short_h = 8 * cell_h + Z_WM_TITLEBAR_H + 4;
+
+		win.h = short_h;
+		term_rows_from_win();
+		redraw_at(40, 60);
+		frame_check("short: panel");
+		expect(vis_rows == 8, "8 rows shown");
+		expect(vskip == PANEL_R0, "the panel pulls the view to its top");
+
+		z_widget_t *w = &panel_items[PB_REPL];
+		mouse(w->x + w->w / 2, w->y + w->h / 2, Z_MOUSE_BTN_LEFT);
+		mouse(w->x + w->w / 2, w->y + w->h / 2, 0);
+		frame_check("short: connected");
+		expect(port.connected, "REPL clicked in a short window connects");
+
+		output("\x1b[2J\x1b[H> ");
+		frame_check("short: cleared");
+		expect(vskip == 0, "cleared screen: view at the top");
+
+		output_lines(200, 240, 1, "short: one line per frame");
+		expect(vt.cursor_y >= vskip && vt.cursor_y < vskip + vis_rows,
+			"short: the cursor stays in view");
+		expect(vskip == VT_ROWS - vis_rows, "short: prompt on the bottom row");
+		write_pbm(prefix, "11-short");
+
+		output_lines(241, 280, 5, "short: five lines per frame");
+
+		int first = view_first_now();
+		key(Z_KEY_PAGEUP, Z_KBD_MOD_LSHIFT);
+		frame_check("short: Shift+PgUp");
+		expect(view_first_now() == first - (vis_rows - 1),
+			"short: a page is the window, one line short");
+		for (int i = 0; i < 4; i++) key(Z_KEY_PAGEUP, Z_KBD_MOD_LSHIFT);
+		frame_check("short: into history");
+		expect(view_off > 0 && vskip == 0, "short: scrolled into history");
+
+		output_lines(281, 290, 3, "short: output while scrolled back");
+		expect(view_off > 0, "short: output does not move the view");
+
+		key(Z_KEY_END, Z_KBD_MOD_LSHIFT);
+		frame_check("short: Shift+End");
+		expect(view_off == 0 && vt.cursor_y >= vskip &&
+			vt.cursor_y < vskip + vis_rows, "short: back to live, cursor in view");
+
+		key(Z_KEY_F11, 0);
+		frame_check("short: Open bar");
+		expect(vskip == VT_ROWS - vis_rows, "short: the bar pulls the view down");
+		key(0x1b, 0);
+		frame_check("short: bar dismissed");
+
+		win.h = full_h;
+		term_rows_from_win();
+		redraw_at(40, 60);
+		frame_check("full height again");
+		expect(vis_rows == VT_ROWS && vskip == 0, "full height: all 25 rows");
+		write_pbm(prefix, "11-full-again");
+	}
 
 	printf("\nterm render: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;

@@ -542,6 +542,9 @@ Beyond the subsystem documents listed at the top:
 
 - `docs/csrs.md` -- how the kernel learns the machine's real memory size
 - `docs/icache.md` -- why instruction fetch dominates CPI here
+- `docs/console.md` -- the console log ring every console byte is
+  recorded in (`k_uart_putc()`, `kprint()`), and the two syscalls that
+  let `sw/apps/console` show it in a term window
 - `docs/mpu.md` -- crash reports (`k_fault()`), the kernel panic, and
   the memory protection unit the kernel programs at boot and on every
   context switch

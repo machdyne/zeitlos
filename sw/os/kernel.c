@@ -1135,6 +1135,8 @@ static void k_fault_cause(uint32_t irqs, uint32_t pc) {
 }
 
 static void k_panic(uint32_t *regs, uint32_t irqs, uint32_t pc) {
+	maskirq(0xffffffffu);
+	k_uart_polled = true;
 	printf("\n*** KERNEL PANIC: ");
 	k_fault_cause(irqs, pc);
 	printf("\n    pc %08lx", (unsigned long)k_fault_pc(pc));
@@ -1146,7 +1148,9 @@ static void k_panic(uint32_t *regs, uint32_t irqs, uint32_t pc) {
 	printf("\n");
 	k_fault_regs(regs);
 	printf("    system halted\n");
-	maskirq(0xffffffffu);
+	k_uart_flush();
+	// and on the screen, for a machine with no serial cable
+	k_klog_panic_screen();
 	for (;;) ;
 }
 
@@ -1232,6 +1236,42 @@ static void k_mpu_init(void) {
 	printf(" - mpu: enforcing (`mpu report` to only log)\n");
 }
 
+// -- syscall pointer checks --
+//
+// True if [ptr, ptr+len) is memory the running app may have the kernel
+// write to: its own block, through its window (0x8xxx_xxxx) or at its
+// physical address. A refusal is logged (the first 16) and the handler
+// fails the call, which the app sees as an ordinary error rather than
+// the kernel scribbling over some other process's memory.
+//
+// "The running app" is z_pid, not something recorded at syscall entry:
+// syscalls other than FatFs ones can be preempted, and z_pid is what a
+// switch saves and restores, so it is always the process whose syscall
+// this is. The kernel's own process (pid 0) has its block at the kernel
+// image, below _end, and apps are all above it -- so kernel code calling
+// a handler directly is never refused.
+static uint32_t k_user_bad_logged;
+
+bool k_user_ok(const void *ptr, uint32_t len) {
+	if (z_pid >= Z_PROCS_MAX ||
+		z_procs[z_pid].base < (uint32_t)(uintptr_t)&_end) return true;
+	uint32_t pid = z_pid;
+	uint32_t a = (uint32_t)(uintptr_t)ptr;
+	uint32_t size = z_procs[pid].size;
+	uint32_t lo = ((a & 0xf0000000u) == 0x80000000u) ? 0x80000000u
+		: z_procs[pid].base;
+	if (a >= lo && a - lo <= size && len <= size - (a - lo)) return true;
+	if (k_user_bad_logged < 16) {
+		const char *n = k_pidreg_name_for(pid);
+		printf("syscall: %s%spid %lu passed a bad pointer %08lx (%lu bytes); call refused\n",
+			n ? n : "", n ? " " : "", (unsigned long)pid,
+			(unsigned long)a, (unsigned long)len);
+		if (++k_user_bad_logged == 16)
+			printf("syscall: further bad-pointer reports suppressed\n");
+	}
+	return false;
+}
+
 // `mpu` shell command support (sh.c)
 bool k_mpu_active(void) { return k_mpu; }
 void k_mpu_reset_log(void) { k_mpu_logged = 0; }
@@ -1303,14 +1343,26 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 			// so that stays true if it ever stops being.
 			int fslock = k_syscall_touches_fs(syscall_id);
 
-			if (fslock) k_fs_enter();
+			// Syscall pointer checks (docs/mpu.md). The MPU cannot
+			// stop the kernel writing on an app's behalf, so a bad
+			// pointer an app hands to a syscall is checked here
+			// instead: the arguments themselves (many handlers write
+			// results back into them) must be in the caller's own
+			// memory, and handlers check any buffer they write
+			// through with k_user_ok(). Only apps are checked: the
+			// kernel's own process (pid 0) runs from the kernel image.
+			if (regs && !k_user_ok(regs, 4)) {
+				ret = (uint32_t *)&z_fail;
+			} else {
+				if (fslock) k_fs_enter();
 
-			ret = (uint32_t *)z_syscall_table[syscall_id]((z_obj_t *)regs);
+				ret = (uint32_t *)z_syscall_table[syscall_id]((z_obj_t *)regs);
 
-			// Single exit -- this path has no early returns between
-			// the enter and here, which is what keeps the counter from
-			// leaking.
-			if (fslock) k_fs_leave();
+				// Single exit -- this path has no early returns between
+				// the enter and here, which is what keeps the counter from
+				// leaking.
+				if (fslock) k_fs_leave();
+			}
 		}
 
 		goto done;
@@ -1318,6 +1370,9 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 	}
 
 	// not a system call; must be an interrupt
+
+	// Printing from here must not block (sw/os/uart.c): cleared at done.
+	k_uart_polled = true;
 
 	// Crashes and protection faults first: an app that faulted must not
 	// be resumed at the faulting instruction. See k_fault() above.
@@ -1467,6 +1522,7 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 	ret = regs;
 
 	done:
+	k_uart_polled = false;
 	__asm__ volatile ("mv gp, %0" :: "r"(saved_gp) : "memory");
 	return ret;
 
@@ -1540,7 +1596,9 @@ z_obj_t *k_wm_wake(z_obj_t *args) {
 //
 // Path 1 is the picorv32 `timer` insn, which fires IRQ 0. That
 // needs ENABLE_IRQ_TIMER=1 in the bitstream (sysctl.v); with it
-// off the insn is illegal (IRQ 1, which retries the faulting PC).
+// off the insn is illegal (IRQ 1: both cores retire it and trap with
+// the PC of the NEXT instruction, so it is skipped, not retried --
+// and k_fault() now ends the process instead; docs/mpu.md).
 // A UART-THRE pulse was tried first so the bitstream could stay:
 // writing IER.THRE is a no-op when THRE is already enabled (the
 // printf path), and waitirq in that hole froze every RUNNABLE
@@ -1870,29 +1928,29 @@ z_rv k_proc_dump(void) {
 // --
 
 void kprint(const char *s) {
+    // writes UART0 directly, so it records into the console log itself
+    // (sw/os/uart.c, docs/console.md)
     while (*s) {
         if (*s == '\n') {
             while ((reg_uart0_lsr & 0x20) == 0);
+            k_klog_putc('\r');
             reg_uart0_data = '\r';
         }
         while ((reg_uart0_lsr & 0x20) == 0);
+        k_klog_putc((uint8_t)*s);
         reg_uart0_data = *s++;
     }
 }
 
 void kprint_hex_digit(uint8_t val) {
-    // Wait for the transmitter like kprint() does. This used to write
-    // unconditionally and then spin 500 iterations of a volatile loop,
-    // which only paced the UART by accident of CPU speed: the counter
-    // lives on the stack, so with the data cache (docs/dcache.md) each
-    // iteration got 2-3x faster, and kprint_hex32() calls this eight
-    // times in a row.
+    // Wait for the transmitter like kprint() does (this used to write
+    // unconditionally and pace itself with a 500-iteration spin loop,
+    // which the data cache made 2-3x shorter). Records into the
+    // console log, like kprint().
+    char ch = (val < 10) ? ('0' + val) : ('A' + (val - 10));
     while ((reg_uart0_lsr & 0x20) == 0);
-    if (val < 10) {
-        reg_uart0_data = '0' + val;
-    } else {
-        reg_uart0_data = 'A' + (val - 10);
-    }
+    k_klog_putc((uint8_t)ch);
+    reg_uart0_data = ch;
 }
 
 void kprint_hex32(uint32_t val) {

@@ -77,7 +77,7 @@ LDSCRIPT = ../common/riscv-os.ld
 OBJS = kernel.o kruntime.o mem.o zar.o usb/usbh.o usb/usbh_hid.o usb/usbh_msc.o usb/usbh_hub.o usb/usbh_cdc.o usb/usbh_ecm.o usbcdcapi.o usbnetapi.o \
 	fs/fs.o fs/ramdisk.o fs/sdbench.o fs/fatfs/sdmm.o fs/fatfs/diskio_mux.o fs/fatfs/ff.o \
 	uart.o hid.o sh.o xfer.o xmodem.o ui.o msg.o pidreg.o fsapi.o flashapi.o jumpapi.o zjump.o procapi.o zobj.o zstream.o zdns.o zsoc.o zgpio.o logo.o \
-	cfg.o zcfg.o
+	cfg.o zcfg.o zfont_data.o
 
 # kernel.o's recipe below builds every object in one go (they're not
 # independent processes, and mostly don't need to be) -- but for
@@ -91,7 +91,8 @@ OBJS = kernel.o kruntime.o mem.o zar.o usb/usbh.o usb/usbh_hid.o usb/usbh_msc.o 
 KSRCS = kernel.c kruntime.c mem.c \
 	fs/fs.c fs/ramdisk.c fs/sdbench.c fs/fatfs/sdmm.c fs/fatfs/diskio_mux.c fs/fatfs/ff.c \
 	usb/usbh.c usb/usbh_hid.c usb/usbh_msc.c usb/usbh_hub.c usb/usbh_cdc.c usb/usbh_ecm.c usbcdcapi.c usbnetapi.c uart.c hid.c sh.c xfer.c xmodem.c ui.c msg.c pidreg.c fsapi.c flashapi.c jumpapi.c procapi.c logo.c cfg.c \
-	../common/zobj.c ../common/zstream.c ../common/zdns.c ../common/zsoc.c ../common/zcfg.c ../common/zjump.c
+	../common/zobj.c ../common/zstream.c ../common/zdns.c ../common/zsoc.c ../common/zcfg.c ../common/zjump.c \
+	../common/zfont_data.c
 
 kernel: kernel.elf kernel.bin
 
@@ -138,6 +139,9 @@ fs/ramdisk.o: fs/ramdisk.c fs/ramdisk.h
 	$(CC) $(CFLAGS) -c jumpapi.c -o jumpapi.o
 	$(CC) $(CFLAGS) -c procapi.c -o procapi.o
 	$(CC) $(CFLAGS) -c ../common/zobj.c -o zobj.o
+	# only z_font_5x8 survives --gc-sections: the panic screen's font
+	# (sw/os/uart.c, k_klog_panic_screen())
+	$(CC) $(CFLAGS) -c ../common/zfont_data.c -o zfont_data.o
 	$(CC) $(CFLAGS) -c cfg.c -o cfg.o
 	# -DZCFG_KERNEL: the parser and known-key table only; the app-side
 	# syscall wrappers call through reg_kernel -- see zcfg.h.

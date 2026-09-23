@@ -56,6 +56,12 @@ z_obj_t *k_proc_list(z_obj_t *args) {
 		if (a) { a->count = 0; a->truncated = 0; }
 		return (&z_fail);
 	}
+	// k_user_ok(): the kernel must not write where the app has no memory (docs/mpu.md)
+	if (a->max > 0xFFFFFFFFu / sizeof(z_proc_info_t) ||
+		!k_user_ok(a->out, a->max * (uint32_t)sizeof(z_proc_info_t))) {
+		a->count = 0; a->truncated = 0;
+		return (&z_fail);
+	}
 
 	a->count = 0;
 	a->truncated = 0;

@@ -265,6 +265,8 @@ z_obj_t *k_cfg_get(z_obj_t *args) {
 
 	z_cfg_get_args_t *a = (z_cfg_get_args_t *)args;
 	if (!a) return &z_fail;
+	// k_user_ok(): the kernel must not write where the app has no memory (docs/mpu.md)
+	if (a->val && !k_user_ok(a->val, a->vallen)) return &z_fail;
 
 	a->generation = k_cfg_gen;
 	a->found = 0;
@@ -287,6 +289,9 @@ z_obj_t *k_cfg_entry(z_obj_t *args) {
 	const char *k, *v;
 
 	if (!a) return &z_fail;
+	// k_user_ok(): the kernel must not write where the app has no memory (docs/mpu.md)
+	if ((a->key && !k_user_ok(a->key, a->keylen)) ||
+		(a->val && !k_user_ok(a->val, a->vallen))) return &z_fail;
 
 	a->found = 0;
 	if (!k_cfg_at(a->index, &k, &v)) return &z_ok;

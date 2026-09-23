@@ -78,7 +78,7 @@ dfu_base = 0x040000
 # repl is not a core app -- it and posix ship on the card image
 # (release/lib/mkfatimg.py) and init starts them from there. With 1MB
 # of RAM posix cannot start here (its tier is 4MB), and init says so.
-core_apps = wm term
+core_apps = wm term console
 
 defines =
     FPGA_ECP5

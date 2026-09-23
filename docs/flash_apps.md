@@ -1,7 +1,10 @@
 # Core Apps in Flash
 
-The core apps -- `wm`, `net` and `term` -- are programmed into flash
-alongside the kernel and are available with no sdcard attached.
+The core apps -- `wm`, `net`, `term` and `console` -- are programmed
+into flash alongside the kernel and are available with no sdcard
+attached. `console` is the kernel console as a port (`docs/console.md`):
+it is a core app because the machines that most need it, with no card
+and no serial cable, are exactly the ones with nothing else.
 
 The two shells, `repl` and `posix`, are **not** core apps: they live on
 the sdcard, and `init()` starts both from there when a card is present.

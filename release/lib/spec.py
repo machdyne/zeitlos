@@ -313,7 +313,7 @@ def load_target(root, name):
     # writes to the wrong place.
     dfu = _one(bdata, "dfu_base", default="", where=bpath)
     t.dfu_base = int(dfu, 0) if dfu else None
-    t.core_apps = _words(bdata, "core_apps") or ["wm", "net", "term"]
+    t.core_apps = _words(bdata, "core_apps") or ["wm", "net", "term", "console"]
     t.description = _one(tdata, "description",
                          default=_one(bdata, "description", default=name,
                                       where=bpath),
