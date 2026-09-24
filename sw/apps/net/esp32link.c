@@ -187,25 +187,25 @@ static void vmouse_release_if_stale(void)
  *
  * screen.c must not hash and ship the framebuffer to a gateway nobody
  * is reading it from, and net cannot see the WebSocket: it terminates
- * on the ESP32, in screend.c. What DOES cross the link is that
- * firmware's own log -- every ESP_LOG line is framed as ZNIC_LOG and
- * printed here as "esp32: ..." -- and screend logs "viewer connected
- * (fd N)" and "viewer gone (fd N)" for exactly these two events, the
- * second one also when its once-a-second keepalive to an idle client
- * fails. So the count is kept from those lines.
+ * on the ESP32, in screend.c. So screend says how many clients it has,
+ * in a ZNIC_VIEWERS message, every time the number changes and once a
+ * second regardless. A lost message, or a net started while a browser
+ * was already watching, is therefore right again within a second.
  *
- * That is a string match on another program's log messages, which is
- * not a contract, so it has a floor under it: any keyboard or mouse
- * event from the browser also counts as a viewer for the next
- * VIEWER_INPUT_HOLD. A missed "connected" therefore means a picture
- * that is frozen until the pointer moves, never one that stays
- * frozen; a missed "gone" means streaming to nobody until the next
- * connect, which is what it did all the time before.
+ * Firmware older than that message has only its log to go by: every
+ * ESP_LOG line crosses the link as ZNIC_LOG, and screend logs "viewer
+ * connected (fd N)" and "viewer gone (fd N)". That is a string match on
+ * another program's messages, not a contract -- and before the ESP32
+ * firmware of task 0043 the keepalive freed idle clients without
+ * logging the "gone", so a tab closed on a still screen left net
+ * streaming to nobody. The text is still read, but only until the first
+ * ZNIC_VIEWERS after each HELLO says the firmware knows better, so an
+ * old ESP32 under this net behaves exactly as before.
  *
- * The clean version is a ZNIC control message from screend saying how
- * many clients it has. It needs the ESP32 reflashed (SD out, passthru
- * bitstream -- esp32/zeitlos-nic/README.md), so it waits for the
- * next time that has to happen anyway.
+ * Under both there is a floor: any keyboard or mouse event from the
+ * browser also counts as a viewer for the next VIEWER_INPUT_HOLD. A
+ * missed viewer therefore means a picture that is frozen until the
+ * pointer moves, never one that stays frozen.
  */
 #define VIEWER_INPUT_HOLD  (30 * TICKS_PER_SEC)
 #define VIEWER_MAX         8	/* screend.c's MAX_CLIENTS */
@@ -218,6 +218,9 @@ static void vmouse_release_if_stale(void)
  * repeat of one we already have a no-op, which is what it is. */
 static int viewer_fd[VIEWER_MAX];
 static int viewers;
+/* a ZNIC_VIEWERS has arrived since the last HELLO: `viewers` is its n
+ * and viewer_fd[] is no longer kept */
+static int viewers_counted;
 static uint32_t viewer_input_tick;
 static int viewer_input_seen;
 
@@ -590,6 +593,7 @@ static void znic_dispatch(void)
 		 * is empty and its WebSocket clients are gone, so forget them
 		 * and resend the whole framebuffer once one comes back */
 		viewers = 0;
+		viewers_counted = 0;
 		screen_reset();
 		break;
 
@@ -649,18 +653,32 @@ static void znic_dispatch(void)
 	case ZNIC_LOG:	/* one ESP_LOG line from the firmware */
 		logs_rx++;
 		printf("esp32: %.*s\n", (int)rx_msg_len, (const char *)rx_msg);
-		/* screend.c announces its WebSocket clients here and nowhere
-		 * else -- see viewer_present() above. */
+		/* firmware without ZNIC_VIEWERS announces its WebSocket
+		 * clients only here -- see viewer_present() above */
 		{
 			int at = msg_find(rx_msg, rx_msg_len, "viewer connected");
 			if (at >= 0) {
-				viewer_add(msg_fd(rx_msg, rx_msg_len, at));
+				if (!viewers_counted)
+					viewer_add(msg_fd(rx_msg, rx_msg_len, at));
 				/* its shadow is whatever we last streamed, which may
 				 * be nothing at all: start from a whole frame */
 				screen_reset();
-			} else if ((at = msg_find(rx_msg, rx_msg_len, "viewer gone")) >= 0) {
+			} else if (!viewers_counted &&
+					(at = msg_find(rx_msg, rx_msg_len, "viewer gone")) >= 0) {
 				viewer_del(msg_fd(rx_msg, rx_msg_len, at));
 			}
+		}
+		break;
+
+	case ZNIC_VIEWERS:	/* {n:u8}: screend's WebSocket clients, now */
+		if (rx_msg_len >= 1) {
+			int n = rx_msg[0] < VIEWER_MAX ? rx_msg[0] : VIEWER_MAX;
+			/* one more than we knew of, even if its "connected"
+			 * line was lost: a whole frame, as above */
+			if (n > viewers)
+				screen_reset();
+			viewers = n;
+			viewers_counted = 1;
 		}
 		break;
 
@@ -784,6 +802,7 @@ bool esp32link_init(const uint8_t mac[6])
 	rx_head = rx_tail = rx_count = 0;
 	phase = PH_HELLO;
 	viewers = 0;
+	viewers_counted = 0;
 	viewer_input_seen = 0;
 	sta_tries = 0;
 	link_timeout_reported = 0;
