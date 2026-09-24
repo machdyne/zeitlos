@@ -359,6 +359,13 @@ static void mouse(uint32_t packed) {
 
 int main(void) {
 
+	// One keyboard at a time: Super+K starts this whether or not one
+	// is already up. The registry numbers names, so anything but
+	// "keyboard0" means another is running.
+	char reg[24];
+	if (!z_pid_register("keyboard", reg, sizeof(reg)) || strcmp(reg, "keyboard0"))
+		return 0;
+
 	if (z_win_create_flags(&win, "keyboard", WIN_W, WIN_H, -1, -1,
 		Z_WIN_FLAG_CLOSE_ICON | Z_WIN_FLAG_CLOSE_KILLS_OWNER |
 		Z_WIN_FLAG_NO_FOCUS) != Z_OK) {

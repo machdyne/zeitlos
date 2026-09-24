@@ -4,11 +4,12 @@
  *   > run wm
  *   > run settings
  *
- * Four settings (docs/config.md):
+ * Five settings (docs/config.md):
  *
  *   Display               system.video.mode        applied immediately
  *   Terminal connects to  apps.term.auto_connect   new term windows
  *   Keyboard layouts      system.keyboard.layouts  the next key pressed
+ *   Japanese font         system.font.japanese     at once: jfont started/stopped
  *   Time zone             system.rtc.timezone      clock and cal
  *
  * The time zone is chosen from a list -- UTC, about sixty cities with
@@ -65,6 +66,7 @@
 #include "../../common/zgfx.h"
 #include "../../common/zfont.h"
 #include "../../common/zkbd.h"
+#include "../../common/zjfont.h"		// Z_JFONT_NAME
 #include "../../common/zwidget.h"
 #include "../../common/zdialog.h"
 #include "../../common/zfsapp.h"
@@ -74,7 +76,7 @@
 // Fixed size, not resizable: a preferences panel has no content to
 // reveal.
 #define WIN_W   284
-#define WIN_H   (214 + 2 * (8 + 2) + 6)	// one row per preference: see layout()
+#define WIN_H   (214 + 2 * (2 * (8 + 2) + 6))	// one row per preference: see layout()
 
 static z_win_t win;
 static z_dialog_ctx_t dlg;
@@ -102,6 +104,7 @@ static const char *video_labels[] = { "White", "Amber", "Green", "Paper" };
 enum {
 	W_EDIT_TERM = MODE_COUNT,
 	W_EDIT_KBD,
+	W_TOGGLE_JA,
 	W_SET_TZ,
 	W_RELOAD,
 	W_COUNT
@@ -127,11 +130,16 @@ typedef struct {
 static pref_t prefs[] = {
 	{ "apps.term.auto_connect", "Terminal connects to", W_EDIT_TERM, "", false },
 	{ "system.keyboard.layouts", "Keyboard layouts (Super+Space)", W_EDIT_KBD, "", false },
+	{ "system.font.japanese", "Japanese font (text at 6x12)", W_TOGGLE_JA, "", false },
 };
 
 // The last preference's Edit button: the list comes after it in Tab
 // order.
-#define W_LAST_PREF W_EDIT_KBD
+#define W_LAST_PREF W_TOGGLE_JA
+
+// The Japanese font switch -- defined with its button, further down.
+static bool japanese_on(void);
+static void set_japanese_label(void);
 #define PREF_COUNT (int)(sizeof(prefs) / sizeof(prefs[0]))
 
 static int other_keys;			// settings in the file this app does not show
@@ -223,6 +231,7 @@ static void read_values(void) {
 			sizeof(prefs[i].value));
 
 	tz_in_file = z_cfg_get("system.rtc.timezone", tz_value, sizeof(tz_value));
+	set_japanese_label();
 	z_listbox_select(&tz_list, tz_row_for(tz_value));
 	zone_selection_changed();
 
@@ -319,6 +328,8 @@ static void describe(const pref_t *p, char *out, size_t n) {
 		v = "start panel";
 	if (!strcmp(p->key, "system.keyboard.layouts") && !v[0])
 		v = "us";
+	if (!strcmp(p->key, "system.font.japanese"))
+		v = japanese_on() ? "on -- jfont holds it, about 190KB" : "off";
 
 	snprintf(out, n, "%.*s%s", max - (int)strlen(suffix), v, suffix);
 
@@ -547,6 +558,41 @@ static bool valid_layouts(const char *v, char *bad, size_t badlen) {
 
 }
 
+// -- the Japanese font -- docs/text_encoding.md, "Japanese" --
+//
+// Not a prompt but a switch, and it acts at once: turning it on saves
+// the setting AND starts jfont, so Japanese draws in the next repaint;
+// turning it off saves it and stops jfont, giving its ~190KB back. wm
+// reads the setting only at boot, so without starting and stopping it
+// here the change would wait for a reboot.
+
+static bool japanese_on(void) {
+	const char *v = prefs[2].value;
+	return !strcmp(v, "yes") || !strcmp(v, "on") || !strcmp(v, "true") || !strcmp(v, "1");
+}
+
+static void set_japanese_label(void) {
+	widgets[W_TOGGLE_JA].label = japanese_on() ? "Turn off" : "Turn on";
+}
+
+static void toggle_japanese(void) {
+
+	bool on = !japanese_on();
+	if (!save("system.font.japanese", on ? "yes" : "no")) { repaint(); return; }
+
+	if (on) {
+		if (!z_proc_run("jfont"))
+			set_status("saved; could not start jfont -- is /apps/jfont on the card?");
+	} else {
+		uint32_t pid;
+		if (z_pid_lookup(Z_JFONT_NAME, &pid)) z_proc_kill(pid);
+	}
+
+	set_japanese_label();
+	repaint();
+
+}
+
 static void edit_layouts(const pref_t *p) {
 
 	// The names, wrapped for the dialog, from zkbd's own table -- so a
@@ -642,6 +688,7 @@ static void activate(int idx) {
 	if (idx < MODE_COUNT) { apply_video(idx); return; }
 	if (idx == W_EDIT_TERM) { edit(&prefs[0]); return; }
 	if (idx == W_EDIT_KBD) { edit(&prefs[1]); return; }
+	if (idx == W_TOGGLE_JA) { toggle_japanese(); return; }
 	if (idx == W_SET_TZ) { choose_zone_and_return(); return; }
 	if (idx == W_RELOAD) { reload(); return; }
 }
@@ -826,6 +873,10 @@ static void widgets_init(void) {
 	widgets[W_EDIT_KBD].type = Z_WIDGET_BUTTON;
 	widgets[W_EDIT_KBD].label = "Edit";
 	widgets[W_EDIT_KBD].enabled = true;
+
+	widgets[W_TOGGLE_JA].type = Z_WIDGET_BUTTON;
+	widgets[W_TOGGLE_JA].label = "Turn on";	// set_japanese_label() after reading
+	widgets[W_TOGGLE_JA].enabled = true;
 
 	widgets[W_SET_TZ].type = Z_WIDGET_BUTTON;
 	widgets[W_SET_TZ].label = "Set time zone";

@@ -8,7 +8,8 @@
 #include <string.h>
 
 #include "zedit.h"
-#include "zkbd.h"
+#include "zutf8.h"
+#include "zkbd.h"		// Z_KEY_IS_TEXT
 
 #define PAD_X 3
 #define PAD_Y 3
@@ -44,18 +45,24 @@ void z_edit_init(z_edit_t *e, char *buf, int cap, const char *initial) {
 // Called from draw rather than from key handling, because only the
 // draw knows how wide the box is -- and a field that scrolls only
 // when a key arrives would sit wrong after a resize.
+//
+// cur and scroll are BYTE offsets into UTF-8, each at the start of a
+// character; widths are display columns (z_utf8_cols(): two for a CJK
+// character). docs/sdcard.md, "Long file names".
 static void scroll_to_caret(z_edit_t *e, int cols) {
-
-	if (e->cur < e->scroll) e->scroll = e->cur;
-
-	// The caret sits AFTER the last visible character when it is at
-	// the end of the text, so the test is >=, not >. Getting this
-	// wrong hides the caret exactly when someone is typing at the
-	// end, which is almost always.
-	if (e->cur >= e->scroll + cols) e->scroll = e->cur - cols + 1;
 
 	if (e->scroll > e->len) e->scroll = e->len;
 	if (e->scroll < 0) e->scroll = 0;
+	if (e->cur < e->scroll) e->scroll = e->cur;
+
+	// The caret sits AFTER the last visible character when it is at
+	// the end of the text, so it needs a column of its own: the text
+	// before it may use cols - 1. Getting this wrong hides the caret
+	// exactly when someone is typing at the end, which is almost
+	// always.
+	while (e->scroll < e->cur &&
+	       z_utf8_cols(e->buf + e->scroll, (size_t)(e->cur - e->scroll)) > cols - 1)
+		e->scroll = z_utf8_next_off(e->buf, e->len, e->scroll);
 
 }
 
@@ -64,11 +71,11 @@ bool z_edit_key(z_edit_t *e, uint32_t keysym) {
 	switch (keysym) {
 
 	case Z_KEY_LEFT:
-		if (e->cur > 0) { e->cur--; return true; }
+		if (e->cur > 0) { e->cur = z_utf8_prev_off(e->buf, e->len, e->cur); return true; }
 		return false;
 
 	case Z_KEY_RIGHT:
-		if (e->cur < e->len) { e->cur++; return true; }
+		if (e->cur < e->len) { e->cur = z_utf8_next_off(e->buf, e->len, e->cur); return true; }
 		return false;
 
 	case Z_KEY_HOME:
@@ -81,19 +88,22 @@ bool z_edit_key(z_edit_t *e, uint32_t keysym) {
 
 	case 0x7f:					// Backspace arrives as DEL -- see zkbd.c
 		if (e->cur > 0) {
-			memmove(&e->buf[e->cur - 1], &e->buf[e->cur],
+			// The whole character before the caret.
+			int from = z_utf8_prev_off(e->buf, e->len, e->cur);
+			memmove(&e->buf[from], &e->buf[e->cur],
 				(size_t)(e->len - e->cur + 1));
-			e->cur--;
-			e->len--;
+			e->len -= e->cur - from;
+			e->cur = from;
 			return true;
 		}
 		return false;
 
 	case Z_KEY_DELETE:
 		if (e->cur < e->len) {
-			memmove(&e->buf[e->cur], &e->buf[e->cur + 1],
-				(size_t)(e->len - e->cur));
-			e->len--;
+			int to = z_utf8_next_off(e->buf, e->len, e->cur);
+			memmove(&e->buf[e->cur], &e->buf[to],
+				(size_t)(e->len - to + 1));
+			e->len -= to - e->cur;
 			return true;
 		}
 		return false;
@@ -105,16 +115,19 @@ bool z_edit_key(z_edit_t *e, uint32_t keysym) {
 		return false;
 
 	default:
-		// Printable ASCII only. This field holds a filename or a URL,
-		// and anything outside this range in either is something the
-		// caller should be deciding about, not something to insert
-		// silently.
-		if (keysym >= 0x20 && keysym < 0x7f && e->len < e->cap - 1) {
-			memmove(&e->buf[e->cur + 1], &e->buf[e->cur],
+		// Any character a keyboard layout types, as UTF-8 -- file
+		// names are long names now, and can be German or Japanese
+		// (docs/sdcard.md). Controls and named keys are the caller's.
+		// A character that does not fit whole is not inserted.
+		if (Z_KEY_IS_TEXT(keysym)) {
+			char u[Z_UTF8_MAX];
+			int k = z_utf8_put(keysym, u);
+			if (e->len + k > e->cap - 1) return false;
+			memmove(&e->buf[e->cur + k], &e->buf[e->cur],
 				(size_t)(e->len - e->cur + 1));
-			e->buf[e->cur] = (char)keysym;
-			e->cur++;
-			e->len++;
+			memcpy(&e->buf[e->cur], u, (size_t)k);
+			e->cur += k;
+			e->len += k;
 			return true;
 		}
 		return false;
@@ -126,12 +139,21 @@ bool z_edit_key(z_edit_t *e, uint32_t keysym) {
 void z_edit_click(z_edit_t *e, int cx, int box_x, const z_font_t *font) {
 
 	int col = (cx - box_x - PAD_X) / font->w;
-
 	if (col < 0) col = 0;
-	col += e->scroll;
-	if (col > e->len) col = e->len;
 
-	e->cur = col;
+	// Walk characters from the first visible one until `col` columns
+	// are used; a wide character that straddles the click is not
+	// stepped into.
+	int off = e->scroll;
+	while (off < e->len) {
+		int next = z_utf8_next_off(e->buf, e->len, off);
+		int w = z_utf8_cols(e->buf + off, (size_t)(next - off));
+		if (w > col) break;
+		col -= w;
+		off = next;
+	}
+
+	e->cur = off;
 
 }
 
@@ -169,15 +191,14 @@ void z_edit_draw(const z_win_t *win, z_edit_t *e,
 
 	if (clip.x1 < clip.x0) return;
 
-	n = e->len - e->scroll;
-	if (n > cols) n = cols;
-
-	for (int i = 0; i < n; i++)
-		z_fb_draw_char(x0 + PAD_X + i * font->w, y0 + PAD_Y,
-			(unsigned char)e->buf[e->scroll + i], 1, font, &clip);
+	(void)n;
+	// UTF-8 from the first visible character; the clip cuts it at
+	// the box's right edge.
+	z_fb_draw_utf8(x0 + PAD_X, y0 + PAD_Y, e->buf + e->scroll, 1, font, &clip);
 
 	if (e->focus) {
-		int cx = x0 + PAD_X + (e->cur - e->scroll) * font->w;
+		int cx = x0 + PAD_X +
+			z_utf8_cols(e->buf + e->scroll, (size_t)(e->cur - e->scroll)) * font->w;
 		if (cx >= clip.x0 && cx <= clip.x1)
 			z_fb_hw_fill_rect(cx, y0 + 2, 1, y1 - y0 - 3, 1);
 	}

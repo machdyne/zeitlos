@@ -89,7 +89,7 @@ zrtc.o:
 	$(CC) $(CFLAGS) -c ../../common/zrtc.c -o zrtc.o
 
 settings.o:
-	$(CC) $(CFLAGS) -c settings.c -S -o settings.asm
+	$(CC) $(CFLAGS) -c settings.c -S -MF /dev/null -o settings.asm
 	$(CC) $(CFLAGS) -c settings.c -o settings.o
 
 settings.elf: $(OBJS)

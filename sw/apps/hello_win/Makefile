@@ -36,7 +36,7 @@ zwin.o:
 	$(CC) $(CFLAGS) -c ../../common/zwin.c -o zwin.o
 
 hello_win.o:
-	$(CC) $(CFLAGS) -c hello_win.c -S -o hello_win.asm
+	$(CC) $(CFLAGS) -c hello_win.c -S -MF /dev/null -o hello_win.asm
 	$(CC) $(CFLAGS) -c hello_win.c -o hello_win.o
 
 hello_win.elf: $(OBJS)

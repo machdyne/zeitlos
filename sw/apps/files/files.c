@@ -327,7 +327,7 @@ static void do_open(void) {
 
 static void do_mkdir(void) {
 
-	char name[32];
+	char name[Z_FS_NAME_MAX];
 
 	if (!z_dialog_prompt(&dlg_ctx, "New Folder",
 		"Name for the new folder:", "", name, sizeof(name)))

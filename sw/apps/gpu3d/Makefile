@@ -85,7 +85,7 @@ stl.o:
 	$(CC) $(CFLAGS) -c stl.c -o stl.o
 
 gpu3d.o:
-	$(CC) $(CFLAGS) -c gpu3d.c -S -o gpu3d.asm
+	$(CC) $(CFLAGS) -c gpu3d.c -S -MF /dev/null -o gpu3d.asm
 	$(CC) $(CFLAGS) -c gpu3d.c -o gpu3d.o
 
 gpu3d.elf: $(OBJS)

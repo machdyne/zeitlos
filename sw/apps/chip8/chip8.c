@@ -93,7 +93,7 @@ static bool chrome_known;
 static int img_x, img_y;
 
 static char rom_path[Z_WM_ARG_MAX];
-static char rom_name[48];
+static char rom_name[Z_FS_NAME_MAX];
 static char rom_dir[Z_WM_ARG_MAX];
 static char flags_path[Z_WM_ARG_MAX];
 

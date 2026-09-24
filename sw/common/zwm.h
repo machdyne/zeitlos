@@ -695,6 +695,37 @@ typedef struct {
 #define Z_WM_UNPACK_Y(v)   ((v) & 0x3FF)
 
 // defaults used when a Z_WM_CREATE_WINDOW request omits w/h
+// app -> wm: make my window this size. obj is a packed Z_UINT32 --
+// Z_WM_PACK_RESIZE() below: the window id and the new OUTER size, the
+// same w/h z_win_create() takes. For an app whose content changes
+// size (term's font toggle, chip8's scale) -- before this, the only
+// way was to destroy the window and create another, which lost its
+// place on the screen. wm applies it exactly as a resize-grip release:
+// the owner gets Z_WM_WINDOW_RESIZED (and Z_WM_WINDOW_MOVED if the
+// window had to move to stay on the screen) and then a Z_WM_REDRAW at
+// the new size. Clamped to Z_WM_MIN_WIDTH/HEIGHT and to the screen.
+// Only the owner may resize its window. z_win_resize() in zwin.h.
+#define Z_WM_RESIZE              123
+#define Z_WM_PACK_RESIZE(id, w, h) \
+	((((uint32_t)(id) & 0xFFu) << 24) | (((uint32_t)(w) & 0xFFFu) << 12) | ((uint32_t)(h) & 0xFFFu))
+#define Z_WM_UNPACK_RESIZE_ID(v)  (((uint32_t)(v) >> 24) & 0xFFu)
+#define Z_WM_UNPACK_RESIZE_W(v)   (((uint32_t)(v) >> 12) & 0xFFFu)
+#define Z_WM_UNPACK_RESIZE_H(v)   ((uint32_t)(v) & 0xFFFu)
+
+// app -> wm: the largest size this window is any use at (outer size,
+// as z_win_create() takes). obj is Z_WM_PACK_RESIZE(id, w, h); 0 for a
+// dimension means no limit. The resize grip stops there, and maximizing
+// goes no further -- a window already at its limit does not maximize at
+// all. term sets its natural 80x25 size: its screen does not grow.
+// z_win_set_max_size() in zwin.h.
+#define Z_WM_SET_LIMITS          124
+
+// Two clicks closer together than this are a double click -- the
+// titlebar (maximize, and with Alt, shade) and zflist's rows. Z_TICK_HZ
+// is 732 (zsoc.h), so a bit over a third of a second: generous, since
+// the clicks come from whatever pointing device is plugged in.
+#define Z_DOUBLE_CLICK_TICKS     256
+
 #define Z_WM_DEFAULT_WIDTH     140
 #define Z_WM_DEFAULT_HEIGHT     100
 

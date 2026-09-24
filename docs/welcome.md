@@ -14,18 +14,92 @@ apps. Windows can be moved around by their titlebar.
 - **Click a window** to bring it to the front and focus it.
 - **Click and drag a titlebar** to move a window around. Windows are
   kept fully on-screen.
+- **Drag the corner grip** of a resizable window to resize it.
+- **Double-click a titlebar** to maximize a resizable window -- it fills
+  the screen and the dock hides -- and double-click again to put it
+  back. `term` does not maximize: its screen is always 80x25.
+- **Alt+double-click a titlebar** to shade the window -- only its
+  titlebar stays -- and again to unshade it. A maximized window cannot
+  be shaded; put it back first.
 - **Click a dock icon** to launch that app.
-
-There's no window resizing yet -- windows open at a fixed size.
 
 ### Using the keyboard
 
-Zeitlos works fully without a mouse if you don't have one plugged in.
+Zeitlos works fully without a mouse if you don't have one plugged in --
+and without a keyboard, through the on-screen one (Super+K). The rule
+of thumb: **Alt** acts on the focused window, **Super** on the system as
+a whole -- game mode, speech, keyboard layouts. Every key combination
+there is:
 
-- **Alt+Tab** cycles focus between windows and the dock.
-- **Alt+Arrow** moves the focused window in that direction.
-- **While the dock has focus**, the arrow keys move a selection
-  between icons and **Enter** launches the selected app.
+**Windows and the dock** ([window_manager.md](window_manager.md))
+
+| Keys | What they do |
+|---|---|
+| Alt+Tab | cycle focus between windows and the dock |
+| Alt+Arrow | move the focused window |
+| Alt+Equal | maximize the focused window, or put it back (the key left of Backspace, whatever it types) |
+| Alt+Minus | shade the focused window, or unshade it (the key right of 0, whatever it types) |
+| Alt+[ / Alt+] | previous / next page of dock icons (the two keys right of P, whatever they type) |
+| Arrows, Enter | while the dock has focus: move between icons, launch one |
+
+**Keyboard and languages** ([keyboard_layouts.md](keyboard_layouts.md))
+
+| Keys | What they do |
+|---|---|
+| Super+Space | next keyboard layout (set the list in `settings`) |
+| Super+K | the on-screen keyboard ([keyboard_app.md](keyboard_app.md)) |
+| AltGr (right Alt) | the third and fourth characters on a key, on layouts that have them: `@` on German is AltGr+Q |
+| a dead key, then a letter | an accented letter: on German, `´` then `e` is `é`; the dead key twice, or then Space, types the accent alone; Escape cancels it |
+| romaji, on a `ja` layout | kana: `konnichiha` is こんにちは; Backspace takes back a waiting letter, Escape drops them ([Japanese input](keyboard_layouts.md#japanese-input)) |
+
+**Speech** ([tts.md](tts.md))
+
+| Keys | What they do |
+|---|---|
+| Super+S | speech on / off |
+| Super+A | read the focused window, from the caret |
+| Super+C | speak the highlighted text |
+| Super+V | speak the clipboard |
+| Super+W | what is under the pointer (the focused window with no mouse) |
+| Super+R | repeat the last thing said |
+| Super+E | switch between the recorded and the synthesised voice |
+| Ctrl, tapped alone | stop speaking |
+
+**Game mode** ([game_mode.md](game_mode.md))
+
+| Keys | What they do |
+|---|---|
+| Super+Esc | game mode on / off |
+| Super+Arrow | move the viewport |
+| Super held + mouse | the viewport follows the pointer |
+
+**The terminal** ([terminal.md](terminal.md))
+
+| Keys | What they do |
+|---|---|
+| F11 | the Open bar -- go somewhere new |
+| F12 | disconnect and return to the start panel |
+| Esc | on the start panel: hide it to read the old session |
+| Shift+PgUp / Shift+PgDn | scroll back / forward a page |
+| Shift+Up / Shift+Down | scroll one line |
+| Shift+Home / Shift+End | oldest line / back to live |
+| Ctrl+Shift+C / Ctrl+Shift+V | copy the selection / paste |
+
+In `term` and `text`, the titlebar's **Aa** icon switches between the
+small and the large font; `term` keeps its 80x25 screen and resizes to
+fit. Japanese is drawn at the large size, with **Japanese font** turned
+on in `settings`.
+
+**The text editor** ([text_editor.md](text_editor.md))
+
+| Keys | What they do |
+|---|---|
+| Ctrl+N / Ctrl+O / Ctrl+S | new / open / save |
+| Ctrl+Q | close |
+| Ctrl+A | select all |
+| Ctrl+C / Ctrl+X / Ctrl+V | copy / cut / paste |
+| Shift + any movement key | extend the selection |
+| Tab | four spaces |
 
 ## The terminal
 

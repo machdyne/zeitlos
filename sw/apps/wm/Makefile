@@ -81,7 +81,7 @@ win_icons.o: win_icons.c win_icons.h
 	$(CC) $(CFLAGS) -c win_icons.c -o win_icons.o
 
 wm.o:
-	$(CC) $(CFLAGS) -c wm.c -S -o wm.asm
+	$(CC) $(CFLAGS) -c wm.c -S -MF /dev/null -o wm.asm
 	$(CC) $(CFLAGS) -c wm.c -o wm.o
 
 wm.elf: $(OBJS)

@@ -37,7 +37,7 @@ zuart.o:
 	$(CC) $(CFLAGS) -c ../../common/zuart.c -o zuart.o
 
 serial.o:
-	$(CC) $(CFLAGS) -c serial.c -S -o serial.asm
+	$(CC) $(CFLAGS) -c serial.c -S -MF /dev/null -o serial.asm
 	$(CC) $(CFLAGS) -c serial.c -o serial.o
 
 serial.elf: $(OBJS)

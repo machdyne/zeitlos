@@ -254,7 +254,7 @@ static bool sel_clear(void) {
 static uint16_t line_off[MAX_LINES];
 static int nlines;
 
-static char filename[80];	// "" when the document has never been saved
+static char filename[Z_FS_PATH_MAX];	// "" when the document has never been saved
 
 // -- window --
 
@@ -1021,29 +1021,16 @@ static void repaint(void) {
 // matters.
 static void build_title(char *t, int cap, const char *path, bool star) {
 
-	int n = 0;
-	const char *base = path[0] ? path : "untitled";
-
-	// show just the last path component -- "/DOCS/NOTES.TXT" is
-	// mostly slashes at this width
-	for (const char *s = path; *s; s++)
-		if (*s == '/') base = s + 1;
-
-	if (star && n < cap - 1) t[n++] = '*';
-
 	// Latin-9 is said in the title: it is the encoding the file will be
 	// saved in, and the one thing about a file that is otherwise
-	// invisible. UTF-8 -- every new document -- says nothing.
+	// invisible. UTF-8 -- every new document -- says nothing. The
+	// name is cut, at a character boundary, to leave room for it.
 	const char *enc = (file_enc == ENC_LATIN9) ? " (Latin-9)" : "";
-	int room = cap - 1 - (int)strlen(enc);
+	int room = cap - (int)strlen(enc);
+	if (room < 2) room = cap;
 
-	for (const char *s = base; *s && n < room; s++)
-		t[n++] = *s;
-
-	for (const char *s = enc; *s && n < cap - 1; s++)
-		t[n++] = *s;
-
-	t[n] = 0;
+	z_win_doc_title(t, room, path, star, "untitled");
+	strncat(t, enc, (size_t)(cap - 1 - (int)strlen(t)));
 
 }
 
@@ -1066,7 +1053,7 @@ static char sent_title[32];
 
 static void update_title(void) {
 
-	char t[32];
+	char t[64];
 	build_title(t, (int)sizeof(t), filename, modified);
 
 	int i = 0;

@@ -23,7 +23,7 @@ zsoc.o:
 	$(CC) $(CFLAGS) -c ../../common/zsoc.c -o zsoc.o
 
 audiotest.o:
-	$(CC) $(CFLAGS) -c audiotest.c -S -o audiotest.asm
+	$(CC) $(CFLAGS) -c audiotest.c -S -MF /dev/null -o audiotest.asm
 	$(CC) $(CFLAGS) -c audiotest.c -o audiotest.o
 
 audiotest.elf: $(OBJS)

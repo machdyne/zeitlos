@@ -32,6 +32,7 @@ Berlin selected -- Set time zone to use it
 | Display buttons | `system.video.mode` | immediately, and saved |
 | Terminal connects to | `apps.term.auto_connect` | the next term window |
 | Keyboard layouts | `system.keyboard.layouts` | the next key pressed |
+| Japanese font | `system.font.japanese` | at once -- `jfont` is started or stopped |
 | Time zone list + Set time zone | `system.rtc.timezone` | clock and cal, within a second |
 | Reload file | -- | re-reads `/zeitlos.cfg` after editing it elsewhere |
 
@@ -78,6 +79,15 @@ A `z_tz_cities[]` city list (`zrtc.h`), in a list box (`z_listbox_t`,
 - **The value is checked before anything is written.** It must start
   with `port`, `serial`, `telnet`, `ssh` or `none`; otherwise a message
   explains, and the file is untouched.
+
+## The Japanese font
+
+Not a prompt but a switch: **Turn on** / **Turn off**. It acts at once.
+Turning it on saves `system.font.japanese: yes` and starts `jfont`, so
+Japanese draws at 6x12 in the next repaint; turning it off saves `no`
+and stops `jfont`, giving back its ~190KB. (`wm` reads the setting only
+at boot, so without that the change would wait for a reboot.) See
+[text_encoding.md](text_encoding.md), "Japanese".
 
 ## Editing the keyboard layouts
 

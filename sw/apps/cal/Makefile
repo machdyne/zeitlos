@@ -81,7 +81,7 @@ cal_core.o:
 	$(CC) $(CFLAGS) -c cal_core.c -o cal_core.o
 
 cal.o:
-	$(CC) $(CFLAGS) -c cal.c -S -o cal.asm
+	$(CC) $(CFLAGS) -c cal.c -S -MF /dev/null -o cal.asm
 	$(CC) $(CFLAGS) -c cal.c -o cal.o
 
 cal.elf: $(OBJS)

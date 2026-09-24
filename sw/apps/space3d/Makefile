@@ -49,7 +49,7 @@ zwin.o:
 	$(CC) $(CFLAGS) -c ../../common/zwin.c -o zwin.o
 
 space3d.o:
-	$(CC) $(CFLAGS) -c space3d.c -S -o space3d.asm
+	$(CC) $(CFLAGS) -c space3d.c -S -MF /dev/null -o space3d.asm
 	$(CC) $(CFLAGS) -c space3d.c -o space3d.o
 
 space3d.elf: $(OBJS)

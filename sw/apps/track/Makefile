@@ -56,7 +56,7 @@ modplay.o:
 	$(CC) $(CFLAGS) -c modplay.c -o modplay.o
 
 track.o:
-	$(CC) $(CFLAGS) -c track.c -S -o track.asm
+	$(CC) $(CFLAGS) -c track.c -S -MF /dev/null -o track.asm
 	$(CC) $(CFLAGS) -c track.c -o track.o
 
 track.elf: $(OBJS)

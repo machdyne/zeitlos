@@ -140,6 +140,57 @@ static inline int z_utf8_put(uint32_t cp, char *out) {
 
 }
 
+// -- stepping by character, over a byte buffer --
+//
+// For editors that keep UTF-8 in a buffer and a caret as a byte offset
+// (zedit, text). A malformed byte is one character on its own, exactly
+// as z_utf8_next() treats it, so both directions agree on where every
+// character starts.
+
+// The offset of the character after the one at `off`.
+static inline int z_utf8_next_off(const char *s, int len, int off) {
+	if (off >= len) return len;
+	const char *p = s + off;
+	z_utf8_next(&p, s + len);
+	return (int)(p - s);
+}
+
+// The offset of the character before `off`.
+static inline int z_utf8_prev_off(const char *s, int len, int off) {
+	if (off <= 0) return 0;
+	int k = off - 1;
+	int lim = off - Z_UTF8_MAX > 0 ? off - Z_UTF8_MAX : 0;
+	while (k > lim && ((uint8_t)s[k] & 0xC0) == 0x80) k--;
+	if (z_utf8_next_off(s, len, k) == off) return k;
+	return off - 1;
+}
+
+// -- fitting --
+
+// The longest prefix of s[0..len) that is at most `max` bytes and ends
+// on a character boundary -- for copying a UTF-8 string into a buffer
+// without leaving half a character at the end. Returns its length.
+static inline size_t z_utf8_fit(const char *s, size_t len, size_t max) {
+	if (len <= max) return len;
+	size_t n = max;
+	// Back off continuation bytes; the byte at n is where the cut goes.
+	while (n > 0 && ((uint8_t)s[n] & 0xC0) == 0x80) n--;
+	return n;
+}
+
+// Copies NUL-terminated `src` into `dst` (capacity `cap`, always
+// terminated if cap > 0), cut at a character boundary if it does not
+// fit. Returns the bytes copied, not counting the NUL.
+static inline size_t z_utf8_copy(char *dst, size_t cap, const char *src) {
+	if (!cap) return 0;
+	size_t len = 0;
+	while (src[len]) len++;
+	size_t n = z_utf8_fit(src, len, cap - 1);
+	for (size_t i = 0; i < n; i++) dst[i] = src[i];
+	dst[n] = 0;
+	return n;
+}
+
 // -- display width --
 //
 // How many terminal columns a character takes: 0 for a combining mark
@@ -174,6 +225,35 @@ static inline int z_cp_width(uint32_t cp) {
 
 	return 1;
 
+}
+
+// Columns s[0..len) takes on screen -- z_cp_width() of each character,
+// a malformed byte counting one (it draws as one box).
+static inline int z_utf8_cols(const char *s, size_t len) {
+	const char *end = s + len;
+	int n = 0;
+	while (s < end) {
+		const char *before = s;
+		int w = z_cp_width(z_utf8_next(&s, end));
+		n += (s - before == 1 && (uint8_t)before[0] >= 0x80) ? 1 : w;
+	}
+	return n;
+}
+
+// The longest prefix of s[0..len) that fits in `cols` columns, in bytes
+// -- for a name that must be cut to fit a title or a row. A wide
+// character that would straddle the limit is left out whole.
+static inline size_t z_utf8_fit_cols(const char *s, size_t len, int cols) {
+	const char *p = s, *end = s + len;
+	int used = 0;
+	while (p < end) {
+		const char *before = p;
+		uint32_t cp = z_utf8_next(&p, end);
+		int w = (p - before == 1 && (uint8_t)before[0] >= 0x80) ? 1 : z_cp_width(cp);
+		if (used + w > cols) return (size_t)(before - s);
+		used += w;
+	}
+	return len;
 }
 
 // -- ISO 8859-15 (Latin-9) --

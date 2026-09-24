@@ -68,7 +68,7 @@ zgpio.o:
 	$(CC) $(CFLAGS) -c ../../common/zgpio.c -o zgpio.o
 
 logic.o:
-	$(CC) $(CFLAGS) -c logic.c -S -o logic.asm
+	$(CC) $(CFLAGS) -c logic.c -S -MF /dev/null -o logic.asm
 	$(CC) $(CFLAGS) -c logic.c -o logic.o
 
 logic.elf: $(OBJS)

@@ -42,7 +42,7 @@ zport.o:
 	$(CC) $(CFLAGS) -c ../../common/zport.c -o zport.o
 
 console.o:
-	$(CC) $(CFLAGS) -c console.c -S -o console.asm
+	$(CC) $(CFLAGS) -c console.c -S -MF /dev/null -o console.asm
 	$(CC) $(CFLAGS) -c console.c -o console.o
 
 console.elf: $(OBJS)

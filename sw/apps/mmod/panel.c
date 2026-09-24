@@ -38,6 +38,7 @@
 #include "../../common/zgpio.h"
 #include "../../common/zspi.h"
 #include "../../common/zwm.h"
+#include "../../common/zfs.h"		// Z_FS_NAME_MAX, Z_FS_PATH_MAX
 #include "../../common/zwin.h"
 #include "../../common/zgfx.h"
 #include "../../common/zfont.h"
@@ -124,8 +125,8 @@ static uint32_t range_start, range_len;
 // directory is not what anyone checks at a glance.
 static src_t src;
 
-static char file_name[40];
-static char file_path[160];
+static char file_name[Z_FS_NAME_MAX];
+static char file_path[Z_FS_PATH_MAX];
 static uint32_t file_size;
 
 static char status[96];

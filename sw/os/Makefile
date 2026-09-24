@@ -75,7 +75,7 @@ LDFLAGS = $(PIC_FLAGS) -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS) $
 LDSCRIPT = ../common/riscv-os.ld
 
 OBJS = kernel.o kruntime.o mem.o zar.o usb/usbh.o usb/usbh_hid.o usb/usbh_msc.o usb/usbh_hub.o usb/usbh_cdc.o usb/usbh_ecm.o usbcdcapi.o usbnetapi.o \
-	fs/fs.o fs/ramdisk.o fs/sdbench.o fs/fatfs/sdmm.o fs/fatfs/diskio_mux.o fs/fatfs/ff.o \
+	fs/fs.o fs/ramdisk.o fs/sdbench.o fs/fatfs/sdmm.o fs/fatfs/diskio_mux.o fs/fatfs/ff.o fs/fatfs/ffunicode.o \
 	uart.o hid.o sh.o xfer.o xmodem.o ui.o msg.o pidreg.o fsapi.o flashapi.o jumpapi.o zjump.o procapi.o zobj.o zstream.o zdns.o zsoc.o zgpio.o logo.o \
 	cfg.o zcfg.o zfont_data.o
 
@@ -89,7 +89,7 @@ OBJS = kernel.o kruntime.o mem.o zar.o usb/usbh.o usb/usbh_hid.o usb/usbh_msc.o 
 # any edit. bit us for real with fs/fs.c during this session's
 # zstream/TFTP work -- see docs/networking.md.
 KSRCS = kernel.c kruntime.c mem.c \
-	fs/fs.c fs/ramdisk.c fs/sdbench.c fs/fatfs/sdmm.c fs/fatfs/diskio_mux.c fs/fatfs/ff.c \
+	fs/fs.c fs/ramdisk.c fs/sdbench.c fs/fatfs/sdmm.c fs/fatfs/diskio_mux.c fs/fatfs/ff.c fs/fatfs/ffunicode.c \
 	usb/usbh.c usb/usbh_hid.c usb/usbh_msc.c usb/usbh_hub.c usb/usbh_cdc.c usb/usbh_ecm.c usbcdcapi.c usbnetapi.c uart.c hid.c sh.c xfer.c xmodem.c ui.c msg.c pidreg.c fsapi.c flashapi.c jumpapi.c procapi.c logo.c cfg.c \
 	../common/zobj.c ../common/zstream.c ../common/zdns.c ../common/zsoc.c ../common/zcfg.c ../common/zjump.c \
 	../common/zfont_data.c
@@ -125,6 +125,11 @@ usb/usbh_cdc.o: usb/usbh_cdc.c usb/usbh_cdc.h usb/usbh.h usb/usbh_hw.h
 fs/ramdisk.o: fs/ramdisk.c fs/ramdisk.h
 	$(CC) $(CFLAGS) -c fs/ramdisk.c -o fs/ramdisk.o
 	$(CC) $(CFLAGS) -c fs/fatfs/ff.c -o fs/fatfs/ff.o
+
+# Long file names (docs/sdcard.md): FatFs's Unicode tables, R0.14b as
+# shipped. Only code page 437's are linked (ffconf.h).
+fs/fatfs/ffunicode.o: fs/fatfs/ffunicode.c fs/fatfs/ffconf.h
+	$(CC) $(CFLAGS) -c fs/fatfs/ffunicode.c -o fs/fatfs/ffunicode.o
 	$(CC) $(CFLAGS) -c sh.c -o sh.o
 	$(CC) $(CFLAGS) -c xfer.c -o xfer.o
 	$(CC) $(CFLAGS) -c xmodem.c -o xmodem.o
@@ -148,11 +153,11 @@ fs/ramdisk.o: fs/ramdisk.c fs/ramdisk.h
 	$(CC) $(CFLAGS) -DZCFG_KERNEL -c ../common/zcfg.c -o zcfg.o
 	$(CC) $(CFLAGS) -c ../common/zstream.c -o zstream.o
 	$(CC) $(CFLAGS) -c ../common/zdns.c -o zdns.o
-	$(CC) $(CFLAGS) -c kernel.c -S -o kernel.asm
+	$(CC) $(CFLAGS) -c kernel.c -S -MF /dev/null -o kernel.asm
 	$(CC) $(CFLAGS) -c ../common/zsoc.c -o zsoc.o
 	$(CC) $(CFLAGS) -c ../common/zjump.c -o zjump.o
 	$(CC) $(CFLAGS) -c ../common/zgpio.c -o zgpio.o
-	$(CC) $(CFLAGS) -c sh.c -S -o sh.asm
+	$(CC) $(CFLAGS) -c sh.c -S -MF /dev/null -o sh.asm
 
 kernel.elf: $(OBJS)
 	$(CC) $(LDFLAGS) -T $(LDSCRIPT) -Wl,-Map,kernel.map -o kernel.elf $(OBJS)

@@ -2,6 +2,7 @@
 #define ZFSAPP_H
 
 #include <stdint.h>
+#include "zfs.h"		// Z_FS_NAME_MAX, Z_FS_PATH_MAX: size buffers for names with these
 #include <stdbool.h>
 
 /*

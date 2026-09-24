@@ -416,7 +416,7 @@ tftp.o: tftp.c tftp.h
 	$(CC) $(CFLAGS) -c tftp.c -o tftp.o
 
 net.o: net.c net_phy.h netcfg.h ssh/ssh.h sock.h ../../common/znet.h .net_config_selected ../../common/zsoc.h ../../common/zntp.h dhcp.h dns.h ntp.h
-	$(CC) $(CFLAGS) -c net.c -S -o net.asm
+	$(CC) $(CFLAGS) -c net.c -S -MF /dev/null -o net.asm
 	$(CC) $(CFLAGS) -c net.c -o net.o
 
 net.elf: $(OBJS)

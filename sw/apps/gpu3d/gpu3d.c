@@ -1371,15 +1371,7 @@ static void paint_full(void) {
 /* Live USB HID modifier byte. See this file's header comment for why
  * this is read from hardware rather than tracked from wm messages. */
 static uint8_t kbd_mods(void) {
-
-	uint32_t i0 = reg_usb0_info;
-	uint32_t i1 = reg_usb1_info;
-
-	if (((i0 >> 24) & 0x3) == 1) return (uint8_t)(i0 & 0xFF);
-	if (((i1 >> 24) & 0x3) == 1) return (uint8_t)(i1 & 0xFF);
-
-	return 0;
-
+	return z_kbd_live_mods();		// sw/common/zkbd.h
 }
 
 static bool dragging = false;
@@ -1642,7 +1634,7 @@ static void do_load(const char *path) {
 
 static void do_open(void) {
 
-	char path[80];
+	char path[Z_FS_PATH_MAX];
 
 	if (!z_dialog_open(&dlg_ctx, last_dir, path, sizeof(path))) return;
 

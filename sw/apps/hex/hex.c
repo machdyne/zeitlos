@@ -788,19 +788,7 @@ static void repaint(void) {
 // are unsaved edits. Just the basename: "/DOCS/DATA.BIN" is mostly
 // slashes at the width wm gives a title.
 static void build_title(char *t, int cap, const char *p, bool star) {
-
-	int n = 0;
-	const char *base = p[0] ? p : "untitled";
-
-	for (const char *s = p; *s; s++)
-		if (*s == '/') base = s + 1;
-
-	if (star && n < cap - 1) t[n++] = '*';
-
-	for (const char *s = base; *s && n < cap - 1; s++) t[n++] = *s;
-
-	t[n] = 0;
-
+	z_win_doc_title(t, cap, p, star, "untitled");
 }
 
 // The last title actually sent, so a call that would change nothing
@@ -817,7 +805,7 @@ static char sent_title[32];
 
 static void update_title(void) {
 
-	char t[32];
+	char t[64];
 	build_title(t, (int)sizeof(t), path, modified());
 
 	int i = 0;

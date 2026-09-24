@@ -61,6 +61,7 @@
 #include "../../common/zsoc.h"
 #include "../../common/zwm.h"
 #include "../../common/zwin.h"
+#include "../../common/zutf8.h"
 #include "../../common/zgfx.h"
 #include "../../common/zfont.h"
 #include "../../common/zkbd.h"
@@ -109,7 +110,7 @@ static z_dialog_ctx_t dlg_ctx;
 // static rather than a local -- see z_img_file_t in zimg.h.
 static z_img_file_t src __attribute__((section(".bss")));
 
-static char filename[80];
+static char filename[Z_FS_PATH_MAX];
 static char last_dir[80] = "/";
 static char title_buf[48];
 
@@ -315,7 +316,8 @@ static void update_title(void) {
 	if (!img_w) {
 		str_copy(next, sizeof(next), "view");
 	} else {
-		n = str_copy(next, sizeof(next), basename_of(filename));
+		// Cut at a character boundary: a long file name is UTF-8.
+		n = (int)z_utf8_copy(next, sizeof(next), basename_of(filename));
 		n = str_append(next, sizeof(next), n, " ");
 		n = str_append_dec(next, sizeof(next), n, img_w);
 		n = str_append(next, sizeof(next), n, "x");

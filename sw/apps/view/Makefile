@@ -182,7 +182,7 @@ zprof.o:
 	$(CC) $(CFLAGS) -c ../../common/zprof.c -o zprof.o
 
 view.o:
-	$(CC) $(CFLAGS) -c view.c -S -o view.asm
+	$(CC) $(CFLAGS) -c view.c -S -MF /dev/null -o view.asm
 	$(CC) $(CFLAGS) -c view.c -o view.o
 
 view.elf: $(OBJS)

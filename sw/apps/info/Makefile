@@ -62,7 +62,7 @@ logo_small.o: logo_small.c logo_small.h
 	$(CC) $(CFLAGS) -c logo_small.c -o logo_small.o
 
 info.o:
-	$(CC) $(CFLAGS) -c info.c -S -o info.asm
+	$(CC) $(CFLAGS) -c info.c -S -MF /dev/null -o info.asm
 	$(CC) $(CFLAGS) -c info.c -o info.o
 
 info.elf: $(OBJS)

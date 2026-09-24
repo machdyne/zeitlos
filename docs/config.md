@@ -30,7 +30,7 @@ system.video.mode: amber
 | key | default | read by | effect |
 | --- | --- | --- | --- |
 | `apps.term.auto_connect` | *(none)* | `term` | what a new term window connects to by itself |
-| `system.font.japanese` | `no` | `wm` | start `jfont` at boot, so Japanese draws in `text` at 6x12 -- about 190KB of RAM ([text_encoding.md](text_encoding.md)) |
+| `system.font.japanese` | `no` | `wm`, `settings` | start `jfont` at boot, so Japanese draws at 6x12 -- about 190KB of RAM ([text_encoding.md](text_encoding.md)); `settings` switches it on and off at once |
 | `system.keyboard.layouts` | `us` | `wm` | keyboard layouts, comma-separated; the first is used at start, Super+Space cycles |
 | `system.rtc.timezone` | `UTC` | `clock`, `cal` | local time shown; the RTC itself stays UTC |
 | `system.tts.enabled` | `no` | kernel | speech: start `tts` at boot, for a machine set up for someone who cannot see it |

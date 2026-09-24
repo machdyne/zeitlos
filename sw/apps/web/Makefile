@@ -281,7 +281,7 @@ zrng.o:
 
 web.o: web.c url.h http.h html.h layout.h page.h ../../common/zweb.h \
 	.web_config_selected
-	$(CC_TARGET) $(CFLAGS) -c web.c -S -o web.asm
+	$(CC_TARGET) $(CFLAGS) -c web.c -S -MF /dev/null -o web.asm
 	$(CC_TARGET) $(CFLAGS) -c web.c -o web.o
 
 web.elf: $(OBJS)

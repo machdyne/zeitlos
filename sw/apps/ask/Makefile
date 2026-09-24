@@ -83,7 +83,7 @@ aidx.o:
 	$(CC) $(CFLAGS) -c aidx.c -o aidx.o
 
 ask.o:
-	$(CC) $(CFLAGS) -c ask.c -S -o ask.asm
+	$(CC) $(CFLAGS) -c ask.c -S -MF /dev/null -o ask.asm
 	$(CC) $(CFLAGS) -c ask.c -o ask.o
 
 ask.elf: $(OBJS)

@@ -30,7 +30,7 @@ zport.o:
 	$(CC) $(CFLAGS) -c ../../common/zport.c -o zport.o
 
 portdemo.o:
-	$(CC) $(CFLAGS) -c portdemo.c -S -o portdemo.asm
+	$(CC) $(CFLAGS) -c portdemo.c -S -MF /dev/null -o portdemo.asm
 	$(CC) $(CFLAGS) -c portdemo.c -o portdemo.o
 
 portdemo.elf: $(OBJS)

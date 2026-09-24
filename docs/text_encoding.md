@@ -131,8 +131,10 @@ a character with.
 ## Japanese
 
 Japanese is drawn from a **12x12 font held once for every app** by a
-small service, `sw/apps/jfont`. Start it with `system.font.japanese:
-yes` in `/zeitlos.cfg` (wm runs it at boot) or `run jfont`.
+small service, `sw/apps/jfont`. Turn it on in `settings` (**Japanese
+font**, which starts it at once and keeps it on at boot), or set
+`system.font.japanese: yes` in `/zeitlos.cfg`, or `run jfont`. Then use
+the 6x12 font -- the titlebar's **Aa** icon in `text` and in `term`.
 
 **The font** is Shinonome `shnmk12`: 6,879 JIS X 0208 glyphs --
 hiragana, katakana, 6,356 kanji, fullwidth forms and JIS symbols --
@@ -182,8 +184,8 @@ two characters, and the caret, Up/Down and clicks land on the right
 column. Programs compiled with `zcc` get it too (libz gained
 `z_proc_list()` for the lookup). `term` keeps each wide character's
 codepoint in its cell and its scrollback, so Japanese is copied and read
-aloud as itself, and drawn when `term` is built at 6x12
-([terminal.md](terminal.md), "UTF-8"). `read` still turns each line into
+aloud as itself, and drawn at 6x12 -- the titlebar's Aa icon
+([terminal.md](terminal.md), "Font"). `read` still turns each line into
 one glyph byte per column, so Japanese there is correctly spaced boxes;
 drawing it needs its line model to carry codepoints. Japanese is typed
 with the `ja` layouts ([keyboard_layouts.md](keyboard_layouts.md),

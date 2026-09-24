@@ -76,7 +76,7 @@ draw_icons.o: draw_icons.c draw_icons.h
 	$(CC) $(CFLAGS) -c draw_icons.c -o draw_icons.o
 
 draw.o:
-	$(CC) $(CFLAGS) -c draw.c -S -o draw.asm
+	$(CC) $(CFLAGS) -c draw.c -S -MF /dev/null -o draw.asm
 	$(CC) $(CFLAGS) -c draw.c -o draw.o
 
 draw.elf: $(OBJS)

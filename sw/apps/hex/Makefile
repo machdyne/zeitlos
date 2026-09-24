@@ -73,7 +73,7 @@ zdialog.o:
 	$(CC) $(CFLAGS) -c ../../common/zdialog.c -o zdialog.o
 
 hex.o:
-	$(CC) $(CFLAGS) -c hex.c -S -o hex.asm
+	$(CC) $(CFLAGS) -c hex.c -S -MF /dev/null -o hex.asm
 	$(CC) $(CFLAGS) -c hex.c -o hex.o
 
 hex.elf: $(OBJS)

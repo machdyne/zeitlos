@@ -111,7 +111,7 @@ zconnect.o:
 	$(CC) $(CFLAGS) -c ../../common/zconnect.c -o zconnect.o
 
 term.o:
-	$(CC) $(CFLAGS) -c term.c -S -o term.asm
+	$(CC) $(CFLAGS) -c term.c -S -MF /dev/null -o term.asm
 	$(CC) $(CFLAGS) -c term.c -o term.o
 
 term.elf: $(OBJS)

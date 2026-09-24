@@ -50,20 +50,25 @@
 
 #include "zwin.h"
 #include "zwidget.h"
+#include "zfs.h"		// Z_FS_NAME_MAX, Z_FS_PATH_MAX
 
 // Bounds, chosen against the SD cards this actually runs on rather
 // than in the abstract. 128 entries is a comfortable multiple of what
-// a Zeitlos root directory holds; 8.3 short names plus a "/" prefix
-// and a NUL fit in 16 bytes with room to spare (FatFs is built with
-// FF_SFN_BUF = 12, see sw/os/fs/fatfs/ffconf.h), and 24 leaves
-// headroom if long filename support is ever turned on.
+// a Zeitlos root directory holds.
 //
-// Cost is Z_FLIST_MAX * Z_FLIST_NAME_MAX = 3KB of .bss per instance,
-// plus the shared staging buffer in zflist.c. Worth knowing before
+// Names are long file names (docs/sdcard.md), up to 255 bytes of UTF-8
+// each, so they are not kept in fixed slots -- 128 of those would be
+// 32KB. They sit end to end in one pool, Z_FLIST_POOL bytes, each
+// found by its offset; the directory is listed straight into the pool
+// and each entry cut down to its name in place, so no second buffer is
+// needed either. A directory whose names do not all fit is truncated,
+// exactly as one with too many entries is. Cost: the pool plus 2 bytes
+// an entry, about 4.3KB of .bss per instance -- worth knowing before
 // putting three of these in one app.
 #define Z_FLIST_MAX        128
-#define Z_FLIST_NAME_MAX    24
-#define Z_FLIST_PATH_MAX    64
+#define Z_FLIST_POOL       4096
+#define Z_FLIST_NAME_MAX   Z_FS_NAME_MAX
+#define Z_FLIST_PATH_MAX   Z_FS_PATH_MAX
 
 // z_flist_mouse()/z_flist_key() results
 #define Z_FLIST_NONE        0	// nothing happened
@@ -90,7 +95,9 @@ typedef struct {
 	// display names (no path), because that is what gets drawn and
 	// what a caller usually wants to show; z_flist_selected_path()
 	// rebuilds the full path on demand.
-	char		names[Z_FLIST_MAX][Z_FLIST_NAME_MAX];
+	// Entry i's name is at pool + name_off[i]; see z_flist_selected().
+	char		pool[Z_FLIST_POOL];
+	uint16_t	name_off[Z_FLIST_MAX];
 	uint8_t		isdir[Z_FLIST_MAX];
 	int			count;
 

@@ -847,6 +847,60 @@ same reason: they are about the desktop, not about any one app.
 | Super+E | switch between the recorded and the synthesised voice (`docs/tts.md`) |
 | Ctrl, tapped alone | stop speaking |
 
+### Maximize and shade
+
+**Maximize** -- double-click a resizable window's titlebar, or Alt+Equal
+-- fills the screen with the window, and the **dock hides** while any
+window is maximized; the same again puts it back where it was. The
+window fills as much of the screen as its app allows: an app can give
+its largest useful size with `z_win_set_max_size()` (`Z_WM_SET_LIMITS`,
+`zwm.h`), which the resize grip also stops at, and a window already at
+that size does not maximize at all. `term` sets its natural 80x25 size,
+so it neither maximizes nor grows past its screen by the grip; when its
+grid can grow, that is the one line to change. A maximized window cannot
+be dragged -- restoring it is how it moves again -- and has no grip.
+Maximizing is applied exactly as a resize: new rect, then
+`Z_WM_WINDOW_MOVED`/`_RESIZED` to the owner and a repair of everywhere
+it was and is (`set_rect()`).
+
+The dock hides by moving below the bottom of the screen, where repairs
+never reach it, nothing hits it and its visible region is empty; Alt+Tab
+passes it by and Alt+[ / Alt+] do nothing until it is back. Closing a
+maximized window brings it back if no other is maximized.
+
+**Shade** -- Alt+double-click the titlebar (left Alt: right Alt is AltGr
+on many layouts), or Alt+Minus -- leaves only the titlebar. It is wm's
+alone: the window's `h` becomes the titlebar's height and `real_h` keeps
+the app's, which `send_win_rect()` reports, so the app is never resized;
+it gets an empty visible region, and a redraw when unshaded. Every hit
+test, region and repair already follows `h`, so none of them needed to
+learn about shading. A shaded window gives up the keyboard, and Alt+Tab
+passes it by. Double-clicking a shaded window unshades it rather than
+maximizing it, and a maximized window cannot be shaded -- it would leave
+the dock hidden and nothing on the screen; restore it first.
+
+Double clicks are two presses within `Z_DOUBLE_CLICK_TICKS` (`zwm.h`,
+also used by `zflist`) and 4 pixels. Alt is read from the keyboard's own
+report at the moment of the click (`z_kbd_live_mods()`, `zkbd.h`),
+because a held modifier sends no key events; that is also why the
+on-screen keyboard cannot shade by click -- Alt+Minus works from it.
+With speech on, "maximized", "restored", "shaded" and "unshaded" are
+said.
+
+### Resizing on request
+
+An app can ask for a new size with `z_win_resize(win, w, h)` (`zwin.h`),
+which sends `Z_WM_RESIZE` (`zwm.h`) -- one packed word: the window id and
+the new outer size. `wm` applies it exactly as a resize-grip release:
+new size (clamped to the minimum and to the screen, and moved back on if
+it grew past an edge), `Z_WM_WINDOW_RESIZED` to the owner -- and
+`Z_WM_WINDOW_MOVED` if it moved -- then a repair of everywhere the
+window was and now is, so the owner's redraw comes at the new size. Only
+the owner may resize its window, and not while the user is dragging or
+resizing it. `term`'s font toggle is the first user; before it the only
+way was to destroy the window and create another, which lost its place
+on the screen (`chip8` still does this).
+
 ### Windows that never take focus
 
 `Z_WIN_FLAG_NO_FOCUS` (`zwm.h`) marks a window that is never given the
@@ -862,6 +916,7 @@ not take the keys away from the window they are for.
 | key | action |
 |---|---|
 | Super+Space | next keyboard layout in `system.keyboard.layouts`; its two-letter label shows on the dock for a moment, and speech says its name |
+| Super+K | start the on-screen keyboard ([keyboard_app.md](keyboard_app.md)); it is single-instance, so a second press does nothing |
 
 Tested before the speech keys, by usage (Space is the same key on every
 layout). See [keyboard_layouts.md](keyboard_layouts.md), which also
@@ -2446,9 +2501,9 @@ so a grab that silenced the keyboard would be a trap with no way out.
 **Not suspended:** wm's own hotkeys. It is the only process that sees
 every keystroke and that has to stay true whoever owns the screen.
 
-### Alt+Esc during a grab revokes it
+### Super+Esc during a grab revokes it
 
-The camera is meaningless when an app owns the framebuffer, so Alt+Esc
+The camera is meaningless when an app owns the framebuffer, so Super+Esc
 hands the screen back, repaints the desktop, and sends the owner
 `Z_WM_GAME_REVOKED`. An app that ignores that message is no worse off
 than before; one that handles it can put itself back in a window.

@@ -87,7 +87,7 @@ midi_icons.o:
 	$(CC) $(CFLAGS) -c midi_icons.c -o midi_icons.o
 
 midi.o:
-	$(CC) $(CFLAGS) -c midi.c -S -o midi.asm
+	$(CC) $(CFLAGS) -c midi.c -S -MF /dev/null -o midi.asm
 	$(CC) $(CFLAGS) -c midi.c -o midi.o
 
 midi.elf: $(OBJS)

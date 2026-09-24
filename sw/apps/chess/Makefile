@@ -99,7 +99,7 @@ input.o:
 	$(CC) $(CFLAGS) -c input.c -o input.o
 
 chess.o:
-	$(CC) $(CFLAGS) -c chess.c -S -o chess.asm
+	$(CC) $(CFLAGS) -c chess.c -S -MF /dev/null -o chess.asm
 	$(CC) $(CFLAGS) -c chess.c -o chess.o
 
 chess.elf: $(OBJS)

@@ -2870,18 +2870,8 @@ static void follow(const char *target) {
 
 static void update_title(void) {
 
-	char t[32];
-	int n = 0;
-
-	const char *base = path[0] ? path : "read";
-
-	for (const char *p = path; *p; p++)
-		if (*p == '/') base = p + 1;
-
-	for (const char *p = base; *p && n < (int)sizeof(t) - 1; p++) t[n++] = *p;
-
-	t[n] = 0;
-
+	char t[64];
+	z_win_doc_title(t, (int)sizeof(t), path, false, "read");
 	z_win_set_title(&win, t);
 
 }

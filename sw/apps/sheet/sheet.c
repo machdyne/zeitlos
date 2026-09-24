@@ -80,7 +80,7 @@
 
 static sheet_t sh;
 
-static char filename[80];		// "" when never saved
+static char filename[Z_FS_PATH_MAX];		// "" when never saved
 
 // -- window --
 
@@ -357,28 +357,7 @@ static bool scroll_to_cursor(void) {
 // ---------------------------------------------------------------
 
 static void build_title(char *t, int cap, const char *path, bool star) {
-
-	const char *base = path;
-
-	for (const char *p = path; *p; p++)
-		if (*p == '/') base = p + 1;
-
-	int n = 0;
-	const char *pre = "sheet: ";
-
-	while (pre[n] && n < cap - 1) { t[n] = pre[n]; n++; }
-
-	if (!*base) {
-		const char *u = "untitled";
-		for (int i = 0; u[i] && n < cap - 1; i++) t[n++] = u[i];
-	} else {
-		for (int i = 0; base[i] && n < cap - 1; i++) t[n++] = base[i];
-	}
-
-	if (star && n < cap - 1) t[n++] = '*';
-
-	t[n] = 0;
-
+	z_win_doc_title(t, cap, path, star, "untitled");
 }
 
 // What was last sent, so an unchanged title costs no message. wm
@@ -389,7 +368,7 @@ static char sent_title[40];
 
 static void update_title(void) {
 
-	char t[40];
+	char t[64];
 
 	build_title(t, (int)sizeof(t), filename, sh.modified);
 
@@ -805,7 +784,7 @@ static bool do_save_to(const char *path) {
 
 static bool do_save_as(void) {
 
-	char path[80];
+	char path[Z_FS_PATH_MAX];
 
 	const char *suggest = filename[0] ? filename : "SHEET.ZSS";
 
@@ -945,7 +924,7 @@ static void do_open(void) {
 
 	if (!confirm_discard()) { repaint(); return; }
 
-	char path[80];
+	char path[Z_FS_PATH_MAX];
 
 	if (z_dialog_open(&dlg_ctx, last_dir, path, sizeof(path)))
 		load_path(path);

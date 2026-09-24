@@ -250,6 +250,25 @@ blit or a viewport move that brings one into view repaints it. At full
 height all of this reduces to what it was before: the render test's
 results are identical, line for line.
 
+## Font
+
+The titlebar's **Aa** icon switches between the 5x8 font and 6x12, and
+the window changes size to keep the screen 80x25: 400x200 of text at
+5x8, 480x300 at 6x12, both well inside 640x480. 6x12 is the size
+Japanese is drawn at ([text_encoding.md](text_encoding.md), "Japanese").
+`make term FONT=z_font_6x12` picks the font it starts in.
+
+`TERM_FONT` is a pointer behind a macro, so every use of it follows the
+switch; `term_toggle_font()` recomputes the cell size and the window
+size (`term_setup()`), invalidates the shadow so every cell is redrawn,
+and asks `wm` for the new size with `z_win_resize()` -- the
+app-initiated resize, `Z_WM_RESIZE` ([window_manager.md](window_manager.md)).
+The new geometry is in place before the request goes out, so the
+`Z_WM_WINDOW_RESIZED` and redraw that come back find everything already
+sized for it. Both fonts are in hardware glyph memory -- `wm` loads both
+at startup -- which is what makes switching safe; the source comment
+that warned against a 6x12 build dated from when it loaded only 5x8.
+
 ## UTF-8
 
 What arrives from a shell or an ssh session is UTF-8, and what `term`
@@ -282,7 +301,7 @@ some tables count as wide (watch, hourglass) are one column here.
 (`vt_cell_t.cp`, 16 bits -- the Basic Multilingual Plane, which is all
 of everyday Japanese), and a history line keeps it too (see "Memory").
 So it is copied, read aloud and scrolled back as itself at any font
-size. Built with `make term FONT=z_font_6x12` and with `jfont` running
+size. At 6x12 (the Aa icon, "Font" above) and with `jfont` running
 ([text_encoding.md](text_encoding.md), "Japanese"), it is also DRAWN:
 the renderer flags such a cell in its shadow (`SHADOW_WIDE`), draws the
 12x12 glyph across both cells from the left one, and draws nothing for

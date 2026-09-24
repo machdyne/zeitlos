@@ -84,6 +84,26 @@ int main(void) {
 		ck(e.scroll == 0, "returning to the start scrolls back");
 	}
 
+		// -- UTF-8 (long file names, docs/sdcard.md) --
+	{
+		char b[16];
+		z_edit_t u;
+		z_edit_init(&u, b, sizeof(b), "a");
+		z_edit_key(&u, 0xFC);						// u-umlaut, 2 bytes
+		z_edit_key(&u, 0x65E5);						// a kanji, 3 bytes
+		ck(u.len == 6 && !strcmp(b, "a\xC3\xBC\xE6\x97\xA5"), "typed UTF-8");
+		z_edit_key(&u, Z_KEY_LEFT);
+		ck(u.cur == 3, "Left steps over a 3-byte character");
+		z_edit_key(&u, 0x7f);
+		ck(!strcmp(b, "a\xE6\x97\xA5") && u.cur == 1, "Backspace removes a whole 2-byte character");
+		z_edit_key(&u, Z_KEY_DELETE);
+		ck(!strcmp(b, "a") && u.len == 1, "Delete removes a whole 3-byte character");
+		// A character that does not fit whole is refused.
+		z_edit_init(&u, b, 5, "abc");
+		ck(!z_edit_key(&u, 0x65E5) && u.len == 3, "no half character at the end");
+		ck(z_edit_key(&u, 0xE4) == false || u.len == 5, "a 2-byte one does not fit either");
+	}
+
 	printf("%s: %d checks, %d failures\n", fails?"FAIL":"ok", checks, fails);
 	return fails ? 1 : 0;
 }
@@ -95,3 +115,4 @@ void z_fb_hw_fill_rect(int a,int b,int c,int d,int e){(void)a;(void)b;(void)c;(v
 
 
 void z_fb_draw_char(int x, int y, char c, int color, const z_font_t *font, const z_clip_t *clip) { (void)x;(void)y;(void)c;(void)color;(void)font;(void)clip; }
+void z_fb_draw_utf8(int x, int y, const char *t, int color, const z_font_t *font, const z_clip_t *clip) { (void)x;(void)y;(void)t;(void)color;(void)font;(void)clip; }

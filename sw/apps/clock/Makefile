@@ -71,7 +71,7 @@ zrtc.o: ../../common/zrtc.c ../../common/zrtc.h
 	$(CC) $(CFLAGS) -c ../../common/zrtc.c -o zrtc.o
 
 clock.o: clock.c ../../common/zrtc.h ../../common/zntp.h
-	$(CC) $(CFLAGS) -c clock.c -S -o clock.asm
+	$(CC) $(CFLAGS) -c clock.c -S -MF /dev/null -o clock.asm
 	$(CC) $(CFLAGS) -c clock.c -o clock.o
 
 clock.elf: $(OBJS)

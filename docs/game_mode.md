@@ -157,8 +157,8 @@ the one process that sees every keystroke before any app does.
 
 | key | action |
 |---|---|
-| Alt+Esc | toggle game mode |
-| Ctrl+Alt+Arrow | move the viewport 20px |
+| Super+Esc | toggle game mode |
+| Super+Arrow | move the viewport 20px |
 | Super held + mouse | viewport follows the pointer |
 
 Ctrl+Alt, not plain Alt, because Alt+Arrow already moves the focused
@@ -350,4 +350,13 @@ to get wrong.
 
 `(game-mode)`, `(game-view)`, `(game-frame)`, `(game-wait)` — see
 `docs/scheme_api.md`. Useful for poking at the viewport interactively;
-`Alt+Esc` gets you back if you scroll away from your terminal.
+`Super+Esc` gets you back if you scroll away from your terminal.
+
+## Keys moved to Super
+
+Game mode's keys were Alt+Esc and Ctrl+Alt+Arrow. They are Super+Esc
+and Super+Arrow now: Super is for what is global -- the viewport,
+speech, keyboard layouts -- and Alt for the focused window
+([welcome.md](welcome.md)). Alt+Esc now reaches the focused app like any
+other key.
+

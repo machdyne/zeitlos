@@ -43,7 +43,7 @@ zwin.o:
 	$(CC) $(CFLAGS) -c ../../common/zwin.c -o zwin.o
 
 keyboard.o:
-	$(CC) $(CFLAGS) -c keyboard.c -S -o keyboard.asm
+	$(CC) $(CFLAGS) -c keyboard.c -S -MF /dev/null -o keyboard.asm
 	$(CC) $(CFLAGS) -c keyboard.c -o keyboard.o
 
 keyboard.elf: $(OBJS)

@@ -73,7 +73,7 @@ ztype.o:
 	$(CC) $(CFLAGS) -c ../../common/ztype.c -o ztype.o
 
 files.o:
-	$(CC) $(CFLAGS) -c files.c -S -o files.asm
+	$(CC) $(CFLAGS) -c files.c -S -MF /dev/null -o files.asm
 	$(CC) $(CFLAGS) -c files.c -o files.o
 
 files.elf: $(OBJS)

@@ -80,7 +80,7 @@ zdialog.o:
 	$(CC) $(CFLAGS) -c ../../common/zdialog.c -o zdialog.o
 
 text.o:
-	$(CC) $(CFLAGS) -c text.c -S -o text.asm
+	$(CC) $(CFLAGS) -c text.c -S -MF /dev/null -o text.asm
 	$(CC) $(CFLAGS) -c text.c -o text.o
 
 text.elf: $(OBJS)

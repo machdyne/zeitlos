@@ -240,7 +240,7 @@ page.o: page.c page.h ../../common/zfsapp.h ../../common/zport.h
 	$(CC) $(CFLAGS) -c page.c -o page.o
 
 repl.o:
-	$(CC) $(CFLAGS) $(MS_SIZE_CFLAGS) -c repl.c -S -o repl.asm
+	$(CC) $(CFLAGS) $(MS_SIZE_CFLAGS) -c repl.c -S -MF /dev/null -o repl.asm
 	$(CC) $(CFLAGS) $(MS_SIZE_CFLAGS) -c repl.c -o repl.o
 
 repl.elf: $(OBJS)

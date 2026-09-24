@@ -69,7 +69,7 @@ calc_core.o: calc_core.c calc_core.h
 	$(CC) $(CFLAGS) -c calc_core.c -o calc_core.o
 
 calc.o:
-	$(CC) $(CFLAGS) -c calc.c -S -o calc.asm
+	$(CC) $(CFLAGS) -c calc.c -S -MF /dev/null -o calc.asm
 	$(CC) $(CFLAGS) -c calc.c -o calc.o
 
 calc.elf: $(OBJS)

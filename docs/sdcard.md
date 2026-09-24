@@ -502,3 +502,64 @@ somewhere and write its output somewhere durable.
   command
 - `docs/ramdisk.md` — the 19 KB/s figure, and `/ram`
 - `docs/posix.md` — why this is Phase 0
+
+## Long file names
+
+The card's FAT filesystem uses **long file names** (FatFs `FF_USE_LFN
+1`, `sw/os/fs/fatfs/ffconf.h`): up to 255 characters, spaces and any
+script included -- `Meeting notes.txt`, `Grüße.txt`, `日本語.txt`. They
+reach apps as **UTF-8** (`FF_LFN_UNICODE 2`), the encoding everything
+that crosses a process boundary uses ([text_encoding.md](text_encoding.md)).
+Before this a file saved on another computer showed as its 8.3 alias
+(`MEETIN~1.TXT`), and a German or Japanese name could not exist at all.
+
+**The kernel.** FatFs keeps its long-name working buffer in `.bss`, not on
+the stack (`FF_USE_LFN 1`, not 2): kernel stack depth is what has run out
+before -- see the `f_stat()` note in `sw/os/fs/fs.c` -- and FatFs is only
+entered from one syscall at a time. For the same reason `k_fs_list()`'s
+`FILINFO`, about 290 bytes with long names, is static. `k_fs_list()` used
+to assemble each name in a 96-byte buffer and skip any that did not fit;
+it now writes straight into the caller's buffer, or long names would
+have vanished from every listing. `ffunicode.c` is FatFs R0.14b's.
+
+**The code page is 437**, not 932 as it was. With the UTF-8 API every
+name a user sees is a long name, stored on the card as UTF-16, whatever
+the code page says; it only decides how a non-ASCII byte in a bare 8.3
+name is read, and the short aliases written beside long names. 932
+(Shift-JIS) needs 47KB of tables -- more than the kernel image has free
+(`docs/kernel.md`, "The 256KB image budget") -- and 437's are about 1KB.
+Long names cost the kernel 5.7KB in all.
+
+**Apps.** `sw/common/zfs.h` has `Z_FS_NAME_MAX` and `Z_FS_PATH_MAX` (256
+each); apps size name and path buffers with those instead of the 64s and
+80s each used to choose. Shared pieces carry the rest:
+
+- `zflist` (the file list in every dialog and in `files`) keeps names end
+  to end in one 4KB pool, found by offset, instead of 128 fixed 24-byte
+  slots -- fixed slots for 255-byte names would be 32KB -- and lists
+  straight into that pool, so its old staging buffer is gone. Names are
+  drawn as UTF-8. (It also sorted Z to A until now; A to Z.)
+- `zedit` (the one-line field in dialogs) edits UTF-8: typing any
+  character, stepping and deleting whole characters, columns by width.
+- `z_win_doc_title()` (`zwin.h`) builds a document window's title -- the
+  name without its directory, `*` while modified, cut at a character
+  boundary -- for `text`, `sheet`, `hex`, `draw` and `read`, which each
+  built it themselves; `wm` draws titles as UTF-8 and never cuts one
+  inside a character.
+- `zutf8.h` gained `z_utf8_copy()`/`z_utf8_fit()` (copy without cutting
+  a character), `z_utf8_cols()`/`z_utf8_fit_cols()` (widths), and
+  `z_utf8_next_off()`/`z_utf8_prev_off()` (stepping a caret).
+
+**Not yet:** a name with a space cannot be typed in a shell or passed as
+a launch argument -- those split on spaces. Such files open from the
+file browser and the dialogs, which do no parsing.
+
+**The release image stays 8.3.** `release/lib/mkfatimg.py` still refuses
+long names on the card it builds, on purpose: everything shipped keeps a
+short name, so a release card reads the same under a kernel without long
+names. It is stricter than the system, not a limit of it.
+
+Tests: `sw/common/tests/test_flist.c` (long, German and Japanese names
+through the real `zflist`, the sort, a pool too small for a directory),
+and the UTF-8 cases in `test_edit.c`.
+

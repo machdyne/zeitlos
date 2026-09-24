@@ -37,7 +37,8 @@
 #include "../../common/zkbd.h"
 #include "../../common/zicon.h"
 #include "../../common/zspeak.h"	// speech -- docs/tts.md
-#include "../../common/zcfg.h"		// system.keyboard.layouts
+#include "../../common/zcfg.h"
+#include "../../common/zutf8.h"		// titles are UTF-8		// system.keyboard.layouts
 #include "dock_icons.h"
 #include "win_icons.h"
 
@@ -79,6 +80,17 @@ typedef struct {
 	// creation size it may be derived from is not retained anywhere
 	// else -- w/h change as soon as the user resizes.
 	uint32_t	min_w, min_h;
+
+	// The largest useful size, from the app (Z_WM_SET_LIMITS); 0 = none.
+	uint32_t	max_w, max_h;
+
+	// Maximized: filling the screen, rx/ry/rw/rh the place to go back
+	// to. Shaded: only its titlebar shows -- h is the titlebar's
+	// height while real_h keeps the app's, which is never told. See
+	// "-- maximize and shade --".
+	bool		maxed, shaded;
+	uint32_t	rx, ry, rw, rh;
+	uint32_t	real_h;
 } wm_window_t;
 
 // -- dock --
@@ -198,6 +210,13 @@ static int dock_app_count;
 // indices this one doesn't need the usual "does this id still exist"
 // checking.
 static int dock_idx = -1;
+
+// While any window is maximized the dock is hidden, moved below the
+// screen; dock_home_y is where it goes back to. See "-- maximize and
+// shade --" (dock_update()). Up here because next_focusable() and the
+// dock paging keys, both long before that section, check it.
+static bool dock_hidden;
+static uint32_t dock_home_y;
 
 // The keyboard layout label drawn over the dock for a moment after a
 // switch (draw_dock(), kbd_announce()). Up here because draw_dock()
@@ -385,6 +404,7 @@ static void handle_message(z_msg_t *msg);
 static bool bring_to_front(int idx);
 static void wipe_raise_overlap(int raised);
 static void notify_moved(int idx);
+static void notify_resized(int idx);
 static void repair_drag(int dragged_idx);
 // forward-declared for the same reason as the three above: Alt+Tab
 // (next_focusable(), further down) has to skip windows blocked by
@@ -528,7 +548,8 @@ static void draw_window_box(wm_window_t *w, bool is_focused, int color) {
 	// grip on a fixed-size window is worse than no grip at all, since
 	// the one thing a grip promises is that dragging it does
 	// something.
-	if ((w->flags & Z_WIN_FLAG_RESIZABLE) && !w->no_titlebar) {
+	if ((w->flags & Z_WIN_FLAG_RESIZABLE) && !w->no_titlebar &&
+	    !w->maxed && !w->shaded) {
 		for (int i = 3; i < Z_WM_RESIZE_GRIP; i += 3) {
 			int gx = x1 - i, gy = y1 - i;
 			// skip any tick that would need a negative coordinate --
@@ -904,7 +925,9 @@ static void draw_titlebar_content(wm_window_t *w) {
 		// BACKGROUND to 0 (see zgfx.h), so asking it for black text
 		// painted black-on-black and wiped the white bar back out
 		// underneath the title. This one takes fg AND bg.
-		z_fb_draw_text2(x0 + Z_WM_TITLE_TEXT_MARGIN_X,
+		// UTF-8: a title is usually a file name, and a long file name
+		// can be anything (docs/sdcard.md).
+		z_fb_draw_utf8_2(x0 + Z_WM_TITLE_TEXT_MARGIN_X,
 			titlebar_content_y(w, z_font_5x8.h),
 			w->title, fg, bg, &z_font_5x8, &clip);
 
@@ -2688,6 +2711,10 @@ static int next_focusable(int from) {
 		// itself stays in the cycle, so the app is still reachable.
 		if (blocked_by_modal(idx) >= 0) continue;
 		if (windows[idx].flags & Z_WIN_FLAG_NO_FOCUS) continue;
+		// Nothing to type into: a shaded window, or the dock while a
+		// maximized window has hidden it.
+		if (windows[idx].shaded) continue;
+		if (idx == dock_idx && dock_hidden) continue;
 		return idx;
 	}
 
@@ -2915,7 +2942,7 @@ static void game_toggle(void) {
 
 }
 
-// Ctrl+Alt+Arrow -- move the viewport, in game mode only.
+// Super+Arrow -- move the viewport, in game mode only.
 //
 // Ctrl+Alt rather than plain Alt because Alt+Arrow is already taken by
 // alt_move_focused() above. dispatch_keys() must therefore test for
@@ -3300,6 +3327,147 @@ static void speech_ctrl_tap(uint8_t usage, uint8_t modifiers, bool pressed) {
 // usage code to a keysym (zkbd.h) first. Demo windows (owned by wm
 // itself, see main() below) have no app to notify, same as
 // notify_moved()'s check below.
+// -- maximize and shade -- docs/window_manager.md, "Maximize and shade" --
+//
+// Maximize: a resizable window fills the screen (or as much of it as its
+// app's Z_WM_SET_LIMITS allows -- a window already at that does not
+// maximize at all, which is term today), and the dock is hidden while
+// any window is. Applied like any resize: new rect, Z_WM_WINDOW_MOVED/
+// _RESIZED to the owner, a repair of everywhere it was and is.
+//
+// Shade: only the titlebar shows. wm alone knows: h becomes the
+// titlebar's height and real_h keeps the app's, which is what
+// send_win_rect() reports, so the app is never resized -- it just gets
+// an empty visible region, and a redraw when it is unshaded. Every
+// hit test, region and repair follows h, so none of them needed to
+// learn about shading.
+
+#define SHADE_H  (Z_WM_TITLEBAR_H + 2)
+
+// dock_hidden, dock_home_y: declared with dock_idx, near the top.
+
+static int tb_click_idx = -1;
+static uint32_t tb_click_tick;
+static int tb_click_x, tb_click_y;
+
+// True for the second press of a double click on window idx's titlebar.
+static bool titlebar_double_click(int idx, int cx, int cy) {
+	uint32_t now = z_uptime_ticks();
+	bool dbl = tb_click_idx == idx && (now - tb_click_tick) < Z_DOUBLE_CLICK_TICKS &&
+		cx - tb_click_x <= 4 && tb_click_x - cx <= 4 &&
+		cy - tb_click_y <= 4 && tb_click_y - cy <= 4;
+	tb_click_idx = dbl ? -1 : idx;
+	tb_click_tick = now;
+	tb_click_x = cx;
+	tb_click_y = cy;
+	return dbl;
+}
+
+// Focus moves off window idx (it is being shaded, or is the hidden dock).
+static void focus_away_from(int idx) {
+	if (focused != idx) return;
+	int old = focused;
+	int n = next_focusable(idx);
+	focused = (n == idx) ? -1 : n;
+	repair_focus_chrome(old, focused);
+}
+
+// The dock hides while any window is maximized -- off the bottom of the
+// screen, where nothing is drawn, hit or given a region -- and comes back
+// when none is.
+static void dock_update(void) {
+	if (dock_idx < 0) return;
+	bool any = false;
+	for (int i = 0; i < WM_MAX_WINDOWS; i++)
+		if (windows[i].used && windows[i].maxed) any = true;
+	if (any == dock_hidden) return;
+	wm_window_t *d = &windows[dock_idx];
+	int oy = (int)d->y;
+	if (any) { dock_home_y = d->y; d->y = WM_SCREEN_H; }
+	else d->y = dock_home_y;
+	dock_hidden = any;
+	if (any) focus_away_from(dock_idx);
+	send_clip_all();
+	repair_region((int)d->x, any ? oy : (int)d->y, (int)d->w, (int)d->h, -1);
+}
+
+static void set_rect(int idx, int nx, int ny, int nw, int nh) {
+	wm_window_t *w = &windows[idx];
+	int ox = (int)w->x, oy = (int)w->y, ow = (int)w->w, oh = (int)w->h;
+	w->x = (uint32_t)nx; w->y = (uint32_t)ny; w->w = (uint32_t)nw; w->h = (uint32_t)nh;
+	if (nx != ox || ny != oy) notify_moved(idx);
+	notify_resized(idx);
+	int x0 = ox < nx ? ox : nx, y0 = oy < ny ? oy : ny;
+	int x1 = ox + ow > nx + nw ? ox + ow : nx + nw;
+	int y1 = oy + oh > ny + nh ? oy + oh : ny + nh;
+	repair_region(x0, y0, x1 - x0, y1 - y0, -1);
+}
+
+static void toggle_shade(int idx);
+
+static void toggle_maximize(int idx) {
+
+	wm_window_t *w = &windows[idx];
+	if (idx == dock_idx || w->no_titlebar) return;
+	if (!(w->flags & Z_WIN_FLAG_RESIZABLE)) return;
+
+	// On a shaded window the gesture unshades; it does not maximize.
+	if (w->shaded) { toggle_shade(idx); return; }
+
+	if (w->maxed) {
+		w->maxed = false;
+		set_rect(idx, (int)w->rx, (int)w->ry, (int)w->rw, (int)w->rh);
+		dock_update();
+		z_speak_static("restored", Z_TTS_F_INTERRUPT);
+		return;
+	}
+
+	int nw = WM_SCREEN_W, nh = WM_SCREEN_H;
+	if (w->max_w && nw > (int)w->max_w) nw = (int)w->max_w;
+	if (w->max_h && nh > (int)w->max_h) nh = (int)w->max_h;
+	if (nw == (int)w->w && nh == (int)w->h) return;	// already as big as it gets
+
+	w->rx = w->x; w->ry = w->y; w->rw = w->w; w->rh = w->h;
+	w->maxed = true;
+	set_rect(idx, (WM_SCREEN_W - nw) / 2, (WM_SCREEN_H - nh) / 2, nw, nh);
+	dock_update();
+	z_speak_static("maximized", Z_TTS_F_INTERRUPT);
+
+}
+
+static void toggle_shade(int idx) {
+
+	wm_window_t *w = &windows[idx];
+	if (idx == dock_idx || w->no_titlebar) return;
+
+	// Not while maximized: a full-screen window shrunk to its titlebar
+	// would leave the dock hidden and nothing on the screen. Restore it
+	// first (double-click, or Alt+Equal). Both ways in -- Alt+double-
+	// click and Alt+Minus -- come through here.
+	if (w->maxed && !w->shaded) return;
+
+	if (!w->shaded) {
+		w->real_h = w->h;
+		w->h = SHADE_H;
+		w->shaded = true;
+		focus_away_from(idx);
+		send_clip_all();
+		repair_region((int)w->x, (int)w->y, (int)w->w, (int)w->real_h, -1);
+		z_speak_static("shaded", Z_TTS_F_INTERRUPT);
+	} else {
+		w->h = w->real_h;
+		w->shaded = false;
+		int old = focused;
+		bring_to_front(idx);
+		focused = idx;
+		repair_focus_chrome(old, idx);
+		send_clip_all();
+		repair_region((int)w->x, (int)w->y, (int)w->w, (int)w->h, -1);
+		z_speak_static("unshaded", Z_TTS_F_INTERRUPT);
+	}
+
+}
+
 // -- keyboard layouts -- docs/keyboard_layouts.md
 //
 // The kernel keeps the active layout and stamps it into every key event
@@ -3575,6 +3743,17 @@ static void dispatch_keys(void) {
 
 		if (pressed) kbd_sent[usage] = keysym;
 
+		// Super+K -- the on-screen keyboard (docs/keyboard_app.md). By
+		// character, like the speech keys: the key marked K on this
+		// layout. It is started, not toggled: a second one exits at once
+		// (it is single-instance), and its own close box closes it.
+		if ((modifiers & Z_KBD_MOD_GUI) && (keysym == 'k' || keysym == 'K') &&
+		    !(modifiers & Z_KBD_MOD_CTRL) && !alt) {
+			if (pressed && !z_proc_run("keyboard"))
+				printf("wm: Super+K: could not start keyboard\n");
+			continue;
+		}
+
 		// Super+S/A/C/V/W/R/E -- speech. See speech_hotkey().
 		if (speech_hotkey(keysym, modifiers, pressed)) continue;
 
@@ -3587,12 +3766,28 @@ static void dispatch_keys(void) {
 			continue;
 		}
 
-		// Alt+Esc -- toggle game mode. Consumed even on a bitstream
-		// without game mode: Escape reaching the focused app only on
-		// boards that happen to lack a feature would be a genuinely
-		// confusing difference between machines.
-		if (alt && keysym == 0x1b) {
+		// Super+Esc -- toggle game mode. Super, not Alt: Super is for
+		// what is global -- the viewport, speech, the keyboard -- and
+		// Alt for the focused window (docs/welcome.md). It was Alt+Esc.
+		// Consumed even on a bitstream without game mode: Escape
+		// reaching the focused app only on boards that happen to lack a
+		// feature would be a genuinely confusing difference between
+		// machines.
+		if ((modifiers & Z_KBD_MOD_GUI) && keysym == 0x1b &&
+		    !(modifiers & Z_KBD_MOD_CTRL) && !alt) {
 			if (pressed) game_toggle();
+			continue;
+		}
+
+		// Alt+Equal / Alt+Minus -- maximize / shade the focused window
+		// (or restore / unshade it). By KEY, the two keys right of 0,
+		// like Alt+[ ]: on German they type ß and ´, and = needs Shift.
+		if (alt && (usage == 0x2D || usage == 0x2E) &&
+		    !(modifiers & (Z_KBD_MOD_CTRL | Z_KBD_MOD_GUI))) {
+			if (pressed && focused >= 0 && focused != dock_idx) {
+				if (usage == 0x2E) toggle_maximize(focused);
+				else toggle_shade(focused);
+			}
 			continue;
 		}
 
@@ -3611,16 +3806,16 @@ static void dispatch_keys(void) {
 		// and [ ] need AltGr, so a character match would put the
 		// shortcut somewhere no German user could press it.
 		if (alt && (usage == 0x2F || usage == 0x30)) {
-			if (pressed) dock_set_page(dock_page + (usage == 0x30 ? 1 : -1));
+			// Not while a maximized window has hidden the dock: paging
+			// lays it out again, which would bring it back on screen.
+			if (pressed && !dock_hidden)
+				dock_set_page(dock_page + (usage == 0x30 ? 1 : -1));
 			continue;
 		}
 
-		// Ctrl+Alt+Arrow -- move the game mode viewport. MUST be
-		// tested before the plain Alt+Arrow case directly below:
-		// Ctrl+Alt+Left also satisfies that test, so the other order
-		// would move the focused window and this would never fire at
-		// all. See game_move_view()'s own comment.
-		if (alt && (modifiers & Z_KBD_MOD_CTRL) &&
+		// Super+Arrow -- move the game mode viewport (global, so
+		// Super; it was Ctrl+Alt+Arrow). See game_move_view().
+		if ((modifiers & Z_KBD_MOD_GUI) && !(modifiers & Z_KBD_MOD_CTRL) && !alt &&
 			(keysym == Z_KEY_LEFT || keysym == Z_KEY_RIGHT ||
 			 keysym == Z_KEY_UP   || keysym == Z_KEY_DOWN)) {
 			if (pressed) game_move_view(keysym);
@@ -3706,7 +3901,8 @@ static int create_window(uint32_t owner_pid, const char *title,
 		}
 
 		if (title) {
-			strncpy(windows[i].title, title, WM_TITLE_MAX - 1);
+			// Cut at a character boundary, never inside one.
+			z_utf8_copy(windows[i].title, WM_TITLE_MAX, title);
 			windows[i].title[WM_TITLE_MAX - 1] = 0;
 		} else {
 			windows[i].title[0] = 0;
@@ -3882,6 +4078,12 @@ static void destroy_window(uint32_t id) {
 
 	if (id >= WM_MAX_WINDOWS || !windows[id].used) return;
 
+	// A maximized window closing may be the one hiding the dock.
+	if (windows[id].maxed) {
+		windows[id].maxed = false;
+		dock_update();
+	}
+
 	int ox = (int)windows[id].x, oy = (int)windows[id].y;
 	int ow = (int)windows[id].w, oh = (int)windows[id].h;
 
@@ -4041,6 +4243,7 @@ static bool hit_resize_grip(int idx, int cx, int cy) {
 
 	if (w->no_titlebar) return false;
 	if (!(w->flags & Z_WIN_FLAG_RESIZABLE)) return false;
+	if (w->maxed || w->shaded) return false;
 
 	int x1 = (int)(w->x + w->w - 1);
 	int y1 = (int)(w->y + w->h - 1);
@@ -4326,7 +4529,10 @@ static void send_win_rect(uint32_t to, uint32_t subject, uint32_t tag, int idx) 
 		v[1].type = Z_UINT32; v[1].val.uint32 = windows[idx].x;
 		v[2].type = Z_UINT32; v[2].val.uint32 = windows[idx].y;
 		v[3].type = Z_UINT32; v[3].val.uint32 = windows[idx].w;
-		v[4].type = Z_UINT32; v[4].val.uint32 = windows[idx].h;
+		// A shaded window's h is its titlebar; the app keeps its
+		// own size and is only ever told that one.
+		v[4].type = Z_UINT32; v[4].val.uint32 =
+			windows[idx].shaded ? windows[idx].real_h : windows[idx].h;
 	}
 
 	win_rect_tbl[s].len = (uint32_t)n;
@@ -4728,6 +4934,68 @@ static void handle_message(z_msg_t *msg) {
 
 		}
 
+		case Z_WM_SET_LIMITS: {
+
+			if (msg->obj.type != Z_UINT32) break;
+			uint32_t v = msg->obj.val.uint32;
+			int idx = (int)Z_WM_UNPACK_RESIZE_ID(v);
+			if (idx >= WM_MAX_WINDOWS || !windows[idx].used) break;
+			if (windows[idx].owner_pid != msg->from) break;
+			windows[idx].max_w = Z_WM_UNPACK_RESIZE_W(v);
+			windows[idx].max_h = Z_WM_UNPACK_RESIZE_H(v);
+			break;
+
+		}
+
+		case Z_WM_RESIZE: {
+
+			// An app asking for a new size -- zwm.h. Applied as a
+			// resize-grip release is: new size, tell the owner, repair
+			// everywhere the window was and now is.
+			if (msg->obj.type != Z_UINT32) break;
+			uint32_t v = msg->obj.val.uint32;
+			int idx = (int)Z_WM_UNPACK_RESIZE_ID(v);
+			if (idx >= WM_MAX_WINDOWS || !windows[idx].used) break;
+			if (windows[idx].owner_pid != msg->from) break;
+			if (idx == resizing || idx == dragging) break;	// the user has it
+			// Maximized or shaded, the size is the user's choice for now;
+			// it goes back to the app's when the window is restored.
+			if (windows[idx].maxed || windows[idx].shaded) break;
+
+			int nw = (int)Z_WM_UNPACK_RESIZE_W(v), nh = (int)Z_WM_UNPACK_RESIZE_H(v);
+			if (nw < Z_WM_MIN_WIDTH) nw = Z_WM_MIN_WIDTH;
+			if (nh < Z_WM_MIN_HEIGHT) nh = Z_WM_MIN_HEIGHT;
+			if (nw > WM_SCREEN_W) nw = WM_SCREEN_W;
+			if (nh > WM_SCREEN_H) nh = WM_SCREEN_H;
+
+			int ox = (int)windows[idx].x, oy = (int)windows[idx].y;
+			int ow = (int)windows[idx].w, oh = (int)windows[idx].h;
+			if (nw == ow && nh == oh) break;
+
+			// Grown past the screen's edge: move it back on, as a drag
+			// would have kept it.
+			int nx = ox, ny = oy;
+			if (nx + nw > WM_SCREEN_W) nx = WM_SCREEN_W - nw;
+			if (ny + nh > WM_SCREEN_H) ny = WM_SCREEN_H - nh;
+			if (nx < 0) nx = 0;
+			if (ny < 0) ny = 0;
+
+			windows[idx].x = nx;
+			windows[idx].y = ny;
+			windows[idx].w = nw;
+			windows[idx].h = nh;
+
+			if (nx != ox || ny != oy) notify_moved(idx);
+			notify_resized(idx);
+
+			int x0 = ox < nx ? ox : nx, y0 = oy < ny ? oy : ny;
+			int x1 = ox + ow > nx + nw ? ox + ow : nx + nw;
+			int y1 = oy + oh > ny + nh ? oy + oh : ny + nh;
+			repair_region(x0, y0, x1 - x0, y1 - y0, -1);
+			break;
+
+		}
+
 		case Z_WM_SET_TITLE: {
 
 			z_obj_t *id = z_map_find(&msg->obj, "id");
@@ -4745,7 +5013,7 @@ static void handle_message(z_msg_t *msg) {
 			// another's window.
 			if (windows[idx].owner_pid != msg->from) break;
 
-			strncpy(windows[idx].title, t->val.str, WM_TITLE_MAX - 1);
+			z_utf8_copy(windows[idx].title, WM_TITLE_MAX, t->val.str);
 			windows[idx].title[WM_TITLE_MAX - 1] = 0;
 
 			// Repair only the titlebar strip, and EXCLUDE THE OWNER.
@@ -5538,7 +5806,17 @@ int main(void) {
 					// that is changing shape around it.
 					clear_window_interior(hit);
 
-				} else if (hit_titlebar(hit, cy)) {
+				} else if (hit_titlebar(hit, cy) && titlebar_double_click(hit, cx, cy)) {
+
+					// the second click of a double click: maximize or
+					// restore -- with (left) Alt held, shade or unshade
+					// -- and no drag. See "-- maximize and shade --".
+					if (z_kbd_live_mods() & Z_KBD_MOD_LALT) toggle_shade(hit);
+					else toggle_maximize(hit);
+
+				} else if (hit_titlebar(hit, cy) && !windows[hit].maxed) {
+					// (A maximized window stays put: double-click, or
+					// Alt+Equal, gives it its place back.)
 					dragging = hit;
 
 					// Nothing is blanked and no region is changed HERE.
@@ -5700,6 +5978,10 @@ int main(void) {
 			// out of existence.
 			if (nw < (int)windows[idx].min_w) nw = (int)windows[idx].min_w;
 			if (nh < (int)windows[idx].min_h) nh = (int)windows[idx].min_h;
+
+			// ...and its maximum, if its app gave one (Z_WM_SET_LIMITS).
+			if (windows[idx].max_w && nw > (int)windows[idx].max_w) nw = (int)windows[idx].max_w;
+			if (windows[idx].max_h && nh > (int)windows[idx].max_h) nh = (int)windows[idx].max_h;
 
 			// and the screen's own bounds -- the top-left corner is
 			// pinned during a resize, so only the far edges can leave
@@ -5869,12 +6151,10 @@ int main(void) {
 		// press and its release, so an event-derived copy would be
 		// stale exactly when it matters.
 		if (z_game_enabled()) {
-			uint32_t info = (mouse_port() == 0) ? reg_usb0_info : reg_usb1_info;
-			uint32_t kinfo = (mouse_port() == 0) ? reg_usb1_info : reg_usb0_info;
-			// The keyboard is usually the OTHER port from the mouse,
-			// but need not be -- a combo device reports both on one.
-			// Accept the modifier from either.
-			if (((info | kinfo) & Z_KBD_MOD_GUI) != 0)
+			// z_kbd_live_mods() (zkbd.h) reads the keyboard's own
+			// report. This ORed both ports' registers, which counted a
+			// mouse's button byte as modifiers.
+			if (z_kbd_live_mods() & Z_KBD_MOD_GUI)
 				game_follow_pointer(cx, cy);
 		}
 

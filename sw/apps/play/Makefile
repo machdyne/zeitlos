@@ -138,7 +138,7 @@ prof.o:
 	$(CC) $(CFLAGS) -c prof.c -o prof.o
 
 play.o:
-	$(CC) $(CFLAGS) -c play.c -S -o play.asm
+	$(CC) $(CFLAGS) -c play.c -S -MF /dev/null -o play.asm
 	$(CC) $(CFLAGS) -c play.c -o play.o
 
 play.elf: $(OBJS)

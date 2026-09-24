@@ -32,7 +32,7 @@ zwin.o: ../../common/zwin.c ../../common/zwin.h
 	$(CC) $(CFLAGS) -c ../../common/zwin.c -o zwin.o
 
 gpudemo.o: gpudemo.c
-	$(CC) $(CFLAGS) -c gpudemo.c -S -o gpudemo.asm
+	$(CC) $(CFLAGS) -c gpudemo.c -S -MF /dev/null -o gpudemo.asm
 	$(CC) $(CFLAGS) -c gpudemo.c -o gpudemo.o
 
 gpudemo.elf: $(OBJS)

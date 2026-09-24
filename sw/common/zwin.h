@@ -340,6 +340,26 @@ void z_win_draw_text(const z_win_t *win, int x, int y, const char *s, int color,
 void z_win_draw_text2(const z_win_t *win, int x, int y, const char *s,
 	int fg_color, int bg_color, const z_font_t *font);
 
+// Asks wm to make the window w x h (outer size, as z_win_create()
+// takes). Fire and forget: the new size arrives as Z_WM_WINDOW_RESIZED
+// (apply it with z_win_parse_rect(), as for a user's resize), followed
+// by a Z_WM_REDRAW at that size. Z_WM_RESIZE in zwm.h.
+void z_win_resize(const z_win_t *win, uint32_t w, uint32_t h);
+
+// Tells wm the largest size the window is any use at (outer size; 0 =
+// no limit in that direction). The resize grip and maximize respect it.
+// Z_WM_SET_LIMITS in zwm.h.
+void z_win_set_max_size(const z_win_t *win, uint32_t w, uint32_t h);
+
+// The title for a window showing a document: the file's name without
+// its directory, "*" in front while there are unsaved changes, and
+// `untitled` when there is no file yet. Written into t (capacity cap,
+// always terminated), cut at a character boundary if it does not fit
+// -- a long file name can be up to 255 bytes of UTF-8 (docs/
+// sdcard.md). Every app with a document used to build this itself.
+void z_win_doc_title(char *t, int cap, const char *path, bool modified,
+	const char *untitled);
+
 // UTF-8 versions of z_win_draw_text()/z_win_draw_text2(): same
 // coordinates and clipping, text decoded as UTF-8 -- see
 // z_fb_draw_utf8() in zgfx.h and docs/text_encoding.md. Use these for

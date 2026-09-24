@@ -86,7 +86,7 @@ sheet_core.o: sheet_core.c sheet_core.h
 	$(CC) $(CFLAGS) -c sheet_core.c -o sheet_core.o
 
 sheet.o:
-	$(CC) $(CFLAGS) -c sheet.c -S -o sheet.asm
+	$(CC) $(CFLAGS) -c sheet.c -S -MF /dev/null -o sheet.asm
 	$(CC) $(CFLAGS) -c sheet.c -o sheet.o
 
 sheet.elf: $(OBJS)

@@ -167,7 +167,7 @@ static void set_modified(bool m);
 // notice from, and nothing outside draw could identify a saved image
 // at all. Files written before it are still loadable -- see
 // z_bm_is_legacy_size() and load_canvas() below.
-static char filename[80];
+static char filename[Z_FS_PATH_MAX];
 static bool modified;
 
 static z_dialog_ctx_t dlg_ctx;
@@ -177,7 +177,7 @@ static z_dialog_ctx_t dlg_ctx;
 static char last_dir[Z_FLIST_PATH_MAX] = "/";
 
 // Filename handed to us at launch, if any -- see main().
-static char launch_path[80];
+static char launch_path[Z_FS_PATH_MAX];
 
 // -- window --
 
@@ -1154,20 +1154,8 @@ static void handle_mouse(uint32_t packed) {
 // unsaved changes. Same convention as sw/apps/text.
 static void update_title(void) {
 
-	char t[32];
-	int n = 0;
-
-	const char *base = filename[0] ? filename : "untitled";
-
-	for (const char *p = filename; *p; p++)
-		if (*p == '/') base = p + 1;
-
-	if (modified && n < (int)sizeof(t) - 1) t[n++] = '*';
-
-	for (const char *p = base; *p && n < (int)sizeof(t) - 1; p++) t[n++] = *p;
-
-	t[n] = 0;
-
+	char t[64];
+	z_win_doc_title(t, (int)sizeof(t), filename, modified, "untitled");
 	z_win_set_title(&win, t);
 
 }
@@ -1258,7 +1246,7 @@ static bool do_save_to(const char *path) {
 
 static bool do_save_as(void) {
 
-	char path[80];
+	char path[Z_FS_PATH_MAX];
 	const char *suggest = filename[0] ? filename : "";
 
 	for (const char *p = filename; *p; p++)
@@ -1404,7 +1392,7 @@ static void do_open(void) {
 
 	if (!confirm_discard()) return;
 
-	char path[80];
+	char path[Z_FS_PATH_MAX];
 
 	if (!z_dialog_open(&dlg_ctx, last_dir, path, sizeof(path))) return;
 

@@ -7,7 +7,9 @@ whichever layout is active, and typed with the pointer.
 > run keyboard
 ```
 
-or its dock icon. It has two jobs:
+or **Super+K**, or its dock icon. It is single-instance: starting it
+again while it is up does nothing (it registers as `keyboard0` and a
+second copy exits at once). It has two jobs:
 
 - **Seeing and trying a layout.** Every key shows what it types in the
   active layout, with Shift and AltGr as they stand. The status line

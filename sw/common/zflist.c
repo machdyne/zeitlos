@@ -40,15 +40,18 @@
 // 3KB: Z_FLIST_MAX short names at their worst case, with slack. A
 // directory that overflows it comes back truncated, which
 // z_flist_truncated() reports, rather than failing.
-#define STAGE_SIZE  3072
-static char stage_buf[STAGE_SIZE];
+// The listing's entry types, one byte each. The names themselves are
+// listed straight into the widget's own pool -- see load_dir().
 static uint8_t stage_types[Z_FLIST_MAX];
+
+// Entry i's name, in the pool.
+#define NAME(fl, i)  ((fl)->pool + (fl)->name_off[i])
 
 // Double-click window, in kernel ticks. Z_TICK_HZ is 732 (zsoc.h), so
 // this is a bit over a third of a second -- deliberately generous,
 // since the two clicks are being made with whatever pointing device
 // happens to be plugged into a USB port, not a calibrated mouse.
-#define DBLCLICK_TICKS  256
+#define DBLCLICK_TICKS  Z_DOUBLE_CLICK_TICKS	// zwm.h -- shared with the titlebar
 
 // -- helpers --
 
@@ -79,11 +82,13 @@ static void copy_bounded(char *dst, const char *src, int cap) {
 // thing it replaces.
 static void sort_entries(z_flist_t *fl) {
 
+	// Entries are sorted by moving their 2-byte offsets; the names stay
+	// where they are in the pool.
 	for (int i = 1; i < fl->count; i++) {
 
-		char name[Z_FLIST_NAME_MAX];
+		uint16_t off = fl->name_off[i];
 		uint8_t dir = fl->isdir[i];
-		memcpy(name, fl->names[i], Z_FLIST_NAME_MAX);
+		const char *name = fl->pool + off;
 
 		int j = i - 1;
 
@@ -97,27 +102,33 @@ static void sort_entries(z_flist_t *fl) {
 			} else {
 				// strcasecmp isn't available on every libc this tree
 				// builds against, so compare folded bytes directly.
-				const char *a = fl->names[j], *b = name;
+				// Only ASCII is folded; other UTF-8 compares by byte,
+				// which keeps each script's letters together, in
+				// Unicode order.
+				const char *a = NAME(fl, j), *b = name;
 				int cmp = 0;
 				while (*a || *b) {
-					char ca = *a, cb = *b;
-					if (ca >= 'a' && ca <= 'z') ca = (char)(ca - 32);
-					if (cb >= 'a' && cb <= 'z') cb = (char)(cb - 32);
+					unsigned char ca = (unsigned char)*a, cb = (unsigned char)*b;
+					if (ca >= 'a' && ca <= 'z') ca = (unsigned char)(ca - 32);
+					if (cb >= 'a' && cb <= 'z') cb = (unsigned char)(cb - 32);
 					if (ca != cb) { cmp = (ca < cb) ? -1 : 1; break; }
 					a++; b++;
 				}
-				after = (cmp < 0);
+				// Move the earlier entry up while it sorts AFTER this one.
+				// This was `cmp < 0`, which moved it while it sorted
+				// before -- every list and dialog ran Z to A.
+				after = (cmp > 0);
 			}
 
 			if (!after) break;
 
-			memcpy(fl->names[j + 1], fl->names[j], Z_FLIST_NAME_MAX);
+			fl->name_off[j + 1] = fl->name_off[j];
 			fl->isdir[j + 1] = fl->isdir[j];
 			j--;
 
 		}
 
-		memcpy(fl->names[j + 1], name, Z_FLIST_NAME_MAX);
+		fl->name_off[j + 1] = off;
 		fl->isdir[j + 1] = dir;
 
 	}
@@ -195,7 +206,11 @@ static bool load_dir(z_flist_t *fl, const char *path, const char *keep) {
 
 	uint32_t count = 0, truncated = 0;
 
-	if (!fs_list_into(path, stage_buf, STAGE_SIZE, stage_types,
+	// Listed straight into the pool. Each entry arrives as a full path;
+	// it is cut down to its name and moved to the write position, which
+	// never passes the read position -- a name is never longer than
+	// the path it came in -- so this needs no second buffer.
+	if (!fs_list_into(path, fl->pool, Z_FLIST_POOL, stage_types,
 		Z_FLIST_MAX, &count, &truncated)) {
 
 		// An EMPTY directory is not a failure, but fs_list_into()
@@ -212,13 +227,15 @@ static bool load_dir(z_flist_t *fl, const char *path, const char *keep) {
 
 	fl->count = 0;
 
-	const char *p = stage_buf;
+	const char *p = fl->pool;
+	size_t w = 0;
 
 	for (uint32_t i = 0; i < count && fl->count < Z_FLIST_MAX; i++) {
 
 		size_t l = strlen(p);
 
 		const char *base = basename_of(p);
+		size_t bl = l - (size_t)(base - p);
 
 		// FatFs's f_readdir doesn't report "." or ".." (see
 		// sw/os/fs/fatfs), but skip them defensively -- the ".." row
@@ -228,9 +245,11 @@ static bool load_dir(z_flist_t *fl, const char *path, const char *keep) {
 		if (!(base[0] == '.' && (base[1] == 0 ||
 			(base[1] == '.' && base[2] == 0)))) {
 
-			copy_bounded(fl->names[fl->count], base, Z_FLIST_NAME_MAX);
+			memmove(fl->pool + w, base, bl + 1);
+			fl->name_off[fl->count] = (uint16_t)w;
 			fl->isdir[fl->count] = stage_types[i];
 			fl->count++;
+			w += bl + 1;
 
 		}
 
@@ -259,7 +278,7 @@ static bool load_dir(z_flist_t *fl, const char *path, const char *keep) {
 
 	if (want[0]) {
 		for (int i = 0; i < fl->count; i++) {
-			if (!strcmp(fl->names[i], want)) {
+			if (!strcmp(NAME(fl, i), want)) {
 				select_row(fl, i + (has_updir(fl) ? 1 : 0));
 				break;
 			}
@@ -422,9 +441,10 @@ void z_flist_draw(z_flist_t *fl, bool force) {
 		z_fb_draw_icon(clip.x0 + 1, ry + 1, icon,
 			selected ? 0 : 1, selected ? 1 : 0, &clip);
 
-		const char *name = updir ? ".." : fl->names[entry];
+		const char *name = updir ? ".." : NAME(fl, entry);
 
-		z_fb_draw_text2(clip.x0 + 1 + TEXT_X, ry + 1, name,
+		// UTF-8: a long file name can be anything (docs/sdcard.md).
+		z_fb_draw_utf8_2(clip.x0 + 1 + TEXT_X, ry + 1, name,
 			selected ? 0 : 1, selected ? 1 : 0, &z_font_5x8, &clip);
 
 	}
@@ -490,7 +510,7 @@ static bool enter_selection(z_flist_t *fl) {
 		sub[n++] = *s;
 	if (n > 0 && sub[n - 1] != '/' && n < Z_FLIST_PATH_MAX - 1)
 		sub[n++] = '/';
-	for (const char *s = fl->names[fl->sel]; *s && n < Z_FLIST_PATH_MAX - 1; s++)
+	for (const char *s = NAME(fl, fl->sel); *s && n < Z_FLIST_PATH_MAX - 1; s++)
 		sub[n++] = *s;
 	sub[n] = 0;
 
@@ -632,7 +652,7 @@ const char *z_flist_selected(const z_flist_t *fl) {
 	if (fl->sel_updir) return NULL;
 	if (fl->sel < 0 || fl->sel >= fl->count) return NULL;
 
-	return fl->names[fl->sel];
+	return NAME(fl, fl->sel);
 
 }
 

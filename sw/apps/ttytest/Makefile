@@ -30,7 +30,7 @@ zport.o:
 	$(CC) $(CFLAGS) -c ../../common/zport.c -o zport.o
 
 ttytest.o:
-	$(CC) $(CFLAGS) -c ttytest.c -S -o ttytest.asm
+	$(CC) $(CFLAGS) -c ttytest.c -S -MF /dev/null -o ttytest.asm
 	$(CC) $(CFLAGS) -c ttytest.c -o ttytest.o
 
 ttytest.elf: $(OBJS)

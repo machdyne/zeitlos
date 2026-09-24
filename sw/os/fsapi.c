@@ -499,23 +499,21 @@ z_obj_t *k_fs_list(z_obj_t *args) {
 		}
 	}
 
-	FILINFO fno;
+	// Static, not on the stack: with long names a FILINFO is ~290
+	// bytes (FF_LFN_BUF), and kernel stack depth is what has run out
+	// before -- see the f_stat() note in fs/fs.c. Syscalls do not
+	// nest, so one is enough.
+	static FILINFO fno;
 	while (count < max_entries) {
 
 		res = f_readdir(&dir, &fno);
 		if (res != FR_OK || fno.fname[0] == 0) break;
 
+		// Straight into the caller's buffer, prefix then name. This used
+		// to be assembled in a 96-byte buffer first and an entry that
+		// did not fit was skipped -- harmless with 8.3 names, and it
+		// would silently drop long ones from every listing.
 		size_t nlen = strlen(fno.fname);
-		char full[96];
-		if (prefix_len + nlen >= sizeof(full)) {
-			// pathologically long combined path -- skip this one
-			// entry rather than overflow `full` (never happens with
-			// real 8.3 short names, FF_SFN_BUF is 12, see ffconf.h)
-			continue;
-		}
-		memcpy(full, prefix, prefix_len);
-		memcpy(full + prefix_len, fno.fname, nlen + 1); // +1: copy the NUL too
-
 		size_t flen = prefix_len + nlen;
 		if (written + flen + 1 > a->out_cap) {
 			a->truncated = 1;
@@ -529,7 +527,8 @@ z_obj_t *k_fs_list(z_obj_t *args) {
 			a->types[count] = (fno.fattrib & AM_DIR)
 				? Z_FS_TYPE_DIR : Z_FS_TYPE_FILE;
 
-		memcpy(a->out + written, full, flen + 1); // +1: include the NUL separator
+		memcpy(a->out + written, prefix, prefix_len);
+		memcpy(a->out + written + prefix_len, fno.fname, nlen + 1); // +1: the NUL separator
 		written += (uint32_t)(flen + 1);
 		count++;
 

@@ -98,7 +98,7 @@ md.o: md.c md.h
 	$(CC) $(CFLAGS) -c md.c -o md.o
 
 read.o:
-	$(CC) $(CFLAGS) -c read.c -S -o read.asm
+	$(CC) $(CFLAGS) -c read.c -S -MF /dev/null -o read.asm
 	$(CC) $(CFLAGS) -c read.c -o read.o
 
 read.elf: $(OBJS)

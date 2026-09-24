@@ -345,6 +345,14 @@ int z_kbd_ime_flush(z_kbd_ime_t *ime, uint32_t *out);
 // case the Backspace is the app's.
 bool z_kbd_ime_backspace(z_kbd_ime_t *ime);
 
+// The modifier keys held down right now, read from the USB keyboard's
+// own report -- for code that must know about a modifier that is merely
+// HELD, which generates no key events between its press and its release
+// (wm's Alt+double-click, gpu3d's Alt+drag, the viewport following the
+// pointer with Super). Only a port that reports a keyboard counts. Not
+// in host builds; injected keys (the on-screen keyboard) are not seen.
+uint8_t z_kbd_live_mods(void);
+
 // -- the active layout (syscalls; not in host builds) --
 
 // The layout the kernel is stamping into key events now.

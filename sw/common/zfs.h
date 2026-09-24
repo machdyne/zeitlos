@@ -81,6 +81,19 @@ typedef struct {
 #define Z_FS_TYPE_FILE   0
 #define Z_FS_TYPE_DIR    1
 
+// -- sizes for names and paths -- docs/sdcard.md, "Long file names" --
+//
+// With long file names a name is up to 255 bytes of UTF-8 (FatFs's
+// FF_LFN_BUF; a longer one is reported by its 8.3 alias instead), so a
+// buffer that holds any name the filesystem can report is
+// Z_FS_NAME_MAX. Z_FS_PATH_MAX is what apps allow for a whole path --
+// the kernel's own limit (FS_PATH_MAX, sw/os/fs/fs.h) is a little
+// larger, so anything that fits here resolves there. Use these rather
+// than a number: every app used to pick its own (64, 80), sized for
+// 8.3 names.
+#define Z_FS_NAME_MAX    256
+#define Z_FS_PATH_MAX    256
+
 /*
  * Chunked file I/O -- FS_OPEN_READ/FS_OPEN_WRITE/FS_READ_CHUNK/
  * FS_WRITE_CHUNK/FS_CLOSE. Added for the Zeitlos Scheme API's `tget`/

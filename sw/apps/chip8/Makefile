@@ -90,7 +90,7 @@ debug.o: debug.c debug.h disasm.h core.h
 	$(CC) $(CFLAGS) -c debug.c -o debug.o
 
 chip8.o: chip8.c core.h render.h sound.h config.h debug.h
-	$(CC) $(CFLAGS) -c chip8.c -S -o chip8.asm
+	$(CC) $(CFLAGS) -c chip8.c -S -MF /dev/null -o chip8.asm
 	$(CC) $(CFLAGS) -c chip8.c -o chip8.o
 
 chip8.elf: $(OBJS)

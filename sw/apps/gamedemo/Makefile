@@ -60,7 +60,7 @@ level.o: level.c level.h sprites.h
 	$(CC) $(CFLAGS) -c level.c -o level.o
 
 gamedemo.o: gamedemo.c
-	$(CC) $(CFLAGS) -c gamedemo.c -S -o gamedemo.asm
+	$(CC) $(CFLAGS) -c gamedemo.c -S -MF /dev/null -o gamedemo.asm
 	$(CC) $(CFLAGS) -c gamedemo.c -o gamedemo.o
 
 gamedemo.elf: $(OBJS)

@@ -83,6 +83,17 @@ void hid_inject(int32_t packed_event) {
 	z_kernel_ptr(Z_SYS_HID_INJECT, (uint32_t *)&obj, 0);
 }
 
+// -- held modifiers -- zkbd.h's z_kbd_live_mods() --
+//
+// reg_usbN_info bits 25:24 say what the port has (1 = a keyboard) and
+// bits 7:0 are its current modifier byte. The first keyboard wins.
+uint8_t z_kbd_live_mods(void) {
+	uint32_t i0 = reg_usb0_info, i1 = reg_usb1_info;
+	if (((i0 >> 24) & 0x3) == 1) return (uint8_t)(i0 & 0xFF);
+	if (((i1 >> 24) & 0x3) == 1) return (uint8_t)(i1 & 0xFF);
+	return 0;
+}
+
 // -- keyboard layout (Z_SYS_KBD_LAYOUT, sw/os/hid.c) --
 //
 // Declared in zkbd.h, with the layout tables, because that is where a

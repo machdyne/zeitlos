@@ -68,21 +68,26 @@
 #include "../../common/zspeak.h"	// Super+A, Super+C -- docs/tts.md
 #include "../../common/zsayall.h"
 
-// which font to render with -- override at build time with
-// `make term FONT=z_font_6x12`. Defaults to z_font_5x8, adopted after
-// real-hardware testing showed z_font_5x7's bottom row cut off and
-// z_font_6x12 costing too much blit work and screen margin (see
-// docs/user_input.md's "Debugging notes").
+// which font to render with. The titlebar's Aa icon switches between
+// z_font_5x8 and z_font_6x12 while running, and resizes the window to
+// keep 80x25 (term_toggle_font()); `make term FONT=z_font_6x12` picks
+// the one it starts in. 5x8 is the default, adopted after real-hardware
+// testing showed z_font_5x7's bottom row cut off (docs/user_input.md's
+// "Debugging notes"); 6x12 is what Japanese is drawn at
+// (docs/text_encoding.md, "Japanese").
 //
-// wm is the only process that loads glyph data into hardware glyph
-// memory, and it only ever loads z_font_5x8. A Z_GFX_HW_BLIT build
-// with a different FONT renders z_font_5x8's glyph data reinterpreted
-// at the wrong dimensions -- garbled, not just wrong-sized. Don't
-// override FONT for a hardware build until wm loads more than one.
+// Both are in hardware glyph memory -- wm loads both at startup (see
+// glyph_layout[] in zgfx.c) -- which is what makes switching safe. It
+// was not always so: when wm loaded only 5x8, a build with another font
+// drew 5x8's glyph data at the wrong dimensions.
+//
+// TERM_FONT is a pointer behind a macro, so every use of it -- as
+// &TERM_FONT or TERM_FONT.w -- follows the switch unchanged.
 #ifndef TERM_FONT_NAME
 #define TERM_FONT_NAME z_font_5x8
 #endif
-#define TERM_FONT TERM_FONT_NAME
+static const z_font_t *term_font = &TERM_FONT_NAME;
+#define TERM_FONT (*term_font)
 
 // Scrollback depth, in lines. The Makefile's SCROLLBACK sets this.
 //
@@ -876,6 +881,33 @@ static void term_rows_from_win(void) {
 static void term_resized(z_obj_t *obj) {
 	z_win_apply_resized(&win, obj);
 	term_rows_from_win();
+}
+
+static void term_setup(void);
+static void shadow_invalidate(void);
+
+// The titlebar's Aa icon: the other font, and the window resized so the
+// screen is still 80x25 (docs/terminal.md, "Font"). The new geometry is
+// in place before the request goes out; wm's Z_WM_WINDOW_RESIZED and
+// the redraw after it then find everything already sized for it.
+static void term_toggle_font(void) {
+
+	term_font = (term_font == &z_font_6x12) ? &z_font_5x8 : &z_font_6x12;
+	term_setup();
+
+	vis_rows = VT_ROWS;
+	z_scrollbar_set_geom(&sbar, text_w, 0, text_h);
+	view_live();
+	vskip_update();
+	if (panel_visible) panel_reposition();
+	shadow_invalidate();
+	drawn_valid = false;
+	render_all = true;
+
+	// The new natural size is also the new largest useful one.
+	z_win_set_max_size(&win, (uint32_t)term_win_w, (uint32_t)term_win_h);
+	z_win_resize(&win, (uint32_t)term_win_w, (uint32_t)term_win_h);
+
 }
 
 // ---------------------------------------------------------------
@@ -2260,10 +2292,19 @@ int main(void) {
 	// destroying it AND killing this process is exactly right.
 	if (z_win_create_flags(&win, instance_name, term_win_w, term_win_h, -1, -1,
 		Z_WIN_FLAG_CLOSE_ICON | Z_WIN_FLAG_CLOSE_KILLS_OWNER |
-		Z_WIN_FLAG_READABLE | Z_WIN_FLAG_RESIZABLE) != Z_OK) {
+		Z_WIN_FLAG_READABLE | Z_WIN_FLAG_RESIZABLE |
+		Z_WIN_FLAG_FONT_ICON) != Z_OK) {
 		printf("term: failed to create window\n");
 		return 1;
 	}
+
+	// Its screen is 80x25 whatever the window's size (VT_COLS x
+	// VT_ROWS), so that is as large as it is any use at: the grip stops
+	// there, and a double-click on the titlebar does not maximize it --
+	// there would be nothing to fill the screen with. When the grid can
+	// grow, this is the one line that changes (docs/window_manager.md,
+	// "Maximize and shade").
+	z_win_set_max_size(&win, (uint32_t)term_win_w, (uint32_t)term_win_h);
 
 	// No z_gfx_hw_font_load(): wm loads z_font_5x8 into glyph memory
 	// once and is the only process that ever does -- see TERM_FONT_NAME.
@@ -2289,6 +2330,11 @@ int main(void) {
 				z_win_parse_rect(&win, &msg.obj);
 			} else if (msg.subject == Z_WM_WINDOW_RESIZED) {
 				term_resized(&msg.obj);
+			} else if (msg.subject == Z_WM_TITLEBAR_ICON) {
+				if (msg.obj.type == Z_UINT32 &&
+				    (int)Z_WM_UNPACK_TBICON_ID(msg.obj.val.uint32) == win.id &&
+				    Z_WM_UNPACK_TBICON_KIND(msg.obj.val.uint32) == Z_WM_TBICON_FONT)
+					term_toggle_font();
 			} else if (msg.subject == Z_WM_MOUSE) {
 				if (msg.obj.type == Z_UINT32) {
 					// A click stops a reading; the wheel scrolls under it.

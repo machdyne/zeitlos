@@ -42,7 +42,7 @@ zfsapp.o:
 	$(CC) $(CFLAGS) -c ../../common/zfsapp.c -o zfsapp.o
 
 jfont.o:
-	$(CC) $(CFLAGS) -c jfont.c -S -o jfont.asm
+	$(CC) $(CFLAGS) -c jfont.c -S -MF /dev/null -o jfont.asm
 	$(CC) $(CFLAGS) -c jfont.c -o jfont.o
 
 jfont.elf: $(OBJS)

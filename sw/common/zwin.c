@@ -13,6 +13,7 @@
 #include "zobj.h"
 #include "zwm.h"
 #include "zwin.h"
+#include "zutf8.h"
 #include "zgfx.h"
 
 // resolved once, cached for the lifetime of this process -- z_win_*
@@ -998,6 +999,48 @@ void z_win_draw_text2(const z_win_t *win, int x, int y, const char *s,
 
 	z_fb_draw_text2(clip.x0 + x, clip.y0 + y, s, fg_color, bg_color,
 		font, &clip);
+
+}
+
+void z_win_resize(const z_win_t *win, uint32_t w, uint32_t h) {
+
+	if (win->id < 0) return;
+
+	uint32_t wmpid = resolve_wm_pid();
+	if (!wmpid) return;
+
+	// A packed word, not a map: nothing borrowed, nothing to keep alive
+	// until wm reads it.
+	z_msg_new_send(wmpid, Z_WM_RESIZE, 0,
+		z_obj_uint32(Z_WM_PACK_RESIZE(win->id, w, h)));
+
+}
+
+void z_win_set_max_size(const z_win_t *win, uint32_t w, uint32_t h) {
+
+	if (win->id < 0) return;
+
+	uint32_t wmpid = resolve_wm_pid();
+	if (!wmpid) return;
+
+	z_msg_new_send(wmpid, Z_WM_SET_LIMITS, 0,
+		z_obj_uint32(Z_WM_PACK_RESIZE(win->id, w, h)));
+
+}
+
+void z_win_doc_title(char *t, int cap, const char *path, bool modified,
+	const char *untitled) {
+
+	if (cap <= 0) return;
+
+	const char *base = (path && path[0]) ? path : untitled;
+	if (!base) base = "";
+	for (const char *p = base; *p; p++)
+		if (*p == '/') base = p + 1;
+
+	int n = 0;
+	if (modified && cap > 1) t[n++] = '*';
+	z_utf8_copy(t + n, (size_t)(cap - n), base);
 
 }
 
