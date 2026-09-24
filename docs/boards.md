@@ -131,6 +131,30 @@ itself, evidence that the fabric is full. ULX3S pins `PNR_SEED`
 because a bitstream that misses 48 MHz still programs and then
 misbehaves. These two rows are that pinned seed, and both close.
 
+## ULX3S 85k with the caches and the MPU
+
+The tables above are at 616e152. The ULX3S 85k was measured again with
+the data cache, SDRAM burst fills and the MPU in ([dcache.md](dcache.md),
+[mpu.md](mpu.md)), the same flow and seed 10 (`make BOARD=ulx3s
+DEVICE=85k`), Yosys 0.63+173 and nextpnr-ecp5 0.10-12-g5281b8d8, at
+76f3434 (112d0ad plus two commits that do not touch the RTL). All four
+clocks close.
+
+| | 616e152 | 76f3434 |
+|---|---|---|
+| COMB | 18771 / 83640 (22%) | 21254 / 83640 (25%) |
+| FF | 8722 / 83640 (10%) | 9627 / 83640 (11%) |
+| DP16KD | 39 / 208 | 42 / 208 |
+| MULT18 | 11 / 156 | 11 / 156 |
+| `clk126mhz` | 257.47 MHz | 247.22 MHz |
+| `clk25_2mhz` | 59.42 MHz | 65.13 MHz |
+| `clk12mhz` | 78.76 MHz | 71.94 MHz |
+| `clk48mhz` | 53.49 MHz | 53.15 MHz |
+
+The 616e152 column was measured with a different Yosys and nextpnr, so
+a change of a few percent in fmax between the columns is not evidence
+about the design.
+
 ## Boards with nothing to measure
 
 iCE40 targets in the Makefile (`riegel`, `eis`, `kolibri`, `bonbon`,
