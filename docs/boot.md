@@ -37,9 +37,11 @@ gateware  ->  BIOS (BRAM)  ->  kernel (flash -> RAM)  ->  sh()  ->  init()  ->  
    readable -- pointless on a board with no card at all, which is why
    the flash case is checked first. See
    [`flash_apps.md`](flash_apps.md).
-4. **`init()`** starts `wm`, loads `net`, starts `repl` and then
-   `posix`, starts `net`, and registers **`init0`**. `term` is launched
-   on demand from wm's dock rather than at boot. `wm`'s startup
+4. **`init()`** starts `wm`, loads `net`, starts `console`, looks for
+   `repl` and `posix` on the card without starting them, starts `net`,
+   and registers **`init0`**. `term` is launched on demand from wm's
+   dock, and the shells on demand from term's buttons
+   ([terminal.md](terminal.md), "Starting the shells"). `wm`'s startup
    `clear_screen()` is what wipes the splash.
 
    Each app is resolved independently: filesystem first, flash

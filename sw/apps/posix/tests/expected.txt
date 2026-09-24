@@ -193,5 +193,6 @@ posix -- see docs/posix.md
 
 anything else is run as a program: 'zcc hello.c -o hello'
 redirection: > and >>   chaining: && and ||
+quoting: 'a b' "a b" a\ b   wildcards: * ? [abc]
 $ exit
 [exit]

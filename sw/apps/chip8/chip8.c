@@ -1105,7 +1105,7 @@ int main(void) {
 
 	c8_render_init(&rnd, 2);
 
-	if (!z_launch_arg_take(rom_path, sizeof(rom_path)))
+	if (!z_launch_path_take(rom_path, sizeof(rom_path)))
 		rom_path[0] = '\0';
 
 	/* The window has to exist before a dialog can be centred on it and

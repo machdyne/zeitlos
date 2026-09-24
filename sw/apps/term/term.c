@@ -1192,8 +1192,12 @@ static void panel_probe(bool force) {
 	posix_up = p;
 	console_up = c;
 
-	panel_items[PB_REPL].enabled = r;
-	panel_items[PB_POSIX].enabled = p;
+	// REPL and POSIX are always enabled: pressing one starts the shell
+	// if it is not running (start_shell()). CONSOLE is init's, and
+	// enabled only while it is there.
+	(void)r; (void)p;
+	panel_items[PB_REPL].enabled = true;
+	panel_items[PB_POSIX].enabled = true;
 	panel_items[PB_CONSOLE].enabled = c;
 
 	// A focused button that just became disabled would leave Enter
@@ -1201,7 +1205,7 @@ static void panel_probe(bool force) {
 	// shell is the better default than OPEN.
 	int f = panel_set.focused;
 	if (!panel_focus_user) {
-		int want = r ? PB_REPL : (p ? PB_POSIX : (c ? PB_CONSOLE : PB_OPEN));
+		int want = PB_REPL;
 		if (want != f) z_widget_focus_set(&panel_set, want);
 	} else if (f < 0 || !panel_items[f].enabled) {
 		z_widget_focus_next(&panel_set, false);
@@ -1296,14 +1300,16 @@ static void panel_draw(void) {
 
 }
 
+static void start_shell(const char *name);	// "-- starting the shells --"
+
 static void panel_activate(int idx) {
 
 	switch (idx) {
 	case PB_REPL:
-		connect_port("repl0", z_obj_none(), Z_CONN_TIMEOUT_LOCAL_TICKS, "repl0");
+		start_shell("repl0");
 		break;
 	case PB_POSIX:
-		connect_port("posix0", z_obj_none(), Z_CONN_TIMEOUT_LOCAL_TICKS, "posix0");
+		start_shell("posix0");
 		break;
 	case PB_CONSOLE:
 		connect_port("console0", z_obj_none(), Z_CONN_TIMEOUT_LOCAL_TICKS, "console0");
@@ -1636,6 +1642,7 @@ static bool connect_port(const char *name, z_obj_t arg,
 
 static char auto_text[BAR_MAX];
 static char auto_wait_for[24];
+static char auto_label[24];		// "auto-connect", or "starting repl"
 static uint32_t auto_deadline;
 static uint32_t auto_next_probe;
 
@@ -1665,6 +1672,59 @@ static bool auto_parse(const char *text, z_conn_kind_t *kind, const char **rest)
 
 }
 
+// -- starting the shells -- docs/terminal.md, "Starting the shells" --
+//
+// repl and posix are started by term, on demand, not by init at boot:
+// the REPL and POSIX buttons start the shell if it is not running yet,
+// then connect once it has registered, through the same wait
+// auto-connect uses. A shell nobody asks for costs nothing -- posix
+// alone is 4MB. Typing `port repl0` into the Open bar does NOT start
+// anything: that names a port, and if nothing is listening it says so.
+
+// The program that registers as `name`, for the two shells term can
+// start; NULL for anything else.
+static const char *shell_program_for(const char *name) {
+	if (!strcmp(name, "repl0")) return "repl";
+	if (!strcmp(name, "posix0")) return "posix";
+	return NULL;
+}
+
+// A shell button: connect if it is running, else start it and wait.
+static void start_shell(const char *name) {
+
+	uint32_t pid;
+	char status[VT_COLS + 1];
+	const char *prog = shell_program_for(name);
+
+	if (auto_pending) return;			// already starting one
+
+	if (z_pid_lookup(name, &pid) || !prog) {
+		connect_port(name, z_obj_none(), Z_CONN_TIMEOUT_LOCAL_TICKS, name);
+		return;
+	}
+
+	if (!z_proc_run(prog)) {
+		// Not on the card (it is not in flash), or not enough memory --
+		// posix wants about 4MB and will not fit a 1MB or 2MB board.
+		snprintf(status, sizeof(status),
+			"could not start %s -- no sdcard, or not enough memory", prog);
+		printf("term: could not start %s\n", prog);
+		panel_show(status);
+		return;
+	}
+
+	snprintf(auto_text, sizeof(auto_text), "port %s", name);
+	snprintf(auto_wait_for, sizeof(auto_wait_for), "%s", name);
+	snprintf(auto_label, sizeof(auto_label), "starting %s", prog);
+	auto_pending = true;
+	auto_deadline = z_uptime_ticks() + TERM_AUTO_WAIT_TICKS;
+	auto_next_probe = 0;
+
+	snprintf(status, sizeof(status), "starting %s...  (Esc cancels)", prog);
+	panel_show(status);
+
+}
+
 // Reads the setting and, if there is one, starts waiting.
 static void auto_begin(void) {
 
@@ -1686,6 +1746,7 @@ static void auto_begin(void) {
 	}
 
 	snprintf(auto_text, sizeof(auto_text), "%.71s", v);	// length checked above
+	snprintf(auto_label, sizeof(auto_label), "auto-connect");
 
 	switch (kind) {
 	case Z_CONN_PORT:   snprintf(auto_wait_for, sizeof(auto_wait_for), "%.23s", rest); break;
@@ -1697,6 +1758,15 @@ static void auto_begin(void) {
 	auto_pending = true;
 	auto_deadline = z_uptime_ticks() + TERM_AUTO_WAIT_TICKS;
 	auto_next_probe = 0;
+
+	// A shell nothing has started yet: start it, as its button would.
+	// init no longer does (docs/terminal.md, "Starting the shells").
+	if (kind == Z_CONN_PORT) {
+		const char *prog = shell_program_for(auto_wait_for);
+		uint32_t pid;
+		if (prog && !z_pid_lookup(auto_wait_for, &pid) && !z_proc_run(prog))
+			printf("term: auto_connect: could not start %s\n", prog);
+	}
 
 	snprintf(status, sizeof(status), "auto-connect: %.40s  (Esc cancels)",
 		auto_text);
@@ -1720,7 +1790,7 @@ static void auto_poll(void) {
 		if (now >= auto_deadline) {
 			auto_pending = false;
 			snprintf(status, sizeof(status),
-				"auto-connect: %.24s did not appear -- choose below", auto_wait_for);
+				"%s: %.24s did not appear -- choose below", auto_label, auto_wait_for);
 			panel_show(status);
 		}
 		return;
@@ -1737,7 +1807,7 @@ static void auto_poll(void) {
 	auto_parse(auto_text, &kind, &rest);
 
 	if (!z_conn_prepare(kind, rest, &target, err, sizeof(err))) {
-		snprintf(status, sizeof(status), "auto-connect: %.60s", err);
+		snprintf(status, sizeof(status), "%s: %.50s", auto_label, err);
 		panel_show(status);
 		return;
 	}

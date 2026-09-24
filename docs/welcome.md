@@ -104,8 +104,9 @@ on in `settings`.
 ## The terminal
 
 `term` is your main way of interacting with Zeitlos -- launch it from
-the dock. It gives you a text console, connected to `repl`, a
-command/scripting server. Most of what you'll want to do day to day
+the dock. It opens on a start panel: press **REPL** (Enter) for `repl`,
+a command/scripting server, or **POSIX** for a Unix-style shell. The
+first press starts the shell -- it takes a moment -- and connects to it. Most of what you'll want to do day to day
 (run commands, transfer files, connect out to another machine, edit a
 file, evaluate Scheme) happens from here.
 
@@ -213,7 +214,9 @@ connection used to build/flash the system (see the main `README.md`
 for connecting and flashing). This is where you land before the
 desktop starts, and it has its own separate command set (`ls`, `run`,
 `ps`, `kill`, `xf`, `ss`, and more -- type `help` there to see them
-all). The graphical desktop (`wm`, `net`, `repl`) starts automatically
+all). A file name with a space in it is written in quotes there, as
+in the posix shell: `cat 'My Notes.txt'` ([posix.md](posix.md),
+"Quoting"). The graphical desktop (`wm`, `net`, `repl`) starts automatically
 here a few seconds after boot; if you need to get a new app or file
 onto the SD card without removing it, `xf` receives a file over the
 serial connection (you'll need the `xfer` utility on the other end):

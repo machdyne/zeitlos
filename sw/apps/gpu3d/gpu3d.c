@@ -1843,7 +1843,7 @@ int main(void) {
 	{
 		char arg[Z_WM_ARG_MAX];
 
-		if (z_launch_arg_take(arg, sizeof(arg)) && arg[0])
+		if (z_launch_path_take(arg, sizeof(arg)) && arg[0])
 			do_load(arg);
 		else
 			update_title();

@@ -614,7 +614,7 @@ int main(void) {
 	// whatever the user opens next (Z_WM_SET_ARG, zwm.h).
 	{
 		char arg[Z_FLIST_PATH_MAX];
-		if (!z_launch_arg_take(arg, sizeof(arg))) arg[0] = 0;
+		if (!z_launch_path_take(arg, sizeof(arg))) arg[0] = 0;
 		z_flist_chdir(&flist, arg[0] ? arg : "/");
 	}
 

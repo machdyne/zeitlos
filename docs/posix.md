@@ -10,9 +10,10 @@ computer.
 
 ## Getting there
 
-`posix` is a port provider, like `repl`. With an sdcard present, `init`
-starts both at boot, and a new `term` window's **POSIX** button connects
-to it. By hand:
+`posix` is a port provider, like `repl`. A `term` window's **POSIX**
+button starts it the first time it is pressed and connects to it
+([terminal.md](terminal.md), "Starting the shells"); nothing starts it
+at boot. By hand:
 
 ```
 > run wm
@@ -20,26 +21,27 @@ to it. By hand:
 > run term
 ```
 
-Then click **POSIX** on the `term` window's start panel, or type
-`port posix0` straight onto it, or from a `repl` prompt type
-`port posix0`. All three reach the same place. **F12** always
+Then click **POSIX** on the `term` window's start panel, or -- once it
+is running -- type `port posix0` straight onto it, or from a `repl`
+prompt. All three reach the same place. **F12** always
 disconnects, back to that panel.
 
 posix needs about 4.2MB of RAM (its 4MB tier plus its image), so it will
-not start on the 1MB and 2MB boards; `init` prints why.
+not start on the 1MB and 2MB boards; the POSIX button says it could not
+start it.
 
 You get a `$` prompt.
 
 ## The shell
 
-Commands, redirection `>` and `>>`, pipes `|`, and `&&` / `||`.
-There is no quoting and no globbing -- a Zeitlos path has no spaces in
-it, and every argument is a path or a flag.
+Commands, redirection `>` and `>>`, pipes `|`, `&&` / `||`, quoting
+and wildcards.
 
 ```
 $ ls
 $ cat notes.txt
-$ wc *.c            <- NO. globbing does not exist
+$ cat 'My Notes.txt'
+$ wc *.c
 $ cat a.c | grep printf | wc
 $ zcc hello.c -o hello && run hello
 ```
@@ -56,6 +58,78 @@ regular expressions (`:g`, `:s`) if you need them.
 
 Anything that is not a builtin is run as a program, so `zcc hello.c`
 and `run zcc hello.c` are the same thing.
+
+### Quoting
+
+File names can have spaces in them (long file names, [sdcard.md](sdcard.md)),
+so an argument can too:
+
+| you type | the argument is |
+|---|---|
+| `'My Notes.txt'` | `My Notes.txt` -- everything between single quotes is literal |
+| `"My Notes.txt"` | the same; inside double quotes `\"` is `"` and `\\` is `\` |
+| `My\ Notes.txt` | the same; a backslash makes the next character literal |
+| `it"'"s` | `it's` -- quoted and unquoted parts next to each other join |
+
+Nothing else is special inside quotes -- there are no variables. A quote
+left open runs to the end of the line. Quoting also turns an operator
+into an argument: `echo '>'` prints `>`, and `echo 'a|b'` does not pipe.
+
+A program gets its arguments as one string (the launch argument, see
+"What `run` passes" below), so `run` quotes each argument that needs it.
+Programs split it back with the same rules -- `zcc "my prog.c" -o "my
+prog"` does what it says -- and an app that opens one file, like `text`,
+takes the quoted name as that file: `run text 'My Notes.txt'`.
+
+All of this is `sw/common/zargs.h`, shared by this shell, the kernel
+shell (quoting only), and `zcc`/`zfpga` for their arguments.
+
+### Wildcards
+
+| pattern | matches |
+|---|---|
+| `*` | any run of characters, including none |
+| `?` | one character -- one `ü` or `日`, not one byte |
+| `[abc]` | one of those; `[a-z]` a range; `[!abc]` or `[^abc]` anything else |
+
+`*.c` is every matching name in the current directory, `src/*.c` every
+match in `src`, in the order `ls` lists them. A few things work
+differently from a Unix shell, on purpose:
+
+- **Case does not matter** for ASCII letters: `*.txt` matches
+  `README.TXT`. FAT names are case-insensitive, and old-style 8.3 names
+  are stored in capitals, so a case-sensitive match would miss them.
+- **A pattern that matches nothing stays as typed**, as in other
+  shells: `rm *.bak` with nothing to remove says `rm: *.bak: ...` rather
+  than running `rm` with no arguments.
+- **Only the last part of a path** is matched: `src/*.c` works, a
+  wildcard in a directory part (`sr*` then `/a.c`) is taken literally.
+  Quote the directory if it has a space: `cat "Old Stuff"/*.txt`.
+- **Names starting with `.`** are matched only by a pattern that starts
+  with one.
+- **A quoted wildcard is a character:** `'*.c'` and `\*.c` are the name
+  `*.c`.
+- **A redirection target is never a pattern:** `> *.txt` writes a file
+  with that name.
+- **At most 24 arguments** (`PX_MAX_ARGS`), expansion included; more is
+  an error, not a silent cut.
+
+The matcher is `sw/common/zglob.h`; the expansion is `expand_globs()`
+in `sh.c`. The kernel shell does not expand wildcards -- it is kept
+small, and this shell has them.
+
+### What `run` passes
+
+`run prog a b` -- or just `prog a b` -- starts `prog` with the launch
+argument `a b` (`z_launch_arg_set()`, `zwin.h`): each argument quoted
+if it needs to be, so that `z_args_split()` gives them back.
+
+- A program that takes **several arguments** splits the string with
+  `z_args_split()` (`zcc`, `zfpga`).
+- An app that takes **one path** uses `z_launch_path_take()`, which
+  removes the quotes from a string that is one quoted argument and
+  leaves anything else alone -- so the name arrives the same whether
+  it came from this shell, quoted, or from the file browser, as it is.
 
 ### gzip: `zcat` and `gunzip`
 
@@ -158,6 +232,9 @@ The window is always 80x25 regardless of how large you make it.
   what it looks like.
 - **There is one current directory**, shared by every terminal
   connected to the same `posix`.
+- **Wildcards match case-insensitively, only in the last part of a
+  path, and a pattern that matches nothing stays as typed** -- see
+  "Wildcards".
 
 ---
 
@@ -2222,9 +2299,11 @@ this migration stays possible, and ship copy-per-output first.
 
 ### In `posix`
 
-- **No quoting, no globbing.** `cat "two words.txt"` and `rm *.o` do
-  not work. A Zeitlos path cannot contain a space, so quoting has no
-  job; globbing is a real absence and would go in `split()`.
+- **Wildcards only in the last part of a path**, not in directory
+  names (`*/notes.txt`). Quoting and wildcards are otherwise done -- see
+  "Quoting" and "Wildcards" at the top. (This entry used to read "no
+  quoting, no globbing": a path could not contain a space until long
+  file names.)
 - **A pipe is capped at 16KB** and holds its intermediate in memory.
   Process-to-process pipes would lift that and are unbuilt: nothing
   puts a compiler or an editor in a pipeline.

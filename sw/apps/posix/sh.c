@@ -29,6 +29,8 @@
 #include "zeitlos.h"
 #include "zfsapp.h"
 #include "zwin.h"           /* z_launch_arg_set() */
+#include "../../common/zargs.h"		// quoting -- docs/posix.md, "Quoting"
+#include "../../common/zglob.h"		// wildcards -- docs/posix.md, "Wildcards"
 #include "posix.h"
 #include "zgz.h"            /* zcat, gunzip */
 
@@ -1042,16 +1044,17 @@ static void bi_run(px_shell_t *sh, int argc, char **argv) {
         return;
     }
 
+    // The program gets its arguments as one string. Each is quoted if
+    // it needs to be -- a space, a quote -- so a program that splits
+    // the string with z_args_split() (zcc, zfpga) gets them back
+    // exactly; one that takes the whole string as a path gets it back
+    // too (z_launch_path_take(), zwin.h). docs/posix.md, "Quoting".
     char args[PX_LINE_MAX];
-    int n = 0;
-    for (int i = 2; i < argc; i++) {
-        int len = (int)strlen(argv[i]);
-        if (n + len + 2 >= (int)sizeof(args)) break;
-        if (n) args[n++] = ' ';
-        memcpy(args + n, argv[i], (size_t)len);
-        n += len;
+    if (!z_args_join(argc - 2, argv + 2, args, sizeof(args))) {
+        px_puts(sh, "run: arguments too long\n");
+        sh->status = 1;
+        return;
     }
-    args[n] = 0;
 
     /* ALWAYS set, even to the empty string.
      *
@@ -1126,33 +1129,34 @@ static void bi_help(px_shell_t *sh, int argc, char **argv) {
     for (int i = 0; builtins[i].name; i++)
         px_printf(sh, "  %-8s %s\n", builtins[i].name, builtins[i].help);
     px_puts(sh, "\nanything else is run as a program: 'zcc hello.c -o hello'\n"
-                "redirection: > and >>   chaining: && and ||\n");
+                "redirection: > and >>   chaining: && and ||\n"
+                "quoting: 'a b' \"a b\" a\\ b   wildcards: * ? [abc]\n");
 }
 
 /* ------------------------------------------------------------------ */
 /* the line                                                            */
 
 /*
- * Splits in place. No quoting and no escapes.
+ * Splits a command into arguments, with quoting: '...', "..." and \x
+ * (sw/common/zargs.h, docs/posix.md "Quoting").
  *
- * Deliberate, and worth stating rather than leaving as an omission: a
- * Zeitlos path cannot contain a space (FAT long names can, but nothing
- * in this tree creates one), and every argument a command here takes
- * is a path or a flag. Adding quoting would mean adding escaping, and
- * then a user has to know which is which -- for a capability nothing
- * needs yet.
+ * This used to split on spaces and nothing else, deliberately: a Zeitlos
+ * path could not contain a space, and every argument here is a path or a
+ * flag. Long file names changed the first half of that -- `My
+ * Notes.txt` is a real file now -- so an argument has to be able to hold
+ * one.
+ *
+ * The arguments are written into a buffer of their own rather than cut
+ * out of the line in place: a quoted wildcard is marked in them for the
+ * globbing below, and marking can make an argument longer than the text
+ * it came from. Each argument's Z_ARG_* flags say whether it was quoted
+ * (so it can never be an operator like `>`) and whether it has a
+ * wildcard to expand.
  */
-static int split(char *line, char **argv, int max) {
-    int argc = 0;
-    char *p = line;
-    while (*p && argc < max) {
-        while (*p == ' ' || *p == '\t') p++;
-        if (!*p) break;
-        argv[argc++] = p;
-        while (*p && *p != ' ' && *p != '\t') p++;
-        if (*p) *p++ = 0;
-    }
-    return argc;
+static char tok_buf[2 * PX_LINE_MAX + 16];
+
+static int split(const char *line, char **argv, uint8_t *fl, int max) {
+    return z_args_split(line, tok_buf, sizeof(tok_buf), argv, fl, max);
 }
 
 /*
@@ -1162,12 +1166,15 @@ static int split(char *line, char **argv, int max) {
  * both work without the splitter needing to know about redirection --
  * the splitter's job is whitespace and nothing else.
  */
-static bool take_redirect(px_shell_t *sh, int *argc, char **argv) {
+static bool take_redirect(px_shell_t *sh, int *argc, char **argv, uint8_t *fl) {
 
     for (int i = 0; i < *argc; i++) {
 
         int append = 0;
-        const char *target = 0;
+        char *target = 0;
+
+        // A quoted '>' is an argument: `echo '>'` prints it.
+        if (fl[i] & Z_ARG_QUOTED) continue;
 
         if (!strcmp(argv[i], ">") || !strcmp(argv[i], ">>")) {
             append = (argv[i][1] == '>');
@@ -1176,7 +1183,7 @@ static bool take_redirect(px_shell_t *sh, int *argc, char **argv) {
                 return false;
             }
             target = argv[i + 1];
-            for (int j = i; j + 2 <= *argc; j++) argv[j] = argv[j + 2];
+            for (int j = i; j + 2 <= *argc; j++) { argv[j] = argv[j + 2]; fl[j] = fl[j + 2]; }
             *argc -= 2;
         } else if (argv[i][0] == '>') {
             append = (argv[i][1] == '>');
@@ -1185,11 +1192,16 @@ static bool take_redirect(px_shell_t *sh, int *argc, char **argv) {
                 px_puts(sh, "syntax error: expected a filename after >\n");
                 return false;
             }
-            for (int j = i; j + 1 <= *argc; j++) argv[j] = argv[j + 1];
+            for (int j = i; j + 1 <= *argc; j++) { argv[j] = argv[j + 1]; fl[j] = fl[j + 1]; }
             *argc -= 1;
         } else {
             continue;
         }
+
+        // The target is a name, never a pattern: `> *.txt` writes a
+        // file called that, as other shells do when it would match
+        // nothing, rather than guessing which file was meant.
+        z_args_unmark(target);
 
         char err[128];
 
@@ -1235,6 +1247,8 @@ static void exec_one(px_shell_t *sh, char *cmd) {
 
     stages[n++] = p;
     while (*p && n < 8) {
+        // A quoted '|' is an argument, not a pipe.
+        if (*p == '\'' || *p == '"' || *p == '\\') { p = (char *)z_args_skip(p); continue; }
         if (p[0] == '|' && p[1] != '|') {
             *p++ = 0;
             while (*p == ' ') p++;
@@ -1288,17 +1302,140 @@ static void exec_one(px_shell_t *sh, char *cmd) {
     sh->in_len = 0;
 }
 
+/*
+ * Expands the arguments with unquoted wildcards (docs/posix.md,
+ * "Wildcards"). `*.c` becomes every matching name in the current
+ * directory, and `src/` followed by `*.c` every match in src, in the order `ls` would list
+ * them. A pattern that matches nothing is kept as it was typed, as
+ * other shells do, so `rm *.bak` with nothing to remove says so rather
+ * than running `rm` with no arguments.
+ *
+ * Wildcards are matched in the LAST part of a path only: one in a
+ * directory part (`src*` followed by a slash) is taken literally. Names starting with '.' are matched only by
+ * a pattern that starts with one, the Unix convention.
+ *
+ * The expanded names live in glob_buf, which lasts until the next
+ * command; argv points into it.
+ */
+static char glob_buf[4096];
+static char glob_list[4096];
+static uint8_t glob_types[128];
+
+static int glob_cmp(const char *a, const char *b) {
+    // As ls sorts (bi_ls), so a wildcard lists files in the same order.
+    return strcmp(a, b);
+}
+
+static bool expand_globs(px_shell_t *sh, int *argc, char **argv, uint8_t *fl) {
+
+    char *out[PX_MAX_ARGS];
+    uint8_t ofl[PX_MAX_ARGS];
+    int n = 0;
+    size_t used = 0;
+
+    for (int i = 0; i < *argc; i++) {
+
+        if (!(fl[i] & Z_ARG_WILD)) {
+            if (n >= PX_MAX_ARGS) goto too_many;
+            ofl[n] = fl[i];
+            out[n++] = argv[i];
+            continue;
+        }
+
+        // Split at the last '/': the directory, as typed, and the
+        // pattern for the names in it.
+        char *pat = argv[i];
+        char *slash = strrchr(pat, '/');
+        char dir[PX_PATH_MAX];
+        const char *base = pat;
+        if (slash) {
+            size_t dl = (size_t)(slash - pat);
+            if (dl >= sizeof(dir)) dl = sizeof(dir) - 1;
+            memcpy(dir, pat, dl);
+            dir[dl] = 0;
+            z_args_unmark(dir);
+            base = slash + 1;
+        } else {
+            dir[0] = 0;
+        }
+
+        int first = n;
+        char abs[PX_PATH_MAX];
+        uint32_t count = 0, truncated = 0;
+        const char *listdir = slash ? (dir[0] ? dir : "/") : ".";
+
+        if (px_resolve(listdir, abs, sizeof(abs)) &&
+            fs_list_into(abs, glob_list, sizeof(glob_list), glob_types,
+                sizeof(glob_types), &count, &truncated)) {
+
+            const char *p = glob_list;
+            for (uint32_t k = 0; k < count; k++) {
+                const char *name = strrchr(p, '/');
+                name = name ? name + 1 : p;
+                size_t pl = strlen(p);
+                bool dot_ok = (base[0] == '.');
+                if ((name[0] != '.' || dot_ok) && z_glob_match(base, name)) {
+                    if (n >= PX_MAX_ARGS) goto too_many;
+                    size_t need = (slash ? strlen(dir) + 1 : 0) + strlen(name) + 1;
+                    if (used + need > sizeof(glob_buf)) goto too_many;
+                    char *w = glob_buf + used;
+                    if (slash) {
+                        strcpy(w, dir);
+                        strcat(w, "/");
+                        strcat(w, name);
+                    } else {
+                        strcpy(w, name);
+                    }
+                    used += need;
+                    // Sorted into place among this pattern's matches.
+                    int j = n;
+                    while (j > first && glob_cmp(out[j - 1], w) > 0) {
+                        out[j] = out[j - 1];
+                        ofl[j] = ofl[j - 1];
+                        j--;
+                    }
+                    out[j] = w;
+                    ofl[j] = Z_ARG_QUOTED;  // a name, not an operator
+                    n++;
+                }
+                p += pl + 1;
+            }
+        }
+
+        if (n == first) {
+            // Nothing matched: the pattern itself, as typed.
+            z_args_unmark(argv[i]);
+            if (n >= PX_MAX_ARGS) goto too_many;
+            ofl[n] = fl[i];
+            out[n++] = argv[i];
+        }
+
+    }
+
+    for (int i = 0; i < n; i++) { argv[i] = out[i]; fl[i] = ofl[i]; }
+    *argc = n;
+    return true;
+
+too_many:
+    px_printf(sh, "posix: too many names from a wildcard (at most %d arguments)\n",
+        PX_MAX_ARGS);
+    return false;
+
+}
+
 static void exec_simple(px_shell_t *sh, char *cmd) {
 
     char *argv[PX_MAX_ARGS];
-    int argc = split(cmd, argv, PX_MAX_ARGS);
+    uint8_t fl[PX_MAX_ARGS];
+    int argc = split(cmd, argv, fl, PX_MAX_ARGS);
 
     if (!argc) return;
 
     out_fd = 1;
     sh->status = 0;
 
-    if (!take_redirect(sh, &argc, argv)) { sh->status = 1; return; }
+    if (!take_redirect(sh, &argc, argv, fl)) { sh->status = 1; return; }
+    if (!expand_globs(sh, &argc, argv, fl)) { sh->status = 1; px_close_all_files(); out_fd = 1; return; }
     if (!argc) { px_close_all_files(); out_fd = 1; return; }
 
     for (int i = 0; builtins[i].name; i++) {
@@ -1364,6 +1501,8 @@ static void exec_rest(px_shell_t *sh, char *p, int first_join) {
         int next_join = 0;          /* 0 none, 1 &&, 2 || */
 
         while (*p) {
+            // Quoted && and || are arguments -- skip over quotes.
+            if (*p == '\'' || *p == '"' || *p == '\\') { p = (char *)z_args_skip(p); continue; }
             if (p[0] == '&' && p[1] == '&') { next_join = 1; break; }
             if (p[0] == '|' && p[1] == '|') { next_join = 2; break; }
             p++;

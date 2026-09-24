@@ -550,9 +550,12 @@ each); apps size name and path buffers with those instead of the 64s and
   a character), `z_utf8_cols()`/`z_utf8_fit_cols()` (widths), and
   `z_utf8_next_off()`/`z_utf8_prev_off()` (stepping a caret).
 
-**Not yet:** a name with a space cannot be typed in a shell or passed as
-a launch argument -- those split on spaces. Such files open from the
-file browser and the dialogs, which do no parsing.
+**Shells.** A name with a space is typed with quotes -- `cat 'My
+Notes.txt'`, `"My Notes.txt"` or `My\ Notes.txt` -- in the posix shell,
+the kernel shell and anywhere else that splits a command line, and
+passes through `run` to the app intact ([posix.md](posix.md),
+"Quoting"). The posix shell also expands wildcards (`*.txt`); the
+kernel shell does not.
 
 **The release image stays 8.3.** `release/lib/mkfatimg.py` still refuses
 long names on the card it builds, on purpose: everything shipped keeps a

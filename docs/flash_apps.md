@@ -7,7 +7,9 @@ it is a core app because the machines that most need it, with no card
 and no serial cable, are exactly the ones with nothing else.
 
 The two shells, `repl` and `posix`, are **not** core apps: they live on
-the sdcard, and `init()` starts both from there when a card is present.
+the sdcard, and `term` starts one when its REPL or POSIX button is
+pressed ([terminal.md](terminal.md), "Starting the shells"). `init()`
+only looks for them, which is what wakes a freshly powered card.
 See "Why repl is not a core app" below.
 
 ## Why

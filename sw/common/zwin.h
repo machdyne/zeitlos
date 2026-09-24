@@ -458,6 +458,15 @@ void z_launch_arg_set(const char *arg);
 // paint ran with no region and the dropped SET_CLIP was never resent.
 bool z_launch_arg_take(char *out, int outlen);
 
+// z_launch_arg_take() for an app whose argument is ONE path (text, view,
+// read...). The posix shell quotes an argument that holds a space when
+// it passes it on (`run text 'My Notes.txt'` arrives as 'My Notes.txt',
+// quotes and all), while the file browser passes a path as it is. This
+// takes either: a string that begins with a quote and is exactly one
+// quoted argument is unquoted; anything else is the path unchanged.
+// docs/posix.md, "Quoting".
+bool z_launch_path_take(char *out, int outlen);
+
 // -- clipboard --
 //
 // See Z_WM_CLIP_SET in zwm.h for the protocol and why the clipboard

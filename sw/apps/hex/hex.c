@@ -1727,7 +1727,7 @@ int main(void) {
 	// sw/apps/text hit exactly that and left a file browser's chrome
 	// drawn inside its own window.
 	char launch_arg[Z_FLIST_PATH_MAX];
-	bool have_arg = z_launch_arg_take(launch_arg, sizeof(launch_arg));
+	bool have_arg = z_launch_path_take(launch_arg, sizeof(launch_arg));
 
 	char initial_title[32];
 	build_title(initial_title, (int)sizeof(initial_title),

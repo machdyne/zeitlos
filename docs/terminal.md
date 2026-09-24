@@ -28,7 +28,7 @@ A new `term` window is **not connected to anything**. It shows a panel:
 
 | on the panel | does |
 | --- | --- |
-| click a button, or Tab / arrows then Enter | connect to `repl0` / `posix0` / `console0`, or open the bar |
+| click a button, or Tab / arrows then Enter | connect to `repl0` / `posix0` / `console0` -- starting the shell first if it is not running -- or open the bar |
 | type a printable character | open the Open bar with it -- `port posix0`, `telnet host` just work |
 | Esc | hide the panel to read the old session underneath; any key brings it back |
 | Ctrl+Shift+V | paste the clipboard's first line into the Open bar |
@@ -38,19 +38,29 @@ since boot (its last 4 KB), then live output, and a prompt shared with
 the serial console. It works on a machine with no card and no serial
 cable. See `docs/console.md`.
 
-**The connection buttons are live only while their provider is registered**
-(`repl0`, `posix0`, `console0` in the pid registry), rechecked twice a second while
-the panel is up. A disabled button is an empty frame -- the toolkit's
-disabled look (`sw/common/zwidget.c`). At boot the panel is often on
-screen before init has finished loading the shells off the sdcard, and
-the buttons coming alive one by one says that better than a click that
-fails. On a board with no sdcard both shells stay disabled, which is the
-truth: they live on the card (`docs/flash_apps.md`). CONSOLE is a core
-app in flash, so it is there either way. OPEN is always live.
+### Starting the shells
 
-Until you move focus yourself, it follows the first ready one -- REPL,
-else POSIX, else CONSOLE, else OPEN -- so Enter does the likely thing
-the moment the window appears.
+**`repl` and `posix` are started by term, not at boot.** Pressing REPL
+or POSIX connects to the shell if it is running, and otherwise starts it
+(`z_proc_run()`), says `starting repl...` on the status line, and
+connects once it has registered -- through the same wait auto-connect
+uses (below), so **Esc** cancels it and a shell that never appears is
+reported. A second press while one is starting does nothing. A shell
+nobody asks for costs nothing; `posix` alone is 4MB. Once running, a
+shell stays up for every window, and further presses just connect.
+
+So REPL and POSIX are always live. If the start fails the status line
+says why: there is no sdcard (the shells live on it, not in flash --
+`docs/flash_apps.md`), or not enough memory (`posix` needs about 4MB).
+Typing `port repl0` in the Open bar does **not** start anything -- it
+names a port, and fails if nothing is listening there. CONSOLE is a core
+app that init starts, and its button is live only while `console0` is
+registered (rechecked twice a second); a disabled button is an empty
+frame, the toolkit's disabled look (`sw/common/zwidget.c`). OPEN is
+always live.
+
+Focus starts on REPL, so Enter does the likely thing the moment the
+window appears.
 
 ### Connecting by itself: `apps.term.auto_connect`
 
@@ -58,8 +68,10 @@ Set in `/zeitlos.cfg` (`docs/config.md`), e.g.
 `apps.term.auto_connect: port repl0`, every new window connects there
 instead of waiting on the panel. It takes the same text as the Open bar.
 
-A window opened at boot can be up before the shell has registered, so
-term **waits up to 15 seconds for the provider's name** (`repl0`;
+`port repl0` and `port posix0` start the shell first if it is not
+running, as the buttons do -- otherwise that setting would always time
+out. A window opened at boot can also be up before a provider has
+registered, so term **waits up to 15 seconds for the provider's name** (`repl0`;
 `serial0` for serial and usbserial; `net0` for
 telnet/ssh), with the panel's status
 line saying what it is waiting for, and connects once. **Esc** stops the

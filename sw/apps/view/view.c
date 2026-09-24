@@ -902,7 +902,7 @@ int main(void) {
 	// via z_msg_wait(), which discards anything else that arrives
 	// meanwhile -- safe here only because nothing else is in flight
 	// yet. See zwin.h.
-	have_arg = z_launch_arg_take(launch_arg, sizeof(launch_arg));
+	have_arg = z_launch_path_take(launch_arg, sizeof(launch_arg));
 
 	// CLOSE_ICON without CLOSE_KILLS_OWNER, deliberately: this app
 	// owns more than one window at a time as soon as a dialog opens,

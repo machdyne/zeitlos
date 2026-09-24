@@ -70,6 +70,11 @@ static int mb_head, mb_count;
 static uint32_t ticks = 1000;
 
 static bool reg_repl, reg_posix;
+
+// Programs started with z_proc_run() -- the shell buttons start repl
+// and posix themselves now (docs/terminal.md, "Starting the shells").
+static char started[4][16];
+static int nstarted;
 static bool refuse_next;
 
 static char clipboard[Z_WM_CLIP_MAX];
@@ -95,6 +100,14 @@ static uint32_t *k_syscall(uint32_t id, uint32_t *args, uint32_t b) {
 	(void)b;
 
 	switch (id) {
+
+	case Z_SYS_PROC_RUN: {
+		z_obj_t *o = (z_obj_t *)args;
+		if (nstarted < 4) snprintf(started[nstarted++], 16, "%s", o->val.str);
+		o->type = Z_UINT32;
+		o->val.uint32 = 77;		// a pid; it registers when the test says
+		return (uint32_t *)&k_ok;
+	}
 
 	case Z_SYS_UPTIME:
 		((z_obj_t *)args)->type = Z_UINT32;
@@ -438,10 +451,24 @@ int main(int argc, char **argv) {
 	frame_check("startup");
 	expect(panel_visible, "panel visible at startup");
 	expect(!port.connected, "not connected at startup");
-	expect(!panel_items[PB_REPL].enabled, "REPL disabled while repl0 is not registered");
+	// REPL and POSIX are enabled with no shell running: pressing one
+	// starts it. Focus starts on REPL.
+	expect(panel_items[PB_REPL].enabled, "REPL enabled though repl0 is not registered");
+	expect(panel_items[PB_POSIX].enabled, "POSIX enabled though posix0 is not registered");
 	expect(panel_items[PB_OPEN].enabled, "OPEN always enabled");
-	expect(panel_set.focused == PB_OPEN, "focus on OPEN while no shell is ready");
+	expect(panel_set.focused == PB_REPL, "focus on REPL");
 	write_pbm(prefix, "1-start");
+
+	// Pressing REPL with no repl0 starts repl and waits for it; Esc
+	// cancels the wait and leaves the panel as it was.
+	panel_activate(PB_REPL);
+	expect(nstarted == 1 && !strcmp(started[0], "repl"), "REPL starts repl when repl0 is not there");
+	expect(auto_pending && !strcmp(auto_wait_for, "repl0"), "and waits for repl0");
+	panel_activate(PB_REPL);
+	expect(nstarted == 1, "a second press while starting does not start another");
+	auto_cancel(NULL);
+	expect(!auto_pending, "Esc cancels the wait");
+	nstarted = 0;
 
 	// -- 2. repl0 registers; its button comes alive; click it --
 	printf("2. repl0 appears, click REPL\n");
@@ -449,7 +476,7 @@ int main(int argc, char **argv) {
 	ticks += Z_TICK_HZ;
 	frame_check("after repl0 registers");
 	expect(panel_items[PB_REPL].enabled, "REPL enabled once repl0 registers");
-	expect(!panel_items[PB_POSIX].enabled, "POSIX still disabled");
+	expect(panel_items[PB_POSIX].enabled, "POSIX enabled throughout");
 	expect(panel_set.focused == PB_REPL, "focus follows the first ready shell");
 	write_pbm(prefix, "2-repl-ready");
 

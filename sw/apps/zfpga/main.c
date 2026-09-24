@@ -11,6 +11,7 @@
  * ecppack option-for-option is what makes the differential test honest.
  */
 
+#include "../../common/zargs.h"	/* quoting -- docs/posix.md */
 #include "zfpga.h"
 
 #ifndef ZFPGA_HOSTED
@@ -186,16 +187,12 @@ int cmd_info(int argc, char **argv) {
     return 0;
 }
 
+/* Split as the posix shell quoted it -- see zcc/main.c's split_args(). */
+static char arg_buf[2 * 512 + 16];
+
 static int split_args(char *line, char **av, int max) {
-    int n = 0;
-    char *p = line;
-    while (*p && n < max) {
-        while (*p == ' ' || *p == '\t') p++;
-        if (!*p) break;
-        av[n++] = p;
-        while (*p && *p != ' ' && *p != '\t') p++;
-        if (*p) *p++ = 0;
-    }
+    int n = z_args_split(line, arg_buf, sizeof(arg_buf), av, NULL, max);
+    for (int i = 0; i < n; i++) z_args_unmark(av[i]);
     return n;
 }
 

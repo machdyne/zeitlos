@@ -13,6 +13,7 @@
  * between five minutes and an afternoon.
  */
 
+#include "../../common/zargs.h"	/* quoting -- docs/posix.md */
 #include <string.h>
 #include <stdint.h>
 
@@ -193,17 +194,17 @@ static void dump_tokens(token_t *t) {
  * path has no spaces in it, and the alternative is a shell, which is
  * `posix`'s job and not this file's.
  */
+/* The launch argument split as the posix shell quoted it: '...', "..."
+ * and \x, so an argument can hold a space (sw/common/zargs.h, docs/
+ * posix.md "Quoting"). Spaces alone used to be the only separator,
+ * which was all a file name could hold before long file names. */
+static char arg_buf[2 * 512 + 16];
+
 static int split_args(char *line, char **argv, int max) {
-    int n = 1;
     argv[0] = "zcc";
-    for (char *p = line; *p && n < max; ) {
-        while (*p == ' ' || *p == '\t') p++;
-        if (!*p) break;
-        argv[n++] = p;
-        while (*p && *p != ' ' && *p != '\t') p++;
-        if (*p) *p++ = 0;
-    }
-    return n;
+    int n = z_args_split(line, arg_buf, sizeof(arg_buf), argv + 1, NULL, max - 1);
+    for (int i = 1; i <= n; i++) z_args_unmark(argv[i]);  /* no globbing here */
+    return n + 1;
 }
 
 int main(int argc, char **argv) {

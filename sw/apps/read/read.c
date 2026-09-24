@@ -3437,7 +3437,7 @@ int main(void) {
 
 	{
 		char arg[Z_FLIST_PATH_MAX];
-		if (z_launch_arg_take(arg, sizeof(arg))) {
+		if (z_launch_path_take(arg, sizeof(arg))) {
 
 			/* Split off a "#<decimal>" byte-offset fragment, if
 			 * there is one. `ask` (sw/apps/ask, docs/ask_app.md)

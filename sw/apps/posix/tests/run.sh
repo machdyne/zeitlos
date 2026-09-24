@@ -89,6 +89,20 @@ echo "posix shell: transcript matches"
 # The assertion suite. Separate from the transcript above because it
 # answers a different question: the transcript says "nothing changed",
 # these say "the answers are right".
+# Long file names (docs/posix.md, "Quoting" and "Wildcards"), made
+# only now, after the transcript has run, so its `ls` of the root does
+# not change, and in directories of their own: a name with a space, one in a directory with a space, a German
+# one (built with printf -- sh does not expand \ooo in quotes), and
+# three .c files and a .h for the wildcards.
+mkdir -p "$work/names/Old Stuff" "$work/wild"
+printf 'spaced out\n' > "$work/names/My Notes.txt"
+printf 'inside\n' > "$work/names/Old Stuff/a b.txt"
+printf 'gruss\n' > "$work/names/$(printf 'Gr\303\274\303\237e.txt')"
+printf 'int a;\n' > "$work/wild/a.c"
+printf 'int bb;\n' > "$work/wild/b.c"
+printf 'int c;\n' > "$work/wild/c.c"
+printf 'hdr\n' > "$work/wild/a.h"
+
 if [ -x "$here/px_case_test" ]; then
     echo
     "$here/px_case_test" "$work" "$here/cases.txt" || exit 1

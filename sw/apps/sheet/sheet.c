@@ -1579,7 +1579,7 @@ int main(void) {
 	// own note on the redraw race that retitling immediately after
 	// creation caused.
 	char launch_arg[sizeof(filename)];
-	bool have_arg = z_launch_arg_take(launch_arg, sizeof(launch_arg));
+	bool have_arg = z_launch_path_take(launch_arg, sizeof(launch_arg));
 
 	char initial_title[40];
 	build_title(initial_title, (int)sizeof(initial_title),

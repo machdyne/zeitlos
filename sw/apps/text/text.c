@@ -2245,7 +2245,7 @@ int main(void) {
 	// title is already right, so update_title() below finds nothing
 	// to send.
 	char launch_arg[sizeof(filename)];
-	bool have_arg = z_launch_arg_take(launch_arg, sizeof(launch_arg));
+	bool have_arg = z_launch_path_take(launch_arg, sizeof(launch_arg));
 
 	char initial_title[32];
 	build_title(initial_title, (int)sizeof(initial_title),

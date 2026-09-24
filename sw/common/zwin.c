@@ -14,6 +14,8 @@
 #include "zwm.h"
 #include "zwin.h"
 #include "zutf8.h"
+#include "zargs.h"		// z_launch_path_take()
+#include "zfs.h"
 #include "zgfx.h"
 
 // resolved once, cached for the lifetime of this process -- z_win_*
@@ -1025,6 +1027,24 @@ void z_win_set_max_size(const z_win_t *win, uint32_t w, uint32_t h) {
 
 	z_msg_new_send(wmpid, Z_WM_SET_LIMITS, 0,
 		z_obj_uint32(Z_WM_PACK_RESIZE(win->id, w, h)));
+
+}
+
+bool z_launch_path_take(char *out, int outlen) {
+
+	if (!z_launch_arg_take(out, outlen)) return false;
+	if (out[0] != '\'' && out[0] != '"') return true;
+
+	// One quoted argument? z_args_split() into a buffer of its own; a
+	// launch argument is at most one line, so twice its size will do.
+	char buf[2 * Z_FS_PATH_MAX + 8];
+	char *av[2];
+	uint8_t fl[2];
+	if (z_args_split(out, buf, sizeof(buf), av, fl, 2) == 1) {
+		z_args_unmark(av[0]);
+		z_utf8_copy(out, (size_t)outlen, av[0]);
+	}
+	return true;
 
 }
 

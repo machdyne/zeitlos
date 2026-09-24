@@ -2024,7 +2024,7 @@ int main(void) {
      * startup nothing else is in flight. Later it would not be safe.
      * See zwin.h. */
     arg[0] = 0;
-    z_launch_arg_take(arg, sizeof(arg));
+    z_launch_path_take(arg, sizeof(arg));
 
     scan_dir("/AUDIO");
     if (!nfiles) scan_dir("/audio");

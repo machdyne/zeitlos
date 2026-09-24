@@ -1563,7 +1563,7 @@ int main(void) {
 	// browser does -- see Z_WM_SET_ARG in zwm.h). Done AFTER the
 	// dialog context is set up, since load_canvas() reports failures
 	// through a dialog, and after layout() so a repaint is valid.
-	if (z_launch_arg_take(launch_path, sizeof(launch_path)) &&
+	if (z_launch_path_take(launch_path, sizeof(launch_path)) &&
 		load_canvas(launch_path)) {
 
 		int i = 0;

@@ -11,6 +11,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include "../common/zeitlos.h"
+#include "../common/zargs.h"	// get_arg(): quoting, docs/posix.md
+#include "../common/zfs.h"		// Z_FS_PATH_MAX
 #include "../common/znet.h"
 #include "../common/zstream.h"
 #include "../common/zdns.h"
@@ -1767,34 +1769,37 @@ void init(void) {
 		}
 	}
 
-	// repl and posix: the two shells a term window can connect to.
+	// repl and posix, the two shells a term window connects to, are NOT
+	// started here any more: term starts one when its REPL or POSIX
+	// button is pressed (docs/terminal.md, "Starting the shells"). A
+	// shell nobody asks for costs nothing -- posix alone is 4MB -- and
+	// `port repl0` before either button fails, which is fine.
 	//
-	// Neither is a core app any more. They live on the sdcard, not in
-	// the flash archive (docs/flash_apps.md), so on a card-less board
-	// both "not found" lines below are the expected outcome, not a
-	// fault -- the desktop comes up with wm, net and term, and term's
-	// start panel shows both shells as not running.
-	//
-	// Both are non-fatal, and neither returns early. This function
-	// used to `return` when repl was missing, which also skipped the
-	// k_proc_start(pid_net) at the bottom: net was loaded and then
-	// never ran. Harmless while repl was in flash and could not be
-	// missing; a board with no card and no network the moment it was
-	// not.
-	//
-	// repl before posix, and both after net is LOADED but before net
-	// STARTS -- see the note on net at the end.
+	// This function used to `return` when repl was missing, which also
+	// skipped the k_proc_start(pid_net) at the bottom: net was loaded
+	// and never ran. Worth remembering for anything added here: optional
+	// things are non-fatal and never return early.
 	// The kernel console as a port (sw/apps/console, docs/console.md):
 	// what term's CONSOLE button connects to. A core app, in flash, so
 	// a machine with no card and no serial cable can still see this
 	// boot log.
 	init_start_optional("console");
-	init_start_optional("repl");
-	init_start_optional("posix");
+
+	// Look for the shells on the card without starting them. Loading
+	// them used to be what brought a freshly powered card up before
+	// the config retry below (issue #7): a directory read does the same
+	// for the price of a lookup. The answer itself is only reported.
+	{
+		z_exec_info_t xi;
+		if (core_exec_info("repl", &xi) == CORE_SRC_NONE)
+			printf("init: repl not found (it lives on the sdcard)\n");
+		if (core_exec_info("posix", &xi) == CORE_SRC_NONE)
+			printf("init: posix not found (it lives on the sdcard)\n");
+	}
 
 	// The config, if boot found no card (issue #7). A freshly powered
 	// card can fail its first access and come up moments later -- here,
-	// loading the shells is what brings it up -- so this is the one
+	// looking the shells up is what brings it up -- so this is the one
 	// retry, before anything below reads a setting (tts). If the card is
 	// still not up, boot gives up on it: defaults until `cfg reload`.
 	k_cfg_retry();
@@ -1861,7 +1866,8 @@ void init(void) {
 }
 
 // returns argument n (0 = command name, 1 = first argument, ...) of
-// str, split on spaces, or NULL if there aren't that many.
+// str, split as a shell splits it -- spaces, and quotes to put a space
+// in an argument -- or NULL if there aren't that many.
 //
 // operates on a private copy internally and hands back a copy of the
 // result, rather than using strtok() directly on str and returning a
@@ -1879,27 +1885,24 @@ void init(void) {
 // afterward without one overwriting another.
 char *get_arg(char *str, int n) {
 
-	static char slots[8][64];
+	// Quoting, as in the posix shell -- '...', "..." and \x -- so a path
+	// can hold a space (sw/common/zargs.h, docs/posix.md "Quoting").
+	// Wildcards are NOT expanded here: the kernel stays small, and posix
+	// has them. A slot holds a long file name's path (Z_FS_PATH_MAX); it
+	// held 64 bytes when a name was 8.3.
+	static char slots[8][Z_FS_PATH_MAX];
 	static int next_slot = 0;
+	static char buf[2 * 256 + 8];
+	char *av[16];
 
-	char tmp[256];
-	strncpy(tmp, str, sizeof(tmp) - 1);
-	tmp[sizeof(tmp) - 1] = 0;
-
-	char *token = strtok(tmp, " ");
-	int tn = 0;
-
-	while (token != NULL && tn != n) {
-		token = strtok(NULL, " ");
-		tn++;
-	}
-
-	if (!token) return NULL;
+	int count = z_args_split(str, buf, sizeof(buf), av, NULL, 16);
+	if (n < 0 || n >= count) return NULL;
+	z_args_unmark(av[n]);
 
 	char *slot = slots[next_slot];
 	next_slot = (next_slot + 1) % 8;
 
-	strncpy(slot, token, sizeof(slots[0]) - 1);
+	strncpy(slot, av[n], sizeof(slots[0]) - 1);
 	slot[sizeof(slots[0]) - 1] = 0;
 
 	return slot;
