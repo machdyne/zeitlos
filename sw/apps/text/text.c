@@ -35,7 +35,7 @@
  * and add a second representation of "where the text is" that every
  * function here would have to understand. If typing ever feels heavy
  * on real hardware, this is the first thing to change, and it is a
- * change confined to buf_insert()/buf_delete().
+ * change confined to insert_seq()/buf_delete_range().
  *
  * -- wrapping --
  *
@@ -60,6 +60,21 @@
  * glyph memory at fixed offsets (glyph_layout[] in sw/common/zgfx.c),
  * loaded once by wm, so both render through the hardware blitter.
  * Switching rewraps the document, because the column count changes.
+ *
+ * -- characters --
+ *
+ * The buffer holds UTF-8 and every offset in this file is a BYTE
+ * offset, as before. What changed is that a character may now be
+ * more than one byte, so the three things that care -- stepping the
+ * caret, counting columns, and drawing -- walk characters with
+ * next_off()/prev_off() instead of adding one, and count columns with
+ * width_at(): a CJK character takes two (drawn from the Japanese font
+ * while sw/apps/jfont runs), a combining mark none. A byte that is not
+ * valid UTF-8 is kept exactly as it is and counts as one character
+ * (drawn as the missing-glyph box), so a file this editor cannot
+ * fully decode is saved back byte for byte. A file that is not UTF-8
+ * at all is read as ISO 8859-15 and saved back that way; see
+ * load_file(), do_save_to() and docs/text_editor.md, "Encodings".
  *
  * -- not implemented --
  *
@@ -87,6 +102,7 @@
 #include "../../common/zfsapp.h"
 #include "../../common/zspeak.h"	// Super+A -- docs/tts.md
 #include "../../common/zsayall.h"
+#include "../../common/zutf8.h"		// docs/text_encoding.md
 
 // -- the document --
 
@@ -112,6 +128,74 @@ static char buf[TEXT_MAX];
 static int len;
 static int cursor;			// offset into buf, 0..len
 static bool modified;
+
+// How the file on disk is encoded, so it is saved back the same way.
+// The buffer is UTF-8 either way (see the header comment).
+typedef enum {
+	ENC_UTF8 = 0,		// also every file that is plain ASCII
+	ENC_LATIN9,			// ISO 8859-15: every byte one character
+} enc_t;
+
+static enc_t file_enc;
+static bool file_bom;		// the file started with a UTF-8 byte order mark
+
+// -- characters --
+//
+// Byte offsets of the character after and before `off`. A malformed
+// byte is one character on its own, exactly as z_utf8_next() treats
+// it, so these two agree with each other and with the drawing code on
+// where every character starts.
+
+static int next_off(int off) {
+	if (off >= len) return len;
+	const char *p = &buf[off];
+	z_utf8_next(&p, &buf[len]);
+	return (int)(p - buf);
+}
+
+static int prev_off(int off) {
+	if (off <= 0) return 0;
+	// Back over at most three continuation bytes to a lead byte, and
+	// accept it only if decoding forward from there lands exactly on
+	// `off`. Anything else -- a stray continuation byte, a truncated
+	// sequence -- is a one-byte character.
+	int k = off - 1;
+	int lim = off - Z_UTF8_MAX > 0 ? off - Z_UTF8_MAX : 0;
+	while (k > lim && ((uint8_t)buf[k] & 0xC0) == 0x80) k--;
+	if (next_off(k) == off) return k;
+	return off - 1;
+}
+
+// Columns the character at `off` takes on screen: z_cp_width(), the
+// count zgfx draws with and a terminal uses -- two for a CJK character,
+// none for a combining mark. A control character (a tab or NUL from a
+// loaded file) is drawn as a space, so it takes one.
+static int width_at(int off) {
+	const char *p = &buf[off];
+	uint32_t cp = z_utf8_next(&p, &buf[len]);
+	int w = z_cp_width(cp);
+	return (w == 0 && cp < 0x20) ? 1 : w;
+}
+
+// Columns buf[a..b) takes.
+static int chars_between(int a, int b) {
+	int n = 0;
+	while (a < b) { n += width_at(a); a = next_off(a); }
+	return n;
+}
+
+// The offset `col` columns after `a`, but not past `b`. A wide
+// character that would straddle `col` is not stepped into: its start
+// is the answer.
+static int off_after(int a, int b, int col) {
+	while (a < b) {
+		int w = width_at(a);
+		if (w > col) break;
+		col -= w;
+		a = next_off(a);
+	}
+	return a;
+}
 
 // -- selection --
 //
@@ -218,31 +302,19 @@ static void buf_clear(void) {
 	cursor = 0;
 	modified = false;
 	filename[0] = 0;
+	file_enc = ENC_UTF8;
+	file_bom = false;
 }
 
-// Inserts one byte at `at`. Returns false if the buffer is full --
-// which the caller must not ignore, since silently dropping
-// keystrokes at 32KB is exactly the kind of thing that gets blamed on
-// the keyboard.
-static bool buf_insert(int at, char c) {
+// Removes buf[a..b).
+static void buf_delete_range(int a, int b) {
 
-	if (len >= TEXT_MAX) return false;
-	if (at < 0 || at > len) return false;
+	if (a < 0) a = 0;
+	if (b > len) b = len;
+	if (b <= a) return;
 
-	memmove(&buf[at + 1], &buf[at], (size_t)(len - at));
-	buf[at] = c;
-	len++;
-
-	return true;
-
-}
-
-static void buf_delete(int at) {
-
-	if (at < 0 || at >= len) return;
-
-	memmove(&buf[at], &buf[at + 1], (size_t)(len - at - 1));
-	len--;
+	memmove(&buf[a], &buf[b], (size_t)(len - b));
+	len -= (b - a);
 
 }
 
@@ -265,12 +337,21 @@ static int wrap_one(int start) {
 	int last_space = -1;
 	int count = 0;
 
-	while (i < len && count < cols) {
+	// Columns are display columns -- next_off() steps over a whole
+	// UTF-8 sequence, and width_at() says how many columns it takes:
+	// two for a CJK character, which does not start a line it cannot
+	// finish. Space and newline are single bytes, so the break logic
+	// below needs no change. Japanese has no spaces to break at; a
+	// line of it breaks at the width, between any two characters,
+	// which is where Japanese is broken anyway.
+	while (i < len) {
 		char c = buf[i];
 		if (c == '\n') return i + 1;
+		int w = width_at(i);
+		if (count + w > cols) break;
 		if (c == ' ') last_space = i;
-		i++;
-		count++;
+		i = next_off(i);
+		count += w;
 	}
 
 	if (i >= len) return len;
@@ -358,8 +439,8 @@ static int line_end(int l) {
 
 }
 
-// Length of line `l` as DRAWN -- the trailing newline is part of the
-// line but is not a glyph.
+// Length of line `l` as DRAWN, in BYTES -- the trailing newline is
+// part of the line but is not a glyph.
 static int line_draw_len(int l) {
 
 	int a = (int)line_off[l];
@@ -380,11 +461,25 @@ static int line_draw_len(int l) {
 // scrollbar.
 static int line_col_max(int l) {
 
-	int n = line_draw_len(l);
+	int a = (int)line_off[l];
+	int n = chars_between(a, a + line_draw_len(l));
 
 	return n > cols ? cols : n;
 
 }
+
+// The offset of column `col` on line `l`, clamped to line_col_max().
+static int line_pos(int l, int col) {
+
+	int maxcol = line_col_max(l);
+	if (col > maxcol) col = maxcol;
+	if (col < 0) col = 0;
+
+	int a = (int)line_off[l];
+	return off_after(a, a + line_draw_len(l), col);
+
+}
+
 
 // The display line containing `off`. Binary search: this runs on
 // every cursor move and every edit, and nlines can be in the
@@ -522,7 +617,7 @@ static void draw_caret(void) {
 		return;
 	}
 
-	int col = cursor - (int)line_off[l];
+	int col = chars_between((int)line_off[l], cursor);
 	if (col > cols) col = cols;
 
 	z_clip_t c;
@@ -619,22 +714,25 @@ static void draw_row(int r) {
 	int l = top_line + r;
 	if (l >= nlines) return;
 
-	int n = line_draw_len(l);
-	if (n > cols) n = cols;
+	// n is BYTES, clamped to the first `cols` characters; nc is how
+	// many characters that is. Columns are characters (see the header
+	// comment), so every x position below comes from a character count.
+	int off = (int)line_off[l];
+	int n = off_after(off, off + line_draw_len(l), cols) - off;
 	if (n <= 0) return;
 
 #if TEXT_INSTRUMENT
 	ins_chars += (uint32_t)n;
 #endif
 
-	// Copied out because z_win_draw_text() takes a NUL-terminated
+	// Copied out because the drawing calls take a NUL-terminated
 	// string and the buffer is not terminated anywhere in particular.
-	// Bounded by cols, so this is a screen line's worth, not a
-	// document's.
-	char tmp[256];
+	// Bounded by cols characters of up to four bytes each, so this is
+	// a screen line's worth, not a document's.
+	char tmp[Z_SCREEN_W / 5 * Z_UTF8_MAX + 1];
 	if (n > (int)sizeof(tmp) - 1) n = (int)sizeof(tmp) - 1;
 
-	memcpy(tmp, &buf[line_off[l]], (size_t)n);
+	memcpy(tmp, &buf[off], (size_t)n);
 	tmp[n] = 0;
 
 	// Tabs would advance by one glyph cell here, which disagrees with
@@ -642,19 +740,21 @@ static void draw_row(int r) {
 	// tab stops, the insert path turns Tab into spaces (see
 	// handle_key()), so a tab can only appear in text loaded from
 	// disk. Drawn as a space so it at least occupies its one column.
+	// A NUL in a loaded file would end the copy early; it is drawn as
+	// a space too, for the same reason.
 	for (int i = 0; i < n; i++)
-		if (tmp[i] == '\t') tmp[i] = ' ';
+		if (tmp[i] == '\t' || tmp[i] == 0) tmp[i] = ' ';
 
-	int off = (int)line_off[l];
+	int nc = chars_between(off, off + n);
 
 	if (!has_sel()) {
-		z_win_draw_text(&win, TEXT_X0, cy, tmp, 1, cur_font);
+		z_win_draw_utf8(&win, TEXT_X0, cy, tmp, 1, cur_font);
 		return;
 	}
 
 	// Split the line into up to three runs -- before, inside, after
 	// the selection -- and draw each. The selected run goes through
-	// z_fb_draw_text2() with the colours swapped, which is one
+	// z_fb_draw_utf8_2() with the colours swapped, which is one
 	// hardware glyph blit per character exactly like the normal path;
 	// inverting afterwards with a fill would be a second pass over
 	// the same pixels and would fight the no-flash rule the rest of
@@ -681,6 +781,10 @@ static void draw_row(int r) {
 	if (b < 0) b = 0;
 	if (b > n) b = n;
 
+	// The runs' x positions, in characters.
+	int ac = chars_between(off, off + a);
+	int bc = chars_between(off, off + b);
+
 	z_clip_t c;
 	z_win_content_rect(&win, &c);
 
@@ -690,19 +794,19 @@ static void draw_row(int r) {
 	if (a > 0) {
 		char save = tmp[a];
 		tmp[a] = 0;
-		z_fb_draw_text(px, py, tmp, 1, cur_font, &c);
+		z_fb_draw_utf8(px, py, tmp, 1, cur_font, &c);
 		tmp[a] = save;
 	}
 
 	if (b > a) {
 		char save = tmp[b];
 		tmp[b] = 0;
-		z_fb_draw_text2(px + a * CHAR_W, py, tmp + a, 0, 1, cur_font, &c);
+		z_fb_draw_utf8_2(px + ac * CHAR_W, py, tmp + a, 0, 1, cur_font, &c);
 		tmp[b] = save;
 	}
 
 	if (n > b)
-		z_fb_draw_text(px + b * CHAR_W, py, tmp + b, 1, cur_font, &c);
+		z_fb_draw_utf8(px + bc * CHAR_W, py, tmp + b, 1, cur_font, &c);
 
 	// A selection continuing onto the next line takes the rest of
 	// this row with it, past the end of the text. Without this a
@@ -710,7 +814,7 @@ static void draw_row(int r) {
 	// rather than one continuous block, and it becomes genuinely hard
 	// to see where a line ended.
 	if (sel_end() > line_end(l) - 1 && sel_start() <= off + n) {
-		int rx = TEXT_X0 + n * CHAR_W;
+		int rx = TEXT_X0 + nc * CHAR_W;
 		if (rx < text_w)
 			fill_content(rx, cy, text_w - rx, cur_font->h, 1);
 	}
@@ -927,7 +1031,16 @@ static void build_title(char *t, int cap, const char *path, bool star) {
 
 	if (star && n < cap - 1) t[n++] = '*';
 
-	for (const char *s = base; *s && n < cap - 1; s++)
+	// Latin-9 is said in the title: it is the encoding the file will be
+	// saved in, and the one thing about a file that is otherwise
+	// invisible. UTF-8 -- every new document -- says nothing.
+	const char *enc = (file_enc == ENC_LATIN9) ? " (Latin-9)" : "";
+	int room = cap - 1 - (int)strlen(enc);
+
+	for (const char *s = base; *s && n < room; s++)
+		t[n++] = *s;
+
+	for (const char *s = enc; *s && n < cap - 1; s++)
 		t[n++] = *s;
 
 	t[n] = 0;
@@ -1003,15 +1116,161 @@ static void remember_dir(const char *path) {
 
 }
 
+// -- encodings -- docs/text_editor.md, "Encodings" --
+//
+// In a Latin-9 file every byte is a character, including 0x80-0x9f,
+// which ISO 8859-15 leaves as C1 control codes. Those are kept as the
+// codepoints of the same value (U+0080-U+009F) so that ANY file read
+// as Latin-9 is written back byte for byte, whatever it contains.
+
+static uint32_t l9_byte_to_cp(uint8_t b) {
+	return (b >= 0x80 && b < 0xA0) ? b : z_l9_to_cp(b);
+}
+
+// The Latin-9 byte for cp, or -1 if there is none.
+static int l9_cp_to_byte(uint32_t cp) {
+	if (cp >= 0x80 && cp < 0xA0) return (int)cp;
+	if (cp == 0) return 0;
+	uint8_t b = z_cp_to_l9(cp);
+	return b ? b : -1;
+}
+
+// How to read these bytes. Plain ASCII is UTF-8. Otherwise count the
+// multi-byte UTF-8 sequences that decode and the bytes that do not:
+// text written as UTF-8 is all the former, text written in a single-
+// byte encoding is nearly all the latter (a-umlaut in Latin-1 is the
+// lone byte 0xE4, which cannot start a UTF-8 character before a
+// letter). A UTF-8 file with a stray bad byte or two stays UTF-8 and
+// keeps those bytes as they are.
+static enc_t detect_enc(const char *b, int n) {
+
+	int good = 0, bad = 0;
+	const char *p = b, *end = b + n;
+
+	while (p < end) {
+		if ((uint8_t)*p < 0x80) { p++; continue; }
+		const char *q = p;
+		z_utf8_next(&p, end);
+		if (p - q == 1) bad++;
+		else good++;
+	}
+
+	return bad > good ? ENC_LATIN9 : ENC_UTF8;
+
+}
+
+// Converts the Latin-9 bytes in buf[0..len) to UTF-8 in place. Returns
+// false, changing nothing, if the result would not fit TEXT_MAX --
+// every accented letter doubles.
+static bool latin9_to_utf8_in_place(void) {
+
+	int out = 0;
+	for (int i = 0; i < len; i++) {
+		char u[Z_UTF8_MAX];
+		out += z_utf8_put(l9_byte_to_cp((uint8_t)buf[i]), u);
+	}
+	if (out > TEXT_MAX) return false;
+
+	// Backwards, so the growing output never overtakes the input still
+	// to be read: the write position is always at or after the read
+	// position.
+	int j = out;
+	for (int i = len - 1; i >= 0; i--) {
+		char u[Z_UTF8_MAX];
+		int k = z_utf8_put(l9_byte_to_cp((uint8_t)buf[i]), u);
+		j -= k;
+		memcpy(&buf[j], u, (size_t)k);
+	}
+
+	len = out;
+	return true;
+
+}
+
+// Characters in the document that Latin-9 has no byte for.
+static int latin9_unsavable(void) {
+
+	int lost = 0;
+	const char *p = buf, *end = buf + len;
+
+	while (p < end) {
+		uint32_t cp = z_utf8_next(&p, end);
+		if (l9_cp_to_byte(cp) < 0) lost++;
+	}
+
+	return lost;
+
+}
+
+// Writes the document to `path` in the file's own encoding: the
+// buffer as it is for UTF-8 (after the byte order mark, if the file
+// had one), converted a small piece at a time for Latin-9, so that
+// saving needs no second copy of the document -- there is no room for
+// one (see load_file()). Latin-9 has no byte for some characters;
+// those are written as '?', and do_save_to() asks first.
+static bool write_document(const char *path) {
+
+	int h = fs_open_write(path);
+	if (h < 0) return false;
+
+	bool ok = true;
+
+	if (file_enc == ENC_UTF8) {
+
+		if (file_bom && fs_write_chunk(h, "\xEF\xBB\xBF", 3) != 3) ok = false;
+
+		for (int i = 0; ok && i < len; ) {
+			int n = len - i > 4096 ? 4096 : len - i;
+			if (fs_write_chunk(h, &buf[i], n) != n) ok = false;
+			i += n;
+		}
+
+	} else {
+
+		char out[256];
+		int o = 0;
+		const char *p = buf, *end = buf + len;
+
+		while (ok && p < end) {
+			int b = l9_cp_to_byte(z_utf8_next(&p, end));
+			out[o++] = (char)(b < 0 ? '?' : b);
+			if (o == (int)sizeof(out) || p >= end) {
+				if (fs_write_chunk(h, out, o) != o) ok = false;
+				o = 0;
+			}
+		}
+
+	}
+
+	if (!fs_close_handle(h)) ok = false;
+	return ok;
+
+}
+
+
 static bool do_save_to(const char *path) {
 
-	// fs_write_file() creates or truncates, and reports how much it
-	// actually wrote. A short write means the card filled up or
-	// failed mid-way, which must not be reported as success -- the
-	// file on disk is now a truncated version of the document.
-	int wrote = fs_write_file((char *)path, buf, len);
+	// A Latin-9 file that has gained characters Latin-9 cannot hold:
+	// ask, rather than quietly turning them into question marks. Yes
+	// switches the file to UTF-8, which holds everything; No writes
+	// Latin-9 anyway, with '?' in their place.
+	if (file_enc == ENC_LATIN9) {
+		int lost = latin9_unsavable();
+		if (lost) {
+			char msg[96];
+			snprintf(msg, sizeof(msg),
+				"%d character%s cannot be saved\nas Latin-9. Save as UTF-8\ninstead?",
+				lost, lost == 1 ? "" : "s");
+			int r = z_dialog_confirm(&dlg_ctx, "Encoding", msg, Z_DIALOG_YES_NO_CANCEL);
+			if (r == Z_DIALOG_CANCEL) return false;
+			if (r == Z_DIALOG_YES) file_enc = ENC_UTF8;
+		}
+	}
 
-	if (wrote != len) {
+	// A short or failed write means the card filled up or failed
+	// mid-way, which must not be reported as success -- the file on
+	// disk is now a truncated version of the document.
+	if (!write_document(path)) {
 		z_dialog_confirm(&dlg_ctx, "Save failed",
 			"The file could not be\nwritten completely.", Z_DIALOG_OK_CANCEL);
 		return false;
@@ -1145,6 +1404,26 @@ static bool load_file(const char *path) {
 			buf[w++] = buf[r];
 		}
 		len = w;
+	}
+
+	// The encoding (see detect_enc()). A UTF-8 byte order mark is
+	// taken off -- it is not text, and would sit in front of the first
+	// character as a box -- and put back on save.
+	if (len >= 3 && (uint8_t)buf[0] == 0xEF && (uint8_t)buf[1] == 0xBB &&
+	    (uint8_t)buf[2] == 0xBF) {
+		memmove(buf, buf + 3, (size_t)(len - 3));
+		len -= 3;
+		file_bom = true;
+	}
+
+	file_enc = file_bom ? ENC_UTF8 : detect_enc(buf, len);
+
+	if (file_enc == ENC_LATIN9 && !latin9_to_utf8_in_place()) {
+		buf_clear();
+		z_dialog_confirm(&dlg_ctx, "Too large",
+			"That file is too large for\nthis editor once its accented\nletters are converted.",
+			Z_DIALOG_OK_CANCEL);
+		return false;
 	}
 
 	int i = 0;
@@ -1330,7 +1609,12 @@ static void do_paste(void) {
 		para = para_line_at(cursor);
 	}
 
-	if (n > TEXT_MAX - len) n = TEXT_MAX - len;
+	if (n > TEXT_MAX - len) {
+		n = TEXT_MAX - len;
+		// Cut at a character boundary: half a UTF-8 sequence would be
+		// a malformed byte left in the document.
+		while (n > 0 && ((uint8_t)clip[n] & 0xC0) == 0x80) n--;
+	}
 
 	if (n > 0) {
 		memmove(&buf[cursor + n], &buf[cursor], (size_t)(len - cursor));
@@ -1349,7 +1633,15 @@ static void do_paste(void) {
 
 }
 
-static void insert_run(char c, int n) {
+// Inserts `n` copies of the `k`-byte sequence `seq` as ONE edit -- one
+// rewrap, one repaint, and at most one "document is full" complaint
+// no matter how many characters were asked for. Tab is the reason it
+// takes a count: four separate insertions would rewrap and repaint
+// four times for a single keypress, and could raise the same dialog
+// four times in a row at the buffer limit. A character that does not
+// fit whole is not inserted at all -- half a UTF-8 sequence would be
+// a malformed byte in the file.
+static void insert_seq(const char *seq, int k, int n) {
 
 	// Typing with a selection replaces it -- the standard behaviour,
 	// and the reason delete_selection() is factored out.
@@ -1359,8 +1651,11 @@ static void insert_run(char c, int n) {
 	int done = 0;
 
 	for (; done < n; done++) {
-		if (!buf_insert(cursor, c)) break;
-		cursor++;
+		if (len + k > TEXT_MAX) break;
+		memmove(&buf[cursor + k], &buf[cursor], (size_t)(len - cursor));
+		memcpy(&buf[cursor], seq, (size_t)k);
+		len += k;
+		cursor += k;
 	}
 
 	if (done) after_edit(para);
@@ -1376,8 +1671,20 @@ static void insert_run(char c, int n) {
 
 }
 
+static void insert_run(char c, int n) {
+	insert_seq(&c, 1, n);
+}
+
 static void insert_char(char c) {
 	insert_run(c, 1);
+}
+
+// One character, as its codepoint -- anything a keyboard layout can
+// type (docs/keyboard_layouts.md).
+static void insert_cp(uint32_t cp) {
+	char u[Z_UTF8_MAX];
+	int k = z_utf8_put(cp, u);
+	insert_seq(u, k, 1);
 }
 
 static void delete_back(void) {
@@ -1386,10 +1693,12 @@ static void delete_back(void) {
 
 	if (cursor == 0) return;
 
-	int para = para_line_at(cursor - 1);
+	// The whole character before the caret, however many bytes.
+	int from = prev_off(cursor);
+	int para = para_line_at(from);
 
-	cursor--;
-	buf_delete(cursor);
+	buf_delete_range(from, cursor);
+	cursor = from;
 
 	after_edit(para);
 
@@ -1403,7 +1712,7 @@ static void delete_forward(void) {
 
 	int para = para_line_at(cursor);
 
-	buf_delete(cursor);
+	buf_delete_range(cursor, next_off(cursor));
 
 	after_edit(para);
 
@@ -1473,17 +1782,14 @@ static void move_cursor(int to) {
 static void move_line_ex(int delta, bool extend) {
 
 	int l = line_at(cursor);
-	int col = cursor - (int)line_off[l];
+	int col = chars_between((int)line_off[l], cursor);
 
 	int target = l + delta;
 	if (target < 0) target = 0;
 	if (target >= nlines) target = nlines - 1;
 	if (target == l) return;
 
-	int maxcol = line_col_max(target);
-	if (col > maxcol) col = maxcol;
-
-	move_cursor_ex((int)line_off[target] + col, extend);
+	move_cursor_ex(line_pos(target, col), extend);
 
 }
 
@@ -1531,16 +1837,19 @@ static void echo_char(int at) {
 		return;
 	}
 
-	char c = buf[at];
-	if (c == '\n') {
+	if (buf[at] == '\n') {
 		z_speak_static("new line", Z_TTS_F_INTERRUPT);
 		return;
 	}
 
 	// One character on its own: text2ph.c names it, punctuation
 	// included ("semicolon"), which is exactly what a caret stepping
-	// over it should say.
-	char one[2] = { c, 0 };
+	// over it should say. The whole character, in UTF-8 -- what goes
+	// between processes (docs/text_encoding.md).
+	char one[Z_UTF8_MAX + 1];
+	int k = next_off(at) - at;
+	memcpy(one, &buf[at], (size_t)k);
+	one[k] = 0;
 	z_speak(one, Z_TTS_F_INTERRUPT);
 
 }
@@ -1674,8 +1983,8 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 
 		// Stepping over a character says that character; moving
 		// between lines says the whole line.
-		case Z_KEY_LEFT:	move_cursor_ex(cursor - 1, ext); echo_char(cursor); return;
-		case Z_KEY_RIGHT:	move_cursor_ex(cursor + 1, ext); echo_char(cursor - 1); return;
+		case Z_KEY_LEFT:	move_cursor_ex(prev_off(cursor), ext); echo_char(cursor); return;
+		case Z_KEY_RIGHT:	move_cursor_ex(next_off(cursor), ext); echo_char(prev_off(cursor)); return;
 		case Z_KEY_UP:		move_line_ex(-1, ext); echo_line(); return;
 		case Z_KEY_DOWN:	move_line_ex(1, ext); echo_line(); return;
 
@@ -1689,7 +1998,7 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 
 		case Z_KEY_END: {
 			int l = line_at(cursor);
-			move_cursor_ex((int)line_off[l] + line_col_max(l), ext);
+			move_cursor_ex(line_pos(l, line_col_max(l)), ext);
 			echo_line();
 			return;
 		}
@@ -1699,7 +2008,7 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 		case 0x7f:			// Backspace -- DEL, see zkbd.c
 			// Said BEFORE the delete: afterwards it is gone, and
 			// "what did I just remove" is the question.
-			echo_char(cursor - 1);
+			echo_char(prev_off(cursor));
 			delete_back();
 			return;
 
@@ -1719,8 +2028,11 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 
 		default:
 
-			if (keysym >= 0x20 && keysym <= 0x7e) {
-				insert_char((char)keysym);
+			// Any character a keyboard layout can type, not just ASCII
+			// (zkbd.h's Z_KEY_IS_TEXT: no controls, no named keys).
+			if (Z_KEY_IS_TEXT(keysym)) {
+				if (keysym < 0x80) insert_char((char)keysym);
+				else insert_cp(keysym);
 				// A word is finished by the thing that ends it.
 				if (keysym == ' ' || keysym == '.' || keysym == ',' ||
 				    keysym == '?' || keysym == '!' || keysym == ';' ||
@@ -1813,10 +2125,7 @@ static void handle_mouse(uint32_t packed) {
 	int col = (cx - TEXT_X0 + CHAR_W / 2) / CHAR_W;
 	if (col < 0) col = 0;
 
-	int maxcol = line_col_max(l);
-	if (col > maxcol) col = maxcol;
-
-	int pos = (int)line_off[l] + col;
+	int pos = line_pos(l, col);
 
 	if (!selecting) {
 		// Press: place the caret and anchor here, so that any drag

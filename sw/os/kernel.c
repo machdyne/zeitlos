@@ -93,6 +93,7 @@ z_obj_t *k_proc_wait(z_obj_t *args);
 z_obj_t *k_video_get_mode(z_obj_t *args);
 z_obj_t *k_video_set_mode(z_obj_t *args);
 z_obj_t *k_hid_inject(z_obj_t *obj);
+z_obj_t *k_kbd_layout(z_obj_t *args);	// sw/os/hid.c
 z_obj_t *k_wm_wake(z_obj_t *args);
 
 // CFG_GET/_ENTRY/_RELOAD handlers -- see cfg.h.

@@ -31,7 +31,7 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 | Crypto | Optional [Montgomery multiplier](docs/montmul.md) for TLS |
 | USB Host | [Dual-port USB host controller](docs/usb_host.md) (HID, MSC, CDC-ACM, [CDC-ECM](docs/usb_ethernet.md), hubs) |
 | USB Device | [USB CDC](docs/usb_cdc.md) serial console |
-| HID | USB keyboard + optional USB mouse/[gamepad](docs/gamepad.md) |
+| HID | USB keyboard ([22 layouts](docs/keyboard_layouts.md)) + optional USB mouse/[gamepad](docs/gamepad.md) |
 | I/O | Optional [GPIO](docs/gpio.md) on PMOD ports with bit-banged [I2C](docs/i2c.md) and [SPI](docs/spi.md), hardware SPI, 16550 UART, optional second [UART](docs/uart1.md) |
 
 ![Zeitlos Hardware Map](https://github.com/machdyne/zeitlos/blob/main/hwmap.png)
@@ -46,6 +46,7 @@ Build the hardware map from RTL with `make hwmap` (see [docs/hwmap.md](docs/hwma
  - FAT filesystem, on MicroSD and on an optional [RAM disk](docs/ramdisk.md)
  - [Core apps in flash](docs/flash_apps.md) -- boots to a desktop with no sdcard
  - Object-based interprocess [messaging](docs/messaging.md), streaming and [ports](docs/ports.md)
+ - International text: UTF-8; [22 keyboard layouts](docs/keyboard_layouts.md) (US, UK, German, French, Spanish, Italian, Portuguese, Nordic, Swiss, Belgian, Japanese and more) with dead keys and AltGr, switched with Super+Space; ASCII + accented letters and the euro sign drawn by the hardware fonts ([ISO 8859-15](docs/text_encoding.md)); Japanese drawn from a public-domain 12x12 font and typed with a romaji [input method](docs/keyboard_layouts.md#japanese-input)
  - [Speech](docs/tts.md) for blind and headless use
  - Image decoding and [vector rendering](docs/svg.md) shared by every app (`sw/common`)
  - IP/ARP/ICMP/UDP/DHCP/NTP/DNS/TFTP/TCP/telnet/ssh [networking](docs/networking.md)
@@ -69,7 +70,7 @@ With the MTU, there is no need for position independent code or complicated addr
 | kernel | Kernel + kernel shell (serial console) |
 | [wm](docs/window_manager.md) | Window manager + dock |
 | [net](docs/networking.md) | Networking service |
-| [term](docs/terminal.md) | Terminal emulator (VT100; start panel, scrollback; connects to shells and services) |
+| [term](docs/terminal.md) | Terminal emulator (VT100, UTF-8; start panel, scrollback; connects to shells and services) |
 
 #### Shells
 
@@ -84,7 +85,7 @@ On the sdcard, started at boot when a card is present. A `term` window can conne
 
 | App | Description |
 |-----|-------------|
-| [text](docs/text_editor.md) | Text editor |
+| [text](docs/text_editor.md) | Text editor (UTF-8 and Latin-9 files, Japanese) |
 | [sheet](docs/sheet_app.md) | Spreadsheet |
 | [web](docs/web_app.md) | Web browser: HTTP/1.1 and TLS 1.3, gzip, in-place images and SVG |
 | [read](docs/read_app.md) | Text reader for files of unlimited size (with rendered Markdown) |
@@ -97,6 +98,7 @@ On the sdcard, started at boot when a card is present. A `term` window can conne
 | [clock](docs/clock_app.md) | Analog and digital clock |
 | [cal](docs/cal_app.md) | Month calendar |
 | [settings](docs/settings_app.md) | System settings; editor for [`/zeitlos.cfg`](docs/config.md) |
+| [keyboard](docs/keyboard_app.md) | On-screen keyboard for any layout: for touchscreens and pointer-only use, and for trying layouts |
 | [ask](docs/ask_app.md) | Local dataset search |
 | [play](docs/play_app.md) | WAV/AU/RAW audio file player |
 | [track](docs/track_app.md) | MOD audio file player |
@@ -127,6 +129,7 @@ On the sdcard, started at boot when a card is present. A `term` window can conne
 | [serial](docs/uart1.md) | Serial port service |
 | [console](docs/console.md) | Console service |
 | [tts](docs/tts.md) | Text-to-speech service (Super+S to turn speech on) |
+| [jfont](docs/text_encoding.md#japanese) | Japanese font service: holds the font once for every app (`system.font.japanese: yes`) |
 | [zcc](docs/zcc.md) | C compiler |
 | [zfpga](docs/zfpga.md) | FPGA toolchain (synthesis, place-and-route, bitstream packing) |
 | vi | Port of the [nextvi](https://github.com/kyx0r/nextvi) terminal text editor |

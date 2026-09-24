@@ -99,14 +99,16 @@ void k_hid_wake_subscriber(void) {
 
 // packed raw event: bit0 = pressed(1)/released(0), bits 8:1 = HID
 // usage code, bits 16:9 = modifier byte at the time of the event,
-// bits 19:17 = lock state (Z_KBD_LOCK_*, zkbd.h) after the event.
+// bits 19:17 = lock state (Z_KBD_LOCK_*, zkbd.h) after the event,
+// bits 24:20 = the active keyboard layout (below).
 // always < 0x80000000 as an int32_t (top 15 bits always zero), so it
 // can never collide with k_hid_read_key()'s -1 "empty" sentinel. which
 // port produced the event is deliberately not encoded -- see the file
 // header comment, apps only ever want "a key event", not "a key event
 // from port N".
 #define HID_EVENT(usage, mods, pressed) \
-	((((uint32_t)hid_locks & 0x07) << 17) | \
+	((((uint32_t)hid_layout & 0x1F) << 20) | \
+	 (((uint32_t)hid_locks & 0x07) << 17) | \
 	 (((uint32_t)(mods) & 0xFF) << 9) | (((uint32_t)(usage) & 0xFF) << 1) | ((pressed) ? 1u : 0u))
 
 // -- lock state --
@@ -119,6 +121,19 @@ void k_hid_wake_subscriber(void) {
 // turns a block of letter keys into an embedded keypad while the host
 // says Num Lock is on. See zkbd.h.
 static volatile uint8_t hid_locks = 0;
+
+// -- keyboard layout --
+//
+// Which layout (an index into z_kbd_layouts[], sw/common/zkbd.h) keys
+// are to be read in. The kernel does not translate anything -- that
+// stays in app space, see the file header -- it only keeps the number
+// and stamps it into every event, the way it does the lock state. So a
+// switch cannot fall between a key and its translation, and a program
+// reading raw events without wm (midi, play, track in console mode)
+// follows the same layout wm does. Set by wm (Super+Space, and
+// system.keyboard.layouts in /zeitlos.cfg); 0 (US) until then.
+// docs/keyboard_layouts.md.
+static volatile uint8_t hid_layout = 0;
 
 static void hid_lock_key(uint8_t usage) {
 	uint8_t bit = usage == Z_HID_USAGE_NUMLOCK    ? Z_KBD_LOCK_NUM :
@@ -373,11 +388,32 @@ z_obj_t *z_hid_read_key(z_obj_t *obj) {
 // the port ISRs. For network-sourced keystrokes.
 z_obj_t *k_hid_inject(z_obj_t *obj) {
 	uint32_t old_mask = maskirq(0xFFFFFFFF);
-	hid_push((uint32_t)obj->val.int32);
+	// The injector knows the key; the kernel knows the layout. Stamp
+	// the current one over whatever bits 24:20 arrived with, exactly as
+	// HID_EVENT() does for a key from the USB ports.
+	uint32_t ev = (uint32_t)obj->val.int32 & ~(0x1Fu << 20);
+	hid_push(ev | (((uint32_t)hid_layout & 0x1F) << 20));
 	maskirq(old_mask);
 	// Visor keystrokes have no HID IRQ of their own. Wake the HID
 	// subscriber so it drains the ring instead of waiting for the
 	// next USB report or timer.
 	k_hid_wake_subscriber();
 	return (&z_ok);
+}
+
+// Z_SYS_KBD_LAYOUT: args->val.int32 >= 0 sets the layout, < 0 only
+// reads it; either way the (new) current layout comes back in args.
+// The kernel keeps the number without knowing what it means -- the
+// range check is all it can do, and it is the one that matters, since
+// the value lands in five bits of every key event.
+z_obj_t *k_kbd_layout(z_obj_t *args) {
+	if (!args) return &z_fail;
+	int32_t want = args->val.int32;
+	if (want >= 0) {
+		if (want >= 32) return &z_fail;
+		hid_layout = (uint8_t)want;
+	}
+	args->type = Z_INT32;
+	args->val.int32 = hid_layout;
+	return &z_ok;
 }

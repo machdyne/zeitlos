@@ -8,10 +8,13 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "zeitlos.h"
 #include "zgfx.h"
 #include "zfont.h"
+#include "zutf8.h"
+#include "zjfont.h"		// the Japanese font, docs/text_encoding.md
 
 #define VRAM ((volatile uint32_t *)0x20000000)
 
@@ -2004,9 +2007,16 @@ static void hw_blit_vram_one(int src_x, int src_y,
 //
 // Current occupancy, against Z_ICON_MEM_OFFSET (3840):
 //
-//   z_font_5x8    96 glyphs x  8 rows =  768 bytes at    0
-//   z_font_6x12   96 glyphs x 12 rows = 1152 bytes at  768
-//                                              free from 1920
+//   z_font_5x8   192 glyphs x  8 rows = 1536 bytes at    0
+//   z_font_6x12  192 glyphs x 12 rows = 2304 bytes at 1536
+//                                              full at 3840
+//
+// 192 glyphs is ASCII plus the upper half of ISO 8859-15; the C1
+// range 0x80-0x9f is not stored (zfont.h's gap). The two fonts fill
+// the font region exactly, so there is no room for a third without
+// growing glyph memory (rtl/mem/glyph.v's ADDR_WIDTH, and
+// GLYPH_ADDR_WIDTH in rtl/gpu/gpu_blit.v to match). See
+// docs/text_encoding.md.
 //
 // To add a font: append an entry with the next free offset, check the
 // total still clears Z_ICON_MEM_OFFSET, and add a
@@ -2019,8 +2029,8 @@ typedef struct {
 } z_glyph_slot_t;
 
 static const z_glyph_slot_t glyph_layout[] = {
-	{ &z_font_5x8,  0   },
-	{ &z_font_6x12, 768 },
+	{ &z_font_5x8,  0    },
+	{ &z_font_6x12, 1536 },
 };
 
 #define GLYPH_LAYOUT_COUNT \
@@ -2056,7 +2066,7 @@ void z_gfx_hw_font_load(const z_font_t *font) {
 	}
 
 	volatile uint8_t *glyph_mem = (volatile uint8_t *)GLYPH_MEM_BASE;
-	uint32_t n = (uint32_t)(font->last - font->first + 1) * font->h;
+	uint32_t n = z_font_glyph_count(font) * font->h;
 
 	// Never past the icon region at the top of glyph memory
 	// (zicon.h). Truncating produces a font with missing glyphs at
@@ -2084,8 +2094,9 @@ static inline void hw_blit_wait(void) {
 static void draw_char_sw(int x, int y, char c, int color,
 	const z_font_t *font, const z_clip_t *clip) {
 
-	unsigned char uc = (unsigned char)c;
-	const uint8_t *glyph = font->glyphs + (uc - font->first) * font->h;
+	int gi = z_font_index(font, (unsigned char)c);
+	if (gi < 0) return;
+	const uint8_t *glyph = font->glyphs + gi * font->h;
 
 	for (int row = 0; row < font->h; row++) {
 		uint8_t bits = glyph[row];
@@ -2099,8 +2110,8 @@ static void draw_char_sw(int x, int y, char c, int color,
 
 void z_fb_draw_char(int x, int y, char c, int color, const z_font_t *font, const z_clip_t *clip) {
 
-	unsigned char uc = (unsigned char)c;
-	if (uc < font->first || uc > font->last) return;
+	int gi = z_font_index(font, (unsigned char)c);
+	if (gi < 0) return;
 
 	bool fits =
 		x >= 0 && y >= 0 &&
@@ -2176,7 +2187,7 @@ void z_fb_draw_char(int x, int y, char c, int color, const z_font_t *font, const
 
 		gpu_blit_dst_x = x;
 		gpu_blit_dst_y = y;
-		gpu_blit_glyph_addr = glyph_base + (uint32_t)(uc - font->first) * font->h;
+		gpu_blit_glyph_addr = glyph_base + (uint32_t)gi * font->h;
 		gpu_blit_glyph_w = font->w;
 		gpu_blit_glyph_h = font->h;
 		gpu_blit_fg_color = color ? 1 : 0;
@@ -2240,8 +2251,9 @@ void z_fb_draw_text(int x, int y, const char *s, int color, const z_font_t *font
 static void draw_char_sw2(int x, int y, char c, int fg_color, int bg_color,
 	const z_font_t *font, const z_clip_t *clip) {
 
-	unsigned char uc = (unsigned char)c;
-	const uint8_t *glyph = font->glyphs + (uc - font->first) * font->h;
+	int gi = z_font_index(font, (unsigned char)c);
+	if (gi < 0) return;
+	const uint8_t *glyph = font->glyphs + gi * font->h;
 
 	z_fb_fill_rect(x, y, font->w, font->h, bg_color, clip);
 
@@ -2258,8 +2270,8 @@ static void draw_char_sw2(int x, int y, char c, int fg_color, int bg_color,
 void z_fb_draw_char2(int x, int y, char c, int fg_color, int bg_color,
 	const z_font_t *font, const z_clip_t *clip) {
 
-	unsigned char uc = (unsigned char)c;
-	if (uc < font->first || uc > font->last) return;
+	int gi = z_font_index(font, (unsigned char)c);
+	if (gi < 0) return;
 
 	uint32_t t_fits = zgfx_cyc();
 	bool fits =
@@ -2324,7 +2336,7 @@ void z_fb_draw_char2(int x, int y, char c, int fg_color, int bg_color,
 		uint32_t tr = zgfx_cyc();
 		gpu_blit_dst_x = x;
 		gpu_blit_dst_y = y;
-		gpu_blit_glyph_addr = glyph_base + (uint32_t)(uc - font->first) * font->h;
+		gpu_blit_glyph_addr = glyph_base + (uint32_t)gi * font->h;
 		gpu_blit_glyph_w = font->w;
 		gpu_blit_glyph_h = font->h;
 		gpu_blit_fg_color = fg_color ? 1 : 0;
@@ -2370,7 +2382,7 @@ void z_fb_draw_char2(int x, int y, char c, int fg_color, int bg_color,
 		uint32_t tr = zgfx_cyc();
 		gpu_blit_dst_x = x;
 		gpu_blit_dst_y = y;
-		gpu_blit_glyph_addr = glyph_base + (uint32_t)(uc - font->first) * font->h;
+		gpu_blit_glyph_addr = glyph_base + (uint32_t)gi * font->h;
 		gpu_blit_glyph_w = font->w;
 		gpu_blit_glyph_h = font->h;
 		gpu_blit_fg_color = fg_color ? 1 : 0;
@@ -2518,10 +2530,10 @@ void z_gfx_hw_font_load(const z_font_t *font) {
 
 void z_fb_draw_char(int x, int y, char c, int color, const z_font_t *font, const z_clip_t *clip) {
 
-	unsigned char uc = (unsigned char)c;
-	if (uc < font->first || uc > font->last) return;
+	int gi = z_font_index(font, (unsigned char)c);
+	if (gi < 0) return;
 
-	const uint8_t *glyph = font->glyphs + (uc - font->first) * font->h;
+	const uint8_t *glyph = font->glyphs + gi * font->h;
 
 	for (int row = 0; row < font->h; row++) {
 		uint8_t bits = glyph[row];
@@ -2565,10 +2577,10 @@ void z_fb_draw_text(int x, int y, const char *s, int color, const z_font_t *font
 void z_fb_draw_char2(int x, int y, char c, int fg_color, int bg_color,
 	const z_font_t *font, const z_clip_t *clip) {
 
-	unsigned char uc = (unsigned char)c;
-	if (uc < font->first || uc > font->last) return;
+	int gi = z_font_index(font, (unsigned char)c);
+	if (gi < 0) return;
 
-	const uint8_t *glyph = font->glyphs + (uc - font->first) * font->h;
+	const uint8_t *glyph = font->glyphs + gi * font->h;
 
 	z_fb_fill_rect(x, y, font->w, font->h, bg_color, clip);
 
@@ -2631,6 +2643,228 @@ void z_fb_draw_icon(int x, int y, int icon_id, int fg_color, int bg_color, const
 }
 
 #endif
+
+// -- drawing by codepoint --
+//
+// For text that is not single bytes: UTF-8 strings, and characters an
+// app holds as codepoints. Every character is mapped to the glyph for
+// its ISO 8859-15 byte (zutf8.h's z_cp_to_l9()), so both hardware
+// fonts draw all of ASCII and Latin-9 in hardware, exactly like the
+// byte functions above. A character with no Latin-9 byte, or one this
+// font has no glyph for, is drawn as the missing-glyph box
+// (zfont.h's Z_GLYPH_MISSING) -- or '?' in a font without the box --
+// and still takes exactly one cell, so text after it stays in column.
+// C0 control characters draw nothing and take a cell, as they do in
+// the byte functions. See docs/text_encoding.md.
+
+// The byte to draw for cp in `font`.
+static uint8_t cp_glyph_byte(const z_font_t *font, uint32_t cp) {
+
+	if (cp < 0x20) return (uint8_t)cp;		// draws nothing, as before
+
+	uint8_t b = z_cp_to_l9(cp);
+	if (b && z_font_index(font, b) >= 0) return b;
+
+	if (z_font_index(font, Z_GLYPH_MISSING) >= 0) return Z_GLYPH_MISSING;
+	return '?';
+
+}
+
+// -- the Japanese font -- zjfont.h, docs/text_encoding.md, "Japanese" --
+//
+// Found in sw/apps/jfont's memory with no message (z_jfont_find()): its
+// descriptor is looked for in its block once, then re-checked (two loads) before every
+// use. While jfont is not running, the search is retried every two
+// seconds rather than on every character, so an app drawing a page of
+// kanji without it costs a proc list per two seconds, not per glyph.
+
+#define JF_RETRY_TICKS  1464		// ~2 s at the ~732Hz tick
+
+static const volatile z_jfont_desc_t *jf_desc;
+static uint32_t jf_phys;
+static uint32_t jf_retry;
+static bool jf_retry_armed;
+
+// Host tests and the simulator have no jfont process; they hand the
+// font over directly.
+static const uint8_t *jf_test_font;
+static uint32_t jf_test_len;
+
+void z_jfont_use(const uint8_t *font, uint32_t len) {
+	jf_test_font = font;
+	jf_test_len = len;
+}
+
+static const uint8_t *jfont_file(uint32_t *len) {
+
+	if (jf_test_font) { *len = jf_test_len; return jf_test_font; }
+
+	if (jf_desc) {
+		if (z_jfont_desc_ok(jf_desc, jf_phys)) {
+			*len = jf_desc->len;
+			return (const uint8_t *)(uintptr_t)(jf_phys + sizeof(z_jfont_desc_t));
+		}
+		jf_desc = NULL;			// jfont has gone
+	}
+
+	uint32_t now = z_uptime_ticks();
+	if (jf_retry_armed && (int32_t)(now - jf_retry) < 0) return NULL;
+	jf_retry = now + JF_RETRY_TICKS;
+	jf_retry_armed = true;
+
+	// Every slot the kernel has (Z_PROCS_MAX, sw/os/kernel.h): the list
+	// is in slot order, so asking for fewer could miss jfont on a busy
+	// machine. ~1.7KB of stack, for a lookup that happens once when it
+	// succeeds and at most every two seconds while it does not.
+	z_proc_info_t procs[32];
+	uint32_t truncated = 0;
+	uint32_t n = z_proc_list(procs, 32, &truncated);
+
+	uint32_t at;
+	const volatile z_jfont_desc_t *d = z_jfont_find(procs, n, &at);
+	if (d) {
+		jf_desc = d;
+		jf_phys = at;
+		*len = d->len;
+		return (const uint8_t *)(uintptr_t)(at + sizeof(z_jfont_desc_t));
+	}
+
+	return NULL;
+
+}
+
+// Draws a two-column character from the Japanese font, in software (the
+// blitter's glyphs are at most 8 pixels wide). Only at 6x12, whose two
+// cells are exactly the font's 12x12. Returns false, having drawn
+// nothing, if it cannot -- no jfont, another font size, a character the
+// font has not got -- and the caller draws the box instead.
+static bool draw_wide(int x, int y, uint32_t cp, int fg, int bg, bool solid,
+	const z_font_t *font, const z_clip_t *clip) {
+
+	if (font->h != 12 || font->w != 6) return false;
+
+	uint32_t len;
+	const uint8_t *f = jfont_file(&len);
+	if (!f) return false;
+
+	int gw, gh;
+	const uint8_t *g = z_zfn_glyph(f, len, cp, &gw, &gh);
+	if (!g || gw > 2 * font->w || gh > font->h) return false;
+
+	// A blit still in flight could land after these direct writes.
+	z_fb_hw_sync();
+
+	if (solid) z_fb_fill_rect(x, y, 2 * font->w, font->h, bg, clip);
+
+	for (int r = 0; r < gh; r++) {
+		uint16_t bits = (uint16_t)((g[2 * r] << 8) | g[2 * r + 1]);
+		if (!bits) continue;
+		for (int c = 0; c < gw; c++)
+			if (bits & (0x8000u >> c))
+				z_fb_set_pixel(x + c, y + r, fg, clip);
+	}
+
+	return true;
+
+}
+
+// A two-column character: its glyph if the Japanese font has it, else
+// the missing-glyph box and a blank, still two columns.
+static void draw_cp_wide(int x, int y, uint32_t cp, int fg, int bg,
+	bool solid, const z_font_t *font, const z_clip_t *clip) {
+
+	if (draw_wide(x, y, cp, fg, bg, solid, font, clip)) return;
+
+	char box = (char)cp_glyph_byte(font, 0xFFFD);
+	if (solid) {
+		z_fb_draw_char2(x, y, box, fg, bg, font, clip);
+		z_fb_draw_char2(x + font->w, y, ' ', fg, bg, font, clip);
+	} else {
+		z_fb_draw_char(x, y, box, fg, font, clip);
+	}
+
+}
+
+void z_fb_draw_cp(int x, int y, uint32_t cp, int color,
+	const z_font_t *font, const z_clip_t *clip) {
+	if (z_cp_width(cp) == 2) { draw_cp_wide(x, y, cp, color, 0, false, font, clip); return; }
+	z_fb_draw_char(x, y, (char)cp_glyph_byte(font, cp), color, font, clip);
+}
+
+void z_fb_draw_cp2(int x, int y, uint32_t cp, int fg_color, int bg_color,
+	const z_font_t *font, const z_clip_t *clip) {
+	if (z_cp_width(cp) == 2) { draw_cp_wide(x, y, cp, fg_color, bg_color, true, font, clip); return; }
+	z_fb_draw_char2(x, y, (char)cp_glyph_byte(font, cp), fg_color,
+		bg_color, font, clip);
+}
+
+// UTF-8 is decoded a run at a time into glyph bytes and handed to
+// z_fb_draw_text()/z_fb_draw_text2(), so it gets exactly their
+// behaviour -- the hardware path, skipping glyphs past the clip's right
+// edge, and waiting for the last blit before returning. Runs are split
+// at newlines here rather than passed through, because those functions
+// reset x to where THEIR call started, which for a later run is not
+// the start of the line.
+#define UTF8_RUN  64
+
+static void draw_utf8(int x, int y, const char *s, int fg_color,
+	int bg_color, bool solid, const z_font_t *font, const z_clip_t *clip) {
+
+	const char *end = s;
+	while (*end) end++;
+
+	char run[UTF8_RUN + 1];
+	int n = 0, cx = x, cy = y;
+
+	// Draws what has been collected and moves past it.
+#define FLUSH() do { \
+		if (n) { \
+			run[n] = 0; \
+			if (solid) z_fb_draw_text2(cx, cy, run, fg_color, bg_color, font, clip); \
+			else z_fb_draw_text(cx, cy, run, fg_color, font, clip); \
+			cx += n * font->w; \
+			n = 0; \
+		} \
+	} while (0)
+
+	while (s < end) {
+
+		uint32_t cp = z_utf8_next(&s, end);
+
+		if (cp == '\n') { FLUSH(); cx = x; cy += font->h; continue; }
+
+		// Columns follow z_cp_width(), the same count a terminal and
+		// a text editor use: a combining mark takes none, a CJK
+		// character two.
+		int wdt = z_cp_width(cp);
+		if (wdt == 0) continue;
+		if (wdt == 2) {
+			FLUSH();
+			draw_cp_wide(cx, cy, cp, fg_color, bg_color, solid, font, clip);
+			cx += 2 * font->w;
+			continue;
+		}
+
+		run[n++] = (char)cp_glyph_byte(font, cp);
+		if (n == UTF8_RUN) FLUSH();
+
+	}
+
+	FLUSH();
+#undef FLUSH
+
+}
+
+void z_fb_draw_utf8(int x, int y, const char *s, int color,
+	const z_font_t *font, const z_clip_t *clip) {
+	draw_utf8(x, y, s, color, 0, false, font, clip);
+}
+
+void z_fb_draw_utf8_2(int x, int y, const char *s, int fg_color,
+	int bg_color, const z_font_t *font, const z_clip_t *clip) {
+	draw_utf8(x, y, s, fg_color, bg_color, true, font, clip);
+}
+
 
 
 // Declared in zgfx.h since the raster ops were added, and never

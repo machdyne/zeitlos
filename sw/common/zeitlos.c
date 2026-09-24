@@ -16,6 +16,7 @@
 #include <unistd.h>
 
 #include "zeitlos.h"
+#include "zkbd.h"
 #include "zwm.h"		// Z_WM_GAME_GRAB / _RELEASE
 #include "zsoc.h"		// z_game_view_set_enabled()
 
@@ -80,6 +81,39 @@ void hid_inject(int32_t packed_event) {
 	obj.type = Z_INT32;
 	obj.val.int32 = packed_event;
 	z_kernel_ptr(Z_SYS_HID_INJECT, (uint32_t *)&obj, 0);
+}
+
+// -- keyboard layout (Z_SYS_KBD_LAYOUT, sw/os/hid.c) --
+//
+// Declared in zkbd.h, with the layout tables, because that is where a
+// caller looking for them will look. An old kernel without the syscall
+// answers nothing, which reads as layout 0 (US) -- what such a kernel
+// stamps anyway.
+
+// The request goes out typed Z_UINT32 and the kernel answers Z_INT32,
+// so an unchanged type means nobody answered.
+
+int z_kbd_active_layout(void) {
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_obj_t obj = {0};
+	obj.type = Z_UINT32;
+	obj.val.int32 = -1;
+	z_kernel_ptr(Z_SYS_KBD_LAYOUT, (uint32_t *)&obj, 0);
+	if (obj.type != Z_INT32 || obj.val.int32 < 0) return 0;
+	return (int)obj.val.int32;
+}
+
+bool z_kbd_set_active_layout(int id) {
+	if (id < 0) return false;
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_obj_t obj = {0};
+	obj.type = Z_UINT32;
+	obj.val.int32 = id;
+	z_kernel_ptr(Z_SYS_KBD_LAYOUT, (uint32_t *)&obj, 0);
+	// Like z_video_mode_set(): the kernel echoes the layout now in
+	// effect, so success is ending up where we asked -- which also
+	// reads an old kernel without the syscall correctly, as failure.
+	return obj.type == Z_INT32 && obj.val.int32 == id && id < 32;
 }
 
 void z_wm_wake(void) {

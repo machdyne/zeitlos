@@ -14,6 +14,8 @@ Display
 Preferences                  /zeitlos.cfg
 Terminal connects to               [Edit]
   port repl0
+Keyboard layouts (Super+Space)     [Edit]
+  us,de
 Time zone: Munich
 +----------------------------------+-+
 | Moscow         UTC+3             | |
@@ -29,6 +31,7 @@ Berlin selected -- Set time zone to use it
 | --- | --- | --- |
 | Display buttons | `system.video.mode` | immediately, and saved |
 | Terminal connects to | `apps.term.auto_connect` | the next term window |
+| Keyboard layouts | `system.keyboard.layouts` | the next key pressed |
 | Time zone list + Set time zone | `system.rtc.timezone` | clock and cal, within a second |
 | Reload file | -- | re-reads `/zeitlos.cfg` after editing it elsewhere |
 
@@ -75,6 +78,16 @@ A `z_tz_cities[]` city list (`zrtc.h`), in a list box (`z_listbox_t`,
 - **The value is checked before anything is written.** It must start
   with `port`, `serial`, `telnet`, `ssh` or `none`; otherwise a message
   explains, and the file is untouched.
+
+## Editing the keyboard layouts
+
+**Edit** opens a prompt listing every layout `zkbd` has, taken from its
+own table (`z_kbd_layouts[]`), so a newly added layout appears here
+with no change to this app. Enter names separated by commas; the first
+is the one the machine starts in, and Super+Space steps through them.
+Every name is checked, and one that is not a layout is refused with
+nothing written. `default` removes the line (US only). See
+[keyboard_layouts.md](keyboard_layouts.md).
 
 ## It never clobbers the rest of the file
 

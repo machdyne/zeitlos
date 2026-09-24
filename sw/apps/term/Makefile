@@ -51,6 +51,13 @@ endif
 SCROLLBACK ?= 200
 override CFLAGS += -DTERM_HIST_LINES=$(SCROLLBACK)
 
+# Font -- `make term FONT=z_font_6x12` for a terminal Japanese can be
+# drawn in (with sw/apps/jfont running; docs/terminal.md, "UTF-8").
+# 5x8 has no Japanese font small enough to read: wide characters are
+# boxes there, two columns wide, and copy as themselves all the same.
+FONT ?= z_font_5x8
+override CFLAGS += -DTERM_FONT_NAME=$(FONT)
+
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o zsayall.o zkbd.o zvt100.o \
 	zport.o zdns.o zconnect.o zcfg.o term.o
 

@@ -446,6 +446,22 @@ correctly. Inline code and links are the two inline styles a 1bpp
 display can actually carry — and inline code is by far the most common
 construct in this corpus, so it gets the one that reads best.
 
+### Characters
+
+Each source line is turned into glyph bytes as it is read
+(`line_to_glyphs()`), in place, before the parser sees it: one byte per
+character, the ISO 8859-15 byte the font draws it with, so the parser,
+wrapping, links, selection and drawing all still work in bytes. A line
+that is valid UTF-8 is decoded -- a character Latin-9 has not got is
+the missing-glyph box, a CJK character the box and a blank -- two
+columns, so a table with Japanese in it still lines up -- and a
+combining mark disappears; a line that is not
+is taken as Latin-9 already. Deciding per line lets a file that mixes
+the two, or has one stray bad byte, read correctly everywhere else.
+The index's file offsets are counted separately, so the line getting
+shorter does not disturb them. Copy and reading aloud turn the text
+back into UTF-8 ([text_encoding.md](text_encoding.md)).
+
 ## Hand-written Markdown, not generated
 
 The input is Markdown as a person wrote it. **Pandoc's output is not

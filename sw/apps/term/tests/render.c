@@ -280,7 +280,7 @@ static void check_glass(const char *where) {
 
 			int doc = count - view_off + row;
 			uint32_t id = pushed - (uint32_t)view_off + (uint32_t)row;
-			uint8_t b = vt_doc_cell(&vt, doc, col);
+			vt_packed_t b = vt_doc_cell(&vt, doc, col);
 
 			bool inv = VT_PACK_REV(b);
 			if (want_selected(id, col)) inv = !inv;
@@ -290,14 +290,23 @@ static void check_glass(const char *where) {
 			}
 
 			uint16_t want = (uint16_t)((uint8_t)VT_PACK_CH(b) | (inv ? 0x100 : 0));
+			// A wide character with its codepoint is flagged, and drawn
+			// from the Japanese font across both its cells -- a glyph
+			// this per-cell check has no model of, so its pixels, and
+			// its right half's, are left to the Japanese render check.
+			bool wide = VT_PACK_WIDE_CP(b) != 0;
+			if (wide) want |= SHADOW_WIDE;
+			bool right_of_wide = (uint8_t)VT_PACK_CH(b) == (uint8_t)VT_CH_WIDE_RIGHT &&
+				col > 0 && VT_PACK_WIDE_CP(vt_doc_cell(&vt, doc, col - 1)) != 0;
 			if (shadow[row][col] != want) {
 				if (!bad_shadow++ && first_r < 0) { first_r = row; first_c = col; }
 			}
+			if (wide || right_of_wide) continue;
 
 			char ch = VT_PACK_CH(b);
 			const uint8_t *g = NULL;
-			if ((uint8_t)ch >= TERM_FONT.first && (uint8_t)ch <= TERM_FONT.last)
-				g = TERM_FONT.glyphs + ((uint8_t)ch - TERM_FONT.first) * TERM_FONT.h;
+			if (z_font_index(&TERM_FONT, (uint8_t)ch) >= 0)
+				g = TERM_FONT.glyphs + z_font_index(&TERM_FONT, (uint8_t)ch) * TERM_FONT.h;
 
 			bool cell_bad = false;
 			for (int j = 0; j < cell_h && !cell_bad; j++)
@@ -369,7 +378,7 @@ static char row_text_buf[VT_COLS + 1];
 static const char *display_row(int row) {
 	int last = -1;
 	for (int c = 0; c < VT_COLS; c++) {
-		uint8_t b = vt_doc_cell(&vt, vt_history_count(&vt) - view_off + row, c);
+		vt_packed_t b = vt_doc_cell(&vt, vt_history_count(&vt) - view_off + row, c);
 		row_text_buf[c] = VT_PACK_CH(b);
 		if (row_text_buf[c] != ' ') last = c;
 	}

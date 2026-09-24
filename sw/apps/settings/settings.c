@@ -4,10 +4,11 @@
  *   > run wm
  *   > run settings
  *
- * Three settings (docs/config.md):
+ * Four settings (docs/config.md):
  *
  *   Display               system.video.mode        applied immediately
  *   Terminal connects to  apps.term.auto_connect   new term windows
+ *   Keyboard layouts      system.keyboard.layouts  the next key pressed
  *   Time zone             system.rtc.timezone      clock and cal
  *
  * The time zone is chosen from a list -- UTC, about sixty cities with
@@ -73,7 +74,7 @@
 // Fixed size, not resizable: a preferences panel has no content to
 // reveal.
 #define WIN_W   284
-#define WIN_H   214
+#define WIN_H   (214 + 2 * (8 + 2) + 6)	// one row per preference: see layout()
 
 static z_win_t win;
 static z_dialog_ctx_t dlg;
@@ -100,6 +101,7 @@ static const char *video_labels[] = { "White", "Amber", "Green", "Paper" };
 // between Edit and Set -- see handle_key().
 enum {
 	W_EDIT_TERM = MODE_COUNT,
+	W_EDIT_KBD,
 	W_SET_TZ,
 	W_RELOAD,
 	W_COUNT
@@ -124,7 +126,12 @@ typedef struct {
 
 static pref_t prefs[] = {
 	{ "apps.term.auto_connect", "Terminal connects to", W_EDIT_TERM, "", false },
+	{ "system.keyboard.layouts", "Keyboard layouts (Super+Space)", W_EDIT_KBD, "", false },
 };
+
+// The last preference's Edit button: the list comes after it in Tab
+// order.
+#define W_LAST_PREF W_EDIT_KBD
 #define PREF_COUNT (int)(sizeof(prefs) / sizeof(prefs[0]))
 
 static int other_keys;			// settings in the file this app does not show
@@ -310,6 +317,8 @@ static void describe(const pref_t *p, char *out, size_t n) {
 	if (!strcmp(p->key, "apps.term.auto_connect") &&
 		(!v[0] || !strcmp(v, "none")))
 		v = "start panel";
+	if (!strcmp(p->key, "system.keyboard.layouts") && !v[0])
+		v = "us";
 
 	snprintf(out, n, "%.*s%s", max - (int)strlen(suffix), v, suffix);
 
@@ -509,10 +518,75 @@ static bool valid_auto_connect(const char *v) {
 	return false;
 }
 
+// True if every name in a comma- or space-separated list is a layout
+// zkbd knows, and there is at least one. `bad` gets the first one that
+// is not.
+static bool valid_layouts(const char *v, char *bad, size_t badlen) {
+
+	char name[24];
+	int n = 0;
+
+	while (*v) {
+		while (*v == ',' || *v == ' ') v++;
+		size_t k = 0;
+		while (*v && *v != ',' && *v != ' ') {
+			if (k + 1 < sizeof(name)) name[k++] = *v;
+			v++;
+		}
+		name[k] = 0;
+		if (!k) break;
+		if (z_kbd_layout_find(name) < 0) {
+			snprintf(bad, badlen, "%s", name);
+			return false;
+		}
+		n++;
+	}
+
+	if (!n) snprintf(bad, badlen, "(none)");
+	return n > 0;
+
+}
+
+static void edit_layouts(const pref_t *p) {
+
+	// The names, wrapped for the dialog, from zkbd's own table -- so a
+	// layout added there shows up here with no change to this app.
+	char msg[200];
+	size_t o = 0, col = 0;
+	o += (size_t)snprintf(msg + o, sizeof(msg) - o, "First is used at start:\n");
+	for (int i = 0; i < z_kbd_layout_count && o < sizeof(msg) - 20; i++) {
+		size_t len = strlen(z_kbd_layouts[i].name);
+		if (col + len + 1 > 38) { msg[o++] = '\n'; col = 0; }
+		o += (size_t)snprintf(msg + o, sizeof(msg) - o, "%s%s",
+			z_kbd_layouts[i].name, i + 1 < z_kbd_layout_count ? " " : "");
+		col += len + 1;
+	}
+
+	char v[Z_CFG_VAL_MAX], bad[24];
+	if (!z_dialog_prompt(&dlg, "Keyboard layouts", msg, p->value, v, sizeof(v)))
+		return;
+
+	if (!strcmp(v, "default")) {
+		save(p->key, NULL);
+	} else if (!valid_layouts(v, bad, sizeof(bad))) {
+		char m[64];
+		snprintf(m, sizeof(m), "Unknown layout: %.20s\nnothing saved.", bad);
+		z_dialog_confirm(&dlg, "Keyboard layouts", m, Z_DIALOG_OK_CANCEL);
+		return;
+	} else {
+		save(p->key, v);
+	}
+
+	repaint();
+
+}
+
 static void edit(const pref_t *p) {
 
 	char v[Z_CFG_VAL_MAX];
 	const char *msg;
+
+	if (!strcmp(p->key, "system.keyboard.layouts")) { edit_layouts(p); return; }
 
 	msg = "port repl0, port posix0, telnet <host>,\n"
 	      "ssh <user@host>, serial [baud], or none\n"
@@ -567,6 +641,7 @@ static void activate(int idx) {
 	if (idx < 0) return;
 	if (idx < MODE_COUNT) { apply_video(idx); return; }
 	if (idx == W_EDIT_TERM) { edit(&prefs[0]); return; }
+	if (idx == W_EDIT_KBD) { edit(&prefs[1]); return; }
 	if (idx == W_SET_TZ) { choose_zone_and_return(); return; }
 	if (idx == W_RELOAD) { reload(); return; }
 }
@@ -648,7 +723,7 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 	if (list_focus) {
 		if (keysym == '\t') {
 			focus_list(false);
-			z_widget_focus_set(&wset, back ? W_EDIT_TERM : after_list());
+			z_widget_focus_set(&wset, back ? W_LAST_PREF : after_list());
 			z_widget_draw_all(&wset, false);
 			return;
 		}
@@ -673,7 +748,7 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 
 		case '\t':
 			// Into the list from either side of it.
-			if ((!back && wset.focused == W_EDIT_TERM) ||
+			if ((!back && wset.focused == W_LAST_PREF) ||
 				(back && wset.focused == after_list())) {
 				focus_list(true);
 				return;
@@ -747,6 +822,10 @@ static void widgets_init(void) {
 	widgets[W_EDIT_TERM].type = Z_WIDGET_BUTTON;
 	widgets[W_EDIT_TERM].label = "Edit";
 	widgets[W_EDIT_TERM].enabled = true;
+
+	widgets[W_EDIT_KBD].type = Z_WIDGET_BUTTON;
+	widgets[W_EDIT_KBD].label = "Edit";
+	widgets[W_EDIT_KBD].enabled = true;
 
 	widgets[W_SET_TZ].type = Z_WIDGET_BUTTON;
 	widgets[W_SET_TZ].label = "Set time zone";

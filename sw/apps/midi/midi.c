@@ -1655,12 +1655,15 @@ int main(void) {
             drain_messages();
             ui_step();
         } else {
-            /* Console mode has no release edge from hid_read_key(),
-             * so notes would sustain forever. Transport only. */
+            /* Presses only -- transport keys act on the press, and
+             * the release would repeat them. (hid_read_key() does
+             * deliver both edges; this used to decode the event with
+             * the wrong bit positions, which is where the belief that
+             * it did not came from. zkbd.h's Z_KBD_EV_* have the
+             * layout.) */
             int32_t ev = hid_read_key();
-            if (ev >= 0)
-                handle_key(z_kbd_usage_to_keysym((uint8_t)(ev & 0xFF),
-                    (uint8_t)((ev >> 8) & 0xFF)), true);
+            if (ev >= 0 && Z_KBD_EV_PRESSED(ev))
+                handle_key(z_kbd_event_to_keysym(ev, NULL), true);
         }
 
         {

@@ -2131,10 +2131,16 @@ int main(void) {
             { PROF_BEGIN(P_TEXT);  ui_step();        PROF_END(P_TEXT); }
             { PROF_BEGIN(P_SCOPE); scope_step();     PROF_END(P_SCOPE); }
         } else {
+            /* Presses only: hid_read_key() delivers both edges, and
+             * acting on the release too would run every command twice.
+             * The usage code is at bits 8:1 of the event, not 7:0 --
+             * see zkbd.h's Z_KBD_EV_* for the layout.
+             * z_kbd_event_to_keysym() follows the keyboard layout
+             * the kernel stamped into the event (docs/
+             * keyboard_layouts.md), as wm does. */
             int32_t ev = hid_read_key();
-            if (ev >= 0)
-                handle_key(z_kbd_usage_to_keysym((uint8_t)(ev & 0xFF),
-                    (uint8_t)((ev >> 8) & 0xFF)));
+            if (ev >= 0 && Z_KBD_EV_PRESSED(ev))
+                handle_key(z_kbd_event_to_keysym(ev, NULL));
         }
 
         /* -- once a second: recompute the measurements -- */

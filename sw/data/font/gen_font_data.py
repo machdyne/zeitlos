@@ -5,7 +5,9 @@ directory (sw/data/font/). See sw/common/zfont.h for the target format
 this produces (z_font_t: w, h, first/last codepoint, glyph bytes).
 
 A .mem source is named font<W>x<H>.mem (e.g. font6x12.mem) and is a
-plain text grid: 96 glyphs (covering ASCII 0x20-0x7f, in order), each
+plain text grid of either 96 glyphs (ASCII 0x20-0x7f, in order) or
+192 (ASCII, then the upper half of ISO 8859-15, bytes 0xa0-0xff --
+bdf_to_mem.py's default output), each
 `h` lines of `w` space-separated 0/1 values, one line per pixel row,
 top row first. This is the same format sw/data/font/font16.mem
 already used -- nothing new, just documented and given a real
@@ -31,7 +33,17 @@ OUT_FILE = FONT_DIR.parent.parent / "common" / "zfont_data.c"
 
 FIRST_CODEPOINT = 0x20
 LAST_CODEPOINT = 0x7f
-NUM_GLYPHS = LAST_CODEPOINT - FIRST_CODEPOINT + 1  # 96
+NUM_GLYPHS = LAST_CODEPOINT - FIRST_CODEPOINT + 1  # 96 (ASCII)
+NUM_GLYPHS_LATIN9 = NUM_GLYPHS + 96                  # 192
+
+# Bytes 0x80-0x9f are C1 control codes: no glyphs, and not stored. A
+# 192-glyph font says so with its gap fields (zfont.h).
+GAP_LO, GAP_HI = 0x80, 0x9f
+
+
+def glyph_byte(g):
+	"""The byte value glyph number g stands for."""
+	return FIRST_CODEPOINT + g if g < NUM_GLYPHS else 0xa0 + (g - NUM_GLYPHS)
 
 
 def parse_mem(path, w, h):
@@ -47,10 +59,10 @@ def parse_mem(path, w, h):
 					f"{len(bits)}: {line!r}")
 			rows.append(bits)
 
-	expected_rows = NUM_GLYPHS * h
-	if len(rows) != expected_rows:
-		sys.exit(f"{path}: expected {expected_rows} rows ({NUM_GLYPHS} "
-			f"glyphs x {h} rows), got {len(rows)}")
+	if len(rows) not in (NUM_GLYPHS * h, NUM_GLYPHS_LATIN9 * h):
+		sys.exit(f"{path}: expected {NUM_GLYPHS * h} or "
+			f"{NUM_GLYPHS_LATIN9 * h} rows ({NUM_GLYPHS} or "
+			f"{NUM_GLYPHS_LATIN9} glyphs x {h} rows), got {len(rows)}")
 
 	# each row's `w` bits become the top `w` bits of one byte
 	glyph_bytes = []
@@ -70,27 +82,41 @@ def codepoint_char(cp):
 	# literally: DEL isn't printable at all, and a trailing backslash
 	# on a `//` comment line is a C line-continuation (silently
 	# swallows the next line into the comment) -- gcc warns about
-	# exactly this ([-Wcomment]), so spell it out instead.
+	# exactly this ([-Wcomment]), so spell it out instead. Latin-9
+	# bytes are named by their Unicode character, written as UTF-8.
 	if cp == 0x20:
 		return "space"
 	if cp == 0x7f:
-		return "?"  # DEL, not actually present in most of these fonts
+		return "DEL -- the missing-glyph box"
 	if cp == 0x5c:
 		return "backslash"
+	if cp == 0xa0:
+		return "no-break space"
+	if cp == 0xad:
+		return "soft hyphen"
+	if cp >= 0xa0:
+		u = bytes([cp]).decode("iso8859_15")
+		return f"{u} U+{ord(u):04X}"
 	return chr(cp)
 
 
 def emit_font(name, w, h, glyph_bytes, out):
-	out.write(f"static const uint8_t z_font_{name}_data[{NUM_GLYPHS} * {h}] = {{\n")
-	for g in range(NUM_GLYPHS):
-		cp = FIRST_CODEPOINT + g
+	n = len(glyph_bytes) // h
+	out.write(f"static const uint8_t z_font_{name}_data[{n} * {h}] = {{\n")
+	for g in range(n):
+		cp = glyph_byte(g)
 		row_bytes = glyph_bytes[g * h:(g + 1) * h]
 		hex_str = ", ".join(f"0x{b:02x}" for b in row_bytes)
 		out.write(f"\t{hex_str}, // 0x{cp:02x} {codepoint_char(cp)}\n")
 	out.write("};\n\n")
-	out.write(f"const z_font_t z_font_{name} = "
-		f"{{ {w}, {h}, 0x{FIRST_CODEPOINT:02x}, 0x{LAST_CODEPOINT:02x}, "
-		f"z_font_{name}_data }};\n\n")
+	if n == NUM_GLYPHS:
+		out.write(f"const z_font_t z_font_{name} = "
+			f"{{ {w}, {h}, 0x{FIRST_CODEPOINT:02x}, 0x{LAST_CODEPOINT:02x}, "
+			f"z_font_{name}_data, 0, 0 }};\n\n")
+	else:
+		out.write(f"const z_font_t z_font_{name} = "
+			f"{{ {w}, {h}, 0x{FIRST_CODEPOINT:02x}, 0xff, "
+			f"z_font_{name}_data, 0x{GAP_LO:02x}, 0x{GAP_HI:02x} }};\n\n")
 
 
 def main():

@@ -51,7 +51,9 @@ APPS = casino poker roulette blackjack slots craps \
 	chip8 \
 	chess \
 	kidgames \
-	ask
+	ask \
+	jfont \
+	keyboard
 
 # zcc is in this list and builds its own runtime as a side effect:
 # sw/apps/zcc/Makefile has $(LIBZOBJS) depend on a recursive make into

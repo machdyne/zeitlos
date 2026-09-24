@@ -35,8 +35,16 @@
 #define VT_ROWS 25
 
 typedef struct {
-	char ch;		// 0x20-0x7e, or 0x20 (space) for an erased/blank cell
-	bool reverse;	// the only SGR attribute this 1bpp framebuffer can
+	char ch;		// an ISO 8859-15 byte -- 0x20-0x7e or 0xa0-0xff; 0x7f
+					// for a character Latin-9 cannot draw (the font's
+					// missing-glyph box); VT_CH_WIDE_RIGHT for the right
+					// half of a wide one; 0x20 (space) when blank.
+					// See "characters" below.
+	bool reverse;
+	uint16_t cp;	// in the LEFT cell of a wide character: which one it is
+					// (Basic Multilingual Plane; 0 beyond it or for any other
+					// cell). The glyph byte there stays the box, so a reader
+					// that ignores this sees what it always saw.	// the only SGR attribute this 1bpp framebuffer can
 					// represent -- see the file header comment
 } vt_cell_t;
 
@@ -48,13 +56,30 @@ typedef struct {
  * stack, `term` attaches a .bss array, and anything that attaches
  * nothing gets exactly the old behaviour.
  *
- * -- one byte per cell --
+ * -- characters --
  *
- * put_char() only ever stores 0x20..0x7e, so bit 7 of a cell is free,
- * and reverse video is the only attribute there is. A history line is
- * therefore VT_COLS bytes, half of what storing vt_cell_t would cost,
- * and the packing is lossless. Every history byte is VT_PACK()ed; the
- * live screen stays vt_cell_t so nothing that reads vt.cells changes.
+ * The parser decodes UTF-8 (vt_feed_byte()): what arrives from a shell
+ * or an ssh session is UTF-8 (docs/text_encoding.md). A cell holds the
+ * ISO 8859-15 byte of the character -- the byte the hardware font
+ * draws it with -- or 0x7f, the missing-glyph box, for one Latin-9 has
+ * not got. A character that is two columns wide (CJK, kana: see
+ * z_cp_width() in zutf8.h) takes two cells, the second holding
+ * VT_CH_WIDE_RIGHT, so everything after it lands in the column the
+ * remote program expects; the left cell also keeps the character's
+ * codepoint (vt_cell_t.cp), so it can be drawn from the Japanese font,
+ * copied and read aloud as itself. Combining marks take none.
+ *
+ * -- a history line is VT_HIST_LINE_BYTES --
+ *
+ * VT_COLS glyph bytes, then a VT_COLS-bit bitmap of which cells are in
+ * reverse video (bit c%8 of byte c/8), then one of which cells start a
+ * wide character whose codepoint is kept: for those, the cell's glyph
+ * byte and its right neighbour's hold the codepoint's high and low
+ * bytes instead of the box and VT_CH_WIDE_RIGHT. The cells used to be packed 7+1
+ * bits into one byte each, which stopped fitting when a cell became a
+ * whole Latin-9 byte; the bitmap costs a tenth of what 16-bit cells
+ * would. Readers never see the storage: vt_doc_cell() and vt_id_cell()
+ * return a vt_packed_t, VT_PACK()ed.
  *
  * -- what goes in, and what does not --
  *
@@ -83,9 +108,21 @@ typedef struct {
  *   what lets a selection stay attached to its text while output
  *   keeps arriving. An id below pushed - count has been evicted.
  */
-#define VT_PACK(ch, rev)	((uint8_t)(((uint8_t)(ch) & 0x7f) | ((rev) ? 0x80 : 0)))
-#define VT_PACK_CH(b)		((char)((b) & 0x7f))
-#define VT_PACK_REV(b)		(((b) & 0x80) != 0)
+// A cell as the readers get it: the glyph byte in bits 7:0, reverse
+// video in bit 8, and for the left cell of a wide character its
+// codepoint in bits 31:16 (VT_PACK_WIDE_CP; 0 for every other cell).
+typedef uint32_t vt_packed_t;
+#define VT_PACK(ch, rev)	((vt_packed_t)((uint8_t)(ch) | ((rev) ? 0x100u : 0u)))
+#define VT_PACK_CP(ch, rev, cp)	(VT_PACK(ch, rev) | ((vt_packed_t)(uint16_t)(cp) << 16))
+#define VT_PACK_WIDE_CP(b)	((uint32_t)((b) >> 16))
+#define VT_PACK_CH(b)		((char)((b) & 0xff))
+#define VT_PACK_REV(b)		(((b) & 0x100) != 0)
+
+// The right half of a wide character. A C1 control byte, so never a
+// real character's glyph byte; draws as blank.
+#define VT_CH_WIDE_RIGHT	((char)0x80)
+
+#define VT_HIST_LINE_BYTES	(VT_COLS + 2 * ((VT_COLS + 7) / 8))
 
 typedef enum {
 	VT_PSTATE_NORMAL,	// ordinary bytes -- print, or act on C0 controls
@@ -127,6 +164,13 @@ typedef struct {
 	// (term proper, not the standalone test harness) can redraw only
 	// dirty rows instead of the whole 80x25 grid on every byte.
 	bool dirty[VT_ROWS];
+
+	// UTF-8 being decoded: the codepoint so far, how many continuation
+	// bytes are still due, and the smallest value this length may
+	// encode (anything below is an overlong form).
+	uint32_t u8_cp;
+	uint8_t u8_need;
+	uint32_t u8_min;
 
 
 	/* Rows scrolled off the top since the last vt_take_scrolls().
@@ -172,7 +216,8 @@ static inline uint16_t vt_take_scrolls(vt_screen_t *vt) {
 void vt_init(vt_screen_t *vt);
 
 // Gives the screen a scrollback ring of `cap_lines` lines. `buf` must
-// be cap_lines * VT_COLS bytes and outlive the screen. Starts empty.
+// be cap_lines * VT_HIST_LINE_BYTES bytes and outlive the screen.
+// Starts empty.
 // NULL or 0 detaches.
 void vt_history_attach(vt_screen_t *vt, uint8_t *buf, uint16_t cap_lines);
 
@@ -192,11 +237,11 @@ void vt_history_clear(vt_screen_t *vt);
 // One cell of DOCUMENT line `doc` (0 = oldest retained history line,
 // count.. = live screen), packed with VT_PACK(). Out of range reads as
 // a blank cell rather than failing, so a renderer never has to guard.
-uint8_t vt_doc_cell(const vt_screen_t *vt, int doc, int col);
+vt_packed_t vt_doc_cell(const vt_screen_t *vt, int doc, int col);
 
 // One cell of ABSOLUTE line `id`. Returns false, and a blank cell, if
 // that line has been evicted or is below the bottom of the screen.
-bool vt_id_cell(const vt_screen_t *vt, uint32_t id, int col, uint8_t *out);
+bool vt_id_cell(const vt_screen_t *vt, uint32_t id, int col, vt_packed_t *out);
 
 // feed one byte through the parser -- printable characters are
 // written at the cursor (with wrap/scroll as needed); C0 controls

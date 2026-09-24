@@ -521,9 +521,9 @@ offsets declared in `glyph_layout[]` (`sw/common/zgfx.c`):
 
 | font | glyphs | bytes | offset |
 | --- | --- | --- | --- |
-| `z_font_5x8` | 96 x 8 rows | 768 | 0 |
-| `z_font_6x12` | 96 x 12 rows | 1152 | 768 |
-| *(free)* | | | 1920 |
+| `z_font_5x8` | 192 x 8 rows | 1536 | 0 |
+| `z_font_6x12` | 192 x 12 rows | 2304 | 1536 |
+| *(full)* | | | 3840 |
 | window icons | 32 slots x 8 | 256 | 3840 |
 
 The offsets being **fixed and compiled from one source file** is the
@@ -549,9 +549,16 @@ it as absent and both `z_fb_draw_char()` and `z_fb_draw_char2()` render
 it in software. Blitting from an offset holding a different font's data
 would draw confident nonsense, which is worse than being slow.
 
-To add one: append an entry with the next free offset, check the total
-still clears `Z_ICON_MEM_OFFSET`, and add a `z_gfx_hw_font_load()` call
-in `wm`'s `main()`. Note the blitter only handles glyphs up to 8 pixels
+192 glyphs is ASCII plus the upper half of ISO 8859-15 -- accented
+letters, the euro sign -- with the C1 range 0x80-0x9f left out, which
+is what makes the two fonts fit (see [text_encoding.md](text_encoding.md)).
+The font region is now exactly full.
+
+To add one: grow glyph memory first (`rtl/mem/glyph.v`'s `ADDR_WIDTH`,
+and `GLYPH_ADDR_WIDTH` in `rtl/gpu/gpu_blit.v` to match), then append an
+entry with the next free offset, check the total still clears
+`Z_ICON_MEM_OFFSET` (which moves with it), and add a
+`z_gfx_hw_font_load()` call in `wm`'s `main()`. Note the blitter only handles glyphs up to 8 pixels
 wide (`gpu_blit.v`), so `z_font_8x16` is the widest that could ever go
 here.
 
@@ -608,9 +615,10 @@ every glyph goes software. Today nothing does that: `term` defaults to
 `z_font_5x8` and `repl`'s `(text ...)` uses `z_font_6x12`, both
 resident. Building `term` with `FONT=z_font_5x7` or `z_font_8x16`
 would be correct but slow, and the fix is to add that font to
-`glyph_layout[]`, not to change the hardware. There are 1920 free bytes
-between the fonts and the icon region, which fits `z_font_8x16` (1536)
-or `z_font_5x7` (672), but not both.
+`glyph_layout[]`, not to change the hardware. There is no free space
+between the fonts and the icon region any more -- the two resident fonts
+carry Latin-9 and fill it -- so that now means growing glyph memory
+too.
 
 ### Font switching
 
@@ -838,6 +846,27 @@ same reason: they are about the desktop, not about any one app.
 | Super+R | repeat the last utterance |
 | Super+E | switch between the recorded and the synthesised voice (`docs/tts.md`) |
 | Ctrl, tapped alone | stop speaking |
+
+### Windows that never take focus
+
+`Z_WIN_FLAG_NO_FOCUS` (`zwm.h`) marks a window that is never given the
+keyboard. Clicking it raises it, delivers the click and lets it be
+dragged, like any window -- but the focus stays where it was, it gets
+the pointer while it is under the cursor without being focused, Alt+Tab
+passes it by, and opening it does not focus it. It exists for the
+on-screen keyboard ([keyboard_app.md](keyboard_app.md)), whose taps must
+not take the keys away from the window they are for.
+
+### Keyboard layout key
+
+| key | action |
+|---|---|
+| Super+Space | next keyboard layout in `system.keyboard.layouts`; its two-letter label shows on the dock for a moment, and speech says its name |
+
+Tested before the speech keys, by usage (Space is the same key on every
+layout). See [keyboard_layouts.md](keyboard_layouts.md), which also
+covers what `dispatch_keys()` does with dead keys and AltGr before a
+key reaches an app.
 
 `speech_hotkey()` is tested before every other global hotkey, and only
 matches with Super held and neither Ctrl nor Alt, so it cannot shadow
@@ -1376,6 +1405,9 @@ Past seventeen it pages:
 - **Alt+[** and **Alt+]** step pages directly, for anyone who does not
   want to walk the cycle. Global rather than dock-focused: the point is
   to reach an app on another page without first focusing the dock.
+  Matched by key -- the two keys right of P -- not by character, so
+  they stay under the same fingers on layouts where `[` and `]` need
+  AltGr ([keyboard_layouts.md](keyboard_layouts.md)).
 - Keyboard navigation treats NEXT as one more icon in the cycle --
   Left/Right lands on it and Enter activates it -- so the keyboard and
   the mouse offer exactly the same targets.

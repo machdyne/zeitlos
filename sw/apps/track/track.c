@@ -1264,10 +1264,11 @@ static int play(int index) {
 			if (dt > t_pat_max) t_pat_max = dt;
 
 		} else {
+			// Presses only, and the usage code is at bits 8:1 -- see
+			// the same block in sw/apps/play/play.c.
 			int32_t ev = hid_read_key();
-			if (ev >= 0)
-				handle_key(z_kbd_usage_to_keysym((uint8_t)(ev & 0xFF),
-					(uint8_t)((ev >> 8) & 0xFF)));
+			if (ev >= 0 && Z_KBD_EV_PRESSED(ev))
+				handle_key(z_kbd_event_to_keysym(ev, NULL));
 			if (z_uptime_ticks() - last_draw > 366) {
 				last_draw = z_uptime_ticks();
 				printf("\r  pos %02d/%02d row %02d  mix %3d%%  %s   ",

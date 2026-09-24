@@ -60,6 +60,7 @@
 #include "../../common/zgfx.h"
 #include "../../common/zkbd.h"
 #include "../../common/zvt100.h"
+#include "../../common/zutf8.h"		// docs/text_encoding.md
 #include "../../common/zport.h"
 #include "../../common/zterm.h"
 #include "../../common/zconnect.h"	// the Open bar -- see bar_*() below
@@ -85,9 +86,11 @@
 
 // Scrollback depth, in lines. The Makefile's SCROLLBACK sets this.
 //
-// Costs TERM_HIST_LINES * VT_COLS bytes of .bss per term instance, and
-// .bss is RAM for the process's whole lifetime (docs/boot.md, "Memory
-// budget"). 200 lines is eight screens and 16,000 bytes.
+// Costs TERM_HIST_LINES * VT_HIST_LINE_BYTES (90) bytes of .bss per term
+// instance, and .bss is RAM for the process's whole lifetime
+// (docs/boot.md, "Memory budget"). 200 lines is eight screens and
+// 18,000 bytes -- 16,000 before a cell held a whole Latin-9 byte
+// (zvt100.h, "a history line is VT_HIST_LINE_BYTES").
 //
 // The upper bound is zvt100's uint16_t line count; the lower bound is
 // a screen, because anything less cannot show even the previous page.
@@ -128,7 +131,7 @@ static int text_w, text_h;		// the 80x25 grid
 static int term_win_w, term_win_h;
 
 static vt_screen_t vt;
-static uint8_t hist_buf[TERM_HIST_LINES * VT_COLS];
+static uint8_t hist_buf[TERM_HIST_LINES * VT_HIST_LINE_BYTES];
 static z_win_t win;
 static z_port_t port;
 static z_scrollbar_t sbar;
@@ -296,6 +299,15 @@ static bool sel_contains(uint32_t id, int col) {
 
 #define GLASS_UNKNOWN 0xFFFF
 
+// A cell drawn as a wide character from the Japanese font: glyph byte
+// 0x7f (the box) with this flag. The codepoint is read from the cell
+// again when it is drawn, rather than kept in a second 4KB array.
+// GLASS_UNKNOWN has every bit set, so it is never mistaken for one:
+// the renderer checks the whole value first.
+#define SHADOW_WIDE 0x200
+#define SHADOW_IS_WIDE(v) ((v) != GLASS_UNKNOWN && ((v) & SHADOW_WIDE))
+
+
 static uint16_t shadow[VT_ROWS][VT_COLS];
 
 /* -- what a redraw cost --
@@ -390,10 +402,29 @@ static void shadow_shift(int up) {
 static void draw_glyph(const z_clip_t *clip, int col, int row, char ch,
 	bool inverted) {
 
+	// The right half of a wide character is blank: its glyph -- the
+	// missing-glyph box, until there are wide fonts -- is in the left
+	// half. It has to be DRAWN blank rather than skipped, or the cell
+	// would keep whatever was there before.
+	if (ch == VT_CH_WIDE_RIGHT) ch = ' ';
+
 	z_fb_draw_char2(clip->x0 + col * cell_w, clip->y0 + (row - vskip) * cell_h, ch,
 		inverted ? 0 : 1, inverted ? 1 : 0, &TERM_FONT, clip);
 
 	INS(ins_glyphs++);
+
+}
+
+// A wide character, both of its cells: from the Japanese font when term
+// is built at 6x12 and jfont is running, the box and a blank otherwise
+// -- zgfx's z_fb_draw_cp2() decides (docs/text_encoding.md, "Japanese").
+static void draw_wide(const z_clip_t *clip, int col, int row, uint16_t cp,
+	bool inverted) {
+
+	z_fb_draw_cp2(clip->x0 + col * cell_w, clip->y0 + (row - vskip) * cell_h, cp,
+		inverted ? 0 : 1, inverted ? 1 : 0, &TERM_FONT, clip);
+
+	INS(ins_glyphs += 2);
 
 }
 
@@ -670,10 +701,9 @@ static void render(void) {
 				continue;
 			}
 
-			uint8_t b;
+			vt_packed_t b;
 			if (doc >= (int)count) {
-				vt_cell_t *cell = &vt.cells[doc - count][col];
-				b = VT_PACK(cell->ch, cell->reverse);
+				b = vt_doc_cell(&vt, doc, col);
 			} else {
 				b = vt_doc_cell(&vt, doc, col);
 			}
@@ -683,7 +713,27 @@ static void render(void) {
 			if (row == cur_row && col == cur_col) inv = !inv;
 
 			uint16_t want = (uint16_t)((uint8_t)VT_PACK_CH(b) | (inv ? 0x100u : 0u));
-			if (shadow[row][col] == want) continue;
+
+			// A wide character with its codepoint (zvt100.h, "characters")
+			// is flagged, and redrawn whenever its row is looked at: the
+			// shadow holds a glyph byte, not a codepoint, so it cannot tell
+			// one kanji from another -- and there are few enough of these
+			// that keeping 32 bits a cell to tell would cost more.
+			bool wide = VT_PACK_WIDE_CP(b) != 0;
+			if (wide) want |= SHADOW_WIDE;
+
+			// Its right half draws nothing of its own -- the glyph from
+			// the left covers it -- so a right half that changed means
+			// the left must be drawn again.
+			if ((uint8_t)VT_PACK_CH(b) == (uint8_t)VT_CH_WIDE_RIGHT && col > 0 &&
+			    SHADOW_IS_WIDE(shadow[row][col - 1]) && shadow[row][col] != want &&
+			    !need[row][col - 1]) {
+				need[row][col - 1] = 1;
+				need_row[row]++;
+				need_n++;
+			}
+
+			if (shadow[row][col] == want && !wide) continue;
 
 			shadow[row][col] = want;
 			need[row][col] = 1;
@@ -717,6 +767,16 @@ static void render(void) {
 				for (int col = c0; col <= c1; col++) {
 					if (!need[row][col]) continue;
 					uint16_t w = shadow[row][col];
+					if (w & SHADOW_WIDE) {
+						draw_wide(&clip, col, row,
+							(uint16_t)VT_PACK_WIDE_CP(vt_doc_cell(&vt, doc0 + row, col)),
+							(w & 0x100u) != 0);
+						redraw_cells++;
+						continue;
+					}
+					if ((uint8_t)w == (uint8_t)VT_CH_WIDE_RIGHT && col > 0 &&
+					    SHADOW_IS_WIDE(shadow[row][col - 1]))
+						continue;		// the left half drew it
 					draw_glyph(&clip, col, row, (char)(w & 0xFFu),
 						(w & 0x100u) != 0);
 					redraw_cells++;
@@ -1694,18 +1754,31 @@ static int sel_gather(void) {
 		int from = (id == sel_id0) ? sel_col0 : 0;
 		int to = (id == sel_id1) ? sel_col1 : VT_COLS - 1;
 		char line[VT_COLS];
+		uint16_t wcp[VT_COLS];		// a wide character's codepoint, or 0
 		int last = from - 1;
 
 		for (int col = from; col <= to; col++) {
-			uint8_t b;
+			vt_packed_t b;
 			vt_id_cell(&vt, id, col, &b);
 			line[col] = VT_PACK_CH(b);
+			wcp[col] = (uint16_t)VT_PACK_WIDE_CP(b);
 			if (line[col] != ' ') last = col;
 		}
 
+		// The clipboard is UTF-8 (docs/text_encoding.md); a cell is a
+		// Latin-9 glyph byte. The right half of a wide character adds
+		// nothing; a wide character is itself, kept in its left cell;
+		// any other box -- a character the screen could not keep -- is
+		// the replacement character, which is honest about it.
 		for (int col = from; col <= last && n < max; col++) {
-			char ch = line[col];
-			clip_io[n++] = (ch >= 0x20 && ch < 0x7f) ? ch : ' ';
+			uint8_t ch = (uint8_t)line[col];
+			if (ch == (uint8_t)VT_CH_WIDE_RIGHT) continue;
+			uint32_t cp = wcp[col] ? wcp[col] : (ch == 0x7f) ? 0xFFFDu :
+				(ch >= 0x20 && (ch < 0x80 || ch >= 0xA0)) ? z_l9_to_cp(ch) : ' ';
+			char u[Z_UTF8_MAX];
+			int k = z_utf8_put(cp, u);
+			if (n + k > max) break;
+			for (int i = 0; i < k; i++) clip_io[n++] = u[i];
 		}
 
 		if (id != sel_id1 && n < max) clip_io[n++] = '\n';
@@ -1737,22 +1810,26 @@ static int say_row;			// the next row to consider
 static int say_get(void *user, int n, const char **text, uint32_t *flags) {
 
 	(void)user; (void)n;
-	static char out[VT_COLS + 1];
+	static char out[VT_COLS * Z_UTF8_MAX + 1];	// UTF-8, for speech
 
 	while (say_row < vskip + vis_rows) {
 		uint32_t id = say_top + (uint32_t)say_row++;
-		int last = -1;
+		int last = -1, lastcol = -1, n = 0;
 		for (int col = 0; col < VT_COLS; col++) {
-			uint8_t b;
+			vt_packed_t b;
 			vt_id_cell(&vt, id, col, &b);
-			char ch = VT_PACK_CH(b);
-			out[col] = (ch >= 0x20 && ch < 0x7f) ? ch : ' ';
-			if (out[col] != ' ') last = col;
+			uint8_t ch = (uint8_t)VT_PACK_CH(b);
+			if (ch == (uint8_t)VT_CH_WIDE_RIGHT) continue;
+			uint32_t cp = VT_PACK_WIDE_CP(b) ? VT_PACK_WIDE_CP(b) :
+				(ch >= 0x20 && ch != 0x7f && (ch < 0x80 || ch >= 0xA0)) ?
+				z_l9_to_cp(ch) : ' ';
+			n += z_utf8_put(cp, &out[n]);
+			if (cp != ' ') { last = n - 1; lastcol = col; }
 		}
 		if (last < 0) continue;			// a blank row: nothing to say
 		out[last + 1] = 0;
 		*text = out;
-		*flags = (last == VT_COLS - 1 && say_row < vskip + vis_rows) ? Z_TTS_F_CONTINUES : 0;
+		*flags = (lastcol == VT_COLS - 1 && say_row < vskip + vis_rows) ? Z_TTS_F_CONTINUES : 0;
 		return last + 1;
 	}
 	return -1;
@@ -1970,7 +2047,14 @@ static int key_to_bytes(uint32_t keysym, char *buf, int buflen) {
 		return len;
 	}
 
-	if (keysym == Z_KEY_NONE || keysym >= 0x80) return 0;
+	if (keysym == Z_KEY_NONE) return 0;
+
+	// A character from a keyboard layout goes out as UTF-8, which is
+	// what every shell and ssh session expects (docs/text_encoding.md).
+	if (keysym >= 0x80) {
+		if (!Z_KEY_IS_TEXT(keysym) || buflen < Z_UTF8_MAX) return 0;
+		return z_utf8_put(keysym, buf);
+	}
 
 	buf[0] = (char)keysym;
 	return 1;

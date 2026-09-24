@@ -87,6 +87,7 @@
 #include "zwidget.h"
 #include "zfont.h"
 #include "zwm.h"
+#include "zutf8.h"
 
 #define Z_RENDER_VRAM ((void *)0x20000000UL)
 #define Z_RENDER_VRAM_LEN 0x40000u
@@ -283,8 +284,8 @@ void z_fb_hw_box(int x0, int y0, int x1, int y1, int color,
 void z_fb_draw_char(int x, int y, char ch, int color, const z_font_t *f,
 	const z_clip_t *c) {
 	const uint8_t *g;
-	if (!f || (uint8_t)ch < f->first || (uint8_t)ch > f->last) return;
-	g = f->glyphs + ((uint8_t)ch - f->first) * f->h;
+	if (!f || z_font_index(f, (uint8_t)ch) < 0) return;
+	g = f->glyphs + z_font_index(f, (uint8_t)ch) * f->h;
 	for (int j = 0; j < f->h; j++)
 		for (int i = 0; i < f->w; i++)
 			if (g[j] & (0x80 >> i)) z_fb_set_pixel(x + i, y + j, color, c);
@@ -324,8 +325,8 @@ void z_fb_draw_char2(int x, int y, char ch, int fg, int bg,
 	if (!f) return;
 	for (int ri = 0; zr_glyph_clip(c, ri, &e); ri++) {
 		z_fb_fill_rect(x, y, f->w, f->h, bg, &e);
-		if ((uint8_t)ch < f->first || (uint8_t)ch > f->last) continue;
-		g = f->glyphs + ((uint8_t)ch - f->first) * f->h;
+		if (z_font_index(f, (uint8_t)ch) < 0) continue;
+		g = f->glyphs + z_font_index(f, (uint8_t)ch) * f->h;
 		for (int j = 0; j < f->h; j++)
 			for (int i = 0; i < f->w; i++)
 				if (g[j] & (0x80 >> i)) z_fb_set_pixel(x + i, y + j, fg, &e);
@@ -340,6 +341,84 @@ void z_fb_draw_text(int x, int y, const char *s, int color,
 void z_fb_draw_text2(int x, int y, const char *s, int fg, int bg,
 	const z_font_t *f, const z_clip_t *c) {
 	for (; s && *s; s++, x += f->w) z_fb_draw_char2(x, y, *s, fg, bg, f, c);
+}
+
+// Codepoints and UTF-8, mapped to glyph bytes the way zgfx.c maps them
+// (its cp_glyph_byte()): Latin-9 byte if the font has it, else the
+// missing-glyph box, else '?'. C0 draws nothing and takes a cell.
+static uint8_t zr_cp_byte(const z_font_t *f, uint32_t cp) {
+	if (cp < 0x20) return (uint8_t)cp;
+	uint8_t b = z_cp_to_l9(cp);
+	if (b && z_font_index(f, b) >= 0) return b;
+	return z_font_index(f, Z_GLYPH_MISSING) >= 0 ? Z_GLYPH_MISSING : '?';
+}
+
+// The Japanese font, handed over by a test (zgfx.h's z_jfont_use()).
+#include "zjfont.h"
+static const uint8_t *zr_jfont;
+static uint32_t zr_jfont_len;
+void z_jfont_use(const uint8_t *font, uint32_t len) { zr_jfont = font; zr_jfont_len = len; }
+
+// A two-column character, as zgfx.c's draw_cp_wide(): the 12x12 glyph
+// at 6x12 when the font has it, else the box and a blank.
+static void zr_wide(int x, int y, uint32_t cp, int fg, int bg, bool solid,
+	const z_font_t *f, const z_clip_t *c) {
+	int gw, gh;
+	const uint8_t *g = (f->h == 12 && f->w == 6) ?
+		z_zfn_glyph(zr_jfont, zr_jfont_len, cp, &gw, &gh) : NULL;
+	if (g) {
+		if (solid) z_fb_fill_rect(x, y, 2 * f->w, f->h, bg, c);
+		for (int r = 0; r < gh; r++) {
+			uint16_t bits = (uint16_t)((g[2 * r] << 8) | g[2 * r + 1]);
+			for (int i = 0; i < gw; i++)
+				if (bits & (0x8000u >> i)) z_fb_set_pixel(x + i, y + r, fg, c);
+		}
+		return;
+	}
+	if (solid) {
+		z_fb_draw_char2(x, y, (char)zr_cp_byte(f, 0xFFFD), fg, bg, f, c);
+		z_fb_draw_char2(x + f->w, y, ' ', fg, bg, f, c);
+	} else {
+		z_fb_draw_char(x, y, (char)zr_cp_byte(f, 0xFFFD), fg, f, c);
+	}
+}
+
+void z_fb_draw_cp(int x, int y, uint32_t cp, int color,
+	const z_font_t *f, const z_clip_t *c) {
+	if (z_cp_width(cp) == 2) { zr_wide(x, y, cp, color, 0, false, f, c); return; }
+	z_fb_draw_char(x, y, (char)zr_cp_byte(f, cp), color, f, c);
+}
+
+void z_fb_draw_cp2(int x, int y, uint32_t cp, int fg, int bg,
+	const z_font_t *f, const z_clip_t *c) {
+	if (z_cp_width(cp) == 2) { zr_wide(x, y, cp, fg, bg, true, f, c); return; }
+	z_fb_draw_char2(x, y, (char)zr_cp_byte(f, cp), fg, bg, f, c);
+}
+
+// Columns follow z_cp_width(), as in zgfx.c.
+static void zr_utf8(int x, int y, const char *s, int fg, int bg, bool solid,
+	const z_font_t *f, const z_clip_t *c) {
+	const char *end = s + strlen(s);
+	int cx = x;
+	while (s < end) {
+		uint32_t cp = z_utf8_next(&s, end);
+		if (cp == '\n') { cx = x; y += f->h; continue; }
+		int w = z_cp_width(cp);
+		if (w == 0) continue;
+		if (solid) z_fb_draw_cp2(cx, y, cp, fg, bg, f, c);
+		else z_fb_draw_cp(cx, y, cp, fg, f, c);
+		cx += w * f->w;
+	}
+}
+
+void z_fb_draw_utf8(int x, int y, const char *s, int color,
+	const z_font_t *f, const z_clip_t *c) {
+	zr_utf8(x, y, s, color, 0, false, f, c);
+}
+
+void z_fb_draw_utf8_2(int x, int y, const char *s, int fg, int bg,
+	const z_font_t *f, const z_clip_t *c) {
+	zr_utf8(x, y, s, fg, bg, true, f, c);
 }
 
 // Software VRAM scroll, with the same contract as zgfx.c's: content

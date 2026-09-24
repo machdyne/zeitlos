@@ -170,6 +170,15 @@
 // docs/tts.md.
 #define Z_WIN_FLAG_READABLE           (1u << 9)
 
+// A window that is never given the keyboard. Clicking it raises it,
+// delivers the click and lets it be dragged, as for any window, but
+// focus stays on the window that had it, and Alt+Tab passes it by. For
+// sw/apps/keyboard, the on-screen keyboard: tapping a key must not take
+// the keys away from the window they are meant for (docs/
+// keyboard_app.md). The pointer is delivered to it while it is under
+// the cursor even though it is not focused.
+#define Z_WIN_FLAG_NO_FOCUS           (1u << 10)
+
 // clamp this window's minimum size to whatever size it was CREATED
 // at, instead of the global Z_WM_MIN_WIDTH/HEIGHT floor below.
 // Meaningless without Z_WIN_FLAG_RESIZABLE also set.
@@ -658,15 +667,22 @@ typedef struct {
 #define Z_MOUSE_BTN_RIGHT  (1u << 1)
 #define Z_MOUSE_BTN_MIDDLE (1u << 2)
 
-// keysym: 0x0000-0x7fff (see zkbd.h -- ASCII in 0x00-0x7f, named keys
-// like arrows in 0x100+). modifiers: the raw USB HID modifier byte
-// (zkbd.h's Z_KBD_MOD_* bits) at the time of this event. pressed: 1 =
-// key down, 0 = key up.
+// keysym: 23 bits, 0x000000-0x7fffff (see zkbd.h -- Unicode
+// codepoints for characters, 0x110000+ for named keys like arrows).
+// modifiers: the raw USB HID modifier byte (zkbd.h's Z_KBD_MOD_* bits)
+// at the time of this event. pressed: 1 = key down, 0 = key up.
+//
+// The keysym field was 15 bits (bits 23:9) until keyboard layouts made
+// keysyms Unicode; it now runs to bit 31. Bits 23:0 are laid out
+// exactly as before, so a keysym below 0x8000 packs to the same word
+// either way. A binary built against the old header still decodes
+// characters correctly but reads named keys as Z_KEY_NONE -- rebuild
+// it (docs/keyboard_layouts.md).
 #define Z_WM_PACK_KEY(keysym, modifiers, pressed) \
-	((((uint32_t)(keysym) & 0x7FFF) << 9) | \
+	((((uint32_t)(keysym) & 0x7FFFFFu) << 9) | \
 	 (((uint32_t)(modifiers) & 0xFF) << 1) | \
 	 ((pressed) ? 1u : 0u))
-#define Z_WM_UNPACK_KEY_KEYSYM(v)     (((v) >> 9) & 0x7FFF)
+#define Z_WM_UNPACK_KEY_KEYSYM(v)     (((uint32_t)(v) >> 9) & 0x7FFFFFu)
 #define Z_WM_UNPACK_KEY_MODIFIERS(v)  (((v) >> 1) & 0xFF)
 #define Z_WM_UNPACK_KEY_PRESSED(v)    ((v) & 1)
 

@@ -37,6 +37,7 @@
 #include "../../common/zkbd.h"
 #include "../../common/zicon.h"
 #include "../../common/zspeak.h"	// speech -- docs/tts.md
+#include "../../common/zcfg.h"		// system.keyboard.layouts
 #include "dock_icons.h"
 #include "win_icons.h"
 
@@ -159,6 +160,7 @@ static const dock_app_t dock_candidates[] = {
 	{ "cal",			z_icon_cal_data   },
 	{ "info",		z_icon_info_data  },
 	{ "settings",	z_icon_settings_data },
+	{ "keyboard",	z_icon_keyboard_data },
 
 	{ "ask",			z_icon_ask_data   },
 	{ "hex",			z_icon_hex_data   },
@@ -196,6 +198,18 @@ static int dock_app_count;
 // indices this one doesn't need the usual "does this id still exist"
 // checking.
 static int dock_idx = -1;
+
+// The keyboard layout label drawn over the dock for a moment after a
+// switch (draw_dock(), kbd_announce()). Up here because draw_dock()
+// is defined long before the keyboard code.
+static bool kbd_osd;
+static uint32_t kbd_osd_deadline;
+
+// Japanese input (zkbd.h, "input methods"): the romaji typed so far on
+// an input method layout. Shown over the dock while it is not empty --
+// the app sees nothing until a kana is finished, so this is the only
+// place the letters are visible.
+static z_kbd_ime_t kbd_ime;
 
 // -- dock keyboard navigation / launch feedback -- see
 // docs/window_manager.md, "Keyboard-only operation" --
@@ -1286,6 +1300,25 @@ static void draw_dock(void) {
 
 	}
 
+	// The keyboard layout, for a moment after Super+Space: its
+	// two-letter label in a solid box over the right end of the dock,
+	// covering part of an icon rather than moving anything -- the
+	// dock's geometry is shared with its hit testing (dock_layout.h).
+	// Cleared by the main loop at kbd_osd_deadline.
+	if (kbd_osd || kbd_ime.n) {
+		const z_kbd_layout_t *l = z_kbd_layout_info(z_kbd_active_layout());
+		const z_font_t *f = &z_font_6x12;
+		// Letters waiting to become kana, while there are any; the
+		// layout's label otherwise.
+		const char *label = kbd_ime.n ? kbd_ime.pend : l->label;
+		int len = (int)strlen(label);
+		int bw = len * f->w + 8, bh = DOCK_ICON_SIZE;
+		int bx = x0 + (int)w->w - DOCK_PADDING - bw;
+		int by = y0 + DOCK_PADDING;
+		z_fb_hw_fill_rect(bx, by, bw, bh, 1);
+		z_fb_draw_text2(bx + 4, by + (bh - f->h) / 2, label, 0, 1, f, NULL);
+	}
+
 }
 
 // returns true if rectangles a and b (given as x,y,w,h) overlap at all
@@ -1816,6 +1849,13 @@ static uint32_t wm_idle_ticks(void) {
 
 	if (wm_busy_mask & WM_BUSY_STARTUP)
 		return 1;
+
+	if (kbd_osd) {
+		int32_t left = (int32_t)(kbd_osd_deadline - now);
+		if (left <= 0)
+			return 1;
+		soon = (uint32_t)left;
+	}
 
 	for (i = 0; i < DOCK_APP_COUNT; i++) {
 		int32_t left;
@@ -2647,6 +2687,7 @@ static int next_focusable(int from) {
 		// ambiguity modality exists to remove. The modal window
 		// itself stays in the cycle, so the app is still reachable.
 		if (blocked_by_modal(idx) >= 0) continue;
+		if (windows[idx].flags & Z_WIN_FLAG_NO_FOCUS) continue;
 		return idx;
 	}
 
@@ -3259,33 +3300,280 @@ static void speech_ctrl_tap(uint8_t usage, uint8_t modifiers, bool pressed) {
 // usage code to a keysym (zkbd.h) first. Demo windows (owned by wm
 // itself, see main() below) have no app to notify, same as
 // notify_moved()'s check below.
+// -- keyboard layouts -- docs/keyboard_layouts.md
+//
+// The kernel keeps the active layout and stamps it into every key event
+// (zkbd.h's Z_KBD_EV_LAYOUT); wm decides which one it is. The layouts to
+// cycle through come from system.keyboard.layouts in /zeitlos.cfg, a
+// comma-separated list of names (zkbd.h's z_kbd_layouts[]), the first
+// being the one to start in. Super+Space steps through the list.
+
+#define KBD_CYCLE_MAX	8
+
+static int kbd_cycle[KBD_CYCLE_MAX];
+static int kbd_cycle_n;
+static uint32_t kbd_cfg_gen = ~0u;
+
+// A dead key waiting for the character it modifies (zkbd.h), or 0.
+static uint32_t kbd_dead;
+
+// A key whose press the input method consumed: its release is dropped
+// too. Above every keysym (Z_KEY_MAX), so it cannot be one.
+#define KBD_SENT_DROP 0xFFFFFFFFu
+
+// The keysym each key's PRESS was delivered as, so its release is
+// delivered as the same thing. Without this a composed e-acute would
+// be released as a plain e, and a key pressed in one layout and
+// released in another would release a different character -- both
+// harmless to an app that acts on presses, and a stuck key to one that
+// tracks what is held.
+static uint32_t kbd_sent[256];
+
+// The layout label shown briefly over the right end of the dock after
+// a switch -- see draw_dock().
+#define KBD_OSD_TICKS	(Z_TICK_HZ * 3 / 2)
+
+static void kbd_load_config(void) {
+
+	char val[Z_CFG_VAL_MAX];
+	z_cfg_get("system.keyboard.layouts", val, sizeof(val));
+	kbd_cfg_gen = z_cfg_generation();
+
+	kbd_cycle_n = 0;
+	char *p = val;
+	while (*p && kbd_cycle_n < KBD_CYCLE_MAX) {
+		while (*p == ',' || *p == ' ' || *p == '\t') p++;
+		char *name = p;
+		while (*p && *p != ',' && *p != ' ' && *p != '\t') p++;
+		if (p == name) break;
+		char save = *p;
+		*p = 0;
+		int id = z_kbd_layout_find(name);
+		if (id < 0)
+			printf("wm: keyboard layout '%s' unknown, skipped\n", name);
+		else
+			kbd_cycle[kbd_cycle_n++] = id;
+		*p = save;
+	}
+	if (!kbd_cycle_n) kbd_cycle[kbd_cycle_n++] = 0;	// US
+
+	// Keep the current layout if it is still on the list -- a config
+	// reload should not switch someone's keyboard out from under them
+	// -- otherwise start at the head of the list.
+	int cur = z_kbd_active_layout();
+	for (int i = 0; i < kbd_cycle_n; i++)
+		if (kbd_cycle[i] == cur) return;
+	if (!z_kbd_set_active_layout(kbd_cycle[0]))
+		printf("wm: kernel has no keyboard layout support; US only\n");
+	kbd_dead = 0;
+	kbd_ime.n = 0;
+	kbd_ime.pend[0] = 0;
+
+}
+
+static void kbd_announce(int id) {
+
+	const z_kbd_layout_t *l = z_kbd_layout_info(id);
+	printf("wm: keyboard layout %s (%s)\n", l->name, l->desc);
+
+	// z_speak() is a no-op when speech is off.
+	z_speak_static(l->desc, Z_TTS_F_INTERRUPT);
+
+	kbd_osd = true;
+	kbd_osd_deadline = z_uptime_ticks() + KBD_OSD_TICKS;
+	if (dock_idx >= 0)
+		repair_region(windows[dock_idx].x, windows[dock_idx].y,
+			windows[dock_idx].w, windows[dock_idx].h, -1);
+
+}
+
+static void kbd_cycle_next(void) {
+
+	int cur = z_kbd_active_layout();
+	int at = -1;
+	for (int i = 0; i < kbd_cycle_n; i++)
+		if (kbd_cycle[i] == cur) at = i;
+	int next = kbd_cycle[(at + 1) % kbd_cycle_n];
+
+	// A single-layout list still says which layout it is, so the key
+	// is never silently dead.
+	if (next != cur && !z_kbd_set_active_layout(next)) return;
+	kbd_dead = 0;
+	kbd_ime.n = 0;
+	kbd_ime.pend[0] = 0;
+	kbd_announce(next);
+
+}
+
+// Delivers one key to whoever gets keys: the grab owner if a game has
+// the screen, otherwise the focused window's owner. The tail of
+// dispatch_keys(), and also used to type a dead key's accent before
+// the character that did not combine with it.
+static void forward_key(uint32_t keysym, uint8_t modifiers, bool pressed) {
+
+	if (focused < 0) return;
+	if (windows[focused].owner_pid == my_pid) return;
+
+	uint32_t packed = Z_WM_PACK_KEY(keysym, modifiers, pressed);
+	/* TO THE GRAB OWNER, not to whatever has focus. An app that
+	 * owns the screen is the only thing the user can see, so
+	 * focus is meaningless -- and every game here leaves game
+	 * mode with Escape, so this is also the way out. */
+	if (game_grab_pid) {
+		z_msg_new_send(game_grab_pid, Z_WM_KEY, 0, z_obj_uint32(packed));
+		return;
+	}
+
+	z_msg_new_send(windows[focused].owner_pid, Z_WM_KEY, 0, z_obj_uint32(packed));
+
+}
+
+static void forward_tap(uint32_t keysym, uint8_t modifiers) {
+	forward_key(keysym, modifiers, true);
+	forward_key(keysym, modifiers, false);
+}
+
+// The pending romaji changed from `before` letters: repaint the dock,
+// which shows them (draw_dock()).
+static void kbd_ime_show(uint8_t before) {
+	if (before == kbd_ime.n && !kbd_ime.n) return;
+	if (dock_idx >= 0)
+		repair_region(windows[dock_idx].x, windows[dock_idx].y,
+			windows[dock_idx].w, windows[dock_idx].h, -1);
+}
+
 static void dispatch_keys(void) {
 
 	int32_t ev;
 	while ((ev = hid_read_key()) >= 0) {
 
-		uint8_t usage     = (ev >> 1) & 0xFF;
-		uint8_t modifiers = (ev >> 9) & 0xFF;
-		bool    pressed   = (ev & 1) != 0;
+		uint8_t usage     = Z_KBD_EV_USAGE(ev);
+		uint8_t modifiers = Z_KBD_EV_MODS(ev);
+		bool    pressed   = Z_KBD_EV_PRESSED(ev) != 0;
+
+		// A config reload (settings, `cfg reload`) may have changed
+		// the layout list. Checked here, where keys arrive, rather
+		// than every pass of the main loop: nothing about layouts
+		// matters until someone types.
+		if (z_cfg_generation() != kbd_cfg_gen) kbd_load_config();
 
 		// Before anything else, including the keysym translation
 		// below: a bare Ctrl has no keysym and would be skipped.
 		speech_ctrl_tap(usage, modifiers, pressed);
 
-		// Caps Lock (state kept by the kernel, zkbd.h): letters only,
-		// Shift inverted -- Shift+letter with Caps Lock on gives lower
-		// case, as on every desktop. Usages 0x04-0x1d are a-z.
-		if ((Z_KBD_EV_LOCKS(ev) & Z_KBD_LOCK_CAPS) &&
-		    usage >= 0x04 && usage <= 0x1d) {
-			if (modifiers & Z_KBD_MOD_SHIFT)
-				modifiers &= (uint8_t)~Z_KBD_MOD_SHIFT;
-			else
-				modifiers |= Z_KBD_MOD_LSHIFT;
+		const z_kbd_layout_t *layout = z_kbd_layout_info((int)Z_KBD_EV_LAYOUT(ev));
+
+		// Right Alt is AltGr on a layout that has one, so it is not
+		// Alt for wm's own shortcuts either: AltGr+Tab is not Alt+Tab.
+		bool alt = (modifiers & Z_KBD_MOD_LALT) ||
+			((modifiers & Z_KBD_MOD_RALT) && !layout->altgr);
+
+		// Super+Space -- next keyboard layout. By usage, not keysym:
+		// Space is the same key on every layout, and what matters is
+		// the key, not what it would have typed.
+		if (usage == 0x2C && (modifiers & Z_KBD_MOD_GUI) &&
+		    !(modifiers & Z_KBD_MOD_CTRL) && !alt) {
+			if (pressed) kbd_cycle_next();
+			kbd_sent[usage] = 0;
+			continue;
 		}
 
-		uint32_t keysym = z_kbd_usage_to_keysym(usage, modifiers);
+		// Layout, Shift, AltGr, Ctrl and Caps Lock, all in one place
+		// (zkbd.c). fwd_mods is what the app is told was held: without
+		// right Alt when it was AltGr picking a character.
+		uint8_t fwd_mods;
+		uint32_t keysym = z_kbd_event_to_keysym(ev, &fwd_mods);
+
+		if (!pressed) {
+			// Released as whatever it was pressed as (kbd_sent's
+			// comment). A key with no record -- a dead key, or one
+			// pressed before wm started -- falls back to translating
+			// the release itself, as before layouts.
+			uint32_t sent = kbd_sent[usage];
+			kbd_sent[usage] = 0;
+			if (sent == KBD_SENT_DROP) continue;
+			if (sent) keysym = sent;
+		}
+
 		if (keysym == Z_KEY_NONE) continue;   // bare modifier change, or
 		                                       // an unmapped usage code
+
+		// -- dead keys -- docs/keyboard_layouts.md, "Dead keys" --
+		if (pressed && Z_KEY_IS_DEAD(keysym)) {
+			if (kbd_dead) {
+				// The same dead key twice types its accent; a
+				// different one types the first one's accent and
+				// waits on the second.
+				uint32_t sp = z_kbd_dead_spacing_of(kbd_dead);
+				bool same = (kbd_dead == keysym);
+				kbd_dead = same ? 0 : keysym;
+				if (sp) forward_tap(sp, fwd_mods);
+			} else {
+				kbd_dead = keysym;
+			}
+			continue;
+		}
+		if (Z_KEY_IS_DEAD(keysym)) continue;	// a dead key's release
+
+		if (pressed && kbd_dead) {
+			uint32_t d = kbd_dead;
+			kbd_dead = 0;
+			if (keysym == 0x1b) {
+				// Escape cancels the pending accent and is spent
+				// doing it -- an app should not also see it.
+				kbd_sent[usage] = 0;
+				continue;
+			}
+			if (Z_KEY_IS_TEXT(keysym) &&
+			    !(fwd_mods & (Z_KBD_MOD_CTRL | Z_KBD_MOD_GUI)) && !alt) {
+				uint32_t r = z_kbd_compose(d, keysym);
+				uint32_t sp = z_kbd_dead_spacing_of(d);
+				if (r) keysym = r;
+				else if (keysym == ' ' && sp) keysym = sp;
+				else if (sp) forward_tap(sp, fwd_mods);
+			}
+			// Anything else -- an arrow, Enter, a shortcut -- drops
+			// the accent and does what it always does.
+		}
+
+		// -- Japanese input -- docs/keyboard_layouts.md, "Japanese input" --
+		//
+		// On an input method layout, letters (and - , . [ ] ~ / ') go to
+		// the romaji converter, and what comes out -- kana, or a letter
+		// that became nothing -- goes to the app as ordinary keys, each a
+		// press and a release. The key itself is spent: its release is
+		// dropped. Anything else finishes the pending letters first and
+		// then does what it always does; Backspace and Escape act on the
+		// pending letters instead, while there are any. Shortcuts --
+		// Ctrl, Alt, Super -- are never romaji.
+		if (pressed && layout->ime) {
+			bool plain = !(fwd_mods & (Z_KBD_MOD_CTRL | Z_KBD_MOD_GUI)) && !alt;
+			uint32_t out[Z_KBD_IME_OUT];
+			int n;
+			uint8_t before = kbd_ime.n;
+			kbd_ime.mode = layout->ime;
+			if (plain && keysym < 0x80 && z_kbd_ime_takes(keysym)) {
+				n = z_kbd_ime_feed(&kbd_ime, keysym, out);
+				for (int i = 0; i < n; i++) forward_tap(out[i], 0);
+				kbd_sent[usage] = KBD_SENT_DROP;
+				kbd_ime_show(before);
+				continue;
+			}
+			if (kbd_ime.n) {
+				if (keysym == 0x7f || keysym == 0x1b) {
+					if (keysym == 0x7f) z_kbd_ime_backspace(&kbd_ime);
+					else { kbd_ime.n = 0; kbd_ime.pend[0] = 0; }
+					kbd_sent[usage] = KBD_SENT_DROP;
+					kbd_ime_show(before);
+					continue;
+				}
+				n = z_kbd_ime_flush(&kbd_ime, out);
+				for (int i = 0; i < n; i++) forward_tap(out[i], 0);
+				kbd_ime_show(before);
+			}
+		}
+
+		if (pressed) kbd_sent[usage] = keysym;
 
 		// Super+S/A/C/V/W/R/E -- speech. See speech_hotkey().
 		if (speech_hotkey(keysym, modifiers, pressed)) continue;
@@ -3294,7 +3582,7 @@ static void dispatch_keys(void) {
 		// release is silently dropped (nothing to do with it, and it
 		// must not fall through to being forwarded as a Tab/arrow
 		// keystroke to whatever's focused).
-		if ((modifiers & Z_KBD_MOD_ALT) && keysym == '\t') {
+		if (alt && keysym == '\t') {
 			if (pressed) alt_tab();
 			continue;
 		}
@@ -3303,7 +3591,7 @@ static void dispatch_keys(void) {
 		// without game mode: Escape reaching the focused app only on
 		// boards that happen to lack a feature would be a genuinely
 		// confusing difference between machines.
-		if ((modifiers & Z_KBD_MOD_ALT) && keysym == 0x1b) {
+		if (alt && keysym == 0x1b) {
 			if (pressed) game_toggle();
 			continue;
 		}
@@ -3317,9 +3605,13 @@ static void dispatch_keys(void) {
 		// is not paging, so the keys behave the same on every machine
 		// rather than falling through to the focused app on the ones
 		// that happen to have fewer apps installed.
-		if ((modifiers & Z_KBD_MOD_ALT) &&
-			(keysym == '[' || keysym == ']')) {
-			if (pressed) dock_set_page(dock_page + (keysym == ']' ? 1 : -1));
+		//
+		// Matched by KEY (usages 0x2F/0x30, the two keys right of P),
+		// not by character: on German those keys are U-umlaut and +,
+		// and [ ] need AltGr, so a character match would put the
+		// shortcut somewhere no German user could press it.
+		if (alt && (usage == 0x2F || usage == 0x30)) {
+			if (pressed) dock_set_page(dock_page + (usage == 0x30 ? 1 : -1));
 			continue;
 		}
 
@@ -3328,14 +3620,14 @@ static void dispatch_keys(void) {
 		// Ctrl+Alt+Left also satisfies that test, so the other order
 		// would move the focused window and this would never fire at
 		// all. See game_move_view()'s own comment.
-		if ((modifiers & Z_KBD_MOD_ALT) && (modifiers & Z_KBD_MOD_CTRL) &&
+		if (alt && (modifiers & Z_KBD_MOD_CTRL) &&
 			(keysym == Z_KEY_LEFT || keysym == Z_KEY_RIGHT ||
 			 keysym == Z_KEY_UP   || keysym == Z_KEY_DOWN)) {
 			if (pressed) game_move_view(keysym);
 			continue;
 		}
 
-		if ((modifiers & Z_KBD_MOD_ALT) &&
+		if (alt &&
 			(keysym == Z_KEY_LEFT || keysym == Z_KEY_RIGHT ||
 			 keysym == Z_KEY_UP   || keysym == Z_KEY_DOWN)) {
 			if (pressed) alt_move_focused(keysym);
@@ -3347,20 +3639,7 @@ static void dispatch_keys(void) {
 		// on exactly which keys it consumes and why.
 		if (focused == dock_idx && dock_handle_key(keysym, pressed)) continue;
 
-		if (focused < 0) continue;
-		if (windows[focused].owner_pid == my_pid) continue;
-
-		uint32_t packed = Z_WM_PACK_KEY(keysym, modifiers, pressed);
-		/* TO THE GRAB OWNER, not to whatever has focus. An app that
-		 * owns the screen is the only thing the user can see, so
-		 * focus is meaningless -- and every game here leaves game
-		 * mode with Escape, so this is also the way out. */
-		if (game_grab_pid) {
-			z_msg_new_send(game_grab_pid, Z_WM_KEY, 0, z_obj_uint32(packed));
-			continue;
-		}
-
-		z_msg_new_send(windows[focused].owner_pid, Z_WM_KEY, 0, z_obj_uint32(packed));
+		forward_key(keysym, fwd_mods, pressed);
 
 	}
 
@@ -4213,7 +4492,7 @@ static void handle_message(z_msg_t *msg) {
 					}
 				}
 
-				if (focused < 0 || first_window) {
+				if ((focused < 0 || first_window) && !(flags & Z_WIN_FLAG_NO_FOCUS)) {
 
 					int old_focused = focused;
 					focused = idx;
@@ -4641,7 +4920,10 @@ static void dispatch_mouse(int cx, int cy, uint8_t btn) {
 		if (target < 0) return;
 	} else if (target < 0) {
 		int hit = hit_test(cx, cy);
-		if (hit >= 0 && hit == focused) target = hit;
+		// A no-focus window (the on-screen keyboard) is under the
+		// cursor without being focused; it gets the pointer anyway.
+		if (hit >= 0 && (hit == focused ||
+		    (windows[hit].flags & Z_WIN_FLAG_NO_FOCUS))) target = hit;
 	}
 
 	if (target < 0) return;
@@ -5020,6 +5302,17 @@ int main(void) {
 	dock_build();
 	dock_idx = create_dock();
 
+	// Keyboard layouts (system.keyboard.layouts) -- before the first
+	// key can arrive. docs/keyboard_layouts.md.
+	kbd_load_config();
+
+	// The Japanese font service, if asked for (docs/text_encoding.md,
+	// "Japanese"). Only on request: it holds about 190KB for as long as
+	// it runs. It needs the card it loads the font from, so a failure
+	// here is only a message.
+	if (z_cfg_get_bool("system.font.japanese", false) && !z_proc_run("jfont"))
+		printf("wm: system.font.japanese: could not start jfont\n");
+
 	// Busy until init has finished -- see init_finished(). wm is up
 	// (it is this process) but init() is still loading the rest.
 	wm_busy_set(WM_BUSY_STARTUP);
@@ -5076,6 +5369,14 @@ int main(void) {
 			printf("wm: dock: gave up waiting for '%s' (pid %ld) to create a window\n",
 				dock_apps[di]->name, (long)dock_launching_pid[di]);
 			dock_launching[di] = false;
+			if (dock_idx >= 0)
+				repair_region(windows[dock_idx].x, windows[dock_idx].y,
+					windows[dock_idx].w, windows[dock_idx].h, -1);
+		}
+
+		// -- keyboard layout label -- see draw_dock()'s kbd_osd.
+		if (kbd_osd && (int32_t)(z_uptime_ticks() - kbd_osd_deadline) >= 0) {
+			kbd_osd = false;
 			if (dock_idx >= 0)
 				repair_region(windows[dock_idx].x, windows[dock_idx].y,
 					windows[dock_idx].w, windows[dock_idx].h, -1);
@@ -5173,10 +5474,14 @@ int main(void) {
 
 			} else if (hit >= 0) {
 
+				// A Z_WIN_FLAG_NO_FOCUS window (the on-screen keyboard)
+				// is raised and gets the click like any other, but the
+				// keyboard stays where it was.
+				int gets = (windows[hit].flags & Z_WIN_FLAG_NO_FOCUS) ? focused : hit;
 				int old_focused = focused;
-				bool changed = (focused != hit);
-				focused = hit;
-				if (changed) speak_focus(hit);
+				bool changed = (focused != gets);
+				focused = gets;
+				if (changed) speak_focus(gets);
 				dbg_n_redraw = 0;
 				dbg_n_clip = 0;
 				dbg_t0 = z_uptime_ticks();
@@ -5194,7 +5499,7 @@ int main(void) {
 				// gained pixels -- unless this is a titlebar
 				// press, in which case the raised window's
 				// content REDRAW is pending_raise_redraw.
-				repair_focus_chrome(old_focused, hit);
+				repair_focus_chrome(old_focused, gets);
 				if (wm_clip_debug)
 					printf("wm: switch win %d ms=%lu clips=%d redraws=%d\n",
 						hit,

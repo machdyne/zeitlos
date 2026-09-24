@@ -182,6 +182,8 @@ SUPPLEMENTAL = [
     ("apps/logic", "sw/apps/logic/logic.bin"),
     ("apps/serial", "sw/apps/serial/serial.bin"),
     ("apps/tts", "sw/apps/tts/tts.bin"),
+    ("apps/jfont", "sw/apps/jfont/jfont.bin"),
+    ("apps/keyboard", "sw/apps/keyboard/keyboard.bin"),
 ]
 
 # The casino. One dock icon (apps/casino) launches the rest, so the
@@ -237,7 +239,7 @@ SELFHOST = [
 ]
 
 DIRS = ["apps", "audio", "docs", "ark", "user", "libz", "libz/include",
-        "fpga", "fpga/boards", "fpga/examples", "speech", "web"]
+        "fpga", "fpga/boards", "fpga/examples", "speech", "web", "font"]
 
 # The speech pack: the pronunciation lexicon and the recorded voice
 # sw/apps/tts reads (docs/tts.md). NOT built from this tree and NOT
@@ -368,6 +370,15 @@ EXAMPLES = [
 # there as the documented place to start editing, not to set anything.
 CONFIG_FILES = [
     ("zeitlos.cfg", "sw/data/zeitlos.cfg"),
+]
+
+# Fonts drawn in software (docs/text_encoding.md, "Japanese"): the 12x12
+# Japanese font sw/apps/jfont holds for every app. Committed to the tree
+# (tools/gen_jfont.py makes it from public-domain Shinonome), so it is
+# required like the config file rather than looked for like the speech
+# pack.
+FONT_FILES = [
+    ("font/jp12.zfn", "sw/data/font/jp12.zfn"),
 ]
 
 # Tracker modules, from sw/data/audio. Whatever is there is shipped --
@@ -503,7 +514,7 @@ def build(root, out_path, ark_dir=None, verbose=True, packs=None):
     # builds them as a dependency), and a card whose zcc cannot find
     # them compiles only freestanding programs -- so their absence is
     # an error here rather than a quiet omission.
-    missing += [p for _, p in LIBZ_FILES + LIBZ_EXTRA + CONFIG_FILES
+    missing += [p for _, p in LIBZ_FILES + LIBZ_EXTRA + CONFIG_FILES + FONT_FILES
                 + EXAMPLES + FPGA_FILES
                 if not os.path.exists(os.path.join(root, p))]
 
@@ -568,7 +579,7 @@ def build(root, out_path, ark_dir=None, verbose=True, packs=None):
     sizes = [os.path.getsize(src) for _n, fs in pack_files for _c, src in fs]
     nfiles_pack = len(sizes)
     for _n, rel in apps + LIBZ_FILES + LIBZ_EXTRA + EXAMPLES + FPGA_FILES \
-            + CONFIG_FILES:
+            + CONFIG_FILES + FONT_FILES:
         sizes.append(os.path.getsize(os.path.join(root, rel)))
     for a in audio:
         sizes.append(os.path.getsize(os.path.join(audio_src, a)))
@@ -683,7 +694,7 @@ def build(root, out_path, ark_dir=None, verbose=True, packs=None):
         copy(os.path.join(root, rel), "/" + name)
 
     # -- the configuration template --
-    for name, rel in CONFIG_FILES:
+    for name, rel in CONFIG_FILES + FONT_FILES:
         fits_83(name)
         copy(os.path.join(root, rel), "/" + name)
 

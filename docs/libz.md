@@ -39,6 +39,18 @@ because deleting the line shifts everything after it. Nothing is
 retired yet -- it is recorded now because the moment it is needed is
 the moment deleting the line looks harmless.
 
+## ABI 7: Unicode keysyms, UTF-8 text
+
+Keysyms became Unicode codepoints and the named keys moved from `0x100`
+to `0x110000` ([keyboard_layouts.md](keyboard_layouts.md)). No table
+entry changed, but a program compiled against the old `zkbd.h` compares
+keysyms against the old values -- its arrow keys would silently do
+nothing -- so the version moved with it and `zcc` refuses the stale
+pairing. Four entries were appended: `z_fb_draw_utf8`,
+`z_fb_draw_utf8_2`, `z_win_draw_utf8` and `z_win_draw_utf8_2`, for
+drawing UTF-8 text through the Latin-9 hardware fonts
+([text_encoding.md](text_encoding.md)).
+
 ## ABI 5: pointer-shaped wrappers
 
 Every constructor in `zobj.h` returns `z_obj_t` **by value**, and zcc

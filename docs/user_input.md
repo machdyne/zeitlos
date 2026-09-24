@@ -266,25 +266,50 @@ kernel rebuild+reflash, and it keeps both ISRs small and fast.
 
 `z_kbd_usage_to_keysym(usage, modifiers)` turns a raw USB HID usage
 code (plus the report's modifier byte, for shift/ctrl resolution)
-into a **keysym**:
+into a **keysym**. Keysyms come in two disjoint ranges:
 
-- `0x00`-`0x7f`: ordinary ASCII, already shift/ctrl-resolved.
+- `0x000000`-`0x10FFFF`: a character, as its Unicode codepoint,
+  already shift/ctrl-resolved. ASCII is the bottom of this range, so
+  `keysym >= 0x20 && keysym < 0x7f` still means "printable ASCII".
   Ctrl+letter returns the usual control-code mapping (Ctrl+A = `0x01`
   .. Ctrl+Z = `0x1A`), matching every other terminal convention.
-- `0x100`+: named keys with no ASCII representation --
+- `0x110000`+ (`Z_KEY_NAMED_BASE`): named keys with no character --
   `Z_KEY_UP`/`_DOWN`/`_LEFT`/`_RIGHT`, `_HOME`/`_END`/`_PAGEUP`/
-  `_PAGEDOWN`, `_INSERT`/`_DELETE`, `_F1`..`_F12`.
-- `Z_KEY_NONE`: no mapping for this usage (media keys, non-US layout
-  keys), or a bare modifier press/release (`0xE0`-`0xE7`) -- those
-  have no keysym of their own; a caller that wants to react to a
+  `_PAGEDOWN`, `_INSERT`/`_DELETE`, `_F1`..`_F12`. 0x110000 is the
+  first value above Unicode, so no character can land here.
+- `Z_KEY_NONE`: no mapping for this usage (media keys, keys a layout
+  leaves empty), or a bare modifier press/release (`0xE0`-`0xE7`) --
+  those have no keysym of their own; a caller that wants to react to a
   modifier changing by itself should check the raw usage code before
   calling this.
 
-US QWERTY only -- there's no layout selection mechanism yet. Letters
-and the number/punctuation row are table-driven; Enter/Escape/
-Backspace/Tab/Space/F-keys/nav cluster are a direct `switch`. Backspace
-maps to `0x7f` (DEL), matching `zeitlos.c`'s `readline()`, which
-already accepts either `CH_BS` or `CH_DEL`.
+`Z_KEY_IS_NAMED(k)` and `Z_KEY_IS_TEXT(k)` tell the ranges apart;
+`Z_KEY_IS_TEXT` is the Unicode-aware version of the ASCII printable
+test, for apps that store more than ASCII.
+
+The named keys used to be at `0x100`+, which is Latin Extended-A --
+harmless while every keysym was ASCII, a collision once a keyboard
+layout can type those letters. They moved in the first phase of the
+keyboard layout work ([keyboard_layouts.md](keyboard_layouts.md)).
+Code that uses the `Z_KEY_*` names is unaffected.
+
+For the raw events themselves, `zkbd.h` has `Z_KBD_EV_PRESSED(ev)`,
+`Z_KBD_EV_USAGE(ev)`, `Z_KBD_EV_MODS(ev)` and `Z_KBD_EV_LOCKS(ev)`.
+Use them rather than open-coding the shifts: the usage code is at
+bits 8:1, not 7:0. `midi`, `play` and `track` had exactly that wrong in
+their console (window-less) modes until the same change fixed it.
+
+Which character a key types depends on the keyboard layout. The
+translation is table-driven: `z_kbd_translate()` looks the key up in
+the active layout (generated from xkeyboard-config, `zkbd_layouts.c`)
+and applies Shift, AltGr, Caps Lock and Ctrl; Enter/Escape/Backspace/
+Tab/Space, the F-keys, the navigation cluster and the keypad are the
+same on every layout. Backspace maps to `0x7f` (DEL), matching
+`zeitlos.c`'s `readline()`, which already accepts either `CH_BS` or
+`CH_DEL`. The kernel stamps the active layout into every event
+(`Z_KBD_EV_LAYOUT`), so `z_kbd_event_to_keysym(ev)` is the one call a
+raw-event reader needs; `z_kbd_usage_to_keysym()` is US only, as it
+always was. The whole design: [keyboard_layouts.md](keyboard_layouts.md).
 
 This translation happens in `wm.c` (next section), not the kernel --
 see `sw/os/hid.c`'s own comment for why.
@@ -309,6 +334,13 @@ Z_WM_UNPACK_KEY_MODIFIERS(v)
 Z_WM_UNPACK_KEY_PRESSED(v)
 ```
 
+The keysym field is 23 bits (bits 31:9), wide enough for every
+Unicode codepoint and every named key. It was 15 bits (bits 23:9)
+before keysyms became Unicode; the low 24 bits are laid out exactly as
+they were, so ASCII keys pack to the same word either way. An app
+built against the old header still reads characters correctly but sees
+named keys as `Z_KEY_NONE` -- rebuild it.
+
 Packed rather than a `Z_MAP`, for the same reason as `Z_WM_REDRAW`:
 this can fire at high frequency (every keystroke, plus a release for
 each), and a fresh heap allocation per event is more than this needs
@@ -325,8 +357,8 @@ Alt+Esc and Ctrl+Alt+Arrow ([window_manager.md](window_manager.md),
 [game_mode.md](game_mode.md)), and the speech keys -- Super+S, A, C, V, W, R, E
 and R ([tts.md](tts.md)). The speech keys only match with Super held
 and neither Ctrl nor Alt; any other Super+key still reaches the app as
-before (as the plain letter -- `z_kbd_usage_to_keysym()` ignores the
-GUI bit).
+before (as the plain letter -- translation ignores the GUI bit).
+Super+Space is wm's too: the next keyboard layout.
 
 A lone Ctrl tap stops speech. It is recognised from the pseudo-usage
 events `sw/os/hid.c` synthesises for modifier edges (`0xE0`/`0xE4`),

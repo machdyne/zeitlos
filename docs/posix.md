@@ -1840,10 +1840,13 @@ byte is one character. The table IS the switch; no `#ifdef` touches
 the editor's logic. `sw/ext/nextvi` carries that as `uc_bytemode()`,
 three lines behind `#ifdef ZEITLOS`.
 
-**And it is required, not optional.** Zeitlos terminal fonts cover
-0x20-0x7f (`sw/common/zfont_data.c`) and `sw/common/zgfx.c` draws
-nothing for a byte outside that range -- so a screen cell is exactly
-one byte. Leave the table as upstream has it and a two-byte sequence
+**And it is required, not optional.** `term` draws one byte per
+cell: the terminal font covers ASCII and ISO 8859-15
+(`sw/common/zfont_data.c`, [text_encoding.md](text_encoding.md)), and
+`sw/common/zgfx.c` draws each byte as its own Latin-9 glyph -- so a
+screen cell is exactly one byte. (No longer so: `term` now decodes
+UTF-8 into cells, and `vi` runs with UTF-8 on -- docs/terminal.md,
+"UTF-8", and sw/ext/nextvi/ZEITLOS.md.) Leave the table as upstream has it and a two-byte sequence
 is one character to nextvi and two blank cells to the terminal: the
 cursor column and the screen disagree from there on, and every redraw
 after it is wrong. Flattened, the arithmetic matches the rendering

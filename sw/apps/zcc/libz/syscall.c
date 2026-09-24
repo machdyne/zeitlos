@@ -141,6 +141,23 @@ void z_proc_wait(uint32_t ticks) {
     z_syscall(ZS_PROC_WAIT, &o);
 }
 
+/* The process table -- sw/common/zeitlos.c's, reproduced for the same
+ * reason as everything else here. zgfx.c needs it to find the Japanese
+ * font service (sw/common/zjfont.h), so a program compiled with zcc
+ * draws kanji like any other app. */
+uint32_t z_proc_list(z_proc_info_t *out, uint32_t max, uint32_t *truncated) {
+    if (truncated) *truncated = 0;
+    if (!out || !max) return 0;
+    z_proc_list_args_t args;
+    args.out = out;
+    args.max = max;
+    args.count = 0;
+    args.truncated = 0;
+    if (!syscall_ok(ZS_PROC_LIST, &args)) return 0;
+    if (truncated) *truncated = args.truncated;
+    return args.count;
+}
+
 z_rv z_proc_kill(uint32_t pid) {
     zobj_t o;
     o.type = Z_UINT32;

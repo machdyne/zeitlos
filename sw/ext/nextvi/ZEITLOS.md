@@ -9,7 +9,15 @@ short and each item says what it is for.
 
 ## Local changes
 
-**1. `uc.c`, `vi.h` -- `uc_bytemode()`, behind `#ifdef ZEITLOS`.**
+**1. `uc.c`, `vi.h` -- `uc_bytemode()`, behind `#ifdef ZEITLOS`.
+Still present, no longer called.**
+
+`sw/apps/vi/vi_zeitlos.c` stopped calling it when `term` learned UTF-8
+(docs/terminal.md, "UTF-8"): `term` now draws one cell per character
+and two for a wide one, which is how nextvi counts them too, so the
+cursor and the screen agree with UTF-8 on. What follows is why it was
+needed, kept because it is the answer if a terminal without UTF-8 ever
+runs this again.
 
 Sets `utf8_length[1..255]` to 1, so every byte is one character.
 
@@ -18,7 +26,7 @@ multi-byte decision through `uc_len(s)`, which is
 `utf8_length[(unsigned char)s[0]]` -- so the table IS the switch, and
 no `#ifdef` has to touch the editor's logic.
 
-**It is required, not optional.** Zeitlos terminal fonts cover
+**It was required.** Zeitlos terminal fonts covered
 0x20-0x7f and `sw/common/zgfx.c` draws nothing outside that range, so a
 screen cell is exactly one byte. With the table left as upstream has
 it, a two-byte sequence is one character to nextvi and two blank cells

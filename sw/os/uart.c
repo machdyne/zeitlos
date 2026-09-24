@@ -533,8 +533,8 @@ void k_klog_panic_screen(void) {
 			col = 0;
 			if (row >= K_PANIC_ROWS) break;
 		}
-		if (c < f->first || c > f->last) c = '?';
-		const uint8_t *g = f->glyphs + (c - f->first) * f->h;
+		if (z_font_index(f, c) < 0) c = '?';
+		const uint8_t *g = f->glyphs + z_font_index(f, c) * f->h;
 		for (int j = 0; j < 8; j++)
 			K_PANIC_VRAM[(row * 8 + j) * K_PANIC_COLS + col] = k_rev8(g[j]);
 		col++;

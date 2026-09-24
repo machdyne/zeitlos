@@ -155,6 +155,24 @@ void z_fb_draw_text(int x, int y, const char *s, int color, const z_font_t *font
 void z_fb_draw_char2(int x, int y, char c, int fg_color, int bg_color, const z_font_t *font, const z_clip_t *clip);
 void z_fb_draw_text2(int x, int y, const char *s, int fg_color, int bg_color, const z_font_t *font, const z_clip_t *clip);
 
+// Drawing by Unicode codepoint, and UTF-8 strings (zutf8.h). Both
+// hardware fonts cover ASCII and ISO 8859-15, so every character in
+// those draws in hardware; anything else is the missing-glyph box
+// (zfont.h). Width follows z_cp_width(): a combining mark takes no
+// cell, and a CJK character takes two -- drawn from the Japanese font
+// (zjfont.h) at 6x12 while sw/apps/jfont is running, the box and a
+// blank otherwise. The byte functions above take Latin-9
+// bytes. See docs/text_encoding.md.
+void z_fb_draw_cp(int x, int y, uint32_t cp, int color, const z_font_t *font, const z_clip_t *clip);
+void z_fb_draw_cp2(int x, int y, uint32_t cp, int fg_color, int bg_color, const z_font_t *font, const z_clip_t *clip);
+void z_fb_draw_utf8(int x, int y, const char *s, int color, const z_font_t *font, const z_clip_t *clip);
+void z_fb_draw_utf8_2(int x, int y, const char *s, int fg_color, int bg_color, const z_font_t *font, const z_clip_t *clip);
+
+// Hands the Japanese font over directly, instead of finding sw/apps/
+// jfont (zjfont.h) -- for host tests and the simulator, which have no
+// jfont process. NULL goes back to looking for it.
+void z_jfont_use(const uint8_t *font, uint32_t len);
+
 // -- raster operations --
 //
 // What the `color` argument of z_fb_hw_line()/z_fb_hw_box() (and

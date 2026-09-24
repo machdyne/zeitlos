@@ -66,6 +66,7 @@
 #include "../../common/zdialog.h"
 #include "../../common/zfsapp.h"
 #include "../../common/ztype.h"
+#include "../../common/zutf8.h"		// docs/text_encoding.md
 #include "md.h"
 
 #define WIN_W   320
@@ -622,6 +623,56 @@ static int rd_byte(void) {
 // dropped anywhere in the line, output always NUL-terminated, false
 // only when there was nothing left to read at all (a partial last line
 // with no trailing newline still returns true).
+// Turns one source line into glyph bytes, in place: one byte per
+// character, the byte the hardware font draws it with (ISO 8859-15,
+// docs/text_encoding.md). Everything downstream -- the Markdown parser,
+// wrapping, links, selection, drawing -- then keeps working in bytes,
+// exactly as it did when every file was ASCII.
+//
+// A line that is valid UTF-8 is decoded: a character Latin-9 has is its
+// byte, any other is the missing-glyph box (0x7f). A line that is not
+// valid UTF-8 was written in a single-byte encoding and is taken as
+// Latin-9 already -- decided per line, which is what lets a file that
+// mixes the two, or has one stray bad byte, still read correctly
+// everywhere else. Only the text changes: the file offsets the index
+// keeps are counted separately (rbuf_base/rbuf_pos), so the output
+// shrinking is harmless. Returns the new length.
+static int line_to_glyphs(char *s, int n) {
+
+	bool high = false;
+	for (int i = 0; i < n; i++) if ((uint8_t)s[i] >= 0x80) { high = true; break; }
+	if (!high) return n;
+
+	if (!z_utf8_valid(s, (size_t)n)) {
+		// Latin-9 bytes; only the C1 range has no glyph.
+		for (int i = 0; i < n; i++)
+			if ((uint8_t)s[i] >= 0x80 && (uint8_t)s[i] < 0xA0) s[i] = 0x7f;
+		return n;
+	}
+
+	const char *p = s, *end = s + n;
+	int o = 0;
+	while (p < end) {
+		uint32_t cp = z_utf8_next(&p, end);
+		int w = z_cp_width(cp);
+		if (w == 0) continue;				// a combining mark: no cell
+		if (w == 2) {
+			// A CJK character: the box and a blank, two columns, so a
+			// table or code block with Japanese in it still lines up.
+			// Never longer than the source: a wide character is three
+			// or four bytes of UTF-8.
+			s[o++] = 0x7f;
+			s[o++] = ' ';
+			continue;
+		}
+		uint8_t b = z_cp_to_l9(cp);
+		s[o++] = (char)(b >= 0x20 ? b : 0x7f);
+	}
+	s[o] = 0;
+	return o;
+
+}
+
 static bool rd_raw(char *out, int cap) {
 
 	int n = 0;
@@ -671,6 +722,7 @@ static bool rd_raw(char *out, int cap) {
 	}
 
 	out[n] = 0;
+	n = line_to_glyphs(out, n);
 	return any || n > 0;
 
 }
@@ -1494,8 +1546,16 @@ static int sel_text(char *out, int cap) {
 		for (int k = from; k < to; k++)
 			if (v->text[k] != ' ') last = k;
 
-		for (int k = from; k <= last && n < cap - 1; k++)
-			out[n++] = v->text[k];
+		// Out as UTF-8 -- the clipboard and speech are both across a
+		// process boundary (docs/text_encoding.md). A box is the
+		// replacement character: the character it stood for is gone.
+		for (int k = from; k <= last && n < cap - 1; k++) {
+			uint8_t b = (uint8_t)v->text[k];
+			char u[Z_UTF8_MAX];
+			int len = z_utf8_put(b == 0x7f ? 0xFFFDu : z_l9_to_cp(b), u);
+			if (n + len > cap - 1) break;
+			for (int i = 0; i < len; i++) out[n++] = u[i];
+		}
 
 		if (r != r1 && n < cap - 1) out[n++] = '\n';
 
@@ -2653,8 +2713,12 @@ static int say_get(void *user, int n, const char **text, uint32_t *flags) {
 		for (int i = 0; ml.text[i] && k < (int)sizeof(out) - 1; i++) out[k++] = ml.text[i];
 		out[k] = 0;
 
+		// To speech as UTF-8, like everything that leaves the process.
+		static char out8[(MD_LINE_MAX + 16) * 3];
+		k = (int)z_l9_to_utf8(out, (size_t)k, out8, sizeof(out8));
+
 		say_line[n & 15] = at;
-		*text = out;
+		*text = out8;
 		*flags = 0;		// every block ends a sentence: a pause after
 		return k;
 	}

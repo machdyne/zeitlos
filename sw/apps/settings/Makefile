@@ -38,7 +38,7 @@ LDSCRIPT = ../../common/riscv-app.ld
 # parser/editor (zcfg) and time-zone parsing, to check a zone before
 # saving it (zrtc). See docs/config.md.
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o \
-	zfsapp.o zdialog.o zflist.o zedit.o ztype.o zcfg.o zrtc.o settings.o
+	zfsapp.o zdialog.o zflist.o zedit.o ztype.o zcfg.o zrtc.o zkbd.o settings.o
 
 settings: settings.elf settings.bin
 
@@ -80,6 +80,10 @@ ztype.o:
 
 zcfg.o:
 	$(CC) $(CFLAGS) -c ../../common/zcfg.c -o zcfg.o
+
+# the keyboard layout names, for checking system.keyboard.layouts
+zkbd.o:
+	$(CC) $(CFLAGS) -c ../../common/zkbd.c -o zkbd.o
 
 zrtc.o:
 	$(CC) $(CFLAGS) -c ../../common/zrtc.c -o zrtc.o

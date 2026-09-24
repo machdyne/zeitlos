@@ -9,6 +9,7 @@
 #include <stdbool.h>
 
 #include "zvt100.h"
+#include "zutf8.h"		// z_cp_width(), z_cp_to_l9()
 
 static void mark_dirty(vt_screen_t *vt, int row) {
 	if (row >= 0 && row < VT_ROWS) vt->dirty[row] = true;
@@ -31,9 +32,23 @@ static void history_push_top(vt_screen_t *vt) {
 
 	if (!vt->hist_buf || !vt->hist_cap) return;
 
-	uint8_t *line = vt->hist_buf + (uint32_t)vt->hist_head * VT_COLS;
-	for (int c = 0; c < VT_COLS; c++)
-		line[c] = VT_PACK(vt->cells[0][c].ch, vt->cells[0][c].reverse);
+	uint8_t *line = vt->hist_buf + (uint32_t)vt->hist_head * VT_HIST_LINE_BYTES;
+	uint8_t *rev = line + VT_COLS;
+	uint8_t *wide = rev + (VT_COLS + 7) / 8;
+	for (int c = 0; c < (VT_COLS + 7) / 8; c++) rev[c] = wide[c] = 0;
+	for (int c = 0; c < VT_COLS; c++) {
+		line[c] = (uint8_t)vt->cells[0][c].ch;
+		if (vt->cells[0][c].reverse) rev[c / 8] |= (uint8_t)(1u << (c % 8));
+	}
+	// A wide character with its codepoint keeps it: the pair's two
+	// glyph bytes carry it, and the wide bitmap says so.
+	for (int c = 0; c + 1 < VT_COLS; c++) {
+		uint16_t cp = vt->cells[0][c].cp;
+		if (!cp || vt->cells[0][c + 1].ch != VT_CH_WIDE_RIGHT) continue;
+		line[c] = (uint8_t)(cp >> 8);
+		line[c + 1] = (uint8_t)cp;
+		wide[c / 8] |= (uint8_t)(1u << (c % 8));
+	}
 
 	vt->hist_head++;
 	if (vt->hist_head >= vt->hist_cap) vt->hist_head = 0;
@@ -58,6 +73,7 @@ static void scroll_up(vt_screen_t *vt, bool save) {
 
 	for (int c = 0; c < VT_COLS; c++) {
 		vt->cells[VT_ROWS - 1][c].ch = ' ';
+		vt->cells[VT_ROWS - 1][c].cp = 0;
 		vt->cells[VT_ROWS - 1][c].reverse = vt->reverse;
 	}
 
@@ -92,10 +108,47 @@ static void put_char(vt_screen_t *vt, char c) {
 	}
 
 	vt->cells[vt->cursor_y][vt->cursor_x].ch = c;
+	vt->cells[vt->cursor_y][vt->cursor_x].cp = 0;
 	vt->cells[vt->cursor_y][vt->cursor_x].reverse = vt->reverse;
 	mark_dirty(vt, vt->cursor_y);
 
 	vt->cursor_x++;
+
+}
+
+// Writes one decoded character. The cell gets the character's ISO
+// 8859-15 byte -- the byte the hardware font draws it with -- or the
+// missing-glyph box (0x7f) when Latin-9 has none; see "characters" in
+// zvt100.h. Width follows z_cp_width(), which is what the program at
+// the other end uses to decide where its own cursor is.
+static void put_cp(vt_screen_t *vt, uint32_t cp) {
+
+	int w = z_cp_width(cp);
+	if (w == 0) return;					// a combining mark: no cell of its own
+
+	// C1 controls (U+0080-U+009F) are not interpreted, like the C0
+	// controls this parser does not handle.
+	if (cp >= 0x80 && cp < 0xA0) return;
+
+	uint8_t b = z_cp_to_l9(cp);
+	if (b < 0x20) b = 0x7f;				// none (0), or not a glyph: the box
+
+	if (w == 2) {
+		// Both halves on one line: a wide character that would start
+		// in the last column wraps first and leaves that column blank,
+		// as xterm does.
+		if (vt->cursor_x == VT_COLS - 1) put_char(vt, ' ');
+		put_char(vt, (char)b);
+		// put_char() has just moved past the left cell. Keep which
+		// character this is, for drawing it from the Japanese font and
+		// for copying it as itself -- see vt_cell_t.cp.
+		if (cp <= 0xFFFF)
+			vt->cells[vt->cursor_y][vt->cursor_x - 1].cp = (uint16_t)cp;
+		put_char(vt, VT_CH_WIDE_RIGHT);
+		return;
+	}
+
+	put_char(vt, (char)b);
 
 }
 
@@ -104,6 +157,7 @@ static void put_char(vt_screen_t *vt, char c) {
 // before", it's blank-with-current-attributes.
 static void erase_cell(vt_screen_t *vt, int row, int col) {
 	vt->cells[row][col].ch = ' ';
+	vt->cells[row][col].cp = 0;
 	vt->cells[row][col].reverse = vt->reverse;
 }
 
@@ -298,6 +352,40 @@ static void csi_dispatch(vt_screen_t *vt, char final) {
 
 void vt_feed_byte(vt_screen_t *vt, uint8_t c) {
 
+	// -- UTF-8 --
+	//
+	// Decoded here, a byte at a time, because bytes arrive one at a
+	// time and a character can be split across two reads. Only outside
+	// escape sequences: those are ASCII. A malformed sequence becomes
+	// one missing-glyph box, and the byte that ended it is then read
+	// as itself -- so an ESC arriving mid-character still starts its
+	// escape sequence.
+	if (vt->pstate == VT_PSTATE_NORMAL) {
+
+		if (vt->u8_need) {
+			if ((c & 0xC0) == 0x80) {
+				vt->u8_cp = (vt->u8_cp << 6) | (c & 0x3Fu);
+				if (--vt->u8_need) return;
+				uint32_t cp = vt->u8_cp;
+				if (cp < vt->u8_min || cp > 0x10FFFF || (cp >= 0xD800 && cp < 0xE000))
+					cp = 0xFFFD;
+				put_cp(vt, cp);
+				return;
+			}
+			vt->u8_need = 0;
+			put_cp(vt, 0xFFFD);
+		}
+
+		if (c >= 0x80) {
+			if (c >= 0xC2 && c <= 0xDF)      { vt->u8_cp = c & 0x1Fu; vt->u8_need = 1; vt->u8_min = 0x80; }
+			else if (c >= 0xE0 && c <= 0xEF) { vt->u8_cp = c & 0x0Fu; vt->u8_need = 2; vt->u8_min = 0x800; }
+			else if (c >= 0xF0 && c <= 0xF4) { vt->u8_cp = c & 0x07u; vt->u8_need = 3; vt->u8_min = 0x10000; }
+			else put_cp(vt, 0xFFFD);
+			return;
+		}
+
+	}
+
 	switch (vt->pstate) {
 
 		case VT_PSTATE_NORMAL:
@@ -383,6 +471,10 @@ void vt_init(vt_screen_t *vt) {
 
 	vt->scrolls = 0;
 
+	vt->u8_cp = 0;
+	vt->u8_need = 0;
+	vt->u8_min = 0;
+
 	vt->hist_buf = 0;
 	vt->hist_cap = 0;
 	vt->hist_head = 0;
@@ -392,6 +484,7 @@ void vt_init(vt_screen_t *vt) {
 	for (int r = 0; r < VT_ROWS; r++) {
 		for (int c = 0; c < VT_COLS; c++) {
 			vt->cells[r][c].ch = ' ';
+			vt->cells[r][c].cp = 0;
 			vt->cells[r][c].reverse = false;
 		}
 		vt->dirty[r] = true;	// everything starts dirty, so a fresh
@@ -451,25 +544,39 @@ static const uint8_t *history_line(const vt_screen_t *vt, int idx) {
 	while (slot < 0) slot += vt->hist_cap;
 	while (slot >= vt->hist_cap) slot -= vt->hist_cap;
 
-	return vt->hist_buf + (uint32_t)slot * VT_COLS;
+	return vt->hist_buf + (uint32_t)slot * VT_HIST_LINE_BYTES;
 
 }
 
-uint8_t vt_doc_cell(const vt_screen_t *vt, int doc, int col) {
+vt_packed_t vt_doc_cell(const vt_screen_t *vt, int doc, int col) {
 
 	if (col < 0 || col >= VT_COLS || doc < 0) return VT_PACK(' ', false);
 
-	if (doc < (int)vt->hist_count)
-		return history_line(vt, doc)[col];
+	if (doc < (int)vt->hist_count) {
+		const uint8_t *line = history_line(vt, doc);
+		const uint8_t *wide = line + VT_COLS + (VT_COLS + 7) / 8;
+		bool rev = (line[VT_COLS + col / 8] >> (col % 8)) & 1;
+		if ((wide[col / 8] >> (col % 8)) & 1)
+			return VT_PACK_CP(0x7f, rev, ((uint16_t)line[col] << 8) | line[col + 1]);
+		if (col > 0 && ((wide[(col - 1) / 8] >> ((col - 1) % 8)) & 1))
+			return VT_PACK(VT_CH_WIDE_RIGHT, rev);
+		return VT_PACK(line[col], rev);
+	}
 
 	int row = doc - (int)vt->hist_count;
 	if (row >= VT_ROWS) return VT_PACK(' ', false);
 
-	return VT_PACK(vt->cells[row][col].ch, vt->cells[row][col].reverse);
+	// The codepoint only while the pair is whole: a program that wrote
+	// over the right half has left a lone box, not a wide character --
+	// the same test history_push_top() applies.
+	const vt_cell_t *cl = &vt->cells[row][col];
+	uint16_t cp = (col + 1 < VT_COLS && vt->cells[row][col + 1].ch == VT_CH_WIDE_RIGHT) ?
+		cl->cp : 0;
+	return VT_PACK_CP(cl->ch, cl->reverse, cp);
 
 }
 
-bool vt_id_cell(const vt_screen_t *vt, uint32_t id, int col, uint8_t *out) {
+bool vt_id_cell(const vt_screen_t *vt, uint32_t id, int col, vt_packed_t *out) {
 
 	uint32_t first = vt->hist_pushed - vt->hist_count;
 

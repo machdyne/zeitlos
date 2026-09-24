@@ -173,10 +173,18 @@ xterm's choice too. `ED 3` (`ESC[3J`) clears the history, as in xterm.
 
 ### Memory
 
-History is a ring in `.bss`, **one byte per cell**: `put_char()` only
-ever stores 0x20..0x7e, so bit 7 is free and carries reverse video, the
-only attribute there is. 80 bytes a line, half what `vt_cell_t` would
-cost, and lossless.
+History is a ring in `.bss`, **100 bytes a line**: one glyph byte per
+cell (80), then a bitmap of which cells are in reverse video (10), the
+only attribute there is, then a bitmap of which cells start a wide
+character whose codepoint the pair's two glyph bytes carry instead of
+the box and its right half (10). Until `term` decoded UTF-8 a cell only ever
+held 0x20..0x7e, so bit 7 carried reverse video and a line was 80
+bytes; a cell now holds a whole ISO 8859-15 byte (see "UTF-8" below),
+and the two bitmaps cost 4,000 bytes at the default depth where 32-bit
+cells would have cost 48,000. The live screen's cells grew from 2 bytes
+to 4 for the codepoint (+4,000). Readers see neither layout:
+`vt_doc_cell()` and `vt_id_cell()` return a `vt_packed_t` (glyph byte
+in bits 7:0, reverse in bit 8).
 
 `.bss` is RAM for the process's whole lifetime (`docs/boot.md`, "Memory
 budget"), per `term` instance. Measured at the commit this landed:
@@ -196,7 +204,7 @@ So **+28,672 bytes per term instance**:
 - **Code:** +16.4KB. That is the widget toolkit's buttons and scrollbar, the hardware fill/box/copy primitives that section GC used to drop, and `__divdi3` for the scrollbar's 64-bit arithmetic.
 
 Depth is a build option: `make term SCROLLBACK=1000` (25..8000 lines,
-80 bytes each). The shells no longer being in flash is what frees room
+100 bytes each). So is the font: `make term FONT=z_font_6x12`. The shells no longer being in flash is what frees room
 on small boards: repl's 368KB block is not in RAM unless a card started
 it.
 
@@ -241,6 +249,74 @@ account for the hidden rows at the top (`vskip`) and how many are shown
 blit or a viewport move that brings one into view repaints it. At full
 height all of this reduces to what it was before: the render test's
 results are identical, line for line.
+
+## UTF-8
+
+What arrives from a shell or an ssh session is UTF-8, and what `term`
+sends is UTF-8 -- the rule for everything that crosses a process
+boundary ([text_encoding.md](text_encoding.md)).
+
+**In.** The parser (`vt_feed_byte()`, `sw/common/zvt100.c`) decodes
+UTF-8 a byte at a time, so a character split across two reads arrives
+whole. Each character becomes one cell holding its ISO 8859-15 byte --
+the byte the hardware font draws it with -- so every accented letter
+and the euro sign draw in hardware like ASCII. Anything else:
+
+| character | cells |
+|---|---|
+| not in Latin-9 (an em dash, Polish letters, Cyrillic) | one, the missing-glyph box |
+| two columns wide -- CJK, kana, hangul, fullwidth forms | two: the box, with the character's codepoint kept in the cell, and a blank right half (`VT_CH_WIDE_RIGHT`) |
+| a combining mark | none |
+| a C1 control | none (not interpreted) |
+| a malformed sequence | one box; the byte that ended it is then read as itself, so an ESC mid-character still starts its escape sequence |
+
+Width is `z_cp_width()` (`zutf8.h`) -- the same answer, for the blocks
+that matter, as glibc's `wcwidth()` and nextvi's own table, which is
+what the program at the other end uses to place its cursor. Get it
+wrong and everything after a wide character lands in the wrong column;
+a wide character that would start in the last column wraps first,
+leaving that column blank, as xterm does. A few rarer symbols that
+some tables count as wide (watch, hourglass) are one column here.
+
+**Japanese.** A wide character's left cell keeps its codepoint
+(`vt_cell_t.cp`, 16 bits -- the Basic Multilingual Plane, which is all
+of everyday Japanese), and a history line keeps it too (see "Memory").
+So it is copied, read aloud and scrolled back as itself at any font
+size. Built with `make term FONT=z_font_6x12` and with `jfont` running
+([text_encoding.md](text_encoding.md), "Japanese"), it is also DRAWN:
+the renderer flags such a cell in its shadow (`SHADOW_WIDE`), draws the
+12x12 glyph across both cells from the left one, and draws nothing for
+the right one. The shadow stays 16 bits a cell, so it cannot tell one
+kanji from another; a flagged cell is simply redrawn whenever its row
+is looked at -- there are few of them, and 32-bit shadows would cost
+4KB more. The default 5x8 build shows the box and a blank: there is no
+Japanese font that small.
+
+A program that writes over only the right half of a wide character
+leaves a lone box: the codepoint counts only while its right half is
+still `VT_CH_WIDE_RIGHT`.
+
+**Out.** A key a layout types ([keyboard_layouts.md](keyboard_layouts.md))
+goes out as its UTF-8 bytes. A paste goes out as the clipboard holds
+it, which is UTF-8. A copy turns each cell back into UTF-8: the right
+half of a wide character adds nothing, and a box becomes U+FFFD -- the
+character it stood for was not kept, and the replacement character
+says so. Reading aloud sends UTF-8 too.
+
+`vi` runs with nextvi's UTF-8 on now; it was forced to one byte per
+character only because `term` could not show anything else
+(`sw/ext/nextvi/ZEITLOS.md`).
+
+Tests: `sw/common/tests/test_vt.c` -- characters split across reads,
+the box, wide characters and their wrap, combining marks, malformed
+input, ESC mid-character, and history keeping whole bytes and reverse
+video:
+
+```
+cc -std=gnu99 -Wall -I sw/common -o /tmp/test_vt \
+   sw/common/tests/test_vt.c sw/common/zvt100.c
+/tmp/test_vt
+```
 
 ## Selection and clipboard
 

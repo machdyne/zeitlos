@@ -227,6 +227,25 @@ LIBZ_ENTRY(z_msg_obj_u32)
  */
 LIBZ_ENTRY(z_msg_unread)
 
+/* ===================================================================
+ * ABI 7 -- Unicode keysyms, UTF-8 text.
+ *
+ * Keysyms became Unicode codepoints and the named keys (Z_KEY_UP,
+ * Z_KEY_F1, ...) moved from 0x100+ to 0x110000+ (docs/
+ * keyboard_layouts.md, phase 1). No entry changed, but a program
+ * compiled against the old zkbd.h compares against the old values, so
+ * the version moves with it and zcc refuses the stale pairing rather
+ * than building a program whose arrow keys silently do nothing.
+ *
+ * The four drawing entries draw UTF-8 text through the Latin-9
+ * hardware fonts (docs/text_encoding.md).
+ * ===================================================================
+ */
+LIBZ_ENTRY(z_fb_draw_utf8)
+LIBZ_ENTRY(z_fb_draw_utf8_2)
+LIBZ_ENTRY(z_win_draw_utf8)
+LIBZ_ENTRY(z_win_draw_utf8_2)
+
 /*
  * -- RETIRED entries --
  *

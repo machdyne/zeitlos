@@ -340,6 +340,16 @@ void z_win_draw_text(const z_win_t *win, int x, int y, const char *s, int color,
 void z_win_draw_text2(const z_win_t *win, int x, int y, const char *s,
 	int fg_color, int bg_color, const z_font_t *font);
 
+// UTF-8 versions of z_win_draw_text()/z_win_draw_text2(): same
+// coordinates and clipping, text decoded as UTF-8 -- see
+// z_fb_draw_utf8() in zgfx.h and docs/text_encoding.md. Use these for
+// text that came from outside the app: file names, the clipboard,
+// anything received in a message.
+void z_win_draw_utf8(const z_win_t *win, int x, int y, const char *s,
+	int color, const z_font_t *font);
+void z_win_draw_utf8_2(const z_win_t *win, int x, int y, const char *s,
+	int fg_color, int bg_color, const z_font_t *font);
+
 // the window's content area (below the titlebar, inset to clear wm's
 // own outer border) in absolute screen coordinates. This is exactly
 // what z_win_clear()/z_win_fill_rect()/z_win_draw_text()/

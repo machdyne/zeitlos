@@ -20,6 +20,10 @@
 const z_cfg_known_t z_cfg_known[] = {
 	{ "apps.term.auto_connect", "",
 	  "what a new term window connects to, e.g. port repl0 (empty: start panel)" },
+	{ "system.keyboard.layouts", "us",
+	  "keyboard layouts, comma-separated, first at start (us gb de fr es it br ch se no dk fi pt be jp, ja for Japanese input ... see docs/keyboard_layouts.md) -- Super+Space cycles" },
+	{ "system.font.japanese", "no",
+	  "start jfont at boot: Japanese in text at 6x12 (yes/no) -- about 190KB of RAM" },
 	{ "system.rtc.timezone", "UTC",
 	  "clock and cal: a city (Berlin, New York -- DST included), UTC, or UTC+2" },
 	{ "system.tts.enabled", "no",

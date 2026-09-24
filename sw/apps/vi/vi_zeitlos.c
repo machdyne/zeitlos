@@ -361,12 +361,15 @@ int main(void) {
             (long)((&probe - &_end) / 1024));
     }
 
-    /* Byte mode BEFORE anything reads a file. See ZEITLOS.md: with
-     * the UTF-8 table left as upstream has it, a multi-byte sequence
-     * is one character to the editor and several blank cells to a
-     * terminal whose font stops at 0x7f, and the cursor and the screen
-     * disagree from there on. */
-    uc_bytemode();
+    /* UTF-8, as upstream has it. This used to call uc_bytemode()
+     * here, making every byte one character, because a terminal whose
+     * font stopped at 0x7f drew a multi-byte character as several
+     * blank cells and the cursor and the screen disagreed. term now
+     * decodes UTF-8 into one cell per character (two for a wide one,
+     * as nextvi also counts them), so the two agree again with UTF-8
+     * on -- see sw/ext/nextvi/ZEITLOS.md and docs/terminal.md, "UTF-8".
+     * Shaping and bidirectional reordering stay off: nothing here can
+     * draw the scripts that need them. */
     xshape = 0;
     xorder = 0;
 

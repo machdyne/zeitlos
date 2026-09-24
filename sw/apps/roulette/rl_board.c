@@ -111,8 +111,8 @@ static void big_glyph(const rl_layout_t *L, int x, int y, char ch, int s)
     const uint8_t *g;
     int row, col;
 
-    if (ch < f->first || ch > f->last) return;
-    g = f->glyphs + (ch - f->first) * f->h;
+    if (z_font_index(f, (unsigned char)ch) < 0) return;
+    g = f->glyphs + z_font_index(f, (unsigned char)ch) * f->h;
 
     for (row = 0; row < f->h; row++)
         for (col = 0; col < f->w; col++)

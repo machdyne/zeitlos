@@ -30,6 +30,8 @@ system.video.mode: amber
 | key | default | read by | effect |
 | --- | --- | --- | --- |
 | `apps.term.auto_connect` | *(none)* | `term` | what a new term window connects to by itself |
+| `system.font.japanese` | `no` | `wm` | start `jfont` at boot, so Japanese draws in `text` at 6x12 -- about 190KB of RAM ([text_encoding.md](text_encoding.md)) |
+| `system.keyboard.layouts` | `us` | `wm` | keyboard layouts, comma-separated; the first is used at start, Super+Space cycles |
 | `system.rtc.timezone` | `UTC` | `clock`, `cal` | local time shown; the RTC itself stays UTC |
 | `system.tts.enabled` | `no` | kernel | speech: start `tts` at boot, for a machine set up for someone who cannot see it |
 | `system.tts.voice` | `recorded` | `tts` | speech: `recorded`, `male` or `female`. `recorded` is a real person's voice, built from the speech pack's diphones; without a pack that has them, the male synthesised voice speaks. `male` and `female` choose the synthesised voice; a female one is a higher pitch (200Hz) AND a shorter vocal tract (formants 17% higher), because pitch alone only makes a squeaky male voice |
@@ -122,6 +124,21 @@ stays sorted and every entry parses.
 A value that does not parse shows **UTC, labelled UTC**, and the app
 prints why on the serial console.
 
+### `system.keyboard.layouts`
+
+The keyboard layouts to cycle through with Super+Space, by name,
+separated by commas: `us,de`. The first is the one the machine starts
+in. Names are the ones in [keyboard_layouts.md](keyboard_layouts.md):
+`us` `gb` `de` `de-nodeadkeys` `it` `fr` `es` `latam` `br` `ch` `ch-fr`
+`se` `fi` `dk` `no` `pt` `be` `us-intl` `jp`, and the Japanese input
+methods `ja` `ja-kata` `ja-us`. An unknown
+name is skipped with a message on the serial console; a list with
+nothing usable in it means `us`.
+
+`wm` reads it at startup and again on the first key pressed after a
+reload. A reload keeps the layout in use if it is still on the list,
+so editing the list does not switch the keyboard mid-sentence.
+
 ### `system.video.mode`
 
 `white`, `amber`, `green` or `paper` -- the same words as the `color`
@@ -184,10 +201,11 @@ What picks up a reload:
 - `system.video.mode` -- immediately; the kernel applies it.
 - `system.rtc.timezone` -- on the next second in `clock`, the next check in `cal`.
 - `apps.term.auto_connect` -- the next term window opened.
+- `system.keyboard.layouts` -- the next key pressed (`wm`).
 
 ### The settings app
 
-`settings` edits the three settings above:
+`settings` edits four of the settings above:
 
 - **Colour:** a row of buttons. Choosing one applies it and saves it.
 - **Time zone:** a scrolling list of cities and offsets. Select one
@@ -197,6 +215,8 @@ What picks up a reload:
   prompt. Typing `default` removes the line. A connection that does not
   start with `port`/`serial`/`telnet`/`ssh`/`none` is refused, and
   nothing is written.
+- **Keyboard layouts:** another **Edit** prompt, listing the layout
+  names. A name zkbd does not know is refused, and nothing is written.
 
 **It does not clobber anything it does not recognise.** Every change
 reads the file, rewrites **only the lines for the one key being changed**

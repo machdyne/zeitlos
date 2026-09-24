@@ -20,14 +20,15 @@ widget, so it doubles as the worked example for `docs/widgets.md`.
 
 Titlebar buttons, left to right: **new**, **open**, **save**, **close**.
 The title shows the current filename, prefixed with `*` when there are
-unsaved changes.
+unsaved changes, and followed by `(Latin-9)` for a file that will be
+saved in that encoding -- see "Encodings" below.
 
 | key | does |
 | --- | --- |
-| any printable character | inserts it |
+| any character the keyboard layout types | inserts it -- accented letters, the euro sign, anything ([keyboard_layouts.md](keyboard_layouts.md)) |
 | Enter | new paragraph |
 | Tab | four spaces — see "Tabs" below |
-| Backspace / Delete | delete before / after the caret |
+| Backspace / Delete | delete the character before / after the caret |
 | arrows | move the caret; up and down keep the column |
 | Home / End | start / end of the display line |
 | PageUp / PageDown | a screen at a time |
@@ -66,7 +67,8 @@ CPU, and only when typing at the very start of a full document. A gap
 buffer would remove that and add a second representation of "where the
 text is" that every function in the file would have to understand. If
 typing ever feels heavy on real hardware, this is the first thing to
-change, and the change is confined to `buf_insert()` / `buf_delete()`.
+change, and the change is confined to `insert_seq()` /
+`buf_delete_range()`.
 
 The buffer is not NUL-terminated as a rule; `len` is the length and the
 text may contain any byte. Anything handing a string to a drawing call
@@ -78,6 +80,95 @@ second copy of the whole file out of a heap that is 16KB shared with the
 stack (`Z_PROC_STACK_SIZE_DEFAULT`, `sw/os/kernel.h`), so a 20KB
 document would fail to open for no reason the user could ever guess.
 CRLF is normalized to LF on the way in.
+
+## Encodings
+
+**The buffer holds UTF-8.** Every offset in `text.c` is still a byte
+offset; what changed is that a character can be more than one byte, so
+the three things that care walk characters instead of adding one:
+
+- **the caret** -- Left, Right, Backspace and Delete step over a whole
+  character (`next_off()` / `prev_off()`);
+- **columns** -- wrapping, Up/Down, End, the caret's x position and
+  mouse clicks count display columns (`width_at()`, `chars_between()`,
+  `line_pos()`): a CJK character takes two, a combining mark none. A
+  wide character never straddles the right edge; a line of Japanese,
+  which has no spaces, breaks between any two characters;
+- **drawing** -- rows go through `z_win_draw_utf8()`, so every
+  character in ISO 8859-15 is a hardware glyph, Japanese is drawn from
+  the `jfont` service at 6x12, and anything else is the missing-glyph
+  box ([text_encoding.md](text_encoding.md), "Japanese").
+
+A byte that is not valid UTF-8 is **one character**, drawn as the box,
+and is kept exactly as it is: the caret steps over it, Delete removes
+it, and a save writes it back unchanged. So a file this editor cannot
+fully decode is never corrupted by opening and saving it.
+
+### Reading a file
+
+| the file | read as | saved as |
+|---|---|---|
+| ASCII only | UTF-8 | UTF-8 |
+| starts with a UTF-8 byte order mark | UTF-8; the mark is taken off | UTF-8, with the mark put back |
+| more valid UTF-8 sequences than invalid bytes | UTF-8; stray bad bytes kept as they are | UTF-8 |
+| anything else | ISO 8859-15 (Latin-9), converted to UTF-8 in the buffer | Latin-9 |
+
+The test is `detect_enc()`: text written as UTF-8 is all valid multi-
+byte sequences; text written in a single-byte encoding is nearly all
+bytes that cannot start one (ä in Latin-1 is the lone byte 0xE4). The
+byte order mark is taken off because it is not text -- it would sit in
+front of the first character as a box.
+
+A Latin-9 file is converted **in place**, backwards so the growing
+output never overtakes the input, because there is no room for a second
+copy (see "The document" above). Every accented letter doubles, so a
+file under 32KB can be too large once converted; that is refused with a
+message and nothing loaded. **Every byte survives**, 0x80-0x9F
+included: ISO 8859-15 leaves those as control codes, and they are kept
+as the codepoints of the same value so that any file read as Latin-9 is
+written back byte for byte.
+
+### Saving
+
+A file is written back in the encoding it was read in, a piece at a
+time through `fs_open_write()` / `fs_write_chunk()` -- again, no second
+copy. New documents are UTF-8.
+
+A Latin-9 file that has gained a character Latin-9 cannot hold -- a
+Japanese character, an em dash, a Polish letter -- asks before saving:
+
+- **Yes** saves it as UTF-8 from now on, which holds everything;
+- **No** saves Latin-9 anyway, with `?` in place of each such character;
+- **Cancel** saves nothing.
+
+### Paste and speech
+
+The clipboard is UTF-8 (the rule in [text_encoding.md](text_encoding.md)),
+so a copy is the selected bytes and a paste inserts them. A paste that
+does not all fit is cut at a character boundary, never half-way through
+one. The speech echo sends whole characters.
+
+### Tests
+
+`sw/apps/text/tests/utf8.c` runs the real `text.c` against a scripted
+kernel with an in-memory filesystem: typing non-ASCII, Backspace and
+Delete over multi-byte characters, caret columns, wrapping and Up/Down
+by characters, a UTF-8 file with a byte order mark, a Latin-9 file with
+all 128 high bytes saved back byte for byte, an edit that fits Latin-9
+and one that does not, a UTF-8 file with a malformed byte, and the
+too-large refusal. Given an argument it also writes a picture:
+
+```
+cc -std=gnu99 -Wall -no-pie -I sw/common -o /tmp/text_utf8 \
+   sw/apps/text/tests/utf8.c sw/common/zwin.c sw/common/zwidget.c \
+   sw/common/zflist.c sw/common/zedit.c sw/common/zfsapp.c \
+   sw/common/zfont_data.c sw/common/zobj.c sw/common/zeitlos.c \
+   sw/common/zspeak.c sw/common/zsayall.c sw/common/zdialog.c
+/tmp/text_utf8 /tmp/text          # also writes /tmp/text-utf8.pbm
+```
+
+Needs `-no-pie` and `vm.mmap_min_addr=0`, like the other app-level host
+tests (`sw/common/tests/ztramp.h`); exits 77 without them.
 
 ## Wrapping
 
