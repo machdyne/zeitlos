@@ -103,6 +103,7 @@
 #include "../../common/zspeak.h"	// Super+A -- docs/tts.md
 #include "../../common/zsayall.h"
 #include "../../common/zutf8.h"		// docs/text_encoding.md
+#include "../../common/zundo.h"		// undo and redo -- docs/text_editor.md, "Undo"
 
 // -- the document --
 
@@ -297,6 +298,68 @@ static int top_line;		// first visible display line
 
 // -- buffer primitives --
 
+// -- undo -- docs/text_editor.md, "Undo" --
+//
+// Every change to the document goes through edit_insert() and
+// edit_delete(), which tell the undo log (sw/common/zundo.h) before
+// they touch the buffer. The log keeps the edits, not copies of the
+// document: 256 of them and 6KB of the text they inserted or deleted,
+// as far back as that reaches.
+//
+// One Ctrl+Z undoes a group. A group is a run of the same kind of edit
+// at the place the last one left off -- typing a sentence, holding
+// Backspace -- ended by moving the caret, by switching between typing
+// and deleting, or by Enter. Anything that replaces a selection, and
+// every cut and paste, is a group of its own.
+
+#define UNDO_RECORDS  256
+#define UNDO_BYTES    6144
+
+static z_undo_rec_t undo_rec[UNDO_RECORDS];
+static char undo_bytes[UNDO_BYTES];
+static z_undo_t undo;
+
+enum { UK_NONE, UK_TYPE, UK_BACK, UK_FWD, UK_OTHER };
+static uint16_t undo_group;
+static int undo_kind = UK_NONE;
+static int undo_next = -1;		// where a continuing edit of undo_kind would be
+
+// Starts a new group unless this edit continues the last one: the same
+// kind, at the place the last one left off.
+static void undo_begin(int kind, int pos) {
+	if (kind != undo_kind || pos != undo_next || kind == UK_OTHER)
+		undo_group++;
+	undo_kind = kind;
+}
+
+// Ends the current group, whatever comes next -- after Enter, an undo,
+// a caret move.
+static void undo_break(void) {
+	undo_kind = UK_NONE;
+	undo_next = -1;
+}
+
+static void edit_insert(int at, const char *s, int n) {
+	z_undo_record(&undo, Z_UNDO_INS, at, s, n, cursor, undo_group);
+	memmove(&buf[at + n], &buf[at], (size_t)(len - at));
+	memcpy(&buf[at], s, (size_t)n);
+	len += n;
+}
+
+static void edit_delete(int a, int b) {
+	if (a < 0) a = 0;
+	if (b > len) b = len;
+	if (b <= a) return;
+	z_undo_record(&undo, Z_UNDO_DEL, a, &buf[a], b - a, cursor, undo_group);
+	memmove(&buf[a], &buf[b], (size_t)(len - b));
+	len -= (b - a);
+}
+
+// Removes buf[a..b).
+static void buf_delete_range(int a, int b) {
+	edit_delete(a, b);
+}
+
 static void buf_clear(void) {
 	len = 0;
 	cursor = 0;
@@ -304,19 +367,12 @@ static void buf_clear(void) {
 	filename[0] = 0;
 	file_enc = ENC_UTF8;
 	file_bom = false;
+	if (!undo.rec)					// the first document: set the log up
+		z_undo_init(&undo, undo_rec, UNDO_RECORDS, undo_bytes, UNDO_BYTES);
+	z_undo_reset(&undo);
+	undo_break();
 }
 
-// Removes buf[a..b).
-static void buf_delete_range(int a, int b) {
-
-	if (a < 0) a = 0;
-	if (b > len) b = len;
-	if (b <= a) return;
-
-	memmove(&buf[a], &buf[b], (size_t)(len - b));
-	len -= (b - a);
-
-}
 
 // -- word wrap --
 
@@ -1272,6 +1328,8 @@ static bool do_save_to(const char *path) {
 
 	remember_dir(filename);
 	set_modified(false);
+	z_undo_saved(&undo);		// undoing back to here is "unmodified" again
+	undo_break();
 	update_title();
 
 	return true;
@@ -1534,8 +1592,7 @@ static bool delete_selection(void) {
 
 	int para = para_line_at(a);
 
-	memmove(&buf[a], &buf[b], (size_t)(len - b));
-	len -= (b - a);
+	edit_delete(a, b);
 
 	cursor = a;
 	sel_anchor = -1;
@@ -1562,7 +1619,9 @@ static void do_cut(void) {
 	if (!has_sel()) return;
 
 	do_copy();
+	undo_begin(UK_OTHER, sel_start());
 	delete_selection();
+	undo_break();
 
 }
 
@@ -1584,12 +1643,15 @@ static void do_paste(void) {
 	// would rewrap twice and repaint twice for a single user action.
 	int para;
 
+	// One group, delete and insert both: one Ctrl+Z puts the selection
+	// back.
+	undo_begin(UK_OTHER, has_sel() ? sel_start() : cursor);
+
 	if (has_sel()) {
 		int a = sel_start();
 		int b = sel_end();
 		para = para_line_at(a);
-		memmove(&buf[a], &buf[b], (size_t)(len - b));
-		len -= (b - a);
+		edit_delete(a, b);
 		cursor = a;
 		sel_anchor = -1;
 	} else {
@@ -1604,11 +1666,10 @@ static void do_paste(void) {
 	}
 
 	if (n > 0) {
-		memmove(&buf[cursor + n], &buf[cursor], (size_t)(len - cursor));
-		memcpy(&buf[cursor], clip, (size_t)n);
-		len += n;
+		edit_insert(cursor, clip, n);
 		cursor += n;
 	}
+	undo_break();
 
 	after_edit(para);
 
@@ -1631,7 +1692,9 @@ static void do_paste(void) {
 static void insert_seq(const char *seq, int k, int n) {
 
 	// Typing with a selection replaces it -- the standard behaviour,
-	// and the reason delete_selection() is factored out.
+	// and the reason delete_selection() is factored out. That is a
+	// group of its own; plain typing continues the last one.
+	undo_begin(has_sel() ? UK_OTHER : UK_TYPE, has_sel() ? sel_start() : cursor);
 	delete_selection();
 
 	int para = para_line_at(cursor);
@@ -1639,11 +1702,13 @@ static void insert_seq(const char *seq, int k, int n) {
 
 	for (; done < n; done++) {
 		if (len + k > TEXT_MAX) break;
-		memmove(&buf[cursor + k], &buf[cursor], (size_t)(len - cursor));
-		memcpy(&buf[cursor], seq, (size_t)k);
-		len += k;
+		edit_insert(cursor, seq, k);
 		cursor += k;
 	}
+
+	// Enter ends a group, so undo takes back a line at a time.
+	if (k == 1 && seq[0] == '\n') undo_break();
+	else { undo_kind = UK_TYPE; undo_next = cursor; }
 
 	if (done) after_edit(para);
 
@@ -1674,9 +1739,18 @@ static void insert_cp(uint32_t cp) {
 	insert_seq(u, k, 1);
 }
 
+// Backspace or Delete with a selection: removing it is a group of its own.
+static bool delete_selection_as_edit(void) {
+	if (!has_sel()) return false;
+	undo_begin(UK_OTHER, sel_start());
+	delete_selection();
+	undo_break();
+	return true;
+}
+
 static void delete_back(void) {
 
-	if (delete_selection()) return;
+	if (delete_selection_as_edit()) return;
 
 	if (cursor == 0) return;
 
@@ -1684,8 +1758,10 @@ static void delete_back(void) {
 	int from = prev_off(cursor);
 	int para = para_line_at(from);
 
+	undo_begin(UK_BACK, cursor);
 	buf_delete_range(from, cursor);
 	cursor = from;
+	undo_next = cursor;
 
 	after_edit(para);
 
@@ -1693,13 +1769,15 @@ static void delete_back(void) {
 
 static void delete_forward(void) {
 
-	if (delete_selection()) return;
+	if (delete_selection_as_edit()) return;
 
 	if (cursor >= len) return;
 
 	int para = para_line_at(cursor);
 
+	undo_begin(UK_FWD, cursor);
 	buf_delete_range(cursor, next_off(cursor));
+	undo_next = cursor;
 
 	after_edit(para);
 
@@ -1935,9 +2013,106 @@ static void read_selection(void) {
 	z_speak_n(&buf[a], (uint32_t)(b - a), Z_TTS_F_INTERRUPT);
 }
 
+// -- undo and redo -- docs/text_editor.md, "Undo" --
+
+static void do_undo(bool redo) {
+
+	int from = 0;
+	bool ok = redo
+		? z_undo_redo(&undo, buf, &len, TEXT_MAX, &cursor, &from)
+		: z_undo_undo(&undo, buf, &len, TEXT_MAX, &cursor, &from);
+
+	// Whatever is typed next starts a group of its own.
+	undo_break();
+	if (!ok) return;
+
+	if (cursor > len) cursor = len;
+	if (cursor < 0) cursor = 0;
+	after_edit(para_line_at(from));
+
+	// Back at the saved text -- by undo or by redo -- is unmodified.
+	set_modified(!z_undo_at_saved(&undo));
+
+}
+
+// -- find -- docs/text_editor.md, "Find" --
+//
+// Ctrl+F asks for the text and selects the next match after the caret,
+// wrapping round to the top; Ctrl+G or F3 finds the same text again.
+// ASCII letters match either case -- as the posix shell's wildcards do
+// -- and everything else byte for byte, which for UTF-8 is character
+// for character, so "Grüße" and Japanese are found as typed.
+
+static char find_text[128];
+
+static char fold_ascii(char c) {
+	return (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
+}
+
+static bool match_at(int i, int n) {
+	for (int k = 0; k < n; k++)
+		if (fold_ascii(buf[i + k]) != fold_ascii(find_text[k])) return false;
+	return true;
+}
+
+// Selects the first match at or after `start`, wrapping round.
+static bool find_from(int start) {
+
+	int n = (int)strlen(find_text);
+	if (!n || n > len) return false;
+	if (start < 0 || start > len) start = 0;
+
+	for (int pass = 0; pass < 2; pass++) {
+		int lo = pass ? 0 : start;
+		int hi = pass ? start : len - n;
+		for (int i = lo; i <= hi && i <= len - n; i++) {
+			if (!match_at(i, n)) continue;
+			sel_anchor = i;
+			cursor = i + n;
+			undo_break();
+			scroll_to_cursor();
+			repaint();
+			return true;
+		}
+	}
+	return false;
+
+}
+
+static void find_report(void) {
+	char msg[160];
+	snprintf(msg, sizeof(msg), "\"%.60s\"\nwas not found.", find_text);
+	z_dialog_confirm(&dlg_ctx, "Find", msg, Z_DIALOG_OK_CANCEL);
+	repaint();
+}
+
+static void do_find(void) {
+
+	char q[sizeof(find_text)];
+	if (!z_dialog_prompt(&dlg_ctx, "Find", "Find:", find_text, q, sizeof(q)) || !q[0]) {
+		repaint();
+		return;
+	}
+	snprintf(find_text, sizeof(find_text), "%s", q);
+
+	// From the start of any selection, so a word already selected is
+	// found where it is; from the caret otherwise.
+	int start = has_sel() ? sel_start() : cursor;
+	if (!find_from(start)) find_report();
+
+}
+
+static void find_next(void) {
+	if (!find_text[0]) { do_find(); return; }
+	// After the current match (or the caret), so it moves on.
+	if (!find_from(has_sel() ? sel_end() : cursor)) find_report();
+}
+
 static void handle_key(uint32_t keysym, uint8_t mods) {
 
 	mods_now = mods;
+
+	if (keysym == Z_KEY_F3) { find_next(); return; }	// find again
 
 	if (mods & Z_KBD_MOD_CTRL) {
 
@@ -1952,6 +2127,12 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 			case 0x03: do_copy(); return;		// Ctrl+C
 			case 0x18: do_cut(); return;		// Ctrl+X
 			case 0x16: do_paste(); return;		// Ctrl+V
+			case 0x1a:							// Ctrl+Z; Ctrl+Shift+Z is redo
+				do_undo((mods & Z_KBD_MOD_SHIFT) != 0);
+				return;
+			case 0x19: do_undo(true); return;	// Ctrl+Y -- redo
+			case 0x06: do_find(); return;		// Ctrl+F
+			case 0x07: find_next(); return;		// Ctrl+G -- find again
 			case 0x01:							// Ctrl+A -- select all
 				sel_anchor = 0;
 				move_cursor_ex(len, true);

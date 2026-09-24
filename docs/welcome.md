@@ -98,6 +98,10 @@ on in `settings`.
 | Ctrl+Q | close |
 | Ctrl+A | select all |
 | Ctrl+C / Ctrl+X / Ctrl+V | copy / cut / paste |
+| Ctrl+Z | undo |
+| Ctrl+Y or Ctrl+Shift+Z | redo |
+| Ctrl+F | find |
+| Ctrl+G or F3 | find the same text again |
 | Shift + any movement key | extend the selection |
 | Tab | four spaces |
 

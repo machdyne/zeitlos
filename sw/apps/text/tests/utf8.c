@@ -400,6 +400,80 @@ int main(int argc, char **argv) {
 	key(Z_KEY_RIGHT);
 	expect(caret_col_w() == 3, "caret after a, kanji: column 3");
 
+	// -- 11. undo and redo (docs/text_editor.md, "Undo") --
+	printf("11. undo and redo\n");
+	fresh();
+	type("hello world");
+	expect(modified, "typing modifies");
+	do_undo(false);
+	expect(doc_is("") && cursor == 0, "one undo takes back a run of typing");
+	expect(!modified, "back to the empty document: unmodified");
+	do_undo(true);
+	expect(doc_is("hello world") && cursor == len, "redo puts it back");
+
+	fresh();
+	type("abc\ndef");
+	do_undo(false);
+	expect(doc_is("abc\n"), "Enter ends a group: the second line goes first");
+	do_undo(false);
+	expect(doc_is(""), "then the first");
+	do_undo(true);
+	do_undo(true);
+	expect(doc_is("abc\ndef"), "redo both");
+
+	fresh();
+	type("hello");
+	key(0x7f); key(0x7f); key(0x7f);
+	expect(doc_is("he"), "three backspaces");
+	do_undo(false);
+	expect(doc_is("hello") && cursor == 5, "a run of Backspace undoes as one, caret back");
+	do_undo(false);
+	expect(doc_is(""), "then the typing");
+
+	fresh();
+	type("hello world");
+	sel_anchor = 6;
+	cursor = 11;
+	type("X");
+	expect(doc_is("hello X"), "typing over a selection");
+	do_undo(false);
+	expect(doc_is("hello world"), "one undo puts the selection back");
+
+	fresh();
+	type("Gr\xC3\xBC\xC3\x9F" "e \xE6\x97\xA5");
+	key(0x7f);
+	do_undo(false);
+	expect(doc_is("Gr\xC3\xBC\xC3\x9F" "e \xE6\x97\xA5"), "undo a deleted kanji, whole");
+	do_undo(false);
+	expect(doc_is(""), "and the multibyte typing");
+
+	// Undo after a save stops at the saved text, which is unmodified.
+	fresh();
+	type("saved");
+	expect(write_document("/U2.TXT"), "save");
+	set_modified(false);
+	z_undo_saved(&undo);
+	undo_break();
+	type(" more");
+	do_undo(false);
+	expect(doc_is("saved") && !modified, "undo back to the save: unmodified");
+
+	// -- 12. find (docs/text_editor.md, "Find") --
+	printf("12. find\n");
+	fresh();
+	type("Hello world, hello Welt, Gr\xC3\xBC\xC3\x9F" "e");
+	cursor = 0;
+	snprintf(find_text, sizeof(find_text), "HELLO");
+	expect(find_from(0) && sel_start() == 0 && sel_end() == 5, "finds, either case");
+	find_next();
+	expect(sel_start() == 13 && sel_end() == 18, "find again moves on");
+	find_next();
+	expect(sel_start() == 0, "and wraps round");
+	snprintf(find_text, sizeof(find_text), "gr\xC3\xBC\xC3\x9F" "e");
+	expect(find_from(0) && sel_start() == 25, "finds a German word");
+	snprintf(find_text, sizeof(find_text), "nowhere");
+	expect(!find_from(0), "reports no match");
+
 	// -- 10. a picture, for looking at: `utf8 /tmp/text` writes
 	// /tmp/text-utf8.pbm -- Latin-9 in hardware glyphs, and the box for
 	// what Latin-9 has not got (the half, the hiragana).

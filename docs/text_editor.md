@@ -39,6 +39,10 @@ saved in that encoding -- see "Encodings" below.
 | Shift+click | extend the selection to here |
 | Ctrl+A | select all |
 | Ctrl+C / Ctrl+X / Ctrl+V | copy / cut / paste |
+| Ctrl+Z | undo |
+| Ctrl+Y or Ctrl+Shift+Z | redo |
+| Ctrl+F | find |
+| Ctrl+G or F3 | find the same text again |
 | right-click | copy the selection |
 
 Clicking places the caret. Clicking past the end of a line, or below the
@@ -332,10 +336,58 @@ there. `handle_mouse()` now ignores samples outside the content area
 unless a drag is already in progress — that exemption matters, because
 a drag legitimately leaves the window and must keep extending.
 
+## Undo
+
+**Ctrl+Z** undoes, **Ctrl+Y** (or Ctrl+Shift+Z) redoes. One undo takes
+back a *group* of edits:
+
+- a run of typing, up to and including an Enter -- so undo goes back a
+  line at a time, and a sentence typed without Enter is one step;
+- a run of Backspace, or of Delete;
+- anything that replaces a selection -- typing over it, Paste -- and
+  every Cut, with the selection coming back as it was.
+
+Moving the caret, or switching between typing and deleting, starts a new
+group. After an undo the caret is where it was before the edit.
+
+**Memory.** An app has 16KB for heap and stack together, so the document
+is never copied: what is kept is the edits -- the last 256, and 6KB of the
+text they inserted or deleted -- in fixed rings (`UNDO_RECORDS`,
+`UNDO_BYTES`). When they fill, the oldest edits are forgotten; undo goes
+back as far as they reach. A single edit larger than 6KB (a big paste)
+cannot be undone, and clears the history before it. Opening or starting
+a document clears it too.
+
+**The modified mark follows it.** Saving marks the point; undoing or
+redoing back to exactly the saved text clears the `*` from the title,
+and undo stops at that point even in the middle of a group, so the saved
+text can always be reached.
+
+All of this is `sw/common/zundo.h` -- generic over any byte buffer, with
+no app types in it. `text.c` tells it every edit through `edit_insert()`
+and `edit_delete()`, the only two places the buffer changes (loading
+aside, which starts the history over), and decides the groups.
+
+## Find
+
+**Ctrl+F** asks for the text (the dialog's field takes any character,
+German and Japanese included) and selects the next match after the
+caret, wrapping round to the top; **Ctrl+G** or **F3** finds the same
+text again. ASCII letters match either case, as the posix shell's
+wildcards do; everything else matches exactly, so accented and Japanese
+text is found as typed. A search with no match says so. No replace yet.
+
 ## Not implemented
 
-No undo, no search. Each wants a real design
-rather than a corner of this file, and none is needed to write a note.
+Replace. Anything past the fixed-size document (32KB).
+
+## Tests
+
+Undo and find run through the real `text.c` in `tests/utf8.c` (sections
+11 and 12): typing, Enter, Backspace runs, typing over a selection,
+multibyte text, the saved point, and find with case, wrapping and a
+German word. `sw/common/tests/test_undo.c` covers the log on its own,
+including what happens when it fills.
 
 ## Speech
 
