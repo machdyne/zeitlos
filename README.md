@@ -46,7 +46,7 @@ Build the hardware map from RTL with `make hwmap` (see [docs/hwmap.md](docs/hwma
  - FAT filesystem, on MicroSD and on an optional [RAM disk](docs/ramdisk.md)
  - [Core apps in flash](docs/flash_apps.md) -- boots to a desktop with no sdcard
  - Object-based interprocess [messaging](docs/messaging.md), streaming and [ports](docs/ports.md)
- - International text: UTF-8; [22 keyboard layouts](docs/keyboard_layouts.md) (US, UK, German, French, Spanish, Italian, Portuguese, Nordic, Swiss, Belgian, Japanese and more) with dead keys and AltGr, switched with Super+Space; ASCII + accented letters and the euro sign drawn by the hardware fonts ([ISO 8859-15](docs/text_encoding.md)); Japanese drawn from a public-domain 12x12 font and typed with a romaji [input method](docs/keyboard_layouts.md#japanese-input)
+ - International text: UTF-8 throughout, [22 keyboard layouts](docs/keyboard_layouts.md) (US, UK, German, French, Spanish, Italian, Portuguese, Nordic, Swiss, Belgian, Japanese and more) with dead keys and AltGr, switched with Super+Space; accented letters and the euro sign drawn by the hardware fonts ([ISO 8859-15](docs/text_encoding.md)); Japanese drawn from a public-domain 12x12 font and typed with a romaji [input method](docs/keyboard_layouts.md#japanese-input)
  - [Speech](docs/tts.md) for blind and headless use
  - Image decoding and [vector rendering](docs/svg.md) shared by every app (`sw/common`)
  - IP/ARP/ICMP/UDP/DHCP/NTP/DNS/TFTP/TCP/telnet/ssh [networking](docs/networking.md)
@@ -365,6 +365,8 @@ The contents of this repo are released under the [Lone Dynamics Open License](LI
 - rtl/ext/usb\_hid\_host uses the Apache 2.0 license.
 - rtl/ext/usb\_cdc uses the MIT license.
 - sw/os/fs/fatfs uses a BSD compatible license.
+- sw/common/zkbd\_layouts.c (keyboard layout data generated from [xkeyboard-config](https://gitlab.freedesktop.org/xkeyboard-config/xkeyboard-config)) uses X11/MIT-style licenses; see sw/common/zkbd\_layouts.LICENSE.
+- sw/data/font: the BDF fonts (Markus Kuhn's misc-fixed ucs-fonts) and jp12.zfn (converted from the Shinonome fonts) are in the public domain.
 - sw/data/ark uses Creative Commons Attribution-ShareAlike 4.0 International License (CC BY-SA) and the GNU Free Documentation License (GFDL).
 - sw/ext/nextvi uses an ISC license.
 - sw/apps/zfpga/ext/prjtrellis-db (the Project Trellis ECP5 database) uses the CC0 1.0 license.

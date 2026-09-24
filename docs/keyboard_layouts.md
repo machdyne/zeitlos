@@ -165,6 +165,16 @@ that key. The generator:
   Compose file, which is tens of thousands of lines mostly for other
   scripts. 338 combinations for the dead keys these layouts have.
 
+**Licence.** The layout data is xkeyboard-config's, which is under
+X11/MIT-style licences: permissive, with the condition that their
+copyright and permission notices go with copies. They are kept verbatim
+in `sw/common/zkbd_layouts.LICENSE`, the generated file's header points
+to it, and the README lists it with the repo's other exceptions. When
+re-syncing to a newer xkeyboard-config, refresh that file from the
+`xkb-data` package's `copyright` file. `keysymdef.h` is only read to
+turn keysym names into codepoints -- nothing of it reaches the output
+-- and the dead-key combinations come from Unicode normalization.
+
 Layout ids are positions in `LAYOUTS` in the generator. They are what
 the kernel stores, so the list is append-only.
 
