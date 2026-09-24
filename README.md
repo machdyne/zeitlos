@@ -43,7 +43,7 @@ Build the hardware map from RTL with `make hwmap` (see [docs/hwmap.md](docs/hwma
  - Pre-emptive multitasking
  - Flat memory model with virtual address space for apps
  - Text [configuration file](docs/config.md) (`/zeitlos.cfg`), loaded at boot and reloadable
- - FAT filesystem, on MicroSD and on an optional [RAM disk](docs/ramdisk.md)
+ - FAT filesystem, on MicroSD and on an optional [RAM disk](docs/ramdisk.md) with long filename support
  - [Core apps in flash](docs/flash_apps.md) -- boots to a desktop with no sdcard
  - Object-based interprocess [messaging](docs/messaging.md), streaming and [ports](docs/ports.md)
  - International text: UTF-8 throughout, [22 keyboard layouts](docs/keyboard_layouts.md) (US, UK, German, French, Spanish, Italian, Portuguese, Nordic, Swiss, Belgian, Japanese and more) with dead keys and AltGr, switched with Super+Space; accented letters and the euro sign drawn by the hardware fonts ([ISO 8859-15](docs/text_encoding.md)); Japanese drawn from a public-domain 12x12 font and typed with a romaji [input method](docs/keyboard_layouts.md#japanese-input)
