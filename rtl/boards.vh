@@ -681,7 +681,7 @@
 `define GPU_CURSOR
 `define GPU_DDMI
 `define UART0
-`define USB_HID
+`define USB_HOST
 `define SPI_SDCARD
 `define ETH_RMII
 `define ETH_RMII_DRIVE_REFCLK
