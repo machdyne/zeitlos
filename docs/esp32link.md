@@ -63,6 +63,7 @@ UART is a byte stream, so frames are delimited:
 | `0x31` BURST | ESP32 -> Z | `{n}`: exactly n framed messages follow back to back; sent when the poll carried credit >= 2 and n things were queued |
 | `0x32` INPUT | ESP32 -> Z | `{usage, mods, pressed}`: one synthetic key event from a remote desktop viewer, injected into the HID ring |
 | `0x33` MOUSE | ESP32 -> Z | `{x_lo, x_hi, y_lo, y_hi, buttons}`: pointer position in framebuffer coordinates. `buttons[2:0]` = left/right/middle; bit 7 = the pointer left the viewer |
+| `0x34` VIEWERS | ESP32 -> Z | `{n}`: how many WebSocket clients `screend` holds. Sent whenever the number changes and once a second regardless, so net's idea of whether anybody is watching is right within a second of a lost message or a restart. Older firmware never sends it, and net then falls back to counting `screend`'s `viewer connected/gone` log lines |
 
 Every ESP32 -> Zeitlos frame is a reply (fw version 2): `RX_POLL` is
 answered with the oldest queued control message (HELLO, LINK, LOG),

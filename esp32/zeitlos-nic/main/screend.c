@@ -33,6 +33,29 @@ static struct {
 	uint32_t seen;		/* tick of last successful send -- staleness */
 } clients[MAX_CLIENTS];
 
+/* Tell net how many viewers there are: ZNIC_VIEWERS {n:u8}. net cannot
+ * see the WebSocket, and this is what it decides whether to stream on.
+ * Sent whenever n changes and again with every keepalive round
+ * (always = 1), so a lost message, or a net that has just started, is
+ * put right within a second. The periodic one waits while the control
+ * queue holds anything: whatever is in it goes first, and a net that
+ * is not polling does not get its queue filled with them. */
+static void viewers_announce(int always)
+{
+	static int last = -1;
+	int n = 0;
+	xSemaphoreTake(lock, portMAX_DELAY);
+	for (int i = 0; i < MAX_CLIENTS; i++)
+		if (clients[i].fd >= 0)
+			n++;
+	xSemaphoreGive(lock);
+	if (n == last && !(always && znic_ctl_depth() == 0))
+		return;
+	uint8_t b = (uint8_t)n;
+	if (znic_ctl_push(ZNIC_VIEWERS, &b, 1) == 0)
+		last = n;
+}
+
 static void udp_task(void *arg)
 {
 	(void)arg;
@@ -74,19 +97,25 @@ static esp_err_t ws_handler(httpd_req_t *req)
 	if (req->method == HTTP_GET) {	/* handshake: register the client */
 		int fd = httpd_req_to_sockfd(req);
 		xSemaphoreTake(lock, portMAX_DELAY);
-		int slot = -1;
+		int slot = -1, evicted = -1;
 		for (int i = 0; i < MAX_CLIENTS; i++)
 			if (clients[i].fd < 0) { slot = i; break; }
 		if (slot < 0) {		/* table full: evict the oldest */
 			slot = 0;
 			for (int i = 1; i < MAX_CLIENTS; i++)
 				if (clients[i].seen < clients[slot].seen) slot = i;
+			evicted = clients[slot].fd;
 		}
 		clients[slot].fd = fd;
 		clients[slot].pending = (1u << STRIPES) - 1;
 		clients[slot].seen = xTaskGetTickCount();
 		xSemaphoreGive(lock);
+		/* net counts viewers from these two lines: every slot that is
+		 * freed has to say so, whichever path frees it */
+		if (evicted >= 0)
+			ESP_LOGI(TAG, "viewer gone (fd %d)", evicted);
 		ESP_LOGI(TAG, "viewer connected (fd %d)", fd);
+		viewers_announce(0);
 		return ESP_OK;
 	}
 	/* an input frame from the browser: {usage, mods, pressed}, relayed
@@ -132,9 +161,11 @@ static void relay_task(void *arg)
 			for (int c = 0; c < MAX_CLIENTS; c++) {
 				if (clients[c].fd < 0 || clients[c].pending) continue;
 				if (httpd_ws_send_frame_async(server, clients[c].fd, &kf) != ESP_OK) {
+					ESP_LOGI(TAG, "viewer gone (fd %d)", clients[c].fd);
 					clients[c].fd = -1; clients[c].pending = 0;
 				}
 			}
+			viewers_announce(1);
 		}
 		xSemaphoreTake(lock, portMAX_DELAY);
 		uint32_t newly = dirty_all;
@@ -172,6 +203,7 @@ static void relay_task(void *arg)
 				ESP_LOGI(TAG, "viewer gone (fd %d)", clients[c].fd);
 				clients[c].fd = -1;
 				clients[c].pending = 0;
+				viewers_announce(0);
 			} else {
 				clients[c].seen = xTaskGetTickCount();
 			}

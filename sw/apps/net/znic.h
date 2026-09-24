@@ -34,6 +34,9 @@
 #define ZNIC_MOUSE     0x33	/* browser -> ESP32 -> Z: {x_lo,x_hi,y_lo,y_hi,buttons}
 				   buttons[2:0] = left/right/middle; bit 7 =
 				   pointer left the visor (clear reg_vmouse) */
+#define ZNIC_VIEWERS   0x34	/* ESP32 -> Z: {n:u8} WebSocket clients screend
+				   has now. Sent when n changes and once a
+				   second regardless (screend.c). */
 
 #define ZNIC_STA_OK    0
 
