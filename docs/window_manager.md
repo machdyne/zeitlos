@@ -2102,6 +2102,50 @@ an app from drawing outside its window. The `zwin.h` API above is the
 enforces the window boundary for you, but it's a convention backed by
 a convenient API, not a hard guarantee.
 
+## Captions
+
+`Z_WM_CAPTION` (125): large text over everything, with no window --
+[captions.md](captions.md). The caption is an occluder in every
+window's visible region, and wm's own unrestricted drawing state is
+"the screen minus the caption" while one is up (`wm_unclip()`, which
+replaced every `z_gfx_clear_visible()` in `wm.c`), so nothing -- app,
+chrome or dock -- can draw over it. Use `sw/common/zcaption.h` rather
+than the message.
+
+## The label box on the dock
+
+The box over the right end of the dock shows the keyboard layout for a
+moment after Super+Space and, while an input method layout (`ja`,
+`ja-kata`, `ja-us`) is active, stays up the whole time: the romaji
+waiting to become kana, or the layout's label when none are. It is a
+fixed width while an input method is on, so each keystroke redraws
+only the box (`ime_box_update()`). It used to come and go with every
+kana, and each time the whole dock was repaired -- a visible flash per
+letter. A layout switched from outside wm (sw/apps/automate sets it
+through the kernel) is noticed on the next key.
+
+## Automation
+
+What a script driver ([automate.md](automate.md)) needs that the
+keyboard and pointer cannot give it. Any process may send these; the
+tag names a process (its frontmost window), or 0 for the focused
+window. Never the dock.
+
+| Message | |
+|---|---|
+| `Z_WM_WIN_QUERY` (126) | answered with `Z_WM_WIN_INFO` (127), tag echoed: a `z_wm_win_info_t` blob -- frame and content rect, whether it is focused, where its titlebar icons are, its title, and the **real-input count** |
+| `Z_WM_WIN_PLACE` (128) | move the window's top-left corner (`Z_WM_PACK_PLACE`), clamped on-screen -- the same freeze-and-repair path as Alt+Arrow (`move_window_to()`) |
+| `Z_WM_WIN_FOCUS` (129) | raise and focus, as a click would (a modal dialog wins, as it would) |
+| `Z_WM_WIN_TBICON` (130) | act on a titlebar icon as if clicked; `Z_WM_TBICON_*`, 0 = close |
+| `Z_WM_WIN_KILL` (131) | kill the process and destroy its windows, as the close icon does for a kills-owner window. A process killed any other way leaves its windows behind, and the next process to get its pid inherits them |
+| `Z_WM_WIN_NEXT_PLACE` (132) | the next window this process creates opens at (x, y) instead of the cascade; tag 0 means the first window of the next process to create one, and is what to send *before* `z_proc_run()` -- after it is a race a fast app wins. Expires like a launch argument |
+
+**Real input** is every key event without the kernel's injected bit
+(`Z_KBD_EV_INJECTED`, `zkbd.h`) plus every USB pointer movement or
+button change -- the on-screen keyboard, the remote desktop and
+`automate` do not count. A driver that sees it change knows a person
+has touched the machine (attract mode, [automate.md](automate.md)).
+
 ## Known limitations / future work
 
 - **A partially occluded window still cannot scroll in hardware** --

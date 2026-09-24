@@ -184,6 +184,7 @@ SUPPLEMENTAL = [
     ("apps/tts", "sw/apps/tts/tts.bin"),
     ("apps/jfont", "sw/apps/jfont/jfont.bin"),
     ("apps/keyboard", "sw/apps/keyboard/keyboard.bin"),
+    ("apps/automate", "sw/apps/automate/automate.bin"),
 ]
 
 # The casino. One dock icon (apps/casino) launches the rest, so the
@@ -238,7 +239,7 @@ SELFHOST = [
     ("apps/ttytest", "sw/apps/ttytest/ttytest.bin"),
 ]
 
-DIRS = ["apps", "audio", "docs", "ark", "user", "libz", "libz/include",
+DIRS = ["apps", "audio", "demo", "docs", "ark", "user", "libz", "libz/include",
         "fpga", "fpga/boards", "fpga/examples", "speech", "web", "font"]
 
 # The speech pack: the pronunciation lexicon and the recorded voice
@@ -391,6 +392,24 @@ FONT_FILES = [
 AUDIO_DIR = "sw/data/audio"
 AUDIO_EXT = ".mod"
 
+# The demos (docs/demo.md): sw/apps/automate's scripts and the media
+# they show off, in /demo. Every file is listed, and a missing one
+# fails the build: a card whose demo has silently lost its picture, or
+# still carries last week's script, is worse than no card. The .pgm
+# and .svg are made by sw/data/demo/gen_media.py and committed. Only
+# things Zeitlos really does: the photo is a photo, the SVG is drawn
+# by view's own renderer on the board.
+DEMO_FILES = [
+    ("demo/demo.zds",     "sw/data/demo/demo.zds"),
+    ("demo/short.zds",    "sw/data/demo/short.zds"),
+    ("demo/long.zds",     "sw/data/demo/long.zds"),
+    ("demo/store.zds",    "sw/data/demo/store.zds"),
+    ("demo/squirrel.pgm", "sw/data/demo/squirrel.pgm"),
+    ("demo/zeitlos.svg",  "sw/data/demo/zeitlos.svg"),
+    ("demo/lvb11.mid",    "sw/data/audio/lvb11.mid"),
+    ("demo/squirrel.jpg", "sw/data/images/squirrel.jpg"),
+]
+
 TOOLS = ["mkfs.fat", "fsck.fat", "mmd", "mcopy"]
 
 
@@ -515,7 +534,7 @@ def build(root, out_path, ark_dir=None, verbose=True, packs=None):
     # them compiles only freestanding programs -- so their absence is
     # an error here rather than a quiet omission.
     missing += [p for _, p in LIBZ_FILES + LIBZ_EXTRA + CONFIG_FILES + FONT_FILES
-                + EXAMPLES + FPGA_FILES
+                + EXAMPLES + FPGA_FILES + DEMO_FILES
                 if not os.path.exists(os.path.join(root, p))]
 
     if missing:
@@ -535,11 +554,19 @@ def build(root, out_path, ark_dir=None, verbose=True, packs=None):
         print("    note: no %s files in %s, card will have none"
               % (AUDIO_EXT, AUDIO_DIR))
 
+    demo = list(DEMO_FILES)
+    for card, _src in demo:
+        _check_83_path(card)
+
     speech = os.environ.get("SPEECH_PACK") or os.path.join(root, SPEECH_PACK)
     if not os.path.exists(speech):
         print("    note: no speech pack at %s, card will have none"
               % os.path.relpath(speech, root))
         print("          (speech will use its built-in dictionary, rules and formant voice)")
+        print("    WARNING: the demos (/demo, docs/demo.md) switch to the recorded")
+        print("          voice, which is IN the speech pack: without it they speak")
+        print("          in the synthesised voice throughout. Build it with")
+        print("          tools/speech/speech (docs/tts_data.md), or set SPEECH_PACK.")
         speech = None
 
     docs = sorted(f for f in os.listdir(os.path.join(root, "docs"))
@@ -583,6 +610,8 @@ def build(root, out_path, ark_dir=None, verbose=True, packs=None):
         sizes.append(os.path.getsize(os.path.join(root, rel)))
     for a in audio:
         sizes.append(os.path.getsize(os.path.join(audio_src, a)))
+    for _c, rel in demo:
+        sizes.append(os.path.getsize(os.path.join(root, rel)))
     if speech:
         sizes.append(os.path.getsize(speech))
     for d in docs:
@@ -658,6 +687,8 @@ def build(root, out_path, ark_dir=None, verbose=True, packs=None):
         copy(os.path.join(root, rel), "/" + name)
     for a in audio:
         copy(os.path.join(audio_src, a), "/audio/" + a)
+    for card, rel in demo:
+        copy(os.path.join(root, rel), "/" + card)
     if speech:
         copy(speech, SPEECH_DEST)
     for d in docs:

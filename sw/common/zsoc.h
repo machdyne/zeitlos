@@ -365,6 +365,14 @@
 // Inventory only: use z_mpu_present() before touching its registers.
 #define Z_FEATURE2_MPU        (1u << 10)
 
+// The virtual mouse register, reg_vmouse at 0xf000_0400 (`VMOUSE,
+// rtl/sysctl.v): {present, buttons, y, x}. Universal from the release
+// that added it; before that only ULX3S (`ESP32_LINK) had one, and
+// without it 0xf000_0400 may be decoded as the console UART -- so a
+// write to reg_vmouse is only safe when this bit is set. Used by
+// sw/apps/automate (docs/automate.md) and net's remote desktop.
+#define Z_FEATURE2_VMOUSE     (1u << 11)
+
 // The jumploader region: the same on every board, the top 192 KB of the
 // first 2 MB. KEEP IN SYNC with the Makefile's JUMP_ADDR
 // (release/lib/layout.py checks). docs/zboot.md sec. 5.

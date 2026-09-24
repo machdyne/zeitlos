@@ -27,7 +27,7 @@ override CFLAGS += --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) -DZ_GFX
 LDFLAGS = -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS)
 LDSCRIPT = ../../common/riscv-app.ld
 
-OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zkbd.o zspeak.o zcfg.o dock_icons.o win_icons.o wm.o
+OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zkbd.o zspeak.o zcaption.o zcfg.o dock_icons.o win_icons.o wm.o
 
 # built with -DZ_GFX_HW_BLIT, same as hello_win/term -- the dock's
 # icon labels (see wm.c's draw_dock()) go through the hardware glyph
@@ -61,6 +61,9 @@ zkbd.o:
 # the speech keys (Super+S/A/C/W/R) -- docs/tts.md
 zspeak.o:
 	$(CC) $(CFLAGS) -c ../../common/zspeak.c -o zspeak.o
+
+zcaption.o:
+	$(CC) $(CFLAGS) -c ../../common/zcaption.c -o zcaption.o
 
 # system.keyboard.layouts -- see docs/keyboard_layouts.md
 zcfg.o:

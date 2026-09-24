@@ -9,7 +9,7 @@
  * -- the bank is settled when the table empties --
  *
  * The other five games have a round: you stake, it resolves, the net
- * goes to /USER/casino.dat. Craps has no such boundary. Bets go up and come
+ * goes to /user/casino.dat. Craps has no such boundary. Bets go up and come
  * down across many rolls, a place bet wins and stays working, a come
  * bet takes its own number and outlives the point that was on when it
  * was made.
@@ -20,7 +20,7 @@
  * bet rather than what is in the bank.
  *
  * That keeps the same crash-safety the others have: chips do not leave
- * /USER/casino.dat until the shooter's run is over, so a window closed
+ * /user/casino.dat until the shooter's run is over, so a window closed
  * mid-hand costs nothing. It also means a long hot run is not banked
  * until it ends, which is exactly what a craps table feels like.
  *
@@ -179,7 +179,7 @@ static void load_bank(void)
 
     if (rv == ZBANK_CORRUPT) {
         say("bank file damaged -- `buyin` to start over");
-        puts("craps: /USER/casino.dat is damaged; not writing to it");
+        puts("craps: /user/casino.dat is damaged; not writing to it");
     }
 }
 
@@ -511,7 +511,7 @@ int main(void)
         /* THE BANK CHANGES UNDER THIS WINDOW.
          *
          * sw/apps/casino can hand out a loan while a game is open, and
-         * another game can win while this one is idle -- /USER/casino.dat is
+         * another game can win while this one is idle -- /user/casino.dat is
          * shared. Reading it only at startup meant a loan did not
          * appear until the game was restarted.
          *

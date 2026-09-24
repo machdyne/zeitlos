@@ -38,6 +38,7 @@
 #include "../../common/zicon.h"
 #include "../../common/zspeak.h"	// speech -- docs/tts.md
 #include "../../common/zcfg.h"
+#include "../../common/zcaption.h"	// docs/captions.md
 #include "../../common/zutf8.h"		// titles are UTF-8		// system.keyboard.layouts
 #include "dock_icons.h"
 #include "win_icons.h"
@@ -229,6 +230,95 @@ static uint32_t kbd_osd_deadline;
 // the app sees nothing until a kana is finished, so this is the only
 // place the letters are visible.
 static z_kbd_ime_t kbd_ime;
+
+// The label box over the right end of the dock: the layout for a
+// moment after Super+Space, and -- all the time an input method layout
+// is active -- the romaji waiting to become kana, or the layout's label
+// when none are. Always the same width while an input method is on, so
+// each keystroke redraws only the box (ime_box_update()) instead of
+// repairing the whole dock, which flashed the dock once per letter.
+static bool ime_box_shown;
+
+static bool ime_layout_active(void) {
+	return z_kbd_layout_info(z_kbd_active_layout())->ime != Z_KBD_IME_NONE;
+}
+
+static bool ime_box_wanted(void) {
+	return kbd_osd || kbd_ime.n || ime_layout_active();
+}
+
+// -- captions (Z_WM_CAPTION, zwm.h; docs/captions.md) --
+//
+// One caption for the whole system: large text with no window, drawn
+// by wm above everything. Two things keep it on the glass:
+//
+//   - It is an OCCLUDER in every window's visible region
+//     (window_visible_region()), so apps are clipped around it by the
+//     regions they already obey, and so is wm's own chrome, which is
+//     drawn through the same regions.
+//   - wm's "unrestricted" drawing state is really "the screen minus
+//     the caption" while one is up (wm_unclip()). Every fill, line,
+//     glyph and blit in zgfx honours the visible list, so the rest of
+//     this file needs no caption awareness at all.
+//
+// It is pre-rendered once per change (zcaption.c) and re-blitted in
+// one blitter operation, which draws the same pixels every time, so a
+// refresh cannot flicker. It is refreshed when wm repaints something
+// (cap_dirty) and twice shortly after it appears, to cover a frame an
+// app had in flight against its old region.
+#define CAP_BMP_W      640
+#define CAP_BMP_WORDS  (CAP_BMP_W / 32)
+#define CAP_BMP_H      144
+static bool cap_vis;
+static z_clip_t cap_rect;			// inclusive, screen coordinates
+static int cap_w, cap_h;
+// +1 row: the blitter may read a word past the last one it needs
+// (zgfx.h, z_fb_hw_blit_mem()).
+static uint32_t cap_bits[CAP_BMP_H + 1][CAP_BMP_WORDS];
+static char cap_text[Z_CAPTION_TEXT_MAX];	// Latin-9
+static uint32_t cap_tag;
+static bool cap_dirty;
+static bool cap_has_deadline;
+static uint32_t cap_deadline;
+static uint32_t cap_refresh_at[2];
+static int cap_refresh_n;
+static z_clip_t cap_unclip[4];
+static int cap_unclip_n;
+
+// Key and pointer events from real devices since startup -- not the
+// injected ones (Z_KBD_EV_INJECTED) and not the software pointer.
+// Reported in Z_WM_WIN_INFO, which is how a looping demo notices a
+// person (docs/automate.md, "Attract mode").
+static uint32_t wm_real_input;
+static uint32_t wm_real_logged;		// z_uptime_ticks() of the last log line
+
+// Counts one real event, and says so on the console -- at most every
+// five seconds, so a moving mouse is one line, not hundreds. A demo
+// that stops by itself names its cause here.
+static void real_input(const char *what, uint32_t detail) {
+	uint32_t t = z_uptime_ticks();
+	wm_real_input++;
+	if (wm_real_input == 1 || (int32_t)(t - wm_real_logged) > (int32_t)(5 * Z_TICK_HZ)) {
+		printf("wm: real input: %s 0x%02lx\n", what, (unsigned long)detail);
+		wm_real_logged = t;
+	}
+}
+
+// Z_WM_WIN_NEXT_PLACE: where the next window of one process goes.
+static uint32_t next_place_pid;
+static bool next_place_any;		// tag 0: the next process's first window
+static int next_place_x, next_place_y;
+static uint32_t next_place_tick;
+
+// Defined with the game-mode code below; the caption needs it first.
+static uint32_t game_grab_pid;
+
+// What every former z_gfx_clear_visible() in this file now calls: no
+// restriction, except that nothing wm draws may land on the caption.
+static void wm_unclip(void) {
+	if (cap_vis) z_gfx_set_visible(cap_unclip, cap_unclip_n);
+	else z_gfx_clear_visible();
+}
 
 // -- dock keyboard navigation / launch feedback -- see
 // docs/window_manager.md, "Keyboard-only operation" --
@@ -490,7 +580,7 @@ static void chrome_use_region(void) {
 	if (chrome_region_n > 0)
 		z_gfx_set_visible(chrome_region, chrome_region_n);
 	else
-		z_gfx_clear_visible();
+		wm_unclip();
 }
 
 static void draw_window_box(wm_window_t *w, bool is_focused, int color) {
@@ -659,9 +749,9 @@ static void xor_band_erase(void)
 	w->h = (uint32_t)xor_band_h;
 	chrome_region = NULL;
 	chrome_region_n = 0;
-	z_gfx_clear_visible();
+	wm_unclip();
 	draw_window_box(w, xor_band_focused, Z_RASTER_XOR);
-	z_gfx_clear_visible();
+	wm_unclip();
 	w->x = sx; w->y = sy; w->w = sw; w->h = sh;
 	xor_band_idx = -1;
 }
@@ -672,9 +762,9 @@ static void xor_band_draw(int idx)
 	if (idx < 0 || idx >= WM_MAX_WINDOWS || !windows[idx].used) return;
 	chrome_region = NULL;
 	chrome_region_n = 0;
-	z_gfx_clear_visible();
+	wm_unclip();
 	draw_window_box(&windows[idx], idx == focused, Z_RASTER_XOR);
-	z_gfx_clear_visible();
+	wm_unclip();
 	xor_band_idx = idx;
 	xor_band_x = (int)windows[idx].x;
 	xor_band_y = (int)windows[idx].y;
@@ -1238,6 +1328,25 @@ static void draw_dock_selection_ring(int ix, int iy) {
 	z_fb_hw_box(ix - 1, iy - 1, ix + DOCK_ICON_SIZE, iy + DOCK_ICON_SIZE, 1, NULL);
 }
 
+// Draws the label box (see ime_box_shown) with whatever clip is loaded.
+static void draw_ime_box(void) {
+	if (dock_idx < 0) return;
+	wm_window_t *w = &windows[dock_idx];
+	const z_kbd_layout_t *l = z_kbd_layout_info(z_kbd_active_layout());
+	const z_font_t *f = &z_font_6x12;
+	// Letters waiting to become kana, while there are any; the
+	// layout's label otherwise.
+	const char *label = kbd_ime.n ? kbd_ime.pend : l->label;
+	int len = (int)strlen(label);
+	int cols = len;
+	if (l->ime != Z_KBD_IME_NONE && cols < Z_KBD_IME_PEND) cols = Z_KBD_IME_PEND;
+	int bw = cols * f->w + 8, bh = DOCK_ICON_SIZE;
+	int bx = (int)w->x + (int)w->w - DOCK_PADDING - bw;
+	int by = (int)w->y + DOCK_PADDING;
+	z_fb_hw_fill_rect(bx, by, bw, bh, 1);
+	z_fb_draw_text2(bx + (bw - len * f->w) / 2, by + (bh - f->h) / 2, label, 0, 1, f, NULL);
+}
+
 static void draw_dock(void) {
 
 	if (dock_idx < 0) return;
@@ -1328,19 +1437,8 @@ static void draw_dock(void) {
 	// covering part of an icon rather than moving anything -- the
 	// dock's geometry is shared with its hit testing (dock_layout.h).
 	// Cleared by the main loop at kbd_osd_deadline.
-	if (kbd_osd || kbd_ime.n) {
-		const z_kbd_layout_t *l = z_kbd_layout_info(z_kbd_active_layout());
-		const z_font_t *f = &z_font_6x12;
-		// Letters waiting to become kana, while there are any; the
-		// layout's label otherwise.
-		const char *label = kbd_ime.n ? kbd_ime.pend : l->label;
-		int len = (int)strlen(label);
-		int bw = len * f->w + 8, bh = DOCK_ICON_SIZE;
-		int bx = x0 + (int)w->w - DOCK_PADDING - bw;
-		int by = y0 + DOCK_PADDING;
-		z_fb_hw_fill_rect(bx, by, bw, bh, 1);
-		z_fb_draw_text2(bx + 4, by + (bh - f->h) / 2, label, 0, 1, f, NULL);
-	}
+	ime_box_shown = ime_box_wanted();
+	if (ime_box_shown) draw_ime_box();
 
 }
 
@@ -1616,22 +1714,23 @@ static void paint_window_chrome(int idx)
 	if (idx == dock_idx) draw_dock();
 	chrome_region = NULL;
 	chrome_region_n = 0;
+	cap_dirty = true;
 }
 
 static void repair_focus_chrome(int old_idx, int new_idx)
 {
-	z_gfx_clear_visible();
+	wm_unclip();
 	if (old_idx >= 0 && old_idx < WM_MAX_WINDOWS && windows[old_idx].used)
 		paint_window_chrome(old_idx);
 	if (new_idx >= 0 && new_idx != old_idx &&
 	    new_idx < WM_MAX_WINDOWS && windows[new_idx].used)
 		paint_window_chrome(new_idx);
-	z_gfx_clear_visible();
+	wm_unclip();
 }
 
 static void repair_chrome_in_rect(int rx, int ry, int rw, int rh, int skip)
 {
-	z_gfx_clear_visible();
+	wm_unclip();
 	for (int i = 0; i < zorder_count; i++) {
 		int idx = zorder[i];
 		wm_window_t *w = &windows[idx];
@@ -1641,7 +1740,7 @@ static void repair_chrome_in_rect(int rx, int ry, int rw, int rh, int skip)
 			continue;
 		paint_window_chrome(idx);
 	}
-	z_gfx_clear_visible();
+	wm_unclip();
 }
 
 static void repair_region(int rx, int ry, int rw, int rh, int exclude_idx) {
@@ -1650,7 +1749,7 @@ static void repair_region(int rx, int ry, int rw, int rh, int exclude_idx) {
 
 	// See draw_window_box(): wm's own drawing must not inherit a
 	// region left over from the dock.
-	z_gfx_clear_visible();
+	wm_unclip();
 
 	// expand by 1px on every side before clearing/redrawing -- the
 	// focused window's chrome highlight (draw_window_box()'s own
@@ -1735,7 +1834,8 @@ static void repair_region(int rx, int ry, int rw, int rh, int exclude_idx) {
 	// Leave zgfx unrestricted, as it was before per-window chrome
 	// clipping: nothing drawn after a repair should inherit the last
 	// window's region.
-	z_gfx_clear_visible();
+	wm_unclip();
+	cap_dirty = true;
 }
 
 // -- mouse --
@@ -1809,6 +1909,13 @@ static void vmouse_yield_to_usb(void) {
 	if (sig == last_usb_sig)
 		return;
 	last_usb_sig = sig;
+	// Only a port that says it is a mouse: the cursor fields of a
+	// keyboard port are not a pointer, and a change in them is not a
+	// person moving one.
+	{
+		uint8_t typ = (mouse_port() == 0 ? reg_usb0_info : reg_usb1_info) >> 24 & 0x3;
+		if (typ == 2) real_input("pointer", sig >> 20 & 7);
+	}
 	if (vmouse_present())
 		reg_vmouse = 0;
 }
@@ -1872,6 +1979,21 @@ static uint32_t wm_idle_ticks(void) {
 
 	if (wm_busy_mask & WM_BUSY_STARTUP)
 		return 1;
+
+	// The caption's timeout and its two refreshes (caption_tick()).
+	if (cap_vis) {
+		if (cap_dirty && !game_grab_pid && xor_band_idx < 0)
+			return 1;
+		uint32_t t[3];
+		int nt = 0;
+		if (cap_has_deadline) t[nt++] = cap_deadline;
+		for (i = 0; i < cap_refresh_n; i++) t[nt++] = cap_refresh_at[i];
+		for (i = 0; i < nt; i++) {
+			int32_t left = (int32_t)(t[i] - now);
+			if (left <= 0) return 1;
+			if (!soon || (uint32_t)left < soon) soon = (uint32_t)left;
+		}
+	}
 
 	if (kbd_osd) {
 		int32_t left = (int32_t)(kbd_osd_deadline - now);
@@ -2485,6 +2607,9 @@ static int window_visible_region(int idx, z_clip_t *out, int max) {
 		occ[nocc++] = o;
 	}
 
+	// The caption is in front of everything (see cap_vis).
+	if (cap_vis && nocc < WM_MAX_WINDOWS) occ[nocc++] = cap_rect;
+
 	return region_compute(&win, occ, nocc, out, max);
 }
 
@@ -2763,29 +2888,20 @@ static void alt_tab(void) {
 // same before/after bounding-box bookkeeping (drag_min/max_x/y) a
 // mouse drag release already produces, rather than duplicating that
 // logic here.
-static void alt_move_focused(uint32_t keysym) {
+// Moves window idx so its top-left is at (nx, ny), clamped on-screen.
+// Alt+Arrow and Z_WM_WIN_PLACE (sw/apps/automate) both come here.
+static void move_window_to(int idx, int32_t nx, int32_t ny) {
 
-	if (focused < 0 || focused == dock_idx || !windows[focused].used) return;
+	if (idx < 0 || idx == dock_idx || !windows[idx].used) return;
 
-	int dx = 0, dy = 0;
-	switch (keysym) {
-		case Z_KEY_LEFT:  dx = -WM_KEY_MOVE_STEP; break;
-		case Z_KEY_RIGHT: dx =  WM_KEY_MOVE_STEP; break;
-		case Z_KEY_UP:    dy = -WM_KEY_MOVE_STEP; break;
-		case Z_KEY_DOWN:  dy =  WM_KEY_MOVE_STEP; break;
-		default: return;
-	}
+	wm_window_t *w = &windows[idx];
 
-	wm_window_t *w = &windows[focused];
-
-	int32_t nx = (int32_t)w->x + dx;
-	int32_t ny = (int32_t)w->y + dy;
 	if (nx < 0) nx = 0;
 	if (ny < 0) ny = 0;
 	if (nx + (int32_t)w->w > WM_SCREEN_W) nx = WM_SCREEN_W - (int32_t)w->w;
 	if (ny + (int32_t)w->h > WM_SCREEN_H) ny = WM_SCREEN_H - (int32_t)w->h;
 
-	if ((uint32_t)nx == w->x && (uint32_t)ny == w->y) return;   // already at the edge
+	if ((uint32_t)nx == w->x && (uint32_t)ny == w->y) return;   // already there
 
 	int old_x = (int)w->x, old_y = (int)w->y;
 	int ww = (int)w->w, wh = (int)w->h;
@@ -2795,8 +2911,8 @@ static void alt_move_focused(uint32_t keysym) {
 	// a clear, so it does not black out origin-minus-destination
 	// underneath the windows behind while they repaint it. Bounded
 	// wait for the ack, like freeze_all().
-	if (send_clip_freeze(focused))
-		wait_clip_ack_one(focused, FREEZE_ACK_TIMEOUT_MS);
+	if (send_clip_freeze(idx))
+		wait_clip_ack_one(idx, FREEZE_ACK_TIMEOUT_MS);
 
 	drag_moved = true;
 	drag_ox = old_x;
@@ -2812,9 +2928,31 @@ static void alt_move_focused(uint32_t keysym) {
 	drag_max_x = (old_x + ww > nx + ww) ? old_x + ww : nx + ww;
 	drag_max_y = (old_y + wh > ny + wh) ? old_y + wh : ny + wh;
 
-	notify_moved(focused);
-	repair_drag(focused);
+	notify_moved(idx);
+	repair_drag(idx);
 	drag_moved = false;
+
+	// An app moved while it was still starting up may have drawn its
+	// first frame into the freeze; ask for the whole thing again.
+	if (windows[idx].owner_pid != my_pid) send_redraw(windows[idx].owner_pid, idx);
+
+}
+
+static void alt_move_focused(uint32_t keysym) {
+
+	if (focused < 0 || focused == dock_idx || !windows[focused].used) return;
+
+	int dx = 0, dy = 0;
+	switch (keysym) {
+		case Z_KEY_LEFT:  dx = -WM_KEY_MOVE_STEP; break;
+		case Z_KEY_RIGHT: dx =  WM_KEY_MOVE_STEP; break;
+		case Z_KEY_UP:    dy = -WM_KEY_MOVE_STEP; break;
+		case Z_KEY_DOWN:  dy =  WM_KEY_MOVE_STEP; break;
+		default: return;
+	}
+
+	move_window_to(focused, (int32_t)windows[focused].x + dx,
+		(int32_t)windows[focused].y + dy);
 
 }
 
@@ -3039,6 +3177,248 @@ static int hit_test(int cx, int cy);
 // The dock's filenames are what z_proc_run() needs, not what a person
 // wants to hear. Only the ones that do not already read as a word are
 // listed; anything missing is spoken as its filename.
+
+// -- captions: layout, drawing, changes (see cap_vis above) --
+
+static void handle_titlebar_icon_click(int idx, int kind);
+static void handle_close_click(int idx);
+
+// The screen minus the caption, as up to four strips.
+static void cap_compute_unclip(void) {
+	const z_clip_t *r = &cap_rect;
+	int n = 0;
+	if (r->y0 > 0) {
+		z_clip_t t = { 0, 0, WM_SCREEN_W - 1, r->y0 - 1 };
+		cap_unclip[n++] = t;
+	}
+	if (r->y1 < WM_SCREEN_H - 1) {
+		z_clip_t t = { 0, r->y1 + 1, WM_SCREEN_W - 1, WM_SCREEN_H - 1 };
+		cap_unclip[n++] = t;
+	}
+	if (r->x0 > 0) {
+		z_clip_t t = { 0, r->y0, r->x0 - 1, r->y1 };
+		cap_unclip[n++] = t;
+	}
+	if (r->x1 < WM_SCREEN_W - 1) {
+		z_clip_t t = { r->x1 + 1, r->y0, WM_SCREEN_W - 1, r->y1 };
+		cap_unclip[n++] = t;
+	}
+	// A caption covering the whole screen leaves nothing: one EMPTY
+	// rectangle, because an empty list means "unrestricted".
+	if (n == 0) {
+		z_clip_t t = { 0, 0, -1, -1 };
+		cap_unclip[n++] = t;
+	}
+	cap_unclip_n = n;
+}
+
+// Renders cap_text into cap_bits and places it. False: nothing to show.
+static bool cap_layout(void) {
+
+	uint32_t o = cap_tag;
+	int ax = 0, ay = 0, aw = WM_SCREEN_W, ah = WM_SCREEN_H, margin = 8;
+
+	// Game mode shows a 320x240 camera, pixel-doubled: keep the
+	// caption inside what is being looked at, at half the scale.
+	bool cam = z_game_enabled();
+	if (cam) {
+		int sc = Z_CAPTION_GET_SCALE(o);
+		if (sc < 1) sc = 2;
+		sc = (sc + 1) / 2;
+		o = (o & ~3u) | Z_CAPTION_SCALE(sc);
+		ax = (int)view_x; ay = (int)view_y;
+		aw = Z_GAME_VIEW_W; ah = Z_GAME_VIEW_H;
+		margin = 4;
+	}
+
+	int w, h;
+	if (!z_caption_render(cap_text, o, aw - 2 * margin, &cap_bits[0][0],
+			CAP_BMP_WORDS, CAP_BMP_H, &w, &h))
+		return false;
+
+	int x = ax + (aw - w) / 2, y;
+	switch (Z_CAPTION_GET_POS(o)) {
+	case 1:  y = ay + margin; break;
+	case 2:  y = ay + (ah - h) / 2; break;
+	default:
+		y = ay + ah - margin - h;
+		// Above the dock, not over it.
+		if (!cam && dock_idx >= 0 && !dock_hidden && windows[dock_idx].used) {
+			int dy = (int)windows[dock_idx].y - margin - h;
+			if (dy < y) y = dy;
+		}
+		break;
+	}
+	if (y < 0) y = 0;
+
+	z_clip_t r = { x, y, x + w - 1, y + h - 1 };
+	cap_rect = r;
+	cap_w = w;
+	cap_h = h;
+	return true;
+}
+
+static void caption_blit(void) {
+
+	if (!cap_vis) { cap_dirty = false; return; }
+
+	// Not while an app owns the screen, and not in the middle of a
+	// drag's XOR band: the band's erase would XOR the caption. Left
+	// dirty; the release repaints and it is drawn then.
+	if (game_grab_pid || xor_band_idx >= 0) return;
+
+	z_gfx_clear_visible();
+	if (!z_fb_hw_blit_mem(cap_bits, CAP_BMP_WORDS * 4, 0, 0,
+			cap_rect.x0, cap_rect.y0, cap_w, cap_h)) {
+		// A blitter without memory-source blits. Slow, and rare.
+		for (int yy = 0; yy < cap_h; yy++)
+			for (int xx = 0; xx < cap_w; xx++)
+				z_fb_set_pixel(cap_rect.x0 + xx, cap_rect.y0 + yy,
+					(cap_bits[yy][xx >> 5] >> (xx & 31)) & 1, NULL);
+	}
+	wm_unclip();
+	cap_dirty = false;
+}
+
+// Shows, replaces or (empty text) hides the caption.
+static void caption_set(const char *utf8, uint32_t tag) {
+
+	bool old_vis = cap_vis;
+	z_clip_t old = cap_rect;
+
+	z_caption_to_l9(utf8, cap_text, (int)sizeof(cap_text));
+	cap_tag = tag;
+
+	cap_vis = cap_layout();
+
+	uint32_t now = z_uptime_ticks();
+	uint32_t ms = Z_CAPTION_GET_TIMEOUT_MS(tag);
+	cap_has_deadline = cap_vis && ms;
+	cap_deadline = now + ms * Z_TICK_HZ / 1000u;
+
+	bool moved = old_vis != cap_vis ||
+		(cap_vis && (old.x0 != cap_rect.x0 || old.y0 != cap_rect.y0 ||
+		             old.x1 != cap_rect.x1 || old.y1 != cap_rect.y1));
+
+	if (moved) {
+		if (cap_vis) cap_compute_unclip();
+		// Every region first, with no REDRAW: windows under the new
+		// caption lose pixels (nothing to paint); windows under the
+		// old one gain them, and the repair below asks them to paint.
+		send_clip_all_except_ex(-1, false);
+		wm_unclip();
+		if (old_vis)
+			repair_region(old.x0, old.y0, old.x1 - old.x0 + 1,
+				old.y1 - old.y0 + 1, -1);
+	}
+
+	if (cap_vis) {
+		cap_refresh_at[0] = now + Z_TICK_HZ / 20;		// ~50ms
+		cap_refresh_at[1] = now + Z_TICK_HZ * 3 / 10;	// ~300ms
+		cap_refresh_n = 2;
+		cap_dirty = true;
+		caption_blit();
+	} else {
+		cap_refresh_n = 0;
+		cap_dirty = false;
+	}
+}
+
+// Once per main-loop pass: the timeout, the refreshes, a repaint.
+static void caption_tick(void) {
+	if (!cap_vis) return;
+	uint32_t now = z_uptime_ticks();
+	if (cap_has_deadline && (int32_t)(now - cap_deadline) >= 0) {
+		caption_set("", 0);
+		return;
+	}
+	for (int i = 0; i < cap_refresh_n; ) {
+		if ((int32_t)(now - cap_refresh_at[i]) >= 0) {
+			cap_dirty = true;
+			cap_refresh_at[i] = cap_refresh_at[--cap_refresh_n];
+		} else {
+			i++;
+		}
+	}
+	if (cap_dirty) caption_blit();
+}
+
+// -- automation (Z_WM_WIN_*, zwm.h; docs/automate.md) --
+
+// The frontmost window of `pid`, or the focused window for 0. Never
+// the dock.
+static int auto_window(uint32_t pid) {
+	if (!pid)
+		return (focused >= 0 && focused != dock_idx && windows[focused].used)
+			? focused : -1;
+	for (int i = zorder_count - 1; i >= 0; i--) {
+		int k = zorder[i];
+		if (k == dock_idx || !windows[k].used) continue;
+		if (windows[k].owner_pid == pid) return k;
+	}
+	return -1;
+}
+
+// Static, two slots, for the same reason as clip_payload(): a payload
+// is borrowed until the recipient reads it, and wm's heap is 8KB.
+static z_wm_win_info_t win_info[2];
+static z_blob_t win_info_blob[2];
+static int win_info_side;
+
+static void send_win_info(uint32_t to, uint32_t tag, int idx) {
+
+	int side = win_info_side ^= 1;
+	z_wm_win_info_t *in = &win_info[side];
+	memset(in, 0, sizeof(*in));
+	in->real_input = wm_real_input;
+
+	if (idx >= 0) {
+		wm_window_t *w = &windows[idx];
+		in->found = 1;
+		in->pid = w->owner_pid;
+		in->x = (int16_t)w->x; in->y = (int16_t)w->y;
+		in->w = (int16_t)w->w; in->h = (int16_t)w->h;
+		// The same rect z_win_content_rect() (zwin.c) gives the app.
+		in->cx0 = (int16_t)(w->x + 2);
+		in->cy0 = (int16_t)(w->y + (w->no_titlebar ? 0 : Z_WM_TITLEBAR_H) + 2);
+		in->cx1 = (int16_t)(w->x + w->w - 3);
+		in->cy1 = (int16_t)(w->y + w->h - 3);
+		in->focused = (idx == focused);
+		if (!w->no_titlebar) {
+			titlebar_icon_slot_t sl[TITLEBAR_ICON_TABLE_COUNT];
+			int left;
+			int n = titlebar_icons(w, sl, &left);
+			if (n > Z_WM_INFO_ICONS) n = Z_WM_INFO_ICONS;
+			for (int i = 0; i < n; i++) {
+				in->icon_kind[i] = (uint8_t)sl[i].kind;
+				in->icon_x[i] = (int16_t)sl[i].x;
+				in->icon_y[i] = (int16_t)sl[i].y;
+			}
+			in->n_icons = (uint8_t)n;
+		}
+		strncpy(in->title, w->title, Z_WM_INFO_TITLE - 1);
+	}
+
+	win_info_blob[side].len = sizeof(*in);
+	win_info_blob[side].data = (uint8_t *)in;
+	z_obj_t o;
+	o.type = Z_BLOB;
+	o.val.ptr = &win_info_blob[side];
+	z_msg_new_send(to, Z_WM_WIN_INFO, tag, o);
+}
+
+// Raise and focus, as a click on the window would.
+static void auto_focus(int idx) {
+	if (idx < 0 || game_grab_pid) return;
+	int m = blocked_by_modal(idx);
+	if (m >= 0) idx = m;
+	int old = focused;
+	focused = idx;
+	bring_to_front(idx);
+	repair_focus_chrome(old, idx);
+	if (old != idx) speak_focus(idx);
+}
+
 static const char *dock_spoken_name(const char *name) {
 	static const char *const map[][2] = {
 		{ "term",     "Terminal" },
@@ -3603,11 +3983,31 @@ static void forward_tap(uint32_t keysym, uint8_t modifiers) {
 
 // The pending romaji changed from `before` letters: repaint the dock,
 // which shows them (draw_dock()).
-static void kbd_ime_show(uint8_t before) {
-	if (before == kbd_ime.n && !kbd_ime.n) return;
-	if (dock_idx >= 0)
+// Brings the label box up to date: redrawn in place when it is on
+// screen and stays there, the whole dock repaired only when it appears
+// or goes (a layout switched from outside wm -- sw/apps/automate sets it
+// through the kernel -- is noticed here, on the next key).
+static void ime_box_update(void) {
+	if (dock_idx < 0 || dock_hidden) return;
+	bool want = ime_box_wanted();
+	if (want && ime_box_shown) {
+		z_clip_t reg[WM_MAX_CLIP];
+		int n = window_visible_region(dock_idx, reg, WM_MAX_CLIP);
+		if (n > 0) {
+			z_gfx_set_visible(reg, n);
+			draw_ime_box();
+			wm_unclip();
+		}
+		return;
+	}
+	if (want != ime_box_shown)
 		repair_region(windows[dock_idx].x, windows[dock_idx].y,
 			windows[dock_idx].w, windows[dock_idx].h, -1);
+}
+
+static void kbd_ime_show(uint8_t before) {
+	if (before == kbd_ime.n && !kbd_ime.n && ime_box_shown == ime_box_wanted()) return;
+	ime_box_update();
 }
 
 static void dispatch_keys(void) {
@@ -3616,8 +4016,10 @@ static void dispatch_keys(void) {
 	while ((ev = hid_read_key()) >= 0) {
 
 		uint8_t usage     = Z_KBD_EV_USAGE(ev);
+		if (!Z_KBD_EV_INJECTED(ev)) real_input("key", usage);
 		uint8_t modifiers = Z_KBD_EV_MODS(ev);
 		bool    pressed   = Z_KBD_EV_PRESSED(ev) != 0;
+		if (pressed && ime_box_shown != ime_box_wanted()) ime_box_update();
 
 		// A config reload (settings, `cfg reload`) may have changed
 		// the layout list. Checked here, where keys arrive, rather
@@ -3901,6 +4303,29 @@ static int create_window(uint32_t owner_pid, const char *title,
 		if (windows[i].min_w < Z_WM_MIN_WIDTH) windows[i].min_w = Z_WM_MIN_WIDTH;
 		if (windows[i].min_h < Z_WM_MIN_HEIGHT) windows[i].min_h = Z_WM_MIN_HEIGHT;
 
+		bool place_it = false;
+		if (fixed_x < 0 && owner_pid != my_pid &&
+		    z_uptime_ticks() - next_place_tick <= Z_WM_ARG_TIMEOUT) {
+			if (next_place_pid && owner_pid == next_place_pid) place_it = true;
+			else if (next_place_any) {
+				// Only a process with no window yet: not a dialog of
+				// something already on the screen.
+				place_it = true;
+				for (int j = 0; j < WM_MAX_WINDOWS; j++)
+					if (j != i && windows[j].used && windows[j].owner_pid == owner_pid)
+						place_it = false;
+			}
+		}
+		if (place_it) {
+			// Z_WM_WIN_NEXT_PLACE: where a script wants it, clamped.
+			int32_t px = next_place_x, py = next_place_y;
+			if (px + (int32_t)w > WM_SCREEN_W) px = WM_SCREEN_W - (int32_t)w;
+			if (py + (int32_t)h > WM_SCREEN_H) py = WM_SCREEN_H - (int32_t)h;
+			fixed_x = px < 0 ? 0 : px;
+			fixed_y = py < 0 ? 0 : py;
+			next_place_pid = 0;
+			next_place_any = false;
+		}
 		if (fixed_x >= 0 && fixed_y >= 0) {
 			windows[i].x = (uint32_t)fixed_x;
 			windows[i].y = (uint32_t)fixed_y;
@@ -3987,7 +4412,7 @@ static void wipe_raise_overlap(int raised)
 
 	if (raised < 0 || !windows[raised].used) return;
 	a = &windows[raised];
-	z_gfx_clear_visible();
+	wm_unclip();
 	for (i = 0; i < raise_jumped_n; i++) {
 		int j = raise_jumped[i];
 		wm_window_t *b;
@@ -5049,9 +5474,9 @@ static void handle_message(z_msg_t *msg) {
 			// they overlap the strip and are drawn after it. Windows
 			// behind are covered by the titlebar and are skipped by
 			// repair_region()'s own occlusion check.
-			z_gfx_clear_visible();
+			wm_unclip();
 			paint_window_chrome(idx);
-			z_gfx_clear_visible();
+			wm_unclip();
 
 			break;
 
@@ -5076,6 +5501,67 @@ static void handle_message(z_msg_t *msg) {
 				/* The app drew over the desktop, so there is
 				 * nothing left of it to uncover. */
 				repair_region(0, 0, WM_SCREEN_W, WM_SCREEN_H, -1);
+			}
+			break;
+
+		case Z_WM_CAPTION:
+			// Copied (and converted) before anything else runs: the
+			// payload is the sender's, borrowed.
+			caption_set(msg->obj.type == Z_STR ? msg->obj.val.str : "",
+				msg->tag);
+			break;
+
+		case Z_WM_WIN_QUERY:
+			send_win_info(msg->from, msg->tag, auto_window(msg->tag));
+			break;
+
+		case Z_WM_WIN_PLACE: {
+			int idx = auto_window(msg->tag);
+			if (idx >= 0 && msg->obj.type == Z_UINT32 && !game_grab_pid &&
+			    !windows[idx].maxed)
+				move_window_to(idx,
+					Z_WM_UNPACK_PLACE_X(msg->obj.val.uint32),
+					Z_WM_UNPACK_PLACE_Y(msg->obj.val.uint32));
+			break;
+		}
+
+		case Z_WM_WIN_FOCUS:
+			auto_focus(auto_window(msg->tag));
+			break;
+
+		case Z_WM_WIN_TBICON: {
+			int idx = auto_window(msg->tag);
+			if (idx >= 0 && msg->obj.type == Z_UINT32) {
+				int kind = (int)msg->obj.val.uint32;
+				if (kind == 0) handle_close_click(idx);
+				else handle_titlebar_icon_click(idx, kind);
+			}
+			break;
+		}
+
+		case Z_WM_WIN_KILL: {
+			uint32_t pid = msg->tag;
+			if (!pid || pid == my_pid) break;
+			// Kill first so it stops drawing, then take its windows
+			// away -- destroy_window() drains the rasterizer before
+			// it repairs, so a last queued line cannot land after.
+			z_proc_kill(pid);
+			for (int i = 0; i < WM_MAX_WINDOWS; i++)
+				if (windows[i].used && windows[i].owner_pid == pid &&
+				    i != dock_idx)
+					destroy_window((uint32_t)i);
+			if (next_place_pid == pid) next_place_pid = 0;
+			printf("wm: killed pid %lu and its windows\n", (unsigned long)pid);
+			break;
+		}
+
+		case Z_WM_WIN_NEXT_PLACE:
+			if (msg->obj.type == Z_UINT32) {
+				next_place_pid = msg->tag;
+				next_place_any = (msg->tag == 0);
+				next_place_x = Z_WM_UNPACK_PLACE_X(msg->obj.val.uint32);
+				next_place_y = Z_WM_UNPACK_PLACE_Y(msg->obj.val.uint32);
+				next_place_tick = z_uptime_ticks();
 			}
 			break;
 
@@ -5427,9 +5913,9 @@ static void repair_drag(int dragged_idx) {
 	// (a titlebar press brings it to front) and must end up on top of
 	// both.
 	if (dragged_idx >= 0 && windows[dragged_idx].used) {
-		z_gfx_clear_visible();
+		wm_unclip();
 		paint_window_chrome(dragged_idx);
-		z_gfx_clear_visible();
+		wm_unclip();
 	}
 
 	// The dock is wm-owned (send_clip() skips it), so nothing else
@@ -5453,9 +5939,9 @@ static void repair_drag(int dragged_idx) {
 				(int)w->x, (int)w->y, (int)w->w, (int)w->h);
 		}
 		if (touched) {
-			z_gfx_clear_visible();
+			wm_unclip();
 			paint_window_chrome(dock_idx);
-			z_gfx_clear_visible();
+			wm_unclip();
 		}
 	}
 
@@ -5925,7 +6411,7 @@ int main(void) {
 						if (send_clip_freeze(dragging))
 							wait_clip_ack_one(dragging,
 								FREEZE_ACK_TIMEOUT_MS);
-						z_gfx_clear_visible();
+						wm_unclip();
 						draw_window_box(&windows[dragging],
 							dragging == focused, Z_RASTER_CLEAR);
 						fill_rect(drag_ox, drag_oy, drag_ow, drag_oh, 0);
@@ -6205,6 +6691,8 @@ int main(void) {
 		 * costs 732 wakeups a second, which is what this whole
 		 * mechanism exists to avoid, so it is a fallback and not a
 		 * mode anybody should be in. */
+		caption_tick();
+
 		z_proc_wait(ptr_wakeups ? wm_idle_ticks() : 1);
 
 	}

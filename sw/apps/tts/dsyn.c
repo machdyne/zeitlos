@@ -15,6 +15,7 @@
  * mark. Overlapping grains are normalised by their summed windows.
  */
 
+#include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
@@ -132,18 +133,35 @@ bool dsyn_open(uint32_t off, uint32_t len) {
 
 	uint8_t h[16];
 	ready = false;
-	if (len < 16 || !pack_read_at(off, h, 16)) return false;
-	if (rd16(h) != 1 || rd16(h + 2) != SYNTH_FS) return false;
+	// Every refusal says why: a pack whose lexicon loads and whose
+	// recorded voice silently does not looks like a pack without one.
+	if (len < 16 || !pack_read_at(off, h, 16)) {
+		printf("tts: recorded voice: cannot read the DIPHONE header (%lu bytes at %lu)\n",
+			(unsigned long)len, (unsigned long)off);
+		return false;
+	}
+	if (rd16(h) != 1 || rd16(h + 2) != SYNTH_FS) {
+		printf("tts: recorded voice: version %u at %u Hz, this build wants 1 at %u Hz\n",
+			rd16(h), rd16(h + 2), (unsigned)SYNTH_FS);
+		return false;
+	}
 	nph = rd16(h + 4);
 	nunits = rd16(h + 6);
 	marks_off = rd32(h + 8);
 	data_off = rd32(h + 12);
-	if (nph == 0 || nph > MAX_PH || nunits == 0 || nunits > MAX_UNITS) return false;
+	if (nph == 0 || nph > MAX_PH || nunits == 0 || nunits > MAX_UNITS) {
+		printf("tts: recorded voice: %u phones, %u units -- this build holds %u and %u\n",
+			(unsigned)nph, (unsigned)nunits, (unsigned)MAX_PH, (unsigned)MAX_UNITS);
+		return false;
+	}
 	sec_off = off;
 
 	uint32_t p = off + 16;
 	uint8_t nm[2 * MAX_PH];
-	if (!pack_read_at(p, nm, 2u * nph)) return false;
+	if (!pack_read_at(p, nm, 2u * nph)) {
+		printf("tts: recorded voice: read failed at %lu\n", (unsigned long)p);
+		return false;
+	}
 	for (int i = 0; i < nph; i++) {
 		names[i][0] = (char)nm[2 * i];
 		names[i][1] = (char)nm[2 * i + 1];
@@ -152,10 +170,16 @@ bool dsyn_open(uint32_t off, uint32_t len) {
 	p += 2u * nph;
 	// The pair table and the stand-ins: read as bytes, little-endian.
 	static uint8_t tmp[2 * MAX_PH * MAX_PH];
-	if (!pack_read_at(p, tmp, 2u * nph * nph)) return false;
+	if (!pack_read_at(p, tmp, 2u * nph * nph)) {
+		printf("tts: recorded voice: read failed at %lu\n", (unsigned long)p);
+		return false;
+	}
 	for (uint32_t i = 0; i < (uint32_t)nph * nph; i++) pair[i] = rd16(tmp + 2 * i);
 	p += 2u * nph * nph;
-	if (!pack_read_at(p, tmp, 4u * nph)) return false;
+	if (!pack_read_at(p, tmp, 4u * nph)) {
+		printf("tts: recorded voice: read failed at %lu\n", (unsigned long)p);
+		return false;
+	}
 	for (int i = 0; i < nph; i++) {
 		first_of[i] = rd16(tmp + 2 * i);
 		last_of[i] = rd16(tmp + 2 * nph + 2 * i);
@@ -167,7 +191,10 @@ bool dsyn_open(uint32_t off, uint32_t len) {
 	for (uint32_t i = 0; i < nunits; i++) {
 		if (i % 64 == 0) {
 			uint32_t n = nunits - i < 64 ? nunits - i : 64;
-			if (!pack_read_at(p + 16 * i, blk, 16 * n)) return false;
+			if (!pack_read_at(p + 16 * i, blk, 16 * n)) {
+				printf("tts: recorded voice: read failed at %lu\n", (unsigned long)p);
+				return false;
+			}
 		}
 		const uint8_t *r = blk + 16 * (i % 64);
 		units[i].data = rd32(r);

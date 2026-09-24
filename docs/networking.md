@@ -32,7 +32,7 @@ binary serves every board:
 | `usb_ecm.c` | a USB ethernet adapter (CDC-ECM), on any board with the USB host controller | the adapter's own, which nothing reports |
 
 A MAC in the bitstream wins; the USB adapter is what a board with none
-gets, and `NET.CFG`'s `phy = auto | usb | builtin` overrides that
+gets, and `net.cfg`'s `phy = auto | usb | builtin` overrides that
 either way. The USB backend differs from the three MACs in three ways
 worth knowing before reading the rest of this document — its hardware
 can arrive and leave while `net` runs, it has a MAC address of its own

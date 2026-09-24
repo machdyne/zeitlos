@@ -1,0 +1,7 @@
+# The in-store demo: the long demo, forever. Anyone touching the
+# keyboard or mouse stops it and has the machine to themselves; after
+# 60 seconds with nobody touching anything it starts again.
+#   > run automate /demo/store.zds
+# docs/demo.md, "In the store".
+attract 60
+chain /demo/long.zds

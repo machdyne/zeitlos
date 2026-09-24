@@ -1,5 +1,5 @@
 /*
- * Zeitlos -- NET.CFG parser. See netcfg.h and docs/esp32link.md.
+ * Zeitlos -- net.cfg parser. See netcfg.h and docs/esp32link.md.
  */
 
 #include <stdio.h>
@@ -54,7 +54,7 @@ int netcfg_load(netcfg_t *out)
 	memset(out, 0, sizeof(*out));
 	out->dhcp = -1;
 
-	char *buf = fs_mallocfile("NET.CFG");
+	char *buf = fs_mallocfile("net.cfg");
 	if (!buf)
 		buf = fs_mallocfile("net.cfg");
 	if (!buf)

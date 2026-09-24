@@ -398,13 +398,26 @@ static void scan_dir(const char *dir) {
  * comes first in the list, which is the order somebody who has done
  * neither would expect.
  *
- * fs_list() returns full paths ("/AUDIO/AI.MOD"), so load_module()
+ * fs_list() returns full paths ("/audio/ai.mod"), so load_module()
  * opens what it is given and needs no directory of its own.
  */
 static void find_modules(void) {
 	nfiles = 0;
+	scan_dir("/demo");	/* media for the demos (docs/demo.md) */
 	scan_dir("/audio");
 	scan_dir("/");
+}
+
+/* Paths from fs_list() and from a launch argument may differ in case
+ * (FatFs here matches 8.3 names case-insensitively). */
+static int same_path(const char *a, const char *b) {
+	for (;; a++, b++) {
+		char ca = *a, cb = *b;
+		if (ca >= 'a' && ca <= 'z') ca = (char)(ca - 32);
+		if (cb >= 'a' && cb <= 'z') cb = (char)(cb - 32);
+		if (ca != cb) return 0;
+		if (!ca) return 1;
+	}
 }
 
 /*
@@ -1330,7 +1343,26 @@ int main(void) {
 	hw_mix = z_audio_mixer_present();
 	printf("track: mixing in %s\n", hw_mix ? "HARDWARE" : "software");
 
+	/* A module to start with: `files` double-click, or a script
+	 * (sw/apps/automate). Claimed before the scan so a stale argument
+	 * never lingers for the next app. */
+	char launch[96];
+	int start = 0;
+	launch[0] = 0;
+	z_launch_arg_take(launch, sizeof(launch));
+
 	find_modules();
+
+	if (launch[0]) {
+		int found = -1;
+		for (i = 0; i < nfiles; i++)
+			if (same_path(files[i], launch)) { found = i; break; }
+		if (found < 0 && nfiles < MAX_FILES) {
+			char *copy = malloc(strlen(launch) + 1);
+			if (copy) { strcpy(copy, launch); files[nfiles] = copy; found = nfiles++; }
+		}
+		if (found >= 0) start = found;
+	}
 
 	if (nfiles == 0) {
 		printf("No .mod files in /audio or the root directory.\n");
@@ -1357,7 +1389,7 @@ int main(void) {
 	 * last module: this is a player left running while other things
 	 * happen, which is the whole point of the exercise. n skips, the
 	 * close icon or q stops. */
-	for (i = 0; !want_quit; i++) {
+	for (i = start; !want_quit; i++) {
 		if (i >= nfiles) i = 0;
 		if (!play(i)) break;
 	}

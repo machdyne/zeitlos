@@ -33,6 +33,13 @@ static const char *ph(const char *t, bool spell) {
 static int has(const char *t, const char *want) { return strstr(ph(t, false), want) != 0; }
 
 int main(void) {
+	// A sentence of exactly twelve words: the chunk ends at the word
+	// limit, and its period must go with it, not become a chunk of its
+	// own -- one character is spelled, and it said "dot".
+	CHECK(!has("one two three four five six seven eight nine ten eleven twelve.", "D AA1 T"));
+	CHECK(!has("de zined tuh gheh thur, and so on and so forth for you all here.", "D AA1 T"));
+	CHECK(has("readme.txt", "D AA1 T"));				// file.txt still says dot
+	CHECK(has("one two three four five six seven eight nine ten eleven twelve. Next!", "N EH1 K S T"));
 	// numbers
 	CHECK(strcmp(ph("42", false), "F AO1 R T IY0 T UW1 ") == 0);
 	CHECK(has("4,096", "F AO1 R TH AW1 Z AX0 N D N AY1 N T IY0 S IH1 K S"));

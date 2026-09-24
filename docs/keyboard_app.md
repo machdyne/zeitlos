@@ -27,7 +27,10 @@ A key is sent exactly the way a physical key arrives: as a raw USB HID
 event, a press and a release, through `hid_inject()` -- the path the
 ESP32 remote desktop already uses. The kernel stamps the active layout
 into it, and `wm` translates and delivers it like any other key
-([keyboard_layouts.md](keyboard_layouts.md)). So everything a real
+([keyboard_layouts.md](keyboard_layouts.md)). The kernel marks it as
+injected (bit 25, `Z_KBD_EV_INJECTED`), which is how `wm` tells a
+person at a real keyboard from this one -- see
+[automate.md](automate.md#attract-mode). So everything a real
 keyboard gets, this gets, with no code of its own for any of it: the
 layout, dead keys, AltGr, Caps Lock, Super+Space, Japanese input,
 `wm`'s shortcuts.

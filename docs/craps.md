@@ -1,7 +1,7 @@
 # craps
 
 **Status: complete.** The whole felt, the come-out and point phases,
-free odds, and chips that persist in `/USER/casino.dat`.
+free odds, and chips that persist in `/user/casino.dat`.
 
     cd sw/apps/craps && make                   # the target binary
     make test                                  # 131 checks, plus 196 shared
@@ -188,7 +188,7 @@ making, and on a display with no back buffer it is the right one.
 ## The bank is settled when the table empties
 
 The other five games have a round: you stake, it resolves, the net goes
-to `/USER/casino.dat`. **Craps has no such boundary.** Bets go up and come
+to `/user/casino.dat`. **Craps has no such boundary.** Bets go up and come
 down across many rolls, a place bet wins and stays working, a come bet
 takes its own number and outlives the point that was on when it was
 made.
@@ -199,7 +199,7 @@ is tracked in the game and the display shows what is left to bet rather
 than what is in the bank.
 
 That keeps the crash-safety the others have: chips do not leave
-`/USER/casino.dat` until the shooter's run is over. It also means a long hot
+`/user/casino.dat` until the shooter's run is over. It also means a long hot
 run is not banked until it ends, which is exactly what a craps table
 feels like.
 

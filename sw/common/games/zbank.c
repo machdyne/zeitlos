@@ -352,7 +352,7 @@ int zbank_save(const zbank_t *b)
 
     if (fs_write_file((char *)ZBANK_PATH, buf, n) == n) return ZBANK_OK;
 
-    /* A first save on a card with no /USER. Creating it eagerly on
+    /* A first save on a card with no /user. Creating it eagerly on
      * every save would be a directory lookup per round for a condition
      * that is true once in the life of a card; doing it only when the
      * write has actually failed costs nothing on the path that matters.

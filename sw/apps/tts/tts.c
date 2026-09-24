@@ -188,11 +188,35 @@ static const ttsq_ops_t queue_ops = { notify, backend_stop };
 
 static bool quitting;
 
+// -- narration (Z_TTS_NARRATE, ztts.h) --
+static uint32_t narrator_pid;
+static uint32_t narrator_lease;	// ticks
+static uint32_t narrator_until;
+
+static bool narrator_blocks(uint32_t from) {
+	if (!narrator_pid) return false;
+	if ((int32_t)(z_uptime_ticks() - narrator_until) >= 0) {
+		printf("tts: [narrator %lu lease expired]\n", (unsigned long)narrator_pid);
+		narrator_pid = 0;
+		return false;
+	}
+	if (from == narrator_pid) {
+		narrator_until = z_uptime_ticks() + narrator_lease;
+		return false;
+	}
+	return true;
+}
+
 static void handle(z_msg_t *m) {
 
 	switch (m->subject) {
 
 	case Z_TTS_SAY:
+		if (narrator_blocks(m->from)) {
+			uint16_t mk = (uint16_t)Z_TTS_TAG_MARK(m->tag);
+			if (mk) notify(m->from, Z_TTS_MARK_CANCELLED, mk);
+			break;
+		}
 		// Copied inside ttsq_say(), before anything else here sends a
 		// message and lets the sender run again.
 		ttsq_say(m->from,
@@ -201,11 +225,28 @@ static void handle(z_msg_t *m) {
 		break;
 
 	case Z_TTS_STOP:
+		if (narrator_blocks(m->from)) break;
 		ttsq_cancel_all();
 		break;
 
 	case Z_TTS_REPEAT:
+		if (narrator_blocks(m->from)) break;
 		ttsq_repeat();
+		break;
+
+	case Z_TTS_NARRATE:
+		if (m->obj.type != Z_UINT32) break;
+		if (m->obj.val.uint32) {
+			uint32_t s = m->obj.val.uint32 > 600 ? 600 : m->obj.val.uint32;
+			if (narrator_pid != m->from)
+				printf("tts: [narrator is pid %lu]\n", (unsigned long)m->from);
+			narrator_pid = m->from;
+			narrator_lease = s * Z_TICK_HZ;
+			narrator_until = z_uptime_ticks() + narrator_lease;
+		} else if (m->from == narrator_pid) {
+			printf("tts: [narrator released]\n");
+			narrator_pid = 0;
+		}
 		break;
 
 	case Z_TTS_QUIT:
@@ -228,6 +269,8 @@ static void handle(z_msg_t *m) {
 				// which it now is, in that voice -- or that there is no
 				// recorded voice to switch to.
 				const char *said;
+				bool quiet = (v & Z_TTS_VOICE_QUIET) != 0;
+				v &= ~Z_TTS_VOICE_QUIET;
 				if (v == Z_TTS_VOICE_NEXT)
 					v = voice_recorded && dsyn_ready() ? Z_TTS_VOICE_MALE : Z_TTS_VOICE_RECORDED;
 				voice_recorded = (v == Z_TTS_VOICE_RECORDED);
@@ -235,7 +278,8 @@ static void handle(z_msg_t *m) {
 				if (voice_recorded && !dsyn_ready()) said = "No recorded voice. Synthesised voice";
 				else if (voice_recorded) said = "Recorded voice";
 				else said = "Synthesised voice";
-				ttsq_say(0, said, Z_TTS_F_INTERRUPT, 0);
+				if (quiet) printf("tts: [voice: %s]\n", said);
+				else ttsq_say(0, said, Z_TTS_F_INTERRUPT, 0);
 				break;
 			}
 			case Z_TTS_PARAM_VOLUME:

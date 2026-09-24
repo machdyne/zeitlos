@@ -489,7 +489,7 @@ changing anything that writes into a buffer.
 
 ## The bankroll
 
-Poker buys in from `/USER/casino.dat` and cashes out when the table
+Poker buys in from `/user/casino.dat` and cashes out when the table
 ends, sharing one bankroll with the rest of the casino
 (`docs/casino.md`). **The boundary is the table, not the hand** -- a
 stack rises and falls across many hands, so there is no round to settle

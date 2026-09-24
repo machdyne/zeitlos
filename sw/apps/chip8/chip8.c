@@ -29,7 +29,7 @@
  *   F5         reset
  *   F6         full-screen game mode
  *   F7/F8      slower / faster
- *   F9         screenshot to CHIP8SS.ZBM
+ *   F9         screenshot to chip8ss.zbm
  *   F10        debugger pane
  *   F11        single step        F12  run / pause
  *   Shift+F1   cycle the XO-CHIP grey mapping
@@ -154,7 +154,7 @@ static const uint32_t pad_mask[C8_PAD_COUNT] = {
 	Z_PAD_START, Z_PAD_SELECT
 };
 
-/* Overwritten per ROM from CHIP8.CFG -- see config.h. Not const for
+/* Overwritten per ROM from chip8.cfg -- see config.h. Not const for
  * that reason. */
 static uint8_t pad_key[C8_PAD_COUNT] = {
 	0x2, 0x8, 0x4, 0x6,
@@ -171,7 +171,7 @@ static int keysym_to_hex(uint32_t keysym) {
 	/* SPACE and ENTER are not on the hex keypad, and a machine with a
 	 * keyboard should still do something sensible when you press the
 	 * obvious "fire" key. They alias the GAMEPAD's A and START rather
-	 * than fixed hex values, so one `pad a=` line in CHIP8.CFG moves
+	 * than fixed hex values, so one `pad a=` line in chip8.cfg moves
 	 * the pad button and the space bar together -- which is what
 	 * somebody editing that line means, and it avoids a second
 	 * mapping that could drift out of step with the first.
@@ -633,7 +633,7 @@ static void screenshot(void) {
 	z_bm_header_t hdr;
 	int h;
 
-	if (!sibling_path(path, (int)sizeof(path), "CHIP8SS.ZBM")) {
+	if (!sibling_path(path, (int)sizeof(path), "chip8ss.zbm")) {
 		printf("chip8: ROM path too long for a screenshot beside it\n");
 		return;
 	}
@@ -669,7 +669,7 @@ static void load_config(void) {
 
 	c8_config_defaults(&cfg);
 
-	if (!sibling_path(path, (int)sizeof(path), "CHIP8.CFG")) return;
+	if (!sibling_path(path, (int)sizeof(path), "chip8.cfg")) return;
 
 	sz = fs_size(path);
 	if (sz <= 0) return;
@@ -1152,7 +1152,7 @@ int main(void) {
 	printf("chip8: %s\n", c8_sound_available()
 		? "sound on the hardware mixer" : "no audio on this board");
 	if (cfg.found)
-		printf("chip8: configuration from CHIP8.CFG applied\n");
+		printf("chip8: configuration from chip8.cfg applied\n");
 	if (flags_have_file)
 		printf("chip8: restored saved flags from %s\n", flags_path);
 	printf("chip8: F1/F2/F3 scale, F4 profile, F5 reset, F6 game mode,\n");

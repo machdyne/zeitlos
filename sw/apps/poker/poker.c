@@ -451,7 +451,7 @@ static void announce_result(void)
  * TABLE ends -- a buy-in and a cash-out, which is how a card room
  * works and is also the only boundary that exists.
  *
- * NOTHING LEAVES /USER/casino.dat WHEN YOU SIT DOWN. The buy-in is
+ * NOTHING LEAVES /user/casino.dat WHEN YOU SIT DOWN. The buy-in is
  * recorded and the chips stay in the bank until the table is over, so a
  * window closed mid-hand costs nothing -- the same arrangement
  * sw/apps/craps uses for the same reason. What the player is worth is
@@ -468,7 +468,7 @@ static void load_bank(void)
     if (rv == ZBANK_CORRUPT) {
         set_str(view.message, PT_MSG_LEN,
             "bank file damaged -- `buyin` to start over");
-        puts("poker: /USER/casino.dat is damaged; not writing to it");
+        puts("poker: /user/casino.dat is damaged; not writing to it");
     }
 }
 
@@ -513,7 +513,7 @@ static void new_game(void)
     /* THE OPPONENTS ARE THE HOUSE'S MONEY; the hero's is not.
      *
      * pk_game_init() seats everyone with the same stack, which is right
-     * for the other seats -- they are not drawing on /USER/casino.dat.
+     * for the other seats -- they are not drawing on /user/casino.dat.
      * The hero buys in for what the bank can cover, up to a full stack.
      *
      * A short buy-in is a real disadvantage at a table where everyone
@@ -872,7 +872,7 @@ int main(void)
 
         /* THE BANK CHANGES UNDER THIS WINDOW. sw/apps/casino can hand
          * out a loan while a table is open, and another game can win
-         * while this one is idle -- /USER/casino.dat is shared. Once a
+         * while this one is idle -- /user/casino.dat is shared. Once a
          * second, and only when the figure has actually moved. */
         {
             uint32_t now = z_uptime_ticks();

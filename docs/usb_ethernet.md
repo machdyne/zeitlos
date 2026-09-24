@@ -244,7 +244,7 @@ interface:
   The consequence to know about: `net` registers its name before this,
   so a process that messages `net0` while it is waiting will wait for
   its own timeout rather than failing at once. Set `phy=builtin` in
-  `NET.CFG` to get the old behaviour of exiting cleanly instead.
+  `net.cfg` to get the old behaviour of exiting cleanly instead.
 
 Unplug mid-session needs no handling beyond this: sends fail, receives
 return nothing, and `net` logs the event. A replug resumes. `ic` on the
@@ -253,7 +253,7 @@ is what to look at if frames appear to be going missing between them.
 
 ## Configuration
 
-`NET.CFG` gains one key:
+`net.cfg` gains one key:
 
 ```
 phy = auto | usb | builtin

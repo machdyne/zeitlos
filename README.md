@@ -47,7 +47,7 @@ Build the hardware map from RTL with `make hwmap` (see [docs/hwmap.md](docs/hwma
  - [Core apps in flash](docs/flash_apps.md) -- boots to a desktop with no sdcard
  - Object-based interprocess [messaging](docs/messaging.md), streaming and [ports](docs/ports.md)
  - International text: UTF-8 throughout, [22 keyboard layouts](docs/keyboard_layouts.md) (US, UK, German, French, Spanish, Italian, Portuguese, Nordic, Swiss, Belgian, Japanese and more) with dead keys and AltGr, switched with Super+Space; accented letters and the euro sign drawn by the hardware fonts ([ISO 8859-15](docs/text_encoding.md)); Japanese drawn from a public-domain 12x12 font and typed with a romaji [input method](docs/keyboard_layouts.md#japanese-input)
- - [Speech](docs/tts.md) for blind and headless use
+ - [Speech](docs/tts.md) for blind and headless use, and system-wide [captions](docs/captions.md)
  - Image decoding and [vector rendering](docs/svg.md) shared by every app (`sw/common`)
  - IP/ARP/ICMP/UDP/DHCP/NTP/DNS/TFTP/TCP/telnet/ssh [networking](docs/networking.md)
  - TLS 1.3 with X.509 certificate verification -- see [tls](docs/tls.md) and [x509](docs/x509.md)
@@ -101,6 +101,7 @@ With the MTU, there is no need for position independent code or complicated addr
 | [cal](docs/cal_app.md) | Month calendar |
 | [settings](docs/settings_app.md) | System settings; editor for [`/zeitlos.cfg`](docs/config.md) |
 | [keyboard](docs/keyboard_app.md) | On-screen keyboard for any layout: for touchscreens and pointer-only use, and for trying layouts |
+| [automate](docs/automate.md) | Plays scripted, narrated, captioned [demos](docs/demo.md) -- short, long and in-store |
 | [ask](docs/ask_app.md) | Local dataset search |
 | [play](docs/play_app.md) | WAV/AU/RAW audio file player |
 | [track](docs/track_app.md) | MOD audio file player |

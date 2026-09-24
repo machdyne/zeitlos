@@ -75,15 +75,15 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-/* The bank lives under /USER, with the rest of what belongs to the
+/* The bank lives under /user, with the rest of what belongs to the
  * person rather than to the system. The directory is created on demand
  * -- see zbank_save() -- so a card that predates this still works.
  *
  * ZBANK_OLD_PATH is where it used to be. zbank_load() falls back to it
  * so an existing bankroll is not lost on the move; the next save writes
  * the new location and the old file is then just a stale copy. */
-#define ZBANK_DIR         "/USER"
-#define ZBANK_PATH        "/USER/casino.dat"
+#define ZBANK_DIR         "/user"
+#define ZBANK_PATH        "/user/casino.dat"
 #define ZBANK_OLD_PATH    "/casino.dat"
 #define ZBANK_VERSION     1
 

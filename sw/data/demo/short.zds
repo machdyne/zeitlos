@@ -1,0 +1,127 @@
+# Zeitlos -- the SHORT demo: about 60 seconds, for social media.
+#
+#   > run automate /demo/short.zds
+#
+# Revision 11. Captions are 3x, one line each; the narration after the
+# "|" is what is SPOKEN, and is spelled for the ear: without a speech
+# pack (/speech/en.spk) tts falls back to its built-in letter-to-sound
+# rules, which say "timeless" as "timless" and "designed" as
+# "dizzig-nd". The respellings were checked with tts's own front end
+# (sw/apps/tts/tests/t2p_cli.c); docs/demo.md, "Spelling for the ear".
+#
+# THE RULE: speech and action never overlap -- the voice needs about
+# 60% of the CPU, and anything beside it made it stutter.
+
+reset
+interruptible off
+caption-size 3
+caption-pos bottom
+rate 190
+type-speed 45
+speech on
+voice synth
+# jfont (Japanese) must already be running: start it before the demo.
+
+# -- 1. hello: a desktop already at work -------------------------------
+# Opened before anyone speaks: launching is what would hurt the voice.
+# Once open, these are idle (clock redraws once a second), so they stay
+# up under the first sentences.
+run cal at 24 24
+run calc at 250 70
+run clock at 470 30
+focus calc
+type 12*34
+key enter
+pause 400
+narrate Hello. I am Zeitlos. | Hello. I am Zeitlos.
+# With a speech pack this is where the recorded voice takes over;
+# without one it stays synthesised (tts logs "No recorded voice").
+voice recorded
+narrate Computer + OS, designed together | A cum pewter and operating system, de zined tuh gheh thur.
+narrate RISC-V CPU, our own GPU, one FPGA | A risk five processor, plus graphics hardware, on one FPGA.
+close calc
+close cal
+close clock
+run gpu3d at 420 24
+drag 520 130 596 170 700
+key space
+pause 1500
+close gpu3d
+
+# -- 2. every language -------------------------------------------------
+narrate 22 keyboard layouts | Twenty two keyboard layouts, from German to Japanese.
+run text at 16 16
+tbicon text font
+type Hello from Zeitlos!
+key enter
+layout de
+type Grüße aus Bayern!
+key enter
+layout ja-us
+type konnichiha!
+layout us
+pause 900
+kill text
+
+# -- 3. reading Markdown ----------------------------------------------
+# welcome.md has headings, lists and tables: rendered, paged with Space.
+narrate Markdown, rendered | And read Markdown documents.
+run read /docs/welcome.md at 150 16
+key alt+equal
+pause 1500
+key space
+pause 1300
+key space
+pause 1300
+close read
+
+# -- 4. a photograph ---------------------------------------------------
+# Said first; then the picture is decoded and shown (all at once, when
+# view has finished). Tune the pause to the card: the window must not
+# close before the picture is up.
+narrate Every photo, in one bit | Foe tows, dithered to one bit.
+run view /demo/squirrel.pgm at 0 0
+key alt+equal
+pause 6000
+close view
+
+# -- 5. music ----------------------------------------------------------
+narrate Play music | Play music.
+run midi /demo/lvb11.mid at 168 120
+pause 800
+melody 150 e 3 e 3 e m w q n:2 - z c n m:2 - c h m q:2 - c e 3 e 3 e m w q n:3
+pause 500
+close midi
+
+# -- 6. drawing --------------------------------------------------------
+narrate Or paint | Or paint.
+run draw at 150 16
+origin draw
+click 30 50
+click 72 256
+drag 50 170 320 225 450
+click 10 50
+click 24 256
+drag 120 110 200 168 350
+click 30 30
+drag 115 110 160 72 250
+drag 160 72 205 110 250
+click 10 70
+drag 245 18 290 60 300
+origin screen
+pause 600
+
+# -- 7. timeless -------------------------------------------------------
+caption github.com/machdyne/zeitlos
+video amber
+pause 450
+video green
+pause 450
+video paper
+pause 450
+video white
+say Zeitlos. Time less cum pewting.
+pause 1200
+caption-off
+reset
+end

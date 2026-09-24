@@ -2,7 +2,7 @@
 
 **Status: complete.** European and American wheels, the full betting
 layout by keyboard or mouse, an animated spin, and chips that persist
-in `/USER/casino.dat`.
+in `/user/casino.dat`.
 
     cd sw/apps/roulette && make                   # the target binary
     make test                                     # 533 checks, six binaries
@@ -12,7 +12,7 @@ Built for rv32i with section GC: 37,810 text, 52 data, 3,284 bss —
 41,146 bytes, against `sw/apps/poker`'s 68,844. No soft-float reaches
 any of this app's own objects.
 
-Chips come from the shared bank, `/USER/casino.dat` — see
+Chips come from the shared bank, `/user/casino.dat` — see
 `docs/casino_bank.md`.
 
 ## One wheel, two layouts
@@ -464,7 +464,7 @@ pockets. That was a real bug, caught by the input tests.
 
 ## The bank
 
-Chips come from `/USER/casino.dat` and go back to it, so a win here is
+Chips come from `/user/casino.dat` and go back to it, so a win here is
 spendable in every other game. See `docs/casino_bank.md`.
 
 **One adjustment for the whole round**, applied when the wheel stops:
@@ -478,7 +478,7 @@ Bets are limited by the bank *minus what is already on the table*.
 Checking against the balance alone would let somebody bet their stack
 twice over, because the balance has not moved yet.
 
-A damaged `/USER/casino.dat` is reported rather than replaced. `zbank`
+A damaged `/user/casino.dat` is reported rather than replaced. `zbank`
 refuses to write over one precisely so a real bankroll is never swapped
 for a default, which means the app has to be the thing that says so.
 

@@ -887,8 +887,10 @@ module sysctl #()
 `endif
 `ifdef ESP32_LINK
 	wire [31:0] wbs_esp32ctl_dat_o;
-	wire [31:0] wbs_vmouse_dat_o;
 	wire [31:0] wbs_esp32rx_dat_o;
+`endif
+`ifdef VMOUSE
+	wire [31:0] wbs_vmouse_dat_o;
 `endif
 	wire [31:0] wbs_spisdcard_dat_o;
 	wire [31:0] wbs_usb0_dat_o;
@@ -1179,22 +1181,36 @@ module sysctl #()
 	// to bits 8-9 == 0 (the same idea as USB port 0/1 using bit 5).
 	// Without them the whole-nibble decode is what every other board
 	// has always had.
+	//
+	// The virtual mouse (`VMOUSE, universal -- rtl/boards.vh) sits at
+	// 0x400 in the same nibble, so on every board that has it the
+	// window narrows too. Without the narrowing a write to 0xf000_0400
+	// would land in the console UART.
 `ifdef UART1
-	// Mask widened from 0x300 to 0x700 for the ESP32 virtual mouse at
-	// 0x400 -- see cs_vmouse below. The four low windows keep their
-	// values; the wider mask only stops 0x400-0x700 from aliasing back
-	// onto them, which nothing used.
+`define UART0_NARROW_DECODE
+`endif
+`ifdef VMOUSE
+`define UART0_NARROW_DECODE
+`endif
+`ifdef UART0_NARROW_DECODE
+	// Mask 0x700: the low windows keep their values; the wider mask
+	// stops 0x400-0x700 from aliasing back onto them.
 	wire cs_uart0 = ((wbm_adr & 32'hf000_0700) == 32'hf000_0000);
-	wire cs_uart1 = ((wbm_adr & 32'hf000_0700) == 32'hf000_0100);
 `else
 	wire cs_uart0 = ((wbm_adr & 32'hf000_0000) == 32'hf000_0000);
+`endif
+`ifdef UART1
+	wire cs_uart1 = ((wbm_adr & 32'hf000_0700) == 32'hf000_0100);
 `endif
 `ifdef ESP32_LINK
 	wire cs_esp32ctl = ((wbm_adr & 32'hf000_0700) == 32'hf000_0200);
 	wire cs_esp32rx  = ((wbm_adr & 32'hf000_0700) == 32'hf000_0300);
-	// Software-written mouse: net writes {present,buttons,y,x} here from
-	// a browser over the link, and it drives the hardware cursor sprite
-	// and reads back for wm exactly like a USB mouse. See docs/esp32link.md.
+`endif
+`ifdef VMOUSE
+	// Software-written mouse: {present,buttons,y,x}. Written by net from
+	// a browser (ESP32 remote desktop) and by sw/apps/automate; drives
+	// the hardware cursor sprite and reads back for wm exactly like a
+	// USB mouse. See docs/esp32link.md and docs/automate.md.
 	wire cs_vmouse   = ((wbm_adr & 32'hf000_0700) == 32'hf000_0400);
 `endif
 
@@ -1234,6 +1250,8 @@ module sysctl #()
 `ifdef ESP32_LINK
 		({32{cs_esp32ctl}} & wbs_esp32ctl_dat_o) |
 		({32{cs_esp32rx}} & wbs_esp32rx_dat_o) |
+`endif
+`ifdef VMOUSE
 		({32{cs_vmouse}} & wbs_vmouse_dat_o) |
 `endif
 `ifdef SPI_SDCARD
@@ -1305,8 +1323,10 @@ module sysctl #()
 `endif
 `ifdef ESP32_LINK
 	wire wbs_esp32ctl_ack_o;
-	wire wbs_vmouse_ack_o;
 	wire wbs_esp32rx_ack_o;
+`endif
+`ifdef VMOUSE
+	wire wbs_vmouse_ack_o;
 `endif
 	wire wbs_spisdcard_ack_o;
 	wire wbs_usb0_ack_o;
@@ -1372,6 +1392,8 @@ module sysctl #()
 `ifdef ESP32_LINK
 		(cs_esp32ctl & wbs_esp32ctl_ack_o) |
 		(cs_esp32rx & wbs_esp32rx_ack_o) |
+`endif
+`ifdef VMOUSE
 		(cs_vmouse & wbs_vmouse_ack_o) |
 `endif
 `ifdef SPI_SDCARD
@@ -2552,35 +2574,6 @@ module sysctl #()
 		end
 	end
 
-	// Virtual mouse register (0xf000_0400):
-	//   [9:0]   curs_x     [19:10] curs_y
-	//   [22:20] buttons    [24]    present (1 = a network mouse is here)
-	// Written by net (sw/apps/net) from browser pointer events; read by
-	// wm the same way it reads a USB mouse, and its x/y drive the
-	// hardware cursor sprite below when present. present is last-writer:
-	// software writes 0 to hand the sprite back to USB (silence, leave,
-	// or a USB move) -- the mux does not time out on its own.
-	reg [24:0] vmouse_r;
-	reg [31:0] vmouse_dat;
-	reg vmouse_ack;
-	assign wbs_vmouse_dat_o = vmouse_dat;
-	assign wbs_vmouse_ack_o = vmouse_ack;
-	wire wbm_cyc_vmouse = cs_vmouse && wbm_cyc;
-	always @(posedge wbm_clk) begin
-		vmouse_ack <= 0;
-		if (wbm_rst) begin
-			vmouse_r <= 25'b0;
-		end else if (wbm_cyc_vmouse && wbm_stb && !vmouse_ack) begin
-			vmouse_ack <= 1;
-			if (wbm_we)
-				vmouse_r <= wbm_dat_o[24:0];
-			else
-				vmouse_dat <= {7'b0, vmouse_r};
-		end
-	end
-	wire vmouse_present = vmouse_r[24];
-	wire [9:0] vmouse_x = vmouse_r[9:0];
-	wire [9:0] vmouse_y = vmouse_r[19:10];
 
 	// 8 KiB block-RAM receive FIFO on the same UART1 RX pin (see
 	// rtl/esp32_rxfifo.v): the 16550's 16 bytes are not enough for a
@@ -2607,6 +2600,39 @@ module sysctl #()
 		.wb_cyc_i(wbm_cyc && cs_esp32rx),
 		.wb_ack_o(wbs_esp32rx_ack_o)
 	);
+`endif
+
+`ifdef VMOUSE
+	// Virtual mouse register (0xf000_0400):
+	//   [9:0]   curs_x     [19:10] curs_y
+	//   [22:20] buttons    [24]    present (1 = a software mouse is here)
+	// Written by net (sw/apps/net) from browser pointer events, and by
+	// sw/apps/automate (scripted demos, docs/automate.md); read by
+	// wm the same way it reads a USB mouse, and its x/y drive the
+	// hardware cursor sprite below when present. present is last-writer:
+	// software writes 0 to hand the sprite back to USB (silence, leave,
+	// or a USB move) -- the mux does not time out on its own.
+	reg [24:0] vmouse_r;
+	reg [31:0] vmouse_dat;
+	reg vmouse_ack;
+	assign wbs_vmouse_dat_o = vmouse_dat;
+	assign wbs_vmouse_ack_o = vmouse_ack;
+	wire wbm_cyc_vmouse = cs_vmouse && wbm_cyc;
+	always @(posedge wbm_clk) begin
+		vmouse_ack <= 0;
+		if (wbm_rst) begin
+			vmouse_r <= 25'b0;
+		end else if (wbm_cyc_vmouse && wbm_stb && !vmouse_ack) begin
+			vmouse_ack <= 1;
+			if (wbm_we)
+				vmouse_r <= wbm_dat_o[24:0];
+			else
+				vmouse_dat <= {7'b0, vmouse_r};
+		end
+	end
+	wire vmouse_present = vmouse_r[24];
+	wire [9:0] vmouse_x = vmouse_r[9:0];
+	wire [9:0] vmouse_y = vmouse_r[19:10];
 `endif
 
 	// WISHBONE SLAVE: HARDWARE SPI MASTER FOR SDCARD
@@ -3419,7 +3445,7 @@ module sysctl #()
 `define USB_CURSOR_SRC
 `endif
 `ifdef USB_CURSOR_SRC
-`ifdef ESP32_LINK
+`ifdef VMOUSE
 	assign gpu_curs_x = vmouse_present ? vmouse_x :
 		(wbs_usb0_typ == 2'd2) ? wbs_usb0_curs_x :
 		(wbs_usb1_typ == 2'd2) ? wbs_usb1_curs_x : wbs_usb0_curs_x;

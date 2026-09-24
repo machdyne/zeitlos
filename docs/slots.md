@@ -1,7 +1,7 @@
 # slots
 
 **Status: complete.** Three reels, five paylines, an exact 5.359% house
-edge, and chips that persist in `/USER/casino.dat`.
+edge, and chips that persist in `/user/casino.dat`.
 
 Built for rv32i with section GC: 45,964 text, 64 data, 3,536 bss —
 49,564 bytes. No soft-float in the app's own objects.
@@ -259,7 +259,7 @@ is what the button means everywhere else.
 
 **One adjustment for the whole spin**, applied when the reels land: the
 net, not a deduction when they start and a credit when they stop. The
-stake never leaves `/USER/casino.dat` until the spin is over, so a crash or a
+stake never leaves `/user/casino.dat` until the spin is over, so a crash or a
 window closed mid-spin costs nothing. `zbank_adjust()` re-reads before
 it writes, so a win in another game meanwhile is not clobbered.
 

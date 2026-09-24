@@ -1384,16 +1384,16 @@ int main(void) {
 	// CSR-capable bitstream reporting neither MAC returns NULL, which
 	// is what makes it safe for sw/os/sh.c's `init` to start net on
 	// every board rather than reserving its pid and giving up.
-	// NET.CFG first, because its phy= key is part of choosing the
+	// net.cfg first, because its phy= key is part of choosing the
 	// driver: a board with a MAC can be told to use a USB adapter
 	// instead, and one without can be told not to wait for one.
 	netcfg_t cfg;
 	if (netcfg_load(&cfg) != 0) {
-		printf("net: NET.CFG parse error\n");
+		printf("net: net.cfg parse error\n");
 		return 1;
 	}
 	if (cfg.has_file)
-		printf("net: loaded NET.CFG%s, %d network(s), first '%s'\n",
+		printf("net: loaded net.cfg%s, %d network(s), first '%s'\n",
 			cfg.has_wifi ? " (wifi)" : "", cfg.n_wifi, cfg.ssid);
 
 	if (!net_phy_select(cfg.phy)) {
@@ -1484,7 +1484,7 @@ int main(void) {
 			use_gateway = cfg.gw ? cfg.gw : OUR_GATEWAY;
 		}
 	} else {
-		printf("net: dhcp=0 in NET.CFG, using static config\n");
+		printf("net: dhcp=0 in net.cfg, using static config\n");
 		use_ip = cfg.ip ? cfg.ip : OUR_IP;
 		use_netmask = cfg.mask ? cfg.mask : OUR_NETMASK;
 		use_gateway = cfg.gw ? cfg.gw : OUR_GATEWAY;

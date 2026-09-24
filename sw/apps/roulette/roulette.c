@@ -4,7 +4,7 @@
  * Copyright (c) 2026 Lone Dynamics Corporation. All rights reserved.
  *
  * A European or American wheel, in a window or full screen, with the
- * chips coming from /USER/casino.dat so a win here is spendable in every
+ * chips coming from /user/casino.dat so a win here is spendable in every
  * other game (sw/common/games/zbank.h).
  *
  * -- the spin is the only thing in this app with a frame rate --
@@ -213,7 +213,7 @@ static void load_bank(void)
          * never swapped for a default one behind somebody's back --
          * which means the app has to be the thing that mentions it. */
         say("bank file damaged -- `buyin` to start over");
-        puts("roulette: /USER/casino.dat is damaged; not writing to it");
+        puts("roulette: /user/casino.dat is damaged; not writing to it");
     }
 }
 
@@ -702,7 +702,7 @@ int main(void)
         /* THE BANK CHANGES UNDER THIS WINDOW.
          *
          * sw/apps/casino can hand out a loan while a game is open, and
-         * another game can win while this one is idle -- /USER/casino.dat is
+         * another game can win while this one is idle -- /user/casino.dat is
          * shared. Reading it only at startup meant a loan did not
          * appear until the game was restarted.
          *

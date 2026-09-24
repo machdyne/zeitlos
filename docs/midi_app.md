@@ -13,7 +13,7 @@ through `rtl/audio_mixer.v` using generated waveforms.
 
 It is on the `wm` dock; `sw/data/icons/icon-midi.png` goes through
 `gen_dock_icon_data.py` like every other dock icon.
-    > run midi /AUDIO/SONG.MID
+    > run midi /audio/SONG.MID
 
 Requires a bitstream with `AUDIO_MIXER`. It refuses to run without one
 and says so, because there is no fallback worth having — see below.
@@ -300,7 +300,8 @@ in between goes near it. Silence is a frame of zeros.
 
 ## Where the files live
 
-`/AUDIO`, then `/audio`, then the root — the **same directory**
+`/audio`, then `/audio`, then the root, and then `/demo` for the
+[demos](demo.md) — the **same directory**
 `sw/apps/track` and `sw/apps/play` use. One place for everything that
 makes a sound, rather than a folder per app: a card with `AUDIO`,
 `MIDI` and `MOD` directories makes you remember which app wanted which,

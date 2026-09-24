@@ -331,8 +331,18 @@ bool pack_open(const char *path) {
 
 	pack_close();
 
-	if (io_open(path) < 0) return false;
-	if (!io_read(0, hdr, sizeof(hdr))) { pack_close(); return false; }
+	// Every way this can fail says so. A card with the pack on it and a
+	// voice that silently stays synthesised is the worst outcome: it
+	// looks exactly like a card without one (docs/tts.md).
+	if (io_open(path) < 0) {
+		printf("tts: no speech pack: cannot open %s\n", path);
+		return false;
+	}
+	if (!io_read(0, hdr, sizeof(hdr))) {
+		printf("tts: %s: cannot read its header\n", path);
+		pack_close();
+		return false;
+	}
 
 	if (rd32(hdr) != PACK_MAGIC) {
 		printf("tts: %s is not a speech pack\n", path);
@@ -349,7 +359,11 @@ bool pack_open(const char *path) {
 		return false;
 	}
 
-	if (!io_read(16, table, nsect * 16)) { pack_close(); return false; }
+	if (!io_read(16, table, nsect * 16)) {
+		printf("tts: %s: cannot read its section table\n", path);
+		pack_close();
+		return false;
+	}
 
 	uint32_t ph_off, ph_len;
 	if (!section(table, (int)nsect, "PHONES", &ph_off, &ph_len) ||
@@ -361,8 +375,15 @@ bool pack_open(const char *path) {
 	}
 
 	// The pack's phoneme names, mapped onto ours.
-	static char phbuf[512];
-	if (ph_len >= sizeof(phbuf) || !io_read(ph_off, phbuf, ph_len)) {
+	static char phbuf[1024];
+	if (ph_len >= sizeof(phbuf)) {
+		printf("tts: %s: PHONES section is %lu bytes, more than %u\n",
+			path, (unsigned long)ph_len, (unsigned)sizeof(phbuf) - 1);
+		pack_close();
+		return false;
+	}
+	if (!io_read(ph_off, phbuf, ph_len)) {
+		printf("tts: %s: cannot read its PHONES section\n", path);
 		pack_close();
 		return false;
 	}

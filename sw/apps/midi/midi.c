@@ -1323,7 +1323,7 @@ static void do_open(void) {
     ctx.parent = &win;
     ctx.on_msg = on_dialog_msg;
 
-    if (z_dialog_open(&ctx, "/AUDIO", path, sizeof(path))) {
+    if (z_dialog_open(&ctx, "/audio", path, sizeof(path))) {
         int i;
         cur_file = -1;
         for (i = 0; i < nfiles; i++)
@@ -1607,7 +1607,7 @@ int main(void) {
     z_launch_arg_take(arg, sizeof(arg));
 
     /*
-     * /AUDIO, the same directory sw/apps/track and sw/apps/play use.
+     * /audio, the same directory sw/apps/track and sw/apps/play use.
      *
      * One place for everything that makes a sound, rather than a
      * directory per app -- a card with AUDIO, MIDI and MOD folders
@@ -1617,13 +1617,12 @@ int main(void) {
      * alongside are simply not listed here, and this app's .MID files
      * are not listed by the other two.
      *
-     * Both cases are tried because FatFs is built with FF_USE_LFN 0
-     * and matches 8.3 names case-insensitively, but the path given to
-     * f_opendir() is taken as written.
+     * Lowercase, as every name on the card is now (long filenames);
+     * FatFs matches names case-insensitively either way.
      */
-    scan_dir("/AUDIO");
-    if (!nfiles) scan_dir("/audio");
+    scan_dir("/audio");
     if (!nfiles) scan_dir("/");
+    scan_dir("/demo");      /* media for the demos (docs/demo.md) */
     printf("midi: %d file%s\n", nfiles, nfiles == 1 ? "" : "s");
 
     init_widgets();

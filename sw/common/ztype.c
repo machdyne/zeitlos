@@ -54,7 +54,7 @@ const z_ftype_t z_ftypes[] = {
 	// Three extensions rather than one because the emulator covers
 	// three machines and the extension is the only hint it gets about
 	// which: CH8 is plain CHIP-8, SC8 is SUPER-CHIP, XO8 is XO-CHIP.
-	// A ROM directory can override the guess per file (CHIP8.CFG),
+	// A ROM directory can override the guess per file (chip8.cfg),
 	// but that only helps once the right app is already running --
 	// this table is what decides that.
 	//
@@ -109,6 +109,9 @@ const z_ftype_t z_ftypes[] = {
 	{ "PBM", "view", "Netpbm image"  },
 	{ "PGM", "view", "Netpbm image"  },
 	{ "PPM", "view", "Netpbm image"  },
+
+	// Demo scripts -- sw/apps/automate, docs/automate.md.
+	{ "ZDS", "automate", "Demo script" },
 
 	{ NULL,  NULL,   NULL            },
 

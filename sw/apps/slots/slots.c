@@ -4,7 +4,7 @@
  * Copyright (c) 2026 Lone Dynamics Corporation. All rights reserved.
  *
  * Three reels, five paylines, and a house edge of 5.359% that
- * sl_reels.c pins to an exact integer. Chips come from /USER/casino.dat,
+ * sl_reels.c pins to an exact integer. Chips come from /user/casino.dat,
  * shared with poker, roulette and blackjack.
  *
  * -- the spin is the only thing here with a frame rate --
@@ -177,7 +177,7 @@ static void load_bank(void)
 
     if (rv == ZBANK_CORRUPT) {
         say("bank file damaged -- `buyin` to start over");
-        puts("slots: /USER/casino.dat is damaged; not writing to it");
+        puts("slots: /user/casino.dat is damaged; not writing to it");
     }
 }
 
@@ -547,7 +547,7 @@ int main(void)
         /* THE BANK CHANGES UNDER THIS WINDOW.
          *
          * sw/apps/casino can hand out a loan while a game is open, and
-         * another game can win while this one is idle -- /USER/casino.dat is
+         * another game can win while this one is idle -- /user/casino.dat is
          * shared. Reading it only at startup meant a loan did not
          * appear until the game was restarted.
          *

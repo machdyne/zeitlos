@@ -205,6 +205,10 @@ void z_speak_stop(void) {
 	zs_send(Z_TTS_STOP, 0, z_obj_none());
 }
 
+bool z_speak_narrate(uint32_t lease_s) {
+	return zs_send(Z_TTS_NARRATE, 0, z_obj_uint32(lease_s));
+}
+
 void z_speak_repeat(void) {
 	zs_send(Z_TTS_REPEAT, 0, z_obj_none());
 }

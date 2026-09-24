@@ -92,6 +92,13 @@
 // its translation, and a program that reads raw events itself gets the
 // same layout wm does.
 #define Z_KBD_EV_LAYOUT(ev) (((uint32_t)(ev) >> 20) & 0x1F)
+
+// Bit 25: the event came through hid_inject() -- the on-screen
+// keyboard, the remote desktop, sw/apps/automate -- rather than from a
+// keyboard on a USB port. Set by the kernel (sw/os/hid.c,
+// k_hid_inject()), never by the injector. wm counts events WITHOUT it
+// as real input (docs/automate.md, "Attract mode").
+#define Z_KBD_EV_INJECTED(ev) (((uint32_t)(ev) >> 25) & 1u)
 #define Z_KBD_LAYOUT_MAX    32
 
 // -- raw event fields --

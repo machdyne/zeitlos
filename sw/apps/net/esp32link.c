@@ -26,7 +26,7 @@
 #include "netprof.h"
 #include "screen.h"
 #include "netcfg.h"
-#include "../../common/zfsapp.h"	/* fs_write_file() -- NET.IP on the SD */
+#include "../../common/zfsapp.h"	/* fs_write_file() -- net.ip on the SD */
 
 #define UART1_LSR_DR    0x01
 #define UART1_LSR_THRE  0x20
@@ -620,7 +620,7 @@ static void znic_dispatch(void)
 				last_reason, last_scan);
 		/* Leave the DHCP address on the SD so a headless board (no
 		 * HDMI, no serial console) can still be found: pull the card
-		 * and read NET.IP. LINK can repeat as a poll reply, so only
+		 * and read net.ip. LINK can repeat as a poll reply, so only
 		 * rewrite on an actual state change -- never on every poll. */
 		{
 			static uint32_t ip_on_card = 0;
@@ -637,7 +637,7 @@ static void znic_dispatch(void)
 				else
 					n = snprintf(line, sizeof line, "down\n");
 				if (n > 0)
-					fs_write_file("NET.IP", line, n);
+					fs_write_file("net.ip", line, n);
 				ip_on_card = sta_ip;
 				up_on_card = link_up;
 			}
@@ -731,7 +731,7 @@ static void znic_dispatch(void)
 static int znic_send_sta(const netcfg_t *cfg)
 {
 	/* One (ssid_len, ssid, psk_len, psk) tuple per configured network,
-	 * in NET.CFG order. The firmware scans and takes the first one
+	 * in net.cfg order. The firmware scans and takes the first one
 	 * that exists; a single-network payload is byte-identical to what
 	 * this always sent. */
 	static uint8_t body[NETCFG_WIFI_MAX * (2 + NETCFG_SSID_MAX + NETCFG_PSK_MAX)];

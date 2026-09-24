@@ -2,7 +2,7 @@
 
 **Status: complete.** Six decks, splits, doubles, insurance and
 surrender, by keyboard or mouse, with chips that persist in
-`/USER/casino.dat`.
+`/user/casino.dat`.
 
     cd sw/apps/blackjack && make          # the target binary
     make test                             # 351 checks, four binaries
@@ -10,7 +10,7 @@ surrender, by keyboard or mouse, with chips that persist in
 
 Cards, the shoe and the shuffle come from `sw/common/games` — promoted
 out of `sw/apps/poker` when this app became their second caller. Chips
-come from the shared bank, `/USER/casino.dat`. See `docs/casino_bank.md`.
+come from the shared bank, `/user/casino.dat`. See `docs/casino_bank.md`.
 
 ## An ace is eleven at most once
 
@@ -167,7 +167,7 @@ which game they are playing.
 
 **One adjustment for the whole round**, applied when the hand is over:
 the net, not a deduction at deal time and a credit at payout. The stake
-never leaves `/USER/casino.dat` until the hand finishes, so a crash or a
+never leaves `/user/casino.dat` until the hand finishes, so a crash or a
 window closed mid-hand costs nothing. `zbank_adjust()` re-reads before
 it writes, so a win in another game meanwhile is not clobbered.
 

@@ -59,6 +59,17 @@
 // Change a voice setting. obj is a Z_UINT32 from Z_TTS_SET_PACK().
 #define Z_TTS_SET				0x54540005u
 
+// Become the narrator, or stop being it. obj is a Z_UINT32: a lease in
+// seconds, or 0 to give it up. While a narrator holds the lease, SAY,
+// STOP and REPEAT from every OTHER process are ignored -- a marked SAY
+// is answered Z_TTS_MARK_CANCELLED at once -- so a scripted demo
+// (sw/apps/automate) is not talked over, or cut off, by wm announcing
+// each window that opens. Every SAY from the narrator renews the
+// lease; so does sending this again. A narrator that dies simply lets
+// it run out. Z_TTS_QUIT (Super+S) still works: the user can always
+// turn speech off. See docs/tts.md, "Narration".
+#define Z_TTS_NARRATE			0x54540006u
+
 // -- tts -> app --
 //
 // Sent only for utterances that carried a non-zero mark, and only to
@@ -118,6 +129,9 @@
 #define Z_TTS_VOICE_MALE		1
 #define Z_TTS_VOICE_FEMALE		2
 #define Z_TTS_VOICE_NEXT		0xff
+// OR'd into a voice: switch without saying so. For a script that wants
+// the change heard in its own next sentence (sw/apps/automate).
+#define Z_TTS_VOICE_QUIET		0x100
 
 #define Z_TTS_SET_PACK(param, value) \
 	(((uint32_t)(param) << 24) | ((uint32_t)(value) & 0xffffffu))

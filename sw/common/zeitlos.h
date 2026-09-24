@@ -504,7 +504,8 @@ void noecho(void);
 int32_t hid_read_key(void);
 void hid_inject(int32_t packed_event);
 // Unblock wm0 if it is sleeping. net writes the visor pointer into
-// reg_vmouse (plain MMIO, no IRQ) and then calls this. USB HID and
+// reg_vmouse (plain MMIO, no IRQ) and then calls this -- so does
+// sw/apps/automate (check Z_FEATURE2_VMOUSE, zsoc.h, first). USB HID and
 // hid_inject wake wm from the kernel without going through here.
 void z_wm_wake(void);
 

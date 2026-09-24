@@ -428,6 +428,36 @@ not pause and fall in pitch as if a sentence had ended.
 
 ---
 
+## Narration
+
+A scripted demo ([automate.md](automate.md)) is narrated by this
+service, and would be talked over -- and, since focus announcements
+interrupt, cut off -- by `wm` saying the title of every window the
+script opens. So a process can hold the **narrator lease**:
+
+    Z_TTS_NARRATE   Z_UINT32 lease in seconds (at most 600), or 0 to release
+
+While it is held, `SAY`, `STOP` and `REPEAT` from every other process
+are ignored; a marked `SAY` is answered `Z_TTS_MARK_CANCELLED` at
+once, so a sender waiting on it is not left hanging. Every `SAY` from
+the narrator renews the lease, and so does sending `Z_TTS_NARRATE`
+again; a narrator that dies simply lets it run out, and the service
+logs `tts: [narrator ... lease expired]`. `Z_TTS_QUIT` is not blocked:
+Super+S turns speech off whoever is narrating.
+
+`z_speak_narrate(lease_s)` (`zspeak.h`) sends it.
+
+**When the pack does not load**, `tts` says why at startup: it cannot
+open the file, cannot read its header or section table, or finds a
+section it cannot use. (Several of these used to fail silently, which
+made a card with a pack look exactly like a card without one.) With a
+pack loaded it says `tts: lexicon from /speech/en.spk`, and
+`tts: recorded voice from ...` when the pack has one.
+
+A narrator changing voice (`Z_TTS_PARAM_VOICE`) usually does not want
+the change announced over its script: OR `Z_TTS_VOICE_QUIET` into the
+voice and the service only logs it (`tts: [voice: ...]`).
+
 ## The protocol
 
 `sw/common/ztts.h`. The service registers `tts` and so answers to

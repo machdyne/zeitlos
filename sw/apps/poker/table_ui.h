@@ -162,7 +162,7 @@ typedef struct {
      * Poker is the only game here whose boundary is not a round: a
      * stack rises and falls across many hands, so the bank is settled
      * when the TABLE ends rather than when a hand does. Until then
-     * `bank` is what is left in /USER/casino.dat and `buyin` is what is
+     * `bank` is what is left in /user/casino.dat and `buyin` is what is
      * on the table -- the two together are what the player is worth. */
     int32_t    bank;
     int32_t    buyin;

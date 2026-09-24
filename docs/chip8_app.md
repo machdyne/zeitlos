@@ -69,13 +69,13 @@ can be promoted later, but nothing has yet.
 core.h  core.c       the guest machine. No I/O of any kind.
 quirks.c             the three compatibility profiles, as data
 render.h render.c    planes -> a 1bpp bitmap. Also no I/O.
-config.h config.c    the CHIP8.CFG parser. Also no I/O.
+config.h config.c    the chip8.cfg parser. Also no I/O.
 disasm.h disasm.c    Octo-syntax disassembler. Also no I/O.
 sound.h  sound.c     buzzer and XO-CHIP audio, on the mixer
 debug.h  debug.c     the debugger pane
 chip8.c              window, input, pacing, blit -- the only file
                      that owns the machine's state
-chip8.cfg.example    a CHIP8.CFG to copy to a ROM directory
+chip8.cfg.example    a chip8.cfg to copy to a ROM directory
 tests/test_core.c    guest machine tests
 tests/test_render.c  scaling, bit order and dither tests
 tests/test_config.c  config parsing and disassembly tests
@@ -123,7 +123,7 @@ argument slot (`Z_WM_SET_ARG`, `zwm.h`).
   F5         reset
   F6         full-screen game mode
   F7 F8      slower / faster
-  F9         screenshot to CHIP8SS.ZBM beside the ROM
+  F9         screenshot to chip8ss.zbm beside the ROM
   F10        debugger pane
   F11        single step        F12  run / pause
   Shift+F1   cycle the XO-CHIP grey mapping
@@ -138,7 +138,7 @@ written before anything can repoint at the new one.
 keyboard should still do something sensible when you press the obvious
 fire key -- they did nothing at all at first, which is how this got
 noticed. They alias the *gamepad's* A and START rather than fixed hex
-values, so one `pad a=` line in `CHIP8.CFG` moves the pad button and
+values, so one `pad a=` line in `chip8.cfg` moves the pad button and
 the space bar together. That is what somebody editing that line means,
 and it avoids a second mapping that could drift out of step with the
 first. Default A is 5: the centre of the QWER/ASDF block and the key
@@ -155,7 +155,7 @@ grid). There is no modifier available to disambiguate, because the
 guest reads keys as a level and a chord would register as two keypad
 presses.
 
-The profile comes from `CHIP8.CFG` if the ROM's directory has one.
+The profile comes from `chip8.cfg` if the ROM's directory has one.
 Otherwise `c8_profile_hint()` decides, and it looks at **size before
 name**: a ROM larger than 3,584 bytes cannot be CHIP-8 or SUPER-CHIP,
 because there is no address space for it to live in, so however it is
@@ -245,7 +245,7 @@ across the whole screen, and 0 is the only level that is exactly and
 seamlessly off.
 
 Shift+F1 cycles it at run time; `palette fill|index|solid` sets it per
-ROM in `CHIP8.CFG`.
+ROM in `chip8.cfg`.
 
 Content-relative rather than screen-relative, which is the opposite of
 `z_fb_hw_fill_shade()`'s choice (`zgfx.h`) and for a stated reason: a
@@ -344,8 +344,9 @@ just means most ROMs need no entry.
 
 ## Per-ROM configuration
 
-`CHIP8.CFG`, in the same directory as the ROM. Uppercase and 8.3
-because FAT short names are all this filesystem has.
+`chip8.cfg`, in the same directory as the ROM. Lowercase, like every
+name on the card; FAT matches names case-insensitively, so an older
+card's `CHIP8.CFG` is still found.
 
 ```
 # comments run to end of line; ; also works
@@ -487,7 +488,7 @@ kernel tier change is needed, which is a better outcome than moving
 `chip8` to a larger allowance would have been.
 
 The two remaining `fs_mallocfile()` calls read the saved flags (16
-bytes) and `CHIP8.CFG`, which is size-capped at 8KB for the same
+bytes) and `chip8.cfg`, which is size-capped at 8KB for the same
 reason.
 
 ### ROM size limits
@@ -852,7 +853,7 @@ and is entirely plausible, so there are tests for all four.
 
 ## Screenshots
 
-`F9` writes `CHIP8SS.ZBM` beside the ROM. ZBM (`zbm.h`) because the
+`F9` writes `chip8ss.zbm` beside the ROM. ZBM (`zbm.h`) because the
 renderer's output is *already* in exactly that pixel format -- the
 framebuffer's own, LSB leftmost -- so a screenshot is a 16-byte header
 and the buffer with no conversion anywhere, and `draw` and `view` can

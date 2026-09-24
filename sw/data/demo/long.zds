@@ -1,0 +1,178 @@
+# Zeitlos -- the LONG demo: about four minutes, for YouTube. Revision 9.
+#
+# The narration after each "|" is SPOKEN, and spelled for the ear:
+# without a speech pack tts's letter-to-sound rules mispronounce common
+# words (docs/demo.md, "Spelling for the ear"). Captions are spelled
+# normally.
+#
+#   > run automate /demo/long.zds
+#
+# Captions are 2x (12x24 pixels a letter), up to two lines. Each
+# chapter starts from a clean desktop, so a chapter can be cut, moved or
+# dropped by editing only its own block. Language: docs/automate.md.
+# Notes: docs/demo.md.
+#
+# THE RULE: speech and action never overlap. The voice renders at about
+# 60% of the CPU, and on hardware anything running beside it -- typing
+# included -- made it stutter. So every sentence finishes (narrate and
+# say wait) before the next thing happens, and while something happens
+# the caption carries the message.
+#
+# It opens in the synthesised voice and hands over to the recorded one.
+# The synthesised voice gets only easy words: it mangles "computer"
+# and "FPGA".
+
+reset
+interruptible off
+caption-size 2
+caption-pos bottom
+rate 180
+type-speed 55
+speech on
+voice synth
+# jfont (Japanese) must already be running: start it before the demo.
+
+# -- 1. what this is ---------------------------------------------------
+narrate Hello. I am Zeitlos. | Hello. I am Zeitlos. This is my sin thetic voice.
+voice recorded
+narrate And this is my recorded voice | And this is my recorded voice: a real person's, joined tuh gheh thur from small pieces of sound.
+narrate A computer and an OS, developed together | Zeitlos is a cum pewter, and an operating system, de vel upt tuh gheh thur, so that each can make the other better.
+run info at 16 16
+narrate One FPGA, 48 MHz, a RISC-V CPU | Every thing you will see runs on one FPGA, at forty eight megahertz, on a risk five processor.
+narrate Line drawing, blitter, 8-voice mixer: in hardware | Next to it: a line drawing en jin, a blitter, an eight voice audio mick ser, and USB, all in the same chip.
+close info
+
+# -- 2. windows --------------------------------------------------------
+narrate Pre-emptive multitasking | Apps run side by side, with pre emptive multi tasking, and a window man ij er built for a one bit screen.
+run clock at 420 20
+run cal at 60 40
+drag 110 45 250 150 900
+pause 500
+drag 470 26 400 70 700
+pause 1200
+close cal
+close clock
+
+# -- 3. every language -------------------------------------------------
+narrate 22 keyboard layouts | Twenty two keyboard layouts, with dead keys and AltGr. The on screen keyboard always shows the one in use.
+run text at 16 16
+tbicon text font
+run keyboard at 150 236
+focus text
+caption English
+type Hello from Zeitlos. It runs at 48 MHz.
+key enter
+layout de
+caption Deutsch
+type Grüße aus Bayern! 50 € für Äpfel & Öl.
+key enter
+layout fr
+caption Français
+type Bonjour ! Où est le café ? Noël à Genève.
+key enter
+layout es
+caption Español
+type ¡Hola! ¿Qué tal? Mañana, señor.
+key enter
+pause 600
+narrate Japanese: romaji becomes kana | Japanese: roe mah jee bee cums kaw nuh as you type.
+layout ja-us
+type konnichiha. zeitlos desu.
+layout us
+pause 1200
+kill keyboard
+kill text
+
+# -- 4. pictures -------------------------------------------------------
+# Said first; then the picture is decoded and shown (all at once, when
+# view has finished). Tune the pauses to the card: the window must not
+# close before the picture is up.
+narrate Photos, dithered to one bit | Foe toe graphs, dithered to one bit on the board.
+run view /demo/squirrel.pgm at 0 0
+key alt+equal
+pause 6000
+close view
+narrate Vector graphics: rendered by Zeitlos | Vector graphics are rendered here, on the fly.
+run view /demo/zeitlos.svg at 0 0
+key alt+equal
+pause 4000
+close view
+
+# -- 5. the GPU --------------------------------------------------------
+narrate Hardware line drawing | The GPU draws lines in hardware. Grab the cube, and it follows the pointer.
+run gpu3d at 220 40
+drag 318 146 400 190 900
+drag 400 190 300 120 900
+key space
+key + + +
+pause 2000
+close gpu3d
+
+# -- 6. drawing --------------------------------------------------------
+narrate A MacPaint-inspired paint program | A paint program, in the spih rit of the classics: patterns, shapes and brushes.
+run draw at 150 16
+origin draw
+click 30 50
+click 72 256
+drag 50 170 320 225 600
+click 10 50
+click 24 256
+drag 120 110 200 168 500
+drag 150 132 170 168 300
+click 30 30
+drag 115 110 160 72 350
+drag 160 72 205 110 350
+click 10 70
+drag 245 18 290 60 400
+click 30 10
+stroke 90 60 40 75 32 95 40 110 34 125 42
+stroke 90 215 40 230 34 245 42 258 38
+origin screen
+pause 1000
+kill draw
+
+# -- 7. music ----------------------------------------------------------
+narrate A General MIDI synthesizer | A general middy synthesizer: the cum pewter keyboard is the piano.
+run midi /demo/lvb11.mid at 168 100
+pause 800
+melody 170 e 3 e 3 e m w q n:2 - z c n m:2 - c h m q:2 - c e 3 e 3 e m w q n:3
+pause 500
+narrate Or play a file | Or play a whole file.
+key space
+pause 7000
+key space
+close midi
+
+# -- 8. games ----------------------------------------------------------
+narrate A tracker module, and a chess engine playing itself | A tracker module in the background, and a chess en jin playing itself.
+run track /audio/retro.mod at 330 20
+run chess at 16 16
+focus chess
+type new demo
+key enter
+caption A chess engine, playing itself
+pause 7000
+close chess
+# track quits on q, and stops its own mixer channels doing it. NOT
+# `close`: its window kills its owner, and a killed track leaves the
+# music playing over the next sentence.
+focus track
+key q
+pause 1000
+kill track
+narrate Games, emulators, and tools to make your own | Games, a chip eight em you later, a see compiler, and a scheme interpreter: tools to make your own.
+
+# -- 9. timeless -------------------------------------------------------
+caption White, amber, green or paper
+video amber
+pause 900
+video green
+pause 900
+video paper
+pause 900
+video white
+narrate Zeitlos -- github.com/machdyne/zeitlos | Zeitlos. Time less cum pewting.
+pause 1500
+caption-off
+reset
+end

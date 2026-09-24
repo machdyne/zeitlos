@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "../common/zeitlos.h"
+#include "../common/zwm.h"	// Z_WM_SET_ARG, for `run`
 #include "../common/zargs.h"	// get_arg(): quoting, docs/posix.md
 #include "../common/zfs.h"		// Z_FS_PATH_MAX
 #include "../common/znet.h"
@@ -1029,6 +1030,31 @@ void sh(void) {
 			// need for more than the default allowance (per-message
 			// zport.h leak, plus repl's own Scheme stdlib loading --
 			// see zport.c's own z_port_send() comment).
+			// Anything after the name is the program's launch
+			// argument (Z_WM_SET_ARG, zwm.h) -- `run view /demo/a.jpg`,
+			// `run automate /demo/short.zds` -- joined with spaces, as
+			// cron passes a rule's arguments. Held by wm, so it needs
+			// wm running; without it the program simply gets none.
+			if (get_arg(buffer, 2)) {
+				static char run_arg[Z_WM_ARG_MAX];
+				uint32_t wmp;
+				run_arg[0] = 0;
+				for (int ai = 2; ; ai++) {
+					char *a = get_arg(buffer, ai);
+					if (!a) break;
+					if (ai > 2) strncat(run_arg, " ", sizeof(run_arg) - strlen(run_arg) - 1);
+					strncat(run_arg, a, sizeof(run_arg) - strlen(run_arg) - 1);
+				}
+				if (z_pid_lookup("wm0", &wmp)) {
+					z_obj_t o;
+					o.type = Z_STR;
+					o.val.str = run_arg;
+					z_msg_new_send(wmp, Z_WM_SET_ARG, 0, o);
+					printf("launch argument: %s\n", run_arg);
+				} else {
+					printf("no wm: launch argument ignored\n");
+				}
+			}
 			uint32_t stack_size = z_proc_stack_size_for(arg);
 			uint32_t pid = k_proc_create(size, stack_size);
 			printf(" - pid: %ld\n", pid);
@@ -2221,7 +2247,7 @@ void sh_help(void) {
 	printf(" xmf <file>        receive to file via xmodem\n");
 	printf(" tget <ip-or-host> <remote-file> [local-file]  fetch a file via tftp (needs `run net`)\n");
 	printf(" tput <ip-or-host> <local-file> [remote-file]  send a file via tftp (needs `run net`)\n");
-	printf(" run <file>        create a new process\n");
+	printf(" run <file> [arg]  create a new process; arg is its launch argument\n");
 	printf(" init               start wm, net, repl and posix (runs at boot)\n");
 	printf(" cfg [reload|get k] show or re-read /zeitlos.cfg (docs/config.md)\n");
 	printf(" kill <pid>        kill a process\n");

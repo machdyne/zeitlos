@@ -101,7 +101,8 @@ Type romaji and kana come out:
 `ja-kata` gives the same in katakana (`ko-hi-` is コーヒー). Case does
 not matter. A letter that can still become a kana waits -- `k` shows
 nothing until `ka` -- and the letters waiting are shown over the right
-end of the dock, since the app sees nothing until a kana is finished.
+end of the dock (with the layout's label when none are waiting, so the
+box stays put while you type -- [window_manager.md](window_manager.md)), since the app sees nothing until a kana is finished.
 Backspace takes back a waiting letter and Escape drops them all; any
 other key (Space, Enter, an arrow, a digit) finishes them first -- a
 lone `n` becomes ん -- and then does what it always does. Shortcuts

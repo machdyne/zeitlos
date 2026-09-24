@@ -81,6 +81,11 @@ bool z_speak_static(const char *text, uint32_t flags);
 // Stop speaking, discard the queue.
 void z_speak_stop(void);
 
+// Hold (lease_s > 0) or release (0) the narrator lease: while held,
+// nobody else's speech is heard -- Z_TTS_NARRATE, ztts.h. Every
+// z_speak*() from the holder renews it. Returns false if speech is off.
+bool z_speak_narrate(uint32_t lease_s);
+
 // Say the last thing again.
 void z_speak_repeat(void);
 

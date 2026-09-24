@@ -101,7 +101,7 @@ association takes seconds and `wm` has to keep running).
 
 1. Bitstream holds the ESP32 in reset; `init` starts `net` last (after
    every SD load).
-2. `net` reads `NET.CFG` (root of the SD card, 8.3 name):
+2. `net` reads `net.cfg` (root of the SD card, 8.3 name):
    ```
    ssid=MyAP
    psk=secret

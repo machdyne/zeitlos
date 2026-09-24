@@ -25,7 +25,7 @@
  * z_proc_run() takes a name with no path, the same way the dock and
  * sh's `run` do. A game that is already open is not started again --
  * z_proc_list() is asked first, because four copies of blackjack all
- * writing /USER/casino.dat is exactly the concurrency zbank_adjust() is
+ * writing /user/casino.dat is exactly the concurrency zbank_adjust() is
  * careful about, and there is no reason to invite it.
  */
 
@@ -330,7 +330,7 @@ static void reload_bank(void)
     bank_state = zbank_load(&bank);
 
     if (bank_state == ZBANK_CORRUPT)
-        puts("casino: /USER/casino.dat is damaged; not writing to it");
+        puts("casino: /user/casino.dat is damaged; not writing to it");
 }
 
 static void do_borrow(int32_t amount)
@@ -396,7 +396,7 @@ static void launch(int i)
 
     /* A game that is already open is raised by clicking its window, not
      * by starting a second copy. Four blackjacks all writing
-     * /USER/casino.dat is exactly the concurrency zbank_adjust() is careful
+     * /user/casino.dat is exactly the concurrency zbank_adjust() is careful
      * about, and there is no reason to invite it. */
     if (already_running(games[i].proc)) {
         message[0] = '\0';

@@ -80,7 +80,7 @@ than just saying no — "no" without a number is a door with no handle.
 
 **A game that is already open is not started again.** `z_proc_list()` is
 asked first, because four copies of blackjack all writing
-`/USER/casino.dat` is exactly the concurrency `zbank_adjust()` is careful
+`/user/casino.dat` is exactly the concurrency `zbank_adjust()` is careful
 about, and there is no reason to invite it.
 
 If a launch fails the likely cause is that the binary is not on the

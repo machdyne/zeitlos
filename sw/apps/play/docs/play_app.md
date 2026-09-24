@@ -132,7 +132,7 @@ reads.
 
 ### The rest of the status line
 
-    2/7 /AUDIO/SONG.WAV
+    2/7 /audio/SONG.WAV
     IMA ADPCM 2ch 22050Hz -> 44117Hz lerp
     0:43 / 3:12  vol 62%  PLAYING
     buf 94%  sv0  ur  sd  22K/s
@@ -285,11 +285,11 @@ slider. The file-open control is `Z_WIN_FLAG_OPEN_ICON` in the
 titlebar, which is what that flag is for and saves a button's width in
 a window that has none to spare.
 
-`play` scans `/AUDIO`, then `/audio`, then the root, and plays through
+`play` scans `/audio`, then `/audio`, then the root, and plays through
 what it finds, wrapping rather than exiting. A launch argument, if `wm`
 passed one, overrides the scan:
 
-    > run play /AUDIO/SONG.WAV
+    > run play /audio/SONG.WAV
 
 **Filenames are 8.3.** FatFs is built with `FF_USE_LFN 0`
 (`sw/os/fs/fatfs/ffconf.h`), so `MYFAVOURITESONG.WAV` is
@@ -418,8 +418,8 @@ codes are `0xFE` and `0x7E`. Correct table, wrong expectation.
 
 Play a tone first, before any real material:
 
-    python3 tools/mkaudio.py --tone 440 --seconds 30 -d /media/sd/AUDIO
-    > run play /AUDIO/TONE440.WAV
+    python3 tools/mkaudio.py --tone 440 --seconds 30 -d /media/sd/audio
+    > run play /audio/TONE440.WAV
 
 This removes ffmpeg, the encoder, the codec and the compression ratio
 from the list of things that could be wrong, leaving the card, the
@@ -439,7 +439,7 @@ is for.
     python3 tools/mkaudio.py song.flac                  # IMA, 22.05kHz
     python3 tools/mkaudio.py -f wav16 -r 44100 song.wav
     python3 tools/mkaudio.py -m -f ulaw -r 11025 talk.mp3
-    python3 tools/mkaudio.py -d /media/sd/AUDIO *.flac
+    python3 tools/mkaudio.py -d /media/sd/audio *.flac
 
 It prints the resulting bandwidth as a percentage of the core and warns
 above 176 KB/s.

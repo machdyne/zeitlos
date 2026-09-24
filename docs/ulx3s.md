@@ -76,7 +76,7 @@ With no display attached the console is how you find the board: `net`
 prints the address the access point gave the ESP32 (`esp32link: LINK up
 rssi=... ip=...`, and the firmware's own `esp_netif_handlers: sta ip:`
 before it), which is where the [remote desktop](remote_desktop.md)
-lives. It also writes it to `NET.IP` at the root of the card.
+lives. It also writes it to `net.ip` at the root of the card.
 
 `pr` lists the processes that started, which answers "did the desktop
 come up at all" without a display; `mount` and `ls` answer the same for
@@ -90,7 +90,7 @@ image ([prebuilt](../README.md#quick-start-prebuilt-images), or
 ([config.md](config.md)), `web/roots.der` for TLS, and `docs/`, `ark/`,
 `libz/`, `user/`.
 
-The one file this board wants that others do not is **`NET.CFG`** at
+The one file this board wants that others do not is **`net.cfg`** at
 the root, holding the WiFi credentials `net` hands the ESP32. Format
 and the rest of the link in [esp32link.md](esp32link.md); flashing the
 ESP32 itself is `esp32/zeitlos-nic/README.md`, and is its own

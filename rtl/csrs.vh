@@ -383,4 +383,10 @@ localparam CSR_FEATURES2 =
 `ifdef MPU
 	(32'h1 << 10) |
 `endif
+// The virtual mouse register at 0xf000_0400 (`VMOUSE, rtl/sysctl.v).
+// Software MUST check this before writing reg_vmouse: on a bitstream
+// without it that address is decoded as the console UART.
+`ifdef VMOUSE
+	(32'h1 << 11) |
+`endif
 	32'h0;

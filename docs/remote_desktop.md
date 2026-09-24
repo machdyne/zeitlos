@@ -23,7 +23,7 @@ net (sw/apps/net/screen.c)          the ESP32 (esp32/zeitlos-nic)
 **Finding the address.** It is whatever the access point's DHCP gave
 the ESP32, so nothing in this tree can know it. The console says it at
 boot -- `esp_netif_handlers: sta ip: ...`, and `esp32link: LINK up
-rssi=... ip=...` right after -- and `net` also writes it to `NET.IP` at
+rssi=... ip=...` right after -- and `net` also writes it to `net.ip` at
 the root of the sdcard when the link comes up. Everything else is
 `http://<that>/`.
 
@@ -245,7 +245,8 @@ it) and sent as `[x_lo, x_hi, y_lo, y_hi, buttons]`, coalesced to
 about 30 Hz for motion, immediately for a press or a release so a
 click cannot hide behind the timer. The firmware relays it as
 `ZNIC_MOUSE` and `net` writes `reg_vmouse` -- a software pointer
-register that shares the layout of the USB one, so `wm` reads it the
+register (on every board now, `` `VMOUSE ``; scripted demos use it too,
+[automate.md](automate.md)) that shares the layout of the USB one, so `wm` reads it the
 same way -- then calls `Z_SYS_WM_WAKE`, because an MMIO write has no
 interrupt behind it. Leaving the canvas, or hiding the tab, sends an
 explicit release (`buttons` bit 7), and a second of silence drops the

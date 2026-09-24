@@ -392,7 +392,12 @@ z_obj_t *k_hid_inject(z_obj_t *obj) {
 	// the current one over whatever bits 24:20 arrived with, exactly as
 	// HID_EVENT() does for a key from the USB ports.
 	uint32_t ev = (uint32_t)obj->val.int32 & ~(0x1Fu << 20);
-	hid_push(ev | (((uint32_t)hid_layout & 0x1F) << 20));
+	// Bit 25 marks the event as injected (Z_KBD_EV_INJECTED, zkbd.h),
+	// set here rather than trusted from the caller, so a person at a
+	// real keyboard can always be told apart from the on-screen
+	// keyboard, the remote desktop and sw/apps/automate -- which is
+	// how a looping store demo notices a customer (docs/automate.md).
+	hid_push(ev | (((uint32_t)hid_layout & 0x1F) << 20) | (1u << 25));
 	maskirq(old_mask);
 	// Visor keystrokes have no HID IRQ of their own. Wake the HID
 	// subscriber so it drains the ring instead of waiting for the

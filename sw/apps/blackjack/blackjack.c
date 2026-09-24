@@ -8,7 +8,7 @@
  * because every one of them moves the house edge and the table prints
  * which game you are actually playing.
  *
- * Chips come from /USER/casino.dat, shared with every game in the
+ * Chips come from /user/casino.dat, shared with every game in the
  * casino. Cards,
  * the shoe and the shuffle come from sw/common/games.
  *
@@ -157,7 +157,7 @@ static void load_bank(void)
 
     if (rv == ZBANK_CORRUPT) {
         say("bank file damaged -- `buyin` to start over");
-        puts("blackjack: /USER/casino.dat is damaged; not writing to it");
+        puts("blackjack: /user/casino.dat is damaged; not writing to it");
     }
 }
 
@@ -435,7 +435,7 @@ int main(void)
         /* THE BANK CHANGES UNDER THIS WINDOW.
          *
          * sw/apps/casino can hand out a loan while a game is open, and
-         * another game can win while this one is idle -- /USER/casino.dat is
+         * another game can win while this one is idle -- /user/casino.dat is
          * shared. Reading it only at startup meant a loan did not
          * appear until the game was restarted.
          *

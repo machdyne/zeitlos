@@ -142,6 +142,19 @@
 // to be rebuilt differently.
 `define GAME
 
+// The virtual (software-written) mouse at 0xf000_0400: a 25-bit
+// register {present, buttons, y, x} that, while present is set, drives
+// the hardware cursor sprite and is read by wm exactly like a USB
+// mouse. It began as the ULX3S remote desktop's pointer (sw/apps/net,
+// docs/esp32link.md) and is universal now because scripted demos
+// (sw/apps/automate, docs/automate.md) need to move the pointer on
+// every board. About 25 flip-flops and a 10-bit two-way mux.
+//
+// Defining it narrows the UART0 decode to 0xf000_00xx (rtl/sysctl.v):
+// without that, 0xf000_0400 would alias the console UART. Software
+// checks Z_FEATURE2_VMOUSE (sw/common/zsoc.h) before writing it.
+`define VMOUSE
+
 // RV32IM: hardware multiply and divide (rtl/cpu/picorv32/picorv32.v's
 // ENABLE_FAST_MUL/ENABLE_MUL/ENABLE_DIV). Universal rather than
 // per-board because the alternative -- some boards with M, some

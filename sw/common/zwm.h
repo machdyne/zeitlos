@@ -766,4 +766,86 @@ typedef struct {
 #define Z_WM_MIN_WIDTH          64
 #define Z_WM_MIN_HEIGHT         (Z_WM_TITLEBAR_H + 20)
 
+
+// -- captions (docs/captions.md) --
+//
+// Large text over everything, with no window: narration captions for
+// sw/apps/automate's demos, and any system-wide indicator (a volume
+// level, a mode change) that should be seen without taking focus. Use
+// sw/common/zcaption.h rather than sending this directly -- it copies
+// the text into storage that outlives the send and packs the options.
+//
+//   app -> wm   Z_WM_CAPTION   Z_STR, UTF-8 text ('\n' breaks a line;
+//                              empty hides); tag = options, zcaption.h
+//
+// wm keeps ONE caption. A new one replaces the old; the caption is
+// not owned by the process that set it and does not go away when that
+// process exits (set a timeout in the options if it should). While it
+// is up, every window's visible region excludes it, so nothing draws
+// over it -- including wm's own chrome.
+#define Z_WM_CAPTION             125
+
+// -- automation (docs/automate.md) --
+//
+// What a script driver needs from wm that the keyboard and pointer
+// cannot give it: where a window is, and a way to put it somewhere.
+// Any process may send these; they act on windows of the process named
+// in the TAG (its frontmost window), or on the focused window for 0.
+//
+//   Z_WM_WIN_QUERY   tag = pid or 0; no payload. Answered with
+//                    Z_WM_WIN_INFO, tag echoed, Z_BLOB z_wm_win_info_t.
+//                    `found` is 0 when there is no such window; the
+//                    real_input count is filled in either way.
+//   Z_WM_WIN_PLACE   tag = pid; Z_UINT32 Z_WM_PACK_PLACE(x, y): move
+//                    the window's top-left corner (clamped on-screen).
+//   Z_WM_WIN_FOCUS   tag = pid: raise and focus, as a click would.
+//   Z_WM_WIN_TBICON  tag = pid; Z_UINT32 kind: act on a titlebar icon
+//                    as if clicked -- Z_WM_TBICON_* or 0 for close.
+#define Z_WM_WIN_QUERY           126
+#define Z_WM_WIN_INFO            127
+#define Z_WM_WIN_PLACE           128
+#define Z_WM_WIN_FOCUS           129
+#define Z_WM_WIN_TBICON          130
+//   Z_WM_WIN_KILL    tag = pid: destroy every window the process owns,
+//                    then kill it -- what the close icon does for a
+//                    Z_WIN_FLAG_CLOSE_KILLS_OWNER window. Killing a
+//                    process any other way leaves its windows on the
+//                    screen, and the kernel reuses pids at once, so
+//                    the NEXT process to get that pid inherits them.
+//   Z_WM_WIN_NEXT_PLACE  tag = pid, or 0; Z_UINT32 Z_WM_PACK_PLACE(x, y):
+//                    the next window that process creates goes there
+//                    instead of the cascade. With tag 0 it is the first
+//                    window of the next process to create one -- send
+//                    it BEFORE z_proc_run(): after is a race a fast app
+//                    (gpu3d) wins. Expires like a launch argument.
+#define Z_WM_WIN_KILL            131
+#define Z_WM_WIN_NEXT_PLACE      132
+
+#define Z_WM_PACK_PLACE(x, y) \
+	((((uint32_t)(y) & 0x3FF) << 10) | ((uint32_t)(x) & 0x3FF))
+#define Z_WM_UNPACK_PLACE_X(v)   ((int)((v) & 0x3FF))
+#define Z_WM_UNPACK_PLACE_Y(v)   ((int)(((v) >> 10) & 0x3FF))
+
+#define Z_WM_INFO_ICONS          5
+#define Z_WM_INFO_TITLE          64
+
+typedef struct {
+	uint32_t	found;			// 1 if a window matched
+	uint32_t	pid;			// its owner
+	int16_t		x, y, w, h;		// frame, screen coordinates
+	int16_t		cx0, cy0, cx1, cy1;	// content rect, inclusive
+	// Keyboard and pointer events wm has seen from real devices since
+	// it started -- NOT the injected ones (Z_KBD_EV_INJECTED, zkbd.h)
+	// nor the software pointer. A driver that sees this change knows
+	// a person has touched the machine.
+	uint32_t	real_input;
+	uint8_t		focused;		// 1 if this is the focused window
+	uint8_t		n_icons;
+	uint8_t		icon_kind[Z_WM_INFO_ICONS];	// Z_WM_TBICON_*, 0 = close
+	uint8_t		pad;
+	int16_t		icon_x[Z_WM_INFO_ICONS];	// top-left of each 8x8 icon
+	int16_t		icon_y[Z_WM_INFO_ICONS];
+	char		title[Z_WM_INFO_TITLE];
+} z_wm_win_info_t;
+
 #endif

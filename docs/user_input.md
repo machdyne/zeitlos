@@ -598,7 +598,10 @@ reader is concerned, whichever wire it came in on.
 
 ### A pointer with no hardware behind it
 
-**ULX3S-specific.** `reg_vmouse` (`0xf000_0400`, `rtl/sysctl.v`) is a
+**Every board** (`` `VMOUSE ``, universal in `rtl/boards.vh`; it began
+on ULX3S, and `Z_FEATURE2_VMOUSE` says whether a bitstream has it).
+`sw/apps/automate` writes it too ([automate.md](automate.md)).
+`reg_vmouse` (`0xf000_0400`, `rtl/sysctl.v`) is a
 software mouse: a plain register another process writes, laid out
 exactly like `reg_usbN_cursor`'s x/y/buttons fields plus a `present`
 bit at 24, so `wm` reads it with the code it already had and the

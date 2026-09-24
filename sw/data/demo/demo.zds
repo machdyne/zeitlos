@@ -1,0 +1,3 @@
+# What `run automate` plays when it is given no script: the long demo.
+# From the serial console:  run automate /demo/short.zds
+chain /demo/long.zds

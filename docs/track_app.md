@@ -15,6 +15,13 @@ Also runs without `wm`, printing to the console instead of drawing.
 is set by how much can be redrawn in the time a tracker row lasts, not
 by taste.
 
+## Which modules
+
+`/demo` ([demo.md](demo.md)), then `/audio`, then the root, played in
+that order and round again. Launched with a file -- double-clicked in
+`files`, or `run track FILE` from a demo script -- it starts with that
+one, adding it to the list if it lives somewhere else.
+
 ## The display
 
 ```

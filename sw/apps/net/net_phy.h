@@ -71,7 +71,7 @@ typedef struct {
 	bool (*send)(const uint8_t *buf, uint16_t len);
 	void (*debug_dump)(void);
 	// Optional, NULL on the wired backends. The ULX3S link is a WiFi
-	// station: it needs credentials (NET.CFG, netcfg.h) and drives the
+	// station: it needs credentials (net.cfg, netcfg.h) and drives the
 	// association from net's main loop rather than blocking phy_init(),
 	// so that wm keeps being scheduled while it happens.
 	void (*poll_wifi)(const netcfg_t *cfg);
@@ -119,7 +119,7 @@ typedef struct {
 	bool (*get_mac)(uint8_t mac[6]);
 } net_phy_t;
 
-// What NET.CFG's phy= key selects. Default auto: a MAC built into the
+// What net.cfg's phy= key selects. Default auto: a MAC built into the
 // bitstream if there is one, a USB adapter otherwise.
 #define NET_PHY_AUTO     0
 #define NET_PHY_USB      1      // a USB adapter even on a board with a MAC

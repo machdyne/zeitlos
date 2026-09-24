@@ -661,6 +661,20 @@ diffs the two file lists and fails if they drift — which is not
 hypothetical, since the committed script and the one actually in use had
 already diverged.
 
+**The demos** go in `/demo` ([demo.md](demo.md)): `automate`'s
+scripts and the media they show off, every file listed in
+`DEMO_FILES` (`release/lib/mkfatimg.py`) -- from `sw/data/demo`, plus
+`sw/data/audio/lvb11.mid` and `sw/data/images/squirrel.jpg`. A missing
+one fails the build rather than shipping a demo that lost a picture or
+still carries last week's script. Adding a file to the demo means
+adding a line there.
+
+The demos also need the **speech pack** (`/speech/en.spk`, built by
+`tools/speech/speech`, [tts_data.md](tts_data.md)): the recorded voice
+is in it. It is a build product, not in git, so a card built without
+one gets a warning naming the demos, and they speak in the synthesised
+voice throughout.
+
 Applications go in `apps/` on the card, alongside `docs/`, `ark/` and
 `user/`, rather than loose in the root. Nothing in the release system
 had to learn that beyond the destination paths:

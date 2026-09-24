@@ -243,7 +243,7 @@ Files in `sw/common` and one in `sw/apps/wm`, all of them invited:
   beforehand. A chi-square over 370,000 draws never noticed. It is only
   the fallback -- hardware gets ChaCha20 -- but the fallback is what
   every host test runs on.
-- **`zbank.h`/`.c`: loans, and a move to `/USER`.** The bank used to
+- **`zbank.h`/`.c`: loans, and a move to `/user`.** The bank used to
   hand out a fresh stack when it ran dry, which makes an
   exactly-computed house edge meaningless. Running out means borrowing
   now, and the debt sits in the net-worth figure. See
@@ -259,7 +259,7 @@ Files in `sw/common` and one in `sw/apps/wm`, all of them invited:
   wrapper went in `zeitlos.c` -- which every app already links, so no
   game needed a source or Makefile change. See `docs/window_manager.md`.
 - **`zfsapp.c`** is now linked by every one of these apps, for
-  `/USER/casino.dat`.
+  `/user/casino.dat`.
 
 ## Flicker is about clearing, not about which blit
 

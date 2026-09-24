@@ -786,7 +786,7 @@ static bool do_save_as(void) {
 
 	char path[Z_FS_PATH_MAX];
 
-	const char *suggest = filename[0] ? filename : "SHEET.ZSS";
+	const char *suggest = filename[0] ? filename : "sheet.zss";
 
 	if (!z_dialog_save(&dlg_ctx, last_dir, suggest, path, sizeof(path)))
 		return false;

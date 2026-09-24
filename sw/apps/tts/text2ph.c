@@ -769,6 +769,21 @@ bool text2ph_chunk(const char *text, uint32_t len, uint32_t *pos, bool spell,
 		i++;								// quotes, brackets: nothing
 	}
 
+	// Stopped at the word limit with the sentence's own punctuation
+	// right after: it belongs to THIS chunk. Left for the next one it
+	// is a chunk of one character, and a one-character chunk is spelled
+	// (above) -- so a sentence of exactly twelve words ended in "dot".
+	// Only punctuation that ends something: "file.txt" is not touched.
+	if (!spell && words >= 12) {
+		while (i < len && (text[i] == '.' || text[i] == '!' || text[i] == '?' ||
+		       text[i] == ',' || text[i] == ';' || text[i] == ':') &&
+		       (i + 1 >= len || is_space(text[i + 1]) || text[i + 1] == text[i])) {
+			char t[2] = { (text[i] == ',' || text[i] == ';' || text[i] == ':') ? ',' : text[i], 0 };
+			emit(&s, t);
+			i++;
+		}
+	}
+
 	*pos = i;
 	while (*pos < len && is_space(text[*pos])) (*pos)++;
 	*more = *pos < len;

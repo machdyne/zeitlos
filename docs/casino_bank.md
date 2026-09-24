@@ -63,9 +63,9 @@ Two things improved in the move:
   arithmetic, both wrong in different ways. `zdeck` calls
   `zg_rng_below()`.
 
-## The bank: `/USER/casino.dat`
+## The bank: `/user/casino.dat`
 
-It lives under `/USER`, with the rest of what belongs to the person
+It lives under `/user`, with the rest of what belongs to the person
 rather than to the system.
 
 **The directory is created on demand, not by the image builder.** A save
@@ -118,7 +118,7 @@ game.roulette.rounds: 40
 ```
 
 Text, in the same `key: value` shape as `/zeitlos.cfg`, so `cat
-/USER/casino.dat` from the console tells you something and a hand edit is
+/user/casino.dat` from the console tells you something and a hand edit is
 possible when a game gets it wrong. Binary would be smaller and would
 make both of those false.
 

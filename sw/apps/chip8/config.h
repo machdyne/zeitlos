@@ -16,7 +16,7 @@
  *
  * -- the file --
  *
- * `CHIP8.CFG`, in the same directory as the ROM. Uppercase and 8.3
+ * `chip8.cfg`, in the same directory as the ROM. Uppercase and 8.3
  * because FAT short names are all this filesystem has (FF_USE_LFN is
  * 0; see sw/os/fs/fatfs/ffconf.h).
  *
@@ -127,7 +127,7 @@ bool c8_config_parse(c8_config_t *cfg, const char *text, const char *rom);
 /* Merge the config's quirk overrides onto `base`. */
 void c8_config_apply(const c8_config_t *cfg, c8_quirks_t *base);
 
-/* Best guess at which machine a ROM is for, before CHIP8.CFG has been
+/* Best guess at which machine a ROM is for, before chip8.cfg has been
  * read (and for the majority of ROMs, which have no entry).
  *
  * SIZE FIRST, extension second. A ROM larger than C8_ROM_MAX_4K cannot

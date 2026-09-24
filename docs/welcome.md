@@ -134,7 +134,7 @@ of the box if you're on a wired network):
 
 ```
 > ls
-("/APPS" "/DOCS" "/ARK" "/USER")
+("/APPS" "/DOCS" "/ARK" "/user")
 > ls /APPS
 ("/APPS/FILES" "/APPS/TEXT" "/APPS/READ" ...)
 > tget 192.168.1.100 firmware.bin

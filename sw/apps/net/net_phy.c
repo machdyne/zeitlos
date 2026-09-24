@@ -97,7 +97,7 @@ const net_phy_t *net_phy = 0;
 
 const net_phy_t *net_phy_select(int mode)
 {
-	// NET.CFG asked for USB explicitly: a board with a MAC it should
+	// net.cfg asked for USB explicitly: a board with a MAC it should
 	// ignore, or one whose MAC is unusable.
 	if (mode == NET_PHY_USB) {
 		net_phy = usb_ecm_supported() ? &phy_usb_ecm : 0;
@@ -127,7 +127,7 @@ const net_phy_t *net_phy_select(int mode)
 		// there is no MAC here. Which is not the same as no NIC any
 		// more -- a USB ethernet adapter is one, and on a board with a
 		// USB host controller it is the only one there was ever going
-		// to be. phy=builtin in NET.CFG keeps the old behaviour of
+		// to be. phy=builtin in net.cfg keeps the old behaviour of
 		// exiting instead.
 		net_phy = (mode != NET_PHY_BUILTIN && usb_ecm_supported()) ?
 			&phy_usb_ecm : 0;
