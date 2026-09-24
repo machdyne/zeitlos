@@ -8,7 +8,7 @@
  *      sw/apps/settings/tests/render.c sw/common/zwin.c \
  *      sw/common/zwidget.c sw/common/zfont_data.c sw/common/zobj.c \
  *      sw/common/zeitlos.c sw/common/zfsapp.c sw/common/zcfg.c \
- *      sw/common/zrtc.c
+ *      sw/common/zrtc.c sw/common/zkbd.c sw/common/zspeak.c
  *   /tmp/settings_render /tmp/settings
  *
  * Exit 0 pass, 1 fail, 77 skipped.
@@ -288,10 +288,16 @@ int main(int argc, char **argv) {
 	expect(other_keys == 1, "one other key counted");
 	render(prefix, "2-from-file");
 
-	// Tab order: Edit -> list -> Reload
+	// Tab order: each preference's button in turn, then the list, then
+	// Reload. (There was one preference row when this was first
+	// written; Tab from its Edit went straight to the list.)
 	z_widget_focus_set(&wset, W_EDIT_TERM);
 	handle_key('\t', 0);
-	expect(list_focus && wset.focused < 0, "Tab from Edit enters the list");
+	expect(wset.focused == W_EDIT_KBD, "Tab from the first Edit reaches the next row's");
+	handle_key('\t', 0);
+	expect(wset.focused == W_TOGGLE_JA, "then the Japanese font switch");
+	handle_key('\t', 0);
+	expect(list_focus && wset.focused < 0, "Tab from the last preference enters the list");
 
 	// type-to-find, then Enter saves
 	// "mu" is Mumbai (it sorts first); "mun" is Munich

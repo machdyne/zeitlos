@@ -3866,6 +3866,18 @@ static int create_window(uint32_t owner_pid, const char *title,
 		windows[i].no_titlebar = false;
 		windows[i].flags = flags;
 
+		// A slot is reused, and everything below belongs to the window
+		// that had it before: without this, a new window inherited the
+		// last one's size limit (term's 80x25, so "maximize" gave a
+		// centered window that size) or even its maximized or shaded
+		// state. Set every field -- see "-- maximize and shade --".
+		windows[i].max_w = 0;
+		windows[i].max_h = 0;
+		windows[i].maxed = false;
+		windows[i].shaded = false;
+		windows[i].rx = windows[i].ry = windows[i].rw = windows[i].rh = 0;
+		windows[i].real_h = 0;
+
 		// minimum size for a later resize (see the resize block in
 		// main()). Z_WIN_FLAG_MIN_IS_CREATE means "never smaller than
 		// what I just asked for" -- for an app whose window contains
