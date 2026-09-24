@@ -525,15 +525,16 @@ endif
 # verbatim (they are already ZEXE files).
 #
 # repl is NOT here. It and posix are the shells term connects to, and
-# both live on the sdcard -- init() starts them from there when a card
-# is present. See docs/flash_apps.md, "Why repl is not a core app".
+# both live on the sdcard -- term starts one when its REPL or POSIX
+# button is pressed. See docs/flash_apps.md, "Why repl is not a core app".
 $(OUTDIR)/apps.zar: apps
 	mkdir -p $(OUTDIR)
 	python3 tools/mkzar.py $(OUTDIR)/apps.zar \
 		wm=sw/apps/wm/wm.bin \
 		net=sw/apps/net/net.bin \
 		term=sw/apps/term/term.bin \
-		console=sw/apps/console/console.bin
+		console=sw/apps/console/console.bin \
+		cron=sw/apps/cron/cron.bin
 
 ifeq ($(FAMILY), ice40)
 flash_apps: $(OUTDIR)/apps.zar

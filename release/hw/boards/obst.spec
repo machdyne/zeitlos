@@ -76,9 +76,11 @@ flash_cmd = openFPGALoader -v -c dirtyJtag -f -o 0 {file}
 dfu_base = 0x040000
 
 # repl is not a core app -- it and posix ship on the card image
-# (release/lib/mkfatimg.py) and init starts them from there. With 1MB
-# of RAM posix cannot start here (its tier is 4MB), and init says so.
-core_apps = wm term console
+# (release/lib/mkfatimg.py) and term starts them when asked. With 1MB
+# of RAM posix cannot start here (its tier is 4MB), and term says so.
+# cron is: with no net there is no NTP, so it is for `wait_for_ntp: no`
+# jobs here -- `at boot` and `every` (docs/cron.md).
+core_apps = wm term console cron
 
 defines =
     FPGA_ECP5

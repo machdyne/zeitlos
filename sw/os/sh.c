@@ -1825,6 +1825,13 @@ void init(void) {
 			init_start_optional("tts");
 	}
 
+	// cron (docs/cron.md), only if there is something for it to do: a
+	// service that sleeps is still RAM. After the config retry above, so
+	// the card is up to be asked. It waits for NTP itself when told to
+	// (wait_for_ntp), so it does not matter that net starts after it.
+	if (fs_size("/user/cron.cfg") > 0)
+		init_start_optional("cron");
+
 	// net is created and loaded above, in its usual slot, but does not
 	// start running until every other load is done.
 	//

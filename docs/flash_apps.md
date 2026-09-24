@@ -1,10 +1,14 @@
 # Core Apps in Flash
 
-The core apps -- `wm`, `net`, `term` and `console` -- are programmed
+The core apps -- `wm`, `net`, `term`, `console` and `cron` -- are programmed
 into flash alongside the kernel and are available with no sdcard
 attached. `console` is the kernel console as a port (`docs/console.md`):
 it is a core app because the machines that most need it, with no card
 and no serial cable, are exactly the ones with nothing else.
+
+`cron` ([cron.md](cron.md)) is one for the same reason as `console`:
+it is small -- about 22KB -- and a scheduled job should not depend on
+anything but the card it reads its list from.
 
 The two shells, `repl` and `posix`, are **not** core apps: they live on
 the sdcard, and `term` starts one when its REPL or POSIX button is

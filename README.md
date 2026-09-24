@@ -71,6 +71,8 @@ With the MTU, there is no need for position independent code or complicated addr
 | [wm](docs/window_manager.md) | Window manager + dock |
 | [net](docs/networking.md) | Networking service |
 | [term](docs/terminal.md) | Terminal emulator (VT100, UTF-8; start panel, scrollback; connects to shells and services) |
+| [console](docs/console.md) | Console service |
+| [cron](docs/cron.md) | Runs programs on a schedule from `/user/cron.cfg` (daily, weekly, hourly, every N, at boot) |
 
 #### Shells
 
@@ -127,7 +129,6 @@ With the MTU, there is no need for position independent code or complicated addr
 | App | Description |
 |-----|-------------|
 | [serial](docs/uart1.md) | Serial port service |
-| [console](docs/console.md) | Console service |
 | [tts](docs/tts.md) | Text-to-speech service (Super+S to turn speech on) |
 | [jfont](docs/text_encoding.md#japanese) | Japanese font service: holds the font once for every app (`system.font.japanese: yes`) |
 | [zcc](docs/zcc.md) | C compiler |

@@ -52,7 +52,7 @@ dfu_base = 0x040000
 
 # repl is not a core app -- it and posix ship on the card image
 # (release/lib/mkfatimg.py) and init starts them from there.
-core_apps = wm net term console
+core_apps = wm net term console cron
 
 defines =
     FPGA_ECP5
