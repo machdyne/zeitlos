@@ -23,6 +23,9 @@
 				   when RX_POLL carried a credit >= 2. */
 #define ZNIC_INPUT     0x32	/* browser -> ESP32 -> Z: {usage,mods,pressed} */
 #define ZNIC_MOUSE     0x33	/* browser -> ESP32 -> Z: {x_lo,x_hi,y_lo,y_hi,buttons} */
+#define ZNIC_VIEWERS   0x34	/* ESP32 -> Z: {n:u8} WebSocket clients screend
+				   has now. Sent when n changes and once a
+				   second regardless (screend.c). */
 #define ZNIC_STA_OK    0
 
 typedef struct {
