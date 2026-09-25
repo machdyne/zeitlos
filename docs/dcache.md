@@ -464,7 +464,12 @@ own generated `zspec.vh` and merged `.lpf`, `-DZSPEC`, the board's
 | sergei_ml1 | 47% | 45 / 108 | 52.5 MHz |
 | ulx3s_12f | 85% | 39 / 56 | 58.2 MHz |
 | ulx3s_45f | 47% | 42 / 108 | 52.5 MHz |
-| ulx3s_85f | not built: the ulx3s_45f design on a larger die | | |
+| ulx3s_85f | 25% \* | 42 / 208 | 53.2 MHz \* |
+
+\* Not built by `zrelease build`: this row is the board flow, `make BOARD=ulx3s
+DEVICE=85k` (seed 10, Yosys 0.63+173, nextpnr 0.10-12), which is the same
+design and the one the 85F was brought up on: 21,254 of 83,640
+`TRELLIS_COMB`, 9,627 FF, 42 of 208 DP16KD, `clk48mhz` 53.15 MHz.
 
 All pass. The 25F-class targets (Lakritz, ULX3S 12F, which is the same
 die) sit at 85-88%: there is room for the cache, not for much else. If
@@ -482,6 +487,10 @@ before and after enabling:
 | sergei_ml1 (45F) | 44% / 42 / 53.3 MHz | 48% / 45 / 54.5 MHz |
 | Lakritz (25F), with write buffer | 82% / 35 / 55.2 MHz | 88% / 38 / 53.3 MHz |
 | ULX3S (25F) | 79% / 39 / 56.8 MHz | 86% / 42 / 55.7 MHz |
+| ULX3S (85F) | 22% / 39 / 53.5 MHz \* | 25% / 42 / 53.2 MHz |
+
+\* "Without" is `docs/boards.md` at 616e152, which predates the data cache,
+the MPU and the writable flash; "with" is this tree. Same flow and seed.
 
 Hardware status: mozart_ml1 has run it (see
 [Measured on hardware](#measured-on-hardware)). The others are
