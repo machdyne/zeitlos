@@ -123,11 +123,11 @@ module ddr3_phy_ecp5 (
 	// edge clock and the 48MHz system clock, and which beat lands in
 	// which slot depends on when they leave reset relative to the edge
 	// clock. They must be reset WHILE THE EDGE CLOCK IS STOPPED, by the
-	// init sequence -- in LiteX the init sequence's reset drives the
-	// system reset, and the system reset is every DDR primitive's RST:
-	//
-	//   AsyncResetSynchronizer(self.cd_sys, ~pll.locked | self.reset)
-	//   self.comb += self.crg.reset.eq(self.ddrphy.init.reset)
+	// init sequence. LiteX's ECP5 DDR3 boards (lattice_versa_ecp5 in
+	// litex-boards) do exactly this: the init sequence's reset is ORed
+	// into the system reset -- asserted at once, released through a
+	// synchroniser on the system clock -- and the system reset is every
+	// DDR primitive's RST.
 	//
 	// Here they were reset by the SoC reset alone, released whenever the
 	// reset counter finished -- at an arbitrary point relative to the
@@ -422,8 +422,9 @@ module ddr3_phy_ecp5 (
 	// rather than at an end of it.
 	wire rd_capture = rd_pipe[13];
 
-	// The READ pulse to each DQSBUFM: TWO cycles, combinational, as
-	// LiteDRAM's dqs_re = taps[cl_sys_latency] | taps[cl_sys_latency+1].
+	// The READ pulse to each DQSBUFM: TWO cycles, combinational, as in
+	// LiteDRAM's ECP5 PHY -- the read enable delayed by the CAS latency
+	// in system cycles, ORed with the same delayed one cycle more.
 	// Lattice FPGA-TN-02035 6.2.4: the READ pulse must be asserted for
 	// two system cycles before the data returns. The reset value of the
 	// gate field (3, rtl/mem/ddr3.v) is exactly LiteDRAM's position for

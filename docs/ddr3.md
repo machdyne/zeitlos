@@ -41,6 +41,7 @@ it).
 - [Verification](#verification)
 - [Troubleshooting](#troubleshooting)
 - [Limitations and open work](#limitations-and-open-work)
+- [Credits](#credits)
 
 ## Build and flash
 
@@ -405,3 +406,15 @@ current.
 - **With `PROBE`, every `0x7000_0x00` register tenant -- DDR3's among
   them -- overlaps `0x7F00_0000`** (`hwmap --check`). Pre-existing for
   the others; ML2 does not enable PROBE.
+
+## Credits
+
+The PHY's strobe path follows LiteDRAM's ECP5 PHY
+(`litedram/phy/ecp5ddrphy.py`, by David Shah and Florent Kermarrec), and
+its reset and initialisation follow the same authors' LiteX ECP5 DDR3
+boards; both are BSD-2-Clause. What was taken from them is design
+information -- delay settings, the read gate's timing, the write strobe
+pattern, the order of the initialisation steps (also given by Lattice,
+FPGA-TN-02035) -- implemented here independently. No LiteX or LiteDRAM
+code is included, so no notice of theirs is required; this section is
+credit, not a licence condition.
