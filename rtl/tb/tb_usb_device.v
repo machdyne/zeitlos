@@ -75,7 +75,17 @@ module tb_usb_device #(
     // is index 3. Frames the testbench queues with ecm_push go out on
     // bulk IN; frames the host sends are checked against the same
     // pattern (ecm_pat) and counted. Default 0.
-    parameter integer ECM = 0
+    parameter integer ECM = 0,
+    // A USB serial device, for rtl/tb/tb_usb_serial_cosim.v:
+    //   1  a Silicon Labs CP2102 (10c4:ea60): one vendor-class
+    //      interface, bulk IN 0x81 and bulk OUT 0x01, 64 bytes; the
+    //      UART is dead until IFC_ENABLE, as on the chip (AN571)
+    //   2  a CDC-ACM device: communications interface 0 with an
+    //      interrupt IN on 0x83, data interface 1 with bulk IN 0x81
+    //      and bulk OUT 0x02, 64 bytes
+    // Bytes the testbench queues with ser_push go out on bulk IN;
+    // bytes the host sends collect in ser_rb. Default 0.
+    parameter integer SER = 0
 ) (
     inout wire dp,
     inout wire dm,
@@ -338,6 +348,65 @@ module tb_usb_device #(
     integer ecm_notes;              // notifications delivered
     integer ecm_q;                  // scratch for the ECM paths
 
+    // -- USB serial (SER = 1 CP2102, SER = 2 CDC-ACM) --
+    reg ser_en;                     // CP2102: IFC_ENABLE(1) in force
+    integer ser_baud;               // SET_BAUDRATE / line coding rate
+    integer ser_lctl;               // bits << 8 | parity << 4 | stop
+    reg ser_dtr, ser_rts;
+    integer ser_mhs_n;              // SET_MHS / SET_CONTROL_LINE_STATE seen
+    // Times DTR and RTS were left DIFFERENT by a request. On an ESP32
+    // board that is the auto-reset circuit firing: the chip is held in
+    // reset, or restarted into its ROM bootloader.
+    integer ser_glitch;
+    integer ser_unknown;            // vendor/class requests not understood
+    integer ser_order_err;          // CP2102: data endpoint before IFC_ENABLE
+    integer ser_reqs;               // vendor/class requests seen, in order
+    reg [7:0] ser_req_log [0:15];   // ...their bRequest
+    reg [7:0] ser_q [0:4095];       // bytes queued for bulk IN
+    integer ser_qh, ser_qt;
+    reg [7:0] ser_rb [0:4095];      // bytes received on bulk OUT
+    integer ser_rn;
+    reg ser_in_tgl, ser_out_tgl;
+    integer ser_dup_out;
+    integer ser_out_naks;           // hook: NAK the next N OUT packets
+    integer ser_in_naks;            // hook: NAK the next N IN tokens with data waiting
+    integer ser_short;              // hook: at most this many per IN packet (0: 64)
+    reg [15:0] ser_w;               // scratch: wValue
+    // Hook: STALL the status stage of every request whose bRequest is
+    // ser_stall_req, while ser_stall_en is set -- a device refusing it.
+    reg ser_stall_en;
+    reg [7:0] ser_stall_req;
+    integer ser_stalls;
+    reg ser_refused;                // the request being decoded is STALLed
+
+    task ser_push;
+        input [7:0] b;
+        begin
+            ser_q[ser_qt] = b;
+            ser_qt = (ser_qt + 1) % 4096;
+        end
+    endtask
+
+    task ser_reset;
+        begin
+            ser_en = 1'b0;
+            ser_in_tgl = 1'b0;
+            ser_out_tgl = 1'b0;
+        end
+    endtask
+
+    task ser_log_req;
+        begin
+            if (ser_reqs < 16) ser_req_log[ser_reqs] = setup[1];
+            ser_reqs = ser_reqs + 1;
+            ser_refused = ser_stall_en && setup[1] == ser_stall_req;
+            if (ser_refused) begin
+                stall_next = 1'b1;
+                ser_stalls = ser_stalls + 1;
+            end
+        end
+    endtask
+
     // Test pattern for a frame: byte 0 is the seed, the rest a function
     // of seed and position. rtl/tb/cosim/usbh_vpi.c has the same.
     function [7:0] ecm_pat;
@@ -428,6 +497,7 @@ module tb_usb_device #(
                     msc_halt_out = 1'b0;
                     msc_nak_left = 0;
                     if (ECM) ecm_reset;
+                    if (SER) ser_reset;
                     // A reset hub comes back with every port unpowered
                     // and nothing enabled (USB 2.0 11.10); so does one
                     // that was unplugged and plugged back in.
@@ -1000,7 +1070,105 @@ module tb_usb_device #(
             disk[2] = 8'h90; disk[3] = 8'h6d;
             disk[510] = 8'h55; disk[511] = 8'haa;
         end
+
+        ser_baud = 0; ser_lctl = 0;
+        ser_dtr = 1'b0; ser_rts = 1'b0;
+        ser_mhs_n = 0; ser_glitch = 0; ser_unknown = 0;
+        ser_order_err = 0; ser_reqs = 0;
+        ser_qh = 0; ser_qt = 0; ser_rn = 0;
+        ser_dup_out = 0; ser_out_naks = 0; ser_in_naks = 0; ser_short = 0;
+        ser_stall_en = 1'b0; ser_stall_req = 8'h00; ser_stalls = 0;
+        ser_refused = 1'b0;
+        ser_reset;
+        if (SER == 1) begin
+            desc[7] = 8'h40;                    // 64, as the CP2102
+            desc[8] = 8'hc4; desc[9] = 8'h10;   // 10c4:ea60
+            desc[10] = 8'h60; desc[11] = 8'hea;
+            // config: 32 bytes, one vendor-class interface, two bulk
+            cfg_total = 32;
+            cfgd[0]  = 8'h09; cfgd[1]  = 8'h02; cfgd[2]  = 8'h20;
+            cfgd[3]  = 8'h00; cfgd[4]  = 8'h01; cfgd[5]  = 8'h01;
+            cfgd[6]  = 8'h00; cfgd[7]  = 8'h80; cfgd[8]  = 8'h32;
+            cfgd[9]  = 8'h09; cfgd[10] = 8'h04; cfgd[11] = 8'h00;
+            cfgd[12] = 8'h00; cfgd[13] = 8'h02; cfgd[14] = 8'hff;
+            cfgd[15] = 8'h00; cfgd[16] = 8'h00; cfgd[17] = 8'h02;
+            cfgd[18] = 8'h07; cfgd[19] = 8'h05; cfgd[20] = 8'h81;
+            cfgd[21] = 8'h02; cfgd[22] = 8'h40; cfgd[23] = 8'h00;
+            cfgd[24] = 8'h00;
+            cfgd[25] = 8'h07; cfgd[26] = 8'h05; cfgd[27] = 8'h01;
+            cfgd[28] = 8'h02; cfgd[29] = 8'h40; cfgd[30] = 8'h00;
+            cfgd[31] = 8'h00;
+        end
+        if (SER == 2) begin
+            desc[4] = 8'h02;                    // bDeviceClass: CDC
+            desc[7] = 8'h40;
+            desc[8] = 8'hc0; desc[9] = 8'h16;   // 16c0:05e1
+            desc[10] = 8'he1; desc[11] = 8'h05;
+            // config: 67 bytes. Interface 0: communications, ACM, with
+            // header, call management, ACM and union functional
+            // descriptors and an interrupt IN; interface 1: data, bulk
+            // IN 0x81 and bulk OUT 0x02.
+            cfg_total = 67;
+            cfgd[0]  = 8'h09; cfgd[1]  = 8'h02; cfgd[2]  = 8'h43;
+            cfgd[3]  = 8'h00; cfgd[4]  = 8'h02; cfgd[5]  = 8'h01;
+            cfgd[6]  = 8'h00; cfgd[7]  = 8'h80; cfgd[8]  = 8'h32;
+            cfgd[9]  = 8'h09; cfgd[10] = 8'h04; cfgd[11] = 8'h00;
+            cfgd[12] = 8'h00; cfgd[13] = 8'h01; cfgd[14] = 8'h02;
+            cfgd[15] = 8'h02; cfgd[16] = 8'h01; cfgd[17] = 8'h00;
+            cfgd[18] = 8'h05; cfgd[19] = 8'h24; cfgd[20] = 8'h00;
+            cfgd[21] = 8'h10; cfgd[22] = 8'h01;
+            cfgd[23] = 8'h05; cfgd[24] = 8'h24; cfgd[25] = 8'h01;
+            cfgd[26] = 8'h00; cfgd[27] = 8'h01;
+            cfgd[28] = 8'h04; cfgd[29] = 8'h24; cfgd[30] = 8'h02;
+            cfgd[31] = 8'h02;
+            cfgd[32] = 8'h05; cfgd[33] = 8'h24; cfgd[34] = 8'h06;
+            cfgd[35] = 8'h00; cfgd[36] = 8'h01;
+            cfgd[37] = 8'h07; cfgd[38] = 8'h05; cfgd[39] = 8'h83;
+            cfgd[40] = 8'h03; cfgd[41] = 8'h08; cfgd[42] = 8'h00;
+            cfgd[43] = 8'h10;
+            cfgd[44] = 8'h09; cfgd[45] = 8'h04; cfgd[46] = 8'h01;
+            cfgd[47] = 8'h00; cfgd[48] = 8'h02; cfgd[49] = 8'h0a;
+            cfgd[50] = 8'h00; cfgd[51] = 8'h00; cfgd[52] = 8'h00;
+            cfgd[53] = 8'h07; cfgd[54] = 8'h05; cfgd[55] = 8'h81;
+            cfgd[56] = 8'h02; cfgd[57] = 8'h40; cfgd[58] = 8'h00;
+            cfgd[59] = 8'h00;
+            cfgd[60] = 8'h07; cfgd[61] = 8'h05; cfgd[62] = 8'h02;
+            cfgd[63] = 8'h02; cfgd[64] = 8'h40; cfgd[65] = 8'h00;
+            cfgd[66] = 8'h00;
+        end
     end
+
+    // -- SER: bulk OUT, from the host --
+    //
+    // A CP2102 whose UART is not enabled takes nothing: STALL, so a
+    // host that skipped IFC_ENABLE fails at once rather than retrying
+    // into a NAK forever.
+    task ser_out;
+        begin
+            rx_packet;
+            if (rx_crc_ok) begin
+                turnaround;
+                if (SER == 1 && !ser_en) begin
+                    ser_order_err = ser_order_err + 1;
+                    tx_packet(PID_STALL, 0);
+                end else if (ser_out_naks > 0) begin
+                    ser_out_naks = ser_out_naks - 1;
+                    tx_packet(PID_NAK, 0);
+                end else begin
+                    tx_packet(PID_ACK, 0);
+                    if ((rxpid == PID_DATA1) != ser_out_tgl) begin
+                        ser_dup_out = ser_dup_out + 1;
+                    end else begin
+                        ser_out_tgl = ~ser_out_tgl;
+                        for (i = 0; i < rxn - 3; i = i + 1) begin
+                            if (ser_rn < 4096) ser_rb[ser_rn] = rxb[1 + i];
+                            ser_rn = ser_rn + 1;
+                        end
+                    end
+                end
+            end
+        end
+    endtask
 
     // -- HUB=1: a class request, decoded from setup[] --
     //
@@ -1104,6 +1272,7 @@ module tb_usb_device #(
         msc_nak_left = 0;
         pkt_held = 1'b0;
         if (ECM) ecm_reset;
+        if (SER) ser_reset;
     end
 
     // -- a CBW has arrived: decide the data phase and queue the CSW --
@@ -1205,6 +1374,37 @@ module tb_usb_device #(
         end else if (rx_crc_ok && (rxb[1][6:0] == dev_addr) &&
                      (rxb[1][7] == 1'b1) && (rxb[2][2:0] == 3'd0)) begin
 
+            // Endpoint 1, SER: bulk IN, whatever is queued, up to 64
+            // bytes (or ser_short) per packet.
+            if (SER != 0 && rxpid == PID_IN) begin
+                turnaround;
+                if (SER == 1 && !ser_en) begin
+                    ser_order_err = ser_order_err + 1;
+                    tx_packet(PID_STALL, 0);
+                end else if (ser_qh == ser_qt) begin
+                    tx_packet(PID_NAK, 0);
+                end else if (ser_in_naks > 0) begin
+                    ser_in_naks = ser_in_naks - 1;
+                    tx_packet(PID_NAK, 0);
+                end else begin
+                    k = (ser_qt - ser_qh + 4096) % 4096;
+                    if (k > 64) k = 64;
+                    if (ser_short > 0 && k > ser_short) k = ser_short;
+                    for (i = 0; i < k; i = i + 1)
+                        txb[i] = ser_q[(ser_qh + i) % 4096];
+                    tx_packet(ser_in_tgl ? PID_DATA1 : PID_DATA0, k);
+                    rx_packet;
+                    if (rxpid != PID_ACK) pkt_held = 1'b1;
+                    if (rxpid == PID_ACK) begin
+                        ser_in_tgl = ~ser_in_tgl;
+                        ser_qh = (ser_qh + k) % 4096;
+                    end
+                end
+            end else
+            // Endpoint 1, CP2102: bulk OUT.
+            if (SER == 1 && rxpid == PID_OUT) begin
+                ser_out;
+            end else
             // Endpoint 1, ECM: bulk IN, the head of the frame queue in
             // 64-byte packets, a zero-length packet after a frame that
             // is an exact multiple of 64.
@@ -1344,6 +1544,13 @@ module tb_usb_device #(
                     end
                 end
             end
+
+        end else if (SER == 2 && rx_crc_ok && rxpid == PID_OUT &&
+                     (rxb[1][6:0] == dev_addr) &&
+                     (rxb[1][7] == 1'b0) && (rxb[2][2:0] == 3'd1)) begin
+
+            // Endpoint 2, CDC-ACM: bulk OUT.
+            ser_out;
 
         end else if (ECM && rx_crc_ok && rxpid == PID_IN &&
                      (rxb[1][6:0] == dev_addr) &&
@@ -1519,6 +1726,46 @@ module tb_usb_device #(
                         ecm_filter = setup[2];
                         ecm_filters = ecm_filters + 1;
                         in_len = 0;
+                    end else if (SER != 0 && setup[0] == 8'h00 &&
+                                 setup[1] == 8'h09) begin
+                        // SET_CONFIGURATION resets the data toggles
+                        ser_in_tgl = 1'b0;
+                        ser_out_tgl = 1'b0;
+                        in_len = 0;
+                    end else if (SER == 1 && setup[0] == 8'h41) begin
+                        // CP2102 vendor requests, AN571. SET_BAUDRATE's
+                        // rate arrives in the data stage (PID_OUT below).
+                        ser_log_req;
+                        ser_w = {setup[3], setup[2]};
+                        if (!ser_refused) case (setup[1])
+                        8'h00: ser_en = ser_w[0];
+                        8'h03: ser_lctl = ser_w;
+                        8'h07: begin
+                            ser_mhs_n = ser_mhs_n + 1;
+                            if (ser_w[8]) ser_dtr = ser_w[0];
+                            if (ser_w[9]) ser_rts = ser_w[1];
+                            if (ser_dtr != ser_rts) ser_glitch = ser_glitch + 1;
+                        end
+                        8'h1e: ;
+                        default: ser_unknown = ser_unknown + 1;
+                        endcase
+                        in_len = 0;
+                    end else if (SER == 2 && setup[0] == 8'h21) begin
+                        // CDC-ACM class requests. SET_LINE_CODING's
+                        // seven bytes arrive in the data stage.
+                        ser_log_req;
+                        ser_w = {setup[3], setup[2]};
+                        if (!ser_refused) case (setup[1])
+                        8'h20: ;
+                        8'h22: begin
+                            ser_mhs_n = ser_mhs_n + 1;
+                            ser_dtr = ser_w[0];
+                            ser_rts = ser_w[1];
+                            if (ser_dtr != ser_rts) ser_glitch = ser_glitch + 1;
+                        end
+                        default: ser_unknown = ser_unknown + 1;
+                        endcase
+                        in_len = 0;
                     end else if (MSC && setup[0] == 8'h21 &&
                                  setup[1] == 8'hff) begin
                         // Bulk-Only Mass Storage Reset, BOT 3.1: back
@@ -1585,6 +1832,17 @@ module tb_usb_device #(
                 rx_packet;
                 turnaround;
                 tx_packet(PID_ACK, 0);
+                // A control write's data stage, for the SER requests
+                // that carry one. (The status stage of a control read
+                // arrives here too, with no data, and matches neither.)
+                if (SER == 1 && setup[0] == 8'h41 && setup[1] == 8'h1e &&
+                    !ser_refused && rx_crc_ok && rxn - 3 >= 4)
+                    ser_baud = {rxb[4], rxb[3], rxb[2], rxb[1]};
+                if (SER == 2 && setup[0] == 8'h21 && setup[1] == 8'h20 &&
+                    !ser_refused && rx_crc_ok && rxn - 3 >= 7) begin
+                    ser_baud = {rxb[4], rxb[3], rxb[2], rxb[1]};
+                    ser_lctl = {rxb[7], rxb[6][3:0], rxb[5][3:0]};
+                end
                 // SET_ADDRESS takes effect only after its status
                 // stage completes, which is why this is here and not
                 // where the request was decoded.

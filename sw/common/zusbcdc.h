@@ -5,7 +5,7 @@
  * Zeitlos
  * Copyright (c) 2026 Lone Dynamics Corporation. All rights reserved.
  *
- * A USB CDC-ACM device ("USB serial"), for apps. The driver is in the
+ * A USB serial device, for apps. The driver is in the
  * kernel (sw/os/usb/usbh_cdc.c); these are the three syscalls onto it,
  * Z_SYS_USBCDC_PRESENT / _READ / _WRITE, and the argument shapes they
  * share with sw/os/usbcdcapi.c.
@@ -18,12 +18,13 @@
  * arbitrates between two apps calling these directly; their bytes
  * would interleave.
  *
- * -- What it is not --
+ * -- What it drives --
  *
- * CDC-ACM only. FTDI, CP210x, CH340 and PL2303 adapters are vendor
- * protocols and are not bound (docs/usb_host.md, "CDC"). There is no
- * baud rate to set: the host sends 115200 8N1 at enumeration, which a
- * native-USB device ignores and a CDC bridge uses.
+ * Any USB serial device the kernel binds: CDC-ACM, and CP210x bridges
+ * (docs/usb_host.md, "USB serial devices"). FTDI, CH340 and PL2303 are
+ * not bound yet. The syscalls are the same for every kind; the name
+ * is historical. There is no baud rate to set: the host sets 115200
+ * 8N1 at bind, which a native-USB device ignores and a bridge uses.
  */
 
 #include <stdint.h>

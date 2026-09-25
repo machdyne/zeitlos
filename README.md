@@ -106,6 +106,7 @@ With the MTU, there is no need for position independent code or complicated addr
 | [play](docs/play_app.md) | WAV/AU/RAW audio file player |
 | [track](docs/track_app.md) | MOD audio file player |
 | [mmod](docs/mmod.md) | [MMOD](https://github.com/machdyne/mmod) reader/writer |
+| [mesh](docs/mesh_app.md) | Meshtastic LoRa client |
 | [logic](docs/logic_app.md) | Logic analyzer (under development) |
 | [gpu3d](docs/gpu3d_app.md) | Spinning 3D cube demo + STL viewer |
 

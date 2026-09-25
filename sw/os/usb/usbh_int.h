@@ -15,6 +15,7 @@
 
 #include <stdint.h>
 #include "usbh.h"
+#include "usbh_ser.h"
 
 #ifndef DIR_IN
 #define DIR_IN              0x80
@@ -69,9 +70,11 @@
 #define E_HUB_WAIT      17  // debounced, waiting for address 0 and scratch
 #define E_HUB_RESET     18  // hub is resetting the port: holds address 0
 #define E_HUB_RECOVER   19  // reset done, 10 ms recovery: holds address 0
-// CDC-ACM class requests between SET_CONFIGURATION and binding.
-#define E_CDC_LINE      20  // SET_LINE_CODING
-#define E_CDC_DTR       21  // SET_CONTROL_LINE_STATE
+// A USB serial device (usbh_ser.h) between SET_CONFIGURATION and
+// binding: its setup requests, one per pass, in order. 21 was
+// E_CDC_DTR, CDC-ACM's second request, before every kind shared one
+// state; it is not reused.
+#define E_SER_SETUP     20
 #define E_HID_RDESC     22  // a mouse's report descriptor, to pick its protocol
 // CDC-ECM (usbh_ecm.c) between SET_CONFIGURATION and binding.
 #define E_ECM_MAC       23  // GET_DESCRIPTOR(STRING iMACAddress)
@@ -229,6 +232,11 @@ typedef struct {
     // MRD_* below. lsusb shows both.
     uint8_t mouse_rd;
     z_usbh_mlay_t mlay;
+    // USB serial devices (usbh_ser.h): what the probe found, which
+    // setup request is in flight, and whether its failure is fatal.
+    z_usbh_ser_t ser;
+    uint8_t ser_step;
+    uint8_t ser_fatal;
 
     // -- hub class driver, usbh_hub.c; meaningful only for a hub --
     uint8_t h_state;

@@ -74,7 +74,7 @@ SEG_PAGE_LDFLAGS = -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16
 LDFLAGS = $(PIC_FLAGS) -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS) $(SEG_PAGE_LDFLAGS)
 LDSCRIPT = ../common/riscv-os.ld
 
-OBJS = kernel.o kruntime.o mem.o zar.o usb/usbh.o usb/usbh_hid.o usb/usbh_msc.o usb/usbh_hub.o usb/usbh_cdc.o usb/usbh_ecm.o usbcdcapi.o usbnetapi.o \
+OBJS = kernel.o kruntime.o mem.o zar.o usb/usbh.o usb/usbh_hid.o usb/usbh_msc.o usb/usbh_hub.o usb/usbh_cdc.o usb/usbh_cp210x.o usb/usbh_ecm.o usbcdcapi.o usbnetapi.o \
 	fs/fs.o fs/ramdisk.o fs/sdbench.o fs/fatfs/sdmm.o fs/fatfs/diskio_mux.o fs/fatfs/ff.o fs/fatfs/ffunicode.o \
 	uart.o hid.o sh.o xfer.o xmodem.o ui.o msg.o pidreg.o fsapi.o flashapi.o jumpapi.o zjump.o procapi.o zobj.o zstream.o zdns.o zsoc.o zgpio.o logo.o \
 	cfg.o zcfg.o zfont_data.o
@@ -90,7 +90,7 @@ OBJS = kernel.o kruntime.o mem.o zar.o usb/usbh.o usb/usbh_hid.o usb/usbh_msc.o 
 # zstream/TFTP work -- see docs/networking.md.
 KSRCS = kernel.c kruntime.c mem.c \
 	fs/fs.c fs/ramdisk.c fs/sdbench.c fs/fatfs/sdmm.c fs/fatfs/diskio_mux.c fs/fatfs/ff.c fs/fatfs/ffunicode.c \
-	usb/usbh.c usb/usbh_hid.c usb/usbh_msc.c usb/usbh_hub.c usb/usbh_cdc.c usb/usbh_ecm.c usbcdcapi.c usbnetapi.c uart.c hid.c sh.c xfer.c xmodem.c ui.c msg.c pidreg.c fsapi.c flashapi.c jumpapi.c procapi.c logo.c cfg.c \
+	usb/usbh.c usb/usbh_hid.c usb/usbh_msc.c usb/usbh_hub.c usb/usbh_cdc.c usb/usbh_cp210x.c usb/usbh_ecm.c usbcdcapi.c usbnetapi.c uart.c hid.c sh.c xfer.c xmodem.c ui.c msg.c pidreg.c fsapi.c flashapi.c jumpapi.c procapi.c logo.c cfg.c \
 	../common/zobj.c ../common/zstream.c ../common/zdns.c ../common/zsoc.c ../common/zcfg.c ../common/zjump.c \
 	../common/zfont_data.c
 
@@ -107,7 +107,7 @@ kernel.o: $(KSRCS)
 fs/fatfs/diskio_mux.o: fs/fatfs/diskio_mux.c fs/ramdisk.h
 	$(CC) $(CFLAGS) -c fs/fatfs/diskio_mux.c -o fs/fatfs/diskio_mux.o
 
-usb/usbh.o: usb/usbh.c usb/usbh.h usb/usbh_hw.h usb/usbh_int.h usb/usbh_msc.h usb/usbh_cdc.h
+usb/usbh.o: usb/usbh.c usb/usbh.h usb/usbh_hw.h usb/usbh_int.h usb/usbh_msc.h usb/usbh_cdc.h usb/usbh_ser.h
 	$(CC) $(CFLAGS) -c usb/usbh.c -o usb/usbh.o
 
 usb/usbh_hid.o: usb/usbh_hid.c usb/usbh.h usb/usbh_hw.h
@@ -119,8 +119,11 @@ usb/usbh_msc.o: usb/usbh_msc.c usb/usbh_msc.h usb/usbh.h usb/usbh_hw.h
 usb/usbh_hub.o: usb/usbh_hub.c usb/usbh_int.h usb/usbh.h usb/usbh_hw.h
 	$(CC) $(CFLAGS) -c usb/usbh_hub.c -o usb/usbh_hub.o
 
-usb/usbh_cdc.o: usb/usbh_cdc.c usb/usbh_cdc.h usb/usbh.h usb/usbh_hw.h
+usb/usbh_cdc.o: usb/usbh_cdc.c usb/usbh_cdc.h usb/usbh_ser.h usb/usbh.h usb/usbh_hw.h
 	$(CC) $(CFLAGS) -c usb/usbh_cdc.c -o usb/usbh_cdc.o
+
+usb/usbh_cp210x.o: usb/usbh_cp210x.c usb/usbh_ser.h
+	$(CC) $(CFLAGS) -c usb/usbh_cp210x.c -o usb/usbh_cp210x.o
 
 fs/ramdisk.o: fs/ramdisk.c fs/ramdisk.h
 	$(CC) $(CFLAGS) -c fs/ramdisk.c -o fs/ramdisk.o

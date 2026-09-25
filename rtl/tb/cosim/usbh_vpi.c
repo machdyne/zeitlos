@@ -115,6 +115,38 @@ int z_usbh_msc_write(uint32_t lba, const uint8_t *src, uint32_t count);
 
 #include "usbh_ecm.h"
 
+/* -- USB serial devices (usbh_cdc.c, usbh_cp210x.c), tb_usb_serial_cosim.v --
+ *
+ * Both directions carry ser_pat(): byte n of everything ever sent that
+ * way is ser_pat(n), and each side keeps its own running count, so a
+ * lost, duplicated or reordered byte anywhere shows as a mismatch from
+ * that point on.
+ *
+ * SER_INFO   rc = present | kind << 1
+ * SER_READ   arg 0: ONE z_usbh_cdc_read(); rc = its return.
+ *            arg n: read until n bytes have arrived or 4000 reads in a
+ *            row found nothing; rc = bytes (or -1 if any read failed),
+ *            bad = bytes differing from ser_pat, first_bad = reads that
+ *            returned data
+ * SER_WRITE  arg = len: one z_usbh_cdc_write() of the next len bytes of
+ *            ser_pat; rc = its return
+ * SER_RESET  the harness's running counts back to 0 (a fresh device) */
+#define SER_OP_INFO   15
+#define SER_OP_READ   16
+#define SER_OP_WRITE  17
+#define SER_OP_RESET  18
+
+#include "usbh_cdc.h"
+
+/* tb_usb_serial_cosim.v's ser_pat, byte for byte. */
+static uint8_t ser_pat(int pos)
+{
+    return (uint8_t)((pos * 13 + (pos >> 8) * 7 + 0x21) & 0xff);
+}
+
+static int ser_rx_pos, ser_tx_pos;
+static void ser_run(int op);
+
 /* tb_usb_device.v's ecm_pat, byte for byte. */
 static uint8_t ecm_pat(uint8_t seed, int pos)
 {
@@ -193,6 +225,10 @@ static void msc_run(void)
     msc_bad = 0;
     msc_first_bad = -1;
 
+    if (msc_op >= SER_OP_INFO) {
+        ser_run(msc_op);
+        return;
+    }
     if (msc_op >= ECM_OP_INFO) {
         ecm_run(msc_op);
         return;
@@ -315,6 +351,53 @@ static void ecm_run(int op)
         msc_rc = (int)in.rx_drop;
         msc_bad = (int)in.rx_err;
         msc_first_bad = (int)in.tx_err;
+        break;
+    }
+}
+
+static void ser_run(int op)
+{
+    static uint8_t buf[64];
+    int i, n, got, idle, fail;
+
+    switch (op) {
+    case SER_OP_INFO:
+        msc_rc = z_usbh_cdc_present() | z_usbh_cdc_kind() << 1;
+        break;
+    case SER_OP_READ:
+        if (msc_arg == 0) {
+            msc_rc = z_usbh_cdc_read(buf, sizeof(buf));
+            for (i = 0; i < msc_rc; i++)
+                if (buf[i] != ser_pat(ser_rx_pos++)) msc_bad++;
+            break;
+        }
+        got = 0; idle = 0; fail = 0;
+        msc_first_bad = 0;
+        while (got < msc_arg && idle < 4000) {
+            n = z_usbh_cdc_read(buf, sizeof(buf));
+            if (n < 0) { fail = 1; break; }
+            if (n == 0) { idle++; continue; }
+            idle = 0;
+            msc_first_bad++;
+            for (i = 0; i < n; i++)
+                if (buf[i] != ser_pat(ser_rx_pos++)) msc_bad++;
+            got += n;
+        }
+        msc_rc = fail ? -1 : got;
+        break;
+    case SER_OP_WRITE:
+        {
+            static uint8_t out[4096];
+            n = msc_arg > (int)sizeof(out) ? (int)sizeof(out) : msc_arg;
+            for (i = 0; i < n; i++) out[i] = ser_pat(ser_tx_pos + i);
+            msc_rc = z_usbh_cdc_write(out, n);
+            if (msc_rc > 0) ser_tx_pos += msc_rc;
+        }
+        break;
+    case SER_OP_RESET:
+        ser_rx_pos = 0;
+        ser_tx_pos = 0;
+        msc_rc = 0;
         break;
     }
 }

@@ -82,6 +82,7 @@ document says what replaces it and why.
 - [Mass storage and the filesystem](#mass-storage-and-the-filesystem)
 - [Mass storage status](#mass-storage-status)
 - [CDC](#cdc)
+- [USB serial devices](#usb-serial-devices)
 - [USB ethernet](#usb-ethernet)
 - [Resource budget](#resource-budget)
 - [Debug build](#debug-build)
@@ -1165,6 +1166,139 @@ vendor-specific protocols, not CDC.** Each needs its own small driver
 (mostly vendor control requests to set a baud divisor, then bulk).
 "USB serial adapter" is not one thing, and the cheap ones in everybody's
 drawer are usually CH340 or FTDI.
+
+**CP210x is now bound** -- see
+[USB serial devices](#usb-serial-devices), which also covers how the
+next vendor driver (FTDI) goes in.
+
+## USB serial devices
+
+**Status: CP210x confirmed on hardware** -- a Heltec WiFi LoRa 32 V3
+(CP2102) binds as `class=cdc (cp210x)` on a root port while a hub
+with a keyboard and mouse runs on the other, and `usbserial` shows its
+Meshtastic console. Passes `make test_usb_serial` (72 checks).
+CDC-ACM and Silicon Labs CP210x bridges bind; FTDI is next. First
+user: the Meshtastic client, [mesh_app.md](mesh_app.md).
+
+### One data path, several kinds
+
+"USB serial" is not one protocol (see "Expectation to set" above), but
+every kind has the same shape once it is running: bytes out on one bulk
+OUT endpoint, bytes back on one bulk IN endpoint. So there is one data
+path -- `z_usbh_cdc_read()` / `_write()` in `usbh_cdc.c`, the
+`Z_SYS_USBCDC_*` syscalls, `serial0` -- and each kind contributes only
+what differs:
+
+| | where | CDC-ACM | CP210x | FTDI (planned) |
+|---|---|---|---|---|
+| recognised by | `z_usbh_ser_probe()` | class 2/2 + class 0x0a with bulk IN/OUT | VID:PID **and** a vendor-class (0xff) interface with bulk IN/OUT | VID:PID and shape |
+| set up by | `z_usbh_ser_setup()` | SET_LINE_CODING, SET_CONTROL_LINE_STATE | IFC_ENABLE, SET_BAUDRATE, SET_LINE_CTL, SET_MHS | reset, baud divisor, data, flow, modem control |
+| IN packets hold | `rx_payload()` | data | data | 2 status bytes, then data |
+
+`sw/os/usb/usbh_ser.h` is the interface; its header comment is the
+checklist for adding a kind. The name `usbh_cdc.c` and the syscall
+names are historical.
+
+**Setup is a list of requests, not states.** A kind's setup generator
+returns control request *n* (host-to-device, at most 8 data bytes, and
+whether its failure is fatal); `usbh.c` runs them one per pass through
+a single enumeration state, `E_SER_SETUP`, then binds. A fatal
+failure fails enumeration, which retries it; any other is logged
+(`usb serial: cp210x setup request 2 refused, continuing`) and setup
+carries on, because devices STALL optional requests they do not
+implement. This replaced CDC-ACM's two dedicated states (`E_CDC_LINE`,
+`E_CDC_DTR`); state 21 is retired rather than reused.
+
+**Class before IDs.** A device that declares CDC-ACM is taken at its
+word whoever made it; ID tables are only for vendor-class devices.
+An ID match with the wrong interface shape binds nothing.
+
+**Still one device at a time.** A second USB serial device enumerates
+and sits unbound, as a second CDC-ACM device did before. (It is not
+bound later if the first goes away; replug it.)
+
+### CP210x
+
+`sw/os/usb/usbh_cp210x.c`, from Silicon Labs' public AN571. No driver
+source was consulted -- in particular not Linux's `cp210x.c`, which is
+GPL.
+
+- **IDs:** `10c4:ea60` only -- the one-port family default (CP2102,
+  CP2102N, CP2103, CP2104, CP2109). Rebadged IDs are added as they
+  turn up. The multi-port parts (CP2105, CP2108) are left out on
+  purpose: which of their ports is "the" serial port is an unasked
+  question.
+- **Setup:** `IFC_ENABLE` (fatal -- the UART passes nothing until it
+  succeeds), `SET_BAUDRATE` 115200, `SET_LINE_CTL` 8N1, `SET_MHS`.
+- **Data:** plain bytes both ways, so it needs no `rx_payload()` case.
+
+**DTR and RTS are set in ONE request, `SET_MHS 0x0303`.** On ESP32
+boards these lines drive the EN/IO0 auto-reset transistors esptool
+uses: one asserted without the other holds the chip in reset or
+restarts it into its ROM bootloader. Two separate writes would pass
+through that state; one write with both mask bits does not. Both
+asserted is what Linux does on `open()`. If a board turns out to
+dislike it, `CP_MHS_BOTH_CLEAR` (0x0300) is the one-line alternative
+and is just as safe. The model in `test_usb_serial` counts every
+moment DTR and RTS differ; the count must be zero.
+
+**Baud rate is fixed at 115200** for every kind (`Z_USBH_SER_BAUD`), as
+CDC-ACM's line coding always was. A syscall to change it waits for a
+user who needs another rate; a bridge makes that meaningful in a way
+CDC-ACM did not.
+
+### FTDI, next
+
+What it will take, so the shape above is checked against it now rather
+than discovered later:
+
+- a probe on `0403:6001` (FT232R), `0403:6015` (FT-X) and friends;
+- setup: `SIO_RESET`, `SIO_SET_BAUD_RATE` with the divisor in wValue
+  and wIndex (the one piece of real arithmetic), `SIO_SET_DATA` 8N1,
+  `SIO_SET_FLOW_CTRL` none, `SIO_SET_MODEM_CTRL` -- all vendor OUT with
+  no data stage, which the request list already covers;
+- `rx_payload()`: strip the two modem-status bytes at the start of
+  every IN packet; a packet of only those two means "nothing". Reads
+  are already one packet per call, which is what makes this a
+  per-packet operation;
+- a model in `tb_usb_device.v` (`SER=3`) that inserts the status bytes,
+  so the stripping is tested byte for byte like everything else here.
+
+### `serial` now closes the connection when the device goes away
+
+It used to print a notice onto the connection and mark it
+disconnected on its own side only. A person reading `term` could see
+that; a program cannot act on it. It now also sends `Z_PORT_CLOSE`, so
+`term` shows its "closed by the other end" panel and `mesh` can start
+reconnecting.
+
+### Testing
+
+`make test_usb_serial` (`rtl/tb/tb_usb_serial_cosim.v`): the real
+driver and gateware against a CP2102 model on port 0 and a CDC-ACM
+model on port 1 (`tb_usb_device.v`, `SER=1` and `SER=2`). It checks:
+the CP2102's setup order and values; zero DTR/RTS glitches; receive
+of 1 to 4000 bytes, short packets, NAKs with data waiting; send of 1
+to 1000 bytes including exact multiples of 64 and a device NAKing;
+reads and writes failing after unplug and working after replug; an
+optional request refused (bound anyway) and IFC_ENABLE refused (not
+bound, UART never enabled, lsusb says where); a CDC-ACM device beside
+a bound CP2102 left alone, and alone bound as ACM with its own two
+requests carrying data both ways. Both directions carry a position
+pattern, so a lost, repeated or reordered byte shows.
+
+### Hardware check
+
+With a Heltec V3 (or any CP2102 board) on a USB host port:
+
+    > lsusb
+    ... state=running ... class=cdc (cp210x)
+    ... device 10c4:ea60 ...
+
+The boot log shows `usb serial: cp210x, addr N ep in 1 out 1, mps
+64/64`. In a term window, `usbserial` shows whatever the board prints
+at 115200. On an ESP32 board, the board must **not** reset when it
+binds; if it does, see `CP_MHS_VALUE` above.
 
 ## USB ethernet
 
@@ -3907,7 +4041,7 @@ The first two are gateware defects that would have reached a board.
 
 ## Testing
 
-Five targets, and each exists because something got through the others:
+Six targets, and each exists because something got through the others:
 
     make test_usb           # 77 gateware checks against a device model
     make test_usb_cosim     # 19 checks, real driver against real RTL
@@ -3920,6 +4054,9 @@ Five targets, and each exists because something got through the others:
                             #   CDC-ECM adapter model shaped like an
                             #   RTL8152, every frame length that matters
                             #   both ways, LS mouse polling throughout
+    make test_usb_serial    # 72 checks, real driver incl. usbh_cdc.c and
+                            #   usbh_cp210x.c, CP2102 and CDC-ACM models,
+                            #   both directions byte for byte
     make test_usb_margin    # receive tolerance to device clock error
     make usb_fmax BOARD=x   # whole-SoC Fmax, place-and-route, ONE seed
     make usb_fmax_sweep BOARD=x [SEEDS="1 2 3 4 5"]

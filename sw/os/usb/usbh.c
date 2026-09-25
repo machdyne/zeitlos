@@ -1055,6 +1055,40 @@ static void port_step(int i)
     dev_step(i, ps);
 }
 
+#define DV_VID(dv) ((uint16_t)((dv)->d_vid_lo | ((dv)->d_vid_hi << 8)))
+#define DV_PID(dv) ((uint16_t)((dv)->d_pid_lo | ((dv)->d_pid_hi << 8)))
+
+// Start USB serial setup request devs[i].ser_step, its data stage (if
+// any) written to d first. 1 if one was started; 0 if the sequence is
+// complete.
+static int ser_begin(int i, uint32_t d)
+{
+    z_usbh_dev_t *dv = &devs[i];
+    z_usbh_ser_req_t r;
+    int k;
+
+    memset(&r, 0, sizeof(r));
+    if (!z_usbh_ser_setup(&dv->ser, dv->ser_step, &r)) return 0;
+    if (r.len > sizeof(r.data)) r.len = sizeof(r.data);
+    for (k = 0; k < r.len; k++) z_usbh_wb(d + (uint32_t)k, r.data[k]);
+    dv->ser_fatal = r.fatal;
+    usbh_ctrl_begin(i, r.type, r.req, r.val, r.idx, r.len);
+    return 1;
+}
+
+// Setup is done: bind on the shared data path.
+static void ser_bind(int i)
+{
+    z_usbh_dev_t *dv = &devs[i];
+
+    usbh_scr_free(dv->scr);
+    dv->scr = 0;
+    if (z_usbh_cdc_bind(dv->addr, dv->xa_flags, dv->port, &dv->ser))
+        dv->cls = Z_USBH_CLASS_CDC;
+    usbh_any_ready = 1;
+    dv->state = E_RUNNING;
+}
+
 // One step of device i's enumeration. ps is its root port's status for
 // a root-port device and unused for one behind a hub.
 static void dev_step(int i, uint32_t ps)
@@ -1221,17 +1255,17 @@ static void dev_step(int i, uint32_t ps)
         if (!usbh_ctrl_finished(i)) break;
         dv->iface = (int8_t)z_usbh_hid_probe(dv->cfg_raw, dv->cfg_rawn);
         if (dv->iface < 0) {
-            // CDC-ACM: set the line coding before binding -- 115200
-            // 8N1, little-endian, in the data stage.
-            a = z_usbh_cdc_probe(dv->cfg_raw, dv->cfg_rawn);
-            if (a >= 0) {
-                static const uint8_t lc[7] = { 0x00, 0xc2, 0x01, 0x00,
-                                               0x00, 0x00, 0x08 };
-                int k;
-                for (k = 0; k < 7; k++) z_usbh_wb(d + (uint32_t)k, lc[k]);
-                dv->iface = (int8_t)a;
-                usbh_ctrl_begin(i, HID_OUT_IFACE, 0x20, 0, (uint16_t)a, 7);
-                dv->state = E_CDC_LINE;
+            // A USB serial device -- CDC-ACM or a vendor bridge
+            // (usbh_ser.h): its setup requests, one per pass through
+            // E_SER_SETUP, then bind. Before ECM: a CP210x and an ECM
+            // adapter cannot both match, and CDC-ACM is tried first
+            // exactly as it was when this was CDC-only.
+            if (z_usbh_ser_probe(DV_VID(dv), DV_PID(dv), dv->cfg_raw,
+                                 dv->cfg_rawn, &dv->ser)) {
+                dv->iface = (int8_t)dv->ser.iface;
+                dv->ser_step = 0;
+                if (ser_begin(i, d)) dv->state = E_SER_SETUP;
+                else ser_bind(i);
                 break;
             }
             // CDC-ECM: the MAC string, the data interface's bulk
@@ -1329,27 +1363,21 @@ static void dev_step(int i, uint32_t ps)
             dv->state = E_BIND;
         break;
 
-    // -- CDC-ACM --
-    // A device may STALL either request; neither failure stops the bind.
-    case E_CDC_LINE:
-        if (usbh_ctrl_step(i) == CS_ERROR || usbh_ctrl_finished(i)) {
-            // DTR and RTS: many devices send nothing until DTR is set.
-            usbh_ctrl_begin(i, HID_OUT_IFACE, 0x22, 0x0003,
-                            (uint16_t)dv->iface, 0);
-            dv->state = E_CDC_DTR;
+    // -- USB serial devices --
+    // The request just sent has finished, one way or the other. A
+    // failure of one marked fatal fails enumeration (and so retries
+    // it); any other is noted and setup carries on, because devices
+    // refuse optional requests they do not implement.
+    case E_SER_SETUP:
+        a = usbh_ctrl_step(i);
+        if (a != CS_ERROR && !usbh_ctrl_finished(i)) break;
+        if (a == CS_ERROR) {
+            if (dv->ser_fatal) { usbh_dev_fail(dv); break; }
+            printf("usb serial: %s setup request %d refused, continuing\n",
+                   z_usbh_ser_name(dv->ser.kind), dv->ser_step);
         }
-        break;
-
-    case E_CDC_DTR:
-        if (usbh_ctrl_step(i) == CS_ERROR || usbh_ctrl_finished(i)) {
-            usbh_scr_free(dv->scr);
-            dv->scr = 0;
-            if (z_usbh_cdc_bind(dv->addr, dv->xa_flags, dv->port,
-                                dv->cfg_raw, dv->cfg_rawn))
-                dv->cls = Z_USBH_CLASS_CDC;
-            usbh_any_ready = 1;
-            dv->state = E_RUNNING;
-        }
+        dv->ser_step++;
+        if (!ser_begin(i, d)) ser_bind(i);
         break;
 
     // -- CDC-ECM --
@@ -1641,8 +1669,7 @@ static const char *state_name(int st)
     case E_HUB_WAIT:    return "hub-wait";
     case E_HUB_RESET:   return "hub-reset";
     case E_HUB_RECOVER: return "hub-recover";
-    case E_CDC_LINE:    return "cdc-line-coding";
-    case E_CDC_DTR:     return "cdc-dtr";
+    case E_SER_SETUP:   return "serial-setup";
     case E_HID_RDESC:   return "hid-report-desc";
     case E_ECM_MAC:     return "ecm-mac";
     case E_ECM_ALT:     return "ecm-set-interface";
@@ -1698,7 +1725,8 @@ static void dump_dev(int i, const char *pre)
                (devs[i].led_sent & 2) ? 'C' : '-',
                (devs[i].led_sent & 4) ? 'S' : '-');
     if (devs[i].cls == Z_USBH_CLASS_MSC) printf(" class=msc");
-    if (devs[i].cls == Z_USBH_CLASS_CDC) printf(" class=cdc");
+    if (devs[i].cls == Z_USBH_CLASS_CDC)
+        printf(" class=cdc (%s)", z_usbh_ser_name(devs[i].ser.kind));
     if (devs[i].cls == Z_USBH_CLASS_ECM) printf(" class=ecm");
     if (devs[i].retries) printf(" retries=%d", devs[i].retries);
     if (devs[i].recoveries)

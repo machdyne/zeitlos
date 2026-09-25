@@ -811,7 +811,7 @@ test_usb_cosim:
 	cd output && iverilog-vpi --name=usbh_cosim -DZ_USBH_COSIM \
 		-I../sw/os/usb ../rtl/tb/cosim/usbh_vpi.c \
 		../sw/os/usb/usbh.c ../sw/os/usb/usbh_hid.c \
-		../sw/os/usb/usbh_msc.c ../sw/os/usb/usbh_hub.c ../sw/os/usb/usbh_cdc.c \
+		../sw/os/usb/usbh_msc.c ../sw/os/usb/usbh_hub.c ../sw/os/usb/usbh_cdc.c ../sw/os/usb/usbh_cp210x.c \
 		../sw/os/usb/usbh_ecm.c
 	iverilog -g2005 $(if $(filter-out 0,$(TRACE)),-DCOSIM_TRACE,) \
 		-o output/tb_usb_cosim rtl/tb/tb_usb_cosim.v \
@@ -830,7 +830,7 @@ test_usb_msc:
 	cd output && iverilog-vpi --name=usbh_cosim -DZ_USBH_COSIM \
 		-I../sw/os/usb ../rtl/tb/cosim/usbh_vpi.c \
 		../sw/os/usb/usbh.c ../sw/os/usb/usbh_hid.c \
-		../sw/os/usb/usbh_msc.c ../sw/os/usb/usbh_hub.c ../sw/os/usb/usbh_cdc.c \
+		../sw/os/usb/usbh_msc.c ../sw/os/usb/usbh_hub.c ../sw/os/usb/usbh_cdc.c ../sw/os/usb/usbh_cp210x.c \
 		../sw/os/usb/usbh_ecm.c
 	iverilog -g2005 -o output/tb_usb_msc_cosim rtl/tb/tb_usb_msc_cosim.v \
 		rtl/tb/tb_usb_device.v rtl/usb/usb_host.v rtl/usb/usb_sie.v \
@@ -850,12 +850,33 @@ test_usb_ecm:
 	cd output && iverilog-vpi --name=usbh_cosim -DZ_USBH_COSIM \
 		-I../sw/os/usb ../rtl/tb/cosim/usbh_vpi.c \
 		../sw/os/usb/usbh.c ../sw/os/usb/usbh_hid.c \
-		../sw/os/usb/usbh_msc.c ../sw/os/usb/usbh_hub.c ../sw/os/usb/usbh_cdc.c \
+		../sw/os/usb/usbh_msc.c ../sw/os/usb/usbh_hub.c ../sw/os/usb/usbh_cdc.c ../sw/os/usb/usbh_cp210x.c \
 		../sw/os/usb/usbh_ecm.c
 	iverilog -g2005 -o output/tb_usb_ecm_cosim rtl/tb/tb_usb_ecm_cosim.v \
 		rtl/tb/tb_usb_device.v rtl/usb/usb_host.v rtl/usb/usb_sie.v \
 		rtl/usb/usb_port.v rtl/usb/usb_xact.v rtl/usb/usb_hid_compat.v
 	@cd output && vvp -M. -musbh_cosim tb_usb_ecm_cosim
+
+# USB SERIAL co-simulation: the real driver including the USB serial
+# dispatch (usbh_cdc.c) and the CP210x driver (usbh_cp210x.c), the real
+# gateware, a CP2102 model on port 0 and a CDC-ACM model on port 1.
+# Setup order and DTR/RTS atomicity (an ESP32's auto-reset circuit),
+# both directions byte for byte, refused requests, unplug and replug,
+# one device at a time. See rtl/tb/tb_usb_serial_cosim.v and
+# docs/usb_host.md, "USB serial devices".
+#
+#   make test_usb_serial
+test_usb_serial:
+	@mkdir -p output
+	cd output && iverilog-vpi --name=usbh_cosim -DZ_USBH_COSIM \
+		-I../sw/os/usb ../rtl/tb/cosim/usbh_vpi.c \
+		../sw/os/usb/usbh.c ../sw/os/usb/usbh_hid.c \
+		../sw/os/usb/usbh_msc.c ../sw/os/usb/usbh_hub.c ../sw/os/usb/usbh_cdc.c ../sw/os/usb/usbh_cp210x.c \
+		../sw/os/usb/usbh_ecm.c
+	iverilog -g2005 -o output/tb_usb_serial_cosim rtl/tb/tb_usb_serial_cosim.v \
+		rtl/tb/tb_usb_device.v rtl/usb/usb_host.v rtl/usb/usb_sie.v \
+		rtl/usb/usb_port.v rtl/usb/usb_xact.v rtl/usb/usb_hid_compat.v
+	@cd output && vvp -M. -musbh_cosim tb_usb_serial_cosim
 
 # HUB co-simulation: the real driver including the hub class driver
 # (usbh_hub.c) and mass storage, the real gateware, a four-port hub
@@ -869,7 +890,7 @@ test_usb_hub:
 	cd output && iverilog-vpi --name=usbh_cosim -DZ_USBH_COSIM \
 		-I../sw/os/usb ../rtl/tb/cosim/usbh_vpi.c \
 		../sw/os/usb/usbh.c ../sw/os/usb/usbh_hid.c \
-		../sw/os/usb/usbh_msc.c ../sw/os/usb/usbh_hub.c ../sw/os/usb/usbh_cdc.c \
+		../sw/os/usb/usbh_msc.c ../sw/os/usb/usbh_hub.c ../sw/os/usb/usbh_cdc.c ../sw/os/usb/usbh_cp210x.c \
 		../sw/os/usb/usbh_ecm.c
 	iverilog -g2005 -o output/tb_usb_hub_cosim rtl/tb/tb_usb_hub_cosim.v \
 		rtl/tb/tb_usb_device.v rtl/usb/usb_host.v rtl/usb/usb_sie.v \
@@ -915,7 +936,7 @@ test_usb_margin:
 	@cd output && iverilog-vpi --name=usbh_cosim -DZ_USBH_COSIM \
 		-I../sw/os/usb ../rtl/tb/cosim/usbh_vpi.c \
 		../sw/os/usb/usbh.c ../sw/os/usb/usbh_hid.c \
-		../sw/os/usb/usbh_msc.c ../sw/os/usb/usbh_hub.c ../sw/os/usb/usbh_cdc.c ../sw/os/usb/usbh_ecm.c >/dev/null
+		../sw/os/usb/usbh_msc.c ../sw/os/usb/usbh_hub.c ../sw/os/usb/usbh_cdc.c ../sw/os/usb/usbh_cp210x.c ../sw/os/usb/usbh_ecm.c >/dev/null
 	@for c in "10000 0" "-10000 0" "0 20000" "0 -20000"; do \
 		set -- $$c; \
 		iverilog -g2005 -DDEV_SKEW=20 -DDEV_PPM_FS=$$1 \

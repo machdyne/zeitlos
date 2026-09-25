@@ -1,10 +1,11 @@
 /*
  * serial -- UART1 as a port, so `term` can talk to it.
  *
- * -- and a USB CDC-ACM device, in the same process --
+ * -- and a USB serial device, in the same process --
  *
  * One app, one port (`serial0`), two backends, each with its own
- * connection: UART1, and a USB CDC-ACM device through the kernel's
+ * connection: UART1, and a USB serial device (CDC-ACM or a CP210x
+ * bridge -- docs/usb_host.md, "USB serial devices") through the kernel's
  * driver (sw/common/zusbcdc.h). A CONNECT picks the backend by its
  * argument: Z_CONN_USBSERIAL_ARG (sw/common/zconnect.h) means the USB
  * device -- what term's `usbserial` sends -- and anything else is
@@ -91,6 +92,7 @@
 #include "../../common/zport.h"
 #include "../../common/zuart.h"
 #include "../../common/zusbcdc.h"
+#include "../../common/zproc.h"		// Z_PROC_STATE_*
 #include "../../common/zconnect.h"	// Z_CONN_USBSERIAL_ARG
 
 #define DEFAULT_BAUD 115200
@@ -151,19 +153,37 @@ static void say(z_port_t *c, const char *s) {
 	if (c->connected) z_port_send(c, s, (uint32_t)strlen(s));
 }
 
+// Is the client holding this connection gone? A client that is killed
+// (a window closed with Z_WIN_FLAG_CLOSE_KILLS_OWNER, `kill`) never
+// sends CLOSE, and without this the connection stayed "connected" to a
+// dead pid and every later client was refused. A CONNECT from the SAME
+// pid also means the old connection is dead: a live client does not
+// connect twice, and the kernel reuses pids.
+static bool client_gone(const z_port_t *c, const z_msg_t *msg) {
+	uint32_t state = Z_PROC_STATE_UNKNOWN;
+	if (msg->from == c->peer_pid) return true;
+	if (z_proc_status(c->peer_pid, &state, NULL) != Z_OK) return false;
+	return state != Z_PROC_STATE_RUNNING;
+}
+
 static void connect_usb(const z_msg_t *msg) {
+	if (conn_usb.connected && client_gone(&conn_usb, msg)) {
+		printf("serial: USB client (pid %ld) is gone; releasing it\n",
+			(long)conn_usb.peer_pid);
+		conn_usb.connected = false;
+	}
 	if (conn_usb.connected) {
-		z_port_refuse(msg, "serial: the USB CDC device is already "
+		z_port_refuse(msg, "serial: the USB serial device is already "
 			"connected to another client -- there is only one wire");
 		return;
 	}
 	if (!z_usbcdc_present()) {
-		z_port_refuse(msg, "serial: no USB CDC-ACM device is plugged in");
+		z_port_refuse(msg, "serial: no USB serial device is plugged in");
 		return;
 	}
 	z_port_accept(&conn_usb, msg, CONN_USB);
 	held_usb_n = 0;
-	say(&conn_usb, "serial: connected to the USB CDC device. "
+	say(&conn_usb, "serial: connected to the USB serial device. "
 		"F12 disconnects.\r\n");
 	printf("serial: USB client connected (pid %ld)\n", (long)msg->from);
 }
@@ -173,8 +193,13 @@ static void connect_uart(const z_msg_t *msg, char *buf, size_t buflen) {
 
 	if (!have_uart) {
 		z_port_refuse(msg, "serial: this bitstream has no UART1 -- see "
-			"docs/uart1.md; `usbserial` reaches a USB CDC device");
+			"docs/uart1.md; `usbserial` reaches a USB serial device");
 		return;
+	}
+	if (conn_uart.connected && client_gone(&conn_uart, msg)) {
+		printf("serial: UART1 client (pid %ld) is gone; releasing it\n",
+			(long)conn_uart.peer_pid);
+		conn_uart.connected = false;
 	}
 	if (conn_uart.connected) {
 		z_port_refuse(msg, "serial: UART1 is already connected to another "
@@ -230,7 +255,11 @@ static bool poll_usb(void) {
 			if (z_usbcdc_present()) break;
 			say(&conn_usb, "\r\n[serial: the USB device went away]\r\n");
 			printf("serial: USB device gone, client dropped\n");
-			conn_usb.connected = false;
+			// CLOSE, not just the notice: a client that is a program
+			// rather than a person (sw/apps/mesh) needs a signal it can
+			// act on, and term shows its "closed by the other end"
+			// panel instead of sitting on a dead connection.
+			z_port_close(&conn_usb);
 			break;
 		}
 		if (n == 0) break;
@@ -278,7 +307,7 @@ int main(void) {
 			(long)z_getpid());
 
 	// Stays resident without UART1: the USB side may still be used, and
-	// a CDC device can be plugged in at any time.
+	// a USB serial device can be plugged in at any time.
 	have_uart = z_uart1_present();
 	cur_baud = DEFAULT_BAUD;
 	if (have_uart) {

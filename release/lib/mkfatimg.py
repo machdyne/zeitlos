@@ -181,6 +181,7 @@ SUPPLEMENTAL = [
     ("apps/mmod", "sw/apps/mmod/mmod.bin"),
     ("apps/logic", "sw/apps/logic/logic.bin"),
     ("apps/serial", "sw/apps/serial/serial.bin"),
+    ("apps/mesh", "sw/apps/mesh/mesh.bin"),
     ("apps/tts", "sw/apps/tts/tts.bin"),
     ("apps/jfont", "sw/apps/jfont/jfont.bin"),
     ("apps/keyboard", "sw/apps/keyboard/keyboard.bin"),

@@ -35,6 +35,7 @@ APPS = casino poker roulette blackjack slots craps \
 	console \
 	cron \
 	serial \
+	mesh \
 	repl \
 	posix \
 	zcc \
