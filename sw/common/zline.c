@@ -10,6 +10,7 @@
 #include <stddef.h>
 
 #include "zline.h"
+#include "zutf8.h"
 
 void z_line_reset(z_line_t *line) {
 
@@ -19,6 +20,8 @@ void z_line_reset(z_line_t *line) {
 	line->had_cr = false;
 	line->esc = Z_LINE_ESC_NONE;
 	line->esc_p = 0;
+	line->utf8_len = 0;
+	line->utf8_need = 0;
 	line->hist_at = Z_LINE_HIST_NONE;
 	line->stash[0] = 0;
 	line->stash_len = 0;
@@ -141,6 +144,58 @@ static bool multiline(const z_line_t *line) {
 	return line->complete != NULL;
 }
 
+// Columns, not bytes.
+//
+// `pos` is a byte offset into the buffer. The terminal's cursor moves
+// in columns, and those two numbers are equal only while every
+// character is one byte wide. Every distance this file emits, and
+// every place a row change lands the cursor, goes through here so the
+// buffer and the screen cannot drift apart.
+
+static uint32_t cols_span(const char *s, uint32_t n) {
+	if (!n) return 0;
+	return (uint32_t)z_utf8_cols(s, n);
+}
+
+static uint32_t col_of(const z_line_t *line, uint32_t start, uint32_t at) {
+	if (at <= start) return 0;
+	return cols_span(line->buf + start, at - start);
+}
+
+// Byte offset of display column `col` on the row that begins at
+// `start`. Never lands in the middle of a character: a column that
+// falls in the right half of a wide one stays on that character.
+static uint32_t pos_at_col(const z_line_t *line, uint32_t start, uint32_t col) {
+
+	uint32_t end = row_end_of(line, start);
+	uint32_t i = start;
+	uint32_t c = 0;
+
+	while (i < end && c < col) {
+
+		uint32_t n = (uint32_t)z_utf8_next_off(line->buf, (int)line->len, (int)i);
+		int w;
+
+		if (n <= i) break;
+
+		w = z_utf8_cols(line->buf + i, n - i);
+
+		// A combining mark takes no column. Skipping it keeps the
+		// walk moving; counting it as one would disagree with
+		// z_utf8_cols() about where the cursor is.
+		if (w <= 0) { i = n; continue; }
+
+		if (c + (uint32_t)w > col) return i;
+
+		c += (uint32_t)w;
+		i = n;
+
+	}
+
+	return i;
+
+}
+
 // -- echo emitter --
 //
 // Everything written here is RELATIVE. See zline.h on why: this
@@ -229,7 +284,7 @@ static void redraw_tail(emit_t *e, const z_line_t *line, uint32_t from) {
 
 	emit_erase_eol(e);
 
-	if (end > line->pos) emit_left(e, end - line->pos);
+	if (end > line->pos) emit_left(e, col_of(line, line->pos, end));
 
 }
 
@@ -291,7 +346,7 @@ static void redraw_all(emit_t *e, z_line_t *line) {
 	if (last_row > cur_row) emit_up(e, last_row - cur_row);
 
 	emit_ch(e, '\r');
-	emit_right(e, line->prompt_w + (line->pos - row_start_of(line, line->pos)));
+	emit_right(e, line->prompt_w + col_of(line, row_start_of(line, line->pos), line->pos));
 
 	line->screen_row = cur_row;
 
@@ -301,8 +356,9 @@ static void redraw_all(emit_t *e, z_line_t *line) {
 static void set_line(z_line_t *line, emit_t *e, const char *s) {
 
 	// Back to the start of the input, then rewrite. Relative, so the
-	// prompt in front of it is untouched.
-	emit_left(e, line->pos);
+	// prompt in front of it is untouched. Columns, not bytes: a
+	// multi-byte character is still one step of the cursor.
+	emit_left(e, col_of(line, 0, line->pos));
 
 	str_copy(line->buf, s, Z_LINE_MAX + 1);
 	line->len = str_len(line->buf);
@@ -333,16 +389,49 @@ static void hist_show(z_line_t *line, emit_t *e, int at) {
 
 // -- editing operations --
 
+// Drops `n` bytes at `at`. `n` is always a whole character: callers
+// step with z_utf8_prev_off / z_utf8_next_off, so a sequence is never
+// cut in half.
+static void buf_delete(z_line_t *line, uint32_t at, uint32_t n) {
+
+	for (uint32_t i = at + n; i < line->len; i++)
+		line->buf[i - n] = line->buf[i];
+
+	line->len -= n;
+	line->buf[line->len] = 0;
+
+}
+
 static void do_left(z_line_t *line, emit_t *e) {
+
 	if (!line->pos) return;
-	line->pos--;
-	emit_left(e, 1);
+
+	uint32_t prev = (uint32_t)z_utf8_prev_off(line->buf, (int)line->len, (int)line->pos);
+	uint32_t n = line->pos - prev;
+	int cols;
+
+	if (!n) return;
+
+	cols = z_utf8_cols(line->buf + prev, n);
+	line->pos = prev;
+	if (cols > 0) emit_left(e, (uint32_t)cols);
+
 }
 
 static void do_right(z_line_t *line, emit_t *e) {
+
 	if (line->pos >= line->len) return;
-	line->pos++;
-	emit_right(e, 1);
+
+	uint32_t next = (uint32_t)z_utf8_next_off(line->buf, (int)line->len, (int)line->pos);
+	uint32_t n = next - line->pos;
+	int cols;
+
+	if (!n) return;
+
+	cols = z_utf8_cols(line->buf + line->pos, n);
+	line->pos = next;
+	if (cols > 0) emit_right(e, (uint32_t)cols);
+
 }
 
 // Home and End work within the ROW, which is what they mean on a
@@ -350,50 +439,58 @@ static void do_right(z_line_t *line, emit_t *e) {
 static void do_home(z_line_t *line, emit_t *e) {
 	uint32_t s = row_start_of(line, line->pos);
 	if (line->pos == s) return;
-	emit_left(e, line->pos - s);
+	emit_left(e, col_of(line, s, line->pos));
 	line->pos = s;
 }
 
 static void do_end(z_line_t *line, emit_t *e) {
 	uint32_t end = row_end_of(line, line->pos);
 	if (line->pos >= end) return;
-	emit_right(e, end - line->pos);
+	emit_right(e, col_of(line, line->pos, end));
 	line->pos = end;
 }
 
 static void do_backspace(z_line_t *line, emit_t *e) {
 
+	uint32_t prev, n;
+	int cols;
+	bool joined;
+
 	if (!line->pos) return;
 
-	bool joined = (line->buf[line->pos - 1] == '\n');
+	prev = (uint32_t)z_utf8_prev_off(line->buf, (int)line->len, (int)line->pos);
+	n = line->pos - prev;
+	if (!n) return;
 
-	for (uint32_t i = line->pos; i < line->len; i++)
-		line->buf[i - 1] = line->buf[i];
+	joined = (n == 1 && line->buf[prev] == '\n');
+	cols = z_utf8_cols(line->buf + prev, n);
 
-	line->len--;
-	line->pos--;
-	line->buf[line->len] = 0;
+	buf_delete(line, prev, n);
+	line->pos = prev;
 
 	// Deleting the newline merges two rows, so everything below moves
 	// -- there is no way to express that as a rewrite of one row.
 	if (joined) { redraw_all(e, line); return; }
 
-	emit_left(e, 1);
+	if (cols > 0) emit_left(e, (uint32_t)cols);
 	redraw_tail(e, line, line->pos);
 
 }
 
 static void do_delete(z_line_t *line, emit_t *e) {
 
+	uint32_t next, n;
+	bool joined;
+
 	if (line->pos >= line->len) return;
 
-	bool joined = (line->buf[line->pos] == '\n');
+	next = (uint32_t)z_utf8_next_off(line->buf, (int)line->len, (int)line->pos);
+	n = next - line->pos;
+	if (!n) return;
 
-	for (uint32_t i = line->pos + 1; i < line->len; i++)
-		line->buf[i - 1] = line->buf[i];
+	joined = (n == 1 && line->buf[line->pos] == '\n');
 
-	line->len--;
-	line->buf[line->len] = 0;
+	buf_delete(line, line->pos, n);
 
 	if (joined) { redraw_all(e, line); return; }
 
@@ -437,7 +534,7 @@ static void do_kill_line(z_line_t *line, emit_t *e) {
 		return;
 	}
 
-	emit_left(e, line->pos);
+	emit_left(e, col_of(line, 0, line->pos));
 
 	line->len = 0;
 	line->pos = 0;
@@ -447,23 +544,50 @@ static void do_kill_line(z_line_t *line, emit_t *e) {
 
 }
 
-static void do_insert(z_line_t *line, emit_t *e, char c) {
+// Inserts `n` bytes at the cursor. `n` is one character -- a single
+// ASCII byte, or a whole UTF-8 sequence -- and it is all or nothing:
+// a sequence that does not fit is not cut down to the bytes that do.
+static void do_insert_bytes(z_line_t *line, emit_t *e, const char *s, uint32_t n) {
 
-	if (line->len >= Z_LINE_MAX) return;
+	if (!n || line->len + n > Z_LINE_MAX) return;
 
 	for (uint32_t i = line->len; i > line->pos; i--)
-		line->buf[i] = line->buf[i - 1];
+		line->buf[i + n - 1] = line->buf[i - 1];
 
-	line->buf[line->pos] = c;
-	line->len++;
-	line->pos++;
+	for (uint32_t k = 0; k < n; k++)
+		line->buf[line->pos + k] = s[k];
+
+	line->len += n;
+	line->pos += n;
 	line->buf[line->len] = 0;
 
-	// Appending at the end is the common case and costs one byte;
-	// only an insert in the middle needs the tail rewritten.
-	if (line->pos == line->len) emit_ch(e, c);
-	else { emit_ch(e, c); redraw_tail(e, line, line->pos); }
+	for (uint32_t k = 0; k < n; k++) emit_ch(e, s[k]);
 
+	// Appending at the end is the common case and costs the
+	// character; only an insert in the middle needs the tail
+	// rewritten.
+	if (line->pos != line->len) redraw_tail(e, line, line->pos);
+
+}
+
+static void do_insert(z_line_t *line, emit_t *e, char c) {
+	do_insert_bytes(line, e, &c, 1);
+}
+
+// How many bytes a lead byte opens, or 0 if it cannot start UTF-8.
+// Overlongs and out-of-range values look like leads here and are
+// rejected by z_utf8_valid() once the sequence is complete, which is
+// the one place that decides.
+static int utf8_need_of(uint8_t b) {
+	if ((b & 0xE0) == 0xC0) return 2;
+	if ((b & 0xF0) == 0xE0) return 3;
+	if ((b & 0xF8) == 0xF0) return 4;
+	return 0;
+}
+
+static void commit_utf8(z_line_t *line, emit_t *e) {
+	if (!z_utf8_valid((const char *)line->utf8, line->utf8_len)) return;
+	do_insert_bytes(line, e, (const char *)line->utf8, line->utf8_len);
 }
 
 // Inserts a newline and continues editing on a fresh row.
@@ -529,9 +653,9 @@ static void do_hist_next(z_line_t *line, emit_t *e) {
 static void row_move(z_line_t *line, emit_t *e, int delta) {
 
 	uint32_t start = row_start_of(line, line->pos);
-	uint32_t col = line->pos - start;
+	uint32_t col = col_of(line, start, line->pos);
 
-	uint32_t target_start;
+	uint32_t target_start, new_pos, new_col;
 
 	if (delta < 0) {
 		if (!start) return;
@@ -542,18 +666,19 @@ static void row_move(z_line_t *line, emit_t *e, int delta) {
 		target_start = end + 1;
 	}
 
-	uint32_t target_end = row_end_of(line, target_start);
-	uint32_t target_len = target_end - target_start;
-
-	if (col > target_len) col = target_len;
-
-	line->pos = target_start + col;
+	// Keep the column, clamped to the target row, and never in the
+	// middle of a character. The cursor then moves to THAT column,
+	// which is not always the one asked for: a wide character can
+	// refuse the right half.
+	new_pos = pos_at_col(line, target_start, col);
+	new_col = col_of(line, target_start, new_pos);
+	line->pos = new_pos;
 
 	if (delta < 0) { emit_up(e, 1); line->screen_row--; }
 	else { emit_down(e, 1); line->screen_row++; }
 
 	emit_ch(e, '\r');
-	emit_right(e, line->prompt_w + col);
+	emit_right(e, line->prompt_w + new_col);
 
 }
 
@@ -628,6 +753,34 @@ int z_line_feed(z_line_t *line, uint8_t byte,
 	emit_t e = { echo, echo_cap, 0 };
 
 	*echo_len = 0;
+
+	// A UTF-8 sequence in progress. A continuation byte extends it;
+	// anything else abandons it with no echo and is then read for
+	// what it is. A control byte has to keep working, and half a
+	// character must not appear on screen or in the line.
+	if (line->utf8_need) {
+
+		if ((byte & 0xC0) == 0x80 && line->utf8_len < sizeof line->utf8) {
+
+			line->utf8[line->utf8_len++] = byte;
+
+			if (line->utf8_len >= line->utf8_need) {
+				commit_utf8(line, &e);
+				line->utf8_len = 0;
+				line->utf8_need = 0;
+			}
+
+			// This byte was text, so a CR waiting for its LF is over.
+			line->had_cr = false;
+			*echo_len = e.len;
+			return 0;
+
+		}
+
+		line->utf8_len = 0;
+		line->utf8_need = 0;
+
+	}
 
 	// -- escape sequences --
 	//
@@ -767,14 +920,27 @@ int z_line_feed(z_line_t *line, uint8_t byte,
 		default: break;
 	}
 
-	// anything else: only accept printable ASCII, and only if there's
-	// still room (leaving space for the NUL) -- silently drop (no
-	// echo) otherwise.
-	if (byte < 0x20 || byte >= 0x7f) return 0;
+	// Printable ASCII: one byte, one column. Same path as before.
+	if (byte >= 0x20 && byte < 0x7f) {
+		do_insert(line, &e, (char)byte);
+		*echo_len = e.len;
+		return 0;
+	}
 
-	do_insert(line, &e, (char)byte);
-
-	*echo_len = e.len;
+	// A lead byte opens a sequence and echoes nothing yet. A
+	// continuation with nothing open, or a byte that cannot start
+	// UTF-8, is dropped -- the same silence as any other rejected
+	// byte. The gap is checked for the whole sequence, when it
+	// completes, not for this one byte.
+	if (byte >= 0x80) {
+		int need = utf8_need_of(byte);
+		if (need) {
+			line->utf8[0] = byte;
+			line->utf8_len = 1;
+			line->utf8_need = (uint8_t)need;
+			line->had_cr = false;
+		}
+	}
 
 	return 0;
 

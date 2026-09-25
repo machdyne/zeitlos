@@ -200,6 +200,10 @@ with the `ja` layouts ([keyboard_layouts.md](keyboard_layouts.md),
   ([terminal.md](terminal.md), "UTF-8"); `read` turns each line into
   glyph bytes as it reads it ([read_app.md](read_app.md),
   "Characters"); `vi` has nextvi's own UTF-8 back on.
+- **The prompt accepts UTF-8.** `zline`, the line editor `repl` and
+  `posix` share, keeps the line as UTF-8 bytes and moves the cursor by
+  column, so an accent typed at either prompt is the character
+  ([line_editing.md](line_editing.md)).
 - **Filenames stay ASCII.** The FAT layer is built 8.3-only
   (`FF_USE_LFN 0`) with `FF_CODE_PAGE 932` (Shift-JIS) in
   `sw/os/fs/fatfs/ffconf.h`. In code page 932, bytes such as 0xE4 are
