@@ -20,7 +20,7 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 | MPU | [Memory protection unit](docs/mpu.md) and crash reporting |
 | Cache | Optional [instruction cache](docs/icache.md), or unified instruction + [data cache](docs/dcache.md) with write buffer and SDRAM burst fills |
 | Bus | 32-bit Wishbone |
-| Main Memory | SDRAM, [DDR3](docs/ddr3.md), PSRAM or SRAM (1MB minimum) |
+| Main Memory | SDRAM, [DDR3](docs/ddr3.md), PSRAM or SRAM (1MB minimum; 512MB maximum) |
 | Framebuffer | 640x480x1bpp (monochrome; white, amber, green or paper -- [socctl](docs/socctl.md)) |
 | Viewport | Optional 320x240 pixel-doubled [viewport](docs/game_mode.md) |
 | Video | VGA, DVI, DVI over HDMI, [composite](docs/composite.md) NTSC and PAL |

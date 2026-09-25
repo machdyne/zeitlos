@@ -38,6 +38,7 @@ sw/os/fs/fatfs/*.d
 sw/apps/net/.net_config_selected
 sw/apps/web/.web_config_selected
 sw/apps/repl/ms_stdlib.h
+sw/apps/info/feat_names.h
 
 # ESP-IDF (esp32/zeitlos-nic): build tree and the generated sdkconfig
 esp32/zeitlos-nic/build/

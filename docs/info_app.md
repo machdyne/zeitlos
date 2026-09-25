@@ -200,6 +200,27 @@ The feature list wraps to however many lines the enabled bits need at
 the current width, computed rather than assumed, since which features
 exist varies per board.
 
+## Feature tags
+
+Every feature bit the running bitstream sets is shown -- FEATURES and
+FEATURES2 ([csrs.md](csrs.md)) -- in bit order. The names are not kept
+in `info.c`: `gen_feat_names.awk` reads every `Z_FEATURE_*` and
+`Z_FEATURE2_*` definition in `sw/common/zsoc.h` at build time into
+`feat_names.h` (generated, not committed), dropping the subject prefixes
+`MEM_`, `GPU_`, `CPU_` and `SPI_` (`Z_FEATURE_GPU_BLIT` is `BLIT`). So a
+bit added to `zsoc.h` appears here with no edit to this app.
+
+A bit the hardware sets that `zsoc.h` has no name for yet is still
+shown, as `F1.n` (FEATURES) or `F2.n` (FEATURES2): nothing the board
+reports is hidden. FEATURES2 goes through `z_soc_has_feature2()`, which
+checks the register's signature, so an older bitstream without that
+word shows none of them rather than a misleading all-zero.
+
+It used to be a hand-kept list of 18 tags, and had fallen behind: CPU,
+cache, audio, RTC, MPU and most FEATURES2 bits never appeared. The
+window is 30 pixels taller than it was (370) to make room for the
+longer list without taking rows from the process list.
+
 ## Known limits
 
 - **The load figure is a sample, not an integral.** A process that

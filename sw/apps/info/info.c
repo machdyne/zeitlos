@@ -70,7 +70,7 @@
 // short label/value pair or a bar that looks fine at this width.
 // Resizable upward for a longer process list.
 #define WIN_W   180
-#define WIN_H   340
+#define WIN_H   370	// was 340: every feature bit is shown now (~6 lines, not 3)
 
 static z_win_t win;
 
@@ -330,57 +330,72 @@ static void bar(int cx, int cy, int w, uint32_t used, uint32_t total) {
 // layout
 // ---------------------------------------------------------------
 
-// Feature bits worth showing, in the order they read best. Only the
-// ones actually present are drawn, so this is a menu rather than a
-// list -- a board without ethernet simply doesn't show it.
+// Feature tags: EVERY feature bit the running bitstream sets, named
+// from sw/common/zsoc.h at build time -- feat_names.h is generated from
+// it by gen_feat_names.awk (see the Makefile), so a bit added there
+// shows up here without anyone remembering this file. A bit the
+// hardware sets that zsoc.h has no name for yet still shows, as F1.n
+// (FEATURES) or F2.n (FEATURES2): nothing the board reports is hidden.
 //
-// `f2` says which register the bit lives in: 0 for FEATURES, 1 for
-// FEATURES2 (rtl/csrs.v word 3). A flag rather than two tables,
-// because everything downstream of here -- the wrap arithmetic, the
-// draw loop, the ordering -- wants one list, and the tags read best
-// interleaved by subject rather than grouped by which CSR word they
-// happen to come from. feat_present() below is the only place that
-// cares.
+// Order is bit order, FEATURES then FEATURES2 -- which is also roughly
+// by subject, since zsoc.h assigns them that way (memory, GPU, I/O,
+// CPU, the rest).
 typedef struct {
-	uint32_t	bit;
+	uint8_t		word;		// 0: FEATURES, 1: FEATURES2
+	uint8_t		bit;
 	const char	*name;
-	uint8_t		f2;
-} feat_t;
+} feat_name_t;
 
-static const feat_t features[] = {
-	{ Z_FEATURE_MEM_SDRAM,  "SDRAM"  },
-	{ Z_FEATURE_MEM_SRAM,   "SRAM"   },
-	{ Z_FEATURE_MEM_QQSPI,  "QQSPI"  },
-	{ Z_FEATURE_MEM_VRAM,   "VRAM"   },
-	{ Z_FEATURE_MEM_GLYPH,  "GLYPH"  },
-	{ Z_FEATURE_GPU_RASTER, "RASTER" },
-	{ Z_FEATURE_GPU_BLIT,   "BLIT"   },
-	{ Z_FEATURE_GPU_CURSOR, "CURSOR" },
-	{ Z_FEATURE_GPU_VGA,    "VGA"    },
-	{ Z_FEATURE_GPU_DDMI,   "DDMI"   },
-	{ Z_FEATURE_USB_HID,    "USBHID" },
-	{ Z_FEATURE_SPI_SDCARD, "SDCARD" },
-	{ Z_FEATURE_SPI_FLASH,  "FLASH"  },
-	{ Z_FEATURE_ETH_RMII,   "ETH"    },
-	{ Z_FEATURE_SPI_ETH,    "ETHSPI" },
-	{ Z_FEATURE_UART0,      "UART"   },
-	{ Z_FEATURE2_UART1,     "UART1",  1 },
-	{ Z_FEATURE2_GPIO,      "GPIO",   1 },
+static const feat_name_t feat_names[] = {
+#include "feat_names.h"
 };
-#define FEAT_COUNT (int)(sizeof(features) / sizeof(features[0]))
+#define FEAT_NAMES (int)(sizeof(feat_names) / sizeof(feat_names[0]))
 
-// Is this tag's feature actually in the running bitstream?
+#define TAGS_MAX (32 + 16)
+static const char *tags[TAGS_MAX];
+static char tag_unknown[TAGS_MAX][6];		// "F2.15"
+static int ntags;
+
+// Is this bit set in the running bitstream?
 //
-// The FEATURES2 half MUST go through z_soc_has_feature2() rather than
-// masking a register read like the FEATURES half does. A bitstream
-// built before that register existed answers word 3 with a clean zero
-// -- which is a perfectly well-formed "no GPIO, no UART1" -- so a raw
-// mask would quietly report the right answer for the wrong reason on
-// current gateware and the wrong answer on nothing at all. The helper
-// checks the signature. See sw/common/zsoc.h.
-static bool feat_present(int i) {
-	if (features[i].f2) return z_soc_has_feature2(features[i].bit);
-	return (reg_csr_features & features[i].bit) != 0;
+// FEATURES2 MUST go through z_soc_has_feature2() rather than masking a
+// register read. A bitstream built before that register existed answers
+// word 3 with a clean zero -- a perfectly well-formed "none of these" --
+// so a raw mask would give the right answer for the wrong reason on
+// current gateware and a wrong one on nothing at all. The helper checks
+// the signature in the top half; only the low sixteen bits are features.
+// See sw/common/zsoc.h.
+static bool feat_bit_set(int word, int bit) {
+	if (word == 1) return z_soc_has_feature2(1u << bit);
+	return z_soc_csrs_present() && (reg_csr_features & (1u << bit)) != 0;
+}
+
+static void collect_tags(void) {
+	ntags = 0;
+	for (int word = 0; word < 2; word++) {
+		int nbits = word ? 16 : 32;
+		for (int bit = 0; bit < nbits; bit++) {
+			if (!feat_bit_set(word, bit)) continue;
+			const char *name = 0;
+			for (int k = 0; k < FEAT_NAMES; k++)
+				if (feat_names[k].word == word && feat_names[k].bit == bit) {
+					name = feat_names[k].name;
+					break;
+				}
+			if (!name) {
+				char *u = tag_unknown[ntags];
+				int j = 0;
+				u[j++] = 'F';
+				u[j++] = (char)('1' + word);
+				u[j++] = '.';
+				if (bit >= 10) u[j++] = (char)('0' + bit / 10);
+				u[j++] = (char)('0' + bit % 10);
+				u[j] = 0;
+				name = u;
+			}
+			tags[ntags++] = name;
+		}
+	}
 }
 
 // How many lines the feature tags wrap to at this width. Computed
@@ -393,9 +408,10 @@ static int feature_line_count(int cw) {
 
 	int col = 0, lines = 1;
 
-	for (int i = 0; i < FEAT_COUNT; i++) {
-		if (!feat_present(i)) continue;
-		int need = (int)strlen(features[i].name) + 1;
+	collect_tags();		// cheap, and features never change -- but
+				// this keeps one source for count and draw
+	for (int i = 0; i < ntags; i++) {
+		int need = (int)strlen(tags[i]) + 1;
 		if (col && col + need > per) { lines++; col = 0; }
 		col += need;
 	}
@@ -567,11 +583,9 @@ static void draw_static(void) {
 	buf[0] = 0;
 	n = 0;
 
-	for (int i = 0; i < FEAT_COUNT; i++) {
+	for (int i = 0; i < ntags; i++) {
 
-		if (!feat_present(i)) continue;
-
-		int need = (int)strlen(features[i].name) + 1;
+		int need = (int)strlen(tags[i]) + 1;
 
 		if (col && col + need > per) {
 			text_at(MARGIN, y_feat + line * LINE_H, buf);
@@ -582,7 +596,7 @@ static void draw_static(void) {
 		}
 
 		if (n) n = put_str(buf, n, sizeof(buf), " ");
-		n = put_str(buf, n, sizeof(buf), features[i].name);
+		n = put_str(buf, n, sizeof(buf), tags[i]);
 		col += need;
 
 	}

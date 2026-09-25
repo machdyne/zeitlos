@@ -61,7 +61,13 @@ zwin.o:
 logo_small.o: logo_small.c logo_small.h
 	$(CC) $(CFLAGS) -c logo_small.c -o logo_small.o
 
-info.o:
+# The feature-tag names, generated from zsoc.h so a new feature bit
+# needs no edit here (gen_feat_names.awk; not committed). Rebuilt when
+# zsoc.h changes.
+feat_names.h: ../../common/zsoc.h gen_feat_names.awk
+	awk -f gen_feat_names.awk ../../common/zsoc.h > feat_names.h
+
+info.o: feat_names.h
 	$(CC) $(CFLAGS) -c info.c -S -MF /dev/null -o info.asm
 	$(CC) $(CFLAGS) -c info.c -o info.o
 
@@ -83,7 +89,7 @@ info.bin: info.elf
 	rm -f info.data
 
 clean:
-	rm -f info.elf info.bin info.data info.asm info.dasm info.map *.o *.d
+	rm -f info.elf info.bin info.data info.asm info.dasm info.map *.o *.d feat_names.h
 
 .PHONY: info clean
 

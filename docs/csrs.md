@@ -102,6 +102,11 @@ whenever a bit is added, same split `rtl/usb_hid.v`/`sw/common/zkbd.h`
 already have for HID-usage translation. Only bit *position* has to
 match between the two; the C-side name is just documentation.
 
+Those two are the only places: `info` takes its tag names from
+`zsoc.h` at build time ([info_app.md](info_app.md#feature-tags)), so a
+new bit shows up there without a third edit -- and a bit set in
+hardware before `zsoc.h` names it still shows, as `F1.n` or `F2.n`.
+
 ### `FEATURES` is full
 
 Bits 0 through 30 are assigned. **Bit 31 is the last one and is
