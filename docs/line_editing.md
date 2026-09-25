@@ -60,6 +60,11 @@ Typing inserts at the cursor. `pos` is separate from `len` — they were
 one variable when this could only append, which is what made it not an
 editor.
 
+The buffer is UTF-8 bytes (`Z_LINE_MAX` counts bytes): a character is
+inserted only once its sequence is complete and valid, and the cursor
+moves by code point while the echo moves by column, so an accent is
+one column and a wide character is two.
+
 History is a `z_line_hist_t` the **caller supplies**, not something
 embedded in `z_line_t`. One is wanted per user, not per connection:
 `repl` serves up to four terminals and sharing one history between
@@ -124,13 +129,16 @@ screen**. An editor whose buffer and display disagree is far worse
 than one that can't edit at all, because the user is then typing blind
 into something that looks correct.
 
-So the suite drives a small simulated terminal (printable characters,
-backspace, CR, `ESC[nC`, `ESC[nD`, `ESC[K`) with the echo bytes, and
-after every keystroke asserts that the terminal's visible line and
-cursor column match the buffer and position exactly. 95 checks,
-covering movement, mid-line insert, delete, kill, history including
-the stash, escape sequences that must never reach the line, the
-full-buffer limit, and all of the multi-line behaviour above.
+So the suite drives a small simulated terminal (UTF-8 cells at
+`z_cp_width()`, backspace, CR, `ESC[nC`, `ESC[nD`, `ESC[K`) with the
+echo bytes, and after every keystroke asserts that the terminal's
+visible line and cursor column match the buffer and position exactly.
+175 checks, covering movement, mid-line insert, delete, kill, history
+including the stash, escape sequences that must never reach the line,
+the full-buffer limit, all of the multi-line behaviour above, and
+UTF-8: an accent inserted and deleted as one character, a wide
+character taking two columns, a sequence that does not fit or is not
+valid dropped with no echo.
 
 The echo batching has its own harness (`/tmp` scratch, not checked in)
 that models the port's send window and confirms both that a paste now

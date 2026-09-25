@@ -20,6 +20,8 @@ void z_line_reset(z_line_t *line) {
 	line->had_cr = false;
 	line->esc = Z_LINE_ESC_NONE;
 	line->esc_p = 0;
+	line->utf8_len = 0;
+	line->utf8_need = 0;
 	line->hist_at = Z_LINE_HIST_NONE;
 	line->stash[0] = 0;
 	line->stash_len = 0;
@@ -542,23 +544,50 @@ static void do_kill_line(z_line_t *line, emit_t *e) {
 
 }
 
-static void do_insert(z_line_t *line, emit_t *e, char c) {
+// Inserts `n` bytes at the cursor. `n` is one character -- a single
+// ASCII byte, or a whole UTF-8 sequence -- and it is all or nothing:
+// a sequence that does not fit is not cut down to the bytes that do.
+static void do_insert_bytes(z_line_t *line, emit_t *e, const char *s, uint32_t n) {
 
-	if (line->len >= Z_LINE_MAX) return;
+	if (!n || line->len + n > Z_LINE_MAX) return;
 
 	for (uint32_t i = line->len; i > line->pos; i--)
-		line->buf[i] = line->buf[i - 1];
+		line->buf[i + n - 1] = line->buf[i - 1];
 
-	line->buf[line->pos] = c;
-	line->len++;
-	line->pos++;
+	for (uint32_t k = 0; k < n; k++)
+		line->buf[line->pos + k] = s[k];
+
+	line->len += n;
+	line->pos += n;
 	line->buf[line->len] = 0;
 
-	// Appending at the end is the common case and costs one byte;
-	// only an insert in the middle needs the tail rewritten.
-	if (line->pos == line->len) emit_ch(e, c);
-	else { emit_ch(e, c); redraw_tail(e, line, line->pos); }
+	for (uint32_t k = 0; k < n; k++) emit_ch(e, s[k]);
 
+	// Appending at the end is the common case and costs the
+	// character; only an insert in the middle needs the tail
+	// rewritten.
+	if (line->pos != line->len) redraw_tail(e, line, line->pos);
+
+}
+
+static void do_insert(z_line_t *line, emit_t *e, char c) {
+	do_insert_bytes(line, e, &c, 1);
+}
+
+// How many bytes a lead byte opens, or 0 if it cannot start UTF-8.
+// Overlongs and out-of-range values look like leads here and are
+// rejected by z_utf8_valid() once the sequence is complete, which is
+// the one place that decides.
+static int utf8_need_of(uint8_t b) {
+	if ((b & 0xE0) == 0xC0) return 2;
+	if ((b & 0xF0) == 0xE0) return 3;
+	if ((b & 0xF8) == 0xF0) return 4;
+	return 0;
+}
+
+static void commit_utf8(z_line_t *line, emit_t *e) {
+	if (!z_utf8_valid((const char *)line->utf8, line->utf8_len)) return;
+	do_insert_bytes(line, e, (const char *)line->utf8, line->utf8_len);
 }
 
 // Inserts a newline and continues editing on a fresh row.
@@ -725,6 +754,34 @@ int z_line_feed(z_line_t *line, uint8_t byte,
 
 	*echo_len = 0;
 
+	// A UTF-8 sequence in progress. A continuation byte extends it;
+	// anything else abandons it with no echo and is then read for
+	// what it is. A control byte has to keep working, and half a
+	// character must not appear on screen or in the line.
+	if (line->utf8_need) {
+
+		if ((byte & 0xC0) == 0x80 && line->utf8_len < sizeof line->utf8) {
+
+			line->utf8[line->utf8_len++] = byte;
+
+			if (line->utf8_len >= line->utf8_need) {
+				commit_utf8(line, &e);
+				line->utf8_len = 0;
+				line->utf8_need = 0;
+			}
+
+			// This byte was text, so a CR waiting for its LF is over.
+			line->had_cr = false;
+			*echo_len = e.len;
+			return 0;
+
+		}
+
+		line->utf8_len = 0;
+		line->utf8_need = 0;
+
+	}
+
 	// -- escape sequences --
 	//
 	// Handled before anything else: mid-sequence, a byte means what
@@ -863,14 +920,27 @@ int z_line_feed(z_line_t *line, uint8_t byte,
 		default: break;
 	}
 
-	// anything else: only accept printable ASCII, and only if there's
-	// still room (leaving space for the NUL) -- silently drop (no
-	// echo) otherwise.
-	if (byte < 0x20 || byte >= 0x7f) return 0;
+	// Printable ASCII: one byte, one column. Same path as before.
+	if (byte >= 0x20 && byte < 0x7f) {
+		do_insert(line, &e, (char)byte);
+		*echo_len = e.len;
+		return 0;
+	}
 
-	do_insert(line, &e, (char)byte);
-
-	*echo_len = e.len;
+	// A lead byte opens a sequence and echoes nothing yet. A
+	// continuation with nothing open, or a byte that cannot start
+	// UTF-8, is dropped -- the same silence as any other rejected
+	// byte. The gap is checked for the whole sequence, when it
+	// completes, not for this one byte.
+	if (byte >= 0x80) {
+		int need = utf8_need_of(byte);
+		if (need) {
+			line->utf8[0] = byte;
+			line->utf8_len = 1;
+			line->utf8_need = (uint8_t)need;
+			line->had_cr = false;
+		}
+	}
 
 	return 0;
 

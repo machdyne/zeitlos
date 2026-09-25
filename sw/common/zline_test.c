@@ -7,14 +7,18 @@
  * worse than one that cannot edit at all, because the user is then
  * typing blind into something that looks correct.
  *
- * So this drives a small simulated terminal (printable characters,
- * backspace, CR, ESC[nC / ESC[nD / ESC[K) with the echo bytes, and
- * after every keystroke asserts that the terminal's visible line and
- * cursor column match the editor's buffer and position exactly.
+ * So this drives a small simulated terminal (UTF-8, one cell per
+ * column at z_cp_width(), backspace, CR, ESC[nA/B/C/D / ESC[K /
+ * ESC[J) with the echo bytes, and after every keystroke asserts that
+ * the terminal's visible line and cursor column match the editor's
+ * buffer and position exactly. A cursor that lands inside a
+ * multi-byte character fails on its own: that is the buffer and the
+ * screen disagreeing about where the caret is.
  */
 #include <stdio.h>
 #include <string.h>
 #include "zline.h"
+#include "zutf8.h"
 
 static int checks, fails;
 
@@ -24,21 +28,47 @@ static int checks, fails;
 // change row, ESC[J to erase from the cursor down.
 #define TW 128
 #define TH 16
-static char scr[TH][TW];
+// Right half of a two-column character. Not a code point, so the
+// reconstruction below skips it and the character is counted once.
+#define CELL_WIDE 0x110000u
+static uint32_t scr[TH][TW];
 static int  curx, cury, rowlen[TH], maxrow;
 
 static void term_reset(void){
-    memset(scr,' ',sizeof scr); curx=0; cury=0; maxrow=0;
-    for(int i=0;i<TH;i++) rowlen[i]=0;
+    for(int r=0;r<TH;r++){
+        for(int c=0;c<TW;c++) scr[r][c]=' ';
+        rowlen[r]=0;
+    }
+    curx=0; cury=0; maxrow=0;
+}
+
+// Place one character at the cursor. A wide character occupies two
+// cells; overwriting either half of an old one clears the other, or
+// the next reconstruction would still see it.
+static void term_put(uint32_t cp, int w){
+    if(w<=0 || cury<0 || cury>=TH || curx>=TW) return;
+    for(int k=0;k<w;k++){
+        int x=curx+k;
+        if(x>=TW) break;
+        if(scr[cury][x]==CELL_WIDE && x>0) scr[cury][x-1]=' ';
+        if(x+1<TW && scr[cury][x+1]==CELL_WIDE && scr[cury][x]!=CELL_WIDE)
+            scr[cury][x+1]=' ';
+        scr[cury][x]=(k==0)?cp:CELL_WIDE;
+    }
+    curx+=w;
+    if(curx>rowlen[cury]) rowlen[cury]=curx;
+    if(cury>maxrow) maxrow=cury;
 }
 
 static void term_feed(const char *b, unsigned n){
     unsigned i=0;
     while(i<n){
-        char c=b[i];
+        unsigned char c=(unsigned char)b[i];
         if(c==0x1b && i+1<n && b[i+1]=='['){
             unsigned j=i+2; unsigned p=0; int have=0;
-            while(j<n && b[j]>='0'&&b[j]<='9'){p=p*10+(b[j]-'0');j++;have=1;}
+            while(j<n && (unsigned char)b[j]>='0'&&(unsigned char)b[j]<='9'){
+                p=p*10+((unsigned char)b[j]-'0'); j++; have=1;
+            }
             if(j<n){
                 char f=b[j];
                 if(!have)p=1;
@@ -47,17 +77,17 @@ static void term_feed(const char *b, unsigned n){
                 else if(f=='A'){cury-=p; if(cury<0)cury=0;}
                 else if(f=='B'){cury+=p; if(cury>TH-1)cury=TH-1;}
                 else if(f=='K'){
-                    for(int k=curx;k<rowlen[cury];k++)scr[cury][k]=' ';
-                    if(curx<rowlen[cury])rowlen[cury]=curx;
+                    for(int k=curx;k<rowlen[cury]&&k<TW;k++) scr[cury][k]=' ';
+                    if(curx<rowlen[cury]) rowlen[cury]=curx;
                 }
                 else if(f=='J'){
-                    for(int k=curx;k<rowlen[cury];k++)scr[cury][k]=' ';
-                    if(curx<rowlen[cury])rowlen[cury]=curx;
+                    for(int k=curx;k<rowlen[cury]&&k<TW;k++) scr[cury][k]=' ';
+                    if(curx<rowlen[cury]) rowlen[cury]=curx;
                     for(int r=cury+1;r<TH;r++){
-                        for(int k=0;k<rowlen[r];k++)scr[r][k]=' ';
+                        for(int k=0;k<rowlen[r]&&k<TW;k++) scr[r][k]=' ';
                         rowlen[r]=0;
                     }
-                    if(maxrow>cury)maxrow=cury;
+                    if(maxrow>cury) maxrow=cury;
                 }
                 i=j+1; continue;
             }
@@ -65,13 +95,18 @@ static void term_feed(const char *b, unsigned n){
         if(c=='\b'){ if(curx)curx--; i++; continue; }
         if(c=='\r'){ curx=0; i++; continue; }
         if(c=='\n'){ cury++; if(cury>TH-1)cury=TH-1; if(cury>maxrow)maxrow=cury; i++; continue; }
-        if(c>=0x20&&c<0x7f){
-            scr[cury][curx]=c; curx++;
-            if(curx>rowlen[cury])rowlen[cury]=curx;
-            if(cury>maxrow)maxrow=cury;
-            i++; continue;
+        if(c<0x20){ i++; continue; }
+        {
+            const char *s=b+i, *before=s;
+            uint32_t cp=z_utf8_next(&s, b+n);
+            int used=(int)(s-before);
+            int w;
+            if(used<1) used=1;
+            w=(used==1 && c>=0x80) ? 1 : z_cp_width(cp);
+            if(w>0) term_put(cp, w);
+            i+=used;
+            continue;
         }
-        i++;
     }
 }
 
@@ -96,23 +131,41 @@ static unsigned PW;      // prompt width currently in use
 
 static void agree(const char *what){
     checks++;
-    char vis[TH*TW+1]; int n=0;
+    char vis[TH*TW*Z_UTF8_MAX + TH + 1]; int n=0;
     for(int r=0;r<=maxrow;r++){
         int start=(int)PW;
         if(start>rowlen[r])start=rowlen[r];
-        for(int k=start;k<rowlen[r];k++) vis[n++]=scr[r][k];
-        if(r<maxrow) vis[n++]='\n';
+        for(int k=start; k<rowlen[r] && k<TW; k++){
+            uint32_t cp=scr[r][k];
+            char tmp[Z_UTF8_MAX];
+            int m;
+            if(cp==CELL_WIDE) continue;
+            m=z_utf8_put(cp, tmp);
+            if(n+m >= (int)sizeof vis) break;
+            for(int t=0;t<m;t++) vis[n++]=tmp[t];
+        }
+        if(r<maxrow && n+1 < (int)sizeof vis) vis[n++]='\n';
     }
     vis[n]=0;
 
-    int want_row=0, want_col=0;
-    for(unsigned k=0;k<L.pos;k++){
-        if(L.buf[k]=='\n'){want_row++;want_col=0;} else want_col++;
+    // Columns of buf[0..pos), newlines starting a row. pos sitting
+    // inside a sequence is a failure of its own: the caret would be
+    // between two bytes of one character.
+    int want_row=0, want_col=0, split=0;
+    uint32_t i=0;
+    while(i<L.pos){
+        uint32_t nxt;
+        if(L.buf[i]=='\n'){ want_row++; want_col=0; i++; continue; }
+        nxt=(uint32_t)z_utf8_next_off(L.buf, (int)L.len, (int)i);
+        if(nxt<=i || nxt>L.pos){ split=1; break; }
+        want_col += z_utf8_cols(L.buf+i, nxt-i);
+        i=nxt;
     }
 
-    if(strcmp(vis,L.buf)||cury!=want_row||curx!=(int)PW+want_col){
-        printf("  FAIL %-26s screen \"%s\"@%d,%d  buffer \"%s\" want @%d,%d\n",
-            what,vis,cury,curx,L.buf,want_row,(int)PW+want_col);
+    if(split||strcmp(vis,L.buf)||cury!=want_row||curx!=(int)PW+want_col){
+        printf("  FAIL %-26s screen \"%s\"@%d,%d  buffer \"%s\" want @%d,%d%s\n",
+            what,vis,cury,curx,L.buf,want_row,(int)PW+want_col,
+            split?" SPLIT":"");
         fails++;
     }
 }
@@ -306,6 +359,176 @@ int main(void){
     checks++;
     if(strstr(L.buf,"earlier")){printf("  FAIL history clobbered a form\n");fails++;}
     agree("history refused");
+
+    // UTF-8. Bytes, not source encoding, so the file stays ASCII and
+    // the sequence under test is obvious.
+    //   ñ U+00F1  é U+00E9  ç U+00E7  á U+00E1   each 2 bytes, 1 column
+    //   あ U+3042                              3 bytes, 2 columns
+#define U_N  "\xc3\xb1"
+#define U_E  "\xc3\xa9"
+#define U_C  "\xc3\xa7"
+#define U_A  "\xc3\xa1"
+#define U_W  "\xe3\x81\x82"
+
+    printf("utf-8: insert in the middle:\n");
+    start(); type("hlo"); type(LEFT LEFT); type(U_N);
+    bufis("h" U_N "lo","ntilde inserted");
+    posis(3,"cursor after ntilde");
+    agree("insert ntilde");
+    // The tail after the caret is itself multi-byte. Moving back
+    // across it by bytes would leave the cursor a column off.
+    start(); type("a" U_E "b"); type(HOME); type(RIGHT); type("X");
+    bufis("aX" U_E "b","inserted before an accent");
+    agree("redraw across accent");
+
+    printf("utf-8: a lead byte echoes nothing until the sequence ends:\n");
+    start(); type("a\xc3");
+    bufis("a","lead held back");
+    agree("no echo for a partial");
+    type("\xb1");
+    bufis("a" U_N,"completed");
+    agree("echoed once complete");
+
+    printf("utf-8: backspace deletes the whole character:\n");
+    start(); type("a" U_E); type("\x7f");
+    bufis("a","backspace over e-acute");
+    posis(1,"pos after bs");
+    agree("bs over e-acute");
+
+    printf("utf-8: left and right step one character:\n");
+    start(); type("a" U_C "b");
+    type(LEFT); posis(3,"left onto b"); agree("before b");
+    type(LEFT); posis(1,"left across c-cedilla"); agree("across cedilla");
+    type(RIGHT); posis(3,"right across c-cedilla"); agree("back across cedilla");
+
+    printf("utf-8: home and end:\n");
+    start(); type(U_N U_A U_E);
+    type(HOME); posis(0,"home"); agree("utf8 home");
+    type(END); posis(6,"end"); agree("utf8 end");
+
+    printf("utf-8: kill stays on character boundaries:\n");
+    start(); type("ab" U_N "cd");
+    bufis("ab" U_N "cd","before ctrl-k");
+    type(HOME); type(RIGHT RIGHT); type("\x0b");
+    bufis("ab","ctrl-k"); agree("kill to end");
+    start(); type("ab" U_N "cd");
+    bufis("ab" U_N "cd","before ctrl-u");
+    type(LEFT LEFT); type("\x15");
+    bufis("","ctrl-u"); posis(0,"pos after kill"); agree("kill line");
+
+    printf("utf-8: history:\n");
+    start(); type("echo " U_N "\r");
+    type(UP);
+    bufis("echo " U_N,"recalled");
+    agree("history accent");
+    type(LEFT); type(U_E);
+    bufis("echo " U_E U_N,"edited recall");
+    agree("edit recalled accent");
+    // Recalling AWAY from an accented line moves left by columns.
+    // One byte too far and the rewrite starts inside the prompt.
+    start(); type("zz\r");
+    PW=2; term_feed("> ",2);
+    type("b" U_N);
+    bufis("b" U_N,"typed over the prompt");
+    agree("accent before recall");
+    type(UP);
+    bufis("zz","recalled over accent");
+    agree("recall does not eat the prompt");
+
+    printf("utf-8: invalid sequences are dropped, with no echo:\n");
+    start(); type("ab\xff" "c");
+    bufis("abc","lone 0xff dropped"); agree("invalid lead");
+    start(); type("ab\xc3\x7f");
+    bufis("a","cut by backspace"); agree("cut then backspace");
+    start(); type("ab\xc0\x80" "c");
+    bufis("abc","overlong dropped"); agree("overlong");
+    start(); type("ab\xe4\xb8" "c");
+    bufis("abc","truncated dropped"); agree("truncated");
+    start(); type("ab\xc3\x1b[D");
+    bufis("ab","esc cuts the sequence");
+    posis(1,"left still runs");
+    agree("esc cut");
+
+    printf("utf-8: the whole sequence has to fit:\n");
+    start();
+    for(int i=0;i<Z_LINE_MAX-1;i++) type("x");
+    type(U_N);
+    checks++;
+    if(L.len!=Z_LINE_MAX-1 || strchr(L.buf,'\xc3')){
+        printf("  FAIL stored a partial ntilde, len %u\n",L.len); fails++;
+    }
+    agree("one byte short, ntilde refused");
+    start();
+    for(int i=0;i<Z_LINE_MAX-2;i++) type("x");
+    type(U_N);
+    checks++;
+    if(L.len!=Z_LINE_MAX){printf("  FAIL ntilde did not fill, len %u\n",L.len);fails++;}
+    agree("ntilde fills the last two bytes");
+
+    printf("utf-8: a wide character is two columns:\n");
+    start(); type("a" U_W "b");
+    bufis("a" U_W "b","wide typed");
+    agree("wide in the line");
+    type(LEFT); agree("left over b");
+    type(LEFT); agree("left across wide");
+    type(RIGHT); agree("right across wide");
+    type("\x7f");
+    bufis("ab","backspace deletes the wide character");
+    agree("bs wide");
+    start(); type("ab"); type(HOME); type(RIGHT); type(U_W);
+    bufis("a" U_W "b","wide inserted");
+    agree("wide insert");
+    // U+1F600, four bytes, two columns. Same geometry as あ, so a
+    // length bug in the assembler would show here and not there.
+    start(); type("a\xf0\x9f\x98\x80" "b");
+    bufis("a\xf0\x9f\x98\x80" "b","emoji typed");
+    agree("emoji is two columns");
+    type(LEFT); agree("left over b");
+    type(LEFT); agree("left across emoji");
+    type(RIGHT); agree("right across emoji");
+    type("\x7f");
+    bufis("ab","backspace deletes the emoji");
+    agree("bs emoji");
+
+    printf("utf-8: multi-line, a 2-byte character on the row boundary:\n");
+    // "añZ" is 4 bytes and 3 columns. Coming down at column 2 must
+    // land on 'Z', not on the continuation byte of ñ.
+    start_multi(); type("(ab\r"); type("a" U_N "Z");
+    bufis("(ab\n" "a" U_N "Z","ntilde in the second row");
+    agree("row with ntilde");
+    type(UP); type(LEFT); type(DOWN);
+    agree("down onto the column after ntilde");
+    {
+        const char *nl=strchr(L.buf,'\n');
+        unsigned want=(unsigned)(nl-L.buf)+1+1+2; // row start, 'a', ñ, at 'Z'
+        checks++;
+        if(!nl || L.pos!=want){
+            printf("  FAIL pos %u want %u (landed inside ntilde)\n",L.pos,want);
+            fails++;
+        }
+    }
+    // ñ is the last character of the row, immediately before the
+    // newline. Up from column 2 of the next row lands on it, not
+    // inside it, and joining the rows does not tear it.
+    start_multi(); type("(x" U_N "\r"); type("yz");
+    bufis("(x" U_N "\n" "yz","ntilde before the newline");
+    agree("ntilde at end of row");
+    type(UP);
+    agree("up onto ntilde");
+    {
+        const char *nl=strchr(L.buf,'\n');
+        unsigned at=(unsigned)(nl-L.buf)-2; // lead byte of ñ
+        checks++;
+        if(!nl || L.pos!=at || (unsigned char)L.buf[L.pos]!=0xc3){
+            printf("  FAIL pos %u is not the lead of ntilde\n",L.pos);
+            fails++;
+        }
+    }
+    type(END); agree("end after ntilde");
+    type(DOWN); agree("down off that row");
+    type(HOME); type("\x7f");
+    bufis("(x" U_N "yz","joined");
+    agree("joined, ntilde intact");
 
     printf("\n%d checks", checks);
     printf(fails?", %d FAILED\n":", all passed\n",fails);

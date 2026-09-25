@@ -76,7 +76,7 @@
  * including one that changes (a continuation prompt, say).
  */
 
-#define Z_LINE_MAX 128 // max chars per line, excluding the terminating NUL
+#define Z_LINE_MAX 128 // max bytes per line, excluding the terminating NUL
 
 // Recallable previous lines.
 //
@@ -120,6 +120,15 @@ typedef struct {
 
 	uint8_t		esc;	// z_line_esc_t
 	uint32_t	esc_p;	// numeric parameter accumulated so far
+
+	// A UTF-8 sequence being assembled, one byte per z_line_feed()
+	// call -- the same reason `esc` exists. It is inserted only once
+	// complete and valid. `utf8_need` is 0 while idle. A byte that
+	// does not continue the sequence drops it, with no echo, and is
+	// then read for itself.
+	uint8_t		utf8[4];
+	uint8_t		utf8_len;	// bytes gathered so far
+	uint8_t		utf8_need;	// total length expected, or 0
 
 	// History, optional. `at` is Z_LINE_HIST_NONE while editing a
 	// fresh line, otherwise how many entries back the display
