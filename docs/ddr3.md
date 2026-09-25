@@ -1,7 +1,7 @@
 # DDR3 main memory
 
 Zeitlos runs from DDR3 on **Mozart ML2** (LFE5U-45F, MT41K256M16TW-107
-DDR3L). The controller, PHY, clocking and BIOS training are this
+DDR3L), using all 512MB of the part. The controller, PHY, clocking and BIOS training are this
 project's own; the PHY's strobe path follows LiteDRAM's ECP5 PHY, the one
 datapath known to work on this board. How it got here, and what each
 wrong turn taught, is in [ddr3-bringup.md](ddr3-bringup.md).
@@ -17,10 +17,17 @@ verify 00000000 bad words, bits 00000000
 
 ZEITLOS
  ...
- - main memory: 256MB
+ - main memory: 512MB
+ - memory initialized.
+ ...
+ - ramdisk: 4096 KB at /ram
+ - starting shell.
 ```
 
-sys_clk meets timing at 55MHz against the 48MHz it runs at.
+The RAM disk is an eighth of main memory capped at 4MB (`sw/os/mem.h`),
+so it is 4MB at 256MB and at 512MB alike. sys_clk meets timing at
+54.1MHz against the 48MHz it runs at, with 512MB enabled (55.1MHz before
+it).
 
 ## Contents
 
@@ -32,6 +39,7 @@ sys_clk meets timing at 55MHz against the 48MHz it runs at.
 - [Training, in the BIOS](#training-in-the-bios)
 - [Performance](#performance)
 - [Verification](#verification)
+- [Troubleshooting](#troubleshooting)
 - [Limitations and open work](#limitations-and-open-work)
 
 ## Build and flash
@@ -62,7 +70,8 @@ A DDR3 board needs, in `rtl/boards.vh`:
 `define MEM_DDR3
 `define DDR3_ROW_BITS 15      // from the part, below
 `define DDR3_TRFC_NS 260      // from the part, below
-`define MEM 256               // what the OS may use; see Memory map
+`define MAIN_512MB            // only for a 512MB part; see Memory map
+`define MEM 512               // what the OS may use: 512, or the part's size
 ```
 
 and in the Makefile's board block, the DDR3 sources -- appended there
@@ -103,14 +112,51 @@ named error rather than aliasing.
 0x7000_0700                 DDR3 registers
 ```
 
-**512MB is decoded, 256MB is used.** The data cache treats only
-`0x4xxx_xxxx` as main memory and its tags stop at address bit 27, so the
-upper half would be uncached: correct, but slow. `MEM` stays 256 until
-the cache's tags are widened by one bit together with its main-memory
-test -- widening the test alone would make `0x4000_0000` and
-`0x5000_0000` share cache lines ([dcache.md](dcache.md)). On a smaller
-part the upper addresses alias the lower ones, which is harmless because
-`MEM` tells the OS how much there really is.
+**`MAIN_512MB` makes `0x5` main memory too.** Everything that asks "is
+this main memory" has to agree, so `rtl/sysctl.v` turns the one define
+into a `MAIN_512` parameter on each module that asks:
+
+| | with `MAIN_512MB` |
+|---|---|
+| data and instruction caches | `0x4`-`0x5` cached; tags one bit wider |
+| MPU | `0x4`-`0x5` is main memory for its own-block and store rules |
+| cache snoop | `0x4`-`0x5` |
+| DDR3 decode | `0x4`-`0x5` (without it, `0x4` only) |
+
+The two halves of the risk, and what catches each:
+
+- **Tags not widened**: `0x4000_0000` and `0x5000_0000` would share cache
+  lines and return each other's data. `rtl/tb/tb_cache_id.v` with
+  `MAIN_512=1` moves half its addresses into `0x5` with identical low
+  bits -- the same line -- and a cache with only its main-memory test
+  widened fails it with 350 errors.
+- **MPU not told**: stores above `0x5000_0000` would be gated only by
+  `MASK`, whose default allows nibble 5, so any app could write any
+  process's memory there. `rtl/tb/tb_mpu.v` with `MAIN_512=1` against the
+  old MPU lets 367 such stores through.
+
+The tag entries grow from 16 and 17 bits to 17 and 18, which still fit
+the 18-bit block RAMs they occupy: on ML2 the design stays at 44 DP16KD,
+for about 100 LUTs.
+
+**On boards without the define the logic is proven unchanged**: the caches'
+optimised netlists are identical and the MPU is formally equivalent, and
+`sysctl.v` preprocesses to exactly the same text -- the parameter is only
+passed when the define is set. The synthesised *mapping* still moves
+slightly: ABC is deterministic but responds to any change in the text it
+is given, and with these three files edited ML1 maps its combinational
+logic differently by a few tenths of a percent, with the same register
+count. Any edit to those files does the same.
+
+**Smaller parts** leave `MAIN_512MB` undefined, and then the DDR3 decode
+covers `0x4` only and `0x5` is empty. That is not a detail: decoding `0x5`
+on such a board would alias it onto the lower memory while the MPU treats
+nibble 5 as a peripheral region that `MASK` allows, so an app could store
+through `0x5` into any memory, the kernel's included. The decode follows
+the same define as the caches and the MPU.
+
+**512MB is the ceiling of this map**: `0x6` is the Ethernet controllers
+and `0x7` the registers.
 
 **The `0x6` region holds the Ethernet controllers, one 16MB slot
 each.** spieth moved there from `0x5000_0000` to make room, beside the
@@ -334,11 +380,21 @@ them and what each proves. `make hwmap` reads the DDR3 sources too
 (they are appended in ML2's board block) and its golden model is
 current.
 
+## Troubleshooting
+
+| Console | Meaning |
+|---|---|
+| `ddr3 00000000 init timeout` | The DDR3 registers are not there: STATUS reads zero, so its magic (`0xdd30`) is missing. Almost always a bitstream for another board -- ML1's, say -- flashed with the DDR3 BIOS. |
+| `ddr3 dd30.... init timeout` | The registers are there but the controller never finished initialising: check bits `[7]` PLL locked and `[1]` PHY ready. |
+| `ddr3 training FAILED`, gate scan all `0` | No strobe caught at any gate: the DRAM is not answering reads -- clocks, reset, commands or pins, not tuning. |
+| `ddr3 training FAILED`, gate scan shows `3`s | Strobes arrive but no setting reads correct data; the dump that follows shows what does come back. |
+| cells marked `*` in a map | More than one offset passed in one cell, which a real read path cannot do: the reads are not reaching the DRAM. |
+| `verify ... bad words` | Reading back the kernel image fails. Same count in both passes: wrong data stored. Different: read noise at a marginal setting. `bits` names the lane: `00ff00ff` lane 0, `ff00ff00` lane 1. |
+| verifies clean, then nothing | Possibly no OS in flash: blank memory matches blank flash. |
+| `init: wm binary not found` | The apps are not in flash; unrelated to DDR3. |
+
 ## Limitations and open work
 
-- **256 of 512MB used.** Widen the data and instruction cache tags by a
-  bit, include `0x5` in the cache's main-memory test, raise `MEM` to
-  512. See [Memory map](#memory-map).
 - **The read windows are narrow**: two or three READCLKSEL phases per
   lane, which is why the BIOS trains on every boot and picks the centre.
 - **Training is in the BIOS**, so DDR3 boards lose the monitor. Moving

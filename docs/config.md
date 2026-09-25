@@ -149,6 +149,10 @@ the file, at boot and on every reload.
 removing the line and reloading does not undo a `color` typed a moment
 ago. At power-on "as it is" is white anyway.
 
+Super+P cycles the phosphor for now (white, amber, green, paper)
+without touching this setting: a reboot, or a config reload, brings
+this one back ([window_manager.md](window_manager.md)).
+
 ## The file format
 
 ```

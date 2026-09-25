@@ -98,14 +98,15 @@ way.
 **Only main memory (`0x4xxx_xxxx`) is cached.** Everything else,
 including BRAM, VRAM and every peripheral, bypasses.
 
-> **DDR3 boards decode main memory up to `0x5fff_ffff`** (512MB,
-> [ddr3.md](ddr3.md)), but `MEM` tells the OS 256MB, so nothing above
-> `0x4fff_ffff` is used yet. Before raising it: the tags here stop at
-> address bit 27 (`D_TAGB = 28 - D_TAGLSB`, likewise `I_TAGB`), so
-> widening `c_main` to take in `0x5` WITHOUT widening the tags by one
-> bit would make `0x4000_0000` and `0x5000_0000` share lines and
-> return each other's data. Left as it is, `0x5` is simply uncached --
-> correct, but slow.
+> **512MB boards** (`MAIN_512MB`, [ddr3.md](ddr3.md#memory-map)) set the
+> `MAIN_512` parameter here and in `rtl/cache.v`: main memory is then
+> `0x4000_0000`-`0x5fff_ffff`, and the tags widen by one bit with it
+> (`I_TAGB`, `D_TAGB`, `TAG_BITS` all follow the parameter). The two
+> must move together -- widening the main-memory test alone would make
+> `0x4000_0000` and `0x5000_0000` share lines and return each other's
+> data -- which is why one parameter sets both. `tb_cache_id.v` with
+> `-Ptb_cache_id.MAIN_512=1` checks it, with half its addresses moved
+> into `0x5` onto the same lines.
 
 ### Data side
 

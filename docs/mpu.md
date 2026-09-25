@@ -96,6 +96,12 @@ store belongs to the most recently fetched instruction.
 | load | its address nibble is enabled in `MASK` | reads 0 |
 | store | inside its own block; or a nibble enabled in `MASK` that is not kernel-only (below) | dropped |
 
+On 512MB boards (`MAIN_512MB`, [ddr3.md](ddr3.md#memory-map)) "main
+memory" below means nibbles 4 AND 5: the own-block and store rules cover
+both, through the `MAIN_512` parameter of `rtl/mpu.v`. Without it, stores
+above `0x5000_0000` would be gated only by `MASK`, which allows nibble 5
+by default.
+
 **Kernel-only for stores**, fixed in hardware: BIOS RAM (nibble 0),
 flash and its write/erase registers (nibble 1), main memory outside the
 app's own block, the cache control registers (`0x7000_01xx`), the FPGA

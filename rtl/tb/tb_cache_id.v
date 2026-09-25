@@ -21,6 +21,7 @@
  *   iverilog -g2005 -o tb_cid rtl/tb/tb_cache_id.v rtl/cache_id.v
  *   ./tb_cid
  *   iverilog -g2005 -Ptb_cache_id.BURST=1 -Ptb_cache_id.WBUF=4 ...
+ *   iverilog -g2005 -Ptb_cache_id.MAIN_512=1 ...   (512MB: 0x4 and 0x5)
  */
 
 `timescale 1ns / 1ps
@@ -36,8 +37,18 @@ module tb_cache_id;
     parameter BURST  = 0;
     parameter SEED   = 1;
     parameter NOPS   = 40000;
+    // Main memory 0x4000_0000-0x5fff_ffff (`MAIN_512MB). The memory and
+    // reference models then hold a second 64KB half at 0x5000_0000, and
+    // the address generator moves half of all addresses there by setting
+    // bit 28 -- same low bits, so the SAME cache line and offset as the
+    // 0x4 address it came from. The worst case for aliasing, and a cache
+    // whose tags were not widened fails it at once. DUT_512 sets the
+    // cache separately, for exactly that check.
+    parameter MAIN_512 = 0;
+    parameter DUT_512  = MAIN_512;
 
     localparam MEM_WORDS = 16384;              // 64KB of main memory
+    localparam TOT_WORDS = MEM_WORDS * (1 + MAIN_512); // both halves
     localparam MAIN      = 32'h4000_0000;
     localparam IOBASE    = 32'h1000_0000;      // uncached "peripheral"
     localparam CFG       = 32'h7000_0100;
@@ -71,6 +82,7 @@ module tb_cache_id;
     wire cfg_hit;
 
     wb_cache #(
+        .MAIN_512(DUT_512),
         .I_KB(I_KB), .I_LINE_WORDS(I_LW),
         .D_KB(D_KB), .D_LINE_WORDS(D_LW),
         .FAST_HIT(FAST), .WBUF_DEPTH(WBUF), .BURST(BURST), .SNOOP(1)
@@ -91,8 +103,17 @@ module tb_cache_id;
 
     // -- memories ---------------------------------------------------
 
-    reg [31:0] smem [0:MEM_WORDS-1];     // what the slave holds
-    reg [31:0] rmem [0:MEM_WORDS-1];     // what the CPU has written
+    reg [31:0] smem [0:TOT_WORDS-1];     // what the slave holds
+    reg [31:0] rmem [0:TOT_WORDS-1];     // what the CPU has written
+
+    // Model index: the 64KB window, plus the half with MAIN_512.
+    function [31:0] midx;
+        input [31:0] a;
+    begin
+        if (MAIN_512) midx = {a[28], a[15:2]};
+        else midx = (a - MAIN) >> 2;
+    end
+    endfunction
     reg [31:0] iomem [0:15];
 
     integer seed;
@@ -125,16 +146,17 @@ module tb_cache_id;
                 end else if (lat == 1) begin
                     lat <= 0;
                     m_ack <= 1'b1;
-                    if ((m_adr & 32'hf000_0000) == MAIN) begin
+                    if (MAIN_512 ? ((m_adr & 32'he000_0000) == MAIN)
+                                 : ((m_adr & 32'hf000_0000) == MAIN)) begin
                         if (m_we) begin
-                            sw = smem[(m_adr - MAIN) >> 2];
+                            sw = smem[midx(m_adr)];
                             if (m_sel[0]) sw[7:0]   = m_dat_o[7:0];
                             if (m_sel[1]) sw[15:8]  = m_dat_o[15:8];
                             if (m_sel[2]) sw[23:16] = m_dat_o[23:16];
                             if (m_sel[3]) sw[31:24] = m_dat_o[31:24];
-                            smem[(m_adr - MAIN) >> 2] <= sw;
+                            smem[midx(m_adr)] <= sw;
                         end
-                        m_dat_i <= smem[(m_adr - MAIN) >> 2];
+                        m_dat_i <= smem[midx(m_adr)];
                     end else begin
                         if (m_we) iomem[m_adr[5:2]] <= m_dat_o;
                         m_dat_i <= iomem[m_adr[5:2]];
@@ -156,7 +178,7 @@ module tb_cache_id;
     // slave memory. The program issues one after random stores.
     always @(posedge clk) begin
         if (m_cyc && m_stb && m_ack && m_we && (m_adr == IOBASE + 32'h3c)) begin
-            for (i = 0; i < MEM_WORDS; i = i + 1) begin
+            for (i = 0; i < TOT_WORDS; i = i + 1) begin
                 if (smem[i] !== rmem[i]) begin
                     if (errors < 10)
                         $display("ORDER ERROR: word %0d slave=%08x ref=%08x at fence",
@@ -253,12 +275,12 @@ module tb_cache_id;
         input [31:0] dat;
     begin
         bus(adr, 1'b1, sel, dat, 1'b0);
-        w = rmem[(adr - MAIN) >> 2];
+        w = rmem[midx(adr)];
         if (sel[0]) w[7:0]   = dat[7:0];
         if (sel[1]) w[15:8]  = dat[15:8];
         if (sel[2]) w[23:16] = dat[23:16];
         if (sel[3]) w[31:24] = dat[31:24];
-        rmem[(adr - MAIN) >> 2] = w;
+        rmem[midx(adr)] = w;
     end
     endtask
 
@@ -268,7 +290,7 @@ module tb_cache_id;
     begin
         // picorv32 reads carry sel=0000, zeitlos32 sel=1111: use both
         bus(adr, 1'b0, ($random(seed) & 1) ? 4'b1111 : 4'b0000, 32'h0, instr);
-        check(adr, rd, rmem[(adr - MAIN) >> 2], instr ? "fetch" : "load");
+        check(adr, rd, rmem[midx(adr)], instr ? "fetch" : "load");
     end
     endtask
 
@@ -297,6 +319,12 @@ module tb_cache_id;
                             (($unsigned($random(seed)) % 64) * 4));
         else
             raddr = MAIN + (($unsigned($random(seed)) % MEM_WORDS) * 4);
+        // Nested, not "MAIN_512 && $random": Verilog does not promise to
+        // short-circuit, and an extra $random would change the default
+        // run's whole sequence.
+        if (MAIN_512) begin
+            if ($random(seed) & 1) raddr = raddr | 32'h1000_0000;
+        end
     end
     endfunction
 
@@ -313,7 +341,7 @@ module tb_cache_id;
         total_cycles = 0;
         c_adr = 0; c_dat_w = 0; c_we = 0; c_sel = 0; c_stb = 0; c_cyc = 0;
         c_instr = 0; snoop_stb = 0; snoop_adr = 0;
-        for (i = 0; i < MEM_WORDS; i = i + 1) begin
+        for (i = 0; i < TOT_WORDS; i = i + 1) begin
             smem[i] = $random(seed);
             rmem[i] = smem[i];
         end

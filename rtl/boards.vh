@@ -655,7 +655,7 @@
 // PROGRAMN on M8, as on ML1 (boards/mozart_ml2.lpf).
 `define PROGRAMN_PIN
 `define OSC48
-`define MEM 256
+`define MEM 512
 // DDR3 (rtl/mem/ddr3*.v, docs/ddr3.md). The part decides two things,
 // from its datasheet -- all three candidates are x16, 8 banks, 10
 // column bits:
@@ -668,16 +668,17 @@
 // commands to a DRAM still refreshing, and the corruption that
 // follows is intermittent and looks like a tuning problem.
 //
-// ML2 carries the 4Gb part, all of it decoded (0x4000_0000 to
-// 0x5fff_ffff; spieth moved to 0x6100_0000 to make room).
+// ML2 carries the 4Gb part, and all 512MB of it is main memory:
+// 0x4000_0000-0x5fff_ffff (spieth moved to 0x6100_0000 to make room).
 //
-// MEM stays 256 for now. The data cache treats only 0x4xxx_xxxx as
-// main memory and its tags stop at address bit 27, so the upper 256MB
-// is UNCACHED: correct, but slow for anything the OS placed there.
-// Widening the cache's main-memory test to 0x5 WITHOUT widening its
-// tags by a bit would make 0x4000_0000 and 0x5000_0000 share lines and
-// return each other's data. Raise MEM to 512 together with that.
+// MAIN_512MB tells everything that asks "is this main memory" -- both
+// caches, the MPU and the cache snoop -- that 0x5 counts, from one
+// parameter set in rtl/sysctl.v. The caches' tags widen by a bit with
+// it; without that, 0x4000_0000 and 0x5000_0000 would share lines. And
+// without the MPU's part, stores above 0x5000_0000 would be gated only
+// by MASK, which allows nibble 5 by default.
 `define MEM_DDR3
+`define MAIN_512MB
 `define DDR3_ROW_BITS 15
 `define DDR3_TRFC_NS 260
 `define MEM_VRAM

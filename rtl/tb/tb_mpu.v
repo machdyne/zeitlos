@@ -12,10 +12,22 @@
  */
 
 `timescale 1ns / 1ps
+//
+// 512MB main memory (`MAIN_512MB): -Ptb_mpu.MAIN_512=1. Adding
+// -Ptb_mpu.DUT_512=0 runs that model against the old rules, and must
+// FAIL -- stores above 0x5000_0000 let through.
 
 module tb_mpu;
 
     parameter XLATE = 1;
+    // Main memory 0x4000_0000-0x5fff_ffff (`MAIN_512MB). The reference
+    // model below follows MAIN_512 and the address generator adds a
+    // 0x5 region only then, so the default run is unchanged. DUT_512
+    // sets the design under test separately: running MAIN_512=1 against
+    // DUT_512=0 must FAIL -- that is the hole the change closes, stores
+    // above 0x5000_0000 outside the app's own block being let through.
+    parameter MAIN_512 = 0;
+    parameter DUT_512 = MAIN_512;
     parameter SEED = 1;
     parameter NOPS = 20000;
 
@@ -38,7 +50,7 @@ module tb_mpu;
     reg [31:0] mtu_base;
     wire irq;
 
-    wb_mpu #(.XLATE_ON_BUS(XLATE)) dut (
+    wb_mpu #(.MAIN_512(DUT_512), .XLATE_ON_BUS(XLATE)) dut (
         .wb_clk_i(clk), .wb_rst_i(rst),
         .c_adr_i(adr), .c_dat_i(dat), .c_we_i(we), .c_sel_i(sel),
         .c_stb_i(stb), .c_cyc_i(cyc), .c_instr_i(instr),
@@ -114,7 +126,7 @@ module tb_mpu;
                 end else if (!in_own(a)) expect_why = 1;
             end else if (!MASK[n]) expect_why = 3;
             else if (w) begin
-                if (n == 4'h4) begin
+                if (n == 4'h4 || (MAIN_512 && n == 4'h5)) begin
                     if (!in_own(a)) expect_why = 1;
                 end else if (n == 4'h0 || n == 4'h1 || n == 4'h9 ||
                          a[31:8] == 24'h7000_01 || a[31:2] == (32'h7000_0218 >> 2))
@@ -237,7 +249,7 @@ module tb_mpu;
         input dummy;
         integer k;
     begin
-        k = $unsigned($random(seed)) % 14;
+        k = $unsigned($random(seed)) % (14 + MAIN_512);
         case (k)
             0: raddr = 32'h8000_0000 + (($unsigned($random(seed)) % (SIZE + 32'h800)) & ~3);
             1: raddr = BASE + (($unsigned($random(seed)) % (SIZE + 32'h800)) & ~3);
@@ -248,6 +260,7 @@ module tb_mpu;
             6: raddr = 32'h7000_0000 + (($unsigned($random(seed)) % 32'h400) & ~3);
             7: raddr = 32'h7000_0218;
             8: raddr = 32'hB000_0000;
+            14: raddr = 32'h5000_0000 + (($unsigned($random(seed)) % 32'h20000) & ~3);
             9: raddr = 32'h1F00_0000 + (($unsigned($random(seed)) % 32'h100) & ~3);
             10: raddr = 32'h2000_0000 + (($unsigned($random(seed)) % 32'h1000) & ~3);
             11: raddr = 32'hF000_0000 + (($unsigned($random(seed)) % 32'h400) & ~3);

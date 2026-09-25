@@ -61,6 +61,11 @@ def simplify_chain(conds):
     return out
 
 
+def region_granular(dec):
+    """Every window of the decode is whole 256MB regions."""
+    return all((w["mask"] & 0x0FFFFFFF) == 0 for w in dec["windows"])
+
+
 def common(cubes):
     if not cubes:
         return C.TRUE
@@ -139,13 +144,22 @@ class View:
                 continue
             nib = d["windows"][0]["value"] >> 28
             # decodes of the same window under exclusive conditions form
-            # one "one of" entry (SRAM / SDRAM / PSRAM)
+            # one "one of" entry (SRAM / SDRAM / PSRAM). So do decodes at
+            # the same base whose windows are whole regions of different
+            # sizes -- main memory, where DDR3 may take 512MB
+            # (`MAIN_512MB) while the others take 256MB. Only whole-region
+            # windows qualify, so small register windows sharing a base
+            # are never pulled together by this.
             peers = [d]
             for e in decs:
                 if e is d or e["name"] in used:
                     continue
-                if ([(w["value"], w["mask"]) for w in e["windows"]] ==
-                        [(w["value"], w["mask"]) for w in d["windows"]] and
+                same = ([(w["value"], w["mask"]) for w in e["windows"]] ==
+                        [(w["value"], w["mask"]) for w in d["windows"]])
+                nested = (region_granular(d) and region_granular(e) and
+                          {w["value"] for w in e["windows"]} ==
+                          {w["value"] for w in d["windows"]})
+                if ((same or nested) and
                         all(C.exclusive(a["cond"], b["cond"])
                             for p in peers for a in p["windows"]
                             for b in e["windows"])):
@@ -206,12 +220,41 @@ class View:
                                        inline=r["inline"], dec=d))
             members.extend(merged)
         d0 = decs[0]
-        win = d0["windows"]
+        # Every distinct window of every decode in the entry, not just the
+        # first decode's: a grouped decode may have a window the others
+        # lack (DDR3's 512MB). A window several decodes share gets the
+        # literals common to all of them, so it is tagged only by what
+        # they have in common.
+        byw = {}
+        for dd in decs:
+            for w in dd["windows"]:
+                byw.setdefault((w["value"], w["mask"]), []).append(w)
+        win = []
+        for (val, mask), ws in sorted(byw.items(),
+                                      key=lambda kv: (kv[0][0], -kv[0][1] & 0xFFFFFFFF)):
+            w0 = dict(ws[0])
+            if len(ws) > 1:
+                w0["cond"] = common(C.absorb([x["cond"] for x in ws]))
+            else:
+                # A window only one decode has is tagged relative to that
+                # decode, so it says what is specific to the window --
+                # [MAIN_512MB] -- not the decode's whole condition again.
+                for dd in decs:
+                    if any(x is ws[0] for x in dd["windows"]):
+                        w0["parent"] = common(dd["cover"])
+            win.append(w0)
+        # Regions the entry covers: a window larger than 256MB spans the
+        # columns after its base.
+        span = 1
+        for w in win:
+            sz = M.window_size(w["mask"])
+            if sz and sz > (1 << 28):
+                span = max(span, sz >> 28)
         entry = dict(kind="alts" if len(members) > 1 else "single",
                      decodes=[d["name"] for d in decs],
                      windows=win, sort=win[0]["value"], line=d0["line"],
                      cover=C.absorb(sum([d["cover"] for d in decs], [])),
-                     members=members,
+                     members=members, span=span,
                      absorber=any(w["excludes"] for w in win))
         mc = []
         for mem in members:
@@ -270,10 +313,60 @@ class Lines:
                                 gap=it["gap"] if first else 0))
                 first = False
             if it["right"] and not same:
-                out.append(dict(kind="pill", it=it, text="", pill=it["right"], pw=pw,
-                                h=it["rsize"] * 1.3 + (it["gap"] if not texts else 0) + 0.4,
-                                gap=it["gap"] if not texts else 0))
+                # On its own line a tag still wider than the box is set
+                # smaller to fit, down to a legible floor; past that it is
+                # split at its "&" terms onto further lines. Never cut
+                # short: a truncated condition would be wrong. (It used to
+                # keep its size, and spill out of the box.)
+                first = True
+                for piece, rs, ppw in self.tag_pieces(it, w):
+                    g = it["gap"] if (first and not texts) else 0
+                    out.append(dict(kind="pill", it=it, text="", pill=piece, pw=ppw,
+                                    rsize=rs, h=rs * 1.3 + g + 0.4, gap=g))
+                    first = False
         return out
+
+    TAG_FLOOR = 3.0
+
+    def tag_pieces(self, it, w):
+        """The tag as (text, size, pill width) rows that fit width w."""
+        font, rs = it["rfont"], it["rsize"]
+        def pw_of(t, sz):
+            return text_width(t, sz, font) + 3.0
+        tag = it["right"]
+        if pw_of(tag, rs) <= w:
+            return [(tag, rs, pw_of(tag, rs))]
+        sz = max(rs * (w - 3.0) / (pw_of(tag, rs) - 3.0), self.TAG_FLOOR)
+        if pw_of(tag, sz) <= w:
+            return [(tag, sz, pw_of(tag, sz))]
+        terms = tag.split(" & ")
+        pieces, cur = [], ""
+        for t in terms:
+            cand = (cur + " & " + t) if cur else t
+            if cur and pw_of(cand, sz) > w:
+                pieces.append(cur + " &")
+                cur = t
+            else:
+                cur = cand
+        pieces.append(cur)
+        # a single name still too wide breaks after an underscore, so it
+        # stays whole and readable: "!UART0_NARROW_" / "DECODE"
+        out = []
+        for pc in pieces:
+            if pw_of(pc, sz) <= w or "_" not in pc:
+                out.append(pc)
+                continue
+            parts = pc.split("_")
+            cur = ""
+            for i, part in enumerate(parts):
+                seg = part + ("_" if i < len(parts) - 1 else "")
+                if cur and pw_of(cur + seg, sz) > w:
+                    out.append(cur)
+                    cur = seg
+                else:
+                    cur += seg
+            out.append(cur)
+        return [(pc, sz, min(pw_of(pc, sz), w)) for pc in out]
 
     def height(self, w):
         return sum(r["h"] for r in self.rows(w))
@@ -292,10 +385,11 @@ class Lines:
                         it["color"])
                 cy += r["h"] - r["gap"]
             else:
-                ph = it["rsize"] * 1.3
+                rs = r.get("rsize", it["rsize"])
+                ph = rs * 1.3
                 pw = min(r["pw"], w)
                 pill(cv, x + w - pw + 0.5, cy + 0.2, pw - 0.5, ph, r["pill"],
-                     it["rsize"], it["rfont"], it["rcolor"])
+                     rs, it["rfont"], it["rcolor"])
                 cy += r["h"] - r["gap"]
         return cy - y
 
@@ -714,34 +808,58 @@ class MapPage:
                         4.2, "H", GREY, "c")
 
     # -- bus bar and address columns ------------------------------------------
-    def column_widths(self, total, gap):
+    def stack_need(self, es, w):
+        """Height of these entries stacked at width w, untrimmed."""
+        return (sum(self.entry_lines(e).height(w - 6) + 5.5 for e in es) +
+                3.0 * (len(es) - 1))
+
+    def column_widths(self, total, gap, h=None):
+        # A column whose boxes cannot fit one stack in the height there is
+        # drawn as TWO stacks side by side, and asks for the width of two;
+        # the extra comes proportionally out of every other column. Width
+        # alone used to decide this, so a column of many short entries
+        # (the 0x7 register tenants) got an ordinary width and ran down
+        # into the legend.
         want = []
+        self.stacks = [1] * 16
         for k in range(16):
             es = self.v.columns[k]
             nat = 30.0
             for e in es:
                 nat = max(nat, self.entry_lines(e).natural() + 7)
-            want.append(min(max(nat, 36.0), 80.0))
+            wk = min(max(nat, 36.0), 80.0)
+            # judged at the width a column will really get, not at its
+            # natural width: text wraps more when the page is shared out
+            est = min(wk, (total - 15 * gap) / 16.0)
+            if h is not None and len(es) > 1 and self.stack_need(es, est) > h:
+                self.stacks[k] = 2
+                wk = 2 * wk + gap
+            want.append(wk)
         avail = total - 15 * gap
         s = sum(want)
         if s <= avail:
             extra = avail - s
             return [wd + extra * wd / s for wd in want]
-        # shrink the widest first, never below the floor
+        # shrink the widest first, never below the floor -- comparing
+        # the width of each STACK, so a two-stack column is not taken
+        # for the widest and cut back to one stack's width
         floor = 34.0
-        widths = list(want)
-        while sum(widths) > avail + 0.01:
-            over = sum(widths) - avail
-            big = [i for i, wd in enumerate(widths) if wd > floor + 0.01]
+        st = self.stacks
+        per = [(want[i] - gap * (st[i] - 1)) / st[i] for i in range(16)]
+        def total_of(p):
+            return sum(p[i] * st[i] + gap * (st[i] - 1) for i in range(16))
+        while total_of(per) > avail + 0.01:
+            over = total_of(per) - avail
+            big = [i for i in range(16) if per[i] > floor + 0.01]
             if not big:
                 break
-            top_w = max(widths[i] for i in big)
-            second = max([widths[i] for i in big if widths[i] < top_w - 0.01] + [floor])
-            cand = [i for i in big if widths[i] >= top_w - 0.01]
-            cut = min(over / len(cand), top_w - second)
+            top_w = max(per[i] for i in big)
+            second = max([per[i] for i in big if per[i] < top_w - 0.01] + [floor])
+            cand = [i for i in big if per[i] >= top_w - 0.01]
+            cut = min(over / sum(st[i] for i in cand), top_w - second)
             for i in cand:
-                widths[i] -= cut
-        return widths
+                per[i] -= cut
+        return [per[i] * st[i] + gap * (st[i] - 1) for i in range(16)]
 
     def bus_and_columns(self, y0, y1):
         cv, m = self.cv, self.m
@@ -756,18 +874,41 @@ class MapPage:
             cv.line([(self.main_drop, y0 - 6.5), (self.main_drop, y0)], BUS, 1.6,
                     arrow=2.6)
         gap = 3.0
-        widths = self.column_widths(x1 - x0, gap)
         top = y0 + bar_h + 4
+        avail = y1 - (top + 16)
+        widths = self.column_widths(x1 - x0, gap, avail)
+        xs = []
         cx = x0
         for k in range(16):
-            cw = widths[k]
+            xs.append(cx)
+            cx += widths[k] + gap
+        covered = set()
+        for k in range(16):
+            cx, cw = xs[k], widths[k]
             cv.line([(cx + cw / 2, y0 + bar_h), (cx + cw / 2, top + 1)], BUS, 0.9)
             cv.rect(cx, top + 1, cw, 12, fill=(0.93, 0.94, 0.97), stroke=None, r=1.5)
             cv.text(cx + 3, top + 9.6, "0x%X" % k, 7.0, "HB", BUS)
-            if cw > 44:
-                cv.text(cx + cw - 2.5, top + 9.2, "%X000_0000" % k, 4.2, "C", GREY, "r")
-            self.column(k, cx, top + 16, cw, y1 - (top + 16))
-            cx += cw + gap
+            # the base address, wherever it fits beside the column label
+            # (a fixed 44pt threshold hid it once columns were shared out
+            # more tightly)
+            addr = "%X000_0000" % k
+            if (text_width("0x%X" % k, 7.0, "HB") + text_width(addr, 4.2, "C")
+                    + 8.0 <= cw):
+                cv.text(cx + cw - 2.5, top + 9.2, addr, 4.2, "C", GREY, "r")
+            if k in covered:
+                continue
+            # An entry whose window covers the next regions (main memory
+            # at 0x4-0x5 with `MAIN_512MB) is drawn across their columns
+            # too, when they hold nothing of their own.
+            dw = cw
+            span = max([e.get("span", 1) for e in self.v.columns[k]] + [1])
+            for j in range(1, span):
+                if k + j < 16 and not self.v.columns[k + j]:
+                    dw = xs[k + j] + widths[k + j] - cx
+                    covered.add(k + j)
+                else:
+                    break
+            self.column(k, cx, top + 16, dw, avail)
 
     def entry_lines(self, e):
         hn, v = self.h, self.v
@@ -792,7 +933,8 @@ class MapPage:
         for wdw in e["windows"]:
             sz = M.window_size(wdw["mask"])
             desc = M.size_str(sz) if sz else "/%X" % (wdw["mask"] & 0x0FFFFFFF)
-            wt = tag_of(wdw["cond"], base) if len(e["windows"]) > 1 else ""
+            wt = (tag_of(wdw["cond"], wdw.get("parent", base))
+                  if len(e["windows"]) > 1 else "")
             L.add("%s %s" % (M.hexs(wdw["value"]), desc), 4.3, "C", INK,
                   right=wt or None, rsize=3.9)
         if e["absorber"]:
@@ -834,12 +976,30 @@ class MapPage:
         return self.h.inline(dn)
 
     def column(self, k, x, y, w, h):
-        cv, hn = self.cv, self.h
+        cv = self.cv
         es = self.v.columns[k]
         if not es:
             cv.text(x + w / 2, y + 12, "unused", 4.6, "H", LIGHT, "c")
             return
         blocks = [(e, self.entry_lines(e)) for e in es]
+        gap = 3.0
+        if getattr(self, "stacks", [1] * 16)[k] == 2 and len(blocks) > 1:
+            # two stacks, address order kept: the first entries on the
+            # left, the rest on the right, split where the taller of the
+            # two is shortest
+            sw = (w - gap) / 2
+            hs = [L.height(sw - 6) + 5.5 for _, L in blocks]
+            def taller(i):
+                return max(sum(hs[:i]) + gap * (i - 1),
+                           sum(hs[i:]) + gap * (len(hs) - i - 1))
+            cut = min(range(1, len(blocks)), key=taller)
+            self.stack(k, blocks[:cut], x, y, sw, h)
+            self.stack(k, blocks[cut:], x + sw + gap, y, sw, h)
+        else:
+            self.stack(k, blocks, x, y, w, h)
+
+    def stack(self, k, blocks, x, y, w, h):
+        cv, hn = self.cv, self.h
         gap = 3.0
         pad = 5.5
         need = sum(L.height(w - 6) + pad for _, L in blocks) + gap * (len(blocks) - 1)

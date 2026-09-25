@@ -917,6 +917,7 @@ not take the keys away from the window they are for.
 |---|---|
 | Super+Space | next keyboard layout in `system.keyboard.layouts`; its two-letter label shows on the dock for a moment, and speech says its name |
 | Super+K | start the on-screen keyboard ([keyboard_app.md](keyboard_app.md)); it is single-instance, so a second press does nothing |
+| Super+P | next phosphor -- white, amber, green, paper, round again, in `settings`' order. Writes the video register only: `system.video.mode` (the default) is untouched, so a reboot, or a config reload (which re-applies it, `sw/os/cfg.c`), brings the default back |
 
 Tested before the speech keys, by usage (Space is the same key on every
 layout). See [keyboard_layouts.md](keyboard_layouts.md), which also

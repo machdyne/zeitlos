@@ -48,6 +48,7 @@ there is:
 |---|---|
 | Super+Space | next keyboard layout (set the list in `settings`) |
 | Super+K | the on-screen keyboard ([keyboard_app.md](keyboard_app.md)) |
+| Super+P | switch to next phosphor mode: white, amber, green, paper |
 | AltGr (right Alt) | the third and fourth characters on a key, on layouts that have them: `@` on German is AltGr+Q |
 | a dead key, then a letter | an accented letter: on German, `´` then `e` is `é`; the dead key twice, or then Space, types the accent alone; Escape cancels it |
 | romaji, on a `ja` layout | kana: `konnichiha` is こんにちは; Backspace takes back a waiting letter, Escape drops them ([Japanese input](keyboard_layouts.md#japanese-input)) |

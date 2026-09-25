@@ -120,6 +120,13 @@
  */
 
 module wb_icache #(
+    // 1: main memory is 0x4000_0000-0x5fff_ffff (512MB, `MAIN_512MB in
+    // rtl/boards.vh) instead of 0x4xxx_xxxx. Everything that decides
+    // "is this main memory" must agree, so rtl/sysctl.v sets this one
+    // parameter from that one define and passes it to the caches and
+    // the MPU. 0 gives exactly the original logic. The tag widens by one
+    // bit with it, so 0x4 and 0x5 cannot share a line.
+    parameter MAIN_512    = 0,
     parameter CACHE_KB    = 8,   // total data array size, KB (power of 2)
     parameter LINE_WORDS  = 4,   // words per line (power of 2, >= 2)
     // 1: acknowledge a hit combinationally, in the same cycle the tag
@@ -211,7 +218,7 @@ module wb_icache #(
     localparam OFF_LSB      = 2;
     localparam IDX_LSB      = OFF_LSB + WOFF_BITS;
     localparam TAG_LSB      = IDX_LSB + IDX_BITS;
-    localparam TAG_BITS     = 28 - TAG_LSB;
+    localparam TAG_BITS     = (MAIN_512 ? 29 : 28) - TAG_LSB;
 
     // -- storage ---------------------------------------------------
 
@@ -295,7 +302,8 @@ module wb_icache #(
     // MEM_QQSPI all at this same base and boards.vh makes them
     // mutually exclusive, so this single test covers every backend.
     assign req_cacheable = cache_enable && c_instr_i && !c_we_i &&
-        ((c_adr_i & 32'hf000_0000) == 32'h4000_0000);
+        (MAIN_512 ? ((c_adr_i & 32'he000_0000) == 32'h4000_0000)
+                  : ((c_adr_i & 32'hf000_0000) == 32'h4000_0000));
 
     // In S_IDLE the arrays are addressed with the address arriving on
     // the bus this cycle, so tag/data/valid are already registered and

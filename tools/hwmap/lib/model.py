@@ -311,7 +311,16 @@ class Model:
             if not ok or cmp_ is None:
                 continue
             net, mask, val = cmp_
-            if mask & 0xF0000000 != 0xF0000000:
+            # An address-space decode compares a contiguous run of the top
+            # address bits: the whole top nibble (one 256MB region), or
+            # fewer bits for a window spanning a power-of-two run of
+            # regions -- e.g. 0xE0000000 for main memory at
+            # 0x4000_0000-0x5fff_ffff (`MAIN_512MB). This used to demand
+            # all four bits, so a two-region decode was dropped as "not an
+            # address-space decode" and the map showed only the other
+            # branch of its `ifdef.
+            if mask & 0xF0000000 not in (0xF0000000, 0xE0000000,
+                                         0xC0000000, 0x80000000):
                 continue            # not an address-space decode
             name = tg[0][0]
             dec = self.decodes.setdefault(name, dict(name=name, net=net,

@@ -134,7 +134,8 @@ them at an arbitrary moment. Also: READCLKSEL changes are now applied
 under PAUSE, as LiteDRAM does.
 
 **7. Zeitlos boots.** Centred on both lanes, kernel verified clean,
-256MB reported by the OS, timing 55MHz against 48MHz.
+256MB reported by the OS, timing 55MHz against 48MHz. (512MB followed;
+see below.)
 
 ### Making room: where spieth went
 
@@ -157,6 +158,43 @@ to exactly its original decode.
 **When a device moves, check everything that is keyed on its address,
 not just the decode**: register offsets inside the module, the driver's
 headers, and access rules such as the MPU's.
+
+### All 512MB
+
+Main memory at `0x4`-`0x5` needed four things to agree, not one: both
+caches (whose tags must widen by a bit with the main-memory test, or
+`0x4` and `0x5` share lines), the MPU (whose store rules only covered
+nibble 4 -- with the default mask any app could have written anywhere
+above `0x5000_0000`), the cache snoop, and the DDR3 decode itself. One
+define, `MAIN_512MB`, sets a parameter on each, from one place in
+`sysctl.v`. Each failure mode has a test that catches it, shown to fail
+against the naive change.
+
+Two findings on the way:
+
+- **Overriding a parameter with its default still changes the build.**
+  Passing `MAIN_512(0)` to every board made yosys build separately named
+  module copies. It is now passed only when the define is set, and every
+  other board's `sysctl.v` preprocesses to the same text as before.
+- **ABC's mapping moves with any change to its input text.** With the
+  three module files edited, ML1 -- logic proven identical, same
+  register count -- mapped its combinational logic a few tenths of a
+  percent differently, and swapping any one file back gave yet another
+  mapping. Deterministic, but chaotic; "logic unchanged" and "netlist
+  unchanged" are different claims.
+
+And one the docs nearly got wrong: a smaller DDR3 part still decoding
+`0x5` would alias it onto the lower memory while the MPU let apps store
+there. The decode now follows the define too.
+
+On hardware: the OS reports `main memory: 512MB` and boots to the shell,
+with sys_clk at 54.1MHz against 48MHz, about 1MHz less than before. The
+wider tag compare sits on the cache hit path and may account for it, but a
+shift that size is also within what mapping differences alone produce
+(see above), so it is not attributed.
+(A first attempt printed `ddr3 00000000 init timeout` -- ML1's bitstream
+had been flashed, which has no DDR3 registers, so STATUS read zero. It is
+now in the troubleshooting table in [ddr3.md](ddr3.md#troubleshooting).)
 
 ## Lessons
 

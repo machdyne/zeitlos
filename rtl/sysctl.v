@@ -963,11 +963,18 @@ module sysctl #()
 `elsif MEM_SDRAM
 	wire cs_sdram = ((wbm_adr & 32'hf000_0000) == 32'h4000_0000);
 `elsif MEM_DDR3
+`ifdef MAIN_512MB
 	// 512MB: 0x4000_0000 to 0x5fff_ffff. 0x5000_0000 was spieth, now
-	// at 0x6100_0000 beside the other Ethernet controller. On a smaller part the upper addresses alias the
-	// lower ones, which is harmless because MEM tells the OS how much
-	// there really is.
+	// at 0x6100_0000 beside the other Ethernet controller.
 	wire cs_ddr3 = ((wbm_adr & 32'he000_0000) == 32'h4000_0000);
+`else
+	// 0x4 only. Decoding 0x5 as well on a board WITHOUT `MAIN_512MB
+	// would alias it onto the lower memory while the MPU treats nibble
+	// 5 as a peripheral region that MASK allows -- so an app could
+	// store through 0x5 into any memory at all, the kernel's included.
+	// The decode follows the same define as the caches and the MPU.
+	wire cs_ddr3 = ((wbm_adr & 32'hf000_0000) == 32'h4000_0000);
+`endif
 `elsif MEM_QQSPI
 	wire cs_qqspi = ((wbm_adr & 32'hf000_0000) == 32'h4000_0000);
 `endif
@@ -1548,6 +1555,19 @@ module sysctl #()
 
 	localparam BRAM_WORDS = 2048;
 
+	// `MAIN_512MB (rtl/boards.vh): main memory is 0x4000_0000-0x5fff_ffff
+	// (512MB) rather than 0x4xxx_xxxx. Everything that asks "is this
+	// main memory" must agree -- both caches (whose tags widen with it),
+	// the MPU, and the cache snoop -- so each takes its MAIN_512
+	// parameter from this one define, here.
+	//
+	// The parameter is passed ONLY when the define is set, rather than
+	// always passing 0: overriding a parameter, even with its default,
+	// makes yosys build a separately named copy of the module, and the
+	// changed processing order alone moved about 60 cells in the
+	// mapping of a board that did not use this at all. Passed only
+	// when needed, every other board's source reads exactly as before.
+
 `ifdef CPU_ZEITLOS32
 
 	// EXPERIMENTAL: rtl/cpu/zeitlos32, selected by `CPU_ZEITLOS32 in
@@ -1708,6 +1728,9 @@ module sysctl #()
 	// kernel enables it.
 `ifdef MPU
 	wb_mpu #(
+`ifdef MAIN_512MB
+		.MAIN_512(1),
+`endif
 		.XLATE_ON_BUS(MTU_ON_BUS),
 		.CFG_BASE(32'h9000_0100)
 	) mpu_i (
@@ -1770,6 +1793,9 @@ module sysctl #()
 	// and a snoop input. The I_* registers at 0x7000_0100 are
 	// identical, so the BIOS and kernel work against either.
 	wb_cache #(
+`ifdef MAIN_512MB
+		.MAIN_512(1),
+`endif
 		.I_KB(`ICACHE_KB),
 		.I_LINE_WORDS(`ICACHE_LINE_WORDS),
 		.D_KB(`DCACHE_KB),
@@ -1811,6 +1837,9 @@ module sysctl #()
 	assign wbc_cti = 3'b000;
 
 	wb_icache #(
+`ifdef MAIN_512MB
+		.MAIN_512(1),
+`endif
 		.CACHE_KB(`ICACHE_KB),
 		.LINE_WORDS(`ICACHE_LINE_WORDS),
 		.FAST_HIT(`ICACHE_FAST_HIT),
@@ -1960,7 +1989,11 @@ module sysctl #()
 	// writing master (rtl/dma.v) is coherent with wb_cache without
 	// anyone having to remember.
 	assign cache_snoop_stb = (marb_master != 2'd0) && wbm_cyc && wbm_stb &&
+`ifdef MAIN_512MB
+		wbm_we && wbm_ack && ((wbm_adr & 32'he000_0000) == 32'h4000_0000);
+`else
 		wbm_we && wbm_ack && ((wbm_adr & 32'hf000_0000) == 32'h4000_0000);
+`endif
 
 `else
 

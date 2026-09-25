@@ -97,6 +97,17 @@
  */
 
 module wb_cache #(
+    // 1: main memory is 0x4000_0000-0x5fff_ffff (512MB, `MAIN_512MB in
+    // rtl/boards.vh) instead of 0x4xxx_xxxx. Everything that decides
+    // "is this main memory" must agree, so rtl/sysctl.v sets this one
+    // parameter from that one define and passes it to the caches and
+    // the MPU. 0 gives exactly the original logic.
+    //
+    // The tags widen by one bit with it. Widening the main-memory test
+    // WITHOUT the tags would make 0x4000_0000 and 0x5000_0000 share
+    // lines and return each other's data. Both follow MAIN_512 here, so
+    // they cannot be set apart.
+    parameter MAIN_512     = 0,
     parameter I_KB         = 8,   // instruction array size, KB (power of 2)
     parameter I_LINE_WORDS = 4,   // words per I line (power of 2, >= 2)
     parameter D_KB         = 4,   // data array size, KB (power of 2)
@@ -158,7 +169,7 @@ module wb_cache #(
     localparam I_DIDXB   = $clog2(I_WORDS);
     localparam I_IDXLSB  = 2 + I_WOFFB;
     localparam I_TAGLSB  = I_IDXLSB + I_IDXB;
-    localparam I_TAGB    = 28 - I_TAGLSB;
+    localparam I_TAGB    = (MAIN_512 ? 29 : 28) - I_TAGLSB;
 
     localparam D_WORDS   = (D_KB * 1024) / 4;
     localparam D_LINES   = D_WORDS / D_LINE_WORDS;
@@ -167,7 +178,7 @@ module wb_cache #(
     localparam D_DIDXB   = $clog2(D_WORDS);
     localparam D_IDXLSB  = 2 + D_WOFFB;
     localparam D_TAGLSB  = D_IDXLSB + D_IDXB;
-    localparam D_TAGB    = 28 - D_TAGLSB;
+    localparam D_TAGB    = (MAIN_512 ? 29 : 28) - D_TAGLSB;
 
     // shared counters are sized for the larger side
     localparam FCW  = (I_WOFFB > D_WOFFB) ? I_WOFFB : D_WOFFB;
@@ -333,7 +344,8 @@ module wb_cache #(
     wire fill_burst;
 
     assign c_req  = c_cyc_i && c_stb_i && !cfg_sel;
-    assign c_main = ((c_adr_i & 32'hf000_0000) == 32'h4000_0000);
+    assign c_main = MAIN_512 ? ((c_adr_i & 32'he000_0000) == 32'h4000_0000)
+                             : ((c_adr_i & 32'hf000_0000) == 32'h4000_0000);
 
     assign lu_adr = (state == S_IDLE) ? c_adr_i : req_adr;
 

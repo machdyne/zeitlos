@@ -86,6 +86,17 @@
  */
 
 module wb_mpu #(
+    // 1: main memory is 0x4000_0000-0x5fff_ffff (512MB, `MAIN_512MB in
+    // rtl/boards.vh) instead of 0x4xxx_xxxx. Everything that decides
+    // "is this main memory" must agree, so rtl/sysctl.v sets this one
+    // parameter from that one define and passes it to the caches and
+    // the MPU. 0 gives exactly the original logic.
+    //
+    // Without it, a 512MB board's upper half is not "main memory" to
+    // the MPU: stores there are gated only by MASK, whose default
+    // allows nibble 5, so any app could write any other process's
+    // memory above 0x5000_0000.
+    parameter MAIN_512 = 0,
     parameter XLATE_ON_BUS = 1,           // 1: picorv32 (MTU on the bus)
     parameter [31:0] CFG_BASE = 32'h9000_0100
 ) (
@@ -160,22 +171,26 @@ module wb_mpu #(
                  (mtu_base_i != 32'h0);
     wire [3:0] pnib = xlate ? 4'h4 : nib;    // nibble after translation
 
+    // Main memory: nibble 4, or 4 and 5 on a 512MB board.
+    wire nib_main  = MAIN_512 ? (nib[3:1] == 3'b010)  : (nib == 4'h4);
+    wire pnib_main = MAIN_512 ? (pnib[3:1] == 3'b010) : (pnib == 4'h4);
+
     // inside the current app's block
     wire own = xlate ? ({4'h0, c_adr_i[27:0]} < size) :
-               ((nib == 4'h4) && (c_adr_i >= mtu_base_i) &&
+               (nib_main && (c_adr_i >= mtu_base_i) &&
                 (c_adr_i < limit) && (size != 32'h0));
 
     // fetching from here makes the instruction privileged
     wire priv_region = !xlate &&
         ((c_adr_i[31:13] == 19'd0) ||
-         ((nib == 4'h4) && (c_adr_i < ktext)));
+         (nib_main && (c_adr_i < ktext)));
 
     wire at_gate = !xlate &&
         ((c_adr_i == gate) || (c_adr_i == 32'h0000_0010));
 
     wire kernel_only_store =
         (pnib == 4'h0) || (pnib == 4'h1) || (pnib == 4'h9) ||
-        ((pnib == 4'h4) && !own) ||
+        (pnib_main && !own) ||
         (c_adr_i[31:8] == 24'h7000_01) ||
         (c_adr_i[31:2] == 30'h1C00_0086);          // 0x7000_0218
 
@@ -194,7 +209,7 @@ module wb_mpu #(
             end else if (!mask[pnib]) begin
                 why = 4'd3;
             end else if (c_we_i && kernel_only_store) begin
-                why = (pnib == 4'h4) ? 4'd1 : 4'd2;
+                why = pnib_main ? 4'd1 : 4'd2;
             end
         end
     end

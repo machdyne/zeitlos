@@ -58,7 +58,10 @@ Page 1 has five regions:
   connect them.
 - **The main bus** (middle, full width) -- one column per top address nibble.
   A slave sits in the column of its base address, so the block diagram and
-  the memory map are the same picture.
+  the memory map are the same picture. A slave whose window spans several
+  regions is drawn across their columns (main memory at `0x4`-`0x5` with
+  `MAIN_512MB`), and a column with more boxes than one stack can hold is
+  drawn as two stacks side by side, taking its width from the others.
 
 A block's outline says whether it is there:
 
@@ -172,7 +175,12 @@ wire cs_x = ((wbm_adr & 32'hf000_0000) == 32'h4000_0000);
 wire cs_x = (wbm_adr[31:13] == 19'd0);
 ```
 
-The mask must cover the top nibble. The net they compare is the bus.
+The mask must cover the top nibble -- all four top bits for a window of
+one 256MB region, or a contiguous run of them from bit 31 for a window of
+a power-of-two run of regions (`32'he000_0000` for 512MB at `0x4`-`0x5`).
+The same decode may be declared in both branches of an `` `ifdef `` with
+different masks; each becomes a window under its condition. The net they
+compare is the bus.
 
 **Data/ack muxes** are OR chains of AND terms, with the replication
 marking the data mux:
@@ -268,11 +276,20 @@ convention above is broken, for example an ack signal driven through logic
 hwmap cannot trace. It still appears in the Blocks table.
 
 **A slave is missing from its column** -- check that its ack is in the ack
-mux in the form above, and that the decode's mask covers the top nibble.
+mux in the form above, and that the decode's mask covers the top nibble
+(or, for a multi-region window, a contiguous run of bits from bit 31).
 
-**"column(s) ... too full"** -- a column had more notes than fit; the lowest
-notes of the biggest boxes were dropped from page 1. The reference pages
-are complete.
+**"column(s) ... too full"** -- a column had more notes than fit even as
+two stacks; the lowest notes of the biggest boxes were dropped from page 1.
+The reference pages are complete. A column is given two stacks when its
+boxes would not fit one at the width it is likely to get, and its second
+stack's width comes out of every other column -- so a map with many busy
+columns runs out of width before it runs out of height.
+
+**A condition tag is too wide for its box** -- it moves onto its own line,
+then is set smaller (down to a floor), then splits at its `&` terms, and a
+single long name breaks after an underscore. It is never truncated: a
+cut-short condition would be a wrong one.
 
 **"cannot read the RTL"** -- a structural parse error with file and line,
 usually an unbalanced `` `ifdef `` or bracket. hwmap refuses to guess.

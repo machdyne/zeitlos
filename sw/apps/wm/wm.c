@@ -4156,6 +4156,23 @@ static void dispatch_keys(void) {
 			continue;
 		}
 
+		// Super+P -- the next phosphor: white, amber, green, paper, and
+		// round again, the order settings lists them in (the mode values
+		// are in that order). Only the CURRENT mode: system.video.mode,
+		// the default, is untouched, so a reboot -- or a config reload,
+		// which re-applies it (sw/os/cfg.c) -- brings the default back.
+		if ((modifiers & Z_KBD_MOD_GUI) && (keysym == 'p' || keysym == 'P') &&
+		    !(modifiers & Z_KBD_MOD_CTRL) && !alt) {
+			if (pressed) {
+				uint32_t m = (z_video_get_mode() + 1) % Z_VIDEO_MODE_COUNT;
+				if (z_video_set_mode(m))
+					printf("wm: Super+P: %s\n", z_video_mode_name(m));
+				else
+					printf("wm: Super+P: this bitstream has no video modes\n");
+			}
+			continue;
+		}
+
 		// Super+S/A/C/V/W/R/E -- speech. See speech_hotkey().
 		if (speech_hotkey(keysym, modifiers, pressed)) continue;
 
