@@ -46,12 +46,15 @@
 #include "zsoc.h"
 #include "zwin.h"
 #include "zwm.h"
+#include "zrtc.h"
 
 #include "mesh_pb.h"
 #include "mesh_model.h"
 #include "mesh_proto.h"
 #include "mesh_session.h"
 #include "mesh_ui.h"
+#include "mesh_log.h"
+#include "mesh_log_io.h"
 
 #define RETRY_MS		3000u
 #define SEND_WAIT_MS	30000u
@@ -253,9 +256,38 @@ static void goodbye(void) {
 	z_port_close(&port);
 }
 
+// -- history --
+
+static bool warned;
+
+static void history_check(void) {
+	if (warned || mesh_log_io_ok()) return;
+	warned = true;
+	if (gui) mesh_ui_notice("history not saved: cannot write " MESH_LOG_PATH);
+	else puts("mesh: history not saved: cannot write " MESH_LOG_PATH);
+}
+
+void mesh_app_sent(mesh_msg_t *g) {
+	mesh_log_msg(&model, g, MESH_LOG_PATH);
+	history_check();
+}
+
+static void history_event(const mesh_ev_t *ev) {
+	if (ev->kind == MESH_EV_TEXT) mesh_log_msg(&model, ev->msg, MESH_LOG_PATH);
+	else if (ev->kind == MESH_EV_STATUS) mesh_log_status(ev->msg, MESH_LOG_PATH);
+	else return;
+	history_check();
+}
+
 // -- the window --
 
-static void ui_event(void *ctx, const mesh_ev_t *ev) { (void)ctx; mesh_ui_event(ev); }
+// The window first: it stamps a received message with our clock when
+// the node's is not set, and the record should carry that time.
+static void ui_event(void *ctx, const mesh_ev_t *ev) {
+	(void)ctx;
+	mesh_ui_event(ev);
+	history_event(ev);
+}
 static void ui_line(void *ctx, const char *s) { (void)ctx; mesh_ui_line(s); }
 
 static int run_window(void) {
@@ -263,6 +295,7 @@ static int run_window(void) {
 	bool running = true;
 
 	gui = true;
+	mesh_log_load(&model, MESH_LOG_PATH);
 	sess.event = ui_event;
 	sess.line = ui_line;
 	if (!mesh_ui_open(&model, &sess)) {
@@ -298,6 +331,7 @@ static bool cli_done;
 
 static void cli_event(void *ctx, const mesh_ev_t *ev) {
 	(void)ctx;
+	history_event(ev);
 	if (ev->kind == MESH_EV_CONFIG_DONE) cli_done = true;
 	if (ev->kind == MESH_EV_NOTIFY) { o("mesh: node says: "); o(ev->text); oend(); }
 }
@@ -408,6 +442,8 @@ static int run_cli(const char *arg) {
 		return 1;
 	}
 
+	// So that a packet the node replays is recognised as already held.
+	mesh_log_load(&model, MESH_LOG_PATH);
 	sess.event = cli_event;
 	try_connect();
 	t0 = t_try = now_ms();
@@ -454,6 +490,8 @@ static int run_cli(const char *arg) {
 			out = mesh_session_send_text(&sess, to, (uint8_t)ch, text,
 				(uint32_t)strlen(text));
 			if (!out) { puts("mesh: the node would not take the message"); rc = 1; break; }
+			if (z_rtc_valid()) out->rx_time = z_rtc_seconds();
+			mesh_app_sent(out);
 			t_sent = t;
 			print_msg(out);
 		}

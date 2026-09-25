@@ -78,6 +78,9 @@ bool mesh_view_in_cur(const mesh_view_t *v, const mesh_model_t *m,
 
 uint32_t mesh_view_unread_total(const mesh_view_t *v);
 
+// Everything read: after loading the history.
+void mesh_view_mark_read(mesh_view_t *v);
+
 // -- word wrap --
 
 // Lines of at most `cols` columns (CJK counts two) from UTF-8 `s`,

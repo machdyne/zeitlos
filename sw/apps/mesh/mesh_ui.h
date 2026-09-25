@@ -42,4 +42,11 @@ void mesh_ui_flush(void);
 
 void mesh_ui_close(void);
 
+// A line for the status bar, shown for a few seconds.
+void mesh_ui_notice(const char *s);
+
+// Implemented by the caller (mesh.c): the window just sent a message.
+// It is in the model; this is for the history on the card.
+void mesh_app_sent(mesh_msg_t *g);
+
 #endif

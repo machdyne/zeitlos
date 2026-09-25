@@ -28,9 +28,11 @@ reconsidered before it starts.
 - [Model](#model)
 - [Phase 3, as built](#phase-3-as-built)
 - [Phase 4, as built](#phase-4-as-built)
+- [History](#history)
 - [User interface](#user-interface)
 - [Risks](#risks)
 - [Phase plan](#phase-plan)
+- [Hardware test: history](#hardware-test-history)
 - [Hardware test: phase 4](#hardware-test-phase-4)
 - [Hardware test: phase 3](#hardware-test-phase-3)
 - [Hardware test: phases 0 and 1](#hardware-test-phases-0-and-1)
@@ -393,6 +395,63 @@ once.
 which phase 4 drops) plus 46 KB of static data. The core itself is
 about 9 KB.
 
+## History
+
+Every message -- received, or sent from the window or the command line
+-- is appended to **`/user/mesh.log`**, and every later change in a
+sent one's status after it (`sent`, `delivered`, failed and why). On
+start, `mesh` reads the end of that file back, so the window opens on
+the conversations as they were. `mesh_log.c` is the format, `mesh_log_io.c`
+the file.
+
+The file is **plain text**, one record per line, tab-separated, so it
+can be read with `cat` and repaired with a text editor:
+
+    # mesh log v1
+    M  1758800100  db29e314  ffffffff  0  6a3b90c1  0  0  anyone near the river?
+    M  1758800160  849b6ba0  11223344  0  1f00a2b3  1  0  yes, east bank
+    S  1f00a2b3  3  0
+
+(tabs shown as spaces). `M` is a message: time (epoch seconds; the
+node's, or ours when the node's clock is not set), from, to (`ffffffff`
+for a channel), channel, packet id, status (0 received, 1 sending,
+2 sent, 3 delivered, 4 failed, 5 sent with no relay heard), error, and
+the text with `\t`, `\n` and `\\` escaped. `S` is a status change for
+the most recent `M` with that id. Node numbers and ids are 8 hex
+digits, as the Meshtastic apps show them.
+
+Decisions worth knowing:
+
+- **Every write opens, appends and closes.** FatFs commits on close, so
+  a record that was written is on the card; switching off between
+  messages loses nothing. A few milliseconds per message is nothing at
+  LoRa rates.
+- **Loading is bounded.** Only the last 64 KB is read, however large the
+  file, and only the newest 96 messages are held -- the model's ring.
+  Starting mid-file, the partial first line is skipped, not counted as
+  damage.
+- **It cannot fill the card.** Past 256 KB the file is rewritten as just
+  the messages held in memory. No big buffer is needed for that (the
+  process has a 16 KB heap): the records are streamed out one by one.
+- **A damaged line costs that line.** Anything that does not parse is
+  skipped: a card pulled mid-write loses the record being written. Text
+  read back is cleaned exactly as text off the air is, since a
+  hand-edited file is no more trustworthy than a radio.
+- **What was `sending` when mesh stopped is loaded as `sent, no relay
+  heard`**: its ack can never arrive now.
+- **History is never unread.** Conversations in it are ordered by their
+  activity, but nothing loaded counts as new.
+- **Duplicates.** The ids are in the file, so a packet the node replays
+  after a restart (one it queued while no client was attached) is
+  recognised as already held.
+- **No card, or a read-only one**, and `mesh` says once, in the status
+  bar, that history is not being saved -- and carries on.
+
+`tests/test_log.c` (36 checks): every field round-trips, any chunking,
+the worst-case line (233 backslashes) fits and reads back, status
+records, and a stream with garbage, an overlong line and a missing final
+newline around good records.
+
 ## User interface
 
 A resizable wm window, keyboard-first, 1bpp like everything else here:
@@ -585,10 +644,22 @@ this document.
 | 2 | `zpb` codec and framer -- **done** (`make test` in `sw/apps/mesh`: 51 + 26 checks, also under ASan/UBSan with `make test_asan`) | host tests green: spec vectors, round trips, malformed and random input stays in bounds, resynchronisation after every kind of damage. Decoding *captured* frames moves to phase 3, which is where their meaning is |
 | 3 | `mesh` core, headless -- **done off hardware** (86 host checks; wire format checked against the reference runtime) | connect, full dump, send and receive a channel message and a DM with a phone on the mesh, delivery status from ROUTING_APP, heartbeat, reconnect after node reboot -- all traced on the console (UART0); zero resyncs on a large dump |
 | 4 | `mesh` window -- **done off hardware** (45 view checks; seven states rendered with `make render`) | the UI above; unread counts; log view; captions |
-| 5 | Extras | message history on the sdcard; node positions and distance; battery/telemetry; TCP transport through `net` for a node on WiFi; setting our own names through AdminMessage |
+| 5 | Extras -- **started**: message history on the card (done off hardware, see [History](#history)) | message history on the sdcard; node positions and distance; battery/telemetry; TCP transport through `net` for a node on WiFi; setting our own names through AdminMessage |
 
 Phases 1 and 2 do not depend on each other and can land in either
 order. Phase 4 can start as soon as phase 3's model is fixed.
+
+## Hardware test: history
+
+1. `run mesh`; send a message or two. Close it, open it again: the same
+   conversations and messages are there, with their statuses, and
+   nothing is marked unread.
+2. `cat /user/mesh.log` (or open it in `text`): one line per message,
+   `S` lines after sent ones.
+3. `run mesh send hello` from the shell, then open the window: that
+   message is in the history too.
+4. With no card in (or a read-only one): the status bar says history is
+   not being saved, once; everything else works.
 
 ## Hardware test: phase 4
 

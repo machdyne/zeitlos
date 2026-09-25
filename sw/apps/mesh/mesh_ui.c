@@ -596,6 +596,7 @@ static void send_line(void) {
 	}
 	if (!epoch_ok(g->rx_time)) g->rx_time = now_epoch();
 	mesh_view_note(&V, M, g);
+	mesh_app_sent(g);
 	mesh_input_clear(&IN);
 	in_start = 0;
 	scroll = 0;
@@ -690,12 +691,19 @@ static void on_mouse(uint32_t packed) {
 
 // -- entry points --
 
+void mesh_ui_notice(const char *s) { say(s); }
+
 bool mesh_ui_open(mesh_model_t *m, mesh_session_t *s) {
 	char v[64];
+	uint32_t i;
 	M = m;
 	S = s;
 	mesh_view_init(&V);
 	mesh_input_clear(&IN);
+	// History loaded from the card: its conversations are active, but
+	// nothing in it is new.
+	for (i = 0; i < M->msg_count; i++) mesh_view_note(&V, M, mesh_msg_at(M, i));
+	mesh_view_mark_read(&V);
 	if (z_win_create_flags(&win, "mesh", WIN_W, WIN_H, -1, -1,
 		Z_WIN_FLAG_CLOSE_ICON | Z_WIN_FLAG_RESIZABLE) != Z_OK)
 		return false;

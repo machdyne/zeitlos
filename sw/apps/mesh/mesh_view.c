@@ -160,6 +160,13 @@ void mesh_view_select(mesh_view_t *v, int i) {
 	}
 }
 
+void mesh_view_mark_read(mesh_view_t *v) {
+	int i;
+	for (i = 0; i < MESH_MAX_CHANNELS; i++) v->chan_unread[i] = 0;
+	for (i = 0; i < MESH_DM_TRACK; i++) v->dm[i].unread = 0;
+	for (i = 0; i < v->nconv; i++) v->conv[i].unread = 0;
+}
+
 uint32_t mesh_view_unread_total(const mesh_view_t *v) {
 	uint32_t t = 0;
 	int i;

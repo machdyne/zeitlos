@@ -23,6 +23,7 @@
 // -- stubs --
 
 uint32_t mesh_ui_host_clock(void) { return 1758800400u; }	// 2026-09-25 11:40 UTC
+void mesh_app_sent(mesh_msg_t *g) { (void)g; }
 bool z_caption_show(const char *s, uint32_t o) { (void)s; (void)o; return true; }
 bool z_cfg_get(const char *key, char *out, size_t len) {
 	(void)key;
