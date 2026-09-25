@@ -29,10 +29,10 @@ to reboot the FPGA into something else, **PROGRAMN is the only
 mechanism**, and it requires the pin to be routed back to the FPGA's own
 IO so that logic inside can pull it low.
 
-On Lakritz, Obst and Mozart ML1 it is -- `M8`, confirmed -- and that is
-not incidental: it is how the DFU bootloader hands off, so the hard
-prerequisite for everything below is satisfied on shipping hardware.
-The other boards in this tree (Mozart ML2, Sergei, ULX3S) are
+On Lakritz, Obst, Mozart ML1 and Mozart ML2 it is -- `M8`, confirmed --
+and that is not incidental: it is how the DFU bootloader hands off, so
+the hard prerequisite for everything below is satisfied on shipping
+hardware. The other boards in this tree (Sergei, ULX3S) are
 unconfirmed, and build without it (section 6).
 
 ---
@@ -469,13 +469,13 @@ all, and it is the first step because it exercises the risky half in
 isolation: a misrouted pin is a board that does not come back, and it is
 better found while the flash is untouched.
 
-**The pin.** `M8` on Lakritz, Obst and Mozart ML1, wired to PROGRAMN on
-each, as the DFU bootloader drives it. `rtl/boards.vh` defines
-`PROGRAMN_PIN` for exactly those three; `rtl/sysctl.v` then has an
+**The pin.** `M8` on Lakritz, Obst, Mozart ML1 and Mozart ML2, wired to
+PROGRAMN on each, as the DFU bootloader drives it. `rtl/boards.vh`
+defines `PROGRAMN_PIN` for exactly those four; `rtl/sysctl.v` then has an
 `inout PROGRAMN` port, driven open-drain through a `BB` -- a hard 0 when
 asked, tri-state otherwise, tri-state from power-on. Boards whose site
-has not been confirmed (Mozart ML2, Sergei, ULX3S) do not define it and
-build exactly as before.
+has not been confirmed (Sergei, ULX3S) do not define it and build
+exactly as before.
 
 **The register.** `rtl/socctl.v` word 6, `RECONFIG`, at `0x7000_0218`.
 Writing the key `0x5A52_4254` ("ZRBT") as one whole-word store pulls

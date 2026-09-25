@@ -4,6 +4,17 @@ PREFIX ?= $(RISCV_PREFIX)
 # picolibc's specs would drag its headers in too, and bios.c has its
 # own globals called stdin/stdout that then collide with them.
 CFLAGS=-DBOARD_$(BOARD) -DFPGA_$(FAMILY) $(ARCH_DEFS)
+
+# DDR3 boards build a minimal BIOS (bios.c, BIOS_DDR3): logo, training,
+# boot. The monitor is still in the source but nothing calls it, and
+# without section garbage collection it would still take the space the
+# training needs. bios.lds KEEPs .init, which holds the reset vector
+# and is the only thing that reaches main() and irq(); with nothing
+# kept the linker may discard all of it. KEEP is a no-op for every
+# other board, whose BIOS is byte-identical with or without it.
+ifneq ($(filter MOZART_ML2,$(BOARD)),)
+CFLAGS += -ffunction-sections -fdata-sections -Wl,--gc-sections
+endif
 # ARCH/ABI come from one place -- see that file for why
 include ../common/arch.mk
 ABI=ilp32

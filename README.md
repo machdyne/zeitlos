@@ -20,7 +20,7 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 | MPU | [Memory protection unit](docs/mpu.md) and crash reporting |
 | Cache | Optional [instruction cache](docs/icache.md), or unified instruction + [data cache](docs/dcache.md) with write buffer and SDRAM burst fills |
 | Bus | 32-bit Wishbone |
-| Main Memory | SDRAM, PSRAM or SRAM (1MB minimum) |
+| Main Memory | SDRAM, [DDR3](docs/ddr3.md), PSRAM or SRAM (1MB minimum) |
 | Framebuffer | 640x480x1bpp (monochrome; white, amber, green or paper -- [socctl](docs/socctl.md)) |
 | Viewport | Optional 320x240 pixel-doubled [viewport](docs/game_mode.md) |
 | Video | VGA, DVI, DVI over HDMI, [composite](docs/composite.md) NTSC and PAL |
@@ -145,6 +145,7 @@ The following boards are fully supported:
  - [Machdyne Obst](https://github.com/machdyne/obst) (see [DFU upgrade docs](docs/dfu_upgrade.md))
  - [Machdyne Lakritz](https://github.com/machdyne/lakritz) (see [DFU upgrade docs](docs/dfu_upgrade.md))
  - [Machdyne Mozart](https://github.com/machdyne/mozart) / [ML1](https://github.com/machdyne/sechzig)
+ - [Machdyne Mozart](https://github.com/machdyne/mozart) / ML2 -- DDR3 main memory (see [docs/ddr3.md](docs/ddr3.md))
  - [Machdyne Sergei](https://github.com/machdyne/sergei) / [ML1](https://github.com/machdyne/sechzig)
  - [Radiona ULX3S](https://radiona.org/ulx3s/) (85F tested, see [docs/ulx3s.md](docs/ulx3s.md))
  - (more soon)

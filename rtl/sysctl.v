@@ -354,6 +354,22 @@ module sysctl #()
 	output sdram_clock,
 `endif
 
+`ifdef MEM_DDR3
+	output [15:0] ddr3_a,
+	output [2:0] ddr3_ba,
+	output ddr3_ras_n,
+	output ddr3_cas_n,
+	output ddr3_we_n,
+	output ddr3_cs_n,
+	output ddr3_cke,
+	output ddr3_odt,
+	output ddr3_reset_n,
+	output [1:0] ddr3_dm,
+	inout [15:0] ddr3_dq,
+	inout [1:0] ddr3_dqs_p,
+	output ddr3_clk_p,
+`endif
+
 `ifdef MEM_QQSPI
 `ifndef MEM_QQSPI_SINGLE
 	output QQSPI_CS1, QQSPI_CS0,
@@ -509,11 +525,28 @@ module sysctl #()
 	assign clk25mhz = CLK_25;
 `endif
 
+`ifdef MEM_DDR3
+	// On a DDR3 board the system clock is divided from the DDR edge
+	// clock, so the PHY's two halves are phase-locked by construction.
+	// It is driven by ddr3_clk below. See rtl/mem/ddr3_clk.v.
+	wire sys_clk;
+	wire ddr3_eclk, ddr3_ddrdel, ddr3_pause, ddr3_phy_ready;
+	wire ddr3_phy_rst;
+	wire ddr3_pll_locked;
+`else
 	wire sys_clk = clk48mhz;
+`endif
 
 `ifdef ECP5
 
+`ifdef MEM_DDR3
+	// sys_clk comes from the DDR3 PLL on these boards, so the reset
+	// counter below cannot run -- and must not release -- until that
+	// PLL has locked too.
+	wire pll_locked = pll0_locked && pll1_locked && ddr3_pll_locked;
+`else
 	wire pll_locked = pll0_locked && pll1_locked;
+`endif
 	wire pll0_locked;
 	wire pll1_locked;
 
@@ -870,6 +903,9 @@ module sysctl #()
 	wire [27:0] wbm_adr_sel = (wbm_adr & 32'h0fff_ffff);
 	wire [25:0] wbm_adr_sel_word = wbm_adr_sel[27:2];
 
+	// Word address within a 16MB device slot (the 0x6 region).
+	wire [21:0] wbm_adr_dev_word = wbm_adr[23:2];
+
 	wire [27:0] wbm_vram_adr_sel = wbm_vram_adr - 32'h2000_0000; // subtract base addr
 	wire [25:0] wbm_vram_adr_sel_word = wbm_vram_adr_sel[27:2];
 
@@ -926,6 +962,12 @@ module sysctl #()
 	wire cs_sram = ((wbm_adr & 32'hf000_0000) == 32'h4000_0000);
 `elsif MEM_SDRAM
 	wire cs_sdram = ((wbm_adr & 32'hf000_0000) == 32'h4000_0000);
+`elsif MEM_DDR3
+	// 512MB: 0x4000_0000 to 0x5fff_ffff. 0x5000_0000 was spieth, now
+	// at 0x6100_0000 beside the other Ethernet controller. On a smaller part the upper addresses alias the
+	// lower ones, which is harmless because MEM tells the OS how much
+	// there really is.
+	wire cs_ddr3 = ((wbm_adr & 32'he000_0000) == 32'h4000_0000);
 `elsif MEM_QQSPI
 	wire cs_qqspi = ((wbm_adr & 32'hf000_0000) == 32'h4000_0000);
 `endif
@@ -1017,10 +1059,27 @@ module sysctl #()
 	wire cs_glyph = ((wbm_adr & 32'hf000_0000) == 32'h3000_0000);
 `endif
 `ifdef SPI_ETH
-	wire cs_spieth = ((wbm_adr & 32'hf000_0000) == 32'h5000_0000);
+	wire cs_spieth = ((wbm_adr & 32'hff00_0000) == 32'h6100_0000);
 `endif
 `ifdef ETH_RMII
-	wire cs_ethmac = ((wbm_adr & 32'hf000_0000) == 32'h6000_0000);
+	// 0x6000_0000: Ethernet controllers, one per 16MB slot.
+	//
+	//   0x6000_0000  ethmac   RMII MAC (rtl/ethmac_rmii.v)
+	//   0x6100_0000  spieth   ENC28J60 SPI master (rtl/spim.v), moved
+	//                         from 0x5000_0000 so DDR3 main memory
+	//                         can take 0x4000_0000-0x5fff_ffff
+	//
+	// Both drivers are apps, and nibble 6 is in the MPU's default app
+	// mask, so the two share one app-accessible region (docs/mpu.md).
+	//
+	// ethmac used to decode the WHOLE region. Each now decodes its own
+	// slot and receives its address relative to that slot
+	// (wbm_adr_dev_word): both modules compare their register numbers
+	// against the full address they are given, so an address relative
+	// to the 256MB region would reach no register in any slot but the
+	// first. For ethmac, in slot 0, the two are identical across its
+	// whole window (registers, and RX/TX buffers ending below 0x1200).
+	wire cs_ethmac = ((wbm_adr & 32'hff00_0000) == 32'h6000_0000);
 `endif
 	// CSRs (rtl/csrs.v) -- always decoded, no `ifdef guard, unlike
 	// every peripheral above/below this line -- see csrs.v's own
@@ -1144,8 +1203,16 @@ module sysctl #()
 	wire cs_montmul = ((wbm_adr & 32'hf000_0700) == 32'h7000_0600);
 	wire wbm_cyc_montmul = cs_montmul && wbm_cyc;
 `endif
+`ifdef MEM_DDR3
+	// DDR3 status and tuning: the eighth 0x700 tenant.
+	wire cs_ddr3reg = ((wbm_adr & 32'hf000_0700) == 32'h7000_0700);
+	wire wbm_cyc_ddr3reg = cs_ddr3reg && wbm_cyc;
+`endif
 	wire cs_csrs = ((wbm_adr & 32'hf000_0000) == 32'h7000_0000)
 		&& !cs_socctl
+`ifdef MEM_DDR3
+		&& !cs_ddr3reg
+`endif
 `ifdef ICACHE
 `endif
 `ifdef RTC
@@ -1229,6 +1296,8 @@ module sysctl #()
 		({32{cs_sram}} & wbs_sram_dat_o) |
 `elsif MEM_SDRAM
 		({32{cs_sdram}} & wbs_sdram_dat_o) |
+`elsif MEM_DDR3
+		({32{cs_ddr3}} & wbs_ddr3_dat_o) |
 `elsif MEM_QQSPI
 		({32{cs_qqspi}} & wbs_qqspi_dat_o) |
 `endif
@@ -1294,6 +1363,9 @@ module sysctl #()
 `ifdef MONTMUL
 		({32{cs_montmul}} & wbs_montmul_dat_o) |
 `endif
+`endif
+`ifdef MEM_DDR3
+		({32{cs_ddr3reg}} & wbs_ddr3reg_dat_o) |
 `endif
 `ifdef AUDIO
 		({32{cs_audio}} & wbs_audio_dat_o) |
@@ -1371,6 +1443,8 @@ module sysctl #()
 		(cs_sram & wbs_sram_ack_o) |
 `elsif MEM_SDRAM
 		(cs_sdram & wbs_sdram_ack_o) |
+`elsif MEM_DDR3
+		(cs_ddr3 & wbs_ddr3_ack_o) |
 `elsif MEM_QQSPI
 		(cs_qqspi & wbs_qqspi_ack_o) |
 `endif
@@ -1436,6 +1510,9 @@ module sysctl #()
 `ifdef MONTMUL
 		(cs_montmul & wbs_montmul_ack_o) |
 `endif
+`endif
+`ifdef MEM_DDR3
+		(cs_ddr3reg & wbs_ddr3reg_ack_o) |
 `endif
 `ifdef AUDIO
 		(cs_audio & wbs_audio_ack_o) |
@@ -2200,6 +2277,74 @@ module sysctl #()
 	);
 `endif
 
+`ifdef MEM_DDR3
+	// WISHBONE SLAVE: DDR3 (MAIN MEMORY)
+
+	ddr3_clk ddr3_clk_i (
+		.clk48_i(clk48mhz),
+		.rst_i(1'b0),
+		.sys_clk_o(sys_clk),
+		.eclk_o(ddr3_eclk),
+		.ddrdel_o(ddr3_ddrdel),
+		.pause_o(ddr3_pause),
+		.phy_rst_o(ddr3_phy_rst),
+		.ready_o(ddr3_phy_ready),
+		.locked_o(ddr3_pll_locked)
+	);
+
+	wire wbm_cyc_ddr3 = cs_ddr3 && wbm_cyc;
+	wire [31:0] wbs_ddr3_dat_o;
+	wire wbs_ddr3_ack_o;
+	wire [31:0] wbs_ddr3reg_dat_o;
+	wire wbs_ddr3reg_ack_o;
+
+	ddr3 #(
+		// Per part, from rtl/boards.vh.
+		.ROW_BITS(`DDR3_ROW_BITS),
+		.TRFC_NS(`DDR3_TRFC_NS)
+	) ddr3_i (
+		.clk_i(wbm_clk),
+		.rst_i(wbm_rst),
+
+		.eclk_i(ddr3_eclk),
+		.ddrdel_i(ddr3_ddrdel),
+		.pause_i(ddr3_pause),
+		.phy_rst_i(ddr3_phy_rst),
+		.phy_ready_i(ddr3_phy_ready),
+		.pll_locked_i(ddr3_pll_locked),
+
+		// A WORD address across the 512MB window: the controller's
+		// map puts the word within its 16-byte block in bits [1:0].
+		// wbm_adr_sel_word is only 256MB wide, which is why this is
+		// taken from the bus address directly.
+		.wb_adr_i(wbm_adr[28:2]),
+		.wb_dat_i(wbm_dat_o),
+		.wb_dat_o(wbs_ddr3_dat_o),
+		.wb_we_i(wbm_we),
+		.wb_sel_i(wbm_sel),
+		.wb_stb_i(wbm_stb),
+		.wb_cyc_i(wbm_cyc_ddr3),
+		.wb_ack_o(wbs_ddr3_ack_o),
+
+		.reg_adr_i(wbm_adr_sel_word[1:0]),
+		.reg_dat_i(wbm_dat_o),
+		.reg_dat_o(wbs_ddr3reg_dat_o),
+		.reg_we_i(wbm_we),
+		.reg_stb_i(wbm_stb),
+		.reg_cyc_i(wbm_cyc_ddr3reg),
+		.reg_ack_o(wbs_ddr3reg_ack_o),
+
+		.ddr3_a(ddr3_a), .ddr3_ba(ddr3_ba),
+		.ddr3_ras_n(ddr3_ras_n), .ddr3_cas_n(ddr3_cas_n),
+		.ddr3_we_n(ddr3_we_n), .ddr3_cs_n(ddr3_cs_n),
+		.ddr3_cke(ddr3_cke), .ddr3_odt(ddr3_odt),
+		.ddr3_reset_n(ddr3_reset_n),
+		.ddr3_dm(ddr3_dm), .ddr3_dq(ddr3_dq),
+		.ddr3_dqs_p(ddr3_dqs_p), .ddr3_clk_p(ddr3_clk_p)
+	);
+
+`endif
+
 	// WISHBONE SLAVE: DUAL-PORT VRAM (FRAMEBUFFER) [DEDICATED BUS]
 `ifdef MEM_VRAM
 	reg [15:0] gb_adr;
@@ -2679,7 +2824,7 @@ module sysctl #()
 	(
 		.wb_clk_i(wbm_clk),
 		.wb_rst_i(wbm_rst),
-		.wb_adr_i(wbm_adr_sel_word),
+		.wb_adr_i({10'd0, wbm_adr_dev_word}),   // relative to its slot
 		.wb_dat_i(wbm_dat_o),
 		.wb_dat_o(wbs_spieth_dat_o),
 		.wb_we_i(wbm_we),
@@ -2733,7 +2878,7 @@ module sysctl #()
 	(
 		.wb_clk_i(wbm_clk),
 		.wb_rst_i(wbm_rst),
-		.wb_adr_i(wbm_adr_sel_word),
+		.wb_adr_i({10'd0, wbm_adr_dev_word}),   // relative to its slot
 		.wb_dat_i(wbm_dat_o),
 		.wb_dat_o(wbs_ethmac_dat_o),
 		.wb_we_i(wbm_we),

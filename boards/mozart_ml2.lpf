@@ -246,3 +246,14 @@ LOCATE COMP "ddr3_dqs_p[1]" SITE "G16";
 IOBUF PORT "ddr3_dqs_p[1]" IO_TYPE=SSTL135D_I TERMINATION=OFF DIFFRESISTOR=100 SLEWRATE=FAST;
 LOCATE COMP "ddr3_clk_p" SITE "C16";
 IOBUF PORT "ddr3_clk_p" IO_TYPE=SSTL135D_I SLEWRATE=FAST;
+
+# PROGRAMN, routed back to a user pin: rtl/sysctl.v pulls it low (open
+# drain) to reconfigure the FPGA -- `reboot`, docs/zboot.md. M8 is
+# wired to PROGRAMN on this module.
+LOCATE COMP "PROGRAMN" SITE "M8";
+# Open drain: the pad only ever pulls low, and "1" leaves it released,
+# so no design built for this board -- Zeitlos, a jumploader, user
+# gateware returning to Zeitlos -- can ever drive PROGRAMN high against
+# a reset button pulling it low. (Zeitlos's own driver, a BB with its T
+# input, and a jumploader, which only drives 0, work as before.)
+IOBUF PORT "PROGRAMN" IO_TYPE=LVCMOS33 OPENDRAIN=ON;

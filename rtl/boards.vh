@@ -371,7 +371,7 @@
 `define FPGA_ECP5
 // PROGRAMN is wired to user pin M8 (boards/*.lpf): rtl/socctl.v's
 // RECONFIG, `reboot`, docs/zboot.md. Confirmed for Lakritz, Obst and
-// Mozart ML1; boards whose site is not confirmed do not define it.
+// Mozart ML1 and ML2; boards whose site is not confirmed do not define it.
 `define PROGRAMN_PIN
 `define OSC48
 `define MEM 1				// note that some Obst boards have 2MB SRAM
@@ -485,7 +485,7 @@
 `define FPGA_ECP5
 // PROGRAMN is wired to user pin M8 (boards/*.lpf): rtl/socctl.v's
 // RECONFIG, `reboot`, docs/zboot.md. Confirmed for Lakritz, Obst and
-// Mozart ML1; boards whose site is not confirmed do not define it.
+// Mozart ML1 and ML2; boards whose site is not confirmed do not define it.
 `define PROGRAMN_PIN
 `define OSC48
 `define MEM 32
@@ -596,7 +596,7 @@
 `define FPGA_ECP5
 // PROGRAMN is wired to user pin M8 (boards/*.lpf): rtl/socctl.v's
 // RECONFIG, `reboot`, docs/zboot.md. Confirmed for Lakritz, Obst and
-// Mozart ML1; boards whose site is not confirmed do not define it.
+// Mozart ML1 and ML2; boards whose site is not confirmed do not define it.
 `define PROGRAMN_PIN
 `define OSC48
 `define MEM 32
@@ -619,6 +619,81 @@
 `define DCACHE_LINE_WORDS 4
 `define DCACHE_WBUF 2
 `define SDRAM_BURST
+`define GPU
+`define GPU_RASTER
+`define GPU_BLIT
+`define GPU_CURSOR
+`define GPU_DDMI
+`define UART0
+// USB host controller (rtl/usb/, docs/usb_host.md) instead of the
+// low-speed HID-only rtl/ext/usb_hid_host. Both cores remain
+// supported and USB_HID is still the default on every other board --
+// see rtl/sysctl.v, where USB_HOST `undef's USB_HID because the two
+// are two cores for the same two pins.
+`define USB_HOST
+`define SPI_SDCARD
+`define ETH_RMII
+// See the note on ETH_RX_SLOTS under BOARD_SERGEI_ML1.
+`define ETH_RX_SLOTS 4
+`define AUDIO
+`define AUDIO_PT8211
+`define AUDIO_MIXER
+
+// Built-in logic analyser (rtl/probe.v). Watching USB host port 0's
+// D+/D- by default -- see the probe instantiation in rtl/sysctl.v for
+// what it is wired to and what triggers it.
+//
+// One DP16KD and ~100 LUT4. This is a 45F, so both are affordable;
+// take it back out once USB bring-up is done.
+//`define PROBE
+//`define PROBE_WORDS 512
+//`define PROBE_AW 9
+
+`elsif BOARD_MOZART_ML2
+
+`define FPGA_ECP5
+// PROGRAMN on M8, as on ML1 (boards/mozart_ml2.lpf).
+`define PROGRAMN_PIN
+`define OSC48
+`define MEM 256
+// DDR3 (rtl/mem/ddr3*.v, docs/ddr3.md). The part decides two things,
+// from its datasheet -- all three candidates are x16, 8 banks, 10
+// column bits:
+//
+//   MT41K64M16TW-107:J    1Gb  128MB  13 row bits  tRFC 110ns
+//   MT41K128M16JT-125:K   2Gb  256MB  14 row bits  tRFC 160ns
+//   MT41K256M16TW-107:P   4Gb  512MB  15 row bits  tRFC 260ns
+//
+// tRFC MUST match the density: the 1Gb value on a 4Gb part issues
+// commands to a DRAM still refreshing, and the corruption that
+// follows is intermittent and looks like a tuning problem.
+//
+// ML2 carries the 4Gb part, all of it decoded (0x4000_0000 to
+// 0x5fff_ffff; spieth moved to 0x6100_0000 to make room).
+//
+// MEM stays 256 for now. The data cache treats only 0x4xxx_xxxx as
+// main memory and its tags stop at address bit 27, so the upper 256MB
+// is UNCACHED: correct, but slow for anything the OS placed there.
+// Widening the cache's main-memory test to 0x5 WITHOUT widening its
+// tags by a bit would make 0x4000_0000 and 0x5000_0000 share lines and
+// return each other's data. Raise MEM to 512 together with that.
+`define MEM_DDR3
+`define DDR3_ROW_BITS 15
+`define DDR3_TRFC_NS 260
+`define MEM_VRAM
+`define MEM_ROM
+`define MEM_GLYPH
+`define ICACHE
+`define MONTMUL
+`define ICACHE_KB 8
+`define ICACHE_LINE_WORDS 4
+// Data cache: rtl/cache_id.v's unified wb_cache replaces wb_icache
+// (docs/dcache.md). Comment out DCACHE to get the I-cache-only build
+// back exactly; comment out ICACHE as well for no cache at all.
+`define DCACHE
+`define DCACHE_KB 4
+`define DCACHE_LINE_WORDS 4
+`define DCACHE_WBUF 2
 `define GPU
 `define GPU_RASTER
 `define GPU_BLIT

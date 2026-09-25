@@ -1,7 +1,7 @@
 SECTIONS {
 	.memory : {
 		. = 0x000000;
-		*(.init);
+		KEEP(*(.init));
 		*(.text);
 		*(*);
 		. = ALIGN(4);

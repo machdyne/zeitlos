@@ -29,6 +29,20 @@ def rtl_files(root, warn):
         if m:
             files = [w for w in m.group(1).replace("\\\n", " ").split()
                      if w.endswith(".v") or w.endswith(".sv")]
+        # Plus files a board block appends ("RTL_PICO += ..."): this
+        # tool reads every board's defines at once, so it has to see
+        # every board's sources. Mozart ML2 appends the DDR3 files there
+        # (they instantiate ECP5 DDR primitives no other family should
+        # read). Without them the tool could not tell those modules'
+        # inputs from their outputs, and reported an input port
+        # connection as a second driver of the net.
+        if files:
+            for a in re.finditer(r"^\s*RTL_PICO\s*\+=\s*((?:.*\\\n)*.*)$",
+                                 text, re.M):
+                for w in a.group(1).replace("\\\n", " ").split():
+                    if (w.endswith(".v") or w.endswith(".sv")) \
+                            and w not in files:
+                        files.append(w)
     if files:
         return files, "Makefile RTL_PICO"
     warn("could not read RTL_PICO from the Makefile; scanning rtl/ instead")

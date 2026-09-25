@@ -66,6 +66,16 @@
 #define MEM_VRAM			0x20000000
 #define MEM_VRAM_SIZE	(640 * 480) / 32
 #define MEM_MAIN			0x40000000
+
+// DDR3 boards build a MINIMAL BIOS: copy the logo, train the DDR3 read
+// path, load the OS, boot. Nothing else fits beside the training --
+// the BIOS has 2048 words and the full monitor uses 1984 of them.
+// Once training is settled it can move into gateware and the full
+// BIOS comes back; until then each training change is a BIOS rebuild
+// of seconds rather than a gateware build of many minutes.
+#if defined(BOARD_MOZART_ML2)
+#define BIOS_DDR3
+#endif
 // fallback only -- see get_mem_main_size() below, which is what
 // main()/cmd_toggle_addr_ptr() actually call. Matches Obst (the only
 // board this ever ran on before rtl/boards.vh's `MEM/rtl/csrs.v
@@ -484,6 +494,363 @@ void delay() {
 	}
 }
 
+#ifdef BIOS_DDR3
+
+// -- DDR3 read-path training --------------------------------------
+//
+// Registers: rtl/mem/ddr3.v.
+#define reg_ddr3_status (*(volatile uint32_t*)0x70000700)
+#define reg_ddr3_tune   (*(volatile uint32_t*)0x70000704)
+#define reg_ddr3_ctrl   (*(volatile uint32_t*)0x70000708)
+#define reg_dcache_ctrl (*(volatile uint32_t*)0x70000110)
+
+#define CTRL_HOLD_REFRESH 1
+#define CTRL_TRAIN_WRITES 4
+#define CTRL_RDBUF_OFF    8
+
+// Every training access goes to the DRAM. The first hardware scan
+// forgot the controller's own block register: the training write left
+// the block in it, every training read was answered from it, and every
+// setting passed -- the map was all 'f', sixteen offsets working
+// everywhere, while the real read path had never delivered a burst.
+#define CTRL_TRAINING (CTRL_TRAIN_WRITES | CTRL_RDBUF_OFF)
+
+// Every byte of the block different, so a beat, a byte or a lane in
+// the wrong place cannot pass. (A pattern whose halves match hides a
+// one-beat shift -- which is how two cancelling errors survived in
+// the controller's testbench.)
+static const uint32_t ddr3_pat[4] = {
+	0x04030201, 0x08070605, 0x0c0b0a09, 0x100f0e0d
+};
+
+// Per lane, per read phase, per gate: the offset that assembled the
+// lane correctly, 0xff for none, or 0xfe for MORE THAN ONE.
+//
+// A real read path assembles a lane at exactly one offset -- the
+// assembly testbench proves it. Two offsets passing in one cell means
+// the reads are not coming from the DRAM at all, so such a cell is
+// shown as '*' and never chosen. The trainer checks that its own
+// measurement reaches the hardware, instead of trusting it.
+static uint8_t ddr3_tbl[2][8][8];
+
+static uint32_t ddr3_tune_of(uint32_t wd, uint32_t rs, uint32_t g,
+	uint32_t o)
+{
+	return wd | (g << 4) | (g << 8) | (rs << 12) | (rs << 16)
+		| (o << 20) | (o << 24);
+}
+
+// Written through the training mode, which skips the read that
+// read-modify-write would otherwise need: four words in sequence
+// leave the block exactly right whatever the read path is doing.
+// Refresh runs while it happens, which also bounds how long refresh
+// is ever held -- DDR3 keeps data for 64ms without it.
+static void ddr3_write_pat(void)
+{
+	volatile uint32_t *m = (volatile uint32_t *)MEM_MAIN;
+	int i;
+	reg_ddr3_ctrl = CTRL_TRAINING;
+	for (i = 0; i < 4; i++) m[i] = ddr3_pat[i];
+	reg_ddr3_ctrl = CTRL_TRAINING | CTRL_HOLD_REFRESH;
+}
+
+// Both lanes scored separately, on their own bytes, so one lane
+// working is visible while the other is not. And twice: a value that
+// comes back identical is repeatable, which a stale capture that
+// happens to be right once is not.
+static uint32_t ddr3_score(void)
+{
+	volatile uint32_t *m = (volatile uint32_t *)MEM_MAIN;
+	uint32_t ok = 3, a, b;
+	int i;
+	for (i = 0; i < 4; i++) {
+		a = m[i];
+		b = m[i];
+		if (a != b) return 0;
+		if ((a & 0x00ff00ff) != (ddr3_pat[i] & 0x00ff00ff)) ok &= ~1;
+		if ((a & 0xff00ff00) != (ddr3_pat[i] & 0xff00ff00)) ok &= ~2;
+	}
+	return ok;
+}
+
+// Does the same offset work one read phase away? READCLKSEL is CIRCULAR:
+// stepping from phase 7 to phase 0 moves a whole cycle, and the gate
+// compensates by one. The first hardware map showed exactly that --
+// lane 1 working at r6 and r7 with gate 2, and at r0 with gate 3, same
+// offset -- so r7 was the centre of its window, while a test that only
+// looked at r6 and a nonexistent r8 called it an edge.
+static int ddr3_nb(int lane, int rs, int g, uint8_t v)
+{
+	if (rs < 0) { rs = 7; g--; }
+	if (rs > 7) { rs = 0; g++; }
+	if (g < 0 || g > 7) return 0;
+	return ddr3_tbl[lane][rs][g] == v;
+}
+
+// The cell with the most working neighbours in phase: 2 = centred.
+static int ddr3_pick(int lane, uint32_t *rs_o, uint32_t *g_o,
+	uint32_t *o_o)
+{
+	int rs, g, sc, best = -1;
+	uint8_t v;
+	for (rs = 0; rs < 8; rs++)
+		for (g = 0; g < 8; g++) {
+			v = ddr3_tbl[lane][rs][g];
+			if (v >= 0xfe) continue;
+			sc = ddr3_nb(lane, rs - 1, g, v) + ddr3_nb(lane, rs + 1, g, v);
+			if (sc > best) {
+				best = sc;
+				*rs_o = rs; *g_o = g; *o_o = v;
+			}
+		}
+	return best + 1;       // 0 none, 1 edge-only, 2 one side, 3 centred
+}
+
+// One lane's map: a row per read phase, a column per gate, the offset
+// that worked there or '.'.
+static void ddr3_map(int lane)
+{
+	int rs, g;
+	uint8_t v;
+	for (rs = 0; rs < 8; rs++) {
+		print(lane ? " L1 r" : " L0 r");
+		print_hex(rs, 1);
+		print(" ");
+		for (g = 0; g < 8; g++) {
+			v = ddr3_tbl[lane][rs][g];
+			if (v == 0xff) print(".");
+			else if (v == 0xfe) print("*");
+			else print_hex(v, 1);
+		}
+		print("\n");
+	}
+}
+
+// Where does the read gate catch the strobe?
+//
+// BURSTDET is set by each lane's DQSBUFM when the read gate catches a
+// DQS burst. It depends only on the READ command and the gate --
+// not on the data, and not on whether any write ever landed -- so it
+// answers the first question independently of every other one: is the
+// DRAM answering reads at all, and when?
+//
+// One read per cell; the PHY clears BURSTDET as each read is issued.
+// Each cell prints the lanes that saw a burst: 1 = lane 0, 2 = lane 1,
+// 3 = both. (Every read completes now -- data is captured a fixed time
+// after the command, as in LiteDRAM, not when DATAVALID says so -- so
+// completion no longer tells anything and is not shown.)
+static void ddr3_gatescan(void)
+{
+	volatile uint32_t *m = (volatile uint32_t *)MEM_MAIN;
+	uint32_t rs, g, st, d;
+
+	print("gate scan: burstdet, 1=L0 2=L1 3=both, row=rdclksel col=gate\n");
+	reg_ddr3_ctrl = CTRL_TRAINING | CTRL_HOLD_REFRESH;
+	for (rs = 0; rs < 8; rs++) {
+		print(" r");
+		print_hex(rs, 1);
+		print(" ");
+		for (g = 0; g < 8; g++) {
+			reg_ddr3_tune = ddr3_tune_of(3, rs, g, 4);
+			d = m[0];
+			(void)d;
+			st = reg_ddr3_status;
+			print_hex((st >> 4) & 3, 1);
+		}
+		print("\n");
+	}
+	reg_ddr3_ctrl = CTRL_TRAINING;
+}
+
+// When training finds nothing: what DOES come back? The first gate
+// where both lanes saw a burst, every offset, all four words -- the
+// shape of the wrong data says more than a pass/fail map can.
+static void ddr3_dump(void)
+{
+	volatile uint32_t *m = (volatile uint32_t *)MEM_MAIN;
+	uint32_t rs, g, o, i;
+
+	reg_ddr3_ctrl = CTRL_TRAINING | CTRL_HOLD_REFRESH;
+	for (rs = 0; rs < 8; rs++)
+		for (g = 0; g < 8; g++) {
+			reg_ddr3_tune = ddr3_tune_of(4, rs, g, 4);
+			(void)m[0];
+			if (((reg_ddr3_status >> 4) & 3) == 3) goto found;
+		}
+	print("no cell with a burst on both lanes\n");
+	reg_ddr3_ctrl = 0;
+	return;
+found:
+	// Write delay 4: LiteDRAM's position, and the only one that has
+	// worked here. The dump used 3, i.e. showed data written wrongly.
+	reg_ddr3_tune = ddr3_tune_of(4, rs, g, 4);
+	print("dump (wd4) at r");
+	print_hex(rs, 1);
+	print(" g");
+	print_hex(g, 1);
+	print(", want 04030201 08070605 0c0b0a09 100f0e0d\n");
+	ddr3_write_pat();
+	for (o = 0; o < 16; o++) {
+		reg_ddr3_tune = ddr3_tune_of(4, rs, g, o);
+		print(" o");
+		print_hex(o, 1);
+		for (i = 0; i < 4; i++) {
+			print(" ");
+			print_hex(m[i], 8);
+		}
+		print("\n");
+	}
+	reg_ddr3_ctrl = 0;
+}
+
+static int ddr3_train(void)
+{
+	volatile uint32_t *m = (volatile uint32_t *)MEM_MAIN;
+	uint32_t wd, rs, g, o, sc, n;
+	uint32_t rs0, g0, o0, rs1, g1, o1;
+	int p0, p1;
+
+	// The trainer must read DRAM, not a cache. D_CTRL resets to 0
+	// already; saying so here stops the trainer depending on a reset
+	// value that someone might one day change.
+	reg_dcache_ctrl = 0;
+
+	print("ddr3 ");
+	for (n = 0; n < 2000000 && !(reg_ddr3_status & 1); n++) ;
+	print_hex(reg_ddr3_status, 8);
+	if (!(reg_ddr3_status & 1)) {
+		print(" init timeout\n");
+		return 0;
+	}
+	print("\n");
+
+	// Always, before training: it is informative whether or not
+	// training then succeeds.
+	ddr3_gatescan();
+
+	for (wd = 0; wd < 8; wd++) {
+		for (rs = 0; rs < 8; rs++) {
+			reg_ddr3_tune = ddr3_tune_of(wd, 0, 0, 0);
+			ddr3_write_pat();
+			for (g = 0; g < 8; g++) {
+				ddr3_tbl[0][rs][g] = 0xff;
+				ddr3_tbl[1][rs][g] = 0xff;
+				for (o = 0; o < 16; o++) {
+					reg_ddr3_tune = ddr3_tune_of(wd, rs, g, o);
+					sc = ddr3_score();
+					if (sc & 1) ddr3_tbl[0][rs][g] =
+						ddr3_tbl[0][rs][g] == 0xff ? o : 0xfe;
+					if (sc & 2) ddr3_tbl[1][rs][g] =
+						ddr3_tbl[1][rs][g] == 0xff ? o : 0xfe;
+				}
+			}
+		}
+		p0 = ddr3_pick(0, &rs0, &g0, &o0);
+		p1 = ddr3_pick(1, &rs1, &g1, &o1);
+		if (p0 || p1) {
+			print("wd");
+			print_hex(wd, 1);
+			print("\n");
+			ddr3_map(0);
+			ddr3_map(1);
+		}
+		if (p0 && p1) break;
+	}
+
+	reg_ddr3_ctrl = 0;
+	if (wd == 8) {
+		print("ddr3 training FAILED\n");
+		ddr3_dump();
+		return 0;
+	}
+
+	reg_ddr3_tune = wd | (g0 << 4) | (g1 << 8) | (rs0 << 12)
+		| (rs1 << 16) | (o0 << 20) | (o1 << 24);
+	print("ddr3 tune ");
+	print_hex(reg_ddr3_tune, 8);
+	// Per lane: C = centred (works one phase either side), e = edge.
+	print(p0 == 3 ? " L0:C" : " L0:e");
+	print(p1 == 3 ? " L1:C\n" : " L1:e\n");
+
+	// Now through the normal path: read-modify-write, refresh on,
+	// a block the training never touched, a word and a single byte.
+	m[64] = 0xa5c3a5c3;
+	m[65] = 0x5a3c5a3c;
+	((volatile uint8_t *)MEM_MAIN)[64 * 4 + 1] = 0x77;
+	print("ddr3 check ");
+	print_hex(m[64], 8);
+	print(" ");
+	print_hex(m[65], 8);
+	if (m[64] != 0xa5c377c3 || m[65] != 0x5a3c5a3c) {
+		print(" FAILED\n");
+		return 0;
+	}
+	print(" ok\n");
+	return 1;
+}
+
+// Compare the loaded kernel with the ROM it came from, twice.
+//
+// The copy itself is robust -- each 16-byte block is written four times
+// and the last write carries all four words from the merge register --
+// so a mismatch here comes from READING BACK, which is what the OS does
+// with every instruction it fetches. Two passes: if they disagree, the
+// errors are read noise at a marginal setting, not wrong data stored.
+// "bits" is every bit that was ever wrong, so it names the lane: the
+// low byte of each half is lane 0 (00ff00ff), the high byte lane 1.
+static void ddr3_verify(void)
+{
+	volatile uint32_t *d = (volatile uint32_t *)MEM_MAIN;
+	volatile uint32_t *r = (volatile uint32_t *)ROM_OS_ADDR;
+	uint32_t i, a, b, e, x, first, pass;
+
+	for (pass = 0; pass < 2; pass++) {
+		e = 0; x = 0; first = 0;
+		for (i = 0; i < ROM_OS_SIZE / 4; i++) {
+			a = d[i];
+			b = r[i];
+			if (a != b) {
+				if (!e) first = i;
+				e++;
+				x |= a ^ b;
+			}
+		}
+		print("verify ");
+		print_hex(e, 8);
+		print(" bad words, bits ");
+		print_hex(x, 8);
+		if (e) {
+			print(", first @");
+			print_hex(first * 4, 8);
+			print(" got ");
+			print_hex(d[first], 8);
+			print(" want ");
+			print_hex(r[first], 8);
+		}
+		print("\n");
+	}
+}
+
+// Logo, training, OS. Returning from main boots: the startup code
+// jumps to MEM_MAIN (boot_picorv32.S).
+void main() {
+	reg_led = 0xff;
+	reg_mtu = 0x40000000;	// 0x8000_0000 will mirror 0x4000_0000
+
+	uart_init();
+	print("ZB\n");
+	bios_wordcpy(MEM_VRAM, ROM_LOGO_ADDR, ROM_LOGO_SIZE);
+
+	if (!ddr3_train()) {
+		print("main memory unusable -- not booting\n");
+		while (1) ;
+	}
+	load_zeitlos();
+	ddr3_verify();
+}
+
+#else
+
 void main() {
 
 	uint32_t ctr = 0;
@@ -632,3 +999,4 @@ void main() {
 	}
 
 }
+#endif  /* BIOS_DDR3 */

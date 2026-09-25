@@ -253,6 +253,26 @@ else ifeq ($(BOARD), mozart_ml1)
 	FLASH = openFPGALoader -v -c dirtyJtag -f
 	FLASH_OFFSET = -o
 	JUMP = 1
+else ifeq ($(BOARD), mozart_ml2)
+	FAMILY = ecp5
+	DEVICE = 45k
+	PACKAGE = CABGA256
+	LPF = mozart_ml2.lpf
+	PROG = openFPGALoader -c dirtyJtag
+	FLASH = openFPGALoader -v -c dirtyJtag -f
+	FLASH_OFFSET = -o
+	JUMP = 1
+	# DDR3 main memory (docs/ddr3.md). Only this board builds these:
+	# they instantiate ECP5 DDR primitives, which other families'
+	# synthesis has no business seeing.
+	RTL_PICO += \
+		rtl/clk/pll2.v \
+		rtl/mem/ddr3.v \
+		rtl/mem/ddr3_ctrl.v \
+		rtl/mem/ddr3_phy_ecp5.v \
+		rtl/mem/ddr3_rdasm.v \
+		rtl/mem/ddr3_clk.v \
+		rtl/mem/ddr3_phy_init.v
 else ifeq ($(BOARD), sergei_ml1)
 	FAMILY = ecp5
 	DEVICE = 45k

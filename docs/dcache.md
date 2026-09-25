@@ -38,7 +38,7 @@ the boards other than mozart_ml1 have not run it on hardware yet.
 - **Measured in simulation, over I-cache only: 1.19x on picorv32, 1.29x
   on zeitlos32** (with write buffer and SDRAM burst fills). Less than
   the proposal's estimate, for reasons given under
-  [Performance](#performance).
+  [Performance](#performance-simulation).
 - **Cost on mozart_ml1, placed and routed: +1,579 logic cells, +419
   FF, +3 DP16KD** for 4KB of data cache, a 2-entry write buffer and
   SDRAM burst reads. **Timing: 60.3 MHz against 48 MHz required** (the
@@ -97,6 +97,15 @@ way.
 
 **Only main memory (`0x4xxx_xxxx`) is cached.** Everything else,
 including BRAM, VRAM and every peripheral, bypasses.
+
+> **DDR3 boards decode main memory up to `0x5fff_ffff`** (512MB,
+> [ddr3.md](ddr3.md)), but `MEM` tells the OS 256MB, so nothing above
+> `0x4fff_ffff` is used yet. Before raising it: the tags here stop at
+> address bit 27 (`D_TAGB = 28 - D_TAGLSB`, likewise `I_TAGB`), so
+> widening `c_main` to take in `0x5` WITHOUT widening the tags by one
+> bit would make `0x4000_0000` and `0x5000_0000` share lines and
+> return each other's data. Left as it is, `0x5` is simply uncached --
+> correct, but slow.
 
 ### Data side
 

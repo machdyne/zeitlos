@@ -103,7 +103,15 @@ reconfigure key (`0x7000_0218`), and the MTU/MPU registers (nibble 9).
 
 **`MASK`** is 16 bits, one per address nibble (`0x0xxx_xxxx` to
 `0xFxxx_xxxx`). The kernel sets it to `0xF7FF`: everything except the SD
-card (nibble `0xB`), which only the kernel's filesystem may drive. So
+card (nibble `0xB`), which only the kernel's filesystem may drive.
+
+> **Nibble `0x6` holds both Ethernet controllers**, one 16MB slot
+> each: the RMII MAC at `0x6000_0000` and the ENC28J60 SPI Ethernet at
+> `0x6100_0000` (moved from `0x5000_0000` so DDR3 main memory could
+> take `0x4000_0000`-`0x5fff_ffff`; see [ddr3.md](ddr3.md#memory-map)).
+> Both drivers are apps (`sw/apps/net/rmii_eth.c`, `enc28j60.c`), and
+> nibble 6 is in the default mask, so they share one app-accessible
+> region -- while the sdcard keeps nibble `0xB` to itself. So
 apps keep nearly all the access they had; the mask is there to take a
 space away, or to widen what an app may use later, without new
 hardware.

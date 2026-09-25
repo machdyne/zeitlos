@@ -300,13 +300,17 @@ typedef uint32_t *(*z_kernel_ptr_t)(uint32_t, uint32_t *, uint32_t);
 // for the driver.
 // -- hardware SPI master for the ENC28J60 (rtl/spim.v) --
 //
+// At 0x6100_0000, beside the RMII MAC at 0x6000_0000: the Ethernet
+// region, one 16MB slot per controller. It was at 0x5000_0000, which
+// main memory now grows into (docs/ddr3.md).
+//
 // Same module and same register layout as the sdcard block above --
 // see rtl/spim.v. The divider defaults fast here because the ENC28J60,
 // unlike an sdcard, needs no slow initialisation phase.
-#define reg_spieth_data   (*(volatile uint32_t*)0x50000000)
-#define reg_spieth_status (*(volatile uint32_t*)0x50000004)
-#define reg_spieth_ctrl   (*(volatile uint32_t*)0x50000008)
-#define reg_spieth_magic  (*(volatile uint32_t*)0x5000000c)
+#define reg_spieth_data   (*(volatile uint32_t*)0x61000000)
+#define reg_spieth_status (*(volatile uint32_t*)0x61000004)
+#define reg_spieth_ctrl   (*(volatile uint32_t*)0x61000008)
+#define reg_spieth_magic  (*(volatile uint32_t*)0x6100000c)
 
 // STATUS bit 2: the chip's interrupt pin, active low. Readable so the
 // driver can check for a pending packet with one register read instead
@@ -325,7 +329,7 @@ typedef uint32_t *(*z_kernel_ptr_t)(uint32_t, uint32_t *, uint32_t);
 #define Z_SPIETH_DIV      1     // 12MHz; ENC28J60 SPI maximum is 20MHz
 
 // kept for compatibility with anything still poking the old register
-#define reg_eth (*(volatile uint32_t*)0x50000000)
+#define reg_eth (*(volatile uint32_t*)0x61000000)
 
 // RMII Ethernet MAC (rtl/ethmac_rmii.v): mozart_ml1, sergei_ml1, and
 // Lakritz with a Katze PMOD. Alternative to reg_eth (SPI ENC28J60) for
