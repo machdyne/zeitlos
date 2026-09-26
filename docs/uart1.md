@@ -205,7 +205,10 @@ window:
 `repl` sends `term` a `Z_TERM_SET_PORT` naming `serial0` with the baud
 rate as the CONNECT argument — the same mechanism `telnet` uses to hand
 a window to `net`, with a baud rate where telnet puts a target IP.
-**F12 disconnects**, back to term's start panel.
+**F12 disconnects**, back to term's start panel. A client killed
+without disconnecting is noticed within about a second and the port is
+free again (ports.md, "A peer that died"); it used to stay taken until
+a reboot.
 
 `port serial0` connects with no argument and gets whatever rate the
 port is already at, which is what you want after F12.

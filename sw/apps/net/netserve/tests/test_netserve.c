@@ -24,6 +24,8 @@
 #include "../../ssh/ssh_proto.h"
 #include "../../../../common/zkv.h"
 #include "authkeys_keys.h"
+#include "../../../../common/zproc.h"
+static uint32_t dead_pid;       /* a backend the test has "killed" */
 void fake_fs_authkeys(const char *t);
 extern bool fake_rng_secure;
 
@@ -138,6 +140,11 @@ static uint32_t *k_syscall(uint32_t id, uint32_t *args, uint32_t b) {
 		if (a->key && !strcmp(a->key, "apps.netserve.ssh_auth")) v = cfg_ssh_auth;
 		a->found = v != NULL;
 		if (v) snprintf(a->val, a->vallen, "%s", v);
+		return (uint32_t *)&k_ok;
+	}
+	case Z_SYS_PROC_STATUS: {
+		z_proc_status_args_t *a = (z_proc_status_args_t *)args;
+		a->state = (a->pid == dead_pid) ? Z_PROC_STATE_EXITED : Z_PROC_STATE_RUNNING;
 		return (uint32_t *)&k_ok;
 	}
 	case Z_SYS_KV: {
@@ -1032,6 +1039,97 @@ int main(void) {
 		ssh_pk_check(NULL, "phil", "rsa-sha2-256", RSA_BLOB, sizeof(RSA_BLOB));
 		CK(ak_reported == reported && ak_list.refused == 1, "a refused line is reported once, not at every login");
 		fake_fs_authkeys(NULL);
+	}
+
+	// -- 15. the backend dies without a CLOSE --
+	{
+		for (int i = 0; i < MAX_SESS; i++)
+			if (sess[i].state) deliver(NET, Z_PORT_CLOSE, (uint32_t)i + 1, z_obj_none());
+		steps(3); ticks += 6 * Z_TICK_HZ; steps(3);
+		repl_up = true;
+
+		// telnet
+		mark = nout;
+		int conn_mark = mark;
+		connect_from(15, 0xC0A80140, 23, true);
+		step();
+		uint32_t tc = out[find(NET, Z_PORT_CONNECTED, mark)].u32;
+		type(tc, "correct horse\r", 14);
+		steps(2);
+		deliver(REPL, Z_PORT_CONNECTED, 0, z_obj_uint32(6));
+		steps(2);
+		CK(sess[tc - 1].state == S_OPEN && sess[tc - 1].app.connected, "(a telnet session on repl)");
+		type(tc, "(loop)\r", 7);                     // sent, never acked: repl is about to die
+		steps(2);
+		collect(NET, tc, conn_mark, buf, 0);        // net acks what it was sent, as the real one does
+		steps(1);
+		mark = nout;
+		dead_pid = REPL;
+		ticks += 2 * Z_TICK_HZ;
+		steps(3);
+		n = collect(NET, tc, mark, buf, sizeof(buf));
+		CK(contains(buf, n, "process has gone", 16) && find(NET, Z_PORT_CLOSE, mark) >= 0,
+			"telnet: the user is told, and the connection closed");
+		CK(find(REPL, Z_PORT_CLOSE, mark) < 0, "nothing is sent to the dead process");
+		steps(3);
+		CK(sess[tc - 1].state == S_FREE, "the session freed, its unacked sends to repl with it");
+		dead_pid = 0;
+	}
+	{
+		// SSH: the message goes through the engine, and the client is told
+		static ssh_proto_t cli;
+		static struct cstate C;
+		static uint32_t conn;
+		static int fed;
+		cli_for_ev = &cli;
+		memset(&C, 0, sizeof(C));
+		cfg_ssh = "22 repl0";
+		cfg_ssh_auth = NULL;
+		read_config();
+		mark = nout; fed = mark;
+		connect_from(16, 0xC0A80141, 22, true);
+		step();
+		conn = out[find(NET, Z_PORT_CONNECTED, mark)].u32;
+		ssh_pw_for_test = "correct horse";
+		c_out_n = 0;
+		ssh_proto_init(&cli, &C, cw, cev, cr, "phil");
+		RUN(40);
+		deliver(REPL, Z_PORT_CONNECTED, 0, z_obj_uint32(7));
+		RUN(4);
+		CK(C.ready == 1, "(an SSH session on repl)");
+		dead_pid = REPL;
+		ticks += 2 * Z_TICK_HZ;
+		RUN(10);
+		C.got[C.got_n < sizeof(C.got) ? C.got_n : sizeof(C.got) - 1] = 0;
+		CK(contains(C.got, C.got_n, "process has gone", 16) && C.closed == 1,
+			"ssh: the message arrives inside the encrypted channel, then the session ends (%s)", C.why);
+		dead_pid = 0;
+	}
+	{
+		// a child holding the terminal dies without closing: the session
+		// waits for its parent's call-back, as when it closes
+		for (int i = 0; i < MAX_SESS; i++)
+			if (sess[i].state) deliver(NET, Z_PORT_CLOSE, (uint32_t)i + 1, z_obj_none());
+		steps(3); ticks += 6 * Z_TICK_HZ; steps(3);
+		mark = nout;
+		connect_from(17, 0xC0A80142, 23, true);
+		step();
+		uint32_t tc = out[find(NET, Z_PORT_CONNECTED, mark)].u32;
+		ticks += 10;
+		type(tc, "correct horse\r", 14);
+		steps(2);
+		deliver(REPL, Z_PORT_CONNECTED, 0, z_obj_uint32(8));
+		steps(2);
+		deliver(REPL, Z_TERM_SET_PORT, 0, z_obj_str("vi0"));
+		step();
+		deliver(22, Z_PORT_CONNECTED, 0, z_obj_uint32(4));
+		steps(2);
+		CK(sess[tc - 1].app_pid == 22 && sess[tc - 1].prev_pid == REPL, "(the session handed to vi)");
+		dead_pid = 22;
+		ticks += 2 * Z_TICK_HZ;
+		steps(3);
+		CK(sess[tc - 1].state == S_AWAY, "vi dying silently: the session waits for posix's call-back");
+		dead_pid = 0;
 	}
 
 	printf("netserve test: %d checks, %d failed\n", checks, fails);

@@ -201,3 +201,53 @@ int z_jump(uint32_t target) {
     (void)target;
     return -1;
 }
+
+/* -- ps, kill, port --
+ *
+ * A fixed process table. z_proc_kill() marks its process dying rather
+ * than removing it, so a `ps` after a `kill` shows which one it was --
+ * the only way a case can see the effect. */
+#include "zeitlos.h"   /* z_rv, Z_OK */
+#include "zproc.h"
+
+static z_proc_info_t host_procs[] = {
+    { .pid = 1, .size = 180 * 1024, .flags = Z_PROC_FLAG_ACTIVE | Z_PROC_FLAG_BLOCKED, .name = "wm0", .cpu_ticks = 7320 },
+    { .pid = 2, .size = 360 * 1024, .flags = Z_PROC_FLAG_ACTIVE, .name = "net0", .cpu_ticks = 73200 },
+    { .pid = 5, .size = 4096 * 1024, .flags = Z_PROC_FLAG_ACTIVE, .name = "posix0", .cpu_ticks = 732 },
+    { .pid = 6, .size = 64 * 1024, .flags = Z_PROC_FLAG_ACTIVE | Z_PROC_FLAG_BLOCKED, .name = "", .cpu_ticks = 0 },
+};
+#define HOST_NPROCS (uint32_t)(sizeof(host_procs) / sizeof(host_procs[0]))
+
+uint32_t z_proc_list(z_proc_info_t *out, uint32_t max, uint32_t *truncated) {
+    uint32_t n = HOST_NPROCS < max ? HOST_NPROCS : max;
+    memcpy(out, host_procs, n * sizeof(*out));
+    if (truncated) *truncated = HOST_NPROCS > max;
+    return n;
+}
+
+z_rv z_proc_kill(uint32_t pid) {
+    for (uint32_t i = 0; i < HOST_NPROCS; i++)
+        if (host_procs[i].pid == pid) { host_procs[i].flags |= Z_PROC_FLAG_DIE; return Z_OK; }
+    return Z_FAIL;
+}
+
+bool z_pid_lookup(const char *name, uint32_t *pid) {
+    for (uint32_t i = 0; i < HOST_NPROCS; i++)
+        if (host_procs[i].name[0] && !strcmp(host_procs[i].name, name)) { *pid = host_procs[i].pid; return true; }
+    return false;
+}
+
+/* main.c's, which asks term to switch; here, the answers it can give */
+bool px_switch_port(void *conn, const char *name, char *err, uint32_t cap) {
+    (void)conn;
+    if (strlen(name) > 20) { snprintf(err, cap, "name too long"); return false; }
+    return true;
+}
+
+/* `free`: fixed figures, the shape of a small board's pool */
+bool z_mem_stats(z_mem_stats_args_t *m) {
+    m->total = 8192 * 1024; m->used = 3500 * 1024; m->free = 4692 * 1024;
+    m->largest_free = 4096 * 1024;
+    m->used_blocks = 12; m->free_blocks = 3; m->blocks_used = 15; m->blocks_max = 64;
+    return true;
+}

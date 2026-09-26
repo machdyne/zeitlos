@@ -905,7 +905,7 @@ static ms_val *zapi_read_form(const char *src) {
 // together -- but so must every already-flashed binary, since the
 // syscall's own arg struct is shared, so this is not a case where one
 // side can drift silently.
-#define ZAPI_PS_MAX 16
+#define ZAPI_PS_MAX 32		// was 16, below the kernel's 32: rows past it went unreported
 
 // (ps) -- a snapshot of the process table as a list of lists, one row
 // per live process:
@@ -926,7 +926,7 @@ static ms_val *zapi_ps(ms_val *args) {
 
 	(void)args;
 
-	z_proc_info_t procs[ZAPI_PS_MAX];
+	static z_proc_info_t procs[ZAPI_PS_MAX];      // static: ~2 KB, off the stack
 	uint32_t truncated = 0;
 	uint32_t n = z_proc_list(procs, ZAPI_PS_MAX, &truncated);
 	// `truncated` is deliberately not surfaced to Scheme: it can only
@@ -937,7 +937,7 @@ static ms_val *zapi_ps(ms_val *args) {
 
 	// worst case: Z_PROCS_MAX rows of six 10-digit numbers plus
 	// separators. Sized generously and bounds-checked below anyway.
-	char buf[ZAPI_PS_MAX * 72 + 8];
+	static char buf[ZAPI_PS_MAX * 72 + 8];
 	uint32_t o = 0;
 
 	buf[o++] = '(';

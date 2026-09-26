@@ -32,6 +32,8 @@
 #include "../../common/zargs.h"		// quoting -- docs/posix.md, "Quoting"
 #include "../../common/zglob.h"		// wildcards -- docs/posix.md, "Wildcards"
 #include "posix.h"
+#include "zproc.h"           /* ps: z_proc_info_t, Z_PROC_FLAG_* */
+#include "zsoc.h"            /* ps: Z_TICK_HZ, for CPU seconds */
 #include "zgz.h"            /* zcat, gunzip */
 
 void *px_current_conn;
@@ -1082,6 +1084,114 @@ static void bi_run(px_shell_t *sh, int argc, char **argv) {
 
 static void bi_help(px_shell_t *sh, int argc, char **argv);
 
+/* -- processes -- */
+
+#define PX_PS_MAX 32            /* the kernel's Z_PROCS_MAX (sw/os/kernel.h) */
+
+/* One line per process: its pid (what `kill` takes), the name it
+ * registered, whether it is running, waiting or being killed, its
+ * memory, and the CPU it has used since it started. repl's (ps) is the
+ * same snapshot as data (sw/apps/repl/zapi.c). */
+static void bi_ps(px_shell_t *sh, int argc, char **argv) {
+    static z_proc_info_t procs[PX_PS_MAX];
+    uint32_t truncated = 0, n;
+    (void)argc; (void)argv;
+
+    n = z_proc_list(procs, PX_PS_MAX, &truncated);
+    px_puts(sh, "  PID NAME                     STATE    MEM KB    CPU s\n");
+    for (uint32_t i = 0; i < n; i++) {
+        const z_proc_info_t *p = &procs[i];
+        const char *state = (p->flags & Z_PROC_FLAG_DIE) ? "dying" :
+            (p->flags & Z_PROC_FLAG_BLOCKED) ? "wait" : "run";
+        px_printf(sh, "%5lu %-24s %-5s %9lu %8lu\n", (unsigned long)p->pid,
+            p->name[0] ? p->name : "-", state, (unsigned long)(p->size / 1024),
+            (unsigned long)(p->cpu_ticks / Z_TICK_HZ));
+    }
+    if (truncated) px_puts(sh, "(more processes than this list holds)\n");
+    sh->status = 0;
+}
+
+/* `free`: the memory every program is loaded into -- the kernel's pool
+ * -- and this shell's own share of it. "largest" is the one to watch:
+ * a program needs one block that big, so a pool with plenty free can
+ * still refuse it if the free space is in pieces. repl's (free) is the
+ * same numbers as data. */
+static void bi_free(px_shell_t *sh, int argc, char **argv) {
+    z_mem_stats_args_t m;
+    (void)argc; (void)argv;
+    memset(&m, 0, sizeof(m));
+    if (!z_mem_stats(&m)) {
+        px_puts(sh, "free: unavailable\n");
+        sh->status = 1;
+        return;
+    }
+    px_puts(sh, "          total     used     free  largest\n");
+    px_printf(sh, "KB     %8lu %8lu %8lu %8lu\n",
+        (unsigned long)(m.total / 1024), (unsigned long)(m.used / 1024),
+        (unsigned long)(m.free / 1024), (unsigned long)(m.largest_free / 1024));
+    px_printf(sh, "blocks: %lu used, %lu free (%lu of %lu descriptors)\n",
+        (unsigned long)m.used_blocks, (unsigned long)m.free_blocks,
+        (unsigned long)m.blocks_used, (unsigned long)m.blocks_max);
+#ifndef PX_HOST_TEST
+    {
+        /* This process: its static footprint (_start.._end, the linker's)
+         * and what malloc() has added past it -- as repl's (free). */
+        extern char _end, _start;
+        void *sbrk(intptr_t);
+        uint32_t stat = (uint32_t)&_end - (uint32_t)&_start;
+        uint32_t heap = (uint32_t)sbrk(0) - (uint32_t)&_end;
+        px_printf(sh, "this shell: %lu KB static, %lu KB heap\n",
+            (unsigned long)(stat / 1024), (unsigned long)(heap / 1024));
+    }
+#endif
+    sh->status = 0;
+}
+
+/* `kill PID|NAME ...`: a pid from ps, or a registered name (net0,
+ * netserve0). No ownership check -- any process may kill any other,
+ * the kernel's own trust model (z_proc_kill(), zeitlos.h). */
+static void bi_kill(px_shell_t *sh, int argc, char **argv) {
+    sh->status = 0;
+    if (argc < 2) {
+        px_puts(sh, "usage: kill PID|NAME ...   (see ps)\n");
+        sh->status = 2;
+        return;
+    }
+    for (int i = 1; i < argc; i++) {
+        char *end;
+        uint32_t pid = (uint32_t)strtoul(argv[i], &end, 10);
+        if (*end || end == argv[i]) {
+            if (!z_pid_lookup(argv[i], &pid)) {
+                px_printf(sh, "kill: %s: no such process\n", argv[i]);
+                sh->status = 1;
+                continue;
+            }
+        }
+        if (!pid || z_proc_kill(pid) != Z_OK) {
+            px_printf(sh, "kill: %s: could not kill it\n", argv[i]);
+            sh->status = 1;
+        }
+    }
+}
+
+/* `port NAME`: this terminal, to another port -- repl0, console0,
+ * serial0, or anything registered. */
+static void bi_port(px_shell_t *sh, int argc, char **argv) {
+    char err[128];
+    if (argc != 2) {
+        px_puts(sh, "usage: port NAME   (repl0, console0, serial0 ...; F12 comes back)\n");
+        sh->status = 2;
+        return;
+    }
+    if (!px_switch_port(px_current_conn, argv[1], err, sizeof(err))) {
+        px_printf(sh, "port: %s\n", err);
+        sh->status = 1;
+        return;
+    }
+    px_printf(sh, "connecting to %s -- disconnecting now\n", argv[1]);
+    sh->status = 0;
+}
+
 static void bi_exit(px_shell_t *sh, int argc, char **argv) {
     sh->want_exit = true;
     sh->status = (argc > 1) ? atoi(argv[1]) : 0;
@@ -1118,6 +1228,10 @@ static const builtin_t builtins[] = {
     { "rmdir", bi_rmdir, "remove an empty directory" },
     { "df",    bi_df,    "filesystem usage" },
     { "run",   bi_run,   "run a Zeitlos program, passing arguments" },
+    { "ps",    bi_ps,    "list processes" },
+    { "free",  bi_free,  "memory: the pool programs load into, and this shell" },
+    { "kill",  bi_kill,  "stop a process, by pid or name (kill netserve0)" },
+    { "port",  bi_port,  "connect this terminal to another port (port repl0)" },
     { "help",  bi_help,  "this list" },
     { "exit",  bi_exit,  "close this session" },
     { 0, 0, 0 }

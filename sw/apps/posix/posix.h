@@ -124,6 +124,13 @@ void px_resume(px_shell_t *sh, int status);
 void px_tty_handoff(void *conn, const char *provider);
 void px_tty_return(void *conn);
 
+/* `port NAME`: tells this session's terminal to connect to another
+ * port instead -- repl's `port`, through the same zconnect helpers.
+ * The terminal then disconnects from posix, which ends the session.
+ * False, with the reason in `err`, if it cannot even be asked.
+ * Implemented in main.c for the same reason as the handoff above. */
+bool px_switch_port(void *conn, const char *name, char *err, uint32_t cap);
+
 void px_shell_init(px_shell_t *sh, px_out_fn out, void *ctx);
 
 /*

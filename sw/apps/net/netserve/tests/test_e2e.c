@@ -23,6 +23,7 @@
 #include "../../../../common/znet.h"
 #include "../../../../common/zcfg.h"
 #include "../../../../common/zauth.h"
+#include "../../../../common/zproc.h"
 #include "../../tcp.h"
 #include "../../relay.h"
 
@@ -74,6 +75,9 @@ static box_t *box_for(uint32_t pid) {
 static uint32_t *k_syscall(uint32_t id, uint32_t *args, uint32_t b) {
 	(void)b;
 	switch (id) {
+	case Z_SYS_PROC_STATUS:
+		((z_proc_status_args_t *)args)->state = Z_PROC_STATE_RUNNING;
+		return (uint32_t *)&k_ok;
 	case Z_SYS_UPTIME:
 		((z_obj_t *)args)->type = Z_UINT32; ((z_obj_t *)args)->val.uint32 = ticks;
 		return (uint32_t *)&k_ok;

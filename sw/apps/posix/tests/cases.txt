@@ -262,3 +262,44 @@ $ wc wild/*.c
 1 2 7 wild/c.c
 $ echo wild/*.c | wc
 1 3 27
+
+# -- ps, kill, port --
+$ ps
+  PID NAME                     STATE    MEM KB    CPU s
+    1 wm0                      wait        180       10
+    2 net0                     run         360      100
+    5 posix0                   run        4096        1
+    6 -                        wait         64        0
+$ kill
+usage: kill PID|NAME ...   (see ps)
+? 2
+$ kill 99
+kill: 99: could not kill it
+? 1
+$ kill nobody0
+kill: nobody0: no such process
+? 1
+$ kill net0
+$ kill 6 99
+kill: 99: could not kill it
+? 1
+$ ps
+  PID NAME                     STATE    MEM KB    CPU s
+    1 wm0                      wait        180       10
+    2 net0                     dying       360      100
+    5 posix0                   run        4096        1
+    6 -                        dying        64        0
+$ port
+usage: port NAME   (repl0, console0, serial0 ...; F12 comes back)
+? 2
+$ port repl0
+connecting to repl0 -- disconnecting now
+$ port averyveryverylongportname
+port: name too long
+? 1
+
+# -- free --
+$ free
+          total     used     free  largest
+KB         8192     3500     4692     4096
+blocks: 12 used, 3 free (15 of 64 descriptors)

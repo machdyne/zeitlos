@@ -1257,9 +1257,18 @@ static void handle_data(const z_msg_t *msg) {
 
 }
 
+static void conn_ended(repl_conn_t *c);
+
 static void handle_close(const z_msg_t *msg) {
 	repl_conn_t *c = find_conn(msg);
 	if (!c) return;
+	conn_ended(c);
+	printf("repl: connection closed by peer\n");
+}
+
+// A connection's end, whether its peer said so (a CLOSE) or died
+// without saying (check_peers()): what the session held is let go.
+static void conn_ended(repl_conn_t *c) {
 	if (c->in_editor) {
 		// this connection's own `term` disappeared (crashed, closed,
 		// whatever) while it owned the live `te` session -- release
@@ -1284,7 +1293,24 @@ static void handle_close(const z_msg_t *msg) {
 		c->in_pager = false;
 	}
 	c->port.connected = false;
-	printf("repl: connection closed by peer\n");
+}
+
+// About once a second: a peer that exited or was killed sends no
+// CLOSE (docs/ports.md, "A peer that died"). Its unacked sends are
+// freed, and nothing is sent to it.
+static void check_peers(void) {
+	static uint32_t last;
+	uint32_t now = z_uptime_ticks();
+	if (now - last < Z_TICK_HZ) return;
+	last = now;
+	for (int i = 0; i < Z_REPL_MAX_CONNS; i++) {
+		repl_conn_t *c = &conns[i];
+		if (!z_port_peer_gone(&c->port)) continue;
+		printf("repl: connection %d: its peer (pid %lu) is gone -- closed\n",
+			i + 1, (unsigned long)c->port.peer_pid);
+		z_port_forget(&c->port);
+		conn_ended(c);
+	}
 }
 
 // -- REPL_EVAL (message-based, non-interactive) side -- see
@@ -1457,6 +1483,7 @@ int main(void) {
 		 * Z_PROC_FLAG_BLOCKED (see k_proc_wait() in sw/os/kernel.c),
 		 * so a message arriving between the read above and the block
 		 * here wakes it rather than being missed. */
+		check_peers();
 		z_proc_wait(Z_TICK_HZ / 20);
 
 	}

@@ -375,6 +375,25 @@ int main(void) {
 
 		}
 
+		// About once a second: a client that exited or was killed sends
+		// no CLOSE (docs/ports.md, "A peer that died"), and its port
+		// stayed taken -- nobody else could open UART1 until a reboot.
+		{
+			static uint32_t last;
+			uint32_t now = z_uptime_ticks();
+			if (now - last >= Z_TICK_HZ) {
+				last = now;
+				if (z_port_peer_gone(&conn_uart)) {
+					z_port_forget(&conn_uart);
+					printf("serial: UART1 client gone -- disconnected\n");
+				}
+				if (z_port_peer_gone(&conn_usb)) {
+					z_port_forget(&conn_usb);
+					printf("serial: USB client gone -- disconnected\n");
+				}
+			}
+		}
+
 		bool busy = false;
 		if (conn_uart.connected && poll_uart()) busy = true;
 		if (conn_usb.connected && poll_usb()) busy = true;

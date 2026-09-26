@@ -339,7 +339,37 @@ rediscovering:
 
 This is a provider-side workaround for a missing kernel facility, not a
 fix. A real one is a death notification -- which would also serve `wm`,
-whose own window table has the identical hole.
+whose own window table has the identical hole. Meanwhile every provider
+now also checks its peers about once a second (next section), so a
+dead peer is let go at once rather than when the table fills; repl's
+scan stays for what that check cannot see, a pid already reused.
+
+### A peer that died: checked once a second
+
+`z_port_peer_gone(port)` (zport.h) says whether an open connection's
+peer is still running, from `z_proc_status()`. Each process with
+connections asks it about once a second, and for a peer that is gone
+runs its own end-of-connection path -- but sends nothing, since there
+is nobody to send to and the pid may soon be someone else's, and frees
+the sends it will never ack with `z_port_forget()`.
+
+| process | what a dead peer used to cost | now |
+|---|---|---|
+| `console` | the kernel log streamed to its pid forever -- and when the pid came back as posix, posix ran the log as commands (netserve.md, "Found on hardware") | the stream stops |
+| `posix` | the session held; a terminal that died during a handoff held its slot for a return that never came | the session ends; the slot is released |
+| `repl` | the slot, and the process-wide `te` and `page` locks, until the table filled | released at once |
+| `serial` | UART1 (or USB) taken until a reboot | free for the next client |
+| `net` (relay.c) | an accepted connection hanging, a stall report every 3 s | the connection reset, the port released |
+| `netserve` | a session typing into nothing when its port's process died | the user told, the session closed; a child that dies during a handoff is treated as having exited |
+
+`z_port_pid_running(pid)` is the same question for a pid remembered
+after its port closed -- posix's terminal, away while a child has it.
+
+The check is a syscall per connection per second: nothing. What it
+cannot see is a pid that has already been reused by the time it asks;
+the data then reaches a stranger, who rejects it
+(`z_port_reject_stranger()`, "Match by sender and tag"). Both halves are
+needed: this one for promptness, that one for correctness.
 
 ### What `posix` does about it, and what it would take to close the gap
 

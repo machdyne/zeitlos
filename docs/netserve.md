@@ -411,6 +411,27 @@ netserve match by sender and tag, and answer a stranger's DATA with
 `z_port_reject_stranger()` (zport.h): an ack, so the sender can free
 it, and a CLOSE, so it stops. `term` already checked the sender.
 
+**Killing netserve left its connections hanging.** Nothing tells net
+when a listening process exits or is killed: its relays went on
+offering the dead process the client's keystrokes, the client waited
+on a connection nobody would answer, and a stall report came every
+three seconds for as long as it stayed open. net now checks each
+listener about once a second (`z_proc_status()`); when one is gone,
+every connection it had is reset -- the client hears "connection
+reset" at once -- its unacked sends are freed (`z_port_forget()`), and
+its ports stop listening, free for the next netserve. A listener that
+asks for a port it already holds has restarted under its old pid
+before that check saw it go, and its old connections are reset the
+same way. `tests/test_relay.c` kills a listener mid-session, and
+restarts one on its old pid.
+
+The ports a dead netserve's sessions were connected to -- repl, posix
+-- were not told either, and each held a session for it. They now
+check their peers about once a second, as does netserve for its
+backends: a session whose port's process dies tells its user so and
+closes (through the encrypted channel, for SSH) -- see ports.md, "A
+peer that died".
+
 ## Found by the tests: a missing CLOSED
 
 A connection **this machine closed first** ended in TIME_WAIT without
@@ -444,11 +465,11 @@ tests with a scripted kernel; they skip otherwise):
 
 | test | checks | what |
 |---|---|---|
-| `net/tests/test_relay.c` | 33 | the real `tcp.c` and `relay.c`: the window in the SYN-ACK, the offer, early data, both directions, holding, the window closing and reopening, a close with several segments still queued, the peer leaving mid-offer, REFUSED, a takeover, every relay busy |
+| `net/tests/test_relay.c` | 41 | the real `tcp.c` and `relay.c`: the window in the SYN-ACK, the offer, early data, both directions, holding, the window closing and reopening, a close with several segments still queued, the peer leaving mid-offer, REFUSED, a takeover, every relay busy, a relay waiting for its listener's acks, a listener killed mid-session, one restarted on its old pid |
 | `net/netserve/tests/test_e2e.c` | 7 | end to end: a TCP client, the real tcp.c, relay.c and netserve.c, a scripted posix: `help`'s 1.4 KB and two 4 KB messages reach the client under real flow control; the board's echo test, 3,000 bytes in and all back, with and without the client's FIN on the last segment |
 | `net/netserve/tests/test_authkeys.c` | 25 | the authkeys parser with OpenSSL-made keys and Python-computed expectations: every line form, every refusal, fingerprints as ssh-keygen prints them, Ed25519 agreeing with OpenSSL, RSA and Ed25519 signatures good and tampered |
 | `net/ssh/tests/test_ssh_server.c` | 46 | the server engine against the REAL client engine: the handshake, the fingerprint, a wrong password then the right one, 40 KB out within the client's window, the server's own window, three failures, the kernel's refusal, a flipped bit, strict KEX (offered, Terrapin's IGNORE-first refused, non-kex mid-exchange refused), no algorithms in common, HTTP on the SSH port, an absurd length, a client sending past the window, channel data before logging in; public keys: the PK_OK question, Ed25519 and RSA logins, an unlisted key (not counted), SHA-1 ssh-rsa refused (by the engine itself), bad signatures counted, keys only, passwords only, server-sig-algs |
-| `net/netserve/tests/test_netserve.c` | 120 | the real `netserve.c`: the policy, listening, echo, the subnet rule, option negotiation (and no loops), the password never echoed, a wrong one, three wrong, the kernel's delay, the login timeout, starting repl once for two sessions, CONNECT answers matched in order, Enter normalised, 0xFF both ways, backpressure, a 4 KB message and a 600-byte paste, a stranger's DATA, the terminal handoff and its call-back and fallback, a peer that vanishes; echo finishing a half-close; HTTP: files, indexes, types, %-decoding, every refusal (`..` in each disguise, `%00`, 404, 405, 408, 414/431, 400), HEAD, a 5 KB file streamed, a request in pieces, half-closes before and after the request, no file handle free, no handle or session left behind; SSH through netserve with the real client engine: host key made once and kept, off without a seeded TRNG, login, keystrokes to repl, 4 KB back, a 3 KB paste through the window, repl quitting, three wrong passwords, the login timeout, the engine wiped and released; SSH policy (keys only needs no password, the default needs one) and `/user/authkeys` (none, listed, unlisted, an edit taking effect, a refused line reported once) |
+| `net/netserve/tests/test_netserve.c` | 128 | the real `netserve.c`: the policy, listening, echo, the subnet rule, option negotiation (and no loops), the password never echoed, a wrong one, three wrong, the kernel's delay, the login timeout, starting repl once for two sessions, CONNECT answers matched in order, Enter normalised, 0xFF both ways, backpressure, a 4 KB message and a 600-byte paste, a stranger's DATA, the terminal handoff and its call-back and fallback, a peer that vanishes; echo finishing a half-close; HTTP: files, indexes, types, %-decoding, every refusal (`..` in each disguise, `%00`, 404, 405, 408, 414/431, 400), HEAD, a 5 KB file streamed, a request in pieces, half-closes before and after the request, no file handle free, no handle or session left behind; SSH through netserve with the real client engine: host key made once and kept, off without a seeded TRNG, login, keystrokes to repl, 4 KB back, a 3 KB paste through the window, repl quitting, three wrong passwords, the login timeout, the engine wiped and released; SSH policy (keys only needs no password, the default needs one) and `/user/authkeys` (none, listed, unlisted, an edit taking effect, a refused line reported once); a backend dying silently under telnet (told, closed, its sends freed, nothing sent to it), under SSH (the message inside the channel), and during a handoff (waits for the call-back) |
 | `net/tests/test_tcp_pool.c` | 73 | networking.md, "Connections" |
 
 Each behaviour was confirmed to fail its test when removed, with two

@@ -13,6 +13,7 @@
 #include "zobj.h"
 #include "zmsg.h"
 #include "zport.h"
+#include "zproc.h"		// Z_PROC_STATE_*: z_port_peer_gone()
 
 // Diagnostics. A program that must not pull in stdio at all builds with
 // -DZPORT_NO_PRINTF and these compile to nothing: sw/apps/console is
@@ -253,6 +254,23 @@ void z_port_handle_ack_closed(z_port_t *port, const z_msg_t *msg) {
 	port->connected = true;
 	z_port_handle_ack(port, msg);
 	port->connected = was;
+}
+
+bool z_port_pid_running(uint32_t pid) {
+	// The syscall itself rather than z_proc_status(): zport.c is also
+	// linked into programs zcc builds, whose runtime (libz) carries
+	// only part of zeitlos.c -- and not that.
+	z_proc_status_args_t a;
+	a.pid = pid;
+	a.state = Z_PROC_STATE_UNKNOWN;
+	a.status = 0;
+	z_kernel_ptr_t k = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_obj_t *rv = (z_obj_t *)k(Z_SYS_PROC_STATUS, (uint32_t *)&a, 0);
+	return rv->val.uint32 == Z_OK && a.state == Z_PROC_STATE_RUNNING;
+}
+
+bool z_port_peer_gone(const z_port_t *port) {
+	return port->connected && !z_port_pid_running(port->peer_pid);
 }
 
 void z_port_forget(z_port_t *port) {

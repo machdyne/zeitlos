@@ -44,6 +44,14 @@ password without asking for it, is the exception -- it is refused here
 and accepted only on UART0, because the kernel can tell the two apart
 (bytes injected through this port are marked in the UART receive ring).
 
+## A client that dies
+
+A client killed without closing -- a `term` window closed from its
+titlebar -- is noticed within about a second and the log stops going
+to it. It used to go on forever, and once, when the pid came back as
+posix, posix ran the log line by line as commands (ports.md, "A peer
+that died").
+
 ## How it works
 
 ```

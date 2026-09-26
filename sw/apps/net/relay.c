@@ -40,6 +40,7 @@
 #include "../../common/zport.h"
 #include "../../common/znet.h"
 #include "../../common/zsoc.h"		// Z_TICK_HZ
+#include "../../common/zproc.h"		// Z_PROC_STATE_*: is a listener still running?
 
 #define RELAY_MAX   (TCP_MAX_CONN - TCP_MIN_OUTBOUND_FREE)
 #define RELAY_TX    1024        // listener -> peer, awaiting tcp_send()
@@ -244,6 +245,63 @@ static tcp_event_handler_t on_accept(tcp_conn_t *c, uint16_t lport, uint32_t ip,
 	return NULL;                        // every relay busy: RST
 }
 
+// -- a listener that has died --
+//
+// Nothing tells net when a listening process exits or is killed. Its
+// relays went on handing it data that could never arrive -- the peer
+// hung, and a stall report came every three seconds forever. Found by
+// killing netserve during an SSH session. Now each listener is checked
+// about once a second; when one is gone, every connection it had is
+// reset (the peer hears so at once) and its ports stop listening.
+
+static void owner_gone(uint32_t pid) {
+	int n = 0;
+	for (int i = 0; i < RELAY_MAX; i++) {
+		relay_t *r = &relays[i];
+		if (!r->state || r->owner != pid) continue;
+		if (r->tcp) tcp_abort(r->tcp);
+		// Its sends to the listener will never be acked: free them
+		// (zport.h), rather than wait in R_DRAIN for nothing.
+		z_port_forget(&r->port);
+		r->held_n = 0;              // nobody to ack them to
+		relay_free(r);
+		n++;
+	}
+	for (int i = 0; i < TCP_MAX_LISTEN; i++) {
+		if (!listening[i].port || listening[i].owner != pid) continue;
+		tcp_unlisten(listening[i].port);
+		printf("net: port %u closed: its listener (pid %lu) is gone\n",
+			(unsigned)listening[i].port, (unsigned long)pid);
+		listening[i].port = 0;
+		listening[i].owner = 0;
+	}
+	if (n) printf("net: %d connection%s of pid %lu reset: it is gone\n", n, n == 1 ? "" : "s",
+		(unsigned long)pid);
+}
+
+static bool running(uint32_t pid) {
+	uint32_t st = Z_PROC_STATE_UNKNOWN;
+	return z_proc_status(pid, &st, NULL) == Z_OK && st == Z_PROC_STATE_RUNNING;
+}
+
+static void check_listeners(void) {
+	static uint32_t last;
+	uint32_t now = z_uptime_ticks(), seen[TCP_MAX_LISTEN + RELAY_MAX];
+	int ns = 0;
+	if (now - last < Z_TICK_HZ) return;
+	last = now;
+	for (int i = 0; i < TCP_MAX_LISTEN + RELAY_MAX; i++) {
+		uint32_t o = i < TCP_MAX_LISTEN ? (listening[i].port ? listening[i].owner : 0)
+			: (relays[i - TCP_MAX_LISTEN].state ? relays[i - TCP_MAX_LISTEN].owner : 0);
+		bool dup = false;
+		if (!o) continue;
+		for (int k = 0; k < ns; k++) if (seen[k] == o) dup = true;
+		if (dup) continue;
+		seen[ns++] = o;
+		if (!running(o)) owner_gone(o);
+	}
+}
+
 // -- listening --
 
 void relay_init(void) {
@@ -279,7 +337,19 @@ void relay_listen(const z_msg_t *msg) {
 				if (relays[i].tcp) tcp_abort(relays[i].tcp);
 				relay_free(&relays[i]);
 			}
-	} else if (listening[slot].port != port) {
+	} else if (listening[slot].port == port) {
+		// The owner asking again for a port it already has: it has
+		// restarted and got its old pid back before check_listeners()
+		// saw it go -- a running listener never asks twice. Its old
+		// connections belong to the process that died.
+		for (int i = 0; i < RELAY_MAX; i++)
+			if (relays[i].state && relays[i].owner == msg->from && relays[i].info.lport == port) {
+				if (relays[i].tcp) tcp_abort(relays[i].tcp);
+				z_port_forget(&relays[i].port);
+				relays[i].held_n = 0;
+				relay_free(&relays[i]);
+			}
+	} else {
 		if (!tcp_listen((uint16_t)port, on_accept)) { reply(msg, Z_NET_LISTEN_E_FULL); return; }
 	}
 	listening[slot].port = (uint16_t)port;
@@ -396,6 +466,7 @@ bool relay_msg(const z_msg_t *msg) {
 // -- moving bytes --
 
 void relay_poll(void) {
+	check_listeners();
 	for (int i = 0; i < RELAY_MAX; i++) {
 		relay_t *r = &relays[i];
 		if (r->state == R_DRAIN) {

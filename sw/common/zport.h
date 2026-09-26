@@ -371,4 +371,21 @@ void z_port_forget(z_port_t *port);
 // connection.
 void z_port_handle_ack_closed(z_port_t *port, const z_msg_t *msg);
 
+// -- a peer that died --
+//
+// Nothing tells a process when the other end of a connection exits or
+// is killed: no CLOSE comes. A provider went on holding the session --
+// console streaming the log to a dead term, posix keeping a shell for
+// it -- until something happened to fail. Check about once a second:
+
+// The peer of an open connection is no longer running. Then clean up
+// as for its CLOSE, but send nothing, and z_port_forget() the sends it
+// will never ack.
+bool z_port_peer_gone(const z_port_t *port);
+
+// Whether `pid` is a running process -- for a session that remembers a
+// peer's pid after its port has closed (posix, handing its terminal to
+// a child).
+bool z_port_pid_running(uint32_t pid);
+
 #endif

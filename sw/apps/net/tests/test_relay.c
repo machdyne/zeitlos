@@ -19,6 +19,7 @@
 #include "../../../common/zobj.h"
 #include "../../../common/zport.h"
 #include "../../../common/znet.h"
+#include "../../../common/zproc.h"
 
 /* -- the network -- */
 
@@ -56,11 +57,18 @@ typedef struct { uint32_t to, subject, tag, type, u32; uint8_t data[1600]; uint3
 static msg_out_t mo[256];
 static int nmo;
 static z_obj_t k_ok, k_fail;
+static uint32_t dead_pid;          /* a listener the test has "killed" */
 static uint32_t ticks = 1000;
 
 
 static uint32_t *k_syscall(uint32_t id, uint32_t *args, uint32_t b) {
 	(void)b;
+	if (id == Z_SYS_PROC_STATUS) {
+		/* every pid is running, but the one a test has killed */
+		z_proc_status_args_t *a = (z_proc_status_args_t *)args;
+		a->state = (a->pid == dead_pid) ? Z_PROC_STATE_EXITED : Z_PROC_STATE_RUNNING;
+		return (uint32_t *)&k_ok;
+	}
 	if (id == Z_SYS_UPTIME) {
 		((z_obj_t *)args)->type = Z_UINT32; ((z_obj_t *)args)->val.uint32 = ticks;
 		return (uint32_t *)&k_ok;
@@ -387,6 +395,61 @@ int main(void) {
 	handshake(4005, 2100);
 	c = mfind(Z_PORT_CONNECT, mark);
 	CK(c >= 0 && mo[c].to == OTHER, "and new ones go to the new owner");
+
+	/* -- the listener dies mid-session -- */
+	{
+		/* a clean slate the way it happens for real: OTHER, which took
+		 * port 23 over above, dies, and net cleans up after it */
+		dead_pid = OTHER;
+		ticks += 2 * Z_TICK_HZ;
+		relay_poll();
+		dead_pid = 0;
+		listener_acks_all();
+		CK(relay_count() == 0, "a dead listener's connections all go (%d left)", relay_count());
+		m = msg(OWNER, Z_NET_LISTEN, 23, z_obj_uint32(23));
+		relay_listen(&m);
+		CK(mo[nmo - 1].u32 == 0, "its port is free for the next listener");
+		uint32_t o5 = handshake(4100, 7000);
+		c = mfind(Z_PORT_CONNECT, nmo - 1);
+		if (c < 0) { printf("FAIL: no connection offered -- stopping\n"); return 1; }
+		rid = mo[c].tag;
+		m = msg(OWNER, Z_PORT_CONNECTED, rid, z_obj_uint32(91));
+		relay_msg(&m);
+		rx(4100, 23, 7001, o5, TCP_FLAG_ACK | TCP_FLAG_PSH, "typed", 5);
+		relay_poll();                                   /* sent to the listener, never acked */
+		CK(relays[rid - 1].port.pending_count == 1, "(a send out to the listener)");
+		dead_pid = OWNER;                               /* killed */
+		ticks += 2 * Z_TICK_HZ;
+		nseg = 0;
+		relay_poll();
+		bool rst = false;
+		for (int i = 0; i < nseg; i++) if (segs[i].flags & TCP_FLAG_RST) rst = true;
+		CK(rst && relay_count() == 0, "its connection is reset at once, the relay freed");
+		nseg = 0;
+		rx(4101, 23, 8000, 0, TCP_FLAG_SYN, NULL, 0);
+		CK(nseg == 1 && (segs[0].flags & TCP_FLAG_RST), "and its port no longer listens");
+		dead_pid = 0;
+	}
+
+	/* -- a listener restarted under its old pid: its old connections go -- */
+	{
+		m = msg(OWNER, Z_NET_LISTEN, 23, z_obj_uint32(23));
+		relay_listen(&m);
+		uint32_t o6 = handshake(4200, 9000);
+		(void)o6;
+		c = mfind(Z_PORT_CONNECT, nmo - 1);
+		if (c < 0) { printf("FAIL: no connection offered -- stopping\n"); return 1; }
+		rid = mo[c].tag;
+		m = msg(OWNER, Z_PORT_CONNECTED, rid, z_obj_uint32(92));
+		relay_msg(&m);
+		CK(relay_count() == 1, "(a session)");
+		nseg = 0;
+		m = msg(OWNER, Z_NET_LISTEN, 23, z_obj_uint32(23));     /* the same pid asks again */
+		relay_listen(&m);
+		CK(relay_count() == 0 && nseg >= 1 && (segs[nseg - 1].flags & TCP_FLAG_RST),
+			"the same pid listening again: its old connection is reset");
+		CK(mo[nmo - 1].subject == Z_NET_LISTEN_REPLY && mo[nmo - 1].u32 == 0, "and the port is its again");
+	}
 
 	/* -- no relay free: RST -- */
 	for (int i = 0; i < RELAY_MAX; i++) handshake((uint16_t)(5000 + i), 3000u + 100u * (uint32_t)i);

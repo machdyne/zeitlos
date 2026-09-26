@@ -396,8 +396,10 @@ fails against the old code.
 
 `relay.c` relays each connection accepted on a listened port
 (`Z_NET_LISTEN`) to the process that listens -- `netserve`, which
-serves telnet and echo. The whole design, and its flow control in both
-directions, is in [netserve.md](netserve.md).
+serves SSH, telnet, HTTP and echo. The whole design, and its flow
+control in both directions, is in [netserve.md](netserve.md). A
+listener that dies is noticed within about a second: its connections
+are reset and its ports released (netserve.md, "Found on hardware").
 
 ## Connections
 

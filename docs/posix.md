@@ -51,7 +51,22 @@ $ zcc hello.c -o hello && run hello
 | files | `ls` `cat` `cp` `mv` `rm` `touch` `mkdir` `rmdir` `zcat` `gunzip` |
 | text | `wc` `head` `tail` `grep` `sort` `uniq` |
 | places | `cd` `pwd` |
-| other | `echo` `clear` `df` `run` `help` `exit` `reboot` `jump` |
+| processes | `ps` `kill` `run` `free` |
+| other | `echo` `clear` `df` `port` `help` `exit` `reboot` `jump` |
+
+`ps` lists every process: its pid, the name it registered, whether it
+is running, waiting or being killed, its memory, and the CPU seconds it
+has used. `kill` takes pids from `ps` or registered names -- `kill
+netserve0` -- several at once. `port repl0` sends this terminal to
+another port, as repl's `port` does; posix's session ends when the
+terminal goes, and F12 there comes back to term's start panel.
+
+`free` shows the kernel's memory pool, which every program is loaded
+into: total, used, free, and the largest free block -- the one to
+watch, since a program needs a single block that big, and a pool with
+plenty free can still refuse it when the free space is in pieces. Then
+the pool's block counts, and this shell's own static footprint and
+heap.
 
 `grep` matches a **fixed string**, not a regular expression. `vi` has
 regular expressions (`:g`, `:s`) if you need them.
@@ -1741,6 +1756,16 @@ before then.
 `sw/apps/posix/main.c`, the half no test reaches -- it needs a second
 process, `term` and `wm`. F12 remains the escape if a child hangs
 while holding the terminal.
+
+### A terminal that dies -- during a handoff or not
+
+posix checks each session's peer about once a second
+(`check_peers()`, ports.md "A peer that died"). A terminal killed
+without closing ends its session at once -- its unsent output
+dropped, nothing sent to it -- and one that dies while away, its
+terminal handed to a child, releases the slot it was being held for:
+nobody will come back to it. A child still running when its session
+ends carries on, as after any disconnect.
 
 ### How a child reaches the terminal: three cases, two built
 

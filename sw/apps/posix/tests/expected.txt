@@ -188,6 +188,10 @@ posix -- see docs/posix.md
   rmdir    remove an empty directory
   df       filesystem usage
   run      run a Zeitlos program, passing arguments
+  ps       list processes
+  free     memory: the pool programs load into, and this shell
+  kill     stop a process, by pid or name (kill netserve0)
+  port     connect this terminal to another port (port repl0)
   help     this list
   exit     close this session
 

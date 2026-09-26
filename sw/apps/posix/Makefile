@@ -41,7 +41,7 @@ LDFLAGS = -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS)
 LDSCRIPT = ../../common/riscv-app.ld
 
 OBJS = zeitlos.o zobj.o zport.o zline.o zfsapp.o zwin.o zgfx.o zfont_data.o \
-	zconnect.o zinflate.o zgz.o \
+	zconnect.o zdns.o zinflate.o zgz.o \
 	vfs.o sh.o main.o
 
 posix: posix.elf posix.bin
@@ -65,6 +65,10 @@ zline.o:
 # `telnet`; see posix.h's PX_TTY_TAG.
 zconnect.o:
 	$(CC) $(CFLAGS) -c ../../common/zconnect.c -o zconnect.o
+# `port` goes through z_conn_prepare(), which also knows telnet and ssh
+# targets and so their hostname lookup -- as repl's does.
+zdns.o:
+	$(CC) $(CFLAGS) -c ../../common/zdns.c -o zdns.o
 zfsapp.o:
 	$(CC) $(CFLAGS) -c ../../common/zfsapp.c -o zfsapp.o
 # zwin is here for z_launch_arg_set() alone -- the mechanism the `run`

@@ -60,6 +60,11 @@ typedef struct {
      * here instead, and the slot has to survive a close that would
      * otherwise free it. */
     bool        tty_away;
+    /* `port NAME` has asked the terminal to go elsewhere: no prompt,
+     * the session ends when it disconnects -- or, if it has not within
+     * switch_deadline, the prompt comes back. */
+    bool        switching;
+    uint32_t    switch_deadline;
     uint32_t    tty_term_pid;   /* who to call back; port.peer_pid is gone */
 
     /* The child exited while the terminal was away, so its status is
@@ -365,6 +370,7 @@ static void handle_connect(const z_msg_t *msg) {
 
     conns[slot].is_sink = sink;
     conns[slot].owner = NULL;
+    conns[slot].switching = false;
 
     if (sink) {
         /* Bound to whichever session is running a command right now.
@@ -443,10 +449,77 @@ static void handle_close(const z_msg_t *msg) {
     z_port_close(&c->port);
 }
 
+/* A session's peer exited or was killed without a CLOSE -- term closed
+ * from its titlebar, say. The same ending as handle_close(), except
+ * that nothing is SENT: there is nobody to send it to, and the pid may
+ * soon be someone else's (docs/ports.md). Its unacked output is freed,
+ * not waited for. A child still running carries on; its exit finds no
+ * session to prompt, as after any other disconnect. */
+static void peer_gone(px_conn_t *c) {
+    printf("posix: session %d: its peer (pid %lu) is gone -- closed\n",
+           (int)(c - conns) + 1, (unsigned long)c->port.peer_pid);
+    if (out_conn == c) { out_len = 0; out_conn = 0; }
+    z_port_forget(&c->port);
+    c->is_sink = false;
+    c->owner = NULL;
+    c->tty_away = false;
+}
+
+/* About once a second (docs/ports.md, "A peer that died"). */
+static void check_peers(void) {
+    static uint32_t last;
+    uint32_t now = z_uptime_ticks();
+    if (now - last < Z_TICK_HZ) return;
+    last = now;
+    for (int i = 0; i < PX_MAX_CONNS; i++) {
+        px_conn_t *c = &conns[i];
+        if (c->switching && c->port.connected && (int32_t)(now - c->switch_deadline) >= 0) {
+            /* term did not go (the port refused it, say): stay. */
+            c->switching = false;
+            conn_out(c, "port: the terminal did not switch\r\n", 36);
+            prompt(c);
+            out_flush();
+        }
+        if (z_port_peer_gone(&c->port)) {
+            peer_gone(c);
+        } else if (c->tty_away && !c->port.connected && !z_port_pid_running(c->tty_term_pid)) {
+            /* term went away to the child and died there: nobody will
+             * come back, so the slot is no longer held for it. */
+            printf("posix: session %d: its terminal (pid %lu) died while away -- released\n",
+                   i + 1, (unsigned long)c->tty_term_pid);
+            c->tty_away = false;
+            c->resume_pending = false;
+        }
+    }
+}
+
+/* `port NAME` (sh.c): the terminal is asked to connect elsewhere, as
+ * repl's `port` asks it -- z_conn_prepare() finds the port,
+ * z_conn_handoff() tells term. term then disconnects from us, which
+ * ends this session by the ordinary path; nothing is closed from here,
+ * so no CLOSE of ours can race term's new connection (the conn_id
+ * collision handle_close() describes). */
+bool px_switch_port(void *conn, const char *name, char *err, uint32_t cap) {
+    px_conn_t *c = conn;
+    z_conn_target_t t;
+    if (!c || !c->port.connected || c->is_sink) {
+        snprintf(err, cap, "only from a terminal");
+        return false;
+    }
+    if (!z_conn_prepare(Z_CONN_PORT, name, &t, err, cap)) return false;
+    z_conn_handoff(c->port.peer_pid, &t);
+    c->switching = true;
+    c->switch_deadline = z_uptime_ticks() + 5u * Z_TICK_HZ;
+    return true;
+}
+
 /* Called when a command finishes, whether it ran a child or not. */
 static void finish_line(px_conn_t *c) {
 
     out_flush();
+
+    /* Leaving for another port: no prompt -- term is going. */
+    if (c->switching) return;
 
     if (c->sh.want_exit) {
         conn_out(c, "bye\r\n", 5);
@@ -704,6 +777,7 @@ int main(void) {
          * decode went from 7.7s to 3.1s once the other processes
          * stopped busy-waiting. A shell is idle almost all the time,
          * so this is the single most important line in the loop. */
+        check_peers();
         z_proc_wait(Z_TICK_HZ / 10);
     }
 

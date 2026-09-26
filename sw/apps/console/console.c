@@ -112,6 +112,20 @@ int main(void) {
 				break;
 			}
 		}
+		// About once a second: a client that exited or was killed sends
+		// no CLOSE (docs/ports.md, "A peer that died"). console used to
+		// stream the log to it forever -- and when the pid came back as
+		// another process, that process took the log as input: posix
+		// ran it, line by line.
+		{
+			static uint32_t last;
+			uint32_t now = z_uptime_ticks();
+			if (now - last >= Z_TICK_HZ) {
+				last = now;
+				for (int i = 0; i < MAX_CLIENTS; i++)
+					if (z_port_peer_gone(&clients[i].port)) z_port_forget(&clients[i].port);
+			}
+		}
 		for (int i = 0; i < MAX_CLIENTS; i++)
 			if (clients[i].port.connected) pump(&clients[i]);
 

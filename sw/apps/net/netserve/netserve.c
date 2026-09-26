@@ -110,6 +110,7 @@ typedef struct {
 	uint32_t prev_pid;          // who handed it away (posix), 0 if nobody
 	char prev_target[32];
 	uint32_t last_input;        // tick of the peer's last input
+	uint32_t peer_check;        // tick of the next check that the backend lives
 	uint32_t stall_since;       // tick output toward the peer last moved
 	uint32_t stall_left;        // bytes still to go then
 	uint32_t connect_seq;       // order of our CONNECTs to one provider
@@ -995,6 +996,8 @@ static void handoff(const z_msg_t *m) {
 	app_connect(s);
 }
 
+static void backend_closed(sess_t *s, bool died);
+
 static void on_msg(const z_msg_t *m) {
 	sess_t *s;
 
@@ -1088,23 +1091,35 @@ static void on_msg(const z_msg_t *m) {
 		return;
 	case Z_PORT_CLOSE:
 		s = by_app(m->from, m->tag);
-		if (s) {
-			s->app.connected = false;
-			if (s->prev_pid) {
-				// A child that had the terminal has finished: its
-				// parent calls the session back (Z_TERM_SET_PORT). If it
-				// does not, poll_session() goes back on its own.
-				s->state = S_AWAY;
-				s->deadline = z_uptime_ticks() + AWAY_TICKS;
-			} else if (s->kind == K_SSH && s->ssh) {
-				// exit-status, EOF and CLOSE to the client first; the
-				// engine's CLOSED then closes the connection.
-				sshs_end(&s->ssh->eng, 0);
-			} else {
-				close_after_flush(s);    // what it printed last still goes out
-			}
-		}
+		if (s) backend_closed(s, false);
 		return;
+	}
+}
+
+// The session's port has closed -- by a CLOSE, or because its process
+// died (`died`, found by poll_session(): nothing tells us that).
+static void backend_closed(sess_t *s, bool died) {
+	static const char gone[] = "\r\nnetserve: the port's process has gone\r\n";
+
+	if (died) z_port_forget(&s->app);          // its unacked sends: it will never ack them
+	s->app.connected = false;
+
+	if (s->prev_pid) {
+		// A child that had the terminal has finished -- or died: its
+		// parent calls the session back (Z_TERM_SET_PORT). If it does
+		// not, poll_session() goes back on its own.
+		s->state = S_AWAY;
+		s->deadline = z_uptime_ticks() + AWAY_TICKS;
+	} else if (s->kind == K_SSH && s->ssh) {
+		// Through the engine, never into to_net: raw text in an SSH
+		// stream would break it. Then exit-status, EOF and CLOSE; the
+		// engine's CLOSED closes the connection.
+		if (died) sshs_send(&s->ssh->eng, (const uint8_t *)gone, sizeof(gone) - 1,
+			(uint32_t)(SSH_OUT_MAX - s->ssh->out_len));
+		sshs_end(&s->ssh->eng, died ? 1 : 0);
+	} else {
+		if (died) net_str(s, gone);
+		close_after_flush(s);        // what it printed last still goes out
 	}
 }
 
@@ -1116,6 +1131,18 @@ static void poll_session(sess_t *s) {
 	// held input, in order, as room allows
 	drain(s, s->held_net, &s->held_net_n, from_peer, net_pid);
 	drain(s, s->held_app, &s->held_app_n, from_app, s->app_pid);
+
+	// The backend's process, about once a second: if it died, nothing
+	// else will say so, and the user would type into nothing
+	// (docs/ports.md, "A peer that died").
+	if (s->app.connected && (int32_t)(now - s->peer_check) >= 0) {
+		s->peer_check = now + Z_TICK_HZ;
+		if (z_port_peer_gone(&s->app)) {
+			printf("netserve: session %lu: its port's process (pid %lu) is gone\n",
+				(unsigned long)((uint32_t)(s - sess) + 1), (unsigned long)s->app_pid);
+			backend_closed(s, true);
+		}
+	}
 
 	// the backend, if we are waiting for it to start
 	if (s->state == S_LAUNCH) {
