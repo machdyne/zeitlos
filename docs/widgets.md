@@ -364,6 +364,12 @@ edits it, **Space included**, and Enter is OK. Tab cycles field → OK →
 Cancel → field; on a focused button Space or Enter presses it, and
 typing a character returns to the field with that character.
 
+`z_dialog_prompt_secret()` is the same prompt for a password: its
+field (`z_edit_t.secret`, `zedit.h`) shows `*` for every character and
+takes printable ASCII only, so the stars line up with the caret, and
+the dialog wipes its own copy of the text before returning. See
+[security.md](security.md).
+
 It used to start with OK focused, "so Space works immediately". Space
 presses the focused button, so the first space typed in the field
 submitted everything typed so far -- `port ` came back as `port`, and

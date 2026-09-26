@@ -1,5 +1,9 @@
 # SSH
 
+This is the SSH **client**. The server -- SSH into Zeitlos -- is
+`sw/apps/net/ssh/ssh_server.c`, bound by netserve: see
+[netserve.md](netserve.md), "SSH".
+
 An SSH-2 client. `ssh [user@]host` from a `term` prompt opens an
 interactive shell on a remote machine, through the same zport
 mechanism `telnet` uses.
@@ -222,7 +226,7 @@ hardware:
 - Public key authentication. `crypto_ed25519_sign` is available and
   this is the obvious next feature; it needs a key store first.
 - `known_hosts` persistence (`ssh_hostkey.c`).
-- Multiple channels — `tcp.c` has one TCB, so there is one session.
+- Multiple channels, and more than one session: `ssh.c` keeps one connection.
 
 `pty-req` sends a fixed 80×25, matching `VT_COLS`/`VT_ROWS` in
 `zvt100.h`. `term` windows are not resizable, so there is no

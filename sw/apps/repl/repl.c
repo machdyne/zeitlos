@@ -72,6 +72,7 @@
 					// below (the `free` command that also used it is now a
 					// Scheme procedure, see zapi.c)
 
+#include "../../common/zauth.h"	// `lock`: docs/security.md
 #include "../../common/zeitlos.h"
 #include "../../common/zport.h"
 #include "../../common/zsoc.h"	// Z_TICK_HZ, for the idle wait in main()
@@ -282,7 +283,7 @@ static bool form_complete(const char *s, void *user) {
 // Shortening the text is the cheap answer and has been the right one
 // so far.
 static const char HELP_TEXT[] =
-	"builtins: help ping echo te <f> page <f> scheme <e> quit\r\n"
+	"builtins: help ping echo te <f> page <f> scheme <e> lock quit\r\n"
 	"connect:  port <n> serial [baud] usbserial telnet <h> ssh <h>  (F11)\r\n"
 	"scheme:   ls ps free uptime run kill load mkdir delay-ms ...\r\n"
 	"F12 leaves any port; bare word = call, so `ps` is (ps)";
@@ -669,6 +670,17 @@ static bool dispatch_line(const char *line, char *out, uint32_t out_cap,
 		return false;
 	}
 
+	// Locks the screen: the same as Super+L (docs/security.md). wm
+	// does the work; with no password set, the lock opens with Enter.
+	if (!strcmp(line, "lock")) {
+		z_auth_status_t st;
+		bool sent = z_wm_lock_request(Z_WM_LOCK_NOW);
+		bool has = z_auth_status(&st) == Z_AUTH_OK && (st.flags & Z_AUTH_HAS_PASSWORD);
+		snprintf(out, out_cap, "%s", !sent ? "lock: wm is not running" :
+			has ? "locked" : "locked (no password is set: Enter opens it)");
+		return false;
+	}
+
 	// NOTE: `uptime` and `free` used to be builtins right here. Both
 	// are Scheme procedures now (zapi.c) -- they return real values
 	// instead of pre-formatted text, and the bare-word command syntax
@@ -1044,9 +1056,12 @@ static void handle_connect(const z_msg_t *msg) {
 
 }
 
-static repl_conn_t *find_conn_by_tag(uint32_t tag) {
+// By sender AND tag: a tag alone matches whatever a dead peer's pid is
+// now running as (z_port_reject_stranger(), zport.h).
+static repl_conn_t *find_conn(const z_msg_t *msg) {
 	for (int i = 0; i < Z_REPL_MAX_CONNS; i++) {
-		if (conns[i].port.connected && conns[i].port.conn_id == tag)
+		if (conns[i].port.connected && conns[i].port.conn_id == msg->tag &&
+				conns[i].port.peer_pid == msg->from)
 			return &conns[i];
 	}
 	return NULL;
@@ -1054,7 +1069,9 @@ static repl_conn_t *find_conn_by_tag(uint32_t tag) {
 
 static void handle_data(const z_msg_t *msg) {
 
-	repl_conn_t *c = find_conn_by_tag(msg->tag);
+	repl_conn_t *c = find_conn(msg);
+
+	if (!c) { z_port_reject_stranger(msg); return; }
 
 	if (c) {
 
@@ -1196,7 +1213,7 @@ static void handle_data(const z_msg_t *msg) {
 					// from this same peer are still queued behind this
 					// DATA message (unlikely, but not impossible), the
 					// tag won't match a connected slot anymore and
-					// find_conn_by_tag() will just drop them next
+					// find_conn() will just drop them next
 					// time, same as any other post-close stray DATA.
 					break;
 				}
@@ -1241,7 +1258,7 @@ static void handle_data(const z_msg_t *msg) {
 }
 
 static void handle_close(const z_msg_t *msg) {
-	repl_conn_t *c = find_conn_by_tag(msg->tag);
+	repl_conn_t *c = find_conn(msg);
 	if (!c) return;
 	if (c->in_editor) {
 		// this connection's own `term` disappeared (crashed, closed,
@@ -1379,7 +1396,7 @@ int main(void) {
 			} else if (msg.subject == Z_PORT_DATA) {
 				handle_data(&msg);
 			} else if (msg.subject == Z_PORT_DATA_ACK) {
-				repl_conn_t *c = find_conn_by_tag(msg.tag);
+				repl_conn_t *c = find_conn(&msg);
 				if (c) z_port_handle_ack(&c->port, &msg);
 			} else if (msg.subject == Z_PORT_CLOSE) {
 				handle_close(&msg);

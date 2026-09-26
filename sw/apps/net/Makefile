@@ -169,6 +169,27 @@ override CFLAGS += -DNET_SOCK=$(NET_SOCK)
 TCP_REASSEMBLY ?= 0
 override CFLAGS += -DTCP_REASSEMBLY=$(TCP_REASSEMBLY)
 
+# -- ARP logging: each who-has sent and each reply received (arp.c) --
+# Off: it was for chasing a host that never resolved (it had changed
+# address). `make NET_ARP_LOG=1` to see it again.
+NET_ARP_LOG ?= 0
+override CFLAGS += -DNET_ARP_LOG=$(NET_ARP_LOG)
+
+# -- the connection pool (tcp.h, TCP_MAX_CONN, TCP_MIN_OUTBOUND_FREE) --
+#
+# 8 connections, of which inbound may never take the last 2. About
+# 600 bytes each. For a 1 MB board:
+#
+#   make TCP_MAX_CONN=4 TCP_MIN_OUTBOUND_FREE=1
+TCP_MAX_CONN ?=
+TCP_MIN_OUTBOUND_FREE ?=
+ifneq ($(TCP_MAX_CONN),)
+override CFLAGS += -DTCP_MAX_CONN=$(TCP_MAX_CONN)
+endif
+ifneq ($(TCP_MIN_OUTBOUND_FREE),)
+override CFLAGS += -DTCP_MIN_OUTBOUND_FREE=$(TCP_MIN_OUTBOUND_FREE)
+endif
+
 TCP_ADVERTISE_MSS ?=
 
 ifneq ($(TCP_ADVERTISE_MSS),)
@@ -267,7 +288,7 @@ endif
 # zrtc.o rides with ntp.o rather than being listed separately: it is
 # the calendar arithmetic ntp.c uses to print the time it just set, and
 # nothing else in this app has any use for a date.
-OBJS = zeitlos.o zobj.o zstream.o zport.o zrng.o zfsapp.o netcfg.o screen.o $(PHY_OBJ) eth.o arp.o ip.o udp.o $(DHCP_OBJ) dns.o $(NTP_OBJ) tcp.o telnet.o $(SOCK_OBJ) $(SSH_OBJ) tftp.o $(PROF_OBJ) net.o
+OBJS = zeitlos.o zobj.o zstream.o zport.o zrng.o zfsapp.o netcfg.o screen.o $(PHY_OBJ) eth.o arp.o ip.o udp.o $(DHCP_OBJ) dns.o $(NTP_OBJ) tcp.o relay.o telnet.o $(SOCK_OBJ) $(SSH_OBJ) tftp.o $(PROF_OBJ) net.o
 
 net: net.elf net.bin
 
@@ -369,6 +390,9 @@ zrng.o: ../../common/zrng.c ../../common/zrng.h ../../common/zsoc.h
 tcp.o: tcp.c tcp.h ../../common/zrng.h
 	$(CC) $(CFLAGS) -c tcp.c -o tcp.o
 
+relay.o: relay.c relay.h tcp.h ip.h ../../common/znet.h ../../common/zport.h
+	$(CC) $(CFLAGS) -c relay.c -o relay.o
+
 # -- SSH --
 #
 # The vendored Monocypher files are compiled from sw/ext/monocypher
@@ -463,13 +487,16 @@ clean:
 # every object depend on its own source and headers, so `make` alone is
 # correct and `make clean` stops being a required ritual.
 -include $(wildcard *.d)
--include $(wildcard */*.d)
+# Not netserve/: it is a separate app whose .d files name paths relative
+# to its own directory, and including them here broke net's next build.
+-include $(filter-out netserve/%,$(wildcard */*.d))
 -include $(wildcard */*/*.d)
 
 # -- host tests --
 #
-# Only the parts of this app that can run off-target: tcp.c's
-# reassembly, which is the one with real logic and no hardware in it,
+# Only the parts of this app that can run off-target: tcp.c -- its
+# reassembly, and its connection pool and listening side against a
+# scripted peer --
 # and the stripe encoder, whose output a browser running an older
 # viewer page still has to be able to decode.
 HOSTCC ?= cc
@@ -479,6 +506,17 @@ test:
 	$(HOSTCC) --std=gnu99 -w -I. -I../../common -o /tmp/test_tcp_ooo \
 		tests/test_tcp_ooo.c
 	/tmp/test_tcp_ooo
+	$(HOSTCC) --std=gnu99 -Wall -I. -I../../common -o /tmp/test_tcp_pool \
+		tests/test_tcp_pool.c
+	/tmp/test_tcp_pool
+	$(HOSTCC) --std=gnu99 -Wall -DTCP_REASSEMBLY=1 -I. -I../../common \
+		-o /tmp/test_tcp_pool_ooo tests/test_tcp_pool.c
+	/tmp/test_tcp_pool_ooo
+	$(HOSTCC) --std=gnu99 -Wall -I. -I../../common -o /tmp/test_arp tests/test_arp.c
+	/tmp/test_arp
+	$(HOSTCC) --std=gnu99 -w -no-pie -I. -I../../common -o /tmp/test_relay \
+		tests/test_relay.c ../../common/zobj.c ../../common/zport.c ../../common/zeitlos.c
+	/tmp/test_relay || [ $$? -eq 77 ]
 	$(HOSTCC) --std=gnu99 -w -I. -I../../common -o /tmp/test_packbits \
 		tests/test_packbits.c
 	/tmp/test_packbits

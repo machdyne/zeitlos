@@ -35,6 +35,7 @@
 #include "../../common/zwm.h"
 #include "../../common/zgfx.h"
 #include "../../common/zkbd.h"
+#include "../../common/zauth.h"	// the screen lock: docs/security.md
 #include "../../common/zicon.h"
 #include "../../common/zspeak.h"	// speech -- docs/tts.md
 #include "../../common/zcfg.h"
@@ -313,9 +314,28 @@ static uint32_t next_place_tick;
 // Defined with the game-mode code below; the caption needs it first.
 static uint32_t game_grab_pid;
 
+// -- the screen lock (docs/security.md) --
+//
+// While locked, every window -- the dock and wm's own chrome included
+// -- has an EMPTY visible region: window_visible_region() answers
+// nothing, wm_unclip() confines wm to nothing, and the only thing drawn
+// is the lock screen (lock_draw(), further down). Compositing by region
+// is what makes that hold for apps: an app drawing through zwin.h
+// cannot touch a pixel outside its region (see "App trust model" in
+// docs/window_manager.md for what that does and does not promise).
+static bool wm_locked;
+static bool lock_pending;           // engage at the next safe point in the loop
+static uint32_t lock_last_input;    // tick of the last key or pointer movement
+static z_auth_status_t lock_st;     // the password's presence and the policy
+
 // What every former z_gfx_clear_visible() in this file now calls: no
 // restriction, except that nothing wm draws may land on the caption.
 static void wm_unclip(void) {
+	if (wm_locked) {
+		static const z_clip_t nothing = { 0, 0, -1, -1 };
+		z_gfx_set_visible(&nothing, 1);
+		return;
+	}
 	if (cap_vis) z_gfx_set_visible(cap_unclip, cap_unclip_n);
 	else z_gfx_clear_visible();
 }
@@ -1512,9 +1532,11 @@ static int wm_clip_debug;
 // long did wm sit here" is the honest number. Wraps every ~89 s at
 // Z_SYSCLK_HZ; a single wait is bounded far below that.
 static inline uint32_t dbg_cyc(void) {
-	uint32_t v;
+	uint32_t v = 0;
+#ifdef __riscv
 	__asm__ volatile ("rdcycle %0" : "=r"(v));
-	return v;
+#endif
+	return v;			// 0 in a host build (tests/test_lock.c)
 }
 #define DBG_CYC_PER_MS   (Z_SYSCLK_HZ / 1000u)
 
@@ -1976,6 +1998,16 @@ static uint32_t wm_idle_ticks(void) {
 	uint32_t now = z_uptime_ticks();
 	uint32_t soon = 0;
 	int i;
+
+	if (lock_pending) return 1;
+
+	// Locking when idle: wake at the moment it is due.
+	if (!wm_locked && lock_st.lock_idle_min && (lock_st.flags & Z_AUTH_HAS_PASSWORD)) {
+		int32_t left = (int32_t)(lock_last_input +
+			lock_st.lock_idle_min * 60u * Z_TICK_HZ - now);
+		if (left <= 0) return 1;
+		soon = (uint32_t)left;
+	}
 
 	if (wm_busy_mask & WM_BUSY_STARTUP)
 		return 1;
@@ -2584,6 +2616,9 @@ static int window_visible_region(int idx, z_clip_t *out, int max) {
 
 	if (idx < 0 || idx >= WM_MAX_WINDOWS || !windows[idx].used)
 		return 0;
+
+	// Locked: the lock screen is in front of everything.
+	if (wm_locked) return 0;
 
 	z_clip_t win = { (int)windows[idx].x, (int)windows[idx].y,
 	                 (int)(windows[idx].x + windows[idx].w - 1),
@@ -3261,6 +3296,9 @@ static bool cap_layout(void) {
 static void caption_blit(void) {
 
 	if (!cap_vis) { cap_dirty = false; return; }
+
+	// Not over the lock screen; left dirty, drawn after unlocking.
+	if (wm_locked) return;
 
 	// Not while an app owns the screen, and not in the middle of a
 	// drag's XOR band: the band's erase would XOR the caption. Left
@@ -4010,6 +4048,147 @@ static void kbd_ime_show(uint8_t before) {
 	ime_box_update();
 }
 
+// -- the screen lock: drawing, locking, unlocking --
+
+#define LOCK_BOX_W  300
+#define LOCK_BOX_H  76
+
+static char lock_pw[Z_AUTH_PW_MAX + 1];
+static int lock_pw_len;
+static char lock_msg[64];
+
+static void lock_wipe(void) {
+	volatile char *p = lock_pw;
+	for (int i = 0; i < (int)sizeof(lock_pw); i++) p[i] = 0;
+	lock_pw_len = 0;
+}
+
+// The password's presence and the policy, from the kernel. At start,
+// on Z_WM_LOCK_RELOAD, and at every lock and unlock.
+static void lock_reload(void) {
+	if (z_auth_status(&lock_st) != Z_AUTH_OK) memset(&lock_st, 0, sizeof(lock_st));
+}
+
+static void lock_text(int y, const char *t) {
+	int x = (WM_SCREEN_W - (int)strlen(t) * z_font_5x8.w) / 2;
+	z_fb_draw_text(x, y, t, 1, &z_font_5x8, NULL);
+}
+
+// The whole lock screen, every time: one blitter fill, a frame and
+// four lines of text, cheap enough to redraw on each keystroke.
+static void lock_draw(void) {
+	char line[Z_AUTH_PW_MAX + 16];
+	int bx = (WM_SCREEN_W - LOCK_BOX_W) / 2, by = (WM_SCREEN_H - LOCK_BOX_H) / 2;
+	int lh = z_font_5x8.h + 6, n;
+
+	z_gfx_clear_visible();
+	z_fb_hw_fill_rect(0, 0, WM_SCREEN_W, WM_SCREEN_H, 0);
+	z_fb_hw_fill_rect(bx, by, LOCK_BOX_W, 1, 1);
+	z_fb_hw_fill_rect(bx, by + LOCK_BOX_H - 1, LOCK_BOX_W, 1, 1);
+	z_fb_hw_fill_rect(bx, by, 1, LOCK_BOX_H, 1);
+	z_fb_hw_fill_rect(bx + LOCK_BOX_W - 1, by, 1, LOCK_BOX_H, 1);
+
+	lock_text(by + 8, "Zeitlos is locked");
+	n = snprintf(line, sizeof(line), "Password: ");
+	// At most 40 stars: the box is 300 px, and the count is all they show.
+	for (int i = 0; i < lock_pw_len && i < 40 && n < (int)sizeof(line) - 2; i++) line[n++] = '*';
+	line[n++] = '_';
+	line[n] = 0;
+	// Anchored, not centred: a centred field would slide left with
+	// every character typed.
+	z_fb_draw_text(bx + (LOCK_BOX_W - 50 * z_font_5x8.w) / 2, by + 8 + 2 * lh, line, 1,
+		&z_font_5x8, NULL);
+	lock_text(by + 8 + 3 * lh, lock_msg[0] ? lock_msg :
+		(lock_st.flags & Z_AUTH_HAS_PASSWORD) ? "Type the password, then Enter" :
+		"No password is set: press Enter");
+
+	wm_unclip();
+}
+
+// Safe points only (the main loop): freeze_all() services messages
+// while it waits, and a half-finished drag owns the XOR band.
+static void lock_engage(void) {
+	if (wm_locked) { lock_pending = false; return; }
+	if (dragging >= 0 || resizing >= 0 || xor_band_idx >= 0) return;   // after release
+	lock_pending = false;
+
+	// An app holding the whole screen, or the game-mode camera, would
+	// show something other than the lock screen.
+	if (game_grab_pid) game_revoke();
+	if (z_game_enabled()) z_game_view_set_enabled(false, false);
+
+	// Every app stops drawing and says so (bounded), THEN the lock
+	// screen goes up -- so a frame in progress cannot land on it.
+	freeze_all(NULL);
+	wm_locked = true;
+	// A grab that arrived while freeze_all() was servicing messages.
+	if (game_grab_pid) game_revoke();
+	send_clip_all_except_ex(-1, false);     // their regions, all empty now
+	lock_wipe();
+	lock_msg[0] = 0;
+	lock_reload();
+	lock_draw();
+	printf("wm: screen locked\n");
+}
+
+static void lock_release(void) {
+	lock_wipe();
+	lock_msg[0] = 0;
+	wm_locked = false;
+	// Regions first, without REDRAWs; the full repair then repaints
+	// the chrome and asks every window for its content, once.
+	send_clip_all_except_ex(-1, false);
+	repair_region(0, 0, WM_SCREEN_W, WM_SCREEN_H, -1);
+	lock_last_input = z_uptime_ticks();
+	lock_reload();
+	printf("wm: screen unlocked\n");
+}
+
+static void lock_try(void) {
+	uint32_t w = 0;
+	int rc;
+
+	if (!lock_pw_len && (lock_st.flags & Z_AUTH_HAS_PASSWORD)) {
+		snprintf(lock_msg, sizeof(lock_msg), "Type the password, then Enter");
+		lock_draw();
+		return;
+	}
+	// The check is half a second inside the kernel: say so first.
+	snprintf(lock_msg, sizeof(lock_msg), "Checking...");
+	lock_draw();
+	rc = z_auth_check(lock_pw, (uint32_t)lock_pw_len, &w);
+	lock_wipe();
+	// No password, or a kernel without Z_SYS_AUTH: there is nothing to
+	// check against, and the lock was only ever a curtain.
+	if (rc == Z_AUTH_OK || rc == Z_AUTH_E_NOPASS || rc == Z_AUTH_E_NOSYS) {
+		lock_release();
+		return;
+	}
+	if (rc == Z_AUTH_E_WAIT)
+		snprintf(lock_msg, sizeof(lock_msg), "Too many attempts -- wait %lu s",
+			(unsigned long)((w + 999) / 1000));
+	else if (rc == Z_AUTH_E_BAD)
+		snprintf(lock_msg, sizeof(lock_msg), "Wrong password");
+	else
+		snprintf(lock_msg, sizeof(lock_msg), "Could not check the password (%d)", rc);
+	lock_draw();
+}
+
+// Every key while locked comes here and nowhere else. Printable ASCII
+// only, as the console and the settings field take. A chord with Ctrl,
+// Alt or Super is not typing: Super+L on a locked screen must not put
+// an 'l' in the field.
+static void lock_key(uint32_t keysym, bool chord) {
+	if (chord) return;
+	if (keysym == 0x0d) { lock_try(); return; }
+	if (keysym == 0x1b) { lock_wipe(); lock_msg[0] = 0; }
+	else if (keysym == 0x7f || keysym == 0x08) { if (lock_pw_len) lock_pw[--lock_pw_len] = 0; }
+	else if (keysym >= 0x20 && keysym < 0x7f && lock_pw_len < Z_AUTH_PW_MAX)
+		lock_pw[lock_pw_len++] = (char)keysym;
+	else return;
+	lock_draw();
+}
+
 static void dispatch_keys(void) {
 
 	int32_t ev;
@@ -4017,6 +4196,7 @@ static void dispatch_keys(void) {
 
 		uint8_t usage     = Z_KBD_EV_USAGE(ev);
 		if (!Z_KBD_EV_INJECTED(ev)) real_input("key", usage);
+		lock_last_input = z_uptime_ticks();
 		uint8_t modifiers = Z_KBD_EV_MODS(ev);
 		bool    pressed   = Z_KBD_EV_PRESSED(ev) != 0;
 		if (pressed && ime_box_shown != ime_box_wanted()) ime_box_update();
@@ -4067,6 +4247,23 @@ static void dispatch_keys(void) {
 
 		if (keysym == Z_KEY_NONE) continue;   // bare modifier change, or
 		                                       // an unmapped usage code
+
+		// Locked: the lock screen has every key. No hotkey, no app.
+		if (wm_locked) {
+			if (pressed) lock_key(keysym, alt ||
+				(modifiers & (Z_KBD_MOD_CTRL | Z_KBD_MOD_GUI)) != 0);
+			kbd_sent[usage] = 0;
+			continue;
+		}
+
+		// Super+L -- lock the screen (docs/security.md). By character,
+		// like Super+K. Deferred to the main loop: see lock_engage().
+		if ((modifiers & Z_KBD_MOD_GUI) && (keysym == 'l' || keysym == 'L') &&
+		    !(modifiers & Z_KBD_MOD_CTRL) && !alt) {
+			if (pressed) lock_pending = true;
+			kbd_sent[usage] = 0;
+			continue;
+		}
 
 		// -- dead keys -- docs/keyboard_layouts.md, "Dead keys" --
 		if (pressed && Z_KEY_IS_DEAD(keysym)) {
@@ -5507,6 +5704,18 @@ static void handle_message(z_msg_t *msg) {
 			 * if a caller sets it (zmsg.h), so a grab cannot be
 			 * claimed on another process's behalf. */
 			game_grab_pid = msg->from;
+			/* Not over the lock screen: revoked at once. */
+			if (wm_locked) {
+				game_revoke();
+				lock_draw();
+			}
+			break;
+
+		case Z_WM_LOCK:
+			if (msg->obj.type == Z_UINT32 && msg->obj.val.uint32 == Z_WM_LOCK_RELOAD)
+				lock_reload();
+			else
+				lock_pending = true;
 			break;
 
 		case Z_WM_GAME_RELEASE:
@@ -6111,6 +6320,13 @@ int main(void) {
 			windows[dock_idx].w, windows[dock_idx].h, -1);
 
 	uint8_t last_btn = 0;
+	int last_cx = -1, last_cy = -1;
+
+	// The screen lock's policy, and a lock at boot if it asks for one.
+	lock_reload();
+	lock_last_input = z_uptime_ticks();
+	if ((lock_st.flags & Z_AUTH_HAS_PASSWORD) && lock_st.lock_boot)
+		lock_pending = true;
 
 	// diagnostic: prints whenever either USB HID port's device type
 	// changes (rtl/ext/usb_hid_host/src/usb_hid_host.v's `typ`
@@ -6173,6 +6389,11 @@ int main(void) {
 		int cx = get_cursor_x();
 		int cy = get_cursor_y();
 		uint8_t btn = get_mouse_btn();
+		if (cx != last_cx || cy != last_cy || btn != last_btn) {
+			lock_last_input = z_uptime_ticks();
+			last_cx = cx;
+			last_cy = cy;
+		}
 		bool btn_down = (btn & 1) != 0;
 		bool btn_was_down = (last_btn & 1) != 0;
 
@@ -6183,7 +6404,7 @@ int main(void) {
 		 *
 		 * dispatch_mouse() below still runs, so the owner gets the
 		 * click; it is only wm's own handling of it that stops. */
-		if (btn_down && !btn_was_down && !game_grab_pid) {
+		if (btn_down && !btn_was_down && !game_grab_pid && !wm_locked) {
 
 			int hit = hit_test(cx, cy);
 
@@ -6645,8 +6866,10 @@ int main(void) {
 		// reaching the app, and before the capture is released below,
 		// so the app still receives the button-up that ends its own
 		// gesture.
-		dispatch_mouse(cx, cy, btn);
-		dispatch_wheel(cx, cy);
+		if (!wm_locked) {
+			dispatch_mouse(cx, cy, btn);
+			dispatch_wheel(cx, cy);
+		}
 
 		// Super held -- drag the game mode viewport along with the
 		// pointer. A level test on a held modifier, so it belongs here
@@ -6708,6 +6931,15 @@ int main(void) {
 		 * costs 732 wakeups a second, which is what this whole
 		 * mechanism exists to avoid, so it is a fallback and not a
 		 * mode anybody should be in. */
+		// The screen lock: asked for (Super+L, Z_WM_LOCK, boot), or
+		// due because nothing has moved for sys.lock.idle minutes.
+		if (!wm_locked && !lock_pending && lock_st.lock_idle_min &&
+		    (lock_st.flags & Z_AUTH_HAS_PASSWORD) &&
+		    (int32_t)(z_uptime_ticks() - lock_last_input) >=
+		    (int32_t)(lock_st.lock_idle_min * 60u * Z_TICK_HZ))
+			lock_pending = true;
+		if (lock_pending) lock_engage();
+
 		caption_tick();
 
 		z_proc_wait(ptr_wakeups ? wm_idle_ticks() : 1);

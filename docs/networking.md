@@ -4,11 +4,13 @@
 DHCP, DNS, NTP, TCP, and the services built on them — telnet, SSH,
 TFTP, and raw sockets for other applications.
 
-It is one process, and it holds **one TCP connection**. That single
-fact shapes everything below: there is no connection table, no
-listening socket, and an application that wants the network asks
-`net` for it over the message port rather than opening a socket
-itself.
+It is one process, and every TCP connection in the system is one of
+its pool of eight (`tcp.c`, "Connections" below). It used to hold
+exactly one, and that shaped much of what follows: an application that
+wants the network still asks `net` for it over the message port rather
+than opening a socket itself, and each kind of session -- telnet, ssh,
+a raw socket -- is still one at a time. But they no longer exclude one
+another, and `net` can accept connections as well as make them.
 
 ## What is here
 
@@ -352,13 +354,14 @@ by one process and re-sent by another gets translated twice and
 underflows. A socket client builds this map and sends it straight to
 `net`. It is translated once, and nothing forwards it.
 
-### One TCB means one session
+### One of each kind, not one in all
 
-A socket, a telnet session and an SSH session are mutually exclusive,
-system-wide. That is not new — telnet and SSH already excluded each
-other — but it now means **browsing and an SSH session cannot happen
-at the same time**. Both the socket handler and the telnet handler
-check all three states, because either can be started first.
+There is one socket, one telnet session and one SSH session at a time
+-- `sock.c`, `telnet.c` and `ssh.c` each keep a single connection --
+but they no longer exclude each other: **browsing during an SSH
+session works**. Each handler checks only its own kind. That changed
+with the pool (below); before it, one TCB meant one session of any
+kind, and every handler checked all three.
 
 ### Unsent bytes are an error here, not a dropped keystroke
 
@@ -370,6 +373,92 @@ The socket path does not do that. A dropped fragment of a TLS record
 makes the connection unrecoverable in a way that surfaces much later
 as a decryption failure, so a full queue tears the connection down
 and tells the client instead.
+
+## ARP
+
+`arp.c` keeps eight entries. It follows RFC 826's merge rule: any ARP
+packet refreshes the entry for its sender if there is one, but a
+sender is only *learned* from a packet addressed to this machine -- a
+request for our address, or a reply to one of ours. When the cache is
+full the least recently used entry goes.
+
+It used to learn the sender of every ARP packet seen, and when full
+always overwrite slot 0. On a busy network the who-has broadcasts
+between other machines filled it, the first eight hosts heard kept
+slots 1-7 for good, and every new host shared slot 0 with the chatter:
+a TFTP server's reply landed there and was overwritten before the
+retry, and `tget` failed with "arp not resolved yet" every time. Found
+on a board that had been up a while with telnet sessions from another
+machine. `tests/test_arp.c` (`make test`) holds it to both rules, and
+fails against the old code.
+
+## Accepted connections
+
+`relay.c` relays each connection accepted on a listened port
+(`Z_NET_LISTEN`) to the process that listens -- `netserve`, which
+serves telnet and echo. The whole design, and its flow control in both
+directions, is in [netserve.md](netserve.md).
+
+## Connections
+
+`tcp.c` holds a pool of `TCP_MAX_CONN` (8) connections; each costs about
+600 bytes, most of it the retransmit copy of its one outstanding
+segment. It replaced a single static TCB when `net` had to accept
+connections for the network servers (`netserve`, the next phase) while
+still making its own.
+
+- **Handles.** `tcp_connect()` returns a `tcp_conn_t *`, and every call
+  and event carries one. A handle is dead after `TCP_EVENT_CLOSED` or
+  the caller's own `tcp_abort()` -- the slot is reused at once -- so
+  each client drops its pointer there. Inside `tcp.c` a handler may
+  abort its own connection, and even open a new one in the same slot,
+  from within an event; every path that continues after an event
+  checks the slot's generation first.
+- **Outbound is never starved.** Inbound connections may not take the
+  last `TCP_MIN_OUTBOUND_FREE` (2) free slots, so a burst of incoming
+  connections -- a browser, a port scan, a SYN flood -- cannot stop the
+  machine from making its own. A slot in TIME_WAIT counts as free; the
+  oldest is reclaimed when nothing else is.
+- **Listening.** `tcp_listen(port, accept)`; a SYN to a listened port
+  goes straight into a slot (SYN_RCVD) and the accept callback decides.
+  No SYN queue. A SYN-ACK is retried three times, not seven, so a
+  half-open connection gives its slot back in about seven seconds.
+- **RST.** A segment for no connection -- a closed port, a refused
+  accept, no free slot -- is answered with a RST, as RFC 793 asks. It
+  used to be dropped, which left a client waiting out its own timeout
+  instead of hearing "connection refused". An incoming RST is believed
+  only at exactly the next sequence number (RFC 5961); anything else
+  gets a challenge ACK.
+- **Sequence numbers** start from the CSPRNG, not the tick counter:
+  a guessable one lets someone off the path inject into a connection.
+- **TIME_WAIT.** A new SYN on a 4-tuple in TIME_WAIT reopens it.
+- **Windows share the NIC.** Its receive buffer is one buffer for all
+  connections, so each advertises its own limit within an equal share
+  of `rx_window_max`, never below one MSS. One connection gets the
+  whole of it, as before.
+- **The peer's MSS** is taken from its SYN; `tcp_mss()` is what
+  `tcp_send()` accepts, at most 536.
+- **Half-close**, for a connection that asks (`tcp_set_half_close()`):
+  the peer's FIN is `TCP_EVENT_EOF` and CLOSE_WAIT, the owner goes on
+  sending, and its `tcp_close()` finishes it. net's relay asks; the
+  clients (telnet, ssh, sock) do not, and a FIN still ends theirs both
+  ways. [netserve.md](netserve.md), "Half-close".
+- **A FIN held up by unacked data** is now sent when the data is
+  acked. It used to be left unsent and the connection sat in LAST_ACK
+  until its retries gave up.
+
+`tests/test_tcp_pool.c` (`make test`) plays the network against the
+real `tcp.c`: it builds the segments a peer sends and parses every one
+the stack sends back. 64 checks -- handshakes both ways, the MSS
+option, RSTs, the reservation, window sharing, the half-open timeout,
+RFC 5961, TIME_WAIT, the deferred FIN, a handler that aborts and
+reopens inside an event, three interleaved connections -- run with and
+without reassembly. Each behaviour above was confirmed to fail the
+test when removed, except the generation check after a DATA event,
+which today's code makes redundant (every later step also tests the
+connection's state); it is kept for the next line added there.
+
+For a 1 MB board: `make TCP_MAX_CONN=4 TCP_MIN_OUTBOUND_FREE=1`.
 
 ## Throughput
 
@@ -502,7 +591,7 @@ queue size means the app, not the network, is the constraint.
 |---|---|
 | **Stop-and-wait sending** | one segment outstanding. Fine for telnet and requests; it caps uploads. |
 | **No out-of-order reassembly** | the big one. A lost segment discards everything behind it. See "Throughput". |
-| **One TCB** | one TCP connection in the whole system. `web` keeps it alive across same-host requests rather than reopening. |
+| **A pool of 8** | eight TCP connections in the whole system, two always kept for outbound; one socket, one telnet and one ssh session at a time (see "Connections"). |
 | **No window scaling, SACK or timestamps** | only an MSS option, on the SYN. |
 | **No half-close** | a remote FIN gets ours straight back. |
 

@@ -821,6 +821,18 @@ typedef struct {
 #define Z_WM_WIN_KILL            131
 #define Z_WM_WIN_NEXT_PLACE      132
 
+// Z_WM_LOCK -- the screen lock (docs/security.md). Payload Z_UINT32:
+//
+//   Z_WM_LOCK_NOW     lock the screen now: Super+L, repl's and the
+//                     kernel console's `lock`
+//   Z_WM_LOCK_RELOAD  the password or the lock policy changed
+//                     (sw/apps/settings): read it again
+//
+// z_wm_lock_request() in zauth.h sends it. No reply.
+#define Z_WM_LOCK                133
+#define Z_WM_LOCK_NOW            0
+#define Z_WM_LOCK_RELOAD         1
+
 #define Z_WM_PACK_PLACE(x, y) \
 	((((uint32_t)(y) & 0x3FF) << 10) | ((uint32_t)(x) & 0x3FF))
 #define Z_WM_UNPACK_PLACE_X(v)   ((int)((v) & 0x3FF))

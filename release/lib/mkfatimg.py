@@ -175,6 +175,7 @@ SUPPLEMENTAL = [
     ("apps/track", "sw/apps/track/track.bin"),
     ("apps/view", "sw/apps/view/view.bin"),
     ("apps/web", "sw/apps/web/web.bin"),
+    ("apps/netserve", "sw/apps/net/netserve/netserve.bin"),
     ("apps/hex", "sw/apps/hex/hex.bin"),
     ("apps/play", "sw/apps/play/play.bin"),
     ("apps/midi", "sw/apps/midi/midi.bin"),

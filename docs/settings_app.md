@@ -23,8 +23,13 @@ Time zone: Munich
 | Munich         UTC+1  summer +1  | |
 +----------------------------------+-+
 [ Reload file ]           [ Set time zone ]
+
+Security                                flash
+Password                      [Change][Remove]
+  set
+Screen lock                            [Edit]
+  at start, after 5 min idle
 Berlin selected -- Set time zone to use it
-1 other setting in the file, kept as is
 ```
 
 | control | setting (`docs/config.md`) | takes effect |
@@ -35,6 +40,8 @@ Berlin selected -- Set time zone to use it
 | Japanese font | `system.font.japanese` | at once -- `jfont` is started or stopped |
 | Time zone list + Set time zone | `system.rtc.timezone` | clock and cal, within a second |
 | Reload file | -- | re-reads `/zeitlos.cfg` after editing it elsewhere |
+| Password: Set / Change, Remove | the flash key/value store, not the file | at once |
+| Screen lock: Edit | the same | at once: `wm` is told to re-read it |
 
 Each value line shows what is in effect, and `(default)` when the file
 does not set it.
@@ -138,11 +145,42 @@ than being written empty. `fs_write_file()` reports bytes written, so an
 empty write could not be told apart from a failed one. With no sdcard,
 the status line says the file could not be written.
 
+## Security: the password and the screen lock
+
+The one section that does not edit `/zeitlos.cfg`: the kernel keeps
+the password and the lock policy in the flash key/value store, so they
+hold with no card, and changes them only when given the current
+password ([security.md](security.md)).
+
+- **Password** shows *not set*, *set*, or *set -- too short for network
+  use* (under 10 characters: fine for the screen lock, refused by
+  network logins). **Set** / **Change** asks for the current password
+  if there is one, then the new one twice; **Remove** asks to confirm,
+  then for the current password.
+- **Screen lock** shows what is on: *at start*, *after N min idle*,
+  *console too*, or *only on Super+L*. **Edit** asks three questions --
+  lock at start? how many idle minutes (0 for never, 1440 at most)? the
+  serial console too? -- then for the current password.
+- **Every password field shows `*`** and is wiped when its dialog
+  closes (`z_dialog_prompt_secret()`); the app wipes its own copies
+  after each change.
+- **After a change, `wm` re-reads the policy** (`Z_WM_LOCK_RELOAD`), so
+  a new idle timeout applies at once.
+- The buttons are disabled, and the rows say why, on a bitstream that
+  cannot write the flash or a kernel without `Z_SYS_AUTH`.
+
+The host test (`tests/render.c`) scripts `Z_SYS_AUTH` and walks every
+path: set, a wrong current password, two new passwords that differ,
+cancelling, a short password, the policy with good and bad minute
+counts and a wrong password, removal, and the read-only and old-kernel
+cases -- and renders the section.
+
 ## Keyboard-only
 
 Fully usable with no pointer.
 
-- **Tab and Shift+Tab** move between every control, including the list.
+- **Tab and Shift+Tab** move between every control, including the list
+  and, after Reload, the Security buttons.
   Outside the list, the arrow keys do too.
 - **Enter or Space** activates one.
 

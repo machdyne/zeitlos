@@ -18,6 +18,16 @@
 // lists the same keys with the full story; keep the two together.
 
 const z_cfg_known_t z_cfg_known[] = {
+	{ "apps.netserve.allow", "subnet",
+	  "netserve: accept connections from the subnet only, or any (docs/netserve.md)" },
+	{ "apps.netserve.echo", "off",
+	  "netserve: an echo service for testing, on this port (7), or off" },
+	{ "apps.netserve.http", "off",
+	  "netserve: HTTP on a port, serving a directory -- 80 /www -- or off" },
+	{ "apps.netserve.ssh", "off",
+	  "netserve: SSH on a port, to a port name -- 22 posix0 -- or off; needs a 10+ character password" },
+	{ "apps.netserve.telnet", "off",
+	  "netserve: telnet on a port, to a port name -- 23 repl0 -- or off; needs a 10+ character password" },
 	{ "apps.term.auto_connect", "",
 	  "what a new term window connects to, e.g. port repl0 (empty: start panel)" },
 	{ "system.keyboard.layouts", "us",

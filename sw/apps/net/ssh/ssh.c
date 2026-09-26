@@ -33,6 +33,7 @@ typedef enum {
 
 static ssh_proto_t proto;
 static bool active;
+static tcp_conn_t *conn;		// dropped on CLOSED (tcp.h)
 
 static ssh_out_handler_t app_on_out;
 static ssh_ready_handler_t app_on_ready;
@@ -141,8 +142,11 @@ static void proto_event(void *u, ssh_event_t ev, const uint8_t *data,
 		crypto_wipe((uint8_t *)line, sizeof(line));
 		// tcp_abort() rather than tcp_close(): the SSH layer has
 		// already said everything it intends to, and waiting out a
-		// FIN exchange only delays freeing the single TCB.
-		tcp_abort();
+		// FIN exchange only delays freeing the slot. Often called
+		// from inside this connection's own data callback; tcp.c
+		// allows that (tcp.h, "a handle is a pointer into the pool").
+		if (conn) tcp_abort(conn);
+		conn = NULL;
 		if (app_on_closed) app_on_closed(text);
 		break;
 
@@ -152,7 +156,8 @@ static void proto_event(void *u, ssh_event_t ev, const uint8_t *data,
 
 // -- tcp events --
 
-static void on_tcp_event(tcp_event_t ev, const uint8_t *data, uint16_t len) {
+static void on_tcp_event(tcp_conn_t *c, tcp_event_t ev, const uint8_t *data, uint16_t len) {
+	(void)c;
 
 	switch (ev) {
 
@@ -173,8 +178,13 @@ static void on_tcp_event(tcp_event_t ev, const uint8_t *data, uint16_t len) {
 		if (active) ssh_proto_feed(&proto, data, len);
 		break;
 
+	case TCP_EVENT_EOF:
+		// never: this connection does not ask for half-close (tcp.h)
+		break;
+
 	case TCP_EVENT_CLOSED:
 		printf("ssh: tcp closed (active=%d)\n", (int)active);
+		conn = NULL;
 		if (active) {
 			active = false;
 			collecting = COLLECT_NONE;
@@ -302,8 +312,13 @@ bool ssh_connect(uint32_t ip, uint16_t port, const char *user,
 		(long)((ip >> 24) & 0xFF), (long)((ip >> 16) & 0xFF),
 		(long)((ip >> 8) & 0xFF), (long)(ip & 0xFF), (int)target_port);
 
-	if (!tcp_connect(ip, target_port, on_tcp_event)) {
-		printf("ssh: tcp_connect refused -- another connection is open\n");
+	if (conn) {
+		printf("ssh: already connected\n");
+		return false;
+	}
+	conn = tcp_connect(ip, target_port, on_tcp_event, NULL);
+	if (!conn) {
+		printf("ssh: tcp_connect refused -- every connection slot is in use\n");
 		return false;
 	}
 
@@ -361,19 +376,20 @@ void ssh_abort(void) {
 	collecting = COLLECT_NONE;
 	tx_queue_len = 0;
 	crypto_wipe((uint8_t *)line, sizeof(line));
-	tcp_abort();
+	if (conn) tcp_abort(conn);
+	conn = NULL;
 }
 
 void ssh_poll(void) {
 
 	uint16_t n;
 
-	if (!tcp_is_connected()) return;
+	if (!tcp_is_connected(conn)) return;
 	if (tx_queue_len == 0) return;
 
-	n = tx_queue_len > TCP_MAX_PAYLOAD ? TCP_MAX_PAYLOAD : tx_queue_len;
+	n = tx_queue_len > tcp_mss(conn) ? tcp_mss(conn) : tx_queue_len;
 
-	if (tcp_send(tx_queue, n)) {
+	if (tcp_send(conn, tx_queue, n)) {
 		memmove(tx_queue, tx_queue + n, tx_queue_len - n);
 		tx_queue_len -= n;
 	}

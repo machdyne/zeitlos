@@ -36,6 +36,14 @@ position in the log.
   instead the panic draws the end of this log straight onto the screen
   itself ([mpu.md](mpu.md#crash-reporting)).
 
+## The password
+
+The console lock ([security.md](security.md)) covers this port as it
+covers UART0: they are one shell. `passwd reset`, which removes the
+password without asking for it, is the exception -- it is refused here
+and accepted only on UART0, because the kernel can tell the two apart
+(bytes injected through this port are marked in the UART receive ring).
+
 ## How it works
 
 ```

@@ -27,6 +27,8 @@
 #include "fsapi.h"
 #include "procapi.h"
 #include "flashapi.h"	// k_flash, referenced by the syscall table
+#include "kvstore.h"	// k_kv, the same
+#include "auth.h"		// k_auth, the same
 #include "usbnetapi.h"	// k_usbnet, referenced by the syscall table
 #include "usbcdcapi.h"	// k_usbcdc_*, referenced by the syscall table	// k_proc_list(), referenced by the syscall
 						// table built from syscalls.def below
@@ -819,6 +821,12 @@ int main(void) {
 		fs_ramdisk_create(ram_bytes);
 	}
 
+	// The flash key/value store (docs/kvstore.md): found and summarised
+	// before anything can reach Z_SYS_KV. Reads only.
+	k_kv_init();
+	// The password and lock policy (docs/security.md), which live in it.
+	k_auth_init();
+
 	printf(" - starting shell.\n");
 
 	// the kernel shell is process zero
@@ -1006,6 +1014,8 @@ static uint32_t *k_sched_switch(uint32_t *regs) {
 		k_fs_release_all(z_pid);
 		// and its flash session, if it held one (flashapi.c)
 		k_flash_release_pid(z_pid);
+		// and the password check's gate, if it died mid-check (auth.c)
+		k_auth_release_pid(z_pid);
 		z_procs[z_pid].base = 0x00000000;
 		z_procs[z_pid].flags = 0x00000000;
 		goto next_process;

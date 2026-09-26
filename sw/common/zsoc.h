@@ -379,6 +379,18 @@
 #define Z_JUMP_FLASH_OFFSET   0x1D0000u
 #define Z_JUMP_REGION_SIZE    0x30000u
 
+// The flash key/value store (docs/kvstore.md): the LAST Z_KV_SIZE bytes
+// of the chip -- two 4 KB sectors. On a 2 MB chip that is 0x1FE000,
+// past every jumploader built so far (the 45F one ends at 0x1F7BE9).
+// A chip larger than 16 MB keeps it at the top of the first 16 MB,
+// which is all the controller's 3-byte addresses reach; a chip whose
+// size cannot be read (no flash writer in this bitstream) is taken to
+// be Z_KV_DEFAULT_FLASH_SIZE. KEEP IN SYNC with ZFPGA_KV_SIZE in
+// sw/apps/zfpga/boot.c (release/lib/layout.py checks).
+#define Z_KV_SIZE                0x2000u
+#define Z_KV_DEFAULT_FLASH_SIZE  0x200000u
+#define Z_KV_FLASH_MAX           0x1000000u
+
 // -- the flash controller's registers (rtl/spiflash.v) --
 //
 // The kernel owns these: apps go through Z_SYS_FLASH (zflash.h), which

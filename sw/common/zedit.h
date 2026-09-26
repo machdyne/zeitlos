@@ -59,6 +59,12 @@ typedef struct {
 	// strong claims on where typing goes.
 	bool		focus;
 
+	// A password field: every character is drawn as '*', and only
+	// printable ASCII is accepted, so each character is one column and
+	// the stars line up with the caret. Set it after z_edit_init().
+	// The caller owns the buffer and should wipe it when done.
+	bool		secret;
+
 } z_edit_t;
 
 // `initial` may be NULL. The caret lands at the end, which is where

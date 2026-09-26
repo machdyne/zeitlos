@@ -15,11 +15,17 @@
  * Deliberately simplified relative to a general-purpose TCP, in the
  * same spirit tftp.c/udp.h document their own simplifications:
  *
- * - **One connection at a time**, a single static TCB -- same
- *   constraint TFTP already accepted for its own "one transfer at a
- *   time" (docs/networking.md). Revisit (a TCB array/table) if
- *   something ever needs concurrent TCP connections; nothing does
- *   yet.
+ * - **A small pool of connections**, TCP_MAX_CONN (8) of them, shared
+ *   by both directions. Inbound connections may never take the last
+ *   TCP_MIN_OUTBOUND_FREE (2) free slots, so a burst of incoming
+ *   connections -- a browser, a scan, a SYN flood -- cannot stop this
+ *   machine from making its own. A slot in TIME_WAIT counts as free: the
+ *   oldest one is reclaimed when nothing else is.
+ *
+ *   It was one static TCB until the network servers (netserve)
+ *   needed to accept connections while the machine kept making its own.
+ *   The pool is the one change that made telnet, ssh and web sessions
+ *   stop excluding one another.
  * - **Stop-and-wait sending**: at most one unacknowledged outbound
  *   segment at a time (tcp_send() returns false if the previous one
  *   hasn't been acked yet -- caller should just retry on a later
@@ -76,8 +82,13 @@
  *   through CLOSE_WAIT and waiting for the application to decide --
  *   telnet has no use for keeping one direction open after the other
  *   closes, so this isn't implemented.
- * - **No listening/passive-open side, no SYN queue.** Nothing in
- *   Zeitlos needs to accept incoming TCP connections yet.
+ * - **Listening, without a SYN queue.** tcp_listen() registers a port
+ *   and an accept callback; a SYN for it is accepted straight into a
+ *   pool slot (SYN_RCVD), or answered with RST when there is no slot
+ *   or the callback declines. A segment for no connection at all gets a
+ *   RST too, as RFC 793 asks -- the stack used to drop those silently,
+ *   which left a client trying a closed port waiting out its own
+ *   timeout instead of hearing "connection refused".
  *
  * None of this has been run against real hardware or a real TCP
  * stack yet -- see docs/networking.md's own template for what
@@ -86,6 +97,19 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+
+// -- the pool --
+//
+// A connection costs about 600 bytes, mostly its retransmit copy of one
+// segment. TCP_MAX_CONN=4 TCP_MIN_OUTBOUND_FREE=1 suits a 1 MB board.
+#ifndef TCP_MAX_CONN
+#define TCP_MAX_CONN 8
+#endif
+#ifndef TCP_MIN_OUTBOUND_FREE
+#define TCP_MIN_OUTBOUND_FREE 2
+#endif
+
+typedef struct tcp_conn tcp_conn_t;
 
 // max application-data bytes we ever SEND in one segment -- see the
 // "no options at all" note above for why this is exactly RFC 879's
@@ -215,8 +239,11 @@ void tcp_stats_reset(void);
 // discarded along with everything behind it.
 void tcp_set_rx_window_max(uint16_t w);
 
-void tcp_set_rx_window(uint16_t w);
-void tcp_ack_now(void);
+// The connection's own window, below the share (tcp.c's
+// window_for()): lowered by a listener that cannot keep up, raised
+// again when it can.
+void tcp_set_rx_window(tcp_conn_t *c, uint16_t w);
+void tcp_ack_now(tcp_conn_t *c);
 
 typedef enum {
 	// the handshake completed -- data/tcp_send() usable from here.
@@ -228,65 +255,104 @@ typedef enum {
 	// if you need to keep it past returning.
 	TCP_EVENT_DATA,
 
-	// the connection is gone -- either end closed it (FIN exchange
-	// completed, or a FIN was received and immediately answered with
-	// our own, see tcp.h's own "no half-close" note), a RST arrived,
-	// or the handshake/a retransmit gave up after too many retries.
-	// No further tcp_send() calls are valid until tcp_connect() is
-	// called again. If this arrives before TCP_EVENT_ESTABLISHED
-	// ever did, the connection attempt itself failed -- the caller
-	// asked to connect but never got established.
+	// the peer has finished SENDING (its FIN), and nothing more will
+	// arrive -- but this end may still send, and closes with
+	// tcp_close() when it is done. Only for a connection that asked
+	// for it with tcp_set_half_close(); without that, a FIN ends the
+	// connection both ways and CLOSED comes instead.
+	TCP_EVENT_EOF,
+
+	// the connection is gone -- either end closed it, a RST arrived,
+	// or the handshake or a retransmit gave up. THE LAST EVENT, and
+	// the handle is dead from here: drop it. The slot may be reused by
+	// the next connection, so calling anything with a handle after its
+	// CLOSED acts on someone else's connection. If this arrives before
+	// ESTABLISHED ever did, the connection attempt itself failed.
 	TCP_EVENT_CLOSED,
 
 } tcp_event_t;
 
-typedef void (*tcp_event_handler_t)(tcp_event_t ev, const uint8_t *data, uint16_t len);
+// tcp_conn_t (above) is one connection. Callers hold the pointer and
+// treat it as opaque.
 
-// call once at startup (net.c, alongside arp_init()/ip_init()) --
-// needed for tcp_checksum()'s pseudo-header, though ip_our_addr()
-// (ip.h) could also supply this; kept as an explicit init call for
-// symmetry with arp_init()/ip_init() rather than a hidden dependency
-// on ip.c having already run.
+typedef void (*tcp_event_handler_t)(tcp_conn_t *c, tcp_event_t ev,
+	const uint8_t *data, uint16_t len);
+
+// call once at startup, and again when the address changes (DHCP).
 void tcp_init(uint32_t our_ip);
 
-// starts an active open to dst_ip:dst_port. returns false if a
-// connection is already in progress/established (see "one connection
-// at a time" above) -- close it first. `handler` is called for every
-// event on this connection from here until TCP_EVENT_CLOSED.
-bool tcp_connect(uint32_t dst_ip, uint16_t dst_port, tcp_event_handler_t handler);
+// Starts an active open. NULL if every slot is in use. `handler` gets
+// every event on this connection until TCP_EVENT_CLOSED; `user` is
+// the caller's, returned by tcp_user().
+tcp_conn_t *tcp_connect(uint32_t dst_ip, uint16_t dst_port,
+	tcp_event_handler_t handler, void *user);
 
-// true only in the ESTABLISHED state -- tcp_send() is only valid
-// while this is true.
-bool tcp_is_connected(void);
+// -- listening --
+//
+// Called for a SYN to a listened port, with a slot already set aside.
+// Return the handler for the new connection (and set *user) to accept,
+// NULL to refuse -- the peer then gets a RST. ESTABLISHED follows once
+// the handshake completes; if it never does, CLOSED does instead.
+typedef tcp_event_handler_t (*tcp_accept_t)(tcp_conn_t *c, uint16_t local_port,
+	uint32_t remote_ip, uint16_t remote_port, void **user);
 
-// queues len bytes for sending. returns false if not established, if
-// len exceeds TCP_MAX_PAYLOAD, or if the previous segment sent isn't
-// acked yet (see "stop-and-wait" above) -- the caller should hold the
-// data and just call this again on a later poll in that last case.
-bool tcp_send(const uint8_t *data, uint16_t len);
+#define TCP_MAX_LISTEN 4
 
-// begins a graceful active close (sends FIN) from the ESTABLISHED
-// state. Returns false (no-op) if not established, or if the
-// previous segment isn't acked yet -- same stop-and-wait constraint
-// tcp_send() has, since FIN consumes the same single outstanding-
-// segment slot. TCP_EVENT_CLOSED fires once the close completes.
-bool tcp_close(void);
+// false if the port is already listened or the table is full.
+bool tcp_listen(uint16_t port, tcp_accept_t accept);
+void tcp_unlisten(uint16_t port);
 
-// forces the connection down right away: RST's the peer (best
-// effort -- doesn't wait for or retransmit it) if there's an active
-// connection, and resets local state to CLOSED immediately, skipping
-// any FIN exchange. For a caller that needs to abandon a connection
-// NOW (e.g. the port client hung up) rather than waiting out a
-// graceful close. Does not itself call the event handler -- the
-// caller already knows why it's closing.
-void tcp_abort(void);
+// -- one connection --
+
+bool tcp_is_connected(const tcp_conn_t *c);    // ESTABLISHED
+bool tcp_can_send(const tcp_conn_t *c);        // ESTABLISHED, or half-closed by the peer
+
+// Half-close (RFC 793's CLOSE_WAIT): a FIN from the peer then means only
+// "I have finished sending", delivered as TCP_EVENT_EOF, and this end
+// goes on sending until its own tcp_close(). A client like `nc` sends
+// its FIN as soon as its input ends and expects the answer to keep
+// coming; without this, whatever had not gone out yet was lost.
+// net's relay (relay.c) opts in; telnet.c, sock.c and ssh.c do not.
+void tcp_set_half_close(tcp_conn_t *c, bool on);
+void *tcp_user(const tcp_conn_t *c);
+uint32_t tcp_remote_ip(const tcp_conn_t *c);
+uint16_t tcp_remote_port(const tcp_conn_t *c);
+uint16_t tcp_local_port(const tcp_conn_t *c);
+bool tcp_is_inbound(const tcp_conn_t *c);
+
+// The most tcp_send() takes at once: the peer's MSS, at most
+// TCP_MAX_PAYLOAD.
+uint16_t tcp_mss(const tcp_conn_t *c);
+
+// queues len bytes for sending. false if not established, if len
+// exceeds tcp_mss(), or if the previous segment sent isn't acked yet
+// (see "stop-and-wait" above) -- hold the data and try again on a
+// later poll in that last case.
+bool tcp_send(tcp_conn_t *c, const uint8_t *data, uint16_t len);
+
+// begins a graceful close (FIN). false if not established, or if the
+// previous segment isn't acked yet. TCP_EVENT_CLOSED follows.
+bool tcp_close(tcp_conn_t *c);
+
+// forces the connection down now: RST to the peer (best effort), and
+// the slot freed at once. Does NOT call the handler -- the caller
+// already knows. The handle is dead after this, as after CLOSED.
+void tcp_abort(tcp_conn_t *c);
+
+// -- the stack --
 
 // dispatched from ip_handle() for protocol 6 (TCP).
 void tcp_handle(uint32_t src_ip, const uint8_t *payload, uint16_t len);
 
-// call every main-loop iteration (alongside eth_poll()) -- handles
-// retransmit timeouts and TIME_WAIT expiry. No-op if there's no
-// connection in progress.
+// call every main-loop iteration -- retransmits, handshake and
+// TIME_WAIT timeouts, for every connection.
 void tcp_poll(void);
+
+// Connections in use (not CLOSED), for diagnostics and tests.
+int tcp_count(void);
+
+// For stall reports: whether a segment is out unacked, how many times
+// it has been retransmitted, and its length.
+void tcp_debug(const tcp_conn_t *c, bool *pending, uint8_t *retries, uint16_t *len);
 
 #endif

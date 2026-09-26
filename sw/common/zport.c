@@ -248,6 +248,28 @@ void z_port_accept(z_port_t *out_port, const z_msg_t *connect_msg, uint32_t conn
 	z_msg_new_send(connect_msg->from, Z_PORT_CONNECTED, 0, z_obj_uint32(conn_id));
 }
 
+void z_port_handle_ack_closed(z_port_t *port, const z_msg_t *msg) {
+	bool was = port->connected;
+	port->connected = true;
+	z_port_handle_ack(port, msg);
+	port->connected = was;
+}
+
+void z_port_forget(z_port_t *port) {
+	while (port->pending_count) {
+		z_obj_t blob = { .type = Z_BLOB, .val.ptr = port->pending[port->pending_head].header };
+		z_obj_free(&blob);
+		port->pending_head = (port->pending_head + 1) % Z_PORT_MAX_PENDING_SENDS;
+		port->pending_count--;
+	}
+	port->connected = false;
+}
+
+void z_port_reject_stranger(const z_msg_t *msg) {
+	if (msg->obj.type == Z_BLOB) z_port_send_ack(msg);
+	z_msg_new_send(msg->from, Z_PORT_CLOSE, msg->tag, z_obj_none());
+}
+
 void z_port_refuse(const z_msg_t *connect_msg, const char *reason) {
 	z_msg_new_send(connect_msg->from, Z_PORT_REFUSED, 0,
 		z_obj_str(reason ? reason : ""));

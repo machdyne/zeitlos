@@ -119,6 +119,7 @@
 #if NET_SOCK
 #include "sock.h"
 #include "tcp.h"		// tcp_set_rx_window(), tcp_ack_now()
+#include "relay.h"		// accepted connections: Z_NET_LISTEN, docs/netserve.md
 #endif
 #include "netcfg.h"
 #include "screen.h"
@@ -238,7 +239,7 @@ static uint32_t telnet_client_pid;	// valid once state != TN_IDLE
 
 #if NET_SOCK
 
-// -- sock: a raw TCP session type through the same single TCB --
+// -- sock: a raw TCP session type, one connection from tcp.c's pool --
 //
 // The third and last consumer of tcp.c's one connection. Same shape
 // as telnet's state machine above and for the same reasons -- the
@@ -276,7 +277,7 @@ static uint32_t sock_conn_id = 3;
 
 #if SSH_ENABLE
 
-// -- ssh: a second zport session type through the same single TCB --
+// -- ssh: a second zport session type, one connection from the pool --
 //
 // tcp.c has one connection, so SSH and telnet are mutually exclusive
 // and both states are checked before either starts. That is not a
@@ -626,7 +627,7 @@ static void sock_update_window(void) {
 
 	if ((uint16_t)w == sock_win_last) return;
 
-	tcp_set_rx_window((uint16_t)w);
+	if (sock_tcp()) tcp_set_rx_window(sock_tcp(), (uint16_t)w);
 
 	// Reopening has to be announced -- but NOT from here.
 	//
@@ -798,9 +799,11 @@ static void handle_ssh_prepare(const z_msg_t *msg) {
 		return;
 	}
 
-	if (telnet_state != TN_IDLE || ssh_state != SSH_IDLE) {
+	// One ssh session at a time (ssh.c keeps one). Telnet and socket
+	// sessions no longer exclude it: tcp.c has a pool.
+	if (ssh_state != SSH_IDLE) {
 		reply_error(msg->from, Z_NET_SSH_PREPARE_REPLY, msg->tag,
-			"net: already busy with another session");
+			"net: an ssh session is already open");
 		return;
 	}
 
@@ -882,8 +885,8 @@ static bool handle_ssh_port_connect(const z_msg_t *msg) {
 		return false;
 	}
 
-	if (telnet_state != TN_IDLE || ssh_state != SSH_IDLE) {
-		z_port_refuse(msg, "net: already busy with another session");
+	if (ssh_state != SSH_IDLE) {
+		z_port_refuse(msg, "net: an ssh session is already open");
 		return true;
 	}
 
@@ -1014,16 +1017,10 @@ static bool handle_sock_port_connect(const z_msg_t *msg) {
 		return true;
 	}
 
-	if (sock_state != SO_IDLE || telnet_state != TN_IDLE
-#if SSH_ENABLE
-		|| ssh_state != SSH_IDLE
-#endif
-		) {
-		// One TCB, so one session of any kind. Worth naming the
-		// constraint in the message: a client seeing this while its
-		// user has an ssh window open otherwise has no way to know
-		// why its fetch failed.
-		z_port_refuse(msg, "net: tcp busy with another session");
+	// One socket at a time (sock.c and the relay below keep one).
+	// Telnet and ssh no longer exclude it: tcp.c has a pool.
+	if (sock_state != SO_IDLE) {
+		z_port_refuse(msg, "net: a socket is already open");
 		return true;
 	}
 
@@ -1041,7 +1038,7 @@ static bool handle_sock_port_connect(const z_msg_t *msg) {
 	tcp_stats_reset();
 	sock_win_last = 0xFFFF;			// force a fresh advertisement
 	sock_win_reopened = false;
-	tcp_set_rx_window(TCP_RX_WINDOW);
+	// (the new connection starts with the full window: tcp_connect())
 
 	printf("net: socket connecting to ");
 	print_ip(ip);
@@ -1049,7 +1046,7 @@ static bool handle_sock_port_connect(const z_msg_t *msg) {
 
 	if (!sock_connect(ip, (uint16_t)port, sock_on_established,
 			sock_on_data, sock_on_closed)) {
-		z_port_refuse(msg, "net: tcp busy with another connection");
+		z_port_refuse(msg, "net: every tcp connection slot is in use");
 		return true;
 	}
 
@@ -1131,27 +1128,14 @@ static void handle_telnet_port_connect(const z_msg_t *msg) {
 	// claims the message if the value matches a live token it issued,
 	// so a real IP falls straight through to telnet below.
 	if (handle_ssh_port_connect(msg)) return;
-
-	if (ssh_state != SSH_IDLE) {
-		z_port_refuse(msg, "net: already busy with an ssh session");
-		return;
-	}
 #endif
 
+	// One telnet session at a time (telnet.c keeps one); ssh and
+	// socket sessions no longer exclude it -- tcp.c has a pool.
 	if (telnet_state != TN_IDLE) {
-		z_port_refuse(msg, "net: already busy with another telnet session");
+		z_port_refuse(msg, "net: a telnet session is already open");
 		return;
 	}
-
-#if NET_SOCK
-	// One TCB: a socket session blocks telnet exactly as an ssh
-	// session does. Checked here as well as in the socket handler
-	// because either can be started first.
-	if (sock_state != SO_IDLE) {
-		z_port_refuse(msg, "net: already busy with a socket session");
-		return;
-	}
-#endif
 
 	if (msg->obj.type != Z_UINT32) {
 		z_port_refuse(msg, "net: telnet requires a target IP");
@@ -1166,7 +1150,7 @@ static void handle_telnet_port_connect(const z_msg_t *msg) {
 	printf(" for pid %ld\n", (long)telnet_client_pid);
 
 	if (!telnet_connect(ip, telnet_on_established, telnet_on_data, telnet_on_closed)) {
-		z_port_refuse(msg, "net: tcp busy with another connection");
+		z_port_refuse(msg, "net: every tcp connection slot is in use");
 		return;
 	}
 
@@ -1431,6 +1415,7 @@ int main(void) {
 	// more than the hardware can hold is what produced 153 dropped
 	// segments in a 258KB transfer.
 	tcp_set_rx_window_max(phy_rx_capacity());
+	relay_init();
 
 	printf("net: initializing %s...\n", NET_PHY_NAME);
 
@@ -1575,7 +1560,12 @@ int main(void) {
 		NP_T0(_np_msg);
 		z_msg_t msg;
 		while (z_msg_read(&msg) == Z_OK) {
-			if (msg.subject == Z_STREAM_OPEN) handle_stream_open(&msg);
+			// A listener's messages first: its DATA would otherwise be
+			// claimed by a handler below that matches by tag alone.
+			if (relay_msg(&msg)) continue;
+			if (msg.subject == Z_NET_LISTEN) relay_listen(&msg);
+			else if (msg.subject == Z_NET_UNLISTEN) relay_unlisten(&msg);
+			else if (msg.subject == Z_STREAM_OPEN) handle_stream_open(&msg);
 			else if (msg.subject == Z_NET_TFTP_PUT) handle_tftp_put_request(&msg);
 			else if (msg.subject == Z_NET_DNS_RESOLVE) handle_dns_resolve(&msg);
 			// A DNS reply arriving HERE, at net, is net's own DNS
@@ -1644,6 +1634,7 @@ int main(void) {
 
 		NP_PHASE(NP_TFTP, check_tftp_progress());
 		NP_PHASE(NP_TCP, tcp_poll());
+		relay_poll();
 		NP_PHASE(NP_TELNET, telnet_poll());
 #if NET_SOCK
 		NP_T0(_np_sock);
@@ -1652,7 +1643,7 @@ int main(void) {
 		if (sock_rx_len) sock_rx_flush();
 		// And announce a window that has reopened, from out here
 		// rather than from inside tcp.c's receive path.
-		if (sock_win_reopened) { sock_win_reopened = false; tcp_ack_now(); }
+		if (sock_win_reopened) { sock_win_reopened = false; tcp_ack_now(sock_tcp()); }
 		NP_ACC(NP_SOCK, _np_sock);
 #endif
 #if SSH_ENABLE

@@ -15,6 +15,7 @@ uint32_t k_flash_hw_program(uint32_t addr, const uint8_t *buf, uint32_t len);
 uint8_t k_flash_window(uint32_t off);            // a byte of the flash, through the window
 
 #define K_FLASH_KERNEL 0xFFFFFFFFu               // the session owner when the shell writes
+#define K_FLASH_KV     0xFFFFFFFEu               // ... when the key/value store writes (kvstore.c)
 bool k_flash_begin(uint32_t owner);
 void k_flash_end(uint32_t owner);
 bool k_flash_session_active(void);               // zar.c: no flash-app launches while true

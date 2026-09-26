@@ -40,6 +40,12 @@
 #define ZFPGA_ZAR_OFFSET   0x140000u
 #define ZFPGA_JUMP_OFFSET  0x1D0000u
 #define ZFPGA_JUMP_END     0x200000u
+/* The key/value store: the last 8 KB of the chip (or of its first 16 MB,
+ * all a 3-byte address reaches). The kernel refuses writes there
+ * (docs/kvstore.md). KEEP IN SYNC with Z_KV_SIZE / Z_KV_FLASH_MAX in
+ * sw/common/zsoc.h. */
+#define ZFPGA_KV_SIZE      0x2000u
+#define ZFPGA_KV_FLASH_MAX 0x1000000u
 /* ... and the gateware region: Zeitlos's own bitstream starts at
  * USERPART_START on a board with the DFU bootloader, at 0 without, and
  * must end before the boot logo (sw/bios, logo.h). */
@@ -161,7 +167,8 @@ static int free_spaces(const zio_flash_info_t *fi, space_t *sp) {
         sp[n++].what = "after Zeitlos's gateware";
     }
     if (fi->size > ZFPGA_JUMP_END) {
-        sp[n].lo = ZFPGA_JUMP_END; sp[n].hi = fi->size;
+        uint32_t top = fi->size > ZFPGA_KV_FLASH_MAX ? ZFPGA_KV_FLASH_MAX : fi->size;
+        sp[n].lo = ZFPGA_JUMP_END; sp[n].hi = top - ZFPGA_KV_SIZE;
         sp[n++].what = "after the jumploader";
     }
     return n;

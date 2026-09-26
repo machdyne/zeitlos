@@ -37,6 +37,12 @@ enum {
 	Z_FLASH_PROGRAM = 5,    // addr, buf, len (1..256, within one 256-byte page)
 };
 
+// Refused by the kernel rather than the controller: the range holds the
+// key/value store (the last Z_KV_SIZE bytes of the chip, zsoc.h), which
+// only the kernel writes -- docs/kvstore.md. Returned in `result` by
+// z_flash_erase() and z_flash_program(), like the controller's bits.
+#define Z_FLASH_E_RESERVED   (1u << 16)
+
 typedef struct {
 	uint32_t op;
 	uint32_t addr;          // a flash offset, not a window address

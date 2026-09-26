@@ -77,6 +77,19 @@ What this does not cover is **another bitstream**: user gateware booted
 through the jumploader has the flash pins to itself. `docs/zboot.md`
 section 7 has why the chip's own block protection is not used for that.
 
+## The key/value store is off limits
+
+The last 8 KB of the chip is the kernel's key/value store
+([kvstore.md](kvstore.md)). `Z_SYS_FLASH` refuses to erase or program
+any of it, whoever asks, with `Z_FLASH_E_RESERVED` (bit 16, `zflash.h`)
+in `result` -- a refusal made by the kernel, not the controller, so it
+appears alongside the controller's own bits. The check is made modulo
+the chip size, since the chip ignores address bits above it: on a
+2 MB part, `0x3FE000` reaches the same bytes as `0x1FE000`.
+
+`kv test` checks the refusal on a board. `zfpga` already keeps its user
+gateware clear of the store.
+
 ## Writing from software
 
 Apps use `Z_SYS_FLASH` through `sw/common/zflash.h`; the kernel owns the
@@ -108,14 +121,16 @@ From the serial shell:
 
 ```
 flash        JEDEC ID, size, the lock, the status
-flashtest    erase and program sector 0x1FF000, and read it back
+flashtest    erase and program sector 0x1FC000, and read it back
 ```
 
-`flashtest` uses the last 4 KB of the first 2 MB: inside the jumploader
-region, but past its end -- a 25F jumploader ends at `0x1E8530`, a 45F
-one would end at `0x1F7958`. It
-refuses to erase that sector unless it is blank or holds its own
-pattern from an earlier run. It checks, in order:
+`flashtest` uses sector `0x1FC000`: inside the jumploader region but
+past its end -- a 25F jumploader ends at `0x1E8530`, a 45F one at
+`0x1F7BE9` -- and below the key/value store, which has the last 8 KB of
+the chip ([kvstore.md](kvstore.md)). It used `0x1FF000` until the store
+took that. It refuses to erase its sector unless it is blank or holds
+its own pattern from an earlier run, and refuses outright if the sector
+is ever the store's. It checks, in order:
 
 1. the refusals, which send nothing to the flash: an unarmed command,
    an erase of sector 0, an erase of `0x03F000`, a program at

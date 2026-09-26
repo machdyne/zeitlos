@@ -1099,6 +1099,8 @@ static void prompt_setup(const char *initial) {
 
 }
 
+static bool prompt_secret;
+
 bool z_dialog_prompt(const z_dialog_ctx_t *ctx, const char *title,
 	const char *msg, const char *initial, char *out, int outlen) {
 
@@ -1136,17 +1138,35 @@ bool z_dialog_prompt(const z_dialog_ctx_t *ctx, const char *title,
 	dlg.field_y = dlg.btn_y - DLG_MARGIN - DLG_FIELD_H;
 
 	prompt_setup(initial);
+	dlg.edit.secret = prompt_secret;
 
 	dlg_repaint();
 
-	if (dlg_run() != Z_DIALOG_YES) return false;
+	bool ok = dlg_run() == Z_DIALOG_YES;
 
 	int i = 0;
-	for (; i < outlen - 1 && dlg.edit.buf[i]; i++) out[i] = dlg.edit.buf[i];
+	if (ok)
+		for (; i < outlen - 1 && dlg.edit.buf[i]; i++) out[i] = dlg.edit.buf[i];
 	out[i] = 0;
+
+	// A password must not outlive the dialog in its buffer.
+	if (prompt_secret) {
+		volatile char *f = dlg.field;
+		for (int k = 0; k < DLG_FIELD_MAX; k++) f[k] = 0;
+		dlg.edit.len = dlg.edit.cur = 0;
+	}
 
 	return out[0] != 0;
 
+}
+
+bool z_dialog_prompt_secret(const z_dialog_ctx_t *ctx, const char *title,
+	const char *msg, char *out, int outlen) {
+	bool ok;
+	prompt_secret = true;
+	ok = z_dialog_prompt(ctx, title, msg, NULL, out, outlen);
+	prompt_secret = false;
+	return ok;
 }
 
 int z_dialog_confirm(const z_dialog_ctx_t *ctx, const char *title,

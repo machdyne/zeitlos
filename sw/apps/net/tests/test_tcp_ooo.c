@@ -36,9 +36,13 @@ void z_rng_stir_event(void) { }
 #define TCP_REASSEMBLY 1
 #include "../tcp.c"
 
+/* The pool's first slot plays the old single TCB. */
+#define tcb (conns[0])
+
 /* -- what the listener saw -- */
 static uint8_t got[300000]; static uint32_t got_len;
-static void sink(tcp_event_t ev, const uint8_t *d, uint16_t n) {
+static void sink(tcp_conn_t *c, tcp_event_t ev, const uint8_t *d, uint16_t n) {
+	(void)c;
 	if (ev == TCP_EVENT_DATA && got_len + n <= sizeof(got)) {
 		memcpy(got + got_len, d, n); got_len += n; }
 }
@@ -51,12 +55,12 @@ static void ck(int c, const char *w) {
 static void seg(uint32_t seq, const uint8_t *d, uint16_t n) {
 	if (seq == tcb.rcv_nxt) {
 		tcb.rcv_nxt += n;
-		notify(TCP_EVENT_DATA, d, n);
-		ooo_drain();
+		notify(&tcb, TCP_EVENT_DATA, d, n);
+		ooo_drain(&tcb);
 	} else if ((int32_t)(seq - tcb.rcv_nxt) < 0) {
 		/* duplicate */
 	} else {
-		ooo_store(seq, d, n);
+		ooo_store(&tcb, seq, d, n);
 	}
 }
 

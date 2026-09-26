@@ -149,6 +149,12 @@ int z_dialog_confirm(const z_dialog_ctx_t *ctx, const char *title,
 bool z_dialog_prompt(const z_dialog_ctx_t *ctx, const char *title,
 	const char *msg, const char *initial, char *out, int outlen);
 
+// z_dialog_prompt() for a password: the field shows '*' and takes
+// printable ASCII only, and the dialog's own copy is wiped before this
+// returns. The caller should wipe `out` once it is done with it.
+bool z_dialog_prompt_secret(const z_dialog_ctx_t *ctx, const char *title,
+	const char *msg, char *out, int outlen);
+
 #define Z_DIALOG_MSG_LINES   4
 
 #endif

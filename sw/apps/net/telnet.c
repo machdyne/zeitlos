@@ -170,7 +170,12 @@ static void telnet_feed(const uint8_t *data, uint16_t len) {
 
 }
 
-static void on_tcp_event(tcp_event_t ev, const uint8_t *data, uint16_t len) {
+// This module's one connection, or NULL. Dropped on CLOSED: the pool
+// reuses the slot (tcp.h).
+static tcp_conn_t *conn;
+
+static void on_tcp_event(tcp_conn_t *c, tcp_event_t ev, const uint8_t *data, uint16_t len) {
+	(void)c;
 
 	switch (ev) {
 
@@ -184,6 +189,10 @@ static void on_tcp_event(tcp_event_t ev, const uint8_t *data, uint16_t len) {
 		telnet_feed(data, len);
 		break;
 
+	case TCP_EVENT_EOF:
+		// never: this connection does not ask for half-close (tcp.h)
+		break;
+
 	case TCP_EVENT_CLOSED:
 		// diagnostic: this is the exact dispatch point between tcp.c's
 		// notify() and net.c's telnet_on_closed() -- a real bug once
@@ -195,6 +204,7 @@ static void on_tcp_event(tcp_event_t ev, const uint8_t *data, uint16_t len) {
 		// from net.c's own logs alone.
 		printf("telnet: TCP_EVENT_CLOSED, app_on_closed=%s\n",
 			app_on_closed ? "set" : "NULL");
+		conn = NULL;
 		if (app_on_closed) app_on_closed();
 		break;
 
@@ -212,13 +222,15 @@ bool telnet_connect(uint32_t ip, telnet_established_handler_t on_established,
 	app_on_data = on_data;
 	app_on_closed = on_closed;
 
-	return tcp_connect(ip, TELNET_PORT, on_tcp_event);
+	if (conn) return false;             // one telnet session at a time
+	conn = tcp_connect(ip, TELNET_PORT, on_tcp_event, NULL);
+	return conn != NULL;
 
 }
 
 bool telnet_send(const uint8_t *data, uint16_t len) {
 
-	if (!tcp_is_connected()) return false;
+	if (!tcp_is_connected(conn)) return false;
 
 	// escape any literal 0xFF (IAC) byte -- see telnet.h. computed up
 	// front so this either queues the whole thing or none of it, no
@@ -239,23 +251,25 @@ bool telnet_send(const uint8_t *data, uint16_t len) {
 }
 
 void telnet_close(void) {
-	tcp_close();
+	if (conn) tcp_close(conn);
 }
 
 void telnet_abort(void) {
 	tx_queue_len = 0;
 	pstate = TN_DATA;
-	tcp_abort();
+	if (conn) tcp_abort(conn);
+	conn = NULL;
 }
 
 void telnet_poll(void) {
 
-	if (!tcp_is_connected()) return;
+	if (!tcp_is_connected(conn)) return;
 	if (tx_queue_len == 0) return;
 
-	uint16_t n = tx_queue_len > TCP_MAX_PAYLOAD ? TCP_MAX_PAYLOAD : tx_queue_len;
+	uint16_t mss = tcp_mss(conn);
+	uint16_t n = tx_queue_len > mss ? mss : tx_queue_len;
 
-	if (tcp_send(tx_queue, n)) {
+	if (tcp_send(conn, tx_queue, n)) {
 		memmove(tx_queue, tx_queue + n, tx_queue_len - n);
 		tx_queue_len -= n;
 	}

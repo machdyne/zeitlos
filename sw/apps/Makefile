@@ -28,6 +28,7 @@ APPS = casino poker roulette blackjack slots craps \
 	read \
 	web \
 	net \
+	net/netserve \
 	term \
 	logic \
 	mmod \

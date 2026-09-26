@@ -160,16 +160,16 @@ def load(root):
     # The jumploader region: docs/zboot.md sec. 5. The kernel's constant
     # and the Makefile's --bootaddr must name the same address.
     jumpc = _scan_defines(zsoc_h, {
-        "Z_JUMP_FLASH_OFFSET", "Z_JUMP_REGION_SIZE",
+        "Z_JUMP_FLASH_OFFSET", "Z_JUMP_REGION_SIZE", "Z_KV_SIZE",
     }, {})
-    for name in ("Z_JUMP_FLASH_OFFSET", "Z_JUMP_REGION_SIZE"):
+    for name in ("Z_JUMP_FLASH_OFFSET", "Z_JUMP_REGION_SIZE", "Z_KV_SIZE"):
         if name not in jumpc:
             raise LayoutError("%s: could not resolve %s" % (zsoc_h, name))
     # zfpga flash / run carry their own copy, being an app built for the
     # host too (sw/apps/zfpga/boot.c)
     zboot = _scan_defines(boot_c, {
         "ZFPGA_ZAR_OFFSET", "ZFPGA_JUMP_OFFSET", "ZFPGA_JUMP_END",
-        "ZFPGA_GW_DFU", "ZFPGA_LOGO_OFFSET",
+        "ZFPGA_GW_DFU", "ZFPGA_LOGO_OFFSET", "ZFPGA_KV_SIZE",
     }, {}) if os.path.exists(boot_c) else None
 
     rom_base = bios["MEM_ROM"]
@@ -182,6 +182,10 @@ def load(root):
     zar_off = zar["Z_ZAR_FLASH_OFFSET"]
     jump_off = jumpc["Z_JUMP_FLASH_OFFSET"]
     jump_size = jumpc["Z_JUMP_REGION_SIZE"]
+    # The key/value store takes the last Z_KV_SIZE bytes of the chip
+    # (docs/kvstore.md). On the 2 MB map that is the tail of the
+    # jumploader region, so a jumploader must stop short of it.
+    kv_size = jumpc["Z_KV_SIZE"]
 
     # --- the cross-checks, i.e. the KEEP IN SYNC comments, enforced ---
 
@@ -215,6 +219,8 @@ def load(root):
               zboot.get("ZFPGA_JUMP_OFFSET", -1), "sw/apps/zfpga/boot.c")
         agree("jumploader region end", jump_off + jump_size, "sw/common/zsoc.h",
               zboot.get("ZFPGA_JUMP_END", -1), "sw/apps/zfpga/boot.c ZFPGA_JUMP_END")
+        agree("key/value store size", kv_size, "sw/common/zsoc.h Z_KV_SIZE",
+              zboot.get("ZFPGA_KV_SIZE", -1), "sw/apps/zfpga/boot.c ZFPGA_KV_SIZE")
         # zfpga flash puts user gateware in the gateware region's tail,
         # up to the logo, and looks for Zeitlos's gateware at 0 or at
         # ZFPGA_GW_DFU -- which every DFU board's dfu_base must equal
@@ -255,6 +261,9 @@ def load(root):
     if zar_off >= jump_off:
         problems.append("core apps offset 0x%x is not below the jumploader "
                         "(0x%x)" % (zar_off, jump_off))
+    if kv_size & 0xFFF or not 0 < kv_size < jump_size:
+        problems.append("the key/value store size 0x%x is not a whole number "
+                        "of 4 KB sectors inside the jumploader region" % kv_size)
     if zar_off >= flash_size:
         problems.append("core apps offset 0x%x is past the end of flash "
                         "(0x%x)" % (zar_off, flash_size))
@@ -272,8 +281,14 @@ def load(root):
                "sw/bios/bios.c ROM_OS_ADDR"),
         Region("apps", "core apps (ZAR)", zar_off, jump_off - zar_off,
                "sw/os/zar.h Z_ZAR_FLASH_OFFSET"),
-        Region("jump", "jumploader", jump_off, jump_size,
-               "sw/common/zsoc.h Z_JUMP_FLASH_OFFSET"),
+        Region("jump", "jumploader", jump_off, jump_size - kv_size,
+               "sw/common/zsoc.h Z_JUMP_FLASH_OFFSET, less Z_KV_SIZE"),
+        # Never part of an image: the running system writes it. An image
+        # padded over it (a full JTAG image, a DFU image) erases it,
+        # which docs/kvstore.md says is allowed -- it loses the password
+        # and any other keys, and nothing else.
+        Region("kv", "key/value store (written by the running system)",
+               flash_size - kv_size, kv_size, "sw/common/zsoc.h Z_KV_SIZE"),
     ]
 
     return {

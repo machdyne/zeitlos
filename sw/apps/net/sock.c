@@ -27,7 +27,15 @@ static bool established;
 static uint8_t tx_queue[SOCK_TX_QUEUE_LEN];
 static uint16_t tx_queue_len;
 
-static void on_tcp_event(tcp_event_t ev, const uint8_t *data, uint16_t len) {
+// The one socket's connection, or NULL. Dropped on CLOSED (tcp.h).
+static tcp_conn_t *conn;
+
+tcp_conn_t *sock_tcp(void) {
+	return conn;
+}
+
+static void on_tcp_event(tcp_conn_t *c, tcp_event_t ev, const uint8_t *data, uint16_t len) {
+	(void)c;
 
 	switch (ev) {
 
@@ -43,9 +51,14 @@ static void on_tcp_event(tcp_event_t ev, const uint8_t *data, uint16_t len) {
 		if (app_on_data && len) app_on_data(data, len);
 		break;
 
+	case TCP_EVENT_EOF:
+		// never: this connection does not ask for half-close (tcp.h)
+		break;
+
 	case TCP_EVENT_CLOSED:
 		established = false;
 		tx_queue_len = 0;
+		conn = NULL;
 		if (app_on_closed) app_on_closed();
 		break;
 
@@ -65,7 +78,9 @@ bool sock_connect(uint32_t ip, uint16_t port,
 	established = false;
 	tx_queue_len = 0;
 
-	return tcp_connect(ip, port, on_tcp_event);
+	if (conn) return false;
+	conn = tcp_connect(ip, port, on_tcp_event, NULL);
+	return conn != NULL;
 
 }
 
@@ -87,13 +102,14 @@ bool sock_send(const uint8_t *data, uint16_t len) {
 }
 
 void sock_close(void) {
-	tcp_close();
+	if (conn) tcp_close(conn);
 }
 
 void sock_abort(void) {
 	tx_queue_len = 0;
 	established = false;
-	tcp_abort();
+	if (conn) tcp_abort(conn);
+	conn = NULL;
 }
 
 void sock_poll(void) {
@@ -102,9 +118,9 @@ void sock_poll(void) {
 
 	if (!established || tx_queue_len == 0) return;
 
-	n = tx_queue_len > TCP_MAX_PAYLOAD ? TCP_MAX_PAYLOAD : tx_queue_len;
+	n = tx_queue_len > tcp_mss(conn) ? tcp_mss(conn) : tx_queue_len;
 
-	if (tcp_send(tx_queue, n)) {
+	if (tcp_send(conn, tx_queue, n)) {
 		memmove(tx_queue, tx_queue + n, (size_t)(tx_queue_len - n));
 		tx_queue_len = (uint16_t)(tx_queue_len - n);
 	}

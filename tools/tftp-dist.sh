@@ -39,6 +39,11 @@
 #     doesn't match its directory isn't an app binary and is skipped,
 #     rather than being published under a name nothing will ask for.
 #
+#   - Apps one level further down are listed by hand below: netserve
+#     lives in sw/apps/net/netserve/ (docs/netserve.md), and a general
+#     two-level glob would also pick up zcc's libz/libz.bin, which is
+#     not an app and is handled on its own.
+#
 #   - The two zcc runtime files (sw/apps/zcc/libz/libz.bin and
 #     libz.sym) are copied as well, since they are not app binaries
 #     and would otherwise be missed -- see the block near the end.
@@ -79,7 +84,7 @@ fi
 copied=0
 skipped=0
 
-for dir in "$APPS_DIR"/*/; do
+for dir in "$APPS_DIR"/*/ "$APPS_DIR"/net/netserve/; do
 
 	[ -d "$dir" ] || continue
 

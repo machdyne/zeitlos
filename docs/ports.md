@@ -126,6 +126,27 @@ fixed rhythm. Forcing that into two independent `zstream` pulls (one
 per direction) is possible but adds real coordination complexity for
 not much benefit at the traffic volumes involved here.
 
+## Match by sender and tag
+
+A provider with several connections must match each DATA, DATA_ACK
+and CLOSE to a connection by **sender and tag**, not tag alone. A peer
+that dies without a CLOSE leaves its provider still sending to its pid,
+and pids are reused: the next process with that pid receives a stream
+tagged like one of its own connections. On hardware that was posix
+executing the kernel log, line by line, streamed by `console0` to a
+killed `term` whose pid posix had inherited ([netserve.md](netserve.md),
+"Found on hardware").
+
+A process that closes a connection and then waits for its sends to
+drain must count their acks with `z_port_handle_ack_closed()`:
+`z_port_handle_ack()` ignores a closed port, so the count never falls
+and the memory is lost when the wait gives up. A peer known to be gone
+gets `z_port_forget()` instead, which frees what it will never ack.
+
+DATA from a stranger gets `z_port_reject_stranger()` (zport.h): an
+ack, so the sender can free it, and a CLOSE, so it stops. posix, repl
+and netserve do this; term and console already checked the sender.
+
 ## Protocol sketch
 
 Plain `z_msg_t` messages, not `zstream` -- fire-and-forget once

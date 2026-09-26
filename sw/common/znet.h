@@ -141,13 +141,64 @@
 // console question instead of an instrumented build.
 #define Z_NET_DEBUG_DUMP         313
 
-// The next subject added anywhere in this shared sequence starts at
-// 314. sw/common/zweb.h has taken 310-312.
+// sw/common/zweb.h has taken 310-312. The next subject added anywhere in
+// this shared sequence starts at 318.
+
+// -- accepting connections: Z_NET_LISTEN (docs/netserve.md) --
+//
+//   app -> net   Z_NET_LISTEN        tag: yours   obj Z_UINT32 port
+//   net -> app   Z_NET_LISTEN_REPLY  same tag     obj Z_UINT32 0, or an error:
+//                                                  Z_NET_LISTEN_E_*
+//   app -> net   Z_NET_UNLISTEN      tag: any     obj Z_UINT32 port; no reply
+//
+// Each connection accepted on a listened port then arrives at the
+// listening process as a zport CONNECT -- the process is the PROVIDER,
+// net the client -- and from there it is an ordinary port connection
+// (zport.h): DATA both ways, acked; CLOSE from either side.
+//
+//   net -> app   Z_PORT_CONNECT    tag: net's relay id   obj Z_BLOB z_net_accept_t
+//   app -> net   Z_PORT_CONNECTED  tag: THE SAME relay id   obj Z_UINT32 your conn_id
+//            or  Z_PORT_REFUSED    tag: the same relay id
+//
+// The tag is what z_port_accept()/z_port_refuse() do NOT do (they reply
+// with tag 0): a process with several connections arriving at once has
+// to say which one it is answering. Reply with z_msg_new_send().
+//
+// The blob is net's, and valid until the connection ends; copy what you
+// need while handling the CONNECT.
+//
+// Listening is last-writer-wins: a second LISTEN for a port from another
+// process takes it over (after a restart, the new netserve reclaims its
+// ports) and the old owner's connections are closed. Apps are trusted
+// (docs/security.md).
+#define Z_NET_LISTEN             314
+#define Z_NET_LISTEN_REPLY       315
+#define Z_NET_UNLISTEN           316
+
+// net -> listener, on an accepted connection: the peer has FINISHED
+// SENDING (a TCP half-close, its FIN), and every byte it sent before
+// that has been delivered as DATA. The connection is still open the
+// other way: send what is left, then CLOSE as usual. Tag: your conn_id.
+// No payload, no reply. zport has no half-close of its own; this is it.
+#define Z_NET_EOF                317
+
+#define Z_NET_LISTEN_E_PORT      1   // 0 or above 65535
+#define Z_NET_LISTEN_E_FULL      2   // net's listen table is full
+#define Z_NET_LISTEN_E_NOIP      3   // no address yet
+
+#define Z_NET_ACCEPT_LOCAL       1u  // the peer is on this machine's own subnet
+
+typedef struct {
+	uint32_t ip;            // the peer
+	uint16_t port;          // the peer's port
+	uint16_t lport;         // ours: which listened port
+	uint32_t flags;         // Z_NET_ACCEPT_*
+} z_net_accept_t;
 
 // -- Z_PORT_CONNECT to net: three meanings, told apart by SHAPE --
 //
 // `net` is a zport provider (sw/common/zport.h, docs/ports.md) for
-// three different kinds of session, all through tcp.c's single TCB
+// three different kinds of session, each a connection from tcp.c's pool
 // and all arriving on the one Z_PORT_CONNECT subject. There is no
 // discriminator field; they are distinguished by the type of the
 // argument object:
@@ -178,9 +229,8 @@
 // and sends it straight to `net`, so it is translated exactly once and
 // nothing forwards it.
 //
-// ONE TCB MEANS ONE SESSION, system-wide. A socket connect while an
-// ssh or telnet session is open is refused, and vice versa. That is
-// not new -- telnet and ssh already excluded each other -- but it now
-// means browsing and an ssh session cannot happen at the same time.
+// ONE OF EACH KIND: one socket, one telnet and one ssh session at a
+// time, but they no longer exclude each other -- tcp.c has a pool
+// (docs/networking.md, "Connections").
 
 #endif

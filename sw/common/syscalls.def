@@ -241,3 +241,13 @@ Z_MKSYSCALL(CONSOLE_INPUT, k_console_input)
 // docs/keyboard_layouts.md. Appended last so no earlier enum value
 // shifts.
 Z_MKSYSCALL(KBD_LAYOUT, k_kbd_layout)
+
+// The flash key/value store (sw/common/zkv.h, sw/os/kvstore.c,
+// docs/kvstore.md): small settings that must survive without an sdcard,
+// in the last 8 KB of the configuration flash. An op field rather than
+// five syscalls. Appended last so no earlier enum value shifts.
+Z_MKSYSCALL(KV, k_kv)
+
+// The password and the screen-lock policy (sw/common/zauth.h,
+// sw/os/auth.c, docs/security.md). An op field. Appended last.
+Z_MKSYSCALL(AUTH, k_auth)

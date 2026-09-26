@@ -14,6 +14,8 @@ rather than duplicated:
 | `docs/executables.md` | ZEXE, and how a process image is loaded |
 | `docs/boot.md` | the memory budget everything sits in |
 | `docs/ports.md` | the connection protocol built on messaging |
+| `docs/kvstore.md` | the flash key/value store, `Z_SYS_KV` |
+| `docs/security.md` | the password, the screen lock, `Z_SYS_AUTH` |
 
 ## Processes
 
@@ -576,3 +578,24 @@ and no core app is launched from flash while one is open. Nothing below
 `0x040000` can be written, which the controller enforces in hardware.
 The serial shell has `flash` (ID, size, lock, status) and `flashtest`
 (the on-board test). `docs/spiflash.md`.
+
+The last 8 KB of the chip is the kernel's own: the **key/value store**
+(`sw/os/kvstore.c`, `sw/os/kvlog.c`; apps use `sw/common/zkv.h`), a few
+KB of settings that must exist with no sdcard. `Z_SYS_FLASH` refuses to
+touch it. Writes are serialised by a lock that a dying process releases
+through `k_flash_release_pid()`; reads take no lock. The console has
+`kv`. It costs 13.3 KB of image; its on-board test, 2.8 KB more, is
+built only with `make KV_TEST=1`. `docs/kvstore.md`.
+
+## The password
+
+`Z_SYS_AUTH` (`sw/os/auth.c`, `sw/os/authcore.c`; apps use
+`sw/common/zauth.h`) keeps the machine's one password as a salted
+PBKDF2-HMAC-SHA256 hash in the key/value store, and checks it for the
+lock screen, the console and, later, network logins. One tally of
+failures and one check at a time, system-wide; a process killed
+mid-check releases the gate through the reaper
+(`k_auth_release_pid()`, beside `k_flash_release_pid()`). The console
+has `passwd`, `passwd reset` (UART0 only -- the receive ring marks
+bytes injected through `console0`) and `lock`. 9 KB of image.
+`docs/security.md`.

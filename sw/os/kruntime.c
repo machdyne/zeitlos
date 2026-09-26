@@ -46,12 +46,18 @@ int getch(void) {
 	}
 }
 
+// False once any byte of the line readline() last read came through
+// k_console_input() (console0) rather than UART0 -- `passwd reset`
+// checks it (sw/os/auth.c).
+bool k_readline_from_uart;
+
 void readline(char *buf, int maxlen) {
 
 	int c;
 	int pl = 0;
 
 	memset(buf, 0x00, maxlen + 1);
+	k_readline_from_uart = true;
 
 	while (1) {
 
@@ -76,6 +82,8 @@ void readline(char *buf, int maxlen) {
 			continue;
 
 		}
+
+		if (k_uart_last_injected) k_readline_from_uart = false;
 
 		if (c == CH_CR || c == CH_LF) {
 			break;

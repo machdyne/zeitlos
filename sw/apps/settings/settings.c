@@ -72,11 +72,14 @@
 #include "../../common/zfsapp.h"
 #include "../../common/zcfg.h"
 #include "../../common/zrtc.h"		// the city table, and z_tz_parse()
+#include "../../common/zauth.h"		// the password and screen lock: docs/security.md
 
 // Fixed size, not resizable: a preferences panel has no content to
 // reveal.
 #define WIN_W   284
-#define WIN_H   (214 + 2 * (2 * (8 + 2) + 6))	// one row per preference: see layout()
+// one row per preference, plus the Security section (a heading and two
+// rows, 92 px): see layout()
+#define WIN_H   (214 + 2 * (2 * (8 + 2) + 6) + 92)
 
 static z_win_t win;
 static z_dialog_ctx_t dlg;
@@ -107,8 +110,13 @@ enum {
 	W_TOGGLE_JA,
 	W_SET_TZ,
 	W_RELOAD,
+	W_PW_SET,
+	W_PW_REMOVE,
+	W_LOCK_EDIT,
 	W_COUNT
 };
+
+#define PW_BTN_W  44
 
 static z_widget_t widgets[W_COUNT];
 static z_widget_set_t wset;
@@ -147,6 +155,16 @@ static char status[64];
 static bool status_is_hint;		// status holds the "selected -- Set" hint
 
 static int y_display, y_modes, y_prefs, y_rows, y_tz, y_list, y_reload, y_status;
+static int y_sec, y_sec_rows;
+
+// -- security: the password and the screen lock (docs/security.md) --
+//
+// Not in /zeitlos.cfg: the kernel keeps them in the flash key/value
+// store, so they hold with no card, and it changes them only when
+// given the current password (Z_SYS_AUTH, zauth.h).
+static z_auth_status_t auth;
+static bool auth_ok;			// the kernel answered: it has Z_SYS_AUTH
+static void read_auth(void);		// with read_values()
 
 // -- the time zone list --
 //
@@ -232,6 +250,7 @@ static void read_values(void) {
 
 	tz_in_file = z_cfg_get("system.rtc.timezone", tz_value, sizeof(tz_value));
 	set_japanese_label();
+	read_auth();
 	z_listbox_select(&tz_list, tz_row_for(tz_value));
 	zone_selection_changed();
 
@@ -247,6 +266,17 @@ static void read_values(void) {
 		if (!shown) other_keys++;
 	}
 
+}
+
+static void read_auth(void) {
+	auth_ok = z_auth_status(&auth) == Z_AUTH_OK;
+	if (!auth_ok) memset(&auth, 0, sizeof(auth));
+	bool w = auth_ok && (auth.flags & Z_AUTH_WRITABLE);
+	bool has = (auth.flags & Z_AUTH_HAS_PASSWORD) != 0;
+	widgets[W_PW_SET].label = has ? "Change" : "Set";
+	widgets[W_PW_SET].enabled = w;
+	widgets[W_PW_REMOVE].enabled = w && has;
+	widgets[W_LOCK_EDIT].enabled = w;
 }
 
 static void select_current_mode(void) {
@@ -308,7 +338,19 @@ static void layout(void) {
 	widgets[W_SET_TZ].x = (int16_t)(cw - MARGIN - 110);
 	widgets[W_SET_TZ].y = (int16_t)y_reload;
 
-	y_status = y_reload + BTN_H + 6;
+	y_sec = y_reload + BTN_H + 10;
+	y_sec_rows = y_sec + LINE_H + 4;
+	widgets[W_PW_SET].x = (int16_t)(cw - MARGIN - 2 * PW_BTN_W - GAP);
+	widgets[W_PW_REMOVE].x = (int16_t)(cw - MARGIN - PW_BTN_W);
+	widgets[W_PW_SET].y = widgets[W_PW_REMOVE].y = (int16_t)(y_sec_rows - 3);
+	widgets[W_PW_SET].w = widgets[W_PW_REMOVE].w = PW_BTN_W;
+	widgets[W_PW_SET].h = widgets[W_PW_REMOVE].h = EDIT_H;
+	widgets[W_LOCK_EDIT].x = (int16_t)(cw - MARGIN - EDIT_W);
+	widgets[W_LOCK_EDIT].y = (int16_t)(y_sec_rows + 2 * LINE_H + 6 - 3);
+	widgets[W_LOCK_EDIT].w = EDIT_W;
+	widgets[W_LOCK_EDIT].h = EDIT_H;
+
+	y_status = y_sec_rows + 2 * (2 * LINE_H + 6);
 
 	z_widget_invalidate(&wset);
 	z_listbox_invalidate(&tz_list);
@@ -337,6 +379,33 @@ static void describe(const pref_t *p, char *out, size_t n) {
 
 static void draw_text(int x, int y, const char *s) {
 	z_win_draw_text(&win, x, y, s, 1, &z_font_5x8);
+}
+
+static void describe_password(char *out, size_t n) {
+	if (!auth_ok)
+		snprintf(out, n, "unavailable: this kernel has no password support");
+	else if (!(auth.flags & Z_AUTH_WRITABLE))
+		snprintf(out, n, "read-only: this bitstream cannot write the flash");
+	else if (!(auth.flags & Z_AUTH_HAS_PASSWORD))
+		snprintf(out, n, "not set");
+	else
+		snprintf(out, n, "set%s", (auth.flags & Z_AUTH_NET_OK) ? "" :
+			" -- too short for network use");
+}
+
+static void describe_lock(char *out, size_t n) {
+	int k = 0;
+	out[0] = 0;
+	if (auth.lock_boot)
+		k += snprintf(out + k, n - (size_t)k, "at start");
+	if (auth.lock_idle_min && (size_t)k < n)
+		k += snprintf(out + k, n - (size_t)k, "%safter %lu min idle", k ? ", " : "",
+			(unsigned long)auth.lock_idle_min);
+	if (auth.lock_console && (size_t)k < n)
+		k += snprintf(out + k, n - (size_t)k, "%sconsole too", k ? ", " : "");
+	if (!k) snprintf(out, n, "only on Super+L");
+	else if (!(auth.flags & Z_AUTH_HAS_PASSWORD) && (size_t)k < n)
+		snprintf(out + k, n - (size_t)k, " (needs a password)");
 }
 
 static void draw_status(void) {
@@ -383,6 +452,15 @@ static void repaint(void) {
 	snprintf(line, sizeof(line), "Time zone: %.32s%s", tz_value,
 		tz_in_file ? "" : "  (default)");
 	draw_text(MARGIN, y_tz, line);
+
+	draw_text(MARGIN, y_sec, "Security");
+	draw_text(cw - MARGIN - 5 * z_font_5x8.w, y_sec, "flash");
+	draw_text(MARGIN, y_sec_rows, "Password");
+	describe_password(line, sizeof(line));
+	draw_text(MARGIN + 8, y_sec_rows + LINE_H, line);
+	draw_text(MARGIN, y_sec_rows + 2 * LINE_H + 6, "Screen lock");
+	describe_lock(line, sizeof(line));
+	draw_text(MARGIN + 8, y_sec_rows + 3 * LINE_H + 6, line);
 
 	draw_status();
 
@@ -683,6 +761,131 @@ static void reload(void) {
 
 static void choose_zone_and_return(void);
 
+// -- security actions --
+
+static void wipe(char *p, size_t n) {
+	volatile char *v = p;
+	while (n--) *v++ = 0;
+}
+
+static void auth_result(int rc, uint32_t w, const char *ok) {
+	char m[64];
+	switch (rc) {
+	case Z_AUTH_OK:        set_status(ok); return;
+	case Z_AUTH_E_BAD:     set_status("wrong password -- nothing changed"); return;
+	case Z_AUTH_E_WAIT:
+		snprintf(m, sizeof(m), "too many attempts -- wait %lu s", (unsigned long)((w + 999) / 1000));
+		set_status(m);
+		return;
+	case Z_AUTH_E_STORE:   set_status("the flash store refused (kv at the console)"); return;
+	case Z_AUTH_E_NOSYS:   set_status("this kernel has no password support"); return;
+	default:               set_status("not accepted -- nothing changed"); return;
+	}
+}
+
+// The current password, if there is one: false if the user cancelled.
+static bool ask_current(const char *title, char *cur, size_t n) {
+	cur[0] = 0;
+	if (!(auth.flags & Z_AUTH_HAS_PASSWORD)) return true;
+	return z_dialog_prompt_secret(&dlg, title, "Current password:", cur, (int)n);
+}
+
+static void set_password(void) {
+	char cur[Z_AUTH_PW_MAX + 1], n1[Z_AUTH_PW_MAX + 1], n2[Z_AUTH_PW_MAX + 1];
+	const char *title = (auth.flags & Z_AUTH_HAS_PASSWORD) ? "Change password" : "Set password";
+	uint32_t w = 0;
+	int rc;
+
+	n1[0] = n2[0] = 0;
+	if (!ask_current(title, cur, sizeof(cur))) goto out;
+	if (!z_dialog_prompt_secret(&dlg, title,
+			"New password -- for the screen lock and\nthe console; 10 characters or more\n"
+			"for network logins.", n1, sizeof(n1)))
+		goto out;
+	if (!z_dialog_prompt_secret(&dlg, title, "The new password again:", n2, sizeof(n2)))
+		goto out;
+	if (strcmp(n1, n2)) {
+		set_status("the two differ -- nothing changed");
+		goto out;
+	}
+	set_status("working...");
+	draw_status();
+	rc = z_auth_set(cur, (uint32_t)strlen(cur), n1, (uint32_t)strlen(n1), &w);
+	auth_result(rc, w, strlen(n1) < Z_AUTH_NET_MIN ?
+		"password set -- too short for network logins" : "password set");
+	if (rc == Z_AUTH_OK) z_wm_lock_request(Z_WM_LOCK_RELOAD);
+out:
+	wipe(cur, sizeof(cur));
+	wipe(n1, sizeof(n1));
+	wipe(n2, sizeof(n2));
+	read_auth();
+	repaint();
+}
+
+static void remove_password(void) {
+	char cur[Z_AUTH_PW_MAX + 1];
+	uint32_t w = 0;
+	int rc;
+
+	if (z_dialog_confirm(&dlg, "Remove password",
+			"Remove the password? The screen lock\nwill then open with Enter.",
+			Z_DIALOG_YES_NO) != Z_DIALOG_YES)
+		return;
+	if (!ask_current("Remove password", cur, sizeof(cur))) goto out;
+	set_status("working...");
+	draw_status();
+	rc = z_auth_set(cur, (uint32_t)strlen(cur), NULL, 0, &w);
+	auth_result(rc, w, "password removed");
+	if (rc == Z_AUTH_OK) z_wm_lock_request(Z_WM_LOCK_RELOAD);
+out:
+	wipe(cur, sizeof(cur));
+	read_auth();
+	repaint();
+}
+
+static void edit_lock(void) {
+	z_auth_status_t p = auth;
+	char mins[8], init[12], cur[Z_AUTH_PW_MAX + 1];
+	uint32_t w = 0, v = 0;
+	int r, rc, i;
+
+	cur[0] = 0;
+	r = z_dialog_confirm(&dlg, "Screen lock", "Lock the screen when the machine starts?",
+		Z_DIALOG_YES_NO_CANCEL);
+	if (r == Z_DIALOG_CANCEL) return;
+	p.lock_boot = (r == Z_DIALOG_YES);
+
+	snprintf(init, sizeof(init), "%lu", (unsigned long)p.lock_idle_min);
+	if (!z_dialog_prompt(&dlg, "Screen lock",
+			"Lock after how many minutes without\ninput? 0 for never, 1440 at most.",
+			init, mins, sizeof(mins)))
+		return;
+	for (i = 0; mins[i]; i++) {
+		if (mins[i] < '0' || mins[i] > '9' || v > 1440) { v = 9999; break; }
+		v = v * 10 + (uint32_t)(mins[i] - '0');
+	}
+	if (v > 1440) {
+		set_status("minutes: a number from 0 to 1440");
+		repaint();
+		return;
+	}
+	p.lock_idle_min = v;
+
+	r = z_dialog_confirm(&dlg, "Screen lock",
+		"Ask for the password on the serial\nconsole too?", Z_DIALOG_YES_NO_CANCEL);
+	if (r == Z_DIALOG_CANCEL) return;
+	p.lock_console = (r == Z_DIALOG_YES);
+
+	if (!ask_current("Screen lock", cur, sizeof(cur))) goto out;
+	rc = z_auth_policy(cur, (uint32_t)strlen(cur), &p, &w);
+	auth_result(rc, w, "screen lock saved");
+	if (rc == Z_AUTH_OK) z_wm_lock_request(Z_WM_LOCK_RELOAD);
+out:
+	wipe(cur, sizeof(cur));
+	read_auth();
+	repaint();
+}
+
 static void activate(int idx) {
 	if (idx < 0) return;
 	if (idx < MODE_COUNT) { apply_video(idx); return; }
@@ -691,6 +894,9 @@ static void activate(int idx) {
 	if (idx == W_TOGGLE_JA) { toggle_japanese(); return; }
 	if (idx == W_SET_TZ) { choose_zone_and_return(); return; }
 	if (idx == W_RELOAD) { reload(); return; }
+	if (idx == W_PW_SET) { set_password(); return; }
+	if (idx == W_PW_REMOVE) { remove_password(); return; }
+	if (idx == W_LOCK_EDIT) { edit_lock(); return; }
 }
 
 // Saves the time zone at the list's selection.
@@ -885,6 +1091,13 @@ static void widgets_init(void) {
 	widgets[W_RELOAD].type = Z_WIDGET_BUTTON;
 	widgets[W_RELOAD].label = "Reload file";
 	widgets[W_RELOAD].enabled = true;
+
+	widgets[W_PW_SET].type = Z_WIDGET_BUTTON;
+	widgets[W_PW_SET].label = "Set";		// read_auth() after reading
+	widgets[W_PW_REMOVE].type = Z_WIDGET_BUTTON;
+	widgets[W_PW_REMOVE].label = "Remove";
+	widgets[W_LOCK_EDIT].type = Z_WIDGET_BUTTON;
+	widgets[W_LOCK_EDIT].label = "Edit";
 
 	z_widget_set_init(&wset, widgets, W_COUNT, &win);
 

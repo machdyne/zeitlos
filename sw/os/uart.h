@@ -31,6 +31,10 @@ z_obj_t *k_console_input(z_obj_t *args);
 // Interrupt context (and a panic): printing drains the UART by polling
 // instead of blocking the current process. See sw/os/uart.c.
 extern volatile bool k_uart_polled;
+
+// True if the byte k_uart_getc() last returned was injected through
+// k_console_input() (console0) rather than received on the UART.
+extern volatile bool k_uart_last_injected;
 // For a panic: send what is still queued, then draw the end of the
 // console log on the screen (docs/console.md, docs/mpu.md).
 void k_uart_flush(void);

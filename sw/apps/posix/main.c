@@ -252,10 +252,12 @@ static void conn_out(void *ctx, const char *buf, int len) {
  * the line machinery below. */
 static void finish_line(px_conn_t *c);
 
-static px_conn_t *find_conn_by_tag(uint32_t tag) {
-    if (tag < 1 || tag > PX_MAX_CONNS) return 0;
-    px_conn_t *c = &conns[tag - 1];
-    return c->port.connected ? c : 0;
+/* By sender AND tag: a tag alone matches whatever a dead peer's pid
+ * is now running as (z_port_reject_stranger(), zport.h). */
+static px_conn_t *find_conn(const z_msg_t *msg) {
+    if (msg->tag < 1 || msg->tag > PX_MAX_CONNS) return 0;
+    px_conn_t *c = &conns[msg->tag - 1];
+    return (c->port.connected && c->port.peer_pid == msg->from) ? c : 0;
 }
 
 static void prompt(px_conn_t *c) {
@@ -387,7 +389,7 @@ static void handle_connect(const z_msg_t *msg) {
 }
 
 static void handle_close(const z_msg_t *msg) {
-    px_conn_t *c = find_conn_by_tag(msg->tag);
+    px_conn_t *c = find_conn(msg);
     if (!c) return;
 
     /* A session whose terminal has been handed away closes as a matter
@@ -483,9 +485,9 @@ static void run_line(px_conn_t *c, char *line) {
 
 static void handle_data(const z_msg_t *msg) {
 
-    px_conn_t *c = find_conn_by_tag(msg->tag);
+    px_conn_t *c = find_conn(msg);
 
-    if (!c) { z_port_send_ack(msg); return; }
+    if (!c) { z_port_reject_stranger(msg); return; }
 
     const uint8_t *data = (const uint8_t *)z_blob_data(&msg->obj);
     uint32_t len = z_blob_len(&msg->obj);
@@ -622,7 +624,7 @@ int main(void) {
             } else if (msg.subject == Z_PORT_DATA) {
                 handle_data(&msg);
             } else if (msg.subject == Z_PORT_DATA_ACK) {
-                px_conn_t *c = find_conn_by_tag(msg.tag);
+                px_conn_t *c = find_conn(&msg);
                 if (c) z_port_handle_ack(&c->port, &msg);
             } else if (msg.subject == Z_PORT_CLOSE) {
                 handle_close(&msg);

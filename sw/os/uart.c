@@ -26,6 +26,21 @@ volatile uint8_t __attribute__((section(".bss"))) uart_tx_fifo[UART_FIFO_SIZE];
  * half the depth it claims, and index arithmetic disagreed with the
  * array bounds. */
 volatile uint16_t __attribute__((section(".bss"))) rx_head = 0, rx_tail = 0;
+
+/* Which receive slots hold a byte injected by k_console_input() (the
+ * console0 port, sw/apps/console) rather than one that arrived on the
+ * UART itself. One bit per slot, set or cleared as each byte goes in,
+ * and copied to k_uart_last_injected as it comes out -- so the kernel
+ * can tell a line typed at the serial cable from one typed in a term
+ * window, which `passwd reset` depends on (sw/os/auth.c,
+ * docs/security.md). */
+static volatile uint8_t __attribute__((section(".bss"))) uart_rx_inj[UART_FIFO_SIZE / 8];
+volatile bool __attribute__((section(".bss"))) k_uart_last_injected;
+
+static inline void rx_mark(uint16_t slot, bool injected) {
+	if (injected) uart_rx_inj[slot >> 3] |= (uint8_t)(1u << (slot & 7));
+	else uart_rx_inj[slot >> 3] &= (uint8_t)~(1u << (slot & 7));
+}
 volatile uint16_t __attribute__((section(".bss"))) tx_head = 0, tx_tail = 0;
 
 uint16_t leds = 0x00;
@@ -185,6 +200,7 @@ void z_uart_irq(void) {
 					uint16_t next = (rx_head + 1) % UART_FIFO_SIZE;
 					if (next != rx_tail) {  // RX FIFO not full
 						uart_rx_fifo[rx_head] = c;
+						rx_mark(rx_head, false);
 						rx_head = next;
 					} else {
 						// TODO: handle RX overflow; currently drops character
@@ -279,6 +295,7 @@ int16_t k_uart_getc(void) {
 	}
 
 	char c = uart_rx_fifo[rx_tail];
+	k_uart_last_injected = (uart_rx_inj[rx_tail >> 3] >> (rx_tail & 7)) & 1u;
 	rx_tail = (rx_tail + 1) % UART_FIFO_SIZE;
 
 	maskirq(old_mask);
@@ -445,6 +462,7 @@ z_obj_t *k_console_input(z_obj_t *args) {
 		uint16_t next = (rx_head + 1) % UART_FIFO_SIZE;
 		if (next == rx_tail) break;		// full: take what fits
 		uart_rx_fifo[rx_head] = a->buf[n++];
+		rx_mark(rx_head, true);
 		rx_head = next;
 	}
 	if (n && uart_rx_wait_pid != ~0u) {

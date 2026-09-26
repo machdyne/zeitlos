@@ -57,10 +57,29 @@ bool z_dialog_prompt(const z_dialog_ctx_t *c, const char *t, const char *m,
 	return true;
 }
 
+// Masked prompts take their answers from a queue, one per prompt; an
+// empty queue is Cancel.
+static const char *secret_q[8];
+static int secret_n, secret_i, secret_prompts;
+static void secrets(const char *a, const char *b, const char *c) {
+	secret_q[0] = a; secret_q[1] = b; secret_q[2] = c;
+	secret_n = (a != NULL) + (b != NULL) + (c != NULL);
+	secret_i = 0;
+}
+bool z_dialog_prompt_secret(const z_dialog_ctx_t *c, const char *t, const char *m,
+	char *out, int n) {
+	(void)c; (void)t; (void)m;
+	secret_prompts++;
+	if (secret_i >= secret_n) { out[0] = 0; return false; }
+	snprintf(out, (size_t)n, "%s", secret_q[secret_i++]);
+	return out[0] != 0;
+}
+
+static int confirm_answer = Z_DIALOG_YES;
 int z_dialog_confirm(const z_dialog_ctx_t *c, const char *t, const char *m, int b) {
 	(void)c; (void)t; (void)m; (void)b;
 	confirms++;
-	return Z_DIALOG_YES;
+	return confirm_answer;
 }
 
 // -- a scripted kernel: one file, and a store loaded from it --
@@ -74,6 +93,49 @@ static uint32_t generation = 1;
 static z_obj_t k_ok, k_fail;
 static uint32_t ticks = 5000;
 static void ticks_bump(void) { ticks += 2 * 732; }
+
+// -- a scripted Z_SYS_AUTH: the kernel's rules, without the hashing --
+static struct {
+	bool has, writable, nosys;
+	char pw[Z_AUTH_PW_MAX + 1];
+	uint32_t boot, idle, console;
+	int sets, policies, checks_bad;
+} ka = { false, true, false, "", 0, 0, 0, 0, 0, 0 };
+
+static bool ka_matches(const z_auth_args_t *a) {
+	return a->pwlen == strlen(ka.pw) && !memcmp(a->pw, ka.pw, a->pwlen);
+}
+
+static void k_auth_script(z_auth_args_t *a) {
+	if (ka.nosys) return;           // the wrapper's Z_AUTH_E_NOSYS stands
+	a->result = Z_AUTH_OK;
+	switch (a->op) {
+	case Z_AUTH_STATUS:
+		memset(a->st, 0, sizeof(*a->st));
+		a->st->flags = (ka.has ? Z_AUTH_HAS_PASSWORD : 0) | (ka.writable ? Z_AUTH_WRITABLE : 0) |
+			(ka.has && strlen(ka.pw) >= Z_AUTH_NET_MIN ? Z_AUTH_NET_OK : 0);
+		a->st->lock_boot = ka.boot;
+		a->st->lock_idle_min = ka.idle;
+		a->st->lock_console = ka.console;
+		break;
+	case Z_AUTH_SET:
+		if (ka.has && !ka_matches(a)) { a->result = Z_AUTH_E_BAD; ka.checks_bad++; break; }
+		ka.sets++;
+		ka.has = a->newlen > 0;
+		snprintf(ka.pw, sizeof(ka.pw), "%.*s", (int)a->newlen, a->newlen ? a->newpw : "");
+		break;
+	case Z_AUTH_POLICY:
+		if (ka.has && !ka_matches(a)) { a->result = Z_AUTH_E_BAD; ka.checks_bad++; break; }
+		if (a->st->lock_idle_min > 1440) { a->result = Z_AUTH_E_INVAL; break; }
+		ka.policies++;
+		ka.boot = a->st->lock_boot;
+		ka.idle = a->st->lock_idle_min;
+		ka.console = a->st->lock_console;
+		break;
+	default:
+		a->result = Z_AUTH_E_INVAL;
+	}
+}
 
 static void store_load(void) {
 	char k[Z_CFG_KEY_MAX], v[Z_CFG_VAL_MAX];
@@ -169,6 +231,10 @@ static uint32_t *k_syscall(uint32_t id, uint32_t *args, uint32_t b) {
 		a->done = 1;
 		return (uint32_t *)&k_ok;
 	}
+
+	case Z_SYS_AUTH:
+		k_auth_script((z_auth_args_t *)args);
+		return (uint32_t *)&k_ok;
 
 	default:
 		return (uint32_t *)&k_ok;
@@ -442,6 +508,119 @@ int main(int argc, char **argv) {
 		"a value with no row: no selection, value still shown");
 
 	render(prefix, "4-final");
+
+	// -- 6. security: the password and the screen lock --
+	printf("6. security\n");
+	read_values();
+	expect(auth_ok && !strcmp(widgets[W_PW_SET].label, "Set") && !widgets[W_PW_REMOVE].enabled,
+		"no password: Set, and Remove disabled");
+	{
+		char d[80];
+		describe_lock(d, sizeof(d));
+		expect(!strcmp(d, "only on Super+L"), "no lock policy described as such");
+	}
+	render(prefix, "6-security-none");
+
+	// Tab reaches the new buttons after Reload
+	z_widget_focus_set(&wset, W_RELOAD);
+	handle_key('\t', 0);
+	expect(wset.focused == W_PW_SET, "Tab from Reload reaches the password button");
+
+	secrets("correct horse", "correct horse", NULL);
+	activate(W_PW_SET);
+	expect(ka.has && !strcmp(ka.pw, "correct horse") && ka.sets == 1, "set a password");
+	expect(!strcmp(status, "password set"), "status: password set");
+	expect(!strcmp(widgets[W_PW_SET].label, "Change") && widgets[W_PW_REMOVE].enabled,
+		"with a password: Change, and Remove enabled");
+
+	secrets("nope", "new-one-long", "new-one-long");
+	activate(W_PW_SET);
+	expect(!strcmp(ka.pw, "correct horse") && strstr(status, "wrong password"),
+		"a wrong current password changes nothing");
+
+	secrets("correct horse", "aaaa", "bbbb");
+	int sets_before = ka.sets;
+	activate(W_PW_SET);
+	expect(ka.sets == sets_before && strstr(status, "differ"), "two different new passwords: no call");
+
+	secrets("correct horse", NULL, NULL);
+	activate(W_PW_SET);
+	expect(ka.sets == sets_before && !strcmp(ka.pw, "correct horse"), "cancel at the new password");
+
+	secrets("correct horse", "short", "short");
+	activate(W_PW_SET);
+	expect(!strcmp(ka.pw, "short") && strstr(status, "too short for network"),
+		"a short password is accepted, with the network warning");
+	{
+		char d[80];
+		describe_password(d, sizeof(d));
+		expect(strstr(d, "too short") != NULL, "and the row says so");
+	}
+
+	// the lock policy: yes to both questions, 5 minutes, the password
+	confirm_answer = Z_DIALOG_YES;
+	prompt_answer = "5";
+	secrets("short", NULL, NULL);
+	activate(W_LOCK_EDIT);
+	expect(ka.boot == 1 && ka.idle == 5 && ka.console == 1 && ka.policies == 1,
+		"policy saved: boot, 5 min, console");
+	{
+		char d[80];
+		describe_lock(d, sizeof(d));
+		expect(!strcmp(d, "at start, after 5 min idle, console too"), "policy described");
+	}
+	render(prefix, "7-security-set");
+
+	prompt_answer = "99999";
+	secrets("short", NULL, NULL);
+	activate(W_LOCK_EDIT);
+	expect(ka.policies == 1 && strstr(status, "0 to 1440"), "an out-of-range minute count is refused");
+
+	prompt_answer = "5x";
+	activate(W_LOCK_EDIT);
+	expect(ka.policies == 1, "a minute count with a letter in it is refused");
+
+	confirm_answer = Z_DIALOG_CANCEL;
+	activate(W_LOCK_EDIT);
+	expect(ka.policies == 1, "cancel at the first question changes nothing");
+
+	confirm_answer = Z_DIALOG_NO;
+	prompt_answer = "0";
+	secrets("wrong", NULL, NULL);
+	activate(W_LOCK_EDIT);
+	expect(ka.boot == 1 && strstr(status, "wrong password"), "policy with a wrong password refused");
+
+	secrets("short", NULL, NULL);
+	activate(W_LOCK_EDIT);
+	expect(ka.boot == 0 && ka.idle == 0 && ka.console == 0, "policy turned off");
+
+	// remove
+	confirm_answer = Z_DIALOG_NO;
+	secret_prompts = 0;
+	activate(W_PW_REMOVE);
+	expect(ka.has && secret_prompts == 0, "declining the removal asks for nothing");
+	confirm_answer = Z_DIALOG_YES;
+	secrets("short", NULL, NULL);
+	activate(W_PW_REMOVE);
+	expect(!ka.has && strstr(status, "removed"), "password removed");
+	expect(!widgets[W_PW_REMOVE].enabled, "Remove disabled again");
+
+	// without the flash writer, and on a kernel without Z_SYS_AUTH
+	ka.writable = false;
+	read_auth();
+	expect(!widgets[W_PW_SET].enabled && !widgets[W_LOCK_EDIT].enabled,
+		"read-only store: the buttons are disabled");
+	ka.writable = true;
+	ka.nosys = true;
+	read_auth();
+	{
+		char d[80];
+		describe_password(d, sizeof(d));
+		expect(!auth_ok && !widgets[W_PW_SET].enabled && strstr(d, "no password support"),
+			"an old kernel: disabled, and says why");
+	}
+	ka.nosys = false;
+	read_auth();
 
 	printf("--- final /zeitlos.cfg ---\n%.*s--- end ---\n", file_len, file);
 	printf("settings render: %d checks, %d failed\n", checks, failures);

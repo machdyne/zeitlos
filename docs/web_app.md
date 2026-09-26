@@ -116,9 +116,10 @@ It cannot simply reuse the telnet provider. `telnet.c` escapes a
 literal `0xFF` byte as `IAC IAC`, which would corrupt roughly one
 byte in 256 of a TLS record.
 
-One TCB means one connection at a time, system-wide. Browsing and an
-SSH session are mutually exclusive, exactly as telnet and SSH already
-are.
+One socket at a time: `net` relays one. It no longer excludes telnet
+or SSH -- `tcp.c` has a pool of connections now
+([networking.md](networking.md), "Connections") -- so browsing during
+an SSH session works.
 
 ### Everything fetched is spooled
 
@@ -325,8 +326,9 @@ Written before any of this ran. Kept, with what actually happened.
    there is no out-of-order reassembly and a frame the hardware cannot
    hold is discarded along with everything behind it. See
    [networking.md](networking.md).
-2. **One TCB.** *Correct and unchanged.* No browsing while an SSH
-   session is open, and no parallel fetches. `web` now keeps that one
+2. **One TCB.** *No longer true: `tcp.c` has a pool, and browsing
+   during an SSH session works.* Still no parallel fetches -- `net`
+   relays one socket. `web` now keeps that one
    connection alive across same-host requests rather than reopening
    it.
 3. **X.509 parsing is attacker-controlled DER.** *Still true, still
@@ -433,8 +435,8 @@ Things that are known-missing rather than broken:
   replaces the first.
 - **Fragment links jump to the top**, because there is no anchor
   index yet.
-- **One TCB**, so browsing and an SSH session are mutually exclusive,
-  and `net` will say so. `web` now keeps that one connection alive
+- **One socket**, so no parallel fetches (browsing and SSH no longer
+  exclude each other). `web` now keeps that one connection alive
   across same-host requests rather than reopening it, and gives it
   back after ten idle seconds -- see [http.md](http.md).
 - **No TLS session resumption**, so a redirect to a DIFFERENT host

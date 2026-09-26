@@ -200,7 +200,8 @@ top of a 2 MB flash, **at `0x1D0000` on every board**:
 | `0x100000` | kernel | 256 KB | unchanged |
 | `0x140000` | core apps (ZAR) | 576 KB, to `0x1D0000` | limit only (was to `0x200000`) |
 | *(run time)* | user gateware | see below | new |
-| **`0x1D0000`** | **jumploader** | **192 KB** | **new** |
+| **`0x1D0000`** | **jumploader** | **184 KB** | **new**; 192 KB less the store |
+| `0x1FE000` | key/value store | 8 KB | the last 8 KB of any chip; written only by the running system, [kvstore.md](kvstore.md) |
 
 **Why one address for every board.** A jumploader is an almost-empty
 bitstream, and its size is set by the die, not the design -- every frame
@@ -228,7 +229,9 @@ section 11), the first of:
   never the reverse;
 - the tail of the gateware region, between the end of Zeitlos's own
   bitstream and the logo at `0x0F0000`;
-- on 4 MB and larger, above `0x200000`, where it never meets the apps.
+- on 4 MB and larger, above `0x200000`, where it never meets the apps,
+  up to 8 KB short of the end of the chip, where the key/value store
+  is ([kvstore.md](kvstore.md)).
 
 A blinky is ~99 KB on a 25F and ~162 KB on a 45F -- never much less,
 since every configuration frame costs bytes. On a Mozart ML1 (2 MB, a

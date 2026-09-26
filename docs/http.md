@@ -22,7 +22,7 @@ provider underneath.
     |
   net/sock.c   raw TCP, nothing added or removed
     |
-  net/tcp.c    one TCB, stop-and-wait
+  net/tcp.c    a pool of connections, stop-and-wait
 ```
 
 `http.c` includes nothing from Zeitlos and touches no socket. Bytes
@@ -140,7 +140,7 @@ stream from that file. Three things fall out of it:
 
 ### One fetch at a time
 
-`net` has one TCP connection, so `web` has one fetch. A second
+`net` relays one socket, so `web` has one fetch. A second
 request is **queued, not refused** — a client that got "busy" could
 only sit in a retry loop doing the same thing worse. `Z_WEB_CANCEL`
 is how a client that does not want to wait gets out.

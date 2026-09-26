@@ -19,6 +19,9 @@
 #include "../common/zdns.h"
 #include "kernel.h"
 #include "flashapi.h"
+#include "kvstore.h"	// `kv`, and flashtest keeping clear of the store
+#include "auth.h"		// `passwd`, `lock`, and the console lock
+extern bool k_readline_from_uart;	// kruntime.c
 #include "usb/usbh.h"
 #include "usb/usbh_cdc.h"
 #include "uart.h"
@@ -595,6 +598,10 @@ void sh(void) {
 			"skipping auto-start (run `init` manually once ready)\n",
 			(unsigned long)(AUTOINIT_TIMEOUT_TICKS / 732));
 	}
+
+	// The console lock (docs/security.md): after init, so a locked
+	// console never holds up the desktop, and before the first prompt.
+	k_auth_console_boot();
 
 	while (1) {
 
@@ -1656,6 +1663,22 @@ void sh(void) {
 			}
 		}
 
+		// PASSWD, LOCK: docs/security.md
+		else if (!strncmp(buffer, "passwd", cmdlen)) {
+			k_auth_shell_passwd(get_arg(buffer, 1), k_readline_from_uart);
+		}
+		else if (!strncmp(buffer, "lock", cmdlen)) {
+			k_auth_shell_lock();
+		}
+
+		// KV: the flash key/value store, docs/kvstore.md
+		else if (!strncmp(buffer, "kv", cmdlen)) {
+			char *sub = get_arg(buffer, 1);
+			char *a1 = sub ? get_arg(buffer, 2) : NULL;
+			char *a2 = a1 ? get_arg(buffer, 3) : NULL;
+			k_kv_shell(sub, a1, a2);
+		}
+
 		// CONFIGURATION -- /zeitlos.cfg, docs/config.md.
 		//   cfg              list known keys (effective values) and
 		//                    anything else the file sets
@@ -1857,6 +1880,20 @@ void init(void) {
 	// (wait_for_ntp), so it does not matter that net starts after it.
 	if (fs_size("/user/cron.cfg") > 0)
 		init_start_optional("cron");
+
+	// netserve (docs/netserve.md), the same way: only if a service is
+	// configured. It waits for net and its address itself.
+	{
+		static const char *keys[] = { "apps.netserve.ssh", "apps.netserve.telnet",
+			"apps.netserve.http", "apps.netserve.echo" };
+		for (int i = 0; i < 4; i++) {
+			const char *v = k_cfg_find(keys[i]);
+			if (v && v[0] && strcmp(v, "off") && strcmp(v, "no")) {
+				init_start_optional("netserve");
+				break;
+			}
+		}
+	}
 
 	// net is created and loaded above, in its usual slot, but does not
 	// start running until every other load is done.
@@ -2211,7 +2248,10 @@ void sh_help(void) {
 	printf(" reboot            reconfigure the FPGA, after syncing files\n");
 	printf(" jump [addr]       the jumploader; with a hex address, boot from it\n");
 	printf(" flash             the flash: ID, size, lock, status\n");
-	printf(" flashtest         test erase/program on sector 0x1FF000\n");
+	printf(" flashtest         test erase/program on sector 0x1FC000\n");
+	printf(" kv [get|set|del|compact|test] ...  the flash key/value store\n");
+	printf(" passwd [reset]    set, change or remove the password\n");
+	printf(" lock              lock the screen (and the console, if set to)\n");
 	printf(" probe             dump logic analyser capture "
 		"(needs -DPROBE)\n");
 	printf(" usbmount          mount usb storage at /usb\n");
@@ -2296,7 +2336,12 @@ static void sh_flash_info(void) {
 		(unsigned long)st, k_flash_session_active() ? "; a write session is open" : "");
 }
 
-#define FT_SECTOR 0x1FF000u      /* the last 4 KB of the first 2 MB: free on every board */
+/* Below the key/value store (docs/kvstore.md), which has the last 8 KB
+ * of the chip, and past every jumploader built for a 2 MB flash (the
+ * 45F one ends at 0x1F7BE9). On a larger flash this is inside an 85F
+ * jumploader -- which is what the blank-or-ours check below is for, as
+ * it was at the old 0x1FF000. */
+#define FT_SECTOR 0x1FC000u
 #define FT_SIG    "ZFLASHTEST"
 
 static volatile const uint8_t *ft_win(uint32_t off) {
@@ -2332,6 +2377,12 @@ static void sh_flashtest(void) {
 		return;
 	}
 	ft_wait(NULL);
+
+	if (k_kv_overlaps(FT_SECTOR, 4096)) {
+		printf("flashtest: sector 0x%06lx is the key/value store on this flash; "
+			"not touching it\n", (unsigned long)FT_SECTOR);
+		return;
+	}
 
 	// Only a blank sector, or one this test wrote, is erased.
 	bool blank = true, ours = true;

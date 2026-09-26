@@ -437,7 +437,10 @@ static inline uint32_t z_proc_stack_size_for(const char *name) {
 	// that. See the tier notes above.
 	if (!strcmp(name, "web") || !strcmp(name, "repl"))
 		return Z_PROC_STACK_SIZE_LARGE;
-	if (!strcmp(name, "net"))
+	// netserve: a few sessions, each with up to 8 port sends in flight
+	// in both directions, and every send is a heap copy until acked
+	// (zport.h) -- more than DEFAULT's 16KB of stack and heap together.
+	if (!strcmp(name, "net") || !strcmp(name, "netserve"))
 		return Z_PROC_STACK_SIZE_MEDIUM;
 	if (!strcmp(name, "wm") || !strcmp(name, "term"))
 		return Z_PROC_STACK_SIZE_SMALL;

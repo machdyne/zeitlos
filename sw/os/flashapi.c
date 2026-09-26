@@ -23,6 +23,7 @@
 #include "flashapi.h"
 #include "../common/zsoc.h"
 #include "../common/zflash.h"
+#include "kvstore.h"
 
 #define REG(o) (*(volatile uint32_t *)(Z_SPIFLASH_BASE + (o)))
 
@@ -92,6 +93,8 @@ bool k_flash_session_active(void) {
 // session. An operation still running finishes on its own.
 void k_flash_release_pid(uint32_t pid) {
 	if (session && session_owner == pid) session = false;
+	// the store's write lock, if this process died inside Z_SYS_KV
+	k_kv_release_pid(pid);
 }
 
 z_obj_t *k_flash(z_obj_t *args) {
@@ -119,6 +122,16 @@ z_obj_t *k_flash(z_obj_t *args) {
 		return &z_ok;
 	case Z_FLASH_ERASE:
 	case Z_FLASH_PROGRAM:
+		// The key/value store is the kernel's (kvstore.c,
+		// docs/kvstore.md). Checked before the session, so the refusal
+		// is the same whoever asks, and modulo the chip size inside
+		// k_kv_overlaps(), because the chip ignores the address bits
+		// above its size.
+		if (a->op == Z_FLASH_ERASE ? k_kv_overlaps(a->addr & ~0xFFFu, 4096u)
+				: k_kv_overlaps(a->addr, a->len)) {
+			a->result = Z_FLASH_E_RESERVED;
+			return &z_fail;
+		}
 		if (!session || session_owner != z_pid) {
 			a->result = 0xFFFFFFFFu;
 			return &z_fail;

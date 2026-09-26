@@ -68,6 +68,8 @@ static void scroll_to_caret(z_edit_t *e, int cols) {
 
 bool z_edit_key(z_edit_t *e, uint32_t keysym) {
 
+	if (e->secret && keysym >= 0x80 && Z_KEY_IS_TEXT(keysym)) return false;
+
 	switch (keysym) {
 
 	case Z_KEY_LEFT:
@@ -194,7 +196,18 @@ void z_edit_draw(const z_win_t *win, z_edit_t *e,
 	(void)n;
 	// UTF-8 from the first visible character; the clip cuts it at
 	// the box's right edge.
-	z_fb_draw_utf8(x0 + PAD_X, y0 + PAD_Y, e->buf + e->scroll, 1, font, &clip);
+	if (e->secret) {
+		// As many stars as characters from the first visible one --
+		// all ASCII, so bytes are characters and characters columns.
+		char stars[96];
+		int k = e->len - e->scroll;
+		if (k > (int)sizeof(stars) - 1) k = (int)sizeof(stars) - 1;
+		if (k < 0) k = 0;
+		memset(stars, '*', (size_t)k);
+		stars[k] = 0;
+		z_fb_draw_utf8(x0 + PAD_X, y0 + PAD_Y, stars, 1, font, &clip);
+	} else
+		z_fb_draw_utf8(x0 + PAD_X, y0 + PAD_Y, e->buf + e->scroll, 1, font, &clip);
 
 	if (e->focus) {
 		int cx = x0 + PAD_X +

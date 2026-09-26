@@ -916,6 +916,7 @@ not take the keys away from the window they are for.
 | key | action |
 |---|---|
 | Super+Space | next keyboard layout in `system.keyboard.layouts`; its two-letter label shows on the dock for a moment, and speech says its name |
+| Super+L | lock the screen ([security.md](security.md)); also `lock` in the repl or at the console. Acted on in the main loop, after any drag is released |
 | Super+K | start the on-screen keyboard ([keyboard_app.md](keyboard_app.md)); it is single-instance, so a second press does nothing |
 | Super+P | next phosphor -- white, amber, green, paper, round again, in `settings`' order. Writes the video register only: `system.video.mode` (the default) is untouched, so a reboot, or a config reload (which re-applies it, `sw/os/cfg.c`), brings the default back |
 
@@ -2146,6 +2147,55 @@ window. Never the dock.
 button change -- the on-screen keyboard, the remote desktop and
 `automate` do not count. A driver that sees it change knows a person
 has touched the machine (attract mode, [automate.md](automate.md)).
+
+## The screen lock
+
+`wm` draws the lock screen and owns every key while it is up.
+[security.md](security.md) has the whole design and the threat model;
+this is the part that lives in `wm.c`.
+
+It is built on regions rather than beside them. While `wm_locked` is
+set:
+
+- `window_visible_region()` answers **nothing** for every window, so
+  every app, the dock and `wm`'s own chrome are sent, or paint with, an
+  empty region -- and zgfx confines every primitive to it. A repair
+  triggered by a window opening, closing or asking to be raised runs as
+  usual and lands nowhere.
+- `wm_unclip()` confines `wm` itself to nothing, which covers every
+  other path that draws with no window's region.
+- `caption_blit()` returns; the caption is drawn after unlocking.
+- `dispatch_keys()` sends every key to `lock_key()` before any hotkey
+  or app sees it; the click that manages windows, `dispatch_mouse()`
+  and `dispatch_wheel()` do not run.
+- A `Z_WM_GAME_GRAB` is revoked as it arrives.
+
+**Locking** (`lock_engage()`) happens only in the main loop, never
+inside a key handler or a message: `freeze_all()` services messages
+while it waits, and a drag in progress owns the XOR band. So Super+L,
+`Z_WM_LOCK` and the idle timer only set `lock_pending`, and the loop
+engages it -- after the button is released, if a drag or resize is
+under way. The order is: revoke any grab and turn off the game-mode
+camera, **freeze every window and wait for the acks**, set `wm_locked`,
+resend every (now empty) region, draw the lock screen.
+
+**Unlocking** (`lock_release()`) resends the real regions without
+REDRAWs, then repairs the whole screen once, which repaints the chrome
+and asks each window for its content.
+
+**Idle:** every key event and every change of pointer position or
+buttons resets `lock_last_input`. `wm_idle_ticks()` includes the moment
+the idle lock is due, so a sleeping `wm` wakes for it.
+
+**The policy** (`lock_st`) comes from the kernel (`z_auth_status()`)
+at start, on `Z_WM_LOCK_RELOAD` (settings and `passwd` send it), and at
+every lock and unlock.
+
+`tests/test_lock.c` runs the real `wm.c` on the host -- a software
+framebuffer (`sw/common/tests/zrender.h`, in its strict-region mode,
+which enforces regions per pixel as zgfx does) and a scripted kernel
+playing one app and `Z_SYS_AUTH`. 29 checks; each of the nine
+properties was confirmed to fail with the code protecting it removed.
 
 ## Known limitations / future work
 

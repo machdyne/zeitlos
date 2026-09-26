@@ -342,4 +342,33 @@ void z_port_accept(z_port_t *out_port, const z_msg_t *connect_msg, uint32_t conn
 // provider that only supports one client at a time, already in use).
 void z_port_refuse(const z_msg_t *connect_msg, const char *reason);
 
+// For a provider (or any process with several peers): DATA that belongs
+// to none of your connections -- no connection with this tag FROM THIS
+// SENDER. Acks it, so the sender can free it, and answers CLOSE with
+// the same tag, so the sender stops.
+//
+// Matching by tag alone is not enough. A peer that dies without a CLOSE
+// leaves its provider sending to its pid, and pids are reused: the
+// next process to get that pid receives a stream it never asked for,
+// tagged like one of its own connections. Seen on hardware as posix
+// executing the kernel log line by line -- console0 was still streaming
+// to a term that had been killed, and posix had its pid.
+void z_port_reject_stranger(const z_msg_t *msg);
+
+// For a peer KNOWN TO BE GONE (it exited, it was killed): frees every
+// send still waiting for its ack -- none will come -- and marks the
+// connection closed, sending nothing. Never for a live peer: it may yet
+// read a payload this frees. netserve uses it when posix calls a
+// session back from a child (vi) that exited without closing its port.
+void z_port_forget(z_port_t *port);
+
+// z_port_handle_ack(), for a connection this side has already CLOSED:
+// its sends are still out, and their acks still come. z_port_handle_ack()
+// ignores a closed port -- so a process that closes and then waits for
+// its sends to drain (netserve, net's relay) never sees the count reach
+// zero, and the memory is lost once it stops waiting. Matched by tag as
+// usual. Only while the z_port_t has not been reused for a new
+// connection.
+void z_port_handle_ack_closed(z_port_t *port, const z_msg_t *msg);
+
 #endif

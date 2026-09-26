@@ -56,6 +56,12 @@ CFLAGS = $(PIC_FLAGS) --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) -I..
 ifeq ($(USBH_DEBUG),1)
 CFLAGS += -DUSBH_DEBUG
 endif
+# `kv test`, the on-board test of the flash key/value store: about 2.8 KB
+# of image, which the kernel no longer has to spare by default since the
+# password went in (docs/security.md). `make KV_TEST=1` builds it in for
+# a hardware check. docs/kvstore.md.
+KV_TEST ?= 0
+CFLAGS += -DKV_TEST=$(KV_TEST)
 # Page size for the linker's segment layout: 16 bytes, not 4 KB.
 #
 # riscv-os.ld's DATA_SEGMENT_ALIGN moves the data segment to a page
@@ -76,7 +82,7 @@ LDSCRIPT = ../common/riscv-os.ld
 
 OBJS = kernel.o kruntime.o mem.o zar.o usb/usbh.o usb/usbh_hid.o usb/usbh_msc.o usb/usbh_hub.o usb/usbh_cdc.o usb/usbh_cp210x.o usb/usbh_ecm.o usbcdcapi.o usbnetapi.o \
 	fs/fs.o fs/ramdisk.o fs/sdbench.o fs/fatfs/sdmm.o fs/fatfs/diskio_mux.o fs/fatfs/ff.o fs/fatfs/ffunicode.o \
-	uart.o hid.o sh.o xfer.o xmodem.o ui.o msg.o pidreg.o fsapi.o flashapi.o jumpapi.o zjump.o procapi.o zobj.o zstream.o zdns.o zsoc.o zgpio.o logo.o \
+	uart.o hid.o sh.o xfer.o xmodem.o ui.o msg.o pidreg.o fsapi.o flashapi.o kvstore.o kvlog.o auth.o authcore.o zsha256.o jumpapi.o zjump.o procapi.o zobj.o zstream.o zdns.o zsoc.o zgpio.o logo.o \
 	cfg.o zcfg.o zfont_data.o
 
 # kernel.o's recipe below builds every object in one go (they're not
@@ -90,8 +96,8 @@ OBJS = kernel.o kruntime.o mem.o zar.o usb/usbh.o usb/usbh_hid.o usb/usbh_msc.o 
 # zstream/TFTP work -- see docs/networking.md.
 KSRCS = kernel.c kruntime.c mem.c \
 	fs/fs.c fs/ramdisk.c fs/sdbench.c fs/fatfs/sdmm.c fs/fatfs/diskio_mux.c fs/fatfs/ff.c fs/fatfs/ffunicode.c \
-	usb/usbh.c usb/usbh_hid.c usb/usbh_msc.c usb/usbh_hub.c usb/usbh_cdc.c usb/usbh_cp210x.c usb/usbh_ecm.c usbcdcapi.c usbnetapi.c uart.c hid.c sh.c xfer.c xmodem.c ui.c msg.c pidreg.c fsapi.c flashapi.c jumpapi.c procapi.c logo.c cfg.c \
-	../common/zobj.c ../common/zstream.c ../common/zdns.c ../common/zsoc.c ../common/zcfg.c ../common/zjump.c \
+	usb/usbh.c usb/usbh_hid.c usb/usbh_msc.c usb/usbh_hub.c usb/usbh_cdc.c usb/usbh_cp210x.c usb/usbh_ecm.c usbcdcapi.c usbnetapi.c uart.c hid.c sh.c xfer.c xmodem.c ui.c msg.c pidreg.c fsapi.c flashapi.c kvstore.c kvlog.c auth.c authcore.c jumpapi.c procapi.c logo.c cfg.c \
+	../common/zobj.c ../common/zsha256.c ../common/zstream.c ../common/zdns.c ../common/zsoc.c ../common/zcfg.c ../common/zjump.c \
 	../common/zfont_data.c
 
 kernel: kernel.elf kernel.bin
@@ -144,6 +150,10 @@ fs/fatfs/ffunicode.o: fs/fatfs/ffunicode.c fs/fatfs/ffconf.h
 	$(CC) $(CFLAGS) -c pidreg.c -o pidreg.o
 	$(CC) $(CFLAGS) -c fsapi.c -o fsapi.o
 	$(CC) $(CFLAGS) -c flashapi.c -o flashapi.o
+	$(CC) $(CFLAGS) -c kvstore.c -o kvstore.o
+	$(CC) $(CFLAGS) -c kvlog.c -o kvlog.o
+	$(CC) $(CFLAGS) -c auth.c -o auth.o
+	$(CC) $(CFLAGS) -c authcore.c -o authcore.o
 	$(CC) $(CFLAGS) -c jumpapi.c -o jumpapi.o
 	$(CC) $(CFLAGS) -c procapi.c -o procapi.o
 	$(CC) $(CFLAGS) -c ../common/zobj.c -o zobj.o
@@ -161,6 +171,12 @@ fs/fatfs/ffunicode.o: fs/fatfs/ffunicode.c fs/fatfs/ffconf.h
 	$(CC) $(CFLAGS) -c ../common/zjump.c -o zjump.o
 	$(CC) $(CFLAGS) -c ../common/zgpio.c -o zgpio.o
 	$(CC) $(CFLAGS) -c sh.c -S -MF /dev/null -o sh.asm
+
+# SHA-256 for the password (auth.c). An explicit rule: the other
+# ../common objects are built inside kernel.o's recipe above, and a
+# new one added only there is not rebuilt when that recipe is skipped.
+zsha256.o: ../common/zsha256.c ../common/zsha256.h
+	$(CC) $(CFLAGS) -c ../common/zsha256.c -o zsha256.o
 
 kernel.elf: $(OBJS)
 	$(CC) $(LDFLAGS) -T $(LDSCRIPT) -Wl,-Map,kernel.map -o kernel.elf $(OBJS)

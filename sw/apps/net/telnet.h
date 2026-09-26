@@ -6,7 +6,8 @@
  * Copyright (c) 2025 Lone Dynamics Corporation. All rights reserved.
  *
  * Telnet (RFC 854), client-only, layered directly on tcp.h -- one
- * connection at a time, following tcp.c's own constraint (there's
+ * telnet session at a time (this module keeps a single connection,
+ * though tcp.c now has a pool -- the rest of this note predates it; there's
  * only one TCB, so there can only ever be one telnet session either).
  *
  * Deliberately minimal option handling: refuses (WONT/DONT) every

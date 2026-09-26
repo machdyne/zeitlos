@@ -188,9 +188,23 @@ void z_gfx_paint_end(void) {
 	zr_paint_have = 0;
 }
 
+// Strict: every pixel is also confined to the visible region, as
+// zgfx.c confines every primitive on the device. Off by default -- the
+// panel renders predate it and draw with no region set -- and turned
+// on by a test whose question IS the region: sw/apps/wm/tests/
+// test_lock.c, which checks that nothing reaches a locked screen.
+static bool zr_region_strict;
+
 static bool zr_allows(int x, int y, const z_clip_t *c) {
 	if (x < 0 || y < 0 || x >= Z_SCREEN_W || y >= Z_SCREEN_H) return false;
 	if (c && (x < c->x0 || x > c->x1 || y < c->y0 || y > c->y1)) return false;
+	if (zr_region_strict && zr_region_n > 0) {
+		for (int i = 0; i < zr_region_n; i++)
+			if (x >= zr_region[i].x0 && x <= zr_region[i].x1 &&
+			    y >= zr_region[i].y0 && y <= zr_region[i].y1)
+				return true;
+		return false;
+	}
 	return true;
 }
 

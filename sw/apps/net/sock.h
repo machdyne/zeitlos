@@ -25,11 +25,9 @@
  *
  * -- one connection at a time --
  *
- * tcp.c has a single TCB, so a socket, a telnet session and an SSH
- * session are mutually exclusive system-wide. net.c checks all three
- * before starting any of them. That is not a new restriction: telnet
- * and SSH already had it, and this adds a third participant rather
- * than a new problem.
+ * One socket at a time: this module keeps one connection, and net.c
+ * relays one. It used to exclude telnet and SSH sessions too, when
+ * tcp.c had a single TCB; tcp.c has a pool now, and they coexist.
  *
  * -- compiled out with NET_SOCK=0 --
  *
@@ -43,6 +41,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "tcp.h"
 
 // Outbound bytes buffered while tcp.c's single unacknowledged segment
 // is in flight.
@@ -87,6 +86,10 @@ void sock_close(void);
 
 // Immediate teardown (tcp_abort()), discarding anything queued.
 void sock_abort(void);
+
+// The socket's TCP connection, or NULL: for net.c's window control
+// (tcp_set_rx_window(), tcp_ack_now()).
+tcp_conn_t *sock_tcp(void);
 
 // Call every main-loop iteration alongside tcp_poll(). Flushes the
 // queue through tcp_send() as room allows.

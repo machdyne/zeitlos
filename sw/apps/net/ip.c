@@ -86,6 +86,10 @@ void ip_init(uint32_t ip, uint32_t netmask, uint32_t gateway_ip) {
 	our_gateway = gateway_ip;
 }
 
+uint32_t ip_our_netmask(void) {
+	return our_netmask;
+}
+
 uint32_t ip_our_addr(void) {
 	return our_ip;
 }

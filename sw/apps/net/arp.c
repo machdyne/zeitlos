@@ -12,16 +12,22 @@
 #include "arp.h"
 #include "eth.h"
 
+#ifndef NET_ARP_LOG
+#define NET_ARP_LOG 0
+#endif
+
 #define ARP_CACHE_SIZE  8
 
 typedef struct {
 	bool used;
 	uint32_t ip;
 	uint8_t mac[6];
+	uint32_t last;          // arp_clock when last used or refreshed (LRU)
 } arp_entry_t;
 
 static arp_entry_t arp_cache[ARP_CACHE_SIZE];
 static uint32_t our_ip;
+static uint32_t arp_clock;
 
 static const uint8_t bcast_mac[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
 
@@ -30,34 +36,39 @@ void arp_init(uint32_t ip) {
 	for (int i = 0; i < ARP_CACHE_SIZE; i++) arp_cache[i].used = false;
 }
 
-static void arp_cache_insert(uint32_t ip, const uint8_t mac[6]) {
-
+// Updates an entry for `ip` if there is one. Adds one only if `add`,
+// replacing the least recently used when the cache is full.
+//
+// RFC 826's merge rule, and the reason for it found the hard way: this
+// used to add the sender of EVERY ARP packet seen -- including the
+// who-has broadcasts between other machines, which a home network has
+// plenty of -- and, once full, always overwrite slot 0. So the first
+// eight hosts heard kept slots 1-7 for good, and everything new shared
+// slot 0 with the broadcast chatter: a TFTP server's reply landed there
+// and was gone before the retry, and tget failed with "arp not resolved
+// yet" on every attempt.
+static void arp_cache_insert(uint32_t ip, const uint8_t mac[6], bool add) {
+	int victim = -1;
 	for (int i = 0; i < ARP_CACHE_SIZE; i++) {
 		if (arp_cache[i].used && arp_cache[i].ip == ip) {
 			for (int j = 0; j < 6; j++) arp_cache[i].mac[j] = mac[j];
+			arp_cache[i].last = ++arp_clock;
 			return;
 		}
 	}
-
+	if (!add) return;
 	for (int i = 0; i < ARP_CACHE_SIZE; i++) {
-		if (!arp_cache[i].used) {
-			arp_cache[i].used = true;
-			arp_cache[i].ip = ip;
-			for (int j = 0; j < 6; j++) arp_cache[i].mac[j] = mac[j];
-			printf("net: arp learned %ld.%ld.%ld.%ld = %02x:%02x:%02x:%02x:%02x:%02x\n",
-				(long)(ip >> 24 & 0xFF), (long)(ip >> 16 & 0xFF),
-				(long)(ip >> 8 & 0xFF), (long)(ip & 0xFF),
-				mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-			return;
-		}
+		if (!arp_cache[i].used) { victim = i; break; }
+		if (victim < 0 || (int32_t)(arp_cache[i].last - arp_cache[victim].last) < 0) victim = i;
 	}
-
-	// cache full -- evict slot 0. simple, not LRU; fine for a
-	// handful of hosts on a dev network.
-	arp_cache[0].used = true;
-	arp_cache[0].ip = ip;
-	for (int j = 0; j < 6; j++) arp_cache[0].mac[j] = mac[j];
-
+	arp_cache[victim].used = true;
+	arp_cache[victim].ip = ip;
+	arp_cache[victim].last = ++arp_clock;
+	for (int j = 0; j < 6; j++) arp_cache[victim].mac[j] = mac[j];
+	printf("net: arp learned %ld.%ld.%ld.%ld = %02x:%02x:%02x:%02x:%02x:%02x\n",
+		(long)(ip >> 24 & 0xFF), (long)(ip >> 16 & 0xFF),
+		(long)(ip >> 8 & 0xFF), (long)(ip & 0xFF),
+		mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
 
 bool arp_lookup(uint32_t ip, uint8_t mac_out[6]) {
@@ -65,6 +76,7 @@ bool arp_lookup(uint32_t ip, uint8_t mac_out[6]) {
 	for (int i = 0; i < ARP_CACHE_SIZE; i++) {
 		if (arp_cache[i].used && arp_cache[i].ip == ip) {
 			for (int j = 0; j < 6; j++) mac_out[j] = arp_cache[i].mac[j];
+			arp_cache[i].last = ++arp_clock;
 			return true;
 		}
 	}
@@ -101,6 +113,14 @@ static void arp_send(uint16_t oper, const uint8_t target_mac[6], uint32_t target
 }
 
 void arp_request(uint32_t ip) {
+#if NET_ARP_LOG
+	// When a host "never resolves", the first question is whether our
+	// who-has went out at all (see arp_handle()'s reply log for the
+	// other half). `make NET_ARP_LOG=1`.
+	printf("net: arp who-has %ld.%ld.%ld.%ld\n",
+		(long)(ip >> 24 & 0xFF), (long)(ip >> 16 & 0xFF),
+		(long)(ip >> 8 & 0xFF), (long)(ip & 0xFF));
+#endif
 	arp_send(1, NULL, ip);	// operation 1 = request
 }
 
@@ -127,7 +147,21 @@ void arp_handle(const uint8_t src_mac[6], const uint8_t *p, uint16_t len) {
 
 	// learn the sender's mapping from any ARP traffic we see, not
 	// just replies to our own requests
-	arp_cache_insert(spa, sha);
+	// Refresh anyone we already know; LEARN only from a packet meant for
+	// us -- a request for our address, or a reply to one of ours (whose
+	// target is us too). See arp_cache_insert().
+	// Every REPLY is logged, learned or not: replies are unicast to us,
+	// so this is a few lines, not the network's broadcast chatter -- and
+	// a reply that arrives addressed to someone else is worth seeing.
+#if NET_ARP_LOG
+	if (oper == 2)
+		printf("net: arp reply %ld.%ld.%ld.%ld is-at %02x:%02x:%02x:%02x:%02x:%02x%s\n",
+			(long)(spa >> 24 & 0xFF), (long)(spa >> 16 & 0xFF),
+			(long)(spa >> 8 & 0xFF), (long)(spa & 0xFF),
+			sha[0], sha[1], sha[2], sha[3], sha[4], sha[5],
+			tpa == our_ip ? "" : " (not addressed to us)");
+#endif
+	arp_cache_insert(spa, sha, tpa == our_ip);
 
 	if (oper == 1 && tpa == our_ip) {
 		printf("net: arp who-has us from %ld.%ld.%ld.%ld, replying\n",
