@@ -26,6 +26,8 @@ const z_cfg_known_t z_cfg_known[] = {
 	  "netserve: HTTP on a port, serving a directory -- 80 /www -- or off" },
 	{ "apps.netserve.ssh", "off",
 	  "netserve: SSH on a port, to a port name -- 22 posix0 -- or off; needs a 10+ character password" },
+	{ "apps.netserve.ssh_auth", "both",
+	  "netserve: SSH logins by key (/user/authkeys), password, or both" },
 	{ "apps.netserve.telnet", "off",
 	  "netserve: telnet on a port, to a port name -- 23 repl0 -- or off; needs a 10+ character password" },
 	{ "apps.term.auto_connect", "",

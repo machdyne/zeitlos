@@ -39,7 +39,9 @@ gateware  ->  BIOS (BRAM)  ->  kernel (flash -> RAM)  ->  sh()  ->  init()  ->  
    [`flash_apps.md`](flash_apps.md).
 4. **`init()`** starts `wm`, loads `net`, starts `console`, looks for
    `repl` and `posix` on the card without starting them, starts `cron`
-   if `/user/cron.cfg` exists ([cron.md](cron.md)), starts `net`, and
+   if `/user/cron.cfg` exists ([cron.md](cron.md)), starts `netserve`
+   if any of its services is configured ([netserve.md](netserve.md)),
+   starts `net`, and
    registers **`init0`**. `term` is launched on demand from wm's
    dock, and the shells on demand from term's buttons
    ([terminal.md](terminal.md), "Starting the shells"). `wm`'s startup

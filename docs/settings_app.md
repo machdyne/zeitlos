@@ -169,6 +169,12 @@ password ([security.md](security.md)).
 - The buttons are disabled, and the rows say why, on a bitstream that
   cannot write the flash or a kernel without `Z_SYS_AUTH`.
 
+The Security buttons once came up disabled on the board -- empty
+boxes, which is how zwidget draws a disabled button -- because
+`widgets_init()` zeroed what `read_values()` had just set. Startup is
+now one function, `startup()`, that the host test calls too, so it
+starts exactly as the app does.
+
 The host test (`tests/render.c`) scripts `Z_SYS_AUTH` and walks every
 path: set, a wrong current password, two new passwords that differ,
 cancelling, a short password, the policy with good and bad minute

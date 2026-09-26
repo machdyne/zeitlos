@@ -5,10 +5,10 @@ to a card: they exist with no sdcard inserted, and they do not travel
 with one. It lives in the last 8 KB of the configuration flash and the
 kernel keeps it.
 
-**Status: built; host-tested, power cuts included; awaiting a hardware
-test** (`kv test`, below). It holds the password and the screen-lock
-policy ([security.md](security.md)), and will hold the SSH server's
-host key.
+**Status: running on boards** -- it holds the password, the lock
+policy and the SSH host key there. Host-tested, power cuts included.
+The on-board test (`kv test`, below) has not yet been run on a board,
+so its timings are still to be measured.
 
 | key | written by | |
 |---|---|---|
@@ -171,8 +171,8 @@ flash has no ECC and the store trusts a read that passes the CRC.
   `Z_KV_E_BUSY` rather than interleave with it.
 - **`auth.*` and `sys.*` belong to the kernel.** Through `Z_SYS_KV` and
   the `kv` command they can be listed but not read or written. Kernel
-  code (`k_kv_*()`) has no such restriction; that is what phase B's
-  `passwd` will use.
+  code (`k_kv_*()`) has no such restriction; that is what auth.c's
+  `passwd` uses.
 
 This is an API boundary and not secrecy. Any app can read any address,
 the flash window included ([mpu.md](mpu.md)), so a value here is hidden
@@ -306,7 +306,7 @@ Measured against the kernel before this change (235,520 bytes, 26 KB
 free). About 5 KB is the log itself; 1.7 KB is its work area, which is
 `.bss` and therefore image ([kernel.md](kernel.md), "The 256KB image
 budget"). With the password on top ([security.md](security.md)) the
-kernel has 3,608 bytes of headroom after phase F (netserve's boot start and config keys), 824 with `kv test`.
+kernel has 3,488 bytes of headroom now, with the password and netserve's boot start and config keys in; 704 with `kv test`.
 
 ## Wear
 

@@ -592,7 +592,8 @@ built only with `make KV_TEST=1`. `docs/kvstore.md`.
 `Z_SYS_AUTH` (`sw/os/auth.c`, `sw/os/authcore.c`; apps use
 `sw/common/zauth.h`) keeps the machine's one password as a salted
 PBKDF2-HMAC-SHA256 hash in the key/value store, and checks it for the
-lock screen, the console and, later, network logins. One tally of
+lock screen, the console, and telnet and SSH password logins
+(`docs/netserve.md`). One tally of
 failures and one check at a time, system-wide; a process killed
 mid-check releases the gate through the reaper
 (`k_auth_release_pid()`, beside `k_flash_release_pid()`). The console

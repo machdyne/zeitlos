@@ -1108,6 +1108,17 @@ static void widgets_init(void) {
 
 }
 
+// The values, then the widgets, then the values the widgets carry.
+// One function, so tests/render.c starts up exactly as the app does:
+// the Security buttons once came up disabled -- drawn as empty boxes --
+// because widgets_init() zeroed what read_values() had set, and a test
+// that re-read the values later could not see it.
+static void startup(void) {
+	read_values();
+	widgets_init();
+	read_auth();
+}
+
 int main(void) {
 
 	printf("settings: starting\n");
@@ -1138,8 +1149,7 @@ int main(void) {
 	z_listbox_init(&tz_list, &win);
 	z_listbox_set_items(&tz_list, TZ_ITEMS, tz_label, NULL);
 
-	read_values();
-	widgets_init();
+	startup();
 	layout();
 	repaint();
 

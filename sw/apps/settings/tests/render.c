@@ -308,8 +308,12 @@ int main(int argc, char **argv) {
 	printf("1. no /zeitlos.cfg\n");
 	z_listbox_init(&tz_list, &win);
 	z_listbox_set_items(&tz_list, TZ_ITEMS, tz_label, NULL);
-	read_values();
-	widgets_init();
+	startup();                      // exactly as main() starts
+	// On the board the Security buttons came up disabled (drawn as empty
+	// boxes): widgets_init() had wiped what read_values() set. Checked
+	// here, right after startup, not after a later re-read that hides it.
+	expect(widgets[W_PW_SET].enabled && widgets[W_LOCK_EDIT].enabled && widgets[W_PW_SET].label,
+		"the Security buttons are enabled and labelled at startup");
 	layout();
 	expect(!prefs[0].in_file && !tz_in_file, "nothing from the file");
 	expect(!strcmp(tz_value, "UTC"), "time zone shows its default");

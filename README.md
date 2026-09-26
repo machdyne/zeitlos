@@ -49,7 +49,8 @@ Build the hardware map from RTL with `make hwmap` (see [docs/hwmap.md](docs/hwma
  - International text: UTF-8 throughout, [22 keyboard layouts](docs/keyboard_layouts.md) (US, UK, German, French, Spanish, Italian, Portuguese, Nordic, Swiss, Belgian, Japanese and more) with dead keys and AltGr, switched with Super+Space; accented letters and the euro sign drawn by the hardware fonts ([ISO 8859-15](docs/text_encoding.md)); Japanese drawn from a public-domain 12x12 font and typed with a romaji [input method](docs/keyboard_layouts.md#japanese-input)
  - [Speech](docs/tts.md) for blind and headless use, and system-wide [captions](docs/captions.md)
  - Image decoding and [vector rendering](docs/svg.md) shared by every app (`sw/common`)
- - IP/ARP/ICMP/UDP/DHCP/NTP/DNS/TFTP/TCP/telnet/ssh [networking](docs/networking.md)
+ - IP/ARP/ICMP/UDP/DHCP/NTP/DNS/TFTP/TCP/telnet/ssh [networking](docs/networking.md), and [servers](docs/netserve.md): SSH (password or keys), telnet, and a static web server
+ - A [password and screen lock](docs/security.md) (Super+L), kept with other machine settings in a power-safe [key/value store in flash](docs/kvstore.md)
  - TLS 1.3 with X.509 certificate verification -- see [tls](docs/tls.md) and [x509](docs/x509.md)
  - [Remote desktop](docs/remote_desktop.md) in a browser, with keyboard and mouse back, on boards with the [ESP32 link](docs/esp32link.md)
 
@@ -130,7 +131,7 @@ On the sdcard. A `term` window starts one when you press its REPL or POSIX butto
 
 | App | Description |
 |-----|-------------|
-| [netserve](docs/netserve.md) | Monolithic network server (echo, telnet, http, ssh) |
+| [netserve](docs/netserve.md) | Network servers: SSH (password or [keys](docs/netserve.md#ssh-keys)), telnet, HTTP (static files), echo |
 | [serial](docs/uart1.md) | Serial port service |
 | [tts](docs/tts.md) | Text-to-speech service (Super+S to turn speech on) |
 | [jfont](docs/text_encoding.md#japanese) | Japanese font service: holds the font once for every app (`system.font.japanese: yes`) |

@@ -36,8 +36,13 @@
  * the numbers at every NEWKEYS and refuses anything but key exchange
  * messages during the first one.
  *
- * Password authentication only. "none", "publickey" and anything else
- * get a FAILURE listing "password", which every client handles. One
+ * Password and public-key authentication (sshs_set_auth()), either or
+ * both. A public key is checked in two steps, as RFC 4252 section 7
+ * has it: the client asks whether a key would do (answered from the
+ * owner's list alone, PK_OK), then signs. ssh-ed25519 and rsa-sha2-256
+ * signatures; SHA-1 "ssh-rsa" signatures are refused. The owner decides
+ * which keys are listed and checks the signature (the engine carries
+ * no RSA). Anything else gets a FAILURE naming what is offered. One
  * `session` channel; `pty-req` and `shell` accepted, `exec`,
  * `subsystem` (sftp, scp) and forwarding refused.
  *
@@ -88,6 +93,19 @@ typedef void (*sshs_random_fn)(void *user, uint8_t *out, uint32_t len);
 typedef int (*sshs_auth_fn)(void *user, const char *username,
 	const uint8_t *password, uint32_t len);
 
+// Public keys. `alg` is the SIGNATURE algorithm the client names --
+// "ssh-ed25519" or "rsa-sha2-256" -- and `blob` its public key, in the
+// SSH wire form (string type, then the key). Is this key listed?
+typedef bool (*sshs_pk_check_fn)(void *user, const char *username, const char *alg,
+	const uint8_t *blob, uint32_t blob_len);
+// Is `sig` (string alg, string signature) a valid signature by `blob`
+// over `data`? Called only for a key pk_check() accepted.
+typedef bool (*sshs_pk_verify_fn)(void *user, const char *alg, const uint8_t *blob,
+	uint32_t blob_len, const uint8_t *sig, uint32_t sig_len, const uint8_t *data, uint32_t data_len);
+
+#define SSHS_AUTH_PASSWORD   1u
+#define SSHS_AUTH_PUBLICKEY  2u
+
 typedef struct {
 	// hooks
 	void *user;
@@ -95,6 +113,10 @@ typedef struct {
 	sshs_event_fn event;
 	sshs_random_fn random;
 	sshs_auth_fn auth;
+	sshs_pk_check_fn pk_check;
+	sshs_pk_verify_fn pk_verify;
+	uint32_t methods;               // SSHS_AUTH_*
+	bool ext_info_c;                // the client takes SSH_MSG_EXT_INFO (RFC 8308)
 
 	// the host key
 	uint8_t host_secret[64];        // Ed25519 secret key (seed || public)
@@ -147,6 +169,11 @@ typedef struct {
 // the 32-byte Ed25519 seed; the engine derives the key pair from it.
 void sshs_init(ssh_server_t *s, const uint8_t host_seed[32], void *user,
 	sshs_write_fn write, sshs_event_fn event, sshs_random_fn random, sshs_auth_fn auth);
+
+// Which authentication methods are offered, and the public-key hooks.
+// Before the first sshs_feed(). Password alone if never called.
+void sshs_set_auth(ssh_server_t *s, uint32_t methods,
+	sshs_pk_check_fn check, sshs_pk_verify_fn verify);
 
 // Bytes from the client. Always consumes all of them.
 void sshs_feed(ssh_server_t *s, const uint8_t *data, uint32_t len);

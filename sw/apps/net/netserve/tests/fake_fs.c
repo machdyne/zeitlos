@@ -59,6 +59,26 @@ const uint8_t *fake_fs_data(const char *p, uint32_t *len) {
 	return files[f].data;
 }
 
+static const char *authkeys_text;           // /user/authkeys, set by a test
+void fake_fs_authkeys(const char *t) { authkeys_text = t; }
+
+int fs_read_file(char *p, char *buf, int max) {
+	uint32_t n;
+	const uint8_t *d;
+	if (!strcmp(p, "/user/authkeys")) {
+		if (!authkeys_text) return 0;
+		n = (uint32_t)strlen(authkeys_text);
+		if (n > (uint32_t)max) n = (uint32_t)max;
+		memcpy(buf, authkeys_text, n);
+		return (int)n;
+	}
+	d = fake_fs_data(p, &n);
+	if (!d) return 0;
+	if (n > (uint32_t)max) n = (uint32_t)max;
+	memcpy(buf, d, n);
+	return (int)n;
+}
+
 int fs_size(char *p) {
 	int f = find_file(p);
 	return f < 0 ? 0 : (int)files[f].len;

@@ -36,6 +36,7 @@
 #include "../../../common/zkv.h"		// SSH: the host key, in the flash key/value store
 #include "../../../common/zrng.h"		// SSH: ephemeral keys, padding
 #include "../ssh/ssh_server.h"		// SSH: the protocol engine (docs/netserve.md, "SSH")
+#include "authkeys.h"			// SSH: the keys in /user/authkeys
 
 #define MAX_SESS        6           // net relays at most TCP_MAX_CONN - 2
 #define TO_NET_MAX      512
@@ -77,6 +78,9 @@ typedef struct {
 static ssh_slot_t ssh_pool[SSH_MAX];
 static uint8_t host_seed[32];
 #define HOSTKEY_KEY "apps.netserve.hostkey"
+#define AUTHKEYS_PATH "/user/authkeys"
+#define AUTHKEYS_MAX 8192           // the file; RSA-4096 lines are ~740 bytes
+static uint32_t ssh_methods;        // SSHS_AUTH_*, from apps.netserve.ssh_auth
 
 enum { H_REQ = 0, H_SEND };
 enum { S_FREE = 0, S_LOGIN, S_LAUNCH, S_CONNECT, S_OPEN, S_AWAY, S_CLOSING, S_DRAIN };
@@ -405,7 +409,7 @@ static void login_char(sess_t *s, uint8_t c) {
 
 // -- data --
 
-// -- HTTP: static files (docs/netserve.md, "HTTP") --
+// -- HTTP: static files (docs/netserve.md, "The web server") --
 //
 // HTTP/1.0 in effect: one request per connection, answered, then
 // closed (Connection: close). GET and HEAD. The file goes out as room
@@ -649,6 +653,53 @@ static void ssh_event(void *user, sshs_event_t ev, const uint8_t *d, uint32_t n,
 	}
 }
 
+// -- SSH keys: /user/authkeys (docs/netserve.md, "SSH keys") --
+//
+// Read at every check, so an edit takes effect at the next login.
+// Refused lines are reported on the console -- once per version of the
+// file, not at every login.
+
+static char ak_text[AUTHKEYS_MAX];
+static authkeys_t ak_list;
+static uint32_t ak_reported;        // hash of the file last reported on
+
+static void ak_warn(int line, const char *why) {
+	printf("netserve: %s line %d: %s\n", AUTHKEYS_PATH, line, why);
+}
+
+static bool ak_load(void) {
+	int n = fs_read_file(AUTHKEYS_PATH, ak_text, sizeof(ak_text));
+	uint32_t h = 0x811C9DC5u;
+	if (n <= 0) { ak_list.n = 0; return false; }
+	for (int i = 0; i < n; i++) h = (h ^ (uint8_t)ak_text[i]) * 16777619u;
+	authkeys_parse(&ak_list, ak_text, (uint32_t)n, h != ak_reported ? ak_warn : NULL);
+	if (h != ak_reported) {
+		printf("netserve: %s: %d key%s%s\n", AUTHKEYS_PATH, ak_list.n, ak_list.n == 1 ? "" : "s",
+			ak_list.refused ? " (some lines refused, above)" : "");
+		ak_reported = h;
+	}
+	return true;
+}
+
+static bool ssh_pk_check(void *user, const char *username, const char *alg,
+		const uint8_t *blob, uint32_t len) {
+	(void)user; (void)username;
+	return ak_load() && authkeys_allows(&ak_list, alg, blob, len);
+}
+
+// An RSA key takes a few seconds of this CPU; ed25519 about one.
+static bool ssh_pk_verify(void *user, const char *alg, const uint8_t *blob, uint32_t bl,
+		const uint8_t *sig, uint32_t sl, const uint8_t *data, uint32_t dl) {
+	sess_t *s = user;
+	char fp[64];
+	bool ok = authkeys_verify(alg, blob, bl, sig, sl, data, dl);
+	authkeys_fingerprint(fp, sizeof(fp), blob, bl);
+	printf("netserve: ssh key %s from ", fp);
+	print_ip(s->info.ip);
+	printf(" %s\n", ok ? "accepted" : "refused: bad signature");
+	return ok;
+}
+
 // Bytes from the client: all of them, into the engine -- unless its
 // output has too little room left for what it may answer with, in
 // which case they wait, held, until it has drained.
@@ -852,8 +903,10 @@ static void on_connect(const z_msg_t *m) {
 	if (kind != K_SSH) snprintf(s->target, sizeof(s->target), "%s", svc_telnet.target);
 	s->deadline = z_uptime_ticks() + LOGIN_TICKS;
 	z_msg_new_send(m->from, Z_PORT_CONNECTED, m->tag, z_obj_uint32(s->net.conn_id));
-	if (kind == K_SSH)
+	if (kind == K_SSH) {
 		sshs_init(&s->ssh->eng, host_seed, s, ssh_write, ssh_event, ssh_random, ssh_auth);
+		sshs_set_auth(&s->ssh->eng, ssh_methods, ssh_pk_check, ssh_pk_verify);
+	}
 
 	if (kind == K_HTTP) s->deadline = z_uptime_ticks() + HTTP_TICKS;
 	printf("netserve: %s session %lu from ",
@@ -1169,13 +1222,18 @@ static bool ssh_ready(z_auth_status_t *st) {
 	uint8_t pub[32];
 	char fp[64];
 
-	if (z_auth_status(st) != Z_AUTH_OK || !(st->flags & Z_AUTH_HAS_PASSWORD)) {
-		printf("netserve: ssh stays off -- no password is set (passwd)\n");
-		return false;
-	}
-	if (!(st->flags & Z_AUTH_NET_OK)) {
-		printf("netserve: ssh stays off -- the password is under %d characters\n", Z_AUTH_NET_MIN);
-		return false;
+	// The password rule applies where the password does: not to a
+	// server that takes keys only.
+	if (ssh_methods & SSHS_AUTH_PASSWORD) {
+		if (z_auth_status(st) != Z_AUTH_OK || !(st->flags & Z_AUTH_HAS_PASSWORD)) {
+			printf("netserve: ssh stays off -- no password is set (passwd), and "
+				"apps.netserve.ssh_auth allows passwords\n");
+			return false;
+		}
+		if (!(st->flags & Z_AUTH_NET_OK)) {
+			printf("netserve: ssh stays off -- the password is under %d characters\n", Z_AUTH_NET_MIN);
+			return false;
+		}
 	}
 	if (!z_rng_secure()) {
 		printf("netserve: ssh stays off -- no seeded random source (docs/trng.md)\n");
@@ -1233,6 +1291,12 @@ static void read_config(void) {
 		while (*t >= '0' && *t <= '9') t++;
 		while (*t == ' ') t++;
 		snprintf(svc_ssh.target, sizeof(svc_ssh.target), "%.31s", *t ? t : "posix0");
+		// Which logins: "both" (the default), "key" or "password".
+		ssh_methods = SSHS_AUTH_PASSWORD | SSHS_AUTH_PUBLICKEY;
+		if (z_cfg_get("apps.netserve.ssh_auth", v, sizeof(v))) {
+			if (!strcmp(v, "key") || !strcmp(v, "keys")) ssh_methods = SSHS_AUTH_PUBLICKEY;
+			else if (!strcmp(v, "password")) ssh_methods = SSHS_AUTH_PASSWORD;
+		}
 		svc_ssh.on = ssh_ready(&st);
 	}
 
@@ -1279,8 +1343,13 @@ int main(void) {
 	if (svc_echo.on) printf("netserve: echo on port %u\n", (unsigned)svc_echo.port);
 	if (svc_http.on) printf("netserve: http on port %u, serving %s\n", (unsigned)svc_http.port,
 		http_root[0] ? http_root : "/");
-	if (svc_ssh.on) printf("netserve: ssh on port %u to %s, %s\n", (unsigned)svc_ssh.port,
-		svc_ssh.target, allow_any ? "from anywhere" : "from this subnet only");
+	if (svc_ssh.on) {
+		printf("netserve: ssh on port %u to %s, %s; logins by %s\n", (unsigned)svc_ssh.port,
+			svc_ssh.target, allow_any ? "from anywhere" : "from this subnet only",
+			ssh_methods == SSHS_AUTH_PUBLICKEY ? "key only" :
+			ssh_methods == SSHS_AUTH_PASSWORD ? "password only" : "key or password");
+		if (ssh_methods & SSHS_AUTH_PUBLICKEY) ak_load();   // report on the file now
+	}
 
 	for (;;) {
 		z_msg_t m;

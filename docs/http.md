@@ -167,9 +167,9 @@ feeds is one that works in the test file and fails on hardware, where
 the transport delivers whatever a 536-byte segment happened to
 contain.
 
-What is **not** tested here is the thing that will actually bite:
-`tcp.c` against a real internet host. See
-[networking.md](networking.md#still-unmeasured).
+What is **not** tested here is the thing that actually bites: `tcp.c`
+against a real internet host. That is measured on hardware instead --
+see [networking.md](networking.md#throughput) and its "Known limits".
 
 ---
 

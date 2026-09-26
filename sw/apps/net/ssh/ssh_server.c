@@ -28,6 +28,8 @@
 #define MSG_USERAUTH_REQUEST     50
 #define MSG_USERAUTH_FAILURE     51
 #define MSG_USERAUTH_SUCCESS     52
+#define MSG_USERAUTH_PK_OK       60
+#define MSG_EXT_INFO              7
 #define MSG_GLOBAL_REQUEST       80
 #define MSG_REQUEST_FAILURE      82
 #define MSG_CHANNEL_OPEN         90
@@ -231,6 +233,11 @@ static void handle_kexinit(ssh_server_t *s, const uint8_t *pl, uint32_t len, uin
 			!first_is(kex, kex_n, "curve25519-sha256@libssh.org"))
 		s->ignore_next = true;
 
+	// RFC 8308: the client takes extensions. It is how server-sig-algs
+	// reaches it -- without which OpenSSH will not offer an RSA key.
+	if (!s->first_kex_done && ssh_namelist_has(kex, kex_n, "ext-info-c"))
+		s->ext_info_c = true;
+
 	// Strict KEX: decided at the first exchange, kept for the rest.
 	if (!s->first_kex_done && ssh_namelist_has(kex, kex_n, "kex-strict-c-v00@openssh.com")) {
 		s->strict = true;
@@ -317,6 +324,20 @@ static void handle_ecdh_init(ssh_server_t *s, const uint8_t *pl, uint32_t len) {
 	crypto_wipe(key, sizeof(key));
 	if (s->strict) s->tx_cipher.seq = 0;
 	s->state = ST_NEWKEYS;
+
+	// The first packet after our first NEWKEYS may be EXT_INFO (RFC 8308
+	// 2.4): the signature algorithms public keys may use here.
+	if (!s->first_kex_done && s->ext_info_c && (s->methods & SSHS_AUTH_PUBLICKEY)) {
+		static const char algs[] = "ssh-ed25519,rsa-sha2-256";
+		uint8_t buf[80];
+		ssh_wr w;
+		ssh_wr_init(&w, buf, sizeof(buf));
+		ssh_wr_u8(&w, MSG_EXT_INFO);
+		ssh_wr_u32(&w, 1);
+		ssh_wr_cstr(&w, "server-sig-algs");
+		ssh_wr_cstr(&w, algs);
+		if (send_packet(s, buf, ssh_wr_len(&w))) log_line(s, "ssh: ext-info: server-sig-algs=ssh-ed25519,rsa-sha2-256");
+	}
 }
 
 static void handle_newkeys(ssh_server_t *s) {
@@ -340,21 +361,109 @@ static void handle_newkeys(ssh_server_t *s) {
 
 // -- authentication --
 
+// FAILURE names what is offered, so a client knows what to try next.
 static void auth_failure(ssh_server_t *s) {
-	uint8_t buf[32];
+	uint8_t buf[48];
 	ssh_wr w;
 	ssh_wr_init(&w, buf, sizeof(buf));
 	ssh_wr_u8(&w, MSG_USERAUTH_FAILURE);
-	ssh_wr_cstr(&w, "password");
+	ssh_wr_cstr(&w, (s->methods & SSHS_AUTH_PUBLICKEY) ?
+		((s->methods & SSHS_AUTH_PASSWORD) ? "publickey,password" : "publickey") : "password");
 	ssh_wr_bool(&w, false);
 	send_packet(s, buf, ssh_wr_len(&w));
+}
+
+static bool too_many(ssh_server_t *s) {
+	if (++s->auth_failures < MAX_AUTH_FAILURES) return false;
+	disconnect_code(s, DISC_NO_MORE_AUTH, "Too many authentication failures");
+	return true;
+}
+
+static void logged_in(ssh_server_t *s, const char *how) {
+	char line[96];
+	uint8_t ok = MSG_USERAUTH_SUCCESS;
+	if (!send_packet(s, &ok, 1)) return;
+	s->authed = true;
+	s->state = ST_OPEN;
+	snprintf(line, sizeof(line), "ssh: user '%.32s' logged in (%s)", s->username, how);
+	log_line(s, line);
+}
+
+// "publickey" (RFC 4252 section 7). Without a signature it is a
+// question -- would this key do? -- answered from the list alone, and
+// not a failed attempt if the answer is no: a client with several keys
+// asks about each. With one, the client has signed the session id and
+// the request itself; that signature is what logs it in.
+static void userauth_publickey(ssh_server_t *s, ssh_rd *r) {
+	const uint8_t *alg, *blob, *sig;
+	uint32_t alg_n, blob_n, sig_n;
+	char algs[24], line[96];
+	bool has_sig = ssh_rd_bool(r);
+
+	alg = ssh_rd_string(r, &alg_n);
+	blob = ssh_rd_string(r, &blob_n);
+	if (r->bad || alg_n >= sizeof(algs)) { auth_failure(s); return; }
+	memcpy(algs, alg, alg_n);
+	algs[alg_n] = 0;
+
+	if (strcmp(algs, "ssh-ed25519") && strcmp(algs, "rsa-sha2-256")) {
+		// rsa-sha2-512, ecdsa, and SHA-1 "ssh-rsa": not offered
+		// (server-sig-algs said so), so no answer but "not this one".
+		auth_failure(s);
+		return;
+	}
+	if (!s->pk_check || !s->pk_check(s->user, s->username, algs, blob, blob_n)) {
+		snprintf(line, sizeof(line), "ssh: %s key for '%.32s' is not in the list", algs, s->username);
+		log_line(s, line);
+		auth_failure(s);
+		return;
+	}
+	if (!has_sig) {
+		uint8_t buf[600];
+		snprintf(line, sizeof(line), "ssh: %s key for '%.32s' is listed", algs, s->username);
+		log_line(s, line);
+		ssh_wr w;
+		ssh_wr_init(&w, buf, sizeof(buf));
+		ssh_wr_u8(&w, MSG_USERAUTH_PK_OK);
+		ssh_wr_string(&w, alg, alg_n);
+		ssh_wr_string(&w, blob, blob_n);
+		if (ssh_wr_ok(&w)) send_packet(s, buf, ssh_wr_len(&w));
+		else auth_failure(s);
+		return;
+	}
+	sig = ssh_rd_string(r, &sig_n);
+	if (r->bad) { auth_failure(s); return; }
+
+	// What the client signed: string session_id, byte 50, string user,
+	// string "ssh-connection", string "publickey", TRUE, string alg,
+	// string blob -- the request itself, bound to this session.
+	{
+		uint8_t data[SSH_SHA256_DIGEST + 700];
+		ssh_wr w;
+		ssh_wr_init(&w, data, sizeof(data));
+		ssh_wr_string(&w, s->session_id, SSH_SHA256_DIGEST);
+		ssh_wr_u8(&w, MSG_USERAUTH_REQUEST);
+		ssh_wr_cstr(&w, s->username);
+		ssh_wr_cstr(&w, "ssh-connection");
+		ssh_wr_cstr(&w, "publickey");
+		ssh_wr_bool(&w, true);
+		ssh_wr_string(&w, alg, alg_n);
+		ssh_wr_string(&w, blob, blob_n);
+		if (ssh_wr_ok(&w) && s->pk_verify &&
+				s->pk_verify(s->user, algs, blob, blob_n, sig, sig_n, data, ssh_wr_len(&w))) {
+			logged_in(s, algs);
+			return;
+		}
+	}
+	snprintf(line, sizeof(line), "ssh: %s signature for '%.32s' did not verify", algs, s->username);
+	log_line(s, line);
+	if (!too_many(s)) auth_failure(s);
 }
 
 static void handle_userauth(ssh_server_t *s, const uint8_t *pl, uint32_t len) {
 	ssh_rd r;
 	const uint8_t *user, *service, *method, *pw;
 	uint32_t user_n, service_n, method_n, pw_n;
-	char line[80];
 
 	ssh_rd_init(&r, pl, len);
 	ssh_rd_u8(&r);
@@ -369,9 +478,13 @@ static void handle_userauth(ssh_server_t *s, const uint8_t *pl, uint32_t len) {
 	memcpy(s->username, user, user_n);
 	s->username[user_n] = 0;
 
-	if (!ssh_str_eq(method, method_n, "password")) {
+	if (ssh_str_eq(method, method_n, "publickey") && (s->methods & SSHS_AUTH_PUBLICKEY)) {
+		userauth_publickey(s, &r);
+		return;
+	}
+	if (!ssh_str_eq(method, method_n, "password") || !(s->methods & SSHS_AUTH_PASSWORD)) {
 		// "none" is how a client asks what we take; anything else is
-		// a method we do not have. Either way: password.
+		// a method we do not offer. Either way: the list.
 		auth_failure(s);
 		return;
 	}
@@ -381,23 +494,14 @@ static void handle_userauth(ssh_server_t *s, const uint8_t *pl, uint32_t len) {
 
 	int rc = s->auth(s->user, s->username, pw, pw_n);
 	if (rc == SSHS_AUTH_OK) {
-		uint8_t ok = MSG_USERAUTH_SUCCESS;
-		if (!send_packet(s, &ok, 1)) return;
-		s->authed = true;
-		s->state = ST_OPEN;
-		snprintf(line, sizeof(line), "ssh: user '%.32s' logged in", s->username);
-		log_line(s, line);
+		logged_in(s, "password");
 		return;
 	}
 	if (rc == SSHS_AUTH_REFUSE) {
 		disconnect_code(s, DISC_NO_MORE_AUTH, "Too many attempts -- try again later");
 		return;
 	}
-	if (++s->auth_failures >= MAX_AUTH_FAILURES) {
-		disconnect_code(s, DISC_NO_MORE_AUTH, "Too many authentication failures");
-		return;
-	}
-	auth_failure(s);
+	if (!too_many(s)) auth_failure(s);
 }
 
 // -- the channel --
@@ -746,6 +850,7 @@ void sshs_init(ssh_server_t *s, const uint8_t host_seed[32], void *user,
 	s->event = event;
 	s->random = random;
 	s->auth = auth;
+	s->methods = SSHS_AUTH_PASSWORD;
 	ssh_cipher_init(&s->tx_cipher);
 	ssh_cipher_init(&s->rx_cipher);
 
@@ -761,6 +866,13 @@ void sshs_init(ssh_server_t *s, const uint8_t host_seed[32], void *user,
 		return;
 	}
 	send_kexinit(s);
+}
+
+void sshs_set_auth(ssh_server_t *s, uint32_t methods,
+		sshs_pk_check_fn check, sshs_pk_verify_fn verify) {
+	s->methods = methods;
+	s->pk_check = check;
+	s->pk_verify = verify;
 }
 
 uint32_t sshs_send(ssh_server_t *s, const uint8_t *data, uint32_t len, uint32_t room) {

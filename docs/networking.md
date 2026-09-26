@@ -404,7 +404,7 @@ directions, is in [netserve.md](netserve.md).
 `tcp.c` holds a pool of `TCP_MAX_CONN` (8) connections; each costs about
 600 bytes, most of it the retransmit copy of its one outstanding
 segment. It replaced a single static TCB when `net` had to accept
-connections for the network servers (`netserve`, the next phase) while
+connections for the network servers ([netserve.md](netserve.md)) while
 still making its own.
 
 - **Handles.** `tcp_connect()` returns a `tcp_conn_t *`, and every call
@@ -449,11 +449,12 @@ still making its own.
 
 `tests/test_tcp_pool.c` (`make test`) plays the network against the
 real `tcp.c`: it builds the segments a peer sends and parses every one
-the stack sends back. 64 checks -- handshakes both ways, the MSS
+the stack sends back. 73 checks -- handshakes both ways, the MSS
 option, RSTs, the reservation, window sharing, the half-open timeout,
 RFC 5961, TIME_WAIT, the deferred FIN, a handler that aborts and
-reopens inside an event, three interleaved connections -- run with and
-without reassembly. Each behaviour above was confirmed to fail the
+reopens inside an event, three interleaved connections, half-close, the
+window in an ACK after a handler took data -- run with and without
+reassembly. Each behaviour above was confirmed to fail the
 test when removed, except the generation check after a DATA event,
 which today's code makes redundant (every later step also tests the
 connection's state); it is kept for the next line added there.
@@ -589,11 +590,11 @@ queue size means the app, not the network, is the constraint.
 
 | | |
 |---|---|
-| **Stop-and-wait sending** | one segment outstanding. Fine for telnet and requests; it caps uploads. |
+| **Stop-and-wait sending** | one segment of at most 536 bytes outstanding. Fine for telnet and requests; it caps uploads, and what the servers send -- a large file over HTTP most of all ([netserve.md](netserve.md)). |
 | **No out-of-order reassembly** | the big one. A lost segment discards everything behind it. See "Throughput". |
 | **A pool of 8** | eight TCP connections in the whole system, two always kept for outbound; one socket, one telnet and one ssh session at a time (see "Connections"). |
 | **No window scaling, SACK or timestamps** | only an MSS option, on the SYN. |
-| **No half-close** | a remote FIN gets ours straight back. |
+| **Half-close for accepted connections only** | net's relay takes a peer's FIN as "done sending" and answers in full ([netserve.md](netserve.md), "Half-close"); the clients (telnet, ssh, sockets) still answer a remote FIN with ours straight away. |
 
 Measured against a real internet host, a 258KB body takes about 23
 seconds — roughly 11 KB/s, or **1% of the 10Mbit link**. The link has

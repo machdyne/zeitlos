@@ -1,8 +1,9 @@
 # Security: the password and the screen lock
 
 Zeitlos is a single-user system, and this is that user's one password.
-It locks the screen, can lock the serial console, and will be what the
-network services ask for ([netserve.md](netserve.md)).
+It locks the screen, can lock the serial console, and is what telnet
+and SSH password logins ask for ([netserve.md](netserve.md)). SSH can
+take keys instead, or as well.
 
 | | |
 |---|---|
@@ -13,7 +14,10 @@ network services ask for ([netserve.md](netserve.md)).
 | `sw/apps/settings` | the Security section |
 | `sw/os/tests/test_auth.c`, `sw/apps/wm/tests/test_lock.c` | host tests |
 
-**Status: built and host-tested; not yet run on a board.**
+**Status: running on a board** -- the password, `passwd`, the settings
+pane, and password logins over telnet and SSH. The screen lock and its
+idle and boot variants, and the console lock, have not yet been
+reported from a board.
 
 ## What it protects, and what it does not
 
@@ -36,17 +40,23 @@ otherwise.
 **SSH** ([netserve.md](netserve.md), "SSH") asks for the same
 password, over an encrypted connection with strict key exchange; its
 host key lives in the flash store and is exactly as private as the
-code this machine runs. Prefer it to telnet anywhere but a bench.
+code this machine runs. Prefer it to telnet anywhere but a bench. With
+keys (`/user/authkeys`) it can take no password at all
+(`apps.netserve.ssh_auth: key`) -- the setting for a machine reachable
+from outside the local network. The key list is on the card, so
+whoever can edit the card can add a key: the same boundary as the rest
+of this page.
 
 **It protects the machine from the network** ([netserve.md](netserve.md)):
-every remote login will be checked by the same kernel code, against
-the same tally of failures.
+every password login, telnet or SSH, is checked by the same kernel
+code, against the same tally of failures. A key login is checked
+against `/user/authkeys` instead, and needs no password at all.
 
 **It does not protect what is on the sdcard.** The card is plain FAT.
 Pull it, read it in any computer. This is a screen lock on a laptop
 without disk encryption, and nothing more. Password-based encryption
-is a separate, larger piece of work, flagged for the final phase --
-see "Open: encryption" below.
+is a separate, larger piece of work, not yet designed -- see "Open:
+encryption" below.
 
 **It does not protect against code running on the machine.** Any app
 can read any address, the flash included ([mpu.md](mpu.md)), so the
@@ -90,7 +100,7 @@ board without a TRNG.
 **Length:** 1 to 64 bytes of printable ASCII. Short passwords are
 accepted -- a PIN is reasonable for a screen lock -- but one under
 **10 characters** is flagged (`Z_AUTH_NET_OK` clear), and `netserve`
-refuses to offer telnet with it. `passwd` and settings
+refuses to offer telnet, or SSH password logins, with it. `passwd` and settings
 both say so when one is set.
 
 ### The hash is cheap here, and that is said plainly
@@ -115,8 +125,9 @@ the kernel, which is slow and remembers.
 
 ### Guessing is slow, everywhere at once
 
-Every check -- the lock screen, the console, settings, and later every
-network login -- goes through one kernel function with one tally:
+Every check -- the lock screen, the console, settings, and every
+password login over telnet or SSH -- goes through one kernel function
+with one tally:
 
 | consecutive failures | before the next check is allowed |
 |---|---|
@@ -247,13 +258,14 @@ screen before calling it.
 Kernel image: 8,984 bytes, of which SHA-256 is 1,696. To make room the
 store's on-board test (`kv test`) is now left out by default; `make
 KV_TEST=1` builds it back in for a hardware check. The kernel has
-3,608 bytes of headroom after phase F (824 with `kv test`).
+3,488 bytes of headroom now, with netserve's config keys in (704 with `kv test`).
 
 ## Open: encryption
 
 The card is readable by anyone who holds it. Password-based encryption,
 probably ChaCha20-Poly1305 with a key derived from the password, is
-flagged for discussion in the final phase. The questions it opens:
+open, and to be discussed before anything is built. The questions it
+opens:
 
 - **Where:** a layer under FatFs encrypting sectors, an encrypted
   container file mounted as a volume, or files encrypted one by one.

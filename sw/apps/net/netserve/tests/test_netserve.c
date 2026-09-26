@@ -23,6 +23,8 @@
 #define NET  10
 #include "../../ssh/ssh_proto.h"
 #include "../../../../common/zkv.h"
+#include "authkeys_keys.h"
+void fake_fs_authkeys(const char *t);
 extern bool fake_rng_secure;
 
 void fake_fs_init(void);
@@ -75,7 +77,7 @@ static uint32_t ticks = 1000;
 static bool repl_up;
 static int proc_runs, auth_checks;
 static int auth_force;
-static const char *cfg_telnet = "23 repl0", *cfg_echo = "7", *cfg_allow = NULL, *cfg_http = NULL, *cfg_ssh = NULL;
+static const char *cfg_telnet = "23 repl0", *cfg_echo = "7", *cfg_allow = NULL, *cfg_http = NULL, *cfg_ssh = NULL, *cfg_ssh_auth = NULL;
 static bool has_pw = true, pw_long = true;
 
 static uint32_t *k_syscall(uint32_t id, uint32_t *args, uint32_t b) {
@@ -133,6 +135,7 @@ static uint32_t *k_syscall(uint32_t id, uint32_t *args, uint32_t b) {
 		if (a->key && !strcmp(a->key, "apps.netserve.allow")) v = cfg_allow;
 		if (a->key && !strcmp(a->key, "apps.netserve.http")) v = cfg_http;
 		if (a->key && !strcmp(a->key, "apps.netserve.ssh")) v = cfg_ssh;
+		if (a->key && !strcmp(a->key, "apps.netserve.ssh_auth")) v = cfg_ssh_auth;
 		a->found = v != NULL;
 		if (v) snprintf(a->val, a->vallen, "%s", v);
 		return (uint32_t *)&k_ok;
@@ -995,6 +998,40 @@ int main(void) {
 		used = 0;
 		for (int i = 0; i < SSH_MAX; i++) used += ssh_pool[i].used;
 		CK(used == 0, "no engine left held");
+	}
+
+	// -- 14. SSH keys: the policy and /user/authkeys --
+	{
+		static char akfile[1024];
+		has_pw = false;
+		cfg_ssh = "22 posix0";
+		cfg_ssh_auth = "key";
+		read_config();
+		CK(svc_ssh.on && ssh_methods == SSHS_AUTH_PUBLICKEY, "keys only: ssh on without a password");
+		cfg_ssh_auth = NULL;
+		read_config();
+		CK(!svc_ssh.on, "the default (both) still needs the password");
+		has_pw = true;
+		read_config();
+		CK(svc_ssh.on && ssh_methods == (SSHS_AUTH_PASSWORD | SSHS_AUTH_PUBLICKEY), "both, with a password");
+		cfg_ssh_auth = "password";
+		read_config();
+		CK(ssh_methods == SSHS_AUTH_PASSWORD, "passwords only");
+		cfg_ssh_auth = NULL;
+
+		fake_fs_authkeys(NULL);
+		CK(!ssh_pk_check(NULL, "phil", "ssh-ed25519", ED_BLOB, sizeof(ED_BLOB)), "no /user/authkeys: no key logs in");
+		snprintf(akfile, sizeof(akfile), "%s\n", ED_LINE);
+		fake_fs_authkeys(akfile);
+		CK(ssh_pk_check(NULL, "phil", "ssh-ed25519", ED_BLOB, sizeof(ED_BLOB)), "a listed key is found in the file");
+		CK(!ssh_pk_check(NULL, "phil", "rsa-sha2-256", RSA_BLOB, sizeof(RSA_BLOB)), "an unlisted one is not");
+		snprintf(akfile, sizeof(akfile), "%s\n%s\nfrom=\"x\" %s\n", ED_LINE, RSA_LINE, ED_LINE);
+		CK(ssh_pk_check(NULL, "phil", "rsa-sha2-256", RSA_BLOB, sizeof(RSA_BLOB)),
+			"an edit takes effect at the next check");
+		uint32_t reported = ak_reported;
+		ssh_pk_check(NULL, "phil", "rsa-sha2-256", RSA_BLOB, sizeof(RSA_BLOB));
+		CK(ak_reported == reported && ak_list.refused == 1, "a refused line is reported once, not at every login");
+		fake_fs_authkeys(NULL);
 	}
 
 	printf("netserve test: %d checks, %d failed\n", checks, fails);
