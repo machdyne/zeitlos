@@ -130,7 +130,7 @@ With the MTU, there is no need for position independent code or complicated addr
 
 | App | Description |
 |-----|-------------|
-| [netserve](docs/netserve.md) Monolithic network server (echo, telnet, http, ssh) |
+| [netserve](docs/netserve.md) | Monolithic network server (echo, telnet, http, ssh) |
 | [serial](docs/uart1.md) | Serial port service |
 | [tts](docs/tts.md) | Text-to-speech service (Super+S to turn speech on) |
 | [jfont](docs/text_encoding.md#japanese) | Japanese font service: holds the font once for every app (`system.font.japanese: yes`) |
