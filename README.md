@@ -76,7 +76,7 @@ With the MTU, there is no need for position independent code or complicated addr
 
 #### Shells
 
-+On the sdcard. A `term` window starts one when you press its REPL or POSIX button, and connects to it (or to a remote system).
+On the sdcard. A `term` window starts one when you press its REPL or POSIX button, and connects to it (or to a remote system).
 
 | App | Description |
 |-----|-------------|
