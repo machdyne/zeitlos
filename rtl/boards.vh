@@ -796,6 +796,67 @@
 //`define GPIO_PORT0
 //`define GPIO_PORT0_NARROW
 
+`elsif BOARD_SERGEI_ML2
+
+// Sergei with the Sechzig ML2 module: Sergei ML1's carrier choices, with
+// the ML2 module's -- which are Mozart ML2's. Mozart ML1 -> ML2 changed
+// exactly the memory defines and SDRAM_BURST; this block is
+// BOARD_SERGEI_ML1 with that same change. See boards/sergei_ml2.lpf for
+// why the PIN file is NOT a copy of sergei_ml1.lpf.
+
+`define FPGA_ECP5
+// PROGRAMN is wired to user pin M8 on the ML2 module, confirmed on
+// Mozart ML2 (docs/zboot.md).
+`define PROGRAMN_PIN
+`define OSC48
+// DDR3 main memory (docs/ddr3.md). These values are for the 4Gb part
+// Mozart ML2 carries, MT41K256M16TW-107. The pin file allows 128MB to
+// 512MB parts: a smaller one needs MEM, DDR3_ROW_BITS and DDR3_TRFC_NS
+// from the table in docs/ddr3.md, and NO MAIN_512MB -- with it, the OS
+// would use aliased memory above the part's size.
+`define MEM 512
+`define MEM_DDR3
+`define MAIN_512MB
+`define DDR3_ROW_BITS 15
+`define DDR3_TRFC_NS 260
+`define MEM_VRAM
+`define MEM_ROM
+`define MEM_GLYPH
+`define ICACHE
+`define MONTMUL
+`define ICACHE_KB 8
+`define ICACHE_LINE_WORDS 4
+`define DCACHE
+`define DCACHE_KB 4
+`define DCACHE_LINE_WORDS 4
+`define DCACHE_WBUF 2
+// No SDRAM_BURST: that selects burst line fills for the SDRAM
+// controller; DDR3's answers a line fill from its own block register.
+`define GPU
+`define GPU_RASTER
+`define GPU_BLIT
+`define GPU_CURSOR
+`define GPU_DDMI
+`define UART0
+`define USB_HOST
+`define SPI_SDCARD
+`define ETH_RMII
+`define ETH_RMII_DRIVE_REFCLK
+// See the note on ETH_RX_SLOTS under BOARD_SERGEI_ML1.
+`define ETH_RX_SLOTS 4
+`define AUDIO
+`define AUDIO_SPDIF
+`define AUDIO_MIXER
+// 46875Hz, as BOARD_SERGEI_ML1: the S/PDIF half-cell in whole sys_clks.
+`define AUDIO_RATE_RESET 8'd16
+
+// GPIO on the 6-pin PMOD, four pins, off by default -- the same trade
+// as BOARD_SERGEI_ML1 (pin 1 is the optical S/PDIF output), on the
+// ML2 module's balls. See boards/sergei_ml2.lpf, whose ball map is
+// deduced rather than measured.
+//`define GPIO_PORT0
+//`define GPIO_PORT0_NARROW
+
 `elsif BOARD_LEBKUCHEN
 
 `define FPGA_GATEMATE

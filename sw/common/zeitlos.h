@@ -331,7 +331,7 @@ typedef uint32_t *(*z_kernel_ptr_t)(uint32_t, uint32_t *, uint32_t);
 // kept for compatibility with anything still poking the old register
 #define reg_eth (*(volatile uint32_t*)0x61000000)
 
-// RMII Ethernet MAC (rtl/ethmac_rmii.v): mozart_ml1, sergei_ml1, and
+// RMII Ethernet MAC (rtl/ethmac_rmii.v): mozart_ml1/ml2, sergei_ml1/ml2, and
 // Lakritz with a Katze PMOD. Alternative to reg_eth (SPI ENC28J60) for
 // boards with an RMII PHY instead. See
 // rtl/ethmac_rmii.v's header comment for the full register map and

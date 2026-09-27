@@ -170,7 +170,6 @@ static const dock_app_t dock_candidates[] = {
 	{ "text",		z_icon_text_data  },
 	{ "read",		z_icon_read_data  },
 	{ "web",			z_icon_web_data  },
-	{ "irc",			z_icon_irc_data  },
 	{ "sheet",		z_icon_sheet_data },
 	{ "draw",		z_icon_draw_data  },
 	{ "view",		z_icon_view_data  },
@@ -185,6 +184,7 @@ static const dock_app_t dock_candidates[] = {
 	{ "keyboard",	z_icon_keyboard_data },
 
 	{ "ask",			z_icon_ask_data   },
+	{ "irc",			z_icon_irc_data  },
 	{ "hex",			z_icon_hex_data   },
 	{ "mmod",		z_icon_mmod_data, 0, Z_FEATURE2_GPIO },
 	{ "casino",		z_icon_casino_data },

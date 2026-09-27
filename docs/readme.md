@@ -34,7 +34,7 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [icache](icache.md) | Instruction cache |
 | [dcache](dcache.md) | Unified I+D cache, write buffer, SDRAM bursts |
 | [mpu](mpu.md) | Memory protection and crash reports |
-| [ddr3](ddr3.md) | DDR3 main memory (Mozart ML2) |
+| [ddr3](ddr3.md) | DDR3 main memory (Mozart ML2, Sergei ML2) |
 | [ddr3-design](ddr3-design.md) | DDR3 datapath, second attempt |
 | [ddr3-bringup](ddr3-bringup.md) | DDR3 bring-up log |
 | [ddr3-status](ddr3-status.md) | DDR3 status log |

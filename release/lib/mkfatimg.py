@@ -331,7 +331,7 @@ FPGA_FILES = [
     # it back fine, and the board saw only a mangled alias
     # (docs/zfpga.md sec. 22).
     ("fpga/lfe5u25f.zdb", "sw/apps/zfpga/db/lfe5u25f.zdb"),
-    # the 45F: Mozart ML1 and Sergei ML1
+    # the 45F: Mozart ML1 and ML2, Sergei ML1 and ML2
     ("fpga/lfe5u45f.zdb", "sw/apps/zfpga/db/lfe5u45f.zdb"),
     # board profiles and their pins: `zfpga build design.v -b lakritz`
     ("fpga/boards/lakritz.brd", "sw/apps/zfpga/db/boards/lakritz.brd"),

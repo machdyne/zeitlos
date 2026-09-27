@@ -2896,7 +2896,7 @@ module sysctl #()
 `endif
 
 	// WISHBONE SLAVE: RMII ETHERNET MAC (tested with LAN8720A: on-board on
-	// mozart_ml1/sergei_ml1, and on the Katze PMOD -- lakritz_katze)
+	// mozart and sergei ML1/ML2, and on the Katze PMOD -- lakritz_katze)
 `ifdef ETH_RMII
 	wire wbm_cyc_ethmac = cs_ethmac && wbm_cyc;
 

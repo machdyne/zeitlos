@@ -262,17 +262,7 @@ else ifeq ($(BOARD), mozart_ml2)
 	FLASH = openFPGALoader -v -c dirtyJtag -f
 	FLASH_OFFSET = -o
 	JUMP = 1
-	# DDR3 main memory (docs/ddr3.md). Only this board builds these:
-	# they instantiate ECP5 DDR primitives, which other families'
-	# synthesis has no business seeing.
-	RTL_PICO += \
-		rtl/clk/pll2.v \
-		rtl/mem/ddr3.v \
-		rtl/mem/ddr3_ctrl.v \
-		rtl/mem/ddr3_phy_ecp5.v \
-		rtl/mem/ddr3_rdasm.v \
-		rtl/mem/ddr3_clk.v \
-		rtl/mem/ddr3_phy_init.v
+	# DDR3 main memory: the files are added below, for every DDR3_BOARDS.
 else ifeq ($(BOARD), sergei_ml1)
 	FAMILY = ecp5
 	DEVICE = 45k
@@ -282,6 +272,16 @@ else ifeq ($(BOARD), sergei_ml1)
 	FLASH = openFPGALoader -v -c dirtyJtag -f
 	FLASH_OFFSET = -o
 	JUMP = 1
+else ifeq ($(BOARD), sergei_ml2)
+	FAMILY = ecp5
+	DEVICE = 45k
+	PACKAGE = CABGA256
+	LPF = sergei_ml2.lpf
+	PROG = openFPGALoader -c dirtyJtag
+	FLASH = openFPGALoader -v -c dirtyJtag -f
+	FLASH_OFFSET = -o
+	JUMP = 1
+	# DDR3 main memory: the files are added below, for every DDR3_BOARDS.
 else ifeq ($(BOARD), ulx3s)
 	FAMILY = ecp5
 	# Same 12/25/45/85K PCB and LPF; DEVICE picks the fitted chip.
@@ -318,6 +318,40 @@ else ifeq ($(BOARD), kolsch)
 	PR = ~/work/fpga/gatemate/oss-cad-suite/bin/nextpnr-himbaechel
 	PACK = ~/work/fpga/gatemate/oss-cad-suite/bin/gmpack
 	PROG = openFPGALoader -c $(CABLE)
+endif
+
+# An unknown BOARD matches no block above and leaves every board variable
+# empty -- FAMILY, FLASH, LPF. Nothing then failed until a recipe needed
+# one, and the error named the wrong thing: `make BOARD=sechzig_ml2
+# dev-flash` built all the software, then tried to run
+# "1048576 sw/os/kernel.bin" as a command (FLASH empty). Every block
+# sets FAMILY, so an empty FAMILY means no block matched: stop now, and
+# say so. No BOARD at all is left to `check` -- clean, apps and
+# tftp-dist need none. The list is read from this file, so it cannot
+# go stale.
+ifdef BOARD
+ifeq ($(FAMILY),)
+KNOWN_BOARDS := $(shell sed -n 's/^\(else \)*ifeq (\$$(BOARD), *\([a-z0-9_]*\)).*/\2/p' $(firstword $(MAKEFILE_LIST)))
+$(error Unknown BOARD '$(BOARD)'. Boards: $(KNOWN_BOARDS))
+endif
+endif
+
+# DDR3 main memory (docs/ddr3.md), for every board with the Sechzig ML2
+# module. ONE list, so the boards cannot drift apart. Only these boards
+# build the files: they instantiate ECP5 DDR primitives, which other
+# families' synthesis has no business seeing. sw/bios/Makefile and
+# sw/bios/bios.c keep the same list, to build these boards' minimal
+# DDR3 BIOS.
+DDR3_BOARDS = mozart_ml2 sergei_ml2
+ifneq ($(filter $(BOARD),$(DDR3_BOARDS)),)
+RTL_PICO += \
+		rtl/clk/pll2.v \
+		rtl/mem/ddr3.v \
+		rtl/mem/ddr3_ctrl.v \
+		rtl/mem/ddr3_phy_ecp5.v \
+		rtl/mem/ddr3_rdasm.v \
+		rtl/mem/ddr3_clk.v \
+		rtl/mem/ddr3_phy_init.v
 endif
 
 FAMILY_UC = $(shell echo '$(FAMILY)' | tr '[:lower:]' '[:upper:]')

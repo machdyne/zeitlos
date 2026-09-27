@@ -32,8 +32,10 @@ IO so that logic inside can pull it low.
 On Lakritz, Obst, Mozart ML1 and Mozart ML2 it is -- `M8`, confirmed --
 and that is not incidental: it is how the DFU bootloader hands off, so
 the hard prerequisite for everything below is satisfied on shipping
-hardware. The other boards in this tree (Sergei, ULX3S) are
-unconfirmed, and build without it (section 6).
+hardware. Sergei ML1 and ML2 use `M8` too, by inference rather than
+measurement: the wiring is on the Sechzig module, and each carries the
+same module as the Mozart of the same name. ULX3S is unconfirmed, and
+builds without it (section 6).
 
 ---
 
@@ -479,12 +481,13 @@ isolation: a misrouted pin is a board that does not come back, and it is
 better found while the flash is untouched.
 
 **The pin.** `M8` on Lakritz, Obst, Mozart ML1 and Mozart ML2, wired to
-PROGRAMN on each, as the DFU bootloader drives it. `rtl/boards.vh`
-defines `PROGRAMN_PIN` for exactly those four; `rtl/sysctl.v` then has an
+PROGRAMN on each, as the DFU bootloader drives it -- and on Sergei ML1
+and ML2, from the module they share with Mozart. `rtl/boards.vh`
+defines `PROGRAMN_PIN` for exactly those six; `rtl/sysctl.v` then has an
 `inout PROGRAMN` port, driven open-drain through a `BB` -- a hard 0 when
 asked, tri-state otherwise, tri-state from power-on. Boards whose site
-has not been confirmed (Sergei, ULX3S) do not define it and build
-exactly as before.
+has not been confirmed (ULX3S) do not define it and build exactly as
+before.
 
 **The register.** `rtl/socctl.v` word 6, `RECONFIG`, at `0x7000_0218`.
 Writing the key `0x5A52_4254` ("ZRBT") as one whole-word store pulls

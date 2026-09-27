@@ -12,7 +12,8 @@ CFLAGS=-DBOARD_$(BOARD) -DFPGA_$(FAMILY) $(ARCH_DEFS)
 # and is the only thing that reaches main() and irq(); with nothing
 # kept the linker may discard all of it. KEEP is a no-op for every
 # other board, whose BIOS is byte-identical with or without it.
-ifneq ($(filter MOZART_ML2,$(BOARD)),)
+# Keep in step with DDR3_BOARDS in the top-level Makefile.
+ifneq ($(filter MOZART_ML2 SERGEI_ML2,$(BOARD)),)
 CFLAGS += -ffunction-sections -fdata-sections -Wl,--gc-sections
 endif
 # ARCH/ABI come from one place -- see that file for why

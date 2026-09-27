@@ -2,7 +2,7 @@
  * Zeitlos SOC
  * Copyright (c) 2025 Lone Dynamics Corporation. All rights reserved.
  *
- * RMII Ethernet MAC (LAN8720A PHY). Built on mozart_ml1 and sergei_ml1
+ * RMII Ethernet MAC (LAN8720A PHY). Built on mozart_ml1/ml2 and sergei_ml1/ml2
  * for their on-board PHYs, and on Lakritz for the Katze PMOD
  * (release/targets/lakritz_katze.spec, docs/katze.md) -- an alternative
  * to the SPI ENC28J60 path (rtl/spim.v) for boards that have an RMII

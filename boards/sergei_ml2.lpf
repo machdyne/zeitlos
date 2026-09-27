@@ -121,6 +121,37 @@ IOBUF PORT "DDMI_D2_P" DRIVE=4;
 LOCATE COMP "AUD_OPTICAL" SITE "A13";
 IOBUF PORT "AUD_OPTICAL" IO_TYPE=LVCMOS33;
 
+# PMOD A ball map. Six pins, four of them signals, as on ML1 -- see
+# boards/sergei_ml1.lpf for the port and for why pin 1 (A13, shared
+# with the optical output above) is output-only as a GPIO. Duplicated
+# in machine-readable form as pmod.a in release/hw/boards/sergei_ml2.spec.
+#
+#   pin   ball    Sechzig signal
+#   1     A13     USB-device D+ (as ML1)
+#   2     E10     audio DIN   (ML1: R12)
+#   3     E9      audio BCK   (ML1: T13)
+#   4     D9      audio WS    (ML1: T14)
+#
+# DEDUCED, NOT MEASURED. Pins 2-4 are the Sechzig audio signals: on ML1
+# Sergei's PMOD balls R12/T13/T14 are exactly Mozart ML1's AUD_DIN,
+# AUD_BCK and AUD_WS, so Sergei routes those three connector pins to
+# its PMOD. The carrier's wiring does not depend on the module, and
+# Mozart ML2 has the same three signals on E10, E9 and D9 -- so those
+# are Sergei ML2's PMOD balls. Check with a meter before relying on it.
+#
+# Commented out for the same reason as on ML1: pin 1 IS the optical
+# output above. A hand build needs `AUDIO_SPDIF out and `GPIO_PORT0 +
+# `GPIO_PORT0_NARROW in (rtl/boards.vh, BOARD_SERGEI_ML2), the
+# AUD_OPTICAL LOCATE commented out, and these four uncommented.
+#LOCATE COMP "GPIO0[0]" SITE "A13";				# PMODA1
+#IOBUF PORT "GPIO0[0]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+#LOCATE COMP "GPIO0[1]" SITE "E10";				# PMODA2
+#IOBUF PORT "GPIO0[1]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+#LOCATE COMP "GPIO0[2]" SITE "E9";				# PMODA3
+#IOBUF PORT "GPIO0[2]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+#LOCATE COMP "GPIO0[3]" SITE "D9";				# PMODA4
+#IOBUF PORT "GPIO0[3]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+
 # Extra MicroSD data lines, present on this motherboard.
 LOCATE COMP "SD_D1" SITE "T2";
 IOBUF PORT "SD_D1" IO_TYPE=LVCMOS33 PULLMODE=NONE;
@@ -247,3 +278,15 @@ LOCATE COMP "ddr3_dqs_p[1]" SITE "G16";
 IOBUF PORT "ddr3_dqs_p[1]" IO_TYPE=SSTL135D_I TERMINATION=OFF DIFFRESISTOR=100 SLEWRATE=FAST;
 LOCATE COMP "ddr3_clk_p" SITE "C16";
 IOBUF PORT "ddr3_clk_p" IO_TYPE=SSTL135D_I SLEWRATE=FAST;
+
+# PROGRAMN, routed back to a user pin: rtl/sysctl.v pulls it low (open
+# drain) to reconfigure the FPGA -- `reboot`, docs/zboot.md. M8 is
+# wired to PROGRAMN on the ML2 module -- the same module as Mozart ML2,
+# where it is confirmed.
+LOCATE COMP "PROGRAMN" SITE "M8";
+# Open drain: the pad only ever pulls low, and "1" leaves it released,
+# so no design built for this board -- Zeitlos, a jumploader, user
+# gateware returning to Zeitlos -- can ever drive PROGRAMN high against
+# a reset button pulling it low. (Zeitlos's own driver, a BB with its T
+# input, and a jumploader, which only drives 0, work as before.)
+IOBUF PORT "PROGRAMN" IO_TYPE=LVCMOS33 OPENDRAIN=ON;

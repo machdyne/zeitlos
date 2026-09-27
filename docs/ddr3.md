@@ -1,7 +1,8 @@
 # DDR3 main memory
 
 Zeitlos runs from DDR3 on **Mozart ML2** (LFE5U-45F, MT41K256M16TW-107
-DDR3L), using all 512MB of the part. The controller, PHY, clocking and BIOS training are this
+DDR3L), using all 512MB of the part. **Sergei ML2** carries the same
+module and builds the same way; it has not yet been run on hardware. The controller, PHY, clocking and BIOS training are this
 project's own; the PHY's strobe path follows LiteDRAM's ECP5 PHY, the one
 datapath known to work on this board. How it got here, and what each
 wrong turn taught, is in [ddr3-bringup.md](ddr3-bringup.md).
@@ -75,19 +76,23 @@ A DDR3 board needs, in `rtl/boards.vh`:
 `define MEM 512               // what the OS may use: 512, or the part's size
 ```
 
-and in the Makefile's board block, the DDR3 sources -- appended there
-rather than listed for every board, because they instantiate ECP5 DDR
-primitives no other family should read:
+and the board's name in three lists. The top-level Makefile's
+`DDR3_BOARDS` adds the DDR3 sources to that board's build only -- they
+instantiate ECP5 DDR primitives no other family should read -- and
+`sw/bios/Makefile` and `sw/bios/bios.c` each select the minimal DDR3
+BIOS ([Training](#training-in-the-bios)) by board name:
 
 ```
-RTL_PICO += rtl/clk/pll2.v rtl/mem/ddr3.v rtl/mem/ddr3_ctrl.v \
-            rtl/mem/ddr3_phy_ecp5.v rtl/mem/ddr3_rdasm.v \
-            rtl/mem/ddr3_clk.v rtl/mem/ddr3_phy_init.v
+DDR3_BOARDS = mozart_ml2 sergei_ml2                          # Makefile
+ifneq ($(filter MOZART_ML2 SERGEI_ML2,$(BOARD)),)            # sw/bios/Makefile
+#if defined(BOARD_MOZART_ML2) || defined(BOARD_SERGEI_ML2)   // sw/bios/bios.c
 ```
 
-`sw/bios/bios.c` and `sw/bios/Makefile` each have a one-line board list
-for the minimal DDR3 BIOS ([Training](#training-in-the-bios)); add the
-board to both.
+A new board with the Sechzig ML2 module is its ML1 block with the
+memory defines changed and `SDRAM_BURST` dropped -- exactly what
+separates Mozart ML1 from ML2, and Sergei ML1 from ML2. Its PIN file is
+not a copy: ML2 moved most signals to new balls, and
+`boards/sergei_ml2.lpf` explains why editing an ML1 file is a trap.
 
 The part decides two values, from its datasheet. All three candidates
 are x16 with 8 banks and 10 column bits:
