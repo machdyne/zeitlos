@@ -31,6 +31,7 @@
 #include <string.h>
 
 #include "../../common/zeitlos.h"
+#include "../../common/zaudio.h"	// the system volume (VOLUME)
 #include "../../common/zsoc.h"	// Z_TICK_HZ, z_cursor_set_busy()
 #include "../../common/zwm.h"
 #include "../../common/zgfx.h"
@@ -169,6 +170,7 @@ static const dock_app_t dock_candidates[] = {
 	{ "text",		z_icon_text_data  },
 	{ "read",		z_icon_read_data  },
 	{ "web",			z_icon_web_data  },
+	{ "irc",			z_icon_irc_data  },
 	{ "sheet",		z_icon_sheet_data },
 	{ "draw",		z_icon_draw_data  },
 	{ "view",		z_icon_view_data  },
@@ -183,7 +185,6 @@ static const dock_app_t dock_candidates[] = {
 	{ "keyboard",	z_icon_keyboard_data },
 
 	{ "ask",			z_icon_ask_data   },
-	{ "irc",			z_icon_irc_data  },
 	{ "hex",			z_icon_hex_data   },
 	{ "mmod",		z_icon_mmod_data, 0, Z_FEATURE2_GPIO },
 	{ "casino",		z_icon_casino_data },
@@ -4008,6 +4009,51 @@ static void ws_switch(int to) {
 
 }
 
+// -- system volume -- docs/audio.md, "System volume" --
+//
+// Super+Minus / Super+Equal (the two keys right of 0, whatever they
+// type), and Super with the keypad - and +. The volume is a register in
+// the audio block (VOLUME, rtl/audio.v) that scales everything played,
+// FIFO and hardware mixer alike, before every DAC: so it is system-wide
+// without any app knowing, and an app's own volume is relative to it.
+// wm owns it. Ten steps of 10%; the hardware resets to 50%, so that is
+// the default at every boot.
+
+static int vol_pct = -1;		// -1: not read from the hardware yet
+
+static void vol_step(int dir) {
+
+	static char text[24];
+
+	if (!z_audio_has_volume()) {
+		// A bitstream without VOLUME: say so rather than do nothing.
+		caption_set("No volume control on this bitstream",
+			Z_CAPTION_CENTER | Z_CAPTION_COMPACT | Z_CAPTION_SCALE(2) |
+			Z_CAPTION_TIMEOUT(1000));
+		return;
+	}
+
+	if (vol_pct < 0) {
+		uint32_t v = reg_audio_volume & 0x1FF;
+		if (v > Z_AUDIO_VOLUME_UNITY) v = Z_AUDIO_VOLUME_UNITY;
+		vol_pct = (int)((v * 100u + Z_AUDIO_VOLUME_UNITY / 2) / Z_AUDIO_VOLUME_UNITY);
+		vol_pct = (vol_pct + 5) / 10 * 10;			// onto the 10% steps
+	}
+
+	vol_pct += dir * 10;
+	if (vol_pct < 0) vol_pct = 0;
+	if (vol_pct > 100) vol_pct = 100;
+
+	reg_audio_volume = (uint32_t)vol_pct * Z_AUDIO_VOLUME_UNITY / 100u;
+
+	snprintf(text, sizeof(text), "Volume %d%%", vol_pct);
+	caption_set(text, Z_CAPTION_CENTER | Z_CAPTION_COMPACT |
+		Z_CAPTION_SCALE(2) | Z_CAPTION_TIMEOUT(1000));
+	// Spoken too, at the new level -- which is itself the thing to hear.
+	z_speak(text, Z_TTS_F_INTERRUPT);
+
+}
+
 // Alt+Super+[ ] -- the focused window (and, if its app has a dialog
 // open, the rest of its app: workspace.c, ws_move_set()) to the
 // previous or next workspace, and you with it.
@@ -4588,6 +4634,17 @@ static void dispatch_keys(void) {
 					ws_switch(ws_step(cur_ws, dir));
 				}
 			}
+			kbd_sent[usage] = 0;
+			continue;
+		}
+
+		// Super+Minus / Super+Equal, and Super with keypad - / + --
+		// the system volume down / up. By KEY: the two keys right of 0
+		// (on German they type ß and ´, and + is somewhere else), and
+		// the keypad's, which are the same on every layout.
+		if ((modifiers & Z_KBD_MOD_GUI) && !(modifiers & Z_KBD_MOD_CTRL) && !alt &&
+		    (usage == 0x2D || usage == 0x2E || usage == 0x56 || usage == 0x57)) {
+			if (pressed) vol_step((usage == 0x2E || usage == 0x57) ? 1 : -1);
 			kbd_sent[usage] = 0;
 			continue;
 		}

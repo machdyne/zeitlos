@@ -64,6 +64,7 @@ module tb_audio;
 	localparam [31:0] REG_WMARK  = 32'd5;
 	localparam [31:0] REG_CONFIG = 32'd6;
 	localparam [31:0] REG_CLKHZ  = 32'd7;
+	localparam [31:0] REG_VOLUME = 32'd14;
 
 	localparam [7:0] CTRL_EN     = 8'h01;
 	localparam [7:0] CTRL_IRQEN  = 8'h02;
@@ -91,6 +92,10 @@ module tb_audio;
 	wire aud_din;
 
 	integer errors;
+
+	// section 10, system volume
+	integer vi, vol, vwant_l, vwant_r, eff;
+	reg [15:0] sl, sr;
 	integer i;
 	integer j;
 	integer ones;
@@ -346,7 +351,8 @@ module tb_audio;
 		// 5a41330a want 5a41130a" is not a helpful way to be told.
 		check("CONFIG", rd, {
 			16'h5A41,      // signature
-			2'b0,          // reserved
+			1'b0,          // reserved
+			1'b1,          // bit 14: system volume (VOLUME) present
 			1'b1,          // bit 13: mixer channels can fetch 16-bit
 			1'b1,          // bit 12: hardware mixer present
 			4'b0011,       // formats: sigma-delta + PT8211
@@ -355,6 +361,9 @@ module tb_audio;
 
 		wb_read(REG_CLKHZ, rd);
 		check("CLKHZ", rd, 32'd48000000);
+
+		wb_read(REG_VOLUME, rd);
+		check("VOLUME reset (50%)", rd, 32'd128);
 
 		wb_read(REG_RATE, rd);
 		check("RATE reset", rd, 32'd17);
@@ -448,6 +457,11 @@ module tb_audio;
 
 		$display("");
 		$display("=== 4. PT8211 round trip ===");
+
+		// Sections 4 onward check the serialisers and the sigma-delta
+		// against exact values, so they run at unity; the volume itself
+		// is section 10.
+		wb_write(REG_VOLUME, 32'd256);
 
 		wb_write(REG_CTRL, CTRL_FLUSH);
 		wb_write(REG_RATE, 32'd2);
@@ -563,6 +577,39 @@ module tb_audio;
 		check("int set again after flush", { 31'b0, aud_int }, 32'd1);
 
 		$display("");
+		$display("");
+		$display("=== 10. system volume ===");
+
+		// A known frame at several volumes, each compared with the
+		// arithmetic done here independently: (sample * vol) >> 8,
+		// arithmetic shift, vol 0..256 with anything above 256 playing
+		// at unity. Both signs, and the most negative sample, which is
+		// where a product that does not fit would show.
+		begin
+			sl = 16'h8000;		// -32768: the extreme
+			sr = 16'h3A5C;		// positive, asymmetric
+			for (vi = 0; vi < 7; vi = vi + 1) begin
+				case (vi)
+					0: vol = 256;	1: vol = 128;	2: vol = 64;
+					3: vol = 1;		4: vol = 0;		5: vol = 200;
+					default: vol = 511;		// above unity: plays at 256
+				endcase
+				eff = (vol > 256) ? 256 : vol;
+				wb_write(REG_VOLUME, vol);
+				wb_read(REG_VOLUME, rd);
+				check("VOLUME reads back", rd, vol);
+				wb_write(REG_CTRL, CTRL_FLUSH);
+				wb_write(REG_CTRL, CTRL_EN);
+				for (i = 0; i < 60; i = i + 1)
+					wb_write(REG_DATA, { sl, sr });
+				pt_wait_frames(3);
+				vwant_l = ($signed({{16{sl[15]}}, sl}) * eff) >>> 8;
+				vwant_r = ($signed({{16{sr[15]}}, sr}) * eff) >>> 8;
+				check("volume left ", { 16'b0, pt_pair_a }, { 16'b0, vwant_l[15:0] });
+				check("volume right", { 16'b0, pt_pair_b }, { 16'b0, vwant_r[15:0] });
+			end
+		end
+
 		if (errors == 0)
 			$display("=== tb_audio: PASS ===");
 		else

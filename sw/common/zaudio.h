@@ -129,6 +129,16 @@
 #define reg_audio_mixpossel  (*(volatile uint32_t*)0x70000530)
 #define reg_audio_mixpos     (*(volatile uint32_t*)0x70000534)
 
+/* The SYSTEM volume (rtl/audio.v, register 14): 0..Z_AUDIO_VOLUME_UNITY,
+ * applied to everything the block plays, after the FIFO/mixer select
+ * and before every DAC. wm owns it (Super+Minus / Super+Equal, and the
+ * keypad - and +); an app's own volume is relative to it, and an app
+ * should not write it. Resets to 128, 50%. docs/audio.md, "System
+ * volume". Probe with z_audio_has_volume() before touching it. */
+#define reg_audio_volume     (*(volatile uint32_t*)0x70000538)
+#define Z_AUDIO_VOLUME_UNITY 256u
+#define Z_AUDIO_CONFIG_HAS_VOLUME (1u << 14)
+
 /*
  * Hardware mixer channel registers (rtl/audio_mixer.v).
  *
@@ -274,6 +284,17 @@ static inline uint32_t z_audio_formats(void) {
 	uint32_t cfg = reg_audio_config;
 	if ((cfg >> 16) != Z_AUDIO_CONFIG_SIG) return 0;
 	return cfg & 0x0000FF00u;
+}
+
+// Does this bitstream have the system volume (VOLUME, CONFIG bit 14)?
+// In the order that cannot hang: the block first, then its CONFIG
+// signature, then the bit -- a block older than VOLUME reads the bit as
+// 0, and one older than CONFIG fails the signature.
+static inline bool z_audio_has_volume(void) {
+	uint32_t cfg;
+	if (!z_audio_present()) return false;
+	cfg = reg_audio_config;
+	return (cfg >> 16) == Z_AUDIO_CONFIG_SIG && (cfg & Z_AUDIO_CONFIG_HAS_VOLUME);
 }
 
 // Exact sample rate in Hz for the divider currently programmed.

@@ -46,16 +46,10 @@ test:
 	@/tmp/wm_test_dock
 	@$(HOSTCC) $(HOSTFLAGS) -o /tmp/wm_test_region tests/test_region.c
 	@/tmp/wm_test_region
-
-.PHONY: test
-
-HOSTCC ?= cc
-
-# workspace.c: the workspace decisions, on the build machine.
-test:
-	$(HOSTCC) --std=gnu99 -Wall -Wextra -o /tmp/test_workspace \
+	@# workspace.c: the workspace decisions (docs/window_manager.md)
+	@$(HOSTCC) $(HOSTFLAGS) -o /tmp/wm_test_workspace \
 		tests/test_workspace.c workspace.c
-	/tmp/test_workspace
+	@/tmp/wm_test_workspace
 
 .PHONY: test
 

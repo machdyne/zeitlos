@@ -346,6 +346,7 @@ No decode mask change was needed: `sysctl.v` widened the tenant mask to
 | 11 | `052c` | `MIXDBG_DAT` | R | the word it read |
 | 12 | `0530` | `MIXPOSSEL` | RW | `[2:0]` which channel `MIXPOS` reports |
 | 13 | `0534` | `MIXPOS` | R | that channel's phase, 18.14, integer part is a byte offset from `BASE` |
+| 14 | `0538` | `VOLUME` | RW | `[8:0]` the system volume, 0..256 (256 = unity); resets to 128, 50% -- see "System volume" |
 | 16..63 | `0540`+ | per-channel mixer state | W | six words per channel |
 
 `CTRL`: 0 `EN`, 1 `IRQEN`, 2 `SWAPLR`, 3 `FLUSH`, 4 `CLRUR`, 5
@@ -357,6 +358,7 @@ DAC's input from the hardware mixer instead of the FIFO). `FLUSH` and
 19 `UNDERRUN`.
 
 `CONFIG` `FORMATS`: bit 0 sigma-delta, bit 1 PT8211, bit 2 S/PDIF.
+Bit 13: mixer channels can fetch 16-bit samples. Bit 14: `VOLUME` exists.
 Bit 12 says the hardware mixer is **built** — software cannot infer
 that from anything else, because `MIXSTAT` reads 0 both when the mixer
 is absent and when it is present with every channel idle. A build
@@ -395,6 +397,46 @@ offset `0x140` for register 0, and unmasked, no case ever matches —
 writes vanish and `MAGIC` reads zero, with no error anywhere.
 
 ---
+
+## System volume
+
+One volume for everything the machine plays: **Super+Minus** and
+**Super+Equal** (the two keys right of 0, whatever they type -- on
+German that is ß and ´), or Super with the **keypad - and +**, the same
+keys on every layout. Ten steps of 10%, 50% at every boot. Each press
+shows "Volume 60%" in the middle of the screen for a second and speaks
+it.
+
+**It is hardware, in the output stage.** `VOLUME` (register 14) scales
+the frame after the FIFO/mixer select and before every DAC -- the
+sigma-delta, the PT8211 and S/PDIF all take the scaled frame:
+
+    out = (sample * vol) >> 8,   vol 0..256, 256 exactly unity
+
+So it covers the FIFO path (software-mixed apps, speech) and the
+hardware mixer alike, costs the CPU nothing, and no app has to know it
+exists or can play around it. The alternative -- each app scaling its
+own samples -- meant changing nine apps and spending CPU per sample, and
+any app that missed it would escape the volume. An app's own volume
+(`MIXVOL`, a player's volume keys) is relative to this one.
+
+**wm owns it** (`vol_step()`); apps should not write it.
+`z_audio_has_volume()` (`zaudio.h`) probes for it in the order that
+cannot hang the CPU -- the audio block, then `CONFIG`'s signature, then
+bit 14 -- and on a bitstream without it wm says so in the caption
+rather than doing nothing.
+
+**Cost**, synthesising the audio block alone with Yosys for ECP5: two
+`MULT18X18D` (the 16 x 10 multiply per channel; 2 -> 4 in the block),
+50 LUT4 and 9 flip-flops. Combinational, so the DACs see the scaled
+frame on the same edge they saw the unscaled one.
+
+**Tested** in `tb_audio.v`, section 10: a frame with the most negative
+sample on one side and an asymmetric positive one on the other, played
+at 256, 128, 64, 1, 0, 200 and 511 (above unity: plays at unity),
+decoded off the PT8211 pins and compared with the arithmetic done
+independently in the testbench. Sections 4 onward run at unity, since
+they check the serialisers and the sigma-delta against exact values.
 
 ## Testing
 

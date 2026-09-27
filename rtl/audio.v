@@ -193,7 +193,8 @@
  *                  fs = CLK_HZ / (64 * RATE). Resets to 17 ->
  *                  44117.6 Hz at 48MHz. 34 -> 22058.8 Hz.
  *   5  WMARK   RW  [15:0] interrupt watermark. Resets to depth/2.
- *   6  CONFIG  R   { 16'h5A41, 4'b0, FORMATS[3:0], DEPTH_LOG2[7:0] }
+ *   6  CONFIG  R   { 16'h5A41, 0, HAS_VOLUME[14], MIXER_FMT16[13],
+ *                    HAS_MIXER[12], FORMATS[11:8], DEPTH_LOG2[7:0] }
  *                  FORMATS bit 0 = a 1-bit DAC is wired on this board,
  *                  bit 1 = a PT8211 is, bit 2 = an optical S/PDIF
  *                  transmitter is (RESERVED, nothing sets it yet --
@@ -214,6 +215,10 @@
  *                  four-channel module wants 255. Software owns this
  *                  because software knows how many channels the
  *                  module has. See audio_mixer.v on the arithmetic.
+ *  14  VOLUME  RW  [8:0] the SYSTEM volume, 0..256, 256 = unity. Resets
+ *                  to 128 (50%). Scales everything played -- FIFO and
+ *                  mixer alike -- before every DAC; set by wm (Super+Plus
+ *                  and Super+Minus). CONFIG bit 14 says it exists.
  *   9  MIXSTAT R   [7:0] bit per channel, set while that channel is
  *                  still sounding. Read-only status, not a control --
  *                  a one-shot sample clears its own bit when it runs
@@ -419,6 +424,10 @@ module audio_wb #(
 	reg [7:0] rate;
 	reg [7:0] mixvol;
 
+	// VOLUME (register 14): the system volume, applied after the source
+	// select and before every DAC -- see "system volume" below.
+	reg [8:0] volume;
+
 	// Which channel MIXPOS reports. A stored select plus a separate
 	// read register, rather than eight positions mapped into eight
 	// addresses: the latter needs a mux driven by the bus address
@@ -562,6 +571,27 @@ module audio_wb #(
 	wire signed [15:0] src_r = ctrl_mixen ? mix_r : fifo_dout[15:0];
 	wire src_valid = ctrl_mixen ? 1'b1 : head_valid;
 
+	// -- system volume --
+	//
+	// One scale for everything the block plays: after the source select,
+	// so the FIFO path (software-mixed apps, speech) and the hardware
+	// mixer are both covered, and before every DAC -- the sigma-delta,
+	// the PT8211 and S/PDIF all take vol_l/vol_r. No app can play around
+	// it and none has to know it exists; an app's own volume (MIXVOL, a
+	// player's volume keys) is relative to it. Set by wm (Super+Plus /
+	// Super+Minus, docs/audio.md "System volume").
+	//
+	// out = (sample * vol) >> 8, vol 0..256: 256 is exactly unity, since
+	// |sample * 256| < 2^23 fits bits [23:0] and >> 8 gives the sample
+	// back. A 16 x 10 signed multiply per channel -- an ECP5 multiplier
+	// block each -- combinational, so the DACs see the scaled frame on
+	// the same edge they saw the unscaled one.
+	wire [8:0] vol_eff = volume[8] ? 9'd256 : volume;
+	wire signed [25:0] vol_prod_l = src_l * $signed({1'b0, vol_eff});
+	wire signed [25:0] vol_prod_r = src_r * $signed({1'b0, vol_eff});
+	wire signed [15:0] vol_l = vol_prod_l[23:8];
+	wire signed [15:0] vol_r = vol_prod_r[23:8];
+
 `ifdef AUDIO_SPDIF
 	// S/PDIF sits alongside the analogue output stage, not downstream
 	// of it: same frame_req, same source mux, its own pin. Both run at
@@ -572,8 +602,8 @@ module audio_wb #(
 		.enable(ctrl_en),
 		.rate(rate),
 		.frame_req(frame_req),
-		.sample_l(src_l),
-		.sample_r(src_r),
+		.sample_l(vol_l),
+		.sample_r(vol_r),
 		.fs_code(spdif_fs),
 		.spdif(AUD_OPTICAL)
 	);
@@ -623,8 +653,8 @@ module audio_wb #(
 		.enable(ctrl_en),
 		.rate(rate),
 		.swap_lr(ctrl_swap),
-		.sample_l(src_l),
-		.sample_r(src_r),
+		.sample_l(vol_l),
+		.sample_r(vol_r),
 		.sample_valid(src_valid),
 		.frame_req(frame_req),
 		.sd_l(sd_l),
@@ -651,6 +681,7 @@ module audio_wb #(
 			ctrl <= CTRL_RESET;
 			rate <= RATE_RESET;
 			mixvol <= 8'd128;
+			volume <= 9'd128;		// 50%: the system's default volume
 			mixpos_sel <= 3'd0;
 			spdif_fs <= 4'b0100;   // "48 kHz"
 			wmark <= DEPTH / 2;
@@ -798,6 +829,14 @@ module audio_wb #(
 						if (wb_sel_i[1]) spdif_fs <= wb_dat_i[11:8];
 					end
 
+					// VOLUME. Nine bits over byte lanes 0 and 1; 256 is
+					// unity, and anything above reads back as written
+					// but plays at unity (vol_eff below).
+					if (wb_adr_i == 32'd14) begin
+						if (wb_sel_i[0]) volume[7:0] <= wb_dat_i[7:0];
+						if (wb_sel_i[1]) volume[8] <= wb_dat_i[8];
+					end
+
 					// MIXPOSSEL. Byte lane 0 only -- three bits wide
 					// and everything above is reserved, same rule as
 					// CTRL and RATE.
@@ -836,7 +875,7 @@ module audio_wb #(
 						// supported". Same argument, and the same
 						// remedy, as bit 12 for the mixer itself.
 						32'd6: wb_dat_o <= {
-							CONFIG_SIG, 2'b0, HAS_MIXER_FMT16,
+							CONFIG_SIG, 1'b0, 1'b1 /* HAS_VOLUME */, HAS_MIXER_FMT16,
 							HAS_MIXER, FORMATS, DEPTH_LOG2_B
 						};
 						32'd7: wb_dat_o <= CLK_HZ;
@@ -853,6 +892,7 @@ module audio_wb #(
 						// MIXPOS. Registered inside the mixer; see
 						// audio_mixer.v's pos_o comment.
 						32'd13: wb_dat_o <= mix_pos;
+						32'd14: wb_dat_o <= { 23'b0, volume };
 						default: wb_dat_o <= 32'h0000_0000;
 					endcase
 

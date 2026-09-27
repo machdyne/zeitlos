@@ -54,6 +54,7 @@ there is:
 | Super+K | the on-screen keyboard ([keyboard_app.md](keyboard_app.md)) |
 | Super+P | switch to next phosphor mode: white, amber, green, paper |
 | Super+L | lock the screen ([security.md](security.md)) |
+| Super+Minus / Super+Equal | system volume down / up, 10% a press -- also Super with the keypad - / + ([audio.md](audio.md#system-volume)) |
 | Ctrl+Super+[ / Ctrl+Super+] | previous / next page of dock icons (the two keys right of P, whatever they type) |
 | AltGr (right Alt) | the third and fourth characters on a key, on layouts that have them: `@` on German is AltGr+Q |
 | a dead key, then a letter | an accented letter: on German, `´` then `e` is `é`; the dead key twice, or then Space, types the accent alone; Escape cancels it |
