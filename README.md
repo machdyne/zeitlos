@@ -149,9 +149,9 @@ The following boards are fully supported:
  - [Machdyne Obst](https://github.com/machdyne/obst) (see [DFU upgrade docs](docs/dfu_upgrade.md))
  - [Machdyne Lakritz](https://github.com/machdyne/lakritz) (see [DFU upgrade docs](docs/dfu_upgrade.md))
  - [Machdyne Mozart](https://github.com/machdyne/mozart) / [ML1](https://github.com/machdyne/sechzig)
- - [Machdyne Mozart](https://github.com/machdyne/mozart) / ML2 -- DDR3 main memory (see [docs/ddr3.md](docs/ddr3.md))
+ - [Machdyne Mozart](https://github.com/machdyne/mozart) / [ML2](https://github.com/machdyne/sechzig)
  - [Machdyne Sergei](https://github.com/machdyne/sergei) / [ML1](https://github.com/machdyne/sechzig)
- - [Machdyne Sergei](https://github.com/machdyne/sergei) / ML2 -- DDR3 main memory (see [docs/ddr3.md](docs/ddr3.md))
+ - [Machdyne Sergei](https://github.com/machdyne/sergei) / [ML2](https://github.com/machdyne/sechzig)
  - [Radiona ULX3S](https://radiona.org/ulx3s/) (85F tested, see [docs/ulx3s.md](docs/ulx3s.md))
  - (more soon)
 
