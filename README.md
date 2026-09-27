@@ -69,7 +69,7 @@ With the MTU, there is no need for position independent code or complicated addr
 | App | Description |
 |-----|-------------|
 | kernel | Kernel + kernel shell (serial console) |
-| [wm](docs/window_manager.md) | Window manager + dock |
+| [wm](docs/window_manager.md) | Window manager + dock, with ten workspaces (Super+1 ... Super+0) |
 | [net](docs/networking.md) | Networking service |
 | [term](docs/terminal.md) | Terminal emulator (VT100, UTF-8; start panel, scrollback; connects to shells and services) |
 | [console](docs/console.md) | Console service |

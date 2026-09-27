@@ -252,10 +252,12 @@ In `dispatch_keys()`, in order:
 5. **Dead keys** (next section).
 6. wm's own shortcuts, then the dock, then the focused app. Alt for
    these means left Alt, or right Alt on a layout without AltGr --
-   AltGr+Tab is not Alt+Tab. **Alt+[ and Alt+]** (dock pages) are
-   matched by key, the two keys right of P: on German `[` and `]` need
-   AltGr, and a character match would put the shortcut where nobody
-   could press it.
+   AltGr+Tab is not Alt+Tab. **Super+[ and Super+]** (workspaces, and
+   with Alt or Ctrl, moving a window or paging the dock) are matched by
+   key, the two keys right of P: on German `[` and `]` need AltGr, and a
+   character match would put the shortcut where nobody could press it.
+   Super+1 ... Super+0 are matched by key too -- on AZERTY the digit row
+   types digits only with Shift.
 
 ### Dead keys
 

@@ -865,7 +865,7 @@ it was and is (`set_rect()`).
 
 The dock hides by moving below the bottom of the screen, where repairs
 never reach it, nothing hits it and its visible region is empty; Alt+Tab
-passes it by and Alt+[ / Alt+] do nothing until it is back. Closing a
+passes it by and Ctrl+Super+[ / Ctrl+Super+] do nothing until it is back. Closing a
 maximized window brings it back if no other is maximized.
 
 **Shade** -- Alt+double-click the titlebar (left Alt: right Alt is AltGr
@@ -1408,6 +1408,63 @@ appearing one repaint round later. `region_skip_idx` is what leaves a
 window out of every region computation for that, as if it were not on
 screen.
 
+## Workspaces
+
+Ten desktops, one on the screen at a time. Every window is on one of
+them; the dock is on all of them.
+
+| Keys | |
+|---|---|
+| Super+[ / Super+] | previous / next workspace, wrapping (after 10 comes 1) |
+| Super+1 ... Super+9, Super+0 | workspace 1 ... 9, and 10 |
+| Alt+Super+[ / Alt+Super+] | take the focused window to the previous / next workspace, and follow it |
+
+All matched by physical key: the two keys right of P (on German they
+type U-umlaut and +, and `[ ]` need AltGr), and the digit row (on AZERTY
+it types digits only with Shift). Switching shows "Workspace 2" as a
+one-second caption in the middle of the screen and speaks it -- without
+it, switching to an empty workspace looks as if every window vanished.
+
+**How a window is hidden.** The way the dock is while a window is
+maximized: its `y` goes below the bottom of the screen, in wm's own
+table only, and `home_y` keeps where it lives. Drawing, hit testing,
+visible regions and repairs all work from the rectangle and the screen,
+so every one of them passes a hidden window by without having been
+changed -- its app gets an empty visible region, exactly as a shaded
+window's does, keeps running, and gets a redraw when it comes back. The
+app is never told it moved: `send_win_rect()` reports `home_y`, and a
+move or resize it asks for while hidden (`Z_WM_RESIZE`, or a script's
+`Z_WM_WIN_PLACE` through `move_window_to()`) changes `home_y` and repairs
+nothing.
+
+**What had to know.**
+
+- **Focus.** `next_focusable()` -- and so Alt+Tab -- skips hidden
+  windows. Each workspace remembers its focused window and gets it back;
+  if it has gone, whatever can take focus does.
+- **The dock** hides for a maximized window on the workspace on the
+  screen, not one on another.
+- **Dialogs.** A modal window blocks every window of its app, so a window
+  whose app has a dialog open moves with all of that app's windows, the
+  dialog included; otherwise it moves alone. `ws_move_set()`.
+- **Scripts.** `Z_WM_WIN_FOCUS` of a window on another workspace switches
+  to that workspace first.
+- **A held button.** A mouse capture on a window that has just been
+  hidden is dropped, or the rest of the drag would go to a hidden window.
+
+Switching is refused while a game holds the screen, while the screen is
+locked, and during a drag or resize. New windows open on the workspace
+on the screen.
+
+**Cost.** A byte per window (its workspace) and a byte per workspace
+(its remembered focus), which is why there are ten rather than four.
+The window limit is unchanged: sixteen in all, across every workspace.
+
+The decisions -- wrapping, the digit keys, what moves with a window --
+are `sw/apps/wm/workspace.c`, tested on the build machine
+(`make -C sw/apps/wm test`); the hiding and focus are wm.c,
+"-- workspaces --".
+
 ## The dock
 
 A small always-on-top launcher bar, anchored to the bottom left of
@@ -1459,7 +1516,9 @@ Past seventeen it pages:
 - **Empty space is the page indicator.** Page 0 is always full, so the
   unused positions on a short page can only mean a later one. No
   counter, no label, no chrome.
-- **Alt+[** and **Alt+]** step pages directly, for anyone who does not
+- **Ctrl+Super+[** and **Ctrl+Super+]** step pages directly (they were
+  Alt+[ ] until workspaces came: Alt is the focused window's modifier,
+  Super the system's), for anyone who does not
   want to walk the cycle. Global rather than dock-focused: the point is
   to reach an app on another page without first focusing the dock.
   Matched by key -- the two keys right of P -- not by character, so

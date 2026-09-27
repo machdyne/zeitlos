@@ -12,7 +12,7 @@ ZFMT = 1
 #   zspeak.o: the speech keys (Super+S/A/C/W/R) -- docs/tts.md
 #
 #   zcfg.o: system.keyboard.layouts -- see docs/keyboard_layouts.md
-OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zkbd.o zspeak.o zcaption.o zcfg.o dock_icons.o win_icons.o wm.o
+OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zkbd.o zspeak.o zcaption.o zcfg.o dock_icons.o win_icons.o workspace.o wm.o
 
 # dock_icons.c/.h are generated -- see sw/data/icons/gen_dock_icon_data.py.
 # not regenerated automatically here (this Makefile doesn't depend on
@@ -46,6 +46,16 @@ test:
 	@/tmp/wm_test_dock
 	@$(HOSTCC) $(HOSTFLAGS) -o /tmp/wm_test_region tests/test_region.c
 	@/tmp/wm_test_region
+
+.PHONY: test
+
+HOSTCC ?= cc
+
+# workspace.c: the workspace decisions, on the build machine.
+test:
+	$(HOSTCC) --std=gnu99 -Wall -Wextra -o /tmp/test_workspace \
+		tests/test_workspace.c workspace.c
+	/tmp/test_workspace
 
 .PHONY: test
 

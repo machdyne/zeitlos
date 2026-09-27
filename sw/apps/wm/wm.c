@@ -42,6 +42,7 @@
 #include "../../common/zcaption.h"	// docs/captions.md
 #include "../../common/zutf8.h"		// titles are UTF-8		// system.keyboard.layouts
 #include "dock_icons.h"
+#include "workspace.h"		// workspaces: the decisions (tested on the host)
 #include "win_icons.h"
 
 #define WM_MAX_WINDOWS    16
@@ -93,6 +94,11 @@ typedef struct {
 	bool		maxed, shaded;
 	uint32_t	rx, ry, rw, rh;
 	uint32_t	real_h;
+
+	// -- workspaces -- (see "-- workspaces --" below)
+	uint8_t		ws;			// the workspace it is on
+	bool		ws_off;		// hidden: on another workspace
+	uint32_t	home_y;		// its y while hidden; y is off the screen
 } wm_window_t;
 
 // -- dock --
@@ -174,8 +180,8 @@ static const dock_app_t dock_candidates[] = {
 	{ "cal",			z_icon_cal_data   },
 	{ "info",		z_icon_info_data  },
 	{ "settings",	z_icon_settings_data },
-
 	{ "keyboard",	z_icon_keyboard_data },
+
 	{ "ask",			z_icon_ask_data   },
 	{ "irc",			z_icon_irc_data  },
 	{ "hex",			z_icon_hex_data   },
@@ -428,6 +434,8 @@ static char arg_empty[1];
 // not a clipboard.
 static char clipboard[Z_WM_CLIP_MAX];
 
+static int cur_ws;						// the workspace on the screen
+static int8_t ws_focus[WS_COUNT] = { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
 static uint8_t zorder[WM_MAX_WINDOWS];	// back-to-front; zorder[count-1] is frontmost
 static uint8_t zorder_count = 0;
 // Windows that were in front of the one just raised (bring_to_front).
@@ -2875,6 +2883,7 @@ static int next_focusable(int from) {
 		// Nothing to type into: a shaded window, or the dock while a
 		// maximized window has hidden it.
 		if (windows[idx].shaded) continue;
+		if (windows[idx].ws_off) continue;		// on another workspace
 		if (idx == dock_idx && dock_hidden) continue;
 		return idx;
 	}
@@ -2936,6 +2945,16 @@ static void move_window_to(int idx, int32_t nx, int32_t ny) {
 	if (ny < 0) ny = 0;
 	if (nx + (int32_t)w->w > WM_SCREEN_W) nx = WM_SCREEN_W - (int32_t)w->w;
 	if (ny + (int32_t)w->h > WM_SCREEN_H) ny = WM_SCREEN_H - (int32_t)w->h;
+
+	// On another workspace: it moves where it lives, which is all its
+	// app is told about; the screen has nothing of it to repair.
+	if (w->ws_off) {
+		if ((uint32_t)nx == w->x && (uint32_t)ny == w->home_y) return;
+		w->x = (uint32_t)nx;
+		w->home_y = (uint32_t)ny;
+		notify_moved(idx);
+		return;
+	}
 
 	if ((uint32_t)nx == w->x && (uint32_t)ny == w->y) return;   // already there
 
@@ -3799,7 +3818,7 @@ static void dock_update(void) {
 	if (dock_idx < 0) return;
 	bool any = false;
 	for (int i = 0; i < WM_MAX_WINDOWS; i++)
-		if (windows[i].used && windows[i].maxed) any = true;
+		if (windows[i].used && windows[i].maxed && !windows[i].ws_off) any = true;
 	if (any == dock_hidden) return;
 	wm_window_t *d = &windows[dock_idx];
 	int oy = (int)d->y;
@@ -3887,6 +3906,136 @@ static void toggle_shade(int idx) {
 	}
 
 }
+
+// -- workspaces -- docs/window_manager.md, "Workspaces" --
+//
+// Ten desktops, one on the screen. A window on another workspace is
+// hidden the way the dock is while a window is maximized: its y goes
+// off the bottom of the screen, IN WM'S TABLE ONLY, and home_y keeps
+// where it lives. Everything that draws, hit-tests, computes a visible
+// region or repairs works from the rectangle and the screen, so all of
+// it skips a hidden window without having to be told -- the app just
+// gets an empty visible region, as a shaded one does, and a redraw when
+// it comes back. The app is never told it moved: send_win_rect()
+// reports home_y, and a move or resize it asks for while hidden changes
+// home_y and is not repaired (move_window_to(), Z_WM_RESIZE).
+//
+// What does have to know: focus (next_focusable() skips hidden windows,
+// and each workspace remembers its focused window), the dock (only a
+// maximized window on THIS workspace hides it), and scripts
+// (Z_WM_WIN_FOCUS of a hidden window switches to it). The decisions --
+// wrapping, the digit keys, what moves with a window -- are in
+// workspace.c, tested on the build machine.
+
+static void ws_hide(int i) {
+	wm_window_t *w = &windows[i];
+	if (w->ws_off) return;
+	w->home_y = w->y;
+	w->y = WM_SCREEN_H;
+	w->ws_off = true;
+}
+
+static void ws_show(int i) {
+	wm_window_t *w = &windows[i];
+	if (!w->ws_off) return;
+	w->y = w->home_y;
+	w->ws_off = false;
+}
+
+static const char *const ws_names[WS_COUNT] = {
+	"Workspace 1", "Workspace 2", "Workspace 3", "Workspace 4",
+	"Workspace 5", "Workspace 6", "Workspace 7", "Workspace 8",
+	"Workspace 9", "Workspace 10",
+};
+
+// "Workspace 2", in the middle of the screen for a second, and spoken.
+// Without it, switching to an empty workspace looks like every window
+// just vanished.
+static void ws_announce(void) {
+	caption_set(ws_names[cur_ws], Z_CAPTION_CENTER | Z_CAPTION_COMPACT |
+		Z_CAPTION_SCALE(2) | Z_CAPTION_TIMEOUT(1000));
+	z_speak_static(ws_names[cur_ws], Z_TTS_F_INTERRUPT);
+}
+
+static void ws_switch(int to) {
+
+	int old, f;
+
+	if (to < 0 || to >= WS_COUNT) return;
+	// Not while a game holds the screen, the screen is locked, or a
+	// window is being dragged or resized.
+	if (game_grab_pid || wm_locked || dragging >= 0 || resizing >= 0) return;
+	if (to == cur_ws) { ws_announce(); return; }
+
+	// Remember what had focus here -- if it belongs here: a window just
+	// moved away (ws_move_focused()) belongs to where it went.
+	if (focused >= 0 && focused != dock_idx && windows[focused].used &&
+		windows[focused].ws == cur_ws)
+		ws_focus[cur_ws] = (int8_t)focused;
+
+	for (int i = 0; i < WM_MAX_WINDOWS; i++)
+		if (windows[i].used && i != dock_idx && windows[i].ws == cur_ws) ws_hide(i);
+
+	cur_ws = to;
+
+	for (int i = 0; i < WM_MAX_WINDOWS; i++)
+		if (windows[i].used && i != dock_idx && windows[i].ws == cur_ws) ws_show(i);
+
+	// A button held in a window that has just gone: its capture goes too,
+	// or the rest of the drag would be delivered to a hidden window.
+	if (mouse_capture >= 0 && windows[mouse_capture].ws_off) mouse_capture = -1;
+
+	// Focus what had it here last, if it still can have it; otherwise
+	// whatever can.
+	f = ws_focus[to];
+	if (f < 0 || f >= WM_MAX_WINDOWS || !windows[f].used ||
+		windows[f].ws != to || windows[f].ws_off || windows[f].shaded)
+		f = next_focusable(-1);
+	if (f >= 0) {
+		int m = blocked_by_modal(f);
+		if (m >= 0 && !windows[m].ws_off) f = m;
+	}
+	old = focused;
+	focused = f;
+	if (f >= 0) bring_to_front(f);
+
+	dock_update();
+	send_clip_all();
+	repair_region(0, 0, WM_SCREEN_W, WM_SCREEN_H, -1);
+	repair_focus_chrome(old, focused);
+
+	ws_announce();
+
+}
+
+// Alt+Super+[ ] -- the focused window (and, if its app has a dialog
+// open, the rest of its app: workspace.c, ws_move_set()) to the
+// previous or next workspace, and you with it.
+static void ws_move_focused(int dir) {
+
+	bool used[WM_MAX_WINDOWS], modal[WM_MAX_WINDOWS];
+	uint32_t owner[WM_MAX_WINDOWS], set;
+	int to;
+
+	if (focused < 0 || focused == dock_idx || !windows[focused].used) return;
+	if (game_grab_pid || wm_locked || dragging >= 0 || resizing >= 0) return;
+
+	for (int i = 0; i < WM_MAX_WINDOWS; i++) {
+		used[i] = windows[i].used && i != dock_idx;
+		owner[i] = windows[i].owner_pid;
+		modal[i] = (windows[i].flags & Z_WIN_FLAG_MODAL) != 0;
+	}
+	set = ws_move_set(focused, WM_MAX_WINDOWS, used, owner, modal);
+
+	to = ws_step(cur_ws, dir);
+	for (int i = 0; i < WM_MAX_WINDOWS; i++)
+		if (set & (1u << i)) windows[i].ws = (uint8_t)to;
+
+	ws_focus[to] = (int8_t)focused;		// it keeps focus where it lands
+	ws_switch(to);
+
+}
+
 
 // -- keyboard layouts -- docs/keyboard_layouts.md
 //
@@ -4409,26 +4558,49 @@ static void dispatch_keys(void) {
 			continue;
 		}
 
-		// Alt+[ and Alt+] -- previous/next dock page.
-		//
-		// Global rather than dock-focused, and deliberately: the
-		// point of a keyboard shortcut here is to reach an app on
-		// another page without first having to focus the dock, which
-		// is itself several keystrokes. Consumed even when the dock
-		// is not paging, so the keys behave the same on every machine
-		// rather than falling through to the focused app on the ones
-		// that happen to have fewer apps installed.
+		// Super+[ and Super+] -- the previous/next workspace (wrapping).
+		// Alt+Super+[ ] -- the focused window there, and you with it.
+		// Ctrl+Super+[ ] -- the previous/next dock page.
 		//
 		// Matched by KEY (usages 0x2F/0x30, the two keys right of P),
 		// not by character: on German those keys are U-umlaut and +,
-		// and [ ] need AltGr, so a character match would put the
-		// shortcut somewhere no German user could press it.
-		if (alt && (usage == 0x2F || usage == 0x30)) {
-			// Not while a maximized window has hidden the dock: paging
-			// lays it out again, which would bring it back on screen.
-			if (pressed && !dock_hidden)
-				dock_set_page(dock_page + (usage == 0x30 ? 1 : -1));
+		// and [ ] need AltGr, so a character match would put these
+		// somewhere no German user could press them.
+		//
+		// The dock's pages were Alt+[ ] until the workspaces came: Alt
+		// is the focused window's modifier (Alt+Tab, Alt+Equal,
+		// Alt+Arrow), and Super the system's. Dock paging is global
+		// rather than dock-focused, deliberately: the point is to reach
+		// an app on another page without first focusing the dock.
+		// Consumed even when the dock is not paging, so the keys behave
+		// the same on every machine.
+		if ((modifiers & Z_KBD_MOD_GUI) && (usage == 0x2F || usage == 0x30)) {
+			int dir = (usage == 0x30) ? 1 : -1;
+			bool ctrl = (modifiers & Z_KBD_MOD_CTRL) != 0;
+			if (pressed) {
+				if (ctrl && !alt) {
+					// Not while a maximized window has hidden the dock:
+					// paging lays it out again, which would bring it back.
+					if (!dock_hidden) dock_set_page(dock_page + dir);
+				} else if (alt && !ctrl) {
+					ws_move_focused(dir);
+				} else if (!alt && !ctrl) {
+					ws_switch(ws_step(cur_ws, dir));
+				}
+			}
+			kbd_sent[usage] = 0;
 			continue;
+		}
+
+		// Super+1 .. Super+9, Super+0 -- workspace 1 .. 10, by KEY
+		// (workspace.c, ws_for_digit_usage()).
+		if ((modifiers & Z_KBD_MOD_GUI) && !(modifiers & Z_KBD_MOD_CTRL) && !alt) {
+			int to = ws_for_digit_usage(usage);
+			if (to >= 0) {
+				if (pressed) ws_switch(to);
+				kbd_sent[usage] = 0;
+				continue;
+			}
 		}
 
 		// Super+Arrow -- move the game mode viewport (global, so
@@ -4495,6 +4667,9 @@ static int create_window(uint32_t owner_pid, const char *title,
 		windows[i].shaded = false;
 		windows[i].rx = windows[i].ry = windows[i].rw = windows[i].rh = 0;
 		windows[i].real_h = 0;
+		windows[i].ws = (uint8_t)cur_ws;	// a new window opens where you are
+		windows[i].ws_off = false;
+		windows[i].home_y = 0;
 
 		// minimum size for a later resize (see the resize block in
 		// main()). Z_WIN_FLAG_MIN_IS_CREATE means "never smaller than
@@ -5180,7 +5355,11 @@ static void send_win_rect(uint32_t to, uint32_t subject, uint32_t tag, int idx) 
 
 	if (idx >= 0) {
 		v[1].type = Z_UINT32; v[1].val.uint32 = windows[idx].x;
-		v[2].type = Z_UINT32; v[2].val.uint32 = windows[idx].y;
+		// A window on another workspace is off the screen only in wm's
+		// own table (see "-- workspaces --"); its app is told where it
+		// lives, as a shaded window's app is told its real height.
+		v[2].type = Z_UINT32; v[2].val.uint32 =
+			windows[idx].ws_off ? windows[idx].home_y : windows[idx].y;
 		v[3].type = Z_UINT32; v[3].val.uint32 = windows[idx].w;
 		// A shaded window's h is its titlebar; the app keeps its
 		// own size and is only ever told that one.
@@ -5625,6 +5804,24 @@ static void handle_message(z_msg_t *msg) {
 			int ow = (int)windows[idx].w, oh = (int)windows[idx].h;
 			if (nw == ow && nh == oh) break;
 
+			// On another workspace: resized where it lives, and nothing
+			// on the screen to repair (see move_window_to()).
+			if (windows[idx].ws_off) {
+				int ohy = (int)windows[idx].home_y;
+				int hx = ox, hy = ohy;
+				if (hx + nw > WM_SCREEN_W) hx = WM_SCREEN_W - nw;
+				if (hy + nh > WM_SCREEN_H) hy = WM_SCREEN_H - nh;
+				if (hx < 0) hx = 0;
+				if (hy < 0) hy = 0;
+				windows[idx].x = (uint32_t)hx;
+				windows[idx].home_y = (uint32_t)hy;
+				windows[idx].w = (uint32_t)nw;
+				windows[idx].h = (uint32_t)nh;
+				if (hx != ox || hy != ohy) notify_moved(idx);
+				notify_resized(idx);
+				break;
+			}
+
 			// Grown past the screen's edge: move it back on, as a drag
 			// would have kept it.
 			int nx = ox, ny = oy;
@@ -5753,9 +5950,13 @@ static void handle_message(z_msg_t *msg) {
 			break;
 		}
 
-		case Z_WM_WIN_FOCUS:
-			auto_focus(auto_window(msg->tag));
+		case Z_WM_WIN_FOCUS: {
+			// Focusing a window on another workspace goes there first.
+			int idx = auto_window(msg->tag);
+			if (idx >= 0 && windows[idx].ws_off) ws_switch(windows[idx].ws);
+			auto_focus(idx);
 			break;
+		}
 
 		case Z_WM_WIN_TBICON: {
 			int idx = auto_window(msg->tag);
