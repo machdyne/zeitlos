@@ -1,5 +1,8 @@
+# sw/apps/web -- build rules are shared: sw/common/app.mk, docs/build.md.
+
+APP = web
+APP_MAIN_RULE = 0
 # Zeitlos -- sw/apps/web
-#
 # An experimental text-mode web browser, and the system's fetch
 # service. See docs/web_app.md.
 #
@@ -14,13 +17,6 @@
 # the build machine against real input. web.c itself is the part that
 # genuinely needs the machine, and it is deliberately the smallest
 # part.
-
-PREFIX ?= $(RISCV_PREFIX)
-# ARCH/ABI come from one place -- see that file for why
-include ../../common/arch.mk
-CC_TARGET = $(PREFIX)gcc
-AS = $(PREFIX)as
-ASFLAGS = -march=$(ARCH) -mabi=$(ABI)
 
 # -- TLS --
 #
@@ -38,27 +34,8 @@ ASFLAGS = -march=$(ARCH) -mabi=$(ABI)
 # See docs/tls.md and docs/x509.md.
 WEB_TLS ?= 1
 
-GC_SECTIONS ?= 1
-ifeq ($(GC_SECTIONS),1)
-GC_CFLAGS = -ffunction-sections -fdata-sections
-GC_LDFLAGS = -Wl,--gc-sections
-endif
-
-# -DZ_GFX_HW_BLIT, same as read/wm/term: the widget toolkit reads its
-# text labels through the hardware glyph blitter, and this app draws a
-# great many glyphs -- a full screen of 5x8 text is around 2,600 of
-# them. In software that is roughly 5,300 cycles each. See
-# docs/window_manager.md, "Hardware glyph blitting".
 EXTRA_CFLAGS ?=
 
-# `override` for the reason every other app in this tree says so: a
-# command-line CFLAGS REPLACES this one rather than adding to it,
-# which silently drops -Os, -march, section GC and -DZ_GFX_HW_BLIT.
-# The result still builds and still links; it just renders every glyph
-# in software and triples in size, which can overrun the space the
-# loader has for the app.
-# The crypto is built at -O2, everything else at -Os.
-#
 # Not a guess about code size: on this CPU a Montgomery multiply costs
 # roughly 337 cycles per 32x32 multiply-accumulate, measured, against
 # a DSP multiplier that takes 2. Almost all of that is instruction
@@ -102,11 +79,7 @@ override CFLAGS += -DWEB_SVG=$(WEB_SVG) \
 WEB_IMG_SW ?= 0
 override CFLAGS += -DWEB_IMG_SW=$(WEB_IMG_SW)
 
-override CFLAGS += --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) \
-	-DZ_GFX_HW_BLIT -DWEB_TLS=$(WEB_TLS) \
-	$(GC_CFLAGS) $(ARCH_DEFS) $(LIBC_FLAGS) $(EXTRA_CFLAGS)
-LDFLAGS = -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS)
-LDSCRIPT = ../../common/riscv-app.ld
+APP_CFLAGS = -DWEB_TLS=$(WEB_TLS) $(EXTRA_CFLAGS)
 
 # url.o, uni.o, html.o, layout.o, page.o and http.o are all free of
 # I/O and of Zeitlos types (layout.o and page.o take zgfx.h and
@@ -123,9 +96,7 @@ endif
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o \
 	zfsapp.o zflist.o zedit.o zinflate.o zimg.o zsvg.o \
 	zport.o zstream.o zdns.o \
-	url.o uni.o http.o html.o layout.o page.o toolbar.o $(TLS_OBJ) web.o
-
-web: web.elf web.bin
+	url.o uni.o http.o html.o layout.o page.o toolbar.o smallweb.o bodyview.o $(TLS_OBJ) web.o
 
 # WEB_TLS changes CFLAGS without changing a single source file, so
 # make on its own would happily relink a mixture of objects built with
@@ -150,42 +121,42 @@ FORCE:
 .PHONY: FORCE
 
 zeitlos.o:
-	$(CC_TARGET) $(CFLAGS) -c ../../common/zeitlos.c -o zeitlos.o
+	$(CC) $(CFLAGS) -c ../../common/zeitlos.c -o zeitlos.o
 
 zobj.o:
-	$(CC_TARGET) $(CFLAGS) -c ../../common/zobj.c -o zobj.o
+	$(CC) $(CFLAGS) -c ../../common/zobj.c -o zobj.o
 
 zgfx.o:
-	$(CC_TARGET) $(CFLAGS) -c ../../common/zgfx.c -o zgfx.o
+	$(CC) $(CFLAGS) -c ../../common/zgfx.c -o zgfx.o
 
 zfont_data.o:
-	$(CC_TARGET) $(CFLAGS) -c ../../common/zfont_data.c -o zfont_data.o
+	$(CC) $(CFLAGS) -c ../../common/zfont_data.c -o zfont_data.o
 
 zwin.o:
-	$(CC_TARGET) $(CFLAGS) -c ../../common/zwin.c -o zwin.o
+	$(CC) $(CFLAGS) -c ../../common/zwin.c -o zwin.o
 
 zspeak.o:
-	$(CC_TARGET) $(CFLAGS) -c ../../common/zspeak.c -o zspeak.o
+	$(CC) $(CFLAGS) -c ../../common/zspeak.c -o zspeak.o
 
 zwidget.o:
-	$(CC_TARGET) $(CFLAGS) -c ../../common/zwidget.c -o zwidget.o
+	$(CC) $(CFLAGS) -c ../../common/zwidget.c -o zwidget.o
 
 zfsapp.o:
-	$(CC_TARGET) $(CFLAGS) -c ../../common/zfsapp.c -o zfsapp.o
+	$(CC) $(CFLAGS) -c ../../common/zfsapp.c -o zfsapp.o
 
 zflist.o:
-	$(CC_TARGET) $(CFLAGS) -c ../../common/zflist.c -o zflist.o
+	$(CC) $(CFLAGS) -c ../../common/zflist.c -o zflist.o
 
 # sw/common/zedit.c -- the URL field. web no longer links zdialog.c
 # at all: the toolbar replaced the modal prompt, and the text field it
 # used moved here when web became its second caller.
 zedit.o:
-	$(CC_TARGET) $(CFLAGS) -c ../../common/zedit.c -o zedit.o
+	$(CC) $(CFLAGS) -c ../../common/zedit.c -o zedit.o
 
 # sw/common/zinflate.c -- gzip for Content-Encoding, and what a PNG
 # decoder will need, which is why it lives in common.
 zinflate.o:
-	$(CC_TARGET) $(CFLAGS) -c ../../common/zinflate.c -o zinflate.o
+	$(CC) $(CFLAGS) -c ../../common/zinflate.c -o zinflate.o
 
 # sw/common/zimg.c -- the image decoders, for in-place images. PNG is
 # off until its decoder exists; BMP, PNM, GIF and JPEG are on, which
@@ -200,109 +171,99 @@ zinflate.o:
 # a photograph does.
 # sw/common/zsvg.c -- vector rendering for in-page SVG.
 zsvg.o:
-	$(CC_TARGET) $(CFLAGS) -c ../../common/zsvg.c -o zsvg.o
+	$(CC) $(CFLAGS) -c ../../common/zsvg.c -o zsvg.o
 
 zimg.o:
-	$(CC_TARGET) $(CFLAGS) -DZ_IMG_HAVE_PNG=1 -c ../../common/zimg.c -o zimg.o
+	$(CC) $(CFLAGS) -DZ_IMG_HAVE_PNG=1 -c ../../common/zimg.c -o zimg.o
 
 zport.o:
-	$(CC_TARGET) $(CFLAGS) -c ../../common/zport.c -o zport.o
+	$(CC) $(CFLAGS) -c ../../common/zport.c -o zport.o
 
 zstream.o:
-	$(CC_TARGET) $(CFLAGS) -c ../../common/zstream.c -o zstream.o
+	$(CC) $(CFLAGS) -c ../../common/zstream.c -o zstream.o
 
 zdns.o:
-	$(CC_TARGET) $(CFLAGS) -c ../../common/zdns.c -o zdns.o
+	$(CC) $(CFLAGS) -c ../../common/zdns.c -o zdns.o
 
 url.o: url.c url.h
-	$(CC_TARGET) $(CFLAGS) -c url.c -o url.o
+	$(CC) $(CFLAGS) -c url.c -o url.o
 
 uni.o: uni.c uni.h
-	$(CC_TARGET) $(CFLAGS) -c uni.c -o uni.o
+	$(CC) $(CFLAGS) -c uni.c -o uni.o
 
 http.o: http.c http.h url.h
-	$(CC_TARGET) $(CFLAGS) -c http.c -o http.o
+	$(CC) $(CFLAGS) -c http.c -o http.o
 
 # The browser toolbar's geometry. Its own file so it can be tested
 # without a window or a framebuffer -- see tests/test_toolbar.c.
 toolbar.o: toolbar.c toolbar.h
-	$(CC_TARGET) $(CFLAGS) -c toolbar.c -o toolbar.o
+	$(CC) $(CFLAGS) -c toolbar.c -o toolbar.o
 
 html.o: html.c html.h uni.h
-	$(CC_TARGET) $(CFLAGS) -c html.c -o html.o
+	$(CC) $(CFLAGS) -c html.c -o html.o
 
 layout.o: layout.c layout.h html.h
-	$(CC_TARGET) $(CFLAGS) -c layout.c -o layout.o
+	$(CC) $(CFLAGS) -c layout.c -o layout.o
 
 page.o: page.c page.h html.h layout.h
-	$(CC_TARGET) $(CFLAGS) -c page.c -o page.o
+	$(CC) $(CFLAGS) -c page.c -o page.o
 
 tls_crypto.o: tls_crypto.c tls_crypto.h ../../common/zsha256.h
-	$(CC_TARGET) $(CFLAGS) -c tls_crypto.c -o tls_crypto.o
+	$(CC) $(CFLAGS) -c tls_crypto.c -o tls_crypto.o
 
 tls.o: tls.c tls.h tls_crypto.h
-	$(CC_TARGET) $(CFLAGS) -c tls.c -o tls.o
+	$(CC) $(CFLAGS) -c tls.c -o tls.o
 
 der.o: der.c der.h
-	$(CC_TARGET) $(CFLAGS) -c der.c -o der.o
+	$(CC) $(CFLAGS) -c der.c -o der.o
 
 x509.o: x509.c x509.h der.h
-	$(CC_TARGET) $(CFLAGS) -c x509.c -o x509.o
+	$(CC) $(CFLAGS) -c x509.c -o x509.o
 
 bignum.o: bignum.c bignum.h
-	$(CC_TARGET) $(CFLAGS) $(CRYPTO_CFLAGS) -c bignum.c -o bignum.o
+	$(CC) $(CFLAGS) $(CRYPTO_CFLAGS) -c bignum.c -o bignum.o
 
 rsa.o: rsa.c rsa.h bignum.h ../../common/zsha256.h
-	$(CC_TARGET) $(CFLAGS) $(CRYPTO_CFLAGS) -c rsa.c -o rsa.o
+	$(CC) $(CFLAGS) $(CRYPTO_CFLAGS) -c rsa.c -o rsa.o
 
 ecdsa.o: ecdsa.c ecdsa.h
-	$(CC_TARGET) $(CFLAGS) $(CRYPTO_CFLAGS) -c ecdsa.c -o ecdsa.o
+	$(CC) $(CFLAGS) $(CRYPTO_CFLAGS) -c ecdsa.c -o ecdsa.o
 
 sha384.o: sha384.c sha384.h
-	$(CC_TARGET) $(CFLAGS) -c sha384.c -o sha384.o
+	$(CC) $(CFLAGS) -c sha384.c -o sha384.o
 
 # SHA-512, which sha384.c builds on. --gc-sections drops the Ed25519
 # half of this object, which nothing here calls.
 monocypher-ed25519.o:
-	$(CC_TARGET) $(CFLAGS) -c ../../ext/monocypher/monocypher-ed25519.c \
+	$(CC) $(CFLAGS) -c ../../ext/monocypher/monocypher-ed25519.c \
 		-o monocypher-ed25519.o
 
 verify.o: verify.c verify.h x509.h rsa.h ecdsa.h sha384.h
-	$(CC_TARGET) $(CFLAGS) -c verify.c -o verify.o
+	$(CC) $(CFLAGS) -c verify.c -o verify.o
 
 zsha256.o:
-	$(CC_TARGET) $(CFLAGS) $(CRYPTO_CFLAGS) -c ../../common/zsha256.c -o zsha256.o
+	$(CC) $(CFLAGS) $(CRYPTO_CFLAGS) -c ../../common/zsha256.c -o zsha256.o
 
 monocypher.o:
-	$(CC_TARGET) $(CFLAGS) -c ../../ext/monocypher/monocypher.c -o monocypher.o
+	$(CC) $(CFLAGS) -c ../../ext/monocypher/monocypher.c -o monocypher.o
 
 zrng.o:
-	$(CC_TARGET) $(CFLAGS) -c ../../common/zrng.c -o zrng.o
+	$(CC) $(CFLAGS) -c ../../common/zrng.c -o zrng.o
 
 web.o: web.c url.h http.h html.h layout.h page.h ../../common/zweb.h \
 	.web_config_selected
-	$(CC_TARGET) $(CFLAGS) -c web.c -S -MF /dev/null -o web.asm
-	$(CC_TARGET) $(CFLAGS) -c web.c -o web.o
-
-web.elf: $(OBJS)
-	$(CC_TARGET) $(LDFLAGS) -T $(LDSCRIPT) -Wl,-Map,web.map -o web.elf $(OBJS)
-	$(PREFIX)objdump -S --disassemble web.elf > web.dasm
+	$(CC) $(CFLAGS) -c web.c -S -MF /dev/null -o web.asm
+	$(CC) $(CFLAGS) -c web.c -o web.o
 
 # ZEXE, not a raw --pad-to binary. This app has a sizeable .bss -- the
 # parser context alone is nearly 6KB and the block buffer for a screen
 # is larger -- and the old format wrote .bss out as literal zeros, so
 # all of it would be read off the SD card on every launch. The header
 # carries it as a number instead. See sw/common/zexec.h.
-web.bin: web.elf
-	@EDATA=$$($(PREFIX)nm web.elf | awk '$$3=="_edata"{print "0x"$$1}'); \
-	END=$$($(PREFIX)nm web.elf | awk '$$3=="_end"{print "0x"$$1}'); \
-	$(PREFIX)objcopy -O binary web.elf web.data; \
-	python3 ../../../tools/mkexec.py web.data web.bin $$(($$END - $$EDATA)); \
-	rm -f web.data
 
 # -- host builds, with the host's own compiler, not $(PREFIX)gcc --
 
-# The HOST compiler, kept separate from $(CC_TARGET) above. Using the
+# The HOST compiler, kept separate from $(CC) above. Using the
 # same variable for both is how a "host" test ends up built for RISC-V
 # and silently not run.
 HOSTCC    ?= cc
@@ -325,9 +286,9 @@ OUT      ?= /tmp/web.pbm
 # NOT in this list: it programs the GPU rasterizer through MMIO, which
 # on a build machine writes into unmapped memory and draws nothing.
 RENDER_SRC = $(COMMON)/zwin.c $(COMMON)/zwidget.c $(COMMON)/zfont_data.c \
-             $(COMMON)/zobj.c $(COMMON)/zeitlos.c
+             $(COMMON)/zobj.c $(COMMON)/zeitlos.c $(COMMON)/tests/zspeak_stub.c
 
-.PHONY: web test test-tls test-asan render clean
+.PHONY: test test-tls test-asan render
 
 TLS_HOST_SRC = tls.c tls_crypto.c ../../common/zsha256.c \
                ../../ext/monocypher/monocypher.c
@@ -338,8 +299,10 @@ test: $(BUILD)/test_url $(BUILD)/test_http $(BUILD)/test_html \
       $(BUILD)/test_ecdsa $(BUILD)/test_ecdsa_hw $(BUILD)/test_solinas \
       $(BUILD)/test_toolbar \
       $(BUILD)/test_verify \
-      $(BUILD)/test_sha384
+      $(BUILD)/test_sha384 $(BUILD)/test_smallweb $(BUILD)/test_bodyview
 	@echo "--- url ---"    && $(BUILD)/test_url
+	@echo "--- gopher, gemini ---" && $(BUILD)/test_smallweb
+	@echo "--- scroll by blit ---" && $(BUILD)/test_bodyview
 	@echo "--- toolbar ---" && $(BUILD)/test_toolbar
 	@echo "--- http ---"   && $(BUILD)/test_http
 	@echo "--- html ---"   && $(BUILD)/test_html $(PAGES)
@@ -357,6 +320,11 @@ test: $(BUILD)/test_url $(BUILD)/test_http $(BUILD)/test_html \
 
 $(BUILD):
 	@mkdir -p $(BUILD)
+
+# Gopher and Gemini: requests, the Gemini header, and the HTML each
+# body becomes -- docs/gopher_gemini.md.
+$(BUILD)/test_smallweb: tests/test_smallweb.c smallweb.c smallweb.h url.c url.h | $(BUILD)
+	$(HOSTCC) $(HOSTFLAGS) -o $@ tests/test_smallweb.c smallweb.c url.c
 
 $(BUILD)/test_url: tests/test_url.c url.c url.h | $(BUILD)
 	$(HOSTCC) $(HOSTFLAGS) -o $@ tests/test_url.c url.c
@@ -376,6 +344,11 @@ $(BUILD)/test_html: tests/test_html.c html.c uni.c html.h uni.h | $(BUILD)
 $(BUILD)/test_layout: tests/test_layout.c layout.c html.c uni.c | $(BUILD)
 	$(HOSTCC) $(HOSTFLAGS) -I $(COMMON) -o $@ \
 		tests/test_layout.c layout.c html.c uni.c $(RENDER_SRC)
+
+# Scrolling by blit, compared pixel for pixel with a fresh draw.
+$(BUILD)/test_bodyview: tests/test_bodyview.c bodyview.c bodyview.h page.c layout.c html.c uni.c | $(BUILD)
+	$(HOSTCC) $(HOSTFLAGS) -I $(COMMON) -o $@ \
+		tests/test_bodyview.c bodyview.c page.c layout.c html.c uni.c $(RENDER_SRC)
 
 $(BUILD)/test_page: tests/test_page.c page.c layout.c html.c uni.c | $(BUILD)
 	$(HOSTCC) $(HOSTFLAGS) -I $(COMMON) -o $@ \
@@ -488,7 +461,38 @@ test-tls: $(BUILD)/test_tls
 	@# The refusals. These are the runs that prove verification is
 	@# actually consulted rather than merely linked in -- a client
 	@# that skipped it would pass every test above.
-	@for mode in none wronghost; do \
+	@# Pin mode (tls_set_pin, docs/gopher_gemini.md): accepted with NO
+	@# root store when the key matches, refused when it does not.
+	@python3 tests/tls_server.py 44398 --cert-der $(BUILD)/server_pin.der \
+		> $(BUILD)/tls_server.log 2>&1 & \
+	sleep 2; \
+	$(BUILD)/test_tls 44398 7 pin $(BUILD)/server_pin.der || exit 1
+	@# A server that asks for a client certificate (Gemini servers do):
+	@# answered with an empty Certificate after the server's Finished,
+	@# in both authentication modes.
+	@for mode in pin verify; do \
+		python3 tests/tls_server.py 44397 --request-client-cert \
+			--cert-der $(BUILD)/server_cr.der > $(BUILD)/tls_server.log 2>&1 & \
+		sleep 2; \
+		$(BUILD)/test_tls 44397 536 $$mode $(BUILD)/server_cr.der || exit 1; \
+		grep -q "handshake ok" $(BUILD)/tls_server.log || \
+			{ echo "server did not complete the handshake"; exit 1; }; \
+		wait; \
+	done
+	@echo "client-certificate request answered, pin and CA modes"
+	@# The key types Gemini capsules use, in pin mode, each with a
+	@# client-certificate request: P-384 and Ed25519 failed with
+	@# alert 40 until their CertificateVerify schemes were offered.
+	@for key in rsa:4096 ec:P-256 ec:P-384 ed25519; do \
+		python3 tests/tls_server.py 44396 --key $$key --request-client-cert \
+			--cert-der $(BUILD)/server_key.der > $(BUILD)/tls_server.log 2>&1 & \
+		for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do \
+			grep -q listening $(BUILD)/tls_server.log && break; sleep 1; done; \
+		$(BUILD)/test_tls 44396 536 pin $(BUILD)/server_key.der || exit 1; \
+		wait; \
+	done
+	@echo "pin mode: RSA-4096, P-256, P-384 and Ed25519 capsules all verify"
+	@for mode in none wronghost pinwrong; do \
 		python3 tests/tls_server.py 44399 \
 			--cert-der $(BUILD)/server_neg.der \
 			> $(BUILD)/tls_server.log 2>&1 & \
@@ -511,16 +515,6 @@ render: $(BUILD)/render
 	$(BUILD)/render $(DOC) $(SCROLL) $(SCALE) $(OUT)
 	@echo "wrote $(OUT) -- view it, do not just read the log"
 
-clean:
-	rm -rf $(BUILD)
-	rm -f web.elf web.bin web.data web.asm web.dasm web.map *.o *.d
-	rm -f .web_config_selected
-
-# Header dependency tracking -- CFLAGS carries -MD, and without
-# including the .d files an edit to a header rebuilds nothing. See
-# sw/apps/net/Makefile for the longer version of why that matters.
--include $(wildcard *.d)
-
 # -- the trust store --------------------------------------------------
 #
 # See roots/README.md. The PEM is VENDORED, not downloaded: the store
@@ -535,7 +529,6 @@ clean:
 # build machine's own store for a local build:
 #
 #   make roots ROOTS_PEM=/etc/ssl/certs/ca-certificates.crt ROOTS_SHA256=
-#
 ROOTS_PEM    ?= roots/cacert.pem
 ROOTS_SHA256 ?=
 
@@ -574,3 +567,7 @@ check-sources:
 	if [ -n "$$missing" ]; then \
 		echo "check-sources: not in OBJS:$$missing"; exit 1; \
 	else echo "check-sources: every source is linked"; fi
+
+CLEAN_EXTRA = $(BUILD) .web_config_selected
+
+include ../../common/app.mk

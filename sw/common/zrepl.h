@@ -1,6 +1,8 @@
 #ifndef ZREPL_H
 #define ZREPL_H
 
+
+#include "zsubjects.h"	// the block these subjects are in
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -57,9 +59,9 @@
  * evaluation lands behind them.
  */
 
-#define Z_REPL_EVAL     130
-#define Z_REPL_RESULT   131
-#define Z_REPL_ERROR    132
+#define Z_REPL_EVAL     (Z_SUBJ_REPL + 0)
+#define Z_REPL_RESULT   (Z_SUBJ_REPL + 1)
+#define Z_REPL_ERROR    (Z_SUBJ_REPL + 2)
 
 // NOTHING IN THE TREE USES THIS ANY MORE, and it is no longer even
 // likely to be right: repl now starts from the sdcard only when one is
@@ -127,5 +129,8 @@
 // `out`/*is_error are untouched in that case.
 z_rv z_repl_eval(uint32_t repl_pid, const char *code,
 	char *out, uint32_t out_cap, uint32_t timeout_ticks, bool *is_error);
+
+// Still inside the block zsubjects.h gives this protocol:
+Z_SUBJECTS_IN(Z_SUBJ_REPL, Z_REPL_ERROR);
 
 #endif

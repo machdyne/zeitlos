@@ -257,8 +257,10 @@ screen before calling it.
 
 Kernel image: 8,984 bytes, of which SHA-256 is 1,696. To make room the
 store's on-board test (`kv test`) is now left out by default; `make
-KV_TEST=1` builds it back in for a hardware check. The kernel has
-3,488 bytes of headroom now, with netserve's config keys in (704 with `kv test`).
+KV_TEST=1` builds it back in for a hardware check. The kernel then had
+3,488 bytes of headroom, with netserve's config keys in (704 with `kv
+test`); the current figure is in
+[kernel.md](kernel.md#the-256kb-image-budget).
 
 ## Open: encryption
 

@@ -9,17 +9,20 @@
 
 void toolbar_geom(int content_w, toolbar_t *tb) {
 
-	int bx = content_w - 2 * TB_BTN_W - TB_BTN_GAP - TB_MARGIN;
+	// [ field ][Go][<][>] -- Go beside the field it acts on, the
+	// history buttons after it.
+	int bx = content_w - 3 * TB_BTN_W - 2 * TB_BTN_GAP - TB_MARGIN;
 
 	tb->buttons = true;
 
 	// A window too narrow for both keeps the field and drops the
 	// buttons. The field is the part with no keyboard equivalent --
-	// Back and Forward have 'b' and 'f' -- so it is the part to keep
-	// when there is not room for everything.
+	// Back and Forward have 'b' and 'f', Go is Enter and Stop is
+	// Escape -- so it is the part to keep when there is not room for
+	// everything.
 	if (bx - TB_MARGIN * 2 < TB_MIN_FIELD) {
 		tb->buttons = false;
-		tb->back_x = tb->fwd_x = content_w;		// off the end, unhittable
+		tb->go_x = tb->back_x = tb->fwd_x = content_w;	// off the end, unhittable
 		tb->field_x = TB_MARGIN;
 		tb->field_w = content_w - 2 * TB_MARGIN;
 		if (tb->field_w < 1) tb->field_w = 1;
@@ -28,8 +31,9 @@ void toolbar_geom(int content_w, toolbar_t *tb) {
 
 	tb->field_x = TB_MARGIN;
 	tb->field_w = bx - TB_MARGIN * 2;
-	tb->back_x = bx;
-	tb->fwd_x = bx + TB_BTN_W + TB_BTN_GAP;
+	tb->go_x = bx;
+	tb->back_x = bx + TB_BTN_W + TB_BTN_GAP;
+	tb->fwd_x = tb->back_x + TB_BTN_W + TB_BTN_GAP;
 
 }
 
@@ -38,6 +42,8 @@ toolbar_hit_t toolbar_hit(const toolbar_t *tb, int x, int y) {
 	if (y < 0 || y >= TB_H) return TB_HIT_NONE;
 
 	if (tb->buttons) {
+		if (x >= tb->go_x && x < tb->go_x + TB_BTN_W)
+			return TB_HIT_GO;
 		if (x >= tb->back_x && x < tb->back_x + TB_BTN_W)
 			return TB_HIT_BACK;
 		if (x >= tb->fwd_x && x < tb->fwd_x + TB_BTN_W)
@@ -88,3 +94,29 @@ bool toolbar_arrow_px(int dx, int dy, int w, int h, bool left) {
 bool toolbar_stipple(int dx, int dy) {
 	return ((dx + dy) & 1) == 0;
 }
+
+bool toolbar_cross_px(int dx, int dy, int w, int h) {
+
+	// Two diagonals, each two pixels wide in every row: a box one column
+	// wider than it is tall, so each row holds a pair per diagonal and
+	// the mark is the same top to bottom as left to right. Sized so
+	// the box centres exactly across the button's width.
+	int size = (h < w ? h : w) - 9;		// rows
+	int bw, x0, y0, x, y;
+
+	if (size < 3) return false;
+	if ((w - (size + 1)) & 1) size--;	// centre on whole pixels
+	bw = size + 1;
+	x0 = (w - bw) / 2;
+	y0 = (h - size) / 2;
+
+	if (dx < 0 || dy < 0 || dx >= w || dy >= h) return false;
+	x = dx - x0;
+	y = dy - y0;
+	if (x < 0 || y < 0 || x >= bw || y >= size) return false;
+
+	return x == y || x == y + 1 ||					// "\"
+		x == size - 1 - y || x == size - y;			// "/"
+
+}
+

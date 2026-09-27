@@ -5,6 +5,9 @@ documents, follows links, and acts as a **fetch service** so that
 other apps can make HTTP and HTTPS requests without containing any
 network code of their own.
 
+It also opens **`gopher://` and `gemini://`**, the small internet,
+through the same page engine: see [gopher_gemini.md](gopher_gemini.md).
+
 It is roughly a Lynx-class browser: no JavaScript, no CSS, no layout
 beyond a single column. That is a smaller thing than a modern browser
 by several orders of magnitude, and it is still enough to read
@@ -22,6 +25,7 @@ verified certificate chain. See "Where this stands" at the end.
 |---|---|
 | HTTP/1.1 | keep-alive, chunked, redirects, `Content-Encoding: gzip` |
 | TLS 1.3 | ChaCha20-Poly1305, X.509 chain verification against a root store on the card |
+| Gopher, Gemini | menus, text and gemtext converted to HTML; Gemini keys pinned on first use ([gopher_gemini.md](gopher_gemini.md)) |
 | Signatures | RSA PKCS#1 and PSS, ECDSA P-256 and P-384, optionally hardware-accelerated |
 | Documents | streaming HTML parser, sparse checkpoint index, unlimited page size |
 | Images | BMP, PNM, GIF, JPEG and PNG, dithered to 1bpp; SVG rendered as vectors |
@@ -190,15 +194,63 @@ unreferenced for many drops.
 
 Host-only sources (`render.c`, `*_test.c`) are skipped by name.
 
+## Scrolling
+
+**Forward is a blit.** Scrolling down -- an arrow, the wheel, Page Down
+-- moves the pixels already on the screen up and draws only the lines
+that come into view at the bottom, instead of laying out and drawing the
+whole body again. `sw/apps/web/bodyview.c`.
+
+Lines here are not one height -- headings use the taller font, an image
+is several lines, and blocks have gaps between them -- so the distance to
+move is not "lines times a height". `bv_draw()` records, for every
+display line it draws, which line it is (block, line within the block)
+and where it went, and where drawing stopped. A forward scroll finds the
+new top line in that record; its old position is the distance. One
+hardware blit moves everything from it to the top of the view, the strip
+opened at the bottom is cleared, drawing continues from the first line
+that was not on the screen, and the link rectangles move with their
+text.
+
+When that cannot be done exactly it is a full draw, as before: the new
+top is not on the screen (a jump of a screen or more), the window is
+not wholly visible (the hardware would copy another window's pixels) or
+is being dragged, its size changed, an image is loading, or a selected
+link's box is on the screen (a blit would carry it along).
+
+**Backward stays a full draw.** A line's position after scrolling back
+depends on lines that were never drawn, so there is nothing recorded to
+move by. The hardware can move content down (`zgfx.h`), so doing it
+would mean measuring the lines above first -- a possible next step.
+
+`tests/test_bodyview.c` draws at every starting position down several
+documents (headings, lists, `<pre>`, tables, links, a paragraph longer
+than the screen, a Gopher menu), scrolls forward by 1, 2, 3, 5, 12 and
+20 lines through the blit -- the render harness emulates the hardware,
+and refuses it by the same rule -- then draws from scratch at the same
+place, and requires the body to be identical pixel for pixel, the
+record identical line for line, and the link rectangles identical:
+2,166 scrolls. A shift one pixel out, an uncleared strip, or a
+continuation one line late each fail it by the thousand.
+
 ## The toolbar
 
-An editable URL field with Back and Forward beside it.
+An editable URL field, a Go button, and Back and Forward beside it.
 
 ```
-+------------------------------------------+  +--+ +--+
-| https://en.wikipedia.org/wiki/Main_Page   |  | <| |> |
-+------------------------------------------+  +--+ +--+
++----------------------------------------+ +--+ +--+ +--+
+| https://en.wikipedia.org/wiki/Main_Page | |Go| | <| |> |
++----------------------------------------+ +--+ +--+ +--+
 ```
+
+**Go** navigates to what was typed in the field, or -- when the field
+just shows the current page -- reloads it, as `r` does. While a page is
+loading from the network it becomes **Stop** (a cross), and a click
+abandons the load exactly as a failed one ends (`fetch_failed()`:
+socket and spool let go, "stopped" on the status line). **Escape** stops
+too, when the field does not have the keyboard. The button changes back
+by itself when the load ends, however it ends. Name resolution blocks
+the whole app, so a load becomes stoppable once it reaches the network.
 
 The URL used to be a label, and opening a page meant `g` and a modal
 dialog over the top of it — a step that existed only because there
@@ -209,8 +261,8 @@ field; Return navigates, Escape puts back what was there.
 the middle of a hostname would open a dialog and space would scroll
 the page out from under what is being typed.
 
-`b` and `f` still work, so the buttons are a convenience rather than
-the only way — which is why a window too narrow for everything drops
+`b` and `f` still work, as do Return for Go and Escape for Stop, so the
+buttons are a convenience rather than the only way — which is why a window too narrow for everything drops
 the **buttons** and keeps the field.
 
 ### The field is a shared widget
@@ -411,7 +463,9 @@ Backspace goes back, `f` forward, `r` reloads. In the URL bar, Enter
 navigates and Escape restores what was there.
 
 The mouse works on links, images, the URL bar, the Back and Forward
-buttons, and the scrollbar.
+buttons, and the scrollbar, and the wheel scrolls three lines a notch
+(the notches of a fast spin are added up and scrolled once, since each
+scroll repaints the page).
 
 `/web` must exist on the card, and `/web/roots.der` must be there for
 HTTPS -- `make roots` builds it, see `sw/apps/web/roots/README.md`.

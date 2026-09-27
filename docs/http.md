@@ -140,8 +140,10 @@ stream from that file. Three things fall out of it:
 
 ### One fetch at a time
 
-`net` relays one socket, so `web` has one fetch. A second
-request is **queued, not refused** — a client that got "busy" could
+`web` uses one of `net`'s sockets at a time, so it has one fetch.
+(`net` has two, `NET_SOCK_SLOTS` -- the other is for another app, such
+as `irc`, holding a connection open; [networking.md](networking.md#more-than-one-socket).)
+A second request is **queued, not refused** — a client that got "busy" could
 only sit in a retry loop doing the same thing worse. `Z_WEB_CANCEL`
 is how a client that does not want to wait gets out.
 
@@ -191,7 +193,7 @@ that twice.
 The second half was real, and `web.c` answers it with an idle timer
 rather than by closing after every request: ten seconds, long enough
 for the redirects and sub-fetches that follow a page load, after
-which net's only socket goes back.
+which `web`'s socket goes back to `net`.
 
 ### When a connection may be reused
 

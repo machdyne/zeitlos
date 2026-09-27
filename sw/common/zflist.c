@@ -44,6 +44,83 @@
 // listed straight into the widget's own pool -- see load_dir().
 static uint8_t stage_types[Z_FLIST_MAX];
 
+// -- the details column (fl->info) --
+
+// How many characters of name a row must keep before the details
+// column is shown at all. Below that the name matters more.
+#define DETAIL_MIN_NAME  12
+
+// "  12.3K 2026-09-26" into `out`; returns its length in characters.
+// Sizes in the smallest unit that keeps them to four figures, dates
+// as ISO (UTC -- docs/filesystem.md, "Timestamps"), a directory as
+// "<dir>", and a missing date as blanks so the columns still line up.
+// Appends `v` in decimal, at least `width` digits (zero-padded).
+// Hand-rolled rather than snprintf(): every app with a file dialog
+// links this widget, and a formatted print is several kilobytes an app
+// may not otherwise carry.
+static char *put_u(char *o, uint32_t v, int width) {
+	char t[10];
+	int n = 0;
+	do { t[n++] = (char)('0' + v % 10); v /= 10; } while (v);
+	while (n < width) t[n++] = '0';
+	while (n) *o++ = t[--n];
+	return o;
+}
+
+static int details_text(const z_fs_info_t *fi, char *out) {
+
+	char sz[8], *o = sz;
+	uint32_t v = fi->size;
+	char unit = 0;
+
+	if (fi->type == Z_FS_TYPE_DIR) {
+		memcpy(sz, "<dir>", 6);
+		o = sz + 5;
+	} else {
+		// Tenths of a KB, then of a MB, rounded to nearest and split
+		// so that a 4GB file (FAT32's limit) does not overflow.
+		if (v >= 10000) {
+			unit = 'K';
+			v = (fi->size / 1024) * 10 + ((fi->size % 1024) * 10 + 512) / 1024;
+			if (v >= 10000) {
+				unit = 'M';
+				v = (fi->size >> 20) * 10 +
+					(((fi->size & 0xFFFFF) >> 10) * 10 + 512) / 1024;
+			}
+		}
+		if (unit && v < 1000) {
+			o = put_u(o, v / 10, 1); *o++ = '.'; o = put_u(o, v % 10, 1);
+		} else {
+			o = put_u(o, unit ? (v + 5) / 10 : v, 1);
+		}
+		if (unit) *o++ = unit;
+	}
+	*o = 0;
+
+	// right-align the size in six columns, then the date
+	int n = (int)(o - sz);
+	char *p = out;
+	for (int i = n; i < 6; i++) *p++ = ' ';
+	memcpy(p, sz, (size_t)n); p += n;
+	*p++ = ' ';
+	if (fi->fdate) {
+		p = put_u(p, 1980 + (fi->fdate >> 9), 4); *p++ = '-';
+		p = put_u(p, (fi->fdate >> 5) & 15, 2); *p++ = '-';
+		p = put_u(p, fi->fdate & 31, 2);
+	} else {
+		for (int i = 0; i < 10; i++) *p++ = ' ';
+	}
+	*p = 0;
+	return (int)(p - out);
+
+}
+
+const z_fs_info_t *z_flist_selected_info(const z_flist_t *fl) {
+	if (!fl->info || fl->sel_updir || fl->sel < 0 || fl->sel >= fl->count)
+		return NULL;
+	return &fl->info[fl->sel];
+}
+
 // Entry i's name, in the pool.
 #define NAME(fl, i)  ((fl)->pool + (fl)->name_off[i])
 
@@ -89,6 +166,8 @@ static void sort_entries(z_flist_t *fl) {
 		uint16_t off = fl->name_off[i];
 		uint8_t dir = fl->isdir[i];
 		const char *name = fl->pool + off;
+		z_fs_info_t inf;
+		if (fl->info) inf = fl->info[i];
 
 		int j = i - 1;
 
@@ -124,12 +203,14 @@ static void sort_entries(z_flist_t *fl) {
 
 			fl->name_off[j + 1] = fl->name_off[j];
 			fl->isdir[j + 1] = fl->isdir[j];
+			if (fl->info) fl->info[j + 1] = fl->info[j];
 			j--;
 
 		}
 
 		fl->name_off[j + 1] = off;
 		fl->isdir[j + 1] = dir;
+		if (fl->info) fl->info[j + 1] = inf;
 
 	}
 
@@ -210,8 +291,15 @@ static bool load_dir(z_flist_t *fl, const char *path, const char *keep) {
 	// it is cut down to its name and moved to the write position, which
 	// never passes the read position -- a name is never longer than
 	// the path it came in -- so this needs no second buffer.
-	if (!fs_list_into(path, fl->pool, Z_FLIST_POOL, stage_types,
-		Z_FLIST_MAX, &count, &truncated)) {
+	// With a details column the listing carries each entry's size and
+	// date as well (FS_LIST_EX); the type comes from that too.
+	int listed = fl->info
+		? fs_list_ex(path, fl->pool, Z_FLIST_POOL, fl->info,
+			Z_FLIST_MAX, &count, &truncated)
+		: fs_list_into(path, fl->pool, Z_FLIST_POOL, stage_types,
+			Z_FLIST_MAX, &count, &truncated);
+
+	if (!listed) {
 
 		// An EMPTY directory is not a failure, but fs_list_into()
 		// can't tell us that apart from a real one -- the syscall
@@ -247,7 +335,14 @@ static bool load_dir(z_flist_t *fl, const char *path, const char *keep) {
 
 			memmove(fl->pool + w, base, bl + 1);
 			fl->name_off[fl->count] = (uint16_t)w;
-			fl->isdir[fl->count] = stage_types[i];
+			if (fl->info) {
+				// compacted in step with the names ("." and ".."
+				// skipped above): entry fl->count's details
+				fl->info[fl->count] = fl->info[i];
+				fl->isdir[fl->count] = fl->info[i].type;
+			} else {
+				fl->isdir[fl->count] = stage_types[i];
+			}
 			fl->count++;
 			w += bl + 1;
 
@@ -342,6 +437,14 @@ void z_flist_set_geom(z_flist_t *fl, int x, int y, int w, int h) {
 
 bool z_flist_chdir(z_flist_t *fl, const char *path) {
 	return load_dir(fl, (path && path[0]) ? path : "/", NULL);
+}
+
+// Re-reads the current directory and selects `name` if it is there
+// (a file just renamed or copied), else the first row.
+bool z_flist_refresh_select(z_flist_t *fl, const char *name) {
+	char path[Z_FLIST_PATH_MAX];
+	copy_bounded(path, fl->path, Z_FLIST_PATH_MAX);
+	return load_dir(fl, path, name);
 }
 
 bool z_flist_refresh(z_flist_t *fl) {
@@ -443,9 +546,25 @@ void z_flist_draw(z_flist_t *fl, bool force) {
 
 		const char *name = updir ? ".." : NAME(fl, entry);
 
+		// The details column, right-aligned, when there is one and the
+		// row is wide enough that the name keeps DETAIL_MIN_NAME
+		// characters in front of it. The name is then clipped short
+		// of the column rather than running underneath it.
+		z_clip_t nclip = clip;
+		if (fl->info && !updir) {
+			char det[24];
+			int dw = details_text(&fl->info[entry], det);
+			int dx = clip.x1 - dw * z_font_5x8.w;
+			if (dx - (clip.x0 + 1 + TEXT_X) >= DETAIL_MIN_NAME * z_font_5x8.w) {
+				z_fb_draw_text2(dx, ry + 1, det, selected ? 0 : 1,
+					selected ? 1 : 0, &z_font_5x8, &clip);
+				nclip.x1 = dx - z_font_5x8.w;
+			}
+		}
+
 		// UTF-8: a long file name can be anything (docs/sdcard.md).
 		z_fb_draw_utf8_2(clip.x0 + 1 + TEXT_X, ry + 1, name,
-			selected ? 0 : 1, selected ? 1 : 0, &z_font_5x8, &clip);
+			selected ? 0 : 1, selected ? 1 : 0, &z_font_5x8, &nclip);
 
 	}
 
@@ -515,6 +634,24 @@ static bool enter_selection(z_flist_t *fl) {
 	sub[n] = 0;
 
 	return load_dir(fl, sub, NULL);
+
+}
+
+void z_flist_wheel(z_flist_t *fl, int notches) {
+
+	int rows = visible_rows(fl);
+	int max = total_rows(fl) - rows;
+	int top = fl->top - 3 * notches;		// up (positive) is back
+
+	if (max < 0) max = 0;
+	if (top > max) top = max;
+	if (top < 0) top = 0;
+	if (top == fl->top) return;
+
+	fl->top = top;
+	z_scrollbar_set_value(&fl->sb, fl->top);
+	fl->dirty = true;
+	z_flist_draw(fl, false);
 
 }
 

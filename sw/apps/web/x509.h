@@ -62,6 +62,7 @@ typedef enum {
 	X509_KEY_RSA,
 	X509_KEY_EC_P256,
 	X509_KEY_EC_P384,
+	X509_KEY_ED25519,		// ec_point holds the 32-byte public key
 } x509_key_alg_t;
 
 typedef enum {

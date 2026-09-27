@@ -309,6 +309,7 @@ Everything works without a pointer.
 | Tab / shift+Tab | right / left |
 | Enter | down |
 | PageUp / PageDown | a screen at a time |
+| mouse wheel | three rows a notch; the view moves, the cell cursor stays |
 | Home / End | first column / last used column |
 | Ctrl+Home | A1 |
 | any printable character | starts a fresh entry, replacing the cell |

@@ -42,6 +42,7 @@
 
 typedef struct {
 	int		field_x, field_w;
+	int		go_x;			// Go, or Stop while a fetch is under way
 	int		back_x;
 	int		fwd_x;
 	bool	buttons;		// false when the window is too narrow
@@ -54,6 +55,7 @@ typedef enum {
 	TB_HIT_FIELD,
 	TB_HIT_BACK,
 	TB_HIT_FORWARD,
+	TB_HIT_GO,			// Go -- or Stop; web.c decides which it is
 } toolbar_hit_t;
 
 // `x`/`y` are content-relative. A click below the bar is TB_HIT_NONE,
@@ -83,5 +85,11 @@ bool toolbar_arrow_px(int dx, int dy, int w, int h, bool left);
 // which does not say "you cannot go back", it says "this button is
 // broken".
 bool toolbar_stipple(int dx, int dy);
+
+// Is pixel (dx, dy) part of the Stop button's cross, in a button of
+// the given size? Two diagonals, two pixels thick, centred -- the
+// usual "stop loading" mark. (Go is drawn as the word, so that it is
+// not mistaken for the Forward arrow beside it.)
+bool toolbar_cross_px(int dx, int dy, int w, int h);
 
 #endif

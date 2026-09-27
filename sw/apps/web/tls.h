@@ -128,6 +128,28 @@ void tls_init(tls_ctx_t *c, const char *host,
 void tls_set_verify(tls_ctx_t *c, int64_t now,
 	verify_root_fn find_root, void *user);
 
+// The OTHER way to authenticate a server: a pin, for Gemini
+// (docs/gopher_gemini.md, "Certificates"), where servers almost all
+// present self-signed certificates and the protocol's own answer is
+// trust on first use.
+//
+// Everything that proves the peer holds its key is unchanged -- the
+// CertificateVerify signature is still required and still checked
+// against the leaf. What changes is the question asked of the leaf:
+// not "does a trusted CA vouch for it" but "is its public key the one
+// this host presented before". `pin` is called once per handshake,
+// after CertificateVerify has verified, with the host and the SHA-256
+// of the leaf's SubjectPublicKeyInfo (the key, not the certificate,
+// so a renewal that keeps the key is not a change). It returns true
+// to accept; to refuse it returns false and may set *why.
+//
+// Exactly one of tls_set_verify() and tls_set_pin() must be called
+// before tls_start(); it refuses with neither. There is still no way
+// to connect with authentication switched off.
+typedef bool (*tls_pin_fn)(void *user, const char *host,
+	const uint8_t spki_sha256[32], const char **why);
+void tls_set_pin(tls_ctx_t *c, tls_pin_fn pin, void *user);
+
 bool tls_start(tls_ctx_t *c);
 
 // Ciphertext from the socket.
@@ -236,7 +258,10 @@ struct tls_ctx {
 	uint32_t		chain_n;
 	x509_cert_t		leaf;
 	bool			have_leaf;
-	bool			chain_ok;
+	bool			chain_ok;	// the leaf is authenticated (chain or pin)
+	bool			cert_requested;	// CertificateRequest seen: answer it in order
+	tls_pin_fn		pin;
+	void			*pin_user;
 
 	// The transcript hash through Certificate, which is what the
 	// CertificateVerify signature covers.

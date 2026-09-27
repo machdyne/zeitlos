@@ -418,3 +418,9 @@ pattern, the order of the initialisation steps (also given by Lattice,
 FPGA-TN-02035) -- implemented here independently. No LiteX or LiteDRAM
 code is included, so no notice of theirs is required; this section is
 credit, not a licence condition.
+
+## See also
+
+- [ddr3-design.md](ddr3-design.md) -- the second-attempt datapath design
+- [ddr3-bringup.md](ddr3-bringup.md) and [ddr3-status.md](ddr3-status.md)
+  -- the bring-up and status logs, in the order the work happened

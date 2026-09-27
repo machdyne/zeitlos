@@ -27,6 +27,7 @@ APPS = casino poker roulette blackjack slots craps \
 	cal \
 	read \
 	web \
+	irc \
 	net \
 	net/netserve \
 	term \
@@ -69,11 +70,20 @@ APPS = casino poker roulette blackjack slots craps \
 # see docs/zcc.md, "Where libz comes from". tools/tftp-dist.sh
 # publishes all three.
 
-all:
+# Every message subject must come from a block in sw/common/zsubjects.h
+# (docs/messaging.md, "Subjects and tags"): checked first, in a second,
+# so a protocol that skipped the registry fails the build rather than
+# colliding with another at run time.
+all: check-subjects
 	@for a in $(APPS); do \
 		echo "==> $$a"; \
 		$(MAKE) -C $$a || exit 1; \
 	done
+
+check-subjects:
+	@python3 ../../tools/check_subjects.py ..
+
+.PHONY: check-subjects
 
 clean:
 	@for a in $(APPS); do \

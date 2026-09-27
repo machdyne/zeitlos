@@ -48,7 +48,7 @@ $ zcc hello.c -o hello && run hello
 
 | | |
 |---|---|
-| files | `ls` `cat` `cp` `mv` `rm` `touch` `mkdir` `rmdir` `zcat` `gunzip` |
+| files | `ls [-l]` `cat` `cp` `mv` `rm` `touch` `mkdir` `rmdir` `zcat` `gunzip` |
 | text | `wc` `head` `tail` `grep` `sort` `uniq` |
 | places | `cd` `pwd` |
 | processes | `ps` `kill` `run` `free` |
@@ -175,6 +175,49 @@ refuses above 512 lines or 16KB rather than dropping the rest.
 **A pipe holds its intermediate in memory, capped at 16KB**, and says
 so when it truncates. So `wc big.c` is fine and `cat big.c | wc` may
 not be.
+
+### `mv` and `ls -l`
+
+`mv` is one rename in the filesystem (`FS_RENAME`), so it is instant
+whatever the size. Between volumes (the card and `/ram` or `/usb`) a
+rename is impossible, and `mv` copies and then removes the source, only
+once the copy has succeeded. As in Unix, a destination that is an
+existing directory means "into it". A refusal says why:
+
+```
+$ mv notes.txt old.txt
+mv: notes.txt: destination exists
+$ mv log.txt /ram/
+$ mv docs docs/archive
+mv: docs: invalid name
+```
+
+`ls -l` adds each entry's size, or `<dir>`, and its modification time,
+UTC (see [filesystem.md](filesystem.md#timestamps)):
+
+```
+$ ls -l src
+        26  2026-09-26 14:30  a.c
+```
+
+Both are in `sw/apps/posix/tests/cases.txt`. The host stubs treat
+`/ram` as a second volume, so the cross-volume path runs through the
+real `sw/common/zfsutil.c` there.
+
+### Return conventions
+
+`sw/common/zfsapp.h` returns **1 on success, 0 on failure**. The
+kernel's own `fs_unlink()`/`fs_mkdir()` in `sw/os/fs/fs.c` return the
+opposite, 0 on success. The names are the same, and posix had the
+kernel's convention: `rm`, `mv`, `rmdir`, `mkdir` and `gunzip` checked
+`fs_unlink(...) != 0` for failure. So on a device a successful `rm`
+printed "failed" and set a non-zero status, and a real failure said
+nothing.
+
+The host tests could not see it, because `tests/host_fs.c` had the same
+mistake in the other direction. It has been corrected to return what
+the device links, which is the point of a stub. When adding a call,
+take the convention from `zfsapp.h`, not from the kernel's `fs.h`.
 
 ## The compiler
 

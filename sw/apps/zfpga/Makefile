@@ -6,60 +6,40 @@
 # Same sources as Makefile.host; only the port file differs. The shape
 # is sw/apps/zcc/Makefile's, for the reasons recorded there.
 
-PREFIX ?= $(RISCV_PREFIX)
-include ../../common/arch.mk
-CC = $(PREFIX)gcc
+# Build rules are shared: sw/common/app.mk, docs/build.md.
 
-GC_SECTIONS ?= 1
-ifeq ($(GC_SECTIONS),1)
-GC_CFLAGS = -ffunction-sections -fdata-sections
-GC_LDFLAGS = -Wl,--gc-sections
-endif
+APP = zfpga
+APP_MAIN_RULE = 0
 
 # -DZFPGA_HOSTED=0 on EVERYTHING: main.c tests it too, for the argv
 # handling, and a device build that trusted main()'s argc/argv is the
 # bug that crashed a machine under zcc (docs/zcc.md).
-override CFLAGS += --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) \
-	$(GC_CFLAGS) $(ARCH_DEFS) $(LIBC_FLAGS) -I../../common -I. \
-	-DZFPGA_HOSTED=0
-LDFLAGS = -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS)
-LDSCRIPT = ../../common/riscv-app.ld
+APP_CFLAGS = -I../../common -I. -DZFPGA_HOSTED=0
 
 # -Werror on zfpga's own sources only; sw/common's warnings vary by
 # toolchain version and are not this app's to fail over.
-APP_CFLAGS = $(CFLAGS) -Werror -Wno-unused-parameter
+OWN_CFLAGS = $(CFLAGS) -Werror -Wno-unused-parameter
 
 # Objects in build/, never beside the sources, where the host build
 # would overwrite them (sw/apps/zcc/Makefile has the story).
 B = build
 COMMON = zeitlos zobj zport zfsapp zwin zgfx zfont_data
-APP = main util db chip cfg pack pnr route place unpack synth_parse synth_flat synth_elab synth_map bram build boot port_dev
-OBJS = $(addprefix $(B)/,$(addsuffix .o,$(COMMON) $(APP)))
+OWN = main util db chip cfg pack pnr route place unpack synth_parse synth_flat synth_elab synth_map bram build boot port_dev
+OBJS = $(addprefix $(B)/,$(addsuffix .o,$(COMMON) $(OWN)))
 
 DB_SRC = ext/prjtrellis-db
 DB_COMMIT = 015e0330630d7c238c0e4f2cdd9c8157eb78c54a
 
-zfpga: zfpga.bin db/lfe5u25f.zdb card
+zfpga: db/lfe5u25f.zdb card
 
-$(addprefix $(B)/,$(addsuffix .o,$(COMMON))): $(B)/%.o: | $(B)
-	$(CC) $(CFLAGS) -c ../../common/$*.c -o $@
+$(addprefix $(B)/,$(addsuffix .o,$(COMMON))): $(B)/%.o: ../../common/%.c | $(B)
+	$(CC) $(CFLAGS) -c $< -o $@
 
-$(addprefix $(B)/,$(addsuffix .o,$(APP))): $(B)/%.o: %.c zfpga.h zfpga_port.h synth.h | $(B)
-	$(CC) $(APP_CFLAGS) -c $< -o $@
+$(addprefix $(B)/,$(addsuffix .o,$(OWN))): $(B)/%.o: %.c zfpga.h zfpga_port.h synth.h | $(B)
+	$(CC) $(OWN_CFLAGS) -c $< -o $@
 
 $(B):
 	mkdir -p $(B)
-
-zfpga.elf: $(OBJS)
-	$(CC) $(LDFLAGS) -T $(LDSCRIPT) -Wl,-Map,zfpga.map -o zfpga.elf $(OBJS)
-	$(PREFIX)objdump -S --disassemble zfpga.elf > zfpga.dasm
-
-zfpga.bin: zfpga.elf
-	@EDATA=$$($(PREFIX)nm zfpga.elf | awk '$$3=="_edata"{print "0x"$$1}'); \
-	END=$$($(PREFIX)nm zfpga.elf | awk '$$3=="_end"{print "0x"$$1}'); \
-	$(PREFIX)objcopy -O binary zfpga.elf zfpga.data; \
-	python3 ../../../tools/mkexec.py zfpga.data zfpga.bin $$(($$END - $$EDATA)); \
-	rm -f zfpga.data
 
 # The database the card carries as /fpga/lfe5u25f.zdb. It serves the
 # 12F too (identical die). Rebuilt when the generator changes; the
@@ -92,9 +72,8 @@ db/lfe5u45f.zdb: tools/mkzdb.py ext/nextpnr-base/lfe5u-45f.config
 	python3 tools/mkzdb.py --db $(DB_SRC) --device LFE5U-45F \
 		--source $(DB_COMMIT) --base ext/nextpnr-base/lfe5u-45f.config -o $@
 
-clean:
-	rm -rf $(B) zfpga.elf zfpga.bin zfpga.map zfpga.dasm db tests/out
+.PHONY: card
 
-.PHONY: zfpga clean card
+CLEAN_EXTRA = $(B) db tests/out
 
--include $(wildcard $(B)/*.d)
+include ../../common/app.mk

@@ -1,122 +1,33 @@
+# sw/apps/read -- build rules are shared: sw/common/app.mk, docs/build.md.
 
-PREFIX ?= $(RISCV_PREFIX)
-# ARCH/ABI come from one place -- see that file for why
-include ../../common/arch.mk
-CC = $(PREFIX)gcc
-AS = $(PREFIX)as
-ASFLAGS = -march=$(ARCH) -mabi=$(ABI)
-# See sw/apps/repl/Makefile for the full reasoning -- in short,
-# sw/common is shared by every app, so each links whole objects for the
-# sake of a fraction of them, and section GC drops the rest. Set
-# GC_SECTIONS=0 to disable.
-GC_SECTIONS ?= 1
-ifeq ($(GC_SECTIONS),1)
-GC_CFLAGS = -ffunction-sections -fdata-sections
-GC_LDFLAGS = -Wl,--gc-sections
-endif
+APP = read
 
-# -DZ_GFX_HW_BLIT, same as wm/hello_win/term: the widget toolkit reads
-# its text labels through the hardware glyph blitter. read does NOT
-# call z_gfx_hw_font_load() itself -- wm is the only process on the
-# board that ever loads glyph memory, and every app reads with
-# z_font_5x8 as a result. See docs/window_manager.md, "Hardware glyph
-# blitting".
-# EXTRA_CFLAGS is the hook for one-off build options, so nobody has to
-# override CFLAGS itself -- doing that silently drops -DZ_GFX_HW_BLIT
-# and the arch flags with it, and the result builds and runs while
-# rendering every glyph in software.
+# EXTRA_CFLAGS is the hook for one-off build options:
 #
 #   make clean && make EXTRA_CFLAGS=-DREAD_PROFILE=1
 #
 # (clean first: -MD tracks header dependencies, not flag changes, so a
-# rebuild without it will happily keep the old objects.)
+# rebuild without it will happily keep the old objects.) A command-line
+# CFLAGS+= works too; sw/common/app.mk appends with `override`, so it
+# no longer drops the flags every app needs.
 EXTRA_CFLAGS ?=
-
-# `override` so the flags this app REQUIRES survive any command-line
-# CFLAGS. A command-line assignment normally replaces the makefile's
-# CFLAGS outright -- `make CFLAGS+=-DFOO=1` appends to the command-line
-# value, not to this one -- which silently drops -Os, -march,
-# -ffunction-sections, the libc specs and -DZ_GFX_HW_BLIT.
-#
-# The result of that still BUILDS and still LINKS. It just compiles
-# the software glyph renderer instead of the hardware one and skips
-# section GC, so the binary triples, overruns the space the loader has
-# for the app, and crashes on start. Nothing in the build says so.
-#
-# With override, both of these do the right thing:
-#
-#   make clean && make EXTRA_CFLAGS=-DREAD_PROFILE=1
-#   make clean && make CFLAGS+=-DREAD_PROFILE=1
-override CFLAGS += --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) -DZ_GFX_HW_BLIT $(GC_CFLAGS) $(ARCH_DEFS) $(LIBC_FLAGS) $(EXTRA_CFLAGS)
-LDFLAGS = -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS)
-LDSCRIPT = ../../common/riscv-app.ld
+APP_CFLAGS = $(EXTRA_CFLAGS)
 
 # md.o is the Markdown parser, deliberately free of I/O so the test
 # suite below can build it for the host -- see md_test.c.
+
+# Objects, and why each is linked:
+#
+#   zedit.o: sw/common/zedit.c -- the single-line text field.
+#
+#   zdialog.c owned it privately until sw/apps/web's URL bar became its
+#   second caller. Every app that links the dialog needs this too: a
+#   shared widget is only shared if the build says so.
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o zsayall.o \
 	zfsapp.o zflist.o zdialog.o zedit.o ztype.o md.o read.o
 
-read: read.elf read.bin
-
-zeitlos.o:
-	$(CC) $(CFLAGS) -c ../../common/zeitlos.c -o zeitlos.o
-
-zobj.o:
-	$(CC) $(CFLAGS) -c ../../common/zobj.c -o zobj.o
-
-zgfx.o:
-	$(CC) $(CFLAGS) -c ../../common/zgfx.c -o zgfx.o
-
-zfont_data.o:
-	$(CC) $(CFLAGS) -c ../../common/zfont_data.c -o zfont_data.o
-
-zwin.o:
-	$(CC) $(CFLAGS) -c ../../common/zwin.c -o zwin.o
-
-zspeak.o:
-	$(CC) $(CFLAGS) -c ../../common/zspeak.c -o zspeak.o
-
-zsayall.o:
-	$(CC) $(CFLAGS) -c ../../common/zsayall.c -o zsayall.o
-
-zwidget.o:
-	$(CC) $(CFLAGS) -c ../../common/zwidget.c -o zwidget.o
-
-zfsapp.o:
-	$(CC) $(CFLAGS) -c ../../common/zfsapp.c -o zfsapp.o
-
-zflist.o:
-	$(CC) $(CFLAGS) -c ../../common/zflist.c -o zflist.o
-
-zdialog.o:
-	$(CC) $(CFLAGS) -c ../../common/zdialog.c -o zdialog.o
-
-ztype.o:
-	$(CC) $(CFLAGS) -c ../../common/ztype.c -o ztype.o
-
 md.o: md.c md.h
 	$(CC) $(CFLAGS) -c md.c -o md.o
-
-read.o:
-	$(CC) $(CFLAGS) -c read.c -S -MF /dev/null -o read.asm
-	$(CC) $(CFLAGS) -c read.c -o read.o
-
-read.elf: $(OBJS)
-	$(CC) $(LDFLAGS) -T $(LDSCRIPT) -Wl,-Map,read.map -o read.elf $(OBJS)
-	$(PREFIX)objdump -S --disassemble read.elf > read.dasm
-
-# Produces a .zexe rather than a raw --pad-to binary. read has a large
-# .bss -- the document buffer is the full 640x480 framebuffer size, so
-# 37.5K on its own -- and the old format wrote .bss out as literal
-# zeros, so that would be 37.5K of zeros read off the SD card on every
-# launch. The header carries it as a NUMBER instead. See
-# sw/common/zexec.h.
-read.bin: read.elf
-	@EDATA=$$($(PREFIX)nm read.elf | awk '$$3=="_edata"{print "0x"$$1}'); \
-	END=$$($(PREFIX)nm read.elf | awk '$$3=="_end"{print "0x"$$1}'); \
-	$(PREFIX)objcopy -O binary read.elf read.data; \
-	python3 ../../../tools/mkexec.py read.data read.bin $$(($$END - $$EDATA)); \
-	rm -f read.data
 
 # Host builds of the parser and the layout logic, with the host's own
 # compiler -- not $(CC), which is the cross compiler.
@@ -155,23 +66,8 @@ render:
 	cc --std=gnu99 -Wall -o render_test render_test.c md.c
 	./render_test $(DOC) 300 $(MODE)
 
-clean:
-	rm -f read.elf read.bin read.data read.asm read.dasm read.map md_test render_test *.o *.d
+.PHONY: test render
 
-.PHONY: read clean test render
+CLEAN_EXTRA = md_test render_test
 
-# Header dependency tracking -- see sw/apps/wm/Makefile for the full
-# explanation. In short: without this, editing a .c or .h rebuilds
-# nothing once the object exists, and the link silently produces a
-# binary from stale objects.
--include $(wildcard *.d)
--include $(wildcard */*.d)
--include $(wildcard */*/*.d)
-
-# sw/common/zedit.c -- the single-line text field.
-#
-# zdialog.c owned it privately until sw/apps/web's URL bar became its
-# second caller. Every app that links the dialog needs this too: a
-# shared widget is only shared if the build says so.
-zedit.o:
-	$(CC) $(CFLAGS) -c ../../common/zedit.c -o zedit.o
+include ../../common/app.mk

@@ -1,48 +1,20 @@
-# Zeitlos kidgames.
+# sw/apps/kidgames -- build rules are shared: sw/common/app.mk, docs/build.md.
 
-PREFIX ?= $(RISCV_PREFIX)
-# ARCH/ABI come from one place -- see that file for why. Never
-# hardcode them here: some boards are rv32i and a hardcoded rv32im
-# produces a binary that traps on its first multiply.
-include ../../common/arch.mk
-CC = $(PREFIX)gcc
-AS = $(PREFIX)as
-ASFLAGS = -march=$(ARCH) -mabi=$(ABI)
+APP = kidgames
+APP_MAIN_RULE = 0
+# Zeitlos kidgames.
 
 # sw/common is shared by every app, so each links whole objects for the
 # sake of a fraction of them, and section GC drops the rest. See
 # sw/apps/repl/Makefile for the full reasoning.
-GC_SECTIONS ?= 1
-ifeq ($(GC_SECTIONS),1)
-GC_CFLAGS = -ffunction-sections -fdata-sections
-GC_LDFLAGS = -Wl,--gc-sections
-endif
 
-# -DZ_GFX_HW_BLIT, same as wm/chess/poker/cal/clock: text goes through
-# the hardware glyph blitter. This app does NOT call
-# z_gfx_hw_font_load() itself -- wm is the only process board-wide that
-# writes glyph memory, and it loads z_font_5x8 at startup, which is the
-# only font used here. See docs/window_manager.md, "Fonts in glyph
-# memory".
-#
-# `override` so the flags this app REQUIRES survive a command-line
-# CFLAGS. A command-line assignment REPLACES the makefile's CFLAGS
-# outright, silently dropping -Os, -march, section GC and the libc
-# specs. The result still links; it is just three times the size, and
-# past a certain size it overruns the loader's space and crashes on
-# start with nothing in the build output to say so
-# (docs/app_runtime.md). For a one-off option use:
-#
 #     make clean && make EXTRA_CFLAGS=-DSOMETHING=1
 #
 # EVERY LATER APPEND IN THIS FILE MUST ALSO SAY `override`. A plain
 # `CFLAGS +=` after an override assignment is silently ignored by make,
 # which is how sw/apps/net ended up compiling against one PHY header
 # and linking the other.
-override CFLAGS += --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) \
-	-DZ_GFX_HW_BLIT $(GC_CFLAGS) $(ARCH_DEFS) $(LIBC_FLAGS) $(EXTRA_CFLAGS)
-LDFLAGS = -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS)
-LDSCRIPT = ../../common/riscv-app.ld
+APP_CFLAGS = $(EXTRA_CFLAGS)
 
 # zfsapp.o is kgsave.c's: fs_read_file/fs_write_file/fs_mkdir are
 # DECLARED in sw/common/zfsapp.h and DEFINED in sw/common/zfsapp.c, so
@@ -56,50 +28,19 @@ APPOBJS = kgui.o kgwidget.o kgpad.o kgfont.o kgfmt.o \
 	games_word.o games_number.o games_guess.o games_memory.o games_animal.o \
 	animals.o kgart.o kgsound.o games.o kidgames.o
 
+# Objects, and why each is linked:
+#
+#   zrng.o: The ChaCha20 generator, seeded from rtl/trng.v where the board has
+#   one. A board without a TRNG still gets a different sequence each
+#   boot; see zrng.h.
 OBJS = $(COMMONOBJS) $(APPOBJS)
-
-kidgames: kidgames.elf kidgames.bin
-
-zeitlos.o:
-	$(CC) $(CFLAGS) -c ../../common/zeitlos.c -o zeitlos.o
-
-zobj.o:
-	$(CC) $(CFLAGS) -c ../../common/zobj.c -o zobj.o
-
-zgfx.o:
-	$(CC) $(CFLAGS) -c ../../common/zgfx.c -o zgfx.o
-
-zfont_data.o:
-	$(CC) $(CFLAGS) -c ../../common/zfont_data.c -o zfont_data.o
-
-zwin.o:
-	$(CC) $(CFLAGS) -c ../../common/zwin.c -o zwin.o
-
-# The ChaCha20 generator, seeded from rtl/trng.v where the board has
-# one. A board without a TRNG still gets a different sequence each
-# boot; see zrng.h.
-zrng.o:
-	$(CC) $(CFLAGS) -c ../../common/zrng.c -o zrng.o
-
-zfsapp.o:
-	$(CC) $(CFLAGS) -c ../../common/zfsapp.c -o zfsapp.o
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
-kidgames.elf: $(OBJS)
-	$(CC) $(LDFLAGS) -T $(LDSCRIPT) -Wl,-Map,kidgames.map -o kidgames.elf $(OBJS)
-	$(PREFIX)objdump -S --disassemble kidgames.elf > kidgames.dasm
-
 # A .zexe rather than a raw --pad-to binary: the header carries .bss as
 # a NUMBER instead of writing it out as literal zeros to be read off
 # the SD card on every launch. See sw/common/zexec.h.
-kidgames.bin: kidgames.elf
-	@EDATA=$$($(PREFIX)nm kidgames.elf | awk '$$3=="_edata"{print "0x"$$1}'); \
-	END=$$($(PREFIX)nm kidgames.elf | awk '$$3=="_end"{print "0x"$$1}'); \
-	$(PREFIX)objcopy -O binary kidgames.elf kidgames.data; \
-	python3 ../../../tools/mkexec.py kidgames.data kidgames.bin $$(($$END - $$EDATA)); \
-	rm -f kidgames.data
 
 # -- host-side tests ----------------------------------------------------
 #
@@ -347,14 +288,6 @@ render:
 	@echo "wrote /tmp/kidgames.pbm ($(WHAT)) -- others: make render \
 WHAT=pad|digits|field|msg|font"
 
-clean:
-	rm -f *.o *.d kidgames.elf kidgames.bin kidgames.data kidgames.map \
-		kidgames.dasm
+.PHONY: test includecheck linkcheck nofloat noprintf nmcheck render
 
-.PHONY: kidgames test clean includecheck linkcheck nofloat noprintf nmcheck render
-
-# Header dependency tracking -- see sw/apps/wm/Makefile. Without this,
-# editing a .c or .h rebuilds nothing once the object exists, and the
-# link silently produces a binary from stale objects.
--include $(wildcard *.d)
--include $(wildcard */*.d)
+include ../../common/app.mk

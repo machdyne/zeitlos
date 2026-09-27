@@ -73,6 +73,20 @@ sw/apps/posix/posix.bin
 sw/apps/posix/posix.map
 sw/apps/posix/posix.dasm
 sw/apps/posix/tests/px_shell_test
+sw/apps/posix/tests/px_case_test
+
+# Host test and render products, built in place by `make test` /
+# `make render` (the web browser's go in build/, which also holds the
+# live TLS test's generated certificates and server log)
+sw/apps/web/build/
+sw/apps/sheet/sheet_test
+sw/apps/sheet/sheet_layout
+sw/apps/sheet/sheet_files
+sw/apps/sheet/sheet_render
+sw/apps/read/md_test
+sw/apps/ask/test/hosttest
+sw/apps/gpu3d/test/stl_test
+sw/apps/gpu3d/test/teapot*.stl
 
 # python bytecode (esp32/flash.py imports nic_selftest)
 __pycache__/

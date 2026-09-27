@@ -285,4 +285,108 @@ typedef struct {
 	uint32_t	free_kb;	// OUT: unallocated space
 } z_fs_df_args_t;
 
+// -- FS_RENAME, FS_STAT, FS_LIST_EX -- docs/filesystem.md, "Rename,
+// stat and the extended listing" --
+
+// FS_RENAME -- renames or moves a file or directory within one volume.
+//
+// `from` and `to` are ordinary app paths (/ram/... and /usb/... are
+// resolved as everywhere else). Both must be on the SAME volume:
+// FatFs's f_rename() ignores any drive in the new name and renames
+// within the old one, so a rename from /ram/x to /x would otherwise
+// quietly land inside the RAM disk. A cross-volume rename is refused
+// with Z_FS_ERR_XDEV, which is the caller's cue to copy and delete
+// instead (sw/apps/posix's `mv` does exactly that).
+//
+// `to` must not exist. A directory cannot be moved into itself or
+// below itself. A file that some process has open for WRITING is
+// refused with Z_FS_ERR_BUSY: FatFs is built without file locking
+// (FF_FS_LOCK 0), and an open write handle remembers where its
+// directory entry was so that closing it can record the final size --
+// after a rename that would be a write into a deleted entry. Read
+// handles and files inside a renamed directory are unaffected.
+typedef struct {
+	char		*from;
+	char		*to;
+	int32_t		err;		// OUT: Z_FS_ERR_* (0 on success)
+} z_fs_rename_args_t;
+
+#define Z_FS_ERR_NONE		0
+#define Z_FS_ERR_NOENT		1	// `from` does not exist
+#define Z_FS_ERR_EXIST		2	// `to` already exists
+#define Z_FS_ERR_XDEV		3	// different volumes: copy + delete
+#define Z_FS_ERR_BUSY		4	// open for writing by some process
+#define Z_FS_ERR_INVAL		5	// bad name, a root, or into itself
+#define Z_FS_ERR_IO			6	// anything else FatFs reported
+
+// Attribute bits, as FAT stores them (and FatFs's AM_* reports them).
+#define Z_FS_ATTR_RDONLY	0x01
+#define Z_FS_ATTR_HIDDEN	0x02
+#define Z_FS_ATTR_SYSTEM	0x04
+#define Z_FS_ATTR_DIR		0x10
+#define Z_FS_ATTR_ARCHIVE	0x20
+
+// What FS_STAT and FS_LIST_EX report about one entry. 12 bytes.
+//
+// The timestamp is FAT's own packed date and time, UTC (the RTC's
+// time; see docs/filesystem.md, "Timestamps"). z_fs_info_time() below
+// turns it into Unix seconds. A date of 0 means "unknown": the
+// synthetic /ram and /usb roots, and a volume root, have none.
+typedef struct {
+	uint32_t	size;		// bytes; 0 for a directory
+	uint16_t	fdate;		// bits 15:9 year-1980, 8:5 month, 4:0 day
+	uint16_t	ftime;		// bits 15:11 hour, 10:5 minute, 4:0 second/2
+	uint8_t		attr;		// Z_FS_ATTR_*
+	uint8_t		type;		// Z_FS_TYPE_*
+	uint8_t		_pad[2];
+} z_fs_info_t;
+
+// FS_STAT -- one path. Fails for a path that does not exist.
+typedef struct {
+	char		*name;
+	z_fs_info_t	info;		// OUT
+} z_fs_stat_args_t;
+
+// FS_LIST_EX -- FS_LIST, plus an optional `info` array filled one
+// entry per name in the same order as `out`, exactly as `types` is.
+// Like `types`, a non-NULL `info` needs list.max_entries set, since
+// that is the only statement of how many entries it has room for.
+//
+// A separate syscall rather than a new field on z_fs_list_args_t,
+// because an app built before the field existed would pass a smaller
+// struct and the kernel would read whatever followed it.
+//
+// Cheaper than FS_STAT per entry by a long way: each f_stat() scans
+// the directory from the start, so stat-ing every entry of an
+// n-entry directory reads O(n^2) directory sectors off the card. The
+// listing already has every entry's FILINFO in hand as it goes by.
+typedef struct {
+	z_fs_list_args_t	list;
+	z_fs_info_t			*info;	// OUT: optional, max_entries entries
+} z_fs_list_ex_args_t;
+
+// Unix seconds (UTC) from a z_fs_info_t's date and time, or 0 if it
+// has no date. Header-only so neither the kernel nor an app needs to
+// link anything for it.
+static inline uint32_t z_fs_info_time(const z_fs_info_t *fi) {
+	uint32_t y, m, d, days;
+	if (!fi || fi->fdate == 0) return 0;
+	y = 1980 + (fi->fdate >> 9);
+	m = (fi->fdate >> 5) & 15;
+	d = fi->fdate & 31;
+	if (m < 1 || m > 12 || d < 1) return 0;
+	// days from civil (Howard Hinnant's algorithm), March-based year
+	if (m <= 2) y--;
+	{
+		uint32_t era = y / 400;
+		uint32_t yoe = y - era * 400;
+		uint32_t mp = (m + 9) % 12;
+		uint32_t doy = (153 * mp + 2) / 5 + d - 1;
+		uint32_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+		days = era * 146097 + doe - 719468;
+	}
+	return days * 86400 + (fi->ftime >> 11) * 3600 +
+		((fi->ftime >> 5) & 63) * 60 + (fi->ftime & 31) * 2;
+}
+
 #endif

@@ -6,7 +6,8 @@
  *      sw/common/tests/test_flist.c sw/common/zflist.c sw/common/zwin.c \
  *      sw/common/zwidget.c sw/common/zfsapp.c sw/common/zfont_data.c \
  *      sw/common/zobj.c sw/common/zeitlos.c sw/common/zspeak.c
- *   /tmp/test_flist /tmp/flist    # also writes /tmp/flist.pbm
+ *   /tmp/test_flist /tmp/flist    # also writes /tmp/flist.pbm and
+ *                                 # /tmp/flist-details.pbm
  *
  * Needs -no-pie and vm.mmap_min_addr=0 (ztramp.h); exits 77 without.
  * See docs/sdcard.md, "Long file names".
@@ -26,6 +27,7 @@ void z_fb_draw_icon(int x, int y, int icon_id, int fg, int bg, const z_clip_t *c
 
 static const char *entries[64];
 static uint8_t types[64];
+static uint32_t sizes[64];
 static int nentries;
 
 static z_obj_t k_ok, k_fail;
@@ -37,10 +39,16 @@ static uint32_t *k_syscall(uint32_t id, uint32_t *args, uint32_t b) {
 		((z_obj_t *)args)->val.uint32 = 1000;
 		return (uint32_t *)&k_ok;
 	}
-	if (id != Z_SYS_FS_LIST) return (uint32_t *)&k_ok;
+	if (id != Z_SYS_FS_LIST && id != Z_SYS_FS_LIST_EX) return (uint32_t *)&k_ok;
 
-	// As k_fs_list() does: full "/"-prefixed paths, packed.
+	// As k_fs_list() does: full "/"-prefixed paths, packed. FS_LIST_EX
+	// is the same listing with a z_fs_info_t per entry (zfs.h).
+	z_fs_info_t *info = NULL;
 	z_fs_list_args_t *a = (z_fs_list_args_t *)args;
+	if (id == Z_SYS_FS_LIST_EX) {
+		info = ((z_fs_list_ex_args_t *)args)->info;
+		a = &((z_fs_list_ex_args_t *)args)->list;
+	}
 	uint32_t w = 0;
 	a->count = 0;
 	a->truncated = 0;
@@ -52,6 +60,12 @@ static uint32_t *k_syscall(uint32_t id, uint32_t *args, uint32_t b) {
 		if (w + l + 1 > a->out_cap) { a->truncated = 1; break; }
 		memcpy(a->out + w, full, l + 1);
 		if (a->types) a->types[a->count] = types[i];
+		if (info) {
+			memset(&info[a->count], 0, sizeof(info[0]));
+			info[a->count].type = types[i];
+			info[a->count].size = sizes[i];
+			info[a->count].fdate = (uint16_t)(((2026 - 1980) << 9) | (9 << 5) | (1 + i));
+		}
 		w += (uint32_t)(l + 1);
 		a->count++;
 	}
@@ -143,6 +157,81 @@ int main(int argc, char **argv) {
 	expect(fl.count > 10 && fl.count < 40, "as many as fit");
 	for (int i = 0; i < fl.count; i++)
 		expect(strlen(fl.pool + fl.name_off[i]) == 203, "each kept name is whole");
+
+	// -- the mouse wheel (z_flist_wheel) --
+	{
+		static z_flist_t fw;
+		static char names[60][12];
+		for (int i = 0; i < 60; i++) {
+			snprintf(names[i], sizeof(names[i]), "f%02d.txt", i);
+			entries[i] = names[i]; types[i] = Z_FS_TYPE_FILE;
+		}
+		nentries = 60;
+		z_flist_init(&fw, &win);
+		z_flist_set_geom(&fw, 0, 0, 200, 120);
+		expect(z_flist_chdir(&fw, "/"), "wheel: 60 entries listed");
+		int rows = (fw.h - 2) / (z_font_5x8.h + 2), total = fw.count;	// zflist.c ROW_H
+		int sel = fw.sel;
+		z_flist_wheel(&fw, -1);		// toward the user: down
+		expect(fw.top == 3, "wheel: a notch down is three rows");
+		expect(fw.sel == sel, "wheel: the selection does not move");
+		expect((int)fw.sb.value == fw.top, "wheel: the scrollbar follows");
+		z_flist_wheel(&fw, 1);
+		expect(fw.top == 0, "wheel: a notch up comes back");
+		z_flist_wheel(&fw, 5);
+		expect(fw.top == 0, "wheel: clamps at the top");
+		z_flist_wheel(&fw, -1000);
+		expect(fw.top == total - rows && fw.top > 0, "wheel: clamps at the bottom");
+		// A short list does not move at all.
+		nentries = 3;
+		z_flist_chdir(&fw, "/");
+		z_flist_wheel(&fw, -4);
+		expect(fw.top == 0, "wheel: nothing to scroll in a short list");
+	}
+
+	// -- the details column (fl.info, FS_LIST_EX) --
+	{
+		static z_flist_t fd;
+		static z_fs_info_t inf[Z_FLIST_MAX];
+		entries[0] = "zeitlos.cfg";   types[0] = Z_FS_TYPE_FILE; sizes[0] = 812;
+		entries[1] = "photo.jpg";     types[1] = Z_FS_TYPE_FILE; sizes[1] = 123456;
+		entries[2] = "speech.pak";    types[2] = Z_FS_TYPE_FILE; sizes[2] = 7864320;
+		entries[3] = LONG_NAME;       types[3] = Z_FS_TYPE_FILE; sizes[3] = 10;
+		entries[4] = "Meeting notes"; types[4] = Z_FS_TYPE_DIR;  sizes[4] = 0;
+		entries[5] = "apps";          types[5] = Z_FS_TYPE_DIR;  sizes[5] = 0;
+		nentries = 6;
+		z_flist_init(&fd, &win);
+		fd.info = inf;
+		z_flist_set_geom(&fd, 0, 0, 300, 180);
+		expect(z_flist_chdir(&fd, "/"), "details: lists through FS_LIST_EX");
+		expect(fd.count == 6, "details: every entry");
+		// Sorted -- and each entry's details went with it.
+		expect(!strcmp(fd.pool + fd.name_off[0], "apps") && fd.isdir[0] &&
+			inf[0].type == Z_FS_TYPE_DIR && (inf[0].fdate & 31) == 6,
+			"details: apps first, its own date");
+		bool paired = true;
+		for (int i = 0; i < fd.count; i++) {
+			const char *n = fd.pool + fd.name_off[i];
+			for (int j = 0; j < 6; j++)
+				if (!strcmp(n, entries[j]) && (inf[i].size != sizes[j] ||
+					(inf[i].fdate & 31) != 1 + j || fd.isdir[i] != types[j]))
+					paired = false;
+		}
+		expect(paired, "details: every entry keeps its own size and date");
+		// z_flist_refresh_select() re-selects by name.
+		expect(z_flist_refresh_select(&fd, "speech.pak") &&
+			z_flist_selected(&fd) && !strcmp(z_flist_selected(&fd), "speech.pak"),
+			"refresh_select selects by name");
+		const z_fs_info_t *si = z_flist_selected_info(&fd);
+		expect(si && si->size == 7864320, "selected_info is the selected entry's");
+		if (argc > 1) {
+			z_render_clear();
+			z_flist_draw(&fd, true);
+			char out[256];
+			snprintf(out, sizeof(out), "%s-details.pbm", argv[1]);
+			z_render_write(out, &win, 2);
+		}
+	}
 
 	// A picture of the first listing.
 	if (argc > 1) {

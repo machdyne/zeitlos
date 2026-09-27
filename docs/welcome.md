@@ -21,6 +21,11 @@ apps. Windows can be moved around by their titlebar.
 - **Alt+double-click a titlebar** to shade the window -- only its
   titlebar stays -- and again to unshade it. A maximized window cannot
   be shaded; put it back first.
+- **Turn the scroll wheel** to scroll whatever is under the pointer in
+  the focused window -- a terminal's history, a document, a web page, a
+  file list. It moves the view, not your cursor or selection
+  ([user_input.md](user_input.md#scroll-wheel); a mouse needs a wheel
+  its report descriptor declares).
 - **Click a dock icon** to launch that app.
 
 ### Using the keyboard

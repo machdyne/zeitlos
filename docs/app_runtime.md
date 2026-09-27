@@ -7,11 +7,13 @@ the memory pool, and the syscall boundary.
 
 ## Do not override CFLAGS from the command line
 
-Every app Makefile here sets flags the app needs to build CORRECTLY,
-not merely to build: `-DZ_GFX_HW_BLIT` selects the hardware glyph
-renderer over the software one, `-Os` and `-ffunction-sections` plus
-`--gc-sections` keep the binary inside the space the loader has for
-it, and `--specs=picolibc.specs` picks the libc.
+Every app is built with flags it needs to build CORRECTLY, not merely
+to build, and they come from one place, `sw/common/app.mk`
+([build.md](build.md)): `-DZ_GFX_HW_BLIT` selects the hardware glyph
+renderer over the software one (every app has it), `-Os` and
+`-ffunction-sections` plus `--gc-sections` keep the binary inside the
+space the loader has for it (every app has those too), and `arch.mk`'s
+`LIBC_FLAGS` pick the libc.
 
 A command-line assignment REPLACES all of that. `make
 CFLAGS+=-DFOO=1` does not append to the makefile's CFLAGS -- it
@@ -22,7 +24,7 @@ the size. Past a certain size it overruns the loader's space and
 crashes on start. Nothing in the build output says any of this; the
 compile lines just look short.
 
-The Makefiles now use `override CFLAGS +=`, so the required flags
+`app.mk` appends with `override CFLAGS +=`, so the required flags
 survive any command-line form.
 
 **If you edit an app Makefile:** every LATER append to CFLAGS in that
@@ -59,36 +61,59 @@ whatever the ring last recorded for that pid -- or UNKNOWN.
 See `docs/kernel.md` for the ring and why it is not a zombie table,
 and `docs/posix.md` for the shell that motivated it.
 
-## printf pulls in ~100KB, and fputs/stdout ~40KB
+## printf is the most expensive thing an app can call
 
-The formatter is not the only trap here. `fputs(s, stdout)` needs a
-`FILE`, which drags in picolibc's whole stdio layer -- about 40KB --
-even though it formats nothing. `puts()` does not: an app whose
-printf calls are all plain strings already links it, because the
-compiler rewrites `printf("literal\n")` into `puts()`.
+A formatted `printf` is the largest single cost in most binaries here,
+and it is invisible at the call site. newlib's `printf` can print a
+`double`, so the first conversion specifier anywhere links its whole
+formatting engine, the double-to-decimal conversion and libgcc's
+soft-float arithmetic -- measured at about **59KB** in `wm` and `term`
+with this project's toolchain (xPack GCC, newlib), and `snprintf` links
+a second engine. `sscanf` is similar and worse: in `net` one call cost
+58KB, 28KB of it wide-character locale tables. (The figures depend on
+the libc; `arch.mk` uses picolibc when the compiler has it, and its
+sizes differ.)
 
-So for a debug line: build the string by hand and emit it with
-`puts()`. Not `printf` (formatter), not `fputs` (FILE). Both mistakes
-were made in `sw/apps/read` in the same week, and both showed up as an
-unexplained binary size jump rather than as anything pointing at the
-print.
+What does not cost it:
 
+- **A `printf` whose format is a plain string**, which the compiler
+  rewrites into `puts()`: `printf("done\n")` links no formatter.
+- **`puts()`, `putchar()`, `fputs()`** -- the FILE layer they need is
+  5-6KB, and every app that prints anything already has it.
+- **Formatting by hand** into a buffer and printing that.
+- **`ZFMT = 1`** in the app's Makefile, which replaces the whole
+  `printf` family with `sw/common/zfmt.c`: integers, strings and
+  pointers, no floating point (`%f %e %g %a` print `?`), about 1.5KB,
+  and still written through the FILE layer so buffering and ordering
+  are unchanged. The core apps in flash (`wm`, `net`, `term`) and the
+  kernel use it. [build.md](build.md#integer-only-printf-zfmt) has the
+  details and the check to run before opting in.
 
+Either way, check the binary's size after adding a debug print: the
+jump is the only sign. `sw/apps/read` tripled once from a single `%d`,
+and past a point an app overruns the space the loader has for it and
+crashes on start.
 
-An app whose `printf` calls are all plain strings does not link the
-formatter at all: the compiler rewrites `printf("literal\n")` into
-`puts()`, and `--gc-sections` drops `vfprintf`. Adding one conversion
-specifier -- a single `%d` in a debug print -- links it back in and
-costs on the order of 100KB.
+## Files: rename, stat, copy, move
 
-That is enough to push an app past the space the loader has for it, in
-which case it crashes on start. `sw/apps/read` hit this twice, and
-both times the binary tripling looked unrelated to the one-line debug
-print that caused it.
+`sw/common/zfsapp.h` is the filesystem API; every call returns **1 on
+success, 0 on failure** -- not the kernel's `fs.c` convention, which
+is the opposite (`posix` once mixed them up; [posix.md](posix.md)).
+Beyond open/read/write/list:
 
-If a debug print is worth having, format the numbers by hand and emit
-with `fputs()` -- see `rp_report()` in `sw/apps/read/read.c`. Either
-way, check the binary size after adding one.
+| | |
+|---|---|
+| `fs_rename(from, to, &err)` | rename or move within a volume; `err` says why not (`Z_FS_ERR_*`) |
+| `fs_stat(path, &info)` | size, date and attributes (`z_fs_info_t`, `zfs.h`) |
+| `fs_list_ex(...)` | a listing with a `z_fs_info_t` per entry, in one pass |
+| `fs_copy_file(from, to)` | a streamed copy (`zfsutil.c`) |
+| `fs_move(from, to, &err)` | rename, or copy then delete between volumes (`zfsutil.c`) |
+| `fs_strerror(err)` | "destination exists", ... |
+
+The last three are in `sw/common/zfsutil.c`: link `zfsutil.o`. File
+times are UTC, from the RTC. The rules -- why a rename between
+volumes, or of a file open for writing, is refused -- are in
+[filesystem.md](filesystem.md#rename-stat-and-the-extended-listing).
 
 ## Overview
 
@@ -453,14 +478,21 @@ system and mailbox model these operate on; this file only exists to
 point at that one so app code and this document don't drift apart
 the way a few other things in this project already have.
 
+**A new message subject goes in `sw/common/zsubjects.h`.** Every
+protocol owns a block of subject numbers there, the compiler checks the
+blocks cannot overlap, and `make -C sw/apps` refuses a subject that is
+not from one ([messaging.md](messaging.md#subjects-and-tags)). An app
+hears from several protocols at once, so two that share a number are
+read as each other; three pairs of them once did.
+
 ## What a windowed app owes the compositor
 
 There is one framebuffer and no depth buffer, so what keeps one
 window's pixels out of another's is entirely a matter of where each app
 is permitted to draw. `wm` and the shared layer provide that guarantee
--- `docs/window_manager.md` has the protocol in full -- but three
+-- `docs/window_manager.md` has the protocol in full -- but four
 things about it change how an app's own main loop has to be written,
-and all three are easy to get wrong in a way that looks like a
+and all four are easy to get wrong in a way that looks like a
 rendering fault rather than a missing line.
 
 **1. Do not assume you can paint before your first region.** A window
@@ -504,6 +536,27 @@ repaint per app per drag.
 The cure is a single test at the top of a periodic render: return
 without touching the glass *or* the model, leave the work pending, and
 do it on the first tick after the thaw.
+
+**4. Handle the wheel if anything scrolls.** `wm` sends `Z_WM_WHEEL`
+(`zwm.h`), a signed count of notches, positive = up, to the window
+under the pointer, and does nothing else with it: an app that scrolls
+and has no case for it ignores the wheel. The convention every app
+follows ([user_input.md](user_input.md#scroll-wheel) has the list):
+
+```c
+case Z_WM_WHEEL:
+	if (msg.obj.type == Z_UINT32)
+		scroll_view_by(-3 * Z_WM_WHEEL_NOTCHES(msg.obj.val.uint32));
+	break;
+```
+
+Three lines or rows a notch; move the **view**, not the cursor or
+selection, the way dragging the scrollbar does (going through "keep the
+cursor visible" would snap it straight back); clamp at both ends. An
+app whose repaint is expensive adds the notches up while the mailbox
+drains and scrolls once after, as `web` and `read` do -- a fast spin
+arrives as a burst of messages. A list built on `zflist` calls
+`z_flist_wheel()`; the Open and Save dialogs already do.
 
 ## Checking a panel before it reaches a screen
 
@@ -1001,12 +1054,25 @@ For an 80x25 terminal (400x200 px at 5x8):
 Worth doing, and it is the only remaining text cost that is visible: a
 perceptible hitch every time output scrolls.
 
-**Upward scroll only.** The blitter walks rows top-down, so copying a
-region UP is safe — each row is read before anything overwrites it.
-Scrolling down would need a bottom-up walk, which the hardware cannot
-do, and must stay a re-render. That is the rarer case in a terminal and
-in a reader.
+**Both directions, now.** The blitter walks rows top-down, so copying
+a region UP (content moving up, the view going forward) is one safe
+blit. Content moving DOWN was first thought impossible; `z_fb_hw_scroll()`
+does it as a series of strips, bottom to top (`zgfx.h` has why that is
+safe), at the cost of one blit setup per strip. Ask
+`z_fb_hw_scroll_allowed()` first: on a window that is not wholly
+visible the scroll does nothing, and a caller keeping a model of the
+glass must not move its model while the pixels stay put.
 
-It applies equally to `read` and `text`, which scroll far more than a
-terminal does. Neither is CPU-bound today (both measured near 1%), so
-this is about latency, not throughput.
+Who uses it: `term`, `text`, `read`, `play`, and `web`
+(`sw/apps/web/bodyview.c`, forward only -- [web_app.md](web_app.md#scrolling)
+has why). None of them is CPU-bound in normal use, so this is about
+latency -- the hitch a full re-render makes on every step -- not
+throughput.
+
+**Irregular line heights need a model, not arithmetic.** A terminal's
+rows are all one height, so "three lines" is a fixed number of pixels.
+In `read` and `web` a heading is taller than text, an image several
+lines tall, and blocks have gaps between them, so each keeps a record
+of where every display line it drew went, and scrolls by the recorded
+position of the new top line. `web`'s is checked pixel for pixel
+against a fresh draw (`tests/test_bodyview.c`).

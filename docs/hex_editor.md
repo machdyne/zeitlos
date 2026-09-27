@@ -44,6 +44,7 @@ Titlebar buttons, left to right: **new**, **open**, **save**, **font**,
 | any printable character (character pane) | write that byte |
 | arrows | move the caret by a byte / a row |
 | PageUp / PageDown | a screen at a time |
+| mouse wheel | three rows a notch; the view moves, the cursor stays |
 | Home / End | start / end of the row |
 | Ctrl+Home / Ctrl+End | start / end of the file |
 | Backspace | step back one byte, changing nothing |

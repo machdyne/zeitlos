@@ -23,6 +23,7 @@ static const uint8_t oid_rsa_pss[]          = { 0x2A,0x86,0x48,0x86,0xF7,0x0D,0x
 static const uint8_t oid_ec_public_key[]    = { 0x2A,0x86,0x48,0xCE,0x3D,0x02,0x01 };
 static const uint8_t oid_prime256v1[]       = { 0x2A,0x86,0x48,0xCE,0x3D,0x03,0x01,0x07 };
 static const uint8_t oid_secp384r1[]        = { 0x2B,0x81,0x04,0x00,0x22 };
+static const uint8_t oid_ed25519[]          = { 0x2B,0x65,0x70 };	// 1.3.101.112
 static const uint8_t oid_ecdsa_sha256[]     = { 0x2A,0x86,0x48,0xCE,0x3D,0x04,0x03,0x02 };
 static const uint8_t oid_ecdsa_sha384[]     = { 0x2A,0x86,0x48,0xCE,0x3D,0x04,0x03,0x03 };
 
@@ -379,6 +380,20 @@ static bool parse_spki(x509_cert_t *c, der_t spki, const char **err) {
 			}
 		}
 
+		c->ec_point = payload;
+
+	} else if (DER_OID_IS(&oid, oid_ed25519)) {
+
+		// Ed25519 (RFC 8410): no parameters, and the key is the 32
+		// bytes of the BIT STRING. No public CA issues these, so this
+		// is for Gemini, where self-generated Ed25519 certificates are
+		// common (docs/gopher_gemini.md); the CertificateVerify is
+		// checked in tls.c. ec_point is reused to hold the key.
+		if (payload.len != 32) {
+			*err = "Ed25519 key is not 32 bytes";
+			return false;
+		}
+		c->key_alg = X509_KEY_ED25519;
 		c->ec_point = payload;
 
 	} else {

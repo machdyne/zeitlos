@@ -92,6 +92,8 @@
 #endif
 #include "toolbar.h"
 #include "http.h"
+#include "smallweb.h"
+#include "bodyview.h"		// the body, and scrolling it by blit		// gopher://, gemini:// -- docs/gopher_gemini.md
 #if WEB_TLS
 #include "tls.h"
 #include "x509.h"
@@ -661,6 +663,45 @@ static uint32_t port_bytes;
 
 static http_ctx_t http;
 static http_response_t last_res;
+
+// -- Gopher and Gemini (smallweb.c, docs/gopher_gemini.md) --
+//
+// Neither protocol has headers worth the name or a length: the server
+// sends and closes. smallweb.c turns what arrives into HTML, which is
+// spooled exactly as an HTTP body is, so everything after the spool --
+// the index, layout, links, scrolling -- is the web page path
+// unchanged.
+static sw_ctx_t swc;
+static url_t fetch_url;		// defined with the rest of the fetch state below
+
+// Neither protocol says how long a response is: it ends when the server
+// closes. So the client sets the limit -- past it the load stops and the
+// page shows what arrived, with a note (sw_limit_note()). Without one, a
+// capsule that streams, or one that never closes, fills the spool --
+// /ram/webspool, or /web/spool on the card -- until the card is full.
+#define SW_MAX_BYTES   (4u * 1024u * 1024u)
+
+static uint32_t sw_rx;			// raw bytes received for this response
+static bool sw_limit_hit;		// SW_MAX_BYTES reached; ended where it is safe
+static bool sw_header_logged;
+
+static bool sw_mode(void) {
+	return fetch_url.scheme == URL_SCHEME_GOPHER ||
+		fetch_url.scheme == URL_SCHEME_GEMINI;
+}
+
+static void on_body(void *user, const char *data, uint32_t len);
+
+static void sw_out(void *user, const char *d, uint32_t n) {
+	on_body(user, d, n);
+}
+
+// Puts `url` + "?" in the URL bar with the caret after it, and the
+// server's question on the status line: how both a Gemini input
+// request (status 1x) and a Gopher search item (type 7) are answered.
+// The user types after the '?' and presses Enter; smallweb.c encodes
+// the query on the way out.
+static void ask_in_bar(const url_t *u, const char *question);
 static bool have_res;
 static int redirects;
 static url_t fetch_url;			// what the current request is for
@@ -927,7 +968,103 @@ static bool web_find_root(void *user, const der_t *issuer, x509_cert_t *out) {
 // describes, so the class of bug goes away rather than this one
 // instance of it.
 static bool tls_in_use(void) {
-	return fetch_url.scheme == URL_SCHEME_HTTPS;
+	return fetch_url.scheme == URL_SCHEME_HTTPS ||
+		fetch_url.scheme == URL_SCHEME_GEMINI;
+}
+
+// -- Gemini's certificates: trust on first use --
+//
+// docs/gopher_gemini.md, "Certificates". Gemini servers almost all
+// present self-signed certificates, so the CA check that protects
+// https would refuse nearly every capsule. The protocol's own answer
+// is TOFU: remember each server's key the first time, and refuse if it
+// ever changes. tls_set_pin() (tls.h) still requires the server to
+// PROVE it holds the key (CertificateVerify); what it replaces is only
+// the question of whose key it should be.
+//
+// Pins live in /web/pins.txt, one "host:port HEX" line per server, the
+// hex being the SHA-256 of the server's public key (not of the whole
+// certificate, so renewing with the same key is not a change). A pin
+// that cannot be written (no card) is kept for the session.
+#define PINS_PATH   CACHE_DIR "/pins.txt"
+#define PIN_MEM     8
+
+static struct { char hp[URL_HOST_MAX + 8]; uint8_t fp[32]; } pin_mem[PIN_MEM];
+static int pin_mem_n;
+static bool pin_was_new;
+
+static void hex32(const uint8_t fp[32], char out[65]) {
+	static const char hx[] = "0123456789abcdef";
+	for (int i = 0; i < 32; i++) {
+		out[2 * i] = hx[fp[i] >> 4];
+		out[2 * i + 1] = hx[fp[i] & 15];
+	}
+	out[64] = 0;
+}
+
+static bool gemini_pin(void *user, const char *host, const uint8_t fp[32],
+	const char **why) {
+
+	char key[URL_HOST_MAX + 8], hex[65];
+	char *file, *p;
+	int klen, i;
+
+	(void)user; (void)host;
+	snprintf(key, sizeof(key), "%s:%u", fetch_url.host,
+		(unsigned)url_port(&fetch_url));
+	klen = (int)strlen(key);
+	hex32(fp, hex);
+	pin_was_new = false;
+
+	for (i = 0; i < pin_mem_n; i++) {
+		if (strcmp(pin_mem[i].hp, key)) continue;
+		if (!memcmp(pin_mem[i].fp, fp, 32)) return true;
+		*why = "this capsule's key has changed since it was first "
+			"seen -- refusing (docs/gopher_gemini.md)";
+		return false;
+	}
+
+	file = fs_mallocfile(PINS_PATH);
+	for (p = file; p && *p; ) {
+		char *eol = strchr(p, '\n');
+		if (!strncmp(p, key, (size_t)klen) && p[klen] == ' ') {
+			bool same = !strncmp(p + klen + 1, hex, 64);
+			free(file);
+			if (same) return true;
+			*why = "this capsule's key has changed since it was first "
+				"seen -- if that is expected, delete its line from "
+				PINS_PATH;
+			printf("web: gemini: %s key %s does not match its pin\n", key, hex);
+			return false;
+		}
+		p = eol ? eol + 1 : NULL;
+	}
+
+	// First contact: pin it.
+	{
+		int old = file ? (int)strlen(file) : 0;
+		int n = old + klen + 1 + 64 + 1;
+		char *nf = malloc((size_t)n + 1);
+		bool saved = false;
+		if (nf) {
+			if (old) memcpy(nf, file, (size_t)old);
+			snprintf(nf + old, (size_t)(n - old + 1), "%s %s\n", key, hex);
+			fs_mkdir(CACHE_DIR);
+			saved = fs_write_file(PINS_PATH, nf, n) == n;
+			free(nf);
+		}
+		if (!saved && pin_mem_n < PIN_MEM) {
+			snprintf(pin_mem[pin_mem_n].hp, sizeof(pin_mem[0].hp), "%s", key);
+			memcpy(pin_mem[pin_mem_n].fp, fp, 32);
+			pin_mem_n++;
+		}
+		printf("web: gemini: pinned %s %s%s\n", key, hex,
+			saved ? "" : " (for this session only)");
+	}
+	free(file);
+	pin_was_new = true;
+	return true;
+
 }
 static bool tls_req_sent;
 
@@ -946,9 +1083,13 @@ static void tls_on_send(void *user, const uint8_t *d, uint32_t n) {
 }
 
 // ...and plaintext coming the other way, which is just HTTP.
+static void sw_recv(const uint8_t *d, uint32_t n);
+
 static void tls_on_data(void *user, const uint8_t *d, uint32_t n) {
 	(void)user;
-	if (state == W_RECEIVING) http_feed(&http, (const char *)d, n);
+	if (state != W_RECEIVING) return;
+	if (sw_mode()) sw_recv(d, n);
+	else http_feed(&http, (const char *)d, n);
 }
 
 // Bytes seen from the peer before the handshake completed. Reported
@@ -999,7 +1140,33 @@ static void transport_recv(const uint8_t *d, uint32_t n) {
 		return;
 	}
 #endif
-	if (state == W_RECEIVING) http_feed(&http, (const char *)d, n);
+	if (state != W_RECEIVING) return;
+	if (sw_mode()) sw_recv(d, n);
+	else http_feed(&http, (const char *)d, n);
+}
+
+// Bytes of a Gopher or Gemini response, from the socket or out of TLS.
+// Counted against SW_MAX_BYTES; at the limit the rest is not converted
+// and sw_limit_hit is set -- and acted on by the port handler after
+// transport_recv() returns, NOT here: this can run inside tls_feed(),
+// which must not have the connection torn down under it.
+static void sw_recv(const uint8_t *d, uint32_t n) {
+
+	if (sw_limit_hit) return;
+	if (n > SW_MAX_BYTES - sw_rx) {
+		n = SW_MAX_BYTES - sw_rx;
+		sw_limit_hit = true;
+	}
+	sw_feed(&swc, (const char *)d, n);
+	sw_rx += n;
+
+	// What the server said, once: the first thing to look at when a
+	// capsule does something unexpected.
+	if (swc.gemini && swc.header_done && !sw_header_logged) {
+		sw_header_logged = true;
+		printf("web: gemini: %d %s\n", swc.status, swc.meta);
+	}
+
 }
 
 // -- the fetch service ---------------------------------------------
@@ -1053,6 +1220,7 @@ static z_clip_t crect;
 
 static layout_hit_t hits[LAYOUT_MAX_HITS];
 static int nhits;
+static bodyview_t bv;		// bodyview.h: set up in relayout()
 static int sel_link = -1;
 
 static void relayout(void) {
@@ -1082,6 +1250,17 @@ static void relayout(void) {
 	cfg.links_live = (state == W_READY);
 
 	z_scrollbar_set_geom(&sbar, cw - sb, BAR_H, view_h);
+
+	bv.pg = &pg;
+	bv.cfg = &cfg;
+	bv.win = &win;
+	bv.crect = &crect;
+	bv.view_y = view_y;
+	bv.view_h = view_h;
+	bv.body_w = cw - sb;
+	bv.hits = hits;
+	bv.nhits = &nhits;
+	bv.max_hits = LAYOUT_MAX_HITS;
 
 }
 
@@ -1127,6 +1306,80 @@ static void draw_arrow(int x, int y, int h, bool left, bool live) {
 
 }
 
+static void draw_bar(void);
+static void go_to_text(const char *text);
+
+// -- Go / Stop --
+//
+// The button beside the URL field is Go while nothing is loading and
+// Stop while the network is busy. Go takes you to what was typed in the
+// field -- or, when the field just shows the current page, reloads it,
+// as 'r' does. Stop abandons the fetch the way a failed one ends
+// (fetch_failed(), which lets go of the socket and the spool), so there
+// is one way a load ends early, not two. Escape stops too, when the URL
+// field does not have the keyboard.
+//
+// Resolving a name blocks the whole app (zdns.h), so only a load that
+// has reached the network can be clicked away; indexing the page that
+// arrived is local work that finishes by itself.
+static bool net_busy(void) {
+	return state == W_RESOLVING || state == W_CONNECTING ||
+		state == W_RECEIVING || state == W_IMG;
+}
+
+// What the button showed when the bar was last drawn, so the main loop
+// redraws it exactly when that stops being true.
+static bool drawn_busy;
+
+static void web_stop(void) {
+	// Logged either way: whether a Stop arrived, and in which state, is
+	// the first question when one seems not to work.
+	printf("web: stop (state %d, %s)\n", (int)state,
+		net_busy() ? "stopping" : "nothing loading");
+	if (net_busy()) fetch_failed("stopped");
+}
+
+static void draw_go(int x, int y, int h) {
+
+	z_clip_t c;
+
+	z_win_content_rect(&win, &c);
+	z_fb_hw_fill_rect(c.x0 + x, c.y0 + y, TB_BTN_W, 1, 1);
+	z_fb_hw_fill_rect(c.x0 + x, c.y0 + y + h - 1, TB_BTN_W, 1, 1);
+	z_fb_hw_fill_rect(c.x0 + x, c.y0 + y, 1, h, 1);
+	z_fb_hw_fill_rect(c.x0 + x + TB_BTN_W - 1, c.y0 + y, 1, h, 1);
+
+	if (net_busy()) {
+		for (int dy = 0; dy < h; dy++)
+			for (int dx = 0; dx < TB_BTN_W; dx++)
+				if (toolbar_cross_px(dx, dy, TB_BTN_W, h))
+					z_fb_hw_fill_rect(c.x0 + x + dx, c.y0 + y + dy, 1, 1, 1);
+	} else {
+		z_win_draw_text(&win, x + (TB_BTN_W - 2 * z_font_5x8.w) / 2,
+			y + (h - z_font_5x8.h) / 2, "Go", 1, &z_font_5x8);
+	}
+
+}
+
+// Go: the typed URL if the field has been edited, else a reload.
+static void web_go(void) {
+
+	bool typed = url_focus && url_editing && url_buf[0];
+
+	url_focus = false;
+	url_editing = false;
+
+	if (typed) {
+		go_to_text(url_buf);
+	} else if (cur_url_text[0]) {
+		url_t u;
+		if (url_parse(cur_url_text, &u)) start_fetch(&u, false);
+	} else {
+		draw_bar();
+	}
+
+}
+
 static void draw_bar(void) {
 
 	int cw = z_win_content_w(&win);
@@ -1149,7 +1402,9 @@ static void draw_bar(void) {
 	z_edit_draw(&win, &url_edit, tb.field_x, 1, tb.field_w, BAR_H - 3,
 		&z_font_5x8);
 
+	drawn_busy = net_busy();
 	if (tb.buttons) {
+		draw_go(tb.go_x, 1, BAR_H - 3);
 		draw_arrow(tb.back_x, 1, BAR_H - 3, true, hist_at > 0);
 		draw_arrow(tb.fwd_x, 1, BAR_H - 3, false, hist_at + 1 < hist_n);
 	}
@@ -1182,59 +1437,17 @@ static void img_overlay(uint32_t block, layout_img_t *o) {
 
 static void draw_body(void) {
 
-	static html_line_t blocks[PAGE_FETCH_MAX];
-	uint32_t n, i;
-	int y = view_y;
-	int prev_kind = -1;
-	bool first = true;
+	// The drawing -- and the record of which line is where, which is what
+	// lets a forward scroll move pixels instead of redrawing them -- is
+	// bodyview.c. docs/web_app.md, "Scrolling".
+	bv_draw(&bv, top);
 
-	z_win_fill_rect(&win, 0, view_y, z_win_content_w(&win), view_h, 0);
-
-	nhits = 0;
-
-	if (page_blocks(&pg) == 0) return;
-
-	n = page_fetch(&pg, top.block, PAGE_FETCH_MAX, blocks);
-
-	for (i = 0; i < n && y < view_y + view_h; i++) {
-
-		const html_line_t *l = &blocks[i];
-		int lh = layout_line_height(l, &cfg);
-		int from = first ? (int)top.sub : 0;
-		int gap = first ? 0 : layout_gap_before(l, &cfg);
-		int avail, drew;
-
-		// Consecutive blocks of the same kind are one structure -- a
-		// list, a table, a <pre> -- so the inter-block gap is
-		// suppressed between them. Without this a ten-row table is
-		// spread over two screens for no reason.
-		if ((int)l->kind == prev_kind &&
-			(l->kind == HTML_LIST || l->kind == HTML_TABLE ||
-			 l->kind == HTML_PRE))
-			gap = 0;
-
-		y += gap;
-
-		avail = (view_y + view_h - y) / lh;
-		if (avail <= 0) break;
-
-		drew = layout_draw(l, &cfg, crect.y0 + y, from, avail,
-			&crect, (uint16_t)(top.block + i),
-			hits, &nhits, LAYOUT_MAX_HITS);
-
-		y += drew * lh;
-		prev_kind = (int)l->kind;
-		first = false;
-
-	}
-
-	// The selected link, boxed. Keyboard link selection needs a
-	// visible cursor and underline alone is not one -- every link has
-	// that already.
 	if (sel_link >= 0 && sel_link < nhits) {
 		const layout_hit_t *h = &hits[sel_link];
 		z_fb_hw_box(h->x - 1, h->y - 1, h->x + h->w, h->y + h->h,
 			1, &crect);
+		// A blit would carry the box along with the text it framed.
+		bv_invalidate(&bv);
 	}
 
 }
@@ -1284,6 +1497,7 @@ static void repaint(void) {
 	// before this takes effect, and another follows when the picture
 	// arrives.
 	if (!fetching_image) draw_body();
+	else bv_invalidate(&bv);	// the body was not redrawn to match
 
 	draw_scrollbar();
 
@@ -1338,6 +1552,9 @@ static int32_t img_block_lines(int32_t dir) {
 
 }
 
+// Wheel notches received but not yet scrolled; see the main loop.
+static int32_t wheel_pending;
+
 static void scroll_by(int32_t lines) {
 
 	// A single-line step onto or off an image moves the WHOLE image.
@@ -1352,7 +1569,12 @@ static void scroll_by(int32_t lines) {
 
 	if (page_advance(&pg, &cfg, &top, lines) != 0) {
 		sel_link = -1;
-		repaint();
+		// Forward: move what is on the glass and draw only the new lines
+		// (bodyview.c); anything it cannot do exactly, a full repaint.
+		if (lines > 0 && !fetching_image && bv_scroll_to(&bv, top))
+			draw_scrollbar();
+		else
+			repaint();
 	}
 }
 
@@ -1596,6 +1818,33 @@ static void send_request(void) {
 	static char req[2048];
 	uint32_t n;
 
+	if (sw_mode()) {
+		n = sw_request(&fetch_url, req, sizeof(req));
+		if (n == 0) { fetch_failed("that URL is too long to request"); return; }
+		printf("web: %s request %.*s\n",
+			fetch_url.scheme == URL_SCHEME_GEMINI ? "gemini" : "gopher",
+			(int)(n - 2), req);
+		snprintf(conn_host, sizeof(conn_host), "%s", fetch_url.host);
+		conn_port = url_port(&fetch_url);
+		conn_secure = (fetch_url.scheme == URL_SCHEME_GEMINI);
+		conn_reusable = false;		// both protocols close after one response
+		sw_rx = 0;
+		sw_limit_hit = false;
+		sw_header_logged = false;
+		memset(&last_res, 0, sizeof(last_res));
+		last_res.status = 200;
+		have_res = true;
+		sw_begin(&swc, &fetch_url, sw_out, NULL);
+		if (!transport_send((const uint8_t *)req, n)) {
+			fetch_failed("could not send the request");
+			return;
+		}
+		state = W_RECEIVING;
+		snprintf(status, sizeof(status), "requesting %s...", fetch_url.host);
+		repaint();
+		return;
+	}
+
 	n = http_build_request(req, sizeof(req),
 		fetch_is_head ? "HEAD" : "GET", &fetch_url, NULL, true, true);
 
@@ -1637,6 +1886,82 @@ static void response_done(void) {
 	sock_disconnect();
 
 	if (!have_res) { fetch_failed("no response"); return; }
+
+	// Gopher and Gemini: finish the conversion, then express the
+	// outcome in the HTTP terms the rest of this function works in --
+	// a success is text/html in the spool, a Gemini redirect is a 3xx
+	// with a Location, so the redirect limit and loop check below
+	// apply to it unchanged.
+	if (sw_mode() && !fetching_image) {
+
+		char msg[SW_META_MAX + 64];
+
+		// Cut short at SW_MAX_BYTES: say so, at the end of what arrived.
+		if (sw_limit_hit) {
+			static const char note[] = "\n<hr><p>[This page was longer "
+				"than 4 MB. Only the first 4 MB were loaded.]</p>\n";
+			if (swc.pre) sw_out(NULL, "</pre>", 6);
+			sw_out(NULL, note, sizeof(note) - 1);
+			swc.pre = false;
+		}
+
+		sw_end(&swc);
+		printf("web: %s: %lu bytes received, %lu written to the spool\n",
+			swc.gemini ? "gemini" : "gopher",
+			(unsigned long)sw_rx, (unsigned long)spool_len);
+
+		if (swc.gemini) {
+			switch (sw_status_class(&swc)) {
+			case 1:
+				sock_disconnect();
+				spool_close();
+				ask_in_bar(&fetch_url, swc.meta[0] ? swc.meta : "input requested");
+				return;
+			case 2:
+				break;
+			case 3:
+				// A truncated URL is a different URL (url.h): refuse
+				// one that does not fit rather than follow half of it.
+				if (strlen(swc.meta) >= sizeof(last_res.location)) {
+					fetch_failed("the capsule redirected to a URL too long to follow");
+					return;
+				}
+				last_res.status = 302;
+				memcpy(last_res.location, swc.meta, strlen(swc.meta) + 1);
+				last_res.has_location = true;
+				break;
+			case 6:
+				fetch_failed("this capsule wants a client certificate, "
+					"which this browser does not have");
+				return;
+			case 0:
+				fetch_failed("that is not a Gemini response");
+				return;
+			default:
+				snprintf(msg, sizeof(msg), "gemini %d: %s", swc.status,
+					swc.meta[0] ? swc.meta : "failed");
+				fetch_failed(msg);
+				return;
+			}
+			if (sw_status_class(&swc) == 2 && swc.body == SW_BODY_DISCARD) {
+				snprintf(msg, sizeof(msg), "cannot show %s", swc.meta);
+				fetch_failed(msg);
+				return;
+			}
+			if (pin_was_new)
+				printf("web: gemini: first visit to %s, its key is now pinned\n",
+					fetch_url.host);
+		} else if (swc.body == SW_BODY_DISCARD) {
+			snprintf(msg, sizeof(msg), "gopher items of type '%c' cannot "
+				"be shown here", swc.gopher_type);
+			fetch_failed(msg);
+			return;
+		}
+
+		snprintf(last_res.content_type, sizeof(last_res.content_type), "text/html");
+		snprintf(last_res.charset, sizeof(last_res.charset), "utf-8");
+
+	}
 
 	printf("web: http %u\n", (unsigned)last_res.status);
 	if (last_res.has_location)
@@ -1853,7 +2178,7 @@ static void start_fetch(const url_t *u, bool push_history) {
 				u->scheme_text);
 			fetch_failed(msg);
 		} else {
-			fetch_failed("not a http:// or https:// URL");
+			fetch_failed("not a http://, https://, gopher:// or gemini:// URL");
 		}
 		return;
 	}
@@ -1890,6 +2215,14 @@ static void start_fetch(const url_t *u, bool push_history) {
 
 	}
 #endif
+
+	// A Gopher search item is asked for its terms before anything is
+	// fetched: without them the server has nothing to answer.
+	if (u->scheme == URL_SCHEME_GOPHER && sw_gopher_type(u) == '7' &&
+		!u->has_query) {
+		ask_in_bar(u, "search: type the terms after the ? and press Enter");
+		return;
+	}
 
 	if (!net_pid && !z_pid_lookup("net0", &net_pid)) {
 		fetch_failed("net is not running -- try `run net`");
@@ -2089,6 +2422,25 @@ static void start_fetch(const url_t *u, bool push_history) {
 }
 
 // -- navigation ----------------------------------------------------
+
+static void ask_in_bar(const url_t *u, const char *question) {
+
+	url_t q = *u;
+	char where[URL_MAX];
+
+	q.has_query = false;
+	q.query[0] = 0;
+	q.fragment[0] = 0;
+	url_format(&q, where, sizeof(where) - 1, false);
+	strcat(where, "?");
+
+	state = W_READY;
+	url_focus = true;
+	z_edit_set(&url_edit, where);
+	snprintf(status, sizeof(status), "%s", question);
+	repaint();
+
+}
 
 static void go_to_text(const char *text) {
 
@@ -2392,6 +2744,7 @@ static void handle_key(uint32_t k, uint8_t mods) {
 
 	switch (k) {
 
+	case 0x1b:            web_stop(); break;	// Escape: stop loading
 	case Z_KEY_DOWN:      scroll_by(1); break;
 	case Z_KEY_UP:        scroll_by(-1); break;
 	case Z_KEY_PAGEDOWN:
@@ -2475,6 +2828,11 @@ static void handle_mouse(uint32_t packed) {
 			if (!(buttons & 1)) return;
 
 			switch (hit) {
+
+			case TB_HIT_GO:
+				if (net_busy()) web_stop();
+				else web_go();
+				break;
 
 			case TB_HIT_BACK:
 				if (hist_at > 0) go_back();
@@ -2560,6 +2918,11 @@ static void handle_port_msg(z_msg_t *msg) {
 			// time tls_established() becomes true.
 			tls_init(&tls, fetch_url.host, tls_on_send, tls_on_data, NULL);
 
+			// Gemini authenticates by pin instead of by CA, and a pin
+			// has no dates, so it needs no clock. See gemini_pin().
+			if (fetch_url.scheme == URL_SCHEME_GEMINI) {
+				tls_set_pin(&tls, gemini_pin, NULL);
+			} else
 			// The clock and the trust store. Both are refusals when
 			// missing, not things to work around.
 			{
@@ -2683,7 +3046,17 @@ static void handle_port_msg(z_msg_t *msg) {
 		}
 		// The server's close_notify ends the body, exactly as a TCP
 		// close does for plain HTTP.
+		// A Gopher or Gemini response that reached SW_MAX_BYTES ends
+		// here, where tearing the connection down is safe.
+		if (sw_mode() && sw_limit_hit && state == W_RECEIVING) {
+			printf("web: %s response passed %u MB -- stopped there\n",
+				fetch_url.scheme == URL_SCHEME_GEMINI ? "gemini" : "gopher",
+				(unsigned)(SW_MAX_BYTES >> 20));
+			response_done();
+			break;
+		}
 		if (tls_in_use() && tls_closed(&tls) && state == W_RECEIVING) {
+			if (sw_mode()) { response_done(); break; }
 			http_eof(&http);
 			if (http_error(&http)) fetch_failed(http_error(&http));
 			else response_done();
@@ -2730,6 +3103,7 @@ static void handle_port_msg(z_msg_t *msg) {
 		}
 #endif
 		if (state == W_RECEIVING) {
+			if (sw_mode()) { response_done(); break; }
 			http_eof(&http);
 			if (http_error(&http)) fetch_failed(http_error(&http));
 			else response_done();
@@ -2837,6 +3211,14 @@ int main(void) {
 				if (msg.obj.type == Z_UINT32) handle_mouse(msg.obj.val.uint32);
 				break;
 
+			case Z_WM_WHEEL:
+				// Accumulated, and applied once the mailbox is empty
+				// (below): scroll_by() repaints the page, and a fast
+				// spin arrives as a burst of notches.
+				if (msg.obj.type == Z_UINT32)
+					wheel_pending += Z_WM_WHEEL_NOTCHES(msg.obj.val.uint32);
+				break;
+
 			case Z_WM_SET_CLIP:
 				z_win_apply_clip(&win, &msg.obj);
 				break;
@@ -2908,6 +3290,20 @@ int main(void) {
 			}
 
 		}
+
+		// The wheel: three lines a notch, up = back, like term, text
+		// and read -- by the same scroll_by() as the arrow keys, so it
+		// works whenever they do (with no page, it does nothing).
+		if (wheel_pending) {
+			int32_t n = wheel_pending;
+			wheel_pending = 0;
+			scroll_by(-3 * n);
+		}
+
+		// Go becomes Stop when a load reaches the network and back
+		// when it ends, however it ends -- redrawn here rather than at
+		// each of the many places the state changes.
+		if (net_busy() != drawn_busy) draw_bar();
 
 		// -- idle work --
 		//

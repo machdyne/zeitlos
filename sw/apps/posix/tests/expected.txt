@@ -166,14 +166,14 @@ $ help
 posix -- see docs/posix.md
   cd       change directory
   pwd      print the working directory
-  ls       list a directory
+  ls       list a directory (-l: size and date)
   cat      print files
   zcat     print .gz files, decompressed
   gunzip   FILE.gz to FILE (-k keep it, -f overwrite)
   echo     print arguments
   rm       delete files
   cp       copy a file
-  mv       rename a file
+  mv       rename or move a file or directory
   touch    create a file if it does not exist
   clear    clear the screen
   reboot   reconfigure the FPGA, after syncing open files

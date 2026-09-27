@@ -1,6 +1,8 @@
 #ifndef ZPORT_H
 #define ZPORT_H
 
+
+#include "zsubjects.h"	// the block these subjects are in
 /*
  * Zeitlos
  * Copyright (c) 2025 Lone Dynamics Corporation. All rights reserved.
@@ -71,12 +73,12 @@
 #include "zobj.h"
 #include "zmsg.h"
 
-#define Z_PORT_CONNECT    120
-#define Z_PORT_CONNECTED  121
-#define Z_PORT_REFUSED    122
-#define Z_PORT_DATA       123
-#define Z_PORT_CLOSE      124
-#define Z_PORT_DATA_ACK   125
+#define Z_PORT_CONNECT    (Z_SUBJ_PORT + 0)
+#define Z_PORT_CONNECTED  (Z_SUBJ_PORT + 1)
+#define Z_PORT_REFUSED    (Z_SUBJ_PORT + 2)
+#define Z_PORT_DATA       (Z_SUBJ_PORT + 3)
+#define Z_PORT_CLOSE      (Z_SUBJ_PORT + 4)
+#define Z_PORT_DATA_ACK   (Z_SUBJ_PORT + 5)
 
 // fallback pid for the demo virtual port (sw/apps/portdemo) if name
 // lookup ("portdemo0") fails -- same convention as Z_PID_WM (zwm.h) /
@@ -387,5 +389,8 @@ bool z_port_peer_gone(const z_port_t *port);
 // peer's pid after its port has closed (posix, handing its terminal to
 // a child).
 bool z_port_pid_running(uint32_t pid);
+
+// Still inside the block zsubjects.h gives this protocol:
+Z_SUBJECTS_IN(Z_SUBJ_PORT, Z_PORT_DATA_ACK);
 
 #endif

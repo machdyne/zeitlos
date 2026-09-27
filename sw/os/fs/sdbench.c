@@ -44,6 +44,7 @@
 #include "zeitlos.h"
 #include "zsoc.h"
 #include "../kernel.h"
+#include "../mem.h"		// k_mem_alloc(): sdb_buf
 #include "fs.h"
 #include "sdbench.h"
 #include "fatfs/ff.h"
@@ -78,7 +79,22 @@
 #define SDB_SECTORS		4
 #define SDB_BUFSZ		(SDB_SECTORS * 512)
 
-static uint8_t sdb_buf[SDB_BUFSZ];
+// Allocated for the length of one run (sdb_with_buf() below), not
+// static: a static buffer is 2KB of the kernel's 256KB image on every
+// boot for a command that is run by hand, occasionally
+// (docs/kernel.md, "The 256KB image budget").
+static uint8_t *sdb_buf;
+
+static void sdb_with_buf(void (*run)(const char *), const char *path) {
+	sdb_buf = k_mem_alloc(SDB_BUFSZ);
+	if (!sdb_buf) {
+		printf("sdbench: no memory for a %u byte buffer\n", SDB_BUFSZ);
+		return;
+	}
+	run(path);
+	k_mem_free(sdb_buf);
+	sdb_buf = NULL;
+}
 
 /* Total bytes each layer moves. Enough that a millisecond of noise
  * does not show, small enough that the whole command finishes while
@@ -371,7 +387,7 @@ static void sdb_layer3(const char *path, int usb) {
 
 }
 
-void sh_sdbench(const char *path) {
+static void sdb_run(const char *path) {
 
 	printf("sdbench -- see docs/sdcard.md\n");
 	printf("kill wm/net/repl first or every figure is inflated (see ps)\n");
@@ -400,6 +416,10 @@ void sh_sdbench(const char *path) {
 		printf("\npass a filename for layer 3 (FatFs), e.g. sdbench wm\n");
 	}
 
+}
+
+void sh_sdbench(const char *path) {
+	sdb_with_buf(sdb_run, path);
 }
 
 #ifdef USBH_DEBUG
@@ -485,7 +505,7 @@ static void sdb_usb_layer12(void) {
 	sdb_usb_stat_report();
 }
 
-void sh_usbbench(const char *path) {
+static void usb_run(const char *path) {
 	printf("usbbench -- see docs/usb_host.md\n");
 	printf("kill wm/net/repl first or every figure is inflated (see ps)\n");
 	printf("sysclk %lu Hz\n\n", (unsigned long)Z_SYSCLK_HZ);
@@ -511,5 +531,9 @@ void sh_usbbench(const char *path) {
 		printf("\npass a /usb filename for layer 3 (FatFs), "
 			"e.g. usbbench /usb/test.bin\n");
 	}
+}
+
+void sh_usbbench(const char *path) {
+	sdb_with_buf(usb_run, path);
 }
 #endif  // USBH_DEBUG

@@ -190,6 +190,9 @@ static int k_syscall_touches_fs(uint32_t id) {
 		case Z_SYS_FS_OPEN_RW:
 		case Z_SYS_FS_SYNC:
 		case Z_SYS_FS_TRUNCATE:
+		case Z_SYS_FS_RENAME:
+		case Z_SYS_FS_STAT:
+		case Z_SYS_FS_LIST_EX:
 		case Z_SYS_EXEC_EXISTS:
 		case Z_SYS_CFG_RELOAD:
 		// Not files: these share the one USB transaction engine with

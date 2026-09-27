@@ -12,8 +12,10 @@
  *
  * -- scope --
  *
- * RFC 3986 section 5 resolution, restricted to the three schemes this
- * browser can act on: http, https and file. Everything else parses
+ * RFC 3986 section 5 resolution, restricted to the schemes this
+ * browser can act on: http, https, gopher, gemini and file. Gopher
+ * and Gemini URLs are hierarchical like http's and resolve the same
+ * way (docs/gopher_gemini.md). Everything else parses
  * cleanly and is reported as URL_SCHEME_OTHER, so the renderer can
  * still draw a `mailto:` link as a link and say why it will not
  * follow it, rather than mangling it into a relative path and
@@ -72,6 +74,8 @@ typedef enum {
 	URL_SCHEME_HTTP,
 	URL_SCHEME_HTTPS,
 	URL_SCHEME_FILE,
+	URL_SCHEME_GOPHER,		// port 70, RFC 1436 -- docs/gopher_gemini.md
+	URL_SCHEME_GEMINI,		// port 1965, TLS
 	URL_SCHEME_OTHER,		// mailto:, ftp:, javascript:, ...
 } url_scheme_t;
 
@@ -87,7 +91,8 @@ typedef struct {
 	// Lowercased, no userinfo, no brackets on an IPv6 literal.
 	char			host[URL_HOST_MAX];
 
-	// 0 means "the scheme's default" -- 80 for http, 443 for https.
+	// 0 means "the scheme's default" -- 80 for http, 443 for https,
+	// 70 for gopher, 1965 for gemini.
 	// url_port() resolves that; this field stays 0 so that
 	// url_format() can leave the port out again.
 	uint16_t		port;
@@ -146,7 +151,7 @@ void url_format(const url_t *u, char *out, uint32_t cap, bool with_fragment);
 // query if there is one. Never the fragment.
 void url_request_target(const url_t *u, char *out, uint32_t cap);
 
-// 80, 443, or the explicit port if one was given.
+// The scheme's default port (80, 443, 70, 1965), or the explicit one.
 uint16_t url_port(const url_t *u);
 
 // Same scheme, host and effective port. Used for the one security
@@ -154,7 +159,8 @@ uint16_t url_port(const url_t *u);
 // but a redirect from https to http is NOT (see http.h).
 bool url_same_origin(const url_t *a, const url_t *b);
 
-// true for http and https -- the schemes that need `net`.
+// true for http, https, gopher and gemini -- the schemes that need
+// `net`.
 bool url_is_network(const url_t *u);
 
 #endif

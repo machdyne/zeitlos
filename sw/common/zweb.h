@@ -1,6 +1,8 @@
 #ifndef ZWEB_H
 #define ZWEB_H
 
+
+#include "zsubjects.h"	// the block these subjects are in
 /*
  * Zeitlos
  * Copyright (c) 2026 Lone Dynamics Corporation. All rights reserved.
@@ -111,7 +113,7 @@
 // refusing them, since a client that got "busy" could only sit in a
 // retry loop that does the same thing worse. A client that does not
 // want to wait can send Z_WEB_CANCEL.
-#define Z_WEB_FETCH          310
+#define Z_WEB_FETCH          (Z_SUBJ_WEB + 0)
 
 // web -> requester, reply to Z_WEB_FETCH (same tag):
 //   Z_MAP {
@@ -140,7 +142,7 @@
 // The handle is valid until the body stream ends, is cancelled, or
 // the client process exits. Opening a stream with a stale handle is
 // rejected rather than silently serving the wrong body.
-#define Z_WEB_FETCH_REPLY    311
+#define Z_WEB_FETCH_REPLY    (Z_SUBJ_WEB + 1)
 
 // requester -> web: Z_UINT32, a handle from a FETCH_REPLY.
 //
@@ -149,7 +151,7 @@
 // handle. No reply. Sending this for a handle that has already
 // finished is harmless and is the normal way to say "I am done with
 // the body and you can drop the spool".
-#define Z_WEB_CANCEL         312
+#define Z_WEB_CANCEL         (Z_SUBJ_WEB + 2)
 
 // -- opening the body stream --
 //
@@ -162,5 +164,8 @@
 // Z_STREAM_EOF marks the end of the body. Z_STREAM_ERROR carries a
 // failure that happened mid-body -- a connection that died after the
 // headers were already reported, most likely.
+
+// Still inside the block zsubjects.h gives this protocol:
+Z_SUBJECTS_IN(Z_SUBJ_WEB, Z_WEB_CANCEL);
 
 #endif

@@ -1,38 +1,9 @@
+# sw/apps/tts -- build rules are shared: sw/common/app.mk, docs/build.md.
 
-PREFIX ?= $(RISCV_PREFIX)
-# ARCH/ABI come from one place -- see that file for why
-include ../../common/arch.mk
-CC = $(PREFIX)gcc
-AS = $(PREFIX)as
-ASFLAGS = -march=$(ARCH) -mabi=$(ABI)
-# Section GC, same as wm/clock: sw/common is linked a whole object at a
-# time, and this drops the parts of zeitlos.o a service never calls.
-GC_SECTIONS ?= 1
-ifeq ($(GC_SECTIONS),1)
-GC_CFLAGS = -ffunction-sections -fdata-sections
-GC_LDFLAGS = -Wl,--gc-sections
-endif
-# `override` so the flags this app REQUIRES survive a command-line
-# CFLAGS -- see sw/apps/hello_win/Makefile for the full story.
-override CFLAGS += --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) $(ARCH_DEFS) $(LIBC_FLAGS) $(GC_CFLAGS)
-LDFLAGS = -march=$(ARCH) -mabi=$(ABI) $(LIBC_FLAGS) $(GC_LDFLAGS)
-LDSCRIPT = ../../common/riscv-app.ld
+APP = tts
+APP_LISTING = 0
 
 OBJS = zeitlos.o zobj.o zsoc.o zcfg.o zfsapp.o tts_queue.o text2ph.o pack.o dsyn.o lts.o phon.o synth.o tts_audio.o tts.o
-
-tts: tts.elf tts.bin
-
-zeitlos.o:
-	$(CC) $(CFLAGS) -c ../../common/zeitlos.c -o zeitlos.o
-
-zobj.o:
-	$(CC) $(CFLAGS) -c ../../common/zobj.c -o zobj.o
-
-zcfg.o:
-	$(CC) $(CFLAGS) -c ../../common/zcfg.c -o zcfg.o
-
-zsoc.o:
-	$(CC) $(CFLAGS) -c ../../common/zsoc.c -o zsoc.o
 
 # -O2 for the voice: synth.c's inner loop runs ~11,000 times a second
 # per utterance, and -Os leaves speed on the table there.
@@ -47,44 +18,9 @@ synth.o: synth.c
 	$(CC) $(CFLAGS) -O2 -c synth.c -o synth.o
 	$(CC) $(CFLAGS) -O2 -c synth.c -o synth.o
 
-phon.o:
-	$(CC) $(CFLAGS) -c phon.c -o phon.o
-
-zfsapp.o:
-	$(CC) $(CFLAGS) -c ../../common/zfsapp.c -o zfsapp.o
-
-pack.o:
-	$(CC) $(CFLAGS) -c pack.c -o pack.o
-
 # The recorded voice's inner loop runs per output sample: -O2, like synth.o.
 dsyn.o: dsyn.c
 	$(CC) $(CFLAGS) -O2 -c dsyn.c -o dsyn.o
-
-lts.o:
-	$(CC) $(CFLAGS) -c lts.c -o lts.o
-
-text2ph.o:
-	$(CC) $(CFLAGS) -c text2ph.c -o text2ph.o
-
-tts_audio.o:
-	$(CC) $(CFLAGS) -c tts_audio.c -o tts_audio.o
-
-tts_queue.o:
-	$(CC) $(CFLAGS) -c tts_queue.c -o tts_queue.o
-
-tts.o:
-	$(CC) $(CFLAGS) -c tts.c -o tts.o
-
-tts.elf: $(OBJS)
-	$(CC) $(LDFLAGS) -T $(LDSCRIPT) -Wl,-Map,tts.map -o tts.elf $(OBJS)
-	$(PREFIX)objdump -S --disassemble tts.elf > tts.dasm
-
-tts.bin: tts.elf
-	@EDATA=$$($(PREFIX)nm tts.elf | awk '$$3=="_edata"{print "0x"$$1}'); \
-	END=$$($(PREFIX)nm tts.elf | awk '$$3=="_end"{print "0x"$$1}'); \
-	$(PREFIX)objcopy -O binary tts.elf tts.data; \
-	python3 ../../../tools/mkexec.py tts.data tts.bin $$(($$END - $$EDATA)); \
-	rm -f tts.data
 
 # -- host-side tests --
 #
@@ -96,7 +32,6 @@ tts.bin: tts.elf
 # reason.
 HOSTCC ?= cc
 HOSTFLAGS = -std=gnu99 -Wall -Wextra -no-pie -I ../../common
-
 
 # Instructions per audio sample on the target, by emulator (needs
 # `pip install unicorn`). See tests/prof/prof.py.
@@ -115,13 +50,7 @@ test:
 	$(HOSTCC) $(HOSTFLAGS) -DPACK_HOST -o /tmp/pack_test tests/pack_test.c pack.c lts.c phon.c synth.c dsyn.c
 	/tmp/pack_test
 
-clean:
-	rm -f tts.elf tts.bin tts.data tts.dasm tts.map *.o *.d
-
-.PHONY: tts clean test
-
-# Header dependency tracking -- see sw/apps/hello_win/Makefile.
--include $(wildcard *.d)
+.PHONY: test
 
 # -- the voice, on the build machine --
 #
@@ -155,3 +84,5 @@ lts_eval:
 	python3 tests/lts_eval.py 2000 -v
 
 .PHONY: lts_eval
+
+include ../../common/app.mk

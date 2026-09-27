@@ -416,9 +416,10 @@ z_obj_t *k_fs_close(z_obj_t *args) {
 // compiled code stays away from that libc machinery); the prefix and
 // each combined name are built with plain strlen()/memcpy() into
 // small fixed local buffers instead.
-z_obj_t *k_fs_list(z_obj_t *args) {
-
-	z_fs_list_args_t *a = (z_fs_list_args_t *)args;
+// FS_LIST and FS_LIST_EX (below) share this. `info` is NULL for
+// FS_LIST; for FS_LIST_EX it has been checked by the caller to hold
+// max_entries entries.
+static z_obj_t *k_fs_list_core(z_fs_list_args_t *a, z_fs_info_t *info) {
 
 	if (!a || !a->out || a->out_cap == 0) {
 		if (a) { a->count = 0; a->truncated = 0; }
@@ -492,6 +493,11 @@ z_obj_t *k_fs_list(z_obj_t *args) {
 				break;
 			}
 			if (a->types) a->types[count] = Z_FS_TYPE_DIR;
+			if (info) {
+				memset(&info[count], 0, sizeof(info[count]));
+				info[count].attr = Z_FS_ATTR_DIR;
+				info[count].type = Z_FS_TYPE_DIR;
+			}
 			memcpy(a->out + written, prefix, prefix_len);
 			memcpy(a->out + written + prefix_len, mn, mlen + 1);
 			written += (uint32_t)(prefix_len + mlen + 1);
@@ -499,11 +505,12 @@ z_obj_t *k_fs_list(z_obj_t *args) {
 		}
 	}
 
-	// Static, not on the stack: with long names a FILINFO is ~290
-	// bytes (FF_LFN_BUF), and kernel stack depth is what has run out
-	// before -- see the f_stat() note in fs/fs.c. Syscalls do not
-	// nest, so one is enough.
-	static FILINFO fno;
+	// Not on the stack: with long names a FILINFO is ~290 bytes
+	// (FF_LFN_BUF), and kernel stack depth is what has run out before
+	// -- see the f_stat() note in fs/fs.c. fs_fno is the one fs.c
+	// shares with fs_stat_info(); syscalls do not nest.
+	FILINFO *const fnop = &fs_fno;
+#define fno (*fnop)
 	while (count < max_entries) {
 
 		res = f_readdir(&dir, &fno);
@@ -526,6 +533,7 @@ z_obj_t *k_fs_list(z_obj_t *args) {
 		if (a->types)
 			a->types[count] = (fno.fattrib & AM_DIR)
 				? Z_FS_TYPE_DIR : Z_FS_TYPE_FILE;
+		if (info) fs_info_from(&fno, &info[count]);
 
 		memcpy(a->out + written, prefix, prefix_len);
 		memcpy(a->out + written + prefix_len, fno.fname, nlen + 1); // +1: the NUL separator
@@ -535,10 +543,99 @@ z_obj_t *k_fs_list(z_obj_t *args) {
 	}
 
 	f_closedir(&dir);
+#undef fno
 
 	a->count = count;
 
 	return (&z_ok);
+
+}
+
+z_obj_t *k_fs_list(z_obj_t *args) {
+	return k_fs_list_core((z_fs_list_args_t *)args, NULL);
+}
+
+// -- rename, stat, extended listing -- docs/filesystem.md, "Rename,
+// stat and the extended listing". The rules are in sw/common/zfs.h;
+// the work is fs_rename()/fs_stat_info() in fs/fs.c, which the kernel
+// shell's `mv` shares.
+
+z_obj_t *k_fs_list_ex(z_obj_t *args) {
+
+	z_fs_list_ex_args_t *x = (z_fs_list_ex_args_t *)args;
+
+	if (!x) return (&z_fail);
+	if (x->info) {
+		// Same rule as `types`: max_entries is the only statement of
+		// how big the array is, so it is required -- and the whole
+		// array must be the app's own memory (docs/mpu.md).
+		if (!x->list.max_entries || x->list.max_entries > 4096 ||
+		    !k_user_ok(x->info, x->list.max_entries * sizeof(z_fs_info_t))) {
+			x->list.count = 0; x->list.truncated = 0;
+			return (&z_fail);
+		}
+	}
+	return k_fs_list_core(&x->list, x->info);
+
+}
+
+z_obj_t *k_fs_rename(z_obj_t *args) {
+
+	z_fs_rename_args_t *a = (z_fs_rename_args_t *)args;
+
+	if (!a) return (&z_fail);
+	a->err = fs_rename(a->from, a->to);
+	return (a->err == Z_FS_ERR_NONE) ? (&z_ok) : (&z_fail);
+
+}
+
+z_obj_t *k_fs_stat(z_obj_t *args) {
+
+	z_fs_stat_args_t *a = (z_fs_stat_args_t *)args;
+
+	if (!a || !a->name) return (&z_fail);
+	return fs_stat_info(a->name, &a->info) ? (&z_ok) : (&z_fail);
+
+}
+
+// fs_rename()'s busy check. A write handle keeps the sector and the
+// in-window address of its directory entry (FIL.dir_sect/dir_ptr) so
+// that f_sync()/f_close() can record the final size and time there.
+// Opening `path` read-only fills in the same two fields, so: same
+// volume object, same sector, same place in that volume's window, the
+// same directory entry -- by position, so a long name and its 8.3
+// alias are the same file, as they should be.
+//
+// The probe borrows a FREE handle slot's FIL rather than keeping one
+// of its own: a FIL carries a 512-byte sector buffer, and static
+// storage counts against the kernel's 256KB image (docs/kernel.md).
+// That is safe because the caller holds k_fs_enter() and syscalls do
+// not nest. With every slot in use there is nothing to borrow, and the
+// answer is a conservative "busy".
+//
+// A directory cannot be opened as a file, so it is never "busy": its
+// entry moves, but the entries of the files inside it stay where they
+// are, in the directory's own clusters.
+bool k_fs_write_open(const char *path) {
+
+	int h = z_fs_alloc_handle();
+	FIL *probe;
+	bool busy = false;
+
+	if (h < 0) return true;
+	probe = &z_fs_handles[h].fil;
+	if (f_open(probe, path, FA_READ) != FR_OK) return false;
+
+	for (int i = 0; i < Z_FS_MAX_OPEN; i++) {
+		const FIL *f = &z_fs_handles[i].fil;
+		if (!z_fs_handles[i].used || !(f->flag & FA_WRITE)) continue;
+		if (f->obj.fs == probe->obj.fs && f->dir_sect == probe->dir_sect &&
+		    f->dir_ptr == probe->dir_ptr)
+			busy = true;
+	}
+
+	f_close(probe);
+	return busy;
 
 }
 

@@ -10,27 +10,61 @@ A file browser. `sw/apps/files`.
 Most of this app is the `z_flist_t` widget (`sw/common/zflist.h`),
 which was factored out of the file dialogs on exactly the assumption
 that a browser would want the same thing. What's left is the window
-around it, three buttons, and the decision about what double-clicking
+around it, six buttons, and the decision about what double-clicking
 something means.
 
 ## Using it
 
 Double-click a folder to enter it, or the `..` row to go up. Arrow
 keys, PageUp/PageDown, Home/End move the selection; Enter opens;
-Backspace goes up a level.
+Backspace goes up a level. The mouse wheel scrolls the list three rows
+a notch without moving the selection, here and in every app's Open and
+Save dialogs ([user_input.md](user_input.md#scroll-wheel)).
 
-**Tab** moves between the list and the three buttons, **Shift+Tab**
+**Tab** moves between the list and the six buttons, **Shift+Tab**
 goes back, and **Enter** or **Space** presses the focused button. The
 focused control draws a ring around it. This app is fully usable with
 no mouse at all, which is a first-class case in this system — arrows
 deliberately don't move between buttons, because they belong to the
 list and Tab is the only way across.
 
-| button | does |
-| --- | --- |
-| Open | opens the selection — same as Enter or a double-click |
-| New Folder | prompts for a name and creates it in the current directory |
-| Delete | asks first, naming the file, then removes it |
+| button | key | does |
+| --- | --- | --- |
+| Open | Enter | opens the selection — same as a double-click |
+| New Dir | | prompts for a name and creates it in the current directory |
+| Rename | F2 | prompts with the current name; the new one stays in this directory |
+| Copy | | prompts "Copy to:" with the file's own path, to edit |
+| Move | | prompts "Move to:" the same way |
+| Delete | Delete | asks first, naming the file, then removes it |
+
+Each row shows the entry's **size and date** on the right: bytes up to
+9999, then `K` and `M` to one decimal place, and `<dir>` for a folder.
+Dates are UTC, the RTC's time ([filesystem.md](filesystem.md#timestamps)).
+The column is only drawn when the row is wide enough to keep twelve
+characters of the name in front of it, so a narrow window shows names
+alone rather than truncating them to nothing.
+
+### Rename, copy and move
+
+**Copy** and **Move** start the prompt from the file's own full path,
+because the common cases are then an edit at the end of the line: a
+new name, or another directory in front of the same name. A destination
+that is an **existing folder** means "into it", as `mv` does in the
+posix shell. Copying onto an existing file asks before replacing it;
+moving onto one is refused ("destination exists").
+
+**Move within a volume** is a single rename and instant, whatever the
+size. **Between volumes** (the card and `/ram` or `/usb`) a rename is
+impossible, so it is a copy followed by a delete, and the original is
+removed only once the copy has succeeded. A folder can be renamed or
+moved within its volume but not copied, and not moved between volumes:
+both of those are a recursive copy, which is not written.
+
+A file some program has **open for writing** cannot be renamed or
+moved ("in use"). Renaming it would lose what that program then writes;
+[filesystem.md](filesystem.md#what-a-rename-refuses-and-why) says why.
+
+The file just renamed or copied stays selected after the list reloads.
 
 Buttons are laid out from the **left**, deliberately: right-aligning
 them the way a dialog does would put the last one underneath the resize
@@ -93,12 +127,14 @@ else that later asks "what opens this?", read the same table.
   Handing the file to an already-running instance would need a way to
   find one and ask it, which the pid registry could support but nothing
   does yet.
-- **The listing is bounded** at `Z_FLIST_MAX` (128) entries. A fuller
-  directory is truncated; `z_flist_truncated()` reports it but this app
-  doesn't yet surface it, so a file that is definitely on the card can
-  simply not appear.
-- **No rename, copy or move.** `fs_unlink()` and `fs_mkdir()` are what
-  the filesystem API currently offers an app.
+- **The listing is bounded** at `Z_FLIST_MAX` (128) entries, or fewer
+  when the names are long (the list's 4KB name pool). A fuller
+  directory is listed in part, and the path line above the list says
+  "(partial list)", so a file that is on the card but not shown has an
+  explanation. `ls` in the posix shell has the same bound and says
+  "... (truncated)".
+- **No recursive copy.** Folders can be renamed and moved within a
+  volume (one `FS_RENAME`), but not copied, or moved between volumes.
 
 ## Mounting
 

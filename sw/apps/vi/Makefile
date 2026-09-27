@@ -1,20 +1,13 @@
+# sw/apps/vi -- build rules are shared: sw/common/app.mk, docs/build.md.
+
+APP = vi
+APP_MAIN_RULE = 0
 # vi -- nextvi (sw/ext/nextvi, ISC) running on Zeitlos.
-#
 # The editor's own sources are compiled UNMODIFIED from sw/ext/nextvi.
 # What this directory adds is vi_zeitlos.c (the port connection, and
 # stdin/stdout through the hooks in sw/common/zeitlos.c) and
 # posix_stubs.c (the calls upstream makes that this machine does not
 # have). See sw/ext/nextvi/ZEITLOS.md.
-
-PREFIX ?= $(RISCV_PREFIX)
-include ../../common/arch.mk
-CC = $(PREFIX)gcc
-
-GC_SECTIONS ?= 1
-ifeq ($(GC_SECTIONS),1)
-GC_CFLAGS = -ffunction-sections -fdata-sections
-GC_LDFLAGS = -Wl,--gc-sections
-endif
 
 NEXTVI = ../../ext/nextvi
 
@@ -22,10 +15,7 @@ NEXTVI = ../../ext/nextvi
 # upstream's entry point so that vi_zeitlos.c can own main() and do the
 # terminal handoff before the editor starts -- which is what lets the
 # editor source stay untouched.
-override CFLAGS += --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) \
-	$(GC_CFLAGS) $(ARCH_DEFS) $(LIBC_FLAGS) \
-	-Ishim -I../../common -I$(NEXTVI) \
-	-DZEITLOS=1
+APP_CFLAGS = -Ishim -I../../common -I$(NEXTVI) -DZEITLOS=1
 
 # -Ishim FIRST, and it is not optional.
 #
@@ -45,10 +35,7 @@ override CFLAGS += --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) \
 # code and sw/common has warnings that vary by toolchain; neither is
 # this app's to fix, and failing the build over them would mean
 # patching a vendored tree on every toolchain bump.
-APP_CFLAGS = $(CFLAGS) -Werror
-
-LDFLAGS = -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS)
-LDSCRIPT = ../../common/riscv-app.ld
+OWN_CFLAGS = $(CFLAGS) -Werror
 
 # ONE object, not nine.
 #
@@ -61,26 +48,12 @@ LDSCRIPT = ../../common/riscv-app.ld
 #
 # Found by trying it. Worth stating because the file list looks exactly
 # like a set of translation units.
+
+# Objects, and why each is linked:
+#
+#   zwin.o: zwin for z_launch_arg_take() alone -- how posix hands over a filename.
 OBJS = zeitlos.o zobj.o zport.o zwin.o zgfx.o zfont_data.o zfsapp.o \
 	nextvi.o vi_zeitlos.o posix_stubs.o fileio.o
-
-vi: vi.elf vi.bin
-
-zeitlos.o:
-	$(CC) $(CFLAGS) -c ../../common/zeitlos.c -o zeitlos.o
-zobj.o:
-	$(CC) $(CFLAGS) -c ../../common/zobj.c -o zobj.o
-zport.o:
-	$(CC) $(CFLAGS) -c ../../common/zport.c -o zport.o
-# zwin for z_launch_arg_take() alone -- how posix hands over a filename.
-zwin.o:
-	$(CC) $(CFLAGS) -c ../../common/zwin.c -o zwin.o
-zfsapp.o:
-	$(CC) $(CFLAGS) -c ../../common/zfsapp.c -o zfsapp.o
-zgfx.o:
-	$(CC) $(CFLAGS) -c ../../common/zgfx.c -o zgfx.o
-zfont_data.o:
-	$(CC) $(CFLAGS) -c ../../common/zfont_data.c -o zfont_data.o
 
 # The whole editor, from the one translation unit upstream intends.
 #
@@ -107,28 +80,12 @@ nextvi.o: $(NEXTVI)/vi.c
 		-c $(NEXTVI)/vi.c -o nextvi.o
 
 vi_zeitlos.o: vi_zeitlos.c
-	$(CC) $(APP_CFLAGS) -c vi_zeitlos.c -o vi_zeitlos.o
+	$(CC) $(OWN_CFLAGS) -c vi_zeitlos.c -o vi_zeitlos.o
 posix_stubs.o: posix_stubs.c
-	$(CC) $(APP_CFLAGS) -c posix_stubs.c -o posix_stubs.o
+	$(CC) $(OWN_CFLAGS) -c posix_stubs.c -o posix_stubs.o
 # The POSIX descriptor layer over zfsapp -- see fileio.c. Overrides the
 # weak _open/_read/_write/_close/_fstat in sw/common/zeitlos.c.
 fileio.o: fileio.c
-	$(CC) $(APP_CFLAGS) -c fileio.c -o fileio.o
+	$(CC) $(OWN_CFLAGS) -c fileio.c -o fileio.o
 
-vi.elf: $(OBJS)
-	$(CC) $(LDFLAGS) -T $(LDSCRIPT) -Wl,-Map,vi.map -o vi.elf $(OBJS)
-	$(PREFIX)objdump -S --disassemble vi.elf > vi.dasm
-
-vi.bin: vi.elf
-	@EDATA=$$($(PREFIX)nm vi.elf | awk '$$3=="_edata"{print "0x"$$1}'); \
-	END=$$($(PREFIX)nm vi.elf | awk '$$3=="_end"{print "0x"$$1}'); \
-	$(PREFIX)objcopy -O binary vi.elf vi.data; \
-	python3 ../../../tools/mkexec.py vi.data vi.bin $$(($$END - $$EDATA)); \
-	rm -f vi.data; \
-	echo "vi.bin: $$(wc -c < vi.bin) bytes"
-
-clean:
-	rm -f vi.elf vi.bin vi.data vi.map vi.dasm *.o *.d
-
-.PHONY: vi clean
--include $(wildcard *.d)
+include ../../common/app.mk

@@ -25,9 +25,13 @@
  *
  * -- one connection at a time --
  *
- * One socket at a time: this module keeps one connection, and net.c
- * relays one. It used to exclude telnet and SSH sessions too, when
- * tcp.c had a single TCB; tcp.c has a pool now, and they coexist.
+ * NET_SOCK_SLOTS sockets at a time (default 2), each a slot with its
+ * own connection and transmit queue: the browser can fetch while an
+ * IRC client (sw/apps/irc) holds a connection open for hours. Every
+ * call below takes the slot index. It used to be one socket, and before
+ * that one connection of ANY kind, when tcp.c had a single TCB; tcp.c
+ * has a pool now, and telnet, SSH and sockets coexist.
+ * docs/networking.md, "More than one socket".
  *
  * -- compiled out with NET_SOCK=0 --
  *
@@ -53,46 +57,44 @@
 // here at all -- it is handed straight to the port.
 #define SOCK_TX_QUEUE_LEN 2048
 
-// Same borrowed-buffer lifetime as tcp.h's TCP_EVENT_DATA: valid only
-// for the duration of the callback (docs/messaging.md).
-typedef void (*sock_data_handler_t)(const uint8_t *data, uint16_t len);
-typedef void (*sock_established_handler_t)(void);
-typedef void (*sock_closed_handler_t)(void);
+#ifndef NET_SOCK_SLOTS
+#define NET_SOCK_SLOTS 2
+#endif
 
-// Starts an active open to ip:port. Returns false if tcp.c already
-// has a connection.
-//
-// Note that on_established fires when the TCP handshake completes,
-// which is the point net.c defers its Z_PORT_CONNECTED to -- see
-// net.c's sock_on_established().
-bool sock_connect(uint32_t ip, uint16_t port,
+// Same borrowed-buffer lifetime as tcp.h's TCP_EVENT_DATA: valid only
+// for the duration of the callback (docs/messaging.md). `slot` says
+// which socket.
+typedef void (*sock_data_handler_t)(int slot, const uint8_t *data, uint16_t len);
+typedef void (*sock_established_handler_t)(int slot);
+typedef void (*sock_closed_handler_t)(int slot);
+
+// A free slot, or -1 if every socket is in use.
+int sock_free_slot(void);
+
+// Starts a connection in `slot`. The handlers are shared by every slot
+// and told which one an event is for. False if the slot is busy or
+// tcp.c has no connection to give. See net.c's sock_on_established().
+bool sock_connect(int slot, uint32_t ip, uint16_t port,
 	sock_established_handler_t on_established,
 	sock_data_handler_t on_data,
 	sock_closed_handler_t on_closed);
 
-// Queues bytes for sending, verbatim. Returns false if not connected
-// or if the queue has no room; a false return is not a hard error --
-// hold the data and try again on a later poll, exactly as
-// tcp_send()/telnet_send() ask.
-//
-// Either the whole buffer is queued or none of it is. A partial
-// write here would mean the caller had to track how much of its own
-// record went out, which for a TLS record is not a thing it can do.
-bool sock_send(const uint8_t *data, uint16_t len);
+// Queues bytes for sending. False if the slot is not connected or its
+// queue is full; nothing is queued then.
+bool sock_send(int slot, const uint8_t *data, uint16_t len);
 
-// Graceful close (tcp_close()). Does not wait for the queue to drain
-// -- call sock_poll() enough times first if that matters.
-void sock_close(void);
+// Graceful close: the queue drains first -- call sock_poll() enough
+// times first if that matters.
+void sock_close(int slot);
 
-// Immediate teardown (tcp_abort()), discarding anything queued.
-void sock_abort(void);
+// Immediate: the queue is dropped and the connection reset.
+void sock_abort(int slot);
 
-// The socket's TCP connection, or NULL: for net.c's window control
-// (tcp_set_rx_window(), tcp_ack_now()).
-tcp_conn_t *sock_tcp(void);
+// The slot's tcp.c connection, or NULL.
+tcp_conn_t *sock_tcp(int slot);
 
-// Call every main-loop iteration alongside tcp_poll(). Flushes the
-// queue through tcp_send() as room allows.
+// Moves queued bytes onto the wire, for every slot. Call from the main
+// loop.
 void sock_poll(void);
 
 #endif

@@ -517,6 +517,7 @@ Backspace goes back, through a 12-deep history.
 | --- | --- |
 | Space / PageDown | page down |
 | Shift+Space / PageUp | page up |
+| mouse wheel | three lines a notch (fused like the keys: a fast spin is one repaint) |
 | arrows | one display line |
 | Home / End | start / end |
 | Tab / Shift+Tab | cycle the links on screen |

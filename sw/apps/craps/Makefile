@@ -1,49 +1,18 @@
+# sw/apps/craps -- build rules are shared: sw/common/app.mk, docs/build.md.
+
+APP = craps
+APP_LISTING = 0
 # Zeitlos craps.
 
 COMMON = ../../common
 GAMES = $(COMMON)/games
 
-PREFIX ?= $(RISCV_PREFIX)
-# ARCH/ABI come from one place -- never hardcode them.
 include $(COMMON)/arch.mk
-CC = $(PREFIX)gcc
-
-GC_SECTIONS ?= 1
-ifeq ($(GC_SECTIONS),1)
-GC_CFLAGS = -ffunction-sections -fdata-sections
-GC_LDFLAGS = -Wl,--gc-sections
-endif
-
-# -DZ_GFX_HW_BLIT: text goes through the hardware glyph blitter. This
-# app does not load glyph memory itself -- wm is the only process that
-# does, and it loads z_font_5x8, the font used here.
-override CFLAGS += --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) \
-	-DZ_GFX_HW_BLIT $(GC_CFLAGS) $(ARCH_DEFS) $(LIBC_FLAGS)
-LDFLAGS = -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS)
-LDSCRIPT = $(COMMON)/riscv-app.ld
 
 OBJS = zeitlos.o zobj.o zgfx.o zshape.o zfont_data.o zwin.o zrng.o zfsapp.o \
 	zrand.o zrand_sys.o zbank.o zdice.o \
 	cr_table.o cr_game.o cr_board.o cr_input.o craps.o
 
-craps: craps.elf craps.bin
-
-zeitlos.o:
-	$(CC) $(CFLAGS) -c $(COMMON)/zeitlos.c -o zeitlos.o
-zobj.o:
-	$(CC) $(CFLAGS) -c $(COMMON)/zobj.c -o zobj.o
-zgfx.o:
-	$(CC) $(CFLAGS) -c $(COMMON)/zgfx.c -o zgfx.o
-zshape.o:
-	$(CC) $(CFLAGS) -c $(COMMON)/zshape.c -o zshape.o
-zfont_data.o:
-	$(CC) $(CFLAGS) -c $(COMMON)/zfont_data.c -o zfont_data.o
-zwin.o:
-	$(CC) $(CFLAGS) -c $(COMMON)/zwin.c -o zwin.o
-zrng.o:
-	$(CC) $(CFLAGS) -c $(COMMON)/zrng.c -o zrng.o
-zfsapp.o:
-	$(CC) $(CFLAGS) -c $(COMMON)/zfsapp.c -o zfsapp.o
 zrand.o:
 	$(CC) $(CFLAGS) -c $(GAMES)/zrand.c -o zrand.o
 zrand_sys.o:
@@ -53,30 +22,8 @@ zbank.o:
 zdice.o:
 	$(CC) $(CFLAGS) -c $(GAMES)/zdice.c -o zdice.o
 
-cr_table.o:
-	$(CC) $(CFLAGS) -c cr_table.c -o cr_table.o
-cr_game.o:
-	$(CC) $(CFLAGS) -c cr_game.c -o cr_game.o
-cr_board.o:
-	$(CC) $(CFLAGS) -c cr_board.c -o cr_board.o
-cr_input.o:
-	$(CC) $(CFLAGS) -c cr_input.c -o cr_input.o
-craps.o:
-	$(CC) $(CFLAGS) -c craps.c -o craps.o
-
-craps.elf: $(OBJS)
-	$(CC) $(LDFLAGS) -T $(LDSCRIPT) -Wl,-Map,craps.map -o craps.elf $(OBJS)
-	$(PREFIX)objdump -S --disassemble craps.elf > craps.dasm
-
 # A .zexe rather than a raw --pad-to binary: the header carries .bss as
 # a NUMBER instead of writing it out as literal zeros. See zexec.h.
-craps.bin: craps.elf
-	@EDATA=$$($(PREFIX)nm craps.elf | awk '$$3=="_edata"{print "0x"$$1}'); \
-	END=$$($(PREFIX)nm craps.elf | awk '$$3=="_end"{print "0x"$$1}'); \
-	$(PREFIX)objcopy -O binary craps.elf craps.data; \
-	python3 ../../../tools/mkexec.py craps.data craps.bin \
-		$$(($$END - $$EDATA)); \
-	rm -f craps.data
 
 # Scoped to this app's own objects: sw/common/zobj.c has a float in
 # z_obj_t and pulls __subsf3 into every app in this tree.
@@ -101,7 +48,7 @@ ENGINESRC = cr_table.c cr_game.c
 TARGETSRC = cr_table.c cr_game.c cr_board.c cr_input.c craps.c
 
 # The software pixel primitives, so a test can actually DRAW the felt.
-PANELSRC = $(COMMON)/zwin.c $(COMMON)/zwidget.c $(COMMON)/zfont_data.c \
+PANELSRC = $(COMMON)/zwin.c $(COMMON)/zwidget.c $(COMMON)/tests/zspeak_stub.c $(COMMON)/zfont_data.c \
 	$(COMMON)/zobj.c $(COMMON)/zeitlos.c
 PANELFLAGS = $(HOSTFLAGS) -I $(COMMON)
 
@@ -151,9 +98,6 @@ render:
 		$(PANELSRC)
 	/tmp/craps_render /tmp/craps.pbm $(WHAT)
 
-clean:
-	rm -f *.o *.d craps.elf craps.bin craps.data craps.map craps.dasm
+.PHONY: test includecheck nofloat nmcheck render
 
-.PHONY: craps test clean includecheck nofloat nmcheck render
-
--include $(wildcard *.d)
+include ../../common/app.mk

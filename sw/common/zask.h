@@ -1,6 +1,8 @@
 #ifndef ZASK_H
 #define ZASK_H
 
+
+#include "zsubjects.h"	// the block these subjects are in
 /*
  * Zeitlos
  * Copyright (c) 2026 Lone Dynamics Corporation. All rights reserved.
@@ -121,7 +123,7 @@
 // The cancelled requester gets a Z_ASK_RESULT with "cancelled" set
 // rather than silence, so a client is never left waiting on a reply
 // that is not coming.
-#define Z_ASK_QUERY            313
+#define Z_ASK_QUERY            (Z_SUBJ_ASK + 0)
 
 // ask -> requester, reply to Z_ASK_QUERY (same tag):
 //   Z_MAP {
@@ -172,7 +174,7 @@
 //     char arg[Z_WM_ARG_MAX];
 //     snprintf(arg, sizeof(arg), "%s#%u", path, off);
 //     // Z_WM_SET_ARG to wm, then z_proc_run("read")
-#define Z_ASK_RESULT           314
+#define Z_ASK_RESULT           (Z_SUBJ_ASK + 1)
 
 // requester -> ask: Z_MAP { "id": Z_UINT32, "max": Z_UINT32 }
 //
@@ -183,7 +185,7 @@
 // positions in the index, not handles, so a stale one is not
 // dangerous -- it just returns a different passage than the caller
 // expected, which is why the reply echoes the path and offset back.
-#define Z_ASK_PREVIEW          315
+#define Z_ASK_PREVIEW          (Z_SUBJ_ASK + 2)
 
 // ask -> requester, reply to Z_ASK_PREVIEW (same tag):
 //   Z_MAP {
@@ -204,7 +206,7 @@
 // mid-paragraph at a chunk boundary. A client that wants to trim it to
 // whole sentences should do so itself and should not silently join
 // ranges from two different hits -- see docs/ask_app.md, "The rule".
-#define Z_ASK_TEXT             316
+#define Z_ASK_TEXT             (Z_SUBJ_ASK + 3)
 
 // requester -> ask: Z_UINT32, non-zero.
 //
@@ -215,7 +217,7 @@
 // Cancellation is immediate: the scan holds no lock and allocates
 // nothing per slice, so this costs the price of one flag test at the
 // next slice boundary. See docs/ask_app.md, "Responsiveness".
-#define Z_ASK_CANCEL           317
+#define Z_ASK_CANCEL           (Z_SUBJ_ASK + 4)
 
 // requester -> ask:
 //   Z_MAP {
@@ -229,7 +231,7 @@
 // The browse tree, which exists because the card holds numbered files
 // (8.3, FF_USE_LFN 0) and `files` therefore shows a wall of digits.
 // `ask` has the index, so `ask` is where Ark is browsable by title.
-#define Z_ASK_BROWSE           318
+#define Z_ASK_BROWSE           (Z_SUBJ_ASK + 5)
 
 // ask -> requester, reply to Z_ASK_BROWSE (same tag):
 //   Z_MAP {
@@ -241,10 +243,10 @@
 //         "n":     Z_UINT32   document count, for a dataset
 //     }
 //   }
-#define Z_ASK_LIST             319
+#define Z_ASK_LIST             (Z_SUBJ_ASK + 6)
 
 // requester -> ask: no payload.
-#define Z_ASK_INFO             320
+#define Z_ASK_INFO             (Z_SUBJ_ASK + 7)
 
 // ask -> requester, reply to Z_ASK_INFO (same tag):
 //   Z_MAP {
@@ -290,7 +292,7 @@
 // arrangement sw/apps/web/ecdsa.c uses for rtl/montmul.v, for the same
 // reason: a half-wired accelerator otherwise looks like a bad model
 // rather than bad hardware.
-#define Z_ASK_INFO_REPLY       321
+#define Z_ASK_INFO_REPLY       (Z_SUBJ_ASK + 8)
 
 // ask -> requester, unsolicited, during a long operation:
 //   Z_MAP {
@@ -311,7 +313,7 @@
 // bounded by card throughput, and scanning is bounded by SDRAM. A
 // progress bar is the honest interface to a known-duration wait, and
 // "total" is a real count rather than a guess.
-#define Z_ASK_PROGRESS         322
+#define Z_ASK_PROGRESS         (Z_SUBJ_ASK + 9)
 
 #define Z_ASK_PROG_LOADING     0    // reading a pack off the card
 #define Z_ASK_PROG_SCANNING    1    // coarse scan, units are vectors
@@ -362,5 +364,8 @@
 // truncated rather than refused: a question is a handful of words and
 // anything past this is a paste.
 #define Z_ASK_QUERY_MAX        160
+
+// Still inside the block zsubjects.h gives this protocol:
+Z_SUBJECTS_IN(Z_SUBJ_ASK, Z_ASK_PROGRESS);
 
 #endif

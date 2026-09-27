@@ -1,56 +1,15 @@
+# sw/apps/roulette -- build rules are shared: sw/common/app.mk, docs/build.md.
+
+APP = roulette
+APP_LISTING = 0
 # Zeitlos roulette.
 
-PREFIX ?= $(RISCV_PREFIX)
-# ARCH/ABI come from one place -- never hardcode them. Some boards are
-# rv32i and a hardcoded rv32im produces a binary that traps on its
-# first multiply.
-include ../../common/arch.mk
-CC = $(PREFIX)gcc
-ASFLAGS = -march=$(ARCH) -mabi=$(ABI)
-
-GC_SECTIONS ?= 1
-ifeq ($(GC_SECTIONS),1)
-GC_CFLAGS = -ffunction-sections -fdata-sections
-GC_LDFLAGS = -Wl,--gc-sections
-endif
-
-# -DZ_GFX_HW_BLIT, same as wm/chess/poker: text goes through the
-# hardware glyph blitter. This app does not call z_gfx_hw_font_load()
-# itself -- wm is the only process that loads glyph memory, and it
-# loads z_font_5x8, which is the font used here.
+# Objects, and why each is linked:
 #
-# `override` so the flags this app REQUIRES survive a command-line
-# CFLAGS, which would otherwise replace them outright and silently drop
-# -Os, -march and the libc specs.
-override CFLAGS += --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) \
-	-DZ_GFX_HW_BLIT $(GC_CFLAGS) $(ARCH_DEFS) $(LIBC_FLAGS)
-LDFLAGS = -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS)
-LDSCRIPT = ../../common/riscv-app.ld
-
+#   zfsapp.o: The bank lives in a file, so this app links the filesystem wrappers.
 OBJS = zeitlos.o zobj.o zgfx.o zshape.o zfont_data.o zwin.o zrng.o zfsapp.o \
 	zrand.o zrand_sys.o zbank.o \
 	rl_table.o rl_wheel.o rl_board.o rl_input.o roulette.o
-
-roulette: roulette.elf roulette.bin
-
-zeitlos.o:
-	$(CC) $(CFLAGS) -c ../../common/zeitlos.c -o zeitlos.o
-zobj.o:
-	$(CC) $(CFLAGS) -c ../../common/zobj.c -o zobj.o
-zgfx.o:
-	$(CC) $(CFLAGS) -c ../../common/zgfx.c -o zgfx.o
-zshape.o:
-	$(CC) $(CFLAGS) -c ../../common/zshape.c -o zshape.o
-zfont_data.o:
-	$(CC) $(CFLAGS) -c ../../common/zfont_data.c -o zfont_data.o
-zwin.o:
-	$(CC) $(CFLAGS) -c ../../common/zwin.c -o zwin.o
-zrng.o:
-	$(CC) $(CFLAGS) -c ../../common/zrng.c -o zrng.o
-
-# The bank lives in a file, so this app links the filesystem wrappers.
-zfsapp.o:
-	$(CC) $(CFLAGS) -c ../../common/zfsapp.c -o zfsapp.o
 
 zrand.o:
 	$(CC) $(CFLAGS) -c $(GAMES)/zrand.c -o zrand.o
@@ -59,31 +18,9 @@ zrand_sys.o:
 zbank.o:
 	$(CC) $(CFLAGS) -c $(GAMES)/zbank.c -o zbank.o
 
-rl_table.o:
-	$(CC) $(CFLAGS) -c rl_table.c -o rl_table.o
-rl_wheel.o:
-	$(CC) $(CFLAGS) -c rl_wheel.c -o rl_wheel.o
-rl_board.o:
-	$(CC) $(CFLAGS) -c rl_board.c -o rl_board.o
-rl_input.o:
-	$(CC) $(CFLAGS) -c rl_input.c -o rl_input.o
-roulette.o:
-	$(CC) $(CFLAGS) -c roulette.c -o roulette.o
-
-roulette.elf: $(OBJS)
-	$(CC) $(LDFLAGS) -T $(LDSCRIPT) -Wl,-Map,roulette.map -o roulette.elf $(OBJS)
-	$(PREFIX)objdump -S --disassemble roulette.elf > roulette.dasm
-
 # A .zexe rather than a raw --pad-to binary: the header carries .bss as
 # a NUMBER instead of writing it out as literal zeros to be read off the
 # SD card on every launch. See sw/common/zexec.h.
-roulette.bin: roulette.elf
-	@EDATA=$$($(PREFIX)nm roulette.elf | awk '$$3=="_edata"{print "0x"$$1}'); \
-	END=$$($(PREFIX)nm roulette.elf | awk '$$3=="_end"{print "0x"$$1}'); \
-	$(PREFIX)objcopy -O binary roulette.elf roulette.data; \
-	python3 ../../../tools/mkexec.py roulette.data roulette.bin \
-		$$(($$END - $$EDATA)); \
-	rm -f roulette.data
 
 # -- host-side tests --
 
@@ -97,7 +34,7 @@ GAMES = $(COMMON)/games
 # and the wheel can actually be DRAWN in a test rather than only
 # computed. zgfx.c cannot be linked here -- it is register writes from
 # top to bottom -- which is exactly why zshape.c is its own object.
-PANELSRC = $(COMMON)/zwin.c $(COMMON)/zwidget.c $(COMMON)/zfont_data.c \
+PANELSRC = $(COMMON)/zwin.c $(COMMON)/zwidget.c $(COMMON)/tests/zspeak_stub.c $(COMMON)/zfont_data.c \
 	$(COMMON)/zobj.c $(COMMON)/zeitlos.c
 PANELFLAGS = $(HOSTFLAGS) -I $(COMMON)
 
@@ -216,9 +153,6 @@ render:
 		$(COMMON)/zshape.c $(PANELSRC)
 	/tmp/roulette_render /tmp/roulette.pbm $(WHAT)
 
-clean:
-	rm -f *.o *.d roulette.elf roulette.bin roulette.data roulette.map roulette.dasm
+.PHONY: test includecheck nofloat nmcheck render stress
 
-.PHONY: roulette test clean includecheck nofloat nmcheck render stress
-
--include $(wildcard *.d)
+include ../../common/app.mk

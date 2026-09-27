@@ -159,8 +159,8 @@ repainted. See "Rendering" for how overlays work now.
 | Shift+Home / Shift+End | oldest line / live |
 
 The **scrollbar** down the right-hand side shows where you are; drag the
-thumb or click the trough. There is no mouse wheel in this system
-(`sw/common/zwidget.h`). The window is `Z_SB_THICK` (12px) wider than
+thumb or click the trough, or turn the mouse wheel: three lines a notch
+([user_input.md](user_input.md#scroll-wheel)). The window is `Z_SB_THICK` (12px) wider than
 80 columns to make room -- 416px instead of 404 -- so the text grid is
 still exactly 80x25.
 

@@ -144,6 +144,11 @@ int k_fs_sync_all(void);    // flush every open write handle; reboot's first hal
 // the existing fs_mkdir()/fs_touch(), same relationship k_fs_unlink()
 // has to fs_unlink(). Args are z_fs_path_args_t (sw/common/zfs.h).
 z_obj_t *k_fs_mkdir(z_obj_t *args);
+
+// docs/filesystem.md, "Rename, stat and the extended listing".
+z_obj_t *k_fs_rename(z_obj_t *args);
+z_obj_t *k_fs_stat(z_obj_t *args);
+z_obj_t *k_fs_list_ex(z_obj_t *args);
 z_obj_t *k_fs_touch(z_obj_t *args);
 
 // repositions an open chunked handle -- args are z_fs_seek_args_t.

@@ -1,20 +1,12 @@
+# sw/apps/net -- build rules are shared: sw/common/app.mk, docs/build.md.
 
-PREFIX ?= $(RISCV_PREFIX)
-# ARCH/ABI come from one place -- see that file for why
-include ../../common/arch.mk
-CC = $(PREFIX)gcc
-AS = $(PREFIX)as
-ASFLAGS = -march=$(ARCH) -mabi=$(ABI)
-# See sw/apps/repl/Makefile for the full reasoning behind these two --
-# in short, sw/common is shared by every app, so each links whole
-# objects for the sake of a fraction of them, and section GC drops the
-# rest. Measured saving on this app is noted in docs/scheme_api.md's
-# memory-budget section. Set GC_SECTIONS=0 to disable.
-GC_SECTIONS ?= 1
-ifeq ($(GC_SECTIONS),1)
-GC_CFLAGS = -ffunction-sections -fdata-sections
-GC_LDFLAGS = -Wl,--gc-sections
-endif
+APP = net
+
+# A core app in the flash archive: integer-only printf, about 50KB
+# smaller. It prints no floating point. docs/build.md, "Integer-only
+# printf (ZFMT)".
+ZFMT = 1
+APP_MAIN_RULE = 0
 
 # NOTE: every later append to CFLAGS in this file must also say
 # `override`. A plain `CFLAGS += ...` after an override assignment is
@@ -27,17 +19,6 @@ endif
 # to their defaults with nothing said. That specific trap is gone with
 # NET_PHY (see below), but the -D flags that remain are just as
 # order-sensitive.
-#
-# `override` so the flags this app REQUIRES survive a command-line
-# CFLAGS. A command-line assignment replaces the makefile's CFLAGS
-# outright -- `make CFLAGS+=-DFOO=1` appends to the command-line value,
-# not to this one -- silently dropping -Os, -march, section GC, the
-# libc specs and any -D this app needs to build correctly. The result
-# still builds and links; it just produces a much larger, slower binary
-# that can overrun the space the loader has for it and crash on start.
-override CFLAGS += --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) $(GC_CFLAGS) $(ARCH_DEFS) $(LIBC_FLAGS)
-LDFLAGS = -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS)
-LDSCRIPT = ../../common/riscv-app.ld
 
 # BOTH NIC drivers are built in and the right one is chosen at
 # runtime from the feature CSR -- see net_phy.h for why, and for what
@@ -132,6 +113,13 @@ override CFLAGS += -DNTP_ENABLE=$(NTP_ENABLE)
 # that is in `web`. It saves sock.o.
 NET_SOCK ?= 1
 override CFLAGS += -DNET_SOCK=$(NET_SOCK)
+
+# How many raw sockets at once (sock.h): 2, so the browser can fetch
+# while irc holds a connection. 1 is the old single socket. A slot past
+# the first costs ~2.2KB idle and allocates its 16KB receive queue only
+# while open -- docs/networking.md, "More than one socket".
+NET_SOCK_SLOTS ?= 2
+override CFLAGS += -DNET_SOCK_SLOTS=$(NET_SOCK_SLOTS)
 
 # -- TCP receive window (tcp.h, TCP_RX_WINDOW) --
 #
@@ -290,8 +278,6 @@ endif
 # nothing else in this app has any use for a date.
 OBJS = zeitlos.o zobj.o zstream.o zport.o zrng.o zfsapp.o netcfg.o screen.o $(PHY_OBJ) eth.o arp.o ip.o udp.o $(DHCP_OBJ) dns.o $(NTP_OBJ) tcp.o relay.o telnet.o $(SOCK_OBJ) $(SSH_OBJ) tftp.o $(PROF_OBJ) net.o
 
-net: net.elf net.bin
-
 # each rule below lists its own .c file as a prerequisite -- without
 # this, `make` has no way to know a source file changed (it was only
 # checking whether the .o file existed at all), so it would happily
@@ -319,22 +305,10 @@ net: net.elf net.bin
 FORCE:
 
 .net_config_selected: FORCE
-	@cur="$(NET_DHCP) $(NET_STATIC_IP) $(NET_STATIC_NETMASK) $(NET_STATIC_GATEWAY) $(NET_STATIC_DNS) $(NET_STATIC_NTP) $(NTP_SERVER) $(NTP_ENABLE) $(SSH_ENABLE) $(SSH_MAX_PACKET) $(NET_SOCK) $(TCP_RX_WINDOW) $(TCP_ADVERTISE_MSS) $(TCP_REASSEMBLY) $(NET_PROFILE)"; \
+	@cur="$(NET_DHCP) $(NET_STATIC_IP) $(NET_STATIC_NETMASK) $(NET_STATIC_GATEWAY) $(NET_STATIC_DNS) $(NET_STATIC_NTP) $(NTP_SERVER) $(NTP_ENABLE) $(SSH_ENABLE) $(SSH_MAX_PACKET) $(NET_SOCK) $(NET_SOCK_SLOTS) $(TCP_RX_WINDOW) $(TCP_ADVERTISE_MSS) $(TCP_REASSEMBLY) $(NET_PROFILE)"; \
 	if [ ! -f $@ ] || [ "$$(cat $@ 2>/dev/null)" != "$$cur" ]; then \
 		echo "$$cur" > $@; \
 	fi
-
-zeitlos.o: ../../common/zeitlos.c ../../common/zeitlos.h
-	$(CC) $(CFLAGS) -c ../../common/zeitlos.c -o zeitlos.o
-
-zobj.o: ../../common/zobj.c ../../common/zobj.h
-	$(CC) $(CFLAGS) -c ../../common/zobj.c -o zobj.o
-
-zstream.o: ../../common/zstream.c ../../common/zstream.h
-	$(CC) $(CFLAGS) -c ../../common/zstream.c -o zstream.o
-
-zport.o: ../../common/zport.c ../../common/zport.h
-	$(CC) $(CFLAGS) -c ../../common/zport.c -o zport.o
 
 enc28j60.o: enc28j60.c enc28j60.h
 	$(CC) $(CFLAGS) -c enc28j60.c -o enc28j60.o
@@ -350,9 +324,6 @@ screen.o: screen.c screen.h udp.h esp32link.h packbits.h netprof.h
 
 netcfg.o: netcfg.c netcfg.h ../../common/zfsapp.h
 	$(CC) $(CFLAGS) -c netcfg.c -o netcfg.o
-
-zfsapp.o: ../../common/zfsapp.c ../../common/zfsapp.h
-	$(CC) $(CFLAGS) -c ../../common/zfsapp.c -o zfsapp.o
 
 usb_ecm.o: usb_ecm.c usb_ecm.h ../../common/zusbnet.h ../../common/zsoc.h
 	$(CC) $(CFLAGS) -c usb_ecm.c -o usb_ecm.o
@@ -381,12 +352,6 @@ dns.o: dns.c dns.h udp.h ../../common/znet.h
 ntp.o: ntp.c ntp.h udp.h dns.h ../../common/zrtc.h ../../common/znet.h .net_config_selected
 	$(CC) $(CFLAGS) -c ntp.c -o ntp.o
 
-zrtc.o: ../../common/zrtc.c ../../common/zrtc.h
-	$(CC) $(CFLAGS) -c ../../common/zrtc.c -o zrtc.o
-
-zrng.o: ../../common/zrng.c ../../common/zrng.h ../../common/zsoc.h
-	$(CC) $(CFLAGS) -c ../../common/zrng.c -o zrng.o
-
 tcp.o: tcp.c tcp.h ../../common/zrng.h
 	$(CC) $(CFLAGS) -c tcp.c -o tcp.o
 
@@ -411,8 +376,6 @@ monocypher-ed25519.o: $(MONO)/monocypher-ed25519.c $(MONO)/monocypher-ed25519.h 
 # sw/apps/web needed it too (docs/tls.md); ssh/ssh_sha256.h is a shim
 # over the z_ names so the rest of the SSH client did not change, and
 # ssh/ssh_sha256.c is empty and can be deleted.
-zsha256.o: ../../common/zsha256.c ../../common/zsha256.h
-	$(CC) $(CFLAGS) -c ../../common/zsha256.c -o zsha256.o
 
 ssh_wire.o: ssh/ssh_wire.c ssh/ssh_wire.h
 	$(CC) $(CFLAGS) -c ssh/ssh_wire.c -o ssh_wire.o
@@ -433,7 +396,7 @@ telnet.o: telnet.c telnet.h tcp.h
 netprof.o: netprof.c netprof.h
 	$(CC) $(CFLAGS) -c netprof.c -o netprof.o
 
-sock.o: sock.c sock.h tcp.h
+sock.o: sock.c sock.h tcp.h .net_config_selected
 	$(CC) $(CFLAGS) -c sock.c -o sock.o
 
 tftp.o: tftp.c tftp.h
@@ -442,10 +405,6 @@ tftp.o: tftp.c tftp.h
 net.o: net.c net_phy.h netcfg.h ssh/ssh.h sock.h ../../common/znet.h .net_config_selected ../../common/zsoc.h ../../common/zntp.h dhcp.h dns.h ntp.h
 	$(CC) $(CFLAGS) -c net.c -S -MF /dev/null -o net.asm
 	$(CC) $(CFLAGS) -c net.c -o net.o
-
-net.elf: $(OBJS)
-	$(CC) $(LDFLAGS) -T $(LDSCRIPT) -Wl,-Map,net.map -o net.elf $(OBJS)
-	$(PREFIX)objdump -S --disassemble net.elf > net.dasm
 
 # ZEXE, same as every other app (sw/common/zexec.h). This was the last
 # Makefile still emitting a raw --pad-to binary: .bss shipped as
@@ -459,38 +418,12 @@ net.elf: $(OBJS)
 # The --pad-to trick it replaces was working around objcopy truncating
 # .bss (docs/networking.md, "objcopy truncation bug"); mkexec.py solves
 # the same problem by recording _end - _edata in the header instead.
-net.bin: net.elf
-	@EDATA=$$($(PREFIX)nm net.elf | awk '$$3=="_edata"{print "0x"$$1}'); \
-	END=$$($(PREFIX)nm net.elf | awk '$$3=="_end"{print "0x"$$1}'); \
-	$(PREFIX)objcopy -O binary net.elf net.data; \
-	python3 ../../../tools/mkexec.py net.data net.bin $$(($$END - $$EDATA)); \
-	rm -f net.data
 
-clean:
-	rm -f net.elf net.bin net.data net.asm net.dasm net.map *.o *.d .net_phy_selected .net_config_selected
+.PHONY: FORCE
 
-.PHONY: net clean FORCE
-
-# Header dependency tracking.
-#
-# CFLAGS has carried -MD all along, so gcc has been writing .d files
-# listing every header each object depends on -- but nothing included
-# them, and the object rules below have no prerequisites at all
-# (`wm.o:` rather than `wm.o: wm.c`). The effect is that once an object
-# file exists, make considers it permanently up to date: editing a .c
-# or a .h rebuilds nothing, and the link silently produces a binary
-# from stale objects.
-#
-# That is not a theoretical problem -- it has twice produced hardware
-# that behaved like a broken feature when the real cause was simply
-# that the change was never compiled in. Including the .d files makes
-# every object depend on its own source and headers, so `make` alone is
-# correct and `make clean` stops being a required ritual.
--include $(wildcard *.d)
 # Not netserve/: it is a separate app whose .d files name paths relative
 # to its own directory, and including them here broke net's next build.
 -include $(filter-out netserve/%,$(wildcard */*.d))
--include $(wildcard */*/*.d)
 
 # -- host tests --
 #
@@ -520,4 +453,13 @@ test:
 	$(HOSTCC) --std=gnu99 -w -I. -I../../common -o /tmp/test_packbits \
 		tests/test_packbits.c
 	/tmp/test_packbits
+	$(HOSTCC) --std=gnu99 -Wall -I. -I../../common -o /tmp/test_sock_slots \
+		tests/test_sock_slots.c sock.c
+	/tmp/test_sock_slots
+	$(HOSTCC) --std=gnu99 -Wall -I. -I../../common -o /tmp/test_netcfg \
+		tests/test_netcfg.c netcfg.c
+	/tmp/test_netcfg
 
+CLEAN_EXTRA = .net_phy_selected .net_config_selected
+
+include ../../common/app.mk

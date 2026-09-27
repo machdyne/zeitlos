@@ -1586,8 +1586,8 @@ default-case status in `zgfx.h`.
 Text -- the "Dock" window title, not currently drawn anywhere per
 "Known limitations" below, so nothing dock-related actually uses text
 right now -- would go through the hardware glyph blitter if it ever
-does (`wm`'s Makefile builds with `-DZ_GFX_HW_BLIT`, like
-`hello_win`/`term`) -- see "Hardware glyph blitting" below for how
+does (every app is built with `Z_GFX_HW_BLIT`, see
+[build.md](build.md)) -- see "Hardware glyph blitting" below for how
 that path works, and for why `wm` loading `z_font_5x8` exactly once,
 itself, in `main()`, is now the *only* place any font is ever loaded
 into hardware glyph memory board-wide.
@@ -1829,13 +1829,22 @@ Existing examples: `sw/apps/mmod/tests/render.c`,
 ## Hardware glyph blitting
 
 `z_fb_draw_char`/`z_fb_draw_text` have two implementations, selected
-at compile time by defining `Z_GFX_HW_BLIT` (`-DZ_GFX_HW_BLIT` in an
-app's `CFLAGS`) -- the original software renderer (default, always
-available, always correct) or a hardware-accelerated path driving the
-GPU blitter (`rtl/gpu/gpu_blit.v`) and a new dedicated glyph memory
+at compile time by defining `Z_GFX_HW_BLIT` -- the original software
+renderer (always available, always correct) or a hardware-accelerated
+path driving the GPU blitter (`rtl/gpu/gpu_blit.v`) and a new dedicated glyph memory
 (`rtl/mem/glyph.v`). Both implementations live in `zgfx.c` under
 `#ifdef Z_GFX_HW_BLIT`; the interface (`zgfx.h`) is identical either
 way, so callers (`zwin.c`, apps) don't need to know which is active.
+
+**Every app gets the hardware path.** `sw/common/app.mk` defines
+`Z_GFX_HW_BLIT` for all of them (`GFX_HW_BLIT ?= 1`, [build.md](build.md));
+it used to be each app's own `-D`, and 19 apps never had it, four of
+which draw text (`chip8`, `gamedemo`, `mmod`, `repl`) and so drew it in
+software. The software path is still selected on its own, per glyph,
+for a font that is not resident in glyph memory or a glyph not wholly
+on screen. `make GFX_HW_BLIT=0` builds an app with the software path
+throughout, to tell a blitter problem from a layout one. No app is
+built that way by default.
 
 **Why**: software drawing costs roughly one function call + clip
 check + shift/mask + read-modify-write per *pixel*. The blitter writes

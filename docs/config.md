@@ -35,6 +35,9 @@ travel with the card. `settings` edits them; see
 
 | key | default | read by | effect |
 | --- | --- | --- | --- |
+| `apps.irc.channels` | *(none)* | `irc` | channels to join once connected, `#zeitlos #fpga` ([irc_app.md](irc_app.md)) |
+| `apps.irc.nick` | `zeitlos` | `irc` | your nickname; an `_` is added while it is taken |
+| `apps.irc.server` | `irc.libera.chat 6667` | `irc` | server and port to connect to at start; empty: wait for `/connect` |
 | `apps.netserve.allow` | `subnet` | `netserve` | accept connections from this subnet only, or `any` ([netserve.md](netserve.md)) |
 | `apps.netserve.echo` | `off` | `netserve`, `init` | an echo service on this port, for testing |
 | `apps.netserve.http` | `off` | `netserve`, `init` | HTTP: a port and a directory to serve, `80 /www` |
@@ -44,7 +47,7 @@ travel with the card. `settings` edits them; see
 | `apps.term.auto_connect` | *(none)* | `term` | what a new term window connects to by itself |
 | `system.font.japanese` | `no` | `wm`, `settings` | start `jfont` at boot, so Japanese draws at 6x12 -- about 190KB of RAM ([text_encoding.md](text_encoding.md)); `settings` switches it on and off at once |
 | `system.keyboard.layouts` | `us` | `wm` | keyboard layouts, comma-separated; the first is used at start, Super+Space cycles |
-| `system.rtc.timezone` | `UTC` | `clock`, `cal` | local time shown; the RTC itself stays UTC |
+| `system.rtc.timezone` | `UTC` | `clock`, `cal`, `irc` | local time shown; the RTC itself stays UTC (file times too -- [filesystem.md](filesystem.md#timestamps)) |
 | `system.tts.enabled` | `no` | kernel | speech: start `tts` at boot, for a machine set up for someone who cannot see it |
 | `system.tts.voice` | `recorded` | `tts` | speech: `recorded`, `male` or `female`. `recorded` is a real person's voice, built from the speech pack's diphones; without a pack that has them, the male synthesised voice speaks. `male` and `female` choose the synthesised voice; a female one is a higher pitch (200Hz) AND a shorter vocal tract (formants 17% higher), because pitch alone only makes a squeaky male voice |
 | `system.tts.pitch` | `110` | `tts` | speech: base pitch in Hz, 50-300 (200 for the recorded and female voices) |

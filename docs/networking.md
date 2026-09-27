@@ -356,12 +356,86 @@ underflows. A socket client builds this map and sends it straight to
 
 ### One of each kind, not one in all
 
-There is one socket, one telnet session and one SSH session at a time
--- `sock.c`, `telnet.c` and `ssh.c` each keep a single connection --
-but they no longer exclude each other: **browsing during an SSH
-session works**. Each handler checks only its own kind. That changed
-with the pool (below); before it, one TCB meant one session of any
-kind, and every handler checked all three.
+There is one telnet session and one SSH session at a time -- `telnet.c`
+and `ssh.c` each keep a single connection -- and `NET_SOCK_SLOTS`
+sockets (below), and none of them exclude each other: **browsing
+during an SSH session works**. Each handler checks only its own kind.
+That changed with the pool (below); before it, one TCB meant one
+session of any kind, and every handler checked all three.
+
+### More than one socket
+
+`sock.c` keeps `NET_SOCK_SLOTS` sockets (`sock.h`, default **2**), so
+two clients can each hold a connection: the browser fetching a page
+while [`irc`](irc_app.md) stays connected for hours, which with one
+socket would have locked the browser out for as long as the chat was
+open.
+
+Each slot has its own connection, 2KB transmit queue, receive queue,
+advertised window, and session record in `net.c` (`socks[]`). Every
+`sock.c` call takes the slot index; a TCP event finds its slot through
+`tcp.c`'s user pointer, and an event from a connection a slot has since
+replaced is ignored. A client's `DATA` and `CLOSE` find their slot by
+connection id, which `sock_conn_seq` keeps unique across every slot, so
+nothing about the client side of the protocol changed: `web` is
+untouched.
+
+**Slot 0 is the one that was always there**, with its static 16KB
+receive queue, so the browser's path and its throughput are exactly as
+before. **A higher slot allocates its 16KB receive queue when it opens
+and frees it when it closes.** `net` is a core app and has to fit a 1MB
+board, so an idle second socket costs its session record and its 2KB
+transmit queue and nothing more. If the allocation fails, the connect
+is refused with *net: no memory for another socket*, rather than the
+queue being made smaller and the connection slower without saying so.
+
+| | |
+|---|---|
+| `NET_SOCK_SLOTS` | build option; 1 restores the old single socket |
+| cost, idle | ~2.2KB of `.bss` per slot beyond the first, ~3KB of code |
+| cost, open | + 16KB of heap per open slot beyond the first |
+| refused | *net: every socket is in use* when all slots are open |
+
+The startup line says how many there are: `net: buffers: 2 sockets,
+rx queue 16384, ...`, and every socket message names its slot
+(`net: socket 1 connected, relaying to pid 12`).
+
+`sw/apps/net/tests/test_sock_slots.c` (`make -C sw/apps/net test`)
+drives `sock.c` against a stub `tcp.c`: two connections at once, each
+event reaching its own slot, each slot's queue its own, a closed slot
+reused, and a stale connection's events ignored.
+
+**The core-app archive.** `net` is in the flash archive with `wm`,
+`term`, `console` and `cron`, which has 589,824 bytes
+(`0x140000`-`0x1D0000`, [zboot.md](zboot.md)). With two slots and the
+`irc` dock icon in `wm` it measured 578,356 -- 11,468 bytes free -- and
+after `net` stopped calling `sscanf` (below) and the core apps moved to
+integer-only `printf` ([build.md](build.md#integer-only-printf-zfmt)),
+353,236: 236,588 free. Check it again before growing any of those five.
+
+### Why net does not call sscanf
+
+`netcfg.c` reads the static addresses in `/net.cfg`, and it used to read
+each with `sscanf(s, "%u.%u.%u.%u%c", ...)`. That one call linked
+newlib's `sscanf` engine, `strtod` (which `sscanf` needs for `%f`
+whether or not the format has one), the multi-precision helpers, soft
+double arithmetic, and 28KB of wide-character locale tables: **58KB of
+a 247KB core app**, for four numbers.
+
+`netcfg_parse_ipv4()` does it by hand, in about 20 lines, accepting what
+`sscanf` accepted from a config file: whitespace before each number,
+leading zeros of any length (`010` is ten, as `%u` reads it), and
+nothing after the last number. `tests/test_netcfg.c` runs both on 24
+cases and requires them to agree.
+
+The one difference is deliberate. `%u` wraps a number too big for an
+`unsigned int`, so `sscanf` read `4294967297.0.0.1` as `1.0.0.1` -- a
+typo in the config becoming a different address. The parser refuses
+it, and the test checks that it does.
+
+Anything new in `net` that parses text should do the same: `strtoul()`
+and hand-written parsing link almost nothing; any `scanf` brings all of
+the above back.
 
 ### Unsent bytes are an error here, not a dropped keystroke
 
@@ -594,7 +668,7 @@ queue size means the app, not the network, is the constraint.
 |---|---|
 | **Stop-and-wait sending** | one segment of at most 536 bytes outstanding. Fine for telnet and requests; it caps uploads, and what the servers send -- a large file over HTTP most of all ([netserve.md](netserve.md)). |
 | **No out-of-order reassembly** | the big one. A lost segment discards everything behind it. See "Throughput". |
-| **A pool of 8** | eight TCP connections in the whole system, two always kept for outbound; one socket, one telnet and one ssh session at a time (see "Connections"). |
+| **A pool of 8** | eight TCP connections in the whole system, two always kept for outbound; two sockets (`NET_SOCK_SLOTS`), one telnet and one ssh session at a time (see "More than one socket" and "Connections"). |
 | **No window scaling, SACK or timestamps** | only an MSS option, on the SYN. |
 | **Half-close for accepted connections only** | net's relay takes a peer's FIN as "done sending" and answers in full ([netserve.md](netserve.md), "Half-close"); the clients (telnet, ssh, sockets) still answer a remote FIN with ours straight away. |
 

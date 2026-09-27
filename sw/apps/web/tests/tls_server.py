@@ -48,10 +48,17 @@ RESPONSE = (b"HTTP/1.1 200 OK\r\n"
             b"Content-Length: %d\r\n"
             b"Connection: close\r\n\r\n" % len(BODY)) + BODY
 
-def make_cert(d, der_out):
+def make_cert(d, der_out, newkey="rsa:2048"):
+    # `newkey` is openssl req's -newkey: rsa:2048, rsa:4096, ec with
+    # -pkeyopt (see KEYS below), ed25519. Gemini servers present all of
+    # these, self-signed; test_tls's pin runs try each.
     key = os.path.join(d, "k.pem"); crt = os.path.join(d, "c.pem")
+    extra = []
+    if newkey.startswith("ec:"):
+        extra = ["-pkeyopt", "ec_paramgen_curve:" + newkey[3:]]
+        newkey = "ec"
     subprocess.run(
-        ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+        ["openssl", "req", "-x509", "-newkey", newkey] + extra + ["-nodes",
          "-keyout", key, "-out", crt, "-days", "1",
          "-subj", "/CN=localhost",
          "-addext", "subjectAltName=DNS:localhost",
@@ -78,13 +85,26 @@ def main():
     der_out = sys.argv[sys.argv.index("--cert-der") + 1] \
         if "--cert-der" in sys.argv else "/tmp/tls_server_cert.der"
 
+    newkey = sys.argv[sys.argv.index("--key") + 1] \
+        if "--key" in sys.argv else "rsa:2048"
+
     d = tempfile.mkdtemp()
-    crt, key = make_cert(d, der_out)
+    crt, key = make_cert(d, der_out, newkey)
 
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.minimum_version = ssl.TLSVersion.TLSv1_3
     ctx.maximum_version = ssl.TLSVersion.TLSv1_3
     ctx.load_cert_chain(crt, key)
+
+    # --request-client-cert: send a CertificateRequest, client
+    # certificate optional -- what Gemini servers do, and what this
+    # client once answered in the wrong place in the handshake
+    # (tls.c, HS_CERTIFICATE_REQUEST). The client has none, so it must
+    # answer with an empty Certificate, in order, and the handshake must
+    # still complete.
+    if "--request-client-cert" in sys.argv:
+        ctx.verify_mode = ssl.CERT_OPTIONAL
+        ctx.load_verify_locations(crt)
 
     # Pin the suite so the test exercises the one this client
     # implements, rather than whichever OpenSSL happens to prefer.

@@ -208,6 +208,14 @@ static void dlg_dispatch(z_msg_t *msg) {
 
 		}
 
+		case Z_WM_WHEEL:
+			// The file list scrolls; a prompt or a confirm has nothing
+			// to scroll. Ours for the same reason Z_WM_MOUSE is.
+			if (msg->obj.type == Z_UINT32 &&
+			    (dlg.kind == DLG_KIND_OPEN || dlg.kind == DLG_KIND_SAVE))
+				z_flist_wheel(&dlg.flist, Z_WM_WHEEL_NOTCHES(msg->obj.val.uint32));
+			break;
+
 		case Z_WM_KEY: {
 
 			if (msg->obj.type != Z_UINT32) break;

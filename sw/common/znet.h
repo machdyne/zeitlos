@@ -1,6 +1,8 @@
 #ifndef ZNET_H
 #define ZNET_H
 
+
+#include "zsubjects.h"	// the block these subjects are in
 /*
  * Zeitlos
  * Copyright (c) 2025 Lone Dynamics Corporation. All rights reserved.
@@ -53,7 +55,7 @@
 // requester -> net: Z_MAP{"ip":Z_UINT32, "filename":Z_STR}. net opens
 // a stream back to the requester (see zstream.h) to pull the file's
 // bytes, then forwards each chunk to the TFTP server as it arrives.
-#define Z_NET_TFTP_PUT         302
+#define Z_NET_TFTP_PUT         (Z_SUBJ_NET + 2)
 
 // net -> requester, reply to Z_NET_TFTP_PUT (same tag): Z_MAP with
 // "ok" (Z_UINT32, 0 or 1). If ok, nothing else. If not ok, "error"
@@ -61,7 +63,7 @@
 // the remote server's handling of the final block -- completes, not
 // when the requester finishes producing chunks (those two can finish
 // at different times).
-#define Z_NET_TFTP_PUT_REPLY   303
+#define Z_NET_TFTP_PUT_REPLY   (Z_SUBJ_NET + 3)
 
 // requester -> net: Z_STR (the hostname to resolve, e.g.
 // "example.com"). net.c dispatches this to sw/apps/net/dns.c's
@@ -81,14 +83,14 @@
 // zstream.h's blocking API wraps Z_STREAM_*'s own request/reply
 // shape. Written directly here mainly for net.c/dns.c's own
 // documentation purposes.
-#define Z_NET_DNS_RESOLVE        304
+#define Z_NET_DNS_RESOLVE        (Z_SUBJ_NET + 4)
 
 // net -> requester, reply to Z_NET_DNS_RESOLVE (same tag): Z_MAP with
 // "ok" (Z_UINT32, 0 or 1). If ok, "ip" (Z_UINT32) holds the resolved
 // address. If not ok, "error" (Z_STR) holds a short reason (no
 // nameserver configured, NXDOMAIN/no A record, timeout, busy with
 // another resolution, etc).
-#define Z_NET_DNS_RESOLVE_REPLY  305
+#define Z_NET_DNS_RESOLVE_REPLY  (Z_SUBJ_NET + 5)
 
 // -- SSH session setup (sw/apps/net/ssh/, sw/apps/repl/repl.c) --
 //
@@ -130,8 +132,8 @@
 // Request obj: Z_MAP { "user": Z_STR, "ip": Z_UINT32, "port": Z_UINT32 }
 // Reply obj:   Z_MAP { "ok": Z_UINT32, "token": Z_UINT32,
 //                      "error": Z_STR (only when ok == 0) }
-#define Z_NET_SSH_PREPARE        308
-#define Z_NET_SSH_PREPARE_REPLY  309
+#define Z_NET_SSH_PREPARE        (Z_SUBJ_NET + 8)
+#define Z_NET_SSH_PREPARE_REPLY  (Z_SUBJ_NET + 9)
 
 // Asks net to print its link counters on the serial console -- the
 // esp32link debug dump (crc errors, fifo overruns, input events
@@ -139,7 +141,7 @@
 // failure. Carries no payload and gets no reply; the dump IS the
 // answer. sh.c's `ic` sends this, so "where did the input go?" is a
 // console question instead of an instrumented build.
-#define Z_NET_DEBUG_DUMP         313
+#define Z_NET_DEBUG_DUMP         (Z_SUBJ_NET + 13)
 
 // sw/common/zweb.h has taken 310-312. The next subject added anywhere in
 // this shared sequence starts at 318.
@@ -171,16 +173,16 @@
 // process takes it over (after a restart, the new netserve reclaims its
 // ports) and the old owner's connections are closed. Apps are trusted
 // (docs/security.md).
-#define Z_NET_LISTEN             314
-#define Z_NET_LISTEN_REPLY       315
-#define Z_NET_UNLISTEN           316
+#define Z_NET_LISTEN             (Z_SUBJ_NET + 14)
+#define Z_NET_LISTEN_REPLY       (Z_SUBJ_NET + 15)
+#define Z_NET_UNLISTEN           (Z_SUBJ_NET + 16)
 
 // net -> listener, on an accepted connection: the peer has FINISHED
 // SENDING (a TCP half-close, its FIN), and every byte it sent before
 // that has been delivered as DATA. The connection is still open the
 // other way: send what is left, then CLOSE as usual. Tag: your conn_id.
 // No payload, no reply. zport has no half-close of its own; this is it.
-#define Z_NET_EOF                317
+#define Z_NET_EOF                (Z_SUBJ_NET + 17)
 
 #define Z_NET_LISTEN_E_PORT      1   // 0 or above 65535
 #define Z_NET_LISTEN_E_FULL      2   // net's listen table is full
@@ -232,5 +234,8 @@ typedef struct {
 // ONE OF EACH KIND: one socket, one telnet and one ssh session at a
 // time, but they no longer exclude each other -- tcp.c has a pool
 // (docs/networking.md, "Connections").
+
+// Still inside the block zsubjects.h gives this protocol:
+Z_SUBJECTS_IN(Z_SUBJ_NET, Z_NET_EOF);
 
 #endif

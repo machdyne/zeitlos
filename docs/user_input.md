@@ -214,7 +214,29 @@ build"); a normal kernel's `lsusb` leaves that detail out.
 Apps do not read it: `wm` does (`dispatch_wheel()`), and sends the
 notches to the window that owns the pointer as **`Z_WM_WHEEL`**
 (`zwm.h`) -- a signed count, never coalesced, unlike `Z_WM_MOUSE`.
-`term` scrolls its history three lines a notch.
+Positive is away from the user: up, back.
+
+**Each app applies it to its own view**, so an app that scrolls and
+does not handle `Z_WM_WHEEL` simply ignores the wheel -- which is how
+every app but `term` behaved until September 2026. What they do now:
+
+| app | a notch scrolls | how |
+|---|---|---|
+| `term` | 3 lines of history | |
+| `files`, and every app's Open and Save dialogs | 3 rows of the list | `z_flist_wheel()` in the list widget; the selection stays where it is |
+| `text` | 3 lines | the view moves, the caret does not -- the scrollbar's path |
+| `read` | 3 lines | added to its fused scroll, so a fast spin is one repaint, not one per notch |
+| `web` | 3 lines | notches collected while the mailbox drains, scrolled once |
+| `hex`, `sheet` | 3 rows | the view moves, the cursor does not |
+| `irc` | 3 rows of the conversation | |
+| `view`, `draw` | 48 pixels | clamped to the image or canvas by its scrollbar |
+| `mesh` | its own lists | |
+
+The convention, for an app that scrolls: **three lines (or rows) a
+notch, up = back, move the view and not the cursor** -- as dragging the
+scrollbar does -- and, where a repaint is expensive, add the notches up
+and scroll once when the mailbox is empty rather than once per message.
+[app_runtime.md](app_runtime.md) has the pattern.
 
 ### Lock keys and keyboard LEDs
 
@@ -441,10 +463,11 @@ one-line fix.
   digits either way; the lock state and LED are right, the navigation
   mapping is not written. (A compact keyboard's embedded keypad is the
   keyboard's own doing, and does follow Num Lock.)
-- **No keyboard-driven focus switching.** Auto-focus (above) gets a
-  single app a window without a mouse, but there's no keyboard
-  equivalent of clicking a different window (an Alt+Tab-style switch)
-  once more than one app has a window open.
+- **Keyboard focus switching is Alt+Tab** (`alt_tab()` in
+  `sw/apps/wm/wm.c`), which cycles between windows and the dock; the
+  full list of window-manager hotkeys is in `docs/welcome.md`. This
+  entry used to say there was no keyboard equivalent of clicking a
+  window, which stopped being true when those hotkeys went in.
 - **Debug instrumentation left in place, intentionally.** `wm.c`'s
   per-port `usb port N device type ->` print, the `click port=...`
   line, and `repair_region`'s fill/draw logging are all still present
@@ -452,10 +475,11 @@ one-line fix.
   the UART console while this area is still under active development.
   Worth trimming once this whole subsystem (and `term`, built on top
   of it) is more settled.
-- **`LDFLAGS` fix not yet applied project-wide.** See "Debugging
-  notes" above -- `ping`, `pong`, `blinky`, `gpu3d`, `gpudemo`,
-  `bounce`, `bounceblit`, `hello`, and `net` all still link without
-  `-march`/`-mabi`.
+- **The `LDFLAGS` fix is applied project-wide.** See "Debugging
+  notes" above. Every app now links with `-march`/`-mabi`: the ones
+  that were listed here either gained the flags or no longer exist,
+  and `sw/common/app.mk` (docs/build.md) now supplies them to every
+  app from one place.
 
 ## Cursor precision
 

@@ -458,3 +458,75 @@ bool fs_df(uint32_t *total_kb, uint32_t *free_kb) {
 	return (rv->val.uint32 == Z_OK);
 
 }
+
+// -- rename, stat, extended listing, copy -- see zfsapp.h --
+
+int fs_rename(const char *from, const char *to, int *err) {
+
+	z_fs_rename_args_t args;
+
+	if (err) *err = Z_FS_ERR_INVAL;
+	if (!from || !to) return 0;
+
+	args.from = (char *)from;
+	args.to = (char *)to;
+	args.err = Z_FS_ERR_IO;
+
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_obj_t *rv = (z_obj_t *)z_kernel_ptr(Z_SYS_FS_RENAME, (uint32_t *)&args, 0);
+
+	if (err) *err = args.err;
+	return (rv->val.uint32 == Z_OK) ? 1 : 0;
+
+}
+
+int fs_stat(const char *path, z_fs_info_t *info) {
+
+	z_fs_stat_args_t args;
+
+	if (!path || !info) return 0;
+	args.name = (char *)path;
+	memset(&args.info, 0, sizeof(args.info));
+
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_obj_t *rv = (z_obj_t *)z_kernel_ptr(Z_SYS_FS_STAT, (uint32_t *)&args, 0);
+
+	if (rv->val.uint32 != Z_OK) return 0;
+	*info = args.info;
+	return 1;
+
+}
+
+int fs_list_ex(const char *path, char *buf, uint32_t buf_cap,
+	z_fs_info_t *info, uint32_t max_entries, uint32_t *count,
+	uint32_t *truncated) {
+
+	z_fs_list_ex_args_t args;
+
+	if (count) *count = 0;
+	if (truncated) *truncated = 0;
+	if (!buf || buf_cap == 0) return 0;
+	if (info && !max_entries) return 0;	// see zfs.h
+
+	args.list.path = (char *)path;
+	args.list.out = buf;
+	args.list.out_cap = buf_cap;
+	args.list.max_entries = max_entries;
+	args.list.count = 0;
+	args.list.truncated = 0;
+	args.list.types = NULL;
+	args.info = info;
+
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_obj_t *rv = (z_obj_t *)z_kernel_ptr(Z_SYS_FS_LIST_EX, (uint32_t *)&args, 0);
+
+	if (rv->val.uint32 != Z_OK) return 0;
+	if (count) *count = args.list.count;
+	if (truncated) *truncated = args.list.truncated;
+	return 1;
+
+}
+
+// fs_copy_file(), fs_move() and fs_strerror() are in zfsutil.c: they
+// use only the calls above, so the posix host tests link them against
+// their own stubs and test the shipped code.

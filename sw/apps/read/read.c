@@ -3534,6 +3534,17 @@ int main(void) {
 
 					break;
 
+				case Z_WM_WHEEL:
+
+					// Three lines a notch, up = back, as term and text
+					// do. Added to the fused impulses (scroll_flush()),
+					// so a fast spin that arrives as a burst of notches
+					// is one scroll, not one repaint per notch -- and,
+					// like the arrows, it scrolls under a reading voice.
+					if (msg.obj.type == Z_UINT32)
+						key_pend_lines -= 3 * Z_WM_WHEEL_NOTCHES(msg.obj.val.uint32);
+					break;
+
 				case Z_WM_MOUSE:
 
 					if (msg.obj.type != Z_UINT32) break;

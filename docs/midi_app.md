@@ -440,7 +440,7 @@ always stay. A muted channel shows a floor line rather than nothing, so
 distinguishable at a glance.
 
 Every fill goes through the **hardware blitter** — `z_win_fill_rect()`
-does, and the Makefile passes `-DZ_GFX_HW_BLIT` so the text does too.
+does, and every app is built with `-DZ_GFX_HW_BLIT` so the text does too.
 That is not optional at this size: the software path is a per-pixel
 read-modify-write of VRAM whose cost is proportional to *area*, which
 `sw/common/zwin.c` records as roughly three seconds to clear a 288x216

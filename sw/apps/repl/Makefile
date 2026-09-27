@@ -1,10 +1,8 @@
+# sw/apps/repl -- build rules are shared: sw/common/app.mk, docs/build.md.
 
-PREFIX ?= $(RISCV_PREFIX)
-# ARCH/ABI come from one place -- see that file for why
-include ../../common/arch.mk
-CC = $(PREFIX)gcc
-AS = $(PREFIX)as
-ASFLAGS = -march=$(ARCH) -mabi=$(ABI)
+APP = repl
+APP_MAIN_RULE = 0
+
 # -ffunction-sections/-fdata-sections + --gc-sections (below) let the
 # linker drop code and data nothing actually references. This is worth
 # real money here: sw/common is shared by every app, so each one links
@@ -20,22 +18,6 @@ ASFLAGS = -march=$(ARCH) -mabi=$(ABI)
 # or referenced solely by the linker script, and if an app starts
 # misbehaving in a way that smells like missing code, this is the
 # first thing to rule out.
-GC_SECTIONS ?= 1
-ifeq ($(GC_SECTIONS),1)
-GC_CFLAGS = -ffunction-sections -fdata-sections
-GC_LDFLAGS = -Wl,--gc-sections
-endif
-
-# `override` so the flags this app REQUIRES survive a command-line
-# CFLAGS. A command-line assignment replaces the makefile's CFLAGS
-# outright -- `make CFLAGS+=-DFOO=1` appends to the command-line value,
-# not to this one -- silently dropping -Os, -march, section GC, the
-# libc specs and any -D this app needs to build correctly. The result
-# still builds and links; it just produces a much larger, slower binary
-# that can overrun the space the loader has for it and crash on start.
-override CFLAGS += --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) $(GC_CFLAGS) $(ARCH_DEFS) $(LIBC_FLAGS)
-LDFLAGS = -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS)
-LDSCRIPT = ../../common/riscv-app.ld
 
 # sw/ext/ms -- Machdyne Scheme, vendored directly (already patched
 # for Zeitlos, not upstream-plus-a-patch-step) -- see docs/scheme.md.
@@ -101,38 +83,29 @@ TE_CFLAGS = -DEMBEDDED -DTE_HOST_IO \
 # zapi.c. Nothing else in repl needs a date, so it rides in on that one
 # procedure and --gc-sections drops it from any build where zapi.c
 # stops calling it.
+
+# Objects, and why each is linked:
+#
+#   zstream.o: needed for `tget`/`tput` (zapi.c's own "Networking" section) --
+#   repl didn't link this before this API existed either.
+#
+#   zgfx.o: the window/graphics stack -- see zapi.c's own "Windows" section for
+#   why repl needs this now (it didn't before this API existed). Same
+#   three objects/build rules sw/apps/hello_win's own Makefile already
+#   uses for the same three source files -- copied here verbatim rather
+#   than reinvented, this is the established way any app links against
+#   z_win_*.
 OBJS = zeitlos.o zobj.o zport.o zline.o zrepl.o zdns.o zfsapp.o zstream.o \
 	zgfx.o zfont_data.o zwin.o zrtc.o zrng.o zgpio.o zi2c.o zspi.o zuart.o zconnect.o ms.o \
 	te.o te_bridge.o page.o zapi.o repl.o
-
-repl: repl.elf repl.bin
-
-zeitlos.o:
-	$(CC) $(CFLAGS) -c ../../common/zeitlos.c -o zeitlos.o
-
-zobj.o:
-	$(CC) $(CFLAGS) -c ../../common/zobj.c -o zobj.o
-
-zport.o:
-	$(CC) $(CFLAGS) -c ../../common/zport.c -o zport.o
-
-zline.o:
-	$(CC) $(CFLAGS) -c ../../common/zline.c -o zline.o
-
-zrtc.o: ../../common/zrtc.c ../../common/zrtc.h
-	$(CC) $(CFLAGS) -c ../../common/zrtc.c -o zrtc.o
 
 # The system CSPRNG, behind (random)/(random-hex)/(random-secure?) --
 # see zapi.c and docs/trng.md. Linked unconditionally rather than
 # behind a switch: it is ~2.4KB and it works (with a clearly-labelled
 # non-cryptographic fallback) on a bitstream with no `TRNG at all, so
 # there is no build where leaving it out would be the right call.
-zrng.o: ../../common/zrng.c ../../common/zrng.h ../../common/zsoc.h
-	$(CC) $(CFLAGS) -c ../../common/zrng.c -o zrng.o
 
 # The (gpio-*) procedures in zapi.c.
-zgpio.o: ../../common/zgpio.c ../../common/zgpio.h ../../common/zsoc.h
-	$(CC) $(CFLAGS) -c ../../common/zgpio.c -o zgpio.o
 
 # The (i2c-*) and (spi-*) procedures. Both are bit-banged over the
 # GPIO pins above; neither has any hardware of its own.
@@ -146,42 +119,9 @@ zspi.o: ../../common/zspi.c ../../common/zspi.h ../../common/zgpio.h \
 
 # The (uart1-*) procedures. UART1 only -- UART0 is the console and has
 # no API by design; see ../../common/zuart.h.
-zuart.o: ../../common/zuart.c ../../common/zuart.h ../../common/zsoc.h
-	$(CC) $(CFLAGS) -c ../../common/zuart.c -o zuart.o
 
 # The port/serial/telnet/ssh commands' target-building, shared with
 # sw/apps/term's Open dialog. See ../../common/zconnect.h.
-zconnect.o: ../../common/zconnect.c ../../common/zconnect.h
-	$(CC) $(CFLAGS) -c ../../common/zconnect.c -o zconnect.o
-
-zrepl.o:
-	$(CC) $(CFLAGS) -c ../../common/zrepl.c -o zrepl.o
-
-zdns.o:
-	$(CC) $(CFLAGS) -c ../../common/zdns.c -o zdns.o
-
-# needed for `tget`/`tput` (zapi.c's own "Networking" section) --
-# repl didn't link this before this API existed either.
-zstream.o:
-	$(CC) $(CFLAGS) -c ../../common/zstream.c -o zstream.o
-
-zfsapp.o:
-	$(CC) $(CFLAGS) -c ../../common/zfsapp.c -o zfsapp.o
-
-# the window/graphics stack -- see zapi.c's own "Windows" section for
-# why repl needs this now (it didn't before this API existed). Same
-# three objects/build rules sw/apps/hello_win's own Makefile already
-# uses for the same three source files -- copied here verbatim rather
-# than reinvented, this is the established way any app links against
-# z_win_*.
-zgfx.o:
-	$(CC) $(CFLAGS) -c ../../common/zgfx.c -o zgfx.o
-
-zfont_data.o:
-	$(CC) $(CFLAGS) -c ../../common/zfont_data.c -o zfont_data.o
-
-zwin.o:
-	$(CC) $(CFLAGS) -c ../../common/zwin.c -o zwin.o
 
 # regenerated whenever the submodule's stdlib source is newer than the
 # last build's header -- see gen_ms_stdlib.py's own header comment for
@@ -243,17 +183,6 @@ repl.o:
 	$(CC) $(CFLAGS) $(MS_SIZE_CFLAGS) -c repl.c -S -MF /dev/null -o repl.asm
 	$(CC) $(CFLAGS) $(MS_SIZE_CFLAGS) -c repl.c -o repl.o
 
-repl.elf: $(OBJS)
-	$(CC) $(LDFLAGS) -T $(LDSCRIPT) -Wl,-Map,repl.map -o repl.elf $(OBJS) -lm
-	$(PREFIX)objdump -S --disassemble repl.elf > repl.dasm
-
-repl.bin: repl.elf
-	@EDATA=$$($(PREFIX)nm repl.elf | awk '$$3=="_edata"{print "0x"$$1}'); \
-	END=$$($(PREFIX)nm repl.elf | awk '$$3=="_end"{print "0x"$$1}'); \
-	$(PREFIX)objcopy -O binary repl.elf repl.data; \
-	python3 ../../../tools/mkexec.py repl.data repl.bin $$(($$END - $$EDATA)); \
-	rm -f repl.data
-
 # Host build of the shared line editor's test suite -- with the host's
 # own compiler, not $(CC).
 #
@@ -275,26 +204,9 @@ test:
 		-o zline_test ../../common/zline_test.c ../../common/zline.c
 	./zline_test
 
-clean:
-	rm -f zline_test repl.elf repl.bin repl.data repl.asm repl.dasm repl.map ms_stdlib.h *.o *.d te_max_file_size.h
+.PHONY: test FORCE
 
-.PHONY: repl clean test FORCE
+CLEAN_EXTRA = zline_test ms_stdlib.h te_max_file_size.h
+LDLIBS = -lm
 
-# Header dependency tracking.
-#
-# CFLAGS has carried -MD all along, so gcc has been writing .d files
-# listing every header each object depends on -- but nothing included
-# them, and the object rules below have no prerequisites at all
-# (`wm.o:` rather than `wm.o: wm.c`). The effect is that once an object
-# file exists, make considers it permanently up to date: editing a .c
-# or a .h rebuilds nothing, and the link silently produces a binary
-# from stale objects.
-#
-# That is not a theoretical problem -- it has twice produced hardware
-# that behaved like a broken feature when the real cause was simply
-# that the change was never compiled in. Including the .d files makes
-# every object depend on its own source and headers, so `make` alone is
-# correct and `make clean` stops being a required ritual.
--include $(wildcard *.d)
--include $(wildcard */*.d)
--include $(wildcard */*/*.d)
+include ../../common/app.mk

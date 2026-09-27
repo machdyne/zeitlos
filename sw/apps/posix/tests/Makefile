@@ -5,7 +5,7 @@ CFLAGS ?= -O1 -g -std=gnu99 -Wall -Wextra -Werror -Wno-unused-parameter -I.. -I.
 run: px_shell_test px_case_test
 	@./run.sh
 
-GZ = ../../../common/zgz.c ../../../common/zinflate.c
+GZ = ../../../common/zgz.c ../../../common/zinflate.c ../../../common/zfsutil.c
 px_shell_test: run_sh.c host_fs.c ../sh.c ../vfs.c ../posix.h $(GZ)
 	$(CC) $(CFLAGS) -DPX_HOST_TEST=1 -o $@ run_sh.c host_fs.c ../sh.c ../vfs.c $(GZ)
 

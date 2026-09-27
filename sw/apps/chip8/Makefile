@@ -1,5 +1,8 @@
+# sw/apps/chip8 -- build rules are shared: sw/common/app.mk, docs/build.md.
+
+APP = chip8
+APP_MAIN_RULE = 0
 # chip8 -- CHIP-8 / SUPER-CHIP / XO-CHIP emulator
-#
 #   make            build chip8.elf and chip8.bin
 #   make test       host unit tests (core + renderer). No toolchain needed.
 #   make roms       download the test-suite ROMs
@@ -14,59 +17,20 @@
 # precisely so the guest machine and the display expansion can be
 # checked without a board.
 
-PREFIX ?= $(RISCV_PREFIX)
-# ARCH/ABI come from one place -- see that file for why
-include ../../common/arch.mk
-CC = $(PREFIX)gcc
-AS = $(PREFIX)as
-ASFLAGS = -march=$(ARCH) -mabi=$(ABI)
-# `override` so the flags this app REQUIRES survive a command-line
-# CFLAGS -- a command-line assignment replaces the makefile's outright,
-# silently dropping -Os, -march and the libc specs and producing a much
-# larger binary that can overrun the space the loader has for it.
-override CFLAGS += --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) \
-	$(ARCH_DEFS) $(LIBC_FLAGS)
-LDFLAGS = -march=$(ARCH) -mabi=$(ABI) $(LIBC_FLAGS)
-LDSCRIPT = ../../common/riscv-app.ld
-
+# Objects, and why each is linked:
+#
+#   zedit.o: sw/common/zedit.c -- the single-line text field.
+#
+#   zdialog.c owned it privately until sw/apps/web's URL bar became its
+#   second caller. Every app that links the dialog needs this too: a
+#   shared widget is only shared if the build says so.
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o \
 	zfsapp.o zflist.o zdialog.o zedit.o \
 	core.o quirks.o render.o sound.o config.o disasm.o debug.o chip8.o
 
-chip8: chip8.elf chip8.bin
-
-zeitlos.o: ../../common/zeitlos.c ../../common/zeitlos.h
-	$(CC) $(CFLAGS) -c ../../common/zeitlos.c -o zeitlos.o
-
-zobj.o: ../../common/zobj.c ../../common/zobj.h
-	$(CC) $(CFLAGS) -c ../../common/zobj.c -o zobj.o
-
-zgfx.o: ../../common/zgfx.c ../../common/zgfx.h
-	$(CC) $(CFLAGS) -c ../../common/zgfx.c -o zgfx.o
-
 # zgfx.c references the font tables whenever anything draws text, and
 # they live in their own translation unit -- so this is needed even
 # though chip8 itself draws no text of its own.
-zfont_data.o: ../../common/zfont_data.c ../../common/zfont.h
-	$(CC) $(CFLAGS) -c ../../common/zfont_data.c -o zfont_data.o
-
-zwin.o: ../../common/zwin.c ../../common/zwin.h
-	$(CC) $(CFLAGS) -c ../../common/zwin.c -o zwin.o
-
-zspeak.o:
-	$(CC) $(CFLAGS) -c ../../common/zspeak.c -o zspeak.o
-
-zwidget.o: ../../common/zwidget.c ../../common/zwidget.h
-	$(CC) $(CFLAGS) -c ../../common/zwidget.c -o zwidget.o
-
-zfsapp.o: ../../common/zfsapp.c ../../common/zfsapp.h
-	$(CC) $(CFLAGS) -c ../../common/zfsapp.c -o zfsapp.o
-
-zflist.o: ../../common/zflist.c ../../common/zflist.h
-	$(CC) $(CFLAGS) -c ../../common/zflist.c -o zflist.o
-
-zdialog.o: ../../common/zdialog.c ../../common/zdialog.h
-	$(CC) $(CFLAGS) -c ../../common/zdialog.c -o zdialog.o
 
 core.o: core.c core.h
 	$(CC) $(CFLAGS) -c core.c -o core.o
@@ -92,17 +56,6 @@ debug.o: debug.c debug.h disasm.h core.h
 chip8.o: chip8.c core.h render.h sound.h config.h debug.h
 	$(CC) $(CFLAGS) -c chip8.c -S -MF /dev/null -o chip8.asm
 	$(CC) $(CFLAGS) -c chip8.c -o chip8.o
-
-chip8.elf: $(OBJS)
-	$(CC) $(LDFLAGS) -T $(LDSCRIPT) -Wl,-Map,chip8.map -o chip8.elf $(OBJS)
-	$(PREFIX)objdump -S --disassemble chip8.elf > chip8.dasm
-
-chip8.bin: chip8.elf
-	@EDATA=$$($(PREFIX)nm chip8.elf | awk '$$3=="_edata"{print "0x"$$1}'); \
-	END=$$($(PREFIX)nm chip8.elf | awk '$$3=="_end"{print "0x"$$1}'); \
-	$(PREFIX)objcopy -O binary chip8.elf chip8.data; \
-	python3 ../../../tools/mkexec.py chip8.data chip8.bin $$(($$END - $$EDATA)); \
-	rm -f chip8.data
 
 # -- host tests ------------------------------------------------------
 #
@@ -156,24 +109,8 @@ goldens: $(BIN_RUN)
 
 check: test suite
 
-clean:
-	rm -f chip8.elf chip8.bin chip8.data chip8.asm chip8.dasm chip8.map *.o *.d
-	rm -f $(BIN_TEST_CORE) $(BIN_TEST_RENDER) $(BIN_TEST_CONFIG) $(BIN_RUN)
-	rm -rf /tmp/chip8-pgm
+.PHONY: test suite suite-pgm goldens roms check
 
-.PHONY: chip8 test suite suite-pgm goldens roms check clean
+CLEAN_EXTRA = $(BIN_TEST_CORE) $(BIN_TEST_RENDER) $(BIN_TEST_CONFIG) $(BIN_RUN) /tmp/chip8-pgm
 
-# Header dependency tracking. CFLAGS carries -MD, so gcc writes .d
-# files listing every header each object depends on; including them
-# here is what makes editing a header actually rebuild what uses it,
-# rather than linking silently against stale objects.
--include $(wildcard *.d)
--include $(wildcard */*.d)
-
-# sw/common/zedit.c -- the single-line text field.
-#
-# zdialog.c owned it privately until sw/apps/web's URL bar became its
-# second caller. Every app that links the dialog needs this too: a
-# shared widget is only shared if the build says so.
-zedit.o:
-	$(CC) $(CFLAGS) -c ../../common/zedit.c -o zedit.o
+include ../../common/app.mk

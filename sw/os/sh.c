@@ -691,6 +691,21 @@ void sh(void) {
 				printf("error: no file/directory specified\n");
 		}
 
+		// RENAME / MOVE (within one volume) -- docs/filesystem.md
+		if (!strncmp(buffer, "mv", cmdlen)) {
+			char *to = get_arg(buffer, 2);
+			static const char *const mv_err[] = { "", "no such file",
+				"destination exists", "different volumes (copy, then rm)",
+				"open for writing", "invalid name", "i/o error" };
+			arg = get_arg(buffer, 1);
+			if (arg == NULL || to == NULL) {
+				printf("usage: mv <from> <to>\n");
+			} else {
+				int e = fs_rename(arg, to);
+				if (e) printf("mv: %s\n", mv_err[e]);
+			}
+		}
+
 		// REMOVE FILE/DIRECTORY
 		if (!strncmp(buffer, "rm", cmdlen)) {
 			arg = get_arg(buffer, 1);
@@ -2145,9 +2160,17 @@ static void sh_bench(void) {
 	uint32_t n_int, n_mul, n_div, n_ld, n_ldr, n_st;
 
 	// A scratch buffer big enough that scattered access misses
-	// whatever row/line the previous access opened. Static rather
-	// than on the stack: the shell's stack is not this large.
-	static volatile uint32_t buf[1024];
+	// whatever row/line the previous access opened. Not on the stack:
+	// the shell's stack is not this large. And allocated for the run
+	// rather than static, like sdbench's (fs/sdbench.c): a static
+	// buffer is 4KB of the kernel's 256KB (image plus .bss) on every
+	// boot for a command run by hand. It is main memory either way,
+	// which is what the load/store rows measure.
+	volatile uint32_t *buf = k_mem_alloc(1024 * sizeof(uint32_t));
+	if (!buf) {
+		printf("bench: no memory for a 4KB buffer\n");
+		return;
+	}
 
 	printf("cycles per operation (lower is better)\n");
 
@@ -2239,6 +2262,8 @@ static void sh_bench(void) {
 	printf("      process. cyc/insn (CPI) is still meaningful. For clean\n");
 	printf("      absolute numbers, kill the other processes first.\n");
 
+	k_mem_free((void *)buf);
+
 }
 
 void sh_help(void) {
@@ -2310,6 +2335,7 @@ void sh_help(void) {
 	printf(" color [white|amber|green|paper]  display phosphor mode\n");
 	printf(" gpio [port] [pin] [in|out|od|0|1]  read/drive gpio pins (e.g. gpio 0 3 out)\n");
 	printf(" bench             cpu/memory micro-benchmarks\n");
+	printf(" mv <from> <to>    rename or move a file or directory\n");
 	printf(" sdbench [file]    layered sdcard throughput benchmark (docs/sdcard.md)\n");
 #ifdef USBH_DEBUG
 	printf(" usbbench [file]   the same for usb storage (docs/usb_host.md)\n");

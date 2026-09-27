@@ -46,6 +46,7 @@ Two consequences worth understanding before filing a bug about either:
   two, not stored at full resolution and panned. The scrollbars pan
   around the 640×480 *document*, which matters because the window is
   usually smaller than that — not because the image might be bigger.
+  The mouse wheel scrolls it vertically, 48 pixels a notch.
 - **Dithering happens during decode.** There is no greyscale
   intermediate, so there is nothing to re-dither from. Changing the
   scale means decoding the file again.

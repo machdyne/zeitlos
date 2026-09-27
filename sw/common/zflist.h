@@ -133,6 +133,14 @@ typedef struct {
 	uint8_t		last_buttons;
 	bool		dirty;
 
+	// Optional details column: size and date on each row. NULL (what
+	// z_flist_init() leaves) lists names only, as every dialog does.
+	// An app that wants details points this at Z_FLIST_MAX entries of
+	// its own -- 1.5KB, which is why it is not built in -- and the
+	// listing then comes from FS_LIST_EX (docs/filesystem.md). Entry
+	// i's details are info[i], kept in step with the sort.
+	z_fs_info_t	*info;
+
 } z_flist_t;
 
 // binds the widget to a window. Does not read the filesystem -- call
@@ -154,6 +162,10 @@ bool z_flist_chdir(z_flist_t *fl, const char *path);
 // it still exists. For after a save, so the new file shows up.
 bool z_flist_refresh(z_flist_t *fl);
 
+// z_flist_refresh(), then select the entry called `name` if there is
+// one (NULL: the first row). For a file that was just renamed.
+bool z_flist_refresh_select(z_flist_t *fl, const char *name);
+
 void z_flist_draw(z_flist_t *fl, bool force);
 
 // marks everything dirty -- after a resize, or any time the window's
@@ -163,6 +175,12 @@ void z_flist_invalidate(z_flist_t *fl);
 // pointer sample, content-relative, `buttons` from
 // Z_WM_UNPACK_MOUSE_BUTTONS. Returns one of Z_FLIST_*.
 int z_flist_mouse(z_flist_t *fl, int cx, int cy, uint8_t buttons);
+
+// the mouse wheel: `notches` from Z_WM_WHEEL_NOTCHES (zwm.h), positive
+// away from the user. Scrolls the VIEW three rows a notch and leaves the
+// selection where it is, as desktop file lists do; the selection may
+// scroll out of sight, and a key brings it back. Redraws if it moved.
+void z_flist_wheel(z_flist_t *fl, int notches);
 
 // one keysym (zkbd.h) -- Up/Down/PageUp/PageDown/Home/End move the
 // selection, Enter activates, Backspace goes up a directory. Returns
@@ -194,5 +212,9 @@ bool z_flist_activated_dir(const z_flist_t *fl);
 // built on this: the alternative is a file that is definitely there
 // and simply never appears.
 bool z_flist_truncated(const z_flist_t *fl);
+
+// The details of the selected entry (size, date, attributes), or NULL
+// when there is no selection, it is the ".." row, or fl->info is NULL.
+const z_fs_info_t *z_flist_selected_info(const z_flist_t *fl);
 
 #endif

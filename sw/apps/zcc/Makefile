@@ -15,15 +15,12 @@
 # the card at run time and not linked into zcc. `make` here builds it
 # so that a whole-tree build produces both.
 
-PREFIX ?= $(RISCV_PREFIX)
-include ../../common/arch.mk
-CC = $(PREFIX)gcc
+# Build rules are shared: sw/common/app.mk, docs/build.md. What is
+# particular to zcc is below: objects in build/, -Werror on its own
+# sources only, and libz built alongside.
 
-GC_SECTIONS ?= 1
-ifeq ($(GC_SECTIONS),1)
-GC_CFLAGS = -ffunction-sections -fdata-sections
-GC_LDFLAGS = -Wl,--gc-sections
-endif
+APP = zcc
+APP_MAIN_RULE = 0
 
 # -DZCC_HOSTED=0 on EVERYTHING, not just port_dev.c.
 #
@@ -36,11 +33,7 @@ endif
 #
 # A flag that selects "which machine is this for" belongs on the whole
 # build, not on the file that most obviously needs it.
-override CFLAGS += --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) \
-	$(GC_CFLAGS) $(ARCH_DEFS) $(LIBC_FLAGS) -I../../common -I. \
-	-DZCC_HOSTED=0
-LDFLAGS = -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS)
-LDSCRIPT = ../../common/riscv-app.ld
+APP_CFLAGS = -I../../common -I. -DZCC_HOSTED=0
 
 # -Werror on THIS APP'S OWN sources only. The sw/common objects below
 # have warnings that vary by toolchain version (zeitlos.c's _exit() is
@@ -48,7 +41,7 @@ LDSCRIPT = ../../common/riscv-app.ld
 # build over code it does not own. The reason -Werror is here at all
 # is in docs/zcc.md -- zcc shipped for days with three implicit
 # declarations nobody read.
-APP_CFLAGS = $(CFLAGS) -Werror
+OWN_CFLAGS = $(CFLAGS) -Werror
 
 # Objects go in build/, NOT beside the sources.
 #
@@ -62,69 +55,34 @@ APP_CFLAGS = $(CFLAGS) -Werror
 # This was fixed once and reintroduced when zcc became an ordinary app,
 # which is the argument for the comment rather than just the fix.
 B = build
-OBJS = $(B)/zeitlos.o $(B)/zobj.o $(B)/zport.o $(B)/zfsapp.o $(B)/zwin.o \
-	$(B)/zgfx.o $(B)/zfont_data.o \
-	$(B)/main.o $(B)/lex.o $(B)/cpp.o $(B)/parse.o $(B)/emit.o \
-	$(B)/util.o $(B)/port_dev.o
+COMMON = zeitlos zobj zport zfsapp zwin zgfx zfont_data
+OWN = main lex cpp parse emit util port_dev
+OBJS = $(addprefix $(B)/,$(addsuffix .o,$(COMMON) $(OWN)))
 
-zcc: zcc.elf zcc.bin libz.data
-
-$(B)/zeitlos.o: | $(B)
-	$(CC) $(CFLAGS) -c ../../common/zeitlos.c -o $@
-$(B)/zobj.o: | $(B)
-	$(CC) $(CFLAGS) -c ../../common/zobj.c -o $@
-$(B)/zport.o: | $(B)
-	$(CC) $(CFLAGS) -c ../../common/zport.c -o $@
-$(B)/zfsapp.o: | $(B)
-	$(CC) $(CFLAGS) -c ../../common/zfsapp.c -o $@
 # zwin for z_launch_arg_take() alone -- how `posix` hands zcc a command
 # line. It pulls in zgfx/zfont_data, which --gc-sections then drops
 # almost all of.
-$(B)/zwin.o: | $(B)
-	$(CC) $(CFLAGS) -c ../../common/zwin.c -o $@
-$(B)/zgfx.o: | $(B)
-	$(CC) $(CFLAGS) -c ../../common/zgfx.c -o $@
-$(B)/zfont_data.o: | $(B)
-	$(CC) $(CFLAGS) -c ../../common/zfont_data.c -o $@
+$(addprefix $(B)/,$(addsuffix .o,$(COMMON))): $(B)/%.o: ../../common/%.c | $(B)
+	$(CC) $(CFLAGS) -c $< -o $@
 
-$(B)/main.o: main.c zcc.h zcc_port.h | $(B)
-	$(CC) $(APP_CFLAGS) -c main.c -o $@
-$(B)/lex.o: lex.c zcc.h zcc_port.h | $(B)
-	$(CC) $(APP_CFLAGS) -c lex.c -o $@
-$(B)/cpp.o: cpp.c zcc.h zcc_port.h | $(B)
-	$(CC) $(APP_CFLAGS) -c cpp.c -o $@
-$(B)/parse.o: parse.c zcc.h zcc_port.h | $(B)
-	$(CC) $(APP_CFLAGS) -c parse.c -o $@
-$(B)/emit.o: emit.c zcc.h zcc_port.h | $(B)
-	$(CC) $(APP_CFLAGS) -c emit.c -o $@
-$(B)/util.o: util.c zcc.h zcc_port.h | $(B)
-	$(CC) $(APP_CFLAGS) -c util.c -o $@
-$(B)/port_dev.o: port_dev.c zcc.h zcc_port.h | $(B)
-	$(CC) $(APP_CFLAGS) -c port_dev.c -o $@
+$(addprefix $(B)/,$(addsuffix .o,$(OWN))): $(B)/%.o: %.c zcc.h zcc_port.h | $(B)
+	$(CC) $(OWN_CFLAGS) -c $< -o $@
 
 $(B):
 	mkdir -p $(B)
 
-zcc.elf: $(OBJS)
-	$(CC) $(LDFLAGS) -T $(LDSCRIPT) -Wl,-Map,zcc.map -o zcc.elf $(OBJS)
-	$(PREFIX)objdump -S --disassemble zcc.elf > zcc.dasm
-
-zcc.bin: zcc.elf
-	@EDATA=$$($(PREFIX)nm zcc.elf | awk '$$3=="_edata"{print "0x"$$1}'); \
-	END=$$($(PREFIX)nm zcc.elf | awk '$$3=="_end"{print "0x"$$1}'); \
-	$(PREFIX)objcopy -O binary zcc.elf zcc.data; \
-	python3 ../../../tools/mkexec.py zcc.data zcc.bin $$(($$END - $$EDATA)); \
-	rm -f zcc.data
-
 # The runtime zcc embeds into what it builds. A separate artefact with
 # its own Makefile, not linked here -- see the header comment.
+zcc: libz.data
 libz.data:
 	$(MAKE) -C libz
 
-clean:
-	rm -rf zcc.elf zcc.bin zcc.data zcc.map zcc.dasm $(B)
+clean: clean-libz
+clean-libz:
 	$(MAKE) -C libz clean
-	rm -rf build
 
-.PHONY: zcc libz.data clean
--include $(wildcard $(B)/*.d)
+.PHONY: libz.data clean-libz
+
+CLEAN_EXTRA = $(B)
+
+include ../../common/app.mk

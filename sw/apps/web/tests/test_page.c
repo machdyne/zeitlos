@@ -404,6 +404,43 @@ int main(int argc, char **argv) {
 	build_big();
 	run_doc(doc_big, doc_big_len, "big");
 
+	// -- <pre>: long, and last --
+	//
+	// No mark used to be legal inside a <pre> (html.c, mark_if_legal()),
+	// so a <pre> longer than one pass hung the indexer at the same
+	// block for ever, and a document ENDING in a <pre> lost it: the
+	// last pass wound its count back to the mark before the <pre>.
+	// Every Gopher menu is one <pre> and nothing after it (smallweb.c),
+	// so the third document is a menu exactly as the converter writes
+	// one; a Gemini page ending in a ``` block was the quiet case.
+	{
+		static char pre_long[16384], pre_last[512], menu[16384];
+		int n = 0;
+
+		n += sprintf(pre_long + n, "<html><body><p>before</p><pre>");
+		for (int i = 0; i < 200; i++)
+			n += sprintf(pre_long + n, "row %d of a long listing\n", i);
+		n += sprintf(pre_long + n, "</pre><p>after</p></body></html>");
+		run_doc(pre_long, (uint32_t)n, "pre-long");
+
+		n = sprintf(pre_last, "<html><body><h1>Art</h1><pre>  +---+\n"
+			"  | Z |\n  +---+\n</pre></body></html>\n");
+		run_doc(pre_last, (uint32_t)n, "pre-last");
+
+		n = sprintf(menu, "<html><head><meta charset=\"utf-8\"></head>"
+			"<body>\n<pre>      Welcome to a gopher hole\n");
+		for (int i = 0; i < 60; i++) {
+			if (i % 3 == 2)
+				n += sprintf(menu + n, "      information line %d\n", i);
+			else
+				n += sprintf(menu + n, "[%s] <a href=\"gopher://h/%d/sel/%d\">"
+					"Item %d, a longer description</a>\n",
+					i % 3 ? "txt" : "dir", i % 3 ? 0 : 1, i, i);
+		}
+		n += sprintf(menu + n, "</pre></body></html>\n");
+		run_doc(menu, (uint32_t)n, "gopher-menu");
+	}
+
 	// The big document must actually have exercised the thinning
 	// path, or the test above proved nothing about it.
 	index_whole(doc_big, doc_big_len);

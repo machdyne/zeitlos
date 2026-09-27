@@ -2,7 +2,8 @@
  * files -- a file browser
  *
  * Browse the filesystem, open a file with whatever app handles its
- * type, make directories, delete things.
+ * type, make directories, and rename, copy, move and delete things.
+ * Each row shows the entry's size and date (docs/file_browser.md).
  *
  *   > run wm
  *   > run files
@@ -11,7 +12,7 @@
  * was factored out of the file dialogs on exactly the assumption that
  * a browser would want the same thing: rows with an icon, keyboard and
  * mouse selection, its own scrollbar, and directory navigation. This
- * file is the window around it, three buttons, and the decision about
+ * file is the window around it, six buttons, and the decision about
  * what double-clicking something means.
  *
  * -- opening a file --
@@ -63,10 +64,14 @@ static z_dialog_ctx_t dlg_ctx;
 
 #define BTN_OPEN    0
 #define BTN_MKDIR   1
-#define BTN_DELETE  2
-#define BTN_COUNT   3
+#define BTN_RENAME  2
+#define BTN_COPY    3
+#define BTN_MOVE    4
+#define BTN_DELETE  5
+#define BTN_COUNT   6
 
-#define BTN_W       78
+// Six across the window's minimum width: (300 - 2*4 - 5*4) / 6.
+#define BTN_W       45
 #define BTN_H       16
 #define BTN_GAP     4
 #define MARGIN      4
@@ -75,8 +80,12 @@ static z_widget_t widgets[BTN_COUNT];
 static z_widget_set_t wset;
 
 static const char *const btn_labels[BTN_COUNT] = {
-	"Open", "New Folder", "Delete"
+	"Open", "New Dir", "Rename", "Copy", "Move", "Delete"
 };
+
+// The details column in the list (size and date per row, zflist.h):
+// the widget lists through FS_LIST_EX when given somewhere to put it.
+static z_fs_info_t finfo[Z_FLIST_MAX];
 
 // content-relative layout, recomputed on every resize
 static int list_y, list_h, btn_y;
@@ -90,7 +99,7 @@ static int list_y, list_h, btn_y;
 // the tab order lives here rather than in either of them.
 //
 // FOCUS_LIST is the list; anything else is a widget index. Tab cycles
-// list -> Open -> New Folder -> Delete -> list.
+// list -> Open -> New Dir -> Rename -> Copy -> Move -> Delete -> list.
 #define FOCUS_LIST  (-1)
 
 static int focus = FOCUS_LIST;
@@ -181,11 +190,18 @@ static void path_draw(void) {
 	int avail = cw - 2 * MARGIN;
 	if (avail <= 0) return;
 
-	int maxch = avail / z_font_5x8.w;
+	// A directory with more than Z_FLIST_MAX entries (or longer names
+	// than the list's pool holds) is listed only in part. Said here,
+	// on the path line, because otherwise a file that is on the card
+	// simply is not in the list and nothing hints why.
+	const char *more = z_flist_truncated(&flist) ? " (partial list)" : "";
+	int morelen = (int)strlen(more);
+
+	int maxch = avail / z_font_5x8.w - morelen;
 	const char *p = flist.path;
 	int len = (int)strlen(p);
 
-	char shown[Z_FLIST_PATH_MAX + 4];
+	char shown[Z_FLIST_PATH_MAX + 24];
 
 	if (len <= maxch) {
 		memcpy(shown, p, (size_t)len + 1);
@@ -195,6 +211,7 @@ static void path_draw(void) {
 	} else {
 		shown[0] = 0;
 	}
+	strcat(shown, more);
 
 	z_clip_t clip;
 	clip.x0 = content.x0 + MARGIN;
@@ -366,6 +383,149 @@ static void do_mkdir(void) {
 
 }
 
+// The current directory joined with `name`. False if it does not fit.
+static bool join_dir(const char *name, char *out, int outlen) {
+
+	int n = (int)strlen(flist.path);
+	int l = (int)strlen(name);
+	bool slash = (n > 0 && flist.path[n - 1] != '/');
+
+	if (n + (slash ? 1 : 0) + l + 1 > outlen) return false;
+	memcpy(out, flist.path, (size_t)n);
+	if (slash) out[n++] = '/';
+	memcpy(out + n, name, (size_t)l + 1);
+	return true;
+
+}
+
+// "Can't <verb>\n<reason>." for a Z_FS_ERR_* code, in a dialog.
+static void fail_dialog(const char *title, int err) {
+
+	char msg[64];
+	const char *why = fs_strerror(err);
+	int n = 0;
+
+	for (const char *p = "Not possible:\n"; *p; p++) msg[n++] = *p;
+	for (const char *p = why; *p && n < (int)sizeof(msg) - 2; p++)
+		msg[n++] = *p;
+	msg[n++] = '.';
+	msg[n] = 0;
+
+	z_dialog_confirm(&dlg_ctx, title, msg, Z_DIALOG_OK_CANCEL);
+
+}
+
+// After an operation: re-read the directory, keeping `keep` selected
+// if it is still here (a renamed file stays under the cursor).
+static void reload(const char *keep) {
+	z_flist_refresh_select(&flist, keep);
+	repaint();
+}
+
+// F2, or the Rename button. The new name stays in this directory --
+// moving somewhere else is Move's job, so a '/' is refused here as it
+// is in New Dir.
+static void do_rename(void) {
+
+	const char *name = z_flist_selected(&flist);
+	if (!name) return;
+
+	char from[Z_FLIST_PATH_MAX], to[Z_FLIST_PATH_MAX];
+	char newname[Z_FS_NAME_MAX];
+	int err;
+
+	if (!z_flist_selected_path(&flist, from, sizeof(from))) return;
+
+	if (!z_dialog_prompt(&dlg_ctx, "Rename", "New name:", name,
+		newname, sizeof(newname)) || !newname[0])
+		return;
+	if (!strcmp(newname, name)) return;
+
+	for (const char *p = newname; *p; p++) {
+		if (*p == '/') {
+			z_dialog_confirm(&dlg_ctx, "Bad name",
+				"A name cannot\ncontain '/'.", Z_DIALOG_OK_CANCEL);
+			return;
+		}
+	}
+
+	if (!join_dir(newname, to, sizeof(to))) return;
+
+	if (!fs_rename(from, to, &err)) {
+		fail_dialog("Rename", err);
+		return;
+	}
+
+	reload(newname);
+
+}
+
+// Copy and Move ask where to, starting from where the file is now, so
+// the common cases are an edit of the end of the line: a new name, or
+// another directory in front of the same name. A destination that is
+// an existing directory means "into it", as in posix's `mv`/`cp`.
+//
+// Move between volumes (the card and /ram, say) is a copy then a
+// delete, done by fs_move(), which removes the original only once the
+// copy has succeeded. Copying a whole folder is not offered: that is a
+// recursive walk with its own failure modes, and is posix's `cp` to
+// grow if it is wanted.
+static void do_copy_move(bool move) {
+
+	const char *title = move ? "Move" : "Copy";
+	const char *name = z_flist_selected(&flist);
+	if (!name) return;
+
+	char from[Z_FLIST_PATH_MAX], to[Z_FLIST_PATH_MAX];
+	z_fs_info_t fi;
+	int err = Z_FS_ERR_IO;
+
+	if (!z_flist_selected_path(&flist, from, sizeof(from))) return;
+
+	if (!move && z_flist_selected_is_dir(&flist)) {
+		z_dialog_confirm(&dlg_ctx, title,
+			"Folders can be moved\nor renamed, not copied.", Z_DIALOG_OK_CANCEL);
+		return;
+	}
+
+	if (!z_dialog_prompt(&dlg_ctx, title, move ? "Move to:" : "Copy to:",
+		from, to, sizeof(to)) || !to[0])
+		return;
+	if (!strcmp(to, from)) return;
+
+	if (fs_stat(to, &fi) && fi.type == Z_FS_TYPE_DIR) {
+		int n = (int)strlen(to);
+		int l = (int)strlen(name);
+		if (n > 0 && to[n - 1] == '/') n--;
+		if (n + 1 + l + 1 > (int)sizeof(to)) { fail_dialog(title, Z_FS_ERR_INVAL); return; }
+		to[n++] = '/';
+		memcpy(to + n, name, (size_t)l + 1);
+	}
+
+	if (move) {
+		if (!fs_move(from, to, &err)) { fail_dialog(title, err); return; }
+	} else {
+		// fs_copy_file() overwrites; a copy onto an existing file
+		// asks first, as Delete does.
+		if (fs_stat(to, &fi)) {
+			if (fi.type == Z_FS_TYPE_DIR) { fail_dialog(title, Z_FS_ERR_EXIST); return; }
+			if (z_dialog_confirm(&dlg_ctx, title,
+				"Replace the file that\nis already there?", Z_DIALOG_YES_NO)
+				!= Z_DIALOG_YES)
+				return;
+		}
+		if (!fs_copy_file(from, to)) {
+			z_dialog_confirm(&dlg_ctx, title,
+				"The copy failed. Is\nthere space for it?", Z_DIALOG_OK_CANCEL);
+			reload(name);
+			return;
+		}
+	}
+
+	reload(move ? NULL : name);
+
+}
+
 static void do_delete(void) {
 
 	const char *name = z_flist_selected(&flist);
@@ -426,6 +586,9 @@ static void handle_mouse(uint32_t packed) {
 		switch (act) {
 			case BTN_OPEN:   do_open(); break;
 			case BTN_MKDIR:  do_mkdir(); break;
+			case BTN_RENAME: do_rename(); break;
+			case BTN_COPY:   do_copy_move(false); break;
+			case BTN_MOVE:   do_copy_move(true); break;
 			case BTN_DELETE: do_delete(); break;
 			default: break;
 		}
@@ -495,6 +658,9 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 			switch (act) {
 				case BTN_OPEN:   do_open(); break;
 				case BTN_MKDIR:  do_mkdir(); break;
+				case BTN_RENAME: do_rename(); break;
+				case BTN_COPY:   do_copy_move(false); break;
+				case BTN_MOVE:   do_copy_move(true); break;
 				case BTN_DELETE: do_delete(); break;
 				default: break;
 			}
@@ -514,6 +680,11 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 		draw_list_focus();
 		return;
 	}
+
+	// The usual shortcuts, in the list: F2 renames, Delete deletes
+	// (still asking first).
+	if (keysym == Z_KEY_F2) { do_rename(); draw_list_focus(); return; }
+	if (keysym == Z_KEY_DELETE) { do_delete(); draw_list_focus(); return; }
 
 	int r = z_flist_key(&flist, keysym);
 
@@ -606,6 +777,7 @@ int main(void) {
 	dlg_ctx.user = NULL;
 
 	z_flist_init(&flist, &win);
+	flist.info = finfo;
 
 	layout();
 
@@ -642,6 +814,14 @@ int main(void) {
 
 					if (msg.obj.type == Z_UINT32)
 						handle_mouse(msg.obj.val.uint32);
+
+					break;
+
+				case Z_WM_WHEEL:
+
+					// The list scrolls; the selection stays put (zflist.h).
+					if (msg.obj.type == Z_UINT32)
+						z_flist_wheel(&flist, Z_WM_WHEEL_NOTCHES(msg.obj.val.uint32));
 
 					break;
 

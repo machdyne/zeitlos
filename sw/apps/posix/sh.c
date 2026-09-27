@@ -186,16 +186,23 @@ static void bi_ls(px_shell_t *sh, int argc, char **argv) {
 
     char abs[PX_PATH_MAX];
     static char buf[4096];
-    static uint8_t types[128];
+    static z_fs_info_t info[128];
+    static const char *names[128];
+    static uint8_t order[128];
     uint32_t count = 0, truncated = 0;
+    int longfmt = 0, argi = 1;
 
-    if (!px_resolve(argc > 1 ? argv[1] : ".", abs, sizeof(abs))) {
+    /* -l: size and modification time (UTC -- the RTC's time; see
+     * docs/filesystem.md, "Timestamps"). */
+    if (argi < argc && !strcmp(argv[argi], "-l")) { longfmt = 1; argi++; }
+
+    if (!px_resolve(argi < argc ? argv[argi] : ".", abs, sizeof(abs))) {
         px_printf(sh, "ls: bad path\n");
         sh->status = 1;
         return;
     }
 
-    if (!fs_list_into(abs, buf, sizeof(buf), types, 128, &count, &truncated)) {
+    if (!fs_list_ex(abs, buf, sizeof(buf), info, 128, &count, &truncated)) {
         px_printf(sh, "ls: %s: cannot read\n", abs);
         sh->status = 1;
         return;
@@ -208,37 +215,45 @@ static void bi_ls(px_shell_t *sh, int argc, char **argv) {
      * makes the output of `ls` depend on the history of the card.
      *
      * An index array and an insertion sort: `count` is bounded at 128
-     * and the strings stay where they are, so this costs 128 pointers
-     * of stack and no copying.
+     * and the strings and infos stay where they are.
      */
-    static const char *names[128];
-    static uint8_t ntypes[128];
     const char *p = buf;
 
     for (uint32_t i = 0; i < count; i++) {
-        /* Entries come back "/"-prefixed (sw/common/zfs.h) and the
-         * leading slash is noise in a listing of one directory. */
-        names[i] = (*p == '/') ? p + 1 : p;
-        ntypes[i] = types[i];
+        /* Entries come back as full paths (sw/common/zfs.h), and in a
+         * listing of one directory only the last component is wanted. */
+        const char *slash = strrchr(p, '/');
+        names[i] = slash ? slash + 1 : p;
+        order[i] = (uint8_t)i;
         while (*p) p++;
         p++;
     }
 
     for (uint32_t i = 1; i < count; i++) {
-        const char *nk = names[i];
-        uint8_t tk = ntypes[i];
+        uint8_t k = order[i];
         uint32_t j = i;
-        while (j > 0 && strcmp(names[j - 1], nk) > 0) {
-            names[j] = names[j - 1];
-            ntypes[j] = ntypes[j - 1];
+        while (j > 0 && strcmp(names[order[j - 1]], names[k]) > 0) {
+            order[j] = order[j - 1];
             j--;
         }
-        names[j] = nk;
-        ntypes[j] = tk;
+        order[j] = k;
     }
 
-    for (uint32_t i = 0; i < count; i++)
-        px_printf(sh, "%s%s\n", names[i], ntypes[i] ? "/" : "");
+    for (uint32_t i = 0; i < count; i++) {
+        const z_fs_info_t *fi = &info[order[i]];
+        int dir = (fi->type == Z_FS_TYPE_DIR);
+        if (longfmt) {
+            if (dir) px_puts(sh, "     <dir>");
+            else px_printf(sh, "%10lu", (unsigned long)fi->size);
+            if (fi->fdate)
+                px_printf(sh, "  %04u-%02u-%02u %02u:%02u  ",
+                    1980 + (fi->fdate >> 9), (fi->fdate >> 5) & 15,
+                    fi->fdate & 31, fi->ftime >> 11, (fi->ftime >> 5) & 63);
+            else
+                px_puts(sh, "                    ");
+        }
+        px_printf(sh, "%s%s\n", names[order[i]], dir ? "/" : "");
+    }
 
     if (truncated) px_puts(sh, "... (truncated)\n");
 }
@@ -399,7 +414,7 @@ static void bi_gunzip(px_shell_t *sh, int argc, char **argv) {
             sh->status = 1;
             continue;
         }
-        if (!keep && fs_unlink(abs) != 0) {
+        if (!keep && !fs_unlink(abs)) {
             px_printf(sh, "gunzip: %s: decompressed, but not removed\n", argv[i]);
             sh->status = 1;
         }
@@ -415,7 +430,7 @@ static void bi_rm(px_shell_t *sh, int argc, char **argv) {
     if (argc < 2) { px_puts(sh, "usage: rm <file> ...\n"); sh->status = 1; return; }
     for (int i = 1; i < argc; i++) {
         char abs[PX_PATH_MAX];
-        if (!px_resolve(argv[i], abs, sizeof(abs)) || fs_unlink(abs) != 0) {
+        if (!px_resolve(argv[i], abs, sizeof(abs)) || !fs_unlink(abs)) {
             px_printf(sh, "rm: %s: failed\n", argv[i]);
             sh->status = 1;
         }
@@ -426,7 +441,7 @@ static void bi_mkdir(px_shell_t *sh, int argc, char **argv) {
     if (argc < 2) { px_puts(sh, "usage: mkdir <dir> ...\n"); sh->status = 1; return; }
     for (int i = 1; i < argc; i++) {
         char abs[PX_PATH_MAX];
-        if (!px_resolve(argv[i], abs, sizeof(abs)) || fs_mkdir(abs) != 0) {
+        if (!px_resolve(argv[i], abs, sizeof(abs)) || !fs_mkdir(abs)) {
             px_printf(sh, "mkdir: %s: failed\n", argv[i]);
             sh->status = 1;
         }
@@ -493,20 +508,20 @@ static void bi_cp(px_shell_t *sh, int argc, char **argv) {
 }
 
 /*
- * Renames, by copying and then removing.
+ * Renames or moves: one rename in the filesystem, instant whatever the
+ * size (FS_RENAME, docs/filesystem.md). Between volumes -- the card
+ * and /ram, say -- a rename is impossible, and fs_move() copies and
+ * then removes the source, only once the copy has succeeded, so an
+ * interrupted `mv` loses nothing.
  *
- * FatFs has f_rename and sw/common/zfsapp.h does not expose it, so
- * this is copy-then-unlink. That is slower and it is also SAFER in one
- * way worth stating: the source is only removed once the copy has
- * succeeded, so an interrupted `mv` loses nothing.
- *
- * Exposing f_rename would make this atomic and one syscall; it is a
- * small addition to zfsapp if `mv` of a large file ever becomes
- * annoying.
+ * As in Unix, a destination that is an existing directory means "into
+ * it": `mv notes.txt docs` gives docs/notes.txt.
  */
 static void bi_mv(px_shell_t *sh, int argc, char **argv) {
 
-    char src[PX_PATH_MAX];
+    char src[PX_PATH_MAX], dst[PX_PATH_MAX];
+    z_fs_info_t fi;
+    int err;
 
     if (argc != 3) {
         px_puts(sh, "usage: mv <from> <to>\n");
@@ -514,10 +529,28 @@ static void bi_mv(px_shell_t *sh, int argc, char **argv) {
         return;
     }
 
-    if (!copy_file(sh, argv[1], argv[2])) { sh->status = 1; return; }
+    if (!px_resolve(argv[1], src, sizeof(src)) ||
+        !px_resolve(argv[2], dst, sizeof(dst))) {
+        px_puts(sh, "mv: bad path\n");
+        sh->status = 1;
+        return;
+    }
 
-    if (!px_resolve(argv[1], src, sizeof(src)) || fs_unlink(src) != 0) {
-        px_printf(sh, "mv: %s: copied but not removed\n", argv[1]);
+    if (fs_stat(dst, &fi) && fi.type == Z_FS_TYPE_DIR) {
+        const char *base = strrchr(src, '/');
+        size_t n = strlen(dst);
+        base = base ? base + 1 : src;
+        if (n + 1 + strlen(base) + 1 > sizeof(dst)) {
+            px_puts(sh, "mv: path too long\n");
+            sh->status = 1;
+            return;
+        }
+        if (n == 0 || dst[n - 1] != '/') dst[n++] = '/';
+        strcpy(dst + n, base);
+    }
+
+    if (!fs_move(src, dst, &err)) {
+        px_printf(sh, "mv: %s: %s\n", argv[1], fs_strerror(err));
         sh->status = 1;
     }
 }
@@ -991,7 +1024,7 @@ static void bi_rmdir(px_shell_t *sh, int argc, char **argv) {
         /* FatFs's f_unlink removes an empty directory as well as a
          * file, and refuses a non-empty one -- which is rmdir's
          * contract exactly, so there is nothing to add. */
-        if (!px_resolve(argv[i], abs, sizeof(abs)) || fs_unlink(abs) != 0) {
+        if (!px_resolve(argv[i], abs, sizeof(abs)) || !fs_unlink(abs)) {
             px_printf(sh, "rmdir: %s: failed (not empty?)\n", argv[i]);
             sh->status = 1;
         }
@@ -1206,14 +1239,14 @@ typedef struct {
 static const builtin_t builtins[] = {
     { "cd",    bi_cd,    "change directory" },
     { "pwd",   bi_pwd,   "print the working directory" },
-    { "ls",    bi_ls,    "list a directory" },
+    { "ls",    bi_ls,    "list a directory (-l: size and date)" },
     { "cat",   bi_cat,   "print files" },
     { "zcat",  bi_zcat,  "print .gz files, decompressed" },
     { "gunzip", bi_gunzip, "FILE.gz to FILE (-k keep it, -f overwrite)" },
     { "echo",  bi_echo,  "print arguments" },
     { "rm",    bi_rm,    "delete files" },
     { "cp",    bi_cp,    "copy a file" },
-    { "mv",    bi_mv,    "rename a file" },
+    { "mv",    bi_mv,    "rename or move a file or directory" },
     { "touch", bi_touch, "create a file if it does not exist" },
     { "clear", bi_clear, "clear the screen" },
     { "reboot", bi_reboot, "reconfigure the FPGA, after syncing open files" },

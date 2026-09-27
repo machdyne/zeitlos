@@ -1020,6 +1020,29 @@ static void scroll_repaint(void) {
 
 }
 
+// The mouse wheel (Z_WM_WHEEL): three lines a notch, up = back, like
+// term and every desktop editor. It moves the VIEW, not the caret --
+// the same as dragging the scrollbar, and by the same path, so it does
+// not go through scroll_to_cursor(), which would pull the view straight
+// back to the caret. The next key that moves the caret brings it back
+// into view.
+static void wheel_scroll(int notches) {
+
+	int max = nlines - rows;
+	int t = top_line - 3 * notches;
+
+	if (max < 0) max = 0;
+	if (t > max) t = max;
+	if (t < 0) t = 0;
+	if (t == top_line) return;
+
+	top_line = t;
+	z_scrollbar_set_value(&sbar, top_line);
+	scroll_repaint();
+
+}
+
+
 // Full repaint. Called on Z_WM_REDRAW, which wm sends after it has
 // already cleared the region -- so this must not assume anything
 // about what is currently on screen.
@@ -2491,6 +2514,12 @@ int main(void) {
 					handle_key(Z_WM_UNPACK_KEY_KEYSYM(msg.obj.val.uint32),
 						(uint8_t)Z_WM_UNPACK_KEY_MODIFIERS(msg.obj.val.uint32));
 
+					break;
+
+				case Z_WM_WHEEL:
+
+					if (msg.obj.type == Z_UINT32)
+						wheel_scroll(Z_WM_WHEEL_NOTCHES(msg.obj.val.uint32));
 					break;
 
 				case Z_WM_MOUSE:

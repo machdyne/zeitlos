@@ -227,53 +227,18 @@ FILE *const stderr = &z_picolibc_stdio;
 
 // -- printf without floating point --
 //
-// newlib's printf and snprintf are the full implementations, and a
-// full printf must be able to print a double: each drags in its own
-// copy of the formatting engine (_vfprintf_r and _svfprintf_r, ~14 KB
-// each), plus _dtoa_r, the multi-precision helpers and libgcc's soft
-// double arithmetic. Measured on this kernel: 46 KB of the 256 KB image
-// (docs/kernel.md, "The 256KB image budget"), for a kernel with no
-// floating point in it anywhere -- no %f, %e, %g or %a in any format
-// string, and the one %g in ../common/zobj.c (z_obj_print) is not
-// linked here.
+// The kernel's printf family is sw/common/zfmt.c (docs/build.md,
+// "Integer-only printf (ZFMT)"), linked from this directory's Makefile.
 //
-// newlib also has the integer-only engine, _vfiprintf_r, which was
-// already linked (assert() uses it through fiprintf). Defining these
-// three here makes every printf in the kernel use it; the libc members
-// holding the full versions are then never pulled in. Output is the
-// same for everything the integer engine supports -- %d %i %u %x %X %o
-// %c %s %p, the l and h length modifiers, flags, width and precision.
+// History, since it explains the choice. newlib's printf and snprintf
+// are the full implementations, each with its own engine (~14 KB) plus
+// _dtoa_r, the multi-precision helpers and soft double arithmetic: 46 KB
+// of the 256 KB image for a kernel with no floating point in it. The
+// first fix defined printf/snprintf/vsnprintf here on top of newlib's
+// integer-only engines, _vfiprintf_r and _svfiprintf_r -- still two
+// engines, ~14 KB between them. zfmt.c is one, of ~1.5 KB, and writes
+// through the same FILE layer, so the kernel's fflush()es and its
+// mixing of puts() with printf() behave exactly as before.
 //
-// THE TRAP: a %f added to kernel code later compiles, gcc's -Wformat
-// accepts it, and it prints nothing useful. Print fixed point instead,
-// as fs/sdbench.c already does.
-//
-// picolibc (../common/arch.mk, when the newlib prefix is absent) does
-// not name the integer-only variants the same way, so this is newlib
-// only and picolibc keeps whatever its own printf does.
-#ifndef __PICOLIBC__
-int printf(const char *fmt, ...)
-{
-	va_list ap;
-	int r;
-	va_start(ap, fmt);
-	r = viprintf(fmt, ap);
-	va_end(ap);
-	return r;
-}
-
-int vsnprintf(char *s, size_t n, const char *fmt, va_list ap)
-{
-	return vsniprintf(s, n, fmt, ap);
-}
-
-int snprintf(char *s, size_t n, const char *fmt, ...)
-{
-	va_list ap;
-	int r;
-	va_start(ap, fmt);
-	r = vsniprintf(s, n, fmt, ap);
-	va_end(ap);
-	return r;
-}
-#endif	// !__PICOLIBC__
+// THE TRAP is unchanged: %f, %e, %g and %a print "?". Print fixed
+// point instead, as fs/sdbench.c does.

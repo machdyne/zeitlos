@@ -1,5 +1,8 @@
+# sw/apps/mesh -- build rules are shared: sw/common/app.mk, docs/build.md.
+
+APP = mesh
+APP_LISTING = 0
 # sw/apps/mesh -- a Meshtastic client. See docs/mesh_app.md.
-#
 #   make          the app, mesh.bin
 #   make test     the host tests: zpb, the framer, the protocol, model
 #                 and session layers against a simulated node, and the
@@ -12,23 +15,9 @@
 
 COMMON = ../../common
 
-PREFIX ?= $(RISCV_PREFIX)
-# ARCH/ABI come from one place -- never hardcode them.
 include $(COMMON)/arch.mk
-CC = $(PREFIX)gcc
 
-GC_SECTIONS ?= 1
-ifeq ($(GC_SECTIONS),1)
-GC_CFLAGS = -ffunction-sections -fdata-sections
-GC_LDFLAGS = -Wl,--gc-sections
-endif
-
-# `override` so the flags this app REQUIRES survive a command-line
-# CFLAGS, which would otherwise replace them outright.
-override CFLAGS += --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) \
-	-DZ_GFX_HW_BLIT -DZPORT_NO_PRINTF -I$(COMMON) $(GC_CFLAGS) $(ARCH_DEFS) $(LIBC_FLAGS)
-LDFLAGS = -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS)
-LDSCRIPT = $(COMMON)/riscv-app.ld
+APP_CFLAGS = -DZPORT_NO_PRINTF -I$(COMMON)
 
 # The core, shared by the app and the host tests.
 CORE = mesh_frame mesh_model mesh_proto mesh_session mesh_view mesh_log
@@ -36,33 +25,14 @@ COMMON_OBJS = zeitlos.o zobj.o zport.o zrng.o zsoc.o zwin.o zgfx.o \
 	zfont_data.o zrtc.o zcfg.o zcaption.o zpb.o zfsapp.o
 OBJS = $(COMMON_OBJS) $(addsuffix .o,$(CORE)) mesh_log_io.o mesh_ui.o mesh.o
 
-mesh: mesh.elf mesh.bin
-
 $(COMMON_OBJS): %.o: $(COMMON)/%.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 mesh_%.o: mesh_%.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
-mesh.o: mesh.c
-	$(CC) $(CFLAGS) -c mesh.c -o mesh.o
-
-mesh.elf: $(OBJS)
-	$(CC) $(LDFLAGS) -T $(LDSCRIPT) -Wl,-Map,mesh.map -o mesh.elf $(OBJS)
-	$(PREFIX)objdump -S --disassemble mesh.elf > mesh.dasm
-
 # A .zexe: the header carries .bss as a number rather than as zeros on
 # the card. See sw/common/zexec.h.
-mesh.bin: mesh.elf
-	@EDATA=$$($(PREFIX)nm mesh.elf | awk '$$3=="_edata"{print "0x"$$1}'); \
-	END=$$($(PREFIX)nm mesh.elf | awk '$$3=="_end"{print "0x"$$1}'); \
-	$(PREFIX)objcopy -O binary mesh.elf mesh.data; \
-	python3 ../../../tools/mkexec.py mesh.data mesh.bin $$(($$END - $$EDATA)); \
-	rm -f mesh.data
-
-# -DZ_GFX_HW_BLIT: text goes through the hardware glyph blitter, in
-# z_font_5x8, which wm keeps in glyph memory (docs/window_manager.md,
-# "Hardware glyph blitting").
 
 # -- host tests --
 
@@ -92,10 +62,7 @@ test:
 test_asan:
 	$(MAKE) test HOSTFLAGS="$(HOSTFLAGS) -fsanitize=address,undefined -g"
 
-clean:
-	rm -f mesh.elf mesh.bin mesh.data mesh.map mesh.dasm *.o *.d
-
-.PHONY: mesh test test_asan clean render
+.PHONY: test test_asan render
 
 -include *.d
 
@@ -111,3 +78,5 @@ render:
 		$(COMMON)/zfont_data.c $(COMMON)/zobj.c $(COMMON)/zeitlos.c \
 		$(COMMON)/zrtc.c
 	/tmp/mesh_render /tmp/mesh_$(WHAT).pbm $(WHAT)
+
+include ../../common/app.mk

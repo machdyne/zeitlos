@@ -221,4 +221,39 @@ int fs_truncate(int handle, uint32_t size);
 // on exactly that class of collision.
 bool fs_df(uint32_t *total_kb, uint32_t *free_kb);
 
+// -- rename, stat, extended listing, copy -- docs/filesystem.md,
+// "Rename, stat and the extended listing". Same 1-on-success,
+// 0-on-failure convention as everything above.
+
+// Renames or moves `from` to `to` within one volume. On failure, if
+// `err` is not NULL it gets the Z_FS_ERR_* reason (zfs.h) --
+// Z_FS_ERR_XDEV in particular means "different volumes: copy, then
+// unlink", which fs_move() below does for you.
+int fs_rename(const char *from, const char *to, int *err);
+
+// Size, date and attributes of one path (z_fs_info_t, zfs.h).
+int fs_stat(const char *path, z_fs_info_t *info);
+
+// fs_list_into() plus a z_fs_info_t per entry. `info` may be NULL, in
+// which case this is exactly fs_list_into(); otherwise it must hold
+// max_entries entries.
+int fs_list_ex(const char *path, char *buf, uint32_t buf_cap,
+	z_fs_info_t *info, uint32_t max_entries, uint32_t *count,
+	uint32_t *truncated);
+
+// The three below are in zfsutil.c: link zfsutil.o to use them.
+
+// Copies one file, streaming through a small buffer. A partial copy
+// is removed rather than left behind. Refuses to copy a file onto
+// itself (same path, compared case-insensitively as FAT names are).
+int fs_copy_file(const char *from, const char *to);
+
+// Renames if it can, copies and unlinks if the two paths are on
+// different volumes. The source is removed only once the copy has
+// succeeded. `err` as for fs_rename().
+int fs_move(const char *from, const char *to, int *err);
+
+// A short English reason for a Z_FS_ERR_* code: "destination exists".
+const char *fs_strerror(int err);
+
 #endif

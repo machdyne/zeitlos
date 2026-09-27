@@ -194,6 +194,33 @@ invariant and by nothing else:
 In both cases a parse from the start was correct every time, and
 every unit case passed.
 
+**Inside `<pre>` the rule had one gap, the other way round: it was too
+strict.** After each newline in a `<pre>` the next row's kind is
+`HTML_PRE`, so "no classified block kind" was never true inside one --
+and no mark was ever taken there, however long the `<pre>`. The indexer
+(`page.c`) resumes each pass from the latest mark and winds its count
+back to it, so:
+
+- a `<pre>` longer than one indexing pass (24 blocks in `web`) was
+  re-indexed from its start on every pass, for ever: *"reading... 0
+  blocks"*;
+- a document **ending** in a `<pre>` lost it entirely, because the last
+  pass wound the count back to the mark before it and there was no next
+  pass.
+
+Every Gopher menu is one `<pre>` and nothing after it
+([gopher_gemini.md](gopher_gemini.md)), which is how it was found; a web
+page with a long code listing hung the same way, and a Gemini page
+ending in a preformatted block silently lost it. The kind inside a
+`<pre>` is not really context-only, though: it follows from
+`pre_depth`, which *is* in `html_state_t`. So a row boundary inside a
+`<pre>` is now a legal mark (`mark_if_legal()`, `html.c`), and
+`html_restore()` sets the kind back from `pre_depth`. `tests/test_page.c`
+indexes a long `<pre>`, one at the end of a document, and a Gopher menu
+as the converter writes one, streamed at a budget of 8 blocks a pass,
+and requires the index to match a straight parse; against the old
+`html.c` those fail 17 checks.
+
 ---
 
 ## Layout

@@ -284,10 +284,10 @@ int z_widget_key_activate(z_widget_set_t *set);
  * the blitter like everything else here.
  *
  * Visually it is deliberately minimal: a thumb, and nothing else. No
- * step arrows (there is no scroll wheel in this system either, so the
- * mouse-only granularity is a page -- but arrows are three extra hit
- * regions and a pair of drawn triangles for something the keyboard
- * already does better), and no trough frame. When there is nothing to
+ * step arrows (arrows are three extra hit regions and a pair of drawn
+ * triangles for something the keyboard and the mouse wheel already do
+ * better -- the wheel is Z_WM_WHEEL, which each app applies to its own
+ * view; docs/user_input.md, "Scroll wheel"), and no trough frame. When there is nothing to
  * scroll, it draws NOTHING rather than a full-length thumb, which is
  * both quieter and unambiguous.
  *

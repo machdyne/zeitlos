@@ -127,6 +127,49 @@ $ wc t2.txt
 2 6 30 t2.txt
 $ rm t2.txt
 
+# -- mv: rename, into a directory, between volumes, refusals --
+# (docs/filesystem.md, "Rename, stat and the extended listing")
+$ cp notes.txt m1.txt
+$ mv m1.txt mvdir
+$ cat mvdir/m1.txt
+hello from a file
+second line
+$ cat m1.txt
+cat: m1.txt: cannot open
+? 1
+# /ram is another volume: copied, then the source removed
+$ mv mvdir/m1.txt /ram/m1.txt
+$ cat /ram/m1.txt
+hello from a file
+second line
+$ cat mvdir/m1.txt
+cat: mvdir/m1.txt: cannot open
+? 1
+$ cp notes.txt m2.txt
+$ cp notes.txt m3.txt
+$ mv m2.txt m3.txt
+mv: m2.txt: destination exists
+? 1
+$ mv nosuch.txt m4.txt
+mv: nosuch.txt: no such file or directory
+? 1
+$ mv mvdir mvdir/inner
+mv: mvdir: invalid name
+? 1
+$ rm m2.txt
+$ rm m3.txt
+$ rm /ram/m1.txt
+$ rm nosuch.txt
+rm: nosuch.txt: failed
+? 1
+
+# -- ls -l: size, or <dir>, and the date (fixed in host_fs.c) --
+$ ls -l src
+        26  2026-01-02 03:04  a.c
+$ ls -l mvdir
+$ ls src
+a.c
+
 # -- zcat, gunzip (sw/common/zgz.c) --
 $ zcat notes.gz
 hello from a file

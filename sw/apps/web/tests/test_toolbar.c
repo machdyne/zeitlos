@@ -41,8 +41,10 @@ int main(void) {
 			if (tb.fwd_x + TB_BTN_W > cw) {
 				fails++; printf("FAIL: cw=%d forward button off the edge\n", cw); break; }
 			// ...and nothing may overlap anything else.
-			if (tb.field_x + tb.field_w > tb.back_x) {
-				fails++; printf("FAIL: cw=%d field overlaps back\n", cw); break; }
+			if (tb.field_x + tb.field_w > tb.go_x) {
+				fails++; printf("FAIL: cw=%d field overlaps go\n", cw); break; }
+			if (tb.go_x + TB_BTN_W > tb.back_x) {
+				fails++; printf("FAIL: cw=%d go overlaps back\n", cw); break; }
 			if (tb.back_x + TB_BTN_W > tb.fwd_x) {
 				fails++; printf("FAIL: cw=%d buttons overlap\n", cw); break; }
 		}
@@ -65,6 +67,16 @@ int main(void) {
 			"one pixel left of back is not back");
 		ck(toolbar_hit(&tb, tb.back_x + TB_BTN_W, 4) != TB_HIT_BACK,
 			"one pixel right of back is not back");
+
+		ck(toolbar_hit(&tb, tb.go_x, 4) == TB_HIT_GO,
+			"go button, first pixel");
+		ck(toolbar_hit(&tb, tb.go_x + TB_BTN_W - 1, 4) == TB_HIT_GO,
+			"go button, last pixel");
+		ck(toolbar_hit(&tb, tb.go_x - 1, 4) == TB_HIT_NONE ||
+			toolbar_hit(&tb, tb.go_x - 1, 4) == TB_HIT_FIELD,
+			"left of go is the gap or the field, not go");
+		ck(tb.go_x < tb.back_x && tb.field_x + tb.field_w <= tb.go_x,
+			"order: field, go, back, forward");
 
 		ck(toolbar_hit(&tb, tb.fwd_x, 4) == TB_HIT_FORWARD,
 			"forward button, first pixel");
@@ -148,6 +160,28 @@ int main(void) {
 			ck(lit > 4, "a disabled arrow is still drawn");
 			ck(lit < nleft, "but is fainter than an enabled one");
 		}
+	}
+
+	// The Stop cross: symmetric, both diagonals, clear of the frame.
+	{
+		int w = TB_BTN_W, h = TB_H, set = 0, sym = 1, vsym = 1, top = -1, bot = -1;
+		for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) {
+			bool p = toolbar_cross_px(x, y, w, h);
+			set += p;
+			if (p && top < 0) top = y;
+			if (p) bot = y;
+			if (p != toolbar_cross_px(w - 1 - x, y, w, h)) sym = 0;
+		}
+		for (int y = top; y <= bot; y++) for (int x = 0; x < w; x++)
+			if (toolbar_cross_px(x, y, w, h) !=
+				toolbar_cross_px(x, top + bot - y, w, h)) vsym = 0;
+		ck(set > 8, "the cross draws something");
+		ck(sym, "the cross is left-right symmetric");
+		ck(vsym, "the cross is top-bottom symmetric");
+		ck(!toolbar_cross_px(0, 0, w, h) && !toolbar_cross_px(w - 1, h - 1, w, h),
+			"the cross stays clear of the button's frame");
+		ck(toolbar_cross_px(w / 2, h / 2, w, h) || toolbar_cross_px(w / 2 - 1, h / 2, w, h),
+			"the diagonals meet in the middle");
 	}
 
 	printf("%s: %d checks, %d failures\n", fails?"FAIL":"ok", checks, fails);

@@ -1,6 +1,8 @@
 #ifndef ZTTS_H
 #define ZTTS_H
 
+
+#include "zsubjects.h"	// the block these subjects are in
 /*
  * Zeitlos
  * Copyright (c) 2026 Lone Dynamics Corporation. All rights reserved.
@@ -42,22 +44,22 @@
 // The service copies the text into its own queue the moment it reads
 // the message, so the sender's buffer only has to survive until then
 // -- which zspeak.c's ring guarantees in practice (docs/tts.md).
-#define Z_TTS_SAY				0x54540001u
+#define Z_TTS_SAY				(Z_SUBJ_TTS + 0x1)
 
 // Stop speaking and discard everything queued. No payload. Every
 // discarded utterance that carried a mark is reported to its sender
 // as Z_TTS_MARK_CANCELLED.
-#define Z_TTS_STOP				0x54540002u
+#define Z_TTS_STOP				(Z_SUBJ_TTS + 0x2)
 
 // Speak the last utterance again. No payload.
-#define Z_TTS_REPEAT			0x54540003u
+#define Z_TTS_REPEAT			(Z_SUBJ_TTS + 0x3)
 
 // Say "Speech off", finish saying it, and exit. No payload. This is
 // how Super+S turns speech off (sw/apps/wm).
-#define Z_TTS_QUIT				0x54540004u
+#define Z_TTS_QUIT				(Z_SUBJ_TTS + 0x4)
 
 // Change a voice setting. obj is a Z_UINT32 from Z_TTS_SET_PACK().
-#define Z_TTS_SET				0x54540005u
+#define Z_TTS_SET				(Z_SUBJ_TTS + 0x5)
 
 // Become the narrator, or stop being it. obj is a Z_UINT32: a lease in
 // seconds, or 0 to give it up. While a narrator holds the lease, SAY,
@@ -68,7 +70,7 @@
 // lease; so does sending this again. A narrator that dies simply lets
 // it run out. Z_TTS_QUIT (Super+S) still works: the user can always
 // turn speech off. See docs/tts.md, "Narration".
-#define Z_TTS_NARRATE			0x54540006u
+#define Z_TTS_NARRATE			(Z_SUBJ_TTS + 0x6)
 
 // -- tts -> app --
 //
@@ -81,8 +83,8 @@
 // or Z_TTS_F_LOW while busy), which is reported CANCELLED at once.
 // A sender that loses one (its own mailbox full) must not wait
 // forever; zsayall-style readers use a timeout.
-#define Z_TTS_MARK_DONE			0x54540010u
-#define Z_TTS_MARK_CANCELLED	0x54540011u
+#define Z_TTS_MARK_DONE			(Z_SUBJ_TTS + 0x10)
+#define Z_TTS_MARK_CANCELLED	(Z_SUBJ_TTS + 0x11)
 
 // -- flags (low 8 bits of the tag) --
 
@@ -142,5 +144,8 @@
 // truncated, not refused. Sized for the whole clipboard
 // (Z_WM_CLIP_MAX, zwm.h), which is the longest thing anything sends.
 #define Z_TTS_UTTER_MAX			4096
+
+// Still inside the block zsubjects.h gives this protocol:
+Z_SUBJECTS_IN(Z_SUBJ_TTS, Z_TTS_MARK_CANCELLED);
 
 #endif

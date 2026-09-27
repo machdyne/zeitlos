@@ -13,8 +13,10 @@
 #include "verify.h"
 #include "rsa.h"
 #include "ecdsa.h"
+#include "sha384.h"
 
 #include "../../ext/monocypher/monocypher.h"
+#include "../../ext/monocypher/monocypher-ed25519.h"	// CertificateVerify, ed25519
 
 #ifdef TLS_HOST_TEST
 // The host harness supplies its own randomness; see tests/test_tls.c.
@@ -259,6 +261,8 @@ static void build_client_hello(tls_ctx_t *c, wbuf_t *w) {
 		uint32_t l = wlen16(w);
 		w16(w, 0x0403);					// ecdsa_secp256r1_sha256
 		w16(w, 0x0804);					// rsa_pss_rsae_sha256
+		w16(w, 0x0503);					// ecdsa_secp384r1_sha384
+		w16(w, 0x0807);					// ed25519 (Gemini capsules)
 		w16(w, 0x0401);					// rsa_pkcs1_sha256
 		wpatch16(w, l);
 	}
@@ -268,15 +272,21 @@ static void build_client_hello(tls_ctx_t *c, wbuf_t *w) {
 	// leaves a server free to select HTTP/2, which this client cannot
 	// speak -- and the failure would arrive as an unparseable
 	// response body rather than as a handshake error.
-	w16(w, EXT_ALPN);
-	at = wlen16(w);
-	{
-		uint32_t l = wlen16(w);
-		w8(w, 8);
-		wbytes(w, "http/1.1", 8);
-		wpatch16(w, l);
+	//
+	// Not in pin mode, which is Gemini (tls_set_pin()): Gemini defines
+	// no ALPN value, and offering an HTTP one to a Gemini server is
+	// wrong -- a strict server answers no_application_protocol.
+	if (!c->pin) {
+		w16(w, EXT_ALPN);
+		at = wlen16(w);
+		{
+			uint32_t l = wlen16(w);
+			w8(w, 8);
+			wbytes(w, "http/1.1", 8);
+			wpatch16(w, l);
+		}
+		wpatch16(w, at);
 	}
-	wpatch16(w, at);
 
 	w16(w, EXT_KEY_SHARE);
 	at = wlen16(w);
@@ -333,7 +343,7 @@ bool tls_start(tls_ctx_t *c) {
 	// There is deliberately no way to run this with verification off.
 	// The flag that allowed it while the machinery was being written
 	// is gone; see tls.h.
-	if (!c->verify_ready || !c->find_root) {
+	if (!c->verify_ready || (!c->find_root == !c->pin)) {
 		fail(c, "tls: no certificate root store -- refusing to connect");
 		return false;
 	}
@@ -548,7 +558,22 @@ static void handle_server_finished(tls_ctx_t *c, const uint8_t *msg,
 		c->tx_seq = 0;
 		c->tx_encrypted = true;
 
-		tls_finished(verify, c->client_hs_secret, th_after);
+		// A requested client Certificate comes first, empty (see
+		// HS_CERTIFICATE_REQUEST), and is part of what our Finished
+		// covers -- but not of the application secrets above, which
+		// RFC 8446 section 7.1 takes from the transcript through the
+		// server's Finished.
+		uint8_t th_fin[TLS_HASH_LEN];
+		if (c->cert_requested) {
+			uint8_t empty[4] = { 0, 0, 0, 0 };	// ctx len 0, list len 0 (3 bytes)
+			send_handshake(c, HS_CERTIFICATE, empty, 4);
+			snapshot = c->transcript;
+			z_sha256_final(&snapshot, th_fin);
+		} else {
+			memcpy(th_fin, th_after, TLS_HASH_LEN);
+		}
+
+		tls_finished(verify, c->client_hs_secret, th_fin);
 		send_handshake(c, HS_FINISHED, verify, TLS_HASH_LEN);
 	}
 
@@ -560,7 +585,23 @@ static void handle_server_finished(tls_ctx_t *c, const uint8_t *msg,
 	// NOW the chain, with our Finished already on the wire so the
 	// server is not waiting on us while this runs. See
 	// handle_certificate().
-	{
+	//
+	// Or, in pin mode (tls_set_pin()), the leaf's public key against
+	// the pin. CertificateVerify has already proved the peer holds
+	// that key, so a matching pin is the same server as last time.
+	if (c->pin) {
+		const char *why = NULL;
+		uint8_t fp[32];
+		z_sha256_ctx h;
+		z_sha256_init(&h);
+		z_sha256_update(&h, c->leaf.spki.p, c->leaf.spki.len);
+		z_sha256_final(&h, fp);
+		if (!c->pin(c->pin_user, c->host, fp, &why)) {
+			fail(c, why ? why : "tls: certificate does not match its pin");
+			return;
+		}
+		c->chain_ok = true;
+	} else {
 		const char *verr = NULL;
 		if (!verify_chain(c->chain, c->chain_n, c->host, c->now,
 			c->find_root, c->root_user, &verr)) {
@@ -751,6 +792,50 @@ static void handle_certificate_verify(tls_ctx_t *c, const uint8_t *body,
 		break;
 	}
 
+	// P-384 and Ed25519 keys. Offered so that a server whose key is one
+	// of these can sign at all -- it has no other choice of scheme
+	// (TLS 1.3 ties ECDSA schemes to one curve), and without them the
+	// handshake ended in alert 40 before anything was verified. Ed25519
+	// is how many Gemini capsules generate their own certificates; P-384
+	// turns up on both Gemini and the web.
+	case 0x0503: {						// ecdsa_secp384r1_sha384
+		uint8_t h384[SHA384_DIGEST];
+		der_t sv = { sig, siglen }, r, sc, seq;
+		if (c->leaf.key_alg != X509_KEY_EC_P384 ||
+			c->leaf.ec_point.len != 97) {
+			fail(c, "tls: signature algorithm does not match the key");
+			return;
+		}
+		if (!der_expect(&sv, DER_SEQUENCE, &seq) ||
+			!der_expect(&seq, DER_INTEGER, &r) ||
+			!der_expect(&seq, DER_INTEGER, &sc) || seq.len != 0) {
+			fail(c, "tls: malformed ECDSA CertificateVerify");
+			return;
+		}
+		sha384(h384, signed_content, n);
+		if (!ec_verify(EC_CURVE_P384, c->leaf.ec_point.p,
+			c->leaf.ec_point.len, r.p, r.len, sc.p, sc.len, h384, SHA384_DIGEST)) {
+			fail(c, "tls: the server did not prove it holds its own key");
+			return;
+		}
+		break;
+	}
+
+	case 0x0807:						// ed25519
+		// Signs the content itself, not a hash of it (RFC 8446
+		// section 4.4.3, RFC 8032).
+		if (c->leaf.key_alg != X509_KEY_ED25519 ||
+			c->leaf.ec_point.len != 32) {
+			fail(c, "tls: signature algorithm does not match the key");
+			return;
+		}
+		if (siglen != 64 ||
+			crypto_ed25519_check(sig, c->leaf.ec_point.p, signed_content, n) != 0) {
+			fail(c, "tls: the server did not prove it holds its own key");
+			return;
+		}
+		break;
+
 	// PKCS#1 v1.5 is NOT accepted here, even though certificates use
 	// it constantly. TLS 1.3 forbids it for handshake signatures
 	// (RFC 8446 section 4.4.3), and accepting it would be accepting
@@ -792,13 +877,34 @@ static void process_handshake_msg(tls_ctx_t *c, uint8_t type,
 		break;
 
 	case HS_CERTIFICATE_REQUEST:
-		// Answered with an empty Certificate, which is what a client
-		// with no certificate is supposed to send. Ignoring it makes
-		// the server wait for a message that never comes.
-		{
-			uint8_t empty[4] = { 0, 0, 0, 0 };	// ctx len 0, list len 0 (3 bytes)
-			send_handshake(c, HS_CERTIFICATE, empty, 4);
+		// Answered with an empty Certificate -- what a client with no
+		// certificate sends -- but NOT here. RFC 8446 puts the client's
+		// Certificate after the server's Finished, in the client's
+		// flight, encrypted under the client handshake key, and in the
+		// transcript after everything the server sent. Sending it on
+		// arrival (as this once did) put it in the transcript ahead of
+		// the server's Certificate and CertificateVerify, so the
+		// signature the server made over its own transcript never
+		// matched ours: "the server did not prove it holds its own
+		// key", from every server that asks for a client certificate.
+		// Gemini servers ask routinely -- it is how a capsule knows who
+		// is visiting -- and HTTPS servers almost never do, which is why
+		// only Gemini failed. It also went out unencrypted. Now it is
+		// noted here and sent in handle_server_finished().
+		//
+		// During the handshake the request context must be empty; a
+		// request after it is post-handshake authentication, which
+		// this client never offered (no post_handshake_auth extension)
+		// and so must refuse (RFC 8446 section 4.6.2).
+		if (c->state == ST_ESTABLISHED) {
+			fail(c, "tls: unexpected post-handshake CertificateRequest");
+			return;
 		}
+		if (!complete || len < 1 || body[0] != 0) {
+			fail(c, "tls: bad CertificateRequest");
+			return;
+		}
+		c->cert_requested = true;
 		break;
 
 	case HS_FINISHED:
@@ -1105,6 +1211,12 @@ void tls_set_verify(tls_ctx_t *c, int64_t now,
 	c->find_root = find_root;
 	c->root_user = user;
 	c->verify_ready = true;
+}
+
+void tls_set_pin(tls_ctx_t *c, tls_pin_fn pin, void *user) {
+	c->pin = pin;
+	c->pin_user = user;
+	c->verify_ready = (pin != NULL);
 }
 
 void tls_init(tls_ctx_t *c, const char *host,

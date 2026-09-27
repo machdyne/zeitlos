@@ -32,6 +32,7 @@ saved in that encoding -- see "Encodings" below.
 | arrows | move the caret; up and down keep the column |
 | Home / End | start / end of the display line |
 | PageUp / PageDown | a screen at a time |
+| mouse wheel | three lines a notch; the view moves, the caret stays |
 | Ctrl+N / Ctrl+O / Ctrl+S | new / open / save |
 | Ctrl+Q | close |
 | Shift + any movement key | extend the selection |

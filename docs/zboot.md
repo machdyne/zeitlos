@@ -234,8 +234,14 @@ section 11), the first of:
   is ([kvstore.md](kvstore.md)).
 
 A blinky is ~99 KB on a 25F and ~162 KB on a 45F -- never much less,
-since every configuration frame costs bytes. On a Mozart ML1 (2 MB, a
-45F) the core apps end near `0x1B0000`, leaving 128 KB, too little;
+since every configuration frame costs bytes. The first slot is what the
+core apps leave: in September 2026 they grew to fill it (578,356 bytes,
+ending at `0x1CD334`, nothing left), and then shrank to 353,236 when
+`net` stopped calling `sscanf` and the core apps moved to integer-only
+`printf` ([build.md](build.md#integer-only-printf-zfmt)). They now end
+at `0x1963D4`, which leaves **192 KB** from `0x1A0000` -- room for a 45F
+design, which it was not before. Earlier, on a Mozart ML1 (2 MB, a
+45F), the core apps ended near `0x1B0000`, leaving 128 KB, too little;
 its 598 KB of gateware, flashed over JTAG, leaves 320 KB in the
 gateware tail, which is where designs go there. With the DFU
 bootloader the gateware starts at `0x040000` and that tail shrinks to

@@ -1160,6 +1160,7 @@ static void pump_redraws(void) {
 		switch (msg.subject) {
 			case Z_WM_KEY:
 			case Z_WM_MOUSE:
+			case Z_WM_WHEEL:
 			case Z_WM_TITLEBAR_ICON:
 				break;
 			default:
@@ -1784,6 +1785,20 @@ int main(void) {
 
 					handle_key(Z_WM_UNPACK_KEY_KEYSYM(msg.obj.val.uint32),
 						(uint8_t)Z_WM_UNPACK_KEY_MODIFIERS(msg.obj.val.uint32));
+
+					break;
+
+				case Z_WM_WHEEL:
+
+					// Three rows a notch, up = back. The view moves and
+					// the cursor stays, as with the scrollbar.
+					if (msg.obj.type == Z_UINT32) {
+						int32_t t = (int32_t)top_row -
+							3 * Z_WM_WHEEL_NOTCHES(msg.obj.val.uint32);
+						if (t < 0) t = 0;
+						if ((uint32_t)t > max_top_row()) t = (int32_t)max_top_row();
+						if ((uint32_t)t != top_row) scroll_to_row((uint32_t)t);
+					}
 
 					break;
 

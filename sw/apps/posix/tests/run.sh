@@ -102,6 +102,9 @@ printf 'int a;\n' > "$work/wild/a.c"
 printf 'int bb;\n' > "$work/wild/b.c"
 printf 'int c;\n' > "$work/wild/c.c"
 printf 'hdr\n' > "$work/wild/a.h"
+# mv between volumes: host_fs.c treats /ram as a second volume, so a
+# rename into it is refused and fs_move() copies and unlinks instead.
+mkdir -p "$work/ram" "$work/mvdir"
 
 if [ -x "$here/px_case_test" ]; then
     echo

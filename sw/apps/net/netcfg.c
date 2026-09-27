@@ -10,15 +10,37 @@
 #include "../../common/zfsapp.h"
 #include "netcfg.h"
 
-static int parse_ipv4(const char *s, uint32_t *out)
+// A dotted-quad IPv4 address, "192.168.1.10", into host order. 0 on
+// success, -1 if it is not one.
+//
+// By hand rather than sscanf("%u.%u.%u.%u%c"), which is what this was:
+// that one call linked sscanf's engine, strtod, the multi-precision
+// helpers, soft double arithmetic and 28KB of wide-character locale
+// tables into net -- about 74KB of a core app, for four numbers
+// (docs/networking.md, "Why net does not call sscanf"). It accepts what
+// that accepted from a config file: whitespace before each number,
+// leading zeros of any length ("010" is ten, as %u reads it), and
+// nothing after the last number. tests/test_netcfg.c checks it.
+int netcfg_parse_ipv4(const char *s, uint32_t *out)
 {
-	unsigned a, b, c, d;
-	char extra;
-	if (sscanf(s, "%u.%u.%u.%u%c", &a, &b, &c, &d, &extra) != 4)
-		return -1;
-	if (a > 255 || b > 255 || c > 255 || d > 255)
-		return -1;
-	*out = (a << 24) | (b << 16) | (c << 8) | d;
+	uint32_t v = 0;
+
+	for (int part = 0; part < 4; part++) {
+		uint32_t n = 0;
+		int digits = 0;
+		while (*s == ' ' || *s == '\t') s++;
+		while (*s >= '0' && *s <= '9') {
+			n = n * 10 + (uint32_t)(*s++ - '0');
+			if (n > 255) return -1;		// also stops overflow
+			digits++;
+		}
+		if (!digits) return -1;
+		v = (v << 8) | n;
+		if (part < 3 && *s++ != '.') return -1;
+	}
+	if (*s) return -1;
+
+	*out = v;
 	return 0;
 }
 
@@ -142,25 +164,25 @@ int netcfg_load(netcfg_t *out)
 			} else if (!strcmp(p, "dhcp")) {
 				out->dhcp = (val[0] != '0');
 			} else if (!strcmp(p, "ip")) {
-				if (parse_ipv4(val, &out->ip) != 0) {
+				if (netcfg_parse_ipv4(val, &out->ip) != 0) {
 					printf("netcfg: bad ip\n");
 					free(buf);
 					return -1;
 				}
 			} else if (!strcmp(p, "mask") || !strcmp(p, "netmask")) {
-				if (parse_ipv4(val, &out->mask) != 0) {
+				if (netcfg_parse_ipv4(val, &out->mask) != 0) {
 					printf("netcfg: bad mask\n");
 					free(buf);
 					return -1;
 				}
 			} else if (!strcmp(p, "gw") || !strcmp(p, "gateway")) {
-				if (parse_ipv4(val, &out->gw) != 0) {
+				if (netcfg_parse_ipv4(val, &out->gw) != 0) {
 					printf("netcfg: bad gw\n");
 					free(buf);
 					return -1;
 				}
 			} else if (!strcmp(p, "dns")) {
-				if (parse_ipv4(val, &out->dns) != 0) {
+				if (netcfg_parse_ipv4(val, &out->dns) != 0) {
 					printf("netcfg: bad dns\n");
 					free(buf);
 					return -1;

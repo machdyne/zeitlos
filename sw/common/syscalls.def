@@ -251,3 +251,11 @@ Z_MKSYSCALL(KV, k_kv)
 // The password and the screen-lock policy (sw/common/zauth.h,
 // sw/os/auth.c, docs/security.md). An op field. Appended last.
 Z_MKSYSCALL(AUTH, k_auth)
+
+// Rename/move, stat, and a listing with size, date and attributes
+// (sw/common/zfs.h, sw/os/fsapi.c, docs/filesystem.md). Added for the
+// file browser's rename/copy/move and posix's `mv`. Appended last so
+// no earlier enum value shifts.
+Z_MKSYSCALL(FS_RENAME, k_fs_rename)
+Z_MKSYSCALL(FS_STAT, k_fs_stat)
+Z_MKSYSCALL(FS_LIST_EX, k_fs_list_ex)

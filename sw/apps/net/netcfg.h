@@ -47,4 +47,7 @@ typedef struct {
 /* 0 even if the file is missing (has_file=0). -1 on a malformed file. */
 int netcfg_load(netcfg_t *out);
 
+// "a.b.c.d" into a host-order address; 0 on success, -1 otherwise.
+int netcfg_parse_ipv4(const char *s, uint32_t *out);
+
 #endif

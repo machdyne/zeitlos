@@ -1,6 +1,8 @@
 #ifndef ZNTP_H
 #define ZNTP_H
 
+
+#include "zsubjects.h"	// the block these subjects are in
 /*
  * Zeitlos
  * Copyright (c) 2025 Lone Dynamics Corporation. All rights reserved.
@@ -58,7 +60,7 @@
 //
 // Ignored if a sync is already in flight, so an impatient double-click
 // costs nothing.
-#define Z_NET_NTP_SYNC          306
+#define Z_NET_NTP_SYNC          (Z_SUBJ_NET + 6)
 
 // requester -> net: Z_NONE. Asks how the clock is doing.
 //
@@ -74,6 +76,9 @@
 //                        deliberately: this answers "how stale is the
 //                        clock", and the wall clock is the thing in
 //                        question.
-#define Z_NET_NTP_STATUS        307
+#define Z_NET_NTP_STATUS        (Z_SUBJ_NET + 7)
+
+// Still inside the block zsubjects.h gives this protocol:
+Z_SUBJECTS_IN(Z_SUBJ_NET, Z_NET_NTP_STATUS);
 
 #endif

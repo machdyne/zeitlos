@@ -488,7 +488,7 @@ and independently flashable.
 CPU-mixed. No RTL changes at all, which is what makes it a safe step:
 it produces the working reference that phase 3's register interface
 gets designed *against* rather than guessed at. See
-[The MOD player](#the-mod-player) below.
+[The player, `track`](#the-player-track) below.
 
 **Phase 3 — hardware mixer and arbiter extension.** Done. See below.
 

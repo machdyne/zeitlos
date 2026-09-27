@@ -58,6 +58,8 @@ static url_scheme_t scheme_from_text(const char *s) {
 	if (!strcmp(s, "http"))  return URL_SCHEME_HTTP;
 	if (!strcmp(s, "https")) return URL_SCHEME_HTTPS;
 	if (!strcmp(s, "file"))  return URL_SCHEME_FILE;
+	if (!strcmp(s, "gopher")) return URL_SCHEME_GOPHER;
+	if (!strcmp(s, "gemini")) return URL_SCHEME_GEMINI;
 	return URL_SCHEME_OTHER;
 }
 
@@ -287,8 +289,7 @@ bool url_parse(const char *text, url_t *out) {
 	if (out->path[0] == '\0' && out->host[0] != '\0')
 		strcpy(out->path, "/");
 
-	if ((out->scheme == URL_SCHEME_HTTP || out->scheme == URL_SCHEME_HTTPS) &&
-		out->host[0] == '\0')
+	if (url_is_network(out) && out->host[0] == '\0')
 		return false;
 
 	return true;
@@ -320,8 +321,7 @@ bool url_resolve(const url_t *base, const url_t *ref, url_t *out) {
 	if (!base || !ref || !out) return false;
 	if (base->scheme == URL_SCHEME_NONE || base->scheme == URL_SCHEME_OTHER)
 		return false;
-	if ((base->scheme == URL_SCHEME_HTTP || base->scheme == URL_SCHEME_HTTPS) &&
-		base->host[0] == '\0')
+	if (url_is_network(base) && base->host[0] == '\0')
 		return false;
 
 	memset(r, 0, sizeof(*r));
@@ -422,7 +422,12 @@ bool url_resolve_str(const url_t *base, const char *text, url_t *out) {
 // -- format -------------------------------------------------------
 
 static uint16_t default_port(url_scheme_t s) {
-	return s == URL_SCHEME_HTTPS ? 443 : 80;
+	switch (s) {
+	case URL_SCHEME_HTTPS:  return 443;
+	case URL_SCHEME_GOPHER: return 70;
+	case URL_SCHEME_GEMINI: return 1965;
+	default:                return 80;
+	}
 }
 
 uint16_t url_port(const url_t *u) {
@@ -495,5 +500,6 @@ bool url_same_origin(const url_t *a, const url_t *b) {
 }
 
 bool url_is_network(const url_t *u) {
-	return u->scheme == URL_SCHEME_HTTP || u->scheme == URL_SCHEME_HTTPS;
+	return u->scheme == URL_SCHEME_HTTP || u->scheme == URL_SCHEME_HTTPS ||
+		u->scheme == URL_SCHEME_GOPHER || u->scheme == URL_SCHEME_GEMINI;
 }

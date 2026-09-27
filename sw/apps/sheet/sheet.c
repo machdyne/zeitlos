@@ -1648,6 +1648,24 @@ int main(void) {
 
 					break;
 
+				case Z_WM_WHEEL:
+					// Three rows a notch, up = back, like the other apps:
+					// the view moves over the sheet, the cell cursor
+					// stays -- as with the scrollbar, whose range bounds
+					// it.
+					if (msg.obj.type == Z_UINT32) {
+						int t = top_row - 3 * Z_WM_WHEEL_NOTCHES(msg.obj.val.uint32);
+						int max = vsb.total - vsb.page;
+						if (t > max) t = max;
+						if (t < 0) t = 0;
+						if (t != top_row) {
+							top_row = t;
+							z_scrollbar_set_value(&vsb, top_row);
+							repaint_view();
+						}
+					}
+					break;
+
 				case Z_WM_MOUSE:
 
 					if (msg.obj.type == Z_UINT32)

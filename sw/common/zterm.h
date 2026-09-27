@@ -1,6 +1,8 @@
 #ifndef ZTERM_H
 #define ZTERM_H
 
+
+#include "zsubjects.h"	// the block these subjects are in
 /*
  * Zeitlos
  * Copyright (c) 2025 Lone Dynamics Corporation. All rights reserved.
@@ -59,6 +61,9 @@
  * whatever it just left.
  */
 
-#define Z_TERM_SET_PORT   140
+#define Z_TERM_SET_PORT   (Z_SUBJ_TERM + 0)
+
+// Still inside the block zsubjects.h gives this protocol:
+Z_SUBJECTS_IN(Z_SUBJ_TERM, Z_TERM_SET_PORT);
 
 #endif

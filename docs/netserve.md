@@ -536,5 +536,6 @@ guarantees it) and tcp.c's generation check after a DATA event.
 - **Window size.** A telnet client's NAWS is refused; the ports are
   80x25 (`term`'s size), and a larger client window simply shows it
   in the top-left corner.
-- **More than one socket** from `web` at a time: `net` still relays one
-  outbound socket (networking.md).
+- **More than one socket from `web` at a time.** `net` relays two
+  outbound sockets now (`NET_SOCK_SLOTS`, networking.md), but `web`
+  uses one, so a second fetch waits for the first.

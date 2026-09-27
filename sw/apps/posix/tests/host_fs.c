@@ -28,6 +28,9 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <strings.h>
+
+#include "zfs.h"
 
 static char root[512];
 
@@ -98,8 +101,13 @@ int fs_close_handle(int h) {
     return 0;
 }
 
-int fs_unlink(char *path)  { return remove(hp(path)) == 0 ? 0 : -1; }
-int fs_mkdir(const char *path) { return mkdir(hp(path), 0777) == 0 ? 0 : -1; }
+/* 1 on success, 0 on failure -- sw/common/zfsapp.h's convention, which
+ * is what the device links. These stubs once returned 0 on success
+ * (the KERNEL's fs.c convention), so the host tests passed while on the
+ * device a successful `rm` or `mkdir` reported failure and a failed one
+ * reported nothing. See docs/posix.md, "Return conventions". */
+int fs_unlink(char *path)  { return remove(hp(path)) == 0 ? 1 : 0; }
+int fs_mkdir(const char *path) { return mkdir(hp(path), 0777) == 0 ? 1 : 0; }
 
 bool fs_df(uint32_t *total, uint32_t *freek) {
     *total = 1024 * 1024;
@@ -124,7 +132,12 @@ int fs_list_into(const char *path, char *buf, uint32_t cap,
         if (n >= max_entries) { *truncated = 1; break; }
 
         char entry[300];
-        snprintf(entry, sizeof(entry), "/%s", de->d_name);
+        /* A full path, as the kernel returns it (sw/common/zfs.h:
+         * "each already a full "/"-prefixed path"). This stub once
+         * returned "/name" alone, which hid that `ls src` on a device
+         * printed "src/a.c" for every entry. */
+        snprintf(entry, sizeof(entry), "%s%s%s", path,
+            (path[0] && path[strlen(path) - 1] == '/') ? "" : "/", de->d_name);
         size_t len = strlen(entry) + 1;
         if (used + len > cap) { *truncated = 1; break; }
 
@@ -251,3 +264,75 @@ bool z_mem_stats(z_mem_stats_args_t *m) {
     m->used_blocks = 12; m->free_blocks = 3; m->blocks_used = 15; m->blocks_max = 64;
     return true;
 }
+
+/* -- FS_RENAME / FS_STAT / FS_LIST_EX (docs/filesystem.md) --
+ *
+ * The rules that matter to the shell are reproduced: `to` must not
+ * exist, a directory cannot go into itself, and /ram is a DIFFERENT
+ * VOLUME -- a rename between it and anywhere else is refused with
+ * Z_FS_ERR_XDEV, exactly as the kernel refuses one, so fs_move()'s
+ * copy-then-unlink fallback (sw/common/zfsutil.c) runs here for real.
+ *
+ * Every entry reports the same fixed date, 2026-01-02 03:04, so the
+ * expected output of `ls -l` does not depend on when the fixture was
+ * made. */
+
+#define HOST_FDATE  (((2026 - 1980) << 9) | (1 << 5) | 2)
+#define HOST_FTIME  ((3 << 11) | (4 << 5))
+
+static int host_vol(const char *p) {
+    return (!strncasecmp(p, "/ram", 4) && (p[4] == 0 || p[4] == '/')) ? 1 : 0;
+}
+
+static void host_info(const struct stat *st, z_fs_info_t *fi) {
+    memset(fi, 0, sizeof(*fi));
+    int dir = S_ISDIR(st->st_mode);
+    fi->size = dir ? 0 : (uint32_t)st->st_size;
+    fi->type = dir ? Z_FS_TYPE_DIR : Z_FS_TYPE_FILE;
+    fi->attr = dir ? Z_FS_ATTR_DIR : Z_FS_ATTR_ARCHIVE;
+    fi->fdate = HOST_FDATE;
+    fi->ftime = HOST_FTIME;
+}
+
+int fs_stat(const char *path, z_fs_info_t *info) {
+    struct stat st;
+    if (stat(hp(path), &st) != 0) return 0;
+    host_info(&st, info);
+    return 1;
+}
+
+int fs_rename(const char *from, const char *to, int *err) {
+    struct stat st;
+    char f[1024];
+    size_t n = strlen(from);
+    int e = Z_FS_ERR_NONE;
+
+    if (host_vol(from) != host_vol(to)) e = Z_FS_ERR_XDEV;
+    else if (!strncasecmp(from, to, n) && (to[n] == 0 || to[n] == '/'))
+        e = Z_FS_ERR_INVAL;
+    else if (stat(hp(from), &st) != 0) e = Z_FS_ERR_NOENT;
+    else if (stat(hp(to), &st) == 0) e = Z_FS_ERR_EXIST;
+    else {
+        snprintf(f, sizeof(f), "%s", hp(from));
+        if (rename(f, hp(to)) != 0) e = Z_FS_ERR_IO;
+    }
+    if (err) *err = e;
+    return e == Z_FS_ERR_NONE;
+}
+
+int fs_list_ex(const char *path, char *buf, uint32_t cap,
+               z_fs_info_t *info, uint32_t max_entries, uint32_t *count,
+               uint32_t *truncated) {
+    if (!fs_list_into(path, buf, cap, NULL, max_entries, count, truncated))
+        return 0;
+    if (info) {
+        const char *p = buf;
+        for (uint32_t i = 0; i < *count; i++) {
+            if (fs_stat(p, &info[i]) == 0) memset(&info[i], 0, sizeof(info[i]));
+            while (*p) p++;
+            p++;
+        }
+    }
+    return 1;
+}
+

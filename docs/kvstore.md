@@ -306,7 +306,9 @@ Measured against the kernel before this change (235,520 bytes, 26 KB
 free). About 5 KB is the log itself; 1.7 KB is its work area, which is
 `.bss` and therefore image ([kernel.md](kernel.md), "The 256KB image
 budget"). With the password on top ([security.md](security.md)) the
-kernel has 3,488 bytes of headroom now, with the password and netserve's boot start and config keys in; 704 with `kv test`.
+kernel had 3,488 bytes of headroom, with the password and netserve's
+boot start and config keys in; 704 with `kv test`. The current figure
+is kept in one place, [kernel.md](kernel.md#the-256kb-image-budget).
 
 ## Wear
 

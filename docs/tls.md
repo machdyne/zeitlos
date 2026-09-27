@@ -28,6 +28,18 @@ shown on every connection is one that gets clicked through, and
 nobody can tell an intercepted page from a working one by looking at
 it.
 
+### The other kind of authentication: a pin
+
+`tls_set_pin()` is the second, and only other, way to authenticate a
+server, for Gemini, whose servers almost all present self-signed
+certificates. The server must still prove it holds its key
+(CertificateVerify, below); instead of a CA vouching for that key, a
+callback compares it with the key the same host presented before.
+Exactly one of `tls_set_verify()` and `tls_set_pin()` must be set, and
+`tls_start()` refuses with neither and with both, so "refuse, do not
+warn" still holds: there is no third, unauthenticated way in. See
+[gopher_gemini.md](gopher_gemini.md#certificates-trust-on-first-use).
+
 ### The chain is verified AFTER our Finished
 
 Textbook order is: check the certificate chain, then send Finished.
@@ -139,6 +151,55 @@ the dummy ChangeCipherSpec, both non-optional on the open internet),
 ALPN naming `http/1.1`, SNI, `KeyUpdate`, `close_notify`, and an empty
 `Certificate` in reply to a `CertificateRequest`.
 
+### Answering a CertificateRequest, in order
+
+A server may ask for a client certificate; this client has none, so it
+answers with an empty `Certificate`. **Where** it answers matters, and
+it used to be wrong. RFC 8446 puts the client's `Certificate` in the
+client's flight -- after the server's `Finished`, encrypted under the
+client handshake key, immediately before the client's `Finished`, and
+in the transcript after everything the server sent. The first version
+sent it the moment the request arrived. That put it in the transcript
+ahead of the server's `Certificate` and `CertificateVerify`, so the
+signature the server had made over its own transcript never matched
+this side's hash: *"the server did not prove it holds its own key"*,
+from every server that asked. It also went out unencrypted.
+
+HTTPS servers almost never ask, so the web never showed it. Gemini
+servers ask routinely -- a client certificate is how a capsule knows
+who is visiting -- so **every Gemini capsule failed**, which is how it
+was found ([gopher_gemini.md](gopher_gemini.md)). Now the request is
+only noted when it arrives, and the empty `Certificate` goes out in
+`handle_server_finished()`, after the switch to the client handshake
+key; the client `Finished` covers it, and the application secrets --
+taken from the transcript through the server's `Finished`, RFC 8446
+section 7.1 -- do not.
+
+A request during the handshake must have an empty context, and one
+after it is post-handshake authentication, which this client never
+offers (no `post_handshake_auth` extension); both are refused.
+
+### Signature schemes
+
+Offered in `signature_algorithms`, and checked in `CertificateVerify`:
+
+| scheme | key | |
+|---|---|---|
+| `ecdsa_secp256r1_sha256` | P-256 | |
+| `rsa_pss_rsae_sha256` | RSA, up to 4096 bits | |
+| `ecdsa_secp384r1_sha384` | P-384 | the content hashed with SHA-384 |
+| `ed25519` | Ed25519 | the content itself is signed, no pre-hash (Monocypher) |
+| `rsa_pkcs1_sha256` | -- | offered for **certificate** signatures only; refused in `CertificateVerify`, as TLS 1.3 requires |
+
+A TLS 1.3 server can sign only with a scheme that matches its key, and
+ECDSA schemes are tied to one curve, so a key type missing from this
+list is a handshake that ends in alert 40 before anything is verified.
+P-384 and Ed25519 were added for that reason: Ed25519 is how many Gemini
+capsules generate their own certificates, and P-384 turns up on both
+Gemini and the web. Certificate chains signed with Ed25519 are not
+verified -- no public CA issues them -- so an Ed25519 server is reachable
+by pin (Gemini), not by CA.
+
 ### Not implemented
 
 - **No session resumption.** Every connection is a full handshake,
@@ -146,7 +207,9 @@ ALPN naming `http/1.1`, SNI, `KeyUpdate`, `close_notify`, and an empty
   [tls_resumption.md](tls_resumption.md).
 - **No session resumption or 0-RTT.** Both need a ticket store; 0-RTT
   additionally needs replay protection a client cannot provide alone.
-- **No client certificates.**
+- **No client certificates of its own.** A request for one is answered
+  with an empty `Certificate` (above); a capsule that insists on one
+  refuses the connection.
 - **No HelloRetryRequest.** Detected and reported clearly rather than
   misparsed. It only happens when a server rejects every group
   offered, and x25519 is universal.
@@ -226,6 +289,12 @@ Two further runs must be **refused**:
 |---|---|---|
 | `none` | empty | *the certificate chain does not lead to a known root* |
 | `wronghost` | correct | *the certificate is not valid for this host* |
+| `pinwrong` | none, pin mode | refused by the pin |
+
+and one more must **succeed**: `pin`, with no root store at all and the
+correct pin, which proves the pin replaces the chain check rather than
+running beside it. Every run also checks that `tls_start()` refuses
+with no authentication configured and with both kinds at once.
 
 Those are the runs that prove verification is actually consulted
 rather than being code that happens to be linked in and never
@@ -272,4 +341,8 @@ window matched to the NIC's buffer, no fast retransmit. TLS adds a
 full round trip
 before any request goes out, so whatever that number is, HTTPS pays it
 twice. See
-[networking.md](networking.md#still-unmeasured).
+[networking.md](networking.md#throughput).
+
+See also [crypto_perf.md](crypto_perf.md) for where the handshake time
+goes, and [crypto_hw_options.md](crypto_hw_options.md) for the hardware
+that was considered to shorten it.

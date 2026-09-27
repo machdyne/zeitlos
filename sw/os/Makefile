@@ -46,7 +46,7 @@ ifeq ($(KERNEL_PIC),1)
 PIC_FLAGS = -fPIC
 endif
 
-CFLAGS = $(PIC_FLAGS) --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) -I../common $(GC_CFLAGS) $(ARCH_DEFS) $(LIBC_FLAGS)
+CFLAGS = $(PIC_FLAGS) --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) -I../common $(GC_CFLAGS) $(ARCH_DEFS) $(LIBC_FLAGS) -DZ_ZFMT
 
 # USB host bring-up and debugging tools -- usbcap, usbtune, usbnak,
 # usbidle, usbbuf, usbcdc, usbbench, lsusb's detail, the storage driver's
@@ -83,7 +83,7 @@ LDSCRIPT = ../common/riscv-os.ld
 OBJS = kernel.o kruntime.o mem.o zar.o usb/usbh.o usb/usbh_hid.o usb/usbh_msc.o usb/usbh_hub.o usb/usbh_cdc.o usb/usbh_cp210x.o usb/usbh_ecm.o usbcdcapi.o usbnetapi.o \
 	fs/fs.o fs/ramdisk.o fs/sdbench.o fs/fatfs/sdmm.o fs/fatfs/diskio_mux.o fs/fatfs/ff.o fs/fatfs/ffunicode.o \
 	uart.o hid.o sh.o xfer.o xmodem.o ui.o msg.o pidreg.o fsapi.o flashapi.o kvstore.o kvlog.o auth.o authcore.o zsha256.o jumpapi.o zjump.o procapi.o zobj.o zstream.o zdns.o zsoc.o zgpio.o logo.o \
-	cfg.o zcfg.o zfont_data.o
+	cfg.o zcfg.o zfont_data.o zfmt.o
 
 # kernel.o's recipe below builds every object in one go (they're not
 # independent processes, and mostly don't need to be) -- but for
@@ -175,6 +175,11 @@ fs/fatfs/ffunicode.o: fs/fatfs/ffunicode.c fs/fatfs/ffconf.h
 # SHA-256 for the password (auth.c). An explicit rule: the other
 # ../common objects are built inside kernel.o's recipe above, and a
 # new one added only there is not rebuilt when that recipe is skipped.
+# The printf family: integers only, one engine -- see kruntime.c's note
+# and docs/build.md, "Integer-only printf (ZFMT)".
+zfmt.o: ../common/zfmt.c
+	$(CC) $(CFLAGS) -c ../common/zfmt.c -o zfmt.o
+
 zsha256.o: ../common/zsha256.c ../common/zsha256.h
 	$(CC) $(CFLAGS) -c ../common/zsha256.c -o zsha256.o
 

@@ -491,6 +491,8 @@ static void put_text(html_ctx_t *c, const char *s) {
 // engine matters because a block's text is what gets INDEXED and
 // searched, and leading whitespace that only the renderer knows about
 // would make every offset in it wrong.
+static void mark_if_legal(html_ctx_t *c);	// below, with tag_done()
+
 static void put_cp(html_ctx_t *c, uint32_t cp) {
 
 	char fold[UNI_FOLD_MAX];
@@ -526,7 +528,12 @@ static void put_cp(html_ctx_t *c, uint32_t cp) {
 		// Inside <pre> a newline ends the visual line and nothing is
 		// collapsed. Everything else about block assembly is the same,
 		// which is why this is a flush rather than a separate path.
-		if (cp == '\n') { flush_block(c); c->cur_kind = HTML_PRE; return; }
+		if (cp == '\n') {
+			flush_block(c);
+			c->cur_kind = HTML_PRE;
+			mark_if_legal(c);		// a row boundary is a resume point
+			return;
+		}
 		if (cp == '\r') return;
 		classify(c);
 		n = uni_fold(cp, fold);
@@ -928,6 +935,31 @@ static void close_tag(html_ctx_t *c, const tag_ent_t *t) {
 
 // -- tag dispatch --
 
+// Takes a mark (see "when a mark is legal" in tag_done()) if the
+// parser is at a point where everything not in html_state_t is empty.
+//
+// One exception: a row boundary INSIDE <pre>. There the block kind is
+// HTML_PRE, not empty -- after each newline the next row is
+// preformatted too -- but it is not lost by a resume, because it
+// follows from pre_depth, which IS in the state: html_restore() puts
+// it back. Without this, no mark was ever legal inside a <pre> of any
+// length, and the indexer (page.c) cannot move past a block it has no
+// mark after. A <pre> longer than one indexing pass hung "reading...
+// 0 blocks" for good, and a document ENDING in one lost it entirely,
+// because the last pass wound its count back to the mark before it.
+// Every Gopher menu is exactly one <pre> (smallweb.c), which is how it
+// was found; a web page with a long code listing hit the same thing.
+static void mark_if_legal(html_ctx_t *c) {
+
+	bool pre_row = c->st.pre_depth && c->cur_kind == HTML_PRE;
+
+	if (!c->have_text && !c->pending_space && (!c->cur_kind || pre_row) &&
+		!c->span_kind && !c->anchor_depth && !c->line.nlinks &&
+		!c->line_tight && !c->line.marker[0] && !c->st.drop_depth)
+		{ c->mark_off = c->off; c->mark_st = c->st; }
+
+}
+
 static void tag_done(html_ctx_t *c, bool closing, bool self_closing) {
 
 	const tag_ent_t *t;
@@ -981,10 +1013,7 @@ static void tag_done(html_ctx_t *c, bool closing, bool self_closing) {
 	// because it is not the obvious one: THE MARK VISIBLE DURING AN
 	// EMIT IS THE RESUME POINT FOR THAT SAME BLOCK, not for the one
 	// after it. An index records (mark, blocks_emitted_before_this).
-	if (!c->have_text && !c->pending_space && !c->cur_kind &&
-		!c->span_kind && !c->anchor_depth && !c->line.nlinks &&
-		!c->line_tight && !c->line.marker[0] && !c->st.drop_depth)
-		{ c->mark_off = c->off; c->mark_st = c->st; }
+	mark_if_legal(c);
 
 }
 
@@ -1240,6 +1269,10 @@ void html_restore(html_ctx_t *ctx, const html_state_t *st, uint32_t off) {
 	ctx->off = off;
 	ctx->mark_off = off;
 	ctx->mark_st = *st;
+
+	// Inside <pre> the block kind is always HTML_PRE, and a mark may be
+	// taken there (mark_if_legal()), so a resume puts it back.
+	if (ctx->st.pre_depth) ctx->cur_kind = HTML_PRE;
 
 	// The title is carried across a restore rather than re-derived.
 	// It was found during the first pass over the head; a resume in

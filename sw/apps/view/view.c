@@ -957,6 +957,14 @@ int main(void) {
 					handle_key(Z_WM_UNPACK_KEY_KEYSYM(msg.obj.val.uint32));
 					break;
 
+				case Z_WM_WHEEL:
+					// Three arrow steps a notch, up = back, like the
+					// other apps; scroll_to() clamps to the image.
+					if (msg.obj.type == Z_UINT32)
+						scroll_to(scroll_x, scroll_y -
+							3 * SCROLL_STEP * Z_WM_WHEEL_NOTCHES(msg.obj.val.uint32));
+					break;
+
 				case Z_WM_MOUSE:
 
 					if (msg.obj.type == Z_UINT32)

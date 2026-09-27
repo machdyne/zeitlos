@@ -260,6 +260,44 @@ right both times (`z_msg_envelope_t` is 24 bytes, a mailbox 780, and a
 `z_proc` was 148 then and is 188 now) and the totals were not, which
 means the model was missing something the model could not see.
 
+### Spending it: a worked example
+
+The rename, stat and extended-listing syscalls and real file
+timestamps ([filesystem.md](filesystem.md)) first measured **+3,345
+bytes**, which left 148 bytes of the 256KB. Most of that was not code:
+
+| | bytes | what was done |
+|---|---:|---|
+| a `FIL` for the busy probe | 556 | borrow a free slot of the handle table's instead |
+| two `FILINFO`s | 560 | share one (`fs_fno`) between the listing and `fs_stat_info()` |
+| a days-to-date conversion | ~100 | a year/month walk instead of Hinnant's divisions |
+
+and then one thing that had nothing to do with the feature: `sdbench`,
+a benchmark run by hand, kept a **2KB static buffer** in every boot's
+image. It now allocates the buffer for the length of a run
+(`sdb_with_buf()`, `sw/os/fs/sdbench.c`).
+
+Net: **+608 bytes** for three syscalls, real timestamps and the shell's
+`mv`, with 2,880 bytes of headroom left (it was 3,488). The three
+`apps.irc.*` rows added to the shared config table later took 312 more
+(the kernel links `zcfg.c`'s descriptions too): **2,568 bytes** of
+headroom.
+
+Then two changes gave it back several times over. The kernel's
+`printf`, `snprintf` and `vsnprintf` had been defined in `kruntime.c`
+on top of newlib's two integer-only engines (`_vfiprintf_r` and
+`_svfiprintf_r`, ~14KB between them); they are now
+`sw/common/zfmt.c`, one engine of ~1.5KB that writes through the same
+FILE layer ([build.md](build.md#integer-only-printf-zfmt)): **-11,212
+bytes**. And the shell's `bench` command, like `sdbench` before it,
+allocates its 4KB scratch buffer for the run instead of keeping it in
+`.bss`: **-4,032**. That leaves **17,812 bytes** of headroom at the time
+of writing (`kernel.bin` 244,332).
+
+The lesson
+generalises: before cutting code, look for static buffers that only a
+diagnostic or a rarely-used command needs, and allocate them when used.
+
 The build also no longer runs `strip` on `kernel.elf` in place. It
 could never have affected the output -- `objcopy -O binary` emits
 allocated section contents and nothing else -- and what it did do was

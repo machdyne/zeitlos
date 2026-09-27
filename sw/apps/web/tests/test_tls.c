@@ -50,6 +50,7 @@
 
 #include "../tls.h"
 #include "../x509.h"
+#include "../../../common/zsha256.h"
 
 static int fails, checks;
 
@@ -131,6 +132,28 @@ static bool no_roots(void *user, const der_t *issuer, x509_cert_t *out) {
 	return false;
 }
 
+// -- pin mode (tls_set_pin, docs/gopher_gemini.md) --
+//
+// The pin the callback expects: the SHA-256 of the server
+// certificate's SubjectPublicKeyInfo, worked out here independently
+// of tls.c from the DER the server wrote out.
+static uint8_t want_fp[32];
+static bool pin_wrong;
+static int pin_calls;
+static char pin_host[64];
+
+static bool pin_cb(void *user, const char *host, const uint8_t fp[32],
+	const char **why) {
+	(void)user;
+	pin_calls++;
+	snprintf(pin_host, sizeof(pin_host), "%s", host);
+	if (pin_wrong || memcmp(fp, want_fp, 32)) {
+		*why = "pin mismatch (test)";
+		return false;
+	}
+	return true;
+}
+
 int main(int argc, char **argv) {
 
 	struct sockaddr_in sa;
@@ -144,7 +167,21 @@ int main(int argc, char **argv) {
 	const char *mode = (argc > 3) ? argv[3] : "verify";
 	bool empty_store = !strcmp(mode, "none");
 	bool wrong_host = !strcmp(mode, "wronghost");
-	bool expect_fail = empty_store || wrong_host;
+	bool pin_mode = !strncmp(mode, "pin", 3);
+	pin_wrong = !strcmp(mode, "pinwrong");
+	bool expect_fail = empty_store || wrong_host || pin_wrong;
+
+	// tls_start() refuses with no authentication configured, and with
+	// both kinds at once: there is exactly one way in, never zero.
+	{
+		static tls_ctx_t g;
+		tls_init(&g, "localhost", on_send, on_data, NULL);
+		ck(!tls_start(&g), "refuses with neither verify nor pin");
+		tls_init(&g, "localhost", on_send, on_data, NULL);
+		tls_set_verify(&g, 1, find_root, NULL);
+		tls_set_pin(&g, pin_cb, NULL);
+		ck(!tls_start(&g), "refuses with both verify and pin");
+	}
 	const char *cert_path = (argc > 4) ? argv[4] : "/tmp/tls_server_cert.der";
 	const char *req =
 		"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
@@ -178,7 +215,17 @@ int main(int argc, char **argv) {
 		const char *e = NULL;
 		int64_t now = 0;
 		if (x509_parse(root_der, root_len, &c, &e)) now = c.not_before + 3600;
-		tls_set_verify(&tls, now, empty_store ? no_roots : find_root, NULL);
+		if (pin_mode) {
+			// No root store at all: success proves the pin REPLACES
+			// the chain check rather than running alongside it.
+			z_sha256_ctx h;
+			z_sha256_init(&h);
+			z_sha256_update(&h, c.spki.p, c.spki.len);
+			z_sha256_final(&h, want_fp);
+			tls_set_pin(&tls, pin_cb, NULL);
+		} else {
+			tls_set_verify(&tls, now, empty_store ? no_roots : find_root, NULL);
+		}
 	}
 
 	if (expect_fail) {
@@ -221,6 +268,10 @@ int main(int argc, char **argv) {
 
 		if (tls_failed(&tls)) {
 			if (expect_fail) {
+				if (pin_wrong && pin_calls != 1) {
+					printf("FAIL (%s): refused, but not by the pin\n", mode);
+					return 1;
+				}
 				printf("ok (%s): refused -- %s\n", mode, tls_error(&tls));
 				return 0;
 			}
@@ -282,6 +333,11 @@ int main(int argc, char **argv) {
 			printf("FAIL: %u body bytes wrong, first at offset %u of %u\n",
 				(unsigned)bad, (unsigned)first_bad, (unsigned)body_len);
 		}
+	}
+
+	if (pin_mode) {
+		ck(pin_calls == 1, "pin consulted exactly once");
+		ck(!strcmp(pin_host, "localhost"), "pin given the host");
 	}
 
 	close(sock);

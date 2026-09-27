@@ -1,6 +1,8 @@
 #ifndef Z_STREAM_H
 #define Z_STREAM_H
 
+
+#include "zsubjects.h"	// the block these subjects are in
 /*
  * Zeitlos
  * Copyright (c) 2025 Lone Dynamics Corporation. All rights reserved.
@@ -87,13 +89,13 @@
 #include "zobj.h"
 #include "zmsg.h"
 
-#define Z_STREAM_OPEN         400
-#define Z_STREAM_OPEN_REPLY   401
-#define Z_STREAM_PULL         402
-#define Z_STREAM_CHUNK        403
-#define Z_STREAM_EOF          404
-#define Z_STREAM_ERROR        405
-#define Z_STREAM_ABORT        406
+#define Z_STREAM_OPEN         (Z_SUBJ_STREAM + 0)
+#define Z_STREAM_OPEN_REPLY   (Z_SUBJ_STREAM + 1)
+#define Z_STREAM_PULL         (Z_SUBJ_STREAM + 2)
+#define Z_STREAM_CHUNK        (Z_SUBJ_STREAM + 3)
+#define Z_STREAM_EOF          (Z_SUBJ_STREAM + 4)
+#define Z_STREAM_ERROR        (Z_SUBJ_STREAM + 5)
+#define Z_STREAM_ABORT        (Z_SUBJ_STREAM + 6)
 
 // suggested default -- not part of the wire protocol itself (a
 // chunk's size is just its Z_BLOB's own len field, self-describing),
@@ -266,5 +268,8 @@ void zstream_pull_async(zstream_consumer_t *st);
 zstream_consumer_event_t zstream_consumer_handle(zstream_consumer_t *st,
 	z_msg_t *msg, const uint8_t **data, uint32_t *len,
 	char *err, uint32_t err_len);
+
+// Still inside the block zsubjects.h gives this protocol:
+Z_SUBJECTS_IN(Z_SUBJ_STREAM, Z_STREAM_ABORT);
 
 #endif

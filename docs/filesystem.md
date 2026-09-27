@@ -423,6 +423,122 @@ Two signals worth recognising in a boot log:
   hardware), so where it appears says when the card actually came up
   relative to everything else.
 
+## Rename, stat and the extended listing
+
+Three syscalls, appended to `sw/common/syscalls.def` so every earlier
+id is where it was: an app built before them runs unchanged on a kernel
+that has them. The argument structs and the rules are in
+`sw/common/zfs.h`; the kernel side is `fs_rename()`/`fs_stat_info()` in
+`sw/os/fs/fs.c` and the handlers in `sw/os/fsapi.c`; apps call
+`zfsapp.h`.
+
+| Syscall | `zfsapp.h` | |
+|---|---|---|
+| `FS_RENAME` | `fs_rename(from, to, &err)` | rename or move within one volume |
+| `FS_STAT` | `fs_stat(path, &info)` | size, date and attributes of one path |
+| `FS_LIST_EX` | `fs_list_ex(...)` | `FS_LIST` plus a `z_fs_info_t` per entry |
+
+Built from those, in `sw/common/zfsutil.c` (link `zfsutil.o` as well
+as `zfsapp.o`):
+
+| | |
+|---|---|
+| `fs_copy_file(from, to)` | streams a copy; removes a partial one on failure |
+| `fs_move(from, to, &err)` | rename, or copy then unlink across volumes |
+| `fs_strerror(err)` | "destination exists", and so on |
+
+`sw/apps/posix`'s `mv` and `ls -l` and the `files` app are the
+callers ([posix.md](posix.md), [file_browser.md](file_browser.md)).
+The kernel shell has `mv` too.
+
+### What a rename refuses, and why
+
+`fs_rename()` returns a `Z_FS_ERR_*` code. The ones that are not plain
+FatFs results are each there because FatFs would otherwise do
+something wrong without saying so.
+
+**Different volumes: `Z_FS_ERR_XDEV`.** `/ram` and `/usb` are FatFs
+drives 1 and 2 behind a path rewrite (`fs_path_resolve()`), and
+`f_rename()` *ignores* any drive in the new name: it renames within
+the old path's drive. So `/ram/x` renamed to `/x` would become `/x`
+on the RAM disk, not on the card. The kernel resolves both paths and
+refuses if the drives differ; `fs_move()` takes that as its cue to
+copy and delete.
+
+**Open for writing: `Z_FS_ERR_BUSY`.** FatFs is built without file
+locking (`FF_FS_LOCK 0`). A write handle remembers the sector and the
+position of its file's directory entry, so that closing it can record
+the final size there. `f_rename()` writes a new entry and deletes the
+old one, so a close after a rename writes into a deleted entry: the
+file is left with size 0 and its data unreachable.
+`sw/os/tests/test_fsrename.c` demonstrates exactly that, on the
+project's own FatFs.
+
+The check is exact rather than by name. `k_fs_write_open()` opens the
+file read-only, which fills in the same two fields, and compares them
+with every open write handle. The same entry is the same file, so a
+long name and its 8.3 alias are caught alike. The probe borrows a free
+slot of the kernel's handle table rather than keeping a `FIL` of its
+own (a `FIL` carries a 512-byte buffer, and static storage counts
+against the [kernel's 256KB image](kernel.md#the-256kb-image-budget));
+with every slot in use it answers "busy".
+
+Read handles are never a problem (they write nothing back), and nor is
+renaming a directory with files open inside it: their entries live in
+the directory's own clusters, which do not move.
+
+**Into itself: `Z_FS_ERR_INVAL`.** A directory cannot be moved to a
+path at or below itself; nor can a volume root be renamed.
+
+### The extended listing
+
+`FS_LIST_EX` is `FS_LIST` with an optional `info` array filled in
+listing order, exactly as `types` is. It is a separate syscall, not a
+new field on `z_fs_list_args_t`: an app built before the field existed
+passes a smaller struct, and the kernel would read past it.
+
+It exists because the alternative is slow. `f_stat()` finds its entry
+by scanning the directory from the start, so stat-ing every entry of
+an n-entry directory reads O(n²) directory sectors off the card. The
+listing already holds each entry's `FILINFO` as it passes.
+
+The synthetic `/ram` and `/usb` entries in a listing of `/`, and volume
+roots, have no date: `fdate` is 0.
+
+## Timestamps
+
+FatFs used to be built with `FF_FS_NORTC 1`, which stamps every file
+with the same fixed date (2020-01-01). It is now `0`, and
+`get_fattime()` in `sw/os/fs/fs.c` reads the RTC ([rtc.md](rtc.md)).
+
+- **UTC.** File times are the RTC's time, like every other time
+  comparison in the system; `system.rtc.timezone` changes only what is
+  shown ([config.md](config.md)). `z_fs_info_time()` (`zfs.h`) turns a
+  FAT date and time into Unix seconds.
+- **Until the clock is set**, and on a bitstream without the RTC,
+  files get the old fixed date. It is neither 1970, which FAT cannot
+  represent, nor a time counted from power-on.
+- **Two-second resolution**, as FAT stores them.
+- **2100 is not a leap year**, and the RTC's seconds do reach it (they
+  run out in 2106). The conversion (`fs_fattime_of()`, `fs/fs.h`) is
+  checked against `z_fs_info_time()` for every day from 1980 to 2106 by
+  `sw/os/tests/test_fsrename.c`, which is how that case was caught.
+
+### Testing
+
+```
+cc -std=gnu99 -Wall -I sw/os -I sw/os/fs -I sw/common \
+   -o /tmp/t sw/os/tests/test_fsrename.c \
+   sw/os/fs/fatfs/ff.c sw/os/fs/fatfs/ffunicode.c && /tmp/t
+```
+
+It runs the project's FatFs on three RAM disks standing in for the
+card, `/ram` and `/usb`, and checks: that renaming a file open for
+writing does lose it (the premise of `BUSY`); that the probe matches
+the write handle under the long name and the alias and matches nothing
+else; that `f_rename()` really does ignore the drive (the premise of
+`XDEV`); the timestamp round trip; and the path helpers' edge cases.
+
 ## See also
 
 - `sw/os/kernel.c` -- the counter, the classifier, and the scheduler check

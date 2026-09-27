@@ -268,6 +268,55 @@ void z_obj_free(z_obj_t *obj) {
 
 // OBJECT DEBUG
 
+#ifdef Z_ZFMT
+// A float for z_obj_print() in a binary built with ZFMT=1, whose printf
+// has no floating point (sw/common/zfmt.c, docs/build.md). Decoded from
+// its IEEE-754 bits with integer shifts and one 32x32->64 multiply, so
+// it links no soft-float code either: sign, integer part, and six
+// decimals rounded, trailing zeros dropped -- "1.5", "-0.333333",
+// "3". Magnitudes of 2^31 and above print as "big"; below about 2^-40
+// they round to 0. A debug printer: close to %.6g, not identical.
+static void zobj_print_float(float f) {
+
+	union { float f; uint32_t u; } x;
+	uint32_t e, m, ip, frac;
+	int sh;
+	char d[8];
+
+	x.f = f;
+	e = (x.u >> 23) & 0xff;
+	m = x.u & 0x7fffff;
+	if (e == 0xff) { printf(m ? "nan" : ((x.u >> 31) ? "-inf" : "inf")); return; }
+	if (x.u >> 31) printf("-");
+	if (e == 0) { if (!m) { printf("0"); return; } e = 1; }	// subnormal
+	else m |= 0x800000;
+
+	sh = (int)e - 150;				// the value is m * 2^sh
+	if (sh >= 8) { printf("big"); return; }
+	if (sh >= 0) { printf("%lu", (unsigned long)(m << sh)); return; }
+
+	if (-sh < 32) {
+		uint32_t fb = m & ((1u << -sh) - 1);
+		ip = m >> -sh;
+		frac = (uint32_t)(((uint64_t)fb * 1000000u + (1ull << (-sh - 1))) >> -sh);
+	} else {
+		ip = 0;
+		frac = -sh < 64 ? (uint32_t)(((uint64_t)m * 1000000u + (1ull << (-sh - 1))) >> -sh) : 0;
+	}
+	if (frac >= 1000000u) { ip++; frac -= 1000000u; }
+
+	printf("%lu", (unsigned long)ip);
+	if (frac) {
+		int n = 6;
+		for (int i = 5; i >= 0; i--) { d[i] = (char)('0' + frac % 10); frac /= 10; }
+		while (n > 1 && d[n - 1] == '0') n--;
+		d[n] = 0;
+		printf(".%s", d);
+	}
+
+}
+#endif
+
 void z_obj_print(const z_obj_t *obj) {
     if (!obj) {
         printf("NULL");
@@ -288,7 +337,11 @@ void z_obj_print(const z_obj_t *obj) {
             break;
             
         case Z_FLOAT32:   
+#ifdef Z_ZFMT
+            zobj_print_float(obj->val.float32);
+#else
             printf("%.6g", obj->val.float32); 
+#endif
             break;
             
         case Z_STR:     

@@ -16,6 +16,8 @@
 FATFS sdvol0;
 
 #include "ramdisk.h"
+#include "../../common/zfs.h"	// Z_FS_ERR_*, z_fs_info_t
+#include "../../common/zrtc.h"	// get_fattime()
 
 // The ramdisk volume, FatFs drive 1, reachable as /ram.
 static FATFS ramvol1;
@@ -656,6 +658,110 @@ int fs_unlink(char *path) {
 	}
 
 	return 0;
+
+}
+
+// -- rename, stat, timestamps -- docs/filesystem.md, "Rename, stat
+// and the extended listing" --
+
+// Returns a Z_FS_ERR_* code (sw/common/zfs.h), 0 on success. The
+// syscall (fsapi.c) and the kernel shell's `mv` both come through
+// here, so both get the same checks.
+int fs_rename(const char *from, const char *to) {
+
+	char rf[FS_PATH_MAX], rt[FS_PATH_MAX];
+	FRESULT res;
+	int err;
+
+	if (!from || !to || !from[0] || !to[0]) return Z_FS_ERR_INVAL;
+
+	from = fs_path_resolve(from, rf, sizeof(rf));
+	to = fs_path_resolve(to, rt, sizeof(rt));
+
+	// FatFs would rename within `from`'s drive whatever `to` says.
+	if (fs_vol_of(from) != fs_vol_of(to)) return Z_FS_ERR_XDEV;
+	if (fs_is_root(from) || fs_is_root(to) ||
+	    fs_is_within(fs_vol_strip(from), fs_vol_strip(to)))
+		return Z_FS_ERR_INVAL;
+
+	k_fs_enter();
+
+	// Refused while open for writing: zfs.h, FS_RENAME, and
+	// k_fs_write_open() in fsapi.c for how that is told exactly.
+	if (k_fs_write_open(from)) {
+		err = Z_FS_ERR_BUSY;
+	} else {
+		res = f_rename(from, to);
+		err = (res == FR_OK) ? Z_FS_ERR_NONE :
+			(res == FR_NO_FILE) ? Z_FS_ERR_NOENT :
+			(res == FR_EXIST) ? Z_FS_ERR_EXIST :
+			(res == FR_NO_PATH || res == FR_INVALID_NAME) ? Z_FS_ERR_INVAL :
+			Z_FS_ERR_IO;
+	}
+
+	k_fs_leave();
+	return err;
+
+}
+
+// Fills `fi` for one path. Returns false if it does not exist. A
+// volume root (f_stat() refuses those) and the synthetic /ram and /usb
+// roots are reported as directories with no date.
+// One FILINFO (~290 bytes with long names) shared by fs_stat_info()
+// and fsapi.c's listing, rather than one each: static storage counts
+// against the 256KB image, and neither can run inside the other --
+// both are only reached with the filesystem held (k_fs_enter()).
+FILINFO fs_fno;
+
+bool fs_stat_info(const char *path, z_fs_info_t *fi) {
+
+	char rp[FS_PATH_MAX];
+	bool ok;
+
+	memset(fi, 0, sizeof(*fi));
+	path = fs_path_resolve(path, rp, sizeof(rp));
+
+	if (fs_is_root(path)) {
+		fi->attr = Z_FS_ATTR_DIR;
+		fi->type = Z_FS_TYPE_DIR;
+		return true;
+	}
+
+	k_fs_enter();
+	ok = (f_stat(path, &fs_fno) == FR_OK);
+	if (ok) fs_info_from(&fs_fno, fi);
+	k_fs_leave();
+
+	return ok;
+
+}
+
+void fs_info_from(const FILINFO *st, z_fs_info_t *fi) {
+	fi->size = (st->fattrib & AM_DIR) ? 0 : (uint32_t)st->fsize;
+	fi->fdate = st->fdate;
+	fi->ftime = st->ftime;
+	fi->attr = st->fattrib;
+	fi->type = (st->fattrib & AM_DIR) ? Z_FS_TYPE_DIR : Z_FS_TYPE_FILE;
+	fi->_pad[0] = fi->_pad[1] = 0;
+}
+
+// The timestamp FatFs writes on every create, write and mkdir
+// (FF_FS_NORTC 0 in ffconf.h). UTC, from the RTC.
+//
+// Until something has set the clock (NTP, `date`, docs/rtc.md), and on
+// a bitstream without the RTC, this returns FatFs's old fixed date,
+// 2020-01-01: the same stamp every file got before, rather than 1970
+// (which FAT cannot represent, its epoch being 1980) or a time counted
+// from power-on.
+DWORD get_fattime(void) {
+
+	uint32_t t;
+
+	if (!z_rtc_available() || !z_rtc_valid() ||
+	    (t = z_rtc_seconds()) < 315532800u)		// 1980-01-01
+		return ((DWORD)(2020 - 1980) << 25) | (1u << 21) | (1u << 16);
+
+	return fs_fattime_of(t);
 
 }
 

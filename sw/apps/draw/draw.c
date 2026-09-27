@@ -1592,6 +1592,17 @@ int main(void) {
 
 			switch (msg.subject) {
 
+				case Z_WM_WHEEL:
+					// 48 pixels a notch, up = back -- the same distance
+					// as in view. The scrollbar clamps it to the canvas.
+					if (msg.obj.type == Z_UINT32 &&
+					    z_scrollbar_set_value(&vsb, scroll_y -
+							48 * Z_WM_WHEEL_NOTCHES(msg.obj.val.uint32))) {
+						scroll_y = (int)vsb.value;
+						scroll_view();
+					}
+					break;
+
 				case Z_WM_MOUSE:
 					if (msg.obj.type == Z_UINT32)
 						handle_mouse(msg.obj.val.uint32);

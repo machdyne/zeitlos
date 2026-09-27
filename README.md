@@ -90,12 +90,12 @@ On the sdcard. A `term` window starts one when you press its REPL or POSIX butto
 |-----|-------------|
 | [text](docs/text_editor.md) | Text editor (UTF-8 and Latin-9 files, Japanese) |
 | [sheet](docs/sheet_app.md) | Spreadsheet |
-| [web](docs/web_app.md) | Web browser: HTTP/1.1 and TLS 1.3, gzip, in-place images and SVG |
+| [web](docs/web_app.md) | Web browser: HTTP/1.1 and TLS 1.3, gzip, in-place images and SVG; [Gopher and Gemini](docs/gopher_gemini.md) |
 | [read](docs/read_app.md) | Text reader for files of unlimited size (with rendered Markdown) |
 | [hex](docs/hex_editor.md) | Hex editor for files of unlimited size |
 | draw | MacPaint-inspired drawing app |
 | [view](docs/view_app.md) | Image viewer: BMP, PNM, GIF, JPEG, [PNG](docs/png.md) and [SVG](docs/svg.md) |
-| files | File browser |
+| [files](docs/file_browser.md) | File browser: copy, move, rename, delete, new folder |
 | [calc](docs/calc_app.md) | Calculator |
 | [info](docs/info_app.md) | System info |
 | [clock](docs/clock_app.md) | Analog and digital clock |
@@ -107,6 +107,7 @@ On the sdcard. A `term` window starts one when you press its REPL or POSIX butto
 | [play](docs/play_app.md) | WAV/AU/RAW audio file player |
 | [track](docs/track_app.md) | MOD audio file player |
 | [mmod](docs/mmod.md) | [MMOD](https://github.com/machdyne/mmod) reader/writer |
+| [irc](docs/irc_app.md) | IRC client: channels and private conversations, mentions, timestamps |
 | [mesh](docs/mesh_app.md) | Meshtastic LoRa client |
 | [logic](docs/logic_app.md) | Logic analyzer (under development) |
 | [gpu3d](docs/gpu3d_app.md) | Spinning 3D cube demo + STL viewer |
@@ -344,9 +345,7 @@ and the design reasoning.
 
 ### Documentation
 
-The Zeitlos documentation will be the [Timeless Computing](https://github.com/machdyne/tc) book, which will be included in the default Zeitlos distribution. The later chapters will explain the system, list the API, etc. 
-
-The Zeitlos implementation portions of the book are currently located in the `docs` directory.
+The [Timeless Computing](docs/tc.md) book is in `docs/tc.md`. The rest of the `docs` directory documents the implementation; [docs/readme.md](docs/readme.md) indexes it by subject.
 
 ### Hardware map
 

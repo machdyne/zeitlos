@@ -1,6 +1,8 @@
 #ifndef ZWM_H
 #define ZWM_H
 
+
+#include "zsubjects.h"	// the block these subjects are in
 /*
  * Zeitlos
  * Copyright (c) 2025 Lone Dynamics Corporation. All rights reserved.
@@ -44,7 +46,7 @@
 // neither -- see zwin.c's z_win_create_ex()), and "flags" (Z_UINT32,
 // Z_WIN_FLAG_* below) keys. any missing key falls back to a
 // WM-chosen default (no exact placement, flags=0 -- no close icon).
-#define Z_WM_CREATE_WINDOW    100
+#define Z_WM_CREATE_WINDOW    (Z_SUBJ_WM + 0)
 
 // -- window flags (the "flags" key on Z_WM_CREATE_WINDOW) --
 //
@@ -199,15 +201,15 @@
 // wm -> app reply to a Z_WM_CREATE_WINDOW (same tag as the request):
 // obj is a Z_MAP with "id" (Z_INT32, -1 on failure), "x", "y", "w",
 // "h" (Z_UINT32) keys giving the window's actual allocated rect.
-#define Z_WM_WINDOW_CREATED    101
+#define Z_WM_WINDOW_CREATED    (Z_SUBJ_WM + 1)
 
 // app -> wm: obj is a Z_UINT32 window id to destroy.
-#define Z_WM_DESTROY_WINDOW    102
+#define Z_WM_DESTROY_WINDOW    (Z_SUBJ_WM + 2)
 
 // wm -> app: sent after a drag completes. obj is a Z_MAP with the
 // same "id"/"x"/"y"/"w"/"h" shape as Z_WM_WINDOW_CREATED, so the app
 // knows where to redraw its content.
-#define Z_WM_WINDOW_MOVED       103
+#define Z_WM_WINDOW_MOVED       (Z_SUBJ_WM + 3)
 
 // wm -> app: sent any time the wm has redrawn the screen (window
 // created/destroyed, moved, or focus changed) and the app's content
@@ -224,7 +226,7 @@
 // included since there's no resize support yet, so an app that got
 // them from Z_WM_WINDOW_CREATED already has them and they don't
 // change.
-#define Z_WM_REDRAW             104
+#define Z_WM_REDRAW             (Z_SUBJ_WM + 4)
 
 // A REDRAW that says WHAT was invalidated: only the pixels this
 // window's region just gained. z_win_damage_rects() (zwin.h) hands
@@ -252,7 +254,7 @@
 // (currently informational only -- matching is done by sender pid,
 // not window id; see docs/window_manager.md "content z-order" for
 // why this exists and its limits).
-#define Z_WM_REDRAW_DONE         105
+#define Z_WM_REDRAW_DONE         (Z_SUBJ_WM + 5)
 
 // wm -> app: sent to the *focused* window's owner only, whenever a
 // key is pressed or released (see sw/os/hid.c for the interrupt-driven
@@ -261,7 +263,7 @@
 // Z_WM_REDRAW, this can fire at high frequency (every keystroke, plus
 // a release for each), so it's a packed Z_UINT32, not a Z_MAP -- same
 // no-heap-allocation reasoning as Z_WM_REDRAW.
-#define Z_WM_KEY                106
+#define Z_WM_KEY                (Z_SUBJ_WM + 6)
 
 // wm -> app: the titlebar close icon (Z_WIN_FLAG_CLOSE_ICON) was
 // clicked on one of this process's windows, and that window's
@@ -274,7 +276,7 @@
 // or until the owner calls z_win_destroy() (zwin.h) on this id
 // itself, same as any other window destruction. Fire-and-forget, no reply
 // expected -- same convention as Z_WM_REDRAW/Z_WM_KEY.
-#define Z_WM_CLOSE               107
+#define Z_WM_CLOSE               (Z_SUBJ_WM + 7)
 
 // wm -> app: sent once after a resize drag completes (not on every
 // intermediate size -- same reasoning Z_WM_WINDOW_MOVED's own
@@ -291,7 +293,7 @@
 // Z_UINT32 with no room for w/h -- see its own comment), so an app
 // that saw the redraw first would redraw itself at its OLD size into
 // a window that is no longer that size.
-#define Z_WM_WINDOW_RESIZED      108
+#define Z_WM_WINDOW_RESIZED      (Z_SUBJ_WM + 8)
 
 // wm -> app: pointer position/button state, sent to the window that
 // currently owns the pointer -- normally the focused window while the
@@ -322,7 +324,7 @@
 // and friends (zwin.h) rather than the window-relative convention
 // z_win_draw_text() uses. z_win_mouse_content_xy() (zwin.h) converts
 // to content-relative when that's what's wanted.
-#define Z_WM_MOUSE               109
+#define Z_WM_MOUSE               (Z_SUBJ_WM + 9)
 
 // wm -> app: one of the extra titlebar icons (Z_WIN_FLAG_NEW_ICON /
 // _SAVE_ICON / _OPEN_ICON / _FONT_ICON above) was clicked. obj is a
@@ -341,7 +343,7 @@
 // anyway, purely so it matches the shape Z_WM_CLOSE already has and
 // an app handling both doesn't need two parsing styles for two
 // near-identical notifications.
-#define Z_WM_TITLEBAR_ICON       110
+#define Z_WM_TITLEBAR_ICON       (Z_SUBJ_WM + 10)
 
 // wm -> app: the mouse's scroll wheel turned. obj is a Z_UINT32 holding
 // a SIGNED count of notches, as an int32_t -- Z_WM_WHEEL_NOTCHES()
@@ -356,7 +358,7 @@
 // descriptor confirmed a wheel -- report protocol, simple layout
 // (docs/user_input.md, "Scroll wheel"). A mouse without one, or in boot
 // protocol, or on the older usb_hid_host core, sends none of these.
-#define Z_WM_WHEEL               121
+#define Z_WM_WHEEL               (Z_SUBJ_WM + 21)
 #define Z_WM_WHEEL_NOTCHES(u)    ((int32_t)(uint32_t)(u))
 
 // wm -> app: the user pressed Super+A ("read this window") -- or Super+C,
@@ -374,7 +376,7 @@
 // Any navigation key should stop a read and leave the position where
 // speech stopped, so Super+A afterwards resumes from there. See
 // docs/tts.md, "Reading a window".
-#define Z_WM_READ                122
+#define Z_WM_READ                (Z_SUBJ_WM + 22)
 
 // Z_WM_READ's payload: the window id in the low 16 bits, and WHAT to
 // read in bits 16-23 -- everything from the caret (Super+A), or only
@@ -419,7 +421,7 @@
 // wm repairs the titlebar strip rather than the whole window, so
 // retitling doesn't cost the owner a full content redraw -- see its
 // handler in wm.c.
-#define Z_WM_SET_TITLE           111
+#define Z_WM_SET_TITLE           (Z_SUBJ_WM + 11)
 
 // -- visible regions --
 //
@@ -442,7 +444,7 @@
 // by zgfx as "unrestricted", which is the opposite of what a fully
 // occluded window needs. wm sends a fully occluded window as ONE
 // EMPTY rectangle (x1 < x0), never as an empty list.
-#define Z_WM_SET_CLIP            119
+#define Z_WM_SET_CLIP            (Z_SUBJ_WM + 19)
 
 // app -> wm: acknowledges a Z_WM_SET_CLIP, the same way
 // Z_WM_REDRAW_DONE acknowledges a redraw.
@@ -457,7 +459,7 @@
 //
 // So wm sends-and-waits when narrowing, and fires and forgets when
 // widening.
-#define Z_WM_CLIP_DONE           120
+#define Z_WM_CLIP_DONE           (Z_SUBJ_WM + 20)
 
 // Ceiling on rectangles in one region. Eight covers a window with two
 // overlapping neighbours; beyond that wm SHRINKS the region rather
@@ -525,13 +527,13 @@ typedef struct {
 //
 // wm's own hotkeys keep working too -- it is the only process that sees
 // every keystroke, and that has to stay true whoever owns the screen.
-#define Z_WM_GAME_GRAB           (-32760)
-#define Z_WM_GAME_RELEASE        (-32759)
+#define Z_WM_GAME_GRAB           (Z_SUBJ_WM_GAME + 8)
+#define Z_WM_GAME_RELEASE        (Z_SUBJ_WM_GAME + 9)
 
 // Sent to the owner when wm takes the screen back -- Alt+Esc, or the
 // owner's window going away. An app that ignores it is no worse off
 // than before; one that handles it can put itself back in a window.
-#define Z_WM_GAME_REVOKED        (-32758)
+#define Z_WM_GAME_REVOKED        (Z_SUBJ_WM_GAME + 10)
 
 #define Z_WM_CLIP_CTL            (-32768)
 #define Z_WM_CLIP_FREEZE         1
@@ -571,9 +573,9 @@ typedef struct {
 // finishes -- would sit in the slot indefinitely and be collected by
 // whatever the user happened to launch next, which is a genuinely
 // confusing way for the wrong file to open. See Z_WM_ARG_TIMEOUT.
-#define Z_WM_SET_ARG             112
-#define Z_WM_GET_ARG             113
-#define Z_WM_ARG                 114
+#define Z_WM_SET_ARG             (Z_SUBJ_WM + 12)
+#define Z_WM_GET_ARG             (Z_SUBJ_WM + 13)
+#define Z_WM_ARG                 (Z_SUBJ_WM + 14)
 
 // Longest launch argument, in bytes including the NUL. One buffer in
 // wm, so this can be generous -- it needs to hold a full path, and
@@ -605,9 +607,9 @@ typedef struct {
 // Text only, NUL-terminated on the wire. Embedded newlines are fine
 // and expected (a multi-line selection is the common case); embedded
 // NULs are not representable and would truncate.
-#define Z_WM_CLIP_SET            115
-#define Z_WM_CLIP_GET            116
-#define Z_WM_CLIP_DATA           117
+#define Z_WM_CLIP_SET            (Z_SUBJ_WM + 15)
+#define Z_WM_CLIP_GET            (Z_SUBJ_WM + 16)
+#define Z_WM_CLIP_DATA           (Z_SUBJ_WM + 17)
 
 // app -> wm: repaint the WHOLE screen -- desktop background, every
 // window's frame, and a Z_WM_REDRAW to every window's owner.
@@ -630,7 +632,7 @@ typedef struct {
 // would leave debris that looks exactly like this bug not being fixed.
 // The whole screen is the only honest answer, and it costs one
 // repaint on an event that happens when a person quits an app.
-#define Z_WM_REPAINT            118
+#define Z_WM_REPAINT            (Z_SUBJ_WM + 18)
 
 // Clipboard capacity in bytes, including the terminating NUL.
 //
@@ -705,7 +707,7 @@ typedef struct {
 // window had to move to stay on the screen) and then a Z_WM_REDRAW at
 // the new size. Clamped to Z_WM_MIN_WIDTH/HEIGHT and to the screen.
 // Only the owner may resize its window. z_win_resize() in zwin.h.
-#define Z_WM_RESIZE              123
+#define Z_WM_RESIZE              (Z_SUBJ_WM + 23)
 #define Z_WM_PACK_RESIZE(id, w, h) \
 	((((uint32_t)(id) & 0xFFu) << 24) | (((uint32_t)(w) & 0xFFFu) << 12) | ((uint32_t)(h) & 0xFFFu))
 #define Z_WM_UNPACK_RESIZE_ID(v)  (((uint32_t)(v) >> 24) & 0xFFu)
@@ -718,7 +720,7 @@ typedef struct {
 // goes no further -- a window already at its limit does not maximize at
 // all. term sets its natural 80x25 size: its screen does not grow.
 // z_win_set_max_size() in zwin.h.
-#define Z_WM_SET_LIMITS          124
+#define Z_WM_SET_LIMITS          (Z_SUBJ_WM + 24)
 
 // Two clicks closer together than this are a double click -- the
 // titlebar (maximize, and with Alt, shade) and zflist's rows. Z_TICK_HZ
@@ -783,7 +785,7 @@ typedef struct {
 // process exits (set a timeout in the options if it should). While it
 // is up, every window's visible region excludes it, so nothing draws
 // over it -- including wm's own chrome.
-#define Z_WM_CAPTION             125
+#define Z_WM_CAPTION             (Z_SUBJ_WM + 25)
 
 // -- automation (docs/automate.md) --
 //
@@ -801,11 +803,11 @@ typedef struct {
 //   Z_WM_WIN_FOCUS   tag = pid: raise and focus, as a click would.
 //   Z_WM_WIN_TBICON  tag = pid; Z_UINT32 kind: act on a titlebar icon
 //                    as if clicked -- Z_WM_TBICON_* or 0 for close.
-#define Z_WM_WIN_QUERY           126
-#define Z_WM_WIN_INFO            127
-#define Z_WM_WIN_PLACE           128
-#define Z_WM_WIN_FOCUS           129
-#define Z_WM_WIN_TBICON          130
+#define Z_WM_WIN_QUERY           (Z_SUBJ_WM + 26)
+#define Z_WM_WIN_INFO            (Z_SUBJ_WM + 27)
+#define Z_WM_WIN_PLACE           (Z_SUBJ_WM + 28)
+#define Z_WM_WIN_FOCUS           (Z_SUBJ_WM + 29)
+#define Z_WM_WIN_TBICON          (Z_SUBJ_WM + 30)
 //   Z_WM_WIN_KILL    tag = pid: destroy every window the process owns,
 //                    then kill it -- what the close icon does for a
 //                    Z_WIN_FLAG_CLOSE_KILLS_OWNER window. Killing a
@@ -818,8 +820,8 @@ typedef struct {
 //                    window of the next process to create one -- send
 //                    it BEFORE z_proc_run(): after is a race a fast app
 //                    (gpu3d) wins. Expires like a launch argument.
-#define Z_WM_WIN_KILL            131
-#define Z_WM_WIN_NEXT_PLACE      132
+#define Z_WM_WIN_KILL            (Z_SUBJ_WM + 31)
+#define Z_WM_WIN_NEXT_PLACE      (Z_SUBJ_WM + 32)
 
 // Z_WM_LOCK -- the screen lock (docs/security.md). Payload Z_UINT32:
 //
@@ -829,7 +831,7 @@ typedef struct {
 //                     (sw/apps/settings): read it again
 //
 // z_wm_lock_request() in zauth.h sends it. No reply.
-#define Z_WM_LOCK                133
+#define Z_WM_LOCK                (Z_SUBJ_WM + 33)
 #define Z_WM_LOCK_NOW            0
 #define Z_WM_LOCK_RELOAD         1
 
@@ -859,5 +861,9 @@ typedef struct {
 	int16_t		icon_y[Z_WM_INFO_ICONS];
 	char		title[Z_WM_INFO_TITLE];
 } z_wm_win_info_t;
+
+// Still inside the block zsubjects.h gives this protocol:
+Z_SUBJECTS_IN(Z_SUBJ_WM, Z_WM_LOCK);
+Z_SUBJECTS_IN(Z_SUBJ_WM_GAME, Z_WM_GAME_REVOKED);
 
 #endif

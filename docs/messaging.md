@@ -212,24 +212,63 @@ loop over `z_msg_read()`, not a separate syscall.
 
 ### Subjects and tags
 
-`subject` and `tag` are both just `uint32_t` -- Zeitlos doesn't impose
-a global registry. Convention so far:
+`subject` and `tag` are both just `uint32_t`.
 
-- `subject` identifies the *kind* of message (e.g. "this is a ping",
-  "this is a create-window request"). Each subsystem defines its own
-  constants (see `Z_WM_*` in `sw/common/zwm.h` for the window
-  manager's).
-- A subject that might reach the wrong process should be chosen so
-  that no other process has a case for it. The speech protocol
-  (`sw/common/ztts.h`) uses `0x5454xxxx` for exactly this reason: its
-  clients cache the service's pid, and a cached pid can briefly name a
-  newer process after the service exits. See `docs/tts.md`, "Cost".
+- `subject` identifies the *kind* of message (e.g. "this is a
+  create-window request"). Each protocol defines its own constants --
+  `Z_WM_*` in `sw/common/zwm.h` for the window manager's, `Z_PORT_*` in
+  `zport.h` for connections, and so on.
 - `tag` is available for matching a reply to a specific outstanding
-  request when a process might have more than one in flight. The
-  ping/pong and window-manager demos don't need it yet (each process
-  only ever has one request outstanding at a time) and use `0`
-  throughout, but a real RPC client with multiple concurrent requests
-  would pick a fresh tag per request and match on it.
+  request when a process might have more than one in flight; the
+  window manager's protocol and most others use `0`.
+
+**Subjects must be distinct across protocols**, not just within one:
+a process usually speaks several -- an app hears from `wm`, `net` and
+`term` at once -- and a subject two protocols share is read as
+whichever of the two the receiver checks first. Nothing used to enforce
+that, and by September 2026 three pairs had collided: `wm`'s subjects
+had grown past 119 into the port protocol's 120-125 (so a wheel notch
+and "connected" were both 121) and the REPL protocol's 130-132, and
+`ask`'s 313-322 overlapped `net`'s 313-317. It surfaced as a compile
+error only because two apps happened to handle both in one `switch`;
+apps using `if`/`else` compiled and misread.
+
+**`sw/common/zsubjects.h` is now the one place subject numbers are
+decided.** Each protocol owns a block -- a base and a size -- and
+defines its subjects there as base + offset:
+
+```c
+#include "zsubjects.h"
+#define Z_PORT_CONNECT    (Z_SUBJ_PORT + 0)
+...
+Z_SUBJECTS_IN(Z_SUBJ_PORT, Z_PORT_DATA_ACK);	// still inside the block
+```
+
+Three checks keep it that way:
+
+- **The blocks cannot overlap.** `zsubjects.h` lists them in order of
+  base and checks each clears the one before, at compile time.
+- **A protocol cannot outgrow its block.** Each header's
+  `Z_SUBJECTS_IN()` fails the compile if its last subject is past the
+  end.
+- **A protocol cannot skip the registry.** `make -C sw/apps` runs
+  `tools/check_subjects.py` first, which finds every subject the tree
+  sends, compares or waits for and fails if one is not defined through
+  a block -- the case the compiler cannot see, and the one that caused
+  the collisions.
+
+The numbers themselves are only in `zsubjects.h`; this document does
+not repeat them. The speech protocol's block is `0x5454xxxx` ("TT"),
+far from everything else, because its clients cache the service's pid,
+and a cached pid can briefly name a newer process after the service
+exits (`docs/tts.md`, "Cost").
+
+**Adding a protocol:** give it a block in `zsubjects.h` (in order,
+with room to grow, and the one-line check linking it to the block
+before), include `zsubjects.h` in its header, define each subject as
+`(Z_SUBJ_<NAME> + n)`, and check the last with `Z_SUBJECTS_IN()`. A
+protocol private to one app still takes a block: whatever else that
+app talks to hears its subjects too.
 
 ### Kernel internals, briefly
 
