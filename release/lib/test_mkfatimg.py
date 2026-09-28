@@ -20,7 +20,7 @@
 #   - every variant builds, fsck-clean, at the size plan_size() chose;
 #   - a pack arrives complete: every file, at its card path, same size;
 #   - the manifest lists a pack as ONE entry, not tens of thousands;
-#   - a name that is not 8.3 fails BEFORE anything is formatted;
+#   - a name FatFs cannot open fails BEFORE anything is formatted;
 #   - the large-image path (8KB clusters) formats and holds a pack --
 #     forced with a lowered threshold, since writing a real 1GB image
 #     here would test the disk more than the builder.
@@ -152,20 +152,73 @@ def main():
         for key, _stem, _packs in mkfatimg.VARIANTS:
             test_variant(root, key, tmp)
 
-        print("8.3 names")
+        print("card names")
+        # The predicate, without formatting. 255 UTF-16 units is the
+        # longest create_name() accepts; zsubjects.h is the header that
+        # the old 8.3 check rejected.
+        def accepts(dest, what):
+            try:
+                mkfatimg.check_card_path(dest)
+                check(True, what)
+            except mkfatimg.FatError as e:
+                check(False, "%s (%s)" % (what, e))
+
+        def refuses(dest, what):
+            try:
+                mkfatimg.check_card_path(dest)
+                check(False, what)
+            except mkfatimg.FatError as e:
+                check("cannot go on the card" in str(e), what)
+
+        accepts("libz/include/zsubjects.h", "zsubjects.h fits")
+        accepts("a" * 255, "255 UTF-16 units fit")
+        accepts("hello_win", "a nine-character app name fits")
+        accepts("Meeting notes.txt", "spaces and a long stem fit")
+        # U+1F600 is one scalar and two UTF-16 units. 127 of them is
+        # 254; one more ASCII unit makes 255.
+        accepts("\U0001F600" * 127 + "a", "a name of 255 units fits")
+        refuses("a" * 256, "256 UTF-16 units are refused")
+        refuses("\U0001F600" * 128, "256 units via surrogate pairs are refused")
+        refuses("bad*name.md", "an illegal LFN character is refused")
+        refuses(b"\xff", "invalid UTF-8 is refused")
+        refuses(".", "a name that snips to nothing is refused")
+        refuses("foo\\bar", "a backslash is refused")
+
+        print("refused before formatting")
+        # '*' is legal in an APFS name and illegal in a long name, so
+        # the file can exist here and must still be rejected. A
+        # 256-unit name cannot be created on this filesystem at all.
         bad = os.path.join(ROOT, mkfatimg.ASK_OUT, "zdocs", "ark", "zdocs",
-                           "longfilename.md")
+                           "bad*name.md")
         img = os.path.join(tmp, "bad.img")
         try:
             open(bad, "w").write("x")
             try:
                 mkfatimg.build(root, img, verbose=False, packs=("zdocs",))
-                check(False, "a long name in a pack is refused")
+                check(False, "an unopenable pack name is refused")
             except mkfatimg.FatError as e:
-                check("8.3" in str(e), "a long name in a pack is refused")
+                check("cannot go on the card" in str(e),
+                      "an unopenable pack name is refused")
         finally:
-            os.unlink(bad)
+            if os.path.exists(bad):
+                os.unlink(bad)
         check(not os.path.exists(img), "...before anything was formatted")
+
+        print("a long name is stored")
+        good = os.path.join(ROOT, mkfatimg.ASK_OUT, "zdocs", "ark", "zdocs",
+                            "longfilename.md")
+        img = os.path.join(tmp, "long.img")
+        try:
+            open(good, "w").write("x")
+            mkfatimg.build(root, img, verbose=False, packs=("zdocs",))
+            on_card = card_files(img)
+            check("/ark/zdocs/longfilename.md" in on_card,
+                  "longfilename.md is on the card")
+        finally:
+            if os.path.exists(good):
+                os.unlink(good)
+            if os.path.exists(img):
+                os.unlink(img)
 
         print("large-image path (8KB clusters, threshold lowered)")
         saved = mkfatimg.LARGE_IMAGE_BYTES
