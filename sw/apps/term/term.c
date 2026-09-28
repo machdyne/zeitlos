@@ -315,6 +315,35 @@ static bool sel_contains(uint32_t id, int col) {
 
 static uint16_t shadow[VT_ROWS][VT_COLS];
 
+/* -- the box font --
+ *
+ * zvt100's line-drawing codes (0x81-0x9E: box drawing, blocks, shades)
+ * drawn as a font at exactly this terminal's cell size, so a line
+ * reaches the edges of its cell and meets the next one whatever font
+ * term was built with. Four copies, one per parity of the cell's
+ * position on the screen: the shades are dithers, and at a cell width
+ * of 5 a checker drawn the same in every cell would show a seam every
+ * five pixels. Built once, at start: 4 x 30 glyphs x cell_h bytes. */
+#define BOX_GLYPHS (VT_BOX_LAST - VT_BOX_FIRST + 1)
+static uint8_t box_bits[2][2][BOX_GLYPHS * 16];
+static z_font_t box_font[2][2];
+
+static void box_fonts_build(void) {
+	int h = TERM_FONT.h > 16 ? 16 : TERM_FONT.h;
+	for (int xp = 0; xp < 2; xp++)
+		for (int yp = 0; yp < 2; yp++) {
+			for (int i = 0; i < BOX_GLYPHS; i++)
+				vt_box_glyph((uint8_t)(VT_BOX_FIRST + i), TERM_FONT.w, h, xp, yp,
+					&box_bits[xp][yp][i * h]);
+			box_font[xp][yp].w = TERM_FONT.w;
+			box_font[xp][yp].h = (uint8_t)h;
+			box_font[xp][yp].first = VT_BOX_FIRST;
+			box_font[xp][yp].last = VT_BOX_LAST;
+			box_font[xp][yp].glyphs = box_bits[xp][yp];
+			box_font[xp][yp].gap_lo = box_font[xp][yp].gap_hi = 0;
+		}
+}
+
 /* -- what a redraw cost --
  *
  * One console line per Z_WM_REDRAW served, when term_perf_debug is on
@@ -413,7 +442,20 @@ static void draw_glyph(const z_clip_t *clip, int col, int row, char ch,
 	// would keep whatever was there before.
 	if (ch == VT_CH_WIDE_RIGHT) ch = ' ';
 
-	z_fb_draw_char2(clip->x0 + col * cell_w, clip->y0 + (row - vskip) * cell_h, ch,
+	int x = clip->x0 + col * cell_w, y = clip->y0 + (row - vskip) * cell_h;
+
+	// Line drawing, blocks and shades from the box font, made at this
+	// cell's size (box_fonts_build()). Its glyphs are not in glyph
+	// memory, so z_fb_draw_char2() draws them in software: a few dozen
+	// pixels a cell, and only the cells that are boxes.
+	if (vt_is_box((uint8_t)ch)) {
+		z_fb_draw_char2(x, y, ch, inverted ? 0 : 1, inverted ? 1 : 0,
+			&box_font[x & 1][y & 1], clip);
+		INS(ins_glyphs++);
+		return;
+	}
+
+	z_fb_draw_char2(x, y, ch,
 		inverted ? 0 : 1, inverted ? 1 : 0, &TERM_FONT, clip);
 
 	INS(ins_glyphs++);
@@ -575,7 +617,7 @@ static void render(void) {
 	// nothing to type at, and a block sitting in the corner of the old
 	// session reads as a prompt that is not there.
 	int cur_row = -1, cur_col = 0;
-	if (port.connected) {
+	if (port.connected && vt_cursor_visible(&vt)) {
 		cur_col = (vt.cursor_x >= VT_COLS) ? VT_COLS - 1 : vt.cursor_x;
 		cur_row = vt.cursor_y + view_off;
 		if (cur_row >= VT_ROWS) cur_row = -1;
@@ -1287,9 +1329,19 @@ static void panel_draw(void) {
 		"port, serial, telnet or ssh");
 	z_win_draw_text2(&win, x + PANEL_TEXT_X, y + PANEL_DESC_Y + 30, line, 1, 0, &TERM_FONT);
 
-	if (panel_status[0])
+	// Cut to the panel's width. A status is anything a failed connect
+	// or auto-connect has to say, and a long one ran on past the
+	// panel's right edge into cells the panel does not own: nothing
+	// erased them when the panel went, and the shadow said they were
+	// blank. (sw/apps/term/tests/render.c, "bad auto-connect value".)
+	if (panel_status[0]) {
+		int fit = (w - 2 * PANEL_TEXT_X) / cell_w;
+		if (fit > (int)sizeof(line) - 1) fit = (int)sizeof(line) - 1;
+		if (fit < 0) fit = 0;
+		snprintf(line, sizeof(line), "%.*s", fit, panel_status);
 		z_win_draw_text2(&win, x + PANEL_TEXT_X, y + PANEL_STATUS_Y,
-			panel_status, 1, 0, &TERM_FONT);
+			line, 1, 0, &TERM_FONT);
+	}
 
 	z_win_draw_text2(&win, x + PANEL_TEXT_X, y + PANEL_HINT_Y,
 		"Tab chooses, Enter connects, or type a target", 1, 0, &TERM_FONT);
@@ -1868,15 +1920,16 @@ static int sel_gather(void) {
 		}
 
 		// The clipboard is UTF-8 (docs/text_encoding.md); a cell is a
-		// Latin-9 glyph byte. The right half of a wide character adds
-		// nothing; a wide character is itself, kept in its left cell;
-		// any other box -- a character the screen could not keep -- is
-		// the replacement character, which is honest about it.
+		// Latin-9 glyph byte or a line-drawing code. The right half of a
+		// wide character adds nothing; a wide character is itself, kept
+		// in its left cell; a line-drawing code is its own character, so
+		// a copied box pastes as a box; any other box -- a character the
+		// screen could not keep -- is the replacement character, which is
+		// honest about it. vt_glyph_cp() says which.
 		for (int col = from; col <= last && n < max; col++) {
 			uint8_t ch = (uint8_t)line[col];
 			if (ch == (uint8_t)VT_CH_WIDE_RIGHT) continue;
-			uint32_t cp = wcp[col] ? wcp[col] : (ch == 0x7f) ? 0xFFFDu :
-				(ch >= 0x20 && (ch < 0x80 || ch >= 0xA0)) ? z_l9_to_cp(ch) : ' ';
+			uint32_t cp = wcp[col] ? wcp[col] : vt_glyph_cp(ch);
 			char u[Z_UTF8_MAX];
 			int k = z_utf8_put(cp, u);
 			if (n + k > max) break;
@@ -1922,8 +1975,11 @@ static int say_get(void *user, int n, const char **text, uint32_t *flags) {
 			vt_id_cell(&vt, id, col, &b);
 			uint8_t ch = (uint8_t)VT_PACK_CH(b);
 			if (ch == (uint8_t)VT_CH_WIDE_RIGHT) continue;
+			// Line drawing is said as nothing: a box around a menu is
+			// not something to hear, and "box drawings light horizontal"
+			// eighty times over is worse than silence.
 			uint32_t cp = VT_PACK_WIDE_CP(b) ? VT_PACK_WIDE_CP(b) :
-				(ch >= 0x20 && ch != 0x7f && (ch < 0x80 || ch >= 0xA0)) ?
+				(ch >= 0x20 && ch != 0x7f && !vt_is_box(ch) && (ch < 0x80 || ch >= 0xA0)) ?
 				z_l9_to_cp(ch) : ' ';
 			n += z_utf8_put(cp, &out[n]);
 			if (cp != ' ') { last = n - 1; lastcol = col; }
@@ -2264,6 +2320,27 @@ static int sb_vis;
 // overlays on top of it, and the scrollbar. The one entry point for
 // "draw", so the main loop and connect_port()'s wait cannot disagree
 // about what drawing involves.
+// Output from the far end: onto the screen, and any answer it asked
+// for straight back. A function of its own so the render test can
+// deliver output the way a provider does.
+static void port_data(const z_msg_t *msg) {
+	if (port.connected && msg->tag == port.conn_id && msg->from == port.peer_pid) {
+		uint32_t len = z_blob_len(&msg->obj);
+		void *data = z_blob_data(&msg->obj);
+		if (data && len) vt_feed(&vt, (const uint8_t *)data, len);
+		// What the far end asked (CSI 6n: where is the cursor -- how a
+		// BBS tells an ANSI terminal) goes straight back to it.
+		uint8_t rep[VT_REPLY_MAX];
+		uint32_t rn = vt_take_reply(&vt, rep, sizeof(rep));
+		if (rn) z_port_send(&port, rep, rn);
+	}
+	// Tells the sender it may free its z_obj_blob(). AFTER vt_feed()
+	// has finished reading it, and sent even when the guard did not
+	// match -- the sender's pending-send slot needs the ack either
+	// way. See zport.h.
+	z_port_send_ack(msg);
+}
+
 static void frame(void) {
 
 	z_clip_t clip;
@@ -2318,6 +2395,7 @@ static void term_setup(void) {
 
 	cell_w = TERM_FONT.w;
 	cell_h = TERM_FONT.h;
+	box_fonts_build();          // at the cell size, again after the Aa toggle
 	text_w = VT_COLS * cell_w;
 	text_h = VT_ROWS * cell_h;
 
@@ -2434,17 +2512,7 @@ int main(void) {
 			} else if (z_sayall_msg(&reader, &msg)) {
 				// speech's progress report, pacing Super+A
 			} else if (msg.subject == Z_PORT_DATA) {
-				if (port.connected && msg.tag == port.conn_id &&
-					msg.from == port.peer_pid) {
-					uint32_t len = z_blob_len(&msg.obj);
-					void *data = z_blob_data(&msg.obj);
-					if (data && len) vt_feed(&vt, (const uint8_t *)data, len);
-				}
-				// Tells the sender it may free its z_obj_blob(). AFTER
-				// vt_feed() has finished reading it, and sent even when
-				// the guard did not match -- the sender's pending-send
-				// slot needs the ack either way. See zport.h.
-				z_port_send_ack(&msg);
+				port_data(&msg);
 			} else if (msg.subject == Z_PORT_DATA_ACK) {
 				z_port_handle_ack(&port, &msg);
 			} else if (msg.subject == Z_PORT_CLOSE) {

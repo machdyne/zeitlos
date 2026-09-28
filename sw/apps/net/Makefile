@@ -263,7 +263,7 @@ SOCK_OBJ =
 endif
 
 ifeq ($(SSH_ENABLE), 1)
-SSH_OBJ = monocypher.o monocypher-ed25519.o \
+SSH_OBJ = monocypher.o monocypher-ed25519.o z25519.o \
 	zsha256.o ssh_wire.o ssh_crypto.o ssh_proto.o ssh.o
 else
 SSH_OBJ =
@@ -368,6 +368,10 @@ MONO = ../../ext/monocypher
 
 monocypher.o: $(MONO)/monocypher.c $(MONO)/monocypher.h
 	$(CC) $(CFLAGS) -c $(MONO)/monocypher.c -o monocypher.o
+
+# X25519 and Ed25519 checks on montmul's register file (docs/z25519.md)
+z25519.o: ../../common/z25519.c ../../common/z25519.h
+	$(CC) $(CFLAGS) -c ../../common/z25519.c -o z25519.o
 
 monocypher-ed25519.o: $(MONO)/monocypher-ed25519.c $(MONO)/monocypher-ed25519.h $(MONO)/monocypher.h
 	$(CC) $(CFLAGS) -I$(MONO) -c $(MONO)/monocypher-ed25519.c -o monocypher-ed25519.o

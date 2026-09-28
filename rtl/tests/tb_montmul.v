@@ -44,6 +44,7 @@ module tb;
 	wire [31:0] dat_r;
 	wire ack;
 	integer guard;
+	reg [31:0] rdata;		// declared before the tasks that assign it
 
 	montmul #(.LIMBS(12)) dut (
 		.clk(clk), .resetn(resetn),
@@ -93,7 +94,6 @@ module tb;
 		end
 	endtask
 
-	reg [31:0] rdata;
 	integer fd, ncase, c, k, polls, fails, worst, bad, rc;
 	integer nl;
 	reg [31:0] ni;

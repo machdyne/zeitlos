@@ -390,6 +390,59 @@ bool z_port_peer_gone(const z_port_t *port);
 // a child).
 bool z_port_pid_running(uint32_t pid);
 
+// -- Who is connecting --
+//
+// A CONNECT that comes from outside this machine -- netserve, relaying
+// a telnet or SSH session -- carries a Z_MAP saying who it is, instead
+// of Z_NONE. docs/ports.md, "Who is connecting".
+//
+//   "transport"  Z_STR     "telnet" or "ssh"
+//   "auth"       Z_STR     "system": the machine's password or an SSH
+//                          key in /user/authkeys was checked.
+//                          "none": nobody checked anything (a noauth
+//                          listener, docs/netserve.md) -- the provider
+//                          must log the user in itself, or refuse.
+//   "peer"       Z_UINT32  the remote IPv4 address
+//   "port"       Z_UINT32  the local TCP port it arrived on
+//   "user"       Z_STR     SSH only: the user name the client sent.
+//                          A claim, never a proof -- even with "system".
+//
+// The strings are BORROWED from the sender until the provider answers
+// (docs/messaging.md): copy what you keep before CONNECTED or REFUSED.
+//
+// **A map with "auth" other than "system" is unauthenticated.** Every
+// provider that hands out a shell or a device -- repl, posix, console,
+// serial -- refuses it with z_port_refuse_unauthenticated(). A CONNECT
+// with no identity map at all is from this machine (term, a script)
+// and is as trusted as the machine's own processes. Anything else that
+// forwards connections from outside must therefore send a map.
+#define Z_PORT_ID_TRANSPORT  "transport"
+#define Z_PORT_ID_AUTH       "auth"
+#define Z_PORT_ID_PEER       "peer"
+#define Z_PORT_ID_PORT       "port"
+#define Z_PORT_ID_USER       "user"
+#define Z_PORT_AUTH_SYSTEM   "system"
+#define Z_PORT_AUTH_NONE     "none"
+
+typedef struct {
+	bool remote;            // an identity map was present: from outside the machine
+	bool authenticated;     // local, or remote with auth "system"
+	char transport[8];      // "telnet", "ssh"; empty when local
+	char user[33];          // SSH's user name, cut to 32 bytes; empty if none
+	uint32_t peer;          // IPv4, 0 when local
+	uint16_t port;          // local TCP port, 0 when local
+} z_port_ident_t;
+
+// Reads a CONNECT's identity into `out` (copied: safe to keep). Never
+// fails: a CONNECT without a map is a local one.
+void z_port_ident(const z_msg_t *connect_msg, z_port_ident_t *out);
+
+// For a provider that must not serve anyone unchecked: if this CONNECT
+// is unauthenticated, REFUSE it, say so on the console as `who`, and
+// return true -- the caller then does nothing more with it. False, and
+// nothing sent, for anything else.
+bool z_port_refuse_unauthenticated(const z_msg_t *connect_msg, const char *who);
+
 // Still inside the block zsubjects.h gives this protocol:
 Z_SUBJECTS_IN(Z_SUBJ_PORT, Z_PORT_DATA_ACK);
 

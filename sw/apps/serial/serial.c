@@ -330,6 +330,10 @@ int main(void) {
 
 			if (msg.subject == Z_PORT_CONNECT) {
 
+				// A device on a wire: never for a session nobody
+				// logged in (zport.h, "Who is connecting").
+				if (z_port_refuse_unauthenticated(&msg, "serial")) continue;
+
 				if (msg.obj.type == Z_UINT32 &&
 				    msg.obj.val.uint32 == Z_CONN_USBSERIAL_ARG)
 					connect_usb(&msg);

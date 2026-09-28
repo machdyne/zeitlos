@@ -197,3 +197,36 @@ bearing.
 4. Revisit the D-cache as its own project once the crypto is out of
    the way, because it is the only option that touches everything
    else in the table.
+
+## Keccak (SHA-3, SHAKE): for the post-quantum algorithms
+
+**Measured** (September 2026, `cryptobench`): one Keccak-f[1600]
+permutation in software is **169,336 cycles (3.5 ms)** -- 64-bit lanes
+on a 32-bit CPU with no data cache. It is 51-61% of each ML-KEM-768
+operation ([mlkem.md](mlkem.md#measured-on-the-board)), and most of
+ML-DSA verification (the post-quantum signature in zfed's migration
+plan, [fed.md](fed.md#quantum-computers)) and nearly all of SLH-DSA's.
+
+**The option**: a block like the SHA-256 one (rtl/sha256.v) -- a
+compact core, one 64-bit lane at a time, the 1600-bit state in block
+RAM, absorbing and squeezing through registers, OWNER-claimed. Moving
+the state in and out (~50 register accesses each way at ~30 cycles)
+would dominate, so an estimated **3,000-4,000 cycles a permutation,
+~45x**; a core doing a round per cycle would hardly improve on that.
+ML-KEM would roughly halve (its NTT arithmetic is the other ~45%);
+ML-DSA and SLH-DSA verification become practical in volume.
+
+**Where it fits**: an estimated ~1,000 LUT4 or so, to be confirmed by
+synthesis -- room on the ECP5-45 boards (Sergei ML2); **not on Lakritz**
+(511 LUT4 free) without taking something else out.
+
+**Also possible, for every board**: a Keccak written for 32-bit CPUs
+("bit-interleaved", as in the Keccak team's public-domain XKCP),
+typically 1.5-2x faster there than the portable 64-bit code.
+
+**Built** (docs/keccak_hw.md): the round-per-clock form, 6,005 LUT4 --
+larger than the compact estimate above, and simpler; on Sergei ML2,
+off on Lakritz.
+
+**Not yet**: an NTT unit. After Keccak, ML-KEM's remaining time is its
+polynomial arithmetic; worth revisiting once ML-DSA is measured.

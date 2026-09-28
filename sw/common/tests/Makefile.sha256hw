@@ -1,0 +1,15 @@
+# The zsha256 driver against rtl/sha256.v, under Verilator.
+VERILATOR ?= verilator
+OUT = /tmp/zsha256_hw
+all:
+	mkdir -p $(OUT)
+	# Verilator does not relink when these objects change: always from scratch.
+	rm -f $(OUT)/obj/test_zsha256_hw
+	cc -std=c99 -O1 -c ../zsha256.c -o $(OUT)/ref.o
+	cc -std=c99 -O1 -DZ_SHA256_HW_TEST -Dz_sha256_init=hw_sha256_init \
+		-Dz_sha256_update=hw_sha256_update -Dz_sha256_final=hw_sha256_final \
+		-Dz_sha256=hw_sha256 -c ../zsha256.c -o $(OUT)/hw.o
+	$(VERILATOR) --cc ../../../rtl/sha256.v --top-module sha256 --exe test_zsha256_hw.cpp \
+		$(OUT)/ref.o $(OUT)/hw.o --Mdir $(OUT)/obj --build -j 1 -Wno-fatal -Wno-lint -Wno-style \
+		-CFLAGS -I$(CURDIR) -o test_zsha256_hw >/dev/null
+	$(OUT)/obj/test_zsha256_hw

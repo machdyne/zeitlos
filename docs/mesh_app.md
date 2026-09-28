@@ -762,6 +762,45 @@ running Meshtastic, plugged into a Zeitlos USB host port:
    than committing it; it becomes phase 3's test vectors, and its
    firmware version gets recorded here.
 
+## mesh0
+
+**The radio as a service** for other programs -- zfed's radio link first
+([fed.md](fed.md), "The radio link"). mesh stays the only program that
+speaks Meshtastic; a client sends and receives payloads on an
+application's port (Meshtastic reserves 256 and up for applications)
+through the port `mesh0`, one record in each port DATA:
+
+| | record | |
+|---|---|---|
+| client to mesh | `'L' port(2)` | listen on a port |
+| | `'S' to(4) channel(1) port(2) payload` | send (at most 233 bytes) |
+| mesh to client | `'U' my_num(4)` | the radio is up (and at once, on connecting, whichever it is) |
+| | `'D'` | ... and down |
+| | `'R' from(4) to(4) channel(1) port(2) payload` | a packet arrived on the port |
+| | `'E' text` | a send refused, and why |
+
+Numbers little-endian. `mesh0` is served while the window is open, and
+by **`run mesh serve`** -- no window, no exit: for a board that is a
+node. A client's data is acked at once (as serial's is), so a client
+never stalls mesh; a client eight records behind misses packets rather
+than holding mesh up -- a radio link must recover from loss anyway. A
+send to one node asks for an acknowledgement, a broadcast does not. The
+service is asked about every message first: `port_msg()` acks every
+DATA, anyone's.
+
+`sw/apps/mesh/mesh_svc.c`; `mesh_proto.c` gained `MESH_EV_DATA` (a
+packet on an application's port, handed on as it is) and
+`mesh_tx_data()`, `mesh_session.c` `mesh_session_send_data()`.
+**Tests**: `tests/test_session.c` -- a packet on port 300 as a DATA
+event, every field and byte; port 70 not; a data packet sent decodes
+back exactly, a broadcast asking no acknowledgement and one to a node
+asking one; port 255, 234 bytes and no link refused. `tests/test_svc.c`
+(15 checks, a scripted kernel) -- a client told the radio's state at
+once and on every change; packets only to the port a client listens on;
+sends handed to the node, or refused saying why; serial's messages, and
+a stranger's using a client's id, never taken for a client's; a client
+that dies forgotten. Not yet on hardware.
+
 ## Deliberately not done
 
 - **Any radio or crypto on this side.** The node does it; see the top

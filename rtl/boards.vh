@@ -505,6 +505,12 @@
 // absent, so dropping it on a board that stops fitting costs speed
 // rather than function.
 `define MONTMUL
+// Its register file (docs/montmul.md), ~510 LUT4 and one DP16KD, and
+// the SHA-256 block (docs/sha256_hw.md), ~1,000 LUT4-equivalents and
+// one DP16KD. The tightest board: see docs/sha256_hw.md, "Fitting",
+// for what these cost here.
+`define MONTMUL_REGS
+`define SHA256
 `define ICACHE_KB 4
 `define ICACHE_LINE_WORDS 4
 // Data cache (docs/dcache.md), WITHOUT the write buffer: this 25F is
@@ -824,6 +830,15 @@
 `define MEM_GLYPH
 `define ICACHE
 `define MONTMUL
+// Its register file and the SHA-256 block (docs/montmul.md,
+// docs/sha256_hw.md): measured here, 52.25 MHz against 48, and
+// cryptobench's known answers correct through both.
+`define MONTMUL_REGS
+`define SHA256
+// The Keccak-f[1600] block (docs/keccak_hw.md): ~6,000 LUT4 and ~1,700
+// FF -- room here, not on Lakritz. Optional like the others: take this
+// line out and sw/common/zkeccak.c uses software.
+`define KECCAK
 `define ICACHE_KB 8
 `define ICACHE_LINE_WORDS 4
 `define DCACHE

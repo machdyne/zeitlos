@@ -1,0 +1,15 @@
+# sw/common/zkeccak.c (and ML-KEM on it) against rtl/keccak.v, under Verilator.
+VERILATOR ?= verilator
+OUT = /tmp/zkeccak_hw
+MK = ../../ext/mlkem
+C_SRC = ../zkeccak.c ../zfips202.c ../zmlkem.c $(MK)/kem.c $(MK)/indcpa.c $(MK)/polyvec.c $(MK)/poly.c \
+	$(MK)/ntt.c $(MK)/cbd.c $(MK)/reduce.c $(MK)/verify.c $(MK)/symmetric-shake.c
+all:
+	mkdir -p $(OUT)
+	# Verilator does not relink when these objects change: always from scratch.
+	rm -f $(OUT)/obj/test_zkeccak_hw
+	for s in $(C_SRC); do cc -std=c99 -O2 -DKYBER_K=3 -DZKECCAK_HW_TEST -c $$s -o $(OUT)/$$(basename $$s .c).o || exit 1; done
+	$(VERILATOR) --cc ../../../rtl/keccak.v --top-module keccak --exe test_zkeccak_hw.cpp \
+		$(OUT)/*.o --Mdir $(OUT)/obj --build -j 1 -O3 \
+		-Wno-fatal -Wno-lint -Wno-style -CFLAGS "-O2 -I$(CURDIR)" -o test_zkeccak_hw >/dev/null
+	$(OUT)/obj/test_zkeccak_hw

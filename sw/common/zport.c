@@ -6,6 +6,7 @@
  */
 
 #include <stdio.h>
+#include <string.h>
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -291,4 +292,51 @@ void z_port_reject_stranger(const z_msg_t *msg) {
 void z_port_refuse(const z_msg_t *connect_msg, const char *reason) {
 	z_msg_new_send(connect_msg->from, Z_PORT_REFUSED, 0,
 		z_obj_str(reason ? reason : ""));
+}
+
+// -- who is connecting (zport.h) --
+
+static void ident_str(z_obj_t *map, const char *key, char *out, uint32_t cap) {
+	z_obj_t *v = z_map_find(map, key);
+	out[0] = 0;
+	if (!v || v->type != Z_STR || !v->val.str) return;
+	uint32_t i = 0;
+	for (; v->val.str[i] && i + 1 < cap; i++) out[i] = v->val.str[i];
+	out[i] = 0;
+}
+
+void z_port_ident(const z_msg_t *connect_msg, z_port_ident_t *out) {
+	z_obj_t *map = (z_obj_t *)&connect_msg->obj;
+	char auth[8];
+	z_obj_t *v;
+
+	memset(out, 0, sizeof(*out));
+	out->authenticated = true;
+	if (map->type != Z_MAP || !z_map_find(map, Z_PORT_ID_AUTH)) return;
+
+	out->remote = true;
+	ident_str(map, Z_PORT_ID_AUTH, auth, sizeof(auth));
+	// Only the exact word counts: anything else -- "none", a typo, a
+	// value cut short -- is unauthenticated. Failing closed.
+	out->authenticated = !strcmp(auth, Z_PORT_AUTH_SYSTEM);
+	ident_str(map, Z_PORT_ID_TRANSPORT, out->transport, sizeof(out->transport));
+	ident_str(map, Z_PORT_ID_USER, out->user, sizeof(out->user));
+	v = z_map_find(map, Z_PORT_ID_PEER);
+	if (v && v->type == Z_UINT32) out->peer = v->val.uint32;
+	v = z_map_find(map, Z_PORT_ID_PORT);
+	if (v && v->type == Z_UINT32) out->port = (uint16_t)v->val.uint32;
+}
+
+bool z_port_refuse_unauthenticated(const z_msg_t *connect_msg, const char *who) {
+	z_port_ident_t id;
+	(void)who;
+	z_port_ident(connect_msg, &id);
+	if (id.authenticated) return false;
+	ZPORT_LOG("%s: refused an unauthenticated %s session from %lu.%lu.%lu.%lu "
+		"(a noauth listener -- docs/netserve.md)\n", who,
+		id.transport[0] ? id.transport : "remote",
+		(unsigned long)(id.peer >> 24), (unsigned long)((id.peer >> 16) & 0xFF),
+		(unsigned long)((id.peer >> 8) & 0xFF), (unsigned long)(id.peer & 0xFF));
+	z_port_refuse(connect_msg, "this port needs a logged-in session (not noauth)");
+	return true;
 }

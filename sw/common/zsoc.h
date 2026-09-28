@@ -372,6 +372,10 @@
 // write to reg_vmouse is only safe when this bit is set. Used by
 // sw/apps/automate (docs/automate.md) and net's remote desktop.
 #define Z_FEATURE2_VMOUSE     (1u << 11)
+// rtl/sha256.v -- see Z_SHA256_BASE below. rtl/csrs.vh FEATURES2 bit 12.
+#define Z_FEATURE2_SHA256     (1u << 12)
+// rtl/keccak.v -- see Z_KECCAK_BASE below. rtl/csrs.vh FEATURES2 bit 13.
+#define Z_FEATURE2_KECCAK     (1u << 13)
 
 // The jumploader region: the same on every board, the top 192 KB of the
 // first 2 MB. KEEP IN SYNC with the Makefile's JUMP_ADDR
@@ -431,6 +435,57 @@
 #define Z_MONTMUL_W_B         28u
 #define Z_MONTMUL_W_N         40u
 #define Z_MONTMUL_W_R         52u
+// The register file (rtl/montmul.v with REGFILE, docs/montmul.md). A
+// bitstream has it when CONFIG bits 15:8 -- the register count -- are
+// not zero. OWNER is on every bitstream from this version on.
+#define Z_MONTMUL_W_OWNER     4u            // the advisory claim: see Z_HW_OWNER_*
+#define Z_MONTMUL_W_RSEL      5u            // { reg, word }: where RDATA starts
+#define Z_MONTMUL_W_RDATA     6u            // a word of a register; auto-increments
+#define Z_MONTMUL_W_CMD       7u            // { op, rd, ra, rb }; poll bit 0 for BUSY
+#define Z_MONTMUL_OP_MUL      1u
+#define Z_MONTMUL_OP_ADD      2u
+#define Z_MONTMUL_OP_SUB      3u
+#define Z_MONTMUL_CMD(op, rd, ra, rb) \
+	(((uint32_t)(op) << 12) | ((uint32_t)(rd) << 8) | ((uint32_t)(ra) << 4) | (uint32_t)(rb))
+
+// rtl/sha256.v -- SHA-256 compression at 0x7e00_0000, advertised by
+// Z_FEATURE2_SHA256. docs/sha256_hw.md. sw/common/zsha256.c is its
+// driver; nothing else should need to touch it.
+#define Z_SHA256_BASE         0x7E000000u
+#define Z_SHA256_MAGIC        0x5A534841u   // "ZSHA"
+#define Z_SHA256_W_MAGIC      0u
+#define Z_SHA256_W_CTRL       1u            // W: bit0 START. R: bit0 BUSY
+#define Z_SHA256_W_CONFIG     2u
+#define Z_SHA256_W_OWNER      3u
+#define Z_SHA256_W_W          4u            // push a word as loaded (little-endian)
+#define Z_SHA256_W_WBE        5u            // push a word already big-endian
+#define Z_SHA256_W_H          8u            // H0..H7 at 8..15
+
+// Keccak-f[1600] (rtl/keccak.v), when Z_FEATURE2_KECCAK. docs/keccak_hw.md.
+// sw/common/zkeccak.c is its driver. The state is a rotating 50-word
+// shift register: IN shifts a word in, XIN shifts one in xoring it into
+// the word leaving, OUT reads the bottom word and rotates.
+#define Z_KECCAK_BASE         0x7D000000u
+#define Z_KECCAK_MAGIC        0x5A4B4543u   // "ZKEC"
+#define Z_KECCAK_W_MAGIC      0u
+#define Z_KECCAK_W_CTRL       1u            // W: bit0 START, bit1 CLEAR. R: bit0 BUSY
+#define Z_KECCAK_W_CONFIG     2u
+#define Z_KECCAK_W_OWNER      3u
+#define Z_KECCAK_W_IN         4u
+#define Z_KECCAK_W_XIN        5u
+#define Z_KECCAK_W_OUT        6u
+
+// -- sharing a block between processes (montmul, sha256) --
+//
+// Both blocks have an OWNER register: write a nonzero id to claim the
+// block if nobody has; write id | Z_HW_OWNER_RELEASE to give it back if
+// you hold it; read it to see who does. Advisory: the hardware computes
+// for anyone, so a caller claims, reads back, and uses the block only
+// if the id is its own. A process's id is its pid; the kernel, which has
+// none, uses Z_HW_OWNER_KERNEL. The kernel releases a process's claims
+// when it dies (sw/os/kernel.c).
+#define Z_HW_OWNER_RELEASE    0x80000000u
+#define Z_HW_OWNER_KERNEL     0x7FFFFFFFu
 
 // -- feature table (sw/common/zsoc.c) --
 //

@@ -73,6 +73,7 @@
 #define PORT_NODEINFO		4	// payload is a User
 #define PORT_ROUTING		5
 #define PORT_TELEMETRY		67
+#define PORT_PRIVATE_MIN	256	// applications' own; zfed's radio link is one (mesh_svc.c)
 
 // -- Routing (payload of PORT_ROUTING) --
 #define RT_ERROR			3	// VAR  RT_ERR_*

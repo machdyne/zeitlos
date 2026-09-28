@@ -52,6 +52,15 @@ every password login, telnet or SSH, is checked by the same kernel
 code, against the same tally of failures. A key login is checked
 against `/user/authkeys` instead, and needs no password at all.
 
+**Except on a `noauth` listener**, which asks nothing and hands the
+session to a program that logs its own users in -- the BBS
+([bbs.md](bbs.md)). Such a session is marked unauthenticated, and every
+program that hands out a shell or a device (`repl`, `posix`, `console`,
+`serial`) refuses it ([ports.md](ports.md#who-is-connecting)). The
+program behind a `noauth` listener is then the boundary: what it lets
+a caller do is what the internet can do, so run only such programs
+there.
+
 **It does not protect what is on the sdcard.** The card is plain FAT.
 Pull it, read it in any computer. This is a screen lock on a laptop
 without disk encryption, and nothing more. Password-based encryption

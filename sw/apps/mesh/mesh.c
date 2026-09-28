@@ -14,6 +14,9 @@
  *   run mesh send #CH TEXT    to channel CH (index or name)
  *   run mesh dm NODE TEXT     to one node (short name, long name or
  *                             !a1b2c3d4); waits for delivery
+ *   run mesh serve            no window, no exit: the radio as a service,
+ *                             mesh0, for other programs (fed's radio
+ *                             link) -- mesh_svc.c. The window serves it too.
  *
  * -- the transport --
  *
@@ -51,6 +54,7 @@
 #include "mesh_pb.h"
 #include "mesh_model.h"
 #include "mesh_proto.h"
+#include "mesh_svc.h"
 #include "mesh_session.h"
 #include "mesh_ui.h"
 #include "mesh_log.h"
@@ -287,6 +291,7 @@ static void ui_event(void *ctx, const mesh_ev_t *ev) {
 	(void)ctx;
 	mesh_ui_event(ev);
 	history_event(ev);
+	mesh_svc_event(ev);
 }
 static void ui_line(void *ctx, const char *s) { (void)ctx; mesh_ui_line(s); }
 
@@ -302,16 +307,20 @@ static int run_window(void) {
 		puts("mesh: no window (is wm running?)");
 		return 1;
 	}
+	mesh_svc_start(NULL);					// mesh0, while the window is open
 	try_connect();
 	t_try = now_ms();
 
 	while (running) {
 		bool busy = false;
 		while (z_msg_read(&msg) == Z_OK) {
+			// the service's first: port_msg() acks every DATA, anyone's
+			if (mesh_svc_msg(&msg, &sess)) { busy = true; continue; }
 			if (port_msg(&msg)) { busy = true; continue; }
 			if (!mesh_ui_wm(&msg)) running = false;
 		}
 		if (transport_step()) busy = true;
+		mesh_svc_tick(&sess);
 		mesh_ui_flush();
 		z_proc_wait(busy ? 1 : Z_TICK_HZ / 50);
 	}
@@ -410,6 +419,39 @@ static int find_channel(const char *s) {
 	return -1;
 }
 
+// -- serve: the radio as a service, no window --
+
+static void serve_line(const char *s) { puts(s); }
+
+static void serve_event(void *ctx, const mesh_ev_t *ev) {
+	(void)ctx;
+	history_event(ev);
+	mesh_svc_event(ev);
+	if (ev->kind == MESH_EV_CONFIG_DONE) puts("mesh: the radio is up -- mesh0 serving");
+}
+
+static int run_serve(void) {
+	z_msg_t msg;
+	gui = false;
+	if (!mesh_svc_start(serve_line)) return 1;
+	sess.event = serve_event;
+	sess.line = NULL;
+	puts("mesh: mesh0 -- waiting for the node");
+	try_connect();
+	t_try = now_ms();
+	for (;;) {
+		bool busy = false;
+		while (z_msg_read(&msg) == Z_OK) {
+			busy = true;
+			if (mesh_svc_msg(&msg, &sess)) continue;	// first: port_msg() acks every DATA
+			port_msg(&msg);
+		}
+		if (transport_step()) busy = true;
+		mesh_svc_tick(&sess);
+		z_proc_wait(busy ? 1 : Z_TICK_HZ / 50);
+	}
+}
+
 static int run_cli(const char *arg) {
 	char w[16], dest[48];
 	const char *text;
@@ -420,6 +462,7 @@ static int run_cli(const char *arg) {
 
 	dest[0] = 0;
 	text = word(arg, w, sizeof(w));
+	if (!strcmp(w, "serve")) return run_serve();
 	if (!strcmp(w, "nodes")) cli_mode = MODE_NODES;
 	else if (!strcmp(w, "send")) {
 		cli_mode = MODE_SEND;
@@ -430,7 +473,7 @@ static int run_cli(const char *arg) {
 	}
 	if (!cli_mode || (cli_mode != MODE_NODES && !*text) ||
 		(cli_mode == MODE_DM && !dest[0])) {
-		puts("usage: mesh [nodes | send [#CH] TEXT | dm NODE TEXT]");
+		puts("usage: mesh [nodes | send [#CH] TEXT | dm NODE TEXT | serve]");
 		puts("       (no argument: the window)");
 		return 1;
 	}

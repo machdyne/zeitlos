@@ -1,0 +1,4 @@
+# sw/common/zjson.c on the host, against Python's json module's verdicts.
+all:
+	cc -std=c99 -g -Wall -Wextra -pedantic -fsanitize=address,undefined -o /tmp/test_zjson test_zjson.c ../zjson.c
+	/tmp/test_zjson

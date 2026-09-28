@@ -709,9 +709,10 @@ void sh(void) {
 		// REMOVE FILE/DIRECTORY
 		if (!strncmp(buffer, "rm", cmdlen)) {
 			arg = get_arg(buffer, 1);
-			if (arg != NULL)
-				fs_unlink(arg);
-			else
+			if (arg != NULL) {
+				printf("deleting '%s' ...\n", arg);
+				if (fs_unlink(arg) != 0) printf("unlink failed\n");
+			} else
 				printf("error: no file/directory specified\n");
 		}
 

@@ -130,6 +130,21 @@ mesh_msg_t *mesh_session_send_text(mesh_session_t *s, uint32_t to,
 	return mesh_proto_sent(s->m, to, channel, id, text, len);
 }
 
+bool mesh_session_send_data(mesh_session_t *s, uint32_t to, uint8_t channel,
+	uint32_t port, const uint8_t *payload, uint32_t len) {
+	uint8_t out[MESH_TX_MAX];
+	uint32_t id, n;
+
+	if (s->state != MESH_ST_LIVE || !len || len > MESH_PAYLOAD_MAX || channel >= MESH_MAX_CHANNELS)
+		return false;
+	do {
+		id = s->rand32 ? s->rand32(s->ctx) : 0x10000u + s->m->msg_seq++;
+	} while (id == 0);
+	n = mesh_tx_data(out, sizeof(out), to, channel, id,
+		s->m->hop_limit ? s->m->hop_limit : 3, port, payload, len);
+	return n && !put(s, out, n);
+}
+
 void mesh_session_bye(mesh_session_t *s) {
 	uint8_t out[16];
 	if (s->state == MESH_ST_DOWN) return;

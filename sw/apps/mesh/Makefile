@@ -23,7 +23,7 @@ APP_CFLAGS = -DZPORT_NO_PRINTF -I$(COMMON)
 CORE = mesh_frame mesh_model mesh_proto mesh_session mesh_view mesh_log
 COMMON_OBJS = zeitlos.o zobj.o zport.o zrng.o zsoc.o zwin.o zgfx.o \
 	zfont_data.o zrtc.o zcfg.o zcaption.o zpb.o zfsapp.o
-OBJS = $(COMMON_OBJS) $(addsuffix .o,$(CORE)) mesh_log_io.o mesh_ui.o mesh.o
+OBJS = $(COMMON_OBJS) $(addsuffix .o,$(CORE)) mesh_log_io.o mesh_ui.o mesh_svc.o mesh.o
 
 $(COMMON_OBJS): %.o: $(COMMON)/%.c
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -56,6 +56,9 @@ test:
 	$(HOSTCC) $(HOSTFLAGS) -o /tmp/mesh_test_log \
 		tests/test_log.c $(CORESRC)
 	/tmp/mesh_test_log
+	cc -std=gnu99 -g -Wall -Wextra -no-pie -I ../../common -o /tmp/mesh_test_svc \
+		tests/test_svc.c mesh_svc.c $(CORESRC) $(COMMON)/zport.c $(COMMON)/zobj.c $(COMMON)/zeitlos.c
+	@/tmp/mesh_test_svc; r=$$?; if [ $$r -eq 77 ]; then echo "(mesh0's test needs vm.mmap_min_addr=0 -- skipped)"; elif [ $$r -ne 0 ]; then exit $$r; fi
 
 # The malformed-input and lossy-link tests only really check "stays
 # inside the buffer" with these on.

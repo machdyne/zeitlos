@@ -12,6 +12,7 @@
 #include "../../../ext/monocypher/monocypher.h"
 #include "../../../ext/monocypher/monocypher-ed25519.h"
 #include "../../web/rsa.h"
+#include "../../../common/z25519.h"	// the montmul block when there is one (docs/z25519.md)
 
 #define RSA_MIN_BITS 2048
 #define RSA_MAX_BITS 4096
@@ -210,7 +211,7 @@ bool authkeys_verify(const char *alg, const uint8_t *blob, uint32_t blob_len,
 
 	if (!strcmp(alg, "ssh-ed25519")) {
 		if (kr.bad || !ssh_str_eq(kt, ktn, "ssh-ed25519") || k1n != 32 || svn != 64) return false;
-		return crypto_ed25519_check(sv, k1, data, data_len) == 0;
+		return z_ed25519_check(sv, k1, data, data_len) == 0;
 	}
 
 	if (!strcmp(alg, "rsa-sha2-256")) {

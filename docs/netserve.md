@@ -5,7 +5,9 @@ echo service for testing the path.
 
 **Status: telnet, HTTP and echo run on a board (RMII), after the fixes
 in "Found on hardware". SSH -- password and keys -- is host-tested
-against the real client engine and not yet reported from a board.**
+against the real client engine and not yet reported from a board.
+Listener lists and `noauth` ("noauth", below) are host-tested and not
+yet reported from a board.**
 
 ```
 peer --TCP-- net --port-- netserve --port-- repl0 / posix0 / console0 / serial0
@@ -39,12 +41,50 @@ apps.netserve.allow: subnet
 
 | key | | |
 |---|---|---|
-| `apps.netserve.ssh` | `off` | a port, then a port name, as for telnet; `22 posix0` by default. Needs the same password -- and a seeded TRNG |
-| `apps.netserve.ssh_auth` | `both` | `both`, `key` (only keys in `/user/authkeys`; no password needed at all) or `password` |
-| `apps.netserve.telnet` | `off` | a port, then a port name to connect sessions to: `repl0`, `posix0`, `console0`, `serial0`, or any zport provider. The port defaults to 23, the name to `repl0` |
+| `apps.netserve.ssh` | `off` | one or more **listeners** (below); `22 posix0` by default. Needs the same password -- and a seeded TRNG |
+| `apps.netserve.ssh_auth` | `both` | `both`, `key` (only keys in `/user/authkeys`; no password needed at all) or `password`. Not for `noauth` listeners, which take anyone |
+| `apps.netserve.ssh_sessions` | `2` | SSH sessions at a time, 1 to 4; about 10 KB of netserve's memory each ("Cost", below) |
+| `apps.netserve.telnet` | `off` | one or more **listeners**: a port, then a port name to connect sessions to -- `repl0`, `posix0`, `console0`, `serial0`, `bbs0`, or any zport provider. The port defaults to 23, the name to `repl0` |
 | `apps.netserve.http` | `off` | a port, then the directory to serve: `80 /www`. No password: it serves files, read-only |
 | `apps.netserve.echo` | `off` | a port (7): everything sent comes back. No password; for testing |
-| `apps.netserve.allow` | `subnet` | `subnet` accepts connections only from this machine's own subnet; `any` from anywhere |
+| `apps.netserve.allow` | `subnet` | `subnet` accepts connections only from this machine's own subnet; `any` from anywhere. The default for every listener; one can say otherwise |
+
+### Listeners
+
+`telnet` and `ssh` each take a **list**, entries separated by
+semicolons, up to four:
+
+```
+apps.netserve.ssh: 22 bbs0 noauth any; 2222 posix0
+apps.netserve.telnet: 23 bbs0 noauth any
+```
+
+Each entry is a port, then optionally a port name and flags, separated
+by spaces, the flags in any order:
+
+| word | |
+|---|---|
+| a number | the TCP port; the service's default (22, 23) if there is none |
+| a name | the port name sessions connect to; the service's default if there is none |
+| `noauth` | **no password.** The session goes straight to the port name, which must log its users in itself -- see "noauth" below |
+| `any` | accept from anywhere, whatever `apps.netserve.allow` says |
+| `subnet` | accept from this subnet only, whatever `apps.netserve.allow` says |
+
+The one-entry form everyone already has -- `22 posix0` -- is simply a
+list of one.
+
+**Anything not understood refuses that entry, and the console says
+which and why**: an unknown word (`noath`), a second name, a port that
+is not a number or not 1-65535, a port another entry or service
+already has, a fifth entry. A typo in a flag must never quietly become
+a different policy. The other entries are unaffected.
+
+**Semicolons, not commas:** commas are legal in FAT file names, so a
+comma could one day be part of a value; a semicolon cannot.
+
+**The password rule is per listener.** One that asks for the machine's
+password stays off, saying so, while that password is missing or
+shorter than 10 characters; a `noauth` listener in the same list runs.
 
 `init` starts `netserve` at boot when a service is set; otherwise `run
 netserve`. It exits at once, saying so, if nothing is.
@@ -53,6 +93,76 @@ netserve`. It exits at once, saying so, if nothing is.
 more** ([security.md](security.md)): it hands out a shell, and its
 password crosses the network in the clear. Set one with `passwd` at
 the console, or in settings. The console says why telnet stayed off.
+
+## noauth
+
+For programs that do their own logins -- a BBS ([bbs.md](bbs.md)) --
+netserve can carry sessions without asking for anything:
+
+```
+apps.netserve.telnet: 23 bbs0 noauth any
+apps.netserve.ssh: 22 bbs0 noauth any; 2222 posix0
+```
+
+**Telnet:** no banner, no password prompt. netserve offers WILL ECHO
+and WILL SGA as always, and connects: the first thing the caller sees
+is the port's own screen.
+
+**SSH:** the session is **encrypted as ever**, and the host proves who
+it is with its key as ever; the *user* proves nothing. Whatever the
+client tries first gets in:
+
+| the client sends | answer |
+|---|---|
+| `none` -- OpenSSH, PuTTY and Dropbear send this first | SUCCESS: in, with no prompt |
+| `password`, any password | SUCCESS. The password is thrown away, never logged |
+| `keyboard-interactive` | SUCCESS, with no questions |
+| `publickey`, asked about | PK_OK, as for a listed key: a client asking a question expects that answer |
+| `publickey`, signed -- any key | SUCCESS; the signature is not checked, since nothing depends on it |
+| anything else | SUCCESS |
+
+Some clients, notably ones built on SSH libraries, skip `none` and
+always send a password; accepting any password is what lets them in.
+The user name the client sent is passed on ("Who is connecting",
+below), so a BBS can offer it at its own login prompt.
+
+The console log says so on every login:
+
+```
+netserve: ssh (noauth) session 1 from 93.184.216.34
+netserve: session 1: ssh: user 'visitor' logged in (none, unauthenticated)
+```
+
+### Who is connecting
+
+Every session's CONNECT to its port carries a map saying who it is
+(zport.h, "Who is connecting"; [ports.md](ports.md#who-is-connecting)):
+the transport (`telnet`, `ssh`), `auth` -- `system` if the machine's
+password or a listed key was checked, `none` from a `noauth` listener --
+the peer's address, the local port, and for SSH the user name the
+client sent. A user name is a claim, never a proof.
+
+### What keeps `noauth` safe
+
+**A shell refuses it.** `repl`, `posix`, `console` and `serial` refuse
+any session whose `auth` is not `system`, and say so on the console:
+
+```
+posix: refused an unauthenticated telnet session from 93.184.216.34 (a noauth listener -- docs/netserve.md)
+```
+
+The caller is told `the port refused: this port needs a logged-in
+session (not noauth)`. So `2222 posix0 noauth` -- a slip of the pen, or
+a copied line -- opens nothing: it fails closed, in the program that
+would have handed out the shell, without netserve having to know which
+ports are shells.
+
+A program written for `noauth` sessions must do the opposite: log each
+caller in itself, and treat the map's user name as a suggestion.
+
+**Everything else about the listener still applies**: the subnet rule
+(which is why the examples say `any` -- a public BBS wants the
+internet), the session limits, the login timeout for SSH.
 
 ## A telnet session
 
@@ -128,7 +238,7 @@ netserve binds it to a session.
   exchange messages during the first one, and the client's KEXINIT
   must be its very first packet.
 - **A key or the password** (`apps.netserve.ssh_auth`; see "SSH
-  keys" below). The password is the machine's, through the kernel --
+  keys" below) -- or nothing, on a `noauth` listener ("noauth", above). The password is the machine's, through the kernel --
   the same tally of failures and the same delays as the lock screen
   and telnet. Any user name: this is a single-user system, and the
   name is logged. Three wrong passwords or bad signatures, or 60 s
@@ -163,9 +273,20 @@ users to click through the warning).
 
 **Cost:** the key exchange is three curve25519 operations and an
 Ed25519 signature, about a second or two of this CPU, during which
-netserve's other sessions wait. netserve is about 150 KB of code with
-SSH and its key checking in (RSA verification comes from `web`), and
-runs two SSH sessions at a time (about 6 KB each).
+netserve's other sessions wait. netserve is about 155 KB of code with
+SSH and its key checking in (RSA verification comes from `web`).
+
+**SSH sessions** come from a pool allocated when netserve starts,
+`apps.netserve.ssh_sessions` of them -- 2 by default, 4 at most -- each
+about 10 KB: the engine (~6.8 KB, most of it its 4 KB receive buffer),
+2 KB of output waiting for room toward the peer, and the 1 KB the
+client may send before the port takes it. The pool is on the heap, not
+in `.bss`, so a machine with no SSH listener pays nothing for it. A
+session over the limit is refused (`netserve: too many ssh sessions`);
+if the memory is not there, netserve starts with as many as fit and
+says so. netserve's memory tier is LARGE (64 KB of stack and heap,
+`sw/os/kernel.h`): moving the default pool out of `.bss` shrank the
+image by 19 KB, so the default costs about 13 KB more than before.
 
 ## SSH keys
 
@@ -314,6 +435,18 @@ to `repl0` is answered with tag 0 like any other, so the answer is
 matched to the oldest open CONNECT to that provider -- providers answer
 in order.
 
+**A CONNECT outlives its session.** A provider answers every CONNECT,
+in order, whether or not the session that sent it still exists. A
+session that ends while its CONNECT is unanswered keeps its slot until
+the answer comes (or the 15 seconds a connect is given), and a late
+CONNECTED is closed at once. Otherwise that answer went to the next
+session waiting on the same provider -- handing it a connection meant
+for the dead one -- and the session's own answer then went nowhere,
+leaving a slot held in the provider. The wait also keeps the identity
+map valid: the provider reads it from netserve's memory after the
+CONNECT is sent ([messaging.md](messaging.md)), and the map lives in the
+session's slot.
+
 Backpressure works as in `net`: input that does not fit is held,
 unacked, and processed as room appears. A session that has ended is
 kept until every send it made has been acked, because zport frees a
@@ -457,6 +590,15 @@ has not acked everything waits for it (`R_DRAIN`) before its slot is
 reused. Found by the HTTP tests, which open more sessions than any
 before them; both halves are checked.
 
+## Found by the tests: re-reading the configuration
+
+`read_config()` rebuilds the listener lists, and the first version
+cleared each listener's "net is listening for us" flag with the rest.
+net answers a LISTEN once, so every connection to a port that had not
+changed was then refused as `no service on that port`. A listener
+whose port survives the re-read now keeps the flag. It showed as a
+segfault in the test, several sections later -- see "Testing".
+
 ## Testing
 
 On the host -- `make test` in `sw/apps/net` and in
@@ -468,9 +610,14 @@ tests with a scripted kernel; they skip otherwise):
 | `net/tests/test_relay.c` | 41 | the real `tcp.c` and `relay.c`: the window in the SYN-ACK, the offer, early data, both directions, holding, the window closing and reopening, a close with several segments still queued, the peer leaving mid-offer, REFUSED, a takeover, every relay busy, a relay waiting for its listener's acks, a listener killed mid-session, one restarted on its old pid |
 | `net/netserve/tests/test_e2e.c` | 7 | end to end: a TCP client, the real tcp.c, relay.c and netserve.c, a scripted posix: `help`'s 1.4 KB and two 4 KB messages reach the client under real flow control; the board's echo test, 3,000 bytes in and all back, with and without the client's FIN on the last segment |
 | `net/netserve/tests/test_authkeys.c` | 25 | the authkeys parser with OpenSSL-made keys and Python-computed expectations: every line form, every refusal, fingerprints as ssh-keygen prints them, Ed25519 agreeing with OpenSSL, RSA and Ed25519 signatures good and tampered |
-| `net/ssh/tests/test_ssh_server.c` | 46 | the server engine against the REAL client engine: the handshake, the fingerprint, a wrong password then the right one, 40 KB out within the client's window, the server's own window, three failures, the kernel's refusal, a flipped bit, strict KEX (offered, Terrapin's IGNORE-first refused, non-kex mid-exchange refused), no algorithms in common, HTTP on the SSH port, an absurd length, a client sending past the window, channel data before logging in; public keys: the PK_OK question, Ed25519 and RSA logins, an unlisted key (not counted), SHA-1 ssh-rsa refused (by the engine itself), bad signatures counted, keys only, passwords only, server-sig-algs |
-| `net/netserve/tests/test_netserve.c` | 128 | the real `netserve.c`: the policy, listening, echo, the subnet rule, option negotiation (and no loops), the password never echoed, a wrong one, three wrong, the kernel's delay, the login timeout, starting repl once for two sessions, CONNECT answers matched in order, Enter normalised, 0xFF both ways, backpressure, a 4 KB message and a 600-byte paste, a stranger's DATA, the terminal handoff and its call-back and fallback, a peer that vanishes; echo finishing a half-close; HTTP: files, indexes, types, %-decoding, every refusal (`..` in each disguise, `%00`, 404, 405, 408, 414/431, 400), HEAD, a 5 KB file streamed, a request in pieces, half-closes before and after the request, no file handle free, no handle or session left behind; SSH through netserve with the real client engine: host key made once and kept, off without a seeded TRNG, login, keystrokes to repl, 4 KB back, a 3 KB paste through the window, repl quitting, three wrong passwords, the login timeout, the engine wiped and released; SSH policy (keys only needs no password, the default needs one) and `/user/authkeys` (none, listed, unlisted, an edit taking effect, a refused line reported once); a backend dying silently under telnet (told, closed, its sends freed, nothing sent to it), under SSH (the message inside the channel), and during a handoff (waits for the call-back) |
+| `net/ssh/tests/test_ssh_server.c` | 56 | the server engine against the REAL client engine: the handshake, the fingerprint, a wrong password then the right one, 40 KB out within the client's window, the server's own window, three failures, the kernel's refusal, a flipped bit, strict KEX (offered, Terrapin's IGNORE-first refused, non-kex mid-exchange refused), no algorithms in common, HTTP on the SSH port, an absurd length, a client sending past the window, channel data before logging in; public keys: the PK_OK question, Ed25519 and RSA logins, an unlisted key (not counted), SHA-1 ssh-rsa refused (by the engine itself), bad signatures counted, keys only, passwords only, server-sig-algs; `noauth` (SSHS_AUTH_ANY): `none` in with no password asked, any password (the hook never called), keyboard-interactive, an unknown method (its name made printable for the log), a key asked about (PK_OK) and a key in no list signed |
+| `net/netserve/tests/test_netserve.c` | 232 | the real `netserve.c`: the policy, listening, echo, the subnet rule, option negotiation (and no loops), the password never echoed, a wrong one, three wrong, the kernel's delay, the login timeout, starting repl once for two sessions, CONNECT answers matched in order, Enter normalised, 0xFF both ways, backpressure, a 4 KB message and a 600-byte paste, a stranger's DATA, the terminal handoff and its call-back and fallback, a peer that vanishes; echo finishing a half-close; HTTP: files, indexes, types, %-decoding, every refusal (`..` in each disguise, `%00`, 404, 405, 408, 414/431, 400), HEAD, a 5 KB file streamed, a request in pieces, half-closes before and after the request, no file handle free, no handle or session left behind; SSH through netserve with the real client engine: host key made once and kept, off without a seeded TRNG, login, keystrokes to repl, 4 KB back, a 3 KB paste through the window, repl quitting, three wrong passwords, the login timeout, the engine wiped and released; SSH policy (keys only needs no password, the default needs one) and `/user/authkeys` (none, listed, unlisted, an edit taking effect, a refused line reported once); a backend dying silently under telnet (told, closed, its sends freed, nothing sent to it), under SSH (the message inside the channel), and during a handoff (waits for the call-back); a CONNECT answered after its session ended (the slot kept for the answer, a late CONNECTED closed, never given to the next session; a late REFUSED); listener lists (flags in any order, defaults, every refused entry, a port taken, four at most, the password rule per listener, noauth SSH without a password or with no TRNG, the old one-entry form); the subnet rule per listener both ways, and ports kept listened on across a re-read; a noauth telnet session (no banner or prompt, `bbs` started, its identity map, typeahead, its screen) beside a password one (`auth system`); a noauth SSH session from the internet with no password (never checked; identity with the user name; the BBS's screen through the channel); `z_port_ident()` and `z_port_refuse_unauthenticated()` on every kind of argument; `apps.netserve.ssh_sessions` (limits, the pool as the limit, not replaced while in use) |
 | `net/tests/test_tcp_pool.c` | 73 | networking.md, "Connections" |
+
+A connection netserve should have accepted and did not is reported as
+a failure at the test's own line (`conn_since()`); the tests used to
+index the message log with an unchecked `find()`, and turned such a
+failure into a segfault further on.
 
 Each behaviour was confirmed to fail its test when removed, with two
 exceptions that are equivalent in today's code and say so where they
@@ -522,6 +669,11 @@ guarantees it) and tcp.c's generation check after a DATA event.
    | the same with an RSA key, and with a `SHA256:` line | in |
    | `ssh <ip>`, a wrong password three times | disconnected |
    | `apps.netserve.ssh_auth: key`, then a password login | refused: keys only |
+   | `apps.netserve.telnet: 23 repl0 noauth` | `telnet <ip>`: `the port refused: this port needs a logged-in session`; the console names repl |
+   | `apps.netserve.ssh: 2222 posix0 noauth` | the same from posix |
+   | `apps.netserve.ssh: 22 posix0; 2222 posix0 noauth`, `ssh -p 22` | still asks for the password |
+   | `apps.netserve.telnet: 23 portdemo0 noauth`, `run portdemo` first | straight to portdemo's banner: no prompt |
+   | the same over SSH (`ssh -p 2222 anyone@<ip>`) with OpenSSH, PuTTY, Dropbear's `dbclient`, SyncTERM, NetRunner | in with no password prompt -- or, for a client that insists on one, with any password |
 
    Worth reporting: how the typing feels (each keystroke is a round
    trip through net and netserve), and any `net: relay` or `netserve:`
@@ -533,6 +685,11 @@ guarantees it) and tcp.c's generation check after a DATA event.
   (networking.md, "Known limits"); two at a time, and full-size ones,
   would speed up large HTTP files most.
 - SSH `exec` (`ssh host command`), and scp/sftp.
+- **Telnet BINARY** (RFC 856). Enter is normalised to one CR and
+  nothing else is negotiated, which is right for typing and wrong for
+  a file transfer (XMODEM) over telnet -- not needed while the BBS
+  carries no files ([bbs.md](bbs.md), "Files"); over SSH the channel is
+  already 8-bit clean.
 - **Window size.** A telnet client's NAWS is refused; the ports are
   80x25 (`term`'s size), and a larger client window simply shows it
   in the top-left corner.

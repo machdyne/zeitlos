@@ -16,7 +16,7 @@ void ns_init(void) {
 void ns_step(void) {
 	z_msg_t m;
 	if (net_pid || z_pid_lookup("net0", &net_pid)) {
-		if (svc_telnet.on && !svc_telnet.listening) listen_on(svc_telnet.port);
+		if (svc_telnet[0].on && !svc_telnet[0].listening) listen_on(svc_telnet[0].port);
 		if (svc_echo.on && !svc_echo.listening) listen_on(svc_echo.port);
 	}
 	while (z_msg_read(&m) == Z_OK) on_msg(&m);

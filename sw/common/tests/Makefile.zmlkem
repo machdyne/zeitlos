@@ -1,0 +1,28 @@
+# sw/common/zmlkem.c on the host against NIST's FIPS 203 vectors and
+# kyber-py's; then the RISC-V build checked for divide instructions.
+MK = ../../ext/mlkem
+# SHA-3/SHAKE from zfips202.c on zkeccak.c (the Keccak block when there
+# is one) -- not the vendored fips202.c -- as every ML-KEM build links it.
+SRC = ../zmlkem.c $(MK)/kem.c $(MK)/indcpa.c $(MK)/polyvec.c $(MK)/poly.c $(MK)/ntt.c \
+	$(MK)/cbd.c $(MK)/reduce.c $(MK)/verify.c ../zfips202.c ../zkeccak.c $(MK)/symmetric-shake.c
+RVCC ?= riscv-none-elf-gcc
+all:
+	cc -std=c99 -g -Wall -Wextra -O1 -DKYBER_K=3 -fsanitize=address,undefined -o /tmp/test_zmlkem test_zmlkem.c $(SRC)
+	/tmp/test_zmlkem
+	@# KyberSlash: no division of a SECRET by q. The compiled code may
+	@# divide only where the operands are public; anywhere else a divide
+	@# fails the build (this CPU's divider may take a time that depends on
+	@# its operands). The allowed places, and why:
+	@#   shake128, shake256 (fips202.c): outlen / the block size (168, 136)
+	@#     -- the requested output LENGTH, never a secret. -Os emits divu;
+	@#     -O2 multiplies instead.
+	@if command -v $(RVCC) >/dev/null; then \
+		mkdir -p /tmp/zmlkem-rv && for s in $(SRC); do \
+			$(RVCC) -march=rv32im -mabi=ilp32 -Os -DKYBER_K=3 -c $$s -o /tmp/zmlkem-rv/$$(basename $$s .c).o || exit 1; done; \
+		riscv-none-elf-objdump -d /tmp/zmlkem-rv/*.o | \
+			awk '/^[0-9a-f]+ <[^.]/ { fn = $$2 } /[[:space:]](div|divu|rem|remu)[[:space:]]/ { print fn }' > /tmp/zmlkem-rv/divs.txt; \
+		all=$$(wc -l < /tmp/zmlkem-rv/divs.txt); \
+		bad=$$(grep -v -E "^<pqcrystals_kyber_fips202_ref_shake(128|256)>:$$" /tmp/zmlkem-rv/divs.txt | sort -u); \
+		if [ -n "$$bad" ]; then echo "FAIL: a divide where a secret may be, in:" $$bad; exit 1; fi; \
+		echo "RISC-V (rv32im, -Os): $$all divide or remainder instructions, all on public lengths in shake128/shake256"; \
+	else echo "(no $(RVCC): the divide check skipped)"; fi

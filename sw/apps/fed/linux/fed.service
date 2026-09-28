@@ -1,0 +1,25 @@
+# systemd unit for fed, the zfed node -- docs/bbs_deploy.md.
+#
+# It runs as the bbs account: fed's local socket (fed.sock) is readable
+# only by its owner, and the BBS connects to it.
+
+[Unit]
+Description=fed (zfed node)
+After=network-online.target
+Wants=network-online.target
+Before=bbs.service
+
+[Service]
+User=bbs
+Group=bbs
+ExecStart=/usr/local/bin/fed --dir /var/lib/fed
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/fed
+PrivateTmp=yes
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

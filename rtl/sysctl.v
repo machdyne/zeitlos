@@ -948,6 +948,14 @@ module sysctl #()
 `ifdef AUDIO
 	wire [31:0] wbs_audio_dat_o;
 `endif
+`ifdef SHA256
+	wire [31:0] wbs_sha_dat_o;
+	wire wbs_sha_ack_o;
+`endif
+`ifdef KECCAK
+	wire [31:0] wbs_kec_dat_o;
+	wire wbs_kec_ack_o;
+`endif
 `ifdef ICACHE
 `endif
 
@@ -1171,6 +1179,20 @@ module sysctl #()
 	wire cs_probe = ((wbm_adr & 32'hff00_0000) == 32'h7f00_0000);
 	wire wbm_cyc_probe = cs_probe && wbm_cyc;
 `endif
+	// rtl/sha256.v -- SHA-256 compression, docs/sha256_hw.md. Decoded
+	// like the probe, on bits [27:24]: the eight 256-byte tenants of
+	// nibble 7 are all taken, and 0x7e sits just below the probe's 0x7f.
+	// Excluded from csrs_wb's fall-through below, as the probe is.
+`ifdef SHA256
+	wire cs_sha = ((wbm_adr & 32'hff00_0000) == 32'h7e00_0000);
+	wire wbm_cyc_sha = cs_sha && wbm_cyc;
+`endif
+	// rtl/keccak.v -- Keccak-f[1600], docs/keccak_hw.md. Decoded as the
+	// SHA-256 block is, just below it.
+`ifdef KECCAK
+	wire cs_kec = ((wbm_adr & 32'hff00_0000) == 32'h7d00_0000);
+	wire wbm_cyc_kec = cs_kec && wbm_cyc;
+`endif
 	wire cs_socctl = ((wbm_adr & 32'hf000_0700) == 32'h7000_0200);
 	wire wbm_cyc_socctl = cs_socctl && wbm_cyc;
 `ifdef ICACHE
@@ -1236,6 +1258,12 @@ module sysctl #()
 `endif
 `ifdef PROBE
 		&& !cs_probe
+`endif
+`ifdef SHA256
+		&& !cs_sha
+`endif
+`ifdef KECCAK
+		&& !cs_kec
 `endif
 		;
 	// Unconditional, like cs_uart0 below and unlike the `ifdef-guarded
@@ -1343,8 +1371,17 @@ module sysctl #()
 `ifdef PROBE
 		({32{cs_probe}} & wbs_probe_dat_o) |
 `endif
+`ifdef SHA256
+		({32{cs_sha}} & wbs_sha_dat_o) |
+`endif
 `ifdef PROBE
 		({32{cs_probe}} & wbs_probe_dat_o) |
+`endif
+`ifdef SHA256
+		({32{cs_sha}} & wbs_sha_dat_o) |
+`endif
+`ifdef KECCAK
+		({32{cs_kec}} & wbs_kec_dat_o) |
 `endif
 `ifdef GPU_RASTER
 		({32{cs_gpu}} & wbs_gpu_dat_o) |
@@ -1490,8 +1527,17 @@ module sysctl #()
 `ifdef PROBE
 		(cs_probe & wbs_probe_ack_o) |
 `endif
+`ifdef SHA256
+		(cs_sha & wbs_sha_ack_o) |
+`endif
 `ifdef PROBE
 		(cs_probe & wbs_probe_ack_o) |
+`endif
+`ifdef SHA256
+		(cs_sha & wbs_sha_ack_o) |
+`endif
+`ifdef KECCAK
+		(cs_kec & wbs_kec_ack_o) |
 `endif
 `ifdef GPU_RASTER
 		(cs_gpu & wbs_gpu_ack_o) |
@@ -3184,11 +3230,21 @@ module sysctl #()
 	// Software reads the block's own CONFIG register rather than
 	// assuming.
 `ifdef MONTMUL
+	// REGFILE: sixteen registers in a block RAM and MUL/ADD/SUB
+	// commands on them, ~6x on a multiply as software drives it
+	// (docs/montmul.md, "The register file"); ~510 LUT4 and one
+	// DP16KD. `MONTMUL_REGS in rtl/boards.vh. Without it the block is
+	// the classic one plus the claim register.
 	montmul #(
 `ifdef MONTMUL_LIMBS
-		.LIMBS(`MONTMUL_LIMBS)
+		.LIMBS(`MONTMUL_LIMBS),
 `else
-		.LIMBS(12)
+		.LIMBS(12),
+`endif
+`ifdef MONTMUL_REGS
+		.REGFILE(1)
+`else
+		.REGFILE(0)
 `endif
 	) montmul_i (
 		.clk(wbm_clk),
@@ -3201,6 +3257,49 @@ module sysctl #()
 		.wb_stb_i(wbm_stb),
 		.wb_ack_o(wbs_montmul_ack_o),
 		.wb_cyc_i(wbm_cyc_montmul)
+	);
+`endif
+
+	// WISHBONE SLAVE: SHA256 (rtl/sha256.v)
+	//
+	// Optional, `SHA256 in rtl/boards.vh. SHA-256 compression, ~150
+	// cycles a block against ~44,000 in software; sw/common/zsha256.c
+	// uses it when CSR_FEATURES2 bit 12 says it is here. ~760 LUT4,
+	// ~1,000 FF, one DP16KD (the round constants). Word addresses, as
+	// montmul takes them: 32 words of register map.
+`ifdef SHA256
+	sha256 sha256_i (
+		.clk(wbm_clk),
+		.resetn(!wbm_rst),
+		.wb_adr_i({ 27'b0, wbm_adr_sel_word[4:0] }),
+		.wb_dat_i(wbm_dat_o),
+		.wb_dat_o(wbs_sha_dat_o),
+		.wb_we_i(wbm_we),
+		.wb_sel_i(wbm_sel),
+		.wb_stb_i(wbm_stb),
+		.wb_ack_o(wbs_sha_ack_o),
+		.wb_cyc_i(wbm_cyc_sha)
+	);
+`endif
+
+	// WISHBONE SLAVE: KECCAK (rtl/keccak.v)
+	//
+	// Optional, `KECCAK in rtl/boards.vh. Keccak-f[1600] in 24 cycles
+	// against ~169,000 in software; sw/common/zkeccak.c uses it when
+	// CSR_FEATURES2 bit 13 says it is here. ~6,000 LUT4 and ~1,700 FF,
+	// so only where there is room (docs/keccak_hw.md, "Fitting").
+`ifdef KECCAK
+	keccak keccak_i (
+		.clk(wbm_clk),
+		.resetn(!wbm_rst),
+		.wb_adr_i({ 29'b0, wbm_adr_sel_word[2:0] }),
+		.wb_dat_i(wbm_dat_o),
+		.wb_dat_o(wbs_kec_dat_o),
+		.wb_we_i(wbm_we),
+		.wb_sel_i(wbm_sel),
+		.wb_stb_i(wbm_stb),
+		.wb_ack_o(wbs_kec_ack_o),
+		.wb_cyc_i(wbm_cyc_kec)
 	);
 `endif
 

@@ -15,7 +15,7 @@ APP_LISTING = 0
 # SSH: the server engine and what it shares with net's client, compiled
 # in place from ../ssh and sw/ext/monocypher -- no copies.
 MONO = ../../../ext/monocypher
-SSH_OBJS = ssh_server.o ssh_wire.o ssh_crypto.o zsha256.o monocypher.o monocypher-ed25519.o zrng.o \
+SSH_OBJS = ssh_server.o ssh_wire.o ssh_crypto.o zsha256.o monocypher.o monocypher-ed25519.o z25519.o zrng.o \
 	authkeys.o rsa.o bignum.o
 
 OBJS = zeitlos.o zobj.o zport.o zcfg.o zfsapp.o $(SSH_OBJS) netserve.o
@@ -28,6 +28,10 @@ ssh_crypto.o: ../ssh/ssh_crypto.c ../ssh/ssh_crypto.h
 	$(CC) $(CFLAGS) -c ../ssh/ssh_crypto.c -o ssh_crypto.o
 monocypher.o: $(MONO)/monocypher.c $(MONO)/monocypher.h
 	$(CC) $(CFLAGS) -c $(MONO)/monocypher.c -o monocypher.o
+
+# X25519 and Ed25519 checks on montmul's register file (docs/z25519.md)
+z25519.o: ../../../common/z25519.c ../../../common/z25519.h
+	$(CC) $(CFLAGS) -c ../../../common/z25519.c -o z25519.o
 monocypher-ed25519.o: $(MONO)/monocypher-ed25519.c $(MONO)/monocypher-ed25519.h
 	$(CC) $(CFLAGS) -I$(MONO) -c $(MONO)/monocypher-ed25519.c -o monocypher-ed25519.o
 authkeys.o: authkeys.c authkeys.h
@@ -44,7 +48,8 @@ HOSTCC ?= cc
 # The SSH engine and its crypto, for the host tests. zrng.c is not among
 # them: it reads the TRNG's registers; the tests bring their own.
 TEST_SSH = ../ssh/ssh_server.c ../ssh/ssh_wire.c ../ssh/ssh_crypto.c ../../../common/zsha256.c \
-	$(MONO)/monocypher.c $(MONO)/monocypher-ed25519.c authkeys.c ../../web/rsa.c ../../web/bignum.c
+	$(MONO)/monocypher.c $(MONO)/monocypher-ed25519.c ../../../common/z25519.c \
+	authkeys.c ../../web/rsa.c ../../web/bignum.c
 .PHONY: test
 test:
 	$(HOSTCC) --std=gnu99 -O2 -Wall -o /tmp/test_authkeys tests/test_authkeys.c $(TEST_SSH)

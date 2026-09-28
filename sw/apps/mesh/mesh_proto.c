@@ -478,6 +478,16 @@ static bool rx_packet(mesh_model_t *m, const zpb_field_t *pf, mesh_ev_t *ev) {
 		ev->kind = MESH_EV_NODE;
 		return true;
 	default:
+		// an application's own port: handed on as it is (mesh_svc.c)
+		if (p.port >= PORT_PRIVATE_MIN && p.port <= 0xFFFF) {
+			ev->kind = MESH_EV_DATA;
+			ev->from = p.from;
+			ev->to = p.to;
+			ev->port = p.port;
+			ev->channel = (uint8_t)p.chan;
+			ev->data = p.payload;
+			ev->data_len = p.payload_len;
+		}
 		return true;
 	}
 }
@@ -625,6 +635,29 @@ uint32_t mesh_tx_text(uint8_t *out, uint32_t cap, uint32_t to, uint8_t channel,
 	zpb_put_fixed32(&p, MP_ID, id);
 	if (hop_limit) zpb_put_varint(&p, MP_HOP_LIMIT, hop_limit);
 	zpb_put_varint(&p, MP_WANT_ACK, 1);
+
+	zpb_wr_init(&t, tb, sizeof(tb));
+	zpb_put_msg(&t, TR_PACKET, &p);
+	return finish(out, cap, &t);
+}
+
+uint32_t mesh_tx_data(uint8_t *out, uint32_t cap, uint32_t to, uint8_t channel,
+	uint32_t id, uint8_t hop_limit, uint32_t port, const uint8_t *payload, uint32_t len) {
+	uint8_t db[MESH_PAYLOAD_MAX + 16], pb[MESH_PAYLOAD_MAX + 48], tb[MESH_PAYLOAD_MAX + 56];
+	zpb_wr_t d, p, t;
+
+	if (len > MESH_PAYLOAD_MAX || !id || port < PORT_PRIVATE_MIN || port > 0xFFFF) return 0;
+	zpb_wr_init(&d, db, sizeof(db));
+	zpb_put_varint(&d, DA_PORTNUM, port);
+	zpb_put_bytes(&d, DA_PAYLOAD, payload, len);
+
+	zpb_wr_init(&p, pb, sizeof(pb));
+	zpb_put_fixed32(&p, MP_TO, to);
+	if (channel) zpb_put_varint(&p, MP_CHANNEL, channel);
+	zpb_put_msg(&p, MP_DECODED, &d);
+	zpb_put_fixed32(&p, MP_ID, id);
+	if (hop_limit) zpb_put_varint(&p, MP_HOP_LIMIT, hop_limit);
+	if (to != MESH_BROADCAST) zpb_put_varint(&p, MP_WANT_ACK, 1);
 
 	zpb_wr_init(&t, tb, sizeof(tb));
 	zpb_put_msg(&t, TR_PACKET, &p);

@@ -295,6 +295,7 @@ and the euro sign draw in hardware like ASCII. Anything else:
 
 | character | cells |
 |---|---|
+| box drawing, blocks, shades (U+2500-U+259F) | one, a line-drawing code, drawn as the picture -- see "Line drawing" |
 | not in Latin-9 (an em dash, Polish letters, Cyrillic) | one, the missing-glyph box |
 | two columns wide -- CJK, kana, hangul, fullwidth forms | two: the box, with the character's codepoint kept in the cell, and a blank right half (`VT_CH_WIDE_RIGHT`) |
 | a combining mark | none |
@@ -569,7 +570,18 @@ window draws only the rows that scrolled in. Checking
 
 **`zvt100`** -- `cd sw/test && make test-zvt100`. Host-only, covering
 the parser and the history ring: wraparound, eviction, stable ids, DL
-not saving, ED 2 / ED 3, reverse video surviving packing.
+not saving, ED 2 / ED 3, reverse video surviving packing. Two of its
+twenty failed for a while: they still assumed an 80-byte history line
+and an 8-bit packed cell, overran their buffers, and read reverse video
+from a byte that no longer holds it.
+
+**`test_vt`** -- `sw/common/tests/test_vt.c` (the command is at its
+top). UTF-8, wide characters, and everything in "Escape sequences"
+below: private modes, save and restore, ICH/DCH/ECH, the answers,
+controls inside sequences, RI/IND/NEL, SU/SD, RIS keeping the
+scrollback, the UTF-8 and DEC mappings (every code round-trips through
+its character), and the glyphs themselves at both sizes -- 111
+checks.
 
 **`term` itself** -- `sw/apps/term/tests/render.c` builds the real
 `term.c` against the software framebuffer in
@@ -613,17 +625,22 @@ The scenarios:
   five lines per frame, `clear`, Shift+PgUp into history, output while
   scrolled back, Shift+End, the Open bar, and back to full height
 
-**Known failures.** As of the console and resizing work, 149 of the
-276 checks fail, all of them in scenarios 2-10 and all present before
-that work (same list, line for line, with and without it). The first is
-right after clicking REPL: the shadow is correct but about 60 pixels at
-the panel's left edge (row 17, column 12) stay set, and that follows
-every later frame. Either the panel's box is not fully erased when it
-hides, or the harness disagrees with the real drawing path; it has not
-been investigated. Separately, scenario 8's redraw moves the window to
-0,0 and back without moving its visible region, which clips everything
-after it at y=214; the short-window scenario sets the region properly
-(`redraw_at()` in the test) and passes in full.
+**No known failures** since phase 2 of the BBS work: 297 checks. The 149
+that used to be listed here, starting with about 60 pixels at the
+panel's left edge (row 17, column 12), were the harness's: it moved the
+window to 40,60 after `z_render_open()` had given it a visible region at
+0,0, and never moved the region, so nothing below y=214 was ever inside
+it and the paint pass never reached it. The last two were `term`'s own:
+a long panel status -- `auto-connect: ...` -- ran past the panel's right
+edge into cells the panel does not own, and stayed there after the
+panel went. It is cut to the panel's width now.
+
+Scenario 12 is the BBS one: single and double boxes with every junction,
+blocks, a row of shades, the same box from DEC graphics, reverse video
+over line drawing -- all checked pixel by pixel against
+`vt_box_glyph()` at both font sizes -- then the cursor report and the
+device attributes answered through the port, the cursor hidden and
+shown, and a copy of line drawing pasting the characters.
 
 It also writes PBM renders (`/tmp/term-*.pbm`) to look at.
 
@@ -632,17 +649,47 @@ since the pixel primitives are software there (see `zrender.h`).
 
 ## Escape sequences the emulator implements
 
-`sw/common/zvt100.c`:
+`sw/common/zvt100.c`. Enough of VT100 and ANSI for the shells, `vi`,
+curses programs with `TERM=vt100`, and a BBS ([bbs.md](bbs.md)).
 
 | | |
 |---|---|
-| `A` `B` `C` `D` | cursor up/down/right/left |
-| `H` `f` | cursor position |
-| `J` | erase in display (0, 1, 2; **3 clears scrollback**) |
-| `K` | erase in line |
-| `m` | SGR -- attributes |
-| `L` | insert lines (IL) |
-| `M` | delete lines (DL) |
+| `CSI A` `B` `C` `D` | cursor up/down/right/left |
+| `CSI H` `f` | cursor position |
+| `CSI G` `` ` `` | to a column (CHA, HPA) |
+| `CSI d` | to a row (VPA) |
+| `CSI E` `F` | down / up n lines, to column 1 (CNL, CPL) |
+| `CSI J` | erase in display (0, 1, 2; **3 clears scrollback**) |
+| `CSI K` | erase in line |
+| `CSI X` | erase characters, nothing moves (ECH) |
+| `CSI @` | insert blank characters (ICH) |
+| `CSI P` | delete characters, the line closes up (DCH) |
+| `CSI L` | insert lines (IL) |
+| `CSI M` | delete lines (DL) |
+| `CSI S` `T` | scroll up / down (SU, SD); neither feeds history |
+| `CSI s` `u`, `ESC 7` `8` | save / restore the cursor: position, reverse video, character sets. Restoring with nothing saved goes home |
+| `CSI m` | SGR -- attributes: reverse video. Bold, colour and the rest are accepted and ignored: the display is one bit deep |
+| `CSI ? 25 h` `l` | show / hide the cursor |
+| `CSI 6 n`, `CSI 5 n`, `CSI c` | questions -- answered; see "Answers" below |
+| `ESC ( 0` `B`, `ESC ) 0` `B`, SO, SI | the DEC special graphics set in G0 or G1, and which is in use: see "Line drawing" |
+| `ESC D` `E` `M` | index, next line, reverse index (RI at the top scrolls down) |
+| `ESC c` | full reset -- everything but the scrollback, which is yours rather than the program's |
+| C0 controls | CR, LF (and VT, FF), BS, TAB, SO, SI; the rest ignored |
+
+**Parsing follows the standard's shape.** A `CSI` sequence is
+parameters, an optional private marker (`?` `>` `<` `=`) before them,
+optional intermediate bytes (0x20-0x2F), and a final byte. A private
+sequence means only what it says here (`CSI ? 25 l`), never the ANSI
+command with the same final byte -- `CSI ? 6 n` is not `CSI 6 n` -- and
+anything with an intermediate (`CSI SP q`, `CSI ! p`) is absorbed whole.
+A C0 control inside a sequence is obeyed and the sequence goes on; an
+ESC abandons it and starts another; CAN and SUB cancel it.
+
+**`CSI ?` used to print.** `?` was taken as the final byte, the
+sequence ended there, and the rest was printed: `ESC[?25l` -- hide the
+cursor, which every curses program and BBS sends -- left `25l` on the
+screen, and `ESC[?1049h` left `1049h`. Found planning the BBS; tested
+in `sw/common/tests/test_vt.c`.
 
 **`L` and `M` were added for `vi`, and their absence looked like a
 different bug entirely.** nextvi scrolls the screen by emitting `ESC[nM`
@@ -652,11 +699,91 @@ still. `DL` at the top of the screen routes through `scroll_up()`, which
 is what gives the renderer its scroll count and therefore the blit.
 
 **Not implemented, and worth knowing before the next port:** DECSTBM
-(`ESC[r`, scrolling regions), insert/delete characters (`@`, `P`),
-save/restore cursor (`s`, `u`), and the alternate screen buffer
-(`ESC[?1049h`). nextvi emits the last of these only with `-a`, which
-this front end does not pass. An alternate screen, if added, should not
-feed history either.
+(`CSI r`, scrolling regions), insert mode (`CSI 4 h`), the alternate
+screen buffer (`CSI ? 1049 h`), tab stops other than every eight, and
+double-width lines (`ESC # 3`). Each is absorbed rather than printed.
+nextvi emits the alternate screen only with `-a`, which this front end
+does not pass; an alternate screen, if added, should not feed history
+either.
+
+### Answers
+
+A program at the far end can ask the terminal things, and a BBS does:
+`CSI 6 n`, "where is the cursor?", is how it finds out it has an ANSI
+terminal at all, and how big the screen is (move to 999;999, ask).
+
+| asked | answered |
+|---|---|
+| `CSI 6 n` | `CSI row ; col R`, 1-indexed. Past the last column (a deferred wrap) is the last column, as xterm says |
+| `CSI 5 n` | `CSI 0 n`: all is well |
+| `CSI c` (and `CSI 0 c`) | `CSI ? 1 ; 0 c`: a VT100 with no options |
+
+The emulator queues the answers (`vt_take_reply()`, zvt100.h; 32 bytes,
+dropped rather than overflowing if nobody takes them) and `term` sends
+them back through the port as soon as the output that asked has been
+fed (`port_data()` in term.c). `CSI > c` and the other private
+questions are not answered.
+
+### Line drawing
+
+Box drawing -- single and double -- the half and full blocks, and the
+three shades, which is what a BBS menu, a curses dialog or a
+`tree`-style listing draws with, and none of which Latin-9 has:
+
+```
+┌───┐  ╔═╦═╗   █ ▀ ▄ ▌ ▐   ░ ▒ ▓
+│ A │  ║B║C║
+├─┼─┤  ╠═╬═╣
+└─┴─┘  ╚═╩═╝
+```
+
+**In a cell** each is one of thirty codes in the C1 range, 0x81-0x9E
+(`VT_BOX_*`, zvt100.h), the bytes a cell never held -- beside 0x80, the
+right half of a wide character. So a cell is still one byte, history
+keeps them as it keeps everything else, and nothing about the shadow or
+the scroll changed.
+
+**Where they come from:** UTF-8, U+2500-U+259F, or the DEC special
+graphics set a VT100 program selects with `ESC ( 0` (`lqk` is `┌─┐`).
+Heavy, dashed and rounded lines are drawn as the single ones; a mixed
+single/double junction (`╒`, `╟` ...) as the double one, the half a box is
+built from in the CP437 art these come from; `╴╵╶╷` as the whole line.
+The diagonals and the partial blocks have no code and show as the
+missing-glyph box. DEC graphics' degree, plus-minus, pound and middle
+dot are Latin-9 characters and use the font's own.
+
+**How they are drawn:** `term` builds a font of the thirty
+(`box_fonts_build()`) at its own cell size, 5x8 or 6x12, when it starts
+and again after the Aa toggle, so every line reaches the edges of its
+cell and meets its neighbour whatever the font. The pictures come from
+`vt_box_glyph()`:
+
+- **single lines** run through the middle of the cell to each edge they
+  leave by;
+- **double lines** are the outline of a line three pixels thick: the
+  union of the arms' bands, less every pixel all of whose neighbours are
+  in it. That turns the inner line of `╔` at the inner corner and breaks
+  `╬` into four corners, with no table of special cases;
+- **blocks** are exact halves, so `▌▐` tile a `█` even at an odd width;
+- **shades** are dithers -- a quarter, a half, three quarters -- that
+  follow the screen rather than the cell. At a cell width of 5 a
+  checker drawn the same in every cell would show a seam every five
+  pixels, so there are four copies of the font, one per parity of the
+  cell's position.
+
+The box font is not in glyph memory, so these cells are drawn in
+software -- a few dozen pixels each, and only the cells that hold one.
+It costs 1,920 bytes of `.bss`; `term` grew 5.8 KB on disk.
+
+**Copied**, a code is its character again (`vt_glyph_cp()`): a box
+pastes as a box. **Read aloud** it is nothing -- a border is not
+something to hear, and "box drawings light horizontal" eighty times
+over is worse than silence.
+
+**Colour is still ignored.** A BBS that paints with colour alone loses
+that meaning here; one designed for this terminal
+([bbs.md](bbs.md), "Decisions") carries it in text, position and
+reverse video.
 
 ## Line editing lives at the far end
 

@@ -35,15 +35,17 @@ travel with the card. `settings` edits them; see
 
 | key | default | read by | effect |
 | --- | --- | --- | --- |
+| `apps.bbs.dir` | `/bbs` | `bbs` | the BBS's data directory: its own `bbs.cfg`, the users, the bulletins ([bbs.md](bbs.md#the-data-directory)) |
 | `apps.irc.channels` | *(none)* | `irc` | channels to join once connected, `#zeitlos #fpga` ([irc_app.md](irc_app.md)) |
 | `apps.irc.nick` | `zeitlos` | `irc` | your nickname; an `_` is added while it is taken |
 | `apps.irc.server` | `irc.libera.chat 6667` | `irc` | server and port to connect to at start; empty: wait for `/connect` |
 | `apps.netserve.allow` | `subnet` | `netserve` | accept connections from this subnet only, or `any` ([netserve.md](netserve.md)) |
 | `apps.netserve.echo` | `off` | `netserve`, `init` | an echo service on this port, for testing |
 | `apps.netserve.http` | `off` | `netserve`, `init` | HTTP: a port and a directory to serve, `80 /www` |
-| `apps.netserve.ssh` | `off` | `netserve`, `init` | SSH: a port and a port name, `22 posix0`; needs a 10+ character password and a seeded TRNG |
-| `apps.netserve.ssh_auth` | `both` | `netserve` | SSH logins by `key` (`/user/authkeys`), `password`, or `both` |
-| `apps.netserve.telnet` | `off` | `netserve`, `init` | telnet: a port and a port name, `23 repl0`; needs a password of 10+ characters |
+| `apps.netserve.ssh` | `off` | `netserve`, `init` | SSH: listeners, `;`-separated -- a port, a port name and flags (`noauth`, `any`, `subnet`): `22 posix0; 2222 bbs0 noauth any` ([netserve.md](netserve.md#listeners)); a seeded TRNG, and a 10+ character password for any listener that is not `noauth` |
+| `apps.netserve.ssh_auth` | `both` | `netserve` | SSH logins by `key` (`/user/authkeys`), `password`, or `both`; not for `noauth` listeners |
+| `apps.netserve.ssh_sessions` | `2` | `netserve` | SSH sessions at a time, 1-4, about 10KB of memory each |
+| `apps.netserve.telnet` | `off` | `netserve`, `init` | telnet: listeners, as for SSH: `23 repl0; 2323 bbs0 noauth`; a 10+ character password for any listener that is not `noauth` |
 | `apps.term.auto_connect` | *(none)* | `term` | what a new term window connects to by itself |
 | `system.font.japanese` | `no` | `wm`, `settings` | start `jfont` at boot, so Japanese draws at 6x12 -- about 190KB of RAM ([text_encoding.md](text_encoding.md)); `settings` switches it on and off at once |
 | `system.keyboard.layouts` | `us` | `wm` | keyboard layouts, comma-separated; the first is used at start, Super+Space cycles |

@@ -49,6 +49,9 @@ static client_t *find(const z_msg_t *msg) {
 
 static void on_connect(z_msg_t *msg) {
 	int slot = -1;
+	// The kernel shell: never for a session nobody logged in (zport.h,
+	// "Who is connecting"; docs/netserve.md, "noauth").
+	if (z_port_refuse_unauthenticated(msg, "console")) return;
 	// A client that reconnects without having sent CLOSE (a term that
 	// was killed) reuses its old slot rather than leaking it.
 	for (int i = 0; i < MAX_CLIENTS; i++)

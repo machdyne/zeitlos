@@ -289,6 +289,18 @@ localparam CSR_FEATURES2 =
 `ifdef MONTMUL
 	(32'h1 << 3) |
 `endif
+// rtl/sha256.v -- SHA-256 compression at 0x7e00_0000 (docs/sha256_hw.md).
+// Set when the block is built; sw/common/zsha256.c falls back to
+// software when it is clear. Read the block's MAGIC as well, as for
+// montmul.
+`ifdef SHA256
+	(32'h1 << 12) |
+`endif
+// rtl/keccak.v -- Keccak-f[1600] at 0x7d00_0000 (docs/keccak_hw.md).
+// sw/common/zkeccak.c falls back to software when it is clear.
+`ifdef KECCAK
+	(32'h1 << 13) |
+`endif
 // rtl/usb/usb_host.v -- the USB host controller. See docs/usb_host.md.
 //
 // Set when the block is BUILT. NOT a replacement for CSR_FEATURES bit

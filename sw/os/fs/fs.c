@@ -646,18 +646,11 @@ int fs_unlink(char *path) {
 	path = (char *)fs_path_resolve(path, rp_, sizeof(rp_));
 
 
-	FRESULT res;
-
-	printf("deleting '%s' ...\n", path);
-
-	res = f_unlink(path);
-
-	if (res != FR_OK) {
-		printf("unlink failed; error code: %i\n", res);
-		return 1;
-	}
-
-	return 0;
+	// Quiet: apps delete (and replace files by write-then-rename) through
+	// this, and routine store updates do not belong on the console. The
+	// shell's `rm` says what it is doing itself (sh.c).
+	FRESULT res = f_unlink(path);
+	return res == FR_OK ? 0 : 1;
 
 }
 

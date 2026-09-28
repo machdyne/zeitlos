@@ -29,6 +29,8 @@ RTL_PICO = \
 	rtl/rtc.v \
 	rtl/trng.v \
 	rtl/montmul.v \
+	rtl/sha256.v \
+	rtl/keccak.v \
 	rtl/audio.v \
 	rtl/audio_out.v \
 	rtl/audio_mixer.v \

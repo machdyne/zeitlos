@@ -1019,6 +1019,10 @@ static int reap_dead_conns(uint32_t connecting_pid) {
 static void handle_connect(const z_msg_t *msg) {
 
 	int slot = -1;
+
+	// A shell: never for a session nobody logged in (zport.h, "Who is
+	// connecting"; docs/netserve.md, "noauth").
+	if (z_port_refuse_unauthenticated(msg, "repl")) return;
 	for (int i = 0; i < Z_REPL_MAX_CONNS; i++) {
 		if (!conns[i].port.connected) { slot = i; break; }
 	}

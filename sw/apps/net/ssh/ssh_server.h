@@ -37,7 +37,8 @@
  * messages during the first one.
  *
  * Password and public-key authentication (sshs_set_auth()), either or
- * both. A public key is checked in two steps, as RFC 4252 section 7
+ * both -- or SSHS_AUTH_ANY, which lets anyone in without checking
+ * anything, for netserve's noauth listeners (docs/netserve.md). A public key is checked in two steps, as RFC 4252 section 7
  * has it: the client asks whether a key would do (answered from the
  * owner's list alone, PK_OK), then signs. ssh-ed25519 and rsa-sha2-256
  * signatures; SHA-1 "ssh-rsa" signatures are refused. The owner decides
@@ -105,6 +106,14 @@ typedef bool (*sshs_pk_verify_fn)(void *user, const char *alg, const uint8_t *bl
 
 #define SSHS_AUTH_PASSWORD   1u
 #define SSHS_AUTH_PUBLICKEY  2u
+// Anyone in: the first USERAUTH_REQUEST of ANY method -- "none",
+// "password" with any password, "keyboard-interactive", or a public key
+// (asked about: PK_OK; signed: in, the signature not checked) -- is
+// answered SUCCESS. The session is still encrypted and the host still
+// proves itself with its key; the user proves nothing, and the owner
+// must treat the session as unauthenticated (docs/netserve.md,
+// "noauth"). Excludes the other two: the hooks are never called.
+#define SSHS_AUTH_ANY        4u
 
 typedef struct {
 	// hooks
@@ -153,7 +162,8 @@ typedef struct {
 	ssh_cipher tx_cipher, rx_cipher;
 
 	// authentication
-	char username[33];
+	char username[33];              // as the client sent it, cut to 32 bytes
+	char auth_method[24];           // how it got in: "password", "ssh-ed25519", "none" ...
 	uint8_t auth_failures;
 	bool authed;
 

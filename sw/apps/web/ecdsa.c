@@ -27,6 +27,9 @@
 // reach MMIO by forgetting a flag.
 #ifdef EC_HW
 #include "../../common/zsoc.h"
+#if defined(EC_HW) && !defined(EC_HW_SIM)
+#include "../../common/zeitlos.h"		// z_getpid(), z_proc_wait(): the claim
+#endif
 #endif
 
 // Widest curve here, in 32-bit limbs: 384 bits.
@@ -278,34 +281,100 @@ static void mod_sub(uint32_t *r, const uint32_t *a, const uint32_t *b,
 	if (sub_n(r, a, b, nl)) add_n(r, r, m, nl);
 }
 
-// Inverse by Fermat: a^(m-2). Both p and n are prime for both curves,
-// so this is valid for either, and it avoids a separate extended
-// Euclid with its own edge cases -- at the cost of 32*nl squarings,
-// which against the thousands the scalar multiplication needs is not
-// where the time goes.
+// -- inverses --
+//
+// Binary extended Euclid (HAC 14.61, the form for an odd modulus): only
+// shifts and subtractions, ~2 steps a bit. It replaced inversion by
+// Fermat (a^(m-2): 32*nl squarings and as many multiplies again) in
+// 2026, once the scalar multiplication moved onto montmul's register
+// file: the inverse mod n, untouched, had become ~80% of a P-384 check
+// -- ~840 ms of 1,082 on the board. The comment that stood here said,
+// rightly at the time, that against the thousands of multiplies the
+// scalar multiplication needed the inverse was "not where the time
+// goes". Making the thousands fast made it where the time went.
+//
+// VARIABLE TIME: how many steps it takes depends on the value. Every
+// value inverted here is public -- from a signature, a hash, a point
+// being checked -- and nothing secret may ever be passed to it.
+//
+// Its edge cases are the reason Fermat was chosen originally, and they
+// are why the old exponentiation is kept below (under EC_TEST_HOOKS) as
+// the reference ec_test_inverses() holds this to: random values and the
+// edges -- 1, 2, m-1, m-2, (m+1)/2, powers of two, all-ones patterns --
+// on both curves' p and n.
+
+static bool is_one_n(const uint32_t *a, uint16_t nl) {
+	if (a[0] != 1) return false;
+	for (uint16_t i = 1; i < nl; i++) if (a[i]) return false;
+	return true;
+}
+
+// x >>= 1, `top` shifted in at the most significant bit.
+static void shr1_n(uint32_t *x, uint32_t top, uint16_t nl) {
+	for (uint16_t i = 0; i < nl; i++) {
+		uint32_t hi = (i + 1 < nl) ? (x[i + 1] & 1u) : top;
+		x[i] = (x[i] >> 1) | (hi << 31);
+	}
+}
+
+// x/2 mod m, for 0 <= x < m, m odd: (x + m)/2 when x is odd. x + m can
+// carry out of nl limbs; that carry is the bit shifted back in.
+static void half_mod(uint32_t *x, const uint32_t *m, uint16_t nl) {
+	if (x[0] & 1u) {
+		uint32_t c = add_n(x, x, m, nl);
+		shr1_n(x, c, nl);
+	} else shr1_n(x, 0, nl);
+}
+
+// out = a^-1 mod m: m odd, 0 < a < m, gcd(a, m) = 1 -- which p and n,
+// both prime, and every value below them but 0, satisfy. Given 0 (or a
+// shared factor) it returns 0 rather than looping forever.
+static void inv_mod(uint32_t *out, const uint32_t *a, const uint32_t *m, uint16_t nl) {
+	uint32_t u[EC_MAX_LIMBS], v[EC_MAX_LIMBS], x1[EC_MAX_LIMBS], x2[EC_MAX_LIMBS];
+	memcpy(u, a, (size_t)nl * sizeof(uint32_t));
+	memcpy(v, m, (size_t)nl * sizeof(uint32_t));
+	memset(x1, 0, sizeof(x1)); x1[0] = 1;
+	memset(x2, 0, sizeof(x2));
+	while (!is_one_n(u, nl) && !is_one_n(v, nl)) {
+		if (is_zero_n(u, nl) || is_zero_n(v, nl)) { memset(out, 0, (size_t)nl * sizeof(uint32_t)); return; }
+		while (!(u[0] & 1u)) { shr1_n(u, 0, nl); half_mod(x1, m, nl); }
+		while (!(v[0] & 1u)) { shr1_n(v, 0, nl); half_mod(x2, m, nl); }
+		if (cmp_n(u, v, nl) >= 0) { sub_n(u, u, v, nl); mod_sub(x1, x1, x2, m, nl); }
+		else { sub_n(v, v, u, nl); mod_sub(x2, x2, x1, m, nl); }
+	}
+	memcpy(out, is_one_n(u, nl) ? x1 : x2, (size_t)nl * sizeof(uint32_t));
+}
+
+// The inverse of a Montgomery-form value, in Montgomery form: out of it,
+// inverted, back in -- two multiplies around inv_mod().
 static void mont_inv(uint32_t *out, const uint32_t *a, const mont_t *mc,
 	uint16_t nl) {
+	uint32_t x[EC_MAX_LIMBS];
+	from_mont(x, a, mc, nl);
+	inv_mod(x, x, mc->m, nl);
+	to_mont(out, x, mc, nl);
+}
 
+#ifdef EC_TEST_HOOKS
+// The old inverse, by Fermat -- kept only as the reference for tests.
+static void mont_inv_fermat(uint32_t *out, const uint32_t *a, const mont_t *mc,
+	uint16_t nl) {
 	uint32_t e[EC_MAX_LIMBS], two[EC_MAX_LIMBS];
 	uint32_t r[EC_MAX_LIMBS], x[EC_MAX_LIMBS], one[EC_MAX_LIMBS];
-
 	memset(two, 0, sizeof(two));
 	two[0] = 2;
 	sub_n(e, mc->m, two, nl);
-
 	memset(one, 0, sizeof(one));
 	one[0] = 1;
 	to_mont(r, one, mc, nl);
 	memcpy(x, a, (size_t)nl * sizeof(uint32_t));
-
 	for (int bit = 32 * (int)nl - 1; bit >= 0; bit--) {
 		mont_mul(r, r, r, mc, nl);
 		if ((e[bit / 32] >> (bit % 32)) & 1) mont_mul(r, r, x, mc, nl);
 	}
-
 	memcpy(out, r, (size_t)nl * sizeof(uint32_t));
-
 }
+#endif
 
 // -- hardware Montgomery multiplier, when the board has one ---------
 //
@@ -326,7 +395,11 @@ static void mont_inv(uint32_t *out, const uint32_t *a, const mont_t *mc,
 #ifdef EC_HW
 
 static bool hw_checked, hw_ok;
+// Set when the block could not be had (another process held it too
+// long): from then on this process uses software field arithmetic.
+static bool hw_forced_off;
 static uint16_t hw_limbs;
+static uint16_t hw_nregs;		// the register file's size: CONFIG[15:8]; 0 = none
 
 #ifdef EC_HW_SIM
 
@@ -425,16 +498,20 @@ static inline volatile uint32_t *hw_reg(uint32_t w) {
 // -- so the width is checked rather than assumed.
 static bool hw_available(uint16_t nl) {
 
+	if (hw_forced_off) return false;
+
 	if (!hw_checked) {
 		hw_checked = true;
 #ifdef EC_HW_SIM
 		hw_limbs = HW_SIM_LIMBS;
+		hw_nregs = 16;
 		hw_ok = true;
 #else
 		hw_ok = false;
 		if (z_soc_has_feature2(Z_FEATURE2_MONTMUL)) {
 			if (*hw_reg(Z_MONTMUL_W_MAGIC) == Z_MONTMUL_MAGIC) {
 				hw_limbs = (uint16_t)(*hw_reg(Z_MONTMUL_W_CONFIG) & 0xFF);
+				hw_nregs = (uint16_t)((*hw_reg(Z_MONTMUL_W_CONFIG) >> 8) & 0xFF);
 				hw_ok = (hw_limbs >= 8);
 			}
 		}
@@ -479,6 +556,7 @@ static void hw_pad(uint32_t *dst, const uint32_t *src, uint16_t nl) {
 // P-256 was falling back to software for an unrelated reason, which
 // masked it entirely.
 static const void *hw_cur;
+
 
 static void hw_set_modulus(const uint32_t *n, uint32_t n0inv, uint16_t nl) {
 	uint32_t p[EC_MAX_LIMBS];
@@ -769,7 +847,21 @@ static void fe_mul(uint32_t *out, const uint32_t *a, const uint32_t *b,
 // a Solinas prime and there is no fast reduction for it. Two inverses
 // per verification, against thousands of multiplies, so it does not
 // matter which they use.
+static void to_field(uint32_t *out, const uint32_t *a, const ec_curve_t *cv);
+static void from_field(uint32_t *out, const uint32_t *a, const ec_curve_t *cv);
+
+// The field inverse, in the active representation: out of it, inv_mod()
+// (above -- public values only), back in.
 static void fe_inv(uint32_t *out, const uint32_t *a, const ec_curve_t *cv) {
+	uint32_t x[EC_MAX_LIMBS];
+	from_field(x, a, cv);
+	inv_mod(x, x, cv->p, cv->nl);
+	to_field(out, x, cv);
+}
+
+#ifdef EC_TEST_HOOKS
+// The old field inverse, by Fermat -- the reference for tests.
+static void fe_inv_fermat(uint32_t *out, const uint32_t *a, const ec_curve_t *cv) {
 
 	uint16_t nl = cv->nl;
 	uint32_t e[EC_MAX_LIMBS], two[EC_MAX_LIMBS], r[EC_MAX_LIMBS];
@@ -795,6 +887,7 @@ static void fe_inv(uint32_t *out, const uint32_t *a, const ec_curve_t *cv) {
 	memcpy(out, r, (size_t)nl * sizeof(uint32_t));
 
 }
+#endif
 
 // -- the curve ------------------------------------------------------
 //
@@ -1082,6 +1175,269 @@ static void pt_add(const ec_curve_t *cv, pt_t *r, const pt_t *a,
 
 }
 
+// -- the register file (rtl/montmul.v with REGFILE; docs/montmul.md) --
+//
+// The classic path above moves both operands in and the result out for
+// every multiply: ~3,450 cycles, ~700 of them the block's own work. With
+// the register file the double-scalar multiplication below keeps its
+// running point INSIDE the block: sixteen registers of the block's
+// width, one-word MUL / ADD / SUB commands, and only the table point of
+// each addition loaded. Measured on the board a MUL command is ~776
+// cycles and an ADD ~190.
+//
+// It only ever REPLACES shamir() when it can finish: an addition whose
+// two points share an x coordinate (where the formula would divide by
+// zero), or a table point at infinity, makes rf_shamir() give up and
+// the classic path answer. For honest signatures that never happens;
+// an attacker can arrange it, and then gets the classic path's answer.
+
+// Which path verifications took: for the tests.
+uint32_t ec_stat_rf, ec_stat_rf_bail;
+int ec_rf_disable;			// tests: force the classic path
+
+#ifdef EC_HW
+#define RF_REGS 16
+
+#ifdef EC_HW_SIM
+static uint32_t sim_rf[RF_REGS][HW_SIM_LIMBS];
+static uint32_t sim_sel;
+
+static void rf_load(int r, const uint32_t *v, uint16_t nl) {
+	for (int i = 0; i < HW_SIM_LIMBS; i++) sim_rf[r][i] = i < nl ? v[i] : 0;
+}
+static void rf_fetch(int r, uint32_t *v, uint16_t nl) {
+	memcpy(v, sim_rf[r], (size_t)nl * sizeof(uint32_t));
+}
+// The block's ADD and SUB, at its full width, modulo the loaded N.
+static void rf_op(uint32_t op, int d, int a, int b) {
+	uint32_t t[HW_SIM_LIMBS];
+	uint64_t c = 0;
+	int i;
+	(void)sim_sel;
+	if (op == Z_MONTMUL_OP_MUL) { sim_mul(t, sim_rf[a], sim_rf[b]); memcpy(sim_rf[d], t, sizeof(t)); return; }
+	if (op == Z_MONTMUL_OP_ADD) {
+		for (i = 0; i < HW_SIM_LIMBS; i++) { c += (uint64_t)sim_rf[a][i] + sim_rf[b][i]; t[i] = (uint32_t)c; c >>= 32; }
+		{
+			uint32_t dd[HW_SIM_LIMBS], borrow = 0;
+			for (i = 0; i < HW_SIM_LIMBS; i++) {
+				uint64_t s = (uint64_t)t[i] - sim_n[i] - borrow;
+				dd[i] = (uint32_t)s; borrow = (s >> 32) ? 1u : 0u;
+			}
+			if (!(borrow && c == 0)) memcpy(t, dd, sizeof(dd));
+		}
+	} else {
+		uint32_t borrow = 0;
+		for (i = 0; i < HW_SIM_LIMBS; i++) {
+			uint64_t s = (uint64_t)sim_rf[a][i] - sim_rf[b][i] - borrow;
+			t[i] = (uint32_t)s; borrow = (s >> 32) ? 1u : 0u;
+		}
+		if (borrow) {
+			for (i = 0; i < HW_SIM_LIMBS; i++) { c += (uint64_t)t[i] + sim_n[i]; t[i] = (uint32_t)c; c >>= 32; }
+		}
+	}
+	memcpy(sim_rf[d], t, sizeof(t));
+}
+#else
+static void rf_load(int r, const uint32_t *v, uint16_t nl) {
+	*hw_reg(Z_MONTMUL_W_RSEL) = (uint32_t)r << 4;
+	for (uint16_t i = 0; i < hw_limbs; i++) *hw_reg(Z_MONTMUL_W_RDATA) = i < nl ? v[i] : 0;
+}
+static void rf_fetch(int r, uint32_t *v, uint16_t nl) {
+	*hw_reg(Z_MONTMUL_W_RSEL) = (uint32_t)r << 4;
+	for (uint16_t i = 0; i < nl; i++) v[i] = *hw_reg(Z_MONTMUL_W_RDATA);
+}
+static void rf_op(uint32_t op, int d, int a, int b) {
+	*hw_reg(Z_MONTMUL_W_CMD) = Z_MONTMUL_CMD(op, d, a, b);
+	while (*hw_reg(Z_MONTMUL_W_CMD) & 1u) { }
+}
+#endif
+
+#define MUL(d, a, b) rf_op(Z_MONTMUL_OP_MUL, (d), (a), (b))
+#define ADD(d, a, b) rf_op(Z_MONTMUL_OP_ADD, (d), (a), (b))
+#define SUB(d, a, b) rf_op(Z_MONTMUL_OP_SUB, (d), (a), (b))
+
+// Registers are named by the formulas as they go: a tiny allocator,
+// and results renamed rather than copied (the block has no copy).
+static uint16_t rf_used;
+static int rf_get(void) {
+	for (int i = 0; i < RF_REGS; i++)
+		if (!(rf_used & (1u << i))) { rf_used |= (uint16_t)(1u << i); return i; }
+	return 0;			// cannot happen: the formulas below need at most 12
+}
+static void rf_put(int r) { rf_used &= (uint16_t)~(1u << r); }
+
+// (X, Y, Z) <- 2 (X, Y, Z): dbl-2001-b, a = -3, as pt_dbl().
+static void rf_dbl(int *X, int *Y, int *Z) {
+	int d = rf_get(), g = rf_get(), b = rf_get(), t1 = rf_get(), t2 = rf_get(), al = rf_get();
+	int x3 = rf_get(), y3, z3;
+	MUL(d, *Z, *Z);			// delta = Z^2
+	MUL(g, *Y, *Y);			// gamma = Y^2
+	MUL(b, *X, g);			// beta = X gamma
+	SUB(t1, *X, d);
+	ADD(t2, *X, d);
+	MUL(al, t1, t2);
+	ADD(t1, al, al);
+	ADD(al, t1, al);		// alpha = 3 (X - delta)(X + delta)
+	MUL(x3, al, al);
+	ADD(t2, b, b);
+	ADD(t2, t2, t2);		// 4 beta
+	SUB(x3, x3, t2);
+	SUB(x3, x3, t2);		// X' = alpha^2 - 8 beta
+	z3 = rf_get();
+	ADD(z3, *Y, *Z);
+	MUL(z3, z3, z3);
+	SUB(z3, z3, g);
+	SUB(z3, z3, d);			// Z' = (Y + Z)^2 - gamma - delta
+	SUB(t2, t2, x3);
+	MUL(t2, al, t2);		// alpha (4 beta - X')
+	MUL(t1, g, g);
+	ADD(t1, t1, t1);
+	ADD(t1, t1, t1);
+	ADD(t1, t1, t1);		// 8 gamma^2
+	y3 = rf_get();
+	SUB(y3, t2, t1);		// Y'
+	rf_put(d); rf_put(g); rf_put(b); rf_put(t1); rf_put(t2); rf_put(al);
+	rf_put(*X); rf_put(*Y); rf_put(*Z);
+	*X = x3; *Y = y3; *Z = z3;
+}
+
+static bool rf_is_zero(int r, uint16_t nl) {
+	uint32_t v[EC_MAX_LIMBS];
+	rf_fetch(r, v, nl);
+	return is_zero_n(v, nl);
+}
+
+// (X, Y, Z) <- (X, Y, Z) + (x2, y2, 1): madd-2007-bl. False if the two
+// points share an x coordinate -- H = 0, where the formula would divide
+// by zero -- and nothing has changed but x2 and y2 being used up.
+static bool rf_madd(int *X, int *Y, int *Z, int x2, int y2, uint16_t nl) {
+	int z1z1 = rf_get(), u2 = rf_get(), s2, h, hh, i, j, r, v, x3, y3, t, z3;
+	MUL(z1z1, *Z, *Z);
+	MUL(u2, x2, z1z1);
+	rf_put(x2);
+	s2 = rf_get();
+	MUL(s2, y2, *Z);
+	rf_put(y2);
+	MUL(s2, s2, z1z1);		// S2 = y2 Z^3
+	h = rf_get();
+	SUB(h, u2, *X);			// H = U2 - X
+	rf_put(u2);
+	if (rf_is_zero(h, nl)) {
+		rf_put(z1z1); rf_put(s2); rf_put(h);
+		return false;
+	}
+	hh = rf_get(); MUL(hh, h, h);
+	i = rf_get(); ADD(i, hh, hh); ADD(i, i, i);		// I = 4 HH
+	j = rf_get(); MUL(j, h, i);				// J = H I
+	r = rf_get(); SUB(r, s2, *Y); ADD(r, r, r);		// r = 2 (S2 - Y)
+	rf_put(s2);
+	v = rf_get(); MUL(v, *X, i);				// V = X I
+	rf_put(i);
+	x3 = rf_get();
+	MUL(x3, r, r); SUB(x3, x3, j); SUB(x3, x3, v); SUB(x3, x3, v);
+	y3 = rf_get();
+	SUB(y3, v, x3); MUL(y3, r, y3);
+	rf_put(v); rf_put(r);
+	t = rf_get(); MUL(t, *Y, j); ADD(t, t, t);
+	SUB(y3, y3, t);						// Y3 = r (V - X3) - 2 Y J
+	rf_put(t); rf_put(j);
+	z3 = rf_get();
+	ADD(z3, *Z, h); MUL(z3, z3, z3); SUB(z3, z3, z1z1); SUB(z3, z3, hh);
+	rf_put(z1z1); rf_put(hh); rf_put(h);
+	rf_put(*X); rf_put(*Y); rf_put(*Z);
+	*X = x3; *Y = y3; *Z = z3;
+	return true;
+}
+
+// dst <- src^(p-2) = src^-1, in the Montgomery domain: left to right,
+// the top bit's "acc = src" folded into the first squaring.
+static int rf_inv(int src, const ec_curve_t *cv) {
+	uint32_t e[EC_MAX_LIMBS], two[EC_MAX_LIMBS];
+	uint16_t nl = cv->nl;
+	int acc = rf_get(), top, bit;
+	memset(two, 0, sizeof(two));
+	two[0] = 2;
+	sub_n(e, cv->p, two, nl);
+	for (top = 32 * nl - 1; top > 0 && !((e[top / 32] >> (top % 32)) & 1); top--) ;
+	MUL(acc, src, src);
+	if ((e[(top - 1) / 32] >> ((top - 1) % 32)) & 1) MUL(acc, acc, src);
+	for (bit = top - 2; bit >= 0; bit--) {
+		MUL(acc, acc, acc);
+		if ((e[bit / 32] >> (bit % 32)) & 1) MUL(acc, acc, src);
+	}
+	return acc;
+}
+
+// u1 G + u2 Q, the result's AFFINE x (Montgomery form) in r->x and
+// r->z = one -- so the caller skips its own inversion. False: the
+// classic shamir() must answer.
+static bool rf_shamir(const ec_curve_t *cv, pt_t *out, const uint32_t *u1,
+	const pt_t *g, const uint32_t *u2, const pt_t *q) {
+
+	uint16_t nl = cv->nl;
+	fe tx[4], ty[4];
+	pt_t t3;
+	int X = -1, Y = -1, Z = -1;
+	bool inf = true;
+
+	// The table, affine: G, Q (both have z = one), and G + Q made so.
+	pt_add(cv, &t3, g, q);
+	if (pt_is_zero(&t3, nl)) return false;			// Q = -G
+	hw_select(cv);
+	rf_used = 0;
+	{
+		int z = rf_get(), zi, z2, z3, x, y;
+		rf_load(z, t3.z, nl);
+		zi = rf_inv(z, cv);
+		rf_put(z);
+		z2 = rf_get(); MUL(z2, zi, zi);
+		z3 = rf_get(); MUL(z3, z2, zi);
+		x = rf_get(); rf_load(x, t3.x, nl); MUL(x, x, z2);
+		y = rf_get(); rf_load(y, t3.y, nl); MUL(y, y, z3);
+		rf_fetch(x, tx[3], nl);
+		rf_fetch(y, ty[3], nl);
+		rf_used = 0;
+	}
+	memcpy(tx[1], g->x, sizeof(fe)); memcpy(ty[1], g->y, sizeof(fe));
+	memcpy(tx[2], q->x, sizeof(fe)); memcpy(ty[2], q->y, sizeof(fe));
+
+	for (int bit = 32 * (int)nl - 1; bit >= 0; bit--) {
+		int idx = (int)(((u1[bit / 32] >> (bit % 32)) & 1) |
+			(((u2[bit / 32] >> (bit % 32)) & 1) << 1));
+		if (!inf) rf_dbl(&X, &Y, &Z);
+		if (!idx) continue;
+		if (inf) {
+			X = rf_get(); rf_load(X, tx[idx], nl);
+			Y = rf_get(); rf_load(Y, ty[idx], nl);
+			Z = rf_get(); rf_load(Z, cv->one, nl);
+			inf = false;
+			continue;
+		}
+		{
+			int x2 = rf_get(), y2 = rf_get();
+			rf_load(x2, tx[idx], nl);
+			rf_load(y2, ty[idx], nl);
+			if (!rf_madd(&X, &Y, &Z, x2, y2, nl)) return false;
+		}
+	}
+
+	if (inf) { pt_zero(out); return true; }
+	// affine x = X / Z^2
+	{
+		int zi = rf_inv(Z, cv), z2 = rf_get(), x = rf_get();
+		MUL(z2, zi, zi);
+		MUL(x, X, z2);
+		memset(out, 0, sizeof(*out));
+		rf_fetch(x, out->x, nl);
+		memcpy(out->z, cv->one, sizeof(fe));
+	}
+	return true;
+}
+#undef MUL
+#undef ADD
+#undef SUB
+#endif
+
 // u1*G + u2*Q by Shamir's trick: one pass over the bits, doubling
 // once and adding at most once per bit, rather than two independent
 // scalar multiplications. Roughly halves the work.
@@ -1147,7 +1503,68 @@ static void bytes_to_limbs(uint32_t *out, const uint8_t *in, uint16_t nl) {
 	}
 }
 
+// -- sharing the block (docs/montmul.md, "Sharing") --
+//
+// The block holds one modulus for the whole machine, and zfed's `fed`,
+// cryptobench or anything else may use it too. So each verification
+// CLAIMS it first (the OWNER register) and forgets which modulus it
+// last loaded, so hw_select() loads its own again: a few dozen writes a
+// verification, against whatever the last user left there.
+//
+// A claim that does not succeed within ~2 s means someone holds the
+// block for long: this process then switches to software for good, its
+// curve constants rebuilt in software's form, rather than wait again
+// every time. The two forms cannot be mixed within a verification.
+//
+// On a bitstream older than the OWNER register, the claim reads back 0:
+// nothing to share with, and the block is used as it always was.
+#if defined(EC_HW) && !defined(EC_HW_SIM)
+static bool hw_claim(void) {
+	static uint32_t me;
+	if (!hw_available(1)) return false;
+	if (!me) me = z_getpid() & 0x7FFFFFFFu;
+	if (!me) me = 0x7FFFFFFEu;
+	for (int tries = 0; tries < 180; tries++) {
+		*hw_reg(Z_MONTMUL_W_OWNER) = me;
+		uint32_t got = *hw_reg(Z_MONTMUL_W_OWNER);
+		if (got == me || got == 0) {
+			hw_cur = NULL;			// whatever is loaded is not ours
+			return true;
+		}
+		z_proc_wait(8);			// ~11 ms
+	}
+	printf("ecdsa: the montmul block has been busy for 2 s; using software from now on\n");
+	hw_forced_off = true;
+	for (int i = 0; i < 2; i++) {
+		if (curves[i].hw) { curves[i].hw = false; curves[i].ready = false; }
+	}
+	return false;
+}
+
+static void hw_release(void) {
+	*hw_reg(Z_MONTMUL_W_OWNER) = (z_getpid() & 0x7FFFFFFFu) | Z_HW_OWNER_RELEASE;
+}
+#else
+static bool hw_claim(void) { return false; }
+static void hw_release(void) { }
+#endif
+
+static bool ec_verify_held(ec_curve_id_t id, const uint8_t *point, uint32_t point_len,
+	const uint8_t *r_bytes, uint32_t r_len,
+	const uint8_t *s_bytes, uint32_t s_len,
+	const uint8_t *hash, uint32_t hash_len);
+
 bool ec_verify(ec_curve_id_t id, const uint8_t *point, uint32_t point_len,
+	const uint8_t *r_bytes, uint32_t r_len,
+	const uint8_t *s_bytes, uint32_t s_len,
+	const uint8_t *hash, uint32_t hash_len) {
+	bool held = hw_claim();
+	bool ok = ec_verify_held(id, point, point_len, r_bytes, r_len, s_bytes, s_len, hash, hash_len);
+	if (held) hw_release();
+	return ok;
+}
+
+static bool ec_verify_held(ec_curve_id_t id, const uint8_t *point, uint32_t point_len,
 	const uint8_t *r_bytes, uint32_t r_len,
 	const uint8_t *s_bytes, uint32_t s_len,
 	const uint8_t *hash, uint32_t hash_len) {
@@ -1158,6 +1575,7 @@ bool ec_verify(ec_curve_id_t id, const uint8_t *point, uint32_t point_len,
 	uint32_t u1[EC_MAX_LIMBS], u2[EC_MAX_LIMBS];
 	uint8_t rb[EC_MAX_LIMBS * 4], sb[EC_MAX_LIMBS * 4], eb[EC_MAX_LIMBS * 4];
 	pt_t Q, R;
+	bool affine = false;		// R.x is already affine (the register file's path)
 
 	if (!cv) return false;
 	nl = cv->nl;
@@ -1265,6 +1683,12 @@ bool ec_verify(ec_curve_id_t id, const uint8_t *point, uint32_t point_len,
 			one[0] = 1;
 			memcpy(G.z, cv->one, (size_t)nl * sizeof(uint32_t));
 		}
+#ifdef EC_HW
+		if (cv->hw && hw_nregs >= RF_REGS && !ec_rf_disable) {
+			if (rf_shamir(cv, &R, u1, &G, u2, &Q)) { ec_stat_rf++; affine = true; }
+			else { ec_stat_rf_bail++; shamir(cv, &R, u1, &G, u2, &Q); }
+		} else
+#endif
 		shamir(cv, &R, u1, &G, u2, &Q);
 	}
 
@@ -1276,9 +1700,12 @@ bool ec_verify(ec_curve_id_t id, const uint8_t *point, uint32_t point_len,
 		fe zinv, z2, x_aff;
 		uint32_t xa[EC_MAX_LIMBS];
 
-		fe_inv(zinv, R.z, cv);
-		fe_mul(z2, zinv, zinv, cv);
-		fe_mul(x_aff, R.x, z2, cv);
+		if (affine) memcpy(x_aff, R.x, sizeof(fe));		// rf_shamir() did it
+		else {
+			fe_inv(zinv, R.z, cv);
+			fe_mul(z2, zinv, zinv, cv);
+			fe_mul(x_aff, R.x, z2, cv);
+		}
 		from_field(xa, x_aff, cv);
 
 		// x is a field element and r is a scalar, so the comparison
@@ -1290,3 +1717,84 @@ bool ec_verify(ec_curve_id_t id, const uint8_t *point, uint32_t point_len,
 	}
 
 }
+
+#ifdef EC_TEST_HOOKS
+// Tests only: inv_mod() and its two users against the Fermat inverses
+// they replaced, on P-256's and P-384's p and n -- random values and the
+// edges. Returns how many disagree (0 is right); *checked, how many
+// values were tried.
+static uint32_t test_rng = 20260927u;
+static uint32_t test_rand(void) { test_rng = test_rng * 1664525u + 1013904223u; return test_rng; }
+
+// the value `k` of the edge list, or a random one, below m and not 0
+static bool test_value(uint32_t *a, const uint32_t *m, uint16_t nl, int k) {
+	uint32_t one[EC_MAX_LIMBS];
+	int bits = 32 * nl;
+	memset(a, 0, (size_t)nl * sizeof(uint32_t));
+	memset(one, 0, sizeof(one)); one[0] = 1;
+	if (k == 0) a[0] = 1;
+	else if (k == 1) a[0] = 2;
+	else if (k == 2) a[0] = 3;
+	else if (k == 3) sub_n(a, m, one, nl);						// m - 1
+	else if (k == 4) { sub_n(a, m, one, nl); sub_n(a, a, one, nl); }	// m - 2
+	else if (k == 5) { memcpy(a, m, (size_t)nl * 4); add_n(a, a, one, nl); shr1_n(a, 0, nl); }	// (m + 1)/2
+	else if (k < 6 + bits) { int b = k - 6; a[b / 32] = 1u << (b % 32); }	// 2^b
+	else if (k < 6 + 2 * bits) { int b = k - 6 - bits + 1; for (int i = 0; i < b; i++) a[i / 32] |= 1u << (i % 32); }	// 2^b - 1
+	else if (k == 6 + 2 * bits) for (uint16_t i = 0; i < nl; i++) a[i] = 0x55555555u;
+	else if (k == 7 + 2 * bits) for (uint16_t i = 0; i < nl; i++) a[i] = 0xAAAAAAAAu;
+	else for (uint16_t i = 0; i < nl; i++) a[i] = test_rand();
+	while (cmp_n(a, m, nl) >= 0) a[nl - 1] >>= 1;
+	return !is_zero_n(a, nl);
+}
+
+int ec_test_inverses(int randoms, int *checked) {
+	int bad = 0;
+	*checked = 0;
+	for (int c = 0; c < 2; c++) {
+		ec_curve_t *cv = curve_for(c == 0 ? EC_CURVE_P256 : EC_CURVE_P384);
+		uint16_t nl = cv->nl;
+		for (int which = 0; which < 2; which++) {		// p, then n
+			const uint32_t *m = which ? cv->n : cv->p;
+			mont_t mc;
+			memset(&mc, 0, sizeof(mc));
+			mont_setup(&mc, m, nl);
+			int edges = 8 + 2 * 32 * nl;
+			for (int k = 0; k < edges + randoms; k++) {
+				uint32_t a[EC_MAX_LIMBS], x[EC_MAX_LIMBS], am[EC_MAX_LIMBS], f[EC_MAX_LIMBS], y[EC_MAX_LIMBS];
+				if (!test_value(a, m, nl, k)) continue;
+				(*checked)++;
+				inv_mod(x, a, m, nl);
+				// against Fermat
+				to_mont(am, a, &mc, nl);
+				mont_inv_fermat(f, am, &mc, nl);
+				from_mont(f, f, &mc, nl);
+				if (cmp_n(x, f, nl)) { bad++; continue; }
+				// and a * a^-1 = 1
+				to_mont(y, x, &mc, nl);
+				mont_mul(y, y, am, &mc, nl);
+				from_mont(y, y, &mc, nl);
+				if (!is_one_n(y, nl)) { bad++; continue; }
+				// the wrappers: mont_inv() on its own form, fe_inv() on the field's
+				mont_inv(y, am, &mc, nl);
+				from_mont(y, y, &mc, nl);
+				if (cmp_n(x, y, nl)) { bad++; continue; }
+				if (!which) {
+					fe fa, fi, ff;
+					to_field(fa, a, cv);
+					fe_inv(fi, fa, cv);
+					fe_inv_fermat(ff, fa, cv);
+					if (cmp_n(fi, ff, nl)) bad++;
+				}
+			}
+		}
+		// 0 has no inverse: 0 back, and no hang
+		{
+			uint32_t z[EC_MAX_LIMBS], x[EC_MAX_LIMBS];
+			memset(z, 0, sizeof(z));
+			inv_mod(x, z, cv->p, nl);
+			if (!is_zero_n(x, nl)) bad++;
+		}
+	}
+	return bad;
+}
+#endif

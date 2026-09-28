@@ -110,10 +110,52 @@
  *
  * N and N0INV are written ONCE per verification, not per multiply --
  * that is most of why the transfer cost is bearable.
+ *
+ * -- The register file (REGFILE=1) --
+ *
+ * Measured on Lakritz, a multiply driven as above costs ~3,450 cycles,
+ * of which the engine's own work is ~700: the rest is moving 32 words
+ * in and out, and the software doing it (docs/cryptobench.md). So the
+ * block also keeps NREGS registers of LIMBS words each in one block
+ * RAM, and runs commands on them: software loads its operands once,
+ * issues a stream of one-word commands, and reads back only the
+ * answer. A MUL copies its two registers into A and B, runs exactly
+ * the engine above, and copies T back -- the multiply itself is the
+ * same logic as ever. ADD and SUB are modulo N and take ~3 x LIMBS
+ * cycles. Operands must be below N, as for the engine.
+ *
+ *    2  CONFIG   read: bits 15:8 are NREGS (0: no register file).
+ *                Bits 7:0 are LIMBS as before, and software that
+ *                masks them off is unaffected.
+ *    4  OWNER    advisory claim, for sharing the block between
+ *                processes (docs/montmul.md, "Sharing"). Read: the
+ *                owner, 0 if none. Write a pid (1..2^31-1): claims the
+ *                block if it has no owner. Write pid | 2^31: releases
+ *                it if that pid owns it. Nothing is enforced -- the
+ *                block computes for anyone -- so a caller claims, then
+ *                reads OWNER back to see whether it won.
+ *    5  RSEL     write: { reg (4 bits), word (4 bits) }, where the
+ *                window below starts.
+ *    6  RDATA    write: the word at RSEL, then RSEL + 1. Read: the
+ *                same, auto-incrementing too. LIMBS writes load a
+ *                register; LIMBS reads fetch one.
+ *    7  CMD      write: { op [15:12], rd [11:8], ra [7:4], rb [3:0] }
+ *                and the command runs; poll BUSY (CTRL or CMD bit 0).
+ *                op 1 MUL: rd = ra * rb * R^-1 mod N
+ *                op 2 ADD: rd = ra + rb mod N
+ *                op 3 SUB: rd = ra - rb mod N
+ *                Every command takes the same number of cycles whatever
+ *                its operands: the register file runs X25519 on secret
+ *                scalars (sw/common/z25519.c).
+ *                rd may be ra or rb. A, B and R are overwritten, so
+ *                the classic interface above and the commands must not
+ *                be mixed within one computation -- which the claim
+ *                is for.
  */
 
 module montmul #(
-	parameter LIMBS = 12				// 12 -> 384 bits, 8 -> 256 bits
+	parameter LIMBS = 12,				// 12 -> 384 bits, 8 -> 256 bits
+	parameter REGFILE = 1				// the register file and its commands
 ) (
 	input clk,
 	input resetn,
@@ -149,6 +191,14 @@ module montmul #(
 	// read and one write per array per cycle, which is why the FSM
 	// has more states than the algorithm strictly needs.
 
+	// The engine's state, declared ahead of everything that reads it.
+	// (It used to be declared further down, after its first use in
+	// t_ra below. Older simulators let that through; iverilog 14 and
+	// the Verilog standard do not.)
+	reg [4:0] st;
+	localparam S_IDLE = 5'd0;
+	wire busy = (st != S_IDLE);
+
 	reg [31:0] ra [0:(1<<AW)-1];
 	reg [31:0] rb [0:(1<<AW)-1];
 	reg [31:0] rn [0:(1<<AW)-1];
@@ -181,6 +231,30 @@ module montmul #(
 
 	reg [31:0] n0inv;
 
+	// -- the register file --------------------------------------------
+	//
+	// NREGS x 16 words, a register's words at { reg, word }: 256 x 32,
+	// one block RAM. One write port and one SYNCHRONOUS read port --
+	// the shape yosys maps to an ECP5 DP16KD (or a GateMate RAM) --
+	// so a word is read the cycle after its address is presented, and
+	// the copying states below are pipelined by one.
+	localparam NREGS = REGFILE ? 16 : 0;
+
+	reg [31:0] rf [0:255];
+	reg [7:0]  rf_ra_eng, rf_wa, rsel;
+	reg [31:0] rf_wd, rf_q;
+	reg        rf_we;
+	wire [7:0] rf_ra = busy ? rf_ra_eng : rsel;
+
+	always @(posedge clk) begin
+		if (REGFILE && rf_we) rf[rf_wa] <= rf_wd;
+		rf_q <= rf[rf_ra];
+	end
+
+	reg [30:0] owner;
+	reg        cmd_on;			// a command is running: finish into S_WB
+	reg [3:0]  cmd_op, cmd_rd, cmd_ra, cmd_rb;
+
 	// -- bus ---------------------------------------------------------
 
 	reg [31:0] dat_r;
@@ -203,7 +277,6 @@ module montmul #(
 
 	// Five bits: the conditional subtract needs two states past the
 	// fifteen the multiply itself uses.
-	localparam S_IDLE = 5'd0;
 	localparam S_CLR  = 5'd1;
 	localparam S_LOAD = 5'd2;
 	localparam S_L1   = 5'd3;
@@ -220,9 +293,18 @@ module montmul #(
 	localparam S_SUB  = 5'd14;
 	localparam S_CPY  = 5'd15;
 	localparam S_SUB0 = 5'd16;
+	// the register file's commands
+	localparam S_XA   = 5'd17;		// register ra -> A
+	localparam S_XB   = 5'd18;		// register rb -> B
+	localparam S_ADD  = 5'd19;		// T = A + B
+	localparam S_ADDC = 5'd20;		// T[LIMBS] = the carry
+	localparam S_ADDW = 5'd21;		// let that write land, then S_SUB0
+	localparam S_SBAB = 5'd22;		// T = A - B
+	localparam S_SBN0 = 5'd23;		// borrowed? then T += N
+	localparam S_ADDN = 5'd24;
+	localparam S_WB0  = 5'd25;		// T -> register rd
+	localparam S_WB   = 5'd26;
 
-	reg [4:0] st;
-	wire busy = (st != S_IDLE);
 	reg [4:0] i, j;
 	reg [31:0] bi, m, carry;
 	reg [31:0] hold;
@@ -248,6 +330,24 @@ module montmul #(
 	reg [63:0] acc;
 	reg [32:0] acc2;
 
+	// ONE 33-bit adder/subtractor for every word-serial add and
+	// subtract: the final T - N (S_SUB), and the register file's A + B,
+	// A - B and T + N. Four separate ones synthesised to ~120 more LUTs
+	// than this and its two operand multiplexers. `carry` is the carry
+	// for an add and the borrow for a subtract, as before.
+	wire as_ab  = (st == S_ADD) || (st == S_SBAB);
+	wire as_sub = (st == S_SUB) || (st == S_SBAB);
+	wire [31:0] as_x = as_ab ? a_rd : t_rd;
+	// SUB's add-back adds N after a borrow and ZERO otherwise, but
+	// always runs: a command's time must not depend on its operands,
+	// or X25519 on secret scalars would leak them through its timing.
+	reg sb_borrow;
+	wire [31:0] as_y = as_ab ? b_rd : ((st == S_ADDN && !sb_borrow) ? 32'd0 : n_rd);
+	wire [32:0] as_sum = { 1'b0, as_x } + { 1'b0, as_sub ? ~as_y : as_y }
+		+ { 32'd0, as_sub ? ~carry[0] : carry[0] };
+	wire [31:0] as_res = as_sum[31:0];
+	wire        as_out = as_sub ? ~as_sum[32] : as_sum[32];
+
 	always @(posedge clk) begin
 
 		ack_r <= 1'b0;
@@ -255,12 +355,16 @@ module montmul #(
 		b_we <= 1'b0;
 		n_we <= 1'b0;
 		t_we <= 1'b0;
+		rf_we <= 1'b0;
 
 		if (!resetn) begin
 
 			st <= S_IDLE;
 			ack_r <= 1'b0;
 			n0inv <= 32'd0;
+			owner <= 31'd0;
+			cmd_on <= 1'b0;
+			rsel <= 8'd0;
 
 		end else begin
 
@@ -280,9 +384,35 @@ module montmul #(
 						if (wb_dat_i[0] && !busy) begin
 							st <= S_CLR;
 							j <= 5'd0;
+							cmd_on <= 1'b0;
 						end
 					end else if (w == 6'd3) begin
 						n0inv <= wb_dat_i;
+					end else if (w == 6'd4) begin
+						// OWNER: claim if free; release if yours
+						if (wb_dat_i[31]) begin
+							if (owner == wb_dat_i[30:0]) owner <= 31'd0;
+						end else if (owner == 31'd0) begin
+							owner <= wb_dat_i[30:0];
+						end
+					end else if (REGFILE && w == 6'd5) begin
+						rsel <= wb_dat_i[7:0];
+					end else if (REGFILE && w == 6'd6) begin
+						if (!busy) begin
+							rf_wa <= rsel; rf_wd <= wb_dat_i; rf_we <= 1'b1;
+							rsel <= rsel + 8'd1;
+						end
+					end else if (REGFILE && w == 6'd7) begin
+						if (!busy && (wb_dat_i[15:12] >= 4'd1) && (wb_dat_i[15:12] <= 4'd3)) begin
+							cmd_op <= wb_dat_i[15:12];
+							cmd_rd <= wb_dat_i[11:8];
+							cmd_ra <= wb_dat_i[7:4];
+							cmd_rb <= wb_dat_i[3:0];
+							cmd_on <= 1'b1;
+							rf_ra_eng <= { wb_dat_i[7:4], 4'd0 };
+							j <= 5'd0;
+							st <= S_XA;
+						end
 					end else if (is_a) begin
 						a_wa <= w[3:0]; a_wd <= wb_dat_i; a_we <= 1'b1;
 					end else if (is_b) begin
@@ -293,7 +423,16 @@ module montmul #(
 				end else begin
 					if (w == 6'd0) dat_r <= 32'h5A4D_4F4E;
 					else if (w == 6'd1) dat_r <= { 31'd0, busy };
-					else if (w == 6'd2) dat_r <= { 16'h4D4F, 8'd0, LIMBS[7:0] };
+					else if (w == 6'd2) dat_r <= { 16'h4D4F, NREGS[7:0], LIMBS[7:0] };
+					else if (w == 6'd4) dat_r <= { 1'b0, owner };
+					else if (REGFILE && w == 6'd5) dat_r <= { 24'd0, rsel };
+					else if (REGFILE && w == 6'd6) begin
+						// prefetched: rf_ra has been RSEL since the
+						// last access, so rf_q holds its word
+						dat_r <= rf_q;
+						if (!busy) rsel <= rsel + 8'd1;
+					end
+					else if (REGFILE && w == 6'd7) dat_r <= { 31'd0, busy };
 					else if (is_r) dat_r <= t_rd;
 				end
 
@@ -449,9 +588,8 @@ module montmul #(
 			end
 
 			S_SUB: begin
-				acc2 = { 1'b0, t_rd } - { 1'b0, n_rd } - { 32'd0, carry[0] };
-				b_wa <= j[AW-1:0]; b_wd <= acc2[31:0]; b_we <= 1'b1;
-				carry <= { 31'd0, acc2[32] };
+				b_wa <= j[AW-1:0]; b_wd <= as_res; b_we <= 1'b1;
+				carry <= { 31'd0, as_out };
 				t_ra_eng <= (j + 5'd1);
 				n_ra <= (j + 5'd1);
 				if (j == LIMBS - 1) begin
@@ -468,8 +606,117 @@ module montmul #(
 					t_wa <= j[AW-1:0]; t_wd <= b_rd; t_we <= 1'b1;
 				end
 				b_ra <= (j + 5'd1);
-				if (j == LIMBS - 1) st <= S_IDLE;
+				if (j == LIMBS - 1) begin
+					if (REGFILE && cmd_on) begin
+						// The last word's write lands next cycle;
+						// S_WB reads word 0 first, so there is no
+						// hazard for LIMBS >= 2.
+						t_ra_eng <= 4'd0;
+						j <= 5'd0;
+						st <= S_WB;
+					end else st <= S_IDLE;
+				end else j <= j + 5'd1;
+			end
+
+			// -- the register file's commands -------------------------
+			//
+			// Copying in: the RAM answers a cycle after the address,
+			// so at count j the data is word j-1 and the address sent
+			// is word j+1. j runs to LIMBS to write the last word.
+
+			S_XA: if (REGFILE) begin
+				if (j != 5'd0) begin
+					a_wa <= j[AW-1:0] - 4'd1; a_wd <= rf_q; a_we <= 1'b1;
+				end
+				rf_ra_eng <= { cmd_ra, j[3:0] + 4'd1 };
+				if (j == LIMBS) begin
+					rf_ra_eng <= { cmd_rb, 4'd0 };
+					j <= 5'd0;
+					st <= S_XB;
+				end else j <= j + 5'd1;
+			end
+
+			S_XB: if (REGFILE) begin
+				if (j != 5'd0) begin
+					b_wa <= j[AW-1:0] - 4'd1; b_wd <= rf_q; b_we <= 1'b1;
+				end
+				rf_ra_eng <= { cmd_rb, j[3:0] + 4'd1 };
+				if (j == LIMBS) begin
+					j <= 5'd0;
+					a_ra <= 4'd0;
+					b_ra <= 4'd0;
+					carry <= 32'd0;
+					if (cmd_op == 4'd1) st <= S_CLR;		// MUL: the engine
+					else if (cmd_op == 4'd2) st <= S_ADD;
+					else st <= S_SBAB;
+				end else j <= j + 5'd1;
+			end
+
+			// ADD: T = A + B, word by word; the carry becomes
+			// T[LIMBS]; then the engine's own final subtract (S_SUB0 ..
+			// S_CPY) takes N off if the sum reached it.
+			S_ADD: if (REGFILE) begin
+				t_wa <= j[AW-1:0]; t_wd <= as_res; t_we <= 1'b1;
+				carry <= { 31'd0, as_out };
+				a_ra <= (j + 5'd1);
+				b_ra <= (j + 5'd1);
+				if (j == LIMBS - 1) st <= S_ADDC;
 				else j <= j + 5'd1;
+			end
+
+			S_ADDC: if (REGFILE) begin
+				t_wa <= LIMBS[AW-1:0]; t_wd <= carry; t_we <= 1'b1;
+				t_ra_eng <= LIMBS[AW-1:0];
+				st <= S_ADDW;
+			end
+
+			S_ADDW: if (REGFILE) st <= S_SUB0;		// T[LIMBS]'s write lands this cycle
+
+			// SUB: T = A - B; if that borrowed, T += N.
+			S_SBAB: if (REGFILE) begin
+				t_wa <= j[AW-1:0]; t_wd <= as_res; t_we <= 1'b1;
+				carry <= { 31'd0, as_out };
+				a_ra <= (j + 5'd1);
+				b_ra <= (j + 5'd1);
+				if (j == LIMBS - 1) st <= S_SBN0;
+				else j <= j + 5'd1;
+			end
+
+			// Always through S_ADDN, adding N or zero: constant time.
+			S_SBN0: if (REGFILE) begin
+				j <= 5'd0;
+				t_ra_eng <= 4'd0;
+				n_ra <= 4'd0;
+				sb_borrow <= carry[0];
+				carry <= 32'd0;
+				st <= S_ADDN;
+			end
+
+			S_ADDN: if (REGFILE) begin
+				t_wa <= j[AW-1:0]; t_wd <= as_res; t_we <= 1'b1;
+				carry <= { 31'd0, as_out };
+				t_ra_eng <= (j + 5'd1);
+				n_ra <= (j + 5'd1);
+				if (j == LIMBS - 1) st <= S_WB0;
+				else j <= j + 5'd1;
+			end
+
+			S_WB0: if (REGFILE) begin
+				// one cycle for the last T write to land
+				t_ra_eng <= 4'd0;
+				j <= 5'd0;
+				st <= S_WB;
+			end
+
+			// T -> register rd. T reads asynchronously: t_ra_eng set
+			// last cycle is this cycle's word.
+			S_WB: if (REGFILE) begin
+				rf_wa <= { cmd_rd, j[3:0] }; rf_wd <= t_rd; rf_we <= 1'b1;
+				t_ra_eng <= (j + 5'd1);
+				if (j == LIMBS - 1) begin
+					cmd_on <= 1'b0;
+					st <= S_IDLE;
+				end else j <= j + 5'd1;
 			end
 
 			default: ;

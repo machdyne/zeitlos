@@ -1,0 +1,32 @@
+# systemd unit for the BBS on a Linux server. docs/bbs_linux.md,
+# docs/bbs_deploy.md.
+#
+#   useradd --system --create-home --home-dir /var/lib/bbs --shell /bin/sh bbs
+#   install -m 755 bbs-linux /usr/local/bin/bbs
+#   install -m 644 bbs.service /etc/systemd/system/bbs.service
+#   systemctl enable --now bbs
+
+[Unit]
+Description=BBS (Zeitlos BBS core)
+After=network.target fed.service
+Wants=fed.service
+
+[Service]
+User=bbs
+Group=bbs
+# Telnet on 2323; 23 when you are ready (docs/bbs_deploy.md, "The
+# usual ports") -- this capability is what lets it bind 23 without root.
+ExecStart=/usr/local/bin/bbs -d /var/lib/bbs -t 2323
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+# its data; and fed's, where its socket is (fed.service runs as bbs too)
+ReadWritePaths=/var/lib/bbs /var/lib/fed
+PrivateTmp=yes
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

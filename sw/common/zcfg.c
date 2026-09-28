@@ -18,6 +18,8 @@
 // lists the same keys with the full story; keep the two together.
 
 const z_cfg_known_t z_cfg_known[] = {
+	{ "apps.bbs.dir", "/bbs",
+	  "bbs: the BBS's data directory -- its bbs.cfg, users, bulletins (docs/bbs.md)" },
 	{ "apps.netserve.allow", "subnet",
 	  "netserve: accept connections from the subnet only, or any (docs/netserve.md)" },
 	{ "apps.netserve.echo", "off",
@@ -25,11 +27,13 @@ const z_cfg_known_t z_cfg_known[] = {
 	{ "apps.netserve.http", "off",
 	  "netserve: HTTP on a port, serving a directory -- 80 /www -- or off" },
 	{ "apps.netserve.ssh", "off",
-	  "netserve: SSH on a port, to a port name -- 22 posix0 -- or off; needs a 10+ character password" },
+	  "netserve: SSH ports, ;-separated -- 22 posix0; 2222 bbs0 noauth any -- or off; noauth aside, needs a 10+ character password" },
 	{ "apps.netserve.ssh_auth", "both",
-	  "netserve: SSH logins by key (/user/authkeys), password, or both" },
+	  "netserve: SSH logins by key (/user/authkeys), password, or both (not noauth ports)" },
+	{ "apps.netserve.ssh_sessions", "2",
+	  "netserve: SSH sessions at a time, 1-4 -- about 10KB of memory each" },
 	{ "apps.netserve.telnet", "off",
-	  "netserve: telnet on a port, to a port name -- 23 repl0 -- or off; needs a 10+ character password" },
+	  "netserve: telnet ports, ;-separated -- 23 repl0; 2323 bbs0 noauth -- or off; noauth aside, needs a 10+ character password" },
 	{ "apps.irc.channels", "",
 	  "irc: channels to join once connected, e.g. #zeitlos #fpga" },
 	{ "apps.irc.nick", "zeitlos",

@@ -272,6 +272,11 @@ static void prompt(px_conn_t *c) {
 
 static void handle_connect(const z_msg_t *msg) {
 
+    /* A shell: never for a session nobody logged in (zport.h, "Who is
+     * connecting"; docs/netserve.md, "noauth"). Before anything else --
+     * the handoff paths below included. */
+    if (z_port_refuse_unauthenticated(msg, "posix")) return;
+
     /* A free slot is one with no port AND no session behind it.
      *
      * `port.connected` alone is not enough: a session whose terminal

@@ -14,6 +14,7 @@
 #include "ssh_wire.h"
 #include "../../../ext/monocypher/monocypher.h"
 #include "../../../ext/monocypher/monocypher-ed25519.h"
+#include "../../../common/z25519.h"	// the montmul block when there is one (docs/z25519.md)
 
 #define MSG_DISCONNECT            1
 #define MSG_IGNORE                2
@@ -275,8 +276,8 @@ static void handle_ecdh_init(ssh_server_t *s, const uint8_t *pl, uint32_t len) {
 	if (r.bad || q_c_n != 32) { disconnect_code(s, DISC_PROTOCOL_ERROR, "ssh: malformed KEX_ECDH_INIT"); return; }
 
 	s->random(s->user, s->eph_secret, 32);
-	crypto_x25519_public_key(q_s, s->eph_secret);
-	crypto_x25519(shared, s->eph_secret, q_c);
+	z_x25519_public_key(q_s, s->eph_secret);
+	z_x25519(shared, s->eph_secret, q_c);
 	crypto_wipe(s->eph_secret, sizeof(s->eph_secret));
 
 	// A small-order public value drives the result to zero, a secret
@@ -380,13 +381,49 @@ static bool too_many(ssh_server_t *s) {
 }
 
 static void logged_in(ssh_server_t *s, const char *how) {
-	char line[96];
+	char line[112];
 	uint8_t ok = MSG_USERAUTH_SUCCESS;
 	if (!send_packet(s, &ok, 1)) return;
 	s->authed = true;
 	s->state = ST_OPEN;
-	snprintf(line, sizeof(line), "ssh: user '%.32s' logged in (%s)", s->username, how);
+	snprintf(s->auth_method, sizeof(s->auth_method), "%s", how);
+	snprintf(line, sizeof(line), "ssh: user '%.32s' logged in (%s%s)", s->username, how,
+		(s->methods & SSHS_AUTH_ANY) ? ", unauthenticated" : "");
 	log_line(s, line);
+}
+
+// SSHS_AUTH_ANY: every method gets in. The one exception is a public
+// key asked about without a signature -- the client is asking "would
+// this key do?", and the answer it understands is PK_OK, after which it
+// signs and asks again. SUCCESS in reply to the question is legal (RFC
+// 4252 section 5.1 lets the server say SUCCESS to any request) but a
+// client is entitled to be confused by it, so it gets the ordinary
+// answer and the signed request gets SUCCESS.
+static void userauth_any(ssh_server_t *s, ssh_rd *r, const uint8_t *method, uint32_t method_n) {
+	char how[24];
+	uint32_t n = method_n < sizeof(how) - 1 ? method_n : sizeof(how) - 1;
+	if (ssh_str_eq(method, method_n, "publickey")) {
+		const uint8_t *alg, *blob;
+		uint32_t alg_n, blob_n;
+		bool has_sig = ssh_rd_bool(r);
+		alg = ssh_rd_string(r, &alg_n);
+		blob = ssh_rd_string(r, &blob_n);
+		if (!r->bad && !has_sig) {
+			uint8_t buf[600];
+			ssh_wr w;
+			ssh_wr_init(&w, buf, sizeof(buf));
+			ssh_wr_u8(&w, MSG_USERAUTH_PK_OK);
+			ssh_wr_string(&w, alg, alg_n);
+			ssh_wr_string(&w, blob, blob_n);
+			if (ssh_wr_ok(&w)) { send_packet(s, buf, ssh_wr_len(&w)); return; }
+		}
+	}
+	memcpy(how, method, n);
+	how[n] = 0;
+	// Only printable ASCII reaches the log: the method name is the
+	// client's to choose.
+	for (uint32_t i = 0; i < n; i++) if (how[i] < 0x21 || how[i] > 0x7e) how[i] = '?';
+	logged_in(s, n ? how : "none");
 }
 
 // "publickey" (RFC 4252 section 7). Without a signature it is a
@@ -478,6 +515,10 @@ static void handle_userauth(ssh_server_t *s, const uint8_t *pl, uint32_t len) {
 	memcpy(s->username, user, user_n);
 	s->username[user_n] = 0;
 
+	if (s->methods & SSHS_AUTH_ANY) {
+		userauth_any(s, &r, method, method_n);
+		return;
+	}
 	if (ssh_str_eq(method, method_n, "publickey") && (s->methods & SSHS_AUTH_PUBLICKEY)) {
 		userauth_publickey(s, &r);
 		return;

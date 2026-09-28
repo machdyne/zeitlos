@@ -242,7 +242,7 @@ static int test_history_detached(void) {
 
 static int test_history_linefeed_pushes(void) {
 	TEST_START("a linefeed scroll pushes the departing top row");
-	static uint8_t buf[10 * VT_COLS];
+	static uint8_t buf[10 * VT_HIST_LINE_BYTES];
 	vt_screen_t vt;
 	vt_init(&vt);
 	vt_history_attach(&vt, buf, 10);
@@ -261,7 +261,7 @@ static int test_history_linefeed_pushes(void) {
 
 static int test_history_wraps_and_evicts(void) {
 	TEST_START("the ring evicts the oldest line once full");
-	static uint8_t buf[10 * VT_COLS];
+	static uint8_t buf[10 * VT_HIST_LINE_BYTES];
 	vt_screen_t vt;
 	vt_init(&vt);
 	vt_history_attach(&vt, buf, 10);
@@ -276,9 +276,9 @@ static int test_history_wraps_and_evicts(void) {
 
 static int test_history_absolute_ids(void) {
 	TEST_START("absolute ids stay attached to their text");
-	static uint8_t buf[10 * VT_COLS];
+	static uint8_t buf[10 * VT_HIST_LINE_BYTES];
 	vt_screen_t vt;
-	uint8_t b;
+	vt_packed_t b;
 	vt_init(&vt);
 	vt_history_attach(&vt, buf, 10);
 	feed_numbered(&vt, 0, 23 + 5);
@@ -297,7 +297,7 @@ static int test_history_absolute_ids(void) {
 
 static int test_history_dl_does_not_push(void) {
 	TEST_START("DL at row 0 scrolls but does not save (editor scrolling)");
-	static uint8_t buf[10 * VT_COLS];
+	static uint8_t buf[10 * VT_HIST_LINE_BYTES];
 	vt_screen_t vt;
 	vt_init(&vt);
 	vt_history_attach(&vt, buf, 10);
@@ -310,7 +310,7 @@ static int test_history_dl_does_not_push(void) {
 
 static int test_history_erase_display(void) {
 	TEST_START("ED 2 keeps history; ED 3 clears it and not the screen");
-	static uint8_t buf[10 * VT_COLS];
+	static uint8_t buf[10 * VT_HIST_LINE_BYTES];
 	vt_screen_t vt;
 	vt_init(&vt);
 	vt_history_attach(&vt, buf, 10);
@@ -327,15 +327,15 @@ static int test_history_erase_display(void) {
 
 static int test_history_packs_reverse(void) {
 	TEST_START("reverse video survives the trip into history");
-	static uint8_t buf[4 * VT_COLS];
+	static uint8_t buf[4 * VT_HIST_LINE_BYTES];
 	vt_screen_t vt;
 	vt_init(&vt);
 	vt_history_attach(&vt, buf, 4);
 	feed_str(&vt, "\x1b[7mR\x1b[0mn~\r\n");
 	for (int i = 0; i < VT_ROWS - 1; i++) feed_str(&vt, "\r\n");
 	TEST_ASSERT(vt_history_count(&vt) == 1, "one line pushed");
-	uint8_t a = vt_doc_cell(&vt, 0, 0), b = vt_doc_cell(&vt, 0, 1);
-	uint8_t c = vt_doc_cell(&vt, 0, 2);
+	vt_packed_t a = vt_doc_cell(&vt, 0, 0), b = vt_doc_cell(&vt, 0, 1);
+	vt_packed_t c = vt_doc_cell(&vt, 0, 2);
 	TEST_ASSERT(VT_PACK_CH(a) == 'R' && VT_PACK_REV(a), "R is reverse");
 	TEST_ASSERT(VT_PACK_CH(b) == 'n' && !VT_PACK_REV(b), "n is normal");
 	TEST_ASSERT(VT_PACK_CH(c) == '~', "0x7e packs losslessly");

@@ -1,0 +1,21 @@
+# systemd unit for the BBS's own sshd -- docs/bbs_deploy.md, "SSH for callers".
+# The machine's sshd (ssh.service / ssh.socket) is a different unit, untouched.
+
+[Unit]
+Description=sshd for the BBS (callers only, port 2222)
+After=network.target bbs.service
+
+[Service]
+Type=notify
+# sshd needs its privilege-separation directory; on Ubuntu 24.04 the
+# machine's own sshd is socket-activated and may not have made it yet
+ExecStartPre=/usr/bin/mkdir -p -m 0755 /run/sshd
+ExecStartPre=/usr/sbin/sshd -t -f /etc/ssh/sshd_bbs_config
+ExecStart=/usr/sbin/sshd -D -f /etc/ssh/sshd_bbs_config
+ExecReload=/usr/sbin/sshd -t -f /etc/ssh/sshd_bbs_config
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

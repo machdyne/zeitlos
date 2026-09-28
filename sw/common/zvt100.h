@@ -122,17 +122,76 @@ typedef uint32_t vt_packed_t;
 // real character's glyph byte; draws as blank.
 #define VT_CH_WIDE_RIGHT	((char)0x80)
 
+/* -- line drawing, blocks and shades --
+ *
+ * The rest of the C1 range, 0x81-0x9E, is thirty glyphs Latin-9 does
+ * not have and a BBS, a curses program or a box in a shell script
+ * draws with: box drawing single and double, half and full blocks,
+ * and three shades. A cell holds one of these codes; a renderer draws
+ * it from vt_box_glyph() -- `term` builds them into a font at the size
+ * of its cell -- and a reader turns it back into its character with
+ * vt_glyph_cp(), for copying and speech.
+ *
+ * They arrive as UTF-8 (U+2500-U+259F) or, from a VT100 program, as
+ * the DEC special graphics set (ESC ( 0). Heavy, dashed and rounded
+ * lines are drawn as the single ones; a mixed single/double junction
+ * (U+2552-U+256B) as the double one; the diagonals and the partial
+ * blocks have no code and show as the missing-glyph box. docs/terminal.md,
+ * "Line drawing".
+ *
+ * The arms of a line glyph, for the generator: */
+#define VT_ARM_UP		1
+#define VT_ARM_DOWN		2
+#define VT_ARM_LEFT		4
+#define VT_ARM_RIGHT	8
+
+enum {
+	VT_BOX_FIRST = 0x81,
+	// single: horizontal, vertical, the four corners, the four tees, the cross
+	VT_BOX_H = 0x81, VT_BOX_V, VT_BOX_DR, VT_BOX_DL, VT_BOX_UR, VT_BOX_UL,
+	VT_BOX_VR, VT_BOX_VL, VT_BOX_DH, VT_BOX_UH, VT_BOX_VH,
+	// double, the same eleven, in the same order
+	VT_BOX_H2, VT_BOX_V2, VT_BOX_DR2, VT_BOX_DL2, VT_BOX_UR2, VT_BOX_UL2,
+	VT_BOX_VR2, VT_BOX_VL2, VT_BOX_DH2, VT_BOX_UH2, VT_BOX_VH2,
+	// blocks: full, upper half, lower half, left half, right half
+	VT_BOX_FULL, VT_BOX_UPPER, VT_BOX_LOWER, VT_BOX_LEFT, VT_BOX_RIGHT,
+	// shades: light, medium, dark
+	VT_BOX_SHADE1, VT_BOX_SHADE2, VT_BOX_SHADE3,
+	VT_BOX_LAST = VT_BOX_SHADE3,      // 0x9E
+};
+
+static inline int vt_is_box(uint8_t ch) {
+	return ch >= VT_BOX_FIRST && ch <= VT_BOX_LAST;
+}
+
 #define VT_HIST_LINE_BYTES	(VT_COLS + 2 * ((VT_COLS + 7) / 8))
 
 typedef enum {
 	VT_PSTATE_NORMAL,	// ordinary bytes -- print, or act on C0 controls
 	VT_PSTATE_ESC,		// just saw ESC (0x1b), waiting for '[' (CSI) or
 						// another final byte (unsupported final bytes
-						// -- anything but '[' -- are accepted and
-						// silently dropped, not treated as an error;
-						// see vt_feed_byte())
-	VT_PSTATE_CSI		// saw ESC '[', collecting "ESC [ params final"
+						// are accepted and silently dropped, not
+						// treated as an error; see vt_feed_byte())
+	VT_PSTATE_CSI,		// saw ESC '[', collecting "ESC [ params final"
+	VT_PSTATE_ESC_ARG	// ESC ( ESC ) ESC #: one more byte, which says
+						// what (esc_cmd holds which of the three)
 } vt_pstate_t;
+
+// Character sets a G0/G1 slot can hold (ESC ( B, ESC ( 0).
+#define VT_CS_ASCII		0
+#define VT_CS_DEC		1		// DEC special graphics: line drawing
+
+// Where ESC 7 / CSI s put the cursor, for ESC 8 / CSI u.
+typedef struct {
+	int x, y;
+	bool reverse;
+	uint8_t g0, g1;
+	bool shift_out;
+} vt_saved_t;
+
+// Answers to the far end's questions (CSI 6n and friends) wait here for
+// the caller to send: vt_take_reply().
+#define VT_REPLY_MAX 32
 
 #define VT_CSI_MAX_PARAMS 8
 
@@ -158,6 +217,21 @@ typedef struct {
 								// own default" -- CSI's default isn't
 								// always 0 (see vt_feed_byte()'s CUP)
 	int csi_param_count;
+	char csi_private;		// '?', '>', '<' or '=' before the parameters, else 0
+	char csi_inter;			// an intermediate byte (0x20-0x2F), else 0
+	char esc_cmd;			// VT_PSTATE_ESC_ARG: '(', ')' or '#'
+
+	// character sets: G0 and G1, and whether SO has shifted to G1
+	uint8_t g0, g1;
+	bool shift_out;
+
+	vt_saved_t saved;		// ESC 7 / CSI s
+
+	bool cursor_hidden;		// CSI ? 25 l; a renderer should not draw it
+
+	// what the far end asked for and has not been sent yet
+	uint8_t reply[VT_REPLY_MAX];
+	uint8_t reply_len;
 
 	// which rows changed since the caller last checked -- see
 	// vt_row_dirty()/vt_clear_dirty(). a renderer built on top of this
@@ -214,6 +288,34 @@ static inline uint16_t vt_take_scrolls(vt_screen_t *vt) {
 // resets to a blank screen, cursor at (0,0), no pending escape state.
 // Detaches any history -- call vt_history_attach() AFTER this.
 void vt_init(vt_screen_t *vt);
+
+// Bytes the terminal must send back to the far end -- the answers to
+// CSI 6n (where is the cursor), CSI 5n (are you well), CSI c (what are
+// you). Copies at most `cap` of them out and returns how many; call
+// after every vt_feed() and send what comes back. A BBS asks CSI 6n to
+// find out whether it is talking to an ANSI terminal at all.
+uint32_t vt_take_reply(vt_screen_t *vt, uint8_t *out, uint32_t cap);
+
+// Whether the far end wants the cursor shown (CSI ? 25 h/l).
+static inline bool vt_cursor_visible(const vt_screen_t *vt) {
+	return !vt->cursor_hidden;
+}
+
+// The character a cell's glyph byte stands for: its Latin-9 character,
+// a line-drawing code's (U+2500...), U+FFFD for the missing-glyph box,
+// 0 for the right half of a wide character. For copying and speech.
+uint32_t vt_glyph_cp(uint8_t ch);
+
+// The code a character is drawn with, if it is one of the line-drawing
+// characters above; 0 otherwise.
+uint8_t vt_box_from_cp(uint32_t cp);
+
+// A line-drawing code's picture, for a cell `w` x `h` pixels (w <= 8):
+// h bytes, one per row, MSB-first in the top w bits -- a z_font_t's
+// glyph format. `xpar`/`ypar`: the parity of the cell's position on the
+// screen, so the shades (dithers) line up across cells of an odd width.
+// Nothing for a code that is not one.
+void vt_box_glyph(uint8_t code, int w, int h, int xpar, int ypar, uint8_t *rows);
 
 // Gives the screen a scrollback ring of `cap_lines` lines. `buf` must
 // be cap_lines * VT_HIST_LINE_BYTES bytes and outlive the screen.

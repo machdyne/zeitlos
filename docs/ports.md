@@ -147,6 +147,49 @@ DATA from a stranger gets `z_port_reject_stranger()` (zport.h): an
 ack, so the sender can free it, and a CLOSE, so it stops. posix, repl
 and netserve do this; term and console already checked the sender.
 
+## Who is connecting
+
+A CONNECT from `term` or a script comes from this machine. One from
+`netserve` does not: it relays a telnet or SSH session from the network
+([netserve.md](netserve.md)), and some of those sessions logged in with
+nothing -- a `noauth` listener, for programs like the BBS that do their
+own logins. A provider has to be able to tell.
+
+So netserve's CONNECT carries a map instead of `Z_NONE`:
+
+| key | type | |
+|---|---|---|
+| `transport` | `Z_STR` | `telnet` or `ssh` |
+| `auth` | `Z_STR` | `system`: the machine's password or a key in `/user/authkeys` was checked. `none`: nothing was |
+| `peer` | `Z_UINT32` | the remote IPv4 address |
+| `port` | `Z_UINT32` | the local TCP port it arrived on |
+| `user` | `Z_STR` | SSH only: the user name the client sent -- a claim, never a proof |
+
+`z_port_ident()` (zport.h) reads it into a `z_port_ident_t`, copied, so
+it can be kept: the strings in the message are borrowed from netserve
+until the provider answers ([messaging.md](messaging.md)). A CONNECT
+with no map -- or a map without `auth`, such as `web`'s `{ip, port}` to
+`net` -- is local.
+
+**`z_port_refuse_unauthenticated(msg, "name")`** is the one call a
+provider that must not serve strangers makes first, in its CONNECT
+handler: it refuses anything whose `auth` is not exactly `system` --
+`none`, a typo, a number -- says so on the console, and returns true.
+`repl`, `posix`, `console` and `serial` call it. That is what makes a
+misconfigured `noauth` listener fail closed in the program that would
+have handed out the shell, without netserve keeping a list of which
+ports are shells.
+
+**The rule for anything new:** a process that forwards connections
+from outside this machine must send an identity map, since a CONNECT
+without one is trusted as local. A provider that does its own logins
+(the BBS) reads the map for the peer, the transport and the offered
+user name, and ignores `auth`.
+
+Map size: a receiver resolves at most `Z_MSG_MAX_ITEMS` (16) objects in
+a message's lists and maps (zmsg.h), eight key/value pairs. The
+identity map uses five.
+
 ## Protocol sketch
 
 Plain `z_msg_t` messages, not `zstream` -- fire-and-forget once

@@ -1,0 +1,15 @@
+# sw/common/z25519.c against rtl/montmul.v, under Verilator.
+VERILATOR ?= verilator
+OUT = /tmp/z25519_hw
+MONO = ../../ext/monocypher
+all:
+	mkdir -p $(OUT)
+	# Verilator does not relink when these objects change: always from scratch.
+	rm -f $(OUT)/obj/test_z25519_hw
+	cc -std=c99 -O2 -c $(MONO)/monocypher.c -o $(OUT)/mono.o
+	cc -std=c99 -O2 -c $(MONO)/monocypher-ed25519.c -o $(OUT)/mono_ed.o
+	cc -std=c99 -O2 -Wall -Wextra -DZ25519_HW_TEST -c ../z25519.c -o $(OUT)/z25519.o
+	$(VERILATOR) --cc ../../../rtl/montmul.v --top-module montmul --exe test_z25519_hw.cpp \
+		$(OUT)/z25519.o $(OUT)/mono.o $(OUT)/mono_ed.o --Mdir $(OUT)/obj --build -j 1 -O3 \
+		-Wno-fatal -Wno-lint -Wno-style -CFLAGS "-O2 -I$(CURDIR)" -o test_z25519_hw >/dev/null
+	$(OUT)/obj/test_z25519_hw

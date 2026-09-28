@@ -1,0 +1,7 @@
+# zetta's tests (docs/zetta.md): its output through the real terminal
+# emulator, checked cell by cell.
+#
+#   make -f tests/Makefile.zetta      (from sw/common)
+test:
+	cc -std=gnu99 -g -Wall -Wextra -o /tmp/test_zetta tests/test_zetta.c zetta.c zvt100.c
+	/tmp/test_zetta

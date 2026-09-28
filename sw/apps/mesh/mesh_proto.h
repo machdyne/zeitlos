@@ -42,6 +42,7 @@
 #define MESH_EV_QUEUE		10
 #define MESH_EV_REJECT		11	// failed the plausibility check
 #define MESH_EV_PACKET		12	// some other packet (position, telemetry...)
+#define MESH_EV_DATA		13	// on a private port (>= 256): from, to, channel, port, data
 
 typedef struct {
 	int kind;
@@ -49,6 +50,12 @@ typedef struct {
 	mesh_node_t *node;
 	mesh_msg_t *msg;
 	const char *text;
+	// MESH_EV_DATA: the payload points into the frame -- valid while
+	// the event is being handled, not after
+	uint32_t from, to, port;
+	uint8_t channel;
+	const uint8_t *data;
+	uint32_t data_len;
 } mesh_ev_t;
 
 // One frame's protobuf (a FromRadio). Fills *ev and returns ev->kind.
@@ -71,6 +78,11 @@ uint32_t mesh_tx_text(uint8_t *out, uint32_t cap, uint32_t to, uint8_t channel,
 
 // Record a message we are sending in the model, MSG_SENDING. Call when
 // mesh_tx_text()'s bytes have been handed to the transport.
+// A payload on port `port` (>= PORT_PRIVATE_MIN): for mesh_svc.c. Asks
+// for an acknowledgement only when sent to one node.
+uint32_t mesh_tx_data(uint8_t *out, uint32_t cap, uint32_t to, uint8_t channel,
+	uint32_t id, uint8_t hop_limit, uint32_t port, const uint8_t *payload, uint32_t len);
+
 mesh_msg_t *mesh_proto_sent(mesh_model_t *m, uint32_t to, uint8_t channel,
 	uint32_t id, const char *text, uint32_t len);
 

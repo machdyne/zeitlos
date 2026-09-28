@@ -228,6 +228,24 @@ static void send_publickey(const char *alg, const uint8_t *blob, uint32_t bl, bo
 	pump();
 }
 
+/* Any other USERAUTH_REQUEST, through the client's encrypted channel:
+ * "password" with `pw`, "keyboard-interactive", or a method the server
+ * has never heard of -- for the clients that do not start with "none". */
+static void send_userauth(const char *method, const char *pw) {
+	static uint8_t pkt[600];
+	ssh_wr w;
+	ssh_wr_init(&w, pkt, sizeof(pkt));
+	ssh_wr_u8(&w, MSG_USERAUTH_REQUEST);
+	ssh_wr_cstr(&w, "phil");
+	ssh_wr_cstr(&w, "ssh-connection");
+	ssh_wr_cstr(&w, method);
+	if (!strcmp(method, "password")) { ssh_wr_bool(&w, false); ssh_wr_cstr(&w, pw); }
+	else if (!strcmp(method, "keyboard-interactive")) { ssh_wr_cstr(&w, ""); ssh_wr_cstr(&w, ""); }
+	cli.state = ST_AUTH;
+	send_packet(&cli, pkt, ssh_wr_len(&w));
+	pump();
+}
+
 /* -- building raw plaintext packets, for the strict-KEX cases -- */
 static uint32_t raw_packet(uint8_t *out, const uint8_t *pl, uint32_t n) {
 	uint32_t base = 4 + 1 + n, pad = 8 - (base % 8);
@@ -552,6 +570,62 @@ int main(void) {
 		sshs_feed(&srv, buf, n);
 		CK(srv.ext_info_c, "ext-info-c in the client's KEXINIT is noticed");
 	}
+
+	/* -- 7. SSHS_AUTH_ANY: a noauth listener (docs/netserve.md) --
+	 *
+	 * Every client gets in, whatever it tries first, and the owner's
+	 * hooks are never asked. The session is still encrypted. */
+	test_methods = SSHS_AUTH_ANY;
+	start(NULL);
+	CK(C.ready == 1 && S.shell == 1 && C.pw_asked == 0 && S.auth_calls == 0,
+		"any: \"none\", sent first as OpenSSH does, gets in -- no password asked");
+	CK(!strcmp(srv.auth_method, "none") && strstr(S.log, "logged in (none, unauthenticated)"),
+		"any: the log says how, and that nobody was checked (%s)", srv.auth_method);
+	CK(!strcmp(srv.username, "phil"), "any: the user name the client sent is kept");
+	ssh_proto_send(&cli, (const uint8_t *)"hi\r", 3);
+	pump();
+	CK(S.got_n == 3 && !memcmp(S.got, "hi\r", 3), "any: the channel works as for any login");
+
+	/* A client that skips "none" and sends a password: stop the client
+	 * at the prompt of a password-only server, then make it an "any"
+	 * server and send what such a client sends. */
+	test_methods = SSHS_AUTH_PASSWORD;
+	start(NULL);
+	CK(C.pw_asked == 1 && !C.ready, "(a client at the password prompt)");
+	srv.methods = SSHS_AUTH_ANY;
+	send_userauth("password", "not the password");
+	CK(srv.authed && C.ready == 1 && S.auth_calls == 0 && !strcmp(srv.auth_method, "password"),
+		"any: any password gets in, and the password hook is never called");
+
+	start(NULL);
+	srv.methods = SSHS_AUTH_ANY;
+	send_userauth("keyboard-interactive", NULL);
+	CK(srv.authed && C.ready == 1 && !strcmp(srv.auth_method, "keyboard-interactive"),
+		"any: keyboard-interactive gets in at once, with no prompts");
+
+	start(NULL);
+	srv.methods = SSHS_AUTH_ANY;
+	send_userauth("hostbased\x01\x7f", NULL);
+	CK(srv.authed && !strcmp(srv.auth_method, "hostbased??"),
+		"any: an unknown method gets in too, its name made printable for the log (%s)", srv.auth_method);
+
+	/* A key: asked about first -- the ordinary PK_OK, not SUCCESS, which
+	 * a client asking a question might not expect -- then signed. Any
+	 * key: this one is in no list, and nothing checks the signature. */
+	permissive = false;
+	keylist.n = 0;
+	start(NULL);
+	srv.methods = SSHS_AUTH_ANY;
+	send_publickey("ssh-ed25519", ED_BLOB, sizeof(ED_BLOB), false, 0);
+	// !S.closed only, as for the PK_OK test in section 6: this client
+	// has no publickey method, and takes PK_OK as unexpected.
+	CK(!srv.authed && !S.closed, "any: a key asked about gets PK_OK, not SUCCESS");
+	start(NULL);
+	srv.methods = SSHS_AUTH_ANY;
+	send_publickey("ssh-ed25519", ED_BLOB, sizeof(ED_BLOB), true, 'x');
+	CK(srv.authed && C.ready == 1 && !strcmp(srv.auth_method, "publickey"),
+		"any: then signed -- by a key in no list -- it gets in");
+	test_methods = SSHS_AUTH_PASSWORD;
 
 	printf("ssh server: %d checks, %d failed\n", checks, fails);
 	return fails != 0;

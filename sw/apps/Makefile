@@ -30,6 +30,9 @@ APPS = casino poker roulette blackjack slots craps \
 	irc \
 	net \
 	net/netserve \
+	bbs \
+	fed \
+	cryptobench \
 	term \
 	logic \
 	mmod \
@@ -46,6 +49,7 @@ APPS = casino poker roulette blackjack slots craps \
 	tts \
 	ttstest \
 	vi \
+	zetta \
 	space3d \
 	audiotest \
 	play \

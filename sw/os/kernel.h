@@ -245,7 +245,11 @@ void k_proc_yield_blocked(void);
 //   RPC replies (DHCP/DNS/TFTP in net.c), bounded by request COUNT
 //   rather than session length.
 //
-// - Z_PROC_STACK_SIZE_LARGE (64KB): `repl` and `web`.
+// - Z_PROC_STACK_SIZE_LARGE (64KB): `repl`, `web`, `netserve` and `bbs`.
+//
+//   `netserve` was MEDIUM until its SSH engines (~10KB each) moved from
+//   .bss to the heap, sized by apps.netserve.ssh_sessions -- see the
+//   note at its line in z_proc_stack_size_for() below.
 //
 //   `repl` came back down to MEDIUM after the leak was fixed, on the
 //   figure it prints at boot -- "heap grown ~6-9KB by end of stdlib
@@ -435,12 +439,35 @@ static inline uint32_t z_proc_stack_size_for(const char *name) {
 	// repl is LARGE for its own reason: it hosts `te`, whose loader
 	// mallocs the document, and MEDIUM does not leave the heap for
 	// that. See the tier notes above.
-	if (!strcmp(name, "web") || !strcmp(name, "repl"))
+	//
+	// netserve is LARGE since its SSH engines moved from .bss to the
+	// heap (apps.netserve.ssh_sessions, docs/netserve.md "Cost"): about
+	// 10KB each, 2 by default and 4 at most, on top of what MEDIUM was
+	// already for -- up to 8 port sends in flight per session in both
+	// directions, every one a heap copy until acked (zport.h). The
+	// image shrank by the same 19KB the default pool now takes from
+	// the heap, so the default costs 13KB more than before, not 32.
+	//
+	// bbs is LARGE for its callers (docs/bbs.md, "Memory"): each node is
+	// about 5KB (a 4KB output ring), four by default, and each caller can
+	// have eight 512-byte sends in flight until they are acked.
+	//
+	// fed and cryptobench are LARGE for ML-KEM (docs/mlkem.md): the
+	// reference implementation keeps polynomial vectors on the stack, and
+	// a decapsulation's deepest path is ~15KB (-fstack-usage: indcpa_enc
+	// alone is 12.4KB) -- all of DEFAULT's 16KB of stack AND heap, with
+	// nothing left for the caller. There is no stack guard to catch it.
+	// The name is the one `run` was given, which is the file's on the
+	// card: 8.3, so cryptobench is "cryptob" there -- matched as such
+	// (it ran in DEFAULT for a while because only "cryptobench" was).
+	if (!strcmp(name, "web") || !strcmp(name, "repl") || !strcmp(name, "netserve") ||
+			!strcmp(name, "bbs") || !strcmp(name, "fed") || !strcmp(name, "cryptob") ||
+			!strcmp(name, "cryptobench"))
 		return Z_PROC_STACK_SIZE_LARGE;
-	// netserve: a few sessions, each with up to 8 port sends in flight
-	// in both directions, and every send is a heap copy until acked
+	// net: a few relays, each with up to 8 port sends in flight in
+	// both directions, and every send is a heap copy until acked
 	// (zport.h) -- more than DEFAULT's 16KB of stack and heap together.
-	if (!strcmp(name, "net") || !strcmp(name, "netserve"))
+	if (!strcmp(name, "net"))
 		return Z_PROC_STACK_SIZE_MEDIUM;
 	if (!strcmp(name, "wm") || !strcmp(name, "term"))
 		return Z_PROC_STACK_SIZE_SMALL;

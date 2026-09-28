@@ -24,6 +24,7 @@ void z_rng_bytes(void *buf, uint32_t len);
 bool z_rng_secure(void);
 #else
 #include "../../common/zrng.h"
+#include "../../common/z25519.h"	// the montmul block when there is one (docs/z25519.md)
 #endif
 
 // -- wire constants -------------------------------------------------
@@ -351,7 +352,7 @@ bool tls_start(tls_ctx_t *c) {
 	z_rng_bytes(c->client_random, 32);
 	z_rng_bytes(c->session_id, 32);
 	z_rng_bytes(c->priv, 32);
-	crypto_x25519_public_key(c->pub, c->priv);
+	z_x25519_public_key(c->pub, c->priv);
 
 	z_sha256_init(&c->transcript);
 
@@ -460,7 +461,7 @@ static void handle_server_hello(tls_ctx_t *c, const uint8_t *msg, uint32_t len) 
 		uint8_t shared[32], early[TLS_HASH_LEN], th[TLS_HASH_LEN];
 		z_sha256_ctx snapshot;
 
-		crypto_x25519(shared, c->priv, peer);
+		z_x25519(shared, c->priv, peer);
 
 		// An all-zero shared secret means a peer public key in the
 		// small subgroup. Monocypher reports it this way rather than
@@ -830,7 +831,7 @@ static void handle_certificate_verify(tls_ctx_t *c, const uint8_t *body,
 			return;
 		}
 		if (siglen != 64 ||
-			crypto_ed25519_check(sig, c->leaf.ec_point.p, signed_content, n) != 0) {
+			z_ed25519_check(sig, c->leaf.ec_point.p, signed_content, n) != 0) {
 			fail(c, "tls: the server did not prove it holds its own key");
 			return;
 		}

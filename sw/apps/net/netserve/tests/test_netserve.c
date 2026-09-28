@@ -41,6 +41,11 @@ typedef struct {
 	uint8_t data[1200];
 	uint32_t len;
 	char str[80];
+	// a Z_MAP payload: the identity map (zport.h, "Who is connecting")
+	int map_n;
+	char m_transport[16], m_auth[16], m_user[40];
+	uint32_t m_peer, m_port;
+	bool m_has_user;
 } out_t;
 static out_t out[8000];     // every message netserve sends, for the whole run
 static int nout;
@@ -76,9 +81,11 @@ static void deliver_data(uint32_t from, uint32_t subject, uint32_t tag, const vo
 
 static z_obj_t k_ok, k_fail;
 static uint32_t ticks = 1000;
-static bool repl_up;
+static bool repl_up, bbs_up;
+#define BBS 24
 static int proc_runs, auth_checks;
 static int auth_force;
+static const char *cfg_ssh_sessions = NULL;
 static const char *cfg_telnet = "23 repl0", *cfg_echo = "7", *cfg_allow = NULL, *cfg_http = NULL, *cfg_ssh = NULL, *cfg_ssh_auth = NULL;
 static bool has_pw = true, pw_long = true;
 
@@ -102,6 +109,20 @@ static uint32_t *k_syscall(uint32_t id, uint32_t *args, uint32_t b) {
 			memcpy(o->data, bl->data, o->len);
 		}
 		if (m->obj.type == Z_STR && m->obj.val.str) snprintf(o->str, sizeof(o->str), "%s", m->obj.val.str);
+		if (m->obj.type == Z_MAP && m->obj.val.ptr) {
+			// read at send time, as the receiver reads borrowed data
+			z_obj_table_t *t = (z_obj_table_t *)m->obj.val.ptr;
+			o->map_n = (int)t->len;
+			for (uint32_t i = 0; i < t->len; i++) {
+				const char *k = t->a[i].val.str;
+				z_obj_t *v = &t->b[i];
+				if (!strcmp(k, "transport")) snprintf(o->m_transport, sizeof(o->m_transport), "%s", v->val.str);
+				if (!strcmp(k, "auth")) snprintf(o->m_auth, sizeof(o->m_auth), "%s", v->val.str);
+				if (!strcmp(k, "user")) { snprintf(o->m_user, sizeof(o->m_user), "%s", v->val.str); o->m_has_user = true; }
+				if (!strcmp(k, "peer")) o->m_peer = v->val.uint32;
+				if (!strcmp(k, "port")) o->m_port = v->val.uint32;
+			}
+		}
 		return (uint32_t *)&k_ok;
 	}
 	case Z_SYS_MSG_READ:
@@ -121,6 +142,7 @@ static uint32_t *k_syscall(uint32_t id, uint32_t *args, uint32_t b) {
 		if (!strcmp(o->val.str, "net0")) { o->type = Z_UINT32; o->val.uint32 = NET; return (uint32_t *)&k_ok; }
 		if (!strcmp(o->val.str, "repl0") && repl_up) { o->type = Z_UINT32; o->val.uint32 = REPL; return (uint32_t *)&k_ok; }
 		if (!strcmp(o->val.str, "vi0")) { o->type = Z_UINT32; o->val.uint32 = 22; return (uint32_t *)&k_ok; }
+		if (!strcmp(o->val.str, "bbs0") && bbs_up) { o->type = Z_UINT32; o->val.uint32 = BBS; return (uint32_t *)&k_ok; }
 		return (uint32_t *)&k_fail;
 	}
 	case Z_SYS_PROC_RUN: {
@@ -138,6 +160,7 @@ static uint32_t *k_syscall(uint32_t id, uint32_t *args, uint32_t b) {
 		if (a->key && !strcmp(a->key, "apps.netserve.http")) v = cfg_http;
 		if (a->key && !strcmp(a->key, "apps.netserve.ssh")) v = cfg_ssh;
 		if (a->key && !strcmp(a->key, "apps.netserve.ssh_auth")) v = cfg_ssh_auth;
+		if (a->key && !strcmp(a->key, "apps.netserve.ssh_sessions")) v = cfg_ssh_sessions;
 		a->found = v != NULL;
 		if (v) snprintf(a->val, a->vallen, "%s", v);
 		return (uint32_t *)&k_ok;
@@ -223,9 +246,41 @@ static bool contains(const uint8_t *h, uint32_t hn, const void *n, uint32_t nn) 
 	return false;
 }
 
+// Every session closed by its peer and past every deadline: all six
+// slots free. 16 s, because a slot whose CONNECT went unanswered waits
+// as long as the connect would have (LAUNCH_TICKS) -- a test that
+// assumed 5 s here read out[-1] once a later find() came back empty.
+static int clean_slate_fails;
+static void clean_slate(void) {
+	for (int i = 0; i < MAX_SESS; i++)
+		if (sess[i].state) deliver(NET, Z_PORT_CLOSE, (uint32_t)i + 1, z_obj_none());
+	steps(3);
+	ticks += 16 * Z_TICK_HZ;
+	steps(3);
+	for (int i = 0; i < MAX_SESS; i++) if (sess[i].state) {
+		printf("clean_slate: slot %d still in state %u\n", i, (unsigned)sess[i].state);
+		clean_slate_fails++;
+	}
+}
+
 static int checks, fails;
 #define CK(c, ...) do { checks++; if (!(c)) { fails++; printf("FAIL %d: ", __LINE__); \
 	printf(__VA_ARGS__); printf("\n"); } } while (0)
+
+// The connection id netserve gave the newest CONNECT since `from_i`.
+// A missing CONNECTED is a failure, reported with the caller's line --
+// not out[-1], which is what an unchecked find() used to read, and
+// which turned every such failure into a segfault somewhere later.
+static uint32_t conn_since(int from_i, int line) {
+	int c = find(NET, Z_PORT_CONNECTED, from_i);
+	checks++;
+	if (c < 0) {
+		fails++;
+		printf("FAIL %d: netserve did not accept the connection\n", line);
+		return 1;
+	}
+	return out[c].u32;
+}
 
 static void connect_from(uint32_t relay, uint32_t ip, uint16_t lport, bool local) {
 	static z_net_accept_t info[16];
@@ -271,32 +326,32 @@ int main(void) {
 	// -- 0. the policy --
 	has_pw = false;
 	read_config();
-	CK(!svc_telnet.on && svc_echo.on, "no password: telnet stays off, echo does not");
+	CK(!svc_telnet[0].on && svc_echo.on, "no password: telnet stays off, echo does not");
 	has_pw = true; pw_long = false;
 	read_config();
-	CK(!svc_telnet.on, "a short password: telnet stays off");
+	CK(!svc_telnet[0].on, "a short password: telnet stays off");
 	pw_long = true;
 	cfg_telnet = "off";
 	read_config();
-	CK(!svc_telnet.on, "\"off\" is off");
+	CK(!svc_telnet[0].on, "\"off\" is off");
 	cfg_telnet = "2323 posix0";
 	read_config();
-	CK(svc_telnet.on && svc_telnet.port == 2323 && !strcmp(svc_telnet.target, "posix0"),
+	CK(svc_telnet[0].on && svc_telnet[0].port == 2323 && !strcmp(svc_telnet[0].target, "posix0"),
 		"port and target parsed");
 	cfg_telnet = "23 repl0";
 	read_config();
-	CK(svc_telnet.on && svc_telnet.port == 23 && svc_echo.port == 7 && !allow_any, "defaults");
+	CK(svc_telnet[0].on && svc_telnet[0].port == 23 && svc_echo.port == 7 && !allow_any, "defaults");
 
 	// -- 1. listening --
 	net_pid = NET;
-	listen_on(svc_telnet.port);
+	listen_on(svc_telnet[0].port);
 	listen_on(svc_echo.port);
 	CK(nout == 2 && out[0].subject == Z_NET_LISTEN && out[0].u32 == 23 && out[1].u32 == 7,
 		"LISTEN for 23 and 7");
 	deliver(NET, Z_NET_LISTEN_REPLY, 23, z_obj_uint32(0));
 	deliver(NET, Z_NET_LISTEN_REPLY, 7, z_obj_uint32(0));
 	step();
-	CK(svc_telnet.listening && svc_echo.listening, "both listening");
+	CK(svc_telnet[0].listening && svc_echo.listening, "both listening");
 
 	// -- 2. echo --
 	mark = nout;
@@ -482,7 +537,7 @@ int main(void) {
 	mark = nout;
 	connect_from(4, 0xC0A80107, 23, true);
 	step();
-	conn = out[find(NET, Z_PORT_CONNECTED, mark)].u32;
+	conn = conn_since(mark, __LINE__);
 	for (int i = 0; i < 3; i++) { type(conn, "bad\r", 4); steps(2); collect(NET, conn, mark, buf, sizeof(buf)); mark = nout; }
 	steps(2);
 	CK(find(NET, Z_PORT_CLOSE, 0) >= 0 && (sess[conn - 1].state == S_DRAIN || !sess[conn - 1].state),
@@ -494,7 +549,7 @@ int main(void) {
 	mark = nout;
 	connect_from(5, 0xC0A80108, 23, true);
 	step();
-	conn = out[find(NET, Z_PORT_CONNECTED, mark)].u32;
+	conn = conn_since(mark, __LINE__);
 	auth_force = Z_AUTH_E_WAIT;
 	type(conn, "anything\r", 9);
 	steps(3);
@@ -509,7 +564,7 @@ int main(void) {
 	mark = nout;
 	connect_from(6, 0xC0A80109, 23, true);
 	step();
-	conn = out[find(NET, Z_PORT_CONNECTED, mark)].u32;
+	conn = conn_since(mark, __LINE__);
 	ticks += 61 * Z_TICK_HZ;
 	steps(2);
 	n = collect(NET, conn, mark, buf, sizeof(buf));
@@ -519,7 +574,7 @@ int main(void) {
 	mark = nout;
 	connect_from(7, 0xC0A8010A, 23, true);
 	step();
-	conn = out[find(NET, Z_PORT_CONNECTED, mark)].u32;
+	conn = conn_since(mark, __LINE__);
 	deliver(NET, Z_PORT_CLOSE, conn, z_obj_none());
 	steps(2);
 	CK(sess[conn - 1].state == S_DRAIN, "waits for its sends to be acked");
@@ -536,7 +591,7 @@ int main(void) {
 		connect_from(8, 0xC0A8010B, 23, true);
 		connect_from(9, 0xC0A8010C, 23, true);
 		step();
-		c1 = out[find(NET, Z_PORT_CONNECTED, mark)].u32;
+		c1 = conn_since(mark, __LINE__);
 		c2 = out[find(NET, Z_PORT_CONNECTED, find(NET, Z_PORT_CONNECTED, mark) + 1)].u32;
 		type(c1, "correct horse\r", 14);
 		type(c2, "correct horse\r", 14);
@@ -562,7 +617,7 @@ int main(void) {
 		mark = nout;
 		connect_from(10, 0xC0A8010D, 23, true);
 		step();
-		cs = out[find(NET, Z_PORT_CONNECTED, mark)].u32;
+		cs = conn_since(mark, __LINE__);
 		type(cs, "correct horse\r", 14);
 		steps(2);
 		deliver(REPL, Z_PORT_CONNECTED, 0, z_obj_uint32(5));
@@ -659,7 +714,7 @@ int main(void) {
 		mark = nout;
 		connect_from(11, 0xC0A8010E, 7, true);
 		step();
-		ce = out[find(NET, Z_PORT_CONNECTED, mark)].u32;
+		ce = conn_since(mark, __LINE__);
 		static char blob3k[3000];
 		memset(blob3k, 'e', sizeof(blob3k));
 		for (int i = 0; i < 6; i++) type(ce, blob3k + i * 500, 500);
@@ -681,7 +736,11 @@ int main(void) {
 	for (int i = 0; i < MAX_SESS; i++)
 		if (sess[i].state) deliver(NET, Z_PORT_CLOSE, (uint32_t)i + 1, z_obj_none());
 	steps(3);
-	ticks += 6 * Z_TICK_HZ;         // past the drain deadline (acks from gone peers)
+	// Past the drain deadline (acks from gone peers). 16 s, not 6: the
+	// call-back test above ends with a CONNECT repl never answered, and
+	// a slot whose CONNECT is unanswered waits as long as the connect
+	// itself would have (LAUNCH_TICKS) -- section 16 tests why.
+	ticks += 16 * Z_TICK_HZ;
 	steps(3);
 	for (int i = 0; i < MAX_SESS; i++) CK(!sess[i].state, "slot %d free before the HTTP tests", i);
 	fake_fs_init();
@@ -702,7 +761,7 @@ int main(void) {
 			connect_from(relay_id++ % 16, 0xC0A80120, 80, true); \
 			step(); \
 			if (find(NET, Z_PORT_CONNECTED, _m) < 0) { printf("FAIL: not accepted\n"); fails++; break; } \
-			_c = out[find(NET, Z_PORT_CONNECTED, _m)].u32; \
+			_c = conn_since(_m, __LINE__); \
 			type(_c, req, (uint32_t)strlen(req)); \
 			got = 0; \
 			for (int _r = 0; _r < 60; _r++) { int _m2 = nout; step(); got += collect(NET, _c, _m2, resp + got, sizeof(resp) - got); } \
@@ -766,7 +825,7 @@ int main(void) {
 			uint32_t c; int m0 = nout;
 			connect_from(relay_id++ % 16, 0xC0A80120, 80, true);
 			step();
-			c = out[find(NET, Z_PORT_CONNECTED, m0)].u32;
+			c = conn_since(m0, __LINE__);
 			type(c, "GET /inde", 9); steps(2);
 			type(c, "x.html HTTP/1.0\r\nX: y\r", 22); steps(2);
 			CK(sess[c - 1].http == H_REQ, "no answer until the blank line");
@@ -781,7 +840,7 @@ int main(void) {
 			uint32_t c; int m0 = nout;
 			connect_from(relay_id++ % 16, 0xC0A80120, 80, true);
 			step();
-			c = out[find(NET, Z_PORT_CONNECTED, m0)].u32;
+			c = conn_since(m0, __LINE__);
 			type(c, "GET / HT", 8); steps(2);
 			ticks += 11 * Z_TICK_HZ;
 			steps(3);
@@ -795,7 +854,7 @@ int main(void) {
 			uint32_t c; int m0 = nout;
 			connect_from(relay_id++ % 16, 0xC0A80120, 80, true);
 			step();
-			c = out[find(NET, Z_PORT_CONNECTED, m0)].u32;
+			c = conn_since(m0, __LINE__);
 			type(c, "GET / HT", 8);
 			deliver(NET, Z_NET_EOF, c, z_obj_none());
 			steps(3);
@@ -809,7 +868,7 @@ int main(void) {
 			uint32_t c; int m0 = nout;
 			connect_from(relay_id++ % 16, 0xC0A80120, 80, true);
 			step();
-			c = out[find(NET, Z_PORT_CONNECTED, m0)].u32;
+			c = conn_since(m0, __LINE__);
 			type(c, "GET /big.bin HTTP/1.0\r\n\r\n", 25);
 			deliver(NET, Z_NET_EOF, c, z_obj_none());
 			uint32_t g = 0;
@@ -825,7 +884,7 @@ int main(void) {
 			uint32_t c; int m0 = nout;
 			connect_from(relay_id++ % 16, 0xC0A80120, 80, true);
 			step();
-			c = out[find(NET, Z_PORT_CONNECTED, m0)].u32;
+			c = conn_since(m0, __LINE__);
 			type(c, huge, sizeof(huge) - 1);
 			steps(4);
 			uint32_t g = collect(NET, c, m0, resp, sizeof(resp));
@@ -862,24 +921,22 @@ int main(void) {
 	// -- 13. SSH: the real client engine, through netserve, to a backend --
 	{
 		// a clean slate again
-		for (int i = 0; i < MAX_SESS; i++)
-			if (sess[i].state) deliver(NET, Z_PORT_CLOSE, (uint32_t)i + 1, z_obj_none());
-		steps(3); ticks += 6 * Z_TICK_HZ; steps(3);
+		clean_slate();
 
 		fake_rng_secure = false;
 		cfg_ssh = "22 repl0";
 		read_config();
-		CK(!svc_ssh.on, "no seeded random source: ssh stays off");
+		CK(!svc_ssh[0].on, "no seeded random source: ssh stays off");
 		fake_rng_secure = true;
 		read_config();
-		CK(svc_ssh.on && svc_ssh.port == 22 && !strcmp(svc_ssh.target, "repl0"), "ssh on, port and target parsed");
+		CK(svc_ssh[0].on && svc_ssh[0].port == 22 && !strcmp(svc_ssh[0].target, "repl0"), "ssh on, port and target parsed");
 		uint8_t first_seed[32];
 		memcpy(first_seed, host_seed, 32);
 		read_config();
 		CK(!memcmp(first_seed, host_seed, 32), "the host key is kept, not made anew each start");
 		deliver(NET, Z_NET_LISTEN_REPLY, 22, z_obj_uint32(0));
 		step();
-		CK(svc_ssh.listening, "listening on 22");
+		CK(svc_ssh[0].listening, "listening on 22");
 	}
 	{
 		static ssh_proto_t cli;
@@ -970,7 +1027,7 @@ int main(void) {
 		CK(find(NET, Z_PORT_CLOSE, mark) >= 0, "and the connection");
 		steps(3);
 		int used = 0;
-		for (int i = 0; i < SSH_MAX; i++) used += ssh_pool[i].used;
+		for (int i = 0; i < ssh_pool_n; i++) used += ssh_pool[i].used;
 		CK(used == 0, "the engine is released and wiped");
 
 		// a wrong password three times
@@ -979,7 +1036,7 @@ int main(void) {
 		fed = mark;
 		connect_from(13, 0xC0A80131, 22, true);
 		step();
-		conn = out[find(NET, Z_PORT_CONNECTED, mark)].u32;
+		conn = conn_since(mark, __LINE__);
 		ssh_pw_for_test = "wrong";
 		ssh_proto_init(&cli, &C, cw, cev, cr, "phil");
 		RUN(40);
@@ -992,7 +1049,7 @@ int main(void) {
 		fed = mark;
 		connect_from(14, 0xC0A80132, 22, true);
 		step();
-		conn = out[find(NET, Z_PORT_CONNECTED, mark)].u32;
+		conn = conn_since(mark, __LINE__);
 		ssh_pw_for_test = NULL;
 		ssh_proto_init(&cli, &C, cw, cev, cr, "phil");
 		RUN(40);
@@ -1003,7 +1060,7 @@ int main(void) {
 		CK(find(NET, Z_PORT_CLOSE, mark) >= 0, "a login left waiting: the server closes it after 60 s");
 		steps(4); ticks += 6 * Z_TICK_HZ; steps(4);
 		used = 0;
-		for (int i = 0; i < SSH_MAX; i++) used += ssh_pool[i].used;
+		for (int i = 0; i < ssh_pool_n; i++) used += ssh_pool[i].used;
 		CK(used == 0, "no engine left held");
 	}
 
@@ -1014,13 +1071,13 @@ int main(void) {
 		cfg_ssh = "22 posix0";
 		cfg_ssh_auth = "key";
 		read_config();
-		CK(svc_ssh.on && ssh_methods == SSHS_AUTH_PUBLICKEY, "keys only: ssh on without a password");
+		CK(svc_ssh[0].on && ssh_methods == SSHS_AUTH_PUBLICKEY, "keys only: ssh on without a password");
 		cfg_ssh_auth = NULL;
 		read_config();
-		CK(!svc_ssh.on, "the default (both) still needs the password");
+		CK(!svc_ssh[0].on, "the default (both) still needs the password");
 		has_pw = true;
 		read_config();
-		CK(svc_ssh.on && ssh_methods == (SSHS_AUTH_PASSWORD | SSHS_AUTH_PUBLICKEY), "both, with a password");
+		CK(svc_ssh[0].on && ssh_methods == (SSHS_AUTH_PASSWORD | SSHS_AUTH_PUBLICKEY), "both, with a password");
 		cfg_ssh_auth = "password";
 		read_config();
 		CK(ssh_methods == SSHS_AUTH_PASSWORD, "passwords only");
@@ -1043,9 +1100,7 @@ int main(void) {
 
 	// -- 15. the backend dies without a CLOSE --
 	{
-		for (int i = 0; i < MAX_SESS; i++)
-			if (sess[i].state) deliver(NET, Z_PORT_CLOSE, (uint32_t)i + 1, z_obj_none());
-		steps(3); ticks += 6 * Z_TICK_HZ; steps(3);
+		clean_slate();
 		repl_up = true;
 
 		// telnet
@@ -1053,7 +1108,7 @@ int main(void) {
 		int conn_mark = mark;
 		connect_from(15, 0xC0A80140, 23, true);
 		step();
-		uint32_t tc = out[find(NET, Z_PORT_CONNECTED, mark)].u32;
+		uint32_t tc = conn_since(mark, __LINE__);
 		type(tc, "correct horse\r", 14);
 		steps(2);
 		deliver(REPL, Z_PORT_CONNECTED, 0, z_obj_uint32(6));
@@ -1089,7 +1144,7 @@ int main(void) {
 		mark = nout; fed = mark;
 		connect_from(16, 0xC0A80141, 22, true);
 		step();
-		conn = out[find(NET, Z_PORT_CONNECTED, mark)].u32;
+		conn = conn_since(mark, __LINE__);
 		ssh_pw_for_test = "correct horse";
 		c_out_n = 0;
 		ssh_proto_init(&cli, &C, cw, cev, cr, "phil");
@@ -1108,13 +1163,11 @@ int main(void) {
 	{
 		// a child holding the terminal dies without closing: the session
 		// waits for its parent's call-back, as when it closes
-		for (int i = 0; i < MAX_SESS; i++)
-			if (sess[i].state) deliver(NET, Z_PORT_CLOSE, (uint32_t)i + 1, z_obj_none());
-		steps(3); ticks += 6 * Z_TICK_HZ; steps(3);
+		clean_slate();
 		mark = nout;
 		connect_from(17, 0xC0A80142, 23, true);
 		step();
-		uint32_t tc = out[find(NET, Z_PORT_CONNECTED, mark)].u32;
+		uint32_t tc = conn_since(mark, __LINE__);
 		ticks += 10;
 		type(tc, "correct horse\r", 14);
 		steps(2);
@@ -1131,6 +1184,375 @@ int main(void) {
 		CK(sess[tc - 1].state == S_AWAY, "vi dying silently: the session waits for posix's call-back");
 		dead_pid = 0;
 	}
+
+	// ================================================================
+	// Listener lists, noauth, and who is connecting (docs/netserve.md,
+	// "Configuration" and "noauth"; zport.h, "Who is connecting").
+	// ================================================================
+
+	// -- 16. a CONNECT answered after its session ended --
+	//
+	// The answer is the provider's to give, in order, whether or not we
+	// still want it. Taken by a NEWER session's CONNECT to the same
+	// provider, it would hand that session a connection meant for the
+	// dead one.
+	{
+		clean_slate();
+		repl_up = true;
+		mark = nout;
+		int a_mark = mark;
+		connect_from(1, 0xC0A80150, 23, true);
+		step();
+		uint32_t a = conn_since(mark, __LINE__);
+		type(a, "correct horse\r", 14);
+		steps(2);
+		CK(sess[a - 1].state == S_CONNECT && find(REPL, Z_PORT_CONNECT, mark) >= 0, "(A waits for repl)");
+		deliver(NET, Z_PORT_CLOSE, a, z_obj_none());            // A's peer goes
+		steps(2);
+		CK(sess[a - 1].state == S_DRAIN && sess[a - 1].connect_orphan,
+			"A ended with its CONNECT unanswered: the slot is kept for the answer");
+		ticks += 6 * Z_TICK_HZ;
+		steps(2);
+		CK(sess[a - 1].state == S_DRAIN, "... past the usual 5 s drain, as long as a connect may take");
+
+		mark = nout;
+		connect_from(2, 0xC0A80151, 23, true);
+		step();
+		uint32_t b = conn_since(mark, __LINE__);
+		CK(b != a, "(B gets another slot)");
+		type(b, "correct horse\r", 14);
+		steps(2);
+		CK(sess[b - 1].state == S_CONNECT, "(B waits for repl too)");
+
+		mark = nout;
+		collect(NET, a, a_mark, buf, 0);                        // net acks what A was sent, as it does
+		deliver(REPL, Z_PORT_CONNECTED, 0, z_obj_uint32(9));    // repl answers A's
+		steps(2);
+		int cl = find(REPL, Z_PORT_CLOSE, mark);
+		CK(cl >= 0 && out[cl].tag == 9, "A's late connection is closed at once, not leaked in repl");
+		CK(sess[b - 1].state == S_CONNECT && !sess[b - 1].app.connected, "... and not given to B");
+		CK(sess[a - 1].state == S_FREE, "A's slot is free once answered");
+		deliver(REPL, Z_PORT_CONNECTED, 0, z_obj_uint32(10));   // then B's
+		steps(2);
+		CK(sess[b - 1].state == S_OPEN && sess[b - 1].app.conn_id == 10, "B gets its own connection");
+
+		// the same for a REFUSED
+		clean_slate();
+		mark = nout;
+		connect_from(3, 0xC0A80152, 23, true);
+		step();
+		a = conn_since(mark, __LINE__);
+		type(a, "correct horse\r", 14);
+		steps(2);
+		deliver(NET, Z_PORT_CLOSE, a, z_obj_none());
+		steps(2);
+		collect(NET, a, mark, buf, 0);
+		steps(1);
+		CK(sess[a - 1].state == S_DRAIN, "(acked, but still waiting for repl's answer)");
+		deliver(REPL, Z_PORT_REFUSED, 0, z_obj_str("repl: too many connections"));
+		steps(2);
+		CK(sess[a - 1].state == S_FREE, "a late REFUSED frees the slot too");
+	}
+
+	// -- 17. listener lists --
+	{
+		clean_slate();
+		cfg_ssh = NULL;
+		cfg_telnet = "23 bbs0 noauth any; 2323 repl0";
+		read_config();
+		CK(svc_telnet[0].on && svc_telnet[0].port == 23 && !strcmp(svc_telnet[0].target, "bbs0") &&
+			svc_telnet[0].noauth && svc_telnet[0].allow == ALLOW_ANY, "a list: the first entry, with its flags");
+		CK(svc_telnet[1].on && svc_telnet[1].port == 2323 && !strcmp(svc_telnet[1].target, "repl0") &&
+			!svc_telnet[1].noauth && svc_telnet[1].allow == ALLOW_DEFAULT, "... and the second, without");
+		cfg_telnet = "  2323   ;23  noauth  subnet bbs0 ;; ";
+		read_config();
+		CK(svc_telnet[0].on && svc_telnet[0].port == 2323 && !strcmp(svc_telnet[0].target, "repl0") &&
+			svc_telnet[1].on && svc_telnet[1].port == 23 && !strcmp(svc_telnet[1].target, "bbs0") &&
+			svc_telnet[1].allow == ALLOW_SUBNET && !svc_telnet[2].on,
+			"spaces, flags in any order, empty entries: all fine; the target defaults");
+		cfg_telnet = "23 bbs0 noath; 2323 repl0";
+		read_config();
+		CK(svc_telnet[0].on && svc_telnet[0].port == 2323 && !svc_telnet[1].on,
+			"a word it does not know refuses that ENTRY -- a typo is never a policy");
+		cfg_telnet = "23 bbs0 repl0";
+		read_config();
+		CK(!svc_telnet[0].on, "two targets: refused");
+		cfg_telnet = "23x bbs0; 99999; 0; 23 23";
+		read_config();
+		CK(!svc_telnet[0].on, "a bad port, too large, zero, twice: each refused");
+		cfg_telnet = "23 bbs0 noauth; 23 repl0";
+		read_config();
+		CK(svc_telnet[0].on && svc_telnet[0].noauth && !svc_telnet[1].on,
+			"a port already taken: the later entry is refused");
+		cfg_telnet = "7 repl0";
+		read_config();
+		CK(!svc_telnet[0].on && svc_echo.on, "... also by another service (echo on 7)");
+		cfg_telnet = "21; 22; 23; 24; 25";
+		read_config();
+		CK(svc_telnet[3].on && svc_telnet[3].port == 24, "four entries at most ...");
+		{
+			bool fifth = false;
+			for (int i = 0; i < LISTEN_MAX; i++) if (svc_telnet[i].port == 25) fifth = true;
+			CK(!fifth, "... the fifth ignored");
+		}
+
+		// the password rule, per listener
+		has_pw = false;
+		cfg_telnet = "23 bbs0 noauth; 2323 repl0";
+		read_config();
+		CK(svc_telnet[0].on && !svc_telnet[1].on,
+			"no password: a noauth listener runs, one that asks for the password does not");
+		has_pw = true; pw_long = false;
+		read_config();
+		CK(svc_telnet[0].on && !svc_telnet[1].on, "a short password: the same");
+		pw_long = true;
+
+		cfg_ssh = "22 bbs0 noauth any; 2222 posix0";
+		has_pw = false;
+		read_config();
+		CK(svc_ssh[0].on && svc_ssh[0].noauth && !strcmp(svc_ssh[0].target, "bbs0") && !svc_ssh[1].on,
+			"ssh: noauth needs no password; a password listener without one stays off");
+		has_pw = true;
+		read_config();
+		CK(svc_ssh[0].on && svc_ssh[1].on && svc_ssh[1].port == 2222, "ssh: both, with a password");
+		fake_rng_secure = false;
+		read_config();
+		CK(!svc_ssh[0].on && !svc_ssh[1].on, "ssh: no seeded random source -- noauth or not, off");
+		fake_rng_secure = true;
+		cfg_ssh = "22";
+		read_config();
+		CK(svc_ssh[0].on && !strcmp(svc_ssh[0].target, "posix0") && !svc_ssh[0].noauth,
+			"ssh: the old one-entry form, the default target");
+		cfg_ssh = NULL;
+	}
+
+	// -- 18. the subnet rule, per listener --
+	{
+		clean_slate();
+		cfg_allow = NULL;
+		cfg_telnet = "23 bbs0 noauth any; 2323 repl0";
+		read_config();
+		net_pid = NET;
+		deliver(NET, Z_NET_LISTEN_REPLY, 23, z_obj_uint32(0));
+		deliver(NET, Z_NET_LISTEN_REPLY, 2323, z_obj_uint32(0));
+		step();
+		CK(svc_telnet[0].listening && svc_telnet[1].listening, "(both listening)");
+		mark = nout;
+		connect_from(4, 0x08080808, 2323, false);
+		step();
+		CK(find(NET, Z_PORT_REFUSED, mark) >= 0, "the default: off-subnet refused");
+		mark = nout;
+		connect_from(5, 0x08080808, 23, false);
+		step();
+		CK(find(NET, Z_PORT_CONNECTED, mark) >= 0 && find(NET, Z_PORT_REFUSED, mark) < 0,
+			"a listener marked any: accepted from anywhere");
+		clean_slate();
+		cfg_allow = "any";
+		cfg_telnet = "23 bbs0 noauth subnet; 2323 repl0";
+		read_config();
+		CK(svc_telnet[0].listening && svc_telnet[1].listening,
+			"(read again: ports it kept stay listened on -- net answers a LISTEN once)");
+		mark = nout;
+		connect_from(6, 0x08080808, 23, false);
+		step();
+		CK(find(NET, Z_PORT_REFUSED, mark) >= 0, "apps.netserve.allow any, the listener subnet: refused");
+		mark = nout;
+		connect_from(7, 0x08080808, 2323, false);
+		step();
+		CK(find(NET, Z_PORT_CONNECTED, mark) >= 0, "... and the one without a flag takes the global any");
+		cfg_allow = NULL;
+		clean_slate();
+	}
+
+	// -- 19. a noauth telnet session --
+	{
+		cfg_telnet = "23 bbs0 noauth; 2323 repl0";
+		read_config();
+		bbs_up = false;
+		int runs = proc_runs, pw_checks = auth_checks;
+		mark = nout;
+		connect_from(8, 0xC0A80160, 23, true);
+		step();
+		uint32_t tc = conn_since(mark, __LINE__);
+		n = collect(NET, tc, mark, buf, sizeof(buf));
+		static const uint8_t offer[] = { IAC, WILL, OPT_ECHO, IAC, WILL, OPT_SGA };
+		CK(n == 6 && !memcmp(buf, offer, 6),
+			"noauth: WILL ECHO, WILL SGA -- and nothing else of ours, no banner, no prompt (%u)", n);
+		CK(proc_runs == runs + 1 && sess[tc - 1].state == S_LAUNCH, "bbs0 not running: `bbs` started");
+		type(tc, "guest\r", 6);                             // typed before it is up
+		steps(2);
+		bbs_up = true;
+		mark = nout;
+		step();
+		int cc = find(BBS, Z_PORT_CONNECT, mark);
+		CK(cc >= 0 && out[cc].type == Z_MAP, "CONNECT to bbs0, carrying a map");
+		CK(cc >= 0 && !strcmp(out[cc].m_auth, "none") && !strcmp(out[cc].m_transport, "telnet") &&
+			out[cc].m_peer == 0xC0A80160 && out[cc].m_port == 23 && !out[cc].m_has_user && out[cc].map_n == 4,
+			"the identity: telnet, auth none, the peer, the port, no user name");
+		deliver(BBS, Z_PORT_CONNECTED, 0, z_obj_uint32(1));
+		mark = nout;
+		steps(2);
+		n = collect(BBS, 1, mark, buf, sizeof(buf));
+		CK(n == 6 && !memcmp(buf, "guest\r", 6), "what was typed meanwhile reaches it");
+		CK(auth_checks == pw_checks, "no password was checked");
+		mark = nout;
+		deliver_data(BBS, Z_PORT_DATA, 1, "login: ", 7);
+		steps(2);
+		n = collect(NET, tc, mark, buf, sizeof(buf));
+		CK(n == 7 && !memcmp(buf, "login: ", 7), "its screen is the peer's screen");
+
+		// the same listener set, the password one: an ordinary login,
+		// and its CONNECT says "system"
+		repl_up = true;
+		mark = nout;
+		connect_from(9, 0xC0A80161, 2323, true);
+		step();
+		uint32_t pc = conn_since(mark, __LINE__);
+		n = collect(NET, pc, mark, buf, sizeof(buf));
+		CK(contains(buf, n, "password: ", 10), "the other listener still asks for the password");
+		mark = nout;
+		type(pc, "correct horse\r", 14);
+		steps(2);
+		cc = find(REPL, Z_PORT_CONNECT, mark);
+		CK(cc >= 0 && !strcmp(out[cc].m_auth, "system") && out[cc].m_port == 2323,
+			"a logged-in session's CONNECT says auth system");
+		deliver(REPL, Z_PORT_CONNECTED, 0, z_obj_uint32(2));
+		steps(2);
+	}
+
+	// -- 20. a noauth SSH session --
+	{
+		static ssh_proto_t cli;
+		static struct cstate C;
+		static uint32_t conn;
+		static int fed;
+		clean_slate();
+		cli_for_ev = &cli;
+		memset(&C, 0, sizeof(C));
+		cfg_ssh = "22 bbs0 noauth any; 2222 posix0";
+		read_config();
+		deliver(NET, Z_NET_LISTEN_REPLY, 22, z_obj_uint32(0));
+		deliver(NET, Z_NET_LISTEN_REPLY, 2222, z_obj_uint32(0));
+		step();
+		bbs_up = true;
+		int checks_before = auth_checks;
+		mark = nout; fed = mark;
+		connect_from(10, 0x5DB8D822, 22, false);           // from the internet: the listener says any
+		step();
+		conn = conn_since(mark, __LINE__);
+		ssh_pw_for_test = NULL;                             // no password to give
+		c_out_n = 0;
+		ssh_proto_init(&cli, &C, cw, cev, cr, "visitor");
+		RUN(40);
+		int cc = find(BBS, Z_PORT_CONNECT, mark);
+		CK(cc >= 0, "noauth ssh: in, and connected to bbs0, with no password");
+		CK(auth_checks == checks_before, "... the machine's password never consulted");
+		CK(cc >= 0 && !strcmp(out[cc].m_auth, "none") && !strcmp(out[cc].m_transport, "ssh") &&
+			out[cc].m_has_user && !strcmp(out[cc].m_user, "visitor") && out[cc].m_peer == 0x5DB8D822 &&
+			out[cc].m_port == 22 && out[cc].map_n == 5,
+			"the identity: ssh, auth none, the user name the client sent, the peer, the port");
+		deliver(BBS, Z_PORT_CONNECTED, 0, z_obj_uint32(3));
+		RUN(4);
+		CK(C.ready == 1, "the client has its shell");
+		mark = nout;
+		deliver_data(BBS, Z_PORT_DATA, 3, "Welcome\r\n", 9);
+		RUN(6);
+		CK(contains(C.got, C.got_n, "Welcome", 7), "the BBS's screen arrives, encrypted");
+		ssh_pw_for_test = "correct horse";
+	}
+
+	// -- 21. who is connecting: the provider's side (zport.c) --
+	{
+		z_msg_t m;
+		z_port_ident_t id;
+		memset(&m, 0, sizeof(m));
+		m.from = 77;
+		m.obj = z_obj_none();
+		z_port_ident(&m, &id);
+		CK(!id.remote && id.authenticated, "no map: a local connection, trusted as the machine is");
+		m.obj = z_obj_uint32(9600);                         // serial's baud rate
+		z_port_ident(&m, &id);
+		CK(!id.remote && id.authenticated, "a scalar argument: local too");
+
+		sess_t fake;
+		memset(&fake, 0, sizeof(fake));
+		fake.kind = K_TELNET;
+		fake.noauth = true;
+		fake.info.ip = 0x01020304;
+		fake.info.lport = 23;
+		m.obj = identity(&fake);
+		z_port_ident(&m, &id);
+		CK(id.remote && !id.authenticated && !strcmp(id.transport, "telnet") && id.peer == 0x01020304 &&
+			id.port == 23 && !id.user[0], "netserve's noauth map, read back");
+		mark = nout;
+		CK(z_port_refuse_unauthenticated(&m, "test"), "refused ...");
+		int r = find(77, Z_PORT_REFUSED, mark);
+		CK(r >= 0 && strstr(out[r].str, "not noauth"), "... with a REFUSED that says why");
+
+		fake.noauth = false;
+		m.obj = identity(&fake);
+		mark = nout;
+		CK(!z_port_refuse_unauthenticated(&m, "test") && nout == mark, "auth system: served, nothing sent");
+
+		// only the exact word counts
+		z_obj_t mm = z_obj_map(2);
+		z_map_set(&mm, "transport", z_obj_str("telnet"));
+		z_map_set(&mm, "auth", z_obj_str("System"));
+		m.obj = mm;
+		z_port_ident(&m, &id);
+		CK(id.remote && !id.authenticated, "\"System\" is not \"system\": unauthenticated");
+		z_obj_t m2 = z_obj_map(1);
+		z_map_set(&m2, "auth", z_obj_uint32(1));
+		m.obj = m2;
+		z_port_ident(&m, &id);
+		CK(id.remote && !id.authenticated, "auth that is not a string: unauthenticated");
+		z_obj_t m3 = z_obj_map(2);
+		z_map_set(&m3, "ip", z_obj_uint32(1));
+		z_map_set(&m3, "port", z_obj_uint32(80));
+		m.obj = m3;
+		z_port_ident(&m, &id);
+		CK(!id.remote && id.authenticated, "a map without \"auth\" (web's socket {ip, port}) is not an identity");
+	}
+
+	// -- 22. apps.netserve.ssh_sessions --
+	{
+		clean_slate();
+		cfg_ssh = "22 posix0";
+		cfg_ssh_sessions = "3";
+		read_config();
+		CK(ssh_pool_n == 3, "3 sessions: 3 engines (%d)", ssh_pool_n);
+		cfg_ssh_sessions = "9";
+		read_config();
+		CK(ssh_pool_n == SSH_MAX, "more than the most: SSH_MAX (%d)", ssh_pool_n);
+		cfg_ssh_sessions = "0";
+		read_config();
+		CK(ssh_pool_n == 1, "0 or less: 1");
+		cfg_ssh_sessions = NULL;
+		read_config();
+		CK(ssh_pool_n == SSH_DEFAULT, "unset: the default, %d", SSH_DEFAULT);
+
+		// the pool is the limit
+		cfg_ssh_sessions = "1";
+		read_config();
+		deliver(NET, Z_NET_LISTEN_REPLY, 22, z_obj_uint32(0));
+		step();
+		mark = nout;
+		connect_from(12, 0xC0A80170, 22, true);
+		connect_from(13, 0xC0A80171, 22, true);
+		step();
+		int r = find(NET, Z_PORT_REFUSED, mark);
+		CK(find(NET, Z_PORT_CONNECTED, mark) >= 0 && r >= 0 && strstr(out[r].str, "too many ssh"),
+			"one engine: the second SSH session is refused");
+		mark = nout;
+		cfg_ssh_sessions = "2";
+		read_config();
+		CK(ssh_pool_n == 1, "an engine in use: the pool is not replaced under it");
+		cfg_ssh_sessions = NULL;
+		cfg_ssh = NULL;
+		clean_slate();
+	}
+
+	CK(clean_slate_fails == 0, "every clean slate was clean (%d not)", clean_slate_fails);
 
 	printf("netserve test: %d checks, %d failed\n", checks, fails);
 	return fails != 0;

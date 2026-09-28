@@ -521,6 +521,14 @@ void relay_poll(void) {
 			else if (now - r->active > 3u * Z_TICK_HZ) {
 				uint32_t io = 0, dup = 0, gap = 0;
 				tcp_stats(&io, &dup, &gap);
+				// First, whose turn it is: a relay still OFFERED has had no
+				// answer to its CONNECT -- the listener is not replying, or
+				// not running (it is named, and whether it runs, so the
+				// log says which without a `ps`).
+				static const char *const rs[] = { "free", "offered, no answer from the listener", "open", "closing", "draining" };
+				printf("net: relay %d: %s (listener pid %lu, %s)\n", relay_id(r),
+					r->state <= R_DRAIN ? rs[r->state] : "?", (unsigned long)r->owner,
+					running(r->owner) ? "running" : "NOT running");
 				printf("net: relay %d stalled: out %u buffered + %u msgs held; in %u buffered, "
 					"window %u; %u sends to the listener unacked; tcp segment %s (%u bytes, "
 					"%u retries); segments in %lu, dup %lu, gap %lu\n", relay_id(r),

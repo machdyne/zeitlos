@@ -1,0 +1,12 @@
+|15Welcome to |BN!|07
+
+This board runs on Zeitlos. Bulletins are text files in the bulletins
+folder of the BBS's data directory, shown in name order; each caller
+sees the ones changed since their last call, and all of them from the
+menu.
+
+Write them in UTF-8. |14Pipe codes|07 set colours: ||12 is |12bright red|07,
+||07 back to grey. ||RV and ||RO turn |RV reverse video |RO on and off, which
+every terminal shows -- even one without colour. docs/bbs.md lists them all.
+
+Edit or delete this one: it is yours now.

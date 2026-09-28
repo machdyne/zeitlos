@@ -180,8 +180,10 @@ fs/fatfs/ffunicode.o: fs/fatfs/ffunicode.c fs/fatfs/ffconf.h
 zfmt.o: ../common/zfmt.c
 	$(CC) $(CFLAGS) -c ../common/zfmt.c -o zfmt.o
 
+# Z_KERNEL_BUILD: the kernel claims the SHA-256 block (rtl/sha256.v) as
+# Z_HW_OWNER_KERNEL, having no pid of its own. docs/sha256_hw.md.
 zsha256.o: ../common/zsha256.c ../common/zsha256.h
-	$(CC) $(CFLAGS) -c ../common/zsha256.c -o zsha256.o
+	$(CC) $(CFLAGS) -DZ_KERNEL_BUILD -c ../common/zsha256.c -o zsha256.o
 
 kernel.elf: $(OBJS)
 	$(CC) $(LDFLAGS) -T $(LDSCRIPT) -Wl,-Map,kernel.map -o kernel.elf $(OBJS)

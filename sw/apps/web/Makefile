@@ -86,7 +86,7 @@ APP_CFLAGS = -DWEB_TLS=$(WEB_TLS) $(EXTRA_CFLAGS)
 # zfont.h for the drawing primitives and nothing else), which is what
 # lets the `test` target below build them for the host.
 ifeq ($(WEB_TLS), 1)
-TLS_OBJ = tls.o tls_crypto.o zsha256.o monocypher.o zrng.o \
+TLS_OBJ = tls.o tls_crypto.o zsha256.o monocypher.o z25519.o zrng.o \
 	          der.o x509.o bignum.o rsa.o ecdsa.o sha384.o \
 	          monocypher-ed25519.o verify.o
 else
@@ -241,6 +241,10 @@ monocypher-ed25519.o:
 verify.o: verify.c verify.h x509.h rsa.h ecdsa.h sha384.h
 	$(CC) $(CFLAGS) -c verify.c -o verify.o
 
+# X25519 and Ed25519 checks on montmul's register file (docs/z25519.md)
+z25519.o: ../../common/z25519.c ../../common/z25519.h
+	$(CC) $(CFLAGS) $(CRYPTO_CFLAGS) -c ../../common/z25519.c -o z25519.o
+
 zsha256.o:
 	$(CC) $(CFLAGS) $(CRYPTO_CFLAGS) -c ../../common/zsha256.c -o zsha256.o
 
@@ -291,7 +295,8 @@ RENDER_SRC = $(COMMON)/zwin.c $(COMMON)/zwidget.c $(COMMON)/zfont_data.c \
 .PHONY: test test-tls test-asan render
 
 TLS_HOST_SRC = tls.c tls_crypto.c ../../common/zsha256.c \
-               ../../ext/monocypher/monocypher.c
+               ../../ext/monocypher/monocypher.c ../../ext/monocypher/monocypher-ed25519.c \
+               ../../common/z25519.c
 
 test: $(BUILD)/test_url $(BUILD)/test_http $(BUILD)/test_html \
       $(BUILD)/test_layout $(BUILD)/test_page $(BUILD)/test_tls_crypto \
@@ -365,7 +370,7 @@ $(BUILD)/test_rsa: tests/test_rsa.c rsa.c bignum.c tests/rsa_vectors.h \
 		../../common/zsha256.c
 
 MONO = ../../ext/monocypher/monocypher.c \
-       ../../ext/monocypher/monocypher-ed25519.c
+       ../../ext/monocypher/monocypher-ed25519.c ../../common/z25519.c
 
 # The same vectors through the HARDWARE path, with rtl/montmul.v
 # replaced by a software model (EC_HW_SIM in ecdsa.c).
@@ -377,7 +382,7 @@ MONO = ../../ext/monocypher/monocypher.c \
 # only hardware could find, and two of them were found here instead.
 $(BUILD)/test_ecdsa_hw: tests/test_ecdsa.c ecdsa.c tests/ecdsa_vectors.h \
 		| $(BUILD)
-	$(HOSTCC) $(HOSTFLAGS) -DEC_HW -DEC_HW_SIM -I ../../common \
+	$(HOSTCC) $(HOSTFLAGS) -DEC_HW -DEC_HW_SIM -DEC_TEST_HOOKS -I ../../common \
 		-o $@ tests/test_ecdsa.c ecdsa.c
 
 $(BUILD)/test_solinas: tests/test_solinas.c ecdsa.c \
@@ -389,7 +394,7 @@ $(BUILD)/test_toolbar: tests/test_toolbar.c toolbar.c | $(BUILD)
 
 $(BUILD)/test_ecdsa: tests/test_ecdsa.c ecdsa.c tests/ecdsa_vectors.h \
 		| $(BUILD)
-	$(HOSTCC) $(HOSTFLAGS) -o $@ tests/test_ecdsa.c ecdsa.c
+	$(HOSTCC) $(HOSTFLAGS) -DEC_TEST_HOOKS -o $@ tests/test_ecdsa.c ecdsa.c
 
 $(BUILD)/test_sha384: tests/test_sha384.c sha384.c | $(BUILD)
 	$(HOSTCC) $(HOSTFLAGS) -o $@ tests/test_sha384.c sha384.c $(MONO)

@@ -85,10 +85,17 @@ static mesh_msg_t *last_msg;
 static char lines[8][200];
 static int nlines;
 
+static mesh_ev_t last_data;
+static uint8_t last_data_buf[400];
+
 static void t_event(void *ctx, const mesh_ev_t *ev) {
 	(void)ctx;
 	if (ev->kind >= 0 && ev->kind < 16) ev_count[ev->kind]++;
 	if (ev->msg) last_msg = ev->msg;
+	if (ev->kind == MESH_EV_DATA) {			// its payload lives only as long as the event: copied
+		last_data = *ev;
+		memcpy(last_data_buf, ev->data, ev->data_len);
+	}
 }
 
 static void t_line(void *ctx, const char *s) {
@@ -635,6 +642,59 @@ static void test_helpers(void) {
 	CHECK(mesh_msg_find(&M, 3) == NULL && mesh_msg_find(&M, MESH_MAX_MSGS + 5), "find");
 }
 
+// Private ports (>= 256): handed on as they are, for mesh_svc.c -- zfed's
+// radio link among them.
+static void test_data(void) {
+	uint8_t pl[233];
+	zpb_field_t f, g;
+	zpb_rd_t r;
+	for (int i = 0; i < 233; i++) pl[i] = (uint8_t)(i * 7 + 1);
+
+	go_live();
+	node_packet(ALICE, MESH_BROADCAST, 1, 0x1234, 300, pl, 233, 0);
+	deliver();
+	CHECK(ev_count[MESH_EV_DATA] == 1 && last_data.from == ALICE && last_data.to == MESH_BROADCAST &&
+		last_data.port == 300 && last_data.channel == 1 && last_data.data_len == 233 &&
+		!memcmp(last_data_buf, pl, 233), "a packet on port 300: a DATA event, every field and byte as sent");
+	node_packet(ALICE, ME, 0, 0x1235, 70, "x", 1, 0);
+	deliver();
+	CHECK(ev_count[MESH_EV_DATA] == 1, "port 70 -- not an application's: no DATA event");
+
+	sent_n = 0;
+	CHECK(mesh_session_send_data(&S, MESH_BROADCAST, 1, 300, pl, 233), "sending 233 bytes on port 300");
+	parse_sent();
+	CHECK(ntr == 1 && field_of(tr[0], tr_len[0], TR_PACKET, &f) >= 0, "one ToRadio packet");
+	zpb_sub(&r, &f);
+	uint32_t to = 0, ch = 0, ack = 0, port = 0, plen = 0;
+	const uint8_t *pp = NULL;
+	while (zpb_next(&r, &g)) {
+		if (g.num == MP_TO) to = zpb_u32(&g);
+		if (g.num == MP_CHANNEL) ch = zpb_u32(&g);
+		if (g.num == MP_WANT_ACK) ack = zpb_u32(&g);
+		if (g.num == MP_DECODED) {
+			zpb_rd_t d;
+			zpb_field_t h;
+			zpb_sub(&d, &g);
+			while (zpb_next(&d, &h)) {
+				if (h.num == DA_PORTNUM) port = zpb_u32(&h);
+				if (h.num == DA_PAYLOAD) { pp = h.ptr; plen = h.len; }
+			}
+		}
+	}
+	CHECK(to == MESH_BROADCAST && ch == 1 && port == 300 && plen == 233 && pp && !memcmp(pp, pl, 233),
+		"it decodes back: to all, channel 1, port 300, the payload exactly");
+	CHECK(!ack, "a broadcast asks for no acknowledgement -- no one node would give it");
+	sent_n = 0;
+	mesh_session_send_data(&S, ALICE, 0, 300, pl, 10);
+	parse_sent();
+	field_of(tr[0], tr_len[0], TR_PACKET, &f);
+	CHECK(field_of(f.ptr, f.len, MP_WANT_ACK, NULL) == 1, "to one node: an acknowledgement asked for");
+	CHECK(!mesh_session_send_data(&S, MESH_BROADCAST, 0, 255, pl, 10), "port 255, not an application's: refused");
+	CHECK(!mesh_session_send_data(&S, MESH_BROADCAST, 0, 300, pl, 234), "234 bytes, more than a packet: refused");
+	mesh_session_down(&S);
+	CHECK(!mesh_session_send_data(&S, MESH_BROADCAST, 0, 300, pl, 10), "no link: refused");
+}
+
 int main(void) {
 	test_handshake();
 	test_receive();
@@ -643,6 +703,7 @@ int main(void) {
 	test_plausibility();
 	test_lossy_link();
 	test_helpers();
+	test_data();
 	printf("mesh session: %d checks, %d failed\n", run, failed);
 	return failed ? 1 : 0;
 }

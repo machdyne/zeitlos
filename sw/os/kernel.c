@@ -325,6 +325,44 @@ z_obj_t *k_getpid(z_obj_t *args) {
 	return (&z_ok);
 }
 
+// -- the crypto blocks' claims (docs/montmul.md, docs/sha256_hw.md) --
+//
+// rtl/montmul.v and rtl/sha256.v each have an OWNER register a process
+// claims with its pid (pid 0, which cannot be written as a claim, uses
+// 0x7FFFFFFE -- the drivers do the same). A process that dies holding
+// one would leave the block claimed forever; this gives it back, with
+// the same release a process would write itself, which is a no-op if
+// that pid does not hold it. Called with the rest of a dead process's
+// resources, below.
+//
+// sha256's state registers are also cleared: the driver clears them
+// itself before releasing, but a process killed mid-hash never got
+// there, and they are readable by whoever claims next.
+static void k_hw_release_pid(uint32_t pid) {
+	uint32_t id = pid ? (pid & 0x7FFFFFFFu) : 0x7FFFFFFEu;
+	volatile uint32_t *mm = (volatile uint32_t *)(uintptr_t)Z_MONTMUL_BASE;
+	volatile uint32_t *sh = (volatile uint32_t *)(uintptr_t)Z_SHA256_BASE;
+	if (z_soc_has_feature2(Z_FEATURE2_MONTMUL) && mm[Z_MONTMUL_W_MAGIC] == Z_MONTMUL_MAGIC &&
+			mm[Z_MONTMUL_W_OWNER] == id)
+		mm[Z_MONTMUL_W_OWNER] = id | Z_HW_OWNER_RELEASE;
+	if (z_soc_has_feature2(Z_FEATURE2_SHA256) && sh[Z_SHA256_W_MAGIC] == Z_SHA256_MAGIC &&
+			sh[Z_SHA256_W_OWNER] == id) {
+		for (uint32_t i = 0; i < 8; i++) sh[Z_SHA256_W_H + i] = 0;
+		sh[Z_SHA256_W_OWNER] = id | Z_HW_OWNER_RELEASE;
+	}
+	// The Keccak block (docs/keccak_hw.md): cleared, since a process that
+	// died mid-permutation may have left secret state in it, then freed.
+	{
+		volatile uint32_t *kc = (volatile uint32_t *)(uintptr_t)Z_KECCAK_BASE;
+		if (z_soc_has_feature2(Z_FEATURE2_KECCAK) && kc[Z_KECCAK_W_MAGIC] == Z_KECCAK_MAGIC &&
+				kc[Z_KECCAK_W_OWNER] == id) {
+			while (kc[Z_KECCAK_W_CTRL] & 1u) { }
+			kc[Z_KECCAK_W_CTRL] = 2u;
+			kc[Z_KECCAK_W_OWNER] = id | Z_HW_OWNER_RELEASE;
+		}
+	}
+}
+
 // -- virtual phosphor mode (rtl/socctl.v's VIDEO register) --
 //
 // Returns the current mode in args. On a bitstream that predates the
@@ -1019,6 +1057,8 @@ static uint32_t *k_sched_switch(uint32_t *regs) {
 		k_flash_release_pid(z_pid);
 		// and the password check's gate, if it died mid-check (auth.c)
 		k_auth_release_pid(z_pid);
+		// and montmul's or sha256's claim, if it held one (above)
+		k_hw_release_pid(z_pid);
 		z_procs[z_pid].base = 0x00000000;
 		z_procs[z_pid].flags = 0x00000000;
 		goto next_process;

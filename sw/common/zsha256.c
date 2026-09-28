@@ -29,11 +29,114 @@
  *
  * If rtl/ ever grows a SHA-256 core, this file is the single place
  * that changes.
+ *
+ * -- the hardware (rtl/sha256.v, docs/sha256_hw.md) --
+ *
+ * It did grow one. Where the bitstream has it, a block goes through
+ * the hardware in ~150 cycles instead of ~44,000 in software, and
+ * every caller -- the kernel's auth, SSH, TLS, the BBS, zfed -- gets
+ * that without a line changed. Where it has not, or another process
+ * holds it, the software below runs as it always did.
+ *
+ * The block keeps nothing across calls that this file needs: each
+ * z_sha256_update() that has whole blocks to compress claims the
+ * block, loads H from the context, pushes the blocks, reads H back,
+ * ZEROES H, and releases. So losing the block between two calls --
+ * to preemption, to another process -- costs nothing, and the next
+ * owner cannot read anything this caller hashed: H after a block is
+ * derived from its input, and for HMAC that input is the key.
  */
 
 #include <string.h>
 
 #include "zsha256.h"
+
+// -- the hardware's registers --
+//
+// Through two functions, so a host test can put the real RTL behind
+// them (sw/common/tests/test_zsha256_hw.cpp, Verilator). On the
+// target they are plain MMIO; anywhere else the hardware path is
+// compiled out unless the test asks for it.
+#if defined(Z_SHA256_HW_TEST)
+#define ZSHA_HW 1
+uint32_t zsha_hw_rd(uint32_t word);
+void zsha_hw_wr(uint32_t word, uint32_t v);
+uint32_t zsha_hw_owner_id(void);
+static int zsha_hw_present(void) { return 1; }
+#elif defined(__riscv) && !defined(Z_SHA256_NO_HW)
+#define ZSHA_HW 1
+#include "zsoc.h"
+#include "zeitlos.h"
+static inline uint32_t zsha_hw_rd(uint32_t w) {
+	return *(volatile uint32_t *)(uintptr_t)(Z_SHA256_BASE + 4u * w);
+}
+static inline void zsha_hw_wr(uint32_t w, uint32_t v) {
+	*(volatile uint32_t *)(uintptr_t)(Z_SHA256_BASE + 4u * w) = v;
+}
+static int zsha_hw_present(void) {
+	return z_soc_has_feature2(Z_FEATURE2_SHA256) &&
+		zsha_hw_rd(Z_SHA256_W_MAGIC) == Z_SHA256_MAGIC;
+}
+// Who is claiming: the kernel (built with Z_KERNEL_BUILD, sw/os/Makefile)
+// has no pid and uses a fixed id; a process uses its pid, asked once.
+static uint32_t zsha_hw_owner_id(void) {
+#ifdef Z_KERNEL_BUILD
+	return Z_HW_OWNER_KERNEL;
+#else
+	static uint32_t pid;
+	if (!pid) pid = z_getpid() & 0x7FFFFFFFu;
+	return pid ? pid : 0x7FFFFFFEu;
+#endif
+}
+#endif
+
+#ifdef ZSHA_HW
+#define ZSHA_W_CTRL   1u
+#define ZSHA_W_OWNER  3u
+#define ZSHA_W_PUSH   4u
+#define ZSHA_W_H      8u
+#define ZSHA_RELEASE  0x80000000u
+
+static int zsha_hw_state = -1;		// -1 not asked yet, 0 absent, 1 present
+
+// Claims the block and loads ctx's state into it. False: use software.
+static int hw_begin(const uint32_t state[8]) {
+	uint32_t me;
+	if (zsha_hw_state < 0) zsha_hw_state = zsha_hw_present() ? 1 : 0;
+	if (!zsha_hw_state) return 0;
+	me = zsha_hw_owner_id();
+	zsha_hw_wr(ZSHA_W_OWNER, me);
+	if (zsha_hw_rd(ZSHA_W_OWNER) != me) return 0;		// someone else has it
+	for (int i = 0; i < 8; i++) zsha_hw_wr(ZSHA_W_H + (uint32_t)i, state[i]);
+	return 1;
+}
+
+// One block through the hardware. Words go in as a little-endian CPU
+// loads them; the block swaps them to SHA-256's big-endian order.
+static void hw_block(const uint8_t *p) {
+	if (((uintptr_t)p & 3u) == 0) {
+		const uint32_t *w = (const uint32_t *)(const void *)p;
+		for (int i = 0; i < 16; i++) zsha_hw_wr(ZSHA_W_PUSH, w[i]);
+	} else {
+		for (int i = 0; i < 16; i++, p += 4)
+			zsha_hw_wr(ZSHA_W_PUSH, (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+				((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24));
+	}
+	zsha_hw_wr(ZSHA_W_CTRL, 1);
+	// ~144 cycles. Pushes are ignored while it is busy, so the next
+	// block has to wait for this.
+	while (zsha_hw_rd(ZSHA_W_CTRL) & 1u) { }
+}
+
+// Reads the state back, clears the block's copy, and releases it.
+static void hw_end(uint32_t state[8]) {
+	for (int i = 0; i < 8; i++) {
+		state[i] = zsha_hw_rd(ZSHA_W_H + (uint32_t)i);
+		zsha_hw_wr(ZSHA_W_H + (uint32_t)i, 0);
+	}
+	zsha_hw_wr(ZSHA_W_OWNER, zsha_hw_owner_id() | ZSHA_RELEASE);
+}
+#endif
 
 static const uint32_t K[64] = {
 	0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
@@ -122,8 +225,14 @@ void z_sha256_update(z_sha256_ctx *ctx, const void *data, uint32_t len) {
 
 	const uint8_t *p = (const uint8_t *)data;
 	uint32_t n;
+	int hw = 0;
 
 	ctx->count += len;
+
+#ifdef ZSHA_HW
+	// The hardware, if this call compresses at least one block.
+	if (ctx->buf_len + len >= Z_SHA256_BLOCK) hw = hw_begin(ctx->state);
+#endif
 
 	// Top up a partial buffer first, then take whole blocks straight
 	// from the caller's memory without copying, then keep the tail.
@@ -135,16 +244,28 @@ void z_sha256_update(z_sha256_ctx *ctx, const void *data, uint32_t len) {
 		p += n;
 		len -= n;
 		if (ctx->buf_len == Z_SHA256_BLOCK) {
+#ifdef ZSHA_HW
+			if (hw) hw_block(ctx->buf); else
+#endif
 			compress(ctx, ctx->buf);
 			ctx->buf_len = 0;
 		}
 	}
 
 	while (len >= Z_SHA256_BLOCK) {
+#ifdef ZSHA_HW
+		if (hw) hw_block(p); else
+#endif
 		compress(ctx, p);
 		p += Z_SHA256_BLOCK;
 		len -= Z_SHA256_BLOCK;
 	}
+
+#ifdef ZSHA_HW
+	if (hw) hw_end(ctx->state);
+#else
+	(void)hw;
+#endif
 
 	if (len) {
 		memcpy(ctx->buf, p, len);

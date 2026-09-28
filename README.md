@@ -28,7 +28,7 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 | Storage | MicroSD |
 | Network | Ethernet (SPI/USB), Ethernet MAC (for RMII PHY) or [ESP32](docs/esp32link.md) |
 | Entropy | Ring-oscillator [TRNG](docs/trng.md) |
-| Crypto | Optional [Montgomery multiplier](docs/montmul.md) for TLS |
+| Crypto | Optional [Montgomery multiplier](docs/montmul.md) with register file (ECDSA for TLS, X25519/Ed25519 for SSH and zfed), [SHA-256](docs/sha256_hw.md) and [Keccak](docs/keccak_hw.md) (ML-KEM) blocks |
 | USB Host | [Dual-port USB host controller](docs/usb_host.md) (HID, MSC, CDC-ACM, [CDC-ECM](docs/usb_ethernet.md), hubs) |
 | USB Device | [USB CDC](docs/usb_cdc.md) serial console |
 | HID | USB keyboard ([22 layouts](docs/keyboard_layouts.md)) + optional USB mouse/[gamepad](docs/gamepad.md) |
@@ -71,7 +71,7 @@ With the MTU, there is no need for position independent code or complicated addr
 | kernel | Kernel + kernel shell (serial console) |
 | [wm](docs/window_manager.md) | Window manager + dock, with ten workspaces (Super+1 ... Super+0) |
 | [net](docs/networking.md) | Networking service |
-| [term](docs/terminal.md) | Terminal emulator (VT100, UTF-8; start panel, scrollback; connects to shells and services) |
+| [term](docs/terminal.md) | Terminal emulator (VT100, UTF-8, [line drawing](docs/terminal.md#line-drawing); start panel, scrollback; connects to shells and services) |
 | [console](docs/console.md) | Console service |
 | [cron](docs/cron.md) | Runs programs on a schedule from `/user/cron.cfg` (daily, weekly, hourly, every N, at boot) |
 
@@ -108,6 +108,7 @@ On the sdcard. A `term` window starts one when you press its REPL or POSIX butto
 | [track](docs/track_app.md) | MOD audio file player |
 | [mmod](docs/mmod.md) | [MMOD](https://github.com/machdyne/mmod) reader/writer |
 | [irc](docs/irc_app.md) | IRC client: channels and private conversations, mentions, timestamps |
+| [cryptobench](docs/cryptobench.md) | Times the cryptography the BBS and federation use, on this machine |
 | [mesh](docs/mesh_app.md) | Meshtastic LoRa client |
 | [logic](docs/logic_app.md) | Logic analyzer (under development) |
 | [gpu3d](docs/gpu3d_app.md) | Spinning 3D cube demo + STL viewer |
@@ -132,7 +133,9 @@ On the sdcard. A `term` window starts one when you press its REPL or POSIX butto
 
 | App | Description |
 |-----|-------------|
-| [netserve](docs/netserve.md) | Network servers: SSH (password or [keys](docs/netserve.md#ssh-keys)), telnet, HTTP (static files), echo |
+| [netserve](docs/netserve.md) | Network servers: SSH (password or [keys](docs/netserve.md#ssh-keys)), telnet, HTTP (static files), echo; several ports per service, and [`noauth`](docs/netserve.md#noauth) ports for apps with their own logins |
+| [bbs](docs/bbs.md) | Bulletin board system over telnet, SSH and `port bbs0`: forums, private mail, a new-scan, bulletins, sysop tools; also runs on Linux ([bbs_linux](docs/bbs_linux.md)) |
+| [fed](docs/fed.md) | Zeitlos Federation Protocol service |
 | [serial](docs/uart1.md) | Serial port service |
 | [tts](docs/tts.md) | Text-to-speech service (Super+S to turn speech on) |
 | [jfont](docs/text_encoding.md#japanese) | Japanese font service: holds the font once for every app (`system.font.japanese: yes`) |

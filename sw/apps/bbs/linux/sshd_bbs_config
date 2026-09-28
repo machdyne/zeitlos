@@ -1,0 +1,45 @@
+# sshd for the BBS alone -- docs/bbs_deploy.md, "SSH for callers".
+#
+# A second sshd, beside the machine's own: it listens on its own port,
+# lets in only the `bbs` account (no password), and hands every session
+# to the BBS, whatever the client asks. The machine's sshd -- your way
+# in -- is not touched.
+#
+#   /etc/ssh/sshd_bbs_config, with /etc/systemd/system/sshd-bbs.service
+
+Port 2222
+HostKey /etc/ssh/bbs/ssh_host_ed25519_key
+PidFile /run/sshd-bbs.pid
+
+# only the bbs account, only into the BBS
+AllowUsers bbs
+PermitRootLogin no
+ForceCommand /usr/local/bin/bbs -d /var/lib/bbs --connect
+
+# no password: the BBS asks for its own login. Not through PAM, so it
+# does not depend on the system's PAM (nullok) -- sshd reads the empty
+# password field itself.
+UsePAM no
+PasswordAuthentication yes
+PermitEmptyPasswords yes
+KbdInteractiveAuthentication no
+PubkeyAuthentication no
+
+# a terminal, and nothing else
+PermitTTY yes
+AllowTcpForwarding no
+AllowStreamLocalForwarding no
+AllowAgentForwarding no
+X11Forwarding no
+PermitTunnel no
+PermitUserRC no
+PermitUserEnvironment no
+PrintMotd no
+PrintLastLog no
+
+# strangers do not linger
+LoginGraceTime 30
+MaxAuthTries 3
+MaxStartups 10:30:60
+ClientAliveInterval 60
+ClientAliveCountMax 3

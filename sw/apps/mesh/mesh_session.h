@@ -77,5 +77,8 @@ mesh_msg_t *mesh_session_send_text(mesh_session_t *s, uint32_t to,
 
 // Tell the node we are going. Best effort.
 void mesh_session_bye(mesh_session_t *s);
+// A payload on a private port (mesh_svc.c): true if handed to the node.
+bool mesh_session_send_data(mesh_session_t *s, uint32_t to, uint8_t channel,
+	uint32_t port, const uint8_t *payload, uint32_t len);
 
 #endif

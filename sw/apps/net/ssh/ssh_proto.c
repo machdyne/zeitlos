@@ -13,6 +13,7 @@
 #include "ssh_wire.h"
 #include "../../../ext/monocypher/monocypher.h"
 #include "../../../ext/monocypher/monocypher-ed25519.h"
+#include "../../../common/z25519.h"	// the montmul block when there is one (docs/z25519.md)
 
 // -- message numbers (RFC 4253 / 4252 / 4254) --
 
@@ -224,7 +225,7 @@ static bool send_kex_ecdh_init(ssh_proto_t *s) {
 	ssh_wr w;
 
 	s->random(s->user, s->eph_secret, 32);
-	crypto_x25519_public_key(s->eph_public, s->eph_secret);
+	z_x25519_public_key(s->eph_public, s->eph_secret);
 
 	ssh_wr_init(&w, buf, sizeof(buf));
 	ssh_wr_u8(&w, MSG_KEX_ECDH_INIT);
@@ -330,7 +331,7 @@ static void handle_kex_reply(ssh_proto_t *s, const uint8_t *pl, uint32_t len) {
 	}
 
 	// Shared secret.
-	crypto_x25519(shared, s->eph_secret, q_s);
+	z_x25519(shared, s->eph_secret, q_s);
 
 	// A peer public key that drives X25519 to an all-zero output is a
 	// small-order point, and accepting it means the "shared" secret is
@@ -380,7 +381,7 @@ static void handle_kex_reply(ssh_proto_t *s, const uint8_t *pl, uint32_t len) {
 	// the key exchange to an identity. Without it the exchange still
 	// produces a perfectly good shared secret -- with whoever is in
 	// the middle.
-	if (crypto_ed25519_check(sig_blob, hk_key,
+	if (z_ed25519_check(sig_blob, hk_key,
 			s->exchange_hash, SSH_SHA256_DIGEST) != 0) {
 		fail(s, "ssh: HOST KEY SIGNATURE IS INVALID -- possible interception");
 		return;

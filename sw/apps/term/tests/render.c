@@ -83,6 +83,8 @@ static char clipboard[Z_WM_CLIP_MAX];
 // apps.term.auto_connect; NULL means the file does not set it.
 static const char *cfg_auto_connect;
 static int closes_sent;
+static uint8_t port_sent[512];
+static uint32_t port_sent_n;
 
 static void post(uint32_t from, uint32_t subject, uint32_t tag, z_obj_t obj) {
 	if (mb_count >= 32) return;
@@ -159,6 +161,13 @@ static uint32_t *k_syscall(uint32_t id, uint32_t *args, uint32_t b) {
 				post(m->to, Z_PORT_REFUSED, 0, z_obj_str("busy"));
 			} else {
 				post(m->to, Z_PORT_CONNECTED, 0, z_obj_uint32(7));
+			}
+		} else if (m->subject == Z_PORT_DATA && m->obj.type == Z_BLOB) {
+			// what term sends the far end: typing, and answers
+			uint32_t n = z_blob_len(&m->obj);
+			if (port_sent_n + n <= sizeof(port_sent)) {
+				memcpy(port_sent + port_sent_n, z_blob_data(&m->obj), n);
+				port_sent_n += n;
 			}
 		} else if (m->subject == Z_PORT_CLOSE) {
 			closes_sent++;
@@ -297,7 +306,7 @@ static void check_glass(const char *where) {
 
 			bool inv = VT_PACK_REV(b);
 			if (want_selected(id, col)) inv = !inv;
-			if (port.connected) {
+			if (port.connected && !vt.cursor_hidden) {
 				int cc = vt.cursor_x >= VT_COLS ? VT_COLS - 1 : vt.cursor_x;
 				if (row == vt.cursor_y + view_off && col == cc) inv = !inv;
 			}
@@ -318,7 +327,15 @@ static void check_glass(const char *where) {
 
 			char ch = VT_PACK_CH(b);
 			const uint8_t *g = NULL;
-			if (z_font_index(&TERM_FONT, (uint8_t)ch) >= 0)
+			uint8_t boxg[16];
+			if (vt_is_box((uint8_t)ch)) {
+				// A line-drawing cell: its picture straight from the
+				// generator, at this cell's size and screen parity --
+				// not from term's box font, which is what is tested.
+				int px = clip.x0 + col * cell_w, py = clip.y0 + d * cell_h;
+				vt_box_glyph((uint8_t)ch, cell_w, cell_h, px & 1, py & 1, boxg);
+				g = boxg;
+			} else if (z_font_index(&TERM_FONT, (uint8_t)ch) >= 0)
 				g = TERM_FONT.glyphs + z_font_index(&TERM_FONT, (uint8_t)ch) * TERM_FONT.h;
 
 			bool cell_bad = false;
@@ -441,6 +458,15 @@ int main(int argc, char **argv) {
 	// content area -- mouse coordinates are unsigned.
 	win.x = 40;
 	win.y = 60;
+	// ... and its visible region with it. z_render_open() gave the
+	// window a region at 0,0; moving the window without it left every
+	// pixel below y=214 outside the region, so the paint pass never
+	// reached it -- which was the 149 "known failures" terminal.md
+	// used to list, starting with the panel's box at row 17, column 12.
+	win.clip[0].x0 = win.x;
+	win.clip[0].y0 = win.y;
+	win.clip[0].x1 = win.x + term_win_w - 1;
+	win.clip[0].y1 = win.y + term_win_h - 1;
 
 	printf("term render: window %dx%d, scrollback %d lines\n",
 		term_win_w, term_win_h, TERM_HIST_LINES);
@@ -812,6 +838,95 @@ int main(int argc, char **argv) {
 		frame_check("full height again");
 		expect(vis_rows == VT_ROWS && vskip == 0, "full height: all 25 rows");
 		write_pbm(prefix, "11-full-again");
+	}
+
+	// -- 12. what a BBS draws: boxes, blocks, shades; the questions it asks --
+	printf("12. line drawing, the cursor report, a hidden cursor\n");
+	{
+		expect(port.connected, "(still connected from the scenarios above)");
+
+		// Delivered as a provider delivers it, through port_data().
+		#define REMOTE(str) do { \
+			static z_blob_t bl_; \
+			z_msg_t m_; \
+			memset(&m_, 0, sizeof(m_)); \
+			bl_.len = (uint32_t)strlen(str); bl_.data = (uint8_t *)(str); \
+			m_.from = port.peer_pid; m_.tag = port.conn_id; m_.subject = Z_PORT_DATA; \
+			m_.obj.type = Z_BLOB; m_.obj.val.ptr = &bl_; \
+			port_data(&m_); \
+		} while (0)
+
+		REMOTE("\x1b[2J\x1b[H");
+		// a single box, a double box, and between them every block and shade
+		REMOTE("\xE2\x94\x8C\xE2\x94\x80\xE2\x94\x80\xE2\x94\x80\xE2\x94\x90  "
+			"\xE2\x95\x94\xE2\x95\x90\xE2\x95\xA6\xE2\x95\x90\xE2\x95\x97\r\n");
+		REMOTE("\xE2\x94\x82 A \xE2\x94\x82  "
+			"\xE2\x95\x91" "B" "\xE2\x95\x91" "C" "\xE2\x95\x91\r\n");
+		REMOTE("\xE2\x94\x9C\xE2\x94\x80\xE2\x94\xBC\xE2\x94\x80\xE2\x94\xA4  "
+			"\xE2\x95\xA0\xE2\x95\x90\xE2\x95\xAC\xE2\x95\x90\xE2\x95\xA3\r\n");
+		REMOTE("\xE2\x94\x94\xE2\x94\x80\xE2\x94\xB4\xE2\x94\x80\xE2\x94\x98  "
+			"\xE2\x95\x9A\xE2\x95\x90\xE2\x95\xA9\xE2\x95\x90\xE2\x95\x9D\r\n");
+		REMOTE("\xE2\x96\x88\xE2\x96\x80\xE2\x96\x84\xE2\x96\x8C\xE2\x96\x90 ");
+		for (int i = 0; i < 20; i++) REMOTE("\xE2\x96\x91\xE2\x96\x92\xE2\x96\x93");
+		REMOTE("\r\n");
+		// the same shapes again from a VT100 program: DEC special graphics
+		REMOTE("\x1b(0lqqqk\x1b(B VT100\r\n\x1b(0x\x1b(B   \x1b(0x\x1b(B\r\n\x1b(0mqqqj\x1b(B\r\n");
+		// reverse video over line drawing: a highlighted menu bar
+		REMOTE("\x1b[7m\xE2\x96\x92 menu \xE2\x94\x80\xE2\x94\x80\x1b[0m\r\n");
+		frame_check("line drawing, blocks and shades, drawn at the cell size");
+		expect((uint8_t)vt.cells[0][0].ch == VT_BOX_DR && (uint8_t)vt.cells[0][7].ch == VT_BOX_DR2 &&
+			(uint8_t)vt.cells[5][0].ch == VT_BOX_DR, "(the cells hold line-drawing codes)");
+		expect((uint8_t)vt.cells[1][7].ch == VT_BOX_V2 && vt.cells[1][8].ch == 'B' &&
+			(uint8_t)vt.cells[1][9].ch == VT_BOX_V2 && vt.cells[1][10].ch == 'C' &&
+			(uint8_t)vt.cells[1][11].ch == VT_BOX_V2, "(row 2 is ║B║C║, as sent)");
+		expect((uint8_t)vt.cells[4][6].ch == VT_BOX_SHADE1 && (uint8_t)vt.cells[4][65].ch == VT_BOX_SHADE3 &&
+			(uint8_t)vt.cells[8][0].ch == VT_BOX_SHADE2 && vt.cells[8][0].reverse,
+			"(shades across the row; a reversed shade on the menu bar)");
+		write_pbm(prefix, "12-boxes");
+
+		// the other font: rebuilt at 6x12, still exact
+		term_toggle_font();
+		redraw_at(40, 60);
+		frame_check("line drawing at 6x12, after the Aa toggle");
+		write_pbm(prefix, "12-boxes-6x12");
+		term_toggle_font();
+		redraw_at(40, 60);
+		frame_check("and back at 5x8");
+
+		// A BBS asks where the cursor is to find out it has an ANSI
+		// terminal; term answers at once, through the port.
+		port_sent_n = 0;
+		REMOTE("\x1b[12;40H\x1b[6n");
+		expect(port_sent_n == 8 && !memcmp(port_sent, "\x1b[12;40R", 8),
+			"CSI 6 n answered through the port: ESC [ 12 ; 40 R");
+		port_sent_n = 0;
+		REMOTE("\x1b[c");
+		expect(port_sent_n == 7 && !memcmp(port_sent, "\x1b[?1;0c", 7), "CSI c answered: a VT100");
+
+		// The cursor, hidden and shown: check_glass() expects no cursor
+		// while it is hidden, so a stale block would fail it.
+		REMOTE("\x1b[?25l");
+		frame_check("the cursor hidden (CSI ? 25 l): not drawn, and nothing printed");
+		expect(vt.cells[11][39].ch == ' ' && vt.cells[11][40].ch == ' ', "no \"25l\" on the screen");
+		REMOTE("\x1b[5;5Hmove");
+		frame_check("hidden while it moves");
+		REMOTE("\x1b[?25h");
+		frame_check("shown again");
+
+		// Copy pastes the characters, not the codes.
+		clipboard[0] = 0;
+		REMOTE("\x1b[2J\x1b[H\xE2\x94\x8C\xE2\x94\x80\xE2\x96\x92x\xE2\x95\x9D");   // ┌─▒x╝
+		sel_active = true;
+		sel_a_id = sel_c_id = vt_history_pushed(&vt) - (uint32_t)view_off;
+		sel_a_col = 0; sel_c_col = 4;
+		sel_copy();
+		expect(!strcmp(clipboard, "\xE2\x94\x8C\xE2\x94\x80\xE2\x96\x92x\xE2\x95\x9D"),
+			"a copy of line drawing pastes the characters: ┌─▒x╝");
+		sel_active = false;
+		frame_check("(after the copy)");
+		REMOTE("\x1b[2J\x1b[H");
+		frame_check("cleared");
+		#undef REMOTE
 	}
 
 	printf("\nterm render: %d checks, %d failed\n", checks, failures);

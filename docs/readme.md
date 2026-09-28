@@ -112,6 +112,15 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 |---|---|
 | [networking](networking.md) | The `net` service: IP, TCP, drivers |
 | [netserve](netserve.md) | SSH, telnet and HTTP servers |
+| [bbs](bbs.md) | The BBS and `fed` federation: plan, progress, running it |
+| [fed](fed.md) | zfed, federation between BBS nodes: the protocol spec |
+| [keccak\_hw](keccak_hw.md) | The Keccak-f[1600] block (optional) |
+| [mlkem](mlkem.md) | ML-KEM-768 (FIPS 203): post-quantum key encapsulation |
+| [zjson](zjson.md) | A strict JSON parser: zfed's subset |
+| [z25519](z25519.md) | X25519 and Ed25519 checks on the montmul block |
+| [sha256\_hw](sha256_hw.md) | The SHA-256 block, and how software shares it |
+| [cryptobench](cryptobench.md) | What the cryptography costs on this machine |
+| [bbs\_linux](bbs_linux.md) | The BBS as a Linux server: telnet, SSH via OpenSSH, systemd |
 | [ssh](ssh.md) | SSH client and server |
 | [tls](tls.md) | TLS 1.3 |
 | [tls\_resumption](tls_resumption.md) | Keep-alive and session resumption |

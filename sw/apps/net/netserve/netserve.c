@@ -63,8 +63,12 @@
 
 enum { K_TELNET = 1, K_ECHO, K_HTTP, K_SSH };
 
-// SSH sessions: an engine each (about 6 KB), from a small pool.
-#define SSH_MAX 2
+// SSH sessions: an engine each (about 10 KB with its buffers), from a
+// pool allocated at start -- apps.netserve.ssh_sessions of them, 2 by
+// default, SSH_MAX at most. On the heap rather than in .bss so that a
+// machine with no SSH pays nothing for it (docs/netserve.md, "Cost").
+#define SSH_MAX 4
+#define SSH_DEFAULT 2
 #define SSH_OUT_MAX 2048        // engine output waiting for room in to_net
 typedef struct {
 	bool used;
@@ -75,12 +79,13 @@ typedef struct {
 	uint16_t in_len;
 	uint16_t app_sent;          // bytes of to_app given to the port, to credit the window
 } ssh_slot_t;
-static ssh_slot_t ssh_pool[SSH_MAX];
+static ssh_slot_t *ssh_pool;
+static int ssh_pool_n;
 static uint8_t host_seed[32];
 #define HOSTKEY_KEY "apps.netserve.hostkey"
 #define AUTHKEYS_PATH "/user/authkeys"
 #define AUTHKEYS_MAX 8192           // the file; RSA-4096 lines are ~740 bytes
-static uint32_t ssh_methods;        // SSHS_AUTH_*, from apps.netserve.ssh_auth
+static uint32_t ssh_methods;        // SSHS_AUTH_*, from apps.netserve.ssh_auth (not noauth listeners)
 
 enum { H_REQ = 0, H_SEND };
 enum { S_FREE = 0, S_LOGIN, S_LAUNCH, S_CONNECT, S_OPEN, S_AWAY, S_CLOSING, S_DRAIN };
@@ -102,6 +107,24 @@ typedef struct {
 	z_port_t app;               // to the backend port
 	uint32_t app_pid;
 	char target[32];            // the port name `app` is (or is going) to
+	bool noauth;                // from a noauth listener: nobody checked who this is
+	uint16_t listener;          // index in its kind's svc_ list
+
+	// A CONNECT still unanswered when the session ended. The provider
+	// will answer it, in order, and that answer must be taken by THIS
+	// slot -- matched to a newer session's CONNECT it would hand that
+	// session a connection meant for this one. And the identity map
+	// below is borrowed by the provider until it has read the CONNECT
+	// (docs/messaging.md, "borrowed data"), so the slot is not reused
+	// before then either.
+	bool connect_orphan;
+
+	// Who is connecting, for the provider (zport.h, "Who is
+	// connecting"): a map built in place, pointing at this session's
+	// own storage. Kept until the session is freed.
+	z_obj_table_t id_tab;
+	z_obj_t id_k[5], id_v[5];
+	char id_user[33];
 
 	// The terminal handoff, as term does it (docs/netserve.md): a
 	// full-screen child of posix -- vi -- takes the session over, and
@@ -149,16 +172,25 @@ static sess_t sess[MAX_SESS];
 static uint32_t net_pid;
 static uint32_t connect_seq;
 
-static struct {
+// One listening port. telnet and ssh may have several, each with its
+// own target and flags: "22 bbs0 noauth any; 2222 posix0"
+// (docs/netserve.md, "Configuration").
+#define LISTEN_MAX 4
+enum { ALLOW_DEFAULT = 0, ALLOW_SUBNET, ALLOW_ANY };
+typedef struct {
 	bool on;
 	uint16_t port;
-	char target[32];            // telnet: the port name to connect to
+	char target[32];            // the port name sessions connect to
+	bool noauth;                // no password: the target does its own login
+	uint8_t allow;              // ALLOW_*: this listener's own subnet rule
 	bool listening;
-} svc_telnet, svc_echo, svc_http, svc_ssh;
+} svc_t;
+
+static svc_t svc_telnet[LISTEN_MAX], svc_ssh[LISTEN_MAX], svc_echo, svc_http;
 
 static char http_root[64];      // the directory HTTP serves, no trailing slash
 
-static bool allow_any;
+static bool allow_any;          // apps.netserve.allow: the default for every listener
 
 // -- small helpers --
 
@@ -213,6 +245,7 @@ static void net_str(sess_t *s, const char *t) {
 // (S_DRAIN) until every DATA it sent has been acked -- zport frees a
 // send's memory on its ack, so freeing the session sooner would leak it.
 static void end(sess_t *s, bool close_net) {
+	if (s->state == S_CONNECT) s->connect_orphan = true;    // its answer is still coming
 	if (s->fh >= 0) { fs_close_handle(s->fh); s->fh = -1; }
 	for (int i = 0; i < s->held_net_n; i++) ack(net_pid, s->held_net[i].tag);
 	for (int i = 0; i < s->held_app_n; i++) ack(s->app_pid, s->held_app[i].tag);
@@ -223,8 +256,10 @@ static void end(sess_t *s, bool close_net) {
 	wipe(s->pw, sizeof(s->pw));
 	s->state = S_DRAIN;
 	// A peer that died never acks: free the slot anyway, after a while,
-	// and let its last few sends leak rather than the session.
-	s->deadline = z_uptime_ticks() + 5u * Z_TICK_HZ;
+	// and let its last few sends leak rather than the session. An
+	// unanswered CONNECT gets as long as a live one would have: its
+	// provider may still be starting.
+	s->deadline = z_uptime_ticks() + (s->connect_orphan ? LAUNCH_TICKS : 5u * Z_TICK_HZ);
 }
 
 // Closes the TCP side after what is queued for it has gone out.
@@ -234,10 +269,52 @@ static void close_after_flush(sess_t *s) {
 
 // -- the backend --
 
+// The ports netserve may start when nobody has registered them yet, as
+// term's REPL and POSIX buttons do. Anything else must already be
+// running.
 static const char *program_for(const char *name) {
 	if (!strcmp(name, "repl0")) return "repl";
 	if (!strcmp(name, "posix0")) return "posix";
+	if (!strcmp(name, "bbs0")) return "bbs";       // docs/bbs.md
 	return NULL;
+}
+
+// Who this session is, as the CONNECT's argument (zport.h, "Who is
+// connecting"). Built in the session's own storage, not the heap: the
+// provider reads it after we have sent it, and it stays valid until
+// the slot is freed, which waits for the provider's answer.
+//
+// Five entries, ten objects: inside Z_MSG_MAX_ITEMS (zmsg.h), which is
+// what a receiver can resolve.
+static z_obj_t identity(sess_t *s) {
+	static const char *keys[5] = {
+		Z_PORT_ID_TRANSPORT, Z_PORT_ID_AUTH, Z_PORT_ID_PEER, Z_PORT_ID_PORT, Z_PORT_ID_USER,
+	};
+	uint32_t n = 4;
+	z_obj_t o;
+
+	for (int i = 0; i < 5; i++) {
+		s->id_k[i].type = Z_STR;
+		s->id_k[i].val.str = (char *)keys[i];
+	}
+	s->id_v[0].type = Z_STR;
+	s->id_v[0].val.str = (char *)(s->kind == K_SSH ? "ssh" : "telnet");
+	s->id_v[1].type = Z_STR;
+	s->id_v[1].val.str = (char *)(s->noauth ? Z_PORT_AUTH_NONE : Z_PORT_AUTH_SYSTEM);
+	s->id_v[2] = z_obj_uint32(s->info.ip);
+	s->id_v[3] = z_obj_uint32(s->info.lport);
+	if (s->kind == K_SSH && s->ssh) {
+		snprintf(s->id_user, sizeof(s->id_user), "%s", s->ssh->eng.username);
+		s->id_v[4].type = Z_STR;
+		s->id_v[4].val.str = s->id_user;
+		n = 5;
+	}
+	s->id_tab.len = n;
+	s->id_tab.a = s->id_k;
+	s->id_tab.b = s->id_v;
+	o.type = Z_MAP;
+	o.val.ptr = &s->id_tab;
+	return o;
 }
 
 static void app_connect(sess_t *s) {
@@ -273,15 +350,19 @@ static void app_connect(sess_t *s) {
 	s->deadline = z_uptime_ticks() + LAUNCH_TICKS;
 	// Tag 0, like every zport CONNECT: the providers answer with tag 0,
 	// in order, so the answer is matched to our oldest open CONNECT to
-	// that provider (app_answered()).
-	z_msg_new_send(pid, Z_PORT_CONNECT, 0, z_obj_none());
+	// that provider (oldest_connecting()).
+	z_msg_new_send(pid, Z_PORT_CONNECT, 0, identity(s));
 }
 
+// The session a provider's CONNECTED or REFUSED answers: our oldest
+// unanswered CONNECT to it -- including one whose session has since
+// ended (connect_orphan), since the provider answers every CONNECT, in
+// order, whether or not we are still waiting.
 static sess_t *oldest_connecting(uint32_t pid) {
 	sess_t *best = NULL;
 	for (int i = 0; i < MAX_SESS; i++) {
 		sess_t *s = &sess[i];
-		if (s->state == S_CONNECT && s->app_pid == pid &&
+		if ((s->state == S_CONNECT || s->connect_orphan) && s->app_pid == pid &&
 				(!best || (int32_t)(s->connect_seq - best->connect_seq) < 0))
 			best = s;
 	}
@@ -865,13 +946,20 @@ static void on_connect(const z_msg_t *m) {
 	}
 	memcpy(&info, z_blob_data(&m->obj), sizeof(info));
 
-	if (svc_telnet.listening && info.lport == svc_telnet.port) kind = K_TELNET;
-	else if (svc_echo.listening && info.lport == svc_echo.port) kind = K_ECHO;
-	else if (svc_http.listening && info.lport == svc_http.port) kind = K_HTTP;
-	else if (svc_ssh.listening && info.lport == svc_ssh.port) kind = K_SSH;
+	const svc_t *svc = NULL;
+	int li = 0;
+	for (li = 0; li < LISTEN_MAX && !svc; li++) {
+		if (svc_telnet[li].listening && info.lport == svc_telnet[li].port) { kind = K_TELNET; svc = &svc_telnet[li]; }
+		else if (svc_ssh[li].listening && info.lport == svc_ssh[li].port) { kind = K_SSH; svc = &svc_ssh[li]; }
+	}
+	li--;
+	if (svc) ;
+	else if (svc_echo.listening && info.lport == svc_echo.port) { kind = K_ECHO; svc = &svc_echo; li = 0; }
+	else if (svc_http.listening && info.lport == svc_http.port) { kind = K_HTTP; svc = &svc_http; li = 0; }
 	else { refuse(m, "netserve: no service on that port"); return; }
 
-	if (!allow_any && !(info.flags & Z_NET_ACCEPT_LOCAL)) {
+	bool any = svc->allow == ALLOW_ANY || (svc->allow == ALLOW_DEFAULT && allow_any);
+	if (!any && !(info.flags & Z_NET_ACCEPT_LOCAL)) {
 		printf("netserve: refused ");
 		print_ip(info.ip);
 		printf(" -- not on this subnet (apps.netserve.allow)\n");
@@ -882,7 +970,7 @@ static void on_connect(const z_msg_t *m) {
 	if (!s) { refuse(m, "netserve: too many sessions"); return; }
 	ssh_slot_t *slot = NULL;
 	if (kind == K_SSH) {
-		for (int i = 0; i < SSH_MAX; i++) if (!ssh_pool[i].used) { slot = &ssh_pool[i]; break; }
+		for (int i = 0; i < ssh_pool_n; i++) if (!ssh_pool[i].used) { slot = &ssh_pool[i]; break; }
 		if (!slot) { refuse(m, "netserve: too many ssh sessions"); return; }
 	}
 
@@ -893,34 +981,41 @@ static void on_connect(const z_msg_t *m) {
 	s->net.peer_pid = m->from;
 	s->net.conn_id = (uint32_t)(s - sess) + 1;
 	s->net.connected = true;
-	s->state = kind == K_TELNET ? S_LOGIN : S_OPEN;
+	s->noauth = svc->noauth;
+	s->listener = (uint16_t)li;
+	s->state = (kind == K_TELNET && !s->noauth) ? S_LOGIN : S_OPEN;
 	s->fh = -1;
+	snprintf(s->target, sizeof(s->target), "%s", svc->target);
 	if (kind == K_SSH) {
 		memset(slot, 0, sizeof(*slot));
 		slot->used = true;
 		s->ssh = slot;
-		snprintf(s->target, sizeof(s->target), "%s", svc_ssh.target);
 	}
-	if (kind != K_SSH) snprintf(s->target, sizeof(s->target), "%s", svc_telnet.target);
 	s->deadline = z_uptime_ticks() + LOGIN_TICKS;
 	z_msg_new_send(m->from, Z_PORT_CONNECTED, m->tag, z_obj_uint32(s->net.conn_id));
 	if (kind == K_SSH) {
 		sshs_init(&s->ssh->eng, host_seed, s, ssh_write, ssh_event, ssh_random, ssh_auth);
-		sshs_set_auth(&s->ssh->eng, ssh_methods, ssh_pk_check, ssh_pk_verify);
+		sshs_set_auth(&s->ssh->eng, s->noauth ? SSHS_AUTH_ANY : ssh_methods, ssh_pk_check, ssh_pk_verify);
 	}
 
 	if (kind == K_HTTP) s->deadline = z_uptime_ticks() + HTTP_TICKS;
-	printf("netserve: %s session %lu from ",
+	printf("netserve: %s%s session %lu from ",
 		kind == K_TELNET ? "telnet" : kind == K_HTTP ? "http" : kind == K_SSH ? "ssh" : "echo",
-		(unsigned long)s->net.conn_id);
+		s->noauth ? " (noauth)" : "", (unsigned long)s->net.conn_id);
 	print_ip(info.ip);
 	printf("\n");
 
 	if (kind == K_TELNET) {
 		static const uint8_t offer[] = { IAC, WILL, OPT_ECHO, IAC, WILL, OPT_SGA };
 		net_out(s, offer, sizeof(offer));
-		net_str(s, "\r\nZeitlos -- telnet is not encrypted: use it on a network you trust.\r\n\r\n");
-		prompt(s);
+		if (s->noauth) {
+			// The target has the screen from the first byte: its own
+			// banner, its own login. Nothing of ours in between.
+			app_connect(s);
+		} else {
+			net_str(s, "\r\nZeitlos -- telnet is not encrypted: use it on a network you trust.\r\n\r\n");
+			prompt(s);
+		}
 	}
 }
 
@@ -1005,10 +1100,12 @@ static void on_msg(const z_msg_t *m) {
 		switch (m->subject) {
 		case Z_NET_LISTEN_REPLY: {
 			uint32_t port = m->tag, err = m->obj.val.uint32;
-			if (port == svc_telnet.port && svc_telnet.on) svc_telnet.listening = !err;
+			for (int i = 0; i < LISTEN_MAX; i++) {
+				if (port == svc_telnet[i].port && svc_telnet[i].on) svc_telnet[i].listening = !err;
+				if (port == svc_ssh[i].port && svc_ssh[i].on) svc_ssh[i].listening = !err;
+			}
 			if (port == svc_echo.port && svc_echo.on) svc_echo.listening = !err;
 			if (port == svc_http.port && svc_http.on) svc_http.listening = !err;
-			if (port == svc_ssh.port && svc_ssh.on) svc_ssh.listening = !err;
 			if (err) printf("netserve: net refused port %lu (error %lu)\n",
 				(unsigned long)port, (unsigned long)err);
 			else printf("netserve: listening on port %lu\n", (unsigned long)port);
@@ -1059,6 +1156,14 @@ static void on_msg(const z_msg_t *m) {
 	case Z_PORT_CONNECTED:
 		s = oldest_connecting(m->from);
 		if (!s || m->obj.type != Z_UINT32) return;
+		if (s->connect_orphan) {
+			// Answered after the session ended: the provider now holds
+			// a connection nobody will use. Close it at once, or it
+			// keeps a slot there until the provider notices.
+			z_msg_new_send(m->from, Z_PORT_CLOSE, m->obj.val.uint32, z_obj_none());
+			s->connect_orphan = false;
+			return;
+		}
 		s->app.peer_pid = m->from;
 		s->app.conn_id = m->obj.val.uint32;
 		s->app.connected = true;
@@ -1067,6 +1172,7 @@ static void on_msg(const z_msg_t *m) {
 	case Z_PORT_REFUSED:
 		s = oldest_connecting(m->from);
 		if (!s) return;
+		if (s->connect_orphan) { s->connect_orphan = false; return; }
 		net_str(s, "netserve: the port refused: ");
 		if (m->obj.type == Z_STR && m->obj.val.str) net_str(s, m->obj.val.str);
 		net_str(s, "\r\n");
@@ -1227,7 +1333,7 @@ static void poll_session(sess_t *s) {
 		end(s, true);
 
 	if (s->state == S_DRAIN && ((!s->net.pending_count && !s->app.pending_count &&
-			!s->old_app.pending_count) ||
+			!s->old_app.pending_count && !s->connect_orphan) ||
 			(int32_t)(now - s->deadline) >= 0)) {
 		printf("netserve: session %lu ended\n", (unsigned long)((uint32_t)(s - sess) + 1));
 		ssh_release(s);
@@ -1237,31 +1343,17 @@ static void poll_session(sess_t *s) {
 
 // -- configuration --
 
-// Whether SSH can be offered, and the host key if so. The same password
-// rule as telnet -- it hands out a shell -- and two of its own: a
-// seeded random source (an ephemeral key from a weak one gives the
-// session to anyone who recorded it), and a host key that lasts. The
-// key is a 32-byte seed in the flash key/value store, made on the first
-// start; its fingerprint is printed every start, for a user to compare
-// on their first connection.
-static bool ssh_ready(z_auth_status_t *st) {
+// What SSH needs whatever its listeners say: a seeded random source (an
+// ephemeral key from a weak one gives the session to anyone who
+// recorded it), and a host key that lasts. The key is a 32-byte seed in
+// the flash key/value store, made on the first start; its fingerprint
+// is printed every start, for a user to compare on their first
+// connection. The password rule is per listener: password_ok().
+static bool ssh_host_ready(void) {
 	uint32_t len = 0;
 	uint8_t pub[32];
 	char fp[64];
 
-	// The password rule applies where the password does: not to a
-	// server that takes keys only.
-	if (ssh_methods & SSHS_AUTH_PASSWORD) {
-		if (z_auth_status(st) != Z_AUTH_OK || !(st->flags & Z_AUTH_HAS_PASSWORD)) {
-			printf("netserve: ssh stays off -- no password is set (passwd), and "
-				"apps.netserve.ssh_auth allows passwords\n");
-			return false;
-		}
-		if (!(st->flags & Z_AUTH_NET_OK)) {
-			printf("netserve: ssh stays off -- the password is under %d characters\n", Z_AUTH_NET_MIN);
-			return false;
-		}
-	}
 	if (!z_rng_secure()) {
 		printf("netserve: ssh stays off -- no seeded random source (docs/trng.md)\n");
 		return false;
@@ -1281,14 +1373,144 @@ static bool ssh_ready(z_auth_status_t *st) {
 	return true;
 }
 
+// The machine's password, for a listener that asks for it: set, and at
+// least Z_AUTH_NET_MIN long -- it hands out a shell. False, with the
+// reason on the console, otherwise.
+static bool password_ok(const char *what, uint16_t port) {
+	z_auth_status_t st;
+	if (z_auth_status(&st) != Z_AUTH_OK || !(st.flags & Z_AUTH_HAS_PASSWORD)) {
+		printf("netserve: %s on port %u stays off -- no password is set (passwd)\n", what, (unsigned)port);
+		return false;
+	}
+	if (!(st.flags & Z_AUTH_NET_OK)) {
+		printf("netserve: %s on port %u stays off -- the password is under %d characters\n",
+			what, (unsigned)port, Z_AUTH_NET_MIN);
+		return false;
+	}
+	return true;
+}
+
+// Is a port already taken by a listener configured before this one?
+static bool port_taken(uint16_t port) {
+	if (svc_echo.on && svc_echo.port == port) return true;
+	if (svc_http.on && svc_http.port == port) return true;
+	for (int i = 0; i < LISTEN_MAX; i++) {
+		if (svc_telnet[i].on && svc_telnet[i].port == port) return true;
+		if (svc_ssh[i].on && svc_ssh[i].port == port) return true;
+	}
+	return false;
+}
+
+// One entry of a telnet or ssh list: "PORT [TARGET] [noauth] [any|subnet]",
+// words separated by spaces, in any order after the port. Anything it
+// does not understand refuses the ENTRY, and says so: a typo in a flag
+// must not quietly become a different policy.
+static bool parse_listener(const char *what, char *e, uint16_t dport, const char *dtarget, svc_t *out) {
+	char *w, *next;
+	bool have_port = false, have_target = false;
+
+	memset(out, 0, sizeof(*out));
+	out->port = dport;
+	snprintf(out->target, sizeof(out->target), "%s", dtarget);
+	for (w = e; *w; w = next) {
+		while (*w == ' ' || *w == '\t') w++;
+		if (!*w) break;
+		next = w;
+		while (*next && *next != ' ' && *next != '\t') next++;
+		if (*next) *next++ = 0;
+
+		if (*w >= '0' && *w <= '9') {
+			uint32_t p = 0;
+			const char *d = w;
+			while (*d >= '0' && *d <= '9' && p <= 65535) p = p * 10 + (uint32_t)(*d++ - '0');
+			if (have_port || *d || !p || p > 65535) {
+				printf("netserve: %s: '%s' is not a port -- entry ignored\n", what, w);
+				return false;
+			}
+			out->port = (uint16_t)p;
+			have_port = true;
+		} else if (!strcmp(w, "noauth")) out->noauth = true;
+		else if (!strcmp(w, "any")) out->allow = ALLOW_ANY;
+		else if (!strcmp(w, "subnet")) out->allow = ALLOW_SUBNET;
+		else if (!have_target && strlen(w) < sizeof(out->target) &&
+				((*w >= 'a' && *w <= 'z') || (*w >= 'A' && *w <= 'Z'))) {
+			snprintf(out->target, sizeof(out->target), "%s", w);
+			have_target = true;
+		}
+		else {
+			printf("netserve: %s: '%s' is not understood -- entry ignored\n", what, w);
+			return false;
+		}
+	}
+	return true;
+}
+
+// A telnet or ssh value: entries separated by semicolons -- commas are
+// legal in FAT file names, so a semicolon is the separator that cannot
+// turn up inside a value (docs/config.md). The old single-entry form
+// ("22 posix0") is simply a one-entry list.
+static int read_list(const char *key, const char *what, uint16_t dport, const char *dtarget, svc_t *list) {
+	char v[Z_CFG_VAL_MAX];
+	char *e, *next;
+	int n = 0;
+	uint16_t was[LISTEN_MAX];
+
+	// A port net already listens on for us stays listened on: read
+	// again, the list is rebuilt, and an entry that keeps its port keeps
+	// that. Losing it would refuse every connection to an unchanged
+	// port -- net answers a LISTEN only once.
+	for (int i = 0; i < LISTEN_MAX; i++) {
+		was[i] = list[i].listening ? list[i].port : 0;
+		memset(&list[i], 0, sizeof(list[i]));
+	}
+	if (!z_cfg_get(key, v, sizeof(v)) || !strcmp(v, "off") || !strcmp(v, "no")) return 0;
+	for (e = v; e; e = next) {
+		svc_t l;
+		next = strchr(e, ';');
+		if (next) *next++ = 0;
+		while (*e == ' ' || *e == '\t') e++;
+		if (!*e) continue;
+		if (!parse_listener(what, e, dport, dtarget, &l)) continue;
+		if (port_taken(l.port)) {
+			printf("netserve: %s: port %u is already in use here -- entry ignored\n", what, (unsigned)l.port);
+			continue;
+		}
+		if (n >= LISTEN_MAX) {
+			printf("netserve: %s: more than %d ports -- the rest ignored\n", what, LISTEN_MAX);
+			break;
+		}
+		l.on = true;
+		for (int i = 0; i < LISTEN_MAX; i++) if (was[i] && was[i] == l.port) l.listening = true;
+		list[n++] = l;
+	}
+	return n;
+}
+
+// The SSH engines, from the heap: n of them, or as many as fit.
+static void ssh_pool_setup(int n) {
+	if (ssh_pool && ssh_pool_n == n) return;
+	if (ssh_pool) {
+		for (int i = 0; i < ssh_pool_n; i++) if (ssh_pool[i].used) return;     // in use: keep it
+		free(ssh_pool);
+		ssh_pool = NULL;
+		ssh_pool_n = 0;
+	}
+	while (n > 0 && !(ssh_pool = calloc((size_t)n, sizeof(ssh_slot_t)))) n--;
+	ssh_pool_n = ssh_pool ? n : 0;
+}
+
+static bool any_on(void) {
+	if (svc_echo.on || svc_http.on) return true;
+	for (int i = 0; i < LISTEN_MAX; i++) if (svc_telnet[i].on || svc_ssh[i].on) return true;
+	return false;
+}
+
 static void read_config(void) {
 	char v[Z_CFG_VAL_MAX];
-	z_auth_status_t st;
 
-	svc_telnet.on = false;
 	svc_echo.on = false;
 	svc_http.on = false;
-	svc_ssh.on = false;
+	for (int i = 0; i < LISTEN_MAX; i++) svc_telnet[i].on = svc_ssh[i].on = false;
 	allow_any = false;
 
 	if (z_cfg_get("apps.netserve.allow", v, sizeof(v)) && !strcmp(v, "any")) allow_any = true;
@@ -1308,49 +1530,81 @@ static void read_config(void) {
 		size_t rl = strlen(http_root);
 		while (rl > 1 && http_root[rl - 1] == '/') http_root[--rl] = 0;
 		if (rl == 1 && http_root[0] == '/') http_root[0] = 0;   // the card's root
-		svc_http.on = true;
+		if (port_taken(svc_http.port)) printf("netserve: http: port %u is already in use here\n",
+			(unsigned)svc_http.port);
+		else svc_http.on = true;
 	}
 
-	// SSH: a port, then the port name sessions connect to -- "22 posix0".
-	if (z_cfg_get("apps.netserve.ssh", v, sizeof(v)) && strcmp(v, "off") && strcmp(v, "no")) {
-		const char *t = v;
-		svc_ssh.port = (uint16_t)cfg_port(v, 22);
-		while (*t >= '0' && *t <= '9') t++;
-		while (*t == ' ') t++;
-		snprintf(svc_ssh.target, sizeof(svc_ssh.target), "%.31s", *t ? t : "posix0");
-		// Which logins: "both" (the default), "key" or "password".
+	// SSH: "22 posix0", or a list -- "22 bbs0 noauth any; 2222 posix0".
+	if (read_list("apps.netserve.ssh", "ssh", 22, "posix0", svc_ssh)) {
+		// Which logins, for the listeners that check: "both" (the
+		// default), "key" or "password". A noauth listener takes
+		// anyone, whatever this says.
 		ssh_methods = SSHS_AUTH_PASSWORD | SSHS_AUTH_PUBLICKEY;
 		if (z_cfg_get("apps.netserve.ssh_auth", v, sizeof(v))) {
 			if (!strcmp(v, "key") || !strcmp(v, "keys")) ssh_methods = SSHS_AUTH_PUBLICKEY;
 			else if (!strcmp(v, "password")) ssh_methods = SSHS_AUTH_PASSWORD;
 		}
-		svc_ssh.on = ssh_ready(&st);
-	}
-
-	if (z_cfg_get("apps.netserve.telnet", v, sizeof(v)) && strcmp(v, "off") && strcmp(v, "no")) {
-		const char *t = v;
-		svc_telnet.port = (uint16_t)cfg_port(v, 23);
-		while (*t >= '0' && *t <= '9') t++;
-		while (*t == ' ') t++;
-		snprintf(svc_telnet.target, sizeof(svc_telnet.target), "%.31s", *t ? t : "repl0");
-		svc_telnet.on = true;
-		// A telnet password crosses the network in the clear, and
-		// telnet hands out a shell: no password, or a short one, and
-		// telnet stays off. docs/security.md.
-		if (z_auth_status(&st) != Z_AUTH_OK || !(st.flags & Z_AUTH_HAS_PASSWORD)) {
-			printf("netserve: telnet stays off -- no password is set (passwd)\n");
-			svc_telnet.on = false;
-		} else if (!(st.flags & Z_AUTH_NET_OK)) {
-			printf("netserve: telnet stays off -- the password is under %d "
-				"characters\n", Z_AUTH_NET_MIN);
-			svc_telnet.on = false;
+		bool host = ssh_host_ready();
+		int want = (int)z_cfg_get_int("apps.netserve.ssh_sessions", SSH_DEFAULT);
+		if (want < 1) want = 1;
+		if (want > SSH_MAX) want = SSH_MAX;
+		if (host) {
+			ssh_pool_setup(want);
+			if (ssh_pool_n < want) printf("netserve: memory for %d ssh session%s, not %d\n",
+				ssh_pool_n, ssh_pool_n == 1 ? "" : "s", want);
+		}
+		for (int i = 0; i < LISTEN_MAX; i++) {
+			svc_t *l = &svc_ssh[i];
+			if (!l->on) continue;
+			// The password rule applies where the password does: not
+			// to a listener that takes keys only, nor to a noauth one.
+			if (!host || !ssh_pool_n) l->on = false;
+			else if (!l->noauth && (ssh_methods & SSHS_AUTH_PASSWORD) && !password_ok("ssh", l->port))
+				l->on = false;
 		}
 	}
+
+	if (read_list("apps.netserve.telnet", "telnet", 23, "repl0", svc_telnet)) {
+		// A telnet password crosses the network in the clear, and
+		// telnet hands out a shell: no password, or a short one, and a
+		// listener that asks for it stays off. docs/security.md.
+		for (int i = 0; i < LISTEN_MAX; i++) {
+			svc_t *l = &svc_telnet[i];
+			if (l->on && !l->noauth && !password_ok("telnet", l->port)) l->on = false;
+		}
+	}
+}
+
+static void print_listener(const char *what, const svc_t *l) {
+	bool any = l->allow == ALLOW_ANY || (l->allow == ALLOW_DEFAULT && allow_any);
+	printf("netserve: %s on port %u to %s, %s", what, (unsigned)l->port, l->target,
+		any ? "from anywhere" : "from this subnet only");
+	if (l->noauth) printf("; noauth -- no password: %s logs its users in itself", l->target);
+	printf("\n");
+}
+
+static void listen_all(void) {
+	for (int i = 0; i < LISTEN_MAX; i++) {
+		if (svc_telnet[i].on && !svc_telnet[i].listening) listen_on(svc_telnet[i].port);
+		if (svc_ssh[i].on && !svc_ssh[i].listening) listen_on(svc_ssh[i].port);
+	}
+	if (svc_echo.on && !svc_echo.listening) listen_on(svc_echo.port);
+	if (svc_http.on && !svc_http.listening) listen_on(svc_http.port);
+}
+
+static bool all_listening(void) {
+	for (int i = 0; i < LISTEN_MAX; i++) {
+		if (svc_telnet[i].on && !svc_telnet[i].listening) return false;
+		if (svc_ssh[i].on && !svc_ssh[i].listening) return false;
+	}
+	return !(svc_echo.on && !svc_echo.listening) && !(svc_http.on && !svc_http.listening);
 }
 
 int main(void) {
 	char name[24];
 	uint32_t next_listen = 0;
+	bool keys = false;
 
 	if (!z_pid_register("netserve", name, sizeof(name))) {
 		printf("netserve: could not register -- already running?\n");
@@ -1360,22 +1614,25 @@ int main(void) {
 	memset(sess, 0, sizeof(sess));
 
 	read_config();
-	if (!svc_telnet.on && !svc_echo.on && !svc_http.on && !svc_ssh.on) {
+	if (!any_on()) {
 		printf("netserve: nothing to serve -- see apps.netserve.* in docs/netserve.md\n");
 		return 0;
 	}
-	if (svc_telnet.on)
-		printf("netserve: telnet on port %u to %s, %s\n", (unsigned)svc_telnet.port,
-			svc_telnet.target, allow_any ? "from anywhere" : "from this subnet only");
+	for (int i = 0; i < LISTEN_MAX; i++) if (svc_telnet[i].on) print_listener("telnet", &svc_telnet[i]);
 	if (svc_echo.on) printf("netserve: echo on port %u\n", (unsigned)svc_echo.port);
 	if (svc_http.on) printf("netserve: http on port %u, serving %s\n", (unsigned)svc_http.port,
 		http_root[0] ? http_root : "/");
-	if (svc_ssh.on) {
-		printf("netserve: ssh on port %u to %s, %s; logins by %s\n", (unsigned)svc_ssh.port,
-			svc_ssh.target, allow_any ? "from anywhere" : "from this subnet only",
+	for (int i = 0; i < LISTEN_MAX; i++) {
+		if (!svc_ssh[i].on) continue;
+		print_listener("ssh", &svc_ssh[i]);
+		if (!svc_ssh[i].noauth) keys = true;
+	}
+	if (ssh_pool_n) {
+		printf("netserve: ssh: %d session%s at a time; logins by %s\n", ssh_pool_n,
+			ssh_pool_n == 1 ? "" : "s",
 			ssh_methods == SSHS_AUTH_PUBLICKEY ? "key only" :
 			ssh_methods == SSHS_AUTH_PASSWORD ? "password only" : "key or password");
-		if (ssh_methods & SSHS_AUTH_PUBLICKEY) ak_load();   // report on the file now
+		if (keys && (ssh_methods & SSHS_AUTH_PUBLICKEY)) ak_load();   // report on the file now
 	}
 
 	for (;;) {
@@ -1384,16 +1641,9 @@ int main(void) {
 
 		// net, and a listen on each port: retried every two seconds
 		// until net is up and has an address (DHCP can take a while).
-		if ((int32_t)(now - next_listen) >= 0 &&
-				((svc_telnet.on && !svc_telnet.listening) || (svc_echo.on && !svc_echo.listening) ||
-				 (svc_http.on && !svc_http.listening) || (svc_ssh.on && !svc_ssh.listening))) {
+		if ((int32_t)(now - next_listen) >= 0 && !all_listening()) {
 			next_listen = now + 2u * Z_TICK_HZ;
-			if (net_pid || z_pid_lookup("net0", &net_pid)) {
-				if (svc_telnet.on && !svc_telnet.listening) listen_on(svc_telnet.port);
-				if (svc_echo.on && !svc_echo.listening) listen_on(svc_echo.port);
-				if (svc_http.on && !svc_http.listening) listen_on(svc_http.port);
-				if (svc_ssh.on && !svc_ssh.listening) listen_on(svc_ssh.port);
-			}
+			if (net_pid || z_pid_lookup("net0", &net_pid)) listen_all();
 		}
 
 		while (z_msg_read(&m) == Z_OK) on_msg(&m);
