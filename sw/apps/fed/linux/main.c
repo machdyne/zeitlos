@@ -13,6 +13,13 @@
  *   fed --check-join FILE           a publisher checking one: the fingerprint,
  *                                   and the entry to add to the list
  *   fed --dir DIR --publish-list FILE   check a node list, then publish it
+ *
+ * and, for a network's node list without JSON by hand (core/fadmin.c):
+ *
+ *   sudo fed key | nodes | add NAME KEY [sysop=S] [addr=H:P] | set NAME ... | remove NAME
+ *
+ * --dir defaults to /var/lib/fed when it exists; run as root, fed becomes
+ * the owner of that directory before touching anything in it.
  *                                   through the running fed
  *
  * One poll() loop: the TCP listener, the local socket, the sessions (one
@@ -21,6 +28,9 @@
 #define _POSIX_C_SOURCE 200809L
 #define _DEFAULT_SOURCE
 #include <stdio.h>
+#include "../../../ext/monocypher/monocypher.h"
+#include "../core/fadmin.h"
+#include <grp.h>
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
@@ -196,6 +206,75 @@ static int publish_list(const char *dir, const char *path) {
 	return strncmp(reply, "OK", 2) ? 1 : 0;
 }
 
+// -- `fed key`, `fed nodes`, `fed add`...: fadmin.c, over the socket --
+
+static const char *g_dir;
+
+static int lx_request(const char *req, const uint8_t *payload, int plen, char *line, int lcap, uint8_t *data, int dcap, void *ctx) {
+	(void)ctx;
+	struct sockaddr_un ua;
+	memset(&ua, 0, sizeof(ua));
+	ua.sun_family = AF_UNIX;
+	snprintf(ua.sun_path, sizeof(ua.sun_path), "%s/fed.sock", g_dir);
+	int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (fd < 0 || connect(fd, (struct sockaddr *)&ua, sizeof(ua))) { if (fd >= 0) close(fd); return -1; }
+	if (write(fd, req, strlen(req)) < 0 || (plen && write(fd, payload, (size_t)plen) != plen)) { close(fd); return -1; }
+	int ll = 0;
+	char ch;
+	while (ll < lcap - 1 && read(fd, &ch, 1) == 1 && ch != '\n') line[ll++] = ch;
+	line[ll] = 0;
+	int n = 0;
+	if (data && !strncmp(line, "OK ", 3)) {
+		int want = atoi(line + 3);
+		if (want > dcap) want = dcap;
+		while (n < want) { ssize_t r = read(fd, data + n, (size_t)(want - n)); if (r <= 0) break; n += (int)r; }
+	}
+	close(fd);
+	return n;
+}
+
+// The PUBLIC key, from node.key -- never made here: that is fed's first run.
+static bool lx_public_key(uint8_t pk[32], void *ctx) {
+	(void)ctx;
+	char p[300];
+	uint8_t seed[32], sk[64];
+	snprintf(p, sizeof(p), "%s/node.key", g_dir);
+	FILE *f = fopen(p, "rb");
+	if (!f) return false;
+	bool ok = fread(seed, 1, 32, f) == 32;
+	fclose(f);
+	if (ok) crypto_ed25519_key_pair(sk, pk, seed);
+	crypto_wipe(seed, sizeof(seed));
+	crypto_wipe(sk, sizeof(sk));
+	return ok;
+}
+
+static bool lx_read_cfg(char *text, int cap, void *ctx) {
+	(void)ctx;
+	char p[300];
+	snprintf(p, sizeof(p), "%s/fed.cfg", g_dir);
+	FILE *f = fopen(p, "r");
+	if (!f) return false;
+	size_t n = fread(text, 1, (size_t)cap - 1, f);
+	fclose(f);
+	text[n] = 0;
+	return true;
+}
+
+static void lx_out(const char *line, void *ctx) { (void)ctx; puts(line); }
+
+// Run as root: become the data directory's owner first (bbs, on a
+// server), so that nothing in it is ever made or owned by root.
+static bool drop_to_owner(const char *dir) {
+	struct stat st;
+	if (geteuid() != 0 || stat(dir, &st) || st.st_uid == 0) return true;
+	if (setgroups(0, NULL) || setgid(st.st_gid) || setuid(st.st_uid)) {
+		fprintf(stderr, "fed: cannot become the owner of %s\n", dir);
+		return false;
+	}
+	return true;
+}
+
 // The node key: DIR/node.key, 32 random bytes, 0600 -- made if missing.
 static bool node_seed(const char *dir, uint8_t seed[32]) {
 	char p[300];
@@ -249,21 +328,40 @@ static void dial(int i) {
 }
 
 int main(int argc, char **argv) {
-	const char *dir = NULL, *bind_addr = "0.0.0.0", *check = NULL, *list_file = NULL;
+	const char *dir = NULL, *bind_addr = "0.0.0.0", *check = NULL, *list_file = NULL, *network = NULL;
 	bool print_key = false;
-	int join_at = 0;
+	int join_at = 0, cmd_at = 0;
 	for (int i = 1; i < argc; i++) {
+		if (fadmin_is_command(argv[i])) { cmd_at = i; break; }
 		if (!strcmp(argv[i], "--dir") && i + 1 < argc) dir = argv[++i];
+		else if (!strcmp(argv[i], "--network") && i + 1 < argc) network = argv[++i];
 		else if (!strcmp(argv[i], "--bind") && i + 1 < argc) bind_addr = argv[++i];
 		else if (!strcmp(argv[i], "--print-key")) print_key = true;
 		else if (!strcmp(argv[i], "--check-join") && i + 1 < argc) check = argv[++i];
 		else if (!strcmp(argv[i], "--publish-list") && i + 1 < argc) list_file = argv[++i];
 		else if (!strcmp(argv[i], "--join-request")) { join_at = i + 1; break; }
-		else { fprintf(stderr, "usage: fed --dir DIR [--bind ADDR] [--print-key] [--join-request name=...] [--publish-list FILE]\n"
-			"       fed --check-join FILE\n"); return 2; }
+		else { fprintf(stderr, "usage: fed [--dir DIR] [--bind ADDR]                 run the node\n"
+			"       fed [--dir DIR] key | nodes                     this node's public key; the network's list\n"
+			"       fed [--dir DIR] add NAME KEY [sysop=S] [addr=HOST:PORT]\n"
+			"       fed [--dir DIR] set NAME [sysop=S] [addr=HOST:PORT] | remove NAME\n"
+			"       fed --dir DIR --join-request name=... | --check-join FILE | --publish-list FILE\n"
+			"  (--dir: /var/lib/fed when it exists; --network NAME where fed.cfg names several)\n"); return 2; }
 	}
 	if (check) return check_join(check);
-	if (!dir) { fprintf(stderr, "fed: --dir is required\n"); return 2; }
+	if (!dir) {
+		struct stat st;
+		if (!stat("/var/lib/fed", &st) && S_ISDIR(st.st_mode)) dir = "/var/lib/fed";
+		else { fprintf(stderr, "fed: no /var/lib/fed -- say where: --dir DIR\n"); return 2; }
+	}
+	if (!drop_to_owner(dir)) return 1;
+	if (cmd_at) {
+		fadmin_io_t io = { lx_request, lx_public_key, lx_read_cfg, lx_out, NULL, "sudo systemctl start fed", NULL };
+		static char where[320];
+		snprintf(where, sizeof(where), "%s/node.key", dir);
+		io.private_key_where = where;
+		g_dir = dir;
+		return fadmin(&io, network, argc - cmd_at, argv + cmd_at);
+	}
 	if (list_file) return publish_list(dir, list_file);
 	mkdir(dir, 0700);
 	uint8_t seed[32];

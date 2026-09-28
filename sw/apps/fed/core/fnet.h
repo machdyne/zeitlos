@@ -62,6 +62,12 @@ bool fnet_has(const fnet_list_t *l, const uint8_t key[32], const char **addr);
 // by name, which is rare.)
 bool fnet_find_name(const uint8_t *json, uint32_t len, const char *name, uint8_t key[32]);
 // Is `key` a moderator of `topic` in this list?
+// Shared working space, for callers that never parse at the same moment
+// (fnode loading a list; fadmin checking one): the parser's tokens, and a
+// list to parse into. Each is large; one of each in the image, not three.
+void *fnet_tokens(int *cap);
+fnet_list_t *fnet_scratch(void);
+
 bool fnet_moderates(const fnet_list_t *l, const uint8_t key[32], const char *topic);
 
 // "host:port": the host 1+ bytes of A-Z a-z 0-9 . -, the port 1-65535.

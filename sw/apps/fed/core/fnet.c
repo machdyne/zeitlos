@@ -14,6 +14,10 @@
 // 200 nodes of up to four fields: ~1,800 tokens. 32 bytes each.
 #define FNET_TOKENS 2048
 static zjson_tok_t g_tok[FNET_TOKENS];
+static fnet_list_t g_scratch;
+
+void *fnet_tokens(int *cap) { *cap = FNET_TOKENS; return g_tok; }
+fnet_list_t *fnet_scratch(void) { return &g_scratch; }
 
 bool fnet_name_ok(const char *name) {
 	size_t n = strlen(name);

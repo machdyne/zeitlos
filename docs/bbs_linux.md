@@ -46,10 +46,13 @@ There is no SSH server in `bbs`: OpenSSH does SSH, and a `bbs` account
 hands every session to the BBS. **For a server, use a second sshd for
 the BBS alone** -- its own port, only the `bbs` account, the machine's
 own sshd untouched: `sw/apps/bbs/linux/sshd_bbs_config` and
-`sshd-bbs.service`, set up step by step in
-[bbs_deploy.md](bbs_deploy.md) and **tested on Ubuntu 24.04's OpenSSH
-9.6p1**. The block below does the same inside the machine's own sshd,
-for a machine where that is wanted instead.
+`sshd-bbs.service` -- **tested on Ubuntu 24.04's OpenSSH 9.6p1**: an
+empty password into the BBS, `ssh bbs@host <command>` running the BBS
+anyway, any other account refused, forwarding refused. The `bbs`
+account's shell must be a real shell (`/bin/sh`): sshd runs the forced
+command through it, and refuses an account whose shell does not exist.
+The block below does the same inside the machine's own sshd, for a
+machine where that is wanted instead.
 
 ```
 useradd --system --create-home --home-dir /var/lib/bbs --shell /bin/sh bbs
@@ -131,5 +134,7 @@ quick on a server blocks every caller on the board while it runs
 
 The Machdyne plan -- a Linux server as the public node and a Zeitlos
 machine as a second one, with posts flowing between them -- is zfed
-([fed.md](fed.md)); [bbs_deploy.md](bbs_deploy.md) sets it up, step 10
-adding the board.
+([fed.md](fed.md)): `fed` runs beside the BBS (`sw/apps/fed/linux/fed.service`,
+as the `bbs` account -- its socket is readable only by its owner). Its
+network is managed with `sudo fed key`, `nodes`, `add`, `set` and
+`remove` ([fed.md](fed.md), "Managing a network").

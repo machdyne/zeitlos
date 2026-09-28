@@ -250,6 +250,7 @@ typedef struct {
 	bool logged_in;
 	user_t user;
 	int tries;
+	int empty_handles;                 // Enter alone at the handle prompt: the third ends the call
 	char pending_pw[FIELD_MAX];        // the new password, until confirmed
 
 	// the line being typed

@@ -413,6 +413,11 @@ int main(void) {
 	type(&x, "Phil\rnope\rPhil\rnope\r");
 	CK(x.closed && on_screen(&x, "Too many tries"), "three and the call ends");
 	call(&x, T_VT, "telnet", "");
+	type(&x, "\r\r");
+	CK(!x.closed, "Enter alone at the handle prompt, twice: still asking");
+	type(&x, "\r");
+	CK(x.closed && on_screen(&x, "Goodbye."), "the third time: goodbye, and the call ends");
+	call(&x, T_VT, "telnet", "");
 	type(&x, "nobody\r");
 	CK(on_screen(&x, "No such user"), "an unknown handle");
 	hang(&x);

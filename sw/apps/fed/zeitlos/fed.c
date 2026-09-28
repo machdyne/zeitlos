@@ -42,6 +42,10 @@
 #include "../../../common/zplat.h"
 #include "../core/fnode.h"
 #include "../core/fobj.h"
+#include "../core/fadmin.h"
+#include "../../../common/zwin.h"			// z_launch_arg_take()
+#include "../../posix/posix.h"				// PX_STDOUT_TAG
+#include "../../../ext/monocypher/monocypher.h"
 #include "../../../ext/monocypher/monocypher-ed25519.h"
 
 #define NODEKEY_KEY  "apps.fed.nodekey"
@@ -518,13 +522,166 @@ static bool fed_start(const char *dir) {
 	}
 	for (int i = 0; i < FNODE_PEERS; i++) peer_ip[i] = 0;
 	fobj_hex(fnode_public_key(), 32, h);
-	printf("fed: running as %s, key %s\n", name, h);
+	// the key on a line of its own: 64 characters copy whole from an
+	// 80-column console; `run fed key` says the same
+	printf("fed: running as %s; its public key:\n%s\n", name, h);
 	return true;
 }
 
+// -- `run fed key`, `run fed nodes`, `run fed add ...`: fadmin.c, over fed0 --
+//
+// The running fed is asked through its port, exactly as a program asks
+// it (docs/fed.md, "The local interface"); this process registers no
+// name and makes no key. What it says goes to the posix terminal the
+// command was typed in -- a "stdout" connection to posix0, as zcc's --
+// or, without posix, to the console.
+
+static char g_adir[Z_CFG_VAL_MAX];
+static z_port_t g_out, g_fp;
+static bool g_out_on;
+// fed's reply, as it arrives: its first line here, what follows it
+// straight into the caller's buffer (no copy of 16 KB of its own)
+static char g_line[256];
+static int g_ll;
+static bool g_have_line;
+static uint8_t *g_data;
+static int g_dcap, g_dlen;
+
+// One pass over the mailbox: fed's replies taken (and acked); acks seen.
+static void adm_pump(void) {
+	z_msg_t m;
+	while (z_msg_read(&m) == Z_OK) {
+		if (g_out_on && m.from == g_out.peer_pid) {
+			if (m.subject == Z_PORT_DATA_ACK) z_port_handle_ack(&g_out, &m);
+			else if (m.subject == Z_PORT_CLOSE) g_out_on = false;
+			continue;
+		}
+		if (g_fp.connected && m.from == g_fp.peer_pid) {
+			if (m.subject == Z_PORT_DATA && m.obj.type == Z_BLOB) {
+				const uint8_t *d = z_blob_data(&m.obj);
+				uint32_t n = z_blob_len(&m.obj), i = 0;
+				for (; i < n && !g_have_line; i++) {
+					if (d[i] == '\n') g_have_line = true;
+					else if (g_ll < (int)sizeof(g_line) - 1) g_line[g_ll++] = (char)d[i];
+				}
+				if (i < n && g_data) {
+					int k = (int)(n - i);
+					if (k > g_dcap - g_dlen) k = g_dcap - g_dlen;
+					if (k > 0) { memcpy(g_data + g_dlen, d + i, (size_t)k); g_dlen += k; }
+				}
+				z_port_send_ack(&m);
+			} else if (m.subject == Z_PORT_DATA_ACK) z_port_handle_ack(&g_fp, &m);
+			else if (m.subject == Z_PORT_CLOSE) g_fp.connected = false;
+		}
+	}
+}
+
+// Bytes to a port, in pieces, waiting on acks rather than losing any.
+static bool adm_send(z_port_t *p, const uint8_t *d, uint32_t n) {
+	uint32_t off = 0;
+	for (int tries = 0; off < n && tries < 2000; tries++) {
+		uint32_t k = n - off > 512 ? 512 : n - off;
+		if (z_port_send(p, d + off, k) == Z_OK) { off += k; continue; }
+		adm_pump();
+		z_proc_wait(1);
+	}
+	return off == n;
+}
+
+static int zt_request(const char *req, const uint8_t *payload, int plen, char *line, int lcap, uint8_t *data, int dcap, void *ctx) {
+	uint32_t pid;
+	(void)ctx;
+	if (!z_pid_lookup("fed0", &pid) || z_port_connect(&g_fp, pid) != Z_OK) return -1;
+	g_ll = 0; g_have_line = false; g_data = data; g_dcap = data ? dcap : 0; g_dlen = 0;
+	if (!adm_send(&g_fp, (const uint8_t *)req, (uint32_t)strlen(req)) || (plen && !adm_send(&g_fp, payload, (uint32_t)plen))) {
+		z_port_close(&g_fp);
+		return -1;
+	}
+	// its reply: a line, and after "OK n", n bytes -- or five seconds
+	uint32_t until = z_uptime_ticks() + 5u * Z_TICK_HZ;
+	int want = -1;
+	while ((int32_t)(z_uptime_ticks() - until) < 0 && g_fp.connected) {
+		adm_pump();
+		if (g_have_line && want < 0) {
+			g_line[g_ll] = 0;
+			want = data && !strncmp(g_line, "OK ", 3) ? atoi(g_line + 3) : 0;
+			if (want > dcap) want = dcap;
+		}
+		if (want >= 0 && g_dlen >= want) break;
+		z_proc_wait(1);
+	}
+	if (g_fp.connected) z_port_close(&g_fp);
+	g_data = NULL;
+	if (!g_have_line) { snprintf(line, (size_t)lcap, "ERR no reply from fed"); return 0; }
+	snprintf(line, (size_t)lcap, "%s", g_line);
+	return want > 0 && g_dlen >= want ? want : 0;
+}
+
+// The PUBLIC key, from the key/value store -- never made here.
+static bool zt_public_key(uint8_t pk[32], void *ctx) {
+	uint8_t seed[32], sk[64];
+	uint32_t len = 0;
+	(void)ctx;
+	if (z_kv_get(NODEKEY_KEY, seed, 32, &len) != Z_KV_OK || len != 32) return false;
+	crypto_ed25519_key_pair(sk, pk, seed);
+	crypto_wipe(seed, sizeof(seed));
+	crypto_wipe(sk, sizeof(sk));
+	return true;
+}
+
+static bool zt_read_cfg(char *text, int cap, void *ctx) {
+	char p[Z_CFG_VAL_MAX + 16];
+	(void)ctx;
+	snprintf(p, sizeof(p), "%s/fed.cfg", g_adir);
+	int h = plat_open(p, PLAT_READ);
+	if (h < 0) return false;
+	int n = plat_read(h, text, cap - 1);
+	plat_close(h);
+	text[n > 0 ? n : 0] = 0;
+	return true;
+}
+
+static void zt_out(const char *line, void *ctx) {
+	char b[420];
+	(void)ctx;
+	int n = snprintf(b, sizeof(b), "%s\r\n", line);
+	if (n > (int)sizeof(b) - 1) n = (int)sizeof(b) - 1;
+	if (!g_out_on || !adm_send(&g_out, (const uint8_t *)b, (uint32_t)n)) printf("%s\n", line);
+}
+
+static int run_admin(const char *arg, const char *dir) {
+	static char words[Z_WM_ARG_MAX];
+	char *argv[12];
+	int argc = 0;
+	uint32_t pid;
+	snprintf(words, sizeof(words), "%s", arg);
+	snprintf(g_adir, sizeof(g_adir), "%s", dir);
+	for (char *w = strtok(words, " \t"); w && argc < 12; w = strtok(NULL, " \t")) argv[argc++] = w;
+	if (z_pid_lookup("posix0", &pid) && pid && z_port_connect_arg(&g_out, pid, z_obj_str(PX_STDOUT_TAG)) == Z_OK) g_out_on = true;
+	fadmin_io_t io = { zt_request, zt_public_key, zt_read_cfg, zt_out,
+		"the flash key/value store, " NODEKEY_KEY, "run fed", NULL };
+	int rc = fadmin(&io, NULL, argc, argv);
+	if (g_out_on) {
+		for (int i = 0; i < 100 && g_out.pending_count; i++) { adm_pump(); z_proc_wait(1); }	// let it all arrive
+		z_port_close(&g_out);
+	}
+	return rc;
+}
+
 int main(void) {
-	char dir[Z_CFG_VAL_MAX];
+	char dir[Z_CFG_VAL_MAX], arg[Z_WM_ARG_MAX];
 	if (!z_cfg_get("apps.fed.dir", dir, sizeof(dir)) || !dir[0]) strcpy(dir, "/fed");
+	// `run fed key`, `run fed nodes`, ...: a command, then gone -- decided
+	// before anything else, so that it never collides with a running fed
+	if (z_launch_arg_take(arg, sizeof(arg)) && arg[0]) {
+		char first[16];
+		int k = 0;
+		while (arg[k] && arg[k] != ' ' && k < 15) { first[k] = arg[k]; k++; }
+		first[k] = 0;
+		if (fadmin_is_command(first)) return run_admin(arg, dir);
+		printf("fed: '%s'? -- run fed [key | nodes | add NAME KEY | set NAME ... | remove NAME]\n", first);
+		return 2;
+	}
 	if (!fed_start(dir)) return 1;
 	for (;;) z_proc_wait(step() ? 2 : Z_TICK_HZ / 5);
 }

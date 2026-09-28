@@ -268,18 +268,66 @@ A key proves only that whoever sent something holds it. It cannot prove
 who they are; that has to come from somewhere the publisher already
 trusts. So joining is not a protocol message:
 
+(A publisher who knows who is asking -- a friend, their own second
+machine -- simply adds the key; "Managing a network", below. For a
+stranger asking to join:)
+
 1. The new node's sysop runs `fed --join-request`, which makes the key
    and prints a small signed request (name, sysop, address) and its
    **fingerprint** -- the short id, in groups, like an SSH host key's.
 2. They hand it to the publisher over a channel the publisher trusts --
    for Machdyne, naturally, the BBS itself, logged in with an existing
    account -- and the publisher compares fingerprints.
-3. The publisher checks it (`fed --check-join`), adds the key, and
-   publishes the next list (`fed --publish-list`, which checks it
-   exactly as members will). Every member takes it at its next session.
+3. The publisher checks it (`fed --check-join`) and adds the key (`fed
+   add`). Every member takes the new list at its next session.
 
 The request itself never goes onto the network: nothing stores or
 relays `fed/join`.
+
+### Managing a network
+
+A network's publisher manages its list with five commands -- the same
+on Linux (`sudo fed ...`) and on Zeitlos (`run fed ...`), never JSON by
+hand:
+
+```
+fed key                                   this node's PUBLIC key, and where its private key is
+fed nodes                                 each network's list: names, short ids, sysops, addresses
+fed add NAME KEY [sysop=S] [addr=H:P]     add a node -- published at once
+fed set NAME [sysop=S] [addr=H:P] [name=N]   change one
+fed remove NAME                           remove one (by name, key or short id)
+```
+
+`add`, `set` and `remove` work on the publisher's node only, and each
+change is checked exactly as members will check it before it goes out --
+a name or key already listed, a malformed key, the publisher removing
+itself: refused, saying why. The list is edited as text: its profile,
+its moderators and fields a later version adds stay exactly as they
+were. On a network with no list yet, the first `add` puts the publisher
+on it first. On Linux, `--dir` defaults to `/var/lib/fed`, and run as
+root, `fed` becomes that directory's owner before touching it.
+
+**Which key is which:**
+
+| | what it is | where | share it? |
+|---|---|---|---|
+| **public key** | 64 hex digits: how every other node knows this one; what `fed add`, `peer:` and `network:` lines take | printed by `fed key` (and when `fed` starts) | **yes** -- it is meant to be given out |
+| **short id** | its first 16 hex digits, hashed: for people and logs | printed with it | yes |
+| **private key** | the secret the public key comes from: whoever has it *is* the node | `node.key` on Linux; the flash key/value store (`apps.fed.nodekey`) on Zeitlos | **never** -- nothing ever prints it. Back it up |
+
+A network's **publisher key** is simply its publisher's public key: the
+one a `network:` line names.
+
+**Adding a node, in this order**, so that it never waits:
+
+1. On the new node: `fed key` (or `run fed key`) -- its public key, on a
+   line of its own, without starting it.
+2. On the publisher: `fed add NAME KEY`.
+3. On the new node: its `fed.cfg` (`network:` and `peer:` naming the
+   publisher's public key), then start `fed`. Its first session succeeds.
+
+A node that tries before it is listed is refused, and waits before
+trying again -- doubling from 30 seconds to at most ten minutes.
 
 ## 7. Sessions
 
@@ -785,6 +833,8 @@ SUB <name> <pattern>\n
 ACK <position>\n                  also remembered as <name>'s place
 KEY\n
     -> OK <this node's key> <its short id> <its name>\n
+LIST <network>\n
+    -> OK <len>\n then its current list, as published (OK 0: none yet)
 MAIL <node> <type> <len>\n then the letter -- sealed to that node, published
     <node>: a key, a short id, a name, or name@network (a bare name two
     lists give to different nodes is refused as ambiguous)
@@ -860,6 +910,8 @@ each with host tests before the next. The code is `sw/apps/fed`:
 | `live_fed.py` | 24 | two and three daemons: posts both ways, resuming, joining and leaving |
 | `live_mail.py` | 22 | node info spreading; a letter only its node can open; one name in two networks |
 | `live_cancel.py` | 10 | authors, strangers, moderators; a cancel before its target |
+| `live_admin.py` | 20 | `fed key`, `nodes`, `add`, `set`, `remove`: a network run by commands alone; what is refused; a profile kept; root becoming the directory's owner |
+| `test_zadmin` | 9 | the same commands on Zeitlos -- `run fed ...` against a real Linux `fed`, its output on the posix terminal |
 | `live_profile.py` | 16 | a mixed network: the network's limit, link limits at either end, small node info, classical letters |
 | `test_fradio` | 22 | the radio link: three nodes and the air -- clean, 30% lost, 10% damaged, a stranger; no echo, nothing too big announced |
 
@@ -876,7 +928,10 @@ clears every cursor; a bare node name resolved in whichever of two
 networks' lists came first -- a letter could have been sealed to the
 wrong node -- now `name@network`, and ambiguity refused; and a node that
 followed a network without subscribing to its topics never getting its
-list -- now always wanted. One broken check
+list -- now always wanted; and two changes to a list within one second,
+the second refused as "older" half the time (their times tied, and the
+higher id won) -- found by the node-list commands' test, and a state
+object now always newer than its origin's current one. One broken check
 was found to catch nothing -- the cancel's topic agreeing with its
 target's -- because authority never rested on it; it is documented as
 the consistency rule it is.
@@ -884,9 +939,13 @@ the consistency rule it is.
 ### On Linux
 
 ```
-fed --dir /var/lib/fed --print-key      # the node's key (made on first run)
-fed --dir /var/lib/fed [--bind ADDR]    # DIR/fed.cfg, DIR/node.key (0600), DIR/store
+fed [--dir DIR] [--bind ADDR]           # the node: DIR/fed.cfg, DIR/node.key (0600), DIR/store
+sudo fed key | nodes | add | set | remove   # "Managing a network"
+fed --dir DIR --publish-list FILE       # a whole list from a file, checked first
 ```
+
+`--dir` defaults to `/var/lib/fed`; run as root, `fed` becomes the
+directory's owner first.
 
 ### On Zeitlos
 

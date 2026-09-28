@@ -89,6 +89,8 @@ int fnode_due(uint32_t now_ms);
 //
 //   PUB <topic> <type> <format> <kind> <key or -> <len>\n  then len bytes
 //       -> OK <id hex> <position>\n    or   ERR <why>\n
+//   LIST <network>\n
+//       -> OK <len>\n then that network's current list, as published (OK 0: none yet)
 //   KEY\n
 //       -> OK <this node's key, hex> <its name>\n
 //   SUB <name> <pattern>\n

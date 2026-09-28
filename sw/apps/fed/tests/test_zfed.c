@@ -39,6 +39,7 @@
 // fed.c's main() (not run here) and node_seed() call these; zrng.c is
 // not linked on the host.
 bool z_rng_secure(void) { return true; }
+bool z_launch_arg_take(char *out, int outlen) { (void)out; (void)outlen; return false; }
 void z_rng_bytes(void *b, uint32_t n) { plat_random(b, n); }
 
 extern int plat_quiet;

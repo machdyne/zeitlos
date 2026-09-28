@@ -1,4 +1,4 @@
-# systemd unit for the BBS's own sshd -- docs/bbs_deploy.md, "SSH for callers".
+# systemd unit for the BBS's own sshd -- docs/bbs_linux.md, "SSH, through OpenSSH".
 # The machine's sshd (ssh.service / ssh.socket) is a different unit, untouched.
 
 [Unit]

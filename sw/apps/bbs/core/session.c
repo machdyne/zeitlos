@@ -692,7 +692,12 @@ static void logged_in(node_t *n) {
 static void login_name(node_t *n) {
 	char key[FIELD_MAX];
 	handle_key(n->field, key, sizeof(key));
-	if (!n->field[0]) { ask_handle(n); return; }
+	if (!n->field[0]) {
+		// nothing typed, three times: nobody is logging in -- the call ends
+		if (++n->empty_handles >= 3) { bye(n, "Goodbye."); return; }
+		ask_handle(n);
+		return;
+	}
 	if (!strcmp(key, "new")) {
 		if (!bbs_cfg.new_users) {
 			out_mci(n, "|12Sorry, this board is not taking new users.|07\r\n");

@@ -227,7 +227,8 @@ static bool known(const uint8_t k[32]) {
 static int load_list(int n) {
 	static uint8_t buf[FOBJ_MAX];
 	char topic[FOBJ_TOPIC_MAX + 1], err[120], line[240];
-	static fnet_list_t fresh;
+	fnet_list_t *fresh_p = fnet_scratch();		// shared: fnet.h
+#define fresh (*fresh_p)
 	fobj_t o;
 	snprintf(topic, sizeof(topic), "%.32s/nodes", g_cfg.networks[n].name);
 	int r = fstore_state_get(topic, g_cfg.networks[n].publisher, "list", buf, sizeof(buf));
@@ -252,14 +253,21 @@ static int load_list(int n) {
 		*strrchr(host, ':') = 0;
 		if (!g_resolve(host, g_ip[n][i], sizeof(g_ip[n][i]))) {
 			g_ip[n][i][0] = 0;
-			snprintf(line, sizeof(line), "fed: %s: cannot resolve %s -- that node's address is not checked", g_cfg.networks[n].name, host);
-			plat_log(line);
+			// said only where it matters: the address is checked on
+			// connections this node TAKES -- a node that only connects
+			// out takes none, and none come from itself
+			if (g_cfg.listen && memcmp(g_list[n].key[i], g_pk, 32)) {
+				snprintf(line, sizeof(line), "fed: %s: cannot resolve %s -- that node's address is not checked",
+					g_cfg.networks[n].name, host);
+				plat_log(line);
+			}
 		}
 	}
 	snprintf(line, sizeof(line), "fed: %s: a list of %d nodes", g_cfg.networks[n].name, g_list[n].n);
 	plat_log(line);
 	return 1;
 }
+#undef fresh
 
 int fnode_reload_lists(void) {
 	int k = 0;
@@ -554,7 +562,10 @@ void fnode_session_end(fsess_t *s, uint32_t now_ms) {
 		if (ok) { p->backoff_s = 0; p->due_ms = now_ms + g_cfg.poll_s * 1000; }
 		else {
 			p->backoff_s = p->backoff_s ? p->backoff_s * 2 : 30;
-			if (p->backoff_s > 3600) p->backoff_s = 3600;
+			// at most ten minutes, as the other side's limit: a node refused
+			// until it was added to the list is let in soon after, not in an
+			// hour; a peer down for hours costs six attempts an hour
+			if (p->backoff_s > 600) p->backoff_s = 600;
 			p->due_ms = now_ms + p->backoff_s * 1000;
 		}
 		if (!p->due_ms) p->due_ms = 1;
@@ -615,6 +626,18 @@ static int publish(const char *topic, const char *type, const char *format, cons
 	o.kind = !strcmp(kind, "log") ? FOBJ_LOG : !strcmp(kind, "state") ? FOBJ_STATE : 0;
 	if (strcmp(key, "-")) snprintf(o.key, sizeof(o.key), "%s", key);
 	o.time = plat_now();
+	// A state object must be NEWER than this node's current one for the
+	// same topic and key -- or it is refused as older. Two changes in one
+	// second tie on time, and the tie went to whichever id was higher: a
+	// quick second `fed add` was refused half the time (found by
+	// tests/live_admin.py). So it takes the current one's time plus one
+	// when the clock has not moved past it.
+	if (o.kind == FOBJ_STATE) {
+		fobj_t cur;
+		// read into obj: not made yet -- and never the caller's payload
+		int r = fstore_state_get(o.topic, g_pk, o.key, obj, sizeof(obj));
+		if (r > 0 && !fobj_parse(obj, (uint32_t)r, 0, &cur, NULL) && cur.time >= o.time) o.time = cur.time + 1;
+	}
 	o.seq = next_seq();
 	o.len = len;
 	int n = fobj_make(&o, payload, g_sk, obj, sizeof(obj));
@@ -978,6 +1001,23 @@ void fnode_client_input(int id, const uint8_t *d, uint32_t n) {
 				say(c, reply, r);
 				say_raw(c, (const char *)letter, n);
 				crypto_wipe(letter, (size_t)n);
+			}
+		} else if (k == 2 && !strcmp(a[0], "LIST")) {
+			// a network's current list, as published: for `fed nodes`, `fed add`
+			int n = -1;
+			for (int i = 0; i < g_cfg.nnetworks; i++) if (!strcmp(g_cfg.networks[i].name, a[1])) n = i;
+			if (n < 0) { r = snprintf(reply, sizeof(reply), "ERR this node does not follow a network called %s\n", a[1]); say(c, reply, r); }
+			else {
+				char topic[FOBJ_TOPIC_MAX + 1];
+				fobj_t o;
+				snprintf(topic, sizeof(topic), "%.32s/nodes", g_cfg.networks[n].name);
+				int got = fstore_state_get(topic, g_cfg.networks[n].publisher, "list", g_mobj, FOBJ_MAX);
+				if (got <= 0 || fobj_parse(g_mobj, (uint32_t)got, 0, &o, NULL)) say(c, "OK 0\n", 5);	// none yet
+				else {
+					r = snprintf(reply, sizeof(reply), "OK %u\n", (unsigned)o.len);
+					say(c, reply, r);
+					say_raw(c, (const char *)o.payload, (int)o.len);
+				}
 			}
 		} else if (k == 2 && !strcmp(a[0], "CANCELLED")) {
 			// was this object cancelled here? (a client that has it already asks)

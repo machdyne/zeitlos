@@ -1,4 +1,4 @@
-# sshd for the BBS alone -- docs/bbs_deploy.md, "SSH for callers".
+# sshd for the BBS alone -- docs/bbs_linux.md, "SSH, through OpenSSH".
 #
 # A second sshd, beside the machine's own: it listens on its own port,
 # lets in only the `bbs` account (no password), and hands every session

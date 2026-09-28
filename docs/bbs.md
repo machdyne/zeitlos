@@ -525,8 +525,9 @@ level, set a new password, disable or enable them (not yourself; nor
 can you lower your own level -- another sysop can), and disconnect a
 node.
 
-**Logins**: three wrong passwords, or five unknown handles, end the
-call; each wrong password is logged with the caller's address.
+**Logins**: three wrong passwords, five unknown handles, or Enter alone
+at the handle prompt three times, end the call; each wrong password is
+logged with the caller's address.
 
 ## Passwords
 
