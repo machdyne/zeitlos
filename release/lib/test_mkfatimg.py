@@ -51,10 +51,14 @@ def check(cond, what):
 def fake_root():
     """A scratch tree: fake binaries, real docs / ark / packs."""
     r = tempfile.mkdtemp(prefix="fatimg-")
+    # FONT_FILES and DEMO_FILES are required inputs, the same as the
+    # apps. Leaving them out of this scratch tree made the bank fail
+    # before it formatted anything, on a tree that had not been changed.
     lists = (mkfatimg.SUPPLEMENTAL + mkfatimg.CASINO + mkfatimg.GAMES_DEMOS
              + mkfatimg.MISC + mkfatimg.SHELLS + mkfatimg.SELFHOST
              + mkfatimg.LIBZ_FILES + mkfatimg.LIBZ_EXTRA + mkfatimg.EXAMPLES
-             + mkfatimg.FPGA_FILES + mkfatimg.CONFIG_FILES)
+             + mkfatimg.FPGA_FILES + mkfatimg.CONFIG_FILES
+             + mkfatimg.FONT_FILES + mkfatimg.DEMO_FILES)
     for _dest, rel in lists:
         p = os.path.join(r, rel)
         os.makedirs(os.path.dirname(p), exist_ok=True)
