@@ -765,20 +765,25 @@ static const char *kv_get(const char *file, const char *key) {
 
 bool fstore_cursor(const uint8_t peer[32], uint64_t *epoch, uint32_t *pos) {
 	char key[65];
-	unsigned long long e;
+	uint64_t e;
 	unsigned long v;
 	fobj_hex(peer, 32, key);
+	// "<16 hex> <decimal>": by hand, never 64 bits through scanf (fobj.h)
 	const char *s = kv_get("cursors.txt", key);
-	if (!s || sscanf(s, "%16llx %lu", &e, &v) != 2) return false;
+	char *end;
+	if (!s || !fobj_hex_u64(s, &e) || s[16] != ' ') return false;
+	v = strtoul(s + 17, &end, 10);
+	if (end == s + 17) return false;
 	*epoch = e;
 	*pos = (uint32_t)v;
 	return true;
 }
 
 int fstore_set_cursor(const uint8_t peer[32], uint64_t epoch, uint32_t pos) {
-	char key[65], line[120];
+	char key[65], line[120], eh[17];
 	fobj_hex(peer, 32, key);
-	snprintf(line, sizeof(line), "%s %016llx %lu", key, (unsigned long long)epoch, (unsigned long)pos);
+	fobj_u64_hex(eh, epoch);
+	snprintf(line, sizeof(line), "%s %s %u", key, eh, (unsigned)pos);
 	return kv_set("cursors.txt", key, line);
 }
 
@@ -807,17 +812,23 @@ int fstore_set_consumer(const char *name, uint32_t pos) {
 
 uint8_t fstore_peer_slot(const uint8_t peer[32], uint64_t epoch) {
 	char key[65], line[120];
-	unsigned slot;
-	unsigned long long e;
+	unsigned slot = 0;
+	uint64_t e;
+	char *end, eh[17];
 	fobj_hex(peer, 32, key);
+	// "<slot> <16 hex>": by hand, never 64 bits through scanf (fobj.h)
 	const char *s = kv_get("peers.txt", key);
-	if (s && sscanf(s, "%u %16llx", &slot, &e) == 2 && e == epoch && slot >= 1 && slot <= 255) return (uint8_t)slot;
+	if (s) {
+		slot = (unsigned)strtoul(s, &end, 10);
+		if (end != s && *end == ' ' && fobj_hex_u64(end + 1, &e) && e == epoch && slot >= 1 && slot <= 255) return (uint8_t)slot;
+	}
 	const char *nx = kv_get("peers.txt", "next");
 	unsigned next = nx ? (unsigned)strtoul(nx, NULL, 10) : 1;
 	if (next > 255) return 0;					// none left: no skipping, never a wrong one
 	snprintf(line, sizeof(line), "next %u", next + 1);
 	if (kv_set("peers.txt", "next", line) < 0) return 0;
-	snprintf(line, sizeof(line), "%s %u %016llx", key, next, (unsigned long long)epoch);
+	fobj_u64_hex(eh, epoch);
+	snprintf(line, sizeof(line), "%s %u %s", key, next, eh);
 	if (kv_set("peers.txt", key, line) < 0) return 0;
 	return (uint8_t)next;
 }

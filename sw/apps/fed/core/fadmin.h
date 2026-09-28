@@ -23,7 +23,8 @@ typedef struct {
 	// The data's length, or -1 if fed could not be reached.
 	int (*request)(const char *req, const uint8_t *payload, int plen,
 		char *line, int lcap, uint8_t *data, int dcap, void *ctx);
-	// This node's PUBLIC key -- never the private one. False: none yet.
+	// This node's PUBLIC key -- never the private one; the node's key made
+	// first if there is none. False: none, and none could be made.
 	bool (*public_key)(uint8_t pk[32], void *ctx);
 	// fed.cfg's text, NUL-terminated.
 	bool (*read_cfg)(char *text, int cap, void *ctx);
@@ -31,6 +32,7 @@ typedef struct {
 	void (*out)(const char *line, void *ctx);
 	const char *private_key_where;			// told with `key`: where the secret lives
 	const char *how_to_start;				// told when fed is not running
+	const char *how_to_restart;				// ... and when the running one is older
 	void *ctx;
 } fadmin_io_t;
 

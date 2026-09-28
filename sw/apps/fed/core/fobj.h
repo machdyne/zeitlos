@@ -81,4 +81,13 @@ const char *fobj_strerror(int err);
 void fobj_hex(const uint8_t *b, uint32_t n, char *out);			// lowercase, NUL-terminated
 void fobj_short_id(const uint8_t public_key[32], char out[17]);	// a node's short id
 
+// 64-bit numbers as text, by hand. printf and scanf are never asked to
+// do it: not every C library a Zeitlos program may be built with passes
+// 64-bit arguments the same way, and a board built with such a one
+// wrote garbled cursors (docs/fed.md, "Building it").
+int fobj_u64_dec(char out[21], uint64_t v);			// digits, NUL; its length
+void fobj_u64_hex(char out[17], uint64_t v);		// exactly 16 lowercase hex, NUL
+bool fobj_hex_u64(const char *s, uint64_t *v);		// exactly 16 hex digits
+bool fobj_dec_u64(const char *s, uint64_t *v);		// 1-20 digits, then anything not a digit
+
 #endif

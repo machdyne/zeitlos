@@ -123,6 +123,27 @@ int main(void) {
 		CK(strlen(sid) == 16, "a short id: 16 hex digits (%s)", sid);
 	}
 
+	// 64-bit numbers as text, by hand (fobj.h): the edges, both ways
+	{
+		static const uint64_t vals[] = { 0, 1, 9, 10, 4294967295ull, 4294967296ull, 1790505386ull,
+			9999999999999999999ull, 10000000000000000000ull, 18446744073709551615ull };
+		int bad = 0;
+		char d[21], h[17], ref[40];
+		for (unsigned i = 0; i < sizeof(vals) / sizeof(vals[0]); i++) {
+			uint64_t back;
+			fobj_u64_dec(d, vals[i]);
+			snprintf(ref, sizeof(ref), "%llu", (unsigned long long)vals[i]);
+			if (strcmp(d, ref) || !fobj_dec_u64(d, &back) || back != vals[i]) bad++;
+			fobj_u64_hex(h, vals[i]);
+			snprintf(ref, sizeof(ref), "%016llx", (unsigned long long)vals[i]);
+			if (strcmp(h, ref) || !fobj_hex_u64(h, &back) || back != vals[i]) bad++;
+		}
+		CK(!bad, "64-bit numbers as text: the host's printf agrees at every edge, and each reads back (%d wrong)", bad);
+		uint64_t v;
+		CK(!fobj_dec_u64("18446744073709551616", &v) && !fobj_dec_u64("", &v) && !fobj_dec_u64("x1", &v) &&
+			!fobj_hex_u64("0123456789abcde", &v) && !fobj_hex_u64("0123456789abcdeg", &v),
+			"one past the largest, nothing, a non-digit, 15 hex digits, a non-hex: refused");
+	}
 	printf("fobj: %d checks, %d failed\n", checks, fails);
 	return fails != 0;
 }

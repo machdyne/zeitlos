@@ -548,7 +548,7 @@ fsess_t *fnode_session(bool initiator, int peer, const char *addr, uint32_t now_
 
 void fnode_session_end(fsess_t *s, uint32_t now_ms) {
 	slot_t *sl = (slot_t *)s;			// s is a slot's first member
-	char line[200], sid[17] = "-";
+	char line[320], sid[17] = "-";
 	g_now_ms = now_ms;
 	if (!sl->used) return;
 	fsess_closed(s);
@@ -574,10 +574,11 @@ void fnode_session_end(fsess_t *s, uint32_t now_ms) {
 		if (ok) { lim_clear(a); lim_clear(k); }
 		else { lim_fail(a); if (s->phase >= 1) lim_fail(k); }
 	}
-	snprintf(line, sizeof(line), "fed: session %s %s: %s -- %u new, %u had, %u refused, %u sent%s",
+	snprintf(line, sizeof(line), "fed: session %s %s: %s -- %u new, %u had, %u refused, %u sent%s%s",
 		sl->initiator ? "to" : "from", sid, ok ? "done" : s->error,
 		(unsigned)s->stats.got_new, (unsigned)s->stats.got_have, (unsigned)s->stats.got_rejected, (unsigned)s->stats.sent,
-		s->stats.withheld ? ", some withheld: larger than this link takes" : "");
+		s->stats.withheld ? ", some withheld: larger than this link takes" : "",
+		s->stats.got_expired ? "; some arrived already expired -- is the sending node's clock right?" : "");
 	plat_log(line);
 	sl->used = false;
 }
@@ -600,10 +601,11 @@ static uint64_t next_seq(void) {
 	uint64_t v = 0;
 	snprintf(p, sizeof(p), "%s/seq.txt", g_dir);
 	int h = plat_open(p, PLAT_READ);
-	if (h >= 0) { int n = plat_read(h, b, sizeof(b) - 1); plat_close(h); if (n > 0) { b[n] = 0; v = strtoull(b, NULL, 10); } }
+	// by hand, never 64 bits through printf or scanf (fobj.h)
+	if (h >= 0) { int n = plat_read(h, b, sizeof(b) - 1); plat_close(h); if (n > 0) { b[n] = 0; if (!fobj_dec_u64(b, &v)) v = 0; } }
 	v++;
 	h = plat_open(p, PLAT_CREATE);
-	if (h >= 0) { int n = snprintf(b, sizeof(b), "%llu\n", (unsigned long long)v); plat_write(h, b, n); plat_sync(h); plat_close(h); }
+	if (h >= 0) { int n = fobj_u64_dec(b, v); b[n++] = '\n'; plat_write(h, b, n); plat_sync(h); plat_close(h); }
 	return v;
 }
 

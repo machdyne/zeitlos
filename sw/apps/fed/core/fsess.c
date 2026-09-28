@@ -236,6 +236,7 @@ static void got_obj(fsess_t *s, const uint8_t *b, uint32_t n) {
 	if (s->cfg.admit && !s->cfg.admit(&o, s->cfg.ctx)) { s->stats.got_rejected++; return; }
 	int r = fstore_put_from(b, n, s->cfg.now, s->peer_slot, &pos);
 	if (r == FSTORE_NEW) { s->stats.got_new++; if (s->cfg.stored) s->cfg.stored(&o, s->cfg.ctx); }
+	else if (r == FSTORE_EXPIRED) s->stats.got_expired++;		// said in the session's log line: a clock, usually
 	else if (r > 0) s->stats.got_have++;
 	else fail(s, "the store refused a write");
 }

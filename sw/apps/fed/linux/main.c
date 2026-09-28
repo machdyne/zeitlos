@@ -233,16 +233,14 @@ static int lx_request(const char *req, const uint8_t *payload, int plen, char *l
 	return n;
 }
 
-// The PUBLIC key, from node.key -- never made here: that is fed's first run.
+static bool node_seed(const char *dir, uint8_t seed[32]);
+
+// The PUBLIC key -- the node's key made first if there is none yet, so
+// that `sudo fed key` is the first command of a new node.
 static bool lx_public_key(uint8_t pk[32], void *ctx) {
 	(void)ctx;
-	char p[300];
 	uint8_t seed[32], sk[64];
-	snprintf(p, sizeof(p), "%s/node.key", g_dir);
-	FILE *f = fopen(p, "rb");
-	if (!f) return false;
-	bool ok = fread(seed, 1, 32, f) == 32;
-	fclose(f);
+	bool ok = node_seed(g_dir, seed);
 	if (ok) crypto_ed25519_key_pair(sk, pk, seed);
 	crypto_wipe(seed, sizeof(seed));
 	crypto_wipe(sk, sizeof(sk));
@@ -355,7 +353,8 @@ int main(int argc, char **argv) {
 	}
 	if (!drop_to_owner(dir)) return 1;
 	if (cmd_at) {
-		fadmin_io_t io = { lx_request, lx_public_key, lx_read_cfg, lx_out, NULL, "sudo systemctl start fed", NULL };
+		fadmin_io_t io = { lx_request, lx_public_key, lx_read_cfg, lx_out, NULL, "sudo systemctl start fed",
+			"sudo systemctl restart fed", NULL };
 		static char where[320];
 		snprintf(where, sizeof(where), "%s/node.key", dir);
 		io.private_key_where = where;

@@ -196,15 +196,18 @@ int fobj_make(fobj_t *o, const uint8_t *payload, const uint8_t secret_key[64], u
 	if (o->len > FOBJ_PAYLOAD_MAX) return -FOBJ_E_LEN;
 	if ((o->format == FOBJ_JSON || o->format == FOBJ_TEXT) && !zjson_utf8((const char *)payload, o->len)) return -FOBJ_E_PAYLOAD;
 
+	char tm[21], sq[21];
 	fobj_hex(o->origin, 32, origin);
+	fobj_u64_dec(tm, o->time);			// by hand: never 64 bits through printf (fobj.h)
+	fobj_u64_dec(sq, o->seq);
 	if (o->kind == FOBJ_STATE)
 		h = snprintf((char *)out, cap, FOBJ_MAGIC "\ntopic: %s\ntype: %s\nformat: %s\nkind: %s\norigin: %s\n"
-			"time: %llu\nseq: %llu\nkey: %s\nlen: %u\n\n", o->topic, o->type, fmts[o->format], kinds[o->kind],
-			origin, (unsigned long long)o->time, (unsigned long long)o->seq, o->key, (unsigned)o->len);
+			"time: %s\nseq: %s\nkey: %s\nlen: %u\n\n", o->topic, o->type, fmts[o->format], kinds[o->kind],
+			origin, tm, sq, o->key, (unsigned)o->len);
 	else
 		h = snprintf((char *)out, cap, FOBJ_MAGIC "\ntopic: %s\ntype: %s\nformat: %s\nkind: %s\norigin: %s\n"
-			"time: %llu\nseq: %llu\nlen: %u\n\n", o->topic, o->type, fmts[o->format], kinds[o->kind],
-			origin, (unsigned long long)o->time, (unsigned long long)o->seq, (unsigned)o->len);
+			"time: %s\nseq: %s\nlen: %u\n\n", o->topic, o->type, fmts[o->format], kinds[o->kind],
+			origin, tm, sq, (unsigned)o->len);
 	if (h < 0 || h > FOBJ_HEADER_MAX) return -FOBJ_E_HEADER;
 	if ((uint64_t)h + o->len + FOBJ_SIGLINE > cap) return -FOBJ_E_SHORT;
 	memcpy(out + h, payload, o->len);
@@ -245,4 +248,45 @@ const char *fobj_strerror(int err) {
 		"payload is not UTF-8", "signature does not check", "stray space" };
 	if (err < 0) err = -err;
 	return err < (int)(sizeof(names) / sizeof(names[0])) ? names[err] : "?";
+}
+
+// -- 64-bit numbers as text (fobj.h) --
+
+int fobj_u64_dec(char out[21], uint64_t v) {
+	char t[21];
+	int n = 0, k = 0;
+	do { t[n++] = (char)('0' + (int)(v % 10u)); v /= 10u; } while (v);
+	while (n) out[k++] = t[--n];
+	out[k] = 0;
+	return k;
+}
+
+void fobj_u64_hex(char out[17], uint64_t v) {
+	static const char hx[] = "0123456789abcdef";
+	for (int i = 15; i >= 0; i--) { out[i] = hx[v & 15u]; v >>= 4; }
+	out[16] = 0;
+}
+
+bool fobj_hex_u64(const char *s, uint64_t *v) {
+	uint64_t r = 0;
+	for (int i = 0; i < 16; i++) {
+		char c = s[i];
+		int d = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+		if (d < 0) return false;
+		r = (r << 4) | (uint64_t)d;
+	}
+	*v = r;
+	return true;
+}
+
+bool fobj_dec_u64(const char *s, uint64_t *v) {
+	uint64_t r = 0;
+	int n = 0;
+	for (; s[n] >= '0' && s[n] <= '9'; n++) {
+		if (n == 20 || r > (UINT64_MAX - (uint64_t)(s[n] - '0')) / 10u) return false;
+		r = r * 10u + (uint64_t)(s[n] - '0');
+	}
+	if (!n) return false;
+	*v = r;
+	return true;
 }

@@ -436,10 +436,11 @@ delete anything on their own node. Beyond that, **cancels**:
 
 LoRa matters as a fallback -- if internet access became unavailable --
 and for places without it: a remote village, a camp. Day to day it is
-unlikely to carry much. The protocol assumes TCP today; this section is
-how it reaches a radio link, alone or **mixed** with the internet. The
-first part is built; the rest is proposed, and waits for the radio
-transport itself (`mesh`).
+unlikely to carry much. This section is how zfed reaches a radio link,
+alone or **mixed** with the internet. **Built**: network profiles, link
+limits, and the radio link itself, through the `mesh` app -- tested on
+the host, not yet on the air. **Proposed**: a compact encoding, and the
+rest listed at the end.
 
 **The problem, in numbers.** A LoRa packet carries roughly 50-250
 bytes, at hundreds to a few thousand bits a second, and the law often
@@ -449,7 +450,7 @@ Over that, zfed's usual sizes dominate:
 | | over TCP | on radio |
 |---|---|---|
 | an object's envelope | ~350 bytes (the origin and signature in hex, text headers) | more than most posts |
-| a session handshake | ~2.4 KB each way (ML-KEM) | tens of packets before any content |
+| a session handshake | ~2.4 KB each way (ML-KEM) | none: the radio link has no sessions (below) |
 | a sealed letter | letter + 1,164 bytes | a one-line letter, eight packets |
 | a node's full info | ~2.6 KB (its ML-KEM key) | minutes of airtime |
 | the largest payload | 16 KB | not at all |
@@ -522,23 +523,28 @@ plaintext.
 
 **`mesh` stays the only program that speaks Meshtastic** -- the USB
 serial device, the framing, the protobufs. `fed` never sees them: it
-exchanges bytes with `mesh` through a small service port (proposed:
-`mesh0` -- "send these bytes on private application port N", "these
-arrived on it"; Meshtastic reserves ports 256 and up for applications),
-and runs its radio link (below) over that. So **LoRa is Zeitlos only**:
-a Linux node would need an adapter speaking the same small port
-protocol, which is not provided.
+exchanges bytes with `mesh` through its service port, `mesh0` ("send
+these bytes on application port N", "these arrived on it"; Meshtastic
+reserves ports 256 and up for applications -- [mesh_app.md](mesh_app.md),
+"mesh0"), and runs its radio link (below) over that. So **LoRa is
+Zeitlos only**: a Linux node would need an adapter speaking the same
+small port protocol, which is not provided.
 
 **Packets are small** -- about 230 bytes of payload on Meshtastic, less
 at the slowest radio settings -- and an object is usually several
-hundred, so **objects are split into fragments and put back together**.
-Yes, that is a protocol of its own, but a thin one *below* zfed, as TCP
-is below it over the internet: a fragment carries the object's id
-(its first 8 bytes), its index and the count; the receiver collects
-them, rebuilds the object, and checks it against its id -- SHA-256
+hundred, so **objects are split into fragments and put back together**:
+a thin protocol *below* zfed, as TCP is below it over the internet. The
+receiver checks what it rebuilt against the object's id -- SHA-256
 covers the reassembly, so no checksum of its own is needed -- and asks
 for the fragments it lacks. zfed above it does not change: objects,
 signatures and ids are exactly those on the internet.
+
+**No sessions on the air.** Over TCP, two nodes hold an encrypted
+session. The radio link does not: one transmission reaches every node
+in range, so objects -- each signed by its origin -- are broadcast as
+they are, and **the link's confidentiality is the Meshtastic channel's
+encryption**. That is why the channel's key matters (below), and why
+there is no 2.4 KB handshake to pay for.
 
 **What the radio does to security -- and who decides.** A network's
 publisher does not know which of its members carry its traffic over a
@@ -574,8 +580,9 @@ On the link:
 - **`suite: classical` is network-wide**: it weakens every letter on
   the network, including ones that never touch the radio, and recording
   a broadcast is trivial. So a **mixed** network should keep `hybrid`
-  and pay for its letters in airtime -- 1,164 bytes, about six packets
-  -- and `classical` is for networks that are radio-only, or nearly.
+  and pay for its letters in airtime -- a short letter is about eight
+  packets -- and `classical` is for networks that are radio-only, or
+  nearly.
 
 ### The radio link
 
@@ -616,9 +623,10 @@ radio: port=300 channel=1 max=2048 pace=2000     # fed.cfg -- Zeitlos only
 The Meshtastic channel should be a private one, with its own random
 key (above).
 
-### What remains, for the radio transport
+### What remains
 
-*Proposed.*
+*Proposed.* And first of all: the radio link's **test on the air**,
+between boards -- everything above is tested on the host.
 
 - **A compact air encoding of the same objects**: on a radio link the
   origin travels as its index in the node list (one or two bytes, not
@@ -628,8 +636,6 @@ key (above).
   signature against that -- an object carried by radio is the same
   object, with the same id; nothing is ever re-signed. A 200-byte post
   would go from ~550 bytes to ~290.
-- **Classical sessions** for `classical` networks: link encryption from
-  X25519 alone (64 bytes, not 2.4 KB).
 - **Priorities** on the air -- letters and short posts before anything
   else -- and catching up older history over the radio (today it carries
   what is new, and the newest again).
@@ -705,8 +711,7 @@ NIST's draft transition plan deprecates elliptic-curve signatures after
 - **Next**: **events** -- signed announcements to the OS itself, a
   Zeitlos update for example, from a publisher the network names, as
   node lists are; the radio link on the air (built and host-tested:
-  section 11), then its compact encoding and classical sessions; an
-  optional FTN gateway.
+  section 11), then its compact encoding; an optional FTN gateway.
 - **Not planned: files.** Neither file areas in the BBS nor files over
   zfed: too big for radio, and the web, FTP and the like move files
   better. Other networks could want them one day -- then as an option,
@@ -931,7 +936,14 @@ followed a network without subscribing to its topics never getting its
 list -- now always wanted; and two changes to a list within one second,
 the second refused as "older" half the time (their times tied, and the
 higher id won) -- found by the node-list commands' test, and a state
-object now always newer than its origin's current one. One broken check
+object now always newer than its origin's current one. And on a board: cursors
+and peer slots written garbled -- the store's epoch and position passed
+to `printf` as 64-bit numbers, which the C library the board's `fed`
+was built with did not take as the compiler passed them. The board then
+asked for everything again every session, and would have run out of
+peer slots within a day. `fed` now writes and reads 64-bit numbers by
+hand (`fobj_u64_dec()` and the like), never through `printf` or
+`scanf`, whatever the C library. One broken check
 was found to catch nothing -- the cancel's topic agreeing with its
 target's -- because authority never rested on it; it is documented as
 the consistency rule it is.

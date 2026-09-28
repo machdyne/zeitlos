@@ -617,12 +617,13 @@ static int zt_request(const char *req, const uint8_t *payload, int plen, char *l
 	return want > 0 && g_dlen >= want ? want : 0;
 }
 
-// The PUBLIC key, from the key/value store -- never made here.
+// The PUBLIC key -- the node's key made first if there is none yet
+// (node_seed(): only from a seeded random source), so that `run fed key`
+// is the first command of a new node.
 static bool zt_public_key(uint8_t pk[32], void *ctx) {
 	uint8_t seed[32], sk[64];
-	uint32_t len = 0;
 	(void)ctx;
-	if (z_kv_get(NODEKEY_KEY, seed, 32, &len) != Z_KV_OK || len != 32) return false;
+	if (!node_seed(seed)) return false;
 	crypto_ed25519_key_pair(sk, pk, seed);
 	crypto_wipe(seed, sizeof(seed));
 	crypto_wipe(sk, sizeof(sk));
@@ -659,7 +660,7 @@ static int run_admin(const char *arg, const char *dir) {
 	for (char *w = strtok(words, " \t"); w && argc < 12; w = strtok(NULL, " \t")) argv[argc++] = w;
 	if (z_pid_lookup("posix0", &pid) && pid && z_port_connect_arg(&g_out, pid, z_obj_str(PX_STDOUT_TAG)) == Z_OK) g_out_on = true;
 	fadmin_io_t io = { zt_request, zt_public_key, zt_read_cfg, zt_out,
-		"the flash key/value store, " NODEKEY_KEY, "run fed", NULL };
+		"the flash key/value store, " NODEKEY_KEY, "run fed", "stop it, and run fed", NULL };
 	int rc = fadmin(&io, NULL, argc, argv);
 	if (g_out_on) {
 		for (int i = 0; i < 100 && g_out.pending_count; i++) { adm_pump(); z_proc_wait(1); }	// let it all arrive

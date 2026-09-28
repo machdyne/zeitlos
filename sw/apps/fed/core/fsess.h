@@ -65,7 +65,8 @@ enum { FS_RUNNING = 0, FS_DONE, FS_FAILED };
 
 typedef struct {
 	uint32_t got_new, got_have, got_rejected, sent;
-	uint32_t withheld;				// not sent: larger than this link takes
+	uint32_t withheld;
+	uint32_t got_expired;				// already past retention on arrival: not stored				// not sent: larger than this link takes
 } fsess_stats_t;
 
 typedef struct {

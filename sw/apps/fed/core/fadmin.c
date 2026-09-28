@@ -70,6 +70,11 @@ static int load_list(const char *net) {
 	snprintf(req, sizeof(req), "LIST %s\n", net);
 	int n = request(req, NULL, 0, line, sizeof(line), (uint8_t *)g_js, FOBJ_PAYLOAD_MAX);
 	if (n < 0) return -1;
+	if (!strcmp(line, "ERR ?")) {
+		// the running fed does not know LIST: it started before this one was installed
+		say("fed: the running fed is older than this command -- restart it (%s), then try again", io->how_to_restart);
+		return -1;
+	}
 	if (strncmp(line, "OK", 2)) { say("fed: %s", line); return -1; }
 	g_len = n;
 	g_js[n] = 0;
@@ -185,7 +190,7 @@ static int publish(const char *net) {
 
 static bool me(uint8_t pk[32], char hex[65], fcfg_t *cfg) {
 	char err[160];
-	if (!io->public_key(pk, io->ctx)) { say("fed: no node key yet -- fed makes it the first time it runs"); return false; }
+	if (!io->public_key(pk, io->ctx)) { say("fed: no node key, and none could be made here"); return false; }
 	fobj_hex(pk, 32, hex);
 	if (!cfg) return true;
 	// fed.cfg into the list's buffer: read before any list is
