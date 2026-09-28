@@ -298,6 +298,8 @@ void z_port_close(z_port_t *port);
 // on -- this logs it and gives up, at which point z_port_send()'s own
 // backpressure (Z_PORT_MAX_PENDING_SENDS) is the correct backstop,
 // same as it already is for a peer that's stopped acking entirely.
+// A sender that has exited is the other failure, and it is not
+// transient: the retry stops as soon as it is seen, quietly.
 //
 // Payload is just Z_NONE -- nothing needs to be identified (see
 // z_port_handle_ack()'s own comment for why), so there's nothing to

@@ -194,6 +194,13 @@ void z_port_send_ack(const z_msg_t *data_msg) {
 		if (z_msg_new_send(data_msg->from, Z_PORT_DATA_ACK, data_msg->tag,
 			z_obj_none()) == Z_OK) return;
 
+		// A sender that has exited is not a busy mailbox: nothing will
+		// ever take this ack, and retrying only spins the whole window
+		// away (half a second of net, per message, when a client died
+		// with sends in flight). Checked only after a failure, so the
+		// common path costs nothing more.
+		if (!z_port_pid_running(data_msg->from)) return;
+
 		// z_msg_send() failing here means data_msg->from's own mailbox
 		// is full right now -- retrying immediately (rather than
 		// giving up, the way z_port_send() itself does for the
