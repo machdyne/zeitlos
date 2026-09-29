@@ -920,6 +920,13 @@
 `define MEM_GLYPH
 `define ICACHE
 `define MONTMUL
+// Its register file and the SHA-256 block (docs/montmul.md,
+// docs/sha256_hw.md): measured here, 51.15 MHz against 48,
+// +1,383 COMB, +1,129 FF, +2 DP16KD. cryptobench's known
+// answers correct through both. TLS to example.com from
+// 9.1-9.5 s down to 3.5-3.6 s.
+`define MONTMUL_REGS
+`define SHA256
 `define ICACHE_KB 4
 `define ICACHE_LINE_WORDS 4
 // Data cache (docs/dcache.md). Measured on the 25F die (which the 12F
