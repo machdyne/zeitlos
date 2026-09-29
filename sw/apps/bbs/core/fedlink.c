@@ -174,6 +174,85 @@ static void outbox_send(void) {
 	}
 }
 
+// -- topics carried: <datadir>/fed-topics, one a line --
+//
+// A forum given a topic later gets that topic's history from fed -- once:
+// a topic ever carried never asks again, so a forum removed and added
+// back cannot bring deleted posts back (fed.md, "The local interface",
+// SUB with history). No file yet (a BBS federating since before it):
+// the topics it has are recorded, and nothing asked -- it has them.
+
+static char fl_topics[1024];			// the file's text
+static char fl_hist[100];				// asked for now, comma-separated; "" none
+
+static bool topics_load(void) {
+	char p[BBS_PATH_MAX];
+	fl_topics[0] = 0;
+	if (!bbs_path(p, "fed-topics")) return false;
+	int h = plat_open(p, PLAT_READ);
+	if (h < 0) return false;
+	int n = plat_read(h, fl_topics, sizeof(fl_topics) - 1);
+	plat_close(h);
+	fl_topics[n > 0 ? n : 0] = 0;
+	return true;
+}
+
+static void topics_save(void) {
+	char p[BBS_PATH_MAX], tmp[BBS_PATH_MAX];
+	if (!bbs_path(p, "fed-topics") || !bbs_path(tmp, "fed-topics.new")) return;
+	int h = plat_open(tmp, PLAT_CREATE);
+	if (h < 0) return;
+	plat_write(h, fl_topics, (int)strlen(fl_topics));
+	plat_close(h);
+	plat_rename(tmp, p);
+}
+
+static bool topic_known(const char *t) {
+	size_t tl = strlen(t);
+	for (const char *s = fl_topics; *s; ) {
+		const char *e = strchr(s, '\n');
+		size_t l = e ? (size_t)(e - s) : strlen(s);
+		if (l == tl && !memcmp(s, t, tl)) return true;
+		if (!e) break;
+		s = e + 1;
+	}
+	return false;
+}
+
+static void topic_add(const char *t) {
+	size_t o = strlen(fl_topics);
+	if (topic_known(t) || o + strlen(t) + 2 > sizeof(fl_topics)) return;
+	snprintf(fl_topics + o, sizeof(fl_topics) - o, "%s\n", t);
+}
+
+// The SUB's history: topics in forums.cfg never carried, as many as fit.
+static void topics_plan(void) {
+	fl_hist[0] = 0;
+	if (!topics_load()) {
+		for (int a = 1; a < bbs_nareas; a++) if (bbs_area[a].topic[0]) topic_add(bbs_area[a].topic);
+		topics_save();
+		return;
+	}
+	for (int a = 1; a < bbs_nareas; a++) {
+		const char *t = bbs_area[a].topic;
+		if (!t[0] || topic_known(t)) continue;
+		size_t o = strlen(fl_hist);
+		if (o + strlen(t) + 2 > sizeof(fl_hist)) break;			// the rest next time
+		snprintf(fl_hist + o, sizeof(fl_hist) - o, "%s%s", o ? "," : "", t);
+	}
+}
+
+// fed has sent it all: recorded, never asked again.
+static void topics_taken(void) {
+	char t[100];
+	int n = 0;
+	snprintf(t, sizeof(t), "%s", fl_hist);
+	for (char *s = strtok(t, ","); s; s = strtok(NULL, ",")) { topic_add(s); n++; }
+	topics_save();
+	bbs_logf("fed: the history of %d forum%s taken (%s)", n, n == 1 ? "" : "s", fl_hist);
+	fl_hist[0] = 0;
+}
+
 // -- node names: from the network's list, kept in <datadir>/fed-names --
 
 static void names_save(void) {
@@ -552,6 +631,15 @@ static void reply_line(const char *l) {
 			if (nl < sizeof(fl_node)) memcpy(fl_node, nm, nl + 1); else fl_node[0] = 0;
 		}
 	}
+	else if (req == Q_SUB && !ok && fl_hist[0]) {
+		// an older fed, which knows no history: subscribed without -- the
+		// forum gets what arrives from now on
+		bbs_logf("fed: this fed gives no history (an older one) -- subscribing without it");
+		fl_hist[0] = 0;
+		char sub[80];
+		int n = snprintf(sub, sizeof(sub), "SUB bbs %s/*\n", bbs_fed_network);
+		fl_put(sub, (uint32_t)n, Q_SUB);
+	}
 	else if (req == Q_SUB && !ok) bbs_logf("fed: the subscription was refused: %s", l);
 	else if (req == Q_PUB || req == Q_MAIL) {
 		if (!ok) {
@@ -593,9 +681,10 @@ void bbs_fed_up(bool up) {
 	fl_cx.on = false;
 	fl_heard = fl_wait_since = plat_ms();
 	if (!up) return;
-	char sub[80];
+	char sub[200];
 	fl_put("KEY\n", 4, Q_KEY);
-	int n = snprintf(sub, sizeof(sub), "SUB bbs %s/*\n", bbs_fed_network);
+	topics_plan();
+	int n = snprintf(sub, sizeof(sub), "SUB bbs %s/*%s%s\n", bbs_fed_network, fl_hist[0] ? " " : "", fl_hist);
 	fl_put(sub, (uint32_t)n, Q_SUB);
 	outbox_send();
 	bbs_logf("fed: connected (%d posts waiting)", outbox_count());
@@ -651,6 +740,8 @@ void bbs_fed_input(const uint8_t *d, uint32_t n) {
 			got_letter((const char *)fl_in + used, ln);
 			used += ln;
 			if (fl_open.on) { ack(fl_open.pos); fl_open.on = false; }
+		} else if (!strcmp(line, "HIST END")) {
+			if (fl_hist[0]) topics_taken();
 		} else {
 			reply_line(line);
 		}

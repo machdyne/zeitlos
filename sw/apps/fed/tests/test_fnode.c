@@ -223,6 +223,59 @@ int main(void) {
 			fnode_client_close(id);
 			#undef TYPE
 		}
+		// SUB with a topic's history (a forum newly carried): the older
+		// objects on it first, then HIST END, then the stream as ever
+		{
+			char seq[400];
+			uint32_t last = 0;
+			int id = fnode_client_open();
+			const uint8_t *p;
+			uint32_t n;
+			// feed a request; read what comes, acking each object; the
+			// topics of the objects in order, and HIST END, into seq
+			#define RUN(req) do { if ((req)[0]) fnode_client_input(id, (const uint8_t *)(req), (uint32_t)strlen(req)); \
+				seq[0] = 0; \
+				for (int guard = 0; guard < 400; guard++) { \
+					fnode_tick(0); \
+					if ((n = fnode_client_output(id, &p)) == 0) break; \
+					static char buf[20000]; memcpy(buf, p, n); buf[n] = 0; fnode_client_consumed(id, n); \
+					char *q = buf; \
+					while (*q) { \
+						if (!strncmp(q, "HIST END\n", 9)) { strcat(seq, "END "); q += 9; continue; } \
+						if (!strncmp(q, "OBJ ", 4)) { \
+							unsigned pos, len; sscanf(q + 4, "%u %u", &pos, &len); \
+							char *nl = strchr(q, '\n'); char *t = strstr(nl, "topic: t/forum/"); \
+							if (t && t < nl + 1 + len) { char w[4] = { t[15], ' ', 0, 0 }; strcat(seq, w); } \
+							char ack[32]; snprintf(ack, sizeof(ack), "ACK %u\n", pos); last = pos; \
+							fnode_client_input(id, (const uint8_t *)ack, (uint32_t)strlen(ack)); \
+							q = nl + 1 + len; continue; } \
+						char *nl = strchr(q, '\n'); if (!nl) break; q = nl + 1; \
+					} } } while (0)
+			const char *pa = "PUB t/forum/a t text log - 2\nA1", *pb = "PUB t/forum/b t text log - 2\nB1",
+				*pa2 = "PUB t/forum/a t text log - 2\nA2";
+			fnode_client_input(id, (const uint8_t *)pa, (uint32_t)strlen(pa));
+			fnode_client_input(id, (const uint8_t *)pb, (uint32_t)strlen(pb));
+			fnode_client_input(id, (const uint8_t *)pa2, (uint32_t)strlen(pa2));
+			while ((n = fnode_client_output(id, &p)) > 0) fnode_client_consumed(id, n);
+			RUN("SUB h1 t/*\n");
+			CK(!strcmp(seq, "a b a "), "a subscriber reads a, b, a -- and acks them (%s)", seq);
+			uint32_t place = last;
+			RUN("SUB h1 t/* t/forum/a\n");
+			CK(!strcmp(seq, "a a END "), "again, with t/forum/a's history: its two older objects, then HIST END -- not b (%s)", seq);
+			const char *pb2 = "PUB t/forum/b t text log - 2\nB2";
+			fnode_client_input(id, (const uint8_t *)pb2, (uint32_t)strlen(pb2));
+			while ((n = fnode_client_output(id, &p)) > 0 && memcmp(p, "OK", 2) == 0) fnode_client_consumed(id, n);
+			RUN("");
+			CK(!strcmp(seq, "b "), "then the stream as ever: only what is new (%s)", seq);
+			fnode_client_close(id);
+			id = fnode_client_open();
+			RUN("SUB h1 t/*\n");
+			CK(!strcmp(seq, "") && last > place, "its place: after the new one -- the history's acks never moved it back (%s)", seq);
+			RUN("SUB h1 t/* t/forum/c\n");
+			CK(!strcmp(seq, "END "), "a topic with no history: HIST END at once (%s)", seq);
+			fnode_client_close(id);
+			#undef RUN
+		}
 		fnode_stop();
 		snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
 		if (system(cmd)) return 1;

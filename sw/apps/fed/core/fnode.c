@@ -822,6 +822,11 @@ typedef struct {
 	bool last_cr;
 	char name[32], pattern[100];
 	uint32_t acked, scan, inflight_pos;
+	// SUB's history (a forum newly carried): older objects on these topics,
+	// up to where the subscription had got, sent first -- then HIST END
+	char hist[100];
+	uint32_t hist_scan, hist_until;
+	bool hist_on;
 	uint8_t in[FOBJ_PAYLOAD_MAX + 512];
 	uint32_t in_len;
 	uint8_t out[FOBJ_MAX + 64];
@@ -876,13 +881,25 @@ static void term_lines(client_t *c) {
 static void deliver(client_t *c) {
 	if (!c->sub || c->inflight || c->out_len) return;
 	for (int budget = 64; budget > 0; budget--) {
-		uint32_t p = fstore_next(c->scan);
-		if (!p) return;
-		c->scan = p;
+		uint32_t p;
+		bool history = c->hist_on;
+		if (history) {
+			p = fstore_next(c->hist_scan);
+			if (!p || p > c->hist_until) {			// the history sent: said, and the stream goes on
+				c->hist_on = false;
+				say(c, "HIST END\n", 9);
+				return;
+			}
+			c->hist_scan = p;
+		} else {
+			p = fstore_next(c->scan);
+			if (!p) return;
+			c->scan = p;
+		}
 		uint8_t *b = c->out + 32;
 		int n = fstore_get(p, b, FOBJ_MAX);
 		fobj_t o;
-		if (n <= 0 || fobj_parse(b, (uint32_t)n, 0, &o, NULL) || !fsess_wanted(c->pattern, o.topic)) continue;
+		if (n <= 0 || fobj_parse(b, (uint32_t)n, 0, &o, NULL) || !fsess_wanted(history ? c->hist : c->pattern, o.topic)) continue;
 		char h[32];
 		int hl = snprintf(h, sizeof(h), "OBJ %u %d\n", (unsigned)p, n);
 		memcpy(c->out + 32 - hl, h, (size_t)hl);
@@ -972,13 +989,24 @@ void fnode_client_input(int id, const uint8_t *d, uint32_t n) {
 			r = publish(a[1], a[2], a[3], a[4], a[5], c->in + used, (uint32_t)len, reply, sizeof(reply));
 			used += (uint32_t)len;
 			say(c, reply, r);
-		} else if (k == 3 && !strcmp(a[0], "SUB") && (strlen(a[1]) >= sizeof(c->name) || strlen(a[2]) >= sizeof(c->pattern))) {
+		} else if ((k == 3 || k == 4) && !strcmp(a[0], "SUB") && (strlen(a[1]) >= sizeof(c->name) || strlen(a[2]) >= sizeof(c->pattern))) {
 			say(c, "ERR name or pattern too long\n", 29);
-		} else if (k == 3 && !strcmp(a[0], "SUB")) {
+		} else if ((k == 3 || k == 4) && !strcmp(a[0], "SUB") && k == 4 && strlen(a[3]) >= sizeof(c->hist)) {
+			say(c, "ERR history topics too long\n", 28);
+		} else if ((k == 3 || k == 4) && !strcmp(a[0], "SUB")) {
 			snprintf(c->name, sizeof(c->name), "%s", a[1]);
 			snprintf(c->pattern, sizeof(c->pattern), "%s", a[2]);
 			c->acked = c->scan = fstore_consumer(c->name);
 			c->sub = true;
+			c->hist_on = false;
+			if (k == 4) {
+				// SUB NAME PATTERN T1,T2: the history of those topics first
+				snprintf(c->hist, sizeof(c->hist), "%s", a[3]);
+				for (char *q = c->hist; *q; q++) if (*q == ',') *q = '\n';
+				c->hist_scan = 0;
+				c->hist_until = c->acked;
+				c->hist_on = true;
+			}
 			r = snprintf(reply, sizeof(reply), "OK subscribed after %u\n", (unsigned)c->acked);
 			say(c, reply, r);
 		} else if (k == 4 && !strcmp(a[0], "MAIL")) {
@@ -1038,8 +1066,9 @@ void fnode_client_input(int id, const uint8_t *d, uint32_t n) {
 			uint32_t p = (uint32_t)strtoul(a[1], NULL, 10);
 			if (c->inflight && p == c->inflight_pos) {
 				c->inflight = false;
-				c->acked = p;
-				fstore_set_consumer(c->name, p);
+				// a history object is behind where the subscription is: its
+				// ack does not move it back
+				if (p > c->acked) { c->acked = p; fstore_set_consumer(c->name, p); }
 			}
 		} else {
 			say(c, "ERR ?\n", 6);
@@ -1160,7 +1189,13 @@ int fnode_start(const char *dir, const uint8_t seed[32], char *err, int errlen) 
 	memcpy(s, seed, 32);
 	crypto_ed25519_key_pair(g_sk, g_pk, s);		// wipes s
 	snprintf(p, sizeof(p), "%s/store", dir);
-	if (fstore_open(p, plat_now(), retain_for, 0) < 0) { snprintf(err, (size_t)errlen, "the store in %s would not open", p); return -1; }
+	int so = fstore_open(p, plat_now(), retain_for, 0);
+	if (so == -FSTORE_E_FORMAT) {
+		snprintf(err, (size_t)errlen, "the store in %s is from an older fed -- remove that directory and start fed again "
+			"(this node's key is kept; its peers send everything again)", p);
+		return -1;
+	}
+	if (so < 0) { snprintf(err, (size_t)errlen, "the store in %s would not open", p); return -1; }
 	memset(g_slot, 0, sizeof(g_slot));
 	memset(g_cl, 0, sizeof(g_cl));
 	memset(g_lim, 0, sizeof(g_lim));

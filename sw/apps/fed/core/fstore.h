@@ -14,7 +14,6 @@
  *   <dir>/ids.tbl            id -> position: open addressing
  *   <dir>/state.tbl          (topic, origin, key) -> the current object
  *   <dir>/cursors.txt        per peer: its epoch and our position in it
- *   <dir>/peers.txt          per peer: the slot its deliveries are marked with
  *   <dir>/consumers.txt      per local app: the position it has reached
  *
  * XXXXXXXX is a segment's first position, in hex. Positions start at 1.
@@ -38,7 +37,8 @@ enum {
 	FSTORE_STALE = 3,		// a state object older than the one we have
 	FSTORE_EXPIRED = 4,		// already past its retention: not stored
 };
-enum { FSTORE_E_IO = 1, FSTORE_E_OBJ, FSTORE_E_FULL, FSTORE_E_CORRUPT };
+enum { FSTORE_E_IO = 1, FSTORE_E_OBJ, FSTORE_E_FULL, FSTORE_E_CORRUPT,
+	FSTORE_E_FORMAT };		// an older store (ZST1, before sources): remove it; peers send it all again
 
 // Opens the store in dir -- making it if it is not there -- and brings it
 // up to date after a crash: records the index lacks are indexed, a torn
@@ -57,14 +57,14 @@ uint32_t fstore_first(void);		// the oldest position still held
 // in *pos, or FSTORE_HAVE / _STALE / _EXPIRED, or -error.
 int fstore_put(const uint8_t *obj, uint32_t n, uint32_t now, uint32_t *pos);
 
-// The same, marking the object as delivered by the peer in `slot`
-// (fstore_peer_slot()); 0 is "made here".
-int fstore_put_from(const uint8_t *obj, uint32_t n, uint32_t now, uint8_t slot, uint32_t *pos);
+// The same, marking the object with its SOURCE -- fstore_source() of the
+// peer that delivered it; 0 is "made here". Kept in the index and the log.
+int fstore_put_from(const uint8_t *obj, uint32_t n, uint32_t now, uint64_t src, uint32_t *pos);
 
-// A peer's slot, for its current epoch: 1..255, or 0 if none is free.
-// A new epoch (the peer lost its store) gets a NEW slot, so what it
-// delivered before is no longer assumed to be there.
-uint8_t fstore_peer_slot(const uint8_t peer[32], uint64_t epoch);
+// A peer's source tag, for its current epoch: 8 bytes of SHA-256 of its
+// key and epoch, never 0. A new epoch (the peer lost its store) is a NEW
+// source, so what it sent before is sent back to it. No table, no limit.
+uint64_t fstore_source(const uint8_t peer[32], uint64_t epoch);
 
 bool fstore_have(const uint8_t id[32]);
 
@@ -88,10 +88,10 @@ bool fstore_cancelled(const uint8_t id[32]);
 // object since superseded. 0 if there is none.
 uint32_t fstore_next(uint32_t after);
 
-// The same, also skipping what the peer in `slot` delivered: it has it.
-// (slot 0: nothing skipped.) Without this, everything a peer sends comes
+// The same, also skipping what came from `src`: it has it. (0: nothing
+// skipped.) Without this, everything a peer sends comes
 // back to it in the next session.
-uint32_t fstore_next_for(uint32_t after, uint8_t slot);
+uint32_t fstore_next_for(uint32_t after, uint64_t src);
 
 // Makes everything stored so far durable and moves the watermark: after
 // this, a crash loses nothing. Call before recording a cursor.

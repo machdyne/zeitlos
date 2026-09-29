@@ -50,6 +50,14 @@ static int put(int who, const char *topic, int state, const char *key, uint64_t 
 }
 
 static void sh(const char *cmd) { int r = system(cmd); (void)r; }
+
+// Objects fstore would serve to a peer whose source is `src`.
+static int count_for(uint64_t src) {
+	int k = 0;
+	uint32_t p = 0;
+	while ((p = fstore_next_for(p, src))) k++;
+	return k;
+}
 static char *file(const char *rel) { static char p[256]; snprintf(p, sizeof(p), "%s/%s", dir, rel); return p; }
 
 int main(void) {
@@ -351,6 +359,57 @@ int main(void) {
 			fstore_state_get("net/prof", (sk[2] + 32), "me", got, sizeof(got)) > 0,
 			"its segment expired: the cancelled state gone for good, the other carried forward");
 		fstore_close();
+	}
+
+	// -- sources (fstore_source()): what came from a peer is not sent back to it --
+	{
+		char cmd[400];
+		uint8_t pa[32], pb[32];
+		memset(pa, 0xa1, 32);
+		memset(pb, 0xb2, 32);
+		uint64_t A = fstore_source(pa, 7), A2 = fstore_source(pa, 8), B = fstore_source(pb, 7);
+		CK(A && A2 && B && A == fstore_source(pa, 7) && A != A2 && A != B,
+			"a source: the same for a peer's epoch; another for its next epoch, or another peer; never 0");
+		snprintf(cmd, sizeof(cmd), "rm -rf %s && mkdir -p %s", dir, dir);
+		sh(cmd);
+		CK(fstore_open(dir, now, NULL, 64) == 0, "(a fresh store)");
+		fobj_t a1, s1, h1;
+		uint32_t p1, p2, p3;
+		int n = make(0, "net/forum", 0, NULL, now, 50, &a1);
+		fstore_put_from(obj, (uint32_t)n, now, A, &p1);
+		n = make(1, "net/prof", 1, "me", now, 40, &s1);
+		fstore_put_from(obj, (uint32_t)n, now, A, &p2);
+		n = make(2, "net/forum", 0, NULL, now, 30, &h1);
+		fstore_put(obj, (uint32_t)n, now, &p3);
+		CK(count_for(A) == 1 && count_for(B) == 3 && count_for(A2) == 3,
+			"served to A: not what came from A; to B, or to A with a new epoch: all");
+		// a crash with the index two entries behind the log: rebuilt from the log
+		fstore_close();
+		snprintf(cmd, sizeof(cmd), "truncate -s %d %s/seg/00000001.idx", 16 + 20, dir);
+		sh(cmd);
+		CK(fstore_open(dir, now, NULL, 64) == 0 && fstore_last() == 3, "(reopened: the index rebuilt from the log)");
+		CK(count_for(A) == 1 && count_for(B) == 3, "the sources rebuilt with it -- kept in the log too");
+		// expiry: a state object copied forward keeps its source
+		fobj_t late;
+		uint32_t pl;
+		put(3, "net/forum", 0, NULL, now + 31 * 86400, 10, now + 31 * 86400, &late, &pl);	// a new segment
+		fstore_expire(now + 400 * 86400);
+		// by day 400 all else has expired: only the state object is left, copied forward
+		CK(fstore_state_get("net/prof", (sk[1] + 32), "me", got, sizeof(got)) > 0 && fstore_first() == fstore_last() &&
+			count_for(A) == 0 && count_for(B) == 1,
+			"a state object copied forward keeps its source: still not sent back to A, sent to B");
+		fstore_close();
+		// a store from before sources: refused, and left as it was
+		snprintf(cmd, sizeof(cmd), "rm -rf %s && mkdir -p %s", dir, dir);
+		sh(cmd);
+		uint8_t old[32] = { 'Z', 'S', 'T', '1', 9, 9, 9 }, back[32];
+		FILE *f = fopen(file("store.hdr"), "wb");
+		fwrite(old, 1, 32, f);
+		fclose(f);
+		CK(fstore_open(dir, now, NULL, 64) == -FSTORE_E_FORMAT, "a store from before sources: refused -- not read as another");
+		f = fopen(file("store.hdr"), "rb");
+		CK(f && fread(back, 1, 32, f) == 32 && !memcmp(back, old, 32), "and not overwritten as if new");
+		if (f) fclose(f);
 	}
 
 	printf("fstore: %d checks, %d failed\n", checks, fails);

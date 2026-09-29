@@ -56,9 +56,9 @@ and whose posts go out to the network.
 | 3 | **BBS core**: portable core and platform layers (Zeitlos, Linux); `bbs0` with one state machine per caller; the output layer and terminal detection; users, signup, login; bulletins; menus; profiles; who's online; the local sysop; config; Linux deployment (systemd, OpenSSH `ForceCommand`) | **done** -- below, and [bbs_linux.md](bbs_linux.md) |
 | 4 | **Messaging**: message base (append-only log and index, one writer), private mail, forums, new-scan, last-read, reader, editor with quoting | **done** -- "Messages", below |
 | 5 | **fed core**: signed objects on topics, node lists, the hybrid (post-quantum) session, the store, catch-up after downtime, outbound-only nodes, the local interface -- [fed.md](fed.md) | **done** on Linux and Zeitlos; first light on hardware |
-| 6 | **Federated BBS**: forums over fed; mail between nodes, sealed; cancels and moderation; retention | **forums, mail, cancels and moderation: done** ("Federation", below); retention next. (No posting as someone on another node: an address is `handle@node`, and each node vouches only for its own users -- fed.md, "One person, several nodes") |
+| 6 | **Federated BBS**: forums over fed; mail between nodes, sealed; cancels and moderation; retention | **done** ("Federation", below): the BBS keeps its posts, `fed` lets them go; a forum carried later gets its history. (No posting as someone on another node: an address is `handle@node`, and each node vouches only for its own users -- fed.md, "One person, several nodes") |
 | 7 | **Network profiles** -- LoRa's groundwork: a network's maximum object size and its cryptography, in its node list; a link's size limit, per peer; letters sealed classically where a network chooses it (fed.md, "Constrained links") | **done** |
-| 8 | **The live server**: bbs.machdyne.com configured and running -- the BBS and `fed` on Linux, the end-to-end zfed test with a Zeitlos board | |
+| 8 | **The live server**: bbs.machdyne.com configured and running -- the BBS and `fed` on Linux, the end-to-end zfed test with a Zeitlos board | **done**: posts and lists between a board and the server |
 | 9 | **More over fed**: network bulletins; **events** -- announcements to the OS itself (a Zeitlos update, say), signed by a publisher the network names; **LoRa** through `mesh`; an optional FTN gateway | |
 | 10 | **Doors**: the door protocol, a `zdoor` helper, dropfile, relay and time limits; blackjack, then a multiplayer poker table; door leagues; correspondence chess, as a demo | |
 
@@ -423,6 +423,18 @@ that it is trying every 5 seconds.
   a repeat.
 - **Delivery is at least once**: an object whose id -- or token -- is
   among the forum's last 500 messages is acknowledged and skipped.
+- **The BBS keeps its posts; `fed` lets them go.** `fed` holds objects
+  long enough for every node to catch up (90 days by default); a
+  forum's messages are the BBS's own archive, kept as long as the sysop
+  keeps them.
+- **A forum carried later gets its history -- once.** The topics this
+  BBS has carried are in `<datadir>/fed-topics`; a topic new to it is
+  asked for with the subscription (`SUB` with history, fed.md, "The
+  local interface"), and whatever `fed` still holds on it arrives first.
+  It is recorded when `fed` says the history is done, so a topic ever
+  carried never asks again, and a forum removed and added back cannot
+  bring deleted posts back. (A BBS federating from before this file
+  records the topics it has without asking: it has them.)
 - **Authors** show as `handle@node`, the node's name from the
   network's node list (kept in `<datadir>/fed-names`), or its short id.
   This node's own posts show as the plain handle.

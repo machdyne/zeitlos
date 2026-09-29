@@ -371,6 +371,94 @@ int main(void) {
 		CK(strstr(buf, "SUB bbs t/*") != NULL, "and the new link subscribes again");
 	}
 
+	// -- 10. a forum given a topic later: its history, once --
+	{
+		char key[200], hello[260], p[160], topics[400];
+		snprintf(key, sizeof(key), "OK %s 0123456789abcdef alpha\n", self);
+		snprintf(hello, sizeof(hello), "%sOK subscribed after 20\n", key);
+		deliver_data(FED, 5, hello);
+		steps(2);
+		// the file, since the first connection: the topics it had, and no history asked
+		snprintf(p, sizeof(p), "%s/fed-topics", dir);
+		FILE *f = fopen(p, "r");
+		size_t tl = f ? fread(topics, 1, sizeof(topics) - 1, f) : 0;
+		if (f) fclose(f);
+		topics[tl] = 0;
+		CK(!strcmp(topics, "t/forum/general\n"), "fed-topics from the first connection: general's topic -- its history not asked for, it had it");
+		// a forum added, with a topic never carried
+		snprintf(p, sizeof(p), "%s/forums.cfg", dir);
+		f = fopen(p, "w");
+		fputs("general; General; 0; 10; Anything; t/forum/general\nnews; News; 0; 10; Also far; t/forum/news\n", f);
+		fclose(f);
+		areas_load();
+		int news = area_find("news");
+		deliver(FED, Z_PORT_CLOSE, 5, z_obj_none());
+		steps(2);
+		ticks += 6 * Z_TICK_HZ;
+		steps(2);
+		mark = nout;
+		deliver(FED, Z_PORT_CONNECTED, 0, z_obj_uint32(6));
+		steps(2);
+		to_fed(mark, buf, sizeof(buf), 6);
+		CK(strstr(buf, "SUB bbs t/* t/forum/news\n") != NULL, "reconnected: SUB with t/forum/news's history (%s)", buf);
+		// its history: an older post on it, then HIST END
+		char payload[300], obj[1200], line[40];
+		int pl = snprintf(payload, sizeof(payload), "{\"from\":\"dave\",\"subject\":\"Old news\",\"date\":%u,\"body\":\"from before\"}",
+			(unsigned)plat_now());
+		int ol = snprintf(obj, sizeof(obj), "ZFED1\ntopic: t/forum/news\ntype: bbs.post\nformat: json\nkind: log\n"
+			"origin: %s\ntime: %u\nseq: 2\nlen: %d\n\n%s\nsig: %0128d\n", other, (unsigned)plat_now(), pl, payload, 0);
+		deliver_data(FED, 6, hello);
+		steps(1);
+		int ln = snprintf(line, sizeof(line), "OBJ 3 %d\n", ol);
+		static char whole[1400];
+		memcpy(whole, line, (size_t)ln);
+		memcpy(whole + ln, obj, (size_t)ol);
+		memcpy(whole + ln + ol, "HIST END\n", 10);
+		deliver_data(FED, 6, whole);
+		steps(3);
+		CK(news > 0 && msg_count(news) == 1, "its history: the older post, in News");
+		f = fopen(p, "r");
+		(void)f; if (f) fclose(f);
+		snprintf(p, sizeof(p), "%s/fed-topics", dir);
+		f = fopen(p, "r");
+		tl = f ? fread(topics, 1, sizeof(topics) - 1, f) : 0;
+		if (f) fclose(f);
+		topics[tl] = 0;
+		CK(strstr(topics, "t/forum/news\n") != NULL, "after HIST END: t/forum/news recorded as carried");
+		// the next connection asks for no history
+		deliver(FED, Z_PORT_CLOSE, 6, z_obj_none());
+		steps(2);
+		ticks += 6 * Z_TICK_HZ;
+		steps(2);
+		mark = nout;
+		deliver(FED, Z_PORT_CONNECTED, 0, z_obj_uint32(7));
+		steps(2);
+		to_fed(mark, buf, sizeof(buf), 7);
+		CK(strstr(buf, "SUB bbs t/*\n") != NULL, "the next connection: a plain SUB -- never the history again (%s)", buf);
+		// an older fed, which knows no history: subscribed without it
+		snprintf(p, sizeof(p), "%s/forums.cfg", dir);
+		f = fopen(p, "w");
+		fputs("general; General; 0; 10; Anything; t/forum/general\nnews; News; 0; 10; Also far; t/forum/news\n"
+			"old; Old; 0; 10; X; t/forum/old\n", f);
+		fclose(f);
+		areas_load();
+		deliver_data(FED, 7, hello);
+		steps(2);
+		deliver(FED, Z_PORT_CLOSE, 7, z_obj_none());
+		steps(2);
+		ticks += 6 * Z_TICK_HZ;
+		steps(2);
+		deliver(FED, Z_PORT_CONNECTED, 0, z_obj_uint32(8));
+		steps(2);
+		mark = nout;
+		char refused[260];
+		snprintf(refused, sizeof(refused), "%sERR ?\n", key);
+		deliver_data(FED, 8, refused);
+		steps(2);
+		to_fed(mark, buf, sizeof(buf), 8);
+		CK(strstr(buf, "SUB bbs t/*\n") != NULL, "an older fed refusing the history: subscribed without it (%s)", buf);
+	}
+
 	printf("bbs fed-link test: %d checks, %d failed\n", checks, fails);
 	return fails != 0;
 }

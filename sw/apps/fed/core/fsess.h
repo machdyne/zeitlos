@@ -87,7 +87,7 @@ typedef struct {
 
 	// the exchange
 	uint64_t peer_epoch;
-	uint8_t peer_slot;					// what the peer delivers is marked with it
+	uint64_t peer_src;					// what the peer delivers is marked with it (fstore_source())
 	char peer_wants[FSESS_WANTS_MAX];
 	uint32_t pull_from;					// our GET: after this, in the peer's store
 	bool hello_sent, get_sent, got_end, bye_sent, got_bye;

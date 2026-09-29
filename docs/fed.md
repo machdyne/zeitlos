@@ -375,6 +375,15 @@ log first, tables after; a torn record at the end is written over, and
 tables behind the log are brought up to it at start. Every crash this
 claims to survive is made to happen in the tests.
 
+**Every object records its source**: 8 bytes of SHA-256 of the key of
+the peer that delivered it and that peer's store epoch (0: made here),
+in its index entry and in its log record. That is what keeps an object
+from being sent back where it came from; a peer that loses its store has
+a new epoch, so a new source, and is sent everything again. Being in the
+log, the source survives a crash with the index; copied forward, a
+state object keeps it. A store from before sources (`ZST1`) is refused,
+not misread -- remove it, and peers send everything again.
+
 ### Retention
 
 Retention is each node's own setting, not protocol: 90 days by default,
@@ -835,7 +844,12 @@ PUB <topic> <type> <format> <kind> <key or -> <len>\n  then the payload
 SUB <name> <pattern>\n
     -> OK subscribed after <position>\n
     -> OBJ <position> <len>\n then the object -- one at a time, the next after
-ACK <position>\n                  also remembered as <name>'s place
+SUB <name> <pattern> <topic>[,<topic>...]\n
+    the same, with those topics' HISTORY first: the objects on them the
+    subscription had already gone past, then HIST END\n, then the stream
+    as ever (a forum carried later -- bbs.md, "Federation")
+ACK <position>\n                  also remembered as <name>'s place (a
+                                  history object's ack never moves it back)
 KEY\n
     -> OK <this node's key> <its short id> <its name>\n
 LIST <network>\n
@@ -905,10 +919,10 @@ each with host tests before the next. The code is `sw/apps/fed`:
 | suite | checks | what |
 |---|---|---|
 | `test_fobj` | 6, over 503 vectors | against an independent Python implementation, both ways |
-| `test_fstore` | 59 | every crash the store claims to survive, made to happen; a fuzz against a model; cancels |
+| `test_fstore` | 67 | every crash the store claims to survive, made to happen; a fuzz against a model; cancels; sources, through a crash and copy-forward |
 | `test_fsess` | 21 | stores syncing both ways; relays; a store lost; a session cut at 46 points; refusals |
 | `test_handshake` | 12 | a known-answer test of the whole hybrid handshake against Python |
-| `test_fnode` | 48 | configuration, rate limits, membership from real signed lists, the local interface |
+| `test_fnode` | 56 | configuration, rate limits, membership from real signed lists, the local interface -- SUB with history included |
 | `test_fnet` | 13 | every kind of wrong list refused whole; moderators; profiles |
 | `test_fmail` | 19 | sealed letters, hybrid and classical, byte for byte against Python; every byte tampered with; round trips |
 | `test_zfed` | 16 | the Zeitlos program against a scripted kernel, a real Linux `fed` over real TCP, and a scripted `mesh0` |
@@ -937,7 +951,7 @@ list -- now always wanted; and two changes to a list within one second,
 the second refused as "older" half the time (their times tied, and the
 higher id won) -- found by the node-list commands' test, and a state
 object now always newer than its origin's current one. And on a board: cursors
-and peer slots written garbled -- the store's epoch and position passed
+and peer slots (since replaced by sources) written garbled -- the store's epoch and position passed
 to `printf` as 64-bit numbers, which the C library the board's `fed`
 was built with did not take as the compiler passed them. The board then
 asked for everything again every session, and would have run out of

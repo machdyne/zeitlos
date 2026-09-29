@@ -11,7 +11,7 @@
 
 static fradio_cfg_t g;
 static bool g_up;
-static uint8_t g_slot;			// the store's peer slot for "the radio"
+static uint64_t g_src;			// the store's source tag for "the radio"
 static uint32_t g_ann_pos;		// announced up to here
 static uint32_t g_t_ann, g_t_sent, g_now;
 static fradio_stats_t g_st;
@@ -99,7 +99,7 @@ static void announce_new(void) {
 	uint8_t ids[FRADIO_INV_MAX][FRADIO_ID];
 	int n = 0;
 	uint32_t p;
-	while (n < FRADIO_INV_MAX && (p = fstore_next_for(g_ann_pos, g_slot))) {
+	while (n < FRADIO_INV_MAX && (p = fstore_next_for(g_ann_pos, g_src))) {
 		g_ann_pos = p;
 		if (eligible(p, ids[n])) n++;
 	}
@@ -111,7 +111,7 @@ static void announce_newest(void) {
 	uint8_t ids[FRADIO_INV_MAX][FRADIO_ID], one[FRADIO_ID];
 	int n = 0;
 	uint32_t last = fstore_last(), from = last > 64 ? last - 64 : 0, p = from;
-	while ((p = fstore_next_for(p, g_slot)) && p <= last) {
+	while ((p = fstore_next_for(p, g_src)) && p <= last) {
 		if (!eligible(p, one)) continue;
 		if (n == FRADIO_INV_MAX) { memmove(ids[0], ids[1], (FRADIO_INV_MAX - 1) * FRADIO_ID); n--; }
 		memcpy(ids[n++], one, FRADIO_ID);
@@ -197,7 +197,7 @@ static void complete(asm_t *a) {
 		g_st.objects_rejected++;
 		return;
 	}
-	int r = fstore_put_from(a->buf, a->total, now_s, g_slot, &pos);
+	int r = fstore_put_from(a->buf, a->total, now_s, g_src, &pos);
 	if (r == FSTORE_NEW) {
 		g_st.objects_in++;
 		fstore_sync();
@@ -238,7 +238,7 @@ void fradio_init(const fradio_cfg_t *cfg, uint32_t now_ms) {
 	if (!g.retry_ms) g.retry_ms = 30000;
 	if (!g.retries) g.retries = 5;
 	g_up = false;
-	g_slot = fstore_peer_slot(RADIO_PEER, 1);
+	g_src = fstore_source(RADIO_PEER, 1);
 	g_ann_pos = fstore_last();
 	g_t_ann = g_t_sent = g_now = now_ms;
 	g_qh = g_qn = 0;

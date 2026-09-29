@@ -244,6 +244,18 @@ try:
     phil.type("m"); phil.type("w"); phil.type("anna@nowhere\r")
     ck("No node by that name on the network." in phil.screen.decode("utf-8", "replace"), "anna@nowhere: no such node, said at once")
     phil.type("\x18"); phil.type("y"); phil.type("\r"); phil.type("q")
+
+    # -- a forum carried later: its history, once --
+    older = json.dumps({"from": "carl", "subject": "Early news", "date": int(time.time()), "body": "news from before", "post": "tok-early"})
+    ck(fed_pub(FA, "t/forum/news", older).startswith(b"OK"), "(a post on t/forum/news, which beta's BBS does not carry)")
+    ck(wait_for(lambda: in_fed_store(FB, b"news from before"), 20), "it reaches beta's fed -- not shown: no forum for it")
+    stop("bbs-b")
+    open(os.path.join(BB, "forums.cfg"), "a").write("news; News; 0; 10; Carried later; t/forum/news\n")
+    start("bbs-b", [BBS, "-d", BB, "-t", str(tb)], os.path.join(BB, "bbs.sock"))
+    ck(wait_for(lambda: "news from before" in log_of(BB, "news"), 20), "beta's BBS carries it now: the older post arrives, as history")
+    ck(wait_for(lambda: "the history of 1 forum taken" in open(os.path.join(base, "bbs-b.log")).read(), 10),
+       "and says so: the history of 1 forum taken")
+    ck(log_of(BB, "general").count("only once") == 1, "general, carried all along, not sent again")
 finally:
     for n in list(procs):
         try: stop(n)

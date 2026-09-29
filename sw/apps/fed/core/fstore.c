@@ -44,13 +44,12 @@
 
 #define P_MAX 200
 #define IDX_HDR 16
-#define IDX_ENT 12
+#define IDX_ENT 20				// offset, length and flags, expiry, SOURCE (8)
+#define REC_HDR 12				// a log record: its length (4), its source (8), the object
 #define F_STATE 0x40000000u
 #define F_SUPER 0x80000000u
 #define F_CANCEL 0x20000000u		// cancelled (docs/fed.md, "Moderation"): not sent to anyone again
 #define LEN_MASK 0x0000FFFFu		// objects are at most FOBJ_MAX (17,559) bytes
-#define SRC_SHIFT 16				// bits 16-23: the peer slot that delivered it (0: here)
-#define SRC_MASK 0x00FF0000u
 #define TBL_HDR 16
 #define PROBE 8
 #define IDS_DEFAULT 16384u
@@ -124,11 +123,13 @@ static bool write_whole(const char *p, const void *buf, uint32_t n) {
 
 // -- the header --
 
+static bool g_old_format;			// the store is ZST1: refused, and said so
+
 static bool hdr_write(void) {
 	char p[P_MAX];
 	uint8_t h[32];
 	memset(h, 0, sizeof(h));
-	memcpy(h, "ZST1", 4);
+	memcpy(h, "ZST2", 4);
 	put64(h + 4, g_epoch);
 	put32(h + 12, g_water);
 	put32(h + 16, g_next);
@@ -143,7 +144,9 @@ static bool hdr_read(void) {
 	snprintf(q, sizeof(q), "%s.new", p);
 	// a rename that did not finish (Zeitlos unlinks, then renames)
 	if (plat_size(p) < 0 && plat_size(q) == 32) plat_rename(q, p);
-	if (!read_at(p, 0, h, sizeof(h)) || memcmp(h, "ZST1", 4)) return false;
+	if (!read_at(p, 0, h, sizeof(h))) return false;
+	if (!memcmp(h, "ZST1", 4)) { g_old_format = true; return false; }	// before sources (fstore_source())
+	if (memcmp(h, "ZST2", 4)) return false;
 	g_epoch = get64(h + 4);
 	g_water = get32(h + 12);
 	g_next = get32(h + 16);
@@ -161,7 +164,8 @@ static int seg_find(uint32_t pos) {
 	return best;
 }
 
-static bool entry_read(uint32_t pos, uint32_t *off, uint32_t *lenf, uint32_t *exp) {
+// An index entry; src may be NULL.
+static bool entry_read(uint32_t pos, uint32_t *off, uint32_t *lenf, uint32_t *exp, uint64_t *src) {
 	int s = seg_find(pos);
 	char p[P_MAX];
 	uint8_t e[IDX_ENT];
@@ -169,15 +173,16 @@ static bool entry_read(uint32_t pos, uint32_t *off, uint32_t *lenf, uint32_t *ex
 	seg_path(p, g_segs[s], "idx");
 	if (!read_at(p, IDX_HDR + (pos - g_segs[s]) * IDX_ENT, e, IDX_ENT)) return false;
 	*off = get32(e); *lenf = get32(e + 4); *exp = get32(e + 8);
+	if (src) *src = get64(e + 12);
 	return true;
 }
 
-static bool entry_write(uint32_t pos, uint32_t off, uint32_t lenf, uint32_t exp) {
+static bool entry_write(uint32_t pos, uint32_t off, uint32_t lenf, uint32_t exp, uint64_t src) {
 	int s = seg_find(pos);
 	char p[P_MAX];
 	uint8_t e[IDX_ENT];
 	if (s < 0) return false;
-	put32(e, off); put32(e + 4, lenf); put32(e + 8, exp);
+	put32(e, off); put32(e + 4, lenf); put32(e + 8, exp); put64(e + 12, src);
 	seg_path(p, g_segs[s], "idx");
 	return write_at(p, IDX_HDR + (pos - g_segs[s]) * IDX_ENT, e, IDX_ENT);
 }
@@ -187,7 +192,7 @@ static bool seg_new(uint32_t first, uint32_t now) {
 	uint8_t h[IDX_HDR];
 	if (g_nseg >= FSTORE_MAX_SEGS) return false;
 	memset(h, 0, sizeof(h));
-	memcpy(h, "ZSI1", 4);
+	memcpy(h, "ZSI2", 4);
 	put32(h + 4, first);
 	put32(h + 8, now);
 	seg_path(p, first, "log");
@@ -205,11 +210,11 @@ static bool seg_new(uint32_t first, uint32_t now) {
 static uint32_t obj_read(uint32_t pos, uint32_t *lenf) {
 	uint32_t off, lf, exp;
 	char p[P_MAX];
-	if (pos < fstore_first() || !entry_read(pos, &off, &lf, &exp)) return 0;
+	if (pos < fstore_first() || !entry_read(pos, &off, &lf, &exp, NULL)) return 0;
 	uint32_t len = lf & LEN_MASK;
 	if (len > FOBJ_MAX) return 0;
 	seg_path(p, g_segs[seg_find(pos)], "log");
-	if (!read_at(p, off + 4, g_buf, len)) return 0;
+	if (!read_at(p, off + REC_HDR, g_buf, len)) return 0;
 	if (lenf) *lenf = lf;
 	return len;
 }
@@ -411,12 +416,14 @@ static bool apply(uint32_t pos, const fobj_t *o, uint32_t lenf) {
 			if (c > 0 || (c == 0 && cpos > pos)) {
 				// the table's is newer: this record is superseded
 				uint32_t off, lf, exp;
-				if (entry_read(pos, &off, &lf, &exp)) entry_write(pos, off, lf | F_SUPER, exp);
+				uint64_t src;
+				if (entry_read(pos, &off, &lf, &exp, &src)) entry_write(pos, off, lf | F_SUPER, exp, src);
 				return true;
 			}
 			if (c < 0 && cpos >= fstore_first()) {
 				uint32_t off, lf, exp;
-				if (entry_read(cpos, &off, &lf, &exp)) entry_write(cpos, off, lf | F_SUPER, exp);
+				uint64_t src;
+				if (entry_read(cpos, &off, &lf, &exp, &src)) entry_write(cpos, off, lf | F_SUPER, exp, src);
 			}
 		}
 		if (!st_set(k, pos, o->time, o->id, false, T_st.slots, &T_st.used)) return false;
@@ -426,29 +433,30 @@ static bool apply(uint32_t pos, const fobj_t *o, uint32_t lenf) {
 
 // -- appending --
 
-static int append(const uint8_t *obj, uint32_t n, uint32_t flags, uint32_t exp, uint32_t now, uint32_t *pos) {
+static int append(const uint8_t *obj, uint32_t n, uint32_t flags, uint32_t exp, uint32_t now, uint64_t src, uint32_t *pos) {
 	char p[P_MAX];
-	uint8_t len4[4];
+	uint8_t len4[REC_HDR];
 	int s = g_nseg - 1;
 	uint32_t count = g_next - g_segs[s];
-	if (count && (g_cur_logend + 4 + n > FSTORE_SEG_BYTES || (now > g_cur_created && now - g_cur_created > FSTORE_SEG_SECONDS))) {
+	if (count && (g_cur_logend + REC_HDR + n > FSTORE_SEG_BYTES || (now > g_cur_created && now - g_cur_created > FSTORE_SEG_SECONDS))) {
 		if (!seg_new(g_next, now)) return -FSTORE_E_FULL;
 		s = g_nseg - 1;
 	}
 	put32(len4, n);
+	put64(len4 + 4, src);				// in the log too: recovery restores it exactly
 	seg_path(p, g_segs[s], "log");
 	{
 		if (plat_size(p) < 0) return -FSTORE_E_IO;
 		int h = plat_open(p, PLAT_UPDATE);
 		if (h < 0) return -FSTORE_E_IO;
-		bool ok = plat_seek(h, g_cur_logend) && plat_write(h, len4, 4) == 4 && plat_write(h, obj, (int)n) == (int)n;
+		bool ok = plat_seek(h, g_cur_logend) && plat_write(h, len4, REC_HDR) == REC_HDR && plat_write(h, obj, (int)n) == (int)n;
 		plat_close(h);
 		if (!ok) return -FSTORE_E_IO;
 	}
 	*pos = g_next;
 	g_next++;
-	if (!entry_write(*pos, g_cur_logend, n | flags, exp)) { g_next--; return -FSTORE_E_IO; }
-	g_cur_logend += 4 + n;
+	if (!entry_write(*pos, g_cur_logend, n | flags, exp, src)) { g_next--; return -FSTORE_E_IO; }
+	g_cur_logend += REC_HDR + n;
 	return 0;
 }
 
@@ -468,7 +476,7 @@ int fstore_put(const uint8_t *obj, uint32_t n, uint32_t now, uint32_t *pos) {
 	return fstore_put_from(obj, n, now, 0, pos);
 }
 
-int fstore_put_from(const uint8_t *obj, uint32_t n, uint32_t now, uint8_t slot, uint32_t *pos) {
+int fstore_put_from(const uint8_t *obj, uint32_t n, uint32_t now, uint64_t src, uint32_t *pos) {
 	fobj_t o;
 	uint32_t exp, flags = 0, retain;
 	if (n > FOBJ_MAX || fobj_parse(obj, n, 0, &o, NULL) || o.size != n) return -FSTORE_E_OBJ;
@@ -490,8 +498,7 @@ int fstore_put_from(const uint8_t *obj, uint32_t n, uint32_t now, uint8_t slot, 
 			if (ct > o.time || (ct == o.time && memcmp(cur + 32, o.id, 32) >= 0)) return FSTORE_STALE;
 		}
 	}
-	flags |= (uint32_t)slot << SRC_SHIFT;
-	int r = append(obj, n, flags, exp, now, pos);
+	int r = append(obj, n, flags, exp, now, src, pos);
 	if (r < 0) return r;
 	if (!apply(*pos, &o, n | flags)) return -FSTORE_E_IO;
 	return FSTORE_NEW;
@@ -505,7 +512,7 @@ int fstore_state_get(const char *topic, const uint8_t origin[32], const char *ke
 	if (i == -2) return -FSTORE_E_IO;
 	if (i < 0) return 0;
 	uint32_t off, lf, exp;
-	if (entry_read(get32(cur + 16), &off, &lf, &exp) && (lf & F_CANCEL)) return 0;	// cancelled: as if absent
+	if (entry_read(get32(cur + 16), &off, &lf, &exp, NULL) && (lf & F_CANCEL)) return 0;	// cancelled: as if absent
 	return fstore_get(get32(cur + 16), buf, cap);
 }
 
@@ -520,20 +527,21 @@ static uint32_t id_pos(const uint8_t id[32]) {
 
 int fstore_get_id(const uint8_t id[32], uint8_t *buf, uint32_t cap) {
 	uint32_t p = id_pos(id), off, lf, exp;
-	if (!p || !entry_read(p, &off, &lf, &exp) || (lf & F_CANCEL)) return 0;
+	if (!p || !entry_read(p, &off, &lf, &exp, NULL) || (lf & F_CANCEL)) return 0;
 	return fstore_get(p, buf, cap);
 }
 
 int fstore_cancel(const uint8_t id[32]) {
 	uint32_t p = id_pos(id), off, lf, exp;
-	if (!p || !entry_read(p, &off, &lf, &exp)) return 0;
+	uint64_t src;
+	if (!p || !entry_read(p, &off, &lf, &exp, &src)) return 0;
 	if (lf & F_CANCEL) return 0;
-	return entry_write(p, off, lf | F_CANCEL, exp) ? 1 : -FSTORE_E_IO;
+	return entry_write(p, off, lf | F_CANCEL, exp, src) ? 1 : -FSTORE_E_IO;
 }
 
 bool fstore_cancelled(const uint8_t id[32]) {
 	uint32_t p = id_pos(id), off, lf, exp;
-	return p && entry_read(p, &off, &lf, &exp) && (lf & F_CANCEL);
+	return p && entry_read(p, &off, &lf, &exp, NULL) && (lf & F_CANCEL);
 }
 
 int fstore_get(uint32_t pos, uint8_t *buf, uint32_t cap) {
@@ -544,12 +552,13 @@ int fstore_get(uint32_t pos, uint8_t *buf, uint32_t cap) {
 	return (int)len;
 }
 
-uint32_t fstore_next_for(uint32_t after, uint8_t slot) {
+uint32_t fstore_next_for(uint32_t after, uint64_t src) {
 	for (uint32_t p = after + 1 < fstore_first() ? fstore_first() : after + 1; p < g_next; p++) {
 		uint32_t off, lf, exp;
-		if (!entry_read(p, &off, &lf, &exp)) return 0;
+		uint64_t from;
+		if (!entry_read(p, &off, &lf, &exp, &from)) return 0;
 		if (lf & (F_SUPER | F_CANCEL)) continue;
-		if (slot && ((lf & SRC_MASK) >> SRC_SHIFT) == slot) continue;
+		if (src && from == src) continue;
 		return p;
 	}
 	return 0;
@@ -582,8 +591,8 @@ static bool recover_current(uint32_t now) {
 	seg_path(ip, first, "idx");
 	int32_t lsz = plat_size(lp), isz = plat_size(ip);
 	if (lsz < 0) { int c = plat_open(lp, PLAT_CREATE); if (c < 0) return false; plat_close(c); lsz = 0; }
-	if (isz < IDX_HDR || !read_at(ip, 0, h, IDX_HDR) || memcmp(h, "ZSI1", 4)) {
-		memset(h, 0, sizeof(h)); memcpy(h, "ZSI1", 4); put32(h + 4, first); put32(h + 8, now);
+	if (isz < IDX_HDR || !read_at(ip, 0, h, IDX_HDR) || memcmp(h, "ZSI2", 4)) {
+		memset(h, 0, sizeof(h)); memcpy(h, "ZSI2", 4); put32(h + 4, first); put32(h + 8, now);
 		if (!write_at(ip, 0, h, IDX_HDR)) return false;
 		isz = IDX_HDR;
 	}
@@ -593,20 +602,21 @@ static bool recover_current(uint32_t now) {
 	g_cur_logend = 0;
 	while (n > 0) {
 		uint32_t off, lf, exp;
-		if (!entry_read(first + n - 1, &off, &lf, &exp)) return false;
-		if ((uint64_t)off + 4 + (lf & LEN_MASK) <= (uint64_t)lsz) { g_cur_logend = off + 4 + (lf & LEN_MASK); break; }
+		if (!entry_read(first + n - 1, &off, &lf, &exp, NULL)) return false;
+		if ((uint64_t)off + REC_HDR + (lf & LEN_MASK) <= (uint64_t)lsz) { g_cur_logend = off + REC_HDR + (lf & LEN_MASK); break; }
 		n--;
 		g_next = first + n;
 	}
 	g_next = first + n;
 	// whole records the index lacks
-	while (g_cur_logend + 4 <= (uint32_t)lsz) {
-		uint8_t len4[4];
+	while (g_cur_logend + REC_HDR <= (uint32_t)lsz) {
+		uint8_t len4[REC_HDR];
 		fobj_t o;
-		if (!read_at(lp, g_cur_logend, len4, 4)) break;
+		if (!read_at(lp, g_cur_logend, len4, REC_HDR)) break;
 		uint32_t len = get32(len4);
-		if (len > FOBJ_MAX || g_cur_logend + 4 + len > (uint32_t)lsz) break;
-		if (!read_at(lp, g_cur_logend + 4, g_buf, len)) break;
+		uint64_t src = get64(len4 + 4);
+		if (len > FOBJ_MAX || g_cur_logend + REC_HDR + len > (uint32_t)lsz) break;
+		if (!read_at(lp, g_cur_logend + REC_HDR, g_buf, len)) break;
 		if (fobj_parse(g_buf, len, 0, &o, NULL) || o.size != len) break;
 		uint32_t flags = o.kind == FOBJ_STATE ? F_STATE : 0, exp;
 		if (o.kind == FOBJ_STATE) exp = 0xFFFFFFFFu;
@@ -615,8 +625,8 @@ static bool recover_current(uint32_t now) {
 			exp = o.time + retain > 0xFFFFFFFFull ? 0xFFFFFFFFu : (uint32_t)(o.time + retain);
 		}
 		g_next++;
-		if (!entry_write(g_next - 1, g_cur_logend, len | flags, exp)) return false;
-		g_cur_logend += 4 + len;
+		if (!entry_write(g_next - 1, g_cur_logend, len | flags, exp, src)) return false;
+		g_cur_logend += REC_HDR + len;
 	}
 	return true;
 }
@@ -636,7 +646,11 @@ int fstore_open(const char *dir, uint32_t now, fstore_retain_fn retain, uint32_t
 	path(p, "seg");
 	if (!plat_mkdir(p)) return -FSTORE_E_IO;
 
+	g_old_format = false;
 	bool fresh = !hdr_read();
+	// a store from before sources: refused, never read as something else --
+	// nor overwritten as if new. Removing it is safe: peers send it all again.
+	if (g_old_format) return -FSTORE_E_FORMAT;
 	if (fresh) {
 		plat_random(&g_epoch, sizeof(g_epoch));
 		g_water = 0;
@@ -685,19 +699,21 @@ int fstore_expire(uint32_t now) {
 		bool all = true;
 		for (uint32_t pos = first; pos < end && all; pos++) {
 			uint32_t off, lf, exp;
-			if (!entry_read(pos, &off, &lf, &exp)) return dropped;
+			if (!entry_read(pos, &off, &lf, &exp, NULL)) return dropped;
 			if (!(lf & F_STATE) && exp > now) all = false;
 		}
 		if (!all) break;
 		// current state objects: copied forward first
 		for (uint32_t pos = first; pos < end; pos++) {
-			uint32_t lf, len = obj_read(pos, &lf), np;
+			uint32_t lf, len = obj_read(pos, &lf), np, off, lf2, exp2;
+			uint64_t src = 0;
 			fobj_t o;
 			if (!len || !(lf & F_STATE) || (lf & (F_SUPER | F_CANCEL))) continue;	// cancelled: not kept
 			static uint8_t copy[FOBJ_MAX];
 			memcpy(copy, g_buf, len);
 			if (fobj_parse(copy, len, 0, &o, NULL)) continue;
-			if (append(copy, len, F_STATE, 0xFFFFFFFFu, now, &np) < 0) return dropped;
+			entry_read(pos, &off, &lf2, &exp2, &src);		// its source kept: never echoed back
+			if (append(copy, len, F_STATE, 0xFFFFFFFFu, now, src, &np) < 0) return dropped;
 			uint8_t k[16];
 			state_key(&o, k);
 			if (!ids_set(o.id, np, false, T_ids.slots, &T_ids.used)) return dropped;
@@ -805,30 +821,15 @@ int fstore_set_consumer(const char *name, uint32_t pos) {
 	return kv_set("consumers.txt", name, line);
 }
 
-// -- peer slots: peers.txt, "<key hex> <slot> <epoch hex>" lines, and
-// "next <n>" -- the next slot never yet given. A slot is never given
-// twice: objects marked with it would otherwise be skipped for a peer
-// that never sent them.
+// -- sources --
 
-uint8_t fstore_peer_slot(const uint8_t peer[32], uint64_t epoch) {
-	char key[65], line[120];
-	unsigned slot = 0;
-	uint64_t e;
-	char *end, eh[17];
-	fobj_hex(peer, 32, key);
-	// "<slot> <16 hex>": by hand, never 64 bits through scanf (fobj.h)
-	const char *s = kv_get("peers.txt", key);
-	if (s) {
-		slot = (unsigned)strtoul(s, &end, 10);
-		if (end != s && *end == ' ' && fobj_hex_u64(end + 1, &e) && e == epoch && slot >= 1 && slot <= 255) return (uint8_t)slot;
-	}
-	const char *nx = kv_get("peers.txt", "next");
-	unsigned next = nx ? (unsigned)strtoul(nx, NULL, 10) : 1;
-	if (next > 255) return 0;					// none left: no skipping, never a wrong one
-	snprintf(line, sizeof(line), "next %u", next + 1);
-	if (kv_set("peers.txt", "next", line) < 0) return 0;
-	fobj_u64_hex(eh, epoch);
-	snprintf(line, sizeof(line), "%s %u %s", key, next, eh);
-	if (kv_set("peers.txt", key, line) < 0) return 0;
-	return (uint8_t)next;
+uint64_t fstore_source(const uint8_t peer[32], uint64_t epoch) {
+	static const uint8_t label[] = "zfed source 1";
+	uint8_t m[sizeof(label) - 1 + 32 + 8], h[32];
+	memcpy(m, label, sizeof(label) - 1);
+	memcpy(m + sizeof(label) - 1, peer, 32);
+	put64(m + sizeof(label) - 1 + 32, epoch);
+	z_sha256(h, m, sizeof(m));
+	uint64_t v = get64(h);
+	return v ? v : 1;					// 0 is "made here"
 }

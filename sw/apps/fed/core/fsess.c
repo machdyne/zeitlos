@@ -198,7 +198,7 @@ static bool is_list(const fobj_t *o) {
 static void serve(fsess_t *s) {
 	for (int budget = 64; s->serving && budget > 0 && s->state == FS_RUNNING; budget--) {
 		if (s->out_len > 1024) return;					// let it drain first
-		uint32_t next = fstore_next_for(s->serve_pos, s->peer_slot);	// not what it sent us
+		uint32_t next = fstore_next_for(s->serve_pos, s->peer_src);	// not what it sent us
 		if (!next || next > s->serve_end) {
 			uint8_t m[4];
 			put32(m, s->serve_end);
@@ -234,7 +234,7 @@ static void got_obj(fsess_t *s, const uint8_t *b, uint32_t n) {
 	if (fstore_have(o.id)) { s->stats.got_have++; return; }
 	if (!s->cfg.trusted && fobj_verify(&o)) { s->stats.got_rejected++; return; }
 	if (s->cfg.admit && !s->cfg.admit(&o, s->cfg.ctx)) { s->stats.got_rejected++; return; }
-	int r = fstore_put_from(b, n, s->cfg.now, s->peer_slot, &pos);
+	int r = fstore_put_from(b, n, s->cfg.now, s->peer_src, &pos);
 	if (r == FSTORE_NEW) { s->stats.got_new++; if (s->cfg.stored) s->cfg.stored(&o, s->cfg.ctx); }
 	else if (r == FSTORE_EXPIRED) s->stats.got_expired++;		// said in the session's log line: a clock, usually
 	else if (r > 0) s->stats.got_have++;
@@ -273,7 +273,7 @@ static void frame(fsess_t *s, uint8_t *p, uint32_t n) {
 		uint64_t e = 0, ce; uint32_t cp;
 		for (int i = 0; i < 8; i++) e |= (uint64_t)p[i] << (8 * i);
 		s->peer_epoch = e;
-		s->peer_slot = fstore_peer_slot(s->peer_key, e);
+		s->peer_src = fstore_source(s->peer_key, e);
 		memcpy(s->peer_wants, p + 8, n - 8);
 		s->peer_wants[n - 8] = 0;
 		// a cursor into a store that started again means nothing
