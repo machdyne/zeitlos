@@ -32,6 +32,7 @@
 #include "../../common/zport.h"
 #include "../../common/zobj.h"
 #include "../../common/zdns.h"
+#include "../../common/znet.h"
 #include "../../common/zcfg.h"
 #include "../../common/zrtc.h"
 
@@ -189,9 +190,34 @@ static void say(const char *text) { add_line(views[cur].name, text, false); }
 
 // -- the connection --
 
-typedef enum { C_IDLE, C_CONNECTING, C_REGISTERING, C_ONLINE } conn_state_t;
+typedef enum { C_IDLE, C_RESOLVING, C_CONNECTING, C_REGISTERING, C_ONLINE } conn_state_t;
 
 static conn_state_t cstate = C_IDLE;
+
+// The name is looked up by message, not with z_dns_resolve(): that
+// waits by reading this mailbox and throws away everything that is not
+// its reply. The first connect runs as the window opens, so what it
+// threw away was wm's first clip and redraw, and the window stayed
+// blank -- drawn against the empty region a window has until wm speaks
+// (zwin.h) -- for as long as irc ran. web drains its mailbox before it
+// resolves for the same reason (web.c), but a reply that comes while
+// z_dns_resolve() waits is still lost. Same limit as zdns.c's.
+#define IRC_DNS_TICKS	(5 * Z_TICK_HZ)
+static uint32_t dns_tag, dns_since;
+
+// Hanging up: net resets a socket the moment its client sends
+// Z_PORT_CLOSE, and whatever is still queued goes with it (net.c,
+// handle_sock_port_close()) -- a QUIT followed at once by a close never
+// left the machine. So QUIT is sent and the loop goes on until the
+// server hangs up, as /quit always did; then the window closes, or
+// the next connection starts. IRC_QUIT_TICKS bounds a server that
+// does not.
+#define IRC_QUIT_TICKS	(3 * Z_TICK_HZ)
+typedef enum { H_NONE, H_LEAVE, H_RECONNECT } hangup_then_t;
+static hangup_then_t hangup_then;
+static uint32_t hangup_since;
+static char next_server[IRC_TARGET_MAX + 192];
+static uint16_t next_port;
 static uint32_t net_pid;
 static z_port_t sock;
 static char server[IRC_TARGET_MAX + 192];
@@ -212,7 +238,7 @@ static void tx_flush(void) {
 
 static void send_wire(const char *line) {
 	uint32_t n = (uint32_t)strlen(line);
-	if (cstate == C_IDLE || cstate == C_CONNECTING) return;
+	if (cstate == C_IDLE || cstate == C_RESOLVING || cstate == C_CONNECTING) return;
 	if (txlen + n > sizeof(txq)) { say("-- too much queued to send; dropped a line"); return; }
 	memcpy(txq + txlen, line, n);
 	txlen += n;
@@ -230,17 +256,22 @@ static void disconnected(const char *why) {
 	dirty = true;
 }
 
+static void start_connect(uint32_t ip);
+static void hang_up(hangup_then_t then, const char *quit);
+
 static void connect_to(const char *host, uint16_t port) {
 
-	char err[96], t[IRC_SHOW_MAX];
+	char t[IRC_SHOW_MAX];
 	uint32_t ip;
-	z_obj_t arg;
 
-	if (cstate != C_IDLE) {
-		send_wire("QUIT :reconnecting\r\n");
-		z_port_close(&sock);
-		disconnected("reconnecting");
+	if (cstate == C_REGISTERING || cstate == C_ONLINE) {
+		// Say goodbye first; hangup_done() comes back here.
+		snprintf(next_server, sizeof(next_server), "%s", host ? host : "");
+		next_port = port;
+		hang_up(H_RECONNECT, "QUIT :reconnecting\r\n");
+		return;
 	}
+	if (cstate != C_IDLE) disconnected("reconnecting");	// nothing sent yet
 
 	if (host && host[0]) snprintf(server, sizeof(server), "%s", host);
 	if (port) server_port = port;
@@ -259,22 +290,84 @@ static void connect_to(const char *host, uint16_t port) {
 	cur = 0;
 	dirty = true;
 
-	// Blocks (bounded; zdns.h). Drawn first so the window says why.
-	repaint();
-	if (!z_resolve_host(server, &ip, err, sizeof(err))) {
-		snprintf(t, sizeof(t), "-- could not resolve %s: %s", server, err);
-		add_line("", t, false);
+	// An address needs no lookup; a name is answered in handle_msg().
+	if (z_parse_ipv4(server, &ip)) {
+		start_connect(ip);
 		return;
 	}
+	dns_tag = (dns_tag + 1) | 0x10000u;	// any value: matched with the subject
+	dns_since = z_uptime_ticks();
+	cstate = C_RESOLVING;
+	z_msg_new_send(net_pid, Z_NET_DNS_RESOLVE, dns_tag, z_obj_str(server));
+
+}
+
+static void start_connect(uint32_t ip) {
+
+	char t[IRC_SHOW_MAX];
+	z_obj_t arg;
 
 	snprintf(t, sizeof(t), "-- connecting to %s port %u...", server, (unsigned)server_port);
 	add_line("", t, false);
+	dirty = true;
 
 	arg = z_obj_map(2);
 	z_map_set(&arg, "ip", z_obj_uint32(ip));
 	z_map_set(&arg, "port", z_obj_uint32(server_port));
 	z_msg_new_send(net_pid, Z_PORT_CONNECT, 0, arg);
 	cstate = C_CONNECTING;
+
+}
+
+static void on_resolved(const z_msg_t *msg) {
+
+	char t[IRC_SHOW_MAX];
+	z_obj_t *ok = z_map_find((z_obj_t *)&msg->obj, "ok");
+	z_obj_t *ip = z_map_find((z_obj_t *)&msg->obj, "ip");
+
+	if (ok && ok->type == Z_UINT32 && ok->val.uint32 && ip && ip->type == Z_UINT32) {
+		start_connect(ip->val.uint32);
+		return;
+	}
+
+	{
+		z_obj_t *e = z_map_find((z_obj_t *)&msg->obj, "error");
+		snprintf(t, sizeof(t), "-- could not resolve %s: %s", server,
+			(e && e->type == Z_STR && e->val.str) ? e->val.str : "dns: resolve failed");
+	}
+	cstate = C_IDLE;
+	add_line("", t, false);
+	dirty = true;
+
+}
+
+static void hang_up(hangup_then_t then, const char *quit) {
+	if (hangup_then == H_NONE) {
+		send_wire(quit);
+		hangup_since = z_uptime_ticks();
+		add_line("", "-- saying goodbye to the server...", false);
+		dirty = true;
+	}
+	hangup_then = then;
+}
+
+// Called from the loop: the server has hung up (cstate is back to
+// C_IDLE, disconnected() saw its close), or it has had long enough.
+static void hangup_poll(void) {
+
+	if (hangup_then == H_NONE) return;
+	if (cstate != C_IDLE && z_uptime_ticks() - hangup_since < IRC_QUIT_TICKS) return;
+
+	z_port_close(&sock);
+	disconnected("closed");
+
+	if (hangup_then == H_LEAVE) {
+		z_win_destroy(&win);
+		exit(0);
+	}
+
+	hangup_then = H_NONE;
+	connect_to(next_server[0] ? next_server : NULL, next_port);
 
 }
 
@@ -443,6 +536,11 @@ static void submit(void) {
 
 	case IRC_IN_QUIT:
 		if (cstate == C_IDLE) { say("-- not connected"); return; }
+		if (cstate == C_RESOLVING || cstate == C_CONNECTING) {
+			z_port_close(&sock);
+			disconnected("cancelled");
+			return;
+		}
 		send_wire(in.wire);
 		cstate = C_ONLINE;		// let the QUIT go out; the server closes
 		return;
@@ -561,7 +659,8 @@ static void repaint(void) {
 		char st[256];
 		int n;
 		const char *state = cstate == C_ONLINE ? "" : cstate == C_REGISTERING
-			? " (registering)" : cstate == C_CONNECTING ? " (connecting)" : " (offline)";
+			? " (registering)" : cstate == C_CONNECTING ? " (connecting)"
+			: cstate == C_RESOLVING ? " (looking up)" : " (offline)";
 
 		n = snprintf(st, sizeof(st), " %s  %s%s%s%s",
 			views[cur].name[0] ? views[cur].name : "[server]",
@@ -659,17 +758,26 @@ static void handle_msg(z_msg_t *msg) {
 
 	case Z_WM_CLOSE:
 		if (msg->obj.type == Z_UINT32 && (int32_t)msg->obj.val.uint32 == win.id) {
-			if (cstate != C_IDLE) {
-				send_wire("QUIT :Zeitlos\r\n");
-				z_port_close(&sock);
+			if (cstate == C_REGISTERING || cstate == C_ONLINE) {
+				hang_up(H_LEAVE, "QUIT :Zeitlos\r\n");
+				break;
 			}
+			// Not talking to a server yet: nothing to say. A socket
+			// still being opened is reset by net once we are gone.
+			z_port_close(&sock);
 			z_win_destroy(&win);
 			exit(0);
 		}
 		break;
 
+	case Z_NET_DNS_RESOLVE_REPLY:
+		if (cstate == C_RESOLVING && msg->tag == dns_tag) on_resolved(msg);
+		break;
+
 	case Z_PORT_CONNECTED:
 		if (cstate == C_CONNECTING) on_connected(msg);
+		else if (msg->obj.type == Z_UINT32)	// one we gave up on: let it go
+			z_msg_new_send(msg->from, Z_PORT_CLOSE, msg->obj.val.uint32, z_obj_none());
 		break;
 
 	case Z_PORT_REFUSED:
@@ -761,6 +869,15 @@ int main(void) {
 		z_msg_t msg;
 
 		while (z_msg_read(&msg) == Z_OK) handle_msg(&msg);
+
+		if (cstate == C_RESOLVING && z_uptime_ticks() - dns_since >= IRC_DNS_TICKS) {
+			char t[IRC_SHOW_MAX];
+			snprintf(t, sizeof(t), "-- could not resolve %s: dns: timed out", server);
+			cstate = C_IDLE;
+			add_line("", t, false);
+			dirty = true;
+		}
+		hangup_poll();
 
 		if (dirty) repaint();
 
