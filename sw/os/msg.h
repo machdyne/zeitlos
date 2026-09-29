@@ -13,6 +13,9 @@ z_rv z_mailbox_pop(uint32_t pid, z_msg_envelope_t *msg);
 bool z_mailbox_empty(uint32_t pid);
 // pushes that found a full mailbox, system-wide -- for sh.c's `ic`
 uint32_t k_msg_full_drops(void);
+// process exit (interrupt path): its messages still queued elsewhere
+// lose their pointers, and its own mailbox is emptied -- see msg.c
+void k_msg_release_pid(uint32_t pid);
 
 // -- syscall handlers, registered in syscalls.def --
 //
