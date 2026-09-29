@@ -31,9 +31,12 @@ live in the flash archive and must NOT be duplicated onto the card: a
 card copy would shadow the per-target `net` build with the wrong PHY
 driver, which is the bug `check_against_script()` was written after.
 
-Two names are shortened because FatFs here is `FF_USE_LFN 0` and 8.3 is
-the whole namespace: `hello_win` ships as `hellowin` and `audiotest` as
-`audiotst`. `run` takes the name on the card.
+`hello_win` ships as `hellowin` and `audiotest` as `audiotst`. `run`
+takes the name on the card. Those short forms used to be required:
+FatFs was built with `FF_USE_LFN 0`, and 8.3 was the whole namespace.
+It is `FF_USE_LFN 1` now, names up to 255 UTF-16 units in UTF-8
+(`sw/os/fs/fatfs/ffconf.h`), so both long names would fit. They are
+still shipped short. Restoring them would change what `run` launches.
 
 
 Beyond the apps, docs and the ARK scroll:

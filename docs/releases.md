@@ -625,9 +625,10 @@ around 100 MB of a 1.5 GB card. That is what query speed costs.
 **A pack is copied as a tree, one `mcopy -s` each.** The per-file copy
 used for everything else is a subprocess per file that re-reads the
 FAT; fine for arklite's thousand files, hours for arkmed's tens of
-thousands. Every pack path is checked for 8.3 BEFORE anything is
-formatted, since `mcopy` would happily store a long name that FatFs
-here (`FF_USE_LFN 0`) cannot open.
+thousands. Every path is checked against FatFs BEFORE anything is
+formatted. FatFs here is `FF_USE_LFN 1` with names up to 255 UTF-16
+units in UTF-8 (`sw/os/fs/fatfs/ffconf.h`); `mcopy` would store a
+component `create_name()` rejects, and the board would not open it.
 
 **A pack is ONE manifest entry**, `ark/<pack>/`, not a line per file.
 `MANIFEST.json` would otherwise list every Wikipedia article's number.
@@ -639,9 +640,9 @@ Text compresses well; this is a limit for the ~4 GB future, not today.
 `lib/test_mkfatimg.py` builds every variant whose packs are present
 with the real tools -- `mkfs.fat`, `mcopy`, `fsck.fat` -- and reads the
 result back with mtools: every pack file present, contents identical,
-8.3 refused before formatting, and the 8KB-cluster path. The other two
-suites stub the card out, so this is the only one that formats
-anything.
+a name FatFs cannot open refused before formatting, and the
+8KB-cluster path. The other two suites stub the card out, so this is
+the only one that formats anything.
 
 ### How a card is built
 

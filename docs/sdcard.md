@@ -557,10 +557,14 @@ passes through `run` to the app intact ([posix.md](posix.md),
 "Quoting"). The posix shell also expands wildcards (`*.txt`); the
 kernel shell does not.
 
-**The release image stays 8.3.** `release/lib/mkfatimg.py` still refuses
-long names on the card it builds, on purpose: everything shipped keeps a
-short name, so a release card reads the same under a kernel without long
-names. It is stricter than the system, not a limit of it.
+**The release image follows FatFs.** `release/lib/mkfatimg.py` refuses a
+component `create_name()` would not open: longer than 255 UTF-16 units,
+an illegal long-name character, bad UTF-8, or empty once trailing
+spaces and dots are snipped. It used to refuse anything outside 8.3, so
+a release card would still read under a kernel built without long names.
+This kernel is built with them, and that stricter check rejected
+`zsubjects.h`. Names already on the card (`hellowin`, `audiotst`,
+`en.spk`) are unchanged.
 
 Tests: `sw/common/tests/test_flist.c` (long, German and Japanese names
 through the real `zflist`, the sort, a pool too small for a directory),
