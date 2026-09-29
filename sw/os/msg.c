@@ -293,6 +293,64 @@ static z_rv z_resolve_obj(uint32_t from_pid, z_obj_t *obj,
 
 }
 
+// -- a process that has died (kernel.c's reap path) --
+//
+// A message's pointers are resolved when it is READ, against the
+// sender's memory as it is then (z_resolve_obj() above). Once the
+// sender has been reaped that memory is gone: its block is back in
+// the allocator and z_procs[].base is 0, so a pointer it left in
+// someone else's mailbox translates to an address in the bottom 256MB
+// that nothing decodes -- and a read nothing decodes is never acked
+// (rtl/sysctl.v): the CPU waits forever inside the reader's syscall,
+// with every interrupt shut out. Closing irc with its socket open did
+// exactly that -- its QUIT, a blob in irc's own heap, was still in
+// net's mailbox when irc was reaped. Had the slot been reused first,
+// the reader would have read the new process's memory instead.
+//
+// So a dead process's messages keep their envelopes -- a CLOSE must
+// still arrive, it is how a provider learns its client has gone --
+// but lose any payload that points into memory it no longer has: they
+// arrive as Z_NONE, the same as a pointer z_sender_ok() refuses. And
+// its own mailbox is emptied, so whoever gets the slot next does not
+// read mail that was meant for the dead one.
+//
+// Runs on the interrupt path with the rest of the reap: no printf.
+void k_msg_release_pid(uint32_t pid) {
+
+	if (pid == 0 || pid >= Z_PROCS_MAX) return;
+
+	uint32_t old_mask = maskirq(0xFFFFFFFF);
+
+	for (uint32_t p = 0; p < Z_PROCS_MAX; p++) {
+		volatile z_mailbox_t *mb = &z_mailboxes[p];
+		uint32_t k = mb->head;
+		for (uint32_t i = 0; i < mb->count; i++) {
+			volatile z_msg_envelope_t *env = &mb->msgs[k];
+			if (env->from == pid) {
+				switch (env->obj.type) {
+					case Z_NONE:
+					case Z_RETVAL:
+					case Z_UINT32:
+					case Z_INT32:
+					case Z_FLOAT32:
+						break;
+					default:
+						env->obj.type = Z_NONE;
+						break;
+				}
+			}
+			k = (k + 1) % Z_MAILBOX_DEPTH;
+		}
+	}
+
+	z_mailboxes[pid].head = 0;
+	z_mailboxes[pid].tail = 0;
+	z_mailboxes[pid].count = 0;
+
+	maskirq(old_mask);
+
+}
+
 // -- syscalls --
 
 z_obj_t *k_msg_send(z_obj_t *args) {

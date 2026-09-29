@@ -1992,6 +1992,26 @@ static inline uint8_t get_mouse_btn(void) {
 // fast the loop happens to be spinning.
 #define DOCK_LAUNCH_TIMEOUT_TICKS   (Z_TICK_HZ * 3)
 
+// -- windows whose owner has gone --
+//
+// A process can end without destroying its windows: `kill` from the
+// shell, a crash the kernel ends (docs/mpu.md), an exit() with no
+// z_win_destroy(). Nothing told wm, so the window stayed -- frame,
+// contents and hit area, over whatever was behind it -- until a
+// reboot. Z_WM_WIN_KILL cleans up after itself; nothing else did.
+//
+// Checked about once a second, and only while some window belongs to
+// another process, so an empty desktop sleeps as it did. Same check
+// relay.c makes of net's listeners.
+static uint32_t owner_check_at;
+
+static bool others_have_windows(void) {
+	for (int i = 0; i < WM_MAX_WINDOWS; i++)
+		if (windows[i].used && i != dock_idx && windows[i].owner_pid != my_pid)
+			return true;
+	return false;
+}
+
 // How long the idle loop may sleep. 0 = indefinitely (HID IRQ, a
 // visor poke, or a message will cut it short).
 //
@@ -2048,6 +2068,15 @@ static uint32_t wm_idle_ticks(void) {
 		int32_t left;
 		if (!dock_launching[i]) continue;
 		left = (int32_t)(dock_launching_deadline[i] - now);
+		if (left <= 0)
+			return 1;
+		if (!soon || (uint32_t)left < soon)
+			soon = (uint32_t)left;
+	}
+
+	// The owner check (reap_orphans()).
+	if (others_have_windows()) {
+		int32_t left = (int32_t)(owner_check_at - now);
 		if (left <= 0)
 			return 1;
 		if (!soon || (uint32_t)left < soon)
@@ -5050,6 +5079,27 @@ static void destroy_window(uint32_t id) {
 
 }
 
+// See owner_check_at.
+static void reap_orphans(void) {
+
+	if (!others_have_windows()) return;
+	if ((int32_t)(z_uptime_ticks() - owner_check_at) < 0) return;
+	owner_check_at = z_uptime_ticks() + Z_TICK_HZ;
+
+	for (int i = 0; i < WM_MAX_WINDOWS; i++) {
+		uint32_t owner, st = Z_PROC_STATE_UNKNOWN;
+		if (!windows[i].used || i == dock_idx) continue;
+		owner = windows[i].owner_pid;
+		if (owner == my_pid) continue;
+		if (z_proc_status(owner, &st, NULL) == Z_OK && st == Z_PROC_STATE_RUNNING)
+			continue;
+		printf("wm: pid %lu is gone; removing its window %d\n", (unsigned long)owner, i);
+		destroy_window((uint32_t)i);	// repairs its own region
+		if (next_place_pid == owner) next_place_pid = 0;
+	}
+
+}
+
 // -- modality (Z_WIN_FLAG_MODAL, zwm.h) --
 //
 // The frontmost modal window owned by `pid`, or -1 if that process
@@ -6632,6 +6682,9 @@ int main(void) {
 				repair_region(windows[dock_idx].x, windows[dock_idx].y,
 					windows[dock_idx].w, windows[dock_idx].h, -1);
 		}
+
+		// -- windows left behind by a process that has ended --
+		reap_orphans();
 
 		// -- keyboard layout label -- see draw_dock()'s kbd_osd.
 		if (kbd_osd && (int32_t)(z_uptime_ticks() - kbd_osd_deadline) >= 0) {

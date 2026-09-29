@@ -1059,6 +1059,9 @@ static uint32_t *k_sched_switch(uint32_t *regs) {
 		k_auth_release_pid(z_pid);
 		// and montmul's or sha256's claim, if it held one (above)
 		k_hw_release_pid(z_pid);
+		// and the messages it left in other mailboxes, which point
+		// into the block freed above (msg.c)
+		k_msg_release_pid(z_pid);
 		z_procs[z_pid].base = 0x00000000;
 		z_procs[z_pid].flags = 0x00000000;
 		goto next_process;
