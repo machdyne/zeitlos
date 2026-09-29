@@ -104,3 +104,19 @@ node.key
 /sw/apps/bbs/data/fed-outbox
 /sw/apps/bbs/data/fed-names
 /sw/apps/bbs/data/*.sock
+
+# cryptobench's symbol-renaming table (its Makefile; `make clean` removes it)
+sw/apps/cryptobench/o2.syms
+
+# What fed and the BBS write when tried inside the source tree. Never
+# committed: a node key is a node's identity, and a user file holds
+# password hashes.
+node.key
+/sw/apps/fed/fed-linux
+/sw/apps/bbs/bbs-linux
+/sw/apps/bbs/data/users.dat
+/sw/apps/bbs/data/node.id
+/sw/apps/bbs/data/msgs/
+/sw/apps/bbs/data/fed-outbox
+/sw/apps/bbs/data/fed-names
+/sw/apps/bbs/data/*.sock

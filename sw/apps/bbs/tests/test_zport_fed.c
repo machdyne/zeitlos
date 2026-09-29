@@ -115,7 +115,16 @@ static int checks, fails;
 #define CK(c, ...) do { checks++; if (!(c)) { fails++; printf("FAIL %d: ", __LINE__); \
 	printf(__VA_ARGS__); printf("\n"); } } while (0)
 
-static void steps(int n) { while (n--) step(); }
+// The BBS's own clock (plat_ms()) follows the kernel's ticks, as on a
+// board -- the fake one zplat_posix.c keeps for tests; the date stays today.
+extern int plat_fake_time;
+extern uint32_t plat_fake_now, plat_fake_ms;
+static void steps(int n) {
+	while (n--) {
+		plat_fake_ms = (uint32_t)((uint64_t)ticks * 1000u / Z_TICK_HZ);
+		step();
+	}
+}
 
 static int find(uint32_t to, uint32_t subject, int from) {
 	for (int i = from; i < nout; i++) if (out[i].to == to && out[i].subject == subject) return i;
@@ -150,6 +159,9 @@ int main(void) {
 
 	if (!k_install()) { printf("bbs fed-link test: skipped (cannot map page 0)\n"); return 77; }
 	plat_quiet = getenv("BBS_TEST_LOG") ? 0 : 1;
+	plat_fake_time = 1;
+	plat_fake_now = (uint32_t)time(NULL);
+	plat_fake_ms = (uint32_t)((uint64_t)ticks * 1000u / Z_TICK_HZ);
 	snprintf(dir, sizeof(dir), "/tmp/bbs-zfed-%d", (int)getpid());
 	mkdir(dir, 0755);
 	{ char p[128]; snprintf(p, sizeof(p), "%s/bbs.cfg", dir);
@@ -313,6 +325,50 @@ int main(void) {
 		bl = msg_body(0, &n2, body, sizeof(body));
 		body[bl] = 0;
 		CK(strstr(body, "General") && strstr(body, "larger than this network takes (1024)"), "naming the forum, and why");
+	}
+
+	// -- 9. fed restarted on the SAME pid: it looks alive -- its silence tells --
+	{
+		char key[200];
+		snprintf(key, sizeof(key), "OK %s 0123456789abcdef alpha\n", self);
+		// a fresh link, nothing outstanding: fed closes, the BBS comes back,
+		// its KEY and SUB answered
+		deliver(FED, Z_PORT_CLOSE, 3, z_obj_none());
+		steps(2);
+		ticks += 6 * Z_TICK_HZ;
+		steps(2);
+		deliver(FED, Z_PORT_CONNECTED, 0, z_obj_uint32(4));
+		steps(2);
+		char hello[260];
+		snprintf(hello, sizeof(hello), "%sOK subscribed after 9\n", key);
+		deliver_data(FED, 4, hello);
+		steps(2);
+		mark = nout;
+		ticks += 61 * Z_TICK_HZ;
+		steps(2);
+		to_fed(mark, buf, sizeof(buf), 4);
+		CK(strstr(buf, "KEY\n") != NULL && find(FED, Z_PORT_CONNECT, mark) < 0,
+			"a minute silent, nothing outstanding: a harmless KEY -- is fed there? -- and no reset");
+		deliver_data(FED, 4, key);			// a live fed answers
+		steps(2);
+		mark = nout;
+		ticks += 30 * Z_TICK_HZ;
+		steps(2);
+		CK(find(FED, Z_PORT_CONNECT, mark) < 0, "answered: the link stays");
+		// now nobody answers -- a new fed on the old pid, which the pid check cannot tell
+		ticks += 31 * Z_TICK_HZ;
+		steps(2);							// the next KEY goes...
+		mark = nout;
+		ticks += 61 * Z_TICK_HZ;
+		steps(2);							// ...unanswered for a minute: reset
+		ticks += 6 * Z_TICK_HZ;
+		steps(2);							// five seconds on: connecting again
+		CK(find(FED, Z_PORT_CONNECT, mark) >= 0, "unanswered for a minute: the link reset, and a CONNECT to whoever fed0 is now");
+		mark = nout;
+		deliver(FED, Z_PORT_CONNECTED, 0, z_obj_uint32(5));
+		steps(2);
+		to_fed(mark, buf, sizeof(buf), 5);
+		CK(strstr(buf, "SUB bbs t/*") != NULL, "and the new link subscribes again");
 	}
 
 	printf("bbs fed-link test: %d checks, %d failed\n", checks, fails);

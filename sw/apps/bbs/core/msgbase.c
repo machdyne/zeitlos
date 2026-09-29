@@ -167,7 +167,11 @@ void areas_parse(const char *text, uint32_t len) {
 			} else {
 				memcpy(net, f[5], (size_t)(slash - f[5]));
 				net[slash - f[5]] = 0;
-				if (bbs_fed_network[0] && strcmp(net, bbs_fed_network)) {
+				if (!bbs_cfg.fed[0]) {
+					// a topic, but nothing to carry it: said, not queued in silence
+					// for a fed that is never coming (docs/bbs.md, "Federation")
+					bbs_logf("forums.cfg: '%s' has a topic, but bbs.cfg has no fed: line -- the forum stays local", a->tag);
+				} else if (bbs_fed_network[0] && strcmp(net, bbs_fed_network)) {
 					bbs_logf("forums.cfg: '%s': network %s, but the others are in %s -- the forum stays local",
 						a->tag, net, bbs_fed_network);
 				} else {

@@ -86,6 +86,15 @@ int bbs_nodes(void);                   // how many nodes bbs.cfg allows
 const char *bbs_fed_target(void);
 void bbs_fed_up(bool up);
 void bbs_fed_input(const uint8_t *d, uint32_t n);
+// Once a pass while connected, with plat_ms(): false when the link must
+// be reset -- a request unanswered for a minute. A link silent for a
+// minute is asked something harmless, so that a fed restarted on the
+// same pid (on Zeitlos) refuses it and is noticed. fedlink.c.
+bool bbs_fed_tick(uint32_t now_ms);
+
+// A line in the BBS's log -- for the platform layers too (bbs.c,
+// linux/main.c), which say what they are doing about fed.
+void bbs_logf(const char *fmt, ...);
 uint32_t bbs_fed_output(const uint8_t **p);
 void bbs_fed_consumed(uint32_t n);
 

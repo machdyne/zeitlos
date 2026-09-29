@@ -62,6 +62,8 @@ static struct {
 	uint32_t since, next_try, next_check;
 } fed = { { 0 }, 0, false, 0, 0, 0 };
 
+static bool fed_said;					// "not running" said, until it connects
+
 static void fed_down(bool peer_gone) {
 	if (fed.port.connected) {
 		if (peer_gone) z_port_forget(&fed.port);
@@ -77,7 +79,10 @@ static void fed_try(uint32_t now) {
 	const char *target = bbs_fed_target();
 	if (!target[0] || fed.port.connected || fed.connecting || (int32_t)(now - fed.next_try) < 0) return;
 	fed.next_try = now + FED_RETRY_TICKS;
-	if (!z_pid_lookup(target, &fed.pid)) return;		// not running: next time
+	if (!z_pid_lookup(target, &fed.pid)) {			// not running: next time -- said once
+		if (!fed_said) { bbs_logf("fed: %s is not running -- trying every 5 seconds", target); fed_said = true; }
+		return;
+	}
 	fed.connecting = true;
 	fed.since = now;
 	z_msg_new_send(fed.pid, Z_PORT_CONNECT, 0, z_obj_none());
@@ -94,6 +99,7 @@ static bool fed_msg(const z_msg_t *m) {
 		fed.port.conn_id = m->obj.type == Z_UINT32 ? m->obj.val.uint32 : 0;
 		fed.port.connected = true;
 		fed.next_check = z_uptime_ticks() + Z_TICK_HZ;
+		fed_said = false;					// said again if it goes away
 		bbs_fed_up(true);
 		return true;
 	case Z_PORT_REFUSED:
@@ -127,6 +133,9 @@ static void fed_flush(uint32_t now) {
 		fed.next_check = now + Z_TICK_HZ;
 		if (z_port_peer_gone(&fed.port)) { fed_down(true); return; }
 	}
+	// silent for a minute: fed may be gone -- restarted on the same pid,
+	// which looks alive above -- so the link starts again (fedlink.c)
+	if (!bbs_fed_tick(plat_ms())) { fed_down(true); return; }
 	while ((n = bbs_fed_output(&p)) > 0) {
 		if (n > SEND_CHUNK) n = SEND_CHUNK;
 		if (z_port_send(&fed.port, p, n) != Z_OK) break;

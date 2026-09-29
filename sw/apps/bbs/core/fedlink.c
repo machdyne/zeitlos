@@ -55,6 +55,12 @@ static struct { bool on; uint32_t pos, time; char id[65], origin[65]; } fl_open;
 static struct { bool on; uint32_t pos; int area, num; } fl_cx;
 static uint8_t fl_q[64];					// requests awaiting OK / ERR, oldest first
 static int fl_qn;
+// Is anyone there? fed answers in milliseconds; a minute of silence
+// means the fed we are talking to is gone -- on Zeitlos it may have been
+// restarted on the SAME pid, so the pid looks alive (bbs_fed_tick()).
+#define FL_SILENCE_MS 60000u
+static uint32_t fl_wait_since;			// plat_ms() the oldest unanswered request went
+static uint32_t fl_heard;				// plat_ms() fed last said anything
 static int fl_sent;							// outbox records sent since connecting
 // A node's name, by the first 16 hex digits of its key: a clash could
 // only show a wrong NAME -- who is accepted is fed's business, in full.
@@ -84,7 +90,10 @@ static bool fl_put(const void *d, uint32_t n, int req) {
 	if (!fl_up || fl_qn >= (int)sizeof(fl_q) || !fl_room(n)) return false;
 	memcpy(fl_out + fl_out_head + fl_out_len, d, n);
 	fl_out_len += n;
-	if (req) fl_q[fl_qn++] = (uint8_t)req;
+	if (req) {
+		if (!fl_qn) fl_wait_since = plat_ms();
+		fl_q[fl_qn++] = (uint8_t)req;
+	}
 	return true;
 }
 
@@ -529,6 +538,7 @@ static void bounce_local(const char *why) {
 static void reply_line(const char *l) {
 	int req = fl_qn ? fl_q[0] : 0;
 	if (fl_qn) memmove(fl_q, fl_q + 1, (size_t)--fl_qn);
+	fl_wait_since = plat_ms();					// the next one waits from now
 	bool ok = !strncmp(l, "OK", 2);
 	if (req == Q_KEY && ok && strlen(l) >= 67) {
 		// OK <key> <short id> <name>
@@ -581,6 +591,7 @@ void bbs_fed_up(bool up) {
 	fl_sent = 0;
 	fl_open.on = false;				// fed sends it again: it was never acknowledged
 	fl_cx.on = false;
+	fl_heard = fl_wait_since = plat_ms();
 	if (!up) return;
 	char sub[80];
 	fl_put("KEY\n", 4, Q_KEY);
@@ -590,7 +601,25 @@ void bbs_fed_up(bool up) {
 	bbs_logf("fed: connected (%d posts waiting)", outbox_count());
 }
 
+// Once a pass, while connected: false when the link should be reset.
+// A request unanswered for a minute: nobody is there. A link silent for
+// a minute: asked something harmless (KEY) -- a fed that is not ours any
+// more (restarted, the same pid) refuses it, and we hear of it.
+bool bbs_fed_tick(uint32_t now) {
+	if (!fl_up) return true;
+	if (fl_qn && now - fl_wait_since > FL_SILENCE_MS) {
+		bbs_logf("fed: no answer for a minute -- the link is reset");
+		return false;
+	}
+	if (!fl_qn && now - fl_heard > FL_SILENCE_MS) {
+		fl_heard = now;
+		fl_put("KEY\n", 4, Q_KEY);
+	}
+	return true;
+}
+
 void bbs_fed_input(const uint8_t *d, uint32_t n) {
+	fl_heard = plat_ms();
 	if (fl_in_len + n > sizeof(fl_in)) { bbs_logf("fed: more than an object at once -- the link is reset"); bbs_fed_up(false); return; }
 	if (n) memcpy(fl_in + fl_in_len, d, n);
 	fl_in_len += n;
@@ -618,6 +647,7 @@ void bbs_fed_input(const uint8_t *d, uint32_t n) {
 			if (ln > FL_IN_MAX - 200) { bbs_logf("fed: an opened letter too big -- the link is reset"); bbs_fed_up(false); return; }
 			if (fl_in_len < used + ln) return;
 			memmove(fl_q, fl_q + 1, (size_t)--fl_qn);
+			fl_wait_since = plat_ms();
 			got_letter((const char *)fl_in + used, ln);
 			used += ln;
 			if (fl_open.on) { ack(fl_open.pos); fl_open.on = false; }

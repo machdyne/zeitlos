@@ -692,6 +692,41 @@ int main(void) {
 	type(&x, "q");
 	type(&x, "\r");
 
+	// -- 22b. the forum list, readable everywhere --
+	{
+		static const char *const lv = "general; General; 0; 10; Anything\nannounce; News; 0; 100; From the sysop\n"
+			"secret; Secret; 200; 200; Sysops\n";
+		char cfg[600];
+		snprintf(cfg, sizeof(cfg), "%slong; Longdesc; 0; 10; A description far longer than the eighty columns "
+			"a screen has, so that it would wrap, ending in TAILWORD\n", lv);
+		write_file("forums.cfg", cfg, 0);
+		areas_load();
+		uint32_t from = x.raw_n;
+		type(&x, "f");
+		int row = -1;
+		for (int r = 0; r < VT_ROWS && row < 0; r++) {
+			char t[VT_COLS + 1];
+			for (int c = 0; c < VT_COLS; c++) t[c] = x.vt.cells[r][c].ch ? (char)x.vt.cells[r][c].ch : ' ';
+			t[VT_COLS] = 0;
+			if (strstr(t, "Longdesc")) row = r;
+		}
+		char last = row >= 0 ? (char)x.vt.cells[row][VT_COLS - 1].ch : 'x';
+		CK(row >= 0 && (last == ' ' || !last) && !on_screen(&x, "TAILWORD"),
+			"a long description cut to its line: no wrapped half, the last column left empty");
+		bool grey = false;
+		for (uint32_t i = from; i + 7 <= x.raw_n; i++) if (!memcmp(x.raw + i, "\x1b[1;30m", 7)) grey = true;
+		CK(!grey, "nothing on it in dark grey -- in some colour schemes that is the background");
+		type(&x, "\r");
+		// a topic with no fed: line in bbs.cfg -- local, not queued in silence
+		// for a fed that is never coming
+		snprintf(cfg, sizeof(cfg), "%snet; Networked; 0; 10; Carried; mynet/forum/net\n", lv);
+		write_file("forums.cfg", cfg, 0);
+		CK(!bbs_cfg.fed[0] && areas_load() && area_find("net") > 0 && !bbs_area[area_find("net")].topic[0],
+			"a forum with a topic, but no fed: line in bbs.cfg: it stays local");
+		write_file("forums.cfg", lv, 0);
+		areas_load();
+	}
+
 	// -- 23. who is writing; hanging up mid-message --
 	type(&x, "f");
 	type(&x, "1\r");

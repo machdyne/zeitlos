@@ -281,6 +281,7 @@ static void accept_one(int lfd, int kind) {
 
 static int fed_fd = -1;
 static time_t fed_next;			// when to try again
+static bool fed_said;			// "nothing there" said, until it connects
 
 static void fed_down(void) {
 	if (fed_fd >= 0) { close(fed_fd); fed_fd = -1; bbs_fed_up(false); }
@@ -298,15 +299,18 @@ static void fed_try(void) {
 	if (fd < 0 || connect(fd, (struct sockaddr *)&ua, sizeof(ua))) {
 		if (fd >= 0) close(fd);
 		fed_next = time(NULL) + 5;
+		if (!fed_said) { bbs_logf("fed: nothing at %s -- is fed running? trying every 5 seconds", path); fed_said = true; }
 		return;
 	}
 	nonblock(fd);
 	fed_fd = fd;
+	fed_said = false;
 	bbs_fed_up(true);
 }
 
 static void fed_io(short revents) {
 	if (fed_fd < 0) return;
+	if (!bbs_fed_tick(plat_ms())) { fed_down(); return; }	// a minute unanswered (fedlink.c)
 	if (revents & (POLLIN | POLLHUP | POLLERR)) {
 		uint8_t b[4096];
 		ssize_t r = read(fed_fd, b, sizeof(b));

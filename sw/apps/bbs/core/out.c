@@ -106,7 +106,7 @@ void out_cls(node_t *n) {
 
 void out_rule(node_t *n) {
 	int w = (n->cols > 1 ? n->cols : 80) - 1;
-	out_fg(n, 8);
+	out_fg(n, 3);			// not dark grey: in some colour schemes it is the background
 	for (int i = 0; i < w; i++) out_cp(n, 0x2500);        // ─
 	out_fg(n, 7);
 	out_nl(n);

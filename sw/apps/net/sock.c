@@ -18,6 +18,8 @@ typedef struct {
 	bool		established;
 	uint16_t	tx_queue_len;
 	uint8_t		tx_queue[SOCK_TX_QUEUE_LEN];
+	struct { const uint8_t *data; uint32_t len, off, pid, tag; } held[SOCK_HOLD];
+	uint8_t		held_n;
 } sock_slot_t;
 
 static sock_slot_t slots[NET_SOCK_SLOTS];
@@ -109,6 +111,66 @@ bool sock_send(int s, const uint8_t *data, uint16_t len) {
 	return true;
 
 }
+
+int sock_send_room(int s) {
+	if (s < 0 || s >= NET_SOCK_SLOTS || !slots[s].established) return -1;
+	return SOCK_TX_QUEUE_LEN - slots[s].tx_queue_len;
+}
+
+int sock_offer(int s, const uint8_t *data, uint32_t len, uint32_t pid, uint32_t tag) {
+	sock_slot_t *k;
+	uint32_t used = 0;
+	if (s < 0 || s >= NET_SOCK_SLOTS || !slots[s].established) return SOCK_NOT_OPEN;
+	k = &slots[s];
+	if (!k->held_n) {					// nothing waiting ahead of it: as much as fits
+		used = (uint32_t)(SOCK_TX_QUEUE_LEN - k->tx_queue_len);
+		if (used > len) used = len;
+		memcpy(k->tx_queue + k->tx_queue_len, data, used);
+		k->tx_queue_len = (uint16_t)(k->tx_queue_len + used);
+	}
+	if (used == len) return SOCK_QUEUED;
+	if (k->held_n >= SOCK_HOLD) return SOCK_OVER;
+	k->held[k->held_n].data = data;
+	k->held[k->held_n].len = len;
+	k->held[k->held_n].off = used;
+	k->held[k->held_n].pid = pid;
+	k->held[k->held_n].tag = tag;
+	k->held_n++;
+	return SOCK_HELD;
+}
+
+void sock_pump_held(sock_ack_fn ack, sock_alive_fn alive, sock_gone_fn gone) {
+	for (int s = 0; s < NET_SOCK_SLOTS; s++) {
+		sock_slot_t *k = &slots[s];
+		while (k->held_n && k->established && k->tx_queue_len < SOCK_TX_QUEUE_LEN) {
+			// held bytes are in the CLIENT's memory: never read once it has
+			// died -- its memory may be another's by now
+			if (alive && !alive(s)) {
+				k->held_n = 0;
+				if (gone) gone(s);
+				break;
+			}
+			uint32_t left = k->held[0].len - k->held[0].off;
+			uint32_t n = (uint32_t)(SOCK_TX_QUEUE_LEN - k->tx_queue_len);
+			if (n > left) n = left;
+			memcpy(k->tx_queue + k->tx_queue_len, k->held[0].data + k->held[0].off, n);
+			k->tx_queue_len = (uint16_t)(k->tx_queue_len + n);
+			k->held[0].off += n;
+			if (k->held[0].off < k->held[0].len) break;
+			if (ack) ack(k->held[0].pid, k->held[0].tag);
+			memmove(&k->held[0], &k->held[1], sizeof(k->held[0]) * (size_t)(k->held_n - 1));
+			k->held_n--;
+		}
+	}
+}
+
+void sock_drop_held(int s, sock_ack_fn ack) {
+	if (s < 0 || s >= NET_SOCK_SLOTS) return;
+	for (int i = 0; ack && i < slots[s].held_n; i++) ack(slots[s].held[i].pid, slots[s].held[i].tag);
+	slots[s].held_n = 0;
+}
+
+int sock_held(int s) { return (s >= 0 && s < NET_SOCK_SLOTS) ? slots[s].held_n : 0; }
 
 void sock_close(int s) {
 	if (s >= 0 && s < NET_SOCK_SLOTS && slots[s].conn) tcp_close(slots[s].conn);

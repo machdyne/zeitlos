@@ -609,8 +609,17 @@ static void sock_rx_flush(int k) {
 }
 
 // Gives back a higher slot's queue once its session is over.
+static void sock_ack(uint32_t to, uint32_t tag) {
+	z_msg_t m;
+	m.from = to;
+	m.tag = tag;
+	m.obj.type = Z_BLOB;
+	z_port_send_ack(&m);
+}
+
 static void sock_release(int k) {
 	sock_sess_t *x = &socks[k];
+	sock_drop_held(k, sock_ack);			// anything still held: acked, so the client can free it
 	if (k > 0 && x->rxq) { free(x->rxq); x->rxq = NULL; }
 	x->rx_len = 0;
 	x->state = SO_IDLE;
@@ -1019,18 +1028,20 @@ static bool handle_sock_port_data(const z_msg_t *msg) {
 	int k = sock_find(msg);
 	if (k < 0) return false;
 
-	{
-		uint32_t len = z_blob_len(&msg->obj);
-		void *data = z_blob_data(&msg->obj);
-		if (data && len && !sock_send(k, (const uint8_t *)data, (uint16_t)len)) {
-			printf("net: socket %d tx queue full, dropping connection\n", k);
-			sock_abort(k);
-			z_port_close(&socks[k].port);
-			sock_release(k);
-		}
+	uint32_t len = z_blob_len(&msg->obj);
+	const uint8_t *data = (const uint8_t *)z_blob_data(&msg->obj);
+	// what does not fit the send queue waits, unacked (sock.h)
+	int r = data && len ? sock_offer(k, data, len, msg->from, msg->tag) : SOCK_QUEUED;
+	if (r == SOCK_QUEUED || r == SOCK_NOT_OPEN) z_port_send_ack(msg);
+	else if (r == SOCK_OVER) {
+		// more than zport lets a sender have outstanding: a misbehaving
+		// client -- the only case that still ends a connection
+		printf("net: socket %d: client exceeded its send window, dropping connection\n", k);
+		z_port_send_ack(msg);
+		sock_abort(k);
+		z_port_close(&socks[k].port);
+		sock_release(k);
 	}
-
-	z_port_send_ack(msg);
 	return true;
 
 }
@@ -1052,6 +1063,46 @@ static bool handle_sock_port_close(const z_msg_t *msg) {
 						// graceful close
 	sock_release(k);
 	return true;
+
+}
+
+// A socket whose client is no longer running: reset. Its sends will never
+// be acked, and it is not there to hear a CLOSE (zport.h); what it had
+// held (sock.h) is in its memory, which may be another's by now --
+// forgotten, unread and unacked.
+static void sock_client_gone(int k) {
+	sock_sess_t *x = &socks[k];
+	printf("net: socket %d reset: its client (pid %ld) is gone\n", k, (long)x->client_pid);
+	sock_drop_held(k, NULL);
+	z_port_forget(&x->port);
+	sock_abort(k);
+	sock_release(k);
+}
+
+// sock.c's pump asks before each copy of held data -- once a second
+// (sock_check_clients()) is not often enough to never read a dead
+// client's memory.
+static bool sock_alive(int k) { return z_port_pid_running(socks[k].client_pid); }
+
+// Nothing tells net when a client exits or is killed without closing
+// its port: `kill`, a crash, or wm's close icon on a window with
+// Z_WIN_FLAG_CLOSE_KILLS_OWNER (web). Its socket stayed open until the
+// server happened to close it -- for irc, which the server keeps open,
+// indefinitely. Same check relay.c makes of its listeners, about once
+// a second: a socket whose client is no longer running is reset.
+static void sock_check_clients(void) {
+
+	static uint32_t last;
+	uint32_t now = z_uptime_ticks();
+
+	if (now - last < Z_TICK_HZ) return;
+	last = now;
+
+	for (int k = 0; k < NET_SOCK_SLOTS; k++) {
+		sock_sess_t *x = &socks[k];
+		if (x->state == SO_IDLE || z_port_pid_running(x->client_pid)) continue;
+		sock_client_gone(k);
+	}
 
 }
 
@@ -1591,7 +1642,9 @@ int main(void) {
 		NP_PHASE(NP_TELNET, telnet_poll());
 #if NET_SOCK
 		NP_T0(_np_sock);
+		sock_check_clients();
 		sock_poll();
+		sock_pump_held(sock_ack, sock_alive, sock_client_gone);
 		for (int k = 0; k < NET_SOCK_SLOTS; k++) {
 			// Drain anything the peer was too busy to take earlier.
 			if (socks[k].rx_len) sock_rx_flush(k);

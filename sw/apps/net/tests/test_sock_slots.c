@@ -27,9 +27,13 @@ tcp_conn_t *tcp_connect(uint32_t ip, uint16_t port, tcp_event_handler_t h, void 
 }
 void *tcp_user(const tcp_conn_t *c) { return c->user; }
 uint16_t tcp_mss(const tcp_conn_t *c) { (void)c; return 536; }
+// what reached TCP, byte for byte, per connection
+static uint8_t wire[4][40000];
+static int wlen[4];
 bool tcp_send(tcp_conn_t *c, const uint8_t *d, uint16_t n) {
-	(void)d;
 	if (!c->acked) return false;		// one segment in flight, as tcp.c
+	int i = (int)(c - pool);
+	if (wlen[i] + n <= (int)sizeof(wire[0])) { memcpy(wire[i] + wlen[i], d, n); wlen[i] += n; }
 	c->sent += n; c->lastlen = n; c->acked = false;
 	return true;
 }
@@ -43,6 +47,12 @@ static int est[4], closed[4], got[4], last_slot = -1;
 static void on_est(int s) { est[s]++; }
 static void on_data(int s, const uint8_t *d, uint16_t n) { (void)d; got[s] += n; last_slot = s; }
 static void on_closed(int s) { closed[s]++; }
+static uint32_t acks[64];
+static int acks_n, gone_n;
+static bool client_alive = true;
+static void on_ack(uint32_t pid, uint32_t tag) { (void)pid; if (acks_n < 64) acks[acks_n++] = tag; }
+static bool is_alive(int s) { (void)s; return client_alive; }
+static void on_gone(int s) { gone_n++; sock_abort(s); }
 
 int main(void) {
 
@@ -102,6 +112,69 @@ int main(void) {
 	CK(!sock_connect(-1, 1, 1, on_est, on_data, on_closed) &&
 		!sock_connect(NET_SOCK_SLOTS, 1, 1, on_est, on_data, on_closed) &&
 		!sock_send(7, buf, 1) && sock_tcp(9) == NULL, "out-of-range slots");
+
+	// -- client -> peer backpressure (sock.h): held, not dropped --
+	{
+		static uint8_t m[SOCK_HOLD + 2][1500], expect[40000];
+		int nexp = 0;
+		for (int i = 0; i < SOCK_HOLD + 2; i++) for (int j = 0; j < 1500; j++) m[i][j] = (uint8_t)(i * 31 + j);
+		// a fresh socket: slot 1, its connection pool[2] (above)
+		pool[2].h(&pool[2], TCP_EVENT_ESTABLISHED, NULL, 0);
+		wlen[2] = 0;
+		pool[2].acked = true;
+		acks_n = 0;
+		CK(sock_offer(1, m[0], 1500, 70, 1) == SOCK_QUEUED, "1500 bytes: all in the queue -- ack now");
+		memcpy(expect + nexp, m[0], 1500); nexp += 1500;
+		CK(sock_offer(1, m[1], 1500, 70, 2) == SOCK_HELD && sock_held(1) == 1, "the next 1500: 548 in, the rest HELD -- not dropped");
+		memcpy(expect + nexp, m[1], 1500); nexp += 1500;
+		CK(sock_offer(1, m[2], 1500, 70, 3) == SOCK_HELD && sock_held(1) == 2, "a third: held behind it, none of it jumping ahead");
+		memcpy(expect + nexp, m[2], 1500); nexp += 1500;
+		for (int i = 3; i < SOCK_HOLD + 1; i++) { sock_offer(1, m[i], 1500, 70, (uint32_t)(i + 1)); memcpy(expect + nexp, m[i], 1500); nexp += 1500; }
+		CK(sock_held(1) == SOCK_HOLD, "up to zport's window held");
+		CK(sock_offer(1, m[SOCK_HOLD + 1], 10, 70, 99) == SOCK_OVER, "one more than the window: refused -- a misbehaving client");
+		CK(acks_n == 0, "nothing held is acked yet");
+		// TCP drains: one segment at a time, acked by the peer
+		for (int round = 0; round < 400 && (sock_held(1) || wlen[2] < nexp); round++) {
+			sock_poll();
+			pool[2].acked = true;
+			sock_pump_held(on_ack, NULL, NULL);
+		}
+		CK(wlen[2] == nexp && !memcmp(wire[2], expect, (size_t)nexp),
+			"every byte reached TCP, in order -- nothing lost, nothing reordered");
+		bool order = acks_n == SOCK_HOLD;
+		for (int i = 0; i < acks_n; i++) if (acks[i] != (uint32_t)(i + 2)) order = false;
+		CK(order, "each held message acked once all of it was in, in order");
+
+		// a client that dies with data held: its memory never read again
+		static uint8_t dead[1500];
+		memset(dead, 'D', sizeof(dead));
+		wlen[2] = 0; acks_n = 0; gone_n = 0;
+		sock_offer(1, m[0], 1500, 70, 1);
+		sock_offer(1, m[1], 1500, 70, 2);
+		sock_offer(1, dead, 1500, 70, 3);			// held
+		memset(dead, '!', sizeof(dead));			// "freed", and reused by another process
+		client_alive = false;
+		for (int round = 0; round < 50; round++) { sock_poll(); pool[2].acked = true; sock_pump_held(on_ack, is_alive, on_gone); }
+		// only (a prefix of) what was queued before it died -- the first
+		// message and the 548 bytes of the second that fitted; the abort
+		// discards the rest of the queue -- and not one byte held
+		static uint8_t before[2048];
+		memcpy(before, m[0], 1500); memcpy(before + 1500, m[1], 548);
+		CK(wlen[2] > 0 && wlen[2] <= 2048 && !memcmp(wire[2], before, (size_t)wlen[2]),
+			"a dead client's held bytes: never read -- only what was queued before went");
+		CK(gone_n == 1 && sock_held(1) == 0, "its socket closed, nothing held");
+		for (int i = 0; i < acks_n; i++) CK(acks[i] != 3, "nothing acked to a dead client");
+		client_alive = true;
+
+		// closing a socket acks what it still held -- a new connection on slot 1
+		CK(sock_connect(1, 4, 71, on_est, on_data, on_closed) && sock_tcp(1) == &pool[3], "(slot 1 connects again)");
+		pool[3].h(&pool[3], TCP_EVENT_ESTABLISHED, NULL, 0);
+		acks_n = 0;
+		sock_offer(1, m[0], 1500, 70, 1);
+		sock_offer(1, m[1], 1500, 70, 2);
+		sock_drop_held(1, on_ack);
+		CK(acks_n == 1 && acks[0] == 2 && sock_held(1) == 0, "a socket closing: what it held acked, so the client can free it");
+	}
 
 	printf("test_sock_slots: %d checks, %d failed\n", checks, fails);
 	return fails ? 1 : 0;

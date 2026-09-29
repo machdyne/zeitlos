@@ -943,7 +943,12 @@ was built with did not take as the compiler passed them. The board then
 asked for everything again every session, and would have run out of
 peer slots within a day. `fed` now writes and reads 64-bit numbers by
 hand (`fobj_u64_dec()` and the like), never through `printf` or
-`scanf`, whatever the C library. One broken check
+`scanf`, whatever the C library. And, in `net` rather than `fed`: a board's
+session to a server cut off mid-way whenever it sent more than `net`'s
+2 KB send queue held -- `net` dropped the connection rather than make the
+sender wait. It now holds what does not fit, as its listener relay
+always did ([networking.md](networking.md), "Sending faster than the
+network"). One broken check
 was found to catch nothing -- the cancel's topic agreeing with its
 target's -- because authority never rested on it; it is documented as
 the consistency rule it is.

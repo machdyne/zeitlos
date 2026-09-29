@@ -80,6 +80,13 @@ bool bbs_init(const char *datadir) {
 	if (n_nodes < bbs_cfg.nodes)
 		bbs_logf("memory for %d nodes, not %d", n_nodes, bbs_cfg.nodes);
 	bbs_logf("%s: %d nodes, %d users, data in %s", bbs_cfg.name, n_nodes, users_count(), bbs_dir);
+	// federated forums with nothing to federate them: said, not left to be
+	// found out when posts go nowhere
+	for (int a = 1; a < bbs_nareas; a++)
+		if (bbs_area[a].topic[0] && !bbs_cfg.fed[0]) {
+			bbs_logf("forums have zfed topics, but bbs.cfg has no fed: line -- they stay on this BBS (docs/bbs.md, \"Federation\")");
+			break;
+		}
 	return n_nodes > 0;
 }
 
@@ -341,7 +348,7 @@ static void field_key(node_t *n, uint32_t k) {
 void anykey(node_t *n, nstate_t then) {
 	n->after_key = then;
 	set_state(n, N_ANYKEY);
-	out_mci(n, "\r\n|08-- press a key --|07");
+	out_mci(n, "\r\n|07-- press a key --|07");
 }
 
 static bool is_yes(uint32_t k) { return k == 'y' || k == 'Y' || k == K_ENTER; }
@@ -642,7 +649,7 @@ static void welcome(node_t *n) {
 		out_fmt(n, "  Welcome to |15%s|07.\r\n", bbs_cfg.name);
 		if (bbs_cfg.sysop[0]) out_fmt(n, "  Your sysop is %s.\r\n", bbs_cfg.sysop);
 		out_nl(n);
-		out_fmt(n, "  |08Node %d of %d  -  %s  -  %s%s|07\r\n", node_index(n) + 1, n_nodes,
+		out_fmt(n, "  |07Node %d of %d  -  %s  -  %s%s|07\r\n", node_index(n) + 1, n_nodes,
 			n->ansi ? (n->charset == CS_UTF8 ? "ANSI, UTF-8" : "ANSI, CP437") : "plain text",
 			n->transport, !strcmp(n->transport, "telnet") ? " (not encrypted)" : "");
 		out_nl(n);
@@ -832,7 +839,7 @@ static void new_confirm(node_t *n, uint32_t k) {
 
 void item(node_t *n, char key, const char *what) {
 	// The key is in brackets on every terminal; colour only tints it.
-	out_fmt(n, "   |08[|15%c|08]|07 %s\r\n", key, what);
+	out_fmt(n, "   |07[|15%c|07]|07 %s\r\n", key, what);
 }
 
 void show_menu(node_t *n) {
@@ -881,12 +888,12 @@ static void menu_key(node_t *n, uint32_t k) {
 		return;
 	case 'W':
 		out_title(n, "Who is online");
-		out_mci(n, "|08 Node Handle                 Via     Doing                  On for|07\r\n");
+		out_mci(n, "|03 Node Handle                 Via     Doing                  On for|07\r\n");
 		pager_start(n, PG_WHO, N_ANYKEY);
 		return;
 	case 'U': {
 		out_title(n, "Users");
-		out_mci(n, "|08    #  Handle                Location                  Last call (UTC)|07\r\n");
+		out_mci(n, "|03    #  Handle                Location                  Last call (UTC)|07\r\n");
 		n->pg_kind = PG_USERS;
 		int total = users_count();
 		n->pg_then = N_ANYKEY;
@@ -939,7 +946,7 @@ static void profile_show(node_t *n) {
 	out_fmt(n, "  Editor     %s%s\r\n\r\n", (u->flags & USER_F_LINE_EDITOR) ? "a line at a time" : "full-screen",
 		n->ansi ? "" : " -- a line at a time here: no ANSI");
 	out_mci(n, "  Box test:  \xE2\x94\x8C\xE2\x94\x80\xE2\x94\x80\xE2\x94\x90 \xE2\x95\x94\xE2\x95\x90\xE2\x95\x90\xE2\x95\x97 "
-		"\xE2\x96\x91\xE2\x96\x92\xE2\x96\x93\xE2\x96\x88  |08(should be two boxes and four shades)|07\r\n\r\n");
+		"\xE2\x96\x91\xE2\x96\x92\xE2\x96\x93\xE2\x96\x88  |07(should be two boxes and four shades)|07\r\n\r\n");
 	item(n, 'L', "Change location");
 	item(n, 'W', "Change password");
 	item(n, 'C', "Characters: detect, UTF-8, CP437, ASCII");

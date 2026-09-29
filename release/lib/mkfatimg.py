@@ -188,6 +188,15 @@ SUPPLEMENTAL = [
     ("apps/jfont", "sw/apps/jfont/jfont.bin"),
     ("apps/keyboard", "sw/apps/keyboard/keyboard.bin"),
     ("apps/automate", "sw/apps/automate/automate.bin"),
+    ("apps/cryptobench", "sw/apps/cryptobench/cryptobench.bin"),
+]
+
+# The BBS and its zfed node (docs/bbs.md, docs/fed.md). Their data is in
+# /bbs and /fed -- NETWORK_FILES below: a BBS that runs as soon as it is
+# started, and a node that runs alone until it is given a network.
+NETWORK = [
+    ("apps/bbs", "sw/apps/bbs/bbs.bin"),
+    ("apps/fed", "sw/apps/fed/fed.bin"),
 ]
 
 # The casino. One dock icon (apps/casino) launches the rest, so the
@@ -239,11 +248,13 @@ SELFHOST = [
     ("apps/zcc", "sw/apps/zcc/zcc.bin"),
     ("apps/zfpga", "sw/apps/zfpga/zfpga.bin"),
     ("apps/vi", "sw/apps/vi/vi.bin"),
+    ("apps/zetta", "sw/apps/zetta/zetta.bin"),
     ("apps/ttytest", "sw/apps/ttytest/ttytest.bin"),
 ]
 
 DIRS = ["apps", "audio", "demo", "docs", "ark", "user", "libz", "libz/include",
-        "fpga", "fpga/boards", "fpga/examples", "speech", "web", "font"]
+        "fpga", "fpga/boards", "fpga/examples", "speech", "web", "font",
+        "bbs", "bbs/bulletins", "bbs/text", "fed"]
 
 # The speech pack: the pronunciation lexicon and the recorded voice
 # sw/apps/tts reads (docs/tts.md). NOT built from this tree and NOT
@@ -254,7 +265,7 @@ DIRS = ["apps", "audio", "demo", "docs", "ark", "user", "libz", "libz/include",
 #
 # SPEECH_PACK in the environment ships a pack built elsewhere.
 SPEECH_PACK = "tools/speech/build/en/speech.zspk"
-SPEECH_DEST = "/speech/en.spk"      # tts's PACK_PATH; 8.3, so not "speech.zspk"
+SPEECH_DEST = "/speech/en.spk"      # tts's PACK_PATH (sw/apps/tts/pack.h)
 
 # -- ask packs --
 #
@@ -326,10 +337,10 @@ LIBZ_EXTRA = [
 # Without one, zfpga refuses at the .device line and names the file it
 # looked for.
 FPGA_FILES = [
-    # 8.3: FatFs here has no long names. `lfe5u-25f.zdb` was nine
-    # characters; mcopy wrote it with a VFAT long-name entry, Linux read
-    # it back fine, and the board saw only a mangled alias
-    # (docs/zfpga.md sec. 22).
+    # The name zfpga opens (sw/apps/zfpga/db.c). It used to be shortened
+    # from lfe5u-25f.zdb because a nine-character name could not be
+    # opened when FatFs was built without long names (docs/zfpga.md
+    # sec. 22). Long names work now; the lookup name is unchanged.
     ("fpga/lfe5u25f.zdb", "sw/apps/zfpga/db/lfe5u25f.zdb"),
     # the 45F: Mozart ML1 and ML2, Sergei ML1 and ML2
     ("fpga/lfe5u45f.zdb", "sw/apps/zfpga/db/lfe5u45f.zdb"),
@@ -374,6 +385,19 @@ EXAMPLES = [
 # there as the documented place to start editing, not to set anything.
 CONFIG_FILES = [
     ("zeitlos.cfg", "sw/data/zeitlos.cfg"),
+]
+
+# The BBS's and fed's data (NETWORK above), where each looks for it
+# (apps.bbs.dir, apps.fed.dir: /bbs and /fed). Unlike zeitlos.cfg, the
+# BBS's settings are live -- a board's values, so that `run bbs` gives a
+# working local BBS at once; fed.cfg names no network until one is
+# joined. Copied with CONFIG_FILES.
+NETWORK_FILES = [
+    ("bbs/bbs.cfg", "sw/apps/bbs/data/bbs-board.cfg"),
+    ("bbs/forums.cfg", "sw/apps/bbs/data/forums.cfg"),
+    ("bbs/bulletins/01-welcome.txt", "sw/apps/bbs/data/bulletins/01-welcome.txt"),
+    ("bbs/text/README.txt", "sw/apps/bbs/data/text/README.txt"),
+    ("fed/fed.cfg", "sw/apps/fed/data/fed.cfg"),
 ]
 
 # Fonts drawn in software (docs/text_encoding.md, "Japanese"): the 12x12
@@ -474,14 +498,130 @@ def ask_pack_files(root, name):
     return sorted(out)
 
 
-def _check_83_path(dest):
-    """Every component of a card path, 8.3 -- see fits_83 in build()."""
-    for part in dest.strip("/").split("/"):
-        stem, _, ext = part.partition(".")
-        if not stem or len(stem) > 8 or len(ext) > 3 or "." in ext:
+# FatFs as this tree builds it (sw/os/fs/fatfs/ffconf.h). create_name()
+# in ff.c is what decides whether the board can open a component.
+# mcopy stores a long name either way, and finding out on the board
+# that the file is not the one we asked for is the failure this check
+# exists to move in front of mkfs.
+#
+# FF_USE_LFN is 1: the working buffer is static, in .bss. Not 2. The
+# kernel stack is the resource that has actually run out, and FatFs is
+# only entered from one syscall at a time (the note above f_stat() in
+# sw/os/fs/fs.c, and docs/sdcard.md). FF_MAX_LFN is 255 UTF-16 code
+# units, the longest name the specification allows and the longest
+# create_name() will open. FF_LFN_BUF is 255 bytes of the API encoding,
+# which is what a directory listing can report: a name whose UTF-8 is
+# longer still opens by the path that created it, and is listed under
+# its 8.3 alias (sw/common/zfs.h). This check is the open. The API
+# encoding is UTF-8 (FF_LFN_UNICODE 2). FF_FS_RPATH is 0, so "." and
+# ".." are not special entries: trailing dots are snipped and what is
+# left has to be a name.
+FF_MAX_LFN = 255
+# create_name() rejects these when they are ASCII. '\\' is a separator
+# (IsSeparator), so it never becomes part of a component either.
+_LFN_ILLEGAL = set(ord(c) for c in '*:<>|"?\x7f')
+
+
+def _utf8_next(buf, i):
+    """One code point, decoded the way tchar2uni() does for UTF-8.
+
+    Raises ValueError on the sequences tchar2uni() turns into
+    0xFFFFFFFF. An over-long encoding that still decodes to a scalar
+    at or above U+0080 is accepted, because FatFs accepts it; one that
+    decodes below U+0080 is not.
+    """
+    if i >= len(buf):
+        raise ValueError("truncated utf-8")
+    uc = buf[i]
+    i += 1
+    if uc < 0x80:
+        return uc, i
+    if (uc & 0xE0) == 0xC0:
+        uc &= 0x1F
+        nf = 1
+    elif (uc & 0xF0) == 0xE0:
+        uc &= 0x0F
+        nf = 2
+    elif (uc & 0xF8) == 0xF0:
+        uc &= 0x07
+        nf = 3
+    else:
+        raise ValueError("bad utf-8")
+    for _ in range(nf):
+        if i >= len(buf):
+            raise ValueError("truncated utf-8")
+        b = buf[i]
+        i += 1
+        if (b & 0xC0) != 0x80:
+            raise ValueError("bad utf-8")
+        uc = (uc << 6) | (b & 0x3F)
+    if uc < 0x80 or 0xD800 <= uc <= 0xDFFF or uc >= 0x110000:
+        raise ValueError("bad utf-8")
+    return uc, i
+
+
+def _component_problem(raw):
+    """None if create_name() would accept this component, else why not.
+
+    `raw` is the component's bytes, with no slash in it. The length is
+    counted in UTF-16 units, and a scalar above U+FFFF takes two: the
+    high half is stored before the length check and the low half still
+    needs a unit of its own, which is the test in create_name().
+    Trailing spaces and dots are snipped after the length check, so
+    they count, and a name that snips down to nothing is rejected.
+    """
+    i = 0
+    di = 0
+    cps = []
+    while i < len(raw):
+        try:
+            cp, i = _utf8_next(raw, i)
+        except ValueError:
+            return "not valid UTF-8"
+        # create_name() stops at any unit below 0x20, and a C string
+        # ends at NUL, so the board would open a shorter name than the
+        # one mcopy stored. '\\' splits the path the same way.
+        if cp < 0x20 or cp == 0x5C or cp == 0x2F:
+            return "contains a separator or a control character"
+        if cp < 0x80 and cp in _LFN_ILLEGAL:
+            return "contains a character FatFs rejects in a long name"
+        if cp >= 0x10000:
+            di += 1
+            if di >= FF_MAX_LFN:
+                return "longer than %d UTF-16 units" % FF_MAX_LFN
+        if di >= FF_MAX_LFN:
+            return "longer than %d UTF-16 units" % FF_MAX_LFN
+        di += 1
+        cps.append(cp)
+    while cps and cps[-1] in (0x20, 0x2E):
+        cps.pop()
+    if not cps:
+        return "empty once trailing spaces and dots are removed"
+    return None
+
+
+def check_card_path(dest):
+    """Every component of a card path, against FatFs as built.
+
+    A duplicated slash is not a component: follow_path() collapses
+    those. Raises FatError before anything is formatted.
+    """
+    if isinstance(dest, str):
+        raw = dest.encode("utf-8")
+        shown = dest
+    else:
+        raw = bytes(dest)
+        shown = raw.decode("utf-8", "replace")
+    for part in raw.strip(b"/").split(b"/"):
+        if not part:
+            continue
+        problem = _component_problem(part)
+        if problem:
             raise FatError(
-                "'%s' does not fit an 8.3 name and cannot go on the card "
-                "(FatFs here is FF_USE_LFN 0)" % dest)
+                "'%s' cannot go on the card (%s). FatFs here is "
+                "FF_USE_LFN 1, FF_MAX_LFN %d, UTF-8 "
+                "(sw/os/fs/fatfs/ffconf.h); mcopy would store a name "
+                "the board cannot open" % (shown, problem, FF_MAX_LFN))
 
 
 def plan_size(sizes):
@@ -516,7 +656,7 @@ def build(root, out_path, ark_dir=None, verbose=True, packs=None):
 
     ark_dir = ark_dir or os.path.join(root, "sw/data/ark")
 
-    apps = SUPPLEMENTAL + CASINO + GAMES_DEMOS + MISC + SHELLS + SELFHOST
+    apps = SUPPLEMENTAL + NETWORK + CASINO + GAMES_DEMOS + MISC + SHELLS + SELFHOST
 
     # A name listed twice copies once and then fails, halfway through a
     # 64MB image, with mcopy's own silence for an error message. Said
@@ -536,7 +676,7 @@ def build(root, out_path, ark_dir=None, verbose=True, packs=None):
     # builds them as a dependency), and a card whose zcc cannot find
     # them compiles only freestanding programs -- so their absence is
     # an error here rather than a quiet omission.
-    missing += [p for _, p in LIBZ_FILES + LIBZ_EXTRA + CONFIG_FILES + FONT_FILES
+    missing += [p for _, p in LIBZ_FILES + LIBZ_EXTRA + CONFIG_FILES + NETWORK_FILES + FONT_FILES
                 + EXAMPLES + FPGA_FILES + DEMO_FILES
                 if not os.path.exists(os.path.join(root, p))]
 
@@ -558,8 +698,6 @@ def build(root, out_path, ark_dir=None, verbose=True, packs=None):
               % (AUDIO_EXT, AUDIO_DIR))
 
     demo = list(DEMO_FILES)
-    for card, _src in demo:
-        _check_83_path(card)
 
     speech = os.environ.get("SPEECH_PACK") or os.path.join(root, SPEECH_PACK)
     if not os.path.exists(speech):
@@ -597,19 +735,42 @@ def build(root, out_path, ark_dir=None, verbose=True, packs=None):
     for packname in (ask_packs_requested() if packs is None else packs):
         pack_files.append((packname, ask_pack_files(root, packname)))
 
-    # Every pack name must be 8.3, checked BEFORE formatting: mcopy
-    # would store a long name that FatFs here cannot open, and finding
-    # that out after the image is half written is the failure this
-    # function is arranged to avoid.
+    # Every name, checked BEFORE formatting. mcopy would store a
+    # component create_name() rejects, and the board would not open
+    # it; finding that out halfway through the image is the failure
+    # this function is arranged to avoid. Headers are included because
+    # their set is "whatever sw/common exports", which is also where
+    # zsubjects.h (nine characters, one dot) stopped the old 8.3 check
+    # after the image had already been formatted.
+    card_paths = []
+    for name, _rel in apps + LIBZ_FILES + LIBZ_EXTRA + EXAMPLES \
+            + FPGA_FILES + CONFIG_FILES + NETWORK_FILES + FONT_FILES:
+        card_paths.append("/" + name)
+    for a in audio:
+        card_paths.append("/audio/" + a)
+    for card, _rel in demo:
+        card_paths.append("/" + card)
+    if speech:
+        card_paths.append(SPEECH_DEST)
+    for d in docs:
+        card_paths.append("/docs/" + d)
+    for a in ark:
+        card_paths.append("/ark/" + a)
     for _packname, files in pack_files:
         for card, _src in files:
-            _check_83_path(card)
+            card_paths.append(card)
+    for dest, srcdir, exts in LIBZ_HEADER_DIRS:
+        for h in sorted(os.listdir(os.path.join(root, srcdir))):
+            if h.endswith(exts):
+                card_paths.append("/%s/%s" % (dest, h))
+    for dest in card_paths:
+        check_card_path(dest)
 
     # Everything that goes on the card, for sizing.
     sizes = [os.path.getsize(src) for _n, fs in pack_files for _c, src in fs]
     nfiles_pack = len(sizes)
     for _n, rel in apps + LIBZ_FILES + LIBZ_EXTRA + EXAMPLES + FPGA_FILES \
-            + CONFIG_FILES + FONT_FILES:
+            + CONFIG_FILES + NETWORK_FILES + FONT_FILES:
         sizes.append(os.path.getsize(os.path.join(root, rel)))
     for a in audio:
         sizes.append(os.path.getsize(os.path.join(audio_src, a)))
@@ -662,31 +823,7 @@ def build(root, out_path, ark_dir=None, verbose=True, packs=None):
             _run(["mmd", "-i", out_path, "::/%s" % sub])
             made_dirs.add(sub)
 
-    def fits_83(dest):
-        """Every component of a card path, 8.3. FatFs here is FF_USE_LFN
-        0 (sw/os/fs/fatfs/ffconf.h), so a name that does not fit cannot
-        be opened on the card: mcopy stores it under a long-name entry,
-        Linux shows it as written, and FatFs sees only a mangled short
-        alias."""
-        for part in dest.strip("/").split("/"):
-            stem, _, ext = part.partition(".")
-            if not stem or len(stem) > 8 or len(ext) > 3 or "." in ext:
-                raise FatError(
-                    "'%s' does not fit an 8.3 name and cannot go on the card "
-                    "(FatFs here is FF_USE_LFN 0)" % dest)
-
     for name, rel in apps:
-        # 8.3 is not advice: FatFs here is FF_USE_LFN 0
-        # (sw/os/fs/fatfs/ffconf.h), so a name longer than eight
-        # characters cannot be written to the card at all. The header
-        # copy below has always checked this; the app copy did not,
-        # and `audiotest` and `hello_win` are both nine.
-        base = name.split("/")[-1]
-        stem, _, ext = base.partition(".")
-        if len(stem) > 8 or len(ext) > 3:
-            raise FatError(
-                "'%s' does not fit an 8.3 name and cannot go on the card "
-                "(FatFs here is FF_USE_LFN 0)" % name)
         copy(os.path.join(root, rel), "/" + name)
     for a in audio:
         copy(os.path.join(audio_src, a), "/audio/" + a)
@@ -703,8 +840,7 @@ def build(root, out_path, ark_dir=None, verbose=True, packs=None):
     # Packs go in as whole directory trees, one `mcopy -s` per tree.
     # Copying file by file is a subprocess per file, each re-reading the
     # FAT: fine for arklite's thousand files, hours for arkmed's tens of
-    # thousands. Every name is checked for 8.3 first, because mcopy
-    # would happily store a long name that FatFs here cannot open.
+    # thousands. Every name was checked against FatFs before mkfs.
     for packname, files in pack_files:
         base = os.path.join(root, ASK_OUT, packname)
         total = sum(os.path.getsize(src) for _c, src in files)
@@ -719,36 +855,25 @@ def build(root, out_path, ark_dir=None, verbose=True, packs=None):
                   % (packname, len(files), total / 1e6))
 
     for name, rel in LIBZ_FILES + LIBZ_EXTRA + EXAMPLES:
-        fits_83(name)
         copy(os.path.join(root, rel), "/" + name)
 
     # -- the zfpga databases --
     for name, rel in FPGA_FILES:
-        fits_83(name)
         copy(os.path.join(root, rel), "/" + name)
 
     # -- the configuration template --
-    for name, rel in CONFIG_FILES + FONT_FILES:
-        fits_83(name)
+    for name, rel in CONFIG_FILES + NETWORK_FILES + FONT_FILES:
         copy(os.path.join(root, rel), "/" + name)
 
     # Headers by directory rather than by name: the set is "whatever
     # sw/common exports", and a list here would go stale silently --
     # the symptom being a missing include on the device, long after.
+    # Their names were checked with everything else, before mkfs.
     for dest, srcdir, exts in LIBZ_HEADER_DIRS:
         d = os.path.join(root, srcdir)
         for h in sorted(os.listdir(d)):
             if not h.endswith(exts):
                 continue
-            # 8.3 is not advice here: FatFs is built with FF_USE_LFN 0
-            # (sw/os/fs/fatfs/ffconf.h), so a name that does not fit
-            # cannot be written to the card at all. Caught at build
-            # time rather than as a mysteriously absent header.
-            stem, _, ext = h.rpartition(".")
-            if len(stem) > 8 or len(ext) > 3:
-                raise FatError(
-                    "%s/%s does not fit an 8.3 name and cannot go on the "
-                    "card (FatFs here is FF_USE_LFN 0)" % (srcdir, h))
             copy(os.path.join(d, h), "/%s/%s" % (dest, h))
 
     # fsck.fat is not a formality here. mcopy writing into an image it

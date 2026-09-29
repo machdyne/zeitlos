@@ -374,11 +374,13 @@ answers both by number (`reply`, meaningful here) and by id
 ## Federation
 
 A forum can be carried over zfed ([fed.md](fed.md)): posts written on
-any node of the network appear on all of them. On Linux, and on Zeitlos
-(host-tested; on a board with the rest of zfed, fed.md's step 6).
+any node of the network appear on all of them. On Linux and on Zeitlos;
+tested between a board and a Linux server.
 
-**Configuring.** `bbs.cfg` says where this node's `fed` is, and a
-forum's sixth field in `forums.cfg` is its topic:
+**Configuring: two files, both needed.** `bbs.cfg`'s `fed:` line says
+where this node's `fed` is, and a forum's sixth field in `forums.cfg` is
+its topic -- **without the `fed:` line, a forum with a topic stays local**
+(and the log says so at start):
 
 ```
 # bbs.cfg
@@ -391,7 +393,9 @@ local;   Local;   0; 10; This node only
 
 A forum without a topic stays on this node. Every federated forum must
 be in one network (the topic's first segment); a line naming another is
-logged and its forum stays local.
+logged and its forum stays local. Restart the BBS after changing either
+file. Its log then says `fed: connected` -- or, if `fed` is not running,
+that it is trying every 5 seconds.
 
 **How it works** (`core/fedlink.c`):
 
@@ -401,7 +405,12 @@ logged and its forum stays local.
   provider of `bbs0`: it connects in its loop (a blocking connect would
   drop callers' messages while it waited), notices within a second if
   `fed` dies, and tells `fed`'s messages from callers' by **sender** and
-  connection id -- the ids alone can be the same number.
+  connection id -- the ids alone can be the same number. And it
+  notices a `fed` that is no longer there: a request unanswered for a
+  minute resets the link, and a link silent for a minute is asked
+  something harmless (`KEY`). On Zeitlos a `fed` restarted can get the
+  **same pid**, which looks alive -- the new one refuses a stranger's
+  request, or never answers it, and the BBS connects to it afresh.
 - **A post to a federated forum is published** (`PUB`), as JSON --
   `from`, `subject`, `date`, `body`, and `reply` (the parent's object
   id) and a random `post` token -- and enters the forum **when `fed`

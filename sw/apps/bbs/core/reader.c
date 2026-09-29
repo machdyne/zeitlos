@@ -119,7 +119,10 @@ static int forum_by_number(node_t *n, int want) {
 void forums_show(node_t *n) {
 	char line[400], name[24 * 4 + 1];
 	out_title(n, "Forums");
-	out_mci(n, "|08  #  Forum                     New  All  |07\r\n");
+	// no dark grey (|07) for what must be read: in many terminal colour
+	// schemes it IS the background -- the header vanished, and a long
+	// description's wrapped half looked like an empty line
+	out_mci(n, "|03  #  Forum                     New  All  |07\r\n");
 	int k = 0;
 	for (int a = 1; a < bbs_nareas; a++) {
 		if (!can_read(n, a)) continue;
@@ -128,9 +131,15 @@ void forums_show(node_t *n) {
 		snprintf(line, sizeof(line), " %2d  %s %4d %4d  ", ++k, name, nw, msg_count(a));
 		if (nw) out_fg(n, 15);
 		out_text(n, line);
-		out_fg(n, 8);
-		out_text(n, bbs_area[a].desc);
 		out_fg(n, 7);
+		// the description cut to the line -- never wrapping, and never
+		// into the last column, which some terminals wrap on as well
+		int room = (n->cols > 1 ? n->cols : 80) - 1 - 41;
+		if (room >= 8) {
+			char d[sizeof(bbs_area[0].desc) * 2 + 8];
+			utf8_pad(d, sizeof(d), bbs_area[a].desc, room);
+			out_text(n, d);
+		}
 		out_nl(n);
 	}
 	if (!k) out_mci(n, "  There are no forums you can read.\r\n");
@@ -207,12 +216,12 @@ static void show_msg(node_t *n, int num) {
 	snprintf(line, sizeof(line), "%s  #%d of %d", bbs_area[a].name, num, msg_count(a));
 	out_title(n, line);
 	fmt_time(m.date, when);
-	out_mci(n, "  |08From|07     |15"); out_text(n, m.from); out_mci(n, "|07\r\n");
-	if (m.to[0]) { out_mci(n, "  |08To|07       "); out_text(n, m.to); out_nl(n); }
-	out_mci(n, "  |08Subject|07  |15"); out_text(n, m.subject); out_mci(n, "|07\r\n");
+	out_mci(n, "  |03From|07     |15"); out_text(n, m.from); out_mci(n, "|07\r\n");
+	if (m.to[0]) { out_mci(n, "  |03To|07       "); out_text(n, m.to); out_nl(n); }
+	out_mci(n, "  |03Subject|07  |15"); out_text(n, m.subject); out_mci(n, "|07\r\n");
 	snprintf(line, sizeof(line), "  %s UTC", when);
-	out_mci(n, "  |08Date|07   "); out_text(n, line);
-	if (m.reply) { snprintf(line, sizeof(line), "   (a reply to #%u)", (unsigned)m.reply); out_fg(n, 8); out_text(n, line); out_fg(n, 7); }
+	out_mci(n, "  |03Date|07   "); out_text(n, line);
+	if (m.reply) { snprintf(line, sizeof(line), "   (a reply to #%u)", (unsigned)m.reply); out_fg(n, 7); out_text(n, line); out_fg(n, 7); }
 	out_nl(n);
 	out_rule(n);
 
@@ -238,9 +247,9 @@ static void show_msg(node_t *n, int num) {
 void reader_after_body(node_t *n) {
 	set_state(n, N_READ);
 	out_nl(n);
-	out_mci(n, "|08[|15N|08]|07ext |08[|15P|08]|07rev");
-	if (can_write(n, n->area)) out_mci(n, " |08[|15R|08]|07eply");
-	out_mci(n, " |08[|15D|08]|07elete |08[|15Q|08]|07uit: ");
+	out_mci(n, "|07[|15N|07]|07ext |07[|15P|07]|07rev");
+	if (can_write(n, n->area)) out_mci(n, " |07[|15R|07]|07eply");
+	out_mci(n, " |07[|15D|07]|07elete |07[|15Q|07]|07uit: ");
 }
 
 static void scan_next(node_t *n, int after);
@@ -271,13 +280,13 @@ void reader_key(node_t *n, uint32_t k) {
 		num = find_visible(n, a, n->msgnum + 1, +1);
 		if (num) { show_msg(n, num); return; }
 		if (n->scan) { scan_next(n, a); return; }
-		out_mci(n, "\r\n|08No more messages here.|07\r\n");
+		out_mci(n, "\r\n|07No more messages here.|07\r\n");
 		anykey(n, N_AREA_MENU);
 		return;
 	case 'P':
 		num = find_visible(n, a, n->msgnum - 1, -1);
 		if (num) { show_msg(n, num); return; }
-		out_mci(n, "\r\n|08That was the first.|07");
+		out_mci(n, "\r\n|07That was the first.|07");
 		reader_after_body(n);
 		return;
 	case 'R':
@@ -297,7 +306,7 @@ void reader_key(node_t *n, uint32_t k) {
 			// caller wrote it, or is a moderator of the forum (fed.md, "Moderation")
 			msg_t m;
 			if (bbs_area[a].topic[0] && msg_head(a, n->msgnum, &m, NULL) && strlen(m.id) == 64 && fed_cancel(a, m.id) >= 0) {
-				out_mci(n, "\r\n|10Deleted here, and a cancel sent to the network|07 |08(honoured where you wrote it, or moderate the forum)|07\r\n");
+				out_mci(n, "\r\n|10Deleted here, and a cancel sent to the network|07 |07(honoured where you wrote it, or moderate the forum)|07\r\n");
 				reader_key(n, 'N');
 				return;
 			}
@@ -371,9 +380,9 @@ static void post_reply(node_t *n) {
 }
 
 static const char *ed_help =
-	"|08Write a line and press Enter; words wrap by themselves.\r\n"
-	"On a line of its own: |15/s|08 saves  |15/a|08 abandons  |15/l|08 lists  "
-	"|15/d 3|08 deletes line 3  |15/?|08 this.|07\r\n";
+	"|07Write a line and press Enter; words wrap by themselves.\r\n"
+	"On a line of its own: |15/s|07 saves  |15/a|07 abandons  |15/l|07 lists  "
+	"|15/d 3|07 deletes line 3  |15/?|07 this.|07\r\n";
 
 static bool ed_add(node_t *n, const char *line) {
 	size_t l = strlen(line);
@@ -423,7 +432,7 @@ static void ed_list(node_t *n) {
 		const char *eol = strchr(p, '\n');
 		if (!eol) break;
 		snprintf(num, sizeof(num), "%3d> ", i);
-		out_fg(n, 8); out_text(n, num); out_fg(n, 7);
+		out_fg(n, 7); out_text(n, num); out_fg(n, 7);
 		out_textn(n, p, (uint32_t)(eol - p));
 		out_nl(n);
 		p = eol + 1;
@@ -596,7 +605,7 @@ static void zed_start(node_t *n, bool reply) {
 static void zed_abandon(node_t *n) {
 	zed_end(n);
 	editor_free(n);
-	out_mci(n, "|08Not written.|07\r\n");
+	out_mci(n, "|07Not written.|07\r\n");
 	anykey(n, n->msgnum ? N_READ : N_AREA_MENU);
 }
 
@@ -682,7 +691,7 @@ static void editor_start(node_t *n, bool quote) {
 
 static void editor_prompt(node_t *n, const char *carry) {
 	char p[24];
-	snprintf(p, sizeof(p), "|08%3d>|07 ", n->ed_lines + 1);
+	snprintf(p, sizeof(p), "|03%3d>|07 ", n->ed_lines + 1);
 	field(n, N_EDIT, p, ED_LINE_CHARS, false, carry);
 }
 
@@ -815,7 +824,7 @@ bool reader_field(node_t *n) {
 	}
 	case N_POST_SUBJ:
 		if (!n->field[0]) {
-			out_mci(n, "|08Not written.|07\r\n");
+			out_mci(n, "|07Not written.|07\r\n");
 			if (n->msgnum) reader_after_body(n); else area_menu(n, n->area);
 			return true;
 		}
@@ -834,7 +843,7 @@ bool reader_field(node_t *n) {
 			case 's': case 'S': editor_save(n); return true;
 			case 'a': case 'A':
 				editor_free(n);
-				out_mci(n, "|08Abandoned.|07\r\n");
+				out_mci(n, "|07Abandoned.|07\r\n");
 				anykey(n, n->msgnum ? N_READ : N_AREA_MENU);
 				return true;
 			case 'l': case 'L': ed_list(n); editor_prompt(n, NULL); return true;

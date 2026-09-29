@@ -363,6 +363,25 @@ during an SSH session works**. Each handler checks only its own kind.
 That changed with the pool (below); before it, one TCB meant one
 session of any kind, and every handler checked all three.
 
+### Sending faster than the network
+
+A socket's send queue holds 2,048 bytes (`SOCK_TX_QUEUE_LEN`). A
+client's DATA goes into it; **what does not fit is held, unacked** --
+its bytes stay valid in the client's memory until acked (`zport.h`) --
+and the client, having as many sends unacked as zport allows (eight),
+waits. Held bytes move in as TCP drains the queue, and each message is
+acked once all of it is in: the same backpressure `relay.c` gives a
+listener's connections. Before it, data that did not fit **ended the
+connection** ("tx queue full, dropping connection"): a client sending a
+few KB over a slow link -- `fed` on a board, sending posts to a server
+-- lost its session every time.
+
+Held bytes live in the client's memory, so they are never read once the
+client has died: `net` checks before each copy, forgets them unread, and
+closes the socket. A client with more than eight messages outstanding
+breaks zport's rules; that alone still ends a connection.
+`tests/test_sock_slots.c` checks all of it, byte for byte.
+
 ### More than one socket
 
 `sock.c` keeps `NET_SOCK_SLOTS` sockets (`sock.h`, default **2**), so

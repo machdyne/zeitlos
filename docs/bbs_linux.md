@@ -135,6 +135,9 @@ quick on a server blocks every caller on the board while it runs
 The Machdyne plan -- a Linux server as the public node and a Zeitlos
 machine as a second one, with posts flowing between them -- is zfed
 ([fed.md](fed.md)): `fed` runs beside the BBS (`sw/apps/fed/linux/fed.service`,
-as the `bbs` account -- its socket is readable only by its owner). Its
+as the `bbs` account -- its socket is readable only by its owner), and
+`bbs.cfg`'s `fed: /var/lib/fed/fed.sock` points the BBS at it: without
+that line, forums with a topic stay local ([bbs.md](bbs.md),
+"Federation"). Its
 network is managed with `sudo fed key`, `nodes`, `add`, `set` and
 `remove` ([fed.md](fed.md), "Managing a network").
