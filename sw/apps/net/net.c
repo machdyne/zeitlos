@@ -1055,6 +1055,34 @@ static bool handle_sock_port_close(const z_msg_t *msg) {
 
 }
 
+// Nothing tells net when a client exits or is killed without closing
+// its port: `kill`, a crash, or wm's close icon on a window with
+// Z_WIN_FLAG_CLOSE_KILLS_OWNER (web). Its socket stayed open until the
+// server happened to close it -- for irc, which the server keeps open,
+// indefinitely. Same check relay.c makes of its listeners, about once
+// a second: a socket whose client is no longer running is reset.
+static void sock_check_clients(void) {
+
+	static uint32_t last;
+	uint32_t now = z_uptime_ticks();
+
+	if (now - last < Z_TICK_HZ) return;
+	last = now;
+
+	for (int k = 0; k < NET_SOCK_SLOTS; k++) {
+		sock_sess_t *x = &socks[k];
+		if (x->state == SO_IDLE || z_port_pid_running(x->client_pid)) continue;
+		printf("net: socket %d reset: its client (pid %ld) is gone\n",
+			k, (long)x->client_pid);
+		// Its sends will never be acked, and it is not there to hear
+		// a CLOSE (zport.h).
+		z_port_forget(&x->port);
+		sock_abort(k);
+		sock_release(k);
+	}
+
+}
+
 #endif
 
 static void handle_telnet_port_connect(const z_msg_t *msg) {
@@ -1591,6 +1619,7 @@ int main(void) {
 		NP_PHASE(NP_TELNET, telnet_poll());
 #if NET_SOCK
 		NP_T0(_np_sock);
+		sock_check_clients();
 		sock_poll();
 		for (int k = 0; k < NET_SOCK_SLOTS; k++) {
 			// Drain anything the peer was too busy to take earlier.
