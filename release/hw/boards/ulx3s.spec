@@ -20,10 +20,22 @@ board       = ulx3s
 family      = ecp5
 lpf         = ulx3s.lpf
 
-# PMOD ports: the ULX3S J2 header carries the second USB HID port in
-# this build, so there is no free PMOD port to declare. If one is
-# wired up later, add a pmod.<port> ball map here and the existing
-# PMOD specs work unchanged.
+# PMOD port j1: header J1, pins 1-12.
+#
+# Pins 1-4 are power and ground on both rows, so a 12-pin PMOD
+# plugged into that end of the header is powered. The signals are
+# GP0-GP3 (pins 6, 8, 10, 12) and GN0-GN3 (pins 5, 7, 9, 11). The
+# map below puts PMOD pins 1-4 on the GP row.
+#
+# This end of the header, and not one that includes GP10. GP10
+# (C4, J1 pin 30) is WIFI_GPIO27, wired to the onboard ESP32, and
+# GP11-GP13 / GN11-GN13 are the ESP32's other GPIO. Pins 1-12 of
+# J2 are GP14-GP17 / GN14-GN17, the analog inputs. GP26/GN26,
+# which this build uses as USB HID port 1, are J2 pins 34 and 33.
+# None of the eight balls below is constrained in boards/ulx3s.lpf.
+pmod.j1 =
+	1=B9   2=A9   3=A10  4=B11
+	7=C10  8=B10  9=A11  10=C11
 
 # NO DEVICE HERE -- each variant is its own target, because one PCB
 # and one .lpf cover 12F/25F/45F/85F and the only difference in the
