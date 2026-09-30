@@ -109,6 +109,25 @@ html.no-mask[data-phosphor="white"] .wordmark > img,
 html.no-mask[data-phosphor="green"] .wordmark > img,
 html.no-mask[data-phosphor="amber"] .wordmark > img{ filter:invert(1); }
 
+/* --- screenshot --------------------------------------------------- */
+.shot{ padding-block:clamp(2.25rem,5vw,3.5rem); }
+.shot__frame{ border:1px solid var(--ink); padding:clamp(.4rem,1.2vw,.75rem); max-width:680px; }
+.shot__img{
+  display:block; width:100%; aspect-ratio:640 / 480;
+  background-color:var(--ink);
+  -webkit-mask-image:url("screen.png"); mask-image:url("screen.png");
+  -webkit-mask-size:100% 100%; mask-size:100% 100%;
+  -webkit-mask-repeat:no-repeat; mask-repeat:no-repeat;
+}
+.shot__img > img{ display:none; width:100%; height:auto; }
+html.no-mask .shot__img{ background-color:transparent; -webkit-mask-image:none; mask-image:none; }
+html.no-mask .shot__img > img{ display:block; }
+html.no-mask[data-phosphor="paper"] .shot__img > img{ filter:invert(1); }
+.shot__cap{
+  font-family:var(--mono); font-size:.75rem; line-height:1.65; opacity:.62;
+  margin:.9rem 0 0; max-width:62ch;
+}
+
 /* --- masthead ----------------------------------------------------- */
 .masthead{
   position:sticky; top:0; z-index:20;
@@ -331,6 +350,18 @@ html.no-mask[data-phosphor="amber"] .wordmark > img{ filter:invert(1); }
     <div class="ramp__solid"></div><div class="d75"></div><div class="d50"></div><div class="d25"></div><div class="d12"></div><div class="d06"></div>
   </div>
 
+  <!-- ============ SCREENSHOT ============ -->
+  <section class="shot">
+    <div class="wrap">
+      <div class="shot__frame">
+        <div class="shot__img" role="img" aria-label="The Zeitlos desktop: a dock along the bottom, a text window, a 3D cube demo, a clock and the display settings panel."><img src="ss0.png" alt=""></div>
+      </div>
+      <p class="shot__cap">The desktop as it boots &mdash; 640 &times; 480, one bit per pixel. The hardware
+        renders that single bit as white, amber, green or paper, and the switch at the top of this page
+        follows the same four.</p>
+    </div>
+  </section>
+
   <!-- ============ WHAT ============ -->
   <section class="section" id="what">
     <div class="wrap split">
@@ -345,7 +376,10 @@ html.no-mask[data-phosphor="amber"] .wordmark > img{ filter:invert(1); }
           opposite &mdash; a system where the gateware and the operating system live in one repository and are
           designed together. When the OS needs something the hardware can grow it, and when the
           hardware offers something the OS can use it immediately.</p>
-        <p>It runs on <a href="https://machdyne.com/">Machdyne</a> FPGA computers and other FPGA development boards. You write the image to flash, and the board comes up in a graphical desktop with a dock, movable windows and a terminal.</p>
+        <p>It runs on <a href="https://machdyne.com/">Machdyne</a> FPGA computers and other FPGA development
+          boards. Every release ships a prebuilt image per supported board: write one to flash and the board
+          comes up in a graphical desktop with a dock, movable windows and a terminal. Nothing to build, and
+          an sdcard is optional.</p>
         <p>The core applications turn the system into an extensible multi-window network terminal with scripting and
           graphics.</p>
       </div>
@@ -404,19 +438,21 @@ html.no-mask[data-phosphor="amber"] .wordmark > img{ filter:invert(1); }
         <table class="spec">
           <caption>System-on-chip</caption>
           <tbody>
-            <tr><th scope="row">CPU</th><td>32-bit RISC-V (PicoRV32 or Zeitlos32) at 48&nbsp;MHz, <span class="mono">rv32im</span> with hardware multiply and divide, plus an instruction cache</td></tr>
+            <tr><th scope="row">CPU</th><td>32-bit RISC-V (PicoRV32 or Zeitlos32) at 48&nbsp;MHz, <span class="mono">rv32im</span> with hardware multiply and divide</td></tr>
             <tr><th scope="row">GPU</th><td>Line rasterizer and blitter</td></tr>
             <tr><th scope="row">MTU</th><td>Virtual addressing through a Memory Translation Unit</td></tr>
+            <tr><th scope="row">MPU</th><td>Memory protection unit with crash reporting</td></tr>
+            <tr><th scope="row">Cache</th><td>Optional instruction cache, or a unified instruction and data cache with write buffer</td></tr>
             <tr><th scope="row">Bus</th><td>32-bit Wishbone</td></tr>
-            <tr><th scope="row">Memory</th><td>SDRAM, PSRAM or SRAM, 1&nbsp;MB minimum</td></tr>
-            <tr><th scope="row">Framebuffer</th><td>640&times;480, 1 bit per pixel &mdash; monochrome in white, green or amber</td></tr>
-            <tr><th scope="row">Video</th><td>VGA, DVI, DVI over HDMI</td></tr>
-            <tr><th scope="row">Audio</th><td>8 channel hardware mixer</td></tr>
+            <tr><th scope="row">Memory</th><td>SDRAM, DDR3, PSRAM or SRAM, 1&nbsp;MB minimum</td></tr>
+            <tr><th scope="row">Framebuffer</th><td>640&times;480, 1 bit per pixel &mdash; monochrome in white, amber, green or paper</td></tr>
+            <tr><th scope="row">Video</th><td>VGA, DVI, DVI over HDMI, composite NTSC and PAL</td></tr>
+            <tr><th scope="row">Audio</th><td>8 channel 16-bit hardware mixer with stereo output</td></tr>
             <tr><th scope="row">Storage</th><td>MicroSD</td></tr>
-            <tr><th scope="row">Network</th><td>Ethernet over SPI, and an Ethernet MAC for RMII PHYs</td></tr>
-            <tr><th scope="row">Entropy</th><td>Ring-oscillator TRNG</td></tr>
-            <tr><th scope="row">Input</th><td>USB keyboard, optional USB mouse</td></tr>
-            <tr><th scope="row">I/O</th><td>GPIO, SPI, 16550 UART</td></tr>
+            <tr><th scope="row">Network</th><td>Ethernet over SPI or USB, an Ethernet MAC for RMII PHYs, or an ESP32 link</td></tr>
+            <tr><th scope="row">Crypto</th><td>Ring-oscillator TRNG, with optional SHA-256, Keccak and Montgomery multiplier blocks behind TLS and SSH</td></tr>
+            <tr><th scope="row">USB</th><td>Dual-port host controller &mdash; keyboard, mouse, gamepad, storage and serial &mdash; plus a USB serial console</td></tr>
+            <tr><th scope="row">I/O</th><td>GPIO on PMOD ports with I2C and SPI, hardware SPI, 16550 UART</td></tr>
           </tbody>
         </table>
       </div>
@@ -435,10 +471,12 @@ html.no-mask[data-phosphor="amber"] .wordmark > img{ filter:invert(1); }
         <ul class="feats">
           <li>Pre-emptive multitasking</li>
           <li>Flat memory model, with a virtual address space for each application</li>
-          <li>FAT16 and FAT32 filesystems</li>
-          <li>Core applications stored in flash</li>
-          <li>Object-based interprocess messaging and streaming</li>
-          <li>Networking: IP, ARP, ICMP, UDP, DHCP, NTP, TFTP, TCP, telnet and ssh</li>
+          <li>Core applications stored in flash, so a flashed board boots to a desktop with no sdcard</li>
+          <li>Object-based interprocess messaging, streaming and ports</li>
+          <li>FAT filesystem on MicroSD, with long filenames</li>
+          <li>TCP/IP networking with TLS&nbsp;1.3 and SSH, and servers to match</li>
+          <li>UTF-8 throughout, with 22 keyboard layouts</li>
+          <li>Speech and system-wide captions, for blind and headless use</li>
         </ul>
 
         <h3>Memory translation</h3>
@@ -489,16 +527,20 @@ html.no-mask[data-phosphor="amber"] .wordmark > img{ filter:invert(1); }
           <caption>Shipped in flash</caption>
           <tbody>
             <tr><th scope="row">kernel</th><td>Kernel and kernel shell (serial console)</td></tr>
-            <tr><th scope="row">wm</th><td>Window manager and dock</td></tr>
-            <tr><th scope="row">net</th><td>Networking server</td></tr>
-            <tr><th scope="row">repl</th><td>Application server and
-              <a href="https://github.com/machdyne/ms">Lisp interpreter</a>, a subset of R4RS Scheme</td></tr>
-            <tr><th scope="row">term</th><td>Terminal emulator with VT100 emulation, connects to services</td></tr>
+            <tr><th scope="row">wm</th><td>Window manager and dock, with ten workspaces</td></tr>
+            <tr><th scope="row">net</th><td>Networking service</td></tr>
+            <tr><th scope="row">term</th><td>Terminal emulator (VT100, UTF-8) that connects to shells and services</td></tr>
+            <tr><th scope="row">console</th><td>Console service</td></tr>
+            <tr><th scope="row">cron</th><td>Runs programs on a schedule</td></tr>
           </tbody>
         </table>
-        <p class="muted" style="margin-top:1.25rem; max-width:60ch;">Anything on an sdcard shadows the copy in
-          flash, so a single application can be replaced during development without reflashing the rest.
-          Further demos, apps and games live in the repository.</p>
+        <p class="muted" style="margin-top:1.25rem; max-width:62ch;">Anything on an sdcard shadows the copy in
+          flash, so a single application can be replaced during development without reflashing the rest.</p>
+        <p class="muted" style="max-width:62ch;">The card carries the rest: the shells &mdash; a
+          <a href="https://github.com/machdyne/ms">Lisp interpreter</a> and a POSIX layer &mdash; alongside
+          an editor, a spreadsheet, a web browser, a file browser, image and document viewers, network
+          servers, games, and a C compiler and FPGA toolchain that run on the machine itself. The
+          repository has the full list.</p>
       </div>
     </div>
   </section>
