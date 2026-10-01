@@ -376,6 +376,9 @@
 #define Z_FEATURE2_SHA256     (1u << 12)
 // rtl/keccak.v -- see Z_KECCAK_BASE below. rtl/csrs.vh FEATURES2 bit 13.
 #define Z_FEATURE2_KECCAK     (1u << 13)
+// rtl/socctl.v's DIRTY register -- see reg_socctl_dirty below. Built
+// wherever there is VRAM. rtl/csrs.vh FEATURES2 bit 14.
+#define Z_FEATURE2_VRAM_DIRTY (1u << 14)
 
 // The jumploader region: the same on every board, the top 192 KB of the
 // first 2 MB. KEEP IN SYNC with the Makefile's JUMP_ADDR
@@ -706,6 +709,15 @@ static inline bool z_soc_feature_confirmed_absent(uint32_t feature) {
 #define Z_SOCCTL_RECONFIG_SIG 0x5A52u
 #define reg_socctl_view  (*(volatile uint32_t*)0x70000210)
 #define reg_socctl_frame (*(volatile uint32_t*)0x70000214)
+// DIRTY (word 7), when Z_FEATURE2_VRAM_DIRTY: bit n set = framebuffer
+// stripe n (rows 16n..16n+15) has been written since the bit was last
+// cleared -- by anything: the CPU, the blitter, the line rasterizer.
+// Write 1s to clear; reading has no side effect. Read, clear what you
+// read, THEN read the pixels: a write after the clear sets its bit
+// again. One consumer only (sw/apps/net/screen.c); two would clear
+// each other's bits. rtl/socctl.v has the whole contract.
+#define reg_socctl_dirty (*(volatile uint32_t*)0x7000021c)
+#define Z_SOCCTL_DIRTY_ALL 0x3fffffffu
 
 #define Z_SOCCTL_MAGIC 0x5A435452u	// "ZCTR" -- see rtl/socctl.v
 
