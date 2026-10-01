@@ -30,6 +30,8 @@ static const net_phy_t phy_enc28j60 = {
 	// down to a whole number of segments with one spare.
 	10 * 536,
 	0,
+	0,
+	enc28j60_rx_rearm,
 };
 
 static const net_phy_t phy_esp32link = {

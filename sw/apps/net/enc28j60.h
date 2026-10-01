@@ -47,4 +47,8 @@ uint16_t enc28j60_recv(uint8_t *buf, uint16_t maxlen);
 // workaround, not just a sanity bound). returns true on success.
 bool enc28j60_send(const uint8_t *buf, uint16_t len);
 
+// See enc28j60.c. Called when the poller stopped with frames still
+// queued, so the level-triggered INT pin can produce another edge.
+void enc28j60_rx_rearm(void);
+
 #endif
