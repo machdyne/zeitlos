@@ -233,13 +233,51 @@ static int snapshot(int *dirty)
 #define TRAILER_MAGIC  0x5A
 #define TRAILER_LAST   0x01
 
+/* HOW BIG A STRIPE CAN GET
+ *
+ * PackBits is not "a shade over raw" at worst. This encoder spends two
+ * bytes on a repeat of two and two on a literal of one, so a stripe
+ * that alternates them -- A BB A BB ... -- comes out at four bytes for
+ * every three: up to PACK_WORST for 1280. That is not hypothetical.
+ * The dock's bottom stripe (stripe 28: icon outlines, row after row of
+ * short runs) encodes to 1373 bytes, and this buffer used to be 1350
+ * with the trailer still to come, so every time the dock went out net
+ * wrote 33 bytes past the end of pkt[]. The ESP32 relay, which takes
+ * at most 1280 + 64 bytes of payload (screend.c's STRIPE_MAX), cut the
+ * datagram short, and the remote desktop never showed the right half
+ * of the dock's last row. Found by comparing the viewer's picture
+ * with VRAM.
+ *
+ * So the buffer is sized for the real worst case, and a stripe that
+ * PackBits would grow past LITERAL_LEN is sent as plain literal runs
+ * instead: 128 bytes at a time, ten control bytes on 1280, valid
+ * PackBits that every decoder already reads, and inside what the relay
+ * accepts with the trailer on. The encoder itself is untouched --
+ * tests/test_packbits.c pins its output byte for byte. */
+#define STRIPE_BYTES   (STRIPE_WORDS * 4)
+#define PACK_WORST     ((STRIPE_BYTES * 4 + 2) / 3 + 2)
+#define LITERAL_LEN    (STRIPE_BYTES + STRIPE_BYTES / 128)
+
+static int literal_runs(const uint8_t *in, int n, uint8_t *out)
+{
+	int o = 0;
+	for (int i = 0; i < n; i += 128) {
+		int lit = n - i < 128 ? n - i : 128;
+		out[o++] = (uint8_t)(lit - 1);
+		memcpy(out + o, in + i, lit);
+		o += lit;
+	}
+	return o;
+}
+
 static void stripe_send(uint32_t gw_ip, int idx, int last)
 {
-	/* 6-byte header + PackBits payload (worst case a shade over raw)
-	 * + the 4-byte frame trailer */
-	static uint8_t pkt[6 + STRIPE_WORDS * 4 + 64];
+	/* 6-byte header + PackBits payload + the 4-byte frame trailer */
+	static uint8_t pkt[6 + PACK_WORST + 4];
 	const uint8_t *raw = (const uint8_t *)(snap + idx * STRIPE_WORDS);
-	int clen = packbits(raw, STRIPE_WORDS * 4, pkt + 6);
+	int clen = packbits(raw, STRIPE_BYTES, pkt + 6);
+	if (clen > LITERAL_LEN)
+		clen = literal_runs(raw, STRIPE_BYTES, pkt + 6);
 	pkt[0] = 'Z';
 	pkt[1] = 'S';
 	pkt[2] = (uint8_t)idx;
