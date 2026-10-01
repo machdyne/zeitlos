@@ -250,7 +250,19 @@ static uint32_t telnet_client_pid;	// valid once state != TN_IDLE
 // This exists so that `web` (sw/apps/web, docs/web_app.md) can carry
 // HTTP and TLS itself rather than putting either into this app. See
 // sock.h on why it cannot simply be telnet with a port number.
-typedef enum { SO_IDLE, SO_CONNECTING, SO_ACTIVE } sock_session_state_t;
+//
+// SO_DRAIN and SO_ACKWAIT are the tail of an orderly close. tcp.c has
+// already reported CLOSED (and, without half-close, already sent our
+// FIN) while bytes it delivered are still in rxq or still waiting for
+// the client's ack. Releasing the slot there drops those bytes, and
+// closing the port first makes z_port_handle_ack() ignore the acks, so
+// the next session reuses a z_port_t whose pending count is stuck.
+// DRAIN keeps the port open until rxq is empty. ACKWAIT keeps the slot
+// until pending_count hits zero, and those acks go through
+// z_port_handle_ack_closed().
+typedef enum {
+	SO_IDLE, SO_CONNECTING, SO_ACTIVE, SO_DRAIN, SO_ACKWAIT
+} sock_session_state_t;
 
 // A FRESH connection id per socket session, not a fixed one.
 //
@@ -588,11 +600,14 @@ static void sock_update_window(int k) {
 
 // Relays what is queued to the client in SOCK_CHUNK pieces, as far as
 // the port's outstanding-send limit allows; the rest waits for an ack.
+static void sock_release(int k);
+
 static void sock_rx_flush(int k) {
 
 	sock_sess_t *x = &socks[k];
 
-	while (x->rx_len && x->state == SO_ACTIVE && x->port.connected) {
+	while (x->rx_len && x->port.connected &&
+		(x->state == SO_ACTIVE || x->state == SO_DRAIN)) {
 
 		uint32_t n = x->rx_len > SOCK_CHUNK ? SOCK_CHUNK : x->rx_len;
 
@@ -605,6 +620,15 @@ static void sock_rx_flush(int k) {
 	}
 
 	sock_update_window(k);
+
+	// The FIN already went out. What remains is local delivery: once
+	// the queue is empty the client can be told, and the slot stays
+	// only for the acks still outstanding.
+	if (x->state == SO_DRAIN && x->rx_len == 0) {
+		z_port_close(&x->port);
+		if (x->port.pending_count) x->state = SO_ACKWAIT;
+		else sock_release(k);
+	}
 
 }
 
@@ -662,7 +686,6 @@ static void sock_on_closed(int k) {
 		printf("net: socket %d connect for pid %ld failed\n",
 			k, (long)x->client_pid);
 	} else if (x->state == SO_ACTIVE) {
-		z_port_close(&x->port);
 		{
 			uint32_t io = 0, dup = 0, gap = 0;
 			tcp_stats(&io, &dup, &gap);
@@ -670,6 +693,19 @@ static void sock_on_closed(int k) {
 				k, (unsigned long)x->rx_total, (unsigned long)x->rx_high);
 			printf("net: segments: %lu in order, %lu dup, %lu gap\n",
 				(unsigned long)io, (unsigned long)dup, (unsigned long)gap);
+		}
+		// Bytes TCP already accepted are still in rxq. Hand them to
+		// the client before closing the port; closing now would drop
+		// them and strand the pending-send count.
+		if (x->rx_len) {
+			x->state = SO_DRAIN;
+			sock_rx_flush(k);
+			return;
+		}
+		z_port_close(&x->port);
+		if (x->port.pending_count) {
+			x->state = SO_ACKWAIT;
+			return;
 		}
 	}
 
@@ -1609,8 +1645,16 @@ int main(void) {
 				// An ack frees a pending slot, which is exactly when
 				// more of that socket's queue can move.
 				for (int k = 0; k < NET_SOCK_SLOTS; k++) {
-					z_port_handle_ack(&socks[k].port, &msg);
+					// A closed port ignores acks. ACKWAIT is exactly
+					// the wait for the ones still out.
+					if (socks[k].state == SO_ACKWAIT)
+						z_port_handle_ack_closed(&socks[k].port, &msg);
+					else
+						z_port_handle_ack(&socks[k].port, &msg);
 					if (socks[k].rx_len) sock_rx_flush(k);
+					if (socks[k].state == SO_ACKWAIT &&
+						socks[k].port.pending_count == 0)
+						sock_release(k);
 				}
 #endif
 			}
