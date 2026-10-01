@@ -56,22 +56,18 @@ void eth_poll(void) {
 	uint16_t len;
 	int drained = 0;
 
-	// bounded defensively -- if phy_recv() ever fails to return 0
-	// (e.g. a bug in the active driver's own receive-drain logic)
-	// this loop would otherwise spin forever, and would do so
-	// silently from net's other code's perspective (this file's own
-	// "rx frame" print below would still fire every iteration, so it
-	// wouldn't be silent from THIS log, but nothing downstream --
-	// retries, other polling -- would ever run again). capped well
-	// above any realistic single-poll packet burst.
-	while ((len = phy_recv(rxbuf, sizeof(rxbuf))) > 0) {
+	// Bounded so a driver that never returns 0 cannot spin here
+	// forever. The test has to come BEFORE phy_recv(): the old one
+	// sat after it, so the 65th frame was already taken off the NIC
+	// (and, on the ENC28J60, PKTDEC'd) and then thrown away unprocessed.
+	// Stopping at 64 leaves that frame queued. A driver whose pin
+	// stays asserted until the queue is empty -- the ENC28J60 -- is
+	// told to make another edge, because a level is not a second IRQ.
+	while (drained < 64) {
 
+		len = phy_recv(rxbuf, sizeof(rxbuf));
+		if (len == 0) break;
 		drained++;
-		if (drained > 64) {
-			printf("net: eth_poll drained >64 packets in one call, bailing "
-				"(possible driver bug -- receive-ready flag never clearing?)\n");
-			break;
-		}
 
 		if (len < ETH_HDR_LEN) continue;
 
@@ -94,5 +90,7 @@ void eth_poll(void) {
 		}
 
 	}
+
+	if (drained == 64) phy_rx_rearm();
 
 }

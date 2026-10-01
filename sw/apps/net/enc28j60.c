@@ -219,6 +219,12 @@ static void eth_spi_wide(int on) {
 #define EIR_RXERIF       0x01
 #define EIR_TXERIF       0x02
 #define EIR_TXIF         0x08
+// EIE bits. INTIE is the global enable; PKTIE is the receive-packet
+// source. TXIE, RXERIE and LINKIE are left off on purpose: any of
+// them holds INT low until software clears a flag nobody here clears,
+// and a pin that stays low never produces another edge.
+#define EIE_PKTIE        0x40
+#define EIE_INTIE        0x80
 
 // PHY registers (accessed indirectly via MII, see eth_phy_write())
 #define PHCON1     0x00
@@ -530,6 +536,15 @@ bool enc28j60_init(const uint8_t mac[6]) {
 
 	eth_bit_field_set(ECON1, ECON1_RXEN);
 
+	// Packet interrupt, after RXEN so a frame that lands during init
+	// is already a real one. INT is active-low and level-triggered:
+	// it stays low while EPKTCNT is nonzero and PKTIE|INTIE are set,
+	// and it releases only when PKTDEC brings the count to zero.
+	// The errata (DS80349 issue 6, every revision) make EIR.PKTIF
+	// itself unreliable; the pin still follows the datasheet, and
+	// enc28j60_recv() already drains by EPKTCNT rather than by that bit.
+	eth_write_reg(EIE, EIE_INTIE | EIE_PKTIE);
+
 	return (last_revision != 0x00 && last_revision != 0xFF);
 
 }
@@ -577,6 +592,21 @@ uint16_t enc28j60_recv(uint8_t *buf, uint16_t maxlen) {
 	eth_bit_field_set(ECON2, ECON2_PKTDEC);	// tell the chip we're done with this packet
 
 	return to_read;
+
+}
+
+// eth_poll() stops after 64 frames and leaves the rest queued. INT is
+// still low then, and the IRQ line only reports a rising edge, so the
+// next packet produces no new one. Dropping INTIE releases the pin;
+// setting it again reasserts it while EPKTCNT is still nonzero, which
+// is the edge. A count of zero needs nothing: the last PKTDEC already
+// released the pin, and the next frame is a new edge on its own.
+void enc28j60_rx_rearm(void) {
+
+	if (eth_read_reg(EPKTCNT) == 0) return;
+
+	eth_bit_field_clear(EIE, EIE_INTIE);
+	eth_bit_field_set(EIE, EIE_INTIE);
 
 }
 

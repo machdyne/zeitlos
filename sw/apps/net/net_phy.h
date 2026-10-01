@@ -117,6 +117,14 @@ typedef struct {
 	// straight after init(); false leaves net's own address in place.
 	// See usb_ecm.h and docs/usb_ethernet.md.
 	bool (*get_mac)(uint8_t mac[6]);
+
+	// Optional, NULL except on the ENC28J60. eth_poll() calls it only
+	// when it stopped at its frame cap with packets still queued.
+	// That chip's INT pin stays asserted until the receive count hits
+	// zero, and the IRQ is an edge, so the driver has to release and
+	// reassert the enable to be noticed again. A full drain needs no
+	// call: the pin releases on its own.
+	void (*rx_rearm)(void);
 } net_phy_t;
 
 // What net.cfg's phy= key selects. Default auto: a MAC built into the
@@ -142,5 +150,6 @@ const net_phy_t *net_phy_select(int mode);
 #define phy_send(b, l)   (net_phy->send((b), (l)))
 #define phy_debug_dump() (net_phy->debug_dump())
 #define phy_rx_capacity() (net_phy->rx_capacity)
+#define phy_rx_rearm()   do { if (net_phy->rx_rearm) net_phy->rx_rearm(); } while (0)
 
 #endif
