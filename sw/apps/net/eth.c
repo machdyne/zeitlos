@@ -18,7 +18,20 @@
 
 uint8_t eth_our_mac[6];
 
-static uint8_t txbuf[ETH_MTU];
+// The transmitted buffer starts 2 mod 4, so buf+14 (the payload,
+// after the header written a byte at a time below) is 4-aligned.
+// libz memcpy copies a word at a time only when both ends are, and
+// the TCP segment it copies from already is. A struct of plain
+// uint8_t is aligned to 1 unless asked: without the attribute the
+// word path would never run. rxbuf stays where it is; the copy this
+// is about is the one in eth_send().
+static struct {
+	uint8_t pad[2];
+	uint8_t buf[ETH_MTU];
+} tx __attribute__((aligned(4)));
+_Static_assert(__alignof__(tx) >= 4 &&
+	__builtin_offsetof(__typeof__(tx), buf) == 2,
+	"payload at tx.buf+14 must be word-aligned");
 static uint8_t rxbuf[ETH_MTU];
 
 void eth_init(const uint8_t mac[6]) {
@@ -28,26 +41,26 @@ void eth_init(const uint8_t mac[6]) {
 bool eth_send(const uint8_t dst_mac[6], uint16_t ethertype,
 	const uint8_t *payload, uint16_t len) {
 
-	if ((uint32_t)ETH_HDR_LEN + len > sizeof(txbuf)) return false;
+	if ((uint32_t)ETH_HDR_LEN + len > sizeof(tx.buf)) return false;
 
-	for (int i = 0; i < 6; i++) txbuf[i] = dst_mac[i];
-	for (int i = 0; i < 6; i++) txbuf[6 + i] = eth_our_mac[i];
-	txbuf[12] = (ethertype >> 8) & 0xFF;
-	txbuf[13] = ethertype & 0xFF;
+	for (int i = 0; i < 6; i++) tx.buf[i] = dst_mac[i];
+	for (int i = 0; i < 6; i++) tx.buf[6 + i] = eth_our_mac[i];
+	tx.buf[12] = (ethertype >> 8) & 0xFF;
+	tx.buf[13] = ethertype & 0xFF;
 
-	memcpy(txbuf + ETH_HDR_LEN, payload, len);
+	memcpy(tx.buf + ETH_HDR_LEN, payload, len);
 
 	uint16_t framelen = ETH_HDR_LEN + len;
 
 	if (framelen < 60) {
-		// zero the padding explicitly -- txbuf is reused across
+		// zero the padding explicitly -- tx.buf is reused across
 		// calls, so without this, leftover bytes from a previous,
 		// longer send could leak into this frame's padding
-		for (uint16_t i = framelen; i < 60; i++) txbuf[i] = 0;
+		for (uint16_t i = framelen; i < 60; i++) tx.buf[i] = 0;
 		framelen = 60;
 	}
 
-	return phy_send(txbuf, framelen);
+	return phy_send(tx.buf, framelen);
 
 }
 
