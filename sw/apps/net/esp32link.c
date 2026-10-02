@@ -21,6 +21,7 @@
 #include <string.h>
 
 #include "../../common/zeitlos.h"
+#include "../../common/zinput.h"
 #include "esp32link.h"
 #include "znic.h"
 #include "netprof.h"
@@ -152,36 +153,10 @@ static uint32_t last_poll_tick;
 static uint32_t link_busy_tick;
 static int poll_productive;	/* last reply was not NOP: ask again at once */
 
-/* visor / USB mouse coexistence (reg_vmouse bit 24).
- * net used to OR present on every ZNIC_MOUSE and never clear it, so a
- * single visor packet froze the USB pointer until the FPGA was reset.
- * Last writer wins: a visor packet takes the sprite, visor silence of
- * ~1 s (tab closed, pointer left the canvas, synthetic mouse stopped)
- * drops present so the USB mux in rtl/sysctl.v wins without a wiggle.
- * wm also clears present on a USB move. buttons bit 7 is an explicit
- * leave from the visor page. */
-#define VMOUSE_HOLD_TICKS  TICKS_PER_SEC
-static uint32_t vmouse_last_tick;
-static int vmouse_held;
-static uint32_t input_events;	/* ZNIC_MOUSE + ZNIC_INPUT dispatched */
-
-static void vmouse_release(void)
-{
-	reg_vmouse = 0;
-	vmouse_held = 0;
-	/* wm sleeps until HID or this poke — dropping present must
-	 * wake it so a held button is not stuck down. */
-	z_wm_wake();
-}
-
-static void vmouse_release_if_stale(void)
-{
-	if (!vmouse_held)
-		return;
-	if ((int32_t)(z_uptime_ticks() - vmouse_last_tick) < (int32_t)VMOUSE_HOLD_TICKS)
-		return;
-	vmouse_release();
-}
+/* Visor pointer and keyboard land in zinput. input_events counts the
+ * moves and the keys, not a leave: a leave drops the sprite and is
+ * not "someone is still dragging". */
+static uint32_t input_events;
 
 /* ---- is anybody watching? ------------------------------------------
  *
@@ -701,35 +676,19 @@ static void znic_dispatch(void)
 		nops_rx++;
 		break;
 	case ZNIC_MOUSE:
-		/* {x_lo,x_hi,y_lo,y_hi,buttons} -> the virtual mouse register.
-		 * Bit 7 of buttons = pointer left the visor: drop present so
-		 * USB is not latched. Otherwise set present (rtl/sysctl.v;
-		 * wm reads it like a USB mouse) and refresh the hold timer. */
+		/* {x_lo,x_hi,y_lo,y_hi,buttons}. viewer_input() first: the
+		 * "is anybody watching" floor is this file's, not zinput's. */
 		if (rx_msg_len >= 5) {
-			uint32_t x = (uint32_t)rx_msg[0] | ((uint32_t)rx_msg[1] << 8);
-			uint32_t y = (uint32_t)rx_msg[2] | ((uint32_t)rx_msg[3] << 8);
-			uint32_t b = rx_msg[4];
 			viewer_input();
-			if (b & 0x80) {
-				vmouse_release();
-			} else {
-				reg_vmouse = (1u << 24) | ((b & 7) << 20)
-					| ((y & 0x3ff) << 10) | (x & 0x3ff);
-				vmouse_last_tick = z_uptime_ticks();
-				vmouse_held = 1;
+			if (zinput_mouse(rx_msg, rx_msg_len))
 				input_events++;
-				z_wm_wake();
-			}
 		}
 		break;
 	case ZNIC_INPUT:
 		if (rx_msg_len >= 3) {
 			viewer_input();
-			uint32_t ev = (((uint32_t)rx_msg[1] & 0xff) << 9)
-				| (((uint32_t)rx_msg[0] & 0xff) << 1)
-				| (rx_msg[2] ? 1u : 0u);
-			hid_inject((int32_t)ev);
-			input_events++;
+			if (zinput_key(rx_msg, rx_msg_len))
+				input_events++;
 		}
 		break;
 	case ZNIC_BURST:
@@ -840,7 +799,7 @@ void esp32link_poll_wifi(const netcfg_t *cfg)
 	if (!cfg || !cfg->n_wifi)
 		return;
 
-	vmouse_release_if_stale();
+	zinput_tick();
 	screen_set_viewer(viewer_present());
 
 	switch (phase) {
@@ -975,9 +934,7 @@ int esp32link_pump_input(void)
 
 int esp32link_vmouse_buttons(void)
 {
-	if (!vmouse_held)
-		return 0;
-	return (int)((reg_vmouse >> 20) & 7);
+	return zinput_buttons();
 }
 
 

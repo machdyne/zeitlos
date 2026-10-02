@@ -276,7 +276,7 @@ endif
 # zrtc.o rides with ntp.o rather than being listed separately: it is
 # the calendar arithmetic ntp.c uses to print the time it just set, and
 # nothing else in this app has any use for a date.
-OBJS = zeitlos.o zobj.o zstream.o zport.o zrng.o zfsapp.o netcfg.o screen.o zscreen.o $(PHY_OBJ) eth.o arp.o ip.o udp.o $(DHCP_OBJ) dns.o $(NTP_OBJ) tcp.o relay.o telnet.o $(SOCK_OBJ) $(SSH_OBJ) tftp.o $(PROF_OBJ) net.o
+OBJS = zeitlos.o zobj.o zstream.o zport.o zrng.o zfsapp.o netcfg.o screen.o zscreen.o zinput.o $(PHY_OBJ) eth.o arp.o ip.o udp.o $(DHCP_OBJ) dns.o $(NTP_OBJ) tcp.o relay.o telnet.o $(SOCK_OBJ) $(SSH_OBJ) tftp.o $(PROF_OBJ) net.o
 
 # each rule below lists its own .c file as a prerequisite -- without
 # this, `make` has no way to know a source file changed (it was only
@@ -316,8 +316,11 @@ enc28j60.o: enc28j60.c enc28j60.h
 rmii_eth.o: rmii_eth.c rmii_eth.h
 	$(CC) $(CFLAGS) -c rmii_eth.c -o rmii_eth.o
 
-esp32link.o: esp32link.c esp32link.h znic.h netcfg.h
+esp32link.o: esp32link.c esp32link.h znic.h netcfg.h ../../common/zinput.h
 	$(CC) $(CFLAGS) -c esp32link.c -o esp32link.o
+
+zinput.o: ../../common/zinput.c ../../common/zinput.h
+	$(CC) $(CFLAGS) -c ../../common/zinput.c -o zinput.o
 
 screen.o: screen.c screen.h udp.h esp32link.h ../../common/zscreen.h netprof.h
 	$(CC) $(CFLAGS) -c screen.c -o screen.o
