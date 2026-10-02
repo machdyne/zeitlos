@@ -96,6 +96,25 @@ EXTRA_DEFINES ?=
 # Override on the command line to compare:  make BOARD=obst ABC9=
 ABC9 ?= -abc9
 
+# openXC7 -- the Xilinx 7-series toolchain, used only by FAMILY=xc7
+# boards (sergei_mx1, mozart_mx1). openXC7 1.0 or later: the
+# prebuilt release package unpacked at $(OPENXC7) (docs/toolchain.md).
+# yosys is the same one every other family uses; the package supplies
+# place-and-route (nextpnr-xilinx, the 1.x "himbaechel" engine), the
+# chip databases, prjxray-db, fasm2frames and xc7frames2bit. Its bin/
+# entries are self-contained wrappers: nothing to source, no Python
+# path to set.
+OPENXC7 ?= /opt/openxc7
+oxc7bin = $(if $(wildcard $(OPENXC7)/bin/$(1)),$(OPENXC7)/bin/$(1),$(1))
+NEXTPNR_XILINX ?= $(call oxc7bin,nextpnr-xilinx)
+FASM2FRAMES ?= $(call oxc7bin,fasm2frames)
+XC7FRAMES2BIT ?= $(call oxc7bin,xc7frames2bit)
+XRAY_DB ?= $(OPENXC7)/share/nextpnr/external/prjxray-db
+# The package ships one chip database per DIE, not per part. A part
+# name is die + package + speed grade (xc7a35tftg256-1), and the
+# xc7a35t is the xc7a50t die, so it uses that database.
+XC7_DIE = $(shell echo '$(PART)' | sed -E 's/^(xc7[aksz][0-9]+t?).*/\1/; s/^xc7a35t$$/xc7a50t/')
+
 main: check zeitlos
 
 check:
@@ -274,6 +293,45 @@ else ifeq ($(BOARD), sergei_ml1)
 	FLASH = openFPGALoader -v -c dirtyJtag -f
 	FLASH_OFFSET = -o
 	JUMP = 1
+else ifeq ($(BOARD), sergei_mx1)
+	# Sechzig MX1 (Artix-7 XC7A35T-FTG256, 32 MB SDRAM, 4 MB flash) in a
+	# Sergei carrier. docs/boards.md; the pins are boards/sergei_mx1.xdc.
+	FAMILY = xc7
+	# -1 on purpose. MX1 modules are usually built with the -2 part
+	# (XC7A35T-2FTG256C), but some carry a -1, and a design placed and
+	# timed against -1 meets timing on both. A -2-only build would not.
+	# The chipdb is per part name (chipdb/<PART>.bin); override with
+	# PART=xc7a35tftg256-2 to time against the faster part.
+	PART = xc7a35tftg256-1
+	FPGA_PART = xc7a35tftg256
+	XDC = sergei_mx1.xdc
+	PROG = openFPGALoader -c dirtyJtag
+	FLASH = openFPGALoader -c dirtyJtag -f --fpga-part $(FPGA_PART)
+	FLASH_OFFSET = -o
+	# The bitstream is a fixed 2.09 MB, so the Zeitlos region starts at
+	# 3 MB: the top megabyte of the 4 MB part. KEEP IN SYNC with
+	# `FLASH_BASE in rtl/boards.vh (docs/boot.md).
+	FLASH_BASE = 0x300000
+	# The BIOS's stack shares its 8 KB block RAM with the image. Leave
+	# out the xfer receiver to make room, and refuse to build a BIOS with
+	# less than 512 bytes of stack.
+	BIOS_FLAGS = -DBIOS_NO_XFER
+	BIOS_MIN_STACK = 512
+else ifeq ($(BOARD), mozart_mx1)
+	# The same module in a Mozart carrier.
+	FAMILY = xc7
+	PART = xc7a35tftg256-1
+	FPGA_PART = xc7a35tftg256
+	XDC = mozart_mx1.xdc
+	PROG = openFPGALoader -c dirtyJtag
+	FLASH = openFPGALoader -c dirtyJtag -f --fpga-part $(FPGA_PART)
+	FLASH_OFFSET = -o
+	FLASH_BASE = 0x300000
+	# The BIOS's stack shares its 8 KB block RAM with the image. Leave
+	# out the xfer receiver to make room, and refuse to build a BIOS with
+	# less than 512 bytes of stack.
+	BIOS_FLAGS = -DBIOS_NO_XFER
+	BIOS_MIN_STACK = 512
 else ifeq ($(BOARD), sergei_ml2)
 	FAMILY = ecp5
 	DEVICE = 45k
@@ -356,6 +414,14 @@ RTL_PICO += \
 		rtl/mem/ddr3_phy_init.v
 endif
 
+# Artix-7: the MMCM wrappers. Only these boards read them -- they
+# instantiate Xilinx primitives no other family's synthesis knows.
+ifeq ($(FAMILY), xc7)
+RTL_PICO += \
+		rtl/clk/pll0_xc7.v \
+		rtl/clk/pll1_xc7.v
+endif
+
 FAMILY_UC = $(shell echo '$(FAMILY)' | tr '[:lower:]' '[:upper:]')
 
 zeitlos: check zeitlos_pico bios soc os apps
@@ -366,6 +432,8 @@ else ifeq ($(FAMILY), ecp5)
 zeitlos_pico: zeitlos_ecp5_pico
 else ifeq ($(FAMILY), gatemate)
 zeitlos_pico: zeitlos_gatemate_pico
+else ifeq ($(FAMILY), xc7)
+zeitlos_pico: zeitlos_xc7_pico
 endif
 
 # Build logs. Both tools keep printing to the terminal; -l/--log
@@ -444,20 +512,36 @@ ifeq ($(FAMILY), ecp5)
 SOC_CONSTRAINT = boards/$(LPF)
 SOC_SYNTH_INPUTS = $(RTL_PICO) rtl/boards.vh rtl/csrs.vh $(SOC_CONSTRAINT)
 endif
+# xc7: the same, plus the BIOS, which is part of the netlist on this
+# family (rtl/mem/bram.v reads it at synthesis).
+ifeq ($(FAMILY), xc7)
+SOC_SYNTH_INPUTS = $(RTL_PICO) rtl/boards.vh rtl/csrs.vh boards/$(XDC) sw/bios/bios.hex
+endif
 
 FORCE:
 
 $(SOC_CONFIG_STAMP): FORCE
 	@mkdir -p $(OUTDIR)
-	@cur="BOARD=$(BOARD) DEVICE=$(DEVICE) PACKAGE=$(PACKAGE) EXTRA_DEFINES=$(EXTRA_DEFINES) JUMP=$(JUMP) ABC9=$(ABC9) PNR_SEED=$(PNR_SEED)"; \
+	@cur="BOARD=$(BOARD) DEVICE=$(DEVICE) PACKAGE=$(PACKAGE) EXTRA_DEFINES=$(EXTRA_DEFINES) JUMP=$(JUMP) ABC9=$(ABC9) PNR_SEED=$(PNR_SEED) PART=$(PART) XC7_DSP=$(XC7_DSP) XC7_LUTRAM=$(XC7_LUTRAM)"; \
 	if [ ! -f $@ ] || [ "$$(cat $@)" != "$$cur" ]; then \
 		echo "$$cur" > $@; \
 	fi
 
 # Default `bios` target also builds bios_seed.hex, which ecpbram/icebram
 # need. Recursing without a target is what the old `bios:` recipe did.
+# The BIOS block RAM, in 32-bit words: 2048 (8 KB) unless the board's
+# block says otherwise. ONE number, given to both sides -- the BIOS build
+# (hex image size, and the stack, which starts at the top of this RAM)
+# and, on families that build the BIOS in at synthesis, the RTL (the
+# RAM's size and its address decode). Four places used to assume 8 KB
+# independently; making only some of them bigger put the stack at an
+# address nothing answered.
+BRAM_WORDS ?= 2048
+BIOS_FLAGS ?=
+BIOS_MIN_STACK ?= 0
+
 sw/bios/bios.hex: FORCE
-	$(MAKE) -C sw/bios BOARD=$(BOARD_UC) FAMILY=$(FAMILY_UC) PREFIX=$(PREFIX)
+	$(MAKE) -C sw/bios BOARD=$(BOARD_UC) FAMILY=$(FAMILY_UC) PREFIX=$(PREFIX) BRAM_WORDS=$(BRAM_WORDS) BIOS_FLAGS="$(BIOS_FLAGS)" BIOS_MIN_STACK=$(BIOS_MIN_STACK)
 
 bios: sw/bios/bios.hex
 
@@ -513,6 +597,72 @@ zeitlos_gatemate_pico:
 			-nomx8 -json $(OUTDIR)/soc.json"
 	$(PR) --device CCGM1A1 --json $(OUTDIR)/soc.json --vopt ccf=$(CCF) --vopt out=$(OUTDIR)/soc.txt --router router2 -l $(PNR_LOG)
 	$(PACK) $(OUTDIR)/soc.txt $(OUTDIR)/soc.bit
+else ifeq ($(FAMILY), xc7)
+CHIPDB ?= $(OPENXC7)/chipdb/chipdb-$(XC7_DIE).bin
+
+# Multipliers in LUTs rather than DSP48E1s, for now. On Kirsch a
+# DSP48E1 behind the CPU's fast multiplier hung it; the CPU's is off
+# (`NO_CPU_MUL_FAST), and this keeps the others -- audio, the mixer,
+# the blitter -- from being the next unexplained fault during bring-up.
+# Measured on sergei_mx1: ~1,100 LUTs (55% -> 60%). `make XC7_DSP=`
+# lets DSPs back in, which is the test to run once the board boots.
+XC7_DSP ?= -nodsp
+
+# No distributed (LUT) RAM. openXC7's support for it is incomplete --
+# nextpnr-xilinx issue #20, "Limited support for Distributed Memory /
+# LUTRAM"; its 0.9.0 release fixes RAM32M/RAM64M INIT interleaving and
+# turns some unsupported LUT RAM from a silent mis-build into an error.
+# With LUT RAM allowed, yosys puts the CPU's register file (22 RAM64M)
+# and the console UART's TX/RX FIFOs (RAM32M) there, among others; on
+# sergei_mx1 that gave a CPU that ran a few instructions and a console
+# printing wrong bytes, differently on every build. Without it those
+# memories become flip-flops, or block RAM where large. `make
+# XC7_LUTRAM=` lets LUT RAM back in, to test a newer openXC7.
+XC7_LUTRAM ?= -nolutram
+
+# The chip database comes with the openXC7 package; say so plainly if it
+# is not where we look, rather than letting nextpnr fail on a path.
+$(CHIPDB):
+	@echo "*** no openXC7 chip database at $(CHIPDB)."
+	@echo "*** Install the openXC7 1.x release package at $(OPENXC7) (docs/toolchain.md),"
+	@echo "*** or point OPENXC7= (or CHIPDB=) at it."
+	@exit 1
+
+# The BIOS is built FIRST on this family: there is no ecpbram for the
+# Xilinx bitstream, so rtl/mem/bram.v reads sw/bios/bios.hex at
+# synthesis and the BIOS is part of the gateware from then on. A BIOS
+# change therefore needs a resynthesis to reach the board.
+#
+# `delete t:$$print t:$$scopeinfo` drops cells that are not hardware --
+# what yosys keeps for $$display, and hierarchy metadata. nextpnr-ecp5
+# ignores them; nextpnr-xilinx tries to place them and fails. The `\$$`
+# is load-bearing: the -p argument is a double-quoted SHELL string, and
+# a bare $$print would be expanded by the shell to nothing.
+# A FILE target, soc.fasm, so that `make flash` after `make` does not
+# synthesize and route again: it reruns only when an input (the RTL,
+# the board's defines, the XDC, the BIOS, the chipdb) is newer, or a
+# build setting recorded in $(SOC_CONFIG_STAMP) changed. The BIOS's own
+# rule always recurses into sw/bios but leaves bios.hex untouched when
+# nothing there changed, so it only triggers this when it should.
+zeitlos_xc7_pico: $(OUTDIR)/soc.fasm
+
+$(OUTDIR)/soc.fasm: $(SOC_SYNTH_INPUTS) $(CHIPDB) $(SOC_CONFIG_STAMP)
+	mkdir -p $(OUTDIR)
+	yosys $(EXTRA_DEFINES) -DBOARD_$(BOARD_UC) -DXC7 -DBRAM_WORDS=$(BRAM_WORDS) $(if $(XC7_LUTRAM),-DXC7_NOLUTRAM,) -q -l $(SYNTH_LOG) -p \
+		"synth_xilinx -family xc7 $(ABC9) $(XC7_DSP) $(XC7_LUTRAM) -flatten -top sysctl; \
+			delete t:\$$print t:\$$scopeinfo; \
+			write_json $(OUTDIR)/soc.json" $(RTL_PICO)
+	@# openXC7 1.x: the part by name, constraints and FASM as engine
+	@# options (-o), not the 0.9 line's --xdc/--fasm.
+	$(NEXTPNR_XILINX) --device $(PART) --chipdb $(CHIPDB) \
+		--json $(OUTDIR)/soc.json \
+		-o xdc=boards/$(XDC) \
+		-o fasm=$(OUTDIR)/soc.fasm \
+		-l $(PNR_LOG) \
+		$(if $(PNR_SEED),--seed $(PNR_SEED),) \
+		--ignore-loops
+	@echo
+	@tools/pnr_timing.sh $(PNR_LOG) $(BOARD_LC)
 endif
 
 ifeq ($(FAMILY), ice40)
@@ -523,6 +673,17 @@ soc:
 else ifeq ($(FAMILY), gatemate)
 soc:
 	echo
+else ifeq ($(FAMILY), xc7)
+soc: check $(OUTDIR)/soc.bit
+
+$(OUTDIR)/soc.bit: $(OUTDIR)/soc.fasm
+	@command -v $(FASM2FRAMES) >/dev/null 2>&1 || test -x "$(FASM2FRAMES)" || { echo "*** cannot run fasm2frames ($(FASM2FRAMES)). Under sudo, PATH is reset: build unprivileged, or sudo -E env PATH=\"\$$PATH\" make ..."; exit 1; }
+	$(FASM2FRAMES) --part $(PART) --db-root $(XRAY_DB)/artix7 \
+		$(OUTDIR)/soc.fasm > $(OUTDIR)/soc.frames
+	$(XC7FRAMES2BIT) --part_file $(XRAY_DB)/artix7/$(PART)/part.yaml \
+		--part_name $(PART) \
+		--frm_file $(OUTDIR)/soc.frames \
+		--output_file $(OUTDIR)/soc.bit
 else ifeq ($(FAMILY), ecp5)
 soc: check $(OUTDIR)/soc.config $(OUTDIR)/.soc_inputs_ok sw/bios/bios.hex
 	ecpbram -i $(OUTDIR)/soc.config \
@@ -563,19 +724,36 @@ flash_soc: check soc
 	$(FLASH) $(OUTDIR)/soc.bit
 endif
 
+# The Zeitlos flash region (docs/boot.md, "The flash layout"): 1 MB at
+# FLASH_BASE on every board, holding the kernel at +0, the core apps at
+# +0x040000, the flashtest sector and the key/value store. Everything
+# outside it -- the gateware below, anything above -- is not Zeitlos's.
+#
+# 0x100000 is where the region has always been on the ECP5 boards. A
+# board whose gateware does not fit below that (every Artix-7: the
+# bitstream is a fixed 2.09 MB) sets FLASH_BASE in its block above AND
+# `FLASH_BASE in rtl/boards.vh, which is how the running system learns
+# it (rtl/csrs.v word 63). The two must agree; `release/zrelease check`
+# compares them. The offsets inside the region are sw/common/zsoc.h's
+# Z_FLASH_*_OFF -- KEEP IN SYNC (release/lib/layout.py checks).
+FLASH_BASE ?= 0x100000
+FLASH_KERNEL_DEC = $(shell printf '%d' $$(( $(FLASH_BASE) + 0x000000 )))
+FLASH_KERNEL_HEX = $(shell printf '%x' $$(( $(FLASH_BASE) + 0x000000 )))
+FLASH_APPS_DEC = $(shell printf '%d' $$(( $(FLASH_BASE) + 0x040000 )))
+FLASH_APPS_HEX = $(shell printf '%x' $$(( $(FLASH_BASE) + 0x040000 )))
+
 ifeq ($(FAMILY), ice40)
 flash_os: check os
-	$(FLASH) $(FLASH_OFFSET) sw/os/kernel.bin 100000
+	$(FLASH) $(FLASH_OFFSET) sw/os/kernel.bin $(FLASH_KERNEL_HEX)
 else
 flash_os: check os
-	$(FLASH) $(FLASH_OFFSET) 1048576 sw/os/kernel.bin
+	$(FLASH) $(FLASH_OFFSET) $(FLASH_KERNEL_DEC) sw/os/kernel.bin
 endif
 
-# Core apps -- programmed at a fixed flash offset immediately ABOVE the
-# kernel's 256KB region (1MB + 256KB = 0x140000). KEEP THIS OFFSET IN
-# SYNC with Z_ZAR_FLASH_OFFSET in sw/os/zar.h; nothing checks that the
-# two agree, and a mismatch looks like "no core apps in flash" rather
-# than an error.
+# Core apps -- programmed immediately ABOVE the kernel's 256KB, at
+# FLASH_BASE + 0x040000 (Z_ZAR_FLASH_OFFSET in sw/os/zar.h, which
+# release/lib/layout.py checks against this). A mismatch looks like "no
+# core apps in flash" rather than an error.
 #
 # Depends on `apps` so the .bin files exist; mkzar.py stores them
 # verbatim (they are already ZEXE files).
@@ -594,64 +772,14 @@ $(OUTDIR)/apps.zar: apps
 
 ifeq ($(FAMILY), ice40)
 flash_apps: $(OUTDIR)/apps.zar
-	$(FLASH) $(FLASH_OFFSET) $(OUTDIR)/apps.zar 140000
+	$(FLASH) $(FLASH_OFFSET) $(OUTDIR)/apps.zar $(FLASH_APPS_HEX)
 else
 flash_apps: $(OUTDIR)/apps.zar
-	$(FLASH) $(FLASH_OFFSET) 1310720 $(OUTDIR)/apps.zar
+	$(FLASH) $(FLASH_OFFSET) $(FLASH_APPS_DEC) $(OUTDIR)/apps.zar
 endif
 
-# Boot splash logo -- programmed separately from the kernel, at a fixed
-# flash offset immediately BELOW the kernel's own 1MB offset.
-#
-# It used to be compiled into kernel.bin as a 24KB const array
-# (sw/os/logo_data.c). Since k_proc_create() sizes a process's memory
-# block from its image, that cost 24KB of the 1MB main-memory budget
-# permanently, for something shown once at boot. Flash is memory-mapped
-# on this SOC (sw/bios/bios.c's load_zeitlos() memcpy()s the kernel
-# straight out of it), so sw/os/logo.c now reads these bytes directly
-# from flash into VRAM and no main memory is used at all.
-#
-# The artifact written here is sw/data/images/zeitlos_fb.bin: a full
-# 640x480 1bpp framebuffer image, pre-centred and pre-padded from the
-# 512x384 zeitlos.bin by sw/data/images/pad_logo.py. Doing the centring
-# once, here, is what lets both the BIOS and the kernel show it with a
-# single flat memcpy instead of a row-by-row copy -- and it makes the
-# splash clear VRAM rather than leaving a garbage border. Regenerate
-# with:
-#
-#   cd sw/data/images && python3 pad_logo.py zeitlos.bin zeitlos_fb.bin
-#
-# (add --invert if the splash shows with foreground/background swapped;
-# polarity is baked into the image, not decided in C).
-#
-# No header, no wrapper, so there is nothing to keep in sync between the
-# flashed bytes and what the BIOS/kernel expect to find -- and no
-# is-it-programmed check anywhere: the logo is flashed alongside the
-# gateware and kernel, so a board that can boot at all has it.
-#
-# 0xF0000 = 983040. The gateware lives at the start of flash (~400KB
-# today, varies by board) and the kernel at 1MB, so this leaves the
-# gateware headroom up to 960KB. Override both variables together if a
-# board's gateware ever needs more than that:
-#
-#   make flash_logo LOGO_FLASH_OFFSET_HEX=e0000 LOGO_FLASH_OFFSET_DEC=917504
-#
-# KEEP THESE IN SYNC with Z_BOOT_LOGO_FLASH_OFFSET in sw/os/logo.h --
-# there is no build-time link between them (that header is compiled into
-# the kernel, these are arguments to an external flashing tool), so a
-# mismatch shows up only as a missing or garbled splash at boot. The
-# kernel skips drawing entirely if it finds erased flash there, so the
-# failure mode is a blank screen rather than noise.
-LOGO_FLASH_OFFSET_HEX ?= f0000
-LOGO_FLASH_OFFSET_DEC ?= 983040
-
-ifeq ($(FAMILY), ice40)
-flash_logo: check
-	$(FLASH) $(FLASH_OFFSET) sw/data/images/zeitlos_fb.bin $(LOGO_FLASH_OFFSET_HEX)
-else
-flash_logo: check
-	$(FLASH) $(FLASH_OFFSET) $(LOGO_FLASH_OFFSET_DEC) sw/data/images/zeitlos_fb.bin
-endif
+# There is no boot logo (docs/boot.md): the hardware's busy cursor,
+# centred at reset, is the sign of life, and the BIOS clears VRAM.
 
 prog: 
 	$(PROG) $(OUTDIR)/soc.bit
@@ -676,10 +804,6 @@ dev-prog: dev soc prog
 # k_soc_report() catches at boot; everything else is on you).
 dev-flash: dev flash_os flash_apps
 
-# flash_logo included here so a full `make flash` still produces a
-# system with a splash screen -- the extra write only costs setup time,
-# and leaving it out would make the common path silently lose the logo.
-# Flash it on its own (`make flash_logo`) when only the logo changed.
 # flash_apps is part of the default `flash` deliberately: the point of
 # putting the core apps in flash is that a freshly flashed board boots
 # to a working desktop with no SD card at all. Leaving it as a separate
@@ -729,9 +853,9 @@ jumploader flash_jump:
 endif
 
 ifeq ($(JUMP), 1)
-flash: zeitlos flash_soc flash_os flash_logo flash_apps flash_jump
+flash: zeitlos flash_soc flash_os flash_apps flash_jump
 else
-flash: zeitlos flash_soc flash_os flash_logo flash_apps
+flash: zeitlos flash_soc flash_os flash_apps
 endif
 
 os:

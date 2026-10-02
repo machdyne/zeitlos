@@ -37,10 +37,8 @@ cheap: loading an app from it is a copy, with no filesystem and no
 SPI driver involved. It is also **faster than the sdcard**, which is
 bit-banged SPI (`sw/os/fs/fatfs/sdmm.c`).
 
-This is the third use of that same property. The BIOS already loads the
-kernel this way (`load_zeitlos()`, `sw/bios/bios.c`), and `sw/os/logo.c`
-reads the boot splash straight out of flash into VRAM so it costs no
-main memory at all.
+This is the second use of that same property. The BIOS already loads the
+kernel this way (`load_zeitlos()`, `sw/bios/bios.c`).
 
 Writing flash is slow, but that happens once per build, unattended, as
 part of `make flash`.
@@ -57,10 +55,12 @@ alignment of source and destination.
 
 ```
 0x10000000   MEM_ROM base
-0x100F0000   boot splash
-0x10100000   kernel, 256KB
-0x10140000   core apps  <-- this, up to 576 KB (353,236 bytes used, Sep 2026)
-0x101D0000   the jumploader (docs/zboot.md sec. 5)
+             the Zeitlos region (docs/boot.md), at its base:
+  +0x000000  kernel, 256KB
+  +0x040000  core apps  <-- this, up to 576 KB (353,236 bytes used, Sep 2026)
+  +0x0D0000  the jumploader, on ECP5 boards with one (docs/zboot.md sec. 5)
+  +0x0FE000  the key/value store
+             -- add 0x100000 for an ECP5 board, 0x300000 for an Artix-7 one
 0x1F000000   the flash controller's registers (docs/spiflash.md)
 ```
 

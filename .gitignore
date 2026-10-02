@@ -23,7 +23,6 @@
 *.json
 *.bin
 !sw/data/images/zeitlos.bin
-!sw/data/images/zeitlos_fb.bin
 *.hex
 !rtl/ext/usb_hid_host/src/usb_hid_host_rom.hex
 sw/bios/bios_seed.hex
@@ -120,3 +119,7 @@ node.key
 /sw/apps/bbs/data/fed-outbox
 /sw/apps/bbs/data/fed-names
 /sw/apps/bbs/data/*.sock
+
+sw/bios/.build-flags
+sw/bios/bios.hex.tmp
+sw/bios/*.synthbak

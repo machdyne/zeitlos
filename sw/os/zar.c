@@ -18,7 +18,7 @@
 // volatile because this is hardware, not RAM: nothing should cache a
 // read across a reflash, and the compiler has no reason to know that.
 static volatile const uint8_t *zar_base(void) {
-	return (volatile const uint8_t *)Z_ZAR_ADDR;
+	return (volatile const uint8_t *)z_zar_addr();
 }
 
 // Little-endian 32-bit read. Spelled out byte by byte rather than

@@ -85,7 +85,15 @@
  *                room for 64 of these words; the third one being the
  *                second feature register rather than something
  *                unrelated is what keeps the growth path obvious.
- *   4-7          reserved -- FEATURES3 and onward. See above.
+ *   4-62         reserved: FEATURES3 and onward grow UP from word 4;
+ *                board variables (whole-word values, like FLASH_BASE)
+ *                grow DOWN from word 62. They meet only if both run out.
+ *   63           FLASH_BASE: the byte offset in the SPI flash where the
+ *                1 MB Zeitlos region starts (docs/boot.md, "The flash
+ *                layout"). Reads 0 unless rtl/boards.vh sets
+ *                `FLASH_BASE, and software takes 0 to mean the legacy
+ *                base 0x100000 -- so the ECP5 boards, whose region has
+ *                always been there, need not build this at all.
  */
 
 module csrs_wb #(
@@ -93,7 +101,9 @@ module csrs_wb #(
 	parameter FEATURES = 32'h0,
 	// Only the low 16 bits are used -- the top half of the register
 	// is the signature. See the header.
-	parameter FEATURES2 = 32'h0
+	parameter FEATURES2 = 32'h0,
+	// Word 63. See the header; only read when `FLASH_BASE is defined.
+	parameter FLASH_BASE = 32'h0
 )
 (
 	input wb_clk_i,
@@ -142,6 +152,16 @@ module csrs_wb #(
 				(wb_adr_i == 32'd2) ? FEATURES :
 				(wb_adr_i == 32'd3) ?
 					{ FEATURES2_SIG, FEATURES2[15:0] } :
+				// Behind the PREPROCESSOR, not a parameter test: this arm
+				// is a full 32-bit compare against 63, and yosys does not
+				// fold it away when FLASH_BASE is 0 -- measured on Lakritz
+				// in the Kirsch work, ~390 LUT4 for a register reading 0.
+				// Without `FLASH_BASE it is not built and word 63 reads 0
+				// through the default below, which is the documented
+				// meaning of "legacy base".
+`ifdef FLASH_BASE
+				(wb_adr_i == 32'd63) ? FLASH_BASE :
+`endif
 				32'h0;
 		end
 	end

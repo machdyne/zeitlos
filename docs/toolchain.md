@@ -86,6 +86,93 @@ system-installed yosys.
 This is already what `Makefile` assumes for GateMate boards, which
 reference `~/work/fpga/gatemate/oss-cad-suite/bin/nextpnr-himbaechel`.
 
+### Artix-7 boards (Sergei MX1, Mozart MX1) — openXC7
+
+The Artix-7 boards need **openXC7 1.0 or later**: the open toolchain for
+Xilinx 7-series, built around openXC7's own nextpnr engine (the
+"himbaechel" xilinx architecture). The older `nextpnr-xilinx` 0.9 line
+is archived and no longer supported here — its command line and chip
+databases are different.
+
+Use the **prebuilt release package**. It is self-contained: place and
+route (`nextpnr-xilinx`), the chip databases, prjxray-db, `fasm2frames`
+and `xc7frames2bit`, with its own Python. Nothing to build and nothing
+to source.
+
+```
+# 1. download a release from
+#    https://github.com/cavearr/toolchain-openxc7-releases/releases
+#    (openxc7-toolchain-linux-x86-64-<date>.tgz, plus SHA256SUMS)
+sha256sum -c --ignore-missing SHA256SUMS
+
+# 2. install it at /opt/openxc7, where the Makefile looks by default.
+#    The archive has no top-level directory -- unpack INTO the target.
+sudo mv /opt/openxc7 /opt/openxc7-old        # if an older one is there
+sudo mkdir /opt/openxc7
+sudo tar xzf openxc7-toolchain-linux-x86-64-<date>.tgz -C /opt/openxc7
+
+# 3. check
+/opt/openxc7/bin/nextpnr-xilinx --version
+ls /opt/openxc7/chipdb/                      # chipdb-xc7a50t.bin, ...
+```
+
+Then build as for any board — `make BOARD=sergei_mx1`. Elsewhere than
+`/opt/openxc7`, pass `OPENXC7=/path` (or set it in the environment).
+`yosys` still comes from OSS CAD Suite, as for the other families.
+
+**The chip database is per die, not per part.** A part name is die,
+package and speed grade (`xc7a35tftg256-1`); the package ships one
+database per die (`chipdb/chipdb-<die>.bin`), and the XC7A35T is the
+XC7A50T die, so it uses `chipdb-xc7a50t.bin`. The Makefile works this
+out from `PART` (`XC7_DIE`). There is no longer a database built inside
+the tree: delete any `chipdb/` directory an older build left behind.
+
+**The part name still carries the speed grade**, which selects the
+timing model and names prjxray's part data
+(`share/nextpnr/external/prjxray-db/artix7/<part>/`). The MX1 boards
+default to `xc7a35tftg256-1`: modules are usually built with the -2 part
+(`XC7A35T-2FTG256C`), but some carry a -1, and a design timed against -1
+meets timing on both. Override with `PART=xc7a35tftg256-2`.
+
+**The 1.x command line differs from 0.9's.** The part is given by name
+(`--device`), and the constraints and FASM output are engine options:
+`-o xdc=<file> -o fasm=<file>`, not `--xdc`/`--fasm`. The Makefile does
+this; it matters only when running nextpnr by hand.
+
+**Constraints are `.xdc`, and the 1.x reader is strict.** One `LOC` and
+one `IOSTANDARD` line per pin, and both halves of every differential
+pair. A comment after a command on the same line (`... ;# note`) is a
+parse error in 1.x — 0.9 accepted it — so comments go on their own
+lines; `create_clock -name` is ignored with a warning, so it is left
+out. See `boards/sergei_mx1.xdc`.
+
+**Timing estimates differ between the engines.** The same reduced
+sergei_mx1 netlist (no GPU, Ethernet or audio) placed at 66.6 MHz (`clk48mhz`) under 0.9.4 and 87.0 MHz under
+1.x. Neither has been validated against measurements on this silicon:
+treat the reported margin as an estimate, not a guarantee.
+
+**No LUT RAM: `XC7_LUTRAM ?= -nolutram` in the Makefile.** This is
+the important one. openXC7's support for distributed RAM is incomplete
+(nextpnr-xilinx issue #20, "Limited support for Distributed Memory /
+LUTRAM"; its 0.9.0 release fixes RAM32M/RAM64M INIT interleaving and
+stops some unsupported LUT RAM being built silently wrong). With LUT
+RAM allowed, yosys put the CPU's register file and the console UART's
+FIFOs there. The result on sergei_mx1 was a CPU that ran a few
+instructions and a console printing wrong bytes -- differently on every
+build, because placement decides which LUTs those memories land in --
+while the BIOS block RAM checked out bit-exact against the FASM. The
+same is the likeliest explanation of Kirsch's console troubles. `make
+XC7_LUTRAM=` lets LUT RAM back in, to test a newer openXC7.
+
+Three more openXC7 workarounds are in effect on these boards, each a
+real issue found on Kirsch and each one line to undo once fixed
+upstream:
+`` `NO_TRNG `` (the TRNG's ring oscillators do not route),
+`` `NO_CPU_MUL_FAST `` (a DSP48E1 behind the CPU's fast multiplier hung
+the CPU), and `XC7_DSP ?= -nodsp` in the Makefile (multipliers in LUTs
+rather than DSP48E1s, ~1,100 LUTs on sergei_mx1; `make XC7_DSP=` to
+test DSPs again).
+
 ### GateMate boards (Kölsch, Lebkuchen)
 
 These additionally need Cologne Chip's own place-and-route tool, `p_r`,

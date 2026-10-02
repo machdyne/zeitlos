@@ -71,6 +71,19 @@
  * chip select is high for GAP clocks: W25Q16 wants 50 ns before an
  * erase or program, and 8 clocks at 48 MHz is 167 ns.
  */
+// Distributed RAM, except where the build has ruled LUT RAM out:
+// openXC7 builds it unreliably (docs/toolchain.md), so an xc7 build with
+// XC7_LUTRAM=-nolutram passes -DXC7_NOLUTRAM and these memories become
+// flip-flops instead. A ram_style attribute overrides yosys's -nolutram,
+// which is why this has to be decided here and not only in the Makefile.
+`ifndef ZRAM_DISTRIBUTED
+`ifdef XC7_NOLUTRAM
+`define ZRAM_DISTRIBUTED "logic"
+`else
+`define ZRAM_DISTRIBUTED "distributed"
+`endif
+`endif
+
 module spiflash_wb #(
 	parameter [23:0] LOCK_END = 24'h040000,
 	parameter GAP = 8
@@ -131,7 +144,7 @@ module spiflash_wb #(
 	// LUT RAM, not a block RAM: Lakritz uses 54 of its 56, and they are
 	// the tightest resource on the board (docs/usb_host.md). ~60 LUTs
 	// more than a block RAM would cost. docs/spiflash.md.
-	(* ram_style = "distributed" *) reg [31:0] pbuf [0:63];
+	(* ram_style = `ZRAM_DISTRIBUTED *) reg [31:0] pbuf [0:63];
 
 	// -- the shift engine: spiflashro's, unchanged ---------------------------
 
@@ -140,8 +153,19 @@ module spiflash_wb #(
 	reg mosi_do;
 	reg sck_do;
 	reg drive;
+`ifdef XC7
+	// Never high-Z on 7-series. SCK goes to STARTUPE2.USRCCLKO, and the
+	// fabric has no internal tri-state, so a 1'bz there is not a
+	// released clock but an unanswerable question to synthesis; idle
+	// low is what SPI mode 0 wants anyway. MOSI is a plain output, as
+	// LiteX drives it: a tri-stated top-level output is an OBUFT, and
+	// this controller is the flash's only master.
+	assign mosi = mosi_do;
+	assign sck = drive ? sck_do : 1'b0;
+`else
 	assign mosi = drive ? mosi_do : 1'bz;
 	assign sck = drive ? sck_do : 1'bz;
+`endif
 
 	// -- the sequencer -----------------------------------------------------------
 
@@ -165,10 +189,38 @@ module spiflash_wb #(
 		S_ID_END   = 5'd16,
 		S_GAP      = 5'd17,
 		S_R_CS     = 5'd18,
-		S_R_CMD    = 5'd19;
+		S_R_CMD    = 5'd19,
+		S_WAKE     = 5'd20,	// xc7 only: reset the flash first
+		S_WAKE_END = 5'd21,
+		S_RSTEN    = 5'd22,
+		S_RSTEN_END = 5'd23,
+		S_RST      = 5'd24,
+		S_RST_END  = 5'd25,
+		S_TRST     = 5'd26;
 
 	reg [4:0] state, after_gap;
 	reg [7:0] gap;
+
+	// -- xc7: reset the flash before the first command --
+	//
+	// The 7-series configuration engine has just read the bitstream out
+	// of this part, and leaves it in a state where commands are not
+	// plain single-SPI commands. Measured on Kirsch (W25Q128) with
+	// tools/kirsch-flashid: the JEDEC ID read correctly over JTAG, and
+	// as garbage from the same bitstream booted from flash; with this
+	// sequence in front of it, correctly both ways.
+	//
+	// 0xFF x4 with CS low clears continuous-read mode bits; Enable
+	// Reset (0x66) and Reset (0x99) then return the part to its
+	// power-on state; tRST is 30us. Once per reset, before the ID read
+	// and before any window read is served.
+	// Compiled only for xc7: on other families the states below are
+	// unreachable, but yosys does not prune them -- measured on Lakritz,
+	// +430 LUT4 / +14 FF for logic that never runs.
+`ifdef XC7
+	reg wake_pending;
+	reg [11:0] trst;
+`endif
 	reg [1:0] op;			// 1 erase, 2 program
 	reg [8:0] bidx;			// page-buffer byte index while programming
 	reg id_pending;
@@ -219,6 +271,10 @@ module spiflash_wb #(
 			id <= 0;
 			op <= 0;
 			id_pending <= 1;		// read the JEDEC ID first thing
+`ifdef XC7
+			wake_pending <= 1;		// ... after resetting the flash
+			trst <= 0;
+`endif
 			wb_dat_o <= 0;
 		end else begin
 
@@ -289,6 +345,11 @@ module spiflash_wb #(
 					ss <= 1;
 					drive <= 0;
 					sck_do <= 0;
+`ifdef XC7
+					if (wake_pending) begin
+						state <= S_WAKE;
+					end else
+`endif
 					if (busy && op != 0) begin
 						state <= S_WREN;
 					end else if (id_pending) begin
@@ -418,6 +479,55 @@ module spiflash_wb #(
 					after_gap <= S_IDLE;
 					state <= S_GAP;
 				end
+
+`ifdef XC7
+				// -- xc7: the flash reset (see wake_pending) -----------------
+				S_WAKE: begin
+					drive <= 1;
+					ss <= 0;
+					buffer <= 32'hffffffff;
+					xfer_bits <= 32;
+					state <= S_WAKE_END;
+				end
+				S_WAKE_END: begin
+					ss <= 1;
+					gap <= GAP;
+					after_gap <= S_RSTEN;
+					state <= S_GAP;
+				end
+				S_RSTEN: begin
+					ss <= 0;
+					buffer[31:24] <= 8'h66;
+					xfer_bits <= 8;
+					state <= S_RSTEN_END;
+				end
+				S_RSTEN_END: begin
+					ss <= 1;
+					gap <= GAP;
+					after_gap <= S_RST;
+					state <= S_GAP;
+				end
+				S_RST: begin
+					ss <= 0;
+					buffer[31:24] <= 8'h99;
+					xfer_bits <= 8;
+					state <= S_RST_END;
+				end
+				S_RST_END: begin
+					ss <= 1;
+					sck_do <= 0;
+					trst <= 0;
+					state <= S_TRST;
+				end
+				S_TRST: begin			// 4096 clocks: 85us at 48MHz
+					trst <= trst + 1;
+					if (&trst) begin
+						wake_pending <= 0;
+						state <= S_IDLE;
+					end
+				end
+
+`endif
 
 				// -- chip select high between commands ---------------------
 				S_GAP: begin

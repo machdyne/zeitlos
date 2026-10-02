@@ -38,7 +38,7 @@
 #      into the bitstream's BRAM).
 #
 #   4. Per target: the gateware, then the flash image assembled from
-#      that plus the shared kernel, logo and archive.
+#      that plus the shared kernel and archive.
 #
 # Between 3 and 5 the pnr log is read for timing. See check_timing().
 #
@@ -486,7 +486,6 @@ def build_target(root, target, version, outdir, software, dry=False,
 
         parts = {
             "gateware": os.path.join(boutput, "soc.bit"),
-            "logo": os.path.join(root, "sw/data/images/zeitlos_fb.bin"),
             "kernel": software["kernel"],
             "apps": software["zar"],
         }

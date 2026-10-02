@@ -604,6 +604,25 @@ module usb_host #(
         for (gi = 0; gi < PORTS; gi = gi + 1) begin : ports
 
 `ifdef SYNTHESIS
+`ifdef XC7
+            // The 7-series equivalents, used the same way: an ODDR with
+            // both halves equal is a single-rate output register in the
+            // pad's OLOGIC, an IDDR's Q1 a rising-edge sample in its
+            // ILOGIC. As with IDDRX1F, the IDDR's input must come
+            // straight from the pin.
+            ODDR #(.DDR_CLK_EDGE("SAME_EDGE"), .INIT(1'b0), .SRTYPE("SYNC"))
+                odp (.Q(q_dp[gi]), .C(wb_clk_i), .CE(1'b1),
+                     .D1(pin_dp[gi]), .D2(pin_dp[gi]), .R(1'b0), .S(1'b0));
+            ODDR #(.DDR_CLK_EDGE("SAME_EDGE"), .INIT(1'b0), .SRTYPE("SYNC"))
+                odm (.Q(q_dm[gi]), .C(wb_clk_i), .CE(1'b1),
+                     .D1(pin_dm[gi]), .D2(pin_dm[gi]), .R(1'b0), .S(1'b0));
+            IDDR #(.DDR_CLK_EDGE("SAME_EDGE"), .INIT_Q1(1'b0), .INIT_Q2(1'b0), .SRTYPE("SYNC"))
+                idp (.Q1(in_dp[gi]), .Q2(), .C(wb_clk_i), .CE(1'b1),
+                     .D(usb_dp[gi]), .R(1'b0), .S(1'b0));
+            IDDR #(.DDR_CLK_EDGE("SAME_EDGE"), .INIT_Q1(1'b0), .INIT_Q2(1'b0), .SRTYPE("SYNC"))
+                idm (.Q1(in_dm[gi]), .Q2(), .C(wb_clk_i), .CE(1'b1),
+                     .D(usb_dm[gi]), .R(1'b0), .S(1'b0));
+`else
             ODDRX1F odp (.D0(pin_dp[gi]), .D1(pin_dp[gi]), .SCLK(wb_clk_i),
                          .RST(1'b0), .Q(q_dp[gi]));
             ODDRX1F odm (.D0(pin_dm[gi]), .D1(pin_dm[gi]), .SCLK(wb_clk_i),
@@ -612,6 +631,7 @@ module usb_host #(
                          .Q0(in_dp[gi]), .Q1());
             IDDRX1F idm (.D(usb_dm[gi]), .SCLK(wb_clk_i), .RST(1'b0),
                          .Q0(in_dm[gi]), .Q1());
+`endif
 `endif
 
             usb_port #(

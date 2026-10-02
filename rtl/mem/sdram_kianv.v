@@ -217,6 +217,59 @@ module sdram_wb #(
   wire clk = wb_clk_i;
   assign sdram_clk = ~clk;
 
+`ifdef XC7
+  // -- 7-series: every output registered IN ITS PIN, as LiteDRAM does --
+  //
+  // openXC7 does no I/O timing analysis, and these pins span both sides
+  // of the die (on the MX1 and Kirsch, CKE is alone on the right). From
+  // fabric flip-flops placed anywhere, a command could reach its pin
+  // after the SDRAM, half a cycle later, has already sampled it -- and
+  // a garbled initialisation leaves the chip never answering. An ODDR
+  // with D1 = D2 is a rising-edge register in the pin's OLOGIC, so the
+  // delay is the silicon's. It is the structure the USB host already
+  // uses on this toolchain (rtl/usb/usb_host.v).
+  //
+  // That delays every output by one clock, all alike, so command,
+  // address, mask and write data stay aligned; the output enable is
+  // delayed to match, and reads wait one cycle longer (RD_EXTRA). CS#
+  // is a constant 0 in this controller and goes straight to its pin.
+  // RAS#/CAS#/WE# start high: at configuration they read as NOP, not
+  // as a command.
+  reg oe_q;
+  always @(posedge clk) oe_q <= oe;
+  wire [15:0] dq_q;
+  wire [12:0] saddr_q;
+  wire [1:0]  dqm_q, ba_q;
+  wire        cke_q, rasn_q, casn_q, wen_q;
+  wire [36:0] sdr_d = { cke, saddr, dqm, ba, command[2:0], dq };
+  wire [36:0] sdr_q;
+  assign { cke_q, saddr_q, dqm_q, ba_q, rasn_q, casn_q, wen_q, dq_q } = sdr_q;
+  genvar oi;
+  generate
+    for (oi = 0; oi < 37; oi = oi + 1) begin : g_out_oddr
+      ODDR #(
+        .DDR_CLK_EDGE("SAME_EDGE"),
+        .INIT((oi >= 16 && oi <= 18) ? 1'b1 : 1'b0),	// RAS#/CAS#/WE#
+        .SRTYPE("SYNC")
+      ) out_oddr (
+        .Q(sdr_q[oi]),
+        .C(clk),
+        .CE(1'b1),
+        .D1(sdr_d[oi]),
+        .D2(sdr_d[oi]),
+        .R(1'b0),
+        .S(1'b0)
+      );
+    end
+  endgenerate
+  assign sdram_cke  = cke_q;
+  assign sdram_addr = saddr_q;
+  assign sdram_dqm  = dqm_q;
+  assign sdram_csn  = command[3];
+  assign {sdram_rasn, sdram_casn, sdram_wen} = {rasn_q, casn_q, wen_q};
+  assign sdram_ba   = ba_q;
+  assign sdram_dq = oe_q ? dq_q : 16'hzzzz;
+`else
   assign sdram_cke  = cke;
   assign sdram_addr = saddr;
   assign sdram_dqm  = dqm;
@@ -224,17 +277,63 @@ module sdram_wb #(
   assign sdram_ba   = ba;
 
   assign sdram_dq = oe ? dq : 16'hzzzz;
+`endif
 
   // -------------------------------------------------
   // Read capture (fallback path uses negedge sampling)
   // -------------------------------------------------
+`ifdef XC7
+  wire [15:0] dq_negedge;
+`else
   reg  [15:0] dq_negedge;
+`endif
   wire [15:0] dq_rd = (READ_NEGEDGE != 0) ? dq_negedge : sdram_dq;
 
+`ifdef XC7
+  // On 7-series the falling-edge capture is done IN EACH PIN'S ILOGIC:
+  // an IDDR in OPPOSITE_EDGE mode, whose Q2 is a register clocked on the
+  // falling edge of C -- the same function as the always block below,
+  // but at the pad, so the delay from pin to register is the silicon's
+  // and not the placer's. As plain fabric flip-flops, nextpnr put all 16
+  // beside one bank (the right-hand side of the XC7A35T on the MX1),
+  // while DQ0-7 enter on the left: their data crossed the die through
+  // unconstrained routing and was sampled before it arrived. The reset
+  // is dropped; dq_negedge is only read during a read burst.
+  genvar dqi;
+  generate
+    for (dqi = 0; dqi < 16; dqi = dqi + 1) begin : g_dq_iddr
+      IDDR #(
+        .DDR_CLK_EDGE("OPPOSITE_EDGE"),
+        .INIT_Q1(1'b0),
+        .INIT_Q2(1'b0),
+        .SRTYPE("SYNC")
+      ) dq_iddr (
+`ifdef SDRAM_CLK90
+        // With the SDRAM clock 90 degrees behind (rtl/sysctl.v), data is
+        // sampled on the RISING edge, as LiteDRAM's GENSDRPHY does: Q1.
+        // It lands in the same controller cycle as the falling-edge
+        // sample did with the 180 degree clock, so the read wait is
+        // unchanged (CL + 1).
+        .Q1(dq_negedge[dqi]),
+        .Q2(),
+`else
+        .Q1(),
+        .Q2(dq_negedge[dqi]),
+`endif
+        .C(clk),
+        .CE(1'b1),
+        .D(sdram_dq[dqi]),
+        .R(1'b0),
+        .S(1'b0)
+      );
+    end
+  endgenerate
+`else
   always @(negedge clk) begin
     if (wb_rst_i) dq_negedge <= 16'h0000;
     else         dq_negedge <= sdram_dq;
   end
+`endif
 
   // -------------------------------------------------
   // FSM
@@ -332,7 +431,12 @@ module sdram_wb #(
   // Four words per burst, always. A master must not start a burst it
   // will not take four beats of; wb_cache only bursts lines that are
   // a multiple of four words, and an 8-word line is simply two bursts.
-  localparam integer BR_LAT = 1 + CAS_LATENCY + READ_EXTRA_CYC;
+`ifdef XC7
+  localparam integer RD_EXTRA = READ_EXTRA_CYC + 1;	// outputs registered in the pins
+`else
+  localparam integer RD_EXTRA = READ_EXTRA_CYC;
+`endif
+  localparam integer BR_LAT = 1 + CAS_LATENCY + RD_EXTRA;
 
   wire burst_req = (BURST != 0) && (wb_cti_i == 3'b010) && !is_write &&
                    (wb_adr_i[3:0] == 4'h0);
@@ -615,7 +719,7 @@ module sdram_wb #(
         if (KEEP_OPEN != 0) saddr_nxt = col_ko; // A10=0 keep open
         else                saddr_nxt = col_ap; // A10=1 auto-precharge
 
-        wait_cnt_nxt  = CAS_LATENCY + READ_EXTRA_CYC;
+        wait_cnt_nxt  = CAS_LATENCY + RD_EXTRA;
         ret_state_nxt = READ_L;
         state_nxt     = WAIT_STATE;
       end

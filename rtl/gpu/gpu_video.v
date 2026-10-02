@@ -215,6 +215,23 @@ module gpu_video #(
 	output vsync,
 
 	output [3:0] dvi_p,
+`ifdef XC7
+	// The negative halves of the TMDS pairs.
+	//
+	// Only on 7-series, and that is a difference in how the two
+	// families express a differential output rather than a difference
+	// in what comes out of the connector. ECP5 does it with ONE port
+	// constrained as LVCMOS33D: the .lpf names the P ball and the tool
+	// drives the adjacent N ball for you, so a second port would have
+	// nothing to attach to. Xilinx does it with an explicit OBUFDS
+	// having two pins, so the port has to exist.
+	//
+	// BOTH halves must be constrained in the XDC: nextpnr-xilinx places
+	// an unconstrained N port wherever it likes, and then refuses an
+	// OBUFDS whose N side landed on a master pin. See
+	// boards/sergei_mx1.xdc.
+	output [3:0] dvi_n,
+`endif
 
 	output [3:0] dac,
 
@@ -345,10 +362,53 @@ module gpu_video #(
 		 video_mode_active == GPU_MODE_GREEN) ? 8'b0 :
 			{pset, 7'b0};
 
+	// -- Serialiser output stage --
+	//
+	// Ten TMDS bits per pixel leave at 2 per bclk. The 10:1 shifting is
+	// done in fabric above (see gpu_ddmi.v's DDR_ENABLED), so all this
+	// stage has to do is put two bits per clock onto a pin, and bclk is
+	// exactly 5 * pclk for that reason.
+	//
+	// DELIBERATELY NOT OSERDESE2 on 7-series. That primitive would do
+	// the full 10:1 itself and free the fabric shifter -- but it is
+	// cascaded master/slave for widths above 8, it is the part of
+	// nextpnr-xilinx's support that has moved most recently, and none of
+	// that buys anything here: the shifter already exists, already
+	// works on two other families, and costs a handful of registers. A
+	// 2:1 DDR output is the smallest thing that can work and the same
+	// shape as what ECP5 does.
+`ifdef XC7
+	// D1 goes out on the rising edge and D2 on the falling one, which
+	// is ODDRX1F's D0 and D1 respectively. SAME_EDGE means both are
+	// presented on the rising edge of bclk, so the fabric feeding this
+	// is a plain single-edge design.
+	wire [3:0] ddr_q;
+
+	ODDR #(.DDR_CLK_EDGE("SAME_EDGE"), .INIT(1'b0), .SRTYPE("SYNC"))
+		ddr0_clock (.Q(ddr_q[3]), .C(bclk), .CE(1'b1),
+			.D1(out_tmds_clk[0]),   .D2(out_tmds_clk[1]),   .R(1'b0), .S(1'b0));
+	ODDR #(.DDR_CLK_EDGE("SAME_EDGE"), .INIT(1'b0), .SRTYPE("SYNC"))
+		ddr0_red   (.Q(ddr_q[2]), .C(bclk), .CE(1'b1),
+			.D1(out_tmds_red[0]),   .D2(out_tmds_red[1]),   .R(1'b0), .S(1'b0));
+	ODDR #(.DDR_CLK_EDGE("SAME_EDGE"), .INIT(1'b0), .SRTYPE("SYNC"))
+		ddr0_green (.Q(ddr_q[1]), .C(bclk), .CE(1'b1),
+			.D1(out_tmds_green[0]), .D2(out_tmds_green[1]), .R(1'b0), .S(1'b0));
+	ODDR #(.DDR_CLK_EDGE("SAME_EDGE"), .INIT(1'b0), .SRTYPE("SYNC"))
+		ddr0_blue  (.Q(ddr_q[0]), .C(bclk), .CE(1'b1),
+			.D1(out_tmds_blue[0]),  .D2(out_tmds_blue[1]),  .R(1'b0), .S(1'b0));
+
+	// One OBUFDS per lane. The IOSTANDARD (TMDS_33) comes from the XDC;
+	// this only says the output is differential.
+	OBUFDS obufds_clock (.I(ddr_q[3]), .O(dvi_p[3]), .OB(dvi_n[3]));
+	OBUFDS obufds_red   (.I(ddr_q[2]), .O(dvi_p[2]), .OB(dvi_n[2]));
+	OBUFDS obufds_green (.I(ddr_q[1]), .O(dvi_p[1]), .OB(dvi_n[1]));
+	OBUFDS obufds_blue  (.I(ddr_q[0]), .O(dvi_p[0]), .OB(dvi_n[0]));
+`else
 	ODDRX1F ddr0_clock (.D0(out_tmds_clk   [0] ), .D1(out_tmds_clk   [1] ), .Q(dvi_p[3]), .SCLK(bclk), .RST(0));
 	ODDRX1F ddr0_red   (.D0(out_tmds_red   [0] ), .D1(out_tmds_red   [1] ), .Q(dvi_p[2]), .SCLK(bclk), .RST(0));
 	ODDRX1F ddr0_green (.D0(out_tmds_green [0] ), .D1(out_tmds_green [1] ), .Q(dvi_p[1]), .SCLK(bclk), .RST(0));
 	ODDRX1F ddr0_blue  (.D0(out_tmds_blue  [0] ), .D1(out_tmds_blue  [1] ), .Q(dvi_p[0]), .SCLK(bclk), .RST(0));
+`endif
 
 	gpu_ddmi #() gpu_ddmi_i
 	(

@@ -102,8 +102,12 @@ void k_kv_init(void) {
 	kv_size_known = size != 0;
 	if (!size) size = Z_KV_DEFAULT_FLASH_SIZE;
 	if (size > Z_KV_FLASH_MAX) size = Z_KV_FLASH_MAX;
+	// The store is the tail of the Zeitlos region (zsoc.h), not of the
+	// chip. The span is only for k_kv_overlaps()' aliasing check, so an
+	// assumed size that would not even hold the region is raised to.
+	kv_base = z_flash_base() + Z_FLASH_KV_OFF;
+	if (size < kv_base + Z_KV_SIZE) size = kv_base + Z_KV_SIZE;
 	kv_span = size;
-	kv_base = size - Z_KV_SIZE;
 
 	printf(" - kv: store at 0x%06lx", (unsigned long)kv_base);
 	if (!kv_size_known)

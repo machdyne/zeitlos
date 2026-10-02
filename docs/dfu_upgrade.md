@@ -17,8 +17,7 @@ BOOTPART   0x000000 – 0x0FFFFF   1024 KB   the bootloader itself
 USERPART   0x100000 – 0x1FFFFF   1024 KB   your gateware
 ```
 
-Zeitlos is 1303 KB — gateware, kernel, boot splash and the core
-applications. It does not fit in 1024 KB, and no amount of trimming
+Zeitlos is 1303 KB — gateware, kernel and the core applications. It does not fit in 1024 KB, and no amount of trimming
 gets it there while keeping a system that boots to a desktop without
 an sdcard.
 
@@ -312,23 +311,24 @@ sectors.
 Two things make the number worth thinking about rather than rounding.
 
 **The user partition has to fit Zeitlos with room to spare.** Zeitlos
-is 1303 KB today, and the pieces sit at fixed offsets — the boot
-splash at `0x0F0000`, the kernel at `0x100000`, the applications at
-`0x140000`. Those are the same offsets whether you flash over JTAG or
+is 1303 KB today, and the pieces sit at fixed offsets — the kernel at
+`0x100000`, the applications at `0x140000` (the Zeitlos region, at its
+ECP5 base: [boot.md](boot.md#the-flash-layout)). Those are the same offsets whether you flash over JTAG or
 over USB, which is why upgrading the bootloader changes nothing about
 Zeitlos itself. What moving `USERPART_START` does change is how much
-room the gateware has before it runs into the splash: (On boards with a jumploader -- `docs/zboot.md` section 5 -- there is also
+room the gateware has before it runs into the kernel: (On boards with a jumploader -- `docs/zboot.md` section 5 -- there is also
 one at `0x1D0000`, inside the same user partition, so a DFU user image
 runs to the end of the jumploader.)
 
 ```
-  BOOTPART 256 KB   gateware gets 704 KB   uses 481 KB   46% spare
-  BOOTPART 384 KB   gateware gets 576 KB   uses 481 KB   19% spare
-  BOOTPART 512 KB   gateware gets 448 KB   uses 481 KB   does not fit
+  BOOTPART 256 KB   gateware gets 768 KB   uses 481 KB   60% spare
+  BOOTPART 384 KB   gateware gets 640 KB   uses 481 KB   33% spare
+  BOOTPART 512 KB   gateware gets 512 KB   uses 481 KB    6% spare
 ```
 
-At 512 KB the gateware would collide with the splash and the layout
-would have to be rearranged. At 256 KB nothing has to move at all.
+At 512 KB it fits, but only just. (These were 64 KB tighter while a
+boot logo sat below the kernel; it has gone.) At 256 KB nothing has to
+move at all.
 
 **`ecppack --compress` is load-bearing.** An ECP5-25F bitstream is
 7,468 frames of 696 bits — about **676 KB uncompressed**, whatever the

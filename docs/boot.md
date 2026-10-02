@@ -17,10 +17,14 @@ gateware  ->  BIOS (BRAM)  ->  kernel (flash -> RAM)  ->  sh()  ->  init()  ->  
 ```
 
 1. **BIOS** (`sw/bios/bios.c`) runs from block RAM baked into the
-   bitstream. It draws the boot splash, then `memcpy()`s the kernel
-   from flash into main memory (`load_zeitlos()`). A keypress during
-   its `AUTOLOAD_CNT` window drops you at the BIOS monitor instead.
-2. **Kernel** (`sw/os/kernel.c`) redraws the splash, brings up UART,
+   bitstream. It clears the framebuffer, then `memcpy()`s the kernel
+   from the start of the Zeitlos flash region into main memory
+   (`load_zeitlos()`, which prints the region's address). A keypress
+   during its `AUTOLOAD_CNT` window drops you at the BIOS monitor
+   instead. If the kernel's first word reads as all ones or all zeros
+   -- erased flash, or a flash reader that is not working -- it prints
+   `no kernel` and stays at the monitor rather than jumping into it.
+2. **Kernel** (`sw/os/kernel.c`) brings up UART,
    HID and the memory pool, registers itself as pid 0, and calls
    `sh()`.
 3. **`sh()`** (`sw/os/sh.c`) mounts the filesystem, **loads
@@ -45,7 +49,7 @@ gateware  ->  BIOS (BRAM)  ->  kernel (flash -> RAM)  ->  sh()  ->  init()  ->  
    registers **`init0`**. `term` is launched on demand from wm's
    dock, and the shells on demand from term's buttons
    ([terminal.md](terminal.md), "Starting the shells"). `wm`'s startup
-   `clear_screen()` is what wipes the splash.
+   `clear_screen()` replaces the boot screen.
 
    Each app is resolved independently: filesystem first, flash
    underneath, and the source is printed (`init: wm (flash)`).
@@ -99,71 +103,69 @@ FIFO from what you typed at the BIOS prompt, or line noise, would
 otherwise silently drop you at a bare shell wondering where your
 desktop went. Held ESC works fine -- key repeat sends repeated `0x1b`.
 
-## The splash lives in flash
+## The flash layout
 
-The logo used to be a compiled-in `const uint8_t[24576]`
-(`sw/os/logo_data.c`). Because `k_proc_create()` sizes a process's
-memory block from its image, that cost **24KB of the 1MB main-memory
-budget permanently**, for something displayed once for a couple of
-seconds. On the minimum-spec board that was the difference between
-fitting a second `term` and not.
+**Zeitlos uses exactly 1 MB of the configuration flash, on every
+board.** That megabyte is the *Zeitlos region*. Everything outside it --
+the gateware below it, and anything above it on a larger chip --
+belongs to the gateware or to whatever else the board wants, and
+Zeitlos never reads or writes it.
 
-Flash is memory-mapped on this SOC -- the BIOS's `load_zeitlos()` is a
-plain `memcpy()` out of `ROM_OS_ADDR` -- so the splash needs no RAM at
-all. It's read straight from flash into VRAM.
+Inside the region the layout is fixed:
 
-| | offset | size |
+| Offset in the region | Size | Contents |
 |---|---|---|
-| gateware | `0x000000` | ~400KB (varies by board) |
-| **logo** | **`0x0F0000`** | **38,400 bytes** |
-| kernel | `0x100000` | 256KB |
+| `+0x000000` | 256 KB | kernel |
+| `+0x040000` | 576 KB | core apps, the ZAR ([flash_apps.md](flash_apps.md)) |
+| `+0x0D0000` | 184 KB | the jumploader, on ECP5 boards that use one ([zboot.md](zboot.md)) |
+| `+0x0FC000` | 4 KB | the `flashtest` sector ([spiflash.md](spiflash.md)) |
+| `+0x0FE000` | 8 KB | the key/value store ([kvstore.md](kvstore.md)) |
 
-The flashed artifact is `sw/data/images/zeitlos_fb.bin`: a full 640x480
-1bpp framebuffer image, pre-centred and pre-padded from the 512x384
-`zeitlos.bin` by `sw/data/images/pad_logo.py`. Doing the centring once,
-at build time, is what lets both the BIOS and the kernel display it
-with a **single flat `memcpy`** instead of a row-by-row copy with
-per-row offset arithmetic -- which matters in the BIOS, where the
-budget is measured in bytes against `BRAM_WORDS`. It also means the
-splash clears VRAM rather than leaving a border of reset garbage around
-the logo.
+Where the region starts -- its **base** -- is a property of the board,
+because it has to clear that board's gateware:
 
-Polarity is baked in the same way: `pad_logo.py --invert` flips every
-bit at build time. If the splash ever shows with foreground and
-background swapped, regenerate the image rather than changing any C.
+| Boards | Base | Region | Why |
+|---|---|---|---|
+| ECP5 (Lakritz, Obst, Mozart/Sergei ML1/ML2, ULX3S) | `0x100000` | `0x100000`-`0x1FFFFF` | where it has always been: every address is unchanged |
+| Artix-7 (Sergei/Mozart MX1, Kirsch) | `0x300000` | `0x300000`-`0x3FFFFF` | an XC7A35T bitstream is a fixed 2.09 MB |
 
-```
-make flash_logo
-cd sw/data/images && python3 pad_logo.py zeitlos.bin zeitlos_fb.bin
-```
+On a 2 MB ECP5 board and on the 4 MB MX1, the region is the top
+megabyte of the chip, so the key/value store is the last 8 KB of the
+chip on both. On larger parts everything above the region is free.
 
-`flash_logo` is part of the full `make flash` chain. There is no
-is-it-programmed check anywhere: the logo is flashed alongside the
-gateware and kernel, so a board that can boot at all has it.
+### How software finds it
 
-**The offset appears in three places** -- `Z_BOOT_LOGO_FLASH_OFFSET`
-(`sw/os/logo.h`), `ROM_LOGO_ADDR` (`sw/bios/bios.c`), and
-`LOGO_FLASH_OFFSET_HEX`/`_DEC` (top-level `Makefile`) -- with no
-build-time link between them, because all three live in separately
-built artifacts: the BIOS is baked into the bitstream's BRAM, the
-kernel is a flashed binary, and the Makefile drives an external
-flashing tool. A mismatch shows up only as a missing or garbled splash.
+The base is reported by **`rtl/csrs.v` word 63** (`0x7000_00FC`,
+[csrs.md](csrs.md)), set from `` `FLASH_BASE `` in the board's
+`rtl/boards.vh` block, and read at run time by the BIOS
+(`flash_base()`) and the kernel (`z_flash_base()`, `sw/common/zsoc.h`).
+**Zero means the default base, `0x100000`**: the ECP5 boards do not
+build the register at all (it costs ~390 LUTs), and a bitstream from
+before it existed still boots. Zero can never be a real base -- the
+gateware itself starts at offset 0.
 
-### Why you may barely see it
+So **one kernel binary runs on every board**. Nothing compiled into
+the kernel or the core apps may contain an absolute flash address for
+anything in the region; only offsets into it (`Z_FLASH_*_OFF`).
 
-The splash is up from the moment the BIOS draws it until `wm`'s
-`clear_screen()`. On a monitor that takes a second or two to sync,
-most of that window is gone before anything is visible. Drawing it
-earlier (the BIOS, rather than only the kernel) can only ever make the
-visible window longer, never shorter -- if it seems to vary between
-boots, that's monitor sync variance, not the software.
+The base is stated twice, because two different things need it: in
+`rtl/boards.vh` for the running system, and as `FLASH_BASE` in the
+board's Makefile block for the flashing commands (`make flash_os`
+writes the kernel at `FLASH_BASE`, `flash_apps` the ZAR at
+`FLASH_BASE + 0x040000`). The two must agree. `release/lib/layout.py`
+cross-checks every offset in the region between `zsoc.h`, the BIOS,
+`zar.h` and the Makefile (`release/zrelease layout`).
 
-The init-cancel window above adds 500ms to every boot, which is 500ms
-more splash time as a side effect. If you want more than that, the
-lever is a **minimum splash time**: a floor in `sh()` before `init()`
-runs, costing nothing when boot already took longer. Don't put that
-wait inside `wm` before `clear_screen()` -- `wm` would stop servicing
-messages during it, and `term`'s `z_win_create()` has a timeout.
+### No boot logo
+
+There used to be a 38 KB boot splash, flashed just below the kernel
+and copied into VRAM by the BIOS and again by the kernel. It is gone:
+it did not fit the one-megabyte model on ECP5 (with it, the region
+would have been 1 MB + 64 KB), and the hardware already provides a
+sign of life -- the cursor overlay comes out of reset as the busy `Z`,
+centred on the screen (`rtl/usb/usb_hid_compat.v`, `rtl/socctl.v`). The
+BIOS clears VRAM so it sits on a black screen, which the splash used to
+do as a side effect. The info app keeps its own small logo.
 
 ## What the boot log tells you
 

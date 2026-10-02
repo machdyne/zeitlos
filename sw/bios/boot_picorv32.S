@@ -199,8 +199,18 @@ start:
 	addi x31, zero, 0
 
 	/* set stack pointer to end of BRAM */
-	lui sp, %hi(8192)
-	addi sp, sp, %lo(8192)
+	// Stack at the top of the BIOS block RAM, whose size the build
+	// passes in (BRAM_BYTES; 8 KB by default -- see the top-level
+	// Makefile's BRAM_WORDS). The image grows up from 0 and the stack
+	// down from here, with nothing to stop them meeting: a BIOS that
+	// fills an 8 KB RAM leaves its stack a few hundred bytes, and when
+	// the two meet a return address is overwritten and the BIOS prints
+	// one value forever.
+#ifndef BRAM_BYTES
+#define BRAM_BYTES 8192
+#endif
+	lui sp, %hi(BRAM_BYTES)
+	addi sp, sp, %lo(BRAM_BYTES)
 
 	/* call bios main */
 	jal ra, main

@@ -2274,7 +2274,7 @@ void sh_help(void) {
 	printf(" reboot            reconfigure the FPGA, after syncing files\n");
 	printf(" jump [addr]       the jumploader; with a hex address, boot from it\n");
 	printf(" flash             the flash: ID, size, lock, status\n");
-	printf(" flashtest         test erase/program on sector 0x1FC000\n");
+	printf(" flashtest         test erase/program on the flash test sector\n");
 	printf(" kv [get|set|del|compact|test] ...  the flash key/value store\n");
 	printf(" passwd [reset]    set, change or remove the password\n");
 	printf(" lock              lock the screen (and the console, if set to)\n");
@@ -2368,7 +2368,10 @@ static void sh_flash_info(void) {
  * 45F one ends at 0x1F7BE9). On a larger flash this is inside an 85F
  * jumploader -- which is what the blank-or-ours check below is for, as
  * it was at the old 0x1FF000. */
-#define FT_SECTOR 0x1FC000u
+// Inside the Zeitlos region (zsoc.h), just below the key/value store --
+// never an absolute address: at 0x1FC000 this sector is inside the
+// gateware on an Artix-7 board.
+#define FT_SECTOR (z_flash_base() + Z_FLASH_TEST_OFF)
 #define FT_SIG    "ZFLASHTEST"
 
 static volatile const uint8_t *ft_win(uint32_t off) {

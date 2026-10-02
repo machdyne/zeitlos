@@ -239,7 +239,7 @@ So:
 
 | | |
 |---|---|
-| flash layout | kernel at `0x100000`, 256KB, core-app archive (`Z_ZAR_FLASH_OFFSET`) immediately after at `0x140000`; the ZAR's room ends at `0x1D0000`, where the jumploader is (`docs/zboot.md` section 5) |
+| flash layout | the 1 MB Zeitlos region at the base `rtl/csrs.v` word 63 reports (`z_flash_base()`; `0x100000` on ECP5, `0x300000` on Artix-7): kernel at `+0`, 256KB, core-app archive (`Z_ZAR_FLASH_OFFSET`) immediately after at `+0x40000`, room to `+0xD0000` (the jumploader on ECP5, `docs/zboot.md` section 5), the key/value store in the last 8 KB. `docs/boot.md`, "The flash layout" |
 | the limit | `_end` must be under 256KB |
 | what spends it | text, data, **and every static array in the kernel** |
 | failure mode | the BIOS truncates; the kernel boots and then misbehaves |
@@ -617,7 +617,7 @@ and no core app is launched from flash while one is open. Nothing below
 The serial shell has `flash` (ID, size, lock, status) and `flashtest`
 (the on-board test). `docs/spiflash.md`.
 
-The last 8 KB of the chip is the kernel's own: the **key/value store**
+The last 8 KB of the Zeitlos region is the kernel's own: the **key/value store**
 (`sw/os/kvstore.c`, `sw/os/kvlog.c`; apps use `sw/common/zkv.h`), a few
 KB of settings that must exist with no sdcard. `Z_SYS_FLASH` refuses to
 touch it. Writes are serialised by a lock that a dying process releases

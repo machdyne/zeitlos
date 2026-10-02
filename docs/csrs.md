@@ -56,7 +56,8 @@ in `rtl/sysctl.v`'s address decode at the time this was added --
 | `0x04` | `MEM_MB`   | Total main RAM, in megabytes, from `rtl/boards.vh`'s `` `MEM ``. |
 | `0x08` | `FEATURES` | Bitmask of which optional peripherals this build actually has -- see below. |
 | `0x0c` | `FEATURES2` | `{16'h5A46, features2[15:0]}` -- the continuation of `FEATURES`, which filled up. See below. |
-| `0x10`-`0x1c` | | Reserved for `FEATURES3` and onward. Read 0. Don't put anything else here. |
+| `0x10`-`0xf8` | | Reserved. `FEATURES3` and onward grow **up** from word 4 (`0x10`); board variables -- whole-word values, like `FLASH_BASE` -- grow **down** from word 62. Read 0. |
+| `0xfc` | `FLASH_BASE` | Word 63. The byte offset in the SPI flash where the 1 MB Zeitlos region starts ([boot.md](boot.md#the-flash-layout)). Built only when `rtl/boards.vh` sets `` `FLASH_BASE `` -- the Artix-7 boards, `0x300000`. **0 means the default, `0x100000`**: the ECP5 boards leave it out, and a bitstream from before it existed still boots. Read it with `z_flash_base()` (`sw/common/zsoc.h`). |
 
 Read-only, no side effects -- `rtl/csrs.v` is a handful of constants
 behind one registered read, same "keep it simple" spirit as
@@ -333,3 +334,27 @@ Lebkuchen's main-memory backend (`MEM_QQSPI`) is itself still
 commented out in that board's block, so it has no working main memory
 configured at all yet independent of this. Update both once real
 numbers are known.
+
+## `FLASH_BASE` (word 63)
+
+Where the Zeitlos flash region starts, so that **one kernel binary**
+finds its core apps, key/value store and test sector on every board
+([boot.md](boot.md#the-flash-layout)). The BIOS reads it too
+(`flash_base()` in `sw/bios/bios.c`), to load the kernel from the
+region's start.
+
+It sits at the far end of the block on purpose: the feature words grow
+up from word 4 and board variables grow down from word 62, so neither
+runs into the other until both have run out.
+
+It is the one register here behind an `` `ifdef ``, and that is a
+measured decision, not tidiness. The read mux's arm for word 63 is a
+full 32-bit compare, and yosys does not fold it away when the value is
+zero -- on Lakritz it cost ~390 LUT4 for a register reading 0. So the
+arm is built only where `` `FLASH_BASE `` is defined, and everywhere
+else word 63 reads 0 through the default arm -- which software takes to
+mean the default base. Zero can never be a real base: the gateware
+starts at flash offset 0.
+
+`` `FLASH_BASE `` must agree with the board's `FLASH_BASE` in the top-level
+Makefile, which places the kernel and core apps when flashing.

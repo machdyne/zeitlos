@@ -802,6 +802,140 @@
 //`define GPIO_PORT0
 //`define GPIO_PORT0_NARROW
 
+`elsif BOARD_SERGEI_MX1
+
+// Sechzig MX1 (Artix-7 XC7A35T, 32 MB SDRAM, 4 MB flash) in a Sergei
+// carrier: the Sergei ML1 board with an Artix-7 module. Pins:
+// boards/sergei_mx1.xdc.
+`define FPGA_XC7
+`define OSC48
+
+// Zeitlos's 1 MB of flash starts at 3 MB (docs/boot.md): the
+// bitstream is a fixed 2.09 MB on this die. Reported to software by
+// rtl/csrs.v word 63. KEEP IN SYNC with FLASH_BASE in the Makefile.
+`define FLASH_BASE 32'h0030_0000
+// No software write below the end of the bitstream (rtl/spiflash.v).
+`define SPIFLASH_LOCK_END 24'h220000
+
+// Workarounds for the open Artix-7 toolchain, both found on Kirsch
+// (docs/toolchain.md): the TRNG's ring oscillators do not route, and
+// the DSP48E1 behind the fast multiplier hangs the CPU's PCPI
+// handshake. Multiplication stays in hardware -- `CPU_MUL is the
+// sequential multiplier -- so software is unchanged.
+`define NO_TRNG
+`define NO_CPU_MUL_FAST
+
+// Bring-up: the board LED shows how far the SOC got (rtl/sysctl.v).
+`define BRINGUP_LED_STATUS
+
+// The SDRAM clock 90 degrees behind sys_clk, both from one MMCM, with
+// rising-edge read capture -- LiteX's arrangement (rtl/sysctl.v).
+`define SDRAM_CLK90
+
+`define MEM 32
+`define MEM_SDRAM
+`define MEM_VRAM
+`define MEM_ROM
+`define MEM_GLYPH
+
+// First bring-up: no instruction or data cache, and no MONTMUL (it
+// multiplies, i.e. DSP48E1s). Each is one line to turn back on once
+// the board boots -- the ML1 module has ICACHE_KB 8 / DCACHE_KB 4 /
+// DCACHE_WBUF 2 / SDRAM_BURST / MONTMUL.
+//`define ICACHE
+//`define ICACHE_KB 8
+//`define ICACHE_LINE_WORDS 4
+//`define DCACHE
+//`define DCACHE_KB 4
+//`define DCACHE_LINE_WORDS 4
+//`define DCACHE_WBUF 2
+//`define SDRAM_BURST
+//`define MONTMUL
+
+`define GPU
+`define GPU_RASTER
+`define GPU_BLIT
+`define GPU_CURSOR
+`define GPU_DDMI
+// The console: UART0 on the module's UART_TX/UART_RX (L2/L3), which
+// the carrier's RP2040 bridges to USB -- the same dirtyJtag that
+// programs the board. (Not XC/XD: those reach the RP2040 too, unused.)
+`define UART0
+`define USB_HOST
+`define SPI_SDCARD
+`define ETH_RMII
+`define ETH_RX_SLOTS 4
+`define AUDIO
+`define AUDIO_MIXER
+`define ETH_RMII_DRIVE_REFCLK
+`define AUDIO_SPDIF
+`define AUDIO_RATE_RESET 8'd16
+
+`elsif BOARD_MOZART_MX1
+
+// The same module in a Mozart carrier. Pins: boards/mozart_mx1.xdc.
+`define FPGA_XC7
+`define OSC48
+
+// Zeitlos's 1 MB of flash starts at 3 MB (docs/boot.md): the
+// bitstream is a fixed 2.09 MB on this die. Reported to software by
+// rtl/csrs.v word 63. KEEP IN SYNC with FLASH_BASE in the Makefile.
+`define FLASH_BASE 32'h0030_0000
+// No software write below the end of the bitstream (rtl/spiflash.v).
+`define SPIFLASH_LOCK_END 24'h220000
+
+// Workarounds for the open Artix-7 toolchain, both found on Kirsch
+// (docs/toolchain.md): the TRNG's ring oscillators do not route, and
+// the DSP48E1 behind the fast multiplier hangs the CPU's PCPI
+// handshake. Multiplication stays in hardware -- `CPU_MUL is the
+// sequential multiplier -- so software is unchanged.
+`define NO_TRNG
+`define NO_CPU_MUL_FAST
+
+// Bring-up: the board LED shows how far the SOC got (rtl/sysctl.v).
+`define BRINGUP_LED_STATUS
+
+// The SDRAM clock 90 degrees behind sys_clk, both from one MMCM, with
+// rising-edge read capture -- LiteX's arrangement (rtl/sysctl.v).
+`define SDRAM_CLK90
+
+`define MEM 32
+`define MEM_SDRAM
+`define MEM_VRAM
+`define MEM_ROM
+`define MEM_GLYPH
+
+// First bring-up: no instruction or data cache, and no MONTMUL (it
+// multiplies, i.e. DSP48E1s). Each is one line to turn back on once
+// the board boots -- the ML1 module has ICACHE_KB 8 / DCACHE_KB 4 /
+// DCACHE_WBUF 2 / SDRAM_BURST / MONTMUL.
+//`define ICACHE
+//`define ICACHE_KB 8
+//`define ICACHE_LINE_WORDS 4
+//`define DCACHE
+//`define DCACHE_KB 4
+//`define DCACHE_LINE_WORDS 4
+//`define DCACHE_WBUF 2
+//`define SDRAM_BURST
+//`define MONTMUL
+
+`define GPU
+`define GPU_RASTER
+`define GPU_BLIT
+`define GPU_CURSOR
+`define GPU_DDMI
+// The console: UART0 on the module's UART_TX/UART_RX (L2/L3), which
+// the carrier's RP2040 bridges to USB -- the same dirtyJtag that
+// programs the board. (Not XC/XD: those reach the RP2040 too, unused.)
+`define UART0
+`define USB_HOST
+`define SPI_SDCARD
+`define ETH_RMII
+`define ETH_RX_SLOTS 4
+`define AUDIO
+`define AUDIO_MIXER
+`define AUDIO_PT8211
+
 `elsif BOARD_SERGEI_ML2
 
 // Sergei with the Sechzig ML2 module: Sergei ML1's carrier choices, with
@@ -1016,6 +1150,18 @@
 // change somebody actually wants to make.
 `ifdef USB_CDC
 `undef UART0
+`endif
+
+// A board opting OUT of a universal feature, for a toolchain that
+// cannot yet build it (the Artix-7 boards: see their blocks). Software
+// copes as it does on any board without the feature -- the FEATURES
+// bit is clear -- so nothing else changes. A board that sets one of
+// these has an open bug.
+`ifdef NO_TRNG
+`undef TRNG
+`endif
+`ifdef NO_CPU_MUL_FAST
+`undef CPU_MUL_FAST
 `endif
 
 `endif

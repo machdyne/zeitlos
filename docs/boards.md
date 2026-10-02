@@ -155,6 +155,104 @@ The 616e152 column was measured with a different Yosys and nextpnr, so
 a change of a few percent in fmax between the columns is not evidence
 about the design.
 
+## Artix-7 boards (Sechzig MX1)
+
+`sergei_mx1` and `mozart_mx1` are the Sechzig MX1 compute module --
+Artix-7 XC7A35T-FTG256, 32 MB SDRAM (W9825G6KH-6), 4 MB flash
+(W25Q32JV, JEDEC `EF 40 16`) -- in a Sergei or Mozart carrier: the ML1
+boards with an Artix-7 module. Built with openXC7 1.x
+([toolchain.md](toolchain.md)).
+
+### Status: partial -- the BIOS runs, the SDRAM does not answer
+
+Tested on a sergei_mx1 with openXC7 1.x (nextpnr `c68c1358`); mozart_mx1
+builds but has not been on hardware.
+
+**Working:** configuration from flash and over JTAG; the MMCMs lock; the
+CPU and the BIOS run from block RAM; the console at 1 Mbaud; CSR word
+63 (the BIOS reports the Zeitlos region at `0x10300000`); the video
+output (the hardware cursor shows on a monitor).
+
+**Not working: the SDRAM.** Every read returns what looks like a
+floating bus -- the same few bit patterns at every address, echoing the
+last value written -- and the BIOS memory test fails on its first word,
+so the kernel cannot be loaded. Ruled out so far:
+
+- **The pins.** All 39 SDRAM signals traced from the chip's own pins to
+  FPGA balls on the MX1 PCB; they match the XDC, and they match LiteX's
+  `machdyne_mozart_mx1.py` platform, under which (built with Vivado)
+  this module's SDRAM works.
+- **The bitstream's pin configuration.** From the FASM: all 54 pins of a
+  build have the right direction; the SDRAM clock's ODDR is fed the
+  intended values; the data pins' tristate is present and not
+  inverted.
+- **The controller.** `rtl/mem/sdram_kianv.v` is the controller every
+  SDRAM board in the tree uses with this chip; its non-burst read path
+  is unchanged from the version that passed the BIOS memory test on
+  Kirsch (the same module wiring) under openXC7 0.9.
+- **I/O timing**, which openXC7 does not analyse. The interface now has
+  LiteDRAM `GENSDRPHY`'s structure, none of which changed the result:
+  every output registered in its pin (ODDR, D1 = D2), read data captured
+  in each pin's IDDR, and the SDRAM clock 90 degrees behind `sys_clk`,
+  both from one MMCM (`SDRAM_CLK90`, below).
+
+The SDRAM is therefore the open question for this board, and the prime
+suspect is how openXC7 1.x builds the interface.
+
+**`BRINGUP_LED_STATUS`** is on for these boards: the module LED shows
+how far the SOC got, in hardware, independent of software -- fast blink
+(~6 Hz) MMCMs not locked, solid CPU trapped, slow blink (~1 Hz) CPU
+running, static CPU stalled on a bus cycle. Software cannot drive the
+LED while it is set.
+
+### What differs from the ML1 boards
+
+- **Pins.** `boards/sergei_mx1.xdc` and `boards/mozart_mx1.xdc` are
+  generated from the netlist's ports, `boards/<carrier>_ml1.lpf` and the
+  ML1 and MX1 schematics (github.com/machdyne/sechzig, `pcb/ml1_v2` and
+  `pcb/mx1_v1`). Banks 14, 15 and 35 are 3.3 V on the MX1; bank 34,
+  used only by the experimental DS link, is 2.5 V.
+- **The console** is `UART0` on the module's own `UART_TX`/`UART_RX`
+  (L2/L3), bridged to USB by the carrier's RP2040, which runs the same
+  dirtyJtag firmware that programs the board. The ML1 constraint files
+  put `UART0` on the `XA`-`XD` link instead; those pins reach the
+  RP2040 too, but its firmware does not use them. Neither carrier
+  connects the module's USB device pins; Sergei uses `USBD_P` (B2) for
+  S/PDIF.
+- **Clocks.** `SYS_CLK48` (F5) comes from the same RP2040. With
+  `SDRAM_CLK90` (set on these boards) it feeds only the MMCMs: `sys_clk`
+  and the SDRAM clock, 90 degrees behind it, are both outputs of one
+  MMCM, as LiteX's `sys` and `sys_ps` are. The MMCMs are held in reset
+  for 1024 input clocks after configuration, so they start on a running
+  clock however late the RP2040 provides it.
+- **Reset.** `SYS_RST_N` goes to the Artix-7's PROGRAM_B (L9): the
+  carrier's reset reconfigures the FPGA, and the gateware cannot drive
+  it, so there is no `PROGRAMN_PIN` and no jumploader.
+- **Flash.** The Zeitlos region is at `0x300000`, the top megabyte of
+  the 4 MB part, because the bitstream is a fixed 2.09 MB
+  ([boot.md](boot.md#the-flash-layout)). The write lock covers the
+  bitstream (`0x220000`). The flash is reset (`66h`/`99h`) before its
+  first command ([spiflash.md](spiflash.md)).
+- **The BIOS** is built without its xfer receiver (`BIOS_FLAGS =
+  -DBIOS_NO_XFER`), and the build refuses an MX1 BIOS with less than 512
+  bytes of stack (`BIOS_MIN_STACK`). The image and the stack share the
+  8 KB BIOS RAM, image growing up and stack down; every build prints
+  the room between them.
+- **No LUT RAM and no DSP48E1s**, and no TRNG or fast multiplier: the
+  openXC7 workarounds in [toolchain.md](toolchain.md). Without the LUT
+  RAM one, the CPU's register file and the console UART's FIFOs were
+  built wrongly and the BIOS failed differently on every build.
+- **No caches and no MONTMUL** yet. Each is one line in the board's
+  `rtl/boards.vh` block, to try once the board boots.
+- **The part** is `xc7a35tftg256-1` by default: most modules carry the
+  -2 part, some a -1, and a -1 build meets timing on both.
+
+**Synthesis** (`synth_xilinx`, before place-and-route): sergei_mx1: ~14,691 LUTs of 20,800 (70%), 12,616 flip-flops, 17 RAMB36 + 4 RAMB18 of 50, no DSP48E1 or LUT RAM, 6 BUFG, 47 ODDR, 20 IDDR.
+mozart_mx1: ~14,671 LUTs of 20,800 (70%), 12,563 flip-flops, 17 RAMB36 + 4 RAMB18 of 50, no DSP48E1 or LUT RAM, 6 BUFG, 46 ODDR, 20 IDDR.
+openXC7 1.x reports `clk48mhz` timing with a wide margin (93 MHz on a
+reduced build); see [toolchain.md](toolchain.md) on how far to trust
+that.
+
 ## Boards with nothing to measure
 
 iCE40 targets in the Makefile (`riegel`, `eis`, `kolibri`, `bonbon`,

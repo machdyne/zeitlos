@@ -141,7 +141,7 @@ def notes(version, commit, targets, sdcard, layout, prev_version=None):
                "computers." % version)
     out.append("")
     out.append("Each target below ships a single flashable image "
-               "containing the gateware, boot logo, kernel and core apps "
+               "containing the gateware, kernel and core apps "
                "at their fixed offsets. Flash one file and the board boots "
                "to a desktop; an SD card is optional.")
     out.append("")
@@ -348,8 +348,6 @@ def asset_readme(version, commit, targets, sdcard, layout):
                % L["kernel"].offset)
     out.append("  zeitlos-apps.zar               core apps, flash 0x%06x"
                % L["apps"].offset)
-    out.append("  zeitlos-logo.bin               splash,    flash 0x%06x"
-               % L["logo"].offset)
     if "jump" in L:
         out.append("  zeitlos-<board>-jump.bin       jumploader, flash 0x%06x"
                    % L["jump"].offset)
@@ -357,8 +355,8 @@ def asset_readme(version, commit, targets, sdcard, layout):
         out.append("                                 not a .bit, so it is written")
         out.append("                                 whole, header included)")
     out.append("")
-    out.append("THE OFFSETS ARE NOT OPTIONAL. The BIOS reads the splash")
-    out.append("and the kernel from fixed addresses, and the OS reads the")
+    out.append("THE OFFSETS ARE NOT OPTIONAL. The BIOS reads the kernel")
+    out.append("from a fixed address, and the OS reads the")
     out.append("archive from one -- a piece written to the wrong offset")
     out.append("gives a board that configures and then hangs.")
     out.append("")
@@ -370,7 +368,6 @@ def asset_readme(version, commit, targets, sdcard, layout):
             continue
         lines = []
         pieces = [("gateware", gw),
-                  ("logo", "zeitlos-logo.bin"),
                   ("kernel", "zeitlos-kernel.bin"),
                   ("apps", "zeitlos-apps.zar")]
         jl = (t.get("artifacts") or {}).get("jumploader")

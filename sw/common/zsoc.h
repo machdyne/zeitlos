@@ -380,20 +380,25 @@
 // wherever there is VRAM. rtl/csrs.vh FEATURES2 bit 14.
 #define Z_FEATURE2_VRAM_DIRTY (1u << 14)
 
-// The jumploader region: the same on every board, the top 192 KB of the
-// first 2 MB. KEEP IN SYNC with the Makefile's JUMP_ADDR
-// (release/lib/layout.py checks). docs/zboot.md sec. 5.
+// The jumploader region (docs/zboot.md sec. 5) -- ECP5 boards that set
+// JUMP only. It sits inside the Zeitlos region at Z_FLASH_ZAR_END, which
+// on those boards (base Z_FLASH_BASE_DEFAULT) is 0x1D0000; it is kept as
+// an absolute address because the gateware is packed with it as its
+// boot address, and because it may move independently of the region.
+// KEEP IN SYNC with the Makefile's JUMP_ADDR (release/lib/layout.py
+// checks both, and that it equals the default base + Z_FLASH_ZAR_END).
 #define Z_JUMP_FLASH_OFFSET   0x1D0000u
 #define Z_JUMP_REGION_SIZE    0x30000u
 
-// The flash key/value store (docs/kvstore.md): the LAST Z_KV_SIZE bytes
-// of the chip -- two 4 KB sectors. On a 2 MB chip that is 0x1FE000,
-// past every jumploader built so far (the 45F one ends at 0x1F7BE9).
-// A chip larger than 16 MB keeps it at the top of the first 16 MB,
-// which is all the controller's 3-byte addresses reach; a chip whose
-// size cannot be read (no flash writer in this bitstream) is taken to
-// be Z_KV_DEFAULT_FLASH_SIZE. KEEP IN SYNC with ZFPGA_KV_SIZE in
-// sw/apps/zfpga/boot.c (release/lib/layout.py checks).
+// The flash key/value store (docs/kvstore.md): the last Z_KV_SIZE bytes
+// of the ZEITLOS REGION -- two 4 KB sectors at z_flash_base() +
+// Z_FLASH_KV_OFF. (It used to be the last 8 KB of the chip, which on a
+// 2 MB part is the same place.) The chip size is still read, from the
+// JEDEC ID, but only to recognise addresses that alias the store; one
+// that cannot be read is taken to be Z_KV_DEFAULT_FLASH_SIZE, raised
+// to cover the region if the region would not fit. KEEP Z_KV_SIZE IN
+// SYNC with ZFPGA_KV_SIZE in sw/apps/zfpga/boot.c (release/lib/layout.py
+// checks).
 #define Z_KV_SIZE                0x2000u
 #define Z_KV_DEFAULT_FLASH_SIZE  0x200000u
 #define Z_KV_FLASH_MAX           0x1000000u
@@ -605,6 +610,43 @@ static inline bool z_soc_csrs_present(void) {
 static inline uint32_t z_soc_mem_mb(void) {
 	if (!z_soc_csrs_present()) return 0;
 	return reg_csr_mem_mb;
+}
+
+// -- The Zeitlos flash region (docs/boot.md, "The flash layout") --
+//
+// Zeitlos uses exactly 1 MB of the configuration flash, on every board:
+// the kernel, the core apps, the flash test sector and the key/value
+// store, at fixed offsets INSIDE the region. Where the region starts is
+// a property of the board -- it has to clear that board's gateware --
+// and is reported by rtl/csrs.v word 63, FLASH_BASE. Everything outside
+// the region, below or above it, belongs to the gateware or to whatever
+// else the board wants; Zeitlos never reads or writes it.
+//
+// FLASH_BASE reading 0 means the legacy base, Z_FLASH_BASE_DEFAULT,
+// where the region has been on every ECP5 board all along -- so a
+// bitstream built before the register existed, or one that leaves it
+// out (it costs LUTs, and the ECP5 boards don't need it), still boots
+// this kernel correctly. 0 can never be a real base: the gateware
+// itself lives at flash offset 0.
+//
+// ONE kernel binary serves every board because these are offsets and
+// the base is read at run time. Nothing may compile in an absolute
+// flash address for anything inside the region.
+#define reg_csr_flash_base    (*(volatile uint32_t*)0x700000fc)	// word 63
+
+#define Z_FLASH_REGION_SIZE   0x100000u
+#define Z_FLASH_BASE_DEFAULT  0x100000u
+#define Z_FLASH_KERNEL_OFF    0x000000u	// 256 KB: sw/bios/bios.c ROM_OS_SIZE
+#define Z_FLASH_ZAR_OFF       0x040000u	// core apps, up to Z_FLASH_ZAR_END
+#define Z_FLASH_ZAR_END       0x0D0000u	// where the ECP5 jumploader starts
+#define Z_FLASH_TEST_OFF      0x0FC000u	// the 4 KB sector `flashtest` uses
+#define Z_FLASH_KV_OFF        0x0FE000u	// key/value store: the last Z_KV_SIZE
+
+static inline uint32_t z_flash_base(void) {
+	uint32_t b;
+	if (!z_soc_csrs_present()) return Z_FLASH_BASE_DEFAULT;
+	b = reg_csr_flash_base;
+	return b ? b : Z_FLASH_BASE_DEFAULT;
 }
 
 // true only if CSRs are present AND `feature` (one of the

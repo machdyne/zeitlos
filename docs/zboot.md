@@ -133,21 +133,27 @@ pin -- see section 6.
 ## 4. The current flash layout
 
 The whole map on the 2 MB MMOD Lakritz ships with, from
-`release/lib/layout.py` (which reads it from the BIOS, `logo.h`,
-`zar.h` and the Makefile and cross-checks them):
+`release/lib/layout.py` (which reads it from `zsoc.h`, the BIOS,
+`zar.h` and the Makefile and cross-checks them). Everything from
+`0x100000` up is the 1 MB **Zeitlos region**, whose layout and base are
+described in [boot.md](boot.md#the-flash-layout); on ECP5 boards the
+base is `0x100000`, so these addresses are the region's offsets plus
+`0x100000`.
 
 | Offset | Room | Contents |
 |---|---|---|
 | `0x000000` | 256 KB | DFU bootloader (uses ~123 KB), on boards that ship one |
-| `0x040000` | 704 KB | Zeitlos gateware (960 KB from `0x000000` without DFU) |
-| `0x0F0000` | 64 KB | boot logo |
+| `0x040000` | 960 KB | Zeitlos gateware (1 MB from `0x000000` without DFU) |
 | `0x100000` | 256 KB | kernel |
-| `0x140000` | to `0x200000` | core apps (the ZAR) |
+| `0x140000` | to `0x1D0000` | core apps (the ZAR) |
+| `0x1D0000` | to `0x1FE000` | jumploader (below), and the `flashtest` sector at `0x1FC000` |
+| `0x1FE000` | 8 KB | key/value store |
 
-The logo, kernel and ZAR offsets are **absolute** and the same with or
-without a bootloader: the BIOS and `zar.h` read them from fixed addresses
-in the memory-mapped flash window, and one kernel binary runs on every
-ECP5 board. Only the gateware's start moves.
+The kernel and ZAR are found through the region base, which the gateware
+reports (`rtl/csrs.v` word 63) -- so they are the same with or without a
+bootloader, and one kernel binary runs on every board, ECP5 or Artix-7.
+Only the gateware's start moves. There is no boot logo any more; the
+gateware region gained its 64 KB.
 
 The Zeitlos image is 1303 KB of the 1792 KB user partition, so today
 `0x190000` onward -- 448 KB -- is unused.
@@ -197,13 +203,12 @@ top of a 2 MB flash, **at `0x1D0000` on every board**:
 | Offset | Contents | Room | Change |
 |---|---|---|---|
 | `0x000000` | DFU bootloader (optional) | 256 KB | write-protected, see section 7 |
-| `0x040000` | Zeitlos gateware | 704 KB | unchanged; packed with boot address `0x1D0000` |
-| `0x0F0000` | boot logo | 64 KB | unchanged |
+| `0x040000` | Zeitlos gateware | 960 KB | packed with boot address `0x1D0000` (was 704 KB, before the boot logo was dropped) |
 | `0x100000` | kernel | 256 KB | unchanged |
 | `0x140000` | core apps (ZAR) | 576 KB, to `0x1D0000` | limit only (was to `0x200000`) |
 | *(run time)* | user gateware | see below | new |
 | **`0x1D0000`** | **jumploader** | **184 KB** | **new**; 192 KB less the store |
-| `0x1FE000` | key/value store | 8 KB | the last 8 KB of any chip; written only by the running system, [kvstore.md](kvstore.md) |
+| `0x1FE000` | key/value store | 8 KB | the last 8 KB of the Zeitlos region; written only by the running system, [kvstore.md](kvstore.md) |
 
 **Why one address for every board.** A jumploader is an almost-empty
 bitstream, and its size is set by the die, not the design -- every frame
@@ -230,10 +235,16 @@ section 11), the first of:
   shrinking as the apps grow -- the apps take room from user gateware,
   never the reverse;
 - the tail of the gateware region, between the end of Zeitlos's own
-  bitstream and the logo at `0x0F0000`;
+  bitstream and `0x0F0000` (`ZFPGA_LOGO_OFFSET`, named for the logo that
+  used to end the gateware region; the 64 KB above it, up to the
+  Zeitlos region at `0x100000`, is not used yet);
 - on 4 MB and larger, above `0x200000`, where it never meets the apps,
-  up to 8 KB short of the end of the chip, where the key/value store
-  is ([kvstore.md](kvstore.md)).
+  up to 8 KB short of the end of the chip. (The key/value store has
+  moved into the Zeitlos region, so that 8 KB is now simply unused.)
+
+The jumploader and user gateware are ECP5 mechanisms (PROGRAMN and a
+boot address). They do not apply to the Artix-7 boards yet, and may
+move.
 
 A blinky is ~99 KB on a 25F and ~162 KB on a 45F -- never much less,
 since every configuration frame costs bytes. The first slot is what the

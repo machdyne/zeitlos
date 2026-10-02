@@ -227,14 +227,9 @@ def main():
             checks = [
                 ("ZAR magic at the core-app offset",
                  img[L["apps"].offset:L["apps"].offset + 4] == b"ZAR1"),
-                ("logo at its offset",
-                 img[L["logo"].offset:L["logo"].offset + 4] != b"\xff" * 4),
                 ("kernel at its offset",
                  img[L["kernel"].offset:L["kernel"].offset + 4]
                  != b"\xff" * 4),
-                ("gap between logo and kernel left erased",
-                 set(img[L["logo"].offset + lay["logo_bytes"]:
-                         L["kernel"].offset]) == {0xFF}),
                 ("trimmed, not padded to 2MB",
                  len(img) < lay["flash_size"]),
             ]

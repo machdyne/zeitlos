@@ -89,19 +89,24 @@
 #include <stdbool.h>
 
 #include "../common/zexec.h"
+#include "../common/zsoc.h"
 
 // Base of the memory-mapped SPI flash window -- the same MEM_ROM the
 // BIOS uses (bios.c) and the same constant logo.h spells out for the
 // same reason. KEEP IN SYNC with both.
 #define Z_ZAR_ROM_BASE       0x10000000
 
-// Immediately after the kernel, which occupies 256KB at the 1MB mark
-// (see Makefile's flash_os target, which writes at offset 1048576, and
-// bios.c's ROM_OS_ADDR/ROM_OS_SIZE). KEEP IN SYNC with Makefile's
-// flash_apps target -- there is no way for the two to check each other.
-#define Z_ZAR_FLASH_OFFSET   (1024 * 1024 + 1024 * 256)   // 0x140000
+// Immediately after the kernel's 256KB, as an offset INSIDE the Zeitlos
+// flash region -- whose base is read at run time (z_flash_base(),
+// sw/common/zsoc.h), so this is never an absolute flash address.
+// KEEP IN SYNC with Z_FLASH_ZAR_OFF; release/lib/layout.py checks it
+// against that, against bios.c's ROM_OS_SIZE and against the
+// Makefile's flash_apps offset.
+#define Z_ZAR_FLASH_OFFSET   0x040000
 
-#define Z_ZAR_ADDR           (Z_ZAR_ROM_BASE + Z_ZAR_FLASH_OFFSET)
+static inline uint32_t z_zar_addr(void) {
+	return Z_ZAR_ROM_BASE + z_flash_base() + Z_ZAR_FLASH_OFFSET;
+}
 
 #define Z_ZAR_MAGIC0 'Z'
 #define Z_ZAR_MAGIC1 'A'

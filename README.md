@@ -163,6 +163,9 @@ Packed utilisation and routed clocks for every board that builds:
 
 The following boards are currently partially supported or untested:
 
+ - [Machdyne Kirsch](https://github.com/machdyne/kirsch)
+ - [Machdyne Mozart](https://github.com/machdyne/mozart) / [MX1](https://github.com/machdyne/sechzig)
+ - [Machdyne Sergei](https://github.com/machdyne/sergei) / [MX1](https://github.com/machdyne/sechzig)
  - [Machdyne Kölsch](https://github.com/machdyne/kolsch)
  - [Machdyne Lebkuchen](https://github.com/machdyne/lebkuchen)
 
@@ -186,8 +189,8 @@ still reaches telnet, ssh and serial through its Open bar (F11). See
 ### Quick start: prebuilt images
 
 Each [release](https://github.com/machdyne/zeitlos/releases/latest)
-ships one image per supported board, containing the gateware, boot
-splash, kernel and core apps. Flash it and the board boots to a desktop
+ships one image per supported board, containing the gateware,
+kernel and core apps. Flash it and the board boots to a desktop
 — nothing to build.
 
 Pick the image matching your hardware, for example a Lakritz with a
@@ -287,7 +290,7 @@ $ make BOARD=lakritz CABLE=dirtyJtag flash
 ```
 
 The above command builds the SOC, BIOS, OS and apps, then writes the
-gateware, kernel, boot splash and core apps to flash -- and, on some boards, the
+gateware, kernel and core apps to flash -- and, on some boards, the
 [jumploader](docs/zboot.md).
 
 The BIOS will automatically boot the kernel if no keys are pressed, and

@@ -22,7 +22,6 @@
 #include "msg.h"
 #include "hid.h"
 #include "pidreg.h"
-#include "logo.h"
 #include "fs/fs.h"
 #include "fsapi.h"
 #include "procapi.h"
@@ -713,19 +712,6 @@ static void k_cpu_report(void) {
 
 int main(void) {
 
-	// boot splash -- the image lives in flash (see logo.h) and is
-	// copied straight to VRAM, so this costs no main memory at all.
-	// VRAM is plain memory-mapped hardware with no
-	// init of its own needed, so this can run before literally
-	// anything else (uart/hid/mem init below), the earliest the OS
-	// can put anything on screen. Stays up until something else
-	// writes over it -- normally wm's own startup clear_screen()
-	// call, whenever the user eventually runs wm; nothing here
-	// coordinates that handoff explicitly, it's just whichever writes
-	// to VRAM last. If it ever displays with foreground/background
-	// swapped, regenerate the flashed image with pad_logo.py --invert
-	// rather than changing anything here -- see logo.h's own comment.
-	z_boot_logo_show();
 
 	kprint("\nZEITLOS\n");
 

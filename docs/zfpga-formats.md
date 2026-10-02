@@ -453,7 +453,7 @@ a 64 KB boundary (a boot address is `addr[23:16]`):
 | space | from | to |
 |---|---|---|
 | after the core apps | the ZAR's end (its header says) | the jumploader, `0x1D0000` |
-| after Zeitlos's gateware | its end | the boot logo, `0x0F0000` |
+| after Zeitlos's gateware | its end | `0x0F0000` (`ZFPGA_LOGO_OFFSET`: where the boot logo used to start; the Zeitlos region now starts at `0x100000`) |
 | after the jumploader | `0x200000` | the end of a flash larger than 2 MB |
 
 Zeitlos's gateware is found at `0x040000` if a bitstream starts there

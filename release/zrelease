@@ -87,10 +87,10 @@ def cmd_list(args):
 
 def cmd_layout(args):
     lay = layout_mod.load(ROOT)
-    print("\nflash map, read from sw/bios/bios.c, sw/os/logo.h, "
+    print("\nflash map, read from sw/common/zsoc.h, sw/bios/bios.c, "
           "sw/os/zar.h and the Makefile:\n")
     print(layout_mod.describe(lay))
-    print("\nall four sources agree.\n")
+    print("\nall sources agree.\n")
     return 0
 
 
@@ -435,8 +435,8 @@ def cmd_build(args):
 
     # -- board-independent artifacts -----------------------------------
     #
-    # The kernel and the logo are the same bytes for every target, so
-    # they ship once rather than four times. They are already inside
+    # The kernel and the core apps are the same bytes for every target,
+    # so they ship once rather than once per target. They are already inside
     # each flash image; these are for partial reflashes.
     #
     # Only when something was built. A card-only run
@@ -449,8 +449,6 @@ def cmd_build(args):
                      os.path.join(out, "zeitlos-kernel.bin"))
         shutil.copy2(software["zar"],
                      os.path.join(out, "zeitlos-apps.zar"))
-        shutil.copy2(os.path.join(ROOT, "sw/data/images/zeitlos_fb.bin"),
-                     os.path.join(out, "zeitlos-logo.bin"))
 
     # -- SD cards ------------------------------------------------------
     #
@@ -724,11 +722,6 @@ def cmd_verify(args):
         if img[zoff:zoff + 4] != b"ZAR1":
             print("  %s: no ZAR1 magic at 0x%06x -- the kernel will find "
                   "no core apps" % (f, zoff))
-            ok = False
-            continue
-        loff = L["logo"].offset
-        if img[loff:loff + 4] == b"\xff\xff\xff\xff":
-            print("  %s: logo region is erased -- no boot splash" % f)
             ok = False
             continue
         koff = L["kernel"].offset

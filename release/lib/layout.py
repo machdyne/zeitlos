@@ -1,15 +1,16 @@
 #
 # Zeitlos release tooling -- flash layout, derived rather than restated.
 #
-# The flash map already exists in this tree. It is spelled out in four
-# separate places, none of which check each other, and all four carry a
+# The flash map already exists in this tree. It is spelled out in
+# several places, none of which can check each other, and each carries a
 # KEEP IN SYNC comment saying so:
 #
-#   sw/bios/bios.c   MEM_ROM, MEM_ROM_SIZE, ROM_OS_ADDR, ROM_OS_SIZE,
-#                    ROM_LOGO_ADDR, ROM_LOGO_SIZE
-#   sw/os/logo.h     Z_BOOT_LOGO_FLASH_OFFSET, Z_BOOT_LOGO_{W,H}
-#   sw/os/zar.h      Z_ZAR_FLASH_OFFSET
-#   Makefile         LOGO_FLASH_OFFSET_HEX / LOGO_FLASH_OFFSET_DEC
+#   sw/common/zsoc.h Z_FLASH_* -- the Zeitlos region (docs/boot.md): its
+#                    size, the default base, and the offsets inside it;
+#                    Z_JUMP_*, Z_KV_SIZE
+#   sw/bios/bios.c   MEM_ROM, MEM_ROM_SIZE, FLASH_BASE_DEFAULT, ROM_OS_SIZE
+#   sw/os/zar.h      Z_ZAR_FLASH_OFFSET (inside the region)
+#   Makefile         FLASH_BASE's default, JUMP_ADDR
 #
 # A release image is a fifth copy of that map, and the one place where
 # getting it wrong is most expensive: a bad `make flash_os` costs a
@@ -21,7 +22,7 @@
 #
 #   1. The release tool cannot disagree with the running system,
 #      because it has no numbers of its own to disagree with.
-#   2. `zrelease layout` becomes a standing check on those four
+#   2. `zrelease layout` becomes a standing check on those
 #      KEEP IN SYNC comments -- run it after touching any of them and
 #      it will tell you if a copy was missed.
 #
@@ -128,45 +129,45 @@ def load(root):
     """Read the flash map out of the tree at `root`, cross-checking it.
 
     Returns a dict with the resolved constants plus a `regions` list in
-    ascending offset order.
+    ascending offset order, for the DEFAULT region base. A board whose
+    region sits elsewhere (an Artix-7 board: docs/boot.md) gets its own
+    list from regions_at(lay, base).
     """
     bios_c = os.path.join(root, "sw/bios/bios.c")
-    logo_h = os.path.join(root, "sw/os/logo.h")
     zar_h = os.path.join(root, "sw/os/zar.h")
     zsoc_h = os.path.join(root, "sw/common/zsoc.h")
     boot_c = os.path.join(root, "sw/apps/zfpga/boot.c")
     makefile = os.path.join(root, "Makefile")
 
     bios = _scan_defines(bios_c, {
-        "MEM_ROM", "MEM_ROM_SIZE", "ROM_OS_ADDR", "ROM_OS_SIZE",
-        "ROM_LOGO_ADDR", "ROM_LOGO_SIZE",
+        "MEM_ROM", "MEM_ROM_SIZE", "FLASH_BASE_DEFAULT", "ROM_OS_SIZE",
     }, {})
-
-    for name in ("MEM_ROM", "MEM_ROM_SIZE", "ROM_OS_ADDR", "ROM_OS_SIZE",
-                 "ROM_LOGO_ADDR", "ROM_LOGO_SIZE"):
+    for name in ("MEM_ROM", "MEM_ROM_SIZE", "FLASH_BASE_DEFAULT", "ROM_OS_SIZE"):
         if name not in bios:
             raise LayoutError("%s: could not resolve %s" % (bios_c, name))
 
-    logo = _scan_defines(logo_h, {
-        "Z_BOOT_LOGO_W", "Z_BOOT_LOGO_H", "Z_BOOT_LOGO_BYTES",
-        "Z_BOOT_LOGO_ROM_BASE", "Z_BOOT_LOGO_FLASH_OFFSET",
-    }, {})
+    zsoc_names = ("Z_FLASH_REGION_SIZE", "Z_FLASH_BASE_DEFAULT",
+                  "Z_FLASH_KERNEL_OFF", "Z_FLASH_ZAR_OFF", "Z_FLASH_ZAR_END",
+                  "Z_FLASH_TEST_OFF", "Z_FLASH_KV_OFF",
+                  "Z_JUMP_FLASH_OFFSET", "Z_JUMP_REGION_SIZE", "Z_KV_SIZE")
+    zs = _scan_defines(zsoc_h, set(zsoc_names), {})
+    for name in zsoc_names:
+        if name not in zs:
+            raise LayoutError("%s: could not resolve %s" % (zsoc_h, name))
+
     zar = _scan_defines(zar_h, {
         "Z_ZAR_ROM_BASE", "Z_ZAR_FLASH_OFFSET", "Z_ZAR_MAX_ENTRIES",
     }, {})
-    mk = _scan_makefile(makefile, {
-        "LOGO_FLASH_OFFSET_HEX", "LOGO_FLASH_OFFSET_DEC", "JUMP_ADDR",
-    })
-    # The jumploader region: docs/zboot.md sec. 5. The kernel's constant
-    # and the Makefile's --bootaddr must name the same address.
-    jumpc = _scan_defines(zsoc_h, {
-        "Z_JUMP_FLASH_OFFSET", "Z_JUMP_REGION_SIZE", "Z_KV_SIZE",
-    }, {})
-    for name in ("Z_JUMP_FLASH_OFFSET", "Z_JUMP_REGION_SIZE", "Z_KV_SIZE"):
-        if name not in jumpc:
-            raise LayoutError("%s: could not resolve %s" % (zsoc_h, name))
-    # zfpga flash / run carry their own copy, being an app built for the
-    # host too (sw/apps/zfpga/boot.c)
+    mk = _scan_makefile(makefile, {"JUMP_ADDR"})
+    # FLASH_BASE: the top-level default, not a board block's override
+    # (those are indented, inside the board if-chain).
+    with open(makefile) as f:
+        for line in f:
+            m = re.match(r"FLASH_BASE\s*\?=\s*(\S+)", line)
+            if m:
+                mk["FLASH_BASE"] = m.group(1)
+    # zfpga flash / run carry their own copies, being an app built for
+    # the host too (sw/apps/zfpga/boot.c)
     zboot = _scan_defines(boot_c, {
         "ZFPGA_ZAR_OFFSET", "ZFPGA_JUMP_OFFSET", "ZFPGA_JUMP_END",
         "ZFPGA_GW_DFU", "ZFPGA_LOGO_OFFSET", "ZFPGA_KV_SIZE",
@@ -174,18 +175,16 @@ def load(root):
 
     rom_base = bios["MEM_ROM"]
     flash_size = bios["MEM_ROM_SIZE"]
-
-    logo_off = bios["ROM_LOGO_ADDR"] - rom_base
-    logo_size = bios["ROM_LOGO_SIZE"]
-    os_off = bios["ROM_OS_ADDR"] - rom_base
-    os_size = bios["ROM_OS_SIZE"]
-    zar_off = zar["Z_ZAR_FLASH_OFFSET"]
-    jump_off = jumpc["Z_JUMP_FLASH_OFFSET"]
-    jump_size = jumpc["Z_JUMP_REGION_SIZE"]
-    # The key/value store takes the last Z_KV_SIZE bytes of the chip
-    # (docs/kvstore.md). On the 2 MB map that is the tail of the
-    # jumploader region, so a jumploader must stop short of it.
-    kv_size = jumpc["Z_KV_SIZE"]
+    region = zs["Z_FLASH_REGION_SIZE"]
+    base = zs["Z_FLASH_BASE_DEFAULT"]
+    kernel_off = zs["Z_FLASH_KERNEL_OFF"]
+    zar_off = zs["Z_FLASH_ZAR_OFF"]
+    zar_end = zs["Z_FLASH_ZAR_END"]
+    test_off = zs["Z_FLASH_TEST_OFF"]
+    kv_off = zs["Z_FLASH_KV_OFF"]
+    kv_size = zs["Z_KV_SIZE"]
+    jump_abs = zs["Z_JUMP_FLASH_OFFSET"]
+    jump_size = zs["Z_JUMP_REGION_SIZE"]
 
     # --- the cross-checks, i.e. the KEEP IN SYNC comments, enforced ---
 
@@ -196,36 +195,40 @@ def load(root):
             problems.append("%s: %s says 0x%x, %s says 0x%x"
                             % (what, a_src, a, b_src, b))
 
-    agree("logo flash offset", logo_off, "sw/bios/bios.c ROM_LOGO_ADDR",
-          logo["Z_BOOT_LOGO_FLASH_OFFSET"], "sw/os/logo.h")
-    agree("logo flash offset", logo_off, "sw/bios/bios.c ROM_LOGO_ADDR",
-          int(mk.get("LOGO_FLASH_OFFSET_HEX", "-1"), 16),
-          "Makefile LOGO_FLASH_OFFSET_HEX")
-    agree("logo flash offset", logo_off, "sw/bios/bios.c ROM_LOGO_ADDR",
-          int(mk.get("LOGO_FLASH_OFFSET_DEC", "-1")),
-          "Makefile LOGO_FLASH_OFFSET_DEC")
-    agree("logo size", logo_size, "sw/bios/bios.c ROM_LOGO_SIZE",
-          logo.get("Z_BOOT_LOGO_BYTES", -1), "sw/os/logo.h")
-    agree("flash window base", rom_base, "sw/bios/bios.c MEM_ROM",
-          logo.get("Z_BOOT_LOGO_ROM_BASE", -1), "sw/os/logo.h")
+    agree("default region base", base, "sw/common/zsoc.h Z_FLASH_BASE_DEFAULT",
+          bios["FLASH_BASE_DEFAULT"], "sw/bios/bios.c FLASH_BASE_DEFAULT")
+    agree("default region base", base, "sw/common/zsoc.h Z_FLASH_BASE_DEFAULT",
+          int(mk.get("FLASH_BASE", "-1"), 0), "Makefile FLASH_BASE ?=")
+    agree("kernel size", zar_off - kernel_off, "sw/common/zsoc.h (ZAR - kernel)",
+          bios["ROM_OS_SIZE"], "sw/bios/bios.c ROM_OS_SIZE")
+    agree("core apps offset", zar_off, "sw/common/zsoc.h Z_FLASH_ZAR_OFF",
+          zar.get("Z_ZAR_FLASH_OFFSET", -1), "sw/os/zar.h Z_ZAR_FLASH_OFFSET")
     agree("flash window base", rom_base, "sw/bios/bios.c MEM_ROM",
           zar.get("Z_ZAR_ROM_BASE", -1), "sw/os/zar.h")
-    agree("jumploader offset", jump_off, "sw/common/zsoc.h Z_JUMP_FLASH_OFFSET",
+    agree("key/value store", kv_off + kv_size, "sw/common/zsoc.h (KV end)",
+          region, "the end of the region")
+    agree("jumploader offset", jump_abs, "sw/common/zsoc.h Z_JUMP_FLASH_OFFSET",
           int(mk.get("JUMP_ADDR", "-1"), 16), "Makefile JUMP_ADDR")
+    agree("jumploader offset", jump_abs, "sw/common/zsoc.h Z_JUMP_FLASH_OFFSET",
+          base + zar_end, "default base + Z_FLASH_ZAR_END")
+    agree("jumploader region end", jump_abs + jump_size, "sw/common/zsoc.h",
+          base + region, "the end of the default region")
     if zboot is not None:
-        agree("core apps offset", zar_off, "sw/os/zar.h Z_ZAR_FLASH_OFFSET",
+        agree("core apps offset", base + zar_off, "default base + Z_FLASH_ZAR_OFF",
               zboot.get("ZFPGA_ZAR_OFFSET", -1), "sw/apps/zfpga/boot.c")
-        agree("jumploader offset", jump_off, "sw/common/zsoc.h Z_JUMP_FLASH_OFFSET",
+        agree("jumploader offset", jump_abs, "sw/common/zsoc.h Z_JUMP_FLASH_OFFSET",
               zboot.get("ZFPGA_JUMP_OFFSET", -1), "sw/apps/zfpga/boot.c")
-        agree("jumploader region end", jump_off + jump_size, "sw/common/zsoc.h",
+        agree("jumploader region end", jump_abs + jump_size, "sw/common/zsoc.h",
               zboot.get("ZFPGA_JUMP_END", -1), "sw/apps/zfpga/boot.c ZFPGA_JUMP_END")
         agree("key/value store size", kv_size, "sw/common/zsoc.h Z_KV_SIZE",
               zboot.get("ZFPGA_KV_SIZE", -1), "sw/apps/zfpga/boot.c ZFPGA_KV_SIZE")
         # zfpga flash puts user gateware in the gateware region's tail,
-        # up to the logo, and looks for Zeitlos's gateware at 0 or at
-        # ZFPGA_GW_DFU -- which every DFU board's dfu_base must equal
-        agree("logo flash offset", logo_off, "sw/os/logo.h",
-              zboot.get("ZFPGA_LOGO_OFFSET", -1), "sw/apps/zfpga/boot.c ZFPGA_LOGO_OFFSET")
+        # up to ZFPGA_LOGO_OFFSET -- a name from when the logo ended it.
+        # It must not reach into the Zeitlos region.
+        if zboot.get("ZFPGA_LOGO_OFFSET", base + 1) > base:
+            problems.append("sw/apps/zfpga/boot.c ZFPGA_LOGO_OFFSET 0x%x runs "
+                            "into the Zeitlos region at 0x%x"
+                            % (zboot.get("ZFPGA_LOGO_OFFSET", -1), base))
         spec_dir = os.path.join(root, "release/hw/boards")
         if os.path.isdir(spec_dir):
             for fn in sorted(os.listdir(spec_dir)):
@@ -238,66 +241,68 @@ def load(root):
                               "release/hw/boards/" + fn + " dfu_base",
                               zboot.get("ZFPGA_GW_DFU", -1), "sw/apps/zfpga/boot.c ZFPGA_GW_DFU")
 
-    # The ZAR sits immediately above the kernel's region. This is stated
-    # as prose in zar.h ("1MB + 256KB") and as two independent numbers;
-    # here it becomes an assertion.
-    if zar_off != os_off + os_size:
-        problems.append("core apps offset: sw/os/zar.h says 0x%x, but the "
-                        "kernel region (sw/bios/bios.c) ends at 0x%x"
-                        % (zar_off, os_off + os_size))
-
-    if logo_off + logo_size > os_off:
-        problems.append("logo (0x%x + %d) overlaps the kernel at 0x%x"
-                        % (logo_off, logo_size, os_off))
-    # The jumploader takes the top of the map, on every board: the ZAR
-    # grows up to it, and nothing sits above it in the first 2 MB.
-    if jump_off + jump_size != flash_size:
-        problems.append("the jumploader region (0x%x + 0x%x) does not end "
-                        "at the end of the map (0x%x)"
-                        % (jump_off, jump_size, flash_size))
-    if jump_off & 0xFFFF:
-        problems.append("the jumploader offset 0x%x is not 64 KB aligned "
-                        "(a boot address is addr[23:16])" % jump_off)
-    if zar_off >= jump_off:
-        problems.append("core apps offset 0x%x is not below the jumploader "
-                        "(0x%x)" % (zar_off, jump_off))
-    if kv_size & 0xFFF or not 0 < kv_size < jump_size:
+    # The order inside the region, as assertions.
+    if kernel_off != 0:
+        problems.append("the kernel is not at the start of the region")
+    if not kernel_off < zar_off < zar_end <= test_off < kv_off:
+        problems.append("region offsets out of order: kernel 0x%x, apps 0x%x, "
+                        "apps end 0x%x, test 0x%x, kv 0x%x"
+                        % (kernel_off, zar_off, zar_end, test_off, kv_off))
+    if test_off + 0x1000 > kv_off:
+        problems.append("the flash test sector overlaps the key/value store")
+    if kv_size & 0xFFF or kv_size <= 0:
         problems.append("the key/value store size 0x%x is not a whole number "
-                        "of 4 KB sectors inside the jumploader region" % kv_size)
-    if zar_off >= flash_size:
-        problems.append("core apps offset 0x%x is past the end of flash "
-                        "(0x%x)" % (zar_off, flash_size))
+                        "of 4 KB sectors" % kv_size)
+    if jump_abs & 0xFFFF:
+        problems.append("the jumploader offset 0x%x is not 64 KB aligned "
+                        "(a boot address is addr[23:16])" % jump_abs)
+    if base & 0xFFFF:
+        problems.append("the default region base 0x%x is not 64 KB aligned" % base)
 
     if problems:
         raise LayoutError("flash layout constants disagree:\n  "
                           + "\n  ".join(problems))
 
-    regions = [
-        Region("gateware", "gateware", 0, logo_off,
-               "start of flash, up to the logo"),
-        Region("logo", "boot logo", logo_off, os_off - logo_off,
-               "sw/os/logo.h Z_BOOT_LOGO_FLASH_OFFSET"),
-        Region("kernel", "kernel", os_off, os_size,
-               "sw/bios/bios.c ROM_OS_ADDR"),
-        Region("apps", "core apps (ZAR)", zar_off, jump_off - zar_off,
-               "sw/os/zar.h Z_ZAR_FLASH_OFFSET"),
-        Region("jump", "jumploader", jump_off, jump_size - kv_size,
-               "sw/common/zsoc.h Z_JUMP_FLASH_OFFSET, less Z_KV_SIZE"),
-        # Never part of an image: the running system writes it. An image
-        # padded over it (a full JTAG image, a DFU image) erases it,
-        # which docs/kvstore.md says is allowed -- it loses the password
-        # and any other keys, and nothing else.
-        Region("kv", "key/value store (written by the running system)",
-               flash_size - kv_size, kv_size, "sw/common/zsoc.h Z_KV_SIZE"),
-    ]
-
-    return {
+    lay = {
         "rom_base": rom_base,
         "flash_size": flash_size,
-        "logo_bytes": logo_size,
+        "region_size": region,
+        "default_base": base,
+        "offsets": {"kernel": kernel_off, "apps": zar_off, "apps_end": zar_end,
+                    "test": test_off, "kv": kv_off, "kv_size": kv_size},
+        "jump": (jump_abs, jump_size),
         "max_zar_entries": zar.get("Z_ZAR_MAX_ENTRIES"),
-        "regions": regions,
     }
+    lay["regions"] = regions_at(lay, base)
+    return lay
+
+
+def regions_at(lay, base):
+    """The flash map for a board whose Zeitlos region starts at `base`.
+
+    The jumploader appears only at the default base, which is the only
+    place it exists today (ECP5 boards that set JUMP; docs/zboot.md).
+    """
+    o = lay["offsets"]
+    regions = [
+        Region("gateware", "gateware", 0, base,
+               "start of flash, up to the Zeitlos region"),
+        Region("kernel", "kernel", base + o["kernel"], o["apps"] - o["kernel"],
+               "sw/common/zsoc.h Z_FLASH_KERNEL_OFF"),
+        Region("apps", "core apps (ZAR)", base + o["apps"], o["apps_end"] - o["apps"],
+               "sw/common/zsoc.h Z_FLASH_ZAR_OFF"),
+    ]
+    if base == lay["default_base"]:
+        jump_abs, _ = lay["jump"]
+        regions.append(Region("jump", "jumploader", jump_abs,
+                              base + o["kv"] - jump_abs,
+                              "sw/common/zsoc.h Z_JUMP_FLASH_OFFSET, up to the store"))
+    # Never part of an image: the running system writes it. An image
+    # padded over it (a full JTAG image, a DFU image) erases it, which
+    # docs/kvstore.md says is allowed.
+    regions.append(Region("kv", "key/value store (written by the running system)",
+                          base + o["kv"], o["kv_size"], "sw/common/zsoc.h Z_FLASH_KV_OFF"))
+    return regions
 
 
 def describe(lay):

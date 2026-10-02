@@ -456,6 +456,16 @@ module sysctl #()
 	output DDMI_D1_P,
 	output DDMI_D2_P,
 	output DDMI_CK_P,
+`ifdef XC7
+	// 7-series drives a differential pair through an OBUFDS with two
+	// pins, so the N halves are ports here; ECP5 drives the pair from
+	// one port with a pseudo-differential IO_TYPE. Both halves must be
+	// constrained on xc7 -- see boards/sergei_mx1.xdc.
+	output DDMI_D0_N,
+	output DDMI_D1_N,
+	output DDMI_D2_N,
+	output DDMI_CK_N,
+`endif
 `endif
 `endif
 
@@ -478,8 +488,13 @@ module sysctl #()
    output CSPI_SS_FLASH,
    input CSPI_MISO,
    output CSPI_MOSI,
+// The flash clock is the configuration clock, a dedicated ball with no
+// user IO behind it on ECP5 (reached through USRMCLK) and on 7-series
+// (through STARTUPE2). Only other families get a port for it.
 `ifndef FPGA_ECP5
+`ifndef FPGA_XC7
    output CSPI_SCK,
+`endif
 `endif
 `endif
 
@@ -520,7 +535,30 @@ module sysctl #()
 	wire clk12mhz;
 
 `ifdef OSC48
+`ifdef XC7
+	// The system clock gets its own, explicitly instantiated global
+	// buffer with the pin as its only input. Left to yosys's clkbufmap,
+	// the buffer is chosen and sourced by the tool, and with the MMCM
+	// outputs also needing global buffers that once left sys_clk
+	// running from a video clock: the design built, met timing (against
+	// the constraint, which said 48MHz) and ran -- at the wrong speed,
+	// which showed only as a console at the wrong baud rate.
+	// clkbuf_inhibit stops clkbufmap adding a second buffer in front.
+	(* clkbuf_inhibit *) wire clk48_pin;
+	assign clk48_pin = CLK_48;
+`ifdef SDRAM_CLK90
+	// With SDRAM_CLK90 the pin only feeds the MMCMs (and their reset
+	// counter): sys_clk is pll0's 48 MHz output, so that it and the 90
+	// degree SDRAM clock come from one MMCM, as LiteX's sys and sys_ps
+	// do. See the SDRAM clock below.
+	wire clk48_ref;
+	BUFG bufg_ref_clk (.I(clk48_pin), .O(clk48_ref));
+`else
+	BUFG bufg_sys_clk (.I(clk48_pin), .O(clk48mhz));
+`endif
+`else
 	assign clk48mhz = CLK_48;
+`endif
 `elsif OSC25
 	assign clk25mhz = CLK_25;
 `endif
@@ -584,6 +622,55 @@ module sysctl #()
 	);
 
 `endif
+
+`elsif XC7
+
+	// Two MMCMs (rtl/clk/pll0_xc7.v, pll1_xc7.v), the same split and the
+	// same outputs as the ECP5 pll0/pll1 so nothing downstream changes.
+	// Both take sys_clk's input clock; sys_clk itself is the pin, not
+	// an MMCM output. reset waits for both to lock.
+	wire pll_locked = pll0_locked && pll1_locked;
+	wire pll0_locked;
+	wire pll1_locked;
+
+	// Hold the MMCMs in reset for 1024 input clocks, counted ON that
+	// clock. A 7-series MMCM is only specified to lock if its input is
+	// stable when it starts, and on the Sechzig MX1 the 48 MHz comes from
+	// the carrier's RP2040, which has its own firmware to boot first. If
+	// the clock arrives late this count does not start until it does, so
+	// the MMCMs always start on a running clock. Free on a board with a
+	// crystal (Kirsch): 21 us after configuration.
+`ifdef SDRAM_CLK90
+	wire clk48_mmcm_in = clk48_ref;
+	wire clk48_90;
+`else
+	wire clk48_mmcm_in = clk48mhz;
+`endif
+	reg [9:0] mmcm_rst_cnt = 10'd0;
+	always @(posedge clk48_mmcm_in)
+		if (!(&mmcm_rst_cnt)) mmcm_rst_cnt <= mmcm_rst_cnt + 10'd1;
+	wire mmcm_rst = !(&mmcm_rst_cnt);
+
+	pll0_xc7 #() pll0_i (
+		.rst(mmcm_rst),
+		.clkin(clk48_mmcm_in),
+		.clkout0(clk100mhz),
+`ifdef SDRAM_CLK90
+		.clkout1(clk48mhz),
+		.clkout4(clk48_90),
+`endif
+		.clkout2(clk50mhz),
+		.clkout3(clk12mhz),
+		.locked(pll0_locked)
+	);
+
+	pll1_xc7 #() pll1_i (
+		.rst(mmcm_rst),
+		.clkin(clk48_mmcm_in),
+		.clkout0(clk126mhz),
+		.clkout1(clk25_2mhz),
+		.locked(pll1_locked)
+	);
 
 `elsif GATEMATE
 
@@ -963,7 +1050,15 @@ module sysctl #()
 	// upper bits so yosys builds a LUT tree rather than a 32-bit
 	// subtractor: the `<` form came out as a 14-stage CCU2C carry chain
 	// on the critical path.
-	wire cs_bram = (wbm_adr[31:13] == 19'd0);
+	// The BIOS block RAM's window is exactly its size, from -DBRAM_WORDS
+	// (rtl/mem/bram.v; 8 KB by default). It was hard-wired to 8 KB here,
+	// so a bigger RAM put the BIOS's stack -- which starts at the top --
+	// at an address nothing acknowledged, and the bus stalled.
+`ifndef BRAM_WORDS
+`define BRAM_WORDS 2048
+`endif
+	localparam BRAM_AW = $clog2(`BRAM_WORDS) + 2;	// byte address bits
+	wire cs_bram = (wbm_adr[31:BRAM_AW] == 0);
 	wire cs_mtu = ((wbm_adr & 32'hf000_0000) == 32'h9000_0000);
 
 `ifdef MEM_SRAM
@@ -2324,6 +2419,56 @@ module sysctl #()
 
 	wire wbm_cyc_sdram = cs_sdram && wbm_cyc;
 
+	// The SDRAM clock. The controller drives ~wb_clk (rtl/mem/
+	// sdram_kianv.v) and on ECP5 that goes straight to the pin. A clock
+	// has no route from fabric to an output pin on 7-series, so there an
+	// ODDR clocked by wb_clk emits it: low on the rising edge, high on
+	// the falling, i.e. ~wb_clk from the IOB with a fixed phase.
+	wire sdram_clk_ctrl;
+`ifdef SDRAM_CLK90
+	// 7-series, LiteX's way: the 90 degree clock out of an ODDR with
+	// D1 = 1, D2 = 0 -- DDROutput(1, 0, sys_ps). The 1 and the 0 are
+	// registers that settle after reset rather than constants, so the
+	// pin does not depend on how the tools realise a constant 0 (openXC7
+	// 1.x routes VCC and sets an inversion bit). Static after reset, so
+	// crossing into the 90 degree domain is harmless.
+	reg sdclk_hi = 1'b0;
+	reg sdclk_lo = 1'b1;
+	always @(posedge wbm_clk) begin
+		sdclk_hi <= sys_rstn;
+		sdclk_lo <= !sys_rstn;
+	end
+	ODDR #(
+		.DDR_CLK_EDGE("SAME_EDGE"),
+		.INIT(1'b0),
+		.SRTYPE("SYNC")
+	) sdram_clk_oddr (
+		.Q(sdram_clock),
+		.C(clk48_90),
+		.CE(1'b1),
+		.D1(sdclk_hi),
+		.D2(sdclk_lo),
+		.R(1'b0),
+		.S(1'b0)
+	);
+`elsif XC7
+	ODDR #(
+		.DDR_CLK_EDGE("SAME_EDGE"),
+		.INIT(1'b0),
+		.SRTYPE("SYNC")
+	) sdram_clk_oddr (
+		.Q(sdram_clock),
+		.C(wbm_clk),
+		.CE(1'b1),
+		.D1(1'b0),
+		.D2(1'b1),
+		.R(1'b0),
+		.S(1'b0)
+	);
+`else
+	assign sdram_clock = sdram_clk_ctrl;
+`endif
+
 	sdram_wb #(
 		.SDRAM_CLK_FREQ(SYSCLK / 1_000_000),
 `ifdef SDRAM_BURST
@@ -2343,7 +2488,7 @@ module sysctl #()
       .wb_ack_o(wbs_sdram_ack_o),
       .wb_cyc_i(wbm_cyc_sdram),
       .wb_cti_i(wbm_cti),
-		.sdram_clk(sdram_clock),
+		.sdram_clk(sdram_clk_ctrl),
 		.sdram_cke(sdram_cke),
 		.sdram_csn(sdram_cs_n),
 		.sdram_rasn(sdram_ras_n),
@@ -2481,12 +2626,41 @@ module sysctl #()
 `ifdef FPGA_ECP5
 	wire CSPI_SCK;
 	USRMCLK usrmclk0 (.USRMCLKI(CSPI_SCK), .USRMCLKTS(1'b0));
+`elsif FPGA_XC7
+	// CCLK is reached through STARTUPE2 after configuration -- the
+	// same job USRMCLK does on ECP5. USRCCLKTS low drives the pin;
+	// USRDONEO/USRDONETS leave DONE alone. rtl/spiflash.v must not
+	// tri-state this net: 7-series fabric has no internal tri-state.
+	wire CSPI_SCK;
+	STARTUPE2 #(
+		.PROG_USR("FALSE"),
+		.SIM_CCLK_FREQ(0.0)
+	) startupe2_i (
+		.CLK(1'b0),
+		.GSR(1'b0),
+		.GTS(1'b0),
+		.KEYCLEARB(1'b0),
+		.PACK(1'b0),
+		.USRCCLKO(CSPI_SCK),
+		.USRCCLKTS(1'b0),
+		.USRDONEO(1'b1),
+		.USRDONETS(1'b1)
+	);
+`endif
+
+	// The write lock: nothing below this offset can be erased or
+	// programmed (rtl/spiflash.v). The DFU bootloader on ECP5 boards;
+	// the whole 2.09 MB bitstream on Artix-7 ones (rtl/boards.vh).
+`ifdef SPIFLASH_LOCK_END
+	localparam [23:0] SPIFLASH_LOCK = `SPIFLASH_LOCK_END;
+`else
+	localparam [23:0] SPIFLASH_LOCK = 24'h040000;
 `endif
 
 	// The flash: read through the window at 0x1000_0000, erased and
 	// programmed through the registers at 0x1F00_0000, never below
 	// 0x040000 (the DFU bootloader). rtl/spiflash.v, docs/spiflash.md.
-	spiflash_wb #() wbs_rom0_i
+	spiflash_wb #(.LOCK_END(SPIFLASH_LOCK)) wbs_rom0_i
 	(
 		.wb_clk_i(wbm_clk),
 		.wb_rst_i(wbm_rst),
@@ -2517,6 +2691,38 @@ module sysctl #()
 	wire [63:0] gpio_out;
 	wire [63:0] gpio_in;
 
+	// -- `BRINGUP_LED_STATUS: the board LED shows how far the SOC got --
+	//
+	// Pure hardware, so it answers on a board where nothing has printed:
+	//
+	//   fast blink, ~6 Hz   the MMCMs have not locked, so reset is held
+	//                       and the CPU has not started (pll_locked)
+	//   solid on            the CPU has trapped
+	//   slow blink, ~1 Hz   the CPU is running: the rate comes from its
+	//                       bus cycles (bit 23 of a count of acks), not
+	//                       from time, so a running CPU is the only way
+	//                       to get it
+	//   static, on or off   the CPU is stalled on a bus cycle nothing
+	//                       acknowledged
+	//
+	// The video path cannot tell these apart: the cursor comes out of
+	// reset centred and busy, and looks the same with the CPU running or
+	// held. Bring-up only -- software cannot drive the LED while it is set.
+	wire gpio_led;
+`ifdef BRINGUP_LED_STATUS
+	reg [21:0] led_tick = 22'd0;
+	reg [23:0] led_acks = 24'd0;
+	always @(posedge sys_clk) begin
+		led_tick <= led_tick + 22'd1;
+		if (wbm_cpu_ack) led_acks <= led_acks + 24'd1;
+	end
+	assign LED_B = !pll_locked ? led_tick[21] :
+	               cpu_trap    ? 1'b1 :
+	               led_acks[23];
+`else
+	assign LED_B = gpio_led;
+`endif
+
 	gpio_wb #(
 		.NPORTS(GPIO_NPORTS)
 	) wbs_gpio0_i
@@ -2531,7 +2737,7 @@ module sysctl #()
 		.wb_stb_i(wbm_stb),
 		.wb_ack_o(wbs_gpio_ack_o),
 		.wb_cyc_i(wbm_cyc_gpio),
-		.led(LED_B),
+		.led(gpio_led),
 `ifdef LED_DEBUG
 		.leds(DBG),
 `endif
@@ -2948,7 +3154,26 @@ module sysctl #()
 
 `ifdef ETH_RMII_DRIVE_REFCLK
    wire eth_refclk = clk50mhz;
+`ifdef XC7
+	// Same reason as the SDRAM clock: out through an ODDR on 7-series.
+	// D1=1, D2=0 gives the clock itself (in phase), as the plain assign
+	// does on ECP5.
+	ODDR #(
+		.DDR_CLK_EDGE("SAME_EDGE"),
+		.INIT(1'b0),
+		.SRTYPE("SYNC")
+	) eth_refclk_oddr (
+		.Q(ETH_REFCLK),
+		.C(clk50mhz),
+		.CE(1'b1),
+		.D1(1'b1),
+		.D2(1'b0),
+		.R(1'b0),
+		.S(1'b0)
+	);
+`else
 	assign ETH_REFCLK = eth_refclk;
+`endif
 `else
    wire eth_refclk = ETH_REFCLK;
 `endif
@@ -3146,7 +3371,12 @@ module sysctl #()
 	csrs_wb #(
 		.MEM_MB(`MEM),
 		.FEATURES(CSR_FEATURES),
+`ifdef FLASH_BASE
+		.FEATURES2(CSR_FEATURES2),
+		.FLASH_BASE(`FLASH_BASE)
+`else
 		.FEATURES2(CSR_FEATURES2)
+`endif
 	) wbs_csrs0_i
 	(
 		.wb_clk_i(wbm_clk),
@@ -3708,6 +3938,9 @@ module sysctl #()
 `endif
 `ifdef GPU_DDMI
 		.dvi_p({ DDMI_CK_P, DDMI_D2_P, DDMI_D1_P, DDMI_D0_P }),
+`ifdef XC7
+		.dvi_n({ DDMI_CK_N, DDMI_D2_N, DDMI_D1_N, DDMI_D0_N }),
+`endif
 `endif
 `endif
 	);

@@ -23,7 +23,7 @@ test** (`flashtest`, below).
 
 The window is exactly what it was: every 32-bit read is one `READ`
 (`03h`) transaction, little-endian, SPI mode 0, one bit per two clocks.
-The BIOS, the boot logo and the flash apps read it unchanged. Two
+The BIOS and the flash apps read it unchanged. Two
 differences: a **write to the window is acknowledged and ignored** (the
 old controller never acknowledged it, which hung the bus), and a read
 that arrives **while an erase or program is running waits** for it to
@@ -77,10 +77,32 @@ What this does not cover is **another bitstream**: user gateware booted
 through the jumploader has the flash pins to itself. `docs/zboot.md`
 section 7 has why the chip's own block protection is not used for that.
 
+## On Artix-7
+
+Three things differ, all under `` `XC7 ``:
+
+- **SCK and MOSI are never high-Z.** SCK goes to `STARTUPE2.USRCCLKO`
+  (CCLK has no user ball), and 7-series fabric has no internal
+  tri-state; MOSI is a plain output, as LiteX drives it.
+- **The flash is reset before the ID read**: `0xFF` x4, Enable Reset
+  (`66h`), Reset (`99h`), then 85 us for tRST. The configuration engine
+  leaves the part in a state where commands are not plain single-SPI
+  commands -- measured on Kirsch with `tools/kirsch-flashid`, whose ID
+  read worked over JTAG and failed from a flash boot until this went in.
+- **The lock covers the bitstream**: `LOCK_END` is `0x220000`
+  (`` `SPIFLASH_LOCK_END ``, `rtl/boards.vh`), past the fixed 2.09 MB of
+  an XC7A35T bitstream, rather than the DFU bootloader's `0x040000`.
+
+`tb_spiflash.v` passes all 28 checks on the ECP5 path. With `-DXC7` the
+functional checks all pass, including the ID read after the reset; it
+reports two failures, both deliberate: the pins are not released when
+idle, and the model sees the three reset commands, which are not among
+the six it expects.
+
 ## The key/value store is off limits
 
-The last 8 KB of the chip is the kernel's key/value store
-([kvstore.md](kvstore.md)). `Z_SYS_FLASH` refuses to erase or program
+The last 8 KB of the Zeitlos flash region is the kernel's key/value
+store ([kvstore.md](kvstore.md), [boot.md](boot.md#the-flash-layout)). `Z_SYS_FLASH` refuses to erase or program
 any of it, whoever asks, with `Z_FLASH_E_RESERVED` (bit 16, `zflash.h`)
 in `result` -- a refusal made by the kernel, not the controller, so it
 appears alongside the controller's own bits. The check is made modulo
@@ -121,14 +143,16 @@ From the serial shell:
 
 ```
 flash        JEDEC ID, size, the lock, the status
-flashtest    erase and program sector 0x1FC000, and read it back
+flashtest    erase and program the test sector, and read it back
 ```
 
-`flashtest` uses sector `0x1FC000`: inside the jumploader region but
-past its end -- a 25F jumploader ends at `0x1E8530`, a 45F one at
-`0x1F7BE9` -- and below the key/value store, which has the last 8 KB of
-the chip ([kvstore.md](kvstore.md)). It used `0x1FF000` until the store
-took that. It refuses to erase its sector unless it is blank or holds
+`flashtest` uses the 4 KB sector at the Zeitlos region's base +
+`0xFC000` (`Z_FLASH_TEST_OFF`): `0x1FC000` on ECP5, `0x3FC000` on
+Artix-7. On ECP5 that is inside the jumploader region but past its end
+-- a 25F jumploader ends at `0x1E8530`, a 45F one at `0x1F7BE9` -- and
+below the key/value store, which has the region's last 8 KB
+([kvstore.md](kvstore.md)). It must never be an absolute address: at
+`0x1FC000` it would be inside an Artix-7 bitstream. It refuses to erase its sector unless it is blank or holds
 its own pattern from an earlier run, and refuses outright if the sector
 is ever the store's. It checks, in order:
 

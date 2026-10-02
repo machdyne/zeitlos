@@ -37,7 +37,7 @@ helpfully rebuilding something nobody has looked at.
 
 ```
 release/dist/0.0.3/
-  zeitlos-lakritz_gpio.img          gateware + logo + kernel + core apps
+  zeitlos-lakritz_gpio.img          gateware + kernel + core apps
                                     + jumploader
   zeitlos-lakritz_katze.img
   zeitlos-lakritz_langkatze.img
@@ -47,7 +47,6 @@ release/dist/0.0.3/
   zeitlos-<target>-jump.bin         the jumploader, per board (boards with one)
   zeitlos-kernel.bin                identical for every target
   zeitlos-apps.zar                  identical for every target
-  zeitlos-logo.bin                  identical for every target
   zeitlos.img.gz                    sdcard image: apps, docs, zdocs
   zeitlos-arklite.img.gz            ...plus Ark Lite for `ask`
   zeitlos-arkmedium.img.gz          ...plus Ark Medium (~1.5GB and up)
@@ -433,8 +432,8 @@ Then once per release: the sdcard images, `README.txt`, `NOTES.md`,
 | Timing failure | A named clock domain missed its target in the **final** report. IO domains are advisory; see below. | `--allow-timing-fail` |
 | Unconstrained port | `rtl/sysctl.v` declares a port nothing gives pins to. nextpnr rejects it; this says which define would remove it. | none — pins, or `-NAME` |
 | Two ports on one ball | Two PMODs overlapping, or a PMOD pin hitting something constrained outside any port. | none — `lpf_drop`, or relocate |
-| Region overrun | An oversized gateware silently eats the boot splash; an oversized kernel eats the start of the ZAR. Both present later as *that feature stopped working*. | none — shrink it or move the region |
-| Layout disagreement | The flash offsets in `bios.c`, `logo.h`, `zar.h` and the Makefile no longer agree. | none — reconcile them |
+| Region overrun | An oversized gateware silently eats the start of the kernel; an oversized kernel eats the start of the ZAR. Both present later as *that feature stopped working*. | none — shrink it or move the region |
+| Layout disagreement | The flash offsets in `zsoc.h`, `bios.c`, `zar.h` and the Makefile no longer agree. | none — reconcile them |
 
 ### Timing
 
@@ -475,13 +474,15 @@ silently dropped — a real problem hiding behind one stays visible.
 ## The flash map
 
 Not defined in `release/`. `lib/layout.py` reads it out of
-`sw/bios/bios.c`, `sw/os/logo.h`, `sw/os/zar.h` and the top-level
-`Makefile`, cross-checks all four, and refuses to do anything if they
-disagree. Two consequences worth having:
+`sw/common/zsoc.h` (the Zeitlos region: [boot.md](../docs/boot.md#the-flash-layout)),
+`sw/bios/bios.c`, `sw/os/zar.h` and the top-level `Makefile`,
+cross-checks them, and refuses to do anything if they disagree. A
+board whose region is not at the default base gets its map from
+`layout.regions_at(lay, base)`. Two consequences worth having:
 
 - The release tool cannot disagree with the running system, because it
   has no numbers of its own to disagree with.
-- `zrelease layout` becomes a standing check on the four `KEEP IN SYNC`
+- `zrelease layout` becomes a standing check on the `KEEP IN SYNC`
   comments those files already carry. Run it after touching any of them.
 
 ```
@@ -489,21 +490,22 @@ $ release/zrelease layout
 
   offset    limit      region
   --------  ---------  ------------------
-  0x000000     983040  gateware
-  0x0f0000      65536  boot logo
+  0x000000    1048576  gateware
   0x100000     262144  kernel
-  0x140000     786432  core apps (ZAR)
+  0x140000     589824  core apps (ZAR)
+  0x1d0000     188416  jumploader
+  0x1fe000       8192  key/value store (written by the running system)
   0x200000             end of flash
 ```
 
 Two properties of the assembled image that matter:
 
 **The fill byte is `0xFF`, not zero.** Erased NOR flash reads as `0xFF`
-and two pieces of this system test for exactly that: `sw/os/logo.c`
-skips drawing if it finds erased flash where the splash should be, and
-`sw/os/zar.c` checks for the `ZAR1` magic. Filling gaps with `0x00`
-would write real zeros over regions meant to read as erased, turning *no
-logo programmed* into *a logo made of black pixels*.
+and two pieces of this system test for exactly that: the BIOS refuses
+to autoboot a kernel region that reads as erased, and `sw/os/zar.c`
+checks for the `ZAR1` magic. Filling gaps with `0x00` would write real
+zeros over regions meant to read as erased, turning *nothing
+programmed* into *something programmed*.
 
 **Images are trimmed, not padded to 2MB.** The last byte written is the
 end of the ZAR, around 1.5MB in practice. The remaining half-megabyte is
@@ -526,7 +528,6 @@ Using Mozart as the example, with that board's own `flash_cmd` from
 
 ```
 $ openFPGALoader -v -c dirtyJtag -f -o 0x000000 zeitlos-mozart_ml1-gateware.bit
-$ openFPGALoader -v -c dirtyJtag -f -o 0x0f0000 zeitlos-logo.bin
 $ openFPGALoader -v -c dirtyJtag -f -o 0x100000 zeitlos-kernel.bin
 $ openFPGALoader -v -c dirtyJtag -f -o 0x140000 zeitlos-apps.zar
 $ openFPGALoader -v -c dirtyJtag -f -o 0x1d0000 zeitlos-mozart_ml1-jump.bin
@@ -553,14 +554,14 @@ without its jumploader, and asks the Makefile which boards those are
 (`board_jumps()` in `lib/build.py`) rather than keeping its own list.
 
 The offsets are the flash map above, and they are not a convention the
-release tool invented — `sw/bios/bios.c` reads the splash and the
-kernel from those addresses and `sw/os/zar.h` reads the archive from
+release tool invented — `sw/bios/bios.c` reads the kernel from the
+start of the Zeitlos region and `sw/os/zar.h` reads the archive from
 its one, so a piece written to the wrong offset produces a board that
 configures and then hangs with nothing on screen.
 
 **Only the gateware and the jumploader are board-specific** -- the
 jumploader because it is built for the board's die. `zeitlos-kernel.bin`,
-`zeitlos-apps.zar` and `zeitlos-logo.bin` are byte-identical across
+and `zeitlos-apps.zar` are byte-identical across
 every target in a release, which is why they have no board name. The
 `net` app carries every NIC driver and selects one at startup from the
 SOC feature register, so there is nothing per-board left in them.
@@ -949,7 +950,7 @@ artifacts written in their place. Everything from the generated
 `zspec.vh` through image assembly, the manifest, the notes and the
 checksums is real code on real data. It checks, among other things, that
 a timing failure stops a build, that `--allow-timing-fail` overrides it,
-that the ZAR magic and the splash land at the right offsets, that gaps
+that the ZAR magic and the kernel land at the right offsets, that gaps
 are left erased, and that `net` is in the archive exactly when the
 target has a MAC.
 

@@ -2,8 +2,8 @@
 
 A few kilobytes of settings that belong to the **machine** rather than
 to a card: they exist with no sdcard inserted, and they do not travel
-with one. It lives in the last 8 KB of the configuration flash and the
-kernel keeps it.
+with one. It lives in the last 8 KB of the Zeitlos flash region
+([boot.md](boot.md#the-flash-layout)) and the kernel keeps it.
 
 **Status: running on boards** -- it holds the password, the lock
 policy and the SSH host key there. Host-tested, power cuts included.
@@ -46,18 +46,24 @@ else is here, and nothing else: the machine boots as a fresh one would.
 
 ## Where
 
-The **last 8 KB of the chip**: two 4 KB sectors.
+The **last 8 KB of the Zeitlos region**: two 4 KB sectors at the region
+base + `0xFE000` (`Z_FLASH_KV_OFF`, `sw/common/zsoc.h`), the base read
+from `rtl/csrs.v` word 63 at boot.
 
-| flash | store | why it is free |
+| boards | base | store |
 |---|---|---|
-| 2 MB | `0x1FE000`-`0x1FFFFF` | the tail of the jumploader region; the 25F jumploader ends at `0x1E8530`, the 45F one at `0x1F7BE9` |
-| 4 MB, 8 MB, 16 MB | the last 8 KB | past the jumploader and the ZAR; `zfpga` stops short of it |
-| over 16 MB | the last 8 KB of the first 16 MB | all the controller's 3-byte addresses reach |
+| ECP5 | `0x100000` | `0x1FE000`-`0x1FFFFF`: the tail of the jumploader region; the 25F jumploader ends at `0x1E8530`, the 45F one at `0x1F7BE9` |
+| Artix-7 | `0x300000` | `0x3FE000`-`0x3FFFFF` |
 
-The kernel reads the chip's size from its JEDEC ID at boot
-(`Z_SPIFLASH_ID`). A bitstream without the flash writer
-(`Z_FEATURE2_FLASHW` clear) cannot report it; the store is then assumed
-to be on a 2 MB chip and is **read-only**.
+On a 2 MB ECP5 chip and the 4 MB MX1 that is also the last 8 KB of the
+chip. It used to be the last 8 KB of the chip on every board; on larger
+chips it has moved, and a store written there by an older kernel is not
+found (the machine boots as a fresh one would).
+
+The kernel still reads the chip's size from its JEDEC ID at boot
+(`Z_SPIFLASH_ID`), but only to recognise addresses that alias the store
+(below). A bitstream without the flash writer (`Z_FEATURE2_FLASHW`
+clear) cannot report it; the store is then **read-only**.
 
 What changed elsewhere to make room:
 
@@ -66,8 +72,8 @@ What changed elsewhere to make room:
   against `ZFPGA_KV_SIZE` (`sw/apps/zfpga/boot.c`), as it does the
   other offsets.
 - `zfpga`'s "after the jumploader" space ends 8 KB before the chip does.
-- `flashtest` moved from `0x1FF000`, which is now the store, to
-  `0x1FC000`, and refuses outright if its sector is ever the store.
+- `flashtest` uses the region's sector at `+0xFC000` (`0x1FC000` on
+  ECP5), and refuses outright if its sector is ever the store.
 - **`Z_SYS_FLASH` refuses to erase or program the store**, whoever
   asks, with `Z_FLASH_E_RESERVED` (`zflash.h`). The check is made modulo
   the chip size, because the chip ignores address bits above its size:

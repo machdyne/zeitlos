@@ -25,9 +25,19 @@ module bram_wb #()
 	input wb_cyc_i,
 );
 
-	reg [31:0] ram [0:2047];
+	// The BIOS image bank: BRAM_WORDS words (2048 = 8 KB), the same on
+	// every board, with the BIOS in it.
+`ifndef BRAM_WORDS
+`define BRAM_WORDS 2048
+`endif
+	reg [31:0] ram [0:`BRAM_WORDS-1];
 
+// GateMate and Artix-7 have no bitstream tool that splices the BIOS in
+// after place-and-route (ECP5's ecpbram), so on those the real BIOS is
+// read here, at synthesis -- which is why the Makefile builds it first.
 `ifdef FPGA_GATEMATE
+	initial $readmemh("sw/bios/bios.hex", ram);
+`elsif FPGA_XC7
 	initial $readmemh("sw/bios/bios.hex", ram);
 `else
 	initial $readmemh("sw/bios/bios_seed.hex", ram);

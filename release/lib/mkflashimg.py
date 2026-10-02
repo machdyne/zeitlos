@@ -13,12 +13,11 @@
 #
 # 1. THE FILL BYTE IS 0xFF, NOT ZERO. Erased NOR flash reads as 0xFF,
 #    and two pieces of this system check for exactly that:
-#    sw/os/logo.c skips drawing if it finds erased flash where the
-#    splash should be, and sw/os/zar.c checks for the "ZAR1" magic
-#    before trusting the archive. Filling the gaps with 0x00 would
-#    write real zeros over regions that are supposed to read as erased,
-#    which turns "no logo programmed" into "a logo made of black
-#    pixels" and defeats both checks.
+#    sw/os/zar.c checks for the "ZAR1" magic before trusting the
+#    archive, and the BIOS refuses to autoboot a kernel region that
+#    reads as erased. Filling the gaps with 0x00 would write real zeros
+#    over regions that are supposed to read as erased, which turns
+#    "nothing programmed" into "something programmed" and defeats both.
 #
 # 2. THE IMAGE IS TRIMMED, NOT PADDED TO 2MB. The last byte written is
 #    the end of the ZAR, which lands around 1.5MB in practice. The
@@ -66,7 +65,7 @@ def build(layout, parts, full=False):
     #
     # Overrunning a region does not fail at flash time and does not fail
     # at boot in any way that names the cause -- an oversized gateware
-    # simply eats the boot logo, and an oversized kernel eats the start
+    # simply eats the start of the kernel, and an oversized kernel eats the start
     # of the ZAR. Both then present as "that feature stopped working".
     # Fail here instead, where the numbers are in hand.
     rows = []

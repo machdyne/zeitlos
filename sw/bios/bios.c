@@ -55,6 +55,7 @@
 // other reg_* macro above is a private copy here, not a #include).
 #define reg_csr_magic  (*(volatile uint32_t*)0x70000000)
 #define reg_csr_mem_mb (*(volatile uint32_t*)0x70000004)
+#define reg_csr_flash_base (*(volatile uint32_t*)0x700000fc)	// word 63
 #define CSR_MAGIC 0x5A454954	// "ZEIT" -- see rtl/csrs.v
 
 #define AUTOLOAD_CNT		500000
@@ -67,7 +68,7 @@
 #define MEM_VRAM_SIZE	(640 * 480) / 32
 #define MEM_MAIN			0x40000000
 
-// DDR3 boards build a MINIMAL BIOS: copy the logo, train the DDR3 read
+// DDR3 boards build a MINIMAL BIOS: clear VRAM, train the DDR3 read
 // path, load the OS, boot. Nothing else fits beside the training --
 // the BIOS has 2048 words and the full monitor uses 1984 of them.
 // Once training is settled it can move into gateware and the full
@@ -86,20 +87,15 @@
 #define MEM_APP			0x80000000
 #define MEM_APP_SIZE		1024 * 1024
 
-#define ROM_OS_ADDR		(MEM_ROM + (1024 * 1024 * 1))
+// The kernel is the first thing in the Zeitlos flash region, whose base
+// rtl/csrs.v reports in word 63 (docs/boot.md, "The flash layout"). 0,
+// or no CSRs at all, means the legacy base the ECP5 boards have always
+// used. KEEP FLASH_BASE_DEFAULT IN SYNC with Z_FLASH_BASE_DEFAULT
+// (sw/common/zsoc.h); release/lib/layout.py checks.
+#define FLASH_BASE_DEFAULT	0x100000
+#define ROM_OS_ADDR		(MEM_ROM + flash_base())
 #define ROM_OS_SIZE		1024 * 256
 
-// Boot splash -- a full 640x480 1bpp framebuffer image, programmed at a
-// fixed flash offset just below the kernel's by the top-level Makefile's
-// `flash_logo` target. It is pre-centred and pre-padded at build time
-// (sw/data/images/pad_logo.py), so showing it is one flat copy of the
-// whole framebuffer rather than a row-by-row copy -- which matters here,
-// where the BIOS budget is measured in bytes against BRAM_WORDS.
-//
-// KEEP IN SYNC with Z_BOOT_LOGO_FLASH_OFFSET (sw/os/logo.h) and
-// LOGO_FLASH_OFFSET_HEX/_DEC (top-level Makefile).
-#define ROM_LOGO_ADDR	(MEM_ROM + 0x000F0000)
-#define ROM_LOGO_SIZE	((640 * 480) / 8)
 
 //#include "scancodes.h"
 //#include "hidcodes.h"
@@ -117,6 +113,21 @@ uint32_t mem_total;
 // address at all -- reading it doesn't fault on this bus, it just
 // returns whatever rtl/sysctl.v's data-mux default case resolves to,
 // so the magic-number check is the only reliable way to tell) or if
+static __attribute__((noinline)) uint32_t flash_base(void) {
+	if (reg_csr_magic != CSR_MAGIC || !reg_csr_flash_base)
+		return FLASH_BASE_DEFAULT;
+	return reg_csr_flash_base;
+}
+
+// Clear the framebuffer. There is no boot logo any more (docs/boot.md);
+// the busy cursor, which the hardware raises at reset in the middle of
+// the screen, is the sign of life. This just makes sure it sits on a
+// black screen rather than on whatever the last run left in VRAM.
+static void vram_clear(void) {
+	volatile uint32_t *v = (volatile uint32_t *)MEM_VRAM;
+	for (uint32_t i = 0; i < MEM_VRAM_SIZE; i++) v[i] = 0;
+}
+
 // the MB value itself is implausibly zero.
 uint32_t get_mem_main_size() {
 	if (reg_csr_magic != CSR_MAGIC) return MEM_MAIN_SIZE_DEFAULT;
@@ -127,8 +138,10 @@ uint32_t get_mem_main_size() {
 
 // --------------------------------------------------------
 
+#ifndef BIOS_NO_XFER
 uint32_t xfer_recv(uint32_t addr);
 uint32_t crc32b(char *data, uint32_t len);
+#endif
 char scantoascii(uint8_t scancode);
 char hidtoascii(uint8_t code);
 
@@ -195,6 +208,17 @@ void getchars(char *buf, int len) {
 	};
 }
 
+// -- BIOS_NO_XFER: leave out the xfer receiver and its CRC32 --
+//
+// The two biggest pieces of the BIOS a board can boot without. The BIOS
+// image and its stack share one block RAM -- image growing up from 0,
+// stack down from the top -- and with a full 8 KB image the gap between
+// them is a couple of hundred bytes; a newer compiler closes it, and
+// then a return address is overwritten and the BIOS prints one value
+// forever. Set per board from BIOS_FLAGS in the top-level Makefile;
+// sw/bios/Makefile reports the stack room on every build, and can be
+// told to refuse a build with too little (BIOS_MIN_STACK).
+#ifndef BIOS_NO_XFER
 uint32_t xfer_recv(uint32_t addr_ptr)
 {
 
@@ -263,6 +287,7 @@ uint32_t crc32b(char *data, uint32_t len) {
 	}
 	return ~crc;
 }
+#endif /* BIOS_NO_XFER */
 
 void cmd_echo() {
 	int c;
@@ -387,16 +412,17 @@ void bios_wordcpy(uint32_t dest, uint32_t src, uint32_t n) {
 }
 
 void load_zeitlos() {
-	print("loading zeitlos from rom to main memory ... ");
+	uint32_t rom_os = ROM_OS_ADDR;		// read the region base once
 
-	print_hex(MEM_MAIN, 8);
-	print(" ");
-	print_hex(ROM_OS_ADDR, 8);
-	print(" ");
-	print_hex(ROM_OS_SIZE, 8);
-	print(" ");
+	// Only the source address is printed: it is the one that varies by
+	// board (the region base, docs/boot.md), so it is the one worth
+	// seeing when a board does not boot. The destination and size are
+	// constants, and this BIOS has no bytes to spare.
+	print("loading zeitlos from ");
+	print_hex(rom_os, 8);
+	print(" ... ");
 
-	bios_wordcpy(MEM_MAIN, ROM_OS_ADDR, ROM_OS_SIZE);
+	bios_wordcpy(MEM_MAIN, rom_os, ROM_OS_SIZE);
 
 	// The kernel image was just written through the data path. The
 	// instruction cache (rtl/cache.v) caches fetches only, so it never
@@ -461,12 +487,16 @@ void cmd_toggle_addr_ptr(void) {
 }
 
 void cmd_xfer() {
+#ifdef BIOS_NO_XFER
+	print("no xfer in this BIOS\n");
+#else
 	uint32_t b = xfer_recv(addr_ptr);
 	print("xfer received ");
 	print_hex(b, 8);
 	print(" bytes at ");
 	print_hex(addr_ptr, 8);
 	print("\n");
+#endif
 }
 
 void uart_init() {
@@ -840,7 +870,7 @@ void main() {
 
 	uart_init();
 	print("ZB\n");
-	bios_wordcpy(MEM_VRAM, ROM_LOGO_ADDR, ROM_LOGO_SIZE);
+	vram_clear();
 
 	if (!ddr3_train()) {
 		print("main memory unusable -- not booting\n");
@@ -868,13 +898,7 @@ void main() {
 
 	print("ZB\n");
 
-	// Splash before load_zeitlos() on purpose: the 256KB kernel copy is
-	// the longest pause in the boot, so this puts something on screen
-	// first. Flash is memory-mapped (load_zeitlos() copies the
-	// kernel straight out of it), so this uses no RAM at all -- and
-	// because the image is a whole pre-padded framebuffer, it also
-	// clears whatever was in VRAM at reset.
-	bios_wordcpy(MEM_VRAM, ROM_LOGO_ADDR, ROM_LOGO_SIZE);
+	vram_clear();
 
 #ifndef FPGA_GATEMATE
 	load_zeitlos();
@@ -914,6 +938,19 @@ void main() {
 	 * the window this covers. */
 	reg_uart0_fcr = (uint8_t)0b00000111;
 	while (getchar() != EOF);
+
+	// Only autoboot into something that could be a kernel. The copy
+	// above "succeeds" whatever the flash returns, and a flash that
+	// reads as erased (or a reader that is not working: docs/boot.md)
+	// gives 0xFFFFFFFF -- an illegal instruction, which picorv32 turns
+	// into IRQ 1, whose handler returns to it, forever. The BIOS would
+	// be gone a few seconds after every power-on. All ones and all
+	// zeros are both refused: (k + 1) > 1 is false for exactly those.
+	uint32_t k = *(volatile uint32_t *)MEM_MAIN;
+	if ((uint32_t)(k + 1) <= 1) {
+		interacted = true;
+		print("no kernel\n");
+	}
 
 	while (1) {
 

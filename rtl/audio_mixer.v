@@ -117,6 +117,19 @@
  * ordinary material" is not the same as cannot clip.
  */
 
+// Distributed RAM, except where the build has ruled LUT RAM out:
+// openXC7 builds it unreliably (docs/toolchain.md), so an xc7 build with
+// XC7_LUTRAM=-nolutram passes -DXC7_NOLUTRAM and these memories become
+// flip-flops instead. A ram_style attribute overrides yosys's -nolutram,
+// which is why this has to be decided here and not only in the Makefile.
+`ifndef ZRAM_DISTRIBUTED
+`ifdef XC7_NOLUTRAM
+`define ZRAM_DISTRIBUTED "logic"
+`else
+`define ZRAM_DISTRIBUTED "distributed"
+`endif
+`endif
+
 module audio_mixer #(
 	parameter integer FRAC_BITS = 14,
 
@@ -254,17 +267,17 @@ module audio_mixer #(
 	//
 	// Distributed RAM: one writer, one reader, eight entries. See this
 	// file's header.
-	(* ram_style = "distributed" *) reg [31:0] ch_base   [0:CHANNELS-1];
+	(* ram_style = `ZRAM_DISTRIBUTED *) reg [31:0] ch_base   [0:CHANNELS-1];
 	// 20 bits, not 32. A ProTracker sample is at most 65535 WORDS =
 	// 131070 bytes, which is 17 bits; 20 leaves headroom and still
 	// halves every comparator these feed. The 32-bit versions put a
 	// full-width carry chain on the critical path for a value that
 	// physically cannot use the top fourteen bits.
-	(* ram_style = "distributed" *) reg [19:0] ch_len    [0:CHANNELS-1];
-	(* ram_style = "distributed" *) reg [19:0] ch_lstart [0:CHANNELS-1];
-	(* ram_style = "distributed" *) reg [19:0] ch_llen   [0:CHANNELS-1];
-	(* ram_style = "distributed" *) reg [31:0] ch_step   [0:CHANNELS-1];
-	(* ram_style = "distributed" *) reg [31:0] ch_ctrl   [0:CHANNELS-1];
+	(* ram_style = `ZRAM_DISTRIBUTED *) reg [19:0] ch_len    [0:CHANNELS-1];
+	(* ram_style = `ZRAM_DISTRIBUTED *) reg [19:0] ch_lstart [0:CHANNELS-1];
+	(* ram_style = `ZRAM_DISTRIBUTED *) reg [19:0] ch_llen   [0:CHANNELS-1];
+	(* ram_style = `ZRAM_DISTRIBUTED *) reg [31:0] ch_step   [0:CHANNELS-1];
+	(* ram_style = `ZRAM_DISTRIBUTED *) reg [31:0] ch_ctrl   [0:CHANNELS-1];
 
 	/*
 	 * -- 8-bit and 16-bit samples --

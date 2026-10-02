@@ -22,7 +22,7 @@ JTAG and UART. The console is 1000000 8N1.
 ## Building, programming and bringing up
 
 `make BOARD=ulx3s DEVICE=85k flash` does the lot -- gateware, BIOS,
-kernel, boot splash and the core apps, all written to the SPI flash --
+kernel and the core apps, all written to the SPI flash --
 after which the board boots to a desktop with nothing attached. The
 pieces, for when you want one at a time:
 
@@ -30,7 +30,6 @@ pieces, for when you want one at a time:
 |--------|--------|-------|
 | `prog` | the bitstream | the FPGA's configuration **SRAM** |
 | `flash_soc` | the bitstream | flash, offset 0 |
-| `flash_logo` | the boot splash | flash, just below 1MB |
 | `flash_os` | `sw/os/kernel.bin` | flash, **1MB** |
 | `flash_apps` | `output/ulx3s/apps.zar` -- `wm`, `net`, `term` | flash, **1.25MB** |
 
