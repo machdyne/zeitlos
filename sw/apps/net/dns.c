@@ -207,6 +207,64 @@ static uint16_t skip_name(const uint8_t *p, uint16_t offset, uint16_t len) {
 
 }
 
+/*
+ * -- Replies are built in static storage, never malloc()ed --
+ *
+ * A reply payload is BORROWED: the kernel hands the receiver a pointer
+ * into this process, so it cannot be freed at the point of sending
+ * (docs/messaging.md, "Payload lifetime, and the leak it used to
+ * cause"). These replies used to be z_obj_map()/z_map_set() and were
+ * "intentionally never freed", on the argument that a reply is one-shot
+ * and its cost bounded. It is not bounded: ntp.c asks this file to
+ * resolve its server through net's own mailbox, and on a link where
+ * that fails it asks again every minute, forever. Each failure left
+ * seven live blocks (119 bytes, 176 with allocator headers) in a heap
+ * that net shares with its stack, 32 KB in all, which was gone in a
+ * few hours. z_map_set() copies what it is given, so the
+ * z_obj_str() temporary passed to it was lost on the spot, too.
+ *
+ * The messaging doc's rule applies: a payload sent in response to
+ * something that repeats must not be allocated. One resolution is in
+ * flight at a time, so a small ring of slots is enough: a requester has
+ * to read its reply before it can ask again, and the only other replies
+ * (the early "busy" and argument errors) go to a requester that is
+ * about to read them. Keys and the error text are string literals.
+ */
+#define DNS_REPLY_SLOTS 4
+
+typedef struct {
+	z_obj_table_t t;
+	z_obj_t k[2], v[2];
+} dns_reply_t;
+
+static dns_reply_t reply_ring[DNS_REPLY_SLOTS];
+static uint32_t reply_next;
+
+static z_obj_t dns_reply(bool ok, uint32_t ip, const char *err) {
+
+	dns_reply_t *r = &reply_ring[reply_next++ % DNS_REPLY_SLOTS];
+
+	r->t.len = 2;
+	r->t.a = r->k;
+	r->t.b = r->v;
+
+	r->k[0].type = Z_STR;		r->k[0].val.str = (char *)"ok";
+	r->v[0].type = Z_UINT32;	r->v[0].val.uint32 = ok ? 1 : 0;
+	if (ok) {
+		r->k[1].type = Z_STR;		r->k[1].val.str = (char *)"ip";
+		r->v[1].type = Z_UINT32;	r->v[1].val.uint32 = ip;
+	} else {
+		r->k[1].type = Z_STR;		r->k[1].val.str = (char *)"error";
+		r->v[1].type = Z_STR;		r->v[1].val.str = (char *)err;
+	}
+
+	z_obj_t obj;
+	obj.type = Z_MAP;
+	obj.val.ptr = &r->t;
+	return obj;
+
+}
+
 static void finish_query(bool ok, uint32_t ip, const char *err) {
 
 	if (ok) {
@@ -217,16 +275,8 @@ static void finish_query(bool ok, uint32_t ip, const char *err) {
 		printf("net: dns: %s -> failed: %s\n", pending_hostname, err);
 	}
 
-	z_obj_t reply = z_obj_map(2);
-	z_map_set(&reply, "ok", z_obj_uint32(ok ? 1 : 0));
-	if (ok)
-		z_map_set(&reply, "ip", z_obj_uint32(ip));
-	else
-		z_map_set(&reply, "error", z_obj_str(err));
-	// `reply` intentionally never freed -- same one-shot, bounded-cost
-	// borrowed-reply tradeoff net.c's own reply_error() documents for
-	// itself (docs/messaging.md).
-	z_msg_new_send(requester_pid, Z_NET_DNS_RESOLVE_REPLY, requester_tag, reply);
+	z_msg_new_send(requester_pid, Z_NET_DNS_RESOLVE_REPLY, requester_tag,
+		dns_reply(ok, ip, err));
 
 	udp_close(local_port);
 	state = DNS_IDLE;
@@ -321,28 +371,22 @@ static void handle_dns_reply(uint32_t src_ip, uint16_t src_port,
 void dns_resolve_start(const char *hostname, uint32_t req_pid, uint32_t tag) {
 
 	if (state != DNS_IDLE) {
-		z_obj_t reply = z_obj_map(2);
-		z_map_set(&reply, "ok", z_obj_uint32(0));
-		z_map_set(&reply, "error", z_obj_str("dns: busy with another resolution"));
-		z_msg_new_send(req_pid, Z_NET_DNS_RESOLVE_REPLY, tag, reply);
+		z_msg_new_send(req_pid, Z_NET_DNS_RESOLVE_REPLY, tag,
+			dns_reply(false, 0, "dns: busy with another resolution"));
 		return;
 	}
 
 	if (!nameserver_ip) {
-		z_obj_t reply = z_obj_map(2);
-		z_map_set(&reply, "ok", z_obj_uint32(0));
-		z_map_set(&reply, "error", z_obj_str("dns: no nameserver configured"));
-		z_msg_new_send(req_pid, Z_NET_DNS_RESOLVE_REPLY, tag, reply);
+		z_msg_new_send(req_pid, Z_NET_DNS_RESOLVE_REPLY, tag,
+			dns_reply(false, 0, "dns: no nameserver configured"));
 		return;
 	}
 
 	uint32_t hlen = hostname ? strlen(hostname) : 0;
 	if (hlen == 0 || hlen > DNS_MAX_HOSTNAME_LEN) {
-		z_obj_t reply = z_obj_map(2);
-		z_map_set(&reply, "ok", z_obj_uint32(0));
-		z_map_set(&reply, "error", z_obj_str(hlen == 0 ?
+		z_msg_new_send(req_pid, Z_NET_DNS_RESOLVE_REPLY, tag,
+			dns_reply(false, 0, hlen == 0 ?
 			"dns: empty hostname" : "dns: hostname too long"));
-		z_msg_new_send(req_pid, Z_NET_DNS_RESOLVE_REPLY, tag, reply);
 		return;
 	}
 
@@ -351,10 +395,8 @@ void dns_resolve_start(const char *hostname, uint32_t req_pid, uint32_t tag) {
 
 	uint16_t plen = build_query(our_qid, hostname, last_pkt);
 	if (plen == 0) {
-		z_obj_t reply = z_obj_map(2);
-		z_map_set(&reply, "ok", z_obj_uint32(0));
-		z_map_set(&reply, "error", z_obj_str("dns: malformed hostname"));
-		z_msg_new_send(req_pid, Z_NET_DNS_RESOLVE_REPLY, tag, reply);
+		z_msg_new_send(req_pid, Z_NET_DNS_RESOLVE_REPLY, tag,
+			dns_reply(false, 0, "dns: malformed hostname"));
 		return;
 	}
 
