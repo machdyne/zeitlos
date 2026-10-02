@@ -11,7 +11,9 @@ on a board with a wired NIC.
 
 ```
 net (sw/apps/net/screen.c)          the ESP32 (esp32/zeitlos-nic)
-  snapshot + hash 30 stripes
+  read socctl's DIRTY: which stripes
+    were written since last time
+  snapshot + hash those stripes
   PackBits the ones that changed
   UDP to the gateway, port 7777 -->  screend.c: keep a shadow stripe
                                      relay the dirty ones over a
@@ -33,13 +35,65 @@ The framebuffer is 30 stripes of 16 rows. A stripe is 1280 bytes
 (640/8 x 16), which is one UDP datagram and one link frame, and 30 of
 them is the whole screen.
 
-Each pass hashes all thirty and sends the ones that differ from what
-was last sent. Every five seconds the hashes are cleared so that a
-stripe lost in flight heals itself -- this is UDP on purpose, and the
-consumer, not the producer, keeps the shadow. That full pass waits if
-the pointer is down or the screen is already busy: thirty stripes is
-the longest the wire is ever held, and holding it through a drag is
-what a viewer feels as seconds.
+Each pass reads the stripes that were written since the last one (see
+"Only what was written" below), hashes them, and sends the ones that
+differ from what was last copied. Every five seconds all thirty are
+resent so that a stripe lost in flight heals itself -- this is UDP on
+purpose, and the consumer, not the producer, keeps the shadow. That
+full pass waits if the pointer is down or the screen is already busy:
+thirty stripes is the longest the wire is ever held, and holding it
+through a drag is what a viewer feels as seconds.
+
+### Only what was written
+
+Until rtl/socctl.v had a DIRTY register, a pass read the whole
+framebuffer -- 9600 words, 14.3 ms -- to find out what had changed,
+up to twenty times a second. With a viewer connected and nothing
+moving, that was ~28% of the machine and nearly all of what `net` did.
+
+DIRTY is one bit per stripe, set in hardware by every write the VRAM
+accepts, so it sees the CPU, the line rasterizer and the blitter alike,
+and things no software layer would report: a game poking VRAM through
+a pointer, the kernel's `cls`. A pass reads it, clears exactly what it
+read, and only then copies those stripes into the snapshot. A stripe
+whose bit is clear has not been written since its last copy, so the
+copy already is the screen, and a frame is still one instant -- the
+stripes that are read are read in one tight pass, now a short one.
+Clearing before copying is what makes the race safe: a write that
+lands during the pass sets its bit again and is picked up next time.
+Nothing on the wire changes.
+
+The five-second resend now doubles as a check on the hardware. It
+reads every stripe, and any stripe that changed without its bit set is
+counted, printed, and summed up when the last viewer leaves:
+
+```
+screen: 186 full check(s), 0 stripe(s) changed with no DIRTY bit
+```
+
+On a bitstream without the register (FEATURES2 bit 14 clear) every
+pass reads everything, as before.
+
+Measured on the ULX3S 85F with one viewer, before and after:
+
+| | before | after |
+|---|---:|---|
+| `net`, desktop still | 32.3% | **3.8%** |
+| time in the snapshot, desktop still | 14.3 ms x 19.4/s = 27.7% | one 17.6 ms pass every 5 s = 0.35% |
+| `net`, no viewer | 1.47% | 1.47% |
+| `net` while dragging a window, cube open | 83.7% | **73.0%** |
+| time in the snapshot, `gpu3d` animating | 30-35 ms a pass | ~9 stripes a pass, 7.9% of the clock |
+| `net` with `gpu3d` animating (the machine is saturated; `net` uses its slice either way) | 59.1% | 58.8% |
+| stripes reaching the browser, same scene | 44.0/s | 48.7/s |
+| `gpu3d` frame rate, same scene | 81-84 fps | 79-83 fps |
+| a stroke in `draw` with the cube animating, gap between updates | 30 / 34 / 30 ms | 27 / 24 / 28 ms |
+
+What the browser shows was compared with VRAM read back over the
+console, pixel for pixel, after each of nine scenes -- a still desktop,
+opening windows, the cube animating for 40 s, a window drag, painting,
+a focus change, the dock, typing, a page loading -- with one viewer held
+for the whole scene and every pointer and key event sent over it: 0
+pixels differ in each, and the check above counted 0 misses.
 
 ### One frame is one instant
 

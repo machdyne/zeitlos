@@ -3080,6 +3080,20 @@ module sysctl #()
 	BB programn_bb (.I(1'b0), .T(~socctl_reconfig), .O(), .B(PROGRAMN));
 `endif
 
+	// What socctl's DIRTY register snoops: every write the VRAM
+	// accepts, from whichever master won wb_arbiter_vram -- the CPU,
+	// the line rasterizer or the blitter -- with the same 15-bit word
+	// index the RAM itself uses (vram_wb writes on cyc & stb & we,
+	// before its ack). See rtl/socctl.v, register 7.
+`ifdef MEM_VRAM
+	wire        socctl_vram_we = wbm_vram_cyc && wbm_vram_stb &&
+		wbm_vram_we && (wbm_vram_sel != 4'b0000);
+	wire [14:0] socctl_vram_adr = wbm_vram_adr_sel_word[14:0];
+`else
+	wire        socctl_vram_we = 1'b0;
+	wire [14:0] socctl_vram_adr = 15'd0;
+`endif
+
 	socctl_wb #(
 		.VIDEO_MODE_RESET(VIDEO_MODE_DEFAULT),
 		.GAME_AVAIL(GAME_AVAILABLE),
@@ -3105,8 +3119,8 @@ module sysctl #()
 		// would mean a VIEW write silently overwrote CTRL and turned
 		// the mouse cursor into a Z every time the viewport moved.
 		// Eight words is the whole of 0x7000_0200..0x7000_021c, well
-		// inside socctl's 256-byte window, so there is room to widen
-		// again if a seventh register ever turns up.
+		// inside socctl's 256-byte window. DIRTY (word 7) fills the
+		// eighth, so a ninth register means widening this to four.
 		.wb_adr_i({ 29'b0, wbm_adr_sel_word[2:0] }),
 		.wb_dat_i(wbm_dat_o),
 		.wb_dat_o(wbs_socctl_dat_o),
@@ -3124,7 +3138,9 @@ module sysctl #()
 		.view_x(socctl_view_x),
 		.view_y(socctl_view_y),
 		.frame_ctr(gpu_frame_ctr),
-		.in_vblank(gpu_in_vblank)
+		.in_vblank(gpu_in_vblank),
+		.vram_we(socctl_vram_we),
+		.vram_adr(socctl_vram_adr)
 	);
 
 	csrs_wb #(

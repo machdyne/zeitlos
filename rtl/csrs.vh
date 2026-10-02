@@ -301,6 +301,14 @@ localparam CSR_FEATURES2 =
 `ifdef KECCAK
 	(32'h1 << 13) |
 `endif
+// rtl/socctl.v's DIRTY register (word 7): one bit per 16-row stripe
+// of the framebuffer, set by every write the VRAM accepts, cleared by
+// writing 1s. Built wherever there is VRAM. sw/apps/net/screen.c
+// reads it to stream only what changed, and scans the whole
+// framebuffer as before when this is clear.
+`ifdef MEM_VRAM
+	(32'h1 << 14) |
+`endif
 // rtl/usb/usb_host.v -- the USB host controller. See docs/usb_host.md.
 //
 // Set when the block is BUILT. NOT a replacement for CSR_FEATURES bit

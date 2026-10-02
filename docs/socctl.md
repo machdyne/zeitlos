@@ -42,6 +42,7 @@ Word-addressed, matching every other simple slave in this codebase.
 | `0x7000_0204` | MAGIC | fixed `0x5A43_5452` (`"ZCTR"`) |
 | `0x7000_0208` | VIDEO | bits 1:0: virtual phosphor mode. Reads back as `{0x5643, 14'b0, mode}`. Reset value comes from the board's `GPU_*` defines. |
 | `0x7000_0218` | RECONFIG | write the key `0x5A52_4254` (`"ZRBT"`), as one whole-word store, to pull PROGRAMN and reconfigure the FPGA -- reboot. Any other value or a partial store is ignored. Reads back as `{0x5A52, 15'b0, avail}`; `avail` is set only on boards defining `PROGRAMN_PIN`, and the request is forced off in hardware elsewhere. Software uses `z_reboot()`, which syncs open files first -- see `docs/zboot.md` section 6. |
+| `0x7000_021c` | DIRTY | bits 29:0: framebuffer stripes written since last cleared, one bit per 16 rows. **Write 1s to clear**; reading has no side effect. Resets to all ones. Present when `FEATURES2` bit 14 (`Z_FEATURE2_VRAM_DIRTY`) is set -- see [Framebuffer dirty stripes](#framebuffer-dirty-stripes). |
 
 MAGIC exists for the same reason `csrs.v` has one: reading an address
 nothing decodes does **not** fault on this bus, so a known constant is
@@ -67,6 +68,51 @@ returns false and every feature gated on it quietly disappears. The
 cache block at `0x7000_01xx` needs the same treatment for the same
 reason; only `csrs.v` gets away with the raw value, because its window
 starts at offset 0.
+
+## Framebuffer dirty stripes
+
+DIRTY answers "which parts of the screen have been drawn on since I
+last looked", without reading the screen. The 640x480 framebuffer is
+thirty stripes of sixteen rows (stripe *n* is VRAM words
+`320n..320n+319`), and bit *n* is set by hardware on **every write the
+VRAM accepts** in that stripe. It snoops the VRAM's one write port, the
+slave side of `wb_arbiter_vram` in `rtl/sysctl.v`, so the CPU, the line
+rasterizer and the blitter all land in it. A game that pokes VRAM
+directly, the kernel's `cls` and a program built with `zcc` are seen
+too, because there is no other way into VRAM. Drawing code does nothing
+to report damage, and pays nothing.
+
+Its one consumer is the remote desktop: `sw/apps/net/screen.c` used to
+read all 38,400 bytes of the framebuffer up to twenty times a second to
+find what had changed. With this it reads only the stripes that were
+written. See [remote_desktop.md](remote_desktop.md).
+
+**Using it.** Read, clear what you read, then read the pixels:
+
+```c
+uint32_t d = reg_socctl_dirty;    // stripes written since the last clear
+reg_socctl_dirty = d;             // write-one-to-clear exactly those
+/* ...now copy the stripes in d out of VRAM... */
+```
+
+A write that lands after the clear sets its bit again and is seen next
+time. One that lands between the read and the clear is in a stripe the
+copy is about to read. The clear only removes bits that are already set,
+and a set in the same cycle as a clear wins. The set path is two
+pipeline stages behind the VRAM port, so a bit can appear slightly
+*after* its pixels but never be cleared before them.
+`rtl/tests/tb_vram_dirty.v` checks the stripe of all 9600 words and a
+VRAM write at every offset from six cycles before to three after the
+clearing store.
+
+**Why reading does not clear it.** This block decodes three address
+bits, and the kernel shell's `hd 70000200` dumps it a byte at a time.
+A read-to-clear register would be emptied by anyone looking at the
+cursor or game-mode registers, and the remote desktop would silently
+miss whatever was drawn just before.
+
+**One consumer.** Two independent readers would each clear bits the
+other had not seen yet. A second one needs its own bank.
 
 ## The busy cursor
 

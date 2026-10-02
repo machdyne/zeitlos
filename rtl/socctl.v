@@ -160,6 +160,51 @@
  *             (Z_FEATURE2_RECONFIG), so on a board without it `reboot`
  *             says so instead of doing nothing.
  *
+ *   7  DIRTY  bits 29:0: one bit per 16-row stripe of the 640x480
+ *             framebuffer (stripe n = rows 16n..16n+15 = VRAM words
+ *             320n..320n+319). A bit is SET by hardware on every write
+ *             the VRAM accepts in that stripe, whoever made it: the CPU,
+ *             the line rasterizer, the blitter. Software CLEARS bits by
+ *             writing 1s to them (write-one-to-clear); 0s leave bits
+ *             alone. Bits 31:30 read 0. Resets to all ones: after a
+ *             reset nothing about the screen is known.
+ *
+ *             It exists so a screen streamer (sw/apps/net/screen.c)
+ *             can learn what changed without reading the framebuffer.
+ *             Every pixel reaches VRAM through the one slave port this
+ *             snoops, so it sees writes no software layer would know
+ *             to report -- a game poking VRAM, the kernel's cls, a
+ *             program built with zcc -- and it costs the drawing side
+ *             nothing at all.
+ *
+ *             READING HAS NO SIDE EFFECT, on purpose. The kernel shell's
+ *             `hd 70000200` dumps this block a byte at a time, and the
+ *             decode here is only three address bits wide, so a
+ *             read-to-clear register would be silently emptied by
+ *             anyone looking at the cursor or game-mode registers.
+ *
+ *             The consumer's sequence, and why it loses nothing:
+ *
+ *                 d = DIRTY;  DIRTY = d;  copy the stripes in d
+ *
+ *             A write that lands after the clear sets its bit again
+ *             and is picked up next time. A write that lands between
+ *             the read and the clear is in a stripe of d -- or its bit
+ *             is not cleared at all -- and the copy, which comes after
+ *             the clear, reads the new pixels. A set and a clear in
+ *             the same cycle: the set wins. Stores to this block are
+ *             never buffered (docs/dcache.md: only main memory is), so
+ *             the clear reaches the register before the copy's first
+ *             VRAM read.
+ *
+ *             The set path is pipelined two stages behind the VRAM
+ *             port, so a bit appears two cycles after its write. That
+ *             can only make a bit appear LATER than the pixels, never
+ *             be cleared before them -- the rule above still holds.
+ *             One consumer: two independent readers clearing each
+ *             other's bits would each miss changes. rtl/csrs.vh
+ *             FEATURES2 bit 14 says the register exists.
+ *
  * Reset state is BUSY (cursor = Z), not idle.
  *
  * That is deliberate and is the honest default: from power-on until
@@ -259,6 +304,12 @@ module socctl_wb #(
     // reads them out. Tied to zero by rtl/sysctl.v on a board with no
     // `GPU, which is the honest answer -- no scanout, no frames --
     // rather than a stuck counter software might wait on forever.
+    // Every write the VRAM accepts: rtl/sysctl.v's slave side of
+    // wb_arbiter_vram (cyc & stb & we, any byte lane), and its word
+    // address. Tied low on a board without VRAM. Feeds DIRTY.
+    input  wire        vram_we,
+    input  wire [14:0] vram_adr,
+
     input  wire [15:0] frame_ctr,
     input  wire        in_vblank,
     // -- reconfiguration -> rtl/sysctl.v's PROGRAMN pin --
@@ -321,6 +372,53 @@ module socctl_wb #(
     // make it structurally impossible rather than merely unlikely.
     wire [9:0] vx_wr = (wb_dat_i[9:0]   > 10'd639) ? 10'd639 : wb_dat_i[9:0];
     wire [9:0] vy_wr = (wb_dat_i[25:16] > 10'd479) ? 10'd479 : wb_dat_i[25:16];
+
+    // -- DIRTY (register 7) --
+    //
+    // Stage 1 only registers the port, so the VRAM bus sees nothing
+    // but four more flip-flop loads. Stage 2 turns the word address
+    // into a stripe: word / 320 = (word >> 6) / 5, and for
+    // (word >> 6) < 150 that is exactly ((word >> 6) * 205) >> 10
+    // (rtl/tests/tb_vram_dirty.v checks all 9600 words). Words past
+    // the framebuffer are not a stripe and set nothing.
+    reg        vd_we1;
+    reg [14:0] vd_adr1;
+    reg        vd_we2;
+    reg [4:0]  vd_stripe2;
+    reg [29:0] dirty;
+
+    // 205 = 128 + 64 + 8 + 4 + 1, written out as shifted adds: a `*`
+    // here is a constant multiply that yosys hands to a DSP block
+    // (MULT18X18D), and some boards have few of those to spare.
+    wire [16:0] vd_q = {8'd0, vd_adr1[14:6]};
+    wire [16:0] vd_prod = (vd_q << 7) + (vd_q << 6) + (vd_q << 3) +
+        (vd_q << 2) + vd_q;
+
+    // A whole-word write is the only way software clears, but the
+    // lanes are honoured like everywhere else in this block.
+    wire dirty_wr = wb_cyc_i && wb_stb_i && !wb_ack_o && wb_we_i &&
+        wb_adr_i == 32'd7;
+    wire [29:0] dirty_clr = dirty_wr ? (wb_dat_i[29:0] & {
+        {6{wb_sel_i[3]}}, {8{wb_sel_i[2]}},
+        {8{wb_sel_i[1]}}, {8{wb_sel_i[0]}} }) : 30'd0;
+    wire [29:0] dirty_set = vd_we2 ? (30'd1 << vd_stripe2) : 30'd0;
+
+    always @(posedge wb_clk_i) begin
+        if (wb_rst_i) begin
+            vd_we1 <= 1'b0;
+            vd_adr1 <= 15'd0;
+            vd_we2 <= 1'b0;
+            vd_stripe2 <= 5'd0;
+            dirty <= {30{1'b1}};
+        end else begin
+            vd_we1 <= vram_we;
+            vd_adr1 <= vram_adr;
+            vd_we2 <= vd_we1 && (vd_adr1 < 15'd9600);
+            vd_stripe2 <= vd_prod[14:10];
+            // set wins over a clear in the same cycle
+            dirty <= (dirty & ~dirty_clr) | dirty_set;
+        end
+    end
 
     always @(posedge wb_clk_i) begin
 
@@ -435,6 +533,7 @@ module socctl_wb #(
                         32'd4: wb_dat_o <= { 6'b0, vy, 6'b0, vx };
                         32'd5: wb_dat_o <= { 15'b0, in_vblank, frame_ctr };
                         32'd6: wb_dat_o <= { RECONFIG_SIG, 15'b0, (RECONFIG_AVAIL != 0) };
+                        32'd7: wb_dat_o <= { 2'b0, dirty };
                         default: wb_dat_o <= 32'h0000_0000;
                     endcase
 

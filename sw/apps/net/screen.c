@@ -42,13 +42,44 @@
  * also carries a frame trailer (see stripe_send) saying which frame it
  * belongs to and whether it is the last of it, and the viewer page
  * assembles off-screen and shows whole frames.
+ *
+ * WHAT CHANGED, WITHOUT LOOKING
+ *
+ * The snapshot read all 9600 words of VRAM on every scan, up to 20
+ * times a second, and with nothing on screen moving that was nearly
+ * all net did: 14 ms a pass, ~28% of the machine, to learn that
+ * nothing had changed (tasks 0057/0028 measured it).
+ *
+ * Where the bitstream has rtl/socctl.v's DIRTY register
+ * (Z_FEATURE2_VRAM_DIRTY), the hardware keeps one bit per stripe, set
+ * by every write the VRAM accepts -- from the CPU, the blitter or the
+ * line rasterizer, so nothing that draws can get past it. A scan reads
+ * it, clears what it read, and snapshots only those stripes. A stripe
+ * whose bit is clear has not been written since it was last copied, so
+ * the copy in snap[] IS the screen, and a frame is still one instant:
+ * the stripes that are read are read in one tight pass, now a short
+ * one, and the rest have not moved. Order matters: clear first, copy
+ * after, so a write that races the scan sets its bit again and is
+ * picked up next time instead of being lost.
+ *
+ * Nothing on the wire changes. Same stripes, same PackBits, same
+ * trailer; neither the ESP32 nor the page can tell.
+ *
+ * The periodic full resend stays (it heals a stripe lost in flight),
+ * and on this path it doubles as a check on the hardware: it reads
+ * every stripe, and any stripe that changed without its bit set is
+ * counted and reported. That count should be zero, always; it is
+ * printed when a viewer leaves. Without the register, every scan reads
+ * everything, exactly as before.
  */
 
 #include <stdint.h>
 #include <string.h>
 #include <stdbool.h>
+#include <stdio.h>
 
 #include "../../common/zeitlos.h"	/* z_uptime_ticks, TICKS_PER_SEC */
+#include "../../common/zsoc.h"		/* reg_socctl_dirty */
 #include "screen.h"
 #include "udp.h"
 #include "esp32link.h"
@@ -96,7 +127,25 @@
 #define SCAN_TICKS     (TICKS_PER_SEC / 20)	/* 20 fps ceiling */
 #define BUSY_SCAN_TICKS (TICKS_PER_SEC / 15)	/* 15 fps under churn */
 
+#define ALL_STRIPES    Z_SOCCTL_DIRTY_ALL	/* bit n = stripe n */
+
+/* sent_hash[] is the hash of each stripe as it was last COPIED into
+ * snap[]; 0 means never. */
 static uint32_t sent_hash[STRIPES];
+/* Stripes the viewer must be sent whatever their hash says: all of
+ * them for a new viewer or the periodic resend, and any a drag cut
+ * out of a full resend. */
+static uint32_t owed = ALL_STRIPES;
+/* The next scan reads every stripe: FULL_RESET after screen_reset(),
+ * when the hashes mean nothing; FULL_VERIFY for the periodic resend,
+ * when they do and a changed stripe with no DIRTY bit is a miss. */
+#define FULL_NONE      0
+#define FULL_RESET     1
+#define FULL_VERIFY    2
+static int      full_next = FULL_RESET;
+static int      dirty_hw = -1;		/* -1: not probed yet */
+static uint32_t verify_passes;
+static uint32_t verify_missed;
 static uint32_t last_force_tick;
 static uint16_t seq;
 static uint16_t frame_seq;
@@ -109,7 +158,6 @@ static int      viewer;
 static uint32_t snap[STRIPES * STRIPE_WORDS];
 
 #ifdef SCREEN_PROFILE
-#include <stdio.h>
 static uint32_t rdcycle(void)
 {
 	uint32_t v;
@@ -157,14 +205,11 @@ static uint32_t rdcycle(void)
  * would cost as much as the reads it saves, and the point of the
  * exercise is that the snapshot is not paid for twice.
  *
- * Returns how many stripes differ from what was last sent, and fills
- * dirty[] with their indices in ascending order -- the consumer needs
- * the count before the first stripe goes out, to mark the last one. */
-static int snapshot(int *dirty)
+ * Reads only the stripes in `want` (bit n = stripe n), and returns
+ * the ones among them whose contents differ from their last copy. */
+static uint32_t snapshot(uint32_t want)
 {
-	const volatile uint32_t *v = (const volatile uint32_t *)FB_BASE;
-	uint32_t *d = snap;
-	int n = 0;
+	uint32_t changed = 0;
 #ifdef SCREEN_PROFILE
 	/* rdcycle is wall clock and this loop is longer than a timeslice,
 	 * so a single reading can be mostly somebody else's work; the
@@ -174,6 +219,11 @@ static int snapshot(int *dirty)
 #endif
 
 	for (int idx = 0; idx < STRIPES; idx++) {
+		if (!(want & (1u << idx)))
+			continue;
+		const volatile uint32_t *v =
+			(const volatile uint32_t *)FB_BASE + idx * STRIPE_WORDS;
+		uint32_t *d = snap + idx * STRIPE_WORDS;
 		uint32_t h = 0x9e3779b9u ^ (uint32_t)idx;
 		/* by fours: the loop arithmetic was a fifth of the work
 		 * in a body this small */
@@ -190,7 +240,7 @@ static int snapshot(int *dirty)
 			h = 1;		/* 0 means "never sent" */
 		if (h != sent_hash[idx]) {
 			sent_hash[idx] = h;
-			dirty[n++] = idx;
+			changed |= 1u << idx;
 		}
 	}
 #ifdef SCREEN_PROFILE
@@ -206,7 +256,7 @@ static int snapshot(int *dirty)
 		prof_n = 0;
 	}
 #endif
-	return n;
+	return changed;
 }
 
 /* THE FRAME TRAILER
@@ -295,12 +345,26 @@ static void stripe_send(uint32_t gw_ip, int idx, int last)
 void screen_reset(void)
 {
 	memset(sent_hash, 0, sizeof(sent_hash));
+	owed = ALL_STRIPES;
+	full_next = FULL_RESET;
+}
+
+static int popcount30(uint32_t m)
+{
+	int n = 0;
+	for (; m; m &= m - 1)
+		n++;
+	return n;
 }
 
 /* Told by esp32link.c, which is the only place that can know: the
  * WebSocket ends on the ESP32. See its viewer_present(). */
 void screen_set_viewer(int present)
 {
+	if (viewer && !present && dirty_hw == 1)
+		printf("screen: %lu full check(s), %lu stripe(s) changed "
+			"with no DIRTY bit\n", (unsigned long)verify_passes,
+			(unsigned long)verify_missed);
 	viewer = present;
 }
 
@@ -324,8 +388,42 @@ void screen_poll(uint32_t gw_ip)
 		return;
 	last_scan_tick = now;
 
+	if (dirty_hw < 0)
+		dirty_hw = z_soc_has_feature2(Z_FEATURE2_VRAM_DIRTY) &&
+			z_socctl_present();
+
+	/* Read what was written, clear exactly that, and only then read
+	 * the pixels -- see "WHAT CHANGED, WITHOUT LOOKING" above. */
+	uint32_t marked = 0, want = ALL_STRIPES;
+	if (dirty_hw) {
+		marked = reg_socctl_dirty & ALL_STRIPES;
+		if (marked)
+			reg_socctl_dirty = marked;
+		want = full_next != FULL_NONE ? ALL_STRIPES : marked;
+	}
+	int verify = dirty_hw && full_next == FULL_VERIFY;
+	full_next = FULL_NONE;
+
+	uint32_t changed = want ? snapshot(want) : 0;
+	if (verify) {
+		/* written while the pass ran: its bit is set again, and it
+		 * is next scan's business, not a miss */
+		uint32_t missed = changed & ~marked & ~reg_socctl_dirty;
+		verify_passes++;
+		if (missed) {
+			verify_missed += popcount30(missed);
+			printf("screen: stripes %08lx changed with no DIRTY bit\n",
+				(unsigned long)missed);
+		}
+	}
+
+	uint32_t out = changed | owed;
+	owed = 0;
 	int dirty[STRIPES];
-	int sends = snapshot(dirty);
+	int sends = 0;
+	for (int idx = 0; idx < STRIPES; idx++)
+		if (out & (1u << idx))
+			dirty[sends++] = idx;
 	frame_seq++;
 	int saw_input = 0;
 	for (int k = 0; k < sends; k++) {
@@ -340,15 +438,15 @@ void screen_poll(uint32_t gw_ip)
 		/* A drag with pending motion: finish THIS snapshot
 		 * (cutting it paints the band in two places)
 		 * but skip the rest of a full-frame force-resend. Those
-		 * stripes were only dirty because we zeroed the hashes,
-		 * and holding the UART for 30 of them is the stall the
-		 * visor feels as "seconds". */
+		 * stripes were only owed because of the resend, and
+		 * holding the UART for 30 of them is the stall the visor
+		 * feels as "seconds". What is cut stays owed. */
 		if (saw_input && esp32link_vmouse_buttons() &&
 				sends >= STRIPES && k > 0 &&
 				k < sends - 1) {
 			stripe_send(gw_ip, dirty[k], 1);
 			for (int j = k + 1; j < sends; j++)
-				sent_hash[dirty[j]] = 0;
+				owed |= 1u << dirty[j];
 			sends = k + 1;
 			break;
 		}
@@ -366,7 +464,8 @@ void screen_poll(uint32_t gw_ip)
 			 * pointer is up and the scan is small again */
 		} else {
 			last_force_tick = now;
-			memset(sent_hash, 0, sizeof(sent_hash));
+			owed = ALL_STRIPES;
+			full_next = FULL_VERIFY;
 		}
 	}
 }
