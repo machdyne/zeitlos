@@ -3,8 +3,10 @@
  *
  * PackBits (TIFF/Mac) for the screen streamer: a control byte, then
  * either a literal run or a repeated byte. Runs of one value -- most
- * of a 1bpp desktop stripe -- collapse hard, and the worst case grows
- * the data by only ~1/128, so there is no expansion trap.
+ * of a 1bpp desktop stripe -- collapse hard. The worst case is NOT
+ * small: a repeat of two and a literal of one both cost two bytes, so
+ * input that alternates them (A BB A BB ...) grows by a third. Size
+ * output buffers for 4n/3 + 2; see stripe_send() in screen.c.
  *
  * WHY THE RUN LOOP LOOKS AT WORDS
  *

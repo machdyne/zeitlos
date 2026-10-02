@@ -98,9 +98,22 @@ sequential multiplier for it.
 
 Stripes go out PackBits-encoded (`sw/apps/net/packbits.h`): a control
 byte, then either a literal span or a repeated byte. A 1bpp desktop
-stripe is mostly one repeated value, so it collapses hard, and the
-worst case grows the data by about 1/128, so there is no expansion
-trap to guard against.
+stripe is mostly one repeated value, so it collapses hard.
+
+The worst case is not small, though, and that once cost real bytes.
+This encoder spends two bytes on a repeat of two and two on a literal
+of one, so a stripe that alternates them -- `A BB A BB ...` -- grows by
+a third. The dock's bottom stripe (icon outlines, row after row of
+short runs) encodes to 1373 bytes. `net` used to build the datagram in
+a buffer sized for 1280 + 64 and wrote past its end every time the dock
+was sent, and the ESP32, which takes at most 1280 + 64 bytes of payload
+(`STRIPE_MAX` in `screend.c`), cut the stripe short: the right half of
+the dock's last row never reached the browser. `stripe_send()` now
+sizes the buffer for the real worst case, and sends any stripe that
+PackBits would grow past 1290 bytes as plain 128-byte literal runs
+instead. That is still PackBits, every decoder already reads it, and it
+fits the relay with the frame trailer on. The encoder itself is
+unchanged: `tests/test_packbits.c` pins its output byte for byte.
 
 It is also the second largest thing `net` does while a browser
 watches. Measured on the board with `gpu3d` animating and ten stripes
