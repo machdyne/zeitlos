@@ -1,7 +1,8 @@
 # Boards
 
 What the SoC actually costs on each ECP5 board, after packing and
-routing.
+routing. Konfekt, Schoko, Noir and Klinge have their own sections below
+the main tables, measured later and with newer tools.
 
 [audio.md](audio.md) measures the audio subsystem at synthesis time.
 Its LUT4 column is pre-packing, and it says so: the figures that
@@ -253,15 +254,157 @@ openXC7 1.x reports `clk48mhz` timing with a wide margin (93 MHz on a
 reduced build); see [toolchain.md](toolchain.md) on how far to trust
 that.
 
+## Konfekt and Schoko
+
+Two Machdyne SDRAM boards added at `e5086e4`, both with the console on
+USB CDC-ACM (the USB-C socket, [usb_cdc.md](usb_cdc.md)) and both
+packed for the 256 KB DFU bootloader layout (`dfu_base = 0x040000`,
+[dfu_upgrade.md](dfu_upgrade.md)). Pins are `boards/konfekt_v0.lpf` and
+`boards/schoko_v1.lpf`, each checked ball by ball against the board's
+schematic; the header of each file lists where the zucker and LiteX
+copies were wrong.
+
+Measured with Yosys 0.69+173 and nextpnr-ecp5 0.11.1-40 (oss-cad-suite
+2026-10-01), default seed, one run each.
+
+| Board | Device | COMB | FF | DP16KD | MULT18 | PLL | `CLK_48` | bitstream |
+|---|---|---|---|---|---|---|---:|---:|
+| Konfekt | 12k | 21542 / 24288 (**88%**) | 9987 (41%) | 40 / 56 | 11 / 28 | 2 / 2 | 57.00 MHz | 511,268 B |
+| Schoko | 45k | 23389 / 43848 (53%) | 10742 (24%) | 39 / 108 | 9 / 72 | 2 / 4 | 52.35 MHz | 619,329 B |
+
+Every clock passed. Konfekt `clk25_2mhz` 61.41 MHz, `clk126mhz`
+388.50 MHz, `clk12mhz` 72.27 MHz; Schoko `clk25_2mhz` 60.72 MHz,
+`clk126mhz` 343.64 MHz (Schoko has no `clk12mhz`: `USB_HOST` runs from
+the system clock). The bitstream column is the compressed `soc.bit`,
+and both fit the DFU layout's 786,432-byte gateware region
+(0x040000-0x0FFFFF).
+
+**Konfekt** is a Lakritz without the PMOD connector, on the 12F --
+which the open-source tools treat as the 25F die. The block is
+Lakritz's less `SPI_ETH` and **less `AUDIO_MIXER`**. The mixer went
+because Lakritz itself is no longer where the table above this section
+puts it: at `e5086e4` it placed at **23395 / 24288 COMB (96%)** with 40
+DP16KD and routed only after more than twenty minutes of congestion
+(build stopped before it finished, so there is no fmax). Konfekt at 88%
+routes and closes with 9 MHz to spare, but it is past the 75% line, so
+re-check `make timing` after any change, and look at `SHA256` and
+`MONTMUL_REGS` next if it needs room -- both cost speed, not function,
+when dropped.
+
+**Schoko** is a 45F with SDRAM: Mozart ML1's cache settings plus the
+MONTMUL register file and SHA-256, the full-speed `USB_HOST`, and both
+video outputs (VGA and DDMI from one timing generator, the same
+picture). Its two PMODs carry a Langkatze on A and GPIO on B in the
+board's own block and `.lpf`, which is also the
+`schoko_langkatze_gpio` release target. `CLK_48` at 52.35 MHz is the
+lowest margin on any board here; it is one seed, and the 45F has half
+its fabric free, so a failing seed is a placement problem, not a
+capacity one.
+
+Both boards have one USB host socket while `rtl/sysctl.v` always builds
+two ports. The second is constrained to C3/D3 (unconnected on both
+schematics) with pull-downs, so it reads as an empty port.
+
+## Noir
+
+Machdyne Noir: ECP5 45F with 256MB DDR3L (MT41K128M16JT-125:K) wired to
+the same balls as the Sechzig ML2, so it builds as a DDR3 board
+([ddr3.md](ddr3.md)): the DDR3 sources, the minimal training BIOS (1806
+of 2048 words), `DDR3_ROW_BITS 14` and the 2Gb tRFC. The console is USB
+CDC-ACM on the USB-C socket; the rest is a 45F desktop -- full-speed
+`USB_HOST`, DDMI, sigma-delta audio with the hardware mixer, SPI
+microSD, Schoko's caches and crypto. Pins are `boards/noir_v0.lpf`.
+
+Same tools and method as Konfekt and Schoko above:
+
+| Board | Device | COMB | FF | DP16KD | MULT18 | PLL | sys_clk | bitstream |
+|---|---|---|---|---|---|---|---:|---:|
+| Noir | 45k | 27716 / 43848 (63%) | 12883 (29%) | 41 / 108 | 13 / 72 | 3 / 4 | 54.23 MHz | 691,610 B |
+
+On a DDR3 board sys_clk is divided from the DDR edge clock, so
+nextpnr names it after whatever it reaches first -- here
+`audio_i.mixer_i.clk`; it is the 48 MHz system clock. The DDR3 PLL's
+free-running `init_clk` closes at 212 MHz, `clk25_2mhz` at 52.88 MHz and
+`clk126mhz` at 341.18 MHz. The third PLL is the DDR3 one (`pll2`). The
+bitstream fits the DFU layout's 786,432-byte gateware region.
+
+**Building any DDR3 board with Yosys 0.69 needed two fixes**, both in
+the tree now and both found on Noir; Mozart ML2 failed the same way,
+unmodified, before them:
+
+- `rtl/mem/ddr3_phy_ecp5.v` named the command-path ODDRX2F instance
+  `cmd_oddr`, the same as the wire it drives. Inside the generate
+  scope, 0.69 resolves `cmd_oddr[gi]` to the instance, leaving the
+  port on a dangling interface placeholder. The instance is
+  `cmd_gear` now.
+- synth_ecp5's last `hierarchy -check` then still re-elaborated sysctl
+  from its Verilog AST when it derived the PHY's parameterised DQSBUFM
+  blackboxes, after flattening had removed the submodules, and failed
+  on `gpu_cursor`. The Makefile now gives DDR3 boards a `YOSYS_PRE`
+  that elaborates and round-trips the design through RTLIL first, so
+  there is no AST left to re-elaborate. Non-DDR3 boards build exactly
+  as before.
+
+## Klinge
+
+Machdyne Klinge: ECP5 25F, 512MB DDR3L (MT41K256M16TW-107:P, the
+Sechzig ML2's part, on the ML2's balls), two LAN8720A RMII PHYs, two
+microSD slots, USB-C, and no video connector, USB host or audio. Pins
+are `boards/klinge_v1.lpf`. **Only Ethernet A and microSD A are built**;
+the second PHY's and slot's balls are listed, commented, at the end of
+that file.
+
+| Board | Device | COMB | FF | DP16KD | MULT18 | PLL | sys_clk | bitstream |
+|---|---|---|---|---|---|---|---:|---:|
+| Klinge | 25k | 20787 / 24288 (**85%**) | 9366 (38%) | 41 / 56 | 9 / 28 | 2 / 2 | 57.08 MHz | 504,447 B |
+
+Every clock passed: sys_clk (`ddr3_clk_i.sys_clk_o`, divided from the
+DDR edge clock) 57.08 MHz against 48, the RMII reference
+(`ETH_REFCLK`) 98.19 MHz against 50, the DDR3 PLL's `init_clk` 211.64
+MHz. The bitstream fits the DFU layout's gateware region, the minimal
+DDR3 BIOS is 1806 of 2048 words, and the jumploader is 99,628 bytes.
+
+**Two PLLs, three jobs.** A 25F has two. DDR3 takes one (`pll2`: the
+edge clock and the system clock divided from it) and `pll0` makes the
+50 MHz RMII reference, which leaves the FPGA on T4 for both PHYs.
+`pll1` makes only video clocks, so `rtl/sysctl.v` now builds it only
+with `GPU` and ties its lock high otherwise. Every board with `GPU`
+builds exactly what it did before.
+
+**Headless, with a framebuffer.** No `GPU`, but `MEM_VRAM`,
+`GPU_RASTER` and `GPU_BLIT` are built: the framebuffer and the line
+and blit engines run on sys_clk and need no video clock. The BIOS and
+the kernel's panic screen write VRAM unconditionally (an absent VRAM
+would be an unacked bus cycle and a hung CPU), and a remote desktop
+over ethernet will read it. See [gpu_raster.md](gpu_raster.md) and
+[gpu_blitter.md](gpu_blitter.md).
+
+**Software.** The console is USB CDC-ACM. The release target's core
+apps are `net console cron`: no `wm` and no `term`, which is a `wm`
+window. With no USB host, `z_hid_init()` and the HID interrupt
+handlers never see an interrupt and nothing polls the absent ports.
+`net` finds the RMII MAC from the feature CSR as on Mozart and Sergei.
+
+**Room.** 85% is past the 75% line, as Konfekt is: re-check `make
+timing` after any change. It already carries `MONTMUL_REGS` and
+`SHA256` -- this is the networking board -- and a second MAC for
+Ethernet B (another `ethmac_rmii` with its own RX slots) is the obvious
+next block to want room for. The D-cache write buffer (`DCACHE_WBUF 2`
+to `0`, about 540 LUT4 on Lakritz) is the first place to find it.
+
+A 12F Klinge builds with `make BOARD=klinge DEVICE=12k` (same die to
+the open-source tools); its zfpga profile then needs `device
+LFE5U-12F`.
+
 ## Boards with nothing to measure
 
 iCE40 targets in the Makefile (`riegel`, `eis`, `kolibri`, `bonbon`,
 `keks`, `kuchen`, `kuchen_v0`, `brot`, `krote`, `icoboard`) have no
 block in `rtl/boards.vh`. There is no configuration to synthesise.
 
-`schoko`, `konfekt`, `minze` and `vanille` are ECP5 targets with an
-LPF and the same gap: the Makefile names them, `rtl/boards.vh` does
-not.
+`minze` and `vanille` are ECP5 targets with the same gap: the Makefile
+names them, but there is no LPF in `boards/` and no `rtl/boards.vh`
+block. (`schoko` and `konfekt` were in this list; see above.)
 
 Lebkuchen and Kölsch do have a `boards.vh` block (GateMate, not ECP5).
 Their flow is a separate Yosys and nextpnr under the path the Makefile

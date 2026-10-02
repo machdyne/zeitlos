@@ -1,0 +1,249 @@
+BLOCK RESETPATHS;
+BLOCK ASYNCPATHS;
+
+SYSCONFIG CONFIG_IOVOLTAGE=3.3 COMPRESS_CONFIG=ON MCCLK_FREQ=2.4 MASTER_SPI_PORT=DISABLE SLAVE_SPI_PORT=DISABLE SLAVE_PARALLEL_PORT=DISABLE CONFIG_MODE=SPI_SERIAL;
+
+# ---------------------------------------------------------------------
+# Machdyne Noir V0 -- LFE5U-45F CABGA256, 256MB DDR3L
+# (MT41K128M16JT-125:K), DDMI (DVI), one USB host port, microSD, 3.5mm
+# audio, USB-C. No PMOD connector, no ethernet.
+#
+# Checked against the board schematic (github.com/machdyne/noir,
+# pcb/noir_v0.pdf). The board repo's own noir_v0.lpf carries only the
+# clock, the LEDs and the USB host pair.
+#
+# THE DDR3 IS SECHZIG ML2's, BALL FOR BALL. All 45 DDR3 signals land on
+# the same balls as boards/mozart_ml2.lpf, so that block is copied
+# below verbatim (and the copy was checked, signal by signal, against
+# the schematic and LiteX's machdyne_noir.py). That is the whole
+# reason this board is a small port: the controller, PHY and BIOS
+# training were brought up on ML2 (docs/ddr3.md). Only the part
+# differs -- 2Gb here, 4Gb on ML2 -- which is rtl/boards.vh's business
+# (`DDR3_ROW_BITS 14, `DDR3_TRFC_NS 160), not this file's.
+#
+# Everything ELSE is NOT ML2's: Noir's clock is A7 (ML2's is C7), and
+# its LED, USB, video, audio and SD balls are its own. Do not copy the
+# rest of the ML2 file.
+#
+# One disagreement with LiteX: machdyne_noir.py lists the RGB LED as
+# r=C1, g=E1, b=G1. The schematic has LED_R on G1, LED_G on C1 and
+# LED_B on E1, which is also what the board repo's noir_v0.lpf says.
+# ---------------------------------------------------------------------
+
+# CLOCK
+LOCATE COMP "CLK_48" SITE "A7";
+IOBUF PORT "CLK_48" IO_TYPE=LVCMOS33;
+FREQUENCY PORT "CLK_48" 48.0 MHz;
+
+# RGB LED (LED_RGB). Schematic: LED_R G1, LED_G C1, LED_B E1.
+LOCATE COMP "LED_R" SITE "G1";
+IOBUF PORT "LED_R" IO_TYPE=LVCMOS33;
+LOCATE COMP "LED_G" SITE "C1";
+IOBUF PORT "LED_G" IO_TYPE=LVCMOS33;
+LOCATE COMP "LED_B" SITE "E1";
+IOBUF PORT "LED_B" IO_TYPE=LVCMOS33;
+
+# Configuration SPI flash (MMOD). MCLK is reached through USRMCLK.
+LOCATE COMP "CSPI_SS_FLASH" SITE "N8";
+IOBUF PORT "CSPI_SS_FLASH" IO_TYPE=LVCMOS33;
+LOCATE COMP "CSPI_MISO" SITE "T7";
+IOBUF PORT "CSPI_MISO" IO_TYPE=LVCMOS33;
+LOCATE COMP "CSPI_MOSI" SITE "T8";
+IOBUF PORT "CSPI_MOSI" IO_TYPE=LVCMOS33;
+
+# USB HOST. Port 0 is the board's USB-A socket (USB1_DP B1, USB1_DN B2).
+# rtl/sysctl.v always builds two host ports; port 1 is parked on C3/D3
+# (PL11C/PL11D, unconnected on the schematic) with pull-downs, so it
+# reads as SE0 -- an empty port -- rather than noise. Same arrangement
+# as Konfekt and Schoko.
+LOCATE COMP "usb_host_dp[0]" SITE "B1";
+IOBUF PORT "usb_host_dp[0]" IO_TYPE=LVCMOS33 PULLMODE=NONE;
+LOCATE COMP "usb_host_dm[0]" SITE "B2";
+IOBUF PORT "usb_host_dm[0]" IO_TYPE=LVCMOS33 PULLMODE=NONE;
+LOCATE COMP "usb_host_dp[1]" SITE "C3";
+IOBUF PORT "usb_host_dp[1]" IO_TYPE=LVCMOS33 PULLMODE=DOWN;
+LOCATE COMP "usb_host_dm[1]" SITE "D3";
+IOBUF PORT "usb_host_dm[1]" IO_TYPE=LVCMOS33 PULLMODE=DOWN;
+
+# USB DEVICE -- the USB-C socket, the console (`USB_CDC). Schematic
+# nets USB0_DP T6, USB0_DN R6, USB0_DP_PU R7 (bank 8).
+LOCATE COMP "usb_ufp_dp" SITE "T6";
+IOBUF PORT "usb_ufp_dp" IO_TYPE=LVCMOS33;
+LOCATE COMP "usb_ufp_dm" SITE "R6";
+IOBUF PORT "usb_ufp_dm" IO_TYPE=LVCMOS33;
+LOCATE COMP "usb_ufp_pull" SITE "R7";
+IOBUF PORT "usb_ufp_pull" IO_TYPE=LVCMOS33;
+
+# DDMI (DVI over the HDMI connector). Schematic: DVI_CK M1/M2,
+# DVI_D0 P1/R1, DVI_D1 R2/T2, DVI_D2 R5/T4. P balls only.
+LOCATE COMP "DDMI_CK_P" SITE "M1";
+IOBUF PORT "DDMI_CK_P" IO_TYPE=LVCMOS33D;
+IOBUF PORT "DDMI_CK_P" DRIVE=4;
+LOCATE COMP "DDMI_D0_P" SITE "P1";
+IOBUF PORT "DDMI_D0_P" IO_TYPE=LVCMOS33D;
+IOBUF PORT "DDMI_D0_P" DRIVE=4;
+LOCATE COMP "DDMI_D1_P" SITE "R2";
+IOBUF PORT "DDMI_D1_P" IO_TYPE=LVCMOS33D;
+IOBUF PORT "DDMI_D1_P" DRIVE=4;
+LOCATE COMP "DDMI_D2_P" SITE "R5";
+IOBUF PORT "DDMI_D2_P" IO_TYPE=LVCMOS33D;
+IOBUF PORT "DDMI_D2_P" DRIVE=4;
+
+# The schematic also carries a 4-bit video DAC (VIDEO_D0..D3 on M4, P3,
+# M5, P2) -- composite, which the board README lists as a V1 feature.
+# Not built (`GPU_COMPOSITE is off); the order and weights are not
+# confirmed for V0, so no COMP_DAC constraints are given here.
+
+# microSD, SPI mode. Schematic: SD_SS B3, SD_MOSI A3, SD_MISO A4,
+# SD_SCK B4 (SD_DAT1 B5, SD_DAT2 A2, SD_CD A5 unused in SPI mode).
+LOCATE COMP "SD_SCK" SITE "B4";
+IOBUF PORT "SD_SCK" IO_TYPE=LVCMOS33 PULLMODE=NONE;
+LOCATE COMP "SD_MOSI" SITE "A3";
+IOBUF PORT "SD_MOSI" IO_TYPE=LVCMOS33 PULLMODE=NONE;
+LOCATE COMP "SD_SS" SITE "B3";
+IOBUF PORT "SD_SS" IO_TYPE=LVCMOS33 PULLMODE=NONE;
+LOCATE COMP "SD_MISO" SITE "A4";
+IOBUF PORT "SD_MISO" IO_TYPE=LVCMOS33 PULLMODE=NONE;
+
+# 3.5mm audio, sigma-delta (`AUDIO_SD). Schematic: AUDIO_L N7,
+# AUDIO_R M7 -- both in bank 8, the configuration bank, which is free
+# for user I/O once the FPGA has configured.
+LOCATE COMP "AUDIO_L" SITE "N7";
+IOBUF PORT "AUDIO_L" IO_TYPE=LVCMOS33;
+LOCATE COMP "AUDIO_R" SITE "M7";
+IOBUF PORT "AUDIO_R" IO_TYPE=LVCMOS33;
+
+# Debug UART pads (schematic UART_TX J2, UART_RX J1). Only for a build
+# with `UART0 and without `USB_CDC.
+#LOCATE COMP "UART0_TX" SITE "J2";
+#IOBUF PORT "UART0_TX" IO_TYPE=LVCMOS33;
+#LOCATE COMP "UART0_RX" SITE "J1";
+#IOBUF PORT "UART0_RX" IO_TYPE=LVCMOS33;
+
+# ---------------------------------------------------------------------
+# DDR3L -- Micron MT41K64M16 / MT41K128M16 / MT41K256M16, x16, 1.35V
+#
+# Banks 2 and 3, whose VCCIO balls are tied to 1.35V on the board, so
+# SSTL135. The byte lanes are not scattered: DQ0-7 + LDM + LDQS sit
+# entirely in DQS group RDQ17/RDQS17 and DQ8-15 + UDM + UDQS entirely
+# in RDQ29/RDQS29, which is what lets each lane have its own DQSBUFM.
+# Do not reorder these -- within a lane the bit order is free, but a
+# bit crossing between lanes is not routable.
+#
+# Address and command are split across banks 2 and 3 (A10, A12, A15
+# and the clock are in bank 2, the rest in bank 3). Both banks are at
+# 1.35V so this is electrically fine, but it does mean command flight
+# times differ between the two groups and may need a delay trim once
+# reads are working -- see docs/ddr3.md.
+# ---------------------------------------------------------------------
+
+LOCATE COMP "ddr3_a[0]" SITE "R15";
+IOBUF PORT "ddr3_a[0]" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_a[1]" SITE "L13";
+IOBUF PORT "ddr3_a[1]" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_a[2]" SITE "P14";
+IOBUF PORT "ddr3_a[2]" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_a[3]" SITE "R14";
+IOBUF PORT "ddr3_a[3]" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_a[4]" SITE "L12";
+IOBUF PORT "ddr3_a[4]" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_a[5]" SITE "T14";
+IOBUF PORT "ddr3_a[5]" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_a[6]" SITE "N11";
+IOBUF PORT "ddr3_a[6]" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_a[7]" SITE "T13";
+IOBUF PORT "ddr3_a[7]" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_a[8]" SITE "P12";
+IOBUF PORT "ddr3_a[8]" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_a[9]" SITE "T15";
+IOBUF PORT "ddr3_a[9]" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_a[10]" SITE "C14";
+IOBUF PORT "ddr3_a[10]" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_a[11]" SITE "M13";
+IOBUF PORT "ddr3_a[11]" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_a[12]" SITE "E14";
+IOBUF PORT "ddr3_a[12]" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_a[13]" SITE "R13";
+IOBUF PORT "ddr3_a[13]" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_a[14]" SITE "M14";
+IOBUF PORT "ddr3_a[14]" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_a[15]" SITE "D14";
+IOBUF PORT "ddr3_a[15]" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+
+LOCATE COMP "ddr3_ba[0]" SITE "N16";
+IOBUF PORT "ddr3_ba[0]" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_ba[1]" SITE "K13";
+IOBUF PORT "ddr3_ba[1]" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_ba[2]" SITE "P16";
+IOBUF PORT "ddr3_ba[2]" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+
+LOCATE COMP "ddr3_ras_n" SITE "L16";
+IOBUF PORT "ddr3_ras_n" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_cas_n" SITE "M16";
+IOBUF PORT "ddr3_cas_n" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_we_n" SITE "P15";
+IOBUF PORT "ddr3_we_n" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_cs_n" SITE "M15";
+IOBUF PORT "ddr3_cs_n" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_cke" SITE "K12";
+IOBUF PORT "ddr3_cke" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_odt" SITE "L15";
+IOBUF PORT "ddr3_odt" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_reset_n" SITE "R12";
+IOBUF PORT "ddr3_reset_n" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+
+LOCATE COMP "ddr3_dm[0]" SITE "F13";
+IOBUF PORT "ddr3_dm[0]" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_dm[1]" SITE "J13";
+IOBUF PORT "ddr3_dm[1]" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+
+# On-die termination on DQ only; DQS uses the differential
+# resistor instead. Both taken from the vendor LiteX platform.
+LOCATE COMP "ddr3_dq[0]" SITE "F14";
+IOBUF PORT "ddr3_dq[0]" IO_TYPE=SSTL135_I TERMINATION=75 SLEWRATE=FAST;
+LOCATE COMP "ddr3_dq[1]" SITE "E16";
+IOBUF PORT "ddr3_dq[1]" IO_TYPE=SSTL135_I TERMINATION=75 SLEWRATE=FAST;
+LOCATE COMP "ddr3_dq[2]" SITE "F12";
+IOBUF PORT "ddr3_dq[2]" IO_TYPE=SSTL135_I TERMINATION=75 SLEWRATE=FAST;
+LOCATE COMP "ddr3_dq[3]" SITE "F15";
+IOBUF PORT "ddr3_dq[3]" IO_TYPE=SSTL135_I TERMINATION=75 SLEWRATE=FAST;
+LOCATE COMP "ddr3_dq[4]" SITE "G13";
+IOBUF PORT "ddr3_dq[4]" IO_TYPE=SSTL135_I TERMINATION=75 SLEWRATE=FAST;
+LOCATE COMP "ddr3_dq[5]" SITE "B16";
+IOBUF PORT "ddr3_dq[5]" IO_TYPE=SSTL135_I TERMINATION=75 SLEWRATE=FAST;
+LOCATE COMP "ddr3_dq[6]" SITE "G12";
+IOBUF PORT "ddr3_dq[6]" IO_TYPE=SSTL135_I TERMINATION=75 SLEWRATE=FAST;
+LOCATE COMP "ddr3_dq[7]" SITE "B15";
+IOBUF PORT "ddr3_dq[7]" IO_TYPE=SSTL135_I TERMINATION=75 SLEWRATE=FAST;
+LOCATE COMP "ddr3_dq[8]" SITE "J14";
+IOBUF PORT "ddr3_dq[8]" IO_TYPE=SSTL135_I TERMINATION=75 SLEWRATE=FAST;
+LOCATE COMP "ddr3_dq[9]" SITE "J16";
+IOBUF PORT "ddr3_dq[9]" IO_TYPE=SSTL135_I TERMINATION=75 SLEWRATE=FAST;
+LOCATE COMP "ddr3_dq[10]" SITE "K15";
+IOBUF PORT "ddr3_dq[10]" IO_TYPE=SSTL135_I TERMINATION=75 SLEWRATE=FAST;
+LOCATE COMP "ddr3_dq[11]" SITE "K14";
+IOBUF PORT "ddr3_dq[11]" IO_TYPE=SSTL135_I TERMINATION=75 SLEWRATE=FAST;
+LOCATE COMP "ddr3_dq[12]" SITE "H14";
+IOBUF PORT "ddr3_dq[12]" IO_TYPE=SSTL135_I TERMINATION=75 SLEWRATE=FAST;
+LOCATE COMP "ddr3_dq[13]" SITE "K16";
+IOBUF PORT "ddr3_dq[13]" IO_TYPE=SSTL135_I TERMINATION=75 SLEWRATE=FAST;
+LOCATE COMP "ddr3_dq[14]" SITE "H13";
+IOBUF PORT "ddr3_dq[14]" IO_TYPE=SSTL135_I TERMINATION=75 SLEWRATE=FAST;
+LOCATE COMP "ddr3_dq[15]" SITE "J15";
+IOBUF PORT "ddr3_dq[15]" IO_TYPE=SSTL135_I TERMINATION=75 SLEWRATE=FAST;
+
+# Differential pairs: P pin only, complement inferred.
+# N balls for reference: LDQS E15, UDQS H15, CK C15.
+LOCATE COMP "ddr3_dqs_p[0]" SITE "D16";
+IOBUF PORT "ddr3_dqs_p[0]" IO_TYPE=SSTL135D_I TERMINATION=OFF DIFFRESISTOR=100 SLEWRATE=FAST;
+LOCATE COMP "ddr3_dqs_p[1]" SITE "G16";
+IOBUF PORT "ddr3_dqs_p[1]" IO_TYPE=SSTL135D_I TERMINATION=OFF DIFFRESISTOR=100 SLEWRATE=FAST;
+LOCATE COMP "ddr3_clk_p" SITE "C16";
+IOBUF PORT "ddr3_clk_p" IO_TYPE=SSTL135D_I SLEWRATE=FAST;
+
+# PROGRAMN, routed back to a user pin: rtl/sysctl.v pulls it low (open
+# drain) to reconfigure the FPGA -- `reboot`, docs/zboot.md. The
+# schematic's RESET net on M8, the same arrangement as every other
+# Machdyne board with a DFU bootloader (tinydfu's resetn).
+LOCATE COMP "PROGRAMN" SITE "M8";
+IOBUF PORT "PROGRAMN" IO_TYPE=LVCMOS33 OPENDRAIN=ON;

@@ -1,0 +1,10 @@
+# Machdyne Klinge: ECP5 LFE5U-25F in CABGA256.
+#
+#   zfpga build /fpga/examples/blink.v -b klinge
+#
+# The pins are the tree's own boards/klinge_v1.lpf, installed beside
+# this file as klinge.lpf. A 12F Klinge needs `device LFE5U-12F` here.
+device  LFE5U-25F
+package CABGA256
+lpf     klinge.lpf
+pack    -c

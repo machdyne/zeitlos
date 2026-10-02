@@ -1,0 +1,247 @@
+BLOCK RESETPATHS;
+BLOCK ASYNCPATHS;
+
+# ---------------------------------------------------------------------
+# Machdyne Schoko V1/V1A -- LFE5U-45F CABGA256, 32MB SDRAM, DDMI (DVI)
+# and VGA, one USB host port, microSD, two PMOD ports, USB-C.
+#
+# Checked against the board schematic (github.com/machdyne/schoko,
+# pcb/schoko_v1.pdf). Two things differ from the zucker copy:
+#
+#   * zucker's (and the Schoko repo's own) schoko_v1.lpf lists
+#     PMOD_B3 twice, on B11 and on B10. The second is PMOD_B4: the
+#     schematic has PMOD_B4 on B10, and LiteX's PMODB connector agrees.
+#
+#   * The SDRAM is the Konfekt layout EXCEPT a[0] (R14, not M13) and
+#     ba[1:0] (T13/T14, not N13/P14). Copying either board's file onto
+#     the other builds and fails the memory test.
+#
+# THE PMODS. This file describes the default build, which is also the
+# schoko_langkatze_gpio release target: the console is USB CDC-ACM on
+# the USB-C socket, so both PMODs are free --
+#
+#   PMOD A (PMOD1)   Langkatze ENC28J60 SPI ethernet   `SPI_ETH
+#   PMOD B (PMOD2)   GPIO port 0, eight pins           `GPIO_PORT0
+#
+# release/hw/boards/schoko.spec carries the same two ball maps as
+# pmod.a/pmod.b, and `zrelease check` reports the target as identical
+# to this file. Change one, change both.
+# ---------------------------------------------------------------------
+
+# CLOCK
+LOCATE COMP "CLK_48" SITE "A7";
+IOBUF PORT "CLK_48" IO_TYPE=LVCMOS33;
+FREQUENCY PORT "CLK_48" 48.0 MHz;
+
+# RGB LED (LED_RGB). Schematic: LED_R B1, LED_G C1, LED_B D1.
+LOCATE COMP "LED_R" SITE "B1";
+IOBUF PORT "LED_R" IO_TYPE=LVCMOS33;
+LOCATE COMP "LED_G" SITE "C1";
+IOBUF PORT "LED_G" IO_TYPE=LVCMOS33;
+LOCATE COMP "LED_B" SITE "D1";
+IOBUF PORT "LED_B" IO_TYPE=LVCMOS33;
+
+# SDRAM (32MB, 16-bit)
+LOCATE COMP "sdram_clock" SITE "F16";
+IOBUF PORT "sdram_clock" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_a[0]" SITE "R14";
+IOBUF PORT "sdram_a[0]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_a[1]" SITE "M14";
+IOBUF PORT "sdram_a[1]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_a[2]" SITE "L14";
+IOBUF PORT "sdram_a[2]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_a[3]" SITE "L13";
+IOBUF PORT "sdram_a[3]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_a[4]" SITE "G12";
+IOBUF PORT "sdram_a[4]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_a[5]" SITE "G13";
+IOBUF PORT "sdram_a[5]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_a[6]" SITE "G14";
+IOBUF PORT "sdram_a[6]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_a[7]" SITE "G15";
+IOBUF PORT "sdram_a[7]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_a[8]" SITE "F12";
+IOBUF PORT "sdram_a[8]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_a[9]" SITE "F13";
+IOBUF PORT "sdram_a[9]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_a[10]" SITE "T15";
+IOBUF PORT "sdram_a[10]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_a[11]" SITE "F14";
+IOBUF PORT "sdram_a[11]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_a[12]" SITE "E14";
+IOBUF PORT "sdram_a[12]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_ba[0]" SITE "T14";
+IOBUF PORT "sdram_ba[0]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_ba[1]" SITE "T13";
+IOBUF PORT "sdram_ba[1]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_cs_n" SITE "G16";
+IOBUF PORT "sdram_cs_n" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_cke" SITE "F15";
+IOBUF PORT "sdram_cke" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_ras_n" SITE "J16";
+IOBUF PORT "sdram_ras_n" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_cas_n" SITE "K16";
+IOBUF PORT "sdram_cas_n" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_we_n" SITE "L15";
+IOBUF PORT "sdram_we_n" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[0]" SITE "R15";
+IOBUF PORT "sdram_dq[0]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[1]" SITE "R16";
+IOBUF PORT "sdram_dq[1]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[2]" SITE "P16";
+IOBUF PORT "sdram_dq[2]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[3]" SITE "P15";
+IOBUF PORT "sdram_dq[3]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[4]" SITE "N16";
+IOBUF PORT "sdram_dq[4]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[5]" SITE "N14";
+IOBUF PORT "sdram_dq[5]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[6]" SITE "M16";
+IOBUF PORT "sdram_dq[6]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[7]" SITE "M15";
+IOBUF PORT "sdram_dq[7]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[8]" SITE "E15";
+IOBUF PORT "sdram_dq[8]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[9]" SITE "D16";
+IOBUF PORT "sdram_dq[9]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[10]" SITE "D14";
+IOBUF PORT "sdram_dq[10]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[11]" SITE "C16";
+IOBUF PORT "sdram_dq[11]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[12]" SITE "B16";
+IOBUF PORT "sdram_dq[12]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[13]" SITE "C14";
+IOBUF PORT "sdram_dq[13]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[14]" SITE "C15";
+IOBUF PORT "sdram_dq[14]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[15]" SITE "B15";
+IOBUF PORT "sdram_dq[15]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dm[0]" SITE "L16";
+IOBUF PORT "sdram_dm[0]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dm[1]" SITE "E16";
+IOBUF PORT "sdram_dm[1]" IO_TYPE=LVTTL33;
+
+# USB HOST. Port 0 is the board's USB-A socket (USB1_DP F2, USB1_DN E1).
+#
+# rtl/sysctl.v always builds two host ports and nextpnr here runs
+# without --lpf-allow-unconstrained, so port 1 needs balls. It is parked
+# on C3/D3 (PL11C/PL11D), unconnected on the schematic, pulled DOWN so
+# the idle port reads SE0 ("nothing attached") rather than noise.
+#
+# A Dual USB Host PMOD in a PMOD port is the other place it could go
+# (LiteX puts it on PMOD B pins 1-4); that is a different target.
+LOCATE COMP "usb_host_dp[0]" SITE "F2";
+IOBUF PORT "usb_host_dp[0]" IO_TYPE=LVCMOS33 PULLMODE=NONE;
+LOCATE COMP "usb_host_dm[0]" SITE "E1";
+IOBUF PORT "usb_host_dm[0]" IO_TYPE=LVCMOS33 PULLMODE=NONE;
+LOCATE COMP "usb_host_dp[1]" SITE "C3";
+IOBUF PORT "usb_host_dp[1]" IO_TYPE=LVCMOS33 PULLMODE=DOWN;
+LOCATE COMP "usb_host_dm[1]" SITE "D3";
+IOBUF PORT "usb_host_dm[1]" IO_TYPE=LVCMOS33 PULLMODE=DOWN;
+
+# USB DEVICE -- the USB-C socket, the console (`USB_CDC). The same
+# balls tinydfu-bootloader's schoko_v1.lpf uses.
+LOCATE COMP "usb_ufp_dp" SITE "T6";
+IOBUF PORT "usb_ufp_dp" IO_TYPE=LVCMOS33;
+LOCATE COMP "usb_ufp_dm" SITE "R6";
+IOBUF PORT "usb_ufp_dm" IO_TYPE=LVCMOS33;
+LOCATE COMP "usb_ufp_pull" SITE "R7";
+IOBUF PORT "usb_ufp_pull" IO_TYPE=LVCMOS33;
+
+# DDMI (DVI over the HDMI connector). P balls only; the N balls are
+# T4, R3, R1 and P2 and are inferred by LVCMOS33D.
+LOCATE COMP "DDMI_CK_P" SITE "R5";
+IOBUF PORT "DDMI_CK_P" IO_TYPE=LVCMOS33D;
+IOBUF PORT "DDMI_CK_P" DRIVE=4;
+LOCATE COMP "DDMI_D0_P" SITE "P4";
+IOBUF PORT "DDMI_D0_P" IO_TYPE=LVCMOS33D;
+IOBUF PORT "DDMI_D0_P" DRIVE=4;
+LOCATE COMP "DDMI_D1_P" SITE "P1";
+IOBUF PORT "DDMI_D1_P" IO_TYPE=LVCMOS33D;
+IOBUF PORT "DDMI_D1_P" DRIVE=4;
+LOCATE COMP "DDMI_D2_P" SITE "N1";
+IOBUF PORT "DDMI_D2_P" IO_TYPE=LVCMOS33D;
+IOBUF PORT "DDMI_D2_P" DRIVE=4;
+
+# VGA, one bit per colour (8 colours). Schematic: VGA_R0 J3, VGA_G0 K3,
+# VGA_B0 H2, VGA_HS J1, VGA_VS J2. Built together with DDMI: both are
+# 640x480@60 from the same timing generator, so the two connectors
+# show the same picture.
+LOCATE COMP "VGA_R" SITE "J3";
+IOBUF PORT "VGA_R" IO_TYPE=LVCMOS33;
+LOCATE COMP "VGA_G" SITE "K3";
+IOBUF PORT "VGA_G" IO_TYPE=LVCMOS33;
+LOCATE COMP "VGA_B" SITE "H2";
+IOBUF PORT "VGA_B" IO_TYPE=LVCMOS33;
+LOCATE COMP "VGA_HS" SITE "J1";
+IOBUF PORT "VGA_HS" IO_TYPE=LVCMOS33;
+LOCATE COMP "VGA_VS" SITE "J2";
+IOBUF PORT "VGA_VS" IO_TYPE=LVCMOS33;
+
+# Configuration SPI flash (MMOD). MCLK is reached through USRMCLK.
+LOCATE COMP "CSPI_SS_FLASH" SITE "N8";
+IOBUF PORT "CSPI_SS_FLASH" IO_TYPE=LVCMOS33;
+LOCATE COMP "CSPI_MISO" SITE "T7";
+IOBUF PORT "CSPI_MISO" IO_TYPE=LVCMOS33;
+LOCATE COMP "CSPI_MOSI" SITE "T8";
+IOBUF PORT "CSPI_MOSI" IO_TYPE=LVCMOS33;
+
+# microSD, SPI mode. Schematic: SD_SS B6, SD_MOSI C6, SD_MISO E6,
+# SD_SCK D6. (V1 wires the card for SPI only; V2 adds SD mode.)
+LOCATE COMP "SD_SCK" SITE "D6";
+IOBUF PORT "SD_SCK" IO_TYPE=LVCMOS33 PULLMODE=NONE;
+LOCATE COMP "SD_MOSI" SITE "C6";
+IOBUF PORT "SD_MOSI" IO_TYPE=LVCMOS33 PULLMODE=NONE;
+LOCATE COMP "SD_SS" SITE "B6";
+IOBUF PORT "SD_SS" IO_TYPE=LVCMOS33 PULLMODE=NONE;
+LOCATE COMP "SD_MISO" SITE "E6";
+IOBUF PORT "SD_MISO" IO_TYPE=LVCMOS33 PULLMODE=NONE;
+
+# PMOD A (PMOD1): Langkatze ENC28J60 SPI ethernet, `SPI_ETH.
+#
+#   pin   1    2    3    4    7    8    9    10
+#   ball  A2   A3   A4   A5   B3   B4   B5   A6
+#
+# Pin assignment from release/hw/pmods/langkatze.spec: 1 CSN, 2 MOSI,
+# 3 MISO, 4 SCK, 7 INTN. Pins 8 (RSTN, pulled up on the PMOD), 9 (NC)
+# and 10 (CLK50, an output FROM the PMOD) are deliberately left alone.
+LOCATE COMP "ETH_SS" SITE "A2";			# PMODA1
+IOBUF PORT "ETH_SS" IO_TYPE=LVCMOS33;
+LOCATE COMP "ETH_MOSI" SITE "A3";		# PMODA2
+IOBUF PORT "ETH_MOSI" IO_TYPE=LVCMOS33;
+LOCATE COMP "ETH_MISO" SITE "A4";		# PMODA3
+IOBUF PORT "ETH_MISO" IO_TYPE=LVCMOS33;
+LOCATE COMP "ETH_SCLK" SITE "A5";		# PMODA4
+IOBUF PORT "ETH_SCLK" IO_TYPE=LVCMOS33;
+LOCATE COMP "ETH_INT" SITE "B3";		# PMODA7
+IOBUF PORT "ETH_INT" IO_TYPE=LVCMOS33;
+
+# PMOD B (PMOD2): GPIO port 0, `GPIO_PORT0 -- all eight pins, weak
+# pull-ups (see release/hw/pmods/gpio.spec for why UP). Bit order is
+# PMOD pin order: bits 0-3 are pins 1-4, bits 4-7 are pins 7-10.
+#
+#   pin   1    2    3    4    7    8    9    10
+#   ball  A12  A11  B11  B10  A9   A10  B8   B9
+LOCATE COMP "GPIO0[0]" SITE "A12";		# PMODB1
+IOBUF PORT "GPIO0[0]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+LOCATE COMP "GPIO0[1]" SITE "A11";		# PMODB2
+IOBUF PORT "GPIO0[1]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+LOCATE COMP "GPIO0[2]" SITE "B11";		# PMODB3
+IOBUF PORT "GPIO0[2]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+LOCATE COMP "GPIO0[3]" SITE "B10";		# PMODB4
+IOBUF PORT "GPIO0[3]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+LOCATE COMP "GPIO0[4]" SITE "A9";		# PMODB7
+IOBUF PORT "GPIO0[4]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+LOCATE COMP "GPIO0[5]" SITE "A10";		# PMODB8
+IOBUF PORT "GPIO0[5]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+LOCATE COMP "GPIO0[6]" SITE "B8";		# PMODB9
+IOBUF PORT "GPIO0[6]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+LOCATE COMP "GPIO0[7]" SITE "B9";		# PMODB10
+IOBUF PORT "GPIO0[7]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+
+# PROGRAMN, routed back to a user pin: rtl/sysctl.v pulls it low (open
+# drain) to reconfigure the FPGA -- `reboot`, docs/zboot.md. M8 is the
+# net tinydfu-bootloader's schoko_v1.lpf calls resetn and drives the
+# same way to leave the bootloader.
+LOCATE COMP "PROGRAMN" SITE "M8";
+IOBUF PORT "PROGRAMN" IO_TYPE=LVCMOS33 OPENDRAIN=ON;

@@ -342,7 +342,7 @@ FPGA_FILES = [
     # opened when FatFs was built without long names (docs/zfpga.md
     # sec. 22). Long names work now; the lookup name is unchanged.
     ("fpga/lfe5u25f.zdb", "sw/apps/zfpga/db/lfe5u25f.zdb"),
-    # the 45F: Mozart ML1 and ML2, Sergei ML1 and ML2
+    # the 45F: Mozart ML1 and ML2, Sergei ML1 and ML2, Schoko, Noir
     ("fpga/lfe5u45f.zdb", "sw/apps/zfpga/db/lfe5u45f.zdb"),
     # board profiles and their pins: `zfpga build design.v -b lakritz`
     ("fpga/boards/lakritz.brd", "sw/apps/zfpga/db/boards/lakritz.brd"),
@@ -353,6 +353,14 @@ FPGA_FILES = [
     ("fpga/boards/mozart1.lpf", "sw/apps/zfpga/db/boards/mozart1.lpf"),
     ("fpga/boards/sergei1.brd", "sw/apps/zfpga/db/boards/sergei1.brd"),
     ("fpga/boards/sergei1.lpf", "sw/apps/zfpga/db/boards/sergei1.lpf"),
+    ("fpga/boards/konfekt.brd", "sw/apps/zfpga/db/boards/konfekt.brd"),
+    ("fpga/boards/konfekt.lpf", "sw/apps/zfpga/db/boards/konfekt.lpf"),
+    ("fpga/boards/schoko.brd", "sw/apps/zfpga/db/boards/schoko.brd"),
+    ("fpga/boards/schoko.lpf", "sw/apps/zfpga/db/boards/schoko.lpf"),
+    ("fpga/boards/noir.brd", "sw/apps/zfpga/db/boards/noir.brd"),
+    ("fpga/boards/noir.lpf", "sw/apps/zfpga/db/boards/noir.lpf"),
+    ("fpga/boards/klinge.brd", "sw/apps/zfpga/db/boards/klinge.brd"),
+    ("fpga/boards/klinge.lpf", "sw/apps/zfpga/db/boards/klinge.lpf"),
     # something to build: docs/zfpga-test.md walks through these
     ("fpga/examples/blink.v", "sw/apps/zfpga/db/examples/blink.v"),
     ("fpga/examples/blinkf.v", "sw/apps/zfpga/db/examples/blinkf.v"),

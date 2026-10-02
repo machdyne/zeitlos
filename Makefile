@@ -216,14 +216,17 @@ else ifeq ($(BOARD), icoboard)
 	FLASH = icoprog -f < output/soc.bit
 	FLASH_OFFSET = -O
 else ifeq ($(BOARD), schoko)
+	# Machdyne Schoko V1 (ECP5 45F, 32MB SDRAM). docs/boards.md.
 	FAMILY = ecp5
 	DEVICE = 45k
 	PACKAGE = CABGA256
 	LPF = schoko_v1.lpf
 	PROG = openFPGALoader -c $(CABLE)
-	FLASH = openFPGALoader -c $(CABLE) -f
+	FLASH = openFPGALoader -v -c $(CABLE) -f
 	FLASH_OFFSET = -o
+	JUMP = 1
 else ifeq ($(BOARD), konfekt)
+	# Machdyne Konfekt V0 (ECP5 12F, 32MB SDRAM). docs/boards.md.
 	FAMILY = ecp5
 	DEVICE = 12k
 	PACKAGE = CABGA256
@@ -231,6 +234,7 @@ else ifeq ($(BOARD), konfekt)
 	PROG = openFPGALoader -c $(CABLE)
 	FLASH = openFPGALoader -v -c $(CABLE) -f
 	FLASH_OFFSET = -o
+	JUMP = 1
 else ifeq ($(BOARD), minze)
 	FAMILY = ecp5
 	DEVICE = 12k
@@ -284,6 +288,31 @@ else ifeq ($(BOARD), mozart_ml2)
 	FLASH_OFFSET = -o
 	JUMP = 1
 	# DDR3 main memory: the files are added below, for every DDR3_BOARDS.
+else ifeq ($(BOARD), noir)
+	# Machdyne Noir V0 (ECP5 45F, 256MB DDR3L). The DDR3 is wired as on
+	# the Sechzig ML2, so it builds like mozart_ml2: DDR3 sources and
+	# the minimal DDR3 BIOS (DDR3_BOARDS below). docs/boards.md.
+	FAMILY = ecp5
+	DEVICE = 45k
+	PACKAGE = CABGA256
+	LPF = noir_v0.lpf
+	PROG = openFPGALoader -c $(CABLE)
+	FLASH = openFPGALoader -v -c $(CABLE) -f
+	FLASH_OFFSET = -o
+	JUMP = 1
+else ifeq ($(BOARD), klinge)
+	# Machdyne Klinge V1 (ECP5 25F, 512MB DDR3L, 2x RMII, headless).
+	# The DDR3 is wired as on the Sechzig ML2, so it is a DDR3_BOARDS
+	# board (below). Most Klinges are 25F; DEVICE=12k for a 12F one.
+	# docs/boards.md.
+	FAMILY = ecp5
+	DEVICE ?= 25k
+	PACKAGE = CABGA256
+	LPF = klinge_v1.lpf
+	PROG = openFPGALoader -c $(CABLE)
+	FLASH = openFPGALoader -v -c $(CABLE) -f
+	FLASH_OFFSET = -o
+	JUMP = 1
 else ifeq ($(BOARD), sergei_ml1)
 	FAMILY = ecp5
 	DEVICE = 45k
@@ -402,7 +431,7 @@ endif
 # families' synthesis has no business seeing. sw/bios/Makefile and
 # sw/bios/bios.c keep the same list, to build these boards' minimal
 # DDR3 BIOS.
-DDR3_BOARDS = mozart_ml2 sergei_ml2
+DDR3_BOARDS = mozart_ml2 sergei_ml2 noir klinge
 ifneq ($(filter $(BOARD),$(DDR3_BOARDS)),)
 RTL_PICO += \
 		rtl/clk/pll2.v \
@@ -412,6 +441,24 @@ RTL_PICO += \
 		rtl/mem/ddr3_rdasm.v \
 		rtl/mem/ddr3_clk.v \
 		rtl/mem/ddr3_phy_init.v
+endif
+
+# DDR3 boards elaborate first and round-trip the design through RTLIL,
+# so synth_ecp5 starts from netlists that carry no Verilog AST.
+#
+# Yosys 0.69 (oss-cad-suite 2026-10-01) re-elaborates sysctl from its
+# AST in synth_ecp5's last `hierarchy -check`, when the DDR3 PHY's
+# parameterised DQSBUFM blackboxes are derived there -- long after
+# everything was flattened and the submodules purged -- and fails:
+#   Reprocessing module sysctl because instantiated module
+#     $paramod$...\DQSBUFM has become available.
+#   ERROR: Module `\gpu_cursor' referenced in module `\sysctl' ...
+# Yosys 0.63 did not, and no non-DDR3 board instantiates a
+# parameterised blackbox that late. A module read back from RTLIL has
+# no AST to re-elaborate from, so the final pass derives the blackbox
+# and leaves sysctl alone. The netlist is otherwise the same flow.
+ifneq ($(filter $(BOARD),$(DDR3_BOARDS)),)
+YOSYS_PRE = hierarchy -top sysctl; write_rtlil $(OUTDIR)/elab.il; design -reset; read_rtlil $(OUTDIR)/elab.il; 
 endif
 
 # Artix-7: the MMCM wrappers. Only these boards read them -- they
@@ -558,7 +605,7 @@ else ifeq ($(FAMILY), ecp5)
 $(OUTDIR)/soc.config: $(SOC_SYNTH_INPUTS) $(SOC_CONFIG_STAMP)
 	mkdir -p $(OUTDIR)
 	yosys $(EXTRA_DEFINES) $(JUMP_DEFINES) -DBOARD_$(BOARD_UC) -DECP5 -q -l $(SYNTH_LOG) -p \
-		"synth_ecp5 $(ABC9) -top sysctl -json $(OUTDIR)/soc.json" $(RTL_PICO)
+		"$(YOSYS_PRE)synth_ecp5 $(ABC9) -top sysctl -json $(OUTDIR)/soc.json" $(RTL_PICO)
 	nextpnr-ecp5 --$(DEVICE) --package $(PACKAGE) --lpf boards/$(LPF) \
 		--json $(OUTDIR)/soc.json \
 		--report $(OUTDIR)/report.txt \

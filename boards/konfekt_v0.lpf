@@ -1,0 +1,221 @@
+BLOCK RESETPATHS;
+BLOCK ASYNCPATHS;
+
+# ---------------------------------------------------------------------
+# Machdyne Konfekt V0 -- LFE5U-12F CABGA256, 32MB SDRAM, DDMI (DVI),
+# one USB host port, microSD, 3.5mm audio + composite, USB-C.
+#
+# Every ball below was checked against the board schematic
+# (github.com/machdyne/konfekt, pcb/konfekt_v0.pdf), not only against
+# the zucker and LiteX copies, because those two disagree with the
+# schematic in three places:
+#
+#   * The RGB LED. zucker's konfekt_v0.lpf has green on E1 and blue on
+#     C1; the schematic has LED_G on C1 and LED_B on E1. (LiteX's
+#     machdyne_konfekt.py lists them as user_led 0/1/2 = G1/E1/C1 and
+#     names them r/g/b in that order, which is the same mistake.)
+#
+#   * The debug UART. zucker has UART0_TX on J1 and UART0_RX on J2.
+#     The schematic nets are UART_RX on J1 and UART_TX on J2, which is
+#     also what LiteX says (serial tx=J2, rx=J1). Not used by default
+#     -- the console is USB CDC-ACM on the USB-C socket -- but kept
+#     below, commented, the right way round.
+#
+#   * The SDRAM's upper byte lane is NOT Lakritz's. dq[8..15] are
+#     E15 D16 D14 C16 B16 C14 C15 B15 here; Lakritz has them in a
+#     different order on mostly the same balls. A copied Lakritz file
+#     builds, passes timing and then fails the BIOS memory test on the
+#     high byte. zucker and LiteX agree with the schematic on this one.
+# ---------------------------------------------------------------------
+
+# CLOCK
+LOCATE COMP "CLK_48" SITE "A7";
+IOBUF PORT "CLK_48" IO_TYPE=LVCMOS33;
+FREQUENCY PORT "CLK_48" 48.0 MHz;
+
+# RGB LED (LED_RGB in rtl/boards.vh). Schematic: LED_R G1, LED_G C1,
+# LED_B E1.
+LOCATE COMP "LED_R" SITE "G1";
+IOBUF PORT "LED_R" IO_TYPE=LVCMOS33;
+LOCATE COMP "LED_G" SITE "C1";
+IOBUF PORT "LED_G" IO_TYPE=LVCMOS33;
+LOCATE COMP "LED_B" SITE "E1";
+IOBUF PORT "LED_B" IO_TYPE=LVCMOS33;
+
+# SDRAM (32MB, 16-bit)
+LOCATE COMP "sdram_clock" SITE "F16";
+IOBUF PORT "sdram_clock" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_a[0]" SITE "M13";
+IOBUF PORT "sdram_a[0]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_a[1]" SITE "M14";
+IOBUF PORT "sdram_a[1]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_a[2]" SITE "L14";
+IOBUF PORT "sdram_a[2]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_a[3]" SITE "L13";
+IOBUF PORT "sdram_a[3]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_a[4]" SITE "G12";
+IOBUF PORT "sdram_a[4]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_a[5]" SITE "G13";
+IOBUF PORT "sdram_a[5]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_a[6]" SITE "G14";
+IOBUF PORT "sdram_a[6]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_a[7]" SITE "G15";
+IOBUF PORT "sdram_a[7]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_a[8]" SITE "F12";
+IOBUF PORT "sdram_a[8]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_a[9]" SITE "F13";
+IOBUF PORT "sdram_a[9]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_a[10]" SITE "T15";
+IOBUF PORT "sdram_a[10]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_a[11]" SITE "F14";
+IOBUF PORT "sdram_a[11]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_a[12]" SITE "E14";
+IOBUF PORT "sdram_a[12]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_ba[0]" SITE "P14";
+IOBUF PORT "sdram_ba[0]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_ba[1]" SITE "N13";
+IOBUF PORT "sdram_ba[1]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_cs_n" SITE "G16";
+IOBUF PORT "sdram_cs_n" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_cke" SITE "F15";
+IOBUF PORT "sdram_cke" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_ras_n" SITE "J16";
+IOBUF PORT "sdram_ras_n" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_cas_n" SITE "K16";
+IOBUF PORT "sdram_cas_n" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_we_n" SITE "L15";
+IOBUF PORT "sdram_we_n" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[0]" SITE "R15";
+IOBUF PORT "sdram_dq[0]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[1]" SITE "R16";
+IOBUF PORT "sdram_dq[1]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[2]" SITE "P16";
+IOBUF PORT "sdram_dq[2]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[3]" SITE "P15";
+IOBUF PORT "sdram_dq[3]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[4]" SITE "N16";
+IOBUF PORT "sdram_dq[4]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[5]" SITE "N14";
+IOBUF PORT "sdram_dq[5]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[6]" SITE "M16";
+IOBUF PORT "sdram_dq[6]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[7]" SITE "M15";
+IOBUF PORT "sdram_dq[7]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[8]" SITE "E15";
+IOBUF PORT "sdram_dq[8]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[9]" SITE "D16";
+IOBUF PORT "sdram_dq[9]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[10]" SITE "D14";
+IOBUF PORT "sdram_dq[10]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[11]" SITE "C16";
+IOBUF PORT "sdram_dq[11]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[12]" SITE "B16";
+IOBUF PORT "sdram_dq[12]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[13]" SITE "C14";
+IOBUF PORT "sdram_dq[13]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[14]" SITE "C15";
+IOBUF PORT "sdram_dq[14]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[15]" SITE "B15";
+IOBUF PORT "sdram_dq[15]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dm[0]" SITE "L16";
+IOBUF PORT "sdram_dm[0]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dm[1]" SITE "E16";
+IOBUF PORT "sdram_dm[1]" IO_TYPE=LVTTL33;
+
+# USB HOST. Port 0 is the board's one USB-A socket (USB1_DP/DN, B1/B2).
+#
+# rtl/sysctl.v always builds two host ports, and nextpnr here runs
+# without --lpf-allow-unconstrained, so port 1 needs balls even though
+# Konfekt has no second socket and no PMOD to put one on. It is parked
+# on C3/D3 (PL11C/PL11D), which the schematic leaves unconnected, with
+# both lines pulled DOWN: a host port whose D+ and D- both read low is
+# SE0, which is "nothing plugged in", so the second core idles instead
+# of decoding noise off two floating pins.
+LOCATE COMP "usb_host_dp[0]" SITE "B1";
+IOBUF PORT "usb_host_dp[0]" IO_TYPE=LVCMOS33 PULLMODE=NONE;
+LOCATE COMP "usb_host_dm[0]" SITE "B2";
+IOBUF PORT "usb_host_dm[0]" IO_TYPE=LVCMOS33 PULLMODE=NONE;
+LOCATE COMP "usb_host_dp[1]" SITE "C3";
+IOBUF PORT "usb_host_dp[1]" IO_TYPE=LVCMOS33 PULLMODE=DOWN;
+LOCATE COMP "usb_host_dm[1]" SITE "D3";
+IOBUF PORT "usb_host_dm[1]" IO_TYPE=LVCMOS33 PULLMODE=DOWN;
+
+# USB DEVICE (upstream-facing port) -- the USB-C socket, the console
+# (`USB_CDC, docs/usb_cdc.md). Schematic nets USB0_DP/USB0_DN/
+# USB0_DP_PU; the same balls tinydfu-bootloader's konfekt_v0.lpf uses.
+# usb_ufp_pull is driven high to attach and released otherwise.
+LOCATE COMP "usb_ufp_dp" SITE "T6";
+IOBUF PORT "usb_ufp_dp" IO_TYPE=LVCMOS33;
+LOCATE COMP "usb_ufp_dm" SITE "R6";
+IOBUF PORT "usb_ufp_dm" IO_TYPE=LVCMOS33;
+LOCATE COMP "usb_ufp_pull" SITE "R7";
+IOBUF PORT "usb_ufp_pull" IO_TYPE=LVCMOS33;
+
+# DDMI (DVI over the HDMI connector). P balls only; LVCMOS33D infers
+# the complement.
+LOCATE COMP "DDMI_CK_P" SITE "M1";
+IOBUF PORT "DDMI_CK_P" IO_TYPE=LVCMOS33D;
+IOBUF PORT "DDMI_CK_P" DRIVE=4;
+LOCATE COMP "DDMI_D0_P" SITE "P1";
+IOBUF PORT "DDMI_D0_P" IO_TYPE=LVCMOS33D;
+IOBUF PORT "DDMI_D0_P" DRIVE=4;
+LOCATE COMP "DDMI_D1_P" SITE "R2";
+IOBUF PORT "DDMI_D1_P" IO_TYPE=LVCMOS33D;
+IOBUF PORT "DDMI_D1_P" DRIVE=4;
+LOCATE COMP "DDMI_D2_P" SITE "R5";
+IOBUF PORT "DDMI_D2_P" IO_TYPE=LVCMOS33D;
+IOBUF PORT "DDMI_D2_P" DRIVE=4;
+
+# Composite video DAC on the 3.5mm jack's sleeve (VIDEO_C). A 4-bit
+# resistor ladder: VIDEO_D0 270R is the MOST significant bit, D3 2K the
+# least -- note that is the reverse of what the net numbering suggests.
+# Not built (`GPU_COMPOSITE is off; see rtl/boards.vh and
+# docs/composite.md), and kept here for the day it is.
+#LOCATE COMP "COMP_DAC[3]" SITE "T13";	# VIDEO_D0, 270R
+#LOCATE COMP "COMP_DAC[2]" SITE "R12";	# VIDEO_D1, 536R
+#LOCATE COMP "COMP_DAC[1]" SITE "T14";	# VIDEO_D2, 1K
+#LOCATE COMP "COMP_DAC[0]" SITE "R13";	# VIDEO_D3, 2K
+
+# Configuration SPI flash (MMOD). MCLK is reached through USRMCLK.
+LOCATE COMP "CSPI_SS_FLASH" SITE "N8";
+IOBUF PORT "CSPI_SS_FLASH" IO_TYPE=LVCMOS33;
+LOCATE COMP "CSPI_MISO" SITE "T7";
+IOBUF PORT "CSPI_MISO" IO_TYPE=LVCMOS33;
+LOCATE COMP "CSPI_MOSI" SITE "T8";
+IOBUF PORT "CSPI_MOSI" IO_TYPE=LVCMOS33;
+
+# microSD, SPI mode. Schematic: SD_SS B3, SD_MOSI A3, SD_MISO A4,
+# SD_SCK B4; SD_DAT1 B5, SD_DAT2 A2 and SD_CD A5 are not used in SPI
+# mode.
+LOCATE COMP "SD_SCK" SITE "B4";
+IOBUF PORT "SD_SCK" IO_TYPE=LVCMOS33 PULLMODE=NONE;
+LOCATE COMP "SD_MOSI" SITE "A3";
+IOBUF PORT "SD_MOSI" IO_TYPE=LVCMOS33 PULLMODE=NONE;
+LOCATE COMP "SD_SS" SITE "B3";
+IOBUF PORT "SD_SS" IO_TYPE=LVCMOS33 PULLMODE=NONE;
+LOCATE COMP "SD_MISO" SITE "A4";
+IOBUF PORT "SD_MISO" IO_TYPE=LVCMOS33 PULLMODE=NONE;
+
+# 3.5mm audio, sigma-delta (`AUDIO_SD). Schematic: AUDIO_L M11,
+# AUDIO_R P12, each through 100R/100nF and a DC-blocking cap.
+LOCATE COMP "AUDIO_L" SITE "M11";
+IOBUF PORT "AUDIO_L" IO_TYPE=LVCMOS33;
+LOCATE COMP "AUDIO_R" SITE "P12";
+IOBUF PORT "AUDIO_R" IO_TYPE=LVCMOS33;
+
+# Debug UART pads (schematic UART_TX J2, UART_RX J1). Only with a build
+# that has `UART0 and not `USB_CDC -- see the header.
+#LOCATE COMP "UART0_TX" SITE "J2";
+#IOBUF PORT "UART0_TX" IO_TYPE=LVCMOS33;
+#LOCATE COMP "UART0_RX" SITE "J1";
+#IOBUF PORT "UART0_RX" IO_TYPE=LVCMOS33;
+
+# User button (BTN, K1). Not used by the SOC.
+#LOCATE COMP "BTN" SITE "K1";
+
+# PROGRAMN, routed back to a user pin: rtl/sysctl.v pulls it low (open
+# drain) to reconfigure the FPGA -- `reboot`, docs/zboot.md. M8 is the
+# net tinydfu-bootloader's konfekt_v0.lpf calls resetn and drives the
+# same way to leave the bootloader; the schematic calls it RESET.
+LOCATE COMP "PROGRAMN" SITE "M8";
+IOBUF PORT "PROGRAMN" IO_TYPE=LVCMOS33 OPENDRAIN=ON;

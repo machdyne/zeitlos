@@ -2,7 +2,14 @@
 
 Zeitlos runs from DDR3 on **Mozart ML2** (LFE5U-45F, MT41K256M16TW-107
 DDR3L), using all 512MB of the part. **Sergei ML2** carries the same
-module and builds the same way; it has not yet been run on hardware. The controller, PHY, clocking and BIOS training are this
+module and builds the same way; it has not yet been run on hardware. **Noir**
+(LFE5U-45F, MT41K128M16JT-125:K, 256MB) wires its DDR3 to the same balls
+as the ML2 and builds the same way with the 2Gb part's values; it has
+not yet been run on hardware either. **Klinge** (LFE5U-25F, the ML2's
+MT41K256M16TW-107:P, 512MB) is the same again on the smaller die, and
+the first DDR3 board without video: see [boards.md](boards.md#klinge).
+Building any DDR3 board with Yosys
+0.69 needs the two fixes described in [boards.md](boards.md#noir). The controller, PHY, clocking and BIOS training are this
 project's own; the PHY's strobe path follows LiteDRAM's ECP5 PHY, the one
 datapath known to work on this board. How it got here, and what each
 wrong turn taught, is in [ddr3-bringup.md](ddr3-bringup.md).
@@ -83,10 +90,16 @@ instantiate ECP5 DDR primitives no other family should read -- and
 BIOS ([Training](#training-in-the-bios)) by board name:
 
 ```
-DDR3_BOARDS = mozart_ml2 sergei_ml2                          # Makefile
-ifneq ($(filter MOZART_ML2 SERGEI_ML2,$(BOARD)),)            # sw/bios/Makefile
-#if defined(BOARD_MOZART_ML2) || defined(BOARD_SERGEI_ML2)   // sw/bios/bios.c
+DDR3_BOARDS = mozart_ml2 sergei_ml2 noir klinge              # Makefile
+ifneq ($(filter MOZART_ML2 SERGEI_ML2 NOIR KLINGE,$(BOARD)),) # sw/bios/Makefile
+#if defined(BOARD_MOZART_ML2) || defined(BOARD_SERGEI_ML2) || \
+    defined(BOARD_NOIR) || defined(BOARD_KLINGE)              // sw/bios/bios.c
 ```
+
+**A board that is not an ML2 carrier** but wires its DDR3 the same
+way -- Noir -- copies only the DDR3 block of `boards/mozart_ml2.lpf`
+(every ball checked against its own schematic), and everything else
+from its own schematic: Noir's 48MHz clock is A7, ML2's C7.
 
 A new board with the Sechzig ML2 module is its ML1 block with the
 memory defines changed and `SDRAM_BURST` dropped -- exactly what

@@ -1,0 +1,11 @@
+# Machdyne Schoko: ECP5 LFE5U-45F in CABGA256.
+#
+#   zfpga build /fpga/examples/blink.v -b schoko
+#
+# The pins are the tree's own boards/schoko_v1.lpf, installed beside
+# this file as schoko.lpf. `pack -c`: compressed, as Zeitlos's own
+# build is.
+device  LFE5U-45F
+package CABGA256
+lpf     schoko.lpf
+pack    -c

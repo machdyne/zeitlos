@@ -1,0 +1,12 @@
+# Machdyne Noir: ECP5 LFE5U-45F in CABGA256.
+#
+#   zfpga build /fpga/examples/blink.v -b noir
+#
+# The pins are the tree's own boards/noir_v0.lpf, installed beside
+# this file as noir.lpf. `pack -c`: compressed, as Zeitlos's own build
+# is. zfpga places only what a design uses, so the DDR3 constraints in
+# that file are harmless to a blink.
+device  LFE5U-45F
+package CABGA256
+lpf     noir.lpf
+pack    -c

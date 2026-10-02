@@ -439,29 +439,26 @@
 // not a shipped target.
 //
 // This does NOT constrain PMOD A to anything on its own; it only
-// stops the console needing it. For GPIO there, see `GPIO_PORT0
-// below and the PMOD A block in boards/obst_v0.lpf, or build the
-// obst_langkatze_gpio target, which does both.
+// stops the console needing it. The obst_langkatze_gpio release
+// target is what uses the freed connector: Langkatze on PMOD A, GPIO
+// on PMOD B (target names list PMODs in port order).
 `define USB_CDC
 
-// GPIO (rtl/gpio.v, docs/gpio.md) is OFF in the plain board build and
-// deliberately so: Obst has two PMOD connectors and this block claims
-// both of them already. PMOD A is the serial console (`UART0) and
-// PMOD B is the Langkatze ethernet PMOD (`SPI_ETH), so there is no
-// free connector for a GPIO port to land on, and uncommenting the
-// line below WITHOUT also removing one of those puts two top-level
-// ports on the same balls -- which nextpnr reports as a placement
-// conflict rather than silently mis-building, but is still not a
-// useful thing to hand somebody.
+// GPIO (rtl/gpio.v, docs/gpio.md) is OFF in the plain board build.
+// boards/obst_v0.lpf still constrains the Langkatze ethernet PMOD on
+// PMOD B (`SPI_ETH), and uncommenting the line below without moving
+// it puts two top-level ports on the same balls.
 //
 // The supported way to build a GPIO Obst is the release system, which
-// exists precisely because a variant is not always a superset of its
-// base (see the ZSPEC note above):
+// generates the constraints itself (see the ZSPEC note above):
 //
 //     ./release/zrelease build obst_langkatze_gpio
 //
-// That target keeps the console on PMOD A, puts GPIO port 0 on PMOD B
-// and drops `SPI_ETH, which a command-line -D cannot express.
+// That target puts the Langkatze on PMOD A and GPIO port 0 on PMOD B
+// -- name order is port order -- with the console on the USB-C
+// socket. Both PMOD ports are therefore taken by the target, and the
+// base file's PMOD B ethernet constraints are released and
+// regenerated on PMOD A.
 //`define GPIO_PORT0
 
 // UART1, a second 16550 at 0xf000_0100, is off for the same reason and
@@ -730,6 +727,113 @@
 //`define PROBE
 //`define PROBE_WORDS 512
 //`define PROBE_AW 9
+
+`elsif BOARD_NOIR
+
+// Machdyne Noir: ECP5 45F, 256MB DDR3L, DDMI, one USB host port,
+// microSD, 3.5mm audio. No PMOD, no ethernet. Pins: boards/noir_v0.lpf.
+//
+// The DDR3 is on the Sechzig ML2's balls, so the memory half of this
+// block is Mozart ML2's (docs/ddr3.md) with the part changed: Noir
+// carries the MT41K128M16JT-125:K, 2Gb, so 14 row bits and the 2Gb
+// tRFC. NOT `MAIN_512MB: with a 256MB part the DDR3 decode covers 0x4
+// only and 0x5 stays empty, which docs/ddr3.md ("Smaller parts")
+// explains is required, not merely tidy.
+//
+// The rest is a desktop 45F: Schoko's cache and crypto settings, the
+// full-speed USB host, and sigma-delta audio with the hardware mixer.
+`define FPGA_ECP5
+// PROGRAMN on M8 (the schematic's RESET net), as on every Machdyne
+// board with tinydfu-bootloader.
+`define PROGRAMN_PIN
+`define OSC48
+`define MEM 256
+`define MEM_DDR3
+`define DDR3_ROW_BITS 14
+`define DDR3_TRFC_NS 160
+`define MEM_VRAM
+`define MEM_ROM
+`define MEM_GLYPH
+`define LED_RGB
+`define ICACHE
+`define MONTMUL
+`define MONTMUL_REGS
+`define SHA256
+`define ICACHE_KB 8
+`define ICACHE_LINE_WORDS 4
+`define DCACHE
+`define DCACHE_KB 4
+`define DCACHE_LINE_WORDS 4
+`define DCACHE_WBUF 2
+`define GPU
+`define GPU_RASTER
+`define GPU_BLIT
+`define GPU_CURSOR
+`define GPU_DDMI
+`define UART0
+// The console is the USB-C socket (`undef at the bottom drops
+// `UART0): Noir has no PMOD, so this is the console that needs no
+// soldering. The debug UART is a pair of pads, J1/J2.
+`define USB_CDC
+`define USB_HOST
+`define SPI_SDCARD
+`define AUDIO
+`define AUDIO_SD
+`define AUDIO_MIXER
+
+`elsif BOARD_KLINGE
+
+// Machdyne Klinge: ECP5 25F, 512MB DDR3L, two LAN8720A RMII PHYs, two
+// microSD slots, USB-C. Headless. Pins: boards/klinge_v1.lpf. Only
+// the first PHY and the first slot are used.
+//
+// MEMORY. The DDR3 is on the Sechzig ML2's balls with the ML2's 4Gb
+// part, so these four lines are Mozart ML2's, all 512MB of it.
+//
+// HEADLESS, BUT WITH A FRAMEBUFFER. No `GPU: there is no connector to
+// scan out to, and no pll1 (rtl/sysctl.v builds it only with `GPU),
+// which is what lets this fit the 25F's two PLLs beside the DDR3 one.
+// `MEM_VRAM, `GPU_RASTER and `GPU_BLIT stay: the 640x480 framebuffer
+// and the line and blit engines all run on sys_clk and need no video
+// clock, so software that draws -- the panic screen, and a future
+// remote desktop over ethernet -- draws at hardware speed into a
+// screen nobody is plugged into.
+//
+// CONSOLE. USB CDC-ACM on the USB-C socket; the `undef at the bottom
+// drops `UART0. Klinge's UART is a pair of pads (R6/R7).
+//
+// NETWORK. The RMII MAC with the FPGA driving the PHYs' 50MHz
+// reference (pll0 -> T4), as Sergei ML1 does.
+`define FPGA_ECP5
+// PROGRAMN on M8 (the schematic's SYS_RST_N, tinydfu's resetn).
+`define PROGRAMN_PIN
+`define OSC48
+`define MEM 512
+`define MEM_DDR3
+`define MAIN_512MB
+`define DDR3_ROW_BITS 15
+`define DDR3_TRFC_NS 260
+`define MEM_VRAM
+`define MEM_ROM
+`define MEM_GLYPH
+`define ICACHE
+`define MONTMUL
+`define MONTMUL_REGS
+`define SHA256
+`define ICACHE_KB 4
+`define ICACHE_LINE_WORDS 4
+`define DCACHE
+`define DCACHE_KB 4
+`define DCACHE_LINE_WORDS 4
+`define DCACHE_WBUF 2
+`define GPU_RASTER
+`define GPU_BLIT
+`define UART0
+`define USB_CDC
+`define SPI_SDCARD
+`define ETH_RMII
+`define ETH_RMII_DRIVE_REFCLK
+`define ETH_RX_SLOTS 4
 
 `elsif BOARD_SERGEI_ML1
 
@@ -1114,6 +1218,121 @@
 // 48.0000 MHz (480MHz VCO / 10), so the S/PDIF arithmetic is identical
 // to the 48MHz-crystal boards and the half-cell is still 8 cycles.
 `define AUDIO_RATE_RESET 8'd16
+
+`elsif BOARD_KONFEKT
+
+// Machdyne Konfekt: ECP5 12F, 32MB SDRAM, DDMI, one USB host port,
+// microSD, 3.5mm audio, no PMOD. Pins: boards/konfekt_v0.lpf.
+//
+// Electrically this is a Lakritz without the PMOD connector, on the
+// 12F rather than the 25F -- which to the open-source tools is the
+// same die with the same 24288 LUT4s and 56 DP16KD (docs/boards.md).
+// So the block is Lakritz's, less `SPI_ETH (there is nowhere to plug a
+// Langkatze in), plus the RGB LED. Lakritz's own budget notes apply
+// unchanged: the D-cache is built without its write buffer, and
+// `AUDIO_MIXER is the first thing to turn off if this stops fitting.
+`define FPGA_ECP5
+// PROGRAMN on M8: the net tinydfu-bootloader's konfekt_v0.lpf calls
+// resetn and pulls the same way to leave the bootloader. By inference
+// from that and from Lakritz and Obst, which share the arrangement.
+`define PROGRAMN_PIN
+`define OSC48
+`define MEM 32
+`define MEM_SDRAM
+`define MEM_VRAM
+`define MEM_ROM
+`define MEM_GLYPH
+`define LED_RGB
+`define ICACHE
+`define MONTMUL
+`define MONTMUL_REGS
+`define SHA256
+`define ICACHE_KB 4
+`define ICACHE_LINE_WORDS 4
+`define DCACHE
+`define DCACHE_KB 4
+`define DCACHE_LINE_WORDS 4
+`define DCACHE_WBUF 0
+`define SDRAM_BURST
+`define GPU
+`define GPU_RASTER
+`define GPU_BLIT
+`define GPU_CURSOR
+`define GPU_DDMI
+`define UART0
+// The console is the USB-C socket; the `undef at the bottom of this
+// file drops `UART0. Konfekt has no PMOD, so this is the only console
+// that needs no soldering (the debug UART is a pair of pads, J1/J2).
+`define USB_CDC
+`define USB_HID
+`define SPI_SDCARD
+`define AUDIO
+`define AUDIO_SD
+// No `AUDIO_MIXER. Lakritz, the same die with this block plus
+// `SPI_ETH, measured 23395 of 24288 TRELLIS_COMB (96%) at the commit
+// this port started from, and routed only after more than twenty
+// minutes of congestion -- well past the ~75% where docs/boards.md
+// says timing turns seed-sensitive. The hardware mixer is the largest
+// optional block that costs nothing but speed to drop (docs/audio.md:
+// sw/apps/mod detects it and mixes in software), so it goes first.
+//`define AUDIO_MIXER
+
+`elsif BOARD_SCHOKO
+
+// Machdyne Schoko: ECP5 45F, 32MB SDRAM, DDMI and VGA, one USB host
+// port, microSD, two PMOD ports, no audio. Pins: boards/schoko_v1.lpf.
+//
+// A 45F with SDRAM, so its cache and crypto settings are Mozart ML1's
+// plus the MONTMUL register file and the SHA-256 block, which the 45F
+// has room for. The USB host is the full-speed controller (`USB_HOST)
+// rather than the low-speed HID core, as on the other 45F boards, so
+// a USB stick works in the front socket.
+//
+// THE PMODS. The console is USB CDC-ACM on the USB-C socket, so both
+// PMOD ports are free, and this block -- like boards/schoko_v1.lpf --
+// describes the schoko_langkatze_gpio release target exactly:
+//
+//   PMOD A   Langkatze ENC28J60 ethernet   `SPI_ETH
+//   PMOD B   GPIO port 0, eight pins       `GPIO_PORT0
+//
+// release/targets/schoko_langkatze_gpio.spec plugs the same two in,
+// and `zrelease check` reports its constraints as identical to the
+// board file's.
+`define FPGA_ECP5
+// PROGRAMN on M8, as Konfekt (tinydfu-bootloader's resetn).
+`define PROGRAMN_PIN
+`define OSC48
+`define MEM 32
+`define MEM_SDRAM
+`define MEM_VRAM
+`define MEM_ROM
+`define MEM_GLYPH
+`define LED_RGB
+`define ICACHE
+`define MONTMUL
+`define MONTMUL_REGS
+`define SHA256
+`define ICACHE_KB 8
+`define ICACHE_LINE_WORDS 4
+`define DCACHE
+`define DCACHE_KB 4
+`define DCACHE_LINE_WORDS 4
+`define DCACHE_WBUF 2
+`define SDRAM_BURST
+`define GPU
+`define GPU_RASTER
+`define GPU_BLIT
+`define GPU_CURSOR
+// Both video outputs, from one timing generator: they show the same
+// 640x480 picture (rtl/sysctl.v drives VGA and DDMI side by side).
+`define GPU_VGA
+`define GPU_DDMI
+`define UART0
+`define USB_CDC
+`define USB_HOST
+`define SPI_SDCARD
+`define SPI_ETH
+`define GPIO_PORT0
 
 `endif
 

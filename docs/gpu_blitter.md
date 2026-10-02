@@ -2248,3 +2248,15 @@ needs both, because the engine starts reading at the address it was
 given however the scissor moves the first written pixel -- see "What
 software must do" above, and the memory-blit section for the canvas
 corruption that found it.
+
+## Without video output
+
+The rasterizer and the blitter are switched by their own defines
+(`GPU_RASTER`, `GPU_BLIT`), not by `GPU`, and run on the system clock
+against VRAM. A board can therefore have both with no scanout at all:
+Klinge builds `MEM_VRAM`, `GPU_RASTER` and `GPU_BLIT` without `GPU`
+(no `gpu_video`, no cursor, no pixel or TMDS clock -- `rtl/sysctl.v`
+builds `pll1` only with `GPU`). Software sees the same feature bits as
+anywhere else, so drawing into the framebuffer runs at hardware speed
+on a machine with no display, which is what a remote desktop over
+ethernet will read. See [boards.md](boards.md#klinge).

@@ -75,7 +75,8 @@
 // BIOS comes back; until then each training change is a BIOS rebuild
 // of seconds rather than a gateware build of many minutes.
 // Keep in step with DDR3_BOARDS in the top-level Makefile.
-#if defined(BOARD_MOZART_ML2) || defined(BOARD_SERGEI_ML2)
+#if defined(BOARD_MOZART_ML2) || defined(BOARD_SERGEI_ML2) || \
+    defined(BOARD_NOIR) || defined(BOARD_KLINGE)
 #define BIOS_DDR3
 #endif
 // fallback only -- see get_mem_main_size() below, which is what

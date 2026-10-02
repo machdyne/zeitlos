@@ -1,0 +1,227 @@
+BLOCK RESETPATHS;
+BLOCK ASYNCPATHS;
+
+SYSCONFIG CONFIG_IOVOLTAGE=3.3 COMPRESS_CONFIG=ON MCCLK_FREQ=2.4 MASTER_SPI_PORT=DISABLE SLAVE_SPI_PORT=DISABLE SLAVE_PARALLEL_PORT=DISABLE CONFIG_MODE=SPI_SERIAL;
+
+# ---------------------------------------------------------------------
+# Machdyne Klinge V1 -- LFE5U-25F CABGA256, 512MB DDR3L
+# (MT41K256M16TW-107:P), two LAN8720A RMII PHYs, two microSD slots,
+# USB-C. Headless: no video connector, no USB host, no audio.
+#
+# Checked against the board schematic (github.com/machdyne/klinge,
+# pcb/klinge_v1.pdf). The board repo's klinge_v1.lpf carries only the
+# clock, the LED, the USB-C pins, the flash and M8.
+#
+# THE DDR3 IS SECHZIG ML2's, BALL FOR BALL -- read off the schematic
+# signal by signal, and the same as Noir's. The block below is copied
+# verbatim from boards/mozart_ml2.lpf. The part is the ML2's 4Gb one,
+# so rtl/boards.vh's DDR3 settings are Mozart ML2's too.
+#
+# ONLY THE FIRST OF EACH PAIR IS USED for now: Ethernet A and microSD A.
+# Ethernet B and microSD B are listed at the bottom, commented, with
+# their balls, for the day a second MAC and a second SPI slot exist.
+#
+# The RMII reference clock is driven BY THE FPGA (`ETH_RMII_DRIVE_REFCLK):
+# pll0's 50 MHz output leaves on T4 (ETH_CLK50) and feeds both PHYs'
+# XTAL1/CLKIN. Neither PHY has a crystal. T4 is not a clock-capable
+# ball; it does not need to be, it is an output.
+# ---------------------------------------------------------------------
+
+# CLOCK. SYS_CLK48 on C7 -- the ML2's ball, not Noir's/Konfekt's A7.
+LOCATE COMP "CLK_48" SITE "C7";
+IOBUF PORT "CLK_48" PULLMODE=NONE IO_TYPE=LVCMOS33;
+FREQUENCY PORT "CLK_48" 48 MHZ;
+
+# The one LED (A12). LED_B is the SOC's always-present status LED.
+LOCATE COMP "LED_B" SITE "A12";
+IOBUF PORT "LED_B" IO_TYPE=LVCMOS33;
+
+# Configuration SPI flash (MMOD). MCLK is reached through USRMCLK.
+LOCATE COMP "CSPI_SS_FLASH" SITE "N8";
+IOBUF PORT "CSPI_SS_FLASH" IO_TYPE=LVCMOS33;
+LOCATE COMP "CSPI_MISO" SITE "T7";
+IOBUF PORT "CSPI_MISO" IO_TYPE=LVCMOS33;
+LOCATE COMP "CSPI_MOSI" SITE "T8";
+IOBUF PORT "CSPI_MOSI" IO_TYPE=LVCMOS33;
+
+# USB DEVICE -- the USB-C socket, the console (`USB_CDC). Schematic
+# USBD_P A13, USBD_N A14, USBD_PU A9: the same balls as
+# tinydfu-bootloader's klinge_v1.lpf. NOT T6/R6/R7 as on the other
+# Machdyne boards.
+LOCATE COMP "usb_ufp_dp" SITE "A13";
+IOBUF PORT "usb_ufp_dp" IO_TYPE=LVCMOS33;
+LOCATE COMP "usb_ufp_dm" SITE "A14";
+IOBUF PORT "usb_ufp_dm" IO_TYPE=LVCMOS33;
+LOCATE COMP "usb_ufp_pull" SITE "A9";
+IOBUF PORT "usb_ufp_pull" IO_TYPE=LVCMOS33;
+
+# Ethernet A: LAN8720A (U7), RMII, strap-configured, no MDIO/MDC
+# (both are unconnected on the schematic).
+LOCATE COMP "ETH_REFCLK" SITE "T4";
+IOBUF PORT "ETH_REFCLK" IO_TYPE=LVCMOS33;
+LOCATE COMP "ETH_RXD[0]" SITE "F1";
+IOBUF PORT "ETH_RXD[0]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+LOCATE COMP "ETH_RXD[1]" SITE "G1";
+IOBUF PORT "ETH_RXD[1]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+LOCATE COMP "ETH_TXD[0]" SITE "B1";
+IOBUF PORT "ETH_TXD[0]" IO_TYPE=LVCMOS33;
+LOCATE COMP "ETH_TXD[1]" SITE "B2";
+IOBUF PORT "ETH_TXD[1]" IO_TYPE=LVCMOS33;
+LOCATE COMP "ETH_TX_EN" SITE "E2";
+IOBUF PORT "ETH_TX_EN" IO_TYPE=LVCMOS33;
+LOCATE COMP "ETH_CRS_DV" SITE "F2";
+IOBUF PORT "ETH_CRS_DV" IO_TYPE=LVCMOS33 PULLMODE=UP;
+LOCATE COMP "ETH_RST_N" SITE "E1";
+IOBUF PORT "ETH_RST_N" IO_TYPE=LVCMOS33;
+
+# microSD A, SPI mode. Schematic: SDA_SS B6, SDA_SCK B5, SDA_MOSI A5,
+# SDA_MISO A4 (SDA_D1 B4, SDA_D2 A6, SDA_CD A7 unused).
+LOCATE COMP "SD_SCK" SITE "B5";
+IOBUF PORT "SD_SCK" IO_TYPE=LVCMOS33 PULLMODE=NONE;
+LOCATE COMP "SD_MOSI" SITE "A5";
+IOBUF PORT "SD_MOSI" IO_TYPE=LVCMOS33 PULLMODE=NONE;
+LOCATE COMP "SD_SS" SITE "B6";
+IOBUF PORT "SD_SS" IO_TYPE=LVCMOS33 PULLMODE=NONE;
+LOCATE COMP "SD_MISO" SITE "A4";
+IOBUF PORT "SD_MISO" IO_TYPE=LVCMOS33 PULLMODE=NONE;
+
+# ---------------------------------------------------------------------
+# DDR3L -- Micron MT41K64M16 / MT41K128M16 / MT41K256M16, x16, 1.35V
+#
+# Banks 2 and 3, whose VCCIO balls are tied to 1.35V on the board, so
+# SSTL135. The byte lanes are not scattered: DQ0-7 + LDM + LDQS sit
+# entirely in DQS group RDQ17/RDQS17 and DQ8-15 + UDM + UDQS entirely
+# in RDQ29/RDQS29, which is what lets each lane have its own DQSBUFM.
+# Do not reorder these -- within a lane the bit order is free, but a
+# bit crossing between lanes is not routable.
+#
+# Address and command are split across banks 2 and 3 (A10, A12, A15
+# and the clock are in bank 2, the rest in bank 3). Both banks are at
+# 1.35V so this is electrically fine, but it does mean command flight
+# times differ between the two groups and may need a delay trim once
+# reads are working -- see docs/ddr3.md.
+# ---------------------------------------------------------------------
+
+LOCATE COMP "ddr3_a[0]" SITE "R15";
+IOBUF PORT "ddr3_a[0]" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_a[1]" SITE "L13";
+IOBUF PORT "ddr3_a[1]" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_a[2]" SITE "P14";
+IOBUF PORT "ddr3_a[2]" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_a[3]" SITE "R14";
+IOBUF PORT "ddr3_a[3]" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_a[4]" SITE "L12";
+IOBUF PORT "ddr3_a[4]" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_a[5]" SITE "T14";
+IOBUF PORT "ddr3_a[5]" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_a[6]" SITE "N11";
+IOBUF PORT "ddr3_a[6]" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_a[7]" SITE "T13";
+IOBUF PORT "ddr3_a[7]" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_a[8]" SITE "P12";
+IOBUF PORT "ddr3_a[8]" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_a[9]" SITE "T15";
+IOBUF PORT "ddr3_a[9]" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_a[10]" SITE "C14";
+IOBUF PORT "ddr3_a[10]" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_a[11]" SITE "M13";
+IOBUF PORT "ddr3_a[11]" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_a[12]" SITE "E14";
+IOBUF PORT "ddr3_a[12]" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_a[13]" SITE "R13";
+IOBUF PORT "ddr3_a[13]" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_a[14]" SITE "M14";
+IOBUF PORT "ddr3_a[14]" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_a[15]" SITE "D14";
+IOBUF PORT "ddr3_a[15]" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+
+LOCATE COMP "ddr3_ba[0]" SITE "N16";
+IOBUF PORT "ddr3_ba[0]" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_ba[1]" SITE "K13";
+IOBUF PORT "ddr3_ba[1]" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_ba[2]" SITE "P16";
+IOBUF PORT "ddr3_ba[2]" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+
+LOCATE COMP "ddr3_ras_n" SITE "L16";
+IOBUF PORT "ddr3_ras_n" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_cas_n" SITE "M16";
+IOBUF PORT "ddr3_cas_n" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_we_n" SITE "P15";
+IOBUF PORT "ddr3_we_n" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_cs_n" SITE "M15";
+IOBUF PORT "ddr3_cs_n" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_cke" SITE "K12";
+IOBUF PORT "ddr3_cke" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_odt" SITE "L15";
+IOBUF PORT "ddr3_odt" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_reset_n" SITE "R12";
+IOBUF PORT "ddr3_reset_n" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+
+LOCATE COMP "ddr3_dm[0]" SITE "F13";
+IOBUF PORT "ddr3_dm[0]" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+LOCATE COMP "ddr3_dm[1]" SITE "J13";
+IOBUF PORT "ddr3_dm[1]" IO_TYPE=SSTL135_I SLEWRATE=FAST;
+
+# On-die termination on DQ only; DQS uses the differential
+# resistor instead. Both taken from the vendor LiteX platform.
+LOCATE COMP "ddr3_dq[0]" SITE "F14";
+IOBUF PORT "ddr3_dq[0]" IO_TYPE=SSTL135_I TERMINATION=75 SLEWRATE=FAST;
+LOCATE COMP "ddr3_dq[1]" SITE "E16";
+IOBUF PORT "ddr3_dq[1]" IO_TYPE=SSTL135_I TERMINATION=75 SLEWRATE=FAST;
+LOCATE COMP "ddr3_dq[2]" SITE "F12";
+IOBUF PORT "ddr3_dq[2]" IO_TYPE=SSTL135_I TERMINATION=75 SLEWRATE=FAST;
+LOCATE COMP "ddr3_dq[3]" SITE "F15";
+IOBUF PORT "ddr3_dq[3]" IO_TYPE=SSTL135_I TERMINATION=75 SLEWRATE=FAST;
+LOCATE COMP "ddr3_dq[4]" SITE "G13";
+IOBUF PORT "ddr3_dq[4]" IO_TYPE=SSTL135_I TERMINATION=75 SLEWRATE=FAST;
+LOCATE COMP "ddr3_dq[5]" SITE "B16";
+IOBUF PORT "ddr3_dq[5]" IO_TYPE=SSTL135_I TERMINATION=75 SLEWRATE=FAST;
+LOCATE COMP "ddr3_dq[6]" SITE "G12";
+IOBUF PORT "ddr3_dq[6]" IO_TYPE=SSTL135_I TERMINATION=75 SLEWRATE=FAST;
+LOCATE COMP "ddr3_dq[7]" SITE "B15";
+IOBUF PORT "ddr3_dq[7]" IO_TYPE=SSTL135_I TERMINATION=75 SLEWRATE=FAST;
+LOCATE COMP "ddr3_dq[8]" SITE "J14";
+IOBUF PORT "ddr3_dq[8]" IO_TYPE=SSTL135_I TERMINATION=75 SLEWRATE=FAST;
+LOCATE COMP "ddr3_dq[9]" SITE "J16";
+IOBUF PORT "ddr3_dq[9]" IO_TYPE=SSTL135_I TERMINATION=75 SLEWRATE=FAST;
+LOCATE COMP "ddr3_dq[10]" SITE "K15";
+IOBUF PORT "ddr3_dq[10]" IO_TYPE=SSTL135_I TERMINATION=75 SLEWRATE=FAST;
+LOCATE COMP "ddr3_dq[11]" SITE "K14";
+IOBUF PORT "ddr3_dq[11]" IO_TYPE=SSTL135_I TERMINATION=75 SLEWRATE=FAST;
+LOCATE COMP "ddr3_dq[12]" SITE "H14";
+IOBUF PORT "ddr3_dq[12]" IO_TYPE=SSTL135_I TERMINATION=75 SLEWRATE=FAST;
+LOCATE COMP "ddr3_dq[13]" SITE "K16";
+IOBUF PORT "ddr3_dq[13]" IO_TYPE=SSTL135_I TERMINATION=75 SLEWRATE=FAST;
+LOCATE COMP "ddr3_dq[14]" SITE "H13";
+IOBUF PORT "ddr3_dq[14]" IO_TYPE=SSTL135_I TERMINATION=75 SLEWRATE=FAST;
+LOCATE COMP "ddr3_dq[15]" SITE "J15";
+IOBUF PORT "ddr3_dq[15]" IO_TYPE=SSTL135_I TERMINATION=75 SLEWRATE=FAST;
+
+# Differential pairs: P pin only, complement inferred.
+# N balls for reference: LDQS E15, UDQS H15, CK C15.
+LOCATE COMP "ddr3_dqs_p[0]" SITE "D16";
+IOBUF PORT "ddr3_dqs_p[0]" IO_TYPE=SSTL135D_I TERMINATION=OFF DIFFRESISTOR=100 SLEWRATE=FAST;
+LOCATE COMP "ddr3_dqs_p[1]" SITE "G16";
+IOBUF PORT "ddr3_dqs_p[1]" IO_TYPE=SSTL135D_I TERMINATION=OFF DIFFRESISTOR=100 SLEWRATE=FAST;
+LOCATE COMP "ddr3_clk_p" SITE "C16";
+IOBUF PORT "ddr3_clk_p" IO_TYPE=SSTL135D_I SLEWRATE=FAST;
+
+# PROGRAMN, routed back to a user pin: rtl/sysctl.v pulls it low (open
+# drain) to reconfigure the FPGA -- `reboot`, docs/zboot.md. The
+# schematic's SYS_RST_N on M8, tinydfu-bootloader's resetn.
+LOCATE COMP "PROGRAMN" SITE "M8";
+IOBUF PORT "PROGRAMN" IO_TYPE=LVCMOS33 OPENDRAIN=ON;
+
+# -- Not used yet --------------------------------------------------------
+#
+# Ethernet B: LAN8720A, sharing ETH_CLK50 (T4) with A.
+#   TXD[0] R1   TXD[1] R2   TX_EN P1   CRS_DV T2
+#   RXD[0] T3   RXD[1] R3   RST_N N1
+#
+# microSD B, SPI mode:
+#   SS D10   SCK B10   MOSI C10   MISO B11   (D1 A11, D2 E10, CD B12)
+#
+# Debug UART pads (schematic UART_TX R6, UART_RX R7), for a build with
+# `UART0 and without `USB_CDC:
+#LOCATE COMP "UART0_TX" SITE "R6";
+#LOCATE COMP "UART0_RX" SITE "R7";

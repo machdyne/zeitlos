@@ -163,6 +163,10 @@ Packed utilisation and routed clocks for every board that builds:
 
 The following boards are currently partially supported or untested:
 
+ - [Machdyne Konfekt](https://github.com/machdyne/konfekt) (builds and meets timing; untested on hardware)
+ - [Machdyne Schoko](https://github.com/machdyne/schoko) (builds and meets timing; untested on hardware)
+ - [Machdyne Noir](https://github.com/machdyne/noir) (DDR3; builds and meets timing; untested on hardware)
+ - [Machdyne Klinge](https://github.com/machdyne/klinge) (DDR3, headless; first ethernet port and first microSD slot only; untested on hardware)
  - [Machdyne Kirsch](https://github.com/machdyne/kirsch)
  - [Machdyne Mozart](https://github.com/machdyne/mozart) / [MX1](https://github.com/machdyne/sechzig)
  - [Machdyne Sergei](https://github.com/machdyne/sergei) / [MX1](https://github.com/machdyne/sechzig)
@@ -229,7 +233,7 @@ With a USB-UART PMOD:
 $ minicom -o -D /dev/ttyUSB0 -b 1000000
 ```
 
-On Obst and Lakritz the console can instead be a USB CDC-ACM device on
+On Obst and Lakritz (and always on Konfekt, Schoko, Noir and Klinge) the console can instead be a USB CDC-ACM device on
 the board's own USB-C socket, freeing the PMOD connector entirely and
 removing the need for a USB-UART adapter at all — see
 [docs/usb\_cdc.md](docs/usb_cdc.md). There the baud rate is ignored:

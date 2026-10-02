@@ -1,6 +1,6 @@
 # Upgrading the DFU bootloader
 
-**Who this is for:** owners of a Lakritz or Obst who flash over USB
+**Who this is for:** owners of a Lakritz, Obst, Konfekt, Schoko, Noir or Klinge who flash over USB
 with `dfu-util` rather than over JTAG.
 
 If you flash with `openFPGALoader` and a JTAG cable, you do not need
@@ -110,6 +110,22 @@ $ curl -LO https://raw.githubusercontent.com/machdyne/lakritz/main/images/tinydf
 ```
 $ curl -LO https://raw.githubusercontent.com/machdyne/obst/main/images/tinydfu_obst_256k.bit
 ```
+
+**Konfekt**, **Schoko**, **Noir** and **Klinge**: Zeitlos's release
+targets for these boards (`konfekt`, `schoko_langkatze_gpio`, `noir`,
+`klinge`) are built for the same
+256 KB layout -- `dfu_base = 0x040000` in their
+`release/hw/boards/*.spec` -- but a 256 KB bootloader image for them is
+not published yet. tinydfu-bootloader's `boards/konfekt`,
+`boards/schoko` and `boards/klinge` still build the original layout, and Noir has no board directory
+there at all (`BOOTPART_SIZE` 1 MB,
+`BOOTADDR = 0x100000`; Schoko's user partition is 3 MB). Until the
+`_256k` images exist, flash these boards over JTAG with
+`zeitlos-<target>.img`; the `-dfu.bin` will not fit behind the
+original bootloader. The change to the bootloader is the one made for
+Lakritz: `BOOTPART_SIZE = 256 * 1024` and `USERPART_START` in
+`boardinfo.vh`, and `BOOTADDR = 0x040000` in the board's Makefile,
+kept in sync.
 
 Take the image built for **your board**. They are different FPGAs —
 25F on Lakritz, 12F on Obst — so the wrong one will not configure at

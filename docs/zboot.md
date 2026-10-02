@@ -34,8 +34,11 @@ and that is not incidental: it is how the DFU bootloader hands off, so
 the hard prerequisite for everything below is satisfied on shipping
 hardware. Sergei ML1 and ML2 use `M8` too, by inference rather than
 measurement: the wiring is on the Sechzig module, and each carries the
-same module as the Mozart of the same name. ULX3S is unconfirmed, and
-builds without it (section 6).
+same module as the Mozart of the same name. Konfekt, Schoko, Noir and
+Klinge use `M8` as well, also by inference: it is the net their DFU
+bootloader drives (`resetn` in tinydfu-bootloader's pin files, `RESET`
+or `SYS_RST_N` on the schematics), the arrangement confirmed on Lakritz
+and Obst. ULX3S is unconfirmed, and builds without it (section 6).
 
 ---
 
@@ -426,7 +429,10 @@ A 45F jumploader is 162,793 bytes, and ends at `0x1F7BE9`, inside the
 region. Sergei ML1's PROGRAMN pin, `M8`, is inferred rather than
 confirmed: it carries the same ML1 module as Mozart ML1 -- 68 of Mozart
 ML1's 72 pin assignments, clock, flash and SDRAM among them, are the
-same on Sergei -- and Mozart ML1's `M8` is confirmed.
+same on Sergei -- and Mozart ML1's `M8` is confirmed. Konfekt and
+Klinge (25F database; Konfekt is a 12F), and Schoko and Noir (45F),
+have board profiles too (`sw/apps/zfpga/boards/`); their jumploaders
+build at 99,628 bytes (Konfekt) and 162,790 (Schoko, Noir).
 
 **Checked.**
 
@@ -493,8 +499,9 @@ better found while the flash is untouched.
 
 **The pin.** `M8` on Lakritz, Obst, Mozart ML1 and Mozart ML2, wired to
 PROGRAMN on each, as the DFU bootloader drives it -- and on Sergei ML1
-and ML2, from the module they share with Mozart. `rtl/boards.vh`
-defines `PROGRAMN_PIN` for exactly those six; `rtl/sysctl.v` then has an
+and ML2, from the module they share with Mozart, and on Konfekt,
+Schoko, Noir and Klinge, where it is the DFU bootloader's reset net.
+`rtl/boards.vh` defines `PROGRAMN_PIN` for exactly those ten; `rtl/sysctl.v` then has an
 `inout PROGRAMN` port, driven open-drain through a `BB` -- a hard 0 when
 asked, tri-state otherwise, tri-state from power-on. Boards whose site
 has not been confirmed (ULX3S) do not define it and build exactly as

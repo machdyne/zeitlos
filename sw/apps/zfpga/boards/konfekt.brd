@@ -1,0 +1,12 @@
+# Machdyne Konfekt: ECP5 LFE5U-12F in CABGA256.
+#
+#   zfpga build /fpga/examples/blink.v -b konfekt
+#
+# The pins are the tree's own boards/konfekt_v0.lpf, installed beside
+# this file as konfekt.lpf. The 12F is the 25F die: db/lfe5u25f.zdb is
+# built with --also LFE5U-12F. `pack -c`: compressed, as Zeitlos's own
+# build is.
+device  LFE5U-12F
+package CABGA256
+lpf     konfekt.lpf
+pack    -c

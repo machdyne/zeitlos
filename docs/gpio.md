@@ -277,13 +277,20 @@ carry.
 | target | GPIO | notes |
 |---|---|---|
 | `lakritz_gpio` | port 0 on PMOD A | no ethernet -- `` -SPI_ETH `` |
-| `obst_langkatze_gpio` | port 0 on PMOD A | none; ethernet keeps PMOD B |
+| `obst_langkatze_gpio` | port 0 on PMOD B | none; ethernet on PMOD A |
+| `schoko_langkatze_gpio` | port 0 on PMOD B | none; ethernet on PMOD A |
 | `sergei_ml1_gpio` | port 0, **4 pins**, on PMOD A | no audio at all -- `` -AUDIO_SPDIF `` |
 
 ```
 ./release/zrelease build lakritz_gpio
 ./release/zrelease build obst_langkatze_gpio
+./release/zrelease build schoko_langkatze_gpio
 ```
+
+Target names list PMODs in port order: `obst_langkatze_gpio` is a
+Langkatze in PMOD A and GPIO in PMOD B. (Before the Schoko port it was
+the reverse, which made the name read backwards; a Langkatze moving
+from B to A is a re-plug, nothing more.)
 
 Neither is a plain `make BOARD=x` build, and that is not an oversight.
 Both boards' PMOD connectors are already spoken for, so GPIO is a
@@ -297,8 +304,14 @@ the release spec layer is for; see `rtl/boards.vh`'s ZSPEC note.
   the console window (an unanswered read there would hang the BIOS on
   the first character), and the machine comes up on HDMI with a USB
   keyboard, with `repl` in a `term` window as the shell.
-- **Obst has two**, with the console on A and the Langkatze ethernet
-  PMOD on B. It's ethernet or GPIO, not both.
+- **Obst has two**, and its console is on the USB-C socket, so both
+  are free: the Langkatze ethernet PMOD on A and GPIO on B. (A plain
+  `make BOARD=obst` build still constrains the Langkatze on B, as
+  `boards/obst_v0.lpf` always has; the release target moves it.)
+- **Schoko has two** and the same USB-C console, and is laid out the
+  same way: Langkatze on A, GPIO on B. Here the board's own `.lpf` and
+  `rtl/boards.vh` block already describe that, so a plain
+  `make BOARD=schoko` build has GPIO too.
 
 For a hand build, `rtl/boards.vh` carries a commented `` `GPIO_PORT0 ``
 in each board block explaining what else has to change, and the base

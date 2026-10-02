@@ -598,12 +598,26 @@ module sysctl #()
 		.locked(pll0_locked)
 	);
 
+`ifdef GPU
 	pll1 #() pll1_i (
 		.clkin(clk48mhz),
 		.clkout0(clk126mhz),
 		.clkout1(clk25_2mhz),
 		.locked(pll1_locked)
 	);
+`else
+	// No scanout, no video clocks. pll1 makes only the pixel clock and
+	// the TMDS bit clock, and only gpu_video and gpu_cursor use them
+	// (both `GPU). A headless board -- Klinge -- has its rasterizer and
+	// blitter (`GPU_RASTER/`GPU_BLIT, which run on sys_clk) but not
+	// those, and it needs the PLL: a 25F has two, and a DDR3 board
+	// already spends one on the DDR edge clock (rtl/clk/pll2.v) and
+	// one on pll0 (12/50 MHz). Every board with `GPU builds exactly
+	// what it did before.
+	assign clk126mhz = 1'b0;
+	assign clk25_2mhz = 1'b0;
+	assign pll1_locked = 1'b1;
+`endif
 
 `elsif OSC25
 

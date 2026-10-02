@@ -171,7 +171,16 @@ module ddr3_phy_ecp5 (
 
 	generate
 		for (gi = 2; gi < 27; gi = gi + 1) begin : cmd
-			ODDRX2F cmd_oddr (
+			// The instance is cmd_gear, NOT cmd_oddr: it used to share
+			// its name with the wire it drives, and inside this
+			// generate scope `cmd_oddr[gi]` then names the instance,
+			// not the wire. Yosys 0.69 resolves it that way -- the port
+			// becomes a dangling interface reference, the module is
+			// marked for re-elaboration, and synth_ecp5 fails at its
+			// last hierarchy pass ("Module `\gpu_cursor' ... is not
+			// part of the design") on every DDR3 board. Older Yosys
+			// looked the name up as the wire, which is what was meant.
+			ODDRX2F cmd_gear (
 				.SCLK(clk_i), .ECLK(eclk_i), .RST(prim_rst),
 				.D0(cmd_bus[gi]), .D1(cmd_bus[gi]),
 				.D2(cmd_bus[gi]), .D3(cmd_bus[gi]),

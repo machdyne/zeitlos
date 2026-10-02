@@ -28,8 +28,8 @@ binary serves every board:
 
 | driver | hardware | receive buffering |
 |---|---|---|
-| `enc28j60.c` | SPI ethernet chip (Lakritz) | 6656-byte ring, on the chip |
-| `rmii_eth.c` | `rtl/ethmac_rmii.v` (Mozart, Sergei, [Katze](katze.md)) | 4 frame slots |
+| `enc28j60.c` | SPI ethernet chip (Langkatze PMOD: Lakritz, Obst, Schoko) | 6656-byte ring, on the chip |
+| `rmii_eth.c` | `rtl/ethmac_rmii.v` (Mozart, Sergei, Klinge, [Katze](katze.md)) | 4 frame slots |
 | `esp32link.c` | `rtl/esp32_rxfifo.v` | 2048-byte FIFO |
 | `usb_ecm.c` | a USB ethernet adapter (CDC-ECM), on any board with the USB host controller | the adapter's own, which nothing reports |
 

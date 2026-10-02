@@ -49,7 +49,7 @@ $(B):
 CARD_EXAMPLES = examples/blink.v examples/blinkf.v examples/empty.zn examples/on.zn \
 	examples/blink.zn examples/hand.zl examples/blinkh.v examples/blinkh.vh
 
-card: db/lfe5u25f.zdb db/lfe5u45f.zdb boards/lakritz.brd ../../../boards/lakritz_v0.lpf boards/obst.brd ../../../boards/obst_v0.lpf boards/mozart1.brd ../../../boards/mozart_ml1.lpf boards/sergei1.brd ../../../boards/sergei_ml1.lpf $(CARD_EXAMPLES)
+card: db/lfe5u25f.zdb db/lfe5u45f.zdb boards/lakritz.brd ../../../boards/lakritz_v0.lpf boards/obst.brd ../../../boards/obst_v0.lpf boards/mozart1.brd ../../../boards/mozart_ml1.lpf boards/sergei1.brd ../../../boards/sergei_ml1.lpf boards/konfekt.brd ../../../boards/konfekt_v0.lpf boards/schoko.brd ../../../boards/schoko_v1.lpf boards/noir.brd ../../../boards/noir_v0.lpf boards/klinge.brd ../../../boards/klinge_v1.lpf $(CARD_EXAMPLES)
 	mkdir -p db/boards db/examples
 	cp boards/lakritz.brd db/boards/lakritz.brd
 	cp ../../../boards/lakritz_v0.lpf db/boards/lakritz.lpf
@@ -59,6 +59,14 @@ card: db/lfe5u25f.zdb db/lfe5u45f.zdb boards/lakritz.brd ../../../boards/lakritz
 	cp ../../../boards/mozart_ml1.lpf db/boards/mozart1.lpf
 	cp boards/sergei1.brd db/boards/sergei1.brd
 	cp ../../../boards/sergei_ml1.lpf db/boards/sergei1.lpf
+	cp boards/konfekt.brd db/boards/konfekt.brd
+	cp ../../../boards/konfekt_v0.lpf db/boards/konfekt.lpf
+	cp boards/schoko.brd db/boards/schoko.brd
+	cp ../../../boards/schoko_v1.lpf db/boards/schoko.lpf
+	cp boards/noir.brd db/boards/noir.brd
+	cp ../../../boards/noir_v0.lpf db/boards/noir.lpf
+	cp boards/klinge.brd db/boards/klinge.brd
+	cp ../../../boards/klinge_v1.lpf db/boards/klinge.lpf
 	cp $(CARD_EXAMPLES) db/examples/
 
 db/lfe5u25f.zdb: tools/mkzdb.py ext/nextpnr-base/lfe5u-25f.config

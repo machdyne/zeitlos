@@ -138,6 +138,15 @@ lpf_fragment.lakritz = langkatze-lakritz.lpf
 
 Define operations are `NAME`, `NAME=VALUE` and `-NAME`.
 
+### Naming a target
+
+`<board>[_<pmod>...]`, with the PMODs **in port order**: the first
+named is in port A, the second in port B. `obst_langkatze_gpio` and
+`schoko_langkatze_gpio` are a Langkatze in A and GPIO in B. A board
+with no PMOD sockets is just its name (`konfekt`, `mozart_ml1`). The
+`pmods =` line in the spec is what actually decides the ports; keep the
+name agreeing with it.
+
 ### Why subtraction exists
 
 Additive defines could have come in on the yosys command line. The
@@ -536,7 +545,8 @@ $ openFPGALoader -v -c dirtyJtag -f -o 0x1d0000 zeitlos-mozart_ml1-jump.bin
 **The jumploader** (`docs/zboot.md` section 5) is a small bitstream at
 `0x1D0000`, which Zeitlos jumps through to reboot or to boot other
 gateware. The ZAR's room ends there (576 KB). On boards built with the
-Makefile's `JUMP` -- Lakritz, Obst, Mozart ML1 and ML2, Sergei ML1 and ML2 -- the
+Makefile's `JUMP` -- Lakritz, Obst, Mozart ML1 and ML2, Sergei ML1 and ML2,
+Konfekt, Schoko, Noir and Klinge -- the
 gateware is packed to reload from `0x1D0000`, so **the jumploader is
 part of the system**: the `.img` and the DFU image carry it, it ships
 on its own as `zeitlos-<target>-jump.bin`, and `make flash` writes it

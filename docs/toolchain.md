@@ -86,6 +86,17 @@ system-installed yosys.
 This is already what `Makefile` assumes for GateMate boards, which
 reference `~/work/fpga/gatemate/oss-cad-suite/bin/nextpnr-himbaechel`.
 
+**Yosys 0.69 and the DDR3 boards.** oss-cad-suite 2026-10-01 (Yosys
+0.69+173, nextpnr-ecp5 0.11.1-40) is what Konfekt, Schoko, Noir and
+Klinge were brought up with ([boards.md](boards.md)). With it, every
+DDR3 board -- Mozart and Sergei ML2, Noir, Klinge -- failed synthesis
+at synth_ecp5's last pass until two changes went in: a renamed
+instance in `rtl/mem/ddr3_phy_ecp5.v`, and the Makefile's `YOSYS_PRE`
+for `DDR3_BOARDS`, which round-trips the elaborated design through
+RTLIL. [boards.md](boards.md#noir) explains both. A tree older than
+those changes needs an older Yosys (0.63 built the ML2 bring-up) for
+any DDR3 board.
+
 ### Artix-7 boards (Sergei MX1, Mozart MX1) — openXC7
 
 The Artix-7 boards need **openXC7 1.0 or later**: the open toolchain for
