@@ -47,6 +47,9 @@ travel with the card. `settings` edits them; see
 | `apps.netserve.ssh_sessions` | `2` | `netserve` | SSH sessions at a time, 1-4, about 10KB of memory each |
 | `apps.netserve.telnet` | `off` | `netserve`, `init` | telnet: listeners, as for SSH: `23 repl0; 2323 bbs0 noauth`; a 10+ character password for any listener that is not `noauth` |
 | `apps.term.auto_connect` | *(none)* | `term` | what a new term window connects to by itself |
+| `apps.zerdesk.allow` | `subnet` | `zerdesk` | accept viewers from this subnet only, or `any` ([remote_desktop.md](remote_desktop.md)) |
+| `apps.zerdesk.port` | `8080` | `zerdesk` | the remote desktop, on this port |
+| `apps.zerdesk.viewers` | `3` | `zerdesk` | viewers at once, 1-6; past that, a plain-text refusal |
 | `system.font.japanese` | `no` | `wm`, `settings` | start `jfont` at boot, so Japanese draws at 6x12 -- about 190KB of RAM ([text_encoding.md](text_encoding.md)); `settings` switches it on and off at once |
 | `system.keyboard.layouts` | `us` | `wm` | keyboard layouts, comma-separated; the first is used at start, Super+Space cycles |
 | `system.rtc.timezone` | `UTC` | `clock`, `cal`, `irc` | local time shown; the RTC itself stays UTC (file times too -- [filesystem.md](filesystem.md#timestamps)) |

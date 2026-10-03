@@ -489,10 +489,20 @@ fails against the old code.
 
 `relay.c` relays each connection accepted on a listened port
 (`Z_NET_LISTEN`) to the process that listens -- `netserve`, which
-serves SSH, telnet, HTTP and echo. The whole design, and its flow
-control in both directions, is in [netserve.md](netserve.md). A
-listener that dies is noticed within about a second: its connections
-are reset and its ports released (netserve.md, "Found on hardware").
+serves SSH, telnet, HTTP and echo, and `zerdesk`, which serves the
+remote desktop ([remote_desktop.md](remote_desktop.md)). The whole
+design, and its flow control in both directions, is in
+[netserve.md](netserve.md). A listener that dies is noticed within
+about a second: its connections are reset and its ports released
+(netserve.md, "Found on hardware").
+
+The listener names each connection. That id has to stay unique for as
+long as any relay still holds it, including one that is closing:
+`relay.c` finds the relay by listener and id among every relay in
+that state. Handing a new connection an id a closing relay still has
+delivers the new connection's acknowledgements to the old one, and
+the new one stalls. Listeners share the relay pool (`RELAY_MAX` is 6)
+and the TCP slots. The last listen on a port takes it over.
 
 ## Connections
 

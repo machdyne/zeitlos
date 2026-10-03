@@ -104,7 +104,7 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [libz](libz.md) | Runtime for zcc-compiled programs |
 | [png](png.md) | PNG decoding |
 | [svg](svg.md) | SVG rendering |
-| [remote\_desktop](remote_desktop.md) | Remote desktop in a browser |
+| [remote\_desktop](remote_desktop.md) | Remote desktop in a browser: the ESP32 link, or `zerdesk` over Ethernet |
 
 ## Networking
 

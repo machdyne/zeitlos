@@ -11,8 +11,10 @@
 # together for the same reason, so the line is also what lets the
 # spec load.
 #
-# WHAT THIS COSTS: no remote desktop. That server is the ESP32's.
-# HDMI, the serial console and the microSD stay. UART0 is the FTDI
+# WHAT THIS COSTS: no remote desktop from the ESP32, because the
+# link is not in this gateware. `run zerdesk` serves the same page
+# over this Ethernet (docs/remote_desktop.md). HDMI, the serial
+# console and the microSD stay. UART0 is the FTDI
 # on L4/M1, not a pin of this header, so unlike lakritz_langkatze
 # this target does not say `-UART0`.
 #
