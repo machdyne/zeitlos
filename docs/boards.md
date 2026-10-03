@@ -37,6 +37,12 @@ make BOARD=ulx3s DEVICE=85k zeitlos_pico
 board, which then uses nextpnr's own seed. The 25k and the 85k share
 that default: both rows below are seed 10.
 
+`ulx3s_85f_langkatze` is this board with `ESP32_LINK` left out and a
+Langkatze PMOD in J1. On that target the default seed has been
+measured at 45.71 MHz, which misses 48; seed 7 meets it at 56.38 MHz.
+The remote desktop there is `zerdesk`, not the ESP32
+([remote_desktop.md](remote_desktop.md)).
+
 Measured with Yosys 0.60+95 and nextpnr-ecp5 0.9-50-g1ce187ab, one run
 each, at git `616e152`. An older nextpnr reports a lower fmax for the
 same netlist — see [toolchain.md](toolchain.md) before treating a FAIL

@@ -1,13 +1,33 @@
 # Remote desktop
 
-The 640x480 1bpp framebuffer, in a browser, over WiFi. Point one at
-the board's station address and you get the desktop as it is on HDMI,
-with the keyboard and mouse going back the other way. There is nothing
-to install and nothing to run: the page is served by the ESP32.
+The 640x480 1bpp framebuffer, in a browser. Point one at the board
+and you get the desktop as it is on HDMI, with the keyboard and mouse
+going back the other way. There is nothing to install.
 
-This is ULX3S-only, because the [ESP32 link](esp32link.md) is. `net`
-produces the picture, the firmware serves it, and neither half exists
-on a board with a wired NIC.
+Two ways, and only one of them at a time.
+
+**Over the ESP32 link.** On a bitstream built with the
+[ESP32 link](esp32link.md) (the ULX3S targets, including `ulx3s_85f`),
+`net` scans the framebuffer and the ESP32 serves the page. Nothing
+has to be started. That path is the one through "screend", below.
+
+**Served by Zeitlos.** On a bitstream with a wired NIC and no ESP32
+link, `run zerdesk` from `term` serves the same page over TCP. The
+ULX3S build for that is `ulx3s_85f_langkatze`: an ENC28J60 in J1, the
+onboard ESP32 left out of the gateware and held in reset. `zerdesk`
+refuses to start when the ESP32 link is present. Both would read and
+clear the same DIRTY register, and the ESP32 already serves the
+desktop there. It does not start by itself.
+
+The page, the stripe format, PackBits, the trailer and the colouring
+are the same on both. What differs is who scans, who keeps a copy for
+a browser that has just connected, and how the bytes travel. That is
+"Served by Zeitlos", after the ESP32 path.
+
+The scan itself, the hash, PackBits and the trailer live in
+`sw/common/zscreen.c`, with no transport. The pointer and the keyboard
+live in `sw/common/zinput.c`. `net`'s screen path and `zerdesk` both
+call them, so a stripe is the same bytes either way.
 
 ```
 net (sw/apps/net/screen.c)          the ESP32 (esp32/zeitlos-nic)
@@ -26,8 +46,9 @@ net (sw/apps/net/screen.c)          the ESP32 (esp32/zeitlos-nic)
 the ESP32, so nothing in this tree can know it. The console says it at
 boot -- `esp_netif_handlers: sta ip: ...`, and `esp32link: LINK up
 rssi=... ip=...` right after -- and `net` also writes it to `net.ip` at
-the root of the sdcard when the link comes up. Everything else is
-`http://<that>/`.
+the root of the sdcard when the link comes up. On this path,
+everything else is `http://<that>/`. On the Ethernet path the address
+is the wired one and the port is 8080; see "Served by Zeitlos".
 
 ## Stripes
 
@@ -393,3 +414,107 @@ Anything else wants a browser. The protocol above is small enough to
 speak from a script -- a WebSocket, binary frames, PackBits, and
 five-byte mouse packets -- which is how the desktop gets driven with
 no keyboard or monitor attached to the board at all.
+
+## Served by Zeitlos
+
+`sw/apps/zerdesk/`. An app of its own: not part of `net`, and not a
+listener inside `netserve`. `net` accepts the TCP connections
+(`Z_NET_LISTEN`) and relays them; `zerdesk` serves two paths.
+
+| | |
+|---|---|
+| `GET /` | the viewer page, `esp32/zeitlos-nic/web/index.html`, embedded as it is. One file for both paths; the page is not modified for this one |
+| `GET /ws` | the WebSocket. One stripe is `[idx:u8 \| len:u16le \| PackBits + trailer]`, the bytes `screend` forwards today. Keys come back as three bytes, the pointer as five, and `zinput` injects them the same way `esp32link` does |
+
+There is no password. The port is `apps.zerdesk.port`, **8080** unless
+the file says otherwise.
+
+**Who may connect.** `apps.zerdesk.allow` is `subnet` or `any`, the
+same choice `netserve` makes, and `subnet` is the default. Anything
+else, and a missing key, stays on the subnet. A peer off the subnet
+is refused before it is given a connection.
+
+**How many.** `apps.zerdesk.viewers` is how many browsers at once,
+**3** unless the file says otherwise, and never more than 6 (that is
+how many inbound relays `net` has). Whoever asks for `/` or `/ws`
+past that gets a plain-text `503` whose body is
+`Too many viewers connected`. The page is unchanged, so that is what
+the browser shows. The ESP32 path is different: `screend` allows
+eight, and a ninth evicts the least recently served.
+
+**Started by hand.** From `term`, `run zerdesk`. It does not start
+by itself. On the ESP32 bitstream it prints that the link is present
+and exits, which is the whole of the refusal.
+
+```
+apps.zerdesk.port: 8080
+apps.zerdesk.allow: subnet
+apps.zerdesk.viewers: 3
+```
+
+**One consumer of DIRTY.** The register is cleared by the reader.
+`net` scans only while its PHY is the ESP32 link; on the Ethernet
+bitstream it does not, and `zerdesk` is the reader. A second reader
+would clear the first one's bits. That is also why the app will not
+start beside the ESP32 path.
+
+**A frame is still one instant.** The copy is taken before input is
+read. Input wakes `wm`, and a copy taken while `wm` is repainting a
+drag band catches the band in two places. The pacing is the ESP32
+path's: at most 20 passes a second on a quiet screen, 15 when more
+than ten stripes changed. A new viewer is sent every stripe of the
+copy. The first viewer, and the first one after the last one left,
+also forgets the hashes, so that frame is read from VRAM. There is
+no shadow on a second machine: the snapshot in the app is the copy,
+38400 bytes of its own memory. Every five seconds the pass reads
+every stripe again and counts one that changed with no DIRTY bit,
+and prints the total when the last viewer leaves, the same sentence
+`net` prints.
+
+**The connection id only grows.** `net` finds a relay by listener and
+id among every relay that is still around, including one that is
+closing. Reusing an id while that relay lives delivers the new
+connection's acknowledgements to the old one, and the new connection
+stalls. `zerdesk` skips 0 and only counts up. Listeners share `net`'s
+relays (6) and its TCP slots; the last listen on a port takes it
+over. See [networking.md](networking.md), "Accepted connections".
+
+**Memory.** An app the kernel does not name gets 16 KB of stack and
+heap. Everything big is static. What the heap holds is `zport`'s copy
+of bytes in flight to `net`, and that is capped at 6 KB in total and
+4 KB to one viewer. A viewer that makes no progress for 10 seconds is
+dropped. While a viewer is caught up, one byte goes out every five
+seconds; the page ignores it, and a send that fails is how a browser
+that vanished gets its slot back.
+
+**Where the two differ, measured.** ULX3S 85F. The Ethernet bitstream
+is `ulx3s_85f_langkatze` with `PNR_SEED=7`: the Makefile's default
+seed of 10 does not meet 48 MHz on that target (45.71 MHz), and seed
+7 does (56.38 MHz). The ESP32 bitstream is `ulx3s_85f`, seed 10,
+52.92 MHz. The desktop was the same scene on both: three `term`,
+`draw`, and `gpu3d` in the upper right, unless a row says otherwise.
+The Mac was not idle, so the key latency, which is timed on the Mac,
+moves more than the board's own CPU.
+
+The shared scan was measured on the ESP32 path against the previous
+`net`, both built from this tree. A still desktop, a key, the six
+scenes, `regress16` and a visible cube come out the same: the cube is
+48 stripes a second and `net` is 59% either way. `net.bin` is 136,732
+bytes, four bytes shorter than the previous build.
+
+| | Zeitlos, Ethernet | the ESP32 |
+|---|---|---|
+| desktop still, one viewer | `net` 0.07%, `zerdesk` 0.44%. 30 stripes on connect, then none | `net` 3.9%. A short burst every 5 s, about 7 stripes/s |
+| 30 keys in one `term` | 47 ms median | 130 ms median |
+| `gpu3d`, three `term`, `draw`, one viewer, the cube at 140,120 | 42 stripes/s. `net` 25%, `zerdesk` 41%, `gpu3d` 31% | 48 stripes/s. `net` 59%, `gpu3d` 39% |
+| the same cube, upper right | one viewer 47 stripes/s; two 33; three 24 each | — |
+| a fourth browser | a plain-text 503, and the three are unchanged | `screend` allows eight; a ninth drops the least recently served |
+| viewer against VRAM, six scenes | 0 pixels | 0 pixels |
+| two hours, one viewer, the cube | 46.5 stripes/s, the heap flat | |
+
+With the cube animating the machine is full either way, and the
+Ethernet path spends part of that on TCP in the app, so fewer stripes
+reach each browser than the ESP32 relays. A still desktop is the other
+way: with one viewer and nothing moving, the scan costs well under one
+percent. A fourth browser on the Ethernet path is the plain-text
+refusal above; it does not slow the three that are already connected.

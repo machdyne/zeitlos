@@ -75,7 +75,10 @@ With no display attached the console is how you find the board: `net`
 prints the address the access point gave the ESP32 (`esp32link: LINK up
 rssi=... ip=...`, and the firmware's own `esp_netif_handlers: sta ip:`
 before it), which is where the [remote desktop](remote_desktop.md)
-lives. It also writes it to `net.ip` at the root of the card.
+lives on this bitstream. It also writes it to `net.ip` at the root of
+the card. On the Ethernet bitstream (`ulx3s_85f_langkatze`) the ESP32
+is held in reset, and the desktop is `run zerdesk` on port 8080 of
+the wired address.
 
 `pr` lists the processes that started, which answers "did the desktop
 come up at all" without a display; `mount` and `ls` answer the same for
@@ -99,8 +102,10 @@ procedure, because the card has to come out for it.
 
 SDRAM (32MB), HDMI, the microSD card, both USB HID ports, audio over
 S/PDIF and networking through the onboard ESP32
-([esp32link.md](esp32link.md)) -- the board has no Ethernet at all, so
-`net` uses the ESP32 as its NIC.
+([esp32link.md](esp32link.md)) -- the board has no Ethernet of its
+own, so `net` uses the ESP32 as its NIC. A Langkatze PMOD in J1 is a
+different bitstream (`ulx3s_85f_langkatze`): the ESP32 link is left
+out, and the remote desktop is `zerdesk`.
 
 ## USB HID ports
 

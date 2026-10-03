@@ -52,7 +52,7 @@ Build the hardware map from RTL with `make hwmap` (see [docs/hwmap.md](docs/hwma
  - IP/ARP/ICMP/UDP/DHCP/NTP/DNS/TFTP/TCP/telnet/ssh [networking](docs/networking.md), and [servers](docs/netserve.md): SSH (password or keys), telnet, and a static web server
  - A [password and screen lock](docs/security.md) (Super+L), kept with other machine settings in a power-safe [key/value store in flash](docs/kvstore.md)
  - TLS 1.3 with X.509 certificate verification -- see [tls](docs/tls.md) and [x509](docs/x509.md)
- - [Remote desktop](docs/remote_desktop.md) in a browser, with keyboard and mouse back, on boards with the [ESP32 link](docs/esp32link.md)
+ - [Remote desktop](docs/remote_desktop.md) in a browser, with keyboard and mouse back: served by the [ESP32 link](docs/esp32link.md), or by `zerdesk` over Ethernet
 
 #### Memory Translation Unit
 
@@ -134,6 +134,7 @@ On the sdcard. A `term` window starts one when you press its REPL or POSIX butto
 | App | Description |
 |-----|-------------|
 | [netserve](docs/netserve.md) | Network servers: SSH (password or [keys](docs/netserve.md#ssh-keys)), telnet, HTTP (static files), echo; several ports per service, and [`noauth`](docs/netserve.md#noauth) ports for apps with their own logins |
+| [zerdesk](docs/remote_desktop.md) | Remote desktop over Ethernet: the same page as the ESP32 path. Started by hand, `run zerdesk`; it does not start by itself |
 | [bbs](docs/bbs.md) | Bulletin board system over telnet, SSH and `port bbs0`: forums, private mail, a new-scan, bulletins, sysop tools; also runs on Linux ([bbs_linux](docs/bbs_linux.md)) |
 | [fed](docs/fed.md) | Zeitlos Federation Protocol service |
 | [serial](docs/uart1.md) | Serial port service |

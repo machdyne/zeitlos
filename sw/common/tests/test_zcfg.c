@@ -84,6 +84,9 @@ static void test_parse(void) {
 	CHECK(!z_cfg_key_valid("has space"), "invalid key");
 	CHECK(!z_cfg_key_valid("undotted"), "undotted key");
 	CHECK(!strcmp(z_cfg_default("system.rtc.timezone"), "UTC"), "default");
+	CHECK(!strcmp(z_cfg_default("apps.zerdesk.port"), "8080"), "zerdesk port");
+	CHECK(!strcmp(z_cfg_default("apps.zerdesk.allow"), "subnet"), "zerdesk allow");
+	CHECK(!strcmp(z_cfg_default("apps.zerdesk.viewers"), "3"), "zerdesk viewers");
 	CHECK(!strcmp(z_cfg_default("no.such.key"), ""), "unknown default is empty");
 
 }

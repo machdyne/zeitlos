@@ -756,8 +756,8 @@ static inline bool z_soc_feature_confirmed_absent(uint32_t feature) {
 // cleared -- by anything: the CPU, the blitter, the line rasterizer.
 // Write 1s to clear; reading has no side effect. Read, clear what you
 // read, THEN read the pixels: a write after the clear sets its bit
-// again. One consumer only (sw/apps/net/screen.c); two would clear
-// each other's bits. rtl/socctl.v has the whole contract.
+// again. One consumer at a time (zscreen); two would clear each
+// other's bits. rtl/socctl.v has the whole contract.
 #define reg_socctl_dirty (*(volatile uint32_t*)0x7000021c)
 #define Z_SOCCTL_DIRTY_ALL 0x3fffffffu
 

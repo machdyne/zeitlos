@@ -179,7 +179,7 @@ requested during a window drag waits for the button to be released.
 app, no hotkey. Key combinations with Ctrl, Alt or Super type nothing.
 Printable ASCII only, as the console and settings take. Backspace and
 Escape edit; Enter checks. Pointer clicks go nowhere. An app that tries
-to take the screen is refused at once. Captions stay hidden. The ESP32
+to take the screen is refused at once. Captions stay hidden. The
 remote desktop ([remote_desktop.md](remote_desktop.md)) streams the
 framebuffer, so it shows the lock screen too, and its keys arrive
 through the same path.
