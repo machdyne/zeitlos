@@ -144,14 +144,113 @@ z_rv z_msg_send(z_msg_t *msg) {
 // arrived after a REDRAW while the app was busy (a 65 s decode, a
 // launch-arg wait) so the paint answers the newest region; anything
 // else it read has to go back or it is lost. Integer payloads copy
-// by value. A blob is only unread if it still lives in this struct's
-// own _blobs scratch -- SET_CLIP is applied, not unread.
+// by value.
+//
+// A blob or a map does not. z_msg_read() rebuilds the header into the
+// caller's own _blobs/_tables/_items (zmsg.h), and obj.val.ptr aims
+// at that scratch. Copying the struct copies the pointer, not the
+// aim: it still names the caller's stack, which is gone by the time
+// the message is read back. The bytes are a second problem. They are
+// borrowed from the sender and only live until this process sends
+// (zmsg.h), and the window that drained acks before anyone reads the
+// put-back, so the sender is free to reuse them.
+//
+// A dialog move is the case that hits both. wm sends the parent's
+// REDRAW ahead of the dialog's thawing SET_CLIP (lower window index
+// first). The parent's drain reads that clip, it belongs to the
+// other window, and the put-back used to hand the dialog a dead
+// blob. The dialog then repainted while still frozen: the frame
+// moved, the text and buttons did not.
+//
+// The slot below owns the headers, and a small buffer owns the
+// bytes. A clip is (Z_WM_MAX_CLIP + 1) rectangles, 72 bytes; 128
+// covers it. A larger blob is left borrowed, as it was before this
+// existed -- nothing that drains past a REDRAW sends one.
+#define Z_MSG_UNREAD_BYTES  128
+typedef char z_msg_unread_holds_a_clip[
+	((Z_WM_MAX_CLIP + 1) * sizeof(z_wm_cliprect_t) <= Z_MSG_UNREAD_BYTES)
+		? 1 : -1];
 static z_msg_t msg_unread;
 static int msg_have_unread;
+static uint8_t unread_blob_store[Z_MSG_MAX_BLOBS][Z_MSG_UNREAD_BYTES];
+
+// How far `p` sits into `base`, or -1 if it does not.
+static int scratch_off(const void *p, const void *base, size_t n) {
+	uintptr_t u = (uintptr_t)p;
+	uintptr_t b = (uintptr_t)base;
+	if (!p || u < b || u >= b + n) return -1;
+	return (int)(u - b);
+}
+
+// `dst` is a struct copy of `src`, so every scratch pointer still
+// names `src`. Point them at the copy. Blob bytes are not touched.
+static void retarget_obj(z_obj_t *obj, const z_msg_t *src, z_msg_t *dst) {
+	int off;
+
+	if (!obj) return;
+
+	if (obj->type == Z_BLOB) {
+		off = scratch_off(obj->val.ptr, src->_blobs, sizeof src->_blobs);
+		if (off >= 0)
+			obj->val.ptr = (uint8_t *)dst->_blobs + off;
+		return;
+	}
+
+	if (obj->type != Z_LIST && obj->type != Z_MAP) return;
+
+	off = scratch_off(obj->val.ptr, src->_tables, sizeof src->_tables);
+	if (off < 0) return;
+	obj->val.ptr = (uint8_t *)dst->_tables + off;
+
+	z_obj_table_t *t = obj->val.ptr;
+	int a = scratch_off(t->a, src->_items, sizeof src->_items);
+	if (a >= 0) t->a = (z_obj_t *)((uint8_t *)dst->_items + a);
+	if (t->b) {
+		int b = scratch_off(t->b, src->_items, sizeof src->_items);
+		if (b >= 0) t->b = (z_obj_t *)((uint8_t *)dst->_items + b);
+	}
+
+	for (uint32_t i = 0; i < t->len; i++) {
+		retarget_obj(&t->a[i], src, dst);
+		if (t->b) retarget_obj(&t->b[i], src, dst);
+	}
+}
+
+// Copy referenced blob bytes into the slot's own store. Called only
+// for the slot, after retarget_obj() has aimed its headers there.
+static void keep_blob_bytes(z_obj_t *obj) {
+	if (!obj) return;
+
+	if (obj->type == Z_BLOB) {
+		z_blob_t *b = obj->val.ptr;
+		int off, idx;
+		if (!b || !b->data) return;
+		off = scratch_off(b, msg_unread._blobs, sizeof msg_unread._blobs);
+		if (off < 0 || (off % (int)sizeof(z_blob_t)) != 0) return;
+		idx = off / (int)sizeof(z_blob_t);
+		if (b->len > Z_MSG_UNREAD_BYTES) return;
+		memcpy(unread_blob_store[idx], b->data, b->len);
+		b->data = unread_blob_store[idx];
+		return;
+	}
+
+	if (obj->type != Z_LIST && obj->type != Z_MAP) return;
+	z_obj_table_t *t = obj->val.ptr;
+	if (!t) return;
+	for (uint32_t i = 0; i < t->len; i++) {
+		keep_blob_bytes(&t->a[i]);
+		if (t->b) keep_blob_bytes(&t->b[i]);
+	}
+}
 
 z_rv z_msg_read(z_msg_t *msg) {
 	if (msg_have_unread) {
 		*msg = msg_unread;
+		// Headers now live in the caller's scratch. The bytes stay
+		// in unread_blob_store until the next put-back: the caller
+		// copies what it needs before it reads again (a clip is
+		// applied before the ack goes out).
+		retarget_obj(&msg->obj, &msg_unread, msg);
 		msg_have_unread = 0;
 		return Z_OK;
 	}
@@ -163,6 +262,8 @@ z_rv z_msg_read(z_msg_t *msg) {
 z_rv z_msg_unread(const z_msg_t *msg) {
 	if (!msg || msg_have_unread) return Z_FAIL;
 	msg_unread = *msg;
+	retarget_obj(&msg_unread.obj, msg, &msg_unread);
+	keep_blob_bytes(&msg_unread.obj);
 	msg_have_unread = 1;
 	return Z_OK;
 }
