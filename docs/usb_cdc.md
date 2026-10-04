@@ -136,6 +136,46 @@ start minicom within ten seconds, and you see everything. Start it
 later and you see the machine from wherever it had got to, exactly as
 you would with a serial cable.
 
+### Power only
+
+USB carrying power and nothing else -- a phone charger, a power bank, a
+charge-only cable, or a host whose terminal never opens the port -- is
+the case the give-up exists for, and two things went wrong in it.
+
+**A process could wait for ever** (fixed in `sw/os/uart.c`). The kernel's
+console output goes through a 512-byte ring, and a writer that found it
+full slept until the THRE *interrupt* woke it. After the give-up, THRE
+*reads* ready -- so `tx_pump()` drains the ring by discarding -- but this
+block raises the THRE interrupt only when the USB side really takes a
+byte, which in this case it never does. The first process to fill the
+ring after the scheduler started slept for good. That was usually init,
+which prints a line per app it starts: it never registered `init0`, so
+`wm` kept the busy `Z` cursor and the rest of the core apps never
+started. A writer now sleeps at most ~20 ms (`UART_TX_RETRY_TICKS`) and
+then tries the ring again itself, so once the give-up engages it drains
+and carries on. The same change replaced the single waiting-pid slot
+with a set: two writers asleep at once used to share it, and the first
+was never woken even with a host attached. The set is cleared for a
+process that ends while waiting (`k_uart_release_pid()`).
+
+**Boot is slower, by up to ten seconds per re-arm.** Writing FCR with
+bit 2 (transmit reset) clears `tx_giveup`, so the next byte waits the
+full ten seconds again. Boot wrote it three times:
+
+| where | | |
+|---|---|---|
+| BIOS banner | the first byte; nobody is reading | the give-up working as designed |
+| BIOS, just before autoboot (`bios.c`, the FCR before the `@`) | re-armed by bit 2 | in the BIOS, which is in the bitstream's block RAM |
+| kernel `z_uart_init()` | re-armed by bit 2 | **removed**: the kernel now writes FCR without bit 2 |
+
+So a board on a charger now boots about twenty seconds later than with
+a terminal open, instead of thirty -- or, before the fix above, not at
+all. The remaining BIOS re-arm can go the same way (it needs bit 1, the
+receive flush, not bit 2) when the BIOS is next rebuilt, and the last
+ten seconds need the RTL: either FCR's transmit reset leaving
+`tx_giveup` alone, or a give-up that comes early when the device has not
+even been enumerated.
+
 ## What is not emulated
 
 **Line settings are not real.** DLL, DLM and LCR are stored and read

@@ -38,6 +38,9 @@ extern volatile bool k_uart_last_injected;
 // For a panic: send what is still queued, then draw the end of the
 // console log on the screen (docs/console.md, docs/mpu.md).
 void k_uart_flush(void);
+
+// Forget a process that has ended, if it was waiting to write (uart.c).
+void k_uart_release_pid(uint32_t pid);
 void k_klog_panic_screen(void);
 
 #endif

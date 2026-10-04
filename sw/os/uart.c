@@ -89,15 +89,69 @@ void k_klog_putc(uint8_t c) {
 	k_klog_put_locked(c);
 	maskirq(old_mask);
 }
-static volatile uint32_t uart_tx_wait_pid = ~0u;
+// -- writers waiting for room in the transmit ring --
+//
+// A writer that finds the ring full sleeps (k_uart_putc() below) and is
+// woken two ways: by the THRE interrupt when the UART takes a byte, and
+// by a timeout, UART_TX_RETRY_TICKS later, after which it tries the
+// ring again itself. The interrupt is the fast path. The timeout is
+// what makes progress certain, because there are consoles that never
+// raise it:
+//
+//   rtl/usb_cdc_uart.v with nothing reading the port -- USB connected
+//   to a charger, a power bank, or a host whose terminal has closed.
+//   After ten seconds it gives up and reports THRE (so tx_pump() drains
+//   the ring by discarding), but it raises the THRE INTERRUPT only when
+//   the USB side really takes a byte, which it never does. A writer
+//   asleep with no timeout slept for ever: whichever process filled the
+//   ring first after boot -- wm, net -- never ran again.
+//
+// And a set, not one pid: two writers asleep at once used to share one
+// slot, and the first was overwritten and never woken even with a host.
+// A bit per process (Z_PROCS_MAX is 32); a writer clears its own bit
+// when it runs again, and the interrupt wakes only bits whose process
+// is still BLOCKED, so no wake is left pending on a process that has
+// since moved on (k_proc_unblock() on a running process records one).
+static volatile uint32_t uart_tx_waiters;
+
+_Static_assert(Z_PROCS_MAX <= 32, "uart_tx_waiters holds a bit per process");
+
+// ~20ms: short enough that output resumes promptly once a stalled
+// console gives up or recovers, long enough that a writer waiting on a
+// slow but working console costs nothing measurable.
+#define UART_TX_RETRY_TICKS  (Z_TICK_HZ / 50u)
+
+static void uart_tx_wake_waiters(void) {
+	uint32_t w = uart_tx_waiters;
+	uart_tx_waiters = 0;
+	for (uint32_t pid = 0; w; pid++, w >>= 1)
+		if ((w & 1u) && (z_procs[pid].flags & Z_PROC_FLAG_BLOCKED))
+			k_proc_unblock(pid);
+}
+
+// A process that ends while waiting must not leave its bit for whoever
+// gets its pid next. Called from the scheduler's reap (kernel.c).
+void k_uart_release_pid(uint32_t pid) {
+	uint32_t old_mask = maskirq(0xFFFFFFFF);
+	if (pid < 32) uart_tx_waiters &= ~(1u << pid);
+	maskirq(old_mask);
+}
 
 void z_uart_init(void) {
 
-	// FIFO enable + RX/TX flush. FCR[7:6]=00 is trigger level 1 byte
+	// FIFO enable + RX flush. FCR[7:6]=00 is trigger level 1 byte
 	// (uart_regs.v: 00=1, 01=4, 10=8, 11=14). 0b111 was once read here
 	// as trigger 14; those are the flush bits, not the trigger. Slack
 	// at 1 Mbaud is then 16 bytes, not 2 -- leave it at 1.
-	reg_uart0_fcr = (uint8_t)0b00000111;
+	//
+	// NOT the transmit flush (bit 2), which this used to set too. On a
+	// 16550 it only threw away the BIOS's last few bytes instead of
+	// sending them. On rtl/usb_cdc_uart.v it also clears tx_giveup, so a
+	// board whose USB carries power and nothing else -- which the BIOS
+	// had already timed out on -- sat through the ten-second give-up a
+	// second time here, the moment the kernel printed "uart
+	// initialized". docs/usb_cdc.md, "Power only".
+	reg_uart0_fcr = (uint8_t)0b00000011;
 	reg_uart0_ier = (uint8_t)0b00000001; // enable RX interrupt
 
 	reg_leds = 0;
@@ -184,11 +238,9 @@ void z_uart_irq(void) {
 				tx_pump();
 				// nothing left to send: stop asking to be told about it
 				if (tx_head == tx_tail) reg_uart0_ier = 0x01;
-				if (uart_tx_wait_pid != ~0u &&
-					((tx_head + 1) % UART_FIFO_SIZE) != tx_tail) {
-					k_proc_unblock(uart_tx_wait_pid);
-					uart_tx_wait_pid = ~0u;
-				}
+				if (uart_tx_waiters &&
+					((tx_head + 1) % UART_FIFO_SIZE) != tx_tail)
+					uart_tx_wake_waiters();
 				break;
 
 			case 0x02: // Received Data Available (RDA)
@@ -321,6 +373,9 @@ void k_uart_putc(char c) {
 		uint32_t old_mask = maskirq(0xFFFFFFFF);
 		uint16_t next;
 
+		// Running again: no longer waiting, however we were woken.
+		if (z_pid < 32) uart_tx_waiters &= ~(1u << z_pid);
+
 		tx_pump();
 		next = (tx_head + 1) % UART_FIFO_SIZE;
 
@@ -353,11 +408,17 @@ void k_uart_putc(char c) {
 			return;
 		}
 
-		uart_tx_wait_pid = z_pid;
-		z_procs[z_pid].wake_tick = 0;
+		// Sleep until the UART takes a byte (the THRE interrupt) or
+		// UART_TX_RETRY_TICKS pass, whichever is first -- see
+		// uart_tx_waiters above for why the timeout is not optional.
+		// wake_tick 0 means "no timeout", so a deadline landing on 0
+		// is nudged to 1, as k_proc_wait() does.
+		uart_tx_waiters |= 1u << z_pid;
+		{
+			uint32_t w = z_kernel_ticks + UART_TX_RETRY_TICKS;
+			z_procs[z_pid].wake_tick = w ? w : 1;
+		}
 		z_procs[z_pid].flags |= Z_PROC_FLAG_BLOCKED;
-		// ring is non-empty, so THRE is already enabled -- the
-		// next byte the 16550 takes will unblock us.
 		maskirq(old_mask);
 		k_proc_yield_blocked();
 

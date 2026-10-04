@@ -1048,6 +1048,8 @@ static uint32_t *k_sched_switch(uint32_t *regs) {
 		// and the messages it left in other mailboxes, which point
 		// into the block freed above (msg.c)
 		k_msg_release_pid(z_pid);
+		// and its place among the console's waiting writers (uart.c)
+		k_uart_release_pid(z_pid);
 		z_procs[z_pid].base = 0x00000000;
 		z_procs[z_pid].flags = 0x00000000;
 		goto next_process;
