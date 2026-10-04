@@ -58,7 +58,7 @@ def fake_root():
              + mkfatimg.MISC + mkfatimg.SHELLS + mkfatimg.SELFHOST
              + mkfatimg.LIBZ_FILES + mkfatimg.LIBZ_EXTRA + mkfatimg.EXAMPLES
              + mkfatimg.FPGA_FILES + mkfatimg.CONFIG_FILES + mkfatimg.NETWORK_FILES
-             + mkfatimg.FONT_FILES + mkfatimg.DEMO_FILES)
+             + mkfatimg.FONT_FILES + mkfatimg.DESK_FILES + mkfatimg.DEMO_FILES)
     for _dest, rel in lists:
         p = os.path.join(r, rel)
         os.makedirs(os.path.dirname(p), exist_ok=True)
@@ -110,12 +110,14 @@ def test_variant(root, key, tmp):
     # /bbs/bbs.cfg, /fed/fed.cfg and the rest included
     listed = [n for n, _ in mkfatimg.SUPPLEMENTAL + mkfatimg.NETWORK + mkfatimg.CASINO
               + mkfatimg.GAMES_DEMOS + mkfatimg.MISC + mkfatimg.SHELLS + mkfatimg.SELFHOST
-              + mkfatimg.CONFIG_FILES + mkfatimg.NETWORK_FILES + mkfatimg.FONT_FILES]
+              + mkfatimg.CONFIG_FILES + mkfatimg.NETWORK_FILES + mkfatimg.FONT_FILES
+              + mkfatimg.DESK_FILES]
     absent = [n for n in listed if ("/" + n).lower() not in on_card]
     check(not absent, "%s: all %d listed apps and data files on the card%s" % (
         key, len(listed), "" if not absent else " (missing e.g. %s)" % absent[0]))
     for n in ("apps/bbs", "apps/fed", "apps/zetta", "apps/cryptobench",
-              "bbs/bbs.cfg", "bbs/forums.cfg", "fed/fed.cfg"):
+              "bbs/bbs.cfg", "bbs/forums.cfg", "fed/fed.cfg",
+              "apps/zerdesk", "zerdesk/index.html"):
         check(("/" + n) in on_card, "%s: /%s on the card" % (key, n))
     for p in packs:
         files = mkfatimg.ask_pack_files(root, p)
