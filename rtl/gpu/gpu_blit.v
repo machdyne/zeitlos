@@ -139,6 +139,7 @@ module gpu_blit_wb #(
 
     localparam VRAM_BASE = 32'h20000000;
     localparam SCREEN_STRIDE = 80; // 640 pixels / 8 = 80 bytes per line
+                                   // (final_y_row/dst_y_row: 64 + 16)
 
     // Control bits
     localparam CTRL_START = 0;
@@ -519,6 +520,17 @@ module gpu_blit_wb #(
     wire [31:0] final_height = final_y_end - final_y;
 
     wire [31:0] left_word_boundary = (final_x >> 5) << 5;
+
+    // y * SCREEN_STRIDE as two shifts and an add (80 = 64 + 16), not a
+    // multiply. Written as `final_y * SCREEN_STRIDE`, yosys mapped it to
+    // a MULT18X18D, and that DSP sat on the blitter's start-of-draw
+    // path: VRAM-arbiter ack -> draw_busy -> the DSP (3.9ns, at a site
+    // far from the blitter) -> the address adder -> line_start_addr.
+    // On a 94%-full Lakritz (lakritz_katze) that path set CLK_48's
+    // fmax at 47.2 MHz. Same 32-bit result; one DSP and its routing
+    // fewer.
+    wire [31:0] final_y_row = (final_y << 6) + (final_y << 4);
+    wire [31:0] dst_y_row = (work_dst_y << 6) + (work_dst_y << 4);
     wire [31:0] right_word_boundary = ((final_x_end + 31) >> 5) << 5;
     wire [31:0] word_span_width = right_word_boundary - left_word_boundary;
     wire [31:0] word_span_words = word_span_width >> 5;
@@ -1086,8 +1098,8 @@ module gpu_blit_wb #(
                             total_lines <= final_height;
                             words_per_line <= word_span_words;
                             cur_y <= final_y[9:0];
-                            line_start_addr <= final_y * SCREEN_STRIDE + (left_word_boundary >> 3);
-                            current_word_addr <= final_y * SCREEN_STRIDE + (left_word_boundary >> 3);
+                            line_start_addr <= final_y_row + (left_word_boundary >> 3);
+                            current_word_addr <= final_y_row + (left_word_boundary >> 3);
 
                             left_mask <= left_pixel_mask;
                             right_mask <= right_pixel_mask;
@@ -1137,8 +1149,8 @@ module gpu_blit_wb #(
                         total_lines <= work_height;
                         words_per_line <= (work_width + 31) >> 5;
                         cur_y <= work_dst_y[9:0];
-                        line_start_addr <= work_dst_y * SCREEN_STRIDE + (work_dst_x >> 5) * 4;
-                        current_word_addr <= work_dst_y * SCREEN_STRIDE + (work_dst_x >> 5) * 4;
+                        line_start_addr <= dst_y_row + (work_dst_x >> 5) * 4;
+                        current_word_addr <= dst_y_row + (work_dst_x >> 5) * 4;
 
                         left_mask <= 32'hFFFFFFFF;
                         right_mask <= 32'hFFFFFFFF;

@@ -275,11 +275,41 @@ module ethmac_rmii_wb
 
 	assign eth_rst_n = phy_rst_done;
 
+	// -- RMII pin registers --
+	//
+	// Every RMII signal crosses the pins through exactly one flop on
+	// eth_refclk, and nothing else touches the pins.
+	//
+	// RX: the PHY launches RXD/CRS_DV off REF_CLK and the LAN8720A
+	// allows itself most of the 20ns period to do it, so what is left
+	// for the FPGA is a few ns of setup. When the engine below used the
+	// pins directly, that budget had to cover the pin-to-logic routing
+	// as well -- on a full 25F that was measured at 7.7ns from
+	// ETH_CRS_DV to the rx buffer's write port, which nextpnr reports
+	// only as an '<async>' path and therefore never fails. A flop right
+	// behind the pin leaves the routing inside the clock domain, where
+	// it is timed, and costs one REF_CLK of latency on the whole RX
+	// stream (all of it, so nothing downstream sees a skew).
+	//
+	// TX: TXD/TX_EN were decoded from tx_state through LUTs straight to
+	// the pins, so their clock-to-out was whatever the router made of
+	// it, and they could glitch between edges. The PHY samples them on
+	// REF_CLK with ~4ns setup; registering them makes clock-to-out a
+	// flop's, and it delays TXD and TX_EN by the same one cycle, so the
+	// frame on the wire is unchanged.
+	reg [1:0] rxd_q = 2'b00;
+	reg crs_dv_q = 1'b0;
+
+	always @(posedge eth_refclk) begin
+		rxd_q <= eth_rxd;
+		crs_dv_q <= eth_crs_dv;
+	end
+
 	reg crs_dv_meta = 0;
 	reg crs_dv_sync = 0;
 
 	always @(posedge wb_clk_i) begin
-		crs_dv_meta <= eth_crs_dv;
+		crs_dv_meta <= crs_dv_q;
 		crs_dv_sync <= crs_dv_meta;
 	end
 
@@ -342,7 +372,7 @@ module ethmac_rmii_wb
 	// top, old bits move down" -- new_byte here is exactly what
 	// rx_shift will hold after this cycle's dibit is incorporated.
 	reg [7:0] rx_shift = 0;
-	wire [7:0] new_byte = { eth_rxd, rx_shift[7:2] };
+	wire [7:0] new_byte = { rxd_q, rx_shift[7:2] };
 
 	reg sfd_found = 0;
 	reg [1:0] dibit_cnt = 0;
@@ -410,7 +440,7 @@ module ethmac_rmii_wb
 	//
 	// {slot, word}: every slot is RXBUF_WORDS long, so the slot index
 	// is simply the high address bits and no multiply is inferred.
-	wire rx_buf_we = eth_crs_dv && sfd_found && (dibit_cnt == 2'b11) && !rx_full;
+	wire rx_buf_we = crs_dv_q && sfd_found && (dibit_cnt == 2'b11) && !rx_full;
 	wire [RX_PW+8:0] rx_buf_waddr = {rx_wr_slot, byte_cnt[10:2]};
 
 	always @(posedge eth_refclk) begin
@@ -424,8 +454,8 @@ module ethmac_rmii_wb
 		end
 	end
 
-	wire [31:0] crc_after_bit0 = crc32_update(rx_crc, eth_rxd[0]);
-	wire [31:0] crc_after_bit1 = crc32_update(crc_after_bit0, eth_rxd[1]);
+	wire [31:0] crc_after_bit0 = crc32_update(rx_crc, rxd_q[0]);
+	wire [31:0] crc_after_bit1 = crc32_update(crc_after_bit0, rxd_q[1]);
 
 	always @(posedge eth_refclk) begin
 
@@ -438,7 +468,7 @@ module ethmac_rmii_wb
 		rx_rd_gray_meta <= rx_rd_gray;
 		rx_rd_gray_sync <= rx_rd_gray_meta;
 
-		if (!eth_crs_dv) begin
+		if (!crs_dv_q) begin
 
 			// carrier just dropped (or was never present) -- if we'd
 			// locked onto a frame, this is the end of it. sfd_found/
@@ -545,8 +575,18 @@ module ethmac_rmii_wb
 	reg [5:0] tx_ifg_cnt = 0;
 	reg tx_busy = 0;
 
-	assign eth_tx_en = (tx_state == TX_PREAMBLE) || (tx_state == TX_DATA) || (tx_state == TX_FCS);
-	assign eth_txd = eth_tx_en ? tx_shift[1:0] : 2'b00;
+	// Registered at the pins -- see "RMII pin registers" above.
+	wire tx_en_c = (tx_state == TX_PREAMBLE) || (tx_state == TX_DATA) || (tx_state == TX_FCS);
+	reg tx_en_q = 1'b0;
+	reg [1:0] txd_q = 2'b00;
+
+	always @(posedge eth_refclk) begin
+		tx_en_q <= tx_en_c;
+		txd_q <= tx_en_c ? tx_shift[1:0] : 2'b00;
+	end
+
+	assign eth_tx_en = tx_en_q;
+	assign eth_txd = txd_q;
 
 	// lookahead for the byte AFTER the one currently being sent --
 	// needed because we have to load tx_shift with the next byte on

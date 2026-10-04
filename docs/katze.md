@@ -186,6 +186,30 @@ An earlier `lakritz_katze` configuration met 48MHz (52.9 MHz) with the
 RMII domain at 88.1 MHz against 50, but that was one placement, not a
 margin.
 
+**Two fixes for 0.0.5.** The `lakritz_katze` build for 0.0.5 placed at
+94% COMB and missed 48MHz at 47.2 MHz, again on the blitter: the
+start-of-draw address `final_y * 80` had been mapped to a MULT18X18D,
+so the path ran from the VRAM arbiter's ack through the DSP (3.9ns plus
+the trip to its site) into the address adder. `rtl/gpu/gpu_blit.v` now
+writes it as `(y << 6) + (y << 4)`. With that and the RMII change below,
+the same target at the default seed placed at 92% COMB and met **57.75
+MHz** on CLK_48, with ETH_REFCLK at 83.4 MHz; the critical path moved
+to the icache tag compare. Still one placement -- but 9.75 MHz of it.
+
+The RMII change is about the pins, which nextpnr does not time at all:
+paths from `ETH_RXD`/`ETH_CRS_DV` show up only as `<async>`, so they
+can never fail the build. They were long. The RX engine used the pins
+directly, and `ETH_CRS_DV` reached the receive buffer's write port
+after 8.6ns of routing -- out of a period in which the LAN8720A takes
+most of the 20ns to drive the signal. On the TX side, `ETH_TXD` and
+`ETH_TX_EN` were decoded from the TX state through LUTs straight onto
+the pins. `rtl/ethmac_rmii.v` now puts one flop on `eth_refclk` behind
+every RX pin and in front of every TX pin; RX and TX each gain one
+REF_CLK of latency, uniformly, so the frame on the wire is unchanged.
+The pin-to-first-flop path is 4.5ns in the build above. Both MAC
+testbenches (`rtl/tb/tb_ethmac_rmii.v`, `tb_ethmac_rmii_tx.v`,
+including the TX-to-RX loopback) pass with it under Verilator.
+
 ### History: the version that did not have the VRAM fix
 
 Before VRAM was fixed, the board had one block RAM to spare and this
