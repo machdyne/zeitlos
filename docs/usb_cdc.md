@@ -158,23 +158,53 @@ with a set: two writers asleep at once used to share it, and the first
 was never woken even with a host attached. The set is cleared for a
 process that ends while waiting (`k_uart_release_pid()`).
 
-**Boot is slower, by up to ten seconds per re-arm.** Writing FCR with
+**Boot waited out the give-up two or three times.** Writing FCR with
 bit 2 (transmit reset) clears `tx_giveup`, so the next byte waits the
-full ten seconds again. Boot wrote it three times:
+full ten seconds again, and boot wrote it three times: the BIOS banner,
+the BIOS just before autoboot, and the kernel's `z_uart_init()` (which
+no longer does). On a charger that was twenty to thirty seconds of dark
+screen.
 
-| where | | |
-|---|---|---|
-| BIOS banner | the first byte; nobody is reading | the give-up working as designed |
-| BIOS, just before autoboot (`bios.c`, the FCR before the `@`) | re-armed by bit 2 | in the BIOS, which is in the bitstream's block RAM |
-| kernel `z_uart_init()` | re-armed by bit 2 | **removed**: the kernel now writes FCR without bit 2 |
+**Now the block decides there is no host, within two seconds.** At the
+moment the BIOS prints its banner a PC and a charger look the same: the
+host cannot even reset the port until it has debounced the attach for
+100ms, and a charge-only cable leaves D- floating, so the line levels
+settle nothing either. What a host does do, within a fraction of a
+second, is send start-of-frame packets every millisecond (the core's
+frame number moves) and then configure the device. So
+`rtl/usb_cdc_uart.v` waits up to `HOST_WAIT_CYCLES` after reset -- two
+seconds, `` `USB_CDC_HOST_WAIT_CYCLES `` in `rtl/sysctl.v` -- for either:
 
-So a board on a charger now boots about twenty seconds later than with
-a terminal open, instead of thirty -- or, before the fix above, not at
-all. The remaining BIOS re-arm can go the same way (it needs bit 1, the
-receive flush, not bit 2) when the BIOS is next rebuilt, and the last
-ten seconds need the RTL: either FCR's transmit reset leaving
-`tx_giveup` alone, or a give-up that comes early when the device has not
-even been enumerated.
+| | |
+|---|---|
+| **a host is seen** | everything exactly as before: the banner held until a terminal opens, the ten-second give-up when none does, recovery when one does |
+| **no host by then** | `no_host`: every write is dropped the cycle it lands, THRE always reads empty, and the transmit interrupt fires as a 16550's does with nothing attached -- so nothing waits again, an FCR write included, and the kernel's console drains at once |
+| **a host appears later** | its first frame ends `no_host` (a board on its own supply, plugged into a PC after boot) |
+
+So a board on a charger reaches the desktop about two seconds after one
+with a terminal open -- the first few bytes go into the core's own FIFO,
+the next waits out the window, and nothing waits after that -- and a PC
+sees the console exactly as it always has. Two seconds is generous:
+hosts usually reset the port within a few hundred milliseconds, but a
+slow hub would otherwise lose the banner.
+
+`rtl/tb/tb_usb_cdc_uart.v` checks all of it against the real USB core
+-- with no host on the bus the core genuinely stays unconfigured, which
+is the charger case itself -- and forces the evidence a host would
+produce for the other cases:
+
+    iverilog -g2005 -I rtl -o /tmp/t rtl/tb/tb_usb_cdc_uart.v \
+        rtl/usb_cdc_uart.v rtl/ext/usb_cdc/[a-z]*.v && vvp /tmp/t
+
+26 checks: the wait ending at the window and not before it, a hundred
+bytes after it with no wait, the interrupt, an FCR write that re-arms
+nothing, the old give-up and recovery unchanged with a host present
+(every byte delivered, in order), a host arriving late, and configured
+counting as evidence. Breaking the frame detection, never engaging
+`no_host`, or letting a write through to the core while there is no
+host each fail it. Cost, synthesising the block alone for ECP5: 55
+flip-flops and 32 carry cells for the window counter and the frame
+register; the LUT count moved within synthesis noise.
 
 ## What is not emulated
 

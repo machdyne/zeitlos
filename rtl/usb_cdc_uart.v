@@ -79,6 +79,13 @@
  * is the correct trade -- it is the same bargain a real UART with
  * nothing attached makes on every character.
  *
+ * The ten seconds are for a HOST that has not opened the port. When
+ * there is no host at all -- a charger, a power bank -- the block knows
+ * sooner: no start-of-frame and no configuration within
+ * HOST_WAIT_CYCLES (two seconds) of reset means no_host, and from then
+ * on every write is dropped at once, FCR or not. See "-- no host --"
+ * below; docs/usb_cdc.md, "Power only".
+ *
  * -- What is NOT emulated --
  *
  * Baud rate, word length, parity and stop bits. DLL/DLM/LCR are
@@ -185,7 +192,13 @@ module usb_cdc_uart #(
 	// Zero would disable the timeout and is NOT offered: the whole
 	// reason it exists is that the failure it prevents is a dead
 	// machine rather than a quiet console.
-	parameter [31:0] STALL_CYCLES = 32'd480_000_000
+	parameter [31:0] STALL_CYCLES = 32'd480_000_000,
+
+	// How long after reset to wait for any sign of a USB host before
+	// deciding there is none -- a charger, a power bank, a charge-only
+	// cable. 96_000_000 cycles is two seconds at 48MHz. See "-- no
+	// host --" below and docs/usb_cdc.md, "Power only".
+	parameter [31:0] HOST_WAIT_CYCLES = 32'd96_000_000
 )
 (
 	input wire wb_clk_i,
@@ -339,10 +352,45 @@ module usb_cdc_uart #(
 	assign usb_in_valid = thr_full;
 	assign in_taken = thr_full && usb_in_ready;
 
-	// THRE lies while tx_giveup is set. That is the timeout doing its
-	// job -- see the header. Everywhere else it is the honest answer
-	// to "is the holding register free".
-	assign lsr_thre = !thr_full || tx_giveup;
+	// -- no host --
+	//
+	// A byte written before anything reads the port waits (see the
+	// header): that is what holds the BIOS banner until a terminal opens.
+	// But at the moment the banner is printed a PC and a charger look the
+	// same -- a host cannot even reset the port until it has debounced
+	// the attach for 100ms -- so the wait used to run its full ten
+	// seconds on a board powered from a charger, and again after every
+	// FCR transmit reset: twenty to thirty seconds of a dark boot.
+	//
+	// So: wait at most HOST_WAIT_CYCLES after reset for EVIDENCE of a
+	// host -- the frame number moving (start-of-frame packets, which a
+	// host sends every millisecond once it has reset the port) or the
+	// device being configured. Evidence seen: everything below behaves
+	// exactly as it always has, banner held, ten-second give-up and all.
+	// No evidence by then: no_host, and the holding register is never
+	// filled -- every write is dropped the cycle it lands and THRE always
+	// reads empty, and the transmit interrupt fires as a 16550's would
+	// with nothing attached, so an interrupt-driven console drains at
+	// once. FCR does not touch any of this. A host that turns up later
+	// (a board on its own supply, plugged into a PC after boot) ends
+	// no_host the moment its first frame arrives.
+	//
+	// One clock: usb_cdc runs on wb_clk_i (USE_APP_CLK 0), so frame_o
+	// and configured_o need no synchroniser.
+	reg host_seen;
+	reg [10:0] last_frame;
+	reg [31:0] host_wait_ctr;
+	wire host_wait_over;
+	wire no_host;
+	assign host_wait_over = (host_wait_ctr >= HOST_WAIT_CYCLES);
+	assign no_host = host_wait_over && !host_seen;
+
+	// THRE lies while tx_giveup or no_host is set. That is the timeout,
+	// or the absent host, doing its job -- see the header. Everywhere
+	// else it is the honest answer to "is the holding register free".
+	// (With no_host the register is also held empty every cycle, so
+	// that term is belt and braces; it says what is meant.)
+	assign lsr_thre = !thr_full || tx_giveup || no_host;
 
 	// -- line status --
 	//
@@ -412,6 +460,9 @@ module usb_cdc_uart #(
 			thre_int <= 1'b0;
 			tx_giveup <= 1'b0;
 			stall_ctr <= 32'h0;
+			host_seen <= 1'b0;
+			last_frame <= 11'd0;
+			host_wait_ctr <= 32'h0;
 			rx_flush <= 1'b0;
 			rx_flush_idle <= 4'd0;
 
@@ -437,6 +488,23 @@ module usb_cdc_uart #(
 					tx_giveup <= 1'b1;
 				else
 					stall_ctr <= stall_ctr + 1;
+			end
+
+			// -- no host -- (see above)
+			if (usb_frame != last_frame || usb_cdc_configured)
+				host_seen <= 1'b1;
+			last_frame <= usb_frame;
+			if (!host_wait_over)
+				host_wait_ctr <= host_wait_ctr + 1;
+			if (no_host) begin
+				// Nothing is waiting to be taken, and nothing will
+				// be: the holding register stays empty, and with
+				// the transmit interrupt enabled it is pending, as
+				// on a 16550 sending into an unplugged cable.
+				thr_full <= 1'b0;
+				stall_ctr <= 32'h0;
+				if (reg_ier[1])
+					thre_int <= 1'b1;
 			end
 
 			if (!reg_ier[1])
@@ -489,7 +557,7 @@ module usb_cdc_uart #(
 								// while tx_giveup was set, and it
 								// is DROPPED -- which is the whole
 								// contract of the timeout.
-								if (!thr_full || in_taken) begin
+								if ((!thr_full || in_taken) && !no_host) begin
 									thr_data <= wb_dat_i[7:0];
 									thr_full <= 1'b1;
 									stall_ctr <= 32'h0;

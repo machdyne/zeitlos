@@ -121,6 +121,16 @@ localparam SYSCLK = 48_000_000;
 `ifndef USB_CDC_STALL_CYCLES
 `define USB_CDC_STALL_CYCLES 32'd480_000_000
 `endif
+
+// Two seconds at 48MHz to see any sign of a USB host -- a frame, or
+// being configured -- before deciding there is none (a charger, a power
+// bank) and dropping console output at once instead of waiting out the
+// stall above, twice, during boot. A host debounces an attach for
+// 100ms before it so much as resets the port, and slow hubs take
+// longer. See rtl/usb_cdc_uart.v, "-- no host --".
+`ifndef USB_CDC_HOST_WAIT_CYCLES
+`define USB_CDC_HOST_WAIT_CYCLES 32'd96_000_000
+`endif
 `endif
 
 // Audio geometry defaults, if a board enabled `AUDIO without pinning
@@ -2880,7 +2890,8 @@ module sysctl #()
 		.VENDORID(`USB_CDC_VID),
 		.PRODUCTID(`USB_CDC_PID),
 		.MAXPACKETSIZE(`USB_CDC_MPS),
-		.STALL_CYCLES(`USB_CDC_STALL_CYCLES)
+		.STALL_CYCLES(`USB_CDC_STALL_CYCLES),
+		.HOST_WAIT_CYCLES(`USB_CDC_HOST_WAIT_CYCLES)
 	) wbs_uart0_i
 	(
 		.wb_clk_i(wbm_clk),
