@@ -149,6 +149,11 @@ static uint32_t k_no_preempt_start = 0;
 // points call each other (fs_exec_info_any -> fs_exec_info), and a
 // syscall handler that calls fs_* nests inside the dispatcher's own
 // increment. Every enter has exactly one matching leave.
+//
+// The timestamp is taken only on the 0 -> 1 transition. A nested
+// enter must not refresh it: that would let a caller hold the
+// scheduler for as long as it kept nesting, which for a program
+// load is the whole transfer.
 void k_fs_enter(void) {
 	if (k_no_preempt == 0) k_no_preempt_start = z_kernel_ticks;
 	k_no_preempt++;
@@ -160,18 +165,22 @@ void k_fs_leave(void) {
 
 // Which syscalls reach FatFs, and therefore must run to completion.
 //
-// PROC_RUN is in here and is the important one: it resolves and LOADS
-// an executable, so init starting `net` and wm's dock_build() probing
-// for apps are two processes in FatFs at the same time -- which is
-// exactly the overlap that left the card returning FR_DISK_ERR for
-// the rest of the boot.
+// PROC_RUN is deliberately not here. It resolves and loads a whole
+// executable, and fs_load_exec() already brackets each FatFs call
+// (one 1KB read). A program is hundreds of milliseconds, far past
+// K_NO_PREEMPT_MAX_TICKS. Holding the guard across the syscall would
+// not cover that load: the timestamp above starts only when the
+// counter leaves zero, so the inner brackets do not restart it, the
+// cap fires inside an f_read, and the swap this guard exists to
+// prevent happens with the card mid-command. The next filesystem
+// user then sees FR_DISK_ERR until a manual mount. Between chunks
+// chip-select is up, which is ordinary single-threaded FatFs use.
 //
 // Deliberately a switch rather than a flag in syscalls.def: that file
 // is shared with app-side code, and its comment warns that inserting
 // an entry shifts every later enum value.
 static int k_syscall_touches_fs(uint32_t id) {
 	switch (id) {
-		case Z_SYS_PROC_RUN:
 		case Z_SYS_FS_SIZE:
 		case Z_SYS_FS_READ:
 		case Z_SYS_FS_WRITE:
