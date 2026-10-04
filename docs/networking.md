@@ -497,12 +497,14 @@ about a second: its connections are reset and its ports released
 (netserve.md, "Found on hardware").
 
 The listener names each connection. That id has to stay unique for as
-long as any relay still holds it, including one that is closing:
-`relay.c` finds the relay by listener and id among every relay in
-that state. Handing a new connection an id a closing relay still has
-delivers the new connection's acknowledgements to the old one, and
-the new one stalls. Listeners share the relay pool (`RELAY_MAX` is 6)
-and the TCP slots. The last listen on a port takes it over.
+long as any relay still holds it, including one that is closing or
+draining. `relay.c` finds the relay by listener and id. When more than
+one match, the open one wins, so a reused id does not stall the new
+connection; the one that is closing keeps its slot until its
+acknowledgements arrive or its deadline passes, and an acknowledgement
+for a reused id lands on the new connection instead. Listeners share
+the relay pool (`RELAY_MAX` is 6) and the TCP slots. The last listen
+on a port takes it over.
 
 ## Connections
 

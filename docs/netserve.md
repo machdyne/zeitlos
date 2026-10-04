@@ -401,7 +401,10 @@ carrying the peer's address, the ports, and whether the peer is on
 this subnet. The listener answers CONNECTED or REFUSED **with the same
 tag**, which `z_port_accept()` does not do (it answers with tag 0): a
 listener with several connections arriving at once has to say which it
-means.
+means. The number it sends is its name for the connection, and
+that name is not reused while a relay might still hold it
+([networking.md](networking.md), "Accepted connections"). netserve's
+names count up and skip 0; they are not the session slot.
 
 Six relays, one per inbound TCP slot (`TCP_MAX_CONN` less the two kept
 for outbound). Each has a 1 KB buffer toward TCP and 512 bytes from it,
