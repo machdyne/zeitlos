@@ -29,6 +29,7 @@
 #include "zobj.h"
 #include "zmsg.h"
 #include "zport.h"
+#include "zwm.h"
 
 typedef struct { int type; unsigned val; } zobj_raw_t;
 
@@ -44,17 +45,87 @@ static z_rv syscall_rv(unsigned id, void *arg) {
 
 z_rv z_msg_send(z_msg_t *msg) { return syscall_rv(ZS_MSG_SEND, msg); }
 
-/* One-message put-back. z_win_apply_redraw() (compiled into this
- * blob from sw/common/zwin.c) drains compositor messages ahead of a
- * REDRAW and has to push back anything else it read. Same contract
- * as zeitlos.c: one slot, a second unread without a read fails.
- * Integer payloads copy by value; SET_CLIP is applied, not unread. */
+/* One-message put-back. Same contract as zeitlos.c, which owns the
+ * explanation: a struct copy leaves a blob header aimed at the
+ * caller's stack, and the bytes are borrowed from the sender only
+ * until the next send. The redraw drain puts a dialog's SET_CLIP
+ * back and then acks, so both have to be kept here. */
+#define Z_MSG_UNREAD_BYTES  128
+typedef char z_msg_unread_holds_a_clip[
+	((Z_WM_MAX_CLIP + 1) * sizeof(z_wm_cliprect_t) <= Z_MSG_UNREAD_BYTES)
+		? 1 : -1];
 static z_msg_t msg_unread;
 static int msg_have_unread;
+static uint8_t unread_blob_store[Z_MSG_MAX_BLOBS][Z_MSG_UNREAD_BYTES];
+
+static int scratch_off(const void *p, const void *base, size_t n) {
+	uintptr_t u = (uintptr_t)p;
+	uintptr_t b = (uintptr_t)base;
+	if (!p || u < b || u >= b + n) return -1;
+	return (int)(u - b);
+}
+
+static void retarget_obj(z_obj_t *obj, const z_msg_t *src, z_msg_t *dst) {
+	int off;
+
+	if (!obj) return;
+
+	if (obj->type == Z_BLOB) {
+		off = scratch_off(obj->val.ptr, src->_blobs, sizeof src->_blobs);
+		if (off >= 0)
+			obj->val.ptr = (uint8_t *)dst->_blobs + off;
+		return;
+	}
+
+	if (obj->type != Z_LIST && obj->type != Z_MAP) return;
+
+	off = scratch_off(obj->val.ptr, src->_tables, sizeof src->_tables);
+	if (off < 0) return;
+	obj->val.ptr = (uint8_t *)dst->_tables + off;
+
+	z_obj_table_t *t = obj->val.ptr;
+	int a = scratch_off(t->a, src->_items, sizeof src->_items);
+	if (a >= 0) t->a = (z_obj_t *)((uint8_t *)dst->_items + a);
+	if (t->b) {
+		int b = scratch_off(t->b, src->_items, sizeof src->_items);
+		if (b >= 0) t->b = (z_obj_t *)((uint8_t *)dst->_items + b);
+	}
+
+	for (uint32_t i = 0; i < t->len; i++) {
+		retarget_obj(&t->a[i], src, dst);
+		if (t->b) retarget_obj(&t->b[i], src, dst);
+	}
+}
+
+static void keep_blob_bytes(z_obj_t *obj) {
+	if (!obj) return;
+
+	if (obj->type == Z_BLOB) {
+		z_blob_t *b = obj->val.ptr;
+		int off, idx;
+		if (!b || !b->data) return;
+		off = scratch_off(b, msg_unread._blobs, sizeof msg_unread._blobs);
+		if (off < 0 || (off % (int)sizeof(z_blob_t)) != 0) return;
+		idx = off / (int)sizeof(z_blob_t);
+		if (b->len > Z_MSG_UNREAD_BYTES) return;
+		memcpy(unread_blob_store[idx], b->data, b->len);
+		b->data = unread_blob_store[idx];
+		return;
+	}
+
+	if (obj->type != Z_LIST && obj->type != Z_MAP) return;
+	z_obj_table_t *t = obj->val.ptr;
+	if (!t) return;
+	for (uint32_t i = 0; i < t->len; i++) {
+		keep_blob_bytes(&t->a[i]);
+		if (t->b) keep_blob_bytes(&t->b[i]);
+	}
+}
 
 z_rv z_msg_read(z_msg_t *msg) {
 	if (msg_have_unread) {
 		*msg = msg_unread;
+		retarget_obj(&msg->obj, &msg_unread, msg);
 		msg_have_unread = 0;
 		return Z_OK;
 	}
@@ -64,6 +135,8 @@ z_rv z_msg_read(z_msg_t *msg) {
 z_rv z_msg_unread(const z_msg_t *msg) {
 	if (!msg || msg_have_unread) return Z_FAIL;
 	msg_unread = *msg;
+	retarget_obj(&msg_unread.obj, msg, &msg_unread);
+	keep_blob_bytes(&msg_unread.obj);
 	msg_have_unread = 1;
 	return Z_OK;
 }
