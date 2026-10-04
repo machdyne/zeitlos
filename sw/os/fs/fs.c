@@ -1143,6 +1143,11 @@ int fs_load_exec(uint32_t dst, char *path, const z_exec_info_t *info) {
 	// 1KB chunks. Alternating FatFs calls from different processes is
 	// ordinary single-threaded FatFs usage; what it does not tolerate
 	// is two at once, and that is still impossible.
+	//
+	// The dispatcher must not also hold the guard across PROC_RUN.
+	// k_fs_enter() timestamps only the 0 -> 1 transition, so an outer
+	// hold would keep these brackets from restarting the clock and
+	// the cap would fire inside f_read.
 	k_fs_enter();
 	res = f_open(&f, path, FA_READ | FA_OPEN_EXISTING);
 	k_fs_leave();

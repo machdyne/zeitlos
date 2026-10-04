@@ -246,6 +246,18 @@ static bool contains(const uint8_t *h, uint32_t hn, const void *n, uint32_t nn) 
 	return false;
 }
 
+// The session that owns this conn_id, or an empty stand-in once it has
+// been freed. conn_id is not the slot index.
+static sess_t *slot_of(uint32_t conn) {
+	static sess_t none;
+	if (conn) {
+		for (int i = 0; i < MAX_SESS; i++)
+			if (sess[i].net.conn_id == conn) return &sess[i];
+	}
+	memset(&none, 0, sizeof(none));
+	return &none;
+}
+
 // Every session closed by its peer and past every deadline: all six
 // slots free. 16 s, because a slot whose CONNECT went unanswered waits
 // as long as the connect would have (LAUNCH_TICKS) -- a test that
@@ -253,7 +265,7 @@ static bool contains(const uint8_t *h, uint32_t hn, const void *n, uint32_t nn) 
 static int clean_slate_fails;
 static void clean_slate(void) {
 	for (int i = 0; i < MAX_SESS; i++)
-		if (sess[i].state) deliver(NET, Z_PORT_CLOSE, (uint32_t)i + 1, z_obj_none());
+		if (sess[i].state) deliver(NET, Z_PORT_CLOSE, sess[i].net.conn_id, z_obj_none());
 	steps(3);
 	ticks += 16 * Z_TICK_HZ;
 	steps(3);
@@ -415,7 +427,7 @@ int main(void) {
 	n = collect(NET, conn, mark, buf, sizeof(buf));
 	CK(contains(buf, n, "connecting to repl0", 19), "right password: connecting");
 	CK(!contains(buf, n, "horse", 5), "still not echoed");
-	CK(proc_runs == 1 && sess[conn - 1].state == S_LAUNCH, "repl was not running: started");
+	CK(proc_runs == 1 && slot_of(conn)->state == S_LAUNCH, "repl was not running: started");
 	steps(3);
 	CK(proc_runs == 1, "and started only once");
 	repl_up = true;
@@ -531,7 +543,7 @@ int main(void) {
 	CK(find(NET, Z_PORT_CLOSE, mark) >= 0, "repl closing closes the TCP side");
 	collect(NET, conn, mark, buf, sizeof(buf));
 	steps(2);
-	CK(!sess[conn - 1].state, "and the session is freed once acked");
+	CK(!slot_of(conn)->state, "and the session is freed once acked");
 
 	// -- 5. three wrong passwords --
 	mark = nout;
@@ -540,7 +552,7 @@ int main(void) {
 	conn = conn_since(mark, __LINE__);
 	for (int i = 0; i < 3; i++) { type(conn, "bad\r", 4); steps(2); collect(NET, conn, mark, buf, sizeof(buf)); mark = nout; }
 	steps(2);
-	CK(find(NET, Z_PORT_CLOSE, 0) >= 0 && (sess[conn - 1].state == S_DRAIN || !sess[conn - 1].state),
+	CK(find(NET, Z_PORT_CLOSE, 0) >= 0 && (slot_of(conn)->state == S_DRAIN || !slot_of(conn)->state),
 		"closed after three");
 	collect(NET, conn, 0, buf, sizeof(buf));
 	steps(3);
@@ -577,10 +589,10 @@ int main(void) {
 	conn = conn_since(mark, __LINE__);
 	deliver(NET, Z_PORT_CLOSE, conn, z_obj_none());
 	steps(2);
-	CK(sess[conn - 1].state == S_DRAIN, "waits for its sends to be acked");
+	CK(slot_of(conn)->state == S_DRAIN, "waits for its sends to be acked");
 	ticks += 6 * Z_TICK_HZ;
 	steps(1);
-	CK(!sess[conn - 1].state, "and is freed after a while even if they never are");
+	CK(!slot_of(conn)->state, "and is freed after a while even if they never are");
 
 	// -- 9. two logins while repl is not running start it once --
 	repl_up = false;
@@ -596,7 +608,7 @@ int main(void) {
 		type(c1, "correct horse\r", 14);
 		type(c2, "correct horse\r", 14);
 		steps(3);
-		CK(sess[c1 - 1].state == S_LAUNCH && sess[c2 - 1].state == S_LAUNCH, "both waiting for repl");
+		CK(slot_of(c1)->state == S_LAUNCH && slot_of(c2)->state == S_LAUNCH, "both waiting for repl");
 		CK(proc_runs == 1, "repl started once for both (%d)", proc_runs);
 		repl_up = true;
 		mark = nout;
@@ -606,7 +618,7 @@ int main(void) {
 		deliver(REPL, Z_PORT_CONNECTED, 0, z_obj_uint32(3));
 		deliver(REPL, Z_PORT_CONNECTED, 0, z_obj_uint32(4));
 		step();
-		CK(sess[c1 - 1].app.conn_id == 3 && sess[c2 - 1].app.conn_id == 4,
+		CK(slot_of(c1)->app.conn_id == 3 && slot_of(c2)->app.conn_id == 4,
 			"answers matched to CONNECTs in order");
 	}
 
@@ -622,7 +634,7 @@ int main(void) {
 		steps(2);
 		deliver(REPL, Z_PORT_CONNECTED, 0, z_obj_uint32(5));
 		steps(2);
-		CK(sess[cs - 1].state == S_OPEN && sess[cs - 1].app.conn_id == 5, "a session on the backend");
+		CK(slot_of(cs)->state == S_OPEN && slot_of(cs)->app.conn_id == 5, "a session on the backend");
 		ticks += 10;                // it types after the other sessions did
 		type(cs, "vi\r", 3);
 		steps(2);                   // sent to the backend, and NOT acked yet
@@ -635,11 +647,11 @@ int main(void) {
 		CK(cv >= 0, "and connects to the child's port");
 		deliver(22, Z_PORT_CONNECTED, 0, z_obj_uint32(1));
 		steps(2);
-		CK(sess[cs - 1].state == S_OPEN && sess[cs - 1].app_pid == 22, "now on the child");
-		CK(sess[cs - 1].old_app.pending_count == 1, "the old port's unacked send is remembered");
+		CK(slot_of(cs)->state == S_OPEN && slot_of(cs)->app_pid == 22, "now on the child");
+		CK(slot_of(cs)->old_app.pending_count == 1, "the old port's unacked send is remembered");
 		deliver(REPL, Z_PORT_DATA_ACK, 5, z_obj_none());      // a late ack for the old port
 		step();
-		CK(sess[cs - 1].old_app.pending_count == 0, "late acks from the old backend still free its sends");
+		CK(slot_of(cs)->old_app.pending_count == 0, "late acks from the old backend still free its sends");
 
 		mark = nout;
 		type(cs, ":q\r", 3);
@@ -653,7 +665,7 @@ int main(void) {
 		mark = nout;
 		deliver(22, Z_PORT_CLOSE, 1, z_obj_none());          // vi exits
 		steps(2);
-		CK(sess[cs - 1].state == S_AWAY && find(NET, Z_PORT_CLOSE, mark) < 0,
+		CK(slot_of(cs)->state == S_AWAY && find(NET, Z_PORT_CLOSE, mark) < 0,
 			"the child closing does not end the session: it waits to be called back");
 		type(cs, "ls\r", 3);                                  // typed meanwhile
 		steps(1);
@@ -668,7 +680,7 @@ int main(void) {
 		mark = nout;
 		steps(2);
 		n = collect(REPL, 5, mark, buf, sizeof(buf));
-		CK(sess[cs - 1].state == S_OPEN && sess[cs - 1].app_pid == REPL && !sess[cs - 1].prev_pid &&
+		CK(slot_of(cs)->state == S_OPEN && slot_of(cs)->app_pid == REPL && !slot_of(cs)->prev_pid &&
 			n == 3 && !memcmp(buf, "ls\r", 3), "back on the backend, with what was typed while away");
 
 		// ... a child that exits WITHOUT closing its port, as vi does on
@@ -677,10 +689,10 @@ int main(void) {
 		step();
 		deliver(22, Z_PORT_CONNECTED, 0, z_obj_uint32(3));
 		steps(2);
-		CK(sess[cs - 1].state == S_OPEN && sess[cs - 1].app_pid == 22, "on the child again");
+		CK(slot_of(cs)->state == S_OPEN && slot_of(cs)->app_pid == 22, "on the child again");
 		type(cs, "zz", 2);                  // sent to the child, never acked: it is gone
 		steps(2);
-		CK(sess[cs - 1].app.pending_count >= 1, "a send to the child is outstanding");
+		CK(slot_of(cs)->app.pending_count >= 1, "a send to the child is outstanding");
 		mark = nout;
 		deliver(REPL, Z_TERM_SET_PORT, 0, z_obj_str("repl0"));   // no CLOSE from vi first
 		step();
@@ -691,7 +703,7 @@ int main(void) {
 		mark = nout;
 		steps(2);
 		n = collect(REPL, 5, mark, buf, sizeof(buf));
-		CK(sess[cs - 1].state == S_OPEN && sess[cs - 1].app_pid == REPL && !sess[cs - 1].prev_pid &&
+		CK(slot_of(cs)->state == S_OPEN && slot_of(cs)->app_pid == REPL && !slot_of(cs)->prev_pid &&
 			n == 3 && !memcmp(buf, "ls\r", 3), "home, with what was typed (%u)", n);
 
 		// ... and if the call-back never comes, it goes back by itself
@@ -704,7 +716,7 @@ int main(void) {
 		mark = nout;
 		ticks += 11 * Z_TICK_HZ;
 		steps(2);
-		CK(find(REPL, Z_PORT_CONNECT, mark) >= 0 && !strcmp(sess[cs - 1].target, "repl0"),
+		CK(find(REPL, Z_PORT_CONNECT, mark) >= 0 && !strcmp(slot_of(cs)->target, "repl0"),
 			"no call-back: reconnects to the backend on its own");
 	}
 
@@ -734,7 +746,7 @@ int main(void) {
 	// closed by their peers, and their sends acked, so all six slots
 	// are free again.
 	for (int i = 0; i < MAX_SESS; i++)
-		if (sess[i].state) deliver(NET, Z_PORT_CLOSE, (uint32_t)i + 1, z_obj_none());
+		if (sess[i].state) deliver(NET, Z_PORT_CLOSE, sess[i].net.conn_id, z_obj_none());
 	steps(3);
 	// Past the drain deadline (acks from gone peers). 16 s, not 6: the
 	// call-back test above ends with a CONNECT repl never answered, and
@@ -828,7 +840,7 @@ int main(void) {
 			c = conn_since(m0, __LINE__);
 			type(c, "GET /inde", 9); steps(2);
 			type(c, "x.html HTTP/1.0\r\nX: y\r", 22); steps(2);
-			CK(sess[c - 1].http == H_REQ, "no answer until the blank line");
+			CK(slot_of(c)->http == H_REQ, "no answer until the blank line");
 			type(c, "\n\r\n", 3); steps(4);
 			uint32_t g = collect(NET, c, m0, resp, sizeof(resp));
 			resp[g] = 0;
@@ -1113,7 +1125,7 @@ int main(void) {
 		steps(2);
 		deliver(REPL, Z_PORT_CONNECTED, 0, z_obj_uint32(6));
 		steps(2);
-		CK(sess[tc - 1].state == S_OPEN && sess[tc - 1].app.connected, "(a telnet session on repl)");
+		CK(slot_of(tc)->state == S_OPEN && slot_of(tc)->app.connected, "(a telnet session on repl)");
 		type(tc, "(loop)\r", 7);                     // sent, never acked: repl is about to die
 		steps(2);
 		collect(NET, tc, conn_mark, buf, 0);        // net acks what it was sent, as the real one does
@@ -1127,7 +1139,7 @@ int main(void) {
 			"telnet: the user is told, and the connection closed");
 		CK(find(REPL, Z_PORT_CLOSE, mark) < 0, "nothing is sent to the dead process");
 		steps(3);
-		CK(sess[tc - 1].state == S_FREE, "the session freed, its unacked sends to repl with it");
+		CK(slot_of(tc)->state == S_FREE, "the session freed, its unacked sends to repl with it");
 		dead_pid = 0;
 	}
 	{
@@ -1177,11 +1189,11 @@ int main(void) {
 		step();
 		deliver(22, Z_PORT_CONNECTED, 0, z_obj_uint32(4));
 		steps(2);
-		CK(sess[tc - 1].app_pid == 22 && sess[tc - 1].prev_pid == REPL, "(the session handed to vi)");
+		CK(slot_of(tc)->app_pid == 22 && slot_of(tc)->prev_pid == REPL, "(the session handed to vi)");
 		dead_pid = 22;
 		ticks += 2 * Z_TICK_HZ;
 		steps(3);
-		CK(sess[tc - 1].state == S_AWAY, "vi dying silently: the session waits for posix's call-back");
+		CK(slot_of(tc)->state == S_AWAY, "vi dying silently: the session waits for posix's call-back");
 		dead_pid = 0;
 	}
 
@@ -1206,14 +1218,14 @@ int main(void) {
 		uint32_t a = conn_since(mark, __LINE__);
 		type(a, "correct horse\r", 14);
 		steps(2);
-		CK(sess[a - 1].state == S_CONNECT && find(REPL, Z_PORT_CONNECT, mark) >= 0, "(A waits for repl)");
+		CK(slot_of(a)->state == S_CONNECT && find(REPL, Z_PORT_CONNECT, mark) >= 0, "(A waits for repl)");
 		deliver(NET, Z_PORT_CLOSE, a, z_obj_none());            // A's peer goes
 		steps(2);
-		CK(sess[a - 1].state == S_DRAIN && sess[a - 1].connect_orphan,
+		CK(slot_of(a)->state == S_DRAIN && slot_of(a)->connect_orphan,
 			"A ended with its CONNECT unanswered: the slot is kept for the answer");
 		ticks += 6 * Z_TICK_HZ;
 		steps(2);
-		CK(sess[a - 1].state == S_DRAIN, "... past the usual 5 s drain, as long as a connect may take");
+		CK(slot_of(a)->state == S_DRAIN, "... past the usual 5 s drain, as long as a connect may take");
 
 		mark = nout;
 		connect_from(2, 0xC0A80151, 23, true);
@@ -1222,7 +1234,7 @@ int main(void) {
 		CK(b != a, "(B gets another slot)");
 		type(b, "correct horse\r", 14);
 		steps(2);
-		CK(sess[b - 1].state == S_CONNECT, "(B waits for repl too)");
+		CK(slot_of(b)->state == S_CONNECT, "(B waits for repl too)");
 
 		mark = nout;
 		collect(NET, a, a_mark, buf, 0);                        // net acks what A was sent, as it does
@@ -1230,11 +1242,11 @@ int main(void) {
 		steps(2);
 		int cl = find(REPL, Z_PORT_CLOSE, mark);
 		CK(cl >= 0 && out[cl].tag == 9, "A's late connection is closed at once, not leaked in repl");
-		CK(sess[b - 1].state == S_CONNECT && !sess[b - 1].app.connected, "... and not given to B");
-		CK(sess[a - 1].state == S_FREE, "A's slot is free once answered");
+		CK(slot_of(b)->state == S_CONNECT && !slot_of(b)->app.connected, "... and not given to B");
+		CK(slot_of(a)->state == S_FREE, "A's slot is free once answered");
 		deliver(REPL, Z_PORT_CONNECTED, 0, z_obj_uint32(10));   // then B's
 		steps(2);
-		CK(sess[b - 1].state == S_OPEN && sess[b - 1].app.conn_id == 10, "B gets its own connection");
+		CK(slot_of(b)->state == S_OPEN && slot_of(b)->app.conn_id == 10, "B gets its own connection");
 
 		// the same for a REFUSED
 		clean_slate();
@@ -1248,10 +1260,10 @@ int main(void) {
 		steps(2);
 		collect(NET, a, mark, buf, 0);
 		steps(1);
-		CK(sess[a - 1].state == S_DRAIN, "(acked, but still waiting for repl's answer)");
+		CK(slot_of(a)->state == S_DRAIN, "(acked, but still waiting for repl's answer)");
 		deliver(REPL, Z_PORT_REFUSED, 0, z_obj_str("repl: too many connections"));
 		steps(2);
-		CK(sess[a - 1].state == S_FREE, "a late REFUSED frees the slot too");
+		CK(slot_of(a)->state == S_FREE, "a late REFUSED frees the slot too");
 	}
 
 	// -- 17. listener lists --
@@ -1378,7 +1390,7 @@ int main(void) {
 		static const uint8_t offer[] = { IAC, WILL, OPT_ECHO, IAC, WILL, OPT_SGA };
 		CK(n == 6 && !memcmp(buf, offer, 6),
 			"noauth: WILL ECHO, WILL SGA -- and nothing else of ours, no banner, no prompt (%u)", n);
-		CK(proc_runs == runs + 1 && sess[tc - 1].state == S_LAUNCH, "bbs0 not running: `bbs` started");
+		CK(proc_runs == runs + 1 && slot_of(tc)->state == S_LAUNCH, "bbs0 not running: `bbs` started");
 		type(tc, "guest\r", 6);                             // typed before it is up
 		steps(2);
 		bbs_up = true;

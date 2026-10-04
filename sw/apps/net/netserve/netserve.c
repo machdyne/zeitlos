@@ -103,7 +103,7 @@ typedef struct { const uint8_t *data; uint32_t len, off, tag; } held_t;
 typedef struct {
 	uint8_t state, kind;
 	uint32_t relay;             // net's relay id, the tag of its CONNECT
-	z_port_t net;               // to net; conn_id is ours: index + 1
+	z_port_t net;               // to net; conn_id is ours, and not reused
 	z_port_t app;               // to the backend port
 	uint32_t app_pid;
 	char target[32];            // the port name `app` is (or is going) to
@@ -169,6 +169,23 @@ typedef struct {
 
 static sess_t sess[MAX_SESS];
 
+// The listener names each connection, and the name has to stay unique
+// while any relay still holds it (znet.h). The session slot can be
+// free again before that relay has finished closing, so the name is
+// not the slot.
+static uint32_t next_conn_id = 1;
+
+static uint32_t alloc_conn_id(void) {
+	for (;;) {
+		uint32_t id = next_conn_id++;
+		int used = 0;
+		if (!id) continue;
+		for (int i = 0; i < MAX_SESS; i++)
+			if (sess[i].state && sess[i].net.conn_id == id) used = 1;
+		if (!used) return id;
+	}
+}
+
 static uint32_t net_pid;
 static uint32_t connect_seq;
 
@@ -213,9 +230,10 @@ static void ack(uint32_t from, uint32_t tag) {
 }
 
 static sess_t *by_net(uint32_t tag) {
-	if (tag < 1 || tag > MAX_SESS) return NULL;
-	sess_t *s = &sess[tag - 1];
-	return s->state ? s : NULL;
+	if (!tag) return NULL;
+	for (int i = 0; i < MAX_SESS; i++)
+		if (sess[i].state && sess[i].net.conn_id == tag) return &sess[i];
+	return NULL;
 }
 
 static sess_t *by_app(uint32_t from, uint32_t tag) {
@@ -711,7 +729,7 @@ static void ssh_event(void *user, sshs_event_t ev, const uint8_t *d, uint32_t n,
 	sess_t *s = user;
 	switch (ev) {
 	case SSHS_EV_LOG:
-		printf("netserve: session %lu: %s\n", (unsigned long)((uint32_t)(s - sess) + 1), text);
+		printf("netserve: session %lu: %s\n", (unsigned long)s->net.conn_id, text);
 		break;
 	case SSHS_EV_SHELL:
 		app_connect(s);
@@ -728,7 +746,7 @@ static void ssh_event(void *user, sshs_event_t ev, const uint8_t *d, uint32_t n,
 		s->peer_eof = true;
 		break;
 	case SSHS_EV_CLOSED:
-		printf("netserve: session %lu: %s\n", (unsigned long)((uint32_t)(s - sess) + 1),
+		printf("netserve: session %lu: %s\n", (unsigned long)s->net.conn_id,
 			text ? text : "ssh: closed");
 		if (s->state != S_CLOSING && s->state != S_DRAIN) close_after_flush(s);
 		break;
@@ -979,7 +997,7 @@ static void on_connect(const z_msg_t *m) {
 	s->relay = m->tag;
 	s->info = info;
 	s->net.peer_pid = m->from;
-	s->net.conn_id = (uint32_t)(s - sess) + 1;
+	s->net.conn_id = alloc_conn_id();
 	s->net.connected = true;
 	s->noauth = svc->noauth;
 	s->listener = (uint16_t)li;
@@ -1067,7 +1085,7 @@ static void handoff(const z_msg_t *m) {
 	if (!s) return;
 
 	printf("netserve: session %lu handed to %s\n",
-		(unsigned long)((uint32_t)(s - sess) + 1), name);
+		(unsigned long)s->net.conn_id, name);
 
 	if (parent) {
 		// The child is gone (the parent only calls back when it is):
@@ -1245,7 +1263,7 @@ static void poll_session(sess_t *s) {
 		s->peer_check = now + Z_TICK_HZ;
 		if (z_port_peer_gone(&s->app)) {
 			printf("netserve: session %lu: its port's process (pid %lu) is gone\n",
-				(unsigned long)((uint32_t)(s - sess) + 1), (unsigned long)s->app_pid);
+				(unsigned long)s->net.conn_id, (unsigned long)s->app_pid);
 			backend_closed(s, true);
 		}
 	}
@@ -1308,7 +1326,7 @@ static void poll_session(sess_t *s) {
 		else if (now - s->stall_since > 3u * Z_TICK_HZ) {
 			printf("netserve: session %lu stalled (state %u): to peer %u buffered, %u msgs "
 				"held; to port %u buffered, %u msgs held; unacked: %u to net, %u to the port\n",
-				(unsigned long)((uint32_t)(s - sess) + 1), (unsigned)s->state,
+				(unsigned long)s->net.conn_id, (unsigned)s->state,
 				(unsigned)s->to_net_len, (unsigned)s->held_app_n, (unsigned)s->to_app_len,
 				(unsigned)s->held_net_n, (unsigned)s->net.pending_count,
 				(unsigned)s->app.pending_count);
@@ -1335,7 +1353,7 @@ static void poll_session(sess_t *s) {
 	if (s->state == S_DRAIN && ((!s->net.pending_count && !s->app.pending_count &&
 			!s->old_app.pending_count && !s->connect_orphan) ||
 			(int32_t)(now - s->deadline) >= 0)) {
-		printf("netserve: session %lu ended\n", (unsigned long)((uint32_t)(s - sess) + 1));
+		printf("netserve: session %lu ended\n", (unsigned long)s->net.conn_id);
 		ssh_release(s);
 		memset(s, 0, sizeof(*s));
 	}

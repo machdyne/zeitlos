@@ -213,13 +213,20 @@ themselves -- the guard is inside.
 
 ### The syscalls it covers
 
-`k_syscall_touches_fs()` lists them. `PROC_RUN` is in the list and is
-the important one -- it resolves *and loads* an executable, so
-`init` starting `net` and `wm`'s `dock_build()` probing for apps were
-the two callers that actually collided.
+`k_syscall_touches_fs()` lists them. `PROC_RUN` is not in the list.
+Loading a program is not one FatFs call: `fs_load_exec()` brackets
+each open, seek, 1KB read and close on its own, and lets the
+scheduler run between them. A whole program is hundreds of
+milliseconds, far past the cap below. The dispatcher's hold is timed
+from the moment the counter leaves zero, and a nested enter does not
+restart that clock, so wrapping `PROC_RUN` would let the cap fire
+inside a read. The card is then mid-command, and the next user gets
+`FR_DISK_ERR` until a manual `mount`. Between chunks chip-select is
+up, so another process using the card is ordinary single-threaded
+FatFs use.
 
 ```
-PROC_RUN        FS_OPEN_WRITE     FS_MKDIR
+FS_OPEN_WRITE   FS_MKDIR
 FS_SIZE         FS_OPEN_READ      FS_TOUCH
 FS_READ         FS_READ_CHUNK     FS_SEEK
 FS_WRITE        FS_WRITE_CHUNK    FS_DF
@@ -259,7 +266,8 @@ prevents**, so the deferral is allowed to lose.
 cycles per byte (see `sdmm.c`'s header), a 512-byte sector is about
 0.5ms, so a healthy operation is nowhere near the cap -- even a 64KB
 single-syscall `k_fs_read` lands around 64ms. Nothing legitimate should
-ever hit it.
+ever hit it. A whole program load used to, while `PROC_RUN` held the
+guard for the transfer; that syscall is no longer in the list above.
 
 ## Performance
 
