@@ -451,6 +451,53 @@ int main(void) {
 		CK(mo[nmo - 1].subject == Z_NET_LISTEN_REPLY && mo[nmo - 1].u32 == 0, "and the port is its again");
 	}
 
+	/* -- a reused conn id: the open relay gets the new bytes -- */
+	{
+		uint32_t oa = handshake(4300, 11000);
+		c = mfind(Z_PORT_CONNECT, nmo - 1);
+		if (c < 0) { printf("FAIL: no connection offered -- stopping\n"); return 1; }
+		uint32_t old = mo[c].tag;
+		m = msg(OWNER, Z_PORT_CONNECTED, old, z_obj_uint32(77));
+		relay_msg(&m);
+		rx(4300, 23, 11001, oa, TCP_FLAG_ACK | TCP_FLAG_PSH, "old", 3);
+		relay_poll();
+		CK(relays[old - 1].state == R_OPEN && relays[old - 1].port.pending_count == 1,
+			"reuse: the first relay has a send the listener has not acked");
+		m = msg(OWNER, Z_PORT_CLOSE, 77, z_obj_none());
+		relay_msg(&m);
+		nseg = 0;
+		rx(4300, 23, 11004, oa, TCP_FLAG_RST, NULL, 0);
+		CK(relays[old - 1].state == R_DRAIN && relays[old - 1].port.conn_id == 77,
+			"reuse: TCP is gone, the relay still holds id 77 while that send is unacked");
+		uint32_t pend = relays[old - 1].port.pending_count;
+		handshake(4301, 12000);
+		c = mfind(Z_PORT_CONNECT, nmo - 1);
+		if (c < 0) { printf("FAIL: no second connection offered -- stopping\n"); return 1; }
+		uint32_t nw = mo[c].tag;
+		m = msg(OWNER, Z_PORT_CONNECTED, nw, z_obj_uint32(77));
+		relay_msg(&m);
+		CK(relays[nw - 1].state == R_OPEN && relays[nw - 1].port.conn_id == 77 && nw != old,
+			"reuse: the new relay is open on the same id");
+		nseg = 0;
+		m = data_msg(OWNER, 77, "new", 3);
+		relay_msg(&m);
+		relay_poll();
+		int on_new = 0;
+		for (int i = 0; i < nseg; i++)
+			if (segs[i].len >= 3 && !memcmp(segs[i].data, "new", 3)) on_new = 1;
+		CK(on_new, "reuse: the new connection's bytes go out, not into the relay that is draining");
+		m = msg(OWNER, Z_PORT_DATA_ACK, 77, z_obj_none());
+		relay_msg(&m);
+		CK(relays[old - 1].port.pending_count == pend,
+			"reuse: that ack is not taken by the relay that is draining");
+		ticks += 6u * Z_TICK_HZ;
+		relay_poll();
+		CK(relays[old - 1].state == R_FREE, "reuse: the draining relay goes at its deadline");
+		rx(4301, 23, 12001, 0, TCP_FLAG_RST, NULL, 0);
+		listener_acks_all();
+		CK(relay_count() == 0, "reuse: the pool is clear again (%d left)", relay_count());
+	}
+
 	/* -- no relay free: RST -- */
 	for (int i = 0; i < RELAY_MAX; i++) handshake((uint16_t)(5000 + i), 3000u + 100u * (uint32_t)i);
 	nseg = 0;

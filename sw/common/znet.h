@@ -166,6 +166,11 @@
 // with tag 0): a process with several connections arriving at once has
 // to say which one it is answering. Reply with z_msg_new_send().
 //
+// The conn_id in that CONNECTED is the listener's name for the
+// connection. It has to stay unique for as long as any relay still
+// holds it, including one that is closing or draining. Reusing it
+// delivers this connection's acknowledgements to the old relay.
+//
 // The blob is net's, and valid until the connection ends; copy what you
 // need while handling the CONNECT.
 //

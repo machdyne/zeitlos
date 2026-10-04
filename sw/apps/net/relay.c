@@ -372,12 +372,21 @@ void relay_unlisten(const z_msg_t *msg) {
 
 // -- messages from listeners --
 
+// The listener's conn_id. An open relay wins over one that is closing
+// or draining and still holds the same id: otherwise the new
+// connection's acknowledgements land on the old relay and the new one
+// stalls. A closing relay is still returned when it is the only match,
+// so its own acknowledgements arrive and the slot can be freed.
 static relay_t *by_conn(uint32_t from, uint32_t tag) {
+	relay_t *closing = NULL;
 	for (int i = 0; i < RELAY_MAX; i++) {
 		relay_t *r = &relays[i];
-		if (r->state >= R_OPEN && r->owner == from && r->port.conn_id == tag) return r;
+		if (r->state < R_OPEN || r->owner != from || r->port.conn_id != tag)
+			continue;
+		if (r->state == R_OPEN) return r;
+		if (!closing) closing = r;
 	}
-	return NULL;
+	return closing;
 }
 
 bool relay_msg(const z_msg_t *msg) {
