@@ -296,6 +296,12 @@ without closing gets its slot back.
 cannot fetch a second one, so the wordmark is an inlined PNG used as a
 CSS mask and everything else is in the file.
 
+One file, two homes. The ESP32 firmware builds it in
+(`EMBED_TXTFILES`). For the desktop Zeitlos serves itself, the card
+image carries the same file as `/zerdesk/index.html` and `zerdesk`
+reads it from there ("Served by Zeitlos", below), so that copy can be
+edited on the machine.
+
 **The canvas.** 640x480, `image-rendering: pixelated`, sized to the
 window at 4:3. `fit()` prefers a whole number of framebuffer pixels
 per screen pixel when that costs less than one CSS pixel of slack over
@@ -423,7 +429,7 @@ listener inside `netserve`. `net` accepts the TCP connections
 
 | | |
 |---|---|
-| `GET /` | the viewer page, `esp32/zeitlos-nic/web/index.html`, embedded as it is. One file for both paths; the page is not modified for this one |
+| `GET /` | the viewer page, read from the card: `/zerdesk/index.html`. The card image puts `esp32/zeitlos-nic/web/index.html` there unchanged, so both paths serve one file |
 | `GET /ws` | the WebSocket. One stripe is `[idx:u8 \| len:u16le \| PackBits + trailer]`, the bytes `screend` forwards today. Keys come back as three bytes, the pointer as five, and `zinput` injects them the same way `esp32link` does |
 
 There is no password. The port is `apps.zerdesk.port`, **8080** unless
@@ -441,6 +447,37 @@ past that gets a plain-text `503` whose body is
 `Too many viewers connected`. The page is unchanged, so that is what
 the browser shows. The ESP32 path is different: `screend` allows
 eight, and a ninth evicts the least recently served.
+
+**The page is on the card.** `zerdesk` carries no copy of it. Each
+`GET /` opens `/zerdesk/index.html`, takes its size for
+`Content-Length`, and sends it 1 KB at a time through the same buffer
+the stripes use, so the page costs no memory of its own and may be any
+size. An edited page is what the next browser gets, with no restart.
+Reading 18 KB from the card makes the request about 65 ms slower than
+a built-in page did (about 0.27 s instead of 0.21 s on a direct
+cable), once per page load.
+
+It is outside `/www` on purpose: `netserve` serves that directory, and
+a viewer page served from there would open its WebSocket to
+`netserve`. `/zerdesk` sits beside the other apps' data directories,
+`/bbs`, `/fed` and `/web`.
+
+Without the file there is no remote desktop, and both ends say why.
+At start the console says
+
+```
+zerdesk: NO PAGE: /zerdesk/index.html is not on the card. Browsers get a plain-text error until it is there; the card image carries it.
+```
+
+and `zerdesk` keeps running. A browser asking for `/` then gets a
+plain-text `503`:
+
+```
+No remote desktop: the viewer page /zerdesk/index.html is not on the card. The card image carries it; its source is esp32/zeitlos-nic/web/index.html.
+```
+
+and the console logs each refusal. Putting the file back is enough:
+the next request is served.
 
 **Started by hand.** From `term`, `run zerdesk`. It does not start
 by itself. On the ESP32 bitstream it prints that the link is present
@@ -482,7 +519,8 @@ over. See [networking.md](networking.md), "Accepted connections".
 **Memory.** An app the kernel does not name gets 16 KB of stack and
 heap. Everything big is static. What the heap holds is `zport`'s copy
 of bytes in flight to `net`, and that is capped at 6 KB in total and
-4 KB to one viewer. A viewer that makes no progress for 10 seconds is
+4 KB to one viewer. The page is read into that buffer as it goes, so
+it adds nothing. A viewer that makes no progress for 10 seconds is
 dropped. While a viewer is caught up, one byte goes out every five
 seconds; the page ignores it, and a send that fails is how a browser
 that vanished gets its slot back.
