@@ -1,0 +1,208 @@
+BLOCK RESETPATHS;
+BLOCK ASYNCPATHS;
+
+# ---------------------------------------------------------------------
+# Machdyne Minze V1 -- LFE5U-12F CABGA256, 32MB SDRAM, 9-bit VGA, one
+# USB host port, microSD, one PMOD port, USB-C.
+#
+# Checked against the board schematic (github.com/machdyne/minze,
+# pcb/minze_v1.pdf). Differences from the board repo's minze_v1.lpf:
+#
+#   * B1/B2 are the USB host socket (schematic USB1_DP/USB1_DN, and
+#     LiteX's usb_host), NOT the UART the board repo's file names
+#     them. The debug UART is on J1 (UART_RX) and J2 (UART_TX).
+#
+#   * VGA is a 3-bit-per-colour resistor DAC (RGB333, 512 colours).
+#     The SOC drives one bit per colour, so only the most significant
+#     resistor of each ladder is used -- VGA_R0/G0/B0, the 536R ones,
+#     on T2, N1 and R4. The other six are listed, commented, below.
+#
+# The SDRAM's byte lanes are Minze's own: not Konfekt's, not Lakritz's
+# (dq[2]/dq[3], the whole upper byte, and UDQM differ). The block below
+# was checked against both the schematic and the board repo's file.
+#
+# THE PMOD. This file describes the default build, which is also the
+# minze_gpio release target: the console is USB CDC-ACM on the USB-C
+# socket, and the one PMOD carries GPIO port 0. release/hw/boards/
+# minze.spec carries the same ball map as pmod.a; `zrelease check`
+# reports the target as identical to this file.
+# ---------------------------------------------------------------------
+
+# CLOCK
+LOCATE COMP "CLK_48" SITE "A7";
+IOBUF PORT "CLK_48" IO_TYPE=LVCMOS33;
+FREQUENCY PORT "CLK_48" 48.0 MHz;
+
+# The one LED (A2). LED_B is the SOC's always-present status LED.
+LOCATE COMP "LED_B" SITE "A2";
+IOBUF PORT "LED_B" IO_TYPE=LVCMOS33;
+
+# SDRAM (32MB, 16-bit)
+LOCATE COMP "sdram_clock" SITE "F16";
+IOBUF PORT "sdram_clock" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_a[0]" SITE "M13";
+IOBUF PORT "sdram_a[0]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_a[1]" SITE "M14";
+IOBUF PORT "sdram_a[1]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_a[2]" SITE "L14";
+IOBUF PORT "sdram_a[2]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_a[3]" SITE "L13";
+IOBUF PORT "sdram_a[3]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_a[4]" SITE "G12";
+IOBUF PORT "sdram_a[4]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_a[5]" SITE "G13";
+IOBUF PORT "sdram_a[5]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_a[6]" SITE "G14";
+IOBUF PORT "sdram_a[6]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_a[7]" SITE "G15";
+IOBUF PORT "sdram_a[7]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_a[8]" SITE "F12";
+IOBUF PORT "sdram_a[8]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_a[9]" SITE "F13";
+IOBUF PORT "sdram_a[9]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_a[10]" SITE "T15";
+IOBUF PORT "sdram_a[10]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_a[11]" SITE "F14";
+IOBUF PORT "sdram_a[11]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_a[12]" SITE "E14";
+IOBUF PORT "sdram_a[12]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_ba[0]" SITE "P14";
+IOBUF PORT "sdram_ba[0]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_ba[1]" SITE "N13";
+IOBUF PORT "sdram_ba[1]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_cs_n" SITE "G16";
+IOBUF PORT "sdram_cs_n" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_cke" SITE "F15";
+IOBUF PORT "sdram_cke" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_ras_n" SITE "J16";
+IOBUF PORT "sdram_ras_n" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_cas_n" SITE "K16";
+IOBUF PORT "sdram_cas_n" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_we_n" SITE "L15";
+IOBUF PORT "sdram_we_n" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[0]" SITE "R15";
+IOBUF PORT "sdram_dq[0]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[1]" SITE "R16";
+IOBUF PORT "sdram_dq[1]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[2]" SITE "P15";
+IOBUF PORT "sdram_dq[2]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[3]" SITE "P16";
+IOBUF PORT "sdram_dq[3]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[4]" SITE "N16";
+IOBUF PORT "sdram_dq[4]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[5]" SITE "N14";
+IOBUF PORT "sdram_dq[5]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[6]" SITE "M16";
+IOBUF PORT "sdram_dq[6]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[7]" SITE "M15";
+IOBUF PORT "sdram_dq[7]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[8]" SITE "E16";
+IOBUF PORT "sdram_dq[8]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[9]" SITE "D14";
+IOBUF PORT "sdram_dq[9]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[10]" SITE "D16";
+IOBUF PORT "sdram_dq[10]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[11]" SITE "C15";
+IOBUF PORT "sdram_dq[11]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[12]" SITE "C16";
+IOBUF PORT "sdram_dq[12]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[13]" SITE "C14";
+IOBUF PORT "sdram_dq[13]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[14]" SITE "B16";
+IOBUF PORT "sdram_dq[14]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dq[15]" SITE "B15";
+IOBUF PORT "sdram_dq[15]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dm[0]" SITE "L16";
+IOBUF PORT "sdram_dm[0]" IO_TYPE=LVTTL33;
+LOCATE COMP "sdram_dm[1]" SITE "E15";
+IOBUF PORT "sdram_dm[1]" IO_TYPE=LVTTL33;
+
+# USB HOST. Port 0 is the board's USB-A socket (USB1_DP B1, USB1_DN B2).
+# rtl/sysctl.v always builds two host ports; port 1 is parked on C3/D3
+# (PL11C/PL11D, unconnected on the schematic) with pull-downs, so it
+# reads as an empty port -- as on Konfekt, Schoko and Noir.
+LOCATE COMP "usb_host_dp[0]" SITE "B1";
+IOBUF PORT "usb_host_dp[0]" IO_TYPE=LVCMOS33 PULLMODE=NONE;
+LOCATE COMP "usb_host_dm[0]" SITE "B2";
+IOBUF PORT "usb_host_dm[0]" IO_TYPE=LVCMOS33 PULLMODE=NONE;
+LOCATE COMP "usb_host_dp[1]" SITE "C3";
+IOBUF PORT "usb_host_dp[1]" IO_TYPE=LVCMOS33 PULLMODE=DOWN;
+LOCATE COMP "usb_host_dm[1]" SITE "D3";
+IOBUF PORT "usb_host_dm[1]" IO_TYPE=LVCMOS33 PULLMODE=DOWN;
+
+# USB DEVICE -- the USB-C socket, the console (`USB_CDC). The same
+# balls tinydfu-bootloader's minze_v1.lpf and LiteX use.
+LOCATE COMP "usb_ufp_dp" SITE "T6";
+IOBUF PORT "usb_ufp_dp" IO_TYPE=LVCMOS33;
+LOCATE COMP "usb_ufp_dm" SITE "R6";
+IOBUF PORT "usb_ufp_dm" IO_TYPE=LVCMOS33;
+LOCATE COMP "usb_ufp_pull" SITE "R7";
+IOBUF PORT "usb_ufp_pull" IO_TYPE=LVCMOS33;
+
+# VGA: the most significant bit of each 3-bit ladder (536R).
+LOCATE COMP "VGA_R" SITE "T2";
+IOBUF PORT "VGA_R" IO_TYPE=LVCMOS33;
+LOCATE COMP "VGA_G" SITE "N1";
+IOBUF PORT "VGA_G" IO_TYPE=LVCMOS33;
+LOCATE COMP "VGA_B" SITE "R4";
+IOBUF PORT "VGA_B" IO_TYPE=LVCMOS33;
+LOCATE COMP "VGA_HS" SITE "P3";
+IOBUF PORT "VGA_HS" IO_TYPE=LVCMOS33;
+LOCATE COMP "VGA_VS" SITE "R3";
+IOBUF PORT "VGA_VS" IO_TYPE=LVCMOS33;
+# The two lower bits per colour, MSB first after the ones above:
+#   R1 R1 (1K)   R2 R2 (2K2)
+#   G1 P2 (1K)   G2 P1 (2K2)
+#   B1 T3 (1K)   B2 T4 (2K2)
+
+# Configuration SPI flash (MMOD). MCLK is reached through USRMCLK.
+LOCATE COMP "CSPI_SS_FLASH" SITE "N8";
+IOBUF PORT "CSPI_SS_FLASH" IO_TYPE=LVCMOS33;
+LOCATE COMP "CSPI_MISO" SITE "T7";
+IOBUF PORT "CSPI_MISO" IO_TYPE=LVCMOS33;
+LOCATE COMP "CSPI_MOSI" SITE "T8";
+IOBUF PORT "CSPI_MOSI" IO_TYPE=LVCMOS33;
+
+# microSD, SPI mode. Schematic: SD_SCK F2, SD_MOSI K1, SD_SS K2,
+# SD_MISO F3 (SD_DAT1 F1, SD_DAT2 K3 unused in SPI mode).
+LOCATE COMP "SD_SCK" SITE "F2";
+IOBUF PORT "SD_SCK" IO_TYPE=LVCMOS33 PULLMODE=NONE;
+LOCATE COMP "SD_MOSI" SITE "K1";
+IOBUF PORT "SD_MOSI" IO_TYPE=LVCMOS33 PULLMODE=NONE;
+LOCATE COMP "SD_SS" SITE "K2";
+IOBUF PORT "SD_SS" IO_TYPE=LVCMOS33 PULLMODE=NONE;
+LOCATE COMP "SD_MISO" SITE "F3";
+IOBUF PORT "SD_MISO" IO_TYPE=LVCMOS33 PULLMODE=NONE;
+
+# PMOD A: GPIO port 0, `GPIO_PORT0 -- all eight pins, weak pull-ups
+# (release/hw/pmods/gpio.spec). Bits 0-3 are pins 1-4, 4-7 are 7-10.
+#
+#   pin   1    2    3    4    7    8    9    10
+#   ball  B11  B12  B13  B14  A11  A12  A13  A14
+LOCATE COMP "GPIO0[0]" SITE "B11";		# PMODA1
+IOBUF PORT "GPIO0[0]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+LOCATE COMP "GPIO0[1]" SITE "B12";		# PMODA2
+IOBUF PORT "GPIO0[1]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+LOCATE COMP "GPIO0[2]" SITE "B13";		# PMODA3
+IOBUF PORT "GPIO0[2]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+LOCATE COMP "GPIO0[3]" SITE "B14";		# PMODA4
+IOBUF PORT "GPIO0[3]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+LOCATE COMP "GPIO0[4]" SITE "A11";		# PMODA7
+IOBUF PORT "GPIO0[4]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+LOCATE COMP "GPIO0[5]" SITE "A12";		# PMODA8
+IOBUF PORT "GPIO0[5]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+LOCATE COMP "GPIO0[6]" SITE "A13";		# PMODA9
+IOBUF PORT "GPIO0[6]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+LOCATE COMP "GPIO0[7]" SITE "A14";		# PMODA10
+IOBUF PORT "GPIO0[7]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+
+# Debug UART pads (schematic UART_TX J2, UART_RX J1), for a build with
+# `UART0 and without `USB_CDC.
+#LOCATE COMP "UART0_TX" SITE "J2";
+#LOCATE COMP "UART0_RX" SITE "J1";
+
+# PROGRAMN, routed back to a user pin: rtl/sysctl.v pulls it low (open
+# drain) to reconfigure -- `reboot`, docs/zboot.md. M8 is the net
+# tinydfu-bootloader's minze_v1.lpf calls resetn.
+LOCATE COMP "PROGRAMN" SITE "M8";
+IOBUF PORT "PROGRAMN" IO_TYPE=LVCMOS33 OPENDRAIN=ON;

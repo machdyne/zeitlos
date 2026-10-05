@@ -279,12 +279,14 @@ carry.
 | `lakritz_gpio` | port 0 on PMOD A | no ethernet -- `` -SPI_ETH `` |
 | `obst_langkatze_gpio` | port 0 on PMOD B | none; ethernet on PMOD A |
 | `schoko_langkatze_gpio` | port 0 on PMOD B | none; ethernet on PMOD A |
+| `minze_gpio` | port 0 on PMOD A | none; Minze has no ethernet |
 | `sergei_ml1_gpio` | port 0, **4 pins**, on PMOD A | no audio at all -- `` -AUDIO_SPDIF `` |
 
 ```
 ./release/zrelease build lakritz_gpio
 ./release/zrelease build obst_langkatze_gpio
 ./release/zrelease build schoko_langkatze_gpio
+./release/zrelease build minze_gpio
 ```
 
 Target names list PMODs in port order: `obst_langkatze_gpio` is a
@@ -312,6 +314,9 @@ the release spec layer is for; see `rtl/boards.vh`'s ZSPEC note.
   same way: Langkatze on A, GPIO on B. Here the board's own `.lpf` and
   `rtl/boards.vh` block already describe that, so a plain
   `make BOARD=schoko` build has GPIO too.
+- **Minze has one**, with the same USB-C console, so it is free for
+  GPIO. As on Schoko, the board's own `.lpf` and block already put
+  port 0 there.
 
 For a hand build, `rtl/boards.vh` carries a commented `` `GPIO_PORT0 ``
 in each board block explaining what else has to change, and the base

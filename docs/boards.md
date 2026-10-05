@@ -1,7 +1,7 @@
 # Boards
 
 What the SoC actually costs on each ECP5 board, after packing and
-routing. Konfekt, Schoko, Noir and Klinge have their own sections below
+routing. Konfekt, Minze, Schoko, Noir and Klinge have their own sections below
 the main tables, measured later and with newer tools.
 
 [audio.md](audio.md) measures the audio subsystem at synthesis time.
@@ -351,6 +351,29 @@ unmodified, before them:
   there is no AST left to re-elaborate. Non-DDR3 boards build exactly
   as before.
 
+## Minze
+
+Machdyne Minze: ECP5 12F, 32MB SDRAM, VGA (a 9-bit RGB333 resistor
+DAC), one USB host port, microSD, one PMOD, USB-C. Pins are
+`boards/minze_v1.lpf`, checked against the schematic; its header lists
+where the board repo's own file differs (B1/B2 are the USB host socket,
+not a UART). The block is Konfekt's on the same die, with VGA instead
+of DDMI and GPIO on the PMOD instead of audio; the board block and
+`.lpf` describe the `minze_gpio` release target exactly. The console is
+USB CDC-ACM.
+
+| Board | Device | COMB | FF | DP16KD | MULT18 | PLL | `CLK_48` | bitstream |
+|---|---|---|---|---|---|---|---:|---:|
+| Minze | 12k | 21150 / 24288 (87%) | 9664 (39%) | 38 / 56 | 9 / 28 | 2 / 2 | 57.87 MHz | 501,327 B |
+
+Every clock passed: the pixel clock at 76.78 MHz against 25.2, the USB
+12 MHz at 74.10. VGA uses only the most significant resistor of each
+colour's ladder (8 colours of the board's 512), since the SOC drives
+one bit per colour; the other six balls are listed in the `.lpf`. The
+BIOS is 1987 of 2048 words, the jumploader 99,628 bytes, and the
+bitstream fits the 256 KB DFU layout. At 87%, the same advice as
+Konfekt applies: re-check timing after any change.
+
 ## Klinge
 
 Machdyne Klinge: ECP5 25F, 512MB DDR3L (MT41K256M16TW-107:P, the
@@ -408,9 +431,9 @@ iCE40 targets in the Makefile (`riegel`, `eis`, `kolibri`, `bonbon`,
 `keks`, `kuchen`, `kuchen_v0`, `brot`, `krote`, `icoboard`) have no
 block in `rtl/boards.vh`. There is no configuration to synthesise.
 
-`minze` and `vanille` are ECP5 targets with the same gap: the Makefile
-names them, but there is no LPF in `boards/` and no `rtl/boards.vh`
-block. (`schoko` and `konfekt` were in this list; see above.)
+`vanille` is an ECP5 target with the same gap: the Makefile names it,
+but there is no LPF in `boards/` and no `rtl/boards.vh` block.
+(`schoko`, `konfekt` and `minze` were in this list; see above.)
 
 Lebkuchen and Kölsch do have a `boards.vh` block (GateMate, not ECP5).
 Their flow is a separate Yosys and nextpnr under the path the Makefile

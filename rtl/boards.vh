@@ -1277,6 +1277,49 @@
 // sw/apps/mod detects it and mixes in software), so it goes first.
 //`define AUDIO_MIXER
 
+`elsif BOARD_MINZE
+
+// Machdyne Minze: ECP5 12F, 32MB SDRAM, VGA, one USB host port,
+// microSD, one PMOD, USB-C. No audio. Pins: boards/minze_v1.lpf.
+//
+// Konfekt's block on the same die, with VGA in place of DDMI and GPIO
+// on the PMOD in place of audio. The console is USB CDC-ACM on the
+// USB-C socket, so the PMOD is free: this block -- like the .lpf --
+// describes the minze_gpio release target exactly.
+//
+// VGA here is one bit per colour on the MSB of each of the board's
+// 3-bit resistor ladders (8 of its 512 colours).
+`define FPGA_ECP5
+// PROGRAMN on M8 (tinydfu-bootloader's resetn), as on Konfekt.
+`define PROGRAMN_PIN
+`define OSC48
+`define MEM 32
+`define MEM_SDRAM
+`define MEM_VRAM
+`define MEM_ROM
+`define MEM_GLYPH
+`define ICACHE
+`define MONTMUL
+`define MONTMUL_REGS
+`define SHA256
+`define ICACHE_KB 4
+`define ICACHE_LINE_WORDS 4
+`define DCACHE
+`define DCACHE_KB 4
+`define DCACHE_LINE_WORDS 4
+`define DCACHE_WBUF 0
+`define SDRAM_BURST
+`define GPU
+`define GPU_RASTER
+`define GPU_BLIT
+`define GPU_CURSOR
+`define GPU_VGA
+`define UART0
+`define USB_CDC
+`define USB_HID
+`define SPI_SDCARD
+`define GPIO_PORT0
+
 `elsif BOARD_SCHOKO
 
 // Machdyne Schoko: ECP5 45F, 32MB SDRAM, DDMI and VGA, one USB host

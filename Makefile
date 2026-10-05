@@ -243,6 +243,7 @@ else ifeq ($(BOARD), minze)
 	PROG = openFPGALoader -c $(CABLE)
 	FLASH = openFPGALoader -v -c $(CABLE) -f
 	FLASH_OFFSET = -o
+	JUMP = 1
 else ifeq ($(BOARD), vanille)
 	FAMILY = ecp5
 	DEVICE = 12k

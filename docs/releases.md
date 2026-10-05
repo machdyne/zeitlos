@@ -546,7 +546,7 @@ $ openFPGALoader -v -c dirtyJtag -f -o 0x1d0000 zeitlos-mozart_ml1-jump.bin
 `0x1D0000`, which Zeitlos jumps through to reboot or to boot other
 gateware. The ZAR's room ends there (576 KB). On boards built with the
 Makefile's `JUMP` -- Lakritz, Obst, Mozart ML1 and ML2, Sergei ML1 and ML2,
-Konfekt, Schoko, Noir and Klinge -- the
+Konfekt, Minze, Schoko, Noir and Klinge -- the
 gateware is packed to reload from `0x1D0000`, so **the jumploader is
 part of the system**: the `.img` and the DFU image carry it, it ships
 on its own as `zeitlos-<target>-jump.bin`, and `make flash` writes it

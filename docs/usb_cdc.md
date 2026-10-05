@@ -72,6 +72,7 @@ ignores.
 | Obst   | M1 | M2 | R1      |
 | Lakritz| T6 | R6 | R7      |
 | Konfekt| T6 | R6 | R7      |
+| Minze  | T6 | R6 | R7      |
 | Schoko | T6 | R6 | R7      |
 | Noir   | T6 | R6 | R7      |
 | Klinge | A13| A14| A9      |

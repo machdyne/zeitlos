@@ -1,6 +1,6 @@
 # Upgrading the DFU bootloader
 
-**Who this is for:** owners of a Lakritz, Obst, Konfekt, Schoko, Noir or Klinge who flash over USB
+**Who this is for:** owners of a Lakritz, Obst, Konfekt, Minze, Schoko, Noir or Klinge who flash over USB
 with `dfu-util` rather than over JTAG.
 
 If you flash with `openFPGALoader` and a JTAG cable, you do not need
@@ -111,12 +111,14 @@ $ curl -LO https://raw.githubusercontent.com/machdyne/lakritz/main/images/tinydf
 $ curl -LO https://raw.githubusercontent.com/machdyne/obst/main/images/tinydfu_obst_256k.bit
 ```
 
-**Konfekt**, **Schoko**, **Noir** and **Klinge**: tinydfu-bootloader's
-`boards/konfekt`, `boards/schoko`, `boards/noir` and `boards/klinge`
+**Konfekt**, **Minze**, **Schoko**, **Noir** and **Klinge**:
+tinydfu-bootloader's `boards/konfekt`, `boards/minze`, `boards/schoko`,
+`boards/noir` and `boards/klinge`
 build the 256 KB layout -- `BOOTPART_SIZE = 256 * 1024` in
 `boardinfo.vh` and `BOOTADDR = 0x040000` in the Makefile, the change
 made for Lakritz and Obst -- and the Zeitlos release targets for them
-(`konfekt`, `schoko_langkatze_gpio`, `noir`, `klinge`) are packed for
+(`konfekt`, `minze_gpio`, `schoko_langkatze_gpio`, `noir`, `klinge`)
+are packed for
 it. Build the image in that directory (`make bootloader`), or take
 `tinydfu_<board>_256k.bit` from the board's own repository once it is
 published there, and carry on from step 2 with that file. The

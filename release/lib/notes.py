@@ -176,7 +176,7 @@ def notes(version, commit, targets, sdcard, layout, prev_version=None):
                "the same system packaged for `dfu-util -a 0 -D`.")
     out.append("")
     out.append("**Flashing a Machdyne board over USB?** Lakritz, Obst, "
-               "Konfekt, Schoko, Noir and Klinge ship a DFU "
+               "Konfekt, Minze, Schoko, Noir and Klinge ship a DFU "
                "bootloader whose user partition is too small for Zeitlos, "
                "so the `-dfu.bin` will not fit until you update it. "
                "[Read this first](%s)." % DFU_DOC_URL)
@@ -432,7 +432,7 @@ def asset_readme(version, commit, targets, sdcard, layout):
     out.append("dfu-util -a 0 -D. It requires the 256KB bootloader.")
     out.append("")
     out.append("FLASHING OVER USB (dfu-util)? Lakritz, Obst, Konfekt,")
-    out.append("Schoko, Noir and Klinge ship a DFU")
+    out.append("Minze, Schoko, Noir and Klinge ship a DFU")
     out.append("bootloader whose user partition is too small for Zeitlos,")
     out.append("so -dfu.bin will not work until you update it. Read this")
     out.append("first:")

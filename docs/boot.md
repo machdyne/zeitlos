@@ -126,7 +126,7 @@ because it has to clear that board's gateware:
 
 | Boards | Base | Region | Why |
 |---|---|---|---|
-| ECP5 (Lakritz, Obst, Mozart/Sergei ML1/ML2, Konfekt, Schoko, Noir, Klinge, ULX3S) | `0x100000` | `0x100000`-`0x1FFFFF` | where it has always been: every address is unchanged |
+| ECP5 (Lakritz, Obst, Mozart/Sergei ML1/ML2, Konfekt, Minze, Schoko, Noir, Klinge, ULX3S) | `0x100000` | `0x100000`-`0x1FFFFF` | where it has always been: every address is unchanged |
 | Artix-7 (Sergei/Mozart MX1, Kirsch) | `0x300000` | `0x300000`-`0x3FFFFF` | an XC7A35T bitstream is a fixed 2.09 MB |
 
 On a 2 MB ECP5 board and on the 4 MB MX1, the region is the top

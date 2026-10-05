@@ -360,6 +360,8 @@ FPGA_FILES = [
     ("fpga/boards/sergei2.lpf", "sw/apps/zfpga/db/boards/sergei2.lpf"),
     ("fpga/boards/konfekt.brd", "sw/apps/zfpga/db/boards/konfekt.brd"),
     ("fpga/boards/konfekt.lpf", "sw/apps/zfpga/db/boards/konfekt.lpf"),
+    ("fpga/boards/minze.brd", "sw/apps/zfpga/db/boards/minze.brd"),
+    ("fpga/boards/minze.lpf", "sw/apps/zfpga/db/boards/minze.lpf"),
     ("fpga/boards/schoko.brd", "sw/apps/zfpga/db/boards/schoko.brd"),
     ("fpga/boards/schoko.lpf", "sw/apps/zfpga/db/boards/schoko.lpf"),
     ("fpga/boards/noir.brd", "sw/apps/zfpga/db/boards/noir.brd"),
