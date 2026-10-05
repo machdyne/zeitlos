@@ -49,6 +49,8 @@ static char *path2(const char *dir, const char *a, const char *b) {
 static const struct { const char *name, *file; } board_aliases[] = {
     { "mozart_ml1", "mozart1" },
     { "sergei_ml1", "sergei1" },
+    { "mozart_ml2", "mozart2" },
+    { "sergei_ml2", "sergei2" },
 };
 
 static const char *board_file(const char *name) {

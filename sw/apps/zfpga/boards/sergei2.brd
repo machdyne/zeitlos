@@ -1,0 +1,13 @@
+# Sergei ML2 (Sechzig ML2 module): ECP5 LFE5U-45F in CABGA256.
+#
+#   zfpga build /fpga/examples/blink.v -b sergei_ml2
+#
+# The pins are the tree's own boards/sergei_ml2.lpf, installed beside this
+# file as sergei2.lpf (the card's 8.3 names; build.c maps sergei_ml2 to it).
+# zfpga places only what a design uses, so the DDR3 constraints in
+# that file are harmless to a blink or a jumploader. `pack -c`:
+# compressed, as Zeitlos's own build is.
+device  LFE5U-45F
+package CABGA256
+lpf     sergei2.lpf
+pack    -c
