@@ -21,9 +21,9 @@ int main(void)
 	CHECK(zd_clamp_port(0) == 8080 && zd_clamp_port(65536) == 8080 &&
 		zd_clamp_port(-1) == 8080, "a bad port falls back to 8080");
 
-	CHECK(zd_clamp_viewers(3) == 3, "the default viewer cap is kept");
-	CHECK(zd_clamp_viewers(1) == 1 && zd_clamp_viewers(6) == 6, "viewer range");
-	CHECK(zd_clamp_viewers(0) == 3 && zd_clamp_viewers(7) == 3, "a bad cap falls back to 3");
+	CHECK(zd_clamp_viewers(6) == 6, "the default viewer cap is kept");
+	CHECK(zd_clamp_viewers(1) == 1 && zd_clamp_viewers(3) == 3, "viewer range");
+	CHECK(zd_clamp_viewers(0) == 6 && zd_clamp_viewers(7) == 6, "a bad cap falls back to 6");
 
 	CHECK(!zd_allow_any("subnet") && !zd_allow_any("") && !zd_allow_any(0),
 		"subnet, empty and missing stay on the subnet");

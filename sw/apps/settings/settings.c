@@ -516,7 +516,7 @@ static void zone_selection_changed(void) {
 // malloc'd (8KB for the output, plus fs_mallocfile() for the input),
 // and on the device save() reported "out of memory" and wrote nothing.
 // An app's heap and stack share one 16KB allowance
-// (z_proc_stack_size_for(), sw/os/kernel.h), and _sbrk() refuses to
+// (the default tier, docs/executables.md), and _sbrk() refuses to
 // grow the heap past the stack pointer -- so an allocation that is
 // trivial on a build machine does not fit here. The host test could
 // not see it; it now fails if save() allocates at all.

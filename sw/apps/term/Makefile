@@ -50,4 +50,7 @@ override CFLAGS += -DTERM_FONT_NAME=$(FONT)
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o zsayall.o zkbd.o zvt100.o \
 	zport.o zdns.o zconnect.o zcfg.o term.o
 
+# 8KB, same as wm. Port sends outlive the call and are bounded.
+APP_TIER = SMALL
+
 include ../../common/app.mk

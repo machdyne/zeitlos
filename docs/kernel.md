@@ -82,11 +82,12 @@ image, for the reason "The 256KB image budget" below explains.
 refuses to pass the stack pointer, so an app's heap and stack share the
 `stack_size` allowance and eat toward each other.
 
-Stack sizes are per-app, chosen by name in `z_proc_stack_size_for()`.
-That function is the policy and `sw/os/kernel.h` carries the reasoning
-for each tier; the important one is `Z_PROC_STACK_SIZE_HUGE` (4MB, for
-`zcc` and `posix`), which is a different KIND of tier from the others
-and explains itself there.
+The executable names its stack and heap tier: bits 2:0 of the ZEXE
+flags word (`docs/executables.md`). `z_proc_stack_size()` in
+`sw/os/kernel.h` turns that index into bytes and will not grant more
+than `Z_PROC_STACK_CAP` (HUGE, 4MB). A program that does not ask, and
+a binary with no header, get the default 16KB. HUGE is a different
+KIND of tier from the others; `docs/executables.md` says why.
 
 **Allocation failure is a clean refusal.** `k_mem_alloc()` returns
 NULL, `k_proc_create()` returns 0, and every caller treats 0 as "did

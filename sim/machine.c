@@ -634,6 +634,8 @@ int machine_load_bin(machine_t *m, const char *path) {
 
 		bss_size = rd32le(hdr + 8);
 		data_off = 16;
+		/* hdr[6..7] names a stack tier. The kernel applies it;
+		 * this simulator gives the process the whole of RAM. */
 	}
 
 	fseek(f, (long)data_off, SEEK_SET);

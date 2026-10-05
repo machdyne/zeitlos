@@ -973,7 +973,7 @@ int fs_exec_info(char *path, z_exec_info_t *info) {
 // WHY A SEARCH PATH AND NOT A PREFIX. Moving the apps into APPS/
 // without one would mean every reference to a program grows a
 // constant "apps/": dock_candidates[] in wm, the extension->app table
-// in ztype.c, z_proc_stack_size_for() in kernel.h, pidreg
+// in ztype.c, pidreg
 // registrations, `run apps/term` at the shell, and the names inside
 // the flash archive -- where it would also spend 5 of
 // Z_ZAR_NAME_MAX's 16 bytes on a prefix that carries no information

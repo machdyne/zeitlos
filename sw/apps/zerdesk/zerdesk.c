@@ -15,9 +15,12 @@
  *              trailer], the bytes the ESP32 forwards today. 3-byte
  *              keys and 5-byte mouse packets come back.
  *
- * At most apps.zerdesk.viewers viewers at once (3 unless the file says
- * otherwise). Whoever asks for / or /ws past that gets a plain-text
- * 503, "Too many viewers connected". The page is not touched.
+ * At most apps.zerdesk.viewers viewers at once (6 unless the file says
+ * otherwise, and never more than 6: that is how many inbound relays
+ * net has). Whoever asks for / or /ws past that, while a relay is
+ * still free, gets a plain-text 503, "Too many viewers connected".
+ * The page is not touched. A seventh connection does not reach this
+ * app: net has no seventh relay, and the TCP connection is refused.
  *
  * apps.zerdesk.allow is subnet or any, the same choice netserve makes.
  * Anything else, and a missing key, is subnet.
@@ -28,10 +31,10 @@
  *
  * Started by hand: `run zerdesk`, from term.
  *
- * MEMORY: an app the kernel does not name gets 16 KB of stack and heap
- * (sw/os/kernel.h). Everything big is static. The heap holds only
- * zport's copies of what is in flight to net, and that is capped here
- * by BUDGET.
+ * MEMORY: this executable asks for the medium tier, 32 KB of stack
+ * and heap (APP_TIER in the Makefile). Everything big is static. The
+ * heap holds only zport's copies of what is in flight to net, and
+ * that is capped here by BUDGET.
  */
 
 #include <stdint.h>

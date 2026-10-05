@@ -353,9 +353,10 @@ below.
 `_sbrk()` (`sw/common/zeitlos.c`) grows the heap up from `_end` and
 refuses to pass the current stack pointer. `k_proc_create(size,
 stack_size)` allocates `image + stack_size`, so the heap and the stack
-share the `stack_size` allowance. The tiers
-(`z_proc_stack_size_for()`, `sw/os/kernel.h`) top out at
-`Z_PROC_STACK_SIZE_LARGE` = 64KB, for `web`.
+share the `stack_size` allowance. When this plan was written the tiers
+topped out at `Z_PROC_STACK_SIZE_LARGE` = 64KB, for `web`. The
+executable now asks for its own tier, and HUGE is 4MB
+(`docs/executables.md`).
 
 **A C compiler needs megabytes.** This is the single hard blocker, and
 it is also the smallest fix in this document: one more tier and one more
@@ -893,8 +894,9 @@ gaps that turned out to be load-bearing rather than cosmetic.
 1. **Re-measure SD throughput** (§2.4) and correct or confirm
    `docs/ramdisk.md`'s 19 KB/s. If it is stale, this may be the single
    highest-value hour in the whole project.
-2. **Add a large heap tier.** `Z_PROC_STACK_SIZE_HUGE` (4MB), granted to
-   `zcc` and `posix` by name in `z_proc_stack_size_for()`, with a memory
+2. **Add a large heap tier.** `Z_PROC_STACK_SIZE_HUGE` (4MB), which
+   `zcc` and `posix` ask for in the executable header
+   (`docs/executables.md`; it used to be granted by name), with a memory
    check so it degrades to a clean refusal on a small board rather than
    an allocation failure misread as something else — the failure mode
    `docs/app_runtime.md` records for `k_proc_create()`'s `Z_FAIL`.
@@ -1087,8 +1089,8 @@ effort on a faster SPI clock: layer 0 runs at DIV=1 *and* DIV=0, and
 
 ### 0.2 The heap tier
 
-`Z_PROC_STACK_SIZE_HUGE`, 4MB, granted to `zcc` and `posix` by name in
-`z_proc_stack_size_for()`. `sw/os/kernel.h` carries the reasoning and
+`Z_PROC_STACK_SIZE_HUGE`, 4MB. `zcc` and `posix` ask for it in the
+executable header (`docs/executables.md`). `sw/os/kernel.h` carries the reasoning and
 the three consequences: it cannot fit on a 1MB board and is not meant
 to, it is most of an 8MB one, and a 4KB-aligned first-fit 4MB request
 can fail on fragmentation while 4MB is nominally free.

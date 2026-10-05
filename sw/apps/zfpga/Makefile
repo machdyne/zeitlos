@@ -90,4 +90,8 @@ db/lfe5u45f.zdb: tools/mkzdb.py ext/nextpnr-base/lfe5u-45f.config
 
 CLEAN_EXTRA = $(B) db tests/out
 
+# 4MB. The chip database is resident (1.5MB for a 25F) plus the
+# configuration it builds (560KB for a 25F, 1.9MB for an 85F).
+APP_TIER = HUGE
+
 include ../../common/app.mk

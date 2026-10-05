@@ -472,4 +472,9 @@ test:
 
 CLEAN_EXTRA = .net_phy_selected .net_config_selected
 
+# 32KB. A few relays, eight port sends in flight each way, each a
+# heap copy until acked. Stays off LARGE: net is a core app and
+# stays small. The old per-message leak is fixed.
+APP_TIER = MEDIUM
+
 include ../../common/app.mk

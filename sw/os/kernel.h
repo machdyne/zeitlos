@@ -3,6 +3,7 @@
 
 #include <string.h>
 #include "../common/zeitlos.h"
+#include "../common/zexec.h"
 #include "../common/zproc.h"
 
 // z_rv, Z_OK and Z_FAIL are defined in ../common/zmsg.h (pulled in via
@@ -200,278 +201,84 @@ void k_proc_yield_blocked(void);
 // there's no separate heap region at all -- this is the ONLY room a
 // process's call stack AND malloc()'d heap ever get, shared, for its
 // entire lifetime).
-//
+
 // IMPORTANT, because it is easy to get backwards: this is NOT where a
 // process's static footprint lives. Code, .rodata and .bss are part of
 // the BINARY, and k_proc_create() sizes the block as image + this. So
 // `repl`'s 96KB Scheme cell heap (MS_HEAP_SIZE * sizeof(ms_val), a
 // .bss array inside ms.o) is entirely unaffected by the tier chosen
-// here -- changing repl from LARGE to MEDIUM below costs it zero
-// Scheme cells. What the tier bounds is the C stack plus whatever
-// malloc() hands out at runtime.
+// here. What the tier bounds is the C stack plus whatever malloc()
+// hands out at runtime.
 //
-// Four tiers:
+// The program asks, in the ZEXE header (sw/common/zexec.h). This file
+// is the number of bytes each tier is, and the cap. Which app asks for
+// which, and why that size and not the next one down, is in that app's
+// Makefile; the longer notes are in docs/executables.md. They used to
+// live here, beside a table of file names. A name is the wrong key:
+// the card stores `cryptobench` as `cryptob`, and an app that is not
+// in the table cannot ask for more without a new kernel.
 //
-// - Z_PROC_STACK_SIZE_SMALL (8KB): `wm` and `term`. This is the size
-//   this project originally shipped with for everything; DEFAULT below
-//   doubled it as a blanket safety margin, and the note there is
-//   explicit that no app had ever shown a confirmed need for more.
-//   These two are plain message-loop apps -- no interpreter, no
-//   per-message allocation that outlives a call -- so they're the two
-//   with the least reason to pay the doubled margin, and returning
-//   them to 8KB is what made room for a second `term` instance on a
-//   1MB board (see docs/boot.md's memory budget). That premise was
-//   once false for wm: its Z_WM_SET_CLIP payload was z_obj_blob()'d
-//   per send and never freed (a borrowed payload, docs/messaging.md),
-//   and about ninety regions exhausted this allowance -- see wm.c's
-//   clip_payload(). term's z_port_send() blobs do outlive the call,
-//   but are bounded (Z_PORT_MAX_PENDING_SENDS) and freed on ack.
+// flags 0, a binary with no header, and a tier index this kernel does
+// not know (7, or any reserved flag bit) are the default. An unknown
+// request is not rounded up to the cap. A corrupt word must not be
+// handed 4MB. A known tier whose byte count is above the cap is
+// clamped to the cap. Nothing below exceeds it today.
 //
-// - Z_PROC_STACK_SIZE_DEFAULT (16KB): anything not named below. Still
-//   the right default for an unknown app: the margin costs little when
-//   only one or two processes are unaccounted for, and an app nobody
-//   has measured is exactly the one that shouldn't get the smallest
-//   tier.
+// HUGE is a different KIND of tier from the ones under it. Those
+// differ by factors of two and exist to trim margin off apps that
+// were measured not to need it. HUGE is sixty-four times LARGE,
+// because a compiler's working set scales with the source rather than
+// with anything a margin can bound. Three things follow from the size,
+// and all three are deliberate:
 //
-// - Z_PROC_STACK_SIZE_MEDIUM (32KB): `net`.
-//
-//   Both `net` and `repl` used to be LARGE, for the same reason: their
-//   z_port_send() call leaked a small z_obj_blob() allocation per
-//   message relayed, for the lifetime of the connection -- confirmed
-//   on real hardware as the cause of a heap-exhaustion crash during a
-//   long telnet session. **That leak is fixed** (see zport.h's
-//   Z_PORT_DATA_ACK and docs/messaging.md). `net` stayed on MEDIUM:
-//   its remaining allocations are the one-shot, intentionally-leaked
-//   RPC replies (DHCP/DNS/TFTP in net.c), bounded by request COUNT
-//   rather than session length.
-//
-// - Z_PROC_STACK_SIZE_LARGE (64KB): `repl`, `web`, `netserve` and `bbs`.
-//
-//   `netserve` was MEDIUM until its SSH engines (~10KB each) moved from
-//   .bss to the heap, sized by apps.netserve.ssh_sessions -- see the
-//   note at its line in z_proc_stack_size_for() below.
-//
-//   `repl` came back down to MEDIUM after the leak was fixed, on the
-//   figure it prints at boot -- "heap grown ~6-9KB by end of stdlib
-//   load" -- which left ~22KB of headroom. That is enough for Scheme
-//   and the port, and not enough for `te`: te_load() mallocs the whole
-//   file (TEST.TXT and RFC20.TXT are both ~18KB) and then the line
-//   list on top. Measured: malloc(18505) failed with 22076 bytes
-//   between sbrk and sp -- newlib's sbrk request does not fit in the
-//   remainder even though the raw size looks like it should. (free)'s
-//   mem-free ~32MB is the kernel pool, not this process heap.
-//
-//   The remaining stack risk is unchanged: deep non-tail Scheme
-//   recursion nests ms_eval() frames. MS_PROTECT_STACK_SIZE (192)
-//   bounds that depth. (free)'s "c-heap" is the number to watch.
-//
-//   `web` shares the tier for an unrelated reason.
-//
-//   The browser's draw path nests in a way nothing else here does:
-//   putting a screen together runs the HTML parser over a replayed
-//   section of the document, and the parser context alone is nearly
-//   6KB (sw/apps/web/page.c keeps exactly one, deliberately, for this
-//   reason). On top of that sit a screen's worth of html_line_t
-//   blocks and the wrapping arithmetic.
-//
-//   MEDIUM would very likely do. LARGE is chosen anyway because the
-//   symptom of being wrong is the silent heap/stack exhaustion this
-//   whole tier system exists to prevent, and `web` is an app for
-//   32MB boards regardless -- see docs/web_app.md. It is not a
-//   candidate for a 1MB machine whether it gets 32KB or 64KB.
-//
-// - Z_PROC_STACK_SIZE_HUGE (4MB): `zcc` and `posix`.
-//
-//   A different KIND of tier from the four above, and worth reading as
-//   such rather than as "LARGE but more". The others differ by factors
-//   of two and exist to trim margin off apps that were measured not to
-//   need it. This one is sixty-four times LARGE, because a compiler's
-//   working set is not a margin question: the token stream, the symbol
-//   and macro tables, the IR for the function being generated and the
-//   output buffer all have to be live at once, and they scale with the
-//   source rather than with anything the tier system can bound. See
-//   docs/posix.md's memory budget, which sizes a 2,000-line
-//   translation unit at roughly 1MB and picks 4MB to leave the
-//   headroom that estimate does not deserve to be trusted without.
-//
-//   THREE THINGS FOLLOW FROM THE SIZE, and all three are deliberate:
-//
-//   1. This does not fit on a 1MB board and is not meant to. Obst has
-//      a 1MB pool with the kernel's own 233KB image already in it, so
-//      a 4MB request cannot succeed there under any circumstances.
-//      That is the correct outcome -- see docs/posix.md, "Board RAM
-//      decides who gets this at all" -- and it is not a silent one:
-//      k_mem_alloc() returns NULL, k_proc_create() returns 0, and
-//      every caller already treats 0 as "did not start". That path was
-//      made trustworthy by the Z_FAIL bug fixed in k_proc_create()
-//      (see docs/app_runtime.md); this tier is the first thing to lean
-//      on it deliberately rather than by accident.
+//   1. It does not fit on a 1MB board and is not meant to. The pool
+//      there already holds the kernel's own image, so a 4MB request
+//      cannot succeed. That is the correct outcome, and it is not a
+//      silent one: k_mem_alloc() returns NULL, k_proc_create() returns
+//      0, and every caller already treats 0 as "did not start".
 //
 //   2. It is a large enough share of an 8MB board to matter to
-//      everything else on it. 4MB of 8MB, with the kernel, wm, net,
-//      repl and a 1MB ramdisk also wanting room, is most of the
-//      machine. On 8MB, expect to run `posix` OR the desktop, not
-//      comfortably both; on 32MB it is unremarkable.
+//      everything else on it. On 8MB, expect to run one of these OR
+//      the desktop, not comfortably both; on 32MB it is unremarkable.
 //
 //   3. k_mem_alloc() is a first-fit walk over a block list with
 //      Z_MEM_ALIGNMENT of 4096 (mem.h), so a 4MB request late in a
 //      fragmented pool can fail while 4MB is nominally free. `free`
-//      (k_mem_dump()) reports fragmentation, and starting the compiler
-//      early is the cheap mitigation. Worth knowing before reading a
-//      refusal as "out of memory" when it is really "out of one
-//      contiguous piece".
+//      reports fragmentation. Worth knowing before reading a refusal
+//      as "out of memory" when it is really "out of one contiguous
+//      piece".
+//
+// Process zero is not a ZEXE. kernel.c passes Z_PROC_STACK_SIZE_DEFAULT
+// for it directly: that process is the kernel.
 #define Z_PROC_STACK_SIZE_SMALL    8*1024
 #define Z_PROC_STACK_SIZE_DEFAULT  16*1024
 #define Z_PROC_STACK_SIZE_MEDIUM   32*1024
 #define Z_PROC_STACK_SIZE_LARGE    64*1024
-// 1MB. Between LARGE and HUGE, and added because there was nothing
-// there.
-//
-// The number is MEASURED, and it moved twice before it was right.
-// `vi` was tried at 4MB (HUGE), then 2MB, on the strength of a startup
-// cost of about 1.1MB -- which turned out not to be nextvi's at all.
-// sw/apps/vi's _fstat() reported st_size as 0, and nextvi's lbuf_rd()
-// falls back to a 1048575-byte read buffer when it cannot learn a
-// file's size. Every file opened allocated a megabyte.
-//
-// With the size reported properly, nextvi starts in UNDER 50KB with
-// full syntax highlighting, and the file itself becomes the term that
-// matters: nextvi allocates per LINE, so a source file costs roughly
-// three times its own size.
-//
-// Measured on a 154KB source file: it needs between 273KB and 529KB of
-// heap, so about 3.4 times the file. 1MB covers that with room, and
-// covers anything this tree contains.
-//
-// 1MB was the first proposal and was rejected because `vi` would not
-// start in it. That was the _fstat() bug, not the size: the editor was
-// spending a megabyte before it read a line. The original instinct was
-// right.
 #define Z_PROC_STACK_SIZE_BIG      1024*1024
 #define Z_PROC_STACK_SIZE_HUGE     4*1024*1024
 
-// which tier (above) a process named `name` should get -- the one
-// place this decision is made, used by every path that can start a
-// process by name (sh.c's `run`/`init`, and k_proc_run()'s own
-// Z_SYS_PROC_RUN syscall handler in kernel.c, which is how wm's dock
-// launches apps). A single shared check specifically so a future
-// tier change doesn't require finding and updating every call site
-// individually the way `net` joining `repl` here once did.
-static inline uint32_t z_proc_stack_size_for(const char *name) {
-	// The compiler and the POSIX layer, which hosts it. Both are
-	// 8MB-and-up features that refuse to start below that; see
-	// Z_PROC_STACK_SIZE_HUGE above and docs/posix.md.
-	//
-	// Named here rather than given a flag in the executable header,
-	// because the header is a stable on-disk format (docs/executables.md)
-	// and this is a policy that will change more often than that format
-	// should. It is the same trade every other name in this function
-	// makes.
-	// An app's heap and stack share this allowance: _sbrk grows up
-	// from _end and refuses to pass sp.
-	//
-	// `vi` was briefly HUGE, on the reasoning that an editor holds a
-	// whole file plus its undo history and nextvi allocates per LINE
-	// -- so a file costs roughly three times its own size. That
-	// arithmetic is right and the conclusion was not: it argues for
-	// more than LARGE's 64KB, not for 4MB. BIG exists for that gap.
-	// `ask` holds its coarse vector array and query encoder on the
-	// heap, one allocation per installed pack (sw/apps/ask/aidx.h).
-	// Measured with tools/ask: 0.90MB for the `arklite` pack alone,
-	// 1.54MB for `arklite` + `zdocs`, and AI_PACKS_MAX is 4.
-	//
-	// BIG was tried first and does not fit. `arklite` needs 1.00MB
-	// once stack headroom is counted against BIG's 1.048MB, which
-	// leaves nothing for a second pack -- and a second pack is the
-	// normal case, since `zdocs` is rebuilt every release while an
-	// Ark pack is rebuilt once in a while. HUGE is not generous
-	// here, it is the next size up.
-	//
-	// WHAT HUGE DOES NOT COVER, and this is worth knowing before
-	// assuming the tier bounds anything: residency is coarse_dim
-	// bytes per chunk, so it grows LINEARLY with the corpus. At the
-	// measured 461 chunks per MB of text and coarse_dim 32, 4MB
-	// covers about 237MB. A full Ark Medium is larger than that and
-	// fits NO tier -- the answer there is a narrower coarse vector
-	// or a clustered index, not a bigger number here. `ask ingest`
-	// projects this and says so before anything is downloaded; see
-	// docs/ask_app.md, "Residency, and the ceiling it runs into".
-	//
-	// Same 8MB-and-up consequence as the two below: on a 1MB board
-	// this cannot succeed and should not, since the smallest useful
-	// pack is 1.3MB on the card.
-	// `zfpga` holds its chip database resident (1.5MB for a 25F, the
-	// whole file, because lookups are random-access) plus the
-	// configuration memory it builds (560KB for a 25F, 1.9MB for an
-	// 85F). BIG's 1MB cannot hold the database alone. See
-	// docs/zfpga.md sec. 11.5.
-	if (!strcmp(name, "zcc") || !strcmp(name, "posix") ||
-			!strcmp(name, "zfpga"))
-		return Z_PROC_STACK_SIZE_HUGE;
-	// `ask` holds NOTHING resident with the pack it ships
-	// (`dense = no`, tools/ask): no vectors and no encoder, so the
-	// term dictionary is binary-searched on the card and postings are
-	// read per query term. What it needs is its own ~30KB of .bss
-	// plus a stack.
-	//
-	// It was HUGE while the dense half was on, where the coarse
-	// vector array and the encoder were 0.90MB for one pack and
-	// AI_PACKS_MAX is 4. That half was measured and dropped -- see
-	// docs/ask_app.md, "The decision, and how it came out" -- and the
-	// tier came down with it.
-	//
-	// A pack built with `dense = yes` still WORKS here, up to about a
-	// megabyte of vectors; past that malloc fails and the app reports
-	// `out of memory -- needs HUGE tier`, which is the accurate thing
-	// to do about it. Move it back up if you install one.
-	if (!strcmp(name, "ask"))
-		return Z_PROC_STACK_SIZE_BIG;
+// The cap. A tier constant larger than this is clamped in
+// z_proc_stack_size(); the header cannot name a bigger one.
+#define Z_PROC_STACK_CAP           Z_PROC_STACK_SIZE_HUGE
 
-	if (!strcmp(name, "vi"))
-		return Z_PROC_STACK_SIZE_BIG;
-	// web parses HTML, lays it out and holds a checkpoint index, and
-	// its per-screen block buffer alone is larger than the DEFAULT
-	// tier's whole allowance. LARGE rather than MEDIUM because the
-	// draw path nests -- page_fetch() runs the parser, which calls
-	// back into the layout engine -- and running out of stack here
-	// is not a clean failure.
-	//
-	// repl is LARGE for its own reason: it hosts `te`, whose loader
-	// mallocs the document, and MEDIUM does not leave the heap for
-	// that. See the tier notes above.
-	//
-	// netserve is LARGE since its SSH engines moved from .bss to the
-	// heap (apps.netserve.ssh_sessions, docs/netserve.md "Cost"): about
-	// 10KB each, 2 by default and 4 at most, on top of what MEDIUM was
-	// already for -- up to 8 port sends in flight per session in both
-	// directions, every one a heap copy until acked (zport.h). The
-	// image shrank by the same 19KB the default pool now takes from
-	// the heap, so the default costs 13KB more than before, not 32.
-	//
-	// bbs is LARGE for its callers (docs/bbs.md, "Memory"): each node is
-	// about 5KB (a 4KB output ring), four by default, and each caller can
-	// have eight 512-byte sends in flight until they are acked.
-	//
-	// fed and cryptobench are LARGE for ML-KEM (docs/mlkem.md): the
-	// reference implementation keeps polynomial vectors on the stack, and
-	// a decapsulation's deepest path is ~15KB (-fstack-usage: indcpa_enc
-	// alone is 12.4KB) -- all of DEFAULT's 16KB of stack AND heap, with
-	// nothing left for the caller. There is no stack guard to catch it.
-	// The name is the one `run` was given, which is the file's on the
-	// card: 8.3, so cryptobench is "cryptob" there -- matched as such
-	// (it ran in DEFAULT for a while because only "cryptobench" was).
-	if (!strcmp(name, "web") || !strcmp(name, "repl") || !strcmp(name, "netserve") ||
-			!strcmp(name, "bbs") || !strcmp(name, "fed") || !strcmp(name, "cryptob") ||
-			!strcmp(name, "cryptobench"))
-		return Z_PROC_STACK_SIZE_LARGE;
-	// net: a few relays, each with up to 8 port sends in flight in
-	// both directions, and every send is a heap copy until acked
-	// (zport.h) -- more than DEFAULT's 16KB of stack and heap together.
-	if (!strcmp(name, "net"))
-		return Z_PROC_STACK_SIZE_MEDIUM;
-	if (!strcmp(name, "wm") || !strcmp(name, "term"))
-		return Z_PROC_STACK_SIZE_SMALL;
-	return Z_PROC_STACK_SIZE_DEFAULT;
+static inline uint32_t z_proc_stack_size(const z_exec_info_t *info) {
+	uint32_t n = Z_PROC_STACK_SIZE_DEFAULT;
+	uint16_t f = (info && info->is_zexe) ? info->flags : 0;
+
+	if ((f & ~Z_EXEC_TIER_MASK) == 0) {
+		switch (f & Z_EXEC_TIER_MASK) {
+		case Z_EXEC_TIER_SMALL:   n = Z_PROC_STACK_SIZE_SMALL;   break;
+		case Z_EXEC_TIER_DEFAULT: n = Z_PROC_STACK_SIZE_DEFAULT; break;
+		case Z_EXEC_TIER_MEDIUM:  n = Z_PROC_STACK_SIZE_MEDIUM;  break;
+		case Z_EXEC_TIER_LARGE:   n = Z_PROC_STACK_SIZE_LARGE;   break;
+		case Z_EXEC_TIER_BIG:     n = Z_PROC_STACK_SIZE_BIG;     break;
+		case Z_EXEC_TIER_HUGE:    n = Z_PROC_STACK_SIZE_HUGE;    break;
+		default:                  n = Z_PROC_STACK_SIZE_DEFAULT; break;
+		}
+	}
+	if (n > Z_PROC_STACK_CAP)
+		n = Z_PROC_STACK_CAP;
+	return n;
 }
 
 // the live process table and the pid of the process currently

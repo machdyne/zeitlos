@@ -24,7 +24,7 @@
  *
  * An app-private buffer would have been a smaller change to `web`,
  * but an app's malloc() is bounded by its stack+heap allowance
- * (z_proc_stack_size_for(), kernel.h), so a megabyte of it needs
+ * (docs/executables.md), so a megabyte of it needs
  * either a new syscall or a "stack size" that is mostly not stack.
  * Both are new mechanisms for one caller.
  *

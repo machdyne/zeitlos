@@ -131,8 +131,8 @@ in-memory file, through the real app code, and renders the panel.
 **The buffers are static, not allocated.** Saving used to `malloc` 8KB
 for the new file and read the old one with `fs_mallocfile()`, and on the
 device it failed with "out of memory" and wrote nothing. An app's heap
-and stack share one allowance (16KB for settings, `z_proc_stack_size_for()`
-in `sw/os/kernel.h`), and `_sbrk()` (`sw/common/zeitlos.c`) refuses to
+and stack share one allowance (16KB for settings, the default tier,
+`docs/executables.md`), and `_sbrk()` (`sw/common/zeitlos.c`) refuses to
 grow the heap past the stack pointer. So an allocation that is trivial
 on a build machine does not fit. Two 4KB `.bss` buffers
 (`Z_CFG_FILE_MAX`) and `fs_read_file()` (`zfsapp.h`) replace them. The

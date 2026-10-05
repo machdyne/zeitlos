@@ -18,8 +18,8 @@
  *
  * Read this before "fixing" the buffer below into an allocation.
  *
- * A process's stack tier (Z_PROC_STACK_SIZE_DEFAULT, 16KB for any app
- * not named in z_proc_stack_size_for(), sw/os/kernel.h) is the ONLY
+ * A process's stack tier (the default 16KB, unless the executable
+ * asks for another -- docs/executables.md) is the ONLY
  * room its C stack and its malloc() heap ever get, shared, for its
  * entire life. It is not a stack allowance with a heap somewhere else.
  *
@@ -44,9 +44,9 @@
  * for precisely this reason, and kernel.h's tier comment calls that
  * out.
  *
- * A happy consequence: mod needs no entry in z_proc_stack_size_for().
- * Nothing here allocates, so the default 16KB tier is ample and the
- * kernel needs no change to run this.
+ * A happy consequence: mod does not set APP_TIER. Nothing here
+ * allocates, so the default 16KB tier is ample and the kernel
+ * needs no change to run this.
  *
  * -- controls --
  *

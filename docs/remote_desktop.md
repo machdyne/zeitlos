@@ -441,11 +441,15 @@ else, and a missing key, stays on the subnet. A peer off the subnet
 is refused before it is given a connection.
 
 **How many.** `apps.zerdesk.viewers` is how many browsers at once,
-**3** unless the file says otherwise, and never more than 6 (that is
+**6** unless the file says otherwise, and never more than 6 (that is
 how many inbound relays `net` has). Whoever asks for `/` or `/ws`
-past that gets a plain-text `503` whose body is
+past the number in the file, while a relay is still free, gets a
+plain-text `503` whose body is
 `Too many viewers connected`. The page is unchanged, so that is what
-the browser shows. The ESP32 path is different: `screend` allows
+the browser shows. With the cap set to 3, that refusal is the fourth
+browser. At the default of 6 the next connection does not reach the
+app: `net` has no seventh relay, and the TCP connection is refused.
+The ESP32 path is different: `screend` allows
 eight, and a ninth evicts the least recently served.
 
 **The page is on the card.** `zerdesk` carries no copy of it. Each
@@ -486,7 +490,7 @@ and exits, which is the whole of the refusal.
 ```
 apps.zerdesk.port: 8080
 apps.zerdesk.allow: subnet
-apps.zerdesk.viewers: 3
+apps.zerdesk.viewers: 6
 ```
 
 **One consumer of DIRTY.** The register is cleared by the reader.
@@ -516,14 +520,27 @@ stalls. `zerdesk` skips 0 and only counts up. Listeners share `net`'s
 relays (6) and its TCP slots; the last listen on a port takes it
 over. See [networking.md](networking.md), "Accepted connections".
 
-**Memory.** An app the kernel does not name gets 16 KB of stack and
-heap. Everything big is static. What the heap holds is `zport`'s copy
+**Memory.** The executable asks for the medium tier, 32 KB of stack
+and heap (`APP_TIER = MEDIUM`; the unnamed default is 16 KB).
+Everything big is static. What the heap holds is `zport`'s copy
 of bytes in flight to `net`, and that is capped at 6 KB in total and
 4 KB to one viewer. The page is read into that buffer as it goes, so
-it adds nothing. A viewer that makes no progress for 10 seconds is
-dropped. While a viewer is caught up, one byte goes out every five
-seconds; the page ignores it, and a send that fails is how a browser
-that vanished gets its slot back.
+it adds nothing of its own. A viewer that makes no progress for 10
+seconds is dropped. While a viewer is caught up, one byte goes out
+every five seconds; the page ignores it, and a send that fails is how
+a browser that vanished gets its slot back.
+
+With the cube running, six viewers, and a page load while five were
+already connected, the heap high-water went from 9,332 bytes to
+13,428. The tier gives 33,908 bytes of stack and heap; the stack was
+2,496. That leaves 17,984 bytes free, which is the worst case the
+cap was chosen against. The six share one 6 KB budget, so the stripes
+each viewer gets fall as more connect: 88, 55, 49, 37, 29 and 24 a
+second, from the board's own ten-second counts. Over a later ten
+seconds with those six and the cube still up, `net` was 41% of the
+CPU, the cube 30% and `zerdesk` 28%. A seventh connection, tried
+while the six were still open, was refused by `net`; `zerdesk`
+logged nothing.
 
 **Where the two differ, measured.** ULX3S 85F. The Ethernet bitstream
 is `ulx3s_85f_langkatze` with `PNR_SEED=7`: the Makefile's default
@@ -546,7 +563,7 @@ bytes, four bytes shorter than the previous build.
 | 30 keys in one `term` | 47 ms median | 130 ms median |
 | `gpu3d`, three `term`, `draw`, one viewer, the cube at 140,120 | 42 stripes/s. `net` 25%, `zerdesk` 41%, `gpu3d` 31% | 48 stripes/s. `net` 59%, `gpu3d` 39% |
 | the same cube, upper right | one viewer 47 stripes/s; two 33; three 24 each | — |
-| a fourth browser | a plain-text 503, and the three are unchanged | `screend` allows eight; a ninth drops the least recently served |
+| a browser past the cap | with the cap at 3, a fourth browser is a plain-text 503 and the three are unchanged. At the default of 6 a seventh connection is refused by `net` | `screend` allows eight; a ninth drops the least recently served |
 | viewer against VRAM, six scenes | 0 pixels | 0 pixels |
 | two hours, one viewer, the cube | 46.5 stripes/s, the heap flat | |
 
@@ -554,5 +571,6 @@ With the cube animating the machine is full either way, and the
 Ethernet path spends part of that on TCP in the app, so fewer stripes
 reach each browser than the ESP32 relays. A still desktop is the other
 way: with one viewer and nothing moving, the scan costs well under one
-percent. A fourth browser on the Ethernet path is the plain-text
-refusal above; it does not slow the three that are already connected.
+percent. A browser past the cap is the plain-text refusal above.
+With the cap at 3 it does not slow the three that are already
+connected. At the default of 6 the seventh never reaches the app.
