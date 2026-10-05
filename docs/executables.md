@@ -87,6 +87,7 @@ passes that to `tools/mkexec.py`). Unset leaves the field 0.
 |---|---|---|
 | `wm`, `term` | SMALL | message loops. The margin the default adds was measured not to be needed, and 8KB is what made room for a second `term` on a 1MB board. `wm`'s clip list used to be a blob per send that was never freed; that is fixed. `term`'s port sends outlive the call, and they are bounded. |
 | `net` | MEDIUM | a few relays, eight port sends in flight each way, each a heap copy until it is acked. More than 16KB. It stays off LARGE: `net` is a core app and stays small. The old per-message leak is fixed. |
+| `zerdesk` | MEDIUM | `zport` keeps a heap copy of every stripe in flight, up to a 6KB budget, and the page is read while that is live. Six viewers, and a page load while five were already up, left 17,984 bytes free of the 33,908 the tier gives. The unnamed 16KB left almost nothing past three. |
 | `repl` | LARGE | `te` mallocs the whole file and then the line list. MEDIUM does not leave the heap: a malloc of 18,505 bytes failed with 22,076 bytes between `sbrk` and `sp`. Scheme recursion is bounded separately (`MS_PROTECT_STACK_SIZE`). |
 | `web` | LARGE | the parser context is nearly 6KB, and the draw path nests the parser back into layout. MEDIUM would very likely do. Running out of stack here is not a clean failure, and `web` is for 32MB boards either way. |
 | `netserve` | LARGE | SSH engines on the heap, about 10KB each, two by default and four at most, plus eight sends in flight per session in each direction. |

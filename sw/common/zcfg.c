@@ -38,7 +38,7 @@ const z_cfg_known_t z_cfg_known[] = {
 	  "zerdesk: accept viewers from the subnet only, or any (docs/remote_desktop.md)" },
 	{ "apps.zerdesk.port", "8080",
 	  "zerdesk: the remote desktop, on this port" },
-	{ "apps.zerdesk.viewers", "3",
+	{ "apps.zerdesk.viewers", "6",
 	  "zerdesk: viewers at once, 1-6" },
 	{ "apps.irc.channels", "",
 	  "irc: channels to join once connected, e.g. #zeitlos #fpga" },

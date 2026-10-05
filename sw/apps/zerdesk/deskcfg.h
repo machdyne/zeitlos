@@ -19,7 +19,7 @@
 #include <string.h>
 
 #define ZD_PORT_DEFAULT     8080
-#define ZD_VIEWERS_DEFAULT  3
+#define ZD_VIEWERS_DEFAULT  6
 #define ZD_VIEWERS_MAX      6
 
 static inline int zd_clamp_port(int p)
