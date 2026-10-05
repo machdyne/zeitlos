@@ -209,4 +209,8 @@ test:
 CLEAN_EXTRA = zline_test ms_stdlib.h te_max_file_size.h
 LDLIBS = -lm
 
+# 64KB. te mallocs the whole file; 32KB does not leave the heap
+# (a malloc of 18505 bytes failed with 22076 between sbrk and sp).
+APP_TIER = LARGE
+
 include ../../common/app.mk

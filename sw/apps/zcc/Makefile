@@ -85,4 +85,9 @@ clean-libz:
 
 CLEAN_EXTRA = $(B)
 
+# 4MB. The working set scales with the source: about 1MB for 2000
+# lines, and 4MB is the headroom that estimate should not be trusted
+# without. It does not fit a 1MB board; the refusal is clean.
+APP_TIER = HUGE
+
 include ../../common/app.mk

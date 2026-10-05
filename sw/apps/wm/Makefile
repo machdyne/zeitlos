@@ -53,4 +53,8 @@ test:
 
 .PHONY: test
 
+# 8KB. A message loop, and the clip payload no longer leaks.
+# This is the size that left room for a second term on a 1MB board.
+APP_TIER = SMALL
+
 include ../../common/app.mk

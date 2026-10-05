@@ -226,17 +226,17 @@ int main(int argc, char **argv) {
 
     if (argc < 2) usage();
 
-    /* The commands that load the database need most of the 4MB tier the
-     * kernel gives zfpga by name (sw/os/kernel.h). A kernel without that
-     * line gives the default 16KB, and every one of them would fail at
-     * its first allocation; say so plainly, before anything else. */
+    /* The commands that load the database need most of the 4MB tier this
+     * binary asks for (APP_TIER in the Makefile). A header that does
+     * not ask gets the default 16KB, and every one of them would fail
+     * at its first allocation; say so plainly, before anything else. */
     if (zf_streq(argv[1], "build") || zf_streq(argv[1], "place") || zf_streq(argv[1], "pnr") ||
             zf_streq(argv[1], "pack") || zf_streq(argv[1], "unpack") || zf_streq(argv[1], "bram") || zf_streq(argv[1], "jump")) {
         void *probe = zio_block(3328u * 1024u);
         if (!probe)
             zf_fatal("this process has less than 3.3MB of memory; zfpga needs the 4MB tier. "
-                "The running kernel does not list zfpga in z_proc_stack_size_for() "
-                "(sw/os/kernel.h): rebuild and reflash Zeitlos -- docs/zfpga-test.md sec. 1");
+                "The executable header did not request it "
+                "(APP_TIER=HUGE, docs/executables.md) -- docs/zfpga-test.md sec. 1");
         zio_free(probe);
     }
     if (zf_streq(argv[1], "pack")) rc = cmd_pack(argc - 1, argv + 1);

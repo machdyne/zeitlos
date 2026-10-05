@@ -76,4 +76,9 @@ test:
 	else echo "(check_fobj.py needs python3 with cryptography -- skipped)"; fi
 
 CLEAN_EXTRA = fed-linux
+
+# 64KB. ML-KEM keeps polynomial vectors on the stack. A
+# decapsulation's deepest path is about 15KB, all of the default.
+APP_TIER = LARGE
+
 include ../../common/app.mk

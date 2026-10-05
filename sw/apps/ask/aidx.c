@@ -179,8 +179,10 @@ int ai_listdirs(const char *path, char *names, int maxnames)
  * "no packs in /ask" was the app's whole vocabulary for four quite
  * different situations: nothing there, an index this build cannot
  * read, files from two different distributions mixed together, and --
- * by far the most likely on a first run -- malloc refusing 400KB
- * because sw/os/kernel.h was never told `ask` needs the HUGE tier.
+ * by far the most likely on a first run -- malloc refusing because
+ * the process was left on the default tier. ask asks for BIG
+ * (docs/executables.md); a dense pack past about a megabyte still
+ * does not fit, and the app says so.
  *
  * Guessing between those over a serial console is exactly the kind of
  * time this costs, so the reason is recorded and shown.

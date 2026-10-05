@@ -704,8 +704,8 @@ int main(void)
     if (!loaded) {
         /* Say WHY. The four realistic causes -- nothing in /ask, an
          * index this build cannot read, files from two distributions
-         * mixed, and malloc refusing the coarse array because
-         * sw/os/kernel.h never got the HUGE tier entry -- are not
+         * mixed, and malloc refusing the coarse array because the
+         * executable did not ask for enough heap -- are not
          * distinguishable from "no packs", and the last one is by far
          * the most likely on a first run. */
         scat(status, sizeof(status), 0, ai_error());

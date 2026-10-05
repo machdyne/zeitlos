@@ -49,10 +49,9 @@
 // for every process -- which then turned out to be too generous on
 // the smallest supported board (Obst's 1MB variant, `MEM 1` in
 // rtl/boards.vh): paying 64KB per process for `kernel`+`wm`+`net`+
-// `repl` left no room to also run `term`. Now per-process
-// (Z_PROC_STACK_SIZE_DEFAULT, 16KB, for everything that isn't
-// `repl` -- see sh.c's own `run`/`init` call sites for where that
-// choice is made) -- see kernel.h for the full reasoning either way.
+// `repl` left no room to also run `term`. The executable now asks
+// for its own tier (docs/executables.md). A program that does not
+// gets 16KB. kernel.h is the byte count of each tier, and the cap.
 #define Z_KERNEL_STACK_SIZE  8*1024
 
 z_obj_t *z_uptime(z_obj_t *args);	// defined below; forward-declared
@@ -471,12 +470,9 @@ z_obj_t *k_proc_run(z_obj_t *args) {
 	// card, and what lets a killed core app be restarted.
 	uint32_t size = fs_exec_info_any(name, &xi) ? 0 : xi.total;
 
-	// see kernel.h's z_proc_stack_size_for() comment -- the same
-	// shared decision sh.c's own `run`/`init` use, so launching
-	// `repl`/`net` via wm's dock (this syscall's own motivating case)
-	// gets the same stack+heap allowance either one needs regardless
-	// of which path started it.
-	uint32_t stack_size = z_proc_stack_size_for(name);
+	// The tier is in the header just parsed. flags 0, and a binary
+	// with no header, are the default. See z_proc_stack_size().
+	uint32_t stack_size = z_proc_stack_size(&xi);
 
 	if (size) {
 		pid = k_proc_create(size, stack_size);
@@ -1811,8 +1807,9 @@ uint32_t k_proc_active_count(void) {
 }
 
 // return process id or 0 on fail. `stack_size` is the per-process
-// stack+heap allowance -- see kernel.h's Z_PROC_STACK_SIZE_DEFAULT/
-// _LARGE comment for which one a given caller should pass.
+// stack+heap allowance. Callers take it from z_proc_stack_size()
+// (the executable header). Process zero is not a ZEXE, so kernel.c
+// passes Z_PROC_STACK_SIZE_DEFAULT for it directly.
 uint32_t k_proc_create(uint32_t size, uint32_t stack_size) {
 
 	uint32_t mem_size = k_mem_align_up(size + stack_size,

@@ -292,8 +292,9 @@ and says so rather than hanging the boot.
 ## Memory budget
 
 `k_proc_create()` allocates `max(align_up(image + stack, 4096), 32768)`
-per process, out of a 1MB pool on the minimum-spec board. Stack tiers
-are in `sw/os/kernel.h`.
+per process, out of a 1MB pool on the minimum-spec board. The byte
+counts are `Z_PROC_STACK_SIZE_*` in `sw/os/kernel.h`. Which program
+asks for which is the ZEXE header (`docs/executables.md`).
 
 Because a process's block is sized from its **image**, every byte of
 `.rodata` and `.bss` in a binary costs a byte of RAM for that process's
@@ -312,14 +313,19 @@ heap (`MS_HEAP_SIZE * sizeof(ms_val)`, a `.bss` array in `ms.o`) is
 completely unaffected by its tier: moving repl from LARGE to MEDIUM
 costs zero Scheme cells.
 
-| tier | size | processes |
-|---|---|---|
-| SMALL | 8KB | `wm`, `term` |
-| DEFAULT | 16KB | anything unnamed |
-| MEDIUM | 32KB | `net` |
-| LARGE | 64KB | `repl`, `web` |
-| BIG | 1MB | `vi` |
-| HUGE | 4MB | `posix`, `zcc` |
+| tier | size |
+|---|---|
+| SMALL | 8KB |
+| DEFAULT | 16KB |
+| MEDIUM | 32KB |
+| LARGE | 64KB |
+| BIG | 1MB |
+| HUGE | 4MB |
+
+A header that does not ask, and an index this kernel does not know,
+get DEFAULT. The blocks below were measured when the kernel still
+chose the tier by file name. The byte counts are the same; which
+program asks is now the header.
 
 Measured at the commit that moved `repl` to the card and gave `term`
 scrollback, built with every app Makefile's defaults (`GC_SECTIONS=1`,

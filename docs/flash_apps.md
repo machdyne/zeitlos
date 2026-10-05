@@ -124,7 +124,7 @@ Two consequences worth stating plainly:
 
 - **Nothing above this function changed when the apps moved.**
   `dock_candidates[]` in wm, the extension table in `ztype.c`,
-  `z_proc_stack_size_for()` in `kernel.h`, pidreg registrations and
+  pidreg registrations and
   `run term` at the shell all still use bare names. The alternative --
   writing `apps/` at every one of those call sites -- would have put a
   constant prefix in a dozen places where it carries no information,

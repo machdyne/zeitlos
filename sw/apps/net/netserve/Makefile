@@ -66,4 +66,8 @@ test:
 		../../../common/zport.c ../../../common/zeitlos.c ../../../common/zcfg.c
 	/tmp/test_e2e || [ $$? -eq 77 ]
 
+# 64KB. SSH engines on the heap, about 10KB each, two by default
+# and four at most, plus eight sends in flight per session each way.
+APP_TIER = LARGE
+
 include ../../../common/app.mk

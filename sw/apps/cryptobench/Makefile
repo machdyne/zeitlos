@@ -81,4 +81,9 @@ test:
 	cd /tmp && /tmp/cryptobench_host
 
 CLEAN_EXTRA = o2.syms o2raw_*.o
+
+# 64KB, same reason as fed. The card stores this file as cryptob;
+# the loader reads this header, not that name.
+APP_TIER = LARGE
+
 include ../../common/app.mk

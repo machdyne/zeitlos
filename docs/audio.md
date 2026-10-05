@@ -1104,8 +1104,8 @@ a real bus cycle rather than a cache hit.
 This is worth reading before changing it, because the obvious version
 is wrong and fails in a misleading way.
 
-A process's stack tier — `Z_PROC_STACK_SIZE_DEFAULT`, 16 KB for any app
-not named in `z_proc_stack_size_for()` — is the **only** room its C
+A process's stack tier — `Z_PROC_STACK_SIZE_DEFAULT`, 16 KB unless the
+executable asks for another (`docs/executables.md`) — is the **only** room its C
 stack *and* its `malloc()` heap ever get, shared, for its whole life.
 It is not a stack allowance with a heap somewhere else.
 
@@ -1143,8 +1143,8 @@ and a shell resident. Lower `MOD_MAX_FILE` if that is too close for
 what else you want running.
 
 One happy consequence: because nothing here allocates, the default
-16 KB tier is ample and `track` needs **no** entry in
-`z_proc_stack_size_for()`. The kernel needs no change to run it.
+16 KB tier is ample and `track` does not set `APP_TIER`. The kernel
+needs no change to run it.
 
 ### Feeding the FIFO without stalling the window
 

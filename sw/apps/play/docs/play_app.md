@@ -488,8 +488,8 @@ the file dialog's list, and the code.
 That all lives in `.bss`, which is the right budget to be in. A
 process's stack tier (`Z_PROC_STACK_SIZE_DEFAULT`, 16KB) is the *only*
 room its C stack and its `malloc()` heap ever get, shared, for its
-whole life — so nothing in this app allocates, and `play` needs no
-entry in `z_proc_stack_size_for()`. `track.c`'s header comment explains
+whole life — so nothing in this app allocates, and `play` does not
+set `APP_TIER`. `track.c`'s header comment explains
 this at length and it applies unchanged here.
 
 ---

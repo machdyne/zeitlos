@@ -348,9 +348,8 @@ int main(void) {
      *
      * nextvi's emalloc()/erealloc() print "out of memory" and exit,
      * which is correct and says nothing about how much there was --
-     * and the answer is usually that the process is in the wrong
-     * stack/heap tier (z_proc_stack_size_for(), sw/os/kernel.h), which
-     * is a KERNEL setting rather than anything in this binary. Printing
+     * and the answer is the stack and heap this binary asked for
+     * (APP_TIER, docs/executables.md). Printing
      * it here turns "out of memory" into a number that can be compared
      * against what the tier should give.
      */

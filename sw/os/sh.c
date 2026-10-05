@@ -1048,11 +1048,8 @@ void sh(void) {
 			printf("creating process (file: %s size: %ld%s)\n", arg,
 				(long)size, xi.is_zexe ? "" : " raw");
 			fflush(stdout);
-			// see kernel.h's z_proc_stack_size_for() comment -- both
-			// `repl` and `net` are zport.h providers with a confirmed
-			// need for more than the default allowance (per-message
-			// zport.h leak, plus repl's own Scheme stdlib loading --
-			// see zport.c's own z_port_send() comment).
+			// The tier is in the header just parsed. See
+			// z_proc_stack_size() in kernel.h.
 			// Anything after the name is the program's launch
 			// argument (Z_WM_SET_ARG, zwm.h) -- `run view /demo/a.jpg`,
 			// `run automate /demo/short.zds` -- joined with spaces, as
@@ -1078,7 +1075,7 @@ void sh(void) {
 					printf("no wm: launch argument ignored\n");
 				}
 			}
-			uint32_t stack_size = z_proc_stack_size_for(arg);
+			uint32_t stack_size = z_proc_stack_size(&xi);
 			uint32_t pid = k_proc_create(size, stack_size);
 			printf(" - pid: %ld\n", pid);
 			if (!pid) {
@@ -1728,7 +1725,7 @@ void sh(void) {
 // a caller that could branch on it is a caller that could stop early.
 //
 // The memory figure in the failure message is what k_proc_create() was
-// asked for. posix's tier is 4MB (Z_PROC_STACK_SIZE_HUGE, kernel.h), so
+// asked for. posix asks for 4MB (HUGE, docs/executables.md), so
 // on a 1MB or 2MB board "unable to create" is the correct outcome and
 // the number says why without anyone having to look it up.
 static void init_start_optional(const char *name) {
@@ -1745,7 +1742,7 @@ static void init_start_optional(const char *name) {
 		return;
 	}
 
-	uint32_t stack = z_proc_stack_size_for(name);
+	uint32_t stack = z_proc_stack_size(&xi);
 	uint32_t pid = k_proc_create(size, stack);
 
 	if (!pid) {
@@ -1784,7 +1781,7 @@ void init(void) {
 		printf("init: wm binary not found\n");
 		return;
 	}
-	uint32_t pid_wm = k_proc_create(size_wm, z_proc_stack_size_for("wm"));
+	uint32_t pid_wm = k_proc_create(size_wm, z_proc_stack_size(&xi_wm));
 	if (!pid_wm) {
 		printf("init: unable to create wm process\n");
 		return;
@@ -1822,7 +1819,7 @@ void init(void) {
 	if (!size_net) {
 		printf("init: net binary not found (non-fatal)\n");
 	} else {
-		pid_net = k_proc_create(size_net, z_proc_stack_size_for("net"));
+		pid_net = k_proc_create(size_net, z_proc_stack_size(&xi_net));
 		if (!pid_net) {
 			printf("init: unable to create net process (non-fatal)\n");
 		} else {

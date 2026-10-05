@@ -85,4 +85,9 @@ clean-test:
 	$(MAKE) -C test clean
 .PHONY: clean-test
 
+# 1MB. The pack this tree ships is dense=no and needs little; a
+# dense=yes pack still works up to about a megabyte and then says
+# it needs HUGE. It was 4MB while the dense half was on.
+APP_TIER = BIG
+
 include ../../common/app.mk

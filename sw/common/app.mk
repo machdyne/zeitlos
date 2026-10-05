@@ -41,6 +41,11 @@
 #   APP_MAIN_RULE 1 (default) this file provides the $(APP).o rule; set
 #                 0 when the app compiles its main object itself.
 #   LDLIBS        extra link inputs after $(OBJS), e.g. -lm.
+#   APP_TIER      stack+heap tier written into the ZEXE flags word
+#                 (sw/common/zexec.h, docs/executables.md): SMALL,
+#                 DEFAULT, MEDIUM, LARGE, BIG or HUGE. Unset leaves
+#                 flags 0, which the loader reads as "does not ask"
+#                 (the default, 16KB).
 #   CLEAN_EXTRA   extra files or directories for `make clean` to remove.
 #                 A clean step that needs a command rather than a file
 #                 list (a sub-make, say) is a prerequisite:
@@ -167,11 +172,13 @@ $(APP).elf: $(OBJS)
 # A .zexe rather than a raw --pad-to binary: .bss is carried in the
 # header as a NUMBER instead of as literal zeros read off the card on
 # every launch. See sw/common/zexec.h and docs/executables.md.
+# $(APP_TIER), when the Makefile set one, is the tier index.
+# Unset, that argument is absent and flags stay 0.
 $(APP).bin: $(APP).elf
 	@EDATA=$$($(PREFIX)nm $< | awk '$$3=="_edata"{print "0x"$$1}'); \
 	END=$$($(PREFIX)nm $< | awk '$$3=="_end"{print "0x"$$1}'); \
 	$(PREFIX)objcopy -O binary $< $(APP).data; \
-	$(MKEXEC) $(APP).data $@ $$(($$END - $$EDATA)); \
+	$(MKEXEC) $(APP).data $@ $$(($$END - $$EDATA)) $(APP_TIER); \
 	rm -f $(APP).data
 
 clean:

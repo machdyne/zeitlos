@@ -88,4 +88,9 @@ posix_stubs.o: posix_stubs.c
 fileio.o: fileio.c
 	$(CC) $(OWN_CFLAGS) -c fileio.c -o fileio.o
 
+# 1MB. nextvi allocates per line, about 3.4 times the file. A 154KB
+# source needed 273-529KB. It was 4MB, then 2MB, because _fstat
+# reported size 0 and the editor allocated a megabyte read buffer.
+APP_TIER = BIG
+
 include ../../common/app.mk

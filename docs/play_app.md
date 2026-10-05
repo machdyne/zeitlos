@@ -773,7 +773,7 @@ Static footprint is about 75 KB, nearly all of it the two rings. It all
 lives in `.bss`, which is the right budget: a process's stack tier
 (`Z_PROC_STACK_SIZE_DEFAULT`, 16 KB) is the *only* room its C stack and
 `malloc()` heap ever get, shared, for its whole life. Nothing in this
-app allocates, so `play` needs no entry in `z_proc_stack_size_for()`.
+app allocates, so `play` does not set `APP_TIER`.
 `track.c`'s header explains this at length and it applies unchanged.
 
 ---

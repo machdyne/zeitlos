@@ -48,4 +48,9 @@ test:
 		echo "(bbs.c's fed-link test needs vm.mmap_min_addr=0 -- skipped)"; elif [ $$r -ne 0 ]; then exit $$r; fi
 
 CLEAN_EXTRA = bbs-linux
+
+# 64KB. Each node is about 5KB, four by default, and a caller can
+# have eight 512-byte sends in flight until they are acked.
+APP_TIER = LARGE
+
 include ../../common/app.mk

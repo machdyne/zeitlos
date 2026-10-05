@@ -59,7 +59,7 @@ char *fs_mallocfile(char *filename);
 //
 // For apps whose heap cannot spare a file-sized allocation. An app's
 // heap and stack share one allowance (16KB by default, see
-// z_proc_stack_size_for() in sw/os/kernel.h), and _sbrk() refuses to
+// docs/executables.md), and _sbrk() refuses to
 // grow the heap into the stack -- so a few KB of malloc can fail on
 // the device while succeeding on any build machine. sw/apps/settings
 // found this reporting "out of memory" when saving.
