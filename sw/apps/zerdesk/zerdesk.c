@@ -6,7 +6,11 @@
  * serves the viewer page and the WebSocket, and puts the pointer and
  * the keyboard back.
  *
- *   GET /      the viewer page. The ESP32's index.html, embedded as is.
+ *   GET /      the viewer page, read from the card: PAGE_PATH. The
+ *              card image puts the ESP32's index.html there (release/),
+ *              and it can be edited in place: every request reads the
+ *              file again. Without it there is no remote desktop, and
+ *              the browser is told why in plain text.
  *   GET /ws    WebSocket. One stripe is [idx][len16 LE][PackBits +
  *              trailer], the bytes the ESP32 forwards today. 3-byte
  *              keys and 5-byte mouse packets come back.
@@ -41,17 +45,21 @@
 #include "../../common/zport.h"
 #include "../../common/znet.h"
 #include "../../common/zcfg.h"
+#include "../../common/zfsapp.h"
 #include "../../common/zscreen.h"
 #include "../../common/zinput.h"
 #include "../../common/zws.h"
 #include "deskcfg.h"
-#include "page.h"
 
 #define TICKS_PER_SEC  Z_TICK_HZ
 
 #define MAX_CONN       6		/* net has 6 inbound relays */
 #define REFUSE_LOG_TICKS (5 * TICKS_PER_SEC)
 #define REFUSE_TEXT    "Too many viewers connected"
+#define PAGE_PATH      "/zerdesk/index.html"
+#define NO_PAGE_TEXT   "No remote desktop: the viewer page " PAGE_PATH \
+	" is not on the card. The card image carries it; its source is " \
+	"esp32/zeitlos-nic/web/index.html."
 #define RX_SZ          1024
 #define OUT_SZ         2560
 #ifndef CHUNK
@@ -93,8 +101,8 @@ typedef struct {
 	uint8_t acc_n;
 	uint8_t out[OUT_SZ];
 	uint16_t out_len;
-	const uint8_t *body;
-	uint32_t body_left;
+	int page_fd;			/* -1, or the page being sent */
+	uint32_t body_left;		/* bytes of it still to read */
 	uint32_t todo;
 	uint16_t lens[Z_PORT_MAX_PENDING_SENDS];
 	uint8_t lens_head, lens_n;
@@ -221,8 +229,17 @@ static void verify_report(void)
 			(unsigned long)scr.verify_missed);
 }
 
+static void page_close(conn_t *c)
+{
+	if (c->page_fd >= 0)
+		fs_close_handle(c->page_fd);
+	c->page_fd = -1;
+	c->body_left = 0;
+}
+
 static void conn_free(conn_t *c)
 {
+	page_close(c);
 	for (int k = 0; k < c->lens_n; k++)
 		pend_bytes -= c->lens[(c->lens_head + k) % Z_PORT_MAX_PENDING_SENDS];
 	memset(c, 0, sizeof(*c));
@@ -232,6 +249,7 @@ static void conn_end(conn_t *c, const char *why)
 {
 	if (c->state == C_FREE || c->state == C_DRAIN)
 		return;
+	page_close(c);
 	if (c->viewer) {
 		c->viewer = false;
 		c->state = C_DRAIN;
@@ -425,6 +443,24 @@ static uint32_t share(void)
 	return s;
 }
 
+/* The next piece of the page, into out. A file that comes up short
+ * (cut while it was being sent) ends the connection there. */
+static bool page_fill(conn_t *c)
+{
+	uint32_t want = c->body_left < CHUNK ? c->body_left : CHUNK;
+	int got = fs_read_chunk(c->page_fd, c->out, (int)want);
+
+	if (got <= 0) {
+		printf("zerdesk: %s: read failed with %lu bytes still to send\n",
+			PAGE_PATH, (unsigned long)c->body_left);
+		conn_end(c, "page read failed");
+		return false;
+	}
+	c->out_len = (uint16_t)got;
+	c->body_left -= (uint32_t)got;
+	return true;
+}
+
 static void pump(conn_t *c, uint32_t now)
 {
 	if (c->state == C_WS && c->viewer)
@@ -433,17 +469,16 @@ static void pump(conn_t *c, uint32_t now)
 	for (;;) {
 		const uint8_t *p;
 		uint32_t n;
-		int src;
 		uint32_t t0;
 		z_rv rv;
 
-		if (c->out_len) {
-			p = c->out; n = c->out_len; src = 0;
-		} else if (c->body_left) {
-			p = c->body; n = c->body_left; src = 1;
-		} else {
+		if (!c->out_len && c->body_left && c->port.connected &&
+				!page_fill(c))
 			break;
-		}
+		if (!c->out_len)
+			break;
+		p = c->out;
+		n = c->out_len;
 		if (n > CHUNK)
 			n = CHUNK;
 		if (!c->port.connected)
@@ -481,19 +516,21 @@ static void pump(conn_t *c, uint32_t now)
 		c->bytes += n;
 		c->last_tx = now;
 		c->last_progress = now;
-		if (src == 0) {
-			memmove(c->out, c->out + n, c->out_len - n);
-			c->out_len = (uint16_t)(c->out_len - n);
-		} else {
-			c->body += n;
-			c->body_left -= n;
-		}
+		memmove(c->out, c->out + n, c->out_len - n);
+		c->out_len = (uint16_t)(c->out_len - n);
 		if (c->state == C_WS && c->viewer)
 			frame_stripes(c);
 	}
 
-	if (c->state == C_BODY && !c->out_len && !c->body_left)
+	if (c->state == C_BODY && !c->out_len && !c->body_left) {
+		if (c->page_fd >= 0) {
+			printf("zerdesk: page to ");
+			print_ip(c->info.ip);
+			printf(", %lu ms\n", (unsigned long)((now - c->opened) *
+				1000u / TICKS_PER_SEC));
+		}
 		conn_end(c, "served");
+	}
 }
 
 static int ci_prefix(const char *s, const char *p)
@@ -533,7 +570,7 @@ static const char *header_val(const char *req, const char *name, int *len)
 
 static void http_text(conn_t *c, const char *status, const char *text)
 {
-	char h[200];
+	char h[320];
 	snprintf(h, sizeof h, "HTTP/1.0 %s\r\nContent-Type: text/plain\r\n"
 		"Content-Length: %u\r\nCache-Control: no-store\r\n"
 		"Connection: close\r\n\r\n%s\n",
@@ -581,18 +618,32 @@ static void http_request(conn_t *c)
 
 	if (!strcmp(path, "/") || !strcmp(path, "/index.html")) {
 		char h[200];
+		int size;
 		if (viewers_full(c))
 			return;
+		/* Read from the card on every request, so an edited page
+		 * is served at once. No copy is kept: without the file,
+		 * the browser is told why. */
+		size = fs_size(PAGE_PATH);
+		if (size > 0)
+			c->page_fd = fs_open_read(PAGE_PATH);
+		if (size <= 0 || c->page_fd < 0) {
+			c->page_fd = -1;
+			printf("zerdesk: page to ");
+			print_ip(c->info.ip);
+			printf(": %s %s; sent the reason instead\n", PAGE_PATH,
+				size <= 0 ? "is not on the card" : "would not open");
+			http_text(c, "503 Service Unavailable", size <= 0 ?
+				NO_PAGE_TEXT : "The viewer page " PAGE_PATH
+				" is on the card but would not open.");
+			return;
+		}
 		snprintf(h, sizeof h, "HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n"
 			"Content-Length: %u\r\nCache-Control: no-store\r\n"
-			"Connection: close\r\n\r\n", (unsigned)PAGE_LEN);
+			"Connection: close\r\n\r\n", (unsigned)size);
 		out_str(c, h);
-		c->body = page_html;
-		c->body_left = PAGE_LEN;
+		c->body_left = (uint32_t)size;
 		c->state = C_BODY;
-		printf("zerdesk: page to ");
-		print_ip(c->info.ip);
-		printf("\n");
 		return;
 	}
 	if (!strcmp(path, "/ws")) {
@@ -790,6 +841,7 @@ static void on_connect(const z_msg_t *m)
 		return;
 	}
 	memset(c, 0, sizeof(*c));
+	c->page_fd = -1;
 	c->info = info;
 	c->state = C_HTTP;
 	c->port.peer_pid = m->from;
@@ -925,10 +977,19 @@ int main(void)
 	memset(conns, 0, sizeof(conns));
 	heap_note();
 	stack_paint();
-	printf("zerdesk: starting as %s; page %u B, chunk %u, budget %u (%u per conn), "
-		"%lu B of stack+heap\n", name, (unsigned)PAGE_LEN,
+	printf("zerdesk: starting as %s; chunk %u, budget %u (%u per conn), "
+		"%lu B of stack+heap\n", name,
 		(unsigned)CHUNK, (unsigned)BUDGET, (unsigned)PER_CONN,
 		(unsigned long)(sp0 - (uintptr_t)&_end));
+	{
+		int size = fs_size(PAGE_PATH);
+		if (size > 0)
+			printf("zerdesk: page %s, %d B\n", PAGE_PATH, size);
+		else
+			printf("zerdesk: NO PAGE: %s is not on the card. Browsers "
+				"get a plain-text error until it is there; the card "
+				"image carries it.\n", PAGE_PATH);
+	}
 	printf("zerdesk: port %lu (%s), allow %s (%s), viewers %d (%s)\n",
 		(unsigned long)listen_port, from_file(port_file),
 		allow_any ? "any" : "subnet", from_file(allow_file),

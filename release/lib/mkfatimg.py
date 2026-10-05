@@ -255,7 +255,7 @@ SELFHOST = [
 
 DIRS = ["apps", "audio", "demo", "docs", "ark", "user", "libz", "libz/include",
         "fpga", "fpga/boards", "fpga/examples", "speech", "web", "font",
-        "bbs", "bbs/bulletins", "bbs/text", "fed"]
+        "bbs", "bbs/bulletins", "bbs/text", "fed", "zerdesk"]
 
 # The speech pack: the pronunciation lexicon and the recorded voice
 # sw/apps/tts reads (docs/tts.md). NOT built from this tree and NOT
@@ -411,6 +411,18 @@ NETWORK_FILES = [
     ("bbs/bulletins/01-welcome.txt", "sw/apps/bbs/data/bulletins/01-welcome.txt"),
     ("bbs/text/README.txt", "sw/apps/bbs/data/text/README.txt"),
     ("fed/fed.cfg", "sw/apps/fed/data/fed.cfg"),
+]
+
+# The remote desktop's viewer page, where sw/apps/zerdesk reads it on
+# every request (docs/remote_desktop.md). zerdesk carries no copy of
+# its own: without this file it serves nothing but a plain-text reason.
+# It is the ESP32's page, the one file both paths serve
+# (esp32/zeitlos-nic embeds it). Edit it on the card to change what the
+# browser gets from this machine; the ESP32's copy is built in.
+# Outside /www on purpose: netserve serves that directory, and there
+# the page would open its WebSocket to netserve.
+DESK_FILES = [
+    ("zerdesk/index.html", "esp32/zeitlos-nic/web/index.html"),
 ]
 
 # Fonts drawn in software (docs/text_encoding.md, "Japanese"): the 12x12
@@ -690,7 +702,7 @@ def build(root, out_path, ark_dir=None, verbose=True, packs=None):
     # them compiles only freestanding programs -- so their absence is
     # an error here rather than a quiet omission.
     missing += [p for _, p in LIBZ_FILES + LIBZ_EXTRA + CONFIG_FILES + NETWORK_FILES + FONT_FILES
-                + EXAMPLES + FPGA_FILES + DEMO_FILES
+                + DESK_FILES + EXAMPLES + FPGA_FILES + DEMO_FILES
                 if not os.path.exists(os.path.join(root, p))]
 
     if missing:
@@ -757,7 +769,7 @@ def build(root, out_path, ark_dir=None, verbose=True, packs=None):
     # after the image had already been formatted.
     card_paths = []
     for name, _rel in apps + LIBZ_FILES + LIBZ_EXTRA + EXAMPLES \
-            + FPGA_FILES + CONFIG_FILES + NETWORK_FILES + FONT_FILES:
+            + FPGA_FILES + CONFIG_FILES + NETWORK_FILES + FONT_FILES + DESK_FILES:
         card_paths.append("/" + name)
     for a in audio:
         card_paths.append("/audio/" + a)
@@ -783,7 +795,7 @@ def build(root, out_path, ark_dir=None, verbose=True, packs=None):
     sizes = [os.path.getsize(src) for _n, fs in pack_files for _c, src in fs]
     nfiles_pack = len(sizes)
     for _n, rel in apps + LIBZ_FILES + LIBZ_EXTRA + EXAMPLES + FPGA_FILES \
-            + CONFIG_FILES + NETWORK_FILES + FONT_FILES:
+            + CONFIG_FILES + NETWORK_FILES + FONT_FILES + DESK_FILES:
         sizes.append(os.path.getsize(os.path.join(root, rel)))
     for a in audio:
         sizes.append(os.path.getsize(os.path.join(audio_src, a)))
@@ -874,8 +886,8 @@ def build(root, out_path, ark_dir=None, verbose=True, packs=None):
     for name, rel in FPGA_FILES:
         copy(os.path.join(root, rel), "/" + name)
 
-    # -- the configuration template --
-    for name, rel in CONFIG_FILES + NETWORK_FILES + FONT_FILES:
+    # -- the configuration template, and the data apps look for --
+    for name, rel in CONFIG_FILES + NETWORK_FILES + FONT_FILES + DESK_FILES:
         copy(os.path.join(root, rel), "/" + name)
 
     # Headers by directory rather than by name: the set is "whatever

@@ -51,6 +51,11 @@ Beyond the apps, docs and the ARK scroll:
   (`docs/bbs.md`). `fed/fed.cfg` names no network: fed runs alone until
   it is given one -- `run fed key` for this node's public key
   (`docs/fed.md`, "Managing a network").
+- **`zerdesk/index.html`** -- the remote desktop's viewer page, which
+  `apps/zerdesk` reads from there on every request and does not carry
+  itself. It is `esp32/zeitlos-nic/web/index.html`, the page the ESP32
+  builds in; the copy on the card can be edited in place
+  (`docs/remote_desktop.md`, "Served by Zeitlos").
 - **`apps/cryptobench`** -- times the cryptography with and without the
   hardware blocks, and checks their answers (`docs/crypto_hw_options.md`).
 - **`libz/`** -- the zcc runtime: `libz.bin`, `libz.sym`, and the
