@@ -206,80 +206,47 @@ void k_proc_yield_blocked(void);
 // process's static footprint lives. Code, .rodata and .bss are part of
 // the BINARY, and k_proc_create() sizes the block as image + this. So
 // `repl`'s 96KB Scheme cell heap (MS_HEAP_SIZE * sizeof(ms_val), a
-// .bss array inside ms.o) is entirely unaffected by the tier chosen
-// here. What the tier bounds is the C stack plus whatever malloc()
-// hands out at runtime.
+// .bss array inside ms.o) is entirely unaffected by the size chosen
+// here. What it bounds is the C stack plus whatever malloc() hands out
+// at runtime.
 //
-// The program asks, in the ZEXE header (sw/common/zexec.h). This file
-// is the number of bytes each tier is, and the cap. Which app asks for
-// which, and why that size and not the next one down, is in that app's
-// Makefile; the longer notes are in docs/executables.md. They used to
-// live here, beside a table of file names. A name is the wrong key:
-// the card stores `cryptobench` as `cryptob`, and an app that is not
-// in the table cannot ask for more without a new kernel.
+// The program asks, with a size code in the ZEXE header
+// (sw/common/zexec.h). Which app asks for how much, and why that size
+// and not the next one down, is in that app's Makefile (APP_STACK);
+// the longer notes are in docs/executables.md. A name is the wrong
+// key: the card stores `cryptobench` as `cryptob`, and an app that is
+// not in a table cannot ask for more without a new kernel.
 //
-// flags 0, a binary with no header, and a tier index this kernel does
-// not know (7, or any reserved flag bit) are the default. An unknown
-// request is not rounded up to the cap. A corrupt word must not be
-// handed 4MB. A known tier whose byte count is above the cap is
-// clamped to the cap. Nothing below exceeds it today.
+// flags 0 and a binary with no header get the default.
+// k_proc_create_exec() (kernel.c) refuses the rest of what it cannot
+// give -- code 15, a reserved flag bit, a code above the cap, or a
+// block the pool cannot hold -- and says so on the console. It never
+// grants less than was asked for.
 //
-// HUGE is a different KIND of tier from the ones under it. Those
-// differ by factors of two and exist to trim margin off apps that
-// were measured not to need it. HUGE is sixty-four times LARGE,
-// because a compiler's working set scales with the source rather than
-// with anything a margin can bound. Three things follow from the size,
-// and all three are deliberate:
-//
-//   1. It does not fit on a 1MB board and is not meant to. The pool
-//      there already holds the kernel's own image, so a 4MB request
-//      cannot succeed. That is the correct outcome, and it is not a
-//      silent one: k_mem_alloc() returns NULL, k_proc_create() returns
-//      0, and every caller already treats 0 as "did not start".
-//
-//   2. It is a large enough share of an 8MB board to matter to
-//      everything else on it. On 8MB, expect to run one of these OR
-//      the desktop, not comfortably both; on 32MB it is unremarkable.
-//
-//   3. k_mem_alloc() is a first-fit walk over a block list with
-//      Z_MEM_ALIGNMENT of 4096 (mem.h), so a 4MB request late in a
-//      fragmented pool can fail while 4MB is nominally free. `free`
-//      reports fragmentation. Worth knowing before reading a refusal
-//      as "out of memory" when it is really "out of one contiguous
-//      piece".
+// The cap is the one number a board with a lot of RAM might want to
+// raise. 8MB is code 11: one doubling above the 4MB that `zcc`,
+// `posix` and `zfpga` ask for, so the largest ask in the tree can grow
+// once without a kernel change, and nothing in sight needs more. The
+// cap is not what protects a small board; the allocator is. On 1MB a
+// 4MB request is refused because the pool cannot hold it, cap or no
+// cap. k_mem_alloc() is a first-fit walk over a block list with
+// Z_MEM_ALIGNMENT of 4096 (mem.h), so a large request late in a
+// fragmented pool can fail while that much is nominally free; the
+// refusal prints the largest free block for that reason.
 //
 // Process zero is not a ZEXE. kernel.c passes Z_PROC_STACK_SIZE_DEFAULT
 // for it directly: that process is the kernel.
-#define Z_PROC_STACK_SIZE_SMALL    8*1024
-#define Z_PROC_STACK_SIZE_DEFAULT  16*1024
-#define Z_PROC_STACK_SIZE_MEDIUM   32*1024
-#define Z_PROC_STACK_SIZE_LARGE    64*1024
-#define Z_PROC_STACK_SIZE_BIG      1024*1024
-#define Z_PROC_STACK_SIZE_HUGE     4*1024*1024
+#define Z_PROC_STACK_SIZE_DEFAULT  (16 * 1024)
+#define Z_PROC_STACK_CAP           (8 * 1024 * 1024)
 
-// The cap. A tier constant larger than this is clamped in
-// z_proc_stack_size(); the header cannot name a bigger one.
-#define Z_PROC_STACK_CAP           Z_PROC_STACK_SIZE_HUGE
-
-static inline uint32_t z_proc_stack_size(const z_exec_info_t *info) {
-	uint32_t n = Z_PROC_STACK_SIZE_DEFAULT;
-	uint16_t f = (info && info->is_zexe) ? info->flags : 0;
-
-	if ((f & ~Z_EXEC_TIER_MASK) == 0) {
-		switch (f & Z_EXEC_TIER_MASK) {
-		case Z_EXEC_TIER_SMALL:   n = Z_PROC_STACK_SIZE_SMALL;   break;
-		case Z_EXEC_TIER_DEFAULT: n = Z_PROC_STACK_SIZE_DEFAULT; break;
-		case Z_EXEC_TIER_MEDIUM:  n = Z_PROC_STACK_SIZE_MEDIUM;  break;
-		case Z_EXEC_TIER_LARGE:   n = Z_PROC_STACK_SIZE_LARGE;   break;
-		case Z_EXEC_TIER_BIG:     n = Z_PROC_STACK_SIZE_BIG;     break;
-		case Z_EXEC_TIER_HUGE:    n = Z_PROC_STACK_SIZE_HUGE;    break;
-		default:                  n = Z_PROC_STACK_SIZE_DEFAULT; break;
-		}
-	}
-	if (n > Z_PROC_STACK_CAP)
-		n = Z_PROC_STACK_CAP;
-	return n;
-}
+// Names for the sizes apps in this tree ask for, because comments and
+// docs refer to them. The header carries a size code, not these, and
+// the loader does not use them.
+#define Z_PROC_STACK_SIZE_SMALL    (8 * 1024)
+#define Z_PROC_STACK_SIZE_MEDIUM   (32 * 1024)
+#define Z_PROC_STACK_SIZE_LARGE    (64 * 1024)
+#define Z_PROC_STACK_SIZE_BIG      (1024 * 1024)
+#define Z_PROC_STACK_SIZE_HUGE     (4 * 1024 * 1024)
 
 // the live process table and the pid of the process currently
 // scheduled/executing -- defined in kernel.c. msg.c (and anything
@@ -298,6 +265,7 @@ extern volatile uint32_t z_kernel_ticks;
 // --
 
 uint32_t k_proc_create(uint32_t size, uint32_t stack_size);
+uint32_t k_proc_create_exec(const char *name, const z_exec_info_t *xi);
 uint32_t k_proc_base(uint32_t pid);
 z_rv k_proc_start(uint32_t pid);
 z_rv k_proc_stop(uint32_t pid);

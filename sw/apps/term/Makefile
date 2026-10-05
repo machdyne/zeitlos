@@ -51,6 +51,6 @@ OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o zsayall.o 
 	zport.o zdns.o zconnect.o zcfg.o term.o
 
 # 8KB, same as wm. Port sends outlive the call and are bounded.
-APP_TIER = SMALL
+APP_STACK = 8K
 
 include ../../common/app.mk

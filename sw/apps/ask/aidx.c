@@ -180,7 +180,7 @@ int ai_listdirs(const char *path, char *names, int maxnames)
  * different situations: nothing there, an index this build cannot
  * read, files from two different distributions mixed together, and --
  * by far the most likely on a first run -- malloc refusing because
- * the process was left on the default tier. ask asks for BIG
+ * the process was left on the default 16KB. ask asks for 1MB
  * (docs/executables.md); a dense pack past about a megabyte still
  * does not fit, and the app says so.
  *
@@ -306,7 +306,7 @@ static void *load_body(const char *path, uint32_t magic, uint32_t dsid,
          * entry `ask` gets Z_PROC_STACK_SIZE_DEFAULT's 16KB against a
          * coarse array of several hundred KB. See
          * sw/apps/ask/INTEGRATION.md. */
-        ai_note("out of memory -- needs HUGE tier");
+        ai_note("out of memory -- needs APP_STACK = 4M");
         return NULL;
     }
 

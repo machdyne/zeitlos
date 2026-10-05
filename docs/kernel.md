@@ -82,18 +82,20 @@ image, for the reason "The 256KB image budget" below explains.
 refuses to pass the stack pointer, so an app's heap and stack share the
 `stack_size` allowance and eat toward each other.
 
-The executable names its stack and heap tier: bits 2:0 of the ZEXE
-flags word (`docs/executables.md`). `z_proc_stack_size()` in
-`sw/os/kernel.h` turns that index into bytes and will not grant more
-than `Z_PROC_STACK_CAP` (HUGE, 4MB). A program that does not ask, and
-a binary with no header, get the default 16KB. HUGE is a different
-KIND of tier from the others; `docs/executables.md` says why.
+The executable names its stack and heap size: a 4-bit code in the
+ZEXE flags word (`docs/executables.md`), 8KB × 2^(code − 1). The
+kernel grants up to `Z_PROC_STACK_CAP` (`sw/os/kernel.h`, 8MB). A
+program that does not ask, and a binary with no header, get the
+default 16KB. What the kernel cannot give -- the reserved code 15, a
+code above the cap, a reserved flag bit, or a block the pool cannot
+hold -- is refused by `k_proc_create_exec()` with one line saying what
+was asked for and what there is. It never grants less.
 
 **Allocation failure is a clean refusal.** `k_mem_alloc()` returns
 NULL, `k_proc_create()` returns 0, and every caller treats 0 as "did
 not start". That path was not always trustworthy -- see the `Z_FAIL`
 bug in `docs/app_runtime.md` -- and two things now lean on it
-deliberately: the 4MB tier on a small board, and any future dynamic
+deliberately: a 4MB request on a small board, and any future dynamic
 per-process allocation.
 
 ## The scheduler

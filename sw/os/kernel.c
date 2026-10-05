@@ -470,12 +470,10 @@ z_obj_t *k_proc_run(z_obj_t *args) {
 	// card, and what lets a killed core app be restarted.
 	uint32_t size = fs_exec_info_any(name, &xi) ? 0 : xi.total;
 
-	// The tier is in the header just parsed. flags 0, and a binary
-	// with no header, are the default. See z_proc_stack_size().
-	uint32_t stack_size = z_proc_stack_size(&xi);
-
+	// The stack size is in the header just parsed; a refusal is
+	// printed by k_proc_create_exec().
 	if (size) {
-		pid = k_proc_create(size, stack_size);
+		pid = k_proc_create_exec(name, &xi);
 		if (pid) {
 			uint32_t base = k_proc_base(pid);
 			fs_load_exec_any(base, name, &xi);
@@ -1807,8 +1805,8 @@ uint32_t k_proc_active_count(void) {
 }
 
 // return process id or 0 on fail. `stack_size` is the per-process
-// stack+heap allowance. Callers take it from z_proc_stack_size()
-// (the executable header). Process zero is not a ZEXE, so kernel.c
+// stack+heap allowance. An executable gets it from its header through
+// k_proc_create_exec() below. Process zero is not a ZEXE, so kernel.c
 // passes Z_PROC_STACK_SIZE_DEFAULT for it directly.
 uint32_t k_proc_create(uint32_t size, uint32_t stack_size) {
 
@@ -1900,6 +1898,64 @@ uint32_t k_proc_create(uint32_t size, uint32_t stack_size) {
 	}
 
 	return(0);
+}
+
+// k_proc_create() for an executable: the stack size comes from its
+// header (sw/common/zexec.h), and what cannot be given is refused with
+// one line on the console saying what was asked for and what there
+// is. Every launch path uses this -- sh.c's `run` and init(), and
+// k_proc_run() -- so the refusal reads the same from all of them.
+// Returns the pid, or 0.
+uint32_t k_proc_create_exec(const char *name, const z_exec_info_t *xi) {
+
+	uint16_t flags = xi->is_zexe ? xi->flags : 0;
+	uint32_t code = flags & Z_EXEC_STACK_MASK;
+	uint32_t stack;
+
+	switch (z_exec_stack(flags, Z_PROC_STACK_SIZE_DEFAULT,
+		Z_PROC_STACK_CAP, &stack)) {
+	case Z_EXEC_STACK_OK:
+		break;
+	case Z_EXEC_STACK_BAD_FLAGS:
+		printf("%s: unknown ZEXE flags 0x%04x -- not started\n",
+			name, (unsigned)flags);
+		return(0);
+	case Z_EXEC_STACK_IS_RESERVED:
+		printf("%s: stack size code %lu is reserved -- not started\n",
+			name, (unsigned long)code);
+		return(0);
+	case Z_EXEC_STACK_OVER_CAP:
+		printf("%s: asks for %luKB of stack+heap (code %lu), "
+			"above this kernel's cap of %luKB -- not started\n",
+			name, (unsigned long)(stack / 1024), (unsigned long)code,
+			(unsigned long)(Z_PROC_STACK_CAP / 1024));
+		return(0);
+	}
+
+	uint32_t pid = k_proc_create(xi->total, stack);
+	if (pid) return(pid);
+
+	// k_proc_create() fails for no free slot, or, with a slot free,
+	// because k_mem_alloc() had no block for it.
+	int slot = 0;
+	for (int p = 0; p < Z_PROCS_MAX; p++)
+		if (z_procs[p].base == 0x00000000) slot = 1;
+	z_mem_stats_args_t m;
+	k_mem_stats((z_obj_t *)&m);
+	uint32_t need = k_mem_align_up(xi->total + stack, Z_MEM_ALIGNMENT);
+	if (slot)
+		printf("%s: needs %luKB (image %luKB + %luKB stack+heap), "
+			"largest free block %luKB of %luKB free -- not started\n",
+			name, (unsigned long)((need + 1023) / 1024),
+			(unsigned long)((xi->total + 1023) / 1024),
+			(unsigned long)(stack / 1024),
+			(unsigned long)(m.largest_free / 1024),
+			(unsigned long)(m.free / 1024));
+	else
+		printf("%s: no free process slot (%d) -- not started\n",
+			name, Z_PROCS_MAX);
+	return(0);
+
 }
 
 z_rv k_proc_start(uint32_t pid) {

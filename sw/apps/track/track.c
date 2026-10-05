@@ -44,7 +44,7 @@
  * for precisely this reason, and kernel.h's tier comment calls that
  * out.
  *
- * A happy consequence: mod does not set APP_TIER. Nothing here
+ * A happy consequence: mod does not set APP_STACK. Nothing here
  * allocates, so the default 16KB tier is ample and the kernel
  * needs no change to run this.
  *

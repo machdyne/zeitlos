@@ -578,6 +578,6 @@ CLEAN_EXTRA = $(BUILD) .web_config_selected
 # 64KB. The parser context is nearly 6KB and the draw path nests
 # the parser back into layout. Running out of stack here is not a
 # clean failure. 32KB would very likely do; web is a 32MB-board app.
-APP_TIER = LARGE
+APP_STACK = 64K
 
 include ../../common/app.mk

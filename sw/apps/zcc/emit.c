@@ -511,7 +511,7 @@ int emit_write_zexe(const char *path, int entry_label, int verbose) {
 
     memcpy(image, "ZEXE", 4);
     image[4] = 1; image[5] = 0;                     /* version 1 */
-    image[6] = 0; image[7] = 0;             /* flags 0: default tier */
+    image[6] = 0; image[7] = 0;             /* flags 0: default stack */
     uint32_t bss = (uint32_t)bss_size;
     image[8]  = (uint8_t)bss;
     image[9]  = (uint8_t)(bss >> 8);

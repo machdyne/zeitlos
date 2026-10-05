@@ -26,16 +26,16 @@
  * This header fixes both. .bss becomes a NUMBER rather than a region
  * of zeros -- the loader allocates and memset()s it, which is far
  * faster than reading it -- and the magic makes the format
- * self-identifying. The same header now also says which stack+heap
- * tier the program wants, so that choice is not a table of file
- * names inside the kernel.
+ * self-identifying. The same header now also says how much stack and
+ * heap the program wants, so that choice is not a table of file names
+ * inside the kernel.
  *
  * -- Layout --
  *
  *   offset  size  field
  *   0       4     magic    "ZEXE"
  *   4       2     version  format version (currently 1)
- *   6       2     flags    bits 2:0 are the tier; bits 15:3 are 0
+ *   6       2     flags    bits 3:0 are the stack size code; 15:4 are 0
  *   8       4     bss_size bytes of .bss to allocate and zero after data
  *   12      4     entry    reserved; 0 means "base address"
  *   16      ...   data     the loadable image, verbatim
@@ -49,36 +49,41 @@
  * would mean seeking to the end, reading, then seeking back -- two
  * extra operations on every launch, to save nothing. 16 bytes also
  * keeps `data` 16-byte aligned in the file, which suits the chunked
- * reads the loader does. The tier has the same constraint: the loader
- * has to know it before it reserves the stack.
+ * reads the loader does. The stack size has the same constraint: the
+ * loader has to know it before it reserves the block.
  *
- * -- The tier --
+ * -- The stack size code --
  *
- * Bits 2:0 of `flags`. 0 means the program does not ask, and the
- * loader uses its default. The other values name a tier; the kernel
- * decides how many bytes that tier is, and it will not grant more
- * than its cap. The names and the bytes are in sw/os/kernel.h.
- * docs/executables.md has the table and why each app asks for what
- * it asks for.
+ * Bits 3:0 of `flags` say how many bytes of stack and heap the
+ * program wants on top of its image, as a power of two:
  *
- *   0  unspecified     the default
- *   1  SMALL
- *   2  DEFAULT         the same size as unspecified, asked for
- *   3  MEDIUM
- *   4  LARGE
- *   5  BIG
- *   6  HUGE
- *   7  (not a tier)
+ *   0       unspecified: the loader's default (16KB in sw/os/kernel.h)
+ *   1..14   8KB << (code - 1)
+ *   15      reserved
  *
- * Bits 15:3 are reserved and must be 0. A loader that sees one set,
- * or a tier index it does not know, treats the header as not having
- * asked. That is the opposite of rounding an unknown request up to
- * the largest tier: a corrupt word must not be handed the cap.
+ *   code  1    2     3     4     5      6      7      8    9    10
+ *   size  8KB  16KB  32KB  64KB  128KB  256KB  512KB  1MB  2MB  4MB
+ *
+ *   code  11   12    13    14
+ *   size  8MB  16MB  32MB  64MB
+ *
+ * An app's Makefile names a size (APP_STACK = 64K), and
+ * tools/mkexec.py writes the code for it. Nobody has to remember the
+ * table.
+ *
+ * The format can say 64MB; a kernel grants up to its own cap
+ * (Z_PROC_STACK_CAP, sw/os/kernel.h). What it cannot give, it
+ * refuses: code 15, a code above the cap, a bit set in 15:4, or a
+ * block the memory pool cannot hold. The program does not start, and
+ * the loader says what was asked for and what there is. It never
+ * hands out less than the program asked for. A program that asked for
+ * 32MB and runs in 4MB fails later, somewhere less obvious, and an
+ * unknown request is not rounded to anything.
  *
  * The field is the old reserved flags word, still version 1. A binary
- * written before this -- flags 0 -- is "does not ask", which is what
- * that reservation always said. A kernel from before this does not
- * read the word, so a binary that does ask still loads there.
+ * written before it -- flags 0 -- is "does not ask", which is what
+ * that reservation always said. A kernel that does not read the word
+ * still loads a binary that asks.
  *
  * -- Backward compatibility --
  *
@@ -98,15 +103,47 @@
 #define Z_EXEC_VERSION      1
 #define Z_EXEC_HEADER_SIZE  16
 
-/* Bits 2:0. Bit 7 of the index (the value 7) is not a tier. */
-#define Z_EXEC_TIER_MASK      0x0007u
-#define Z_EXEC_TIER_UNSPEC    0
-#define Z_EXEC_TIER_SMALL     1
-#define Z_EXEC_TIER_DEFAULT   2
-#define Z_EXEC_TIER_MEDIUM    3
-#define Z_EXEC_TIER_LARGE     4
-#define Z_EXEC_TIER_BIG       5
-#define Z_EXEC_TIER_HUGE      6
+// Bits 3:0 of flags: the stack size code. Bits 15:4 are reserved.
+#define Z_EXEC_STACK_MASK      0x000fu
+#define Z_EXEC_STACK_UNSPEC    0
+#define Z_EXEC_STACK_RESERVED  15
+#define Z_EXEC_STACK_MAX_CODE  14
+#define Z_EXEC_STACK_UNIT      (8 * 1024)	// code 1
+
+// Bytes for a size code: 8KB << (code - 1) for 1-14, 0 otherwise
+// (0 is "unspecified", 15 is reserved).
+static inline uint32_t z_exec_stack_bytes(uint32_t code) {
+	if (code < 1 || code > Z_EXEC_STACK_MAX_CODE) return 0;
+	return (uint32_t)Z_EXEC_STACK_UNIT << (code - 1);
+}
+
+// The answer to "how much stack does this program get", before any
+// memory is looked at. `def` is the loader's default for a program
+// that does not ask; `cap` is the most it grants.
+typedef enum {
+	Z_EXEC_STACK_OK = 0,
+	Z_EXEC_STACK_BAD_FLAGS,	// a bit in 15:4 is set
+	Z_EXEC_STACK_IS_RESERVED,	// code 15
+	Z_EXEC_STACK_OVER_CAP,	// a real size, above `cap`
+} z_exec_stack_rv;
+
+static inline z_exec_stack_rv z_exec_stack(uint16_t flags, uint32_t def,
+	uint32_t cap, uint32_t *bytes) {
+
+	uint32_t code = flags & Z_EXEC_STACK_MASK;
+
+	*bytes = 0;
+	if (flags & ~Z_EXEC_STACK_MASK) return Z_EXEC_STACK_BAD_FLAGS;
+	if (code == Z_EXEC_STACK_RESERVED) return Z_EXEC_STACK_IS_RESERVED;
+	if (code == Z_EXEC_STACK_UNSPEC) {
+		*bytes = def;
+		return Z_EXEC_STACK_OK;
+	}
+	*bytes = z_exec_stack_bytes(code);
+	if (*bytes > cap) return Z_EXEC_STACK_OVER_CAP;
+	return Z_EXEC_STACK_OK;
+
+}
 
 // On-disk header. Every field is little-endian, matching the CPU, so
 // this maps directly onto the first 16 bytes read with no unpacking.
@@ -138,8 +175,9 @@ typedef struct {
 // rather than guessing matters: a future format change that silently
 // half-loaded would corrupt memory instead of failing.
 //
-// An unrecognised tier is NOT a parse error. The flags word is stored
-// and the caller decides; see z_proc_stack_size() in sw/os/kernel.h.
+// The stack size code is NOT checked here. The flags word is stored
+// and the loader decides; see z_exec_stack() above and
+// k_proc_create_exec() in sw/os/kernel.c.
 static inline int z_exec_parse(const void *hdr, uint32_t hdr_len,
 	uint32_t file_size, z_exec_info_t *info) {
 

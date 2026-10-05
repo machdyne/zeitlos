@@ -521,7 +521,7 @@ relays (6) and its TCP slots; the last listen on a port takes it
 over. See [networking.md](networking.md), "Accepted connections".
 
 **Memory.** The executable asks for the medium tier, 32 KB of stack
-and heap (`APP_TIER = MEDIUM`; the unnamed default is 16 KB).
+and heap (`APP_STACK = 32K`; the unnamed default is 16 KB).
 Everything big is static. What the heap holds is `zport`'s copy
 of bytes in flight to `net`, and that is capped at 6 KB in total and
 4 KB to one viewer. The page is read into that buffer as it goes, so

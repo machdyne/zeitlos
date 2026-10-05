@@ -349,7 +349,7 @@ int main(void) {
      * nextvi's emalloc()/erealloc() print "out of memory" and exit,
      * which is correct and says nothing about how much there was --
      * and the answer is the stack and heap this binary asked for
-     * (APP_TIER, docs/executables.md). Printing
+     * (APP_STACK, docs/executables.md). Printing
      * it here turns "out of memory" into a number that can be compared
      * against what the tier should give.
      */

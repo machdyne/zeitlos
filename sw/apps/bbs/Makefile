@@ -51,6 +51,6 @@ CLEAN_EXTRA = bbs-linux
 
 # 64KB. Each node is about 5KB, four by default, and a caller can
 # have eight 512-byte sends in flight until they are acked.
-APP_TIER = LARGE
+APP_STACK = 64K
 
 include ../../common/app.mk

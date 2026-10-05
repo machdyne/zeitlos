@@ -24,6 +24,6 @@ test:
 # 32KB. zport keeps a heap copy of every stripe in flight, up to the
 # 6KB budget, and the page is read while that is live. The unnamed
 # default is 16KB, which left almost nothing past three viewers.
-APP_TIER = MEDIUM
+APP_STACK = 32K
 
 include ../../common/app.mk
