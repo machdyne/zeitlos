@@ -336,12 +336,31 @@ cv.addEventListener('contextmenu',e=>e.preventDefault());
 document.addEventListener('visibilitychange',()=>{if(document.hidden)mouseLeave();});
 addEventListener('keydown',e=>key(e,1));
 addEventListener('keyup',e=>key(e,0));
+// Both servers send a 1-byte frame while a viewer is idle: the ESP32
+// every second, zerdesk every 5s. Anything quieter than that for this
+// long is a socket the peer dropped without a close. 8s is the slower
+// of those two, plus margin. Closing takes the same reconnect as a
+// real onclose. A beat and a stripe both count as traffic.
+const STALL_MS=8000;
+let lastRx=0, stall=0;
+function watch(ws){
+  clearInterval(stall);
+  lastRx=performance.now();
+  stall=setInterval(()=>{
+    if(sock!==ws||ws.readyState!==1) return;
+    if(performance.now()-lastRx<=STALL_MS) return;
+    clearInterval(stall);
+    link='reconnecting...'; showStatus();
+    ws.close();
+  },1000);
+}
 function go(){
   const ws=new WebSocket('ws://'+location.host+'/ws');sock=ws;
   ws.binaryType='arraybuffer';
-  ws.onopen=()=>{link='connected';showStatus();};
-  ws.onclose=()=>{link='reconnecting...';showStatus();setTimeout(go,1500)};
+  ws.onopen=()=>{link='connected';showStatus();watch(ws);};
+  ws.onclose=()=>{clearInterval(stall);link='reconnecting...';showStatus();setTimeout(go,1500)};
   ws.onmessage=e=>{
+    lastRx=performance.now();
     const a=new Uint8Array(e.data); bytes+=a.length;
     let i=0;
     while(i+3<=a.length){
