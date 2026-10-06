@@ -249,15 +249,19 @@ In `dispatch_keys()`, in order:
    key pressed in one layout and released in another would release a
    different character -- a stuck key to an app that tracks what is
    held.
-5. **Dead keys** (next section).
+5. **Dead keys** (next section). A dead key held with Ctrl, Super or
+   Alt is not one of these: it falls through to the shortcuts below.
 6. wm's own shortcuts, then the dock, then the focused app. Alt for
    these means left Alt, or right Alt on a layout without AltGr --
    AltGr+Tab is not Alt+Tab. **Super+[ and Super+]** (workspaces, and
    with Alt or Ctrl, moving a window or paging the dock) are matched by
    key, the two keys right of P: on German `[` and `]` need AltGr, and a
    character match would put the shortcut where nobody could press it.
-   Super+1 ... Super+0 are matched by key too -- on AZERTY the digit row
-   types digits only with Shift.
+   The same is true of **Alt+Equal** and **Super+Equal**, the two keys
+   right of 0: on German the unshifted key is a dead accent, so the
+   shortcut has to win before that accent is armed. Super+1 ... Super+0
+   are matched by key too -- on AZERTY the digit row types digits only
+   with Shift.
 
 ### Dead keys
 
@@ -273,6 +277,15 @@ key:
 | a character it does not combine with (`´` `q`) | the accent, then the character |
 | Escape | nothing: the accent is cancelled and Escape is spent doing it |
 | anything else -- an arrow, Enter, a Ctrl or Alt shortcut | the key as usual; the accent is dropped |
+
+The same modifiers apply to the dead key itself. Pressed with Ctrl,
+Super or Alt (left Alt, or right Alt on a layout that has no AltGr) it
+is not held: wm's shortcut on that key runs, and if there is none the
+key is dropped. An accent that was already held is dropped too. Shift
+still selects the key's other dead level, and AltGr still selects its
+AltGr character, which may itself be a dead key. This is what lets
+Alt+Equal, Super+Equal and Super+[ ] work on the layouts where those
+keys are dead accents when pressed alone.
 
 This is what xkb and Windows do. Apps never receive a dead key: they
 get the finished character, and a composed one counts as one key press
