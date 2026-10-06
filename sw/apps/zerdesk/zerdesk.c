@@ -38,7 +38,7 @@
  * Started by hand: `run zerdesk`, from term.
  *
  * MEMORY: this executable asks for the medium tier, 32 KB of stack
- * and heap (APP_TIER in the Makefile). Everything big is static. The
+ * and heap (APP_STACK in the Makefile). Everything big is static. The
  * heap holds only zport's copies of what is in flight to net, and
  * that is capped here by BUDGET.
  */

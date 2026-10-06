@@ -79,6 +79,6 @@ CLEAN_EXTRA = fed-linux
 
 # 64KB. ML-KEM keeps polynomial vectors on the stack. A
 # decapsulation's deepest path is about 15KB, all of the default.
-APP_TIER = LARGE
+APP_STACK = 64K
 
 include ../../common/app.mk

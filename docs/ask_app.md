@@ -1811,7 +1811,7 @@ happen:
 
 | message | cause |
 |---|---|
-| `out of memory -- needs HUGE tier` | the `kernel.h` edit above was missed. **By far the most likely first-run failure** — everything else can be correct and the app still finds nothing |
+| `out of memory -- needs APP_STACK = 4M` | the stack the executable asks for (`APP_STACK`, `docs/executables.md`) is too small for this pack. **By far the most likely first-run failure** — everything else can be correct and the app still finds nothing |
 | `/ask has no subdirectories` | the pack was copied to `/ask/` rather than `/ask/<name>/`, or only `/ark/` was copied |
 | `pack files are from different builds` | two distributions mixed in one directory. Every file carries the `dsid`; this is the check that stops confidently wrong answers |
 | `missing file in pack` | an incomplete copy — a pack is eight files in `/ask/<name>/` |

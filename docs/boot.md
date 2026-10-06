@@ -60,9 +60,10 @@ gateware  ->  BIOS (BRAM)  ->  kernel (flash -> RAM)  ->  sh()  ->  init()  ->  
      flash archive (`docs/flash_apps.md`), so on a board with no card
      both print `not found (non-fatal -- it lives on the sdcard)`, and
      that is the expected outcome.
-   - **`posix` needs RAM.** Its tier is 4MB (`Z_PROC_STACK_SIZE_HUGE`),
-     so on a board that cannot hold it, init prints `unable to create
-     posix process -- needs NKB` and carries on.
+   - **`posix` needs RAM.** It asks for 4MB of stack and heap
+     (`APP_STACK`, `docs/executables.md`), so on a board that cannot
+     hold it, the launch is refused with a line saying how much it
+     needs and what is free, and init carries on.
    - **Nothing returns early.** `init()` used to `return` when `repl`
      was missing, which also skipped starting `net`. Harmless while
      repl was in flash, fatal to networking the moment it was not.
@@ -292,9 +293,9 @@ and says so rather than hanging the boot.
 ## Memory budget
 
 `k_proc_create()` allocates `max(align_up(image + stack, 4096), 32768)`
-per process, out of a 1MB pool on the minimum-spec board. The byte
-counts are `Z_PROC_STACK_SIZE_*` in `sw/os/kernel.h`. Which program
-asks for which is the ZEXE header (`docs/executables.md`).
+per process, out of a 1MB pool on the minimum-spec board. The stack
+size is what the ZEXE header asks for (`docs/executables.md`), up to
+`Z_PROC_STACK_CAP` in `sw/os/kernel.h`.
 
 Because a process's block is sized from its **image**, every byte of
 `.rodata` and `.bss` in a binary costs a byte of RAM for that process's
@@ -303,29 +304,21 @@ freed 24KB of RAM, and why `--gc-sections` (on by default in every app
 Makefile, `GC_SECTIONS=0` to disable) is worth real memory rather than
 just disk.
 
-### Stack tiers
+### Stack sizes
 
-`Z_PROC_STACK_SIZE_*` (`sw/os/kernel.h`) is the stack **and malloc
-heap** a process gets on top of its image. It is *not* where static
-data lives -- code, `.rodata` and `.bss` are in the binary, and
-`k_proc_create()` allocates image + tier. So `repl`'s 96KB Scheme cell
-heap (`MS_HEAP_SIZE * sizeof(ms_val)`, a `.bss` array in `ms.o`) is
-completely unaffected by its tier: moving repl from LARGE to MEDIUM
-costs zero Scheme cells.
+The stack size (`APP_STACK`, written into the ZEXE header as a code,
+`docs/executables.md`) is the stack **and malloc heap** a process gets
+on top of its image. It is *not* where static data lives -- code,
+`.rodata` and `.bss` are in the binary, and `k_proc_create()`
+allocates image + stack size. So `repl`'s 96KB Scheme cell heap
+(`MS_HEAP_SIZE * sizeof(ms_val)`, a `.bss` array in `ms.o`) is
+completely unaffected by it: moving repl from 64KB to 32KB costs zero
+Scheme cells.
 
-| tier | size |
-|---|---|
-| SMALL | 8KB |
-| DEFAULT | 16KB |
-| MEDIUM | 32KB |
-| LARGE | 64KB |
-| BIG | 1MB |
-| HUGE | 4MB |
-
-A header that does not ask, and an index this kernel does not know,
-get DEFAULT. The blocks below were measured when the kernel still
-chose the tier by file name. The byte counts are the same; which
-program asks is now the header.
+The sizes apps in this tree ask for are 8KB, 32KB, 64KB, 1MB and 4MB;
+the default, for a header that does not ask, is 16KB. The blocks below
+were measured when the kernel still chose the size by file name. The
+byte counts are the same; which program asks is now the header.
 
 Measured at the commit that moved `repl` to the card and gave `term`
 scrollback, built with every app Makefile's defaults (`GC_SECTIONS=1`,

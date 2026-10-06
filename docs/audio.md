@@ -1143,7 +1143,7 @@ and a shell resident. Lower `MOD_MAX_FILE` if that is too close for
 what else you want running.
 
 One happy consequence: because nothing here allocates, the default
-16 KB tier is ample and `track` does not set `APP_TIER`. The kernel
+16 KB tier is ample and `track` does not set `APP_STACK`. The kernel
 needs no change to run it.
 
 ### Feeding the FIFO without stalling the window

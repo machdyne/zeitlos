@@ -68,6 +68,6 @@ test:
 
 # 64KB. SSH engines on the heap, about 10KB each, two by default
 # and four at most, plus eight sends in flight per session each way.
-APP_TIER = LARGE
+APP_STACK = 64K
 
 include ../../../common/app.mk

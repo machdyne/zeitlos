@@ -483,7 +483,7 @@ TIER_HEADROOM = 96 * 1024
 def check_tier(resident, coarse_dim, nchunks):
     """Warn at BUILD time if a pack will not fit a kernel tier.
 
-    The device discovers this as `out of memory -- needs HUGE tier`
+    The device discovers this as `out of memory -- needs APP_STACK = 4M`
     after copying gigabytes onto a card, which is the expensive place
     to find out.
     """

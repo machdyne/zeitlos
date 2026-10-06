@@ -91,6 +91,6 @@ fileio.o: fileio.c
 # 1MB. nextvi allocates per line, about 3.4 times the file. A 154KB
 # source needed 273-529KB. It was 4MB, then 2MB, because _fstat
 # reported size 0 and the editor allocated a megabyte read buffer.
-APP_TIER = BIG
+APP_STACK = 1M
 
 include ../../common/app.mk

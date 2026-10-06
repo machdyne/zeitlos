@@ -68,7 +68,7 @@ clean-tests:
 	@$(MAKE) -C tests clean
 .PHONY: clean-tests
 
-# 4MB. Hosts the compiler, so it asks for the same tier zcc does.
-APP_TIER = HUGE
+# 4MB. Hosts the compiler, so it asks for what zcc does.
+APP_STACK = 4M
 
 include ../../common/app.mk

@@ -520,7 +520,7 @@ the same arrangement as `sw/apps/zcc/libz/mksyms.py`.
 ### Why one binary rather than four
 
 - **One process, one tier.** The 4MB allowance is what the executable
-  asks for (`APP_TIER`, `docs/executables.md`). Four tools would be
+  asks for (`APP_STACK`, `docs/executables.md`). Four tools would be
   four processes, each holding the database, or a dance to hand it
   from one to the next. One tool is one request.
 - **The shared half is most of it.** The database reader, the `.config`

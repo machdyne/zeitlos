@@ -24,7 +24,7 @@ static size_t mem_now, mem_peak;
 static void *block(size_t n) {
     blk_t *b = zio_block(sizeof(blk_t) + n);
     if (!b) zf_fatal("out of memory (%u bytes more, %u in use); zfpga needs the kernel's "
-        "4MB tier (APP_TIER=HUGE, docs/executables.md)", (unsigned)n, (unsigned)mem_now);
+        "4MB tier (APP_STACK = 4M, docs/executables.md)", (unsigned)n, (unsigned)mem_now);
     b->next = blocks;
     b->size = n;
     blocks = b;
