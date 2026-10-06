@@ -263,14 +263,22 @@ static int msg_fd(const uint8_t *h, uint16_t n, int from)
 
 /* ---- RX FIFO (BRAM) ---------------------------------------------- */
 
+/* rtl/esp32_rxfifo.v writes the status word as
+ * {{(31-DEPTH_BITS){1'b0}}, overrun, count} with DEPTH_BITS 13.
+ * count is [DEPTH_BITS:0], fourteen bits. overrun is the next bit,
+ * bit 14. Bit 12 is part of the count: 4096 bytes queued is not an
+ * overrun. */
+#define RXFIFO_COUNT_MASK 0x3fffu
+#define RXFIFO_OVERRUN    (1u << 14)
+
 static inline uint32_t rx_avail(void)
 {
-	return reg_esp32rx_count & 0x3fff;
+	return reg_esp32rx_count & RXFIFO_COUNT_MASK;
 }
 
 static inline int rx_overrun(void)
 {
-	return (reg_esp32rx_count >> 12) & 1;
+	return (reg_esp32rx_count & RXFIFO_OVERRUN) != 0;
 }
 
 /* Wait until the FIFO has a byte, or `ticks` kernel ticks pass.
