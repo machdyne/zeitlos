@@ -25,6 +25,12 @@
  * apps.zerdesk.allow is subnet or any, the same choice netserve makes.
  * Anything else, and a missing key, is subnet.
  *
+ * The WebSocket upgrade is taken when Origin is absent (a tool is not
+ * a browser, and a page cannot omit the header). When the header is
+ * present it must be http:// or https:// followed by the Host header
+ * and nothing else. Anything else is 403 "Origin not allowed", and the
+ * 101 is not sent. Same rule as the ESP32 server.
+ *
  * One path or the other. On a bitstream with the ESP32 link the ESP32
  * serves the desktop and net scans the screen; two readers of DIRTY
  * would clear each other's bits. This refuses to start there.
@@ -650,10 +656,24 @@ static void http_request(conn_t *c)
 		return;
 	}
 	if (!strcmp(path, "/ws")) {
-		int kl = 0;
-		const char *key;
+		int kl = 0, ol = 0, hl = 0, vl = 0;
+		const char *key, *origin, *host, *ver;
 		char reply[Z_WS_RESPONSE_MAX];
 		size_t rn;
+		origin = header_val(req, "origin:", &ol);
+		host = header_val(req, "host:", &hl);
+		if (!zd_origin_ok(origin, ol, host, hl)) {
+			printf("zerdesk: refused ");
+			print_ip(c->info.ip);
+			printf(" -- origin not allowed\n");
+			http_text(c, "403 Forbidden", "Origin not allowed");
+			return;
+		}
+		ver = header_val(req, "sec-websocket-version:", &vl);
+		if (!ver || vl != 2 || ver[0] != '1' || ver[1] != '3') {
+			http_simple(c, "400 Bad Request");
+			return;
+		}
 		if (viewers_full(c))
 			return;
 		key = header_val(req, "sec-websocket-key:", &kl);
@@ -969,7 +989,6 @@ int main(void)
 		printf("zerdesk: could not register -- already running?\n");
 		return 1;
 	}
-
 	port_file = z_cfg_get("apps.zerdesk.port", val, sizeof val);
 	listen_port = (uint32_t)zd_clamp_port(z_cfg_get_int("apps.zerdesk.port", ZD_PORT_DEFAULT));
 	view_file = z_cfg_get("apps.zerdesk.viewers", val, sizeof val);

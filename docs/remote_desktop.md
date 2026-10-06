@@ -270,7 +270,12 @@ nobody is watching costs nothing at all.
 
 `esp32/zeitlos-nic/main/screend.c`. An HTTP server on port 80 with two
 handlers: `/` serves the page (compiled into the image), `/ws` is the
-relay.
+relay. `/ws` stays an ordinary GET until the origin check has passed.
+The server would otherwise send the `101` before the handler ran, and
+a refused page would already be attached. Who may open it is the same
+rule as "Which page" under "Served by Zeitlos". There is no subnet
+test here: the station is reached from other networks, and that test
+would refuse the browser that is meant to connect.
 
 A UDP task binds port 7777 and keeps one **shadow** per stripe --
 still compressed, never decoded here -- plus a dirty mask. It is the
@@ -439,6 +444,16 @@ the file says otherwise.
 same choice `netserve` makes, and `subnet` is the default. Anything
 else, and a missing key, stays on the subnet. A peer off the subnet
 is refused before it is given a connection.
+
+**Which page.** The upgrade is taken when `Origin` is absent. A
+browser always sends that header, so a page on another site cannot
+leave it out; the programs that drive the desktop are not browsers
+and do not send it. When the header is present it has to be `http://`
+or `https://`, in either case, followed by the value of `Host` and
+nothing more. `null`, an empty value, a path or a different host is
+`403 Forbidden` and the body `Origin not allowed`. The `101` is not
+sent. `screend` uses the same rule and the same body. The upgrade
+also requires `Sec-WebSocket-Version: 13`.
 
 **How many.** `apps.zerdesk.viewers` is how many browsers at once,
 **6** unless the file says otherwise, and never more than 6 (that is

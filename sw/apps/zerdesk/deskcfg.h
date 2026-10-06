@@ -49,6 +49,52 @@ static inline int zd_take_peer(int allow_any, int on_subnet)
 	return allow_any || on_subnet;
 }
 
+/* A browser sends Origin on the WebSocket upgrade. A tool does not,
+ * and a page cannot omit the header, so a missing value is taken.
+ * When the header is present it must be http:// or https://, in either
+ * case, followed by the Host header and nothing else. null, an empty
+ * value, a path or a different host is refused. Lengths, because the
+ * header value is not terminated. */
+static inline int zd_origin_ok(const char *origin, int olen,
+		const char *host, int hlen)
+{
+	int sn = 0;
+	int i;
+
+	if (!origin)
+		return 1;
+	if (olen < 1 || !host || hlen < 1)
+		return 0;
+	if (olen >= 8) {
+		sn = 8;
+		for (i = 0; i < 8; i++) {
+			char a = origin[i];
+			if (a >= 'A' && a <= 'Z')
+				a = (char)(a + 32);
+			if (a != "https://"[i]) {
+				sn = 0;
+				break;
+			}
+		}
+	}
+	if (!sn && olen >= 7) {
+		sn = 7;
+		for (i = 0; i < 7; i++) {
+			char a = origin[i];
+			if (a >= 'A' && a <= 'Z')
+				a = (char)(a + 32);
+			if (a != "http://"[i]) {
+				sn = 0;
+				break;
+			}
+		}
+	}
+	if (!sn)
+		return 0;
+	return olen - sn == hlen &&
+		memcmp(origin + sn, host, (size_t)hlen) == 0;
+}
+
 static inline int zd_viewers_full(int connected, int limit)
 {
 	return connected >= limit;

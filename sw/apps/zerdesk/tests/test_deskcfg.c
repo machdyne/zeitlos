@@ -34,6 +34,38 @@ int main(void)
 	CHECK(!zd_take_peer(0, 0), "off-subnet is refused by default");
 	CHECK(zd_take_peer(1, 0) && zd_take_peer(1, 1), "any takes both");
 
+	CHECK(zd_origin_ok(0, 0, "192.168.4.2:8080", 16), "no Origin is taken");
+	CHECK(!zd_origin_ok("", 0, "192.168.4.2:8080", 16), "an empty Origin is refused");
+	CHECK(!zd_origin_ok("null", 4, "192.168.4.2:8080", 16), "null is refused");
+	{
+		const char *host = "192.168.4.2:8080";
+		const char *ok = "http://192.168.4.2:8080/extra";
+		int hlen = (int)strlen(host);
+		int olen = (int)strlen("http://192.168.4.2:8080");
+		CHECK(zd_origin_ok(ok, olen, host, hlen), "the length stops at Host");
+		CHECK(!zd_origin_ok(ok, olen + 1, host, hlen), "one byte past Host is refused");
+		CHECK(zd_origin_ok("https://192.168.4.2:8080",
+			(int)strlen("https://192.168.4.2:8080"), host, hlen), "https");
+		CHECK(zd_origin_ok("HTTP://192.168.4.2:8080", olen, host, hlen),
+			"the scheme is case-insensitive");
+		CHECK(zd_origin_ok("http://192.168.1.55",
+			(int)strlen("http://192.168.1.55"),
+			"192.168.1.55", (int)strlen("192.168.1.55")),
+			"a default port is absent on both sides");
+		CHECK(!zd_origin_ok("http://192.168.4.1:8769",
+			(int)strlen("http://192.168.4.1:8769"), host, hlen),
+			"a different origin is refused");
+		CHECK(!zd_origin_ok("http://192.168.4.2:8080/", olen + 1, host, hlen),
+			"a trailing slash is refused");
+		CHECK(!zd_origin_ok("http://192.168.4.2",
+			(int)strlen("http://192.168.4.2"), host, hlen),
+			"the port has to be on both sides");
+		CHECK(!zd_origin_ok(ok, olen, 0, 0), "Origin without Host is refused");
+		CHECK(!zd_origin_ok("http://192.168.4.2:8080.evil",
+			(int)strlen("http://192.168.4.2:8080.evil"), host, hlen),
+			"a longer host is refused");
+	}
+
 	CHECK(!zd_viewers_full(0, 3) && !zd_viewers_full(2, 3), "room for another viewer");
 	CHECK(zd_viewers_full(3, 3) && zd_viewers_full(4, 1), "at the cap, and past it");
 

@@ -6,6 +6,7 @@
 #include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_http_server.h"
+#include "esp_httpd_priv.h"	/* httpd_ws_respond_server_handshake, ESP-IDF 5.4 */
 #include "znic.h"
 #include "lwip/sockets.h"
 
@@ -92,48 +93,158 @@ static esp_err_t root_get(httpd_req_t *req)
 		index_html_end - index_html_start);
 }
 
-static esp_err_t ws_handler(httpd_req_t *req)
+/* Same rule as zd_origin_ok() in sw/apps/zerdesk/deskcfg.h. A missing
+ * Origin is taken: a tool is not a browser, and a page cannot omit the
+ * header. A present Origin must be http:// or https://, either case,
+ * followed by the Host header and nothing else. */
+static int origin_ok(const char *origin, int olen, const char *host, int hlen)
 {
-	if (req->method == HTTP_GET) {	/* handshake: register the client */
-		int fd = httpd_req_to_sockfd(req);
-		xSemaphoreTake(lock, portMAX_DELAY);
-		int slot = -1, evicted = -1;
-		for (int i = 0; i < MAX_CLIENTS; i++)
-			if (clients[i].fd < 0) { slot = i; break; }
-		if (slot < 0) {		/* table full: evict the oldest */
-			slot = 0;
-			for (int i = 1; i < MAX_CLIENTS; i++)
-				if (clients[i].seen < clients[slot].seen) slot = i;
-			evicted = clients[slot].fd;
+	int sn = 0;
+	int i;
+
+	if (!origin)
+		return 1;
+	if (olen < 1 || !host || hlen < 1)
+		return 0;
+	if (olen >= 8) {
+		sn = 8;
+		for (i = 0; i < 8; i++) {
+			char a = origin[i];
+			if (a >= 'A' && a <= 'Z')
+				a = (char)(a + 32);
+			if (a != "https://"[i]) {
+				sn = 0;
+				break;
+			}
 		}
-		clients[slot].fd = fd;
-		clients[slot].pending = (1u << STRIPES) - 1;
-		clients[slot].seen = xTaskGetTickCount();
-		xSemaphoreGive(lock);
-		/* net counts viewers from these two lines: every slot that is
-		 * freed has to say so, whichever path frees it */
-		if (evicted >= 0)
-			ESP_LOGI(TAG, "viewer gone (fd %d)", evicted);
-		ESP_LOGI(TAG, "viewer connected (fd %d)", fd);
-		viewers_announce(0);
+	}
+	if (!sn && olen >= 7) {
+		sn = 7;
+		for (i = 0; i < 7; i++) {
+			char a = origin[i];
+			if (a >= 'A' && a <= 'Z')
+				a = (char)(a + 32);
+			if (a != "http://"[i]) {
+				sn = 0;
+				break;
+			}
+		}
+	}
+	if (!sn)
+		return 0;
+	return olen - sn == hlen &&
+		memcmp(origin + sn, host, (size_t)hlen) == 0;
+}
+
+static int upgrade_origin_ok(httpd_req_t *req)
+{
+	char origin[160];
+	char host[160];
+	esp_err_t err;
+
+	err = httpd_req_get_hdr_value_str(req, "Origin", origin, sizeof origin);
+	if (err == ESP_ERR_NOT_FOUND)
+		return 1;
+	if (err != ESP_OK)
+		return 0;
+	err = httpd_req_get_hdr_value_str(req, "Host", host, sizeof host);
+	if (err != ESP_OK)
+		return 0;
+	return origin_ok(origin, (int)strlen(origin), host, (int)strlen(host));
+}
+
+static esp_err_t ws_refuse(httpd_req_t *req, unsigned code)
+{
+	uint8_t body[2];
+	httpd_ws_frame_t close = {
+		.final = true,
+		.type = HTTPD_WS_TYPE_CLOSE,
+		.payload = body,
+		.len = 2,
+	};
+
+	body[0] = (uint8_t)(code >> 8);
+	body[1] = (uint8_t)code;
+	httpd_ws_send_frame(req, &close);
+	return ESP_FAIL;
+}
+
+/* an input frame from the browser: {usage, mods, pressed}, relayed
+ * to Zeitlos as a ZNIC_INPUT control message (znic.c). A frame that is
+ * not 3 or 5 bytes is closed: 1009 past 125 bytes, 1002 otherwise.
+ * Leaving it unread would desynchronise the parser. */
+static esp_err_t ws_frame(httpd_req_t *req)
+{
+	httpd_ws_frame_t f = { 0 };
+	uint8_t ev[5];
+	int want;
+
+	if (httpd_ws_recv_frame(req, &f, 0) != ESP_OK)
+		return ws_refuse(req, 1002);
+	if (f.len > 125)
+		return ws_refuse(req, 1009);
+	if (f.len != 3 && f.len != 5)
+		return ws_refuse(req, 1002);
+	want = (int)f.len;
+	f.payload = ev;
+	if (httpd_ws_recv_frame(req, &f, want) != ESP_OK)
+		return ws_refuse(req, 1002);
+	/* push it to Zeitlos unsolicited (not via the poll queue):
+	 * it lands in the FPGA's receive FIFO, which raises the
+	 * cpu_irq[8] that wakes net at once -- input no longer
+	 * waits for net's next poll. See esp32_rxfifo.v's rx_ready
+	 * and docs/remote_desktop.md. */
+	znic_send(want == 5 ? ZNIC_MOUSE : ZNIC_INPUT, ev, want);
+	return ESP_OK;
+}
+
+static esp_err_t ws_upgrade(httpd_req_t *req)
+{
+	struct httpd_req_aux *aux = req->aux;
+	int fd, slot, evicted;
+
+	if (!upgrade_origin_ok(req)) {
+		ESP_LOGW(TAG, "upgrade refused: origin not allowed");
+		httpd_resp_set_status(req, "403 Forbidden");
+		httpd_resp_set_type(req, "text/plain");
+		httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+		httpd_resp_set_hdr(req, "Connection", "close");
+		httpd_resp_send(req, "Origin not allowed\n", HTTPD_RESP_USE_STRLEN);
 		return ESP_OK;
 	}
-	/* an input frame from the browser: {usage, mods, pressed}, relayed
-	 * to Zeitlos as a ZNIC_INPUT control message (znic.c) */
-	httpd_ws_frame_t f = { 0 };
-	if (httpd_ws_recv_frame(req, &f, 0) == ESP_OK &&
-			(f.len == 3 || f.len == 5)) {
-		uint8_t ev[5];
-		int want = f.len;
-		f.payload = ev;
-		if (httpd_ws_recv_frame(req, &f, want) == ESP_OK)
-			/* push it to Zeitlos unsolicited (not via the poll queue):
-			 * it lands in the FPGA's receive FIFO, which raises the
-			 * cpu_irq[8] that wakes net at once -- input no longer
-			 * waits for net's next poll. See esp32_rxfifo.v's rx_ready
-			 * and docs/remote_desktop.md. */
-			znic_send(want == 5 ? ZNIC_MOUSE : ZNIC_INPUT, ev, want);
+	if (httpd_ws_respond_server_handshake(req, NULL) != ESP_OK) {
+		httpd_resp_set_status(req, "400 Bad Request");
+		httpd_resp_set_type(req, "text/plain");
+		httpd_resp_send(req, "400 Bad Request\n", HTTPD_RESP_USE_STRLEN);
+		return ESP_OK;
 	}
+	aux->sd->ws_handshake_done = true;
+	aux->sd->ws_handler = ws_frame;
+	aux->sd->ws_control_frames = false;
+	aux->sd->ws_user_ctx = NULL;
+
+	fd = httpd_req_to_sockfd(req);
+	xSemaphoreTake(lock, portMAX_DELAY);
+	slot = -1;
+	evicted = -1;
+	for (int i = 0; i < MAX_CLIENTS; i++)
+		if (clients[i].fd < 0) { slot = i; break; }
+	if (slot < 0) {		/* table full: evict the oldest */
+		slot = 0;
+		for (int i = 1; i < MAX_CLIENTS; i++)
+			if (clients[i].seen < clients[slot].seen) slot = i;
+		evicted = clients[slot].fd;
+	}
+	clients[slot].fd = fd;
+	clients[slot].pending = (1u << STRIPES) - 1;
+	clients[slot].seen = xTaskGetTickCount();
+	xSemaphoreGive(lock);
+	/* net counts viewers from these two lines: every slot that is
+	 * freed has to say so, whichever path frees it */
+	if (evicted >= 0)
+		ESP_LOGI(TAG, "viewer gone (fd %d)", evicted);
+	ESP_LOGI(TAG, "viewer connected (fd %d)", fd);
+	viewers_announce(0);
 	return ESP_OK;
 }
 
@@ -227,8 +338,8 @@ void screend_start(void)
 	static const httpd_uri_t root = {
 		.uri = "/", .method = HTTP_GET, .handler = root_get };
 	static const httpd_uri_t ws = {
-		.uri = "/ws", .method = HTTP_GET, .handler = ws_handler,
-		.is_websocket = true };
+		.uri = "/ws", .method = HTTP_GET, .handler = ws_upgrade,
+		.is_websocket = false };
 	httpd_register_uri_handler(server, &root);
 	httpd_register_uri_handler(server, &ws);
 
