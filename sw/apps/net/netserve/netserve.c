@@ -27,6 +27,7 @@
 #include "../../../common/zeitlos.h"
 #include "../../../common/zobj.h"
 #include "../../../common/zport.h"
+#include "../../../common/zlisten.h"
 #include "../../../common/znet.h"
 #include "../../../common/zcfg.h"
 #include "../../../common/zauth.h"
@@ -187,6 +188,8 @@ static uint32_t alloc_conn_id(void) {
 }
 
 static uint32_t net_pid;
+static uint32_t next_listen;       /* tick of the next Z_NET_LISTEN retry */
+static uint32_t next_watch;        /* tick of the next "is net still there" */
 static uint32_t connect_seq;
 
 // One listening port. telnet and ssh may have several, each with its
@@ -1619,9 +1622,71 @@ static bool all_listening(void) {
 	return !(svc_echo.on && !svc_echo.listening) && !(svc_http.on && !svc_http.listening);
 }
 
+static void clear_listening(void) {
+	for (int i = 0; i < LISTEN_MAX; i++) {
+		svc_telnet[i].listening = false;
+		svc_ssh[i].listening = false;
+	}
+	svc_echo.listening = false;
+	svc_http.listening = false;
+}
+
+/* net was replaced. Its relays are gone. CLOSE to net_pid would land
+ * on whoever has that pid now (zlisten.h), so the net side is forgotten
+ * and not told. A backend is still the process it was: it is told. */
+static void drop_sessions(uint32_t now) {
+	for (int i = 0; i < MAX_SESS; i++) {
+		sess_t *s = &sess[i];
+		if (!s->state) continue;
+		printf("netserve: session %lu dropped: net is gone\n",
+			(unsigned long)s->net.conn_id);
+		for (int k = 0; k < s->held_app_n; k++) ack(s->app_pid, s->held_app[k].tag);
+		s->held_app_n = 0;
+		s->held_net_n = 0;
+		s->to_net_len = 0;
+		z_port_forget(&s->net);
+		if (s->fh >= 0) { fs_close_handle(s->fh); s->fh = -1; }
+		wipe(s->pw, sizeof(s->pw));
+		if (s->state == S_CONNECT || s->connect_orphan) {
+			/* The CONNECT is still unanswered. Keep the slot so that
+			 * answer is closed here and not handed to the next session. */
+			s->connect_orphan = true;
+			s->state = S_DRAIN;
+			s->deadline = now + LAUNCH_TICKS;
+			continue;
+		}
+		if (s->app.connected) z_port_close(&s->app);
+		z_port_forget(&s->app);
+		if (s->old_app.connected) z_port_close(&s->old_app);
+		z_port_forget(&s->old_app);
+		ssh_release(s);
+		memset(s, 0, sizeof(*s));
+	}
+}
+
+static void net_replaced(uint32_t now) {
+	bool running = !net_pid || z_port_pid_running(net_pid);
+	if (!z_listen_lost(net_pid, running)) return;
+	printf("netserve: net (pid %lu) is gone; listening again\n",
+		(unsigned long)net_pid);
+	drop_sessions(now);
+	clear_listening();
+	net_pid = 0;
+	next_listen = now;
+}
+
+static void listen_if_due(uint32_t now) {
+	if ((int32_t)(now - next_listen) < 0 || all_listening()) return;
+	if (net_pid || z_pid_lookup("net0", &net_pid)) {
+		next_listen = now + 2u * Z_TICK_HZ;
+		listen_all();
+	} else {
+		next_listen = now + Z_LISTEN_POLL_TICKS;
+	}
+}
+
 int main(void) {
 	char name[24];
-	uint32_t next_listen = 0;
 	bool keys = false;
 
 	if (!z_pid_register("netserve", name, sizeof(name))) {
@@ -1657,12 +1722,15 @@ int main(void) {
 		z_msg_t m;
 		uint32_t now = z_uptime_ticks();
 
-		// net, and a listen on each port: retried every two seconds
-		// until net is up and has an address (DHCP can take a while).
-		if ((int32_t)(now - next_listen) >= 0 && !all_listening()) {
-			next_listen = now + 2u * Z_TICK_HZ;
-			if (net_pid || z_pid_lookup("net0", &net_pid)) listen_all();
-		}
+		// net went away (replaced, or killed): drop what it was carrying
+		// and ask again. While a listen is held the wait below is short
+		// enough to see the gap (zlisten.h). A listen is retried every
+		// two seconds once net is up -- DHCP can take a while, and an
+		// error reply leaves the flag clear -- and sooner when net
+		// itself is not there yet.
+		if (z_listen_due(now, &next_watch))
+			net_replaced(now);
+		listen_if_due(now);
 
 		while (z_msg_read(&m) == Z_OK) on_msg(&m);
 
@@ -1671,7 +1739,14 @@ int main(void) {
 			if (sess[i].state) { poll_session(&sess[i]); busy = true; }
 
 		// Messages wake this at once; the timeout is for the deadlines,
-		// the listen retry and anything held waiting for room.
-		z_proc_wait(busy ? 2 : Z_TICK_HZ / 5);
+		// the listen retry and anything held waiting for room. With a
+		// listen held, also for the gap in which a replaced net is not
+		// running (zlisten.h).
+		{
+			uint32_t w = busy ? 2 : Z_TICK_HZ / 5;
+			if (all_listening() && w > Z_LISTEN_POLL_TICKS)
+				w = Z_LISTEN_POLL_TICKS;
+			z_proc_wait(w);
+		}
 	}
 }

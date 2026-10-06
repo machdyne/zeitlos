@@ -218,6 +218,7 @@ static bool k_install(void) {
 // One pass of netserve's loop, minus the wait.
 static void step(void) {
 	z_msg_t m;
+	net_replaced(ticks);
 	while (z_msg_read(&m) == Z_OK) on_msg(&m);
 	for (int i = 0; i < MAX_SESS; i++) if (sess[i].state) poll_session(&sess[i]);
 }
@@ -1561,6 +1562,74 @@ int main(void) {
 		CK(ssh_pool_n == 1, "an engine in use: the pool is not replaced under it");
 		cfg_ssh_sessions = NULL;
 		cfg_ssh = NULL;
+		clean_slate();
+	}
+
+	// -- 23. net replaced, same pid --
+	// The kernel gives the new net the slot the old one left, so the
+	// pid does not change. Status during the load says it is not
+	// running; once the new one is up, it says running again. The
+	// session has to be dropped without a CLOSE (that pid may already
+	// be the new net), and the ports asked for again -- once, not on
+	// every pass, which would reset the connections.
+	{
+		clean_slate();
+		has_pw = true;
+		pw_long = true;
+		cfg_telnet = "23 repl0";
+		cfg_echo = "7";
+		cfg_http = NULL;
+		cfg_ssh = NULL;
+		read_config();
+		clear_listening();
+		net_pid = NET;
+		listen_on(23);
+		listen_on(7);
+		deliver(NET, Z_NET_LISTEN_REPLY, 23, z_obj_uint32(0));
+		deliver(NET, Z_NET_LISTEN_REPLY, 7, z_obj_uint32(0));
+		step();
+		CK(svc_telnet[0].listening && svc_echo.listening, "listening before net goes");
+
+		mark = nout;
+		connect_from(0, 0xC0A80120, 7, true);
+		step();
+		uint32_t conn = conn_since(mark, __LINE__);
+		type(conn, "abc", 3);
+		step();
+		CK(slot_of(conn)->state == S_OPEN, "echo session open");
+
+		dead_pid = NET;
+		mark = nout;
+		step();
+		CK(!svc_telnet[0].listening && !svc_echo.listening, "listen flags cleared");
+		CK(net_pid == 0, "the old pid is forgotten");
+		CK(slot_of(conn)->state == S_FREE, "the session is dropped, not left to drain");
+		CK(find(NET, Z_PORT_CLOSE, mark) < 0, "no CLOSE to a pid that may already be someone else");
+		CK(find(NET, Z_PORT_DATA, mark) < 0, "nothing else sent to that pid");
+
+		dead_pid = 0;
+		mark = nout;
+		listen_if_due(ticks);
+		CK(net_pid == NET, "the new net has the same pid");
+		CK(find(NET, Z_NET_LISTEN, mark) >= 0, "LISTEN again");
+		{
+			int nlisten = 0;
+			for (int i = mark; i < nout; i++)
+				if (out[i].to == NET && out[i].subject == Z_NET_LISTEN) nlisten++;
+			CK(nlisten == 2, "both ports, and only those (%d)", nlisten);
+		}
+		deliver(NET, Z_NET_LISTEN_REPLY, 23, z_obj_uint32(0));
+		deliver(NET, Z_NET_LISTEN_REPLY, 7, z_obj_uint32(0));
+		step();
+		CK(svc_telnet[0].listening && svc_echo.listening, "listening to the new net");
+		mark = nout;
+		listen_if_due(ticks);
+		CK(nout == mark, "not again while that net is still up");
+
+		mark = nout;
+		connect_from(1, 0xC0A80121, 7, true);
+		step();
+		CK(slot_of(conn_since(mark, __LINE__))->state == S_OPEN, "a new session on the new net");
 		clean_slate();
 	}
 
