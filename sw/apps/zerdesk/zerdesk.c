@@ -52,6 +52,7 @@
 #include "../../common/zeitlos.h"
 #include "../../common/zsoc.h"
 #include "../../common/zport.h"
+#include "../../common/zlisten.h"
 #include "../../common/znet.h"
 #include "../../common/zcfg.h"
 #include "../../common/zfsapp.h"
@@ -252,6 +253,32 @@ static void conn_free(conn_t *c)
 	for (int k = 0; k < c->lens_n; k++)
 		pend_bytes -= c->lens[(c->lens_head + k) % Z_PORT_MAX_PENDING_SENDS];
 	memset(c, 0, sizeof(*c));
+}
+
+/* net was replaced. Its relays are gone, and the pid may already
+ * belong to the new net, so the connections are forgotten and not
+ * closed (zlisten.h). */
+static void drop_for_net(void)
+{
+	for (int i = 0; i < MAX_CONN; i++) {
+		conn_t *c = &conns[i];
+		if (c->state == C_FREE)
+			continue;
+		if (c->viewer) {
+			c->viewer = false;
+			printf("zerdesk: viewer %d gone (net is gone), n=%d; "
+				"%lu stripes, %lu bytes\n",
+				(int)(c - conns) + 1, viewers(),
+				(unsigned long)c->stripes, (unsigned long)c->bytes);
+		}
+		z_port_forget(&c->port);
+		conn_free(c);
+	}
+	if (!viewers()) {
+		verify_report();
+		if (zinput_held())
+			zinput_release();
+	}
 }
 
 static void conn_end(conn_t *c, const char *why)
@@ -1040,17 +1067,38 @@ int main(void)
 
 	{
 		uint32_t next_listen = 0;
+		uint32_t next_watch = 0;
 		stats_tick = z_uptime_ticks();
 		for (;;) {
 			z_msg_t m;
 			uint32_t now = z_uptime_ticks();
 			bool backlog = false;
 
+			/* The net we listened to is gone (replaced, or killed).
+			 * Ask again. While a listen is held the wait below is
+			 * short enough to see the gap; asking on a timer while
+			 * the same net is still up would reset its connections.
+			 * The look itself is once per poll even when a viewer
+			 * makes this loop run much faster (zlisten.h). */
+			if (z_listen_due(now, &next_watch)) {
+				bool running = !net_pid || z_port_pid_running(net_pid);
+				if (z_listen_lost(net_pid, running)) {
+					printf("zerdesk: net (pid %lu) is gone; listening again\n",
+						(unsigned long)net_pid);
+					listening = false;
+					drop_for_net();
+					net_pid = 0;
+					next_listen = now;
+				}
+			}
 			if (!listening && (int32_t)(now - next_listen) >= 0) {
-				next_listen = now + 2u * TICKS_PER_SEC;
-				if (net_pid || z_pid_lookup("net0", &net_pid))
+				if (net_pid || z_pid_lookup("net0", &net_pid)) {
+					next_listen = now + 2u * TICKS_PER_SEC;
 					z_msg_new_send(net_pid, Z_NET_LISTEN, listen_port,
 						z_obj_uint32(listen_port));
+				} else {
+					next_listen = now + Z_LISTEN_POLL_TICKS;
+				}
 			}
 
 			st.loops++;
@@ -1115,6 +1163,8 @@ int main(void)
 					w = TICKS_PER_SEC / 10;
 				if (backlog && w > 20)
 					w = 20;
+				if (listening && w > Z_LISTEN_POLL_TICKS)
+					w = Z_LISTEN_POLL_TICKS;
 				z_proc_wait(w);
 			}
 		}
