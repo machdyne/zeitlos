@@ -29,10 +29,13 @@ static SemaphoreHandle_t wake;	/* given by udp_task when a stripe lands */
 
 static httpd_handle_t server;
 static struct {
-	int fd;			/* -1 = free */
+	int fd;			/* httpd's fd, -1 = free */
+	uint32_t gen;		/* bumped every time the slot is taken */
 	uint32_t pending;	/* stripes this client still needs */
 	uint32_t seen;		/* tick of last successful send -- staleness */
 } clients[MAX_CLIENTS];
+static SemaphoreHandle_t send_mu;	/* fd identity, and the send itself */
+static uint32_t client_gen;
 
 /* Tell net how many viewers there are: ZNIC_VIEWERS {n:u8}. net cannot
  * see the WebSocket, and this is what it decides whether to stream on.
@@ -45,11 +48,11 @@ static void viewers_announce(int always)
 {
 	static int last = -1;
 	int n = 0;
-	xSemaphoreTake(lock, portMAX_DELAY);
+	xSemaphoreTake(send_mu, portMAX_DELAY);
 	for (int i = 0; i < MAX_CLIENTS; i++)
 		if (clients[i].fd >= 0)
 			n++;
-	xSemaphoreGive(lock);
+	xSemaphoreGive(send_mu);
 	if (n == last && !(always && znic_ctl_depth() == 0))
 		return;
 	uint8_t b = (uint8_t)n;
@@ -224,7 +227,7 @@ static esp_err_t ws_upgrade(httpd_req_t *req)
 	aux->sd->ws_user_ctx = NULL;
 
 	fd = httpd_req_to_sockfd(req);
-	xSemaphoreTake(lock, portMAX_DELAY);
+	xSemaphoreTake(send_mu, portMAX_DELAY);
 	slot = -1;
 	evicted = -1;
 	for (int i = 0; i < MAX_CLIENTS; i++)
@@ -236,9 +239,10 @@ static esp_err_t ws_upgrade(httpd_req_t *req)
 		evicted = clients[slot].fd;
 	}
 	clients[slot].fd = fd;
+	clients[slot].gen = ++client_gen;
 	clients[slot].pending = (1u << STRIPES) - 1;
 	clients[slot].seen = xTaskGetTickCount();
-	xSemaphoreGive(lock);
+	xSemaphoreGive(send_mu);
 	/* net counts viewers from these two lines: every slot that is
 	 * freed has to say so, whichever path frees it */
 	if (evicted >= 0)
@@ -246,6 +250,70 @@ static esp_err_t ws_upgrade(httpd_req_t *req)
 	ESP_LOGI(TAG, "viewer connected (fd %d)", fd);
 	viewers_announce(0);
 	return ESP_OK;
+}
+
+/* httpd calls this from its own task when a session ends, before the
+ * fd can be handed to the next accept. With a close_fn set, httpd does
+ * not close the socket itself. A slot is only filled after the 101, so
+ * a connection that was refused never has one. The send below refuses
+ * a second time: the fd must still be that slot, and httpd must still
+ * call it a WebSocket. Both checks and the write happen while holding
+ * send_mu, which this function takes before close(), so the write
+ * cannot land on a connection that has not completed the handshake. */
+static void client_closed(httpd_handle_t hd, int sockfd)
+{
+	int gone = 0;
+
+	(void)hd;
+	xSemaphoreTake(send_mu, portMAX_DELAY);
+	for (int i = 0; i < MAX_CLIENTS; i++) {
+		if (clients[i].fd != sockfd)
+			continue;
+		ESP_LOGI(TAG, "viewer gone (fd %d)", sockfd);
+		clients[i].fd = -1;
+		clients[i].pending = 0;
+		gone = 1;
+		break;
+	}
+	close(sockfd);
+	xSemaphoreGive(send_mu);
+	if (gone)
+		viewers_announce(0);
+}
+
+/* 1 if the frame was written to the same viewer that was snapshotted. */
+static int client_send(int slot, int fd, uint32_t gen, httpd_ws_frame_t *f)
+{
+	int drop = 0;
+	esp_err_t err = ESP_OK;
+
+	xSemaphoreTake(send_mu, portMAX_DELAY);
+	if (clients[slot].fd != fd || clients[slot].gen != gen ||
+			httpd_ws_get_fd_info(server, fd) != HTTPD_WS_CLIENT_WEBSOCKET) {
+		if (clients[slot].fd == fd && clients[slot].gen == gen && fd >= 0) {
+			ESP_LOGI(TAG, "viewer gone (fd %d)", fd);
+			clients[slot].fd = -1;
+			clients[slot].pending = 0;
+			drop = 1;
+		}
+		xSemaphoreGive(send_mu);
+		if (drop)
+			viewers_announce(0);
+		return 0;
+	}
+	err = httpd_ws_send_frame_async(server, fd, f);
+	if (err != ESP_OK) {
+		ESP_LOGI(TAG, "viewer gone (fd %d)", fd);
+		clients[slot].fd = -1;
+		clients[slot].pending = 0;
+		drop = 1;
+	} else {
+		clients[slot].seen = xTaskGetTickCount();
+	}
+	xSemaphoreGive(send_mu);
+	if (drop)
+		viewers_announce(0);
+	return err == ESP_OK;
 }
 
 static void relay_task(void *arg)
@@ -270,54 +338,75 @@ static void relay_task(void *arg)
 			httpd_ws_frame_t kf = { .final = true,
 				.type = HTTPD_WS_TYPE_BINARY, .payload = &ka, .len = 1 };
 			for (int c = 0; c < MAX_CLIENTS; c++) {
-				if (clients[c].fd < 0 || clients[c].pending) continue;
-				if (httpd_ws_send_frame_async(server, clients[c].fd, &kf) != ESP_OK) {
-					ESP_LOGI(TAG, "viewer gone (fd %d)", clients[c].fd);
-					clients[c].fd = -1; clients[c].pending = 0;
-				}
+				int fd;
+				uint32_t gen;
+				int idle;
+
+				xSemaphoreTake(send_mu, portMAX_DELAY);
+				fd = clients[c].fd;
+				gen = clients[c].gen;
+				idle = fd >= 0 && !clients[c].pending;
+				xSemaphoreGive(send_mu);
+				if (!idle)
+					continue;
+				client_send(c, fd, gen, &kf);
 			}
 			viewers_announce(1);
 		}
 		xSemaphoreTake(lock, portMAX_DELAY);
 		uint32_t newly = dirty_all;
 		dirty_all = 0;
+		xSemaphoreGive(lock);
+		xSemaphoreTake(send_mu, portMAX_DELAY);
 		for (int i = 0; i < MAX_CLIENTS; i++)
 			if (clients[i].fd >= 0)
 				clients[i].pending |= newly;
-		xSemaphoreGive(lock);
+		xSemaphoreGive(send_mu);
 		for (int c = 0; c < MAX_CLIENTS; c++) {
-			if (clients[c].fd < 0 || !clients[c].pending)
+			int fd, o = 0;
+			uint32_t gen, pend, sent = 0;
+
+			xSemaphoreTake(send_mu, portMAX_DELAY);
+			fd = clients[c].fd;
+			gen = clients[c].gen;
+			pend = clients[c].pending;
+			xSemaphoreGive(send_mu);
+			if (fd < 0 || !pend)
 				continue;
-			int o = 0;
 			xSemaphoreTake(lock, portMAX_DELAY);
 			for (int idx = 0; idx < STRIPES; idx++) {
-				if (!(clients[c].pending & (1u << idx))) continue;
-				int ml = shadow_len[idx];
-				if (ml == 0) { clients[c].pending &= ~(1u << idx); continue; }
+				int ml;
+
+				if (!(pend & (1u << idx)))
+					continue;
+				ml = shadow_len[idx];
+				if (ml == 0) {
+					sent |= 1u << idx;
+					continue;
+				}
 				out[o++] = (uint8_t)idx;
 				out[o++] = (uint8_t)(ml & 0xff);
 				out[o++] = (uint8_t)(ml >> 8);
 				memcpy(out + o, shadow + idx * STRIPE_MAX, ml);
 				o += ml;
-				clients[c].pending &= ~(1u << idx);
+				sent |= 1u << idx;
 			}
 			xSemaphoreGive(lock);
-			if (!o) continue;
+			xSemaphoreTake(send_mu, portMAX_DELAY);
+			if (clients[c].fd == fd && clients[c].gen == gen)
+				clients[c].pending &= ~sent;
+			else
+				o = 0;
+			xSemaphoreGive(send_mu);
+			if (!o)
+				continue;
 			httpd_ws_frame_t f = {
 				.final = true,
 				.type = HTTPD_WS_TYPE_BINARY,
 				.payload = out,
 				.len = o,
 			};
-			if (httpd_ws_send_frame_async(server,
-					clients[c].fd, &f) != ESP_OK) {
-				ESP_LOGI(TAG, "viewer gone (fd %d)", clients[c].fd);
-				clients[c].fd = -1;
-				clients[c].pending = 0;
-				viewers_announce(0);
-			} else {
-				clients[c].seen = xTaskGetTickCount();
-			}
+			client_send(c, fd, gen, &f);
 		}
 	}
 }
@@ -325,12 +414,14 @@ static void relay_task(void *arg)
 void screend_start(void)
 {
 	lock = xSemaphoreCreateMutex();
+	send_mu = xSemaphoreCreateMutex();
 	wake = xSemaphoreCreateBinary();
 	for (int i = 0; i < MAX_CLIENTS; i++)
 		clients[i].fd = -1;
 
 	httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
 	cfg.lru_purge_enable = true;
+	cfg.close_fn = client_closed;
 	if (httpd_start(&server, &cfg) != ESP_OK) {
 		ESP_LOGE(TAG, "httpd_start failed");
 		return;
