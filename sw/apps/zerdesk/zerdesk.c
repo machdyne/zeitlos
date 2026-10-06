@@ -985,10 +985,27 @@ int main(void)
 			"the remote desktop there, and net scans the screen. Not starting.\n");
 		return 1;
 	}
+	/* Register hands out zerdesk0, then zerdesk1, and returns true
+	 * either way. A second copy has to leave before Z_NET_LISTEN, or
+	 * net gives it the port and the first one keeps running with no
+	 * listener. The lookup is the usual case; the name check covers
+	 * two copies passing the lookup together. */
+	{
+		uint32_t running;
+		if (z_pid_lookup("zerdesk0", &running)) {
+			printf("zerdesk: already running\n");
+			return 1;
+		}
+	}
 	if (!z_pid_register("zerdesk", name, sizeof(name))) {
 		printf("zerdesk: could not register -- already running?\n");
 		return 1;
 	}
+	if (strcmp(name, "zerdesk0")) {
+		printf("zerdesk: already running\n");
+		return 1;
+	}
+
 	port_file = z_cfg_get("apps.zerdesk.port", val, sizeof val);
 	listen_port = (uint32_t)zd_clamp_port(z_cfg_get_int("apps.zerdesk.port", ZD_PORT_DEFAULT));
 	view_file = z_cfg_get("apps.zerdesk.viewers", val, sizeof val);
