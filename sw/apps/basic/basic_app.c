@@ -40,6 +40,7 @@
 #include "../../common/zfsapp.h"
 #include "../../common/zcolor.h"
 #include "../../common/zport.h"
+#include "../../common/zi2cx.h"
 #include "../../ext/basic/basic.h"
 
 #include "bscreen.h"
@@ -421,18 +422,47 @@ void bp_sync(void) {
     }
 }
 
-/* no pins: unused is fine, anything else is not supported */
+/* Pins 3 and 4 (C, D) as I2C, on the bench bus a netlist gives the
+ * BASIC computer (`basic BUS`, docs/bench.md), through zi2cx: opened
+ * again at every PINS, so a netlist reloaded in bench is used by the
+ * next RUN. NET on pins 1 and 2 is "left to the system": nothing to do,
+ * and a module's program (PINS NET, NET, I2C, I2C) runs here unchanged.
+ * Anything else: there are no pins. */
+static z_i2cx_t i2c_bus;
+static bool i2c_open;
+
+/* while zi2cx waits for bench: wm's messages and the terminal's, into
+ * the app's own handler (it never prints: keys wait in the inbox) */
+static void i2c_other(z_msg_t *m) {
+    on_msg(m, NULL);
+}
+
 int hw_pin_mode(uint8_t pin, uint8_t mode) {
-    (void)pin;
-    return mode == PM_NONE ? 0 : HW_ERR_UNSUPPORTED;
+    if (mode == PM_NONE) return 0;
+    if (mode == PM_NET && (pin == 1 || pin == 2)) return 0;
+    if (mode == PM_I2C && (pin == 3 || pin == 4)) {
+        if (pin == 3 || !i2c_open) {
+            if (i2c_open) z_i2cx_close(&i2c_bus);
+            i2c_open = false;
+            i2c_bus.other = i2c_other;
+            if (z_i2cx_open_role(&i2c_bus, "basic") != Z_I2C_OK) return HW_ERR_UNSUPPORTED;
+            i2c_open = true;
+        }
+        return 0;
+    }
+    return HW_ERR_UNSUPPORTED;
 }
 void hw_pin_write(uint8_t pin, uint8_t level) { (void)pin; (void)level; }
 uint8_t hw_pin_read(uint8_t pin) { (void)pin; return 0; }
 int16_t hw_adc(uint8_t pin) { (void)pin; return -1; }
 void hw_led(uint8_t on) { (void)on; }
 int hw_i2c(uint8_t addr, const uint8_t *w, uint8_t wn, uint8_t *r, uint8_t rn) {
-    (void)addr; (void)w; (void)wn; (void)r; (void)rn;
-    return -1;
+    int st;
+    if (!i2c_open) return -1;
+    if (wn && rn) st = z_i2cx_write_read(&i2c_bus, addr, w, wn, r, rn);
+    else if (rn) st = z_i2cx_read(&i2c_bus, addr, r, rn);
+    else st = z_i2cx_write(&i2c_bus, addr, w, wn);
+    return st == Z_I2C_OK ? 0 : -1;
 }
 
 /* ---- files: /basic only ---- */

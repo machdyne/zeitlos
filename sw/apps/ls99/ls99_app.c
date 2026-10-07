@@ -15,14 +15,15 @@
  * program runs, the module's clock follows bench's, so a program starts
  * at "now".
  *
- * Catching up must be cheap. SLEEP waits in 100ms pieces with a break
- * check after each (basic.c, wait_ms()): at x3600 that is 36,000 pieces
- * a second, and reading messages is a system call (so is the clock). A
+ * Catching up must be cheap. SLEEP waits in pieces with a break check
+ * after each (basic.c, wait_ms()): in 100ms pieces, x3600 is 36,000 of
+ * them a second -- more than the CPU can do, and the module fell hours
+ * behind bench's clock. So the interpreter is built with pieces of a
+ * minute (BASIC_WAIT_PIECE, Makefile): an hour is 60. A halt still
+ * stops a piece at once: this sleep returns on HALT or Ctrl-C. And a
  * piece bench's clock has already passed returns at once, sending only
- * changed pins; messages are read on every 256th such piece, and on
- * every 32nd break check -- and on every turn of a sleep that really
- * waits. Reading them on every piece left the module hours behind
- * bench's clock at x3600.
+ * changed pins; messages are read on every 256th such piece, every 32nd
+ * break check, and every turn of a sleep that really waits.
  *
  * Files are the module's own storage: /bench/NAME/.
  */

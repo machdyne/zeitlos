@@ -16,7 +16,10 @@ APP_MAIN_RULE = 0
 
 E = ../../ext/basic
 B = ../bench
-BASIC_DEFS = -DBASIC_PROFILE -DHW_PINS=7 -DMAX_PROG=32768
+# WAIT and SLEEP in pieces of a minute, not 100ms: at x3600 an hour was
+# 36,000 pieces, more than the CPU could do. A halt still stops a piece
+# at once (ls99_app.c's sleep returns on HALT or Ctrl-C).
+BASIC_DEFS = -DBASIC_PROFILE -DHW_PINS=7 -DMAX_PROG=32768 -DBASIC_WAIT_PIECE=60000
 
 OBJS = zeitlos.o zobj.o zport.o zwin.o zgfx.o zfont_data.o zfsapp.o zgpio.o zi2c.o zi2cx.o \
 	basic_interp.o sechs_core.o ls99.o ls99_app.o
