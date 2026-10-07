@@ -411,14 +411,84 @@ static void print_ip(uint32_t ip) {
 		(long)((ip >> 8) & 0xFF), (long)(ip & 0xFF));
 }
 
+/*
+ * Replies are built in static storage, never malloc()ed.
+ *
+ * A reply payload is borrowed: the kernel hands the receiver a pointer
+ * into this process, so it cannot be freed at the point of sending
+ * (docs/messaging.md, "Payload lifetime, and the leak it used to
+ * cause"). The same rule as dns_reply() in dns.c. These replies used
+ * to be z_obj_map()/z_map_set() and were left allocated, on the
+ * argument that each one was one-shot and the cost bounded. It is not.
+ * Every one of them answers something a person can repeat: a tput, an
+ * ssh prepare, a refused connection. z_map_set() copies what it is
+ * given, so the temporary z_obj_str() was lost on the spot as well.
+ *
+ * One ring serves every map this file builds. Four slots: a requester
+ * reads its reply before it asks again, and the replies that go
+ * somewhere else (a second connection failing, the busy path) only
+ * need the previous slot to stay intact until that read. Keys and the
+ * fixed texts are string literals. The one text that is not -- tput's
+ * error, which arrives in a stack buffer -- is copied into the slot.
+ * A bare Z_PORT_REFUSED string is a literal already, so it needs no
+ * slot: the object is just a pointer to it.
+ */
+#define NET_REPLY_SLOTS 4
+#define NET_REPLY_TEXT  64
+
+typedef struct {
+	z_obj_table_t t;
+	z_obj_t k[3], v[3];
+	char text[NET_REPLY_TEXT];
+} net_reply_slot_t;
+
+static net_reply_slot_t net_reply_ring[NET_REPLY_SLOTS];
+static uint32_t net_reply_next;
+
+static net_reply_slot_t *net_reply_take(void) {
+	net_reply_slot_t *r = &net_reply_ring[net_reply_next % NET_REPLY_SLOTS];
+	net_reply_next++;
+	memset(r, 0, sizeof(*r));
+	return r;
+}
+
+static z_obj_t net_reply_map(net_reply_slot_t *r, uint32_t n) {
+	r->t.len = n;
+	r->t.a = r->k;
+	r->t.b = r->v;
+	z_obj_t o;
+	o.type = Z_MAP;
+	o.val.ptr = &r->t;
+	return o;
+}
+
+static void net_kv_u32(net_reply_slot_t *r, int i, const char *key, uint32_t v) {
+	r->k[i].type = Z_STR;
+	r->k[i].val.str = (char *)key;
+	r->v[i].type = Z_UINT32;
+	r->v[i].val.uint32 = v;
+}
+
+static void net_kv_lit(net_reply_slot_t *r, int i, const char *key, const char *s) {
+	r->k[i].type = Z_STR;
+	r->k[i].val.str = (char *)key;
+	r->v[i].type = Z_STR;
+	r->v[i].val.str = (char *)s;
+}
+
+/* `msg` is a string literal. It has to outlive the receiver's read. */
 static void reply_error(uint32_t to, uint32_t subject, uint32_t tag, const char *msg) {
-	z_obj_t reply = z_obj_map(2);
-	z_map_set(&reply, "ok", z_obj_uint32(0));
-	z_map_set(&reply, "error", z_obj_str(msg));
-	z_msg_new_send(to, subject, tag, reply);
-	// note: `reply` intentionally never freed -- same borrowed-reply
-	// tradeoff documented throughout (see docs/messaging.md); a
-	// one-shot message, not a per-chunk one, so the cost is bounded
+	net_reply_slot_t *r = net_reply_take();
+	net_kv_u32(r, 0, "ok", 0);
+	net_kv_lit(r, 1, "error", msg);
+	z_msg_new_send(to, subject, tag, net_reply_map(r, 2));
+}
+
+static z_obj_t net_lit_str(const char *s) {
+	z_obj_t o;
+	o.type = Z_STR;
+	o.val.str = (char *)s;
+	return o;
 }
 
 // a Z_STREAM_OPEN arriving at net always means "start a TFTP GET" --
@@ -533,7 +603,7 @@ static void telnet_on_closed(void) {
 		// term's end (same accepted limitation z_port_connect()
 		// already documents).
 		z_msg_new_send(telnet_client_pid, Z_PORT_REFUSED, 0,
-			z_obj_str("net: telnet connection failed"));
+			net_lit_str("net: telnet connection failed"));
 		printf("net: telnet connect to pid %ld failed\n", (long)telnet_client_pid);
 	} else if (telnet_state == TN_ACTIVE) {
 		z_port_close(&telnet_port);	// notifies the peer -- term
@@ -682,7 +752,7 @@ static void sock_on_closed(int k) {
 
 	if (x->state == SO_CONNECTING) {
 		z_msg_new_send(x->client_pid, Z_PORT_REFUSED, 0,
-			z_obj_str("net: tcp connection failed"));
+			net_lit_str("net: tcp connection failed"));
 		printf("net: socket %d connect for pid %ld failed\n",
 			k, (long)x->client_pid);
 	} else if (x->state == SO_ACTIVE) {
@@ -817,9 +887,12 @@ static void handle_ssh_prepare(const z_msg_t *msg) {
 		ssh_pending.user[sizeof(ssh_pending.user) - 1] = 0;
 	}
 
-	reply = z_obj_map(2);
-	z_map_set(&reply, "ok", z_obj_uint32(1));
-	z_map_set(&reply, "token", z_obj_uint32(token));
+	{
+		net_reply_slot_t *r = net_reply_take();
+		net_kv_u32(r, 0, "ok", 1);
+		net_kv_u32(r, 1, "token", token);
+		reply = net_reply_map(r, 2);
+	}
 	z_msg_new_send(msg->from, Z_NET_SSH_PREPARE_REPLY, msg->tag, reply);
 
 	printf("net: ssh prepared for ");
@@ -1260,10 +1333,8 @@ static void handle_telnet_port_close(const z_msg_t *msg) {
 static void handle_dns_resolve(const z_msg_t *msg) {
 
 	if (msg->obj.type != Z_STR || !msg->obj.val.str) {
-		z_obj_t reply = z_obj_map(2);
-		z_map_set(&reply, "ok", z_obj_uint32(0));
-		z_map_set(&reply, "error", z_obj_str("dns: bad request (expected a hostname string)"));
-		z_msg_new_send(msg->from, Z_NET_DNS_RESOLVE_REPLY, msg->tag, reply);
+		reply_error(msg->from, Z_NET_DNS_RESOLVE_REPLY, msg->tag,
+			"dns: bad request (expected a hostname string)");
 		return;
 	}
 
@@ -1287,14 +1358,12 @@ static void handle_ntp_sync(const z_msg_t *msg) {
 static void handle_ntp_status(const z_msg_t *msg) {
 
 	uint32_t last = ntp_last_sync_ticks();
+	net_reply_slot_t *r = net_reply_take();
 
-	z_obj_t reply = z_obj_map(3);
-	z_map_set(&reply, "enabled", z_obj_uint32(ntp_enabled ? 1 : 0));
-	z_map_set(&reply, "synced", z_obj_uint32(ntp_ever_synced() ? 1 : 0));
-	z_map_set(&reply, "age", z_obj_uint32(last ? (z_uptime_ticks() - last) : 0));
-	// `reply` intentionally never freed -- same one-shot borrowed-reply
-	// tradeoff reply_error() above documents (docs/messaging.md).
-	z_msg_new_send(msg->from, Z_NET_NTP_STATUS, msg->tag, reply);
+	net_kv_u32(r, 0, "enabled", ntp_enabled ? 1 : 0);
+	net_kv_u32(r, 1, "synced", ntp_ever_synced() ? 1 : 0);
+	net_kv_u32(r, 2, "age", last ? (z_uptime_ticks() - last) : 0);
+	z_msg_new_send(msg->from, Z_NET_NTP_STATUS, msg->tag, net_reply_map(r, 3));
 
 }
 
@@ -1307,11 +1376,11 @@ static void handle_ntp_status(const z_msg_t *msg) {
 // no reply at all: a caller waiting on one should learn that the
 // answer is "not built in", not time out wondering.
 static void handle_ntp_status(const z_msg_t *msg) {
-	z_obj_t reply = z_obj_map(3);
-	z_map_set(&reply, "enabled", z_obj_uint32(0));
-	z_map_set(&reply, "synced", z_obj_uint32(0));
-	z_map_set(&reply, "age", z_obj_uint32(0));
-	z_msg_new_send(msg->from, Z_NET_NTP_STATUS, msg->tag, reply);
+	net_reply_slot_t *r = net_reply_take();
+	net_kv_u32(r, 0, "enabled", 0);
+	net_kv_u32(r, 1, "synced", 0);
+	net_kv_u32(r, 2, "age", 0);
+	z_msg_new_send(msg->from, Z_NET_NTP_STATUS, msg->tag, net_reply_map(r, 3));
 }
 
 #endif
@@ -1336,18 +1405,25 @@ static void check_tftp_progress(void) {
 		return;
 	}
 
-	z_obj_t reply = z_obj_map(2);
+	net_reply_slot_t *slot = net_reply_take();
 
 	if (r == TFTP_RESULT_OK) {
 		printf("net: tftp put complete, %ld bytes\n", (long)len);
-		z_map_set(&reply, "ok", z_obj_uint32(1));
+		net_kv_u32(slot, 0, "ok", 1);
 	} else {
+		uint32_t i = 0;
 		printf("net: tftp put failed: %s\n", err);
-		z_map_set(&reply, "ok", z_obj_uint32(0));
-		z_map_set(&reply, "error", z_obj_str(err));
+		while (err[i] && i + 1 < sizeof(slot->text)) {
+			slot->text[i] = err[i];
+			i++;
+		}
+		slot->text[i] = 0;
+		net_kv_u32(slot, 0, "ok", 0);
+		net_kv_lit(slot, 1, "error", slot->text);
 	}
 
-	z_msg_new_send(pending_to, Z_NET_TFTP_PUT_REPLY, pending_tag, reply);
+	z_msg_new_send(pending_to, Z_NET_TFTP_PUT_REPLY, pending_tag,
+		net_reply_map(slot, 2));
 	printf("net: tftp put reply sent to pid %ld\n", (long)pending_to);
 
 }

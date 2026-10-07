@@ -52,6 +52,9 @@ TEST_SSH = ../ssh/ssh_server.c ../ssh/ssh_wire.c ../ssh/ssh_crypto.c ../../../co
 	authkeys.c ../../web/rsa.c ../../web/bignum.c
 .PHONY: test
 test:
+	$(HOSTCC) --std=gnu99 -Wall -Wextra -I../../../common -o /tmp/test_zlisten \
+		../../../common/tests/test_zlisten.c
+	/tmp/test_zlisten
 	$(HOSTCC) --std=gnu99 -O2 -Wall -o /tmp/test_authkeys tests/test_authkeys.c $(TEST_SSH)
 	/tmp/test_authkeys
 	$(HOSTCC) --std=gnu99 -O2 -w -I../ssh -o /tmp/test_ssh_server ../ssh/tests/test_ssh_server.c \

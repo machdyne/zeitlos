@@ -20,6 +20,9 @@ HOSTCC ?= cc
 test:
 	$(HOSTCC) --std=gnu99 -Wall -Wextra -I. -o /tmp/test_deskcfg tests/test_deskcfg.c
 	/tmp/test_deskcfg
+	$(HOSTCC) --std=gnu99 -Wall -Wextra -I../../common -o /tmp/test_zlisten \
+		../../common/tests/test_zlisten.c
+	/tmp/test_zlisten
 
 # 32KB. zport keeps a heap copy of every stripe in flight, up to the
 # 6KB budget, and the page is read while that is live. The unnamed
