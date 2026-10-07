@@ -1288,7 +1288,6 @@ behind these; see `docs/i2c.md` and `docs/spi.md`.
 | Procedure | Behavior |
 |---|---|
 | `(i2c-init port scl sda [khz])` | bus handle, or `#f` if the bus is unusable right now |
-| `(i2c-init "name")` | a bus by name ([i2c.md](i2c.md), zi2cx): `"pmod1"` is PMOD port 1's pins 1 and 2, any other name a bench bus ([bench.md](bench.md)); `#f` with `(i2c-error)` "no bench running" or "no such bus" |
 | `(i2c-scan bus)` | 7-bit addresses that answered, as a list |
 | `(i2c-write bus addr data)` | `data` is a list of bytes or a string |
 | `(i2c-read bus addr [n])` | list of bytes, or `#f` |
@@ -1299,11 +1298,6 @@ behind these; see `docs/i2c.md` and `docs/spi.md`.
 | `(spi-init port sck mosi miso cs [mode [khz]])` | bus handle; `-1` for a pin the device lacks |
 | `(spi-select bus v)` | assert or release CS |
 | `(spi-xfer bus data)` / `(spi-xfer bus n)` | send bytes, or `n` idle bytes, and return what came back |
-
-On a bench bus, `(i2c-scan)` probes each address, `(i2c-recover)` has
-nothing to free and returns `#t`, and `(i2c-khz)` is 0: there is no clock.
-Everything else is the same, so a script written against a virtual part
-runs against the real chip.
 
 **Buses are handles, and handles are numbers**, the same convention
 window handles use. Passing the pins to every call instead would mean

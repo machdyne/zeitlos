@@ -15,6 +15,15 @@
  * program runs, the module's clock follows bench's, so a program starts
  * at "now".
  *
+ * Catching up must be cheap. SLEEP waits in 100ms pieces with a break
+ * check after each (basic.c, wait_ms()): at x3600 that is 36,000 pieces
+ * a second, and reading messages is a system call (so is the clock). A
+ * piece bench's clock has already passed returns at once, sending only
+ * changed pins; messages are read on every 256th such piece, and on
+ * every 32nd break check -- and on every turn of a sleep that really
+ * waits. Reading them on every piece left the module hours behind
+ * bench's clock at x3600.
+ *
  * Files are the module's own storage: /bench/NAME/.
  */
 
@@ -144,7 +153,7 @@ static void flush_console(void) {
     con_len = 0;
 }
 
-static void b_service(void) {
+static void serve(void) {
     pump();
     while (in_head != in_tail) {
         int i = in_head;
@@ -153,6 +162,17 @@ static void b_service(void) {
     }
     flush_drives();
     flush_console();
+}
+
+/* the board's turn, from the module: messages on one call in 32 (it
+ * comes after every program line and every 100ms piece of a wait) */
+static void b_service(void) {
+    static unsigned calls;
+    if (++calls % 32 == 0 || in_head != in_tail) serve();
+    else {
+        flush_drives();
+        flush_console();
+    }
 }
 
 /* ---- the board (ls99.h) ---- */
@@ -184,11 +204,17 @@ static int b_i2c(uint8_t a, const uint8_t *w, int wn, uint8_t *r, int rn) {
 }
 
 static void b_sleep(uint32_t ms) {
+    static unsigned caught_up;
     my_clock += ms;
-    flush_drives();
+    flush_drives();                             /* a pin changed: at once */
+    if ((int32_t)(bench_time - my_clock) >= 0) {
+        /* already past: catching up, cheaply; now and then a new time */
+        if (++caught_up % 256 == 0) serve();
+        return;
+    }
     flush_console();
     while (!quit && (int32_t)(bench_time - my_clock) < 0) {
-        b_service();
+        serve();
         if (sechs.cmd == CMD_HALT || sechs.con_break) return;   /* hw_break acts */
         z_proc_wait(1);
     }
@@ -205,8 +231,14 @@ static void b_set_addr(uint8_t a) {
     send(m, 2);
 }
 
+/* about 2ms of real time, the master's turn included */
+static void b_pause(void) {
+    serve();
+    z_proc_wait(2);
+}
+
 static const ls99_board_t board = {
-    b_drive, b_level, b_i2c, b_sleep, b_service, b_console, b_set_addr,
+    b_drive, b_level, b_i2c, b_sleep, b_service, b_console, b_set_addr, b_pause,
 };
 
 /* ---- files: /bench/NAME/, the module's own storage ---- */
@@ -321,7 +353,7 @@ int main(void) {
         z_port_connect_arg(&bench, pid, z_obj_str(tag)) != Z_OK)
         return 1;
     for (int i = 0; i < 400 && !hello && !quit; i++) {
-        b_service();
+        serve();
         z_proc_wait(1);
     }
     if (!hello) return 1;
@@ -329,7 +361,7 @@ int main(void) {
     while (!quit) {
         if (ls99_poll()) start();               /* RESET: the module starts again */
         if (!basic_running) my_clock = bench_time;
-        b_service();
+        serve();
         z_proc_wait(1);
     }
     if (local_open) z_i2cx_close(&local);

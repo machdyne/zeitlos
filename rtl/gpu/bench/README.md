@@ -85,6 +85,13 @@ design makes that pattern land correctly). `tb_line.v` and
   mid-frame adoption). Fails on two deliberately broken read-side
   variants, so it is proven sensitive. With `-DGPU_DDMI -DTB_STUBS`
   it also checks the 8-bit TMDS channel inputs. See `docs/color.md`.
+- `tb_brightness.v` -- monochrome brightness on DDMI (VIDEO bits
+  11:8): the 8-bit channel values for a lit pixel in every phosphor
+  mode at levels 0, 7, 11 and 15; level 7 is exactly the old inks; a
+  change waits for the frame boundary; colour mode ignores it. Needs
+  `-DGPU_DDMI` and `rtl/gpu/gpu_ddmi.v rtl/gpu/tmds_encoder.v`
+  (primitive stubs are in the bench). See `docs/socctl.md`,
+  "Brightness".
 - `tb_cvbs_color.v` -- composite COLOUR. A small software receiver:
   correlates each line's DAC samples against an ideal subcarrier and
   reads off burst and picture phase and amplitude, as a TV decoder

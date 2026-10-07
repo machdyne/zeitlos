@@ -195,6 +195,12 @@ module gpu_video #(
 	// 10 green-on-black            11 black-on-white ("paper")
 	input [1:0] video_mode,
 
+	// Monochrome brightness on DDMI, 0..15, from the same VIDEO
+	// register; wishbone domain, synchronised and adopted with
+	// video_mode. 7 is the 0x80 ink this output has always used. See
+	// ddmi_ink_* below and docs/socctl.md.
+	input [3:0] video_bright,
+
 	// -- game mode, from rtl/socctl.v's GAME/VIEW registers --
 	//
 	// One payload, latched together. view_load is a TOGGLE in the
@@ -331,6 +337,8 @@ module gpu_video #(
 	reg [1:0] video_mode_sync0;
 	reg [1:0] video_mode_sync1;
 	reg [1:0] video_mode_active;
+	reg [3:0] bright_sync0, bright_sync1;
+	reg [3:0] bright_active;
 
 	// XOR, not OR.
 	//
@@ -477,21 +485,107 @@ module gpu_video #(
 	// 0xaa, 0xf -> 0xff), so the palette spans the full range rather
 	// than the 0x80 ceiling the monochrome inks keep for
 	// compatibility. A game wanting the desktop's white sets 0x888.
-	wire [7:0] ddmi_red = color_on ? { c_r, c_r } :
-		(video_mode_active == GPU_MODE_AMBER) ?
-			{pset, pset, 1'b0, pset, 1'b0, 1'b0, pset, 1'b0} :
-		(video_mode_active == GPU_MODE_GREEN) ? 8'b0 :
-			{pset, 7'b0};
+	// -- monochrome brightness (VIDEO bits 11:8) --
+	//
+	// The ink a lit pixel gets, per channel, worked out ONCE per frame
+	// from the phosphor mode and the brightness level -- both adopted at
+	// the frame boundary -- and registered. The pixel path is then just
+	// "ink if pset", as it always was; the arithmetic below is off it
+	// entirely, so sixteen levels cost the same as four would.
+	//
+	// White is W = 16 (L + 1), clamped to 255: L = 7 is 0x80, exactly
+	// the ink this output has always used, and is the reset value, so
+	// nothing changes until someone asks. Amber keeps today's colour at
+	// every level -- R = 0xD2/0x80 W and G = 0x9D/0x80 W, both as
+	// shift-adds that give 0xD2 and 0x9D exactly at L = 7 -- clamped at
+	// 255, where it drifts towards yellow at the top. Green is (0, W, 0);
+	// paper's white is white's.
+	//
+	// Colour mode does not use these: its palette already spans the
+	// full range (docs/color.md).
+	// As three 16-entry tables (one LUT4 per output bit) rather than the
+	// adders that define them -- generated from exactly those formulas:
+	//   W = min(255, 16 (L + 1))
+	//   amber R = min(255, W + W/2 + W/8 + W/64)          (0xD2 at L = 7)
+	//   amber G = min(255, W + W/8 + W/16 + W/32 + W/128)  (0x9D at L = 7)
+	reg [7:0] bw, amber_r8, amber_g8;
 
-	wire [7:0] ddmi_green = color_on ? { c_g, c_g } :
-		(video_mode_active == GPU_MODE_AMBER) ?
-			{pset, 1'b0, 1'b0, pset, pset, pset, 1'b0, pset} :
-			{pset, 7'b0};
+	always @(*) begin
+		case (bright_active)
+			4'd0: bw = 8'h10;
+			4'd1: bw = 8'h20;
+			4'd2: bw = 8'h30;
+			4'd3: bw = 8'h40;
+			4'd4: bw = 8'h50;
+			4'd5: bw = 8'h60;
+			4'd6: bw = 8'h70;
+			4'd7: bw = 8'h80;
+			4'd8: bw = 8'h90;
+			4'd9: bw = 8'hA0;
+			4'd10: bw = 8'hB0;
+			4'd11: bw = 8'hC0;
+			4'd12: bw = 8'hD0;
+			4'd13: bw = 8'hE0;
+			4'd14: bw = 8'hF0;
+			4'd15: bw = 8'hFF;
+		endcase
+	end
 
-	wire [7:0] ddmi_blue = color_on ? { c_b, c_b } :
-		(video_mode_active == GPU_MODE_AMBER ||
-		 video_mode_active == GPU_MODE_GREEN) ? 8'b0 :
-			{pset, 7'b0};
+	always @(*) begin
+		case (bright_active)
+			4'd0: amber_r8 = 8'h1A;
+			4'd1: amber_r8 = 8'h34;
+			4'd2: amber_r8 = 8'h4E;
+			4'd3: amber_r8 = 8'h69;
+			4'd4: amber_r8 = 8'h83;
+			4'd5: amber_r8 = 8'h9D;
+			4'd6: amber_r8 = 8'hB7;
+			4'd7: amber_r8 = 8'hD2;
+			4'd8: amber_r8 = 8'hEC;
+			4'd9: amber_r8 = 8'hFF;
+			4'd10: amber_r8 = 8'hFF;
+			4'd11: amber_r8 = 8'hFF;
+			4'd12: amber_r8 = 8'hFF;
+			4'd13: amber_r8 = 8'hFF;
+			4'd14: amber_r8 = 8'hFF;
+			4'd15: amber_r8 = 8'hFF;
+		endcase
+	end
+
+	always @(*) begin
+		case (bright_active)
+			4'd0: amber_g8 = 8'h13;
+			4'd1: amber_g8 = 8'h27;
+			4'd2: amber_g8 = 8'h3A;
+			4'd3: amber_g8 = 8'h4E;
+			4'd4: amber_g8 = 8'h61;
+			4'd5: amber_g8 = 8'h75;
+			4'd6: amber_g8 = 8'h88;
+			4'd7: amber_g8 = 8'h9D;
+			4'd8: amber_g8 = 8'hB0;
+			4'd9: amber_g8 = 8'hC4;
+			4'd10: amber_g8 = 8'hD7;
+			4'd11: amber_g8 = 8'hEB;
+			4'd12: amber_g8 = 8'hFE;
+			4'd13: amber_g8 = 8'hFF;
+			4'd14: amber_g8 = 8'hFF;
+			4'd15: amber_g8 = 8'hFF;
+		endcase
+	end
+
+	reg [7:0] ddmi_ink_r, ddmi_ink_g, ddmi_ink_b;
+
+	always @(posedge pclk) begin
+		ddmi_ink_r <= (video_mode_active == GPU_MODE_AMBER) ? amber_r8 :
+			(video_mode_active == GPU_MODE_GREEN) ? 8'd0 : bw;
+		ddmi_ink_g <= (video_mode_active == GPU_MODE_AMBER) ? amber_g8 : bw;
+		ddmi_ink_b <= (video_mode_active == GPU_MODE_AMBER ||
+			video_mode_active == GPU_MODE_GREEN) ? 8'd0 : bw;
+	end
+
+	wire [7:0] ddmi_red   = color_on ? { c_r, c_r } : (pset ? ddmi_ink_r : 8'd0);
+	wire [7:0] ddmi_green = color_on ? { c_g, c_g } : (pset ? ddmi_ink_g : 8'd0);
+	wire [7:0] ddmi_blue  = color_on ? { c_b, c_b } : (pset ? ddmi_ink_b : 8'd0);
 
 	// -- Serialiser output stage --
 	//
@@ -996,6 +1090,8 @@ module gpu_video #(
 	always @(posedge pclk) begin
 		video_mode_sync0 <= video_mode;
 		video_mode_sync1 <= video_mode_sync0;
+		bright_sync0 <= video_bright;
+		bright_sync1 <= bright_sync0;
 
 		view_sync0 <= view_load;
 		view_sync1 <= view_sync0;
@@ -1003,6 +1099,7 @@ module gpu_video #(
 
 		if (!resetn) begin
 			video_mode_active <= GPU_MODE_WHITE;
+			bright_active <= 4'd7;
 			view_sync0 <= 1'b0;
 			view_sync1 <= 1'b0;
 			view_sync2 <= 1'b0;
@@ -1032,6 +1129,7 @@ module gpu_video #(
 			end
 			if (hc == h_disp_stop - 1 && vc == v_disp_stop - 1) begin
 				video_mode_active <= video_mode_sync1;
+				bright_active <= bright_sync1;
 				game_active <= game_cap;
 				wrap_active <= wrap_cap;
 				vx_active <= vx_adopt;

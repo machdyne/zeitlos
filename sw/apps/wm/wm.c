@@ -4086,6 +4086,38 @@ static void vol_step(int dir) {
 
 }
 
+// -- monochrome brightness -- docs/socctl.md, VIDEO --
+//
+// Ctrl+Super+Minus / Ctrl+Super+Equal (and with the keypad - and +),
+// beside the volume keys. Sixteen levels of the monochrome ink on
+// HDMI/DVI, shown 1..16; the hardware resets to 8 (the 0x80 white
+// DDMI always had), and system.video.brightness sets it at boot.
+// Colour mode does not use it -- its palette is already full range.
+static void bright_step(int dir) {
+
+	static char text[24];
+	int l;
+
+	if (!z_video_brightness_available()) {
+		caption_set("No brightness control on this display",
+			Z_CAPTION_CENTER | Z_CAPTION_COMPACT | Z_CAPTION_SCALE(2) |
+			Z_CAPTION_TIMEOUT(1000));
+		return;
+	}
+
+	l = (int)z_video_get_brightness() + dir;
+	if (l < 0) l = 0;
+	if (l > (int)Z_VIDEO_BRIGHT_LEVELS - 1) l = (int)Z_VIDEO_BRIGHT_LEVELS - 1;
+	z_video_set_brightness((uint32_t)l);
+
+	snprintf(text, sizeof(text), "Brightness %d/%d", l + 1,
+		(int)Z_VIDEO_BRIGHT_LEVELS);
+	caption_set(text, Z_CAPTION_CENTER | Z_CAPTION_COMPACT |
+		Z_CAPTION_SCALE(2) | Z_CAPTION_TIMEOUT(1000));
+	z_speak(text, Z_TTS_F_INTERRUPT);
+
+}
+
 // Alt+Super+[ ] -- the focused window (and, if its app has a dialog
 // open, the rest of its app: workspace.c, ws_move_set()) to the
 // previous or next workspace, and you with it.
@@ -4676,6 +4708,16 @@ static void dispatch_keys(void) {
 					ws_switch(ws_step(cur_ws, dir));
 				}
 			}
+			kbd_sent[usage] = 0;
+			continue;
+		}
+
+		// Ctrl+Super+Minus / Ctrl+Super+Equal, and with the keypad --
+		// monochrome brightness down / up (bright_step()). The same
+		// keys as the volume, by KEY, with Ctrl.
+		if ((modifiers & Z_KBD_MOD_GUI) && (modifiers & Z_KBD_MOD_CTRL) && !alt &&
+		    (usage == 0x2D || usage == 0x2E || usage == 0x56 || usage == 0x57)) {
+			if (pressed) bright_step((usage == 0x2E || usage == 0x57) ? 1 : -1);
 			kbd_sent[usage] = 0;
 			continue;
 		}

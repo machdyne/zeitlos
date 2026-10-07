@@ -206,6 +206,17 @@
  *             other's bits would each miss changes. rtl/csrs.vh
  *             FEATURES2 bit 14 says the register exists.
  *
+ *   2  VIDEO, continued -- MONOCHROME BRIGHTNESS (DDMI boards):
+ *               bits 11:8   level 0..15; reset 7, the 0x80 ink DDMI has
+ *                           always used. White is 16 (level + 1),
+ *                           clamped to 255; amber and green scale with
+ *                           it. Colour mode is not affected.
+ *               bit 15      W: strobe -- the level is written only when
+ *                           this is set, so plain mode writes (0..3)
+ *                           leave it alone. R: BRIGHT_AVAIL.
+ *             Lane 1. A byte store of 0x80 | level to 0x7000_0209
+ *             sets the level without touching the mode.
+ *
  *   9  COLOR  game-mode colour (docs/color.md). Word 9, not word 8,
  *             and see PALETTE for why that matters.
  *               bit 0       EN: colour on. Only has an effect while
@@ -308,6 +319,9 @@ module socctl_wb #(
     // Composite colour exists (CVBS register), and whether it starts
     // in black and white. Set by rtl/sysctl.v.
     parameter CVBS_AVAIL = 1'b0,
+    // 1 on a board with DDMI: monochrome brightness (VIDEO bits 11:8)
+    // does something. Reads back as VIDEO bit 15. Set by sysctl.v.
+    parameter BRIGHT_AVAIL = 1'b0,
     parameter CVBS_MONO_RESET = 1'b0,
     // Defaults to 0 -- a socctl instantiated without being told
     // anything reports no game mode, which is the safe answer.
@@ -345,6 +359,11 @@ module socctl_wb #(
     // cursor_busy above: on a board built without `GPU it simply goes
     // nowhere.
     output wire [1:0] video_mode,
+
+    // Monochrome brightness on DDMI, 0..15 -> gpu_video.v, which
+    // synchronises it with video_mode. VIDEO bits 11:8; see VIDEO in
+    // this file's header and BRIGHT_AVAIL.
+    output wire [3:0] video_bright,
 
     // -- game mode configuration -> rtl/gpu/gpu_video.v --
     //
@@ -432,6 +451,7 @@ module socctl_wb #(
 
     reg [31:0] ctrl;
     reg [1:0] video;
+    reg [3:0] bright;
 
     reg game;
     reg wrap;
@@ -451,6 +471,7 @@ module socctl_wb #(
     assign cursor_busy = ctrl[0];
     assign reconfig = recfg && (RECONFIG_AVAIL != 0);
     assign video_mode = video;
+    assign video_bright = bright;
 
     // FORCED low, not merely ignored, on a bitstream without game
     // mode -- see the GAME register's note in this file's header on
@@ -540,6 +561,7 @@ module socctl_wb #(
             // busy at reset -- see this file's header comment
             ctrl <= 32'h0000_0001;
             video <= VIDEO_MODE_RESET;
+            bright <= 4'd7;         // the 0x80 ink DDMI always had
 
             // DESKTOP at reset, on every board, even where `GAME is
             // defined. `GAME says the mode is available, not that it
@@ -601,6 +623,12 @@ module socctl_wb #(
                     // software, which cannot see an error on this bus.
                     if (wb_adr_i == 32'd2) begin
                         if (wb_sel_i[0]) video <= wb_dat_i[1:0];
+                        // Brightness only with its own strobe, bit 15:
+                        // every mode write there has ever been is a
+                        // plain word store of 0..3, and must not reset
+                        // the brightness to 0 as a side effect.
+                        if (wb_sel_i[1] && wb_dat_i[15])
+                            bright <= wb_dat_i[11:8];
                     end
 
                     // GAME and VIEW both flip vload. One toggle for
@@ -674,7 +702,9 @@ module socctl_wb #(
                     case (wb_adr_i)
                         32'd0: wb_dat_o <= ctrl;
                         32'd1: wb_dat_o <= MAGIC;
-                        32'd2: wb_dat_o <= { VIDEO_SIG, 14'b0, video };
+                        32'd2: wb_dat_o <= { VIDEO_SIG, (BRIGHT_AVAIL != 0), 3'b0,
+                                             ((BRIGHT_AVAIL != 0) ? bright : 4'd0),
+                                             6'b0, video };
                         // reads back game_en, not `game` -- so a
                         // build without game support reports the
                         // enable bit clear no matter what was

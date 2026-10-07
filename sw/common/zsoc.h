@@ -849,6 +849,43 @@ static inline bool z_video_set_mode(uint32_t mode) {
 	return true;
 }
 
+// -- monochrome brightness (VIDEO bits 11:8; DDMI boards) --
+//
+// Sixteen levels for the monochrome inks on HDMI/DVI: white is
+// 16 * (level + 1), clamped to 255, and amber, green and paper scale
+// with it. Level 7 is the 0x80 white this output has always had, and
+// the reset value. Colour mode is not affected (its palette already
+// spans the full range), nor are VGA (one bit a channel) or composite.
+//
+// No feature bit: like the system volume, the register says whether it
+// is there -- VIDEO bit 15 reads 1 on a bitstream with brightness and
+// a DDMI output. wm owns it (Ctrl+Super+Minus/Equal), and
+// system.video.brightness sets it at boot.
+#define Z_VIDEO_BRIGHT_LEVELS  16u
+#define Z_VIDEO_BRIGHT_DEFAULT 7u
+#define Z_VIDEO_BRIGHT_SET     (1u << 15)    // W: strobe; R: available
+
+static inline bool z_video_brightness_available(void) {
+	return z_video_mode_present() &&
+		(reg_socctl_video & Z_VIDEO_BRIGHT_SET) != 0;
+}
+
+static inline uint32_t z_video_get_brightness(void) {
+	if (!z_video_brightness_available()) return Z_VIDEO_BRIGHT_DEFAULT;
+	return (reg_socctl_video >> 8) & 0xfu;
+}
+
+// Set the level, 0..15, from the next frame. The current mode is
+// written back with it (bits 1:0) rather than relying on a byte store,
+// so the mode is unchanged whatever the bus does with partial writes.
+static inline bool z_video_set_brightness(uint32_t level) {
+	if (level >= Z_VIDEO_BRIGHT_LEVELS) return false;
+	if (!z_video_brightness_available()) return false;
+	reg_socctl_video = Z_VIDEO_BRIGHT_SET | (level << 8) |
+		(reg_socctl_video & 0x3u);
+	return true;
+}
+
 // Display name for a mode, for anything that prints one. Always
 // returns a valid string, "unknown" for a value out of range, so a
 // caller can print the result without checking first.

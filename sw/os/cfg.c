@@ -119,6 +119,26 @@ static void apply(bool verbose) {
 		}
 	}
 
+	// Monochrome brightness on HDMI/DVI, 1..16 (the hardware's 0..15
+	// plus one, as wm's caption shows it). Same rule: absent leaves it
+	// alone; accepted and ignored on a board without it.
+	{
+		const char *b = k_cfg_find("system.video.brightness");
+		if (b) {
+			int n = 0;
+			const char *q = b;
+			while (*q >= '0' && *q <= '9') n = n * 10 + (*q++ - '0');
+			if (*q || q == b || n < 1 || n > (int)Z_VIDEO_BRIGHT_LEVELS)
+				printf("cfg: system.video.brightness: '%s' is not 1-16 -- "
+					"ignored\n", b);
+			else if (z_video_brightness_available())
+				z_video_set_brightness((uint32_t)(n - 1));
+			else if (verbose)
+				printf("cfg: system.video.brightness: no brightness control "
+					"on this board\n");
+		}
+	}
+
 	// Composite colour (docs/composite.md, "Colour"): `mono` for a TV,
 	// cable or region where the colour signal does not work. Same rule
 	// as above: absent leaves it alone. Accepted and ignored on a board

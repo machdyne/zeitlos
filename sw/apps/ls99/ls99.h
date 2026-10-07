@@ -49,6 +49,9 @@ typedef struct {
                                            transactions, levels */
     void (*console)(char c);            /* a copy of what it prints */
     void (*set_addr)(uint8_t addr);     /* its Sechs address changed */
+    /* about 2ms of REAL time (the console's output is full: the master
+     * reads it meanwhile); may be 0, where there is no real time */
+    void (*pause)(void);
 } ls99_board_t;
 
 void ls99_init(const ls99_board_t *b, int profile, uint8_t addr);

@@ -61,6 +61,7 @@ travel with the card. `settings` edits them; see
 | `system.tts.rate` | `180` | `tts` | speech: words per minute, 80-450 |
 | `system.tts.volume` | `200` | `tts` | speech: volume, 0-255 |
 | `system.video.mode` | `white` | kernel | display colour, applied at boot and on reload |
+| `system.video.brightness` | `8` | kernel | HDMI/DVI monochrome brightness, 1-16, applied at boot and on reload |
 | `system.video.composite` | `color` | kernel | composite colour boards: `color`, or `mono` for black and white |
 
 The same table, with one-line help, is `z_cfg_known[]` in
@@ -173,6 +174,16 @@ ago. At power-on "as it is" is white anyway.
 Super+P cycles the phosphor for now (white, amber, green, paper)
 without touching this setting: a reboot, or a config reload, brings
 this one back ([window_manager.md](window_manager.md)).
+
+### `system.video.brightness`
+
+1 to 16, the level Ctrl+Super+Minus / Ctrl+Super+Equal step through
+and their caption shows. 8 is the white HDMI/DVI has always had, and
+the power-on default; 16 is full white. The monochrome phosphor only:
+colour mode, VGA and composite are unaffected
+([socctl.md](socctl.md#brightness)). Applied at boot and on every
+reload; absent leaves the display as it is; ignored on boards without
+HDMI/DVI.
 
 ### `system.video.composite`
 

@@ -74,7 +74,7 @@ static void b_set_addr(uint8_t a) {
     mp->addr = a;
 }
 
-static const ls99_board_t board = { b_drive, b_level, b_i2c, b_sleep, b_service, b_console, b_set_addr };
+static const ls99_board_t board = { b_drive, b_level, b_i2c, b_sleep, b_service, b_console, b_set_addr, 0 };
 
 /* bench sends the module's transactions here: in-process */
 static int module_xfer(part_t *p, const uint8_t *w, int wn, uint8_t *r, int rn) {

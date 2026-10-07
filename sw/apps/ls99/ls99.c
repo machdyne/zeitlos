@@ -47,10 +47,13 @@ bool ls99_halted(void) {
 /* ---- the Sechs core's side (sechs.h) ---- */
 
 /* The console's output is full: on a module, the master reads it during
- * these 2ms. Here the master's transactions arrive as the board's
- * messages, so the wait is the board's turn. */
+ * these 2ms, and the core waits 255 of them (0.5s) before it turns the
+ * console off. Here the master's transactions arrive as the board's
+ * messages: its turn, then the real 2ms -- without them the 255 waits
+ * passed in microseconds, and a LIST stopped half way. */
 void sechs_wait(void) {
     board->service();
+    if (board->pause) board->pause();
 }
 
 void sechs_set_addr(uint8_t addr) {

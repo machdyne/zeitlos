@@ -409,9 +409,13 @@ With `COLOR_AVAIL` 0 the module synthesises to within one LUT4 of the
 version before colour existed (994 LUT4, same flip-flops, same carry
 and mux cells). Boards without `COLOR` pay nothing.
 
-These are pre-placement numbers for one module. Packing moves them
-somewhat; the board-level figure needs a full build, see
-[boards.md](boards.md).
+These are pre-placement numbers for one module, and **noisier than they
+look**: re-synthesising textually different but logically identical
+versions of this file (comments and line numbers only) moved the LUT4
+count by several hundred, because ABC's mapping of the 640:1 `hline`
+mux is sensitive to netlist order. Treat them as rough. The board-level
+figure -- Lakritz measured at 98% with colour, all clocks passing
+([boards.md](boards.md)) -- is the one to trust.
 
 Other costs: no VRAM (the planes are framebuffer that already exists),
 and 60 more words per line on the scanout-only VRAM port.

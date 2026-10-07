@@ -3320,6 +3320,16 @@ module sysctl #()
 	localparam CVBS_MONO_DEFAULT = 1'b0;
 `endif
 	wire socctl_cvbs_mono;
+
+	// Monochrome brightness (VIDEO bits 11:8): only DDMI has the
+	// levels to show it -- VGA is one bit a channel, composite has its
+	// own white. No define of its own.
+`ifdef GPU_DDMI
+	localparam BRIGHT_AVAILABLE = 1'b1;
+`else
+	localparam BRIGHT_AVAILABLE = 1'b0;
+`endif
+	wire [3:0] socctl_video_bright;
 	wire socctl_color_en;
 	wire [1:0] socctl_color_np;
 	wire [5:0] socctl_color_off;
@@ -3379,6 +3389,7 @@ module sysctl #()
 		.COLOR_AVAIL(COLOR_AVAILABLE),
 		.CVBS_AVAIL(CVBS_AVAILABLE),
 		.CVBS_MONO_RESET(CVBS_MONO_DEFAULT),
+		.BRIGHT_AVAIL(BRIGHT_AVAILABLE),
 `ifdef PROGRAMN_PIN
 		.RECONFIG_AVAIL(1)
 `else
@@ -3420,6 +3431,7 @@ module sysctl #()
 		.cursor_busy(socctl_cursor_busy),
 		.reconfig(socctl_reconfig),
 		.video_mode(socctl_video_mode),
+		.video_bright(socctl_video_bright),
 		.view_load(socctl_view_load),
 		.game_en(socctl_game_en),
 		.game_wrap(socctl_game_wrap),
@@ -3965,6 +3977,7 @@ module sysctl #()
 		.resetn(~wbm_rst),
 		.pixel(gpu_pixel),
 		.video_mode(socctl_video_mode),
+		.video_bright(socctl_video_bright),
 		.view_load(socctl_view_load),
 		// GAME_AVAILABLE is already `GAME && `GPU, and socctl has
 		// already gated its own enable bit with it -- so this is belt

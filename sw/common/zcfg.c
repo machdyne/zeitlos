@@ -70,6 +70,8 @@ const z_cfg_known_t z_cfg_known[] = {
 	  "speech: volume, 0-255" },
 	{ "system.video.mode", "white",
 	  "display colour at boot and on reload: white, amber, green or paper" },
+	{ "system.video.brightness", "8",
+	  "HDMI/DVI monochrome brightness at boot and on reload: 1-16" },
 	{ "system.video.composite", "color",
 	  "composite colour boards: color, or mono for black and white" },
 };

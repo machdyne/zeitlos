@@ -40,7 +40,7 @@ Word-addressed, matching every other simple slave in this codebase.
 |---|---|---|
 | `0x7000_0200` | CTRL | bit 0: cursor shape. 0 = normal (X), 1 = busy (Z). **Resets to 1.** Bits 31:1 reserved, write 0. |
 | `0x7000_0204` | MAGIC | fixed `0x5A43_5452` (`"ZCTR"`) |
-| `0x7000_0208` | VIDEO | bits 1:0: virtual phosphor mode. Reads back as `{0x5643, 14'b0, mode}`. Reset value comes from the board's `GPU_*` defines. |
+| `0x7000_0208` | VIDEO | bits 1:0: virtual phosphor mode. Bits 11:8: monochrome brightness on DDMI, written only with bit 15 set (see [Brightness](#brightness)). Reads back as `{0x5643, avail, 3'b0, level, 6'b0, mode}`. Mode reset value comes from the board's `GPU_*` defines; level resets to 7. |
 | `0x7000_0218` | RECONFIG | write the key `0x5A52_4254` (`"ZRBT"`), as one whole-word store, to pull PROGRAMN and reconfigure the FPGA -- reboot. Any other value or a partial store is ignored. Reads back as `{0x5A52, 15'b0, avail}`; `avail` is set only on boards defining `PROGRAMN_PIN`, and the request is forced off in hardware elsewhere. Software uses `z_reboot()`, which syncs open files first -- see `docs/zboot.md` section 6. |
 | `0x7000_021c` | DIRTY | bits 29:0: framebuffer stripes written since last cleared, one bit per 16 rows. **Write 1s to clear**; reading has no side effect. Resets to all ones. Present when `FEATURES2` bit 14 (`Z_FEATURE2_VRAM_DIRTY`) is set -- see [Framebuffer dirty stripes](#framebuffer-dirty-stripes). |
 | `0x7000_0224` | COLOR | game-mode colour: bit 0 enable, bits 2:1 planes−1, bits 13:8 plane 1..3 `{dy,dx}` offsets, bit 15 avail (R/O). Reads back as `{0x5A50, avail, …}`. Adopted with GAME/VIEW at a frame boundary; **a GAME write with bit 0 clear also clears the enable.** See [color.md](color.md). |
@@ -345,3 +345,49 @@ wm: busy=0x0 cursor=X
   `no init0 after 20s -- enabling the dock anyway` -- init never
   finished, or wm was started without it. The serial console shows how
   far init got.
+
+## Brightness
+
+On boards with HDMI/DVI (`GPU_DDMI`), VIDEO bits 11:8 set the
+brightness of the **monochrome** inks, in sixteen levels:
+
+| Level | White | Amber (R, G) | Green |
+|---|---|---|---|
+| 0 | `0x10` | `0x1A, 0x13` | `0x10` |
+| 7 (reset) | `0x80` | `0xD2, 0x9D` | `0x80` |
+| 11 | `0xC0` | `0xFF, 0xEB` | `0xC0` |
+| 15 | `0xFF` | `0xFF, 0xFF` | `0xFF` |
+
+White is 16 × (level + 1), clamped to 255. Amber keeps its colour by
+scaling both channels from today's values (it saturates towards yellow
+at the top), and paper's white background is white's. Level 7 is
+exactly the inks DDMI has always used, and is the reset value, so
+nothing changes until someone asks.
+
+**Writes.** The level is written only when bit 15 is set in the same
+store. Every mode write ever made is a plain store of 0..3, and must
+not reset the brightness as a side effect; `z_video_set_brightness()`
+writes `0x8000 | level << 8 | mode`, the current mode included.
+
+**Presence.** No feature bit: like the system volume, the register
+answers. Bit 15 reads 1 on a bitstream with brightness and a DDMI
+output; `z_video_brightness_available()` checks it.
+
+**Not affected:** colour mode (its palette already spans the full
+range), VGA (one bit a channel), composite (its white is the standard
+100 IRE; a TV has its own brightness control).
+
+**Cost.** The ink for each channel is computed once per frame from the
+mode and the level -- both adopted at the frame boundary -- and held in
+a register, so the pixel path is "ink if lit", as it always was. White,
+amber red and amber green are three 16-entry tables, one LUT4 per output
+bit, generated from the formulas above; no adders. Sixteen levels cost
+the same as four would. Synthesised alone: about 60 LUT4 and 50
+flip-flops, all in the pixel clock domain, no carry chains.
+
+Wm owns it: **Ctrl+Super+Minus / Ctrl+Super+Equal**, with a caption
+like the volume's ([window_manager.md](window_manager.md)). The boot
+value is `system.video.brightness` ([config.md](config.md)).
+`rtl/gpu/bench/tb_brightness.v` checks every mode at levels 0, 7, 11 and
+15, that 7 is the old inks exactly, that a change waits for the frame
+boundary, and that colour mode ignores it.
