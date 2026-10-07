@@ -253,6 +253,17 @@ z_rv z_port_connect_arg_timeout(z_port_t *port, uint32_t provider_pid,
 // mechanism can't cover on its own.
 z_rv z_port_send(z_port_t *port, const void *data, uint32_t len);
 
+// Waits until every DATA this side has sent is acked -- read -- or
+// timeout_ticks pass. A DATA payload lives on the SENDER's heap until
+// its ack frees it (docs/messaging.md, "borrowed data has a lifetime"),
+// so a program that sends its last output and exits at once leaves the
+// receiver reading freed memory: call this before z_port_close() and
+// exiting. Acks are handled; a CLOSE from the peer ends the wait; any
+// other message read meanwhile is dropped (this is for the end of a
+// program). Z_OK when all were read, Z_FAIL if some were not.
+// zfpga and fed did this by hand before it existed.
+z_rv z_port_drain(z_port_t *port, uint32_t timeout_ticks);
+
 // tells the peer this connection is done. does not wait for any
 // acknowledgment.
 void z_port_close(z_port_t *port);

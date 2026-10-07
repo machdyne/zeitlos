@@ -10,7 +10,8 @@ is the point.
 ```
 $ bench /bench/panel.net &
 $ i2c -b main write 0x20 6 0x00        # port 0: outputs
-$ i2c -b main write 0x20 2 0x55        # four LEDs light on the bench
+$ i2c -b main write 0x20 2 0x55        # 01010101: P00, P02, P04, P06 high --
+                                       # l0, l2 and the lamp light
 ```
 
 Bench tests logic, never electrics: levels are high, low, floating or in
@@ -39,6 +40,7 @@ never silent.
 
 | Key or action | Does |
 |---|---|
+| the open icon (title bar) | another netlist, through the file dialog (from `/bench`) |
 | click a button or switch | presses it while held / flips it |
 | click a pin or a card | its net in the status line: level, pull, and every pin on it |
 | F5 | reads the netlist again, after editing it |
@@ -47,8 +49,24 @@ never silent.
 | Escape | the status line back |
 | wheel, Up, Down | scroll |
 
-Bench is started with a netlist (`bench /bench/panel.net`, or by opening
-a `.net` file). `/bench/panel.net` is on the card as an example.
+Bench is started with a netlist (`bench /bench/panel.net`, by opening a
+`.net` file, or empty from the dock), and the open icon loads another. `/bench/panel.net` is on the card as an example.
+
+## Examples
+
+In `sw/apps/bench/examples`, and on the card: the netlists in `/bench`,
+their BASIC programs in `/basic`. Each netlist's comments say what to try.
+
+| Netlist | Shows | Needs |
+|---|---|---|
+| `panel.net` | a TCA9535 with LEDs, buttons and a lamp, driven from the shell with `i2c` | nothing else |
+| `basicpanel.net` | the same expander driven by the BASIC computer: `LOAD PANEL`, `RUN` | the BASIC computer ([basic\_app.md](basic_app.md)) |
+| `modpanel.net` | a virtual LS10 running `PANEL.BAS` against the expander on its own bus | ls99 ([ls99.md](ls99.md)) |
+| `growlight.net` | a virtual LS10 timing a grow light (`GROW.BAS`): press 3, an hour a second | ls99 |
+| `realmodule.net` | a real LS10 in a Wolfszahn on PMOD port 0, its pins on the bench; `BLINK.BAS` for it | a real module |
+
+`PANEL.BAS` runs unchanged on the BASIC computer and on a module, and
+`BLINK.BAS` on a real module and an LS99 alike.
 
 ## Netlists
 
@@ -69,15 +87,16 @@ load     lamp  "Grow light"  x1.P04
 | `TYPE NAME ["label"] [PART.PIN ...] [key=value ...] [word ...]` | a part; its pins joined, in order, to the pins listed. The words `pullup` and `pulldown` put a resistor on its pins' nets |
 | `net NAME PART.PIN ...` | those pins on one net, with a name |
 | `pullup PART.PIN`, `pulldown PART.PIN` | a resistor on that pin's net |
-| `bus NAME [master=MODULE] PART ...` | an I2C bus, and the I2C parts on it; `master=` makes it a module's own bus (its C and D) |
+| `bus NAME [master=MODULE] [segment=GPIO] PART ...` | an I2C bus, and the I2C parts on it; `master=` makes it a module's own bus (its C and D); `segment=` continues it onto a real port's pins 1 and 2 |
+| `gpio NAME port=N [in=PINS] [out=PINS]` | a real PMOD port: its pins, by PMOD number (1-4, 7-10), on bench nets (below) |
 | `module NAME LS10\|LS11\|LS99 ...` | a virtual Zwölf module running BASIC ([ls99.md](ls99.md)) |
+| `basic BUS` | the BASIC computer's pins 3 and 4 on that bus: its `I2C` and `I2CR` reach the parts there ([basic\_app.md](basic_app.md)); a card shows it |
 | `place NAME COL ROW` | the part's card at that cell (otherwise: the first free one) |
 
 A part must be declared before another line names it. An error stops the
 load and says where: `panel.net line 4: x2: no such part (declared
 later?)`. A setting a part does not have is an error too, so a typo
-cannot pass unnoticed. `gpio` (real PMOD ports) is recognised and
-arrives in a later phase.
+cannot pass unnoticed.
 
 ## Parts
 
@@ -108,6 +127,41 @@ read, or when an input changes. The drawing comes free: a part with one
 pin gets a small card, one with more a card showing every pin. Then a
 line in `parts/parts.c`, its object in the Makefile, and tests against
 its datasheet in `tests/`.
+
+## Real hardware
+
+A `gpio` part is a real PMOD port, and bench is its only user while the
+netlist is loaded (zgpio.h: "a server process that owns the pins").
+
+```
+gpio  g0  port=0  in=3  out=4      # a real LS10 in a Wolfszahn on port 0
+bus   main  segment=g0             # its A, B (pins 1, 2): the Sechs bus
+load  lamp  "Module pin C"  g0.3
+switch  sw  "To pin D"  g0.4  pullup
+```
+
+- **`in=` pins** bring the real level onto their nets, read every bench
+  loop (a few hundredths of a second: buttons and lamps, not fast
+  signals). Low drives the net low; high is only a pull-up, since the
+  pin's own weak pull-up may be all that makes it high -- a virtual part
+  can still pull such a net down.
+- **`out=` pins** put their net's level on the real pin, open drain: low
+  pulls it down, anything else lets it go to the pull-up. Safe to wire to
+  a real pin that is itself an output.
+- **`segment=`** continues a bench bus onto the port's pins 1 (SCL) and 2
+  (SDA): a transaction no virtual part answers goes out through zi2c, so
+  real modules and chips share the bus with virtual parts --
+  `sechs -b main info 0x0c` reaches a real module through bench. If a
+  real device answers at an address a virtual part also has, the status
+  line says so when the netlist loads.
+- **Its port is listed as a bus** (`pmod0`), so `i2c -b pmod0` and every
+  other zi2cx user go through bench while it owns the port, instead of
+  driving the same pins.
+- **Time stays at x1**: real hardware runs in real time.
+
+`/bench/realmodule.net` is the netlist above, and `/basic/BLINK.BAS` a
+program for it (`sechs -b main send 0x0c /basic/BLINK.BAS`, then
+`sechs -b main run 0x0c`); it runs the same on an LS99.
 
 ## Using bench buses from an app: zi2cx
 
@@ -151,7 +205,7 @@ conflicts), bus semantics, each part against its datasheet, the drawing
 | Phase | Brings |
 |---|---|
 | 1 | the bench, netlists, the parts above, zi2cx, `i2c` |
-| 2 (this) | LS99: virtual Zwölf modules running BASIC (LS10, LS11 profiles), on bench buses, with virtual time; `sechs` on zi2cx ([ls99.md](ls99.md)) |
-| 3 | the BASIC computer's `I2C` on a bench bus |
-| 4 | real hardware: a bench bus extended onto a PMOD; real pins as bench nets |
+| 2 | LS99: virtual Zwölf modules running BASIC (LS10, LS11 profiles), on bench buses, with virtual time; `sechs` on zi2cx ([ls99.md](ls99.md)) |
+| 3 | the BASIC computer's `I2C` on a bench bus (`basic BUS`); the REPL's `(i2c-*)` on zi2cx |
+| 4 (this) | real hardware: `gpio` ports, `segment=` buses, ports owned through zi2cx |
 | 5 | a real module's own bus reaching virtual parts (gateware) |

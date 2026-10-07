@@ -37,6 +37,7 @@
 #include "../../common/zcolor.h"	// game-mode colour -- see (color-mode ...)
 #include "../../common/zuart.h"	// UART1 -- see (uart1-* ...) below
 #include "../../common/zi2c.h"	// bit-bang I2C -- see (i2c-* ...) below
+#include "../../common/zi2cx.h"	// ...or a bus by name: a bench bus, "pmodN"
 #include "../../common/zspi.h"	// bit-bang SPI -- see (spi-* ...) below
 #include "../../common/zgpio.h"	// the GPIO ports -- see (gpio-* ...)
 								// below. Direct MMIO, no syscall: this is
@@ -2251,13 +2252,13 @@ static ms_val *zapi_leds(ms_val *args) {
 #define ZAPI_I2C_MAX 2
 #define ZAPI_SPI_MAX 2
 
-static z_i2c_t zapi_i2c[ZAPI_I2C_MAX];
+static z_i2cx_t zapi_i2c[ZAPI_I2C_MAX];
 static bool zapi_i2c_used[ZAPI_I2C_MAX];
 
 static z_spi_t zapi_spi[ZAPI_SPI_MAX];
 static bool zapi_spi_used[ZAPI_SPI_MAX];
 
-static z_i2c_t *zapi_i2c_bus(ms_val *v, const char *who) {
+static z_i2cx_t *zapi_i2c_bus(ms_val *v, const char *who) {
 	int h = zapi_arg_int(v, who);
 	if (h < 0 || h >= ZAPI_I2C_MAX || !zapi_i2c_used[h])
 		ms_log(MS_PANIC, "%s: %d is not an open i2c bus "
@@ -2345,9 +2346,9 @@ static ms_val *zapi_bytes_out(const uint8_t *b, uint32_t n) {
 //
 // Setup mistakes DO panic (a bad handle, a byte out of range), because
 // those are the caller's error rather than the bus's.
-static z_i2c_rv zapi_i2c_last = Z_I2C_OK;
+static int zapi_i2c_last = Z_I2C_OK;        // a z_i2c_rv, or Z_I2CX_NO_*
 
-static ms_val *zapi_i2c_result(z_i2c_rv rv) {
+static ms_val *zapi_i2c_result(int rv) {
 	zapi_i2c_last = rv;
 	return ms_mk_bool(rv == Z_I2C_OK);
 }
@@ -2364,7 +2365,23 @@ static ms_val *zapi_i2c_init(ms_val *args) {
 	int h;
 	z_i2c_rv rv;
 
-	if (ms_is_nil(args)) ms_log(MS_PANIC, "i2c-init: expected a port");
+	if (ms_is_nil(args)) ms_log(MS_PANIC, "i2c-init: expected a port, or a bus name");
+
+	// (i2c-init "main") / (i2c-init "pmod1"): a bus by name, through
+	// zi2cx -- a bench bus (docs/bench.md), or a PMOD port's pins 1-2
+	if (ms_is_str(ms_car(args))) {
+		const char *name = ms_str_val(ms_car(args));
+		int r;
+		for (h = 0; h < ZAPI_I2C_MAX; h++) if (!zapi_i2c_used[h]) break;
+		if (h == ZAPI_I2C_MAX)
+			ms_log(MS_PANIC, "i2c-init: no free bus (at most %d)", ZAPI_I2C_MAX);
+		r = z_i2cx_open(&zapi_i2c[h], name);
+		zapi_i2c_last = r;
+		if (r != Z_I2C_OK) return ms_mk_bool(false);
+		zapi_i2c_used[h] = true;
+		return ms_mk_num((double)h);
+	}
+
 	port = zapi_arg_int(ms_car(args), "i2c-init"); args = ms_cdr(args);
 
 	if (ms_is_nil(args)) ms_log(MS_PANIC, "i2c-init: expected an scl pin");
@@ -2385,14 +2402,15 @@ static ms_val *zapi_i2c_init(ms_val *args) {
 	if (h == ZAPI_I2C_MAX)
 		ms_log(MS_PANIC, "i2c-init: no free bus (at most %d)", ZAPI_I2C_MAX);
 
-	zapi_i2c[h].scl_port = (uint8_t)port;
-	zapi_i2c[h].scl_pin = (uint8_t)scl;
-	zapi_i2c[h].sda_port = (uint8_t)port;
-	zapi_i2c[h].sda_pin = (uint8_t)sda;
-	zapi_i2c[h].khz = (uint32_t)(khz < 0 ? 0 : khz);
-	zapi_i2c[h].timeout_us = 1000;
+	memset(&zapi_i2c[h], 0, sizeof(zapi_i2c[h]));    // pins, not bench
+	zapi_i2c[h].pins.scl_port = (uint8_t)port;
+	zapi_i2c[h].pins.scl_pin = (uint8_t)scl;
+	zapi_i2c[h].pins.sda_port = (uint8_t)port;
+	zapi_i2c[h].pins.sda_pin = (uint8_t)sda;
+	zapi_i2c[h].pins.khz = (uint32_t)(khz < 0 ? 0 : khz);
+	zapi_i2c[h].pins.timeout_us = 1000;
 
-	rv = z_i2c_init(&zapi_i2c[h]);
+	rv = z_i2c_init(&zapi_i2c[h].pins);
 	zapi_i2c_last = rv;
 
 	if (rv != Z_I2C_OK) return ms_mk_bool(false);
@@ -2412,7 +2430,9 @@ static ms_val *zapi_i2c_init(ms_val *args) {
 static ms_val *zapi_i2c_error(ms_val *args) {
 	char *s;
 	(void)args;
-	s = strdup(z_i2c_strerror(zapi_i2c_last));
+	s = strdup(zapi_i2c_last == Z_I2CX_NO_BENCH ? "no bench running" :
+		zapi_i2c_last == Z_I2CX_NO_BUS ? "no such bus" :
+		z_i2c_strerror((z_i2c_rv)zapi_i2c_last));
 	if (!s) ms_log(MS_PANIC, "i2c-error: out of memory");
 	return ms_mk_str(s);
 }
@@ -2420,14 +2440,20 @@ static ms_val *zapi_i2c_error(ms_val *args) {
 // (i2c-scan bus) -- addresses that answered, as a list.
 static ms_val *zapi_i2c_scan(ms_val *args) {
 
-	z_i2c_t *b;
+	z_i2cx_t *b;
 	uint8_t found[ZAPI_BB_MAX];
 	int n;
 
 	if (ms_is_nil(args)) ms_log(MS_PANIC, "i2c-scan: expected a bus");
 	b = zapi_i2c_bus(ms_car(args), "i2c-scan");
 
-	n = z_i2c_scan(b, found, ZAPI_BB_MAX);
+	if (b->bench) {                     // a bench bus: probe each address
+		n = 0;
+		for (int a = 0x08; a <= 0x77 && n < ZAPI_BB_MAX; a++)
+			if (z_i2cx_probe(b, (uint8_t)a) == Z_I2C_OK) found[n++] = (uint8_t)a;
+	} else {
+		n = z_i2c_scan(&b->pins, found, ZAPI_BB_MAX);
+	}
 	if (n > ZAPI_BB_MAX) n = ZAPI_BB_MAX;
 
 	zapi_i2c_last = Z_I2C_OK;
@@ -2438,17 +2464,18 @@ static ms_val *zapi_i2c_scan(ms_val *args) {
 
 // (i2c-recover bus) -- unwedge a slave stuck holding SDA down.
 static ms_val *zapi_i2c_recover(ms_val *args) {
-	z_i2c_t *b;
+	z_i2cx_t *b;
 	if (ms_is_nil(args)) ms_log(MS_PANIC, "i2c-recover: expected a bus");
 	b = zapi_i2c_bus(ms_car(args), "i2c-recover");
-	return zapi_i2c_result(z_i2c_recover(b));
+	// a bench bus has no lines to free
+	return zapi_i2c_result(b->bench ? Z_I2C_OK : z_i2c_recover(&b->pins));
 }
 
 // (i2c-write bus addr data) -- data is a list of bytes or a string.
 // `addr` is the 7-BIT address (0x3c, not 0x78) as everywhere else.
 static ms_val *zapi_i2c_write(ms_val *args) {
 
-	z_i2c_t *b;
+	z_i2cx_t *b;
 	int addr;
 	uint8_t buf[ZAPI_BB_MAX];
 	uint32_t n;
@@ -2464,14 +2491,14 @@ static ms_val *zapi_i2c_write(ms_val *args) {
 	n = ms_is_nil(args) ? 0
 		: zapi_bytes_in(ms_car(args), buf, ZAPI_BB_MAX, "i2c-write");
 
-	return zapi_i2c_result(z_i2c_write(b, (uint8_t)addr, buf, n, true));
+	return zapi_i2c_result(z_i2cx_write(b, (uint8_t)addr, buf, n));
 
 }
 
 // (i2c-read bus addr n) -- a list of n bytes, or #f.
 static ms_val *zapi_i2c_read(ms_val *args) {
 
-	z_i2c_t *b;
+	z_i2cx_t *b;
 	int addr, n;
 	uint8_t buf[ZAPI_BB_MAX];
 	z_i2c_rv rv;
@@ -2489,7 +2516,7 @@ static ms_val *zapi_i2c_read(ms_val *args) {
 	if (n < 1 || n > ZAPI_BB_MAX)
 		ms_log(MS_PANIC, "i2c-read: want 1..%d bytes", ZAPI_BB_MAX);
 
-	rv = z_i2c_read(b, (uint8_t)addr, buf, (uint32_t)n, true);
+	rv = (z_i2c_rv)z_i2cx_read(b, (uint8_t)addr, buf, (uint32_t)n);
 	zapi_i2c_last = rv;
 
 	if (rv != Z_I2C_OK) return ms_mk_bool(false);
@@ -2512,7 +2539,7 @@ static ms_val *zapi_i2c_read(ms_val *args) {
 // miserable thing to debug.
 static ms_val *zapi_i2c_reg(ms_val *args) {
 
-	z_i2c_t *b;
+	z_i2cx_t *b;
 	int addr, reg;
 	uint8_t v;
 	z_i2c_rv rv;
@@ -2535,11 +2562,14 @@ static ms_val *zapi_i2c_reg(ms_val *args) {
 		int val = zapi_arg_int(ms_car(args), "i2c-reg");
 		if (val < 0 || val > 255)
 			ms_log(MS_PANIC, "i2c-reg: %d is not a byte (want 0..255)", val);
-		return zapi_i2c_result(z_i2c_reg_write8(b, (uint8_t)addr,
-			(uint8_t)reg, (uint8_t)val));
+		uint8_t w[2] = { (uint8_t)reg, (uint8_t)val };
+		return zapi_i2c_result(z_i2cx_write(b, (uint8_t)addr, w, 2));
 	}
 
-	rv = z_i2c_reg_read8(b, (uint8_t)addr, (uint8_t)reg, &v);
+	{
+		uint8_t r8 = (uint8_t)reg;
+		rv = (z_i2c_rv)z_i2cx_write_read(b, (uint8_t)addr, &r8, 1, &v, 1);
+	}
 	zapi_i2c_last = rv;
 
 	if (rv != Z_I2C_OK) return ms_mk_bool(false);
@@ -2555,10 +2585,11 @@ static ms_val *zapi_i2c_reg(ms_val *args) {
 // a weak pull-up adds real rise time to every released edge. Far under
 // on a bus that should be fast means the pull-ups need help.
 static ms_val *zapi_i2c_khz(ms_val *args) {
-	z_i2c_t *b;
+	z_i2cx_t *b;
 	if (ms_is_nil(args)) ms_log(MS_PANIC, "i2c-khz: expected a bus");
 	b = zapi_i2c_bus(ms_car(args), "i2c-khz");
-	return ms_mk_num((double)z_i2c_measured_khz(b));
+	// measured on pins; a bench bus has no clock
+	return ms_mk_num(b->bench ? 0.0 : (double)z_i2c_measured_khz(&b->pins));
 }
 
 // (spi-init port sck mosi miso cs)             -- mode 0, 1MHz

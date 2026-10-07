@@ -35,7 +35,7 @@ ls99_app.o: ls99_app.c ls99.h ../../common/zbench.h
 HOSTCC ?= cc
 HOSTFLAGS = -std=gnu99 -Wall -Wextra -O1 -g $(BASIC_DEFS)
 BENCH_CORE = $(B)/core.c $(B)/netlist.c $(B)/parts/parts.c $(B)/parts/tca9535.c \
-	$(B)/parts/simple.c $(B)/parts/module.c
+	$(B)/parts/simple.c $(B)/parts/module.c $(B)/parts/gpio.c
 
 BIN_TEST = /tmp/ls99_test
 

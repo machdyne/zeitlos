@@ -13,6 +13,8 @@
  *          reply    status, written, r[rn] (only if status is ZB_ACK)
  *   LIST   request  ZB_LIST
  *          reply    bus names, each ending in 0, then one more 0
+ *   ROLE   request  ZB_ROLE, role name, 0
+ *          reply    the name of the bus with that role, 0 ("" if none)
  *
  * wn and rn are at most ZB_MAX. A write of nothing and a read of nothing
  * is an address probe: ACK if a part answers there.
@@ -26,6 +28,9 @@
 
 #define ZB_XFER         1
 #define ZB_LIST         2
+#define ZB_ROLE         3       /* role name, 0 -> the bus with that role
+                                   in the netlist, 0; "" if none: the
+                                   BASIC computer's is "basic" */
 
 /*
  * Modules (ls99, docs/ls99.md). bench starts one ls99 per module in its

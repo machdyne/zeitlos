@@ -246,13 +246,13 @@ static char *slurp(const char *path) {
     return b;
 }
 
-/* the examples on the card: their netlists and their programs, as typed
- * in by ls99_app.c */
+/* the examples on the card (sw/apps/bench/examples): their netlists and
+ * their programs, as typed in by ls99_app.c */
 static void examples(void) {
     uint8_t v;
     /* the grow light, the override off: 0h on, 16h off, 24h on, 40h off, 48h on */
-    start(slurp("examples/growlight.net"), LS99_LS10);
-    type(slurp("examples/GROW.BAS"));
+    start(slurp("../bench/examples/growlight.net"), LS99_LS10);
+    type(slurp("../bench/examples/GROW.BAS"));
     CHECK(strstr(console, "ERROR") == 0 && strstr(console, "NO MEMORY") == 0,
           "GROW.BAS fits an LS10: [%s]", console);
     watch = 2;
@@ -268,8 +268,8 @@ static void examples(void) {
     CHECK(on == 3 && off == 2 && !bad, "GROW.BAS: on %d, off %d, wrong %d", on, off, bad);
 
     /* the override on: never off */
-    start(slurp("examples/growlight.net"), LS99_LS10);
-    type(slurp("examples/GROW.BAS"));
+    start(slurp("../bench/examples/growlight.net"), LS99_LS10);
+    type(slurp("../bench/examples/GROW.BAS"));
     bn_part_find("keep")->type->click(bn_part_find("keep"), true);
     watch = 2;
     stop_at = 50UL * 3600 * 1000;
@@ -280,8 +280,8 @@ static void examples(void) {
     CHECK(off == 0, "Keep on: never off (%d)", off);
 
     /* the panel: b1 held lights l1, and the master sees it in REG 0 */
-    start(slurp("examples/modpanel.net"), LS99_LS10);
-    type(slurp("examples/PANEL.BAS"));
+    start(slurp("../bench/examples/modpanel.net"), LS99_LS10);
+    type(slurp("../bench/examples/PANEL.BAS"));
     bn_part_find("b1")->type->click(bn_part_find("b1"), true);
     stop_at = 1000;
     ls99_line("RUN");
@@ -290,7 +290,35 @@ static void examples(void) {
     CHECK(sechs_read(0, SR_REG + 0, &v, 1) == BN_ACK && v == 0xFD, "REG 0 = %02x", v);
 }
 
+/* BLINK.BAS, for a real module or a virtual one: C toggles every 250ms,
+ * and stays on while D is low */
+static void blink(void) {
+    start("module m1 LS10\nload lamp \"C\" m1.C\nswitch sw \"D\" m1.D pullup\n", LS99_LS10);
+    type(slurp("../bench/examples/BLINK.BAS"));
+    watch = 2;
+    stop_at = 2000;
+    ls99_line("RUN");
+    watch = -1;
+    int highs = 0, lows = 0;
+    for (int i = 0; i < nchanges; i++) {
+        if (changes[i].level == BN_HIGH) highs++;
+        if (changes[i].level == BN_LOW && changes[i].ms) lows++;
+    }
+    CHECK(highs == 4 && lows == 4, "two seconds: on 4 times, off 4 (%d, %d)", highs, lows);
+    start("module m1 LS10\nload lamp \"C\" m1.C\nswitch sw \"D\" m1.D pullup\n", LS99_LS10);
+    type(slurp("../bench/examples/BLINK.BAS"));
+    bn_part_find("sw")->type->click(bn_part_find("sw"), true);
+    watch = 2;
+    stop_at = 2000;
+    ls99_line("RUN");
+    watch = -1;
+    lows = 0;
+    for (int i = 0; i < nchanges; i++) lows += changes[i].level == BN_LOW && changes[i].ms;
+    CHECK(lows == 0, "D low: C stays on (%d offs)", lows);
+}
+
 int main(void) {
+    blink();
     examples();
     identity();
     too_big();

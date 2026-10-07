@@ -16,6 +16,7 @@ int bn_log_next;
 uint32_t bn_now;
 int bn_conflicts;
 int (*bn_module_xfer)(part_t *p, const uint8_t *w, int wn, uint8_t *r, int rn);
+int (*bn_segment_xfer)(part_t *gpio, uint8_t addr, const uint8_t *w, int wn, uint8_t *r, int rn);
 
 static int depth;           /* nested resolves: a circuit that oscillates */
 #define DEPTH_MAX 32
@@ -133,6 +134,12 @@ part_t *bn_part_find(const char *name) {
     return 0;
 }
 
+int bn_bus_role(const char *role) {
+    for (int i = 0; i < bn_nbuses; i++)
+        if (role[0] && !strcmp(bn_buses[i].role, role)) return i;
+    return -1;
+}
+
 int bn_bus_find(const char *name) {
     for (int i = 0; i < bn_nbuses; i++)
         if (!strcmp(bn_buses[i].name, name)) return i;
@@ -163,7 +170,12 @@ int bn_xfer(int b, uint8_t addr, const uint8_t *w, int wn, uint8_t *r, int rn,
             p = &bn_parts[i];
             break;
         }
-    if (!p) {
+    if (!p && bn_buses[b].segment >= 0) {
+        /* nobody virtual: the real pins, if the bus continues onto them */
+        st = bn_segment_xfer ? bn_segment_xfer(&bn_parts[bn_buses[b].segment], addr, w, wn, r, rn)
+                             : BN_NACK_ADDR;
+        n = st == BN_ACK ? wn : 0;
+    } else if (!p) {
         st = BN_NACK_ADDR;
     } else if (p->type->module) {
         st = bn_module_xfer ? bn_module_xfer(p, w, wn, r, rn) : BN_NACK_ADDR;

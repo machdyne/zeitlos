@@ -1,0 +1,16 @@
+# realmodule.net -- a real LS10 on the bench: in a Wolfszahn on PMOD
+# port 0, its pins A and B are PMOD pins 1 and 2, C and D are 3 and 4.
+#
+#   sechs -b main info 0x0c                  the real module, through bench
+#   sechs -b main send 0x0c /basic/BLINK.BAS a program for it, then:
+#   sechs -b main run 0x0c
+#
+# The lamp shows the module's pin C as it really is; the switch pulls
+# its pin D to ground (open drain), as a real switch would. Real
+# hardware runs in real time: 2 and 3 do not speed it up.
+
+gpio     g0  port=0  in=3  out=4
+bus      main  segment=g0
+
+load     lamp  "Module pin C"  g0.3
+switch   sw  "To pin D"  g0.4  pullup

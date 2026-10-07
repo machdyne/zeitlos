@@ -14,11 +14,15 @@ APP_MAIN_RULE = 0
 # heap, and 16KB less the stack left too little margin for a long one.
 APP_STACK = 32K
 
-CORE = core.c netlist.c draw.c parts/parts.c parts/tca9535.c parts/simple.c parts/module.c
+CORE = core.c netlist.c draw.c parts/parts.c parts/tca9535.c parts/simple.c parts/module.c parts/gpio.c
 CORE_H = core.h netlist.h draw.h
 
-OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zfsapp.o zport.o \
-	core.o netlist.o draw.o parts.o tca9535.o simple.o module.o bench_app.o
+# zdialog.o is the open icon's file dialog: it needs zflist.o (the list),
+# zedit.o (the name field) and zspeak.o (widgets announce themselves), as
+# in sw/apps/view.
+OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o \
+	zflist.o zdialog.o zedit.o zfsapp.o zport.o zgpio.o zi2c.o \
+	core.o netlist.o draw.o parts.o tca9535.o simple.o module.o gpio.o bench_app.o
 
 core.o: core.c $(CORE_H)
 	$(CC) $(CFLAGS) -c core.c -o core.o
@@ -34,6 +38,8 @@ simple.o: parts/simple.c core.h
 	$(CC) $(CFLAGS) -c parts/simple.c -o simple.o
 module.o: parts/module.c core.h
 	$(CC) $(CFLAGS) -c parts/module.c -o module.o
+gpio.o: parts/gpio.c core.h
+	$(CC) $(CFLAGS) -c parts/gpio.c -o gpio.o
 bench_app.o: bench_app.c $(CORE_H) ../../common/zbench.h
 	$(CC) $(CFLAGS) -c bench_app.c -o bench_app.o
 

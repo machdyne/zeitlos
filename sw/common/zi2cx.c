@@ -65,11 +65,47 @@ int z_i2cx_bench_buses(char *buf, int len) {
     return count;
 }
 
+int z_i2cx_open_role(z_i2cx_t *b, const char *role) {
+    z_i2cx_t q;
+    uint8_t req[ZB_NAME + 2];
+    char name[ZB_NAME + 1];
+    uint32_t pid = 0;
+    int n = (int)strlen(role);
+    if (n >= ZB_NAME) return Z_I2CX_NO_BUS;
+    memset(&q, 0, sizeof(q));
+    if (!z_pid_lookup(ZB_PROVIDER, &pid) || !pid ||
+        z_port_connect_arg(&q.port, pid, z_obj_str(ZB_TAG)) != Z_OK)
+        return Z_I2CX_NO_BENCH;
+    q.other = b->other;
+    req[0] = ZB_ROLE;
+    memcpy(req + 1, role, (size_t)n + 1);
+    n = ask(&q, req, n + 2, (uint8_t *)name, ZB_NAME);
+    z_port_close(&q.port);
+    if (n < 1) return Z_I2CX_NO_BENCH;
+    name[n < ZB_NAME ? n : ZB_NAME] = 0;
+    if (!name[0]) return Z_I2CX_NO_BUS;
+    void (*other)(z_msg_t *) = b->other;
+    int r = z_i2cx_open(b, name);
+    b->other = other;
+    return r;
+}
+
 int z_i2cx_open(z_i2cx_t *b, const char *name) {
     int port;
     memset(b, 0, sizeof(*b));
     strncpy(b->name, name, sizeof(b->name) - 1);
     if (pmod_name(name, &port)) {
+        /* a port bench owns (a gpio in its netlist) goes through bench,
+         * which is then its only user (zgpio.h): bench lists it */
+        char names[ZB_MAX * 4];
+        uint32_t pid = 0;
+        if (z_i2cx_bench_buses(names, sizeof(names)) > 0)
+            for (char *p = names; *p; p += strlen(p) + 1)
+                if (!strcmp(p, name) && z_pid_lookup(ZB_PROVIDER, &pid) && pid &&
+                    z_port_connect_arg(&b->port, pid, z_obj_str(ZB_TAG)) == Z_OK) {
+                    b->bench = true;
+                    return Z_I2C_OK;
+                }
         if (!z_gpio_present() || port >= (int)z_gpio_port_count()) return Z_I2CX_NO_BUS;
         b->pins.scl_port = b->pins.sda_port = (uint8_t)port;
         b->pins.scl_pin = 0;

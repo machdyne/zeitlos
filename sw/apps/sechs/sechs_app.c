@@ -237,7 +237,13 @@ int main(void) {
     }
 
     flush();
-    if (out_on) z_port_close(&out_port);
+    /* read before this process, and the heap the output sits on, goes
+     * (z_port_drain(), zport.h) */
+    if (out_on) {
+        z_port_drain(&out_port, Z_TICK_HZ * 2);
+        z_port_close(&out_port);
+    }
+    if (tty.connected) z_port_drain(&tty, Z_TICK_HZ * 2);
     /* the terminal is left to posix, which takes it back when this
      * process has gone (as vi does) */
     return r;

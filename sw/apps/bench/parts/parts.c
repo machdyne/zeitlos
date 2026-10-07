@@ -7,11 +7,11 @@
 #include "../core.h"
 
 extern const part_type_t pt_tca9535, pt_tca9555, pt_led, pt_load, pt_button, pt_switch,
-    pt_ls10, pt_ls11, pt_ls99;
+    pt_ls10, pt_ls11, pt_ls99, pt_gpio;
 
 const part_type_t *const bn_types[] = {
     &pt_tca9535, &pt_tca9555, &pt_led, &pt_load, &pt_button, &pt_switch,
-    &pt_ls10, &pt_ls11, &pt_ls99, 0,
+    &pt_ls10, &pt_ls11, &pt_ls99, &pt_gpio, 0,
 };
 
 const part_type_t *bn_type_find(const char *name) {

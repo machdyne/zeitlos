@@ -154,11 +154,28 @@ letters and digits and a 3-letter extension, `.BAS` if none is given. A
 `SAVE` replaces the old file only once the new one is complete
 (`/basic/_SAVING.TMP` in between).
 
+## I2C on the bench
+
+A netlist can put the BASIC computer's pins 3 and 4 on a bench bus
+([bench.md](bench.md)): `basic main`. Then, with bench running, `PINS -,
+-, I2C, I2C` succeeds and `I2C` and `I2CR` reach the parts on that bus,
+exactly as on a module's pins C and D. `/bench/basicpanel.net` puts it
+on a TCA9535 with LEDs and buttons: `LOAD PANEL`, `RUN`.
+
+`NET` on pins 1 and 2 means "left to the system", and costs nothing
+here, so a module's program (`PINS NET, NET, I2C, I2C`, as
+`/basic/PANEL.BAS`) runs unchanged on the BASIC computer -- develop it
+here, with the screen, then send it to a module with `sechs send`.
+
+The bus is looked up at every `PINS`, so a netlist edited and reloaded
+in bench (F5) is used by the next `RUN`. Without bench, or without a
+`basic` line, `PINS ... I2C, I2C` is `NOT SUPPORTED`.
+
 ## What it does not have
 
-- **Pins.** `PINS`, `IN`, `OUT`, `ADC` and `I2C` are `NOT SUPPORTED`
-  (`PINS -, -, -, -` works, as everywhere). Giving BASIC a PMOD would be
-  a configuration setting, later.
+- **Other pins.** `IN`, `OUT` and `ADC`, and modes other than the above,
+  are `NOT SUPPORTED` (`PINS -, -, -, -` works, as everywhere). Giving
+  BASIC a PMOD would be a configuration setting, later.
 - **`LED`** does nothing.
 - **`FORMAT`** is `NOT SUPPORTED`.
 

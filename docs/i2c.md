@@ -228,7 +228,9 @@ emulate `rtl/gpio.v`'s write-1-to-modify registers faithfully.
 ## Buses by name: zi2cx
 
 `sw/common/zi2cx.h` puts a name in front of zi2c: `"pmod1"` is zi2c on
-PMOD port 1, pin 1 (bit 0) SCL and pin 2 (bit 1) SDA; any other name is a
+PMOD port 1, pin 1 (bit 0) SCL and pin 2 (bit 1) SDA -- or, while bench
+owns that port (a `gpio` in its netlist), bench's own use of it, so the
+two never drive the same pins; any other name is a
 bus on the bench ([bench.md](bench.md)), virtual parts reached through
 its port `bench0`. The calls and their results are the same for both --
 `z_i2cx_write()`, `z_i2cx_read()`, `z_i2cx_write_read()` (repeated start),
@@ -242,4 +244,9 @@ the port's acks; any other message arriving meanwhile goes to the
 `other` callback if the app sets one (an app with a window must not lose
 wm's messages) and is dropped otherwise.
 
-`i2c` ([i2c\_app.md](i2c_app.md)) is its first user.
+Its users: `i2c` ([i2c\_app.md](i2c_app.md)), `sechs -b`
+([sechs\_app.md](sechs_app.md)), the virtual modules' own buses
+([ls99.md](ls99.md)), the BASIC computer's `I2C` ([basic\_app.md](basic_app.md)),
+and the REPL's `(i2c-init "name")` ([scheme\_api.md](scheme_api.md)).
+`z_i2cx_open_role()` opens the bus a netlist gives a role, as `basic BUS`
+does for the BASIC computer.

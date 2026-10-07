@@ -395,10 +395,13 @@ FPGA_FILES = [
 # reaches the terminal rather than the serial console.
 EXAMPLES = [
     ("bench/panel.net", "sw/apps/bench/examples/panel.net"),
-    ("bench/growlight.net", "sw/apps/ls99/examples/growlight.net"),
-    ("bench/modpanel.net", "sw/apps/ls99/examples/modpanel.net"),
-    ("basic/GROW.BAS", "sw/apps/ls99/examples/GROW.BAS"),
-    ("basic/PANEL.BAS", "sw/apps/ls99/examples/PANEL.BAS"),
+    ("bench/basicpanel.net", "sw/apps/bench/examples/basicpanel.net"),
+    ("bench/realmodule.net", "sw/apps/bench/examples/realmodule.net"),
+    ("basic/BLINK.BAS", "sw/apps/bench/examples/BLINK.BAS"),
+    ("bench/growlight.net", "sw/apps/bench/examples/growlight.net"),
+    ("bench/modpanel.net", "sw/apps/bench/examples/modpanel.net"),
+    ("basic/GROW.BAS", "sw/apps/bench/examples/GROW.BAS"),
+    ("basic/PANEL.BAS", "sw/apps/bench/examples/PANEL.BAS"),
     ("user/hello.c", "sw/apps/zcc/examples/hello.c"),
     ("user/hellolz.c", "sw/apps/zcc/examples/hello_libz.c"),
     ("user/hellotrm.c", "sw/apps/zcc/examples/hello_term.c"),

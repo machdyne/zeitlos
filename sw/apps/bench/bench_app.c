@@ -13,11 +13,21 @@
  * bench is also the port provider bench0: zi2cx (sw/common/zi2cx.c)
  * sends it transactions for its buses (zbench.h), one reply each.
  *
+ *   the open icon   another netlist (the file dialog, from /bench)
  *   click      press a button, flip a switch; on a pin: its net, below
  *   F5         read the netlist again (after editing it)
  *   F6         the cards, the bus log, the modules' consoles
  *   1 2 3      virtual time at x1, x60, x3600; space: pause
  *   wheel      scroll
+ *
+ * Real hardware (docs/bench.md): bench owns the PMOD ports its netlist's
+ * gpio parts name, and is their only user while it runs (as zgpio.h
+ * recommends: "a server process that owns the pins"). Every loop it
+ * reads their in= pins onto their nets and writes their out= nets onto
+ * the pins, open drain. A bus with segment= sends what no virtual part
+ * answers out through zi2c on that port's pins 1 and 2. Its ports are
+ * listed as buses ("pmod1"), so zi2cx goes through bench for them. With
+ * real hardware, virtual time stays at x1.
  *
  * Modules (docs/ls99.md): one ls99 process each, started after the
  * netlist is read, one at a time (a launch argument is claimed by the
@@ -41,6 +51,9 @@
 #include "../../common/zgfx.h"
 #include "../../common/zkbd.h"
 #include "../../common/zwidget.h"
+#include "../../common/zdialog.h"
+#include "../../common/zgpio.h"
+#include "../../common/zi2c.h"
 #include "../../common/zfsapp.h"
 #include "../../common/zport.h"
 #include "../../common/zbench.h"
@@ -97,6 +110,19 @@ static int consoles_len;
 static struct { z_port_t *client; uint8_t rn; bool used; } pending[PENDING];
 
 static int view_mode;               /* 0 cards, 1 bus log, 2 consoles */
+
+/* the real ports: one per gpio part, with zi2c if it is a segment */
+typedef struct {
+    part_t *part;
+    int port;
+    bool segment;
+    z_i2c_t i2c;
+    uint8_t in_last;
+} real_t;
+static real_t reals[8];
+static int nreals;
+static void real_release(void);
+static void real_start(void);
 static void on_msg(z_msg_t *m);
 static void stop_modules(void);
 static void start_modules(void);
@@ -106,6 +132,7 @@ static void start_modules(void);
 static void load(void) {
     char err[128];
     stop_modules();
+    real_release();
     char *text = path[0] ? fs_mallocfile(path) : 0;
     if (!path[0]) {
         bn_clear();
@@ -125,6 +152,8 @@ static void load(void) {
     consoles_len = 0;
     consoles[0] = 0;
     dirty = true;
+    real_start();
+    if (bn_real()) speed = 1;
     start_modules();
 }
 
@@ -271,6 +300,98 @@ static void mouse(uint32_t packed) {
     dirty = true;
 }
 
+/* ---- real hardware ---- */
+
+static real_t *real_of(part_t *p) {
+    for (int i = 0; i < nreals; i++)
+        if (reals[i].part == p) return &reals[i];
+    return 0;
+}
+
+/* bn_segment_xfer: what no virtual part answered, on the real pins */
+static int real_xfer(part_t *g, uint8_t addr, const uint8_t *w, int wn, uint8_t *r, int rn) {
+    real_t *rl = real_of(g);
+    int st;
+    if (!rl || !rl->segment) return BN_NACK_ADDR;
+    if (!wn && !rn) st = z_i2c_probe(&rl->i2c, addr) ? Z_I2C_OK : Z_I2C_NACK;
+    else if (wn && rn) st = z_i2c_write_read(&rl->i2c, addr, w, (uint32_t)wn, r, (uint32_t)rn);
+    else if (rn) st = z_i2c_read(&rl->i2c, addr, r, (uint32_t)rn, true);
+    else st = z_i2c_write(&rl->i2c, addr, w, (uint32_t)wn, true);
+    return st == Z_I2C_OK ? BN_ACK : BN_NACK_ADDR;
+}
+
+static void real_release(void) {
+    for (int i = 0; i < nreals; i++)
+        for (int pin = 0; pin < 8; pin++) {
+            uint8_t mine = bn_gpio_in_mask(reals[i].part) | bn_gpio_out_mask(reals[i].part) |
+                           (reals[i].segment ? 3 : 0);
+            if (mine >> pin & 1) z_gpio_mode((uint32_t)reals[i].port, (uint32_t)pin, Z_GPIO_IN);
+        }
+    nreals = 0;
+    bn_segment_xfer = 0;
+}
+
+/* the netlist's ports: pins set up, segments' buses opened, and a
+ * warning if a real device answers at a virtual part's address */
+static void real_start(void) {
+    for (int i = 0; i < bn_nparts && nreals < 8; i++) {
+        part_t *p = &bn_parts[i];
+        if (!p->type->mark || strcmp(p->type->name, "gpio")) continue;
+        int port = bn_gpio_port(p);
+        if (!z_gpio_present() || port >= (int)z_gpio_port_count()) {
+            snprintf(status, sizeof(status), "%s: this board has no PMOD port %d", p->name, port);
+            continue;
+        }
+        real_t *rl = &reals[nreals++];
+        memset(rl, 0, sizeof(*rl));
+        rl->part = p;
+        rl->port = port;
+        for (int pin = 0; pin < 8; pin++) {
+            if (bn_gpio_in_mask(p) >> pin & 1) z_gpio_mode((uint32_t)port, (uint32_t)pin, Z_GPIO_IN);
+            if (bn_gpio_out_mask(p) >> pin & 1) {
+                z_gpio_mode((uint32_t)port, (uint32_t)pin, Z_GPIO_OD);
+                z_gpio_od_write((uint32_t)port, (uint32_t)pin, true);      /* released */
+            }
+        }
+        for (int b = 0; b < bn_nbuses; b++)
+            if (bn_buses[b].segment == i) rl->segment = true;
+        if (rl->segment) {
+            rl->i2c.scl_port = rl->i2c.sda_port = (uint8_t)port;
+            rl->i2c.scl_pin = 0;                /* PMOD pin 1 */
+            rl->i2c.sda_pin = 1;                /* PMOD pin 2 */
+            rl->i2c.khz = 100;
+            rl->i2c.timeout_us = 1000;
+            if (z_i2c_init(&rl->i2c) == Z_I2C_BUSY) z_i2c_recover(&rl->i2c);
+        }
+        rl->in_last = 0xFF;
+    }
+    bn_segment_xfer = real_xfer;
+    for (int b = 0; b < bn_nbuses; b++) {
+        real_t *rl = bn_buses[b].segment >= 0 ? real_of(&bn_parts[bn_buses[b].segment]) : 0;
+        if (!rl) continue;
+        for (int i = 0; i < bn_nparts; i++)
+            if (bn_parts[i].bus == b && z_i2c_probe(&rl->i2c, bn_parts[i].addr))
+                snprintf(status, sizeof(status), "%s: 0x%02x answers on the real pins too",
+                         bn_parts[i].name, bn_parts[i].addr);
+    }
+}
+
+/* every loop: real inputs onto their nets, out= nets onto the pins */
+static void real_tick(void) {
+    for (int i = 0; i < nreals; i++) {
+        real_t *rl = &reals[i];
+        uint8_t in = z_gpio_in_get((uint32_t)rl->port) & bn_gpio_in_mask(rl->part);
+        if (in != rl->in_last) {
+            bn_gpio_inputs(rl->part, in);
+            rl->in_last = in;
+            dirty = true;
+        }
+        uint8_t low = bn_gpio_outputs(rl->part), out = bn_gpio_out_mask(rl->part);
+        for (int pin = 0; pin < 8; pin++)
+            if (out >> pin & 1) z_gpio_od_write((uint32_t)rl->port, (uint32_t)pin, !(low >> pin & 1));
+    }
+}
+
 /* ---- bench0: the clients' transactions ---- */
 
 static z_port_t *client_of(uint32_t pid) {
@@ -286,14 +407,26 @@ static void request(z_port_t *c, const uint8_t *d, uint32_t len) {
     uint8_t addr;
     int wn, rn, n = 0;
     if (len >= 1 && d[0] == ZB_LIST) {
-        uint8_t names[BN_BUSES * BN_NAME + 1];
+        uint8_t names[(BN_BUSES + 8) * BN_NAME + 1];
         for (int i = 0; i < bn_nbuses; i++) {
             size_t k = strlen(bn_buses[i].name) + 1;
             memcpy(names + n, bn_buses[i].name, k);
             n += (int)k;
         }
+        for (int i = 0; i < nreals; i++)        /* its ports: zi2cx comes here */
+            n += snprintf((char *)names + n, BN_NAME, "pmod%d", reals[i].port) + 1;
         names[n++] = 0;
         z_port_send(c, names, (uint32_t)n);
+        return;
+    }
+    if (len >= 2 && d[0] == ZB_ROLE) {
+        char role[ZB_NAME];
+        uint32_t k = len - 1 < ZB_NAME - 1 ? len - 1 : ZB_NAME - 1;
+        memcpy(role, d + 1, k);
+        role[k] = 0;
+        int b = bn_bus_role(role);
+        const char *nm = b >= 0 ? bn_buses[b].name : "";
+        z_port_send(c, nm, (uint32_t)strlen(nm) + 1);
         return;
     }
     if (zb_xfer_decode(d, (int)len, &bus, &addr, &w, &wn, &rn)) {
@@ -303,6 +436,22 @@ static void request(z_port_t *c, const uint8_t *d, uint32_t len) {
         return;
     }
     int b = bn_bus_find(bus);
+    for (int i = 0; b < 0 && i < nreals; i++) {
+        char nm[BN_NAME];
+        snprintf(nm, sizeof(nm), "pmod%d", reals[i].port);
+        if (strcmp(nm, bus)) continue;
+        /* an owned port, raw: its real pins, if they are a bus */
+        int st = reals[i].segment ? real_xfer(reals[i].part, addr, w, wn, r, rn) : BN_NACK_ADDR;
+        reply[0] = (uint8_t)(st == BN_ACK ? ZB_ACK : ZB_NACK_ADDR);
+        reply[1] = (uint8_t)(st == BN_ACK ? wn : 0);
+        n = 2;
+        if (st == BN_ACK && rn) {
+            memcpy(reply + 2, r, (size_t)rn);
+            n += rn;
+        }
+        z_port_send(c, reply, (uint32_t)n);
+        return;
+    }
     if (b < 0) {
         reply[0] = ZB_NO_BUS;
         reply[1] = 0;
@@ -511,7 +660,7 @@ static void modules_tick(void) {
 
 /* ---- messages ---- */
 
-static bool quit;
+static bool quit, open_wanted;
 
 static void on_msg(z_msg_t *m) {
     z_port_t *c;
@@ -520,6 +669,9 @@ static void on_msg(z_msg_t *m) {
         z_win_apply_clip(&win, &m->obj);
         break;
     case Z_WM_REDRAW:
+        /* only ours: a dialog's are handled inside zdialog.c, but this
+         * also arrives while one is being created (as sw/apps/text) */
+        if (m->obj.type != Z_UINT32 || z_win_redraw_id(m->obj.val.uint32) != win.id) break;
         z_win_apply_redraw(&win, m->obj.val.uint32);
         repaint();
         z_win_redraw_done(&win);
@@ -542,7 +694,10 @@ static void on_msg(z_msg_t *m) {
         } else if (k == Z_KEY_DOWN) scroll_to(scroll_x, scroll_y + SCROLL_STEP);
         else if (k == Z_KEY_UP) scroll_to(scroll_x, scroll_y - SCROLL_STEP);
         else if (k == '1' || k == '2' || k == '3') {
-            speed = k == '1' ? 1 : k == '2' ? 60 : 3600;
+            if (bn_real() && k != '1')
+                snprintf(status, sizeof(status), "x1: real hardware on the bench runs in real time");
+            else
+                speed = k == '1' ? 1 : k == '2' ? 60 : 3600;
             draw_status();
         } else if (k == ' ') {
             paused = !paused;
@@ -561,6 +716,11 @@ static void on_msg(z_msg_t *m) {
         break;
     case Z_WM_CLOSE:
         quit = true;
+        break;
+    case Z_WM_TITLEBAR_ICON:
+        if (m->obj.type == Z_UINT32 && (int)Z_WM_UNPACK_TBICON_ID(m->obj.val.uint32) == win.id &&
+            Z_WM_UNPACK_TBICON_KIND(m->obj.val.uint32) == Z_WM_TBICON_OPEN)
+            open_wanted = true;             /* not from inside a handler */
         break;
     case Z_PORT_CONNECT:
         if (m->obj.type == Z_STR && m->obj.val.str &&
@@ -597,6 +757,24 @@ static void on_msg(z_msg_t *m) {
     }
 }
 
+/* While the file dialog is up, wm still asks this window to redraw and
+ * waits for the ack, and bench0's clients and the modules still need
+ * answers: every message goes through on_msg() as usual (zdialog.h). */
+static void dialog_msg(z_msg_t *m, void *user) {
+    (void)user;
+    on_msg(m);
+}
+
+static void open_netlist(void) {
+    z_dialog_ctx_t dlg = { 0 };
+    char chosen[sizeof(path)];
+    dlg.parent = &win;
+    dlg.on_msg = dialog_msg;
+    if (!z_dialog_open(&dlg, "/bench", chosen, sizeof(chosen))) return;
+    strcpy(path, chosen);
+    load();
+}
+
 int main(void) {
     z_launch_path_take(path, sizeof(path));
     if (!z_fb_hw_blit_mem_available()) {
@@ -604,7 +782,7 @@ int main(void) {
         return 1;
     }
     if (z_win_create_flags(&win, "bench", WIN_W, WIN_H, -1, -1,
-            Z_WIN_FLAG_CLOSE_ICON | Z_WIN_FLAG_RESIZABLE) != Z_OK) {
+            Z_WIN_FLAG_CLOSE_ICON | Z_WIN_FLAG_OPEN_ICON | Z_WIN_FLAG_RESIZABLE) != Z_OK) {
         printf("bench: no window (is wm running?)\n");
         return 1;
     }
@@ -620,6 +798,11 @@ int main(void) {
     while (!quit) {
         z_msg_t m;
         while (z_msg_read(&m) == Z_OK) on_msg(&m);
+        if (open_wanted) {
+            open_wanted = false;
+            open_netlist();
+        }
+        real_tick();
         modules_tick();
         if (dirty) {
             render();
@@ -634,6 +817,7 @@ int main(void) {
         if (!quit) z_proc_wait(nmods ? Z_TICK_HZ / 100 : Z_TICK_HZ / 20);
     }
     stop_modules();
+    real_release();
     for (int i = 0; i < CLIENTS; i++)
         if (clients[i].connected) z_port_close(&clients[i]);
     z_win_destroy(&win);

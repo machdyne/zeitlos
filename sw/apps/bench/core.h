@@ -77,6 +77,8 @@ typedef struct {
     bool (*lit)(part_t *p);
     uint8_t addr_dflt;              /* addr= if none is given; 0: needed */
     uint8_t module;                 /* a Zwölf module (LS99): 1 + its profile */
+    /* the letter under a pin on its card; 0: from its drive (o or i) */
+    char (*mark)(part_t *p, int pin);
 } part_type_t;
 
 struct part {
@@ -100,6 +102,9 @@ typedef struct {
 typedef struct {
     char name[BN_NAME];
     int8_t master;                  /* the module whose C/D it is; -1: none */
+    char role[8];                   /* "basic": the BASIC computer's C/D */
+    int8_t segment;                 /* the gpio part whose pins 1, 2 it
+                                       continues onto; -1: none */
 } bus_t;
 
 typedef struct {
@@ -136,6 +141,7 @@ void bn_net_resolve(int n);                     /* and tell its parts */
 void bn_resolve_all(void);
 part_t *bn_part_find(const char *name);
 int bn_bus_find(const char *name);
+int bn_bus_role(const char *role);              /* the bus with it; -1 */
 
 /* A transaction on bus b: wn bytes written (none: a read only), then rn
  * read (none: a write only). Returns BN_ACK or a NACK; *written gets the
@@ -147,6 +153,24 @@ int bn_xfer(int b, uint8_t addr, const uint8_t *w, int wn, uint8_t *r, int rn,
  * whoever runs it -- in-process for the tests; bench_app.c forwards it
  * to the module's own process instead. BN_ACK or BN_NACK_*. */
 extern int (*bn_module_xfer)(part_t *p, const uint8_t *w, int wn, uint8_t *r, int rn);
+
+/* A transaction no virtual part claims, on a bus with a segment: out
+ * through the real pins (bench_app.c, with zi2c). BN_ACK or BN_NACK_*.
+ * Not set in the tests that have no hardware: NACK. */
+extern int (*bn_segment_xfer)(part_t *gpio, uint8_t addr, const uint8_t *w, int wn,
+                              uint8_t *r, int rn);
+
+/* gpio parts (parts/gpio.c): a PMOD port's pins, 1-4 and 7-10, as bits
+ * 0-7. The app reads the port and gives its bits to bn_gpio_inputs()
+ * (in= pins: low drives the net low, high is a pull-up -- the pin's own
+ * may be all that is there); it asks bn_gpio_outputs() which out= pins
+ * to pull low (1 bits) and releases the rest: open drain. */
+int bn_gpio_port(part_t *p);
+uint8_t bn_gpio_in_mask(part_t *p);
+uint8_t bn_gpio_out_mask(part_t *p);
+void bn_gpio_inputs(part_t *p, uint8_t bits);
+uint8_t bn_gpio_outputs(part_t *p);
+bool bn_real(void);                 /* real hardware in the netlist */
 
 /* a module's program= (parts/module.c) */
 const char *bn_module_program(part_t *p);

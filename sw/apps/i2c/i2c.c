@@ -206,6 +206,11 @@ int main(void) {
         z_port_connect_arg(&out, pid, z_obj_str(PX_STDOUT_TAG)) == Z_OK)
         out_on = true;
     int r = run(argc, argv);
-    if (out_on) z_port_close(&out);
+    /* read before this process, and the heap the output sits on, goes
+     * (z_port_drain(), zport.h) */
+    if (out_on) {
+        z_port_drain(&out, Z_TICK_HZ * 2);
+        z_port_close(&out);
+    }
     return r;
 }

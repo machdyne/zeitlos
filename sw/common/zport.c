@@ -109,6 +109,21 @@ z_rv z_port_connect_arg_timeout(z_port_t *port, uint32_t provider_pid,
 
 }
 
+z_rv z_port_drain(z_port_t *port, uint32_t timeout_ticks) {
+	uint32_t start = z_uptime_ticks();
+	while (port->connected && port->pending_count > 0 &&
+	       (z_uptime_ticks() - start) < timeout_ticks) {
+		z_msg_t msg;
+		while (z_msg_read(&msg) == Z_OK) {
+			if (msg.from != port->peer_pid) continue;
+			if (msg.subject == Z_PORT_DATA_ACK) z_port_handle_ack(port, &msg);
+			else if (msg.subject == Z_PORT_CLOSE) port->connected = false;
+		}
+		if (port->connected && port->pending_count > 0) z_proc_wait(1);
+	}
+	return port->pending_count ? Z_FAIL : Z_OK;
+}
+
 z_rv z_port_send(z_port_t *port, const void *data, uint32_t len) {
 
 	if (!port->connected) return Z_FAIL;

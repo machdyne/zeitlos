@@ -78,3 +78,10 @@ const part_type_t pt_switch = {
     "switch", "an on/off switch", one_pin, 1, 0, 0, init_button, 0, 0, 0, 0,
     click_switch, pressed, 0, 0,
 };
+
+/* the BASIC computer (sw/apps/basic), as `basic BUS` puts it on a bus:
+ * no pins of its own on the bench, a card to show it is there */
+const part_type_t pt_basic = {
+    "basic", "the BASIC computer, on a bus (basic BUS)", 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0,
+};

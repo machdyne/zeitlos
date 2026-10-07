@@ -68,6 +68,14 @@ static void errors(void) {
         { "module m1 LS10\nbus a master=m1\nbus b master=m1", "line 3: m1: already the master of a bus" },
         { "module m1 LS10 addr=0x78", "line 1: m1: addr= is 0x08-0x77 for a ls10" },
         { "led l0 l0.PIN l0.PIN", "line 1: l0.PIN: more pins than the part has" },
+        { "basic main", "line 1: main: no such bus (declared later?)" },
+        { "gpio g1 port=9", "line 1: g1: port= is 0-7 (a PMOD port, docs/gpio.md)" },
+        { "gpio g1 port=1 in=5", "line 1: g1: in= and out= are PMOD pins, 1-4 and 7-10" },
+        { "gpio g1 port=1 in=3 out=3", "line 1: g1: a pin is in= or out=, not both" },
+        { "gpio g1 port=1 in=1\nbus main segment=g1", "line 2: g1: pins 1 and 2 are the bus here, not in= or out=" },
+        { "led l0\nbus main segment=l0", "line 2: l0: not a gpio (a segment is a real port)" },
+        { "gpio g1 port=1\nbus a segment=g1\nbus b segment=g1", "line 3: g1: already a segment of a bus" },
+        { "bus a\nbus b\nbasic a\nbasic b", "line 4: basic: one BASIC computer" },
     };
     for (unsigned i = 0; i < sizeof(e) / sizeof(e[0]); i++)
         CHECK(load(e[i].net) == -1 && !strcmp(err, e[i].msg), "error %u: [%s], not [%s]", i, err, e[i].msg);
@@ -197,7 +205,99 @@ static void modules(void) {
           "nobody runs it: NACK");
 }
 
+/* basic BUS: the BASIC computer's C/D on a bus, with a card */
+static void basic_role(void) {
+    CHECK(load("tca9535 x1 addr=0x20\nbus main x1\nbus other\nbasic main") == 0, "%s", err);
+    CHECK(bn_bus_role("basic") == 0 && bn_bus_role("nobody") == -1 && bn_bus_role("") == -1,
+          "the role is main's");
+    part_t *b = bn_part_find("basic");
+    CHECK(b && b->type->npins == 0 && !strcmp(b->label, "on main"), "its card: [%s]", b ? b->label : "");
+    uint8_t v[2];
+    CHECK(bn_xfer(bn_bus_role("basic"), 0x20, (const uint8_t []){ 6 }, 1, v, 2, 0) == BN_ACK &&
+          v[0] == 0xFF, "a transaction on its bus reaches the expander");
+}
+
+/* basicpanel.net: the BASIC computer on the expander */
+static void example_basic(void) {
+    static char text[4096];
+    FILE *f = fopen("examples/basicpanel.net", "r");
+    size_t n = f ? fread(text, 1, sizeof(text) - 1, f) : 0;
+    if (f) fclose(f);
+    text[n] = 0;
+    CHECK(n > 0 && load(text) == 0, "examples/basicpanel.net: %s", err);
+    CHECK(bn_bus_role("basic") == 0 && bn_part_find("basic"), "the BASIC computer is on main");
+}
+
+/* phase 4: real pins and bus segments, with the hardware faked */
+static uint8_t seg_addr;
+static int fake_segment(part_t *g, uint8_t addr, const uint8_t *w, int wn, uint8_t *r, int rn) {
+    (void)g; (void)w; (void)wn;
+    seg_addr = addr;
+    if (addr != 0x0C) return BN_NACK_ADDR;          /* a real module at 0x0c */
+    for (int i = 0; i < rn; i++) r[i] = (uint8_t)(0xA0 + i);
+    return BN_ACK;
+}
+
+static void real_hardware(void) {
+    uint8_t v[2];
+    CHECK(load("gpio g1 port=1 in=3,4 out=7,8\n"
+               "load lamp \"Lamp\" g1.3\n"          /* a real module's output, read in */
+               "button b0 g1.7\n"                       /* a virtual button, out to the real pin */
+               "led l8 g1.8\n"
+               "tca9535 x1 addr=0x20\n"
+               "bus main segment=g1 x1") == 0, "%s", err);
+    part_t *g = bn_part_find("g1");
+    CHECK(bn_gpio_port(g) == 1 && bn_gpio_in_mask(g) == 0x0C && bn_gpio_out_mask(g) == 0x30,
+          "port 1; in = pins 3, 4 (bits 2, 3); out = pins 7, 8 (bits 4, 5)");
+    CHECK(bn_real(), "real hardware: the clock stays at x1");
+
+    /* inputs: low drives low; high is only a pull-up */
+    bn_gpio_inputs(g, 0x00);
+    CHECK(level("g1.3") == BN_L0 && !lit("lamp"), "pin 3 read low: the lamp is off");
+    bn_gpio_inputs(g, 0x04);
+    CHECK(level("g1.3") == BN_L1 && lit("lamp"), "read high: on (a pull-up)");
+    /* outputs: open drain, low only when the net is low */
+    CHECK(bn_gpio_outputs(g) == 0, "nothing pulls: every out= pin released");
+    click("b0", true);
+    CHECK(bn_gpio_outputs(g) == 0x10, "the button pulls pin 7 low (bit 4)");
+    click("b0", false);
+    CHECK(bn_gpio_outputs(g) == 0, "released again");
+
+    /* the segment: virtual parts first, then the real pins */
+    bn_segment_xfer = 0;
+    CHECK(bn_xfer(0, 0x0C, v, 1, 0, 0, 0) == BN_NACK_ADDR, "no hardware: NACK");
+    bn_segment_xfer = fake_segment;
+    CHECK(bn_xfer(0, 0x0C, (const uint8_t []){ 0 }, 1, v, 2, 0) == BN_ACK && v[0] == 0xA0 &&
+          seg_addr == 0x0C, "0x0c: the real module answers through the segment");
+    seg_addr = 0;
+    CHECK(bn_xfer(0, 0x20, (const uint8_t []){ 6 }, 1, v, 1, 0) == BN_ACK && v[0] == 0xFF &&
+          seg_addr == 0, "0x20: the virtual expander, not the real pins");
+    CHECK(bn_xfer(0, 0x30, (const uint8_t []){ 0 }, 1, 0, 0, 0) == BN_NACK_ADDR && seg_addr == 0x30,
+          "0x30: tried on the real pins, nobody there");
+    bn_segment_xfer = 0;
+    CHECK(load("led l0") == 0 && !bn_real(), "no gpio: not real");
+}
+
+/* realmodule.net: a real LS10 in a Wolfszahn on port 0 */
+static void example_real(void) {
+    static char text[4096];
+    FILE *f = fopen("examples/realmodule.net", "r");
+    size_t n = f ? fread(text, 1, sizeof(text) - 1, f) : 0;
+    if (f) fclose(f);
+    text[n] = 0;
+    CHECK(n > 0 && load(text) == 0, "examples/realmodule.net: %s", err);
+    part_t *g = bn_part_find("g0");
+    CHECK(g && bn_gpio_port(g) == 0 && bn_gpio_in_mask(g) == 0x04 && bn_gpio_out_mask(g) == 0x08 &&
+          bn_buses[0].segment == g - bn_parts && bn_real(), "port 0: pin 3 in, pin 4 out, 1-2 the bus");
+    click("sw", true);
+    CHECK(bn_gpio_outputs(g) == 0x08, "the switch on: pin 4 pulled low");
+}
+
 int main(void) {
+    example_real();
+    real_hardware();
+    example_basic();
+    basic_role();
     modules();
     example();
     errors();

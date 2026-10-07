@@ -9,7 +9,11 @@
  *   net NAME PART.PIN ...          those pins on one net, named
  *   pullup PART.PIN                a resistor on that pin's net
  *   pulldown PART.PIN
- *   bus NAME PART ...              an I2C bus and the parts on it
+ *   bus NAME [master=M] [segment=G] PART ...
+ *                                  an I2C bus and the parts on it; on the
+ *                                  real pins 1, 2 of gpio G as well
+ *   basic BUS                      the BASIC computer's pins 3 and 4 (C, D)
+ *                                  are on that bus (it gets a card too)
  *   place NAME COL ROW             where a part's card goes
  *
  * A part must be declared before another statement names it. Errors say
@@ -252,7 +256,21 @@ static int st_bus(char **tok, int n) {
     int b = bn_nbuses++;
     strcpy(bn_buses[b].name, tok[1]);
     bn_buses[b].master = -1;
+    bn_buses[b].segment = -1;
     for (int i = 2; i < n; i++) {
+        if (!strncmp(tok[i], "segment=", 8)) {
+            extern const part_type_t pt_gpio;
+            part_t *g = bn_part_find(tok[i] + 8);
+            if (!g) return fail(tok[i] + 8, ": no such part (declared later?)");
+            if (g->type != &pt_gpio) return fail(tok[i] + 8, ": not a gpio (a segment is a real port)");
+            if ((bn_gpio_in_mask(g) | bn_gpio_out_mask(g)) & 3)
+                return fail(tok[i] + 8, ": pins 1 and 2 are the bus here, not in= or out=");
+            for (int j = 0; j < bn_nbuses; j++)
+                if (bn_buses[j].segment == g - bn_parts)
+                    return fail(tok[i] + 8, ": already a segment of a bus");
+            bn_buses[b].segment = (int8_t)(g - bn_parts);
+            continue;
+        }
         if (!strncmp(tok[i], "master=", 7)) {
             part_t *m = bn_part_find(tok[i] + 7);
             if (!m) return fail(tok[i] + 7, ": no such part (declared later?)");
@@ -276,6 +294,27 @@ static int st_bus(char **tok, int n) {
             }
         p->bus = (int8_t)b;
     }
+    return 0;
+}
+
+/* basic BUS: the BASIC computer (sw/apps/basic) is on that bus; a card
+ * named "basic" shows it */
+static int st_basic(char **tok, int n) {
+    extern const part_type_t pt_basic;
+    if (n != 2) return fail("basic BUS", 0);
+    int b = bn_bus_find(tok[1]);
+    if (b < 0) return fail(tok[1], ": no such bus (declared later?)");
+    if (bn_bus_role("basic") >= 0) return fail("basic: one BASIC computer", 0);
+    if (bn_part_find("basic")) return fail("basic: a part is already called basic", 0);
+    if (bn_nparts >= BN_PARTS) return fail("too many parts", 0);
+    part_t *p = &bn_parts[bn_nparts++];
+    memset(p, 0, sizeof(*p));
+    p->type = &pt_basic;
+    strcpy(p->name, "basic");
+    snprintf(p->label, sizeof(p->label), "on %s", tok[1]);
+    p->bus = p->col = p->row = -1;
+    for (int i = 0; i < BN_PINS; i++) p->net[i] = -1;
+    strcpy(bn_buses[b].role, "basic");
     return 0;
 }
 
@@ -312,6 +351,7 @@ int bn_load(const char *text, char *e, int elen) {
         else if (!strcmp(tok[0], "pulldown")) r = st_pull(tok, n, BN_PULLDOWN);
         else if (!strcmp(tok[0], "bus")) r = st_bus(tok, n);
         else if (!strcmp(tok[0], "place")) r = st_place(tok, n);
+        else if (!strcmp(tok[0], "basic")) r = st_basic(tok, n);
         else if (!strcmp(tok[0], "module")) {
             /* module NAME LS10 ...: the part type is the module's model */
             char model[BN_NAME];
@@ -331,7 +371,7 @@ int bn_load(const char *text, char *e, int elen) {
                 }
             }
         }
-        else if (!strcmp(tok[0], "gpio")) r = fail("gpio: real ports arrive in phase 4", 0);
+
         else if ((t = bn_type_find(tok[0]))) r = st_part(t, tok, n);
         else r = fail(tok[0], ": no such part type or statement");
         if (r) return -1;

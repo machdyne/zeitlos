@@ -190,12 +190,21 @@ static void card_multi(part_t *p, const card_t *k) {
         text(x, y, p->type->pins[i], 4, 1);
         pin_box(x + 2, y + 9, bn_pin_get(p, i));
         int d = p->drive[i];
-        text(x + 2, y + 20, d == BN_HIGH || d == BN_LOW ? "o" : "i", 1, 1);
+        char m[2] = { p->type->mark ? p->type->mark(p, i) : d == BN_HIGH || d == BN_LOW ? 'o' : 'i', 0 };
+        text(x + 2, y + 20, m, 1, 1);
     }
 }
 
 static void card_one(part_t *p, const card_t *k) {
     char conn[32];
+    if (!p->type->npins) {                      /* the BASIC computer */
+        int x0 = k->x + 2, y0 = k->y + 2;
+        box(x0, y0, k->w - 4, k->h - 4);
+        text(x0 + 3, y0 + 3, "BASIC", 0, 1);
+        text(x0 + 3, y0 + 14, "computer", 0, 1);
+        text(x0 + 3, y0 + k->h - 15, p->label, (k->w - 10) / CH_W, 1);
+        return;
+    }
     const char *t = p->type->name;
     int x0 = k->x + 2, y0 = k->y + 2, cx = k->x + k->w / 2, cy = y0 + 23;
     bool on = p->type->lit ? p->type->lit(p) : false;
@@ -255,7 +264,7 @@ int bd_hit(int x, int y, int *pin) {
         if (!k->w || x < k->x || y < k->y || x >= k->x + k->w || y >= k->y + k->h) continue;
         part_t *p = &bn_parts[i];
         if (p->type->npins <= 1) {
-            *pin = 0;
+            *pin = p->type->npins ? 0 : -1;
             return i;
         }
         for (int j = 0; j < p->type->npins; j++) {

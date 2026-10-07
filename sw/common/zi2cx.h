@@ -7,7 +7,10 @@
  * same for both.
  *
  *   "pmod0" ... "pmodN"   zi2c on PMOD port N: pin 1 (bit 0) SCL, pin 2
- *                         (bit 1) SDA, as a Wolfszahn wires a module
+ *                         (bit 1) SDA, as a Wolfszahn wires a module --
+ *                         through bench instead while bench owns the
+ *                         port (a gpio in its netlist), so the two never
+ *                         drive the same pins
  *   any other name        a bus in the running bench's netlist, through
  *                         its port bench0 (zbench.h)
  *
@@ -43,6 +46,11 @@ typedef struct {
 } z_i2cx_t;
 
 int z_i2cx_open(z_i2cx_t *b, const char *name);
+
+/* The bench bus the running netlist gives this role ("basic": the BASIC
+ * computer's pins 3 and 4, from `basic BUS`), opened: Z_I2CX_NO_BENCH,
+ * Z_I2CX_NO_BUS if no bus has the role, or z_i2cx_open()'s result. */
+int z_i2cx_open_role(z_i2cx_t *b, const char *role);
 void z_i2cx_close(z_i2cx_t *b);
 
 int z_i2cx_write(z_i2cx_t *b, uint8_t addr, const uint8_t *d, uint32_t n);

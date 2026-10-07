@@ -205,6 +205,9 @@ void zio_out_open(void) {
 void zio_out_close(void) {
     out_flush();
     if (out_connected) {
+        /* everything read before this process (and the heap its output
+         * sits on) goes: z_port_drain(), zport.h */
+        z_port_drain(&out_port, 732u * 2u);        /* 2s, as zfpga */
         z_port_close(&out_port);
         out_connected = false;
     }
