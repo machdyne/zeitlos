@@ -44,6 +44,7 @@
 #include "../../common/zutf8.h"		// titles are UTF-8		// system.keyboard.layouts
 #include "dock_icons.h"
 #include "workspace.h"		// workspaces: the decisions (tested on the host)
+#include "kbd_accent.h"		// a dead key with Ctrl/Super/Alt is not an accent
 #include "win_icons.h"
 
 #define WM_MAX_WINDOWS    16
@@ -4494,21 +4495,31 @@ static void dispatch_keys(void) {
 		}
 
 		// -- dead keys -- docs/keyboard_layouts.md, "Dead keys" --
-		if (pressed && Z_KEY_IS_DEAD(keysym)) {
-			if (kbd_dead) {
-				// The same dead key twice types its accent; a
-				// different one types the first one's accent and
-				// waits on the second.
-				uint32_t sp = z_kbd_dead_spacing_of(kbd_dead);
-				bool same = (kbd_dead == keysym);
-				kbd_dead = same ? 0 : keysym;
-				if (sp) forward_tap(sp, fwd_mods);
-			} else {
-				kbd_dead = keysym;
+		//
+		// Ctrl, Super or Alt on this key means it is not an accent.
+		// The same three already refuse to compose with one that is
+		// pending (below); applying that only to the second key left
+		// a shortcut matched by usage -- Alt+Equal, Super+Equal,
+		// Super+[ ] -- unreachable on a layout where the key is dead,
+		// and left the accent armed so the next letter came out
+		// accented. AltGr is not Alt, and Shift still picks the other
+		// level: kbd_key_is_accent().
+		if (kbd_key_is_accent(keysym, fwd_mods, alt)) {
+			if (pressed) {
+				if (kbd_dead) {
+					// The same dead key twice types its accent; a
+					// different one types the first one's accent and
+					// waits on the second.
+					uint32_t sp = z_kbd_dead_spacing_of(kbd_dead);
+					bool same = (kbd_dead == keysym);
+					kbd_dead = same ? 0 : keysym;
+					if (sp) forward_tap(sp, fwd_mods);
+				} else {
+					kbd_dead = keysym;
+				}
 			}
-			continue;
+			continue;	// a dead key's release, too
 		}
-		if (Z_KEY_IS_DEAD(keysym)) continue;	// a dead key's release
 
 		if (pressed && kbd_dead) {
 			uint32_t d = kbd_dead;
@@ -4711,6 +4722,13 @@ static void dispatch_keys(void) {
 		// own icon navigation -- see dock_handle_key()'s own comment
 		// on exactly which keys it consumes and why.
 		if (focused == dock_idx && dock_handle_key(keysym, pressed)) continue;
+
+		// Still a dead key: a modifier was held, and no shortcut above
+		// consumed it. An app never receives one.
+		if (Z_KEY_IS_DEAD(keysym)) {
+			kbd_sent[usage] = 0;
+			continue;
+		}
 
 		forward_key(keysym, fwd_mods, pressed);
 

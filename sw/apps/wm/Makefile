@@ -50,6 +50,9 @@ test:
 	@$(HOSTCC) $(HOSTFLAGS) -o /tmp/wm_test_workspace \
 		tests/test_workspace.c workspace.c
 	@/tmp/wm_test_workspace
+	@# kbd_accent.h: a dead key with Ctrl, Super or Alt is not an accent
+	@$(HOSTCC) $(HOSTFLAGS) -o /tmp/wm_test_kbd_accent tests/test_kbd_accent.c
+	@/tmp/wm_test_kbd_accent
 
 .PHONY: test
 
