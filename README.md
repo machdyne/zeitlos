@@ -22,7 +22,7 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 | Bus | 32-bit Wishbone |
 | Main Memory | SDRAM, [DDR3](docs/ddr3.md), PSRAM or SRAM (1MB minimum; 512MB maximum) |
 | Framebuffer | 640x480x1bpp (monochrome; white, amber, green or paper -- [socctl](docs/socctl.md)) |
-| Viewport | Optional 320x240 pixel-doubled [viewport](docs/game_mode.md) |
+| Game Mode | Optional 320x240 pixel-doubled [viewport](docs/game_mode.md) with up to [16 colors](docs/color.md) |
 | Video | VGA, DVI, DVI over HDMI, [composite](docs/composite.md) NTSC and PAL |
 | Audio | 8 channel 16-bit [hardware mixer](docs/audio.md) with stereo output |
 | Storage | MicroSD |
