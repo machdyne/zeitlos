@@ -65,6 +65,10 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [gamepad](gamepad.md) | Gamepads |
 | [gpio](gpio.md) | GPIO on PMOD ports |
 | [i2c](i2c.md) | Bit-banged I2C |
+| [sechs\_app](sechs_app.md) | `sechs`: Sechs modules on a PMOD |
+| [i2c\_app](i2c_app.md) | `i2c`: I2C from the shell, on a PMOD or a bench bus |
+| [bench](bench.md) | `bench`: virtual parts on I2C buses, from netlists |
+| [ls99](ls99.md) | `ls99`: virtual Zwölf modules running BASIC, on the bench |
 | [spi](spi.md) | SPI |
 | [sdcard](sdcard.md) | SD card performance |
 | [esp32link](esp32link.md) | ESP32 network link |
@@ -137,6 +141,7 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [posix](posix.md) | POSIX userland |
 | [scheme](scheme.md) | Scheme in `repl` |
 | [scheme\_api](scheme_api.md) | The Scheme API |
+| [basic\_app](basic_app.md) | `basic`: the BASIC computer |
 | [editor](editor.md) | `te` in `repl` |
 | [zcc](zcc.md) | The C compiler |
 | [zcc\_bringup](zcc_bringup.md) | Testing zcc on hardware |

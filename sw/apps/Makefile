@@ -36,6 +36,10 @@ APPS = casino poker roulette blackjack slots craps \
 	term \
 	logic \
 	mmod \
+	sechs \
+	bench \
+	ls99 \
+	i2c \
 	portdemo \
 	console \
 	cron \
@@ -57,6 +61,7 @@ APPS = casino poker roulette blackjack slots craps \
 	midi \
 	gamedemo \
 	chip8 \
+	basic \
 	chess \
 	kidgames \
 	ask \

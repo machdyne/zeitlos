@@ -527,7 +527,7 @@
 `define GPU_CURSOR
 `define GPU_DDMI
 `define UART0
-`define USB_HID
+`define USB_HOST
 `define SPI_SDCARD
 `define SPI_ETH
 `define AUDIO

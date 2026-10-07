@@ -57,6 +57,8 @@ static inline uint32_t z_font_glyph_count(const z_font_t *f) {
 }
 
 extern const z_font_t z_font_8x16;	// original font, sw/data/font/font8x16.mem
+extern const z_font_t z_font_8x8;	// font8x8 (public domain), sw/data/font/font8x8.mem:
+					// 40x30 characters on 320x240 (BASIC); font8x8_mem.py
 extern const z_font_t z_font_6x12;	// compact font, for dense text (e.g. a terminal)
 extern const z_font_t z_font_5x7;	// smaller still -- see sw/apps/term's TERM_FONT_NAME
 									// for how to pick this at build time

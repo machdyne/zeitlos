@@ -182,6 +182,10 @@ SUPPLEMENTAL = [
     ("apps/play", "sw/apps/play/play.bin"),
     ("apps/midi", "sw/apps/midi/midi.bin"),
     ("apps/mmod", "sw/apps/mmod/mmod.bin"),
+    ("apps/sechs", "sw/apps/sechs/sechs.bin"),
+    ("apps/bench", "sw/apps/bench/bench.bin"),
+    ("apps/ls99", "sw/apps/ls99/ls99.bin"),
+    ("apps/i2c", "sw/apps/i2c/i2c.bin"),
     ("apps/logic", "sw/apps/logic/logic.bin"),
     ("apps/serial", "sw/apps/serial/serial.bin"),
     ("apps/mesh", "sw/apps/mesh/mesh.bin"),
@@ -220,6 +224,7 @@ GAMES_DEMOS = [
     ("apps/chip8", "sw/apps/chip8/chip8.bin"),
     ("apps/chess", "sw/apps/chess/chess.bin"),
     ("apps/kidgames", "sw/apps/kidgames/kidgames.bin"),
+    ("apps/basic", "sw/apps/basic/basic.bin"),
 ]
 
 MISC = [
@@ -253,7 +258,7 @@ SELFHOST = [
     ("apps/ttytest", "sw/apps/ttytest/ttytest.bin"),
 ]
 
-DIRS = ["apps", "audio", "demo", "docs", "ark", "user", "libz", "libz/include",
+DIRS = ["apps", "audio", "basic", "bench", "demo", "docs", "ark", "user", "libz", "libz/include",
         "fpga", "fpga/boards", "fpga/examples", "speech", "web", "font",
         "bbs", "bbs/bulletins", "bbs/text", "fed", "zerdesk"]
 
@@ -389,6 +394,11 @@ FPGA_FILES = [
 # they are the three stages: no runtime, the runtime, and output that
 # reaches the terminal rather than the serial console.
 EXAMPLES = [
+    ("bench/panel.net", "sw/apps/bench/examples/panel.net"),
+    ("bench/growlight.net", "sw/apps/ls99/examples/growlight.net"),
+    ("bench/modpanel.net", "sw/apps/ls99/examples/modpanel.net"),
+    ("basic/GROW.BAS", "sw/apps/ls99/examples/GROW.BAS"),
+    ("basic/PANEL.BAS", "sw/apps/ls99/examples/PANEL.BAS"),
     ("user/hello.c", "sw/apps/zcc/examples/hello.c"),
     ("user/hellolz.c", "sw/apps/zcc/examples/hello_libz.c"),
     ("user/hellotrm.c", "sw/apps/zcc/examples/hello_term.c"),

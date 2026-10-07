@@ -58,7 +58,12 @@ the gap the two fonts would need 4480 bytes; with it they fill the
 | `z_font_6x12` | 192 x 12 rows | 2304 | 1536 |
 
 `z_font_5x7` and `z_font_8x16` are unchanged: ASCII only, software
-rendered.
+rendered. `z_font_8x8` (the BASIC computer's, `docs/basic_app.md`) covers
+Latin-9 like the hardware fonts but is software rendered too: Daniel
+Hepper's public-domain font8x8, converted by `sw/data/font/font8x8_mem.py`,
+which also draws in its style the glyphs it lacks or gets wrong (the eight
+Latin-9 replacements, superscript two and three, N with tilde, the
+missing-glyph box).
 
 The glyphs come from the public-domain misc-fixed BDFs already in
 `sw/data/font/` (Markus Kuhn's ucs-fonts), including the local change

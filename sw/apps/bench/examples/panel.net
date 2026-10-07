@@ -1,0 +1,25 @@
+# panel.net -- an I/O expander with LEDs, buttons and a lamp on the bench.
+#
+# Open it in bench (bench /bench/panel.net), then from the shell:
+#
+#   i2c -b main scan                        the expander answers at 0x20
+#   i2c -b main write 0x20 6 0x00           port 0 all outputs
+#   i2c -b main write 0x20 2 0x55           P00, P02, P04, P06 high
+#   i2c -b main write 0x20 1 read 1         port 1: press a button first
+#
+# A TCA9535 has no pull-ups: the buttons have their own (pullup), and
+# the pins nothing is connected to show as floating. Change tca9535 to
+# tca9555 below and press F5: they read high.
+
+tca9535  x1  addr=0x20
+bus      main  x1
+
+led      l0  x1.P00
+led      l1  x1.P01
+led      l2  x1.P02
+led      l3  x1.P03
+load     lamp  "Grow light"  x1.P04
+
+button   b0  x1.P10  pullup
+button   b1  x1.P11  pullup
+switch   s1  x1.P12  pullup

@@ -224,3 +224,22 @@ emulate `rtl/gpio.v`'s write-1-to-modify registers faithfully.
 - `docs/gpio.md` — the pins, the pull-ups, the open-drain idiom
 - `docs/spi.md` — the same treatment for SPI
 - `sw/common/zi2c.h` — the interface, and the reasoning for each choice
+
+## Buses by name: zi2cx
+
+`sw/common/zi2cx.h` puts a name in front of zi2c: `"pmod1"` is zi2c on
+PMOD port 1, pin 1 (bit 0) SCL and pin 2 (bit 1) SDA; any other name is a
+bus on the bench ([bench.md](bench.md)), virtual parts reached through
+its port `bench0`. The calls and their results are the same for both --
+`z_i2cx_write()`, `z_i2cx_read()`, `z_i2cx_write_read()` (repeated start),
+`z_i2cx_probe()`, returning zi2c's codes -- so an app written against one
+works against the other unchanged. `z_i2cx_open()` also returns
+`Z_I2CX_NO_BENCH` (no bench running) or `Z_I2CX_NO_BUS` (no such bus).
+
+zi2c itself stays what this page describes: the pins. zi2cx adds no
+behaviour to them. A bench transaction waits for bench's reply, handling
+the port's acks; any other message arriving meanwhile goes to the
+`other` callback if the app sets one (an app with a window must not lose
+wm's messages) and is dropped otherwise.
+
+`i2c` ([i2c\_app.md](i2c_app.md)) is its first user.
