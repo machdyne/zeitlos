@@ -381,7 +381,8 @@
 #define Z_FEATURE2_VRAM_DIRTY (1u << 14)
 // Game-mode colour (rtl/socctl.v COLOR/PALETTE, docs/color.md). Says
 // `COLOR was defined; prefer z_color_available(), which also accounts
-// for a board without game mode or with composite output.
+// for a board without game mode. On composite this is composite colour
+// (z_cvbs_available()).
 // rtl/csrs.vh FEATURES2 bit 15.
 #define Z_FEATURE2_COLOR      (1u << 15)
 
@@ -1165,7 +1166,7 @@ static inline bool z_color_present(void) {
 }
 
 // true if this machine can show game-mode colour: the bitstream has
-// `COLOR, game mode, a GPU, and a non-composite output. Prefer this
+// `COLOR, game mode and a GPU -- composite included. Prefer this
 // over Z_FEATURE2_COLOR, for the same reason as z_game_available().
 static inline bool z_color_available(void) {
 	if (!z_color_present()) return false;
@@ -1206,6 +1207,41 @@ static inline uint32_t z_color_planes(void) {
 static inline uint32_t z_color_offsets(void) {
 	if (!z_color_present()) return 0;
 	return (reg_socctl_color >> Z_COLOR_OFF_SHIFT) & 0x3fu;
+}
+
+// -- composite colour (socctl CVBS, docs/composite.md "Colour") --
+//
+// On a composite board with game-mode colour, colour goes out as an
+// NTSC or PAL colour signal. CVBS's MONO bit turns that off -- the
+// palette's brightness in greys and no colour burst, so the receiver
+// shows black and white -- for a set, cable or region where the colour
+// does not work. Colour programs are unaffected either way: they still
+// see z_color_available() and draw the same.
+//
+// Word 14: on an older bitstream it aliases RECONFIG, which acts only
+// on its 32-bit key, so probing here is harmless.
+#define reg_socctl_cvbs (*(volatile uint32_t*)0x70000238)
+#define Z_CVBS_MONO     (1u << 0)
+#define Z_CVBS_AVAIL    (1u << 1)    // read-only
+#define Z_CVBS_SIG      0x5A56u      // "ZV" -- KEEP IN SYNC with socctl.v
+
+static inline bool z_cvbs_available(void) {
+	if (((reg_socctl_cvbs >> 16) & 0xffffu) != Z_CVBS_SIG) return false;
+	return (reg_socctl_cvbs & Z_CVBS_AVAIL) != 0;
+}
+
+// true if composite colour is switched to black and white
+static inline bool z_cvbs_mono(void) {
+	if (!z_cvbs_available()) return false;
+	return (reg_socctl_cvbs & Z_CVBS_MONO) != 0;
+}
+
+// Black and white (true) or colour (false) on the composite output,
+// from the next frame. False if this is not a composite colour board.
+static inline bool z_cvbs_set_mono(bool mono) {
+	if (!z_cvbs_available()) return false;
+	reg_socctl_cvbs = mono ? Z_CVBS_MONO : 0u;
+	return true;
 }
 
 // One palette entry, RGB444 (0xRGB). Takes effect immediately, not at

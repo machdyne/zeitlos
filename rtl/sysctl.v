@@ -3300,19 +3300,26 @@ module sysctl #()
 
 	// Game-mode colour (docs/color.md): `COLOR, and only where game
 	// mode itself exists -- colour is a property of the 320x240
-	// viewport and means nothing without it -- and not on composite,
-	// whose output stage is a monochrome luma ladder. Composite colour
-	// is a separate, later piece of work; until then a composite board
-	// reports no colour rather than one that silently shows plane 0.
+	// viewport and means nothing without it. On a composite build it
+	// is composite colour (docs/composite.md, "Colour"), which also
+	// gets the CVBS register; `GPU_COMPOSITE_MONO makes that start in
+	// black and white.
 `ifdef COLOR
-`ifdef GPU_COMPOSITE
-	localparam COLOR_AVAILABLE = 1'b0;
-`else
 	localparam COLOR_AVAILABLE = GAME_AVAILABLE;
-`endif
 `else
 	localparam COLOR_AVAILABLE = 1'b0;
 `endif
+`ifdef GPU_COMPOSITE
+	localparam CVBS_AVAILABLE = COLOR_AVAILABLE;
+`else
+	localparam CVBS_AVAILABLE = 1'b0;
+`endif
+`ifdef GPU_COMPOSITE_MONO
+	localparam CVBS_MONO_DEFAULT = 1'b1;
+`else
+	localparam CVBS_MONO_DEFAULT = 1'b0;
+`endif
+	wire socctl_cvbs_mono;
 	wire socctl_color_en;
 	wire [1:0] socctl_color_np;
 	wire [5:0] socctl_color_off;
@@ -3370,6 +3377,8 @@ module sysctl #()
 		.VIDEO_MODE_RESET(VIDEO_MODE_DEFAULT),
 		.GAME_AVAIL(GAME_AVAILABLE),
 		.COLOR_AVAIL(COLOR_AVAILABLE),
+		.CVBS_AVAIL(CVBS_AVAILABLE),
+		.CVBS_MONO_RESET(CVBS_MONO_DEFAULT),
 `ifdef PROGRAMN_PIN
 		.RECONFIG_AVAIL(1)
 `else
@@ -3422,6 +3431,7 @@ module sysctl #()
 		.pal_we(socctl_pal_we),
 		.pal_idx(socctl_pal_idx),
 		.pal_rgb(socctl_pal_rgb),
+		.cvbs_mono(socctl_cvbs_mono),
 		.frame_ctr(gpu_frame_ctr),
 		.in_vblank(gpu_in_vblank),
 		.vram_we(socctl_vram_we),
@@ -3977,6 +3987,7 @@ module sysctl #()
 		.pal_we(socctl_pal_we),
 		.pal_idx(socctl_pal_idx),
 		.pal_rgb(socctl_pal_rgb),
+		.cvbs_mono(socctl_cvbs_mono),
 		.frame_ctr(gpu_frame_ctr),
 		.in_vblank(gpu_in_vblank),
 		// x and y are FRAMEBUFFER coordinates now, in both modes --

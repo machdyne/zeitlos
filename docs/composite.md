@@ -1,6 +1,6 @@
 # Composite video
 
-Monochrome CVBS output — NTSC 240p at 60Hz or PAL 288p at 50Hz — from a
+CVBS output -- monochrome, or NTSC/PAL colour (see [Colour](#colour)) — NTSC 240p at 60Hz or PAL 288p at 50Hz — from a
 resistor ladder on four pins and an RCA socket.
 
 ## The one number that shapes everything
@@ -230,29 +230,157 @@ vvp /tmp/tb_pal.out
 Each takes a couple of minutes — it simulates whole fields, because that
 is the only way to measure a field rate.
 
+## Colour
+
+On a composite build with `COLOR` (Lakritz has it), game-mode colour
+([color.md](color.md)) goes out as a real NTSC or PAL colour signal:
+the same palette, the same programs, on a TV.
+
+### How
+
+A colour subcarrier is synthesised **in the 25.2 MHz pixel clock**: a
+32-bit phase accumulator advanced every clock, its top five bits a
+phase in 32 steps. Each DAC sample is then
+
+```
+blank + Y + U sin(phase) + V cos(phase)
+```
+
+for the pixel's palette entry, and the back porch carries a colour
+burst for the receiver to lock its own oscillator to. About seven
+samples per subcarrier cycle; the TV's chroma filter is the
+reconstruction filter.
+
+| | NTSC | PAL |
+|---|---|---|
+| subcarrier | 3 579 545.45 Hz | 4 433 618.75 Hz |
+| accumulator step | 610 080 582 | 755 644 743 |
+| frequency error | +0.001 Hz | −0.002 Hz |
+| burst | 180°, 9 cycles, 5.3 µs after sync | 135°/225° alternating, 10 cycles, 5.6 µs |
+| V | as is | inverted on alternate lines (the PAL switch) |
+
+**No new PLL output and no new clock domain.** The earlier plan was
+`pll1`'s spare output at 630 MHz / 44 = exactly 4×fsc for NTSC. It
+would have worked for NTSC only, and it would have meant driving the
+DAC from a second clock whose samples fall 2.27 to a source pixel --
+irregular pixel widths, shifting by a quarter sample every line. The
+synthesiser does both standards from the clock the picture already
+uses, and PAL is a different step and a sign flip.
+
+**The phase can be coarse.** 32 steps is 11.25°, and truncating the
+accumulator puts every sample up to one step late -- but the burst is
+made from the same accumulator, so any systematic offset is in the
+burst too, and the receiver measures hue against the burst. It cancels.
+The subcarrier is not locked to the line either, for the same reason:
+the receiver locks to the burst on every line. NTSC ends up with 227.56
+cycles a line rather than 227.5, which changes only the dot-crawl
+pattern.
+
+**Y, U and V per palette entry** are computed when the entry is
+written -- shift-adds in the wishbone domain, a few times a frame at
+most -- and kept in distributed RAM beside the RGB palette:
+
+```
+Y = (51R + 100G + 19B) / 16       0.299R + 0.587G + 0.114B, x 160/15
+U = (84B - 8Y) / 16               0.492 (B - Y)
+V = (150R - 14Y) / 16             0.877 (R - Y)
+```
+
+in sixteenths of a DAC code, R, G, B the palette's 0..15. White is
+Y = 159: ten codes above blank, code 15, the same white as monochrome.
+The pixel path then has two small multiplies against a 32-entry sine
+table, and two pipeline registers which every signal -- sync and burst
+included -- goes through, so the whole output is 80 ns late and
+nothing moves relative to anything else.
+
+### Cost
+
+`gpu_video` synthesised alone for ECP5 (yosys 0.33), composite timing,
+colour off against on:
+
+| | LUT4 | CCU2C | FF | DP16KD | DPR16X4 | MULT18X18D |
+|---|---|---|---|---|---|---|
+| monochrome | 968 | 136 | 802 | 0 | 0 | 0 |
+| colour | 1451 | 258 | 1212 | 1 | 11 | 2 |
+
+That is the bitplanes and palette (the same as on DDMI, about 460
+LUT4-equivalents and the line buffer) plus about 270 for composite
+colour itself: the phase accumulator, the Y/U/V palette and its
+converter, and two small multiplies, which yosys puts in DSP blocks. A
+composite build has no DDMI encoder or serialiser, which gives back
+more than that, so Lakritz's composite variant should fit where its
+DDMI build does -- but measure it (`make timing`) before relying on it.
+
+### What a 4-bit DAC gives
+
+One code is 10 IRE. The burst is ±20 IRE, ±2 codes; a saturated colour
+swings about ±6. Codes are clamped to 2..15: never down at sync level,
+where a receiver would see a pulse, and never past the top of the
+ladder. So the colour is real but coarse -- in the class of the Apple
+II and the Atari 8-bits, not broadcast. Bright, saturated colours
+(yellow, light cyan) clip and lose some saturation.
+
+### Black and white is kept
+
+Colour goes out **only while a program has colour on**. The desktop,
+monochrome game mode and anything that never asks for colour send the
+three-level signal they always did, with no burst -- and with no burst
+a receiver's colour killer switches its decoder off, so nothing about
+them changes.
+
+For a TV, a cable or a region where the colour signal does not work:
+
+| | |
+|---|---|
+| `system.video.composite: mono` | in `config` ([config.md](config.md)) -- at boot and on reload |
+| `(composite-color #f)` | from a REPL, until the next reload |
+| `z_cvbs_set_mono(true)` | from C (`zsoc.h`) |
+| `GPU_COMPOSITE_MONO` | build-time: start in black and white |
+| no `COLOR` in the board block | no colour hardware: exactly the old monochrome output |
+
+Mono with colour on is not plane 0 alone: it is the palette's
+**brightness**, in greys (up to ten levels), with no burst. Colour
+programs carry on unchanged; they simply show in black and white.
+
+`socctl`'s CVBS register (word 14, `0x7000_0238`) holds the switch --
+see [socctl.md](socctl.md).
+
+### Testing
+
+`rtl/gpu/bench/tb_cvbs_color.v` is a small software receiver: it
+correlates a line's DAC samples against an ideal subcarrier at the
+standard's frequency and reads off the burst's and the picture's phase
+and amplitude, as a TV's decoder does. For NTSC and for PAL it checks:
+
+- colour off is the three-level signal with no burst
+- eight colours decode to the right luma, hue (to ±15° against the
+  burst) and saturation (±30%, where the 4-bit DAC is not clipping)
+- the burst phase does not drift over a hundred lines (the subcarrier
+  frequency)
+- PAL: both phases of the switch decode to the same colour
+- mono: no burst and a flat line at the colour's luma
+- the bitplanes on composite timing: a plane full of ones decodes to
+  the right palette entry
+- picture codes never go below 2
+
+```
+sed 's/^\tinput \[31:0\] gb_dat_i,$/\tinput [31:0] gb_dat_i/' \
+    rtl/gpu/gpu_video.v > /tmp/gpu_video_fix.v
+iverilog -g2005 -DGPU_COMPOSITE -o /tmp/tb_cvbs.out \
+    rtl/gpu/bench/tb_cvbs_color.v /tmp/gpu_video_fix.v
+vvp /tmp/tb_cvbs.out
+```
+
+Add `-DGPU_COMPOSITE_PAL` for PAL. `tb_composite.v` (timing, sync,
+levels) still passes in both standards: it is built without colour, so
+it sees the monochrome output it always did.
+
+It has not been on a real TV yet. A receiver is more forgiving than this
+bench about frequency and less forgiving about levels; if a set refuses
+the colour, `mono` is the answer, and the measured level and timing
+figures above are where to look.
+
 ## Not done
-
-**Colour.** Game-mode colour now exists for DDMI and VGA
-([color.md](color.md)), and composite boards report it unavailable.
-
-The subcarrier is less of an obstacle than this note used to say. For
-NTSC no new PLL and no phase accumulator are needed: `pll1`'s VCO runs
-at 630 MHz, and 630 / 44 = 14.31818 MHz is exactly 4 x 3.579545 MHz
-(the subcarrier is defined as 315/88 MHz). One of `pll1`'s two unused
-outputs at divide-by-44 is the classic 4xfsc sampling clock, from the
-same VCO as the 25.2 MHz pixel clock.
-
-At 4xfsc a colour's chroma is four repeating DAC codes, so each palette
-entry needs four precomputed codes and the hardware a 2-bit phase
-counter, plus a fixed burst in the back porch. The line is 1602 clocks,
-so there are about 227.56 subcarrier cycles per line rather than the
-standard 227.5. Receivers lock to the burst, not to the line, so that
-changes only the dot-crawl pattern. The 4-bit ladder limits the result
-to something like Apple II / Atari 8-bit composite colour.
-
-PAL's 4.43361875 MHz does not divide out of 630 MHz and would need a
-phase accumulator, which makes it an experiment. Grey levels derived
-from the palette are the cheap fallback for both standards.
 
 **Interlace.** 480i/576i would double vertical resolution to 480/576
 lines, at the cost of flicker on any horizontal edge — which on a 1bpp

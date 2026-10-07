@@ -230,6 +230,13 @@ module gpu_video #(
 	input [3:0] pal_idx,
 	input [11:0] pal_rgb,
 
+	// Composite only: 1 = no colour on the composite output -- the
+	// palette's brightness alone, and no colour burst, so the receiver
+	// shows black and white. From socctl's CVBS register, wishbone
+	// domain; adopted at a frame boundary below. Ignored everywhere
+	// else.
+	input cvbs_mono,
+
 	// -- scanout status, out to rtl/socctl.v's FRAME register --
 	//
 	// Both already in the WISHBONE clock domain: the crossing happens
@@ -628,8 +635,237 @@ module gpu_video #(
 
 	wire csync_low = in_vsync_lines ? broad_pulse : h_pulse;
 
-	assign dac = csync_low ? DAC_SYNC :
+	// The monochrome output, exactly as it has always been: three
+	// levels, nothing else. Used as it stands on a build without
+	// colour, and while colour is off on one with it.
+	wire [3:0] dac_mono = csync_low ? DAC_SYNC :
 		(is_visible && pset) ? DAC_WHITE : DAC_BLANK;
+
+	// -- composite COLOUR (docs/composite.md, "Colour") --
+	//
+	// A colour subcarrier synthesised in the pixel clock domain -- a
+	// 32-bit phase accumulator advanced every 25.2MHz clock -- and each
+	// sample's DAC code worked out as
+	//
+	//     blank + Y + U sin(phase) + V cos(phase)
+	//
+	// from the pixel's palette entry, with a colour burst in the back
+	// porch for the receiver to lock its own oscillator to. No new PLL
+	// output and no new clock domain: the DAC is still driven from
+	// pclk, about seven samples per subcarrier cycle, and the TV's
+	// chroma filter is the reconstruction filter.
+	//
+	// The subcarrier is free-running, not locked to the line: a
+	// receiver locks to the burst on each line, so what matters is
+	// that burst and picture come from the same oscillator, and they
+	// do. For the same reason the phase can be coarse -- 32 steps,
+	// 11.25 degrees -- because any systematic offset is in the burst as
+	// well and cancels.
+	//
+	// THE DAC IS 4 BITS: one code is 10 IRE. Burst is +-20 IRE, i.e.
+	// +-2 codes, and saturated colours swing about +-6. That is coarse
+	// -- think Apple II or Atari 8-bit composite, not broadcast -- but
+	// it is colour, from four resistors. Codes are clamped to 2..15:
+	// never down at sync level (0) where a receiver would see a pulse,
+	// and never past the ladder's top.
+	//
+	// Y, U and V for each palette entry are worked out when the entry
+	// is WRITTEN (wishbone domain, a handful of shift-adds, rare), and
+	// kept in distributed RAM beside the RGB palette. The pixel path
+	// then needs only two small multiplies, against a 32-entry sine
+	// table.
+	//
+	// Scales, all in sixteenths of a DAC code:
+	//   Y = (0.299R + 0.587G + 0.114B) * 160/15 ~ (51R + 100G + 19B) / 16
+	//   U = 0.492 (B*160/15 - Y)               ~ (84B - 8Y) / 16
+	//   V = 0.877 (R*160/15 - Y)               ~ (150R - 14Y) / 16
+	// R, G, B the palette's 0..15 channels, so white is Y = 159, i.e.
+	// 10 codes above blank: code 15, the same white the monochrome
+	// output has always used.
+	//
+	// NTSC encodes U and V directly (the same signal as I and Q, rotated
+	// 33 degrees), burst at 180 degrees. PAL inverts V on alternate
+	// lines -- the "PAL switch" -- with the burst at 135 and 225
+	// degrees to tell the receiver which; that is a sign flip and a
+	// different burst offset, nothing more.
+	//
+	// Colour shows only while game-mode colour is on (color_on), and
+	// only then is there a burst. With no burst a receiver's colour
+	// killer turns its decoder off, so the desktop and monochrome game
+	// mode stay a pure black-and-white signal, three levels, exactly
+	// as before. cvbs_mono (socctl's CVBS register) turns the chroma
+	// and burst off while leaving colour on: the palette's BRIGHTNESS,
+	// in greys, for a receiver or a cable that does not cope.
+`ifdef GPU_COMPOSITE_PAL
+	localparam [31:0] SC_INC    = 32'd755644743;   // 4433618.75Hz / 25.2MHz * 2^32
+	localparam [10:0] BURST_DLY = 11'd141;         // 5.6us after the sync edge
+	localparam [10:0] BURST_LEN = 11'd57;          // 10 cycles
+	localparam IS_PAL = 1'b1;
+`else
+	localparam [31:0] SC_INC    = 32'd610080582;   // 315/88MHz / 25.2MHz * 2^32
+	localparam [10:0] BURST_DLY = 11'd134;         // 5.3us after the sync edge
+	localparam [10:0] BURST_LEN = 11'd63;          // 9 cycles
+	localparam IS_PAL = 1'b0;
+`endif
+
+	reg [31:0] sc_acc;
+	reg pal_alt;                    // PAL: this line's V is inverted
+	reg mono_sync0, mono_sync1, mono_active;
+
+	wire burst_win = !in_vsync_lines &&
+		(hc >= h_front_porch + BURST_DLY) &&
+		(hc < h_front_porch + BURST_DLY + BURST_LEN);
+
+	// Y/U/V per palette entry, written with the RGB palette
+	(* ram_style = "distributed" *) reg [7:0] pal_y [0:15];
+	(* ram_style = "distributed" *) reg signed [8:0] pal_u [0:15];
+	(* ram_style = "distributed" *) reg signed [8:0] pal_v [0:15];
+
+	// round(16 sin(2 pi k / 32))
+	reg signed [5:0] sin_tab [0:31];
+
+	initial begin
+		sin_tab[0] = 6'sd0;
+		sin_tab[1] = 6'sd3;
+		sin_tab[2] = 6'sd6;
+		sin_tab[3] = 6'sd9;
+		sin_tab[4] = 6'sd11;
+		sin_tab[5] = 6'sd13;
+		sin_tab[6] = 6'sd15;
+		sin_tab[7] = 6'sd16;
+		sin_tab[8] = 6'sd16;
+		sin_tab[9] = 6'sd16;
+		sin_tab[10] = 6'sd15;
+		sin_tab[11] = 6'sd13;
+		sin_tab[12] = 6'sd11;
+		sin_tab[13] = 6'sd9;
+		sin_tab[14] = 6'sd6;
+		sin_tab[15] = 6'sd3;
+		sin_tab[16] = 6'sd0;
+		sin_tab[17] = -6'sd3;
+		sin_tab[18] = -6'sd6;
+		sin_tab[19] = -6'sd9;
+		sin_tab[20] = -6'sd11;
+		sin_tab[21] = -6'sd13;
+		sin_tab[22] = -6'sd15;
+		sin_tab[23] = -6'sd16;
+		sin_tab[24] = -6'sd16;
+		sin_tab[25] = -6'sd16;
+		sin_tab[26] = -6'sd15;
+		sin_tab[27] = -6'sd13;
+		sin_tab[28] = -6'sd11;
+		sin_tab[29] = -6'sd9;
+		sin_tab[30] = -6'sd6;
+		sin_tab[31] = -6'sd3;
+		pal_y[0] = 8'd0; pal_u[0] = 9'sd0; pal_v[0] = 9'sd0;
+		pal_y[1] = 8'd11; pal_u[1] = 9'sd47; pal_v[1] = -9'sd10;
+		pal_y[2] = 8'd62; pal_u[2] = -9'sd31; pal_v[2] = -9'sd55;
+		pal_y[3] = 8'd74; pal_u[3] = 9'sd15; pal_v[3] = -9'sd65;
+		pal_y[4] = 8'd31; pal_u[4] = -9'sd16; pal_v[4] = 9'sd66;
+		pal_y[5] = 8'd43; pal_u[5] = 9'sd31; pal_v[5] = 9'sd56;
+		pal_y[6] = 8'd63; pal_u[6] = -9'sd32; pal_v[6] = 9'sd38;
+		pal_y[7] = 8'd106; pal_u[7] = -9'sd1; pal_v[7] = 9'sd1;
+		pal_y[8] = 8'd53; pal_u[8] = -9'sd1; pal_v[8] = 9'sd0;
+		pal_y[9] = 8'd65; pal_u[9] = 9'sd46; pal_v[9] = -9'sd10;
+		pal_y[10] = 8'd115; pal_u[10] = -9'sd32; pal_v[10] = -9'sd54;
+		pal_y[11] = 8'd127; pal_u[11] = 9'sd15; pal_v[11] = -9'sd65;
+		pal_y[12] = 8'd85; pal_u[12] = -9'sd17; pal_v[12] = 9'sd66;
+		pal_y[13] = 8'd96; pal_u[13] = 9'sd30; pal_v[13] = 9'sd56;
+		pal_y[14] = 8'd147; pal_u[14] = -9'sd48; pal_v[14] = 9'sd12;
+		pal_y[15] = 8'd159; pal_u[15] = -9'sd1; pal_v[15] = 9'sd1;
+	end
+
+	// RGB444 -> Y/U/V at write time. Shift-adds, not `*`: a constant
+	// multiply is something yosys may hand to a DSP block, and this is
+	// a write path that runs a few times a frame at most.
+	wire signed [13:0] cr = { 10'd0, pal_rgb[11:8] };
+	wire signed [13:0] cg = { 10'd0, pal_rgb[7:4] };
+	wire signed [13:0] cb = { 10'd0, pal_rgb[3:0] };
+	wire signed [13:0] cy_sum =
+		(cr <<< 5) + (cr <<< 4) + (cr <<< 1) + cr +       // 51 R
+		(cg <<< 6) + (cg <<< 5) + (cg <<< 2) +            // 100 G
+		(cb <<< 4) + (cb <<< 1) + cb;                     // 19 B
+	wire signed [13:0] cy = cy_sum >>> 4;
+	wire signed [13:0] cu_sum = (cb <<< 6) + (cb <<< 4) + (cb <<< 2) - (cy <<< 3);
+	wire signed [13:0] cv_sum = (cr <<< 7) + (cr <<< 4) + (cr <<< 2) + (cr <<< 1) -
+		(cy <<< 4) + (cy <<< 1);
+	wire signed [13:0] cu = cu_sum >>> 4;
+	wire signed [13:0] cv = cv_sum >>> 4;
+
+	always @(posedge clk) begin
+		if (pal_we && COLOR_AVAIL != 0) begin
+			pal_y[pal_idx] <= cy[7:0];
+			pal_u[pal_idx] <= cu[8:0];
+			pal_v[pal_idx] <= cv[8:0];
+		end
+	end
+
+	// -- the pipeline: two registers, the same for every signal --
+	//
+	// Stage 1 looks the pixel's Y/U/V up and samples the phase and
+	// every timing flag; stage 2 works out the code and registers it
+	// onto the pins. Sync, blanking, burst and picture all go through
+	// both stages, so the whole signal is two pixel clocks (80ns) late
+	// and nothing moves relative to anything else.
+	reg [7:0] s1_y;
+	reg signed [8:0] s1_u, s1_v;
+	reg [4:0] s1_p;
+	reg s1_vis, s1_sync, s1_burst, s1_pset, s1_alt;
+	reg [3:0] dac_r;
+
+	wire luma_on = color_on;
+	wire chroma_on = color_on && !mono_active;
+
+	wire signed [5:0] s_sin = sin_tab[s1_p];
+	wire signed [5:0] s_cos = sin_tab[s1_p + 5'd8];
+	wire signed [8:0] s_v = (IS_PAL && s1_alt) ? -s1_v : s1_v;
+	wire signed [15:0] chroma_n = (s1_u * s_sin) + (s_v * s_cos);
+	wire signed [12:0] chroma = chroma_n >>> 4;
+	wire signed [13:0] val = 14'sd88 + $signed({ 6'd0, s1_y }) +
+		(chroma_on ? chroma : 13'sd0);              // 88: blank 80, +8 to round
+	wire signed [9:0] q = val >>> 4;
+	wire [3:0] code = (q < 10'sd2) ? 4'd2 : (q > 10'sd15) ? 4'd15 : q[3:0];
+
+	// burst: +-2 codes around blank, at 180 degrees (NTSC) or 135/225
+	// (PAL, alternating with the V switch)
+	wire [4:0] b_off = !IS_PAL ? 5'd16 : (s1_alt ? 5'd20 : 5'd12);
+	wire signed [5:0] b_sin = sin_tab[s1_p + b_off];
+	wire signed [9:0] b_val = 10'sd88 + (b_sin <<< 1);
+	wire [3:0] b_code = b_val[7:4];
+
+	always @(posedge pclk) begin
+		s1_y <= pal_y[cidx];
+		s1_u <= pal_u[cidx];
+		s1_v <= pal_v[cidx];
+		s1_p <= sc_acc[31:27];
+		s1_vis <= is_visible;
+		s1_sync <= csync_low;
+		s1_burst <= burst_win;
+		s1_pset <= pset;
+		s1_alt <= pal_alt;
+
+		dac_r <= s1_sync ? DAC_SYNC :
+			s1_vis ? (luma_on ? code : (s1_pset ? DAC_WHITE : DAC_BLANK)) :
+			(s1_burst && chroma_on) ? b_code : DAC_BLANK;
+
+		mono_sync0 <= cvbs_mono;
+		mono_sync1 <= mono_sync0;
+
+		if (!resetn) begin
+			sc_acc <= 32'd0;
+			pal_alt <= 1'b0;
+			mono_active <= 1'b0;
+		end else begin
+			sc_acc <= sc_acc + SC_INC;
+			if (hc == h_disp_stop - 1) pal_alt <= ~pal_alt;
+			if (hc == h_disp_stop - 1 && vc == v_disp_stop - 1)
+				mono_active <= mono_sync1;
+		end
+	end
+
+	// Without colour the monochrome path is the output, untouched, and
+	// yosys removes everything above.
+	assign dac = (COLOR_AVAIL != 0) ? dac_r : dac_mono;
 
 `else
 

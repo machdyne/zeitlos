@@ -1740,6 +1740,22 @@ static ms_val *zapi_palette(ms_val *args) {
 
 }
 
+// (composite-color)     -- on a composite colour board: #t if the
+//                          output is in colour, #f if black and white
+// (composite-color #f)  -- black and white; #t for colour again
+//
+// For a TV, cable or region where composite colour does not work: the
+// picture stays, in greys, with no colour burst. Returns the state in
+// effect. Panics on a board without composite colour.
+static ms_val *zapi_composite_color(ms_val *args) {
+	if (!z_cvbs_available())
+		ms_log(MS_PANIC, "composite-color: this board has no composite "
+			"colour (see docs/composite.md)");
+	if (!ms_is_nil(args))
+		z_cvbs_set_mono(ms_car(args) == ms_mk_bool(false));
+	return ms_mk_bool(!z_cvbs_mono());
+}
+
 // (color-fill x y w h c) -- a rectangle in colour c (0-15), in
 // framebuffer coordinates of plane 0 (the viewport's), through the
 // current layout: every plane set or cleared to match c. #t.
@@ -3006,6 +3022,7 @@ void zapi_register(void) {
 	ms_def_builtin("color-mode", zapi_color_mode);
 	ms_def_builtin("palette", zapi_palette);
 	ms_def_builtin("color-fill", zapi_color_fill);
+	ms_def_builtin("composite-color", zapi_composite_color);
 	ms_def_builtin("gamepad", zapi_gamepad);
 	ms_def_builtin("gamepad-count", zapi_gamepad_count);
 	ms_def_builtin("random", zapi_random);

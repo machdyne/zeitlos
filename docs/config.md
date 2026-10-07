@@ -61,6 +61,7 @@ travel with the card. `settings` edits them; see
 | `system.tts.rate` | `180` | `tts` | speech: words per minute, 80-450 |
 | `system.tts.volume` | `200` | `tts` | speech: volume, 0-255 |
 | `system.video.mode` | `white` | kernel | display colour, applied at boot and on reload |
+| `system.video.composite` | `color` | kernel | composite colour boards: `color`, or `mono` for black and white |
 
 The same table, with one-line help, is `z_cfg_known[]` in
 `sw/common/zcfg.c` -- `cfg` at the console prints it with the values in
@@ -172,6 +173,20 @@ ago. At power-on "as it is" is white anyway.
 Super+P cycles the phosphor for now (white, amber, green, paper)
 without touching this setting: a reboot, or a config reload, brings
 this one back ([window_manager.md](window_manager.md)).
+
+### `system.video.composite`
+
+`color` or `mono`, on a composite board built with colour
+([composite.md](composite.md#colour)). `mono` turns the colour signal
+off -- no colour burst, the palette's brightness in greys -- for a TV,
+a cable or a region where the colour does not work; colour programs
+carry on unchanged and simply show in black and white. Applied at boot
+and on every reload. Absent leaves the output as it is, which at
+power-on is colour (or mono on a build with `GPU_COMPOSITE_MONO`).
+Ignored on every other board, so one file serves them all.
+
+From a REPL, `(composite-color #f)` does the same until the next
+reload.
 
 ## The file format
 

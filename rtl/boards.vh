@@ -153,9 +153,10 @@
 // opt in in their own block below: Lakritz, and every 45F board
 // (Mozart ML1/ML2, Sergei ML1/ML2, Noir, Schoko).
 //
-// Without `GAME and `GPU it does nothing (rtl/sysctl.v ands them), and
-// on a composite board it is reported unavailable: that output stage
-// is a monochrome luma ladder. Software asks z_color_available().
+// Without `GAME and `GPU it does nothing (rtl/sysctl.v ands them). On a
+// composite build it is NTSC/PAL colour, with black and white kept as
+// a setting -- see the COMPOSITE VIDEO section below. Software asks
+// z_color_available().
 // Nothing in the monochrome path changes on a board that defines it --
 // colour is off at reset and is switched off by leaving game mode.
 
@@ -341,8 +342,24 @@
 // and `GPU_COMPOSITE here, AND commenting out `GPU_DDMI in the Lakritz
 // block below -- see that .lpf's own note.
 //
+// COLOUR. With `COLOR (Lakritz has it), a composite build sends
+// game-mode colour as an NTSC or PAL colour signal -- a subcarrier
+// synthesised in the pixel clock, no extra PLL output. Colour only
+// goes out while a program has it on; the desktop and monochrome game
+// mode stay the three-level black-and-white signal. See
+// docs/composite.md, "Colour".
+//
+// Black and white is kept, three ways, for a TV, cable or region where
+// the colour does not work:
+//   - at run time: system.video.composite: mono (docs/config.md), or
+//     (composite-color #f) -- greys, no colour burst
+//   - `GPU_COMPOSITE_MONO: start in black and white instead
+//   - comment out `COLOR in the board block: no colour hardware at all,
+//     exactly the monochrome output this always was
+//
 //`define GPU_COMPOSITE
 //`define GPU_COMPOSITE_PAL
+//`define GPU_COMPOSITE_MONO
 
 // BOARD CONFIG
 // ------------

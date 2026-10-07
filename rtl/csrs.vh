@@ -312,9 +312,9 @@ localparam CSR_FEATURES2 =
 // Game-mode colour: rtl/socctl.v's COLOR and PALETTE registers and the
 // bitplane path in rtl/gpu/gpu_video.v (docs/color.md). Mirrors
 // `COLOR in rtl/boards.vh. Like the GAME bit, it says the define was
-// set, not that colour is usable: rtl/sysctl.v also requires game mode
-// and a non-composite output, and the AVAIL bit in COLOR is the
-// answer that accounts for both. Software asks z_color_available().
+// set, not that colour is usable: rtl/sysctl.v also requires game mode,
+// and the AVAIL bit in COLOR is the answer that accounts for it.
+// Software asks z_color_available().
 `ifdef COLOR
 	(32'h1 << 15) |
 `endif

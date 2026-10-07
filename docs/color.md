@@ -127,7 +127,7 @@ free and read as zero.
 |---|---|
 | `Z_FEATURE2_COLOR` (FEATURES2 bit 15) | `COLOR` was defined in `rtl/boards.vh` |
 | `z_color_present()` | this bitstream's socctl has the COLOR register |
-| `z_color_available()` | colour can actually be shown: `COLOR`, `GAME`, `GPU`, and not composite |
+| `z_color_available()` | colour can actually be shown: `COLOR`, `GAME` and `GPU` (on composite too) |
 
 Use `z_color_available()`. `rtl/sysctl.v` ands the conditions before
 telling socctl, so its AVAIL bit is the answer that matters, and EN is
@@ -258,7 +258,7 @@ are a handful of stores per frame.
 |---|---|
 | DDMI (HDMI/DVI) | each 4-bit channel doubled to 8 bits: any 16 of 4096 colours |
 | VGA | the **top bit** of each channel: at most the 8 RGB primaries and secondaries |
-| Composite | unavailable (see below) |
+| Composite | NTSC or PAL colour from a synthesised subcarrier; black and white available as a setting ([composite.md](composite.md#colour)) |
 
 On DDMI the palette spans the full range. The monochrome inks keep
 their historical 0x80 ceiling for compatibility; a game wanting the
@@ -430,24 +430,10 @@ and 60 more words per line on the scanout-only VRAM port.
 | Schoko | on | 45F, VGA and DDMI: VGA shows the top bit of each channel |
 | everything else | off | 12F and 25F boards other than Lakritz, iCE40, GateMate, 7-series, composite |
 
-On a composite board colour is reported unavailable. That output stage
-is a 4-bit monochrome luma ladder.
-
-## Composite (not done)
-
-NTSC colour is possible without a new PLL. `pll1`'s VCO is 630 MHz, and
-630 / 44 = 14.31818 MHz is exactly four times the NTSC subcarrier
-(315/88 MHz).
-
-At 4×fsc the chroma of a palette entry is just four repeating DAC codes
-(Y+U, Y+V, Y−U, Y−V). Software could precompute them per palette entry
-and hardware would pick one with a 2-bit phase counter, plus a fixed
-burst in the back porch: no sine table, no multipliers. The 4-bit DAC
-makes it coarse, roughly Apple II / Atari 8-bit composite colour.
-
-PAL's 4.43361875 MHz does not divide out of 630 MHz and would need a
-phase accumulator: an experiment rather than a plan. Grey levels from
-the palette are the cheap fallback for both.
+On a composite build of a board with `COLOR`, colour goes out as a
+real NTSC or PAL colour signal -- see
+[composite.md](composite.md#colour), which also covers keeping black and
+white for TVs that do not cope.
 
 ## Testing
 
@@ -506,4 +492,5 @@ mode, whatever the last game left behind.
 - `COLOR` on the remaining 25F boards (ULX3S 25k, Klinge) and the
   ULX3S 85k. Each needs its own fit and `make timing`; the 25F ones are
   as full as Lakritz was.
-- Composite colour (above).
+- Composite colour on a real TV: simulated (`tb_cvbs_color.v`), not yet
+  seen on a set.

@@ -45,6 +45,7 @@ Word-addressed, matching every other simple slave in this codebase.
 | `0x7000_021c` | DIRTY | bits 29:0: framebuffer stripes written since last cleared, one bit per 16 rows. **Write 1s to clear**; reading has no side effect. Resets to all ones. Present when `FEATURES2` bit 14 (`Z_FEATURE2_VRAM_DIRTY`) is set -- see [Framebuffer dirty stripes](#framebuffer-dirty-stripes). |
 | `0x7000_0224` | COLOR | game-mode colour: bit 0 enable, bits 2:1 planes−1, bits 13:8 plane 1..3 `{dy,dx}` offsets, bit 15 avail (R/O). Reads back as `{0x5A50, avail, …}`. Adopted with GAME/VIEW at a frame boundary; **a GAME write with bit 0 clear also clears the enable.** See [color.md](color.md). |
 | `0x7000_0234` | PALETTE | write-only, whole-word stores: bits 27:24 entry, bits 11:0 RGB444. Reads 0. See [color.md](color.md). |
+| `0x7000_0238` | CVBS | composite colour: bit 0 MONO (black and white: no burst, the palette's brightness), bit 1 avail (R/O). Reads back as `{0x5A56, ..., avail, mono}`. See [composite.md](composite.md#colour). |
 
 The decode is four address bits wide (sixteen words). It was three
 before COLOR and PALETTE, and those two sit at words 9 and 13 so that

@@ -70,6 +70,8 @@ const z_cfg_known_t z_cfg_known[] = {
 	  "speech: volume, 0-255" },
 	{ "system.video.mode", "white",
 	  "display colour at boot and on reload: white, amber, green or paper" },
+	{ "system.video.composite", "color",
+	  "composite colour boards: color, or mono for black and white" },
 };
 
 const int z_cfg_known_count = (int)(sizeof(z_cfg_known) / sizeof(z_cfg_known[0]));

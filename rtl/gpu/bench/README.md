@@ -85,6 +85,15 @@ design makes that pattern land correctly). `tb_line.v` and
   mid-frame adoption). Fails on two deliberately broken read-side
   variants, so it is proven sensitive. With `-DGPU_DDMI -DTB_STUBS`
   it also checks the 8-bit TMDS channel inputs. See `docs/color.md`.
+- `tb_cvbs_color.v` -- composite COLOUR. A small software receiver:
+  correlates each line's DAC samples against an ideal subcarrier and
+  reads off burst and picture phase and amplitude, as a TV decoder
+  does. Colour off is the old three-level signal; eight colours decode
+  to the right luma, hue and saturation; the burst does not drift over
+  a hundred lines; PAL's switch decodes alike on both line phases;
+  mono has no burst and no chroma; the planes work on composite timing.
+  NTSC, and PAL with `-DGPU_COMPOSITE_PAL`. Fails with the cosine table
+  inverted. See `docs/composite.md`, "Colour".
 - `tb_gamepad.v` -- `rtl/usb_hid.v`'s gamepad register. Uses a STUB
   `usb_hid_host` (the real core needs an actual USB device bit-banging
   a low-speed link to produce a report at all, and none of the

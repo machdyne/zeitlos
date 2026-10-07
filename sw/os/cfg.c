@@ -119,6 +119,25 @@ static void apply(bool verbose) {
 		}
 	}
 
+	// Composite colour (docs/composite.md, "Colour"): `mono` for a TV,
+	// cable or region where the colour signal does not work. Same rule
+	// as above: absent leaves it alone. Accepted and ignored on a board
+	// without composite colour, so one config file serves every board.
+	{
+		const char *cv = k_cfg_find("system.video.composite");
+		if (cv) {
+			bool mono = !strcmp(cv, "mono");
+			if (!mono && strcmp(cv, "color") && strcmp(cv, "colour"))
+				printf("cfg: system.video.composite: '%s' is not color or "
+					"mono -- ignored\n", cv);
+			else if (z_cvbs_available())
+				z_cvbs_set_mono(mono);
+			else if (verbose)
+				printf("cfg: system.video.composite: not a composite colour "
+					"board\n");
+		}
+	}
+
 }
 
 // -- loading --

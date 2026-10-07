@@ -257,7 +257,23 @@
  *             bits under the screen streamer.
  *
  *             The decode is four bits wide now (rtl/sysctl.v), so 8,
- *             10..12, 14 and 15 are free and read as zero.
+ *             10..12 and 15 are free and read as zero.
+ *
+ *  14  CVBS   composite colour (docs/composite.md, "Colour").
+ *             bit 0 MONO: 1 = no colour on the composite output -- the
+ *             palette's brightness in greys and no colour burst, so a
+ *             receiver shows black and white. For a set, a cable or a
+ *             region where the colour does not work. Resets to
+ *             CVBS_MONO_RESET (`GPU_COMPOSITE_MONO).
+ *             Reads back as { 16'h5A56, 14'b0, avail, mono }, "ZV".
+ *             avail = CVBS_AVAIL: a composite board with game-mode
+ *             colour. Adopted at a frame boundary.
+ *
+ *             Word 14 for the same reason as 9 and 13: on an older
+ *             3-bit-decode bitstream it aliases RECONFIG, which acts
+ *             only on its 32-bit key, so a write of 0 or 1 does
+ *             nothing there, and RECONFIG's signature (0x5A52) is not
+ *             this one.
  *
  * Reset state is BUSY (cursor = Z), not idle.
  *
@@ -289,6 +305,10 @@ module socctl_wb #(
     // (rtl/boards.vh's `PROGRAMN_PIN). Set by rtl/sysctl.v, like
     // GAME_AVAIL; see the RECONFIG register above.
     parameter RECONFIG_AVAIL = 0,
+    // Composite colour exists (CVBS register), and whether it starts
+    // in black and white. Set by rtl/sysctl.v.
+    parameter CVBS_AVAIL = 1'b0,
+    parameter CVBS_MONO_RESET = 1'b0,
     // Defaults to 0 -- a socctl instantiated without being told
     // anything reports no game mode, which is the safe answer.
     parameter GAME_AVAIL = 1'b0,
@@ -367,6 +387,7 @@ module socctl_wb #(
     output wire        pal_we,
     output wire [3:0]  pal_idx,
     output wire [11:0] pal_rgb,
+    output wire        cvbs_mono,
 
     // -- scanout status, from rtl/gpu/gpu_video.v --
     //
@@ -406,6 +427,8 @@ module socctl_wb #(
     localparam RECONFIG_SIG = 16'h5A52;
     // top half of the COLOR register -- "ZP", for planes
     localparam COLOR_SIG = 16'h5A50;
+    // top half of CVBS -- "ZV"
+    localparam CVBS_SIG = 16'h5A56;
 
     reg [31:0] ctrl;
     reg [1:0] video;
@@ -423,6 +446,7 @@ module socctl_wb #(
     reg pwe;
     reg [3:0] pidx;
     reg [11:0] prgb;
+    reg cvbs;
 
     assign cursor_busy = ctrl[0];
     assign reconfig = recfg && (RECONFIG_AVAIL != 0);
@@ -448,6 +472,7 @@ module socctl_wb #(
     assign pal_we    = pwe && (COLOR_AVAIL != 0);
     assign pal_idx   = pidx;
     assign pal_rgb   = prgb;
+    assign cvbs_mono = cvbs;
 
     // Range limit on the VIEW write path. This is NOT the clamp that
     // keeps the viewport on screen -- that one depends on the wrap
@@ -539,6 +564,7 @@ module socctl_wb #(
             pwe <= 1'b0;
             pidx <= 4'd0;
             prgb <= 12'd0;
+            cvbs <= CVBS_MONO_RESET;
 
             wb_ack_o <= 1'b0;
             wb_dat_o <= 32'h0000_0000;
@@ -619,6 +645,9 @@ module socctl_wb #(
                     // PALETTE: whole word or nothing, like RECONFIG --
                     // a byte store would otherwise write an entry with
                     // three of its four fields stale.
+                    if (wb_adr_i == 32'd14 && wb_sel_i[0])
+                        cvbs <= wb_dat_i[0];
+
                     if (wb_adr_i == 32'd13 && wb_sel_i == 4'b1111) begin
                         pwe <= 1'b1;
                         pidx <= wb_dat_i[27:24];
@@ -662,6 +691,8 @@ module socctl_wb #(
                         // reads them and yosys removes the registers
                         // -- a board without `COLOR pays for the
                         // signature and nothing else.
+                        32'd14: wb_dat_o <= { CVBS_SIG, 14'b0,
+                                              (CVBS_AVAIL != 0), cvbs };
                         32'd9: wb_dat_o <= { COLOR_SIG, (COLOR_AVAIL != 0), 1'b0,
                                              ((COLOR_AVAIL != 0) ? coff : 6'd0), 5'b0,
                                              ((COLOR_AVAIL != 0) ? np : 2'd0), color_en };
