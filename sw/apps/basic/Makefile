@@ -17,8 +17,9 @@ BASIC_DEFS = -DBASIC_EXT -DMAX_PROG=32768
 
 # Objects, and why each is linked:
 #   zfont_data.o: the 8x8 font the screen draws with, and zgfx's fonts.
+#   zcolor.o: full screen in colour (docs/color.md).
 #   zfsapp.o: the files in /basic.
-OBJS = zeitlos.o zobj.o zport.o zgfx.o zfont_data.o zwin.o zfsapp.o \
+OBJS = zeitlos.o zobj.o zport.o zgfx.o zcolor.o zfont_data.o zwin.o zfsapp.o \
 	basic_interp.o bscreen.o bedit.o bterm.o bext.o basic_app.o
 
 basic_interp.o: ../../ext/basic/basic.c ../../ext/basic/basic.h

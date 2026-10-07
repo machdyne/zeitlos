@@ -71,14 +71,14 @@ defines =
     DCACHE_LINE_WORDS=4
     DCACHE_WBUF=0
     SDRAM_BURST
-    MONTMUL
     GPU
     GPU_RASTER
     GPU_BLIT
     GPU_CURSOR
     GPU_DDMI
+    COLOR
     UART0
-    USB_HID
+    USB_HOST
     SPI_SDCARD
     SPI_ETH
     AUDIO

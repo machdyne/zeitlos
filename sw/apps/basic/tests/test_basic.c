@@ -180,6 +180,30 @@ static void big_programs(void) {
     CHECK(!strcmp(run("20010 PRINT A\nRUN"), "2000\n"), "and runs: [%s]", host_text);
 }
 
+static void colours(void) {
+    fresh();
+    CHECK(!strcmp(run("10 INK 5: PLOT 1, 1: PRINT POINT(1, 1)\nRUN"), "5\n"),
+        "INK 5, POINT: [%s]", host_text);
+    fresh();
+    CHECK(!strcmp(run("10 INK 3: PAPER 9: CLS: PRINT POINT(100, 100)\nRUN"), "9\n"),
+        "PAPER 9, CLS: [%s]", host_text);
+    fresh();
+    run("10 INK 7: COLOR 1: PLOT 2, 2\nRUN");
+    CHECK(bs_point(&host_screen, 2, 2) == 1, "COLOR 1 is white again");
+    fresh();
+    CHECK(!strcmp(run("10 PALETTE 1, 15, 0, 0\nRUN"), "") &&
+        host_screen.pal[1] == 0xf00, "PALETTE: [%s]", host_text);
+    fresh();
+    CHECK(!strcmp(run("10 INK 16\nRUN"), "OUT OF RANGE IN 10\n"), "INK 16: [%s]", host_text);
+    fresh();
+    CHECK(!strcmp(run("10 PALETTE 1, 2, 3\nRUN"), "SYNTAX ERROR IN 10\n") ||
+        strstr(host_text, "ERROR") != 0, "PALETTE short: [%s]", host_text);
+    /* LIST shows the new statements by name */
+    fresh();
+    CHECK(strstr(run("10 INK 2: PAPER 0: PALETTE 0, 1, 2, 3\nLIST"),
+        "INK 2") != 0, "LIST: [%s]", host_text);
+}
+
 int main(void) {
     printing();
     graphics();
@@ -187,6 +211,7 @@ int main(void) {
     screen_keys_sync();
     system_parts();
     big_programs();
+    colours();
     if (failures) {
         printf("FAILED: %d\n", failures);
         return 1;

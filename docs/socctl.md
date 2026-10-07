@@ -43,6 +43,14 @@ Word-addressed, matching every other simple slave in this codebase.
 | `0x7000_0208` | VIDEO | bits 1:0: virtual phosphor mode. Reads back as `{0x5643, 14'b0, mode}`. Reset value comes from the board's `GPU_*` defines. |
 | `0x7000_0218` | RECONFIG | write the key `0x5A52_4254` (`"ZRBT"`), as one whole-word store, to pull PROGRAMN and reconfigure the FPGA -- reboot. Any other value or a partial store is ignored. Reads back as `{0x5A52, 15'b0, avail}`; `avail` is set only on boards defining `PROGRAMN_PIN`, and the request is forced off in hardware elsewhere. Software uses `z_reboot()`, which syncs open files first -- see `docs/zboot.md` section 6. |
 | `0x7000_021c` | DIRTY | bits 29:0: framebuffer stripes written since last cleared, one bit per 16 rows. **Write 1s to clear**; reading has no side effect. Resets to all ones. Present when `FEATURES2` bit 14 (`Z_FEATURE2_VRAM_DIRTY`) is set -- see [Framebuffer dirty stripes](#framebuffer-dirty-stripes). |
+| `0x7000_0224` | COLOR | game-mode colour: bit 0 enable, bits 2:1 planes−1, bits 13:8 plane 1..3 `{dy,dx}` offsets, bit 15 avail (R/O). Reads back as `{0x5A50, avail, …}`. Adopted with GAME/VIEW at a frame boundary; **a GAME write with bit 0 clear also clears the enable.** See [color.md](color.md). |
+| `0x7000_0234` | PALETTE | write-only, whole-word stores: bits 27:24 entry, bits 11:0 RGB444. Reads 0. See [color.md](color.md). |
+
+The decode is four address bits wide (sixteen words). It was three
+before COLOR and PALETTE, and those two sit at words 9 and 13 so that
+on an older bitstream they alias MAGIC and FRAME -- both read-only --
+and probing for colour there cannot disturb anything. See
+[color.md](color.md), "Why words 9 and 13".
 
 MAGIC exists for the same reason `csrs.v` has one: reading an address
 nothing decodes does **not** fault on this bus, so a known constant is

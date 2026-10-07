@@ -370,6 +370,61 @@ static void test_mode_change(void) {
 
 }
 
+/* -- planar (game-mode colour) ---------------------------------------- */
+
+/* Pixel of buf1, same convention as out_px(). */
+static int out_px1(const c8_render_t *r, int x, int y) {
+	const uint32_t *row = (const uint32_t *)(r->buf1 + y * r->stride);
+	return (int)((row[x >> 5] >> (x & 31)) & 1);
+}
+
+/* Planar output is each plane on its own, solid, in its own buffer:
+ * no dither anywhere, and the colour index the hardware forms from the
+ * two (plane 0 in bit 0, plane 1 in bit 1) is exactly the guest's. */
+static void test_planar(void) {
+
+	c8_render_t *r = malloc(sizeof(*r));
+	c8_t *c = fresh(C8_PROFILE_XOCHIP);
+	int x, y, gx, gy, bad = 0;
+
+	c8_render_init(r, 2);
+	CHECK(c8_render_set_planar(r, true));
+	CHECK(!c8_render_set_planar(r, true));
+
+	/* colours 1, 2 and 3 in a row, lores (4x4 output per pixel) */
+	c->two_plane = true;
+	poke(c, 0, 3, 5);
+	poke(c, 1, 4, 5);
+	poke(c, 0, 5, 5);
+	poke(c, 1, 5, 5);
+	c8_render(r, c, true);
+
+	CHECK(!r->grey);
+
+	for (gy = 0; gy < 64; gy++)
+		for (gx = 0; gx < 128; gx++) {
+			int e0 = (gy == 5 && (gx == 3 || gx == 5));
+			int e1 = (gy == 5 && (gx == 4 || gx == 5));
+			if (gx >= c->w || gy >= c->h) continue;
+			for (y = 0; y < r->pxw; y++)
+				for (x = 0; x < r->pxw; x++) {
+					int ox = gx * r->pxw + x, oy = gy * r->pxw + y;
+					if (out_px(r, ox, oy) != e0) bad++;
+					if (out_px1(r, ox, oy) != e1) bad++;
+				}
+		}
+	CHECK_EQ(bad, 0);
+
+	/* and off again: the grey path, plane 1 folded into buf */
+	CHECK(c8_render_set_planar(r, false));
+	c->dirty = ~(uint64_t)0;
+	c8_render(r, c, true);
+	CHECK(r->grey);
+
+	free(r); free(c);
+
+}
+
 int main(void) {
 
 	test_geometry();
@@ -381,6 +436,7 @@ int main(void) {
 	test_dirty_band();
 	test_scale_change_forces_full();
 	test_mode_change();
+	test_planar();
 
 	printf("%s: %d checks, %d failures\n",
 		failures ? "FAILED" : "ok", checks, failures);

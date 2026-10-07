@@ -96,7 +96,7 @@ TE_CFLAGS = -DEMBEDDED -DTE_HOST_IO \
 #   than reinvented, this is the established way any app links against
 #   z_win_*.
 OBJS = zeitlos.o zobj.o zport.o zline.o zrepl.o zdns.o zfsapp.o zstream.o \
-	zgfx.o zfont_data.o zwin.o zrtc.o zrng.o zgpio.o zi2c.o zspi.o zuart.o zconnect.o ms.o \
+	zgfx.o zcolor.o zfont_data.o zwin.o zrtc.o zrng.o zgpio.o zi2c.o zspi.o zuart.o zconnect.o ms.o \
 	te.o te_bridge.o page.o zapi.o repl.o
 
 # The system CSPRNG, behind (random)/(random-hex)/(random-secure?) --

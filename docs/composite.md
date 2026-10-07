@@ -232,11 +232,27 @@ is the only way to measure a field rate.
 
 ## Not done
 
-**Colour.** Needs a colour subcarrier (3.579545 MHz NTSC, 4.43361875 MHz
-PAL) phase-locked to the line rate, which 25.2 MHz does not divide into
-cleanly — it would need its own PLL output and a phase accumulator.
-Pointless on a 1bpp framebuffer anyway; it becomes interesting only
-alongside the 2bpp palette mode discussed in `docs/game_mode.md`.
+**Colour.** Game-mode colour now exists for DDMI and VGA
+([color.md](color.md)), and composite boards report it unavailable.
+
+The subcarrier is less of an obstacle than this note used to say. For
+NTSC no new PLL and no phase accumulator are needed: `pll1`'s VCO runs
+at 630 MHz, and 630 / 44 = 14.31818 MHz is exactly 4 x 3.579545 MHz
+(the subcarrier is defined as 315/88 MHz). One of `pll1`'s two unused
+outputs at divide-by-44 is the classic 4xfsc sampling clock, from the
+same VCO as the 25.2 MHz pixel clock.
+
+At 4xfsc a colour's chroma is four repeating DAC codes, so each palette
+entry needs four precomputed codes and the hardware a 2-bit phase
+counter, plus a fixed burst in the back porch. The line is 1602 clocks,
+so there are about 227.56 subcarrier cycles per line rather than the
+standard 227.5. Receivers lock to the burst, not to the line, so that
+changes only the dot-crawl pattern. The 4-bit ladder limits the result
+to something like Apple II / Atari 8-bit composite colour.
+
+PAL's 4.43361875 MHz does not divide out of 630 MHz and would need a
+phase accumulator, which makes it an experiment. Grey levels derived
+from the palette are the cheap fallback for both standards.
 
 **Interlace.** 480i/576i would double vertical resolution to 480/576
 lines, at the cost of flicker on any horizontal edge — which on a 1bpp

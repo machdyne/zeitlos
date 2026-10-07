@@ -3298,6 +3298,28 @@ module sysctl #()
 	localparam GAME_AVAILABLE = 1'b0;
 `endif
 
+	// Game-mode colour (docs/color.md): `COLOR, and only where game
+	// mode itself exists -- colour is a property of the 320x240
+	// viewport and means nothing without it -- and not on composite,
+	// whose output stage is a monochrome luma ladder. Composite colour
+	// is a separate, later piece of work; until then a composite board
+	// reports no colour rather than one that silently shows plane 0.
+`ifdef COLOR
+`ifdef GPU_COMPOSITE
+	localparam COLOR_AVAILABLE = 1'b0;
+`else
+	localparam COLOR_AVAILABLE = GAME_AVAILABLE;
+`endif
+`else
+	localparam COLOR_AVAILABLE = 1'b0;
+`endif
+	wire socctl_color_en;
+	wire [1:0] socctl_color_np;
+	wire [5:0] socctl_color_off;
+	wire socctl_pal_we;
+	wire [3:0] socctl_pal_idx;
+	wire [11:0] socctl_pal_rgb;
+
 	// Scanout status coming back the other way. Zero on a board with
 	// no `GPU, which is the honest answer -- there is no scanout, so
 	// there are no frames and there is no vertical blanking. A stuck
@@ -3347,6 +3369,7 @@ module sysctl #()
 	socctl_wb #(
 		.VIDEO_MODE_RESET(VIDEO_MODE_DEFAULT),
 		.GAME_AVAIL(GAME_AVAILABLE),
+		.COLOR_AVAIL(COLOR_AVAILABLE),
 `ifdef PROGRAMN_PIN
 		.RECONFIG_AVAIL(1)
 `else
@@ -3371,7 +3394,13 @@ module sysctl #()
 		// Eight words is the whole of 0x7000_0200..0x7000_021c, well
 		// inside socctl's 256-byte window. DIRTY (word 7) fills the
 		// eighth, so a ninth register means widening this to four.
-		.wb_adr_i({ 29'b0, wbm_adr_sel_word[2:0] }),
+		//
+		// FOUR now, for COLOR (word 9) and PALETTE (word 13). Those
+		// two numbers are chosen so that on an OLDER bitstream, where
+		// this is still three bits, they alias MAGIC and FRAME --
+		// both read-only -- and software probing for colour there
+		// cannot disturb anything. See socctl.v's header.
+		.wb_adr_i({ 28'b0, wbm_adr_sel_word[3:0] }),
 		.wb_dat_i(wbm_dat_o),
 		.wb_dat_o(wbs_socctl_dat_o),
 		.wb_we_i(wbm_we),
@@ -3387,6 +3416,12 @@ module sysctl #()
 		.game_wrap(socctl_game_wrap),
 		.view_x(socctl_view_x),
 		.view_y(socctl_view_y),
+		.color_en(socctl_color_en),
+		.color_np(socctl_color_np),
+		.color_off(socctl_color_off),
+		.pal_we(socctl_pal_we),
+		.pal_idx(socctl_pal_idx),
+		.pal_rgb(socctl_pal_rgb),
 		.frame_ctr(gpu_frame_ctr),
 		.in_vblank(gpu_in_vblank),
 		.vram_we(socctl_vram_we),
@@ -3910,7 +3945,8 @@ module sysctl #()
 		.v_pulse_width(VID_V_PW), .v_back_porch(VID_V_BP),
 		.v_frame(VID_V_FP + VID_V_PW + VID_V_BP + VID_V_DISP),
 		.H_DIV_BASE(VID_H_DIV),
-		.FIXED_VIEWPORT(VID_FIXED_VP)
+		.FIXED_VIEWPORT(VID_FIXED_VP),
+		.COLOR_AVAIL(COLOR_AVAILABLE)
 	) gpu_video_i
 	(
 		.clk(wbm_clk),
@@ -3932,6 +3968,15 @@ module sysctl #()
 		.game_wrap(socctl_game_wrap),
 		.view_x(socctl_view_x),
 		.view_y(socctl_view_y),
+		// colour: belt and braces again, as game_en above. Without
+		// `COLOR both ends are constant and gpu_video builds none of
+		// it -- see its COLOR_AVAIL parameter.
+		.color_en(socctl_color_en && COLOR_AVAILABLE),
+		.color_np(socctl_color_np),
+		.color_off(socctl_color_off),
+		.pal_we(socctl_pal_we),
+		.pal_idx(socctl_pal_idx),
+		.pal_rgb(socctl_pal_rgb),
 		.frame_ctr(gpu_frame_ctr),
 		.in_vblank(gpu_in_vblank),
 		// x and y are FRAMEBUFFER coordinates now, in both modes --

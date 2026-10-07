@@ -379,6 +379,11 @@
 // rtl/socctl.v's DIRTY register -- see reg_socctl_dirty below. Built
 // wherever there is VRAM. rtl/csrs.vh FEATURES2 bit 14.
 #define Z_FEATURE2_VRAM_DIRTY (1u << 14)
+// Game-mode colour (rtl/socctl.v COLOR/PALETTE, docs/color.md). Says
+// `COLOR was defined; prefer z_color_available(), which also accounts
+// for a board without game mode or with composite output.
+// rtl/csrs.vh FEATURES2 bit 15.
+#define Z_FEATURE2_COLOR      (1u << 15)
 
 // The jumploader region (docs/zboot.md sec. 5) -- ECP5 boards that set
 // JUMP only. It sits inside the Zeitlos region at Z_FLASH_ZAR_END, which
@@ -1116,6 +1121,101 @@ static inline void z_game_wait_frame(void) {
 	start = reg_socctl_frame & 0xffffu;
 	while ((reg_socctl_frame & 0xffffu) == start)
 		;
+}
+
+// -- game-mode colour (rtl/socctl.v COLOR/PALETTE, docs/color.md) --
+//
+// In game mode only, up to three more 320x240 regions of the 640x480
+// framebuffer can be read as extra BITPLANES of the picture, through a
+// 16-entry RGB444 palette. Plane 0 is the viewport itself; plane k
+// (1..3) is the viewport moved by its own {dy, dx}: dx adds 320
+// columns, dy 240 rows, modulo 640x480.
+//
+// These are the register interface and no more -- see docs/color.md
+// for the layouts that make sense and how to draw into them.
+//
+// THE ADDRESSES ARE NOT 0x220/0x224 ON PURPOSE. Bitstreams before
+// colour decode only three address bits in socctl, so word 9 aliases
+// MAGIC and word 13 aliases FRAME there: both read-only, so probing
+// for colour on an old board changes nothing. Always check
+// z_color_available() before writing either -- on an old bitstream the
+// write is harmless, but on one without socctl at all it is not
+// defined what answers.
+#define reg_socctl_color   (*(volatile uint32_t*)0x70000224)
+#define reg_socctl_palette (*(volatile uint32_t*)0x70000234)
+
+#define Z_COLOR_ENABLE      (1u << 0)
+#define Z_COLOR_NP_SHIFT    1          // bits 2:1 = planes - 1
+#define Z_COLOR_OFF_SHIFT   8          // bits 13:8 = plane 1..3 {dy,dx}
+#define Z_COLOR_AVAIL       (1u << 15) // read-only
+
+// Per-plane offsets, for z_color_set(). Plane 1 is the low pair.
+#define Z_COLOR_DX          1u
+#define Z_COLOR_DY          2u
+#define Z_COLOR_OFFSETS(p1, p2, p3) \
+	((((p1) & 3u) << 0) | (((p2) & 3u) << 2) | (((p3) & 3u) << 4))
+
+// top half of reg_socctl_color -- KEEP IN SYNC with rtl/socctl.v's
+// COLOR_SIG. "ZP". Distinct from MAGIC's 0x5A43, which is what an old
+// bitstream returns at this address.
+#define Z_COLOR_SIG 0x5A50u
+
+static inline bool z_color_present(void) {
+	return ((reg_socctl_color >> 16) & 0xffffu) == Z_COLOR_SIG;
+}
+
+// true if this machine can show game-mode colour: the bitstream has
+// `COLOR, game mode, a GPU, and a non-composite output. Prefer this
+// over Z_FEATURE2_COLOR, for the same reason as z_game_available().
+static inline bool z_color_available(void) {
+	if (!z_color_present()) return false;
+	return (reg_socctl_color & Z_COLOR_AVAIL) != 0;
+}
+
+// Set colour on or off, the plane count (1..4 = 2..16 colours) and the
+// offsets of planes 1..3 (Z_COLOR_OFFSETS). Adopted at the next frame
+// boundary, together with any GAME/VIEW write made in the same frame.
+//
+// Colour only shows while game mode is on, and TURNING GAME MODE OFF
+// TURNS COLOUR OFF: a game that wants colour after re-entering game
+// mode sets it again. Enable game mode first or afterwards, either
+// order works -- both writes land on the same frame.
+static inline bool z_color_set(bool on, uint32_t planes, uint32_t offsets) {
+	uint32_t np;
+	if (!z_color_available()) return false;
+	if (planes < 1) planes = 1;
+	if (planes > 4) planes = 4;
+	np = planes - 1u;
+	reg_socctl_color = (on ? Z_COLOR_ENABLE : 0u) |
+		(np << Z_COLOR_NP_SHIFT) |
+		((offsets & 0x3fu) << Z_COLOR_OFF_SHIFT);
+	return true;
+}
+
+static inline bool z_color_enabled(void) {
+	if (!z_color_present()) return false;
+	return (reg_socctl_color & Z_COLOR_ENABLE) != 0;
+}
+
+static inline uint32_t z_color_planes(void) {
+	if (!z_color_present()) return 1;
+	return ((reg_socctl_color >> Z_COLOR_NP_SHIFT) & 3u) + 1u;
+}
+
+// the plane 1..3 offsets last written, as Z_COLOR_OFFSETS() packs them
+static inline uint32_t z_color_offsets(void) {
+	if (!z_color_present()) return 0;
+	return (reg_socctl_color >> Z_COLOR_OFF_SHIFT) & 0x3fu;
+}
+
+// One palette entry, RGB444 (0xRGB). Takes effect immediately, not at
+// a frame boundary -- write in vblank (z_game_in_vblank(), or straight
+// after z_game_wait_frame()) to avoid a one-pixel glitch mid-picture.
+// On DDMI each nibble is doubled to 8 bits (0xa -> 0xaa); on VGA only
+// the top bit of each channel exists.
+static inline void z_color_set_palette(uint32_t index, uint32_t rgb444) {
+	if (!z_color_available()) return;
+	reg_socctl_palette = ((index & 0xfu) << 24) | (rgb444 & 0xfffu);
 }
 
 // -- instruction cache (rtl/cache.v) --

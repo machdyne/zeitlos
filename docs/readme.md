@@ -55,6 +55,7 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [gpu\_blitter](gpu_blitter.md) | Blitter developer guide |
 | [gpu\_raster](gpu_raster.md) | Line rasterizer developer guide |
 | [game\_mode](game_mode.md) | 320x240 viewport |
+| [color](color.md) | Game-mode colour: bitplanes and a 16-entry palette |
 | [composite](composite.md) | Composite NTSC/PAL output |
 | [audio](audio.md) | Hardware mixer and outputs |
 | [uart](uart.md) | UART0 |
@@ -182,6 +183,7 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 
 | Document | Subject |
 |---|---|
+| [space3d\_app](space3d_app.md) | `space3d`: wireframe space game; 16-colour dual playfield in full screen |
 | [chess\_app](chess_app.md) | `chess` |
 | [chess\_engine](chess_engine.md) | The chess engine |
 | [chip8\_app](chip8_app.md) | `chip8` |

@@ -47,6 +47,7 @@
 #include "../../common/zwm.h"
 #include "../../common/zwin.h"
 #include "../../common/zgfx.h"
+#include "../../common/zcolor.h"
 #include "../../common/zfont.h"
 #include "../../common/zkbd.h"
 #include "../../common/zpad.h"
@@ -396,6 +397,43 @@ static void draw_panel(bool force) {
 
 static int game_back;
 
+/* -- game-mode colour (docs/color.md) --
+ *
+ * On a board with colour, full screen shows XO-CHIP's four colours as
+ * colours rather than dithered greys. XO-CHIP has exactly two planes,
+ * which is the 4-colour mode, and z_color_4_below puts plane 1 240 rows
+ * under the viewport -- under each of the two side-by-side pages this
+ * already flips between, so the flip below needs no change at all:
+ *
+ *       (0,0)  page 0 plane 0    (320,0)  page 1 plane 0
+ *     (0,240)  page 0 plane 1  (320,240)  page 1 plane 1
+ *
+ * The renderer goes planar (render.h) and the hardware combines the
+ * planes through the palette. XO-CHIP's colour index is plane 0 in bit
+ * 0 and plane 1 in bit 1, exactly the scanout's, so a ROM's colour n
+ * is palette entry n.
+ *
+ * Windowed play keeps the greys: the desktop is monochrome. */
+static bool game_color;
+
+/* The palette currently loaded, so it is only rewritten when it
+ * changes -- which is when a ROM first selects plane 2 (two_plane is
+ * sticky, see core.h), or never. */
+static uint16_t game_pal[4];
+static bool game_pal_valid;
+
+/* The four colours: Octo's defaults for a two-plane ROM, and black and
+ * white for a one-plane ROM, which should look as it always has.
+ * chip8.cfg's `colors` line overrides either, entry by entry. */
+static void game_colors(uint16_t out[4]) {
+	static const uint16_t octo[4] = { 0x960, 0xfc0, 0xf60, 0x620 };
+	static const uint16_t mono[4] = { 0x000, 0xfff, 0xfff, 0xfff };
+	int i;
+	memcpy(out, vm.two_plane ? octo : mono, sizeof(octo));
+	for (i = 0; i < cfg.ncolors && i < 4; i++)
+		out[i] = cfg.colors[i];
+}
+
 /* Whether the exit key may act yet.
  *
  * Game mode is entered BY a keypress, and it is read as a level from
@@ -430,10 +468,27 @@ static void blit_game(void) {
 	 * ROM switching to hires does not move or resize it -- which
 	 * means the border is drawn once, by enter_game_mode(), and never
 	 * needs redrawing. */
-	z_fb_hw_blit_mem(rnd.buf, rnd.stride, 0, 0, ox, oy, rnd.w, rnd.h);
-
-	z_game_set_view((uint32_t)px, 0);
-	z_game_wait_frame();
+	if (game_color) {
+		const void *planes[2] = { rnd.buf, rnd.buf1 };
+		uint16_t pal[4];
+		z_color_blit_planes(&z_color_4_below, planes, rnd.stride, 0, 0,
+			ox, oy, rnd.w, rnd.h);
+		z_game_set_view((uint32_t)px, 0);
+		z_game_wait_frame();
+		/* After the boundary, so a palette change cannot land half
+		 * way down a frame. It is at most one frame early or late
+		 * against the picture that needs it, which nobody can see. */
+		game_colors(pal);
+		if (!game_pal_valid || memcmp(pal, game_pal, sizeof(pal)) != 0) {
+			z_color_palette_load_now(pal, 4);
+			memcpy(game_pal, pal, sizeof(pal));
+			game_pal_valid = true;
+		}
+	} else {
+		z_fb_hw_blit_mem(rnd.buf, rnd.stride, 0, 0, ox, oy, rnd.w, rnd.h);
+		z_game_set_view((uint32_t)px, 0);
+		z_game_wait_frame();
+	}
 
 	game_back ^= 1;
 
@@ -466,6 +521,15 @@ static void enter_game_mode(void) {
 	z_gfx_blit_scissor_reset();
 	z_fb_hw_fill_rect(0, 0, 640, 480, 0);
 
+	/* Colour before game mode: both are adopted at the same frame
+	 * boundary (docs/color.md), so the first game-mode frame is
+	 * already in colour. The palette is loaded by the first
+	 * blit_game(), after its frame boundary. */
+	game_color = z_color_available();
+	game_pal_valid = false;
+	c8_render_set_planar(&rnd, game_color);
+	if (game_color) z_color_begin(&z_color_4_below);
+
 	z_game_set_enabled(true, false);
 
 	need_full_redraw = true;
@@ -476,8 +540,11 @@ static void leave_game_mode(void) {
 
 	uint32_t wm_pid;
 
+	/* Leaving game mode turns colour off in hardware too. */
 	z_game_set_enabled(false, false);
 	game_mode = false;
+	game_color = false;
+	c8_render_set_planar(&rnd, false);
 	c8_debug_invalidate();
 
 	/* Hand the framebuffer back. Every window is still alive and still

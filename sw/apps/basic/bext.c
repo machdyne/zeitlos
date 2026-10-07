@@ -19,10 +19,34 @@ static int16_t x_cls(ARGS) {
     return 0;
 }
 
+/* COLOR is BASIC 1's: 0 black, 1 white, 2 invert. COLOR 1 is INK 1,
+ * so after INK 5 it means white again, as it says. */
 static int16_t x_color(ARGS) {
     (void)n;
     if (a[0] < 0 || a[0] > 2) *e = BASIC_E_RANGE;
+    else if (a[0] == 1) bs_ink(bp_screen(), 1);
     else bp_screen()->op = a[0];
+    return 0;
+}
+
+/* INK c, PAPER c, PALETTE i, r, g, b: colour (docs/basic_app.md). On a
+ * machine without colour hardware they still work -- the window, and
+ * full screen there, show the colours as greys. */
+static int16_t x_ink(ARGS) {
+    (void)n;
+    if (!bs_ink(bp_screen(), a[0])) *e = BASIC_E_RANGE;
+    return 0;
+}
+
+static int16_t x_paper(ARGS) {
+    (void)n;
+    if (!bs_paper(bp_screen(), a[0])) *e = BASIC_E_RANGE;
+    return 0;
+}
+
+static int16_t x_palette(ARGS) {
+    (void)n;
+    if (!bs_palette(bp_screen(), a[0], a[1], a[2], a[3])) *e = BASIC_E_RANGE;
     return 0;
 }
 
@@ -93,5 +117,11 @@ const basic_ext_t basic_ext[] = {
     { "SCREEN",  0,        1,  1, x_screen },
     { "KEY",     1,        0,  0, x_key },
     { "SYNC",    0,        0,  0, x_sync },
+    /* Appended, never inserted: a program in memory holds an
+     * extension as its index here (TOK_EXT + i), so moving an existing
+     * entry would change what a stored program means. */
+    { "INK",     0,        1,  1, x_ink },
+    { "PAPER",   0,        1,  1, x_paper },
+    { "PALETTE", 0,        4,  4, x_palette },
 };
 const uint8_t basic_ext_count = sizeof(basic_ext) / sizeof(basic_ext[0]);

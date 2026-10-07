@@ -38,6 +38,7 @@
 #include "../../common/zgfx.h"
 #include "../../common/zkbd.h"
 #include "../../common/zfsapp.h"
+#include "../../common/zcolor.h"
 #include "../../common/zport.h"
 #include "../../ext/basic/basic.h"
 
@@ -58,6 +59,8 @@ static bool chrome_known;
 
 static bool full;                   /* full screen (game mode) */
 static int page;                    /* the game-mode page drawn next */
+static bool full_colour;            /* full screen, in hardware colour */
+static uint32_t grey[BS_PLANE_WORDS];   /* bs_mono(): colour in black and white */
 static bool quit;
 static bool stop;                   /* Escape or Ctrl-C while running */
 static bool line_ready;
@@ -83,34 +86,85 @@ bscreen_t *bp_screen(void) {
 
 /* ---- showing the screen ---- */
 
+/* The picture a monochrome display shows: plane 0 itself, or -- once a
+ * program has used colour -- paper black, the rest white (bs_mono()), rows
+ * y0..y1-1 brought up to date. */
+static const uint32_t *mono_rows(int y0, int y1) {
+    if (!scr.colour) return scr.px;
+    bs_mono(&scr, y0, y1, grey);
+    return grey;
+}
+
 static void show_window(bool all) {
     z_clip_t cc;
     int y0 = 0, y1 = BS_H, n;
+    const uint32_t *img;
     if (!all && !bs_dirty(&scr, &y0, &y1)) return;
+    img = mono_rows(y0, y1);
     z_win_content_rect(&win, &cc);
     n = z_gfx_visible_count();
     if (n == 0) n = 1;
     for (int i = 0; i < n; i++) {
         if (!z_gfx_blit_scissor(i, &cc)) continue;
-        z_fb_hw_blit_mem(scr.px, BS_STRIDE, 0, y0, cc.x0, cc.y0 + y0, BS_W, y1 - y0);
+        z_fb_hw_blit_mem(img, BS_STRIDE, 0, y0, cc.x0, cc.y0 + y0, BS_W, y1 - y0);
     }
     z_gfx_blit_scissor_reset();
 }
 
+/* Full screen in colour (docs/color.md): the four planes into the four
+ * quadrants, the viewport at (0,0), through the palette.
+ *
+ * SINGLE-BUFFERED. Sixteen colours use all four quadrants, so there is
+ * no page left to draw into while another is shown. The rows that
+ * changed are copied straight after a frame boundary, which keeps a
+ * small change clear of the picture being scanned; a whole-screen
+ * change can show half drawn for one frame. SYNC still paces a
+ * program to the display.
+ *
+ * Entered the first time a picture with colour is shown full screen --
+ * which may be in the middle of a program, the moment it first says
+ * INK -- so it starts with the whole image. */
+static void show_full_colour(bool all) {
+    int y0 = 0, y1 = BS_H;
+    const void *planes[4] = { scr.px, scr.pl[0], scr.pl[1], scr.pl[2] };
+    if (!full_colour) {
+        z_color_begin(&z_color_16);
+        z_game_set_view(0, 0);
+        full_colour = true;
+        all = true;
+        scr.pal_dirty = true;
+    }
+    if (!all && !bs_dirty(&scr, &y0, &y1)) y1 = y0;
+    z_game_wait_frame();
+    if (scr.pal_dirty) {
+        z_color_palette_load_now(scr.pal, 16);
+        bs_pal_clean(&scr);
+    }
+    z_gfx_blit_scissor_reset();
+    if (y1 > y0)
+        z_color_blit_planes(&z_color_16, planes, BS_STRIDE, 0, y0,
+            0, y0, BS_W, y1 - y0);
+}
+
 /* Full screen: the whole image into the page not on screen, then that
  * page is shown at the next frame boundary. Both pages are drawn in
- * turn, so each gets the whole image. */
-static void show_full(void) {
+ * turn, so each gets the whole image. With colour but no colour
+ * hardware, the image is bs_mono()'s black and white. */
+static void show_full(bool all) {
     int px = page * Z_GAME_VIEW_W;
+    if (scr.colour && z_color_available()) {
+        show_full_colour(all);
+        return;
+    }
     z_gfx_blit_scissor_reset();
-    z_fb_hw_blit_mem(scr.px, BS_STRIDE, 0, 0, px, 0, BS_W, BS_H);
+    z_fb_hw_blit_mem(mono_rows(0, BS_H), BS_STRIDE, 0, 0, px, 0, BS_W, BS_H);
     z_game_set_view((uint32_t)px, 0);
     z_game_wait_frame();
     page ^= 1;
 }
 
 static void show(bool all) {
-    if (full) show_full();
+    if (full) show_full(all);
     else show_window(all);
     bs_clean(&scr);
     last_shown = z_uptime_ticks();
@@ -135,12 +189,14 @@ bool bp_full_screen(bool on) {
         z_fb_hw_fill_rect(0, 0, 640, 480, 0);
         z_game_set_enabled(true, false);        /* and the game grab */
         full = true;
+        full_colour = false;
         page = 0;
         show(true);
         return true;
     }
-    z_game_set_enabled(false, false);
+    z_game_set_enabled(false, false);       /* colour goes off with it */
     full = false;
+    full_colour = false;
     /* every window is where it was, but this app drew over them */
     if (z_pid_lookup("wm0", &wm_pid))
         z_msg_new_send(wm_pid, Z_WM_REPAINT, 0, z_obj_uint32(0));
@@ -274,6 +330,7 @@ static void on_msg(z_msg_t *msg, void *user) {
         break;
     case Z_WM_GAME_REVOKED:                     /* wm took the screen back */
         full = false;
+        full_colour = false;                    /* and colour with it */
         break;
     case Z_WM_CLOSE:
         quit = stop = true;

@@ -54,6 +54,7 @@ defines =
     GPU_BLIT
     GPU_CURSOR
     GPU_DDMI
+    COLOR
     UART0
     USB_CDC
     USB_HOST

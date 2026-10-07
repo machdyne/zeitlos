@@ -138,6 +138,51 @@ itself, evidence that the fabric is full. ULX3S pins `PNR_SEED`
 because a bitstream that misses 48 MHz still programs and then
 misbehaves. These two rows are that pinned seed, and both close.
 
+## Lakritz with game-mode colour
+
+Lakritz builds `COLOR` ([color.md](color.md)) alongside `USB_HOST`,
+`USB_CDC` and `AUDIO_MIXER`, and drops all of the hardware crypto to
+make room: `MONTMUL`, `MONTMUL_REGS` and `SHA256`. The D-cache stays.
+
+Measured, latest oss-cad-suite, default seed:
+
+| | |
+|---|---|
+| TRELLIS_COMB | **98%** |
+| `CLK_48` | 52.82 MHz (48 required) |
+| `clk25_2mhz` | 51.08 MHz (25.20 required) |
+| `clk126mhz` | 315.76 MHz (126.01 required) |
+
+98% is far past the 75% line, so treat any change to this board as
+needing `make timing` again. The pixel clock has the most room. Colour
+moved it from about 62 to 51 MHz, still twice what it needs, which is
+where the colour logic was deliberately put. `CLK_48` keeps 10% of
+margin.
+
+How the budget came out, from synthesis differences (yosys 0.69,
+`synth_ecp5 -abc9`, whole SoC; LUT-equivalents count a carry cell as
+two):
+
+| Change | Approx. LUT-equivalents |
+|---|---|
+| `USB_HOST` instead of `USB_HID` (upstream `290bc49`: 94% to 102%) | +1,800 |
+| `COLOR` | +530 to +660 |
+| `MONTMUL_REGS` + `SHA256` off | about −1,900 |
+| `MONTMUL` off | −900 |
+
+For reference, other trades that were measured and not taken: no
+`DCACHE` about −1,300, no `MPU` about −430, no `SPI_ETH` about −220.
+Halving both caches saves about 75 and two block RAMs.
+
+TLS and SSH work without the crypto blocks, on the software paths,
+computing the same answers more slowly. A networking-first Lakritz
+that does not want colour can swap the defines back in
+`rtl/boards.vh`.
+
+`release/hw/boards/lakritz.spec` matches, including `USB_HOST`, which
+it had still listed as `USB_HID`; `zrelease check` is clean for every
+Lakritz target.
+
 ## ULX3S 85k with the caches and the MPU
 
 The tables above are at 616e152. The ULX3S 85k was measured again with

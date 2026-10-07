@@ -2,7 +2,7 @@
 
 APP = gamedemo
 
-OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zgame.o \
+OBJS = zeitlos.o zobj.o zgfx.o zcolor.o zfont_data.o zwin.o zgame.o \
 	sprites.o level.o music.o gamedemo.o
 
 # zgfx.c references the font tables (z_font_5x8 and friends) whenever

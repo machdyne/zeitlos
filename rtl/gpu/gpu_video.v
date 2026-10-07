@@ -166,7 +166,17 @@ module gpu_video #(
 	// of the desktop is reached. That is a design consequence worth
 	// stating rather than discovering.
 	parameter [2:0] H_DIV_BASE = 3'd1,
-	parameter FIXED_VIEWPORT = 1'b0
+	parameter FIXED_VIEWPORT = 1'b0,
+
+	// -- game-mode colour (docs/color.md) --
+	//
+	// 1 builds the plane fetcher, the plane line buffer (one block
+	// RAM) and the palette. 0 -- the default, so every existing
+	// instantiation and every existing testbench is unchanged -- makes
+	// color_on below a constant 0, and yosys removes the lot: no
+	// extra VRAM reads, no block RAM, no palette, and the output
+	// muxes fold back to exactly the monochrome path.
+	parameter COLOR_AVAIL = 1'b0
 
 ) (
 
@@ -198,6 +208,27 @@ module gpu_video #(
 	input game_wrap,
 	input [9:0] view_x,
 	input [9:0] view_y,
+
+	// -- game-mode colour, from rtl/socctl.v's COLOR register --
+	//
+	// Part of the SAME payload as game_en/view_x/view_y: captured on
+	// the same view_load edge and adopted at the same frame boundary,
+	// so "enter game mode, set the origin, switch colour on" written
+	// as three stores lands as one change on one frame.
+	//
+	// color_np is planes-1 (0..3 = 2, 4, 8, 16 colours). color_off
+	// holds a 2-bit {dy, dx} offset for each of planes 1..3, in that
+	// order from bit 0: dx adds 320 columns, dy adds 240 rows, both
+	// modulo the 640x480 torus. Plane 0 is the viewport itself.
+	input color_en,
+	input [1:0] color_np,
+	input [5:0] color_off,
+
+	// Palette write port, wishbone clock domain (= clk). One-cycle
+	// strobe from socctl; 12-bit RGB444 into entry pal_idx.
+	input pal_we,
+	input [3:0] pal_idx,
+	input [11:0] pal_rgb,
 
 	// -- scanout status, out to rtl/socctl.v's FRAME register --
 	//
@@ -310,7 +341,8 @@ module gpu_video #(
 	// Free in gates -- an XOR and an OR are the same one LUT at the
 	// same depth -- so this costs nothing in the 25.2MHz pixel domain
 	// this line sits in.
-	wire pix = hline[x] ^ pixel;
+	wire p0 = hline[x];
+	wire pix = p0 ^ pixel;
 
 	// is_visible gates the result, and it MUST: in GPU_PAPER the
 	// inactive state is 1, so an ungated invert would drive the VGA
@@ -323,10 +355,98 @@ module gpu_video #(
 	wire pset = is_visible &&
 		((video_mode_active == GPU_MODE_PAPER) ? ~pix : pix);
 
-	assign red   = (video_mode_active == GPU_MODE_GREEN) ? 1'b0 : pset;
-	assign green = pset;
-	assign blue  = (video_mode_active == GPU_MODE_AMBER ||
-	                video_mode_active == GPU_MODE_GREEN) ? 1'b0 : pset;
+	// -- game-mode colour: index, palette, output --
+	//
+	// See docs/color.md for the whole design; the short version is
+	// that the 640x480x1bpp framebuffer is unchanged, and in game mode
+	// up to three more 320x240 regions of it are read as extra
+	// BITPLANES of the same picture. Plane 0 is the viewport, exactly
+	// as in monochrome game mode, and still comes from hline. Planes
+	// 1..3 come from the plane line buffer below, one held 32-bit word
+	// per plane (cur1..cur3), indexed by the same x[4:0] -- which is
+	// valid for every plane because a plane offset of 320 columns is
+	// exactly ten words, so all planes cross word boundaries together.
+	//
+	// COLOUR REPLACES THE PHOSPHOR MODE while it is on. The virtual
+	// phosphor (white/amber/green/paper) is a choice of ONE ink for a
+	// 1bpp picture; with a palette there is no single ink for it to
+	// choose, so it is not consulted at all. It is not changed or
+	// lost either: video_mode_active keeps tracking socctl's VIDEO
+	// register, and the moment colour goes off -- including by
+	// leaving game mode, which turns colour off in socctl -- the
+	// monochrome path below is selected again in whatever phosphor
+	// mode the desktop was in. Monochrome game mode (colour off)
+	// keeps honouring the phosphor exactly as it always has.
+	reg col_active;
+	reg [1:0] np_active;
+	reg [5:0] off_active;
+	reg [31:0] cur1, cur2, cur3;
+
+	// vp_on rather than game_active: on a composite board the
+	// viewport is permanent and game_active is never consulted. Moot
+	// today (rtl/sysctl.v builds COLOR_AVAIL as 0 on composite, so
+	// this is a constant 0 there), but it is the term composite colour
+	// will want, so it is written that way now.
+	wire color_on = (COLOR_AVAIL != 0) && col_active && vp_on;
+
+	// Which planes take part. Unused planes read as 0, so a 4-colour
+	// picture uses palette entries 0..3, an 8-colour one 0..7.
+	wire [3:0] plane_mask = { (np_active == 2'd3), np_active[1],
+		(np_active != 2'd0), 1'b1 };
+
+	// The cursor inverts the ACTIVE planes only, i.e. index ^ (2^n-1):
+	// the same XOR the monochrome path does, generalised. Over entry 0
+	// it shows the highest entry in use, and it can never land on an
+	// entry the game is not using.
+	wire [3:0] cidx = ({ cur3[x[4:0]], cur2[x[4:0]], cur1[x[4:0]], p0 } ^
+		{ pixel, pixel, pixel, pixel }) & plane_mask;
+
+	// 16 x RGB444, in distributed RAM: written in the wishbone domain,
+	// read asynchronously in this one. A write landing mid-frame can
+	// show as one wrong pixel; write the palette in vblank (software
+	// does -- docs/color.md) and it cannot.
+	//
+	// The power-on contents are the EGA/CGA default 16, which makes
+	// the 4-colour mode the familiar black/blue/green/cyan until a
+	// game sets its own. Reset does not reload them (distributed RAM
+	// has no reset); software that cares sets the palette it wants.
+	(* ram_style = "distributed" *)
+	reg [11:0] pal [0:15];
+
+	initial begin
+		pal[0]  = 12'h000;  pal[1]  = 12'h00a;
+		pal[2]  = 12'h0a0;  pal[3]  = 12'h0aa;
+		pal[4]  = 12'ha00;  pal[5]  = 12'ha0a;
+		pal[6]  = 12'ha50;  pal[7]  = 12'haaa;
+		pal[8]  = 12'h555;  pal[9]  = 12'h55f;
+		pal[10] = 12'h5f5;  pal[11] = 12'h5ff;
+		pal[12] = 12'hf55;  pal[13] = 12'hf5f;
+		pal[14] = 12'hff5;  pal[15] = 12'hfff;
+	end
+
+	always @(posedge clk) begin
+		if (pal_we)
+			pal[pal_idx] <= pal_rgb;
+	end
+
+	wire [11:0] rgb = pal[cidx];
+
+	// blanking gated here for the same reason pset gates it above
+	wire [3:0] c_r = is_visible ? rgb[11:8] : 4'd0;
+	wire [3:0] c_g = is_visible ? rgb[7:4]  : 4'd0;
+	wire [3:0] c_b = is_visible ? rgb[3:0]  : 4'd0;
+
+	// VGA has ONE bit per channel on every board that has VGA at all,
+	// so colour there is the top bit of each channel: at most the
+	// eight RGB primaries and secondaries. The EGA default palette
+	// degrades to the obvious eight (its 0xa levels read as on, its
+	// 0x5 levels as off).
+	assign red   = color_on ? c_r[3] :
+		(video_mode_active == GPU_MODE_GREEN) ? 1'b0 : pset;
+	assign green = color_on ? c_g[3] : pset;
+	assign blue  = color_on ? c_b[3] :
+		(video_mode_active == GPU_MODE_AMBER ||
+		 video_mode_active == GPU_MODE_GREEN) ? 1'b0 : pset;
 
 `ifdef GPU_DDMI
 
@@ -346,18 +466,22 @@ module gpu_video #(
 	// GPU_PAPER needs no entry of its own: pset is already inverted
 	// for it above, so the white arms below produce black glyphs on a
 	// 0x80 field, which is precisely the same white, swapped.
-	wire [7:0] ddmi_red =
+	// In colour each 4-bit channel is replicated to 8 bits (0xa ->
+	// 0xaa, 0xf -> 0xff), so the palette spans the full range rather
+	// than the 0x80 ceiling the monochrome inks keep for
+	// compatibility. A game wanting the desktop's white sets 0x888.
+	wire [7:0] ddmi_red = color_on ? { c_r, c_r } :
 		(video_mode_active == GPU_MODE_AMBER) ?
 			{pset, pset, 1'b0, pset, 1'b0, 1'b0, pset, 1'b0} :
 		(video_mode_active == GPU_MODE_GREEN) ? 8'b0 :
 			{pset, 7'b0};
 
-	wire [7:0] ddmi_green =
+	wire [7:0] ddmi_green = color_on ? { c_g, c_g } :
 		(video_mode_active == GPU_MODE_AMBER) ?
 			{pset, 1'b0, 1'b0, pset, pset, pset, 1'b0, pset} :
 			{pset, 7'b0};
 
-	wire [7:0] ddmi_blue =
+	wire [7:0] ddmi_blue = color_on ? { c_b, c_b } :
 		(video_mode_active == GPU_MODE_AMBER ||
 		 video_mode_active == GPU_MODE_GREEN) ? 8'b0 :
 			{pset, 7'b0};
@@ -605,6 +729,12 @@ module gpu_video #(
 	reg game_active, wrap_active;
 	reg [9:0] vx_active, vy_active;
 
+	// colour rides the same capture and the same adoption -- see the
+	// color_en port. *_active are declared with the pixel path above.
+	reg col_cap;
+	reg [1:0] np_cap;
+	reg [5:0] off_cap;
+
 	// The clamp that keeps the viewport on screen, applied once per
 	// frame at adoption rather than continuously. Deliberately NOT in
 	// socctl.v: it depends on the wrap bit, so doing it on the write
@@ -648,12 +778,21 @@ module gpu_video #(
 			wrap_active <= 1'b0;
 			vx_active <= 10'd0;
 			vy_active <= 10'd0;
+			col_cap <= 1'b0;
+			np_cap <= 2'd0;
+			off_cap <= 6'd0;
+			col_active <= 1'b0;
+			np_active <= 2'd0;
+			off_active <= 6'd0;
 		end else begin
 			if (view_edge) begin
 				game_cap <= game_en;
 				wrap_cap <= game_wrap;
 				vx_cap <= view_x;
 				vy_cap <= view_y;
+				col_cap <= color_en;
+				np_cap <= color_np;
+				off_cap <= color_off;
 			end
 			if (hc == h_disp_stop - 1 && vc == v_disp_stop - 1) begin
 				video_mode_active <= video_mode_sync1;
@@ -661,6 +800,9 @@ module gpu_video #(
 				wrap_active <= wrap_cap;
 				vx_active <= vx_adopt;
 				vy_active <= vy_adopt;
+				col_active <= col_cap && (COLOR_AVAIL != 0);
+				np_active <= np_cap;
+				off_active <= off_cap;
 			end
 		end
 	end
@@ -775,6 +917,26 @@ module gpu_video #(
 	wire [9:0] fb_row =
 		(row_sum >= 11'd480) ? (row_sum - 11'd480) : row_sum[9:0];
 
+	// -- colour: the "other half" row, for planes offset by 240 --
+	//
+	// A plane with dy set is read 240 rows further down the torus than
+	// plane 0, i.e. from (fb_row + 240) mod 480. Every plane's row is
+	// therefore one of only two values, fb_row or this one, so only
+	// this one has to be computed and carried across to the fetch.
+	//
+	// It goes across ALREADY MULTIPLIED by 20 (a VRAM word address).
+	// That arithmetic is done here, in the 25.2MHz domain that has the
+	// slack, rather than on the 48MHz side, which does not; the fetch
+	// below only adds a word index to it, exactly as the hline refill
+	// adds one to row_base. It is assigned on the same edge, under the
+	// same condition, as y_refill and refill_toggle, so it crosses with
+	// exactly the margin y_refill's crossing already relies on.
+	wire [10:0] alt_sum = { 1'b0, fb_row } + 11'd240;
+	wire [9:0] fb_alt =
+		(alt_sum >= 11'd480) ? (alt_sum - 11'd480) : alt_sum[9:0];
+	wire [14:0] alt_base_next = ({ 5'd0, fb_alt } << 4) + ({ 5'd0, fb_alt } << 2);
+	reg [14:0] alt_refill;
+
 	// -- horizontal: the loadable pixel index --
 	//
 	// x is the framebuffer COLUMN, and hline[x] selects the bit. See
@@ -830,6 +992,7 @@ module gpu_video #(
 			vblank_toggle <= 0;
 			y <= 0;
 			y_refill <= 0;
+			alt_refill <= 15'd0;
 		end else if (hc == h_disp_stop - 1) begin
 			refill_toggle <= ~refill_toggle;
 			hc <= 0;
@@ -846,6 +1009,7 @@ module gpu_video #(
 				vc <= vc + 1;
 				y <= fb_row;
 				y_refill <= fb_row;
+				alt_refill <= alt_base_next;
 			end
 		end else begin
 			hc <= hc + 1;
@@ -867,16 +1031,200 @@ module gpu_video #(
 	reg [639:0] hline;
 	wire [14:0] row_base = (y_refill_sync1 << 4) + (y_refill_sync1 << 2);   // y*20
 
+	// -- colour: the plane fetch --
+	//
+	// After hline's 20 words, three more rows of 20 -- planes 1, 2
+	// and 3 for the SAME physical line -- go into the plane line
+	// buffer. Same port, same two-cycle latency, same "issue now,
+	// store two edges later" shape as the hline refill directly above
+	// it, and the same timing: fetched in the horizontal blanking
+	// interval of the line before, so nothing ever reads a word that
+	// is being written. 60 words at 48MHz is 1.25us; with the hline
+	// refill and the crossing it is done about 45 pixel clocks into a
+	// 160-clock blanking interval. The read side does not touch the
+	// buffer until 16 clocks before the line starts.
+	//
+	// Every plane is always fetched in full, whatever color_np says:
+	// the VRAM port is dedicated to scanout and otherwise idle in
+	// blanking, so skipping words would buy nothing and cost a
+	// comparison in the one clock domain that has no slack. dx is not
+	// applied here either -- whole rows come in, in natural order, and
+	// the read side picks the word. That keeps this side to a mux and
+	// an adder per word, the same depth as the hline address above.
+	//
+	// The per-plane dy bits cross from the pixel domain on two flops.
+	// They are frame-constant (adopted at the end of the last visible
+	// line), so the only fetch that can sample them changing is the one
+	// for the first blanking line of the next frame, which nothing
+	// displays.
+	//
+	// The buffer itself is 3 x 20 words, addressed { plane-1, word }:
+	// one DP16KD on ECP5, one RAMB18 on 7-series. Written here, in the
+	// wishbone domain; read in the pixel domain below.
+	(* ram_style = "block" *)
+	reg [31:0] pbuf [0:127];
+
+	reg [14:0] alt_sync0, alt_sync1;
+	reg [2:0] dy_sync0, dy_sync1;
+
+	reg pf_run;
+	reg [1:0] pf_k;
+	reg [4:0] pf_w;
+	reg [14:0] pf_b0, pf_b1, pf_b2;
+	reg pf_v1, pf_v2;
+	reg [6:0] pf_a1, pf_a2;
+
+	wire [14:0] pf_base = (pf_k == 2'd0) ? pf_b0 :
+		(pf_k == 2'd1) ? pf_b1 : pf_b2;
+	wire pf_issue = (COLOR_AVAIL != 0) && pf_run && !refill &&
+		(refill_words == 6'd0);
+
+	always @(posedge clk) begin
+		alt_sync0 <= alt_refill;
+		alt_sync1 <= alt_sync0;
+		dy_sync0 <= { off_active[5], off_active[3], off_active[1] };
+		dy_sync1 <= dy_sync0;
+	end
+
 	always @(posedge clk) begin
 		if (refill) begin
 			refill_words <= 21;
 			gb_adr_o <= row_base + 19;
+			pf_run <= 1'b0;
 		end else if (refill_words > 0) begin
 			if (refill_words != 21)
 				hline <= { hline, gb_dat_i };
 			if (refill_words > 2)
 				gb_adr_o <= row_base + (refill_words - 3);
 			refill_words <= refill_words - 1;
+			// hline done: latch the three plane row bases and start.
+			// Latched rather than recomputed per word so the issue
+			// path below is register -> 3:1 mux -> adder.
+			if (refill_words == 6'd1 && COLOR_AVAIL != 0) begin
+				pf_run <= 1'b1;
+				pf_k <= 2'd0;
+				pf_w <= 5'd0;
+				pf_b0 <= dy_sync1[0] ? alt_sync1 : row_base;
+				pf_b1 <= dy_sync1[1] ? alt_sync1 : row_base;
+				pf_b2 <= dy_sync1[2] ? alt_sync1 : row_base;
+			end
+		end else if (pf_issue) begin
+			gb_adr_o <= pf_base + { 10'd0, pf_w };
+			if (pf_w == 5'd19) begin
+				pf_w <= 5'd0;
+				if (pf_k == 2'd2)
+					pf_run <= 1'b0;
+				else
+					pf_k <= pf_k + 2'd1;
+			end else begin
+				pf_w <= pf_w + 5'd1;
+			end
+		end
+
+		// store pipeline: the word addressed on this edge arrives on
+		// gb_dat_i two edges later, as for hline
+		pf_v1 <= pf_issue;
+		pf_a1 <= { pf_k, pf_w };
+		pf_v2 <= pf_v1;
+		pf_a2 <= pf_a1;
+
+		if (!resetn) begin
+			pf_run <= 1'b0;
+			pf_v1 <= 1'b0;
+			pf_v2 <= 1'b0;
+		end
+	end
+
+	always @(posedge clk) begin
+		if (pf_v2)
+			pbuf[pf_a2] <= gb_dat_i;
+	end
+
+	// -- colour: the plane read side, pixel domain --
+	//
+	// cur1..cur3 hold the word each plane is showing; nxt1..nxt3 the
+	// word after it. At a word crossing (the edge on which x moves
+	// from bit 31 of a word to bit 0 of the next) cur takes nxt, and a
+	// short pass refills nxt from the buffer. A pass is three reads,
+	// one per plane, through a registered read port, so it takes six
+	// clocks; the next crossing is at least 64 clocks away in game
+	// mode (32 source pixels, each doubled) and 32 in desktop mode,
+	// where none of this is displayed anyway.
+	//
+	// The line start is a preload: at 16 clocks before the first
+	// visible pixel -- long after the fetch above has finished --
+	// one pass loads the viewport's first word into nxt, nxt moves to
+	// cur, and a second pass loads the word after it. x already holds
+	// the viewport origin at that point (it is loaded throughout
+	// blanking), so the origin needs no separate path, and a non-word-
+	// aligned origin is just a different x[4:0] into cur.
+	//
+	// Word arithmetic is modulo 20 throughout -- the framebuffer row
+	// is a 20-word torus -- and a plane with dx set reads word
+	// (w + 10) mod 20 where plane 0 reads w, which is the 320-column
+	// offset. In clamp mode the "next" word after the last visible one
+	// is never shown, so the wrap there is harmless rather than wrong.
+	reg [31:0] nxt1, nxt2, nxt3;
+	reg [31:0] pq;
+	reg [6:0] pra;
+	reg [2:0] ps;
+	reg [4:0] pw;
+	reg pre;
+
+	wire [4:0] xw = x[9:5];
+	wire [5:0] xw2_sum = { 1'b0, xw } + 6'd2;
+	wire [4:0] xw2 = (xw2_sum >= 6'd20) ? (xw2_sum[4:0] - 5'd20) : xw2_sum[4:0];
+	wire [5:0] pw1_sum = { 1'b0, pw } + 6'd1;
+	wire [4:0] pw1 = (pw1_sum >= 6'd20) ? (pw1_sum[4:0] - 5'd20) : pw1_sum[4:0];
+	wire [4:0] pw_dx = (pw >= 5'd10) ? (pw - 5'd10) : (pw + 5'd10);
+	wire [4:0] pw_k0 = off_active[0] ? pw_dx : pw;
+	wire [4:0] pw_k1 = off_active[2] ? pw_dx : pw;
+	wire [4:0] pw_k2 = off_active[4] ? pw_dx : pw;
+
+	wire x_cross = (hc >= h_disp_start) && x_step && (x[4:0] == 5'd31);
+	wire pre_go = (hc == h_disp_start - 11'd16);
+
+	always @(posedge pclk) begin
+		pq <= pbuf[pra];
+
+		if (!resetn) begin
+			ps <= 3'd0;
+			pre <= 1'b0;
+			pw <= 5'd0;
+			pra <= 7'd0;
+		end else if (COLOR_AVAIL != 0) begin
+			if (pre_go) begin
+				ps <= 3'd1;
+				pw <= xw;
+				pre <= 1'b1;
+			end else if (x_cross) begin
+				cur1 <= nxt1;
+				cur2 <= nxt2;
+				cur3 <= nxt3;
+				ps <= 3'd1;
+				pw <= xw2;
+			end else begin
+				case (ps)
+					3'd1: begin pra <= { 2'd0, pw_k0 }; ps <= 3'd2; end
+					3'd2: begin pra <= { 2'd1, pw_k1 }; ps <= 3'd3; end
+					3'd3: begin pra <= { 2'd2, pw_k2 }; nxt1 <= pq; ps <= 3'd4; end
+					3'd4: begin nxt2 <= pq; ps <= 3'd5; end
+					3'd5: begin nxt3 <= pq; ps <= 3'd6; end
+					3'd6: begin
+						if (pre) begin
+							cur1 <= nxt1;
+							cur2 <= nxt2;
+							cur3 <= nxt3;
+							pw <= pw1;
+							pre <= 1'b0;
+							ps <= 3'd1;
+						end else begin
+							ps <= 3'd0;
+						end
+					end
+					default: ps <= 3'd0;
+				endcase
+			end
 		end
 	end
 

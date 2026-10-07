@@ -24,7 +24,7 @@ APP_MAIN_RULE = 0
 #   zdialog.c owned it privately until sw/apps/web's URL bar became its
 #   second caller. Every app that links the dialog needs this too: a
 #   shared widget is only shared if the build says so.
-OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o \
+OBJS = zeitlos.o zobj.o zgfx.o zcolor.o zfont_data.o zwin.o zwidget.o zspeak.o \
 	zfsapp.o zflist.o zdialog.o zedit.o \
 	core.o quirks.o render.o sound.o config.o disasm.o debug.o chip8.o
 

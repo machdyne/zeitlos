@@ -34,6 +34,7 @@
 								// (current-date) below
 #include "../../common/zrng.h"	// the system CSPRNG -- see (random) below
 #include "../../common/zpad.h"	// gamepads -- see (gamepad ...) below
+#include "../../common/zcolor.h"	// game-mode colour -- see (color-mode ...)
 #include "../../common/zuart.h"	// UART1 -- see (uart1-* ...) below
 #include "../../common/zi2c.h"	// bit-bang I2C -- see (i2c-* ...) below
 #include "../../common/zspi.h"	// bit-bang SPI -- see (spi-* ...) below
@@ -1615,6 +1616,158 @@ static ms_val *zapi_game_view(ms_val *args) {
 
 }
 
+// -- Game-mode colour (docs/color.md) --
+
+// The layout (color-fill) draws through: the one this file last set,
+// or -- if colour was turned on by something else -- read back from
+// the hardware.
+static z_color_layout_t zapi_color_layout(void) {
+	z_color_layout_t l;
+	l.planes = (uint8_t)z_color_planes();
+	l.offsets = (uint8_t)z_color_offsets();
+	return l;
+}
+
+// (color-mode)            -- #f if colour is off, else the number of
+//                            colours: 2, 4, 8 or 16
+// (color-mode 16)         -- set it: 0 or #f is off, 2/4/8/16 on
+// (color-mode 4 "right")  -- a 4-colour layout by name: "below" (the
+//                            default: plane 1 under the viewport) or
+//                            "right" (plane 1 beside it)
+//
+// Same shape as (game-mode): the state actually in effect is
+// returned, read back from the hardware. Colour only shows in game
+// mode, and leaving game mode turns it off -- so (game-mode "on")
+// first, and again after Super+Esc. The 16- and 8-colour layouts use
+// the quadrants, so the viewport belongs at (0 0): (game-view 0 0).
+static ms_val *zapi_color_mode(ms_val *args) {
+
+	if (!ms_is_nil(args)) {
+
+		ms_val *a = ms_car(args);
+		int n;
+		const z_color_layout_t *l;
+
+		if (!z_color_available())
+			ms_log(MS_PANIC, "color-mode: this bitstream has no colour "
+				"(see docs/color.md)");
+
+		if (a == ms_mk_bool(false)) n = 0;
+		else if (ms_is_num(a)) n = (int)ms_num_val(a);
+		else {
+			ms_log(MS_PANIC, "color-mode: expected #f or 0, 2, 4, 8, 16");
+			return ms_mk_bool(false);	// not reached
+		}
+
+		if (n == 0) l = NULL;
+		else if (n == 2) l = &z_color_mono;
+		else if (n == 8) l = &z_color_8;
+		else if (n == 16) l = &z_color_16;
+		else if (n == 4) {
+			l = &z_color_4_below;
+			if (!ms_is_nil(ms_cdr(args))) {
+				ms_val *b = ms_car(ms_cdr(args));
+				const char *s = ms_is_str(b) ? ms_str_val(b) : "";
+				if (strcmp(s, "right") == 0) l = &z_color_4_right;
+				else if (strcmp(s, "below") != 0)
+					ms_log(MS_PANIC, "color-mode: unknown layout "
+						"(want \"below\" or \"right\")");
+			}
+		}
+		else {
+			ms_log(MS_PANIC, "color-mode: want 0, 2, 4, 8 or 16 colours");
+			return ms_mk_bool(false);	// not reached
+		}
+
+		if (l) z_color_begin(l);
+		else z_color_end();
+
+	}
+
+	if (!z_color_enabled()) return ms_mk_bool(false);
+	return ms_mk_num((double)(1u << z_color_planes()));
+
+}
+
+// (palette i r g b)  -- palette entry i (0-15), each channel 0-15
+// (palette "c64")    -- a whole palette: "c64" or "ega" (the power-on
+//                       colours)
+//
+// Takes effect immediately, so a change can show half-way down one
+// frame. #t.
+static ms_val *zapi_palette(ms_val *args) {
+
+	ms_val *a;
+
+	if (!z_color_available())
+		ms_log(MS_PANIC, "palette: this bitstream has no colour "
+			"(see docs/color.md)");
+
+	if (ms_is_nil(args))
+		ms_log(MS_PANIC, "palette: expected (palette i r g b) or "
+			"(palette \"c64\")");
+
+	a = ms_car(args);
+
+	if (ms_is_str(a)) {
+		const char *s = ms_str_val(a);
+		if (strcmp(s, "c64") == 0)
+			z_color_palette_load_now(z_color_palette_c64, 16);
+		else if (strcmp(s, "ega") == 0)
+			z_color_palette_load_now(z_color_palette_ega, 16);
+		else
+			ms_log(MS_PANIC, "palette: unknown palette '%s' "
+				"(want c64 or ega)", s);
+		return ms_mk_bool(true);
+	}
+
+	{
+		double v[4];
+		int i;
+		for (i = 0; i < 4; i++) {
+			if (ms_is_nil(args) || !ms_is_num(ms_car(args)))
+				ms_log(MS_PANIC, "palette: expected four numbers (i r g b)");
+			v[i] = ms_num_val(ms_car(args));
+			if (v[i] < 0 || v[i] > 15)
+				ms_log(MS_PANIC, "palette: each value is 0-15");
+			args = ms_cdr(args);
+		}
+		z_color_set_palette((uint32_t)v[0],
+			((uint32_t)v[1] << 8) | ((uint32_t)v[2] << 4) | (uint32_t)v[3]);
+	}
+
+	return ms_mk_bool(true);
+
+}
+
+// (color-fill x y w h c) -- a rectangle in colour c (0-15), in
+// framebuffer coordinates of plane 0 (the viewport's), through the
+// current layout: every plane set or cleared to match c. #t.
+static ms_val *zapi_color_fill(ms_val *args) {
+
+	double v[5];
+	int i;
+	z_color_layout_t l;
+
+	for (i = 0; i < 5; i++) {
+		if (ms_is_nil(args) || !ms_is_num(ms_car(args)))
+			ms_log(MS_PANIC, "color-fill: expected (color-fill x y w h c)");
+		v[i] = ms_num_val(ms_car(args));
+		args = ms_cdr(args);
+	}
+	if (v[2] < 1 || v[2] > 640 || v[3] < 1 || v[3] > 480)
+		ms_log(MS_PANIC, "color-fill: size out of range");
+	if (v[4] < 0 || v[4] > 15)
+		ms_log(MS_PANIC, "color-fill: colour is 0-15");
+
+	l = zapi_color_layout();
+	z_color_fill_rect(&l, (int)v[0], (int)v[1], (int)v[2], (int)v[3],
+		(int)v[4]);
+
+	return ms_mk_bool(true);
+
+}
+
 // (game-frame) -- the display's own frame counter, 0..65535.
 //
 // Wraps every ~18 minutes at 60Hz. Compare for inequality or subtract;
@@ -2850,6 +3003,9 @@ void zapi_register(void) {
 	ms_def_builtin("game-view", zapi_game_view);
 	ms_def_builtin("game-frame", zapi_game_frame);
 	ms_def_builtin("game-wait", zapi_game_wait);
+	ms_def_builtin("color-mode", zapi_color_mode);
+	ms_def_builtin("palette", zapi_palette);
+	ms_def_builtin("color-fill", zapi_color_fill);
 	ms_def_builtin("gamepad", zapi_gamepad);
 	ms_def_builtin("gamepad-count", zapi_gamepad_count);
 	ms_def_builtin("random", zapi_random);

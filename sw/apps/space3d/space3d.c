@@ -78,6 +78,7 @@
 #include "../../common/zwin.h"
 #include "../../common/zfont.h"
 #include "../../common/zgfx.h"
+#include "../../common/zcolor.h"
 #include "../../common/zkbd.h"
 
 // ===========================================================================
@@ -479,6 +480,7 @@ static int      flash_timer;   // >0 while the crash strobe is running
 // (to be erased) and one being built for this frame.
 typedef struct {
 	int16_t x0, y0, x1, y1;
+	uint8_t c;      // colour (game-mode colour); 1 for everything otherwise
 } line_t;
 
 static line_t line_buf[2][MAX_LINES];
@@ -486,6 +488,175 @@ static int    line_count[2];
 static int    cur_buf;
 
 static bool overflowed;   // display list filled up; reported once
+
+// ===========================================================================
+// COLOUR (game mode: docs/space3d_app.md, docs/color.md)
+// ===========================================================================
+//
+// Full screen on a board with game-mode colour is sixteen colours, laid
+// out the way the Amiga called DUAL PLAYFIELD:
+//
+//   planes 0-2   the wireframe: seven line colours (1-7), drawn and
+//                erased by the rasterizer exactly as before, one
+//                plane at a time
+//   plane 3      a nebula, drawn ONCE when full screen starts and
+//                never touched again
+//
+// The erase pass clears planes 0-2 only, so the nebula is never
+// damaged by a line passing over it and never has to be repaired --
+// which is the whole trick, and why this needs no back buffer: the
+// game was already single-buffered with an incremental display list,
+// and that keeps working unchanged. Palette entries 8-15 are what a
+// pixel looks like over the nebula: 8 is the nebula itself, 9-15 the
+// line colours again, so a line in front of the nebula looks the same
+// as one in front of empty space.
+//
+// z_color_16, viewport at (0,0): plane 0 is the top-left quadrant,
+// plane 1 top-right, plane 2 bottom-left, plane 3 bottom-right.
+//
+// Then the palette does the rest, for sixteen register writes a frame
+// and no drawing at all:
+//
+//   far stars    two entries whose brightness cycles out of phase, so
+//                half the starfield twinkles against the other half
+//   fire         missiles and explosions share an entry that flickers
+//                through yellows and oranges every frame
+//   the nebula   drifts slowly through purples and blues
+//   a crash      the strobe is fire-coloured, and the nebula flares
+//
+// Draw cost: an erased line clears three planes; a drawn line sets only
+// the planes its colour has bits in (one to three). Where two lines of
+// different colours cross, the shared pixel takes both colours' bits --
+// a mixed point at a crossing, invisible in motion. C switches colour
+// on and off in full screen, for comparison.
+
+#define C_WHITE   1     // near stars and their streaks; the score text
+#define C_HUD     2     // reticle and brackets, and UFOs
+#define C_TWINK_A 3     // far stars, twinkling
+#define C_TWINK_B 4     // far stars, twinkling out of phase
+#define C_ROCK    5     // asteroids
+#define C_GALAXY  6     // galaxies
+#define C_FIRE    7     // missiles and explosions
+
+// Stars farther than this twinkle; nearer ones are steady white.
+#define TWINKLE_Z 2600
+
+static bool    col_on;                  // full screen, in colour
+static uint8_t cur_color = C_WHITE;     // colour of lines being emitted
+static int32_t col_ox[4], col_oy[4];    // where each plane's (0,0) is
+static uint32_t col_anim;               // frames, for the palette
+
+static const uint16_t twinkle[6] = { 0x334, 0x557, 0x99b, 0xccf, 0x99b, 0x557 };
+static const uint16_t fire[6]    = { 0xff8, 0xfd4, 0xfa2, 0xf73, 0xfa2, 0xfd4 };
+static const uint16_t nebula[8]  = { 0x315, 0x316, 0x326, 0x226,
+                                     0x236, 0x226, 0x326, 0x316 };
+
+static void col_palette(void) {
+	uint16_t p[16];
+	int k;
+	p[0]         = 0x000;
+	p[C_WHITE]   = 0xfff;
+	p[C_HUD]     = 0x2e6;
+	p[C_TWINK_A] = twinkle[(col_anim / 5) % 6];
+	p[C_TWINK_B] = twinkle[(col_anim / 5 + 3) % 6];
+	p[C_ROCK]    = 0xd93;
+	p[C_GALAXY]  = ((col_anim >> 5) & 1) ? 0xb6f : 0xc7f;
+	p[C_FIRE]    = fire[col_anim % 6];
+	// over the nebula: the nebula itself, then the line colours again
+	p[8] = flash_timer > 0 ? ((flash_timer & 1) ? 0x934 : 0x512)
+	                       : nebula[(col_anim / 40) % 8];
+	for (k = 1; k < 8; k++) p[8 + k] = p[k];
+	z_color_palette_load_now(p, 16);
+}
+
+// One line in colour, or erased (color 0). See the block comment for
+// why erasing clears three planes and drawing sets only some.
+static void col_line(int32_t x0, int32_t y0, int32_t x1, int32_t y1,
+	int color) {
+	int k;
+	for (k = 0; k < 3; k++) {
+		if (color && !((color >> k) & 1)) continue;
+		z_fb_hw_line(x0 + col_ox[k], y0 + col_oy[k],
+			x1 + col_ox[k], y1 + col_oy[k], color ? 1 : 0, NULL);
+	}
+}
+
+// -- the nebula: plane 3, made once --
+//
+// A few soft blobs summed into a density field, thresholded through a
+// 4x4 ordered dither, so its edges feather out into specks rather than
+// stopping at a line. Built into a 320x240 bitmap in memory and blitted
+// into plane 3's quadrant in one operation.
+#define NEB_STRIDE 44                   // 10 words + 1 the blitter may read
+static uint32_t neb_bits[240 * (NEB_STRIDE / 4) + 1];
+
+static const uint8_t neb_bayer[4][4] = {
+	{  0,  8,  2, 10 }, { 12,  4, 14,  6 }, {  3, 11,  1,  9 }, { 15,  7, 13,  5 }
+};
+
+static void build_nebula(void) {
+	// centre x, centre y, radius: two clouds and some wisps, kept
+	// clear of the middle so the reticle sits on dark space
+	static const int16_t blobs[][3] = {
+		{  60,  60, 70 }, { 105,  40, 45 }, {  30, 110, 40 },
+		{ 255, 185, 80 }, { 290, 140, 45 }, { 215, 215, 50 },
+		{ 280,  35, 25 }, {  45, 205, 22 }
+	};
+	int x, y, i, n = (int)(sizeof(blobs) / sizeof(blobs[0]));
+	memset(neb_bits, 0, sizeof(neb_bits));
+	for (y = 0; y < 240; y++)
+		for (x = 0; x < 320; x++) {
+			int32_t d = 0;
+			for (i = 0; i < n; i++) {
+				int32_t dx = x - blobs[i][0], dy = y - blobs[i][1];
+				int32_t r2 = (int32_t)blobs[i][2] * blobs[i][2];
+				int32_t q = dx * dx + dy * dy;
+				if (q < r2) d += (r2 - q) * 16 / r2;     // 0..16 per blob
+			}
+			// a little hash noise breaks up the dither's regularity
+			{
+				uint32_t h = ((uint32_t)x * 73856093u) ^ ((uint32_t)y * 19349663u);
+				d += (int32_t)((h >> 13) & 3) - 1;
+			}
+			// at most 10/16 lit even at the densest point: a nebula
+			// is a haze with stars behind it, not a solid shape
+			if (d > 16) d = 16;
+			if (d * 10 / 16 > neb_bayer[y & 3][x & 3])
+				neb_bits[y * (NEB_STRIDE / 4) + (x >> 5)] |= 1u << (x & 31);
+		}
+}
+
+static void draw_nebula(void) {
+	z_color_plane_blit(&z_color_16, 3, neb_bits, NEB_STRIDE, 0, 0,
+		0, 0, 320, 240, Z_ROP_COPY);
+}
+
+// Colour on or off, in full screen. Either way the screen is cleared
+// and the erase list dropped: the other mode's pixels mean something
+// else here.
+static void col_set(bool on) {
+	static bool built;
+	int k;
+	z_fb_hw_sync();
+	z_fb_hw_fill_rect(0, 0, 640, 480, 0);
+	line_count[cur_buf ^ 1] = 0;
+	if (on && z_color_available()) {
+		for (k = 0; k < 4; k++) {
+			int px, py;
+			z_color_plane_xy(&z_color_16, k, 0, 0, &px, &py);
+			col_ox[k] = px;
+			col_oy[k] = py;
+		}
+		if (!built) { build_nebula(); built = true; }
+		z_color_begin(&z_color_16);
+		draw_nebula();
+		col_palette();
+		col_on = true;
+	} else {
+		if (col_on) z_color_end();
+		col_on = false;
+	}
+}
 
 // ===========================================================================
 // GEOMETRY: CLIP AND EMIT
@@ -512,6 +683,7 @@ static void push_line(int32_t x0, int32_t y0, int32_t x1, int32_t y1) {
 	line_buf[cur_buf][n].y0 = (int16_t)y0;
 	line_buf[cur_buf][n].x1 = (int16_t)x1;
 	line_buf[cur_buf][n].y1 = (int16_t)y1;
+	line_buf[cur_buf][n].c = cur_color;
 	line_count[cur_buf] = n + 1;
 }
 
@@ -760,6 +932,7 @@ static void draw_galaxy(const galaxy_t *g) {
 
 static void build_galaxies(void) {
 	int i;
+	cur_color = C_GALAXY;
 	for (i = 0; i < MAX_GALAXIES; i++)
 		if (galaxies[i].active) draw_galaxy(&galaxies[i]);
 }
@@ -777,6 +950,11 @@ static void build_stars(void) {
 
 		sx = project_x(star_x[i], z);
 		sy = project_y(star_y[i], z);
+
+		// far stars twinkle, in two groups out of phase; near ones
+		// are steady white
+		cur_color = z > TWINKLE_Z ? ((i & 1) ? C_TWINK_B : C_TWINK_A)
+		                          : C_WHITE;
 
 		if (z < STREAK_Z) {
 			// Streak back toward where the star was a moment ago,
@@ -802,6 +980,7 @@ static void build_objects(void) {
 	for (i = 0; i < MAX_OBJECTS; i++) {
 		object_t *o = &objects[i];
 		if (!o->active) continue;
+		cur_color = o->is_ufo ? C_HUD : C_ROCK;
 		draw_model(&models[o->model], o->x, o->y, o->z,
 		           o->radius, o->rx, o->ry);
 	}
@@ -810,6 +989,8 @@ static void build_objects(void) {
 static void build_missiles(void) {
 
 	int i;
+
+	cur_color = C_FIRE;
 
 	for (i = 0; i < MAX_MISSILES; i++) {
 
@@ -853,6 +1034,8 @@ static void build_explosions(void) {
 
 	int i, j;
 
+	cur_color = C_FIRE;
+
 	for (i = 0; i < MAX_EXPLOSIONS; i++) {
 
 		explosion_t *e = &explosions[i];
@@ -890,6 +1073,8 @@ static void build_hud(void) {
 	int32_t cx = view_cx, cy = view_cy;
 	int32_t bx0 = clip_x0, by0 = clip_y0, bx1 = clip_x1, by1 = clip_y1;
 	const int32_t B = 14;   // corner bracket arm length
+
+	cur_color = C_HUD;
 
 	// centre reticle: four ticks with a gap in the middle, so the
 	// thing you're aiming at stays visible
@@ -962,8 +1147,9 @@ static void build_hud(void) {
 static void draw_line(int32_t x0, int32_t y0, int32_t x1, int32_t y1,
 	int color) {
 
-	if (game_mode) z_fb_hw_line(x0, y0, x1, y1, color, NULL);
-	else z_win_hw_line(&win, x0, y0, x1, y1, color);
+	if (game_mode && col_on) col_line(x0, y0, x1, y1, color);
+	else if (game_mode) z_fb_hw_line(x0, y0, x1, y1, color ? 1 : 0, NULL);
+	else z_win_hw_line(&win, x0, y0, x1, y1, color ? 1 : 0);
 }
 
 static void blit_frame(void) {
@@ -978,7 +1164,7 @@ static void blit_frame(void) {
 		if (i < n_new) {
 			line_t *n = &line_buf[cur_buf][i];
 			if (o->x0 == n->x0 && o->y0 == n->y0 &&
-			    o->x1 == n->x1 && o->y1 == n->y1)
+			    o->x1 == n->x1 && o->y1 == n->y1 && o->c == n->c)
 				continue;          // unchanged: leave it lit
 		}
 		draw_line(o->x0, o->y0, o->x1, o->y1, 0);
@@ -986,7 +1172,7 @@ static void blit_frame(void) {
 
 	for (i = 0; i < n_new; i++) {
 		line_t *l = &line_buf[cur_buf][i];
-		draw_line(l->x0, l->y0, l->x1, l->y1, 1);
+		draw_line(l->x0, l->y0, l->x1, l->y1, l->c);
 	}
 
 	line_count[prev] = 0;
@@ -1031,8 +1217,17 @@ static void draw_hud_text(void) {
 static void reset_game(void);
 
 static void fill_content(int color) {
+	int k;
+	// In colour, planes 0-2 only: plane 3 is the nebula, which nothing
+	// clears (see the colour block above).
+	if (game_mode && col_on) {
+		for (k = 0; k < 3; k++)
+			z_color_plane_fill(&z_color_16, k, clip_x0, clip_y0,
+				clip_x1 - clip_x0 + 1, clip_y1 - clip_y0 + 1, (color >> k) & 1);
+		return;
+	}
 	z_fb_hw_fill_rect(clip_x0, clip_y0,
-	                  clip_x1 - clip_x0 + 1, clip_y1 - clip_y0 + 1, color);
+	                  clip_x1 - clip_x0 + 1, clip_y1 - clip_y0 + 1, color ? 1 : 0);
 }
 
 // One frame of the crash strobe. Alternates filled and cleared, and
@@ -1048,7 +1243,7 @@ static void run_flash_frame(void) {
 	// Starts on white: FLASH_FRAMES is even, so testing the low bit
 	// the other way round would open the strobe on a black frame,
 	// which is indistinguishable from the game simply stopping.
-	fill_content((flash_timer & 1) ? 0 : 1);
+	fill_content((flash_timer & 1) ? 0 : C_FIRE);
 
 	line_count[0] = 0;
 	line_count[1] = 0;
@@ -1062,6 +1257,11 @@ static void run_flash_frame(void) {
 static void render(void) {
 
 	line_count[cur_buf] = 0;
+
+	if (game_mode && col_on) {
+		col_anim++;
+		col_palette();
+	}
 
 	// Ordered most-static first, so blit_frame()'s index-wise
 	// comparison lines up as often as possible. The HUD leads because
@@ -1644,6 +1844,9 @@ static void enter_game_mode(void) {
 	z_game_set_view(0, 0);
 
 	geometry_changed();
+
+	// Sixteen colours where the board has them; see the colour block.
+	col_set(true);
 }
 
 static void leave_game_mode(void) {
@@ -1651,9 +1854,10 @@ static void leave_game_mode(void) {
 	// Releases the grab as well as the register, and wm repaints the
 	// desktop on the release -- so unlike the older apps there is no
 	// Z_WM_REPAINT to send by hand here.
-	z_game_set_enabled(false, false);
+	z_game_set_enabled(false, false);       // colour goes off with it
 
 	game_mode = false;
+	col_on = false;
 	geometry_changed();
 }
 
@@ -1665,6 +1869,12 @@ static void handle_key(uint32_t packed) {
 	if (game_mode && keysym == 0x1b) {
 		if (!pressed) exit_armed = true;
 		else if (exit_armed) leave_game_mode();
+		return;
+	}
+
+	// C: colour on or off in full screen, for comparison
+	if (game_mode && (keysym == 'c' || keysym == 'C')) {
+		if (pressed && z_color_available()) col_set(!col_on);
 		return;
 	}
 

@@ -56,6 +56,13 @@ own note). `socctl` was already decoded and already wired to
 | `0x7000_020c` | GAME | W: bit0 enable, bit1 wrap. R: `{ 0x5A47, 13'b0, avail, wrap, en }` |
 | `0x7000_0210` | VIEW | bits 9:0 = x, bits 25:16 = y, in framebuffer pixels |
 | `0x7000_0214` | FRAME | R/O: `{ 15'b0, vblank, frame[15:0] }` |
+| `0x7000_0224` | COLOR | colour on/off, plane count and plane offsets -- see [color.md](color.md) |
+| `0x7000_0234` | PALETTE | W/O: one palette entry -- see [color.md](color.md) |
+
+COLOR is part of the same payload as GAME and VIEW: all three are
+adopted together at one frame boundary. Writing GAME with bit 0 clear
+also clears COLOR's enable, so leaving game mode always means leaving
+colour.
 
 `0x5A47` ("ZG") is a presence signature, for the same reason the VIDEO
 register has one: `socctl` shipped before these registers existed, and
@@ -132,6 +139,20 @@ kernel involvement, and a full-screen game's main loop is already a
 loop. The counter wraps every ~18 minutes at 60Hz, so compare for
 inequality or unsigned-subtract for elapsed frames; do not test with
 `>`.
+
+## Colour
+
+On boards built with `COLOR`, game mode can read up to three more
+320x240 regions of the framebuffer as extra bitplanes of the viewport,
+through a 16-entry palette: 4, 8 or 16 colours, still from the
+unchanged 640x480x1bpp surface and still with no changes to the
+rasterizer or the blitter. The spare pages this section and the next
+describe are what the extra planes are made of, so colour trades
+directly against back buffers and sprite storage. See
+[color.md](color.md).
+
+While colour is on, the virtual phosphor (VIDEO) is not consulted;
+monochrome game mode honours it exactly as before.
 
 ## Sprites
 

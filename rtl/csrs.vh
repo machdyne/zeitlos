@@ -309,6 +309,15 @@ localparam CSR_FEATURES2 =
 `ifdef MEM_VRAM
 	(32'h1 << 14) |
 `endif
+// Game-mode colour: rtl/socctl.v's COLOR and PALETTE registers and the
+// bitplane path in rtl/gpu/gpu_video.v (docs/color.md). Mirrors
+// `COLOR in rtl/boards.vh. Like the GAME bit, it says the define was
+// set, not that colour is usable: rtl/sysctl.v also requires game mode
+// and a non-composite output, and the AVAIL bit in COLOR is the
+// answer that accounts for both. Software asks z_color_available().
+`ifdef COLOR
+	(32'h1 << 15) |
+`endif
 // rtl/usb/usb_host.v -- the USB host controller. See docs/usb_host.md.
 //
 // Set when the block is BUILT. NOT a replacement for CSR_FEATURES bit

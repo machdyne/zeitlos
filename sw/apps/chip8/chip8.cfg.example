@@ -34,6 +34,10 @@ name Super Neat Boy
 profile xochip
 speed 200
 palette fill
+# On a board with game-mode colour, full screen shows the four colours
+# as colours: background, fill, fill 2, blend, in Octo's order, as hex
+# without '#' (which starts a comment). These are Octo's defaults.
+colors 996600 FFCC00 FF6600 662200
 
 # An ordinary CHIP-8 game that happens to want the CHIP-48 shift
 # behaviour. Everything not named keeps the profile's own value.

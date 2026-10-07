@@ -8,6 +8,6 @@ APP = space3d
 # an ISA the configured PicoRV32 doesn't have. See docs/user_input.md,
 # "Debugging notes".
 
-OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o space3d.o
+OBJS = zeitlos.o zobj.o zgfx.o zcolor.o zfont_data.o zwin.o space3d.o
 
 include ../../common/app.mk

@@ -65,6 +65,7 @@ defines =
     GPU_CURSOR
     GPU_VGA
     GPU_DDMI
+    COLOR
     UART0
     USB_CDC
     USB_HOST

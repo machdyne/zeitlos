@@ -24,6 +24,7 @@ that directory. Nothing it needs has been added to `sw/common` beyond
 | Gamepads, two ports, hotplug | `zpad.h` |
 | Keyboard fallback | `input_read()` |
 | Hardware mixer sound effects | `zaudio.h`, if the board has one |
+| Four colours, double-buffered | `zcolor.h`, if the board has colour — see [Colour](#colour) |
 
 ## Controls
 
@@ -38,10 +39,137 @@ with one still responds to the keyboard.
 | Jump | up or space | A, B or up |
 | Restart | R | start |
 | Quit | Esc | select |
+| Colour on/off | C | |
+| A quarter of a day later | T | |
 
 Unplugging a pad mid-jump releases every button rather than leaving the
 mouse running forever — that falls out of the hardware clearing pad
 state on disconnect (`docs/gamepad.md`), and needs no code here.
+
+## Colour
+
+On a board with game-mode colour ([color.md](color.md)) and blitter
+raster ops, the demo starts in four colours: sky blue, dark brown, leaf
+green and cream. C switches between colour and monochrome at any time,
+for comparison; both clear the framebuffer and the next frame is drawn
+whole.
+
+### The layout changes; the renderer barely does
+
+Monochrome uses zgame's two stacked 640x240 pages and a toroidal
+camera. That spare width is what an incremental scroll needed. Since
+parallax ([below](#parallax-deleted-the-damage-tracking)) the whole
+frame is redrawn every frame anyway, so nothing needs the slack, and
+colour spends it on the second bitplane instead (`z_color_4_below`):
+
+```
+  (0,0)    page 0, plane 0      (320,0)    page 1, plane 0
+  (0,240)  page 0, plane 1      (320,240)  page 1, plane 1
+```
+
+Still double-buffered: draw into one 320x240 page and its plane, flip
+to it, draw the other. Scrolling becomes plain subtraction --
+framebuffer x is page x + (world x - camera) -- in `world_to_fb_x()`,
+the one place the renderer converts coordinates, so the tile walk, the
+ambient layer, the actors and the HUD did not change.
+
+What the layout costs is slack. A page is now exactly the viewport, so
+a sprite half off the left edge would land in the OTHER page, the one
+on screen. Every colour primitive clips to the page being drawn, which
+the monochrome path never needed to.
+
+The flip is `col_flip()`: point the viewport at the page just drawn,
+wait for the boundary, return the frames elapsed -- what
+`z_game_flip()` does for the monochrome layout, so `dt` and the
+stepped world are unchanged.
+
+### Colour per object, from 1bpp art
+
+The art did not change. Colour is assigned per object:
+
+| Object | Where the bitmap is set | Where it is clear |
+|---|---|---|
+| ground, box | dark brown | cream (pebbles, planks) |
+| grass | green (rows 0-4: blades, turf) | transparent, then earth as ground |
+| cheese | cream | transparent |
+| sub-surface | dark brown with a cream dither | -- |
+
+| Sprite | Data | Outline (mask only) |
+|---|---|---|
+| mouse | cream | dark brown |
+| cats, birds | dark brown | dark brown |
+| trees | green | dark brown |
+| clouds | cream | sky (none) |
+
+A two-colour tile is, per plane, a fill (both colours have the same
+bit), a copy (only the foreground has it) or a fill with the bitmap cut
+out (only the background has it). A sprite is, per plane, the mask cut
+out and then the mask or the data put back as that plane's bits of the
+two colours say. One to three blitter passes per plane per object, two
+planes: roughly two to four times the monochrome blit count, which the
+HUD's `b` figure shows directly.
+
+The sub-surface stays a run-length fill, not a blit per tile: plane 0
+is filled solid and plane 1 gets the screen-aligned dithered fill, so
+it is dark brown speckled with cream at the same cost as before.
+
+The HUD text is drawn into plane 0 only, so it shows dark brown over
+the sky -- and at night into plane 1 as well, so it shows cream.
+
+### Palette effects
+
+The palette changes the colour of everything on screen at once for
+four register writes a frame and no blits, however much of the picture
+it touches. That is the one thing blitting cannot do, so the demo leans
+on it. All of it is written once a frame, straight after the flip's
+frame boundary (`fx_tick()`), so no change lands half way down a
+picture.
+
+**Time of day.** The four colours drift through day, sunset, night and
+dawn on a one-minute loop, interpolated a channel at a time between
+keyframes. Everything relights together -- sky, clouds, cheese, the
+mouse -- because they share entries, which is exactly how light
+behaves. T jumps a quarter of a day.
+
+| | sky | dark | green | cream |
+|---|---|---|---|---|
+| day | `6be` | `320` | `4a3` | `fe8` |
+| sunset | `e85` | `312` | `372` | `fcb` |
+| night | `114` | `001` | `132` | `9ac` |
+| dawn | `a8c` | `211` | `483` | `fdc` |
+
+**Stars**, at night only: a 320x112 bitmap made once at startup, drawn
+in cream over the sky with `z_color_blit_mono()` (transparent, so the
+clouds drawn next cover it) on the farthest parallax layer. Four blits
+a frame at night, none by day.
+
+**Lightning**, at night, now and then: a bright-dark-dark-dark-bright
+flash of the sky entry, with a thud.
+
+**Waterfalls.** The pits are falling water now. Each pit run is two
+8x8 pattern fills, one per plane, so each pixel picks one of the four
+entries: neither plane is the sky's own colour (the water), plane 0
+alone dark (shadow streaks), both cream (foam). Both patterns move down
+a row a frame. This one is the blitter rather than the palette, but it
+is drawn in palette entries, so it relights with the time of day like
+everything else -- orange at sunset, moonlit at night. Pattern fills
+are anchored to the screen's 8-pixel grid, so adjacent columns join
+seamlessly, and both pages (x = 0 and 320) sit on that grid.
+
+**Events.** Cheese flashes the sky gold, fading over eight frames. A
+death tints the whole palette red, fading over two seconds. Game over
+drains it to grey (luminance). Winning cycles the sky through a
+twelve-colour rainbow every four frames -- classic colour cycling.
+
+**What four shared colours cannot do.** Every effect above is global,
+because every entry is shared: the sky cannot fade on its own without
+the water fading too. Independent colour cycling -- water shimmering
+while the sky holds, a lava pit glowing on its own -- needs entries that
+belong to nothing else, which means 8 or 16 colours, which means giving
+up the back buffer (docs/color.md). A sky gradient needs the palette to
+change part way down the frame, which the CPU cannot time. A
+"palette split" in hardware -- a second set of entries taking over at a
+programmable scanline -- would give both cheaply. It is not built.
 
 ## The frame
 
@@ -681,6 +809,30 @@ plays silently rather than not at all.
 A tree is **two** 16px cells — `TREE_TOP` above `TREE_BOT` — so its base
 is at `y + 2*GD_SPR_H`, not `y + GD_SPR_H`. Placing it at
 `floor - GD_SPR_H` buried the entire lower cell below the floor surface.
+
+And the floor is not the tile boundary: a grass tile is three rows of
+blades before its turf, and `TREE_BOT`'s last row is empty, so trees
+ending at the boundary floated five pixels above the turf.
+`GD_TREE_SINK` (5) lowers them onto it; the blades, drawn after the
+ambient layer, stand in front of the trunk.
+
+That only works if the blades are **transparent**, and tiles were
+opaque: every tile was a COPY, so the black (or, in colour, sky-blue)
+between the blades blanked the foot of the tree behind them, and a
+cheese floating in front of a cloud or a tree arrived in its own
+sky-coloured box. Tiles are sky-free solid ground everywhere else, so
+the fix is narrow: where a tile's background is "nothing here", it is
+drawn with a raster op instead of copied.
+
+| | Monochrome | Colour |
+|---|---|---|
+| grass, blade rows | OR (rows 0-2), then the turf copied | `c_over()`: per plane OR where the colour has the bit, ANDN where not |
+| cheese | OR | `c_over()` |
+| ground, box | copy | opaque fg-on-bg, as before |
+
+Both cost no more than the copy they replace: one blitter pass, or one
+per plane, touching only the bitmap's own pixels. Without raster ops
+every tile is a copy, as it always was.
 
 Now `GD_GROUND_ROW * GD_TILE_H - 2 * GD_SPR_H`, written in terms of the
 constants rather than the literal 176, so it follows if the ground row

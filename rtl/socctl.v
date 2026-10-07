@@ -179,9 +179,10 @@
  *
  *             READING HAS NO SIDE EFFECT, on purpose. The kernel shell's
  *             `hd 70000200` dumps this block a byte at a time, and the
- *             decode here is only three address bits wide, so a
- *             read-to-clear register would be silently emptied by
- *             anyone looking at the cursor or game-mode registers.
+ *             decode here is only a few address bits wide (three on
+ *             older bitstreams, four now), so a read-to-clear register
+ *             would be silently emptied by anyone looking at the cursor
+ *             or game-mode registers.
  *
  *             The consumer's sequence, and why it loses nothing:
  *
@@ -204,6 +205,59 @@
  *             One consumer: two independent readers clearing each
  *             other's bits would each miss changes. rtl/csrs.vh
  *             FEATURES2 bit 14 says the register exists.
+ *
+ *   9  COLOR  game-mode colour (docs/color.md). Word 9, not word 8,
+ *             and see PALETTE for why that matters.
+ *               bit 0       EN: colour on. Only has an effect while
+ *                           game mode is on; see below.
+ *               bits 2:1    NP: number of bitplanes minus one
+ *                           (0..3 = 2, 4, 8, 16 colours).
+ *               bits 9:8    plane 1 offset {dy, dx}
+ *               bits 11:10  plane 2 offset {dy, dx}
+ *               bits 13:12  plane 3 offset {dy, dx}
+ *                           dx adds 320 columns and dy 240 rows to
+ *                           the viewport origin, modulo 640x480.
+ *               bit 15      AVAIL (read-only): COLOR_AVAIL.
+ *             Lane 0 carries EN/NP, lane 1 the offsets.
+ *
+ *             Reads back as { 16'h5A50, avail, 1'b0, offsets, 5'b0,
+ *             np, en }, "ZP". Same signature reason as GAME.
+ *
+ *             Part of the GAME/VIEW payload: a write here flips
+ *             view_load too, so colour, mode and origin are captured
+ *             together and adopted at one frame boundary.
+ *
+ *             WRITING GAME WITH BIT 0 CLEAR ALSO CLEARS EN. Leaving
+ *             game mode always means leaving colour, so the next
+ *             entry into game mode -- including the window manager's
+ *             Super+Esc over an ordinary desktop -- is monochrome
+ *             unless whoever enters it asks for colour again. Without
+ *             this a game that exited without tidying up would leave
+ *             the desktop's own pixels to be read as bitplanes the
+ *             next time anyone panned the viewport.
+ *
+ *             EN is forced low (and reads back low) when COLOR_AVAIL
+ *             is clear, exactly as GAME's enable is.
+ *
+ *  13  PALETTE  write-only, whole-word stores only:
+ *             bits 27:24 entry, bits 11:0 RGB444 (R 11:8, G 7:4,
+ *             B 3:0). Reads as 0.
+ *
+ *             -- Why words 9 and 13, and not 8 and 9 --
+ *
+ *             Bitstreams before this one decode only three address
+ *             bits here, so word 8 is word 0 again, 9 is 1, and so on.
+ *             Software has to probe COLOR to find out which bitstream
+ *             it is on, and must never be able to hurt an old one by
+ *             doing so. 9 aliases MAGIC and 13 aliases FRAME on an old
+ *             bitstream: both read-only there, so a stray write does
+ *             nothing at all, and MAGIC's top half (0x5A43) is not
+ *             COLOR's signature. Word 8 would have aliased CTRL and
+ *             turned the cursor into a Z; 15 would have cleared DIRTY
+ *             bits under the screen streamer.
+ *
+ *             The decode is four bits wide now (rtl/sysctl.v), so 8,
+ *             10..12, 14 and 15 are free and read as zero.
  *
  * Reset state is BUSY (cursor = Z), not idle.
  *
@@ -237,7 +291,11 @@ module socctl_wb #(
     parameter RECONFIG_AVAIL = 0,
     // Defaults to 0 -- a socctl instantiated without being told
     // anything reports no game mode, which is the safe answer.
-    parameter GAME_AVAIL = 1'b0
+    parameter GAME_AVAIL = 1'b0,
+    // 1 if this bitstream has game-mode colour: rtl/boards.vh's
+    // `COLOR, with `GAME and `GPU, and not composite. Set by
+    // rtl/sysctl.v, like GAME_AVAIL. See COLOR above.
+    parameter COLOR_AVAIL = 1'b0
 )
 (
     input wb_clk_i,
@@ -297,6 +355,19 @@ module socctl_wb #(
     output wire [9:0]  view_x,
     output wire [9:0]  view_y,
 
+    // -- game-mode colour -> rtl/gpu/gpu_video.v --
+    //
+    // color_en/np/off are part of the view_load payload above and
+    // need nothing more. The palette is not: pal_we is a one-cycle
+    // strobe in THIS clock domain, which is also gpu_video's clk, and
+    // the palette RAM is written there directly.
+    output wire        color_en,
+    output wire [1:0]  color_np,
+    output wire [5:0]  color_off,
+    output wire        pal_we,
+    output wire [3:0]  pal_idx,
+    output wire [11:0] pal_rgb,
+
     // -- scanout status, from rtl/gpu/gpu_video.v --
     //
     // Already in the wishbone clock domain when they arrive here (see
@@ -333,6 +404,8 @@ module socctl_wb #(
     // ("ZR"). A 32-bit key rather than a bit: see the header.
     localparam [31:0] RECONFIG_KEY = 32'h5A52_4254;
     localparam RECONFIG_SIG = 16'h5A52;
+    // top half of the COLOR register -- "ZP", for planes
+    localparam COLOR_SIG = 16'h5A50;
 
     reg [31:0] ctrl;
     reg [1:0] video;
@@ -343,6 +416,13 @@ module socctl_wb #(
     reg [9:0] vy;
     reg vload;
     reg recfg;
+
+    reg col;
+    reg [1:0] np;
+    reg [5:0] coff;
+    reg pwe;
+    reg [3:0] pidx;
+    reg [11:0] prgb;
 
     assign cursor_busy = ctrl[0];
     assign reconfig = recfg && (RECONFIG_AVAIL != 0);
@@ -360,6 +440,14 @@ module socctl_wb #(
     assign view_x    = vx;
     assign view_y    = vy;
     assign view_load = vload;
+
+    // forced low without COLOR_AVAIL, as game_en is without GAME_AVAIL
+    assign color_en  = col && (COLOR_AVAIL != 0);
+    assign color_np  = np;
+    assign color_off = coff;
+    assign pal_we    = pwe && (COLOR_AVAIL != 0);
+    assign pal_idx   = pidx;
+    assign pal_rgb   = prgb;
 
     // Range limit on the VIEW write path. This is NOT the clamp that
     // keeps the viewport on screen -- that one depends on the wrap
@@ -444,12 +532,21 @@ module socctl_wb #(
             vload <= 1'b0;
             recfg <= 1'b0;
 
+            // colour off at reset, like game mode itself
+            col <= 1'b0;
+            np <= 2'd0;
+            coff <= 6'd0;
+            pwe <= 1'b0;
+            pidx <= 4'd0;
+            prgb <= 12'd0;
+
             wb_ack_o <= 1'b0;
             wb_dat_o <= 32'h0000_0000;
 
         end else begin
 
             wb_ack_o <= 1'b0;
+            pwe <= 1'b0;
 
             if (wb_cyc_i && wb_stb_i && !wb_ack_o) begin
 
@@ -499,7 +596,33 @@ module socctl_wb #(
                             game <= wb_dat_i[0];
                             wrap <= wb_dat_i[1];
                             vload <= ~vload;
+                            // leaving game mode leaves colour -- see
+                            // COLOR in this file's header
+                            if (!wb_dat_i[0])
+                                col <= 1'b0;
                         end
+                    end
+
+                    // COLOR. Same toggle as GAME and VIEW, so it is
+                    // adopted with them.
+                    if (wb_adr_i == 32'd9) begin
+                        if (wb_sel_i[0]) begin
+                            col <= wb_dat_i[0];
+                            np <= wb_dat_i[2:1];
+                        end
+                        if (wb_sel_i[1])
+                            coff <= wb_dat_i[13:8];
+                        if (wb_sel_i[0] || wb_sel_i[1])
+                            vload <= ~vload;
+                    end
+
+                    // PALETTE: whole word or nothing, like RECONFIG --
+                    // a byte store would otherwise write an entry with
+                    // three of its four fields stale.
+                    if (wb_adr_i == 32'd13 && wb_sel_i == 4'b1111) begin
+                        pwe <= 1'b1;
+                        pidx <= wb_dat_i[27:24];
+                        prgb <= wb_dat_i[11:0];
                     end
 
                     // Lanes 0/1 carry x, lanes 2/3 carry y, so each
@@ -534,6 +657,14 @@ module socctl_wb #(
                         32'd5: wb_dat_o <= { 15'b0, in_vblank, frame_ctr };
                         32'd6: wb_dat_o <= { RECONFIG_SIG, 15'b0, (RECONFIG_AVAIL != 0) };
                         32'd7: wb_dat_o <= { 2'b0, dirty };
+                        // np/coff read back only where colour is
+                        // built, so on a board without it nothing
+                        // reads them and yosys removes the registers
+                        // -- a board without `COLOR pays for the
+                        // signature and nothing else.
+                        32'd9: wb_dat_o <= { COLOR_SIG, (COLOR_AVAIL != 0), 1'b0,
+                                             ((COLOR_AVAIL != 0) ? coff : 6'd0), 5'b0,
+                                             ((COLOR_AVAIL != 0) ? np : 2'd0), color_en };
                         default: wb_dat_o <= 32'h0000_0000;
                     endcase
 

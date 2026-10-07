@@ -370,6 +370,19 @@ take `on`/`off`/`true`/`false`/`yes`/`no`/`1`/`0`; `mem_inc` takes
 
 `palette` takes `fill`, `index` or `solid` -- see "Greys" above.
 
+`colors` gives the four XO-CHIP colours for full screen on a board with
+game-mode colour (see "Game mode in colour" below), in Octo's order --
+background, fill, fill 2, blend -- as 6 or 3 hex digits each, without
+`#` (which starts a comment here):
+
+```
+[SUPERNEA.XO8]
+colors 996600 FFCC00 FF6600 662200
+```
+
+Fewer than four is fine: the rest keep their defaults. Six digits are
+rounded to the hardware's four bits a channel.
+
 `pad` names any of `up down left right a b x y start select` and gives
 each a single hex digit. `a` and `start` also decide what SPACE and
 ENTER do. Buttons the line does not name keep the app's
@@ -640,6 +653,44 @@ On exit, `Z_WM_REPAINT` to wm. Every window is still alive and still
 where it was, but this app drew over all of their pixels and none of
 them know.
 
+### Game mode in colour
+
+On a board with game-mode colour ([color.md](color.md)), full screen
+shows XO-CHIP's four colours as real colours instead of greys.
+
+XO-CHIP has exactly two planes, which is the hardware's 4-colour mode,
+and its colour index -- plane 0 in bit 0, plane 1 in bit 1 -- is the
+scanout's own. So the renderer goes **planar**: no dither, plane 0
+expanded into one buffer and plane 1 into another, and colour n is
+palette entry n with nothing in between.
+
+The layout is `z_color_4_below`: plane 1 sits 240 rows under the
+viewport, i.e. under each of the two side-by-side pages this mode
+already flips between:
+
+```
+  (0,0)    page 0, plane 0      (320,0)    page 1, plane 0
+  (0,240)  page 0, plane 1      (320,240)  page 1, plane 1
+```
+
+So the flip did not change at all. `z_color_blit_planes()` puts both
+planes in place; colour and game mode are switched on together and
+adopted at the same frame boundary, so the first full-screen frame is
+already in colour.
+
+The colours:
+
+- one-plane ROMs: black and white, as they have always looked
+- two-plane ROMs: Octo's defaults, `#996600 #FFCC00 #FF6600 #662200`
+  (background, fill, fill 2, blend)
+- either, overridden by the ROM's `colors` line in `chip8.cfg`
+
+A ROM becomes two-plane the first time it selects plane 2 (that flag is
+sticky, see "Greys"), and the palette changes with it. Palette writes
+are made straight after the flip's frame boundary.
+
+The window keeps the dithered greys: the desktop is monochrome.
+
 ## Audio
 
 SUPER-CHIP is one square wave gated on ST. XO-CHIP replaces it with a
@@ -778,6 +829,7 @@ by unit tests; the beep is phase 4.
 | 6 | ROM library, launcher integration, per-ROM config | done |
 | 7 | debugger, disassembler, screenshots | done |
 | 8 | *optional* expanding blit mode in `gpu_blit.v` | gated on measurement |
+| 9 | XO-CHIP in colour in game mode ([color.md](color.md)) | done |
 
 `chip8` is in `sw/apps/Makefile`'s `APPS` list, and `CH8`/`SC8`/`XO8`
 are registered in `sw/common/ztype.c` so the file browser opens them.

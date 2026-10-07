@@ -31,6 +31,7 @@
  *     speed 30
  *     set mem_inc=x1 shift=off
  *     pad up=2 down=8 left=4 right=6 a=5
+ *     colors 996600 FFCC00 FF6600 662200
  *
  * `[*]` is applied first and a named section on top of it, so a pack
  * can set one speed for everything and override it for the two ROMs
@@ -89,6 +90,13 @@ typedef struct {
 	int profile;                  /* c8_profile_t, or -1 for unset */
 	int speed;                    /* instructions per frame, or 0 */
 	int palette;                  /* c8_palette_t, or -1 for unset */
+
+	/* `colors`: XO-CHIP's four colours for game-mode colour
+	 * (docs/color.md), in Octo's order -- background, fill, fill 2,
+	 * blend -- as RGB444. Only the first `ncolors` were given; the
+	 * rest keep the app's defaults. */
+	uint16_t colors[4];
+	int ncolors;
 
 	/* Quirk overrides. `quirks` holds only the fields whose bit is set
 	 * in `set_mask`; the rest are meaningless. c8_config_apply()

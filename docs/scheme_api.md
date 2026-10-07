@@ -1171,6 +1171,41 @@ one-shot at a prompt; a Scheme loop calling it sixty times a second is
 not what this interpreter is for, and the answer to wanting that is a C
 program against `sw/common/zgame.h`.
 
+### Game-mode colour -- IMPLEMENTED
+
+On a board with game-mode colour ([color.md](color.md)).
+
+| Procedure | Behavior |
+|---|---|
+| `(color-mode)` | `#f` if colour is off, else the number of colours: 2, 4, 8 or 16 |
+| `(color-mode n)` | `n` is `#f` or 0 (off), 2, 4, 8 or 16; returns the state in effect |
+| `(color-mode 4 "right")` | a 4-colour layout by name: `"below"` (the default, plane 1 under the viewport) or `"right"` (beside it) |
+| `(palette i r g b)` | palette entry `i` (0-15), each channel 0-15; `#t` |
+| `(palette "c64")` / `(palette "ega")` | a whole palette; `"ega"` is the power-on one; `#t` |
+| `(color-fill x y w h c)` | a rectangle in colour `c` (0-15), at plane-0 framebuffer coordinates, through the current layout; `#t` |
+
+Colour only shows in game mode, and leaving game mode turns it off -- so
+turn game mode on first, and again after Super+Esc. The 16- and 8-colour
+layouts use the quadrants, so the viewport belongs at `(0 0)`:
+
+```scheme
+(game-mode "on")
+(game-view 0 0)
+(color-mode 16)
+(palette "c64")
+(color-fill 0 0 320 240 6)        ; blue
+(color-fill 40 40 100 60 7)       ; a yellow box
+```
+
+`color-mode` has the same shape as `game-mode`: one getter/setter,
+returning what the hardware reports rather than echoing the argument.
+It panics on gateware without colour, since setting it is something the
+caller asked to do.
+
+Palette writes take effect immediately, so one can show half-way down a
+frame. A REPL cannot tell; a C program uses `z_color_palette_load()`,
+which waits for the frame boundary.
+
 ### GPIO -- IMPLEMENTED
 
 | Procedure | Behavior |

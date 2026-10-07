@@ -59,6 +59,7 @@
 #include "../../common/zwm.h"
 #include "../../common/zgame.h"
 #include "../../common/zgfx.h"
+#include "../../common/zcolor.h"
 #include "../../common/zpad.h"
 #include "../../common/zkbd.h"
 #include "../../common/zaudio.h"
@@ -182,6 +183,8 @@ typedef struct {
 	bool vol_down, vol_up;
 	bool mus_down, mus_up;
 	bool tog_amb;
+	bool tog_col;
+	bool skip_time;
 } gd_input_t;
 
 static bool prev_jump;
@@ -266,6 +269,8 @@ static bool kbd_held(uint8_t usage) {
 #define HID_LBRACK 0x2F    /* [ */
 #define HID_RBRACK 0x30    /* ] */
 #define HID_A      0x04    /* a -- toggle the ambient layer */
+#define HID_C      0x06    /* c -- toggle colour */
+#define HID_T      0x17    /* t -- a quarter of a day later */
 
 static void input_read(gd_input_t *in) {
 
@@ -282,6 +287,8 @@ static void input_read(gd_input_t *in) {
 	in->mus_down = kbd_held(HID_LBRACK);
 	in->mus_up   = kbd_held(HID_RBRACK);
 	in->tog_amb  = kbd_held(HID_A);
+	in->tog_col  = kbd_held(HID_C);
+	in->skip_time = kbd_held(HID_T);
 
 	/* Pad 0, whichever port it is in. Reads 0 when absent, which is
 	 * exactly "nothing pressed" -- so no special case is needed for a
@@ -314,12 +321,498 @@ static void input_read(gd_input_t *in) {
  * seam -- callers that draw spans have to handle that, which is what
  * draw_tiles_span() does by walking tile columns individually rather
  * than computing one rectangle. */
+/* -- colour (docs/color.md, docs/gamedemo.md "Colour") --
+ *
+ * On a board with game-mode colour the demo runs in four colours,
+ * double-buffered, and the page layout changes to make room:
+ *
+ *       (0,0)    page 0, plane 0      (320,0)    page 1, plane 0
+ *       (0,240)  page 0, plane 1      (320,240)  page 1, plane 1
+ *
+ * z_color_4_below. The monochrome layout's two 640-wide pages are the
+ * room a scroll used to need; a renderer that redraws the whole frame
+ * every frame (docs/gamedemo.md, "Parallax deleted the damage
+ * tracking") needs none, so in colour the camera is simply subtracted
+ * -- framebuffer x = page x + (world x - camera) -- and there is no
+ * torus at all.
+ *
+ * What that costs is slack: a page is exactly the viewport, so
+ * anything drawn past its edge would land in the other page, which is
+ * the one on screen. Every colour primitive below therefore clips to
+ * the page. The monochrome path never needed to, and is unchanged.
+ *
+ * The art is still 1bpp. Colour is per OBJECT, not per pixel: a tile
+ * is one colour where its bitmap is set and another where it is clear
+ * (in bands, so grass is green blades on sky over earth), a sprite one
+ * colour where its data is set and an outline colour where only its
+ * mask is. With two bitplanes that is one to three blitter passes per
+ * plane per object. C toggles colour at run time, for comparison. */
+static bool col_on;
+static int col_back;                /* page drawn next: x = 0 or 320 */
+static uint32_t col_last_frame;
+
+#define GD_C_SKY    0
+#define GD_C_DARK   1
+#define GD_C_GREEN  2
+#define GD_C_CREAM  3
+
+/* sky blue, dark brown, leaf green, cream (cheese, clouds, the mouse) */
+static const uint16_t gd_palette[4] = { 0x6be, 0x320, 0x4a3, 0xfe8 };
+
+/* Rows of the grass tile that are blades over sky, before its turf --
+ * see gen_sprites.py. Drawn transparent, in both modes. */
+#define GD_GRASS_BLADES 3
+
+/* How much cream speckles the earth: a dither level, 0..16. */
+#define GD_EARTH_SHADE 3
+
+/* Whether the blitter has raster ops. Set once at startup; the colour
+ * path and transparent tiles depend on it, so it lives up here. */
+static bool rop_hw;
+
+/* sprite colours, set by whoever is about to call spr_draw() */
+static int spr_c = GD_C_CREAM, spr_o = GD_C_DARK;
+
+static inline int col_page_x(void) {
+	return col_back * Z_GAME_VIEW_W;
+}
+
 static inline int world_to_fb_x(int32_t wx) {
+	if (col_on) return col_page_x() + (int)(wx - game.cam);
 	return z_game_fold(game.orient, wx);
 }
 
 static inline int world_to_fb_y(int32_t wy) {
+	if (col_on) return (int)wy;
 	return (int)wy + z_game_back_y(&game);
+}
+
+/* Clip a rectangle, and the source offset that goes with it, to the
+ * page being drawn. False if nothing is left. */
+static bool col_clip(int *x, int *y, int *w, int *h, int *sx, int *sy) {
+	int x0 = col_page_x(), x1 = x0 + Z_GAME_VIEW_W;
+	int y0 = 0, y1 = Z_GAME_VIEW_H;
+	if (*x < x0) { *sx += x0 - *x; *w -= x0 - *x; *x = x0; }
+	if (*x + *w > x1) *w = x1 - *x;
+	if (*y < y0) { *sy += y0 - *y; *h -= y0 - *y; *y = y0; }
+	if (*y + *h > y1) *h = y1 - *y;
+	return *w > 0 && *h > 0;
+}
+
+static void c_fill(int x, int y, int w, int h, int c) {
+	int sx = 0, sy = 0;
+	if (!col_clip(&x, &y, &w, &h, &sx, &sy)) return;
+	hud_blits += 2;
+	z_color_fill_rect(&z_color_4_below, x, y, w, h, c);
+}
+
+/* A 1bpp bitmap in fg where set, TRANSPARENT where clear: per plane,
+ * OR where fg has the bit and ANDN where it does not, which touches
+ * only the bitmap's own pixels. One pass a plane. */
+static void c_over(const void *src, int stride, int sx, int sy,
+	int x, int y, int w, int h, int fg) {
+	int k;
+	if (!col_clip(&x, &y, &w, &h, &sx, &sy)) return;
+	for (k = 0; k < 2; k++) {
+		hud_blits++;
+		z_color_plane_blit(&z_color_4_below, k, src, stride, sx, sy,
+			x, y, w, h, ((fg >> k) & 1) ? Z_ROP_OR : Z_ROP_ANDN);
+	}
+}
+
+/* A 1bpp bitmap, fg where set and bg where clear, opaque. Per plane:
+ * the same bit either way is a fill; set only in fg is a copy; set
+ * only in bg is a fill with the bitmap's shape then cut out of it. */
+static void c_two(const void *src, int stride, int sx, int sy,
+	int x, int y, int w, int h, int fg, int bg) {
+	int k;
+	if (!col_clip(&x, &y, &w, &h, &sx, &sy)) return;
+	for (k = 0; k < 2; k++) {
+		int f = (fg >> k) & 1, b = (bg >> k) & 1;
+		hud_blits++;
+		if (f == b) {
+			z_color_plane_fill(&z_color_4_below, k, x, y, w, h, f);
+		} else if (f) {
+			z_color_plane_blit(&z_color_4_below, k, src, stride, sx, sy,
+				x, y, w, h, Z_ROP_COPY);
+		} else {
+			hud_blits++;
+			z_color_plane_fill(&z_color_4_below, k, x, y, w, h, 1);
+			z_color_plane_blit(&z_color_4_below, k, src, stride, sx, sy,
+				x, y, w, h, Z_ROP_ANDN);
+		}
+	}
+}
+
+/* Tiles in colour: bands of rows, each fg-on-bg. A band whose bg is
+ * the sky is drawn TRANSPARENT instead (c_over()): "sky" in a tile is
+ * really "nothing here", and painting it opaque punched a sky-coloured
+ * hole through whatever the ambient layer had drawn behind -- the foot
+ * of a tree behind the grass blades, a cloud behind a floating cheese. */
+typedef struct { uint8_t y0, y1, fg, bg; } gd_band_t;
+
+static const gd_band_t band_ground[] = { { 0, 16, GD_C_DARK, GD_C_CREAM } };
+static const gd_band_t band_grass[]  = {
+	{ 0, 5, GD_C_GREEN, GD_C_SKY },         /* blades on sky, then turf */
+	{ 5, 16, GD_C_DARK, GD_C_CREAM }        /* earth, as GROUND */
+};
+static const gd_band_t band_box[]    = { { 0, 16, GD_C_DARK, GD_C_CREAM } };
+static const gd_band_t band_cheese[] = { { 0, 16, GD_C_CREAM, GD_C_SKY } };
+
+static void c_tile(uint8_t t, int x, int y) {
+	const gd_band_t *b;
+	int n, i;
+	switch (t) {
+		case GD_TILE_GROUND: b = band_ground; n = 1; break;
+		case GD_TILE_GRASS:  b = band_grass;  n = 2; break;
+		case GD_TILE_BOX:    b = band_box;    n = 1; break;
+		case GD_TILE_CHEESE: b = band_cheese; n = 1; break;
+		default: return;
+	}
+	for (i = 0; i < n; i++) {
+		if (b[i].bg == GD_C_SKY)
+			c_over(gd_tiles[t], GD_TILE_STRIDE, 0, b[i].y0, x, y + b[i].y0,
+				GD_TILE_W, b[i].y1 - b[i].y0, b[i].fg);
+		else
+			c_two(gd_tiles[t], GD_TILE_STRIDE, 0, b[i].y0, x, y + b[i].y0,
+				GD_TILE_W, b[i].y1 - b[i].y0, b[i].fg, b[i].bg);
+	}
+}
+
+/* A masked sprite: data pixels in c, mask-only pixels (the outline) in
+ * o, everything else untouched. Per plane: cut the mask out, then put
+ * back whichever of mask and data that plane's bits call for. */
+static void c_sprite(const void *data, const void *mask, int x, int y,
+	int c, int o) {
+	int k, sx = 0, sy = 0, w = GD_SPR_W, h = GD_SPR_H;
+	const z_color_layout_t *l = &z_color_4_below;
+	if (!col_clip(&x, &y, &w, &h, &sx, &sy)) return;
+	for (k = 0; k < 2; k++) {
+		int ck = (c >> k) & 1, ok = (o >> k) & 1;
+		hud_blits++;
+		z_color_plane_blit(l, k, mask, GD_TILE_STRIDE, sx, sy, x, y, w, h,
+			Z_ROP_ANDN);
+		if (ok) {
+			hud_blits++;
+			z_color_plane_blit(l, k, mask, GD_TILE_STRIDE, sx, sy, x, y, w, h,
+				Z_ROP_OR);
+		}
+		if (ck && !ok) {
+			hud_blits++;
+			z_color_plane_blit(l, k, data, GD_TILE_STRIDE, sx, sy, x, y, w, h,
+				Z_ROP_OR);
+		} else if (!ck && ok) {
+			hud_blits++;
+			z_color_plane_blit(l, k, data, GD_TILE_STRIDE, sx, sy, x, y, w, h,
+				Z_ROP_ANDN);
+		}
+	}
+}
+
+/* The sub-surface: dark earth with cream speckles -- plane 0 solid,
+ * plane 1 a screen-aligned dither, so colours 1 and 3 mixed with no
+ * blit per tile, as the monochrome path's shaded fill does. */
+static void c_earth(int x, int y, int w, int h) {
+	int sx = 0, sy = 0, px, py;
+	if (!col_clip(&x, &y, &w, &h, &sx, &sy)) return;
+	hud_blits += 2;
+	z_color_plane_fill(&z_color_4_below, 0, x, y, w, h, 1);
+	z_color_plane_xy(&z_color_4_below, 1, x, y, &px, &py);
+	z_fb_hw_fill_shade(px, py, w, h, GD_EARTH_SHADE);
+}
+
+/* -- palette effects: what four colours can do when they keep changing --
+ *
+ * docs/gamedemo.md, "Palette effects". The demo's job is to show off
+ * the hardware, and the one thing the palette does that no amount of
+ * blitting can is change the colour of everything on screen at once,
+ * for free: four register writes a frame, zero blits, no matter how
+ * much of the picture they touch. Everything here is that.
+ *
+ *   time of day   the four colours drift through day, sunset, night and
+ *                 dawn on a one-minute loop. Everything relights
+ *                 together -- the sky, the clouds, the cheese, the
+ *                 mouse -- because they share entries, which is exactly
+ *                 how light works.
+ *   stars         at night only, a fixed starfield on the farthest
+ *                 parallax layer.
+ *   lightning     at night, now and then, the sky flashes.
+ *   waterfalls    the pits are water now, falling: an 8x8 pattern fill
+ *                 on each plane, scrolled a row a frame. That one is
+ *                 the blitter, not the palette -- but it is drawn in
+ *                 palette entries, so it relights with everything else.
+ *   events        cheese flashes the sky gold, a death tints the world
+ *                 red, game over drains it to grey, and winning cycles
+ *                 the sky through a rainbow -- classic colour cycling.
+ *
+ * T jumps the clock forward a quarter of a day, for showing it off. */
+
+#define GD_DAY_FRAMES 3600u          /* one minute at 60Hz */
+
+/* Keyframes: frame of the day, and the four entries (sky, dark, green,
+ * cream). The palette is interpolated between neighbours, a channel at
+ * a time -- four bits a channel, so a fade is up to fifteen visible
+ * steps, which reads as deliberate rather than banded at this pace. */
+typedef struct { uint16_t at; uint16_t c[4]; } gd_key_t;
+
+static const gd_key_t gd_day[] = {
+	{    0, { 0x6be, 0x320, 0x4a3, 0xfe8 } },    /* day */
+	{ 1620, { 0x6be, 0x320, 0x4a3, 0xfe8 } },
+	{ 1980, { 0xe85, 0x312, 0x372, 0xfcb } },    /* sunset */
+	{ 2232, { 0x114, 0x001, 0x132, 0x9ac } },    /* night: moonlight */
+	{ 3168, { 0x114, 0x001, 0x132, 0x9ac } },
+	{ 3420, { 0xa8c, 0x211, 0x483, 0xfdc } },    /* dawn */
+	{ 3600, { 0x6be, 0x320, 0x4a3, 0xfe8 } }     /* = frame 0 */
+};
+#define GD_NKEYS ((int)(sizeof(gd_day) / sizeof(gd_day[0])))
+
+/* Stars between these: a little wider than the night keyframes, so
+ * they are out in the late sunset and still there at first light. */
+#define GD_STARS_FROM 2100u
+#define GD_STARS_TO   3300u
+
+static uint32_t fx_tod = 600;        /* frame of the day: start mid-morning */
+static int fx_lightning;             /* frames left in a flash sequence */
+static int fx_cheese;                /* frames of gold sky left */
+static int fx_death;                 /* frames of red left */
+static uint32_t fx_anim;             /* frames since start, for the water */
+static uint32_t fx_rng = 0x2545F491u;
+
+static uint32_t fx_rand(void) {
+	fx_rng = fx_rng * 1664525u + 1013904223u;
+	return fx_rng >> 8;
+}
+
+static bool fx_night(void) {
+	return fx_tod >= GD_STARS_FROM && fx_tod < GD_STARS_TO;
+}
+
+static uint16_t lerp444(uint16_t a, uint16_t b, int t, int n) {
+	int k, out = 0;
+	for (k = 8; k >= 0; k -= 4) {
+		int x = (a >> k) & 15, y = (b >> k) & 15;
+		int v = x + ((y - x) * t + (y > x ? n / 2 : -n / 2)) / n;
+		if (v < 0) v = 0;
+		if (v > 15) v = 15;
+		out |= v << k;
+	}
+	return (uint16_t)out;
+}
+
+static uint16_t grey444(uint16_t c) {
+	int r = c >> 8 & 15, g = c >> 4 & 15, b = c & 15;
+	int y = (2 * r + 5 * g + b + 4) / 8;
+	return (uint16_t)(y << 8 | y << 4 | y);
+}
+
+/* The winning screen's rainbow, cycled through the sky entry. */
+static const uint16_t gd_rainbow[12] = {
+	0xf00, 0xf60, 0xfb0, 0xdf0, 0x6f0, 0x0f6,
+	0x0fd, 0x0bf, 0x06f, 0x60f, 0xb0f, 0xf0b
+};
+
+static void fx_palette(uint16_t out[4]) {
+	int i, k;
+
+	/* time of day */
+	for (i = 0; i + 1 < GD_NKEYS && fx_tod >= gd_day[i + 1].at; i++)
+		;
+	if (i + 1 >= GD_NKEYS) i = GD_NKEYS - 2;
+	{
+		int n = gd_day[i + 1].at - gd_day[i].at;
+		int t = (int)fx_tod - gd_day[i].at;
+		for (k = 0; k < 4; k++)
+			out[k] = n ? lerp444(gd_day[i].c[k], gd_day[i + 1].c[k], t, n)
+			           : gd_day[i].c[k];
+	}
+
+	/* lightning: bright, dark, dark, dark, bright, then out */
+	if (fx_lightning > 0) {
+		int f = fx_lightning;
+		if (f == 6 || f == 5 || f == 1) {
+			out[0] = 0xdde;
+			out[3] = 0xfff;
+		}
+	}
+
+	if (fx_cheese > 0)
+		out[0] = lerp444(out[0], 0xfd4, fx_cheese, 8);
+
+	if (fx_death > 0)
+		for (k = 0; k < 4; k++)
+			out[k] = lerp444(out[k], 0xf00, fx_death, 120);
+
+	if (game_over)
+		for (k = 0; k < 4; k++)
+			out[k] = grey444(out[k]);
+
+	if (won)
+		out[0] = gd_rainbow[(fx_anim >> 2) % 12];
+}
+
+/* Once a frame, straight after the flip's frame boundary, so a change
+ * can never land half way down a picture. */
+static void fx_tick(uint32_t dt) {
+	uint16_t pal[4];
+
+	fx_anim += dt;
+	if (!game_over && !won)
+		fx_tod = (fx_tod + dt) % GD_DAY_FRAMES;
+
+	if (fx_lightning > 0) {
+		fx_lightning -= (int)dt;
+		if (fx_lightning < 0) fx_lightning = 0;
+	} else if (fx_night() && fx_tod > GD_STARS_FROM + 240 &&
+			fx_rand() % 400 < dt) {
+		fx_lightning = 6;
+		if (sound_ok) sfx_play(SFX_LAND);      /* a distant thud */
+	}
+	if (fx_cheese > 0) fx_cheese -= (int)dt;
+	if (fx_death > 0) fx_death -= (int)dt;
+	if (fx_cheese < 0) fx_cheese = 0;
+	if (fx_death < 0) fx_death = 0;
+
+	fx_palette(pal);
+	z_color_palette_load_now(pal, 4);
+}
+
+/* -- stars: a 320x112 1bpp sky, made once --
+ *
+ * One plane's worth of bitmap, drawn in cream over the sky with
+ * z_color_blit_mono() -- transparent, so the clouds drawn after it
+ * cover it. Two blits a plane a frame (the parallax wraps it), and
+ * none at all by day. */
+#define GD_STARS_H      112
+#define GD_STARS_STRIDE 44                  /* 10 words + 1 the blitter may read */
+static uint32_t gd_stars[GD_STARS_H * (GD_STARS_STRIDE / 4) + 1];
+
+static void stars_init(void) {
+	int i;
+	memset(gd_stars, 0, sizeof(gd_stars));
+	for (i = 0; i < 60; i++) {
+		int x = (int)(fx_rand() % 320), y = (int)(fx_rand() % GD_STARS_H);
+		gd_stars[y * (GD_STARS_STRIDE / 4) + (x >> 5)] |= 1u << (x & 31);
+		/* one in six is a bright one: a small cross */
+		if (i % 6 == 0 && x > 0 && x < 319 && y > 0 && y < GD_STARS_H - 1) {
+			gd_stars[y * (GD_STARS_STRIDE / 4) + ((x - 1) >> 5)] |= 1u << ((x - 1) & 31);
+			gd_stars[y * (GD_STARS_STRIDE / 4) + ((x + 1) >> 5)] |= 1u << ((x + 1) & 31);
+			gd_stars[(y - 1) * (GD_STARS_STRIDE / 4) + (x >> 5)] |= 1u << (x & 31);
+			gd_stars[(y + 1) * (GD_STARS_STRIDE / 4) + (x >> 5)] |= 1u << (x & 31);
+		}
+	}
+}
+
+static void c_mono(const void *src, int stride, int sx, int sy,
+	int x, int y, int w, int h, int c) {
+	if (!col_clip(&x, &y, &w, &h, &sx, &sy)) return;
+	hud_blits += 2;
+	z_color_blit_mono(&z_color_4_below, src, stride, sx, sy, x, y, w, h, c);
+}
+
+static void stars_draw(void) {
+	int off, px = col_page_x();
+	if (!fx_night()) return;
+	off = (int)((game.cam >> 4) % 320);         /* farther than the clouds */
+	c_mono(gd_stars, GD_STARS_STRIDE, off, 0, px, 0, 320 - off,
+		GD_STARS_H, GD_C_CREAM);
+	if (off)
+		c_mono(gd_stars, GD_STARS_STRIDE, 0, 0, px + 320 - off, 0, off,
+			GD_STARS_H, GD_C_CREAM);
+}
+
+/* -- waterfalls in the pits --
+ *
+ * A pit is a column with nothing at ground level or below. Its water
+ * is two 8x8 patterns, one per plane, so each pixel is one of four
+ * colours: plane 0 alone is dark (shadow lines), both planes cream
+ * (foam), neither the sky's own colour (the water). Shifting both
+ * patterns down a row a frame makes it fall; the fills are anchored to
+ * the screen's 8-pixel grid, so adjacent pit columns join seamlessly,
+ * and the pages sit at x = 0 and 320, both on that grid. */
+static const uint8_t gd_fall_foam[8] = {
+	0x81, 0x81, 0x80, 0x10, 0x14, 0x04, 0x40, 0x41
+};
+static const uint8_t gd_fall_dark[8] = {
+	0x20, 0x00, 0x02, 0x22, 0x00, 0x08, 0x08, 0x00
+};
+
+static void c_pattern(int x, int y, int w, int h,
+	const uint8_t *p0, const uint8_t *p1) {
+	int sx = 0, sy = 0, px, py;
+	if (!col_clip(&x, &y, &w, &h, &sx, &sy)) return;
+	hud_blits += 2;
+	z_fb_hw_fill_pattern(x, y, w, h, p0);
+	z_color_plane_xy(&z_color_4_below, 1, x, y, &px, &py);
+	z_fb_hw_fill_pattern(px, py, w, h, p1);
+}
+
+static void water_draw(int32_t wx0, int32_t wx1) {
+	uint8_t p0[8], p1[8];
+	int c = (int)(wx0 / GD_TILE_W), c1 = (int)((wx1 + GD_TILE_W - 1) / GD_TILE_W);
+	int y = GD_GROUND_ROW * GD_TILE_H + 4;
+	int r, s = (int)(fx_anim & 7);
+
+	/* plane 0 = foam or shadow, plane 1 = foam: so foam is 3, shadow 1 */
+	for (r = 0; r < 8; r++) {
+		int src = (r - s) & 7;
+		p0[r] = (uint8_t)(gd_fall_foam[src] | gd_fall_dark[src]);
+		p1[r] = gd_fall_foam[src];
+	}
+
+	if (c < 0) c = 0;
+	if (c1 > GD_LEVEL_COLS) c1 = GD_LEVEL_COLS;
+
+	while (c < c1) {
+		int run = 0;
+		while (c < c1 && !(gd_level[GD_GROUND_ROW][c] == GD_TILE_EMPTY &&
+				gd_level[GD_SUBSURFACE_ROW][c] == GD_TILE_EMPTY))
+			c++;
+		while (c + run < c1 &&
+				gd_level[GD_GROUND_ROW][c + run] == GD_TILE_EMPTY &&
+				gd_level[GD_SUBSURFACE_ROW][c + run] == GD_TILE_EMPTY)
+			run++;
+		if (run)
+			c_pattern(world_to_fb_x((int32_t)c * GD_TILE_W), y,
+				run * GD_TILE_W, Z_GAME_VIEW_H - y, p0, p1);
+		c += run;
+	}
+}
+
+/* The flip, in colour: the page just drawn goes on screen at the next
+ * frame boundary, and the number of frames since the last flip comes
+ * back, as z_game_flip() does for the monochrome layout. */
+static uint32_t col_flip(void) {
+	uint32_t f, dt;
+	z_game_set_view((uint32_t)col_page_x(), 0);
+	z_game_wait_frame();
+	f = z_game_frame();
+	dt = (f - col_last_frame) & 0xffffu;
+	if (dt == 0) dt = 1;
+	col_last_frame = f;
+	col_back ^= 1;
+	fx_tick(dt);                /* the palette, at the frame boundary */
+	return dt;
+}
+
+/* Colour on or off. Both clear the whole framebuffer: the other
+ * layout's pages hold pixels that mean something else in this one.
+ * Off hands back to zgame's layout, whose next flip sets the view. */
+static void col_set(bool on) {
+	if (on) {
+		if (!z_color_available()) return;
+		z_fb_hw_sync();
+		z_color_begin(&z_color_4_below);
+		z_fb_hw_fill_rect(0, 0, 640, 480, 0);
+		col_back = 0;
+		col_last_frame = z_game_frame();
+		z_color_palette_load(gd_palette, 4);
+		col_on = true;
+	} else {
+		z_fb_hw_sync();
+		z_color_end();
+		z_fb_hw_fill_rect(0, 0, 640, 480, 0);
+		col_on = false;
+	}
 }
 
 /* One 16x16 tile through the hardware blitter.
@@ -332,9 +825,30 @@ static inline int world_to_fb_y(int32_t wy) {
  * itself. */
 static void draw_tile(uint8_t t, int fbx, int fby) {
 	if (t >= GD_TILE_COUNT) return;
+	if (col_on) { c_tile(t, fbx, fby); return; }
 	/* Async: the next tile's acquire() waits for this one, so the
 	 * loop in draw_tiles_rect() overlaps each blit with computing the
 	 * next tile's address and coordinates. See zgfx.h. */
+	/* The same transparency in monochrome, where the tile's "sky" is
+	 * black: grass blades and cheese are ORed in, so the tree behind
+	 * the blades and the cloud behind a cheese show through instead of
+	 * being blanked to black. Needs raster ops; without them every
+	 * tile is opaque, as it always was. */
+	if (rop_hw && t == GD_TILE_CHEESE) {
+		hud_blits++;
+		z_fb_hw_blit_mem_async(gd_tiles[t], GD_TILE_STRIDE, 0, 0, fbx, fby,
+			GD_TILE_W, GD_TILE_H, Z_ROP_OR);
+		return;
+	}
+	if (rop_hw && t == GD_TILE_GRASS) {
+		hud_blits += 2;
+		z_fb_hw_blit_mem_async(gd_tiles[t], GD_TILE_STRIDE, 0, 0, fbx, fby,
+			GD_TILE_W, GD_GRASS_BLADES, Z_ROP_OR);
+		z_fb_hw_blit_mem_async(gd_tiles[t], GD_TILE_STRIDE, 0, GD_GRASS_BLADES,
+			fbx, fby + GD_GRASS_BLADES, GD_TILE_W,
+			GD_TILE_H - GD_GRASS_BLADES, Z_ROP_COPY);
+		return;
+	}
 	hud_blits++;
 	z_fb_hw_blit_mem_async(gd_tiles[t], GD_TILE_STRIDE, 0, 0, fbx, fby,
 		GD_TILE_W, GD_TILE_H, Z_ROP_COPY);
@@ -399,7 +913,10 @@ static void draw_subsurface(int32_t wx0, int32_t wx1) {
 
 		/* One fill per run, split at the torus seam the same way the
 		 * sky fill is -- a run can straddle framebuffer column 639. */
-		{
+		if (col_on) {
+			c_earth(world_to_fb_x((int32_t)c * GD_TILE_W), fy,
+				run * GD_TILE_W, hh);
+		} else {
 			int fx = world_to_fb_x((int32_t)c * GD_TILE_W);
 			int w = run * GD_TILE_W;
 			int w1 = Z_SCREEN_W - fx;
@@ -501,7 +1018,8 @@ static void draw_tiles_rect(int32_t wx0, int32_t wy0, int32_t wx1, int32_t wy1) 
  * the hardware at all.
  */
 
-static bool rop_hw;      /* set once at startup */
+/* rop_hw: declared with the colour block above, where draw_tile()
+ * first needs it. Set once at startup. */
 
 /* Software fallback: (dst & ~mask) | data, one row at a time. */
 static void spr_draw_sw(const uint16_t *data, const uint16_t *mask,
@@ -603,6 +1121,11 @@ static void spr_draw_any(const uint16_t *data16, const uint16_t *mask16,
 static void spr_draw(const uint16_t *data16, const uint16_t *mask16,
 	const void *data_hw, const void *mask_hw, int fbx, int fby)
 {
+	/* Colour is only ever on with raster ops (see main()). */
+	if (col_on) {
+		c_sprite(data_hw, mask_hw, fbx, fby, spr_c, spr_o);
+		return;
+	}
 	if (!rop_hw) {
 		/* The software path READS AND WRITES VRAM WITH THE CPU, so it
 		 * must not run while an async tile blit is still in flight --
@@ -683,6 +1206,7 @@ static void spr_draw(const uint16_t *data16, const uint16_t *mask16,
 
 #define GD_MAX_CLOUDS 10
 #define GD_MAX_TREES  10
+#define GD_TREE_SINK  5     /* blades (3) + TREE_BOT's empty last row (1) + 1 */
 #define GD_MAX_BIRDS  12
 
 typedef struct {
@@ -724,8 +1248,15 @@ static void ambient_init(void) {
 		 * A tree is TWO 16px cells (TREE_TOP above TREE_BOT), so its
 		 * base is at y + 2*GD_SPR_H, not y + GD_SPR_H. Subtracting
 		 * only one cell height buried the whole lower half below the
-		 * floor surface. */
-		trees[i].y = GD_GROUND_ROW * GD_TILE_H - 2 * GD_SPR_H;
+		 * floor surface.
+		 *
+		 * And +GD_TREE_SINK: the ground row's top is not its tile's
+		 * top. A grass tile is three rows of blades and then turf, and
+		 * TREE_BOT's last row is empty, so a tree whose cells end at
+		 * the tile boundary floats five pixels above the turf. Sunk by
+		 * that much, the base sits at the turf line and the blades
+		 * (drawn after the ambient layer) stand in front of it. */
+		trees[i].y = GD_GROUND_ROW * GD_TILE_H - 2 * GD_SPR_H + GD_TREE_SINK;
 		trees[i].anim = 0;
 	}
 
@@ -775,6 +1306,7 @@ static void ambient_draw(void) {
 	int32_t cam_c = game.cam >> GD_CLOUD_SHIFT;
 	int32_t cam_t = game.cam >> GD_TREE_SHIFT;
 
+	spr_c = GD_C_CREAM; spr_o = GD_C_SKY;   /* clouds: no outline */
 	for (int i = 0; i < GD_MAX_CLOUDS; i++) {
 		amb_cell(gd_hspr_cloud_l, gd_hmsk_cloud_l,
 			gd_spr_cloud_l, gd_msk_cloud_l,
@@ -784,6 +1316,7 @@ static void ambient_draw(void) {
 			clouds[i].x + GD_SPR_W, clouds[i].y, cam_c);
 	}
 
+	spr_c = GD_C_GREEN; spr_o = GD_C_DARK;
 	for (int i = 0; i < GD_MAX_TREES; i++) {
 		amb_cell(gd_hspr_tree_top, gd_hmsk_tree_top,
 			gd_spr_tree_top, gd_msk_tree_top,
@@ -796,6 +1329,8 @@ static void ambient_draw(void) {
 }
 
 static void birds_draw(void) {
+
+	spr_c = GD_C_DARK; spr_o = GD_C_DARK;
 
 	for (int i = 0; i < GD_MAX_BIRDS; i++) {
 		int flap = (birds[i].anim & 8) ? 1 : 0;
@@ -957,6 +1492,7 @@ static void update_player(const gd_input_t *in) {
 			gd_level[r][c] = GD_TILE_EMPTY;
 			score += 10;
 			sfx_play(SFX_COIN);
+			fx_cheese = 8;          /* the sky flashes gold */
 			/* Nothing to repaint. The tile is gone from the map and
 			 * every frame redraws the whole visible area from the
 			 * map, so both pages correct themselves on their next
@@ -971,6 +1507,7 @@ static void update_player(const gd_input_t *in) {
 	if (TOPX(player.y) > GD_WORLD_H) {
 		player.alive = false;
 		sfx_play(SFX_HIT);
+		fx_death = 120;
 	}
 
 	if (TOPX(player.x) >= GD_WORLD_W - 2 * GD_TILE_W) won = true;
@@ -1020,6 +1557,7 @@ static void update_cats(void) {
 				py < cyp + GD_SPR_H - 2 && py + GD_PLAYER_H > cyp + 2) {
 				player.alive = false;
 				sfx_play(SFX_HIT);
+				fx_death = 120;
 			}
 		}
 
@@ -1033,6 +1571,7 @@ static void draw_actors(void) {
 
 	/* Cats first, player last, so the player is never hidden behind a
 	 * cat at the moment of the collision that matters. */
+	spr_c = GD_C_DARK; spr_o = GD_C_DARK;
 	for (int i = 0; i < cat_count; i++) {
 		gd_actor_t *c = &cats[i];
 		int32_t wx = TOPX(c->x), wy = TOPX(c->y);
@@ -1062,6 +1601,7 @@ static void draw_actors(void) {
 		}
 	}
 
+	spr_c = GD_C_CREAM; spr_o = GD_C_DARK;
 	if (player.alive) {
 		int32_t wx = TOPX(player.x) - GD_PLAYER_XOFF;
 		int32_t wy = TOPX(player.y);
@@ -1134,6 +1674,11 @@ static void draw_hud(void) {
 	 * and the hardware glyph blit is unclipped by design. A dozen
 	 * characters a frame is not worth the hazard. */
 	z_fb_draw_text(fbx, fby, buf, 1, &z_font_5x8, NULL);
+	/* In colour the text is plane 0 only -- dark brown on the sky.
+	 * At night the sky is darker than that, so it goes into plane 1
+	 * as well: cream, i.e. moonlight. */
+	if (col_on && fx_night())
+		z_fb_draw_text(fbx, fby + 240, buf, 1, &z_font_5x8, NULL);
 
 
 
@@ -1144,6 +1689,9 @@ static void draw_banner(const char *s) {
 	int32_t wy = Z_GAME_VIEW_H / 2 - 8;
 	z_fb_draw_text(world_to_fb_x(wx), world_to_fb_y(wy), s, 1,
 		&z_font_5x8, NULL);
+	if (col_on && fx_night())
+		z_fb_draw_text(world_to_fb_x(wx), world_to_fb_y(wy) + 240, s, 1,
+			&z_font_5x8, NULL);
 
 }
 
@@ -1173,6 +1721,8 @@ int main(void) {
 	bool prev_vol_down = false, prev_vol_up = false;
 	bool prev_mus_down = false, prev_mus_up = false;
 	bool prev_tog_amb = false;
+	bool prev_tog_col = false;
+	bool prev_skip_time = false;
 
 	printf("gamedemo: mouse vs cats\n");
 
@@ -1190,6 +1740,7 @@ int main(void) {
 
 	gd_level_load();
 	ambient_init();
+	stars_init();
 	sound_ok = music_init();
 
 	/* Probed once. On a bitstream without raster ops every op behaves
@@ -1222,6 +1773,12 @@ int main(void) {
 	 * every pixel is either redrawn as background or covered by a
 	 * sprite, which is the whole point of tracking damage. */
 	z_fb_hw_fill_rect(0, 0, 640, 480, 0);
+
+	/* Colour by default where there is colour hardware and raster ops
+	 * (the colour sprites are raster ops); C toggles it. */
+	if (rop_hw) col_set(true);
+	printf("gamedemo: %s\n", col_on ?
+		"4 colours (C toggles, T skips a quarter day)" : "monochrome");
 
 	for (;;) {
 
@@ -1260,6 +1817,11 @@ int main(void) {
 		prev_vol_up = in.vol_up;
 		if (in.tog_amb && !prev_tog_amb) show_ambient = !show_ambient;
 		prev_tog_amb = in.tog_amb;
+		if (in.tog_col && !prev_tog_col && rop_hw) col_set(!col_on);
+		prev_tog_col = in.tog_col;
+		if (in.skip_time && !prev_skip_time)
+			fx_tod = (fx_tod + GD_DAY_FRAMES / 4) % GD_DAY_FRAMES;
+		prev_skip_time = in.skip_time;
 
 		prev_mus_down = in.mus_down;
 		prev_mus_up = in.mus_up;
@@ -1321,7 +1883,9 @@ int main(void) {
 		 * Two fills when the span crosses the seam, one otherwise --
 		 * the same shape as everything else that has to live on a
 		 * torus. */
-		{
+		if (col_on) {
+			c_fill(col_page_x(), 0, Z_GAME_VIEW_W, Z_GAME_VIEW_H, GD_C_SKY);
+		} else {
 			int fx = world_to_fb_x(game.cam);
 			int fy = z_game_back_y(&game);
 			/* The WHOLE viewport height, not just the sky.
@@ -1359,8 +1923,10 @@ int main(void) {
 		 * HUD -- if blits drop sharply and dt does not move, the
 		 * drawing was never the bottleneck and the answer is in the
 		 * scheduler. */
+		if (col_on) stars_draw();             /* at night only */
 		if (show_ambient) ambient_draw();      /* clouds, trees */
 		draw_subsurface(game.cam, game.cam + Z_GAME_VIEW_W);
+		if (col_on) water_draw(game.cam, game.cam + Z_GAME_VIEW_W);
 		draw_tiles_rect(game.cam, 0,
 			game.cam + Z_GAME_VIEW_W, GD_WORLD_H);
 		birds_draw();
@@ -1385,7 +1951,7 @@ int main(void) {
 		 * right barrier even once this app starts drawing lines. */
 		z_fb_hw_sync();
 
-		dt = z_game_flip(&game);
+		dt = col_on ? col_flip() : z_game_flip(&game);
 		steps = dt;
 		hud_dt = dt;
 		hud_blits = 0;

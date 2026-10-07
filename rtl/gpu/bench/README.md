@@ -74,6 +74,17 @@ design makes that pattern land correctly). `tb_line.v` and
   toroidal wrap, frame-boundary adoption of a mid-frame write, and the
   frame counter. Runs ~40 full 800x525 frames, so it takes a few
   minutes rather than a few seconds. See `docs/game_mode.md`.
+- `tb_color.v` -- `rtl/gpu/gpu_video.v`'s game-mode colour. Tests
+  PIXELS, not addresses: colour is a data path, and a plane word from
+  the wrong row, held one crossing too long or rotated by the wrong
+  ten words leaves `x`/`y` perfectly correct. A real VRAM array with a
+  fixed pseudo-random pattern; every visible pixel of a whole frame
+  compared against an independent model, per configuration (16/8/4
+  colours, double-buffered and side-scrolling layouts, wrap seams and
+  unaligned origins, clamp, cursor XOR, palette, phosphor interplay,
+  mid-frame adoption). Fails on two deliberately broken read-side
+  variants, so it is proven sensitive. With `-DGPU_DDMI -DTB_STUBS`
+  it also checks the 8-bit TMDS channel inputs. See `docs/color.md`.
 - `tb_gamepad.v` -- `rtl/usb_hid.v`'s gamepad register. Uses a STUB
   `usb_hid_host` (the real core needs an actual USB device bit-banging
   a low-speed link to produce a report at all, and none of the
@@ -174,6 +185,12 @@ sed 's/^\tinput \[31:0\] gb_dat_i,$/\tinput [31:0] gb_dat_i/' \
 iverilog -g2005 -o /tmp/tb_game.out \
     rtl/gpu/bench/tb_game_mode.v /tmp/gpu_video_fix.v
 vvp /tmp/tb_game.out          # several minutes
+
+# tb_color.v -- the same patched gpu_video.v. Add -DGPU_DDMI -DTB_STUBS
+# and rtl/gpu/gpu_ddmi.v rtl/gpu/tmds_encoder.v to check DDMI too.
+iverilog -g2005 -o /tmp/tb_color.out \
+    rtl/gpu/bench/tb_color.v /tmp/gpu_video_fix.v
+vvp /tmp/tb_color.out         # several minutes
 
 # tb_gamepad.v -- usb_hid.v alone, with its own stub usb_hid_host
 # built into the testbench. usb_hid.v needs three of the same kind of

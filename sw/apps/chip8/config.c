@@ -53,6 +53,24 @@ static int hex_digit(char c) {
 	return -1;
 }
 
+/* A colour as 3 or 6 hex digits (RGB or RRGGBB; no '#', which starts a
+ * comment here), as RGB444. -1 if it is neither. Six digits are rounded
+ * to four bits a channel, so Octo's #996600 is 0x960. */
+static int parse_rgb(const char *p, int len) {
+	int d[6], i;
+	if (len != 3 && len != 6) return -1;
+	for (i = 0; i < len; i++)
+		if ((d[i] = hex_digit(p[i])) < 0) return -1;
+	if (len == 3) return (d[0] << 8) | (d[1] << 4) | d[2];
+	{
+		int r = (d[0] << 4) | d[1], g = (d[2] << 4) | d[3], b = (d[4] << 4) | d[5];
+		r = (r * 15 + 127) / 255;
+		g = (g * 15 + 127) / 255;
+		b = (b * 15 + 127) / 255;
+		return (r << 8) | (g << 4) | b;
+	}
+}
+
 static int parse_uint(const char *p, int len) {
 	int v = 0, i;
 	if (len <= 0) return -1;
@@ -245,6 +263,25 @@ static void parse_line(c8_config_t *cfg, const char *p, int lineno) {
 		for (i = 0; i < 3; i++)
 			if (tok_eq(rest, n, palette_names[i])) { cfg->palette = i; return; }
 		goto bad;
+	}
+
+	if (tok_eq(p, klen, "colors") || tok_eq(p, klen, "colours")) {
+		const char *q = rest;
+		uint16_t c[4];
+		int n = 0;
+		for (;;) {
+			int len, v;
+			q = skip_space(q);
+			if (!*q || *q == '\n' || *q == '#' || *q == ';') break;
+			len = tok_len(q);
+			if (n == 4 || (v = parse_rgb(q, len)) < 0) goto bad;
+			c[n++] = (uint16_t)v;
+			q += len;
+		}
+		if (n == 0) goto bad;
+		memcpy(cfg->colors, c, sizeof(c));
+		cfg->ncolors = n;
+		return;
 	}
 
 	if (tok_eq(p, klen, "speed")) {

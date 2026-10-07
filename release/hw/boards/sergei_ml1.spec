@@ -57,6 +57,7 @@ defines =
     GPU_BLIT
     GPU_CURSOR
     GPU_DDMI
+    COLOR
     UART0
     USB_HID
     SPI_SDCARD

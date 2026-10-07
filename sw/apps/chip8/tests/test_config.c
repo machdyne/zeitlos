@@ -198,6 +198,45 @@ static void test_config_bad_lines(void) {
 
 }
 
+static void test_config_colors(void) {
+
+	static const char t[] =
+		"[*]\n"
+		"colors 000 fff\n"
+		"[OCTO.XO8]\n"
+		"colors 996600 FFCC00 FF6600 662200  # Octo's defaults\n"
+		"[BAD.XO8]\n"
+		"colors 12345\n"
+		"[MANY.XO8]\n"
+		"colors 000 111 222 333 444\n";
+
+	c8_config_t cfg;
+
+	c8_config_defaults(&cfg);
+	c8_config_parse(&cfg, t, "OCTO.XO8");
+	CHECK_EQ(cfg.ncolors, 4);
+	CHECK_EQ(cfg.colors[0], 0x960);
+	CHECK_EQ(cfg.colors[1], 0xfc0);
+	CHECK_EQ(cfg.colors[2], 0xf60);
+	CHECK_EQ(cfg.colors[3], 0x620);
+	CHECK_EQ(cfg.bad_lines, 0);
+
+	c8_config_defaults(&cfg);
+	c8_config_parse(&cfg, t, "OTHER.CH8");
+	CHECK_EQ(cfg.ncolors, 2);
+	CHECK_EQ(cfg.colors[1], 0xfff);
+
+	c8_config_defaults(&cfg);
+	c8_config_parse(&cfg, t, "BAD.XO8");
+	CHECK_EQ(cfg.bad_lines, 1);
+	CHECK_EQ(cfg.ncolors, 2);          /* the wildcard still applies */
+
+	c8_config_defaults(&cfg);
+	c8_config_parse(&cfg, t, "MANY.XO8");
+	CHECK_EQ(cfg.bad_lines, 1);        /* five colours is an error */
+
+}
+
 static void test_config_palette(void) {
 
 	static const char t[] =
@@ -421,6 +460,7 @@ int main(void) {
 	test_config_matching();
 	test_config_bad_lines();
 	test_config_palette();
+	test_config_colors();
 	test_config_memory_and_meminc();
 	test_config_empty();
 	test_profile_hint();

@@ -39,6 +39,17 @@
  * the expansion tables below are built in the output's order, so the
  * reversal is a property of a table rather than a loop.
  *
+ * -- planar (game-mode colour) --
+ *
+ * On a board with game-mode colour (docs/color.md) full screen shows
+ * XO-CHIP's two planes as real colours instead of greys. Then the
+ * renderer does not dither at all: c8_render_set_planar() makes it
+ * expand plane 0 into buf and plane 1 into buf1, both with the plain
+ * mono tables, and the hardware combines them through the palette.
+ * XO-CHIP's colour index is plane 0 in bit 0 and plane 1 in bit 1,
+ * which is exactly how the scanout forms its index -- so a ROM's
+ * colour n is palette entry n with nothing in between.
+ *
  * -- greys --
  *
  * Four XO-CHIP colours on a display with two. Each output pixel is
@@ -149,12 +160,19 @@ typedef struct {
 	/* Set when the tables no longer match pxw/grey. */
 	bool tables_valid;
 
+	/* Planar output: plane 0 into buf, plane 1 into buf1, no dither.
+	 * See the header comment. */
+	bool planar;
+
 	/* Output rows touched by the last c8_render(), half-open. Empty
 	 * when y1 <= y0. This is what chip8.c blits -- a full-screen blit
 	 * every frame would work and would also be most of the cost. */
 	int dirty_y0, dirty_y1;
 
 	uint8_t buf[C8_BUF_BYTES];
+
+	/* Plane 1, in planar mode only. Same geometry as buf. */
+	uint8_t buf1[C8_BUF_BYTES];
 
 } c8_render_t;
 
@@ -172,7 +190,11 @@ bool c8_render_set_scale(c8_render_t *r, int scale);
  * whether it needs to force a redraw. */
 bool c8_render_set_palette(c8_render_t *r, int pal);
 
-/* Expand the guest display into r->buf.
+/* Planar output on or off (see the header comment). Returns true if
+ * it changed, so the caller knows to force a full render. */
+bool c8_render_set_planar(c8_render_t *r, bool planar);
+
+/* Expand the guest display into r->buf (and r->buf1 when planar).
  *
  * Consumes and clears c->dirty, so only guest rows that changed are
  * re-expanded. Pass force = true after anything that invalidates the

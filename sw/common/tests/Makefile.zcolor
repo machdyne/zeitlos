@@ -1,0 +1,5 @@
+# sw/common/zcolor.c on the host: planar drawing across the 640x480
+# torus, against a software model of the blitter and the scanout.
+all:
+	cc -std=c99 -g -Wall -Wextra -fsanitize=address,undefined -o /tmp/test_zcolor test_zcolor.c ../zcolor.c
+	/tmp/test_zcolor

@@ -142,6 +142,23 @@
 // to be rebuilt differently.
 `define GAME
 
+// `COLOR -- game-mode colour: up to four bitplanes of the 640x480
+// framebuffer shown together through a 16-entry palette, in the
+// 320x240 game-mode viewport only. See docs/color.md.
+//
+// PER BOARD, NOT UNIVERSAL, unlike `GAME directly above. It needs no
+// pins either, but it is not free: one block RAM (the plane line
+// buffer), about 460 LUT4-equivalents and 330 flip-flops at synthesis
+// (docs/color.md, "Cost"), mostly in the pixel clock domain. Boards
+// opt in in their own block below: Lakritz, and every 45F board
+// (Mozart ML1/ML2, Sergei ML1/ML2, Noir, Schoko).
+//
+// Without `GAME and `GPU it does nothing (rtl/sysctl.v ands them), and
+// on a composite board it is reported unavailable: that output stage
+// is a monochrome luma ladder. Software asks z_color_available().
+// Nothing in the monochrome path changes on a board that defines it --
+// colour is off at reset and is switched off by leaving game mode.
+
 // The virtual (software-written) mouse at 0xf000_0400: a 25-bit
 // register {present, buttons, y, x} that, while present is set, drives
 // the hardware cursor sprite and is read by wm exactly like a USB
@@ -501,13 +518,24 @@
 // NO BRAM. Software falls back to its own field arithmetic if it is
 // absent, so dropping it on a board that stops fitting costs speed
 // rather than function.
-`define MONTMUL
+//
+// OFF ON LAKRITZ: it is ~900 LUT4 here, and with USB_HOST, USB_CDC,
+// AUDIO_MIXER and COLOR this 25F is at 98% without it (docs/boards.md,
+// "Lakritz with game-mode colour"). TLS certificate checks take the
+// software path.
+//`define MONTMUL
 // Its register file (docs/montmul.md), ~510 LUT4 and one DP16KD, and
 // the SHA-256 block (docs/sha256_hw.md), ~1,000 LUT4-equivalents and
 // one DP16KD. The tightest board: see docs/sha256_hw.md, "Fitting",
 // for what these cost here.
-`define MONTMUL_REGS
-`define SHA256
+//
+// BOTH OFF ON LAKRITZ, with MONTMUL above, to make room for `COLOR
+// below alongside USB_HOST, USB_CDC and AUDIO_MIXER. All three cost
+// speed, not function: TLS and SSH fall back to the software paths
+// and compute the same answers. Re-enable them here for a
+// networking-first Lakritz build that does not want colour.
+//`define MONTMUL_REGS
+//`define SHA256
 `define ICACHE_KB 4
 `define ICACHE_LINE_WORDS 4
 // Data cache (docs/dcache.md), WITHOUT the write buffer: this 25F is
@@ -526,6 +554,9 @@
 `define GPU_BLIT
 `define GPU_CURSOR
 `define GPU_DDMI
+// Game-mode colour (docs/color.md). Paid for by MONTMUL_REGS and
+// SHA256 above.
+`define COLOR
 `define UART0
 `define USB_HOST
 `define SPI_SDCARD
@@ -627,6 +658,9 @@
 `define GPU_BLIT
 `define GPU_CURSOR
 `define GPU_DDMI
+// Game-mode colour (docs/color.md): one block RAM and a few hundred
+// LUT4 on a 45F, which has plenty of both.
+`define COLOR
 `define UART0
 // USB host controller (rtl/usb/, docs/usb_host.md) instead of the
 // low-speed HID-only rtl/ext/usb_hid_host. Both cores remain
@@ -703,6 +737,9 @@
 `define GPU_BLIT
 `define GPU_CURSOR
 `define GPU_DDMI
+// Game-mode colour (docs/color.md): one block RAM and a few hundred
+// LUT4 on a 45F, which has plenty of both.
+`define COLOR
 `define UART0
 // USB host controller (rtl/usb/, docs/usb_host.md) instead of the
 // low-speed HID-only rtl/ext/usb_hid_host. Both cores remain
@@ -770,6 +807,9 @@
 `define GPU_BLIT
 `define GPU_CURSOR
 `define GPU_DDMI
+// Game-mode colour (docs/color.md): one block RAM and a few hundred
+// LUT4 on a 45F, which has plenty of both.
+`define COLOR
 `define UART0
 // The console is the USB-C socket (`undef at the bottom drops
 // `UART0): Noir has no PMOD, so this is the console that needs no
@@ -866,6 +906,9 @@
 `define GPU_BLIT
 `define GPU_CURSOR
 `define GPU_DDMI
+// Game-mode colour (docs/color.md): one block RAM and a few hundred
+// LUT4 on a 45F, which has plenty of both.
+`define COLOR
 `define UART0
 `define USB_HOST
 `define SPI_SDCARD
@@ -1090,6 +1133,9 @@
 `define GPU_BLIT
 `define GPU_CURSOR
 `define GPU_DDMI
+// Game-mode colour (docs/color.md): one block RAM and a few hundred
+// LUT4 on a 45F, which has plenty of both.
+`define COLOR
 `define UART0
 `define USB_HOST
 `define SPI_SDCARD
@@ -1370,6 +1416,9 @@
 // 640x480 picture (rtl/sysctl.v drives VGA and DDMI side by side).
 `define GPU_VGA
 `define GPU_DDMI
+// Game-mode colour (docs/color.md): one block RAM and a few hundred
+// LUT4 on a 45F, which has plenty of both.
+`define COLOR
 `define UART0
 `define USB_CDC
 `define USB_HOST

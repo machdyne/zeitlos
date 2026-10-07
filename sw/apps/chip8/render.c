@@ -156,6 +156,17 @@ bool c8_render_set_palette(c8_render_t *r, int pal) {
 
 }
 
+bool c8_render_set_planar(c8_render_t *r, bool planar) {
+
+	if (planar == r->planar) return false;
+
+	r->planar = planar;
+	r->tables_valid = false;
+
+	return true;
+
+}
+
 /* Expand one guest row into one output row.
  *
  * 4*pxw is 4, 8, 16 or 32, so it always divides 32 exactly: a fixed
@@ -201,7 +212,9 @@ static void expand_row(const c8_render_t *r, const uint32_t *p0,
 bool c8_render(c8_render_t *r, c8_t *c, bool force) {
 
 	int pxw = c->hires ? r->scale : r->scale * 2;
-	bool grey = c->two_plane;
+	/* Planar output has no greys to make: each plane goes out on its
+	 * own, through the mono tables, and the palette does the rest. */
+	bool grey = c->two_plane && !r->planar;
 	int nibs = c->w / 4;
 	int gy, y0 = 64, y1 = -1;
 
@@ -256,6 +269,18 @@ bool c8_render(c8_render_t *r, c8_t *c, bool force) {
 			memcpy(r->buf + (base + k) * r->stride,
 			       r->buf + (base + k - distinct) * r->stride,
 			       (size_t)r->stride);
+
+		/* Plane 1, the same way: mono, so one distinct row. Always
+		 * expanded when planar, even before a ROM selects plane 1 --
+		 * it is all zeroes then, and a stale buf1 from the previous
+		 * ROM would otherwise show through. */
+		if (r->planar) {
+			expand_row(r, c->px[1][gy], c->px[1][gy], nibs, 0,
+				(uint32_t *)(r->buf1 + base * r->stride));
+			for (k = 1; k < pxw; k++)
+				memcpy(r->buf1 + (base + k) * r->stride,
+				       r->buf1 + base * r->stride, (size_t)r->stride);
+		}
 
 	}
 

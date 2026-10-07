@@ -155,11 +155,127 @@ static void dirty_rows(void) {
     CHECK(bs_dirty(&s, &y0, &y1) && y0 == 50 && y1 == 101, "dirty rows 50-100 (%d-%d)", y0, y1);
 }
 
+/* ---- colour ---- */
+
+/* the colour of every pixel of cell (row, col) is ink where the glyph
+ * is set and paper where it is not */
+static int cell_colours(int row, int col, int c, int ink, int paper) {
+    int i = z_font_index(&z_font_8x8, (uint32_t)c);
+    const uint8_t *g = z_font_8x8.glyphs + i * 8;
+    for (int r = 0; r < 8; r++)
+        for (int b = 0; b < 8; b++) {
+            int want = ((g[r] >> (7 - b)) & 1) ? ink : paper;
+            if (bs_point(&s, col * 8 + b, row * 8 + r) != want) return 0;
+        }
+    return 1;
+}
+
+static int planes_zero(void) {
+    for (int k = 0; k < 3; k++)
+        for (int i = 0; i < BS_PLANE_WORDS; i++)
+            if (s.pl[k][i]) return 0;
+    return 1;
+}
+
+static void colour(void) {
+    /* no colour asked for: planes 1-3 are never touched, and every
+     * monochrome operation is what it was */
+    bs_init(&s);
+    bs_box(&s, 0, 0, 50, 50, true);
+    bs_putc(&s, 'A');
+    s.op = BS_CLEAR;
+    bs_circle(&s, 30, 30, 10);
+    CHECK(!s.colour && planes_zero(), "monochrome leaves planes 1-3 alone");
+    CHECK(bs_ink(&s, 1) && !s.colour, "INK 1 is not colour");
+    CHECK(bs_paper(&s, 0) && !s.colour, "PAPER 0 is not colour");
+    CHECK(!bs_ink(&s, 16) && !bs_ink(&s, -1), "INK out of range");
+    CHECK(!bs_palette(&s, 0, 0, 0, 16), "PALETTE out of range");
+
+    /* drawing in colour 13 (planes 0, 2, 3) over colour 6 (1, 2) */
+    bs_init(&s);
+    CHECK(bs_ink(&s, 6), "INK 6");
+    bs_box(&s, 10, 10, 40, 40, true);
+    CHECK(bs_point(&s, 20, 20) == 6, "box in 6 (%d)", bs_point(&s, 20, 20));
+    bs_ink(&s, 13);
+    bs_line(&s, 10, 25, 40, 25);
+    CHECK(bs_point(&s, 30, 25) == 13 && bs_point(&s, 30, 26) == 6,
+        "line in 13 over 6 (%d %d)", bs_point(&s, 30, 25), bs_point(&s, 30, 26));
+    /* COLOR 0 draws black in every plane */
+    s.op = BS_CLEAR;
+    bs_plot(&s, 30, 26);
+    CHECK(bs_point(&s, 30, 26) == 0, "COLOR 0 is colour 0");
+    /* COLOR 2 inverts plane 0 only, and twice is nothing */
+    s.op = BS_INVERT;
+    bs_plot(&s, 20, 20);
+    CHECK(bs_point(&s, 20, 20) == 7, "invert 6 -> 7 (%d)", bs_point(&s, 20, 20));
+    bs_plot(&s, 20, 20);
+    CHECK(bs_point(&s, 20, 20) == 6, "invert twice");
+
+    /* text: ink on paper in every plane, and a scroll brings in paper */
+    bs_init(&s);
+    bs_ink(&s, 10);
+    bs_paper(&s, 5);
+    bs_cls(&s);
+    CHECK(bs_point(&s, 319, 239) == 5, "CLS in paper");
+    bs_putc(&s, 'Q');
+    CHECK(cell_colours(0, 0, 'Q', 10, 5), "Q in 10 on 5");
+    for (int i = 0; i < BS_ROWS; i++) bs_putc(&s, '\n');
+    CHECK(bs_point(&s, 3, 235) == 5, "scrolled-in rows are paper");
+
+    /* on a monochrome display: the paper black, every other colour
+     * white -- text readable, no dither anywhere */
+    bs_init(&s);
+    bs_ink(&s, 10);
+    bs_paper(&s, 6);
+    bs_cls(&s);
+    bs_putc(&s, 'W');
+    bs_ink(&s, 12);
+    bs_box(&s, 100, 100, 131, 131, true);
+    bs_ink(&s, 6);                      /* the paper's own colour */
+    bs_box(&s, 200, 100, 231, 131, true);
+    {
+        static uint32_t m[BS_PLANE_WORDS];
+        int bad = 0;
+        bs_mono(&s, 0, BS_H, m);
+        for (int y = 0; y < BS_H; y++)
+            for (int x = 0; x < BS_W; x++) {
+                int lit = (int)((m[y * BS_WORDS + (x >> 5)] >> (x & 31)) & 1);
+                if (lit != (bs_point(&s, x, y) != 6)) bad++;
+            }
+        CHECK(bad == 0, "paper black, the rest white (%d wrong)", bad);
+        CHECK(m[50 * BS_WORDS + 5] == 0, "paper is black");
+        CHECK(m[110 * BS_WORDS + 3] != 0, "a colour box is white");
+        CHECK(m[110 * BS_WORDS + 6] == 0, "a box in the paper colour is black");
+        /* the W: the same pixels as monochrome would draw */
+        bs_init(&s);
+        bs_putc(&s, 'W');
+        for (int y = 0; y < 8; y++)
+            if ((m[y * BS_WORDS] & 0xFF) != (s.px[y * BS_WORDS] & 0xFF)) bad++;
+        CHECK(bad == 0, "text in the window looks as in monochrome");
+    }
+
+    /* without colour bs_mono() is plane 0 */
+    bs_init(&s);
+    bs_box(&s, 3, 3, 9, 9, false);
+    {
+        static uint32_t m[BS_PLANE_WORDS];
+        bs_mono(&s, 0, BS_H, m);
+        CHECK(!memcmp(m, s.px, sizeof(s.px)), "mono copy");
+    }
+
+    /* PALETTE */
+    bs_init(&s);
+    CHECK(bs_palette(&s, 2, 15, 8, 0) && s.pal[2] == 0xf80 && s.pal_dirty,
+        "PALETTE 2");
+    CHECK(s.pal[1] == 0xfff && s.pal[0] == 0x000, "C64: 0 black, 1 white");
+}
+
 int main(void) {
     text();
     invert_twice();
     shapes();
     dirty_rows();
+    colour();
     if (failures) {
         printf("FAILED: %d\n", failures);
         return 1;
