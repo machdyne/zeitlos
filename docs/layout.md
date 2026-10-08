@@ -201,24 +201,52 @@ shows both `ram` and `tmp`: two names for one volume.
 
 ## Finding a program
 
-A **bare name** (`run web`, a dock icon, `z_proc_run("poker")`) is
-looked up:
+A **bare name** (a dock icon, `z_proc_run("poker")`, boot starting
+`wm`) is looked up:
 
 1. `/apps/<name>`
 2. the flash archive, under `<name>`
 
-and nowhere else. The card root is no longer searched. To hot-swap a
-core app during development, put the new build at `/apps/wm` (for
-example `xf apps/wm`); delete it to go back to the flash copy.
+and nowhere else. To hot-swap a core app during development, put the
+new build at `/apps/wm` (for example `xf apps/wm`) and reboot; delete it
+to go back to the flash copy.
 
-A **name containing `/`** is a path and is opened exactly as given, with
-no search. That is how the file browser launches a program that is not
+**A shell looks in its working directory first.** Typed at a shell, a
+bare name is tried there before `/apps` and flash:
+
+```
+$ cd proj
+$ zcc -o test test.c
+$ test                  runs /proj/test, even if /apps/test exists
+```
+
+`posix` does this with its own working directory; the kernel shell's
+is always the root, so `tget loom wm` then `run wm` runs the `wm` just
+fetched. Only a real executable counts -- a data file never stands in
+for a program -- and when one hides an installed program of the same
+name the shell says so (`test: running /proj/test, not the installed
+one`).
+
+Unix leaves the working directory out of the search and makes you type
+`./test`, because on a shared machine someone else's file could pose
+as a command. Zeitlos is single-user, so that reason does not apply,
+and "the program I just made is the one that runs" is what people
+expect. Only shells do this: boot, the dock and one app starting
+another have no working directory and use `/apps` and flash alone, so
+a file left anywhere on the card cannot change what they launch.
+
+A **name containing `/`** is a path. The kernel opens it exactly as
+given, from the root; `posix` first resolves it against its working
+directory, so `proj/test` and `./test` mean what they would on Unix.
+That is also how the file browser launches a program that is not
 installed.
 
 `ls` and `ls /apps` list the flash archive's programs after the card's,
 under `in flash:`, leaving out any that `/apps` shadows.
 
-This is `fs_exec_resolve()` in `sw/os/fs/fs.c`. Archive names stay flat
+This is `fs_exec_resolve()` in `sw/os/fs/fs.c` for the search everything
+shares, `run` in `sw/os/sh.c` and `bi_run()` in `sw/apps/posix/sh.c` for
+the shells' working-directory step. Archive names stay flat
 (`sw/os/zar.h`).
 
 ## Every file, and where it goes
@@ -452,7 +480,11 @@ and resetting or removing an app means deleting one folder.
   being small and readable, not dangerous to browse.
 - **A search path with the card root first and a fallback to the old
   `/apps` layout.** Unneeded once the card is rewritten for v0.0.6, and
-  the root stays clean.
+  the root stays clean. The root comes back only as the kernel shell's
+  working directory, for the kernel shell alone.
+- **Unix's rule, `./test` to run a program in the working directory.**
+  Its reason is a shared machine; Zeitlos is not one (see "Finding a
+  program").
 
 ## Implementation
 

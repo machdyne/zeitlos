@@ -40,12 +40,18 @@ printf 'cherry\napple\nbanana\napple\n' > "$work/words.txt"
 awk 'BEGIN { s=""; while (length(s) < 699) s = s "x"; print s }' \
     > "$work/long.txt" 2>/dev/null || \
     python3 -c "print('x'*699)" > "$work/long.txt"
-# `zcc` has to EXIST for the run builtin to report success, since the
-# stub checks for it -- see host_fs.c's z_proc_run().
-printf 'not really a compiler\n' > "$work/zcc"
-# Exits 1, so the failure arms of && and || are reachable -- see
-# host_fs.c's z_proc_run().
-printf 'exits nonzero\n' > "$work/failprog"
+# Installed programs, in apps/ where the kernel finds a bare name --
+# see host_fs.c's z_proc_run(). `zcc` has to EXIST for the run builtin
+# to report success; `failprog` exits 1, so the failure arms of && and
+# || are reachable.
+mkdir -p "$work/apps"
+printf 'not really a compiler\n' > "$work/apps/zcc"
+printf 'exits nonzero\n' > "$work/apps/failprog"
+# Programs of the person's own, for the working-directory search: a
+# `hello` built in proj/, and a `zcc` there that hides the installed one.
+mkdir -p "$work/proj"
+printf 'built here\n' > "$work/proj/hello"
+printf 'a zcc of my own\n' > "$work/proj/zcc"
 # zcat, gunzip: notes.gz as real gzip writes it (with the file's name,
 # which zinflate refuses unless asked -- zgz asks); bad.gz with its
 # trailer's CRC flipped; cut.gz missing its last bytes.

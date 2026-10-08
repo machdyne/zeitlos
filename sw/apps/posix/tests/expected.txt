@@ -1,18 +1,18 @@
 $ pwd
 /
 $ ls
+apps/
 bad.gz
 copy.gz
 cut.gz
 docs/
-failprog
 long.txt
 notes.gz
 notes.txt
 numbers.txt
+proj/
 src/
 words.txt
-zcc
 $ cd src
 $ pwd
 /src
@@ -111,12 +111,12 @@ $ cp missing.txt out.txt
 cp: missing.txt: cannot open
 [status 1]
 $ ls
+apps/
 bad.gz
 brandnew.txt
 copy.gz
 cut.gz
 docs/
-failprog
 keep.txt
 long.txt
 moved.txt
@@ -124,43 +124,62 @@ notes.gz
 notes.txt
 numbers.txt
 out.txt
+proj/
 src/
 words.txt
-zcc
 $ rm moved.txt brandnew.txt keep.txt
 $ mkdir newdir
 $ ls
+apps/
 bad.gz
 copy.gz
 cut.gz
 docs/
-failprog
 long.txt
 newdir/
 notes.gz
 notes.txt
 numbers.txt
 out.txt
+proj/
 src/
 words.txt
-zcc
 $ rm out.txt
 $ ls
+apps/
 bad.gz
 copy.gz
 cut.gz
 docs/
-failprog
 long.txt
 newdir/
 notes.gz
 notes.txt
 numbers.txt
+proj/
 src/
 words.txt
-zcc
 $ rm missing.txt
 rm: missing.txt: failed
+[status 1]
+$ cd proj
+$ hello
+[proc_run /proj/hello arg='' -> ok]
+[child 7 exited 0]
+$ zcc
+zcc: running /proj/zcc, not the installed one
+[proc_run /proj/zcc arg='' -> ok]
+[child 7 exited 0]
+$ cd /
+$ proj/hello
+[proc_run /proj/hello arg='' -> ok]
+[child 7 exited 0]
+$ ./proj/hello
+[proc_run /proj/hello arg='' -> ok]
+[child 7 exited 0]
+$ hello
+[proc_run hello arg='' -> not found]
+run: hello: cannot start
 [status 1]
 $ help
 posix -- see docs/posix.md

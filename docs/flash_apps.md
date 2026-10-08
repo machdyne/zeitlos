@@ -119,6 +119,13 @@ The card keeps its programs in `/apps`, one file each
 A name **containing `/`** is taken literally and not searched at all,
 so `docs/term` cannot resolve to `/apps/term`.
 
+Typed at a shell, a bare name is first looked for in the shell's
+working directory -- the kernel shell's is the root, so `run wm` runs a
+`/wm` fetched with `tget` -- and only then searched as above. Boot, the
+dock and apps launching apps do not do that, so `init` always takes
+`wm` from `/apps` or from flash. See [layout.md](layout.md), "Finding a
+program".
+
 Two consequences worth stating plainly:
 
 - **Nothing above this function changed when the apps moved.**

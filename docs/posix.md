@@ -74,6 +74,15 @@ regular expressions (`:g`, `:s`) if you need them.
 Anything that is not a builtin is run as a program, so `zcc hello.c`
 and `run zcc hello.c` are the same thing.
 
+A program in the **working directory comes first**, before `/apps` and
+the flash archive: `zcc -o test test.c` then `test` runs the `test`
+you just built. There is no need for Unix's `./test` (that rule exists
+for shared machines; [layout.md](layout.md), "Finding a program"). Only
+a real executable counts, and the shell says so when one hides an
+installed program: `zcc: running /proj/zcc, not the installed one`. A
+name with a `/` in it is a path, resolved against the working
+directory, so `proj/test` and `./test` work as on Unix.
+
 ### Quoting
 
 File names can have spaces in them (long file names, [sdcard.md](sdcard.md)),

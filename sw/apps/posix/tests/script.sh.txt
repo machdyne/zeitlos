@@ -63,5 +63,13 @@ ls
 rm out.txt
 ls
 rm missing.txt
+# -- which program: the working directory first, then /apps --
+cd proj
+hello
+zcc
+cd /
+proj/hello
+./proj/hello
+hello
 help
 exit

@@ -11,8 +11,15 @@
 #
 #     sw/apps/text/text.bin   ->   /srv/tftp/text
 #
-# which is what `tget` asks for. Save it on the card as /apps/<name>,
-# where `run <name>` looks for it (docs/layout.md):
+# which is what `tget` asks for. The kernel shell runs a program in its
+# working directory -- the root -- before an installed one, so to try a
+# build:
+#
+#     > tget 192.168.1.100 text
+#     > run text
+#
+# To install it, so the dock and every other launcher get it, save it
+# as /apps/<name> instead (docs/layout.md, "Finding a program"):
 #
 #     > tget 192.168.1.100 text /apps/text
 #

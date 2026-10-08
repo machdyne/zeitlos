@@ -1064,6 +1064,19 @@ static void bi_df(px_shell_t *sh, int argc, char **argv) {
  * behaviour and the right default for something that knows nothing
  * about us.
  *
+ * WHICH PROGRAM. The kernel resolves a bare name in /apps and then in
+ * flash, and knows nothing about this shell's working directory -- so
+ * the shell looks there itself, first. `zcc -o test test.c` then `test`
+ * runs ./test, not an installed /apps/test (docs/layout.md, "Finding a
+ * program"). Unlike Unix there is no need to type `./`: this is a
+ * single-user machine, so the reason Unix keeps the working directory
+ * out of the search does not apply, and the rule people expect is
+ * "the program I just made is the one that runs". Only a real
+ * executable counts, and the shell says so when it hides an installed
+ * program of the same name. A name with a '/' in it is a path,
+ * resolved against the working directory here because the kernel
+ * would take it from the root.
+ *
  * What this still does NOT do is WAIT for the child or report its exit
  * status. `run` returns as soon as the process starts, so `zcc x.c &&
  * run x` does not mean what it looks like -- the `&&` tests whether
@@ -1103,7 +1116,17 @@ static void bi_run(px_shell_t *sh, int argc, char **argv) {
      * arg='src/a.c -o a -v' inherited from three commands earlier. */
     z_launch_arg_set(args);
 
-    uint32_t pid = z_proc_run(argv[1]);
+    const char *prog = argv[1];
+    char here[PX_PATH_MAX];
+    if (strchr(prog, '/')) {
+        if (px_resolve(prog, here, sizeof(here))) prog = here;
+    } else if (px_resolve(prog, here, sizeof(here)) && z_exec_exists(here)) {
+        if (z_exec_exists(argv[1]))
+            px_printf(sh, "%s: running %s, not the installed one\n", argv[1], here);
+        prog = here;
+    }
+
+    uint32_t pid = z_proc_run(prog);
     if (!pid) {
         px_printf(sh, "run: %s: cannot start\n", argv[1]);
         sh->status = 1;

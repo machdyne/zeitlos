@@ -192,11 +192,29 @@ const char *host_last_launch_arg(void) { return last_launch_arg; }
  * rather than whether it started -- testable at all. */
 static int next_exit_status;
 
-uint32_t z_proc_run(const char *name) {
+/* Where the kernel would find `name`, as it does on the board: a path
+ * as given, a bare name in /apps (docs/layout.md, "Finding a
+ * program"). There is no flash here. Any regular file counts as an
+ * executable -- the fixture's programs are text. */
+static FILE *host_program(const char *name) {
     char path[600];
+    if (strchr(name, '/'))
+        snprintf(path, sizeof(path), "%s%s", root, name);
+    else
+        snprintf(path, sizeof(path), "%s/apps/%s", root, name);
+    return fopen(path, "rb");
+}
+
+uint32_t z_exec_exists(const char *name) {
+    FILE *f = host_program(name);
+    if (!f) return 0;
+    fclose(f);
+    return 1;
+}
+
+uint32_t z_proc_run(const char *name) {
     FILE *f;
-    snprintf(path, sizeof(path), "%s/%s", root, name);
-    f = fopen(path, "rb");
+    f = host_program(name);
     printf("[proc_run %s arg='%s' -> %s]\n", name, last_launch_arg,
            f ? "ok" : "not found");
     if (!f) return 0;

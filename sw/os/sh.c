@@ -1034,6 +1034,27 @@ void sh(void) {
 		// CREATE A PROCESS
 		else if (!strncmp(buffer, "run", cmdlen)) {
 			arg = get_arg(buffer, 1);
+
+			// A shell looks in its current directory first, and this
+			// shell's is always the root: `tget loom wm` then `run wm`
+			// runs the wm just fetched. Only a real executable counts,
+			// so a data file never stands in for a program, and saying
+			// so when it hides an installed one keeps that from being a
+			// mystery. Nothing else searches here -- not init, not the
+			// dock, not z_proc_run() -- so a file left at the root
+			// cannot change what they launch (docs/layout.md, "Finding
+			// a program").
+			static char here[FS_PATH_MAX];
+			if (arg && !strchr(arg, '/') && !strchr(arg, '\\')) {
+				z_exec_info_t hx, ax;
+				snprintf(here, sizeof(here), "/%s", arg);
+				if (fs_exec_info(here, &hx) == 0 && hx.total) {
+					if (fs_exec_info_any(arg, &ax) == 0)
+						printf("run: %s is in this directory -- running %s, "
+							"not the installed one\n", arg, here);
+					arg = here;
+				}
+			}
 			// ZEXE-aware: the image size is data + bss, which for the
 			// new format is NOT the file size (see sw/common/zexec.h).
 			// Legacy raw binaries report bss 0 and total == file size,
