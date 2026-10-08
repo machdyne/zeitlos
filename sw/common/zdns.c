@@ -113,7 +113,14 @@ bool z_dns_resolve(const char *hostname, uint32_t *out_ip,
 	}
 
 	uint32_t net_pid = resolve_net_pid();
-	if (!net_pid) return false;	// net not running -- say so, don't guess
+	if (!net_pid) {
+		// net not running -- say so, don't guess. This used to return
+		// false with err untouched, and every caller prints err on
+		// failure: the kernel shell's `tget host ...` printed its
+		// uninitialised stack buffer.
+		set_err(err, err_len, "net is not running (run `init` or `run net`)");
+		return false;
+	}
 	uint32_t tag = next_dns_tag();
 
 	z_msg_new_send(net_pid, Z_NET_DNS_RESOLVE, tag, z_obj_str(hostname));
