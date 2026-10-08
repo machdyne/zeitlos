@@ -642,6 +642,55 @@
 //
 // Obst has two connectors; see obst_uart_uart1 there.
 
+`elsif BOARD_MOZART_ML0
+
+// Mozart with the Sechzig ML0 module (ECP5 LFE5U-25F, 32MB SDRAM, 4MB
+// flash).
+// The ML0 is the ML1 module on a 25F: same balls, same SDRAM, same
+// 48MHz oscillator, same 4MB flash, so the carrier's ML1 pin file is
+// used unchanged (Makefile: LPF = mozart_ml1.lpf). Only the
+// fabric is smaller -- the 25F has 24288 LUT4 and 56 DP16KD against
+// the 45F's 43848 and 108 -- so this is the ML1 block trimmed the way
+// Lakritz, the same die, is trimmed:
+//
+//   ICACHE_KB 8 -> 4      four DP16KD
+//   DCACHE_WBUF 2 -> 0    about 540 LUT4 (docs/dcache.md)
+//   no `MONTMUL           RSA/DH run in software (docs/boards.md)
+//
+// Everything a user sees is kept: DDMI, colour, the full-speed USB
+// host, RMII ethernet, audio with the hardware mixer.
+`define FPGA_ECP5
+// PROGRAMN on M8, the ML1 module's confirmed wiring.
+`define PROGRAMN_PIN
+`define OSC48
+`define MEM 32
+`define MEM_SDRAM
+`define MEM_VRAM
+`define MEM_ROM
+`define MEM_GLYPH
+`define ICACHE
+`define ICACHE_KB 4
+`define ICACHE_LINE_WORDS 4
+`define DCACHE
+`define DCACHE_KB 4
+`define DCACHE_LINE_WORDS 4
+`define DCACHE_WBUF 0
+`define SDRAM_BURST
+`define GPU
+`define GPU_RASTER
+`define GPU_BLIT
+`define GPU_CURSOR
+`define GPU_DDMI
+`define COLOR
+`define UART0
+`define USB_HOST
+`define SPI_SDCARD
+`define ETH_RMII
+`define ETH_RX_SLOTS 4
+`define AUDIO
+`define AUDIO_PT8211
+`define AUDIO_MIXER
+
 `elsif BOARD_MOZART_ML1
 
 `define FPGA_ECP5
@@ -891,6 +940,58 @@
 `define ETH_RMII
 `define ETH_RMII_DRIVE_REFCLK
 `define ETH_RX_SLOTS 4
+
+`elsif BOARD_SERGEI_ML0
+
+// Sergei with the Sechzig ML0 module (ECP5 LFE5U-25F, 32MB SDRAM, 4MB
+// flash).
+// The ML0 is the ML1 module on a 25F: same balls, same SDRAM, same
+// 48MHz oscillator, same 4MB flash, so the carrier's ML1 pin file is
+// used unchanged (Makefile: LPF = sergei_ml1.lpf). Only the
+// fabric is smaller -- the 25F has 24288 LUT4 and 56 DP16KD against
+// the 45F's 43848 and 108 -- so this is the ML1 block trimmed the way
+// Lakritz, the same die, is trimmed:
+//
+//   ICACHE_KB 8 -> 4      four DP16KD
+//   DCACHE_WBUF 2 -> 0    about 540 LUT4 (docs/dcache.md)
+//   no `MONTMUL           RSA/DH run in software (docs/boards.md)
+//
+// Everything a user sees is kept: DDMI, colour, the full-speed USB
+// host, RMII ethernet, audio with the hardware mixer.
+`define FPGA_ECP5
+// PROGRAMN on M8, the ML1 module's confirmed wiring.
+`define PROGRAMN_PIN
+`define OSC48
+`define MEM 32
+`define MEM_SDRAM
+`define MEM_VRAM
+`define MEM_ROM
+`define MEM_GLYPH
+`define ICACHE
+`define ICACHE_KB 4
+`define ICACHE_LINE_WORDS 4
+`define DCACHE
+`define DCACHE_KB 4
+`define DCACHE_LINE_WORDS 4
+`define DCACHE_WBUF 0
+`define SDRAM_BURST
+`define GPU
+`define GPU_RASTER
+`define GPU_BLIT
+`define GPU_CURSOR
+`define GPU_DDMI
+`define COLOR
+`define UART0
+`define USB_HOST
+`define SPI_SDCARD
+`define ETH_RMII
+`define ETH_RMII_DRIVE_REFCLK
+`define ETH_RX_SLOTS 4
+`define AUDIO
+`define AUDIO_SPDIF
+`define AUDIO_MIXER
+// 46875Hz -- the S/PDIF rate, as on Sergei ML1.
+`define AUDIO_RATE_RESET 8'd16
 
 `elsif BOARD_SERGEI_ML1
 

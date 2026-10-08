@@ -365,6 +365,8 @@ FPGA_FILES = [
     (zcard("Z_DIR_ZFPGA_DB", "boards/mozart1.lpf"), "sw/apps/zfpga/db/boards/mozart1.lpf"),
     (zcard("Z_DIR_ZFPGA_DB", "boards/sergei1.brd"), "sw/apps/zfpga/db/boards/sergei1.brd"),
     (zcard("Z_DIR_ZFPGA_DB", "boards/sergei1.lpf"), "sw/apps/zfpga/db/boards/sergei1.lpf"),
+    (zcard("Z_DIR_ZFPGA_DB", "boards/mozart0.brd"), "sw/apps/zfpga/db/boards/mozart0.brd"),
+    (zcard("Z_DIR_ZFPGA_DB", "boards/sergei0.brd"), "sw/apps/zfpga/db/boards/sergei0.brd"),
     (zcard("Z_DIR_ZFPGA_DB", "boards/mozart2.brd"), "sw/apps/zfpga/db/boards/mozart2.brd"),
     (zcard("Z_DIR_ZFPGA_DB", "boards/mozart2.lpf"), "sw/apps/zfpga/db/boards/mozart2.lpf"),
     (zcard("Z_DIR_ZFPGA_DB", "boards/sergei2.brd"), "sw/apps/zfpga/db/boards/sergei2.brd"),

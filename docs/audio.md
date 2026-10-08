@@ -41,6 +41,8 @@ Per board:
 | Lakritz | 1-bit sigma-delta, stereo | `AUDIO_L` M3, `AUDIO_R` N1 | `AUDIO`, `AUDIO_SD` |
 | Mozart ML1 | PT8211/TM8211 | `AUD_BCK` T13, `AUD_WS` T14, `AUD_DIN` R12 | `AUDIO`, `AUDIO_PT8211` |
 | Sergei ML1 | optical S/PDIF | `AUD_OPTICAL` A13 | `AUDIO`, `AUDIO_SPDIF` |
+| Mozart ML0 | as Mozart ML1 | as Mozart ML1 | as Mozart ML1 |
+| Sergei ML0 | as Sergei ML1 | as Sergei ML1 | as Sergei ML1 |
 | ULX3S | coax S/PDIF | `AUD_OPTICAL` E5 | `AUDIO`, `AUDIO_SPDIF` |
 
 Every board also sets `AUDIO_MIXER`. The S/PDIF boards set

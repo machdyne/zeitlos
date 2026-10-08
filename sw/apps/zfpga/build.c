@@ -47,8 +47,10 @@ static char *path2(const char *dir, const char *a, const char *b) {
 /* The tree's board names that are longer than the card's 8.3 file names
  * allow: the Makefile says `-b mozart_ml1`, the card holds mozart1.brd. */
 static const struct { const char *name, *file; } board_aliases[] = {
+    { "mozart_ml0", "mozart0" },
     { "mozart_ml1", "mozart1" },
     { "sergei_ml1", "sergei1" },
+    { "sergei_ml0", "sergei0" },
     { "mozart_ml2", "mozart2" },
     { "sergei_ml2", "sergei2" },
 };

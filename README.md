@@ -169,6 +169,7 @@ The following boards are currently partially supported or untested:
  - [Machdyne Schoko](https://github.com/machdyne/schoko) (builds and meets timing; untested on hardware)
  - [Machdyne Noir](https://github.com/machdyne/noir) (DDR3; builds and meets timing; untested on hardware)
  - [Machdyne Klinge](https://github.com/machdyne/klinge) (DDR3, headless; first ethernet port and first microSD slot only; untested on hardware)
+ - Machdyne Mozart ML0 and Sergei ML0 (the [Sechzig](https://github.com/machdyne/sechzig) ML0 module, 25F; builds and meets timing, tightly; untested on hardware)
  - [Machdyne Kirsch](https://github.com/machdyne/kirsch)
  - [Machdyne Mozart](https://github.com/machdyne/mozart) / [MX1](https://github.com/machdyne/sechzig)
  - [Machdyne Sergei](https://github.com/machdyne/sergei) / [MX1](https://github.com/machdyne/sechzig)

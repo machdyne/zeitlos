@@ -270,6 +270,17 @@ else ifeq ($(BOARD), lakritz)
 	FLASH = openFPGALoader -v -c $(CABLE) -f
 	FLASH_OFFSET = -o
 	JUMP = 1
+else ifeq ($(BOARD), mozart_ml0)
+	# Mozart with the Sechzig ML0 module: the ML1 module on an LFE5U-25F,
+	# same balls, so the ML1 pin file. docs/boards.md.
+	FAMILY = ecp5
+	DEVICE = 25k
+	PACKAGE = CABGA256
+	LPF = mozart_ml1.lpf
+	PROG = openFPGALoader -c dirtyJtag
+	FLASH = openFPGALoader -v -c dirtyJtag -f
+	FLASH_OFFSET = -o
+	JUMP = 1
 else ifeq ($(BOARD), mozart_ml1)
 	FAMILY = ecp5
 	DEVICE = 45k
@@ -312,6 +323,17 @@ else ifeq ($(BOARD), klinge)
 	LPF = klinge_v1.lpf
 	PROG = openFPGALoader -c $(CABLE)
 	FLASH = openFPGALoader -v -c $(CABLE) -f
+	FLASH_OFFSET = -o
+	JUMP = 1
+else ifeq ($(BOARD), sergei_ml0)
+	# Sergei with the Sechzig ML0 module: the ML1 module on an LFE5U-25F,
+	# same balls, so the ML1 pin file. docs/boards.md.
+	FAMILY = ecp5
+	DEVICE = 25k
+	PACKAGE = CABGA256
+	LPF = sergei_ml1.lpf
+	PROG = openFPGALoader -c dirtyJtag
+	FLASH = openFPGALoader -v -c dirtyJtag -f
 	FLASH_OFFSET = -o
 	JUMP = 1
 else ifeq ($(BOARD), sergei_ml1)

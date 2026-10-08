@@ -136,7 +136,7 @@ Same idea as `FEATURES`, one word along. Assigned in `rtl/csrs.vh`'s
 | 10 | `MPU` | the memory protection unit `rtl/mpu.v` is built -- see `docs/mpu.md`. Inventory only: use `z_mpu_present()` before writing its registers, which alias the MTU base on a bitstream without it |
 | 11 | `VMOUSE` | the virtual mouse register at `0xf000_0400` (`rtl/sysctl.v`), universal from the release that added this bit. Check it before writing `reg_vmouse`: on a bitstream without it that address can decode as the console UART. See [automate.md](automate.md) |
 | 9 | `DCACHE` | the unified instruction + data cache `rtl/cache_id.v` is built -- see `docs/dcache.md`. Inventory only: use `z_dcache_present()` before writing `D_CTRL`, which aliases `I_CTRL` on an I-cache-only bitstream |
-| 5 | `RECONFIG` | `rtl/socctl.v`'s RECONFIG can pull this board's PROGRAMN, so `reboot` works (`PROGRAMN_PIN` in `rtl/boards.vh`: Lakritz, Obst, Mozart and Sergei ML1/ML2, Konfekt, Minze, Schoko, Noir, Klinge) -- see `docs/zboot.md` section 6 |
+| 5 | `RECONFIG` | `rtl/socctl.v`'s RECONFIG can pull this board's PROGRAMN, so `reboot` works (`PROGRAMN_PIN` in `rtl/boards.vh`: Lakritz, Obst, Mozart and Sergei ML0/ML1/ML2, Konfekt, Minze, Schoko, Noir, Klinge) -- see `docs/zboot.md` section 6 |
 | 14 | `VRAM_DIRTY` | `rtl/socctl.v`'s DIRTY register at `0x7000_021c`: one bit per 16-row stripe of the framebuffer, set by every write the VRAM accepts. Built wherever there is VRAM (`MEM_VRAM`) -- see `docs/socctl.md` |
 
 Only sixteen bits are carried, because the top half is a signature.

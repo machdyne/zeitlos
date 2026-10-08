@@ -545,7 +545,8 @@ $ openFPGALoader -v -c dirtyJtag -f -o 0x1d0000 zeitlos-mozart_ml1-jump.bin
 **The jumploader** (`docs/zboot.md` section 5) is a small bitstream at
 `0x1D0000`, which Zeitlos jumps through to reboot or to boot other
 gateware. The ZAR's room ends there (576 KB). On boards built with the
-Makefile's `JUMP` -- Lakritz, Obst, Mozart ML1 and ML2, Sergei ML1 and ML2,
+Makefile's `JUMP` -- Lakritz, Obst, Mozart ML0, ML1 and ML2, Sergei ML0, ML1
+and ML2,
 Konfekt, Minze, Schoko, Noir and Klinge -- the
 gateware is packed to reload from `0x1D0000`, so **the jumploader is
 part of the system**: the `.img` and the DFU image carry it, it ships

@@ -1,7 +1,7 @@
 # Boards
 
 What the SoC actually costs on each ECP5 board, after packing and
-routing. Konfekt, Minze, Schoko, Noir and Klinge have their own sections below
+routing. Konfekt, Minze, Schoko, Noir, Klinge and the ML0 boards have their own sections below
 the main tables, measured later and with newer tools.
 
 [audio.md](audio.md) measures the audio subsystem at synthesis time.
@@ -418,6 +418,47 @@ one bit per colour; the other six balls are listed in the `.lpf`. The
 BIOS is 1987 of 2048 words, the jumploader 99,628 bytes, and the
 bitstream fits the 256 KB DFU layout. At 87%, the same advice as
 Konfekt applies: re-check timing after any change.
+
+## Mozart ML0 and Sergei ML0
+
+The Sechzig ML0 module is the ML1 on an LFE5U-25F: the same balls, the
+same 32MB SDRAM, the same 48MHz oscillator and the same 4MB flash, so
+both carriers build with their ML1 pin files unchanged
+(`boards/mozart_ml1.lpf`, `boards/sergei_ml1.lpf`). The board blocks
+are the ML1 ones trimmed the way Lakritz -- the same die -- is
+trimmed: a 4KB instruction cache instead of 8KB, no D-cache write
+buffer, and no `MONTMUL` (RSA and DH run in software). DDMI, colour,
+the full-speed USB host, RMII ethernet and audio with the hardware
+mixer all stay. Like the ML1 boards these are JTAG-flashed modules
+(dirtyJtag on the carrier) with no DFU bootloader, and the console is
+`UART0`. 25F only; a 12F ML0 would need its own images (a different
+IDCODE), so there is none.
+
+Measured with Yosys 0.69+260 and nextpnr-ecp5 0.11.1-54 (oss-cad-suite
+2026-10-08), default seed, one run each:
+
+| Board | Device | COMB | FF | DP16KD | MULT18 | PLL | `CLK_48` | bitstream |
+|---|---|---|---|---|---|---|---:|---:|
+| Mozart ML0 | 25k | 22406 / 24288 (**92%**) | 10391 (42%) | 43 / 56 | 9 / 28 | 2 / 2 | 51.19 MHz | 528,428 B |
+| Sergei ML0 | 25k | 22654 / 24288 (**93%**) | 10444 (43%) | 43 / 56 | 9 / 28 | 2 / 2 | 50.19 MHz | 530,109 B |
+
+Every clock passed. `ETH_REFCLK` closes at 90.1 MHz on both against 50
+(an input on Mozart, where the PHY has its own oscillator; an output on
+Sergei, driven from `pll0`); `clk126mhz` at 275.94 / 306.09 MHz; the
+pixel clock at 44.30 / 40.56 MHz against 25.2. The BIOS is 1987 of
+2048 words, the jumploaders 99,628 bytes each (zfpga profiles
+`mozart0.brd` and `sergei0.brd`, aliased from `mozart_ml0` and
+`sergei_ml0`), and the bitstreams fit the 960KB gateware region.
+
+**These are the tightest boards in the tree,** level with
+`lakritz_katze`. Both critical paths start in the blitter's glyph
+registers (`work_glyph_w`) and are three quarters routing (14.4 of
+19.5 ns on Mozart), which is congestion rather than logic depth. With
+2 to 3 MHz of margin on one seed, re-check `make timing` after any
+change that touches these builds, and expect some seeds to fail. If
+one has to give, `COLOR` (one DP16KD and a few hundred LUT4) and
+`AUDIO_MIXER` (sw/apps/mod mixes in software without it) are the
+cheapest things to remove that a user would notice least.
 
 ## Klinge
 

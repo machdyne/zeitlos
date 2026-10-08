@@ -1,0 +1,11 @@
+# Sergei ML0: the Sechzig ML0 module, ECP5 LFE5U-25F in CABGA256.
+#
+#   zfpga build /fpga/examples/blink.v -b sergei0    (or -b sergei_ml0)
+#
+# The ML0 is the ML1 module on the smaller die, ball for ball, so the
+# pins are the ML1's: sergei1.lpf, which the card already carries for the
+# ML1 profile. The 25F database. `pack -c`: compressed.
+device  LFE5U-25F
+package CABGA256
+lpf     sergei1.lpf
+pack    -c

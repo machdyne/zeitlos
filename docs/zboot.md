@@ -34,7 +34,9 @@ and that is not incidental: it is how the DFU bootloader hands off, so
 the hard prerequisite for everything below is satisfied on shipping
 hardware. Sergei ML1 and ML2 use `M8` too, by inference rather than
 measurement: the wiring is on the Sechzig module, and each carries the
-same module as the Mozart of the same name. Konfekt, Minze, Schoko, Noir and
+same module as the Mozart of the same name. Mozart ML0 and Sergei ML0
+carry the ML0 module, which is the ML1 on a 25F, ball for ball, so
+they use the ML1's `M8`. Konfekt, Minze, Schoko, Noir and
 Klinge use `M8` as well, also by inference: it is the net their DFU
 bootloader drives (`resetn` in tinydfu-bootloader's pin files, `RESET`
 or `SYS_RST_N` on the schematics), the arrangement confirmed on Lakritz
@@ -432,7 +434,9 @@ ML1's 72 pin assignments, clock, flash and SDRAM among them, are the
 same on Sergei -- and Mozart ML1's `M8` is confirmed. Konfekt and
 Klinge (25F database; Konfekt and Minze are 12F), and Schoko and Noir (45F),
 have board profiles too (`sw/apps/zfpga/boards/`); their jumploaders
-build at 99,628 bytes (Konfekt) and 162,790 (Schoko, Noir).
+build at 99,628 bytes (Konfekt) and 162,790 (Schoko, Noir). Mozart ML0
+and Sergei ML0 (`mozart0.brd`, `sergei0.brd`: 25F database, the ML1's
+pin files) build theirs at 99,628 bytes.
 
 **Checked.**
 
@@ -499,9 +503,10 @@ better found while the flash is untouched.
 
 **The pin.** `M8` on Lakritz, Obst, Mozart ML1 and Mozart ML2, wired to
 PROGRAMN on each, as the DFU bootloader drives it -- and on Sergei ML1
-and ML2, from the module they share with Mozart, and on Konfekt, Minze,
+and ML2, from the module they share with Mozart, on Mozart and Sergei
+ML0, whose module is the ML1's on a smaller die, and on Konfekt, Minze,
 Schoko, Noir and Klinge, where it is the DFU bootloader's reset net.
-`rtl/boards.vh` defines `PROGRAMN_PIN` for exactly those eleven; `rtl/sysctl.v` then has an
+`rtl/boards.vh` defines `PROGRAMN_PIN` for exactly those thirteen; `rtl/sysctl.v` then has an
 `inout PROGRAMN` port, driven open-drain through a `BB` -- a hard 0 when
 asked, tri-state otherwise, tri-state from power-on. Boards whose site
 has not been confirmed (ULX3S) do not define it and build exactly as
