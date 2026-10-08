@@ -37,9 +37,6 @@
 // two widgets can't be using it at once even in principle (this is a
 // single-threaded message loop).
 //
-// 3KB: Z_FLIST_MAX short names at their worst case, with slack. A
-// directory that overflows it comes back truncated, which
-// z_flist_truncated() reports, rather than failing.
 // The listing's entry types, one byte each. The names themselves are
 // listed straight into the widget's own pool -- see load_dir().
 static uint8_t stage_types[Z_FLIST_MAX];
@@ -154,7 +151,7 @@ static void copy_bounded(char *dst, const char *src, int cap) {
 }
 
 // Directories before files, then case-insensitive by name. Insertion
-// sort over a bounded array: Z_FLIST_MAX is 128, this runs once per
+// sort over a bounded array: Z_FLIST_MAX is 256, this runs once per
 // directory change, and anything cleverer would be more code than the
 // thing it replaces.
 static void sort_entries(z_flist_t *fl) {

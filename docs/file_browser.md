@@ -127,8 +127,9 @@ else that later asks "what opens this?", read the same table.
   Handing the file to an already-running instance would need a way to
   find one and ask it, which the pid registry could support but nothing
   does yet.
-- **The listing is bounded** at `Z_FLIST_MAX` (128) entries, or fewer
-  when the names are long (the list's 4KB name pool). A fuller
+- **The listing is bounded** at `Z_FLIST_MAX` (256) entries, or fewer
+  when the names are long (the list's 8KB name pool). It was 128,
+  which `/docs` on the card -- 150 files -- outgrew. A fuller
   directory is listed in part, and the path line above the list says
   "(partial list)", so a file that is on the card but not shown has an
   explanation. `ls` in the posix shell has the same bound and says

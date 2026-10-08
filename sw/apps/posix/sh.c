@@ -185,10 +185,13 @@ static void bi_echo(px_shell_t *sh, int argc, char **argv) {
 static void bi_ls(px_shell_t *sh, int argc, char **argv) {
 
     char abs[PX_PATH_MAX];
-    static char buf[4096];
-    static z_fs_info_t info[128];
-    static const char *names[128];
-    static uint8_t order[128];
+    /* 256 entries, as the file browser (Z_FLIST_MAX): /docs on the
+     * card holds 150 and was listed in part at 128. buf takes the
+     * listing as full paths, so it is sized for 256 of ~30 bytes. */
+    static char buf[8192];
+    static z_fs_info_t info[256];
+    static const char *names[256];
+    static uint16_t order[256];
     uint32_t count = 0, truncated = 0;
     int longfmt = 0, argi = 1;
 
@@ -202,7 +205,7 @@ static void bi_ls(px_shell_t *sh, int argc, char **argv) {
         return;
     }
 
-    if (!fs_list_ex(abs, buf, sizeof(buf), info, 128, &count, &truncated)) {
+    if (!fs_list_ex(abs, buf, sizeof(buf), info, 256, &count, &truncated)) {
         px_printf(sh, "ls: %s: cannot read\n", abs);
         sh->status = 1;
         return;
@@ -214,7 +217,7 @@ static void bi_ls(px_shell_t *sh, int argc, char **argv) {
      * An unsorted listing is hard to scan and, more practically here,
      * makes the output of `ls` depend on the history of the card.
      *
-     * An index array and an insertion sort: `count` is bounded at 128
+     * An index array and an insertion sort: `count` is bounded at 256
      * and the strings and infos stay where they are.
      */
     const char *p = buf;
@@ -224,13 +227,13 @@ static void bi_ls(px_shell_t *sh, int argc, char **argv) {
          * listing of one directory only the last component is wanted. */
         const char *slash = strrchr(p, '/');
         names[i] = slash ? slash + 1 : p;
-        order[i] = (uint8_t)i;
+        order[i] = (uint16_t)i;
         while (*p) p++;
         p++;
     }
 
     for (uint32_t i = 1; i < count; i++) {
-        uint8_t k = order[i];
+        uint16_t k = order[i];
         uint32_t j = i;
         while (j > 0 && strcmp(names[order[j - 1]], names[k]) > 0) {
             order[j] = order[j - 1];

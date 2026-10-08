@@ -298,9 +298,9 @@ by the time you ask, the selection is an entry of the *new* directory.
 It **allocates nothing**. An app's stack and heap come out of one 16KB
 allocation (`Z_PROC_STACK_SIZE_DEFAULT`, `sw/os/kernel.h`), and a widget
 that mallocs every time you open a folder is a slow leak waiting to
-happen. Storage is fixed: `Z_FLIST_MAX` (128) entries of
-`Z_FLIST_NAME_MAX` (24) bytes, about 3KB of `.bss` per instance, plus a
-3KB staging buffer shared across every instance in the process. A
+happen. Storage is fixed: `Z_FLIST_MAX` (256) entries whose names
+share an 8KB pool (`Z_FLIST_POOL`), about 8.8KB of `.bss` per instance,
+plus a 256-byte type array shared across every instance in the process. A
 directory with more entries than that comes back truncated, and
 `z_flist_truncated()` says so — worth surfacing somewhere in any UI
 built on this, since the alternative is a file that is definitely on the

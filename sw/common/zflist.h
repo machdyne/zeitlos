@@ -53,8 +53,9 @@
 #include "zfs.h"		// Z_FS_NAME_MAX, Z_FS_PATH_MAX
 
 // Bounds, chosen against the SD cards this actually runs on rather
-// than in the abstract. 128 entries is a comfortable multiple of what
-// a Zeitlos root directory holds.
+// than in the abstract. 256 entries: the card's /docs alone holds 150
+// files (one per docs/*.md), which the old 128 listed in part, and it
+// grows with every subsystem documented.
 //
 // Names are long file names (docs/sdcard.md), up to 255 bytes of UTF-8
 // each, so they are not kept in fixed slots -- 128 of those would be
@@ -62,11 +63,13 @@
 // found by its offset; the directory is listed straight into the pool
 // and each entry cut down to its name in place, so no second buffer is
 // needed either. A directory whose names do not all fit is truncated,
-// exactly as one with too many entries is. Cost: the pool plus 2 bytes
-// an entry, about 4.3KB of .bss per instance -- worth knowing before
+// exactly as one with too many entries is. The pool holds the listing
+// as full paths before they are cut down, so it is sized for 256
+// entries of about 30 bytes of path each. Cost: the pool plus 3 bytes
+// an entry, about 8.8KB of .bss per instance -- worth knowing before
 // putting three of these in one app.
-#define Z_FLIST_MAX        128
-#define Z_FLIST_POOL       4096
+#define Z_FLIST_MAX        256
+#define Z_FLIST_POOL       8192
 #define Z_FLIST_NAME_MAX   Z_FS_NAME_MAX
 #define Z_FLIST_PATH_MAX   Z_FS_PATH_MAX
 

@@ -25,9 +25,9 @@ void z_fb_draw_icon(int x, int y, int icon_id, int fg, int bg, const z_clip_t *c
 
 // -- the directory the scripted kernel lists --
 
-static const char *entries[64];
-static uint8_t types[64];
-static uint32_t sizes[64];
+static const char *entries[300];
+static uint8_t types[300];
+static uint32_t sizes[300];
 static int nentries;
 
 static z_obj_t k_ok, k_fail;
@@ -142,19 +142,43 @@ int main(int argc, char **argv) {
 	expect(z_flist_selected_path(&fl, path, sizeof(path)), "a selected path");
 	expect(!strcmp(path + 1, LONG_NAME) && path[0] == '/', "full path of the long name");
 
+	// The card's /docs: 150 short names, more than the old bound of
+	// 128 entries. All of them, and not reported as partial.
+	static char docs[300][24];
+	for (int i = 0; i < 150; i++) {
+		snprintf(docs[i], sizeof(docs[i]), "doc_page_%03d.md", i);
+		entries[i] = docs[i];
+		types[i] = Z_FS_TYPE_FILE;
+	}
+	nentries = 150;
+	expect(z_flist_chdir(&fl, "/docs"), "lists /docs");
+	expect(fl.count == 150, "all 150 entries of /docs");
+	expect(!z_flist_truncated(&fl), "/docs not reported as partial");
+
+	// More entries than Z_FLIST_MAX is truncated at the bound.
+	for (int i = 150; i < 300; i++) {
+		snprintf(docs[i], sizeof(docs[i]), "doc_page_%03d.md", i);
+		entries[i] = docs[i];
+		types[i] = Z_FS_TYPE_FILE;
+	}
+	nentries = 300;
+	expect(z_flist_chdir(&fl, "/many"), "lists a directory of 300");
+	expect(fl.count == Z_FLIST_MAX, "Z_FLIST_MAX of them");
+	expect(z_flist_truncated(&fl), "300 reported as truncated");
+
 	// A directory whose names outgrow the pool is truncated, not
-	// overflowed: 40 names of ~200 bytes is 8KB against a 4KB pool.
-	static char big[40][210];
-	for (int i = 0; i < 40; i++) {
+	// overflowed: 60 names of ~200 bytes is 12KB against an 8KB pool.
+	static char big[60][210];
+	for (int i = 0; i < 60; i++) {
 		memset(big[i], 'a' + (i % 26), 200);
 		snprintf(big[i] + 200, 10, "%03d", i);
 		entries[i] = big[i];
 		types[i] = Z_FS_TYPE_FILE;
 	}
-	nentries = 40;
+	nentries = 60;
 	expect(z_flist_chdir(&fl, "/big"), "lists a directory of long names");
 	expect(z_flist_truncated(&fl), "reported as truncated");
-	expect(fl.count > 10 && fl.count < 40, "as many as fit");
+	expect(fl.count > 10 && fl.count < 60, "as many as fit");
 	for (int i = 0; i < fl.count; i++)
 		expect(strlen(fl.pool + fl.name_off[i]) == 203, "each kept name is whole");
 
