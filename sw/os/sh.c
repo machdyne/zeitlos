@@ -426,6 +426,24 @@ static void sh_mpu(const char *arg) {
 	}
 }
 
+// Is the command word -- buffer up to the first space, or all of it --
+// exactly `name`?
+//
+// Not `!strncmp(buffer, name, cmdlen)`, which is what every command
+// here used to be. With arguments, cmdlen is the length of the word
+// typed, so that compared only that many characters of `name`: any
+// command that merely STARTED with the typed word matched. The
+// dispatch below is several if/else chains, not one, so a command
+// could run its own branch and then match a longer one further down:
+// `ls sys` listed the directory and then, matching "lsusb" on its
+// first two letters, printed the USB host dump as well.
+static int sh_is(const char *buffer, int cmdlen, const char *name) {
+	size_t n = strlen(name);
+	if (cmdlen == 255)              // no space: the line is the word
+		return !strcmp(buffer, name);
+	return (size_t)cmdlen == n && !strncmp(buffer, name, n);
+}
+
 static void sh_cache(const char *arg) {
 	bool d = z_dcache_present();
 
@@ -622,28 +640,27 @@ void sh(void) {
 		printf("\n");
 
 		// HELP
-		if (!strncmp(buffer, "help", cmdlen)) sh_help();
+		if (sh_is(buffer, cmdlen, "help")) sh_help();
 
 		// FLASH: rtl/spiflash.v's identity and state, docs/spiflash.md
-		// (strncmp against cmdlen, like every command here: cmdlen is
-		// 255 when there are no arguments, so a length test never
-		// matches a bare command)
-		else if (!strncmp(buffer, "flash", cmdlen)) {
+		// (every command here is matched with sh_is(): the whole first
+		// word, exactly -- see there for why not a bare strncmp)
+		else if (sh_is(buffer, cmdlen, "flash")) {
 			sh_flash_info();
 		}
 
 		// FLASHTEST: the on-board test of writing the flash
-		else if (!strncmp(buffer, "flashtest", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "flashtest")) {
 			sh_flashtest();
 		}
 
 		// REBOOT: rtl/socctl.v's RECONFIG, docs/zboot.md
-		else if (!strncmp(buffer, "reboot", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "reboot")) {
 			k_boot_to(0);           // returns only on failure, having said why
 		}
 
 		// JUMP: the jumploader, docs/zboot.md sec. 5
-		else if (!strncmp(buffer, "jump", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "jump")) {
 			if (cmdend && cmdend[1]) {
 				k_boot_to((uint32_t)strtoul(cmdend + 1, NULL, 16));
 			} else {
@@ -660,7 +677,7 @@ void sh(void) {
 		}
 
 		// HEX DUMP
-		else if (!strncmp(buffer, "hd", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "hd")) {
 			arg = get_arg(buffer, 1);
 			uint32_t addr;
 			if (parse_uint(arg, 16, &addr))
@@ -668,7 +685,7 @@ void sh(void) {
 		}
 
 		// LIST DIRECTORY
-		else if (!strncmp(buffer, "ls", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "ls")) {
 			arg = get_arg(buffer, 1);
 			if (arg != NULL)
 				fs_list_dir(arg);
@@ -677,7 +694,7 @@ void sh(void) {
 		}
 
 		// MAKE DIRECTORY
-		if (!strncmp(buffer, "mkdir", cmdlen)) {
+		if (sh_is(buffer, cmdlen, "mkdir")) {
 			arg = get_arg(buffer, 1);
 			if (arg != NULL)
 				fs_mkdir(arg);
@@ -686,7 +703,7 @@ void sh(void) {
 		}
 
 		// TOUCH FILE
-		if (!strncmp(buffer, "touch", cmdlen)) {
+		if (sh_is(buffer, cmdlen, "touch")) {
 			arg = get_arg(buffer, 1);
 			if (arg != NULL)
 				fs_touch(arg);
@@ -695,7 +712,7 @@ void sh(void) {
 		}
 
 		// RENAME / MOVE (within one volume) -- docs/filesystem.md
-		if (!strncmp(buffer, "mv", cmdlen)) {
+		if (sh_is(buffer, cmdlen, "mv")) {
 			char *to = get_arg(buffer, 2);
 			static const char *const mv_err[] = { "", "no such file",
 				"destination exists", "different volumes (copy, then rm)",
@@ -710,7 +727,7 @@ void sh(void) {
 		}
 
 		// REMOVE FILE/DIRECTORY
-		if (!strncmp(buffer, "rm", cmdlen)) {
+		if (sh_is(buffer, cmdlen, "rm")) {
 			arg = get_arg(buffer, 1);
 			if (arg != NULL) {
 				printf("deleting '%s' ...\n", arg);
@@ -720,7 +737,7 @@ void sh(void) {
 		}
 
 		// RECEIVE TO ADDR VIA XFER
-		else if (!strncmp(buffer, "xa", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "xa")) {
 			arg = get_arg(buffer, 1);
 			uint32_t addr, bytes;
 			if (!parse_uint(arg, 16, &addr)) {
@@ -735,7 +752,7 @@ void sh(void) {
 
 
 		// RECEIVE TO FILE VIA XFER
-		else if (!strncmp(buffer, "xf", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "xf")) {
 			arg = get_arg(buffer, 1);
 			if (arg == NULL) {
 				printf("error: no file specified\n");
@@ -773,7 +790,7 @@ void sh(void) {
 		// which -- short version, `xf` for executables (exact length),
 		// `xmf` for everything else and for machines where you only
 		// have a serial terminal.
-		else if (!strncmp(buffer, "xmf", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "xmf")) {
 
 			arg = get_arg(buffer, 1);
 			if (arg == NULL) {
@@ -818,7 +835,7 @@ void sh(void) {
 		}
 
 		// GET FILE VIA TFTP (uses the 'net' app -- see sw/common/znet.h)
-		else if (!strncmp(buffer, "tget", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "tget")) {
 
 			char *ip_str = get_arg(buffer, 1);
 			char *remote = get_arg(buffer, 2);
@@ -900,7 +917,7 @@ void sh(void) {
 		}
 
 		// PUT FILE VIA TFTP
-		else if (!strncmp(buffer, "tput", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "tput")) {
 
 			char *ip_str = get_arg(buffer, 1);
 			char *local = get_arg(buffer, 2);
@@ -1032,7 +1049,7 @@ void sh(void) {
 		}
 
 		// CREATE A PROCESS
-		else if (!strncmp(buffer, "run", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "run")) {
 			arg = get_arg(buffer, 1);
 
 			// A shell looks in its current directory first, and this
@@ -1118,12 +1135,12 @@ void sh(void) {
 		}
 
 		// RE-RUN THE INIT SCRIPT
-		else if (!strncmp(buffer, "init", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "init")) {
 			init();	
 		}
 
 		// KILL A PROCESS
-		else if (!strncmp(buffer, "kill", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "kill")) {
 			arg = get_arg(buffer, 1);
 			uint32_t pid;
 			if ((!parse_uint(arg, 10, &pid)) || pid == 0) {
@@ -1139,27 +1156,27 @@ void sh(void) {
 		}
 
 		// CLEAR SCREEN
-		else if (!strncmp(buffer, "cls", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "cls")) {
 			cls();
 		}
 
 		// SCREENSHOT
-		else if (!strncmp(buffer, "ss", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "ss")) {
 			screenshot();
 		}
 
 		// DISPLAY PROCESS SNAPSHOT
-		else if (!strncmp(buffer, "ps", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "ps")) {
 			k_proc_dump();
 		}
 
 		// DISPLAY PID NAME REGISTRY
-		else if (!strncmp(buffer, "pr", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "pr")) {
 			k_pidreg_dump();
 		}
 
 		// DISPLAY KERNEL SNAPSHOT
-		else if (!strncmp(buffer, "ks", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "ks")) {
 			k_kernel_dump();
 		}
 
@@ -1171,7 +1188,7 @@ void sh(void) {
 		// events it actually dispatched) is asked for over a message
 		// and prints on this same console. All are running totals;
 		// what isolates a loss is which of them moves during a burst.
-		else if (!strncmp(buffer, "ic", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "ic")) {
 			uint32_t hp, hd;
 			k_hid_stats(&hp, &hd);
 			printf("ic: hid ring: %lu pushed, %lu dropped (depth %d)\n",
@@ -1193,10 +1210,10 @@ void sh(void) {
 		// while the unit reports ready -- a card reader with no card
 		// can refuse for a long time -- and the enumeration path runs
 		// from an interrupt, so it cannot do this itself.
-		else if (!strncmp(buffer, "usbmount", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "usbmount")) {
 			fs_usb_mount();
 		}
-		else if (!strncmp(buffer, "usbunmount", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "usbunmount")) {
 			fs_usb_unmount();
 		}
 
@@ -1205,16 +1222,16 @@ void sh(void) {
 		// tools/usbcap.py). `usbcap` arms the logic probe before
 		// every transaction on port 0 and freezes it on the first
 		// that fails; `usbcapd` prints it for the decoder.
-		else if (!strncmp(buffer, "usbcap", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "usbcap")) {
 			z_usbh_cap_start(0);
 		}
 		// Same probe, but freezes on the first SUCCESSFUL IN with data
 		// from a low-speed device behind a hub, so the window holds the
 		// device's packet and our PRE + ACK after it.
-		else if (!strncmp(buffer, "usbcapok", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "usbcapok")) {
 			z_usbh_cap_start(1);
 		}
-		else if (!strncmp(buffer, "usbcapd", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "usbcapd")) {
 			z_usbh_cap_dump();
 		}
 
@@ -1222,7 +1239,7 @@ void sh(void) {
 		// go to the device, its output comes here; Ctrl-] leaves.
 		// For trying a device out -- apps reach it through the serial
 		// port layer once that exists (docs/usb_host.md, "CDC").
-		else if (!strncmp(buffer, "usbcdc", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "usbcdc")) {
 			uint8_t rx[64];
 			int n, k;
 			if (!z_usbh_cdc_present()) {
@@ -1286,7 +1303,7 @@ void sh(void) {
 		// the interesting state is what changes AFTER boot -- a
 		// device plugged in later, a port that enumerated and then
 		// dropped, a poll slot whose last status stopped being OK.
-		else if (!strncmp(buffer, "lsusb", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "lsusb")) {
 			z_usbh_dump();
 		}
 
@@ -1294,12 +1311,12 @@ void sh(void) {
 		// RELEASE THE USB PORTS AND READ THE LINES -- isolates
 		// "the controller is driving" from "the board is holding
 		// a line high", which lsusb alone cannot tell apart.
-		else if (!strncmp(buffer, "usbidle", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "usbidle")) {
 			z_usbh_probe_idle();
 		}
 
 		// PACKET BUFFER ROUND-TRIP + THE SETUP BYTES WE WOULD SEND
-		else if (!strncmp(buffer, "usbbuf", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "usbbuf")) {
 			z_usbh_buftest();
 		}
 
@@ -1316,7 +1333,7 @@ void sh(void) {
 		// the magic-free CTRL read detects: a build without it
 		// decodes this window to csrs and reads back something that
 		// is not a plausible word count.
-		else if (!strncmp(buffer, "probe", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "probe")) {
 			volatile uint32_t *pc = (volatile uint32_t *)0x7f000000;
 			volatile uint32_t *pa = (volatile uint32_t *)0x7f000004;
 			volatile uint32_t *pd = (volatile uint32_t *)0x7f000008;
@@ -1373,7 +1390,7 @@ void sh(void) {
 		// error shown" report -- run this after each `run <app>` to
 		// see exactly how much is left and whether it's fragmented
 		// (see k_mem_dump()'s own comment in mem.c).
-		else if (!strncmp(buffer, "free", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "free")) {
 			k_mem_dump();
 		}
 
@@ -1393,7 +1410,7 @@ void sh(void) {
 		// CPU / MEMORY MICRO-BENCHMARKS -- see sh_bench() above for what
 		// each figure measures and why the boot-time MIPS number isn't
 		// enough on its own.
-		else if (!strncmp(buffer, "bench", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "bench")) {
 			sh_bench();
 		}
 
@@ -1405,26 +1422,26 @@ void sh(void) {
 		// couple of seconds and must not interleave with another
 		// process inside FatFs. Nobody should get that by accident
 		// from typing `bench`. See docs/sdcard.md.
-		else if (!strncmp(buffer, "sdbench", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "sdbench")) {
 			arg = get_arg(buffer, 1);
 			sh_sdbench(arg);
 		}
 
 #ifdef USBH_DEBUG	// bring-up tools, docs/usb_host.md "Debug build"
 		// The same for USB mass storage (fs/sdbench.c, sh_usbbench()).
-		else if (!strncmp(buffer, "usbbench", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "usbbench")) {
 			arg = get_arg(buffer, 1);
 			sh_usbbench(arg);
 		}
 
 #endif
 
-		else if (!strncmp(buffer, "cache", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "cache")) {
 			arg = get_arg(buffer, 1);
 			sh_cache(arg);
 		}
 
-		else if (!strncmp(buffer, "mpu", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "mpu")) {
 			arg = get_arg(buffer, 1);
 			sh_mpu(arg);
 		}
@@ -1452,7 +1469,7 @@ void sh(void) {
 		//
 		// Kernel code, so it calls zgpio.h directly, same as the
 		// `color` command below calls zsoc.h -- sh.c IS the kernel.
-		else if (!strncmp(buffer, "gpio", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "gpio")) {
 
 			uint32_t nports = z_gpio_port_count();
 
@@ -1553,7 +1570,7 @@ void sh(void) {
 		// rather than going through the VIDEO_SET_MODE syscall; sh.c
 		// IS the kernel and already touches socctl this way for the
 		// cursor. Apps use z_video_mode_set() (zeitlos.h) instead.
-		else if (!strncmp(buffer, "color", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "color")) {
 
 			arg = get_arg(buffer, 1);
 
@@ -1609,7 +1626,7 @@ void sh(void) {
 		// flash (sw/os/zar.h) and survive this, so a formatted card
 		// still boots to a desktop. That is worth knowing before
 		// running it -- the machine will come back up fine.
-		else if (!strncmp(buffer, "format", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "format")) {
 
 			arg = get_arg(buffer, 1);
 
@@ -1650,7 +1667,7 @@ void sh(void) {
 		// It also re-runs disk_initialize(), which is what recovers a
 		// card that failed to come up at boot (a slow card, or one
 		// inserted a moment too late).
-		else if (!strncmp(buffer, "mount", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "mount")) {
 
 			// Refuse while anything has a file open. Remounting out
 			// from under an open FIL leaves that handle describing
@@ -1690,7 +1707,7 @@ void sh(void) {
 		// where the board gets reprogrammed far more often than a normal
 		// machine gets power-cycled. Run this first and the card is
 		// consistent.
-		else if (!strncmp(buffer, "sync", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "sync")) {
 			if (fs_unmount() == 0) {
 				printf("filesystem flushed; safe to reprogram or remove\n");
 				if (fs_mount_now() == 0)
@@ -1703,15 +1720,15 @@ void sh(void) {
 		}
 
 		// PASSWD, LOCK: docs/security.md
-		else if (!strncmp(buffer, "passwd", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "passwd")) {
 			k_auth_shell_passwd(get_arg(buffer, 1), k_readline_from_uart);
 		}
-		else if (!strncmp(buffer, "lock", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "lock")) {
 			k_auth_shell_lock();
 		}
 
 		// KV: the flash key/value store, docs/kvstore.md
-		else if (!strncmp(buffer, "kv", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "kv")) {
 			char *sub = get_arg(buffer, 1);
 			char *a1 = sub ? get_arg(buffer, 2) : NULL;
 			char *a2 = a1 ? get_arg(buffer, 3) : NULL;
@@ -1723,13 +1740,13 @@ void sh(void) {
 		//                    anything else the file sets
 		//   cfg reload       re-read the file after editing it
 		//   cfg get <key>    one value
-		else if (!strncmp(buffer, "cfg", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "cfg")) {
 			char *sub = get_arg(buffer, 1);
 			char *key = sub ? get_arg(buffer, 2) : NULL;
 			k_cfg_shell(sub, key);
 		}
 
-		else if (!strncmp(buffer, "df", cmdlen)) {
+		else if (sh_is(buffer, cmdlen, "df")) {
 			// One FAT scan, not two -- see fs_df_kb() in fs.c.
 			uint32_t total = 0, freek = 0;
 			fs_df_kb(&total, &freek);
