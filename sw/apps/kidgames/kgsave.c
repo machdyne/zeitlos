@@ -4,6 +4,7 @@
 
 #include <string.h>
 
+#include "../../common/zpaths.h"
 #include "kgsave.h"
 #include "kgui.h"		/* kg_utoa/kg_append, the printf-free formatting */
 
@@ -225,13 +226,12 @@ bool kg_save_store(const char *game_id, kg_save_t rec)
 	if (len <= 0) return false;
 
 	/*
-	 * fs_mkdir is attempted and its result ignored: /user exists on a
-	 * release card (release/lib/mkfatimg.py's DIRS) but not
-	 * necessarily on a card somebody formatted themselves, and
-	 * "already exists" and "created" are equally fine. Only the write
+	 * fs_mkdir is attempted and its result ignored: the folder is
+	 * there after the first save and not before, and "already exists"
+	 * and "created" are equally fine. Only the write
 	 * that follows decides whether this worked.
 	 */
-	fs_mkdir("/user");
+	fs_mkdir(Z_DIR_KIDGAMES_DATA);
 
 	return fs_write_file(KG_SAVE_PATH, filebuf, len) == len;
 }

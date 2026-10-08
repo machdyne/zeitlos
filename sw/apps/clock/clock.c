@@ -25,7 +25,7 @@
  -- time zone --
  *
  * The RTC counts UTC. What is displayed is local time in the zone
- * system.rtc.timezone names in /zeitlos.cfg (docs/config.md) -- UTC by
+ * system.rtc.timezone names in /sys/zeitlos.cfg (docs/config.md) -- UTC by
  * default -- and the zone's abbreviation is always shown under the
  * digital time, so the reading is never ambiguous: "UTC" when nothing
  * is configured, "CEST" in a Berlin summer.

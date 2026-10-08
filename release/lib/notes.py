@@ -203,10 +203,11 @@ def notes(version, commit, targets, sdcard, layout, prev_version=None):
                    "status=progress conv=fsync" % cs[0]["file"])
         out.append("```")
         out.append("")
-        out.append("Applications live in `apps/` on the card, alongside "
-                   "`docs/`, `ark/` and `user/`. You never need to type "
-                   "that path: `run term` searches the card root, then "
-                   "`apps/`, then the flash archive.")
+        out.append("Applications live in `/apps` on the card, and each "
+                   "one's data in `/data/<app>`; your own files go in "
+                   "`/home`, which starts empty (docs/layout.md). You "
+                   "never need to type `/apps`: `run term` looks there, "
+                   "then in the flash archive.")
         out.append("")
         out.append("The core apps (`wm`, `term`, and `net` where "
                    "the hardware has a NIC) are not on the card -- they are "
@@ -320,8 +321,8 @@ def asset_readme(version, commit, targets, sdcard, layout):
         out.append("  %s" % c["file"])
         out.append("      Optional sdcard image (%d MB, FAT32, %s). The same"
                    % (mb, fits))
-        out.append("      for every board: the additional apps (apps/),")
-        out.append("      the documentation (docs/), the ARK scroll (ark/),")
+        out.append("      for every board: the additional apps (/apps),")
+        out.append("      the documentation (/docs), the ARK scroll (/opt/ark),")
         for line in textwrap.wrap("and for `ask`: %s." % card_contents(c),
                                   W - 6):
             out.append("      " + line)

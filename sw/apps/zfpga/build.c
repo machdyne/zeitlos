@@ -1,7 +1,7 @@
 /*
  * zfpga -- build: every stage in one command, from a board profile.
  *
- *   zfpga build /fpga/examples/blink.v -b lakritz
+ *   zfpga build /data/zfpga/examples/blink.v -b lakritz
  *
  * writes blink.zl, blink.zn, blink.cfg and blink.bit beside the input:
  * each stage's output is kept, so any of them can be looked at, or edited
@@ -20,7 +20,7 @@
  * is what fits all four in the 4MB the kernel gives zfpga.
  *
  * A BOARD PROFILE is a small text file in <db dir>/boards/, on the card
- * /fpga/boards/lakritz.brd (docs/zfpga-formats.md sec. 7):
+ * /data/zfpga/boards/lakritz.brd (docs/zfpga-formats.md sec. 7):
  *
  *   device  LFE5U-25F
  *   package CABGA256

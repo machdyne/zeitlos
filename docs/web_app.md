@@ -131,7 +131,7 @@ an SSH session works.
 serves the stream to its client from that file.
 
 The spool goes on the **RAM disk** when there is one and the card
-otherwise -- `/ram/webspool`, falling back to `/web/spool`. That is
+otherwise -- `/tmp/web.spool`, falling back to `/tmp/web.spool`. That is
 worth thirty times the read speed when re-reading a page to index it;
 see [ramdisk.md](ramdisk.md). `web` prints which it chose.
 
@@ -467,7 +467,7 @@ buttons, and the scrollbar, and the wheel scrolls three lines a notch
 (the notches of a fast spin are added up and scrolled once, since each
 scroll repaints the page).
 
-`/web` must exist on the card, and `/web/roots.der` must be there for
+`/data/web/roots.der` must be on the card for
 HTTPS -- `make roots` builds it, see `sw/apps/web/roots/README.md`.
 The clock must be set, which `net` does over NTP; a certificate
 cannot be checked for expiry without one and `web` refuses rather

@@ -135,7 +135,7 @@
 //     "hits":      Z_LIST of Z_MAP {
 //         "id":      Z_UINT32   chunk id, for Z_ASK_PREVIEW
 //         "score":   Z_UINT32   0..1000, see below
-//         "path":    Z_STR      card path, e.g. "/ark/books/00000009.txt"
+//         "path":    Z_STR      card path, e.g. "/opt/ark/books/00000009.txt"
 //         "off":     Z_UINT32   byte offset of the passage
 //         "len":     Z_UINT32   byte length of the passage
 //         "title":   Z_STR      document title, e.g. "FM 21-76 SURVIVAL"

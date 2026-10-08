@@ -3,6 +3,7 @@
  * zfsapp.h calls the HTTP server uses. fake_fs_open counts handles
  * still open, so a test can check none leak.
  */
+#include "../../../../common/zpaths.h"
 #include <string.h>
 #include <stdint.h>
 #include "../../../../common/zfsapp.h"
@@ -59,13 +60,13 @@ const uint8_t *fake_fs_data(const char *p, uint32_t *len) {
 	return files[f].data;
 }
 
-static const char *authkeys_text;           // /user/authkeys, set by a test
+static const char *authkeys_text;           // Z_PATH_NETSERVE_AUTHKEYS, set by a test
 void fake_fs_authkeys(const char *t) { authkeys_text = t; }
 
 int fs_read_file(char *p, char *buf, int max) {
 	uint32_t n;
 	const uint8_t *d;
-	if (!strcmp(p, "/user/authkeys")) {
+	if (!strcmp(p, Z_PATH_NETSERVE_AUTHKEYS)) {
 		if (!authkeys_text) return 0;
 		n = (uint32_t)strlen(authkeys_text);
 		if (n > (uint32_t)max) n = (uint32_t)max;

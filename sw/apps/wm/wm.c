@@ -4151,7 +4151,7 @@ static void ws_move_focused(int dir) {
 //
 // The kernel keeps the active layout and stamps it into every key event
 // (zkbd.h's Z_KBD_EV_LAYOUT); wm decides which one it is. The layouts to
-// cycle through come from system.keyboard.layouts in /zeitlos.cfg, a
+// cycle through come from system.keyboard.layouts in /sys/zeitlos.cfg, a
 // comma-separated list of names (zkbd.h's z_kbd_layouts[]), the first
 // being the one to start in. Super+Space steps through the list.
 

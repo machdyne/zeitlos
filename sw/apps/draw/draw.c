@@ -90,6 +90,7 @@
 #include <stdbool.h>
 #include <string.h>
 
+#include "../../common/zpaths.h"
 #include "../../common/zeitlos.h"
 #include "../../common/zsoc.h"	// Z_TICK_HZ, for the idle wait in main()
 #include "../../common/zwm.h"
@@ -174,7 +175,7 @@ static z_dialog_ctx_t dlg_ctx;
 
 // Directory the last dialog was in, so a second one starts where the
 // first left off rather than back at the root.
-static char last_dir[Z_FLIST_PATH_MAX] = "/";
+static char last_dir[Z_FLIST_PATH_MAX] = Z_DIR_HOME;
 
 // Filename handed to us at launch, if any -- see main().
 static char launch_path[Z_FS_PATH_MAX];

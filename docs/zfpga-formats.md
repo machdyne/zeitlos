@@ -26,14 +26,14 @@ The `.v` is ordinary Verilog in the subset of `docs/zfpga.md` §19.1,
 typed in the editor like any other file:
 
 ```
-$ zfpga synth blink.v -l /fpga/lakritz.lpf
+$ zfpga synth blink.v -l /data/zfpga/lakritz.lpf
 zfpga: synthesised 0 LUTs, 24 flip-flops, 1 carry chains (12 cells)
 ```
 
 Or every stage at once, from a board profile (section 7):
 
 ```
-$ zfpga build /fpga/examples/blink.v -b lakritz
+$ zfpga build /data/zfpga/examples/blink.v -b lakritz
 ```
 
 The `.zl` it writes keeps the Verilog's names on its nets, so it is the
@@ -283,25 +283,25 @@ without the database; edit the unpacked `.config` instead.
 
 ### 6.2 `.zdb`
 
-The packed chip database, on the card in `/fpga`. Built by
+The packed chip database, on the card in `/data/zfpga`. Built by
 `tools/mkzdb.py` from the vendored Trellis database; format in
 `zfpga.h`. Not for editing: a hand-changed `.zdb` is refused as corrupt
 more often than not, and should be.
 
 ---
 
-## 7. Board profiles, and the card's `/fpga`
+## 7. Board profiles, and the card's `/data/zfpga`
 
 ```
-/fpga/lfe5u25f.zdb            the chip database (12F and 25F)
-/fpga/boards/lakritz.brd      a board profile
-/fpga/boards/lakritz.lpf      its pins: the tree's boards/lakritz_v0.lpf
-/fpga/examples/               blink.v, on.zn, empty.zn, ... (docs/zfpga-test.md)
-/fpga/board                   optional: one word, the default board
+/data/zfpga/lfe5u25f.zdb            the chip database (12F and 25F)
+/data/zfpga/boards/lakritz.brd      a board profile
+/data/zfpga/boards/lakritz.lpf      its pins: the tree's boards/lakritz_v0.lpf
+/data/zfpga/examples/               blink.v, on.zn, empty.zn, ... (docs/zfpga-test.md)
+/data/zfpga/board                   optional: one word, the default board
 ```
 
 On the build machine, `sw/apps/zfpga/db/` is laid out exactly the same,
-so `-D db` on the host is `/fpga` on the card.
+so `-D db` on the host is `/data/zfpga` on the card.
 
 A profile is four lines, `#` comments allowed:
 
@@ -312,8 +312,8 @@ lpf     lakritz.lpf          # beside the profile, or an absolute path
 pack    -c                   # options for zfpga pack
 ```
 
-`zfpga build IN -b NAME` reads `/fpga/boards/NAME.brd`; with no `-b`, the
-name in `/fpga/board`. It runs every stage from the one the input's
+`zfpga build IN -b NAME` reads `/data/zfpga/boards/NAME.brd`; with no `-b`, the
+name in `/data/zfpga/board`. It runs every stage from the one the input's
 extension names -- `.v` synthesises, `.zl` places, `.zn` routes,
 `.cfg` only packs -- and leaves each stage's output beside the input,
 so any of them can be looked at, edited, and built from again.
@@ -339,7 +339,7 @@ synthesise to the same logic yosys makes of them (`docs/zfpga.md`
 §24.6). Several files and modules at once:
 
 ```
-zfpga synth top.v uart.v fifo.v [-t top] -l /fpga/boards/lakritz.lpf
+zfpga synth top.v uart.v fifo.v [-t top] -l /data/zfpga/boards/lakritz.lpf
 ```
 
 `-t` names the top module; without it, the one module nothing

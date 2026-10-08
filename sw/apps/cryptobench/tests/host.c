@@ -26,5 +26,6 @@ void o2_crypto_aead_lock(uint8_t *ct, uint8_t mac[16], const uint8_t key[32], co
 
 static FILE *f;
 int fs_open_write(const char *name) { (void)name; f = fopen("/tmp/cryptobench.txt", "w"); return f ? 1 : -1; }
+int fs_mkdir(const char *path) { (void)path; return 0; }
 int fs_write_chunk(int h, const void *b, int n) { (void)h; return (int)fwrite(b, 1, (size_t)n, f); }
 int fs_close_handle(int h) { (void)h; fclose(f); return 1; }

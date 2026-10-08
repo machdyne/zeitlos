@@ -232,7 +232,7 @@ refuses.
 
 A program that includes `libz.h` gets `printf`, `malloc`, the string
 functions, the filesystem, graphics and windows. The headers and the
-runtime live in `/libz` on the card, and `zcc` looks there by default
+runtime live in `/data/zcc/libz` on the card, and `zcc` looks there by default
 -- so there is nothing to type:
 
 ```
@@ -249,8 +249,8 @@ ship on the card in `user/`:
 | | |
 |---|---|
 | `hello.c` | no includes at all -- compile with `-nolibz` |
-| `hellolz.c` | `printf`, `malloc`, the string functions |
-| `hellotrm.c` | output to the **term window** rather than the console |
+| `hello_libz.c` | `printf`, `malloc`, the string functions |
+| `hello_term.c` | output to the **term window** rather than the console |
 
 The third is the one worth reading. **A program's output goes to the
 serial console unless it asks otherwise** -- that is the right default
@@ -283,7 +283,7 @@ The window is always 80x25 regardless of how large you make it.
 - **A program's output does not come back to the shell unless the
   program asks.** `zcc` asks. Something you compile yourself will
   print to the serial console instead, which looks like silence if you
-  have no cable attached -- see `user/hellotrm.c` for the fifteen
+  have no cable attached -- see `/data/zcc/examples/hello_term.c` for the fifteen
   lines that fix it.
 - **Typing while a command runs is discarded**, not queued.
 - **`&&` waits for the program to finish**, so `zcc x.c && run x` does
@@ -1428,7 +1428,7 @@ precompiled-header-shaped answer rather than for a faster parser.
 
 A Zeitlos process is started by name and carries no arguments, so the
 device build reads its command line from the launch argument
-(`z_launch_arg_take`) and failing that from `/zcc.args`. The file is a
+(`z_launch_arg_take`) and failing that from `/tmp/zcc.args`. The file is a
 stopgap; passing a real argv is what Phase 4 is for.
 
 ### Self-hosting is blocked on one feature
@@ -1504,7 +1504,7 @@ changes.
 
 `zcc hello.c -o hello` at this prompt sets the launch argument
 (`z_launch_arg_set`) and starts the program, so zcc reads a real
-command line rather than `/zcc.args`. That was the one thing Phase 3
+command line rather than `/tmp/zcc.args`. That was the one thing Phase 3
 left hanging, and it needed no change to zcc at all -- it already
 preferred the launch argument.
 
@@ -2217,7 +2217,7 @@ so an app can provide real ones without every binary that includes
 
 **A console fallback, which was not planned and should have been.**
 `vi` with no `posix0` now runs on the serial console instead of
-refusing, and reads `/vi.args` when there is no launch argument, the
+refusing, and reads `/tmp/vi.args` when there is no launch argument, the
 same stopgap `zcc` carries. That is worth having on its own (an editor
 on the console is the recovery path when `wm` is not running) and it is
 what made the editor testable under `sim/`, which has no `posix`, no

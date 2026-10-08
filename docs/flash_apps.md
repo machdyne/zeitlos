@@ -109,16 +109,15 @@ all, or after being killed and restarted.
 
 ### The search path
 
-The card keeps its executables in `apps/`, alongside `docs/`, `ark/`
-and `user/`, rather than loose in the root. `fs_exec_resolve()` is
-what knows that. For a **bare name** it tries, in order:
+The card keeps its programs in `/apps`, one file each
+([layout.md](layout.md)). `fs_exec_resolve()` is what knows that. For a
+**bare name** it tries, in order:
 
-1. the root -- `term`
-2. `apps/` -- `apps/term`
-3. the flash archive, under the bare name
+1. `/apps/term`
+2. the flash archive, under the bare name
 
 A name **containing `/`** is taken literally and not searched at all,
-so `docs/term` cannot resolve to `apps/term`.
+so `docs/term` cannot resolve to `/apps/term`.
 
 Two consequences worth stating plainly:
 
@@ -126,18 +125,18 @@ Two consequences worth stating plainly:
   `dock_candidates[]` in wm, the extension table in `ztype.c`,
   pidreg registrations and
   `run term` at the shell all still use bare names. The alternative --
-  writing `apps/` at every one of those call sites -- would have put a
+  writing `/apps/` at every one of those call sites -- would have put a
   constant prefix in a dozen places where it carries no information,
-  and spent 5 of `Z_ZAR_NAME_MAX`'s 16 bytes on it in the archive too.
+  and spent 6 of `Z_ZAR_NAME_MAX`'s 16 bytes on it in the archive too.
   A prefix repeated everywhere belongs in the resolver instead.
 
-- **Root is searched before `apps/`, deliberately.** That preserves the
-  shadowing rule above: the only way a file reaches the card root is
-  somebody deliberately putting it there, so `xf wm` still hot-swaps a
-  single app during development exactly as it did before `apps/`
-  existed. A card written before the move also still boots, since its
-  root-level apps are found first. The cost is one failed `f_open` per
-  launch on a normally-laid-out card.
+- **The card root is not searched.** Before v0.0.6 it was, first, so
+  that a file dropped there shadowed an installed app. The shadowing
+  rule above survives with one place fewer to look: a release card
+  carries no core apps, so the only way one reaches `/apps` is somebody
+  deliberately putting it there, and `xf apps/wm` hot-swaps `wm` during
+  development. Deleting it goes back to the flash copy. The root stays
+  clean, and a launch costs one `f_open` rather than two.
 
 This is not the drive-letter idea below under another name. It applies
 to **executable resolution only** -- files are still opened by exact
@@ -173,16 +172,16 @@ a possible third -- which is when drives start earning their keep.
 A file on the card wins. That is deliberate and needs no version scheme,
 timestamp comparison or precedence rules: the only way an app got onto
 the card is somebody deliberately putting it there, so treating that as
-intent is exactly right. It keeps `xf wm` working as a single-app
+intent is exactly right. It keeps `xf apps/wm` working as a single-app
 hot-swap during development.
 
 To make that visible rather than mysterious:
 
 - `init` prints each app's source at boot (`init: wm (flash)`).
 - `run` prints it too (`loading term from flash`).
-- `ls` lists flash apps in a separate `in flash:` section, **skipping
-  any shadowed by a real file**, so what it shows matches what `run`
-  would actually launch.
+- `ls` and `ls /apps` list flash apps in a separate `in flash:`
+  section, **skipping any shadowed by `/apps/<name>`**, so what it
+  shows matches what `run` would actually launch.
 
 ## Booting with no card
 
@@ -195,8 +194,8 @@ and skips the poll entirely -- otherwise a card-less board would stall
 for three seconds on every boot before the desktop appeared.
 
 That check only decides *when* to call `init()`. `init()` still resolves
-per app, so a card holding only `wm` still gets its `wm` from the card
-and everything else from flash.
+per app, so a card holding only `/apps/wm` still gets its `wm` from the
+card and everything else from flash.
 
 ## Why repl is not a core app
 
@@ -210,7 +209,7 @@ card-less board needs in order to be useful, and nothing more.
   board carry ~220KB of archive and a 368KB RAM block for a shell whose
   file commands had no card to act on.
 - **There are two shells now.** `posix` has always been card-only (it
-  hosts `zcc`, whose runtime lives in `/libz` on the card, and its 4MB
+  hosts `zcc`, whose runtime lives in `/data/zcc/libz` on the card, and its 4MB
   tier rules out the small boards anyway). Having one shell in flash and
   the other on the card made "which shell does term open" depend on
   whether a card was inserted.

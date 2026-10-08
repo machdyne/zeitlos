@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <string.h>
 
+#include "../../common/zpaths.h"
 #include "fatfs/ff.h"
 #include "fs.h"
 #include "../../common/zexec.h"
@@ -39,12 +40,19 @@ static bool ram_mounted;
 //
 // The wart, stated plainly: /ram and /usb are RESERVED NAMES at the
 // root. A directory of either name on the card becomes unreachable.
+//
+// /tmp is the third entry and the exception: it is the ramdisk when
+// there is one -- the same volume as /ram -- and when there is not,
+// fs_path_resolve() skips it and /tmp is an ordinary directory on the
+// card, which fs_layout_prepare() empties at boot. Either way an app
+// writes to /tmp without asking which it got (docs/layout.md).
 static const struct {
 	const char	*prefix;
 	const char	*vol;
 } fs_mounts[] = {
-	{ "/ram", "1:" },
-	{ "/usb", "2:" },
+	{ Z_DIR_RAM, "1:" },
+	{ Z_DIR_USB, "2:" },
+	{ Z_DIR_TMP, "1:" },
 };
 
 // Case-insensitive, because paths here are not.
@@ -84,6 +92,9 @@ const char *fs_path_resolve(const char *path, char *buf, uint32_t cap) {
 
 		// "/ram" and "/ram/..." match; "/rambling" must not.
 		if (path[n] != '\0' && path[n] != '/') continue;
+
+		// /tmp without a ramdisk is the card's own /tmp.
+		if (!ram_mounted && !strcmp(p, Z_DIR_TMP)) continue;
 
 		snprintf(buf, cap, "%s%s", fs_mounts[i].vol,
 			path[n] ? path + n : "/");
@@ -135,7 +146,7 @@ bool fs_ramdisk_create(uint32_t bytes) {
 
 	ram_mounted = true;
 
-	printf(" - ramdisk: %lu KB at /ram\n",
+	printf(" - ramdisk: %lu KB at " Z_DIR_RAM " (and " Z_DIR_TMP ")\n",
 		(unsigned long)(ramdisk_size() / 1024));
 
 	return true;
@@ -185,7 +196,7 @@ bool fs_usb_mount(void) {
 	}
 
 	usb_mounted = true;
-	printf(" - usb storage: %lu KB at /usb\n",
+	printf(" - usb storage: %lu KB at " Z_DIR_USB "\n",
 		(unsigned long)(z_usbh_msc_sectors() / 2));
 
 	return true;
@@ -243,6 +254,97 @@ void fs_ramdisk_destroy(void) {
 }
 
 bool fs_ramdisk_present(void) { return ram_mounted; }
+
+// -- the card's top-level folders (docs/layout.md) --
+//
+// The release writes /sys, /home and /data onto every card, but a card
+// that was formatted by hand, or with `format`, has none of them, and
+// things rely on all three: the settings app writes /sys/zeitlos.cfg,
+// z_data_file() makes /data/<app> but not /data, and a save dialog
+// opens /home. So the kernel makes sure they exist whenever it
+// knows the card is up. Making a directory that exists is a failed
+// f_mkdir and nothing else, so this is safe to call as often as the
+// card comes up.
+//
+// /tmp on a board without a ramdisk is a card directory, and it is
+// emptied here, ONCE per boot -- a second `mount` must not throw away
+// what an app has just written. Files only, two levels deep: scratch
+// space with a deep tree in it is not something anything here makes,
+// and a fixed bound keeps the kernel stack cost known (each level is
+// a DIR on the stack; the FILINFO and the path are shared).
+
+#define FS_TMP_CLEAR_DEPTH 2
+
+static FILINFO tmp_fi;
+static char tmp_path[FS_PATH_MAX];
+static uint32_t tmp_removed;
+
+static void fs_tmp_clear(int depth) {
+
+	DIR d;
+	FRESULT res;
+	size_t len = strlen(tmp_path);
+
+	k_fs_enter();
+	res = f_opendir(&d, tmp_path);
+	k_fs_leave();
+	if (res != FR_OK) return;
+
+	for (;;) {
+
+		k_fs_enter();
+		res = f_readdir(&d, &tmp_fi);
+		k_fs_leave();
+		if (res != FR_OK || !tmp_fi.fname[0]) break;
+
+		if (len + 1 + strlen(tmp_fi.fname) + 1 > sizeof(tmp_path)) continue;
+		tmp_path[len] = '/';
+		strcpy(tmp_path + len + 1, tmp_fi.fname);
+
+		if ((tmp_fi.fattrib & AM_DIR) && depth > 1)
+			fs_tmp_clear(depth - 1);
+
+		k_fs_enter();
+		if (f_unlink(tmp_path) == FR_OK) tmp_removed++;
+		k_fs_leave();
+
+		tmp_path[len] = 0;
+
+	}
+
+	k_fs_enter();
+	f_closedir(&d);
+	k_fs_leave();
+
+}
+
+void fs_layout_prepare(void) {
+
+	static bool tmp_cleared;
+
+	k_fs_enter();
+	f_mkdir(Z_DIR_SYS);
+	f_mkdir(Z_DIR_HOME);
+	f_mkdir(Z_DIR_DATA);
+	k_fs_leave();
+
+	if (ram_mounted) return;            // /tmp is the ramdisk
+
+	k_fs_enter();
+	f_mkdir(Z_DIR_TMP);
+	k_fs_leave();
+
+	if (tmp_cleared) return;
+	tmp_cleared = true;
+
+	tmp_removed = 0;
+	strcpy(tmp_path, Z_DIR_TMP);
+	fs_tmp_clear(FS_TMP_CLEAR_DEPTH);
+	if (tmp_removed)
+		printf("fs: emptied %s (%lu entries)\n", Z_DIR_TMP,
+			(unsigned long)tmp_removed);
+
+}
 
 int fs_load(uint32_t dst, char *path) {
 
@@ -814,8 +916,8 @@ void fs_list_dir(char *path) {
 	}
 
 	// Core apps living in flash (sw/os/zar.h) are listed after the
-	// filesystem's own contents, marked, and only for the top-level
-	// directory.
+	// filesystem's own contents, marked, for the top-level directory and
+	// for /apps -- the two places somebody looks for what can be run.
 	//
 	// They are NOT files -- there is no directory entry, they cannot be
 	// opened, read, written or deleted, and only the process-launch
@@ -825,21 +927,28 @@ void fs_list_dir(char *path) {
 	// worked perfectly, which is exactly the sort of thing that costs
 	// somebody an afternoon.
 	//
-	// An entry shadowed by a real file on the card is skipped rather
+	// An entry shadowed by /apps/<name> on the card is skipped rather
 	// than shown twice -- what `ls` prints should match what `run`
-	// would actually launch, and the filesystem copy is the one that
-	// wins (see fs_exec_info_any()).
-	if (z_zar_count() && (path[0] == 0 || (path[0] == '/' && path[1] == 0))) {
+	// would actually launch, and the card copy is the one that wins
+	// (see fs_exec_resolve()).
+	bool at_root = path[0] == 0 || (path[0] == '/' && path[1] == 0);
+	bool at_apps = fs_prefix_eq(path, Z_DIR_APPS, sizeof(Z_DIR_APPS) - 1) &&
+		(path[sizeof(Z_DIR_APPS) - 1] == 0 ||
+		 (path[sizeof(Z_DIR_APPS) - 1] == '/' && path[sizeof(Z_DIR_APPS)] == 0));
+	if (z_zar_count() && (at_root || at_apps)) {
 
 		int shown = 0;
-		char name[Z_ZAR_NAME_MAX + 1];
+		char name[sizeof(Z_DIR_APPS) + Z_ZAR_NAME_MAX + 1];
+		char *bare = name + sizeof(Z_DIR_APPS);
 		static FILINFO st;	// static: see the f_stat() note below
+
+		memcpy(name, Z_DIR_APPS "/", sizeof(Z_DIR_APPS));
 
 		for (uint32_t zi = 0; zi < z_zar_count(); zi++) {
 
-			if (!z_zar_name(zi, name)) continue;
+			if (!z_zar_name(zi, bare)) continue;
 
-			// shadowed by a real file -- already listed above.
+			// shadowed by /apps/<name> on the card.
 			//
 			// f_stat(), NOT fs_exec_info(). fs_exec_info() OPENS the
 			// file, and with FF_FS_TINY=0 (ffconf.h) every FIL carries
@@ -861,7 +970,7 @@ void fs_list_dir(char *path) {
 				shown = 1;
 			}
 
-			printf("%s\n", name);
+			printf("%s\n", bare);
 
 		}
 
@@ -966,41 +1075,35 @@ int fs_exec_info(char *path, z_exec_info_t *info) {
 // `run` print it.
 // -- the search path --
 //
-// A bare program name is looked for in the root, then in APPS/, then
-// in the flash archive. A name containing '/' is taken literally and
-// not searched at all.
+// A bare program name is looked for in /apps, then in the flash
+// archive, and nowhere else. A name containing '/' is a path, opened
+// exactly as given and not searched. See docs/layout.md, "Finding a
+// program".
 //
-// WHY A SEARCH PATH AND NOT A PREFIX. Moving the apps into APPS/
-// without one would mean every reference to a program grows a
-// constant "apps/": dock_candidates[] in wm, the extension->app table
-// in ztype.c, pidreg
-// registrations, `run apps/term` at the shell, and the names inside
-// the flash archive -- where it would also spend 5 of
-// Z_ZAR_NAME_MAX's 16 bytes on a prefix that carries no information
-// anywhere it appears. A prefix repeated at every call site is a
-// prefix that belongs in the resolver instead.
+// WHY A SEARCH AND NOT A PREFIX. Without one, every reference to a
+// program grows a constant "/apps/": dock_candidates[] in wm, the
+// extension->app table in ztype.c, pidreg registrations, `run term` at
+// the shell, and the names inside the flash archive -- where it would
+// also spend 6 of Z_ZAR_NAME_MAX's 16 bytes on a prefix that carries no
+// information anywhere it appears. A prefix repeated at every call
+// site is a prefix that belongs in the resolver.
 //
-// Doing it here means the directory move costs nothing above this
-// line: bare names keep working everywhere, the archive stays flat,
-// and a card written before the move still boots, because the root is
-// still searched.
-//
-// This is NOT the drive-letter idea rejected below returning by
-// another name. It applies to EXECUTABLE RESOLUTION only. Files are
-// still opened by exact path -- fs_open/size/read/write, ls, te,
-// repl's file API, tget/tput are all untouched, and none of them
-// gains a way for the same string to mean two different files. The
-// split is the ordinary one: data is addressed, programs are
+// This applies to EXECUTABLE RESOLUTION only. Files are still opened by
+// exact path -- fs_open/size/read/write, ls, te, repl's file API,
+// tget/tput are untouched, and none of them gains a way for one string
+// to mean two different files. Data is addressed; programs are
 // resolved.
 //
-// ROOT IS SEARCHED BEFORE APPS/, deliberately. It preserves the
-// shadowing rule the underlay already documents -- the only way a
-// file gets to the card root is somebody deliberately putting it
-// there -- so `xf wm` still hot-swaps a single app during development
-// exactly as it did before APPS/ existed. The cost is one failed
-// f_open per launch on a normally-laid-out card, which is not
-// measurable next to loading the executable itself.
-#define FS_APPS_DIR "apps/"
+// THE CARD ROOT IS NOT SEARCHED. Before v0.0.6 it was, first, so that a
+// file dropped at the root shadowed an installed app. The shadowing
+// survives with one place fewer to look: a copy at /apps/<name> wins
+// over the flash copy, so `xf apps/wm` still hot-swaps a core app
+// during development, and deleting it goes back to flash. The root
+// stays clean, and a launch on a card costs one f_open, not two.
+//
+// /apps is flat (one file per program, docs/layout.md), so this is one
+// lookup in one directory however many apps are installed.
+#define FS_APPS_DIR Z_DIR_APPS "/"
 
 // Long enough for APPS_DIR plus any name k_proc_run() can pass in
 // (Z_PROC_RUN_NAME_MAX, 64) plus the NUL. A name that would not fit is
@@ -1029,7 +1132,7 @@ static fs_exec_src_t fs_exec_resolve(const char *name, char *resolved,
 	// Anything with a separator in it is a path the caller means
 	// literally -- the file browser launching something several
 	// directories deep, for instance. Searching it would be wrong:
-	// "docs/term" must not find APPS/term.
+	// "docs/term" must not find /apps/term.
 	bool is_path = false;
 	for (const char *p = name; *p; p++)
 		if (*p == '/' || *p == '\\') { is_path = true; break; }
@@ -1037,18 +1140,19 @@ static fs_exec_src_t fs_exec_resolve(const char *name, char *resolved,
 	size_t len = strlen(name);
 	if (len + sizeof(FS_APPS_DIR) > FS_RESOLVED_MAX) return FS_EXEC_NONE;
 
-	// 1. literal -- the root for a bare name, the given path otherwise
-	strcpy(resolved, name);
-	if (fs_exec_info(resolved, info) == 0 && info->total)
-		return FS_EXEC_FS;
-
-	// 2. APPS/, for bare names only
-	if (!is_path) {
-		strcpy(resolved, FS_APPS_DIR);
-		strcpy(resolved + sizeof(FS_APPS_DIR) - 1, name);
+	// 1. a path: exactly as given, and nowhere else
+	if (is_path) {
+		strcpy(resolved, name);
 		if (fs_exec_info(resolved, info) == 0 && info->total)
 			return FS_EXEC_FS;
+		return FS_EXEC_NONE;
 	}
+
+	// 2. /apps/<name>
+	strcpy(resolved, FS_APPS_DIR);
+	strcpy(resolved + sizeof(FS_APPS_DIR) - 1, name);
+	if (fs_exec_info(resolved, info) == 0 && info->total)
+		return FS_EXEC_FS;
 
 	// 3. the flash archive, under the bare name. Entries there are
 	// flat -- no "apps/" prefix -- precisely because this resolver
@@ -1090,7 +1194,7 @@ int fs_exec_is_flash(char *path) {
 //
 // Re-running it is also what makes the search safe to have at all --
 // all three entry points share fs_exec_resolve(), so they cannot
-// disagree about which of root, APPS/ or flash a name meant.
+// disagree about whether /apps or flash is what a name meant.
 int fs_load_exec_any(uint32_t dst, char *path, const z_exec_info_t *info) {
 
 	char rp_[FS_PATH_MAX];

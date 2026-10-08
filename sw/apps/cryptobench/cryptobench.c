@@ -7,7 +7,8 @@
  *
  *   run cryptobench          (posix)      (run "cryptobench")   (repl)
  *
- * Prints to the console and writes the same lines to /cryptobench.txt.
+ * Prints to the console and writes the same lines to
+ * /data/cryptobench/results.txt.
  * Takes a minute or two; run it with nothing else busy -- the cycle
  * counter is a wall clock, so time given to other processes counts.
  *
@@ -28,10 +29,12 @@
 #include <stdarg.h>
 #include <stdint.h>
 
+#include "../../common/zpaths.h"
 #include "../../common/zeitlos.h"
 #include "../../common/zcycles.h"
 #include "../../common/zsha256.h"
 #include "../../common/zfsapp.h"
+#include "../../common/zdata.h"
 #include "../../ext/monocypher/monocypher.h"
 #include "../../ext/monocypher/monocypher-ed25519.h"
 #include "../../common/zsoc.h"
@@ -86,7 +89,7 @@ static const impl_t impls[2] = {
 	  o2_crypto_aead_lock },
 };
 
-// -- output: the console and /cryptobench.txt --
+// -- output: the console and /data/cryptobench/results.txt --
 
 static char report[8192];
 static int report_len;
@@ -885,11 +888,12 @@ int main(void) {
 #endif
 	out("");
 	out(failures ? "%d FAILURES -- see above" : "done, no failures", failures);
-	int h = fs_open_write("/cryptobench.txt");
+	char rpath[64];
+	int h = z_data_file(rpath, sizeof rpath, "results.txt") ? fs_open_write(rpath) : -1;
 	if (h >= 0) {
 		fs_write_chunk(h, report, report_len);
 		fs_close_handle(h);
-		printf("written to /cryptobench.txt\n");
-	} else printf("could not write /cryptobench.txt\n");
+		printf("written to %s\n", rpath);
+	} else printf("could not write %s\n", rpath);
 	return failures ? 1 : 0;
 }

@@ -1,5 +1,5 @@
 /*
- * bench -- netlists (/bench/NAME.net, docs/bench.md, "Netlists"). One
+ * bench -- netlists (NAME.net, docs/bench.md, "Netlists"). One
  * statement per line, # to the end of a line is a comment:
  *
  *   TYPE NAME ["label"] [PART.PIN ...] [key=value ...] [word ...]

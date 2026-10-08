@@ -10,10 +10,10 @@
  * by the kernel in the last 8 KB of the configuration flash. It is for
  * small things that belong to the MACHINE rather than to a card --
  * identity and security settings -- not a second config file: ordinary
- * settings belong in /zeitlos.cfg (docs/config.md).
+ * settings belong in /sys/zeitlos.cfg (docs/config.md).
  *
  *   keys    1..31 characters of [A-Za-z0-9._-]; by convention
- *           "apps.<app>.<name>", as in /zeitlos.cfg
+ *           "apps.<app>.<name>", as in /sys/zeitlos.cfg
  *   values  0..256 bytes, binary is fine
  *   total   everything live must fit in 4 KB, headers included
  *

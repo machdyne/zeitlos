@@ -1,11 +1,11 @@
 # modpanel.net -- an LS10 reading buttons and lighting LEDs on a
-# TCA9535 through its own I2C bus (pins C and D): /basic/PANEL.BAS.
+# TCA9535 through its own I2C bus (pins C and D): /data/basic/PANEL.BAS.
 #
 # Hold a button: its LED lights. The buttons are in the module's REG 0:
 #
 #   sechs -b main reg 0x0c 0
 
-module   m1  LS10  program=/basic/PANEL.BAS
+module   m1  LS10  program=/data/basic/PANEL.BAS
 bus      main  m1
 
 tca9535  x1  addr=0x20

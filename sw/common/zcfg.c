@@ -10,6 +10,7 @@
 #include <stddef.h>
 #include <string.h>
 
+#include "zpaths.h"
 #include "zcfg.h"
 
 // -- known keys --
@@ -18,18 +19,18 @@
 // lists the same keys with the full story; keep the two together.
 
 const z_cfg_known_t z_cfg_known[] = {
-	{ "apps.bbs.dir", "/bbs",
+	{ "apps.bbs.dir", Z_DIR_BBS,
 	  "bbs: the BBS's data directory -- its bbs.cfg, users, bulletins (docs/bbs.md)" },
 	{ "apps.netserve.allow", "subnet",
 	  "netserve: accept connections from the subnet only, or any (docs/netserve.md)" },
 	{ "apps.netserve.echo", "off",
 	  "netserve: an echo service for testing, on this port (7), or off" },
 	{ "apps.netserve.http", "off",
-	  "netserve: HTTP on a port, serving a directory -- 80 /www -- or off" },
+	  "netserve: HTTP on a port, serving a directory -- 80 " Z_DIR_NETSERVE_WWW " -- or off" },
 	{ "apps.netserve.ssh", "off",
 	  "netserve: SSH ports, ;-separated -- 22 posix0; 2222 bbs0 noauth any -- or off; noauth aside, needs a 10+ character password" },
 	{ "apps.netserve.ssh_auth", "both",
-	  "netserve: SSH logins by key (/user/authkeys), password, or both (not noauth ports)" },
+	  "netserve: SSH logins by key (" Z_PATH_NETSERVE_AUTHKEYS "), password, or both (not noauth ports)" },
 	{ "apps.netserve.ssh_sessions", "2",
 	  "netserve: SSH sessions at a time, 1-4 -- about 10KB of memory each" },
 	{ "apps.netserve.telnet", "off",

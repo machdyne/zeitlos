@@ -1,4 +1,4 @@
-# growlight.net -- an LS10 timing a grow light: /basic/GROW.BAS.
+# growlight.net -- an LS10 timing a grow light: /data/basic/GROW.BAS.
 #
 # The lamp is on pin C; a switch on D keeps it on. Press 3 for x3600
 # (an hour a second) and watch the lamp: 16 hours on, 8 off. F6 twice:
@@ -7,7 +7,7 @@
 #   sechs -b main info 0x0c          the module, as a master sees it
 #   sechs -b main console 0x0c       its console
 
-module   m1  LS10  program=/basic/GROW.BAS
+module   m1  LS10  program=/data/basic/GROW.BAS
 bus      main  m1
 
 load     lamp  "Grow light"  m1.C

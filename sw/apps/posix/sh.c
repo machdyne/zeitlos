@@ -1052,7 +1052,7 @@ static void bi_df(px_shell_t *sh, int argc, char **argv) {
  * mechanism wm already uses to give a newly launched app a filename --
  * because Z_SYS_PROC_RUN itself carries a name and nothing else.
  *
- * That is precisely what zcc's /zcc.args stopgap was waiting for:
+ * That is precisely what zcc's /tmp/zcc.args stopgap was waiting for:
  * `zcc hello.c -o hello` here becomes a real argv on the other side,
  * with no file involved. See docs/zcc.md, "Getting arguments to it".
  *

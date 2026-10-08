@@ -20,6 +20,7 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "../../common/zpaths.h"
 #include "../../common/zeitlos.h"
 #include "../../common/zinput.h"
 #include "esp32link.h"
@@ -27,7 +28,7 @@
 #include "netprof.h"
 #include "screen.h"
 #include "netcfg.h"
-#include "../../common/zfsapp.h"	/* fs_write_file() -- net.ip on the SD */
+#include "../../common/zfsapp.h"	/* fs_write_file() -- /data/net/net.ip on the card */
 
 #define UART1_LSR_DR    0x01
 #define UART1_LSR_THRE  0x20
@@ -624,7 +625,8 @@ static void znic_dispatch(void)
 				else
 					n = snprintf(line, sizeof line, "down\n");
 				if (n > 0)
-					fs_write_file("net.ip", line, n);
+					fs_mkdir(Z_DIR_NET_DATA);
+					fs_write_file(Z_PATH_NET_IP, line, n);
 				ip_on_card = sta_ip;
 				up_on_card = link_up;
 			}

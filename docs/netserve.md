@@ -17,7 +17,7 @@ peer --TCP-- net --port-- netserve --port-- repl0 / posix0 / console0 / serial0
 |---|---|
 | `sw/apps/net/tcp.c` | accepting connections: a pool, listening (networking.md, "Connections") |
 | `sw/apps/net/relay.c` | net's side: each accepted connection relayed to its listener |
-| `sw/apps/net/netserve/` | the servers; `authkeys.c` reads `/user/authkeys` |
+| `sw/apps/net/netserve/` | the servers; `authkeys.c` reads `/data/netserve/authkeys` |
 | `sw/apps/net/ssh/ssh_server.c` | the SSH protocol, the other half of the client's `ssh_proto.c` |
 | `sw/common/znet.h` | `Z_NET_LISTEN`, and what an accepted connection carries |
 
@@ -28,13 +28,13 @@ start, and nobody reaches them.
 
 ## Configuration
 
-In `/zeitlos.cfg` ([config.md](config.md)). Everything is **off** until
+In `/sys/zeitlos.cfg` ([config.md](config.md)). Everything is **off** until
 set.
 
 ```
 apps.netserve.ssh: 22 posix0
 apps.netserve.telnet: 23 repl0
-apps.netserve.http: 80 /www
+apps.netserve.http: 80 /data/netserve/www
 apps.netserve.echo: 7
 apps.netserve.allow: subnet
 ```
@@ -42,10 +42,10 @@ apps.netserve.allow: subnet
 | key | | |
 |---|---|---|
 | `apps.netserve.ssh` | `off` | one or more **listeners** (below); `22 posix0` by default. Needs the same password -- and a seeded TRNG |
-| `apps.netserve.ssh_auth` | `both` | `both`, `key` (only keys in `/user/authkeys`; no password needed at all) or `password`. Not for `noauth` listeners, which take anyone |
+| `apps.netserve.ssh_auth` | `both` | `both`, `key` (only keys in `/data/netserve/authkeys`; no password needed at all) or `password`. Not for `noauth` listeners, which take anyone |
 | `apps.netserve.ssh_sessions` | `2` | SSH sessions at a time, 1 to 4; about 10 KB of netserve's memory each ("Cost", below) |
 | `apps.netserve.telnet` | `off` | one or more **listeners**: a port, then a port name to connect sessions to -- `repl0`, `posix0`, `console0`, `serial0`, `bbs0`, or any zport provider. The port defaults to 23, the name to `repl0` |
-| `apps.netserve.http` | `off` | a port, then the directory to serve: `80 /www`. No password: it serves files, read-only |
+| `apps.netserve.http` | `off` | a port, then the directory to serve: `80 /data/netserve/www`. No password: it serves files, read-only |
 | `apps.netserve.echo` | `off` | a port (7): everything sent comes back. No password; for testing |
 | `apps.netserve.allow` | `subnet` | `subnet` accepts connections only from this machine's own subnet; `any` from anywhere. The default for every listener; one can say otherwise |
 
@@ -294,7 +294,7 @@ image by 19 KB, so the default costs about 13 KB more than before.
 $ scp ~/.ssh/id_ed25519.pub ...        # or tget it, or type it in te
 ```
 
-`/user/authkeys` lists the keys that may log in, in OpenSSH's
+`/data/netserve/authkeys` lists the keys that may log in, in OpenSSH's
 `authorized_keys` format -- a `.pub` file's line as it is, one per
 line:
 
@@ -628,7 +628,7 @@ tests with a scripted kernel; they skip otherwise):
 | `net/netserve/tests/test_e2e.c` | 7 | end to end: a TCP client, the real tcp.c, relay.c and netserve.c, a scripted posix: `help`'s 1.4 KB and two 4 KB messages reach the client under real flow control; the board's echo test, 3,000 bytes in and all back, with and without the client's FIN on the last segment |
 | `net/netserve/tests/test_authkeys.c` | 25 | the authkeys parser with OpenSSL-made keys and Python-computed expectations: every line form, every refusal, fingerprints as ssh-keygen prints them, Ed25519 agreeing with OpenSSL, RSA and Ed25519 signatures good and tampered |
 | `net/ssh/tests/test_ssh_server.c` | 56 | the server engine against the REAL client engine: the handshake, the fingerprint, a wrong password then the right one, 40 KB out within the client's window, the server's own window, three failures, the kernel's refusal, a flipped bit, strict KEX (offered, Terrapin's IGNORE-first refused, non-kex mid-exchange refused), no algorithms in common, HTTP on the SSH port, an absurd length, a client sending past the window, channel data before logging in; public keys: the PK_OK question, Ed25519 and RSA logins, an unlisted key (not counted), SHA-1 ssh-rsa refused (by the engine itself), bad signatures counted, keys only, passwords only, server-sig-algs; `noauth` (SSHS_AUTH_ANY): `none` in with no password asked, any password (the hook never called), keyboard-interactive, an unknown method (its name made printable for the log), a key asked about (PK_OK) and a key in no list signed |
-| `net/netserve/tests/test_netserve.c` | 247 | the real `netserve.c`: the policy, listening, echo, the subnet rule, option negotiation (and no loops), the password never echoed, a wrong one, three wrong, the kernel's delay, the login timeout, starting repl once for two sessions, CONNECT answers matched in order, Enter normalised, 0xFF both ways, backpressure, a 4 KB message and a 600-byte paste, a stranger's DATA, the terminal handoff and its call-back and fallback, a peer that vanishes; echo finishing a half-close; HTTP: files, indexes, types, %-decoding, every refusal (`..` in each disguise, `%00`, 404, 405, 408, 414/431, 400), HEAD, a 5 KB file streamed, a request in pieces, half-closes before and after the request, no file handle free, no handle or session left behind; SSH through netserve with the real client engine: host key made once and kept, off without a seeded TRNG, login, keystrokes to repl, 4 KB back, a 3 KB paste through the window, repl quitting, three wrong passwords, the login timeout, the engine wiped and released; SSH policy (keys only needs no password, the default needs one) and `/user/authkeys` (none, listed, unlisted, an edit taking effect, a refused line reported once); a backend dying silently under telnet (told, closed, its sends freed, nothing sent to it), under SSH (the message inside the channel), and during a handoff (waits for the call-back); a CONNECT answered after its session ended (the slot kept for the answer, a late CONNECTED closed, never given to the next session; a late REFUSED); listener lists (flags in any order, defaults, every refused entry, a port taken, four at most, the password rule per listener, noauth SSH without a password or with no TRNG, the old one-entry form); the subnet rule per listener both ways, and ports kept listened on across a re-read; a noauth telnet session (no banner or prompt, `bbs` started, its identity map, typeahead, its screen) beside a password one (`auth system`); a noauth SSH session from the internet with no password (never checked; identity with the user name; the BBS's screen through the channel); `z_port_ident()` and `z_port_refuse_unauthenticated()` on every kind of argument; `apps.netserve.ssh_sessions` (limits, the pool as the limit, not replaced while in use) |
+| `net/netserve/tests/test_netserve.c` | 247 | the real `netserve.c`: the policy, listening, echo, the subnet rule, option negotiation (and no loops), the password never echoed, a wrong one, three wrong, the kernel's delay, the login timeout, starting repl once for two sessions, CONNECT answers matched in order, Enter normalised, 0xFF both ways, backpressure, a 4 KB message and a 600-byte paste, a stranger's DATA, the terminal handoff and its call-back and fallback, a peer that vanishes; echo finishing a half-close; HTTP: files, indexes, types, %-decoding, every refusal (`..` in each disguise, `%00`, 404, 405, 408, 414/431, 400), HEAD, a 5 KB file streamed, a request in pieces, half-closes before and after the request, no file handle free, no handle or session left behind; SSH through netserve with the real client engine: host key made once and kept, off without a seeded TRNG, login, keystrokes to repl, 4 KB back, a 3 KB paste through the window, repl quitting, three wrong passwords, the login timeout, the engine wiped and released; SSH policy (keys only needs no password, the default needs one) and `/data/netserve/authkeys` (none, listed, unlisted, an edit taking effect, a refused line reported once); a backend dying silently under telnet (told, closed, its sends freed, nothing sent to it), under SSH (the message inside the channel), and during a handoff (waits for the call-back); a CONNECT answered after its session ended (the slot kept for the answer, a late CONNECTED closed, never given to the next session; a late REFUSED); listener lists (flags in any order, defaults, every refused entry, a port taken, four at most, the password rule per listener, noauth SSH without a password or with no TRNG, the old one-entry form); the subnet rule per listener both ways, and ports kept listened on across a re-read; a noauth telnet session (no banner or prompt, `bbs` started, its identity map, typeahead, its screen) beside a password one (`auth system`); a noauth SSH session from the internet with no password (never checked; identity with the user name; the BBS's screen through the channel); `z_port_ident()` and `z_port_refuse_unauthenticated()` on every kind of argument; `apps.netserve.ssh_sessions` (limits, the pool as the limit, not replaced while in use) |
 | `net/tests/test_tcp_pool.c` | 73 | networking.md, "Connections" |
 
 A connection netserve should have accepted and did not is reported as
@@ -648,15 +648,15 @@ guarantees it) and tcp.c's generation check after a DATA event.
    a card copy shadows the flash copy. Put `netserve` in `/apps` on the
    card (`tools/tftp-dist.sh` includes it).
 2. **A password**, 10 characters or more: `passwd` at the console.
-3. **`/zeitlos.cfg`:**
+3. **`/sys/zeitlos.cfg`:**
    ```
    apps.netserve.ssh: 22 posix0
    apps.netserve.telnet: 23 repl0
-   apps.netserve.http: 80 /www
+   apps.netserve.http: 80 /data/netserve/www
    apps.netserve.echo: 7
    ```
-   and your public key's line in `/user/authkeys`, an `index.html` in
-   `/www`.
+   and your public key's line in `/data/netserve/authkeys`, an `index.html` in
+   `/data/netserve/www`.
 4. **Reboot.** The console should show, in some order:
    ```
    netserve: starting as netserve0
@@ -679,10 +679,10 @@ guarantees it) and tcp.c's generation check after a DATA event.
    | a telnet session, then Super+L locks the screen | the session carries on: the lock is the screen's, not the network's |
    | telnet to posix0: `help`, then `vi`, then `:q` | the help text; vi full screen; back at the posix prompt |
    | `curl -v http://<ip>/`, and a large file | the page, then the file; each request logged |
-   | `curl http://<ip>/../zeitlos.cfg` | `400`, nothing leaves `/www` |
+   | `curl http://<ip>/../zeitlos.cfg` | `400`, nothing leaves `/data/netserve/www` |
    | `head -c 3000 /dev/zero \| tr '\0' x \| nc -q2 <ip> 7 \| wc -c` | 3000 -- the half-close |
    | `ssh <ip>`, first time | the fingerprint on the console at boot is the one ssh shows |
-   | `ssh <ip>` with your key in `/user/authkeys` | in, no password; the console logs the key's fingerprint |
+   | `ssh <ip>` with your key in `/data/netserve/authkeys` | in, no password; the console logs the key's fingerprint |
    | the same with an RSA key, and with a `SHA256:` line | in |
    | `ssh <ip>`, a wrong password three times | disconnected |
    | `apps.netserve.ssh_auth: key`, then a password login | refused: keys only |

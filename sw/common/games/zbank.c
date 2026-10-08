@@ -1,5 +1,5 @@
 /*
- * Zeitlos -- the shared casino bank, /casino.dat.
+ * Zeitlos -- the shared casino bank, /data/casino/bank.dat.
  * See zbank.h for why games apply a delta and never write a balance.
  */
 
@@ -323,19 +323,8 @@ int zbank_load(zbank_t *b)
 
     zbank_defaults(b);
 
-    {
-        /* The old location, read only if the new one is not there. A
-         * card that has both has already been saved since the move, so
-         * the new file is the live one. */
-        const char *path = ZBANK_PATH;
-
-        if (fs_size((char *)ZBANK_PATH) <= 0) {
-            if (fs_size((char *)ZBANK_OLD_PATH) <= 0) return ZBANK_MISSING;
-            path = ZBANK_OLD_PATH;
-        }
-
-        n = fs_read_file((char *)path, buf, sizeof buf);
-    }
+    if (fs_size((char *)ZBANK_PATH) <= 0) return ZBANK_MISSING;
+    n = fs_read_file((char *)ZBANK_PATH, buf, sizeof buf);
     if (n < 0) return ZBANK_IOERR;
     if (n == 0) return ZBANK_MISSING;
 
@@ -352,7 +341,7 @@ int zbank_save(const zbank_t *b)
 
     if (fs_write_file((char *)ZBANK_PATH, buf, n) == n) return ZBANK_OK;
 
-    /* A first save on a card with no /user. Creating it eagerly on
+    /* A first save on a card with no /data/casino. Creating it eagerly on
      * every save would be a directory lookup per round for a condition
      * that is true once in the life of a card; doing it only when the
      * write has actually failed costs nothing on the path that matters.

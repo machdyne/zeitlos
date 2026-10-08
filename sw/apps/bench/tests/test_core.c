@@ -193,12 +193,12 @@ static void example(void) {
 }
 
 static void modules(void) {
-    CHECK(load("module m1 LS10 program=/basic/GROW.BAS\nmodule m2 ls11 addr=0x0d\n"
+    CHECK(load("module m1 LS10 program=/data/basic/GROW.BAS\nmodule m2 ls11 addr=0x0d\n"
                "tca9535 x1 addr=0x20\nbus local master=m1 x1\nbus main m1 m2") == 0, "%s", err);
     part_t *m1 = bn_part_find("m1"), *m2 = bn_part_find("m2");
     CHECK(m1 && !strcmp(m1->type->name, "ls10") && m1->type->npins == 5 && m1->addr == 0x0C,
           "an LS10, at 0x0c as a new module");
-    CHECK(!strcmp(bn_module_program(m1), "/basic/GROW.BAS"), "its program");
+    CHECK(!strcmp(bn_module_program(m1), "/data/basic/GROW.BAS"), "its program");
     CHECK(m2->addr == 0x0D && m2->type->npins == 8, "an LS11 at 0x0d, pins A-G and LED");
     CHECK(bn_buses[0].master == 0 && bn_buses[1].master == -1, "m1 masters local");
     CHECK(bn_xfer(1, 0x0C, (const uint8_t []){ 0 }, 1, 0, 0, 0) == BN_NACK_ADDR,

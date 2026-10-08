@@ -139,10 +139,10 @@ sudo ufw enable
    key` on a board.
 2. **On the publisher:** `sudo fed add newnode <its public key>`.
 3. **On the new node:** its `fed.cfg` as in step 3 ("Joining"), and its
-   BBS as in step 4. On a board the files ship ready in `/fed` and
-   `/bbs`: fill in the three commented lines of `/fed/fed.cfg`,
-   uncomment `fed: fed0` in `/bbs/bbs.cfg`, add the topics to
-   `/bbs/forums.cfg`, then `run fed` and `run bbs`. A board needs no
+   BBS as in step 4. On a board the files ship ready in `/data/fed` and
+   `/data/bbs`: fill in the three commented lines of `/data/fed/fed.cfg`,
+   uncomment `fed: fed0` in `/data/bbs/bbs.cfg`, add the topics to
+   `/data/bbs/forums.cfg`, then `run fed` and `run bbs`. A board needs no
    `listen:` -- it calls out.
 
 ## 9. Keeping it

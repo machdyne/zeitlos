@@ -24,6 +24,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "../../../common/zpaths.h"
 #include "../../../common/zeitlos.h"
 #include "../../../common/zobj.h"
 #include "../../../common/zport.h"
@@ -37,7 +38,7 @@
 #include "../../../common/zkv.h"		// SSH: the host key, in the flash key/value store
 #include "../../../common/zrng.h"		// SSH: ephemeral keys, padding
 #include "../ssh/ssh_server.h"		// SSH: the protocol engine (docs/netserve.md, "SSH")
-#include "authkeys.h"			// SSH: the keys in /user/authkeys
+#include "authkeys.h"			// SSH: the keys in /data/netserve/authkeys
 
 #define MAX_SESS        6           // net relays at most TCP_MAX_CONN - 2
 #define TO_NET_MAX      512
@@ -84,7 +85,7 @@ static ssh_slot_t *ssh_pool;
 static int ssh_pool_n;
 static uint8_t host_seed[32];
 #define HOSTKEY_KEY "apps.netserve.hostkey"
-#define AUTHKEYS_PATH "/user/authkeys"
+#define AUTHKEYS_PATH Z_PATH_NETSERVE_AUTHKEYS
 #define AUTHKEYS_MAX 8192           // the file; RSA-4096 lines are ~740 bytes
 static uint32_t ssh_methods;        // SSHS_AUTH_*, from apps.netserve.ssh_auth (not noauth listeners)
 
@@ -756,7 +757,7 @@ static void ssh_event(void *user, sshs_event_t ev, const uint8_t *d, uint32_t n,
 	}
 }
 
-// -- SSH keys: /user/authkeys (docs/netserve.md, "SSH keys") --
+// -- SSH keys: /data/netserve/authkeys (docs/netserve.md, "SSH keys") --
 //
 // Read at every check, so an edit takes effect at the next login.
 // Refused lines are reported on the console -- once per version of the
@@ -1541,13 +1542,13 @@ static void read_config(void) {
 		svc_echo.port = (uint16_t)cfg_port(v, 7);
 	}
 
-	// HTTP: a port, then the directory to serve -- "80 /www".
+	// HTTP: a port, then the directory to serve -- "80 /data/netserve/www".
 	if (z_cfg_get("apps.netserve.http", v, sizeof(v)) && strcmp(v, "off") && strcmp(v, "no")) {
 		const char *t = v;
 		svc_http.port = (uint16_t)cfg_port(v, 80);
 		while (*t >= '0' && *t <= '9') t++;
 		while (*t == ' ') t++;
-		snprintf(http_root, sizeof(http_root), "%.63s", *t ? t : "/www");
+		snprintf(http_root, sizeof(http_root), "%.63s", *t ? t : Z_DIR_NETSERVE_WWW);
 		size_t rl = strlen(http_root);
 		while (rl > 1 && http_root[rl - 1] == '/') http_root[--rl] = 0;
 		if (rl == 1 && http_root[0] == '/') http_root[0] = 0;   // the card's root

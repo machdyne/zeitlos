@@ -133,15 +133,15 @@ the kernel now builds a cluster map for every file opened for reading.
 
 ### On the card, and in a release
 
-The card gets it at `/speech/en.spk`, which is what `tts` opens
+The card gets it at `/data/tts/speech/en.spk`, which is what `tts` opens
 (`PACK_PATH` in `sw/apps/tts/pack.h`), not `speech.zspk`.
 `release/lib/mkfatimg.py` copies it **if it is there** and counts it in
 the image's space check; if not, it prints a note and builds a card
 without one. `SPEECH_PACK=<path>` ships a pack built elsewhere.
 
-By hand: `mkdir /speech` on the card and copy the pack there as
-`en.spk`. `tts` logs `lexicon from /speech/en.spk` and `recorded voice
-from /speech/en.spk` when it finds them.
+By hand: make `/data/tts/speech` on the card (`/data/tts` first, if it
+is not there) and copy the pack there as `en.spk`. `tts` logs `lexicon from /data/tts/speech/en.spk` and `recorded voice
+from /data/tts/speech/en.spk` when it finds them.
 
 ### Lookup order
 

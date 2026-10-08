@@ -1,12 +1,12 @@
 # cron -- programs on a schedule
 
 `sw/apps/cron`. Runs programs at set times -- nightly backups, an
-hourly sync -- from a list in **`/user/cron.cfg`**. A core app, in
+hourly sync -- from a list in **`/data/cron/cron.cfg`**. A core app, in
 flash; `init` starts it at boot when that file exists, and it sleeps
 between jobs.
 
 ```
-# /user/cron.cfg
+# /data/cron/cron.cfg
 wait_for_ntp: yes
 
 daily 03:00          backup /docs
@@ -32,7 +32,7 @@ comment.
 | `every N` + `s` `m` `h` or `d` | every so long, counted from when cron started (10 seconds at least) |
 | `at boot` | once, when cron starts |
 
-Times are **local**: `system.rtc.timezone` from `/zeitlos.cfg`
+Times are **local**: `system.rtc.timezone` from `/sys/zeitlos.cfg`
 ([rtc.md](rtc.md)), summer time included. In the spring, a job set in
 the hour that is skipped is missed that day -- a daily job then catches
 up (below); in the autumn, a job in the hour that happens twice runs
@@ -67,10 +67,10 @@ for a board without networking (`obst`), with care.
   running with a valid clock -- the machine was off, or not yet synced,
   at the time. Hourly and `every` jobs do not catch up: a machine off
   for a day should not run 24 syncs at once. When each job last ran is
-  kept in **`/user/cron.state`**, one line per job, keyed by a hash of its
+  kept in **`/data/cron/state`**, one line per job, keyed by a hash of its
   rule's line -- so editing a rule starts its history over.
 - **The log.** One line per start, skip, failed start and exit in
-  **`/user/cron.log`**, and on the console:
+  **`/data/cron/log`**, and on the console:
 
   ```
   2026-09-25 03:00  started backup /docs

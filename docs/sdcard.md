@@ -563,8 +563,9 @@ an illegal long-name character, bad UTF-8, or empty once trailing
 spaces and dots are snipped. It used to refuse anything outside 8.3, so
 a release card would still read under a kernel built without long names.
 This kernel is built with them, and that stricter check rejected
-`zsubjects.h`. Names already on the card (`hellowin`, `audiotst`,
-`en.spk`) are unchanged.
+`zsubjects.h`. The names that had been shortened to fit 8.3
+(`hellowin`, `audiotst`) went back to their natural ones in v0.0.6
+([layout.md](layout.md)).
 
 Tests: `sw/common/tests/test_flist.c` (long, German and Japanese names
 through the real `zflist`, the sort, a pool too small for a directory),

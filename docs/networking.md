@@ -434,7 +434,7 @@ integer-only `printf` ([build.md](build.md#integer-only-printf-zfmt)),
 
 ### Why net does not call sscanf
 
-`netcfg.c` reads the static addresses in `/net.cfg`, and it used to read
+`netcfg.c` reads the static addresses in `/data/net/net.cfg`, and it used to read
 each with `sscanf(s, "%u.%u.%u.%u%c", ...)`. That one call linked
 newlib's `sscanf` engine, `strtod` (which `sscanf` needs for `%f`
 whether or not the format has one), the multi-precision helpers, soft

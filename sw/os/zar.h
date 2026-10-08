@@ -45,12 +45,13 @@
  * doesn't look for them, and nothing but init() consults this archive.
  * The rule is exactly:
  *
- *   at boot, per core app: on the SD card?  -> use that
- *                          otherwise        -> use the flash copy
+ *   at boot, per core app: in /apps on the card?  -> use that
+ *                          otherwise              -> use the flash copy
  *
  * An app on the card is assumed to be newer, because the only way it
- * got there was somebody deliberately putting it there. That keeps
- * `xf wm` working as a single-app hot-swap during development without
+ * got there was somebody deliberately putting it there: a release
+ * card does not carry the core apps (docs/layout.md). That keeps
+ * `xf apps/wm` working as a single-app hot-swap during development without
  * needing a version scheme, a timestamp comparison, or any notion of
  * precedence beyond "the card wins if it has one".
  *
@@ -61,11 +62,11 @@
  *
  * -- Entry names are FLAT --
  *
- * "wm", not "apps/wm", even though that is where the card keeps its
+ * "wm", not "/apps/wm", even though that is where the card keeps its
  * copy. This archive has no directories, so a separator in a name
  * would be decoration; and sw/os/fs/fs.c's fs_exec_resolve() is what
- * knows about apps/, so nothing here has to. It also keeps the whole
- * of Z_ZAR_NAME_MAX available for the name instead of spending 5 of
+ * knows about /apps, so nothing here has to. It also keeps the whole
+ * of Z_ZAR_NAME_MAX available for the name instead of spending 6 of
  * its 16 bytes on a constant prefix.
  *
  * -- Layout --

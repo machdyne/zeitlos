@@ -77,7 +77,7 @@ test:
 		../web/ecdsa.c ../../common/z25519.c ../../common/zmlkem.c \
 		$(patsubst %,../../ext/mlkem/%.c,kem indcpa polyvec poly ntt cbd reduce verify symmetric-shake) \
 		../../common/zfips202.c ../../common/zkeccak.c \
-		-DKYBER_K=3
+		-DKYBER_K=3 -DZ_APP_NAME='"cryptobench"'
 	cd /tmp && /tmp/cryptobench_host
 
 CLEAN_EXTRA = o2.syms o2raw_*.o

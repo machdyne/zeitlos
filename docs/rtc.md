@@ -156,7 +156,7 @@ or compares a time stays UTC.
 
 Local time is a **display** concern. `sw/apps/clock` and `sw/apps/cal`
 convert with `z_tz_local()` (`sw/common/zrtc.h`) using
-`system.rtc.timezone` from `/zeitlos.cfg` (`docs/config.md`), and always
+`system.rtc.timezone` from `/sys/zeitlos.cfg` (`docs/config.md`), and always
 show the zone's abbreviation. The default is still `UTC`.
 
 The original position here still holds: there is no zone database on

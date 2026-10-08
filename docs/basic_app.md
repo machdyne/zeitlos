@@ -7,7 +7,7 @@ screen. Full screen works on a TV through the composite output too.
 The language is Machdyne BASIC 1 (`sw/ext/basic`, a submodule; the language
 reference is upstream's `docs/basic1.md`), with graphics and a few other
 statements added for this machine. It is a learning language, and the
-app keeps it to itself: its files are in `/basic` and nowhere else, there
+app keeps it to itself: its files are in `/data/basic` and nowhere else, there
 is no `FORMAT`, and it cannot touch the rest of the system.
 
 ```
@@ -36,7 +36,7 @@ typed: the screen and BASIC's strings are Latin-9 (ISO 8859-15), as in
 the 8x8 font (`z_font_8x8`, `sw/data/font/font8x8.mem`: Daniel Hepper's
 public-domain font8x8, completed to Latin-9).
 
-`/basic/BOOT.BAS`, if there is one, runs when BASIC starts.
+`/data/basic/BOOT.BAS`, if there is one, runs when BASIC starts.
 
 ## From a terminal
 
@@ -149,22 +149,22 @@ is the double-buffered monochrome it always was.
 ## Files
 
 `SAVE`, `LOAD`, `DIR`, `DEL`, `TYPE` and the data files of BASIC 1 work on
-`/basic` (created when BASIC first starts). Names are BASIC's: up to 8
+`/data/basic` (created when BASIC first starts). Names are BASIC's: up to 8
 letters and digits and a 3-letter extension, `.BAS` if none is given. A
 `SAVE` replaces the old file only once the new one is complete
-(`/basic/_SAVING.TMP` in between).
+(`/data/basic/_SAVING.TMP` in between).
 
 ## I2C on the bench
 
 A netlist can put the BASIC computer's pins 3 and 4 on a bench bus
 ([bench.md](bench.md)): `basic main`. Then, with bench running, `PINS -,
 -, I2C, I2C` succeeds and `I2C` and `I2CR` reach the parts on that bus,
-exactly as on a module's pins C and D. `/bench/basicpanel.net` puts it
+exactly as on a module's pins C and D. `/data/bench/examples/basicpanel.net` puts it
 on a TCA9535 with LEDs and buttons: `LOAD PANEL`, `RUN`.
 
 `NET` on pins 1 and 2 means "left to the system", and costs nothing
 here, so a module's program (`PINS NET, NET, I2C, I2C`, as
-`/basic/PANEL.BAS`) runs unchanged on the BASIC computer -- develop it
+`/data/basic/PANEL.BAS`) runs unchanged on the BASIC computer -- develop it
 here, with the screen, then send it to a module with `sechs send`.
 
 The bus is looked up at every `PINS`, so a netlist edited and reloaded

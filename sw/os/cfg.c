@@ -184,6 +184,7 @@ void k_cfg_retry(void) {
 		return;
 	}
 	printf("cfg: the sdcard came up during init -- reading %s\n", Z_CFG_PATH);
+	fs_layout_prepare();            // missed at boot; docs/layout.md
 	k_cfg_load(true, &ignored);
 }
 

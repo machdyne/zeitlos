@@ -57,9 +57,12 @@ support, so a second drive costs one small driver and one line of
 configuration — and every app gets it through the file API it already
 uses, with **no new API at all**.
 
-## `/ram` is the name to use; `1:` still works
+## `/ram` and `/tmp` are names for it; `1:` still works
 
-Both reach the same volume.
+All three reach the same volume. `/tmp` is the one apps use for scratch
+([layout.md](layout.md)): on a board with no ramdisk it is a card
+directory the kernel empties at boot, so an app writing there does not
+have to know which it got. `/ram` names the ramdisk and nothing else.
 
 `fs_path_resolve()` rewrites a known prefix and **passes everything
 else through unchanged**, so FatFs's own drive syntax was never
@@ -168,13 +171,12 @@ Nothing new. The ordinary file calls take `/ram/...` paths:
 int fd = fs_open_write("/ram/scratch");
 ```
 
-`sw/apps/web` **prefers** it and falls back to the card, rather than
-requiring it — so `web` still runs where there is no ramdisk, and the
-two are directly comparable: same build, same page, one variable. It
-reports which it chose:
+`sw/apps/web` spools to `/tmp`, so it uses the ramdisk when there is
+one and the card when there is not, without asking -- `web` still runs
+where there is no ramdisk. It reports where its spool is:
 
 ```
-web: spool: /ram/webspool
+web: spool: /tmp/web.spool
 ```
 
 ## Files

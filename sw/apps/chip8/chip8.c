@@ -43,6 +43,7 @@
 #include <stdlib.h>
 
 #include "../../common/zeitlos.h"
+#include "../../common/zpaths.h"
 #include "../../common/zsoc.h"
 #include "../../common/zwm.h"
 #include "../../common/zwin.h"
@@ -918,7 +919,7 @@ static void open_another_rom(void) {
 	ctx.on_msg = on_msg;
 
 	picking = true;
-	if (!z_dialog_open(&ctx, rom_dir[0] ? rom_dir : NULL,
+	if (!z_dialog_open(&ctx, rom_dir[0] ? rom_dir : Z_DIR_CHIP8_ROMS,
 		path, sizeof(path))) {
 		picking = false;
 		need_full_redraw = true;
@@ -1193,7 +1194,7 @@ int main(void) {
 		memset(&ctx, 0, sizeof(ctx));
 		ctx.parent = &win;
 		ctx.on_msg = on_msg;
-		if (!z_dialog_open(&ctx, NULL, rom_path, sizeof(rom_path))) {
+		if (!z_dialog_open(&ctx, Z_DIR_CHIP8_ROMS, rom_path, sizeof(rom_path))) {
 			z_win_destroy(&win);
 			return 0;
 		}

@@ -104,10 +104,10 @@ Three things are worth reading carefully:
   archive, not on the card. FatFs read the root directory
   successfully. The filesystem was working.
 
-  (This transcript predates the `apps/` search path. An equivalent
-  trace today shows **two** `FR_NO_FILE` per app rather than one --
-  the root, then `apps/` -- before the flash archive answers. Same
-  meaning, twice the lines. See `docs/flash_apps.md`.)
+  (This transcript predates the `/apps` search path. An equivalent
+  trace today shows one `FR_NO_FILE` per app for `/apps/<name>`
+  before the flash archive answers. Same meaning. See
+  `docs/flash_apps.md`.)
 - Then it flips to `FR_DISK_ERR` and never recovers. The card was not
   slow to start; it was **broken mid-boot**.
 

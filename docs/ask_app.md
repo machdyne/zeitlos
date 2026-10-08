@@ -307,12 +307,12 @@ A distribution is not one monolithic thing. It is a set of **packs**,
 each self-contained, each installed by unzipping it onto the card:
 
 ```
-/ask/arklite/index.zak      Codex + Scroll R1 + docs
-/ask/arkmed/index.zak       Ark Medium
-/ask/recipes/index.zak      something you built yourself
+/data/ask/arklite/index.zak      Codex + Scroll R1 + docs
+/data/ask/arkmed/index.zak       Ark Medium
+/data/ask/recipes/index.zak      something you built yourself
 ```
 
-`ask` enumerates the subdirectories of `/ask` at startup and queries
+`ask` enumerates the subdirectories of `/data/ask` at startup and queries
 every pack it finds. **Adding a pack rebuilds nothing** and removing
 one is `rm -r`. This is the structure that matters most for what this
 is for: the corpus will keep growing, from sources that are not Ark and
@@ -332,7 +332,7 @@ loads one copy per distinct encoder.
 Documents live under the pack that built them:
 
 ```
-/ark/<pack>/<dataset>/00000042.txt
+/opt/ark/<pack>/<dataset>/00000042.txt
 ```
 
 That costs duplication — two packs that both include `docs/` ship two
@@ -340,7 +340,7 @@ copies — and it buys two things that are not negotiable.
 
 **Packs cannot collide.** `arklite` ships Scroll R1 and `arkmed` ships
 Scroll R0; both are the dataset named `scroll` and both number from 1.
-Sharing `/ark/scroll` would have one silently overwrite the other. This
+Sharing `/opt/ark/scroll` would have one silently overwrite the other. This
 was not hypothetical — it was found by co-installing two packs onto one
 card and looking at the result.
 
@@ -363,16 +363,16 @@ ship on separate schedules.
 
 ```
 /                          owner          cadence
-  zeitlos.cfg              release        every release
+  sys/zeitlos.cfg          release        every release
   apps/                    release        every release
     ask                      "            the app binary
     read, files, text, ...   "
   docs/                    release        every release
-  audio/                   release
-  user/                    the user       never touched
-  libz/                    release
+  media/                   release
+  data/zcc/libz/ ...       release
+  home/                    the user       never touched
 
-  ark/                     A PACK         when its corpus changes
+  opt/ark/                 A PACK         when its corpus changes
     arklite/                 "            one directory per pack
       index.md               "            generated, links to datasets
       codex/
@@ -386,10 +386,10 @@ ship on separate schedules.
         index.md
         00000001.md ...
 
-  ask/                     A PACK         same cadence as its /ark tree
+  data/ask/                A PACK         same cadence as its /opt/ark tree
     arklite/
       index.zak              "            root: dims, counts, encoder_id
-      docs.zdt               "            card path, title, uid
+      docs.zdt               "            path within the pack, title, uid
       chunks.zct             "            doc, byte offset, length, heading
       coarse.zcv             "            resident, scanned every query
       fine.zfv               "            on card, read for the shortlist
@@ -400,9 +400,19 @@ ship on separate schedules.
       ...
 ```
 
-A pack is exactly `/ark/<pack>/` plus `/ask/<pack>/`. Installing one is
-unzipping it; removing one is `rm -r` on those two directories. Nothing
-else on the card refers to it.
+A pack is exactly `/opt/ark/<pack>/` plus `/data/ask/<pack>/`
+([layout.md](layout.md), "Ask and Ark"). Installing one is unzipping
+it; removing one is `rm -r` on those two directories. Nothing else on
+the card refers to it.
+
+**A pack holds no card path.** `docs.zdt` stores each document's path
+relative to the pack's own document folder (`books/00000072.md`), and
+`ask` puts `/opt/ark/<pack>/` in front when it loads the pack
+(`Z_DIR_ARK`, `sw/common/zpaths.h`). So a pack works wherever the
+layout puts packs, and a layout change does not invalidate packs
+already built. Format version 1 stored the whole card path; version 2
+is the first that does not, and `ask` refuses a version-1 pack with
+`index built by another version of tools/ask -- rebuild the pack`.
 
 Measured across a co-installed `arklite` + `arkmed` card: 1,948 paths,
 no collisions, longest path 32 characters — 43 of `Z_WM_ARG_MAX`'s 96
@@ -575,7 +585,7 @@ same path and Gutenberg books work.
 So `ask` hands over a path with a fragment:
 
 ```
-/ark/lite/books/00000009.txt#48213
+/opt/ark/arklite/books/00000009.txt#48213
 ```
 
 **The only change `read` needs** is to parse an optional `#<decimal>`
@@ -626,7 +636,7 @@ would otherwise produce confidently ranked results pointing at the
 wrong paragraphs, which is the worst failure this system has.
 
 `release/` ships the app **and `zdocs` + `arklite` by default**. An app
-that boots to "no packs in /ask" looks broken rather than incomplete,
+that boots to "no packs in /data/ask" looks broken rather than incomplete,
 so the data goes with it.
 
 | pack | files | size |
@@ -1429,8 +1439,8 @@ packs: 1   resident: 0.90 MB
 scanned 10059 of 10059 chunks in 6 slices, 8 hits
 
 1. [arklite] FM 21-11 FIRST AID -- CHAPTER 5
-   score 882   /ark/arklite/books/00000072.md  +39006  1848 bytes
-   read arg: /ark/arklite/books/00000072.md#39006 (37/96 bytes)
+   score 882   /opt/ark/arklite/books/00000072.md  +39006  1848 bytes
+   read arg: /opt/ark/arklite/books/00000072.md#39006 (41/96 bytes)
    > 6-3. Snakebites a. Poisonous snakes DO NOT always inject venom...
 ```
 
@@ -1765,7 +1775,7 @@ cp sw/apps/ask/ask.bin /media/<card>/apps/ask
 ```
 
 No extension — that is how every other app on the card is named, and
-`fs_exec_resolve()` searches the root and then `apps/`.
+`fs_exec_resolve()` finds a bare name in `/apps` ([layout.md](layout.md)).
 
 **2. A pack.** At minimum one, and `arklite` is the one to start with
 because everything it needs is inside the ark repo, so it builds from a
@@ -1780,8 +1790,8 @@ cp -r tools/ask/out/arklite/* /media/<card>/
 That writes exactly two directories and touches nothing else:
 
 ```
-/ark/arklite/     the corpus -- 24 MB, plus index.md in every directory
-/ask/arklite/     the index  -- 8 files, 2.1 MB
+/opt/ark/arklite/     the corpus -- 24 MB, plus index.md in every directory
+/data/ask/arklite/    the index  -- 8 files, 2.1 MB
 ```
 
 `MANIFEST.json` is deliberately *outside* the tree, at
@@ -1806,15 +1816,16 @@ Expect ~2.4 s of loading with a progress bar, then `10059 passages,
 
 ### If it says something else
 
-The status line carries the reason, and so does UART0. The four that
+The status line carries the reason, and so does UART0. The ones that
 happen:
 
 | message | cause |
 |---|---|
 | `out of memory -- needs APP_STACK = 4M` | the stack the executable asks for (`APP_STACK`, `docs/executables.md`) is too small for this pack. **By far the most likely first-run failure** — everything else can be correct and the app still finds nothing |
-| `/ask has no subdirectories` | the pack was copied to `/ask/` rather than `/ask/<name>/`, or only `/ark/` was copied |
+| `/data/ask has no subdirectories` | the pack was copied to `/data/ask/` rather than `/data/ask/<name>/`, or only `/opt/ark/` was copied |
+| `index built by another version of tools/ask -- rebuild the pack` | a pack built before format version 2, when indexes stored whole card paths |
 | `pack files are from different builds` | two distributions mixed in one directory. Every file carries the `dsid`; this is the check that stops confidently wrong answers |
-| `missing file in pack` | an incomplete copy — a pack is eight files in `/ask/<name>/` |
+| `missing file in pack` | an incomplete copy — a pack is eight files in `/data/ask/<name>/` |
 
 `hosttest` prints the same string, so pointing it at the mounted card
 tells you what the device will say before you eject it.

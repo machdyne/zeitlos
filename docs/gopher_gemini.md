@@ -126,12 +126,12 @@ hole in the first:
   changes is only the question asked of that key: not "does a trusted
   CA vouch for it" but "is it the key this server had before".
 - **The first visit pins the key.** Its fingerprint, the SHA-256 of the
-  certificate's public key, goes into `/web/pins.txt`. The console says
+  certificate's public key, goes into `/data/web/pins.txt`. The console says
   `web: gemini: pinned host:1965 ...`.
 - **Every later visit must present the same key**, or the connection is
   refused: *this capsule's key has changed since it was first seen*.
   If the change is expected (the server was rebuilt), delete that
-  host's line from `/web/pins.txt` in `text`, and the next visit pins
+  host's line from `/data/web/pins.txt` in `text`, and the next visit pins
   the new key.
 - **The pin is the key, not the certificate**, so renewing a
   certificate with the same key is not a change. Dates are not checked,
@@ -220,8 +220,8 @@ A capsule that streams, or never closes, would otherwise fill the
 spool without end.
 
 The converted page is written to the **spool**, like any web page:
-`/ram/webspool` on the RAM disk, or `/web/spool` on the card when the
-RAM disk cannot hold it. The status line's "receiving... N KB" is the
+`/tmp/web.spool`, which is on the RAM disk when there is one and on the
+card when there is not ([layout.md](layout.md)). The status line's "receiving... N KB" is the
 size of that file.
 
 The console says what happened, for a report or for looking into an

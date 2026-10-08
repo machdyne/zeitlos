@@ -75,7 +75,7 @@ With no display attached the console is how you find the board: `net`
 prints the address the access point gave the ESP32 (`esp32link: LINK up
 rssi=... ip=...`, and the firmware's own `esp_netif_handlers: sta ip:`
 before it), which is where the [remote desktop](remote_desktop.md)
-lives on this bitstream. It also writes it to `net.ip` at the root of
+lives on this bitstream. It also writes it to `/data/net/net.ip` on
 the card. On the Ethernet bitstream (`ulx3s_85f_langkatze`) the ESP32
 is held in reset, and the desktop is `run zerdesk` on port 8080 of
 the wired address.
@@ -88,12 +88,13 @@ the card.
 
 Optional -- the core apps are in flash -- and otherwise the standard
 image ([prebuilt](../README.md#quick-start-prebuilt-images), or
-`tools/mkfatimg.sh`): apps in `apps/`, `zeitlos.cfg` at the root
-([config.md](config.md)), `web/roots.der` for TLS, and `docs/`, `ark/`,
-`libz/`, `user/`.
+`tools/mkfatimg.sh`), laid out as [layout.md](layout.md) describes:
+programs in `/apps`, each app's data in `/data/<app>`, the
+configuration in `/sys/zeitlos.cfg` ([config.md](config.md)).
 
-The one file this board wants that others do not is **`net.cfg`** at
-the root, holding the WiFi credentials `net` hands the ESP32. Format
+The one file this board wants that others do not is
+**`/data/net/net.cfg`**, holding the WiFi credentials `net` hands the
+ESP32. Format
 and the rest of the link in [esp32link.md](esp32link.md); flashing the
 ESP32 itself is `esp32/zeitlos-nic/README.md`, and is its own
 procedure, because the card has to come out for it.

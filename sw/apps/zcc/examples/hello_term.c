@@ -1,7 +1,7 @@
 /*
  * hello_term.c -- output to the term window, not the serial console.
  *
- *     zcc -I /libz/include -L /libz -o /apps/hello /hello_term.c
+ *     zcc -I /data/zcc/libz/include -L /data/zcc/libz -o /apps/hello /hello_term.c
  *     hello
  *
  * -- Why this is not just printf --

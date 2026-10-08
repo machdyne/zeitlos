@@ -30,6 +30,14 @@ int main(int argc, char **argv) {
 
     px_fd_init();
 
+    /* The fixture tree stands in for a whole card and these tests are
+     * written from its root. The shell itself starts in /home
+     * (Z_DIR_HOME, docs/layout.md), which the fixture does not have. */
+    {
+        char err[64];
+        px_chdir("/", err, sizeof err);
+    }
+
     while (fgets(line, sizeof(line), stdin)) {
         char *nl = strchr(line, '\n');
         if (nl) *nl = 0;

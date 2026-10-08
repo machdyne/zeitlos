@@ -915,8 +915,8 @@ apps:
 # Publish every built app to a TFTP root, so a running machine can pull
 # the latest builds with `tget` instead of `xf` over the serial link.
 # Each app lands under its bare name -- sw/apps/text/text.bin becomes
-# $(TFTP_DIR)/text, which is what `tget` asks for and what `run <file>`
-# expects to find afterwards.
+# $(TFTP_DIR)/text, which is what `tget` asks for; saved on the card as
+# /apps/text, it is what `run text` finds (docs/layout.md).
 #
 #   $ make clean && sudo make BOARD=obst dev-flash && sudo make tftp-dist
 #

@@ -5,7 +5,7 @@
  * Zeitlos
  * Copyright (c) 2026 Lone Dynamics Corporation. All rights reserved.
  *
- * Message history, kept on the card in /user/mesh.log. See
+ * Message history, kept on the card in /data/mesh/mesh.log. See
  * docs/mesh_app.md, "History".
  *
  * -- the file --
@@ -33,9 +33,10 @@
 
 #include <stdint.h>
 
+#include "../../common/zpaths.h"
 #include "mesh_model.h"
 
-#define MESH_LOG_PATH		"/user/mesh.log"
+#define MESH_LOG_PATH		Z_PATH_MESH_LOG
 #define MESH_LOG_HEADER		"# mesh log v1\n"
 #define MESH_LOG_LINE_MAX	(MESH_PAYLOAD_MAX * 2 + 96)	// every byte escaped
 

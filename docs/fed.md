@@ -873,7 +873,7 @@ bytes exactly.
 
 ## Configuration
 
-`fed.cfg` (on Zeitlos in `/fed`, or `apps.fed.dir`):
+`fed.cfg` (on Zeitlos in `/data/fed`, or `apps.fed.dir`):
 
 ```
 name: machdyne                     # this node's name
@@ -980,7 +980,7 @@ directory's owner first.
 
 ### On Zeitlos
 
-`run fed`. It registers `fed0`, keeps its files in `/fed`, reads the
+`run fed`. It registers `fed0`, keeps its files in `/data/fed`, reads the
 node key from the key/value store (`apps.fed.nodekey`), listens through
 `net` and dials its peers through `net`'s raw sockets, one at a time --
 every connect and DNS lookup answered in its loop, since blocking

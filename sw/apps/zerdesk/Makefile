@@ -2,7 +2,7 @@
 #
 # The remote desktop, served by Zeitlos itself. net accepts the TCP
 # connections and relays them here (Z_NET_LISTEN). The viewer page is
-# not built in: it is read from the card, /zerdesk/index.html, where the
+# not built in: it is read from the card, /data/zerdesk/index.html, where the
 # card image puts the ESP32's esp32/zeitlos-nic/web/index.html
 # (release/lib/mkfatimg.py). One file, both paths.
 

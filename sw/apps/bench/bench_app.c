@@ -1,6 +1,6 @@
 /*
  * bench -- virtual parts, nets and I2C buses from a netlist, shown live
- * (docs/bench.md). Started with a netlist: `bench /bench/panel.net`.
+ * (docs/bench.md). Started with a netlist: `bench /data/bench/examples/panel.net`.
  *
  * The cards are drawn into a canvas the size of the view (draw.c), from
  * the scroll position, and copied to the window. The canvas is a .bss
@@ -13,7 +13,7 @@
  * bench is also the port provider bench0: zi2cx (sw/common/zi2cx.c)
  * sends it transactions for its buses (zbench.h), one reply each.
  *
- *   the open icon   another netlist (the file dialog, from /bench)
+ *   the open icon   another netlist (the file dialog, from /data/bench/examples)
  *   click      press a button, flip a switch; on a pin: its net, below
  *   F5         read the netlist again (after editing it)
  *   F6         the cards, the bus log, the modules' consoles
@@ -44,6 +44,7 @@
 #include <string.h>
 #include <stdlib.h>
 
+#include "../../common/zpaths.h"
 #include "../../common/zeitlos.h"
 #include "../../common/zsoc.h"
 #include "../../common/zwm.h"
@@ -136,7 +137,7 @@ static void load(void) {
     char *text = path[0] ? fs_mallocfile(path) : 0;
     if (!path[0]) {
         bn_clear();
-        snprintf(status, sizeof(status), "no netlist: bench /bench/NAME.net");
+        snprintf(status, sizeof(status), "no netlist: bench FILE.net");
     } else if (!text) {
         bn_clear();
         snprintf(status, sizeof(status), "%s: cannot read it", path);
@@ -770,7 +771,7 @@ static void open_netlist(void) {
     char chosen[sizeof(path)];
     dlg.parent = &win;
     dlg.on_msg = dialog_msg;
-    if (!z_dialog_open(&dlg, "/bench", chosen, sizeof(chosen))) return;
+    if (!z_dialog_open(&dlg, Z_DIR_BENCH_EXAMPLES, chosen, sizeof(chosen))) return;
     strcpy(path, chosen);
     load();
 }

@@ -279,11 +279,11 @@ def main():
             {"file": "zeitlos.img.gz", "variant": "base",
              "packs": ["zdocs"], "bytes": 1204423,
              "image_bytes": 64 * 1024 * 1024, "needs_8gb": False,
-             "files": ["files", "text", "read", "ark/zdocs/"]},
+             "files": ["files", "text", "read", "opt/ark/zdocs/"]},
             {"file": "zeitlos-arkmedium.img.gz", "variant": "arkmedium",
              "packs": ["zdocs", "arkmed"], "bytes": 612000000,
              "image_bytes": 1728 * 1024 * 1024, "needs_8gb": False,
-             "files": ["files", "ark/zdocs/", "ark/arkmed/"]},
+             "files": ["files", "opt/ark/zdocs/", "opt/ark/arkmed/"]},
         ]
         man = notes_mod.manifest(version, "deadbeef" * 5, False, results,
                                  sdcard, lay, "abc123")

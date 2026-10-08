@@ -45,6 +45,7 @@
 #include <stdlib.h>     /* exit() only -- no stdio, see the note above */
 #include <string.h>
 
+#include "../../common/zpaths.h"
 #include "../../common/zeitlos.h"
 #include "../../common/zsoc.h"
 #include "../../common/zwm.h"
@@ -161,7 +162,7 @@ static int cols(void)
 #define Y_LIST    (Y_STATUS + LINE_H + 2)
 
 /* A row of pack buttons along the bottom, one per installed pack,
- * each opening that pack's /ark/<pack>/index.md in `read`.
+ * each opening that pack's /opt/ark/<pack>/index.md in `read`.
  *
  * Worth the pixels because there is otherwise NO convenient way to
  * reach those indexes. The corpus is numbered files (8.3, FF_USE_LFN
@@ -316,9 +317,9 @@ static void open_pack_index(int i)
     char arg[AI_PATH_MAX];
     int n;
     if (!p) return;
-    /* /ark/<pack>/index.md -- written by tools/ask at build time, and
+    /* /opt/ark/<pack>/index.md -- written by tools/ask at build time, and
      * `read` follows its relative links into the corpus. */
-    n = scat(arg, sizeof(arg), 0, "/ark/");
+    n = scat(arg, sizeof(arg), 0, Z_DIR_ARK "/");
     n = scat(arg, sizeof(arg), n, p->name);
     scat(arg, sizeof(arg), n, "/index.md");
     z_launch_arg_set(arg);
@@ -699,10 +700,10 @@ int main(void)
      * it is seconds and the bar is not decoration. load_progress()
      * redraws the status line as it goes; the window is already up, so
      * the app looks alive from the first frame rather than after. */
-    loaded = ai_load_all("/ask", load_progress) > 0;
+    loaded = ai_load_all(Z_DIR_ASK_PACKS, load_progress) > 0;
 
     if (!loaded) {
-        /* Say WHY. The four realistic causes -- nothing in /ask, an
+        /* Say WHY. The four realistic causes -- nothing in /data/ask, an
          * index this build cannot read, files from two distributions
          * mixed, and malloc refusing the coarse array because the
          * executable did not ask for enough heap -- are not

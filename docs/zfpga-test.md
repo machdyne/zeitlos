@@ -34,18 +34,18 @@ the way you normally do, and write `zeitlos.img.gz` to the sdcard.
 kernel changed), then build the app and copy these onto the card:
 
 ```
-make -C sw/apps/zfpga                    # zfpga.bin, and db/ laid out as /fpga
+make -C sw/apps/zfpga                    # zfpga.bin, and db/ laid out as /data/zfpga
 ```
 
 | On the card | From the tree |
 |---|---|
 | `/apps/zfpga` | `sw/apps/zfpga/zfpga.bin` (renamed: no `.bin`) |
-| `/fpga/lfe5u25f.zdb` | `sw/apps/zfpga/db/lfe5u25f.zdb` |
-| `/fpga/boards/lakritz.brd` | `sw/apps/zfpga/db/boards/lakritz.brd` |
-| `/fpga/boards/lakritz.lpf` | `sw/apps/zfpga/db/boards/lakritz.lpf` |
-| `/fpga/examples/*` | `sw/apps/zfpga/db/examples/*` |
+| `/data/zfpga/lfe5u25f.zdb` | `sw/apps/zfpga/db/lfe5u25f.zdb` |
+| `/data/zfpga/boards/lakritz.brd` | `sw/apps/zfpga/db/boards/lakritz.brd` |
+| `/data/zfpga/boards/lakritz.lpf` | `sw/apps/zfpga/db/boards/lakritz.lpf` |
+| `/data/zfpga/examples/*` | `sw/apps/zfpga/db/examples/*` |
 
-`sw/apps/zfpga/db/` *is* `/fpga`: copying its contents across is the
+`sw/apps/zfpga/db/` *is* `/data/zfpga`: copying its contents across is the
 whole of the second row onward.
 
 **Every name on the card is 8.3** -- at most eight characters, a dot,
@@ -62,9 +62,9 @@ Boot, open a terminal, start `posix` early (it and zfpga each want 4 MB,
 and the allocator is first-fit), and run these **one at a time**:
 
 ```
-$ zfpga build /fpga/examples/blink.v -b lakritz
-$ zfpga build /fpga/examples/on.zn -b lakritz
-$ zfpga build /fpga/examples/empty.zn -b lakritz
+$ zfpga build /data/zfpga/examples/blink.v -b lakritz
+$ zfpga build /data/zfpga/examples/on.zn -b lakritz
+$ zfpga build /data/zfpga/examples/empty.zn -b lakritz
 ```
 
 **Use absolute paths.** posix passes arguments to programs as typed,
@@ -76,10 +76,10 @@ before the next. posix's `&&` waits for a program to *start*, not to
 finish, so chaining them races.
 
 Each writes `.zl`, `.zn`, `.cfg` and `.bit` beside its input in
-`/fpga/examples/`, and says what it is doing as it goes. For `blink.v`:
+`/data/zfpga/examples/`, and says what it is doing as it goes. For `blink.v`:
 
 ```
-zfpga: board lakritz: LFE5U-25F, CABGA256, pins from /fpga/boards/lakritz.lpf
+zfpga: board lakritz: LFE5U-25F, CABGA256, pins from /data/zfpga/boards/lakritz.lpf
 zfpga: loading the chip database...
 zfpga:   database: 3.1 s
 zfpga: synth...
@@ -93,7 +93,7 @@ zfpga: routed 49 nets: 99 arcs, 2 iterations, 51 reroutes, 7687 wires searched
 zfpga:   pnr: 2.3 s
 zfpga: pack...
 zfpga:   pack: 1.4 s
-zfpga: wrote /fpga/examples/blink.bit in 13.1 s (peak memory 3152 KB)
+zfpga: wrote /data/zfpga/examples/blink.bit in 13.1 s (peak memory 3152 KB)
 ```
 
 (Times illustrative.) The first line should appear **within a second**
@@ -122,7 +122,7 @@ zfpga: error: this process has less than 3.3MB of memory; zfpga needs the 4MB ti
 
 which means the kernel in flash is not the new one (section 1).
 
-`ls /fpga/examples` should show three `.bit` files of about 99 KB each.
+`ls /data/zfpga/examples` should show three `.bit` files of about 99 KB each.
 
 ---
 
@@ -135,7 +135,7 @@ With the spare module in the Pmod socket, open **mmod**:
    ERASE stay disabled until it does.
 3. **START** `0`, **LEN** `20000` (hex: 128 KB, more than any of the
    three bitstreams) -> **ERASE**, and confirm.
-4. **Open** (titlebar icon) -> `/fpga/examples/blink.bit` -> **WRITE**,
+4. **Open** (titlebar icon) -> `/data/zfpga/examples/blink.bit` -> **WRITE**,
    and confirm. WRITE writes the file's length from START.
 5. **VERIFY**. It should report the file's byte count matching.
 
@@ -163,7 +163,7 @@ else is needed.
 | `empty.bit` | nothing visible happens | the packer, IDCODE, CRCs: that the device configures at all |
 
 If `blink.bit` blinks, the test passed. One more, for the synthesiser's
-hierarchy (`docs/zfpga.md` §24): `zfpga build /fpga/examples/blinkh.v -b
+hierarchy (`docs/zfpga.md` §24): `zfpga build /data/zfpga/examples/blinkh.v -b
 lakritz` builds a blinky from two modules, a parameter and an
 `` `include``d header; written to the MMOD and booted, its LED should
 blink at **half** `blink.bit`'s rate, 0.35 s on and 0.35 s off. If not, try `on.bit`, then
@@ -181,7 +181,7 @@ socket, power on.
 ## 5. Cross-checks worth doing
 
 **The machine's bitstream is the host's.** Copy
-`/fpga/examples/blink.bit` off the card, then on the host:
+`/data/zfpga/examples/blink.bit` off the card, then on the host:
 
 ```
 cd sw/apps/zfpga

@@ -25,6 +25,7 @@
  * otherwise reach hardware silently.
  */
 
+#include "../../../common/zpaths.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -59,12 +60,12 @@ int main(int argc, char **argv)
     }
     ai_set_root(argv[1]);
 
-    n = ai_load_all("/ask", on_progress);
+    n = ai_load_all(Z_DIR_ASK_PACKS, on_progress);
     if (!n) {
         /* The reason, not just the fact. This is the message the app
          * puts on its status line, so checking a card here tells you
          * exactly what the device will say about it. */
-        fprintf(stderr, "no packs loaded under %s/ask: %s\n",
+        fprintf(stderr, "no packs loaded under %s" Z_DIR_ASK_PACKS ": %s\n",
                 argv[1], ai_error());
         return 1;
     }

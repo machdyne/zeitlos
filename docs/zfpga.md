@@ -4,7 +4,7 @@ Synthesis, place-and-route and bitstream packing, running on Zeitlos,
 targeting the FPGA Zeitlos is running on.
 
 **Status: experimental, and working on hardware.** On a Lakritz,
-`zfpga build /fpga/examples/blink.v -b lakritz` synthesises, places,
+`zfpga build /data/zfpga/examples/blink.v -b lakritz` synthesises, places,
 routes and packs a Verilog blinky on the machine itself, and the
 bitstream it writes, booted from an MMOD, blinks the LED (section 23).
 No host computer is involved from Verilog to bitstream.
@@ -546,20 +546,20 @@ much as a design constraint worth accepting deliberately:
 
 - **Board profiles, not flags.** `-b lakritz` implies device, package,
   the `.lpf`, `USERPART_START`, the gateware slot and flash size, read
-  from `/fpga/boards/lakritz` on the card. One source of truth, and the
+  from `/data/zfpga/boards/lakritz` on the card. One source of truth, and the
   same keep-in-sync hazard `docs/zboot.md` §7 describes, so the release
   should *generate* these files from the values in `Makefile`, not
   carry a second hand-written copy.
 - **`-b` can default.** There is no board-identity CSR today (`docs/csrs.md`
   has memory size and feature bits, not a board), and the card image is
   the same for every target, so the card cannot know either. Until a
-  `BOARD` CSR exists, a one-line `/fpga/board` the user writes once
+  `BOARD` CSR exists, a one-line `/data/zfpga/board` the user writes once
   serves as the default.
 - **Outputs are derived.** `blink.v` becomes `blink.bit` unless `-o`
   says otherwise.
 - **The card layout is the search path**, exactly as `zcc` finds
-  `/libz` without being told (`docs/zcc.md`, "The card's layout is the
-  default search path"): `/fpga/lfe5u25f.zdb`, `/fpga/boards/`.
+  `/data/zcc/libz` without being told (`docs/zcc.md`, "The card's layout is the
+  default search path"): `/data/zfpga/lfe5u25f.zdb`, `/data/zfpga/boards/`.
 
 ### 4.1 Follow zcc's shape exactly
 
@@ -653,7 +653,7 @@ should remove all of it.
 |---|---|---|
 | `sw/os/kernel.h` | `"zfpga"` added to the `HUGE` name check | Phase 2 |
 | `sw/apps/Makefile` | one word in `APPS` | Phase 2 |
-| `release/lib/mkfatimg.py` | `/fpga/*.zdb`, board profiles, examples | Phase 2 |
+| `release/lib/mkfatimg.py` | `/data/zfpga/*.zdb`, board profiles, examples | Phase 2 |
 | `rtl/sysctl.v`, `rtl/spiflash.v` (was `spiflashro.v`), `boards/*.lpf`, `Makefile` | PROGRAMN, flash write, `--bootaddr` | Phase 7 |
 | `docs/` | `zfpga.md`, `zboot.md` | every phase |
 
@@ -878,7 +878,7 @@ Each phase ends with this document updated, per the convention in
   Per-type bit database, tilegrid, IO/package map, string table.
 - ~~**The relative-wire-name resolver**, host-side (§6.1).~~ Moved to
   Phase 4: the packer does not need it. Done there, §13.1.
-- Card layout decided: `/fpga/lfe5u25f.zdb` and friends, plus a
+- Card layout decided: `/data/zfpga/lfe5u25f.zdb` and friends, plus a
   `release/lib/mkfatimg.py` entry so it ships.
 
 **Done when:** every `arc:` in `output/lakritz/soc_final.config`
@@ -1092,7 +1092,7 @@ run on the host and can use the host's installed database
 copy.
 
 **Decided since:** a release will eventually carry databases for all
-three dies on the card -- `/fpga/lfe5u25f.zdb` (serving 12F and 25F),
+three dies on the card -- `/data/zfpga/lfe5u25f.zdb` (serving 12F and 25F),
 `lfe5u45f.zdb` and `lfe5u85f.zdb` -- so that one card works in any
 ECP5 board. That is a later stage. Development and testing stay on the
 25F, which is the only die vendored so far; `tests/run.sh` covers the
@@ -1190,7 +1190,7 @@ make -f Makefile.host              # ./zfpga and db/lfe5u25f.zdb
 ```
 
 On the device, from a `posix` prompt, with the release's
-`/fpga/lfe5u25f.zdb` on the card:
+`/data/zfpga/lfe5u25f.zdb` on the card:
 
 ```
 $ zfpga pack blink.config -c
@@ -1210,7 +1210,7 @@ argument:
 | `-u N` | `--usercode` | accepts hex, which `ecppack` does not |
 | `-i N` | `--idcode` | |
 | `--background` | `--background` | |
-| `-D DIR` | `--db` | default `/fpga` on the device; none on the host |
+| `-D DIR` | `--db` | default `/data/zfpga` on the device; none on the host |
 
 So the Zeitlos build's own packing step,
 `ecppack --compress --freq 2.4 soc_final.config`, is
@@ -1317,7 +1317,7 @@ random-access), the CRAM (560 KB) and small change. That needs the
 |---|---|
 | `sw/os/kernel.h` | `"zfpga"` joins `zcc` and `posix` in `HUGE` |
 | `sw/apps/Makefile` | `zfpga` in `APPS` |
-| `release/lib/mkfatimg.py` | `apps/zfpga`, and `/fpga/lfe5u25f.zdb` in a new `FPGA_FILES` list |
+| `release/lib/mkfatimg.py` | `apps/zfpga`, and `/data/zfpga/lfe5u25f.zdb` in a new `FPGA_FILES` list |
 | `README.md` | the vendored database's CC0 licence, in the exceptions list |
 
 The kernel builds with the change. **`mkfatimg.py` has not been run**
@@ -2033,14 +2033,14 @@ of a frame as one word, three bytes and a shift, fixed that:
 ## 19. Phase 6: `zfpga synth`
 
 ```
-zfpga synth blink.v -l /fpga/lakritz.lpf     # -> blink.zl
+zfpga synth blink.v -l /data/zfpga/lakritz.lpf     # -> blink.zl
 zfpga place blink.zl && zfpga pnr blink.zn && zfpga pack blink.config -c
 ```
 
 Verilog in, a `.zl` out -- the file `docs/zfpga-formats.md` describes,
 with the Verilog's names on its nets (`ctr[3]`, not `$abc$1234`), so the
 next thing a person does with it can be to read it. The release puts the
-Lakritz constraint file on the card as `/fpga/lakritz.lpf`; the tree's
+Lakritz constraint file on the card as `/data/zfpga/lakritz.lpf`; the tree's
 own `boards/lakritz_v0.lpf` is read as it stands, its `BLOCK` and
 `FREQUENCY` statements ignored.
 
@@ -2150,15 +2150,15 @@ are where the time goes (sec. 14.4, 15.6).
 ## 20. `zfpga build`, board profiles, and the first test on a board
 
 ```
-$ zfpga build /fpga/examples/blink.v -b lakritz
+$ zfpga build /data/zfpga/examples/blink.v -b lakritz
 ```
 
 One command from any starting point to a bitstream, with a board
 profile supplying the device, package, pins and pack options
-(`docs/zfpga-formats.md` sec. 7). The card's `/fpga` holds the
+(`docs/zfpga-formats.md` sec. 7). The card's `/data/zfpga` holds the
 database, the Lakritz profile with the tree's own `lakritz_v0.lpf`, and
 the examples; `sw/apps/zfpga/db/` on the build machine is laid out the
-same, so the host's `-D db` is the card's `/fpga`.
+same, so the host's `-D db` is the card's `/data/zfpga`.
 
 ### 20.1 One process, and the memory to do it in
 
@@ -2200,7 +2200,7 @@ would have produced a confused report of a correct result.
 
 ## 21. The first on-board run
 
-`zfpga build /fpga/examples/blink.v -b lakritz` on a Lakritz printed
+`zfpga build /data/zfpga/examples/blink.v -b lakritz` on a Lakritz printed
 nothing for over a minute, on the terminal or the serial console, and
 then the machine froze. The serial log, read character by character
 where two processes' output interleaved, gave the order of events:
@@ -2288,7 +2288,7 @@ in the annealer.
 The second on-board run got as far as the database:
 
 ```
-zfpga: error: no database for LFE5U-25F (looked for /fpga/lfe5u-25f.zdb)
+zfpga: error: no database for LFE5U-25F (looked for /data/zfpga/lfe5u-25f.zdb)
 ```
 
 and the file was there. Zeitlos's FatFs is built with `FF_USE_LFN 0`
@@ -2309,9 +2309,9 @@ Everything zfpga puts on or makes on the card is now 8.3:
 And so that it stays true:
 
 - **`tests/run.sh` checks every name in `db/`**, which is the card's
-  `/fpga` exactly.
+  `/data/zfpga` exactly.
 - **`release/lib/mkfatimg.py` checks every component of every path** in
-  the `/fpga` list, the zcc runtime and the configuration template
+  the `/data/zfpga` list, the zcc runtime and the configuration template
   before copying it, and stops the build naming the file. It already
   checked apps and headers; these lists were copied unchecked, which is
   how the database got through.
@@ -2333,7 +2333,7 @@ the card, which is a decision for the tree rather than for zfpga.
 On a Machdyne Lakritz running Zeitlos, from `posix`:
 
 ```
-zfpga build /fpga/examples/blink.v -b lakritz
+zfpga build /data/zfpga/examples/blink.v -b lakritz
 ```
 
 synthesised the 24-bit counter blinky to 24 flip-flops and a 12-cell

@@ -94,8 +94,8 @@ Found while planning, and worth knowing before any code:
 ### On Zeitlos
 
 `bbs` is an app (`sw/apps/bbs`) that registers the port `bbs0`. Its
-files live in one directory, `/bbs` unless `apps.bbs.dir` in
-`/zeitlos.cfg` says otherwise ([config.md](config.md)); it makes the
+files live in one directory, `/data/bbs` unless `apps.bbs.dir` in
+`/sys/zeitlos.cfg` says otherwise ([config.md](config.md)); it makes the
 directory on first start. For callers from the network, a `noauth`
 listener in netserve ([netserve.md](netserve.md#listeners)):
 
@@ -141,8 +141,8 @@ bulletin, and a note on `text/`.
 
 ## Configuration
 
-`<datadir>/bbs.cfg`, `key: value` lines like `/zeitlos.cfg`. Not keys in
-`/zeitlos.cfg` itself, because the same directory has to work on a
+`<datadir>/bbs.cfg`, `key: value` lines like `/sys/zeitlos.cfg`. Not keys in
+`/sys/zeitlos.cfg` itself, because the same directory has to work on a
 Linux server, which has none. A `#` with blanks on both sides starts a
 comment, so `name: Board #1` keeps its `#1`. Unknown keys are logged and
 ignored; numbers are clamped to their range. Read at start.

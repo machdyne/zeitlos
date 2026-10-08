@@ -11,6 +11,7 @@
  * ecppack option-for-option is what makes the differential test honest.
  */
 
+#include "../../common/zpaths.h"
 #include "../../common/zargs.h"	/* quoting -- docs/posix.md */
 #include "zfpga.h"
 
@@ -18,13 +19,13 @@
 #define ZFPGA_HOSTED 1
 #endif
 
-/* The card layout is the search path, as for zcc's /libz. The host has
+/* The card layout is the search path, as for zcc's /data/zcc/libz. The host has
  * no default -- a path that is right on one machine is silently wrong on
  * every other. */
 #if ZFPGA_HOSTED
 #define DEFAULT_DB NULL
 #else
-#define DEFAULT_DB "/fpga"
+#define DEFAULT_DB Z_DIR_ZFPGA_DB
 #endif
 
 static void usage(void) __attribute__((noreturn));

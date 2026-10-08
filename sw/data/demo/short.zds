@@ -1,10 +1,10 @@
 # Zeitlos -- the SHORT demo: about 60 seconds, for social media.
 #
-#   > run automate /demo/short.zds
+#   > run automate /data/automate/short.zds
 #
 # Revision 11. Captions are 3x, one line each; the narration after the
 # "|" is what is SPOKEN, and is spelled for the ear: without a speech
-# pack (/speech/en.spk) tts falls back to its built-in letter-to-sound
+# pack (/data/tts/speech/en.spk) tts falls back to its built-in letter-to-sound
 # rules, which say "timeless" as "timless" and "designed" as
 # "dizzig-nd". The respellings were checked with tts's own front end
 # (sw/apps/tts/tests/t2p_cli.c); docs/demo.md, "Spelling for the ear".
@@ -80,14 +80,14 @@ close read
 # view has finished). Tune the pause to the card: the window must not
 # close before the picture is up.
 narrate Every photo, in one bit | Foe tows, dithered to one bit.
-run view /demo/squirrel.pgm at 0 0
+run view /media/images/squirrel.pgm at 0 0
 key alt+equal
 pause 6000
 close view
 
 # -- 5. music ----------------------------------------------------------
 narrate Play music | Play music.
-run midi /demo/lvb11.mid at 168 120
+run midi /media/audio/lvb11.mid at 168 120
 pause 800
 melody 150 e 3 e 3 e m w q n:2 - z c n m:2 - c h m q:2 - c e 3 e 3 e m w q n:3
 pause 500

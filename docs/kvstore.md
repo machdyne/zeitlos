@@ -25,7 +25,7 @@ so its timings are still to be measured.
 
 ## What goes here, and what does not
 
-Most configuration belongs in `/zeitlos.cfg` on the card
+Most configuration belongs in `/sys/zeitlos.cfg` on the card
 ([config.md](config.md)), and should stay there: it is a text file
 anyone can edit, back up and copy between machines.
 
@@ -199,7 +199,7 @@ if (z_kv_get("apps.netserve.hostkey", key, sizeof(key), &len) != Z_KV_OK) {
 ```
 
 - Keys: 1-31 characters of `A-Z a-z 0-9 . _ -`. Use
-  `apps.<app>.<name>`, as in `/zeitlos.cfg`.
+  `apps.<app>.<name>`, as in `/sys/zeitlos.cfg`.
 - Values: 0-256 bytes, binary is fine.
 - A write returns once it is durable. An append takes a few
   milliseconds; a compaction, which is two sector erases, up to about a

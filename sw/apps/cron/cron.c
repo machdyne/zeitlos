@@ -1,11 +1,11 @@
 /*
  * cron -- runs programs on a schedule
  *
- * Reads /user/cron.cfg, starts programs when their time comes, and
+ * Reads /data/cron/cron.cfg, starts programs when their time comes, and
  * sleeps in between. A core app, in flash (docs/flash_apps.md); init
- * starts it at boot when /user/cron.cfg exists. docs/cron.md.
+ * starts it at boot when /data/cron/cron.cfg exists. docs/cron.md.
  *
- *   # /user/cron.cfg
+ *   # /data/cron/cron.cfg
  *   wait_for_ntp: yes
  *
  *   daily 03:00         backup /docs
@@ -26,7 +26,7 @@
  * clock is valid -- set later by NTP, or never on a board that cannot
  * reach a server.
  *
- * Clock times are local: system.rtc.timezone from /zeitlos.cfg, summer
+ * Clock times are local: system.rtc.timezone from /sys/zeitlos.cfg, summer
  * time included. A job in the hour skipped in spring runs when it is
  * next due or caught up (below); in the hour repeated in autumn it runs
  * once.
@@ -43,12 +43,12 @@
  * A daily, weekly or monthly job whose last run is more than its period
  * (plus an hour) ago runs once, as soon as cron is running and the
  * clock is valid -- the machine was off, or not yet synced, at 03:00.
- * Last runs are kept in /user/cron.state. Hourly and `every` jobs do
+ * Last runs are kept in /data/cron/state. Hourly and `every` jobs do
  * not catch up: a machine off for a day should not run 24 syncs at once.
  *
  * -- the log --
  *
- * One line per start, skip and exit in /user/cron.log, cut back to
+ * One line per start, skip and exit in /data/cron/log, cut back to
  * nothing when it passes 16KB, and on the console.
  *
  * -- size --
@@ -61,6 +61,7 @@
 #include <stdbool.h>
 #include <string.h>
 
+#include "../../common/zpaths.h"
 #include "../../common/zeitlos.h"
 #include "../../common/zsoc.h"
 #include "../../common/zproc.h"
@@ -70,9 +71,9 @@
 #include "../../common/zwin.h"		// z_launch_arg_set()
 #include "../../common/zargs.h"
 
-#define CFG_PATH    "/user/cron.cfg"
-#define STATE_PATH  "/user/cron.state"
-#define LOG_PATH    "/user/cron.log"
+#define CFG_PATH    Z_PATH_CRON_CONFIG
+#define STATE_PATH  Z_PATH_CRON_STATE
+#define LOG_PATH    Z_PATH_CRON_LOG
 #define LOG_MAX     16384
 
 #define MAX_JOBS    32
@@ -184,7 +185,7 @@ static void log_line(const char *what, const job_t *j) {
 	say("cron: ");
 	say(line);
 
-	fs_mkdir("/user");
+	fs_mkdir(Z_DIR_CRON_DATA);
 	int size = fs_size((char *)LOG_PATH);
 	int h;
 	if (size < 0 || size > LOG_MAX) {
@@ -230,7 +231,7 @@ static void state_save(void) {
 		sb_u(&sb, jobs[i].key, 0); sb_s(&sb, " ");
 		sb_u(&sb, jobs[i].last_run, 0); sb_s(&sb, "\n");
 	}
-	fs_mkdir("/user");
+	fs_mkdir(Z_DIR_CRON_DATA);
 	fs_write_file((char *)STATE_PATH, out, sb.n);
 }
 

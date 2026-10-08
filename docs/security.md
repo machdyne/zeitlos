@@ -41,7 +41,7 @@ otherwise.
 password, over an encrypted connection with strict key exchange; its
 host key lives in the flash store and is exactly as private as the
 code this machine runs. Prefer it to telnet anywhere but a bench. With
-keys (`/user/authkeys`) it can take no password at all
+keys (`/data/netserve/authkeys`) it can take no password at all
 (`apps.netserve.ssh_auth: key`) -- the setting for a machine reachable
 from outside the local network. The key list is on the card, so
 whoever can edit the card can add a key: the same boundary as the rest
@@ -50,7 +50,7 @@ of this page.
 **It protects the machine from the network** ([netserve.md](netserve.md)):
 every password login, telnet or SSH, is checked by the same kernel
 code, against the same tally of failures. A key login is checked
-against `/user/authkeys` instead, and needs no password at all.
+against `/data/netserve/authkeys` instead, and needs no password at all.
 
 **Except on a `noauth` listener**, which asks nothing and hands the
 session to a program that logs its own users in -- the BBS
@@ -287,7 +287,7 @@ opens:
 - **The key:** any app can read any address, so a key in memory
   protects a stolen card, not a machine running hostile code.
 - **Boot order:** the core apps can come from the card, and
-  `/zeitlos.cfg` is read from it before anything could ask for a
+  `/sys/zeitlos.cfg` is read from it before anything could ask for a
   password.
 - **Speed:** ChaCha20 in software against the card's throughput
   ([sdcard.md](sdcard.md)).

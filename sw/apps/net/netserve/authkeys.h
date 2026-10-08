@@ -4,7 +4,7 @@
  * Zeitlos
  * Copyright (c) 2026 Lone Dynamics Corporation. All rights reserved.
  *
- * The SSH keys allowed to log in: /user/authkeys, OpenSSH's
+ * The SSH keys allowed to log in: /data/netserve/authkeys, OpenSSH's
  * authorized_keys format. docs/netserve.md, "SSH keys".
  *
  *     ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... phil@laptop

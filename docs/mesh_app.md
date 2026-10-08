@@ -398,7 +398,7 @@ about 9 KB.
 ## History
 
 Every message -- received, or sent from the window or the command line
--- is appended to **`/user/mesh.log`**, and every later change in a
+-- is appended to **`/data/mesh/mesh.log`**, and every later change in a
 sent one's status after it (`sent`, `delivered`, failed and why). On
 start, `mesh` reads the end of that file back, so the window opens on
 the conversations as they were. `mesh_log.c` is the format, `mesh_log_io.c`
@@ -654,7 +654,7 @@ order. Phase 4 can start as soon as phase 3's model is fixed.
 1. `run mesh`; send a message or two. Close it, open it again: the same
    conversations and messages are there, with their statuses, and
    nothing is marked unread.
-2. `cat /user/mesh.log` (or open it in `text`): one line per message,
+2. `cat /data/mesh/mesh.log` (or open it in `text`): one line per message,
    `S` lines after sent ones.
 3. `run mesh send hello` from the shell, then open the window: that
    message is in the history too.

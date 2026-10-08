@@ -63,10 +63,7 @@ Two things improved in the move:
   arithmetic, both wrong in different ways. `zdeck` calls
   `zg_rng_below()`.
 
-## The bank: `/user/casino.dat`
-
-It lives under `/user`, with the rest of what belongs to the person
-rather than to the system.
+## The bank: `/data/casino/bank.dat`
 
 **The directory is created on demand, not by the image builder.** A save
 tries the write first and only calls `fs_mkdir()` if it fails —
@@ -76,10 +73,11 @@ result is not checked: if it failed because the directory already
 exists the retry is right anyway, and if it failed for any other reason
 the retry reports it.
 
-**`zbank_load()` falls back to `/casino.dat`**, where the bank used to
-be, so an existing bankroll survives the move. The next save writes the
-new location, after which the old file is a stale copy. A card with both
-has already been saved since the move, so the new one is the live one.
+The bank belongs to `casino` and lives in its data folder
+([layout.md](layout.md)); the games `casino` launches use it from
+there. Before v0.0.6 it was `/user/casino.dat`, and before that
+`/casino.dat`, and `zbank_load()` fell back to the old place. v0.0.6
+cards are written fresh, so there is one place and no fallback.
 
 One pile of chips that every game spends from and pays into, so winning
 at roulette leaves you better off at blackjack. Without it each game is
@@ -117,8 +115,8 @@ game.roulette.net: -120
 game.roulette.rounds: 40
 ```
 
-Text, in the same `key: value` shape as `/zeitlos.cfg`, so `cat
-/user/casino.dat` from the console tells you something and a hand edit is
+Text, in the same `key: value` shape as `/sys/zeitlos.cfg`, so `cat
+/data/casino/bank.dat` from the console tells you something and a hand edit is
 possible when a game gets it wrong. Binary would be smaller and would
 make both of those false.
 

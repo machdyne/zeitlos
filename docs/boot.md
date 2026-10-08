@@ -28,7 +28,7 @@ gateware  ->  BIOS (BRAM)  ->  kernel (flash -> RAM)  ->  sh()  ->  init()  ->  
    HID and the memory pool, registers itself as pid 0, and calls
    `sh()`.
 3. **`sh()`** (`sw/os/sh.c`) mounts the filesystem, **loads
-   `/zeitlos.cfg`** into the kernel's configuration store (no card or
+   `/sys/zeitlos.cfg`** into the kernel's configuration store (no card or
    no file: defaults, and a line saying so), offers the
    **init-cancel window** below, then runs `init()`. Loading the config
    first means every app sees the settings from its first instruction,
@@ -43,7 +43,7 @@ gateware  ->  BIOS (BRAM)  ->  kernel (flash -> RAM)  ->  sh()  ->  init()  ->  
    [`flash_apps.md`](flash_apps.md).
 4. **`init()`** starts `wm`, loads `net`, starts `console`, looks for
    `repl` and `posix` on the card without starting them, starts `cron`
-   if `/user/cron.cfg` exists ([cron.md](cron.md)), starts `netserve`
+   if `/data/cron/cron.cfg` exists ([cron.md](cron.md)), starts `netserve`
    if any of its services is configured ([netserve.md](netserve.md)),
    starts `net`, and
    registers **`init0`**. `term` is launched on demand from wm's

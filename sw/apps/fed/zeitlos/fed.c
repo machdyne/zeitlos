@@ -32,6 +32,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "../../../common/zpaths.h"
 #include "../../../common/zeitlos.h"
 #include "../../../common/zobj.h"
 #include "../../../common/zport.h"
@@ -671,7 +672,7 @@ static int run_admin(const char *arg, const char *dir) {
 
 int main(void) {
 	char dir[Z_CFG_VAL_MAX], arg[Z_WM_ARG_MAX];
-	if (!z_cfg_get("apps.fed.dir", dir, sizeof(dir)) || !dir[0]) strcpy(dir, "/fed");
+	if (!z_cfg_get("apps.fed.dir", dir, sizeof(dir)) || !dir[0]) strcpy(dir, Z_DIR_FED);
 	// `run fed key`, `run fed nodes`, ...: a command, then gone -- decided
 	// before anything else, so that it never collides with a running fed
 	if (z_launch_arg_take(arg, sizeof(arg)) && arg[0]) {

@@ -4,7 +4,7 @@
 /*
  * kidgames -- persistent score and level, one line per game.
  *
- *   /user/kidgames.sav
+ *   /data/kidgames/kidgames.sav
  *
  *   spelling 120 3
  *   counting 40 2
@@ -17,10 +17,9 @@
  *
  * -- THE PATH --
  *
- * FatFs here is built FF_USE_LFN 0, so 8.3 names are not advice: a
- * longer name cannot be written to the card at all
- * (release/lib/mkfatimg.py). "kidgames.sav" is exactly 8.3, and
- * /user is a directory the release image already creates.
+ * kidgames' own folder (docs/layout.md), which kgsave.c makes before
+ * writing: an app's data folder exists once the app has saved
+ * something, not before.
  *
  * $HOME and its /root fallback have no equivalent and no purpose --
  * this is a single-user machine, which is the same assumption the
@@ -44,9 +43,10 @@
  * app seem slow.
  */
 
+#include "../../common/zpaths.h"
 #include "kg.h"
 
-#define KG_SAVE_PATH     "/user/kidgames.sav"
+#define KG_SAVE_PATH     Z_PATH_KIDGAMES_SAVE
 #define KG_SAVE_MAX_ID   16
 #define KG_SAVE_MAX_GAMES 24
 

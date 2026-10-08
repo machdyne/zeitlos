@@ -65,7 +65,7 @@ clock has been set (NTP, [rtc.md](rtc.md)).
 
 ## Configuration
 
-In `/zeitlos.cfg` ([config.md](config.md)):
+In `/sys/zeitlos.cfg` ([config.md](config.md)):
 
 | key | default | |
 |---|---|---|

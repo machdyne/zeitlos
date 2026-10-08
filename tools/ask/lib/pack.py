@@ -42,7 +42,10 @@
 
 import struct
 
-FORMAT_VERSION = 1
+# 2: docs.zdt paths are relative to the pack's document folder; the
+# device adds Z_DIR_ARK/<pack> (sw/apps/ask/aidx.h). Version 1 stored
+# the whole card path.
+FORMAT_VERSION = 2
 
 MAGIC_INDEX = 0x314B415A      # "ZAK1"
 MAGIC_DOCS = 0x3154445A       # "ZDT1"
@@ -108,6 +111,8 @@ class Pool:
 # something to hold. Adding it later would mean a format bump.
 
 def pack_docs(docs, paths, dsid):
+    """`paths` relative to the pack's document folder, not the card: a
+    pack holds no card location (cardfs.pack_relative())."""
     pool = Pool()
     recs = bytearray()
     for d, p in zip(docs, paths):

@@ -2,7 +2,7 @@
 #define ZGAMES_BANK_H
 
 /*
- * Zeitlos -- the shared casino bank, /casino.dat.
+ * Zeitlos -- the shared casino bank, /data/casino/bank.dat.
  *
  * Copyright (c) 2026 Lone Dynamics Corporation. All rights reserved.
  *
@@ -49,8 +49,8 @@
  *   game.roulette.net: -120
  *   game.roulette.rounds: 40
  *
- * Text, in the same "key: value" shape as /zeitlos.cfg, so `cat
- * /casino.dat` from the console tells you something and a hand edit is
+ * Text, in the same "key: value" shape as /sys/zeitlos.cfg, so `cat
+ * /data/casino/bank.dat` from the console tells you something and a hand edit is
  * possible when a game gets it wrong. Binary would be smaller and
  * would make both of those false.
  *
@@ -74,17 +74,15 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "../zpaths.h"
 
-/* The bank lives under /user, with the rest of what belongs to the
- * person rather than to the system. The directory is created on demand
- * -- see zbank_save() -- so a card that predates this still works.
- *
- * ZBANK_OLD_PATH is where it used to be. zbank_load() falls back to it
- * so an existing bankroll is not lost on the move; the next save writes
- * the new location and the old file is then just a stale copy. */
-#define ZBANK_DIR         "/user"
-#define ZBANK_PATH        "/user/casino.dat"
-#define ZBANK_OLD_PATH    "/casino.dat"
+/* The bank belongs to casino, in its data folder (docs/layout.md):
+ * /data/casino/bank.dat. The games casino launches -- poker, roulette,
+ * blackjack, slots, craps -- read and write it there; shared data with
+ * an owner, not a folder nobody owns. The directory is created on
+ * demand -- see zbank_save(). */
+#define ZBANK_DIR         Z_DIR_CASINO_DATA
+#define ZBANK_PATH        Z_PATH_CASINO_BANK
 #define ZBANK_VERSION     1
 
 /* What a fresh bank hands over. */
@@ -169,7 +167,7 @@ void zbank_apply(zbank_t *b, const char *game, int32_t delta);
 
 /* -- the half that touches the filesystem ---------------------------- */
 
-/* Reads /casino.dat. Returns ZBANK_OK, ZBANK_MISSING (defaults are in
+/* Reads /data/casino/bank.dat. Returns ZBANK_OK, ZBANK_MISSING (defaults are in
  * `b` and that is correct) or ZBANK_CORRUPT (defaults are in `b` and
  * that is NOT correct -- do not write over the file). */
 int zbank_load(zbank_t *b);

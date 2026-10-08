@@ -1,14 +1,14 @@
 # bench -- virtual parts on I2C buses
 
 The bench is where virtual parts live: I/O expanders, LEDs, buttons,
-switches, lamps. A netlist (a short text file in `/bench`) says which
+switches, lamps. A netlist (a short text file, `NAME.net`) says which
 parts there are and how they are connected; bench shows them live, and
 apps reach their I2C buses as they would a real one. Developing a program
 against a virtual TCA9535 and running it unchanged against the real chip
 is the point.
 
 ```
-$ bench /bench/panel.net &
+$ bench /data/bench/examples/panel.net &
 $ i2c -b main write 0x20 6 0x00        # port 0: outputs
 $ i2c -b main write 0x20 2 0x55        # 01010101: P00, P02, P04, P06 high --
                                        # l0, l2 and the lamp light
@@ -40,7 +40,7 @@ never silent.
 
 | Key or action | Does |
 |---|---|
-| the open icon (title bar) | another netlist, through the file dialog (from `/bench`) |
+| the open icon (title bar) | another netlist, through the file dialog (starting in the examples, `/data/bench/examples`) |
 | click a button or switch | presses it while held / flips it |
 | click a pin or a card | its net in the status line: level, pull, and every pin on it |
 | F5 | reads the netlist again, after editing it |
@@ -49,13 +49,14 @@ never silent.
 | Escape | the status line back |
 | wheel, Up, Down | scroll |
 
-Bench is started with a netlist (`bench /bench/panel.net`, by opening a
-`.net` file, or empty from the dock), and the open icon loads another. `/bench/panel.net` is on the card as an example.
+Bench is started with a netlist (`bench /data/bench/examples/panel.net`, by opening a
+`.net` file, or empty from the dock), and the open icon loads another. `/data/bench/examples/panel.net` is on the card as an example.
 
 ## Examples
 
-In `sw/apps/bench/examples`, and on the card: the netlists in `/bench`,
-their BASIC programs in `/basic`. Each netlist's comments say what to try.
+In `sw/apps/bench/examples`, and on the card: the netlists in
+`/data/bench/examples`,
+their BASIC programs in `/data/basic`. Each netlist's comments say what to try.
 
 | Netlist | Shows | Needs |
 |---|---|---|
@@ -159,8 +160,8 @@ switch  sw  "To pin D"  g0.4  pullup
   driving the same pins.
 - **Time stays at x1**: real hardware runs in real time.
 
-`/bench/realmodule.net` is the netlist above, and `/basic/BLINK.BAS` a
-program for it (`sechs -b main send 0x0c /basic/BLINK.BAS`, then
+`/data/bench/examples/realmodule.net` is the netlist above, and `/data/basic/BLINK.BAS` a
+program for it (`sechs -b main send 0x0c /data/basic/BLINK.BAS`, then
 `sechs -b main run 0x0c`); it runs the same on an LS99.
 
 ## Using bench buses from an app: zi2cx

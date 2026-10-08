@@ -160,7 +160,7 @@ So netserve's CONNECT carries a map instead of `Z_NONE`:
 | key | type | |
 |---|---|---|
 | `transport` | `Z_STR` | `telnet` or `ssh` |
-| `auth` | `Z_STR` | `system`: the machine's password or a key in `/user/authkeys` was checked. `none`: nothing was |
+| `auth` | `Z_STR` | `system`: the machine's password or a key in `/data/netserve/authkeys` was checked. `none`: nothing was |
 | `peer` | `Z_UINT32` | the remote IPv4 address |
 | `port` | `Z_UINT32` | the local TCP port it arrived on |
 | `user` | `Z_STR` | SSH only: the user name the client sent -- a claim, never a proof |

@@ -13,7 +13,7 @@ APP_LISTING = 0
 #   See $(GAMES)/zdeck.h on why a board without one still deals a fine
 #   game.
 #
-#   zfsapp.o: zbank reads and writes /USER/casino.dat, so the filesystem half of the
+#   zfsapp.o: zbank reads and writes /data/casino/bank.dat, so the filesystem half of the
 #   app runtime comes with it.
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zrng.o \
 	zcard.o zdeck.o zrand.o zrand_sys.o zbank.o zfsapp.o zcardart.o \

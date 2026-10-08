@@ -42,6 +42,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include "zpaths.h"
 #include "zproc.h"		// z_proc_info_t
 
 #define Z_JFONT_PROC      "jfont"
@@ -50,7 +51,7 @@
 // run as anything else, so this is the only name a client looks for.
 // (Looking for "jfont" itself found nothing, and every kanji was a box.)
 #define Z_JFONT_NAME      "jfont0"
-#define Z_JFONT_PATH      "/font/jp12.zfn"
+#define Z_JFONT_PATH      Z_PATH_JFONT_FONT
 
 #define Z_JFONT_MAGIC0    0x4A464E54u	// "JFNT"
 #define Z_JFONT_MAGIC1    0x5A464E31u	// "ZFN1"

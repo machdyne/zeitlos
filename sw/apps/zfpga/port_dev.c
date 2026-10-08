@@ -17,6 +17,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#include "../../common/zpaths.h"
 #include "zeitlos.h"
 #include "zfsapp.h"
 #include "zwin.h"               /* z_launch_arg_take() */
@@ -195,7 +196,7 @@ void zio_exit(int status) {
     exit(status);
 }
 
-/* The launch argument, which posix sets; failing that /zfpga.args, for
+/* The launch argument, which posix sets; failing that /tmp/zfpga.args, for
  * driving it from the kernel shell. Z_WM_ARG_MAX is 96 bytes, which is
  * why board profiles exist (docs/zfpga.md sec. 4). */
 int zio_get_args(char *buf, int cap) {
@@ -204,7 +205,7 @@ int zio_get_args(char *buf, int cap) {
         /* Read through the same chunked path as everything else, not
          * fs_mallocfile(): one less sw/common dependency, and one less
          * caller of newlib's printf (see docs/zfpga.md sec. 11). */
-        zio_file_t *f = zio_open_read("/zfpga.args");
+        zio_file_t *f = zio_open_read(Z_PATH_ZFPGA_ARGS);
         int n, i = 0;
         if (!f) return 0;
         n = zio_read(f, buf, cap - 1);

@@ -641,7 +641,7 @@ formatted. FatFs here is `FF_USE_LFN 1` with names up to 255 UTF-16
 units in UTF-8 (`sw/os/fs/fatfs/ffconf.h`); `mcopy` would store a
 component `create_name()` rejects, and the board would not open it.
 
-**A pack is ONE manifest entry**, `ark/<pack>/`, not a line per file.
+**A pack is ONE manifest entry**, `opt/ark/<pack>/`, not a line per file.
 `MANIFEST.json` would otherwise list every Wikipedia article's number.
 
 **GitHub refuses release assets over 2 GiB.** A card that compresses
@@ -668,31 +668,39 @@ build running as root leaves root-owned `.o` files scattered through
 `sw/` that break every subsequent non-root build. The Makefile's
 `tftp-dist` target carries a comment about exactly this hazard.
 
-The shell script stays as the readable reference. `zrelease check`
-diffs the two file lists and fails if they drift — which is not
-hypothetical, since the committed script and the one actually in use had
-already diverged.
+`tools/mkfatimg.sh` is a wrapper that calls `zrelease sdcard` now, so
+there is one file list and nothing to compare it with.
 
-**The demos** go in `/demo` ([demo.md](demo.md)): `automate`'s
-scripts and the media they show off, every file listed in
+**Where things go on the card** is not decided in `mkfatimg.py` either.
+Every destination comes from `sw/common/zpaths.h`, the registry of fixed
+card locations that the C code opens the same files by, read through
+`release/lib/zpaths.py` ([layout.md](layout.md)). `zrelease check`
+reports any string literal in `sw/os`, `sw/apps` or `sw/common` that
+names a card location outside that file, because a literal is a path
+the release tool cannot see and the next layout change leaves behind.
+Directories on the card are made as the first file that needs one is
+copied; there is no separate list of them.
+
+**The demos** go in `/data/automate` and `/media` ([demo.md](demo.md)):
+`automate`'s scripts and the media they show off, every file listed in
 `DEMO_FILES` (`release/lib/mkfatimg.py`) -- from `sw/data/demo`, plus
 `sw/data/audio/lvb11.mid` and `sw/data/images/squirrel.jpg`. A missing
 one fails the build rather than shipping a demo that lost a picture or
 still carries last week's script. Adding a file to the demo means
 adding a line there.
 
-The demos also need the **speech pack** (`/speech/en.spk`, built by
+The demos also need the **speech pack** (`/data/tts/speech/en.spk`, built by
 `tools/speech/speech`, [tts_data.md](tts_data.md)): the recorded voice
 is in it. It is a build product, not in git, so a card built without
 one gets a warning naming the demos, and they speak in the synthesised
 voice throughout.
 
-Applications go in `apps/` on the card, alongside `docs/`, `ark/` and
-`user/`, rather than loose in the root. Nothing in the release system
-had to learn that beyond the destination paths:
-`fs_exec_resolve()` (`sw/os/fs/fs.c`) searches the root, then `apps/`,
-then the flash archive, so bare names still work everywhere and the
-ZAR entries stay flat. See `docs/flash_apps.md`.
+Applications go in `/apps` on the card, one file each under its
+natural name, and everything else an app ships with in `/data/<app>/`
+([layout.md](layout.md)). `fs_exec_resolve()` (`sw/os/fs/fs.c`) looks
+for a bare name in `/apps` and then in the flash archive, so bare names
+work everywhere and the ZAR entries stay flat. See
+`docs/flash_apps.md`.
 
 **The shells are on the card, and only there.** `repl` and `posix` are
 not core apps (`docs/flash_apps.md`, "Why repl is not a core app"), so
@@ -700,7 +708,7 @@ not core apps (`docs/flash_apps.md`, "Why repl is not a core app"), so
 `tools/mkfatimg.sh` -- is the only copy of either that a release ships.
 
 **The remote desktop's page is data on the card.** `zerdesk` reads
-its viewer page from `/zerdesk/index.html` and carries no copy, so
+its viewer page from `/data/zerdesk/index.html` and carries no copy, so
 `DESK_FILES` in `mkfatimg.py` puts `esp32/zeitlos-nic/web/index.html`
 there -- the same file the ESP32 firmware builds in. Edit it on the
 card to change what this machine serves; see
@@ -716,8 +724,8 @@ carried the wrong one for half the boards. It now links both and picks
 at runtime, so `net.bin` is board-independent and *could* ship here.
 Keeping it out is now a deliberate choice — it preserves the plain rule
 that flash wins unless you deliberately put something on the card, and
-the root-first search order means dropping one at the card root is
-still how you hot-swap a single app during development.
+putting one at `/apps/<name>` is still how you hot-swap a single app
+during development.
 
 One card image per release, not per target: everything on it is
 board-independent and detects optional hardware at runtime. It is still

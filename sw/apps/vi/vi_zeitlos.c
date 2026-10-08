@@ -40,12 +40,13 @@
 #include <string.h>
 #include <stdlib.h>
 
+#include "../../common/zpaths.h"
 #include "../../common/zeitlos.h"
 #include "../../common/zsoc.h"
 #include "../../common/zport.h"
 #include "../../common/zobj.h"
 #include "../../common/zwin.h"     /* z_launch_arg_take() */
-#include "../../common/zfsapp.h"   /* fs_mallocfile() -- the /vi.args stopgap */
+#include "../../common/zfsapp.h"   /* fs_mallocfile() -- the /tmp/vi.args stopgap */
 
 /* Must match PX_TTY_TAG in sw/apps/posix/posix.h. Duplicated rather
  * than included because that header pulls in the whole shell; four
@@ -381,7 +382,7 @@ int main(void) {
     argv[0] = "vi";
 
     /* The launch argument first -- what `posix` sets. Failing that,
-     * /vi.args, one command line.
+     * /tmp/vi.args, one command line.
      *
      * The file is a stopgap and the same one sw/apps/zcc carries, for
      * the same reason: `run vi` from the KERNEL shell passes no
@@ -389,7 +390,7 @@ int main(void) {
      * launch argument at all. It is what makes the editor testable
      * without hardware. */
     if (!z_launch_arg_take(argline, sizeof(argline)) || !argline[0]) {
-        char *s = fs_mallocfile("/vi.args");
+        char *s = fs_mallocfile(Z_PATH_VI_ARGS);
         int i = 0;
         if (s) {
             while (s[i] && s[i] != '\n' && i < (int)sizeof(argline) - 1) {

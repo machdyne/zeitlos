@@ -411,7 +411,7 @@ bool z_port_pid_running(uint32_t pid);
 //
 //   "transport"  Z_STR     "telnet" or "ssh"
 //   "auth"       Z_STR     "system": the machine's password or an SSH
-//                          key in /user/authkeys was checked.
+//                          key in /data/netserve/authkeys was checked.
 //                          "none": nobody checked anything (a noauth
 //                          listener, docs/netserve.md) -- the provider
 //                          must log the user in itself, or refuse.

@@ -67,7 +67,7 @@ const z_ftype_t z_ftypes[] = {
 	{ "XO8", "chip8", "XO-CHIP ROM"    },
 
 	// Netlists -- sw/apps/bench (docs/bench.md): parts, nets and I2C
-	// buses on the bench, plain text (/bench/*.net).
+	// buses on the bench, plain text (*.net).
 	{ "NET", "bench", "bench netlist" },
 
 	// Spreadsheets -- sw/apps/sheet (docs/sheet_app.md).

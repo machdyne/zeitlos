@@ -20,7 +20,7 @@
  *
  * -- Lifetime --
  *
- * Started by wm on Super+S (or, later, at boot from /zeitlos.cfg).
+ * Started by wm on Super+S (or, later, at boot from /sys/zeitlos.cfg).
  * Exits on Z_TTS_QUIT after saying "Speech off". A second copy
  * started while one is running exits at once.
  */
@@ -56,7 +56,7 @@ static uint32_t clamp(uint32_t v, uint32_t lo, uint32_t hi) {
 
 static void backend_volume(void);
 
-// system.tts.* from /zeitlos.cfg (docs/config.md). Read at startup and
+// system.tts.* from /sys/zeitlos.cfg (docs/config.md). Read at startup and
 // again whenever the file has been reloaded -- checked at the start of
 // each utterance, which is when a new rate or pitch can take effect,
 // and costs one syscall. Z_TTS_SET changes last until the next reload.

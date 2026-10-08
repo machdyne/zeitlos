@@ -62,6 +62,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "../../common/zpaths.h"
 #include "../../common/zeitlos.h"
 #include "../../common/zsoc.h"
 #include "../../common/zaudio.h"
@@ -385,27 +386,22 @@ static void scan_dir(const char *dir) {
 }
 
 /*
- * /audio first, then the root.
+ * /media/audio first, then /home (docs/layout.md).
  *
- * The sdcard image ships its modules in /audio, alongside apps/,
- * docs/ and ark/ -- 440KB of .mod loose in the root would bury
- * everything else in a directory listing.
+ * /media/audio is where the card's example music ships, and where a
+ * person may keep their own. /home is theirs to arrange as they like,
+ * so a module dropped straight into it is found too -- second, so the
+ * shipped set comes first in the list, which is the order somebody who
+ * has done neither would expect. Anywhere else, open it from the file
+ * browser.
  *
- * The root is still scanned, and second rather than not at all, for
- * two reasons. A card written before /audio existed still plays, and
- * dropping a module in the root remains the quickest way to try one
- * without making a directory for it. Second means the shipped set
- * comes first in the list, which is the order somebody who has done
- * neither would expect.
- *
- * fs_list() returns full paths ("/audio/ai.mod"), so load_module()
+ * fs_list() returns full paths ("/media/audio/ai.mod"), so load_module()
  * opens what it is given and needs no directory of its own.
  */
 static void find_modules(void) {
 	nfiles = 0;
-	scan_dir("/demo");	/* media for the demos (docs/demo.md) */
-	scan_dir("/audio");
-	scan_dir("/");
+	scan_dir(Z_DIR_MEDIA_AUDIO);
+	scan_dir(Z_DIR_HOME);
 }
 
 /* Paths from fs_list() and from a launch argument may differ in case
@@ -1365,7 +1361,7 @@ int main(void) {
 	}
 
 	if (nfiles == 0) {
-		printf("No .mod files in /audio or the root directory.\n");
+		printf("No .mod files in " Z_DIR_MEDIA_AUDIO " or " Z_DIR_HOME ".\n");
 		z_audio_stop();
 		return 1;
 	}

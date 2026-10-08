@@ -45,8 +45,8 @@ net (sw/apps/net/screen.c)          the ESP32 (esp32/zeitlos-nic)
 **Finding the address.** It is whatever the access point's DHCP gave
 the ESP32, so nothing in this tree can know it. The console says it at
 boot -- `esp_netif_handlers: sta ip: ...`, and `esp32link: LINK up
-rssi=... ip=...` right after -- and `net` also writes it to `net.ip` at
-the root of the sdcard when the link comes up. On this path,
+rssi=... ip=...` right after -- and `net` also writes it to
+`/data/net/net.ip` on the card when the link comes up. On this path,
 everything else is `http://<that>/`. On the Ethernet path the address
 is the wired one and the port is 8080; see "Served by Zeitlos".
 
@@ -303,7 +303,7 @@ CSS mask and everything else is in the file.
 
 One file, two homes. The ESP32 firmware builds it in
 (`EMBED_TXTFILES`). For the desktop Zeitlos serves itself, the card
-image carries the same file as `/zerdesk/index.html` and `zerdesk`
+image carries the same file as `/data/zerdesk/index.html` and `zerdesk`
 reads it from there ("Served by Zeitlos", below), so that copy can be
 edited on the machine.
 
@@ -371,7 +371,7 @@ protocol. **So the two ends colour the picture separately, and they
 are meant to.**
 
 On HDMI the colour is the SOC's. `system.video.mode` in
-[`/zeitlos.cfg`](config.md) -- also the `color` console command and
+[`/sys/zeitlos.cfg`](config.md) -- also the `color` console command and
 the Display row of the [settings](settings_app.md) app -- writes the
 two low bits of socctl's VIDEO register (`0x7000_0208`,
 [socctl.md](socctl.md)), which reach `rtl/gpu/gpu_video.v` as
@@ -434,7 +434,7 @@ listener inside `netserve`. `net` accepts the TCP connections
 
 | | |
 |---|---|
-| `GET /` | the viewer page, read from the card: `/zerdesk/index.html`. The card image puts `esp32/zeitlos-nic/web/index.html` there unchanged, so both paths serve one file |
+| `GET /` | the viewer page, read from the card: `/data/zerdesk/index.html`. The card image puts `esp32/zeitlos-nic/web/index.html` there unchanged, so both paths serve one file |
 | `GET /ws` | the WebSocket. One stripe is `[idx:u8 \| len:u16le \| PackBits + trailer]`, the bytes `screend` forwards today. Keys come back as three bytes, the pointer as five, and `zinput` injects them the same way `esp32link` does |
 
 There is no password. The port is `apps.zerdesk.port`, **8080** unless
@@ -468,7 +468,7 @@ The ESP32 path is different: `screend` allows
 eight, and a ninth evicts the least recently served.
 
 **The page is on the card.** `zerdesk` carries no copy of it. Each
-`GET /` opens `/zerdesk/index.html`, takes its size for
+`GET /` opens `/data/zerdesk/index.html`, takes its size for
 `Content-Length`, and sends it 1 KB at a time through the same buffer
 the stripes use, so the page costs no memory of its own and may be any
 size. An edited page is what the next browser gets, with no restart.
@@ -476,23 +476,23 @@ Reading 18 KB from the card makes the request about 65 ms slower than
 a built-in page did (about 0.27 s instead of 0.21 s on a direct
 cable), once per page load.
 
-It is outside `/www` on purpose: `netserve` serves that directory, and
+It is outside `/data/netserve/www` on purpose: `netserve` serves that directory, and
 a viewer page served from there would open its WebSocket to
-`netserve`. `/zerdesk` sits beside the other apps' data directories,
-`/bbs`, `/fed` and `/web`.
+`netserve`. `/data/zerdesk` sits beside the other apps' data directories,
+`/data/bbs`, `/data/fed` and `/data/web` ([layout.md](layout.md)).
 
 Without the file there is no remote desktop, and both ends say why.
 At start the console says
 
 ```
-zerdesk: NO PAGE: /zerdesk/index.html is not on the card. Browsers get a plain-text error until it is there; the card image carries it.
+zerdesk: NO PAGE: /data/zerdesk/index.html is not on the card. Browsers get a plain-text error until it is there; the card image carries it.
 ```
 
 and `zerdesk` keeps running. A browser asking for `/` then gets a
 plain-text `503`:
 
 ```
-No remote desktop: the viewer page /zerdesk/index.html is not on the card. The card image carries it; its source is esp32/zeitlos-nic/web/index.html.
+No remote desktop: the viewer page /data/zerdesk/index.html is not on the card. The card image carries it; its source is esp32/zeitlos-nic/web/index.html.
 ```
 
 and the console logs each refusal. Putting the file back is enough:

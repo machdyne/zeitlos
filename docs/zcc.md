@@ -363,8 +363,8 @@ So a card that runs `zcc` needs both:
 
 ```
 /zcc              the compiler, ~80KB
-/libz/libz.bin   the runtime it embeds into what it builds, ~35KB
-/libz/libz.sym   the table it resolves names against
+/data/zcc/libz/libz.bin   the runtime it embeds into what it builds, ~35KB
+/data/zcc/libz/libz.sym   the table it resolves names against
 ```
 
 Embedding the blob in `zcc.bin` as data would remove the second
@@ -444,7 +444,7 @@ and only the device build could have shown it.
 
 ### The card's layout is the default search path
 
-On the device, `zcc` searches `/libz/include` and `/libz` without being
+On the device, `zcc` searches `/data/zcc/libz/include` and `/data/zcc/libz` without being
 asked, so:
 
 ```
@@ -469,7 +469,7 @@ too: a freestanding program still wants `<stdint.h>`.
 A Zeitlos process is started by name and nothing else -- `run zcc` at
 the shell carries no arguments. So the device build reads its command
 line from the launch argument (`z_launch_arg_take`), and failing that
-from a file, `/zcc.args`.
+from a file, `/tmp/zcc.args`.
 
 **The file is a stopgap and should be read as one.** It exists so the
 compiler is usable and testable before anything can pass it a real

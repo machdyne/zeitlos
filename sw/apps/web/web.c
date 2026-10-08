@@ -28,7 +28,7 @@
  *   open a raw socket       Z_PORT_CONNECT {ip, port} to net
  *   send the request        http_build_request()
  *   feed the response       http_feed()
- *   spool the body          fs_write_chunk() to /web/cache
+ *   spool the body          fs_write_chunk() to /tmp/web.spool
  *   index it                page_index_more(), a few blocks at a time
  *
  * The body is spooled to the card and only then indexed, rather than
@@ -56,7 +56,7 @@
  * Two things must be present, and their absence is a refusal rather
  * than a downgrade:
  *
- *   /web/roots.der   concatenated DER certificates, the trust store
+ *   /data/web/roots.der   concatenated DER certificates, the trust store
  *   a set clock      z_rtc_valid(), which `net` gets from NTP
  *
  * Without a clock an expired certificate cannot be told from a
@@ -69,6 +69,7 @@
 #include <string.h>
 #include <stdlib.h>
 
+#include "../../common/zpaths.h"
 #include "../../common/zeitlos.h"
 #include "../../common/zwin.h"
 #include "../../common/zwidget.h"
@@ -118,30 +119,26 @@
 // line of body text plus a pixel above and below plus the rule.
 #define BAR_H  TB_H
 
-// Cache directory and the single spool file.
+// web's own folder (/data/web: roots.der, pins.txt) and the single
+// spool file.
 //
 // One file, not one per URL. A URL cache needs eviction, a name
 // mapping and a size budget; a single spool gives back/forward
 // nothing and gives everything else -- re-wrapping on resize, serving
 // the fetch service from the same bytes the renderer uses -- for a
 // fixed 0 bytes of bookkeeping. A real cache is a Phase 4 item.
-#define CACHE_DIR   "/web"
-// The spool lives on the RAM disk when there is one.
+#define CACHE_DIR   Z_DIR_WEB_DATA
+// The spool is scratch for one page, so it lives in /tmp.
 //
 // Measured on hardware: indexing a 258KB page meant re-reading it off
 // the card at about 19 KB/s -- 13 seconds, against 1.4 for writing
-// it. The spool is scratch for one page and has no business being on
-// durable storage.
+// it. The spool has no business being on durable storage.
 //
-// PREFERRED, not required. /ram is absent on a 1MB board (kernel.c
-// does not create one there) and can be turned off, and `web` still
-// works from the card when it is -- slowly, which the timing lines
-// will say plainly. Choosing at runtime also makes the two directly
-// comparable: same build, same page, one variable.
-#define SPOOL_PATH_RAM   "/ram/webspool"
-#define SPOOL_PATH_CARD  "/web/spool"
-
-static const char *spool_path = SPOOL_PATH_CARD;
+// /tmp is the ramdisk when there is one, and a card directory when
+// there is not (a 1MB board: docs/ramdisk.md) -- the choice this file
+// used to make for itself by trying /ram first. `web` still works from
+// the card, slowly, which the timing lines will say plainly.
+static const char *spool_path = Z_PATH_WEB_SPOOL;
 
 // Redirect budget. Eight is what every mainstream browser uses; a
 // site that needs more is looping.
@@ -678,7 +675,7 @@ static url_t fetch_url;		// defined with the rest of the fetch state below
 // closes. So the client sets the limit -- past it the load stops and the
 // page shows what arrived, with a note (sw_limit_note()). Without one, a
 // capsule that streams, or one that never closes, fills the spool --
-// /ram/webspool, or /web/spool on the card -- until the card is full.
+// /tmp/web.spool (the ramdisk, or the card without one) -- until the card is full.
 #define SW_MAX_BYTES   (4u * 1024u * 1024u)
 
 static uint32_t sw_rx;			// raw bytes received for this response
@@ -709,7 +706,7 @@ static bool fetch_is_head;
 
 #if WEB_TLS
 
-#define ROOTS_PATH  "/web/roots.der"
+#define ROOTS_PATH  Z_PATH_WEB_ROOTS
 
 // One TLS context, static because it holds a full record buffer and
 // there is one connection in the system.
@@ -982,11 +979,11 @@ static bool tls_in_use(void) {
 // PROVE it holds the key (CertificateVerify); what it replaces is only
 // the question of whose key it should be.
 //
-// Pins live in /web/pins.txt, one "host:port HEX" line per server, the
+// Pins live in /data/web/pins.txt, one "host:port HEX" line per server, the
 // hex being the SHA-256 of the server's public key (not of the whole
 // certificate, so renewing with the same key is not a change). A pin
 // that cannot be written (no card) is kept for the session.
-#define PINS_PATH   CACHE_DIR "/pins.txt"
+#define PINS_PATH   Z_PATH_WEB_PINS
 #define PIN_MEM     8
 
 static struct { char hp[URL_HOST_MAX + 8]; uint8_t fp[32]; } pin_mem[PIN_MEM];
@@ -1627,7 +1624,7 @@ static bool spool_begin(void) {
 	spool_close();
 
 	// The directory may not exist on a fresh card. fs_open_write()
-	// does not create parents, so a missing /web is reported as a
+	// does not create parents, so a missing /data/web is reported as a
 	// plain "cannot open" -- which is true and unhelpful, hence the
 	// specific message below.
 	spool_wr = fs_open_write(spool_path);
@@ -3141,19 +3138,7 @@ int main(void) {
 
 	z_scrollbar_init(&sbar, &win, Z_SB_VERT);
 
-	// Pick the spool location once, by trying it.
-	//
-	// There is no "is there a ramdisk" call in the app-facing file
-	// API, and adding one to answer a question a create-and-close
-	// already answers would be a worse trade than the one write.
-	{
-		int probe = fs_open_write(SPOOL_PATH_RAM);
-		if (probe >= 0) {
-			fs_close_handle(probe);
-			spool_path = SPOOL_PATH_RAM;
-		}
-		printf("web: spool: %s\n", spool_path);
-	}
+	printf("web: spool: %s\n", spool_path);
 
 	// The URL bar starts focused, holding "https://".
 	//

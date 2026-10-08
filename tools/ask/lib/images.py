@@ -205,7 +205,7 @@ def write_indexes(images, outdir, pack):
 
     Named for their contents rather than sitting as index.md inside
     each directory, because these are the pages somebody goes looking
-    for: "the flags" is a thing you want, "ark/arkmed/flags/index.md"
+    for: "the flags" is a thing you want, "opt/ark/arkmed/flags/index.md"
     is a path you have to already know.
 
     Links resolve relative to the file being shown (read.c:2480) and

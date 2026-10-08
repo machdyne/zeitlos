@@ -109,7 +109,8 @@ typedef struct {
 // file's full path into `out` and returns true. Returns false if the
 // user cancelled.
 //
-// `start_dir` (may be NULL for the root) is where browsing begins.
+// `start_dir` is where browsing begins; NULL means /home, the
+// person's own files (docs/layout.md).
 bool z_dialog_open(const z_dialog_ctx_t *ctx, const char *start_dir,
 	char *out, int outlen);
 

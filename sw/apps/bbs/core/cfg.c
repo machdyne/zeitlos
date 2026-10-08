@@ -3,9 +3,9 @@
  * Copyright (c) 2026 Lone Dynamics Corporation. All rights reserved.
  *
  * bbs -- <datadir>/bbs.cfg: "key: value" lines, # comments, the same
- * shape as /zeitlos.cfg. The BBS keeps its own file rather than keys in
- * /zeitlos.cfg because the same data directory must work on a Linux
- * server, which has no /zeitlos.cfg. docs/bbs.md, "Configuration".
+ * shape as /sys/zeitlos.cfg. The BBS keeps its own file rather than keys in
+ * /sys/zeitlos.cfg because the same data directory must work on a Linux
+ * server, which has no /sys/zeitlos.cfg. docs/bbs.md, "Configuration".
  */
 #include <stdio.h>
 #include <stdarg.h>

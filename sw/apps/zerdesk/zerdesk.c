@@ -49,6 +49,7 @@
 #include <stdio.h>
 #include <malloc.h>
 
+#include "../../common/zpaths.h"
 #include "../../common/zeitlos.h"
 #include "../../common/zsoc.h"
 #include "../../common/zport.h"
@@ -66,7 +67,7 @@
 #define MAX_CONN       6		/* net has 6 inbound relays */
 #define REFUSE_LOG_TICKS (5 * TICKS_PER_SEC)
 #define REFUSE_TEXT    "Too many viewers connected"
-#define PAGE_PATH      "/zerdesk/index.html"
+#define PAGE_PATH      Z_PATH_ZERDESK_PAGE
 #define NO_PAGE_TEXT   "No remote desktop: the viewer page " PAGE_PATH \
 	" is not on the card. The card image carries it; its source is " \
 	"esp32/zeitlos-nic/web/index.html."

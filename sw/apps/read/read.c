@@ -52,6 +52,7 @@
 #include <stdbool.h>
 #include <string.h>
 
+#include "../../common/zpaths.h"
 #include "../../common/zeitlos.h"
 #include "../../common/zsoc.h"	// Z_TICK_HZ, for the scroll settle time
 #include "../../common/zwm.h"
@@ -294,7 +295,7 @@ static hist_t hist[HIST_MAX];
 static int hist_n;
 
 static z_dialog_ctx_t dlg_ctx;
-static char last_dir[Z_FLIST_PATH_MAX] = "/";
+static char last_dir[Z_FLIST_PATH_MAX] = Z_DIR_HOME;
 
 static void forward_msg(z_msg_t *msg, void *user);
 static void repaint(void);
@@ -3443,7 +3444,7 @@ int main(void) {
 			 * there is one. `ask` (sw/apps/ask, docs/ask_app.md)
 			 * hands over a passage as
 			 *
-			 *     /ark/arklite/books/00000072.md#39006
+			 *     /opt/ark/arklite/books/00000072.md#39006
 			 *
 			 * so the reader lands ON the matched text rather than
 			 * at the top of a 300KB manual.

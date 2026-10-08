@@ -136,8 +136,14 @@ APP_MAIN_RULE ?= 1
 # the libc specs and any -D the app needs. The result still builds and
 # links; it is just a much larger, slower binary that can overrun the
 # space the loader has for it and crash on start.
+# Z_APP_NAME: the app's name as a string, for z_data_file()
+# (sw/common/zdata.h) -- /data/<APP>/ is the app's own folder on the
+# card (docs/layout.md). APP is the name the app has in /apps too.
+APP_NAME_CFLAGS = -DZ_APP_NAME='"$(APP)"'
+
 override CFLAGS += --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) \
-	$(GFX_CFLAGS) $(ZFMT_CFLAGS) $(APP_CFLAGS) $(GC_CFLAGS) $(ARCH_DEFS) $(LIBC_FLAGS)
+	$(GFX_CFLAGS) $(ZFMT_CFLAGS) $(APP_CFLAGS) $(APP_NAME_CFLAGS) $(GC_CFLAGS) \
+	$(ARCH_DEFS) $(LIBC_FLAGS)
 LDFLAGS = -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS)
 LDSCRIPT = $(COMMON_DIR)/riscv-app.ld
 MKEXEC = python3 $(COMMON_DIR)/../../tools/mkexec.py

@@ -10,6 +10,7 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
+#include "../common/zpaths.h"
 #include "../common/zeitlos.h"
 #include "../common/zwm.h"	// Z_WM_SET_ARG, for `run`
 #include "../common/zargs.h"	// get_arg(): quoting, docs/posix.md
@@ -39,7 +40,7 @@ extern bool k_readline_from_uart;	// kruntime.c
 #include "msg.h"
 #include "hid.h"		// k_hid_stats(), HID_FIFO_SIZE -- the `ic` command
 #include "pidreg.h"
-#include "cfg.h"		// /zeitlos.cfg -- k_cfg_load() at boot, `cfg`
+#include "cfg.h"		// /sys/zeitlos.cfg -- k_cfg_load() at boot, `cfg`
 #include "xmodem.h"
 
 // --
@@ -205,7 +206,7 @@ static bool wait_for_apps_ready(void) {
 		uint32_t now = z_uptime_ticks();
 		if (now == last_tick) continue;
 		last_tick = now;
-		if (fs_size("wm") != 0) return true;
+		if (fs_size(Z_DIR_APPS "/wm") != 0) return true;
 	}
 	return false;
 }
@@ -563,12 +564,14 @@ void sh(void) {
 	} else
 		card_ready = wait_for_card_ready();
 
-	if (card_ready)
+	if (card_ready) {
 		printf("init: sdcard ready\n");
+		fs_layout_prepare();        // /home, /data, /tmp (docs/layout.md)
+	}
 	else if (z_zar_present())
 		printf("init: no sdcard, using core apps in flash\n");
 
-	// /zeitlos.cfg, before init() and before the cancel window -- so
+	// /sys/zeitlos.cfg, before init() and before the cancel window -- so
 	// every app init starts sees the settings from its first
 	// instruction, and a cancelled boot still has them for `run`. No
 	// card or no file loads nothing and everything uses its default.
@@ -1051,8 +1054,8 @@ void sh(void) {
 			// The stack size is in the header just parsed. See
 			// k_proc_create_exec() in kernel.c.
 			// Anything after the name is the program's launch
-			// argument (Z_WM_SET_ARG, zwm.h) -- `run view /demo/a.jpg`,
-			// `run automate /demo/short.zds` -- joined with spaces, as
+			// argument (Z_WM_SET_ARG, zwm.h) -- `run view /media/images/a.jpg`,
+			// `run automate /data/automate/short.zds` -- joined with spaces, as
 			// cron passes a rule's arguments. Held by wm, so it needs
 			// wm running; without it the program simply gets none.
 			if (get_arg(buffer, 2)) {
@@ -1604,8 +1607,10 @@ void sh(void) {
 					// f_mkfs leaves the volume unmounted; remount so
 					// the very next `ls` or `xf` works instead of
 					// failing with FR_NOT_READY.
-					if (fs_mount_now() == 0)
+					if (fs_mount_now() == 0) {
+						fs_layout_prepare();
 						printf("sdcard formatted and remounted.\n");
+					}
 					else
 						printf("formatted, but remount failed -- reboot.\n");
 				}
@@ -1638,6 +1643,7 @@ void sh(void) {
 					"close them first\n", open_now);
 			} else if (fs_mount_now() == 0) {
 				uint32_t total = 0, freek = 0;
+				fs_layout_prepare();
 				fs_df_kb(&total, &freek);
 				if (total)
 					printf("mounted: %ld KB total, %ld KB free\n",
@@ -1691,7 +1697,7 @@ void sh(void) {
 			k_kv_shell(sub, a1, a2);
 		}
 
-		// CONFIGURATION -- /zeitlos.cfg, docs/config.md.
+		// CONFIGURATION -- /sys/zeitlos.cfg, docs/config.md.
 		//   cfg              list known keys (effective values) and
 		//                    anything else the file sets
 		//   cfg reload       re-read the file after editing it
@@ -1887,7 +1893,7 @@ void init(void) {
 	// service that sleeps is still RAM. After the config retry above, so
 	// the card is up to be asked. It waits for NTP itself when told to
 	// (wait_for_ntp), so it does not matter that net starts after it.
-	if (fs_size("/user/cron.cfg") > 0)
+	if (fs_size(Z_PATH_CRON_CONFIG) > 0)
 		init_start_optional("cron");
 
 	// netserve (docs/netserve.md), the same way: only if a service is
@@ -2019,14 +2025,14 @@ void cls(void) {
 	}
 }
 
-// dumps the raw framebuffer, exactly as it sits in VRAM, to ss.bin --
+// dumps the raw framebuffer, exactly as it sits in VRAM, to /home/ss.bin --
 // FB_WIDTH*FB_HEIGHT 1bpp pixels, packed 8 per byte, FB_WIDTH/8 bytes
 // per row, no header. See tools/ssconv.py to convert this into a
 // viewable PNG.
 void screenshot(void) {
-	int written = fs_write_file("ss.bin", (char *)FB_BASE, FB_SIZE);
+	int written = fs_write_file(Z_PATH_SCREENSHOT, (char *)FB_BASE, FB_SIZE);
 	if (written == FB_SIZE)
-		printf("screenshot saved to ss.bin (%d bytes)\n", written);
+		printf("screenshot saved to " Z_PATH_SCREENSHOT " (%d bytes)\n", written);
 	else
 		printf("ss: write failed (wrote %d of %d bytes)\n", written, FB_SIZE);
 }
@@ -2273,8 +2279,8 @@ void sh_help(void) {
 	printf(" lock              lock the screen (and the console, if set to)\n");
 	printf(" probe             dump logic analyser capture "
 		"(needs -DPROBE)\n");
-	printf(" usbmount          mount usb storage at /usb\n");
-	printf(" usbunmount        unmount /usb\n");
+	printf(" usbmount          mount usb storage at " Z_DIR_USB "\n");
+	printf(" usbunmount        unmount " Z_DIR_USB "\n");
 #ifdef USBH_DEBUG
 	printf(" usbcapok          capture a good low-speed IN + our ACK\n");
 #endif
@@ -2308,7 +2314,7 @@ void sh_help(void) {
 	printf(" tput <ip-or-host> <local-file> [remote-file]  send a file via tftp (needs `run net`)\n");
 	printf(" run <file> [arg]  create a new process; arg is its launch argument\n");
 	printf(" init               start wm, net, repl and posix (runs at boot)\n");
-	printf(" cfg [reload|get k] show or re-read /zeitlos.cfg (docs/config.md)\n");
+	printf(" cfg [reload|get k] show or re-read " Z_PATH_SYS_CONFIG " (docs/config.md)\n");
 	printf(" kill <pid>        kill a process\n");
 	printf(" ps                display a process snapshot\n");
 	printf(" df                display filesystem capacity\n");
@@ -2319,7 +2325,7 @@ void sh_help(void) {
 	printf(" ks                display a kernel snapshot\n");
 	printf(" ic                input path counters (hid ring, mailboxes, esp32link)\n");
 	printf(" cls               clear framebuffer\n");
-	printf(" ss                save a screenshot to ss.bin (see tools/ssconv.py)\n");
+	printf(" ss                save a screenshot to " Z_PATH_SCREENSHOT " (see tools/ssconv.py)\n");
 	printf(" ls [path]         display list of files\n");
 	printf(" mkdir [path]      make a directory\n");
 	printf(" touch [path]      create empty file\n");

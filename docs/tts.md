@@ -126,7 +126,7 @@ remap in the web client is future work.
 Somebody will usually set a machine up for a blind user. Today: put
 `tts` on the sdcard (the release image does) and show them Super+S.
 Rate, pitch and volume are `system.tts.rate`, `.pitch` and `.volume`
-in `/zeitlos.cfg` ([config.md](config.md)); the service rereads them
+in `/sys/zeitlos.cfg` ([config.md](config.md)); the service rereads them
 whenever the file is reloaded. Phase 4 adds `system.tts.enabled`, which
 `init` will read to start speech at boot. Whether `tts` becomes a core app
 in flash is an open decision ([flash_apps.md](flash_apps.md)).
@@ -183,7 +183,7 @@ The cost when speech is off is the same fourteen instructions as any
 other `z_speak()` (below), which is why none of this is conditional on
 a setting.
 
-**Starting at boot.** `system.tts.enabled` in `/zeitlos.cfg`
+**Starting at boot.** `system.tts.enabled` in `/sys/zeitlos.cfg`
 ([config.md](config.md)) makes `init` start the service, after the
 desktop is up so there is something to announce. Off by default;
 Super+S still works either way. It is what you set on a machine being
@@ -292,7 +292,7 @@ has why.
 
 ## Voice settings
 
-All in `/zeitlos.cfg` ([config.md](config.md)), read again whenever the
+All in `/sys/zeitlos.cfg` ([config.md](config.md)), read again whenever the
 file is reloaded:
 
 | key | default | range | |
@@ -451,7 +451,7 @@ Super+S turns speech off whoever is narrating.
 open the file, cannot read its header or section table, or finds a
 section it cannot use. (Several of these used to fail silently, which
 made a card with a pack look exactly like a card without one.) With a
-pack loaded it says `tts: lexicon from /speech/en.spk`, and
+pack loaded it says `tts: lexicon from /data/tts/speech/en.spk`, and
 `tts: recorded voice from ...` when the pack has one.
 
 A narrator changing voice (`Z_TTS_PARAM_VOICE`) usually does not want

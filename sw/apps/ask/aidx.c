@@ -10,6 +10,7 @@
 #include <string.h>
 #include <stdlib.h>
 
+#include "../../common/zpaths.h"
 #include "aidx.h"
 
 /* Records why loading failed; defined below, used by the file shim
@@ -66,7 +67,7 @@ int ai_listdirs(const char *path, char *names, int maxnames)
     char full[512];
     joinroot(full, sizeof(full), path);
     DIR *d = opendir(full);
-    if (!d) { ai_note("/ask is empty or unreadable"); return 0; }
+    if (!d) { ai_note(Z_DIR_ASK_PACKS " is empty or unreadable"); return 0; }
     struct dirent *e;
     int n = 0;
     while ((e = readdir(d)) && n < maxnames) {
@@ -86,7 +87,7 @@ int ai_listdirs(const char *path, char *names, int maxnames)
         n++;
     }
     closedir(d);
-    if (!n) ai_note("/ask has no subdirectories");
+    if (!n) ai_note(Z_DIR_ASK_PACKS " has no subdirectories");
     return n;
 }
 
@@ -126,7 +127,7 @@ int ai_listdirs(const char *path, char *names, int maxnames)
      *
      * Entries come back as NUL-terminated strings back to back, each
      * already a full "/"-prefixed path. A pack is a subdirectory of
-     * /ask and the only thing that lives there, so everything here is
+     * /data/ask and the only thing that lives there, so everything here is
      * a candidate; one whose index.zak is missing or whose dataset id
      * does not match is rejected by load_pack(), which is the right
      * place to decide what makes a pack valid. */
@@ -142,7 +143,7 @@ int ai_listdirs(const char *path, char *names, int maxnames)
         /* An EMPTY directory is not distinguishable from a failure
          * here -- k_fs_list() reports failure for both, as zflist.c
          * records. Either way there is nothing to load. */
-        ai_note("/ask is empty or unreadable");
+        ai_note(Z_DIR_ASK_PACKS " is empty or unreadable");
         return 0;
     }
 
@@ -158,7 +159,7 @@ int ai_listdirs(const char *path, char *names, int maxnames)
          *
          * This read types[out] until now, so the first non-directory
          * entry desynchronised the type array from the names for
-         * everything after it -- one stray file in /ask and every pack
+         * everything after it -- one stray file in /data/ask and every pack
          * following it was tested against the wrong type byte. */
         if (types[i] == Z_FS_TYPE_DIR) {
             while (base[j] && j < 12) { names[out * 13 + j] = base[j]; j++; }
@@ -167,7 +168,7 @@ int ai_listdirs(const char *path, char *names, int maxnames)
         }
         p = s + 1;
     }
-    if (!out) ai_note("/ask has no subdirectories");
+    if (!out) ai_note(Z_DIR_ASK_PACKS " has no subdirectories");
     return out;
 }
 
@@ -176,7 +177,7 @@ int ai_listdirs(const char *path, char *names, int maxnames)
 /* ------------------------------------------------------------------ *
  * Why loading failed
  *
- * "no packs in /ask" was the app's whole vocabulary for four quite
+ * "no packs in /data/ask" was the app's whole vocabulary for four quite
  * different situations: nothing there, an index this build cannot
  * read, files from two different distributions mixed together, and --
  * by far the most likely on a first run -- malloc refusing because
@@ -289,7 +290,7 @@ static void *load_body(const char *path, uint32_t magic, uint32_t dsid,
          * it otherwise produces confident wrong answers. */
         if (rd32(hdr) != magic) ai_note("not an ask index file");
         else if (rd32(hdr + 4) != AI_FORMAT_VERSION)
-            ai_note("index built by another version");
+            ai_note("index built by another version of tools/ask -- rebuild the pack");
         else ai_note("pack files are from different builds");
         return NULL;
     }
@@ -372,8 +373,8 @@ static bool load_pack(ai_pack_t *p, const char *askroot, const char *name,
     memset(p, 0, sizeof(*p));
     scopy(p->name, sizeof(p->name), name);
     path_join(p->dir, sizeof(p->dir), askroot, name);
-    scat(p->cardroot, sizeof(p->cardroot), 0, "/ark/");
-    scat(p->cardroot, sizeof(p->cardroot), 5, name);
+    scat(p->cardroot, sizeof(p->cardroot), 0, Z_DIR_ARK "/");
+    scat(p->cardroot, sizeof(p->cardroot), sizeof(Z_DIR_ARK "/") - 1, name);
 
     /* index.zak first, and with dsid 0 -- it is the file that DEFINES
      * the dataset id every other file is then checked against. */
@@ -877,11 +878,11 @@ static bool fill_hit(ai_hit_t *h, const ai_pack_t *p, uint32_t chunk)
         char rel[AI_PATH_MAX];
         read_str(&f, poolbase, poff, rel, sizeof(rel));
         read_str(&f, poolbase, toff, h->title, AI_TITLE_MAX);
-        /* the packer stores a card-relative path like
-         * "ark/arklite/codex/00000042.md"; the device needs it
-         * absolute. */
-        h->path[0] = '/';
-        scopy(h->path + 1, AI_PATH_MAX - 1, rel);
+        /* the packer stores a path relative to the pack's document
+         * folder, "codex/00000042.md"; where that folder is on the card
+         * is the registry's business (Z_DIR_ARK, sw/common/zpaths.h),
+         * so a pack holds no card path and works wherever it is put. */
+        path_join(h->path, AI_PATH_MAX, p->cardroot, rel);
     }
     ai_close(&f);
     return true;
@@ -1632,8 +1633,7 @@ int ai_browse(const ai_pack_t *p, uint32_t from, int max,
         toff = rd32(rec + 4);
         read_str(&f, poolbase, toff, titles[n], AI_TITLE_MAX);
         read_str(&f, poolbase, poff, rel, sizeof(rel));
-        paths[n][0] = '/';
-        scopy(paths[n] + 1, AI_PATH_MAX - 1, rel);
+        path_join(paths[n], AI_PATH_MAX, p->cardroot, rel);   /* as above */
         n++;
     }
     ai_close(&f);

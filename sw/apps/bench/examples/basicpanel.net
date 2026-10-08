@@ -6,7 +6,7 @@
 #   RUN
 #
 # Hold a button: its LED lights. PANEL.BAS is the program
-# /bench/modpanel.net runs on a virtual LS10, unchanged: PINS NET, NET,
+# /data/bench/examples/modpanel.net runs on a virtual LS10, unchanged: PINS NET, NET,
 # I2C, I2C works on both. Or try it by hand:
 #
 #   10 PINS -, -, I2C, I2C

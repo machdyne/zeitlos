@@ -61,6 +61,7 @@
 #include <stdbool.h>
 #include <string.h>
 
+#include "../../common/zpaths.h"
 #include "../../common/zeitlos.h"
 #include "../../common/zsoc.h"			// Z_TICK_HZ
 #include "../../common/zwm.h"
@@ -698,7 +699,7 @@ static void forward_msg(z_msg_t *msg, void *user);
 
 static z_dialog_ctx_t dlg_ctx;
 
-static char last_dir[Z_FLIST_PATH_MAX] = "/";
+static char last_dir[Z_FLIST_PATH_MAX] = Z_DIR_HOME;
 
 static void remember_dir(const char *path) {
 

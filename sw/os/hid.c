@@ -131,7 +131,7 @@ static volatile uint8_t hid_locks = 0;
 // switch cannot fall between a key and its translation, and a program
 // reading raw events without wm (midi, play, track in console mode)
 // follows the same layout wm does. Set by wm (Super+Space, and
-// system.keyboard.layouts in /zeitlos.cfg); 0 (US) until then.
+// system.keyboard.layouts in /sys/zeitlos.cfg); 0 (US) until then.
 // docs/keyboard_layouts.md.
 static volatile uint8_t hid_layout = 0;
 

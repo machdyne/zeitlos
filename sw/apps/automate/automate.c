@@ -6,7 +6,7 @@
  * and apps, in order. See docs/automate.md for the language and
  * docs/demo.md for the demos themselves.
  *
- *     > run automate                      runs /demo/demo.zds
+ *     > run automate                      runs /data/automate/demo.zds
  *     open a .zds file in `files`         runs that one
  *
  * Everything it does to the machine goes through the paths a person
@@ -25,6 +25,7 @@
 #include <string.h>
 #include <stdlib.h>
 
+#include "../../common/zpaths.h"
 #include "../../common/zeitlos.h"
 #include "../../common/zsoc.h"
 #include "../../common/zwm.h"
@@ -35,7 +36,7 @@
 #include "../../common/zfsapp.h"
 #include "../../common/zutf8.h"
 
-#define DEFAULT_SCRIPT	"/demo/demo.zds"
+#define DEFAULT_SCRIPT	Z_PATH_AUTOMATE_DEFAULT
 #define SCRIPT_MAX		32768
 #define LINES_MAX		1500
 #define APPS_MAX		16
@@ -875,8 +876,8 @@ static bool exec_line(char *line) {
 			(!strcmp(w, "synth") || !strcmp(w, "male")) ? Z_TTS_VOICE_MALE :
 			!strcmp(w, "female") ? Z_TTS_VOICE_FEMALE : Z_TTS_VOICE_RECORDED;
 		if (!sync_speech()) return false;	// not in the middle of a sentence
-		if (v == Z_TTS_VOICE_RECORDED && fs_size("/speech/en.spk") <= 0)
-			printf("automate: no speech pack (/speech/en.spk) on this card -- "
+		if (v == Z_TTS_VOICE_RECORDED && fs_size(Z_PATH_TTS_PACK) <= 0)
+			printf("automate: no speech pack (" Z_PATH_TTS_PACK ") on this card -- "
 				"the recorded voice is in it; see docs/tts_data.md\n");
 		if (ensure_tts())
 			z_msg_new_send(tts_pid, Z_TTS_SET, 0, z_obj_uint32(

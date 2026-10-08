@@ -13,6 +13,7 @@
 
 #include <string.h>
 
+#include "../../common/zpaths.h"
 #include "zfsapp.h"
 #include "mesh_log_io.h"
 
@@ -20,7 +21,7 @@ static bool broken;			// a write failed: stop trying until restart
 
 static bool ensure(const char *path) {
 	if (fs_size((char *)path) >= 0) return true;
-	fs_mkdir("/user");			// fails harmlessly if it exists
+	fs_mkdir(Z_DIR_MESH_DATA);			// fails harmlessly if it exists
 	if (!fs_touch(path)) return false;
 	{
 		int h = fs_open_rw(path);

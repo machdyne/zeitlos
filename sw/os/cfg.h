@@ -5,7 +5,7 @@
  * Zeitlos OS
  * Copyright (c) 2026 Lone Dynamics Corporation. All rights reserved.
  *
- * The kernel's configuration store -- /zeitlos.cfg, loaded at boot.
+ * The kernel's configuration store -- /sys/zeitlos.cfg, loaded at boot.
  * See sw/common/zcfg.h for the format and the app API, and
  * docs/config.md for the whole design.
  */
@@ -15,7 +15,7 @@
 
 #include "../common/zobj.h"
 
-// Reads /zeitlos.cfg into the store, replacing whatever was there, and
+// Reads /sys/zeitlos.cfg into the store, replacing whatever was there, and
 // applies the settings the kernel itself owns (system.video.mode).
 // Returns the number of settings loaded; 0 means no file, which is not
 // an error -- everything uses its default. *ignored gets the count of

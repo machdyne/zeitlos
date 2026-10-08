@@ -912,7 +912,8 @@ def cmd_build(args):
         return len(blob)
 
     sizes = {}
-    sizes["docs.zdt"] = write("docs.zdt", pack.pack_docs(docs, paths, dsid))
+    sizes["docs.zdt"] = write("docs.zdt", pack.pack_docs(
+        docs, [cardfs.pack_relative(p_, packname) for p_ in paths], dsid))
     sizes["chunks.zct"] = write("chunks.zct", pack.pack_chunks(chunks, dsid))
 
     # `dense = no` ships a LEXICAL-ONLY pack: no vectors, no encoder.
@@ -1039,8 +1040,8 @@ def cmd_build(args):
     # it.
     print()
     print("  installing on a card that already has this pack:")
-    print("      rm -r /media/<card>/ask/%s /media/<card>/ark/%s"
-          % (packname, packname))
+    print("      rm -r /media/<card>/%s /media/<card>/%s"
+          % (cardfs.pack_dir(packname), cardfs.corpus_dir(packname)))
     print("      cp -r %s/* /media/<card>/" % outdir)
     print("  Copying over the top leaves files the new build does not")
     print("  produce -- with the old dataset id -- and `ask` then")

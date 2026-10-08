@@ -186,7 +186,7 @@ of the box if you're on a wired network):
 
 ```
 > ls
-("/APPS" "/DOCS" "/ARK" "/user")
+("/APPS" "/DATA" "/DOCS" "/HOME" "/MEDIA" "/SYS")
 > ls /APPS
 ("/APPS/FILES" "/APPS/TEXT" "/APPS/READ" ...)
 > tget 192.168.1.100 firmware.bin
@@ -194,8 +194,8 @@ of the box if you're on a wired network):
 ```
 
 Applications live in `/APPS`, but you never have to type that: `run
-term` searches the root, then `/APPS`, then the flash archive. See
-`docs/flash_apps.md`.
+term` looks in `/APPS`, then in the flash archive. What goes where on
+the card is in `docs/layout.md`; the search, in `docs/flash_apps.md`.
 
 ### Connecting to a remote machine
 
@@ -245,8 +245,8 @@ from the prompt:
 ## Taking a screenshot
 
 `ss` (typed at a kernel shell, not `term` -- see "Using the serial
-console" below) saves the entire screen to `ss.bin` on the SD card.
-Convert it to a viewable PNG on your computer with:
+console" below) saves the entire screen to `/home/ss.bin` on the SD
+card. Convert it to a viewable PNG on your computer with:
 
 ```
 $ python3 tools/ssconv.py ss.bin

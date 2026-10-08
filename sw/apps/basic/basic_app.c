@@ -13,7 +13,7 @@
  * the screen at most once per video frame.
  *
  * BASIC is kept apart from the rest of the system: its files are in
- * /basic and nowhere else, FORMAT is not available, and it has no pins.
+ * /data/basic and nowhere else, FORMAT is not available, and it has no pins.
  *
  * It is also the port provider basic0: a terminal (term: F11, port
  * basic0) can connect and type into the same BASIC, text only. Keys from
@@ -31,6 +31,7 @@
 #include <stdbool.h>
 #include <string.h>
 
+#include "../../common/zpaths.h"
 #include "../../common/zeitlos.h"
 #include "../../common/zsoc.h"
 #include "../../common/zwm.h"
@@ -48,7 +49,7 @@
 #include "bplat.h"
 #include "bterm.h"
 
-#define DIR         "/basic"
+#define DIR         Z_DIR_BASIC_PROGRAMS
 #define TICK_HZ     732             /* z_uptime_ticks() */
 #define FRAME_TICKS 12              /* about one video frame */
 
@@ -465,11 +466,11 @@ int hw_i2c(uint8_t addr, const uint8_t *w, uint8_t wn, uint8_t *r, uint8_t rn) {
     return st == Z_I2C_OK ? 0 : -1;
 }
 
-/* ---- files: /basic only ---- */
+/* ---- files: its disk, /data/basic, only (docs/layout.md) ---- */
 
 static int file = -1;
 static uint8_t file_mode;
-static char file_path[32];
+static char file_path[64];
 
 #define TMP DIR "/_SAVING.TMP"
 
@@ -519,7 +520,7 @@ void hw_fabort(void) {
 }
 
 int hw_fdelete(const char *name) {
-    char p[32];
+    char p[64];
     snprintf(p, sizeof(p), DIR "/%s", name);
     return fs_unlink(p) ? FS_OK : FS_ERR_NOT_FOUND;
 }
@@ -582,7 +583,7 @@ int main(void) {
         return 1;
     }
     say("MACHDYNE BASIC 1\r\n\r\n");
-    if (basic_boot()) {             /* /basic/BOOT.BAS */
+    if (basic_boot()) {             /* /data/basic/BOOT.BAS */
         static char run[] = "RUN";
         basic_yield((uint8_t *)run);
     }

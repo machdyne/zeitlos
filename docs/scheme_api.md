@@ -33,7 +33,7 @@ plain space-separated arguments, also works:
 
 ```
 > ls
-("/APPS" "/DOCS" "/ARK" "/user")
+("/APPS" "/DATA" "/DOCS" "/HOME" "/MEDIA" "/SYS")
 > ls /APPS
 ("/APPS/FILES" "/APPS/TEXT" "/APPS/READ")
 ```

@@ -96,7 +96,7 @@ sends.
 
 | | |
 |---|---|
-| `/web/roots.der` | concatenated DER certificates |
+| `/data/web/roots.der` | concatenated DER certificates |
 | a set clock | `z_rtc_valid()`, which `net` gets from NTP |
 
 Both are refusals when missing. Without a clock, an expired

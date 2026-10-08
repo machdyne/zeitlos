@@ -92,7 +92,7 @@ void zio_exit(int status);
  *   1. the launch argument (z_launch_arg_take, sw/common/zwin.h),
  *      which is the mechanism wm already uses to hand a filename to an
  *      app it launches;
- *   2. the file /zcc.args, one command line.
+ *   2. the file /tmp/zcc.args, one command line.
  *
  * The second is a STOPGAP and should be read as one. It exists so that
  * the compiler is usable and testable before there is anything that

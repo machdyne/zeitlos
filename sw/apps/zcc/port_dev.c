@@ -42,6 +42,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#include "../../common/zpaths.h"
 #include "zeitlos.h"
 #include "zfsapp.h"
 #include "zwin.h"           /* z_launch_arg_take() */
@@ -252,7 +253,7 @@ void zio_exit(int status) {
  *
  *   1. the launch argument (z_launch_arg_take, sw/common/zwin.h),
  *      which is what `posix`'s `run` builtin sets;
- *   2. the file /zcc.args, one command line.
+ *   2. the file /tmp/zcc.args, one command line.
  *
  * The second is a stopgap for driving zcc from the kernel shell, where
  * `run` passes nothing.
@@ -262,7 +263,7 @@ int zio_get_args(char *buf, int cap) {
     if (z_launch_arg_take(buf, cap) && buf[0]) return 1;
 
     {
-        char *s = fs_mallocfile("/zcc.args");
+        char *s = fs_mallocfile(Z_PATH_ZCC_ARGS);
         int i = 0;
         if (!s) return 0;
         while (s[i] && s[i] != '\n' && i < cap - 1) { buf[i] = s[i]; i++; }

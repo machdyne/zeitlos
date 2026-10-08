@@ -53,9 +53,9 @@ everything except IMA ADPCM goes to the mixer.
 
 On the console, at every file open:
 
-    play: /audio/SONG.WAV  PCM8 2ch 22050Hz -> MIXER
+    play: /media/audio/SONG.WAV  PCM8 2ch 22050Hz -> MIXER
 
-    play: /audio/OLD.WAV   IMA ADPCM 2ch 22050Hz -> FIFO -- SOFTWARE PATH
+    play: /media/audio/OLD.WAV   IMA ADPCM 2ch 22050Hz -> FIFO -- SOFTWARE PATH
     play: not using the mixer: IMA: 5.5x the CPU of wav8 for identical output
 
 And at the head of every profiler report: `-- play prof [MIXER]: ...`
@@ -466,9 +466,9 @@ draws, and the only call to it was inside `draw_all()`, on a full
 repaint and lagged the state by one transition, which looks exactly
 like inverted logic and is not.
 
-`play` scans `/audio`, then `/audio`, then the root, and plays through
+`play` scans `/media/audio`, then `/home` ([layout.md](layout.md)), and plays through
 what it finds, wrapping rather than exiting. A launch argument
-overrides the scan: `run play /audio/SONG.WAV`.
+overrides the scan: `run play /media/audio/SONG.WAV`.
 
 **Filenames are 8.3.** FatFs is built with `FF_USE_LFN 0`, so
 `MYFAVOURITESONG.WAV` is `MYFAVO~1.WAV` from this side. `mkaudio.py`
@@ -491,7 +491,7 @@ time once the CPU is shared three ways.
 
 ### The status rows
 
-    1/3 /audio/SONG.WAV
+    1/3 /media/audio/SONG.WAV
     PCM8 2ch 22050Hz -> 46875Hz MIXER
     0:43 / 3:12  vol 62%  PLAYING
     buf 94%  sv0  sd 43K/s
@@ -715,7 +715,7 @@ zero and both expand to exactly 0.** The nearest non-zero codes are
 Play a tone first:
 
     python3 tools/mkaudio.py --tone 440 --seconds 30 -d /media/sd/audio
-    > run play /audio/TONE440.WAV
+    > run play /media/audio/TONE440.WAV
 
 That removes ffmpeg, the encoder and the codec from the list of things
 that could be wrong, leaving the card, the player and the DAC. If

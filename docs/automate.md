@@ -4,13 +4,13 @@
 pointer, and apps, in order. The [demos](demo.md) are scripts for it.
 
 ```
-> run automate /demo/short.zds      from the serial console
-> run automate                      plays /demo/demo.zds
+> run automate /data/automate/short.zds      from the serial console
+> run automate                      plays /data/automate/demo.zds
 ```
 
 The kernel shell's `run` passes everything after the program name as
 its launch argument (through wm, `Z_WM_SET_ARG`) -- for any app, so
-`run view /demo/squirrel.pgm` works too. A `.zds` file also opens in
+`run view /media/images/squirrel.pgm` works too. A `.zds` file also opens in
 `automate` from `files` (`sw/common/ztype.c`), though for a recording
 the console is better: nothing else is on the screen. Running it again stops the copy that is
 running and starts over — that is how you restart a demo.
@@ -60,7 +60,7 @@ something happens the caption carries the message. `narrate&` and
 `say&` are still in the language for scenes that really are idle.
 
 **Voices.** The recorded voice is in the speech pack
-(`/speech/en.spk`, [tts_data.md](tts_data.md)); without one, `tts`
+(`/data/tts/speech/en.spk`, [tts_data.md](tts_data.md)); without one, `tts`
 falls back to the synthesised voice and `automate` warns at
 `voice recorded`. `voice` switches with `Z_TTS_VOICE_QUIET` (`ztts.h`), so
 `tts` does not announce the change: the next sentence is the first

@@ -1,6 +1,6 @@
 # settings
 
-System preferences, and the editor for `/zeitlos.cfg`. `sw/apps/settings`.
+System preferences, and the editor for `/sys/zeitlos.cfg`. `sw/apps/settings`.
 
 ```
 > run wm
@@ -11,7 +11,7 @@ System preferences, and the editor for `/zeitlos.cfg`. `sw/apps/settings`.
 Display
 [ White ][ Amber ][ Green ][ Paper ]
 
-Preferences                  /zeitlos.cfg
+Preferences                  /sys/zeitlos.cfg
 Terminal connects to               [Edit]
   port repl0
 Keyboard layouts (Super+Space)     [Edit]
@@ -39,7 +39,7 @@ Berlin selected -- Set time zone to use it
 | Keyboard layouts | `system.keyboard.layouts` | the next key pressed |
 | Japanese font | `system.font.japanese` | at once -- `jfont` is started or stopped |
 | Time zone list + Set time zone | `system.rtc.timezone` | clock and cal, within a second |
-| Reload file | -- | re-reads `/zeitlos.cfg` after editing it elsewhere |
+| Reload file | -- | re-reads `/sys/zeitlos.cfg` after editing it elsewhere |
 | Password: Set / Change, Remove | the flash key/value store, not the file | at once |
 | Screen lock: Edit | the same | at once: `wm` is told to re-read it |
 
@@ -110,7 +110,7 @@ nothing written. `default` removes the line (US only). See
 
 Every change goes through one function, `save()`:
 
-1. **Read** `/zeitlos.cfg` as text.
+1. **Read** `/sys/zeitlos.cfg` as text.
 2. **Rewrite only the lines for that one key** with `z_cfg_text_set()`
    (`sw/common/zcfg.h`).
 3. **Write** it back.
@@ -147,7 +147,7 @@ the status line says the file could not be written.
 
 ## Security: the password and the screen lock
 
-The one section that does not edit `/zeitlos.cfg`: the kernel keeps
+The one section that does not edit `/sys/zeitlos.cfg`: the kernel keeps
 the password and the lock policy in the flash key/value store, so they
 hold with no card, and changes them only when given the current
 password ([security.md](security.md)).

@@ -41,8 +41,8 @@
 #
 #     It stays a choice for two reasons. Flash winning unless you
 #     deliberately put something on the card is a rule worth keeping,
-#     and it is what makes dropping one app at the card root a
-#     hot-swap rather than an accident. And every board this release
+#     and it is what makes putting one app at /apps/<name> a hot-swap
+#     rather than an accident. And every board this release
 #     supports can hold the ZAR in flash -- including over DFU, where
 #     the 256KB bootloader split leaves the flash map untouched. No
 #     shipped configuration needs core apps on the card, so putting
@@ -62,8 +62,14 @@
 #
 
 import os
+import re
 import shutil
 import subprocess
+
+# Every card destination comes from sw/common/zpaths.h, the registry
+# the C code opens the same files by (docs/layout.md). zcard("Z_DIR_APPS",
+# "files") is "apps/files": no leading slash, as this file writes them.
+from zpaths import P, card as zcard, dirname as zcard_dir
 
 LABEL = "ZEITLOS"
 
@@ -103,7 +109,7 @@ def variant(key):
 # every release before variants shipped, so the small images are the
 # size they always were). Above that: the content, rounded up to whole
 # clusters per file, plus HEADROOM for the filesystem's own structures
-# and FREE_MB left over for the user -- `user/`, zcc output, text
+# and FREE_MB left over for the person -- /home, zcc output, text
 # files. Rounded to SIZE_STEP_MB so sizes are not arbitrary.
 #
 # Free space costs nothing to download (zeros compress to nothing) but
@@ -144,13 +150,10 @@ SECTORS_LARGE = 16
 def sectors_per_cluster(image_bytes):
     return SECTORS_LARGE if image_bytes > LARGE_IMAGE_BYTES else SECTORS_SMALL
 
-# Mirrors tools/mkfatimg.sh. Grouped the same way and in the same
-# order, so the two can be read side by side.
-# Destinations are apps/-prefixed: the card holds executables in
-# apps/ rather than loose in the root, alongside docs/, ark/ and
-# user/. sw/os/fs/fs.c's fs_exec_resolve() searches the root and then
-# apps/, so a bare `run term` still works and a card written before
-# the move still boots.
+# Programs, to /apps under their natural names: the directory name in
+# sw/apps, which is also the name `run` and the dock use. /apps is flat
+# and the kernel finds a bare name there before the flash archive
+# (docs/layout.md, "Finding a program").
 # Everything in sw/apps that is not a CORE app.
 #
 # Core apps (wm, net, term, console -- release/hw/boards/*.spec) live in flash
@@ -161,77 +164,77 @@ def sectors_per_cluster(image_bytes):
 # Everything else ships. The lists below are grouped for reading only;
 # nothing depends on which group an app is in.
 SUPPLEMENTAL = [
-    ("apps/files", "sw/apps/files/files.bin"),
-    ("apps/text", "sw/apps/text/text.bin"),
-    ("apps/sheet", "sw/apps/sheet/sheet.bin"),
-    ("apps/read", "sw/apps/read/read.bin"),
-    ("apps/ask", "sw/apps/ask/ask.bin"),
-    ("apps/draw", "sw/apps/draw/draw.bin"),
-    ("apps/info", "sw/apps/info/info.bin"),
-    ("apps/calc", "sw/apps/calc/calc.bin"),
-    ("apps/clock", "sw/apps/clock/clock.bin"),
-    ("apps/cal", "sw/apps/cal/cal.bin"),
-    ("apps/settings", "sw/apps/settings/settings.bin"),
-    ("apps/track", "sw/apps/track/track.bin"),
-    ("apps/view", "sw/apps/view/view.bin"),
-    ("apps/web", "sw/apps/web/web.bin"),
-    ("apps/irc", "sw/apps/irc/irc.bin"),
-    ("apps/netserve", "sw/apps/net/netserve/netserve.bin"),
-    ("apps/zerdesk", "sw/apps/zerdesk/zerdesk.bin"),
-    ("apps/hex", "sw/apps/hex/hex.bin"),
-    ("apps/play", "sw/apps/play/play.bin"),
-    ("apps/midi", "sw/apps/midi/midi.bin"),
-    ("apps/mmod", "sw/apps/mmod/mmod.bin"),
-    ("apps/sechs", "sw/apps/sechs/sechs.bin"),
-    ("apps/bench", "sw/apps/bench/bench.bin"),
-    ("apps/ls99", "sw/apps/ls99/ls99.bin"),
-    ("apps/i2c", "sw/apps/i2c/i2c.bin"),
-    ("apps/logic", "sw/apps/logic/logic.bin"),
-    ("apps/serial", "sw/apps/serial/serial.bin"),
-    ("apps/mesh", "sw/apps/mesh/mesh.bin"),
-    ("apps/tts", "sw/apps/tts/tts.bin"),
-    ("apps/jfont", "sw/apps/jfont/jfont.bin"),
-    ("apps/keyboard", "sw/apps/keyboard/keyboard.bin"),
-    ("apps/automate", "sw/apps/automate/automate.bin"),
-    ("apps/cryptobench", "sw/apps/cryptobench/cryptobench.bin"),
+    (zcard("Z_DIR_APPS", "files"), "sw/apps/files/files.bin"),
+    (zcard("Z_DIR_APPS", "text"), "sw/apps/text/text.bin"),
+    (zcard("Z_DIR_APPS", "sheet"), "sw/apps/sheet/sheet.bin"),
+    (zcard("Z_DIR_APPS", "read"), "sw/apps/read/read.bin"),
+    (zcard("Z_DIR_APPS", "ask"), "sw/apps/ask/ask.bin"),
+    (zcard("Z_DIR_APPS", "draw"), "sw/apps/draw/draw.bin"),
+    (zcard("Z_DIR_APPS", "info"), "sw/apps/info/info.bin"),
+    (zcard("Z_DIR_APPS", "calc"), "sw/apps/calc/calc.bin"),
+    (zcard("Z_DIR_APPS", "clock"), "sw/apps/clock/clock.bin"),
+    (zcard("Z_DIR_APPS", "cal"), "sw/apps/cal/cal.bin"),
+    (zcard("Z_DIR_APPS", "settings"), "sw/apps/settings/settings.bin"),
+    (zcard("Z_DIR_APPS", "track"), "sw/apps/track/track.bin"),
+    (zcard("Z_DIR_APPS", "view"), "sw/apps/view/view.bin"),
+    (zcard("Z_DIR_APPS", "web"), "sw/apps/web/web.bin"),
+    (zcard("Z_DIR_APPS", "irc"), "sw/apps/irc/irc.bin"),
+    (zcard("Z_DIR_APPS", "netserve"), "sw/apps/net/netserve/netserve.bin"),
+    (zcard("Z_DIR_APPS", "zerdesk"), "sw/apps/zerdesk/zerdesk.bin"),
+    (zcard("Z_DIR_APPS", "hex"), "sw/apps/hex/hex.bin"),
+    (zcard("Z_DIR_APPS", "play"), "sw/apps/play/play.bin"),
+    (zcard("Z_DIR_APPS", "midi"), "sw/apps/midi/midi.bin"),
+    (zcard("Z_DIR_APPS", "mmod"), "sw/apps/mmod/mmod.bin"),
+    (zcard("Z_DIR_APPS", "sechs"), "sw/apps/sechs/sechs.bin"),
+    (zcard("Z_DIR_APPS", "bench"), "sw/apps/bench/bench.bin"),
+    (zcard("Z_DIR_APPS", "ls99"), "sw/apps/ls99/ls99.bin"),
+    (zcard("Z_DIR_APPS", "i2c"), "sw/apps/i2c/i2c.bin"),
+    (zcard("Z_DIR_APPS", "logic"), "sw/apps/logic/logic.bin"),
+    (zcard("Z_DIR_APPS", "serial"), "sw/apps/serial/serial.bin"),
+    (zcard("Z_DIR_APPS", "mesh"), "sw/apps/mesh/mesh.bin"),
+    (zcard("Z_DIR_APPS", "tts"), "sw/apps/tts/tts.bin"),
+    (zcard("Z_DIR_APPS", "jfont"), "sw/apps/jfont/jfont.bin"),
+    (zcard("Z_DIR_APPS", "keyboard"), "sw/apps/keyboard/keyboard.bin"),
+    (zcard("Z_DIR_APPS", "automate"), "sw/apps/automate/automate.bin"),
+    (zcard("Z_DIR_APPS", "cryptobench"), "sw/apps/cryptobench/cryptobench.bin"),
 ]
 
 # The BBS and its zfed node (docs/bbs.md, docs/fed.md). Their data is in
-# /bbs and /fed -- NETWORK_FILES below: a BBS that runs as soon as it is
+# /data/bbs and /data/fed -- NETWORK_FILES below: a BBS that runs as soon as it is
 # started, and a node that runs alone until it is given a network.
 NETWORK = [
-    ("apps/bbs", "sw/apps/bbs/bbs.bin"),
-    ("apps/fed", "sw/apps/fed/fed.bin"),
+    (zcard("Z_DIR_APPS", "bbs"), "sw/apps/bbs/bbs.bin"),
+    (zcard("Z_DIR_APPS", "fed"), "sw/apps/fed/fed.bin"),
 ]
 
 # The casino. One dock icon (apps/casino) launches the rest, so the
 # games have to be on the card even though nothing on the dock points
 # at them directly -- z_proc_run() resolves them by name from here.
 CASINO = [
-    ("apps/casino", "sw/apps/casino/casino.bin"),
-    ("apps/poker", "sw/apps/poker/poker.bin"),
-    ("apps/roulette", "sw/apps/roulette/roulette.bin"),
-    ("apps/blkjack", "sw/apps/blackjack/blackjack.bin"),
-    ("apps/slots", "sw/apps/slots/slots.bin"),
-    ("apps/craps", "sw/apps/craps/craps.bin"),
+    (zcard("Z_DIR_APPS", "casino"), "sw/apps/casino/casino.bin"),
+    (zcard("Z_DIR_APPS", "poker"), "sw/apps/poker/poker.bin"),
+    (zcard("Z_DIR_APPS", "roulette"), "sw/apps/roulette/roulette.bin"),
+    (zcard("Z_DIR_APPS", "blackjack"), "sw/apps/blackjack/blackjack.bin"),
+    (zcard("Z_DIR_APPS", "slots"), "sw/apps/slots/slots.bin"),
+    (zcard("Z_DIR_APPS", "craps"), "sw/apps/craps/craps.bin"),
 ]
 
 GAMES_DEMOS = [
-    ("apps/space3d", "sw/apps/space3d/space3d.bin"),
-    ("apps/gamedemo", "sw/apps/gamedemo/gamedemo.bin"),
-    ("apps/gpu3d", "sw/apps/gpu3d/gpu3d.bin"),
-    ("apps/gpudemo", "sw/apps/gpudemo/gpudemo.bin"),
-    ("apps/chip8", "sw/apps/chip8/chip8.bin"),
-    ("apps/chess", "sw/apps/chess/chess.bin"),
-    ("apps/kidgames", "sw/apps/kidgames/kidgames.bin"),
-    ("apps/basic", "sw/apps/basic/basic.bin"),
+    (zcard("Z_DIR_APPS", "space3d"), "sw/apps/space3d/space3d.bin"),
+    (zcard("Z_DIR_APPS", "gamedemo"), "sw/apps/gamedemo/gamedemo.bin"),
+    (zcard("Z_DIR_APPS", "gpu3d"), "sw/apps/gpu3d/gpu3d.bin"),
+    (zcard("Z_DIR_APPS", "gpudemo"), "sw/apps/gpudemo/gpudemo.bin"),
+    (zcard("Z_DIR_APPS", "chip8"), "sw/apps/chip8/chip8.bin"),
+    (zcard("Z_DIR_APPS", "chess"), "sw/apps/chess/chess.bin"),
+    (zcard("Z_DIR_APPS", "kidgames"), "sw/apps/kidgames/kidgames.bin"),
+    (zcard("Z_DIR_APPS", "basic"), "sw/apps/basic/basic.bin"),
 ]
 
 MISC = [
-    ("web/roots.der", "sw/apps/web/roots.der"),
-    ("apps/portdemo", "sw/apps/portdemo/portdemo.bin"),
-    ("apps/hellowin", "sw/apps/hello_win/hello_win.bin"),
-    ("apps/audiotst", "sw/apps/audiotest/audiotest.bin"),
+    (zcard("Z_PATH_WEB_ROOTS"), "sw/apps/web/roots.der"),
+    (zcard("Z_DIR_APPS", "portdemo"), "sw/apps/portdemo/portdemo.bin"),
+    (zcard("Z_DIR_APPS", "hello_win"), "sw/apps/hello_win/hello_win.bin"),
+    (zcard("Z_DIR_APPS", "audiotest"), "sw/apps/audiotest/audiotest.bin"),
 ]
 
 # The two shells a term window connects to. init() starts both from the
@@ -241,8 +244,8 @@ MISC = [
 # that is what it is to a user; the compiler and editor it hosts stay
 # below.
 SHELLS = [
-    ("apps/repl", "sw/apps/repl/repl.bin"),
-    ("apps/posix", "sw/apps/posix/posix.bin"),
+    (zcard("Z_DIR_APPS", "repl"), "sw/apps/repl/repl.bin"),
+    (zcard("Z_DIR_APPS", "posix"), "sw/apps/posix/posix.bin"),
 ]
 
 # The self-hosting set: a compiler and an editor, driven from posix.
@@ -251,16 +254,12 @@ SHELLS = [
 # run what was cross-compiled onto it (docs/posix.md). `zcc` is useless
 # without libz/ below -- see LIBZ_FILES.
 SELFHOST = [
-    ("apps/zcc", "sw/apps/zcc/zcc.bin"),
-    ("apps/zfpga", "sw/apps/zfpga/zfpga.bin"),
-    ("apps/vi", "sw/apps/vi/vi.bin"),
-    ("apps/zetta", "sw/apps/zetta/zetta.bin"),
-    ("apps/ttytest", "sw/apps/ttytest/ttytest.bin"),
+    (zcard("Z_DIR_APPS", "zcc"), "sw/apps/zcc/zcc.bin"),
+    (zcard("Z_DIR_APPS", "zfpga"), "sw/apps/zfpga/zfpga.bin"),
+    (zcard("Z_DIR_APPS", "vi"), "sw/apps/vi/vi.bin"),
+    (zcard("Z_DIR_APPS", "zetta"), "sw/apps/zetta/zetta.bin"),
+    (zcard("Z_DIR_APPS", "ttytest"), "sw/apps/ttytest/ttytest.bin"),
 ]
-
-DIRS = ["apps", "audio", "basic", "bench", "demo", "docs", "ark", "user", "libz", "libz/include",
-        "fpga", "fpga/boards", "fpga/examples", "speech", "web", "font",
-        "bbs", "bbs/bulletins", "bbs/text", "fed", "zerdesk"]
 
 # The speech pack: the pronunciation lexicon and the recorded voice
 # sw/apps/tts reads (docs/tts.md). NOT built from this tree and NOT
@@ -271,16 +270,16 @@ DIRS = ["apps", "audio", "basic", "bench", "demo", "docs", "ark", "user", "libz"
 #
 # SPEECH_PACK in the environment ships a pack built elsewhere.
 SPEECH_PACK = "tools/speech/build/en/speech.zspk"
-SPEECH_DEST = "/speech/en.spk"      # tts's PACK_PATH (sw/apps/tts/pack.h)
+SPEECH_DEST = P["Z_PATH_TTS_PACK"]   # tts's PACK_PATH (sw/apps/tts/pack.h)
 
 # -- ask packs --
 #
 # Shipped BY DEFAULT: a release carries `ask` and the data it needs,
-# because an app that boots to "no packs in /ask" looks broken rather
-# than incomplete.
+# because an app that boots to "no packs in /data/ask" looks broken
+# rather than incomplete.
 #
-# Each pack contributes /ark/<name> and /ask/<name>, copied from
-# tools/ask/out/<name>. Override or disable with the environment:
+# Each pack contributes /opt/ark/<name> and /data/ask/<name>, copied
+# from tools/ask/out/<name>. Override or disable with the environment:
 #
 #     ZEITLOS_ASK_PACKS="zdocs arklite arkmed"    # add one
 #     ZEITLOS_ASK_PACKS=                          # ship none
@@ -294,12 +293,19 @@ SPEECH_DEST = "/speech/en.spk"      # tts's PACK_PATH (sw/apps/tts/pack.h)
 # SIZES: zdocs 2.4MB, arklite ~22MB, arkmed hundreds. The image is
 # sized to fit them (plan_size), before anything is formatted.
 ASK_OUT = "tools/ask/out"
+
+# The two halves of a pack: its documents, and ask's index of them
+# (docs/layout.md, "Ask and Ark"). tools/ask lays ASK_OUT/<pack>/ out
+# exactly as the card is -- ASK_OUT/<pack>/opt/ark/<pack> and
+# ASK_OUT/<pack>/data/ask/<pack> -- taking both from the same registry,
+# so each half goes to the card at the path it already has.
+PACK_HALVES = (zcard("Z_DIR_ARK"), zcard("Z_DIR_ASK_PACKS"))
 # What `zrelease sdcard` (and so tools/mkfatimg.sh) puts on a card when
 # nothing says otherwise: the development card, unchanged from before
 # variants. A release builds VARIANTS instead.
 ASK_PACKS_DEFAULT = ("zdocs", "arklite")
 
-# -- the zcc runtime, under libz/ --
+# -- the zcc runtime, in zcc's folder: /data/zcc/libz --
 #
 # Two files and a pile of headers, and none of them is optional: a
 # compiler that cannot find libz.bin produces a freestanding binary
@@ -317,27 +323,27 @@ ASK_PACKS_DEFAULT = ("zdocs", "arklite")
 # a list here would go stale silently and the symptom would be a
 # missing include on the device.
 LIBZ_FILES = [
-    ("libz/libz.bin", "sw/apps/zcc/libz/libz.bin"),
-    ("libz/libz.sym", "sw/apps/zcc/libz/libz.sym"),
-    ("libz/include/libz.h", "sw/apps/zcc/libz/libz.h"),
+    (zcard("Z_DIR_ZCC_LIBZ", "libz.bin"), "sw/apps/zcc/libz/libz.bin"),
+    (zcard("Z_DIR_ZCC_LIBZ", "libz.sym"), "sw/apps/zcc/libz/libz.sym"),
+    (zcard("Z_DIR_ZCC_INCLUDE", "libz.h"), "sw/apps/zcc/libz/libz.h"),
 ]
 
 LIBZ_HEADER_DIRS = [
-    ("libz/include", "sw/common", (".h",)),
-    ("libz/include", "sw/apps/zcc/include", (".h",)),
+    (zcard("Z_DIR_ZCC_INCLUDE"), "sw/common", (".h",)),
+    (zcard("Z_DIR_ZCC_INCLUDE"), "sw/apps/zcc/include", (".h",)),
 ]
 
 # zeitlos.h generates its syscall enum from this by X-macro, so it is a
 # header in everything but name and extension.
 LIBZ_EXTRA = [
-    ("libz/include/syscalls.def", "sw/common/syscalls.def"),
+    (zcard("Z_DIR_ZCC_INCLUDE", "syscalls.def"), "sw/common/syscalls.def"),
 ]
 
-# -- the zfpga chip databases, under fpga/ --
+# -- the zfpga chip databases, in zfpga's folder --
 #
-# zfpga looks in /fpga by default, the way zcc looks in /libz, so the
-# layout is fixed and nothing needs to be typed. One .zdb per die:
-# lfe5u-25f.zdb also serves the 12F (identical tilegrid, docs/zfpga.md
+# zfpga looks in /data/zfpga by default, the way zcc looks in
+# /data/zcc/libz, so the layout is fixed and nothing needs to be
+# typed. One .zdb per die: lfe5u-25f.zdb also serves the 12F (identical tilegrid, docs/zfpga.md
 # sec. 2.2). 45F and 85F databases will join this list when their
 # vendored data does (sw/apps/zfpga/ext/prjtrellis-db/README.zeitlos.md).
 # Without one, zfpga refuses at the .device line and names the file it
@@ -347,44 +353,44 @@ FPGA_FILES = [
     # from lfe5u-25f.zdb because a nine-character name could not be
     # opened when FatFs was built without long names (docs/zfpga.md
     # sec. 22). Long names work now; the lookup name is unchanged.
-    ("fpga/lfe5u25f.zdb", "sw/apps/zfpga/db/lfe5u25f.zdb"),
+    (zcard("Z_DIR_ZFPGA_DB", "lfe5u25f.zdb"), "sw/apps/zfpga/db/lfe5u25f.zdb"),
     # the 45F: Mozart ML1 and ML2, Sergei ML1 and ML2, Schoko, Noir
-    ("fpga/lfe5u45f.zdb", "sw/apps/zfpga/db/lfe5u45f.zdb"),
+    (zcard("Z_DIR_ZFPGA_DB", "lfe5u45f.zdb"), "sw/apps/zfpga/db/lfe5u45f.zdb"),
     # board profiles and their pins: `zfpga build design.v -b lakritz`
-    ("fpga/boards/lakritz.brd", "sw/apps/zfpga/db/boards/lakritz.brd"),
-    ("fpga/boards/lakritz.lpf", "sw/apps/zfpga/db/boards/lakritz.lpf"),
-    ("fpga/boards/obst.brd", "sw/apps/zfpga/db/boards/obst.brd"),
-    ("fpga/boards/obst.lpf", "sw/apps/zfpga/db/boards/obst.lpf"),
-    ("fpga/boards/mozart1.brd", "sw/apps/zfpga/db/boards/mozart1.brd"),
-    ("fpga/boards/mozart1.lpf", "sw/apps/zfpga/db/boards/mozart1.lpf"),
-    ("fpga/boards/sergei1.brd", "sw/apps/zfpga/db/boards/sergei1.brd"),
-    ("fpga/boards/sergei1.lpf", "sw/apps/zfpga/db/boards/sergei1.lpf"),
-    ("fpga/boards/mozart2.brd", "sw/apps/zfpga/db/boards/mozart2.brd"),
-    ("fpga/boards/mozart2.lpf", "sw/apps/zfpga/db/boards/mozart2.lpf"),
-    ("fpga/boards/sergei2.brd", "sw/apps/zfpga/db/boards/sergei2.brd"),
-    ("fpga/boards/sergei2.lpf", "sw/apps/zfpga/db/boards/sergei2.lpf"),
-    ("fpga/boards/konfekt.brd", "sw/apps/zfpga/db/boards/konfekt.brd"),
-    ("fpga/boards/konfekt.lpf", "sw/apps/zfpga/db/boards/konfekt.lpf"),
-    ("fpga/boards/minze.brd", "sw/apps/zfpga/db/boards/minze.brd"),
-    ("fpga/boards/minze.lpf", "sw/apps/zfpga/db/boards/minze.lpf"),
-    ("fpga/boards/schoko.brd", "sw/apps/zfpga/db/boards/schoko.brd"),
-    ("fpga/boards/schoko.lpf", "sw/apps/zfpga/db/boards/schoko.lpf"),
-    ("fpga/boards/noir.brd", "sw/apps/zfpga/db/boards/noir.brd"),
-    ("fpga/boards/noir.lpf", "sw/apps/zfpga/db/boards/noir.lpf"),
-    ("fpga/boards/klinge.brd", "sw/apps/zfpga/db/boards/klinge.brd"),
-    ("fpga/boards/klinge.lpf", "sw/apps/zfpga/db/boards/klinge.lpf"),
+    (zcard("Z_DIR_ZFPGA_DB", "boards/lakritz.brd"), "sw/apps/zfpga/db/boards/lakritz.brd"),
+    (zcard("Z_DIR_ZFPGA_DB", "boards/lakritz.lpf"), "sw/apps/zfpga/db/boards/lakritz.lpf"),
+    (zcard("Z_DIR_ZFPGA_DB", "boards/obst.brd"), "sw/apps/zfpga/db/boards/obst.brd"),
+    (zcard("Z_DIR_ZFPGA_DB", "boards/obst.lpf"), "sw/apps/zfpga/db/boards/obst.lpf"),
+    (zcard("Z_DIR_ZFPGA_DB", "boards/mozart1.brd"), "sw/apps/zfpga/db/boards/mozart1.brd"),
+    (zcard("Z_DIR_ZFPGA_DB", "boards/mozart1.lpf"), "sw/apps/zfpga/db/boards/mozart1.lpf"),
+    (zcard("Z_DIR_ZFPGA_DB", "boards/sergei1.brd"), "sw/apps/zfpga/db/boards/sergei1.brd"),
+    (zcard("Z_DIR_ZFPGA_DB", "boards/sergei1.lpf"), "sw/apps/zfpga/db/boards/sergei1.lpf"),
+    (zcard("Z_DIR_ZFPGA_DB", "boards/mozart2.brd"), "sw/apps/zfpga/db/boards/mozart2.brd"),
+    (zcard("Z_DIR_ZFPGA_DB", "boards/mozart2.lpf"), "sw/apps/zfpga/db/boards/mozart2.lpf"),
+    (zcard("Z_DIR_ZFPGA_DB", "boards/sergei2.brd"), "sw/apps/zfpga/db/boards/sergei2.brd"),
+    (zcard("Z_DIR_ZFPGA_DB", "boards/sergei2.lpf"), "sw/apps/zfpga/db/boards/sergei2.lpf"),
+    (zcard("Z_DIR_ZFPGA_DB", "boards/konfekt.brd"), "sw/apps/zfpga/db/boards/konfekt.brd"),
+    (zcard("Z_DIR_ZFPGA_DB", "boards/konfekt.lpf"), "sw/apps/zfpga/db/boards/konfekt.lpf"),
+    (zcard("Z_DIR_ZFPGA_DB", "boards/minze.brd"), "sw/apps/zfpga/db/boards/minze.brd"),
+    (zcard("Z_DIR_ZFPGA_DB", "boards/minze.lpf"), "sw/apps/zfpga/db/boards/minze.lpf"),
+    (zcard("Z_DIR_ZFPGA_DB", "boards/schoko.brd"), "sw/apps/zfpga/db/boards/schoko.brd"),
+    (zcard("Z_DIR_ZFPGA_DB", "boards/schoko.lpf"), "sw/apps/zfpga/db/boards/schoko.lpf"),
+    (zcard("Z_DIR_ZFPGA_DB", "boards/noir.brd"), "sw/apps/zfpga/db/boards/noir.brd"),
+    (zcard("Z_DIR_ZFPGA_DB", "boards/noir.lpf"), "sw/apps/zfpga/db/boards/noir.lpf"),
+    (zcard("Z_DIR_ZFPGA_DB", "boards/klinge.brd"), "sw/apps/zfpga/db/boards/klinge.brd"),
+    (zcard("Z_DIR_ZFPGA_DB", "boards/klinge.lpf"), "sw/apps/zfpga/db/boards/klinge.lpf"),
     # something to build: docs/zfpga-test.md walks through these
-    ("fpga/examples/blink.v", "sw/apps/zfpga/db/examples/blink.v"),
-    ("fpga/examples/blinkf.v", "sw/apps/zfpga/db/examples/blinkf.v"),
-    ("fpga/examples/empty.zn", "sw/apps/zfpga/db/examples/empty.zn"),
-    ("fpga/examples/on.zn", "sw/apps/zfpga/db/examples/on.zn"),
-    ("fpga/examples/blink.zn", "sw/apps/zfpga/db/examples/blink.zn"),
-    ("fpga/examples/hand.zl", "sw/apps/zfpga/db/examples/hand.zl"),
+    (zcard("Z_DIR_ZFPGA_DB", "examples/blink.v"), "sw/apps/zfpga/db/examples/blink.v"),
+    (zcard("Z_DIR_ZFPGA_DB", "examples/blinkf.v"), "sw/apps/zfpga/db/examples/blinkf.v"),
+    (zcard("Z_DIR_ZFPGA_DB", "examples/empty.zn"), "sw/apps/zfpga/db/examples/empty.zn"),
+    (zcard("Z_DIR_ZFPGA_DB", "examples/on.zn"), "sw/apps/zfpga/db/examples/on.zn"),
+    (zcard("Z_DIR_ZFPGA_DB", "examples/blink.zn"), "sw/apps/zfpga/db/examples/blink.zn"),
+    (zcard("Z_DIR_ZFPGA_DB", "examples/hand.zl"), "sw/apps/zfpga/db/examples/hand.zl"),
     # two modules, a parameter and an `include, blinking at half blink's
     # rate: zfpga synth's hierarchy, checked on the board (docs/zfpga.md
     # sec. 24)
-    ("fpga/examples/blinkh.v", "sw/apps/zfpga/db/examples/blinkh.v"),
-    ("fpga/examples/blinkh.vh", "sw/apps/zfpga/db/examples/blinkh.vh"),
+    (zcard("Z_DIR_ZFPGA_DB", "examples/blinkh.v"), "sw/apps/zfpga/db/examples/blinkh.v"),
+    (zcard("Z_DIR_ZFPGA_DB", "examples/blinkh.vh"), "sw/apps/zfpga/db/examples/blinkh.vh"),
 ]
 
 # Something to compile.
@@ -394,38 +400,39 @@ FPGA_FILES = [
 # they are the three stages: no runtime, the runtime, and output that
 # reaches the terminal rather than the serial console.
 EXAMPLES = [
-    ("bench/panel.net", "sw/apps/bench/examples/panel.net"),
-    ("bench/basicpanel.net", "sw/apps/bench/examples/basicpanel.net"),
-    ("bench/realmodule.net", "sw/apps/bench/examples/realmodule.net"),
-    ("basic/BLINK.BAS", "sw/apps/bench/examples/BLINK.BAS"),
-    ("bench/growlight.net", "sw/apps/bench/examples/growlight.net"),
-    ("bench/modpanel.net", "sw/apps/bench/examples/modpanel.net"),
-    ("basic/GROW.BAS", "sw/apps/bench/examples/GROW.BAS"),
-    ("basic/PANEL.BAS", "sw/apps/bench/examples/PANEL.BAS"),
-    ("user/hello.c", "sw/apps/zcc/examples/hello.c"),
-    ("user/hellolz.c", "sw/apps/zcc/examples/hello_libz.c"),
-    ("user/hellotrm.c", "sw/apps/zcc/examples/hello_term.c"),
+    (zcard("Z_DIR_BENCH_EXAMPLES", "panel.net"), "sw/apps/bench/examples/panel.net"),
+    (zcard("Z_DIR_BENCH_EXAMPLES", "basicpanel.net"), "sw/apps/bench/examples/basicpanel.net"),
+    (zcard("Z_DIR_BENCH_EXAMPLES", "realmodule.net"), "sw/apps/bench/examples/realmodule.net"),
+    (zcard("Z_DIR_BASIC_PROGRAMS", "BLINK.BAS"), "sw/apps/bench/examples/BLINK.BAS"),
+    (zcard("Z_DIR_BENCH_EXAMPLES", "growlight.net"), "sw/apps/bench/examples/growlight.net"),
+    (zcard("Z_DIR_BENCH_EXAMPLES", "modpanel.net"), "sw/apps/bench/examples/modpanel.net"),
+    (zcard("Z_DIR_BASIC_PROGRAMS", "GROW.BAS"), "sw/apps/bench/examples/GROW.BAS"),
+    (zcard("Z_DIR_BASIC_PROGRAMS", "PANEL.BAS"), "sw/apps/bench/examples/PANEL.BAS"),
+    (zcard("Z_DIR_ZCC_EXAMPLES", "hello.c"), "sw/apps/zcc/examples/hello.c"),
+    (zcard("Z_DIR_ZCC_EXAMPLES", "hello_libz.c"), "sw/apps/zcc/examples/hello_libz.c"),
+    (zcard("Z_DIR_ZCC_EXAMPLES", "hello_term.c"), "sw/apps/zcc/examples/hello_term.c"),
 ]
 
-# The configuration file, at the card root where the kernel reads it
-# (sw/os/cfg.c, docs/config.md). Every setting in it is commented out,
+# The configuration file, in /sys where the kernel reads it
+# (sw/os/cfg.c, docs/config.md). /sys/version is written beside it by
+# build(). Every setting in it is commented out,
 # so a fresh card behaves exactly as if the file were absent -- it is
 # there as the documented place to start editing, not to set anything.
 CONFIG_FILES = [
-    ("zeitlos.cfg", "sw/data/zeitlos.cfg"),
+    (zcard("Z_PATH_SYS_CONFIG"), "sw/data/zeitlos.cfg"),
 ]
 
 # The BBS's and fed's data (NETWORK above), where each looks for it
-# (apps.bbs.dir, apps.fed.dir: /bbs and /fed). Unlike zeitlos.cfg, the
+# (apps.bbs.dir, apps.fed.dir: /data/bbs and /data/fed). Unlike zeitlos.cfg, the
 # BBS's settings are live -- a board's values, so that `run bbs` gives a
 # working local BBS at once; fed.cfg names no network until one is
 # joined. Copied with CONFIG_FILES.
 NETWORK_FILES = [
-    ("bbs/bbs.cfg", "sw/apps/bbs/data/bbs-board.cfg"),
-    ("bbs/forums.cfg", "sw/apps/bbs/data/forums.cfg"),
-    ("bbs/bulletins/01-welcome.txt", "sw/apps/bbs/data/bulletins/01-welcome.txt"),
-    ("bbs/text/README.txt", "sw/apps/bbs/data/text/README.txt"),
-    ("fed/fed.cfg", "sw/apps/fed/data/fed.cfg"),
+    (zcard("Z_DIR_BBS", "bbs.cfg"), "sw/apps/bbs/data/bbs-board.cfg"),
+    (zcard("Z_DIR_BBS", "forums.cfg"), "sw/apps/bbs/data/forums.cfg"),
+    (zcard("Z_DIR_BBS", "bulletins/01-welcome.txt"), "sw/apps/bbs/data/bulletins/01-welcome.txt"),
+    (zcard("Z_DIR_BBS", "text/README.txt"), "sw/apps/bbs/data/text/README.txt"),
+    (zcard("Z_DIR_FED", "fed.cfg"), "sw/apps/fed/data/fed.cfg"),
 ]
 
 # The remote desktop's viewer page, where sw/apps/zerdesk reads it on
@@ -434,10 +441,10 @@ NETWORK_FILES = [
 # It is the ESP32's page, the one file both paths serve
 # (esp32/zeitlos-nic embeds it). Edit it on the card to change what the
 # browser gets from this machine; the ESP32's copy is built in.
-# Outside /www on purpose: netserve serves that directory, and there
-# the page would open its WebSocket to netserve.
+# Outside netserve's www on purpose: netserve serves that directory,
+# and there the page would open its WebSocket to netserve.
 DESK_FILES = [
-    ("zerdesk/index.html", "esp32/zeitlos-nic/web/index.html"),
+    (zcard("Z_PATH_ZERDESK_PAGE"), "esp32/zeitlos-nic/web/index.html"),
 ]
 
 # Fonts drawn in software (docs/text_encoding.md, "Japanese"): the 12x12
@@ -446,42 +453,70 @@ DESK_FILES = [
 # required like the config file rather than looked for like the speech
 # pack.
 FONT_FILES = [
-    ("font/jp12.zfn", "sw/data/font/jp12.zfn"),
+    (zcard("Z_PATH_JFONT_FONT"), "sw/data/font/jp12.zfn"),
 ]
 
 # Tracker modules, from sw/data/audio. Whatever is there is shipped --
 # a glob rather than a list, because these are data files somebody
 # drops in, not build products with a Makefile rule each.
 #
-# sw/apps/track scans /audio first and then the root, so a card
-# written before this existed still plays and dropping one in the root
-# still works.
+# To /media/audio, which sw/apps/track, play and midi list first, before
+# /home (docs/layout.md).
 AUDIO_DIR = "sw/data/audio"
 AUDIO_EXT = ".mod"
 
-# The demos (docs/demo.md): sw/apps/automate's scripts and the media
-# they show off, in /demo. Every file is listed, and a missing one
+# The demos (docs/demo.md): sw/apps/automate's scripts, in automate's
+# folder, and the media they show off, in /media with the rest of the
+# card's examples. Every file is listed, and a missing one
 # fails the build: a card whose demo has silently lost its picture, or
 # still carries last week's script, is worse than no card. The .pgm
 # and .svg are made by sw/data/demo/gen_media.py and committed. Only
 # things Zeitlos really does: the photo is a photo, the SVG is drawn
 # by view's own renderer on the board.
 DEMO_FILES = [
-    ("demo/demo.zds",     "sw/data/demo/demo.zds"),
-    ("demo/short.zds",    "sw/data/demo/short.zds"),
-    ("demo/long.zds",     "sw/data/demo/long.zds"),
-    ("demo/store.zds",    "sw/data/demo/store.zds"),
-    ("demo/squirrel.pgm", "sw/data/demo/squirrel.pgm"),
-    ("demo/zeitlos.svg",  "sw/data/demo/zeitlos.svg"),
-    ("demo/lvb11.mid",    "sw/data/audio/lvb11.mid"),
-    ("demo/squirrel.jpg", "sw/data/images/squirrel.jpg"),
+    (zcard_dir("Z_PATH_AUTOMATE_DEFAULT") + "/demo.zds",     "sw/data/demo/demo.zds"),
+    (zcard_dir("Z_PATH_AUTOMATE_DEFAULT") + "/short.zds",    "sw/data/demo/short.zds"),
+    (zcard_dir("Z_PATH_AUTOMATE_DEFAULT") + "/long.zds",     "sw/data/demo/long.zds"),
+    (zcard_dir("Z_PATH_AUTOMATE_DEFAULT") + "/store.zds",    "sw/data/demo/store.zds"),
+    (zcard("Z_DIR_MEDIA_IMAGES", "squirrel.pgm"), "sw/data/demo/squirrel.pgm"),
+    (zcard("Z_DIR_MEDIA_IMAGES", "zeitlos.svg"),  "sw/data/demo/zeitlos.svg"),
+    (zcard("Z_DIR_MEDIA_AUDIO",  "lvb11.mid"),    "sw/data/audio/lvb11.mid"),
+    (zcard("Z_DIR_MEDIA_IMAGES", "squirrel.jpg"), "sw/data/images/squirrel.jpg"),
 ]
+
+# chip8's own ROMs, where its open dialog starts (docs/chip8_app.md).
+# An XO-CHIP demo; at 65,000 bytes it picks its own profile, so the
+# folder needs no chip8.cfg.
+CHIP8_FILES = [
+    (zcard("Z_DIR_CHIP8_ROMS", "redoct.ch8"), "sw/data/chip8/roms/redoct.ch8"),
+]
+
+# Folders a card has even with nothing in them. /home is the person's,
+# and a release leaves it empty (docs/layout.md, rule 4). /data and
+# the rest are made by the files that go in them; /tmp by the kernel,
+# and only on a board without a ramdisk.
+EMPTY_DIRS = [zcard("Z_DIR_HOME")]
 
 TOOLS = ["mkfs.fat", "fsck.fat", "mmd", "mcopy"]
 
 
 class FatError(Exception):
     pass
+
+
+def tree_version(root):
+    """Z_OS_VERSION from sw/common/zversion.h, or "unknown".
+
+    Read here rather than through build.py, which this module does not
+    otherwise need; and not fatal, because the card tests build images
+    from scratch trees that carry no zversion.h.
+    """
+    try:
+        with open(os.path.join(root, "sw", "common", "zversion.h")) as f:
+            m = re.search(r'#define\s+Z_OS_VERSION\s+"([^"]*)"', f.read())
+        return m.group(1) if m else "unknown"
+    except OSError:
+        return "unknown"
 
 
 def preflight():
@@ -518,13 +553,13 @@ def ask_pack_files(root, name):
     """Every file of pack `name`, as (card_path, source_path).
 
     Raises if the pack is not built, rather than shipping a release
-    with an app and no data -- which boots to "no packs in /ask" and
+    with an app and no data -- which boots to "no packs in /data/ask" and
     looks like the app is broken.
     """
     base = os.path.join(root, ASK_OUT, name)
     out = []
-    for sub in ("ark/" + name, "ask/" + name):
-        d = os.path.join(base, sub)
+    for half in PACK_HALVES:
+        d = os.path.join(base, half, name)
         if not os.path.isdir(d):
             raise FatError(
                 "ask pack '%s' was requested but %s does not exist.\n"
@@ -533,8 +568,8 @@ def ask_pack_files(root, name):
         for dp, _dn, fn in os.walk(d):
             for f in sorted(fn):
                 src = os.path.join(dp, f)
-                rel = os.path.relpath(src, base).replace(os.sep, "/")
-                out.append(("/" + rel, src))
+                rel = os.path.relpath(src, d).replace(os.sep, "/")
+                out.append(("/%s/%s/%s" % (half, name, rel), src))
     return sorted(out)
 
 
@@ -688,7 +723,7 @@ def build(root, out_path, ark_dir=None, verbose=True, packs=None):
     `packs` names the ask packs to ship; None means
     ask_packs_requested() (the environment, or ASK_PACKS_DEFAULT). A
     pack ships as a directory and is listed as one entry,
-    "ark/<pack>/", rather than as its tens of thousands of files --
+    "opt/ark/<pack>/", rather than as its tens of thousands of files --
     MANIFEST.json would otherwise carry every Wikipedia article's
     number.
     """
@@ -717,7 +752,7 @@ def build(root, out_path, ark_dir=None, verbose=True, packs=None):
     # them compiles only freestanding programs -- so their absence is
     # an error here rather than a quiet omission.
     missing += [p for _, p in LIBZ_FILES + LIBZ_EXTRA + CONFIG_FILES + NETWORK_FILES + FONT_FILES
-                + DESK_FILES + EXAMPLES + FPGA_FILES + DEMO_FILES
+                + DESK_FILES + EXAMPLES + FPGA_FILES + DEMO_FILES + CHIP8_FILES
                 if not os.path.exists(os.path.join(root, p))]
 
     if missing:
@@ -784,18 +819,19 @@ def build(root, out_path, ark_dir=None, verbose=True, packs=None):
     # after the image had already been formatted.
     card_paths = []
     for name, _rel in apps + LIBZ_FILES + LIBZ_EXTRA + EXAMPLES \
-            + FPGA_FILES + CONFIG_FILES + NETWORK_FILES + FONT_FILES + DESK_FILES:
+            + FPGA_FILES + CONFIG_FILES + NETWORK_FILES + FONT_FILES + DESK_FILES \
+            + CHIP8_FILES:
         card_paths.append("/" + name)
     for a in audio:
-        card_paths.append("/audio/" + a)
+        card_paths.append("/" + zcard("Z_DIR_MEDIA_AUDIO", a))
     for card, _rel in demo:
         card_paths.append("/" + card)
     if speech:
         card_paths.append(SPEECH_DEST)
     for d in docs:
-        card_paths.append("/docs/" + d)
+        card_paths.append("/" + zcard("Z_DIR_DOCS", d))
     for a in ark:
-        card_paths.append("/ark/" + a)
+        card_paths.append("/" + zcard("Z_DIR_ARK", a))
     for _packname, files in pack_files:
         for card, _src in files:
             card_paths.append(card)
@@ -810,7 +846,7 @@ def build(root, out_path, ark_dir=None, verbose=True, packs=None):
     sizes = [os.path.getsize(src) for _n, fs in pack_files for _c, src in fs]
     nfiles_pack = len(sizes)
     for _n, rel in apps + LIBZ_FILES + LIBZ_EXTRA + EXAMPLES + FPGA_FILES \
-            + CONFIG_FILES + NETWORK_FILES + FONT_FILES + DESK_FILES:
+            + CONFIG_FILES + NETWORK_FILES + FONT_FILES + DESK_FILES + CHIP8_FILES:
         sizes.append(os.path.getsize(os.path.join(root, rel)))
     for a in audio:
         sizes.append(os.path.getsize(os.path.join(audio_src, a)))
@@ -841,20 +877,22 @@ def build(root, out_path, ark_dir=None, verbose=True, packs=None):
     _run(["mkfs.fat", "-F", "32", "-S", "512", "-s", str(spc),
           "-n", LABEL, out_path])
 
-    for d in DIRS:
-        _run(["mmd", "-i", out_path, "::/%s" % d])
-
     shipped = []
 
     def copy(src_abs, dest):
+        mkdir_p(dest.rpartition("/")[0])
         _run(["mcopy", "-i", out_path, src_abs, "::" + dest])
         shipped.append((dest.lstrip("/"), os.path.getsize(src_abs)))
 
-    made_dirs = set(DIRS)
+    made_dirs = set()
 
     def mkdir_p(path):
-        """mmd each missing level. DIRS covers the fixed tree; an ask
-        pack is deeper and its shape depends on the recipe."""
+        """mmd each missing level. Every directory on the card is made
+        here, when the first file that needs it is copied -- there is
+        no separate list of directories to keep in step with the
+        files, or with sw/common/zpaths.h."""
+        if not path.strip("/"):
+            return              # the root: always there
         parts = path.strip("/").split("/")
         for i in range(1, len(parts) + 1):
             sub = "/".join(parts[:i])
@@ -866,15 +904,15 @@ def build(root, out_path, ark_dir=None, verbose=True, packs=None):
     for name, rel in apps:
         copy(os.path.join(root, rel), "/" + name)
     for a in audio:
-        copy(os.path.join(audio_src, a), "/audio/" + a)
+        copy(os.path.join(audio_src, a), "/" + zcard("Z_DIR_MEDIA_AUDIO", a))
     for card, rel in demo:
         copy(os.path.join(root, rel), "/" + card)
     if speech:
         copy(speech, SPEECH_DEST)
     for d in docs:
-        copy(os.path.join(root, "docs", d), "/docs/" + d)
+        copy(os.path.join(root, "docs", d), "/" + zcard("Z_DIR_DOCS", d))
     for a in ark:
-        copy(os.path.join(ark_dir, a), "/ark/" + a)
+        copy(os.path.join(ark_dir, a), "/" + zcard("Z_DIR_ARK", a))
 
     # -- ask packs (resolved in preflight above) --
     # Packs go in as whole directory trees, one `mcopy -s` per tree.
@@ -884,12 +922,12 @@ def build(root, out_path, ark_dir=None, verbose=True, packs=None):
     for packname, files in pack_files:
         base = os.path.join(root, ASK_OUT, packname)
         total = sum(os.path.getsize(src) for _c, src in files)
-        for top in ("ark", "ask"):
-            mkdir_p("/" + top)
+        for half in PACK_HALVES:
+            mkdir_p("/" + half)
             _run(["mcopy", "-s", "-i", out_path,
-                  os.path.join(base, top, packname), "::/%s/" % top])
-            made_dirs.add("%s/%s" % (top, packname))
-        shipped.append(("ark/%s/" % packname, total))
+                  os.path.join(base, half, packname), "::/%s/" % half])
+            made_dirs.add("%s/%s" % (half, packname))
+        shipped.append(("%s/" % zcard("Z_DIR_ARK", packname), total))
         if verbose:
             print("  ask pack %-10s %6d files  %7.1f MB"
                   % (packname, len(files), total / 1e6))
@@ -902,8 +940,21 @@ def build(root, out_path, ark_dir=None, verbose=True, packs=None):
         copy(os.path.join(root, rel), "/" + name)
 
     # -- the configuration template, and the data apps look for --
-    for name, rel in CONFIG_FILES + NETWORK_FILES + FONT_FILES + DESK_FILES:
+    for name, rel in CONFIG_FILES + NETWORK_FILES + FONT_FILES + DESK_FILES \
+            + CHIP8_FILES:
         copy(os.path.join(root, rel), "/" + name)
+
+    # /sys/version: which release wrote this card (docs/layout.md). The
+    # tree's Z_OS_VERSION, which `zrelease build` has already checked
+    # against the version it was asked for.
+    vfile = out_path + ".version"
+    with open(vfile, "w") as f:
+        f.write("zeitlos %s\n" % tree_version(root))
+    copy(vfile, P["Z_PATH_SYS_VERSION"])
+    os.unlink(vfile)
+
+    for d in EMPTY_DIRS:
+        mkdir_p("/" + d)
 
     # Headers by directory rather than by name: the set is "whatever
     # sw/common exports", and a list here would go stale silently --

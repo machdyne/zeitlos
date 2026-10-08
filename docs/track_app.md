@@ -17,7 +17,8 @@ by taste.
 
 ## Which modules
 
-`/demo` ([demo.md](demo.md)), then `/audio`, then the root, played in
+`/media/audio`, where the card's example modules ship, then `/home`
+([layout.md](layout.md)), played in
 that order and round again. Launched with a file -- double-clicked in
 `files`, or `run track FILE` from a demo script -- it starts with that
 one, adding it to the list if it lives somewhere else.

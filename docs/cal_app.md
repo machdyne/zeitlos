@@ -124,7 +124,7 @@ under them is not a feature. `user_navigated` is that one bit.
 ## Time zone
 
 "Today" is today in the zone named by `system.rtc.timezone` in
-`/zeitlos.cfg` (`docs/config.md`), **UTC by default** -- the same
+`/sys/zeitlos.cfg` (`docs/config.md`), **UTC by default** -- the same
 conversion the clock uses (`z_tz_*()`, `zrtc.h`). Unconfigured, west of
 Greenwich the highlight moves several hours before local midnight.
 

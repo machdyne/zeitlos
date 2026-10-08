@@ -7,6 +7,7 @@
 #include <string.h>
 #include <stdlib.h>
 
+#include "../../common/zpaths.h"
 #include "../../common/zfsapp.h"
 #include "netcfg.h"
 
@@ -76,9 +77,9 @@ int netcfg_load(netcfg_t *out)
 	memset(out, 0, sizeof(*out));
 	out->dhcp = -1;
 
-	char *buf = fs_mallocfile("net.cfg");
+	char *buf = fs_mallocfile(Z_PATH_NET_CONFIG);
 	if (!buf)
-		buf = fs_mallocfile("net.cfg");
+		buf = fs_mallocfile(Z_PATH_NET_CONFIG);
 	if (!buf)
 		return 0;
 

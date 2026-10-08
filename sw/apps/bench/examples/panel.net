@@ -1,6 +1,6 @@
 # panel.net -- an I/O expander with LEDs, buttons and a lamp on the bench.
 #
-# Open it in bench (bench /bench/panel.net), then from the shell:
+# Open it in bench (bench /data/bench/examples/panel.net), then from the shell:
 #
 #   i2c -b main scan                        the expander answers at 0x20
 #   i2c -b main write 0x20 6 0x00           port 0 all outputs

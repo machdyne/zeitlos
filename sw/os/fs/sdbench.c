@@ -41,6 +41,8 @@
 #include <stdbool.h>
 #include <string.h>
 
+#include "../../common/zpaths.h"
+
 #include "zeitlos.h"
 #include "zsoc.h"
 #include "../kernel.h"
@@ -528,8 +530,8 @@ static void usb_run(const char *path) {
 		sdb_usb_stat_reset();
 		sdb_layer3(path, 1);
 	} else {
-		printf("\npass a /usb filename for layer 3 (FatFs), "
-			"e.g. usbbench /usb/test.bin\n");
+		printf("\npass a " Z_DIR_USB " filename for layer 3 (FatFs), "
+			"e.g. usbbench " Z_DIR_USB "/test.bin\n");
 	}
 }
 

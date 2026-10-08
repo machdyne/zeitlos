@@ -57,6 +57,7 @@
 #include <stdbool.h>
 #include <string.h>
 
+#include "../../common/zpaths.h"
 #include "../../common/zeitlos.h"
 #include "../../common/zsoc.h"
 #include "../../common/zwm.h"
@@ -111,7 +112,7 @@ static z_dialog_ctx_t dlg_ctx;
 static z_img_file_t src __attribute__((section(".bss")));
 
 static char filename[Z_FS_PATH_MAX];
-static char last_dir[80] = "/";
+static char last_dir[80] = Z_DIR_HOME;
 static char title_buf[48];
 
 // What is currently in `doc`. img_w/img_h are 0 when nothing is

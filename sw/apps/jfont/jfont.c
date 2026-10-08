@@ -3,8 +3,8 @@
  *
  *   > run jfont
  *
- * or `system.font.japanese: yes` in /zeitlos.cfg, and wm starts it at
- * boot. Loads /font/jp12.zfn (12x12 Shinonome, public domain; built by
+ * or `system.font.japanese: yes` in /sys/zeitlos.cfg, and wm starts it at
+ * boot. Loads /data/jfont/jp12.zfn (12x12 Shinonome, public domain; built by
  * tools/gen_jfont.py) into its own memory, writes the descriptor in
  * sw/common/zjfont.h in front of it, and waits. Apps draw from it
  * directly: every byte has one physical address any process may read.

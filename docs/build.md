@@ -320,10 +320,17 @@ checked this way: all 55 binaries, including `libz.bin`, identical.
 1. Create `sw/apps/<name>/` with `<name>.c` and a Makefile shaped like
    the one at the top of this page.
 2. Add `<name>` to `APPS` in `sw/apps/Makefile`.
-3. To ship it on the sdcard image, add a `("apps/<name>", "sw/apps/<name>/<name>.bin")`
-   entry to the file list in `release/lib/mkfatimg.py` (see
+3. To ship it on the sdcard image, add a
+   `(zcard("Z_DIR_APPS", "<name>"), "sw/apps/<name>/<name>.bin")` entry
+   to the file list in `release/lib/mkfatimg.py` (see
    [releases.md](releases.md)).
-4. Document it in `docs/<name>_app.md`, list it in `docs/readme.md`, and
+4. Files it writes for itself go in its own folder, `/data/<name>/`:
+   `z_data_file()` (`sw/common/zdata.h`) names one and makes the folder.
+   If it ships data, or another app reads its files, name those places
+   in `sw/common/zpaths.h` and use the names, in the code and in
+   `mkfatimg.py`. `zrelease check` fails on a literal card path anywhere
+   else. Where each kind of file belongs is [layout.md](layout.md).
+5. Document it in `docs/<name>_app.md`, list it in `docs/readme.md`, and
    give it a row, linked to that doc, in the Apps table of `README.md`.
-5. If it is to be a core app in the flash archive, consider `ZFMT = 1`
+6. If it is to be a core app in the flash archive, consider `ZFMT = 1`
    (above).

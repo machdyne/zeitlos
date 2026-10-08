@@ -27,9 +27,9 @@ int fs_load_exec(uint32_t dst, char *path, const z_exec_info_t *info);
 // Filesystem first, flash core-app archive underneath -- see fs.c.
 // Every process-launch path should use these rather than the two
 // above, so that a card-less board behaves identically.
-// Executable resolution. A bare name is searched for in the root,
-// then apps/, then the flash archive; a name containing '/' is taken
-// literally. All three of these share one resolver in fs.c so they
+// Executable resolution. A bare name is searched for in /apps, then
+// the flash archive; a name containing '/' is taken literally
+// (docs/layout.md, "Finding a program"). All three of these share one resolver in fs.c so they
 // cannot disagree -- see its comment for why the search lives here
 // rather than as an "apps/" prefix at every call site.
 int fs_exec_info_any(char *path, z_exec_info_t *info);
@@ -181,5 +181,11 @@ bool fs_usb_mounted(void);
 int fs_mount_count(void);
 const char *fs_mount_name(int i);
 int fs_mount_live(int i);
+
+// The card's top-level folders (docs/layout.md): makes sure /sys,
+// /home and /data exist, and on a board without a ramdisk makes /tmp and empties
+// it -- once per boot. Call whenever the card is known to be up; safe
+// to call again.
+void fs_layout_prepare(void);
 
 #endif

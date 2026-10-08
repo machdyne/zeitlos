@@ -5,7 +5,7 @@
  * Zeitlos
  * Copyright (c) 2026 Lone Dynamics Corporation. All rights reserved.
  *
- * zcfg -- system configuration: /zeitlos.cfg, read into the kernel at
+ * zcfg -- system configuration: /sys/zeitlos.cfg, read into the kernel at
  * boot, readable by any app. See docs/config.md.
  *
  * -- the file --
@@ -50,8 +50,9 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include "zpaths.h"
 
-#define Z_CFG_PATH       "/zeitlos.cfg"
+#define Z_CFG_PATH       Z_PATH_SYS_CONFIG
 
 #define Z_CFG_KEY_MAX    64		// including the NUL
 #define Z_CFG_VAL_MAX    128	// including the NUL
@@ -109,7 +110,7 @@ uint32_t z_cfg_generation(void);
 bool z_cfg_entry(uint32_t index, char *key, size_t keylen,
 	char *val, size_t vallen);
 
-// Re-reads /zeitlos.cfg into the kernel. Returns the number of settings
+// Re-reads /sys/zeitlos.cfg into the kernel. Returns the number of settings
 // loaded, 0 for no file (defaults everywhere), -1 for no kernel
 // support. *ignored (may be NULL) gets the count of malformed lines.
 int z_cfg_reload(uint32_t *ignored);

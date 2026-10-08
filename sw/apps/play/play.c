@@ -3,7 +3,7 @@
  *
  *   > run wm
  *   > run play
- *   > run play /audio/song.wav
+ *   > run play /media/audio/song.wav
  *
  * PHASE 1 of the streaming player. See docs/play_app.md.
  *
@@ -82,6 +82,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "../../common/zpaths.h"
 #include "../../common/zeitlos.h"
 #include "../../common/zsoc.h"
 #include "../../common/zaudio.h"
@@ -1784,7 +1785,7 @@ static void do_open(void) {
     ctx.parent = &win;
     ctx.on_msg = on_dialog_msg;
 
-    if (z_dialog_open(&ctx, "/audio", path, sizeof(path))) {
+    if (z_dialog_open(&ctx, Z_DIR_MEDIA_AUDIO, path, sizeof(path))) {
         int i;
         /* If the chosen file is in the scanned list, adopt its index
          * so n/p continue to work from there. */
@@ -2026,8 +2027,8 @@ int main(void) {
     arg[0] = 0;
     z_launch_path_take(arg, sizeof(arg));
 
-    scan_dir("/audio");
-    if (!nfiles) scan_dir("/");
+    scan_dir(Z_DIR_MEDIA_AUDIO);
+    scan_dir(Z_DIR_HOME);
 
     printf("play: %d playable file%s\n", nfiles, nfiles == 1 ? "" : "s");
 

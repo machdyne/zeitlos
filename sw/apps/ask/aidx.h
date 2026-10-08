@@ -50,7 +50,11 @@
  * misinterpreted index produces confidently ranked results pointing at
  * the wrong paragraphs, which is the worst thing this program can do.
  */
-#define AI_FORMAT_VERSION   1
+/* 2: docs.zdt paths are relative to the pack's own document folder
+ * ("codex/00000042.md") and the device puts Z_DIR_ARK/<pack> in front
+ * at load. Version 1 stored the whole card path, so a pack only worked
+ * at the location it was built for. */
+#define AI_FORMAT_VERSION   2
 
 #define AI_MAGIC_INDEX      0x314B415AUL    /* "ZAK1" */
 #define AI_MAGIC_DOCS       0x3154445AUL    /* "ZDT1" */
@@ -233,8 +237,8 @@ int  ai_selftest(const char *path);
 /* -- a loaded pack -- */
 typedef struct {
     char        name[16];       /* "arklite", from the directory name */
-    char        dir[32];        /* "/ask/arklite" */
-    char        cardroot[32];   /* "/ark/arklite" */
+    char        dir[32];        /* "/data/ask/arklite" */
+    char        cardroot[32];   /* "/opt/ark/arklite": where its documents are */
 
     uint32_t    dsid;
     uint32_t    flags;

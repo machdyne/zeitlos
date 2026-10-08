@@ -13,6 +13,7 @@
  * between five minutes and an afternoon.
  */
 
+#include "../../common/zpaths.h"
 #include "../../common/zargs.h"	/* quoting -- docs/posix.md */
 #include <string.h>
 #include <stdint.h>
@@ -169,7 +170,7 @@ static void usage(const char *argv0) {
         "link step -- see docs/zcc.md.\n"
 #if !ZCC_HOSTED
         "\n"
-        "/libz/include and /libz are searched by default, so\n"
+        Z_DIR_ZCC_INCLUDE " and " Z_DIR_ZCC_LIBZ " are searched by default, so\n"
         "  zcc -o hello hello.c\n"
         "finds the runtime and its headers without being told.\n"
 #endif
@@ -328,7 +329,7 @@ int main(int argc, char **argv) {
     /*
      * -- the card's own layout, as a default --
      *
-     * On the device, `/libz/include` and `/libz` are where the release
+     * On the device, `/data/zcc/libz/include` and `/data/zcc/libz` are where the release
      * puts the runtime and its headers (release/lib/mkfatimg.py), and
      * that layout is fixed. So they are searched without being asked
      * for, and
@@ -346,8 +347,8 @@ int main(int argc, char **argv) {
      * deliberate: a freestanding program still wants <stdint.h>.
      */
 #if !ZCC_HOSTED
-    cpp_add_include_dir("/libz/include");
-    if (nlibdirs < 8) libdirs[nlibdirs++] = "/libz";
+    cpp_add_include_dir(Z_DIR_ZCC_INCLUDE);
+    if (nlibdirs < 8) libdirs[nlibdirs++] = Z_DIR_ZCC_LIBZ;
 #endif
 
     if (!nolibz)

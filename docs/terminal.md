@@ -64,7 +64,7 @@ window appears.
 
 ### Connecting by itself: `apps.term.auto_connect`
 
-Set in `/zeitlos.cfg` (`docs/config.md`), e.g.
+Set in `/sys/zeitlos.cfg` (`docs/config.md`), e.g.
 `apps.term.auto_connect: port repl0`, every new window connects there
 instead of waiting on the panel. It takes the same text as the Open bar.
 

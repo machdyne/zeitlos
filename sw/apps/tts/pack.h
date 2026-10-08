@@ -22,8 +22,9 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "../../common/zpaths.h"
 
-#define PACK_PATH	"/speech/en.spk"
+#define PACK_PATH	Z_PATH_TTS_PACK
 
 // Opens the pack and checks it over. False (quietly) if there is none.
 bool pack_open(const char *path);

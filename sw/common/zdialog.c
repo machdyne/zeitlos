@@ -13,6 +13,7 @@
 #include <string.h>
 
 #include "zeitlos.h"
+#include "zpaths.h"
 #include "zobj.h"
 #include "zwm.h"
 #include "zspeak.h"
@@ -1030,7 +1031,8 @@ static bool file_dialog(const z_dialog_ctx_t *ctx, dlg_kind_t kind,
 	z_flist_init(&dlg.flist, &dlg.win);
 	z_flist_set_geom(&dlg.flist, DLG_MARGIN, dlg.list_y,
 		cw - 2 * DLG_MARGIN, dlg.list_h);
-	z_flist_chdir(&dlg.flist, start_dir);
+	// No directory given: the person's own (docs/layout.md, rule 5).
+	z_flist_chdir(&dlg.flist, start_dir ? start_dir : Z_DIR_HOME);
 
 	dlg_buttons_init(labels, 2);
 

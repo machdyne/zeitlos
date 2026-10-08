@@ -42,7 +42,7 @@ Build the hardware map from RTL with `make hwmap` (see [docs/hwmap.md](docs/hwma
 
  - Pre-emptive multitasking
  - Flat memory model with virtual address space for apps
- - Text [configuration file](docs/config.md) (`/zeitlos.cfg`), loaded at boot and reloadable
+ - Text [configuration file](docs/config.md) (`/sys/zeitlos.cfg`), loaded at boot and reloadable
  - FAT filesystem, on MicroSD and on an optional [RAM disk](docs/ramdisk.md) with long filename support
  - [Core apps in flash](docs/flash_apps.md) -- boots to a desktop with no sdcard
  - Object-based interprocess [messaging](docs/messaging.md), streaming and [ports](docs/ports.md)
@@ -73,7 +73,7 @@ With the MTU, there is no need for position independent code or complicated addr
 | [net](docs/networking.md) | Networking service |
 | [term](docs/terminal.md) | Terminal emulator (VT100, UTF-8, [line drawing](docs/terminal.md#line-drawing); start panel, scrollback; connects to shells and services) |
 | [console](docs/console.md) | Console service |
-| [cron](docs/cron.md) | Runs programs on a schedule from `/user/cron.cfg` (daily, weekly, hourly, every N, at boot) |
+| [cron](docs/cron.md) | Runs programs on a schedule from `/data/cron/cron.cfg` (daily, weekly, hourly, every N, at boot) |
 
 #### Shells
 
@@ -100,7 +100,7 @@ On the sdcard. A `term` window starts one when you press its REPL or POSIX butto
 | [info](docs/info_app.md) | System info |
 | [clock](docs/clock_app.md) | Analog and digital clock |
 | [cal](docs/cal_app.md) | Month calendar |
-| [settings](docs/settings_app.md) | System settings; editor for [`/zeitlos.cfg`](docs/config.md) |
+| [settings](docs/settings_app.md) | System settings; editor for [`/sys/zeitlos.cfg`](docs/config.md) |
 | [keyboard](docs/keyboard_app.md) | On-screen keyboard for any layout: for touchscreens and pointer-only use, and for trying layouts |
 | [automate](docs/automate.md) | Plays scripted, narrated, captioned [demos](docs/demo.md) -- short, long and in-store |
 | [ask](docs/ask_app.md) | Local dataset search |
@@ -335,14 +335,15 @@ from flash or from a card.
 
 The rule is one line:
 
-> if the filesystem has it, use that; otherwise use the flash copy.
+> if `/apps` on the card has it, use that; otherwise use the flash copy.
 
 A file on the card wins, because the only way it got there was somebody
-deliberately putting it there — which is what makes `xf wm` still work
+deliberately putting it there — which is what makes `xf apps/wm` work
 as a single-app hot-swap during development, with no version scheme or
 timestamps involved. `ls` lists the flash copies in a separate section,
-skipping any that a real file is shadowing, so what you see is what
-`run` would actually launch.
+skipping any that `/apps` is shadowing, so what you see is what `run`
+would actually launch. What goes where on the card is
+[docs/layout.md](docs/layout.md).
 
 For iterating on the OS itself, `make dev-flash` rebuilds and reflashes
 the kernel and core apps without touching the gateware:

@@ -24,7 +24,7 @@
  * connection the far end closes. There is no local echo any more:
  * a terminal connected to nothing has nothing to say.
  *
- * Unless /zeitlos.cfg says otherwise: apps.term.auto_connect (e.g.
+ * Unless /sys/zeitlos.cfg says otherwise: apps.term.auto_connect (e.g.
  * "port repl0", "telnet bbs.example.com") makes every new window
  * connect there by itself, waiting a few seconds for the provider to
  * register if boot has not got that far yet. See auto_*() below and
@@ -1666,7 +1666,7 @@ static bool connect_port(const char *name, z_obj_t arg,
 // ---------------------------------------------------------------
 //
 // The same text the Open bar takes -- "port repl0", "serial 9600",
-// "telnet host", "ssh me@host" -- read from /zeitlos.cfg when the
+// "telnet host", "ssh me@host" -- read from /sys/zeitlos.cfg when the
 // window opens. Empty, absent or "none" means the start panel, as
 // before. See docs/config.md.
 //

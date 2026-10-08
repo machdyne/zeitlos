@@ -33,7 +33,7 @@ for anything that genuinely needs to prod it.
 ## Time zone
 
 The RTC counts UTC. The clock shows local time in the zone named by
-`system.rtc.timezone` in `/zeitlos.cfg` (`docs/config.md`), **UTC by
+`system.rtc.timezone` in `/sys/zeitlos.cfg` (`docs/config.md`), **UTC by
 default**, and the digital view always shows the zone's abbreviation
 under the date -- `UTC` with nothing configured, `CET` or `CEST` with
 `Berlin`.

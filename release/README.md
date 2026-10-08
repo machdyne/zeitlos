@@ -31,35 +31,38 @@ live in the flash archive and must NOT be duplicated onto the card: a
 card copy would shadow the per-target `net` build with the wrong PHY
 driver, which is the bug `check_against_script()` was written after.
 
-`hello_win` ships as `hellowin` and `audiotest` as `audiotst`. `run`
-takes the name on the card. Those short forms used to be required:
-FatFs was built with `FF_USE_LFN 0`, and 8.3 was the whole namespace.
-It is `FF_USE_LFN 1` now, names up to 255 UTF-16 units in UTF-8
-(`sw/os/fs/fatfs/ffconf.h`), so both long names would fit. They are
-still shipped short. Restoring them would change what `run` launches.
+Every program is in `/apps` under its natural name, the same as its
+directory in `sw/apps`, and everything else an app ships with is in its
+`/data/<app>/` folder (`docs/layout.md`). The card root holds folders
+only. `hellowin`, `audiotst` and `blkjack` were 8.3 shortenings from when
+FatFs was built with `FF_USE_LFN 0`; they are `hello_win`, `audiotest`
+and `blackjack` from v0.0.6.
 
+Beyond the apps, `/docs`, `/media` and the ARK scroll:
 
-Beyond the apps, docs and the ARK scroll:
-
-- **`apps/posix`, `apps/zcc`, `apps/vi`, `apps/zetta`** -- the
+- **`/apps/posix`, `/apps/zcc`, `/apps/vi`, `/apps/zetta`** -- the
   self-hosting set. With these the machine can edit, compile and run
   without another computer (`docs/posix.md`). `zetta` is started from
   posix (`zetta notes.txt`), as `vi` is (`docs/zetta.md`).
-- **`apps/bbs`, `apps/fed`** -- the BBS and its zfed node, with their
-  data in **`bbs/`** and **`fed/`**, where they look for it. `bbs/` is a
-  working local BBS as shipped: `run bbs`, then call it from `term`
-  (`docs/bbs.md`). `fed/fed.cfg` names no network: fed runs alone until
+- **`/apps/bbs`, `/apps/fed`** -- the BBS and its zfed node, with their
+  data in **`/data/bbs`** and **`/data/fed`**, where they look for it.
+  `/data/bbs` is a working local BBS as shipped: `run bbs`, then call it
+  from `term` (`docs/bbs.md`). `/data/fed/fed.cfg` names no network: fed
+  runs alone until
   it is given one -- `run fed key` for this node's public key
   (`docs/fed.md`, "Managing a network").
-- **`zerdesk/index.html`** -- the remote desktop's viewer page, which
-  `apps/zerdesk` reads from there on every request and does not carry
+- **`/data/zerdesk/index.html`** -- the remote desktop's viewer page, which
+  `zerdesk` reads from there on every request and does not carry
   itself. It is `esp32/zeitlos-nic/web/index.html`, the page the ESP32
   builds in; the copy on the card can be edited in place
   (`docs/remote_desktop.md`, "Served by Zeitlos").
-- **`apps/cryptobench`** -- times the cryptography with and without the
+- **`/apps/cryptobench`** -- times the cryptography with and without the
   hardware blocks, and checks their answers (`docs/crypto_hw_options.md`).
-- **`libz/`** -- the zcc runtime: `libz.bin`, `libz.sym`, and the
-  headers a program compiled on the device includes.
+- **`/data/zcc/libz`** -- the zcc runtime: `libz.bin`, `libz.sym`, and
+  the headers a program compiled on the device includes.
+- **`/sys/zeitlos.cfg`** and **`/sys/version`** -- the configuration
+  template (every line commented out) and which release wrote the card.
+- **`/home`**, empty: the person's.
 
 `libz.bin` is not the copy linked inside `zcc.bin`. That one is the
 compiler's own runtime; this one is what it EMBEDS into the programs it

@@ -46,8 +46,8 @@ three implicit declarations nobody read.
 /wm  /term  /repl          as now
 /posix                     sw/apps/posix/posix.bin
 /zcc                       sw/apps/zcc/zcc.bin
-/libz/libz.bin            sw/apps/zcc/libz/libz.bin
-/libz/libz.sym            sw/apps/zcc/libz/libz.sym
+/data/zcc/libz/libz.bin            sw/apps/zcc/libz/libz.bin
+/data/zcc/libz/libz.sym            sw/apps/zcc/libz/libz.sym
 /include/                  sw/apps/zcc/include/*.h
 /common/                   sw/common/*.h and syscalls.def
 ```
@@ -116,10 +116,10 @@ crt0, `sw/common/riscv-app.ld`, the same startup path as `repl` and
 problem is no longer anything peculiar to how zcc starts.
 
 **b. A compile, still from the kernel shell.** `run` there passes no
-arguments, so use the `/zcc.args` stopgap (`docs/zcc.md`):
+arguments, so use the `/tmp/zcc.args` stopgap (`docs/zcc.md`):
 
 ```
-> echo -o /hello /hello.c > /zcc.args      (or write it from a host)
+> echo -o /hello /hello.c > /tmp/zcc.args      (or write it from a host)
 > run zcc
 > run hello
 ```
@@ -150,7 +150,7 @@ $ zcc -nolibz /hello.c -o /hello
 $ run hello
 ```
 
-`zcc` at this prompt sets the launch argument, so `/zcc.args` is no
+`zcc` at this prompt sets the launch argument, so `/tmp/zcc.args` is no
 longer involved.
 
 **zcc's output will appear on the kernel console, not in the `term`
@@ -178,7 +178,7 @@ Ordered by how likely, not by how bad.
 2. **`z_launch_arg_set` timing.** `z_launch_arg_take()` must be called
    early and blocks on `wm`'s reply. If `zcc` starts before `wm` is
    ready, or if the launch argument is claimed by something else
-   first, `zcc` will fall back to `/zcc.args` and appear to ignore its
+   first, `zcc` will fall back to `/tmp/zcc.args` and appear to ignore its
    command line. Symptom: `zcc foo.c` compiling whatever the file
    says instead.
 3. **SD throughput.** Unknown, and Phase 0's `sdbench` still has not

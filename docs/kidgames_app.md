@@ -280,7 +280,7 @@ every app in the tree, which is a separate question.
 
 ## Persistence
 
-`/user/kidgames.sav`, one line per game:
+`/data/kidgames/kidgames.sav`, one line per game:
 
     spelling 120 3
     counting 40 2
@@ -343,7 +343,7 @@ forty is a test people learn to re-run.
     kgpad.h/.c    the on-screen keyboard
     kgfont.h/.c   5x7 big block letters
     kgfmt.c       number formatting, with no formatter
-    kgsave.h/.c   /user/kidgames.sav
+    kgsave.h/.c   /data/kidgames/kidgames.sav
     kgrand.h/.c   the one random call
     wordlist.h/.c shared level-tiered word lists
     levelup.h/.c  the shared "LEVEL UP!" screen

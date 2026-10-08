@@ -2,23 +2,25 @@
 
 Two scripted demos of Zeitlos, played by [`automate`](automate.md),
 narrated by the system's own voice ([tts.md](tts.md)) with
-[captions](captions.md). Everything is on the card in `/demo`:
+[captions](captions.md). The scripts are `automate`'s, in its folder,
+and the media they show are the card's examples, in `/media`
+([layout.md](layout.md)):
 
 | File | |
 |---|---|
-| `short.zds` | about 55 seconds, for social media: captions at 3x, one line each |
-| `long.zds` | about four minutes, for YouTube: captions at 2x |
-| `store.zds` | `long.zds` forever, in [attract mode](automate.md#attract-mode) |
-| `demo.zds` | what `run automate` plays: `long.zds` |
-| `zeitlos.svg` | a vector clock face — made by `gen_media.py` |
-| `squirrel.pgm` | a photograph, grey, 1.6x — made by `gen_media.py` from `sw/data/images/squirrel.jpg` |
-| `squirrel.jpg` | the original, for testing `view`'s JPEG path on its own |
-| `lvb11.mid` | a MIDI file (from `sw/data/audio`) |
+| `/data/automate/short.zds` | about 55 seconds, for social media: captions at 3x, one line each |
+| `/data/automate/long.zds` | about four minutes, for YouTube: captions at 2x |
+| `/data/automate/store.zds` | `long.zds` forever, in [attract mode](automate.md#attract-mode) |
+| `/data/automate/demo.zds` | what `run automate` plays: `long.zds` |
+| `/media/images/zeitlos.svg` | a vector clock face — made by `gen_media.py` |
+| `/media/images/squirrel.pgm` | a photograph, grey, 1.6x — made by `gen_media.py` from `sw/data/images/squirrel.jpg` |
+| `/media/images/squirrel.jpg` | the original, for testing `view`'s JPEG path on its own |
+| `/media/audio/lvb11.mid` | a MIDI file (from `sw/data/audio`) |
 
 `release/lib/mkfatimg.py` ships everything in `sw/data/demo` except the
 generator, plus the two files that live elsewhere in the tree. The
-tracker modules stay in `/audio`; `track` and `midi` now also list
-`/demo`, and `track` accepts a file to start with, as `midi` and `view`
+tracker modules are in `/media/audio` too, which `track`, `midi` and
+`play` list; `track` accepts a file to start with, as `midi` and `view`
 already did.
 
 ## What they show
@@ -43,9 +45,9 @@ Für Elise is Beethoven, 1810, and public domain; it is played on
 ## Running them
 
 Rebuild the card (`release/zrelease sdcard`); `DEMO_FILES` in
-`release/lib/mkfatimg.py` lists what goes in `/demo`.
+`release/lib/mkfatimg.py` lists what goes where.
 
-**The recorded voice needs the speech pack**, `/speech/en.spk`. It is
+**The recorded voice needs the speech pack**, `/data/tts/speech/en.spk`. It is
 built, not committed:
 
     ./tools/speech/speech fetch dist/en.spec
@@ -57,19 +59,19 @@ and `zrelease sdcard` copies it to the card (or set `SPEECH_PACK`).
 Without it the card builds with a warning, and `tts` speaks in the
 synthesised voice throughout -- `voice recorded` changes nothing, and
 `automate` says so on the console. With it, `tts` logs
-`tts: lexicon from /speech/en.spk` when it starts; that line is the
+`tts: lexicon from /data/tts/speech/en.spk` when it starts; that line is the
 check.
 
 **Is the card current?** `automate` logs its build
 (`automate: build ...`) and each script its revision
 (`automate: -- short.zds, revision 4`), and the line count
-(`automate: /demo/short.zds, 108 lines`). When unzipping an update over
+(`automate: /data/automate/short.zds, 108 lines`). When unzipping an update over
 the tree, let it overwrite (`unzip -o`), or the old scripts stay.
 Then, from the serial console:
 
-    > run automate /demo/short.zds
-    > run automate /demo/long.zds
-    > run automate /demo/store.zds
+    > run automate /data/automate/short.zds
+    > run automate /data/automate/long.zds
+    > run automate /data/automate/store.zds
 
 Running it again stops the one that is running and starts over.
 
@@ -88,7 +90,7 @@ own vector renderer on the board.
 
 ## If the recorded voice does not come
 
-`tts` logs `tts: recorded voice from /speech/en.spk` when it has one.
+`tts` logs `tts: recorded voice from /data/tts/speech/en.spk` when it has one.
 On hardware, a `tts` started by `automate` loaded the pack's lexicon
 but not its recorded voice, while the same card gave the recorded
 voice to a `tts` started by hand afterwards -- cause not yet known.
@@ -98,7 +100,7 @@ is running. The whole setup, from the serial console:
 
     > run tts
     > run jfont
-    > run automate /demo/short.zds
+    > run automate /data/automate/short.zds
 
 ## Claims
 
@@ -183,7 +185,7 @@ numbers most likely to need adjusting on real hardware:
 - **The squirrel.** The first runs used `squirrel.jpg`, and `view`
   never finished it under the demo. The demo now uses a PGM made from
   it, which needs no decoder. Whether `view` finishes the JPEG on its
-  own — `run view /demo/squirrel.jpg` from the console, nothing else
+  own — `run view /media/images/squirrel.jpg` from the console, nothing else
   running — is the next thing to find out.
 - **Pauses after `run`.** An app that loads from the card and draws
   a lot before its first frame may need a `pause` after `run`.
@@ -211,8 +213,8 @@ window, a character not on the layout, a speech mark that timed out.
 `store.zds`: the long demo on a loop. Touch the keyboard or mouse and
 it stops mid-sentence and leaves the machine to you; leave it alone for
 a minute and it tidies up and starts again. To start it at boot, add
-a line to `/user/cron.cfg` ([cron.md](cron.md)):
+a line to `/data/cron/cron.cfg` ([cron.md](cron.md)):
 
-    at boot automate /demo/store.zds
+    at boot automate /data/automate/store.zds
 
 cron hands the path over as the launch argument.

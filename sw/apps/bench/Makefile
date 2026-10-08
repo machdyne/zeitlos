@@ -1,5 +1,5 @@
 # sw/apps/bench -- the bench: virtual parts, nets and I2C buses, from
-# netlists in /bench (docs/bench.md). Build rules are shared:
+# netlists, its examples in /data/bench/examples (docs/bench.md). Build rules are shared:
 # sw/common/app.mk, docs/build.md.
 #
 #   make            build bench.elf and bench.bin

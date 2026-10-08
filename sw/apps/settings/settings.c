@@ -1,5 +1,5 @@
 /*
- * settings -- system preferences, and the editor for /zeitlos.cfg
+ * settings -- system preferences, and the editor for /sys/zeitlos.cfg
  *
  *   > run wm
  *   > run settings
@@ -29,7 +29,7 @@
  *
  * -- it edits the FILE, one line at a time --
  *
- * Every change reads /zeitlos.cfg, replaces the one line for the key
+ * Every change reads /sys/zeitlos.cfg, replaces the one line for the key
  * being changed with z_cfg_text_set() (sw/common/zcfg.h), writes it
  * back and asks the kernel to reload. Every other line -- comments,
  * blank lines, keys this app has never heard of, even lines that are
@@ -159,7 +159,7 @@ static int y_sec, y_sec_rows;
 
 // -- security: the password and the screen lock (docs/security.md) --
 //
-// Not in /zeitlos.cfg: the kernel keeps them in the flash key/value
+// Not in /sys/zeitlos.cfg: the kernel keeps them in the flash key/value
 // store, so they hold with no card, and it changes them only when
 // given the current password (Z_SYS_AUTH, zauth.h).
 static z_auth_status_t auth;
@@ -537,7 +537,7 @@ static bool save(const char *key, const char *val) {
 	if (insize < 0) {
 		set_status(fs_size(Z_CFG_PATH) > Z_CFG_FILE_MAX
 			? "zeitlos.cfg is too large to edit here"
-			: "could not read /zeitlos.cfg");
+			: "could not read " Z_CFG_PATH);
 		goto done;
 	}
 
@@ -553,11 +553,11 @@ static bool save(const char *key, const char *val) {
 	// not be told apart from a failed write. A file that has lost its
 	// last setting keeps a line saying what it is instead.
 	if (n == 0) {
-		n = snprintf(out, Z_CFG_FILE_MAX, "# /zeitlos.cfg -- see docs/config.md\n");
+		n = snprintf(out, Z_CFG_FILE_MAX, "# " Z_CFG_PATH " -- see docs/config.md\n");
 	}
 
 	if (fs_write_file(Z_CFG_PATH, out, n) != n) {
-		set_status("could not write /zeitlos.cfg -- no sdcard?");
+		set_status("could not write " Z_CFG_PATH " -- no sdcard?");
 		goto done;
 	}
 
@@ -660,7 +660,7 @@ static void toggle_japanese(void) {
 
 	if (on) {
 		if (!z_proc_run("jfont"))
-			set_status("saved; could not start jfont -- is /apps/jfont on the card?");
+			set_status("saved; could not start jfont -- is " Z_DIR_APPS "/jfont on the card?");
 	} else {
 		uint32_t pid;
 		if (z_pid_lookup(Z_JFONT_NAME, &pid)) z_proc_kill(pid);
@@ -747,7 +747,7 @@ static void reload(void) {
 	if (n < 0)
 		snprintf(s, sizeof(s), "this kernel has no config support");
 	else if (n == 0)
-		snprintf(s, sizeof(s), "no settings in /zeitlos.cfg -- defaults");
+		snprintf(s, sizeof(s), "no settings in " Z_CFG_PATH " -- defaults");
 	else
 		snprintf(s, sizeof(s), "reloaded: %d setting%s%s", n, n == 1 ? "" : "s",
 			ignored ? ", some lines ignored" : "");

@@ -222,7 +222,7 @@ static inline void z_rtc_invalidate(void) {
 // The RTC counts UTC, and so does everything that stores or compares a
 // time. Local time is a DISPLAY concern: sw/apps/clock and sw/apps/cal
 // convert with z_tz_*() below, using system.rtc.timezone from
-// /zeitlos.cfg (docs/config.md), and label what they show.
+// /sys/zeitlos.cfg (docs/config.md), and label what they show.
 //
 // There is still no zone database. The earlier position here was that a
 // plausible time silently an hour out for half the year is worse than
@@ -279,7 +279,7 @@ const char *z_month_name(uint8_t month);
 //                                          UTC+2 is two hours AHEAD
 //
 // City names match case-insensitively. This is system.rtc.timezone in
-// /zeitlos.cfg (docs/config.md), and sw/apps/settings offers the table
+// /sys/zeitlos.cfg (docs/config.md), and sw/apps/settings offers the table
 // as a list.
 //
 // -- why a table rather than a zone database --

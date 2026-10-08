@@ -138,7 +138,7 @@ a character with.
 Japanese is drawn from a **12x12 font held once for every app** by a
 small service, `sw/apps/jfont`. Turn it on in `settings` (**Japanese
 font**, which starts it at once and keeps it on at boot), or set
-`system.font.japanese: yes` in `/zeitlos.cfg`, or `run jfont`. Then use
+`system.font.japanese: yes` in `/sys/zeitlos.cfg`, or `run jfont`. Then use
 the 6x12 font -- the titlebar's **Aa** icon in `text` and in `term`.
 
 **The font** is Shinonome `shnmk12`: 6,879 JIS X 0208 glyphs --
@@ -151,7 +151,7 @@ character sits in the two columns a terminal, `wcwidth()` and
 mapping each JIS code to Unicode through EUC-JP, into
 `sw/data/font/jp12.zfn` (178,868 bytes, format in the script's header):
 a sorted codepoint table and 24 bytes a glyph. The release puts it at
-`/font/jp12.zfn`.
+`/data/jfont/jp12.zfn`.
 
 **Why a service.** The font is 175KB: more than any app's 16KB heap,
 and too much to load into every process that might draw a kanji. Every

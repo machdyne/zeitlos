@@ -25,7 +25,7 @@
  * changed pins; messages are read on every 256th such piece, every 32nd
  * break check, and every turn of a sleep that really waits.
  *
- * Files are the module's own storage: /bench/NAME/.
+ * Files are the module's own storage: /data/ls99/NAME/.
  */
 
 #include <stdio.h>
@@ -34,6 +34,7 @@
 #include <string.h>
 #include <stdlib.h>
 
+#include "../../common/zpaths.h"
 #include "../../common/zeitlos.h"
 #include "../../common/zsoc.h"
 #include "../../common/zport.h"
@@ -242,7 +243,7 @@ static const ls99_board_t board = {
     b_drive, b_level, b_i2c, b_sleep, b_service, b_console, b_set_addr, b_pause,
 };
 
-/* ---- files: /bench/NAME/, the module's own storage ---- */
+/* ---- files: /data/ls99/NAME/, the module's own storage ---- */
 
 static int file = -1;
 static uint8_t file_mode;
@@ -312,7 +313,7 @@ int hw_fdir(fs_dir_cb cb) {
 }
 
 int hw_fformat(void) {
-    return HW_ERR_UNSUPPORTED;          /* a virtual module's files are /bench/NAME */
+    return HW_ERR_UNSUPPORTED;          /* a virtual module's files are /data/ls99/NAME */
 }
 
 /* ---- the module ---- */
@@ -346,8 +347,8 @@ int main(void) {
     char tag[32];
     uint32_t pid = 0;
     if (!z_launch_arg_take(name, sizeof(name)) || !name[0]) return 1;
-    snprintf(dir, sizeof(dir), "/bench/%s", name);
-    fs_mkdir("/bench");
+    snprintf(dir, sizeof(dir), Z_DIR_LS99_MODULES "/%s", name);
+    fs_mkdir(Z_DIR_LS99_MODULES);
     fs_mkdir(dir);
     snprintf(tag, sizeof(tag), "%s%s", ZB_MODULE_TAG, name);
     if (!z_pid_lookup(ZB_PROVIDER, &pid) || !pid ||

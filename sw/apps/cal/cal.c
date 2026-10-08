@@ -62,7 +62,7 @@
  -- time zone --
  *
  * "Today" is today in the zone system.rtc.timezone names in
- * /zeitlos.cfg (docs/config.md), UTC by default -- the same conversion
+ * /sys/zeitlos.cfg (docs/config.md), UTC by default -- the same conversion
  * the clock app uses (z_tz_*(), zrtc.h). The status line ends with the
  * zone's abbreviation, so with nothing configured it still says UTC and
  * a highlight that moves hours before local midnight reads as

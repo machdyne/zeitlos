@@ -30,6 +30,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "../../common/zpaths.h"
 #include "../../common/zeitlos.h"
 #include "../../common/zobj.h"
 #include "../../common/zport.h"
@@ -270,7 +271,7 @@ int main(void) {
 	}
 	if (!z_rng_secure())
 		printf("bbs: warning -- no seeded random source; password salts are weak (docs/trng.md)\n");
-	if (!z_cfg_get("apps.bbs.dir", dir, sizeof(dir)) || !dir[0]) strcpy(dir, "/bbs");
+	if (!z_cfg_get("apps.bbs.dir", dir, sizeof(dir)) || !dir[0]) strcpy(dir, Z_DIR_BBS);
 	if (!bbs_init(dir)) {
 		printf("bbs: cannot use %s -- see docs/bbs.md\n", dir);
 		return 1;

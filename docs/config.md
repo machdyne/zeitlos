@@ -1,6 +1,7 @@
-# Configuration: `/zeitlos.cfg`
+# Configuration: `/sys/zeitlos.cfg`
 
-A plain text file of `key: value` settings at the root of the sdcard.
+A plain text file of `key: value` settings in `/sys` on the sdcard, the
+system's own folder ([layout.md](layout.md)).
 The kernel reads it at boot, **before any app starts**, and keeps the
 settings in memory; apps ask the kernel. No card or no file means every
 setting has its default.
@@ -11,7 +12,7 @@ that a board with no card starts at once -- and the first access to a
 freshly powered card can fail (issue #7). Boot then says `cfg: no sdcard
 yet -- init will try again`, and the init script, after loading the
 shells from the card (which is what brings a late card up), tries once
-more: `cfg: the sdcard came up during init -- reading /zeitlos.cfg`,
+more: `cfg: the sdcard came up during init -- reading /sys/zeitlos.cfg`,
 exactly as `cfg reload` would, and before anything that reads a setting
 (the speech service, `system.tts.enabled`). If the card is still not up,
 boot gives up for this boot and says so; `cfg reload` reads it by hand.
@@ -19,7 +20,7 @@ Apps already running see the new generation; the video mode is applied
 at once. `sw/os/cfg.c`, `k_cfg_retry()`, called from `init()` only.
 
 ```
-# /zeitlos.cfg
+# /sys/zeitlos.cfg
 apps.term.auto_connect: port repl0
 system.rtc.timezone: Berlin
 system.video.mode: amber
@@ -35,15 +36,15 @@ travel with the card. `settings` edits them; see
 
 | key | default | read by | effect |
 | --- | --- | --- | --- |
-| `apps.bbs.dir` | `/bbs` | `bbs` | the BBS's data directory: its own `bbs.cfg`, the users, the bulletins ([bbs.md](bbs.md#the-data-directory)) |
+| `apps.bbs.dir` | `/data/bbs` | `bbs` | the BBS's data directory: its own `bbs.cfg`, the users, the bulletins ([bbs.md](bbs.md#the-data-directory)) |
 | `apps.irc.channels` | *(none)* | `irc` | channels to join once connected, `#zeitlos #fpga` ([irc_app.md](irc_app.md)) |
 | `apps.irc.nick` | `zeitlos` | `irc` | your nickname; an `_` is added while it is taken |
 | `apps.irc.server` | `irc.libera.chat 6667` | `irc` | server and port to connect to at start; empty: wait for `/connect` |
 | `apps.netserve.allow` | `subnet` | `netserve` | accept connections from this subnet only, or `any` ([netserve.md](netserve.md)) |
 | `apps.netserve.echo` | `off` | `netserve`, `init` | an echo service on this port, for testing |
-| `apps.netserve.http` | `off` | `netserve`, `init` | HTTP: a port and a directory to serve, `80 /www` |
+| `apps.netserve.http` | `off` | `netserve`, `init` | HTTP: a port and a directory to serve, `80 /data/netserve/www` |
 | `apps.netserve.ssh` | `off` | `netserve`, `init` | SSH: listeners, `;`-separated -- a port, a port name and flags (`noauth`, `any`, `subnet`): `22 posix0; 2222 bbs0 noauth any` ([netserve.md](netserve.md#listeners)); a seeded TRNG, and a 10+ character password for any listener that is not `noauth` |
-| `apps.netserve.ssh_auth` | `both` | `netserve` | SSH logins by `key` (`/user/authkeys`), `password`, or `both`; not for `noauth` listeners |
+| `apps.netserve.ssh_auth` | `both` | `netserve` | SSH logins by `key` (`/data/netserve/authkeys`), `password`, or `both`; not for `noauth` listeners |
 | `apps.netserve.ssh_sessions` | `2` | `netserve` | SSH sessions at a time, 1-4, about 10KB of memory each |
 | `apps.netserve.telnet` | `off` | `netserve`, `init` | telnet: listeners, as for SSH: `23 repl0; 2323 bbs0 noauth`; a 10+ character password for any listener that is not `noauth` |
 | `apps.term.auto_connect` | *(none)* | `term` | what a new term window connects to by itself |
@@ -236,7 +237,7 @@ file were absent.
 
 ## Editing it
 
-Any editor: `vi /zeitlos.cfg` from posix, `text`, `te` in repl, or pull
+Any editor: `vi /sys/zeitlos.cfg` from posix, `text`, `te` in repl, or pull
 it off the card. **Then reload**, because the kernel keeps what it read
 at boot:
 
@@ -285,15 +286,15 @@ See `docs/settings_app.md`.
 
 ```
 > cfg
-/zeitlos.cfg: 2 setting(s), generation 1
+/sys/zeitlos.cfg: 2 setting(s), generation 1
   apps.term.auto_connect     port repl0
   system.rtc.timezone        UTC  (default)
   system.video.mode          amber
   my.own.key                 42  (not read by anything built in)
 > cfg get system.rtc.timezone
-UTC (default -- not set in /zeitlos.cfg)
+UTC (default -- not set in /sys/zeitlos.cfg)
 > cfg reload
-cfg: /zeitlos.cfg: 2 setting(s)
+cfg: /sys/zeitlos.cfg: 2 setting(s)
 ```
 
 ## For app authors
@@ -376,7 +377,7 @@ cc -std=gnu99 -Wall -DZCFG_KERNEL -I sw/common -o /tmp/test_zcfg \
   dates rather than against the code's own idea of them.
 
 `sw/apps/settings/tests/render.c` runs the **real settings app** against
-an in-memory `/zeitlos.cfg`. It checks the following:
+an in-memory `/sys/zeitlos.cfg`. It checks the following:
 
 - editing through the UI leaves comments, unknown keys and invalid
   lines untouched;

@@ -20,7 +20,7 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [ulx3s](ulx3s.md) | Radiona ULX3S notes |
 | [releases](releases.md) | Prebuilt images and `release/zrelease` |
 | [dfu\_upgrade](dfu_upgrade.md) | Upgrading the DFU bootloader |
-| [config](config.md) | `/zeitlos.cfg` |
+| [config](config.md) | `/sys/zeitlos.cfg` |
 
 ## SOC: CPU, memory and bus
 
@@ -86,6 +86,7 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [messaging](messaging.md) | Objects and mailboxes |
 | [ports](ports.md) | Connections built on messaging |
 | [connections](connections.md) | Connecting apps to services |
+| [layout](layout.md) | What goes where on the card: `/apps`, `/data`, `/home` ... |
 | [filesystem](filesystem.md) | FatFs, the syscall API and concurrency |
 | [ramdisk](ramdisk.md) | The RAM disk (`/ram`) |
 | [kvstore](kvstore.md) | Flash key/value store |

@@ -33,6 +33,7 @@
 #include <string.h>
 #include <stdio.h>
 
+#include "../../common/zpaths.h"
 #include "zeitlos.h"
 #include "zfsapp.h"
 #include "posix.h"
@@ -45,7 +46,7 @@
  * shared cwd annoying, the fix is to move this into px_conn_t, which
  * is a contained change because everything below takes the state as an
  * argument already. */
-static char cwd[PX_PATH_MAX] = "/";
+static char cwd[PX_PATH_MAX] = Z_DIR_HOME;
 
 const char *px_getcwd(void) { return cwd; }
 

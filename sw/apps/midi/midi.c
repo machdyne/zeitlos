@@ -49,6 +49,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "../../common/zpaths.h"
 #include "../../common/zeitlos.h"
 #include "../../common/zsoc.h"
 #include "../../common/zaudio.h"
@@ -1323,7 +1324,7 @@ static void do_open(void) {
     ctx.parent = &win;
     ctx.on_msg = on_dialog_msg;
 
-    if (z_dialog_open(&ctx, "/audio", path, sizeof(path))) {
+    if (z_dialog_open(&ctx, Z_DIR_MEDIA_AUDIO, path, sizeof(path))) {
         int i;
         cur_file = -1;
         for (i = 0; i < nfiles; i++)
@@ -1607,7 +1608,8 @@ int main(void) {
     z_launch_arg_take(arg, sizeof(arg));
 
     /*
-     * /audio, the same directory sw/apps/track and sw/apps/play use.
+     * /media/audio and then /home, as sw/apps/track and sw/apps/play
+     * do (docs/layout.md).
      *
      * One place for everything that makes a sound, rather than a
      * directory per app -- a card with AUDIO, MIDI and MOD folders
@@ -1620,9 +1622,8 @@ int main(void) {
      * Lowercase, as every name on the card is now (long filenames);
      * FatFs matches names case-insensitively either way.
      */
-    scan_dir("/audio");
-    if (!nfiles) scan_dir("/");
-    scan_dir("/demo");      /* media for the demos (docs/demo.md) */
+    scan_dir(Z_DIR_MEDIA_AUDIO);
+    scan_dir(Z_DIR_HOME);
     printf("midi: %d file%s\n", nfiles, nfiles == 1 ? "" : "s");
 
     init_widgets();

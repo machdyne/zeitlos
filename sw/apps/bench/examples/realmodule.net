@@ -2,7 +2,7 @@
 # port 0, its pins A and B are PMOD pins 1 and 2, C and D are 3 and 4.
 #
 #   sechs -b main info 0x0c                  the real module, through bench
-#   sechs -b main send 0x0c /basic/BLINK.BAS a program for it, then:
+#   sechs -b main send 0x0c /data/basic/BLINK.BAS a program for it, then:
 #   sechs -b main run 0x0c
 #
 # The lamp shows the module's pin C as it really is; the switch pulls

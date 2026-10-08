@@ -1,7 +1,7 @@
 /*
  * bench parts -- Zwölf modules, run by ls99 (sw/apps/ls99, docs/ls99.md):
  *
- *   module m1 LS10 program=/basic/GROW.BAS [addr=0x0c]
+ *   module m1 LS10 program=/data/basic/GROW.BAS [addr=0x0c]
  *
  * Pins A-D (LS10) or A-G (LS11, LS99), then LED, high while it is lit.
  * The module's own process drives them; the part only holds them. Its

@@ -1,7 +1,7 @@
 /*
  * hello_libz.c -- the second test: the same idea, using the runtime.
  *
- *     zcc -I /libz -I /common -I /include -L /libz -o /hellz /hello_libz.c
+ *     zcc -I /data/zcc/libz -I /common -I /include -L /data/zcc/libz -o /hellz /hello_libz.c
  *     run hellz
  *
  * This one needs more on the card: libz.bin and libz.sym for -L, and

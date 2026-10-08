@@ -30,7 +30,7 @@ them.
 
 ## Using it
 
-Put the layouts to use in `/zeitlos.cfg`, the one to start in first:
+Put the layouts to use in `/sys/zeitlos.cfg`, the one to start in first:
 
 ```
 system.keyboard.layouts: us,de

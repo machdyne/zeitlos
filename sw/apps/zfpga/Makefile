@@ -41,10 +41,10 @@ $(addprefix $(B)/,$(addsuffix .o,$(OWN))): $(B)/%.o: %.c zfpga.h zfpga_port.h sy
 $(B):
 	mkdir -p $(B)
 
-# The database the card carries as /fpga/lfe5u25f.zdb. It serves the
+# The database the card carries as /data/zfpga/lfe5u25f.zdb. It serves the
 # 12F too (identical die). Rebuilt when the generator changes; the
 # vendored data changes only with a deliberate refresh.
-# db/ is the card's /fpga exactly: the database, the board profiles with
+# db/ is the card's /data/zfpga exactly: the database, the board profiles with
 # their pins, and the examples (docs/zfpga-formats.md sec. 7).
 CARD_EXAMPLES = examples/blink.v examples/blinkf.v examples/empty.zn examples/on.zn \
 	examples/blink.zn examples/hand.zl examples/blinkh.v examples/blinkh.vh

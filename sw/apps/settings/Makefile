@@ -3,7 +3,7 @@
 APP = settings
 
 # A window, a radio group and three buttons -- plus what editing
-# /zeitlos.cfg takes: the whole-file API (zfsapp), the text-prompt
+# /sys/zeitlos.cfg takes: the whole-file API (zfsapp), the text-prompt
 # dialog and what it links (zdialog, zflist, zedit, ztype), the config
 # parser/editor (zcfg) and time-zone parsing, to check a zone before
 # saving it (zrtc). See docs/config.md.

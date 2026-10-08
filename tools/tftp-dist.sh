@@ -11,8 +11,10 @@
 #
 #     sw/apps/text/text.bin   ->   /srv/tftp/text
 #
-# which is what `tget` asks for and what `run <file>` expects to find
-# on the SD card afterwards.
+# which is what `tget` asks for. Save it on the card as /apps/<name>,
+# where `run <name>` looks for it (docs/layout.md):
+#
+#     > tget 192.168.1.100 text /apps/text
 #
 # USAGE
 #
@@ -51,8 +53,8 @@
 #   - The core apps (wm, net, term) are copied too, even though
 #     they are already in flash (sw/os/zar.h). Pulling a newer one
 #     over the network is exactly how you'd test a change to it
-#     without reflashing, and `run` prefers a file on the SD card
-#     over the flash copy.
+#     without reflashing, and `run` prefers /apps/<name> on the card
+#     over the flash copy (docs/flash_apps.md).
 
 set -e
 
@@ -105,23 +107,6 @@ for dir in "$APPS_DIR"/*/ "$APPS_DIR"/net/netserve/; do
 		echo "tftp-dist: WARNING: $name.bin is older than $name.elf (stale build?)"
 	fi
 
-	# Warn about a name the receiving end can't store under. FatFs is
-	# built with FF_USE_LFN 0 (sw/os/fs/fatfs/ffconf.h), so the SD
-	# card takes 8.3 SHORT names only -- a base name longer than 8
-	# characters cannot be written there under that name.
-	#
-	# Not fatal, and the file is still published: `tget` takes an
-	# optional local filename ((tget host remote local),
-	# docs/scheme_api.md), so it can be fetched and saved as
-	# something shorter. Worth saying out loud anyway, because the
-	# two-argument form fails at the WRITE, after a successful
-	# transfer -- which from the Zeitlos end reads as a network
-	# problem rather than a filename one.
-	if [ ${#name} -gt 8 ]; then
-		echo "tftp-dist: NOTE: '$name' is ${#name} chars -- too long for the SD card's"
-		echo "tftp-dist:       8.3 names; fetch it as 'tget <host> $name <shortname>'"
-	fi
-
 	cp -f "$bin" "$DEST/$name"
 	chmod 644 "$DEST/$name"
 
@@ -141,10 +126,10 @@ done
 # builds, and they are a DIFFERENT copy from the one linked inside
 # zcc.bin itself (docs/zcc.md, "Where libz comes from").
 #
-# Published under the same bare names. Both are 8.3-valid, which is
-# why they are not called libz.blob and libz.syms -- FatFs here is
-# built with FF_USE_LFN 0, so a four-character extension cannot be
-# written to the card at all.
+# Published under the same bare names. On the card they belong in
+# zcc's folder, /data/zcc/libz (docs/layout.md):
+#
+#     > tget 192.168.1.100 libz.bin /data/zcc/libz/libz.bin
 LIBZ_DIR="$APPS_DIR/zcc/libz"
 
 for f in libz.bin libz.sym; do

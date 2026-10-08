@@ -7,11 +7,14 @@
 # each self-contained, each independently installable by unzipping it
 # onto the card:
 #
-#     /ask/minimal/index.zak     Codex + Scroll + docs
-#     /ask/medium/index.zak      Ark Medium
-#     /ask/recipes/index.zak     something somebody built themselves
+#     /data/ask/minimal/index.zak     Codex + Scroll + docs
+#     /data/ask/medium/index.zak      Ark Medium
+#     /data/ask/recipes/index.zak     something somebody built themselves
 #
-# `ask` enumerates the subdirectories of /ask at startup and queries
+# with each pack's documents beside them in /opt/ark/<pack>
+# (docs/layout.md, "Ask and Ark").
+#
+# `ask` enumerates the subdirectories of /data/ask at startup and queries
 # every pack it finds. Dropping in a new one requires no rebuild of
 # anything already on the card, and deleting one is `rm -r`.
 #
@@ -48,7 +51,7 @@
 # So the default policy is NUMERIC 8.3, with the index owning the
 # mapping back to a title:
 #
-#     /ark/codex/00000042.txt     "Amino acid"
+#     /opt/ark/<pack>/codex/00000042.txt     "Amino acid"
 #
 # THIS IS A POLICY, NOT AN ASSUMPTION. If FF_USE_LFN is turned on later
 # -- and the Codex's real filenames are worth having, they are the
@@ -59,7 +62,7 @@
 # zwm.h), which a long name plus a "#offset" suffix can exceed and a
 # numeric one cannot -- so `long` clamps and warns.
 #
-# What numeric costs: browsing /ark in `files` shows a wall of digits.
+# What numeric costs: browsing /opt/ark in `files` shows a wall of digits.
 # The mitigation is that `ask` browses by title, because it has the
 # index. What it buys: short paths, no long-name parsing on the device,
 # and deterministic numbering, so the same recipe over the same inputs
@@ -68,11 +71,27 @@
 
 import os
 import re
+import sys
 import unicodedata
+
+# The card's layout is decided in one place, sw/common/zpaths.h, which
+# the device code and the release tool read too (docs/layout.md). The
+# two roots below lay out this tool's output exactly as the card is --
+# out/<pack>/opt/ark/<pack> and out/<pack>/data/ask/<pack> -- so that
+# `cp -r out/<pack>/* <card>/` installs a pack, and the release tool
+# copies each half to the path it already has.
+#
+# They are NOT written into the index. Every path in docs.zdt is
+# relative to the pack's own document folder (pack_relative()), and the
+# device puts its own Z_DIR_ARK/<pack> in front, so a built pack holds
+# no card location and keeps working if the layout moves again.
+sys.path.insert(0, os.path.normpath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "release", "lib")))
+import zpaths  # noqa: E402
 
 # Dataset directories live under this, UNDER THE PACK THAT BUILT THEM:
 #
-#     /ark/<pack>/<dataset>/00000042.txt
+#     /opt/ark/<pack>/<dataset>/00000042.txt
 #
 # A pack owns every byte it indexed. That costs duplication -- two
 # packs that both include docs/ ship two copies of it -- and it buys
@@ -80,7 +99,7 @@ import unicodedata
 #
 # FIRST, packs cannot collide. `minimal` ships Scroll R1 and `medium`
 # ships Scroll R0; both are the dataset named "scroll" and both number
-# from 1. Sharing /ark/scroll would have one silently overwrite the
+# from 1. Sharing /opt/ark/scroll would have one silently overwrite the
 # other, and the symptom would be confidently ranked results showing
 # text from the wrong release. This was not hypothetical -- it was
 # found by co-installing two packs onto one card and looking.
@@ -95,10 +114,10 @@ import unicodedata
 #
 # The shared /docs stays exactly where it is, for `read` and `files`.
 # `ask` just does not point at it.
-CARD_ROOT = "ark"
+CARD_ROOT = zpaths.card("Z_DIR_ARK")             # "opt/ark"
 
-# Where packs go, one subdirectory each.
-ASK_ROOT = "ask"
+# Where packs' indexes go, one subdirectory each.
+ASK_ROOT = zpaths.card("Z_DIR_ASK_PACKS")        # "data/ask"
 
 # Documents per directory before splitting into numbered
 # subdirectories. A FAT directory lookup is a linear scan whether or
@@ -176,6 +195,23 @@ def dataset_dir(source, pack):
     _check_83(source)
     _check_83(pack)
     return "%s/%s/%s" % (CARD_ROOT, pack, source)
+
+
+def corpus_dir(pack):
+    """Where a pack's documents go: opt/ark/<pack>."""
+    _check_83(pack)
+    return "%s/%s" % (CARD_ROOT, pack)
+
+
+def pack_relative(path, pack):
+    """A document's card path as the index stores it: relative to the
+    pack's own document folder. "opt/ark/arklite/codex/00000042.md" ->
+    "codex/00000042.md". The device puts its Z_DIR_ARK/<pack> back in
+    front (sw/apps/ask/aidx.c), so the index carries no card location."""
+    root = corpus_dir(pack) + "/"
+    if not path.startswith(root):
+        raise CardError("%s is not under %s" % (path, root))
+    return path[len(root):]
 
 
 def pack_dir(pack):

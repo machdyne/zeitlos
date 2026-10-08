@@ -5,7 +5,7 @@
 # words (docs/demo.md, "Spelling for the ear"). Captions are spelled
 # normally.
 #
-#   > run automate /demo/long.zds
+#   > run automate /data/automate/long.zds
 #
 # Captions are 2x (12x24 pixels a letter), up to two lines. Each
 # chapter starts from a clean desktop, so a chapter can be cut, moved or
@@ -88,12 +88,12 @@ kill text
 # view has finished). Tune the pauses to the card: the window must not
 # close before the picture is up.
 narrate Photos, dithered to one bit | Foe toe graphs, dithered to one bit on the board.
-run view /demo/squirrel.pgm at 0 0
+run view /media/images/squirrel.pgm at 0 0
 key alt+equal
 pause 6000
 close view
 narrate Vector graphics: rendered by Zeitlos | Vector graphics are rendered here, on the fly.
-run view /demo/zeitlos.svg at 0 0
+run view /media/images/zeitlos.svg at 0 0
 key alt+equal
 pause 4000
 close view
@@ -133,7 +133,7 @@ kill draw
 
 # -- 7. music ----------------------------------------------------------
 narrate A General MIDI synthesizer | A general middy synthesizer: the cum pewter keyboard is the piano.
-run midi /demo/lvb11.mid at 168 100
+run midi /media/audio/lvb11.mid at 168 100
 pause 800
 melody 170 e 3 e 3 e m w q n:2 - z c n m:2 - c h m q:2 - c e 3 e 3 e m w q n:3
 pause 500
@@ -145,7 +145,7 @@ close midi
 
 # -- 8. games ----------------------------------------------------------
 narrate A tracker module, and a chess engine playing itself | A tracker module in the background, and a chess en jin playing itself.
-run track /audio/retro.mod at 330 20
+run track /media/audio/retro.mod at 330 20
 run chess at 16 16
 focus chess
 type new demo

@@ -58,7 +58,8 @@ def fake_root():
              + mkfatimg.MISC + mkfatimg.SHELLS + mkfatimg.SELFHOST
              + mkfatimg.LIBZ_FILES + mkfatimg.LIBZ_EXTRA + mkfatimg.EXAMPLES
              + mkfatimg.FPGA_FILES + mkfatimg.CONFIG_FILES + mkfatimg.NETWORK_FILES
-             + mkfatimg.FONT_FILES + mkfatimg.DESK_FILES + mkfatimg.DEMO_FILES)
+             + mkfatimg.FONT_FILES + mkfatimg.DESK_FILES + mkfatimg.DEMO_FILES
+             + mkfatimg.CHIP8_FILES)
     for _dest, rel in lists:
         p = os.path.join(r, rel)
         os.makedirs(os.path.dirname(p), exist_ok=True)
@@ -85,7 +86,8 @@ def card_files(img):
 
 
 def pack_built(name):
-    return os.path.isdir(os.path.join(ROOT, mkfatimg.ASK_OUT, name, "ask", name))
+    return os.path.isdir(os.path.join(ROOT, mkfatimg.ASK_OUT, name,
+                                      mkfatimg.zcard("Z_DIR_ASK_PACKS"), name))
 
 
 def test_variant(root, key, tmp):
@@ -101,24 +103,49 @@ def test_variant(root, key, tmp):
           "%s: %d MB image" % (key, size // (1024 * 1024)))
     names = dict(shipped)
     for p in packs:
-        check(("ark/%s/" % p) in names,
+        check(("%s/" % mkfatimg.zcard("Z_DIR_ARK", p)) in names,
               "%s: pack %s listed as one entry" % (key, p))
     check(len(shipped) < 400, "%s: manifest has %d entries, not one per "
           "pack file" % (key, len(shipped)))
     on_card = card_files(img)
     # every listed app and data file, where the programs look for it --
-    # /bbs/bbs.cfg, /fed/fed.cfg and the rest included
+    # /data/bbs/bbs.cfg, /data/fed/fed.cfg and the rest included
     listed = [n for n, _ in mkfatimg.SUPPLEMENTAL + mkfatimg.NETWORK + mkfatimg.CASINO
               + mkfatimg.GAMES_DEMOS + mkfatimg.MISC + mkfatimg.SHELLS + mkfatimg.SELFHOST
               + mkfatimg.CONFIG_FILES + mkfatimg.NETWORK_FILES + mkfatimg.FONT_FILES
-              + mkfatimg.DESK_FILES]
+              + mkfatimg.DESK_FILES + mkfatimg.CHIP8_FILES]
     absent = [n for n in listed if ("/" + n).lower() not in on_card]
     check(not absent, "%s: all %d listed apps and data files on the card%s" % (
         key, len(listed), "" if not absent else " (missing e.g. %s)" % absent[0]))
-    for n in ("apps/bbs", "apps/fed", "apps/zetta", "apps/cryptobench",
-              "bbs/bbs.cfg", "bbs/forums.cfg", "fed/fed.cfg",
-              "apps/zerdesk", "zerdesk/index.html"):
+    # Spot checks, by the registry's names (sw/common/zpaths.h), so that
+    # they follow the layout rather than restate it.
+    zc = mkfatimg.zcard
+    for n in (zc("Z_DIR_APPS", "bbs"), zc("Z_DIR_APPS", "fed"),
+              zc("Z_DIR_APPS", "zetta"), zc("Z_DIR_APPS", "cryptobench"),
+              zc("Z_DIR_APPS", "blackjack"),
+              zc("Z_DIR_BBS", "bbs.cfg"), zc("Z_DIR_BBS", "forums.cfg"),
+              zc("Z_DIR_FED", "fed.cfg"), zc("Z_DIR_APPS", "zerdesk"),
+              zc("Z_PATH_ZERDESK_PAGE"), zc("Z_PATH_SYS_CONFIG"),
+              zc("Z_PATH_SYS_VERSION"), zc("Z_DIR_CHIP8_ROMS", "redoct.ch8")):
         check(("/" + n) in on_card, "%s: /%s on the card" % (key, n))
+    # /home: there, and empty (docs/layout.md, rule 4)
+    home = "/" + zc("Z_DIR_HOME")
+    r = subprocess.run(["mdir", "-i", img, "::" + home], capture_output=True, text=True)
+    check(r.returncode == 0, "%s: %s exists" % (key, home))
+    check(not [f for f in on_card if f.startswith(home + "/") and f != home + "/"],
+          "%s: %s is empty" % (key, home))
+    # nothing loose at the root but the top-level folders
+    loose = sorted(f for f in on_card if f.count("/") == 1)
+    check(not loose, "%s: no files at the card root%s" % (
+        key, "" if not loose else " (found %s)" % ", ".join(loose[:3])))
+    # /sys/version says which release wrote it
+    back = os.path.join(tmp, "version")
+    subprocess.run(["mcopy", "-n", "-i", img, "::/" + zc("Z_PATH_SYS_VERSION"), back],
+                   check=True, capture_output=True)
+    with open(back) as f:
+        v = f.read()
+    check(v.startswith("zeitlos ") and v.endswith("\n"),
+          "%s: /%s reads %r" % (key, zc("Z_PATH_SYS_VERSION"), v.strip()))
     for p in packs:
         files = mkfatimg.ask_pack_files(root, p)
         absent = [c for c, _s in files if c.lower() not in on_card]
@@ -205,7 +232,7 @@ def main():
         # '*' is legal in an APFS name and illegal in a long name, so
         # the file can exist here and must still be rejected. A
         # 256-unit name cannot be created on this filesystem at all.
-        bad = os.path.join(ROOT, mkfatimg.ASK_OUT, "zdocs", "ark", "zdocs",
+        bad = os.path.join(ROOT, mkfatimg.ASK_OUT, "zdocs", mkfatimg.zcard("Z_DIR_ARK", "zdocs"),
                            "bad*name.md")
         img = os.path.join(tmp, "bad.img")
         try:
@@ -222,14 +249,14 @@ def main():
         check(not os.path.exists(img), "...before anything was formatted")
 
         print("a long name is stored")
-        good = os.path.join(ROOT, mkfatimg.ASK_OUT, "zdocs", "ark", "zdocs",
-                            "longfilename.md")
+        ark = mkfatimg.zcard("Z_DIR_ARK", "zdocs")
+        good = os.path.join(ROOT, mkfatimg.ASK_OUT, "zdocs", ark, "longfilename.md")
         img = os.path.join(tmp, "long.img")
         try:
             open(good, "w").write("x")
             mkfatimg.build(root, img, verbose=False, packs=("zdocs",))
             on_card = card_files(img)
-            check("/ark/zdocs/longfilename.md" in on_card,
+            check("/%s/longfilename.md" % ark in on_card,
                   "longfilename.md is on the card")
         finally:
             if os.path.exists(good):
@@ -249,8 +276,9 @@ def main():
                   "formatted with 16 sectors per cluster")
             on_card = card_files(img)
             n = len(mkfatimg.ask_pack_files(root, "zdocs"))
-            check(sum(1 for f in on_card if f.startswith("/ark/zdocs/")
-                      or f.startswith("/ask/zdocs/")) >= n,
+            check(sum(1 for f in on_card
+                      if f.startswith("/%s/" % mkfatimg.zcard("Z_DIR_ARK", "zdocs"))
+                      or f.startswith("/%s/" % mkfatimg.zcard("Z_DIR_ASK_PACKS", "zdocs"))) >= n,
                   "the pack is complete on it")
         finally:
             mkfatimg.LARGE_IMAGE_BYTES = saved

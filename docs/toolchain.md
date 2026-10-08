@@ -423,7 +423,7 @@ subcommands of one tool, `zfpga`, in `sw/apps/zfpga/`, run from `posix`.
 Lakritz by
 
 ```
-zfpga build /fpga/examples/blink.v -b lakritz
+zfpga build /data/zfpga/examples/blink.v -b lakritz
 ```
 
 blinks the LED (`docs/zfpga.md` section 23).
@@ -448,7 +448,7 @@ zfpga pack soc_final.config -c -f 2.4 -o soc.bit        # same bytes
 
 It builds for the host with `make -f Makefile.host` in `sw/apps/zfpga`,
 and as a Zeitlos app reading its chip database and board profiles from
-`/fpga` on the card (`docs/zfpga-formats.md`). The byte-identity tests
+`/data/zfpga` on the card (`docs/zfpga-formats.md`). The byte-identity tests
 run against whatever `ecppack` is installed -- so this section's version
 table matters there too: a Trellis database that differs from the
 vendored one (`sw/apps/zfpga/ext/prjtrellis-db/`) will show up as a
