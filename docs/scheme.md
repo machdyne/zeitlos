@@ -6,7 +6,7 @@ This document covers the one-time setup, the memory-layout reasoning
 behind how it's built, and what's actually reachable right now.
 
 `repl` is a core app, in flash ([flash_apps.md](flash_apps.md), "Why
-repl is a core app"), with a budget of 192K of flash and 308K of RAM
+repl is a core app"), with a budget of 192K of flash and 320K of RAM
 (`CORE_BUDGETS`). It prints and reads its reals through `zfmt.c`
 (`ZFMT_FLOAT`, [build.md](build.md)), not newlib. **Adding a Scheme
 procedure costs from that budget**: check `make flash_apps`' table

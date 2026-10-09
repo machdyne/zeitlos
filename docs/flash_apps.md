@@ -107,13 +107,13 @@ mismatch presents as "no core apps in flash" rather than an error.
 
 The archive also carries **files**: `CORE_FILES` in the top-level
 `Makefile`: `docs/welcome.txt`, `docs/repl.txt` (the beginner's guide
-to Scheme, [repl.md](repl.md)) and `examples/todo.scm`, its example
+to Scheme, [repl.md](repl.md)) and `data/repl/examples/todo.scm`, its example
 app. Each is read-only, at its path
 under the card, with or without a card, and a file of the same name on
 the card wins over it -- the same rule as for apps:
 
 ```
-CORE_FILES = docs/welcome.txt docs/repl.txt examples/todo.scm
+CORE_FILES = docs/welcome.txt docs/repl.txt data/repl/examples/todo.scm
 ```
 
 A `docs/<name>.txt` is `docs/<name>.md` rendered as plain text by
@@ -294,6 +294,14 @@ Two budgets, and RAM is the one that binds.
 
 24,000 bytes are left, of 770,048 (the region grew from 589,824 when
 the jumploader moved out of it).
+
+**Flash is nearly full, so the flash budgets are tight.** They add up,
+with the reserve, to all but a few KB of the region, so there is no
+slack to hand out: a few KB over each app's size is all there is
+(console and files got 2 KB more after a different toolchain built
+them about 1 KB bigger). The RAM budgets, which only have to meet the
+RAM rule below, have 8-24 KB of headroom each. More flash room would
+have to come from compressing the archive or making apps smaller.
 `zrelease layout` and the release build refuse an archive that does
 not fit.
 
@@ -303,9 +311,9 @@ stack). They are `CORE_BUDGETS` in the top-level `Makefile`, next to
 `CORE_APPS`:
 
 ```
-CORE_BUDGETS = wm=112K/140K net=136K/264K term=90K/140K console=14K/16K \
-	cron=24K/40K text=88K/164K files=66K/92K repl=192K/308K
-CORE_RESERVE = 28K
+CORE_BUDGETS = wm=112K/152K net=136K/288K term=90K/152K console=16K/24K \
+	cron=24K/48K text=88K/176K files=68K/104K repl=192K/320K
+CORE_RESERVE = 22K
 CORE_AT_BOOT = wm net console
 CORE_RAM_MAX = 1M
 ```
@@ -383,7 +391,7 @@ What that means now:
 - **RAM.** Its image is 308,608 bytes, plus its 64K stack. That is RAM
   only while it runs; the budgets' RAM rule ("Budgets") counts it as
   one of the one or two apps started beside the boot set.
-- **Its budget** is 192K of flash and 308K of RAM. `repl` grows when
+- **Its budget** is 192K of flash and 320K of RAM. `repl` grows when
   Scheme procedures (zapi) are added, so this is the budget that will
   bite first: a new procedure is paid for with a smaller one, a
   reserve, or a decision to raise the budget, not found out when the

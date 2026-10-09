@@ -847,9 +847,9 @@ ZAR_APPS = $(filter-out $(CORE_APPS_OMIT),$(CORE_APPS))
 #
 # A budget is raised by taking from another, from the reserve, or by
 # making something smaller. Every core app must have one.
-CORE_BUDGETS = wm=112K/140K net=136K/264K term=90K/140K console=14K/16K \
-	cron=24K/40K text=88K/164K files=66K/92K repl=192K/308K
-CORE_RESERVE = 28K
+CORE_BUDGETS = wm=112K/152K net=136K/288K term=90K/152K console=16K/24K \
+	cron=24K/48K text=88K/176K files=68K/104K repl=192K/320K
+CORE_RESERVE = 22K
 CORE_AT_BOOT = wm net console
 CORE_RAM_MAX = 1M
 
@@ -858,14 +858,14 @@ CORE_RAM_MAX = 1M
 # docs/<name>.txt is docs/<name>.md rendered as plain text by
 # tools/md2txt.py, for `text`. They come out of CORE_RESERVE, all
 # together, and mkzar.py refuses an archive where they do not.
-CORE_FILES = docs/welcome.txt docs/repl.txt examples/todo.scm
+CORE_FILES = docs/welcome.txt docs/repl.txt data/repl/examples/todo.scm
 CORE_FILES_OUT = $(OUTDIR)/files
 
 $(CORE_FILES_OUT)/docs/%.txt: docs/%.md tools/md2txt.py
 	python3 tools/md2txt.py $< $@
 
-# repl's examples, as they are (docs/repl.md)
-$(CORE_FILES_OUT)/examples/%.scm: sw/apps/repl/examples/%.scm
+# repl's examples, as they are, in repl's data directory (docs/repl.md)
+$(CORE_FILES_OUT)/data/repl/examples/%.scm: sw/apps/repl/examples/%.scm
 	mkdir -p $(dir $@)
 	cp $< $@
 

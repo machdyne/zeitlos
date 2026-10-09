@@ -192,11 +192,11 @@ is the event's first value, such as the button's number.
 A complete app, in flash:
 
 ```
-> (load "/examples/todo.scm")
+> (load "/data/repl/examples/todo.scm")
 ```
 
 Type a task, press Enter, click tasks to tick them, and press Clear.
-Open `/examples/todo.scm` in `text` to read how it works, or copy it to
+Open `/data/repl/examples/todo.scm` in `text` to read how it works, or copy it to
 `/ram` and change it.
 
 ## More to try

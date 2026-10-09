@@ -245,7 +245,7 @@ from the prompt:
 To learn Scheme and write apps with windows, buttons and text fields,
 read [repl.md](repl.md) -- in flash as `/docs/repl.txt`, so `text`
 opens it with no card -- and try the example app:
-`(load "/examples/todo.scm")`.
+`(load "/data/repl/examples/todo.scm")`.
 
 ## Taking a screenshot
 

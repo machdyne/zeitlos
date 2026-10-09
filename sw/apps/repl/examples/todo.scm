@@ -1,7 +1,7 @@
 ; todo.scm -- a to-do list, as a window: an example of a Zeitlos app
 ; written in Scheme. docs/repl.md walks through it.
 ;
-;   > (load "/examples/todo.scm")
+;   > (load "/data/repl/examples/todo.scm")
 ;
 ; Type a task and press Enter (or Add). Click a task to tick it off;
 ; Clear removes the ticked ones.
