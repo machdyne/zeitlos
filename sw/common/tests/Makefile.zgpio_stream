@@ -1,0 +1,8 @@
+# sw/common/zgpio_stream.c on the host, against a functional model of
+# the GPIO stream engines (rtl/gpio_stream.v): dividers, pin checks,
+# claiming, FIFO packing, zlink K symbols, SPI transfers.
+#   make -C sw/common/tests -f Makefile.zgpio_stream
+all:
+	cc -std=gnu99 -g -Wall -Wextra -fsanitize=address,undefined -DZ_GS_HOST_TEST \
+		-I .. -o /tmp/test_gpio_stream test_gpio_stream.c ../zgpio_stream.c
+	/tmp/test_gpio_stream

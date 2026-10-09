@@ -511,6 +511,44 @@ A 12F Klinge builds with `make BOARD=klinge DEVICE=12k` (same die to
 the open-source tools); its zfpga profile then needs `device
 LFE5U-12F`.
 
+## GPIO targets and the stream engine
+
+Every target with a GPIO port gets one GPIO stream engine by default
+([gpio.md](gpio.md#stream-engines), [zlink.md](zlink.md)), except
+`lakritz_gpio`. Measured with Yosys 0.69 and nextpnr-ecp5 0.11.1
+(YoWASP), default seed, one run each, with the engine (`E1`) and
+without (`E0`):
+
+| target | E0 COMB | E1 COMB | FF E0 / E1 | DP16KD E0 / E1 |
+|---|---|---|---|---|
+| `obst_langkatze_gpio` | 20,821 (86%) | 21,781 (90%) | 8,990 / 9,445 | 32 / 33 |
+| `minze_gpio` | 20,945 (86%) | 22,335 (92%) | 9,665 / 10,121 | 38 / 39 |
+| `schoko_langkatze_gpio` | -- | 25,608 / 43,848 (58%) | -- / 11,664 | -- / 41 |
+| `lakritz_gpio` | 23,361 (96%) | (no engine) | 10,651 | 38 |
+
+`lakritz_gpio` is built with `GPIO_STREAM_ENGINES 0`: at 96% it has no
+room, and it keeps every feature it has. zlink still reaches it in
+software ([zlink.md](zlink.md), "Soft zlink").
+
+### Where LUTs could come back from
+
+LUT RAM was the right choice when block RAM was the scarce resource;
+on the 25F boards today it is the other way round (Lakritz: 38 of 56
+DP16KD used, 96% of the LUTs). Moving a LUT RAM to a block RAM trades
+one DP16KD for its RAM cells and much of its read multiplexer:
+
+| block | LUT RAM | as block RAM | saving | status |
+|---|---|---|---|---|
+| `rtl/spiflash.v` page buffer (`pbuf`, 64 x 32) | 772 COMB, 32 RAMW | 558 COMB, 1 DP16KD | **-214 COMB**, -32 RAMW, +46 FF | **done** ([spiflash.md](spiflash.md)) |
+
+(`spiflash_wb` alone, packed by nextpnr-ecp5 for an 85F; the two
+differ only in the `ram_style` attribute.) Every board builds the flash
+controller, so every board gets the saving; the utilisation figures
+above were measured before it. The other LUT RAMs on Lakritz are the
+audio mixer (36 DPR16X4), the raster engine (11), the TRNG (8) and video
+(3); the blitter's arithmetic is the other candidate (zlink.md's plan,
+last round).
+
 ## Boards with nothing to measure
 
 iCE40 targets in the Makefile (`riegel`, `eis`, `kolibri`, `bonbon`,

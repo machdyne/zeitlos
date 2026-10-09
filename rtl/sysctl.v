@@ -231,6 +231,29 @@ localparam GPIO_NPORTS = 0
 `endif
 	;
 
+// GPIO stream engines (rtl/gpio_stream.v, docs/zlink.md): how many, and
+// which of the optional modes they have. zlink is always in; SPI, UART
+// and raw can each be left out by a board short of LUTs. rtl/boards.vh
+// supplies the defaults (one engine, every mode). A board with no GPIO
+// port gets none whatever it says, since an engine has nowhere to put
+// its pins.
+localparam GPIO_ENGINES = (GPIO_NPORTS > 0) ? `GPIO_STREAM_ENGINES : 0;
+localparam GPIO_ENG_SPI = 0
+`ifdef GPIO_STREAM_SPI
+	+ 1
+`endif
+	;
+localparam GPIO_ENG_UART = 0
+`ifdef GPIO_STREAM_UART
+	+ 1
+`endif
+	;
+localparam GPIO_ENG_RAW = 0
+`ifdef GPIO_STREAM_RAW
+	+ 1
+`endif
+	;
+
 module sysctl #()
 (
 
@@ -2748,7 +2771,11 @@ module sysctl #()
 `endif
 
 	gpio_wb #(
-		.NPORTS(GPIO_NPORTS)
+		.NPORTS(GPIO_NPORTS),
+		.ENGINES(GPIO_ENGINES),
+		.ENG_SPI(GPIO_ENG_SPI),
+		.ENG_UART(GPIO_ENG_UART),
+		.ENG_RAW(GPIO_ENG_RAW)
 	) wbs_gpio0_i
 	(
 		.wb_clk_i(wbm_clk),

@@ -605,6 +605,11 @@
 // after `USB_CDC_STALL_CYCLES so an unattended board still boots. See
 // rtl/usb_cdc_uart.v's header.
 `define USB_CDC
+// No GPIO stream engine: Lakritz is at 97-98% of its LUTs and keeps
+// every feature it has. zlink still works on lakritz_gpio, in software
+// (docs/zlink.md). Revisit if the blitter work in docs/boards.md frees
+// enough.
+`define GPIO_STREAM_ENGINES 0
 
 // GPIO off in the plain board build, for the same reason as Obst above
 // but harder: Lakritz has exactly ONE PMOD connector and the serial
@@ -1588,6 +1593,31 @@
 // these has an open bug.
 `ifdef NO_TRNG
 `undef TRNG
+`endif
+
+// -- GPIO stream engines (rtl/gpio_stream.v, docs/zlink.md) --
+//
+// One engine on every board that builds a GPIO port, with every mode,
+// unless the board says otherwise: `define GPIO_STREAM_ENGINES 0 (or 2)
+// in its block, or GPIO_STREAM_NO_SPI / _NO_UART / _NO_RAW to drop a
+// mode. Defaults here, after the board chain, so a board block or a
+// release spec only has to mention the exception. A board without a
+// GPIO port gets no engine whatever this says (rtl/sysctl.v).
+//
+// Each engine is one DP16KD and about 1,000 logic cells (960 measured on
+// obst_langkatze_gpio); docs/gpio.md, "Cost", has the numbers. zlink itself works with no engine at all, in
+// software, slower (docs/zlink.md, "Tiers").
+`ifndef GPIO_STREAM_ENGINES
+`define GPIO_STREAM_ENGINES 1
+`endif
+`ifndef GPIO_STREAM_NO_SPI
+`define GPIO_STREAM_SPI
+`endif
+`ifndef GPIO_STREAM_NO_UART
+`define GPIO_STREAM_UART
+`endif
+`ifndef GPIO_STREAM_NO_RAW
+`define GPIO_STREAM_RAW
 `endif
 `ifdef NO_CPU_MUL_FAST
 `undef CPU_MUL_FAST

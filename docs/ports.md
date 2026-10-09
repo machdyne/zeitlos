@@ -159,7 +159,7 @@ So netserve's CONNECT carries a map instead of `Z_NONE`:
 
 | key | type | |
 |---|---|---|
-| `transport` | `Z_STR` | `telnet` or `ssh` |
+| `transport` | `Z_STR` | `telnet` or `ssh`; `zlink` for a shell from the machine at the other end of a [zlink](zlink_app.md#the-shell) cable, which always sends `auth` `system` (it asked for the password itself) and no `peer`, `port` or `user` |
 | `auth` | `Z_STR` | `system`: the machine's password or a key in `/data/netserve/authkeys` was checked. `none`: nothing was |
 | `peer` | `Z_UINT32` | the remote IPv4 address |
 | `port` | `Z_UINT32` | the local TCP port it arrived on |

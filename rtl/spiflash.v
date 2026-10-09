@@ -71,19 +71,6 @@
  * chip select is high for GAP clocks: W25Q16 wants 50 ns before an
  * erase or program, and 8 clocks at 48 MHz is 167 ns.
  */
-// Distributed RAM, except where the build has ruled LUT RAM out:
-// openXC7 builds it unreliably (docs/toolchain.md), so an xc7 build with
-// XC7_LUTRAM=-nolutram passes -DXC7_NOLUTRAM and these memories become
-// flip-flops instead. A ram_style attribute overrides yosys's -nolutram,
-// which is why this has to be decided here and not only in the Makefile.
-`ifndef ZRAM_DISTRIBUTED
-`ifdef XC7_NOLUTRAM
-`define ZRAM_DISTRIBUTED "logic"
-`else
-`define ZRAM_DISTRIBUTED "distributed"
-`endif
-`endif
-
 module spiflash_wb #(
 	parameter [23:0] LOCK_END = 24'h040000,
 	parameter GAP = 8
@@ -141,10 +128,19 @@ module spiflash_wb #(
 	reg [7:0] sr1;
 	reg [23:0] id;
 
-	// LUT RAM, not a block RAM: Lakritz uses 54 of its 56, and they are
-	// the tightest resource on the board (docs/usb_host.md). ~60 LUTs
-	// more than a block RAM would cost. docs/spiflash.md.
-	(* ram_style = `ZRAM_DISTRIBUTED *) reg [31:0] pbuf [0:63];
+	// A BLOCK RAM, deliberately. It was LUT RAM when block RAM was the
+	// scarce resource (Lakritz used 54 of its 56); today it is the other
+	// way round -- Lakritz uses 38 and is out of LUTs -- and the LUT RAM
+	// version cost far more than the "~60 LUTs" first estimated: packed
+	// by nextpnr-ecp5, 772 logic cells and 32 RAMW as LUT RAM against
+	// 558 and one DP16KD as a block RAM, because the read multiplexer
+	// over 32 LUT RAM cells goes too. docs/spiflash.md.
+	//
+	// Nothing else changes: the only read (bword, below) was already
+	// registered, which is what a block RAM needs. On openXC7 builds with
+	// XC7_LUTRAM=-nolutram this is also the better fallback -- the old
+	// attribute made it 2048 flip-flops there.
+	(* ram_style = "block" *) reg [31:0] pbuf [0:63];
 
 	// -- the shift engine: spiflashro's, unchanged ---------------------------
 

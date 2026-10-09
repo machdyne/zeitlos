@@ -32,7 +32,7 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 | USB Host | [Dual-port USB host controller](docs/usb_host.md) (HID, MSC, CDC-ACM, [CDC-ECM](docs/usb_ethernet.md), hubs) |
 | USB Device | [USB CDC](docs/usb_cdc.md) serial console |
 | HID | USB keyboard ([22 layouts](docs/keyboard_layouts.md)) + optional USB mouse/[gamepad](docs/gamepad.md) |
-| I/O | Optional [GPIO](docs/gpio.md) on PMOD ports with bit-banged [I2C](docs/i2c.md) and [SPI](docs/spi.md), hardware SPI, 16550 UART, optional second [UART](docs/uart1.md) |
+| I/O | Optional [GPIO](docs/gpio.md) on PMOD ports with bit-banged [I2C](docs/i2c.md) and [SPI](docs/spi.md), [stream engines](docs/gpio.md#stream-engines) that put zlink, SPI, UART or raw bits on any GPIO pin, hardware SPI, 16550 UART, optional second [UART](docs/uart1.md) |
 
 ![Zeitlos Hardware Map](https://github.com/machdyne/zeitlos/blob/main/hwmap.png)
 
@@ -138,6 +138,7 @@ On the sdcard. A `term` window starts one when you press its REPL or POSIX butto
 | [bbs](docs/bbs.md) | Bulletin board system over telnet, SSH and `port bbs0`: forums, private mail, a new-scan, bulletins, sysop tools; also runs on Linux ([bbs_linux](docs/bbs_linux.md)) |
 | [fed](docs/fed.md) | Zeitlos Federation Protocol service |
 | [serial](docs/uart1.md) | Serial port service |
+| [zlink](docs/zlink_app.md) | Two machines over a couple of GPIO wires: copy files both ways, and a shell on the other machine (`port zlink0`) |
 | [tts](docs/tts.md) | Text-to-speech service (Super+S to turn speech on) |
 | [jfont](docs/text_encoding.md#japanese) | Japanese font service: holds the font once for every app (`system.font.japanese: yes`) |
 | [zcc](docs/zcc.md) | C compiler |

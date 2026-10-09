@@ -14,6 +14,11 @@ at a `repl` prompt rather than at synthesis.
 Hardware: `rtl/gpio.v`. Software: `sw/common/zgpio.h` (phase 2),
 `sw/common/zi2c.h` and `sw/common/zspi.h` (phase 4).
 
+Where software is too slow, a **stream engine** can take over any pins
+of any port: zlink, an SPI master, a UART, or raw bits in and out at a
+fixed rate, chosen at runtime. See [Stream engines](#stream-engines)
+below, and [zlink.md](zlink.md) for the link the engines were built for.
+
 ## The block at a glance
 
 | | |
@@ -24,6 +29,7 @@ Hardware: `rtl/gpio.v`. Software: `sw/common/zgpio.h` (phase 2),
 | Feature bit | `Z_FEATURE2_GPIO`, `FEATURES2` bit 0 |
 | Pull-ups | weak internal pull-up, always on, not changeable at runtime |
 | Reset state | every pin an input, so every pin pulled high |
+| Stream engines | `0xe000_2000 + E * 0x40`; `GPIO_STREAM_ENGINES` per board, 1 by default where a port is built |
 
 `rtl/gpio.v` is ALWAYS instantiated, on every board, whether or not any
 port has pins. It also owns the board LEDs, which is why: it grew out
@@ -105,7 +111,7 @@ Word addresses; `rtl/gpio.v`'s `wb_adr_i` is `sysctl.v`'s
 | `+0x00` | LED | r/w | bit 0: `LED_B`. Resets to 1. |
 | `+0x04` | LEDS | r/w | bits 7:0: `DBG[7:0]`, the `` `LED_DEBUG `` bar |
 | `+0x08` | MAGIC | r | `0x5A47_5049` ("ZGPI") |
-| `+0x0c` | CONFIG | r | `{16'h4750, 12'b0, nports[3:0]}` |
+| `+0x0c` | CONFIG | r | `{16'h4750, 4'b0, modes[3:0], engines[3:0], nports[3:0]}` |
 | `+0x10`..`+0x1c` | | | reserved, read 0 |
 
 LED and LEDS are at the addresses `rtl/debug.v` had them at, and behave
@@ -117,6 +123,12 @@ block existed answers *every* address it doesn't recognise with
 `{31'b0, led}`, so a CONFIG read there returns 0 or 1 -- and "1" is
 exactly what a working block with one port would return. The `"GP"` in
 the top half is what separates those.
+
+CONFIG's `engines` field is how many stream engines this bitstream has,
+and `modes` which optional modes they have: bit 0 zlink (always set
+when there is an engine), bit 1 SPI, bit 2 UART, bit 3 raw. Both are 0
+on a bitstream without engines and on every bitstream that predates
+them, so software that reads them needs no other check.
 
 ### Port registers, `0xe000_1000 + N * 0x20`
 
@@ -156,6 +168,13 @@ at the bottom of the nibble.
 port and `[2:0]` for the register, **and nothing above bit 10**. The
 map therefore repeats every 8KB across the 256MB nibble: LED is also at
 `0xe000_0020`, port 0 DIR is also at `0xe000_3000`.
+
+**With stream engines built, bit 11 is decoded too**, and selects the
+engine window: `0xe000_2000`-`0xe000_3fff` (engine in bits 5:4,
+register in 3:0). The map then repeats every 16KB instead: port 0 DIR
+is also at `0xe000_5000`, and `0xe000_3000` is engine 0 again. A build
+without engines decodes exactly as before, and `tb_gpio.v` (no engines)
+still asserts the 8KB aliasing.
 
 That is a deliberate trade. Timing on this design is tight, and the
 alternative is a comparator against the top fifteen bits of the word
@@ -269,6 +288,253 @@ With the pull-ups above, "input" means "pulled high" rather than
 "floating", which is a better-defined state than the design originally
 had and is the correct idle level for the buses this port will mostly
 carry.
+
+## Stream engines
+
+A stream engine is one serial peripheral that can be put on **any pin
+of any port**, in one of four modes chosen at runtime:
+
+| mode | | speed | pins |
+|---|---|---|---|
+| 1 zlink | 8b/10b, self-clocked, 4x oversampled ([zlink.md](zlink.md)) | up to 12 Mbit/s | TX and/or RX |
+| 2 SPI | master, full duplex, modes 0-3, MSB or LSB first | SCK up to 12 MHz | SCK, MOSI and/or MISO, CS |
+| 3 UART | 8N1 or 8N2 | 300 baud to 3 Mbaud | TX and/or RX |
+| 4 raw | bits out and/or in, one per tick; TX can loop | up to 48 Mbit/s | TX and/or RX |
+
+It is the answer to the paragraph at the top of this page for the cases
+where software is not enough: a link to another machine
+([zlink.md](zlink.md)), an SPI display or flash at megabits rather than
+the ~60 KB/s [spi.md](spi.md) manages, a second serial port on any
+board, MIDI at 31250 baud, or a fixed bit pattern (WS2812 LEDs, a
+test signal) at fabric speed. It is a fixed-function cousin of the
+RP2040's PIO: the same FIFOs, clock divider and any-pin placement, a
+handful of fixed modes instead of a program.
+
+Hardware: `rtl/gpio_stream.v`, instantiated by `rtl/gpio.v`. Software:
+`sw/common/zgpio_stream.h`.
+
+### How many, and which modes
+
+`rtl/boards.vh` gives every board that builds a GPIO port **one engine
+with every mode**, unless its block says otherwise:
+
+| define | effect |
+|---|---|
+| `` `define GPIO_STREAM_ENGINES 0 `` | no engine (Lakritz, which is out of LUTs) |
+| `` `define GPIO_STREAM_ENGINES 2 `` | two, up to 4 |
+| `` `define GPIO_STREAM_NO_SPI `` | drop SPI mode (also `_NO_UART`, `_NO_RAW`) |
+
+A board with no GPIO port gets no engine whatever it says: there is
+nowhere for its pins to go. zlink is in every engine; it is what they
+are for.
+
+### Pins
+
+Four **roles**, each placed on any pin of any port by `SPINS`:
+
+| role | | byte of SPINS |
+|---|---|---|
+| 0 | TX, or SPI MOSI | 7:0 |
+| 1 | RX, or SPI MISO | 15:8 |
+| 2 | SPI SCK (driven low in other modes) | 23:16 |
+| 3 | CS: drives SCTL's CS level, in any mode | 31:24 |
+
+Each byte is `{enable, 1'b0, port[2:0], pin[2:0]}`.
+
+**While MODE is not 0, an enabled role owns its pin.** The port's DIR
+and OUT stop reaching it -- they still read and write, they just do not
+drive -- and the engine sets the pin's direction and level. IN still
+reads the pin. Every other pin of the port is ordinary GPIO. Setting
+MODE back to 0 hands the pins back.
+
+Any pin, because nothing in the engine uses a pin-specific FPGA
+primitive: it samples `gpio.v`'s already-synchronised inputs at 48 MHz
+and does everything else in fabric. That is also its speed limit.
+
+If two roles name one pin, TX wins, then SCK, then CS, then RX. Two
+*engines* on one pin are ORed. Both are configuration errors, which
+`z_gs_config()` refuses rather than the hardware spending logic on.
+
+### Registers, `0xe000_2000 + E * 0x40`
+
+| off | name | | |
+|---|---|---|---|
+| `+0x00` | SCTL | r/w | mode and flags, below |
+| `+0x04` | SPINS | r/w | the four roles |
+| `+0x08` | SRATE | r/w | bits 15:0: the divider. tick = 48 MHz / (SRATE + 1) |
+| `+0x0c` | SSTAT | r | below |
+| `+0x10` | STX | w | push one entry: bit 8 is the zlink K flag, bits 7:0 the byte |
+| `+0x14` | STX4 | w | push four data bytes, bits 7:0 first |
+| `+0x18` | SRX | r | pop one entry: bit 9 valid, bit 8 K, bits 7:0 the byte. 0 if empty |
+| `+0x1c` | SRX4 | r | pop four data bytes, the first in bits 7:0 -- **only if four are waiting**; otherwise 0, and nothing is popped |
+| `+0x20` | SERR | r | bits 15:0: errors (zlink code errors and misplaced commas, UART framing), saturating |
+| `+0x24` | SFLUSH | w | bit 0 empty TX, bit 1 empty RX, bit 2 clear SERR and the sticky flags |
+| `+0x28` | SLOCK | r/w | read: the lock, and take it (test-and-set). Write 0: release |
+
+**SCTL**
+
+| bits | name | |
+|---|---|---|
+| 2:0 | MODE | 0 off, 1 zlink, 2 SPI, 3 UART, 4 raw. A mode this build lacks reads back as 0 |
+| 3 | LSB | SPI, raw: least significant bit first (zlink and UART always are) |
+| 4 | CPHA | SPI |
+| 5 | CPOL | SPI |
+| 6 | TXINV | invert the TX / MOSI pin |
+| 7 | RXINV | invert the RX / MISO pin |
+| 8 | TXOD | TX open drain: drives low, releases for a 1 (1-Wire, wired-AND) |
+| 9 | RXEN | keep what is received. Without it: SPI is write-only, the others ignore their input |
+| 10 | LOOP | TX straight to RX inside the engine, for testing |
+| 11 | REPEAT | raw: loop the TX FIFO, below |
+| 12 | TRIG | raw: start capturing at the first edge on RX |
+| 13 | STOP2 | UART: two stop bits |
+| 14 | CS | the level driven on the CS pin |
+| 15 | IDLE | raw: the TX level when there is nothing to send |
+| 18:16 | SPIDLY | SPI: MISO sample delay, in clocks, below |
+
+**Writing a different MODE resets the engine** -- the shift registers,
+the receiver's alignment, the divider -- but not the FIFOs. Writing
+SCTL with the same MODE changes the flags without a reset, which is
+how CS and the inversions move mid-stream.
+
+**SSTAT**
+
+| bits | |
+|---|---|
+| 10:0 | TX level, 0-1024 |
+| 11 | busy: something still to send, or being sent |
+| 12 | RX overrun, sticky: a byte arrived with the RX FIFO full and was dropped |
+| 13 | TX overflow, sticky: a push into a full TX FIFO was dropped |
+| 14 | zlink: the receiver is aligned to the comma |
+| 15 | sticky: an SRX4 popped a K symbol (zlink data and K should be read with SRX) |
+| 26:16 | RX level, 0-1024 |
+
+### The FIFOs
+
+1024 entries each way, in **one** DP16KD (2048x9). The CPU and the
+engine share the RAM's one write port and one read port, the engine
+first; it needs a port at most once every 8 clocks, so the CPU waits a
+clock at most, and rarely.
+
+A true dual-port RAM -- each side with its own port -- would look more
+natural, and yosys cannot build one from it: given two processes
+writing one array it keeps a write priority between them that a
+DP16KD has no way to provide, and quietly falls back to 18,432
+flip-flops. The first full build of this engine came out at 333% of a
+25F. The single-port arrangement is why it is one block RAM.
+
+### Rates
+
+Every mode runs off the 48 MHz bus clock divided by `SRATE + 1`:
+
+| mode | clocks per bit | rate | examples |
+|---|---|---|---|
+| zlink | 4 (x4 oversampling) | 12 MHz / (SRATE + 1) | 0: 12 Mbit/s, 3: 3 Mbit/s |
+| UART | 4 | 12 MHz / (SRATE + 1) baud | 103: 115384 (+0.16%), 383: 31250 exact, 3: 3 Mbaud |
+| SPI | 2 (one tick per SCK edge) | SCK = 24 MHz / (SRATE + 1) | 1: 12 MHz, 2: 8 MHz, 5: 4 MHz |
+| raw | 1 | 48 MHz / (SRATE + 1) | 0: 48 Mbit/s, 19: 2.4 Mbit/s (WS2812, 3 bits per LED bit) |
+
+`z_gs_div_for()` works these out.
+
+### SPI timing
+
+MOSI and SCK leave registered on the same clock. MISO comes back
+through `gpio.v`'s two-flop synchroniser, so the engine reads it
+SPIDLY clocks after a strobe that marks the sampling edge; with
+SPIDLY = 0 that is the pin **as it was just before the edge**, which is
+what a device expects. A larger SPIDLY samples later, which helps a
+slow device or a long wire, up to half an SCK period.
+
+12 MHz works in simulation against a device model with a 6 ns
+clock-to-out. On real wires treat it as "if it works"; 8 MHz (SRATE 2)
+is the comfortable setting.
+
+The engine will not start a byte unless the RX FIFO has room for its
+answer, so a full-duplex transfer cannot overrun: if software falls
+behind, SCK simply stops between bytes.
+
+### UART
+
+LSB first, a start bit, eight data bits, one or two stop bits. The
+receiver finds the start bit on a low sample, checks it again at its
+middle (a glitch shorter than half a bit is ignored), then samples
+every 4 ticks. A low stop bit counts a framing error in SERR and drops
+the byte.
+
+### Raw
+
+TX shifts one bit out per tick; RX shifts one bit in per tick and
+pushes a byte every 8. With TRIG set, RX waits for the first edge on
+its pin and counts that sample as bit 0 -- so a TX that idles high and
+starts with a 0 bit lines up byte for byte on the far side.
+
+**REPEAT** loops the TX FIFO: when it runs dry, the engine starts again
+from where the loop began. The loop begins where the FIFO's read pointer
+was **when MODE was written**, so load the pattern with the engine off
+(MODE 0) and then turn it on with REPEAT set. Turning it on first and
+loading afterwards races the engine, which will loop on whatever part
+of the pattern has arrived.
+
+### Sharing engines between processes
+
+SLOCK is a test-and-set: a read returns it and sets it, in one bus
+cycle, so two processes cannot both claim one engine. Nothing in the
+kernel knows about it -- a process that exits without releasing leaves
+the engine claimed and, possibly, driving its pins. `z_gs_force_release()`
+is there for a shell command to clean up after it.
+
+### From C
+
+```c
+#include "../../common/zgpio_stream.h"
+
+int e = z_gs_claim(Z_GS_ANY);          // -1: none built, or none free
+z_gs_cfg_t c = Z_GS_CFG_INIT;
+c.mode = Z_GS_UART;
+c.tx = Z_GS_PIN(0, 0);                  // port 0, pin 0
+c.rx = Z_GS_PIN(0, 1);
+c.flags = Z_GS_RXEN;
+c.div = z_gs_div_for(Z_GS_UART, 31250, NULL);   // MIDI
+if (z_gs_config(e, &c) == Z_GS_OK) {
+	z_gs_write(e, buf, n);              // queues what fits
+	n = z_gs_read(e, in, sizeof in);    // takes what has arrived
+}
+z_gs_release(e);
+```
+
+Pin numbers are `port * 8 + pin` throughout (`Z_GS_PIN()`), -1 for a
+role not used. `z_gs_config()` refuses pins the board does not have,
+two roles on one pin, a pin another engine is using, and a mode the
+bitstream lacks, each with its own error code. `z_gs_write()` and
+`z_gs_read()` never wait; `z_gs_spi_xfer()` does, for any length, and
+keeps both FIFOs moving. In zlink mode `z_gs_read()` stops in front of
+a control symbol and `z_gs_read_sym()` returns it.
+
+The library is standalone -- it does not link `zgpio.c` -- and adds
+about 4 KB to an app that uses all of it (clang -Os, RV32IM; section GC
+drops what is not called).
+
+### Cost
+
+One engine, all four modes. Place-and-route with and without the
+engine (`GPIO_STREAM_ENGINES` 1 and 0) on the same target, Yosys 0.69
+and nextpnr-ecp5 0.11.1 (YoWASP), default seed, one run each:
+
+| target | device | without | with one engine | engine |
+|---|---|---|---|---|
+| `obst_langkatze_gpio` | 12F (25F die) | 20,821 COMB (86%), 8,990 FF, 32 DP16KD | 21,781 (90%), 9,445 FF, 33 DP16KD | **+960 COMB**, +455 FF, +1 DP16KD |
+| `minze_gpio` | 25F | 20,945 (86%), 9,665 FF, 38 DP16KD | 22,335 (92%), 10,121 FF, 39 DP16KD | +1,390 COMB, +456 FF, +1 DP16KD |
+| `schoko_langkatze_gpio` | 45F | not measured | 25,608 / 43,848 (58%), 11,664 FF, 41 DP16KD | |
+| `lakritz_gpio` | 25F | 23,361 (96%), 10,651 FF, 38 DP16KD | -- (no engine: `GPIO_STREAM_ENGINES 0`) | |
+
+The same engine costs 960 cells on one board and 1,390 on another:
+that spread is nextpnr's packing, not the engine. Synthesised on its
+own with eight pins (yosys `synth_ecp5`) it is 924 LUT4, 67 CCU2C,
+434 FF and one DP16KD. The optional modes are cheap -- SPI about 40
+LUT4, UART and raw close to nothing -- so `GPIO_STREAM_NO_*` saves
+little; the cost is the core (FIFO pointers, the bus side, the
+divider, zlink's receiver). It is about twice what was estimated
+before it was built, and the place to look first if a board needs it
+smaller.
 
 ## Building it
 
@@ -646,10 +912,18 @@ value, where hardware would give contention and an indeterminate level
 the bug quiet, which is the one thing in there worth being suspicious
 of.
 
+The simulator has **no stream engines**: its CONFIG reports 0, so
+`z_gs_count()` is 0 and code falls back exactly as it would on a board
+without them. The engines are tested in RTL simulation instead (below),
+and `zgpio_stream.c` against a model of its registers.
+
 ## Testing it
 
 ```
-iverilog -g2005 -o /tmp/tb_gpio rtl/tb/tb_gpio.v rtl/gpio.v && /tmp/tb_gpio
+make test_gpio                    # the block: ports, LEDs, aliasing
+make test_gpio_stream             # the stream engines, a few minutes
+make -C rtl/tests 8b10b           # zlink's 8b/10b, every symbol
+make -C sw/common/tests -f Makefile.zgpio_stream   # the C library
 ```
 
 `rtl/tb/tb_gpio.v` builds two ports (so the per-port address arithmetic
@@ -660,9 +934,48 @@ and OUT reaching the pads, IN reading the pad rather than OUT, the four
 aliases including their read-back, port isolation, unbuilt ports, the
 documented aliasing, and the full open-drain sequence end to end.
 
+`rtl/tb/tb_gpio_stream.v` builds two whole GPIO blocks, each with two
+ports and two engines, **on separate clocks** -- the second runs `PPM`
+parts per million fast or slow, as a second board would -- and wires
+pins between them with `JIT` ns of random delay on every edge. It
+covers:
+
+- CONFIG, an unbuilt engine, and SLOCK;
+- pin ownership: DIR/OUT ignored on a claimed pin, IN still reading
+  it, and the pin returned to GPIO when MODE goes back to 0;
+- the FIFO plumbing: STX/STX4/SRX/SRX4, levels, TX overflow, flush;
+- raw at 48 Mbit/s through a jumper, both bit orders, the trigger, and
+  REPEAT;
+- UART both ways at 115200, 31250 and 3 Mbaud, and a framing error;
+- SPI against a device model in all four modes, MSB and LSB first, at
+  12 and 6 MHz, full duplex and write-only;
+- zlink both ways at 12 and 3 Mbit/s with data and K symbols, a fault
+  on the wire mid-burst, and the link clean again afterwards;
+- a second engine working independently of the first.
+
+It passes at 0, +-300, +-1000 and +-2000 ppm and with up to 8 ns of
+jitter (`make test_gpio_stream PPM=-2000 JIT=5`); a 48 MHz crystal
+oscillator is good to +-50-100 ppm.
+
+Two things it found that are worth knowing about:
+
+- **A glitch on enable.** For one clock after MODE was written, a pin
+  was already the engine's but its shift register still held the
+  previous mode's idle level, so a raw or UART line that should idle
+  high dipped low -- a false start bit or trigger at the far end. Pins
+  are now taken one clock later, once the reset has run.
+- **A false comma after reconfiguring.** The zlink receiver's shift
+  register kept the previous run's bits across a mode change, and the
+  first new sample could complete a K28.5 with them, aligning the
+  receiver off the symbol boundary -- a stray byte at the start of the
+  next stream. It now clears to all ones, which cannot form a comma
+  with anything but a real one.
+
 ## See also
 
 - `rtl/gpio.v` -- the block, and the reasoning for each decision above
+- `rtl/gpio_stream.v` -- the stream engines
+- `docs/zlink.md` -- zlink, which the stream engines carry
 - `release/hw/pmods/gpio.spec` -- pin map, pull-up choice
 - `docs/logic_app.md` -- the `logic` app: analyser, pin driver, I2C decoder
 - `docs/i2c.md` -- bit-banged I2C over these pins

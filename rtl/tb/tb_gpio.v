@@ -7,7 +7,7 @@
  *   $ iverilog -g2005 -o /tmp/tb_gpio rtl/tb/tb_gpio.v rtl/gpio.v \
  *       && /tmp/tb_gpio
  *
- * or `make tb_gpio` from the project root.
+ * or `make test_gpio` from the project root.
  *
  * NPORTS is 2 here rather than the 1 both current boards build, so the
  * per-port address arithmetic is actually exercised -- with one port,

@@ -409,7 +409,7 @@ bool z_port_pid_running(uint32_t pid);
 // a telnet or SSH session -- carries a Z_MAP saying who it is, instead
 // of Z_NONE. docs/ports.md, "Who is connecting".
 //
-//   "transport"  Z_STR     "telnet" or "ssh"
+//   "transport"  Z_STR     "telnet" or "ssh"; "zlink" from sw/apps/zlink
 //   "auth"       Z_STR     "system": the machine's password or an SSH
 //                          key in /data/netserve/authkeys was checked.
 //                          "none": nobody checked anything (a noauth

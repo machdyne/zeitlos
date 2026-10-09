@@ -193,7 +193,39 @@ includes `docs/zboot.md`'s reboot pin, which is a few cells):
 |---|---|---|---|---|
 | +602 | +127 | +26 | +32 | **0** |
 
-The page buffer is LUT RAM on purpose: Lakritz uses 54 of its 56 block
-RAMs, its tightest resource (`docs/usb_host.md`). Reading the buffer
-back over the bus would have cost about 600 LUTs more, for a debugging
-convenience, so it reads 0.
+That table is the original design, with the page buffer in LUT RAM:
+Lakritz then used 54 of its 56 block RAMs, its tightest resource
+(`docs/usb_host.md`). Reading the buffer back over the bus would have
+cost about 600 LUTs more, for a debugging convenience, so it reads 0 --
+which is still true.
+
+### The page buffer is a block RAM now
+
+The resources have changed places: Lakritz uses 38 of its 56 block
+RAMs and is out of LUTs (96% on `lakritz_gpio`), and every board pays
+for this buffer. As LUT RAM it cost more than it looked -- not just the
+32 RAM cells but the read multiplexer over them. `spiflash_wb` alone,
+packed by nextpnr-ecp5, the two differing only in `ram_style`:
+
+| page buffer | TRELLIS_COMB | TRELLIS_RAMW | TRELLIS_FF | DP16KD |
+|---|---|---|---|---|
+| LUT RAM (before) | 772 | 32 | 207 | 0 |
+| block RAM (now) | 558 | 0 | 253 | 1 |
+| | **-214** | **-32** | +46 | +1 |
+
+Nothing else changed: the program path already read the buffer through
+a register (`bword`), which is what a block RAM needs, so the RTL
+behaves identically cycle for cycle. On an openXC7 build with
+`XC7_LUTRAM=-nolutram` the old attribute made the buffer 2,048
+flip-flops; it is a block RAM there too now.
+
+Verified against the netlist, not only the RTL:
+`make -C rtl/tests spiflash_netlist` runs `tb_spiflash.v` against
+spiflash.v as yosys builds it for ECP5. That needs a working block RAM
+model -- yosys's `cells_sim_ecp5.v` declares DP16KD as an empty black
+box, so the RAM reads X -- which `rtl/tests/dp16kd_model.v` supplies.
+Both the old and new netlists pass all 28 checks.
+
+The first attempt at that netlist test "passed" the 256-byte program
+with every byte X: the readback loop compared with `!=`, and X compared
+with anything is not true inside an `if`. It uses `!==` now.

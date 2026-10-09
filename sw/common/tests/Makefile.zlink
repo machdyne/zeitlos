@@ -1,0 +1,18 @@
+# zlink on the host (docs/zlink.md):
+#   test_zlink         the link layer over a simulated frame wire: loss,
+#                      corruption, collisions, a stalled reader, a restart
+#   test_zlink_soft    the soft transport over two modelled open-drain
+#                      wires, straight and crossed, ends stalled at random
+#   test_zlink_stream  the stream transport over two modelled engines,
+#                      through the real zgpio_stream.c
+#   make -C sw/common/tests -f Makefile.zlink
+CFLAGS = -std=gnu99 -O1 -g -Wall -Wextra -fsanitize=address,undefined -I ..
+
+all:
+	cc $(CFLAGS) -o /tmp/test_zlink test_zlink.c ../zlink.c
+	/tmp/test_zlink
+	cc $(CFLAGS) -o /tmp/test_zlink_soft test_zlink_soft.c ../zlink.c ../zlink_soft.c
+	/tmp/test_zlink_soft
+	cc $(CFLAGS) -DZ_GS_HOST_TEST -o /tmp/test_zlink_stream test_zlink_stream.c \
+		../zlink.c ../zlink_stream.c ../zgpio_stream.c
+	/tmp/test_zlink_stream

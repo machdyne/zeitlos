@@ -23,6 +23,7 @@ RTL_PICO = \
 	rtl/uart_null.v \
 	rtl/ethmac_rmii.v \
 	rtl/gpio.v \
+	rtl/gpio_stream.v \
 	rtl/csrs.v \
 	rtl/esp32_rxfifo.v \
 	rtl/socctl.v \
@@ -998,6 +999,24 @@ test_uart:
 	@mkdir -p output
 	iverilog -g2005 -o output/tb_uart rtl/tb/tb_uart.v rtl/uart.v
 	@vvp output/tb_uart
+
+# rtl/gpio.v: the port registers, LEDs, aliasing (docs/gpio.md).
+test_gpio:
+	@mkdir -p output
+	iverilog -g2005 -o output/tb_gpio rtl/tb/tb_gpio.v rtl/gpio.v rtl/gpio_stream.v
+	@vvp -n output/tb_gpio
+
+# The GPIO stream engines (rtl/gpio_stream.v): two GPIO blocks on
+# clocks PPM apart with JIT ns of wire jitter -- raw, UART, SPI against
+# a device model, zlink both ways, recovery from a fault (docs/zlink.md).
+# A few minutes. `make test_gpio_stream PPM=-2000 JIT=5` for a corner.
+PPM ?= 300
+JIT ?= 3
+test_gpio_stream:
+	@mkdir -p output
+	iverilog -g2005 -DPPM=$(PPM) -DJIT=$(JIT) -o output/tb_gpio_stream \
+		rtl/tb/tb_gpio_stream.v rtl/gpio.v rtl/gpio_stream.v
+	@vvp -n output/tb_gpio_stream
 
 # USB host controller: SIE, port front end, transaction engine and the
 # Wishbone top, against a behavioural device model. Covers full speed,

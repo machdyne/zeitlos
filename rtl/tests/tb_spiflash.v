@@ -180,7 +180,7 @@ module tb_spiflash;
 		d = 0;
 		for (i = 0; i < 64; i = i + 1) begin
 			bus_read(32'h101D_0000 + 4 * i, st);
-			if (st != pattern[i]) begin
+			if (st !== pattern[i]) begin
 				if (d < 4) $display("     word %0d: read %08x, wrote %08x; flash bytes %02x %02x %02x %02x", i, st, pattern[i],
 					flash.mem[24'h1D0000 + 4*i], flash.mem[24'h1D0000 + 4*i + 1], flash.mem[24'h1D0000 + 4*i + 2], flash.mem[24'h1D0000 + 4*i + 3]);
 				d = d + 1;

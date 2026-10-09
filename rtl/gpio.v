@@ -157,7 +157,18 @@ module gpio_wb #(
 	// Defaults to 0: a gpio_wb instantiated without being told
 	// anything is the LED block and nothing more, which is the safe
 	// answer and is exactly what rtl/debug.v was.
-	parameter NPORTS = 0
+	parameter NPORTS = 0,
+
+	// GPIO stream engines (rtl/gpio_stream.v): serial peripherals --
+	// zlink, SPI, UART, raw -- that can be put on any pin of any port.
+	// rtl/sysctl.v passes `GPIO_STREAM_ENGINES (rtl/boards.vh, default 1)
+	// when the board has a port and 0 when it does not. With 0 this
+	// block is exactly what it was before engines existed, aliasing and
+	// all; see the header's "Stream engines" section.
+	parameter ENGINES = 0,
+	parameter ENG_SPI = 1,
+	parameter ENG_UART = 1,
+	parameter ENG_RAW = 1
 )
 (
 	input wb_clk_i,
@@ -215,13 +226,26 @@ module gpio_wb #(
 	assign wb_dat_o = dat_r;
 	assign wb_ack_o = ack_r;
 
-	assign gpio_dir_o = { dir[7], dir[6], dir[5], dir[4],
-	                      dir[3], dir[2], dir[1], dir[0] };
-	assign gpio_out_o = { out[7], out[6], out[5], out[4],
-	                      out[3], out[2], out[1], out[0] };
+	wire [63:0] reg_dir = { dir[7], dir[6], dir[5], dir[4],
+	                        dir[3], dir[2], dir[1], dir[0] };
+	wire [63:0] reg_out = { out[7], out[6], out[5], out[4],
+	                        out[3], out[2], out[1], out[0] };
+
+	// A pin an engine owns takes its direction and value from the
+	// engine; every other pin is the port registers, as always.
+	wire [63:0] eng_own, eng_dir, eng_out;
+	assign gpio_dir_o = (reg_dir & ~eng_own) | (eng_dir & eng_own);
+	assign gpio_out_o = (reg_out & ~eng_own) | (eng_out & eng_own);
 
 	// See the header on what is and is not decoded here.
 	wire is_port = wb_adr_i[10];
+
+	// The engine window, 0xe000_2000: word address bit 11, engine in
+	// bits 5:4, register in 3:0. Only decoded when engines are built,
+	// so a build without them aliases exactly as it always did.
+	wire is_eng = (ENGINES > 0) && wb_adr_i[11];
+	wire [1:0] eidx = wb_adr_i[5:4];
+	wire eng_ok = (eidx < ENGINES);
 	wire [2:0] pidx = wb_adr_i[5:3];
 	wire [2:0] preg = wb_adr_i[2:0];
 
@@ -238,7 +262,62 @@ module gpio_wb #(
 	// lane 0, so lane 0 is the only one with anything to write. A
 	// byte store to lane 3 of DIR does nothing, which is the honest
 	// behaviour -- there is nothing there.
-	wire wr = sel && wb_we_i && wb_sel_i[0];
+	wire wr = sel && wb_we_i && wb_sel_i[0] && !is_eng;
+
+	// -- the engines --
+	//
+	// Each one holds its own access until it says `done`, so the ack
+	// below waits for it; a register in an engine this build does not
+	// have answers at once and reads 0, like an unbuilt port.
+	wire [3:0] eng_done;
+	wire [127:0] eng_rdo;
+	wire [255:0] eng_own_v, eng_dir_v, eng_out_v;
+
+	genvar ge;
+	generate
+		for (ge = 0; ge < 4; ge = ge + 1) begin : engines
+			if (ge < ENGINES) begin : built
+				gpio_stream #(
+					.NPINS(NPORTS * 8),
+					.HAS_SPI(ENG_SPI),
+					.HAS_UART(ENG_UART),
+					.HAS_RAW(ENG_RAW)
+				) eng (
+					.clk(wb_clk_i),
+					.rst(wb_rst_i),
+					.acc(sel && is_eng && (eidx == ge)),
+					.we(wb_we_i),
+					.ra(wb_adr_i[3:0]),
+					.wd(wb_dat_i),
+					.done(eng_done[ge]),
+					.rdo(eng_rdo[ge*32 +: 32]),
+					.pin_in(in_sync),
+					.own(eng_own_v[ge*64 +: 64]),
+					.own_dir(eng_dir_v[ge*64 +: 64]),
+					.own_out(eng_out_v[ge*64 +: 64])
+				);
+			end else begin : none
+				assign eng_done[ge] = 1'b0;
+				assign eng_rdo[ge*32 +: 32] = 32'd0;
+				assign eng_own_v[ge*64 +: 64] = 64'd0;
+				assign eng_dir_v[ge*64 +: 64] = 64'd0;
+				assign eng_out_v[ge*64 +: 64] = 64'd0;
+			end
+		end
+	endgenerate
+
+	// Two engines on one pin is a configuration error zgpio refuses;
+	// the hardware just ORs them rather than spending a priority mux.
+	assign eng_own = eng_own_v[63:0] | eng_own_v[127:64] |
+	                 eng_own_v[191:128] | eng_own_v[255:192];
+	assign eng_dir = eng_dir_v[63:0] | eng_dir_v[127:64] |
+	                 eng_dir_v[191:128] | eng_dir_v[255:192];
+	assign eng_out = eng_out_v[63:0] | eng_out_v[127:64] |
+	                 eng_out_v[191:128] | eng_out_v[255:192];
+
+	// what CONFIG reports: { raw, uart, spi, zlink } when engines exist
+	wire [3:0] eng_modes = (ENGINES > 0) ?
+		{ ENG_RAW != 0, ENG_UART != 0, ENG_SPI != 0, 1'b1 } : 4'd0;
 
 	// Selected port's current value, named once rather than repeated
 	// in six places below. The synthesis result is one 8-wide 8:1 mux
@@ -288,7 +367,10 @@ module gpio_wb #(
 
 		end else begin
 
-			ack_r <= sel;
+			ack_r <= is_eng ? (sel && (!eng_ok || eng_done[eidx])) : sel;
+
+			if (is_eng && sel)
+				dat_r <= eng_ok ? eng_rdo[eidx*32 +: 32] : 32'd0;
 
 			if (wr) begin
 
@@ -317,14 +399,15 @@ module gpio_wb #(
 
 			end
 
-			if (sel && !wb_we_i) begin
+			if (sel && !wb_we_i && !is_eng) begin
 
 				if (!is_port) begin
 					case (preg)
 						3'd0: dat_r <= { 31'b0, led };
 						3'd1: dat_r <= { 24'b0, leds };
 						3'd2: dat_r <= MAGIC;
-						3'd3: dat_r <= { CONFIG_SIG, 12'b0, NPORTS[3:0] };
+						3'd3: dat_r <= { CONFIG_SIG, 4'b0, eng_modes,
+						                 ENGINES[3:0], NPORTS[3:0] };
 						default: dat_r <= 32'h0000_0000;
 					endcase
 				end

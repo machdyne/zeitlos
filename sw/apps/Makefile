@@ -40,6 +40,7 @@ APPS = casino poker roulette blackjack slots craps \
 	bench \
 	ls99 \
 	i2c \
+	zlink \
 	portdemo \
 	console \
 	cron \

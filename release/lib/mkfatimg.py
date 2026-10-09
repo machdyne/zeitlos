@@ -189,6 +189,7 @@ SUPPLEMENTAL = [
     (zcard("Z_DIR_APPS", "bench"), "sw/apps/bench/bench.bin"),
     (zcard("Z_DIR_APPS", "ls99"), "sw/apps/ls99/ls99.bin"),
     (zcard("Z_DIR_APPS", "i2c"), "sw/apps/i2c/i2c.bin"),
+    (zcard("Z_DIR_APPS", "zlink"), "sw/apps/zlink/zlink.bin"),
     (zcard("Z_DIR_APPS", "logic"), "sw/apps/logic/logic.bin"),
     (zcard("Z_DIR_APPS", "serial"), "sw/apps/serial/serial.bin"),
     (zcard("Z_DIR_APPS", "mesh"), "sw/apps/mesh/mesh.bin"),
