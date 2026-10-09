@@ -394,9 +394,12 @@ def cmd_build(args):
     # commit while every image still carried the old ones.
     software = None
     if targets:
-        first = spec.load_target(ROOT, targets[0])
+        # The whole CORE_APPS list from the Makefile -- never one
+        # target's, which is how 0.0.5 shipped every image without wm:
+        # the archive came from the first target, and that was Klinge.
         software = build_mod.build_software(
-            ROOT, first.core_app_list(), dry=args.dry_run, jobs=args.jobs)
+            ROOT, list(spec.core_apps(ROOT)[0]), dry=args.dry_run,
+            jobs=args.jobs)
 
     results = []
     for name in targets:

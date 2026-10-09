@@ -350,6 +350,9 @@ def asset_readme(version, commit, targets, sdcard, layout):
                % L["kernel"].offset)
     out.append("  zeitlos-apps.zar               core apps, flash 0x%06x"
                % L["apps"].offset)
+    if any((t.get("artifacts") or {}).get("apps") for t in targets):
+        out.append("  zeitlos-<board>-apps.zar       instead of the above, for a")
+        out.append("                                 board that omits a core app")
     if "jump" in L:
         out.append("  zeitlos-<board>-jump.bin       jumploader, flash 0x%06x"
                    % L["jump"].offset)
@@ -371,7 +374,8 @@ def asset_readme(version, commit, targets, sdcard, layout):
         lines = []
         pieces = [("gateware", gw),
                   ("kernel", "zeitlos-kernel.bin"),
-                  ("apps", "zeitlos-apps.zar")]
+                  ("apps", (t.get("artifacts") or {}).get("apps")
+                   or "zeitlos-apps.zar")]
         jl = (t.get("artifacts") or {}).get("jumploader")
         if jl and "jump" in L:
             pieces.append(("jump", jl))

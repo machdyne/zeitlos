@@ -326,6 +326,8 @@ else ifeq ($(BOARD), klinge)
 	FLASH = openFPGALoader -v -c $(CABLE) -f
 	FLASH_OFFSET = -o
 	JUMP = 1
+	# Headless, but it keeps every core app: wm is there for remote
+	# desktop, and init does not start it without a display.
 else ifeq ($(BOARD), sergei_ml0)
 	# Sergei with the Sechzig ML0 module: the ML1 module on an LFE5U-25F,
 	# same balls, so the ML1 pin file. docs/boards.md.
@@ -832,14 +834,26 @@ endif
 # repl is NOT here. It and posix are the shells term connects to, and
 # both live on the sdcard -- term starts one when its REPL or POSIX
 # button is pressed. See docs/flash_apps.md, "Why repl is not a core app".
+#
+# THE ONE LIST OF CORE APPS. The release reads it from here (`make
+# core-apps`), so `make flash` and a release image carry the same apps.
+# A board can drop one by setting CORE_APPS_OMIT in its block above; no
+# board does, headless ones included (wm is wanted there for remote
+# desktop). A name in CORE_APPS_OMIT that is not in CORE_APPS is an
+# error in the release tools, not a silent no-op.
+CORE_APPS = wm net term console cron
+ZAR_APPS = $(filter-out $(CORE_APPS_OMIT),$(CORE_APPS))
+
 $(OUTDIR)/apps.zar: apps
 	mkdir -p $(OUTDIR)
 	python3 tools/mkzar.py $(OUTDIR)/apps.zar \
-		wm=sw/apps/wm/wm.bin \
-		net=sw/apps/net/net.bin \
-		term=sw/apps/term/term.bin \
-		console=sw/apps/console/console.bin \
-		cron=sw/apps/cron/cron.bin
+		$(foreach a,$(ZAR_APPS),$(a)=sw/apps/$(a)/$(a).bin)
+
+# For release/: the list, what this board omits, and what it gets.
+core-apps:
+	@echo "all: $(CORE_APPS)"
+	@echo "omit: $(CORE_APPS_OMIT)"
+	@echo "board: $(ZAR_APPS)"
 
 ifeq ($(FAMILY), ice40)
 flash_apps: $(OUTDIR)/apps.zar
@@ -1327,4 +1341,4 @@ clean_bios:
 clean_apps:
 	cd sw/apps && make clean
 
-.PHONY: clean_bios bios apps tftp-dist timing path util test_blit test_uart hwmap FORCE soc
+.PHONY: clean_bios bios apps core-apps tftp-dist timing path util test_blit test_uart hwmap FORCE soc

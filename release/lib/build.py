@@ -305,9 +305,9 @@ def build_software(root, core_apps, dry=False, jobs=None):
     runtime from the feature CSR (sw/apps/net/net_phy.h).
 
     So this runs once, and every target's flash image embeds the same
-    kernel.bin and the same apps.zar. Faster, and one less way for two
-    targets in a release to differ from each other without anybody
-    meaning them to.
+    kernel.bin. `core_apps` is the Makefile's whole CORE_APPS list; the
+    archive of it ships as zeitlos-apps.zar and goes into every image
+    whose board omits nothing (target_zar() handles one that does).
 
     The BIOS is NOT here: it is board-specific (-DBOARD_x, -DFPGA_x)
     and is baked into the bitstream by ecpbram, so it belongs to the
@@ -342,6 +342,23 @@ def build_software(root, core_apps, dry=False, jobs=None):
             "kernel": os.path.join(root, "sw/os/kernel.bin"),
             "arch": arch,
             "core_apps": list(core_apps)}
+
+
+def target_zar(root, target, software, dry=False):
+    """The core app archive for `target`'s image: the shared one, unless
+    the board sets CORE_APPS_OMIT, in which case an archive of the
+    board's own list, from the same .bin files."""
+    apps = target.core_app_list()
+    if apps == software["core_apps"]:
+        return software["zar"]
+    zar = os.path.join(root, "output", "releases", "apps-%s.zar" % target.name)
+    print("    core apps: %s (the board omits %s)"
+          % (", ".join(apps),
+             ", ".join(a for a in software["core_apps"] if a not in apps)))
+    cmd = [sys.executable, os.path.join(root, "tools/mkzar.py"), zar]
+    cmd += ["%s=sw/apps/%s/%s.bin" % (a, a, a) for a in apps]
+    run(cmd, root, dry=dry)
+    return zar
 
 
 def build_target(root, target, version, outdir, software, dry=False,
@@ -381,7 +398,7 @@ def build_target(root, target, version, outdir, software, dry=False,
         "family": target.family,
         "arch": arch,
         "nic": target.nic(),
-        "core_apps": software["core_apps"],
+        "core_apps": target.core_app_list(),
         "defines": {k: v for k, v in target.defines.items()},
         "flash_cmd": target.flash_cmd,
         "notes": list(target.notes),
@@ -487,7 +504,7 @@ def build_target(root, target, version, outdir, software, dry=False,
         parts = {
             "gateware": os.path.join(boutput, "soc.bit"),
             "kernel": software["kernel"],
-            "apps": software["zar"],
+            "apps": target_zar(root, target, software),
         }
         # The jumploader (docs/zboot.md sec. 5). On a board whose Makefile
         # block sets JUMP, the gateware reloads from the jumploader when
@@ -594,6 +611,10 @@ def build_target(root, target, version, outdir, software, dry=False,
 
         result["artifacts"]["flash_image"] = os.path.basename(img_path)
         result["image_bytes"] = len(img)
+        if parts["apps"] != software["zar"]:
+            dst = os.path.join(outdir, "zeitlos-%s-apps.zar" % target.name)
+            shutil.copy2(parts["apps"], dst)
+            result["artifacts"]["apps"] = os.path.basename(dst)
         result["regions"] = [
             {"region": r.key, "offset": r.offset, "used": used,
              "limit": limit, "file": os.path.basename(p.path)}

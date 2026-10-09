@@ -22,10 +22,6 @@ lpf         = sergei_ml2.lpf
 
 flash_cmd = openFPGALoader -c dirtyJtag -f -o 0 {file}
 
-# repl is not a core app -- it and posix ship on the card image
-# (release/lib/mkfatimg.py) and init starts them from there.
-core_apps = wm net term console cron
-
 # PMOD port, as on Sergei ML1 -- six pins, four signals, pin 1 shared
 # with the optical output -- on the ML2 module's balls. Pins 2-4 are
 # DEDUCED from Mozart ML2's audio balls, not measured: see the ball map

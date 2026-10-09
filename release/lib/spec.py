@@ -37,8 +37,10 @@
 #                   additive -D on the yosys command line cannot)
 #
 
+import functools
 import os
 import re
+import subprocess
 
 
 class SpecError(Exception):
@@ -260,15 +262,44 @@ class Target:
         return None
 
     def core_app_list(self):
-        """The core apps in the ZAR.
+        """The core apps in this target's ZAR.
 
-        Now the same list on every board. `net` is included even where
-        there is no MAC: it detects that at startup from the feature
-        CSR and exits cleanly saying so, which is better than being
-        absent for reasons the user cannot see -- and it is what makes
-        one archive correct everywhere.
+        The top-level Makefile's CORE_APPS, less the board's
+        CORE_APPS_OMIT -- see core_apps(). `net` stays even where there
+        is no MAC: it detects that at startup from the feature CSR and
+        exits cleanly saying so.
         """
         return list(self.core_apps)
+
+
+@functools.lru_cache(maxsize=None)
+def core_apps(root, board=None):
+    """(all, omit, board) from the top-level Makefile (`make core-apps`).
+
+    The Makefile holds the one list of core apps, CORE_APPS, and a board
+    drops some with CORE_APPS_OMIT in its block. Asked of the Makefile
+    rather than written down here, so `make flash` and a release image
+    cannot carry different apps. The release used to keep a list per
+    board spec and build ONE archive from whichever target sorted first;
+    when that became klinge, every image lost wm.
+    """
+    cmd = ["make", "-s", "--no-print-directory", "core-apps"]
+    if board:
+        cmd.append("BOARD=" + board)
+    r = subprocess.run(cmd, cwd=root, capture_output=True, text=True)
+    lines = dict(l.split(":", 1) for l in r.stdout.splitlines() if ":" in l)
+    if r.returncode or "all" not in lines:
+        raise SpecError("`%s` failed: %s" % (" ".join(cmd),
+                                            (r.stderr or r.stdout).strip()))
+    every, omit, mine = (tuple(lines.get(k, "").split())
+                         for k in ("all", "omit", "board"))
+    stray = [a for a in omit if a not in every]
+    if stray:
+        raise SpecError("%s: CORE_APPS_OMIT names %s, which %s not in "
+                        "CORE_APPS (%s)" % (board or "Makefile", ", ".join(stray),
+                                            "is" if len(stray) == 1 else "are",
+                                            " ".join(every)))
+    return every, omit, mine
 
 
 def load_target(root, name):
@@ -313,7 +344,14 @@ def load_target(root, name):
     # writes to the wrong place.
     dfu = _one(bdata, "dfu_base", default="", where=bpath)
     t.dfu_base = int(dfu, 0) if dfu else None
-    t.core_apps = _words(bdata, "core_apps") or ["wm", "net", "term", "console"]
+    for data, where in ((bdata, bpath), (tdata, tpath)):
+        if "core_apps" in data:
+            raise SpecError(
+                "%s: core_apps is not set per spec any more. The list is "
+                "CORE_APPS in the top-level Makefile; to drop an app on a "
+                "board, set CORE_APPS_OMIT in that board's block "
+                "(docs/releases.md)." % where)
+    t.core_apps = list(core_apps(root, t.board)[2])
     t.description = _one(tdata, "description",
                          default=_one(bdata, "description", default=name,
                                       where=bpath),

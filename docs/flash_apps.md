@@ -236,19 +236,34 @@ What changed with it, so nothing assumes the old arrangement:
   until `repl0` and `net0` do -- which would never have happened without
   a card. See `docs/socctl.md`, "The busy cursor".
 - **The release** ships `repl` on the card image beside `posix`
-  (`release/lib/mkfatimg.py`'s `SHELLS`, `tools/mkfatimg.sh`), and the
-  board specs' `core_apps` drop it.
+  (`release/lib/mkfatimg.py`'s `SHELLS`, `tools/mkfatimg.sh`), and
+  `CORE_APPS` does not list it.
 
 ## Adding or removing a core app
 
-1. Add or remove it in `Makefile`'s `output/$(BOARD_LC)/apps.zar` rule.
-2. Do the same in `core_apps` in each `release/hw/boards/*.spec`, and
-   the default in `release/lib/spec.py`.
-3. If it is leaving flash but should still exist, add it to the card
+The list is `CORE_APPS` in the top-level `Makefile`, and only there.
+`make flash_apps` builds the archive from it, and `release/zrelease`
+asks the Makefile for it (`make core-apps`), so a board flashed by hand
+and a release image carry the same apps. Board and target specs cannot
+set one; the release tools refuse a spec that tries.
+
+A board can leave apps out with `CORE_APPS_OMIT` in its Makefile block.
+No board does, headless ones included: `wm` stays in flash on Klinge
+for remote desktop, and `init` simply does not start it on a bitstream
+without a display. If a board ever does omit something, the release
+builds that board its own archive and ships it as
+`zeitlos-<target>-apps.zar`; everyone else gets the full
+`zeitlos-apps.zar`. (0.0.5 shipped with the list kept per board spec
+and ONE archive built from whichever target sorted first -- Klinge, at
+the time headless without `wm` -- so every 0.0.5 image lacked `wm` and
+`term`. That is what this arrangement replaces.)
+
+1. Add or remove it in `CORE_APPS` in `Makefile`.
+2. If it is leaving flash but should still exist, add it to the card
    image: `release/lib/mkfatimg.py` and `tools/mkfatimg.sh` (the release
    checks the two lists agree), and remove it from their "core apps must
    not be on the card" check.
-4. Rebuild and reflash: `make BOARD=<board> flash_apps`.
+3. Rebuild and reflash: `make BOARD=<board> flash_apps`.
 
 The kernel accepts up to `Z_ZAR_MAX_ENTRIES` (32) entries. There is no
 requirement that a core app also appear in wm's dock -- the dock should

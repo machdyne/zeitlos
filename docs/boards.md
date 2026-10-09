@@ -494,9 +494,10 @@ would be an unacked bus cycle and a hung CPU), and a remote desktop
 over ethernet will read it. See [gpu_raster.md](gpu_raster.md) and
 [gpu_blitter.md](gpu_blitter.md).
 
-**Software.** The console is USB CDC-ACM. The release target's core
-apps are `net console cron`: no `wm` and no `term`, which is a `wm`
-window. With no USB host, `z_hid_init()` and the HID interrupt
+**Software.** The console is USB CDC-ACM. Flash carries every core
+app, `wm` and `term` included, for remote desktop later; `init` sees
+no `Z_FEATURE_GPU` and does not start `wm` (docs/boot.md). With no USB
+host, `z_hid_init()` and the HID interrupt
 handlers never see an interrupt and nothing polls the absent ports.
 `net` finds the RMII MAC from the feature CSR as on Mozart and Sergei.
 

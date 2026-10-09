@@ -24,11 +24,6 @@ flash_cmd = openFPGALoader -v -c dirtyJtag -f -o 0 {file}
 # The 256KB DFU bootloader's user partition (docs/dfu_upgrade.md).
 dfu_base = 0x040000
 
-# Headless: no wm, and no term (a wm window). net is the point of the
-# board; console is the kernel console as a port provider, reachable
-# over telnet/ssh once netserve runs; cron for scheduled jobs.
-core_apps = net console cron
-
 defines =
     FPGA_ECP5
     PROGRAMN_PIN

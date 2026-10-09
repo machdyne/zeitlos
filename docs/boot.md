@@ -55,7 +55,11 @@ gateware  ->  BIOS (BRAM)  ->  kernel (flash -> RAM)  ->  sh()  ->  init()  ->  
    underneath, and the source is printed (`init: wm (flash)`).
 
    - **`wm` is the only fatal one.** Without it there is no desktop to
-     start anything else into.
+     start anything else into. On a bitstream without a display (no
+     `Z_FEATURE_GPU`, e.g. Klinge) `init` does not start `wm` at all --
+     it prints `init: no display in this bitstream, not starting wm`
+     and carries on with `net` and the rest. `wm` is still in flash
+     there, for remote desktop.
    - **`repl` and `posix` are optional and card-only.** Neither is in the
      flash archive (`docs/flash_apps.md`), so on a board with no card
      both print `not found (non-fatal -- it lives on the sdcard)`, and

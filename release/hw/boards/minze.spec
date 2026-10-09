@@ -26,10 +26,6 @@ flash_cmd = openFPGALoader -v -c dirtyJtag -f -o 0 {file}
 # The 256KB DFU bootloader's user partition (docs/dfu_upgrade.md).
 dfu_base = 0x040000
 
-# No `net`: no PHY, the PMOD carries GPIO, and the low-speed USB HID
-# host cannot drive a USB ethernet adapter.
-core_apps = wm term console cron
-
 defines =
     FPGA_ECP5
     PROGRAMN_PIN

@@ -22,11 +22,6 @@ flash_cmd = openFPGALoader -v -c dirtyJtag -f -o 0 {file}
 # The 256KB DFU bootloader's user partition (docs/dfu_upgrade.md).
 dfu_base = 0x040000
 
-# net stays: there is no PHY, but the full-speed USB host drives USB
-# ethernet adapters (docs/usb_ethernet.md), and net finds the NIC at
-# startup from the feature CSR.
-core_apps = wm net term console cron
-
 defines =
     FPGA_ECP5
     PROGRAMN_PIN

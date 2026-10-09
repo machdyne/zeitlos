@@ -36,8 +36,6 @@ flash_cmd = openFPGALoader -v -c dirtyJtag -f -o 0 {file}
 # first; the -dfu.bin will not fit behind the old one.
 dfu_base = 0x040000
 
-core_apps = wm net term console cron
-
 defines =
     FPGA_ECP5
     PROGRAMN_PIN

@@ -48,10 +48,6 @@ pmod.j1 =
 # Matches the Makefile's own FLASH line for this board.
 flash_cmd = openFPGALoader -v -b ulx3s -f -o 0 {file}
 
-# repl is not a core app -- it and posix ship on the card image
-# (release/lib/mkfatimg.py) and init starts them from there.
-core_apps = wm net term console cron
-
 defines =
 	FPGA_ECP5
 	OSC25

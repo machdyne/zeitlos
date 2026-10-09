@@ -1812,25 +1812,34 @@ void init(void) {
 	}
 
 	// wm:
-
-	printf("starting wm\n");
-	z_exec_info_t xi_wm;
-	core_src_t src_wm = core_exec_info("wm", &xi_wm);
-	uint32_t size_wm = (src_wm == CORE_SRC_NONE) ? 0 : xi_wm.total;
-	if (!size_wm) {
-		printf("init: wm binary not found\n");
-		return;
+	//
+	// Not on a bitstream without `GPU (Klinge): there is no display for
+	// it to draw to and nothing to point with. The core app archive is
+	// the same on every board, so wm is in flash there too; skipping it
+	// here is what keeps a headless board headless, and the rest of the
+	// script -- net above all -- still runs.
+	if (!z_soc_has_feature(Z_FEATURE_GPU)) {
+		printf("init: no display in this bitstream, not starting wm\n");
+	} else {
+		printf("starting wm\n");
+		z_exec_info_t xi_wm;
+		core_src_t src_wm = core_exec_info("wm", &xi_wm);
+		uint32_t size_wm = (src_wm == CORE_SRC_NONE) ? 0 : xi_wm.total;
+		if (!size_wm) {
+			printf("init: wm binary not found\n");
+			return;
+		}
+		uint32_t pid_wm = k_proc_create_exec("wm", &xi_wm);
+		if (!pid_wm) {
+			printf("init: unable to create wm process\n");
+			return;
+		}
+		uint32_t base_wm = k_proc_base(pid_wm);
+		printf("init: wm (%s)\n", core_src_name(src_wm));
+		core_load_exec(base_wm, "wm", &xi_wm, src_wm);
+		k_proc_start(pid_wm);
+		printf("init: wm started as pid %ld\n", pid_wm);
 	}
-	uint32_t pid_wm = k_proc_create_exec("wm", &xi_wm);
-	if (!pid_wm) {
-		printf("init: unable to create wm process\n");
-		return;
-	}
-	uint32_t base_wm = k_proc_base(pid_wm);
-	printf("init: wm (%s)\n", core_src_name(src_wm));
-	core_load_exec(base_wm, "wm", &xi_wm, src_wm);
-	k_proc_start(pid_wm);
-	printf("init: wm started as pid %ld\n", pid_wm);
 
 	// net: sw/apps/net -- ARP/ICMP/TFTP/TCP/telnet, see
 	// docs/networking.md. Loaded and started normally now, same as

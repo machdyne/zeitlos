@@ -26,12 +26,6 @@ flash_cmd = openFPGALoader -v -c dirtyJtag -f -o 0 {file}
 # first; the -dfu.bin will not fit behind the old one.
 dfu_base = 0x040000
 
-# No `net`: Konfekt has no ethernet of any kind -- no PHY, no PMOD
-# socket, and its USB host core is the low-speed HID one, which cannot
-# drive a USB ethernet adapter. cron is kept for `wait_for_ntp: no`
-# jobs (docs/cron.md).
-core_apps = wm term console cron
-
 defines =
     FPGA_ECP5
     PROGRAMN_PIN
