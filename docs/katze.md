@@ -210,6 +210,47 @@ The pin-to-first-flop path is 4.5ns in the build above. Both MAC
 testbenches (`rtl/tb/tb_ethmac_rmii.v`, `tb_ethmac_rmii_tx.v`,
 including the TX-to-RX loopback) pass with it under Verilator.
 
+### Fitting after 0.0.5: no data cache
+
+Since 0.0.5 the Lakritz block gained `USB_HOST` and `COLOR`, and
+dropped `MONTMUL`, `MONTMUL_REGS` and `SHA256` to pay for them
+(docs/boards.md, "Lakritz with game-mode colour"). That leaves the
+plain board at 96-98% COMB with `SPI_ETH`, and the RMII MAC costs more
+fabric than `SPI_ETH` does. `lakritz_katze` at `b663103` stopped
+placing: **24709 / 24288 (101%)** on one machine, 23668 (97%) on
+another with the same commit and a different toolchain build.
+
+The target now leaves out the data cache ([dcache.md](dcache.md)).
+Software already probes for it (`z_dcache_present()`), as it must on
+Obst, so loads simply go to SDRAM. Colour, USB host and the audio
+mixer stay. Same commit, Yosys 0.69+260 / nextpnr-ecp5 0.11.1-54,
+default seed:
+
+| | all of Lakritz | without `DCACHE` |
+|---|---|---|
+| TRELLIS_COMB | 23668 (97%) | **22743 (93%)** |
+| DP16KD | 44 / 56 | 41 / 56 |
+| `CLK_48` (48 required) | not routed | **48.94 MHz** |
+| `ETH_REFCLK` (50 required) | | 100.59 MHz |
+| pixel clock (25.20 required) | | 40.87 MHz |
+
+`CLK_48` passes by 2% on that one placement: expect some seeds to
+fail, and re-check `make timing` after any change to this build.
+
+What else was measured on the same build, as COMB saved against
+23668, for when this target needs more:
+
+| Remove | Saves | Notes |
+|---|---|---|
+| `GPU_BLIT` | 4,717 | not possible today: wm has no software fallback |
+| `AUDIO` (all of it) | 2,249 | |
+| `USB_HOST` -> `USB_HID` | 2,040 | keyboard and mouse only |
+| `AUDIO_MIXER` | 1,612 | sw/apps/mod mixes in software |
+| `GPU_RASTER` | 1,152 | not possible today: no software fallback |
+| `DCACHE` | 925 | taken |
+| `COLOR` | 431 | |
+| `ICACHE_KB`/`DCACHE_KB` 4 -> 2 | 96 | |
+
 ### History: the version that did not have the VRAM fix
 
 Before VRAM was fixed, the board had one block RAM to spare and this

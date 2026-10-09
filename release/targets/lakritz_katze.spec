@@ -25,6 +25,17 @@
 # and this target had to halve the icache, the audio FIFO and the
 # receive FIFO to fit -- see docs/katze.md's history note.
 #
+# -- No data cache --
+#
+# For room. Since 0.0.5 Lakritz gained USB_HOST and COLOR (paid for by
+# dropping the crypto blocks), which put the plain board at 96-98%
+# COMB with SPI_ETH. The RMII MAC costs more fabric than SPI_ETH does,
+# and lakritz_katze stopped placing: 24709 / 24288 (101%) on one
+# machine, 23668 (97%) on another with the same commit. The D-cache is
+# about 925 COMB and two DP16KD here; without it the CPU goes to SDRAM
+# for every load, which costs speed and nothing else. Colour, USB host
+# and the audio mixer all stay. docs/katze.md, "Fitting after 0.0.5".
+#
 # -- The console --
 #
 # Not an issue. `USB_CDC is on for Lakritz, and the `undef at the bottom
@@ -39,4 +50,8 @@ pmods = katze@a
 
 defines =
 	-SPI_ETH
+	-DCACHE
+	-DCACHE_KB
+	-DCACHE_LINE_WORDS
+	-DCACHE_WBUF
 	ETH_RX_SLOTS=4
